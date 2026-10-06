@@ -24,7 +24,7 @@ $ `stdlib/core/string.nu`
 
 @ sink_s s x → i { ^ 0 }  // consumes the owned-string temp, does nothing else
 
-@ main → i {
+unsafe @ main → i {
     : Dog d @ Dog { 1 }
     : i f0 ( nurl_free_count )
     : ~ i i 0

@@ -44,7 +44,7 @@ $ `stdlib/ext/json.nu`
 
 : ~ i g_of_state 0
 
-@ __of_state → *OfState {
+unsafe @ __of_state → *OfState {
     ? != g_of_state 0 { ^ # *OfState g_of_state } {}
     : *OfState st # *OfState ( nurl_malloc Z OfState )
     = . st root ( string_from `.` )
@@ -53,13 +53,13 @@ $ `stdlib/ext/json.nu`
     ^ st
 }
 
-@ orgfiles_set_root s root → v {
+unsafe @ orgfiles_set_root s root → v {
     : *OfState st ( __of_state )
     ( string_clear . st root )
     ( string_push_str . st root root )
 }
 
-@ __of_orgs_dir → String {
+unsafe @ __of_orgs_dir → String {
     : String p ( string_from ( string_data . ( __of_state ) root ) )
     ( string_push_str p `/orgs` )
     ^ p
@@ -86,7 +86,7 @@ $ `stdlib/ext/json.nu`
 
 // The store root itself, for a module that needs the models beside the
 // organisation folders.
-@ orgfiles_root → s { ^ ( string_data . ( __of_state ) root ) }
+unsafe @ orgfiles_root → s { ^ ( string_data . ( __of_state ) root ) }
 
 // Every organisation that has a folder under <root>/orgs — the names of
 // the directories there, whatever they hold.
@@ -216,8 +216,7 @@ $ `stdlib/ext/json.nu`
             : OrgFile a ?? ( vec_get [OrgFile] out - j 1 ) { T x → x F _ → @ OrgFile { ( string_new ) 0 0 } }
             : OrgFile b ?? ( vec_get [OrgFile] out j ) { T x → x F _ → @ OrgFile { ( string_new ) 0 0 } }
             ? > ( nurl_str_cmp ( string_data . a name ) ( string_data . b name ) ) 0 {
-                ( vec_set [OrgFile] out - j 1 b )
-                ( vec_set [OrgFile] out j a )
+                ( vec_swap [OrgFile] out - j 1 j )
                 = j - j 1
             } { = j 0 }
         }
@@ -271,7 +270,7 @@ $ `stdlib/ext/json.nu`
 // random bytes, generated on first use and kept at <root>/orgs/link.secret;
 // deleting the file revokes every link at once.
 
-@ __of_secret → s {
+unsafe @ __of_secret → s {
     : *OfState st ( __of_state )
     ? > ( string_len . st secret ) 0 { ^ ( string_data . st secret ) } {}
     : String p ( __of_orgs_dir )

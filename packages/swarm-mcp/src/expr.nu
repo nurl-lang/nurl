@@ -154,7 +154,7 @@ $ `stdlib/core/rcbox.nu`
 // every copy is the same parser, and the last owner releases it.
 : EParser { s ctl }
 
-@ EParser_share EParser h → EParser { ^ @ EParser { # s ( rcbox_share # i . h ctl ) } }
+unsafe @ EParser_share EParser h → EParser { ^ @ EParser { # s ( rcbox_share # i . h ctl ) } }
 
 @ EParser_drop sink EParser h → v {
     ( mem_forget h )
@@ -163,27 +163,27 @@ $ `stdlib/core/rcbox.nu`
 
 // The parser in place. One underscore: shared with work.nu, whose fold opens
 // the handle once per chunk and evaluates on the pointer.
-@ _EParser_ptr EParser h → *EParserImpl { ^ ( rcbox_ptr [EParserImpl] # i . h ctl ) }
+unsafe @ _EParser_ptr EParser h → *EParserImpl { ^ ( rcbox_ptr [EParserImpl] # i . h ctl ) }
 
 // A parser with nothing parsed yet (eparser_ok is F until expr_parse succeeds).
-@ eparser_new → EParser {
+unsafe @ eparser_new → EParser {
     ^ @ EParser { # s ( rcbox_new [EParserImpl] @ EParserImpl { ( vec_new [i] ) ( vec_new [i] ) 0 ( vec_new [i] ) F } ) }
 }
 
 // Did the last expr_parse accept its source?
-@ eparser_ok EParser p__h → b {
+unsafe @ eparser_ok EParser p__h → b {
     : *EParserImpl p ( _EParser_ptr p__h )
     ^ . p ok
 }
 
-@ __ep_kind * EParserImpl p → i { ^ ?? ( vec_get [i] . p tk . p pos ) { T x → x F → 0 } }
+unsafe @ __ep_kind * EParserImpl p → i { ^ ?? ( vec_get [i] . p tk . p pos ) { T x → x F → 0 } }
 
-@ __ep_val * EParserImpl p → i { ^ ?? ( vec_get [i] . p tv . p pos ) { T x → x F → 0 } }
+unsafe @ __ep_val * EParserImpl p → i { ^ ?? ( vec_get [i] . p tv . p pos ) { T x → x F → 0 } }
 
-@ __ep_adv * EParserImpl p → v { = . p pos + . p pos 1 }
+unsafe @ __ep_adv * EParserImpl p → v { = . p pos + . p pos 1 }
 
 // Push a node, return its index.
-@ __ep_node * EParserImpl p i tag i a i b i c → i {
+unsafe @ __ep_node * EParserImpl p i tag i a i b i c → i {
     : i idx / ( vec_len [i] . p arena ) 4
     ( vec_push [i] . p arena tag )
     ( vec_push [i] . p arena a )
@@ -193,11 +193,11 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Expect+consume a token kind; flag an error if it is not there.
-@ __ep_expect * EParserImpl p i kind → v {
+unsafe @ __ep_expect * EParserImpl p i kind → v {
     ? == ( __ep_kind p ) kind { ( __ep_adv p ) } { = . p ok F }
 }
 
-@ __ep_primary * EParserImpl p → i {
+unsafe @ __ep_primary * EParserImpl p → i {
     : i k ( __ep_kind p )
     ? == k 1 { : i v ( __ep_val p ) ( __ep_adv p ) ^ ( __ep_node p 0 v 0 0 ) } {}  // INT
     ? == k 24 { : i bits ( __ep_val p ) ( __ep_adv p ) ^ ( __ep_node p 20 bits 0 0 ) } {}  // FLT (f64 bits)
@@ -234,7 +234,7 @@ $ `stdlib/core/rcbox.nu`
     ^ ( __ep_primary p )
 }
 
-@ __ep_muldiv * EParserImpl p → i {
+unsafe @ __ep_muldiv * EParserImpl p → i {
     : ~ i a ( __ep_unary p )
     ~ & . p ok | == ( __ep_kind p ) 5 | == ( __ep_kind p ) 6 == ( __ep_kind p ) 7 {
         : i op ( __ep_kind p )
@@ -245,7 +245,7 @@ $ `stdlib/core/rcbox.nu`
     ^ a
 }
 
-@ __ep_addsub * EParserImpl p → i {
+unsafe @ __ep_addsub * EParserImpl p → i {
     : ~ i a ( __ep_muldiv p )
     ~ & . p ok | == ( __ep_kind p ) 3 == ( __ep_kind p ) 4 {
         : i op ( __ep_kind p )
@@ -256,7 +256,7 @@ $ `stdlib/core/rcbox.nu`
     ^ a
 }
 
-@ __ep_compare * EParserImpl p → i {
+unsafe @ __ep_compare * EParserImpl p → i {
     : i a ( __ep_addsub p )
     : i k ( __ep_kind p )
     ? & . p ok & >= k 8 <= k 13 {
@@ -267,7 +267,7 @@ $ `stdlib/core/rcbox.nu`
     ^ a
 }
 
-@ __ep_logic * EParserImpl p → i {
+unsafe @ __ep_logic * EParserImpl p → i {
     : ~ i a ( __ep_compare p )
     ~ & . p ok | == ( __ep_kind p ) 14 == ( __ep_kind p ) 15 {
         : i op ( __ep_kind p )
@@ -278,7 +278,7 @@ $ `stdlib/core/rcbox.nu`
     ^ a
 }
 
-@ __ep_expr * EParserImpl p → i {
+unsafe @ __ep_expr * EParserImpl p → i {
     : i cond ( __ep_logic p )
     ? & . p ok == ( __ep_kind p ) 16 {  // cond ? then : else
         ( __ep_adv p )
@@ -293,7 +293,7 @@ $ `stdlib/core/rcbox.nu`
 // Parse `src` → (arena, root). On any error, ok=0; the caller checks it
 // (eparser_ok). The arena stays in the EParser; the root index is the return
 // value. A parser can be reused: each parse starts from empty vectors.
-@ expr_parse ( Vec u ) src EParser p__h → i {
+unsafe @ expr_parse ( Vec u ) src EParser p__h → i {
     : *EParserImpl p ( _EParser_ptr p__h )
     ( vec_clear [i] . p tk )
     ( vec_clear [i] . p tv )
@@ -316,7 +316,7 @@ $ `stdlib/core/rcbox.nu`
 // parsed expression for every x in its sub-range. The public expr_eval /
 // expr_eval_f open the handle once; the recursion runs on the pointer.
 
-@ __ar * EParserImpl p i node i off → i { ^ ?? ( vec_get [i] . p arena + * node 4 off ) { T x → x F → 0 } }
+unsafe @ __ar * EParserImpl p i node i off → i { ^ ?? ( vec_get [i] . p arena + * node 4 off ) { T x → x F → 0 } }
 
 inline @ expr_eval EParser p__h i node i x → i { ^ ( _expr_eval ( _EParser_ptr p__h ) node x ) }
 

@@ -47,14 +47,14 @@ $ `stdlib/core/rcbox.nu`
 
 : VwState { s ctl }
 
-@ VwState_share VwState h → VwState { ^ @ VwState { # s ( rcbox_share # i . h ctl ) } }
+unsafe @ VwState_share VwState h → VwState { ^ @ VwState { # s ( rcbox_share # i . h ctl ) } }
 
 @ VwState_drop sink VwState h → v {
     ( mem_forget h )
     ( rcbox_release [VwStateImpl] # i . h ctl )
 }
 
-@ __VwState_ptr VwState h → *VwStateImpl { ^ ( rcbox_ptr [VwStateImpl] # i . h ctl ) }
+unsafe @ __VwState_ptr VwState h → *VwStateImpl { ^ ( rcbox_ptr [VwStateImpl] # i . h ctl ) }
 
 // The page as compiled in. `--page FILE` reads from disk instead, which is
 // the only way to iterate on the viewer without rebuilding.
@@ -75,7 +75,7 @@ $ `stdlib/core/rcbox.nu`
     ^ out
 }
 
-@ h_vw_index VwState h HttpRequest req Params p → HttpResponse {
+unsafe @ h_vw_index VwState h HttpRequest req Params p → HttpResponse {
     : *VwStateImpl st ( __VwState_ptr h )
     : HttpResponse r ( response_new 200 )
     ( response_set_header r `Content-Type` `text/html; charset=utf-8` )
@@ -85,7 +85,7 @@ $ `stdlib/core/rcbox.nu`
     ^ r
 }
 
-@ h_vw_cloud VwState h HttpRequest req Params p → HttpResponse {
+unsafe @ h_vw_cloud VwState h HttpRequest req Params p → HttpResponse {
     : *VwStateImpl st ( __VwState_ptr h )
     : HttpResponse r ( response_new 200 )
     ( response_set_header r `Content-Type` `application/octet-stream` )
@@ -98,7 +98,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Serve `path` until interrupted. Returns a process exit code.
-@ vw_serve s path s host i port s page_override i quiet i tls → i {
+unsafe @ vw_serve s path s host i port s page_override i quiet i tls → i {
     : !( Vec u ) IoErr rd ( read_file_bytes path )
     : ~ ( Vec u ) blob ( vec_new [u] )
     ?? rd {

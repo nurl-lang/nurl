@@ -71,7 +71,7 @@ $ `src/orgfiles.nu`
 // step is found wherever it is.
 : AnaSep { f sep i rows }
 
-@ _ana_separation Model mo f rate → AnaSep {
+unsafe @ _ana_separation Model mo f rate → AnaSep {
     : CalReport cr ( model_calibrate mo 0 0 )
     : ~ AnaSep out @ AnaSep { -1.0 0 }
     : i ni ( vec_len [CalVer] . cr items )
@@ -289,8 +289,7 @@ $ `src/orgfiles.nu`
             : Json a ?? ( vec_get [Json] items - j 1 ) { T x → x F _ → @ Json { JNull } }
             : Json b ?? ( vec_get [Json] items j ) { T x → x F _ → @ Json { JNull } }
             ? < ( _ana_jint a `created` 0 ) ( _ana_jint b `created` 0 ) {
-                ( vec_set [Json] items - j 1 b )
-                ( vec_set [Json] items j a )
+                ( vec_swap [Json] items - j 1 j )
                 = j - j 1
             } { = j 0 }
         }
@@ -408,7 +407,7 @@ $ `src/orgfiles.nu`
     ?? ( file_delete ( string_data ip ) ) { T _ → {} F _ → {} }
 }
 
-@ analyze_run s dir → i {
+unsafe @ analyze_run s dir → i {
     : Json params ?? ( __ana_read_json dir `params.json` ) { T j → j F _ → ( json_obj_new ) }
     : String org ( _ana_jstr params `org` )
     : String id ( _ana_jstr params `id` )

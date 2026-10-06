@@ -22,14 +22,14 @@ $ `metadata.nu`
 
 : GrpcClient { s ctl }
 
-@ GrpcClient_share GrpcClient h → GrpcClient { ^ @ GrpcClient { # s ( rcbox_share # i . h ctl ) } }
+unsafe @ GrpcClient_share GrpcClient h → GrpcClient { ^ @ GrpcClient { # s ( rcbox_share # i . h ctl ) } }
 
 @ GrpcClient_drop sink GrpcClient h → v {
     ( mem_forget h )
     ( rcbox_release [GrpcClientImpl] # i . h ctl )
 }
 
-@ __GrpcClient_ptr GrpcClient h → *GrpcClientImpl { ^ ( rcbox_ptr [GrpcClientImpl] # i . h ctl ) }
+unsafe @ __GrpcClient_ptr GrpcClient h → *GrpcClientImpl { ^ ( rcbox_ptr [GrpcClientImpl] # i . h ctl ) }
 
 : GrpcCallOptions { i timeout_ns i max_send_message i max_recv_message i max_metadata i encoding }
 : GrpcCall {
@@ -52,7 +52,7 @@ $ `metadata.nu`
 }
 
 // A client over a transport the caller keeps owning (and closes itself).
-@ grpc_client_from_h2 H2Client transport s scheme s authority → GrpcClient {
+unsafe @ grpc_client_from_h2 H2Client transport s scheme s authority → GrpcClient {
     : i c__box ( rcbox_zero [GrpcClientImpl] )
     : *GrpcClientImpl c ( rcbox_ptr [GrpcClientImpl] c__box )
     = . c transport ( H2Client_share transport )  // the caller keeps its own copy
@@ -78,7 +78,7 @@ $ `metadata.nu`
     ^ ( grpc_error code ( h2_client_err_name error ) )
 }
 
-@ __grpc_client_connected sink H2Client transport s scheme s host i port → GrpcClient {
+unsafe @ __grpc_client_connected sink H2Client transport s scheme s host i port → GrpcClient {
     : String authority ( string_new )
     : String host_text ( string_from host )
     ? & ( string_contains host_text `:` ) ! ( string_starts_with host_text `[` ) {
@@ -112,7 +112,7 @@ $ `metadata.nu`
 // transport closes when the last call on it is gone too).
 @ grpc_client_close sink GrpcClient client → v {}
 
-@ grpc_call_open GrpcClient client__h s path ( Vec Header ) metadata GrpcCallOptions opts → !GrpcCall GrpcError {
+unsafe @ grpc_call_open GrpcClient client__h s path ( Vec Header ) metadata GrpcCallOptions opts → !GrpcCall GrpcError {
     : *GrpcClientImpl client ( __GrpcClient_ptr client__h )
     ? ! ( grpc_method_path path ) { ^ @ !GrpcCall GrpcError { F ( grpc_error GRPC_INVALID_ARGUMENT `invalid RPC method path` ) } } {}
     ? | | < . opts timeout_ns 0 <= . opts max_send_message 0 > . opts max_send_message 2147483647 {
@@ -155,7 +155,7 @@ $ `metadata.nu`
             ( grpc_metadata_new ) ( grpc_metadata_new ) } }
 }
 
-@ grpc_call_cancel inout GrpcCall call → !v GrpcError {
+unsafe @ grpc_call_cancel inout GrpcCall call → !v GrpcError {
     : *GrpcClientImpl cl ( __GrpcClient_ptr . call client )
     ^ ?? ( h2_client_cancel . cl transport . call stream_id ( h2_err_cancel ) ) {
         T _ → @ !v GrpcError { T 0 }
@@ -170,7 +170,7 @@ $ `metadata.nu`
 // peer's stream resources; the decoder, the metadata and the call's share
 // of its client go with the drop glue.
 % Drop GrpcCall {
-    @ drop GrpcCall call → v {
+    unsafe @ drop GrpcCall call → v {
         : *GrpcClientImpl cl ( __GrpcClient_ptr . call client )
         ?? ( h2_client_cancel . cl transport . call stream_id ( h2_err_cancel ) ) { T _ → {} F _ → {} }
         ?? ( h2_client_release_stream . cl transport . call stream_id ) { T _ → {} F _ → {} }
@@ -179,7 +179,7 @@ $ `metadata.nu`
 
 // Queue one framed message. RESOURCE_EXHAUSTED/H2CWouldBlock leaves the
 // borrowed input untouched: receive/pump existing messages before retrying.
-@ grpc_call_send inout GrpcCall call ( Vec u ) message → !v GrpcError {
+unsafe @ grpc_call_send inout GrpcCall call ( Vec u ) message → !v GrpcError {
     : ( Vec u ) framed \ ( grpc_frame message . call encoding . call max_send_message )
     : *GrpcClientImpl cl ( __GrpcClient_ptr . call client )
     ^ ?? ( h2_client_send . cl transport . call stream_id framed F ) {
@@ -188,7 +188,7 @@ $ `metadata.nu`
     }
 }
 
-@ grpc_call_half_close inout GrpcCall call → !v GrpcError {
+unsafe @ grpc_call_half_close inout GrpcCall call → !v GrpcError {
     : *GrpcClientImpl cl ( __GrpcClient_ptr . call client )
     ^ ?? ( h2_client_send . cl transport . call stream_id ( vec_new [u] ) T ) {
         T _ → @ !v GrpcError { T 0 }
@@ -217,7 +217,7 @@ $ `metadata.nu`
 
 // Move currently received bytes into the bounded message decoder and validate
 // headers once. No socket read occurs here; this also supports shared drivers.
-@ __grpc_call_update inout GrpcCall call → !v GrpcError {
+unsafe @ __grpc_call_update inout GrpcCall call → !v GrpcError {
     : *GrpcClientImpl cl ( __GrpcClient_ptr . call client )
     : H2CStream stream ?? ( h2_client_stream_state . cl transport . call stream_id ) {
         T s → s F _ → { ^ @ !v GrpcError { F ( grpc_error GRPC_FAILED_PRECONDITION `call already released` ) } }
@@ -252,7 +252,7 @@ $ `metadata.nu`
     ^ @ !v GrpcError { T 0 }
 }
 
-@ grpc_call_pump inout GrpcCall call → !v GrpcError {
+unsafe @ grpc_call_pump inout GrpcCall call → !v GrpcError {
     : *GrpcClientImpl cl ( __GrpcClient_ptr . call client )
     ?? ( h2_client_pump_once . cl transport ) {
         T _ → {} F e → { ^ @ !v GrpcError { F ( __grpc_client_transport_error e ) } }
@@ -291,7 +291,7 @@ $ `metadata.nu`
 
 // Receive one message, or present=false after successful final status. The
 // same primitive supports unary and all three streaming RPC cardinalities.
-@ grpc_call_receive inout GrpcCall call → !GrpcMessage GrpcError {
+unsafe @ grpc_call_receive inout GrpcCall call → !GrpcMessage GrpcError {
     : *GrpcClientImpl cl ( __GrpcClient_ptr . call client )
     ~ T {
         : !v GrpcError updated ( __grpc_call_update call )

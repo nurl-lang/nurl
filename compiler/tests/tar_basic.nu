@@ -38,7 +38,7 @@ $ `stdlib/core/string.nu`
     ^ d
 }
 
-@ main → i {
+unsafe @ main → i {
     // ── 1. in-memory round-trip ──────────────────────────────────
     ( nurl_print `── round-trip ──\n` )
     : ( Vec TarEntry ) ents ( vec_new [TarEntry] )

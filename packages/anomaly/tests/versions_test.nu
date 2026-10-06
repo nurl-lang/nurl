@@ -126,7 +126,7 @@ $ `src/dynamic.nu`
 // see both. A probe from the old regime is alien to short_term but familiar
 // to the long windows.
 
-@ test_routing Store st → v {
+unsafe @ test_routing Store st → v {
     = g_lcg 1
     : i NOW + T0 * 400 60
     : Model mo ( model_open_at st `routing` T0 )
@@ -394,7 +394,7 @@ $ `src/dynamic.nu`
     String feat
 }
 
-@ flat_ingest Model mo f temp f press f rain i at → FlatProbe {
+unsafe @ flat_ingest Model mo f temp f press f rain i at → FlatProbe {
     : Json j ( json_obj_new )
     ( json_obj_set j `temp` ( json_float temp ) )
     ( json_obj_set j `press` ( json_float press ) )
@@ -437,7 +437,7 @@ $ `src/dynamic.nu`
 // The gauge's habit: dry nine minutes in ten.
 @ rain_now → f { ^ ? < ( lcg_u01 ) 0.9 0.0 ( tenths * 3.0 ( lcg_u01 ) ) }
 
-@ test_flatline Store st → v {
+unsafe @ test_flatline Store st → v {
     = g_lcg 11
     : Model mo ( model_open_at st `flat` T0 )
     ( model_set_limits mo 10 150000 )
@@ -531,7 +531,7 @@ $ `src/dynamic.nu`
 
 : MixProbe { b anomaly f score String feat }
 
-@ mix_ingest Model mo f coarse f flow i at → MixProbe {
+unsafe @ mix_ingest Model mo f coarse f flow i at → MixProbe {
     : Json j ( json_obj_new )
     ( json_obj_set j `coarse` ( json_float coarse ) )
     ( json_obj_set j `flow` ( json_float flow ) )
@@ -568,7 +568,7 @@ $ `src/dynamic.nu`
 }
 
 // The reference the fit wrote for a named column.
-@ mix_ref Meta mm__h s col → f {
+unsafe @ mix_ref Meta mm__h s col → f {
     : *MetaImpl mm ( _Meta_ptr mm__h )
     : i n ( vec_len [String] . mm feats )
     : ~ i k 0

@@ -31,7 +31,7 @@ $ `deps/gpukit/src/dev.nu`
     ( nurl_print `\n` )
 }
 
-@ main → i {
+unsafe @ main → i {
     : GpuKit kit ( gk_open 0 )
     ? ( gk_ok kit ) {} {
         ( nurl_print `SKIP no backend\n` )

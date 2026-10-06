@@ -1,0 +1,5 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_stale_borrow_indirect.nu:27:17: error: pointer 'p' borrowed from 'v' is stale: 'v' was mutated on line 26 and may have reallocated its buffer
+  note: take the view again after the mutation (p = ( string_data / vec_data … v ) ), or read through the owner
+error: compilation aborted — 1 borrow-checker violation (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

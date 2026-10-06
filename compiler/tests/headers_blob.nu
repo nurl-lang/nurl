@@ -9,7 +9,7 @@
 
 $ `stdlib/ext/http.nu`
 
-@ check_invalid_url ! Response HttpErr res s tag → v {
+@ check_invalid_url sink ! Response HttpErr res s tag → v {
     ?? res {
         T r → {
             ( nurl_println `unexpected: live response on empty URL` )

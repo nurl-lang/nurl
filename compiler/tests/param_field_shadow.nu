@@ -14,7 +14,7 @@
     i len
 }
 
-@ box_set_both i cap i len → *Box {
+unsafe @ box_set_both i cap i len → *Box {
     : *Box b # *Box ( nurl_alloc Z Box )
     // The bug shape: param name == field name. Pre-fix this miscompiled.
     = . b cap cap
@@ -22,11 +22,11 @@
     ^ b
 }
 
-@ box_get_cap * Box b → i { ^ . b cap }
+unsafe @ box_get_cap * Box b → i { ^ . b cap }
 
-@ box_get_len * Box b → i { ^ . b len }
+unsafe @ box_get_len * Box b → i { ^ . b len }
 
-@ box_free sink * Box b → v { ( nurl_free # s b ) }
+unsafe @ box_free sink * Box b → v { ( nurl_free # s b ) }
 
 // Negative control: variable-index array store on a *Match-like pointer
 // must still work. The Vec[A] vec_push pattern (`= . data len x` where
@@ -34,7 +34,7 @@
 // field) depends on this routing.
 : Pt { i x i y }
 
-@ pt_fill * Pt arr i n → v {
+unsafe @ pt_fill * Pt arr i n → v {
     : ~ i len 0  // local index var; NOT a param
     ~ < len n {
         // Pt has field `x` and `y` — neither matches `len`, so this is
@@ -47,7 +47,7 @@
     }
 }
 
-@ main → i {
+unsafe @ main → i {
     // ── gotcha-10 positive case ─────────────────────────────────
     : *Box b ( box_set_both 99 7 )
     ( nurl_print `box.cap=` ) ( nurl_print ( nurl_str_int ( box_get_cap b ) ) ) ( nurl_print `\n` )

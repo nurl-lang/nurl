@@ -191,14 +191,14 @@ $ `stdlib/core/rcbox.nu`
 // every copy is the same open file, and the last owner releases it.
 : Gguf { s ctl }
 
-@ Gguf_share Gguf h → Gguf { ^ @ Gguf { # s ( rcbox_share # i . h ctl ) } }
+unsafe @ Gguf_share Gguf h → Gguf { ^ @ Gguf { # s ( rcbox_share # i . h ctl ) } }
 
 @ Gguf_drop sink Gguf h → v {
     ( mem_forget h )
     ( rcbox_release [GgufImpl] # i . h ctl )
 }
 
-@ __Gguf_ptr Gguf h → *GgufImpl { ^ ( rcbox_ptr [GgufImpl] # i . h ctl ) }
+unsafe @ __Gguf_ptr Gguf h → *GgufImpl { ^ ( rcbox_ptr [GgufImpl] # i . h ctl ) }
 
 // A Gguf that holds no file — for a slot that may be empty (a model kept
 // open across a streamed merge, or none). gguf_is_open tells them apart.
@@ -227,7 +227,7 @@ $ `stdlib/core/rcbox.nu`
     ^ T
 }
 
-@ __gc_u8 inout GCur c → i {
+unsafe @ __gc_u8 inout GCur c → i {
     ? ( __gc_need c 1 ) {} { ^ 0 }
     : *u P . c p
     : i v # i . P . c off
@@ -235,7 +235,7 @@ $ `stdlib/core/rcbox.nu`
     ^ v
 }
 
-@ __gc_u16 inout GCur c → i {
+unsafe @ __gc_u16 inout GCur c → i {
     ? ( __gc_need c 2 ) {} { ^ 0 }
     : *u P . c p
     : i o . c off
@@ -243,7 +243,7 @@ $ `stdlib/core/rcbox.nu`
     ^ | # i . P o << # i . P + o 1 8
 }
 
-@ __gc_u32 inout GCur c → i {
+unsafe @ __gc_u32 inout GCur c → i {
     ? ( __gc_need c 4 ) {} { ^ 0 }
     : *u P . c p
     : i o . c off
@@ -265,7 +265,7 @@ $ `stdlib/core/rcbox.nu`
 // remaining file bytes anyway). `forbid_nul` rejects embedded NULs —
 // required for keys and tensor names which flow into C-string
 // comparisons; value strings keep arbitrary bytes.
-@ __gc_str inout GCur c i maxlen b forbid_nul → String {
+unsafe @ __gc_str inout GCur c i maxlen b forbid_nul → String {
     : i len ( __gc_u64 c )
     ? . c fail { ^ ( string_new ) } {}
     ? | < len 0 > len maxlen { = . c fail T ^ ( string_new ) } {}
@@ -451,7 +451,7 @@ $ `stdlib/core/rcbox.nu`
 // into when that is not a mapping (the Gguf holds it for as long as the
 // tensors are read); gguf_open hands in an empty Vec for a mapping, which
 // it owns until this succeeds.
-@ __gguf_parse * u p i n sink ( Vec u ) keep → !Gguf String {
+unsafe @ __gguf_parse * u p i n sink ( Vec u ) keep → !Gguf String {
     ? < n 24 { ^ ( __g_errs `gguf: file too small to be GGUF (< 24 bytes)` ) } {}
     : ~ GCur c @ GCur { p n 0 F }
     : i m0 ( __gc_u8 c )
@@ -645,7 +645,7 @@ $ `stdlib/core/rcbox.nu`
 // mmap-backed open (POSIX). Platforms without MAP_PRIVATE (wasm,
 // win32) fall back to reading the whole file into an owned buffer —
 // correct everywhere, mmap-lazy where it matters.
-@ gguf_open s path → !Gguf String {
+unsafe @ gguf_open s path → !Gguf String {
     ? != ( posix_const `MAP_PRIVATE` ) -1 {
         : i32 fd ( open path # i32 ( posix_const `O_RDONLY` ) # i32 0 )
         ? < # i fd 0 {
@@ -699,43 +699,43 @@ $ `stdlib/core/rcbox.nu`
 
 // ── accessors ───────────────────────────────────────────────────────
 
-@ gguf_version Gguf g__h → i {
+unsafe @ gguf_version Gguf g__h → i {
     : *GgufImpl g ( __Gguf_ptr g__h )
     ^ . g version
 }
 
-@ gguf_align Gguf g__h → i {
+unsafe @ gguf_align Gguf g__h → i {
     : *GgufImpl g ( __Gguf_ptr g__h )
     ^ . g align
 }
 
-@ gguf_n_kv Gguf g__h → i {
+unsafe @ gguf_n_kv Gguf g__h → i {
     : *GgufImpl g ( __Gguf_ptr g__h )
     ^ ( vec_len [GgufKv] . g kvs )
 }
 
 // The metadata and tensor tables (borrowed: valid while the Gguf is).
-@ gguf_kvs Gguf g__h → ( Vec GgufKv ) {
+unsafe @ gguf_kvs Gguf g__h → ( Vec GgufKv ) {
     : *GgufImpl g ( __Gguf_ptr g__h )
     ^ . g kvs
 }
 
-@ gguf_tensors Gguf g__h → ( Vec GgufTensor ) {
+unsafe @ gguf_tensors Gguf g__h → ( Vec GgufTensor ) {
     : *GgufImpl g ( __Gguf_ptr g__h )
     ^ . g tensors
 }
 
-@ gguf_n_tensors Gguf g__h → i {
+unsafe @ gguf_n_tensors Gguf g__h → i {
     : *GgufImpl g ( __Gguf_ptr g__h )
     ^ ( vec_len [GgufTensor] . g tensors )
 }
 
-@ gguf_data_size Gguf g__h → i {
+unsafe @ gguf_data_size Gguf g__h → i {
     : *GgufImpl g ( __Gguf_ptr g__h )
     ^ . g data_size
 }
 
-@ gguf_find_kv Gguf g__h s key → i {
+unsafe @ gguf_find_kv Gguf g__h s key → i {
     : *GgufImpl g ( __Gguf_ptr g__h )
     : ~ i k 0
     : ~ i found -1
@@ -750,7 +750,7 @@ $ `stdlib/core/rcbox.nu`
     ^ found
 }
 
-@ gguf_kv_int_or Gguf g__h s key i def → i {
+unsafe @ gguf_kv_int_or Gguf g__h s key i def → i {
     : *GgufImpl g ( __Gguf_ptr g__h )
     : i idx ( gguf_find_kv g__h key )
     ? < idx 0 { ^ def } {}
@@ -760,7 +760,7 @@ $ `stdlib/core/rcbox.nu`
     }
 }
 
-@ gguf_kv_f_or Gguf g__h s key f def → f {
+unsafe @ gguf_kv_f_or Gguf g__h s key f def → f {
     : *GgufImpl g ( __Gguf_ptr g__h )
     : i idx ( gguf_find_kv g__h key )
     ? < idx 0 { ^ def } {}
@@ -772,7 +772,7 @@ $ `stdlib/core/rcbox.nu`
 
 // BORROWED: the returned s points into g (or is `def`); valid while
 // the Gguf is. Do not free.
-@ gguf_kv_str_or Gguf g__h s key s def → s {
+unsafe @ gguf_kv_str_or Gguf g__h s key s def → s {
     : *GgufImpl g ( __Gguf_ptr g__h )
     : i idx ( gguf_find_kv g__h key )
     ? < idx 0 { ^ def } {}
@@ -782,7 +782,7 @@ $ `stdlib/core/rcbox.nu`
     }
 }
 
-@ gguf_find_tensor Gguf g__h s name → i {
+unsafe @ gguf_find_tensor Gguf g__h s name → i {
     : *GgufImpl g ( __Gguf_ptr g__h )
     : ~ i k 0
     : ~ i found -1
@@ -799,7 +799,7 @@ $ `stdlib/core/rcbox.nu`
 
 // BORROWED pointer to a tensor's first byte inside the mapping; valid
 // while the Gguf is. Length is t.nbytes (when ≥ 0).
-@ gguf_tensor_ptr Gguf g__h GgufTensor t → *u {
+unsafe @ gguf_tensor_ptr Gguf g__h GgufTensor t → *u {
     : *GgufImpl g ( __Gguf_ptr g__h )
     ^ # *u + + # i . g map . g data_off . t offset
 }

@@ -9,7 +9,7 @@
 $ `stdlib/core/posix.nu`
 $ `stdlib/core/cell.nu`
 
-@ main → i {
+unsafe @ main → i {
     // ── 1: nurl_native_constant returns plausible values ─────────
     : i o_nb ( posix_const `O_NONBLOCK` )
     ( nurl_print `O_NONBLOCK>0=` ) ( nurl_print ? > o_nb 0 `T` `F` )

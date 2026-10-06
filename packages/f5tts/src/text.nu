@@ -43,14 +43,14 @@ $ `stdlib/std/fs.nu`
 // every copy is the same vocabulary, and the last owner releases it.
 : F5Vocab { s ctl }
 
-@ F5Vocab_share F5Vocab h → F5Vocab { ^ @ F5Vocab { # s ( rcbox_share # i . h ctl ) } }
+unsafe @ F5Vocab_share F5Vocab h → F5Vocab { ^ @ F5Vocab { # s ( rcbox_share # i . h ctl ) } }
 
 @ F5Vocab_drop sink F5Vocab h → v {
     ( mem_forget h )
     ( rcbox_release [F5VocabImpl] # i . h ctl )
 }
 
-@ __F5Vocab_ptr F5Vocab h → *F5VocabImpl { ^ ( rcbox_ptr [F5VocabImpl] # i . h ctl ) }
+unsafe @ __F5Vocab_ptr F5Vocab h → *F5VocabImpl { ^ ( rcbox_ptr [F5VocabImpl] # i . h ctl ) }
 
 // The same read, public: run.nu's silence walk needs it too.
 @ _f5t_geti ( Vec i ) v i k → i {
@@ -69,7 +69,7 @@ $ `stdlib/std/fs.nu`
 // reads it as `for i, char in enumerate(f)` and drops the last character of
 // each line, so a trailing "\r" from a CRLF file would be part of the token;
 // a file ending in a newline yields no extra empty token.
-@ f5_vocab_load s path → !F5Vocab String {
+unsafe @ f5_vocab_load s path → !F5Vocab String {
     ?? ( read_file path ) {
         T txt → {
             : ( Vec i ) asc ( vec_with_cap [i] 128 )
@@ -127,7 +127,7 @@ $ `stdlib/std/fs.nu`
     : ?i _old ( map_set [s i] m key val \ s x → i { ^ ( hash_string x ) } \ s a s b → b { ^ ( eq_string a b ) } )
 }
 
-@ f5_vocab_size F5Vocab v__h → i {
+unsafe @ f5_vocab_size F5Vocab v__h → i {
     : *F5VocabImpl v ( __F5Vocab_ptr v__h )
     ^ . v size
 }
@@ -175,14 +175,14 @@ $ `stdlib/std/fs.nu`
     ^ T
 }
 
-@ __f5t_id_ascii * F5VocabImpl v i c → i {
+unsafe @ __f5t_id_ascii * F5VocabImpl v i c → i {
     ? >= c 128 { ^ 0 } {}
     : i id ( __f5t_geti . v ascii c )
     ? < id 0 { ^ 0 } {}
     ^ id
 }
 
-@ __f5t_id_multi * F5VocabImpl v s text i off i len → i {
+unsafe @ __f5t_id_multi * F5VocabImpl v s text i off i len → i {
     : String key ( string_new )
     : ~ i j 0
     ~ < j len { ( string_push_char key ( nurl_str_get text + off j ) ) = j + j 1 }

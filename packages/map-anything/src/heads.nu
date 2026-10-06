@@ -86,11 +86,22 @@ $ `src/load.nu`
         ( __ph_lin lw kit `pose_head.fc_rot` 4 PH_HID ) }
 }
 
+// dst = relu(res[k](src)), one convolution of a residual block.
+@ __ph_res_conv GpuKit kit PoseH p i k GkBuf dst GkBuf src i np → b {
+    ?? ( vec_get [PhLin] . p res k ) {
+        T l → {
+            ? ( __ph_gemm kit dst src l np PH_HID PH_HID ) {} { ^ F }
+            ^ ( gkd_relu kit dst dst )
+        }
+        F → { ^ F }
+    }
+}
+
 // One view's pose from the final features. `out` receives 7 host
 // floats: [tx ty tz | qw? qx? ...] — exactly fc_t then fc_rot, the
 // quaternion normalised; which convention the four are in is the
 // GEOMETRY's business (src/geom.nu), not this head's.
-@ ph_forward GpuKit kit PoseH p GkBuf fin i voff i np * f out → b {
+unsafe @ ph_forward GpuKit kit PoseH p GkBuf fin i voff i np * f out → b {
     : GkBuf patches ( ma_view fin * voff PH_DIM * np PH_DIM )
     : GkBuf a ( gk_dbuf_new kit * np PH_HID GK_F32 )
     : GkBuf t1 ( gk_dbuf_new kit * np PH_HID GK_F32 )
@@ -99,23 +110,14 @@ $ `src/load.nu`
     ? ( __ph_gemm kit a patches . p proj np PH_HID PH_DIM ) {} { = ok F }
     // the two residual blocks: t = relu(c1(a)); t = relu(c2(t));
     // t = relu(c3(t)); a = a + t
+    // (the three convolutions ping-pong a → t1 → t2 → t1)
     : ~ i bi 0
     ~ & ok < bi 2 {
-        : ~ GkBuf src a
-        : ~ i ci 0
-        ~ & ok < ci 3 {
-            : GkBuf dst ? == % ci 2 0 t1 t2
-            ?? ( vec_get [PhLin] . p res + * bi 3 ci ) {
-                T l → {
-                    ? ( __ph_gemm kit dst src l np PH_HID PH_HID ) {} { = ok F }
-                    ? & ok ( gkd_relu kit dst dst ) {} { = ok F }
-                }
-                F → { = ok F }
-            }
-            = src dst
-            = ci + ci 1
-        }
-        ? & ok ( gkd_add kit a a src ) {} { = ok F }
+        : i r0 * bi 3
+        ? & ok ( __ph_res_conv kit p + r0 0 t1 a np ) {} { = ok F }
+        ? & ok ( __ph_res_conv kit p + r0 1 t2 t1 np ) {} { = ok F }
+        ? & ok ( __ph_res_conv kit p + r0 2 t1 t2 np ) {} { = ok F }
+        ? & ok ( gkd_add kit a a t1 ) {} { = ok F }
         = bi + bi 1
     }
     // mean over tokens: ones(1/np) · a

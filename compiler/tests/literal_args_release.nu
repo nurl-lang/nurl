@@ -16,7 +16,7 @@ $ `stdlib/core/vec.nu`
 
 & `libc` @ nurl_free_count → i
 
-@ live → i { ^ - ( nurl_alloc_count ) ( nurl_free_count ) }
+unsafe @ live → i { ^ - ( nurl_alloc_count ) ( nurl_free_count ) }
 
 : P { String s i n }
 
@@ -38,8 +38,9 @@ $ `stdlib/core/vec.nu`
     = t + t ( use_res @ !String i { T ( string_from `ok` ) } )
     : ( Vec P ) kept ( vec_new [P] )
     ( keep kept @ P { ( string_from `kept` ) 3 } )
-    ( keep kept @ P { mine 4 } )
-    ^ + + t ( vec_len [P] kept ) ( string_len mine )
+    : i mine_len ( string_len mine )
+    ( keep kept @ P { mine 4 } )  // moves `mine` into the kept P
+    ^ + + t ( vec_len [P] kept ) mine_len
 }
 
 @ main → i {

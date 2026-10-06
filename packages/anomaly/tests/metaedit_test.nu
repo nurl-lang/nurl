@@ -116,7 +116,7 @@ $ `src/dynamic.nu`
 
 // ── Scenario 1: partial patches, adds, replace ────────────────────────
 
-@ test_patch Store st → v {
+unsafe @ test_patch Store st → v {
     = g_lcg 1
     : Model mo ( model_open_at st `patch` T0 )
     ( seed mo )
@@ -226,7 +226,7 @@ $ `src/dynamic.nu`
 
 // ── Scenario 2: clamping ──────────────────────────────────────────────
 
-@ test_clamp Store st → v {
+unsafe @ test_clamp Store st → v {
     = g_lcg 7
     : Model mo ( model_open_at st `clamp` T0 )
     ( seed mo )
@@ -275,7 +275,7 @@ $ `src/dynamic.nu`
 
 // ── Scenario 3: enable / disable ──────────────────────────────────────
 
-@ test_toggle Store st → v {
+unsafe @ test_toggle Store st → v {
     = g_lcg 3
     : Model mo__h ( model_open_at st `toggle` T0 )
     : *ModelImpl mo ( _Model_ptr mo__h )
@@ -312,7 +312,7 @@ $ `src/dynamic.nu`
 
 // ── Scenario 4: refused shapes ────────────────────────────────────────
 
-@ test_errors Store st → v {
+unsafe @ test_errors Store st → v {
     = g_lcg 5
     : Model mo ( model_open_at st `errs` T0 )
     ( seed mo )
@@ -359,7 +359,7 @@ $ `src/dynamic.nu`
 // file path or the feature order, which is why — unlike `name` — it may be
 // edited freely, hold spaces, and be cleared back to empty.
 
-@ test_alias Store st → v {
+unsafe @ test_alias Store st → v {
     = g_lcg 31
     : Model mo ( model_open_at st `aliased` T0 )
     ( seed mo )
@@ -420,7 +420,7 @@ $ `src/dynamic.nu`
 
 }
 
-@ test_maxpoints Store st → v {
+unsafe @ test_maxpoints Store st → v {
     = g_lcg 11
     : Model mo ( model_open_at st `maxpts` T0 )
     ( seed mo )

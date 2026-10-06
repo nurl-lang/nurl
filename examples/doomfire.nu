@@ -16,7 +16,7 @@
 : i H 180
 : i FPS 60
 
-@ main → i {
+unsafe @ main → i {
     : i total_px * W H
     // Lämpöpuskuri (0 = musta, 36 = valkoinen/kuumin)
     : *i fire # *i ( malloc * total_px 8 )

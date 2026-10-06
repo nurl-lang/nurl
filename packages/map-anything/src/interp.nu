@@ -48,7 +48,7 @@ $ `stdlib/std/float.nu`
 
 // One axis's tap start and weights for output index o. Returns the
 // clamped base index; writes the four weights into w[0..3].
-@ __it_axis i o f rscale i insize * f w → i {
+unsafe @ __it_axis i o f rscale i insize * f w → i {
     : f src - * rscale + # f o 0.5 0.5
     : f fl ( float_floor src )
     : i i0 # i fl
@@ -66,7 +66,7 @@ $ `stdlib/std/float.nu`
     ^ v
 }
 
-@ interp_bicubic_torch * f pin i ih i iw i c i oh i ow f rsy f rsx * f pout → v {
+unsafe @ interp_bicubic_torch * f pin i ih i iw i c i oh i ow f rsy f rsx * f pout → v {
     ? | | | <= ih 0 <= iw 0 <= oh 0 <= ow 0 { ^ v } {}
     : ( Vec u ) wy__v ( vec_zeroed [u] 32 )
     : *f wy # *f ( vec_data [u] wy__v )

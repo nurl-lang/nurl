@@ -66,18 +66,18 @@ $ `stdlib/core/rcbox.nu`
 // every copy is the same state, and the last owner releases it.
 : OidcProvider { s ctl }
 
-@ OidcProvider_share OidcProvider h → OidcProvider { ^ @ OidcProvider { # s ( rcbox_share # i . h ctl ) } }
+unsafe @ OidcProvider_share OidcProvider h → OidcProvider { ^ @ OidcProvider { # s ( rcbox_share # i . h ctl ) } }
 
 @ OidcProvider_drop sink OidcProvider h → v {
     ( mem_forget h )
     ( rcbox_release [OidcProviderImpl] # i . h ctl )
 }
 
-@ _OidcProvider_ptr OidcProvider h → *OidcProviderImpl { ^ ( rcbox_ptr [OidcProviderImpl] # i . h ctl ) }
+unsafe @ _OidcProvider_ptr OidcProvider h → *OidcProviderImpl { ^ ( rcbox_ptr [OidcProviderImpl] # i . h ctl ) }
 
 // ── Lifecycle ──────────────────────────────────────────────────────
 
-@ oidc_provider_new s issuer → OidcProvider {
+unsafe @ oidc_provider_new s issuer → OidcProvider {
     : i p__box ( rcbox_zero [OidcProviderImpl] )
     : *OidcProviderImpl p ( rcbox_ptr [OidcProviderImpl] p__box )
     = . p issuer ( string_from issuer )
@@ -104,51 +104,51 @@ $ `stdlib/core/rcbox.nu`
 // The HTTP client every request goes through — exposed so a caller can
 // set a timeout, turn off certificate verification for a test provider,
 // or pin HTTP/3.
-@ oidc_provider_http OidcProvider p__h → HttpClient {
+unsafe @ oidc_provider_http OidcProvider p__h → HttpClient {
     : *OidcProviderImpl p ( _OidcProvider_ptr p__h )
     ^ . p http
 }
 
 // What discovery found (or a setter put there); "" when unset.
-@ oidc_provider_issuer OidcProvider p → s { ^ ( string_data . ( _OidcProvider_ptr p ) issuer ) }
+unsafe @ oidc_provider_issuer OidcProvider p → s { ^ ( string_data . ( _OidcProvider_ptr p ) issuer ) }
 
-@ oidc_provider_authorization_endpoint OidcProvider p → s { ^ ( string_data . ( _OidcProvider_ptr p ) authorization_endpoint ) }
+unsafe @ oidc_provider_authorization_endpoint OidcProvider p → s { ^ ( string_data . ( _OidcProvider_ptr p ) authorization_endpoint ) }
 
-@ oidc_provider_token_endpoint OidcProvider p → s { ^ ( string_data . ( _OidcProvider_ptr p ) token_endpoint ) }
+unsafe @ oidc_provider_token_endpoint OidcProvider p → s { ^ ( string_data . ( _OidcProvider_ptr p ) token_endpoint ) }
 
-@ oidc_provider_userinfo_endpoint OidcProvider p → s { ^ ( string_data . ( _OidcProvider_ptr p ) userinfo_endpoint ) }
+unsafe @ oidc_provider_userinfo_endpoint OidcProvider p → s { ^ ( string_data . ( _OidcProvider_ptr p ) userinfo_endpoint ) }
 
-@ oidc_provider_jwks_uri OidcProvider p → s { ^ ( string_data . ( _OidcProvider_ptr p ) jwks_uri ) }
+unsafe @ oidc_provider_jwks_uri OidcProvider p → s { ^ ( string_data . ( _OidcProvider_ptr p ) jwks_uri ) }
 
-@ oidc_provider_end_session_endpoint OidcProvider p → s { ^ ( string_data . ( _OidcProvider_ptr p ) end_session_endpoint ) }
+unsafe @ oidc_provider_end_session_endpoint OidcProvider p → s { ^ ( string_data . ( _OidcProvider_ptr p ) end_session_endpoint ) }
 
-@ oidc_provider_device_authorization_endpoint OidcProvider p → s { ^ ( string_data . ( _OidcProvider_ptr p ) device_authorization_endpoint ) }
+unsafe @ oidc_provider_device_authorization_endpoint OidcProvider p → s { ^ ( string_data . ( _OidcProvider_ptr p ) device_authorization_endpoint ) }
 
-@ oidc_provider_introspection_endpoint OidcProvider p → s { ^ ( string_data . ( _OidcProvider_ptr p ) introspection_endpoint ) }
+unsafe @ oidc_provider_introspection_endpoint OidcProvider p → s { ^ ( string_data . ( _OidcProvider_ptr p ) introspection_endpoint ) }
 
-@ oidc_provider_revocation_endpoint OidcProvider p → s { ^ ( string_data . ( _OidcProvider_ptr p ) revocation_endpoint ) }
+unsafe @ oidc_provider_revocation_endpoint OidcProvider p → s { ^ ( string_data . ( _OidcProvider_ptr p ) revocation_endpoint ) }
 
-@ oidc_provider_last_error OidcProvider p__h → s {
+unsafe @ oidc_provider_last_error OidcProvider p__h → s {
     : *OidcProviderImpl p ( _OidcProvider_ptr p__h )
     ^ ( string_data . p last_error )
 }
 
-@ oidc_provider_set_min_refetch OidcProvider p__h i secs → v {
+unsafe @ oidc_provider_set_min_refetch OidcProvider p__h i secs → v {
     : *OidcProviderImpl p ( _OidcProvider_ptr p__h )
     = . p min_refetch secs
 }
 
-@ _oidc_err * OidcProviderImpl p s msg → v {
+unsafe @ _oidc_err * OidcProviderImpl p s msg → v {
     ( _oauth_set_str . p last_error msg )
 }
 
-@ _oidc_err2 * OidcProviderImpl p s msg s detail → v {
+unsafe @ _oidc_err2 * OidcProviderImpl p s msg s detail → v {
     ( string_clear . p last_error )
     ( string_push_str . p last_error msg )
     ( string_push_str . p last_error detail )
 }
 
-@ _oidc_err_status * OidcProviderImpl p s what i status → v {
+unsafe @ _oidc_err_status * OidcProviderImpl p s what i status → v {
     ( string_clear . p last_error )
     ( string_push_str . p last_error what )
     ( string_push_str . p last_error ` returned HTTP ` )
@@ -157,22 +157,22 @@ $ `stdlib/core/rcbox.nu`
 
 // ── Field setters (for a provider configured by hand) ──────────────
 
-@ oidc_provider_set_jwks_uri OidcProvider p__h s uri → v {
+unsafe @ oidc_provider_set_jwks_uri OidcProvider p__h s uri → v {
     : *OidcProviderImpl p ( _OidcProvider_ptr p__h )
     ( _oauth_set_str . p jwks_uri uri )
 }
 
-@ oidc_provider_set_token_endpoint OidcProvider p__h s uri → v {
+unsafe @ oidc_provider_set_token_endpoint OidcProvider p__h s uri → v {
     : *OidcProviderImpl p ( _OidcProvider_ptr p__h )
     ( _oauth_set_str . p token_endpoint uri )
 }
 
-@ oidc_provider_set_authorization_endpoint OidcProvider p__h s uri → v {
+unsafe @ oidc_provider_set_authorization_endpoint OidcProvider p__h s uri → v {
     : *OidcProviderImpl p ( _OidcProvider_ptr p__h )
     ( _oauth_set_str . p authorization_endpoint uri )
 }
 
-@ oidc_provider_set_userinfo_endpoint OidcProvider p__h s uri → v {
+unsafe @ oidc_provider_set_userinfo_endpoint OidcProvider p__h s uri → v {
     : *OidcProviderImpl p ( _OidcProvider_ptr p__h )
     ( _oauth_set_str . p userinfo_endpoint uri )
 }
@@ -180,14 +180,14 @@ $ `stdlib/core/rcbox.nu`
 // The cached key set becomes `ks`: the old keys are dropped from the
 // Vec, the new ones moved onto it (the field itself is not stored over —
 // a store through the pointer would not release what it overwrites).
-@ __oidc_keys_replace * OidcProviderImpl p sink ( Vec JwkKey ) ks → v {
+unsafe @ __oidc_keys_replace * OidcProviderImpl p sink ( Vec JwkKey ) ks → v {
     ( vec_clear [JwkKey] . p keys )
     ( vec_append [JwkKey] . p keys ks )
 }
 
 // Load a key set the caller already has (a pinned JWKS, an offline
 // verifier, a test). Replaces whatever was cached.
-@ oidc_provider_set_jwks OidcProvider p__h s jwks_json → b {
+unsafe @ oidc_provider_set_jwks OidcProvider p__h s jwks_json → b {
     : *OidcProviderImpl p ( _OidcProvider_ptr p__h )
     : ( Vec JwkKey ) ks ( jwks_parse jwks_json )
     ? == 0 ( vec_len [JwkKey] ks ) { ^ F } {}
@@ -196,7 +196,7 @@ $ `stdlib/core/rcbox.nu`
     ^ T
 }
 
-@ oidc_provider_key_count OidcProvider p__h → i {
+unsafe @ oidc_provider_key_count OidcProvider p__h → i {
     : *OidcProviderImpl p ( _OidcProvider_ptr p__h )
     ^ ( vec_len [JwkKey] . p keys )
 }
@@ -205,7 +205,7 @@ $ `stdlib/core/rcbox.nu`
 
 // GET a JSON document. Owns nothing of the caller's; the returned Json
 // is owned by the caller.
-@ __oidc_get_json * OidcProviderImpl p s what s url → !Json OauthErr {
+unsafe @ __oidc_get_json * OidcProviderImpl p s what s url → !Json OauthErr {
     ?? ( http_client_get . p http url ) {
         T r → {
             : i status ( http_client_status r )
@@ -254,7 +254,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Fetch the metadata document and adopt its endpoints. None = success.
-@ oidc_discover OidcProvider p__h → ?OauthErr {
+unsafe @ oidc_discover OidcProvider p__h → ?OauthErr {
     : *OidcProviderImpl p ( _OidcProvider_ptr p__h )
     : String url ( oidc_discovery_url ( string_data . p issuer ) )
     : !Json OauthErr dj ( __oidc_get_json p `discovery` ( string_data url ) )
@@ -293,7 +293,7 @@ $ `stdlib/core/rcbox.nu`
 // ── Key set ────────────────────────────────────────────────────────
 
 // Fetch jwks_uri and replace the cached set. None = success.
-@ oidc_fetch_jwks OidcProvider p__h → ?OauthErr {
+unsafe @ oidc_fetch_jwks OidcProvider p__h → ?OauthErr {
     : *OidcProviderImpl p ( _OidcProvider_ptr p__h )
     ? == 0 ( string_len . p jwks_uri ) {
         ( _oidc_err p `no jwks_uri — run discovery or set one` )
@@ -319,7 +319,7 @@ $ `stdlib/core/rcbox.nu`
 
 // Index of the key for (kid, alg), fetching or re-fetching the JWKS when
 // that is what it takes. -1 when the provider has no such key.
-@ oidc_provider_ensure_key OidcProvider p__h s kid s alg → i {
+unsafe @ oidc_provider_ensure_key OidcProvider p__h s kid s alg → i {
     : *OidcProviderImpl p ( _OidcProvider_ptr p__h )
     ? == 0 ( vec_len [JwkKey] . p keys ) {
         ?? ( oidc_fetch_jwks p__h ) { T _ → { ^ -1 } F _ → {} }
@@ -353,7 +353,7 @@ $ `stdlib/core/rcbox.nu`
     ^ ( _oidc_verify_at p__h pol__h token now T )
 }
 
-@ _oidc_verify_at OidcProvider p__h OidcPolicy pol__h s token i now b access → !OidcIdentity OauthErr {
+unsafe @ _oidc_verify_at OidcProvider p__h OidcPolicy pol__h s token i now b access → !OidcIdentity OauthErr {
     : *OidcPolicyImpl pol ( _OidcPolicy_ptr pol__h )
     : *OidcProviderImpl p ( _OidcProvider_ptr p__h )
     // Read the JOSE header ONCE: a token that is not a well-formed JWS

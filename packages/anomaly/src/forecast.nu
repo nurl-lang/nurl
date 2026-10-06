@@ -123,16 +123,16 @@ $ `stdlib/core/rcbox.nu`
 // every copy is the same state, and the last owner releases it.
 : FcModel { s ctl }
 
-@ FcModel_share FcModel h → FcModel { ^ @ FcModel { # s ( rcbox_share # i . h ctl ) } }
+unsafe @ FcModel_share FcModel h → FcModel { ^ @ FcModel { # s ( rcbox_share # i . h ctl ) } }
 
 @ FcModel_drop sink FcModel h → v {
     ( mem_forget h )
     ( rcbox_release [FcModelImpl] # i . h ctl )
 }
 
-@ _FcModel_ptr FcModel h → *FcModelImpl { ^ ( rcbox_ptr [FcModelImpl] # i . h ctl ) }
+unsafe @ _FcModel_ptr FcModel h → *FcModelImpl { ^ ( rcbox_ptr [FcModelImpl] # i . h ctl ) }
 
-@ fc_new → FcModel {
+unsafe @ fc_new → FcModel {
     : i fc__box ( rcbox_zero [FcModelImpl] )
     : *FcModelImpl fc ( rcbox_ptr [FcModelImpl] fc__box )
     = . fc trained F
@@ -158,7 +158,7 @@ $ `stdlib/core/rcbox.nu`
 // The models are read in place in the loops below — `. pm j` through the
 // Vec's data is a view, nothing counted. A model handed OUT of the table
 // (model_forecast_model) is another owner of it.
-@ _fc_model_at FcModel fc__h i j → ArimaModel {
+unsafe @ _fc_model_at FcModel fc__h i j → ArimaModel {
     : *FcModelImpl fc ( _FcModel_ptr fc__h )
     ?? ( vec_get [ArimaModel] . fc models j ) { T m → { ^ ( ArimaModel_share m ) } F _ → {} }
     ^ @ ArimaModel { # s 0 }
@@ -173,7 +173,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Drop the trained models; the handle stays, untrained.
-@ fc_clear FcModel fc__h → v {
+unsafe @ fc_clear FcModel fc__h → v {
     : *FcModelImpl fc ( _FcModel_ptr fc__h )
     ( vec_clear [ArimaModel] . fc models )
     ( vec_clear [String] . fc feats )
@@ -303,7 +303,7 @@ $ `stdlib/core/rcbox.nu`
     f naive
 }
 
-@ __fc_holdout ( Vec f ) y i nfit i h FcCand c → FcScore {
+unsafe @ __fc_holdout ( Vec f ) y i nfit i h FcCand c → FcScore {
     : i n ( vec_len [f] y )
     : ( Vec f ) head ( vec_zeroed [f] nfit )
     : *f py ( vec_data [f] y )
@@ -344,7 +344,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Select the form on the holdout, then fit it on the whole window.
-@ __fc_job_run * FcJob j → v {
+unsafe @ __fc_job_run * FcJob j → v {
     : i n ( vec_len [f] . j y )
     : ~ i hold / n 5
     ? < hold ANOM_FC_HOLDOUT_MIN { = hold ANOM_FC_HOLDOUT_MIN } {}
@@ -383,7 +383,7 @@ $ `stdlib/core/rcbox.nu`
 
 // Jobs lane, lane + stride, … of the `n` at `base` (the jobs Vec's data:
 // each job is written by one lane only).
-@ __fc_lane_run i base i n i lane i stride → v {
+unsafe @ __fc_lane_run i base i n i lane i stride → v {
     : ~ i k lane
     ~ < k n {
         ( __fc_job_run # *FcJob + base * k Z FcJob )
@@ -443,7 +443,7 @@ $ `stdlib/core/rcbox.nu`
 : s FC_KIND_COUNTER `counter (rises by a fixed step and resets)`
 
 // The kind and the spread of the present readings.
-@ __fc_series_kind ( Vec f ) vals → FcSeries {
+unsafe @ __fc_series_kind ( Vec f ) vals → FcSeries {
     : i n ( vec_len [f] vals )
     : ( Vec f ) y ( vec_new [f] )
     ? < n 3 { ^ @ FcSeries { y n F 0 0.0 } } {}
@@ -509,7 +509,7 @@ $ `stdlib/core/rcbox.nu`
     ^ @ FcSeries { y n T kind spread }
 }
 
-@ __fc_fit_series ( Vec f ) hist i nw i j i from i n → FcSeries {
+unsafe @ __fc_fit_series ( Vec f ) hist i nw i j i from i n → FcSeries {
     : i len - n from
     : ( Vec f ) y ( vec_zeroed [f] len )
     : *f py ( vec_data [f] y )
@@ -568,7 +568,7 @@ $ `stdlib/core/rcbox.nu`
 // the window gets a model; the models are then filtered over the whole
 // ring so their states stand at its end. Returns the number of features
 // watched.
-@ fc_train FcModel fc__h Meta mm__h ( Vec EncPoint ) encs i from i season i now i base_seq → i {
+unsafe @ fc_train FcModel fc__h Meta mm__h ( Vec EncPoint ) encs i from i season i now i base_seq → i {
     : *FcModelImpl fc ( _FcModel_ptr fc__h )
     : *MetaImpl mm ( _Meta_ptr mm__h )
     ( fc_clear fc__h )
@@ -705,7 +705,7 @@ $ `stdlib/core/rcbox.nu`
 // ── Streaming ─────────────────────────────────────────────────────────
 
 // Absorb one row of readings (the watched features' values, NaN = gap).
-@ fc_absorb FcModel fc__h ( Vec f ) raw → v {
+unsafe @ fc_absorb FcModel fc__h ( Vec f ) raw → v {
     : *FcModelImpl fc ( _FcModel_ptr fc__h )
     : i nw . fc nw
     : *ArimaModel pm ( vec_data [ArimaModel] . fc models )
@@ -719,7 +719,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // The ring evicted its oldest row.
-@ fc_evict FcModel fc__h → v {
+unsafe @ fc_evict FcModel fc__h → v {
     : *FcModelImpl fc ( _FcModel_ptr fc__h )
     ? > . fc pos 0 { = . fc pos - . fc pos 1 } {}
 }
@@ -735,7 +735,7 @@ $ `stdlib/core/rcbox.nu`
 // Judge a row of readings against the models' current forecasts. With
 // `absorb` the readings are then absorbed (the live ingest: the row is
 // the ring's newest); without, the states stay (detect_only).
-@ fc_judge FcModel fc__h ( Vec f ) raw b absorb → FcOut {
+unsafe @ fc_judge FcModel fc__h ( Vec f ) raw b absorb → FcOut {
     : *FcModelImpl fc ( _FcModel_ptr fc__h )
     : i nw . fc nw
     : ( Vec f ) z ( vec_zeroed [f] nw )
@@ -783,7 +783,7 @@ $ `stdlib/core/rcbox.nu`
     ( Vec ( Vec f ) ) se
 }
 
-@ fc_forecast FcModel fc__h i h → FcForecast {
+unsafe @ fc_forecast FcModel fc__h i h → FcForecast {
     : *FcModelImpl fc ( _FcModel_ptr fc__h )
     : ( Vec String ) feats ( vec_new [String] )
     : ( Vec ( Vec f ) ) means ( vec_new [( Vec f )] )
@@ -806,7 +806,7 @@ $ `stdlib/core/rcbox.nu`
 // A copy of every model, restarted: the stream begins again at the row
 // whose absolute sequence number is `seq` (the regressors' phase
 // follows from it).
-@ fc_replay_begin FcModel fc__h i seq → ( Vec ArimaModel ) {
+unsafe @ fc_replay_begin FcModel fc__h i seq → ( Vec ArimaModel ) {
     : *FcModelImpl fc ( _FcModel_ptr fc__h )
     : ( Vec ArimaModel ) out ( vec_new [ArimaModel] )
     : i nw . fc nw
@@ -825,7 +825,7 @@ $ `stdlib/core/rcbox.nu`
 // written into `z` when it is not empty.
 // The z-score of an innovation against the larger of the forecast's
 // standard error and the feature's floor (ANOM_FC_SE_FLOOR × spread).
-@ __fc_z FcModel fc__h i j f innovation f variance → f {
+unsafe @ __fc_z FcModel fc__h i j f innovation f variance → f {
     : *FcModelImpl fc ( _FcModel_ptr fc__h )
     : ~ f se ? > variance 0.0 ( float_sqrt variance ) 0.0
     : f floor * ANOM_FC_SE_FLOOR ( _fc_getf . fc scale j )
@@ -850,7 +850,7 @@ $ `stdlib/core/rcbox.nu`
     ^ z
 }
 
-@ fc_replay_step FcModel fc__h ( Vec ArimaModel ) copies ( Vec f ) raw ( Vec f ) z → v {
+unsafe @ fc_replay_step FcModel fc__h ( Vec ArimaModel ) copies ( Vec f ) raw ( Vec f ) z → v {
     : i nw ( vec_len [ArimaModel] copies )
     : *f pz ( vec_data [f] z )
     : b want == ( vec_len [f] z ) nw
@@ -896,7 +896,7 @@ $ `stdlib/core/rcbox.nu`
 
 : s FC_FORMAT `anomaly-forecast-1`
 
-@ fc_to_json_str FcModel fc__h → String {
+unsafe @ fc_to_json_str FcModel fc__h → String {
     : *FcModelImpl fc ( _FcModel_ptr fc__h )
     : Json o ( json_obj_new )
     ( json_obj_set o `format` ( json_str_lit FC_FORMAT ) )
@@ -935,7 +935,7 @@ $ `stdlib/core/rcbox.nu`
 
 // None on a malformed document; a document whose models do not parse
 // is untrained.
-@ fc_from_json_str s src → ?FcModel {
+unsafe @ fc_from_json_str s src → ?FcModel {
     ?? ( json_parse src ) {
         T o → {
             : ~ b ok ( json_is_obj o )
@@ -1067,7 +1067,7 @@ $ `stdlib/core/rcbox.nu`
 // season it does not model, and a reader who takes the number at face
 // value believes a daily rhythm is being watched when nothing of the
 // kind is happening.
-@ fc_seasonal_count FcModel fc__h → i {
+unsafe @ fc_seasonal_count FcModel fc__h → i {
     : *FcModelImpl fc ( _FcModel_ptr fc__h )
     : ~ i n 0
     : ~ i j 0
@@ -1085,14 +1085,14 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // The form a feature's fit chose ("naive", "arima", "fourier4", …).
-@ fc_selected_of FcModel fc__h i j → s {
+unsafe @ fc_selected_of FcModel fc__h i j → s {
     : *FcModelImpl fc ( _FcModel_ptr fc__h )
     ?? ( vec_get [String] . fc sel j ) { T sn → { ^ ( string_data sn ) } F _ → {} }
     ^ ``
 }
 
 // What a reader sees of the version (the metadata response's block).
-@ fc_info_json FcModel fc__h → Json {
+unsafe @ fc_info_json FcModel fc__h → Json {
     : *FcModelImpl fc ( _FcModel_ptr fc__h )
     : Json o ( json_obj_new )
     ( json_obj_set o `trained` ( json_bool . fc trained ) )

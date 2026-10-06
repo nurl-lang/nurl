@@ -17,7 +17,7 @@ $ `src/preproc.nu`
 // would be 800k numbers per frame.
 : i STRIDE 997
 
-@ dump_one s path → v {
+unsafe @ dump_one s path → v {
     : !Frame String r ( pp_load path SIZE PATCH )
     ?? r {
         F e → {

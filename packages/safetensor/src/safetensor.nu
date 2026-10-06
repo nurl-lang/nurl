@@ -137,14 +137,14 @@ $ `stdlib/core/rcbox.nu`
 // every copy is the same open file, and the last owner releases it.
 : St { s ctl }
 
-@ St_share St h → St { ^ @ St { # s ( rcbox_share # i . h ctl ) } }
+unsafe @ St_share St h → St { ^ @ St { # s ( rcbox_share # i . h ctl ) } }
 
 @ St_drop sink St h → v {
     ( mem_forget h )
     ( rcbox_release [StImpl] # i . h ctl )
 }
 
-@ __St_ptr St h → *StImpl { ^ ( rcbox_ptr [StImpl] # i . h ctl ) }
+unsafe @ __St_ptr St h → *StImpl { ^ ( rcbox_ptr [StImpl] # i . h ctl ) }
 
 // An St that holds no file — for a slot that may be empty (a model whose
 // checkpoint is some other format). st_is_open tells the two apart.
@@ -164,7 +164,7 @@ $ `stdlib/core/rcbox.nu`
 
 // Read the u64 header length from the first 8 bytes. Little-endian, and a
 // value ≥ 2^63 surfaces as negative — which the caller rejects.
-@ __st_hdr_len * u p → i {
+unsafe @ __st_hdr_len * u p → i {
     : ~ i v 0
     : ~ i k 7
     ~ >= k 0 {
@@ -210,7 +210,7 @@ $ `stdlib/core/rcbox.nu`
 // not a mapping (the St holds it for as long as the tensors are read);
 // st_open hands in an empty Vec for a mapping, which it owns until this
 // succeeds.
-@ __st_parse * u p i n sink ( Vec u ) keep → !St String {
+unsafe @ __st_parse * u p i n sink ( Vec u ) keep → !St String {
     ? < n 8 { ^ ( __st_errs `safetensor: file too small (< 8 bytes)` ) } {}
     : i hlen ( __st_hdr_len p )
     // hlen is attacker-chosen: it must be positive, and 8 + hlen must fit in
@@ -374,7 +374,7 @@ $ `stdlib/core/rcbox.nu`
 
 // mmap-backed where the platform has it (POSIX), a whole-file read where it
 // does not (wasm, win32) — correct everywhere, lazy where it matters.
-@ st_open s path → !St String {
+unsafe @ st_open s path → !St String {
     ? != ( posix_const `MAP_PRIVATE` ) -1 {
         : i32 fd ( open path # i32 ( posix_const `O_RDONLY` ) # i32 0 )
         ? < # i fd 0 {
@@ -427,23 +427,23 @@ $ `stdlib/core/rcbox.nu`
 
 // ── accessors ───────────────────────────────────────────────────────
 
-@ st_n_tensors St s__h → i {
+unsafe @ st_n_tensors St s__h → i {
     : *StImpl s ( __St_ptr s__h )
     ^ ( vec_len [StTensor] . s tensors )
 }
 
 // The tensor table (borrowed: valid while the St is).
-@ st_tensors St s__h → ( Vec StTensor ) {
+unsafe @ st_tensors St s__h → ( Vec StTensor ) {
     : *StImpl s ( __St_ptr s__h )
     ^ . s tensors
 }
 
-@ st_data_size St s__h → i {
+unsafe @ st_data_size St s__h → i {
     : *StImpl s ( __St_ptr s__h )
     ^ . s data_size
 }
 
-@ st_find_tensor St s__h s name → i {
+unsafe @ st_find_tensor St s__h s name → i {
     : *StImpl s ( __St_ptr s__h )
     : ~ i k 0
     : i n ( vec_len [StTensor] . s tensors )
@@ -459,7 +459,7 @@ $ `stdlib/core/rcbox.nu`
 
 // The tensor's bytes, straight out of the mapping. Borrowed: valid while
 // the St (any copy of it) is.
-@ st_tensor_ptr St s__h StTensor t → *u {
+unsafe @ st_tensor_ptr St s__h StTensor t → *u {
     : *StImpl s ( __St_ptr s__h )
     ^ # *u + # i . s map . t offset
 }
@@ -471,11 +471,11 @@ $ `stdlib/core/rcbox.nu`
 // Little-endian scalar reads straight out of the mapping. stdlib's
 // bytes_read_* take a Vec; a mapping is a raw pointer, so these are the
 // pointer-shaped siblings (the same idiom gguf/dequant.nu uses).
-@ __st_u16 * u P i o → i {
+unsafe @ __st_u16 * u P i o → i {
     ^ | # i . P o << # i . P + o 1 8
 }
 
-@ _st_u32 * u P i o → i {
+unsafe @ _st_u32 * u P i o → i {
     ^ | # i . P o | << # i . P + o 1 8 | << # i . P + o 2 16 << # i . P + o 3 24
 }
 
@@ -486,7 +486,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Sign-extending readers: the raw word is unsigned, the dtype is not.
-@ __st_i8 * u P i o → i {
+unsafe @ __st_i8 * u P i o → i {
     : i v # i . P o
     ^ ? > v 127 - v 256 v
 }
@@ -504,7 +504,7 @@ $ `stdlib/core/rcbox.nu`
 // One element of a tensor, as f32. Every dtype widens to f32 here — an f64
 // loses precision (by construction: the device runs f32) and an integer
 // tensor becomes its numeric value.
-@ __st_read_f * u P i dt i idx → f {
+unsafe @ __st_read_f * u P i dt i idx → f {
     ? == dt ST_F32 { ^ # f ( bits_to_f32 ( _st_u32 P * idx 4 ) ) } {}
     ? == dt ST_F16 { ^ ( f16_to_f ( __st_u16 P * idx 2 ) ) } {}
     ? == dt ST_BF16 { ^ ( bf16_to_f ( __st_u16 P * idx 2 ) ) } {}
@@ -523,7 +523,7 @@ $ `stdlib/core/rcbox.nu`
 // Elements [first, first+count) of tensor `idx`, as f32 BYTES (4 per
 // element) — the same shape of result gguf_dequant returns, so a caller can
 // upload it to the device without knowing which container it came from.
-@ st_dequant_range St s__h i idx i first i count → !( Vec u ) String {
+unsafe @ st_dequant_range St s__h i idx i first i count → !( Vec u ) String {
     : *StImpl s ( __St_ptr s__h )
     ? | < idx 0 >= idx ( vec_len [StTensor] . s tensors ) {
         ^ ( __st_err_vec `safetensor: tensor index out of range` )
@@ -566,7 +566,7 @@ $ `stdlib/core/rcbox.nu`
     ^ @ !( Vec u ) String { T out }
 }
 
-@ st_dequant St s__h i idx → !( Vec u ) String {
+unsafe @ st_dequant St s__h i idx → !( Vec u ) String {
     : *StImpl s ( __St_ptr s__h )
     ? | < idx 0 >= idx ( vec_len [StTensor] . s tensors ) {
         ^ ( __st_err_vec `safetensor: tensor index out of range` )

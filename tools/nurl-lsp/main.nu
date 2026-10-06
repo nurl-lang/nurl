@@ -164,7 +164,7 @@ $ `tools/nurl-lsp/jsonrpc.nu`
 
 // LSP positions count UTF-16 code units; the source and compiler offsets are
 // UTF-8 bytes. This also represents EOF on a final line without a newline.
-@ __position_at_byte s text i at → Json {
+unsafe @ __position_at_byte s text i at → Json {
     : i n ( nurl_str_len text )
     : *u p # *u text
     : ~ i k 0
@@ -310,7 +310,7 @@ $ `tools/nurl-lsp/jsonrpc.nu`
     ^ ( string_from uri )
 }
 
-@ __path_to_uri s path → String {
+unsafe @ __path_to_uri s path → String {
     : String out ( string_with_cap + 7 ( nurl_str_len path ) )
     ( string_push_str out `file://` )
     // Forward slashes form URI paths on every host. A Windows drive gets
@@ -715,8 +715,9 @@ $ `tools/nurl-lsp/jsonrpc.nu`
                                         ? & == depth 0 != at_line_start 0 {
                                             // Decl-start scan. A declaration may
                                             // carry any run of the `pub` (v2.0),
-                                            // `simd` (v2.6) and `inline` (v2.7)
-                                            // prefixes, in any order, so consume
+                                            // `simd` (v2.6), `inline` (v2.7) and
+                                            // `unsafe` (v2.8) prefixes, in any
+                                            // order, so consume
                                             // whatever run precedes the sigil.
                                             //
                                             // This used to read one identifier
@@ -737,7 +738,7 @@ $ `tools/nurl-lsp/jsonrpc.nu`
                                                 ? > ie p {
                                                     : String tok ( __substr content p ie )
                                                     : s td ( string_data tok )
-                                                    ? | | != 0 ( nurl_str_eq td `pub` ) != 0 ( nurl_str_eq td `simd` ) != 0 ( nurl_str_eq td `inline` ) {
+                                                    ? | | | != 0 ( nurl_str_eq td `pub` ) != 0 ( nurl_str_eq td `simd` ) != 0 ( nurl_str_eq td `inline` ) != 0 ( nurl_str_eq td `unsafe` ) {
                                                         = p ( __skip_ws content ie n )
                                                         = more T
                                                     } {}
@@ -2021,6 +2022,7 @@ $ `tools/nurl-lsp/jsonrpc.nu`
     ? != 0 ( nurl_str_eq name `pub` ) { ^ T } {}
     ? != 0 ( nurl_str_eq name `simd` ) { ^ T } {}
     ? != 0 ( nurl_str_eq name `inline` ) { ^ T } {}
+    ? != 0 ( nurl_str_eq name `unsafe` ) { ^ T } {}
     ^ F
 }
 

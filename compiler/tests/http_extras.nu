@@ -243,7 +243,7 @@ $ `stdlib/ext/http.nu`
 
 // ── response_set_cookie ──────────────────────────────────────────────
 
-@ body_to_string HttpResponse r → String {
+unsafe @ body_to_string HttpResponse r → String {
     : i n ( vec_len [u] . r body )
     : *u data ( vec_data [u] . r body )
     : String out ( string_with_cap n )
@@ -256,7 +256,7 @@ $ `stdlib/ext/http.nu`
     ^ out
 }
 
-@ wire_to_string ( Vec u ) wire → String {
+unsafe @ wire_to_string ( Vec u ) wire → String {
     : i n ( vec_len [u] wire )
     : *u data ( vec_data [u] wire )
     : String out ( string_with_cap n )

@@ -105,6 +105,104 @@ def core_iter_invalidation(n):
     ], "while iterating over it")
 
 
+# ── the sound-and-complete cores (docs/SOUND_COMPLETE_PLAN.md) ────────
+#
+# One per family of hole the move/borrow rules close (tools/fuzz/holes/).
+# A core may need top-level declarations of its own: it appends them to
+# CORE_DECLS, which build() emits once. Their markers name the RULE, so a
+# rejection for an unrelated reason does not count. Run these with
+# NURL_SOUND=1 until the rules are the default.
+
+CORE_DECLS = []
+
+
+def _decl(lines):
+    for l in lines:
+        if l not in CORE_DECLS:
+            CORE_DECLS.append(l)
+
+
+def core_read_after_store(n):
+    """A value read through its old name after it moved into an aggregate."""
+    _decl([f": Hold{n} {{ ( Vec i ) items }}"])
+    return ([
+        f": ( Vec i ) a{n} ( vec_new [i] )",
+        f"( vec_push [i] a{n} 7 )",
+        f": Hold{n} h{n} @ Hold{n} {{ a{n} }}",
+        f"( vec_free [i] . h{n} items )",
+        f"( nurl_print ( nurl_str_int ( vec_len [i] a{n} ) ) )",
+    ], "its value was moved into")
+
+
+def core_elem_borrow_after_free(n):
+    """A vec_get borrow of an element read after the Vec is released."""
+    return ([
+        f": ( Vec String ) vs{n} ( vec_new [String] )",
+        f"( vec_push [String] vs{n} ( string_from `element {n}, long enough to be heap` ) )",
+        f": String e{n} ?? ( vec_get [String] vs{n} 0 ) {{ T x{n} → x{n} F → ( string_from `` ) }}",
+        f"( vec_free [String] vs{n} )",
+        f"( nurl_print ( string_data e{n} ) )",
+    ], "borrows from")
+
+
+def core_returned_arg_double_free(n):
+    """A callee hands back its argument; both names are released."""
+    _decl([f"@ pass{n} ( Vec i ) x → ( Vec i ) {{ ^ x }}"])
+    return ([
+        f": ( Vec i ) a{n} ( vec_new [i] )",
+        f"( vec_push [i] a{n} 1 )",
+        f": ( Vec i ) b{n} ( pass{n} a{n} )",
+        f"( vec_free [i] a{n} )",
+        f"( vec_free [i] b{n} )",
+    ], "borrows from")
+
+
+def core_view_after_grow(n):
+    """A string view read after the String grew (and may have moved)."""
+    return ([
+        f": String t{n} ( string_from `abc` )",
+        f": s v{n} ( string_data t{n} )",
+        f": ~ i k{n} 0",
+        f"~ < k{n} 64 {{ ( string_push_str t{n} `xxxxxxxxxxxxxxxx` ) = k{n} + k{n} 1 }}",
+        f"( nurl_print v{n} )",
+    ], "is stale")
+
+
+def core_field_view_after_replace(n):
+    """A view of a field read after the field was given a new value."""
+    _decl([f": Fh{n} {{ String v }}"])
+    return ([
+        f": ~ Fh{n} h{n} @ Fh{n} {{ ( string_from `first value {n}, heap allocated` ) }}",
+        f": s view{n} ( string_data . h{n} v )",
+        f"= . h{n} v ( string_from `second` )",
+        f"( nurl_print view{n} )",
+    ], "is stale")
+
+
+def core_payload_of_lent_option(n):
+    """A helper frees the payload of an Option it was only lent."""
+    _decl([f"@ eat{n} ? String o → v {{ ?? o {{ T s → {{ ( string_free s ) }} F → {{}} }} }}"])
+    return ([
+        f": String s{n} ( string_from `owned by the caller {n}, on the heap` )",
+        f"( eat{n} @ ?String {{ T s{n} }} )",
+        f"( nurl_print ( string_data s{n} ) )",
+    ], "is a borrow")
+
+
+def core_kept_closure_capture(n):
+    """A closure kept by a callee outlives the String it captured."""
+    _decl([f": Job{n} {{ ( @ v ) f }}",
+           f": Keep{n} {{ ( Vec Job{n} ) jobs }}",
+           f"@ keep{n} Keep{n} k ( @ v ) f → v {{ ( vec_push [Job{n}] . k jobs @ Job{n} {{ f }} ) }}"])
+    return ([
+        f": ~ Keep{n} kp{n} @ Keep{n} {{ ( vec_new [Job{n}] ) }}",
+        f": String t{n} ( string_from `captured {n}, a heap string` )",
+        f"( keep{n} kp{n} \\ → v {{ ( nurl_print ( string_data t{n} ) ) }} )",
+        f"( string_free t{n} )",
+        f"?? ( vec_get [Job{n}] . kp{n} jobs 0 ) {{ T j{n} → {{ : ( @ v ) g{n} . j{n} f ( g{n} ) }} F → {{}} }}",
+    ], "may hold a closure")
+
+
 CORES = [
     core_alias_double_free,
     core_same_binding_double_free,
@@ -112,13 +210,20 @@ CORES = [
     core_string_double_free,
     core_loop_carried_free,
     core_iter_invalidation,
+    core_read_after_store,
+    core_elem_borrow_after_free,
+    core_returned_arg_double_free,
+    core_view_after_grow,
+    core_field_view_after_replace,
+    core_payload_of_lent_option,
+    core_kept_closure_capture,
 ]
 
 # Cores that already contain a loop of their own. Nesting one inside a
 # foreach would iterate a container it also mutates — a second, different
 # violation whose diagnostic wins, and the oracle would be checking for the
 # wrong marker. Keep the finding attributable to one cause.
-LOOPY = {core_loop_carried_free, core_iter_invalidation}
+LOOPY = {core_loop_carried_free, core_iter_invalidation, core_view_after_grow}
 
 
 def indent(lines, by="    "):
@@ -238,6 +343,7 @@ FN_CTXS = [
 
 def build(seed, depth):
     rng = random.Random(seed)
+    CORE_DECLS.clear()
     core = rng.choice(CORES)
     n = rng.randrange(1000, 9999)
     body, marker = core(n)
@@ -255,7 +361,7 @@ def build(seed, depth):
     if fn is not None and fn.blocks_defer:
         picks = [c for c in picks if c.name != "defer"]
 
-    decls = []
+    decls = list(CORE_DECLS)
     for c in picks:
         n += 1
         body = c.wrap(body, n, decls)

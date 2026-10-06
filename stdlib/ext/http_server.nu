@@ -115,6 +115,17 @@ $ `stdlib/ext/http_request.nu`
 $ `stdlib/ext/http_response.nu`
 $ `stdlib/ext/http2_conn.nu`
 
+// The DoS counters (stdlib/std/dos.nu keeps them in runtime-side memory
+// behind an `i`) in an rcbox: every copy of the server — each worker's,
+// the one server_stop is handed — is the same gate, and the last owner
+// releases it. Releasing it in server_stop instead would pull it from
+// under a worker still finishing its connection.
+: HttpDosGateImpl { i raw }
+
+% Drop HttpDosGateImpl { @ drop HttpDosGateImpl x → v { ( dos_state_free . x raw ) } }
+
+: HttpDosGate { s ctl }
+
 // ── HttpServer struct + lifecycle ─────────────────────────────────────
 //
 // Six knobs at v2.1+:
@@ -133,8 +144,7 @@ $ `stdlib/ext/http2_conn.nu`
 //                                cancellation primitives) — enforcement is
 //                                post-handler only; the per-conn idle
 //                                timeout covers slow reads.
-
-: HttpServer {
+: HttpServerImpl {
     TcpListener listener
     ( @ HttpResponse HttpRequest ) handler
     i idle_timeout_ms
@@ -152,16 +162,25 @@ $ `stdlib/ext/http2_conn.nu`
     HttpDosGate dos_state
 }
 
-// The DoS counters (stdlib/std/dos.nu keeps them in runtime-side memory
-// behind an `i`) in an rcbox: every copy of the server — each worker's,
-// the one server_stop is handed — is the same gate, and the last owner
-// releases it. Releasing it in server_stop instead would pull it from
-// under a worker still finishing its connection.
-: HttpDosGateImpl { i raw }
+// A server is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same server — a worker thread's, a connection fiber's,
+// the one server_stop is handed from another thread — and the last owner
+// releases it. A thread or fiber that captures one takes a share of its
+// own, so the server outlives whichever side finishes first.
+: HttpServer { s ctl }
 
-% Drop HttpDosGateImpl { @ drop HttpDosGateImpl x → v { ( dos_state_free . x raw ) } }
+@ HttpServer_share HttpServer h → HttpServer { ^ @ HttpServer { # s ( rcbox_share # i . h ctl ) } }
 
-: HttpDosGate { s ctl }
+@ HttpServer_drop sink HttpServer h → v {
+    ( mem_forget h )
+    ( rcbox_release [HttpServerImpl] # i . h ctl )
+}
+
+@ __srv HttpServer h → *HttpServerImpl { ^ ( rcbox_ptr [HttpServerImpl] # i . h ctl ) }
+
+@ __srv_new sink HttpServerImpl impl → HttpServer {
+    ^ @ HttpServer { # s ( rcbox_new [HttpServerImpl] impl ) }
+}
 
 @ HttpDosGate_share HttpDosGate h → HttpDosGate { ^ @ HttpDosGate { # s ( rcbox_share # i . h ctl ) } }
 
@@ -251,34 +270,34 @@ $ `stdlib/ext/http2_conn.nu`
 @ server_default_request_total_timeout_ms → i { ^ 0 }
 
 @ server_new TcpListener listener ( @ HttpResponse HttpRequest ) handler → HttpServer {
-    ^ @ HttpServer { listener handler
+    ^ ( __srv_new @ HttpServerImpl { listener handler
         ( server_default_idle_timeout_ms )
         ( server_default_max_keepalive_requests )
         ( http_default_limits )
         ( server_default_request_total_timeout_ms )
-        @ HttpDosGate { # s 0 } }
+        @ HttpDosGate { # s 0 } } )
 }
 
 @ server_new_with_timeout TcpListener listener ( @ HttpResponse HttpRequest ) handler i idle_timeout_ms → HttpServer {
-    ^ @ HttpServer { listener handler idle_timeout_ms
+    ^ ( __srv_new @ HttpServerImpl { listener handler idle_timeout_ms
         ( server_default_max_keepalive_requests )
         ( http_default_limits )
         ( server_default_request_total_timeout_ms )
-        @ HttpDosGate { # s 0 } }
+        @ HttpDosGate { # s 0 } } )
 }
 
 @ server_new_full TcpListener listener ( @ HttpResponse HttpRequest ) handler i idle_timeout_ms i max_keepalive_requests → HttpServer {
-    ^ @ HttpServer { listener handler idle_timeout_ms max_keepalive_requests
+    ^ ( __srv_new @ HttpServerImpl { listener handler idle_timeout_ms max_keepalive_requests
         ( http_default_limits )
         ( server_default_request_total_timeout_ms )
-        @ HttpDosGate { # s 0 } }
+        @ HttpDosGate { # s 0 } } )
 }
 
 // `server_new_complete` — every knob explicit. Use when overriding
 // parser limits and/or per-request total timeout. See the struct comment
 // for what each field controls.
 @ server_new_complete TcpListener listener ( @ HttpResponse HttpRequest ) handler i idle_timeout_ms i max_keepalive_requests HttpLimits limits i request_total_timeout_ms → HttpServer {
-    ^ @ HttpServer { listener handler idle_timeout_ms max_keepalive_requests limits request_total_timeout_ms @ HttpDosGate { # s 0 } }
+    ^ ( __srv_new @ HttpServerImpl { listener handler idle_timeout_ms max_keepalive_requests limits request_total_timeout_ms @ HttpDosGate { # s 0 } } )
 }
 
 // DoS-aware constructor. Allocates a NurlDosState on the runtime side
@@ -289,24 +308,24 @@ $ `stdlib/ext/http2_conn.nu`
 @ server_new_with_dos TcpListener listener ( @ HttpResponse HttpRequest ) handler DosLimits dos_limits → HttpServer {
     : i st ( dos_state_new . dos_limits max_concurrent_conns
     . dos_limits max_conns_per_ip )
-    ^ @ HttpServer { listener handler
+    ^ ( __srv_new @ HttpServerImpl { listener handler
         ( server_default_idle_timeout_ms )
         ( server_default_max_keepalive_requests )
         ( http_default_limits )
         ( server_default_request_total_timeout_ms )
-        @ HttpDosGate { # s ( rcbox_new [HttpDosGateImpl] @ HttpDosGateImpl { st } ) } }
+        @ HttpDosGate { # s ( rcbox_new [HttpDosGateImpl] @ HttpDosGateImpl { st } ) } } )
 }
 
 // Snapshot the current active-connection count — useful for /metrics
 // observability endpoints. Returns 0 when DoS protection is disabled.
 @ server_active_conn_count HttpServer s → i {
-    : i raw ( __dos_gate_raw . s dos_state )
+    : i raw ( __dos_gate_raw . ( __srv s ) dos_state )
     ? == raw 0 { ^ 0 } {}
     ^ ( dos_state_active raw )
 }
 
 @ server_stop HttpServer s → v {
-    ( tcp_close_listener . s listener )
+    ( tcp_close_listener . ( __srv s ) listener )
 }
 
 // ── In-place "drop first N bytes from a Vec[u]" helper ───────────────
@@ -755,7 +774,7 @@ $ `stdlib/ext/http2_conn.nu`
     // TCP layer). On accept: extract peer IP (best-effort —
     // tcp_peer_addr returns "ip:port"; we split on ':'). On
     // release: pass the same IP back so the counter unwinds.
-    : i ds_raw ( __dos_gate_raw . s dos_state )
+    : i ds_raw ( __dos_gate_raw . ( __srv s ) dos_state )
     : ~ s peer_ip ``
     // Owns the "ip" prefix (the "ip:port" truncated at the colon) whose
     // buffer `peer_ip` aliases; dropped on every exit path below, after
@@ -787,7 +806,7 @@ $ `stdlib/ext/http2_conn.nu`
             ^ v
         } {}
     } {}
-    : i ito . s idle_timeout_ms
+    : i ito . ( __srv s ) idle_timeout_ms
     ? > ito 0 { ( tcp_set_timeout conn ito ) } {}
     ( _serve_keepalive_loop s conn )
     ? != ds_raw 0 { ( dos_state_release ds_raw peer_ip ) } {}
@@ -795,7 +814,7 @@ $ `stdlib/ext/http2_conn.nu`
 }
 
 @ server_run_once HttpServer s → !v NetErr {
-    : !TcpConn NetErr ar ( tcp_accept . s listener )
+    : !TcpConn NetErr ar ( tcp_accept . ( __srv s ) listener )
     ?? ar {
         T conn → {
             ( __serve_accepted s conn )
@@ -826,10 +845,10 @@ $ `stdlib/ext/http2_conn.nu`
 // they all just mean "this connection is done, accept the next one".
 
 @ _serve_keepalive_loop HttpServer s TcpConn conn → v {
-    : i max_req . s max_keepalive_requests
-    : HttpLimits lim . s limits
+    : i max_req . ( __srv s ) max_keepalive_requests
+    : HttpLimits lim . ( __srv s ) limits
     : i body_max . lim body_default_max
-    : i req_timeout_ms . s request_total_timeout_ms
+    : i req_timeout_ms . ( __srv s ) request_total_timeout_ms
     // One connection-level carry buffer, owned here, freed at the
     // bottom. Survives across keep-alive iterations so a pipelined
     // successor's bytes (or any leftover past a request's body) are
@@ -923,7 +942,7 @@ $ `stdlib/ext/http2_conn.nu`
                     } {}
                     ? __ws_handled { = done T } {
                         : b req_close ( __request_says_close req )
-                        : ( @ HttpResponse HttpRequest ) f . s handler
+                        : ( @ HttpResponse HttpRequest ) f . ( __srv s ) handler
                         // Wrap the handler in `recover` so a panic inside
                         // the handler doesn't kill the worker thread. On
                         // panic the connection-level `panic_resp` (500)
@@ -1057,12 +1076,12 @@ $ `stdlib/ext/http2_conn.nu`
 // already been answered with GOAWAY inside h2_conn_serve; there is
 // nothing further to write, the caller closes the socket.
 @ __serve_h2 HttpServer s TcpConn conn sink ( Vec u ) carry → v {
-    : HttpLimits lim . s limits
+    : HttpLimits lim . ( __srv s ) limits
     : !H2Connection H2ConnErr cr ( h2_conn_new_buffered conn carry . lim body_default_max )
     ?? cr {
         T h2c → {
             : ~ H2Connection active h2c
-            : !v H2ConnErr sr ( h2_conn_serve active . s handler )
+            : !v H2ConnErr sr ( h2_conn_serve active . ( __srv s ) handler )
             ?? sr { T _ → {} F _ → {} }
             ( h2_conn_finish active )
         }
@@ -1084,7 +1103,7 @@ $ `stdlib/ext/http2_conn.nu`
     // without the ref, the close frees the struct mid-poll
     // (heap-use-after-free, observed under ASan). Same contract
     // `server_run_async` already follows for its accept fiber.
-    ( tcp_listener_retain . s listener )
+    ( tcp_listener_retain . ( __srv s ) listener )
     // Loop forever (until either a clean stop or a real error). One
     // NURL compiler quirk still shapes this implementation:
     //   * Multiple early-`^`-returns inside `?? r { T → … F → … }` arms
@@ -1119,7 +1138,7 @@ $ `stdlib/ext/http2_conn.nu`
             }
         }
     }
-    ( tcp_listener_release . s listener )
+    ( tcp_listener_release . ( __srv s ) listener )
     ? had_err
     { ^ @ !v NetErr { F last_err } }
     {}
@@ -1169,7 +1188,7 @@ $ `stdlib/ext/http2_conn.nu`
     // ref spans spawn → join; the release below runs only after no
     // worker can touch the handle. Same contract `server_run_async`
     // follows for its accept fiber.
-    ( tcp_listener_retain . s listener )
+    ( tcp_listener_retain . ( __srv s ) listener )
 
     // The workers' handles, joined below.
     : ( Vec Thread ) thandles ( vec_with_cap [Thread] n_workers )
@@ -1218,7 +1237,7 @@ $ `stdlib/ext/http2_conn.nu`
         ?? ( vec_get [Thread] thandles j ) { T t → { ( thread_join t ) } F _ → {} }
         = j + j 1
     }
-    ( tcp_listener_release . s listener )
+    ( tcp_listener_release . ( __srv s ) listener )
     ^ @ !v NetErr { T 0 }
 }
 
@@ -1271,7 +1290,7 @@ $ `stdlib/std/async.nu`
     // transport conn precisely so N clients' handshakes overlap
     // instead of serialising on the accept fiber. On Err the TLS
     // layer has already closed the socket; there is no one to answer.
-    : !TcpConn NetErr hs ( tcp_conn_complete_tls . s listener c0 )
+    : !TcpConn NetErr hs ( tcp_conn_complete_tls . ( __srv s ) listener c0 )
     ?? hs {
         T c → { ( __serve_accepted s c ) }
         F _ → {}
@@ -1284,7 +1303,7 @@ $ `stdlib/std/async.nu`
 // shutdown vs. fatal NetErr) flows back through the mutable
 // captures of the spawning frame.
 @ __async_accept_loop HttpServer s → v {
-    : TcpListener listener . s listener
+    : TcpListener listener . ( __srv s ) listener
     : ~ b done F
     ~ ! done {
         // Transport accept only — each conn fiber completes its own TLS
@@ -1319,11 +1338,11 @@ $ `stdlib/std/async.nu`
     // but freeing the listener struct there would race the fiber's next
     // touch of it. The extra ref defers the free until we release it below,
     // after runtime_run has drained every fiber.
-    ( tcp_listener_retain . s listener )
+    ( tcp_listener_retain . ( __srv s ) listener )
     // Spawn one accept fiber; runtime_run blocks until the accept
     // fiber exits AND every in-flight conn fiber drains (pending=0).
     ( spawn \ → v { ( __async_accept_loop s ) } )
     ( runtime_run )
-    ( tcp_listener_release . s listener )
+    ( tcp_listener_release . ( __srv s ) listener )
     ^ @ !v NetErr { T 0 }
 }

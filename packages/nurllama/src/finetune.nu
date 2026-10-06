@@ -105,14 +105,14 @@ $ `stdlib/core/rcbox.nu`
 // every copy is the same state, and the last owner releases it.
 : FtModel { s ctl }
 
-@ FtModel_share FtModel h → FtModel { ^ @ FtModel { # s ( rcbox_share # i . h ctl ) } }
+unsafe @ FtModel_share FtModel h → FtModel { ^ @ FtModel { # s ( rcbox_share # i . h ctl ) } }
 
 @ FtModel_drop sink FtModel h → v {
     ( mem_forget h )
     ( rcbox_release [FtModelImpl] # i . h ctl )
 }
 
-@ __FtModel_ptr FtModel h → *FtModelImpl { ^ ( rcbox_ptr [FtModelImpl] # i . h ctl ) }
+unsafe @ __FtModel_ptr FtModel h → *FtModelImpl { ^ ( rcbox_ptr [FtModelImpl] # i . h ctl ) }
 
 // Streaming base upload, OFF by default: the finetune tests compare the CPU
 // tape's loss against the device's, and a lazy const has no host values to
@@ -272,7 +272,7 @@ $ `stdlib/core/rcbox.nu`
 // The streaming counterpart of __ft_load_bases: read every per-layer
 // SHAPE and no data at all. ft_graph turns each into a lazy const and
 // ft_stream_upload fills them one at a time after the capture.
-@ __ft_load_shapes Gguf gg * FtModelImpl m → v {
+unsafe @ __ft_load_shapes Gguf gg * FtModelImpl m → v {
     = . m n_ff 0
     : ~ i L 0
     ~ < L . m n_layer {
@@ -298,7 +298,7 @@ $ `stdlib/core/rcbox.nu`
     ? > . m n_ff 0 {} { = . m ok F }
 }
 
-@ __ft_load_bases Gguf gg * FtModelImpl m → v {
+unsafe @ __ft_load_bases Gguf gg * FtModelImpl m → v {
     ? . m stream { ( __ft_load_shapes gg m ) ^ v } {}
     : ~ b ok T
     // ffn size read from the first gate tensor
@@ -344,7 +344,7 @@ $ `stdlib/core/rcbox.nu`
 // emptying their vecs (clearing a vec drops its elements). embd / wout / norm_f are KEPT (embd feeds the
 // per-window input recompute; the rest are small). Idempotent — a second
 // call over empty vecs is a no-op — and reversible via ft_reload_base.
-@ ft_drop_base FtModel m__h → v {
+unsafe @ ft_drop_base FtModel m__h → v {
     : *FtModelImpl m ( __FtModel_ptr m__h )
     ( vec_clear [FtW] . m wq ) ( vec_clear [FtW] . m wk ) ( vec_clear [FtW] . m wv )
     ( vec_clear [FtW] . m wo ) ( vec_clear [FtW] . m wg ) ( vec_clear [FtW] . m wu )
@@ -359,7 +359,7 @@ $ `stdlib/core/rcbox.nu`
 // NORM-rope un-permute is identical byte-for-byte. Also restores the
 // embedding table when ft_merge_st consumed it: training again after a
 // merge would otherwise embed every token as a zero row. T on success.
-@ ft_reload_base FtModel m__h → b {
+unsafe @ ft_reload_base FtModel m__h → b {
     : *FtModelImpl m ( __FtModel_ptr m__h )
     ?? ( gguf_open ( string_data . m src_path ) ) {
         T gg → {
@@ -377,7 +377,7 @@ $ `stdlib/core/rcbox.nu`
     ^ F
 }
 
-@ ft_open s path → !FtModel String {
+unsafe @ ft_open s path → !FtModel String {
     ?? ( gguf_open path ) {
         T gg → {
             : s arch ( gguf_kv_str_or gg `general.architecture` `` )
@@ -474,22 +474,22 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // The model's shape, for callers that size buffers or print it.
-@ ft_n_embd FtModel h → i { ^ . ( __FtModel_ptr h ) n_embd }
+unsafe @ ft_n_embd FtModel h → i { ^ . ( __FtModel_ptr h ) n_embd }
 
-@ ft_n_layer FtModel h → i { ^ . ( __FtModel_ptr h ) n_layer }
+unsafe @ ft_n_layer FtModel h → i { ^ . ( __FtModel_ptr h ) n_layer }
 
-@ ft_n_head FtModel h → i { ^ . ( __FtModel_ptr h ) n_head }
+unsafe @ ft_n_head FtModel h → i { ^ . ( __FtModel_ptr h ) n_head }
 
-@ ft_n_kv FtModel h → i { ^ . ( __FtModel_ptr h ) n_kv }
+unsafe @ ft_n_kv FtModel h → i { ^ . ( __FtModel_ptr h ) n_kv }
 
-@ ft_head_dim FtModel h → i { ^ . ( __FtModel_ptr h ) head_dim }
+unsafe @ ft_head_dim FtModel h → i { ^ . ( __FtModel_ptr h ) head_dim }
 
-@ ft_n_vocab FtModel h → i { ^ . ( __FtModel_ptr h ) n_vocab }
+unsafe @ ft_n_vocab FtModel h → i { ^ . ( __FtModel_ptr h ) n_vocab }
 
-@ ft_rope_style FtModel h → i { ^ . ( __FtModel_ptr h ) rope_style }
+unsafe @ ft_rope_style FtModel h → i { ^ . ( __FtModel_ptr h ) rope_style }
 
 // Whether layer L carries qwen3's per-head Q and K norms (both of them).
-@ ft_has_qk_norm FtModel h i L → b {
+unsafe @ ft_has_qk_norm FtModel h i L → b {
     : *FtModelImpl m ( __FtModel_ptr h )
     : b q ?? ( vec_get [FtV] . m qn L ) { T x → . x has F → F }
     : b k ?? ( vec_get [FtV] . m kn L ) { T x → . x has F → F }
@@ -499,7 +499,7 @@ $ `stdlib/core/rcbox.nu`
 // ── the tape graph ────────────────────────────────────────────────────
 
 // Host-side embedding lookup: token ids → [T, n_embd] rows.
-@ ft_embed FtModel m__h ( Vec i ) ids → ( Vec f ) {
+unsafe @ ft_embed FtModel m__h ( Vec i ) ids → ( Vec f ) {
     : *FtModelImpl m ( __FtModel_ptr m__h )
     : i T2 ( vec_len [i] ids )
     : ( Vec f ) x ( vec_with_cap [f] * T2 . m n_embd )
@@ -563,7 +563,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Note a streamed base const's tape node so ft_stream_upload can fill it.
-@ __ft_rec * FtModelImpl m GVar g i L i k → GVar {
+unsafe @ __ft_rec * FtModelImpl m GVar g i L i k → GVar {
     ? . m stream {
         ( vec_push [i] . m lz_node . g id )
         ( vec_push [i] . m lz_key + * L 16 k )
@@ -633,7 +633,7 @@ $ `stdlib/core/rcbox.nu`
 // sequence (T tokens; loss over positions 0..T-2 predicting 1..T-1).
 // `pids` receives the 2·7·n_layer LoRA parameter ids (A, B per slot);
 // LoRA params register FIRST.
-@ ft_graph FtModel m__h GTape tp ( Vec i ) ids i r f alpha i seed ( Vec i ) pids → FtG {
+unsafe @ ft_graph FtModel m__h GTape tp ( Vec i ) ids i r f alpha i seed ( Vec i ) pids → FtG {
     : *FtModelImpl m ( __FtModel_ptr m__h )
     : b _sized ( vec_resize_zeroed [i] pids * 14 . m n_layer )
     : i T2 ( vec_len [i] ids )
@@ -712,14 +712,14 @@ $ `stdlib/core/rcbox.nu`
         : GVar Wg ( __ft_rec m ( __ft_const tp . gw data . gw rows . gw cols ) L 6 )
         : GVar Wu ( __ft_rec m ( __ft_const tp . uw data . uw rows . uw cols ) L 7 )
         : GVar Wd ( __ft_rec m ( __ft_const tp . dw data . dw rows . dw cols ) L 8 )
-        : FtV anv ?? ( vec_get [FtV] . m an L ) { T x → x F → ( __ft_nov ) }
+        : FtV anv ?? ( vec_get [FtV] . m an L ) { T fv → fv F → ( __ft_nov ) }
         : GVar N1 ( __ft_rec m ( __ft_const tp . anv v 0 H ) L 0 )
-        : FtV fnv ?? ( vec_get [FtV] . m fn L ) { T x → x F → ( __ft_nov ) }
+        : FtV fnv ?? ( vec_get [FtV] . m fn L ) { T fv → fv F → ( __ft_nov ) }
         : GVar N2 ( __ft_rec m ( __ft_const tp . fnv v 0 H ) L 1 )
         // qwen3's per-head Q/K norms, declared here so every base const of
         // this layer is created in one place (the streamer pairs by key).
-        : FtV qnv ?? ( vec_get [FtV] . m qn L ) { T x → x F → ( __ft_nov ) }
-        : FtV knv ?? ( vec_get [FtV] . m kn L ) { T x → x F → ( __ft_nov ) }
+        : FtV qnv ?? ( vec_get [FtV] . m qn L ) { T fv → fv F → ( __ft_nov ) }
+        : FtV knv ?? ( vec_get [FtV] . m kn L ) { T fv → fv F → ( __ft_nov ) }
         : b haveqn . qnv has
         : b havekn . knv has
         : ~ GVar QN @ GVar { -1 }
@@ -731,15 +731,15 @@ $ `stdlib/core/rcbox.nu`
         : ~ GVar q ( __ft_lora_lin tp xn Wq pids + s7 0 scale )
         : ~ GVar kk ( __ft_lora_lin tp xn Wk pids + s7 1 scale )
         : ~ GVar vv ( __ft_lora_lin tp xn Wv pids + s7 2 scale )
-        : FtV bqv ?? ( vec_get [FtV] . m bq L ) { T x → x F → ( __ft_nov ) }
+        : FtV bqv ?? ( vec_get [FtV] . m bq L ) { T fv → fv F → ( __ft_nov ) }
         ? . bqv has {
             = q ( g_add tp q ( __ft_rec m ( __ft_const tp . bqv v 0 * NH hd ) L 11 ) )
         } {}
-        : FtV bkv ?? ( vec_get [FtV] . m bk L ) { T x → x F → ( __ft_nov ) }
+        : FtV bkv ?? ( vec_get [FtV] . m bk L ) { T fv → fv F → ( __ft_nov ) }
         ? . bkv has {
             = kk ( g_add tp kk ( __ft_rec m ( __ft_const tp . bkv v 0 * NKV hd ) L 12 ) )
         } {}
-        : FtV bvv ?? ( vec_get [FtV] . m bv L ) { T x → x F → ( __ft_nov ) }
+        : FtV bvv ?? ( vec_get [FtV] . m bv L ) { T fv → fv F → ( __ft_nov ) }
         ? . bvv has {
             = vv ( g_add tp vv ( __ft_rec m ( __ft_const tp . bvv v 0 * NKV hd ) L 13 ) )
         } {}
@@ -784,7 +784,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // The one-hot rows for a window's ids (row t = ids[t+1]; last row zero).
-@ ft_onehot FtModel m__h ( Vec i ) ids → ( Vec f ) {
+unsafe @ ft_onehot FtModel m__h ( Vec i ) ids → ( Vec f ) {
     : *FtModelImpl m ( __FtModel_ptr m__h )
     : i T2 ( vec_len [i] ids )
     : ( Vec f ) oh ( vec_with_cap [f] * T2 . m n_vocab )
@@ -810,14 +810,14 @@ $ `stdlib/core/rcbox.nu`
     ( Vec f ) bflat
 }
 
-@ __ft_ain * FtModelImpl m i slot → i {
+unsafe @ __ft_ain * FtModelImpl m i slot → i {
     : i w % slot 7
     ? == w 3 { ^ * . m n_head . m head_dim } {}
     ? == w 6 { ^ . m n_ff } {}
     ^ . m n_embd
 }
 
-@ __ft_aout * FtModelImpl m i slot → i {
+unsafe @ __ft_aout * FtModelImpl m i slot → i {
     : i w % slot 7
     ? == w 0 { ^ * . m n_head . m head_dim } {}
     ? | == w 1 == w 2 { ^ * . m n_kv . m head_dim } {}
@@ -837,7 +837,7 @@ $ `stdlib/core/rcbox.nu`
 // and an eager run upload identical bytes — what changes is only that one
 // tensor is resident at a time instead of the whole model.
 
-@ __ft_up_vec * FtModelImpl m Gguf gg GProg pg i node i L s suf → b {
+unsafe @ __ft_up_vec * FtModelImpl m Gguf gg GProg pg i node i L s suf → b {
     : FtV pv ( __ft_lvec gg L suf )
     ? . pv has {} { ^ F }
     ? == . m rope_style 0 {
@@ -847,7 +847,7 @@ $ `stdlib/core/rcbox.nu`
     ^ ( gput_set_input pg @ GVar { node } . pv v )
 }
 
-@ __ft_up_layer * FtModelImpl m Gguf gg GProg pg i node i L i slot → b {
+unsafe @ __ft_up_layer * FtModelImpl m Gguf gg GProg pg i node i L i slot → b {
     : s suf ( __ft_base_name slot )
     ? | | | | | | == slot 0 == slot 1 == slot 9 == slot 10 == slot 11 == slot 12 == slot 13 {
         ^ ( __ft_up_vec m gg pg node L suf )
@@ -862,7 +862,7 @@ $ `stdlib/core/rcbox.nu`
     ^ ( gput_set_input pg @ GVar { node } . w data )
 }
 
-@ __ft_up_wout * FtModelImpl m Gguf gg GProg pg i node → b {
+unsafe @ __ft_up_wout * FtModelImpl m Gguf gg GProg pg i node → b {
     : i oi ( gguf_find_tensor gg `output.weight` )
     ? >= oi 0 {
         : ~ i rows 0
@@ -887,7 +887,7 @@ $ `stdlib/core/rcbox.nu`
 
 @ __ft_vslot_set ( Vec FtV ) v i L sink FtV p → v { : b _s ( vec_set [FtV] v L p ) }
 
-@ __ft_layer_in Gguf gg * FtModelImpl m i L → b {
+unsafe @ __ft_layer_in Gguf gg * FtModelImpl m i L → b {
     : ~ b ok T
     : FtW q ( __ft_lw gg L `attn_q.weight` ok )
     : FtW k2 ( __ft_lw gg L `attn_k.weight` ok )
@@ -909,7 +909,7 @@ $ `stdlib/core/rcbox.nu`
     ^ ok
 }
 
-@ __ft_layer_out * FtModelImpl m i L → v {
+unsafe @ __ft_layer_out * FtModelImpl m i L → v {
     ( __ft_slot_set . m wq L @ FtW { 0 0 ( vec_new [f] ) } )
     ( __ft_slot_set . m wk L @ FtW { 0 0 ( vec_new [f] ) } )
     ( __ft_slot_set . m wv L @ FtW { 0 0 ( vec_new [f] ) } )
@@ -925,7 +925,7 @@ $ `stdlib/core/rcbox.nu`
 
 // Fill every lazy base const's device buffer. Call once, right after the
 // capture; T when every tensor landed.
-@ ft_stream_upload FtModel m__h GProg pg → b {
+unsafe @ ft_stream_upload FtModel m__h GProg pg → b {
     : *FtModelImpl m ( __FtModel_ptr m__h )
     ? . m stream {} { ^ T }
     : i n ( vec_len [i] . m lz_node )
@@ -1097,7 +1097,7 @@ $ `stdlib/core/rcbox.nu`
 
 // An F64 checkpoint tensor read raw off the mapping — st_dequant narrows
 // everything through f32, which would round an f64-replay checkpoint.
-@ __ft_ckpt_vals64 St st StTensor t → ( Vec f ) {
+unsafe @ __ft_ckpt_vals64 St st StTensor t → ( Vec f ) {
     : *u P ( st_tensor_ptr st t )
     : i n . t nelems
     : ( Vec f ) o ( vec_with_cap [f] n )
@@ -1224,7 +1224,7 @@ $ `stdlib/core/rcbox.nu`
 
 // wstride: 1 = sequential legacy order · 0 = auto (golden-ratio coprime,
 // ft_auto_stride) · else used as given, mod nwin.
-@ ft_train_ck FtModel m__h ( Vec i ) corpus i win i r f alpha i seed i steps f lr i dtype b verbose s ckptp i ckevery b resume i wstride → FtTrain {
+unsafe @ ft_train_ck FtModel m__h ( Vec i ) corpus i win i r f alpha i seed i steps f lr i dtype b verbose s ckptp i ckevery b resume i wstride → FtTrain {
     : *FtModelImpl m ( __FtModel_ptr m__h )
     : i total ( vec_len [i] corpus )
     : ~ i T2 win
@@ -1373,7 +1373,7 @@ $ `stdlib/core/rcbox.nu`
 
 // Save trained adapters as a safetensors file: per slot,
 // blk.<L>.<which>.lora_a [in,r] and .lora_b [r,out], F32.
-@ ft_adapters_save s path FtModel m__h FtTrain t i r → !v String {
+unsafe @ ft_adapters_save s path FtModel m__h FtTrain t i r → !v String {
     : *FtModelImpl m ( __FtModel_ptr m__h )
     : StWriter so ( stw_new )
     : i nslot * 7 . m n_layer
@@ -1447,7 +1447,7 @@ $ `stdlib/core/rcbox.nu`
 // --merge-only` after a crash between the adapter save and the merge, or
 // merging an adapter file someone shipped. The rank is read from the
 // file's own blk.0.q.lora_a [in, r] shape and stored into `rank`.
-@ ft_adapters_load s path FtModel m__h inout i rank → !FtTrain String {
+unsafe @ ft_adapters_load s path FtModel m__h inout i rank → !FtTrain String {
     : *FtModelImpl m ( __FtModel_ptr m__h )
     ?? ( st_open path ) {
         T st → {
@@ -1550,7 +1550,7 @@ $ `stdlib/core/rcbox.nu`
 
 // mask bit0 = embeddings, bit1 = attention projections, bit2 = mlp
 // projections (a bisect handle for the merged-path diagnostics).
-@ ft_merge_st_mask s path FtModel m__h FtTrain t i r f alpha i mask → !v String {
+unsafe @ ft_merge_st_mask s path FtModel m__h FtTrain t i r f alpha i mask → !v String {
     : *FtModelImpl m ( __FtModel_ptr m__h )
     : f scale / alpha # f r
     // The per-layer base matrices were freed after device capture

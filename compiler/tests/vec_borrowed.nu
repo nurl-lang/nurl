@@ -33,7 +33,7 @@ $ `stdlib/ext/http_response.nu`
     ^ v
 }
 
-@ main → i {
+unsafe @ main → i {
     : ( Vec u ) src ( ramp 1000 )
     : *u sp ( vec_data [u] src )
 

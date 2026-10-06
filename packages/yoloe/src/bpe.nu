@@ -158,7 +158,7 @@ $ `clip_merges_data.nu`
     : ~ i j 0
     ~ < j 256 {
         : i b ( _ig order j )
-        : String sym ?? ( vec_get [String] byte_enc b ) { T s → s F _ → ( string_new ) }
+        : String sym ?? ( vec_get [String] . tk byte_enc b ) { T s → s F _ → ( string_new ) }
         // base symbol (id j): key = a fresh copy so the arena owns it
         : String k0 ( string_from ( string_data sym ) )
         ( __enc_put tk k0 j )
@@ -200,7 +200,7 @@ $ `clip_merges_data.nu`
     : ~ i j 0
     ~ < j 256 {
         : i b ( _ig order j )
-        : String sym ?? ( vec_get [String] byte_enc b ) { T s → s F _ → ( string_new ) }
+        : String sym ?? ( vec_get [String] . tk byte_enc b ) { T s → s F _ → ( string_new ) }
         : String k0 ( string_from ( string_data sym ) )
         ( __enc_put tk k0 j )
         : String k1 ( string_from ( string_data sym ) )
@@ -268,13 +268,13 @@ $ `clip_merges_data.nu`
     }
     : i sp ( __first_space ( string_data line ) )
     ? < sp 0 { ^ } {}
-    // rank: key = the whole "a b" line (arena-owned)
-    ( vec_push [String] . tk arena line )
-    ( __msi_set . tk ranks ( string_data line ) rank )
     // vocab token = a + b (space removed)
     : String tokv ( string_substr line 0 sp )
     : String bpart ( string_substr line + sp 1 - ( string_len line ) + sp 1 )
     ( string_push_str tokv ( string_data bpart ) )
+    // rank: key = the whole "a b" line (arena-owned)
+    ( __msi_set . tk ranks ( string_data line ) rank )
+    ( vec_push [String] . tk arena line )
     ( __enc_put tk tokv + 512 rank )
 }
 

@@ -29,7 +29,7 @@ $ `stdlib/std/panic.nu`
 
 & `libc` @ nurl_free_count → i
 
-@ live → i { ^ - ( nurl_alloc_count ) ( nurl_free_count ) }
+unsafe @ live → i { ^ - ( nurl_alloc_count ) ( nurl_free_count ) }
 
 @ maybe i k → ?String {
     ? > k 0 { ^ @ ?String { T ( string_from `yes` ) } } {}

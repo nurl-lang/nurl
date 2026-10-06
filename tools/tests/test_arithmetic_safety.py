@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Source arithmetic must reject invalid domains before LLVM UB/poison."""
+import re
 import math
 import os
 from pathlib import Path
@@ -100,7 +101,10 @@ double special(long long which) { return which == 0 ? NAN : which == 1 ? INFINIT
         for opt, split, sanitized in [('-O0', False, True), ('-O2', False, False), ('-O2', True, True)]:
             with self.subTest(opt=opt, split=split, sanitized=sanitized):
                 source = self.directory / 'input.nu'
-                source.write_text(PRELUDE + (main + helpers if opt == '-O2' else helpers + main))
+                # The cases call the C helpers declared in PRELUDE: a foreign
+                # call is raw memory's business, so the functions are `unsafe`.
+                program = PRELUDE + (main + helpers if opt == '-O2' else helpers + main)
+                source.write_text(re.sub(r'(?m)^@ ', 'unsafe @ ', program))
                 ir = self.directory / 'input.ll'
                 prefix = self.directory / 'part'
                 flags = ['--sanitize-address'] if sanitized else []

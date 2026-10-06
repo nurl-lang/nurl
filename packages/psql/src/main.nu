@@ -413,7 +413,7 @@ $ `pg.nu`
 
 // Connect, and if the server demands a password we don't have, prompt for
 // one on the terminal (echo disabled) and retry once — the way psql does.
-@ __connect ConnInfo ci i tty → !PgConn PgErr {
+unsafe @ __connect ConnInfo ci i tty → !PgConn PgErr {
     : !PgConn PgErr cr ( pg_connect ( string_data . ci host ) . ci port ( string_data . ci user ) ( string_data . ci password ) ( string_data . ci database ) . ci sslmode )
     ?? cr {
         T c → ^ @ !PgConn PgErr { T c }
@@ -433,7 +433,7 @@ $ `pg.nu`
 
 // The whole program is one default command (psql style): flags, an optional
 // postgres://… URL positional, then one-shot -c or the REPL.
-@ __psql_go CliCtx x → i {
+unsafe @ __psql_go CliCtx x → i {
     : String hostv ( ctx_str x `host` )
     : String userv ( ctx_str x `user` )
     : String passv ( ctx_str x `password` )

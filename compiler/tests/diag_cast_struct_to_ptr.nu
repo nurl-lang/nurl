@@ -5,7 +5,7 @@
 // conversion and die in clang as invalid IR, not here as a diagnostic.
 : Point { i x i y }
 
-@ main → i {
+unsafe @ main → i {
     : Point p @ Point { 1 2 }
     : s q # s p
     ^ ( nurl_str_len q )

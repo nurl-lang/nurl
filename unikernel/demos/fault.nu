@@ -29,7 +29,7 @@ $ `stdlib/core/vec.nu`
 
 : NullTarget { i word }
 
-@ __touch i addr → i {
+unsafe @ __touch i addr → i {
     : *NullTarget p # *NullTarget addr
     = . p word 1
     ^ . p word

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Exercise NURL stream ownership, binary lengths and EOF/error contracts."""
+import re
 import os
 from pathlib import Path
 import subprocess
@@ -13,16 +14,13 @@ $ `stdlib/std/fs.nu`
 : ~ i delivered 0
 @ emit ( Vec u ) bytes → i {
     ( write_bytes bytes )
-    ( vec_free [u] bytes )
     ^ 0
 }
 @ emit_terminated !( Vec u ) IoErr result → i {
     ?? result {
         F _ → { ^ 2 }
         T bytes → {
-            ? != . ( vec_data [u] bytes ) ( vec_len [u] bytes ) # u 0 {
-                ( vec_free [u] bytes ) ^ 3
-            } {}
+            ? != . ( vec_data [u] bytes ) ( vec_len [u] bytes ) # u 0 { ^ 3 } {}
             ^ ( emit bytes )
         }
     }
@@ -105,7 +103,9 @@ class StreamIOTest(unittest.TestCase):
         cls.addClassCleanup(cls.tmp.cleanup)
         cls.root = Path(cls.tmp.name)
         source = cls.root / 'probe.nu'
-        source.write_text(PROBE)
+        # The probe reads the terminator past a buffer's length and writes
+        # through raw pointers on purpose: its functions are `unsafe`.
+        source.write_text(re.sub(r'(?m)^@ ', 'unsafe @ ', PROBE))
         cls.binary = cls.root / 'probe'
         cls.env = {**os.environ, 'NURL_SAN': '1', 'DEBUGINFOD_URLS': '',
                    'ASAN_OPTIONS': 'detect_leaks=1:halt_on_error=1',

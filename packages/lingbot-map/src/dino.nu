@@ -138,7 +138,7 @@ $ `src/patchembed.nu`
     ^ . d poscache
 }
 
-@ dn_pos_for Dino d i gh i gw → ( Vec f ) {
+unsafe @ dn_pos_for Dino d i gh i gw → ( Vec f ) {
     : i n + 1 * gh gw
     : ( Vec f ) out ( vec_with_cap [f] * n DN_DIM )
     : b _sl ( vec_set_len [f] out * n DN_DIM )
@@ -189,7 +189,7 @@ $ `src/patchembed.nu`
 // `tok` must hold dn_tokens(gh, gw) × 1024 f32 and comes back holding
 // the FULL token array; the patch tokens the aggregator wants are the
 // last gh·gw rows, i.e. `lm_view tok (5·1024) (gh·gw·1024)`.
-@ dn_forward GpuKit kit Dino d LmWs ws * f img i h i w i gh i gw GkBuf tok → b {
+unsafe @ dn_forward GpuKit kit Dino d LmWs ws * f img i h i w i gh i gw GkBuf tok → b {
     : i np * gh gw
     : i n ( dn_tokens gh gw )
     : i k * 3 * DN_PATCH DN_PATCH

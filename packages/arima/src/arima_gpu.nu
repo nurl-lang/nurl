@@ -171,7 +171,7 @@ extern "C" __global__ void arima_css(const long long* meta, const double* series
 
 // One round on the device: the ML items in one launch, the CSS items in
 // another, each item's number folded on the host from what came back.
-@ arima_eval_gpu GpuKit kit ( Vec ArimaEvalItem ) items ( Vec ArimaCtx ) ctxs ( Vec f ) out → v {
+unsafe @ arima_eval_gpu GpuKit kit ( Vec ArimaEvalItem ) items ( Vec ArimaCtx ) ctxs ( Vec f ) out → v {
     : i t_start ( now_ms )
     = g_ag_rounds + g_ag_rounds 1
     // the series, each context's once

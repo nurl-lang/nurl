@@ -86,16 +86,16 @@ $ `stdlib/core/rcbox.nu`
 // transport, both rings, the roster and the job node with it.
 : Swarm { s ctl }
 
-@ Swarm_share Swarm h → Swarm { ^ @ Swarm { # s ( rcbox_share # i . h ctl ) } }
+unsafe @ Swarm_share Swarm h → Swarm { ^ @ Swarm { # s ( rcbox_share # i . h ctl ) } }
 
 @ Swarm_drop sink Swarm h → v {
     ( mem_forget h )
     ( rcbox_release [SwarmImpl] # i . h ctl )
 }
 
-@ __Swarm_ptr Swarm h → *SwarmImpl { ^ ( rcbox_ptr [SwarmImpl] # i . h ctl ) }
+unsafe @ __Swarm_ptr Swarm h → *SwarmImpl { ^ ( rcbox_ptr [SwarmImpl] # i . h ctl ) }
 
-@ swarm_new RelayClient rc i id i role i caps s token → Swarm {
+unsafe @ swarm_new RelayClient rc i id i role i caps s token → Swarm {
     : ( Vec u ) me ( pk_from_id id )
     : Transport tr ( transport_open # s 0 rc 1 )
     : Ring ring ( ring_new )
@@ -121,17 +121,17 @@ $ `stdlib/core/rcbox.nu`
 
 // How many workers this node has folded into its ring, and how many of
 // them advertise every capability bit in `mask`.
-@ swarm_worker_count Swarm sw__h → i {
+unsafe @ swarm_worker_count Swarm sw__h → i {
     : *SwarmImpl sw ( __Swarm_ptr sw__h )
     ^ ( roster_count . sw roster )
 }
 
-@ swarm_worker_count_caps Swarm sw__h i mask → i {
+unsafe @ swarm_worker_count_caps Swarm sw__h i mask → i {
     : *SwarmImpl sw ( __Swarm_ptr sw__h )
     ^ ( roster_count_caps . sw roster mask )
 }
 
-@ swarm_join_group Swarm sw__h → v {
+unsafe @ swarm_join_group Swarm sw__h → v {
     : *SwarmImpl sw ( __Swarm_ptr sw__h )
     ?? ( transport_group_join . sw transport . sw group ) { T _ → {} F _ → {} }
 }
@@ -150,14 +150,14 @@ $ `stdlib/core/rcbox.nu`
 // stores (a job handler): it points back without owning — capturing the
 // Swarm handle there would make the swarm own a handle to itself, a cycle
 // of counts nothing frees (docs/MEMORY.md §7.7).
-@ __swarm_announce_ok_at * SwarmImpl sw i want → b {
+unsafe @ __swarm_announce_ok_at * SwarmImpl sw i want → b {
     : ( Vec u ) msg ( hello_build . sw self_id . sw role want . sw self_pk . sw self_caps )
     : ~ b ok F
     ?? ( transport_broadcast . sw transport . sw group msg ) { T _ → { = ok T } F _ → {} }
     ^ ok
 }
 
-@ swarm_on_hello Swarm sw__h Hello h → v {
+unsafe @ swarm_on_hello Swarm sw__h Hello h → v {
     : *SwarmImpl sw ( __Swarm_ptr sw__h )
     ? == . h role ( role_worker ) {
         // Every HELLO — first or heartbeat — refreshes the member's liveness
@@ -190,7 +190,7 @@ $ `stdlib/core/rcbox.nu`
 // Drop workers that stopped announcing, from the roster and from both rings.
 // Returns how many were evicted; a non-zero result bumps the epoch, because a
 // changed ring re-homes chunk keys and invalidates recorded block seeds.
-@ swarm_expire Swarm sw__h → i {
+unsafe @ swarm_expire Swarm sw__h → i {
     : *SwarmImpl sw ( __Swarm_ptr sw__h )
     : ( Vec ( Vec u ) ) gone ( roster_expire . sw roster ( now_ms ) ( __roster_ttl_ms ) . sw self_pk )
     : i n ( vec_len [( Vec u )] gone )
@@ -209,7 +209,7 @@ $ `stdlib/core/rcbox.nu`
     ^ n
 }
 
-@ swarm_pump Swarm sw__h i max → v {
+unsafe @ swarm_pump Swarm sw__h i max → v {
     : *SwarmImpl sw ( __Swarm_ptr sw__h )
     : ~ b more T
     ~ more {
@@ -318,7 +318,7 @@ $ `stdlib/core/rcbox.nu`
 // re-forms — no single relay is a point of failure. Death is detected by a
 // periodic heartbeat announce whose SEND fails when the relay is gone; the
 // on-disk block cache survives the switch, so re-seeding is idempotent.
-@ node_worker ( Vec String ) relays s dhost i dport s token i vflag i gpu → v {
+unsafe @ node_worker ( Vec String ) relays s dhost i dport s token i vflag i gpu → v {
     : i id ( rand_u64 )
     : ~ i idxc 0
     : i caps ? != gpu 0 ( cap_gpu ) 0
@@ -383,7 +383,7 @@ $ `stdlib/core/rcbox.nu`
 // Submits the kernel to the ring and returns the chunk task-ids. `expr` is the
 // raw kernel bytes; the caller owns it.
 
-@ cluster_submit Swarm sw__h i op i dtype i lo i hi ( Vec u ) expr i nchunks → ( Vec i ) {
+unsafe @ cluster_submit Swarm sw__h i op i dtype i lo i hi ( Vec u ) expr i nchunks → ( Vec i ) {
     : *SwarmImpl sw ( __Swarm_ptr sw__h )
     : ( Vec Chunk ) chunks ( shard lo hi nchunks )
     : ( Vec i ) tids ( vec_new [i] )
@@ -403,7 +403,7 @@ $ `stdlib/core/rcbox.nu`
 // ring owner under `kind` (kind_wasm, or kind_wasm_gpu — the GPU capability
 // domain). The module bytes ride every chunk (workers cache by content hash,
 // so it is written once per worker).
-@ cluster_submit_wasm Swarm sw__h i lo i hi ( Vec u ) wasm i nchunks i kind → ( Vec i ) {
+unsafe @ cluster_submit_wasm Swarm sw__h i lo i hi ( Vec u ) wasm i nchunks i kind → ( Vec i ) {
     : *SwarmImpl sw ( __Swarm_ptr sw__h )
     : ( Vec Chunk ) chunks ( shard lo hi nchunks )
     : ( Vec i ) tids ( vec_new [i] )
@@ -455,17 +455,17 @@ $ `stdlib/core/rcbox.nu`
 // last owner releases it with its payload and owner key.
 : ChunkJob { s ctl }
 
-@ ChunkJob_share ChunkJob h → ChunkJob { ^ @ ChunkJob { # s ( rcbox_share # i . h ctl ) } }
+unsafe @ ChunkJob_share ChunkJob h → ChunkJob { ^ @ ChunkJob { # s ( rcbox_share # i . h ctl ) } }
 
 @ ChunkJob_drop sink ChunkJob h → v {
     ( mem_forget h )
     ( rcbox_release [ChunkJobImpl] # i . h ctl )
 }
 
-@ __ChunkJob_ptr ChunkJob h → *ChunkJobImpl { ^ ( rcbox_ptr [ChunkJobImpl] # i . h ctl ) }
+unsafe @ __ChunkJob_ptr ChunkJob h → *ChunkJobImpl { ^ ( rcbox_ptr [ChunkJobImpl] # i . h ctl ) }
 
 // A plan for chunk `idx`, just dispatched as task `tid` to `owner`.
-@ __cj_new i kind ( Vec u ) payload i idx i tid ( Vec u ) owner i now → ChunkJob {
+unsafe @ __cj_new i kind ( Vec u ) payload i idx i tid ( Vec u ) owner i now → ChunkJob {
     ^ @ ChunkJob { # s ( rcbox_new [ChunkJobImpl] @ ChunkJobImpl { kind payload idx 0 tid owner 1 now 0 } ) }
 }
 
@@ -485,14 +485,14 @@ $ `stdlib/core/rcbox.nu`
 // The owner pubkey for `key` in the ring `kind` routes on (copied; empty on an
 // empty ring). GPU chunks resolve against the capability ring, everything else
 // against the general one — the same rule dist/job dispatches by.
-@ __cj_owner Swarm sw__h i kind ( Vec u ) key → ( Vec u ) {
+unsafe @ __cj_owner Swarm sw__h i kind ( Vec u ) key → ( Vec u ) {
     : *SwarmImpl sw ( __Swarm_ptr sw__h )
     : Ring r ? == kind ( kind_wasm_gpu ) . sw gpu_ring . sw ring
     ^ ?? ( ring_owner_pk r key ) { T pk → pk F → ( vec_new [u] ) }
 }
 
 // Does the ring `kind` routes on still have anyone in it?
-@ __cj_ring_empty Swarm sw__h i kind → b {
+unsafe @ __cj_ring_empty Swarm sw__h i kind → b {
     : *SwarmImpl sw ( __Swarm_ptr sw__h )
     : Ring r ? == kind ( kind_wasm_gpu ) . sw gpu_ring . sw ring
     ^ == ( ring_point_count r ) 0
@@ -500,7 +500,7 @@ $ `stdlib/core/rcbox.nu`
 
 @ __cj_gpu_owner Swarm sw__h ( Vec u ) key → ( Vec u ) { ^ ( __cj_owner sw__h ( kind_wasm_gpu ) key ) }
 
-@ cj_tids ( Vec ChunkJob ) jobs → ( Vec i ) {
+unsafe @ cj_tids ( Vec ChunkJob ) jobs → ( Vec i ) {
     : ( Vec i ) t ( vec_new [i] )
     : i n ( vec_len [ChunkJob] jobs )
     : ~ i k 0
@@ -519,7 +519,7 @@ $ `stdlib/core/rcbox.nu`
 // cluster_submit_wasm_gpu, but each chunk keeps its tagged payload and owner so
 // task_refresh can re-dispatch it. Returns the ChunkJob vector (the caller
 // derives tids with cj_tids and stores the plan on the Task).
-@ cluster_dispatch_gpu_ft Swarm sw__h i mode i lo i hi i kbins ( Vec i ) params ( Vec u ) wasm i nchunks → ( Vec ChunkJob ) {
+unsafe @ cluster_dispatch_gpu_ft Swarm sw__h i mode i lo i hi i kbins ( Vec i ) params ( Vec u ) wasm i nchunks → ( Vec ChunkJob ) {
     : *SwarmImpl sw ( __Swarm_ptr sw__h )
     : ( Vec Chunk ) chunks ( shard lo hi nchunks )
     : ( Vec ChunkJob ) jobs ( vec_new [ChunkJob] )
@@ -540,7 +540,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // One ChunkJob around an already-tagged payload, dispatched now.
-@ __cj_dispatch Swarm sw__h i kind i idx ( Vec u ) tagged i now → ChunkJob {
+unsafe @ __cj_dispatch Swarm sw__h i kind i idx ( Vec u ) tagged i now → ChunkJob {
     : *SwarmImpl sw ( __Swarm_ptr sw__h )
     : ( Vec u ) rkey ( chunk_key_salted idx 0 )
     : ( Vec u ) owner ( __cj_owner sw__h kind rkey )
@@ -552,7 +552,7 @@ $ `stdlib/core/rcbox.nu`
 // the plan is what lets task_refresh notice a worker that died mid-chunk.
 // Without it an expression task whose owner disappeared stayed `running`
 // forever, which an agent can only poll into infinity.
-@ cluster_dispatch_kernel_ft Swarm sw__h i op i dtype i lo i hi ( Vec u ) expr i nchunks → ( Vec ChunkJob ) {
+unsafe @ cluster_dispatch_kernel_ft Swarm sw__h i op i dtype i lo i hi ( Vec u ) expr i nchunks → ( Vec ChunkJob ) {
     : *SwarmImpl sw ( __Swarm_ptr sw__h )
     : ( Vec Chunk ) chunks ( shard lo hi nchunks )
     : ( Vec ChunkJob ) jobs ( vec_new [ChunkJob] )
@@ -570,7 +570,7 @@ $ `stdlib/core/rcbox.nu`
 
 // Dispatch a wasm-module task (CPU kind_wasm or GPU kind_wasm_gpu) with a
 // retry plan — the module bytes ride each chunk exactly as cluster_submit_wasm.
-@ cluster_dispatch_wasm_ft Swarm sw__h i lo i hi ( Vec u ) wasm i nchunks i kind → ( Vec ChunkJob ) {
+unsafe @ cluster_dispatch_wasm_ft Swarm sw__h i lo i hi ( Vec u ) wasm i nchunks i kind → ( Vec ChunkJob ) {
     : *SwarmImpl sw ( __Swarm_ptr sw__h )
     : ( Vec Chunk ) chunks ( shard lo hi nchunks )
     : ( Vec ChunkJob ) jobs ( vec_new [ChunkJob] )
@@ -589,7 +589,7 @@ $ `stdlib/core/rcbox.nu`
 // Re-dispatch one failed/lost chunk: salt the key until it maps to an owner
 // other than the one that just failed (bounded probes), resubmit the retained
 // payload there, and refresh the plan. No ring mutation — steering only.
-@ __cj_redispatch Swarm sw__h * ChunkJobImpl cj → v {
+unsafe @ __cj_redispatch Swarm sw__h * ChunkJobImpl cj → v {
     : *SwarmImpl sw ( __Swarm_ptr sw__h )
     : JobNode jn . sw job
     : ~ i s + . cj salt 1
@@ -618,7 +618,7 @@ $ `stdlib/core/rcbox.nu`
 // `data` is the WHOLE dataset's raw LE f64 bytes (empty when the task has no
 // dataset); each chunk ships exactly its own slice data[clo·8, chi·8) — the
 // split travels with its task, so a worker needs no separate fetch.
-@ cluster_submit_wasm_gpu Swarm sw__h i mode i lo i hi i kbins ( Vec i ) params ( Vec u ) data ( Vec u ) wasm i nchunks → ( Vec i ) {
+unsafe @ cluster_submit_wasm_gpu Swarm sw__h i mode i lo i hi i kbins ( Vec i ) params ( Vec u ) data ( Vec u ) wasm i nchunks → ( Vec i ) {
     : *SwarmImpl sw ( __Swarm_ptr sw__h )
     : b hasdata > ( vec_len [u] data ) 0
     : ( Vec Chunk ) chunks ( shard lo hi nchunks )
@@ -637,7 +637,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // All chunk results present? (cluster job results are recorded by task-id.)
-@ tids_ready Swarm sw__h ( Vec i ) tids → b {
+unsafe @ tids_ready Swarm sw__h ( Vec i ) tids → b {
     : *SwarmImpl sw ( __Swarm_ptr sw__h )
     : i n ( vec_len [i] tids )
     : ~ b all T : ~ i k 0
@@ -659,7 +659,7 @@ $ `stdlib/core/rcbox.nu`
 // failed instead of silently reducing zeros into the answer.
 : Combined { i value i nfail }
 
-@ tids_combine Swarm sw__h i dtype i op ( Vec i ) tids → Combined {
+unsafe @ tids_combine Swarm sw__h i dtype i op ( Vec i ) tids → Combined {
     : *SwarmImpl sw ( __Swarm_ptr sw__h )
     : i n ( vec_len [i] tids )
     : ~ i acc ? == dtype 1 ( f64_to_bits ( red_id_f op ) ) ( red_id op )
@@ -709,7 +709,7 @@ $ `stdlib/core/rcbox.nu`
     ~ < k 8 { ( vec_set [u] v + off k # u & >> bits * k 8 255 ) = k + k 1 }
 }
 
-@ tids_combine_vec Swarm sw__h i mode i kbins ( Vec i ) tids → CombinedV {
+unsafe @ tids_combine_vec Swarm sw__h i mode i kbins ( Vec i ) tids → CombinedV {
     : *SwarmImpl sw ( __Swarm_ptr sw__h )
     : b ksum | == mode ( gpu_mode_hist ) == mode ( gpu_mode_vecreduce )
     : ( Vec u ) acc ( vec_new [u] )
@@ -759,7 +759,7 @@ $ `stdlib/core/rcbox.nu`
 
 // ── submit role (manual CLI testing, no MCP) ─────────────────────
 
-@ run_submit s host i port i op i lo i hi s expr s token → i {
+unsafe @ run_submit s host i port i op i lo i hi s expr s token → i {
     ?? ( relay_dial host port ) {
         T rc → {
             : i myid ( rand_u64 )
@@ -802,7 +802,7 @@ $ `stdlib/core/rcbox.nu`
 
 // ── runwasm role (manual CLI testing of a compiled .wasm kernel) ──
 
-@ run_runwasm s host i port i op i lo i hi s wasmpath s token → i {
+unsafe @ run_runwasm s host i port i op i lo i hi s wasmpath s token → i {
     : !( Vec u ) IoErr wr ( read_file_bytes wasmpath )
     : ~ i rc 0
     ?? wr {
@@ -897,7 +897,7 @@ $ `stdlib/core/rcbox.nu`
 // Constructor. The params share the field names (`lo`, `hi`, …); `= . t lo lo`
 // is a field store — the field-store/local-shadow miscompile this used to work
 // around was fixed in the compiler (NURL v0.10.4).
-@ task_new i id ( Vec u ) expr i dtype i lo i hi i op i nchunks ( Vec i ) tids → *Task {
+unsafe @ task_new i id ( Vec u ) expr i dtype i lo i hi i op i nchunks ( Vec i ) tids → *Task {
     : *Task t # *Task ( nurl_alloc Z Task )
     = . t id id
     = . t expr expr
@@ -933,7 +933,7 @@ $ `stdlib/core/rcbox.nu`
 // endpoint is a SERIAL accept loop (`server_run`): exactly one tool call
 // is ever in flight. It is cleared before dispatch and read immediately
 // after, so a tool that submits nothing leaves it at 0.
-@ task_register * Task t → v {
+unsafe @ task_register * Task t → v {
     : *McpState st # *McpState g_mcp
     ( vec_push [s] . st tasks # s t )
     = . st last_task # s t
@@ -953,15 +953,15 @@ $ `stdlib/core/rcbox.nu`
 // `dtype` is the storage type code (== the kernel's has_data value): 1 f64 · 2
 // f32 · 3 i32 · 4 i64. Elements are stored in their native width; the count and
 // all byte offsets scale by that width. The GPU promotes each to a double.
-@ ds_esz_of * Dataset d → i { ^ ( data_dtype_esz . d dtype ) }
+unsafe @ ds_esz_of * Dataset d → i { ^ ( data_dtype_esz . d dtype ) }
 
-@ ds_count_of * Dataset d → i { ^ / . d nbytes ( ds_esz_of d ) }
+unsafe @ ds_count_of * Dataset d → i { ^ / . d nbytes ( ds_esz_of d ) }
 
-@ ds_is_file * Dataset d → b { ^ > ( string_len . d path ) 0 }
+unsafe @ ds_is_file * Dataset d → b { ^ > ( string_len . d path ) 0 }
 
 // The dtype code for a dataset id (1 f64 default if unknown) — the has_data
 // value the CUDA generator and the chunk payload carry for this dataset.
-@ ds_dtype_id i dsid → i {
+unsafe @ ds_dtype_id i dsid → i {
     : s p ( ds_find dsid )
     ? == # i p 0 { ^ ( data_dtype_f64 ) } {}
     : *Dataset d # *Dataset p
@@ -982,7 +982,7 @@ $ `stdlib/core/rcbox.nu`
 // Block b's raw bytes: sliced from RAM, or read from the source file at the
 // block's fixed grid offset (file-backed). One block (≤ 1 MiB) at a time — the
 // coordinator's memory never scales with the dataset size.
-@ ds_block_bytes * Dataset d i b → ( Vec u ) {
+unsafe @ ds_block_bytes * Dataset d i b → ( Vec u ) {
     : i bv ( blob_block_vals )
     : i off * b * bv 8
     : i end0 + off * bv 8
@@ -1047,7 +1047,7 @@ $ `stdlib/core/rcbox.nu`
     ^ out
 }
 
-@ ds_find i id → s {
+unsafe @ ds_find i id → s {
     : *McpState st # *McpState g_mcp
     : i n ( vec_len [s] . st datasets )
     : ~ s found # s 0
@@ -1078,7 +1078,7 @@ $ `stdlib/core/rcbox.nu`
 // referenced block is confirmed cached are the (small) compute chunks
 // submitted; each references its blocks by hash and the worker assembles the
 // slice from its cache, failing visibly on any missing block.
-@ cluster_submit_wasm_gpu_ds Swarm sw__h i mode i rlo i rhi i kbins ( Vec i ) params * Dataset d ( Vec u ) wasm i nchunks_want ( Vec String ) seeded inout i nseed_cell → ( Vec i ) {
+unsafe @ cluster_submit_wasm_gpu_ds Swarm sw__h i mode i rlo i rhi i kbins ( Vec i ) params * Dataset d ( Vec u ) wasm i nchunks_want ( Vec String ) seeded inout i nseed_cell → ( Vec i ) {
     : *SwarmImpl sw ( __Swarm_ptr sw__h )
     // Elements per 1 MiB block depends on the storage width (f64/i64 = 131072,
     // f32/i32 = 262144). Blocks stay byte-aligned (esz divides 1 MiB), so an
@@ -1238,7 +1238,7 @@ $ `stdlib/core/rcbox.nu`
 
 @ __wcache_max → i { ^ 32 }
 
-@ __wcache_get s hex → ?( Vec u ) {
+unsafe @ __wcache_get s hex → ?( Vec u ) {
     : *McpState st # *McpState g_mcp
     : i n ( vec_len [WasmCached] . st wcache )
     : ~ i k 0
@@ -1260,7 +1260,7 @@ $ `stdlib/core/rcbox.nu`
 
 // Insert a copy. At capacity the whole cache resets — a parameter scan lives
 // in one entry, so simplicity beats an eviction policy here.
-@ __wcache_put s hex ( Vec u ) wasm → v {
+unsafe @ __wcache_put s hex ( Vec u ) wasm → v {
     : *McpState st # *McpState g_mcp
     ? >= ( vec_len [WasmCached] . st wcache ) ( __wcache_max ) { ( vec_clear [WasmCached] . st wcache ) } {}
     : ( Vec u ) cp ( vec_with_cap [u] ( vec_len [u] wasm ) )
@@ -1268,7 +1268,7 @@ $ `stdlib/core/rcbox.nu`
     ( vec_push [WasmCached] . st wcache @ WasmCached { ( string_from hex ) cp } )
 }
 
-@ mcp_swarm → Swarm { : *McpState st # *McpState g_mcp ^ ( Swarm_share . st swarm ) }
+unsafe @ mcp_swarm → Swarm { : *McpState st # *McpState g_mcp ^ ( Swarm_share . st swarm ) }
 
 @ mcp_pump i rounds → v {
     : Swarm sw__h ( mcp_swarm )
@@ -1288,7 +1288,7 @@ $ `stdlib/core/rcbox.nu`
 // The reason the first failed chunk gave, or "" when none did. Workers append
 // it to a failed result frame (wasmkernel chunk_err_push), so a task can say
 // WHY it failed instead of only how many chunks did.
-@ __tids_first_error Swarm sw__h ( Vec i ) tids → String {
+unsafe @ __tids_first_error Swarm sw__h ( Vec i ) tids → String {
     : *SwarmImpl sw ( __Swarm_ptr sw__h )
     : i n ( vec_len [i] tids )
     : ~ String out ( string_new )
@@ -1311,7 +1311,7 @@ $ `stdlib/core/rcbox.nu`
     ^ out
 }
 
-@ __task_finalize * Task t → v {
+unsafe @ __task_finalize * Task t → v {
     : Swarm sw__h ( mcp_swarm )
     : *SwarmImpl sw ( __Swarm_ptr sw__h )
     ? == . t mode ( gpu_mode_scalar ) {
@@ -1342,7 +1342,7 @@ $ `stdlib/core/rcbox.nu`
 // chunk asks the roster instead: its owner is presumed lost once it has been
 // evicted for missing heartbeats, with a long backstop so a task can never run
 // forever. An owner we never resolved (empty ring at dispatch) is lost too.
-@ __cj_presumed_lost Swarm sw__h * ChunkJobImpl cj i now → b {
+unsafe @ __cj_presumed_lost Swarm sw__h * ChunkJobImpl cj i now → b {
     : *SwarmImpl sw ( __Swarm_ptr sw__h )
     ? == . cj kind ( kind_wasm_gpu ) { ^ > - now . cj submit_ms ( __ft_deadline_ms ) } {}
     ? > - now . cj submit_ms ( __ft_cpu_backstop_ms ) { ^ T } {}
@@ -1356,7 +1356,7 @@ $ `stdlib/core/rcbox.nu`
 // has attempts left, else marked exhausted. Only when every chunk is settled do
 // we combine — so a returned result still covers every chunk, now surviving a
 // worker death mid-task instead of erroring out.
-@ __task_ft_refresh * Task t → v {
+unsafe @ __task_ft_refresh * Task t → v {
     : Swarm sw__h ( mcp_swarm )
     : *SwarmImpl sw ( __Swarm_ptr sw__h )
     : JobNode jn . sw job
@@ -1423,7 +1423,7 @@ $ `stdlib/core/rcbox.nu`
     } {}
 }
 
-@ task_refresh * Task t → v {
+unsafe @ task_refresh * Task t → v {
     ? == . t done 1 { ^ v } {}
     ? > ( vec_len [ChunkJob] . t chunkjobs ) 0 { ( __task_ft_refresh t ) ^ v } {}
     : Swarm sw__h ( mcp_swarm )
@@ -1431,7 +1431,7 @@ $ `stdlib/core/rcbox.nu`
     ? ( tids_ready sw__h . t tids ) { ( __task_finalize t ) } {}
 }
 
-@ task_find i id → s {
+unsafe @ task_find i id → s {
     : *McpState st # *McpState g_mcp
     : i n ( vec_len [s] . st tasks )
     : ~ s found # s 0
@@ -1445,7 +1445,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Build the JSON-as-text result body for one task (LLM-readable + parseable).
-@ task_to_json * Task t → Json {
+unsafe @ task_to_json * Task t → Json {
     : Json o ( json_obj_new )
     ( json_obj_set o `task_id` ( json_int . t id ) )
     ( json_obj_set o `status` ( json_str_lit ? == . t done 1 ? > . t failed 0 `error` `done` `running` ) )
@@ -1486,7 +1486,7 @@ $ `stdlib/core/rcbox.nu`
 
 @ __vres_b64_max → i { ^ 65536 }
 
-@ __task_vres_json Json o * Task t → v {
+unsafe @ __task_vres_json Json o * Task t → v {
     : i cnt / ( vec_len [u] . t vres ) 8
     ( json_obj_set o `count` ( json_int cnt ) )
     ? > ( string_len . t out_file ) 0 {
@@ -1545,7 +1545,7 @@ $ `stdlib/core/rcbox.nu`
 
 // ── tool: compute_submit ─────────────────────────────────────────
 
-@ tool_submit Json args → Json {
+unsafe @ tool_submit Json args → Json {
     : ?Json ej ( json_obj_get args `expr` )
     : ?Json lj ( json_obj_get args `lo` )
     : ?Json hj ( json_obj_get args `hi` )
@@ -1600,7 +1600,7 @@ $ `stdlib/core/rcbox.nu`
 // Ship a compiled wasm module to the cluster as a task (takes ownership of
 // `wasm`, frees it). Shared by both phase-2 tools.
 
-@ __ship_wasm ( Vec u ) wasm i lo i hi i op i dtype i gpu → Json {
+unsafe @ __ship_wasm ( Vec u ) wasm i lo i hi i op i dtype i gpu → Json {
     ? == ( vec_len [u] wasm ) 0 { ^ ( mcp_tool_result_error `empty wasm module` ) } {}
     // a dead relay here means the coordinator reconnects to the next in the
     // list before submitting — a relay failure does not take the API down
@@ -1724,7 +1724,7 @@ $ `stdlib/core/rcbox.nu`
 
 // Shared CUDA submit: validate → wrap → cached-or-remote compile → shard to
 // the GPU ring → record the task. Frees `params`; borrows `cuda`/`out_file`.
-@ __submit_cuda_task s cuda i op i mode i lo i hi i kbins ( Vec i ) params s out_file i dsid → Json {
+unsafe @ __submit_cuda_task s cuda i op i mode i lo i hi i kbins ( Vec i ) params s out_file i dsid → Json {
     ? ! ( cuda_src_ok cuda ) {
         ^ ( mcp_tool_result_error `the CUDA source may not contain a backtick character` )
     } {}
@@ -1871,7 +1871,7 @@ $ `stdlib/core/rcbox.nu`
 // gradient of a fit and the state it updates coincide, but k-means sufficient
 // statistics, EM stats and A·v for power iteration do not. Returns the
 // failed-chunk count (0 = every chunk reported).
-@ __iterate_round Swarm sw__h ( Vec u ) wasm i S i A ( Vec i ) xparams i rlo i rhi ( Vec f ) state i dsid ( Vec String ) seeded inout i nseed_cell ( Vec f ) grad → i {
+unsafe @ __iterate_round Swarm sw__h ( Vec u ) wasm i S i A ( Vec i ) xparams i rlo i rhi ( Vec f ) state i dsid ( Vec String ) seeded inout i nseed_cell ( Vec f ) grad → i {
     : *SwarmImpl sw ( __Swarm_ptr sw__h )
     : ( Vec i ) params ( vec_new [i] )
     : ~ i j 0
@@ -2000,14 +2000,14 @@ $ `stdlib/core/rcbox.nu`
 // owner releases it.
 : IterRun { s ctl }
 
-@ IterRun_share IterRun h → IterRun { ^ @ IterRun { # s ( rcbox_share # i . h ctl ) } }
+unsafe @ IterRun_share IterRun h → IterRun { ^ @ IterRun { # s ( rcbox_share # i . h ctl ) } }
 
 @ IterRun_drop sink IterRun h → v {
     ( mem_forget h )
     ( rcbox_release [IterRunImpl] # i . h ctl )
 }
 
-@ __IterRun_ptr IterRun h → *IterRunImpl { ^ ( rcbox_ptr [IterRunImpl] # i . h ctl ) }
+unsafe @ __IterRun_ptr IterRun h → *IterRunImpl { ^ ( rcbox_ptr [IterRunImpl] # i . h ctl ) }
 
 // The async runs, kept for the program's lifetime (a finished run stays
 // pollable); held behind a raw global like McpState.
@@ -2019,7 +2019,7 @@ $ `stdlib/core/rcbox.nu`
 
 : ~ i g_iter_next 1
 
-@ __iter_runs → *IterRuns {
+unsafe @ __iter_runs → *IterRuns {
     ? == g_iter_runs 0 {
         : *IterRuns b # *IterRuns ( nurl_alloc Z IterRuns )
         = . b v ( vec_new [IterRun] )
@@ -2029,7 +2029,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // The run with `id`, another owner of it; a null handle (ctl 0) if none.
-@ __iter_find i id → IterRun {
+unsafe @ __iter_find i id → IterRun {
     : *IterRuns rs ( __iter_runs )
     : ~ i k 0
     ~ < k ( vec_len [IterRun] . rs v ) {
@@ -2047,7 +2047,7 @@ $ `stdlib/core/rcbox.nu`
 
 // One full round (accumulate + step), updating the run in place — the exact
 // body the synchronous loop used to inline.
-@ __iterate_step Swarm sw__h * IterRunImpl r → v {
+unsafe @ __iterate_step Swarm sw__h * IterRunImpl r → v {
     : *SwarmImpl sw ( __Swarm_ptr sw__h )
     : *McpState st # *McpState g_mcp
     : ~ i nseed 0
@@ -2100,7 +2100,7 @@ $ `stdlib/core/rcbox.nu`
 // Advance until done / converged / a chunk failure — or, with budget_ns > 0,
 // until the slice's time is up. Finalizes the status and releases the
 // compiled modules when the run leaves "running".
-@ __iter_advance Swarm sw__h * IterRunImpl r i budget_ns → v {
+unsafe @ __iter_advance Swarm sw__h * IterRunImpl r i budget_ns → v {
     : *SwarmImpl sw ( __Swarm_ptr sw__h )
     ? == . r status 0 {} { ^ v }
     : i t0 ( monotonic_ns )
@@ -2122,7 +2122,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // The result object both the synchronous return and the status poll share.
-@ __iter_result_json * IterRunImpl r b with_id → Json {
+unsafe @ __iter_result_json * IterRunImpl r b with_id → Json {
     : Json o ( json_obj_new )
     ? with_id {
         ( json_obj_set o `task_id` ( json_int . r id ) )
@@ -2146,7 +2146,7 @@ $ `stdlib/core/rcbox.nu`
     ^ o
 }
 
-@ tool_iterate Json args → Json {
+unsafe @ tool_iterate Json args → Json {
     : ?Json cj ( json_obj_get args `cuda` )
     : ?Json sj ( json_obj_get args `state` )
     : ?Json uj ( json_obj_get args `update` )
@@ -2286,7 +2286,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Advance an async iterate run by a bounded time slice and report it.
-@ tool_iterate_status Json args → Json {
+unsafe @ tool_iterate_status Json args → Json {
     : i id ?? ( json_obj_get args `task_id` ) { T x → ?? ( json_num_as_i x ) { T v → v F → 0 } F → 0 }
     : IterRun rh ( __iter_find id )
     ? != 0 # i . rh ctl {} { ^ ( mcp_tool_result_error `no such iterate run — start one with compute_iterate {"async":true,...}` ) }
@@ -2345,7 +2345,7 @@ $ `stdlib/core/rcbox.nu`
 
 @ __shuffle_keys_inline → i { ^ 8192 }  // more groups than this must go to out_file
 
-@ tool_shuffle Json args → Json {
+unsafe @ tool_shuffle Json args → Json {
     : ?Json cj ( json_obj_get args `map` )
     : b have_map ?? cj { T _ → T F → F }
     ? have_map {} { ^ ( mcp_tool_result_error `compute_shuffle needs "map" — a pair of CUDA device functions __device__ long long key(long long x[, double v][, const double* p]) and __device__ double value(...) that emit one (key, value) per element — plus "reduce" (sum|product|min|max|count) and "lo"/"hi" (or "dataset")` ) }
@@ -2621,7 +2621,7 @@ $ `stdlib/core/rcbox.nu`
 
 @ __strvec_at ( Vec String ) v i i → s { ^ ?? ( vec_get [String] v i ) { T x → ( string_data x ) F → `` } }
 
-@ __ds_persist * Dataset d ( Vec u ) rawbytes → v {
+unsafe @ __ds_persist * Dataset d ( Vec u ) rawbytes → v {
     : String dir ( __ds_dir )
     ?? ( dir_create_all ( string_data dir ) ) { T _ → {} F e → { ^ v } }
     // where the bytes live on disk: the original file, or a written .data copy
@@ -2649,7 +2649,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Reload every persisted dataset into the (freshly initialised) McpState.
-@ __ds_load_all → v {
+unsafe @ __ds_load_all → v {
     : *McpState st # *McpState g_mcp
     : String dir ( __ds_dir )
     : ~ i maxid 0
@@ -2707,7 +2707,7 @@ $ `stdlib/core/rcbox.nu`
 
 // Register a dataset from its manifest, augmenting the already-built stats
 // object `o` (min/max/mean) with dataset_id/name/count/dtype, and returning it.
-@ __ds_register s name ( Vec u ) bytes String path i nbytes i dtype ( Vec ( Vec u ) ) blocks Json o → Json {
+unsafe @ __ds_register s name ( Vec u ) bytes String path i nbytes i dtype ( Vec ( Vec u ) ) blocks Json o → Json {
     : *McpState st # *McpState g_mcp
     : *Dataset d # *Dataset ( nurl_alloc Z Dataset )
     = . d id . st next_ds
@@ -2777,7 +2777,7 @@ $ `stdlib/core/rcbox.nu`
     ^ ( tool_result_json idj )
 }
 
-@ tool_list_data Json args → Json {
+unsafe @ tool_list_data Json args → Json {
     : *McpState st # *McpState g_mcp
     : Json arr ( json_arr_new )
     : i n ( vec_len [s] . st datasets )
@@ -2806,7 +2806,7 @@ $ `stdlib/core/rcbox.nu`
 // found" or a task that keeps retrying gives a model nothing to reason about:
 // it cannot see whether a worker ever joined, whether it is GPU-capable, or
 // whether the node it is waiting on has gone silent.
-@ tool_status Json args → Json {
+unsafe @ tool_status Json args → Json {
     ? ( mcp_ensure_relay ) {} {}
     : Swarm sw__h ( mcp_swarm )
     : *SwarmImpl sw ( __Swarm_ptr sw__h )
@@ -2836,7 +2836,7 @@ $ `stdlib/core/rcbox.nu`
     ^ ( tool_result_json o )
 }
 
-@ tool_list Json args → Json {
+unsafe @ tool_list Json args → Json {
     ( mcp_pump 4 )
     : *McpState st # *McpState g_mcp
     : Json arr ( json_arr_new )
@@ -2858,7 +2858,7 @@ $ `stdlib/core/rcbox.nu`
 
 // ── tool: compute_result ─────────────────────────────────────────
 
-@ tool_result Json args → Json {
+unsafe @ tool_result Json args → Json {
     : ?Json idj ( json_obj_get args `task_id` )
     ? ! ?? idj { T _ → T F → F } { ^ ( mcp_tool_result_error `compute_result needs "task_id" (int)` ) } {}
     : i id ?? idj { T v → ( json_as_int v ) F → 0 }
@@ -2888,7 +2888,7 @@ $ `stdlib/core/rcbox.nu`
 // Task creation is server-directed and per-request: a client that does
 // not declare the extension on the call gets exactly the old behaviour.
 
-@ mcp_task_store → McpTaskStore {
+unsafe @ mcp_task_store → McpTaskStore {
     : *McpState st # *McpState g_mcp
     ^ . st mcptasks
 }
@@ -2910,7 +2910,7 @@ $ `stdlib/core/rcbox.nu`
 // outcome, not a JSON-RPC fault, so they still COMPLETE the task (the
 // payload's own "status" field says "error"). `failed` is reserved for
 // the case where the swarm task itself has vanished.
-@ __mcp_task_sync s mt → v {
+unsafe @ __mcp_task_sync s mt → v {
     ? ( mcp_task_status_is_terminal ( mcp_task_status mt ) ) { ^ v } {}
     : s tp ( task_find ( mcp_task_link mt ) )
     ? == # i tp 0 {
@@ -2948,7 +2948,7 @@ $ `stdlib/core/rcbox.nu`
 // Wrap the swarm task a just-completed tool call registered into an MCP
 // task handle. None when the call registered nothing — an argument
 // error or an empty cluster is an immediate tool result, not a task.
-@ __mcp_task_augment s name Json args → ?Json {
+unsafe @ __mcp_task_augment s name Json args → ?Json {
     : *McpState st # *McpState g_mcp
     : s lt . st last_task
     ? == # i lt 0 { ^ @ ?Json { F @ Json { JNull } } } {}
@@ -3193,7 +3193,7 @@ $ `stdlib/core/rcbox.nu`
 // behaviour, and so does a call that registered no swarm task (an
 // argument error, or an empty cluster).
 
-@ __ms_task_begin McpCall call → b {
+unsafe @ __ms_task_begin McpCall call → b {
     ? ! ( mcp_call_wants_tasks call ) { ^ F } {}
     : *McpState st # *McpState g_mcp
     = . st last_task # s 0
@@ -3341,7 +3341,7 @@ $ `stdlib/core/rcbox.nu`
 // into the McpState, preserving tasks / datasets / caches. Returns F when no
 // relay in the list is reachable. Called from the submit path when the
 // current relay looks dead, so a relay failure does not take the API down.
-@ mcp_reconnect → b {
+unsafe @ mcp_reconnect → b {
     : *McpState st # *McpState g_mcp
     : ( Vec String ) relays # ( Vec String ) g_mcp_relays
     : ~ i idxc 0
@@ -3379,7 +3379,7 @@ $ `stdlib/core/rcbox.nu`
     ^ ( mcp_reconnect )
 }
 
-@ node_mcp ( Vec String ) relays s rhost i rport s mcp_host i mcp_port s cert s key s token → v {
+unsafe @ node_mcp ( Vec String ) relays s rhost i rport s mcp_host i mcp_port s cert s key s token → v {
     : ~ i idxc 0
     ?? ( relay_dial_list relays `127.0.0.1` 47700 0 idxc ) {
         T rc → {
@@ -3745,17 +3745,24 @@ $ `stdlib/core/rcbox.nu`
         }
     } {}
 
-    // One closure per role (held alive for the process; worker threads share
-    // one closure and each takes a fresh identity inside node_worker).
+    // One closure per role thread. A thread owns what its closure captures,
+    // so every worker gets its own copy of the relay list, dial host and
+    // token (each takes a fresh identity inside node_worker).
     : ( @ v ) relay_body \ → v { ( node_relay ( string_data . lhp host ) . lhp port vflag ) }
-    : ( @ v ) worker_body \ → v { ( node_worker relays ( string_data drh ) drp ( string_data tok ) vflag gpuflag ) }
     : ( @ v ) mcp_body \ → v { ( node_mcp relays ( string_data drh ) drp ( string_data . mhp host ) . mhp port ( string_data certp ) ( string_data keyp ) ( string_data tok ) ) }
 
     : ( Vec Thread ) ths ( vec_new [Thread] )
     ? relay_on { ?? ( thread_spawn relay_body ) { T t → ( vec_push [Thread] ths t ) F _ → {} } } {}
     ? worker_on {
         : ~ i wi 0
-        ~ < wi nworkers { ?? ( thread_spawn worker_body ) { T t → ( vec_push [Thread] ths t ) F _ → {} } = wi + wi 1 }
+        ~ < wi nworkers {
+            : ( Vec String ) wrelays ( mem_dup relays )
+            : String wdrh ( string_clone drh )
+            : String wtok ( string_clone tok )
+            : ( @ v ) worker_body \ → v { ( node_worker wrelays ( string_data wdrh ) drp ( string_data wtok ) vflag gpuflag ) }
+            ?? ( thread_spawn worker_body ) { T t → ( vec_push [Thread] ths t ) F _ → {} }
+            = wi + wi 1
+        }
     } {}
     ? mcp_on { ?? ( thread_spawn mcp_body ) { T t → ( vec_push [Thread] ths t ) F _ → {} } } {}
 

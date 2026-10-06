@@ -169,11 +169,11 @@ $ `src/ops.nu`
 
 // Fail-closed guards: every call is INVALID and must return F. Prints
 // guards|1|<F count>,<expected>.
-@ ck_f sink ? DTensor o * u cnt → v {
+unsafe @ ck_f sink ? DTensor o * u cnt → v {
     ?? o { T _d → {} F _ → { ( nurl_poke cnt 0 + ( nurl_peek cnt 0 ) 1 ) } }
 }
 
-@ run_guards GpuKit kit → v {
+unsafe @ run_guards GpuKit kit → v {
     : i want 5
     : *u cnt ( nurl_alloc 8 )
     ( nurl_poke cnt 0 0 )

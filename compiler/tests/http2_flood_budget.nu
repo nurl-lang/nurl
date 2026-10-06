@@ -98,7 +98,7 @@ $ `stdlib/ext/http2_server.nu`
 
 // Read the 32-bit error code out of a GOAWAY payload (last_stream_id
 // then error_code, §6.8); -1 when the payload is too short to carry one.
-@ goaway_code ( Vec u ) pl → i {
+unsafe @ goaway_code ( Vec u ) pl → i {
     ? < ( vec_len [u] pl ) 8 { ^ - 0 1 } {}
     : *u pp ( vec_data [u] pl )
     ^ + + + << & 255 # i . pp 4 24 << & 255 # i . pp 5 16 << & 255 # i . pp 6 8 & 255 # i . pp 7
@@ -240,7 +240,7 @@ $ `stdlib/ext/http2_server.nu`
     ^ fails
 }
 
-@ run → i {
+unsafe @ run → i {
     : ~ i fails 0
     : !TcpListener NetErr lr ( tcp_listen `127.0.0.1` 18831 )
     ?? lr {

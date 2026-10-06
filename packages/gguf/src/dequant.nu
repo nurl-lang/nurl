@@ -42,7 +42,7 @@ $ `gguf.nu`
 }
 
 // f16 at byte offset o of pointer P (little-endian).
-@ __gg_ld_f16 * u P i o → f {
+unsafe @ __gg_ld_f16 * u P i o → f {
     ^ ( gg_f16_to_f | # i . P o << # i . P + o 1 8 )
 }
 
@@ -51,7 +51,7 @@ $ `gguf.nu`
 }
 
 // signed 8-bit read
-@ __gg_i8 * u P i off → i {
+unsafe @ __gg_i8 * u P i off → i {
     : i x # i . P off
     ^ ? > x 127 - x 256 x
 }
@@ -75,12 +75,12 @@ $ `gguf.nu`
 // scales[4..7] (min); the last four take their low nibble from
 // scales[8..11] and their high 2 bits from the top of scales[0..7].
 // This is ggml's get_scale_min_k4, byte for byte.
-@ __gg_k4_scale * u P i base i j → i {
+unsafe @ __gg_k4_scale * u P i base i j → i {
     ? < j 4 { ^ & # i . P + base j 63 } {}
     ^ | & # i . P + base + j 4 15 << >> # i . P + base - j 4 6 4
 }
 
-@ __gg_k4_min * u P i base i j → i {
+unsafe @ __gg_k4_min * u P i base i j → i {
     ? < j 4 { ^ & # i . P + base + j 4 63 } {}
     ^ | >> # i . P + base + j 4 4 << >> # i . P + base j 6 4
 }
@@ -138,7 +138,7 @@ $ `gguf.nu`
 
 // The decoder. `first`/`count` are block-aligned element bounds,
 // validated by the public entries above.
-@ __gg_dequant Gguf g i idx i first i count → !( Vec u ) String {
+unsafe @ __gg_dequant Gguf g i idx i first i count → !( Vec u ) String {
     : ~ i gt -1
     : ~ i nb -1
     : ~ i addr 0

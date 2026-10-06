@@ -44,7 +44,7 @@ $ `stdlib/core/vec.nu`
 }
 
 // Text of token `t` as a C string; valid while `ts` lives.
-@ fmt_tok_text FmtToks ts FmtTok t → s {
+unsafe @ fmt_tok_text FmtToks ts FmtTok t → s {
     ^ # s + # i ( vec_data [u] . ts text ) . t text
 }
 
@@ -117,7 +117,7 @@ $ `stdlib/core/vec.nu`
 // ── Token emission ─────────────────────────────────────────────
 // Centralised helper so callers only manage the source-window
 // [start, end) and the kind; the text goes onto `buf`.
-@ __fmt_emit ( Vec FmtTok ) toks ( Vec u ) buf s src i start i end i kind i nl_acc → v {
+unsafe @ __fmt_emit ( Vec FmtTok ) toks ( Vec u ) buf s src i start i end i kind i nl_acc → v {
     : i nl_clamped ? > nl_acc 2 2 nl_acc
     : i off ( vec_len [u] buf )
     : i len - end start

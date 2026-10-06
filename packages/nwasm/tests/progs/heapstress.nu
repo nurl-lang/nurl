@@ -5,7 +5,7 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/thread.nu`
 
-@ main → i {
+unsafe @ main → i {
     : Mutex m ( mutex_new )
     : *i total ( nurl_alloc 8 )
     ( nurl_poke # s total 0 0 )
@@ -19,8 +19,8 @@ $ `stdlib/std/thread.nu`
                 : String s ( string_from `frame-` )
                 ( string_push_int s + k r )
                 ( string_push_str s `-payload-payload-payload` )
-                ( vec_push [String] strs s )
                 = sum + sum ( string_len s )
+                ( vec_push [String] strs s )
                 = k + k 1
             }
             : ( Vec u ) buf ( vec_with_cap [u] 5 )

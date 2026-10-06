@@ -11,13 +11,13 @@ $ `stdlib/std/rc.nu`
 
 : Slot [A] { s ctl }
 
-@ slot_new [A] A x → ( Slot A ) {
+unsafe @ slot_new [A] A x → ( Slot A ) {
     : *( SlotImpl A ) impl # *( SlotImpl A ) ( nurl_alloc Z ( SlotImpl A ) )
     = . impl value x
     ^ @ ( Slot A ) { # s impl }
 }
 
-@ Slot_drop [A] sink ( Slot A ) h → v {
+unsafe @ Slot_drop [A] sink ( Slot A ) h → v {
     ( mem_forget h )
     ? == 0 # i . h ctl { ^ } {}
     : *( SlotImpl A ) impl # *( SlotImpl A ) . h ctl
@@ -26,7 +26,7 @@ $ `stdlib/std/rc.nu`
     ( nurl_free # s impl )
 }
 
-@ Slot_trace [A] ( Slot A ) h s vis → v {
+unsafe @ Slot_trace [A] ( Slot A ) h s vis → v {
     ? == 0 # i . h ctl { ^ } {}
     : *( SlotImpl A ) impl # *( SlotImpl A ) . h ctl
     ( mem_trace [A] . impl value vis )
@@ -34,7 +34,7 @@ $ `stdlib/std/rc.nu`
 
 : Node { i id ( Slot ( Rc Node ) ) next }
 
-@ main → i {
+unsafe @ main → i {
     : ( Rc Node ) a ( rc_new [Node] @ Node { 1 ( slot_new [( Rc Node )] ( rc_zero [Node] ) ) } )
     : *( SlotImpl ( Rc Node ) ) si # *( SlotImpl ( Rc Node ) ) . . ( rc_get [Node] a ) next ctl
     : ( Rc Node ) inner . si value

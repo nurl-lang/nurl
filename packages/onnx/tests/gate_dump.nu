@@ -36,7 +36,7 @@ $ `src/runtime.nu`
     ^ ?? ( vec_get [String] av k ) { T x → ( nurl_str_to_int ( string_data x ) ) F _ → dflt }
 }
 
-@ synth i n → *u {
+unsafe @ synth i n → *u {
     : *u h ( nurl_alloc * n 4 )
     : ~ i k 0
     ~ < k n {
@@ -48,7 +48,7 @@ $ `src/runtime.nu`
 }
 
 // Read a whole file into a fresh malloc'd buffer (caller frees).
-@ load_bytes s path * u pcell → *u {
+unsafe @ load_bytes s path * u pcell → *u {
     ?? ( read_file_bytes path ) {
         T bytes → {
             : i n ( vec_len [u] bytes )
@@ -66,7 +66,7 @@ $ `src/runtime.nu`
     }
 }
 
-@ dump_out Engine e RTensor t s path → i {
+unsafe @ dump_out Engine e RTensor t s path → i {
     ? > . t nelem 0 {} { ( nurl_print `EMPTY output\n` ) ^ 1 }
     : GpuHost host ( rt_download e t )
     : i nb * . t nelem 4
@@ -94,7 +94,7 @@ $ `src/runtime.nu`
     ^ v
 }
 
-@ main → i {
+unsafe @ main → i {
     : String mode ( args 1 )
     : String mp ( args 2 )
     : ~ OGraph g ( onnx_empty_graph )

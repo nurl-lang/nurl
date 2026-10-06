@@ -142,7 +142,7 @@ $ `deps/image/src/image.nu`
 // kernel is LANCZOS going down and BICUBIC going up, the crop offsets
 // floor — each of those is the reference's own arithmetic, not an
 // approximation of it.
-@ pp_fit Image im i tw i th → !Frame String {
+unsafe @ pp_fit Image im i tw i th → !Frame String {
     : i w . im width
     : i h . im height
     ? | | <= w 0 <= h 0 != . im channels 3 {

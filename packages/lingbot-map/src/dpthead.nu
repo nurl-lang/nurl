@@ -219,7 +219,7 @@ $ `src/load.nu`
     ^ ( gk_buf_none GK_F32 )
 }
 
-@ dp_pos_embed GpuKit kit ( Vec DpPe ) cache GkBuf x i ch i h i w f aspect → b {
+unsafe @ dp_pos_embed GpuKit kit ( Vec DpPe ) cache GkBuf x i ch i h i w f aspect → b {
     : GkBuf hit ( __dp_pe_find cache ch h w aspect )
     ? ( gk_buf_ok hit ) { ^ ( gkd_add kit x x hit ) } {}
     : f diag ( float_sqrt + * aspect aspect 1.0 )
@@ -271,8 +271,9 @@ $ `src/load.nu`
     : GkBuf pe ( gk_dbuf_new kit * ch * h w GK_F32 )
     : b ok ( gk_dbuf_upload kit pe hv )
     ? ok {} { ^ F }
+    : b added ( gkd_add kit x x pe )
     ( vec_push [DpPe] cache @ DpPe { ch h w aspect pe } )
-    ^ ( gkd_add kit x x pe )
+    ^ added
 }
 
 // One fusion step. `out` is the coarser path (or the only input, for
@@ -328,7 +329,7 @@ i gh i gw → b {
 // re-running with one more print each time is not an option.
 : i DP_STRIDE 9973
 
-@ __dp_dump GpuKit kit s label GkBuf b i ch i h i w → v {
+unsafe @ __dp_dump GpuKit kit s label GkBuf b i ch i h i w → v {
     : i n * ch * h w
     : ( Vec f ) hv ( vec_with_cap [f] n )
     : b _sl ( vec_set_len [f] hv n )
@@ -372,7 +373,7 @@ i gh i gw → b {
 // runs once per frame against ~100 s of transformer, and a wrong
 // hand-computed scratch size fails closed in a way that is tedious to
 // chase.
-@ dp_forward GpuKit kit Dpt d GkBuf taps i gh i gw i h i w i trace
+unsafe @ dp_forward GpuKit kit Dpt d GkBuf taps i gh i gw i h i w i trace
 GkBuf depth GkBuf conf → b {
     : i np * gh gw
     : i p + DP_SPECIAL np

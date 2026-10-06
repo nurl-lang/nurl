@@ -158,7 +158,7 @@ $ `src/sky.nu`
 @ __ma_is_dir s p → b { ^ == 2 ( nurl_path_type p ) }
 
 // ImageNet normalisation, in place over CHW planes.
-@ __ma_norm * f p i n → v {
+unsafe @ __ma_norm * f p i n → v {
     : ( Vec u ) mean__v ( vec_zeroed [u] 24 )
     : *f mean # *f ( vec_data [u] mean__v )
     : ( Vec u ) std__v ( vec_zeroed [u] 24 )
@@ -388,7 +388,7 @@ $ `src/sky.nu`
 
 // ── main ────────────────────────────────────────────────────────────
 
-@ main → i {
+unsafe @ main → i {
     : Opts o ( __ma_parse )
     ? == . o bad 2 {
         ( __ma_usage )
@@ -672,17 +672,20 @@ $ `src/sky.nu`
             }
             : b _d1 ( vec_set_len [f] hostv * 3 hw )
             ? ( gk_dbuf_download kit rays hostv ) {} { ^ 1 }
-            : *f hv ( vec_data [f] hostv )
+            : ~ * f hv ( vec_data [f] hostv )
             : ~ i j 0
             ~ < j * 3 hw { = . rays_h j . hv j = j + j 1 }
             : b _d2 ( vec_set_len [f] hostv hw )
             ? ( gk_dbuf_download kit depth hostv ) {} { ^ 1 }
+            = hv ( vec_data [f] hostv )
             = j 0
             ~ < j hw { = . depth_h j . hv j = j + j 1 }
             ? ( gk_dbuf_download kit conf hostv ) {} { ^ 1 }
+            = hv ( vec_data [f] hostv )
             = j 0
             ~ < j hw { = . conf_h j . hv j = j + j 1 }
             ? ( gk_dbuf_download kit mlog hostv ) {} { ^ 1 }
+            = hv ( vec_data [f] hostv )
             = j 0
             ~ < j hw { = . mlog_h j . hv j = j + j 1 }
 

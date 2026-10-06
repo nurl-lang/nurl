@@ -1,4 +1,4 @@
-// should_warn_stale_borrow_forward.nu — §2.10 stops depending on
+// diag_stale_borrow_forward.nu — §2.10 stops depending on
 // definition order (docs/MEMORY.md §6.4).
 //
 // A pointer borrowed with `vec_data` goes stale when the container is
@@ -21,12 +21,12 @@
 $ `stdlib/core/vec.nu`
 
 // POSITIVE — `grow` is defined at the bottom of this file.
-@ stale_via_forward_helper → i {
+unsafe @ stale_via_forward_helper → i {
     : ~ ( Vec u ) v ( vec_new [u] )
     ( vec_push [u] v # u 1 )
     : *u p ( vec_data [u] v )
     ( grow v )
-    : i x # i . p 0  // warns
+    : i x # i . p 0  // error
     ( vec_free [u] v )
     ^ x
 }
@@ -34,12 +34,12 @@ $ `stdlib/core/vec.nu`
 // POSITIVE — the mutation is inside a `?` arm. After the join either
 // arm may have run, so the pointer is stale exactly as it is when the
 // helper sits above.
-@ stale_via_forward_helper_in_arm → i {
+unsafe @ stale_via_forward_helper_in_arm → i {
     : ~ ( Vec u ) v ( vec_new [u] )
     ( vec_push [u] v # u 1 )
     : *u p ( vec_data [u] v )
     ? > 1 2 { ( grow v ) } {}
-    : i x # i . p 0  // warns
+    : i x # i . p 0  // error
     ( vec_free [u] v )
     ^ x
 }
@@ -47,7 +47,7 @@ $ `stdlib/core/vec.nu`
 // CONTROL — a forward-defined helper that only READS its container
 // cannot reallocate anything. The provisional kill is a question, and
 // the answer here is no.
-@ no_warn_forward_reader → i {
+unsafe @ no_warn_forward_reader → i {
     : ~ ( Vec u ) v ( vec_new [u] )
     ( vec_push [u] v # u 1 )
     : *u p ( vec_data [u] v )
@@ -59,7 +59,7 @@ $ `stdlib/core/vec.nu`
 
 // CONTROL — re-fetching after the forward call clears the borrow, just
 // as it does after an inline `vec_push`.
-@ no_warn_refetch_after_forward → i {
+unsafe @ no_warn_refetch_after_forward → i {
     : ~ ( Vec u ) v ( vec_new [u] )
     ( vec_push [u] v # u 1 )
     : ~ * u p ( vec_data [u] v )
@@ -70,7 +70,7 @@ $ `stdlib/core/vec.nu`
     ^ x
 }
 
-@ main → i {
+unsafe @ main → i {
     : i a ( stale_via_forward_helper )
     : i b ( stale_via_forward_helper_in_arm )
     : i c ( no_warn_forward_reader )

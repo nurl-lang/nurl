@@ -35,7 +35,7 @@
     ^ h
 }
 
-@ main → i {
+unsafe @ main → i {
     : Holder h ( hold 7 )
 
     // Same size class as the env. If `hold` wrongly freed it, this

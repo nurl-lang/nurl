@@ -23,7 +23,7 @@ $ `src/sky.nu`
     ^ 1
 }
 
-@ main → i {
+unsafe @ main → i {
     ? < ( nurl_argc ) 6 { ^ ( __sc_die `usage: skycheck <image> <skyseg.onnx> <out.bin> <tw> <th>` ) } {}
     : s img ( nurl_argv 1 )
     : s model ( nurl_argv 2 )

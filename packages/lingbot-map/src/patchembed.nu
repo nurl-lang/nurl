@@ -32,7 +32,7 @@ $ `stdlib/core/vec.nu`
 // Planar image [c, h, w] → one row per patch, `c·patch·patch` wide.
 // Row order is row-major over the patch grid; within a row the order is
 // channel, then kernel row, then kernel column — Conv2d's weight layout.
-@ pe_im2col * f img i c i h i w i patch * f cols → v {
+unsafe @ pe_im2col * f img i c i h i w i patch * f cols → v {
     ? | | | <= c 0 <= patch 0 < h patch < w patch { ^ v } {}
     : i gh / h patch
     : i gw / w patch
@@ -71,7 +71,7 @@ $ `stdlib/core/vec.nu`
 // dot product against the patch row. Swapped for a device GEMM once the
 // weights live on the device; the loop is the reference the GEMM has to
 // agree with.
-@ pe_project * f cols i p i k * f weight * f bias i n * f out → v {
+unsafe @ pe_project * f cols i p i k * f weight * f bias i n * f out → v {
     ? | | | <= p 0 <= k 0 <= n 0 == # i out 0 { ^ v } {}
     : ~ i r 0
     ~ < r p {

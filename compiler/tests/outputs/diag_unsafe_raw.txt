@@ -1,0 +1,19 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_unsafe_raw.nu:15:26: error: 'nurl_alloc' handles raw memory, which only an 'unsafe' function may do: what it returns or takes is memory the compiler cannot follow, so a mistake there is a use-after-free, a double free or a leak no check can see. Use the owning types instead (String, Vec, HashMap, Box/Rc, a struct of them — they release themselves), or, if this function genuinely needs raw memory and you vouch for its memory safety, declare it 'unsafe @ name …'.
+    : *u8 p ( nurl_alloc 16 )
+                         ^
+compiler/tests/diag_unsafe_raw.nu:20:16: error: 'strlen' is a foreign (FFI) function declared outside the standard library: the compiler cannot see what it does with the memory it is handed. Call it only from an 'unsafe' function ('unsafe @ name …'), which vouches that the call is memory-safe, and give the rest of the program a safe wrapper around it.
+    ^ ( strlen `abc` )
+               ^
+compiler/tests/diag_unsafe_raw.nu:24:19: error: '# u8* …' makes a raw pointer, which only an 'unsafe' function may do: the compiler cannot follow what such an address points at. Index a Vec with vec_get / vec_set (or iterate it) instead of reading through vec_data, or, if this function genuinely needs raw memory and you vouch for its memory safety, declare it 'unsafe @ name …'.
+    : *u8 p # *u8 ( string_data s )
+                  ^
+compiler/tests/diag_unsafe_raw.nu:29:11: error: reading through the raw pointer 'p' is raw memory, which only an 'unsafe' function may touch: the compiler cannot tell whether what it points at is still alive or in bounds. Read the element with vec_get (or iterate the Vec, or use the slice) instead of going through vec_data, or, if this function genuinely needs raw memory and you vouch for its memory safety, declare it 'unsafe @ name …'.
+    ^ . p a
+          ^
+compiler/tests/diag_unsafe_raw.nu:33:11: error: writing through the raw pointer 'p' is raw memory, which only an 'unsafe' function may touch: the compiler cannot tell whether what it points at is still alive or in bounds. Write the element with vec_set (or rebuild the Vec), or, if this function genuinely needs raw memory and you vouch for its memory safety, declare it 'unsafe @ name …'.
+    = . p b 2
+          ^
+error: aborting due to 5 previous errors
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

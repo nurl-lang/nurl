@@ -11,7 +11,7 @@
 
 $ `stdlib/hal/mmio.nu`
 
-@ main → i {
+unsafe @ main → i {
     : i reg # i ( nurl_alloc 8 )
 
     ( mmio_write32 reg # i32 0x1234 )

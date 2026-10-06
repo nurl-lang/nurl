@@ -345,7 +345,7 @@ $ `grep.nu`
 }
 
 // s/// over the pattern space. Returns T when anything changed.
-@ __sed_subst SedCmd c String space → b {
+unsafe @ __sed_subst SedCmd c String space → b {
     : b global != 0 & . c sflags SED_S_GLOBAL
     : b icase != 0 & . c sflags SED_S_ICASE
     : String probe ? icase ( _grep_lower ( string_data space ) ) ( string_clone space )
@@ -413,7 +413,7 @@ $ `grep.nu`
     ^ changed
 }
 
-@ __sed_translit SedCmd c String space → v {
+unsafe @ __sed_translit SedCmd c String space → v {
     : s from ( string_data . c arg1 )
     : s to ( string_data . c arg2 )
     : i fn ( nurl_str_len from )
@@ -452,14 +452,14 @@ $ `grep.nu`
     } {}
 }
 
-@ __sed_emit String out String line b had_nl → v {
+unsafe @ __sed_emit String out String line b had_nl → v {
     ( __sed_out_prep out )
     ( string_push_bytes out # *u ( string_data line ) ( string_len line ) )
     ? had_nl { ( string_push_char out 10 ) } { = g_sed_nonl T }
 }
 
 // Read one line, keeping whether it carried a terminator.
-@ __sed_read BufReader br String raw String dst inout b had_nl → b {
+unsafe @ __sed_read BufReader br String raw String dst inout b had_nl → b {
     ? ! ( bufreader_read_line_raw br raw ) {
         = had_nl F
         ^ F
@@ -497,7 +497,7 @@ $ `grep.nu`
 : ~ b g_sed_quit F
 : ~ i g_sed_rc 0
 
-@ __sed_stream ( Vec SedCmd ) cmds ( Vec i ) ranges s path b quiet String out → i {
+unsafe @ __sed_stream ( Vec SedCmd ) cmds ( Vec i ) ranges s path b quiet String out → i {
     ?? ( bx_reader path ) {
         F _ → { ^ 1 }
         T br → {

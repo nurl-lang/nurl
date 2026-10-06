@@ -152,10 +152,9 @@ $ `stdlib/core/vec.nu`
     ?? ( mcp_session_take_result store ( string_data sid ) rid ) { T j → ( json_free j ) F → { ( nurl_print `  FAIL rpc not resolved\n` ) = fails + fails 1 } }
     ( request_free r5 )
     ( http_response_free resp5 )
-    // begin_rpc also enqueued an outbound request frame — drain + drop it.
+    // begin_rpc also enqueued an outbound request frame — drain + drop it
+    // (vec_free releases the frames with the vector).
     : ( Vec Json ) leftover ( mcp_session_drain_notify store ( string_data sid ) )
-    : ~ i li 0
-    ~ < li ( vec_len [Json] leftover ) { ?? ( vec_get [Json] leftover li ) { T j → ( json_free j ) F → {} } = li + li 1 }
     ( vec_free [Json] leftover )
 
     // 6. batch POST: two requests → ordered JSON array of responses.

@@ -58,17 +58,17 @@ $ `stdlib/core/rcbox.nu`
 // same data, and the last owner releases it.
 : DataSet { s ctl }
 
-@ DataSet_share DataSet h → DataSet { ^ @ DataSet { # s ( rcbox_share # i . h ctl ) } }
+unsafe @ DataSet_share DataSet h → DataSet { ^ @ DataSet { # s ( rcbox_share # i . h ctl ) } }
 
 @ DataSet_drop sink DataSet h → v {
     ( mem_forget h )
     ( rcbox_release [DataSetImpl] # i . h ctl )
 }
 
-@ __DataSet_ptr DataSet h → *DataSetImpl { ^ ( rcbox_ptr [DataSetImpl] # i . h ctl ) }
+unsafe @ __DataSet_ptr DataSet h → *DataSetImpl { ^ ( rcbox_ptr [DataSetImpl] # i . h ctl ) }
 
 // Take ownership of x (n·d) and y (n·l).
-@ data_new sink ( Vec f ) x sink ( Vec f ) y i n i d i l → DataSet {
+unsafe @ data_new sink ( Vec f ) x sink ( Vec f ) y i n i d i l → DataSet {
     : i ds__box ( rcbox_zero [DataSetImpl] )
     : *DataSetImpl ds ( rcbox_ptr [DataSetImpl] ds__box )
     = . ds x x
@@ -82,17 +82,17 @@ $ `stdlib/core/rcbox.nu`
 // Let go of `ds` now rather than at the end of its owner's scope.
 @ data_free sink DataSet ds → v {}
 
-@ data_n DataSet ds__h → i {
+unsafe @ data_n DataSet ds__h → i {
     : *DataSetImpl ds ( __DataSet_ptr ds__h )
     ^ . ds n
 }
 
-@ data_d DataSet ds__h → i {
+unsafe @ data_d DataSet ds__h → i {
     : *DataSetImpl ds ( __DataSet_ptr ds__h )
     ^ . ds d
 }
 
-@ data_l DataSet ds__h → i {
+unsafe @ data_l DataSet ds__h → i {
     : *DataSetImpl ds ( __DataSet_ptr ds__h )
     ^ . ds l
 }
@@ -114,16 +114,16 @@ $ `stdlib/core/rcbox.nu`
 
 : NdfStream { s ctl }
 
-@ NdfStream_share NdfStream h → NdfStream { ^ @ NdfStream { # s ( rcbox_share # i . h ctl ) } }
+unsafe @ NdfStream_share NdfStream h → NdfStream { ^ @ NdfStream { # s ( rcbox_share # i . h ctl ) } }
 
 @ NdfStream_drop sink NdfStream h → v {
     ( mem_forget h )
     ( rcbox_release [NdfStreamImpl] # i . h ctl )
 }
 
-@ __NdfStream_ptr NdfStream h → *NdfStreamImpl { ^ ( rcbox_ptr [NdfStreamImpl] # i . h ctl ) }
+unsafe @ __NdfStream_ptr NdfStream h → *NdfStreamImpl { ^ ( rcbox_ptr [NdfStreamImpl] # i . h ctl ) }
 
-@ data_save_ndf s path DataSet ds__h → !v String {
+unsafe @ data_save_ndf s path DataSet ds__h → !v String {
     : *DataSetImpl ds ( __DataSet_ptr ds__h )
     : ( Vec u ) out ( vec_new [u] )
     ( vec_push [u] out # u 78 ) ( vec_push [u] out # u 68 )
@@ -147,7 +147,7 @@ $ `stdlib/core/rcbox.nu`
     ^ @ !v String { F ( string_from `data: cannot write .ndf` ) }
 }
 
-@ ndf_open s path → !NdfStream String {
+unsafe @ ndf_open s path → !NdfStream String {
     : !File IoErr fr ( file_open path )
     : ~ File fh @ File { # s 0 }
     ?? fr { T h → { = fh h } F _ → { ^ @ !NdfStream String { F ( string_from `data: cannot open .ndf` ) } } }
@@ -188,17 +188,17 @@ $ `stdlib/core/rcbox.nu`
 // last owner closes the file).
 @ ndf_close sink NdfStream st → v {}
 
-@ ndf_n NdfStream st__h → i {
+unsafe @ ndf_n NdfStream st__h → i {
     : *NdfStreamImpl st ( __NdfStream_ptr st__h )
     ^ . st n
 }
 
-@ ndf_d NdfStream st__h → i {
+unsafe @ ndf_d NdfStream st__h → i {
     : *NdfStreamImpl st ( __NdfStream_ptr st__h )
     ^ . st d
 }
 
-@ ndf_l NdfStream st__h → i {
+unsafe @ ndf_l NdfStream st__h → i {
     : *NdfStreamImpl st ( __NdfStream_ptr st__h )
     ^ . st l
 }
@@ -208,7 +208,7 @@ $ `stdlib/core/rcbox.nu`
     ^ ( __ndf_read_row ( __NdfStream_ptr st__h ) idx x_out y_out )
 }
 
-@ __ndf_read_row * NdfStreamImpl st i idx ( Vec f ) x_out ( Vec f ) y_out → b {
+unsafe @ __ndf_read_row * NdfStreamImpl st i idx ( Vec f ) x_out ( Vec f ) y_out → b {
     : i rowf + . st d . st l
     : i off + . st data_off * idx * rowf 8
     : !( Vec u ) IoErr rr ( file_read_at . st f off * rowf 8 )
@@ -274,16 +274,16 @@ $ `stdlib/core/rcbox.nu`
 // share of the dataset or stream it reads.
 : DataLoader { s ctl }
 
-@ DataLoader_share DataLoader h → DataLoader { ^ @ DataLoader { # s ( rcbox_share # i . h ctl ) } }
+unsafe @ DataLoader_share DataLoader h → DataLoader { ^ @ DataLoader { # s ( rcbox_share # i . h ctl ) } }
 
 @ DataLoader_drop sink DataLoader h → v {
     ( mem_forget h )
     ( rcbox_release [DataLoaderImpl] # i . h ctl )
 }
 
-@ __DataLoader_ptr DataLoader h → *DataLoaderImpl { ^ ( rcbox_ptr [DataLoaderImpl] # i . h ctl ) }
+unsafe @ __DataLoader_ptr DataLoader h → *DataLoaderImpl { ^ ( rcbox_ptr [DataLoaderImpl] # i . h ctl ) }
 
-@ __dl_make DataSet ds NdfStream st i n i d i l i batch b drop_last i seed i nshards i shard → DataLoader {
+unsafe @ __dl_make DataSet ds NdfStream st i n i d i l i batch b drop_last i seed i nshards i shard → DataLoader {
     : i base ( __data_shard_base n nshards shard )
     : i end ( __data_shard_base n nshards + shard 1 )
     : i cnt - end base
@@ -309,23 +309,23 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Full in-memory dataset (one shard). seed <= 0 disables shuffling.
-@ dl_new DataSet ds__h i batch b drop_last i seed → DataLoader {
+unsafe @ dl_new DataSet ds__h i batch b drop_last i seed → DataLoader {
     : *DataSetImpl ds ( __DataSet_ptr ds__h )
     ^ ( __dl_make ds__h @ NdfStream { # s 0 } . ds n . ds d . ds l batch drop_last seed 1 0 )
 }
 
-@ dl_new_shard DataSet ds__h i batch b drop_last i seed i nshards i shard → DataLoader {
+unsafe @ dl_new_shard DataSet ds__h i batch b drop_last i seed i nshards i shard → DataLoader {
     : *DataSetImpl ds ( __DataSet_ptr ds__h )
     ^ ( __dl_make ds__h @ NdfStream { # s 0 } . ds n . ds d . ds l batch drop_last seed nshards shard )
 }
 
 // Streaming dataset (one shard).
-@ dl_stream NdfStream st__h i batch b drop_last i seed → DataLoader {
+unsafe @ dl_stream NdfStream st__h i batch b drop_last i seed → DataLoader {
     : *NdfStreamImpl st ( __NdfStream_ptr st__h )
     ^ ( __dl_make @ DataSet { # s 0 } st__h . st n . st d . st l batch drop_last seed 1 0 )
 }
 
-@ dl_stream_shard NdfStream st__h i batch b drop_last i seed i nshards i shard → DataLoader {
+unsafe @ dl_stream_shard NdfStream st__h i batch b drop_last i seed i nshards i shard → DataLoader {
     : *NdfStreamImpl st ( __NdfStream_ptr st__h )
     ^ ( __dl_make @ DataSet { # s 0 } st__h . st n . st d . st l batch drop_last seed nshards shard )
 }
@@ -334,7 +334,7 @@ $ `stdlib/core/rcbox.nu`
 // function of `seed` — idx is reset to the ordered shard range [base,
 // base+n) BEFORE the shuffle, so the same seed always yields the same
 // order regardless of the loader's prior state.
-@ dl_reset DataLoader dl__h i seed → v {
+unsafe @ dl_reset DataLoader dl__h i seed → v {
     : *DataLoaderImpl dl ( __DataLoader_ptr dl__h )
     : ~ i k 0
     ~ < k . dl n { ( vec_set [i] . dl idx k + . dl base k ) = k + k 1 }
@@ -342,7 +342,7 @@ $ `stdlib/core/rcbox.nu`
     = . dl pos 0
 }
 
-@ dl_num_batches DataLoader dl__h → i {
+unsafe @ dl_num_batches DataLoader dl__h → i {
     : *DataLoaderImpl dl ( __DataLoader_ptr dl__h )
     : i b . dl batch
     ? <= b 0 { ^ 0 } {}
@@ -353,7 +353,7 @@ $ `stdlib/core/rcbox.nu`
 // Emit the next batch into bx (rows·d) and by (rows·l), overwriting them.
 // Returns the row count (0 at end-of-epoch; the last batch may be partial
 // unless drop_last).
-@ dl_next DataLoader dl__h ( Vec f ) bx ( Vec f ) by → i {
+unsafe @ dl_next DataLoader dl__h ( Vec f ) bx ( Vec f ) by → i {
     : *DataLoaderImpl dl ( __DataLoader_ptr dl__h )
     : i rem - . dl n . dl pos
     ? <= rem 0 { = . dl last_rows 0 ^ 0 } {}
@@ -386,7 +386,7 @@ $ `stdlib/core/rcbox.nu`
     ^ rows
 }
 
-@ dl_last_rows DataLoader dl__h → i {
+unsafe @ dl_last_rows DataLoader dl__h → i {
     : *DataLoaderImpl dl ( __DataLoader_ptr dl__h )
     ^ . dl last_rows
 }

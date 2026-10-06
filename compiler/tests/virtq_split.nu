@@ -31,20 +31,20 @@ $ `stdlib/hal/virtq.nu`
 
 : MockDev { i last_avail }
 
-@ mock_new → *MockDev {
+unsafe @ mock_new → *MockDev {
     : *MockDev d # *MockDev ( nurl_alloc Z MockDev )
     = . d last_avail 0
     ^ d
 }
 
-@ mock_free sink * MockDev d → v { ( free d ) }
+unsafe @ mock_free sink * MockDev d → v { ( free d ) }
 
-@ mock_has_work * MockDev d Virtq q → b {
+unsafe @ mock_has_work * MockDev d Virtq q → b {
     ^ ( vq_idx_lt . d last_avail ( virtq_avail_idx q ) )
 }
 
 // Returns the chain head it completed, or -1 when idle.
-@ mock_service * MockDev d Virtq q i written → i {
+unsafe @ mock_service * MockDev d Virtq q i written → i {
     ? ! ( mock_has_work d q ) { ^ -1 } {}
     : i slot % . d last_avail ( virtq_qsize q )
     : i head ( virtq_avail_ring q slot )

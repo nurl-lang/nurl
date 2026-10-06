@@ -12,9 +12,9 @@ $ `stdlib/core/string.nu`
 : Alpha { i a i b }
 : Beta { i x i y i z }
 
-@ takes_alpha * Alpha p → i { ^ . p a }
+unsafe @ takes_alpha * Alpha p → i { ^ . p a }
 
-@ main → i {
+unsafe @ main → i {
     : *Beta b # *Beta ( nurl_alloc Z Beta )
     = . b x 5
     ^ ( takes_alpha b )

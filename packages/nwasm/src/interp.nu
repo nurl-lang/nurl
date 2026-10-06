@@ -326,14 +326,14 @@ $ `module.nu`
 // argv by handle and must never drop them.
 : Interp { s ctl }
 
-@ Interp_share Interp h → Interp { ^ @ Interp { # s ( rcbox_share # i . h ctl ) } }
+unsafe @ Interp_share Interp h → Interp { ^ @ Interp { # s ( rcbox_share # i . h ctl ) } }
 
 @ Interp_drop sink Interp h → v {
     ( mem_forget h )
     ( rcbox_release [InterpImpl] # i . h ctl )
 }
 
-@ __Interp_ptr Interp h → *InterpImpl { ^ ( rcbox_ptr [InterpImpl] # i . h ctl ) }
+unsafe @ __Interp_ptr Interp h → *InterpImpl { ^ ( rcbox_ptr [InterpImpl] # i . h ctl ) }
 
 // One activation record on the explicit call stack: the function, its locals,
 // its control stack, and the instruction cursor [pos, end) — pos/end are
@@ -384,13 +384,13 @@ $ `module.nu`
 @ interp_disable_guard → v { = g_guard 0 }
 
 // The linear memory's base address, whichever representation is live.
-inline @ __mem_base * InterpImpl it → i {
+unsafe inline @ __mem_base * InterpImpl it → i {
     ? != 0 . it mem_raw { ^ . it mem_raw } { ^ # i ( vec_data [u] . it mem ) }
 }
 
 // Instantiate `m`. The instance holds a share of the module, so the module
 // lives as long as any instance of it.
-@ interp_new Module m__h → Interp {
+unsafe @ interp_new Module m__h → Interp {
     : *ModuleImpl m ( _Module_ptr m__h )
     : i it__box ( rcbox_zero [InterpImpl] )
     : *InterpImpl it ( rcbox_ptr [InterpImpl] it__box )
@@ -535,7 +535,7 @@ inline @ __mem_base * InterpImpl it → i {
 }
 
 // Allocate a fresh file-descriptor record of the given kind.
-@ __mkfd i kind → s {
+unsafe @ __mkfd i kind → s {
     : *WFd f # *WFd ( nurl_alloc Z WFd )
     = . f kind kind
     = . f data ( vec_new [u] )
@@ -548,7 +548,7 @@ inline @ __mem_base * InterpImpl it → i {
     ^ # s f
 }
 
-@ __freefd s pp → v {
+unsafe @ __freefd s pp → v {
     ? == # i pp 0 { ^ v } {}
     : *WFd f # *WFd pp
     ( vec_free [u] . f data ) ( vec_free [u] . f host ) ( vec_free [u] . f name )
@@ -557,7 +557,7 @@ inline @ __mem_base * InterpImpl it → i {
 
 // The JIT's lazily made raw state: the free list of call contexts, the
 // slab, the anchor block and the call-out bridge's copy of its env.
-@ __jit_state_free i ctxs i slab i spcell i coenv → v {
+unsafe @ __jit_state_free i ctxs i slab i spcell i coenv → v {
     : ~ i cb ctxs
     ~ != 0 cb { : *i c # *i cb : i nx . c 0 ( nurl_free # s cb ) = cb nx }
     ? != 0 slab { ( nurl_free # s slab ) } {}
@@ -565,7 +565,7 @@ inline @ __mem_base * InterpImpl it → i {
     ? != 0 coenv { ( nurl_closure_drop # *u coenv ) } {}
 }
 
-@ __free_args ( Vec s ) args → v {
+unsafe @ __free_args ( Vec s ) args → v {
     : i n ( vec_len [s] args )
     : ~ i k 0
     ~ < k n { ?? ( vec_get [s] args k ) { T pp → ? != # i pp 0 { : *Arg a # *Arg pp ( vec_free [u] . a bytes ) ( nurl_free # s a ) } {} F → {} } = k + k 1 }
@@ -584,7 +584,7 @@ inline @ __mem_base * InterpImpl it → i {
 // proves the thread's BODY finished, and the host thread is still inside
 // the interpreter for a moment after that, reading this memory and table.
 % Drop InterpImpl {
-    @ drop InterpImpl it → v {
+    unsafe @ drop InterpImpl it → v {
         : i tjn ( vec_len [Thread] . it thread_joins )
         : ~ i tji 0
         ~ < tji tjn {
@@ -613,7 +613,7 @@ inline @ __mem_base * InterpImpl it → i {
 // only what __interp_thread_new made for it: the memory, table, argv/envp and
 // every host table belong to the instance that instantiated, and are released
 // exactly once, there.
-@ __interp_thread_free * InterpImpl it → v {
+unsafe @ __interp_thread_free * InterpImpl it → v {
     ( __thread_unregister it )
     ( vec_free [i] . it vs )
     ( vec_free [i] . it thread_kids )
@@ -636,7 +636,7 @@ inline @ __mem_base * InterpImpl it → i {
 // host program that runs a module as a function call wants the
 // module's output back as a VALUE, not interleaved into its own
 // console. Enable before exec_func; read the buffers after it.
-@ interp_capture Interp it__h → v {
+unsafe @ interp_capture Interp it__h → v {
     : *InterpImpl it ( __Interp_ptr it__h )
     = . it cap T
 }
@@ -644,12 +644,12 @@ inline @ __mem_base * InterpImpl it → i {
 // The captured bytes — the Interp's own buffers, lent (valid while the
 // Interp lives). Raw bytes, exactly as the module wrote them: a NUL
 // neither truncates nor terminates.
-@ interp_stdout_bytes Interp it__h → ( Vec u ) {
+unsafe @ interp_stdout_bytes Interp it__h → ( Vec u ) {
     : *InterpImpl it ( __Interp_ptr it__h )
     ^ . it capout
 }
 
-@ interp_stderr_bytes Interp it__h → ( Vec u ) {
+unsafe @ interp_stderr_bytes Interp it__h → ( Vec u ) {
     : *InterpImpl it ( __Interp_ptr it__h )
     ^ . it caperr
 }
@@ -657,41 +657,41 @@ inline @ __mem_base * InterpImpl it → i {
 // Did the guest trap? Did it call proc_exit? The two halves of `halt`.
 // Both can be set: a trap while unwinding an exiting module leaves the
 // trap visible, which is what an embedder wants to report.
-@ __interp_trapped * InterpImpl it → b { ^ != 0 & . it halt 1 }
+unsafe @ __interp_trapped * InterpImpl it → b { ^ != 0 & . it halt 1 }
 
 @ interp_trapped Interp it__h → b { ^ ( __interp_trapped ( __Interp_ptr it__h ) ) }
 
-@ __interp_exited * InterpImpl it → b { ^ != 0 & . it halt 2 }
+unsafe @ __interp_exited * InterpImpl it → b { ^ != 0 & . it halt 2 }
 
 @ interp_exited Interp it__h → b { ^ ( __interp_exited ( __Interp_ptr it__h ) ) }
 
 // The trap message (empty unless interp_trapped) — the Interp's own bytes, lent.
-@ interp_trapmsg Interp it__h → ( Vec u ) {
+unsafe @ interp_trapmsg Interp it__h → ( Vec u ) {
     : *InterpImpl it ( __Interp_ptr it__h )
     ^ . it trapmsg
 }
 
 // The guest's proc_exit code (0 when it returned from _start instead).
-@ interp_exit_code Interp it__h → i {
+unsafe @ interp_exit_code Interp it__h → i {
     : *InterpImpl it ( __Interp_ptr it__h )
     ^ . it exit_code
 }
 
 // The value stack, lent: push an invoked export's arguments here before
 // exec_func, and read its results off the top after it.
-@ interp_stack Interp it__h → ( Vec i ) {
+unsafe @ interp_stack Interp it__h → ( Vec i ) {
     : *InterpImpl it ( __Interp_ptr it__h )
     ^ . it vs
 }
 
 // Meter execution: at most `n` predecoded records, then trap (--fuel).
-@ interp_set_fuel Interp it__h i n → v {
+unsafe @ interp_set_fuel Interp it__h i n → v {
     : *InterpImpl it ( __Interp_ptr it__h )
     = . it fuel n
 }
 
 // Append a program argument (copied from a NUL-terminated host string).
-@ interp_push_arg Interp it__h s str → v {
+unsafe @ interp_push_arg Interp it__h s str → v {
     : *InterpImpl it ( __Interp_ptr it__h )
     : *Arg a # *Arg ( nurl_alloc Z Arg )
     = . a bytes ( bytes_from_str str )
@@ -699,7 +699,7 @@ inline @ __mem_base * InterpImpl it → i {
 }
 
 // Append an environment entry ("NAME=VALUE", copied).
-@ interp_push_env Interp it__h s str → v {
+unsafe @ interp_push_env Interp it__h s str → v {
     : *InterpImpl it ( __Interp_ptr it__h )
     : *Arg a # *Arg ( nurl_alloc Z Arg )
     = . a bytes ( bytes_from_str str )
@@ -710,7 +710,7 @@ inline @ __mem_base * InterpImpl it → i {
 // imports hand the guest raw host pointers into linear memory and forward them
 // to libcuda, so they are only safe for trusted compute — the embedder must
 // opt in explicitly (the CLI does so with --allow-gpu).
-@ interp_allow_gpu Interp it__h → v {
+unsafe @ interp_allow_gpu Interp it__h → v {
     : *InterpImpl it ( __Interp_ptr it__h )
     = . it gpu_ok T
 }
@@ -719,14 +719,14 @@ inline @ __mem_base * InterpImpl it → i {
 // calls become this process's. Off by default for the same reason the
 // GPU bridge is: it is the guest reaching the network through us (the
 // CLI opts in with --allow-net).
-@ interp_allow_net Interp it__h → v {
+unsafe @ interp_allow_net Interp it__h → v {
     : *InterpImpl it ( __Interp_ptr it__h )
     = . it net_ok T
 }
 
 // Grant the module one preopened host directory, visible to it as `guest_name`
 // (the path it resolves opens against). Installed as fd 3.
-@ interp_set_preopen Interp it__h s host_path s guest_name → v {
+unsafe @ interp_set_preopen Interp it__h s host_path s guest_name → v {
     : *InterpImpl it ( __Interp_ptr it__h )
     : *WFd f # *WFd ( __mkfd 2 )
     ( vec_free [u] . f host ) = . f host ( bytes_from_str host_path )
@@ -740,7 +740,7 @@ inline @ __mem_base * InterpImpl it → i {
 // that instantiated it. File descriptors, socket handles and captured
 // output are per-INSTANCE in wasm terms but per-PROCESS in the guest's:
 // a file opened by one thread has to be the same fd in another.
-@ __host * InterpImpl it → *InterpImpl {
+unsafe @ __host * InterpImpl it → *InterpImpl {
     ? == # i . it owner 0 { ^ it } {}
     ^ # *InterpImpl . it owner
 }
@@ -750,7 +750,7 @@ inline @ __mem_base * InterpImpl it → i {
 // HANDLE — safe because a threaded module's memory is allocated at its
 // maximum up front and never moves — and `__interp_thread_free` releases
 // only what the thread itself owns.
-@ __interp_thread_new * InterpImpl parent → *InterpImpl {
+unsafe @ __interp_thread_new * InterpImpl parent → *InterpImpl {
     : *InterpImpl ho ( __host parent )
     : *ModuleImpl m # *ModuleImpl . ho mod
     // Zeroed: the fields not set below (mem_raw, the JIT state, the module
@@ -816,7 +816,7 @@ inline @ __mem_base * InterpImpl it → i {
 
 // Publish a new memory size to every Interp in the group. Called with the
 // atomics lock held.
-@ __mem_publish * InterpImpl ho i pages i bytes → v {
+unsafe @ __mem_publish * InterpImpl ho i pages i bytes → v {
     = . ho mem_pages pages
     = . ho mem_bytes bytes
     : i n ( vec_len [i] . ho thread_kids )
@@ -833,7 +833,7 @@ inline @ __mem_base * InterpImpl it → i {
 }
 
 // Leave the group (the thread is done with its Interp).
-@ __thread_unregister * InterpImpl it → v {
+unsafe @ __thread_unregister * InterpImpl it → v {
     ? == # i . it owner 0 { ^ v } {}
     : *InterpImpl ho ( __host it )
     ( __atom_lock )
@@ -846,15 +846,15 @@ inline @ __mem_base * InterpImpl it → i {
     ( __atom_unlock )
 }
 
-@ interp_run_start Interp it__h → v {
+unsafe @ interp_run_start Interp it__h → v {
     : *InterpImpl it ( __Interp_ptr it__h )
     : *ModuleImpl m # *ModuleImpl . it mod
     ? >= . m start_func 0 { ( __exec_func it . m start_func ) } {}
 }
 
-@ __push * InterpImpl it i v → v { ( vec_push [i] . it vs v ) }
+unsafe @ __push * InterpImpl it i v → v { ( vec_push [i] . it vs v ) }
 
-@ __pop * InterpImpl it → i {
+unsafe @ __pop * InterpImpl it → i {
     : i n ( vec_len [i] . it vs )
     ? <= n 0 { ( __trap it `value stack underflow` ) ^ 0 } {}
     : i v ?? ( vec_get [i] . it vs - n 1 ) { T x → x F → 0 }
@@ -862,10 +862,10 @@ inline @ __mem_base * InterpImpl it → i {
     ^ v
 }
 
-@ __vsh * InterpImpl it → i { ^ ( vec_len [i] . it vs ) }
+unsafe @ __vsh * InterpImpl it → i { ^ ( vec_len [i] . it vs ) }
 
 // Truncate the value stack back to height h.
-@ __vtrunc * InterpImpl it i h → v {
+unsafe @ __vtrunc * InterpImpl it i h → v {
     ~ > ( vec_len [i] . it vs ) h { ( vec_pop [i] . it vs ) }
 }
 
@@ -943,7 +943,7 @@ inline @ __mem_base * InterpImpl it → i {
 // single valtype, non-negative = an index into the type section (multi-value).
 
 // Parameter count of a block type.
-@ __bt_params * ModuleImpl m i bt → i {
+unsafe @ __bt_params * ModuleImpl m i bt → i {
     ? < bt 0 { ^ 0 } {}
     : s tp ?? ( vec_get [s] . m types bt ) { T x → x F → # s 0 }
     ? == # i tp 0 { ^ 0 } {}
@@ -952,7 +952,7 @@ inline @ __mem_base * InterpImpl it → i {
 }
 
 // Result count of a block type.
-@ __bt_results * ModuleImpl m i bt → i {
+unsafe @ __bt_results * ModuleImpl m i bt → i {
     ? == bt -64 { ^ 0 } {}
     ? < bt 0 { ^ 1 } {}
     : s tp ?? ( vec_get [s] . m types bt ) { T x → x F → # s 0 }
@@ -964,7 +964,7 @@ inline @ __mem_base * InterpImpl it → i {
 // ── arithmetic helpers ───────────────────────────────────────────
 
 // Set the trap flag with a message (the uniform way every trap is raised).
-@ __trap * InterpImpl it s msg → v {
+unsafe @ __trap * InterpImpl it s msg → v {
     = . it halt | . it halt 1
     ( vec_free [u] . it trapmsg )
     = . it trapmsg ( bytes_from_str msg )
@@ -1103,7 +1103,7 @@ inline @ __mem_base * InterpImpl it → i {
 // neither ever enters inside all twenty-odd access arms of the driver, and
 // the driver is instruction-cache bound: hoisting them out was 1.9 % of the
 // whole corpus with the instruction count unchanged to the digit.
-@ __mem_load_split s base i ea i n → i {
+unsafe @ __mem_load_split s base i ea i n → i {
     : ~ i v 0
     : ~ i k 0
     ~ < k n {
@@ -1115,7 +1115,7 @@ inline @ __mem_base * InterpImpl it → i {
     ^ v
 }
 
-@ __mem_store_split s base i ea i n i val → v {
+unsafe @ __mem_store_split s base i ea i n i val → v {
     : ~ i k 0
     ~ < k n {
         : i off + ea k
@@ -1145,7 +1145,7 @@ inline @ __mem_base * InterpImpl it → i {
 // sign-extension it will never reach from that site, and declines. Forcing
 // it was 9.5 % off the benchmark corpus, 24 % off nbody and matmul, 19 %
 // off sieve.
-inline @ __mem_load * InterpImpl it i ea i n i signed → i {
+unsafe inline @ __mem_load * InterpImpl it i ea i n i signed → i {
     ? | < ea 0 > + ea n . it mem_bytes {
         ( __trap_oob it `memory load out of bounds` ea n )
         ^ 0
@@ -1178,7 +1178,7 @@ inline @ __mem_load * InterpImpl it i ea i n i signed → i {
 // independent locations, and guests rely on it — two malloc headers, two
 // struct fields, a length beside a flag. The symptom is a heap that grows
 // a wrong size field and hands out a wild pointer somewhere else.
-@ __mem_store_bytes * InterpImpl it i ea i n i val → v {
+unsafe @ __mem_store_bytes * InterpImpl it i ea i n i val → v {
     : *u mb # *u ( __mem_base it )
     : ~ i k 0
     ~ < k n {
@@ -1188,7 +1188,7 @@ inline @ __mem_load * InterpImpl it i ea i n i signed → i {
 }
 
 // Write the low n bytes of val little-endian to mem[ea].
-inline @ __mem_store * InterpImpl it i ea i n i val → v {
+unsafe inline @ __mem_store * InterpImpl it i ea i n i val → v {
     ? | < ea 0 > + ea n . it mem_bytes {
         ( __trap_oob it `memory store out of bounds` ea n )
         ^ v
@@ -1215,7 +1215,7 @@ inline @ __mem_store * InterpImpl it i ea i n i val → v {
 // Grow linear memory by `delta` pages. Returns the old page count, or −1 when
 // the declared maximum (or the wasm32 hard limit of 65536 pages) would be
 // exceeded — the value memory.grow pushes.
-@ __mem_grow * InterpImpl it i delta → i {
+unsafe @ __mem_grow * InterpImpl it i delta → i {
     : *ModuleImpl m # *ModuleImpl . it mod
     : ~ i limit 65536
     ? & > . m mem_max 0 < . m mem_max limit { = limit . m mem_max } {}
@@ -1260,7 +1260,7 @@ inline @ __mem_store * InterpImpl it i ea i n i val → v {
 // the function's results are left on top. Recurses for `call`.
 
 // Dispatch an imported function to the WASI host layer (no frame needed).
-@ __call_import * InterpImpl it * ModuleImpl m i fidx → v {
+unsafe @ __call_import * InterpImpl it * ModuleImpl m i fidx → v {
     : s wp ?? ( vec_get [s] . m imports fidx ) { T x → x F → # s 0 }
     ? != # i wp 0 { : *WImport w # *WImport wp ( __wasi_dispatch it . w module . w field ) } { ( __trap it `bad import index` ) }
 }
@@ -1271,7 +1271,7 @@ inline @ __mem_store * InterpImpl it i ea i n i val → v {
 // one flat array, locals first, stack slots after; the driver copies call
 // arguments straight from the caller's slots, so only the outermost frame
 // touches the value stack.
-@ __frame_new * InterpImpl it * ModuleImpl m i fidx i ret_dst → s {
+unsafe @ __frame_new * InterpImpl it * ModuleImpl m i fidx i ret_dst → s {
     : s pins ( __pfunc_for it m fidx )
     ? == # i pins 0 { ( __trap it `bad function index` ) ^ # s 0 } {}
     : *PFunc pfc # *PFunc pins
@@ -1333,12 +1333,12 @@ inline @ __mem_store * InterpImpl it i ea i n i val → v {
 // Write the current frame's saved position through the MUTABLE frame
 // handle — the driver rebinds `tp` on inline call/return, so no arm may
 // hold the frame through an immutable binding.
-inline @ __fr_setpos s tp i v → v {
+unsafe inline @ __fr_setpos s tp i v → v {
     : *Frame fr # *Frame tp
     = . fr pos v
 }
 
-@ __frame_free sink s pp → v {
+unsafe @ __frame_free sink s pp → v {
     ? == # i pp 0 { ^ v } {}
     : *Frame fr # *Frame pp
     ( vec_free [i] . fr regs )
@@ -1348,7 +1348,7 @@ inline @ __fr_setpos s tp i v → v {
 // Return a frame to its function's pool instead of freeing it. The pool is
 // unbounded by design: its high-water mark is the deepest simultaneous
 // recursion into that one function, which max_depth already caps.
-@ __frame_recycle s pp → v {
+unsafe @ __frame_recycle s pp → v {
     ? == # i pp 0 { ^ v } {}
     : *Frame fr # *Frame pp
     : *PFunc pf # *PFunc . fr pins
@@ -1356,7 +1356,7 @@ inline @ __fr_setpos s tp i v → v {
     = . pf free pp
 }
 
-@ __pf_free sink s pp → v {
+unsafe @ __pf_free sink s pp → v {
     ? == # i pp 0 { ^ v } {}
     : *PFunc pf # *PFunc pp
     : ~ s fp . pf free
@@ -1486,7 +1486,7 @@ inline @ __fr_setpos s tp i v → v {
 // loop ends with. The add record keeps its B/C operands; the store's
 // address slot takes A and its offset takes D. The value slot must be
 // the add's destination, a stack temp.
-@ __fuse_addstoref * PFunc pf i lastp i sb i addr i val i off → b {
+unsafe @ __fuse_addstoref * PFunc pf i lastp i sb i addr i val i off → b {
     ? < lastp 0 { ^ F } {}
     ? != ( vec_len [i] . pf code ) * + lastp 1 6 { ^ F } {}
     : i base * lastp 6
@@ -1499,7 +1499,7 @@ inline @ __fr_setpos s tp i v → v {
     ^ T
 }
 
-@ __fuse_loadshl * PFunc pf i lastp i io i sb i dst i adr i off → b {
+unsafe @ __fuse_loadshl * PFunc pf i lastp i io i sb i dst i adr i off → b {
     ? ! | == io 18 == io 20 { ^ F } {}  // i64.load / i32.load only
     ? < lastp 0 { ^ F } {}
     ? != ( vec_len [i] . pf code ) * + lastp 1 6 { ^ F } {}
@@ -1515,7 +1515,7 @@ inline @ __fr_setpos s tp i v → v {
     ^ T
 }
 
-@ __fuse_loadshladd * PFunc pf i labfloor i io i sb i dst i fz i off i byte → b {
+unsafe @ __fuse_loadshladd * PFunc pf i labfloor i io i sb i dst i fz i off i byte → b {
     ? ! | == io 18 == io 20 { ^ F } {}
     ? | < byte 0 >= byte 4294967296 { ^ F } {}
     : i ti - / ( vec_len [i] . pf code ) 6 1
@@ -1544,7 +1544,7 @@ inline @ __fr_setpos s tp i v → v {
 // producer folds only while its index operand is still the pool zero —
 // the D slot is what the fused form takes for `x` — and f64.sub picks
 // its fused spelling by which side the temp is on.
-@ __fuse_aluf * PFunc pf i lastp i io i sb i dst i x1 i x2 i zslot → b {
+unsafe @ __fuse_aluf * PFunc pf i lastp i io i sb i dst i x1 i x2 i zslot → b {
     ? < lastp 0 { ^ F } {}
     ? != ( vec_len [i] . pf code ) * + lastp 1 6 { ^ F } {}
     : i base * lastp 6
@@ -1762,7 +1762,7 @@ inline @ __fr_setpos s tp i v → v {
 // Emit one 6-slot record; returns its index.
 // Emit one record; the source byte offset goes to the SIDE table (read
 // only by the trap backtrace), so every record word is operand payload.
-@ __pf_emit * PFunc pf i op i a i b i cc i dd i byte → i {
+unsafe @ __pf_emit * PFunc pf i op i a i b i cc i dd i byte → i {
     : ( Vec i ) code . pf code
     : i idx / ( vec_len [i] code ) 6
     ( vec_push [i] code op ) ( vec_push [i] code a ) ( vec_push [i] code b )
@@ -1776,7 +1776,7 @@ inline @ __fr_setpos s tp i v → v {
 // value site*2 → record A-field, site*2+1 → aux word `site`.
 : PBlk { i kind i base i params i results i live_entry i t0 i else_br ( Vec i ) patches }
 
-@ __pblk_new i kind i base i params i results i live i t0 → s {
+unsafe @ __pblk_new i kind i base i params i results i live i t0 → s {
     : *PBlk k # *PBlk ( nurl_alloc Z PBlk )
     = . k kind kind = . k base base = . k params params = . k results results
     = . k live_entry live = . k t0 t0 = . k else_br -1
@@ -1784,7 +1784,7 @@ inline @ __fr_setpos s tp i v → v {
     ^ # s k
 }
 
-@ __pblk_free sink s pp → v {
+unsafe @ __pblk_free sink s pp → v {
     ? == # i pp 0 { ^ v } {}
     : *PBlk k # *PBlk pp
     ( vec_free [i] . k patches )
@@ -1823,7 +1823,7 @@ inline @ __fr_setpos s tp i v → v {
 // that `end`, which is past the fused record, never inside the pair.
 //
 // W5 packs cmpop<<21 | rhs-slot; the byte offset lives in the side table.
-@ __fuse_addbr * PFunc pf i lastp i labfloor i tgt i lop i lb i lc i byte → i {
+unsafe @ __fuse_addbr * PFunc pf i lastp i labfloor i tgt i lop i lb i lc i byte → i {
     ? | < lastp 1 > labfloor - lastp 1 { ^ -1 } {}
     ? | < byte 0 >= byte 4294967296 { ^ -1 } {}
     ? | < lc 0 >= lc 2097152 { ^ -1 } {}
@@ -1861,7 +1861,7 @@ inline @ __fr_setpos s tp i v → v {
 // the previous instruction was straight-line, and no control opcode is, so
 // no label can sit between the compare and the branch — which is the only
 // way a path could reach the branch without the compare.
-@ __fuse_branch * PFunc pf i lastp i labfloor i cond i tgt i byte → i {
+unsafe @ __fuse_branch * PFunc pf i lastp i labfloor i cond i tgt i byte → i {
     ? < lastp 0 { ^ -1 } {}
     ? != ( vec_len [i] . pf code ) * + lastp 1 6 { ^ -1 } {}
     : i base * lastp 6
@@ -1896,7 +1896,7 @@ inline @ __fr_setpos s tp i v → v {
 // condition slot for br_if (-1 = unconditional). `h` is the height AFTER any
 // condition pop. Fills patch sites for forward targets. Returns nothing; the
 // caller handles liveness.
-@ __emit_branch * PFunc pf ( Vec s ) open i k i cond i sb i h i byte i lastp i labfloor → v {
+unsafe @ __emit_branch * PFunc pf ( Vec s ) open i k i cond i sb i h i byte i lastp i labfloor → v {
     : i n ( vec_len [s] open )
     ? >= k n { ( __pf_emit pf ( __R_TRAPUN ) 0 0 0 0 byte ) ^ v } {}
     : s bp ?? ( vec_get [s] open - - n 1 k ) { T x → x F → # s 0 }
@@ -1989,7 +1989,7 @@ inline @ __fr_setpos s tp i v → v {
 // One structural walk of the body collecting the distinct constants. Every
 // other opcode is stepped over by `__skip_imm`, the same routine the decoder
 // already trusts for immediate layout, so this cannot desynchronise.
-@ __const_pool * ModuleImpl m * WFunc f ( Vec i ) kv → v {
+unsafe @ __const_pool * ModuleImpl m * WFunc f ( Vec i ) kv → v {
     // Pool entry 0 is the address-fusion zero. Every load record carries a
     // second address operand (see `__fuse_addr`); an access with nothing
     // folded into it names this slot, so the arm adds a slot that is always
@@ -2099,7 +2099,7 @@ inline @ __fr_setpos s tp i v → v {
 
 // Retarget the last record's destination to local `li`, or report that the
 // move has to be a real MOV after all. `hm1` is the height of the value.
-@ __fold_set * PFunc pf ( Vec i ) vm i lastp i sb i hm1 i li → b {
+unsafe @ __fold_set * PFunc pf ( Vec i ) vm i lastp i sb i hm1 i li → b {
     ? < lastp 0 { ^ F } {}
     ? >= ?? ( vec_get [i] vm hm1 ) { T x → x F → -1 } 0 { ^ F } {}
     : i dstat + * lastp 6 1
@@ -2145,7 +2145,7 @@ inline @ __fr_setpos s tp i v → v {
 // Returns `base << 21 | index` (slots are capped at 2^20), or -1 when there
 // is nothing to fold. On success the add record is gone, so the load takes
 // its index and every earlier record index still means what it did.
-@ __fuse_addr * PFunc pf i lastp i addr i sb → i {
+unsafe @ __fuse_addr * PFunc pf i lastp i addr i sb → i {
     ? < lastp 0 { ^ -1 } {}
     ? != ( vec_len [i] . pf code ) * + lastp 1 6 { ^ -1 } {}
     : i base * lastp 6
@@ -2191,7 +2191,7 @@ inline @ __fr_setpos s tp i v → v {
 // single-use argument as __fuse_selc, with __fuse_addr's stack-slot
 // clause. The `other == tA` rejection covers `t OP t`, where the second
 // read has no slot to read from once the temp is never written.
-@ __fuse_alu2 * PFunc pf i lastp i io i sb i dst i x1 i x2 i byte → b {
+unsafe @ __fuse_alu2 * PFunc pf i lastp i io i sb i dst i x1 i x2 i byte → b {
     ? < lastp 0 { ^ F } {}
     ? != ( vec_len [i] . pf code ) * + lastp 1 6 { ^ F } {}
     : i base * lastp 6
@@ -2234,7 +2234,7 @@ inline @ __fr_setpos s tp i v → v {
     ^ F
 }
 
-@ __wrap_skippable * ModuleImpl m inout Wc c → b {
+unsafe @ __wrap_skippable * ModuleImpl m inout Wc c → b {
     ? >= . c pos . c len { ^ F } {}
     : i nx # i ?? ( vec_get [u] . m code . c pos ) { T x → x F → # u 0 }
     ? ( __insens_binop nx ) { ^ T } {}
@@ -2257,7 +2257,7 @@ inline @ __fr_setpos s tp i v → v {
     ^ F
 }
 
-@ __predecode * ModuleImpl m * WFunc f → s {
+unsafe @ __predecode * ModuleImpl m * WFunc f → s {
     : *PFunc pf # *PFunc ( nurl_alloc Z PFunc )
     = . pf code ( vec_new [i] )
     = . pf aux ( vec_new [i] )
@@ -2644,7 +2644,7 @@ inline @ __fr_setpos s tp i v → v {
     ^ # s pf
 }
 // Get-or-build the PFunc for defined function `fidx`.
-@ __pfunc_for * InterpImpl it * ModuleImpl m i fidx → s {
+unsafe @ __pfunc_for * InterpImpl it * ModuleImpl m i fidx → s {
     : i di - fidx . m num_import_funcs
     // Bound first: `di` comes from a call record, i.e. straight out of the
     // module, so a hostile index must not be allowed to grow the cache.
@@ -2662,7 +2662,7 @@ inline @ __fr_setpos s tp i v → v {
 
 // On trap: append a wasm backtrace (innermost first) to the trap message,
 // naming frames from the module's name section when present.
-@ __trap_backtrace * InterpImpl it * ModuleImpl m s top → v {
+unsafe @ __trap_backtrace * InterpImpl it * ModuleImpl m s top → v {
     : ( Vec u ) msg . it trapmsg
     : ~ s pp top
     : ~ i shown 0
@@ -3065,7 +3065,7 @@ inline @ __fr_setpos s tp i v → v {
 // unreachable in practice). JIT only unlimited-fuel runs: a metered run
 // keeps the interpreter, which charges fuel exactly, so no fuel
 // accounting is emitted.
-@ __jit_ok * PFunc pf → i {
+unsafe @ __jit_ok * PFunc pf → i {
     : i n . pf count
     ? == n 0 { ^ 0 } {}
     : ( Vec i ) code . pf code
@@ -3471,7 +3471,7 @@ inline @ __fr_setpos s tp i v → v {
 
 // Argument/result window of a call record: nargs*65536+nres (or -1 when
 // the type cannot be resolved — the walker then treats it as a full read).
-@ __jit_call_win * ModuleImpl m i op i a → i {
+unsafe @ __jit_call_win * ModuleImpl m i op i a → i {
     : ~ s ct # s 0
     ? | == op 50 == op 210 { = ct ( _module_func_type m a ) } {
         ? == op 170 { = ct ?? ( vec_get [s] . m types a ) { T x → x F → # s 0 } } {} }
@@ -3563,7 +3563,7 @@ inline @ __fr_setpos s tp i v → v {
 // (the callee reads them through the args pointer), and the FCB operand
 // window (the driver reads it from frame memory). Unknown ops keep
 // every write. Returns 0/1 per slot (1 = must write).
-@ __jit_kv_writes * PFunc pf ( Vec i ) pmap ( Vec i ) xmap ( Vec i ) cvals → ( Vec i ) {
+unsafe @ __jit_kv_writes * PFunc pf ( Vec i ) pmap ( Vec i ) xmap ( Vec i ) cvals → ( Vec i ) {
     : i nsl . pf nslots
     : i nl . pf nlocals
     : i knum ( vec_len [i] . pf kv )
@@ -3742,7 +3742,7 @@ inline @ __fr_setpos s tp i v → v {
 // A reusable 7-word JIT call context from the per-Interp freelist (word 0
 // links the free chain). This replaces a Vec per call-out — the profile
 // showed vec_new/push/grow/free dominating recursive guest calls.
-@ __jit_ctx_get * InterpImpl it → *i {
+unsafe @ __jit_ctx_get * InterpImpl it → *i {
     : i h . it jit_ctx_free
     ? != h 0 {
         : *i b # *i h
@@ -3752,7 +3752,7 @@ inline @ __fr_setpos s tp i v → v {
     ^ # *i ( nurl_zalloc 64 )
 }
 
-@ __jit_ctx_put * InterpImpl it * i b → v {
+unsafe @ __jit_ctx_put * InterpImpl it * i b → v {
     = . b 0 . it jit_ctx_free
     = . it jit_ctx_free # i b
 }
@@ -4124,7 +4124,7 @@ inline @ __fr_setpos s tp i v → v {
 // cd[6] on entry, and the result status is written back there: 0 = done,
 // 1 = trap/halt recorded (the code exits with status 11, "already
 // recorded", which every driver maps to a plain trapped return).
-@ __jit_inline_co * InterpImpl it → v {
+unsafe @ __jit_inline_co * InterpImpl it → v {
     : *i cd # *i . it jit_cur_cd
     : i st . cd 6
     : *ModuleImpl m # *ModuleImpl . it mod
@@ -4140,7 +4140,7 @@ inline @ __fr_setpos s tp i v → v {
 // direct-call table, sized once per Interp. 4 MiB of slots; a frame that
 // does not fit returns status 8 and the driver bridges to the
 // interpreter, so deep recursion degrades instead of trapping.
-@ __jit_state_init * InterpImpl it * ModuleImpl m → v {
+unsafe @ __jit_state_init * InterpImpl it * ModuleImpl m → v {
     ? != 0 . it jit_slab { ^ v } {}
     : i bytes 16777216
     = . it jit_slab # i ( nurl_zalloc bytes )
@@ -4294,7 +4294,7 @@ inline @ __fr_setpos s tp i v → v {
 // vec; slots whose every access is an xmm-path operand compete for
 // xmm8..xmm15 instead and land in `xpins`. NURL_NWASM_PIN=0 turns the
 // whole tier off (A/B and debugging).
-@ __jit_pin_select * PFunc pf ( Vec i ) xpins i guard → ( Vec i ) {
+unsafe @ __jit_pin_select * PFunc pf ( Vec i ) xpins i guard → ( Vec i ) {
     : i kvbase . pf nlocals
     : i kvn ( vec_len [i] . pf kv )
     : ( Vec i ) pins ( vec_new [i] )
@@ -4419,7 +4419,7 @@ inline @ __fr_setpos s tp i v → v {
     ^ pins
 }
 
-@ __jit_try * InterpImpl it * ModuleImpl m * PFunc pf i fidx9 → v {
+unsafe @ __jit_try * InterpImpl it * ModuleImpl m * PFunc pf i fidx9 → v {
     ? != # i . pf jit 0 { ^ v } {}  // already tried (handle or -1)
     ? == 0 ( __jit_ok pf ) { = . pf jit # s -1 ^ v } {}
     ( __jit_state_init it m )
@@ -5100,7 +5100,7 @@ inline @ __fr_setpos s tp i v → v {
 // to read.
 // Handle one pending call-out (the request is in cd; `st` says which
 // kind). Returns 0 to continue, 1 when a trap/halt was recorded.
-@ __jit_callout * InterpImpl it * ModuleImpl m i st * i cd → i {
+unsafe @ __jit_callout * InterpImpl it * ModuleImpl m i st * i cd → i {
     : ~ i callee . cd 4
     : i argbase . cd 5
     : *i jrb # *i . cd 0
@@ -5156,7 +5156,7 @@ inline @ __fr_setpos s tp i v → v {
     ^ ? | ( __interp_trapped it ) != 0 . it halt 1 0
 }
 
-@ __jit_run * InterpImpl it * ModuleImpl m * PFunc pfj i argsp → i {
+unsafe @ __jit_run * InterpImpl it * ModuleImpl m * PFunc pfj i argsp → i {
     : s jh . pfj jit
     : *i cd ( __jit_ctx_get it )
     : *i spc # *i . it jit_spcell
@@ -5182,7 +5182,7 @@ inline @ __fr_setpos s tp i v → v {
 // interpreter driver, no value-stack traffic; anything else (imports,
 // non-templatable bodies, or past the recursion cap) falls back to the
 // interpreter. Returns 0 on success, non-zero on trap/halt.
-@ __jit_callee * InterpImpl it * ModuleImpl m i callee * i caller_rbase i argbase → i {
+unsafe @ __jit_callee * InterpImpl it * ModuleImpl m i callee * i caller_rbase i argbase → i {
     // imports and the depth cap take the interpreter's bridge
     ? < callee . m num_import_funcs {
         ( __rdo_import it m callee argbase caller_rbase )
@@ -5249,7 +5249,7 @@ inline @ __fr_setpos s tp i v → v {
     ^ 0
 }
 
-@ __exec_func * InterpImpl it i fidx → v {
+unsafe @ __exec_func * InterpImpl it i fidx → v {
     ? != 0 . it halt { ^ v } {}
     : *ModuleImpl m # *ModuleImpl . it mod
     // Imported functions occupy the low indices → dispatch to the host (WASI).
@@ -5789,7 +5789,7 @@ inline @ __fr_setpos s tp i v → v {
 // the first execution, so the per-call cost is the freelist pop, the
 // argument copy and the chain link — no lookups, no nested call on the
 // pooled path. Returns the new frame, or 0 on trap.
-@ __rdo_call * InterpImpl it * ModuleImpl m s caller i callee i argbase * i caller_rbase * i rpb i rec0 → s {
+unsafe @ __rdo_call * InterpImpl it * ModuleImpl m s caller i callee i argbase * i caller_rbase * i rpb i rec0 → s {
     : ~ s cpins # s . rpb + rec0 4
     ? == # i cpins 0 {
         = cpins ( __pfunc_for it m callee )
@@ -5832,7 +5832,7 @@ inline @ __fr_setpos s tp i v → v {
 // The import bridge (its own record since the predecoder knows), and the
 // dynamic spelling call_indirect still needs: resolve at run time, bridge
 // imports through the value stack.
-@ __rdo_dyn * InterpImpl it * ModuleImpl m s caller i callee i argbase * i caller_rbase → s {
+unsafe @ __rdo_dyn * InterpImpl it * ModuleImpl m s caller i callee i argbase * i caller_rbase → s {
     ? < callee . m num_import_funcs {
         ( __rdo_import it m callee argbase caller_rbase )
         ^ # s 0
@@ -5854,7 +5854,7 @@ inline @ __fr_setpos s tp i v → v {
     ^ nf
 }
 
-@ __rdo_import * InterpImpl it * ModuleImpl m i callee i argbase * i caller_rbase → v {
+unsafe @ __rdo_import * InterpImpl it * ModuleImpl m i callee i argbase * i caller_rbase → v {
     : s wt ( _module_func_type m callee )
     : ~ i np 0
     : ~ i nr 0
@@ -5940,7 +5940,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
 // flush it forced was most of another 30 %; nbody spent 45 % of its records
 // moving values into place for it.
 
-@ __f64_unary i op i ab → i {
+unsafe @ __f64_unary i op i ab → i {
     ? == op 153 { ^ & ab 9223372036854775807 } {}  // f64.abs (clear sign)
     ? == op 154 { ^ ^^ ab -9223372036854775808 } {}  // f64.neg (flip sign)
     : f x ( bits_to_f64 ab )
@@ -5981,7 +5981,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
     ^ ? >= a b 1 0  // 102
 }
 
-@ __f32_unary i op i ab → i {
+unsafe @ __f32_unary i op i ab → i {
     ? == op 139 { ^ & ab 2147483647 } {}  // f32.abs
     ? == op 140 { ^ & ^^ ab 2147483648 4294967295 } {}  // f32.neg
     : f x # f ( bits_to_f32 ab )
@@ -6094,7 +6094,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
 
 // Overwrite/extend a file fd's buffer at byte offset `at` (gap zero-filled —
 // the file-semantics core shared by fd_write and fd_pwrite).
-@ __fd_put_at * WFd f i at ( Vec u ) buf → v {
+unsafe @ __fd_put_at * WFd f i at ( Vec u ) buf → v {
     = . f dirty T
     : i bn ( vec_len [u] buf )
     ~ < ( vec_len [u] . f data ) + at bn { ( vec_push [u] . f data # u 0 ) }
@@ -6104,7 +6104,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
 
 // Write `len` bytes of memory at `ptr` to fd: 1 stdout, 2 stderr, else a file
 // descriptor's buffer at its current position (flushed to disk on close/sync).
-@ __wasi_write_bytes * InterpImpl it i fd i ptr i len → v {
+unsafe @ __wasi_write_bytes * InterpImpl it i fd i ptr i len → v {
     ? <= len 0 { ^ v } {}
     // A write cannot cover more bytes than linear memory holds; a larger length
     // is a hostile iovec — trap rather than pre-allocate gigabytes for it.
@@ -6136,13 +6136,13 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
     }
 }
 
-@ __wasi_proc_exit * InterpImpl it → v {
+unsafe @ __wasi_proc_exit * InterpImpl it → v {
     = . it exit_code ( __pop it )
     = . it halt | . it halt 2
     ( __interp_flush it )
 }
 
-@ __wasi_fd_write * InterpImpl it → v {
+unsafe @ __wasi_fd_write * InterpImpl it → v {
     : i nwritten ( __pop it )
     : i iovs_len ( __pop it )
     : i iovs ( __pop it )
@@ -6171,14 +6171,14 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
 }
 
 // Fetch the fd record for descriptor `fd`, or #s 0 if out of range / closed.
-@ __fd_at * InterpImpl it i fd → s {
+unsafe @ __fd_at * InterpImpl it i fd → s {
     : *InterpImpl ho ( __host it )
     ? | < fd 0 >= fd ( vec_len [s] . ho fds ) { ^ # s 0 } {}
     ^ ?? ( vec_get [s] . ho fds fd ) { T x → x F → # s 0 }
 }
 
 // Read `len` bytes of linear memory at `ptr` into a fresh byte vector.
-@ __mem_slice * InterpImpl it i ptr i len → ( Vec u ) {
+unsafe @ __mem_slice * InterpImpl it i ptr i len → ( Vec u ) {
     // Clamp to memory size: a slice can never be longer than linear memory, so
     // a bogus guest length cannot force a multi-gigabyte allocation. Bytes past
     // the end still trap in __mem_load, so this only bounds the up-front cap.
@@ -6209,7 +6209,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
 
 // Join a dir fd's host path + "/" + `len` guest bytes at `ptr` into an owned
 // String; #s 0 (as String data) is never returned — the caller checked the fd.
-@ __join_path * InterpImpl it * WFd d i ptr i len → String {
+unsafe @ __join_path * InterpImpl it * WFd d i ptr i len → String {
     : ( Vec u ) full ( vec_new [u] )
     : i hn ( vec_len [u] . d host )
     : ~ i k 0
@@ -6225,7 +6225,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
 
 // The dir fd record for `fd`, or #s 0 unless it is a directory (preopen or
 // opened) — the base every path_* call resolves against.
-@ __dirfd_at * InterpImpl it i fd → s {
+unsafe @ __dirfd_at * InterpImpl it i fd → s {
     : s dp ( __fd_at it fd )
     ? == # i dp 0 { ^ # s 0 } {}
     : *WFd d # *WFd dp
@@ -6238,7 +6238,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
 // oflags: 1 CREAT, 2 DIRECTORY, 4 EXCL, 8 TRUNC. fdflags: 1 APPEND.
 // rights bit 6 (fd_write) makes the fd writable. Files are slurped into a
 // buffer; writes are flushed on close/sync/exit.
-@ __wasi_path_open * InterpImpl it → v {
+unsafe @ __wasi_path_open * InterpImpl it → v {
     : i ofd_p ( __pop it )
     : i fdflags ( __pop it )
     ( __pop it )  // fs_rights_inheriting (i64 cell)
@@ -6313,7 +6313,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
 }
 
 // fd_pread / fd_pwrite: positioned I/O that leaves the fd offset untouched.
-@ __wasi_fd_pread * InterpImpl it → v {
+unsafe @ __wasi_fd_pread * InterpImpl it → v {
     : i nread_p ( __pop it )
     : i offset ( __pop it )
     : i iovs_len ( __pop it )
@@ -6344,7 +6344,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
     ( __push it 0 )
 }
 
-@ __wasi_fd_pwrite * InterpImpl it → v {
+unsafe @ __wasi_fd_pwrite * InterpImpl it → v {
     : i nwritten_p ( __pop it )
     : i offset ( __pop it )
     : i iovs_len ( __pop it )
@@ -6374,7 +6374,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
 // path_create_directory / path_remove_directory / path_unlink_file /
 // path_rename / path_filestat_get — the host-directory mutations, resolved
 // against a dir fd exactly like path_open.
-@ __wasi_path_create_directory * InterpImpl it → v {
+unsafe @ __wasi_path_create_directory * InterpImpl it → v {
     : i path_len ( __pop it )
     : i path_p ( __pop it )
     : i dirfd ( __pop it )
@@ -6385,7 +6385,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
     ( __push it ?? r { T x → 0 F e → ( __ioerr_errno e ) } )
 }
 
-@ __wasi_path_remove_directory * InterpImpl it → v {
+unsafe @ __wasi_path_remove_directory * InterpImpl it → v {
     : i path_len ( __pop it )
     : i path_p ( __pop it )
     : i dirfd ( __pop it )
@@ -6396,7 +6396,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
     ( __push it ? == rc 0 0 ( __ioerr_errno ( _io_err_of_kind ( errno_kind ) ) ) )
 }
 
-@ __wasi_path_unlink_file * InterpImpl it → v {
+unsafe @ __wasi_path_unlink_file * InterpImpl it → v {
     : i path_len ( __pop it )
     : i path_p ( __pop it )
     : i dirfd ( __pop it )
@@ -6407,7 +6407,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
     ( __push it ? == # i rc 0 0 ( __ioerr_errno ( _io_err_of_kind ( errno_kind ) ) ) )
 }
 
-@ __wasi_path_rename * InterpImpl it → v {
+unsafe @ __wasi_path_rename * InterpImpl it → v {
     : i new_len ( __pop it )
     : i new_p ( __pop it )
     : i new_dirfd ( __pop it )
@@ -6425,7 +6425,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
 
 // path_filestat_get(dirfd, flags, path_ptr, path_len, st_p): 64-byte filestat —
 // filetype at +16, size at +32 (the fields programs actually read).
-@ __wasi_path_filestat_get * InterpImpl it → v {
+unsafe @ __wasi_path_filestat_get * InterpImpl it → v {
     : i st_p ( __pop it )
     : i path_len ( __pop it )
     : i path_p ( __pop it )
@@ -6456,7 +6456,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
 // entry = 24-byte header (d_next u64, d_ino u64, d_namlen u32, d_type u8+pad)
 // + name. A partially-written final entry with bufused == buf_len tells libc
 // to enlarge and retry, per the ABI.
-@ __wasi_fd_readdir * InterpImpl it → v {
+unsafe @ __wasi_fd_readdir * InterpImpl it → v {
     : i bufused_p ( __pop it )
     : i cookie ( __pop it )
     : i buf_len ( __pop it )
@@ -6530,7 +6530,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
     ^ out
 }
 
-@ __wasi_fd_read * InterpImpl it → v {
+unsafe @ __wasi_fd_read * InterpImpl it → v {
     : i nread_p ( __pop it )
     : i iovs_len ( __pop it )
     : i iovs ( __pop it )
@@ -6559,7 +6559,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
     ( __push it 0 )
 }
 
-@ __wasi_fd_seek * InterpImpl it → v {
+unsafe @ __wasi_fd_seek * InterpImpl it → v {
     : i noff_p ( __pop it )
     : i whence ( __pop it )
     : i offset ( __pop it )
@@ -6575,7 +6575,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
     ( __push it 0 )
 }
 
-@ __wasi_args_sizes_get * InterpImpl it → v {
+unsafe @ __wasi_args_sizes_get * InterpImpl it → v {
     : i bufsz_p ( __pop it )
     : i argc_p ( __pop it )
     : i argc ( vec_len [s] . it argv )
@@ -6591,7 +6591,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
     ( __push it 0 )
 }
 
-@ __wasi_args_get * InterpImpl it → v {
+unsafe @ __wasi_args_get * InterpImpl it → v {
     : i buf_p ( __pop it )
     : i argv_p ( __pop it )
     : i argc ( vec_len [s] . it argv )
@@ -6610,7 +6610,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
     ( __push it 0 )
 }
 
-@ __wasi_fd_prestat_get * InterpImpl it → v {
+unsafe @ __wasi_fd_prestat_get * InterpImpl it → v {
     : i buf ( __pop it )
     : i fd ( __pop it )
     : s fp ( __fd_at it fd )
@@ -6622,7 +6622,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
     ( __push it 0 )
 }
 
-@ __wasi_fd_prestat_dir_name * InterpImpl it → v {
+unsafe @ __wasi_fd_prestat_dir_name * InterpImpl it → v {
     : i plen ( __pop it )
     : i pptr ( __pop it )
     : i fd ( __pop it )
@@ -6640,7 +6640,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
 // opened 4)→directory(3), file→regular(4).
 @ __filetype_of i kind → i { ^ ? | == kind 2 == kind 4 3 ? == kind 3 4 2 }
 
-@ __wasi_fd_fdstat_get * InterpImpl it → v {
+unsafe @ __wasi_fd_fdstat_get * InterpImpl it → v {
     : i stat_p ( __pop it )
     : i fd ( __pop it )
     : s fp ( __fd_at it fd )
@@ -6655,7 +6655,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
     ( __push it 0 )
 }
 
-@ __wasi_fd_filestat_get * InterpImpl it → v {
+unsafe @ __wasi_fd_filestat_get * InterpImpl it → v {
     : i st_p ( __pop it )
     : i fd ( __pop it )
     : s fp ( __fd_at it fd )
@@ -6676,7 +6676,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
 // the disk, so its failure is the ONLY chance the guest has to learn that
 // the write did not happen. Swallowing it made `write_file` report
 // success for a file the host never created.
-@ __fd_flush * WFd f → i {
+unsafe @ __fd_flush * WFd f → i {
     ? & . f writable . f dirty {
         : String hs ( bytes_to_str . f host )
         : !v IoErr wr ( write_file_bytes ( string_data hs ) . f data )
@@ -6689,7 +6689,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
 
 // Flush every open dirty file — called on proc_exit and when _start returns,
 // so buffered writes are never lost to a missing fd_close.
-@ __interp_flush * InterpImpl it → v {
+unsafe @ __interp_flush * InterpImpl it → v {
     : *InterpImpl ho ( __host it )
     : i n ( vec_len [s] . ho fds )
     : ~ i k 3
@@ -6698,7 +6698,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
 
 @ interp_flush Interp it__h → v { ( __interp_flush ( __Interp_ptr it__h ) ) }
 
-@ __wasi_fd_close * InterpImpl it → v {
+unsafe @ __wasi_fd_close * InterpImpl it → v {
     : i fd ( __pop it )
     : s fp ( __fd_at it fd )
     : ~ i rc 0
@@ -6710,7 +6710,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
     ( __push it rc )
 }
 
-@ __wasi_fd_sync * InterpImpl it → v {
+unsafe @ __wasi_fd_sync * InterpImpl it → v {
     : i fd ( __pop it )
     : s fp ( __fd_at it fd )
     ? == # i fp 0 { ( __push it 8 ) ^ v } {}  // EBADF
@@ -6718,7 +6718,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
 }
 
 // fd_tell(fd, off_p): current offset as u64.
-@ __wasi_fd_tell * InterpImpl it → v {
+unsafe @ __wasi_fd_tell * InterpImpl it → v {
     : i off_p ( __pop it )
     : i fd ( __pop it )
     : s fp ( __fd_at it fd )
@@ -6730,7 +6730,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
 
 // environ_sizes_get / environ_get: the entries pushed via interp_push_env
 // (the host environment is NOT inherited — capability-style, like --env).
-@ __wasi_environ_sizes_get * InterpImpl it → v {
+unsafe @ __wasi_environ_sizes_get * InterpImpl it → v {
     : i bufsz_p ( __pop it )
     : i cnt_p ( __pop it )
     : i n ( vec_len [s] . it envp )
@@ -6746,7 +6746,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
     ( __push it 0 )
 }
 
-@ __wasi_environ_get * InterpImpl it → v {
+unsafe @ __wasi_environ_get * InterpImpl it → v {
     : i buf_p ( __pop it )
     : i envv_p ( __pop it )
     : i n ( vec_len [s] . it envp )
@@ -6788,7 +6788,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
 // clock_id(16) timeout(24) precision(32) flags(40) — flag bit 0 means
 // the timeout is ABSOLUTE — and for an fd subscription fd(16).
 // Event is 32 bytes: userdata(0) error(8) type(10) nbytes(16) flags(24).
-@ __wasi_poll_oneoff * InterpImpl it → v {
+unsafe @ __wasi_poll_oneoff * InterpImpl it → v {
     : i nev_p ( __pop it )
     : i nsubs ( __pop it )
     : i out ( __pop it )
@@ -6852,7 +6852,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
 }
 
 // random_get(buf, len): real OS entropy via the runtime CSPRNG.
-@ __wasi_random_get * InterpImpl it → v {
+unsafe @ __wasi_random_get * InterpImpl it → v {
     : i len ( __pop it )
     : i buf ( __pop it )
     // The destination buffer lives in linear memory, so a length larger than
@@ -6872,7 +6872,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
 // An out-of-bounds access says WHICH address and against what bound: with
 // threads those two numbers separate "the guest computed a wild pointer"
 // from "this thread's view of the memory size is behind the others".
-@ __trap_oob * InterpImpl it s what i ea i n → v {
+unsafe @ __trap_oob * InterpImpl it s what i ea i n → v {
     = . it halt | . it halt 1
     ( vec_free [u] . it trapmsg )
     : String m ( string_from what )
@@ -6889,7 +6889,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
 }
 
 // Trap with a message that carries a dynamic name (import module/field).
-@ __trap_named * InterpImpl it s prefix ( Vec u ) name → v {
+unsafe @ __trap_named * InterpImpl it s prefix ( Vec u ) name → v {
     = . it halt | . it halt 1
     ( vec_free [u] . it trapmsg )
     : ( Vec u ) msg ( bytes_from_str prefix )
@@ -6916,86 +6916,86 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
 @ __gpu_base * InterpImpl it → i { ^ ( __mem_base it ) }
 
 // Guest offset → host pointer (NULL stays NULL).
-@ __gpu_ptr * InterpImpl it i off → *u {
+unsafe @ __gpu_ptr * InterpImpl it i off → *u {
     : i o & off 4294967295
     ? == o 0 { ^ # *u 0 } {}
     ^ # *u + ( __gpu_base it ) o
 }
 
-@ __cu_init * InterpImpl it → v {
+unsafe @ __cu_init * InterpImpl it → v {
     : i flags ( __pop it )
     ( __push it # i ( cuInit # i32 flags ) )
 }
 
-@ __cu_device_get_count * InterpImpl it → v {
+unsafe @ __cu_device_get_count * InterpImpl it → v {
     : i count ( __pop it )
     ( __push it # i ( cuDeviceGetCount ( __gpu_ptr it count ) ) )
 }
 
-@ __cu_device_get * InterpImpl it → v {
+unsafe @ __cu_device_get * InterpImpl it → v {
     : i ordinal ( __pop it )
     : i device ( __pop it )
     ( __push it # i ( cuDeviceGet ( __gpu_ptr it device ) # i32 ordinal ) )
 }
 
-@ __cu_device_get_name * InterpImpl it → v {
+unsafe @ __cu_device_get_name * InterpImpl it → v {
     : i dev ( __pop it )
     : i len ( __pop it )
     : i name ( __pop it )
     ( __push it # i ( cuDeviceGetName ( __gpu_ptr it name ) # i32 len # i32 dev ) )
 }
 
-@ __cu_ctx_create * InterpImpl it → v {
+unsafe @ __cu_ctx_create * InterpImpl it → v {
     : i dev ( __pop it )
     : i flags ( __pop it )
     : i pctx ( __pop it )
     ( __push it # i ( cuCtxCreate ( __gpu_ptr it pctx ) # i32 flags # i32 dev ) )
 }
 
-@ __cu_ctx_destroy * InterpImpl it → v {
+unsafe @ __cu_ctx_destroy * InterpImpl it → v {
     : i ctx ( __pop it )
     ( __push it # i ( cuCtxDestroy ctx ) )
 }
 
-@ __cu_ctx_sync * InterpImpl it → v { ( __push it # i ( cuCtxSynchronize ) ) }
+unsafe @ __cu_ctx_sync * InterpImpl it → v { ( __push it # i ( cuCtxSynchronize ) ) }
 
-@ __cu_module_load * InterpImpl it → v {
+unsafe @ __cu_module_load * InterpImpl it → v {
     : i image ( __pop it )
     : i module ( __pop it )
     ( __push it # i ( cuModuleLoadData ( __gpu_ptr it module ) ( __gpu_ptr it image ) ) )
 }
 
-@ __cu_module_unload * InterpImpl it → v {
+unsafe @ __cu_module_unload * InterpImpl it → v {
     : i module ( __pop it )
     ( __push it # i ( cuModuleUnload module ) )
 }
 
-@ __cu_module_get_function * InterpImpl it → v {
+unsafe @ __cu_module_get_function * InterpImpl it → v {
     : i name ( __pop it )
     : i hmod ( __pop it )
     : i hfunc ( __pop it )
     ( __push it # i ( cuModuleGetFunction ( __gpu_ptr it hfunc ) hmod # s ( __gpu_ptr it name ) ) )
 }
 
-@ __cu_mem_alloc * InterpImpl it → v {
+unsafe @ __cu_mem_alloc * InterpImpl it → v {
     : i bytesize ( __pop it )
     : i dptr ( __pop it )
     ( __push it # i ( cuMemAlloc ( __gpu_ptr it dptr ) bytesize ) )
 }
 
-@ __cu_mem_free * InterpImpl it → v {
+unsafe @ __cu_mem_free * InterpImpl it → v {
     : i dptr ( __pop it )
     ( __push it # i ( cuMemFree dptr ) )
 }
 
-@ __cu_memcpy_htod * InterpImpl it → v {
+unsafe @ __cu_memcpy_htod * InterpImpl it → v {
     : i n ( __pop it )
     : i src ( __pop it )
     : i dst ( __pop it )
     ( __push it # i ( cuMemcpyHtoD dst ( __gpu_ptr it src ) n ) )
 }
 
-@ __cu_memcpy_dtoh * InterpImpl it → v {
+unsafe @ __cu_memcpy_dtoh * InterpImpl it → v {
     : i n ( __pop it )
     : i src ( __pop it )
     : i dst ( __pop it )
@@ -7013,7 +7013,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
 // ignores the rest, and each translated entry is a valid host address.
 @ __GPU_MAX_ARGS → i { ^ 64 }
 
-@ __cu_launch_kernel * InterpImpl it → v {
+unsafe @ __cu_launch_kernel * InterpImpl it → v {
     : i extra ( __pop it )
     : i params ( __pop it )
     : i stream ( __pop it )
@@ -7052,7 +7052,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
     ( __push it 0 )
 }
 
-@ __nvrtc_create * InterpImpl it → v {
+unsafe @ __nvrtc_create * InterpImpl it → v {
     : i incs ( __pop it )
     : i headers ( __pop it )
     : i nh ( __pop it )
@@ -7066,7 +7066,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
 // a host copy of the array is built with every entry translated (guest offset
 // → host address). nopt bounds the array exactly; entries past guest memory
 // (a hostile/broken module) become NULL rather than wild host pointers.
-@ __nvrtc_compile * InterpImpl it → v {
+unsafe @ __nvrtc_compile * InterpImpl it → v {
     : i opts ( __pop it )
     : i nopt ( __pop it )
     : i prog ( __pop it )
@@ -7092,31 +7092,31 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
     ( __push it rc )
 }
 
-@ __nvrtc_ptx_size * InterpImpl it → v {
+unsafe @ __nvrtc_ptx_size * InterpImpl it → v {
     : i sz ( __pop it )
     : i prog ( __pop it )
     ( __push it # i ( nvrtcGetPTXSize prog ( __gpu_ptr it sz ) ) )
 }
 
-@ __nvrtc_get_ptx * InterpImpl it → v {
+unsafe @ __nvrtc_get_ptx * InterpImpl it → v {
     : i ptx ( __pop it )
     : i prog ( __pop it )
     ( __push it # i ( nvrtcGetPTX prog ( __gpu_ptr it ptx ) ) )
 }
 
-@ __nvrtc_log_size * InterpImpl it → v {
+unsafe @ __nvrtc_log_size * InterpImpl it → v {
     : i sz ( __pop it )
     : i prog ( __pop it )
     ( __push it # i ( nvrtcGetProgramLogSize prog ( __gpu_ptr it sz ) ) )
 }
 
-@ __nvrtc_get_log * InterpImpl it → v {
+unsafe @ __nvrtc_get_log * InterpImpl it → v {
     : i log ( __pop it )
     : i prog ( __pop it )
     ( __push it # i ( nvrtcGetProgramLog prog ( __gpu_ptr it log ) ) )
 }
 
-@ __nvrtc_destroy * InterpImpl it → v {
+unsafe @ __nvrtc_destroy * InterpImpl it → v {
     : i prog ( __pop it )
     ( __push it # i ( nvrtcDestroyProgram ( __gpu_ptr it prog ) ) )
 }
@@ -7174,7 +7174,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
 //     dereference on demand. An index can only miss.
 
 // Guest (ptr,len) span → host pointer; 0 when it leaves linear memory.
-@ __net_span * InterpImpl it i off i len → s {
+unsafe @ __net_span * InterpImpl it i off i len → s {
     : i o & off 4294967295
     : i n . it mem_bytes
     ? | < len 0 > + o len n { ^ # s 0 } {}
@@ -7184,7 +7184,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
 // Guest pointer to a NUL-terminated string → host `s`. A string with no
 // terminator inside linear memory reads as empty rather than running off
 // the end of the buffer.
-@ __net_cstr * InterpImpl it i off → s {
+unsafe @ __net_cstr * InterpImpl it i off → s {
     : i o & off 4294967295
     : i n . it mem_bytes
     ? >= o n { ^ `` } {}
@@ -7214,7 +7214,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
 }
 
 // Same, for an OWNED host string: copied out, then freed.
-@ __net_put_owned * InterpImpl it i off i cap s src → i {
+unsafe @ __net_put_owned * InterpImpl it i off i cap s src → i {
     ? == # i src 0 { ^ 0 } {}
     : i n ( __net_put_str it off cap src )
     ( nurl_free src )
@@ -7229,7 +7229,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
 // to somebody else. That surfaced far away as a wild pointer inside the
 // guest's own frame parser. The critical sections here are table-only —
 // no blocking host call happens while the lock is held.
-@ __net_reg * InterpImpl it0 i h i kind → i {
+unsafe @ __net_reg * InterpImpl it0 i h i kind → i {
     ? == h 0 { ^ 0 } {}
     : *InterpImpl it ( __host it0 )
     ( __atom_lock )
@@ -7253,7 +7253,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
 }
 
 // Guest index → host handle; 0 for anything the guest made up.
-@ __net_h * InterpImpl it0 i idx → i {
+unsafe @ __net_h * InterpImpl it0 i idx → i {
     : *InterpImpl it ( __host it0 )
     ? <= idx 0 { ^ 0 } {}
     ( __atom_lock )
@@ -7266,7 +7266,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
 }
 
 // Retire an index — the host handle is already closed by the caller.
-@ __net_drop * InterpImpl it0 i idx → v {
+unsafe @ __net_drop * InterpImpl it0 i idx → v {
     : *InterpImpl it ( __host it0 )
     ( __atom_lock )
     ? | <= idx 0 >= idx ( vec_len [i] . it nethandles ) { ( __atom_unlock ) ^ v } {}
@@ -7278,9 +7278,9 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
 // Close every socket the guest left open. A wasm module that exits (or
 // traps) mid-flight would otherwise leak the host's descriptors, which
 // matters most for the embedded case: swarm-mcp runs kernels in-process.
-@ __interp_net_close_all * InterpImpl it → v { ( __net_close_handles . it nethandles . it netkinds ) }
+unsafe @ __interp_net_close_all * InterpImpl it → v { ( __net_close_handles . it nethandles . it netkinds ) }
 
-@ __net_close_handles ( Vec i ) hs ( Vec i ) kinds → v {
+unsafe @ __net_close_handles ( Vec i ) hs ( Vec i ) kinds → v {
     : i n ( vec_len [i] hs )
     : ~ i k 1
     ~ < k n {
@@ -7297,7 +7297,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
 
 @ interp_net_close_all Interp it__h → v { ( __interp_net_close_all ( __Interp_ptr it__h ) ) }
 
-@ __net_dispatch * InterpImpl it ( Vec u ) field → b {
+unsafe @ __net_dispatch * InterpImpl it ( Vec u ) field → b {
     // ── TCP ──
     ? ( __feq field `tcp_listen` ) {
         : i backlog ( __pop it ) : i port ( __pop it ) : i hp ( __pop it )
@@ -7471,7 +7471,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
 // the host sets the new instance's exported `__stack_pointer` from it
 // before the first call. Without the export the spawn is refused rather
 // than letting two threads share one stack.
-@ __wasi_thread_spawn * InterpImpl it → v {
+unsafe @ __wasi_thread_spawn * InterpImpl it → v {
     : i start_arg ( __pop it )
     : *InterpImpl ho ( __host it )
     : *ModuleImpl m # *ModuleImpl . ho mod
@@ -7516,7 +7516,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
     }
 }
 
-@ __wasi_dispatch * InterpImpl it ( Vec u ) mod ( Vec u ) field → v {
+unsafe @ __wasi_dispatch * InterpImpl it ( Vec u ) mod ( Vec u ) field → v {
     ? ( __feq mod `wasi` ) {
         ? ( __feq field `thread-spawn` ) { ( __wasi_thread_spawn it ) ^ v } {}
         ( __trap_named it `unsupported wasi import: ` field ) ^ v
@@ -7578,25 +7578,25 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
 // Callers bounds-check dst/src/n before calling (memory.copy / memory.fill
 // / memory.init do it up front, spec-style); these just move the bytes.
 // nurl_memmove is the overlap-safe one — memory.copy allows aliasing.
-@ __mem_copy * InterpImpl it i dst i src i n → v {
+unsafe @ __mem_copy * InterpImpl it i dst i src i n → v {
     ? <= n 0 { ^ v } {}
     : s base # s ( __mem_base it )
     ( nurl_memmove # s + # i base dst # s + # i base src n )
 }
 
-@ __mem_fill * InterpImpl it i dst i val i n → v {
+unsafe @ __mem_fill * InterpImpl it i dst i val i n → v {
     ? <= n 0 { ^ v } {}
     : s base # s ( __mem_base it )
     ( nurl_memset # s + # i base dst & val 255 n )
 }
 
 // The *DataSeg / *ElemSeg at segment index k (#s 0 if out of range).
-@ __data_at * ModuleImpl m i k → s {
+unsafe @ __data_at * ModuleImpl m i k → s {
     ? | < k 0 >= k ( vec_len [s] . m datas ) { ^ # s 0 } {}
     ^ ?? ( vec_get [s] . m datas k ) { T x → x F → # s 0 }
 }
 
-@ __elem_at * ModuleImpl m i k → s {
+unsafe @ __elem_at * ModuleImpl m i k → s {
     ? | < k 0 >= k ( vec_len [s] . m elems ) { ^ # s 0 } {}
     ^ ?? ( vec_get [s] . m elems k ) { T x → x F → # s 0 }
 }
@@ -7625,7 +7625,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
 
 // Created once, from the thread that instantiates — before any guest
 // thread exists, so this is not itself a race.
-@ __atom_init → v {
+unsafe @ __atom_init → v {
     ? != g_atom_mx 0 { ^ v } {}
     : s m ( nurl_zalloc ( nurl_native_sizeof `pthread_mutex_t` ) )
     ( pthread_mutex_init # *u m # *u 0 )
@@ -7635,13 +7635,13 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
     = g_atom_cv # i c
 }
 
-@ __atom_lock → v { ( __atom_init ) ( pthread_mutex_lock # *u # s g_atom_mx ) }
+unsafe @ __atom_lock → v { ( __atom_init ) ( pthread_mutex_lock # *u # s g_atom_mx ) }
 
-@ __atom_unlock → v { ( pthread_mutex_unlock # *u # s g_atom_mx ) }
+unsafe @ __atom_unlock → v { ( pthread_mutex_unlock # *u # s g_atom_mx ) }
 
 // Natural alignment is required by the spec: an unaligned atomic traps
 // rather than being emulated.
-@ __atom_check * InterpImpl it i ea i w → b {
+unsafe @ __atom_check * InterpImpl it i ea i w → b {
     ? != 0 % ea w { ( __trap it `unaligned atomic access` ) ^ F } {}
     ? | < ea 0 > + ea w . it mem_bytes { ( __trap it `atomic access out of bounds` ) ^ F } {}
     ^ T
@@ -7653,7 +7653,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
     ^ & v - << 1 * 8 w 1
 }
 
-@ __atom_notify i count → i {
+unsafe @ __atom_notify i count → i {
     ( __atom_lock )
     = g_atom_gen + g_atom_gen 1
     : i woke ? < count g_atom_waiters count g_atom_waiters
@@ -7664,7 +7664,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
 
 // 0 = woken, 1 = the value had already changed, 2 = timed out.
 // `timeout` is nanoseconds, negative for "no timeout".
-@ __atom_wait * InterpImpl it i ea i w i expected i timeout → i {
+unsafe @ __atom_wait * InterpImpl it i ea i w i expected i timeout → i {
     ( __atom_lock )
     : i cur ( __mem_load it ea w 0 )
     ? != cur ( __atom_mask expected w ) { ( __atom_unlock ) ^ 1 } {}
@@ -7783,7 +7783,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
     ( __trap it `unsupported atomic opcode` )
 }
 
-@ __exec_fc * InterpImpl it i sub i bop → v {
+unsafe @ __exec_fc * InterpImpl it i sub i bop → v {
     ? == sub 8 {  // memory.init dataidx: copy from a passive data segment
         : i didx bop
         : i n ( __u32 ( __pop it ) )

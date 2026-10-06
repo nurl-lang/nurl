@@ -51,14 +51,14 @@ $ `stdlib/core/rcbox.nu`
 
 : PlyW { s ctl }
 
-@ PlyW_share PlyW h → PlyW { ^ @ PlyW { # s ( rcbox_share # i . h ctl ) } }
+unsafe @ PlyW_share PlyW h → PlyW { ^ @ PlyW { # s ( rcbox_share # i . h ctl ) } }
 
 @ PlyW_drop sink PlyW h → v {
     ( mem_forget h )
     ( rcbox_release [PlyWImpl] # i . h ctl )
 }
 
-@ __PlyW_ptr PlyW h → *PlyWImpl { ^ ( rcbox_ptr [PlyWImpl] # i . h ctl ) }
+unsafe @ __PlyW_ptr PlyW h → *PlyWImpl { ^ ( rcbox_ptr [PlyWImpl] # i . h ctl ) }
 
 @ __ply_wr File f String s → b {
     : ( Vec u ) b ( bytes_from_str ( string_data s ) )
@@ -95,7 +95,7 @@ $ `stdlib/core/rcbox.nu`
 
 // Open `path` and write the header. `comment` goes in as one comment
 // line ("" for none) — a place for provenance, not for structure.
-@ ply_create s path i ascii s comment → !PlyW String {
+unsafe @ ply_create s path i ascii s comment → !PlyW String {
     ?? ( file_create path ) {
         F _e → {
             : String m ( string_from `ply: cannot write ` )
@@ -126,7 +126,7 @@ $ `stdlib/core/rcbox.nu`
     }
 }
 
-@ ply_count PlyW w__h → i {
+unsafe @ ply_count PlyW w__h → i {
     : *PlyWImpl w ( __PlyW_ptr w__h )
     ^ . w n
 }
@@ -152,7 +152,7 @@ $ `stdlib/core/rcbox.nu`
     ^ ( __ply_flush ( __PlyW_ptr w__h ) )
 }
 
-@ __ply_flush * PlyWImpl w → b {
+unsafe @ __ply_flush * PlyWImpl w → b {
     : b ok ( __ply_flush_bufs . w f . w ascii . w abuf . w bbuf )
     // the buffer keeps its capacity for the next PLY_FLUSH_AT bytes
     ? != . w ascii 0 { ( string_clear . w abuf ) } { : b _t ( vec_set_len [u] . w bbuf 0 ) }
@@ -193,7 +193,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Push one vertex. Colour components are clamped to 0..255.
-@ ply_vertex PlyW w__h f x f y f z i r i g i b → v {
+unsafe @ ply_vertex PlyW w__h f x f y f z i r i g i b → v {
     : *PlyWImpl w ( __PlyW_ptr w__h )
     : i rr ( __ply_clamp_u8 r )
     : i gg ( __ply_clamp_u8 g )
@@ -228,7 +228,7 @@ $ `stdlib/core/rcbox.nu`
 
 // Flush, rewind to the count field, overwrite it in place, close. The
 // buffers go with the handle's last owner.
-@ ply_finish PlyW w__h → b {
+unsafe @ ply_finish PlyW w__h → b {
     : *PlyWImpl w ( __PlyW_ptr w__h )
     : b ok ( __ply_close . w f . w ascii . w abuf . w bbuf . w cnt_off . w n )
     // The closed file's handle leaves the writer (dropped here).

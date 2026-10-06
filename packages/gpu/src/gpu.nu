@@ -132,7 +132,7 @@ $ `cpu.nu`
 
 : GpuCtx { s ctl }
 
-@ GpuCtx_share GpuCtx h → GpuCtx { ^ @ GpuCtx { # s ( rcbox_share # i . h ctl ) } }
+unsafe @ GpuCtx_share GpuCtx h → GpuCtx { ^ @ GpuCtx { # s ( rcbox_share # i . h ctl ) } }
 
 @ GpuCtx_drop sink GpuCtx h → v {
     ( mem_forget h )
@@ -161,14 +161,14 @@ $ `cpu.nu`
 
 : GpuRes { s ctl }
 
-@ GpuRes_share GpuRes h → GpuRes { ^ @ GpuRes { # s ( rcbox_share # i . h ctl ) } }
+unsafe @ GpuRes_share GpuRes h → GpuRes { ^ @ GpuRes { # s ( rcbox_share # i . h ctl ) } }
 
 @ GpuRes_drop sink GpuRes h → v {
     ( mem_forget h )
     ( rcbox_release [GpuResImpl] # i . h ctl )
 }
 
-@ __gpu_res_release i kind i h i backend → v {
+unsafe @ __gpu_res_release i kind i h i backend → v {
     ? == kind GPU_RES_HOST { ( nurl_free # *u h ) ^ } {}
     ? == kind GPU_RES_MEM {
         ? == backend 3 { ( wgpu_free h ) ^ } {}
@@ -189,7 +189,7 @@ $ `cpu.nu`
 
 // The owner of raw handle `h` made through `g` (none for a 0 handle: a
 // failed allocation, compile or create owns nothing).
-@ __gpu_res Gpu g i kind i h → GpuRes {
+unsafe @ __gpu_res Gpu g i kind i h → GpuRes {
     ? == h 0 { ^ @ GpuRes { # s 0 } } {}
     ^ @ GpuRes { # s ( rcbox_new [GpuResImpl] @ GpuResImpl { kind h __gpu_backend ( GpuCtx_share . g own ) } ) }
 }
@@ -254,13 +254,13 @@ $ `cpu.nu`
 // one still gets an owner block — the same bookkeeping on every backend,
 // so the sanitized (CPU) builds exercise exactly what CUDA runs; its
 // release has nothing to give back.
-@ __gpu_noctx i ordinal i dev i ctx → Gpu {
+unsafe @ __gpu_noctx i ordinal i dev i ctx → Gpu {
     ? == ctx 0 { ^ @ Gpu { ordinal dev ctx @ GpuCtx { # s 0 } } } {}
     : i box ( rcbox_new [GpuCtxImpl] @ GpuCtxImpl { dev - 0 dev ( string_new ) } )
     ^ @ Gpu { ordinal dev ctx @ GpuCtx { # s box } }
 }
 
-@ gpu_open i ordinal → Gpu {
+unsafe @ gpu_open i ordinal → Gpu {
     ? ( __force_webgpu ) {
         // probe: the WGSL set's sentinel entry compiles to a pipeline (>0)
         // when the JS host has WebGPU up. 0 → no adapter / host missing /
@@ -303,7 +303,7 @@ $ `cpu.nu`
 
 // Human-readable device name (e.g. "NVIDIA GeForce RTX 4090", or "CPU").
 // Borrowed: valid while `g` (or anything made through it) is alive.
-@ gpu_name Gpu g → s {
+unsafe @ gpu_name Gpu g → s {
     ? == __gpu_backend 3 { ^ `WebGPU (WGSL compute)` } {}
     ? == __gpu_backend 2 { ^ `CPU (static kernels)` } {}
     ? == __gpu_backend 1 { ^ `CPU (host C++)` } {}
@@ -347,7 +347,7 @@ $ `cpu.nu`
     }
 }
 
-@ gpu_mem_free Gpu g → i {
+unsafe @ gpu_mem_free Gpu g → i {
     ? == __gpu_backend 0 {
         : s fp ( nurl_zalloc 16 )
         : ~ i r 0
@@ -358,7 +358,7 @@ $ `cpu.nu`
     ^ ( __gpu_meminfo_line `MemAvailable:` )
 }
 
-@ gpu_mem_total Gpu g → i {
+unsafe @ gpu_mem_total Gpu g → i {
     ? == __gpu_backend 0 {
         : s fp ( nurl_zalloc 16 )
         : ~ i r 0
@@ -573,7 +573,7 @@ $ `cpu.nu`
     ( string_free tmp )
 }
 
-@ gpu_compile Gpu g s src s name → GpuKernel {
+unsafe @ gpu_compile Gpu g s src s name → GpuKernel {
     ? == __gpu_backend 3 {
         : i pid ( wgpu_pipeline name )
         ? <= pid 0 {
@@ -703,7 +703,7 @@ $ `cpu.nu`
 // valid while the GpuHost is.
 : GpuHost { * u ptr i bytes GpuRes own }
 
-@ gpu_host_alloc i bytes → GpuHost {
+unsafe @ gpu_host_alloc i bytes → GpuHost {
     : *u p ( nurl_alloc bytes )
     : i box ( rcbox_new [GpuResImpl] @ GpuResImpl { GPU_RES_HOST # i p __gpu_backend @ GpuCtx { # s 0 } } )
     ^ @ GpuHost { p bytes @ GpuRes { # s box } }
@@ -719,19 +719,19 @@ $ `cpu.nu`
 // Let go of `h` now rather than at the end of its owner's scope.
 @ gpu_host_free sink GpuHost h → v {}
 
-@ gpu_host_set_f32 GpuHost h i idx f v → v { ( nurl_poke_f32 . h ptr idx v ) }
+unsafe @ gpu_host_set_f32 GpuHost h i idx f v → v { ( nurl_poke_f32 . h ptr idx v ) }
 
-@ gpu_host_get_f32 GpuHost h i idx → f { ^ ( nurl_peek_f32 . h ptr idx ) }
+unsafe @ gpu_host_get_f32 GpuHost h i idx → f { ^ ( nurl_peek_f32 . h ptr idx ) }
 
-@ gpu_host_set_i32 GpuHost h i idx i v → v { ( nurl_poke_i32 . h ptr idx v ) }
+unsafe @ gpu_host_set_i32 GpuHost h i idx i v → v { ( nurl_poke_i32 . h ptr idx v ) }
 
-@ gpu_host_get_i32 GpuHost h i idx → i { ^ # i ( nurl_peek_i32 . h ptr idx ) }
+unsafe @ gpu_host_get_i32 GpuHost h i idx → i { ^ # i ( nurl_peek_i32 . h ptr idx ) }
 
 // ── device memory ─────────────────────────────────────────────────
 
 // Device memory, freed with the buffer's last owner. dptr 0 = the
 // allocation failed (an empty buffer owns nothing).
-@ gpu_alloc Gpu g i bytes → GpuBuffer {
+unsafe @ gpu_alloc Gpu g i bytes → GpuBuffer {
     : i dptr ? == __gpu_backend 3 ( wgpu_alloc bytes ) ? != __gpu_backend 0 ( cpu_malloc bytes ) ( cuda_malloc bytes )
     ^ @ GpuBuffer { dptr bytes ( __gpu_res g GPU_RES_MEM dptr ) }
 }
@@ -766,7 +766,7 @@ $ `cpu.nu`
 // and at model sizes that — not PCIe — is the upload wall; stripes
 // scale it. Any failed spawn falls back to copying that stripe inline,
 // so the copy is correct with no threads at all (WASI).
-@ __gpu_par_memcpy i dst i src i n → v {
+unsafe @ __gpu_par_memcpy i dst i src i n → v {
     ? < n 8388608 {
         ( nurl_memcpy # *u dst # *u src n )
         ^ {}
@@ -814,12 +814,12 @@ $ `cpu.nu`
     }
 }
 
-@ gpu_staging_free → v {
+unsafe @ gpu_staging_free → v {
     ? != __gpu_stage_a 0 { : i _f1 ( cuda_host_free # *u __gpu_stage_a ) = __gpu_stage_a 0 } {}
     ? != __gpu_stage_b 0 { : i _f2 ( cuda_host_free # *u __gpu_stage_b ) = __gpu_stage_b 0 } {}
 }
 
-@ __gpu_upload_staged i dptr * u host i bytes → i {
+unsafe @ __gpu_upload_staged i dptr * u host i bytes → i {
     ? == __gpu_stage_a 0 { = __gpu_stage_a # i ( cuda_host_alloc ( __GPU_STAGE_CHUNK ) ) } {}
     ? == __gpu_stage_b 0 { = __gpu_stage_b # i ( cuda_host_alloc ( __GPU_STAGE_CHUNK ) ) } {}
     ? | == __gpu_stage_a 0 == __gpu_stage_b 0 {
@@ -878,7 +878,7 @@ $ `cpu.nu`
 // Copy the parts of every segment that fall inside [lo, hi) of the chunk.
 // Segments are four parallel arrays (buffer offset, host address, length,
 // device address) so a stripe worker takes plain addresses, not a Vec.
-@ __gpu_seg_copy i pb i ph i pn i cnt i buf i lo i hi → v {
+unsafe @ __gpu_seg_copy i pb i ph i pn i cnt i buf i lo i hi → v {
     : *i vb # *i pb
     : *i vh # *i ph
     : *i vn # *i pn
@@ -898,7 +898,7 @@ $ `cpu.nu`
 // Fill one chunk (`fill` bytes of segments) into `buf` on four stripes and
 // issue its DMAs. `ev` is recorded after the last copy; the caller syncs
 // it before the buffer is filled again. 0 == success.
-@ __gpu_batch_flush ( Vec i ) sb ( Vec i ) sh ( Vec i ) sn ( Vec i ) sd i buf i fill i ev → i {
+unsafe @ __gpu_batch_flush ( Vec i ) sb ( Vec i ) sh ( Vec i ) sn ( Vec i ) sd i buf i fill i ev → i {
     : i cnt ( vec_len [i] sb )
     : i pb # i ( vec_data [i] sb )
     : i ph # i ( vec_data [i] sh )
@@ -963,7 +963,7 @@ $ `cpu.nu`
 
 // The one-at-a-time shape every other backend takes, and CUDA's fallback
 // when the pinned staging pair or the events cannot be had.
-@ __gpu_upload_each ( Vec GpuCopy ) items → i {
+unsafe @ __gpu_upload_each ( Vec GpuCopy ) items → i {
     : ~ i rc 0
     : ~ i k 0
     ~ & == rc 0 < k ( vec_len [GpuCopy] items ) {
@@ -1095,7 +1095,7 @@ $ `cpu.nu`
 }
 
 // Copy the buffer's worth of bytes host → device. 0 == success.
-@ gpu_upload GpuBuffer dst * u host → i {
+unsafe @ gpu_upload GpuBuffer dst * u host → i {
     ? == __gpu_backend 3 { ^ ( wgpu_upload . dst dptr host . dst bytes ) } {}
     ? != __gpu_backend 0 { ^ ( cpu_htod . dst dptr host . dst bytes ) } {}
     ? ( __gpu_in_reg # i host . dst bytes ) { ^ ( cuda_htod . dst dptr host . dst bytes ) } {}
@@ -1106,14 +1106,14 @@ $ `cpu.nu`
 // Device → device copy of dst's worth of bytes from a raw device pointer.
 // 0 == success. Both allocations live in the process's shared (primary)
 // context, so any package's buffer is a valid source.
-@ gpu_dtod GpuBuffer dst i src_dptr → i {
+unsafe @ gpu_dtod GpuBuffer dst i src_dptr → i {
     ? == __gpu_backend 3 { ^ ( wgpu_dtod . dst dptr src_dptr . dst bytes ) } {}
     ? != __gpu_backend 0 { ^ ( cpu_htod . dst dptr # *u src_dptr . dst bytes ) } {}
     ^ ( cuda_dtod . dst dptr src_dptr . dst bytes )
 }
 
 // Copy the buffer's worth of bytes device → host. 0 == success.
-@ gpu_download * u host GpuBuffer src → i {
+unsafe @ gpu_download * u host GpuBuffer src → i {
     ? == __gpu_backend 3 { ^ ( wgpu_download host . src dptr . src bytes ) } {}
     ? != __gpu_backend 0 { ^ ( cpu_dtoh host . src dptr . src bytes ) } {}
     ^ ( cuda_dtoh host . src dptr . src bytes )
@@ -1128,7 +1128,7 @@ $ `cpu.nu`
 @ gpu_arg_buffer GpuBuffer b → i { ^ . b dptr }  // device pointer
 @ gpu_arg_i32 i v → i { ^ v }  // 32-bit int scalar
 @ gpu_arg_i64 i v → i { ^ v }  // 64-bit int scalar
-@ gpu_arg_f32 f v → i { ^ ( nurl_f32_to_bits # f32 v ) }  // 32-bit float scalar
+unsafe @ gpu_arg_f32 f v → i { ^ ( nurl_f32_to_bits # f32 v ) }  // 32-bit float scalar
 
 // ── launch ────────────────────────────────────────────────────────
 // 1-D launch: `grid` blocks of `block` threads. `args` is the Vec built
@@ -1143,7 +1143,7 @@ $ `cpu.nu`
 : ~ i g_params_buf 0
 : ~ i g_params_cap 0
 
-@ __gpu_params i n → *u {
+unsafe @ __gpu_params i n → *u {
     ? > n g_params_cap {
         ? != g_params_buf 0 { ( nurl_free # s g_params_buf ) } {}
         : i want ? < n 16 16 n
@@ -1153,7 +1153,7 @@ $ `cpu.nu`
     ^ # *u g_params_buf
 }
 
-@ gpu_launch GpuKernel k i grid i block ( Vec i ) args → i {
+unsafe @ gpu_launch GpuKernel k i grid i block ( Vec i ) args → i {
     : i n ( vec_len [i] args )
     : i vbase # i ( vec_data [i] args )
     : *u params ( __gpu_params n )

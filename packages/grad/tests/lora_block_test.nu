@@ -81,7 +81,7 @@ $ `deps/gpukit/src/dev.nu`
     ^ / ( float_abs - a b ) den
 }
 
-@ main → i {
+unsafe @ main → i {
     // ── 1. FD through the whole block ────────────────────────────────
     ( nurl_print `— finite differences through the block —\n` )
     : Blk bl ( blk_new 42 F )

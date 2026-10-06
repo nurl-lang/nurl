@@ -16,7 +16,7 @@
 
 $ `compiler/tests/pub_trait_ffi_vis_mod.nu`
 
-@ main → i {
+unsafe @ main → i {
     : VtfWidget w @ VtfWidget { 42 }
     // Non-pub trait method, resolved by type across the file boundary.
     ( nurl_print `trait_show=` ) ( nurl_print ( nurl_str_int ( vtf_show w ) ) ) ( nurl_print `\n` )

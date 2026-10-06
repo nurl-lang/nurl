@@ -19,7 +19,7 @@
 : i FPS 60
 : i NUM_STARS 1000
 
-@ main → i {
+unsafe @ main → i {
     // Varataan taulukot tähtien 3D-koordinaateille
     : *i stars_x # *i ( malloc * NUM_STARS 8 )
     : *i stars_y # *i ( malloc * NUM_STARS 8 )

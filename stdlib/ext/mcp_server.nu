@@ -1722,11 +1722,13 @@ b read_only b destructive b idempotent b open_world
         T listener → {
             : ( @ HttpResponse HttpRequest ) inner
             ( mcp_http_handler \ Json rq → ?Json { ^ ( disp rq ) } )
-            : ( @ HttpResponse HttpRequest ) h ? > ( nurl_str_len token ) 0
-            ( mcp_server_with_bearer_auth
-            \ HttpRequest rq → HttpResponse { ^ ( inner rq ) } token )
-            \ HttpRequest rq → HttpResponse { ^ ( inner rq ) }
-            : HttpServer srv ( server_new listener h )
+            // The handler runs on the server's worker threads, so each arm
+            // hands server_new a closure built right there (the Send check
+            // follows what it captures; a join of two closures it cannot).
+            : HttpServer srv ? > ( nurl_str_len token ) 0
+            ( server_new listener ( mcp_server_with_bearer_auth
+            \ HttpRequest rq → HttpResponse { ^ ( inner rq ) } token ) )
+            ( server_new listener \ HttpRequest rq → HttpResponse { ^ ( inner rq ) } )
             : !v NetErr rr ( server_run srv )
             ( server_stop srv )
             ^ rr

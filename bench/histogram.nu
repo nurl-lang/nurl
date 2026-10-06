@@ -2,7 +2,7 @@
 // single highest count. Array-indexed tally over a char scan.
 $ `stdlib/core/string.nu`
 
-@ main → i {
+unsafe @ main → i {
     : s text `314159265358979`
     : i n ( nurl_str_len text )
     : *i hist # *i ( malloc * 10 8 )

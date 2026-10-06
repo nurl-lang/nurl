@@ -20,7 +20,7 @@ $ `stdlib/std/thread.nu`
 // stress-testing the refcount, not the payload.
 : ~ i shared_ctl 0
 
-@ run_live_arc_tests → v {
+unsafe @ run_live_arc_tests → v {
     : ( Arc i ) base ( arc_new [i] 42 )
     = shared_ctl # i . base ctl
 

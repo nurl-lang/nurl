@@ -18,7 +18,7 @@ $ `stdlib/core/vec.nu`
 
 & `libc` @ nurl_free_count → i
 
-@ live → i { ^ - ( nurl_alloc_count ) ( nurl_free_count ) }
+unsafe @ live → i { ^ - ( nurl_alloc_count ) ( nurl_free_count ) }
 
 : Rec { String name i n }
 
@@ -35,7 +35,7 @@ $ `stdlib/core/vec.nu`
     ^ ( string_len . q name )
 }
 
-@ rename_put_back ( Vec Rec ) rs → v {
+unsafe @ rename_put_back ( Vec Rec ) rs → v {
     : *Rec p ( vec_data [Rec] rs )
     : ~ Rec item . p 0
     = . item name ( string_from `put` )
@@ -43,20 +43,20 @@ $ `stdlib/core/vec.nu`
     = . p 0 item
 }
 
-@ put_slot ( Vec Rec ) rs i k Rec r → v {
+unsafe @ put_slot ( Vec Rec ) rs i k Rec r → v {
     : *Rec p ( vec_data [Rec] rs )
     ( mem_put_back r )
     = . p k r
 }
 
-@ rename_via_helper ( Vec Rec ) rs → v {
+unsafe @ rename_via_helper ( Vec Rec ) rs → v {
     : *Rec p ( vec_data [Rec] rs )
     : ~ Rec item . p 0
     = . item name ( string_from `helper` )
     ( put_slot rs 0 item )
 }
 
-@ rename_taken_first ( Vec Rec ) rs → v {
+unsafe @ rename_taken_first ( Vec Rec ) rs → v {
     : *Rec p ( vec_data [Rec] rs )
     : ~ Rec item . p 0
     : String old . item name

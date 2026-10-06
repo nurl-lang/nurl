@@ -49,7 +49,7 @@ $ `stdlib/core/vec.nu`
     ? have { ^ @ !Msg Err { T @ Msg { 1 msg } } } { ^ @ !Msg Err { F E2 } }
 }
 
-@ main → i {
+unsafe @ main → i {
     : i a0 - ( nurl_alloc_count ) ( nurl_free_count )
     : ~ i k 0
     ~ < k 10 { ?? ( vloop k ) { T m → {} F _ → {} } = k + k 1 }

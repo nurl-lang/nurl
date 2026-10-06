@@ -66,7 +66,7 @@ $ `src/serve.nu`
 
 // The shared tail once the model and tokenizer are open: read the audio,
 // resample, run, print. Owns neither w nor t.
-@ __wh_transcribe_run Whisper w Tok t s wavpath s lang i maxtok b use_vad b with_ts f nospeech → i {
+unsafe @ __wh_transcribe_run Whisper w Tok t s wavpath s lang i maxtok b use_vad b with_ts f nospeech → i {
     : ~ i rc 0
     ?? ( wav_read wavpath ) {
         T aw → {
@@ -89,7 +89,7 @@ $ `src/serve.nu`
     ^ rc
 }
 
-@ __wh_transcribe s dir s wavpath s lang i maxtok b use_vad b with_ts f nospeech → i {
+unsafe @ __wh_transcribe s dir s wavpath s lang i maxtok b use_vad b with_ts f nospeech → i {
     // whisper.cpp's ggml container: hyperparameters, tokenizer and weights in
     // ONE file — no config.json or tokenizer.json beside it
     ? ( _wh_is_ggml dir ) {

@@ -98,6 +98,8 @@ $ `tools/nurlfmt/tokenize.nu`
     // Grammar v2.7 always-inline prefix — same rule again; any of the
     // three may precede an `@` in any order.
     ? ( __pp_text_eq text `inline` ) { ^ T } {}
+    // Grammar v2.8 raw-memory prefix (`unsafe @ name …`), the same rule.
+    ? ( __pp_text_eq text `unsafe` ) { ^ T } {}
     ^ F
 }
 
@@ -419,7 +421,7 @@ $ `tools/nurlfmt/tokenize.nu`
                     // to glue. `pub` inside a comment/string never
                     // reaches this path (those are non-IDENT kinds).
                     ? & & == bd 0 == pd 0
-                    | | ( __pp_text_eq text `pub` ) ( __pp_text_eq text `simd` ) ( __pp_text_eq text `inline` ) {
+                    | | | ( __pp_text_eq text `pub` ) ( __pp_text_eq text `simd` ) ( __pp_text_eq text `inline` ) ( __pp_text_eq text `unsafe` ) {
                         = prev_was_pub T
                     } {
                         = prev_was_pub F

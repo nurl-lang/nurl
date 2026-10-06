@@ -22,7 +22,7 @@
 
 & `libc` @ printf s fmt ... → i32
 
-@ main → i {
+unsafe @ main → i {
     // ── Fixed-width args of every category ─────────────────────────
     : i32 a 42
     : u32 b 12345

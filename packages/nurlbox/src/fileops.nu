@@ -134,7 +134,7 @@ $ `bx.nu`
 
 // `Aug 27 14:03` for something in the last six months, `Aug 27  2024`
 // for anything older — the rule every ls has followed since v7.
-@ __ls_time String out i mtime i now → v {
+unsafe @ __ls_time String out i mtime i now → v {
     : Time t ( time_local mtime )
     : String mon ( time_format t `%b %e ` )
     ( string_push_bytes out # *u ( string_data mon ) ( string_len mon ) )
@@ -156,7 +156,7 @@ $ `bx.nu`
 
 // `%-N.Ns` — pad on the right, and TRUNCATE at N, which is what keeps
 // a long user name from shifting every column after it.
-@ __push_left String out s text i width → v {
+unsafe @ __push_left String out s text i width → v {
     : i n ( nurl_str_len text )
     : i take ? > n width width n
     ( string_push_bytes out # *u text take )
@@ -193,7 +193,7 @@ $ `bx.nu`
 // fixed ones — nlink %4, user and group %-8.8s, size %9 (or %7 under
 // -h) — not widths computed from the listing, so two `ls -l` runs over
 // different directories still line up when you read them side by side.
-@ __ls_long BxEnt e s dir i flags i now → v {
+unsafe @ __ls_long BxEnt e s dir i flags i now → v {
     : String out ( string_new )
     ? != 0 & flags LS_INODE {
         ( string_push_int out . e ino )
@@ -241,7 +241,7 @@ $ `bx.nu`
     ( bx_write out )
 }
 
-@ __ls_name_only BxEnt e i flags → v {
+unsafe @ __ls_name_only BxEnt e i flags → v {
     : String out ( string_new )
     ? != 0 & flags LS_INODE {
         ( string_push_int out . e ino )
@@ -259,7 +259,7 @@ $ `bx.nu`
 }
 
 // Down-then-across columns, the layout `ls` uses on a terminal.
-@ __ls_columns ( Vec BxEnt ) ents i flags i width → v {
+unsafe @ __ls_columns ( Vec BxEnt ) ents i flags i width → v {
     : i n ( vec_len [BxEnt] ents )
     ? == n 0 { ^ } {}
     : ~ i widest 0
@@ -564,7 +564,7 @@ $ `bx.nu`
     ^ rc
 }
 
-@ ap_rmdir ( Vec String ) argv → i {
+unsafe @ ap_rmdir ( Vec String ) argv → i {
     : BxOpts o ( bx_getopt argv 1 `pv` `parents=p,verbose=v` )
     : ~ i rc 0
     ? ! ( bx_ok o ) { = rc 1 } {
@@ -1075,7 +1075,7 @@ $ `bx.nu`
 
 // ── ln ────────────────────────────────────────────────────────────
 
-@ ap_ln ( Vec String ) argv → i {
+unsafe @ ap_ln ( Vec String ) argv → i {
     : BxOpts o ( bx_getopt argv 1 `sfvnT` `symbolic=s,force=f,verbose=v,no-target-directory=T` )
     : ~ i rc 0
     ? ! ( bx_ok o ) { = rc 1 } {
@@ -1332,7 +1332,7 @@ $ `bx.nu`
 
 // ── mktemp ────────────────────────────────────────────────────────
 
-@ ap_mktemp ( Vec String ) argv → i {
+unsafe @ ap_mktemp ( Vec String ) argv → i {
     : BxOpts o ( bx_getopt argv 1 `dup:tq` `directory=d,dry-run=u,tmpdir=p,quiet=q` )
     : ~ i rc 0
     ? ! ( bx_ok o ) { = rc 1 } {

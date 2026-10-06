@@ -127,7 +127,7 @@ $ `stdlib/std/rng.nu`
 // go when it returns — at most depth × psi indices are alive at once, a
 // few KB at the default psi of 256) and return its node index. `dp` is the
 // raw row-major data buffer; reading feature q of row r is dp[r*n_cols + q].
-@ __build_node IForest fo * f dp i n_cols sink ( Vec i ) idx i depth i height_limit Rng g → i {
+unsafe @ __build_node IForest fo * f dp i n_cols sink ( Vec i ) idx i depth i height_limit Rng g → i {
     : i m ( vec_len [i] idx )
 
     // Isolated (≤1 point) or hit the depth cap → leaf.
@@ -239,7 +239,7 @@ $ `stdlib/std/rng.nu`
 // Path length of `point` (raw *f, length n_cols) down one tree: walk from
 // `root` comparing the node's feature to its threshold, then add c(leaf
 // size) for the unbuilt subtree below where we stopped.
-@ __path_len IForest fo i root * f point → f {
+unsafe @ __path_len IForest fo i root * f point → f {
     : *i feat ( vec_data [i] . fo feature )
     : *f spl ( vec_data [f] . fo split )
     : *i lf ( vec_data [i] . fo left )
@@ -276,7 +276,7 @@ $ `stdlib/std/rng.nu`
 
 // Score row `row` of a row-major ( Vec f ) matrix without copying it out.
 // A row the matrix does not hold scores 0.5, as above.
-@ iforest_score_row IForest fo ( Vec f ) data i row → f {
+unsafe @ iforest_score_row IForest fo ( Vec f ) data i row → f {
     ? & >= row 0 <= * + row 1 . fo n_cols ( vec_len [f] data ) {} { ^ 0.5 }
     : *f dp ( vec_data [f] data )
     : i base + # i dp * * row . fo n_cols 8
@@ -285,7 +285,7 @@ $ `stdlib/std/rng.nu`
 }
 
 // Mean path length over the forest → score. `point` is a raw *f of n_cols.
-@ __score_ptr IForest fo * f point → f {
+unsafe @ __score_ptr IForest fo * f point → f {
     : i nt ( vec_len [i] . fo roots )
     ? <= nt 0 { ^ 0.0 } {}
     : f cpsi . fo c_psi

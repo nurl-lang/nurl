@@ -8,7 +8,7 @@ $ `stdlib/std/fs.nu`
 $ `stdlib/ext/env.nu`
 $ `src/model.nu`
 
-@ main → i {
+unsafe @ main → i {
     : ( Vec String ) av ( env_args_list )
     : ~ i rc 0
     ? >= ( vec_len [String] av ) 3 {} { ( nurl_print `usage: embed_check <model-dir> <corpus>\n` ) ^ 2 }

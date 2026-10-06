@@ -92,14 +92,14 @@ $ `stdlib/core/rcbox.nu`
 // an optional early release.
 : Gg { s ctl }
 
-@ Gg_share Gg h → Gg { ^ @ Gg { # s ( rcbox_share # i . h ctl ) } }
+unsafe @ Gg_share Gg h → Gg { ^ @ Gg { # s ( rcbox_share # i . h ctl ) } }
 
 @ Gg_drop sink Gg h → v {
     ( mem_forget h )
     ( rcbox_release [GgImpl] # i . h ctl )
 }
 
-@ _Gg_ptr Gg h → *GgImpl { ^ ( rcbox_ptr [GgImpl] # i . h ctl ) }
+unsafe @ _Gg_ptr Gg h → *GgImpl { ^ ( rcbox_ptr [GgImpl] # i . h ctl ) }
 
 // The handle that holds no container (a model loaded from safetensors).
 @ gg_none → Gg { ^ @ Gg { # s 0 } }
@@ -109,7 +109,7 @@ $ `stdlib/core/rcbox.nu`
 // Give the file back — the mapping or the read buffer — and keep the
 // parsed metadata (vocabulary, tensor table). After this `gg_ptr` must not
 // be called; the loader calls it exactly once, right after the last upload.
-@ gg_release_data Gg g__h → v {
+unsafe @ gg_release_data Gg g__h → v {
     : *GgImpl g ( _Gg_ptr g__h )
     ? . g from_mmap {
         ? != # i . g map 0 { : i32 _u ( munmap . g map . g nbytes ) } {}
@@ -125,7 +125,7 @@ $ `stdlib/core/rcbox.nu`
 // Early release (optional): the last owner gives everything back.
 @ gg_close sink Gg g → v {}
 
-@ __gg_i32 * u d i off → i {
+unsafe @ __gg_i32 * u d i off → i {
     : i b0 & # i . d off 255
     : i b1 & # i . d + off 1 255
     : i b2 & # i . d + off 2 255
@@ -139,7 +139,7 @@ $ `stdlib/core/rcbox.nu`
     ^ @ !v String { F ( string_from msg ) }
 }
 
-@ gg_open s path → !Gg String {
+unsafe @ gg_open s path → !Gg String {
     // zeroed, and a handle from the start: an early return drops it whole
     : Gg h @ Gg { # s ( rcbox_zero [GgImpl] ) }
     : *GgImpl g ( _Gg_ptr h )
@@ -169,7 +169,7 @@ $ `stdlib/core/rcbox.nu`
 // makes over it (a cold file streams in at the disk's readahead rate rather
 // than a page fault at a time). Elsewhere (Windows, WASI) the file is read
 // into a Vec and `map` points at its bytes.
-@ __gg_map * GgImpl g s path → b {
+unsafe @ __gg_map * GgImpl g s path → b {
     ? != ( posix_const `MAP_PRIVATE` ) -1 {
         : i32 fd ( open path # i32 ( posix_const `O_RDONLY` ) # i32 0 )
         ? < # i fd 0 { ^ F } {}
@@ -209,7 +209,7 @@ $ `stdlib/core/rcbox.nu`
 // The container's own parse over the mapped bytes: header, the mel filters
 // (skipped), the vocabulary, the tensor table. Every length is checked
 // against the mapping before it is trusted.
-@ __gg_parse * GgImpl g → !v String {
+unsafe @ __gg_parse * GgImpl g → !v String {
     : i n . g nbytes
     ? < n 56 {
         ^ ( __gg_err `ggml: file too short for a header` )
@@ -391,7 +391,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Find a tensor by its HF name. -1 when absent.
-@ gg_find Gg g__h s hf → i {
+unsafe @ gg_find Gg g__h s hf → i {
     : *GgImpl g ( _Gg_ptr g__h )
     : String gn ( gg_map_name hf )
     : ~ i found -1
@@ -408,17 +408,17 @@ $ `stdlib/core/rcbox.nu`
     ^ found
 }
 
-@ gg_ttype Gg g__h i ti → i {
+unsafe @ gg_ttype Gg g__h i ti → i {
     : *GgImpl g ( _Gg_ptr g__h )
     ?? ( vec_get [i] . g ttypes ti ) { T x → { ^ x } F → { ^ -1 } }
 }
 
-@ gg_nelems Gg g__h i ti → i {
+unsafe @ gg_nelems Gg g__h i ti → i {
     : *GgImpl g ( _Gg_ptr g__h )
     ?? ( vec_get [i] . g tnelems ti ) { T x → { ^ x } F → { ^ 0 } }
 }
 
-@ gg_ptr Gg g__h i ti → *u {
+unsafe @ gg_ptr Gg g__h i ti → *u {
     : *GgImpl g ( _Gg_ptr g__h )
     : ~ i o2 0
     ?? ( vec_get [i] . g toffs ti ) { T x → { = o2 x } F → {} }
@@ -452,7 +452,7 @@ $ `stdlib/core/rcbox.nu`
 // Build the tokenizer: base words byte-encoded, specials synthesized at
 // whisper.cpp's positional ids. Returns via tok_build so decode, control
 // matching and the timestamp rules all behave exactly as with tokenizer.json.
-@ gg_build_tok Gg g__h → !Tok String {
+unsafe @ gg_build_tok Gg g__h → !Tok String {
     : *GgImpl g ( _Gg_ptr g__h )
     : i nv . g n_vocab
     : i nfile ( vec_len [String] . g vocab )

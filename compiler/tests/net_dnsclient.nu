@@ -74,7 +74,7 @@ $ `stdlib/net/dnsclient.nu`
     ^ v
 }
 
-@ err_of ! ( Vec i ) DnsErr r → s {
+@ err_of sink ! ( Vec i ) DnsErr r → s {
     ^ ?? r {
         T v → { ( vec_free [i] v ) `ok` }
         F e → ( dns_err_name e )

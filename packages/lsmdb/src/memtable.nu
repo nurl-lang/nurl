@@ -58,21 +58,21 @@ $ `stdlib/core/rcbox.nu`
 // every copy is the same state, and the last owner releases it.
 : MemTable { s ctl }
 
-@ MemTable_share MemTable h → MemTable { ^ @ MemTable { # s ( rcbox_share # i . h ctl ) } }
+unsafe @ MemTable_share MemTable h → MemTable { ^ @ MemTable { # s ( rcbox_share # i . h ctl ) } }
 
 @ MemTable_drop sink MemTable h → v {
     ( mem_forget h )
     ( rcbox_release [MemTableImpl] # i . h ctl )
 }
 
-@ __MemTable_ptr MemTable h → *MemTableImpl { ^ ( rcbox_ptr [MemTableImpl] # i . h ctl ) }
+unsafe @ __MemTable_ptr MemTable h → *MemTableImpl { ^ ( rcbox_ptr [MemTableImpl] # i . h ctl ) }
 
 // ── raw byte compare ────────────────────────────────────────────────
 //
 // Bytewise, unsigned, shorter-is-smaller — the total order the whole
 // package agrees on: memtable, SSTable, merge, scan.
 
-@ lsm_bytes_cmp_raw * u ap i aoff i alen * u bp i boff i blen → i {
+unsafe @ lsm_bytes_cmp_raw * u ap i aoff i alen * u bp i boff i blen → i {
     : i lim ? < alen blen alen blen
     : ~ i k 0
     ~ < k lim {
@@ -93,7 +93,7 @@ $ `stdlib/core/rcbox.nu`
 
 // ── construction ────────────────────────────────────────────────────
 
-@ mt_new i seed → MemTable {
+unsafe @ mt_new i seed → MemTable {
     : i m__box ( rcbox_zero [MemTableImpl] )
     : *MemTableImpl m ( rcbox_ptr [MemTableImpl] m__box )
     = . m arena ( vec_new [u] )
@@ -117,7 +117,7 @@ $ `stdlib/core/rcbox.nu`
 // Let go of `m` now rather than at the end of its owner's scope.
 @ mt_free sink MemTable m → v {}
 
-@ __mt_alloc_node * MemTableImpl m i ko i kl i vo i vl i seq i kind i lvl → i {
+unsafe @ __mt_alloc_node * MemTableImpl m i ko i kl i vo i vl i seq i kind i lvl → i {
     : i idx ( vec_len [i] . m koff )
     ( vec_push [i] . m koff ko )
     ( vec_push [i] . m klen kl )
@@ -140,25 +140,25 @@ $ `stdlib/core/rcbox.nu`
     ^ ?? ( vec_get [i] v idx ) { T x → x F _ → 0 }
 }
 
-@ __mt_link * MemTableImpl m i node i lvl → i {
+unsafe @ __mt_link * MemTableImpl m i node i lvl → i {
     ^ ( _mt_iat . m links + * node MT_MAXLVL lvl )
 }
 
-@ __mt_set_link * MemTableImpl m i node i lvl i to → v {
+unsafe @ __mt_set_link * MemTableImpl m i node i lvl i to → v {
     : b _ok ( vec_set [i] . m links + * node MT_MAXLVL lvl to )
 }
 
-@ mt_seq MemTable m__h i node → i {
+unsafe @ mt_seq MemTable m__h i node → i {
     : *MemTableImpl m ( __MemTable_ptr m__h )
     ^ ( _mt_iat . m nseq node )
 }
 
-@ mt_kind MemTable m__h i node → i {
+unsafe @ mt_kind MemTable m__h i node → i {
     : *MemTableImpl m ( __MemTable_ptr m__h )
     ^ ( _mt_iat . m nkind node )
 }
 
-@ mt_count MemTable m__h → i {
+unsafe @ mt_count MemTable m__h → i {
     : *MemTableImpl m ( __MemTable_ptr m__h )
     ^ . m count
 }
@@ -166,7 +166,7 @@ $ `stdlib/core/rcbox.nu`
 // Bytes held: the arena plus the per-node integer rows. The store
 // compares this against its memtable budget, so it has to count the
 // index too — a million tiny keys is mostly index.
-@ mt_bytes MemTable m__h → i {
+unsafe @ mt_bytes MemTable m__h → i {
     : *MemTableImpl m ( __MemTable_ptr m__h )
     : i nodes ( vec_len [i] . m koff )
     ^ + ( vec_len [u] . m arena ) * nodes * 8 + 7 MT_MAXLVL
@@ -179,12 +179,12 @@ $ `stdlib/core/rcbox.nu`
     ^ out
 }
 
-@ mt_key MemTable m__h i node → ( Vec u ) {
+unsafe @ mt_key MemTable m__h i node → ( Vec u ) {
     : *MemTableImpl m ( __MemTable_ptr m__h )
     ^ ( _mt_slice . m arena ( _mt_iat . m koff node ) ( _mt_iat . m klen node ) )
 }
 
-@ mt_val MemTable m__h i node → ( Vec u ) {
+unsafe @ mt_val MemTable m__h i node → ( Vec u ) {
     : *MemTableImpl m ( __MemTable_ptr m__h )
     ^ ( _mt_slice . m arena ( _mt_iat . m voff node ) ( _mt_iat . m vlen node ) )
 }
@@ -193,7 +193,7 @@ $ `stdlib/core/rcbox.nu`
 
 // Compare node `node` against the probe (key, seq) in memtable order:
 // key ascending, sequence descending. <0 means the node sorts first.
-@ __mt_cmp_node * MemTableImpl m i node * u pp i poff i plen i pseq → i {
+unsafe @ __mt_cmp_node * MemTableImpl m i node * u pp i poff i plen i pseq → i {
     : *u ap ( vec_data [u] . m arena )
     : i c ( lsm_bytes_cmp_raw ap ( _mt_iat . m koff node ) ( _mt_iat . m klen node )
     pp poff plen )
@@ -205,7 +205,7 @@ $ `stdlib/core/rcbox.nu`
 
 // xorshift64 — deterministic level draws, so a given write sequence
 // always builds the same structure and tests can rely on it.
-@ __mt_rand * MemTableImpl m → i {
+unsafe @ __mt_rand * MemTableImpl m → i {
     : ~ i x . m rng
     = x ^^ x << x 13
     = x ^^ x >> x 7
@@ -225,7 +225,7 @@ $ `stdlib/core/rcbox.nu`
 
 // Walk down the levels to the last node that sorts BEFORE the probe,
 // recording the path in `prev` when it is non-empty.
-@ __mt_descend * MemTableImpl m * u pp i poff i plen i pseq ( Vec i ) prev → i {
+unsafe @ __mt_descend * MemTableImpl m * u pp i poff i plen i pseq ( Vec i ) prev → i {
     : ~ i x 0
     : ~ i lv - . m level 1
     ~ >= lv 0 {
@@ -246,7 +246,7 @@ $ `stdlib/core/rcbox.nu`
 
 // Append (key, val) as a new version. Both are COPIED into the arena;
 // the caller keeps ownership of the vectors it passed in.
-@ mt_put MemTable m__h ( Vec u ) key ( Vec u ) val i seq i kind → v {
+unsafe @ mt_put MemTable m__h ( Vec u ) key ( Vec u ) val i seq i kind → v {
     : *MemTableImpl m ( __MemTable_ptr m__h )
     : i kl ( vec_len [u] key )
     : i vl ? == kind MT_PUT ( vec_len [u] val ) 0
@@ -299,7 +299,7 @@ $ `stdlib/core/rcbox.nu`
 
 // The node holding `key` as of `snap`, or 0. The caller still has to ask
 // mt_kind: a tombstone is a hit that means "deleted", not "not found".
-@ mt_find MemTable m__h ( Vec u ) key i snap → i {
+unsafe @ mt_find MemTable m__h ( Vec u ) key i snap → i {
     : *MemTableImpl m ( __MemTable_ptr m__h )
     : i cand ( __mt_seek m key snap )
     ? == cand 0 { ^ 0 } {}
@@ -321,17 +321,17 @@ $ `stdlib/core/rcbox.nu`
 
 // Borrowed view of a node's key, for merge comparisons that must not
 // allocate. Valid until the next mt_put (which may move the arena).
-@ mt_kptr MemTable m__h → *u {
+unsafe @ mt_kptr MemTable m__h → *u {
     : *MemTableImpl m ( __MemTable_ptr m__h )
     ^ ( vec_data [u] . m arena )
 }
 
-@ mt_koff MemTable m__h i node → i {
+unsafe @ mt_koff MemTable m__h i node → i {
     : *MemTableImpl m ( __MemTable_ptr m__h )
     ^ ( _mt_iat . m koff node )
 }
 
-@ mt_klen MemTable m__h i node → i {
+unsafe @ mt_klen MemTable m__h i node → i {
     : *MemTableImpl m ( __MemTable_ptr m__h )
     ^ ( _mt_iat . m klen node )
 }

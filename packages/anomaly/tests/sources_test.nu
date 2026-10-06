@@ -548,7 +548,7 @@ b,2.5`
 
 // The first train of a model that arrived as a whole calibrates its
 // margins once; a second call, and a later run, leave them alone.
-@ test_autotune Store st → v {
+unsafe @ test_autotune Store st → v {
     : Model mo ( model_open_at st `tuned` 1000 )
     ( model_set_limits mo 10 150000 )
     ( model_set_schedule mo 100000 100000 )
@@ -605,7 +605,7 @@ b,2.5`
 
 @ nop → v {}
 
-@ test_run Store st → v {
+unsafe @ test_run Store st → v {
     : String id ( make_source )
     ( check > ( string_len id ) 0 `run: source made` )
     : i now + T_0600 1800
@@ -718,7 +718,7 @@ b,2.5`
 
 // ── wide ──────────────────────────────────────────────────────────────
 
-@ test_wide Store st → v {
+unsafe @ test_wide Store st → v {
     ( check ( wfs_caps_has_stored CAPS_XML ) `wide: capabilities mention stored queries` )
     ( check ! ( wfs_caps_has_stored WIDE_XML ) `wide: a collection does not` )
     : Json cat ( wfs_catalog CAPS_XML )

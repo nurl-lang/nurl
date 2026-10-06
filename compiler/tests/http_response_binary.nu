@@ -38,7 +38,7 @@ $ `stdlib/core/vec.nu`
     ^ resp
 }
 
-@ run_test → v {
+unsafe @ run_test → v {
     : !TcpListener NetErr lr ( tcp_listen `127.0.0.1` 18972 )
     ?? lr {
         T listener → {

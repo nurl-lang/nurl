@@ -26,19 +26,19 @@ $ `stdlib/core/vec.nu`
 
 : Outer [A] { s ctl }
 
-@ mk_outer [A] A v → ( Outer A ) {
+unsafe @ mk_outer [A] A v → ( Outer A ) {
     : *( Inner A ) imp # *( Inner A ) ( nurl_alloc Z ( Inner A ) )
     = . imp value v
     = . imp count 1
     ^ @ ( Outer A ) { # s imp }
 }
 
-@ outer_count [A] ( Outer A ) o → i {
+unsafe @ outer_count [A] ( Outer A ) o → i {
     : *( Inner A ) imp # *( Inner A ) . o ctl
     ^ . imp count
 }
 
-@ outer_free [A] sink ( Outer A ) o → v {
+unsafe @ outer_free [A] sink ( Outer A ) o → v {
     : *( Inner A ) imp # *( Inner A ) . o ctl
     ( nurl_free # s imp )
 }
@@ -48,22 +48,22 @@ $ `stdlib/core/vec.nu`
     i flag
 }
 
-@ wrap_new [A] → *( Wrap A ) {
+unsafe @ wrap_new [A] → *( Wrap A ) {
     : *( Wrap A ) w # *( Wrap A ) ( nurl_alloc Z ( Wrap A ) )
     = . w items ( vec_new [A] )
     = . w flag 7
     ^ w
 }
 
-@ wrap_push [A] * ( Wrap A ) w A x → v {
+unsafe @ wrap_push [A] * ( Wrap A ) w A x → v {
     ( vec_push [A] . w items x )
 }
 
-@ wrap_len [A] * ( Wrap A ) w → i {
+unsafe @ wrap_len [A] * ( Wrap A ) w → i {
     ^ ( vec_len [A] . w items )
 }
 
-@ wrap_free [A] sink * ( Wrap A ) w → v {
+unsafe @ wrap_free [A] sink * ( Wrap A ) w → v {
     ( vec_free [A] . w items )
     ( nurl_free # s w )
 }

@@ -1,7 +1,7 @@
 // Test: typed alloc/zalloc from stdlib/core/mem.nu
 $ `stdlib/core/mem.nu`
 
-@ main → i {
+unsafe @ main → i {
     ( nurl_print `typed alloc:\n` )
 
     // alloc[i] 5: uninitialised i64 buffer, fill with 0,10,20,30,40

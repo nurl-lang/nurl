@@ -58,32 +58,32 @@ $ `stdlib/ext/uuid.nu`
 : ~ s g_api_model ``
 : ~ s g_api_histpath ``
 
-@ __api_set_token s tok → v {
+unsafe @ __api_set_token s tok → v {
     ? != 0 ( nurl_str_len g_api_token ) { ( nurl_free g_api_token ) } {}
     = g_api_token ( strdup tok )
 }
 
-@ __api_set_model s m → v {
+unsafe @ __api_set_model s m → v {
     ? != 0 ( nurl_str_len g_api_model ) { ( nurl_free g_api_model ) } {}
     = g_api_model ( strdup m )
 }
 
-@ __api_set_histpath s p → v {
+unsafe @ __api_set_histpath s p → v {
     ? != 0 ( nurl_str_len g_api_histpath ) { ( nurl_free g_api_histpath ) } {}
     = g_api_histpath ( strdup p )
 }
 
-@ __api_set_name s name → v {
+unsafe @ __api_set_name s name → v {
     ? != 0 ( nurl_str_len g_api_name ) { ( nurl_free g_api_name ) } {}
     = g_api_name ( strdup name )
 }
 
-@ api_set_root String root → v {
+unsafe @ api_set_root String root → v {
     ? != 0 ( nurl_str_len g_api_root ) { ( nurl_free g_api_root ) } {}
     = g_api_root ( strdup ( string_data root ) )
 }
 
-@ __api_unload → v {
+unsafe @ __api_unload → v {
     ? != g_api_llm 0 {
         ( llm_word_release g_api_llm )
         = g_api_llm 0
@@ -106,7 +106,7 @@ $ `stdlib/ext/uuid.nu`
 }
 
 // Load `name` unless it is already resident. Empty error = success.
-@ __api_ensure s name → String {
+unsafe @ __api_ensure s name → String {
     ? & != g_api_llm 0 != 0 ( nurl_str_eq g_api_name name ) { ^ ( string_new ) } {}
     ( __api_unload )
     : String rootS ( string_from g_api_root )

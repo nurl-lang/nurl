@@ -6,6 +6,71 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+The ownership rules become the language: **every program accepted without
+an `unsafe` function of its own is memory-safe and leak-free**
+(docs/MEMORY.md §6). ASan and LSan remain CI checks on the compiler; a
+program's safety no longer rests on them.
+
+### Changed
+
+- **An owned value moves.** Storing it into an aggregate, an Option or a
+  container, sending it, returning it, handing it to a `sink` parameter or
+  capturing it in a closure another thread runs moves it, and a later read
+  of the old name is an error. Values with nothing to release are copied.
+- **Reads that do not take ownership are borrows.** `vec_get`, field
+  reads, match payloads of a borrowed value, lent call results and views
+  (`string_data`, `vec_data`) end when their source is moved, released,
+  reassigned or reallocated; a read after that is an error. A stale view
+  was a warning and is now an error.
+- **Threads.** A closure run on another thread moves its captures; share
+  handles (Channel, Mutex, Arc, HttpServer) are captured as a share of
+  their own. `HttpServer` is now a shared handle.
+- The borrow-checker summary line no longer calls every rejection a
+  false positive: the rules are conservative and each message gives a fix.
+- The defer/return leak seam is closed (a per-path transfer flag).
+- **A struct that owns raw string or slice fields cannot be copied to a
+  second binding** (`= out tmp`, `: T b tmp`) outside `unsafe`: the
+  fields stay the original's and were freed with it, so a copy in an outer
+  block or a by-reference capture read freed memory (accepted before).
+  Use owning field types (`String`, `Vec`).
+- **An `inout s` parameter cannot be given a new value.** The callee
+  cannot tell whether the caller's string is owned or borrowed, so the
+  replaced value either leaked or would be freed under a borrower. Return
+  the new string, or take a `String`.
+
+### Added
+
+- **`unsafe` functions (grammar v2.8, spec §3.3d).** Raw pointer reads and
+  writes, pointer casts, the raw-memory primitives and foreign functions
+  declared outside the standard library are allowed only in a function
+  declared `unsafe`, which vouches for itself. `nurlc --unsafe-report`
+  lists a program's own `unsafe` functions.
+- `vec_at` / `vec_put`: element access that panics on a bad index.
+- `tools/fuzz/holes/`: one probe per proven soundness hole in safe code
+  (`check.sh` counts the holes; all are rejected), and seven new
+  rejection cores in the inverse-oracle fuzzer.
+
+### Fixed
+
+- Real memory bugs the rules found in the corpus: arima, onnx and anomaly
+  (element swaps through copied handles, a ring read after release),
+  tensor (a shape read after its tensor adopted it), toml cursors,
+  lru/resolver maps keyed by views, and a Vec shared with a worker
+  thread.
+- **A mutable `s` binding that starts as a borrow no longer leaks what is
+  assigned over it.** `: ~ s out st` over a parameter had no drop slot,
+  so every owned value assigned to it leaked; it now gets an empty owner
+  slot. A return of such a binding also leaked when the last assignment
+  handed the binding's own value back, or when an untracked value was
+  assigned over an owned one. Found when the compiler's own new checker
+  paths ran under LeakSanitizer.
+- nurlfmt keeps `unsafe @ name` on one line (it split the prefix off as a
+  statement of its own).
+- `nurl_println` / `nurl_println_int` print a line in one locked write, so
+  lines from fibers on several threads no longer interleave.
+
 ## [0.70.0] — 2026-10-04
 
 A memory-safety and performance sweep. The compiler now rejects more

@@ -120,7 +120,7 @@ $ `pb.nu`
 }
 
 // ── AttributeProto ────────────────────────────────────────────────
-@ __parse_attr inout PReader r → OAttr {
+unsafe @ __parse_attr inout PReader r → OAttr {
     : ~ String name ( string_new )
     : ~ f fv 0.0
     : ~ i iv 0
@@ -189,7 +189,7 @@ $ `pb.nu`
 }
 
 // ── TensorProto (initializer) ─────────────────────────────────────
-@ __parse_tensor inout PReader r → OTensor {
+unsafe @ __parse_tensor inout PReader r → OTensor {
     : ( Vec i ) dims ( vec_new [i] )
     : ~ String name ( string_new )
     : ~ i dtype 0

@@ -37,7 +37,7 @@ $ `stdlib/core/string.nu`
 // the source, and the constructor must not drop them on any path.
 : Job { ( Vec f ) raw i idx }
 
-@ job_new ( Vec f ) raw i idx → i {
+unsafe @ job_new ( Vec f ) raw i idx → i {
     : *Job j # *Job ( nurl_malloc Z Job )
     = . j raw raw
     = . j idx idx
@@ -47,7 +47,7 @@ $ `stdlib/core/string.nu`
 // Stores its parameter by hand on one path only.
 : Lane { ( Vec i ) jobs }
 
-@ jobs_run ( Vec i ) jobs b par → i {
+unsafe @ jobs_run ( Vec i ) jobs b par → i {
     ? par {
         : *Lane ln # *Lane ( nurl_malloc Z Lane )
         = . ln jobs jobs
@@ -58,7 +58,7 @@ $ `stdlib/core/string.nu`
     ^ ( vec_len [i] jobs )
 }
 
-@ case_views → i {
+unsafe @ case_views → i {
     : ( Vec ( Vec f ) ) raws ( vec_new [( Vec f )] )
     ( vec_push [( Vec f )] raws ( vec_zeroed [f] 3 ) )
     ( vec_push [( Vec f )] raws ( vec_zeroed [f] 4 ) )
@@ -90,14 +90,14 @@ $ `stdlib/core/string.nu`
 
 @ arma → Arma { ^ @ Arma { 3 ( vec_zeroed [f] 3 ) } }
 
-@ fill * Prep p → i {
+unsafe @ fill * Prep p → i {
     : Arma am ( arma )
     = . p phi . am phi
     = . p r . am r
     ^ ( vec_len [f] . am phi )
 }
 
-@ case_local_field → i {
+unsafe @ case_local_field → i {
     : *Prep p # *Prep ( nurl_zalloc Z Prep )
     : i still ( fill p )
     : i n ( vec_len [f] . p phi )
@@ -111,7 +111,7 @@ $ `stdlib/core/string.nu`
 // hands the value in, the parameter's own drop skips the moved fields.
 : Tq { i dt ( Vec i ) shape ( Vec f ) data }
 
-@ heap Tq t → s {
+unsafe @ heap Tq t → s {
     : *Tq p # *Tq ( nurl_alloc Z Tq )
     = . p dt . t dt
     = . p shape . t shape
@@ -119,7 +119,7 @@ $ `stdlib/core/string.nu`
     ^ # s p
 }
 
-@ case_param_fields → i {
+unsafe @ case_param_fields → i {
     : Tq x @ Tq { 1 ( vec_zeroed [i] 2 ) ( vec_zeroed [f] 3 ) }
     : *Tq p # *Tq ( heap x )
     : i n + ( vec_len [i] . p shape ) ( vec_len [f] . p data )
@@ -136,13 +136,13 @@ $ `stdlib/core/string.nu`
 
 @ train → Out { ^ @ Out { @ M { T ( vec_zeroed [f] 4 ) } ( string_new ) } }
 
-@ put * Hold h → i {
+unsafe @ put * Hold h → i {
     : Out out ( train )
     : ~ M nm . out m
     ? . nm ok { = . h m nm ^ 0 } { ^ 1 }
 }
 
-@ case_field_alias → i {
+unsafe @ case_field_alias → i {
     : *Hold h # *Hold ( nurl_zalloc Z Hold )
     ? != ( put h ) 0 { ^ 1 } {}
     : i n ( vec_len [f] . . h m w )
@@ -223,7 +223,7 @@ $ `stdlib/core/string.nu`
 
 @ rs_start → ?RsS { ^ @ ?RsS { T @ RsS { ( vec_with_cap [s] 8 ) 0 } } }
 
-@ case_payload_field → i {
+unsafe @ case_payload_field → i {
     : ~ i got 0
     ?? ( rs_start ) {
         T rs → {

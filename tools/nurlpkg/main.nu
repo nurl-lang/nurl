@@ -1049,7 +1049,7 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
     ( nurl_eprint ( string_data text ) ) ( nurl_eprintln `)` )
 }
 
-@ __update_candidate Manifest m Dep d → !String i {
+unsafe @ __update_candidate Manifest m Dep d → !String i {
     ? > ( string_len . d path ) 0 {
         : String mf ( string_clone . d path ) ( string_push_str mf `/nurl.toml` )
         : !Manifest ManifestErr mr ( manifest_load ( string_data mf ) )
@@ -1918,7 +1918,7 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
 
 // The current import/install layout exposes one deps/<name> entry. A
 // same-name source conflict must be reported before either source writes it.
-@ __registry_layout_valid ( Vec LockPkg ) locked → b {
+unsafe @ __registry_layout_valid ( Vec LockPkg ) locked → b {
     : i n ( vec_len [LockPkg] locked )
     : *LockPkg data ( vec_data [LockPkg] locked )
     : ~ i k 0
@@ -2043,7 +2043,7 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
 // for its password prompt.
 & `c` @ nurl_read_password s prompt → s
 
-@ __cmd_login → i {
+unsafe @ __cmd_login → i {
     : String reg ( __reg_default )
     ( nurl_print `Registry: ` ) ( nurl_print ( string_data reg ) ) ( nurl_print `\n` )
     // Hidden entry: the pasted token must not echo to the screen.
@@ -2139,7 +2139,7 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
     ^ rc
 }
 
-@ __cmd_registry_info s name → i {
+unsafe @ __cmd_registry_info s name → i {
     : String reg ( __reg_default )
     : !RegIndex RegistryFetchErr response ( pkg_fetch_index ( string_data reg ) name )
     : ~ i rc 0
@@ -2688,7 +2688,7 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
 //
 // 0 = every requirement covers its local dep; 1 = refuse (message printed).
 // Validate local overrides before trusting their names or comparing registry code.
-@ __check_pathdep_req Manifest m → i {
+unsafe @ __check_pathdep_req Manifest m → i {
     : ~ i bad 0
     : ~ i di 0
     ~ < di ( vec_len [Dep] . m dependencies ) {
@@ -2751,7 +2751,7 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
 
 // Local overrides must match verified registry code before publishing a parent.
 // Keep relative paths and the packer's ignore rules identical to compilation.
-@ __srcs_of s dir → !( Vec String ) PackErr {
+unsafe @ __srcs_of s dir → !( Vec String ) PackErr {
     ?? ( pkg_pack_list dir ) {
         F e → { ^ @ !( Vec String ) PackErr { F e } }
         T files → {
@@ -2784,7 +2784,7 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
 }
 
 // 0 = identical, 1 = source drift, 2 = comparison failed (already diagnosed).
-@ __compare_source_files s localdir s pubdir ( Vec String ) locals ( Vec String ) pubs → i {
+unsafe @ __compare_source_files s localdir s pubdir ( Vec String ) locals ( Vec String ) pubs → i {
     ? != ( vec_len [String] locals ) ( vec_len [String] pubs ) { ^ 1 } {}
     : ~ i k 0
     ~ < k ( vec_len [String] locals ) {
@@ -2871,7 +2871,7 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
     ^ result
 }
 
-@ __check_published_override Dep d Manifest local s reg → i {
+unsafe @ __check_published_override Dep d Manifest local s reg → i {
     : s name ( string_data . d name )
     : s version ( string_data . local version )
     : ~ i bad 1
@@ -2906,7 +2906,7 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
     ^ bad
 }
 
-@ __check_pathdep_drift Manifest m s reg → i {
+unsafe @ __check_pathdep_drift Manifest m s reg → i {
     : ~ i bad 0
     : ~ i k 0
     ~ < k ( vec_len [Dep] . m dependencies ) {
@@ -3933,7 +3933,7 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
 // won't compile or exits nonzero. Build driver as for `test` ($NURL_CC,
 // else a checkout's ./nurl.sh, else the installed nurl).
 
-@ __run_bench_one s src s driver s directory → i {
+unsafe @ __run_bench_one s src s driver s directory → i {
     : String name ( __test_basename src )
     : String bin ( path_join directory ( string_data name ) )
     : ( Vec s ) args ( vec_new [s] )

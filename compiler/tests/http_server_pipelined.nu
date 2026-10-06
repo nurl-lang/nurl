@@ -41,7 +41,7 @@ $ `stdlib/ext/http_server.nu`
 // snapshot reflects how many requests actually reached the handler
 // and what their body length / first byte were. Returns a tiny
 // `ok\n` body for the client side.
-@ pipelined_handler HttpRequest req → HttpResponse {
+unsafe @ pipelined_handler HttpRequest req → HttpResponse {
     : i bn ( vec_len [u] . req body )
     : ~ i first_byte 0
     ? > bn 0 {

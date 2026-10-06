@@ -13,7 +13,7 @@ $ `stdlib/ext/env.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/errors.nu`
 
-@ show_opt s label ? String got → v {
+@ show_opt s label sink ? String got → v {
     ( nurl_print label )
     ( nurl_print `: ` )
     ?? got {

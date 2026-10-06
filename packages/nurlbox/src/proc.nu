@@ -42,7 +42,7 @@ $ `binio.nu`
 // trusts the size) comes back empty — the streaming reader is the only
 // one that works here, and that is not a detail a caller should have to
 // know.
-@ __proc_read s path String out → b {
+unsafe @ __proc_read s path String out → b {
     ( string_clear out )
     ?? ( bufreader_open path ) {
         F _ → { ^ F }
@@ -118,7 +118,7 @@ $ `binio.nu`
 // A process's command as `ps` shows it: the full argv with NULs turned
 // into spaces, or the kernel thread's name in brackets when argv is
 // empty — which is exactly how the kernel distinguishes the two.
-@ __proc_command i pid String out → b {
+unsafe @ __proc_command i pid String out → b {
     ( string_clear out )
     : String p ( __proc_path pid `cmdline` )
     : String raw ( string_new )
@@ -174,7 +174,7 @@ $ `binio.nu`
 
 // ── ps ────────────────────────────────────────────────────────────
 
-@ ap_ps ( Vec String ) argv → i {
+unsafe @ ap_ps ( Vec String ) argv → i {
     : BxOpts o ( bx_getopt argv 1 `aefluwo:` `` )
     : ~ i rc 0
     ? ! ( bx_ok o ) { = rc 1 } {
@@ -255,7 +255,7 @@ $ `binio.nu`
     ^ found
 }
 
-@ ap_kill ( Vec String ) argv → i {
+unsafe @ ap_kill ( Vec String ) argv → i {
     : i n ( vec_len [String] argv )
     : ~ i sig 15
     : ~ i i 1
@@ -483,7 +483,7 @@ $ `binio.nu`
 // bytes on Linux with `ut_type` a short at offset 0; USER_PROCESS is 7.
 // A machine with no utmp answers -1 and `uptime` leaves the field out
 // rather than claiming nobody is here.
-@ __count_users → i {
+unsafe @ __count_users → i {
     : ~ b ok T
     : ( Vec u ) data ( bx_slurp `/var/run/utmp` ok )
     ? ! ok {
@@ -501,7 +501,7 @@ $ `binio.nu`
     ^ count
 }
 
-@ ap_uptime ( Vec String ) argv → i {
+unsafe @ ap_uptime ( Vec String ) argv → i {
     : String up ( string_new )
     ? ! ( __proc_read `/proc/uptime` up ) {
         ( bx_err `/proc/uptime is not readable — this machine cannot answer that` )
@@ -586,7 +586,7 @@ $ `binio.nu`
     ^ T
 }
 
-@ ap_mount ( Vec String ) argv → i {
+unsafe @ ap_mount ( Vec String ) argv → i {
     : i n ( vec_len [String] argv )
     ? > n 1 {
         // Mounting is a privileged syscall this package does not wrap;

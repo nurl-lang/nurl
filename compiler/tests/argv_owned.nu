@@ -34,7 +34,7 @@ $ `stdlib/std/args.nu`
     } {}
 }
 
-@ main → i {
+unsafe @ main → i {
     : i before ( nurl_free_count )
     ( exercise T )
     ( exercise F )

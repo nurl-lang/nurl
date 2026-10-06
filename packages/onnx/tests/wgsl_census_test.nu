@@ -45,7 +45,7 @@ $ `src/runtime.nu`
 }
 
 // bytes [at, at+len) of `t` as a String
-@ __sub s t i at i len → String { ^ ( string_from_bytes # *u + # i t at len ) }
+unsafe @ __sub s t i at i len → String { ^ ( string_from_bytes # *u + # i t at len ) }
 
 @ __is_id i c → b { ^ | | | & >= c 97 <= c 122 & >= c 65 <= c 90 & >= c 48 <= c 57 == c 95 }
 

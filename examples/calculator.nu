@@ -22,14 +22,14 @@
 }
 
 // Allocate an Expr on the heap
-@ box Expr e → *Expr {
+unsafe @ box Expr e → *Expr {
     : *Expr p # *Expr ( malloc Z Expr )
     = . p 0 e
     ^ p
 }
 
 // Free an expression tree: children first, then the node itself
-@ free_expr * Expr e → v {
+unsafe @ free_expr * Expr e → v {
     ?? . e 0 {
         Num n → {}
         Add l r → {
@@ -53,7 +53,7 @@
 }
 
 // Evaluate an expression, returning None on division by zero
-@ eval * Expr e → ?i {
+unsafe @ eval * Expr e → ?i {
     ?? . e 0 {
         Num n → @ ?i { T n }
 

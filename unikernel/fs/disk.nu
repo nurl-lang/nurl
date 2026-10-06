@@ -47,7 +47,7 @@ $ `stdlib/fs/fatfmt.nu`
 
 @ __streq s a s b → b { ^ != 0 ( nurl_str_eq a b ) }
 
-@ __env_or s name s dflt → s {
+unsafe @ __env_or s name s dflt → s {
     : s v ( getenv name )
     ? == # i v 0 { ^ dflt } {}
     ? == ( nurl_str_len v ) 0 { ^ dflt } {}
@@ -57,7 +57,7 @@ $ `stdlib/fs/fatfmt.nu`
 // The epoch, if the machine was told it. `wallclock=` is seconds; an
 // unparseable one is treated as absent rather than as zero, because
 // zero is a time (1970) and absent is not.
-@ __wallclock → i {
+unsafe @ __wallclock → i {
     : s w ( getenv `wallclock` )
     ? == # i w 0 { ^ 0 } {}
     : i n ( nurl_str_len w )
@@ -190,7 +190,7 @@ $ `stdlib/fs/fatfmt.nu`
 // terminator). Returns the name's length, 0 at the end of the
 // directory, and -1 when the name did not fit — which is a refusal, not
 // a truncated name a caller would then look up and fail to find.
-@ nurl_disk_readdir_name i h s buf i cap → i {
+unsafe @ nurl_disk_readdir_name i h s buf i cap → i {
     : String nm ( string_new )
     : i attr ( fatfs_readdir_attr h nm )
     ? < attr 0 { ^ 0 } {}

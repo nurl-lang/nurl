@@ -28,7 +28,7 @@ $ `stdlib/core/vec.nu`
     ^ @ Ser { y . kd kind . kd spread }
 }
 
-@ main → i {
+unsafe @ main → i {
     : ( Vec f ) xs ( vec_zeroed [f] 3 )
     : i a0 - ( nurl_alloc_count ) ( nurl_free_count )
     : ~ i k 0

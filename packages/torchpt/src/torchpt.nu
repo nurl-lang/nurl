@@ -93,14 +93,14 @@ $ `stdlib/core/rcbox.nu`
 // every copy is the same open checkpoint, and the last owner releases it.
 : Pt { s ctl }
 
-@ Pt_share Pt h → Pt { ^ @ Pt { # s ( rcbox_share # i . h ctl ) } }
+unsafe @ Pt_share Pt h → Pt { ^ @ Pt { # s ( rcbox_share # i . h ctl ) } }
 
 @ Pt_drop sink Pt h → v {
     ( mem_forget h )
     ( rcbox_release [PtImpl] # i . h ctl )
 }
 
-@ __Pt_ptr Pt h → *PtImpl { ^ ( rcbox_ptr [PtImpl] # i . h ctl ) }
+unsafe @ __Pt_ptr Pt h → *PtImpl { ^ ( rcbox_ptr [PtImpl] # i . h ctl ) }
 
 // A Pt that holds no checkpoint — for a slot that may be empty (a model
 // whose checkpoint is some other format). pt_is_open tells them apart.
@@ -120,12 +120,12 @@ $ `stdlib/core/rcbox.nu`
 
 // ── accessors ───────────────────────────────────────────────────────
 
-@ pt_n_tensors Pt p__h → i {
+unsafe @ pt_n_tensors Pt p__h → i {
     : *PtImpl p ( __Pt_ptr p__h )
     ^ ( vec_len [PtTensor] . p tensors )
 }
 
-@ __pt_at * PtImpl p i idx → ?PtTensor { ^ ( vec_get [PtTensor] . p tensors idx ) }
+unsafe @ __pt_at * PtImpl p i idx → ?PtTensor { ^ ( vec_get [PtTensor] . p tensors idx ) }
 
 @ pt_name Pt p__h i idx → s {
     : *PtImpl p ( __Pt_ptr p__h )
@@ -142,7 +142,7 @@ $ `stdlib/core/rcbox.nu`
     ?? ( __pt_at p idx ) { T t → ^ . t ndim F → ^ 0 }
 }
 
-@ pt_dim Pt p__h i idx i j → i {
+unsafe @ pt_dim Pt p__h i idx i j → i {
     : *PtImpl p ( __Pt_ptr p__h )
     ?? ( __pt_at p idx ) {
         T t → {
@@ -153,7 +153,7 @@ $ `stdlib/core/rcbox.nu`
     }
 }
 
-@ pt_stride Pt p__h i idx i j → i {
+unsafe @ pt_stride Pt p__h i idx i j → i {
     : *PtImpl p ( __Pt_ptr p__h )
     ?? ( __pt_at p idx ) {
         T t → {
@@ -185,7 +185,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Raw bytes of a tensor, addressed in the mapping. Valid while the Pt is.
-@ pt_tensor_ptr Pt p__h i idx → *u {
+unsafe @ pt_tensor_ptr Pt p__h i idx → *u {
     : *PtImpl p ( __Pt_ptr p__h )
     ?? ( __pt_at p idx ) {
         T t → ^ # *u + # i . p map . t data_off
@@ -392,7 +392,7 @@ $ `stdlib/core/rcbox.nu`
 // not a mapping (the Pt holds it for as long as the tensors are read);
 // pt_open hands in an empty Vec for a mapping, which it owns until this
 // succeeds.
-@ __pt_parse * u m i sz sink ( Vec u ) keep → !Pt String {
+unsafe @ __pt_parse * u m i sz sink ( Vec u ) keep → !Pt String {
     : !ZipArchive ZipErr zr ( zip_open_ptr m sz )
     ?? zr {
         F e → {
@@ -468,7 +468,7 @@ $ `stdlib/core/rcbox.nu`
     }
 }
 
-@ pt_open s path → !Pt String {
+unsafe @ pt_open s path → !Pt String {
     ? != ( posix_const `MAP_PRIVATE` ) -1 {
         : i32 fd ( open path # i32 ( posix_const `O_RDONLY` ) # i32 0 )
         ? < # i fd 0 {
@@ -525,7 +525,7 @@ $ `stdlib/core/rcbox.nu`
 // Storage-element offset of a tensor's logical element `n`, walking the
 // shape from the fastest-varying axis outward. Contiguous tensors take
 // the identity path, so the common case costs one comparison.
-@ __pt_elem_index * PtImpl p i idx i n → i {
+unsafe @ __pt_elem_index * PtImpl p i idx i n → i {
     ?? ( __pt_at p idx ) {
         F → ^ 0
         T t → {
@@ -547,13 +547,13 @@ $ `stdlib/core/rcbox.nu`
     }
 }
 
-@ __pt_u16 * u P i o → i { ^ + # i . P o * # i . P + o 1 256 }
+unsafe @ __pt_u16 * u P i o → i { ^ + # i . P o * # i . P + o 1 256 }
 
 @ __pt_u32 * u P i o → i { ^ + ( __pt_u16 P o ) * ( __pt_u16 P + o 2 ) 65536 }
 
 @ __pt_u64 * u P i o → i { ^ + ( __pt_u32 P o ) * ( __pt_u32 P + o 4 ) 4294967296 }
 
-@ __pt_elem_f32bits i dtype * u P i off → i {
+unsafe @ __pt_elem_f32bits i dtype * u P i off → i {
     ? == dtype PKS_F32 { ^ ( __pt_u32 P off ) } {}
     ? == dtype PKS_F64 { ^ ( f32_to_bits # f32 ( bits_to_f64 ( __pt_u64 P off ) ) ) } {}
     ? == dtype PKS_F16 { ^ ( f16_bits_to_f32_bits ( __pt_u16 P off ) ) } {}
@@ -608,7 +608,7 @@ $ `stdlib/core/rcbox.nu`
 
 // Read `count` elements starting at `first` straight into a caller's f64
 // buffer — the shape the tensor package wants, without a byte round-trip.
-@ pt_read_f64 Pt p__h i idx i first i count * f dst → b {
+unsafe @ pt_read_f64 Pt p__h i idx i first i count * f dst → b {
     : *PtImpl p ( __Pt_ptr p__h )
     ? | < idx 0 >= idx ( pt_n_tensors p__h ) { ^ F } {}
     : i nelems ( pt_nelems p__h idx )

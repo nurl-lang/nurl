@@ -100,7 +100,7 @@ $ `stdlib/core/vec.nu`
 
 : Conn { ( Vec i ) readable }
 
-@ take_readable * Conn c → ( Vec i ) {
+unsafe @ take_readable * Conn c → ( Vec i ) {
     : ( Vec i ) out . c readable
     = . c readable ( vec_new [i] )
     ^ out
@@ -133,7 +133,7 @@ $ `stdlib/core/vec.nu`
     ^ + ( takes ( fresh ) ) ( nurl_str_len ( nurl_str_int 7 ) )
 }
 
-@ main → i {
+unsafe @ main → i {
     ( loop_local ) ( parameter ( string_from `p` ) ) ( outer_binding_in_arm T ) ( free_with ) ( custom_destructor )
     : *Conn c # *Conn ( nurl_zalloc Z Conn )
     = . c readable ( vec_new [i] )

@@ -100,10 +100,10 @@ $ `stdlib/core/string.nu`
 @ flag_c → i { ^ ? != 0 & rf 0x10 1 0 }
 
 // ── Memory ────────────────────────────────────────────────────────
-@ mem_raw → *u { ^ # *u g_mem }
+unsafe @ mem_raw → *u { ^ # *u g_mem }
 
 // Raw cartridge-ROM byte, masked to the ROM size (a power of two).
-@ rom_byte i off → i {
+unsafe @ rom_byte i off → i {
     : *u r # *u g_rom
     ^ & # i . r & off - g_romsize 1 255
 }
@@ -129,7 +129,7 @@ $ `stdlib/core/string.nu`
     ^ | 0xC0 | & g_joysel 0x30 lo
 }
 
-@ rd8 i addr → i {
+unsafe @ rd8 i addr → i {
     : i a & addr 0xFFFF
     ? == a 0xFF00 { ^ ( joypad_read ) } {}
     ? < a 0x4000 { ^ ( rom_byte a ) } {}  // ROM bank 0
@@ -169,7 +169,7 @@ $ `stdlib/core/string.nu`
     ^ v
 }
 
-@ wr8 i addr i val → v {
+unsafe @ wr8 i addr i val → v {
     : i a & addr 0xFFFF
     : i b & val 0xFF
     ? < a 0x8000 { ( mbc_write a b ) ^ v } {}
@@ -498,7 +498,7 @@ $ `stdlib/core/string.nu`
 // mask DIV for storage. Tying the timer to DIV's absolute phase (rather
 // than a private accumulator) is what keeps timer-IRQ-driven games — e.g.
 // Tobu Tobu Girl — in sync with real hardware.
-@ tick_timer i cyc → v {
+unsafe @ tick_timer i cyc → v {
     : *u m ( mem_raw )
     : i old g_div
     : i new + g_div cyc
@@ -524,7 +524,7 @@ $ `stdlib/core/string.nu`
 // ── APU (sound) ──────────────────────────────────────────────────
 // Lazily allocate the host-drained stereo ring (one i64 per sample,
 // low16 = L, bits16-31 = R as 16-bit two's-complement).
-@ apu_alloc → v {
+unsafe @ apu_alloc → v {
     ? == g_audio 0 {
         = g_audio_cap 8192
         = g_audio ( nurl_zalloc * g_audio_cap 8 )
@@ -538,7 +538,7 @@ $ `stdlib/core/string.nu`
 }
 
 // Current 4-bit wave-RAM nibble for channel 3 at its sample position.
-@ wave_nibble → i {
+unsafe @ wave_nibble → i {
     : *u m ( mem_raw )
     : i byte & # i . m + 0xFF30 >> c3_pos 1 255
     ^ ? == 0 & c3_pos 1 & >> byte 4 15 & byte 15
@@ -563,7 +563,7 @@ $ `stdlib/core/string.nu`
 }
 
 // Mix the four channels into one packed-stereo sample and push it.
-@ apu_sample → v {
+unsafe @ apu_sample → v {
     ? >= g_audio_len g_audio_cap { ^ v } {}
     : i a1 ( sq_level c1_en c1_dac c1_duty c1_dpos c1_vol )
     : i a2 ( sq_level c2_en c2_dac c2_duty c2_dpos c2_vol )
@@ -1064,7 +1064,7 @@ $ `stdlib/core/string.nu`
 }
 
 // ── Boot: post-DMG-bootrom register + IO state ───────────────────
-@ boot_state → v {
+unsafe @ boot_state → v {
     = ra 0x01 = rf 0xB0
     = rb 0x00 = rc 0x13
     = rd 0x00 = re 0xD8
@@ -1095,7 +1095,7 @@ $ `stdlib/core/string.nu`
 // images (dmg-acid2); mid-scanline register tricks are out of scope.
 
 // Raw byte read (no joypad/IO interception) — for VRAM/OAM/register reads.
-@ pb i addr → i { : *u m ( mem_raw ) ^ & # i . m & addr 0xFFFF 255 }
+unsafe @ pb i addr → i { : *u m ( mem_raw ) ^ & # i . m & addr 0xFFFF 255 }
 
 // Colour index 0..3 of a background/window tile pixel at (px,py) in the
 // 256×256 map space rooted at `map_base`.
@@ -1112,7 +1112,7 @@ $ `stdlib/core/string.nu`
     ^ | << & >> hi bit 1 1 & >> lo bit 1
 }
 
-@ ppu_render_bg i y → v {
+unsafe @ ppu_render_bg i y → v {
     : *u fb # *u g_fb
     : *u bgi # *u g_bgidx
     : i lcdc ( pb 0xFF40 )
@@ -1158,7 +1158,7 @@ $ `stdlib/core/string.nu`
     ^ > p q
 }
 
-@ ppu_render_sprites i y → v {
+unsafe @ ppu_render_sprites i y → v {
     : i lcdc ( pb 0xFF40 )
     ? == 0 & lcdc 0x02 { ^ v } {}
     : *u fb # *u g_fb
@@ -1230,7 +1230,7 @@ $ `stdlib/core/string.nu`
 // mechanism dmg-acid2 uses for the mohawk, the window-drawn right eye,
 // the smile and the credit line. A line-based renderer suffices — no
 // T-cycle accuracy needed (per the dmg-acid2 spec).
-@ tick_ppu i cyc → v {
+unsafe @ tick_ppu i cyc → v {
     : *u m ( mem_raw )
     : i lcdc & # i . m 0xFF40 255
     ? == 0 & lcdc 0x80 {  // LCD off → LY=0, mode 0
@@ -1303,7 +1303,7 @@ $ `stdlib/core/string.nu`
 // 64 KiB address space, copy the full ROM into a power-of-two-sized
 // buffer, allocate external RAM, and pick the mapper from the cart-type
 // byte. Resets the PPU scratch + serial too.
-@ cart_load * u rp i n → v {
+unsafe @ cart_load * u rp i n → v {
     = g_mem ( nurl_zalloc 65536 )
     = g_fb ( nurl_zalloc 23040 )
     = g_bgidx ( nurl_zalloc 160 )

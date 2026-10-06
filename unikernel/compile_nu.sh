@@ -118,7 +118,9 @@ $CC -O2 -c "$OUT_LL" -o "$OBJ" 2>"$WORK/cc.err" || fail 4 "$WORK/cc.err" "$CC"
 
 # What does the socket shim define? Its own `@ nurl_*` definitions, read
 # from the file that defines them.
-shim_syms=$(grep -oE '^@ nurl_[A-Za-z0-9_]+' "$SHIM" | awk '{print $2}' | sort -u)
+# (A definition may carry the `pub` / `unsafe` / `inline` / `simd` prefixes:
+# the name is the word after the `@`.)
+shim_syms=$(grep -oE '^((pub|unsafe|inline|simd) )*@ nurl_[A-Za-z0-9_]+' "$SHIM" | awk '{print $NF}' | sort -u)
 undef=$($NM -u "$OBJ" 2>/dev/null | awk '{print $NF}' | sort -u)
 need=""
 if [ -n "$shim_syms" ]; then
@@ -158,8 +160,8 @@ if [ -n "${NURL_DISK:-}" ]; then
     # reports "no filesystem" about a filesystem it is carrying — which
     # is exactly what it did. The names are READ from the shim rather
     # than listed here, for the same reason the socket set is measured.
-    disk_syms=$(grep -oE '^@ nurl_disk_[A-Za-z0-9_]+' "$ROOT/unikernel/fs/disk.nu" \
-                | awk '{print $2}' | sort -u | paste -sd,)
+    disk_syms=$(grep -oE '^((pub|unsafe|inline|simd) )*@ nurl_disk_[A-Za-z0-9_]+' "$ROOT/unikernel/fs/disk.nu" \
+                | awk '{print $NF}' | sort -u | paste -sd,)
     [ -n "$disk_syms" ] || { echo "compile_nu.sh: no nurl_disk_* in the disk shim" >&2; exit 5; }
     keep="--keep=$disk_syms"
 fi

@@ -70,7 +70,7 @@ $ `stdlib/core/string.nu`
 }
 
 // ── Round trip + implicit rejection, at one parameter set ──────────
-@ roundtrip s label i level → b {
+unsafe @ roundtrip s label i level → b {
     : ( Vec u ) d ( vec_new [u] )
     : ( Vec u ) z ( vec_new [u] )
     : ( Vec u ) m ( vec_new [u] )

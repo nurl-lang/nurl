@@ -29,7 +29,7 @@ $ `src/model.nu`
 
 // Position-sensitive checksum over a weight block: every element is mixed
 // with its own index, so a reordering is as visible as a changed value.
-@ __checksum i host i dtype i nelem → v {
+unsafe @ __checksum i host i dtype i nelem → v {
     ? == host 0 { ( p `none` ) ^ {} } {}
     : *u b # *u host
     : ~ i hx 0

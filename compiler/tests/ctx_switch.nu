@@ -39,7 +39,7 @@
 
 @ pb s label b v → v { ( nurl_print label ) ( nurl_print ? v `YES\n` `NO\n` ) }
 
-@ main → i {
+unsafe @ main → i {
     // On a non-x86_64 host the primitive is a documented stub and the
     // hooks report -1; the suite still has to pass there, so the
     // assertions are phrased to hold either way.

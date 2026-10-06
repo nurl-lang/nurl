@@ -21,13 +21,13 @@
 $ `stdlib/core/io.nu`
 $ `stdlib/core/string.nu`
 
-@ take s label → v {
+unsafe @ take s label → v {
     : s piece ( nurl_str_slice label 0 3 )
     ( nurl_print piece )
     ( nurl_free # s piece )
 }
 
-@ main → i {
+unsafe @ main → i {
     ( take `abcdef` )
     ^ 0
 }

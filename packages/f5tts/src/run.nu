@@ -68,16 +68,16 @@ $ `stdlib/core/rcbox.nu`
 // every copy is the same voice, and the last owner releases it.
 : F5Voice { s ctl }
 
-@ F5Voice_share F5Voice h → F5Voice { ^ @ F5Voice { # s ( rcbox_share # i . h ctl ) } }
+unsafe @ F5Voice_share F5Voice h → F5Voice { ^ @ F5Voice { # s ( rcbox_share # i . h ctl ) } }
 
 @ F5Voice_drop sink F5Voice h → v {
     ( mem_forget h )
     ( rcbox_release [F5VoiceImpl] # i . h ctl )
 }
 
-@ __F5Voice_ptr F5Voice h → *F5VoiceImpl { ^ ( rcbox_ptr [F5VoiceImpl] # i . h ctl ) }
+unsafe @ __F5Voice_ptr F5Voice h → *F5VoiceImpl { ^ ( rcbox_ptr [F5VoiceImpl] # i . h ctl ) }
 
-@ f5_voice_target F5Voice v__h → f {
+unsafe @ f5_voice_target F5Voice v__h → f {
     : *F5VoiceImpl v ( __F5Voice_ptr v__h )
     ^ . v target
 }
@@ -100,7 +100,7 @@ $ `stdlib/core/rcbox.nu`
     ^ out
 }
 
-@ f5_voice_load s wav_path s ref_text f target_rms → !F5Voice String {
+unsafe @ f5_voice_load s wav_path s ref_text f target_rms → !F5Voice String {
     ?? ( wav_read wav_path ) {
         T w → {
             : ( Vec f ) raw ( wav_mono w )
@@ -169,7 +169,7 @@ $ `stdlib/core/rcbox.nu`
 //
 // How much text fits beside a reference of this length inside the 22-second
 // window the model was trained on, at the reference's own speaking rate.
-@ f5_max_chars F5Voice v__h f speed → i {
+unsafe @ f5_max_chars F5Voice v__h f speed → i {
     : *F5VoiceImpl v ( __F5Voice_ptr v__h )
     : f secs / # f . v samples # f F5_SR
     : i rb ( nurl_str_len ( string_data . v text ) )
@@ -199,7 +199,7 @@ $ `stdlib/core/rcbox.nu`
 
 : i F5_SHORT_TAPER_END 120
 
-@ f5_duration F5Voice v__h s gen_text i n_text f speed → i {
+unsafe @ f5_duration F5Voice v__h s gen_text i n_text f speed → i {
     : *F5VoiceImpl v ( __F5Voice_ptr v__h )
     : i gen_bytes ( nurl_str_len gen_text )
     : ~ f local speed
@@ -238,14 +238,14 @@ $ `stdlib/core/rcbox.nu`
     ^ d
 }
 
-@ f5_ref_audio_len F5Voice v__h → i {
+unsafe @ f5_ref_audio_len F5Voice v__h → i {
     : *F5VoiceImpl v ( __F5Voice_ptr v__h )
     ^ / . v samples F5_HOP
 }
 
 // ── one chunk ───────────────────────────────────────────────────────
 
-@ __f5r_synth_once F5Model m Vocos vc F5Voice vh F5Vocab vocab s gen_text
+unsafe @ __f5r_synth_once F5Model m Vocos vc F5Voice vh F5Vocab vocab s gen_text
 i steps f cfg f sway f speed i seed ( Vec f ) out → b {
     : *F5VoiceImpl v ( __F5Voice_ptr vh )
     : ( Vec i ) ids ( vec_new [i] )
@@ -1025,7 +1025,7 @@ i steps f cfg f sway f speed f fade_s i seed i retries f max_wer i splitfail ( V
     ^ ok
 }
 
-@ f5_voice_rms F5Voice v__h → f {
+unsafe @ f5_voice_rms F5Voice v__h → f {
     : *F5VoiceImpl v ( __F5Voice_ptr v__h )
     ^ . v rms
 }

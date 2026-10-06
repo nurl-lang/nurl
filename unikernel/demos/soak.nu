@@ -38,7 +38,7 @@ $ `stdlib/core/string.nu`
     ( flush )
 }
 
-@ main → i {
+unsafe @ main → i {
     ?? ( tcp_listen `0.0.0.0` 8080 ) {
         F e → {
             ( nurl_print `listen failed: ` )

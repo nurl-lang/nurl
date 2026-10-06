@@ -19,7 +19,7 @@ $ `src/geom.nu`
     ^ 1
 }
 
-@ __gc_read s dir s name i n → *f {
+unsafe @ __gc_read s dir s name i n → *f {
     : String p ( string_from dir )
     ( string_push_str p name )
     : ~ * f out # *f 0
@@ -42,7 +42,7 @@ $ `src/geom.nu`
     ^ out
 }
 
-@ main → i {
+unsafe @ main → i {
     ? < ( nurl_argc ) 4 { ^ ( __gc_die `usage: geomcheck <dir> <H> <W>` ) } {}
     : s dir ( nurl_argv 1 )
     : i h ( nurl_str_to_int ( nurl_argv 2 ) )

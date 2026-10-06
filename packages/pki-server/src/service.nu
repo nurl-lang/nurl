@@ -31,7 +31,7 @@ $ `stdlib/core/rcbox.nu`
 : ~ i g_ca_handle 0  // the loaded CA's rcbox, one owner kept for the process (0 = none)
 
 // The loaded CA (another owner of the one behind g_ca_handle).
-@ __svc_ca → PkiCa { ^ @ PkiCa { # s ( rcbox_share g_ca_handle ) } }
+unsafe @ __svc_ca → PkiCa { ^ @ PkiCa { # s ( rcbox_share g_ca_handle ) } }
 
 @ pki_service_init s ca_cert s ca_key s crl_file s index_file s initial_dir s device_dir s init_key s mgmt_key s ca_cn i alg → b {
     = g_ca_cert_path ca_cert

@@ -92,7 +92,7 @@ $ `src/report.nu`
 // over the table (measured: it turned a sub-second extract into minutes).
 
 // byte at offset k of a *u pointer, as an int
-@ __b * u p i k → i { ^ # i . p k }
+unsafe @ __b * u p i k → i { ^ # i . p k }
 
 // decimal digit at offset k
 @ __dig * u p i k → i { ^ - ( __b p k ) 48 }
@@ -132,14 +132,14 @@ $ `src/report.nu`
 // comparison re-derives (type, date, uuid) — the comparator would otherwise
 // re-parse strings on every one of ~20 M calls. That is the several-times gap;
 // the direct i64 compare vs the closure's `x - y` sign is a rounding error.
-@ __swp_i * i a i i i j → v {
+unsafe @ __swp_i * i a i i i j → v {
     : i x . a i
     : i y . a j
     = . a i y
     = . a j x
 }
 
-@ __part_i * i a i lo i hi → i {
+unsafe @ __part_i * i a i lo i hi → i {
     : i mid + lo / - hi lo 2
     ? > . a lo . a mid { ( __swp_i a lo mid ) } {}
     ? > . a lo . a hi { ( __swp_i a lo hi ) } {}
@@ -160,7 +160,7 @@ $ `src/report.nu`
 // insertion sort for a small range — cheaper than partitioning once the
 // subarray is tiny, and where a median-of-three quicksort spends most of
 // its comparisons
-@ __ins_i * i a i lo i hi → v {
+unsafe @ __ins_i * i a i lo i hi → v {
     : ~ i i + lo 1
     ~ <= i hi {
         : i x . a i
@@ -402,7 +402,7 @@ $ `src/report.nu`
 // date, uuid) keys ONCE into integers. The million-row table is the bulk of
 // the setup's memory and this helper's own local, so it is gone before the
 // timed sort allocates; the keys are all the sort needs.
-@ __csv_sort_keys i n → ( Vec i ) {
+unsafe @ __csv_sort_keys i n → ( Vec i ) {
     : CSVTable t ( csv_table_from_string ( __gen_csv n ) )
     : i cty ( __col t `type` )
     : i cda ( __col t `date` )
@@ -424,7 +424,7 @@ $ `src/report.nu`
     ^ key
 }
 
-@ bench_csv_sort → BenchRow {
+unsafe @ bench_csv_sort → BenchRow {
     : i n 1000000
     : ( Vec i ) key ( __csv_sort_keys n )
     : *i kp ( vec_data [i] key )

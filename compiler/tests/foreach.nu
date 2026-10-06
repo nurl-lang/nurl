@@ -8,7 +8,7 @@
     ^ total
 }
 
-@ find_max [i data → i {
+unsafe @ find_max [i data → i {
     : ~ i best . . data ptr 0
     ~ val data {
         = best ? > val best val best

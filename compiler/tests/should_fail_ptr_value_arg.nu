@@ -5,9 +5,9 @@
 
 : Box { i v }
 
-@ take Box b → i { ^ . b v }
+unsafe @ take Box b → i { ^ . b v }
 
-@ main → i {
+unsafe @ main → i {
     : *Box p # *Box ( nurl_alloc Z Box )
     = . p v 5
     ^ ( take p )

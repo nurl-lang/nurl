@@ -55,7 +55,7 @@ $ `stdlib/core/rcbox.nu`
 // every copy is the same state, and the last owner releases it.
 : Opt { s ctl }
 
-@ Opt_share Opt h → Opt { ^ @ Opt { # s ( rcbox_share # i . h ctl ) } }
+unsafe @ Opt_share Opt h → Opt { ^ @ Opt { # s ( rcbox_share # i . h ctl ) } }
 
 @ Opt_drop sink Opt h → v {
     ( mem_forget h )
@@ -63,9 +63,9 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // The state, for this package's own code.
-@ _Opt_ptr Opt h → *OptImpl { ^ ( rcbox_ptr [OptImpl] # i . h ctl ) }
+unsafe @ _Opt_ptr Opt h → *OptImpl { ^ ( rcbox_ptr [OptImpl] # i . h ctl ) }
 
-@ _opt_new i kind f lr → Opt {
+unsafe @ _opt_new i kind f lr → Opt {
     ^ @ Opt { # s ( rcbox_new [OptImpl] @ OptImpl { kind lr 0.0 0 0 ( vec_new [i] ) ( vec_new [f] )
             ( vec_new [i] ) ( vec_new [i] ) ( vec_new [f] ) ( vec_new [f] ) } ) }
 }
@@ -79,18 +79,18 @@ $ `stdlib/core/rcbox.nu`
 @ opt_free sink Opt o → v {}
 
 // Adam's step count so far (0 for SGD and before the first step).
-@ opt_t Opt o__h → i {
+unsafe @ opt_t Opt o__h → i {
     : *OptImpl o ( _Opt_ptr o__h )
     ^ . o t
 }
 
-@ opt_set_clip Opt o__h f maxn → v {
+unsafe @ opt_set_clip Opt o__h f maxn → v {
     : *OptImpl o ( _Opt_ptr o__h )
     = . o clip maxn
 }
 
 // Register one tape parameter with its L2 coefficient (0 for biases).
-@ opt_add Opt o__h GTape tp__h GVar p f alpha → v {
+unsafe @ opt_add Opt o__h GTape tp__h GVar p f alpha → v {
     : *OptImpl o ( _Opt_ptr o__h )
     : *GTapeImpl tp ( _GTape_ptr tp__h )
     ? >= . p id 0 {} { ^ v }
@@ -110,7 +110,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // The global L2 norm of every registered parameter's gradient (0-grads skip).
-@ _opt_gnorm * OptImpl o * GTapeImpl tp → f {
+unsafe @ _opt_gnorm * OptImpl o * GTapeImpl tp → f {
     : ~ f ss 0.0
     : i np ( vec_len [i] . o ids )
     : ~ i pi 0
@@ -133,7 +133,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // One update step from the gradients currently on the tape.
-@ opt_step Opt o__h GTape tp__h → v {
+unsafe @ opt_step Opt o__h GTape tp__h → v {
     : *OptImpl o ( _Opt_ptr o__h )
     : *GTapeImpl tp ( _GTape_ptr tp__h )
     // global-norm clip factor (1.0 = no scaling)

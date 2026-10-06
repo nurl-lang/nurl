@@ -68,7 +68,7 @@ $ `stdlib/core/rcbox.nu`
 // every copy is the same state, and the last owner releases it.
 : GpPlan { s ctl }
 
-@ GpPlan_share GpPlan h → GpPlan { ^ @ GpPlan { # s ( rcbox_share # i . h ctl ) } }
+unsafe @ GpPlan_share GpPlan h → GpPlan { ^ @ GpPlan { # s ( rcbox_share # i . h ctl ) } }
 
 @ GpPlan_drop sink GpPlan h → v {
     ( mem_forget h )
@@ -76,10 +76,10 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // The state, for this package's own code.
-@ _GpPlan_ptr GpPlan h → *GpPlanImpl { ^ ( rcbox_ptr [GpPlanImpl] # i . h ctl ) }
+unsafe @ _GpPlan_ptr GpPlan h → *GpPlanImpl { ^ ( rcbox_ptr [GpPlanImpl] # i . h ctl ) }
 
 // Did the analysis find something to fuse?
-@ gpfuse_plan_ok GpPlan pl__h → b {
+unsafe @ gpfuse_plan_ok GpPlan pl__h → b {
     : *GpPlanImpl pl ( _GpPlan_ptr pl__h )
     ^ . pl ok
 }
@@ -87,12 +87,12 @@ $ `stdlib/core/rcbox.nu`
 // The fused segments as flattened (lo, hi) inclusive node-id ranges, and
 // each segment's backward row-kernel name (empty = per-node). Borrowed:
 // valid while the plan is.
-@ gpfuse_plan_segs GpPlan pl__h → ( Vec i ) {
+unsafe @ gpfuse_plan_segs GpPlan pl__h → ( Vec i ) {
     : *GpPlanImpl pl ( _GpPlan_ptr pl__h )
     ^ . pl segs
 }
 
-@ gpfuse_plan_bnames GpPlan pl__h → ( Vec String ) {
+unsafe @ gpfuse_plan_bnames GpPlan pl__h → ( Vec String ) {
     : *GpPlanImpl pl ( _GpPlan_ptr pl__h )
     ^ . pl bnames
 }
@@ -297,7 +297,7 @@ $ `stdlib/core/rcbox.nu`
 
 // Analyze the program, emit the fused-forward kernels, upload the pointer
 // table. ok=F (with everything freed safe) when nothing fuses.
-@ gpfuse_plan GProg pg__h → GpPlan {
+unsafe @ gpfuse_plan GProg pg__h → GpPlan {
     : *GProgImpl pg ( _GProg_ptr pg__h )
     : i pl__box ( rcbox_zero [GpPlanImpl] )
     : *GpPlanImpl pl ( rcbox_ptr [GpPlanImpl] pl__box )
@@ -501,7 +501,7 @@ $ `stdlib/core/rcbox.nu`
 
 // Launches only (no sync policy) — shared by the direct path and the
 // CUDA-graph capture.
-@ _gpfuse_fwd_launches * GProgImpl pg * GpPlanImpl pl → b {
+unsafe @ _gpfuse_fwd_launches * GProgImpl pg * GpPlanImpl pl → b {
     : i nn ( vec_len [GpNode] . pg nodes )
     : i nseg / ( vec_len [i] . pl segs ) 2
     : ~ b r T
@@ -541,7 +541,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Fused forward: segments as one kernel each, everything else per-node.
-@ gpfuse_forward GProg pg__h GpPlan pl__h → b {
+unsafe @ gpfuse_forward GProg pg__h GpPlan pl__h → b {
     : *GpPlanImpl pl ( _GpPlan_ptr pl__h )
     : *GProgImpl pg ( _GProg_ptr pg__h )
     ? & . pg ok . pl ok {} { ^ F }
@@ -1071,7 +1071,7 @@ $ `stdlib/core/rcbox.nu`
 
 // Fused backward: one zero-fill launch, the seed, then the reverse walk
 // with row-space + param-space kernels standing in for fused segments.
-@ _gpfuse_bwd_launches * GProgImpl pg * GpPlanImpl pl → b {
+unsafe @ _gpfuse_bwd_launches * GProgImpl pg * GpPlanImpl pl → b {
     : ~ b r T
     ? > . pl fcnt 0 {
         : ( Vec i ) a ( vec_new [i] )
@@ -1148,7 +1148,7 @@ $ `stdlib/core/rcbox.nu`
     ^ r
 }
 
-@ gpfuse_backward GProg pg__h GpPlan pl__h → b {
+unsafe @ gpfuse_backward GProg pg__h GpPlan pl__h → b {
     : *GpPlanImpl pl ( _GpPlan_ptr pl__h )
     : *GProgImpl pg ( _GProg_ptr pg__h )
     ? & . pg ok . pl ok {} { ^ F }
@@ -1165,7 +1165,7 @@ $ `stdlib/core/rcbox.nu`
 // there; the per-node path is already the optimal cpu execution. The
 // planner still builds (the bit gates run everywhere) — this is the
 // production selector.
-@ gpfuse_worthwhile GProg pg__h → b {
+unsafe @ gpfuse_worthwhile GProg pg__h → b {
     : *GProgImpl pg ( _GProg_ptr pg__h )
     ? . pg ok {} { ^ F }
     : GpuKit kit . pg kit
@@ -1176,7 +1176,7 @@ $ `stdlib/core/rcbox.nu`
 // backward + the optimizer, captured once. Per episode the host does
 // gput_set_input + gpopt_prepare + gput_episode — the identical driver
 // loop as the per-node graph, just with ~5 kernels inside instead of ~40.
-@ gpfuse_graph_capture_train GProg pg__h GpPlan pl__h GpOpt go__h → b {
+unsafe @ gpfuse_graph_capture_train GProg pg__h GpPlan pl__h GpOpt go__h → b {
     : *GpPlanImpl pl ( _GpPlan_ptr pl__h )
     : *GpOptImpl go ( _GpOpt_ptr go__h )
     : *GProgImpl pg ( _GProg_ptr pg__h )
@@ -1209,7 +1209,7 @@ $ `stdlib/core/rcbox.nu`
 
 @ _gpf_smax → i { ^ 16384 }
 
-@ _gpf_in_rowseg * GpPlanImpl pl i k → b {
+unsafe @ _gpf_in_rowseg * GpPlanImpl pl i k → b {
     : i nseg / ( vec_len [i] . pl segs ) 2
     : ~ i w 0
     ~ < w nseg {
@@ -1561,7 +1561,7 @@ $ `stdlib/core/rcbox.nu`
 // every copy is the same state, and the last owner releases it.
 : GpFuse { s ctl }
 
-@ GpFuse_share GpFuse h → GpFuse { ^ @ GpFuse { # s ( rcbox_share # i . h ctl ) } }
+unsafe @ GpFuse_share GpFuse h → GpFuse { ^ @ GpFuse { # s ( rcbox_share # i . h ctl ) } }
 
 @ GpFuse_drop sink GpFuse h → v {
     ( mem_forget h )
@@ -1569,9 +1569,9 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // The state, for this package's own code.
-@ _GpFuse_ptr GpFuse h → *GpFuseImpl { ^ ( rcbox_ptr [GpFuseImpl] # i . h ctl ) }
+unsafe @ _GpFuse_ptr GpFuse h → *GpFuseImpl { ^ ( rcbox_ptr [GpFuseImpl] # i . h ctl ) }
 
-@ gpfuse_open GProg pg__h GpOpt go__h → GpFuse {
+unsafe @ gpfuse_open GProg pg__h GpOpt go__h → GpFuse {
     : *GProgImpl pg ( _GProg_ptr pg__h )
     : ~ b active F
     : ~ GpPlan plan ( _gpfuse_nullplan )
@@ -1588,7 +1588,7 @@ $ `stdlib/core/rcbox.nu`
     ^ @ GpFuse { # s ( rcbox_new [GpFuseImpl] @ GpFuseImpl { active plan } ) }
 }
 
-@ _gpfuse_nullplan → GpPlan {
+unsafe @ _gpfuse_nullplan → GpPlan {
     : i pl__box ( rcbox_zero [GpPlanImpl] )
     : *GpPlanImpl pl ( rcbox_ptr [GpPlanImpl] pl__box )
     = . pl ok F
@@ -1609,7 +1609,7 @@ $ `stdlib/core/rcbox.nu`
     ^ @ GpPlan { # s pl__box }
 }
 
-@ gpfuse_active GpFuse s__h → b {
+unsafe @ gpfuse_active GpFuse s__h → b {
     : *GpFuseImpl s ( _GpFuse_ptr s__h )
     ^ . s active
 }
@@ -1617,7 +1617,7 @@ $ `stdlib/core/rcbox.nu`
 // One training episode. With a captured graph this is a single launch;
 // with a live plan it is the fused forward + backward + optimizer step;
 // otherwise the per-node forward/backward/step. Bit-identical either way.
-@ gpfuse_episode GpFuse s__h GProg pg__h GpOpt go__h → b {
+unsafe @ gpfuse_episode GpFuse s__h GProg pg__h GpOpt go__h → b {
     : *GpFuseImpl s ( _GpFuse_ptr s__h )
     : *GProgImpl pg ( _GProg_ptr pg__h )
     : GpPlan pl . s pl

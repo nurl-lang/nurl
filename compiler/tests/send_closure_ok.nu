@@ -24,7 +24,9 @@ $ `stdlib/std/channel.nu`
 
 @ case_param → v {
     : ( Arc i ) n ( arc_new [i] 7 )
-    ( run_twice \ → v { ( nurl_print_int ( arc_get [i] n ) ) ( nurl_print `\n` ) } )
+    // One write per line: the two fibers run at once, and two calls per
+    // line let their output interleave (`77` then two newlines).
+    ( run_twice \ → v { ( nurl_println_int ( arc_get [i] n ) ) } )
 }
 
 @ case_channel → v {

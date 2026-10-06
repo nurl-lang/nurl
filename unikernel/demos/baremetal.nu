@@ -150,7 +150,7 @@ $ `stdlib/std/time.nu`
     ( nurl_print `\n` )
 }
 
-@ main → i {
+unsafe @ main → i {
     ( nurl_print `\nNURL unikernel - running on bare metal\n` )
     ( rule )
 

@@ -13,7 +13,7 @@ $ `stdlib/core/io.nu`
 
 // A vectorisable reduction. Marked, so the wide clone gets AVX2 and
 // the baseline one does not; both must total the same.
-simd @ __sum * u p i n → i {
+unsafe simd @ __sum * u p i n → i {
     : ~ i acc 0
     : ~ i i 0
     ~ < i n { = acc + acc ( nurl_peek # s p i ) = i + i 1 }
@@ -21,12 +21,12 @@ simd @ __sum * u p i n → i {
 }
 
 // Order of the two prefixes is free, and both must still be public.
-pub simd @ scale_into * u dst * u src i n i k → v {
+unsafe pub simd @ scale_into * u dst * u src i n i k → v {
     : ~ i i 0
     ~ < i n { ( nurl_poke # s dst i * k ( nurl_peek # s src i ) ) = i + i 1 }
 }
 
-simd pub @ dot * u a * u b i n → i {
+unsafe simd pub @ dot * u a * u b i n → i {
     : ~ i acc 0
     : ~ i i 0
     ~ < i n { = acc + acc * ( nurl_peek # s a i ) ( nurl_peek # s b i ) = i + i 1 }
@@ -38,7 +38,7 @@ simd pub @ dot * u a * u b i n → i {
 // reason the prefix belongs on few, coarse functions.
 @ __triple i x → i { ^ * x 3 }
 
-simd @ sum_tripled * u p i n → i {
+unsafe simd @ sum_tripled * u p i n → i {
     : ~ i acc 0
     : ~ i i 0
     ~ < i n { = acc + acc ( __triple ( nurl_peek # s p i ) ) = i + i 1 }
@@ -58,7 +58,7 @@ simd @ tri i n → i {
     ( nurl_print `\n` )
 }
 
-@ main → v {
+unsafe @ main → v {
     : i n 100
     : s a ( nurl_zalloc * n 8 )
     : s b ( nurl_zalloc * n 8 )

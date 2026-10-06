@@ -22,7 +22,7 @@ $ `stdlib/core/string.nu`
     ^ @ !v String { T 0 }
 }
 
-@ main → i {
+unsafe @ main → i {
     : ~ i acc 0
 
     // ? arm: owned raw string (nurl_str_slice allocates) declared, arm

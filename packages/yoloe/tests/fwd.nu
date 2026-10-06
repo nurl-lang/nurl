@@ -21,7 +21,7 @@ $ `deps/onnx/src/runtime.nu`
     : ( Vec i ) v ( vec_new [i] ) ( vec_push [i] v a ) ( vec_push [i] v b ) ( vec_push [i] v c ) ( vec_push [i] v d ) ^ v
 }
 
-@ main → i {
+unsafe @ main → i {
     : ( Vec String ) av ( env_args_list )
     ? < ( vec_len [String] av ) 4 { ( nurl_print `usage: fwd <model> <input.f32> <output0.f32>\n` ) ^ 2 } {}
     : String mp ?? ( vec_get [String] av 1 ) { T x → x F _ → ( string_new ) }

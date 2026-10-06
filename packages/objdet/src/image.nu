@@ -73,7 +73,7 @@ $ `deps/image/src/image.nu`
 // Returns a fresh host buffer of 3*H*W f32 (bytes) in CHW order — hand
 // `( vec_data [u] t )` to the runtime; the Vec releases itself. The
 // model's in-graph preprocessor scales by 1/255.
-@ img_to_nchw Image im → ( Vec u ) {
+unsafe @ img_to_nchw Image im → ( Vec u ) {
     : i W . im width
     : i H . im height
     : i nb * * * 3 H W 4

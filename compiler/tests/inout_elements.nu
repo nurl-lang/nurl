@@ -12,7 +12,7 @@ $ `stdlib/core/vec.nu`
 
 @ position inout i n → i { = n + n 1 ^ - n 1 }
 
-@ main → i {
+unsafe @ main → i {
     : ( Vec Cell ) cells ( vec_new [Cell] )
     ( vec_push [Cell] cells @ Cell { 1 0 } )
     ( vec_push [Cell] cells @ Cell { 2 0 } )

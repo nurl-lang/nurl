@@ -308,7 +308,7 @@ Remember: note_set / note / notes for facts about the repository that outlive th
     ( __ag_mcp_init )
 }
 
-@ __ag_mcp_srv → McpServer {
+unsafe @ __ag_mcp_srv → McpServer {
     ( __ag_mcp_init )
     ^ . ( rcbox_ptr [AgMcpWiring] g_ag_mcp ) server
 }

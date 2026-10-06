@@ -6,11 +6,11 @@
 // that may reallocate `out`; the stale-pointer warning fired here because the
 // container was marked mutated while its first argument was handled, before
 // the second was read (stdlib deflate's back-reference copy). A read after
-// the call still warns (should_warn_stale_borrow.nu).
+// the call is still an error (diag_stale_borrow.nu).
 
 $ `stdlib/core/vec.nu`
 
-@ main → i {
+unsafe @ main → i {
     : ( Vec u ) out ( vec_new [u] )
     ( vec_push [u] out # u 7 )
     : ~ i k 0

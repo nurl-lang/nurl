@@ -23,16 +23,16 @@ $ `stdlib/std/time.nu`
 
 & `c` @ nurl_atomic_i64_load *u p → i
 
-@ live → i { ^ - ( nurl_alloc_count ) ( nurl_free_count ) }
+unsafe @ live → i { ^ - ( nurl_alloc_count ) ( nurl_free_count ) }
 
 // The cell every body bumps, reached through a global so the closures
 // capture nothing: the live count then does not depend on when a
 // detached thread gets round to finishing.
 : ~ i g_cell 0
 
-@ bump → v { : i _old ( nurl_atomic_i64_inc # *u g_cell ) }
+unsafe @ bump → v { : i _old ( nurl_atomic_i64_inc # *u g_cell ) }
 
-@ ran → i { ^ ( nurl_atomic_i64_load # *u g_cell ) }
+unsafe @ ran → i { ^ ( nurl_atomic_i64_load # *u g_cell ) }
 
 : Holder { Thread t i id }
 
@@ -114,7 +114,7 @@ $ `stdlib/std/time.nu`
     ~ & < ( ran ) want < spins 20000 { ( sleep_ms 1 ) = spins + spins 1 }
 }
 
-@ main → i {
+unsafe @ main → i {
     = g_cell # i ( nurl_zalloc 8 )
     : String first ( round )
     ( settle 9 )

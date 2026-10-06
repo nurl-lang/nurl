@@ -20,7 +20,7 @@ $ `stdlib/core/string.nu`
 
 @ f3 String p → s { ^ ( view_of p ) }
 
-@ main → i {
+unsafe @ main → i {
     : String keep ( string_from `zz` )
     : i a0 - ( nurl_alloc_count ) ( nurl_free_count )
     : ~ i r 0

@@ -19,7 +19,7 @@
 : i H 360  // GH * CELL
 : i FPS 15
 
-@ main → i {
+unsafe @ main → i {
     : i ncells * GW GH
     : i frame_ms / 1000 FPS
 

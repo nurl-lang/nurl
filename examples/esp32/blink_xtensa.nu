@@ -17,7 +17,7 @@
 : i REG_GPIO_ENABLE_W1TS 0x3FF44024  // enable as output
 : i PIN_MASK 4  // 1 << 2       GPIO2 (common LED)
 
-@ poke i addr i32 val → v {
+unsafe @ poke i addr i32 val → v {
     : *i32 p # *i32 addr
     = . p 0 val
 }

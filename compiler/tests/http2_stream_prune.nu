@@ -66,7 +66,7 @@ $ `stdlib/ext/http2_conn.nu`
     }
 }
 
-@ run → i {
+unsafe @ run → i {
     : ( Vec i ) fails ( vec_new [i] )
 
     // ── Mixed table: 1 closed, 3 open, 5 closed, 7 half-closed-remote,

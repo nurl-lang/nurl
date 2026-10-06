@@ -190,10 +190,16 @@ $ `stdlib/std/hashmap.nu`  // HashMap, map_*, hash_string, eq_string
     } {}
     : i sl ?? ( vec_pop [i] . c freelist ) { T fs → fs F _ → -1 }
     ? >= sl 0 {
-        : String kc ( string_from key )
-        : b _sk ( vec_set [String] . c keys sl kc )
+        : b _sk ( vec_set [String] . c keys sl ( string_from key ) )
         : b _sv ( vec_set [V] . c vals sl val )
-        ( __lru_idx_set . c index ( string_data kc ) sl )
+        // The index's key is a view of the slot's own key string, taken
+        // from the slot that owns it. It stays valid because an index
+        // entry is always removed before its slot's key is replaced or the
+        // cache released (__lru_insert_new's eviction, lru_remove).
+        ?? ( vec_get [String] . c keys sl ) {
+            T kc → { ( __lru_idx_set . c index ( string_data kc ) sl ) }
+            F _ → {}
+        }
         ( __lru_push_front [V] c sl )
         ( __lru_set_count ctl + ( __lru_count ctl ) 1 )
     } {}

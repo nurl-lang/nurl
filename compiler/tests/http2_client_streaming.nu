@@ -34,7 +34,7 @@ $ `stdlib/std/thread.nu`
     } { ( send_frame tcp 1 4 sid block ) }
 }
 
-@ raw_peer TcpConn tcp → v {
+unsafe @ raw_peer TcpConn tcp → v {
     ( tcp_set_timeout tcp 3000 )
     ?? ( h2_read_preface tcp ) { T _ → {} F _ → { ^ } }
     : ( Vec H2Setting ) settings ( vec_new [H2Setting] )

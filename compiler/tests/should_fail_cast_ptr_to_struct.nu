@@ -10,7 +10,7 @@
 
 : Pair { i a i b }
 
-@ main → i {
+unsafe @ main → i {
     : s p ( nurl_alloc 16 )
     : Pair w # Pair p
     ( nurl_free p )

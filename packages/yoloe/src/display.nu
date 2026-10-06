@@ -28,7 +28,7 @@ $ `image.nu`
 : WinSz { i rows i cols }
 
 // Terminal (rows, cols) from ioctl on stdout; sensible fallback off a tty.
-@ __winsize → WinSz {
+unsafe @ __winsize → WinSz {
     : ( Vec u ) wsv ( vec_zeroed [u] 8 )
     : *u ws ( vec_data [u] wsv )
     : i r ( ioctl # i32 1 ( __TIOCGWINSZ ) ws )
@@ -47,7 +47,7 @@ $ `image.nu`
 // 4-byte slots. This box filter (area average) is what makes the downscaled
 // preview look smooth instead of the aliased mess that point-sampling a
 // 640-wide frame into ~100 cells produces. At least one pixel is sampled.
-@ __avg3 Image im i x0 i x1 i y0 i y1 * u out → v {
+unsafe @ __avg3 Image im i x0 i x1 i y0 i y1 * u out → v {
     : i xb ? > x1 + x0 1 x1 + x0 1
     : i yb ? > y1 + y0 1 y1 + y0 1
     : ~ i sr 0
@@ -88,7 +88,7 @@ $ `image.nu`
 }
 
 // Render `im` to the terminal as truecolor half-blocks, scaled to fit.
-@ img_show Image im → v {
+unsafe @ img_show Image im → v {
     : i W ( img_w im )
     : i H ( img_h im )
     : WinSz wsz ( __winsize )

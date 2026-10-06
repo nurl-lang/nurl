@@ -1,0 +1,5 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_closure_body_file.nu:13: error: 's' is read here, but its value was moved into 'strs' at line 12. A heap value has one owner; once it is stored into an aggregate, an Option or a container (vec_push), the old name is gone, because the owner may release or replace the value while the name still points at it. Read it through 'strs' (a field read, or vec_get on it), or store a copy and keep the original: ( mem_dup s ).
+        ( nurl_println_int ( string_len s ) )
+error: compilation aborted — 1 borrow-checker violation (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

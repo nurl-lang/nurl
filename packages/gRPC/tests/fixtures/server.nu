@@ -5,7 +5,7 @@ $ `stdlib/core/io.nu`
 
 : TestCall { i id String method ( Vec u ) aggregate i count }
 
-@ find_call ( Vec TestCall ) calls i id → i {
+unsafe @ find_call ( Vec TestCall ) calls i id → i {
     : ~ i k 0
     ~ < k ( vec_len [TestCall] calls ) {
         : TestCall call . ( vec_data [TestCall] calls ) k
@@ -15,7 +15,7 @@ $ `stdlib/core/io.nu`
     ^ -1
 }
 
-@ handle inout GrpcServer server ( Vec TestCall ) calls GrpcServerEvent event i encoding → !v GrpcError {
+unsafe @ handle inout GrpcServer server ( Vec TestCall ) calls GrpcServerEvent event i encoding → !v GrpcError {
     : i id . event stream_id
     : ( Vec Header ) empty ( grpc_metadata_new )
     ? == . event kind ( grpc_server_event_open ) {

@@ -86,7 +86,7 @@ $ `model.nu`
 // Coverage graphs name their sources absolutely, because the compiler
 // wrote them that way. A report read next to the code wants the path the
 // reader would type, so the working directory is taken off the front.
-@ report_display s path s root → s {
+unsafe @ report_display s path s root → s {
     : i rn ( nurl_str_len root )
     ? == rn 0 { ^ path } {}
     : i pn ( nurl_str_len path )
@@ -103,7 +103,7 @@ $ `model.nu`
 // A long path is cut at the FRONT: the tail is the part that identifies
 // the file, and truncating it turns every file in a directory into the
 // same row.
-@ __rep_name String out s path i width → v {
+unsafe @ __rep_name String out s path i width → v {
     : i n ( nurl_str_len path )
     ? <= n width { ( __rep_pad_right out path width ) ^ v } {}
     ( string_push_str out `...` )

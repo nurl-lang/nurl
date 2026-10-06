@@ -62,7 +62,7 @@ $ `stdlib/std/time.nu`
     ^ ok
 }
 
-@ main → i {
+unsafe @ main → i {
     : ~ b all T
 
     // ── an ML-DSA-65 identity and a certificate for it ──
@@ -157,7 +157,7 @@ $ `stdlib/std/time.nu`
     = all & all ( chk `server_accepted      ` == g_served 1 )
     ( nurl_tcp_close g_listen )
 
-    ( vec_free [u] sk ) ( vec_free [u] chain )
+    // `sk` and `chain` moved into the server closure, which drops them.
     ( mldsa_keys_free ks )
     ( vec_free [u] rnd ) ( vec_free [u] serial ) ( vec_free [u] seed )
     ( vec_free [u] der )

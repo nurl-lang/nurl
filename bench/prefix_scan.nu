@@ -14,7 +14,7 @@
 // on all five language implementations printing the same line before it
 // reports a single timing number for the row.
 
-@ main → i {
+unsafe @ main → i {
     : i width 16
     : u64 batches 1000000
     : *u64 values # *u64 ( malloc * width 8 )

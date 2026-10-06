@@ -15,7 +15,7 @@
 
 $ `stdlib/core/string.nu`
 
-@ main → i {
+unsafe @ main → i {
     // Owned String. The compiler tracks it on the auto-drop list and
     // will emit `string_free` at function exit.
     : String s ( string_from `hello\n` )

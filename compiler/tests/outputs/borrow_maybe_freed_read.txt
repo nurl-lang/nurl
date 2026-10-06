@@ -2,4 +2,6 @@ COMPILE FAIL
 ERRORS
 compiler/tests/borrow_maybe_freed_read.nu:19: error: use of possibly-moved value 'x' — it was consumed on only some paths, at line 18; on that path this reads a freed buffer. Consume it on every path, or rebind it (= x …) on the path that consumed it
     ^ ( string_len x )
-error: compilation aborted — 1 borrow-checker violation (if the program is correct, this is a false positive: please report it as a bug at https://github.com/nurl-lang/nurl/issues)
+compiler/tests/borrow_maybe_freed_read.nu:27: error: use of moved value 't' — a heap handle has exactly one owner, and this one was consumed at line 26, when its handle was handed to 'prev' by an alias assignment. After that the binding is dead: free or read the value through whatever owns it now, or rebind this name to a fresh value.
+    ^ ( vec_len [u] t )
+error: compilation aborted — 2 borrow-checker violations (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

@@ -50,7 +50,7 @@ $ `src/prep.nu`
 
 // ── 1. Golden mixed-type record ───────────────────────────────────────
 
-@ test_golden → v {
+unsafe @ test_golden → v {
     : Meta m__h ( meta_new `t1` `2026-07-03T00:00:00Z` )
     : *MetaImpl m ( _Meta_ptr m__h )
     : !Json JsonError r ( json_parse `{"temp": 21.5, "status": "ok", "when": "2026-07-03T12:34:56Z", "timestamp": "2026-07-03T12:00:00Z"}` )
@@ -128,7 +128,7 @@ $ `src/prep.nu`
     ^ got
 }
 
-@ test_calendar_clock → v {
+unsafe @ test_calendar_clock → v {
     : Meta m__h ( meta_new `t1b` `2026-07-03T00:00:00Z` )
     : *MetaImpl m ( _Meta_ptr m__h )
     // Midnight in +03:00 is midnight to the sender, not 21:00 UTC.
@@ -198,7 +198,7 @@ $ `src/prep.nu`
 
 // ── 3. Frozen projection: stability rule ──────────────────────────────
 
-@ test_projection → v {
+unsafe @ test_projection → v {
     : Meta m__h ( meta_new `t3` `2026-07-03T00:00:00Z` )
     : *MetaImpl m ( _Meta_ptr m__h )
     : !Json JsonError r1 ( json_parse `{"a": 1, "status": "ok"}` )
@@ -319,7 +319,7 @@ $ `src/prep.nu`
 
 // ── 6. Metadata JSON round-trip is byte-stable ────────────────────────
 
-@ test_meta_roundtrip → v {
+unsafe @ test_meta_roundtrip → v {
     : Meta m__h ( meta_new `t6` `2026-07-03T00:00:00Z` )
     : *MetaImpl m ( _Meta_ptr m__h )
     : !Json JsonError r1 ( json_parse `{"temp": 21.5, "status": "ok", "when": "2026-07-03T12:34:56Z"}` )
@@ -363,7 +363,7 @@ $ `src/prep.nu`
 
 // ── 5b. Scaler: absent readings, extreme readings, the cap ────────────
 
-@ test_scaler_robust → v {
+unsafe @ test_scaler_robust → v {
     // col0 has an absent reading (NaN): the mean and std come from the
     // readings present, and the absent one standardises to 0.
     : ( Vec f ) data ( vec_new [f] )

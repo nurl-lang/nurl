@@ -68,7 +68,7 @@ $ `stdlib/core/rcbox.nu`
 // FNV-1a over the key, folded to 64 bits. The filter needs two
 // independent hashes; the second is derived by odd-shifting the first
 // (Kirsch–Mitzenmacher), which is standard and keeps one pass over the key.
-@ lsm_key_hash * u p i off i len → i {
+unsafe @ lsm_key_hash * u p i off i len → i {
     : ~ i h 1469598103934665603
     : ~ i k 0
     ~ < k len {
@@ -86,7 +86,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Set the k bit positions of one hash into `bits`.
-@ __bloom_set ( Vec u ) bits i nbits i h → v {
+unsafe @ __bloom_set ( Vec u ) bits i nbits i h → v {
     : i h2 | >> h 33 1
     : *u p ( vec_data [u] bits )
     : ~ i i 0
@@ -99,7 +99,7 @@ $ `stdlib/core/rcbox.nu`
     }
 }
 
-@ __bloom_test ( Vec u ) bits i nbits i h → b {
+unsafe @ __bloom_test ( Vec u ) bits i nbits i h → b {
     ? <= nbits 0 { ^ T } {}
     : i h2 | >> h 33 1
     : *u p ( vec_data [u] bits )
@@ -136,16 +136,16 @@ $ `stdlib/core/rcbox.nu`
 
 : SstWriter { s ctl }
 
-@ SstWriter_share SstWriter h → SstWriter { ^ @ SstWriter { # s ( rcbox_share # i . h ctl ) } }
+unsafe @ SstWriter_share SstWriter h → SstWriter { ^ @ SstWriter { # s ( rcbox_share # i . h ctl ) } }
 
 @ SstWriter_drop sink SstWriter h → v {
     ( mem_forget h )
     ( rcbox_release [SstWriterImpl] # i . h ctl )
 }
 
-@ __SstWriter_ptr SstWriter h → *SstWriterImpl { ^ ( rcbox_ptr [SstWriterImpl] # i . h ctl ) }
+unsafe @ __SstWriter_ptr SstWriter h → *SstWriterImpl { ^ ( rcbox_ptr [SstWriterImpl] # i . h ctl ) }
 
-@ sst_create s path → !SstWriter String {
+unsafe @ sst_create s path → !SstWriter String {
     : !File IoErr fr ( file_create path )
     ?? fr {
         T f → {
@@ -176,7 +176,7 @@ $ `stdlib/core/rcbox.nu`
 
 // The table file is finished with (written out, or given up on): close
 // it now, so the reader that opens it next sees every byte.
-@ __sstw_close * SstWriterImpl w → v {
+unsafe @ __sstw_close * SstWriterImpl w → v {
     ( file_close . w f )
     // The closed file's handle leaves the writer (dropped here).
     : File old_f . w f
@@ -186,7 +186,7 @@ $ `stdlib/core/rcbox.nu`
 
 // Close the current block: append its CRC trailer, write it, and record
 // (last key, offset, payload length) in the index.
-@ __sst_flush_block * SstWriterImpl w → !v String {
+unsafe @ __sst_flush_block * SstWriterImpl w → !v String {
     : i plen ( vec_len [u] . w buf )
     ? == plen 0 { ^ @ !v String { T 0 } } {}
     : i crc ( crc32_ctx_hash . w crc . w buf )
@@ -216,7 +216,7 @@ $ `stdlib/core/rcbox.nu`
 
 // Append one entry. Keys must arrive in the package's total order —
 // the memtable walk and the compaction merge both produce exactly that.
-@ sst_add SstWriter w__h ( Vec u ) key ( Vec u ) val i seq i kind → !v String {
+unsafe @ sst_add SstWriter w__h ( Vec u ) key ( Vec u ) val i seq i kind → !v String {
     : *SstWriterImpl w ( __SstWriter_ptr w__h )
     : i kl ( vec_len [u] key )
     : i vl ? == kind MT_PUT ( vec_len [u] val ) 0
@@ -237,7 +237,7 @@ $ `stdlib/core/rcbox.nu`
     ^ @ !v String { T 0 }
 }
 
-@ __sst_write_tail * SstWriterImpl w ( Vec u ) payload → !i String {
+unsafe @ __sst_write_tail * SstWriterImpl w ( Vec u ) payload → !i String {
     : i at . w off
     : i crc ( crc32_ctx_hash . w crc payload )
     ( bytes_push_u32_le payload # u32 crc )
@@ -251,7 +251,7 @@ $ `stdlib/core/rcbox.nu`
 // Flush the tail block, emit the filter, the index and the footer, then
 // fsync. When this returns the table is durable and self-describing;
 // only after that may a manifest name it.
-@ sst_finish SstWriter w__h → !i String {
+unsafe @ sst_finish SstWriter w__h → !i String {
     : *SstWriterImpl w ( __SstWriter_ptr w__h )
     : !v String fb ( __sst_flush_block w )
     ?? fb { T _ → {} F e → { ( __sstw_close w ) ^ @ !i String { F e } } }
@@ -339,14 +339,14 @@ $ `stdlib/core/rcbox.nu`
 
 : SstReader { s ctl }
 
-@ SstReader_share SstReader h → SstReader { ^ @ SstReader { # s ( rcbox_share # i . h ctl ) } }
+unsafe @ SstReader_share SstReader h → SstReader { ^ @ SstReader { # s ( rcbox_share # i . h ctl ) } }
 
 @ SstReader_drop sink SstReader h → v {
     ( mem_forget h )
     ( rcbox_release [SstReaderImpl] # i . h ctl )
 }
 
-@ __SstReader_ptr SstReader h → *SstReaderImpl { ^ ( rcbox_ptr [SstReaderImpl] # i . h ctl ) }
+unsafe @ __SstReader_ptr SstReader h → *SstReaderImpl { ^ ( rcbox_ptr [SstReaderImpl] # i . h ctl ) }
 
 : SstHit {
     i found
@@ -369,7 +369,7 @@ $ `stdlib/core/rcbox.nu`
 // Read `n` bytes at `off` and prove them against their CRC trailer.
 // Returns the payload only. A checksum mismatch is an error — never
 // data: a torn or rotted block must not surface as a value.
-@ __sst_read_verified * SstReaderImpl r i off i plen → !( Vec u ) String {
+unsafe @ __sst_read_verified * SstReaderImpl r i off i plen → !( Vec u ) String {
     : !( Vec u ) IoErr rr ( file_read_at . r f off + plen 4 )
     ?? rr {
         T raw → {
@@ -388,7 +388,7 @@ $ `stdlib/core/rcbox.nu`
     }
 }
 
-@ sst_open s path → !SstReader String {
+unsafe @ sst_open s path → !SstReader String {
     : !File IoErr fr ( file_open path )
     : ~ File f @ File { # s 0 }
     ?? fr { T h → { = f h } F _ → {
@@ -474,7 +474,7 @@ $ `stdlib/core/rcbox.nu`
     ^ @ !SstReader String { T rh }
 }
 
-@ __sst_parse_index * SstReaderImpl r ( Vec u ) idx → !v String {
+unsafe @ __sst_parse_index * SstReaderImpl r ( Vec u ) idx → !v String {
     : i n ( vec_len [u] idx )
     ? < n 4 { ^ @ !v String { F ( __sst_err ( string_data . r path ) `malformed index` ) } } {}
     : i nb ?? ( bytes_read_u32_le idx 0 ) { T x → # i x F _ → 0 }
@@ -502,44 +502,44 @@ $ `stdlib/core/rcbox.nu`
 // Let go of `r` now rather than at the end of its owner's scope.
 @ sst_close sink SstReader r → v {}
 
-@ sst_entries SstReader r__h → i {
+unsafe @ sst_entries SstReader r__h → i {
     : *SstReaderImpl r ( __SstReader_ptr r__h )
     ^ . r nentries
 }
 
-@ sst_maxseq SstReader r__h → i {
+unsafe @ sst_maxseq SstReader r__h → i {
     : *SstReaderImpl r ( __SstReader_ptr r__h )
     ^ . r maxseq
 }
 
-@ sst_blocks SstReader r__h → i {
+unsafe @ sst_blocks SstReader r__h → i {
     : *SstReaderImpl r ( __SstReader_ptr r__h )
     ^ . r nblocks
 }
 
-@ sst_filesize SstReader r__h → i {
+unsafe @ sst_filesize SstReader r__h → i {
     : *SstReaderImpl r ( __SstReader_ptr r__h )
     ^ . r filesize
 }
 
-@ sst_reads SstReader r__h → i {
+unsafe @ sst_reads SstReader r__h → i {
     : *SstReaderImpl r ( __SstReader_ptr r__h )
     ^ . r reads
 }
 
-@ sst_filtered SstReader r__h → i {
+unsafe @ sst_filtered SstReader r__h → i {
     : *SstReaderImpl r ( __SstReader_ptr r__h )
     ^ . r filtered
 }
 
-@ sst_hits SstReader r__h → i {
+unsafe @ sst_hits SstReader r__h → i {
     : *SstReaderImpl r ( __SstReader_ptr r__h )
     ^ . r hits
 }
 
 // First block whose LAST key >= probe, or nblocks if the probe is past
 // the end of the table. Binary search over the index.
-@ __sst_find_block * SstReaderImpl r * u kp i klen → i {
+unsafe @ __sst_find_block * SstReaderImpl r * u kp i klen → i {
     : *u ip ( vec_data [u] . r ikeys )
     : ~ i lo 0
     : ~ i hi . r nblocks
@@ -560,7 +560,7 @@ $ `stdlib/core/rcbox.nu`
 // workload with locality) costs one verification per block rather than
 // one per key: at ~100 entries to a 4 KiB block, that is the difference
 // between checksumming 4 KiB per read and 40 bytes.
-@ __sst_load_block * SstReaderImpl r i bi → !( Vec u ) String {
+unsafe @ __sst_load_block * SstReaderImpl r i bi → !( Vec u ) String {
     : i slot % bi SST_CACHE
     ? == ( _mt_iat . r cache_bi slot ) bi {
         ?? ( vec_get [( Vec u )] . r cache slot ) {
@@ -601,7 +601,7 @@ $ `stdlib/core/rcbox.nu`
 // The newest version of `key` with seq <= snap. `found` is 0 when the
 // table has nothing for the key; a tombstone comes back as found=1 with
 // kind=MT_DEL, which the store must honour as "deleted here, stop".
-@ sst_get SstReader r__h ( Vec u ) key i snap → !SstHit String {
+unsafe @ sst_get SstReader r__h ( Vec u ) key i snap → !SstHit String {
     : *SstReaderImpl r ( __SstReader_ptr r__h )
     : i klen ( vec_len [u] key )
     : *u kp ( vec_data [u] key )
@@ -670,7 +670,7 @@ $ `stdlib/core/rcbox.nu`
 
 : SstCursor { s ctl }
 
-@ SstCursor_share SstCursor h → SstCursor { ^ @ SstCursor { # s ( rcbox_share # i . h ctl ) } }
+unsafe @ SstCursor_share SstCursor h → SstCursor { ^ @ SstCursor { # s ( rcbox_share # i . h ctl ) } }
 
 @ SstCursor_drop sink SstCursor h → v {
     ( mem_forget h )
@@ -679,9 +679,9 @@ $ `stdlib/core/rcbox.nu`
 
 // Package-shared (one underscore): the merge in lsmdb.nu opens each
 // cursor once per step and reads its head in place.
-@ _SstCursor_ptr SstCursor h → *SstCursorImpl { ^ ( rcbox_ptr [SstCursorImpl] # i . h ctl ) }
+unsafe @ _SstCursor_ptr SstCursor h → *SstCursorImpl { ^ ( rcbox_ptr [SstCursorImpl] # i . h ctl ) }
 
-@ sst_cursor SstReader r → SstCursor {
+unsafe @ sst_cursor SstReader r → SstCursor {
     : i c__box ( rcbox_zero [SstCursorImpl] )
     : *SstCursorImpl c ( rcbox_ptr [SstCursorImpl] c__box )
     = . c r ( SstReader_share r )
@@ -702,42 +702,42 @@ $ `stdlib/core/rcbox.nu`
 // Let go of `c` now rather than at the end of its owner's scope.
 @ sc_free sink SstCursor c → v {}
 
-@ sc_valid SstCursor c__h → b {
+unsafe @ sc_valid SstCursor c__h → b {
     : *SstCursorImpl c ( _SstCursor_ptr c__h )
     ^ == . c valid 1
 }
 
-@ sc_failed SstCursor c__h → b {
+unsafe @ sc_failed SstCursor c__h → b {
     : *SstCursorImpl c ( _SstCursor_ptr c__h )
     ^ == . c failed 1
 }
 
-@ sc_err SstCursor c__h → s {
+unsafe @ sc_err SstCursor c__h → s {
     : *SstCursorImpl c ( _SstCursor_ptr c__h )
     ^ ( string_data . c err )
 }
 
-@ sc_seq SstCursor c__h → i {
+unsafe @ sc_seq SstCursor c__h → i {
     : *SstCursorImpl c ( _SstCursor_ptr c__h )
     ^ . c seq
 }
 
-@ sc_kind SstCursor c__h → i {
+unsafe @ sc_kind SstCursor c__h → i {
     : *SstCursorImpl c ( _SstCursor_ptr c__h )
     ^ . c kind
 }
 
-@ sc_klen SstCursor c__h → i {
+unsafe @ sc_klen SstCursor c__h → i {
     : *SstCursorImpl c ( _SstCursor_ptr c__h )
     ^ . c kl
 }
 
-@ sc_kptr SstCursor c__h → *u {
+unsafe @ sc_kptr SstCursor c__h → *u {
     : *SstCursorImpl c ( _SstCursor_ptr c__h )
     ^ ( vec_data [u] . c blk )
 }
 
-@ sc_koff SstCursor c__h → i {
+unsafe @ sc_koff SstCursor c__h → i {
     : *SstCursorImpl c ( _SstCursor_ptr c__h )
     ^ . c koff
 }
@@ -746,11 +746,11 @@ $ `stdlib/core/rcbox.nu`
 
 @ sc_val SstCursor c__h → ( Vec u ) { ^ ( _sc_val ( _SstCursor_ptr c__h ) ) }
 
-@ _sc_key * SstCursorImpl c → ( Vec u ) { ^ ( _mt_slice . c blk . c koff . c kl ) }
+unsafe @ _sc_key * SstCursorImpl c → ( Vec u ) { ^ ( _mt_slice . c blk . c koff . c kl ) }
 
-@ _sc_val * SstCursorImpl c → ( Vec u ) { ^ ( _mt_slice . c blk + . c koff . c kl . c vl ) }
+unsafe @ _sc_val * SstCursorImpl c → ( Vec u ) { ^ ( _mt_slice . c blk + . c koff . c kl . c vl ) }
 
-@ __sc_fail * SstCursorImpl c sink String e → v {
+unsafe @ __sc_fail * SstCursorImpl c sink String e → v {
     = . c failed 1
     = . c valid 0
     ( string_free . c err )
@@ -758,7 +758,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Decode the entry the cursor's `pos` points at.
-@ __sc_decode * SstCursorImpl c → b {
+unsafe @ __sc_decode * SstCursorImpl c → b {
     : i total ( __sst_entry_len . c blk . c pos )
     ? == total 0 { ^ F } {}
     = . c kl ?? ( bytes_read_u32_le . c blk . c pos ) { T x → # i x F _ → 0 }
@@ -770,7 +770,7 @@ $ `stdlib/core/rcbox.nu`
     ^ T
 }
 
-@ __sc_load * SstCursorImpl c i bi → b {
+unsafe @ __sc_load * SstCursorImpl c i bi → b {
     : *SstReaderImpl rr ( __SstReader_ptr . c r )
     ? >= bi . rr nblocks { = . c valid 0 ^ F } {}
     : !( Vec u ) String br ( __sst_load_block rr bi )
@@ -786,7 +786,7 @@ $ `stdlib/core/rcbox.nu`
     }
 }
 
-@ sc_first SstCursor c__h → v {
+unsafe @ sc_first SstCursor c__h → v {
     : *SstCursorImpl c ( _SstCursor_ptr c__h )
     = . c valid 0
     : b _ok ( __sc_load c 0 )
@@ -797,7 +797,7 @@ $ `stdlib/core/rcbox.nu`
     ( _sc_next c )
 }
 
-@ _sc_next * SstCursorImpl c → v {
+unsafe @ _sc_next * SstCursorImpl c → v {
     ? == . c valid 1 {} { ^ }
     = . c pos + . c pos + SST_HDR + . c kl . c vl
     ? ( __sc_decode c ) {} {
@@ -806,7 +806,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Position at the first entry >= (key, snap).
-@ sc_seek SstCursor c__h ( Vec u ) key i snap → v {
+unsafe @ sc_seek SstCursor c__h ( Vec u ) key i snap → v {
     : *SstCursorImpl c ( _SstCursor_ptr c__h )
     = . c valid 0
     : i klen ( vec_len [u] key )

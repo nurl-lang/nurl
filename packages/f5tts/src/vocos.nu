@@ -56,14 +56,14 @@ $ `stdlib/core/rcbox.nu`
 // every copy is the same vocoder, and the last owner releases it.
 : Vocos { s ctl }
 
-@ Vocos_share Vocos h → Vocos { ^ @ Vocos { # s ( rcbox_share # i . h ctl ) } }
+unsafe @ Vocos_share Vocos h → Vocos { ^ @ Vocos { # s ( rcbox_share # i . h ctl ) } }
 
 @ Vocos_drop sink Vocos h → v {
     ( mem_forget h )
     ( rcbox_release [VocosImpl] # i . h ctl )
 }
 
-@ __Vocos_ptr Vocos h → *VocosImpl { ^ ( rcbox_ptr [VocosImpl] # i . h ctl ) }
+unsafe @ __Vocos_ptr Vocos h → *VocosImpl { ^ ( rcbox_ptr [VocosImpl] # i . h ctl ) }
 
 @ __voc_err s msg → !Vocos String {
     ^ @ !Vocos String { F ( string_from msg ) }
@@ -86,7 +86,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Upload one f32 tensor out of the pickle's storage, no host copy.
-@ __voc_up * VocosImpl v s name → GkBuf {
+unsafe @ __voc_up * VocosImpl v s name → GkBuf {
     : i ti ( pt_find . v pt name )
     ? < ti 0 { ^ ( __voc_nobuf ) } {}
     ? ( pt_is_contiguous . v pt ti ) {} { ^ ( __voc_nobuf ) }
@@ -104,17 +104,18 @@ $ `stdlib/core/rcbox.nu`
     ( string_push_int s k )
     ( string_push_str s suf )
     : GkBuf b ( __voc_up v ( string_data s ) )
+    : b ok ( gk_buf_ok b )
     ( vec_push [GkBuf] dst b )
-    ^ ( gk_buf_ok b )
+    ^ ok
 }
 
-@ __voc_u32 * u p i off → i {
+unsafe @ __voc_u32 * u p i off → i {
     ^ | # i . p off | << # i . p + off 1 8 | << # i . p + off 2 16 << # i . p + off 3 24
 }
 
 // A convolution weight with the output channel moved LAST — see
 // __f5m_up_convw in model.nu: the same permutation, for the same reason.
-@ __voc_up_convw * VocosImpl v s name i cout i ipg i K → GkBuf {
+unsafe @ __voc_up_convw * VocosImpl v s name i cout i ipg i K → GkBuf {
     : i ti ( pt_find . v pt name )
     ? < ti 0 { ^ ( __voc_nobuf ) } {}
     ? ( pt_is_contiguous . v pt ti ) {} { ^ ( __voc_nobuf ) }
@@ -147,11 +148,12 @@ $ `stdlib/core/rcbox.nu`
     ( string_push_int s k )
     ( string_push_str s suf )
     : GkBuf b ( __voc_up_convw v ( string_data s ) cout ipg K )
+    : b ok ( gk_buf_ok b )
     ( vec_push [GkBuf] dst b )
-    ^ ( gk_buf_ok b )
+    ^ ok
 }
 
-@ __voc_lists * VocosImpl v → v {
+unsafe @ __voc_lists * VocosImpl v → v {
     = . v dw_w ( vec_new [GkBuf] )
     = . v dw_b ( vec_new [GkBuf] )
     = . v nw ( vec_new [GkBuf] )
@@ -166,7 +168,7 @@ $ `stdlib/core/rcbox.nu`
 // Let go of the frame-sized scratch. A store through the vocoder's pointer
 // does not drop what it overwrites, so each buffer leaves through a take and
 // is dropped when this returns — before the caller allocates the next size.
-@ __voc_scratch_zero * VocosImpl v → v {
+unsafe @ __voc_scratch_zero * VocosImpl v → v {
     = . v frames 0
     : GkBuf o_melb . v melb
     ( mem_take o_melb )
@@ -189,7 +191,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Every weight, from the pickle to the device — again after an idle unload.
-@ __voc_upload_all * VocosImpl v → b {
+unsafe @ __voc_upload_all * VocosImpl v → b {
     ( vec_clear [GkBuf] . v dw_w ) ( vec_clear [GkBuf] . v dw_b )
     ( vec_clear [GkBuf] . v nw ) ( vec_clear [GkBuf] . v nb )
     ( vec_clear [GkBuf] . v p1w ) ( vec_clear [GkBuf] . v p1b )
@@ -221,7 +223,7 @@ $ `stdlib/core/rcbox.nu`
     ^ ok
 }
 
-@ voc_open s path GpuKit kit → !Vocos String {
+unsafe @ voc_open s path GpuKit kit → !Vocos String {
     ?? ( pt_open path ) {
         T pt → {
             : Vocos h @ Vocos { # s ( rcbox_zero [VocosImpl] ) }
@@ -250,7 +252,7 @@ $ `stdlib/core/rcbox.nu`
 // weights, its scratch and the mapping.
 @ voc_close sink Vocos v → v {}
 
-@ __voc_alloc * VocosImpl v i frames → b {
+unsafe @ __voc_alloc * VocosImpl v i frames → b {
     ? == . v frames frames { ^ T } {}
     ( __voc_scratch_zero v )
     : i dim . v dim
@@ -265,7 +267,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // mel (frames × 100, row-major, natural-log scale) → waveform at 24 kHz.
-@ voc_decode Vocos v__h ( Vec f ) mel i frames ( Vec f ) out → b {
+unsafe @ voc_decode Vocos v__h ( Vec f ) mel i frames ( Vec f ) out → b {
     : *VocosImpl v ( __Vocos_ptr v__h )
     : i dim . v dim
     : i inner . v inner
@@ -342,12 +344,12 @@ $ `stdlib/core/rcbox.nu`
 
 // ── the vocoder's lease ─────────────────────────────────────────────
 
-@ voc_loaded Vocos v__h → b {
+unsafe @ voc_loaded Vocos v__h → b {
     : *VocosImpl v ( __Vocos_ptr v__h )
     ^ ( gk_buf_ok . v out_w )
 }
 
-@ voc_unload Vocos v__h → v {
+unsafe @ voc_unload Vocos v__h → v {
     : *VocosImpl v ( __Vocos_ptr v__h )
     ? ( voc_loaded v__h ) {} { ^ }
     ( __voc_scratch_zero v )
@@ -361,7 +363,7 @@ $ `stdlib/core/rcbox.nu`
 
 // The single-tensor weights leave the vocoder (dropped when this returns);
 // the per-layer lists are emptied by vec_clear, which drops their elements.
-@ __voc_drop_top * VocosImpl v → v {
+unsafe @ __voc_drop_top * VocosImpl v → v {
     : GkBuf o_emb_w . v emb_w
     ( mem_take o_emb_w )
     = . v emb_w ( __voc_nobuf )

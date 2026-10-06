@@ -13,16 +13,16 @@ $ `stdlib/core/box.nu`
     i bytes_out
 }
 
-@ bump_requests * Counters c → v {
+unsafe @ bump_requests * Counters c → v {
     = . c requests + . c requests 1
 }
 
-@ record_io * Counters c i n_in i n_out → v {
+unsafe @ record_io * Counters c i n_in i n_out → v {
     = . c bytes_in + . c bytes_in n_in
     = . c bytes_out + . c bytes_out n_out
 }
 
-@ main → i {
+unsafe @ main → i {
     : ( Box Counters ) cb ( box_new [Counters] @ Counters { 0 0 0 0 } )
 
     // Mutate through box_ptr — the stable address every call site uses.

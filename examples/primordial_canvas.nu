@@ -92,7 +92,7 @@ $ `stdlib/core/vec.nu`
     ^ c
 }
 
-@ find_free * i bs i N → i {
+unsafe @ find_free * i bs i N → i {
     : ~ i k 0
     ~ < k N {
         ? == . bs k 0 { ^ k } {}
@@ -102,7 +102,7 @@ $ `stdlib/core/vec.nu`
 }
 
 // ── One simulation tick ───────────────────────────────────────
-@ tick * i xs * i ys * i bs i N → v {
+unsafe @ tick * i xs * i ys * i bs i N → v {
     // 1) Move
     : ~ i k 0
     ~ < k N {
@@ -157,7 +157,7 @@ $ `stdlib/core/vec.nu`
 }
 
 // ── Render one frame into the framebuffer ────────────────────
-@ render * i fb * i xs * i ys * i bs i N → v {
+unsafe @ render * i fb * i xs * i ys * i bs i N → v {
     // Clear to background
     : ~ i g 0
     ~ < g * W H {
@@ -182,7 +182,7 @@ $ `stdlib/core/vec.nu`
     }
 }
 
-@ main → i {
+unsafe @ main → i {
     // The particle arrays are Vecs: they free themselves when main returns.
     // The simulation reads and writes them through their data pointers.
     : ( Vec i ) xv ( vec_zeroed [i] SLOTS )

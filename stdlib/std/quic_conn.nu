@@ -989,15 +989,16 @@ $ `stdlib/core/rcbox.nu`
         ( __qc_fail c 0 ( quic_err_transport_parameter ) 0 )
         ^
     } {}
+    // The parameters move into the connection; read them from there.
     = . c peer_tp p
-    = . c max_data_peer ( quic_tp_initial_max_data p )
-    = . c max_streams_bidi_peer ( quic_tp_initial_max_streams_bidi p )
-    = . c max_streams_uni_peer ( quic_tp_initial_max_streams_uni p )
-    ( quic_rec_set_peer . c rec ( quic_tp_max_ack_delay p ) ( quic_tp_ack_delay_exponent p ) )
+    = . c max_data_peer ( quic_tp_initial_max_data . c peer_tp )
+    = . c max_streams_bidi_peer ( quic_tp_initial_max_streams_bidi . c peer_tp )
+    = . c max_streams_uni_peer ( quic_tp_initial_max_streams_uni . c peer_tp )
+    ( quic_rec_set_peer . c rec ( quic_tp_max_ack_delay . c peer_tp ) ( quic_tp_ack_delay_exponent . c peer_tp ) )
     : ~ i idle ( quic_tp_max_idle_timeout . c local_tp )
-    ? > ( quic_tp_max_idle_timeout p ) 0 { ? | == idle 0 < ( quic_tp_max_idle_timeout p ) idle { = idle ( quic_tp_max_idle_timeout p ) } {} } {}
+    ? > ( quic_tp_max_idle_timeout . c peer_tp ) 0 { ? | == idle 0 < ( quic_tp_max_idle_timeout . c peer_tp ) idle { = idle ( quic_tp_max_idle_timeout . c peer_tp ) } {} } {}
     = . c idle_timeout idle
-    : i mu ? < ( quic_tp_max_udp_payload_size p ) 1350 ( quic_tp_max_udp_payload_size p ) 1350
+    : i mu ? < ( quic_tp_max_udp_payload_size . c peer_tp ) 1350 ( quic_tp_max_udp_payload_size . c peer_tp ) 1350
     = . c max_udp mu
     // streams opened before the parameters arrived (none for a server —
     // client data waits for 1-RTT — but keep the invariant)

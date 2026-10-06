@@ -32,7 +32,7 @@ $ `stdlib/core/vec.nu`
     ^ buf
 }
 
-@ dump_pairs s prefix ( Vec QueryPair ) pairs → v {
+unsafe @ dump_pairs s prefix ( Vec QueryPair ) pairs → v {
     : i n ( vec_len [QueryPair] pairs )
     ( nurl_print prefix )
     ( nurl_print ` n=` )

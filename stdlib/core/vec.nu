@@ -319,6 +319,43 @@
     ^ @ ?A { T x }
 }
 
+// Never returns: defined ahead of its callers so they are compiled knowing
+// that (the noreturn registry), and the optimiser can treat the check as a
+// loop exit.
+@ __vec_index_panic i idx i len → v {
+    ( nurl_eprint `index out of bounds: the index is ` ) ( nurl_eprint_int idx )
+    ( nurl_eprint ` but the length is ` ) ( nurl_eprintln_int len )
+    ( nurl_panic `index out of bounds` )
+}
+
+// The element at `idx` — the indexing a loop over a Vec wants, with no
+// raw pointer: a bounds check (which the optimiser lifts out of a counted
+// loop) and a panic naming the index and the length when it fails. Like
+// vec_get's payload, an owning element comes back as a borrow of the Vec.
+@ vec_at [A] ( Vec A ) v i idx → A {
+    // Both loads ahead of the check: on every path through the function,
+    // so the optimiser can lift them, and the check with them, out of a
+    // loop.
+    : s ctl . v ctl
+    : *A data # *A ( nurl_peek ctl 0 )
+    : i len ( __vec_len_raw ctl )
+    ? | < idx 0 >= idx len { ( __vec_index_panic idx len ) } {}
+    ^ . data idx
+}
+
+// Store `x` at `idx` (dropping the element it replaces); panics like vec_at
+// when `idx` is out of range — vec_set's bounds check without the `b` to
+// thread through when an out-of-range index is a bug, not a case.
+@ vec_put [A] ( Vec A ) v i idx A x → v {
+    : s ctl . v ctl
+    : *A data # *A ( nurl_peek ctl 0 )
+    : i len ( __vec_len_raw ctl )
+    ? | < idx 0 >= idx len { ( __vec_index_panic idx len ) } {}
+    : A old . data idx
+    ( mem_take old )
+    = . data idx x
+}
+
 // The element `x` replaces is dropped (vec_replace hands it back instead).
 @ vec_set [A] ( Vec A ) v i idx A x → b {
     : s ctl . v ctl

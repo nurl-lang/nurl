@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_inout_string_assign.nu:9:30: error: cannot give the inout string parameter 'p' a new value: the caller's string may be one it owns or one it only borrows, so the value replaced here could be neither freed safely nor kept without a leak. Return the new string instead (@ f s p → s { ^ … }), or take a String ('inout String p' and string_push… / string_clear), which owns its buffer.
+@ bump inout s p → v { = p ( nurl_str_cat p `x` ) }
+                             ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

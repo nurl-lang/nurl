@@ -43,7 +43,7 @@ $ `stdlib/core/vec.nu`
     ^ @ !( Vec String ) E { T v }
 }
 
-@ live → i { ^ - ( nurl_alloc_count ) ( nurl_free_count ) }
+unsafe @ live → i { ^ - ( nurl_alloc_count ) ( nurl_free_count ) }
 
 @ main → i {
     : ~ i base ( live )

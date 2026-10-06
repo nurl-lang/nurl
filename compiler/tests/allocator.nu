@@ -1,6 +1,6 @@
 // Allocator test — alloc, realloc, zalloc, memcpy
 
-@ main → i {
+unsafe @ main → i {
     ( nurl_print `Allocator test...\n` )
 
     // Allocate 5 × i64 (40 bytes), fill 0 10 20 30 40

@@ -64,7 +64,7 @@ $ `stdlib/std/fs.nu`
 : JiraConfig { String url String headers }
 
 // Riisu trailing slash base-URL:sta.
-@ __jira_trim_slash s raw → String {
+unsafe @ __jira_trim_slash s raw → String {
     : i n ( nurl_str_len raw )
     ? & > n 0 == ( nurl_str_get raw - n 1 ) 47
     { ^ ( string_from_bytes # *u raw - n 1 ) }

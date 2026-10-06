@@ -8,4 +8,8 @@ compiler/tests/borrow_stored_owner_dropped.nu:44: error: use of possibly-moved v
     ^ ( vec_len [i] a )
 compiler/tests/borrow_stored_owner_dropped.nu:53: error: use of possibly-moved value 'a' — it was stored into 'all', which then let go of a value it held (a field assigned anew, or an element dropped or handed out) at line 52; on that path this reads a freed buffer. Consume it on every path, or rebind it (= a …) on the path that consumed it
     ^ ( vec_len [i] a )
-error: compilation aborted — 4 borrow-checker violations (if the program is correct, this is a false positive: please report it as a bug at https://github.com/nurl-lang/nurl/issues)
+compiler/tests/borrow_stored_owner_dropped.nu:68: error: 'a' is read here, but its value was moved into 'h' at line 59. A heap value has one owner; once it is stored into an aggregate, an Option or a container (vec_push), the old name is gone, because the owner may release or replace the value while the name still points at it. Read it through 'h' (a field read, or vec_get on it), or store a copy and keep the original: ( mem_dup a ).
+    ^ + ( vec_len [i] a ) ( vec_len [i] b )
+compiler/tests/borrow_stored_owner_dropped.nu:68: error: 'b' is read here, but its value was moved into 'all' at line 64. A heap value has one owner; once it is stored into an aggregate, an Option or a container (vec_push), the old name is gone, because the owner may release or replace the value while the name still points at it. Read it through 'all' (a field read, or vec_get on it), or store a copy and keep the original: ( mem_dup b ).
+    ^ + ( vec_len [i] a ) ( vec_len [i] b )
+error: compilation aborted — 6 borrow-checker violations (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

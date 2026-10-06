@@ -193,7 +193,7 @@ $ `stdlib/ext/regex.nu`
 
 // ── Path utilities (OS-agnostic) ────────────────────────────────────
 
-@ find_first_byte s name → i { ^ & # i . # *u name 0 255 }
+unsafe @ find_first_byte s name → i { ^ & # i . # *u name 0 255 }
 
 // Skip "." / ".." and dotfiles — the first byte is '.' (46).
 @ find_is_dot s name → b { ^ == 46 ( find_first_byte name ) }
@@ -202,7 +202,7 @@ $ `stdlib/ext/regex.nu`
 // reusing whichever separator the parent already uses. Backslash wins
 // only when the parent actually contains one; otherwise we default to
 // '/', which every Windows file API also accepts.
-@ join_path s parent s name → String {
+unsafe @ join_path s parent s name → String {
     : ~ String out ( string_from parent )
     : i pl ( nurl_str_len parent )
     ? > pl 0 {
@@ -343,7 +343,7 @@ $ `stdlib/ext/regex.nu`
 
 @ is_flag s a → b { ^ == 45 ( find_first_byte a ) }
 
-@ main → i {
+unsafe @ main → i {
     : i argc ( nurl_argv_count )
 
     : ( Vec String ) terms ( vec_new [String] )

@@ -116,18 +116,18 @@ $ `stdlib/core/rcbox.nu`
 
 : RedisConn { s ctl }
 
-@ RedisConn_share RedisConn h → RedisConn { ^ @ RedisConn { # s ( rcbox_share # i . h ctl ) } }
+unsafe @ RedisConn_share RedisConn h → RedisConn { ^ @ RedisConn { # s ( rcbox_share # i . h ctl ) } }
 
 @ RedisConn_drop sink RedisConn h → v {
     ( mem_forget h )
     ( rcbox_release [RedisConnImpl] # i . h ctl )
 }
 
-@ __RedisConn_ptr RedisConn h → *RedisConnImpl { ^ ( rcbox_ptr [RedisConnImpl] # i . h ctl ) }
+unsafe @ __RedisConn_ptr RedisConn h → *RedisConnImpl { ^ ( rcbox_ptr [RedisConnImpl] # i . h ctl ) }
 
 // ── transport ─────────────────────────────────────────────────────
 
-@ __r_write * RedisConnImpl c ( Vec u ) bytes → i {
+unsafe @ __r_write * RedisConnImpl c ( Vec u ) bytes → i {
     ? == . c tls 1 {
         ?? ( tls_write . c tc bytes ) { T _ → ^ 1 F _ → ^ 0 }
     } {
@@ -136,7 +136,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Read one chunk into rxbuf. Returns 1 on progress, 0 on EOF/error.
-@ __r_fill * RedisConnImpl c → i {
+unsafe @ __r_fill * RedisConnImpl c → i {
     ? == . c tls 1 {
         ?? ( tls_read . c tc 16384 ) {
             T v → {
@@ -165,7 +165,7 @@ $ `stdlib/core/rcbox.nu`
 
 // Read exactly one full reply from the socket. Reads more bytes whenever the
 // buffered prefix is an incomplete RESP value, then drops the consumed bytes.
-@ __r_read_reply * RedisConnImpl c → !RedisReply RedisErr {
+unsafe @ __r_read_reply * RedisConnImpl c → !RedisReply RedisErr {
     : ~ b spin T
     ~ spin {
         : RespParse p ( resp_parse . c rxbuf 0 )
@@ -193,7 +193,7 @@ $ `stdlib/core/rcbox.nu`
 // caller keeps `args` and owns the returned reply.
 @ redis_command RedisConn c__h ( Vec String ) args → !RedisReply RedisErr { ^ ( __redis_command ( __RedisConn_ptr c__h ) args ) }
 
-@ __redis_command * RedisConnImpl c ( Vec String ) args → !RedisReply RedisErr {
+unsafe @ __redis_command * RedisConnImpl c ( Vec String ) args → !RedisReply RedisErr {
     : ( Vec u ) req ( resp_encode args )
     : i ok ( __r_write c req )
     ? == ok 0 { ^ @ !RedisReply RedisErr { F # RedisErr RedisIo } } {}
@@ -325,7 +325,7 @@ $ `stdlib/core/rcbox.nu`
 // ── connection ─────────────────────────────────────────────────────
 
 // tlsmode: 0 plaintext · 1 TLS no-verify · 2 TLS verify-full
-@ __redis_open s host i port i tlsmode s server_name → !RedisConn RedisErr {
+unsafe @ __redis_open s host i port i tlsmode s server_name → !RedisConn RedisErr {
     : i rawfd ( nurl_tcp_connect host port )
     ? != ( nurl_tcp_err_kind rawfd ) 0 {
         ( nurl_tcp_close rawfd )  // failed handles still own their allocation
@@ -370,12 +370,12 @@ $ `stdlib/core/rcbox.nu`
 // owner closes the connection).
 @ redis_close sink RedisConn c → v {}
 
-@ redis_last_error RedisConn c__h → s {
+unsafe @ redis_last_error RedisConn c__h → s {
     : *RedisConnImpl c ( __RedisConn_ptr c__h )
     ^ ( string_data . c lasterr )
 }
 
-@ redis_is_tls RedisConn c__h → b {
+unsafe @ redis_is_tls RedisConn c__h → b {
     : *RedisConnImpl c ( __RedisConn_ptr c__h )
     ^ == . c tls 1
 }
@@ -390,7 +390,7 @@ $ `stdlib/core/rcbox.nu`
     ^ ( __reply_ok c ( __args3 `AUTH` user password ) )
 }
 
-@ redis_select RedisConn c__h i db → !v RedisErr {
+unsafe @ redis_select RedisConn c__h i db → !v RedisErr {
     : *RedisConnImpl c ( __RedisConn_ptr c__h )
     : ( Vec String ) a ( __args1 `SELECT` ) ( redis_arg_i a db )
     : !v RedisErr r ( __reply_ok c a )

@@ -182,7 +182,7 @@ $ `stdlib/ext/json.nu`
 
 // One sample: read d input values at xp[x_at..], fill the activation
 // scratch `acts` (length n_a). Hidden layers ReLU, output linear.
-@ __mlp_forward Mlp m * f xp i x_at ( Vec f ) acts → v {
+unsafe @ __mlp_forward Mlp m * f xp i x_at ( Vec f ) acts → v {
     : *i szp ( vec_data [i] . m sizes )
     : *i wop ( vec_data [i] . m w_off )
     : *i bop ( vec_data [i] . m b_off )
@@ -233,7 +233,7 @@ $ `stdlib/ext/json.nu`
 
 // Mean squared error of the network over rows X (n×d row-major) against
 // targets Y (n×dout row-major): mean over every output element.
-@ mlp_mse Mlp m ( Vec f ) X i n i d ( Vec f ) Y → f {
+unsafe @ mlp_mse Mlp m ( Vec f ) X i n i d ( Vec f ) Y → f {
     ? == n 0 { ^ 0.0 } {}
     : ( Vec f ) acts ( __zeros . m n_a )
     : *f xp ( vec_data [f] X )
@@ -261,7 +261,7 @@ $ `stdlib/ext/json.nu`
 // Accumulate one sample's gradient into gw / gb. `acts` must hold the
 // sample's forward pass; `deltas` is a scratch of n_a (layer-aligned like
 // acts). Returns nothing; the batch divide + L2 happen in the Adam step.
-@ __mlp_backprop Mlp m ( Vec f ) acts * f yp i y_at ( Vec f ) deltas ( Vec f ) gw ( Vec f ) gb → v {
+unsafe @ __mlp_backprop Mlp m ( Vec f ) acts * f yp i y_at ( Vec f ) deltas ( Vec f ) gw ( Vec f ) gb → v {
     : *i szp ( vec_data [i] . m sizes )
     : *i wop ( vec_data [i] . m w_off )
     : *i bop ( vec_data [i] . m b_off )
@@ -327,7 +327,7 @@ $ `stdlib/ext/json.nu`
 // pass by value (only their Vec fields alias), so a counter FIELD on Mlp
 // could never advance across calls — it silently froze the bias correction
 // at t = 1 for every batch after the first.
-@ __mlp_adam Mlp m ( Vec f ) gw ( Vec f ) gb i bsz f lr f alpha i tstep → v {
+unsafe @ __mlp_adam Mlp m ( Vec f ) gw ( Vec f ) gb i bsz f lr f alpha i tstep → v {
     : f t # f tstep
     : f b1 0.9
     : f b2 0.999
@@ -363,7 +363,7 @@ $ `stdlib/ext/json.nu`
 }
 
 // MSE over a subset of rows given by idx[from..to) — the validation view.
-@ __mlp_mse_idx Mlp m * f xp i d * f yp i dout ( Vec i ) idx i from i to ( Vec f ) acts → f {
+unsafe @ __mlp_mse_idx Mlp m * f xp i d * f yp i dout ( Vec i ) idx i from i to ( Vec f ) acts → f {
     ? <= to from { ^ 0.0 } {}
     : i oa ( _mlp_iget . m a_off . m n_layers )
     : ~ f se 0.0
@@ -386,7 +386,7 @@ $ `stdlib/ext/json.nu`
 // Train on X (n×d, row-major) against Y (n×dout). For an autoencoder pass
 // X for Y and d for dout. Returns the training report; the model is
 // updated in place (best-validation weights when early_stop is on).
-@ mlp_train Mlp m ( Vec f ) X i n i d ( Vec f ) Y i dout MlpCfg cfg → MlpTrain {
+unsafe @ mlp_train Mlp m ( Vec f ) X i n i d ( Vec f ) Y i dout MlpCfg cfg → MlpTrain {
     : Rng g ( rng_seed . cfg seed )
     : *f xp ( vec_data [f] X )
     : *f yp ( vec_data [f] Y )
@@ -623,7 +623,7 @@ $ `stdlib/ext/json.nu`
 
 // ── MinMax scaler ─────────────────────────────────────────────────────
 
-@ minmax_fit ( Vec f ) X i n i d → MinMax {
+unsafe @ minmax_fit ( Vec f ) X i n i d → MinMax {
     : ( Vec f ) lo ( __zeros d )
     : ( Vec f ) hi ( __zeros d )
     : *f xp ( vec_data [f] X )
@@ -647,7 +647,7 @@ $ `stdlib/ext/json.nu`
 }
 
 // Scale rows in place: x' = (x − lo) / (hi − lo); zero-range columns → 0.
-@ minmax_apply MinMax mm ( Vec f ) X i n → v {
+unsafe @ minmax_apply MinMax mm ( Vec f ) X i n → v {
     : i d . mm n_cols
     : *f lop ( vec_data [f] . mm lo )
     : *f hip ( vec_data [f] . mm hi )

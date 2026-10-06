@@ -31,7 +31,7 @@ $ `stdlib/ext/http2_client.nu`
 }
 
 // Borrowed value lookup by header name; `` when absent.
-@ hdr_val ( Vec Header ) hs s name → s {
+unsafe @ hdr_val ( Vec Header ) hs s name → s {
     : i n ( vec_len [Header] hs )
     : *Header hp ( vec_data [Header] hs )
     : ~ i k 0
@@ -47,7 +47,7 @@ $ `stdlib/ext/http2_client.nu`
 }
 
 // Compare an owned Vec[u] against a raw string's bytes.
-@ vec_eq_str ( Vec u ) got s want → b {
+unsafe @ vec_eq_str ( Vec u ) got s want → b {
     : i n ( vec_len [u] got )
     : i wn ( nurl_str_len want )
     ? != n wn { ^ F } {}
@@ -63,7 +63,7 @@ $ `stdlib/ext/http2_client.nu`
 
 // ── §A request header HPACK round-trip ────────────────────────────────
 
-@ section_a → i {
+unsafe @ section_a → i {
     ( nurl_print `--- A request header round-trip ---\n` )
     : ~ i fails 0
     : ( Vec Header ) hs ( vec_new [Header] )

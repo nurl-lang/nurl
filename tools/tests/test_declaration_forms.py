@@ -590,7 +590,7 @@ class DeclarationForms(unittest.TestCase):
     def test_ffi_call_forms(self):
         for name, decl, stmt, expectation in FFI_CALLS:
             with self.subTest(form=name):
-                src = (decl + "\n@ main → i {\n    " + stmt +
+                src = (decl + "\nunsafe @ main → i {\n    " + stmt +
                        "\n    ( nurl_print `MAIN RAN\\n` )\n    ^ 0\n}\n")
                 self.check(name, src, expectation)
 

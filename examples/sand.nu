@@ -23,7 +23,7 @@
 : i H 180
 : i FPS 60
 
-@ main → i {
+unsafe @ main → i {
     : i total_px * W H
 
     // Simulaatioverkko: 0 = tyhjä, 1 = hiekka

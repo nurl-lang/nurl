@@ -20,7 +20,7 @@ $ `src/camhead.nu`
 $ `src/preproc.nu`
 $ `src/geom.nu`
 
-@ imnet_norm * f p i h i w → v {
+unsafe @ imnet_norm * f p i h i w → v {
     : ( Vec u ) mean__v ( vec_zeroed [u] 24 )
     : *f mean # *f ( vec_data [u] mean__v )
     : ( Vec u ) std__v ( vec_zeroed [u] 24 )
@@ -39,14 +39,14 @@ $ `src/geom.nu`
     }
 }
 
-@ prow s label * f p i n → v {
+unsafe @ prow s label * f p i n → v {
     ( nurl_print label )
     : ~ i j 0
     ~ < j n { ( nurl_print ` ` ) ( nurl_print ( nurl_str_float . p j ) ) = j + j 1 }
     ( nurl_print `\n` )
 }
 
-@ main → i {
+unsafe @ main → i {
     ? < ( nurl_argc ) 3 { ( nurl_print `usage: posecheck <ckpt.pt> <frame>\n` ) ^ 2 } {}
     : GpuKit kit ( gk_open_best )
     ? ( gk_ok kit ) {} { ( nurl_print `no gpukit backend\n` ) ^ 1 }

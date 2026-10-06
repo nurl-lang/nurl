@@ -52,7 +52,7 @@ $ `stdlib/core/vec.nu`
     ^ req
 }
 
-@ body_to_string HttpResponse r → String {
+unsafe @ body_to_string HttpResponse r → String {
     : i n ( vec_len [u] . r body )
     : *u data ( vec_data [u] . r body )
     : String out ( string_with_cap n )

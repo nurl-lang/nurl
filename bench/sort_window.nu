@@ -26,7 +26,7 @@
 // Textbook bubble sort over 8 slots: 8 passes, each shrinking the
 // unsorted prefix by one. Kept deliberately naive so every language
 // runs the same instruction mill.
-@ bubble_sort8 * u64 arr → v {
+unsafe @ bubble_sort8 * u64 arr → v {
     : ~ i pass 0
     ~ < pass 8 {
         : ~ i j 0
@@ -43,7 +43,7 @@
     }
 }
 
-@ main → i {
+unsafe @ main → i {
     : u64 iterations 2000000
     : u64 mask 0xffffffff
     : *u64 window # *u64 ( malloc * 8 8 )

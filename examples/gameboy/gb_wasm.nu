@@ -38,7 +38,7 @@ $ `examples/gameboy/core.nu`
 
 // Copy the 160×144 GB framebuffer into the canvas surface (one i64 per
 // pixel; the low 32 bits carry the ARGB value).
-@ blit * i fb → v {
+unsafe @ blit * i fb → v {
     : *u gb # *u g_fb
     : ~ i i 0
     ~ < i 23040 {
@@ -47,7 +47,7 @@ $ `examples/gameboy/core.nu`
     }
 }
 
-@ main → i {
+unsafe @ main → i {
     // Pull the selected ROM from the host into a scratch buffer, boot it
     // (cart_load copies it).
     : i n ( host_rom_size )

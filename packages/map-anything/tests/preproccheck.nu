@@ -18,7 +18,7 @@ $ `src/preproc.nu`
 
 : i __PC_N 5
 
-@ main → i {
+unsafe @ main → i {
     ? < ( nurl_argc ) 2 {
         ( puts `usage: preproccheck <dir>` )
         ^ 2

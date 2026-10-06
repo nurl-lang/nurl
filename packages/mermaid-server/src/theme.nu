@@ -344,7 +344,7 @@ $ `stdlib/std/sort.nu`
                                             ( string_clone full )
                                             th
                                         }
-                                        ? != 0 ( nurl_str_eq ( mmd_theme_str th `default` `` ) `true` ) {
+                                        ? != 0 ( nurl_str_eq ( mmd_theme_str . tp theme `default` `` ) `true` ) {
                                             = explicit ( vec_len [MmdTemplate] . ts items )
                                         } {}
                                         ( vec_push [MmdTemplate] . ts items tp )

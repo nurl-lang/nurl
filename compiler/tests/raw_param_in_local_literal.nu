@@ -15,7 +15,7 @@ $ `stdlib/core/vec.nu`
 
 & `libc` @ nurl_free_count → i
 
-@ live → i { ^ - ( nurl_alloc_count ) ( nurl_free_count ) }
+unsafe @ live → i { ^ - ( nurl_alloc_count ) ( nurl_free_count ) }
 
 : P { s text i n }
 
@@ -29,7 +29,7 @@ $ `stdlib/core/vec.nu`
     ( vec_push [P] all q )
 }
 
-@ main → i {
+unsafe @ main → i {
     : ( Vec P ) all ( vec_new [P] )
     : i l0 ( live )
     : ~ i acc 0

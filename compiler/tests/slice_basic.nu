@@ -1,7 +1,7 @@
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/slice.nu`
 
-@ main → i {
+unsafe @ main → i {
     : ( Vec i ) v ( vec_with_cap [i] 4 )
     ( vec_push [i] v 10 )
     ( vec_push [i] v 20 )

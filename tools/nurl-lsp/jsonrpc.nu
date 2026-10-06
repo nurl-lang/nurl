@@ -79,7 +79,7 @@ $ `stdlib/ext/json.nu`
 // spec lets the server reply with a JSON-RPC Parse Error, but for the
 // MVP a clean drop + best-effort log to stderr is enough.
 
-@ read_message → ?Json {
+unsafe @ read_message → ?Json {
     : ~ i clen 0
     : ~ b have_clen F
     : ~ b done F

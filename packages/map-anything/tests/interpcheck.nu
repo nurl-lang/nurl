@@ -20,7 +20,7 @@ $ `src/interp.nu`
     ^ / # f v 251.0
 }
 
-@ __ic_case i oh i ow → v {
+unsafe @ __ic_case i oh i ow → v {
     : i ihw * IC_M IC_M
     : ( Vec u ) pin__v ( vec_zeroed [u] * 8 * IC_C ihw )
     : *f pin # *f ( vec_data [u] pin__v )

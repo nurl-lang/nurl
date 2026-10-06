@@ -1,5 +1,7 @@
 COMPILE FAIL
 ERRORS
+compiler/tests/borrow_keep_beside_closure_arg.nu:26: error: 'm' is read here, but its value was moved into 's' at line 25. A heap value has one owner; once it is stored into an aggregate, an Option or a container (vec_push), the old name is gone, because the owner may release or replace the value while the name still points at it. Read it through 's' (a field read, or vec_get on it), or store a copy and keep the original: ( mem_dup m ).
+    ( mutex_free m )
 compiler/tests/borrow_keep_beside_closure_arg.nu:26: error: 'm' is consumed here, but its value was stored into an owner at line 25 (an aggregate literal, or a call that keeps it, like vec_push) — that owner drops it now, so this is a second release (a double free). Reading 'm' is fine; to hand a value on AND keep one in the owner, store a copy: ( mem_dup m ) — for a shared handle (Arc, Mutex, Channel, Regex, …) that is one more reference to the same value.
     ( mutex_free m )
-error: compilation aborted — 1 borrow-checker violation (if the program is correct, this is a false positive: please report it as a bug at https://github.com/nurl-lang/nurl/issues)
+error: compilation aborted — 2 borrow-checker violations (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

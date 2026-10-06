@@ -260,7 +260,7 @@ $ `stdlib/ext/env.nu`
     ^ out
 }
 
-@ runner_data_path s notes → String {
+unsafe @ runner_data_path s notes → String {
     : i n ( nurl_str_len notes )
     : String out ( string_new )
     ? > n 5 {

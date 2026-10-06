@@ -32,7 +32,7 @@ $ `stdlib/core/vec.nu`
     : ( Vec Cfg ) b ( clone_all a )
 }
 
-@ main → i {
+unsafe @ main → i {
     : i a0 - ( nurl_alloc_count ) ( nurl_free_count )
     : ~ i k 0
     ~ < k 10 { ( round ) = k + k 1 }

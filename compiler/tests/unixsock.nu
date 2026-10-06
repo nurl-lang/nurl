@@ -20,7 +20,7 @@ $ `stdlib/std/thread.nu`
     ^ out
 }
 
-@ vec_to_str ( Vec u ) v → String {
+unsafe @ vec_to_str ( Vec u ) v → String {
     : i n ( vec_len [u] v )
     : *u p ( vec_data [u] v )
     : String out ( string_with_cap + n 1 )
@@ -114,6 +114,8 @@ $ `stdlib/std/thread.nu`
                     }
                     F _ → {}
                 }
+                // The closure took the listener along to its thread: close it here.
+                ( unix_close_listener listener )
             }
             : !Thread ThreadErr st ( thread_spawn server_fn )
             ?? st {
@@ -138,7 +140,6 @@ $ `stdlib/std/thread.nu`
                 }
                 F _ → ( nurl_print `live thread spawn err\n` )
             }
-            ( unix_close_listener listener )
         }
         F e → { ( nurl_print `live listen err=` ) ( nurl_print ( unix_err_name e ) ) ( nurl_print `\n` ) }
     }

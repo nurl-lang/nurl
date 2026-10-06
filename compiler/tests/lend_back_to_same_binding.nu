@@ -19,7 +19,7 @@ $ `stdlib/core/vec.nu`
 
 & `libc` @ nurl_free_count → i
 
-@ live → i { ^ - ( nurl_alloc_count ) ( nurl_free_count ) }
+unsafe @ live → i { ^ - ( nurl_alloc_count ) ( nurl_free_count ) }
 
 : Conn { ( Vec i ) xs String name }
 
@@ -40,12 +40,12 @@ $ `stdlib/core/vec.nu`
 
 : Slot { i id ( Vec u ) body }
 
-@ get_slot ( Vec Slot ) t i k → Slot {
+unsafe @ get_slot ( Vec Slot ) t i k → Slot {
     : *Slot sp ( vec_data [Slot] t )
     ^ . sp k
 }
 
-@ put_slot ( Vec Slot ) t i k Slot s → v {
+unsafe @ put_slot ( Vec Slot ) t i k Slot s → v {
     : *Slot sp ( vec_data [Slot] t )
     ( mem_put_back s )
     = . sp k s

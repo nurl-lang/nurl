@@ -48,7 +48,7 @@ $ `src/store.nu`
 
 // One worker: its own model, CONC_POINTS points into the shared database,
 // each one its own transaction, with an eviction once past the cap.
-@ worker s root s name → v {
+unsafe @ worker s root s name → v {
     : Store st ( store_open root )
     : Meta m__h ( meta_new name `2026-01-01T00:00:00Z` )
     : *MetaImpl m ( _Meta_ptr m__h )

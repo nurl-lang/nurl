@@ -1,7 +1,7 @@
 // Forward consumers must release owned arguments on return and on panic.
 $ `stdlib/std/panic.nu`
 
-@ main → i {
+unsafe @ main → i {
     ( inspect_later ( nurl_str_cat `normal` ` argument` ) )
     ?? ( recover \ → v {
         ( crash_later ( nurl_str_cat `panic` ` argument` ) )

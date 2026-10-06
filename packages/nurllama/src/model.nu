@@ -207,14 +207,14 @@ $ `stdlib/core/rcbox.nu`
 // every copy is the same state, and the last owner releases it.
 : Llm { s ctl }
 
-@ Llm_share Llm h → Llm { ^ @ Llm { # s ( rcbox_share # i . h ctl ) } }
+unsafe @ Llm_share Llm h → Llm { ^ @ Llm { # s ( rcbox_share # i . h ctl ) } }
 
 @ Llm_drop sink Llm h → v {
     ( mem_forget h )
     ( rcbox_release [LlmImpl] # i . h ctl )
 }
 
-@ __Llm_ptr Llm h → *LlmImpl { ^ ( rcbox_ptr [LlmImpl] # i . h ctl ) }
+unsafe @ __Llm_ptr Llm h → *LlmImpl { ^ ( rcbox_ptr [LlmImpl] # i . h ctl ) }
 
 @ __lm_err s msg → !Llm String {
     ^ @ !Llm String { F ( string_from msg ) }
@@ -222,7 +222,7 @@ $ `stdlib/core/rcbox.nu`
 
 // Profiler clock: drain the GPU queue, then read the monotonic clock, so a
 // phase's accumulated ns reflect real device work rather than launch return.
-@ __lm_prof_now * LlmImpl m → i {
+unsafe @ __lm_prof_now * LlmImpl m → i {
     : i _s ( gpu_sync . m g )
     ^ ( monotonic_ns )
 }
@@ -293,7 +293,7 @@ $ `stdlib/core/rcbox.nu`
 // (chunk × n_ff floats) while keeping the launches amortised.
 : i LM_CHUNK 64
 
-@ __lm_upload * LlmImpl m Gguf gg s name → i {
+unsafe @ __lm_upload * LlmImpl m Gguf gg s name → i {
     // A second container, when one was given: same tensor, different file.
     ? ( st_is_open . m st ) {
         : i d ( __lm_upload_st m name )
@@ -340,17 +340,19 @@ $ `stdlib/core/rcbox.nu`
             ( lk_q8_repack . m ks . bq dptr . br dptr / ne0 32 / nb 34 )
             : i _rs ( gpu_sync . m g )
             = __lm_rp_ns + __lm_rp_ns - ( monotonic_ns ) _t1
-            ( vec_push [i] . m wdptr . br dptr )
-            ( vec_push [GpuBuffer] . m wbufs br )
+            : i br_dp . br dptr
+            ( vec_push [i] . m wdptr br_dp )
             ( vec_push [i] . m wbytes . br bytes )
+            ( vec_push [GpuBuffer] . m wbufs br )
             = __lm_last_type gt
-            ^ . br dptr
+            ^ br_dp
         } {}
-        ( vec_push [i] . m wdptr . bq dptr )
-        ( vec_push [GpuBuffer] . m wbufs bq )
+        : i bq_dp . bq dptr
+        ( vec_push [i] . m wdptr bq_dp )
         ( vec_push [i] . m wbytes . bq bytes )
+        ( vec_push [GpuBuffer] . m wbufs bq )
         = __lm_last_type gt
-        ^ . bq dptr
+        ^ bq_dp
     } {}
     : !( Vec u ) String r ( gguf_dequant gg ti )
     ?? r {
@@ -362,11 +364,12 @@ $ `stdlib/core/rcbox.nu`
                 ^ -1
             } {}
             : i _u ( gpu_upload b ( vec_data [u] raw ) )
-            ( vec_push [i] . m wdptr . b dptr )
-            ( vec_push [GpuBuffer] . m wbufs b )
+            : i b_dp . b dptr
+            ( vec_push [i] . m wdptr b_dp )
             ( vec_push [i] . m wbytes . b bytes )
+            ( vec_push [GpuBuffer] . m wbufs b )
             = __lm_last_type 0
-            ^ . b dptr
+            ^ b_dp
         }
         F e → {
             ^ -1
@@ -393,16 +396,17 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Allocate an f32 scratch/cache device buffer of n floats (tracked).
-@ __lm_scratch * LlmImpl m i nfloats → i {
+unsafe @ __lm_scratch * LlmImpl m i nfloats → i {
     : GpuBuffer b ( gpu_alloc . m g * nfloats 4 )
     ? == . b dptr 0 {
         = __lm_alloc_failed T
         ^ -1
     } {}
-    ( vec_push [i] . m wdptr . b dptr )
-    ( vec_push [GpuBuffer] . m wbufs b )
+    : i b_dp . b dptr
+    ( vec_push [i] . m wdptr b_dp )
     ( vec_push [i] . m wbytes . b bytes )
-    ^ . b dptr
+    ( vec_push [GpuBuffer] . m wbufs b )
+    ^ b_dp
 }
 
 // Per-layer tensor name: blk.<L>.<suffix>
@@ -493,7 +497,7 @@ $ `stdlib/core/rcbox.nu`
 // dequanted f32 bytes, before upload: out-lane (h·hd + 2j) ← (h·hd + j),
 // (h·hd + 2j+1) ← (h·hd + rd/2 + j) for j < rd/2; lanes ≥ rd untouched.
 // A weight permutes ROW blocks of the [out, in] tensor; a bias, elements.
-@ __lm_st_rope_permute * LlmImpl m s name ( Vec u ) raw → v {
+unsafe @ __lm_st_rope_permute * LlmImpl m s name ( Vec u ) raw → v {
     ? == . m rope_style 0 {} { ^ v }
     : b isq | != 0 ( nurl_str_ends name `attn_q.weight` ) != 0 ( nurl_str_ends name `attn_q.bias` )
     : b isk | != 0 ( nurl_str_ends name `attn_k.weight` ) != 0 ( nurl_str_ends name `attn_k.bias` )
@@ -556,7 +560,7 @@ $ `stdlib/core/rcbox.nu`
 // to happen here, on this path only. (Getting this wrong is not subtle: the
 // model produces confident nonsense, which is exactly how it was found the
 // first time.)
-@ __lm_upload_st * LlmImpl m s name → i {
+unsafe @ __lm_upload_st * LlmImpl m s name → i {
     : String hf ( __lm_hf_name name . m st_norm_add1 )
     ? == 0 ( string_len hf ) {
         ^ -1
@@ -575,11 +579,12 @@ $ `stdlib/core/rcbox.nu`
                 ^ -1
             } {}
             : i _u ( gpu_upload b ( vec_data [u] raw ) )
-            ( vec_push [i] . m wdptr . b dptr )
-            ( vec_push [GpuBuffer] . m wbufs b )
+            : i b_dp . b dptr
+            ( vec_push [i] . m wdptr b_dp )
             ( vec_push [i] . m wbytes . b bytes )
+            ( vec_push [GpuBuffer] . m wbufs b )
             = __lm_last_type 0
-            ^ . b dptr
+            ^ b_dp
         }
         F e → {
             ^ -1
@@ -588,7 +593,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // x ← x + 1 over a buffer of f32 bytes, in place (see __lm_upload_st).
-@ __lm_add1 ( Vec u ) raw → v {
+unsafe @ __lm_add1 ( Vec u ) raw → v {
     : i n / ( vec_len [u] raw ) 4
     : *u p ( vec_data [u] raw )
     : ~ i k 0
@@ -607,7 +612,7 @@ $ `stdlib/core/rcbox.nu`
 // Optional per-layer tensor: device pointer, or -1 when the model has
 // none (biases are architecture-dependent). Always uploaded as f32 —
 // a bias is a single row, so the dequant cost is nil.
-@ __lm_upload_opt * LlmImpl m Gguf gg i layer s suffix → i {
+unsafe @ __lm_upload_opt * LlmImpl m Gguf gg i layer s suffix → i {
     : String nm ( __lm_tname layer suffix )
     ? ( st_is_open . m st ) {
         : i d ( __lm_upload_st m ( string_data nm ) )
@@ -629,10 +634,11 @@ $ `stdlib/core/rcbox.nu`
                 ^ -1
             } {}
             : i _u ( gpu_upload b ( vec_data [u] raw ) )
-            ( vec_push [i] . m wdptr . b dptr )
-            ( vec_push [GpuBuffer] . m wbufs b )
+            : i b_dp . b dptr
+            ( vec_push [i] . m wdptr b_dp )
             ( vec_push [i] . m wbytes . b bytes )
-            ^ . b dptr
+            ( vec_push [GpuBuffer] . m wbufs b )
+            ^ b_dp
         }
         F e → {
             ^ -1
@@ -685,7 +691,7 @@ $ `stdlib/core/rcbox.nu`
     = __lm_lt now
 }
 
-@ llm_open_st s path s weights i want_ctx → !Llm String {
+unsafe @ llm_open_st s path s weights i want_ctx → !Llm String {
     ( __lm_lp_start )
     : ~ Gguf gg ( gguf_none )
     ?? ( gguf_open path ) {
@@ -1206,22 +1212,22 @@ $ `stdlib/core/rcbox.nu`
 
 @ llm_word_release i w → v { ( rcbox_release [LlmImpl] w ) }
 
-@ llm_tok Llm m__h → Tok {
+unsafe @ llm_tok Llm m__h → Tok {
     : *LlmImpl m ( __Llm_ptr m__h )
     ^ . m tok
 }
 
-@ llm_n_vocab Llm m__h → i {
+unsafe @ llm_n_vocab Llm m__h → i {
     : *LlmImpl m ( __Llm_ptr m__h )
     ^ . m n_vocab
 }
 
-@ llm_n_ctx Llm m__h → i {
+unsafe @ llm_n_ctx Llm m__h → i {
     : *LlmImpl m ( __Llm_ptr m__h )
     ^ . m n_ctx
 }
 
-@ llm_logit Llm m__h i idx → f {
+unsafe @ llm_logit Llm m__h i idx → f {
     : *LlmImpl m ( __Llm_ptr m__h )
     ^ ( gpu_host_get_f32 . m logits_host idx )
 }
@@ -1264,7 +1270,7 @@ $ `stdlib/core/rcbox.nu`
 // n_expert_used best experts inside them), weights = the UNBIASED
 // scores of the winners, normalised, times expert_weights_scale.
 // Appends (expert, weight) pairs to sel/wts.
-@ __lm_moe_route * LlmImpl m i L i b2 ( Vec i ) sel ( Vec f ) wts → v {
+unsafe @ __lm_moe_route * LlmImpl m i L i b2 ( Vec i ) sel ( Vec f ) wts → v {
     : i nx . m n_expert
     : i per_grp ? > . m n_group 0 / nx . m n_group nx
     : ( Vec f ) sc ( vec_new [f] )
@@ -1406,7 +1412,7 @@ $ `stdlib/core/rcbox.nu`
     }
 }
 
-@ __lm_eval_core * LlmImpl m ( Vec i ) ids i first i count i pos0 i kvlen b causal i logits_mode → v {
+unsafe @ __lm_eval_core * LlmImpl m ( Vec i ) ids i first i count i pos0 i kvlen b causal i logits_mode → v {
     ? < count 1 { ^ v } {}
     : i ne . m n_embd
     : i hd . m head_dim
@@ -1639,12 +1645,12 @@ $ `stdlib/core/rcbox.nu`
 
 // After a mode-3 (greedy) window eval: the argmax token id and its
 // softmax probability for window row `row`.
-@ llm_win_id Llm m__h i row → i {
+unsafe @ llm_win_id Llm m__h i row → i {
     : *LlmImpl m ( __Llm_ptr m__h )
     ^ # i ( gpu_host_get_i32 . m amid_h row )
 }
 
-@ llm_win_prob Llm m__h i row → f {
+unsafe @ llm_win_prob Llm m__h i row → f {
     : *LlmImpl m ( __Llm_ptr m__h )
     ^ ( gpu_host_get_f32 . m amprob_h row )
 }
@@ -1658,17 +1664,17 @@ $ `stdlib/core/rcbox.nu`
 
 // Logit `idx` of window row `row` after an all-positions eval
 // (llm_eval_win with logits). Row 0 = the window's first position.
-@ llm_logit_at Llm m__h i row i idx → f {
+unsafe @ llm_logit_at Llm m__h i row i idx → f {
     : *LlmImpl m ( __Llm_ptr m__h )
     ^ ( gpu_host_get_f32 . m logits_host + * row . m n_vocab idx )
 }
 
-@ llm_mask_id Llm m__h → i {
+unsafe @ llm_mask_id Llm m__h → i {
     : *LlmImpl m ( __Llm_ptr m__h )
     ^ . m mask_id
 }
 
-@ llm_is_diffusion Llm m__h → b {
+unsafe @ llm_is_diffusion Llm m__h → b {
     : *LlmImpl m ( __Llm_ptr m__h )
     ^ . m bidir
 }

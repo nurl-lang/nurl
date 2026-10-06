@@ -18,7 +18,7 @@ $ `stdlib/std/time.nu`
 
 & `c` @ nurl_idle_hlt_count → i
 
-@ main → i {
+unsafe @ main → i {
     : i t0 ( monotonic_ns )
     ( sleep_ms 300 )
     : i elapsed_ms / - ( monotonic_ns ) t0 1000000

@@ -2,4 +2,4 @@ COMPILE FAIL
 ERRORS
 compiler/tests/borrow_use_after_move.nu:11: error: use of moved value 'v' — a heap handle has exactly one owner, and this one was consumed at line 10 by vec_free. After that the binding is dead: free or read the value through whatever owns it now, or rebind this name to a fresh value.
     : i n ( vec_len [i] v )
-error: compilation aborted — 1 borrow-checker violation (if the program is correct, this is a false positive: please report it as a bug at https://github.com/nurl-lang/nurl/issues)
+error: compilation aborted — 1 borrow-checker violation (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

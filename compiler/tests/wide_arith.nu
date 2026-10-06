@@ -69,7 +69,7 @@ $ `stdlib/core/vec.nu`
     ^ ^^ z >> z 31
 }
 
-@ main → i {
+unsafe @ main → i {
     // ── fixed edge cases ─────────────────────────────────────────────
     : u64 MAX 18446744073709551615
     ( chk `addc_lo max+1` 0 ( nurl_addc_lo MAX 1 0 ) )

@@ -1,0 +1,11 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_stale_borrow.nu:19:21: error: pointer 'p' borrowed from 'v' is stale: 'v' was mutated on line 16 and may have reallocated its buffer
+  note: take the view again after the mutation (p = ( string_data / vec_data … v ) ), or read through the owner
+compiler/tests/diag_stale_borrow.nu:33:18: error: pointer 'bp' borrowed from 'b' is stale: 'b' was mutated on line 32 and may have reallocated its buffer
+  note: take the view again after the mutation (bp = ( string_data / vec_data … b ) ), or read through the owner
+compiler/tests/diag_stale_borrow.nu:44:39: error: pointer 'cp' borrowed from 'c' is stale: 'c' was mutated on line 43 and may have reallocated its buffer
+  note: take the view again after the mutation (cp = ( string_data / vec_data … c ) ), or read through the owner
+compiler/tests/diag_stale_borrow.nu:55:39: error: pointer 'ep' borrowed from 'e' is stale: 'e' was mutated on line 52 and may have reallocated its buffer
+  note: take the view again after the mutation (ep = ( string_data / vec_data … e ) ), or read through the owner
+error: compilation aborted — 4 borrow-checker violations (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

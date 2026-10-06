@@ -40,7 +40,7 @@ $ `stdlib/ext/http_server.nu`
 // the method, path, and body so the test can verify the round-trip
 // end-to-end. We use plain text (not actual JSON) to avoid pulling
 // the JSON encoder into this test.
-@ echo_handler HttpRequest req → HttpResponse {
+unsafe @ echo_handler HttpRequest req → HttpResponse {
     : String body ( string_with_cap 128 )
     ( string_push_str body `method=` )
     ( string_push_str body ( string_data . req method ) )

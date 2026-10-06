@@ -9,13 +9,13 @@ $ `stdlib/std/rc.nu`
 
 : Slot [A] { s ptr }
 
-@ slot_new [A] A x → ( Slot A ) {
+unsafe @ slot_new [A] A x → ( Slot A ) {
     : *A p ( alloc [A] 1 )
     = . p 0 x
     ^ @ ( Slot A ) { # s p }
 }
 
-@ Slot_drop [A] sink ( Slot A ) h → v {
+unsafe @ Slot_drop [A] sink ( Slot A ) h → v {
     ( mem_forget h )
     : *A p # *A . h ptr
     ? != 0 # i p {
@@ -25,7 +25,7 @@ $ `stdlib/std/rc.nu`
     } {}
 }
 
-@ Slot_clone [A] ( Slot A ) h → ( Slot A ) {
+unsafe @ Slot_clone [A] ( Slot A ) h → ( Slot A ) {
     : *A src # *A . h ptr
     ? == 0 # i src { ^ @ ( Slot A ) { # s 0 } } {}
     : *A p ( alloc [A] 1 )
@@ -36,7 +36,7 @@ $ `stdlib/std/rc.nu`
 
 : Node { i id ( Slot ( Rc Node ) ) next }
 
-@ main → i {
+unsafe @ main → i {
     : ( Rc Node ) a ( rc_new [Node] @ Node { 1 ( slot_new [( Rc Node )] ( rc_zero [Node] ) ) } )
     ^ - . ( rc_get [Node] a ) id 1
 }

@@ -57,16 +57,16 @@ $ `stdlib/core/rcbox.nu`
 // every copy is the same state, and the last owner releases it.
 : OauthConfig { s ctl }
 
-@ OauthConfig_share OauthConfig h → OauthConfig { ^ @ OauthConfig { # s ( rcbox_share # i . h ctl ) } }
+unsafe @ OauthConfig_share OauthConfig h → OauthConfig { ^ @ OauthConfig { # s ( rcbox_share # i . h ctl ) } }
 
 @ OauthConfig_drop sink OauthConfig h → v {
     ( mem_forget h )
     ( rcbox_release [OauthConfigImpl] # i . h ctl )
 }
 
-@ __OauthConfig_ptr OauthConfig h → *OauthConfigImpl { ^ ( rcbox_ptr [OauthConfigImpl] # i . h ctl ) }
+unsafe @ __OauthConfig_ptr OauthConfig h → *OauthConfigImpl { ^ ( rcbox_ptr [OauthConfigImpl] # i . h ctl ) }
 
-@ oauth_config_new s client_id s redirect_uri s scope → OauthConfig {
+unsafe @ oauth_config_new s client_id s redirect_uri s scope → OauthConfig {
     : i c__box ( rcbox_zero [OauthConfigImpl] )
     : *OauthConfigImpl c ( rcbox_ptr [OauthConfigImpl] c__box )
     = . c client_id ( string_from client_id )
@@ -79,22 +79,22 @@ $ `stdlib/core/rcbox.nu`
     ^ @ OauthConfig { # s c__box }
 }
 
-@ oauth_config_set_secret OauthConfig c__h s secret → v {
+unsafe @ oauth_config_set_secret OauthConfig c__h s secret → v {
     : *OauthConfigImpl c ( __OauthConfig_ptr c__h )
     ( _oauth_set_str . c client_secret secret )
 }
 
-@ oauth_config_set_audience OauthConfig c__h s audience → v {
+unsafe @ oauth_config_set_audience OauthConfig c__h s audience → v {
     : *OauthConfigImpl c ( __OauthConfig_ptr c__h )
     ( _oauth_set_str . c audience audience )
 }
 
-@ oauth_config_set_prompt OauthConfig c__h s prompt → v {
+unsafe @ oauth_config_set_prompt OauthConfig c__h s prompt → v {
     : *OauthConfigImpl c ( __OauthConfig_ptr c__h )
     ( _oauth_set_str . c prompt prompt )
 }
 
-@ oauth_config_set_basic_auth OauthConfig c__h b on → v {
+unsafe @ oauth_config_set_basic_auth OauthConfig c__h b on → v {
     : *OauthConfigImpl c ( __OauthConfig_ptr c__h )
     = . c basic_auth on
 }
@@ -120,7 +120,7 @@ $ `stdlib/core/rcbox.nu`
 // The URL to send the user's browser to. `state` and `nonce` are the
 // values the caller minted (pkce.nu) and must remember: state is
 // compared on the way back, nonce is compared inside the ID token.
-@ oauth_authorize_url OidcProvider p__h OauthConfig cfg__h s state s nonce Pkce pk → String {
+unsafe @ oauth_authorize_url OidcProvider p__h OauthConfig cfg__h s state s nonce Pkce pk → String {
     : *OauthConfigImpl cfg ( __OauthConfig_ptr cfg__h )
     : *OidcProviderImpl p ( _OidcProvider_ptr p__h )
     : String q ( string_with_cap 512 )
@@ -154,7 +154,7 @@ $ `stdlib/core/rcbox.nu`
     String error_description
 }
 
-@ __oaf_param ( Vec UrlParam ) ps s key → String {
+unsafe @ __oaf_param ( Vec UrlParam ) ps s key → String {
     : i n ( vec_len [UrlParam] ps )
     : *UrlParam data ( vec_data [UrlParam] ps )
     : ~ i k 0
@@ -255,7 +255,7 @@ $ `stdlib/core/rcbox.nu`
 
 // Add whichever client authentication the config asks for: the secret in
 // the body, or an Authorization header the caller then sends.
-@ __oaf_auth_header * OauthConfigImpl cfg → String {
+unsafe @ __oaf_auth_header * OauthConfigImpl cfg → String {
     : String out ( string_new )
     ? & . cfg basic_auth > ( string_len . cfg client_secret ) 0 {
         : String ek ( url_percent_encode ( string_data . cfg client_id ) )
@@ -272,7 +272,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // POST a form to the token endpoint and read the token response.
-@ __oaf_token_request * OidcProviderImpl p * OauthConfigImpl cfg String form → !TokenSet OauthErr {
+unsafe @ __oaf_token_request * OidcProviderImpl p * OauthConfigImpl cfg String form → !TokenSet OauthErr {
     ? == 0 ( string_len . p token_endpoint ) {
         ( _oidc_err p `no token_endpoint — run discovery or set one` )
         ^ @ !TokenSet OauthErr { F OaConfig }
@@ -333,7 +333,7 @@ $ `stdlib/core/rcbox.nu`
 
 // Exchange the authorization code for tokens. `verifier` is the PKCE
 // secret whose challenge went out with the authorization request.
-@ oauth_exchange_code OidcProvider p__h OauthConfig cfg__h s code s verifier → !TokenSet OauthErr {
+unsafe @ oauth_exchange_code OidcProvider p__h OauthConfig cfg__h s code s verifier → !TokenSet OauthErr {
     : *OauthConfigImpl cfg ( __OauthConfig_ptr cfg__h )
     : *OidcProviderImpl p ( _OidcProvider_ptr p__h )
     : String form ( string_with_cap 512 )
@@ -350,7 +350,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // A new access token from a refresh token — no user interaction.
-@ oauth_refresh OidcProvider p__h OauthConfig cfg__h s refresh_token → !TokenSet OauthErr {
+unsafe @ oauth_refresh OidcProvider p__h OauthConfig cfg__h s refresh_token → !TokenSet OauthErr {
     : *OauthConfigImpl cfg ( __OauthConfig_ptr cfg__h )
     : *OidcProviderImpl p ( _OidcProvider_ptr p__h )
     : String form ( string_with_cap 512 )
@@ -367,7 +367,7 @@ $ `stdlib/core/rcbox.nu`
 
 // The machine grant: this service authenticating as itself, with no user
 // behind it (RFC 6749 §4.4).
-@ oauth_client_credentials OidcProvider p__h OauthConfig cfg__h → !TokenSet OauthErr {
+unsafe @ oauth_client_credentials OidcProvider p__h OauthConfig cfg__h → !TokenSet OauthErr {
     : *OauthConfigImpl cfg ( __OauthConfig_ptr cfg__h )
     : *OidcProviderImpl p ( _OidcProvider_ptr p__h )
     : String form ( string_with_cap 512 )
@@ -386,7 +386,7 @@ $ `stdlib/core/rcbox.nu`
 
 // The profile as the provider will state it right now, fetched with the
 // access token (OIDC core §5.3). Returns the owned claims object.
-@ oauth_userinfo OidcProvider p__h s access_token → !Json OauthErr {
+unsafe @ oauth_userinfo OidcProvider p__h s access_token → !Json OauthErr {
     : *OidcProviderImpl p ( _OidcProvider_ptr p__h )
     ? == 0 ( string_len . p userinfo_endpoint ) {
         ( _oidc_err p `no userinfo_endpoint — run discovery or set one` )

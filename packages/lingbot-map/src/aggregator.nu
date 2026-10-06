@@ -75,18 +75,18 @@ $ `src/rope.nu`
 // `taps` is a 4-element array; the model uses [4, 11, 17, 23], and a
 // test can point it at early groups to see how far a divergence has
 // travelled by then.
-@ ag_tap * i taps i i0 → i {
+unsafe @ ag_tap * i taps i i0 → i {
     : ~ i k 0
     ~ < k 4 { ? == . taps k i0 { ^ k } {} = k + k 1 }
     ^ -1
 }
 
 // The model's own tap points.
-@ ag_default_taps * i out → v {
+unsafe @ ag_default_taps * i out → v {
     = . out 0 4 = . out 1 11 = . out 2 17 = . out 3 23
 }
 
-@ ag_load Lw w GpuKit kit → Agg {
+unsafe @ ag_load Lw w GpuKit kit → Agg {
     : ( Vec LmBlk ) fb ( vec_new [LmBlk] )
     : ( Vec LmBlk ) gb ( vec_new [LmBlk] )
     : ~ i i0 0
@@ -223,7 +223,7 @@ $ `src/rope.nu`
 }
 
 // The six special-token rows for frame `fidx`, as a host vector.
-@ ag_special_rows Agg a i fidx i nscale → ( Vec f ) {
+unsafe @ ag_special_rows Agg a i fidx i nscale → ( Vec f ) {
     : ( Vec f ) out ( vec_with_cap [f] * AG_SPECIAL AG_DIM )
     : b _sl ( vec_set_len [f] out * AG_SPECIAL AG_DIM )
     : *f op ( vec_data [f] out )
@@ -251,7 +251,7 @@ $ `src/rope.nu`
 // Grid coordinates for the 3-D rope: special token j at (f, j, j), patch
 // (py, px) at (f, 6+py, 6+px) — the specials run down a diagonal the
 // patch grid never reaches.
-@ ag_pos3 i gh i gw i fidx * i fr * i rw * i cl → v {
+unsafe @ ag_pos3 i gh i gw i fidx * i fr * i rw * i cl → v {
     : ~ i j 0
     ~ < j AG_SPECIAL { = . fr j fidx = . rw j j = . cl j j = j + j 1 }
     : ~ i y 0
@@ -269,7 +269,7 @@ $ `src/rope.nu`
 }
 
 // Grid coordinates for the 2-D rope: specials at 0, patches offset by 1.
-@ ag_pos2 i gh i gw * i rows * i cols → v {
+unsafe @ ag_pos2 i gh i gw * i rows * i cols → v {
     : ~ i j 0
     ~ < j AG_SPECIAL { = . rows j 0 = . cols j 0 = j + j 1 }
     : ~ i y 0
@@ -289,7 +289,7 @@ $ `src/rope.nu`
 // leaving them to the caller was a bug worth the comment: uninitialised
 // device memory made the very first block produce NaN, and a NaN 72
 // blocks deep says nothing about where it came from.
-@ ag_setup_rope2 GpuKit kit LmWs ws i hd i maxpos → b {
+unsafe @ ag_setup_rope2 GpuKit kit LmWs ws i hd i maxpos → b {
     : i half / hd 2
     : i tn * maxpos half
     : ( Vec u ) hc__v ( vec_zeroed [u] * 8 tn )
@@ -309,7 +309,7 @@ $ `src/rope.nu`
     ^ ok
 }
 
-@ __ag_upi GpuKit kit GkBuf b * i p i n → b {
+unsafe @ __ag_upi GpuKit kit GkBuf b * i p i n → b {
     : ( Vec i ) v ( vec_with_cap [i] n )
     : b _sl ( vec_set_len [i] v n )
     : *i vp ( vec_data [i] v )
@@ -327,7 +327,7 @@ $ `src/rope.nu`
 //
 // Where this frame's rows go in the caches, and how much of them is
 // live, follows from `fidx` alone — see ag_kv_woff / ag_kv_nvalid.
-@ ag_forward_one GpuKit kit Agg a LmWs ws GkBuf dtok GkBuf tok
+unsafe @ ag_forward_one GpuKit kit Agg a LmWs ws GkBuf dtok GkBuf tok
 * f img i h i w i gh i gw i fidx i nscale i kvscale i kvwindow
 i stopat * i taps GkBuf out → b {
     : i np * gh gw

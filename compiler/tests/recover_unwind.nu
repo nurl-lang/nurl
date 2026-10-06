@@ -17,7 +17,7 @@ $ `stdlib/core/string.nu`
 // A user `% Drop` type whose typed destructor frees a malloc'd buffer.
 : Handle { * u buf }
 
-% Drop ( Handle ) { @ drop Handle h → v { ( nurl_free # s . h buf ) } }
+% Drop ( Handle ) { unsafe @ drop Handle h → v { ( nurl_free # s . h buf ) } }
 
 // Owned raw string scratch, freed by the unwind (not leaked).
 @ crash_string → v {
@@ -28,7 +28,7 @@ $ `stdlib/core/string.nu`
 
 // User `% Drop` value: its typed destructor is replayed by the unwind,
 // including one already dropped in a prior loop iteration (no double-drop).
-@ crash_drop → v {
+unsafe @ crash_drop → v {
     : ~ i k 0
     ~ < k 2 {
         : Handle tmp @ Handle { # *u ( malloc 24 ) }
@@ -71,7 +71,7 @@ $ `stdlib/core/string.nu`
     }
 }
 
-@ main → i {
+unsafe @ main → i {
     ( guard \ → v { ( crash_string ) } )
     ( guard \ → v { ( crash_slice ) } )
     ( guard \ → v { ( crash_struct ) } )

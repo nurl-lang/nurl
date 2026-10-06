@@ -34,7 +34,7 @@ $ `stdlib/ext/websocket.nu`
     ( bytes_extend_str buf raw )
 }
 
-@ vec_bytes_eq_hex ( Vec u ) got s want_hex → b {
+unsafe @ vec_bytes_eq_hex ( Vec u ) got s want_hex → b {
     : i n ( vec_len [u] got )
     : i wh ( nurl_str_len want_hex )
     ? != * n 2 wh { ^ F } {}
@@ -68,7 +68,7 @@ $ `stdlib/ext/websocket.nu`
     ^ r
 }
 
-@ section_a → v {
+unsafe @ section_a → v {
     ( nurl_print `--- A handshake ---\n` )
     // RFC 6455 §1.3 worked example
     : String acc ( ws_accept_key `dGhlIHNhbXBsZSBub25jZQ==` )
@@ -107,7 +107,7 @@ $ `stdlib/ext/websocket.nu`
     ( request_free r )
 }
 
-@ section_b → v {
+unsafe @ section_b → v {
     ( nurl_print `--- B ws_is_upgrade ---\n` )
     : HttpRequest r1 ( make_request_for_upgrade )
     ( print_bool `valid_upgrade` ( ws_is_upgrade r1 ) )
@@ -197,7 +197,7 @@ $ `stdlib/ext/websocket.nu`
     ( vec_free [u] cp )
 }
 
-@ section_d → v {
+unsafe @ section_d → v {
     ( nurl_print `--- D frame serializer ---\n` )
     // RFC 6455 §5.7: single unmasked "Hello" text frame
     // Expected wire: 81 05 48 65 6c 6c 6f

@@ -31,7 +31,7 @@ $ `stdlib/ext/websocket.nu`
 }
 
 // Compare an owned Vec[u] against a lowercase hex string.
-@ vec_eq_hex ( Vec u ) got s want_hex → b {
+unsafe @ vec_eq_hex ( Vec u ) got s want_hex → b {
     : i n ( vec_len [u] got )
     : i wh ( nurl_str_len want_hex )
     ? != * n 2 wh { ^ F } {}
@@ -189,7 +189,7 @@ $ `stdlib/ext/websocket.nu`
     ( vec_free [u] carry )
 }
 
-@ run_live_test → i {
+unsafe @ run_live_test → i {
     : ~ i fails 0
     : !TcpListener NetErr lr ( tcp_listen `127.0.0.1` 18974 )
     ?? lr {
@@ -281,7 +281,7 @@ $ `stdlib/ext/websocket.nu`
 }
 
 // Compare an owned Vec[u] against a raw string's bytes.
-@ vec_eq_str ( Vec u ) got s want → b {
+unsafe @ vec_eq_str ( Vec u ) got s want → b {
     : i n ( vec_len [u] got )
     : i wn ( nurl_str_len want )
     ? != n wn { ^ F } {}

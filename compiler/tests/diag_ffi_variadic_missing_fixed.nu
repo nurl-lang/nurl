@@ -19,7 +19,7 @@
 // variadic spelling has exactly the same hazard.
 & `libc` @ xpf s fmt ... → i
 
-@ main → i {
+unsafe @ main → i {
     : i r ( xpf )
     ( nurl_print `unreachable\n` )
     ^ r

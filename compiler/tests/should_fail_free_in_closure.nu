@@ -15,7 +15,7 @@ $ `stdlib/core/io.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 
-@ each ( Vec i ) v ( @ v i ) f → v {
+unsafe @ each ( Vec i ) v ( @ v i ) f → v {
     : i n ( vec_len [i] v )
     : ~ i k 0
     ~ < k n {
@@ -24,7 +24,7 @@ $ `stdlib/core/vec.nu`
     }
 }
 
-@ main → i {
+unsafe @ main → i {
     : ( Vec i ) v ( vec_new [i] )
     ( vec_push [i] v 11 )
     ( each v \ i x → v {

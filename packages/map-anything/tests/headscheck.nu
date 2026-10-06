@@ -21,7 +21,7 @@ $ `src/heads.nu`
     ^ 1
 }
 
-@ __hc_read_up GpuKit kit s dir s name i n → GkBuf {
+unsafe @ __hc_read_up GpuKit kit s dir s name i n → GkBuf {
     : String p ( string_from dir )
     ( string_push_str p name )
     : ~ GkBuf out ( gk_buf_none GK_F32 )
@@ -49,7 +49,7 @@ $ `src/heads.nu`
     ^ out
 }
 
-@ __hc_write s dir s name * f vals i n → b {
+unsafe @ __hc_write s dir s name * f vals i n → b {
     : ( Vec u ) out ( vec_with_cap [u] * n 4 )
     : b _ol ( vec_set_len [u] out * n 4 )
     : *u op ( vec_data [u] out )
@@ -73,7 +73,7 @@ $ `src/heads.nu`
     ^ ok
 }
 
-@ main → i {
+unsafe @ main → i {
     ? < ( nurl_argc ) 5 { ^ ( __hc_die `usage: headscheck <model> <dir> <gh> <gw>` ) } {}
     : s model ( nurl_argv 1 )
     : s dir ( nurl_argv 2 )

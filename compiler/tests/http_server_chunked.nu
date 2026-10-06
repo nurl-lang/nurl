@@ -65,7 +65,7 @@ $ `stdlib/ext/http_server.nu`
     ^ ( string_contains buf needle )
 }
 
-@ bytes_extend_str_from String buf ( Vec u ) chunk → v {
+unsafe @ bytes_extend_str_from String buf ( Vec u ) chunk → v {
     : i n ( vec_len [u] chunk )
     : *u p ( vec_data [u] chunk )
     : ~ i k 0
@@ -75,7 +75,7 @@ $ `stdlib/ext/http_server.nu`
     }
 }
 
-@ run_live → i {
+unsafe @ run_live → i {
     : ~ i fails 0
     : !TcpListener NetErr lr ( tcp_listen `127.0.0.1` 18823 )
     ?? lr {

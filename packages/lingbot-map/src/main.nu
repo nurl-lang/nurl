@@ -490,7 +490,7 @@ $ `src/preproc.nu`
 
 // ── one frame ───────────────────────────────────────────────────────
 
-@ __lm_norm * f p i h i w → v {
+unsafe @ __lm_norm * f p i h i w → v {
     : ( Vec u ) mean__v ( vec_zeroed [u] 24 )
     : *f mean # *f ( vec_data [u] mean__v )
     : ( Vec u ) std__v ( vec_zeroed [u] 24 )
@@ -519,7 +519,7 @@ $ `src/preproc.nu`
 // Emit the points of one frame into the PLY writer. `rgb` is the
 // un-normalised CHW image, `dep` and `cf` are the head's outputs,
 // `kinv` and `c2w` the camera. The writer buffers and flushes itself.
-@ __lm_emit PlyW p * f rgb * f dep * f cf * f kinv * f c2w
+unsafe @ __lm_emit PlyW p * f rgb * f dep * f cf * f kinv * f c2w
 i h i w f cmin i stride → v {
     : ( Vec u ) wp__v ( vec_zeroed [u] 24 )
     : *f wp # *f ( vec_data [u] wp__v )
@@ -622,7 +622,7 @@ i h i w f cmin i stride → v {
     ( nurl_print ` GB` )
 }
 
-@ main → i {
+unsafe @ main → i {
     // `lingbot-map view <cloud.ply>` — look at a cloud that already exists,
     // without a checkpoint, a GPU or a reconstruction. Taken before the
     // options are parsed because a bare filename is a frame everywhere else.

@@ -23,7 +23,7 @@ $ `runtime.nu`
 
 // Load a raw little-endian f32 file: its values as bytes (4 per element),
 // empty when the file cannot be read.
-@ load_f32 s path → ( Vec u ) {
+unsafe @ load_f32 s path → ( Vec u ) {
     ?? ( read_file_bytes path ) {
         T bytes → {
             : i n / ( vec_len [u] bytes ) 4
@@ -38,7 +38,7 @@ $ `runtime.nu`
 
 @ print_f f x → v { ( nurl_print ( nurl_str_float x ) ) }
 
-@ main → i {
+unsafe @ main → i {
     : ( Vec String ) av ( env_args_list )
     ? < ( vec_len [String] av ) 3 {
         ( nurl_print `usage: onnx <model.onnx> <input.f32> [expected.f32]\n` )

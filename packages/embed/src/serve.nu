@@ -113,13 +113,13 @@ $ `model.nu`
 
 : ~ i g_q_sync 0  // *EmSync as an address (0 = never served)
 
-@ __em_sync → *EmSync { ^ # *EmSync g_q_sync }
+unsafe @ __em_sync → *EmSync { ^ # *EmSync g_q_sync }
 
 // Run one request's forward — the WHOLE batch, one job — on the model
 // thread and wait for it. The job takes `ids` and `offs`; what comes
 // back is the `nout` floats of the batch's embeddings, or an empty Vec
 // when the forward failed.
-@ __em_submit sink ( Vec i ) ids sink ( Vec i ) offs i nout b normalize → ( Vec f ) {
+unsafe @ __em_submit sink ( Vec i ) ids sink ( Vec i ) offs i nout b normalize → ( Vec f ) {
     ? != g_q_sync 0 {} { ^ ( vec_new [f] ) }
     : *EmSync q ( __em_sync )
     : ( Vec f ) out ( vec_with_cap [f] nout )
@@ -148,7 +148,7 @@ $ `model.nu`
 }
 
 // The model thread: take jobs, run them, wake the waiter.
-@ __em_model_loop → v {
+unsafe @ __em_model_loop → v {
     : Embed e # Embed g_em
     : *EmSync q ( __em_sync )
     : ~ b run T
@@ -206,7 +206,7 @@ $ `model.nu`
 }
 
 // Five wakes a second for the model thread while --unload-after is on.
-@ __em_ticker → v {
+unsafe @ __em_ticker → v {
     : *EmSync q ( __em_sync )
     ~ T {
         ( sleep_ms 200 )
@@ -285,7 +285,7 @@ $ `model.nu`
 // device forward — and the whole request is ONE job: the model thread
 // sees every text of the batch at once and runs them as a few padded
 // batched forwards (embed_encode_batch), not one forward per text.
-@ __em_run ( Vec String ) texts b normalize → HttpResponse {
+unsafe @ __em_run ( Vec String ) texts b normalize → HttpResponse {
     : Embed e # Embed g_em
     : i nt ( vec_len [String] texts )
     : i dim ( embed_dim e )
@@ -471,7 +471,7 @@ $ `model.nu`
 }
 
 // Serve `e` (borrowed for the server's lifetime). Blocks until stopped.
-@ embed_serve Embed e s name s host i port s token i unload_s → i {
+unsafe @ embed_serve Embed e s name s host i port s token i unload_s → i {
     = g_em # i . e ctl
     = g_em_unload_ms * unload_s 1000
     = g_em_idle_since ( monotonic_ns )

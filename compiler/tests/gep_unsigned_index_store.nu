@@ -13,15 +13,15 @@
 // and a read-back through both an unsigned and a signed index so the
 // two paths are checked against each other.
 
-@ store_at * u64 p u64 idx u64 v → v {
+unsafe @ store_at * u64 p u64 idx u64 v → v {
     = . p idx v
 }
 
-@ store_via_u32 * i32 p u32 idx i32 v → v {
+unsafe @ store_via_u32 * i32 p u32 idx i32 v → v {
     = . p idx v
 }
 
-@ main → i {
+unsafe @ main → i {
     : *u64 p # *u64 ( malloc * 8 8 )
     : ~ i z 0
     ~ < z 8 {

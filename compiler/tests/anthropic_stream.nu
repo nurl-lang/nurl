@@ -37,7 +37,7 @@ $ `stdlib/ext/anthropic.nu`
     ^ @ SseEvent { n_ d_ id_ }
 }
 
-@ pr_str_opt s tag ? String r → v {
+@ pr_str_opt s tag sink ? String r → v {
     ( nurl_print tag )
     ( nurl_print `=` )
     ?? r {

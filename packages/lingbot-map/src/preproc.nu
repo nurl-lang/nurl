@@ -83,7 +83,7 @@ $ `deps/image/src/image.nu`
 // applying the wrong one. Video-derived frames, which is what streaming
 // reconstruction is actually fed, carry no EXIF. Applying it belongs with
 // EXIF support in `image`, not with a guess here.
-@ pp_load s path i size i patch → !Frame String {
+unsafe @ pp_load s path i size i patch → !Frame String {
     ?? ( image_load path ) {
         F → {
             : String m ( string_from `lingbot-map: cannot decode ` )

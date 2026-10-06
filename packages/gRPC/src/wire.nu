@@ -103,7 +103,7 @@ $ `stdlib/ext/compress.nu`
     ^ F
 }
 
-@ grpc_method_path s path → b {
+unsafe @ grpc_method_path s path → b {
     : i n ( nurl_str_len path )
     ? < n 4 { ^ F } {}
     : *u p # *u path
@@ -258,7 +258,7 @@ $ `stdlib/ext/compress.nu`
     } {}
 }
 
-@ grpc_decoder_next inout GrpcDecoder d → !GrpcMessage GrpcError {
+unsafe @ grpc_decoder_next inout GrpcDecoder d → !GrpcMessage GrpcError {
     : i available - ( vec_len [u] . d pending ) . d pos
     ? == available 0 { ^ @ !GrpcMessage GrpcError { T @ GrpcMessage { F ( vec_new [u] ) } } } {}
     : *u p ( vec_data [u] . d pending )

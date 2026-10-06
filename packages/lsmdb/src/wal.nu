@@ -52,14 +52,14 @@ $ `stdlib/core/rcbox.nu`
 
 : Wal { s ctl }
 
-@ Wal_share Wal h → Wal { ^ @ Wal { # s ( rcbox_share # i . h ctl ) } }
+unsafe @ Wal_share Wal h → Wal { ^ @ Wal { # s ( rcbox_share # i . h ctl ) } }
 
 @ Wal_drop sink Wal h → v {
     ( mem_forget h )
     ( rcbox_release [WalImpl] # i . h ctl )
 }
 
-@ __Wal_ptr Wal h → *WalImpl { ^ ( rcbox_ptr [WalImpl] # i . h ctl ) }
+unsafe @ __Wal_ptr Wal h → *WalImpl { ^ ( rcbox_ptr [WalImpl] # i . h ctl ) }
 
 : WalStat {
     i records
@@ -74,7 +74,7 @@ $ `stdlib/core/rcbox.nu`
     ^ msg
 }
 
-@ wal_open s path → !Wal String {
+unsafe @ wal_open s path → !Wal String {
     : !File IoErr fr ( file_append path )
     ?? fr {
         T f → {
@@ -90,7 +90,7 @@ $ `stdlib/core/rcbox.nu`
     }
 }
 
-@ wal_bytes Wal w__h → i {
+unsafe @ wal_bytes Wal w__h → i {
     : *WalImpl w ( __Wal_ptr w__h )
     ^ . w bytes
 }
@@ -98,7 +98,7 @@ $ `stdlib/core/rcbox.nu`
 // Close the log file and open `path` again for appending — what a flush
 // does once it has reset the log. If the reopen fails the log stays
 // closed, and every append after it is an error rather than a lost write.
-@ wal_reopen Wal w__h s path → !v String {
+unsafe @ wal_reopen Wal w__h s path → !v String {
     : *WalImpl w ( __Wal_ptr w__h )
     ( file_close . w f )
     // The closed file's handle leaves the log (dropped here).
@@ -118,7 +118,7 @@ $ `stdlib/core/rcbox.nu`
 // Let go of `w` now rather than at the end of its owner's scope.
 @ wal_close sink Wal w → v {}
 
-@ wal_append Wal w__h ( Vec u ) key ( Vec u ) val i seq i kind → !v String {
+unsafe @ wal_append Wal w__h ( Vec u ) key ( Vec u ) val i seq i kind → !v String {
     : *WalImpl w ( __Wal_ptr w__h )
     : i kl ( vec_len [u] key )
     : i vl ? == kind MT_PUT ( vec_len [u] val ) 0
@@ -145,7 +145,7 @@ $ `stdlib/core/rcbox.nu`
 
 // The durability point. Returning from here means the OS has the bytes
 // on the device — everything appended so far survives a power cut.
-@ wal_sync Wal w__h → !v String {
+unsafe @ wal_sync Wal w__h → !v String {
     : *WalImpl w ( __Wal_ptr w__h )
     ?? ( file_sync . w f ) {
         T _ → { ^ @ !v String { T 0 } }

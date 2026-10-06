@@ -20,7 +20,7 @@ $ `stdlib/ext/http.nu`
 $ `stdlib/ext/http_json.nu`
 $ `stdlib/ext/json.nu`
 
-@ show s tag ! Response HttpErr res → v {
+@ show s tag sink ! Response HttpErr res → v {
     ?? res {
         T r → {
             ( nurl_print tag )

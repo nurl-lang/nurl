@@ -35,7 +35,7 @@ $ `stdlib/dist/job.nu`
     ( string_from `one two three` )
 }
 
-@ str_bytes String s → ( Vec u ) {
+unsafe @ str_bytes String s → ( Vec u ) {
     : ( Vec u ) v ( vec_new [u] )
     : s cs ( string_data s ) : i n ( string_len s ) : *u sp # *u cs
     : ~ i k 0 ~ < k n { ( vec_push [u] v # u . sp k ) = k + k 1 }

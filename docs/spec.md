@@ -79,6 +79,7 @@ used as variable, parameter, field, or function names:
 | `TT_TYPE_KW` | `v256` | 256-bit SIMD vector (v2.6, §4.1c) |
 | `TT_SIMD` | `simd` | CPU-dispatch prefix on a function (v2.6, §3.3b) |
 | `TT_INLINE` | `inline` | always-inline prefix on a function (v2.7, §3.3c) |
+| `TT_UNSAFE` | `unsafe` | raw-memory prefix on a function (v2.8, §3.3d) |
 | `TT_BOOL` | `T` `F` | boolean literals |
 | `TT_SIZEOF` | `Z` | sizeof operator |
 | `TT_PUB` | `pub` | visibility prefix (v2.0) |
@@ -380,6 +381,47 @@ Measure both ways. Two rules nurlc enforces rather than leaving to LLVM:
 
 A directly recursive `inline` function is accepted and compiles: LLVM
 inlines the non-recursive call sites and leaves the self-call alone.
+
+### 3.3d `unsafe` — the raw-memory boundary (grammar v2.8)
+
+A function or method declaration may carry a leading `unsafe` prefix
+(order-independent with `pub`, `simd` and `inline`; in an `impl` block,
+`unsafe @ name …`). Only an `unsafe` function may
+
+- read or write through a raw pointer `*T` (`. p field`, `= . p field x`,
+  `. p k`);
+- cast to a pointer type (`# *T x`, `# i8* x`) — the null pointer
+  `# *T 0` stays safe;
+- call a raw-memory primitive (`nurl_alloc`, `nurl_free`, `nurl_realloc`,
+  `mem_forget`, `nurl_peek*` / `nurl_poke*`, `nurl_memcpy`, …);
+- call a foreign (`&`) function declared outside the standard library.
+
+```
+// The rest of the program sees a safe function: it takes a String and
+// returns an owned Vec, and nothing raw escapes.
+unsafe @ bytes_of String s → ( Vec u8 ) {
+    : ( Vec u8 ) out ( vec_with_cap [u8] ( string_len s ) )
+    : *u8 p # *u8 ( string_data s )
+    : ~ i k 0
+    ~ < k ( string_len s ) { ( vec_push [u8] out . p k ) = k + k 1 }
+    ^ out
+}
+```
+
+`unsafe` is a promise the compiler cannot check: the function's author
+vouches that its body is memory-safe and leak-free for every caller, the
+way the standard library vouches for its own raw code. Calling an
+`unsafe` function needs no marking. The rest of the program is held to
+the ownership rules (docs/MEMORY.md §6), and **every program accepted
+without an `unsafe` function of its own is memory-safe and leak-free**.
+`nurlc --unsafe-report` lists the `unsafe` functions a program
+contains outside the standard library — the whole surface a reviewer has
+to trust.
+
+Ordinary code never needs it: `String`, `Vec`, `HashMap`, `Box` / `Rc` /
+`Arc`, channels and structs of them release themselves. `unsafe` is for
+the exceptional case — a binding to a C library, a hand-laid-out buffer
+handed to a GPU, a data structure whose invariant the rules cannot see.
 
 ### 3.4 Constants and globals
 
@@ -1910,33 +1952,17 @@ legitimately happens after the captured handles are freed.
 A value stored into an owner — a bound or returned aggregate literal, a
 container (`vec_push`), a callee that keeps it — belongs to that owner.
 Releasing it again through the original name is an error (a double free
-when the owner drops it). Reading it is fine; to keep one and hand one
-on, store a copy.
+when the owner drops it), and so is reading it: the value moved. To keep
+one and hand one on, store a copy (`( string_clone x )`), or read it
+through its owner (`. w s`).
 
 ### 9.11 What is NOT checked
 
-- `*T` raw pointer lifetimes (the FFI escape hatch) — except the one
-  narrow `# *T`-escape check `--strict-borrowck` adds (§9 intro).
-- A read of a handle through its original name after the aggregate it
-  was stored into released it (releasing it again by name IS checked,
-  §9.10). This is also where §9.9 stops — a closure stored into a struct rather than bound to
-  a name is reached the same way, and is not a closure-specific gap.
-- Aliased mutation beyond a single call: longer-range "exclusive
-  reference" analysis is not implemented. Within one call,
-  `--strict-borrowck` flags a sibling read however it is spelled — a
-  `. obj field` projection, a read nested inside another call, at any
-  depth and in either argument order; the default mode reports only the
-  bare-identifier form, deliberately, because every sibling read is a
-  snapshot taken before the callee runs (§6.2).
-- Panic / `recover` control flow: the checker treats `recover` as an
-  ordinary call and does not model panic unwind. It does not need to —
-  the owned allocations a panic `longjmp` would skip are reclaimed at the
-  panic itself by an allocation journal kept per fiber, so they leak neither
-  the normal nor the unwind path (see [`docs/MEMORY.md` §7.2](MEMORY.md)).
-- **Conditional** (maybe-moved) double-frees: a value freed on only one
-  arm of a `?` and then freed again is not flagged, to keep every
-  diagnostic a *definite* bug (the no-false-positive contract,
-  [`docs/MEMORY.md` §6.3](MEMORY.md)).
+The body of an `unsafe` function (§3.3d): raw pointers, pointer casts,
+the raw-memory primitives and foreign calls are its author's to get
+right. Everything else is held to the rules above — every program
+accepted without an `unsafe` function of its own is memory-safe and
+leak-free ([`docs/MEMORY.md` §6.2](MEMORY.md)).
 
 ## 10. Diagnostics
 

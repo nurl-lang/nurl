@@ -63,7 +63,7 @@ $ `stdlib/std/bufio.nu`
     ? > n 0 { ( nurl_print_bytes ( string_data buf ) n ) } {}
 }
 
-@ bx_write_bytes ( Vec u ) buf → v {
+unsafe @ bx_write_bytes ( Vec u ) buf → v {
     : i n ( vec_len [u] buf )
     ? > n 0 { ( nurl_print_bytes # s ( vec_data [u] buf ) n ) } {}
 }
@@ -452,7 +452,7 @@ $ `stdlib/std/bufio.nu`
 
 // -1 when nobody installed one, which is every caller that is not the
 // multiplexer — a library used on its own has no applet table.
-@ bx_dispatch s name ( Vec String ) argv → i {
+unsafe @ bx_dispatch s name ( Vec String ) argv → i {
     ? == g_bx_dispatch 0 { ^ -1 } {}
     : *BxDispatch d ( rcbox_ptr [BxDispatch] g_bx_dispatch )
     : ( @ i s ( Vec String ) ) f . d run

@@ -14,7 +14,7 @@ $ `stdlib/core/vec.nu`
 }
 
 // Compare an owned ?String to an expected literal; frees the payload.
-@ expect_val ? String got s exp s label → i {
+@ expect_val sink ? String got s exp s label → i {
     : ~ i bad 1
     ?? got {
         T s → {

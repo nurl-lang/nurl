@@ -29,7 +29,7 @@
     }
 }
 
-@ main → i {
+unsafe @ main → i {
     : i W 320
     : i H 140
     : *i fb ( canvas_open W H )

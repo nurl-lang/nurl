@@ -23,7 +23,7 @@ $ `deps/onnx/src/runtime.nu`
 @ shape3 i a i b i c → ( Vec i ) { : ( Vec i ) v ( vec_new [i] )
     ( vec_push [i] v a ) ( vec_push [i] v b ) ( vec_push [i] v c ) ^ v }
 
-@ main → i {
+unsafe @ main → i {
     : ( Vec String ) av ( env_args_list )
     : String mp ?? ( vec_get [String] av 1 ) { T x → x F _ → ( string_new ) }
     : String ip ?? ( vec_get [String] av 2 ) { T x → x F _ → ( string_new ) }

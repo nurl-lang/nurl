@@ -58,7 +58,7 @@ $ `stdlib/hal/virtio.nu`
 // here, instead of at every push.
 : VecBox { ( Vec u ) v }
 
-@ __vec_box ( Vec u ) v → i {
+unsafe @ __vec_box ( Vec u ) v → i {
     : *VecBox bx # *VecBox ( nurl_alloc Z VecBox )
     = . bx v v
     ^ # i bx
@@ -110,7 +110,7 @@ $ `stdlib/hal/virtio.nu`
 // up, and hand back a driver with both queues live. A null pointer
 // means there is no such device — which is a fact about the machine,
 // not an error, and the caller decides what to do about it.
-@ vnet_open i qsize → *VirtioNet {
+unsafe @ vnet_open i qsize → *VirtioNet {
     : s cl ( nurl_boot_cmdline )
     : i n ( virtio_mmio_count cl )
     : ~ i k 0
@@ -125,7 +125,7 @@ $ `stdlib/hal/virtio.nu`
     ^ # *VirtioNet 0
 }
 
-@ __vnet_bring_up i base i qsize → *VirtioNet {
+unsafe @ __vnet_bring_up i base i qsize → *VirtioNet {
     // No device-specific features: not even MAC. The address is read
     // from config space either way, and a feature this driver does not
     // implement is a format it would then have to parse.
@@ -165,12 +165,12 @@ $ `stdlib/hal/virtio.nu`
     ( __vq_phys q ( vq_used_off qs ) ) )
 }
 
-@ vnet_ready * VirtioNet nic → b {
+unsafe @ vnet_ready * VirtioNet nic → b {
     ? == # i nic 0 { ^ F } {}
     ^ . nic ready
 }
 
-@ vnet_mac * VirtioNet nic → i {
+unsafe @ vnet_mac * VirtioNet nic → i {
     ? == # i nic 0 { ^ 0 } {}
     ^ . nic mac
 }
@@ -185,7 +185,7 @@ $ `stdlib/hal/virtio.nu`
 // fails". `num_free > 0` and "the last add worked" are two different
 // conditions, and a version that trusted the first one spun for ever the
 // moment they disagreed.
-@ __rx_refill * VirtioNet nic → i {
+unsafe @ __rx_refill * VirtioNet nic → i {
     : ~ i added 0
     : ~ i tries 0
     : i limit ( virtq_qsize . nic rx )
@@ -212,7 +212,7 @@ $ `stdlib/hal/virtio.nu`
 // One received frame, or 0 bytes. The 12-byte header is stripped here
 // — nothing above this file has any use for it, and a stack that had
 // to skip it would be a stack that knows which device it is on.
-@ vnet_rx * VirtioNet nic ( Vec u ) out → i {
+unsafe @ vnet_rx * VirtioNet nic ( Vec u ) out → i {
     ? ! ( vnet_ready nic ) { ^ 0 } {}
     ?? ( virtq_get_used . nic rx ) {
         T head → {
@@ -250,7 +250,7 @@ $ `stdlib/hal/virtio.nu`
 // and the two kilobytes stayed allocated. A server leaked them at line
 // rate — which is a leak nobody sees in a demo that answers one request
 // and nobody survives in a machine that answers a million.
-@ __tx_buffer * VirtioNet nic i d → ( Vec u ) {
+unsafe @ __tx_buffer * VirtioNet nic i d → ( Vec u ) {
     ~ <= ( vec_len [i] . nic txbuf ) d { ( vec_push [i] . nic txbuf 0 ) }
     : i cur ?? ( vec_get [i] . nic txbuf d ) { T x → x F → 0 }
     ? != cur 0 {
@@ -271,7 +271,7 @@ $ `stdlib/hal/virtio.nu`
 // 2036 — so this is the answer to a bug elsewhere, and "the send failed"
 // is a fact its caller can act on where "the peer got half a packet" is
 // not.
-@ vnet_tx * VirtioNet nic ( Vec u ) frame i off i len → b {
+unsafe @ vnet_tx * VirtioNet nic ( Vec u ) frame i off i len → b {
     ? ! ( vnet_ready nic ) { ^ F } {}
     ? <= len 0 { ^ F } {}
     ? > len ( vnet_max_frame ) { ^ F } {}
@@ -302,7 +302,7 @@ $ `stdlib/hal/virtio.nu`
 // buffers stay in the pool: they are reused by index, and freeing one
 // the device has not finished with is the bug this reaping exists to
 // avoid.
-@ __tx_reap * VirtioNet nic → i {
+unsafe @ __tx_reap * VirtioNet nic → i {
     : ~ i n 0
     ~ ( virtq_has_used . nic tx ) {
         ?? ( virtq_get_used . nic tx ) {
@@ -319,7 +319,7 @@ $ `stdlib/hal/virtio.nu`
 // The releases here are not bookkeeping autodrop could do: the rings and
 // buffers are memory the DEVICE writes into, so they may be handed back
 // only after virtio_reset has stopped it, never at some scope end before.
-@ vnet_close * VirtioNet nic → v {
+unsafe @ vnet_close * VirtioNet nic → v {
     ? == # i nic 0 { ^ } {}
     ( virtio_reset . nic base )
     ( __free_pool . nic rxbuf )
@@ -331,7 +331,7 @@ $ `stdlib/hal/virtio.nu`
     ( nurl_free # s nic )
 }
 
-@ __free_pool ( Vec i ) pool → v {
+unsafe @ __free_pool ( Vec i ) pool → v {
     : i n ( vec_len [i] pool )
     : ~ i k 0
     ~ < k n {

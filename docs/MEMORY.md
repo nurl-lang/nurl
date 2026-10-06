@@ -26,22 +26,23 @@ v2.3).
   runs registered scope drops across `panic`/`recover` (§7.2). The compiler
   tracks owned strings, slices, struct fields, enum owners, `% Drop` values
   and closure environments. Compiler leak gates and the leak-checked
-  test corpus (every test, under LeakSanitizer) verify these paths. Remaining ownership limitations
-  (owned slices, and structs whose raw `s` fields the compiler owns, cannot go to a `sink`) are described below; this is not a
-  guarantee that every accepted program is memory-safe or leak-free.
-- **A borrow checker runs by default.** A diagnostic analysis pass
-  catches use-after-move, alias double-free, and closures that escape
-  the stack frame they point into. It is always on
-  (`--no-borrowck` is deprecated). It is a *diagnostic* layered on the auto-drop base,
-  not a Rust-style borrow system — see the contract in §6.
-- **It is a diagnostic pass and its diagnostics are hard errors.**
-  The borrow checker emits `error:` lines and the compiler exits
-  non-zero with a count of violations after walking the whole
-  program (so every error surfaces in one run). It *never* changes
-  generated code — a borrow-clean program compiles to byte-identical
-  IR with or without the checker. A false positive is a compiler bug:
-  report it (https://github.com/nurl-lang/nurl/issues). `--no-borrowck`
-  still exists but is deprecated and warns.
+  test corpus (every test, under LeakSanitizer) verify these paths.
+- **The guarantee (§6): every program accepted without an `unsafe`
+  function of its own is memory-safe and leak-free.** An owned value has
+  one owner and *moves*: storing it, sending it, returning it, handing it
+  to a `sink` parameter or to a thread moves it, and the old name is
+  gone. A read that does not take ownership — `vec_get`, a field read,
+  `string_data` — is a *borrow* of its source, and it ends when that
+  source is moved, released, reassigned or reallocated. Raw memory (`*T`
+  reads and writes, pointer casts, `nurl_alloc` / `nurl_free`, foreign
+  functions) is allowed only inside a function declared `unsafe`, which
+  vouches for itself (spec §3.3d); `nurlc --unsafe-report` lists them.
+- **The rules are conservative.** A program they cannot prove safe is
+  rejected with the rule it breaks and a way to satisfy it (clone the
+  value, keep the owner alive longer, pass it through a channel, declare
+  the parameter `sink`). Diagnostics are hard errors and every one
+  surfaces in one run; the checker never changes generated code.
+  `--no-borrowck` is deprecated and warns.
 
 ## 1. Ownership and auto-drop
 
@@ -754,17 +755,18 @@ crash, which is what makes it worth diagnosing:
 ```
 : * u p ( vec_data [u] v )     // borrow
 ( vec_push [u] v # u 1 )       // may realloc → p dangles
-: i x # i . p 0                // warning: pointer 'p' borrowed from 'v'
+: i x # i . p 0                // error: pointer 'p' borrowed from 'v'
                                //          is stale: 'v' was mutated on
                                //          line N and may have
                                //          reallocated its buffer
 ```
 
 The fix is to re-fetch the pointer after the mutation (`= p ( vec_data
-[u] v )`), which clears the diagnostic for that pointer. It is a
-**warning**, not an error: the borrow is legal when the container was
-pre-reserved and the push provably does not grow it, so this is the one
-place the `*T` escape hatch is nudged rather than blocked.
+[u] v )`), which clears the diagnostic for that pointer. It is an
+**error**, including inside an `unsafe` function: a push into a
+pre-reserved container would not reallocate, but the rules decide from
+the program text, not from the capacity at run time (§6.3). A `string_data`
+view — the one a safe program uses — follows the same rule.
 
 The check is path-aware in the one way that matters for false positives:
 the two arms of a `?` are alternatives, so a free or push in one arm does
@@ -894,21 +896,10 @@ address and length) is copied, not owned, and is not reported.
 The borrow checker targets the bug classes that ordinary NURL code
 hits in practice. It deliberately does **not** cover:
 
-- **`*T` raw pointers.** `*T` is the FFI ABI escape hatch — NURL's
-  `unsafe`. A `*T` taken of a local, stored, returned, or captured
-  is *not* checked by default. Treat `*T` lifetimes as your
-  responsibility. Two narrow exceptions: a pointer borrowed from a
-  container that is then reallocated is warned about (§2.10), and
-  `--strict-borrowck` reports a `# *T` escape from an owned binding
-  (§2.9).
-- **User-defined element-dropping wrappers.** A value stored into an
-  owner is followed until the owner is consumed, reassigned, has a
-  handle field reassigned, is released, or (a container) goes through
-  one of the stdlib calls that drop or hand out elements (§2.12). A
-  user function that empties a container it was passed without releasing
-  it is not on that list, so a value read through its own name after
-  such a call is not checked against it. The same boundary is what stops
-  §2.11 at a closure handed to a callee that keeps it.
+- **The body of an `unsafe` function.** Raw pointers, pointer casts,
+  the raw-memory primitives and foreign calls are allowed there and
+  nowhere else (spec §3.3d); the function's author vouches for it. The
+  standard library is such a vouched base.
 - **Aliased mutation beyond a single call.** The exclusive-access
   check (§2.4) covers a binding aliased among one call's arguments —
   by default the bare-identifier spelling, and under
@@ -937,9 +928,12 @@ hits in practice. It deliberately does **not** cover:
 
 ## 4. Practical guidance
 
-- Trust the diagnostic. If the compiler reports a use-after-move or an
-  escape, it has found a real bug — quote the message and fix it
-  rather than reaching for `--no-borrowck`.
+- Read the diagnostic as a rule and a fix. It names what moved or
+  ended where, and the change that satisfies the rule (clone it, keep
+  the owner in the outer scope, send it through a channel, declare the
+  parameter `sink`). Most rejections are real bugs; the rest are
+  programs the conservative rules cannot prove — restructure them the
+  way the message says rather than reaching for `--no-borrowck`.
 - To share a closure beyond the scope of the data it mutates, move
   that data to a heap-backed handle (a single-handle struct over a
   `Vec` or a heap allocation) and capture the handle by value.
@@ -979,12 +973,10 @@ hits in practice. It deliberately does **not** cover:
 | Handle released by name after being stored into an owner | yes (`error:`, §2.12) |
 | Raw pointer read after the block that dropped its owner (`= p ( string_data x )` into an outer binding / `Vec s`) | yes (`error:`) |
 | Closure returned past the local it borrows | yes (`error:`) |
-| Handle read by name after its owner released it | no (the aggregate-conduit boundary, §3) |
-| Returned borrows / general lifetime inference | partial (§2.8) |
-| `*T` raw pointers | no (by design) |
-
-The `no` / `partial` rows are not bugs; they are the boundary of a
-*diagnostic* pass, spelled out in §3 and contracted in §6.
+| Handle read by name after it was stored, sent or captured (moved) | yes (`error:`) |
+| Borrow (`vec_get`, field read, view) used after its owner was moved, released, reassigned or reallocated | yes (`error:`) |
+| Value shared with a thread without a share handle (Channel, Mutex, Arc) | yes (`error:`) |
+| `*T` raw pointers, pointer casts, raw-memory primitives, foreign calls | only inside `unsafe` (spec §3.3d) |
 
 ## 6. The soundness contract
 
@@ -1010,66 +1002,62 @@ keeping them apart:
    reference outlive its frame. It is a flow-sensitive **diagnostic**
    pass: it emits `error:` and exits non-zero, and it lowers nothing.
 
-### 6.2 Sound, not complete
+### 6.2 The guarantee
 
-The precise claim is a one-directional one: **every diagnostic is a
-real bug** (the checker is *sound* — no false positives, §6.3), but a
-clean compile is **not** a proof of memory safety (it is *not
-complete*). It reliably catches the **definite, common** forms of each
-class:
+**Every program the compiler accepts, outside the bodies of `unsafe`
+functions, is memory-safe and leak-free**: no use after free, no double
+free, no read of a dangling view, no data race on an owned value, and
+nothing it allocated is left unreleased (the panic edge included, §7.2;
+Rc cycles are collected, §7.7). AddressSanitizer and LeakSanitizer stay
+in CI as a check on the *compiler* (§6.6); they are no longer what a
+program's safety rests on.
 
-- **Use-after-free / double-free** — use-after-move, alias double-free
-  (by copy, through a `?` / `??` result, through an assignment, or
-  through a callee that hands an argument back), loop-carried
-  double-free, indirect (auto-`sink`) use-after-free
-  (§2.1, §2.2, §2.6) — and all of these whether the helper involved is
-  defined above or below the call (§6.4). The conditional forms of the
-  alias case need `--strict-borrowck`; §2.2 says which and why.
-- **Dangling stack references** reaching a return, a heap container, a
-  thread, a longer-lived binding, a longer-lived binding's *field*, or
-  — interprocedurally — a helper that stores or returns one (§2.3,
-  §2.7, §2.8), and reaching any of those through a `?` / `??` join
-  rather than directly.
-- **Iterator-invalidating mutation** of a container under a `~ x xs`
-  foreach (§2.5), and an **aliased `inout` writer** sharing a call with
-  another reader of the same binding (§2.4).
+The rules that carry it (docs/SOUND_COMPLETE_PLAN.md has the derivation):
 
-The *conditional* forms are flagged too. A value freed on only one arm
-of a `?` and then freed again — or read — is a real double-free (or
-use-after-free) on the path where the first free ran, and it is an
-error:
+- **An owned value moves.** Storing it into an aggregate, an Option or a
+  container, sending it, returning it, handing it to a `sink` parameter
+  (a function that returns a parameter takes it as `sink`) or capturing
+  it in a closure another thread runs moves it; a later read of the old
+  name — or of a name it moved out of on *some* path — is an error. A
+  value with nothing to release (a struct of scalars, an enum of unit
+  variants) is copied, not moved.
+- **A read that does not take ownership is a borrow.** `vec_get`, a field
+  read, a match payload of a borrowed value, a call result the callee
+  lends (its summary; every argument while the callee is not compiled
+  yet) borrow from their source, and so does a view (`string_data`,
+  `vec_data`). A borrow can be read and passed on, never released,
+  stored as an owner or sent; it ends when a source is moved, released,
+  reassigned or has the field replaced — a view also when its source may
+  reallocate — and any read after that is an error. Borrows of borrows
+  flatten to the owners. `vec_get` and its kin are specified as returning
+  a borrow of the element, so they can become projections into the slot
+  without changing user code.
+- **A container keeps what it is handed.** A view pushed into a Vec,
+  used as a map key or handed to a function that keeps its argument (the
+  callee's keeps / escapes summary, decided after the module when the
+  callee is defined below) lives no longer than its source.
+- **Threads and fibers.** A closure run on another thread moves its
+  captures. Handles whose copy is a share of one object (Channel, Mutex,
+  Arc, HttpServer) are captured as a share of their own, so both sides
+  keep using them and either may end first. Shared mutable state goes
+  through one of those handles — never through a plain Vec two threads
+  hold.
+- **Raw memory only in `unsafe`** (spec §3.3d).
 
-```
-? cond { ( vec_free [i] xs ) } {}
-( vec_free [i] xs )    // error: use of possibly-moved value 'xs'
-```
+Every verdict is independent of definition order: a question that
+depends on a callee's final summary is parked and answered after the
+module (§6.4).
 
-The walk follows `break`, `continue`, `^` and loop-local scope, so a
-free on a path that never reaches the use is not counted. What it does
-not follow is a correlation between two conditions: the
-mutually-exclusive-frees pattern (free under `cond` here, free under
-`! cond` later) is rejected — restructure it so one path frees. A
-handle handed to another name on some path (*maybe-aliased*) is still
-readable, and its second consume is the one conditional form left to
-`--strict-borrowck` (§2.9). Together with the unchecked classes (§3)
-and the trusted surface (§6.4), this is why "compiles clean" means
-"free of the bug classes the checker *reports*," not "verified
-memory-safe."
+### 6.3 Conservative, with a fix in every message
 
-### 6.3 The no-false-positive property
-
-Every rule is tuned to flag a fault that happens on a **real path**:
-a value freed on one arm of a `?` and then used is flagged, because the
-path through that arm is real; a value handed to another name on one
-path is not, because the buffer is still live there (§2.1); only the
-back-edge-carried binding is flagged in a loop (§2.6), and a `break`
-path is not joined into the code after it; a summary records a parameter broadly but
-only fires when a *real* stack reference is passed (§2.7, §2.8). The
-consequence is a working contract: **if the checker flags your code, it
-has found a real bug** — quote the message and fix it. The whole
-in-tree corpus (compiler + stdlib + tests) is verified borrow-clean and
-passes the sanitizer gate (§6.6), so a false positive is a compiler bug
-worth reporting, and `--no-borrowck` is the escape hatch meanwhile.
+The rules decide from the program text, so they reject some programs that
+would have run correctly — the price of a guarantee that does not depend
+on the program's inputs. Each diagnostic names the rule, the line where
+the value moved or the borrow ended, and a concrete change that
+satisfies the rule. A program they reject that you believe is correct is
+still worth reporting (https://github.com/nurl-lang/nurl/issues): the
+corpus — compiler tests, examples and every package — is held to the
+rules, and a rejection that has no good fix is a rule to refine.
 
 Because the pass lowers nothing, an accepted program compiles to
 **byte-identical IR** with or without it — which is why turning it on
@@ -1077,16 +1065,16 @@ left the self-hosting bootstrap fixed point untouched.
 
 ### 6.4 Trusted computing base
 
-The guarantees in §6.2 hold *modulo* a small surface you are trusted to
-get right:
+The guarantee in §6.2 rests on a small surface that is trusted, not
+checked:
 
-- **`*T` raw pointers and FFI.** `*T` is NURL's `unsafe`. A `*T` into a
-  local, or any pointer crossing an `& \`lib\`` boundary, is outside the
-  model; its lifetime is yours.
-- **Raw memory.** A handle stored into memory the compiler does not
-  manage — a `*T` block from `nurl_alloc`, a global kept for the
-  program's lifetime — is yours to release (§7.6: auto-drop covers
-  bindings, owning structs, containers and library handles).
+- **`unsafe` functions.** Their bodies may use raw pointers, raw memory
+  and foreign functions; each one vouches that it is memory-safe and
+  leak-free for every caller. `nurlc --unsafe-report` lists the ones a
+  program contains outside the standard library.
+- **The standard library and the runtime.** Their raw code is the
+  vouched base every safe program stands on, held to the sanitizer and
+  leak gates (§6.6).
 - ~~**Definition order.**~~ **No longer a boundary — every rule is
   order-independent.** Summaries are built in codegen order, so a check
   that consults one *inline* sees an empty answer for a callee defined
@@ -1221,15 +1209,12 @@ safe Rust cannot:
    one read-only is ordinary code — two threads *mutating* it is the
    race the second check catches, at the mutation.
 
-   What remains unchecked: an FFI handle nobody marked `% NotSend` is
-   waved through (`s` is the spelling of both String and every opaque
-   handle, so the compiler cannot tell them apart and does not guess);
-   the lock check counts `mutex_lock`/`mutex_unlock` rather than
-   proving the lock is held on every path; and nothing stops the
-   *parent* thread from mutating shared state while a worker runs
-   ([`LIMITATIONS.md`](LIMITATIONS.md), *Concurrency / thread
-   safety*). Every one of those is a MISS, never an invention — the
-   same direction as §6.3.
+   The parent thread cannot mutate what a worker was handed: a closure
+   run on another thread moves its captures (§6.2), and only a share
+   handle (Channel, Mutex, Arc) is used on both sides. An opaque FFI
+   handle comes out of an `unsafe` binding, whose author vouches for
+   whether it may cross threads (`% NotSend` says it may not); the lock
+   check counts `mutex_lock`/`mutex_unlock` as a lint on top of that.
 
 Integer division and remainder by zero panic with a clear message —
 they are not UB.

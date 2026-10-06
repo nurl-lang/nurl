@@ -28,7 +28,7 @@
 
 & `libc` @ write i fd s buf i count → i
 
-@ main → i {
+unsafe @ main → i {
     ( nurl_print `1 stdout via nurl_print\n` )
     ( nurl_eprintln `2 stderr via nurl_eprintln` )
     ( nurl_print `3 stdout again\n` )

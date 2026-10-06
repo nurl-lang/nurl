@@ -48,7 +48,7 @@ $ `stdlib/std/thread.nu`
     ( mutex_lock m ) = g_sum + g_sum b ( mutex_unlock m )
 }
 
-@ main → i {
+unsafe @ main → i {
     : i l0 - ( nurl_alloc_count ) ( nurl_free_count )
     ( runtime_init 4 )
     : Mutex m ( mutex_new )

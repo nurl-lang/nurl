@@ -93,7 +93,7 @@ $ `src/dynamic.nu`
 
 // ── Scenario A: statistical behaviour at production limits ────────────
 
-@ test_stream Store st → v {
+unsafe @ test_stream Store st → v {
     = g_lcg 1
     : Model mo ( model_open_at st `stream` T0 )
     ( check == ( store_exists st `stream` ) T `stream: created on first use` )
@@ -148,7 +148,7 @@ $ `src/dynamic.nu`
 // no longer parsed, the model reopened empty over it and the old forests
 // walked a point of no columns off address zero.
 
-@ test_extreme Store st → v {
+unsafe @ test_extreme Store st → v {
     = g_lcg 7
     : Model mo ( model_open_at st `extreme` T0 )
     : ~ i k 1
@@ -313,7 +313,7 @@ $ `src/dynamic.nu`
 
 // ── Scenario B: streaming mechanics at tiny limits ────────────────────
 
-@ test_mechanics Store st → v {
+unsafe @ test_mechanics Store st → v {
     : Model mo__h ( model_open_at st `mech` T0 )
     : *ModelImpl mo ( _Model_ptr mo__h )
     ( model_set_limits mo__h 10 30 )

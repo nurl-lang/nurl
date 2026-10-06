@@ -51,20 +51,20 @@ $ `stdlib/core/rcbox.nu`
 // releases it.
 : TplSet { s ctl }
 
-@ TplSet_share TplSet h → TplSet { ^ @ TplSet { # s ( rcbox_share # i . h ctl ) } }
+unsafe @ TplSet_share TplSet h → TplSet { ^ @ TplSet { # s ( rcbox_share # i . h ctl ) } }
 
 @ TplSet_drop sink TplSet h → v {
     ( mem_forget h )
     ( rcbox_release [TplSetImpl] # i . h ctl )
 }
 
-@ __TplSet_ptr TplSet h → *TplSetImpl { ^ ( rcbox_ptr [TplSetImpl] # i . h ctl ) }
+unsafe @ __TplSet_ptr TplSet h → *TplSetImpl { ^ ( rcbox_ptr [TplSetImpl] # i . h ctl ) }
 
-@ tset_new → TplSet {
+unsafe @ tset_new → TplSet {
     ^ @ TplSet { # s ( rcbox_new [TplSetImpl] @ TplSetImpl { ( vec_new [String] ) ( vec_new [String] ) } ) }
 }
 
-@ __tset_find * TplSetImpl t s name → i {
+unsafe @ __tset_find * TplSetImpl t s name → i {
     : i n ( vec_len [String] . t names )
     : ~ i k 0
     : ~ i found - 0 1
@@ -79,7 +79,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Register (or replace) a named template. Copies both arguments.
-@ tset_add TplSet t__h s name s tsrc → v {
+unsafe @ tset_add TplSet t__h s name s tsrc → v {
     : *TplSetImpl t ( __TplSet_ptr t__h )
     : i idx ( __tset_find t name )
     ? >= idx 0 {
@@ -152,9 +152,9 @@ $ `stdlib/core/rcbox.nu`
     ( rcbox_release [TplRImpl] # i . h ctl )
 }
 
-@ __TplR_ptr TplR h → *TplRImpl { ^ ( rcbox_ptr [TplRImpl] # i . h ctl ) }
+unsafe @ __TplR_ptr TplR h → *TplRImpl { ^ ( rcbox_ptr [TplRImpl] # i . h ctl ) }
 
-@ __tpl_new s tsrc i sp Json jctx → TplR {
+unsafe @ __tpl_new s tsrc i sp Json jctx → TplR {
     : i r__box ( rcbox_zero [TplRImpl] )
     : *TplRImpl r ( rcbox_ptr [TplRImpl] r__box )
     = . r src tsrc
@@ -191,7 +191,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Record the first failure; later ones are ignored (the first is the cause).
-@ __tpl_fail * TplRImpl r i fpos s msg → v {
+unsafe @ __tpl_fail * TplRImpl r i fpos s msg → v {
     ? . r failed {} {
         = . r failed T
         = . r err_pos fpos
@@ -199,7 +199,7 @@ $ `stdlib/core/rcbox.nu`
     }
 }
 
-@ __tpl_errmsg * TplRImpl r → String {
+unsafe @ __tpl_errmsg * TplRImpl r → String {
     : ~ i p . r err_pos
     ? > p . r len { = p . r len } {}
     : ~ i line 1
@@ -222,7 +222,7 @@ $ `stdlib/core/rcbox.nu`
 
 // ── Byte helpers ─────────────────────────────────────────────────────
 
-@ __tpl_at * TplRImpl r i k → i {
+unsafe @ __tpl_at * TplRImpl r i k → i {
     ? | < k 0 >= k . r len { ^ - 0 1 } {}
     : *u bp # *u . r src
     ^ & 255 # i . bp k
@@ -259,7 +259,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // First index >= from where src[j] == c1 and src[j+1] == c2; -1 if none.
-@ __tpl_find2 * TplRImpl r i from i c1 i c2 → i {
+unsafe @ __tpl_find2 * TplRImpl r i from i c1 i c2 → i {
     : ~ i j from
     : ~ i found - 0 1
     ~ & < j - . r len 1 < found 0 {
@@ -269,7 +269,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Does span [a,b) equal the literal `lit`?
-@ __tpl_kw_is * TplRImpl r i a i bnd s lit → b {
+unsafe @ __tpl_kw_is * TplRImpl r i a i bnd s lit → b {
     : i n ( nurl_str_len lit )
     ? != - bnd a n { ^ F } {}
     : *u lp # *u lit
@@ -289,7 +289,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Does span [a,a+n) equal the String `nm`?
-@ __tpl_seg_eq * TplRImpl r i a i n String nm → b {
+unsafe @ __tpl_seg_eq * TplRImpl r i a i n String nm → b {
     ? != ( string_len nm ) n { ^ F } {}
     : s nd ( string_data nm )
     : *u np # *u nd
@@ -302,7 +302,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // scratch key := src[a, a+n)
-@ __tpl_key_set * TplRImpl r i a i n → v {
+unsafe @ __tpl_key_set * TplRImpl r i a i n → v {
     ( string_clear . r key )
     : ~ i k 0
     ~ < k n {
@@ -325,7 +325,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // HTML-escape a NUL-terminated string into `out`.
-@ __tpl_push_escaped String outbuf s raw → v {
+unsafe @ __tpl_push_escaped String outbuf s raw → v {
     : i n ( nurl_str_len raw )
     : *u bp # *u raw
     : ~ i k 0
@@ -348,7 +348,7 @@ $ `stdlib/core/rcbox.nu`
 // root context object. Numeric segments index into arrays. Returns a
 // BORROW into the context; F = missing anywhere along the path.
 
-@ __tpl_resolve * TplRImpl r i pa i pb → ?Json {
+unsafe @ __tpl_resolve * TplRImpl r i pa i pb → ?Json {
     : ~ i sp pa
     : ~ Json cur ( json_null )
     : ~ b have F
@@ -419,7 +419,7 @@ $ `stdlib/core/rcbox.nu`
 
 // ── Expression evaluation (value slots) ──────────────────────────────
 
-@ __tpl_slot_reset * TplRImpl r → v {
+unsafe @ __tpl_slot_reset * TplRImpl r → v {
     = . r va_kind 0
     = . r va_bool F
     = . r va_num 0.0
@@ -428,7 +428,7 @@ $ `stdlib/core/rcbox.nu`
     ( vec_clear [Json] . r va_node )
 }
 
-@ __tpl_slot_a_to_b * TplRImpl r → v {
+unsafe @ __tpl_slot_a_to_b * TplRImpl r → v {
     = . r vb_kind . r va_kind
     = . r vb_bool . r va_bool
     = . r vb_num . r va_num
@@ -441,7 +441,7 @@ $ `stdlib/core/rcbox.nu`
     }
 }
 
-@ __tpl_slot_from_node * TplRImpl r Json node → v {
+unsafe @ __tpl_slot_from_node * TplRImpl r Json node → v {
     ? ( json_is_null node ) { = . r va_kind 0 } {
         ? ( json_is_bool node ) {
             = . r va_kind 1
@@ -467,7 +467,7 @@ $ `stdlib/core/rcbox.nu`
 
 // Evaluate one primary (path / literal / loop.*) from span [a,bnd) into
 // slot A. Sets e_end to one past the consumed token.
-@ __tpl_eval_primary * TplRImpl r i a i bnd → v {
+unsafe @ __tpl_eval_primary * TplRImpl r i a i bnd → v {
     ( __tpl_slot_reset r )
     : i k ( __tpl_ws r a bnd )
     ? >= k bnd { ( __tpl_fail r a `empty expression` ) } {
@@ -549,7 +549,7 @@ $ `stdlib/core/rcbox.nu`
     }
 }
 
-@ __tpl_truthy_a * TplRImpl r → b {
+unsafe @ __tpl_truthy_a * TplRImpl r → b {
     : i kd . r va_kind
     ? == kd 1 { ^ . r va_bool } {}
     ? == kd 2 { ^ != . r va_num 0.0 } {}
@@ -562,7 +562,7 @@ $ `stdlib/core/rcbox.nu`
     ^ == kd 5
 }
 
-@ __tpl_eq_ab * TplRImpl r → b {
+unsafe @ __tpl_eq_ab * TplRImpl r → b {
     ? != . r va_kind . r vb_kind { ^ F } {}
     : i kd . r va_kind
     ? == kd 0 { ^ T } {}
@@ -573,7 +573,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Full condition: [not] primary [(==|!=) primary]
-@ __tpl_truth * TplRImpl r i a i bnd → b {
+unsafe @ __tpl_truth * TplRImpl r i a i bnd → b {
     : i k ( __tpl_ws r a bnd )
     : ~ i tn k
     ~ & < tn bnd ( __tpl_is_pathb ( __tpl_at r tn ) ) { = tn + tn 1 }
@@ -603,7 +603,7 @@ $ `stdlib/core/rcbox.nu`
 
 // ── Output tag: {{ expr | filters }} ─────────────────────────────────
 
-@ __tpl_apply_filter * TplRImpl r i fa i fe → v {
+unsafe @ __tpl_apply_filter * TplRImpl r i fa i fe → v {
     ? ( __tpl_kw_is r fa fe `raw` ) { = . r va_raw T } {
         ? ( __tpl_kw_is r fa fe `upper` ) {
             ? | == . r va_kind 3 == . r va_kind 2 {
@@ -651,7 +651,7 @@ $ `stdlib/core/rcbox.nu`
                     } } } } }
 }
 
-@ __tpl_emit_a * TplRImpl r → v {
+unsafe @ __tpl_emit_a * TplRImpl r → v {
     : i kd . r va_kind
     ? == kd 1 {
         ? . r va_bool { ( string_push_str . r out `true` ) } { ( string_push_str . r out `false` ) }
@@ -674,7 +674,7 @@ $ `stdlib/core/rcbox.nu`
                 } {} } } }
 }
 
-@ __tpl_out_tag * TplRImpl r i a i bnd → v {
+unsafe @ __tpl_out_tag * TplRImpl r i a i bnd → v {
     ( __tpl_eval_primary r a bnd )
     ? . r failed {} {
         : ~ i k . r e_end
@@ -702,7 +702,7 @@ $ `stdlib/core/rcbox.nu`
 
 // {% if e %} … {% elif e %} … {% else %} … {% end %}
 // Skipping is rendering with emit=F, so nesting stays balanced.
-@ __tpl_do_if * TplRImpl r i ea i eb b emit → v {
+unsafe @ __tpl_do_if * TplRImpl r i ea i eb b emit → v {
     : ~ b cond F
     ? emit { = cond ( __tpl_truth r ea eb ) } {}
     : ~ b handled cond
@@ -726,7 +726,7 @@ $ `stdlib/core/rcbox.nu`
 // {% for NAME in PATH %} … {% end %}
 // The body span is re-scanned once per item; the loop variable and a
 // loop frame (index/len) are pushed for the duration.
-@ __tpl_do_for * TplRImpl r i ea i eb b emit → v {
+unsafe @ __tpl_do_for * TplRImpl r i ea i eb b emit → v {
     ? == emit F {
         : i t ( __tpl_run r F )
         ? & != t 1 == . r failed F {
@@ -798,7 +798,7 @@ $ `stdlib/core/rcbox.nu`
 
 // {% include 'name' %} — renders a set member in the current context and
 // scope. Only reached with emit=T (skip mode skips the tag wholesale).
-@ __tpl_do_include * TplRImpl r i a i bnd → v {
+unsafe @ __tpl_do_include * TplRImpl r i a i bnd → v {
     : i k ( __tpl_ws r a bnd )
     : i qc ( __tpl_at r k )
     ? | == qc 39 == qc 34 {
@@ -853,7 +853,7 @@ $ `stdlib/core/rcbox.nu`
 // terminator. Returns 0 = EOF, 1 = {% end %}, 2 = {% else %},
 // 3 = {% elif %} (expression span left in tag_a/tag_b).
 
-@ __tpl_run * TplRImpl r b emit → i {
+unsafe @ __tpl_run * TplRImpl r b emit → i {
     : ~ i term - 0 1
     ~ & == term - 0 1 == . r failed F {
         : i p0 . r pos
@@ -927,7 +927,7 @@ $ `stdlib/core/rcbox.nu`
 
 // ── Entry points ─────────────────────────────────────────────────────
 
-@ __tpl_render_ptr i sp s tsrc Json jctx → !String String {
+unsafe @ __tpl_render_ptr i sp s tsrc Json jctx → !String String {
     : TplR h ( __tpl_new tsrc sp jctx )
     : *TplRImpl r ( __TplR_ptr h )
     : i term ( __tpl_run r T )
@@ -954,7 +954,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Render a named member of the set.
-@ tset_render TplSet t__h s name Json jctx → !String String {
+unsafe @ tset_render TplSet t__h s name Json jctx → !String String {
     : *TplSetImpl t ( __TplSet_ptr t__h )
     : i idx ( __tset_find t name )
     ? < idx 0 {

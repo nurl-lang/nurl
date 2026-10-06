@@ -2,7 +2,7 @@
 // maximum nesting depth if it is fully balanced, else 0.
 $ `stdlib/core/string.nu`
 
-@ main → i {
+unsafe @ main → i {
     : s text `(([{}]))[]{}`
     : i n ( nurl_str_len text )
     : *i stack # *i ( malloc * n 8 )

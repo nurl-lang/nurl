@@ -83,16 +83,16 @@ $ `src/run.nu`
     Mutex m  // guards g_srv_w, g_srv_busy, the idle clock and the load counters
 }
 
-@ __srv_sync → *WhSync { ^ # *WhSync g_srv_sync }
+unsafe @ __srv_sync → *WhSync { ^ # *WhSync g_srv_sync }
 
-@ __srv_lock → v {
+unsafe @ __srv_lock → v {
     ? != g_srv_sync 0 {
         : *WhSync q ( __srv_sync )
         ( mutex_lock . q m )
     } {}
 }
 
-@ __srv_unlock → v {
+unsafe @ __srv_unlock → v {
     ? != g_srv_sync 0 {
         : *WhSync q ( __srv_sync )
         ( mutex_unlock . q m )
@@ -169,7 +169,7 @@ $ `src/run.nu`
 // thread, so the device context is bound here first (gpu_bind_thread); the
 // model's own close releases the context, and the next load on the request
 // thread retains it again.
-@ __srv_reaper → v {
+unsafe @ __srv_reaper → v {
     ~ T {
         ( sleep_ms 200 )
         ( __srv_lock )
@@ -521,7 +521,7 @@ $ `src/run.nu`
     : !v WsErr _w ( ws_send_text c ( string_data body ) )
 }
 
-@ __srv_ws_config TcpConn c ( Vec u ) payload → v {
+unsafe @ __srv_ws_config TcpConn c ( Vec u ) payload → v {
     : String ps ( string_new )
     : ~ i k 0
     ~ < k ( vec_len [u] payload ) {
@@ -641,7 +641,7 @@ $ `src/run.nu`
 
 // The upgrade hook: T = this was a WebSocket connection and it has been
 // served to completion; F = not an upgrade, fall through to the router.
-@ __srv_ws_hook TcpConn c HttpRequest rq → b {
+unsafe @ __srv_ws_hook TcpConn c HttpRequest rq → b {
     ? ( ws_is_upgrade rq ) {} { ^ F }
     // An unauthorized upgrade falls through to the ordinary handler: the
     // client asked for a 101 and gets a 401 page, which every WebSocket
@@ -692,7 +692,7 @@ $ `src/run.nu`
 // a reload swap it); the caller keeps the tokenizer.
 // cert/key: PEM paths — both set = HTTPS (and wss: the TcpConn's TLS is
 // transparent to the WebSocket layer). Both empty = plain HTTP.
-@ __wh_serve_run sink Whisper w Tok t s dir s host i port s lang i maxtok b use_vad b with_ts s cert s key s token i unload_s → i {
+unsafe @ __wh_serve_run sink Whisper w Tok t s dir s host i port s lang i maxtok b use_vad b with_ts s cert s key s token i unload_s → i {
     = g_srv_w # i . w ctl
     ( mem_forget w )  // the server owns it now (g_srv_w)
     = g_srv_t # i . t ctl
