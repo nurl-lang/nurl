@@ -82,6 +82,19 @@ ESC_MKREF = ("    : ~ Counter c @ Counter { 0 10 }\n"
              "    : ( @ v ) f \\ → v { = . c n + . c n 1 }\n")
 
 
+# Raw memory (a `*T` binding, a pointer cast, vec_data, the raw-memory
+# primitives) is allowed only in `unsafe` functions. A spelling that uses
+# it is about what the checker says of the pointer, not about the
+# boundary, so its functions are declared `unsafe`.
+RAW = re.compile(r"vec_data|nurl_free|nurl_alloc|# \*|# \w+\*|: (~ )?\* ?\w")
+
+
+def as_written(src):
+    """The program as compiled: `unsafe` on its functions when it uses
+    raw memory (templates written out by hand included)."""
+    return re.sub(r"(?m)^@ ", "unsafe @ ", src) if RAW.search(src) else src
+
+
 def prog(body, prelude=PRELUDE_VEC, extra=""):
     return f"{prelude}{extra}\n@ main → i {{\n{body}\n    ^ 0\n}}\n"
 
@@ -102,9 +115,11 @@ CLASSES = [
         # (#1162: a second name is an alias partner, and a use of either
         # after the other was consumed on some path is "use of possibly-
         # moved value … may share its buffer with …", reported by default.)
+        # (Under the ownership rules a callee's result that may be its
+        # argument is a borrow of it: releasing it is "… is a borrow".)
         "expect_msg": ["use of moved value", "may already be freed",
                        "its value was stored into an owner",
-                       "use of possibly-moved value"],
+                       "use of possibly-moved value", "is a borrow"],
         "spellings": {
             # Covered as of #899.
             "let-alias": prog(
@@ -363,7 +378,7 @@ CLASSES = [
                "which is what definition order used to decide.",
         "expect": REJECT_STRICT,
         "expect_msg": ["use of moved value", "may already be freed",
-                       "use of possibly-moved value"],
+                       "use of possibly-moved value", "is a borrow"],
         "spellings": {
             "sink-above": prog(
                 "    : ( Vec i ) v ( vec_new [i] )\n"
@@ -1404,14 +1419,14 @@ CLASSES = [
             # A String and a Vec of scalars crossing the boundary. NURL
             # spells String and every opaque FFI handle `i8*`, so
             # demoting either would demote both and take most correct
-            # worker code with it.
+            # worker code with it. (The closure the thread runs takes
+            # `nums` along and frees it there.)
             "string-and-vec-captured": prog(
                 "    : s label `worker`\n"
                 "    : ( Vec i ) nums ( vec_new [i] )\n"
                 "    : ( @ v ) w \\ → v { ( puts label ) : i n ( vec_len [i] nums ) }\n"
                 "    : !Thread ThreadErr r ( thread_spawn w )\n"
-                "    ?? r { T t → { ( thread_join t ) } F e → {} }\n"
-                "    ( vec_free [i] nums )",
+                "    ?? r { T t → { ( thread_join t ) } F e → {} }",
                 prelude="$ `stdlib/std/thread.nu`\n$ `stdlib/core/vec.nu`\n"),
             # `[T: Send]` is answered by the derivation, not by hunting
             # for an impl — otherwise the bound is unusable for `i`.
@@ -1746,7 +1761,7 @@ RUNTIME_CLASSES = [
             # spelling leak-clean either way.
             "escaped-value-survives": (RECOVER_PRELUDE +
                 ": Resp { s body i code }\n"
-                "@ main → i {\n"
+                "unsafe @ main → i {\n"
                 "    : ~ Resp out @ Resp { `none` 500 }\n"
                 "    : !v PanicInfo r ( recover \\ → v {\n"
                 "        : Resp tmp @ Resp { ( nurl_str_cat `escaped-` `field` ) 201 }\n"
@@ -2002,7 +2017,7 @@ def run_runtime_classes(only, tmp):
             return fails, True
         for name, src in cls["spellings"].items():
             p = tmp / f"{cls['name']}__{name}.nu"
-            p.write_text(src)
+            p.write_text(as_written(src))
             got, why = runtime_verdict(p, tmp, san)
             mark = "ok " if got == RUN_CLEAN else (
                 "INVALID" if got == INVALID else "FAIL")
@@ -2057,7 +2072,7 @@ def main():
         print(f"\n── {cls['name']}  (expect ≥ {want})")
         for name, src in cls["spellings"].items():
             p = tmp / f"{cls['name']}__{name}.nu"
-            p.write_text(src)
+            p.write_text(as_written(src))
             got, _err = verdict_of(p, cls.get("expect_msg", ""),
                                    default_only=(want == ACCEPT))
             if got == INVALID:

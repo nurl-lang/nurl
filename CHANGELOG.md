@@ -30,6 +30,11 @@ program's safety no longer rests on them.
 - The borrow-checker summary line no longer calls every rejection a
   false positive: the rules are conservative and each message gives a fix.
 - The defer/return leak seam is closed (a per-path transfer flag).
+- **A struct that owns raw string or slice fields cannot be copied to a
+  second binding** (`= out tmp`, `: T b tmp`) outside `unsafe`: the
+  fields stay the original's and were freed with it, so a copy in an outer
+  block or a by-reference capture read freed memory (accepted before).
+  Use owning field types (`String`, `Vec`).
 - **An `inout s` parameter cannot be given a new value.** The callee
   cannot tell whether the caller's string is owned or borrowed, so the
   replaced value either leaked or would be freed under a borrower. Return

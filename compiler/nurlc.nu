@@ -17795,6 +17795,19 @@ unsafe @ gen_match i lex i syms i cg → s {
 // (`<path>:<kind>:<leaf_sname>:<leaf_idx>`), keeping only entries whose
 // ptr matches `want_ptr`. Empty when the binding owns no fields. Used by
 // gen_ret to hand the caller exactly the field set to re-register (A4c).
+// `= dst src` / `: T dst src` with `src` a struct binding that owns raw
+// string or slice fields: the fields stay `src`'s — they are freed when
+// `src` goes out of scope — so `dst` would be a second name for them that
+// may outlive them (a binding in an outer block, a by-reference capture).
+// The rules cannot follow that; an owning field type can. (Raw fields are
+// raw memory: an `unsafe` function may manage them by hand.)
+@ bck_check_owned_fields_alias i lex i syms i rhs_tt s rhs s dst → v {
+    ? | | | ! ( bck_sound ) ! ( is_ident_tok rhs_tt ) ( seq rhs dst ) ( bck_unsafe_ctx ) { ^ v } {}
+    : s rptr ( nurl_sym_get2 syms rhs `__ptr` )
+    ? == 0 ( nurl_str_len ( mem_collect_struct_fields_for syms rptr ) ) { ^ v } {}
+    ( die lex ( nurl_str_cat4 `'` rhs `' owns raw string or slice fields that are freed when '` ( nurl_str_cat3 rhs `' goes out of scope; '` ( nurl_str_cat3 dst `' would be a second name for them that can outlive them (a use after free). Give the struct owning field types (String, Vec) so the value can move, or build the struct where it is kept instead of copying it from '` ( nurl_str_cat rhs `' (code that manages those fields by hand belongs in an 'unsafe' function).` ) ) ) ) )
+}
+
 @ mem_collect_struct_fields_for i syms s want_ptr → s {
     ? == 0 ( nurl_str_len want_ptr ) { ^ ( nurl_str_cat `` `` ) } {}
     : ~ s out ``
@@ -23352,6 +23365,7 @@ unsafe @ bck_loop_mask s pre s post → s {
             = lit_track T
         } {}
         ( mem_cursor_owner_slot syms cg is_mutable vt lit_track rhs_is_owned_local rhs_is_owned_global bck_rhs_tt )
+        ( bck_check_owned_fields_alias lex syms bck_rhs_tt bck_rhs_val name )
         // A forward call's ownership guard belongs to THIS binding. Register
         // the hidden slot as an ordinary owned string — every existing drop
         // path then handles it. The stable address graph decides whether
@@ -23628,6 +23642,7 @@ unsafe @ bck_loop_mask s pre s post → s {
                 = lit_track T
             } {}
             ( mem_cursor_owner_slot syms cg is_mutable ptype lit_track rhs_is_owned_local rhs_is_owned_global bck_rhs_tt )
+            ( bck_check_owned_fields_alias lex syms bck_rhs_tt bck_rhs_val name )
             // A forward call's ownership guard belongs to THIS binding. Register
             // the hidden slot as an ordinary owned string — every existing drop
             // path then handles it. The stable address graph decides whether
@@ -24300,6 +24315,7 @@ unsafe @ bck_loop_mask s pre s post → s {
         { ( nurl_sym_def syms `__store_rhs_tok__` bck_rhs_val ) }
         { ( nurl_sym_def syms `__store_rhs_tok__` `-` ) }
         : ~ s store_val ( coerce_store_val lex val rhs_ty vt syms cg )
+        ( bck_check_owned_fields_alias lex syms bck_rhs_tt bck_rhs_val name )
         // A struct binding that owns fields, overwritten by a value that
         // brings the SAME owned fields (a constructor call, a literal):
         // release the old fields before the store, and the registration
