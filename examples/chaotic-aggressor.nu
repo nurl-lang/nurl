@@ -29,6 +29,14 @@
 //       Horner evaluation written as one nested prefix chain.
 //   (7) Compile-time CONST FOLDING, LIFO `defer`, nested member-path
 //       assignment, variable-index pointer stores, and nested ternaries.
+//
+// RAW MEMORY HERE IS A DELIBERATE EXCEPTION, NOT HOW NURL CODE IS WRITTEN.
+// Ordinary NURL never frees anything by hand: String, Vec, HashMap, Rc and
+// every struct or enum built from them drop themselves when their owner
+// goes out of scope. Raw `alloc` / `*T` memory — and with it `nurl_free` —
+// is reserved for the rare places that need it (FFI buffers, a custom
+// allocator, a stress test like this file). The `nurl_free` calls below
+// exist only because this file stresses that raw path on purpose.
 // ============================================================
 
 $ `stdlib/core/mem.nu`
@@ -49,7 +57,9 @@ $ `stdlib/std/float.nu`
     ^ @ ( Stack T ) { # *T ( alloc [T] cap ) 0 cap }
 }
 
-// The store is raw `alloc` memory: release it by hand when done.
+// The store is raw `alloc` memory (axis 1 exercises exactly that), so it is
+// released by hand — the raw-memory exception described at the top. A
+// normal program would hold a `( Vec T )` here and free nothing.
 @ stack_free [T] ( Stack T ) st → v {
     ( nurl_free # s . st data )
 }

@@ -22,6 +22,14 @@
 //
 // The pipeline: parse a formula string into an Expr tree (C), symbolically
 // differentiate + simplify it (B), then evaluate both over Vec3 math (A).
+//
+// RAW MEMORY HERE IS A DELIBERATE EXCEPTION, NOT HOW NURL CODE IS WRITTEN.
+// Ordinary NURL never frees anything by hand: String, Vec, HashMap, Rc and
+// every struct or enum built from them drop themselves when their owner
+// goes out of scope. Raw `alloc` / `*T` memory — and with it `nurl_free` —
+// is reserved for the rare places that need it (FFI buffers, a custom
+// allocator, a stress test like this file). The `nurl_free` calls below
+// exist only because this file stresses that raw path on purpose.
 // ============================================================
 
 $ `stdlib/core/string.nu`
@@ -62,8 +70,9 @@ $ `stdlib/std/float.nu`
 
 // ── Axis B: a recursive symbolic-expression ADT ─────────────────────
 //
-// Children are boxed as `*Expr` (raw pointer payloads). This is the only
-// recursive enum in the codebase.
+// Children are boxed as `*Expr` (raw pointer payloads) on purpose — the
+// raw-memory exception described at the top — so the trees are freed by
+// hand at the end of main. This is the only recursive enum in the codebase.
 
 : | Expr {
     Num f

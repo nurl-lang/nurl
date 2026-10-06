@@ -19,6 +19,8 @@
 // so AC (red + blue) draws purple, ABCD draws all-channel-on = white,
 // and so on. Catalysts punch bright white pixels through the soup.
 
+$ `stdlib/core/vec.nu`
+
 & `canvas` @ canvas_open i w i h → *i
 
 & `canvas` @ canvas_present → v
@@ -181,9 +183,14 @@
 }
 
 @ main → i {
-    : *i xs # *i ( malloc * SLOTS 8 )
-    : *i ys # *i ( malloc * SLOTS 8 )
-    : *i bs # *i ( malloc * SLOTS 8 )
+    // The particle arrays are Vecs: they free themselves when main returns.
+    // The simulation reads and writes them through their data pointers.
+    : ( Vec i ) xv ( vec_zeroed [i] SLOTS )
+    : ( Vec i ) yv ( vec_zeroed [i] SLOTS )
+    : ( Vec i ) bv ( vec_zeroed [i] SLOTS )
+    : *i xs ( vec_data [i] xv )
+    : *i ys ( vec_data [i] yv )
+    : *i bs ( vec_data [i] bv )
 
     : ~ i k 0
     ~ < k SLOTS {
@@ -223,8 +230,5 @@
     }
 
     ( canvas_close )
-    ( free # s xs )
-    ( free # s ys )
-    ( free # s bs )
     ^ 0
 }
