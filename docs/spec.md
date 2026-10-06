@@ -1113,10 +1113,9 @@ Semantics (v2.3, 2026-08-03):
   registered *before* the `;` statement; those values stay alive
   through the defer chain and are auto-dropped after it runs. Values
   bound *after* the last defer drop at their normal scope exit.
-  Returning an owned value transfers it to the caller as usual. One
-  sharp edge: with several return paths, a pre-defer owned value that
-  is returned on one path but not another is *leaked* (never
-  double-freed) on the path that does not return it.
+  Returning an owned value transfers it to the caller as usual. With
+  several return paths, a pre-defer owned value is transferred on the
+  paths that return it and dropped after the chain on the others.
 - `^` (return) and `\` (failure propagation) inside a defer body are
   compile errors — the chain runs during return; handle cleanup failures
   locally with `??`. A closure defined there has its own return context.
