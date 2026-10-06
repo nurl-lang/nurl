@@ -11592,6 +11592,13 @@
             } {}
             ? & ( is_ident_tok bck_arg_tt ) ( __ptr_borrow_fn fname )
             { ( nurl_sym_def syms `__last_borrow_src__` bck_arg_val ) } {}
+            // A view of a FIELD (`( string_data . h v )`) is a view into the
+            // value `h` holds: replacing that field frees it.
+            ? & & ( bck_sound ) == bck_arg_tt TT_DOT ( __ptr_borrow_fn fname ) {
+                : s __vfr ( str_first_word ( nurl_sym_get syms `__last_field_read__` ) )
+                : s __vfn ( nurl_sym_get2 syms __vfr `__bname` )
+                ? != 0 ( nurl_str_len __vfn ) { ( nurl_sym_def syms `__last_borrow_src__` __vfn ) } {}
+            } {}
             ? & ( is_ident_tok bck_arg_tt ) ( __ptr_mutator fname )
             { = __pk_defer ( nurl_str_cat4 __pk_defer `k ` bck_arg_val ( nurl_str_cat3 ` ` ( nurl_str_int bck_arg_line ) ` - - - ` ) ) } {}
         } {}
@@ -22787,9 +22794,13 @@
     ( nurl_str_cat3 `' is stale: '` cont
     ( nurl_str_cat3 `' was mutated on line ` ( nurl_str_int dline )
     ` and may have reallocated its buffer` ) ) ) )
-    ( nurl_eprintln ( nurl_str_cat3 loc `: warning: ` ( nurl_str_cat msg ctx ) ) )
-    ( nurl_eprintln ( nurl_str_cat3 `  note: re-fetch the pointer after the mutation (` name
-    ( nurl_str_cat3 ` = ( vec_data … ` cont ` ) )` ) ) )
+    // A view read after its source may have moved its buffer: under the
+    // sound rules a use-after-free like any other, so an error.
+    : b __pse ( bck_sound )
+    ( nurl_eprintln ( nurl_str_cat3 loc ? __pse `: error: ` `: warning: ` ( nurl_str_cat msg ctx ) ) )
+    ? __pse { = g_bck_errors + g_bck_errors 1 } {}
+    ( nurl_eprintln ( nurl_str_cat3 `  note: take the view again after the mutation (` name
+    ( nurl_str_cat3 ` = ( string_data / vec_data … ` cont ` ) ), or read through the owner` ) ) )
 }
 
 @ __ptr_stale_warn i lex i line i col s name s cont i dline → v {
@@ -22800,9 +22811,13 @@
     ( nurl_str_cat3 `' is stale: '` cont
     ( nurl_str_cat3 `' was mutated on line ` ( nurl_str_int dline )
     ` and may have reallocated its buffer` ) ) ) )
-    ( nurl_eprintln ( nurl_str_cat3 loc `: warning: ` ( nurl_str_cat msg g_diag_ctx ) ) )
-    ( nurl_eprintln ( nurl_str_cat3 `  note: re-fetch the pointer after the mutation (` name
-    ( nurl_str_cat3 ` = ( vec_data … ` cont ` ) )` ) ) )
+    // A view read after its source may have moved its buffer: under the
+    // sound rules a use-after-free like any other, so an error.
+    : b __pse ( bck_sound )
+    ( nurl_eprintln ( nurl_str_cat3 loc ? __pse `: error: ` `: warning: ` ( nurl_str_cat msg g_diag_ctx ) ) )
+    ? __pse { = g_bck_errors + g_bck_errors 1 } {}
+    ( nurl_eprintln ( nurl_str_cat3 `  note: take the view again after the mutation (` name
+    ( nurl_str_cat3 ` = ( string_data / vec_data … ` cont ` ) ), or read through the owner` ) ) )
 }
 
 // The container a pointer was borrowed from ("" when unknown).
@@ -24740,7 +24755,7 @@
                             : s rhsc ? ( __is_closure_ty ftype ) ( mem_clo_into_owner syms cg ftype rhsc0 __fs_tt )
                             ( nurl_str_cat rhsc0 `` )
                             ? ( __is_closure_ty ftype ) { ( bck_note_clo_caps_stored syms __fs_tt __fs_v0 __fs_l0 ) } {}
-                            ? & != 0 ( nurl_str_len obj_name ) ( __type_needs_drop ftype syms ) { ( bck_stash_fieldset obj_name __fs_l0 ) } {}
+                            ? & != 0 ( nurl_str_len obj_name ) ( __type_needs_drop ftype syms ) { ( bck_stash_fieldset obj_name __fs_l0 ) ? ( bck_sound ) { ( __ptr_kill obj_name __fs_l0 ) } {} } {}
                             : s gep ( nurl_cg_reg cg )
                             ( nurl_print `  ` ) ( nurl_print gep )
                             ( nurl_print ` = getelementptr ` ) ( nurl_print ( nurl_llty st ) )
@@ -24889,7 +24904,7 @@
                 : s rhsc ? ( __is_closure_ty ftype ) ( mem_clo_into_owner syms cg ftype rhsc0 __fs_tt )
                 ( nurl_str_cat rhsc0 `` )
                 ? ( __is_closure_ty ftype ) { ( bck_note_clo_caps_stored syms __fs_tt __fs_v1 __fs_l1 ) } {}
-                ? & != 0 ( nurl_str_len obj_name ) ( __type_needs_drop ftype syms ) { ( bck_stash_fieldset obj_name __fs_l1 ) } {}
+                ? & != 0 ( nurl_str_len obj_name ) ( __type_needs_drop ftype syms ) { ( bck_stash_fieldset obj_name __fs_l1 ) ? ( bck_sound ) { ( __ptr_kill obj_name __fs_l1 ) } {} } {}
                 : s gep ( nurl_cg_reg cg )
                 ( nurl_print `  ` ) ( nurl_print gep )
                 ( nurl_print ` = getelementptr ` ) ( nurl_print ( nurl_llty pt ) )
