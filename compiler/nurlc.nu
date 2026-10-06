@@ -28527,7 +28527,8 @@
         {}
         // A String / Vec / owning struct a returned closure captured is the
         // env's own (gen_env_allocation moved or copied it in).
-        ? & & & & | | != 0 g_env_owns_handles ( str_contains_word g_env_moved var ) ( str_contains_word g_env_shared var ) ( __is_handle_ty vty ) ! ( __is_capture_byref var syms ) ! ( __capture_lends var syms )
+        : b __shared_cap & & ( str_contains_word g_env_shared var ) ( __is_handle_ty vty ) ! ( __is_capture_byref var syms )
+        ? | __shared_cap & & & & | != 0 g_env_owns_handles ( str_contains_word g_env_moved var ) ( __is_handle_ty vty ) ! ( __is_capture_byref var syms ) ! ( __capture_lends var syms )
         ! ( str_contains_word g_env_released var )
         { : s ht ( nurl_llty vty )
             : s hm ( __drop_mangle vty )
@@ -29195,13 +29196,17 @@
     = rest ( nurl_str_cat cand `` )
     ~ != 0 ( nurl_str_len rest ) {
         : s v ( str_first_word rest ) = rest ( str_skip_word rest )
-        ? ! ( str_contains_word used v ) { = out ( nurl_str_cat3 out ` ` v ) } {
-            // Still named here, and a handle whose copy is another owner of
-            // the same object (Channel, Mutex, Arc, a server): the thread
-            // takes a share of its own, so either side may end first.
-            : s vt ( nurl_sym_get syms v )
-            ? & ( __is_libh vt ) ( seq ( __libh_copy_op vt ) `share` ) { = g_clo_detach_shared ( nurl_str_cat3 g_clo_detach_shared ` ` v ) } {}
-        }
+        ? ! ( str_contains_word used v ) { = out ( nurl_str_cat3 out ` ` v ) } {}
+    }
+    // Every other capture that is a handle whose copy is another owner of
+    // the same object (Channel, Mutex, Arc, a server) — still named here,
+    // or a parameter the caller owns: the thread or fiber takes a share of
+    // its own, so either side may end first.
+    = rest ( nurl_str_cat caps `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s v ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s vt ( nurl_sym_get syms v )
+        ? & & ! ( str_contains_word out v ) ( __is_libh vt ) ( seq ( __libh_copy_op vt ) `share` ) { = g_clo_detach_shared ( nurl_str_cat3 g_clo_detach_shared ` ` v ) } {}
     }
     ^ out
 }
