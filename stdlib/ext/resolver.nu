@@ -175,12 +175,13 @@ $ `stdlib/std/cmp.nu`
             // The placeholder index leaves the node (dropped here).
             : RegIndex placeholder . node index
             ( mem_take placeholder )
+            // The index moves into the node; read it from there.
             = . node index index
             = . node loaded 1
-            : i n ( vec_len [IdxVersion] . index versions )
+            : i n ( vec_len [IdxVersion] . . node index versions )
             : ~ i k 0
             ~ & == . node loaded 1 < k n {
-                : IdxVersion version . ( vec_data [IdxVersion] . index versions ) k
+                : IdxVersion version . ( vec_data [IdxVersion] . . node index versions ) k
                 ?? ( semver_parse ( string_data . version version ) ) {
                     F _ → { = . node loaded -2 }
                     T value → { ( vec_push [__SolveVersion] . node versions @ __SolveVersion { value k ( vec_new [__SolveEdge] ) 0 } ) }

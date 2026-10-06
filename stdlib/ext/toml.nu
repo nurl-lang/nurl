@@ -499,6 +499,44 @@ $ `stdlib/std/float.nu`
     ^ ( __valresult_ok @ TomlValue { TTable entries } cur )
 }
 
+// Does `arr`'s last element hold a table (an array-of-tables)?
+@ __t_arr_ends_in_table ( Vec TomlValue ) arr → b {
+    : i n ( vec_len [TomlValue] arr )
+    ?? ( vec_get [TomlValue] arr - n 1 ) {
+        T v → { ?? v { TTable _ → { ^ T } _ → {} } }
+        F → {}
+    }
+    ^ F
+}
+
+// The table in `arr`'s last element, lent from `arr`; `fallback` when it
+// holds none (callers check __t_arr_ends_in_table first).
+@ __t_arr_last_tbl ( Vec TomlValue ) arr ( Vec TomlEntry ) fallback → ( Vec TomlEntry ) {
+    : i n ( vec_len [TomlValue] arr )
+    ?? ( vec_get [TomlValue] arr - n 1 ) {
+        T v → { ?? v { TTable t → { ^ t } _ → {} } }
+        F → {}
+    }
+    ^ fallback
+}
+
+// The table the entry just pushed onto `cur` opens — its own table, or
+// the last table of its array-of-tables — lent from `cur`.
+@ __t_last_tbl ( Vec TomlEntry ) cur → ( Vec TomlEntry ) {
+    : i n ( vec_len [TomlEntry] cur )
+    ?? ( vec_get [TomlEntry] cur - n 1 ) {
+        T e → {
+            ?? . e value {
+                TTable t → { ^ t }
+                TArr a → { ^ ( __t_arr_last_tbl a cur ) }
+                _ → {}
+            }
+        }
+        F → {}
+    }
+    ^ cur
+}
+
 // ── Section helper: walk dotted path, inserting tables as needed.
 //
 // `target` is the current top-level TTable's Vec[TomlEntry]. `path` is
@@ -536,27 +574,28 @@ $ `stdlib/std/float.nu`
                     // Allocate only after proving the new table will be owned
                     // by the root. A scalar/table collision must not detach it.
                     ? >= found 0 {
-                        : TomlEntry old . ( vec_data [TomlEntry] cur ) found
-                        ?? . old value {
-                            TArr arr → {
-                                : i count ( vec_len [TomlValue] arr )
-                                ? == count 0 { ^ @ !( Vec TomlEntry ) TomlErr { F TomlSyntax } } {}
-                                ?? . ( vec_data [TomlValue] arr ) - count 1 {
-                                    TTable _ → {}
+                        ?? ( vec_get [TomlEntry] cur found ) {
+                            T old → {
+                                ?? . old value {
+                                    TArr arr → {
+                                        : i count ( vec_len [TomlValue] arr )
+                                        ? == count 0 { ^ @ !( Vec TomlEntry ) TomlErr { F TomlSyntax } } {}
+                                        ? ! ( __t_arr_ends_in_table arr ) { ^ @ !( Vec TomlEntry ) TomlErr { F TomlSyntax } } {}
+                                        // The new table goes straight to its owner;
+                                        // the cursor borrows it back from there.
+                                        ( vec_push [TomlValue] arr @ TomlValue { TTable ( vec_new [TomlEntry] ) } )
+                                        = next_tbl ( __t_arr_last_tbl arr cur )
+                                    }
                                     _ → { ^ @ !( Vec TomlEntry ) TomlErr { F TomlSyntax } }
                                 }
-                                : ( Vec TomlEntry ) inner ( vec_new [TomlEntry] )
-                                ( vec_push [TomlValue] arr @ TomlValue { TTable inner } )
-                                = next_tbl inner
                             }
-                            _ → { ^ @ !( Vec TomlEntry ) TomlErr { F TomlSyntax } }
+                            F → {}
                         }
                     } {
-                        : ( Vec TomlEntry ) inner ( vec_new [TomlEntry] )
                         : ( Vec TomlValue ) arr ( vec_new [TomlValue] )
-                        ( vec_push [TomlValue] arr @ TomlValue { TTable inner } )
+                        ( vec_push [TomlValue] arr @ TomlValue { TTable ( vec_new [TomlEntry] ) } )
                         ( vec_push [TomlEntry] cur @ TomlEntry { ( string_from ( string_data key ) ) @ TomlValue { TArr arr } } )
-                        = next_tbl inner
+                        = next_tbl ( __t_last_tbl cur )
                     }
                 } {
                     // Plain descent — find or create TTable child.
@@ -571,10 +610,8 @@ $ `stdlib/std/float.nu`
                                         // belongs to the most recently declared table.
                                         : i count ( vec_len [TomlValue] arr )
                                         ? == count 0 { ^ @ !( Vec TomlEntry ) TomlErr { F TomlSyntax } } {}
-                                        ?? . ( vec_data [TomlValue] arr ) - count 1 {
-                                            TTable t → = next_tbl t
-                                            _ → { ^ @ !( Vec TomlEntry ) TomlErr { F TomlSyntax } }
-                                        }
+                                        ? ! ( __t_arr_ends_in_table arr ) { ^ @ !( Vec TomlEntry ) TomlErr { F TomlSyntax } } {}
+                                        = next_tbl ( __t_arr_last_tbl arr cur )
                                     }
                                     _ → { ^ @ !( Vec TomlEntry ) TomlErr { F TomlSyntax } }
                                 }
@@ -582,9 +619,8 @@ $ `stdlib/std/float.nu`
                             F _ → {}
                         }
                     } {
-                        : ( Vec TomlEntry ) child ( vec_new [TomlEntry] )
-                        ( vec_push [TomlEntry] cur @ TomlEntry { ( string_from ( string_data key ) ) @ TomlValue { TTable child } } )
-                        = next_tbl child
+                        ( vec_push [TomlEntry] cur @ TomlEntry { ( string_from ( string_data key ) ) @ TomlValue { TTable ( vec_new [TomlEntry] ) } } )
+                        = next_tbl ( __t_last_tbl cur )
                     }
                 }
             }

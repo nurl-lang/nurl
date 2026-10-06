@@ -14840,7 +14840,7 @@
     // the analyze walk scope them unambiguously.
     // A scrutinee that is a borrow (a vec_get result, a field read, a
     // borrowed option) lends its payloads to the arms: `b` marks it.
-    : s bck_mreads ? == g_borrowck 0 `` ( nurl_sym_get g_bck `reads` )
+    : s bck_mreads ? == g_borrowck 0 `` ? == match_first_tt TT_LPAREN ( bck_call_lend_srcs syms ) ( nurl_sym_get g_bck `reads` )
     ( bck_record `match` `` bck_mline )
 
     // Dangling-borrow tracking: `??` arms are alternatives, exactly like the
@@ -19834,6 +19834,22 @@
     } {}
 }
 
+// The arguments the result of the call just generated may borrow from:
+// what the callee's summaries say it lends or hands back — every
+// argument when the callee is not compiled yet.
+@ bck_call_lend_srcs i syms → s {
+    ? != 0 ( nurl_sym_len syms `__last_call_forward__` ) { ^ ( nurl_sym_get syms `__last_call_args__` ) } {}
+    : s a ( nurl_sym_get syms `__last_call_lend_idents__` )
+    : s b ( nurl_sym_get syms `__last_phi_idents__` )
+    ? == 0 ( nurl_str_len a ) { ^ ( nurl_str_cat b `` ) } {}
+    ? == 0 ( nurl_str_len b ) { ^ ( nurl_str_cat a `` ) } {}
+    ^ ( nurl_str_cat3 a ` ` b )
+}
+
+// Set by a binding whose right-hand side is a call: the sources a borrow of
+// its result has (bck_call_lend_srcs); `-` for any other right-hand side.
+: ~ s g_bck_rhs_lend `-`
+
 // The names in `reads` whose values own something (a String, a Vec, an
 // owning struct or option): what a borrow can borrow from. An index or a
 // count read beside them is not a source.
@@ -19858,7 +19874,8 @@
     : s name ( nurl_sym_get2 syms ptr `__bname` )
     ? | == 0 ( nurl_str_len name ) ! ( seq name ( nurl_sym_get g_bck `lastname` ) ) { ^ v } {}
     : s saved ( nurl_sym_get g_bck `reads` )
-    ( nurl_sym_set g_bck `reads` ( bck_owning_reads syms ( nurl_sym_get g_bck `lastreads` ) ` ` ) )
+    : s from ? ( seq g_bck_rhs_lend `-` ) ( nurl_sym_get g_bck `lastreads` ) g_bck_rhs_lend
+    ( nurl_sym_set g_bck `reads` ( bck_owning_reads syms from ` ` ) )
     ( bck_record `borrow` name ( nurl_str_to_int ( nurl_sym_get g_bck `lastline` ) ) )
     ( nurl_sym_set g_bck `reads` saved )
 }
@@ -19923,7 +19940,12 @@
     ? == 0 len { ^ F } {}
     ? == ( nurl_str_get lty - len 1 ) 42 { ^ F } {}
     : i c0 ( nurl_str_get lty 0 )
-    | == c0 37 == c0 123
+    ? ! | == c0 37 == c0 123 { ^ F } {}
+    // Under the sound rules only a value with something to release moves:
+    // a struct of scalars or an enum of unit variants is copied, and a
+    // copy cannot be freed twice.
+    ? ( bck_sound ) { ^ | ( __is_handle_ty lty ) ( __type_needs_drop lty g_root_syms ) } {}
+    T
 }
 
 // Phase 2: an immutable `: T b a` whose RHS is a bare identifier
@@ -19935,12 +19957,27 @@
 // case is the job of a later reference-surface phase; until then the
 // immutability of the destination is the heuristic.
 @ bck_let_alias i syms b is_mut i rhs_tt s rhs_val s vt i line s dest → v {
-    ? & & & ! is_mut ( is_ident_tok rhs_tt ) ( bck_is_heap_lty vt )
-    ! ( nurl_sym_has_word syms `__fn_param_names__` rhs_val )
-    { ( bck_stash_move rhs_val line `an alias copy` )
+    : b is_param ( nurl_sym_has_word syms `__fn_param_names__` rhs_val )
+    ? & & & ! is_mut ( is_ident_tok rhs_tt ) ( bck_is_heap_lty vt ) ! is_param
+    {  // Under the sound rules the walk decides (`:a`): an owner's value
+        // moves to `b`, a borrow is copied (b borrows from its sources).
+        ? ( bck_sound )
+        { ( bck_stash_maybe_alias rhs_val line `an alias copy` ( nurl_str_cat dest `:a` ) ) }
+        { ( bck_stash_move rhs_val line `an alias copy` ) }
         // What was stored in `a`'s value is in `b`'s now.
         ( bck_stash_xfer rhs_val dest line ) }
-    {}
+    {
+        // A `: ~` copy (the cursor idiom) or a copy of a parameter: a
+        // borrow of it.
+        ? & & & ( bck_sound ) ( is_ident_tok rhs_tt ) ( bck_is_heap_lty vt ) | is_mut is_param
+        { ? & != g_borrowck 0 == g_bck_rec_off 0 {
+                : s saved ( nurl_sym_get g_bck `reads` )
+                ( nurl_sym_set g_bck `reads` rhs_val )
+                ( bck_record `borrow` dest line )
+                ( nurl_sym_set g_bck `reads` saved )
+            } {} }
+        {}
+    }
 }
 
 // Stash a handover of `src`'s whole value to `dst` (`: T b a`): bindings
@@ -20082,11 +20119,10 @@
     {  // Bound, not inline — see bck_alias_from_phi: a fresh string
         // passed straight to a user function is never released.
         : s why ( nurl_str_cat3 `its handle was handed to '` dest `' by an alias assignment` )
-        // The sound rules make the handover what it is, a move: `= prev t`
-        // leaves `t` dead until it is given a new value (read `prev`).
-        ? ( bck_sound )
-        { ( bck_stash_move rhs_val line ( nurl_str_cat3 `the assignment to '` dest `'` ) ) }
-        { ( bck_stash_maybe_alias rhs_val line why dest ) } }
+        // Under the sound rules the walk decides (`:a`): an owner's handle
+        // moves (`= prev t` leaves `t` dead until it is given a new value),
+        // a borrow's is copied (the destination borrows from its sources).
+        ( bck_stash_maybe_alias rhs_val line why ? ( bck_sound ) ( nurl_str_cat dest `:a` ) dest ) }
     {}
 }
 
@@ -20263,9 +20299,10 @@
             : s apt ( str_first_word arest )
             = arest ( str_skip_word arest )
             : b acall & > ( nurl_str_len apt ) 2 != 0 ( nurl_str_ends apt `:c` )
-            : s apn ? acall ( nurl_str_slice apt 0 - ( nurl_str_len apt ) 2 ) apt
+            : b aasg & > ( nurl_str_len apt ) 2 != 0 ( nurl_str_ends apt `:a` )
+            : s apn ? | acall aasg ( nurl_str_slice apt 0 - ( nurl_str_len apt ) 2 ) apt
             : s apf ? ( seq apn `-` ) `-` ( nurl_str_cat `=` apn )
-            ( bck_record2 `maybealias` anm ( nurl_str_to_int aln ) apf ? acall `c` `0` )
+            ( bck_record2 `maybealias` anm ( nurl_str_to_int aln ) apf ? acall `c` ? aasg `a` `0` )
         }
         ~ != 0 ( nurl_str_len frest ) {
             : s fnm ( str_first_word frest )
@@ -21358,10 +21395,10 @@
                             : s asrc ? != 0 ( nurl_str_len avsrc ) avsrc ( nurl_str_cat avn `` )
                             = st ( bck_borrow_begin st apid ? == 0 ( nurl_str_len prior ) asrc ( nurl_str_cat3 prior ` ` asrc ) )
                         } {
-                            // An owner's handle one of several a `?` / `??`
-                            // may have selected: moved on the paths that
-                            // selected it.
-                            = st ( bck_st_set st avid ( bck_join ( bck_st_get st avid ) BCK_MOVED ) )
+                            // An owner's handle: an assignment moved it
+                            // (definitely); one of several a `?` / `??` may
+                            // have selected moved on the paths that selected it.
+                            = st ( bck_st_set st avid ? ( seq ( bck_field rec 6 ) `a` ) BCK_MOVED ( bck_join ( bck_st_get st avid ) BCK_MOVED ) )
                             ( nurl_sym_set g_bck ( nurl_str_cat `ml_` avn ) ( bck_field rec 3 ) )
                             ( nurl_sym_set g_bck ( nurl_str_cat3 `mc_` ( nurl_sym_get2 g_bck `rv_` avn ) ( bck_field rec 3 ) ) ( nurl_sym_get g_bck ( nurl_str_cat3 `qc_` ( nurl_sym_get2 g_bck `rv_` avn ) ( bck_field rec 3 ) ) ) )
                         }
@@ -21590,7 +21627,10 @@
     ? != 0 ( nurl_sym_len g_bck ( bck_bkey `nh_` bids ) ) { ^ st } {}
     = g_bck_has_borrow 1
     : ~ s set ``
-    : ~ s rest ( nurl_str_cat srcs `` )
+    // Flattened to owners: a borrow of a borrow borrows from what that one
+    // borrows from. Re-pointing a borrow binding (a cursor walking a tree)
+    // frees nothing, so it must not end the borrows taken through it.
+    : ~ s rest ( bck_borrow_owners srcs )
     ~ != 0 ( nurl_str_len rest ) {
         : s w ( str_first_word rest ) = rest ( str_skip_word rest )
         ? & ! ( seq w bids ) ! ( str_contains_word set w ) {
@@ -21631,6 +21671,19 @@
     ^ ( bck_borrow_begin st wid srcs )
 }
 
+// `srcs` with every borrow binding replaced by its own sources.
+@ bck_borrow_owners s srcs → s {
+    : ~ s out ``
+    : ~ s rest ( nurl_str_cat srcs `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s ws ( nurl_sym_get g_bck ( bck_bkey `bs_` w ) )
+        : s add ? == 0 ( nurl_str_len ws ) ( nurl_str_cat w `` ) ws
+        = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat add `` ) ( nurl_str_cat3 out ` ` add )
+    }
+    ^ out
+}
+
 @ bck_dead_state i v → b {
     ^ | | | | == v BCK_MOVED == v BCK_MAYBE_MOVED == v BCK_STORED == v BCK_INVALID == v BCK_MAYBE_ALIAS
 }
@@ -21666,13 +21719,33 @@
         : i now ( bck_st_get out sid )
         : ~ s why ``
         ? & ! ( bck_dead_state was ) ( bck_dead_state now ) { = why `it was released or moved away` } {}
-        ? & == 0 ( nurl_str_len why ) & ( seq wn srcs ) | ( seq kind `assign` ) ( seq kind `let` ) { = why `it was given a new value` } {}
+        ? & & == 0 ( nurl_str_len why ) & ( seq wn srcs ) | ( seq kind `assign` ) ( seq kind `let` ) != BCK_BORROWED_SHARED ( bck_st_get ist sid ) { = why `it was given a new value` } {}
         ? & == 0 ( nurl_str_len why ) & ( seq wn srcs ) ( seq kind `fieldset` ) { = why `a field of it was replaced` } {}
         ? & == 0 ( nurl_str_len why ) & ( seq wn srcs ) | ( seq kind `pendcall` ) ( seq kind `pendkeep` ) {
             ? ( bck_callee_drops_elems ( bck_field rec 5 ) ( bck_field rec 6 ) ) { = why ( nurl_str_cat3 `it was passed to '` ( bck_field rec 5 ) `', which may drop or replace what it holds` ) } {}
         } {}
         ? != 0 ( nurl_str_len why ) { = out ( bck_borrow_end out sid ( bck_field_int rec 3 ) why 0 ) } {}
     }
+    // Dropping elements or replacing a field THROUGH a borrow reaches what
+    // it borrows from: the other borrows of those owners end (the borrow
+    // used for it still reaches a live value).
+    : s wsrc ? == 0 ( nurl_str_len wn ) `` ( nurl_sym_get g_bck ( bck_bkey `bs_` wn ) )
+    ? != 0 ( nurl_str_len wsrc ) {
+        : ~ s bwhy ``
+        ? ( seq kind `fieldset` ) { = bwhy ( nurl_str_cat3 `a field of it was replaced through '` ( nurl_sym_get2 g_bck `rv_` wn ) `'` ) } {}
+        ? | ( seq kind `pendcall` ) ( seq kind `pendkeep` ) {
+            ? ( bck_callee_drops_elems ( bck_field rec 5 ) ( bck_field rec 6 ) ) { = bwhy ( nurl_str_cat4 `'` ( nurl_sym_get2 g_bck `rv_` wn ) `', which borrows from it, was passed to '` ( nurl_str_cat ( bck_field rec 5 ) `', which may drop or replace what it holds` ) ) } {}
+        } {}
+        ? != 0 ( nurl_str_len bwhy ) {
+            : i keep ( bck_st_get out ( nurl_str_to_int wn ) )
+            : ~ s orest ( nurl_str_cat wsrc `` )
+            ~ != 0 ( nurl_str_len orest ) {
+                : s o ( str_first_word orest ) = orest ( str_skip_word orest )
+                = out ( bck_borrow_end out ( nurl_str_to_int o ) ( bck_field_int rec 3 ) bwhy 0 )
+            }
+            = out ( bck_st_set out ( nurl_str_to_int wn ) keep )
+        } {}
+    } {}
     // A borrow released by its own name: never its to release.
     : ~ s brest ( nurl_str_cat ist `` )
     : i n ( nurl_str_len ist )
@@ -22914,6 +22987,7 @@
         // must NOT register its drop — the owner reclaims it.
         : s rhs_borrow ( nurl_sym_get syms `__last_value_borrow__` )
         // Borrow checker: record this binding (inference path).
+        = g_bck_rhs_lend ? == bck_rhs_tt TT_LPAREN ( bck_call_lend_srcs syms ) `-`
         ( bck_record_binding `let` name bck_line ( bck_is_heap_lty vt ) )
         // Thread-safety (§6.5): this binding is a view INTO an Arc when the
         // initialiser was `arc_get`. For a manually-managed handle payload the
@@ -23208,6 +23282,7 @@
             // register an auto-Drop — the owner reclaims it.
             : s rhs_borrow ( nurl_sym_get syms `__last_value_borrow__` )
             // Borrow checker: record this binding (typed path).
+            = g_bck_rhs_lend ? == bck_rhs_tt TT_LPAREN ( bck_call_lend_srcs syms ) `-`
             ( bck_record_binding `let` name bck_line ( bck_is_heap_lty ( nurl_llty ptype ) ) )
             // Thread-safety (§6.5): this binding is a view INTO an Arc when the
             // initialiser was `arc_get`. For a manually-managed handle payload the
@@ -23542,6 +23617,7 @@
         // AFTER the `assign` row so the walk revives `name` to Owned
         // first and the sources move second (a self-referential
         // `= a ? f a …` is skipped inside, not ordered around).
+        = g_bck_rhs_lend ? == bck_rhs_tt TT_LPAREN ( bck_call_lend_srcs syms ) `-`
         ( bck_record_binding `assign` name bck_line ( bck_is_heap_lty vt ) )
         ( bck_assign_alias syms bck_rhs_tt bck_rhs_val name vt bck_line )
         ( bck_alias_from_phi syms T name vt bck_line )
