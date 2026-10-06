@@ -3334,9 +3334,9 @@
         ( mem_own_closure_ret_release syms ret_ident )
         ( mem_drop_closure_envs syms cg )
         ( __dret_skip_add skip )
-        ( __dret_skip_add skip_str_ptr )
-        ( __dret_skip_add skip_user_ptr )
-        ( __dret_skip_add skip_struct_ptr )
+        ( __dret_xfer cg skip_str_ptr )
+        ( __dret_xfer cg skip_user_ptr )
+        ( __dret_xfer cg skip_struct_ptr )
         ( __dret_skip_add ret_ident )
         ? ! ( seq lt `void` )
         { : s rvp ( nurl_sym_get syms `__ret_val__` )
@@ -17794,6 +17794,59 @@
     }
 }
 
+// The returned binding `w` (a string / user-drop / struct slot) is the
+// caller's on THIS return path: set its transferred flag, so fn_cleanup —
+// which every path runs after the defer chain — releases it only on the
+// paths that did not return it. (A static skip released it on none: the
+// path that returned something else leaked it.) The flag is an `i8*`
+// alloca, which emit_hoisted moves to the entry block and nulls there.
+@ __dret_xfer i cg s w → v {
+    ? == 0 ( nurl_str_len w ) { ^ } {}
+    : s flags ( nurl_sym_get g_fn_escapes `__dret_flags__` )
+    : ~ s reg ( __dret_flag_of w )
+    ? == 0 ( nurl_str_len reg ) {
+        = reg ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print reg ) ( nurl_print ` = alloca i8*\n` )
+        ( nurl_sym_set g_fn_escapes `__dret_flags__` ? == 0 ( nurl_str_len flags ) ( nurl_str_cat3 w ` ` reg ) ( nurl_str_cat4 flags ` ` w ( nurl_str_cat ` ` reg ) ) )
+    } {}
+    ( nurl_print `  store i8* inttoptr (i64 1 to i8*), i8** ` ) ( nurl_print reg ) ( nurl_print `\n` )
+}
+
+// The transferred flag of returned slot `w` ("" when no path returned it).
+@ __dret_flag_of s w → s {
+    : ~ s rest ( nurl_sym_get g_fn_escapes `__dret_flags__` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s k ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s r ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? ( seq k w ) { ^ ( nurl_str_cat r `` ) } {}
+    }
+    ^ ( nurl_str_cat `` `` )
+}
+
+// Open the "not transferred" guard of slot `ptr` in fn_cleanup; returns the
+// label to close it with (__dret_guard_close), or "" when no path returned it.
+@ __dret_guard_open i cg s ptr → s {
+    : s reg ( __dret_flag_of ptr )
+    ? == 0 ( nurl_str_len reg ) { ^ ( nurl_str_cat `` `` ) } {}
+    : s fv ( nurl_cg_reg cg )
+    : s cv ( nurl_cg_reg cg )
+    : s nr ( nurl_cg_reg cg )
+    : s n ( nurl_str_slice nr 1 - ( nurl_str_len nr ) 1 )
+    : s ldrop ( nurl_str_cat `dret.drop.` n )
+    : s lkeep ( nurl_str_cat `dret.keep.` n )
+    ( nurl_print `  ` ) ( nurl_print fv ) ( nurl_print ` = load i8*, i8** ` ) ( nurl_print reg ) ( nurl_print `\n` )
+    ( nurl_print `  ` ) ( nurl_print cv ) ( nurl_print ` = icmp eq i8* ` ) ( nurl_print fv ) ( nurl_print `, null\n` )
+    ( nurl_print `  br i1 ` ) ( nurl_print cv ) ( nurl_print `, label %` ) ( nurl_print ldrop ) ( nurl_print `, label %` ) ( nurl_print lkeep ) ( nurl_print `\n` )
+    ( nurl_print ldrop ) ( nurl_print `:\n` )
+    ^ lkeep
+}
+
+@ __dret_guard_close s lkeep → v {
+    ? == 0 ( nurl_str_len lkeep ) { ^ } {}
+    ( nurl_print `  br label %` ) ( nurl_print lkeep ) ( nurl_print `\n` )
+    ( nurl_print lkeep ) ( nurl_print `:\n` )
+}
+
 // fn_cleanup: reclaim every snapshot entry the defer chain may have
 // referenced, minus return-transferred ones. Alloca-keyed kinds
 // (strings / struct fields / user drops) are safe for inner-scope
@@ -17809,11 +17862,13 @@
         = rest ( str_skip_word rest )
         ? ( str_contains_word skips ptr )
         {}
-        { : s v ( nurl_cg_reg cg )
+        { : s gk ( __dret_guard_open cg ptr )
+            : s v ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print v )
             ( nurl_print ` = load i8*, i8** ` ) ( nurl_print ( mem_guard_drop_slot syms ptr ) ) ( nurl_print `\n` )
             ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print v ) ( nurl_print `)` ) ( emit_dbg_eol )
             ( nurl_print `  store i8* null, i8** ` ) ( nurl_print ( mem_guard_drop_slot syms ptr ) ) ( emit_dbg_eol )
+            ( __dret_guard_close gk )
         }
     }
     = rest ( nurl_sym_get g_fn_escapes `__dsnap_sfield__` )
@@ -17826,7 +17881,9 @@
         : s leaf_idx ( str_first_word rest ) = rest ( str_skip_word rest )
         ? ( str_contains_word skips ptr )
         {}
-        { ( mem_emit_struct_field_drop syms cg ptr sname path kind leaf_sname leaf_idx ) }
+        { : s gk ( __dret_guard_open cg ptr )
+            ( mem_emit_struct_field_drop syms cg ptr sname path kind leaf_sname leaf_idx )
+            ( __dret_guard_close gk ) }
     }
     = rest ( nurl_sym_get g_fn_escapes `__dsnap_udrop__` )
     ~ != 0 ( nurl_str_len rest ) {
@@ -17835,8 +17892,10 @@
         : s impl_mangle_key ( nurl_sym_get2 g_impl_name_syms `drop##` vt )
         ? | ( str_contains_word skips ptr ) == 0 ( nurl_str_len impl_mangle_key )
         {}
-        { ( mem_emit_gated_drop syms cg ptr vt )
+        { : s gk ( __dret_guard_open cg ptr )
+            ( mem_emit_gated_drop syms cg ptr vt )
             ( mem_journal_forget_userdrop cg ptr vt )
+            ( __dret_guard_close gk )
         }
     }
     = rest ( nurl_sym_get g_fn_escapes `__dsnap_cenv__` )
@@ -29711,6 +29770,7 @@
     : s __cl_snapce_saved ( nurl_sym_get g_fn_escapes `__dsnap_cenv__` )
     : s __cl_snapsl_saved ( nurl_sym_get g_fn_escapes `__dsnap_slice__` )
     : s __cl_rskips_saved ( nurl_sym_get g_fn_escapes `__dret_skips__` )
+    : s __cl_rflags_saved ( nurl_sym_get g_fn_escapes `__dret_flags__` )
     : s __cl_pend_saved ( nurl_sym_get g_fn_escapes `__pend_exits__` )
     ( nurl_sym_set g_fn_escapes `__pend_exits__` `` )
     ( nurl_sym_set g_fn_escapes `__defer_top_fn__` `` )
@@ -29721,6 +29781,7 @@
     ( nurl_sym_set g_fn_escapes `__dsnap_cenv__` `` )
     ( nurl_sym_set g_fn_escapes `__dsnap_slice__` `` )
     ( nurl_sym_set g_fn_escapes `__dret_skips__` `` )
+    ( nurl_sym_set g_fn_escapes `__dret_flags__` `` )
     // Borrow checker: the closure body is its OWN function, so it gets its
     // own recording context and its own analyze pass. Recording used to be
     // switched off outright in here, which kept the closure's statements out
@@ -29925,6 +29986,7 @@
     ( nurl_sym_set g_fn_escapes `__dsnap_cenv__` __cl_snapce_saved )
     ( nurl_sym_set g_fn_escapes `__dsnap_slice__` __cl_snapsl_saved )
     ( nurl_sym_set g_fn_escapes `__dret_skips__` __cl_rskips_saved )
+    ( nurl_sym_set g_fn_escapes `__dret_flags__` __cl_rflags_saved )
     ( nurl_sym_set g_fn_escapes `__pend_exits__` __cl_pend_saved )
 
     // The closure tail is a return value like any other: run the shared
@@ -33451,6 +33513,7 @@
     ( nurl_sym_set g_fn_escapes `__dsnap_udrop__` `` )
     ( nurl_sym_set g_fn_escapes `__dsnap_cenv__` `` )
     ( nurl_sym_set g_fn_escapes `__dsnap_slice__` `` )
+    ( nurl_sym_set g_fn_escapes `__dret_flags__` `` )
     ( nurl_sym_set g_fn_escapes `__dret_skips__` `` )
     ( nurl_sym_set g_fn_escapes `__in_defer_body__` `` )
     // Borrow checker: start a fresh per-function statement list.
@@ -34057,9 +34120,9 @@
                 {}
                 ( mem_drop_closure_envs syms cg )
                 ( __dret_skip_add skip )
-                ( __dret_skip_add skip_str_ptr )
-                ( __dret_skip_add skip_user_ptr )
-                ( __dret_skip_add skip_struct_ptr )
+                ( __dret_xfer cg skip_str_ptr )
+                ( __dret_xfer cg skip_user_ptr )
+                ( __dret_xfer cg skip_struct_ptr )
                 ( nurl_print `  br label %` ) ( nurl_print dtop ) ( emit_dbg_eol ) }
             { ( mem_drop_owned syms cg skip )
                 ? != 0 g_auto_drop_strings
@@ -34086,9 +34149,9 @@
                 ( mem_own_closure_ret_release syms ret_ident )
                 ( mem_drop_closure_envs syms cg )
                 ( __dret_skip_add skip )
-                ( __dret_skip_add skip_str_ptr )
-                ( __dret_skip_add skip_user_ptr )
-                ( __dret_skip_add skip_struct_ptr )
+                ( __dret_xfer cg skip_str_ptr )
+                ( __dret_xfer cg skip_user_ptr )
+                ( __dret_xfer cg skip_struct_ptr )
                 ( __dret_skip_add ret_ident )
                 ( nurl_print `  store ` ) ( nurl_print ( nurl_llty ret_ty ) ) ( nurl_print ` ` )
                 ( nurl_print last ) ( nurl_print `, ` ) ( nurl_print ( nurl_llty ret_ty ) )

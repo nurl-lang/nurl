@@ -339,9 +339,15 @@ void nurl_print_int(long long n) {
     nurl_print(nurl__int_digits(n, buf + sizeof buf - 1));
 }
 
-/* Decimal text for `n` followed by a newline. Built on nurl_print_int
- * for the same reason nurl_println is built on nurl_print. */
-void nurl_println_int(long long n) { nurl_print_int(n); nurl_print("\n"); }
+/* Decimal text for `n` followed by a newline, in one write: a line from
+ * another thread cannot land between the number and its newline. */
+void nurl_println_int(long long n) {
+    char buf[25];
+    buf[23] = '\n';
+    char *p = nurl__int_digits(n, buf + 23);
+    buf[23] = '\n'; buf[24] = '\0';
+    nurl_print(p);
+}
 
 /* That completes the print family: `print` = no newline, `println` =
  * newline, `_int` = the integer overload, `eprint`/`eprintln` = the same
@@ -698,8 +704,10 @@ void nurl__io_release(void);
 #endif
 
 /* Print without a trailing newline. */
-void nurl_print(const char *s) {
-    NURL_IO_LOCK();
+/* The body of nurl_print, for a caller already holding NURL_IO_LOCK: a
+ * line printed in two parts (text, newline) holds the lock across both,
+ * so a line from another thread cannot land between them. */
+static void nurl__print_locked(const char *s) {
     if (g_outbuf_mode) {
         size_t n = strlen(s);
         outbuf_reserve(n);
@@ -710,6 +718,10 @@ void nurl_print(const char *s) {
         fputs(s, stdout);
         if (g_stdout_tty) fflush(stdout);
     }
+}
+void nurl_print(const char *s) {
+    NURL_IO_LOCK();
+    nurl__print_locked(s);
     NURL_IO_UNLOCK();
 }
 /* Write `n` raw bytes to stdout — NUL bytes included.
@@ -738,7 +750,7 @@ void nurl_print_bytes(const char *p, long long n) {
 
 /* Print with a trailing newline. Routed through nurl_print so the
  * output-capture buffer (nurl_print_buf_*) sees it too. */
-void nurl_println(const char *s)  { nurl_print(s); nurl_print("\n"); }
+void nurl_println(const char *s)  { NURL_IO_LOCK(); nurl__print_locked(s); nurl__print_locked("\n"); NURL_IO_UNLOCK(); }
 /* stderr is flushed per call, and stdout is block-buffered when it is
  * redirected — so without draining stdout first, a program that
  * interleaves the two would have its stderr lines jump ahead of stdout
