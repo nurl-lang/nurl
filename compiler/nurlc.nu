@@ -100,6 +100,13 @@
 // no and the measurement says otherwise; this is how to say so.
 : i TT_INLINE 51
 
+// `unsafe` — the prefix on a function whose body uses raw memory (`*T`
+// reads and writes, pointer casts, the raw allocator, FFI declared outside
+// the stdlib). Its author vouches that the function is memory-safe for any
+// caller; callers need no marking. Everything else is checked
+// (docs/SOUND_COMPLETE_PLAN.md).
+: i TT_UNSAFE 52
+
 // ── Abort helpers ─────────────────────────────────────────────────
 
 // Multi-error mode (rustc-style): while parse_program's per-declaration
@@ -2335,6 +2342,15 @@
 // g_pending_simd: set when the parser consumes a TT_INLINE ahead of a
 // declaration, read-and-cleared at the matching '@'.
 : ~ i g_pending_inline 0
+// The `unsafe` prefix parsed ahead of the next declaration.
+: ~ i g_pending_unsafe 0
+// The functions declared `unsafe` (name → 1; 0 until the first one).
+: ~ i g_unsafe_fns 0
+// 1 while the body of an `unsafe` function (or of a closure inside one) is
+// being compiled.
+: ~ i g_in_unsafe 0
+// The template a generic instance is being compiled from (its unsafe-ness).
+: ~ s g_inst_tmpl ``
 
 // Set by emit_multiversion the first time it runs. The splitter reads
 // it and declines to partition the module — see split_emit_module.
@@ -4761,6 +4777,7 @@
     ? == tt TT_PUB { ^ ( nurl_str_cat `'pub'` `` ) } {}
     ? == tt TT_SIMD { ^ ( nurl_str_cat `'simd'` `` ) } {}
     ? == tt TT_INLINE { ^ ( nurl_str_cat `'inline'` `` ) } {}
+    ? == tt TT_UNSAFE { ^ ( nurl_str_cat `'unsafe'` `` ) } {}
     ? != 0 ( nurl_str_len val ) { ^ ( nurl_str_cat3 `'` val `'` ) } {}
     ( nurl_str_cat `this token` `` )
 }
@@ -9246,6 +9263,17 @@
                     = ttype TT_INLINE
                 } {}
             } {}
+            // `unsafe` (6) — the raw-memory prefix, classified like `inline`.
+            ? & == ttype TT_IDENT == n 6 {
+                ? & & & & & == & # i . idp 0 255 117
+                == & # i . idp 1 255 110
+                == & # i . idp 2 255 115
+                == & # i . idp 3 255 97
+                == & # i . idp 4 255 102
+                == & # i . idp 5 255 101 {
+                    = ttype TT_UNSAFE
+                } {}
+            } {}
             // `break` (5) and `continue` (8) — loop control.
             ? & == ttype TT_IDENT == n 5 {
                 ? & & & & == & # i . idp 0 255 98
@@ -11156,6 +11184,8 @@
     // first being moved to a heap-backed handle, or the captured
     // stack slot dangles the moment its owning function returns. The
     // check is --borrowck-gated.
+    // Raw memory outside `unsafe` (sound rules, P1).
+    ? ! __callee_shadowed { ( bck_check_raw_call lex syms call_name ) } {}
     : b is_escape_call & ! __callee_shadowed | | |
     ( seq fname `vec_push` )
     ( seq fname `vec_insert` )
@@ -19958,6 +19988,40 @@
     } {}
 }
 
+// ── Raw memory and `unsafe` (docs/SOUND_COMPLETE_PLAN.md, P1) ───────
+//
+// The stdlib is the vouched-for base: its files may use raw memory. So may
+// the body of a function declared `unsafe` (and the closures inside it).
+@ bck_trusted_file s path → b {
+    ? != 0 ( nurl_str_starts path `stdlib/` ) { ^ T } {}
+    ^ & >= ( nurl_str_find path `/stdlib/` ) 0 < ( nurl_str_find path `/deps/` ) 0
+}
+
+@ bck_unsafe_ctx → b {
+    ? != 0 g_in_unsafe { ^ T } {}
+    ^ ( bck_trusted_file ( vis_current_src_file ) )
+}
+
+// The raw-memory primitives: what they hand out or take is memory the
+// checker cannot follow.
+@ bck_raw_call s base → b {
+    ^ ( str_contains_word `nurl_alloc nurl_zalloc nurl_free nurl_realloc alloc zalloc mem_forget nurl_peek nurl_poke nurl_memcpy nurl_memmove nurl_memset malloc calloc realloc free memcpy memmove memset nurl_closure_drop nurl_closure_clone rcbox_ptr` base )
+}
+
+// A call to a raw-memory primitive, or to a foreign function declared
+// outside the stdlib, from code that is not `unsafe`.
+@ bck_check_raw_call i lex i syms s call_name → v {
+    ? | ! ( bck_sound ) ( bck_unsafe_ctx ) { ^ v } {}
+    : s base ( bck_generic_base call_name )
+    ? ( bck_raw_call base ) {
+        ( die lex ( nurl_str_cat3 `'` base `' handles raw memory, which only an 'unsafe' function may do: what it returns or takes is memory the compiler cannot follow, so a mistake there is a use-after-free, a double free or a leak no check can see. Use the owning types instead (String, Vec, HashMap, Box/Rc, a struct of them — they release themselves), or, if this function genuinely needs raw memory and you vouch for its memory safety, declare it 'unsafe @ name …'.` ) )
+        ^ v
+    } {}
+    ? & != 0 ( nurl_sym_len2 syms call_name `__ffi` ) ! ( bck_trusted_file ( nurl_sym_get2 syms call_name `__ffi_src` ) ) {
+        ( die lex ( nurl_str_cat3 `'` call_name `' is a foreign (FFI) function declared outside the standard library: the compiler cannot see what it does with the memory it is handed. Call it only from an 'unsafe' function ('unsafe @ name …'), which vouches that the call is memory-safe, and give the rest of the program a safe wrapper around it.` ) )
+    } {}
+}
+
 // The arguments the result of the call just generated may borrow from:
 // what the callee's summaries say it lends or hands back — every
 // argument when the callee is not compiled yet.
@@ -20081,7 +20145,9 @@
 // case is the job of a later reference-surface phase; until then the
 // immutability of the destination is the heuristic.
 @ bck_let_alias i syms b is_mut i rhs_tt s rhs_val s vt i line s dest → v {
-    : b is_param ( nurl_sym_has_word syms `__fn_param_names__` rhs_val )
+    // A `sink` parameter is the function's own: copying it hands it on
+    // like any owner, it is not a borrow of the caller's value.
+    : b is_param & ( nurl_sym_has_word syms `__fn_param_names__` rhs_val ) == 0 ( nurl_sym_len2 syms rhs_val `__sinkp` )
     ? & & & ! is_mut ( is_ident_tok rhs_tt ) ( bck_is_heap_lty vt ) ! is_param
     {  // Under the sound rules the walk decides (`:a`): an owner's value
         // moves to `b`, a borrow is copied (b borrows from its sources).
@@ -21458,8 +21524,13 @@
         // Phase 1: a read of a Moved binding is a use-after-move.
         // Checked before this row's own writes so a consuming call
         // (move flushed AFTER it) reads its arg while still Owned.
-        ( bck_check_moved_reads ( bck_field rec 2 )
-        ( bck_field_int rec 3 ) st )
+        // (A borrow / cdep / cmove row carries its sources or a closure's
+        // captures in this field: not reads — the statement's own row read
+        // them already.)
+        ? ! | | ( seq kind `borrow` ) ( seq kind `cdep` ) ( seq kind `cmove` ) {
+            ( bck_check_moved_reads ( bck_field rec 2 )
+            ( bck_field_int rec 3 ) st )
+        } {}
         // Most rows are plain statements: past their reads, nothing to do —
         // and no dozen kind compares to find that out.
         ? ( seq kind `expr` ) { = p + p 1 } {
@@ -22163,6 +22234,7 @@
             // Enter the arm with its payload names bound (Owned): they
             // shadow any same-named outer binding for the arm's extent.
             : ~ s entry ( nurl_str_cat state `` )
+            : ~ s shadow_bs ``
             : ~ s binds ( bck_field rec 1 )
             : ~ s ids ``
             ~ != 0 ( nurl_str_len binds ) {
@@ -22185,6 +22257,12 @@
                 } {}
                 = binds ? < cm 0 `` ( nurl_str_slice binds + cm 1 - - ( nurl_str_len binds ) cm 1 )
                 : i id ( bck_intern nm )
+                // A payload that shadows an outer binding of the same name:
+                // that binding's borrow relation comes back after the arm
+                // (its state does, through bck_restore_ids).
+                ? & != 0 g_bck_has_borrow != BCK_UNINIT ( bck_st_get state id ) {
+                    = shadow_bs ( nurl_str_cat4 shadow_bs ( nurl_str_int id ) `=` ( nurl_str_cat ( bck_swap_char ( nurl_sym_get g_bck ( bck_bkey `bs_` ( nurl_str_int id ) ) ) 32 44 ) ` ` ) )
+                } {}
                 // A fresh binding each time the arm runs: whatever an
                 // earlier run handed it to is not its partner now.
                 ( bck_partner_unlink id )
@@ -22193,6 +22271,11 @@
                 = ids ? == 0 ( nurl_str_len ids ) ( nurl_str_int id ) ( nurl_str_cat3 ids ` ` ( nurl_str_int id ) )
             }
             : s armfinal ( bck_walk_seq + j 1 end entry )
+            ~ != 0 ( nurl_str_len shadow_bs ) {
+                : s sw ( str_first_word shadow_bs ) = shadow_bs ( str_skip_word shadow_bs )
+                : i eq ( nurl_str_find sw `=` )
+                ( nurl_sym_set g_bck ( bck_bkey `bs_` ( nurl_str_slice sw 0 eq ) ) ( bck_swap_char ( nurl_str_slice sw + eq 1 - - ( nurl_str_len sw ) eq 1 ) 44 32 ) )
+            }
             = saw_arm T
             ? ! ( seq armfinal `!` ) {
                 // …and forget them, and whatever the arm declared, on the
@@ -24761,6 +24844,11 @@
     : s pv ? nested ( gen_nested_lvalue_addr lex syms cg )
     ( gen_expr lex syms cg )  // pointer/aggregate value
     : s pt ( nurl_get_last_type )  // LLVM type, e.g. "%Node*", "i64*", "{ T*, i64 }", or "%Pair"
+    // Writing through a raw pointer: raw memory (sound rules, P1). (A
+    // nested lvalue path walked by address is the struct's own storage.)
+    ? & & & ( bck_sound ) ( is_ptr_ty pt ) ! nested ! ( bck_unsafe_ctx ) {
+        ( die lex ( nurl_str_cat3 `writing through the raw pointer '` obj_name `' is raw memory, which only an 'unsafe' function may touch: the compiler cannot tell whether what it points at is still alive or in bounds. Write the element with vec_set (or rebuild the Vec), or, if this function genuinely needs raw memory and you vouch for its memory safety, declare it 'unsafe @ name …'.` ) )
+    } {}
     ( nurl_sym_def syms `__field_store_indirect__`
     ? | ( is_ptr_ty pt ) ( mem_is_slice_ty pt ) `1` `` )
     : b __fs_named & & ( is_ptr_ty pt ) == ( nurl_str_get pt 0 ) 37 ( is_ident_tok ( nurl_lex_type lex ) )
@@ -25399,6 +25487,14 @@
     // widen a `zext`, not a `sext`, with no side-channel to clobber.
     : s dt ( parse_type lex )
     : b dst_unsigned ( ty_is_unsigned dt )
+    // A conversion INTO a pointer makes an address out of whatever the
+    // operand was: raw memory (sound rules, P1). The null pointer `# T 0`
+    // is no address and stays legal anywhere.
+    ? & & ( bck_sound ) ( is_ptr_ty dt ) ! ( bck_unsafe_ctx ) {
+        ? ! & == ( nurl_lex_type lex ) TT_INT ( seq ( nurl_lex_val lex ) `0` ) {
+            ( die lex ( nurl_str_cat3 `'# ` dt ` …' makes a raw pointer, which only an 'unsafe' function may do: the compiler cannot follow what such an address points at. Index a Vec with vec_get / vec_set (or iterate it) instead of reading through vec_data, or, if this function genuinely needs raw memory and you vouch for its memory safety, declare it 'unsafe @ name …'.` ) )
+        } {}
+    } {}
     // Diagnose `# T { ... }` parsing as cast-to-T applied to a
     // block expression, NOT as a struct/enum literal. Users coming
     // from Rust / TypeScript reflexively write `#` here and silently
@@ -25949,6 +26045,11 @@
     ? != 0 g_rawlit_n { = g_member_obj 1 } {}
     : s ov ( gen_operand lex syms cg )
     : s ot ( nurl_get_last_type )
+    // Reading through a raw pointer (`. p k` on a `*T`): raw memory (sound
+    // rules, P1).
+    ? & & ( bck_sound ) ( is_ptr_ty ot ) ! ( bck_unsafe_ctx ) {
+        ( die lex ( nurl_str_cat3 `reading through the raw pointer '` ? ( is_ident_tok __mb_tt ) __mb_val `this pointer` `' is raw memory, which only an 'unsafe' function may touch: the compiler cannot tell whether what it points at is still alive or in bounds. Read the element with vec_get (or iterate the Vec, or use the slice) instead of going through vec_data, or, if this function genuinely needs raw memory and you vouch for its memory safety, declare it 'unsafe @ name …'.` ) )
+    } {}
     // The binding a field chain reads from (`. . s a h` → s): what closures
     // the field can hold is what that binding can (__clo_cs_expr).
     ? ( is_ident_tok __mb_tt ) { ( nurl_sym_def syms `__last_member_root__` __mb_val ) } {
@@ -31472,6 +31573,11 @@
     // without the checker, so --no-borrowck changes no generated code.
     : s pn ( nurl_sym_get syms `__fn_param_names__` )
     : i idx ( str_word_index pn name )
+    // A scalar parameter (`? > q 1 q 0` picking an `i`) is copied, never a
+    // handle the result could share: recording it made every result of the
+    // function a borrow of that argument.
+    : s pty ( nurl_sym_get syms name )
+    ? ( bck_scalar_lty pty ) { ^ v } {}
     ? >= idx 0
     { : s cur ( nurl_sym_get syms `__fn_ret_alias__` )
         : s new ( nurl_str_int idx )
@@ -31481,6 +31587,22 @@
             ( nurl_str_cat3 cur ` ` new ) ) }
         {} }
     {}
+}
+
+// `i1` … `i64`, `double`, `float`: a value with no address of its own.
+@ bck_scalar_lty s t → b {
+    : i n ( nurl_str_len t )
+    ? == n 0 { ^ F } {}
+    ? | ( seq t `double` ) ( seq t `float` ) { ^ T } {}
+    ? != ( nurl_str_get t 0 ) 105 { ^ F } {}
+    : ~ i k 1
+    ? == n 1 { ^ F } {}
+    ~ < k n {
+        : i c ( nurl_str_get t k )
+        ? | < c 48 > c 57 { ^ F } {}
+        = k + k 1
+    }
+    ^ T
 }
 
 // idx-th space-separated word of `list`, or empty when out of range.
@@ -33519,6 +33641,10 @@
     // Same read-and-clear discipline for `inline`.
     : i __fn_inline g_pending_inline
     = g_pending_inline 0
+    = g_pending_unsafe 0
+    // Raw memory is allowed in this body when the function — or the generic
+    // it is an instance of — is declared `unsafe` (bck_unsafe_ctx).
+    = g_in_unsafe ? == g_unsafe_fns 0 0 ? | != 0 ( nurl_sym_len g_unsafe_fns fname ) & != 0 ( nurl_str_len g_inst_tmpl ) != 0 ( nurl_sym_len g_unsafe_fns g_inst_tmpl ) 1 0
     // Fresh per-function deferred arm-local drop list (see
     // mem_defer_new_strings) — slot names are function-local SSA.
     ( nurl_sym_set g_fn_escapes `__deferred_drops__` `` )
@@ -35469,6 +35595,9 @@
     // by vis_record_fn, which FFI decls deliberately do not get
     // (FFI symbols are linker-level ABI globals, not NURL sources).
     ( nurl_sym_def syms ( nurl_str_cat fname `__ffi` ) `1` )
+    // …and where it was declared: one declared outside the stdlib is raw
+    // memory to its callers (bck_check_raw_call).
+    ( nurl_sym_def syms ( nurl_str_cat fname `__ffi_src` ) ( vis_current_src_file ) )
     // Per-parameter LLVM types for call-site width coercion (see `ptypes`).
     ( nurl_sym_def syms ( nurl_str_cat fname `__ffi_params` ) ptypes )
     // emit_header already emits `declare` lines for a small set of libc
@@ -39147,7 +39276,7 @@ u` ) ( nurl_print q ) ( nurl_print `:
                             }
                             {}
                         }
-                        { ? & == depth 0 | | == tt TT_PUB == tt TT_SIMD == tt TT_INLINE
+                        { ? & == depth 0 | | | == tt TT_PUB == tt TT_SIMD == tt TT_INLINE == tt TT_UNSAFE
                             {  // `pub` / `simd` / `inline` prefix on any decl — skip the
                                 // keyword, the following decl will be picked up
                                 // by its own branch on the next iteration.
@@ -39514,6 +39643,9 @@ u` ) ( nurl_print q ) ( nurl_print `:
     // (An instance is demanded already: never stored as a lazy function.)
     : i saved_force g_lazy_force
     = g_lazy_force 1
+    // An instance of an `unsafe` generic is unsafe too (gen_fn_decl_concrete).
+    : s saved_tmpl g_inst_tmpl
+    = g_inst_tmpl fname
     ? != g_lint 0
     { : s saved_uf ( nurl_sym_get g_lint_syms `use_file` )
         ( nurl_sym_def g_lint_syms `use_file`
@@ -39523,6 +39655,7 @@ u` ) ( nurl_print q ) ( nurl_print `:
     }
     { ( gen_fn_decl lex2 syms cg ) }
     = g_lazy_force saved_force
+    = g_inst_tmpl saved_tmpl
     ( nurl_lex_free lex2 )
     ( vis_set_current_src_file saved_vis_sf )
     = g_diag_ctx saved_diag_ctx
@@ -43248,12 +43381,12 @@ u` ) ( nurl_print q ) ( nurl_print `:
                     // ternary chain below sees the post-pub token.
                     // Grammar v2.6 adds `simd`, and the two may appear in either
                     // order — hence a loop rather than two sequential tests.
-                    ~ | | == ( nurl_lex_type lex ) TT_PUB == ( nurl_lex_type lex ) TT_SIMD == ( nurl_lex_type lex ) TT_INLINE
+                    ~ | | | == ( nurl_lex_type lex ) TT_PUB == ( nurl_lex_type lex ) TT_SIMD == ( nurl_lex_type lex ) TT_INLINE == ( nurl_lex_type lex ) TT_UNSAFE
                     { ? == ( nurl_lex_type lex ) TT_PUB
                         { = g_pending_pub 1 }
                         { ? == ( nurl_lex_type lex ) TT_SIMD
                             { = g_pending_simd 1 }
-                            { = g_pending_inline 1 } }
+                            { ? == ( nurl_lex_type lex ) TT_UNSAFE { = g_pending_unsafe 1 } { = g_pending_inline 1 } } }
                         ( nurl_lex_advance lex )
                     }
                     : i tt ( nurl_lex_type lex )
@@ -43283,6 +43416,8 @@ u` ) ( nurl_print q ) ( nurl_print `:
                     // function it reached first.
                     = g_pending_simd 0
                     = g_pending_inline 0
+                    : b decl_unsafe != 0 g_pending_unsafe
+                    = g_pending_unsafe 0
                     ? == tt TT_AT
                     { ( nurl_lex_advance lex )
                         ? ( is_ident_tok ( nurl_lex_type lex ) )
@@ -43304,6 +43439,10 @@ u` ) ( nurl_print q ) ( nurl_print `:
                             // seen, which gen_call later consults to enforce visibility.
                             ( vis_record_fn fname decl_pub )
                             ( nurl_sym_def g_fn_link_sources fname `1` )
+                            ? decl_unsafe {
+                                ? == g_unsafe_fns 0 { = g_unsafe_fns ( nurl_sym_new ) } {}
+                                ( nurl_sym_def g_unsafe_fns fname `1` )
+                            } {}
                             // Generic function [T U ...]: skip type params, mark as generic.
                             // Slice type param [type name]: treat like regular params (not generic).
                             // Must match the disambiguation in gen_fn_decl: accept IDENT *or*
@@ -43841,12 +43980,12 @@ u` ) ( nurl_print q ) ( nurl_print `:
     // Grammar v2.6 adds the `simd` CPU-dispatch prefix alongside `pub`;
     // both are optional and order-independent, so consume whatever run
     // of them precedes the declaration token.
-    ~ | | == ( nurl_lex_type lex ) TT_PUB == ( nurl_lex_type lex ) TT_SIMD == ( nurl_lex_type lex ) TT_INLINE
+    ~ | | | == ( nurl_lex_type lex ) TT_PUB == ( nurl_lex_type lex ) TT_SIMD == ( nurl_lex_type lex ) TT_INLINE == ( nurl_lex_type lex ) TT_UNSAFE
     { ? == ( nurl_lex_type lex ) TT_PUB
         { = g_pending_pub 1 }
         { ? == ( nurl_lex_type lex ) TT_SIMD
             { = g_pending_simd 1 }
-            { = g_pending_inline 1 } }
+            { ? == ( nurl_lex_type lex ) TT_UNSAFE { = g_pending_unsafe 1 } { = g_pending_inline 1 } } }
         ( nurl_lex_advance lex )
     }
     : i tt ( nurl_lex_type lex )
@@ -43958,6 +44097,7 @@ u` ) ( nurl_print q ) ( nurl_print `:
     ? == tt TT_PUB { ^ T } {}
     ? == tt TT_SIMD { ^ T } {}
     ? == tt TT_INLINE { ^ T } {}
+    ? == tt TT_UNSAFE { ^ T } {}
     ^ F
 }
 
