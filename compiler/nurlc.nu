@@ -14838,6 +14838,9 @@
     // arm loop. The arms in between are `match-arm` blocks (braced
     // arms) interleaved with block-less bare arms; the bracket lets
     // the analyze walk scope them unambiguously.
+    // A scrutinee that is a borrow (a vec_get result, a field read, a
+    // borrowed option) lends its payloads to the arms: `b` marks it.
+    : s bck_mreads ? == g_borrowck 0 `` ( nurl_sym_get g_bck `reads` )
     ( bck_record `match` `` bck_mline )
 
     // Dangling-borrow tracking: `??` arms are alternatives, exactly like the
@@ -15666,7 +15669,13 @@
                 : s __ab ( str_first_word __ab_rest )
                 = __ab_rest ( str_skip_word __ab_rest )
                 ? & != 0 ( nurl_str_len __ab ) ! ( seq __ab `_` ) {
-                    = __arm_binds ? == 0 ( nurl_str_len __arm_binds ) ( nurl_str_cat __ab `` ) ( nurl_str_cat3 __arm_binds `,` __ab )
+                    // A payload of an owning type taken out of a scrutinee that
+                    // is itself a borrow (a vec_get result, a field read) is
+                    // lent to the arm: `^` marks it for the walk.
+                    : s __abt ( nurl_sym_get syms __ab )
+                    : b __lent & | != 0 ( nurl_str_len match_scrut_borrow ) != 0 ( nurl_str_len match_scrut_field ) | ( __is_handle_ty __abt ) ( __is_hown_ty __abt )
+                    : s __abn ? __lent ( nurl_str_cat3 __ab `^` ( bck_owning_reads syms bck_mreads `+` ) ) ( nurl_str_cat __ab `` )
+                    = __arm_binds ? == 0 ( nurl_str_len __arm_binds ) ( nurl_str_cat __abn `` ) ( nurl_str_cat3 __arm_binds `,` __abn )
                 } {}
             }
             ( bck_record `match-arm-edge` __arm_binds bck_mline )
@@ -18696,6 +18705,7 @@
             // Owned on some paths, lent on others (`{ ( string_from d ) } { h0 }`):
             // whether it owns is its flag, which a store or return consults.
             ( __sb syms ptr `dyn` )
+            ( bck_note_borrow syms ptr )
             ^ v } {} } {}
     ? & != 0 ( nurl_str_len rhs_borrow ) == rhs_tt TT_LPAREN {
         ? != 0 ( nurl_sym_len2 syms ( nurl_sym_get syms `__last_call_name__` ) `__ret_borrow` ) {
@@ -18840,6 +18850,7 @@
 // (mem_lent_cond).
 @ __sb i syms s ptr s how → v {
     ( nurl_sym_set_deep syms ( nurl_str_cat ptr `__sborrow` ) how )
+    ? | | ( seq how `1` ) ( seq how `local` ) ( seq how `elem` ) { ( bck_note_borrow syms ptr ) } {}
 }
 
 @ mem_own_add_user_drop i syms i cg s ptr s vt → v {
@@ -19807,8 +19818,44 @@
         : s rec ( nurl_str_cat3 body `\t` ( nurl_str_int g_bck_depth ) )
         ( nurl_sym_append g_bck `stmts`
         ? == 0 ( nurl_sym_len g_bck `stmts` ) rec ( nurl_str_cat `\n` rec ) )
+        // What the right-hand side of a binding read: the sources a borrow
+        // decided for it a moment later (bck_note_borrow) is a borrow of.
+        ? | ( seq kind `let` ) ( seq kind `assign` ) {
+            ( nurl_sym_set g_bck `lastreads` reads )
+            ( nurl_sym_set g_bck `lastname` wname )
+            ( nurl_sym_set g_bck `lastline` ( nurl_str_int line ) )
+        } {}
         ( nurl_sym_set g_bck `reads` `` )
     } {}
+}
+
+// The names in `reads` whose values own something (a String, a Vec, an
+// owning struct or option): what a borrow can borrow from. An index or a
+// count read beside them is not a source.
+@ bck_owning_reads i syms s reads s sep → s {
+    : ~ s out ``
+    : ~ s rest ( nurl_str_cat reads `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s t ( nurl_sym_get syms w )
+        ? & != 0 ( nurl_str_len t ) | ( __is_handle_ty t ) ( __type_needs_drop t g_root_syms ) {
+            = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat w `` ) ( nurl_str_cat3 out sep w )
+        } {}
+    }
+    ^ out
+}
+
+// Binding `ptr` was just decided a borrow (__sb): record that it borrows
+// from what its initialiser read. A superset of the true source only ends
+// the borrow early — a rejection, never a hole.
+@ bck_note_borrow i syms s ptr → v {
+    ? | | == g_borrowck 0 != g_bck_rec_off 0 ! ( bck_sound ) { ^ v } {}
+    : s name ( nurl_sym_get2 syms ptr `__bname` )
+    ? | == 0 ( nurl_str_len name ) ! ( seq name ( nurl_sym_get g_bck `lastname` ) ) { ^ v } {}
+    : s saved ( nurl_sym_get g_bck `reads` )
+    ( nurl_sym_set g_bck `reads` ( bck_owning_reads syms ( nurl_sym_get g_bck `lastreads` ) ` ` ) )
+    ( bck_record `borrow` name ( nurl_str_to_int ( nurl_sym_get g_bck `lastline` ) ) )
+    ( nurl_sym_set g_bck `reads` saved )
 }
 
 // ── Phase 1/2: move-site capture ───────────────────────────────────
@@ -20363,11 +20410,29 @@
 // use-after-free.
 : i BCK_MAYBE_ALIAS 8
 
+// The sound-and-complete rules (docs/SOUND_COMPLETE_PLAN.md): moves and
+// borrows. Under development they run when NURL_SOUND is set; they become
+// the default once the corpus follows them.
+: ~ i g_sound -1
+
+@ bck_sound → b {
+    ? < g_sound 0 { = g_sound ? != 0 # i ( getenv `NURL_SOUND` ) 1 0 } {}
+    ^ != g_sound 0
+}
+// Set once a function records a borrow: only then does the walk compare
+// states row by row to end borrows whose source went away.
+: ~ i g_bck_has_borrow 0
+
 // Lattice join — least upper bound of two per-binding states meeting
 // at a control-flow merge point.
 @ bck_join i a i b → i {
     ? == a b { ^ a } {}
     ? | == a BCK_INVALID == b BCK_INVALID { ^ BCK_INVALID } {}
+    ? | == a BCK_BORROWED_SHARED == b BCK_BORROWED_SHARED {
+        : i o ? == a BCK_BORROWED_SHARED b a
+        ? | == o BCK_OWNED == o BCK_UNINIT { ^ BCK_BORROWED_SHARED } {}
+        ^ BCK_INVALID
+    } {}
     // Maybe-aliased against anything not freed stays maybe-aliased; against
     // a free (definite or maybe) it is maybe-freed — a free is the stronger
     // fact for both a read and a consume.
@@ -20741,7 +20806,7 @@
     : s kind ( bck_field rec 0 )
     : s w ( bck_field rec 1 )
     : b __pend | | | | | | ( seq kind `pendcall` ) ( seq kind `pendretain` ) ( seq kind `store` ) ( seq kind `pendstore` ) ( seq kind `pendkeep` ) ( seq kind `xfer` ) ( seq kind `maybealias` )
-    : s w2 ? | | | | ( seq kind `let` ) ( seq kind `assign` ) ( seq kind `move` )
+    : s w2 ? | | | | | ( seq kind `let` ) ( seq kind `assign` ) ( seq kind `move` ) ( seq kind `borrow` )
     | | ( seq kind `maybemove` ) ( seq kind `maybealias` ) ( seq kind `fieldset` ) __pend
     ( nurl_str_int ( bck_intern w ) ) ( nurl_str_cat w `` )
     : s rds ( bck_ids ( bck_field rec 2 ) )
@@ -21096,6 +21161,29 @@
     }
 }
 
+// A read of a binding whose value was stored into an owner (an aggregate
+// or Option literal, a container a keeping call like vec_push was handed).
+// The value moved there: the name no longer reaches it soundly, because the
+// owner may release or replace it while this name still reads it.
+@ bck_diag_stored_read i id i useline → v {
+    : s ids ( nurl_str_int id )
+    : s tag ( nurl_str_cat3 ( nurl_str_cat `sr:` ( nurl_str_int useline ) ) `:` ids )
+    : s ws ( nurl_sym_get g_bck `warnset` )
+    ? ( str_contains_word ws tag ) { ^ v } {}
+    ( nurl_sym_set g_bck `warnset`
+    ? == 0 ( nurl_str_len ws ) ( nurl_str_cat tag `` ) ( nurl_str_cat3 ws ` ` tag ) )
+    : s name ( nurl_sym_get2 g_bck `rv_` ids )
+    : s sl ( nurl_sym_get2 g_bck `sl_` ids )
+    : s oids ( nurl_sym_get g_bck ( bck_so_key ids ) )
+    : s oname ? == 0 ( nurl_str_len oids ) ( nurl_str_cat `` `` ) ( nurl_sym_get2 g_bck `rv_` oids )
+    : s into ? == 0 ( nurl_str_len oname ) ( nurl_str_cat `an owner` `` ) ( nurl_str_cat3 `'` oname `'` )
+    : s via ? == 0 ( nurl_str_len oname ) ( nurl_str_cat `through that owner` `` ) ( nurl_str_cat3 `through '` oname `' (a field read, or vec_get on it)` )
+    : s m1 ( nurl_str_cat4 `'` name `' is read here, but its value was moved into ` into )
+    : s m2 ( nurl_str_cat3 ` at line ` sl `. A heap value has one owner; once it is stored into an aggregate, an Option or a container (vec_push), the old name is gone, because the owner may release or replace the value while the name still points at it. Read it ` )
+    : s m3 ( nurl_str_cat4 via `, or store a copy and keep the original: ( mem_dup ` name ` ).` )
+    ( bck_emit_error ( nurl_sym_get g_bck `file` ) useline ( nurl_str_cat3 m1 m2 m3 ) )
+}
+
 // Flag any read of a definitely-Moved binding as a use-after-move.
 // MaybeMoved (a conditional move at a CFG join) is deliberately NOT
 // flagged — erroring only on a definite move keeps this check
@@ -21116,6 +21204,8 @@
             }
             : i rst ( bck_st_get state idv )
             ? == BCK_MOVED rst { ( bck_diag idv line ) } {}
+            ? & ( bck_sound ) == BCK_STORED rst { ( bck_diag_stored_read idv line ) } {}
+            ? & ( bck_sound ) == BCK_INVALID rst { ( bck_diag_invalid idv line ) } {}
             ? & & != 0 g_maybe_moved == BCK_MAYBE_MOVED rst ! ( bck_id_is_global idv ) { ( bck_diag_maybe_read idv line ) } {}
         }
     }
@@ -21134,6 +21224,7 @@
         : s rec ( bck_rec p )
         : s kind ( bck_field rec 0 )
         : ~ b done F
+        : s ist ? != 0 g_bck_has_borrow ( nurl_str_cat st `` ) ``
         // Phase 1: a read of a Moved binding is a use-after-move.
         // Checked before this row's own writes so a consuming call
         // (move flushed AFTER it) reads its arg while still Owned.
@@ -21155,6 +21246,13 @@
                 : s after_defers ( bck_apply_defers st )
                 = st ( nurl_str_cat `!` `` )
                 = p hi
+                = done T
+            } {}
+            ? & ! done ( seq kind `borrow` ) {
+                // The binding the row before this one bound is a borrow of
+                // what its initialiser read (bck_note_borrow).
+                = st ( bck_borrow_begin st ( bck_field_int rec 1 ) ( bck_field rec 2 ) )
+                = p + p 1
                 = done T
             } {}
             ? ( seq kind `let` ) {
@@ -21220,7 +21318,17 @@
                 = st ( bck_st_set st avid ( bck_alias_step ( bck_st_get st avid ) ) )
                 : s apf ( bck_field rec 5 )
                 ? & > ( nurl_str_len apf ) 1 == ( nurl_str_get apf 0 ) 61 {
-                    ( bck_partner_link avid ( nurl_str_to_int ( nurl_str_slice apf 1 - ( nurl_str_len apf ) 1 ) ) )
+                    : i apid ( nurl_str_to_int ( nurl_str_slice apf 1 - ( nurl_str_len apf ) 1 ) )
+                    ( bck_partner_link avid apid )
+                    // The other name took a borrow's handle: it borrows from
+                    // the same sources.
+                    ? & ( bck_sound ) != 0 g_bck_has_borrow {
+                        : s asrc ( nurl_sym_get g_bck ( bck_bkey `bs_` avn ) )
+                        ? != 0 ( nurl_str_len asrc ) {
+                            : s prior ( nurl_sym_get g_bck ( bck_bkey `bs_` ( nurl_str_int apid ) ) )
+                            = st ( bck_borrow_begin st apid ? == 0 ( nurl_str_len prior ) asrc ( nurl_str_cat3 prior ` ` asrc ) )
+                        } {}
+                    } {}
                 } {}
                 ( nurl_sym_set g_bck ( nurl_str_cat `ml_` avn ) ( bck_field rec 3 ) )
                 = p + p 1
@@ -21409,8 +21517,135 @@
             // stray end-marker — reads already checked above
             ? ! done { = p + p 1 } {}
         }
+        // A borrow ends with what it borrows from: compare this row's
+        // states with the ones it started from.
+        ? & != 0 g_bck_has_borrow ! ( seq st `!` ) { = st ( bck_borrow_sweep ist st rec ) } {}
     }
     st
+}
+
+// ── Borrows (sound-and-complete, §4 of docs/SOUND_COMPLETE_PLAN.md) ──
+//
+// `bs_` the sources a borrow binding borrows from (ids), `bb_` the borrows
+// taken from a source, `bsrcs` every source with a borrow. A borrow is
+// BORROWED: readable, never released by its name. It becomes INVALID when
+// a source dies, is given a new value, has a field replaced, or is handed
+// to a call that may drop its elements; reading it then is an error.
+@ bck_bkey s pre s ids → s { ^ ( nurl_str_cat4 pre ( nurl_str_int g_bck_gen ) `_` ids ) }
+
+@ bck_borrow_begin s st i bid s srcs → s {
+    = g_bck_has_borrow 1
+    : s bids ( nurl_str_int bid )
+    : ~ s set ``
+    : ~ s rest ( nurl_str_cat srcs `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? & ! ( seq w bids ) ! ( str_contains_word set w ) {
+            = set ? == 0 ( nurl_str_len set ) ( nurl_str_cat w `` ) ( nurl_str_cat3 set ` ` w )
+            : s bk ( bck_bkey `bb_` w )
+            : s bl ( nurl_sym_get g_bck bk )
+            ? ! ( str_contains_word bl bids ) { ( nurl_sym_set g_bck bk ? == 0 ( nurl_str_len bl ) ( nurl_str_cat bids `` ) ( nurl_str_cat3 bl ` ` bids ) ) } {}
+            : s al ( nurl_sym_get g_bck ( bck_bkey `bsrcs` `` ) )
+            ? ! ( str_contains_word al w ) { ( nurl_sym_set g_bck ( bck_bkey `bsrcs` `` ) ? == 0 ( nurl_str_len al ) ( nurl_str_cat w `` ) ( nurl_str_cat3 al ` ` w ) ) } {}
+        } {}
+    }
+    ( nurl_sym_set g_bck ( bck_bkey `bs_` bids ) set )
+    ? == 0 ( nurl_str_len set ) { ^ st } {}
+    ^ ( bck_st_set st bid BCK_BORROWED_SHARED )
+}
+
+@ bck_dead_state i v → b {
+    ^ | | | | == v BCK_MOVED == v BCK_MAYBE_MOVED == v BCK_STORED == v BCK_INVALID == v BCK_MAYBE_ALIAS
+}
+
+// A stdlib call that drops (or hands out) elements of the container it is
+// given — what a borrow of an element cannot survive. Growing a container
+// (vec_push) keeps every element where its handle points, so it is not
+// listed; a user function answers through its mutation summary.
+@ bck_callee_drops_elems s callee s aix → b {
+    ? | | | | | ( seq callee `vec_clear` ) ( seq callee `vec_set` ) ( seq callee `vec_remove` ) ( seq callee `vec_pop` ) ( seq callee `vec_truncate` ) ( seq callee `vec_swap_remove` ) { ^ T } {}
+    ? | | | | | ( seq callee `vec_free` ) ( seq callee `vec_set_len` ) ( seq callee `vec_retain` ) ( seq callee `vec_drain` ) ( seq callee `string_free` ) ( seq callee `string_clear` ) { ^ T } {}
+    ? | | | | ( seq callee `hashmap_remove` ) ( seq callee `hashmap_set` ) ( seq callee `hashmap_put` ) ( seq callee `hashmap_clear` ) ( seq callee `hashmap_free` ) { ^ T } {}
+    ? | | | | ( nurl_str_starts callee `vec_` ) ( nurl_str_starts callee `string_` ) ( nurl_str_starts callee `hashmap_` ) ( nurl_str_starts callee `bytes_` ) ( nurl_str_starts callee `nurl_` ) { ^ F } {}
+    ^ ( nurl_sym_has_word g_fn_mutates callee aix )
+}
+
+@ bck_borrow_sweep s ist s st s rec → s {
+    : ~ s out st
+    : s kind ( bck_field rec 0 )
+    : s wn ( bck_field rec 1 )
+    : ~ s rest ( nurl_sym_get g_bck ( bck_bkey `bsrcs` `` ) )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s srcs ( str_first_word rest ) = rest ( str_skip_word rest )
+        : i sid ( nurl_str_to_int srcs )
+        : i was ( bck_st_get ist sid )
+        : i now ( bck_st_get out sid )
+        : ~ s why ``
+        ? & ! ( bck_dead_state was ) ( bck_dead_state now ) { = why `it was released or moved away` } {}
+        ? & == 0 ( nurl_str_len why ) & ( seq wn srcs ) | ( seq kind `assign` ) ( seq kind `let` ) { = why `it was given a new value` } {}
+        ? & == 0 ( nurl_str_len why ) & ( seq wn srcs ) ( seq kind `fieldset` ) { = why `a field of it was replaced` } {}
+        ? & == 0 ( nurl_str_len why ) & ( seq wn srcs ) | ( seq kind `pendcall` ) ( seq kind `pendkeep` ) {
+            ? ( bck_callee_drops_elems ( bck_field rec 5 ) ( bck_field rec 6 ) ) { = why ( nurl_str_cat3 `it was passed to '` ( bck_field rec 5 ) `', which may drop or replace what it holds` ) } {}
+        } {}
+        ? != 0 ( nurl_str_len why ) { = out ( bck_borrow_end out sid ( bck_field_int rec 3 ) why 0 ) } {}
+    }
+    // A borrow released by its own name: never its to release.
+    : ~ s brest ( nurl_str_cat ist `` )
+    : i n ( nurl_str_len ist )
+    : ~ i k 0
+    ~ < k n {
+        ? & == BCK_BORROWED_SHARED ( bck_st_get ist k ) | | == BCK_MOVED ( bck_st_get out k ) == BCK_STORED ( bck_st_get out k ) == BCK_MAYBE_MOVED ( bck_st_get out k ) {
+            ( bck_diag_borrow_consumed k ( bck_field_int rec 3 ) )
+            = out ( bck_st_set out k BCK_INVALID )
+        } {}
+        = k + k 1
+    }
+    ^ out
+}
+
+// End every borrow taken from `sid` (and the borrows taken from those).
+@ bck_borrow_end s st i sid i line s why i depth → s {
+    : ~ s out st
+    : s sids ( nurl_str_int sid )
+    : ~ s rest ( nurl_sym_get g_bck ( bck_bkey `bb_` sids ) )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s bs ( str_first_word rest ) = rest ( str_skip_word rest )
+        : i b ( nurl_str_to_int bs )
+        ? & == BCK_BORROWED_SHARED ( bck_st_get out b ) ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `bs_` bs ) ) sids ) {
+            = out ( bck_st_set out b BCK_INVALID )
+            ( nurl_sym_set g_bck ( bck_bkey `bv_` bs ) ( nurl_str_cat4 ( nurl_str_int line ) ` ` sids ( nurl_str_cat ` ` why ) ) )
+            ? < depth 8 { = out ( bck_borrow_end out b line ( nurl_str_cat3 `what it borrows from ended (` why `)` ) + depth 1 ) } {}
+        } {}
+    }
+    ^ out
+}
+
+@ bck_diag_invalid i id i useline → v {
+    : s ids ( nurl_str_int id )
+    : s tag ( nurl_str_cat3 ( nurl_str_cat `bi:` ( nurl_str_int useline ) ) `:` ids )
+    : s ws ( nurl_sym_get g_bck `warnset` )
+    ? ( str_contains_word ws tag ) { ^ v } {}
+    ( nurl_sym_set g_bck `warnset` ? == 0 ( nurl_str_len ws ) ( nurl_str_cat tag `` ) ( nurl_str_cat3 ws ` ` tag ) )
+    : s name ( nurl_sym_get2 g_bck `rv_` ids )
+    : ~ s info ( nurl_sym_get g_bck ( bck_bkey `bv_` ids ) )
+    : s ln ( str_first_word info ) = info ( str_skip_word info )
+    : s srcid ( str_first_word info ) = info ( str_skip_word info )
+    : s sname ( nurl_sym_get2 g_bck `rv_` srcid )
+    : s m1 ( nurl_str_cat4 `'` name `' borrows from '` sname )
+    : s m2 ( nurl_str_cat4 `', which ended at line ` ln ` — ` info )
+    : s m3 ( nurl_str_cat4 `. A borrow (a vec_get result, a field read, a view) lives only as long as its source is unchanged, so '` name `' is gone too. Read it before that line, or take a copy that lives on its own where it is bound: ( mem_dup ` ( nurl_str_cat name ` ).` ) )
+    ( bck_emit_error ( nurl_sym_get g_bck `file` ) useline ( nurl_str_cat3 m1 m2 m3 ) )
+}
+
+@ bck_diag_borrow_consumed i id i line → v {
+    : s ids ( nurl_str_int id )
+    : s tag ( nurl_str_cat3 ( nurl_str_cat `bc:` ( nurl_str_int line ) ) `:` ids )
+    : s ws ( nurl_sym_get g_bck `warnset` )
+    ? ( str_contains_word ws tag ) { ^ v } {}
+    ( nurl_sym_set g_bck `warnset` ? == 0 ( nurl_str_len ws ) ( nurl_str_cat tag `` ) ( nurl_str_cat3 ws ` ` tag ) )
+    : s name ( nurl_sym_get2 g_bck `rv_` ids )
+    ( bck_emit_error ( nurl_sym_get g_bck `file` ) line
+    ( nurl_str_cat4 `'` name `' is a borrow (a vec_get result, a field read, a view of something another binding owns) and is released or handed over here as if it owned the value. The owner still holds and releases it. Take a copy that is yours where it is bound: ( mem_dup ` ( nurl_str_cat name ` ), or release the value through its owner.` ) ) )
 }
 
 // Check armed defer bodies in LIFO order against the ownership at the
@@ -21538,13 +21773,29 @@
             : ~ s ids ``
             ~ != 0 ( nurl_str_len binds ) {
                 : i cm ( nurl_str_find binds `,` )
-                : s nm ? < cm 0 ( nurl_str_cat binds `` ) ( nurl_str_slice binds 0 cm )
+                : s nm0 ? < cm 0 ( nurl_str_cat binds `` ) ( nurl_str_slice binds 0 cm )
+                : i caret ( nurl_str_find nm0 `^` )
+                : b lent >= caret 0
+                : s nm ? lent ( nurl_str_slice nm0 0 caret ) nm0
+                // The sources ride after the `^`, `+`-separated, as names.
+                : ~ s lsrc ``
+                ? lent {
+                    : ~ s lr ( nurl_str_slice nm0 + caret 1 - - ( nurl_str_len nm0 ) caret 1 )
+                    ~ != 0 ( nurl_str_len lr ) {
+                        : i pc ( nurl_str_find lr `+` )
+                        : s ln ? < pc 0 ( nurl_str_cat lr `` ) ( nurl_str_slice lr 0 pc )
+                        = lr ? < pc 0 `` ( nurl_str_slice lr + pc 1 - - ( nurl_str_len lr ) pc 1 )
+                        : s lid ( nurl_str_int ( bck_intern ln ) )
+                        = lsrc ? == 0 ( nurl_str_len lsrc ) lid ( nurl_str_cat3 lsrc ` ` lid )
+                    }
+                } {}
                 = binds ? < cm 0 `` ( nurl_str_slice binds + cm 1 - - ( nurl_str_len binds ) cm 1 )
                 : i id ( bck_intern nm )
                 // A fresh binding each time the arm runs: whatever an
                 // earlier run handed it to is not its partner now.
                 ( bck_partner_unlink id )
                 = entry ( bck_st_set entry id BCK_OWNED )
+                ? & ( bck_sound ) lent { = entry ( bck_borrow_begin entry id lsrc ) } {}
                 = ids ? == 0 ( nurl_str_len ids ) ( nurl_str_int id ) ( nurl_str_cat3 ids ` ` ( nurl_str_int id ) )
             }
             : s armfinal ( bck_walk_seq + j 1 end entry )
@@ -21747,12 +21998,14 @@
 // a `?` then joins to MaybeMoved (not Moved) at the merge, rather than
 // joining a bare Uninit on the other branch straight back to Moved.
 @ bck_analyze s params → v {
+    ? != 0 # i ( getenv `NURL_BCK_DUMP` ) { ( nurl_eprintln ( nurl_str_cat `── rows: ` ( nurl_sym_get g_bck `stmts` ) ) ) } {}
     ( nurl_sym_set g_bck `warnset` `` )
     ( nurl_sym_set g_bck `pml` `` )
     // New function, new dense id space: bumping the generation
     // invalidates every intern entry left by earlier functions.
     = g_bck_gen + g_bck_gen 1
     = g_bck_inn 0
+    = g_bck_has_borrow 0
     : i n ( bck_explode )
     ( nurl_sym_set g_bck `defer_blocks` `` )
     : ~ i row 0
