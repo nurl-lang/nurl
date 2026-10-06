@@ -12,7 +12,7 @@
 // Vec[s] through type coercion is undefined at runtime; the compiler
 // keeps them distinct by mangling `%Vec__i64` vs `%Vec__str`.
 //
-// Control block layout (3 × i64 = 24 bytes, accessed via nurl_peek/poke):
+// Control block layout (3 × i64 = 24 bytes, accessed via nurl_vctl_get/_set):
 //   word 0: data pointer (ptrtoint'd to i64; 0 when no buffer allocated)
 //   word 1: len
 //   word 2: cap
@@ -120,15 +120,15 @@
 // ── Internal helpers ────────────────────────────────────────────────
 
 @ __vec_data_raw s ctl → s {
-    ^ # s ( nurl_peek ctl 0 )
+    ^ # s ( nurl_vctl_get ctl 0 )
 }
 
 @ __vec_len_raw s ctl → i {
-    ^ ( nurl_peek ctl 1 )
+    ^ ( nurl_vctl_get ctl 1 )
 }
 
 @ __vec_cap_raw s ctl → i {
-    ^ ( nurl_peek ctl 2 )
+    ^ ( nurl_vctl_get ctl 2 )
 }
 
 // A borrowed view (vec_borrow_raw) keeps cap == -1: the buffer is not
@@ -156,8 +156,8 @@
         : s fresh ( nurl_alloc * Z A new_cap )
         : i copy_bytes * Z A len
         ? > copy_bytes 0 { ( nurl_memcpy fresh ( __vec_data_raw ctl ) copy_bytes ) } {}
-        ( nurl_poke ctl 0 # i fresh )
-        ( nurl_poke ctl 2 new_cap )
+        ( nurl_vctl_set ctl 0 # i fresh )
+        ( nurl_vctl_set ctl 2 new_cap )
         ^
     } {}
     ? < cap need {
@@ -177,8 +177,8 @@
             : i len ( __vec_len_raw ctl )
             : i copy_bytes * Z A len
             ? > copy_bytes 0 { ( nurl_memcpy fresh cur copy_bytes ) } {}
-            ( nurl_poke ctl 0 # i fresh )
-            ( nurl_poke ctl 2 new_cap )
+            ( nurl_vctl_set ctl 0 # i fresh )
+            ( nurl_vctl_set ctl 2 new_cap )
         } {
             ? == 0 # i cur {
                 // First growth: nurl_alloc, not realloc(NULL, n) — the
@@ -186,12 +186,12 @@
                 // nurl_alloc/nurl_free, and a Vec's first buffer is the
                 // most recycled block shape there is.
                 : s fresh ( nurl_alloc bytes )
-                ( nurl_poke ctl 0 # i fresh )
-                ( nurl_poke ctl 2 new_cap )
+                ( nurl_vctl_set ctl 0 # i fresh )
+                ( nurl_vctl_set ctl 2 new_cap )
             } {
                 : s fresh ( nurl_realloc cur bytes )
-                ( nurl_poke ctl 0 # i fresh )
-                ( nurl_poke ctl 2 new_cap )
+                ( nurl_vctl_set ctl 0 # i fresh )
+                ( nurl_vctl_set ctl 2 new_cap )
             }
         }
     } {}
@@ -256,13 +256,13 @@
 // the empty owned state (data 0, len 0, cap 0).
 @ __vec_point_at s ctl i p i n → v {
     ? & > n 0 != 0 p {
-        ( nurl_poke ctl 0 p )
-        ( nurl_poke ctl 1 n )
-        ( nurl_poke ctl 2 -1 )
+        ( nurl_vctl_set ctl 0 p )
+        ( nurl_vctl_set ctl 1 n )
+        ( nurl_vctl_set ctl 2 -1 )
     } {
-        ( nurl_poke ctl 0 0 )
-        ( nurl_poke ctl 1 0 )
-        ( nurl_poke ctl 2 0 )
+        ( nurl_vctl_set ctl 0 0 )
+        ( nurl_vctl_set ctl 1 0 )
+        ( nurl_vctl_set ctl 2 0 )
     }
 }
 
@@ -279,9 +279,9 @@
     : s ctl ( nurl_zalloc 24 )
     ? > n 0 {
         : s data ( nurl_zalloc * Z A n )
-        ( nurl_poke ctl 0 # i data )
-        ( nurl_poke ctl 1 n )
-        ( nurl_poke ctl 2 n )
+        ( nurl_vctl_set ctl 0 # i data )
+        ( nurl_vctl_set ctl 1 n )
+        ( nurl_vctl_set ctl 2 n )
     } {}
     ^ @ ( Vec A ) { ctl }
 }
@@ -314,7 +314,7 @@
     : s ctl . v ctl
     : i len ( __vec_len_raw ctl )
     ? | < idx 0 >= idx len { ^ @ ?A { F # A 0 } } {}
-    : *A data # *A ( nurl_peek ctl 0 )
+    : *A data # *A ( nurl_vctl_data ctl )
     : A x . data idx
     ^ @ ?A { T x }
 }
@@ -337,7 +337,7 @@
     // so the optimiser can lift them, and the check with them, out of a
     // loop.
     : s ctl . v ctl
-    : *A data # *A ( nurl_peek ctl 0 )
+    : *A data # *A ( nurl_vctl_data ctl )
     : i len ( __vec_len_raw ctl )
     ? | < idx 0 >= idx len { ( __vec_index_panic idx len ) } {}
     ^ . data idx
@@ -348,7 +348,7 @@
 // thread through when an out-of-range index is a bug, not a case.
 @ vec_put [A] ( Vec A ) v i idx A x → v {
     : s ctl . v ctl
-    : *A data # *A ( nurl_peek ctl 0 )
+    : *A data # *A ( nurl_vctl_data ctl )
     : i len ( __vec_len_raw ctl )
     ? | < idx 0 >= idx len { ( __vec_index_panic idx len ) } {}
     : A old . data idx
@@ -361,7 +361,7 @@
     : s ctl . v ctl
     : i len ( __vec_len_raw ctl )
     ? | < idx 0 >= idx len { ^ F } {}
-    : *A data # *A ( nurl_peek ctl 0 )
+    : *A data # *A ( nurl_vctl_data ctl )
     : A old . data idx
     ( mem_take old )
     = . data idx x
@@ -375,7 +375,7 @@
     : s ctl . v ctl
     : i len ( __vec_len_raw ctl )
     ? | < idx 0 >= idx len { ^ @ ?A { F # A 0 } } {}
-    : *A data # *A ( nurl_peek ctl 0 )
+    : *A data # *A ( nurl_vctl_data ctl )
     : A old . data idx
     ( mem_take old )  // the element leaves the container
     = . data idx x
@@ -392,9 +392,9 @@
     // up at ~6 % of a parse-heavy profile. The common push is then a
     // load, a compare, a store and a length bump.
     ? >= len ( __vec_cap_raw ctl ) { ( __vec_grow [A] ctl + len 1 ) } {}
-    : *A data # *A ( nurl_peek ctl 0 )
+    : *A data # *A ( nurl_vctl_data ctl )
     = . data len x
-    ( nurl_poke ctl 1 + len 1 )
+    ( nurl_vctl_set ctl 1 + len 1 )
 }
 
 // Insert `x` at index `idx`, shifting existing [idx..len) right by one.
@@ -405,7 +405,7 @@
     : i len ( __vec_len_raw ctl )
     ? | < idx 0 > idx len { ^ F } {}
     ? < ( __vec_cap_raw ctl ) + len 1 { ( __vec_grow [A] ctl + len 1 ) } {}
-    : *A data # *A ( nurl_peek ctl 0 )
+    : *A data # *A ( nurl_vctl_data ctl )
     // Shift right [idx..len) → [idx+1..len+1). Walk from the tail to
     // keep adjacent slots from clobbering each other.
     : ~ i i len
@@ -414,7 +414,7 @@
         = i - i 1
     }
     = . data idx x
-    ( nurl_poke ctl 1 + len 1 )
+    ( nurl_vctl_set ctl 1 + len 1 )
     ^ T
 }
 
@@ -424,7 +424,7 @@
     : s ctl . v ctl
     : i len ( __vec_len_raw ctl )
     ? | < idx 0 >= idx len { ^ @ ?A { F # A 0 } } {}
-    : *A data # *A ( nurl_peek ctl 0 )
+    : *A data # *A ( nurl_vctl_data ctl )
     : A x . data idx
     ( mem_take x )  // the element leaves the container
     : ~ i i idx
@@ -432,7 +432,7 @@
         = . data i . data + i 1
         = i + i 1
     }
-    ( nurl_poke ctl 1 - len 1 )
+    ( nurl_vctl_set ctl 1 - len 1 )
     ^ @ ?A { T x }
 }
 
@@ -441,19 +441,19 @@
     : i len ( __vec_len_raw ctl )
     ? == len 0 { ^ @ ?A { F # A 0 } } {}
     : i last - len 1
-    : *A data # *A ( nurl_peek ctl 0 )
+    : *A data # *A ( nurl_vctl_data ctl )
     : A x . data last
     ( mem_take x )  // the element leaves the container
-    ( nurl_poke ctl 1 last )
+    ( nurl_vctl_set ctl 1 last )
     ^ @ ?A { T x }
 }
 
 @ vec_clear [A] ( Vec A ) v → v {
     : s ctl . v ctl
     : i len ( __vec_len_raw ctl )
-    : *A data # *A ( nurl_peek ctl 0 )
+    : *A data # *A ( nurl_vctl_data ctl )
     // Length first, so a drop that reaches `v` sees it empty.
-    ( nurl_poke ctl 1 0 )
+    ( nurl_vctl_set ctl 1 0 )
     // The elements leave with the length: each is dropped (a no-op, and no
     // loop, for elements that own nothing).
     : ~ i k 0
@@ -470,9 +470,9 @@
     : s ctl . v ctl
     : i len ( __vec_len_raw ctl )
     ? | < n 0 > n len { ^ F } {}
-    : *A data # *A ( nurl_peek ctl 0 )
+    : *A data # *A ( nurl_vctl_data ctl )
     // Length first, so a drop that reaches `v` sees it short.
-    ( nurl_poke ctl 1 n )
+    ( nurl_vctl_set ctl 1 n )
     : ~ i k n
     ~ < k len {
         : A e . data k
@@ -496,7 +496,7 @@
     // A borrowed view can only shrink: its writable extent is its length.
     : i cap ? ( __vec_is_borrowed ctl ) ( __vec_len_raw ctl ) ( __vec_cap_raw ctl )
     ? > n cap { ^ F } {}
-    ( nurl_poke ctl 1 n )
+    ( nurl_vctl_set ctl 1 n )
     ^ T
 }
 
@@ -528,7 +528,7 @@
     : i len ( __vec_len_raw ctl )
     ? | | | < i_idx 0 >= i_idx len < j_idx 0 >= j_idx len { ^ F } {}
     ? == i_idx j_idx { ^ T } {}
-    : *A data # *A ( nurl_peek ctl 0 )
+    : *A data # *A ( nurl_vctl_data ctl )
     : A a . data i_idx
     : A b . data j_idx
     = . data i_idx b
@@ -540,7 +540,7 @@
     : s ctl . v ctl
     : i len ( __vec_len_raw ctl )
     ? > len 1 {
-        : *A data # *A ( nurl_peek ctl 0 )
+        : *A data # *A ( nurl_vctl_data ctl )
         : ~ i i 0
         : ~ i j - len 1
         ~ < i j {
@@ -575,12 +575,12 @@
     ? < n 0 { ^ F } {}
     : s ctl . v ctl
     : i len ( __vec_len_raw ctl )
-    ? <= n len { ( nurl_poke ctl 1 n ) ^ T } {}
+    ? <= n len { ( nurl_vctl_set ctl 1 n ) ^ T } {}
     ? < ( __vec_cap_raw ctl ) n { ( __vec_grow [A] ctl n ) } {}
     : s data ( __vec_data_raw ctl )
     : s tail # s + # i data * Z A len
     ( nurl_memset tail 0 * Z A - n len )
-    ( nurl_poke ctl 1 n )
+    ( nurl_vctl_set ctl 1 n )
     ^ T
 }
 
@@ -595,14 +595,14 @@
     ? == len 0 {
         : s data ( __vec_data_raw ctl )
         ? != 0 # i data { ( nurl_free data ) } {}
-        ( nurl_poke ctl 0 0 )
-        ( nurl_poke ctl 2 0 )
+        ( nurl_vctl_set ctl 0 0 )
+        ( nurl_vctl_set ctl 2 0 )
     } {
         ? < len cap {
             : s cur ( __vec_data_raw ctl )
             : s fresh ( nurl_realloc cur * Z A len )
-            ( nurl_poke ctl 0 # i fresh )
-            ( nurl_poke ctl 2 len )
+            ( nurl_vctl_set ctl 0 # i fresh )
+            ( nurl_vctl_set ctl 2 len )
         } {}
     }
 }
@@ -631,14 +631,14 @@
     : s dctl . dst ctl
     : i dlen ( __vec_len_raw dctl )
     ? < ( __vec_cap_raw dctl ) + dlen cnt { ( __vec_grow [A] dctl + dlen cnt ) } {}
-    : *A ddata # *A ( nurl_peek dctl 0 )
-    : *A sdata # *A ( nurl_peek sctl 0 )
+    : *A ddata # *A ( nurl_vctl_data dctl )
+    : *A sdata # *A ( nurl_vctl_data sctl )
     : ~ i i 0
     ~ < i cnt {
         = . ddata + dlen i ( mem_dup . sdata + start i )
         = i + i 1
     }
-    ( nurl_poke dctl 1 + dlen cnt )
+    ( nurl_vctl_set dctl 1 + dlen cnt )
 }
 
 // Append a copy of every element of `src` to `dst`: an element that owns
@@ -652,14 +652,14 @@
         : s dctl . dst ctl
         : i dlen ( __vec_len_raw dctl )
         ? < ( __vec_cap_raw dctl ) + dlen n { ( __vec_grow [A] dctl + dlen n ) } {}
-        : *A ddata # *A ( nurl_peek dctl 0 )
-        : *A sdata # *A ( nurl_peek sctl 0 )
+        : *A ddata # *A ( nurl_vctl_data dctl )
+        : *A sdata # *A ( nurl_vctl_data sctl )
         : ~ i i 0
         ~ < i n {
             = . ddata + dlen i ( mem_dup . sdata i )
             = i + i 1
         }
-        ( nurl_poke dctl 1 + dlen n )
+        ( nurl_vctl_set dctl 1 + dlen n )
     } {}
 }
 
@@ -671,14 +671,14 @@
         : s dctl . dst ctl
         : i dlen ( __vec_len_raw dctl )
         ? < ( __vec_cap_raw dctl ) + dlen n { ( __vec_grow [A] dctl + dlen n ) } {}
-        : *A ddata # *A ( nurl_peek dctl 0 )
-        : *A sdata # *A ( nurl_peek sctl 0 )
+        : *A ddata # *A ( nurl_vctl_data dctl )
+        : *A sdata # *A ( nurl_vctl_data sctl )
         : ~ i i 0
         ~ < i n {
             = . ddata + dlen i . sdata i
             = i + i 1
         }
-        ( nurl_poke dctl 1 + dlen n )
+        ( nurl_vctl_set dctl 1 + dlen n )
     } {}
 }
 
@@ -689,7 +689,7 @@
 @ vec_append [A] ( Vec A ) dst sink ( Vec A ) src → v {
     ( __vec_extend_move [A] dst src )
     // The elements live in `dst` now; `src` leaves empty.
-    ( nurl_poke . src ctl 1 0 )
+    ( nurl_vctl_set . src ctl 1 0 )
 }
 
 // ── Cleanup ─────────────────────────────────────────────────────────
@@ -733,7 +733,7 @@
     : i len ( __vec_len_raw ctl )
     : ( Vec A ) out ( vec_with_cap [A] len )
     ? > len 0 {
-        : *A src # *A ( nurl_peek ctl 0 )
+        : *A src # *A ( nurl_vctl_data ctl )
         : *A dst ( vec_data [A] out )
         : ~ i i 0
         ~ < i len {
@@ -757,7 +757,7 @@
     : i len ( __vec_len_raw ctl )
     : ( Vec A ) out ( vec_with_cap [A] len )
     ? > len 0 {
-        : *A src # *A ( nurl_peek ctl 0 )
+        : *A src # *A ( nurl_vctl_data ctl )
         : ~ i i 0
         ~ < i len {
             : A x . src i
@@ -774,7 +774,7 @@
     : s ctl . v ctl
     : i len ( __vec_len_raw ctl )
     ? > len 0 {
-        : *A data # *A ( nurl_peek ctl 0 )
+        : *A data # *A ( nurl_vctl_data ctl )
         : ~ i i 0
         ~ < i len {
             ( f . data i )
@@ -786,7 +786,7 @@
 @ vec_fold [A B] ( Vec A ) v B init ( @ B B A ) f → B {
     : s ctl . v ctl
     : i len ( __vec_len_raw ctl )
-    : *A data # *A ( nurl_peek ctl 0 )
+    : *A data # *A ( nurl_vctl_data ctl )
     : ~ B acc init
     : ~ i i 0
     ~ < i len {
@@ -807,7 +807,7 @@
     : s ctl . v ctl
     : i len ( __vec_len_raw ctl )
     : ( Vec B ) out ( vec_with_cap [B] len )
-    : *A data # *A ( nurl_peek ctl 0 )
+    : *A data # *A ( nurl_vctl_data ctl )
     : ~ i i 0
     ~ < i len {
         : A x . data i
@@ -823,7 +823,7 @@
     : s ctl . v ctl
     : i len ( __vec_len_raw ctl )
     : ( Vec A ) out ( vec_new [A] )
-    : *A data # *A ( nurl_peek ctl 0 )
+    : *A data # *A ( nurl_vctl_data ctl )
     : ~ i i 0
     ~ < i len {
         : A x . data i
@@ -843,7 +843,7 @@
     : s ctl . v ctl
     : i len ( __vec_len_raw ctl )
     : ( Vec A ) out ( vec_new [A] )
-    : *A data # *A ( nurl_peek ctl 0 )
+    : *A data # *A ( nurl_vctl_data ctl )
     : ~ i i 0
     ~ < i len {
         : A x . data i
@@ -857,7 +857,7 @@
 @ vec_find [A] ( Vec A ) v ( @ b A ) pred → ?A {
     : s ctl . v ctl
     : i len ( __vec_len_raw ctl )
-    : *A data # *A ( nurl_peek ctl 0 )
+    : *A data # *A ( nurl_vctl_data ctl )
     : ~ i i 0
     ~ < i len {
         : A x . data i
@@ -871,7 +871,7 @@
 @ vec_any [A] ( Vec A ) v ( @ b A ) pred → b {
     : s ctl . v ctl
     : i len ( __vec_len_raw ctl )
-    : *A data # *A ( nurl_peek ctl 0 )
+    : *A data # *A ( nurl_vctl_data ctl )
     : ~ i i 0
     ~ < i len {
         : A x . data i
@@ -887,7 +887,7 @@
 @ vec_contains [A] ( Vec A ) v A target ( @ b A A ) eq_fn → b {
     : s ctl . v ctl
     : i len ( __vec_len_raw ctl )
-    : *A data # *A ( nurl_peek ctl 0 )
+    : *A data # *A ( nurl_vctl_data ctl )
     : ~ i i 0
     ~ < i len {
         : A x . data i
@@ -902,7 +902,7 @@
 @ vec_index_of [A] ( Vec A ) v A target ( @ b A A ) eq_fn → ?i {
     : s ctl . v ctl
     : i len ( __vec_len_raw ctl )
-    : *A data # *A ( nurl_peek ctl 0 )
+    : *A data # *A ( nurl_vctl_data ctl )
     : ~ i i 0
     ~ < i len {
         : A x . data i
@@ -919,8 +919,8 @@
     : i la ( __vec_len_raw actl )
     : i lb ( __vec_len_raw bctl )
     ? != la lb { ^ F } {}
-    : *A da # *A ( nurl_peek actl 0 )
-    : *A db # *A ( nurl_peek bctl 0 )
+    : *A da # *A ( nurl_vctl_data actl )
+    : *A db # *A ( nurl_vctl_data bctl )
     : ~ i i 0
     ~ < i la {
         : A x . da i
@@ -936,7 +936,7 @@
 @ vec_all [A] ( Vec A ) v ( @ b A ) pred → b {
     : s ctl . v ctl
     : i len ( __vec_len_raw ctl )
-    : *A data # *A ( nurl_peek ctl 0 )
+    : *A data # *A ( nurl_vctl_data ctl )
     : ~ i i 0
     ~ < i len {
         : A x . data i

@@ -112,10 +112,13 @@ the corpus safe. The target is a guarantee:
 - **P1** done: `unsafe` functions and methods (spec §3.3d), raw pointer
   reads/writes, pointer casts, raw-memory primitives and foreign functions
   outside the stdlib gated; `nurlc --unsafe-report`. The corpus marks its
-  raw code `unsafe` (the compiler itself: 204 functions). Open: safe
-  replacements for the commonest raw idiom (`vec_data` loops) —
-  `vec_at` / `vec_put` exist but cost ~4× the instructions until the
-  bounds check hoists, so hot loops in packages stay `unsafe` for now.
+  raw code `unsafe` (the compiler itself: 204 functions). The safe
+  replacement for the commonest raw idiom (`vec_data` loops):
+  `vec_at` / `vec_put` / `vec_get` run at raw-pointer cost (2026-10-06:
+  the Vec control block is read without a branch around the load, and
+  its accesses and the element accesses carry TBAA tags that keep them
+  apart; `tools/vec_parity.sh` gates it in CI), so hot loops in packages
+  can move from `vec_data` + `unsafe` to the safe API.
 - **P2** done: moves, borrows, views, keeping containers and callees,
   closures (C1/C2) — the rules are the default; `NURL_SOUND=0` restores
   the old checker for A/B triage only.

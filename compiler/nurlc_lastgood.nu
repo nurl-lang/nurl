@@ -2346,6 +2346,22 @@ unsafe @ emit_coverage_modules s module → b {
 : ~ i g_pending_unsafe 0
 // The functions declared `unsafe` (name → 1; 0 until the first one).
 : ~ i g_unsafe_fns 0
+// Set by a call to nurl_vctl_data; the let that binds its result marks the
+// pointer `__velem` (its element accesses carry the vec-elem TBAA tag).
+: ~ i g_vctl_seen 0
+
+@ mem_note_velem i syms s name s vt → v {
+    ? & != 0 g_vctl_seen ( is_ptr_ty vt ) { ( nurl_sym_def syms ( nurl_str_cat name `__velem` ) `1` ) } {}
+    = g_vctl_seen 0
+}
+// The TBAA tag an element access through pointer binding `base` carries:
+// the vec-elem tag for a scalar element through a `__velem` pointer.
+@ mem_velem_tag i syms s base s ety → s {
+    ? | == 0 ( nurl_str_len base ) == 0 ( nurl_sym_len2 syms base `__velem` ) { ^ `` } {}
+    : i c0 ( nurl_str_get ety 0 )
+    ? | | == c0 37 == c0 123 == c0 91 { ^ `` } {}
+    ^ `, !tbaa !94`
+}
 // `--unsafe-report`: the program's own `unsafe` functions (outside the
 // standard library), one `file:line name` per line — the surface a
 // reviewer has to trust.
@@ -10974,6 +10990,7 @@ unsafe @ nurl_lex_peek4_type i h → i {
     // reassignment-drop rule) — an alias here dangled and misspelled
     // every private callee's diagnostics.
     : s fname_bare ( nurl_str_cat fname `` )
+    ? ( seq fname `nurl_vctl_data` ) { = g_vctl_seen 1 } {}
     ? ( priv_is_private fname ) {
         = fname ( priv_resolve lex syms fname )
     } {}
@@ -17795,6 +17812,19 @@ unsafe @ gen_match i lex i syms i cg → s {
 // (`<path>:<kind>:<leaf_sname>:<leaf_idx>`), keeping only entries whose
 // ptr matches `want_ptr`. Empty when the binding owns no fields. Used by
 // gen_ret to hand the caller exactly the field set to re-register (A4c).
+// `= dst src` / `: T dst src` with `src` a struct binding that owns raw
+// string or slice fields: the fields stay `src`'s — they are freed when
+// `src` goes out of scope — so `dst` would be a second name for them that
+// may outlive them (a binding in an outer block, a by-reference capture).
+// The rules cannot follow that; an owning field type can. (Raw fields are
+// raw memory: an `unsafe` function may manage them by hand.)
+@ bck_check_owned_fields_alias i lex i syms i rhs_tt s rhs s dst → v {
+    ? | | | ! ( bck_sound ) ! ( is_ident_tok rhs_tt ) ( seq rhs dst ) ( bck_unsafe_ctx ) { ^ v } {}
+    : s rptr ( nurl_sym_get2 syms rhs `__ptr` )
+    ? == 0 ( nurl_str_len ( mem_collect_struct_fields_for syms rptr ) ) { ^ v } {}
+    ( die lex ( nurl_str_cat4 `'` rhs `' owns raw string or slice fields that are freed when '` ( nurl_str_cat3 rhs `' goes out of scope; '` ( nurl_str_cat3 dst `' would be a second name for them that can outlive them (a use after free). Give the struct owning field types (String, Vec) so the value can move, or build the struct where it is kept instead of copying it from '` ( nurl_str_cat rhs `' (code that manages those fields by hand belongs in an 'unsafe' function).` ) ) ) ) )
+}
+
 @ mem_collect_struct_fields_for i syms s want_ptr → s {
     ? == 0 ( nurl_str_len want_ptr ) { ^ ( nurl_str_cat `` `` ) } {}
     : ~ s out ``
@@ -20064,7 +20094,7 @@ unsafe @ mem_own_add_user_drop i syms i cg s ptr s vt → v {
 // The raw-memory primitives: what they hand out or take is memory the
 // checker cannot follow.
 @ bck_raw_call s base → b {
-    ^ ( str_contains_word `nurl_alloc nurl_zalloc nurl_free nurl_realloc alloc zalloc mem_forget nurl_peek nurl_poke nurl_memcpy nurl_memmove nurl_memset malloc calloc realloc free memcpy memmove memset nurl_closure_drop nurl_closure_clone rcbox_ptr` base )
+    ^ ( str_contains_word `nurl_alloc nurl_zalloc nurl_free nurl_realloc alloc zalloc mem_forget nurl_peek nurl_poke nurl_vctl_get nurl_vctl_set nurl_vctl_data nurl_memcpy nurl_memmove nurl_memset malloc calloc realloc free memcpy memmove memset nurl_closure_drop nurl_closure_clone rcbox_ptr` base )
 }
 
 // A call to a raw-memory primitive, or to a foreign function declared
@@ -23352,6 +23382,8 @@ unsafe @ bck_loop_mask s pre s post → s {
             = lit_track T
         } {}
         ( mem_cursor_owner_slot syms cg is_mutable vt lit_track rhs_is_owned_local rhs_is_owned_global bck_rhs_tt )
+        ( bck_check_owned_fields_alias lex syms bck_rhs_tt bck_rhs_val name )
+        ( mem_note_velem syms name vt )
         // A forward call's ownership guard belongs to THIS binding. Register
         // the hidden slot as an ordinary owned string — every existing drop
         // path then handles it. The stable address graph decides whether
@@ -23628,6 +23660,8 @@ unsafe @ bck_loop_mask s pre s post → s {
                 = lit_track T
             } {}
             ( mem_cursor_owner_slot syms cg is_mutable ptype lit_track rhs_is_owned_local rhs_is_owned_global bck_rhs_tt )
+            ( bck_check_owned_fields_alias lex syms bck_rhs_tt bck_rhs_val name )
+            ( mem_note_velem syms name ptype )
             // A forward call's ownership guard belongs to THIS binding. Register
             // the hidden slot as an ordinary owned string — every existing drop
             // path then handles it. The stable address graph decides whether
@@ -24300,6 +24334,7 @@ unsafe @ bck_loop_mask s pre s post → s {
         { ( nurl_sym_def syms `__store_rhs_tok__` bck_rhs_val ) }
         { ( nurl_sym_def syms `__store_rhs_tok__` `-` ) }
         : ~ s store_val ( coerce_store_val lex val rhs_ty vt syms cg )
+        ( bck_check_owned_fields_alias lex syms bck_rhs_tt bck_rhs_val name )
         // A struct binding that owns fields, overwritten by a value that
         // brings the SAME owned fields (a constructor call, a literal):
         // release the old fields before the store, and the registration
@@ -25057,7 +25092,7 @@ unsafe @ bck_loop_mask s pre s post → s {
             ( nurl_print `  store ` ) ( nurl_print ( nurl_llty elem_type ) )
             ( nurl_print ` ` ) ( nurl_print rhsc )
             ( nurl_print `, ` ) ( nurl_print ( nurl_llty elem_type ) )
-            ( nurl_print `* ` ) ( nurl_print gep ) ( emit_dbg_line_eol bck_line )
+            ( nurl_print `* ` ) ( nurl_print gep ) ( nurl_print ( mem_velem_tag syms obj_name ( nurl_llty elem_type ) ) ) ( emit_dbg_line_eol bck_line )
             ( mem_ff_putback_done syms cg )
             ^ rhs
         }
@@ -25129,7 +25164,7 @@ unsafe @ bck_loop_mask s pre s post → s {
                         ( nurl_print `  store ` ) ( nurl_print ( nurl_llty st ) )
                         ( nurl_print ` ` ) ( nurl_print rhsc )
                         ( nurl_print `, ` ) ( nurl_print ( nurl_llty st ) )
-                        ( nurl_print `* ` ) ( nurl_print gep ) ( emit_dbg_line_eol bck_line )
+                        ( nurl_print `* ` ) ( nurl_print gep ) ( nurl_print ( mem_velem_tag syms obj_name ( nurl_llty st ) ) ) ( emit_dbg_line_eol bck_line )
                         ( mem_ff_putback_done syms cg )
                         ^ rhs
                     }
@@ -25211,7 +25246,7 @@ unsafe @ bck_loop_mask s pre s post → s {
                                 ( nurl_print `  store ` ) ( nurl_print ( nurl_llty st ) )
                                 ( nurl_print ` ` ) ( nurl_print rhsc )
                                 ( nurl_print `, ` ) ( nurl_print ( nurl_llty st ) )
-                                ( nurl_print `* ` ) ( nurl_print gep ) ( emit_dbg_line_eol bck_line )
+                                ( nurl_print `* ` ) ( nurl_print gep ) ( nurl_print ( mem_velem_tag syms obj_name ( nurl_llty st ) ) ) ( emit_dbg_line_eol bck_line )
                                 ( mem_ff_putback_done syms cg )
                                 ^ rhs
                             }
@@ -25245,7 +25280,7 @@ unsafe @ bck_loop_mask s pre s post → s {
                     ( nurl_print `  store ` ) ( nurl_print ( nurl_llty st ) )
                     ( nurl_print ` ` ) ( nurl_print rhsc )
                     ( nurl_print `, ` ) ( nurl_print ( nurl_llty st ) )
-                    ( nurl_print `* ` ) ( nurl_print gep ) ( emit_dbg_line_eol bck_line )
+                    ( nurl_print `* ` ) ( nurl_print gep ) ( nurl_print ( mem_velem_tag syms obj_name ( nurl_llty st ) ) ) ( emit_dbg_line_eol bck_line )
                     ( mem_ff_putback_done syms cg )
                     ^ rhs
                 }
@@ -26184,7 +26219,7 @@ unsafe @ bck_loop_mask s pre s post → s {
             ( nurl_print `  ` ) ( nurl_print res )
             ( nurl_print ` = load ` ) ( nurl_print ( nurl_llty elem_type ) )
             ( nurl_print `, ` ) ( nurl_print ( nurl_llty elem_type ) )
-            ( nurl_print `* ` ) ( nurl_print gep ) ( nurl_print `\n` )
+            ( nurl_print `* ` ) ( nurl_print gep ) ( nurl_print ( mem_velem_tag syms ? ( is_ident_tok __mb_tt ) __mb_val `` ( nurl_llty elem_type ) ) ) ( nurl_print `\n` )
             ( nurl_sym_def syms `__last_elem_addr__` gep )
             ( nurl_sym_def syms `__last_field_addr__` ( nurl_str_cat3 gep ` ` elem_type ) )
             ( nurl_set_last_type elem_type )
@@ -26256,7 +26291,7 @@ unsafe @ bck_loop_mask s pre s post → s {
                 ( nurl_print `  ` ) ( nurl_print res )
                 ( nurl_print ` = load ` ) ( nurl_print ( nurl_llty elem_type ) )
                 ( nurl_print `, ` ) ( nurl_print ( nurl_llty elem_type ) )
-                ( nurl_print `* ` ) ( nurl_print gep ) ( nurl_print `\n` )
+                ( nurl_print `* ` ) ( nurl_print gep ) ( nurl_print ( mem_velem_tag syms ? ( is_ident_tok __mb_tt ) __mb_val `` ( nurl_llty elem_type ) ) ) ( nurl_print `\n` )
                 ( nurl_sym_def syms `__last_elem_addr__` gep )
                 ( nurl_sym_def syms `__last_field_addr__` ( nurl_str_cat3 gep ` ` elem_type ) )
                 ( nurl_set_last_type elem_type )
@@ -30086,7 +30121,9 @@ unsafe @ bck_loop_mask s pre s post → s {
     ? != g_borrowck 0 {
         // Same rule borrowck_fn_end follows: a body whose verdict depends on
         // a summary that does not exist yet is parked and walked after the
-        // module, never walked twice.
+        // module, never walked twice. Its diagnostics name THIS file (the
+        // file left over was the last one analysed — an import's).
+        ( nurl_sym_set g_bck `file` ( nurl_lex_filename lex ) )
         ? != 0 ( nurl_sym_len g_bck `deferred` )
         { ( bck_defer_fn ( nurl_sym_get body_syms `__fn_param_names__` ) ) }
         { ( bck_analyze ( nurl_sym_get body_syms `__fn_param_names__` ) ) }
@@ -33737,6 +33774,7 @@ unsafe @ __lazy_scan → v {
 }
 
 @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
+    = g_vctl_seen 0
     ( nurl_cg_reset cg )
     // Where this function starts, for a forward scan of its body
     // (__clo_detach_moves).
@@ -40704,6 +40742,11 @@ u` ) ( nurl_print q ) ( nurl_print `:
     // definition still wins at link, so behaviour is unchanged and the
     // symbol never conflicts. Target-independent IR, so every backend
     // gets it.
+    // (The null case branches: every caller but a Vec's control block
+    // tests a pointer that is almost never null, and the branch is
+    // cheaper there than a select. nurl_vctl_get below is the branchless
+    // form, where hoisting the load out of a loop is the point.)
+    ( emit `@.nurl.peek.zero = linkonce_odr constant i64 0` )
     ( emit `define linkonce_odr i64 @nurl_peek(i8* %p, i64 %i) alwaysinline {` )
     ( emit `entry:` )
     ( emit `  %pk.n = icmp eq i8* %p, null` )
@@ -40715,6 +40758,53 @@ u` ) ( nurl_print q ) ( nurl_print `:
     ( emit `  ret i64 %pk.v` )
     ( emit `pk.zero:` )
     ( emit `  ret i64 0` )
+    ( emit `}` )
+
+    // ── The Vec control block, told apart from the elements ──────
+    //
+    // `nurl_vctl_get` / `_set` / `_data` are nurl_peek / nurl_poke for a
+    // Vec's control block only, and their accesses carry the TBAA tag
+    // `nurl vec ctl`; element reads and writes through a pointer taken
+    // with `nurl_vctl_data` carry `nurl vec elem` (gen_member,
+    // gen_field_store). The two tags say the block and the buffer never
+    // overlap — true, they are separate allocations — so a loop that
+    // writes elements (`vec_put`) keeps the length and the data pointer
+    // in registers instead of reloading them after every store, and
+    // vectorises. Every other access stays untagged and may alias
+    // anything: raw code reading a Vec's buffer with nurl_peek is
+    // unaffected. stdlib/core/vec.nu is the only user.
+    ( emit `!90 = !{!"nurl tbaa"}` )
+    ( emit `!91 = !{!"nurl vec ctl", !90, i64 0}` )
+    ( emit `!92 = !{!91, !91, i64 0}` )
+    ( emit `!93 = !{!"nurl vec elem", !90, i64 0}` )
+    ( emit `!94 = !{!93, !93, i64 0}` )
+    ( emit `define linkonce_odr i64 @nurl_vctl_get(i8* %p, i64 %i) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %vg.n = icmp eq i8* %p, null` )
+    ( emit `  %vg.b = bitcast i8* %p to i64*` )
+    ( emit `  %vg.q = select i1 %vg.n, i64* @.nurl.peek.zero, i64* %vg.b` )
+    ( emit `  %vg.j = select i1 %vg.n, i64 0, i64 %i` )
+    ( emit `  %vg.e = getelementptr inbounds i64, i64* %vg.q, i64 %vg.j` )
+    ( emit `  %vg.v = load i64, i64* %vg.e, !tbaa !92` )
+    ( emit `  ret i64 %vg.v` )
+    ( emit `}` )
+    ( emit `define linkonce_odr i8* @nurl_vctl_data(i8* %p) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %vd.v = call i64 @nurl_vctl_get(i8* %p, i64 0)` )
+    ( emit `  %vd.r = inttoptr i64 %vd.v to i8*` )
+    ( emit `  ret i8* %vd.r` )
+    ( emit `}` )
+    ( emit `define linkonce_odr void @nurl_vctl_set(i8* %p, i64 %i, i64 %v) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %vs.n = icmp eq i8* %p, null` )
+    ( emit `  br i1 %vs.n, label %vs.done, label %vs.store` )
+    ( emit `vs.store:` )
+    ( emit `  %vs.b = bitcast i8* %p to i64*` )
+    ( emit `  %vs.e = getelementptr inbounds i64, i64* %vs.b, i64 %i` )
+    ( emit `  store i64 %v, i64* %vs.e, !tbaa !92` )
+    ( emit `  br label %vs.done` )
+    ( emit `vs.done:` )
+    ( emit `  ret void` )
     ( emit `}` )
     ( emit `define linkonce_odr void @nurl_poke(i8* %p, i64 %i, i64 %v) alwaysinline {` )
     ( emit `entry:` )
@@ -41592,6 +41682,7 @@ unsafe @ __canon_import_key s path → s {
     // The raw-word store retains its value in caller-supplied memory. Address
     // provenance decides whether that value carries an input buffer's address.
     ( nurl_sym_def g_fn_escapes `nurl_poke` `2` )
+    ( nurl_sym_def g_fn_escapes `nurl_vctl_set` `2` )
     // output buffering
     ( nurl_sym_def syms `nurl_print_buf_start` `void` )
     ( nurl_sym_def syms `nurl_print_buf_stop` `i8*` )
@@ -41605,6 +41696,9 @@ unsafe @ __canon_import_key s path → s {
     // unregistered name, so this table must cover every `declare` that
     // emit_header writes. Keep the two in sync.
     ( nurl_sym_def syms `nurl_peek` `i64` )
+    ( nurl_sym_def syms `nurl_vctl_get` `i64` )
+    ( nurl_sym_def syms `nurl_vctl_data` `i8*` )
+    ( nurl_sym_def syms `nurl_vctl_set` `void` )
     ( nurl_sym_def syms `nurl_umulhi` `i64` )
     ( nurl_sym_def syms `nurl_addc_lo` `u64` )
     ( nurl_sym_def syms `nurl_addc_hi` `u64` )
