@@ -53,7 +53,7 @@ $ `../src/bpe.nu`
     ~ < k 8 { ( vec_push [u] out # u & >> v * k 8 255 ) = k + k 1 }
 }
 
-@ main → i {
+unsafe @ main → i {
     : ( Vec String ) av ( env_args_list )
     ? < ( vec_len [String] av ) 5 { ( p `usage: gen_tpe <clip_merges.txt> <text_encoder.onnx> <names.txt> <out_base>\n` ) ^ 2 } {}
     : String mp ?? ( vec_get [String] av 1 ) { T x → x F _ → ( string_new ) }

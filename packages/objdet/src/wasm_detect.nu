@@ -41,7 +41,7 @@ $ `detect.nu`
     ^ v
 }
 
-@ main → i {
+unsafe @ main → i {
     ( gpu_force_webgpu )
     : i n ( host_blob_size 0 )
     ? <= n 0 { ( host_status - 0 1 10 ) ^ 1 } {}

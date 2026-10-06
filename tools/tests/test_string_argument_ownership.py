@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """String argument lifetime must survive declaration order and address casts."""
+import re
 import os
 from pathlib import Path
 import subprocess
@@ -30,7 +31,9 @@ class StringArgumentOwnershipTest(unittest.TestCase):
         path = self.directory / 'input.nu'
         ir = self.directory / 'input.ll'
         binary = self.directory / 'program'
-        path.write_text(source)
+        # Several programs hand strings to foreign functions or cast them
+        # (`# s 7`): raw memory, allowed only in `unsafe` functions.
+        path.write_text(re.sub(r'(?m)^@ ', 'unsafe @ ', source))
         env = {**os.environ, 'NURL_STDLIB': str(ROOT), 'DEBUGINFOD_URLS': '',
                'ASAN_OPTIONS': 'detect_leaks=1:halt_on_error=1',
                'LSAN_OPTIONS': 'use_stacks=0', 'UBSAN_OPTIONS': 'halt_on_error=1'}

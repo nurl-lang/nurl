@@ -79,7 +79,7 @@ class DriverPathsTest(unittest.TestCase):
         output = directory / 'program [live]'
         env = self.atomic_environment(directory)
         source.write_text('''& `c` @ getchar → i32
-@ main → i {
+unsafe @ main → i {
     ( nurl_eprintln `ready` )
     : i32 ignored ( getchar )
     ( nurl_println `old` )

@@ -715,8 +715,9 @@ unsafe @ __path_to_uri s path → String {
                                         ? & == depth 0 != at_line_start 0 {
                                             // Decl-start scan. A declaration may
                                             // carry any run of the `pub` (v2.0),
-                                            // `simd` (v2.6) and `inline` (v2.7)
-                                            // prefixes, in any order, so consume
+                                            // `simd` (v2.6), `inline` (v2.7) and
+                                            // `unsafe` (v2.8) prefixes, in any
+                                            // order, so consume
                                             // whatever run precedes the sigil.
                                             //
                                             // This used to read one identifier
@@ -737,7 +738,7 @@ unsafe @ __path_to_uri s path → String {
                                                 ? > ie p {
                                                     : String tok ( __substr content p ie )
                                                     : s td ( string_data tok )
-                                                    ? | | != 0 ( nurl_str_eq td `pub` ) != 0 ( nurl_str_eq td `simd` ) != 0 ( nurl_str_eq td `inline` ) {
+                                                    ? | | | != 0 ( nurl_str_eq td `pub` ) != 0 ( nurl_str_eq td `simd` ) != 0 ( nurl_str_eq td `inline` ) != 0 ( nurl_str_eq td `unsafe` ) {
                                                         = p ( __skip_ws content ie n )
                                                         = more T
                                                     } {}
@@ -2021,6 +2022,7 @@ unsafe @ __path_to_uri s path → String {
     ? != 0 ( nurl_str_eq name `pub` ) { ^ T } {}
     ? != 0 ( nurl_str_eq name `simd` ) { ^ T } {}
     ? != 0 ( nurl_str_eq name `inline` ) { ^ T } {}
+    ? != 0 ( nurl_str_eq name `unsafe` ) { ^ T } {}
     ^ F
 }
 

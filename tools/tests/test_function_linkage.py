@@ -47,7 +47,9 @@ class FunctionLinkageTest(unittest.TestCase):
 
     def compile(self, source, flags=()):
         path = self.directory / 'source.nu'
-        path.write_text(source)
+        # Foreign calls are allowed only in `unsafe` functions; linkage is
+        # what is under test here, so every function is one.
+        path.write_text(re.sub(r'(?m)^@ ', 'unsafe @ ', source))
         module = self.command([self.compiler, *flags, path])
         ir = self.directory / 'source.ll'
         ir.write_bytes(module)

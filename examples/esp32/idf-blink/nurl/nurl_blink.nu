@@ -22,7 +22,7 @@
 @ nurl_ping → i { ^ 42 }
 
 // 32-bit memory-mapped write: *(volatile u32*)addr = val
-@ poke i addr i32 val → v {
+unsafe @ poke i addr i32 val → v {
     : *i32 p # *i32 addr
     = . p 0 val
 }

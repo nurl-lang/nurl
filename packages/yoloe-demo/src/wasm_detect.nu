@@ -79,7 +79,7 @@ $ `deps/yoloe/src/mask.nu`
 
 // Per-anchor best ENABLED class (bit k of `mask` = class k enabled) —
 // same semantics as the server's yd_decode.
-@ wd_decode * u o i na i nc f thresh i mask → ( Vec Detection ) {
+unsafe @ wd_decode * u o i na i nc f thresh i mask → ( Vec Detection ) {
     : ( Vec Detection ) dets ( vec_new [Detection] )
     : ~ i a 0
     ~ < a na {
@@ -106,7 +106,7 @@ $ `deps/yoloe/src/mask.nu`
 }
 
 // Load blob `kind` into a fresh Vec u (embedder memcpys, we own it).
-@ wd_load_blob i kind → ( Vec u ) {
+unsafe @ wd_load_blob i kind → ( Vec u ) {
     : i n ( host_blob_size kind )
     : ( Vec u ) v ( vec_with_cap [u] ? > n 0 { n } { 1 } )
     ? > n 0 {
@@ -116,7 +116,7 @@ $ `deps/yoloe/src/mask.nu`
     ^ v
 }
 
-@ main → i {
+unsafe @ main → i {
     ? != 0 ( host_use_webgpu ) { ( gpu_force_webgpu ) } { ( gpu_force_static ) }
 
     // model

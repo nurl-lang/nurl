@@ -30086,7 +30086,9 @@ unsafe @ bck_loop_mask s pre s post → s {
     ? != g_borrowck 0 {
         // Same rule borrowck_fn_end follows: a body whose verdict depends on
         // a summary that does not exist yet is parked and walked after the
-        // module, never walked twice.
+        // module, never walked twice. Its diagnostics name THIS file (the
+        // file left over was the last one analysed — an import's).
+        ( nurl_sym_set g_bck `file` ( nurl_lex_filename lex ) )
         ? != 0 ( nurl_sym_len g_bck `deferred` )
         { ( bck_defer_fn ( nurl_sym_get body_syms `__fn_param_names__` ) ) }
         { ( bck_analyze ( nurl_sym_get body_syms `__fn_param_names__` ) ) }

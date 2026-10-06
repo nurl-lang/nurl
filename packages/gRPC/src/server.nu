@@ -140,7 +140,7 @@ $ `stdlib/ext/http2_server.nu`
     }
 }
 
-@ __grpc_server_index GrpcServer server i sid → i {
+unsafe @ __grpc_server_index GrpcServer server i sid → i {
     : ~ i k 0
     : *GrpcServerCall p ( vec_data [GrpcServerCall] . server calls )
     ~ < k ( vec_len [GrpcServerCall] . server calls ) {
@@ -151,11 +151,11 @@ $ `stdlib/ext/http2_server.nu`
     ^ -1
 }
 
-@ __grpc_server_get GrpcServer server i idx → GrpcServerCall {
+unsafe @ __grpc_server_get GrpcServer server i idx → GrpcServerCall {
     ^ . ( vec_data [GrpcServerCall] . server calls ) idx
 }
 
-@ __grpc_server_put GrpcServer server i idx GrpcServerCall call → v {
+unsafe @ __grpc_server_put GrpcServer server i idx GrpcServerCall call → v {
     : *GrpcServerCall p ( vec_data [GrpcServerCall] . server calls )
     // `call` is the slot's own value, read by the getter and updated: it
     // goes back as is (the table still owns it).
@@ -163,7 +163,7 @@ $ `stdlib/ext/http2_server.nu`
     = . p idx call
 }
 
-@ __grpc_server_prune GrpcServer server → v {
+unsafe @ __grpc_server_prune GrpcServer server → v {
     : *GrpcServerCall p ( vec_data [GrpcServerCall] . server calls )
     : ~ i r 0
     : ~ i w 0
@@ -206,7 +206,7 @@ $ `stdlib/ext/http2_server.nu`
     ^ @ !i GrpcError { T idx }
 }
 
-@ __grpc_server_headers ( Vec Header ) metadata i encoding i max_metadata → !( Vec Header ) GrpcError {
+unsafe @ __grpc_server_headers ( Vec Header ) metadata i encoding i max_metadata → !( Vec Header ) GrpcError {
     : ( Vec Header ) encoded \ ( grpc_metadata_encode metadata max_metadata )
     : ( Vec Header ) headers ( grpc_metadata_new )
     ( vec_push [Header] headers ( header_new `:status` `200` ) )
@@ -255,7 +255,7 @@ $ `stdlib/ext/http2_server.nu`
 
 // Flushes queued frames without consuming any peer frame. A stalled stream
 // does not prevent another stream from sending or receiving messages.
-@ grpc_server_flush inout GrpcServer server → !v GrpcError {
+unsafe @ grpc_server_flush inout GrpcServer server → !v GrpcError {
     : ~ b progress T
     ~ progress {
         = progress F
@@ -350,7 +350,7 @@ $ `stdlib/ext/http2_server.nu`
 
 // Send a terminal status without an application callback (malformed request,
 // deadline, or message decoder error). An existing send queue is discarded.
-@ __grpc_server_reject inout GrpcServer server i sid i code s message i http_status → !v GrpcError {
+unsafe @ __grpc_server_reject inout GrpcServer server i sid i code s message i http_status → !v GrpcError {
     : GrpcStatus status ( grpc_status code message )
     : ( Vec Header ) empty ( grpc_metadata_new )
     : !( Vec Header ) GrpcError encoded ( grpc_status_headers status empty . . server limits max_metadata )

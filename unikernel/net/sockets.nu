@@ -124,7 +124,7 @@ $ `stdlib/net/dnsclient.nu`
 
 @ __ms → i { ^ / ( monotonic_ns ) 1000000 }
 
-@ __shim → *Shim {
+unsafe @ __shim → *Shim {
     ? != g_shim 0 { ^ # *Shim g_shim } {}
     : *Shim sh # *Shim ( nurl_alloc Z Shim )
     : i now ( __ms )
@@ -180,7 +180,7 @@ $ `stdlib/net/dnsclient.nu`
 
 & `c` @ getenv s name → s
 
-@ __dns_cmdline_override * Shim sh → v {
+unsafe @ __dns_cmdline_override * Shim sh → v {
     : s v ( getenv `dns` )
     ? == # i v 0 { ^ } {}
     : i n ( nurl_str_len v )
@@ -224,7 +224,7 @@ $ `stdlib/net/dnsclient.nu`
 // machine that polls its driver anyway, and it exists ONLY when there is
 // a device — a loopback-only program keeps the deadlock detector's proof
 // intact, because for it "nothing runnable, no timer" really is the end.
-@ __poll_forever → v {
+unsafe @ __poll_forever → v {
     // Adaptive cadence: 1 ms while traffic moves, backing off to
     // 16 ms when nothing has for a while. The backoff is what lets
     // the tickless idle actually idle — a fixed 1 ms poll is a
@@ -243,7 +243,7 @@ $ `stdlib/net/dnsclient.nu`
     }
 }
 
-@ __start_poller → v {
+unsafe @ __start_poller → v {
     : ( @ v ) body \ → v { ( __poll_forever ) }
     : *u fnp # *u body 0
     : *u env # *u body 1
@@ -251,7 +251,7 @@ $ `stdlib/net/dnsclient.nu`
 }
 
 // Put every frame the stack built onto the wire, then empty the buffer.
-@ __flush_frames PktBuf out → v {
+unsafe @ __flush_frames PktBuf out → v {
     : i n ( pktbuf_count out )
     : ~ i k 0
     ~ < k n {
@@ -278,7 +278,7 @@ $ `stdlib/net/dnsclient.nu`
 // Bounded and best-effort: a network with no gateway, or one that does
 // not answer, costs the deadline once and nothing afterwards. The
 // address still works; the first client just pays the second again.
-@ __arp_warm * Shim sh → v {
+unsafe @ __arp_warm * Shim sh → v {
     : NetStack net . sh net
     : i gw ( stack_gateway net )
     ? == gw 0 { ^ v } {}
@@ -311,7 +311,7 @@ $ `stdlib/net/dnsclient.nu`
 // measuring the stack's own behaviour means removing everything that
 // answers on its behalf. Stated but unparseable panics like a bad
 // `dns=` does, rather than quietly falling back to asking.
-@ __ip_cmdline * Shim sh → b {
+unsafe @ __ip_cmdline * Shim sh → b {
     : s v ( getenv `ip` )
     ? == # i v 0 { ^ F } {}
     : i n ( nurl_str_len v )
@@ -371,7 +371,7 @@ $ `stdlib/net/dnsclient.nu`
 // passes. Bounded by the CLOCK, not by a round count: the retransmit
 // backoff is measured in seconds and a busy loop gets through a
 // hundred thousand rounds in the time a server takes to answer once.
-@ __dhcp_configure * Shim sh → v {
+unsafe @ __dhcp_configure * Shim sh → v {
     : NetStack net . sh net
     : DhcpClient c ( dhcp_client_new ( stack_our_mac net ) & ( __ms ) 4294967295 )
     : i deadline + ( __ms ) 10000
@@ -390,7 +390,7 @@ $ `stdlib/net/dnsclient.nu`
     } {}
 }
 
-@ __dhcp_turn * Shim sh DhcpClient c i now → v {
+unsafe @ __dhcp_turn * Shim sh DhcpClient c i now → v {
     : PktBuf out ( pktbuf_new )
     : i want ( dhcp_tick c now )
     ? != want 0 {
@@ -418,7 +418,7 @@ $ `stdlib/net/dnsclient.nu`
     }
 }
 
-@ __tab → SockTab { ^ . ( __shim ) st }
+unsafe @ __tab → SockTab { ^ . ( __shim ) st }
 
 // ── the waiter registry ──────────────────────────────────────────
 //
@@ -429,7 +429,7 @@ $ `stdlib/net/dnsclient.nu`
 // this runtime exists to be able to make. Two pollers then each
 // conclude the other is making progress and neither ever gives up.
 
-@ __waiter_add i fd i for_write → i {
+unsafe @ __waiter_add i fd i for_write → i {
     : *Shim sh ( __shim )
     : i me ( nurl_fiber_current )
     ? == me 0 { ^ -1 } {}  // the main context cannot park inside itself
@@ -450,7 +450,7 @@ $ `stdlib/net/dnsclient.nu`
     ^ n
 }
 
-@ __waiter_del i slot → v {
+unsafe @ __waiter_del i slot → v {
     ? < slot 0 { ^ } {}
     : *Shim sh ( __shim )
     ? >= slot ( vec_len [i] . sh w_coro ) { ^ } {}
@@ -461,7 +461,7 @@ $ `stdlib/net/dnsclient.nu`
 // anything that can change readiness — frames delivered, a timer fired,
 // a shutdown. Unparking a coroutine that is not parked is banked as a
 // permit by the runtime, so waking one that is mid-check is harmless.
-@ __wake_ready → v {
+unsafe @ __wake_ready → v {
     : *Shim sh ( __shim )
     : i me ( nurl_fiber_current )
     : i n ( vec_len [i] . sh w_coro )
@@ -488,14 +488,14 @@ $ `stdlib/net/dnsclient.nu`
 // One interface plus loopback, decided per frame by the destination
 // MAC, is the whole routing table. It is enough because it is the
 // truth about this machine.
-@ __frame_is_local ( Vec u ) f → b {
+unsafe @ __frame_is_local ( Vec u ) f → b {
     : *Shim sh ( __shim )
     : EthHdr eh ( eth_parse f )
     ? ! . eh valid { ^ T } {}
     ^ == . eh dst ( stack_our_mac . sh net )
 }
 
-@ __drive i now → i {
+unsafe @ __drive i now → i {
     : *Shim sh ( __shim )
     : SockTab st . sh st
     : ~ i moved 0
@@ -584,7 +584,7 @@ $ `stdlib/net/dnsclient.nu`
 // the scheduler it is — it drives the scheduler a step at a time, and a
 // step that runs nothing, with no frames queued and no device, is the
 // end of the road for this wait.
-@ __wait i fd i for_write i timeout_ms → i {
+unsafe @ __wait i fd i for_write i timeout_ms → i {
     ? == timeout_ms 0 {
         // A poll still drives once: readiness on this machine only
         // changes when someone moves the stack, so "right now" means
@@ -688,7 +688,7 @@ $ `stdlib/net/dnsclient.nu`
     ( __wake_ready )
 }
 
-@ nurl_tcp_close i handle → v {
+unsafe @ nurl_tcp_close i handle → v {
     : *Shim sh ( __shim )
     ( __peer_forget sh handle )
     ( sock_close . sh st handle ( __ms ) )
@@ -768,7 +768,7 @@ $ `stdlib/net/dnsclient.nu`
     ^ fd
 }
 
-@ nurl_tcp_read i conn s buf i cap → i {
+unsafe @ nurl_tcp_read i conn s buf i cap → i {
     : SockTab st ( __tab )
     ? <= cap 0 { ^ 0 } {}
     ~ T {
@@ -867,7 +867,7 @@ $ `stdlib/net/dnsclient.nu`
     ^ ( __wait fd direction wait )
 }
 
-@ nurl_reactor_wait_io i fd i events i timeout_ms → i {
+unsafe @ nurl_reactor_wait_io i fd i events i timeout_ms → i {
     ^ ( nurl_tcp_wait_io fd events timeout_ms )
 }
 
@@ -914,7 +914,7 @@ $ `stdlib/net/dnsclient.nu`
 // first version of the UDP cache did the second thing and handed
 // callers a pointer to freed memory: `peer=0Tp#~` where an address
 // belonged.
-@ __addr_own i ip i port → i {
+unsafe @ __addr_own i ip i port → i {
     : s a ( __addr_string ip port )
     : i n ( nurl_str_len a )
     : s p # s ( nurl_alloc + n 1 )
@@ -926,7 +926,7 @@ $ `stdlib/net/dnsclient.nu`
 // connection does, so the string is cached per fd and released by
 // close. A fresh allocation per call would leak on every caller that
 // (correctly, per that contract) does not free it.
-@ nurl_tcp_peer_addr i conn → s {
+unsafe @ nurl_tcp_peer_addr i conn → s {
     : *Shim sh ( __shim )
     : i slot - conn 3
     ? < slot 0 { ^ `` } {}
@@ -938,7 +938,7 @@ $ `stdlib/net/dnsclient.nu`
     ^ # s a
 }
 
-@ __peer_forget * Shim sh i conn → v {
+unsafe @ __peer_forget * Shim sh i conn → v {
     : i slot - conn 3
     ? || < slot 0 >= slot ( vec_len [i] . sh peer ) { ^ } {}
     : i cached ?? ( vec_get [i] . sh peer slot ) { T x → x F → 0 }
@@ -965,7 +965,7 @@ $ `stdlib/net/dnsclient.nu`
     ^ ( sock_udp_bind st want port )
 }
 
-@ nurl_udp_close i handle → v {
+unsafe @ nurl_udp_close i handle → v {
     : *Shim sh ( __shim )
     ( __peer_forget sh handle )
     ( sock_close . sh st handle ( __ms ) )
@@ -1028,7 +1028,7 @@ $ `stdlib/net/dnsclient.nu`
     ^ ( __udp_send ( __tab ) handle -1 0 buf n )
 }
 
-@ __udp_recv i handle s buf i n → i {
+unsafe @ __udp_recv i handle s buf i n → i {
     : SockTab st ( __tab )
     ? <= n 0 { ^ 0 } {}
     ~ T {
@@ -1063,7 +1063,7 @@ $ `stdlib/net/dnsclient.nu`
 // This stack is IPv4-only, so family is always 4 on the way out and
 // anything but 4 is refused on the way in.
 
-@ __udp_addr_put s addr i ip i port → v {
+unsafe @ __udp_addr_put s addr i ip i port → v {
     ( nurl_memset addr 0 24 )
     : *u ap # *u addr
     = . ap 0 # u 4
@@ -1075,7 +1075,7 @@ $ `stdlib/net/dnsclient.nu`
     = . ap 7 # u ( ipv4_octet ip 3 )
 }
 
-@ __udp_addr_ip s addr → i {
+unsafe @ __udp_addr_ip s addr → i {
     // Raw byte reads: `nurl_str_get` is a C-string accessor that stops
     // at the first NUL, and byte 1 of an address is always 0.
     : *u ap # *u addr
@@ -1083,7 +1083,7 @@ $ `stdlib/net/dnsclient.nu`
     ^ ( ipv4_make # i . ap 4 # i . ap 5 # i . ap 6 # i . ap 7 )
 }
 
-@ __udp_addr_port s addr → i {
+unsafe @ __udp_addr_port s addr → i {
     : *u ap # *u addr
     ^ | << # i . ap 2 8 # i . ap 3
 }
@@ -1104,7 +1104,7 @@ $ `stdlib/net/dnsclient.nu`
     ^ ( __udp_send ( __tab ) handle ip ( __udp_addr_port addr ) buf n )
 }
 
-@ nurl_udp_addr_resolve s host i port s addr_out → i {
+unsafe @ nurl_udp_addr_resolve s host i port s addr_out → i {
     ( nurl_memset addr_out 0 24 )
     : i ip ( __resolve host )
     ? < ip 0 { ^ -1 } {}
@@ -1133,7 +1133,7 @@ $ `stdlib/net/dnsclient.nu`
 // SEND to an IPv6 address, but an address handed to it (built by hand,
 // or received on a hosted build and logged here) prints the same way
 // on every runtime.
-@ nurl_udp_addr_format s addr → s {
+unsafe @ nurl_udp_addr_format s addr → s {
     : *u ap # *u addr
     : i fam # i . ap 0
     : i port ( __udp_addr_port addr )
@@ -1198,7 +1198,7 @@ $ `stdlib/net/dnsclient.nu`
 
 // The address the last received datagram came from, cached per fd so
 // the borrowed view outlives the call the way the ABI promises.
-@ __udp_cache_peer i handle → v {
+unsafe @ __udp_cache_peer i handle → v {
     : *Shim sh ( __shim )
     ( __peer_forget sh handle )
     : i slot - handle 3
@@ -1208,7 +1208,7 @@ $ `stdlib/net/dnsclient.nu`
     : b _ok ( vec_set [i] . sh peer slot a )
 }
 
-@ nurl_udp_peer_addr i handle → s {
+unsafe @ nurl_udp_peer_addr i handle → s {
     : *Shim sh ( __shim )
     : i slot - handle 3
     ? < slot 0 { ^ `` } {}
@@ -1291,7 +1291,7 @@ $ `stdlib/net/dnsclient.nu`
 // Two attempts with a fresh id each: one lost datagram should not turn
 // a resolvable name into a refusal, but this is a stub resolver, not a
 // retry ladder — the second timeout is the answer.
-@ __dns_query * Shim sh s host → s {
+unsafe @ __dns_query * Shim sh s host → s {
     : i dns . sh dns_ip
     ? == dns 0 { ^ ( nurl_str_cat `` `` ) } {}
     : SockTab st . sh st
@@ -1383,7 +1383,7 @@ $ `stdlib/net/dnsclient.nu`
     ^ ( __dns_query ( __shim ) host )
 }
 
-@ nurl_dns_resolve_port s host i port → s {
+unsafe @ nurl_dns_resolve_port s host i port → s {
     : s base ( nurl_dns_resolve host )
     ? == 0 ( nurl_str_len base ) { ^ base } {}
     // "ip:port\n" — and "[v6]:port", because a colon inside the

@@ -21,7 +21,7 @@ $ `src/runtime.nu`
 
 & `c` @ host_result *u data i n → v
 
-@ blob i kind → ( Vec u ) {
+unsafe @ blob i kind → ( Vec u ) {
     : i n ( host_blob_size kind )
     : ( Vec u ) b ( vec_with_cap [u] ? > n 0 n 1 )
     ? > n 0 {
@@ -31,7 +31,7 @@ $ `src/runtime.nu`
     ^ b
 }
 
-@ main → i {
+unsafe @ main → i {
     ( gpu_force_webgpu )
     : ( Vec u ) mb ( blob 0 )
     : ( Vec u ) input ( blob 1 )

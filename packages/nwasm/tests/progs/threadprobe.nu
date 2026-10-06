@@ -12,7 +12,7 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/thread.nu`
 
-@ main → i {
+unsafe @ main → i {
     : Mutex m ( mutex_new )
     : *i total ( nurl_alloc 8 )
     ( nurl_poke # s total 0 0 )
