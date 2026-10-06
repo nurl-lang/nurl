@@ -15712,7 +15712,10 @@
                     // is itself a borrow (a vec_get result, a field read) is
                     // lent to the arm: `^` marks it for the walk.
                     : s __abt ( nurl_sym_get syms __ab )
-                    : b __lent & | != 0 ( nurl_str_len match_scrut_borrow ) != 0 ( nurl_str_len match_scrut_field ) | ( __is_handle_ty __abt ) ( __is_hown_ty __abt )
+                    // …or out of a parameter the function did not take by
+                    // `sink`: the caller still owns it, so its payloads are lent.
+                    : b __scrut_param & & != 0 ( nurl_str_len match_var_name ) ( nurl_sym_has_word syms `__fn_param_names__` match_var_name ) == 0 ( nurl_sym_len2 syms match_var_name `__sinkp` )
+                    : b __lent & | | != 0 ( nurl_str_len match_scrut_borrow ) != 0 ( nurl_str_len match_scrut_field ) __scrut_param | ( __is_handle_ty __abt ) ( __is_hown_ty __abt )
                     : s __abn ? __lent ( nurl_str_cat3 __ab `^` ( bck_owning_reads syms bck_mreads `+` ) ) ( nurl_str_cat __ab `` )
                     = __arm_binds ? == 0 ( nurl_str_len __arm_binds ) ( nurl_str_cat __abn `` ) ( nurl_str_cat3 __arm_binds `,` __abn )
                 } {}
@@ -21915,7 +21918,7 @@
     ( nurl_sym_set g_bck `warnset` ? == 0 ( nurl_str_len ws ) ( nurl_str_cat tag `` ) ( nurl_str_cat3 ws ` ` tag ) )
     : s name ( nurl_sym_get2 g_bck `rv_` ids )
     ( bck_emit_error ( nurl_sym_get g_bck `file` ) line
-    ( nurl_str_cat4 `'` name `' is a borrow (a vec_get result, a field read, a view of something another binding owns) and is released or handed over here as if it owned the value. The owner still holds and releases it. Take a copy that is yours where it is bound: ( mem_dup ` ( nurl_str_cat name ` ), or release the value through its owner.` ) ) )
+    ( nurl_str_cat4 `'` name `' is a borrow (a vec_get result, a field read, a view of something another binding owns) and is released or handed over here as if it owned the value. The owner still holds and releases it. Take a copy that is yours where it is bound: ( mem_dup ` ( nurl_str_cat name ` ), or release the value through its owner — when that owner is a parameter of this function, declare the parameter 'sink' so the function owns it.` ) ) )
 }
 
 // Check armed defer bodies in LIFO order against the ownership at the
@@ -34317,7 +34320,8 @@
         // only the side-channel is set so gen_fn_decl_concrete records
         // the index. The consume is enforced at the call site.
         ? == pconv 2
-        { ( nurl_sym_def syms `__last_param_sink__` `1` ) }
+        { ( nurl_sym_def syms `__last_param_sink__` `1` )
+            ( nurl_sym_def syms ( nurl_str_cat pname `__sinkp` ) `1` ) }
         {}
         // Stash `! T E` / `? T` payload metadata for this parameter, mirroring
         // gen_let_or_struct, so a `?? <param>` match can reconstruct a struct /
