@@ -11260,6 +11260,7 @@
     // argument was not one) — the returned-handle propagation below
     // maps the callee's ret-alias indices back to caller bindings.
     : ~ s arg_idents ``
+    : ~ s __clo_args ``
     // Per argument, what it can capture and its type (`;`-separated), for
     // the thread-shared cycle rules (__cc_note_call).
     : ~ s cc_arg_cs ``
@@ -11918,6 +11919,16 @@
         } {}
         : s bck_arg_nm ? ( is_ident_tok bck_arg_tt ) ( nurl_str_cat bck_arg_val `` )
         ( nurl_str_cat `-` `` )
+        // A closure handed over here: what it captured (sound rules — the
+        // owners a callee that keeps it then depends on, after the loop).
+        ? & ( bck_sound ) ( __is_closure_ty at ) {
+            : s __cc_caps ? == bck_arg_tt TT_BACKSLASH ( nurl_sym_get syms `__last_closure_caps__` )
+            ? ( is_ident_tok bck_arg_tt ) ( nurl_sym_get2 syms bck_arg_val `__closure_caps` ) ``
+            ? != 0 ( nurl_str_len __cc_caps ) {
+                : s __cc_one ( nurl_str_cat3 ( nurl_str_int arg_idx ) `:` ( bck_swap_char __cc_caps 32 44 ) )
+                = __clo_args ? == 0 ( nurl_str_len __clo_args ) __cc_one ( nurl_str_cat3 __clo_args ` ` __cc_one )
+            } {}
+        } {}
         = arg_idents ? == 0 ( nurl_str_len arg_idents )
         ( nurl_str_cat bck_arg_nm `` )
         ( nurl_str_cat3 arg_idents ` ` bck_arg_nm )
@@ -12569,6 +12580,27 @@
         }
         = arg_idx + arg_idx 1
     }
+    // Every other owner handed to this call may end up holding the closure
+    // (a callee that keeps it stores it somewhere it can reach): it depends
+    // on what the closure captured (bck `cdep`, decided at the walk).
+    ? != 0 ( nurl_str_len __clo_args ) {
+        : ~ s __ca_rest ( nurl_str_cat __clo_args `` )
+        ~ != 0 ( nurl_str_len __ca_rest ) {
+            : s __ca ( str_first_word __ca_rest ) = __ca_rest ( str_skip_word __ca_rest )
+            : i __cac ( nurl_str_find __ca `:` )
+            : s __cai ( nurl_str_slice __ca 0 __cac )
+            : s __cacaps ( bck_swap_char ( nurl_str_slice __ca + __cac 1 - - ( nurl_str_len __ca ) __cac 1 ) 44 32 )
+            : ~ s __cw_rest ( nurl_str_cat arg_idents `` )
+            : ~ i __cwi 0
+            ~ != 0 ( nurl_str_len __cw_rest ) {
+                : s __cw ( str_first_word __cw_rest ) = __cw_rest ( str_skip_word __cw_rest )
+                ? & & ! ( seq __cw `-` ) != __cwi ( nurl_str_to_int __cai ) ! ( str_contains_word __cacaps __cw ) {
+                    ( bck_stash_cdep __cw ( nurl_lex_line lex ) call_name __cai __cacaps )
+                } {}
+                = __cwi + __cwi 1
+            }
+        }
+    } {}
     ~ != 0 ( nurl_str_len __pk_defer ) {
         : s __pkk ( str_first_word __pk_defer ) = __pk_defer ( str_skip_word __pk_defer )
         : s __pkc ( str_first_word __pk_defer ) = __pk_defer ( str_skip_word __pk_defer )
@@ -20169,6 +20201,30 @@
 // The row is resolved during the analyze walk, which for a function
 // carrying one of these rows is deferred to the end of the module
 // (borrowck_fn_end → g_deferred_bck) so every summary is final.
+// A copy of `str` with every byte `from` replaced by `to`.
+@ bck_swap_char s str i from i to → s {
+    : s out ( nurl_strdup str )
+    : *u op # *u out
+    : i n ( nurl_str_len out )
+    : ~ i k 0
+    ~ < k n {
+        ? == # i . op k from { = . op k # u to } {}
+        = k + k 1
+    }
+    ^ out
+}
+
+// `owner` was handed, beside a closure (argument `cidx`) that captured
+// `caps`, to `callee`: if the callee may keep the closure, `owner` may hold
+// it from here on.
+@ bck_stash_cdep s owner i line s callee s cidx s caps → v {
+    ? & != g_borrowck 0 == g_bck_rec_off 0 {
+        : s cur ( nurl_sym_get g_bck `pcdeps` )
+        : s add ( nurl_str_cat4 owner ` ` ( nurl_str_int line ) ( nurl_str_cat4 ` ` callee ` ` ( nurl_str_cat3 cidx ` ` ( bck_swap_char caps 32 44 ) ) ) )
+        ( nurl_sym_set g_bck `pcdeps` ? == 0 ( nurl_str_len cur ) ( nurl_str_cat add `` ) ( nurl_str_cat3 cur ` ` add ) )
+    } {}
+}
+
 @ bck_stash_pending_call s name i line s callee i argidx s cause b retains → v {
     ? & != g_borrowck 0 == g_bck_rec_off 0 {
         // A definite consume on the same line names the cause: a later
@@ -20317,6 +20373,18 @@
             : s fln ( str_first_word frest )
             = frest ( str_skip_word frest )
             ( bck_record `fieldset` fnm ( nurl_str_to_int fln ) )
+        }
+        // …the owners a kept closure's captures may now live in…
+        : ~ s crest ( nurl_sym_get g_bck `pcdeps` )
+        ( nurl_sym_set g_bck `pcdeps` `` )
+        ~ != 0 ( nurl_str_len crest ) {
+            : s cnm ( str_first_word crest ) = crest ( str_skip_word crest )
+            : s cln ( str_first_word crest ) = crest ( str_skip_word crest )
+            : s ccal ( str_first_word crest ) = crest ( str_skip_word crest )
+            : s cix ( str_first_word crest ) = crest ( str_skip_word crest )
+            : s ccaps ( str_first_word crest ) = crest ( str_skip_word crest )
+            ( nurl_sym_set g_bck `reads` ( bck_swap_char ccaps 44 32 ) )
+            ( bck_record2 `cdep` cnm ( nurl_str_to_int cln ) ccal cix )
         }
         // …and the calls whose move effect is not decidable yet.
         : ~ s prest ( nurl_sym_get g_bck `ppends` )
@@ -20865,7 +20933,7 @@
 @ bck_xlate_row s rec → s {
     : s kind ( bck_field rec 0 )
     : s w ( bck_field rec 1 )
-    : b __pend | | | | | | ( seq kind `pendcall` ) ( seq kind `pendretain` ) ( seq kind `store` ) ( seq kind `pendstore` ) ( seq kind `pendkeep` ) ( seq kind `xfer` ) ( seq kind `maybealias` )
+    : b __pend | | | | | | | ( seq kind `pendcall` ) ( seq kind `pendretain` ) ( seq kind `store` ) ( seq kind `pendstore` ) ( seq kind `pendkeep` ) ( seq kind `xfer` ) ( seq kind `maybealias` ) ( seq kind `cdep` )
     : s w2 ? | | | | | ( seq kind `let` ) ( seq kind `assign` ) ( seq kind `move` ) ( seq kind `borrow` )
     | | ( seq kind `maybemove` ) ( seq kind `maybealias` ) ( seq kind `fieldset` ) __pend
     ( nurl_str_int ( bck_intern w ) ) ( nurl_str_cat w `` )
@@ -21307,6 +21375,26 @@
                 : s after_defers ( bck_apply_defers st )
                 = st ( nurl_str_cat `!` `` )
                 = p hi
+                = done T
+            } {}
+            ? & ! done ( seq kind `cdep` ) {
+                // A closure that captured the read owners went to a callee
+                // with this owner beside it. Unless the callee only invokes
+                // the closure, this owner may hold it: it depends on them.
+                ? ! ( nurl_sym_has_word g_fn_invoke_only ( bck_field rec 5 ) ( bck_field rec 6 ) ) {
+                    = g_bck_has_borrow 1
+                    : s ows ( bck_field rec 1 )
+                    : ~ s cr ( bck_borrow_owners ( bck_field rec 2 ) )
+                    ~ != 0 ( nurl_str_len cr ) {
+                        : s c ( str_first_word cr ) = cr ( str_skip_word cr )
+                        : s dk ( bck_bkey `dd_` c )
+                        : s dl ( nurl_sym_get g_bck dk )
+                        ? ! ( str_contains_word dl ows ) { ( nurl_sym_set g_bck dk ? == 0 ( nurl_str_len dl ) ( nurl_str_cat ows `` ) ( nurl_str_cat3 dl ` ` ows ) ) } {}
+                        : s al ( nurl_sym_get g_bck ( bck_bkey `bsrcs` `` ) )
+                        ? ! ( str_contains_word al c ) { ( nurl_sym_set g_bck ( bck_bkey `bsrcs` `` ) ? == 0 ( nurl_str_len al ) ( nurl_str_cat c `` ) ( nurl_str_cat3 al ` ` c ) ) } {}
+                    }
+                } {}
+                = p + p 1
                 = done T
             } {}
             ? & ! done ( seq kind `borrow` ) {
@@ -21771,6 +21859,16 @@
 @ bck_borrow_end s st i sid i line s why i depth → s {
     : ~ s out st
     : s sids ( nurl_str_int sid )
+    // Owners that may hold a closure which captured `sid` (bck `cdep`).
+    : ~ s drest ( nurl_sym_get g_bck ( bck_bkey `dd_` sids ) )
+    ~ != 0 ( nurl_str_len drest ) {
+        : s ds ( str_first_word drest ) = drest ( str_skip_word drest )
+        : i d ( nurl_str_to_int ds )
+        ? ! ( bck_dead_state ( bck_st_get out d ) ) {
+            = out ( bck_st_set out d BCK_INVALID )
+            ( nurl_sym_set g_bck ( bck_bkey `bv_` ds ) ( nurl_str_cat4 ( nurl_str_int line ) ` ` sids ( nurl_str_cat ` !dep ` why ) ) )
+        } {}
+    }
     : ~ s rest ( nurl_sym_get g_bck ( bck_bkey `bb_` sids ) )
     ~ != 0 ( nurl_str_len rest ) {
         : s bs ( str_first_word rest ) = rest ( str_skip_word rest )
@@ -21795,6 +21893,14 @@
     : s ln ( str_first_word info ) = info ( str_skip_word info )
     : s srcid ( str_first_word info ) = info ( str_skip_word info )
     : s sname ( nurl_sym_get2 g_bck `rv_` srcid )
+    ? ( seq ( str_first_word info ) `!dep` ) {
+        : s dwhy ( str_skip_word info )
+        : s d1 ( nurl_str_cat4 `'` name `' may hold a closure that captured '` sname )
+        : s d2 ( nurl_str_cat4 `', and '` sname `' ended at line ` ( nurl_str_cat3 ln ` — ` dwhy ) )
+        : s d3 ( nurl_str_cat4 `. Running that closure now would read freed memory. End '` sname ( nurl_str_cat3 `' only after '` name `' is done with the closure, or have the closure capture a copy of its own: ( mem_dup ` ) ( nurl_str_cat sname ` ) bound to a separate name.` ) )
+        ( bck_emit_error ( nurl_sym_get g_bck `file` ) useline ( nurl_str_cat3 d1 d2 d3 ) )
+        ^ v
+    } {}
     : s m1 ( nurl_str_cat4 `'` name `' borrows from '` sname )
     : s m2 ( nurl_str_cat4 `', which ended at line ` ln ` — ` info )
     : s m3 ( nurl_str_cat4 `. A borrow (a vec_get result, a field read, a view) lives only as long as its source is unchanged, so '` name `' is gone too. Read it before that line, or take a copy that lives on its own where it is bound: ( mem_dup ` ( nurl_str_cat name ` ).` ) )
