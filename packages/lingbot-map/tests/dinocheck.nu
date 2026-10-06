@@ -22,6 +22,8 @@ $ `src/preproc.nu`
 // The ImageNet statistics the aggregator applies before the trunk sees
 // anything. Doing it here, not in preproc, mirrors the reference —
 // applying them twice is a quiet way to get a plausible wrong answer.
+unsafe
+
 @ imnet_norm * f p i h i w → v {
     : ( Vec u ) mean__v ( vec_zeroed [u] 24 )
     : *f mean # *f ( vec_data [u] mean__v )
@@ -40,6 +42,8 @@ $ `src/preproc.nu`
         = c + c 1
     }
 }
+
+unsafe
 
 @ main → i {
     ? < ( nurl_argc ) 3 { ( nurl_print `usage: dinocheck <ckpt.pt> <frame>\n` ) ^ 2 } {}

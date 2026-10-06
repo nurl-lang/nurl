@@ -37,6 +37,8 @@ $ `stdlib/core/string.nu`
     ^ ( response_text 200 `hello async\n` )
 }
 
+unsafe
+
 @ run_async_http_test → v {
     ( runtime_init 4 )
 

@@ -42,6 +42,8 @@ $ `stdlib/core/vec.nu`
 }
 
 // 2. Generic: same, through instantiation (the shape vec_free_with has).
+unsafe
+
 @ run_each [A] ( Vec A ) v ( @ v A ) drop → v {
     : i n ( vec_len [A] v )
     : *A buf # *A ( vec_data [A] v )

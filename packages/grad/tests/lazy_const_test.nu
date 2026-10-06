@@ -60,6 +60,8 @@ $ `deps/gpukit/src/dev.nu`
 
 // loss = sum((X·W)²) with X a const and W a param. `lazy` picks how X is
 // declared; the graph is otherwise identical.
+unsafe
+
 @ run_once b lazy i dtype * u out → b {
     : GTape tp ( tape_new )
     : ( Vec f ) wv ( wvals )
@@ -102,6 +104,8 @@ $ `deps/gpukit/src/dev.nu`
     ( gk_close kit )
     ^ ok
 }
+
+unsafe
 
 @ main → i {
     : *u ea ( nurl_alloc 24 )

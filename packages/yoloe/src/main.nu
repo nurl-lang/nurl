@@ -100,6 +100,8 @@ $ `window.nu`
 // Run the network on one image, drawing boxes (and, when `want_masks`, the
 // per-object segmentation mask) onto `im`. When `verbose`, prints one line per
 // detection. Returns the detection count.
+unsafe
+
 @ process_frame Image im OGraph g Engine e ( Vec String ) names i nc b want_boxes b want_masks b verbose → i {
     : Letterbox lb ( letterbox im 640 )
     : ( Vec u ) host ( img_to_nchw_norm . lb img )

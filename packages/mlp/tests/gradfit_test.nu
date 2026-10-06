@@ -46,6 +46,8 @@ $ `src/gradfit.nu`
 
 // p95 (nearest-rank) of per-row MSEs + mean, and outlier flags vs that
 // threshold. Returns the flags; writes mean mse + threshold through cells.
+unsafe
+
 @ eval_model Mlp m ( Vec f ) X i n ( Vec f ) O i no i d * u meanb * u thrb → ( Vec i ) {
     : ( Vec f ) mses ( vec_new [f] )
     : ~ f tot 0.0
@@ -69,6 +71,8 @@ $ `src/gradfit.nu`
     }
     ^ flags
 }
+
+unsafe
 
 @ main → i {
     // the oracle recipe's data shape: 2-D latent → 6-D + noise, 60 outliers

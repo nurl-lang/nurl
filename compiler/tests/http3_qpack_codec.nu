@@ -43,11 +43,15 @@ $ `stdlib/ext/http3_qpack.nu`
     }
 }
 
+unsafe
+
 @ hdr_name ( Vec Header ) hs i k → s {
     : *Header hp ( vec_data [Header] hs )
     : Header h . hp k
     ^ ( string_data . h name )
 }
+
+unsafe
 
 @ hdr_value ( Vec Header ) hs i k → s {
     : *Header hp ( vec_data [Header] hs )

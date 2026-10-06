@@ -186,6 +186,8 @@ $ `stdlib/ext/json.nu`
 // key rather than betting on the first. That is the case during a key
 // rotation, when the provider publishes the old and the new key and the
 // tokens in flight carry no `kid` to tell them apart.
+unsafe
+
 @ jwks_select_from ( Vec JwkKey ) ks s kid s alg i from → i {
     : i n ( vec_len [JwkKey] ks )
     : *JwkKey data ( vec_data [JwkKey] ks )
@@ -200,6 +202,8 @@ $ `stdlib/ext/json.nu`
 
 // Does the set hold a key with this `kid` at all? Used to decide whether
 // an unknown `kid` justifies re-fetching the JWKS.
+unsafe
+
 @ jwks_has_kid ( Vec JwkKey ) ks s kid → b {
     : i n ( vec_len [JwkKey] ks )
     : *JwkKey data ( vec_data [JwkKey] ks )

@@ -9,6 +9,8 @@ $ `src/rope.nu`
 
 : i PSI 6  // special tokens per frame: camera + 4 registers + scale
 
+unsafe
+
 @ case i heads i ppf i pph i ppw i fstart → v {
     : i per + PSI * pph ppw
     : i n * ppf per

@@ -55,10 +55,14 @@ $ `stdlib/std/arc.nu`
     ^ bytes
 }
 
+unsafe
+
 @ read_word ( Vec u ) bytes → i {
     : *u p ( vec_data [u] bytes )
     ^ + + + << # i . p 0 24 << # i . p 1 16 << # i . p 2 8 # i . p 3
 }
+
+unsafe
 
 @ buffered_frame ( Vec u ) bytes → b {
     ? < ( vec_len [u] bytes ) 9 { ^ F } {}

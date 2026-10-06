@@ -19,6 +19,8 @@ $ `src/wasmkernel.nu`
 
 @ has String hay s needle → b { ^ >= ( nurl_str_find ( string_data hay ) needle ) 0 }
 
+unsafe
+
 @ main → i {
     // ── validation ────────────────────────────────────────────────
     ( pb `plain CUDA source accepted:      ` ( cuda_src_ok `__device__ double f(long long x) { return 1.0; }` ) )

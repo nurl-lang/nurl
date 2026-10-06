@@ -68,20 +68,30 @@ $ `image.nu`
 // early release).
 : XWin { s ctl }
 
+unsafe
+
 @ XWin_share XWin h → XWin { ^ @ XWin { # s ( rcbox_share # i . h ctl ) } }
 
 @ XWin_drop sink XWin h → v { ( mem_forget h ) ( rcbox_release [XWinImpl] # i . h ctl ) }
 
+unsafe
+
 @ __XWin_ptr XWin h → *XWinImpl { ^ ( rcbox_ptr [XWinImpl] # i . h ctl ) }
 
 // The window that never opened (ok=0): w×h is still the frame size.
+unsafe
+
 @ xwin_none i w i h → XWin { ^ @ XWin { # s ( rcbox_new [XWinImpl] @ XWinImpl { 0 0 0 0 ( vec_new [u] ) w h 0 } ) } }
+
+unsafe
 
 @ xwin_ok XWin h → b { : *XWinImpl x ( __XWin_ptr h ) ^ != . x ok 0 }
 
 // Free the XImage (not its pixels — they are the Vec's: XDestroyImage frees
 // a non-null data pointer, so it is cleared first) and the GC, and close the
 // display, which releases the window with it.
+unsafe
+
 @ __xwin_release i dpy i gc i img → v {
     ? != img 0 {
         ( nurl_poke # *u img 2 0 )  // XImage.data @16
@@ -92,6 +102,8 @@ $ `image.nu`
 }
 
 // Open a window of w×h titled `title`. ok=0 if no X display (run headless).
+unsafe
+
 @ xwin_open i w i h s title → XWin {
     : *u dpy ( XOpenDisplay # *u 0 )
     ? == # i dpy 0 { ^ ( xwin_none w h ) } {}
@@ -116,6 +128,8 @@ $ `image.nu`
 }
 
 // Blit one RGB Image into the window. The frame must match the window size.
+unsafe
+
 @ xwin_show XWin x__h Image im → v {
     : *XWinImpl x ( __XWin_ptr x__h )
     ? == . x ok 0 { ^ {} } {}
@@ -141,6 +155,8 @@ $ `image.nu`
 
 // Drain pending events; return T if the user asked to close (key, click, or
 // the window-manager close button).
+unsafe
+
 @ xwin_should_close XWin x__h → b {
     : *XWinImpl x ( __XWin_ptr x__h )
     ? == . x ok 0 { ^ T } {}
@@ -158,6 +174,8 @@ $ `image.nu`
 }
 
 // Close the window now (optional — its last owner does it anyway).
+unsafe
+
 @ xwin_close XWin x__h → v {
     : *XWinImpl x ( __XWin_ptr x__h )
     ( __xwin_release . x dpy . x gc . x img )

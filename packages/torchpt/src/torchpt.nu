@@ -93,12 +93,16 @@ $ `stdlib/core/rcbox.nu`
 // every copy is the same open checkpoint, and the last owner releases it.
 : Pt { s ctl }
 
+unsafe
+
 @ Pt_share Pt h → Pt { ^ @ Pt { # s ( rcbox_share # i . h ctl ) } }
 
 @ Pt_drop sink Pt h → v {
     ( mem_forget h )
     ( rcbox_release [PtImpl] # i . h ctl )
 }
+
+unsafe
 
 @ __Pt_ptr Pt h → *PtImpl { ^ ( rcbox_ptr [PtImpl] # i . h ctl ) }
 
@@ -120,10 +124,14 @@ $ `stdlib/core/rcbox.nu`
 
 // ── accessors ───────────────────────────────────────────────────────
 
+unsafe
+
 @ pt_n_tensors Pt p__h → i {
     : *PtImpl p ( __Pt_ptr p__h )
     ^ ( vec_len [PtTensor] . p tensors )
 }
+
+unsafe
 
 @ __pt_at * PtImpl p i idx → ?PtTensor { ^ ( vec_get [PtTensor] . p tensors idx ) }
 
@@ -142,6 +150,8 @@ $ `stdlib/core/rcbox.nu`
     ?? ( __pt_at p idx ) { T t → ^ . t ndim F → ^ 0 }
 }
 
+unsafe
+
 @ pt_dim Pt p__h i idx i j → i {
     : *PtImpl p ( __Pt_ptr p__h )
     ?? ( __pt_at p idx ) {
@@ -152,6 +162,8 @@ $ `stdlib/core/rcbox.nu`
         F → ^ 0
     }
 }
+
+unsafe
 
 @ pt_stride Pt p__h i idx i j → i {
     : *PtImpl p ( __Pt_ptr p__h )
@@ -185,6 +197,8 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Raw bytes of a tensor, addressed in the mapping. Valid while the Pt is.
+unsafe
+
 @ pt_tensor_ptr Pt p__h i idx → *u {
     : *PtImpl p ( __Pt_ptr p__h )
     ?? ( __pt_at p idx ) {
@@ -392,6 +406,8 @@ $ `stdlib/core/rcbox.nu`
 // not a mapping (the Pt holds it for as long as the tensors are read);
 // pt_open hands in an empty Vec for a mapping, which it owns until this
 // succeeds.
+unsafe
+
 @ __pt_parse * u m i sz sink ( Vec u ) keep → !Pt String {
     : !ZipArchive ZipErr zr ( zip_open_ptr m sz )
     ?? zr {
@@ -468,6 +484,8 @@ $ `stdlib/core/rcbox.nu`
     }
 }
 
+unsafe
+
 @ pt_open s path → !Pt String {
     ? != ( posix_const `MAP_PRIVATE` ) -1 {
         : i32 fd ( open path # i32 ( posix_const `O_RDONLY` ) # i32 0 )
@@ -525,6 +543,8 @@ $ `stdlib/core/rcbox.nu`
 // Storage-element offset of a tensor's logical element `n`, walking the
 // shape from the fastest-varying axis outward. Contiguous tensors take
 // the identity path, so the common case costs one comparison.
+unsafe
+
 @ __pt_elem_index * PtImpl p i idx i n → i {
     ?? ( __pt_at p idx ) {
         F → ^ 0
@@ -547,11 +567,15 @@ $ `stdlib/core/rcbox.nu`
     }
 }
 
+unsafe
+
 @ __pt_u16 * u P i o → i { ^ + # i . P o * # i . P + o 1 256 }
 
 @ __pt_u32 * u P i o → i { ^ + ( __pt_u16 P o ) * ( __pt_u16 P + o 2 ) 65536 }
 
 @ __pt_u64 * u P i o → i { ^ + ( __pt_u32 P o ) * ( __pt_u32 P + o 4 ) 4294967296 }
+
+unsafe
 
 @ __pt_elem_f32bits i dtype * u P i off → i {
     ? == dtype PKS_F32 { ^ ( __pt_u32 P off ) } {}
@@ -608,6 +632,8 @@ $ `stdlib/core/rcbox.nu`
 
 // Read `count` elements starting at `first` straight into a caller's f64
 // buffer — the shape the tensor package wants, without a byte round-trip.
+unsafe
+
 @ pt_read_f64 Pt p__h i idx i first i count * f dst → b {
     : *PtImpl p ( __Pt_ptr p__h )
     ? | < idx 0 >= idx ( pt_n_tensors p__h ) { ^ F } {}

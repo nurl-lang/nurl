@@ -73,9 +73,13 @@ $ `index_html_data.nu`
 // returns) releases the engine, the graphs and the buffers.
 : Demo { s ctl }
 
+unsafe
+
 @ Demo_share Demo h → Demo { ^ @ Demo { # s ( rcbox_share # i . h ctl ) } }
 
 @ Demo_drop sink Demo h → v { ( mem_forget h ) ( rcbox_release [DemoState] # i . h ctl ) }
+
+unsafe
 
 @ __Demo_ptr Demo h → *DemoState { ^ ( rcbox_ptr [DemoState] # i . h ctl ) }
 
@@ -216,6 +220,8 @@ $ `index_html_data.nu`
 // 512-float embedding into tpe slot `slot`. The tokens ride as int64
 // [1,77]; the n1 text-encoder export ends in an L2 normalize, so the
 // slot lands in exactly the space the contrastive head was traced with.
+unsafe
+
 @ yd_encode_prompt * DemoState st s text i slot → b {
     : Engine e . st eng
     : ( Vec i ) row ( bpe_tokenize . st tk text 77 )
@@ -248,6 +254,8 @@ $ `index_html_data.nu`
 // shadow an enabled custom prompt of the same object ('a dog' 0.63) and
 // the anchor vanished. Restricting the argmax to enabled classes makes
 // toggles behave the way the chips read.
+unsafe
+
 @ yd_decode * u o i na i nc f thresh ( Vec i ) flags → ( Vec Detection ) {
     : ( Vec Detection ) dets ( vec_new [Detection] )
     : ~ i a 0
@@ -276,6 +284,8 @@ $ `index_html_data.nu`
 }
 
 // ── inference: one frame in, masks drawn on, detection JSON out ─────
+
+unsafe
 
 @ yd_detect * DemoState st Image im f conf b want_masks ( Vec i ) flags → Json {
     : Engine e . st eng
@@ -364,6 +374,8 @@ $ `index_html_data.nu`
 
 // ── HTTP handlers ────────────────────────────────────────────────────
 
+unsafe
+
 @ h_index Demo d HttpRequest req Params p → HttpResponse {
     : *DemoState st ( __Demo_ptr d )
     : HttpResponse r ( response_new 200 )
@@ -378,6 +390,8 @@ $ `index_html_data.nu`
 }
 
 // GET /wasm/model — the detector .onnx for the in-browser wasm engine.
+unsafe
+
 @ h_wasm_model Demo d HttpRequest req Params p → HttpResponse {
     : *DemoState st ( __Demo_ptr d )
     : HttpResponse r ( response_new 200 )
@@ -389,6 +403,8 @@ $ `index_html_data.nu`
 // GET /tpe — the CURRENT vocabulary embeddings (nc × 512 f32, raw LE)
 // with the class names in X-Classes. The wasm client seeds from this and
 // re-fetches after /prompt so both engines share one vocabulary.
+unsafe
+
 @ h_tpe Demo d HttpRequest req Params p → HttpResponse {
     : *DemoState st ( __Demo_ptr d )
     // no embeddings without the promptable export (the slab is empty)
@@ -419,6 +435,8 @@ $ `index_html_data.nu`
 @ h_health HttpRequest req Params p → HttpResponse {
     ^ ( response_text 200 `ok` )
 }
+
+unsafe
 
 @ h_detect Demo d HttpRequest req Params p → HttpResponse {
     : *DemoState st ( __Demo_ptr d )
@@ -451,6 +469,8 @@ $ `index_html_data.nu`
 // POST /prompt — body is the prompt text. Encodes it through the
 // MobileCLIP text encoder ON the GPU and appends it to the vocabulary;
 // the next /detect already sees it. JSON out: { id, name, n }.
+unsafe
+
 @ h_prompt Demo d HttpRequest req Params p → HttpResponse {
     : *DemoState st ( __Demo_ptr d )
     ? == . st kmax 0 {
@@ -520,6 +540,8 @@ $ `index_html_data.nu`
 }
 
 // page_path empty → the built-in template.
+unsafe
+
 @ yd_render_index s page_path * DemoState st → b {
     : ~ b ok F
     : String tsrc ? > ( nurl_str_len page_path ) 0
@@ -561,6 +583,8 @@ $ `index_html_data.nu`
     }
     ^ ok
 }
+
+unsafe
 
 @ main → i {
     : ArgParser ap ( args_new `yoloe-demo` `live YOLOE segmentation in the browser, served by pure NURL` )

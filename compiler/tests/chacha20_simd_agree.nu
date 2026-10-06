@@ -14,6 +14,8 @@ $ `stdlib/std/chacha20poly1305.nu`
 
 : ~ i g_bad 0
 
+unsafe
+
 @ sweep i counter i doff → v {
     : ( Vec u ) key ( vec_with_cap [u] 32 )
     : ( Vec u ) non ( vec_with_cap [u] 12 )

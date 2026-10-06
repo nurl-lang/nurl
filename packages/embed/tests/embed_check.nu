@@ -8,6 +8,8 @@ $ `stdlib/std/fs.nu`
 $ `stdlib/ext/env.nu`
 $ `src/model.nu`
 
+unsafe
+
 @ main → i {
     : ( Vec String ) av ( env_args_list )
     : ~ i rc 0

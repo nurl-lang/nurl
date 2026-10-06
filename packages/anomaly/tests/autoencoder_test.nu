@@ -103,6 +103,8 @@ $ `src/dynamic.nu`
     }
 }
 
+unsafe
+
 @ main → i {
     : String root ( env_var_or `ANOMALY_TEST_DIR` `./anomaly_ae_test` )
     : Store st ( store_open ( string_data root ) )

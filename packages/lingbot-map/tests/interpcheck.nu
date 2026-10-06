@@ -11,6 +11,8 @@ $ `src/interp.nu`
 // The same closed-form grid the oracle builds: smooth enough that a
 // wrong kernel shows as a smooth error rather than noise, structured
 // enough that a transposed axis is obvious.
+unsafe
+
 @ fill * f p i w i h i planes → v {
     : ~ i c 0
     ~ < c planes {
@@ -29,6 +31,8 @@ $ `src/interp.nu`
         = c + c 1
     }
 }
+
+unsafe
 
 @ case i sw i sh i planes i dw i dh → v {
     : ( Vec u ) src__v ( vec_zeroed [u] * 8 * planes * sw sh )

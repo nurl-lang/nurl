@@ -17,6 +17,8 @@ $ `stdlib/core/string.nu`
 
 // The __build_argv shape: the argument's address lands in a heap block the
 // callee returns. Nothing in here ever frees that address.
+unsafe
+
 @ borrow_into_block s text → s {
     : s block ( nurl_alloc 16 )
     : *u text_p # *u text
@@ -29,6 +31,8 @@ $ `stdlib/core/string.nu`
 // summary is what a call site consults, so the indirection must not
 // upgrade a borrow into a move either.
 @ forward_into_block s text → s { ^ ( borrow_into_block text ) }
+
+unsafe
 
 @ borrowed → v {
     : s owned ( nurl_str_cat `still` ` here` )
@@ -48,6 +52,8 @@ $ `stdlib/core/string.nu`
     ( nurl_print `\n` )
     ( string_free owner )
 }
+
+unsafe
 
 @ main → i {
     : i before ( nurl_free_count )

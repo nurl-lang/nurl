@@ -38,6 +38,8 @@ $ `stdlib/core/vec.nu`
     }
 }
 
+unsafe
+
 @ main → i {
     : i a0 - ( nurl_alloc_count ) ( nurl_free_count )
     : ~ i k 0

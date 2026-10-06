@@ -103,6 +103,8 @@ $ `stdlib/ext/compress.nu`
     ^ F
 }
 
+unsafe
+
 @ grpc_method_path s path → b {
     : i n ( nurl_str_len path )
     ? < n 4 { ^ F } {}
@@ -257,6 +259,8 @@ $ `stdlib/ext/compress.nu`
         = . d pos 0
     } {}
 }
+
+unsafe
 
 @ grpc_decoder_next inout GrpcDecoder d → !GrpcMessage GrpcError {
     : i available - ( vec_len [u] . d pending ) . d pos

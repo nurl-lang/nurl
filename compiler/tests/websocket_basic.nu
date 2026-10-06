@@ -34,6 +34,8 @@ $ `stdlib/ext/websocket.nu`
     ( bytes_extend_str buf raw )
 }
 
+unsafe
+
 @ vec_bytes_eq_hex ( Vec u ) got s want_hex → b {
     : i n ( vec_len [u] got )
     : i wh ( nurl_str_len want_hex )
@@ -67,6 +69,8 @@ $ `stdlib/ext/websocket.nu`
     ( vec_push [Header] . r headers ( header_new `Sec-WebSocket-Key` `dGhlIHNhbXBsZSBub25jZQ==` ) )
     ^ r
 }
+
+unsafe
 
 @ section_a → v {
     ( nurl_print `--- A handshake ---\n` )
@@ -106,6 +110,8 @@ $ `stdlib/ext/websocket.nu`
     }
     ( request_free r )
 }
+
+unsafe
 
 @ section_b → v {
     ( nurl_print `--- B ws_is_upgrade ---\n` )
@@ -196,6 +202,8 @@ $ `stdlib/ext/websocket.nu`
     ( print_bool `over_max_rejected` ! ( ws_validate_utf8 cp ) )
     ( vec_free [u] cp )
 }
+
+unsafe
 
 @ section_d → v {
     ( nurl_print `--- D frame serializer ---\n` )

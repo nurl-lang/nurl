@@ -517,6 +517,8 @@ $ `stdlib/std/time.nu`
 }
 
 // Count one cell into its column, in place.
+unsafe
+
 @ __it_col_add * ImpCol c Json v → v {
     = . c filled + . c filled 1
     ? == ( string_len . c sample ) 0 {
@@ -569,6 +571,8 @@ $ `stdlib/std/time.nu`
     ? == . c n_text . c filled { ^ `text` } {}
     ^ `mixed`
 }
+
+unsafe
 
 @ __it_describe ( Vec Json ) rows → ( Vec ImpCol ) {
     : ( Vec ImpCol ) cols ( vec_new [ImpCol] )

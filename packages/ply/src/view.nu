@@ -47,12 +47,16 @@ $ `stdlib/core/rcbox.nu`
 
 : VwState { s ctl }
 
+unsafe
+
 @ VwState_share VwState h → VwState { ^ @ VwState { # s ( rcbox_share # i . h ctl ) } }
 
 @ VwState_drop sink VwState h → v {
     ( mem_forget h )
     ( rcbox_release [VwStateImpl] # i . h ctl )
 }
+
+unsafe
 
 @ __VwState_ptr VwState h → *VwStateImpl { ^ ( rcbox_ptr [VwStateImpl] # i . h ctl ) }
 
@@ -75,6 +79,8 @@ $ `stdlib/core/rcbox.nu`
     ^ out
 }
 
+unsafe
+
 @ h_vw_index VwState h HttpRequest req Params p → HttpResponse {
     : *VwStateImpl st ( __VwState_ptr h )
     : HttpResponse r ( response_new 200 )
@@ -84,6 +90,8 @@ $ `stdlib/core/rcbox.nu`
     ( response_set_body_str r ( string_data . st page ) )
     ^ r
 }
+
+unsafe
 
 @ h_vw_cloud VwState h HttpRequest req Params p → HttpResponse {
     : *VwStateImpl st ( __VwState_ptr h )
@@ -98,6 +106,8 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Serve `path` until interrupted. Returns a process exit code.
+unsafe
+
 @ vw_serve s path s host i port s page_override i quiet i tls → i {
     : !( Vec u ) IoErr rd ( read_file_bytes path )
     : ~ ( Vec u ) blob ( vec_new [u] )

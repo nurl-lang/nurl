@@ -20,6 +20,8 @@ $ `stdlib/ext/env.nu`
     }
 }
 
+unsafe
+
 @ main → i {
     // ── Vec[u] CRUD via the raw vec_* API works, demonstrating that the
     //    byte buffer IS just a Vec[u] under the hood. ─────────────────

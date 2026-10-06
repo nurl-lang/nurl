@@ -55,6 +55,8 @@ $ `stdlib/std/float.nu`
 }
 
 // grid value at (channel, cy, cx) for a 13×13 grid.
+unsafe
+
 @ __gv * u grid i ch i cy i cx → f { ^ ( nurl_peek_f32 grid + * ch 169 + * cy 13 cx ) }
 
 // Decode the grid into detections above `thresh`.

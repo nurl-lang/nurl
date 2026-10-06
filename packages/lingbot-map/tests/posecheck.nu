@@ -20,6 +20,8 @@ $ `src/camhead.nu`
 $ `src/preproc.nu`
 $ `src/geom.nu`
 
+unsafe
+
 @ imnet_norm * f p i h i w → v {
     : ( Vec u ) mean__v ( vec_zeroed [u] 24 )
     : *f mean # *f ( vec_data [u] mean__v )
@@ -39,12 +41,16 @@ $ `src/geom.nu`
     }
 }
 
+unsafe
+
 @ prow s label * f p i n → v {
     ( nurl_print label )
     : ~ i j 0
     ~ < j n { ( nurl_print ` ` ) ( nurl_print ( nurl_str_float . p j ) ) = j + j 1 }
     ( nurl_print `\n` )
 }
+
+unsafe
 
 @ main → i {
     ? < ( nurl_argc ) 3 { ( nurl_print `usage: posecheck <ckpt.pt> <frame>\n` ) ^ 2 } {}

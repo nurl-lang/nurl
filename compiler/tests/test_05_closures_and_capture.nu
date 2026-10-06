@@ -42,6 +42,8 @@
 }
 
 // ── (3) Higher-order: ota closure ja sovella se sliceen ──────
+unsafe
+
 @ map_i [i src ( @ i i ) f → [i {
     : i n . src length
     : *i buf # *i ( malloc * n 8 )
@@ -63,7 +65,7 @@
     ^ f
 }
 
-@ main → i {
+unsafe @ main → i {
     // (1) Parametri-vapaa closure
     : ( @ s ) greet ( make_greeting )
     ( puts `greet=` )

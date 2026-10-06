@@ -29,6 +29,8 @@ $ `stdlib/std/fs.nu`
         } F e → { ^ F } }
 }
 
+unsafe
+
 @ main → i {
     // RLIMIT_NOFILE (7): soft and hard limit 64.
     : s lim ( nurl_alloc 16 )

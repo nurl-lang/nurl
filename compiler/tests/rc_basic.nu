@@ -2,6 +2,8 @@
 
 $ `stdlib/std/rc.nu`
 
+unsafe
+
 @ main → i {
     // rc_new starts the count at 1.
     : ( Rc i ) r ( rc_new [i] 1000 )

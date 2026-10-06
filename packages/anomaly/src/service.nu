@@ -464,6 +464,8 @@ $ `stdlib/std/thread.nu`
 
 // The verdict as JSON: the "collecting" shape before the model is
 // ready, the full one after.
+unsafe
+
 @ __an_verdict_json Model mo__h s mname Json body Verdict vd → Json {
     : *ModelImpl mo ( _Model_ptr mo__h )
     ? . vd ready {} {
@@ -561,6 +563,8 @@ $ `stdlib/std/thread.nu`
 // stamps it, as before (-3: the model's own clock, a tick or the wall).
 // Returns the seconds, -1 for a timestamp that could not be read, -2
 // for one older than the newest stored point.
+unsafe
+
 @ __an_point_time Model mo__h Json body → i {
     : *ModelImpl mo ( _Model_ptr mo__h )
     ? ( json_obj_has body `timestamp` ) {} { ^ -3 }
@@ -924,6 +928,8 @@ $ `stdlib/std/thread.nu`
 // is watched".
 // What the flatline's margin asks of each column, in rows and — when the
 // ring has a step to read it by — in minutes.
+unsafe
+
 @ _an_flat_alert_json Model mo__h → Json {
     : *ModelImpl mo ( _Model_ptr mo__h )
     : *MetaImpl mm ( _Meta_ptr . mo meta )
@@ -957,6 +963,8 @@ $ `stdlib/std/thread.nu`
     ( json_obj_set o `note` ( json_str_lit `Per column, the run of identical readings this margin flags at. The reference is the column's own habit, so the same margin asks more of a coarsely quantised column than of a smooth one — raise or lower the margin to move every column's line together, in proportion to what each one normally does.` ) )
     ^ o
 }
+
+unsafe
 
 @ _an_flat_json Meta mm__h → Json {
     : *MetaImpl mm ( _Meta_ptr mm__h )
@@ -996,6 +1004,8 @@ $ `stdlib/std/thread.nu`
     ^ o
 }
 
+unsafe
+
 @ __an_ae_json Store st s name Meta mm__h → Json {
     : *MetaImpl mm ( _Meta_ptr mm__h )
     : Json o ( json_obj_new )
@@ -1031,6 +1041,8 @@ $ `stdlib/std/thread.nu`
 }
 
 // The forecast version's block of the metadata response (src/forecast.nu).
+unsafe
+
 @ __an_fc_json Store st s name Meta mm__h → Json {
     : *MetaImpl mm ( _Meta_ptr mm__h )
     : ~ Json o ( json_obj_new )
@@ -1060,6 +1072,8 @@ $ `stdlib/std/thread.nu`
 // ring as it stands, and switch it on. Optional body: {"season": S,
 // "window_points": N, "window_minutes": M} — written into the version's
 // config first (S = the seasonal period in rows, 0 = none).
+unsafe
+
 @ __an_h_train_fc HttpRequest req Params p → HttpResponse {
     : String mname ( __an_param_model p )
     ? ( __an_name_ok ( string_data mname ) ) {} {
@@ -1115,6 +1129,8 @@ $ `stdlib/std/thread.nu`
 // GET /models/dynamic/<model>/forecast?horizon=H: the next H values of
 // every watched feature from the states as they stand (the ring's
 // newest rows absorbed first), with standard errors.
+unsafe
+
 @ __an_h_forecast HttpRequest req Params p → HttpResponse {
     : String mname ( __an_param_model p )
     ? ( __an_name_ok ( string_data mname ) ) {} {
@@ -1196,6 +1212,8 @@ $ `stdlib/std/thread.nu`
     }
     ^ resp
 }
+
+unsafe
 
 @ __an_h_data HttpRequest req Params p → HttpResponse {
     : String mname ( __an_param_model p )
@@ -1641,6 +1659,8 @@ $ `stdlib/std/thread.nu`
 // what survived `limit`, `only` and `versions`, so a filtered response
 // still says how much it filtered. A row a reader has labelled carries
 // its `label` (POST …/labels).
+unsafe
+
 @ __an_h_anomalies HttpRequest req Params p → HttpResponse {
     : String mname ( __an_param_model p )
     ? ( __an_name_ok ( string_data mname ) ) {} {
@@ -2024,6 +2044,8 @@ $ `stdlib/std/thread.nu`
 // the label rides on the row through the scan and a false positive is
 // left out of calibration and fine-tune. `none` withdraws an earlier
 // label. Recorded with who said it and when; verdicts are untouched.
+unsafe
+
 @ __an_h_label HttpRequest req Params p → HttpResponse {
     : String mname ( __an_param_model p )
     ? ( __an_name_ok ( string_data mname ) ) {} {
@@ -2108,6 +2130,8 @@ $ `stdlib/std/thread.nu`
 
 // GET /models/dynamic/<m>/labels — the labels in force, each with the
 // row's current `index` or `evicted` when the ring has let the row go.
+unsafe
+
 @ __an_h_labels HttpRequest req Params p → HttpResponse {
     : String mname ( __an_param_model p )
     ? ( __an_name_ok ( string_data mname ) ) {} {
@@ -2202,6 +2226,8 @@ $ `stdlib/std/thread.nu`
 // that is the `llm_…` scratch namespace, for an administrator any name.
 // The target must not exist yet; forking over a model would be a reset in
 // disguise, and reset has its own route.
+unsafe
+
 @ __an_h_fork HttpRequest req Params p → HttpResponse {
     : String src ( __an_param_model p )
     ? ( __an_name_ok ( string_data src ) ) {} {
@@ -2455,6 +2481,8 @@ $ `stdlib/std/thread.nu`
     ^ r
 }
 
+unsafe
+
 @ __an_h_schedule HttpRequest req Params p → HttpResponse {
     : String mname ( __an_param_model p )
     ? ( __an_name_ok ( string_data mname ) ) {} {
@@ -2562,6 +2590,8 @@ $ `stdlib/std/thread.nu`
         }
     }
 }
+
+unsafe
 
 @ __an_h_train_ae HttpRequest req Params p → HttpResponse {
     : String mname ( __an_param_model p )
@@ -2772,6 +2802,8 @@ $ `stdlib/std/thread.nu`
 // Per enabled, trained version: the current margin and what it flags in
 // the window, the margin for each standard alert rate, and the curve.
 // Read-only — nothing is written.
+unsafe
+
 @ __an_h_calibration HttpRequest req Params p → HttpResponse {
     : String mname ( __an_param_model p )
     ? ( __an_name_ok ( string_data mname ) ) {} {
@@ -2863,6 +2895,8 @@ $ `stdlib/std/thread.nu`
 // `dry_run` reports without writing.
 // The response keeps the legacy `adjusted_margins` map (the new margins,
 // whether or not they were applied) beside the per-version detail.
+unsafe
+
 @ __an_h_finetune HttpRequest req Params p → HttpResponse {
     : String mname ( __an_param_model p )
     ? ( __an_name_ok ( string_data mname ) ) {} {
@@ -3549,6 +3583,8 @@ $ `stdlib/std/thread.nu`
 // including bringing the model into being. And what it creates belongs to
 // the ORGANISATION exactly like one grown from a stream — there is no third
 // kind of model here.
+unsafe
+
 @ __an_h_import HttpRequest req Params p → HttpResponse {
     : String mname ( __an_param_model p )
     ? ( __an_name_ok ( string_data mname ) ) {} {

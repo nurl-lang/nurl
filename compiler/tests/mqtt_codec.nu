@@ -63,6 +63,8 @@ $ `stdlib/core/vec.nu`
     ( nurl_print `\n` )
 }
 
+unsafe
+
 @ main → i {
     ( nurl_print `-- varint round-trip --\n` )
     ( chk_varint 0 )

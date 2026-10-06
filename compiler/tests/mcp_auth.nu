@@ -24,6 +24,8 @@ $ `stdlib/ext/mcp_auth.nu`
     ( string_free out )
 }
 
+unsafe
+
 @ main → i {
     ( show_path `/mcp` )
     ( show_path `/mcp/` )

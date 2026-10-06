@@ -54,6 +54,8 @@ $ `stdlib/core/rcbox.nu`
 // every copy is the same state, and the last owner releases it.
 : Cov { s ctl }
 
+unsafe
+
 @ Cov_share Cov h → Cov { ^ @ Cov { # s ( rcbox_share # i . h ctl ) } }
 
 @ Cov_drop sink Cov h → v {
@@ -61,9 +63,13 @@ $ `stdlib/core/rcbox.nu`
     ( rcbox_release [CovImpl] # i . h ctl )
 }
 
+unsafe
+
 @ __Cov_ptr Cov h → *CovImpl { ^ ( rcbox_ptr [CovImpl] # i . h ctl ) }
 
 // How many coverage objects were folded in.
+unsafe
+
 @ cov_objects Cov c__h → i {
     : *CovImpl c ( __Cov_ptr c__h )
     ^ . c objects
@@ -77,6 +83,8 @@ $ `stdlib/core/rcbox.nu`
     i funcs_found
     i funcs_hit
 }
+
+unsafe
 
 @ cov_new → Cov {
     : i c__box ( rcbox_zero [CovImpl] )
@@ -102,10 +110,14 @@ $ `stdlib/core/rcbox.nu`
     } {}
 }
 
+unsafe
+
 @ cov_file_count Cov c__h → i {
     : *CovImpl c ( __Cov_ptr c__h )
     ^ ( vec_len [CovFile] . c files )
 }
+
+unsafe
 
 @ cov_file_path Cov c__h i idx → s {
     : *CovImpl c ( __Cov_ptr c__h )
@@ -117,6 +129,8 @@ $ `stdlib/core/rcbox.nu`
 
 // The row for `path`, created when this is the first object to mention it.
 @ cov_file_idx Cov c__h s path → i { ^ ( __cov_file_idx ( __Cov_ptr c__h ) path ) }
+
+unsafe
 
 @ __cov_file_idx * CovImpl c s path → i {
     : i n ( vec_len [CovFile] . c files )
@@ -140,6 +154,8 @@ $ `stdlib/core/rcbox.nu`
 
 // ── Folding one object in ────────────────────────────────────────
 
+unsafe
+
 @ cov_add_object Cov c__h GcovObj o → v {
     : *CovImpl c ( __Cov_ptr c__h )
     : i nf ( gcov_file_count o )
@@ -151,6 +167,8 @@ $ `stdlib/core/rcbox.nu`
     }
     = . c objects + 1 . c objects
 }
+
+unsafe
 
 @ __cov_add_file * CovImpl c GcovObj o LineTab t i src → v {
     : i fidx ( __cov_file_idx c ( gcov_file_path o src ) )
@@ -246,6 +264,8 @@ $ `stdlib/core/rcbox.nu`
 // the package's coverage would drown the package: the number a maintainer
 // acts on is the coverage of the code they wrote.
 
+unsafe
+
 @ cov_keep_only Cov c__h ( Vec String ) prefixes → v {
     : *CovImpl c ( __Cov_ptr c__h )
     ? == 0 ( vec_len [String] prefixes ) { ^ v } {}
@@ -292,6 +312,8 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Order the report the way a person reads it: by path.
+unsafe
+
 @ cov_sort Cov c__h → v {
     : *CovImpl c ( __Cov_ptr c__h )
     : i n ( vec_len [CovFile] . c files )
@@ -313,6 +335,8 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // ── Reading the model back ───────────────────────────────────────
+
+unsafe
 
 @ cov_file_stat Cov c__h i idx → CovStat {
     : *CovImpl c ( __Cov_ptr c__h )
@@ -356,6 +380,8 @@ $ `stdlib/core/rcbox.nu`
     ^ @ CovStat { lf lh bf bh ff fh }
 }
 
+unsafe
+
 @ cov_total Cov c__h → CovStat {
     : *CovImpl c ( __Cov_ptr c__h )
     : ~ i lf 0
@@ -379,6 +405,8 @@ $ `stdlib/core/rcbox.nu`
     ^ @ CovStat { lf lh bf bh ff fh }
 }
 
+unsafe
+
 @ cov_max_line Cov c__h i idx → i {
     : *CovImpl c ( __Cov_ptr c__h )
     ^ ?? ( vec_get [CovFile] . c files idx ) {
@@ -386,6 +414,8 @@ $ `stdlib/core/rcbox.nu`
         F _ → 0
     }
 }
+
+unsafe
 
 @ cov_line_exists Cov c__h i idx i line → b {
     : *CovImpl c ( __Cov_ptr c__h )
@@ -395,6 +425,8 @@ $ `stdlib/core/rcbox.nu`
     }
 }
 
+unsafe
+
 @ cov_line_count Cov c__h i idx i line → i {
     : *CovImpl c ( __Cov_ptr c__h )
     ^ ?? ( vec_get [CovFile] . c files idx ) {
@@ -402,6 +434,8 @@ $ `stdlib/core/rcbox.nu`
         F _ → 0
     }
 }
+
+unsafe
 
 @ cov_branch_rows Cov c__h i idx → i {
     : *CovImpl c ( __Cov_ptr c__h )
@@ -411,6 +445,8 @@ $ `stdlib/core/rcbox.nu`
     }
 }
 
+unsafe
+
 @ cov_branch_field Cov c__h i idx i row i field → i {
     : *CovImpl c ( __Cov_ptr c__h )
     ^ ?? ( vec_get [CovFile] . c files idx ) {
@@ -419,6 +455,8 @@ $ `stdlib/core/rcbox.nu`
     }
 }
 
+unsafe
+
 @ cov_fn_rows Cov c__h i idx → i {
     : *CovImpl c ( __Cov_ptr c__h )
     ^ ?? ( vec_get [CovFile] . c files idx ) {
@@ -426,6 +464,8 @@ $ `stdlib/core/rcbox.nu`
         F _ → 0
     }
 }
+
+unsafe
 
 @ cov_fn_name Cov c__h i idx i row → s {
     : *CovImpl c ( __Cov_ptr c__h )
@@ -438,6 +478,8 @@ $ `stdlib/core/rcbox.nu`
     }
 }
 
+unsafe
+
 @ cov_fn_line Cov c__h i idx i row → i {
     : *CovImpl c ( __Cov_ptr c__h )
     ^ ?? ( vec_get [CovFile] . c files idx ) {
@@ -445,6 +487,8 @@ $ `stdlib/core/rcbox.nu`
         F _ → 0
     }
 }
+
+unsafe
 
 @ cov_fn_called Cov c__h i idx i row → i {
     : *CovImpl c ( __Cov_ptr c__h )

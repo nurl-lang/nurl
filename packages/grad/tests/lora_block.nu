@@ -259,6 +259,8 @@ $ `deps/tensor/src/tensor.nu`
 // Build the whole block on `tp`. Params (in registration order): the 14
 // adapter tensors A0 B0 A1 B1 … (q k v o gate up down). Everything else is
 // const. Writes the param GVars into `pav`/`pbv` (7 each) when non-0.
+unsafe
+
 @ build_block GTape tp Blk bl * u pav * u pbv → GVar {
     : i HT ( cT )
     : i H ( cH )

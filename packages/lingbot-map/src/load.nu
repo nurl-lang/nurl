@@ -61,6 +61,8 @@ $ `src/devblock.nu`
 // CALL time to reach it is a measured LOSS — a full memory round trip
 // over a cold weight used once. Transposing HERE costs one pass, once
 // per process, and every frame afterwards takes the tiled path.
+unsafe
+
 @ lmw_upload_t Lw w GpuKit kit s name i rows i cols → GkBuf {
     : i n ( lw_nelems w name )
     ? | <= n 0 != n * rows cols {

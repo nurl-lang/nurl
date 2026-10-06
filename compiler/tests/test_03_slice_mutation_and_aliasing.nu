@@ -57,7 +57,7 @@
 
 // Rakentaa slice manuaalisesti mallocilla — testaa että
 // raaka muistialue käyttäytyy yhtenevästi literaalin kanssa.
-@ build_slice i n → [i {
+unsafe @ build_slice i n → [i {
     : *i buf # *i ( malloc * n 8 )
     : ~ i i 0
     ~ < i n {
@@ -70,7 +70,7 @@
 
 // Palauttaa uuden slicen jossa jokainen alkio on tuplattu.
 // Testaa että slicen length-kenttä säilyy palautusarvossa.
-@ double_slice [i src → [i {
+unsafe @ double_slice [i src → [i {
     : i n . src length
     : *i buf # *i ( malloc * n 8 )
     : ~ i i 0
@@ -82,7 +82,7 @@
     ^ @ [i { buf n }
 }
 
-@ main → i {
+unsafe @ main → i {
     // (1) Slice-literaali ja length
     : [i nums [i | 10 20 30 40 50]
     ( puts `len=` )

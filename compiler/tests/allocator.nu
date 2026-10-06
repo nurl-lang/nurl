@@ -1,5 +1,7 @@
 // Allocator test — alloc, realloc, zalloc, memcpy
 
+unsafe
+
 @ main → i {
     ( nurl_print `Allocator test...\n` )
 

@@ -19,6 +19,8 @@ $ `stdlib/core/string.nu`
 
 @ maybe_view s x → s { ? > ( nurl_str_len x ) 100 { ^ x } {} ^ ( nurl_str_cat x `!` ) }
 
+unsafe
+
 @ tail_view s x → s { ? > ( nurl_str_len x ) 100 { ^ # s + # i x 1 } {} ^ ( nurl_str_cat x `!` ) }
 
 @ pick i n → i { : s r ( maybe_view ( mk n ) ) ^ ( nurl_str_len r ) }

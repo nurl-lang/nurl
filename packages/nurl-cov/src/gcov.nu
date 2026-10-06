@@ -116,12 +116,16 @@ $ `stdlib/core/rcbox.nu`
 // every copy is the same state, and the last owner releases it.
 : GcovObj { s ctl }
 
+unsafe
+
 @ GcovObj_share GcovObj h → GcovObj { ^ @ GcovObj { # s ( rcbox_share # i . h ctl ) } }
 
 @ GcovObj_drop sink GcovObj h → v {
     ( mem_forget h )
     ( rcbox_release [GcovObjImpl] # i . h ctl )
 }
+
+unsafe
 
 @ __GcovObj_ptr GcovObj h → *GcovObjImpl { ^ ( rcbox_ptr [GcovObjImpl] # i . h ctl ) }
 
@@ -154,6 +158,8 @@ $ `stdlib/core/rcbox.nu`
 // Both files are streams of 32-bit little-endian words. A string is a
 // word-count followed by that many words of NUL-padded bytes.
 
+unsafe
+
 @ __g_u32 * u p i off → i {
     ^ | | | # i . p off
     << # i . p + off 1 8
@@ -175,6 +181,8 @@ $ `stdlib/core/rcbox.nu`
 // million here, and a reader that trusts it walks that far off the end of
 // the buffer. A span that does not fit is not a short string, it is a
 // broken record, and the caller is told by getting nothing back.
+unsafe
+
 @ __g_str * u p i off i words i limit → String {
     ? | < words 0 > + off * words 4 limit { ^ ( string_new ) } {}
     : i cap * words 4
@@ -187,6 +195,8 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // ── The file table ───────────────────────────────────────────────
+
+unsafe
 
 @ __g_file_idx * GcovObjImpl o String path → i {
     : i n ( vec_len [String] . o files )
@@ -203,6 +213,8 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // ── Notes (.gcno) ────────────────────────────────────────────────
+
+unsafe
 
 @ __g_read_notes * GcovObjImpl o ( Vec u ) buf → !v GcovErr {
     : i len ( vec_len [u] buf )
@@ -265,6 +277,8 @@ $ `stdlib/core/rcbox.nu`
 // It is allocated HERE, while the function's arcs are still the last
 // thing in the shared table, because every function's arcs live in one
 // flat array: appending later would land it after some other function's.
+unsafe
+
 @ __g_close_fn * GcovObjImpl o i fi → v {
     ? < fi 0 { ^ v } {}
     ? < ( __g_fn o fi GFN_NBLOCK ) 2 { ^ v } {}
@@ -278,6 +292,8 @@ $ `stdlib/core/rcbox.nu`
 
 // Only the layout this reader implements is accepted. Guessing at an
 // unknown one produces numbers that look plausible and are wrong.
+unsafe
+
 @ __g_version_ok * u p i off → b {
     ^ & & == 42 # i . p off == 56 # i . p + off 1
     & == 48 # i . p + off 2 == 52 # i . p + off 3
@@ -285,6 +301,8 @@ $ `stdlib/core/rcbox.nu`
 
 // A FUNCTION record opens a new function: identity, checksums, name,
 // source file and the line it starts on.
+unsafe
+
 @ __g_notes_function * GcovObjImpl o * u p i body i end → i {
     ? > + body 12 end { ^ -1 } {}
     : i ident ( __g_u32 p body )
@@ -323,6 +341,8 @@ $ `stdlib/core/rcbox.nu`
 
 // A BLOCKS record is one word of flags per basic block; the count of words
 // IS the number of blocks. Block 0 is the entry, block 1 the exit.
+unsafe
+
 @ __g_notes_blocks * GcovObjImpl o i fi i words → v {
     ( vec_set [i] . o fns + * fi GFN_W GFN_NBLOCK words )
     : ~ i k 0
@@ -335,6 +355,8 @@ $ `stdlib/core/rcbox.nu`
 // describes is not this function's, and an arc pointing outside the block
 // table makes the walk that solves the flow unable to mark where it has
 // been. It loops. So the file is refused, which is what gcov does too.
+unsafe
+
 @ __g_notes_arcs * GcovObjImpl o i fi * u p i body i end → b {
     ? > + body 4 end { ^ T } {}
     : i nb ( __g_fn o fi GFN_NBLOCK )
@@ -366,6 +388,8 @@ $ `stdlib/core/rcbox.nu`
 // source file could have and -3 for a block the function does not have.
 // Neither is a record to skip: nothing else in such a file can be trusted
 // either.
+unsafe
+
 @ __g_notes_lines * GcovObjImpl o i fi * u p i body i end → i {
     ? > + body 4 end { ^ -1 } {}
     : i blk ( __g_u32 p body )
@@ -398,6 +422,8 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // ── Data (.gcda) ─────────────────────────────────────────────────
+
+unsafe
 
 @ __g_read_data * GcovObjImpl o ( Vec u ) buf → !v GcovErr {
     : i len ( vec_len [u] buf )
@@ -452,6 +478,8 @@ $ `stdlib/core/rcbox.nu`
     ^ @ !v GcovErr { T 0 }
 }
 
+unsafe
+
 @ __g_data_counters * GcovObjImpl o i fi * u p i body i n → v {
     : i have ( __g_fn o fi GFN_CTR_N )
     ? == have 0 {
@@ -477,13 +505,19 @@ $ `stdlib/core/rcbox.nu`
 
 // ── Small accessors ──────────────────────────────────────────────
 
+unsafe
+
 @ __g_fn * GcovObjImpl o i fi i field → i {
     ^ ?? ( vec_get [i] . o fns + * fi GFN_W field ) { T x → x F _ → 0 }
 }
 
+unsafe
+
 @ __g_ctr * GcovObjImpl o i idx → i {
     ^ ?? ( vec_get [i] . o counters idx ) { T x → x F _ → 0 }
 }
+
+unsafe
 
 @ __g_arc * GcovObjImpl o i ai i field → i {
     ^ ?? ( vec_get [i] . o arcs + ai field ) { T x → x F _ → 0 }
@@ -501,9 +535,13 @@ $ `stdlib/core/rcbox.nu`
 
 @ gcov_fn_count GcovObj o__h → i { ^ ( __gcov_fn_count ( __GcovObj_ptr o__h ) ) }
 
+unsafe
+
 @ __gcov_fn_count * GcovObjImpl o → i {
     ^ / ( vec_len [i] . o fns ) GFN_W
 }
+
+unsafe
 
 @ gcov_fn_name GcovObj o__h i fi → s {
     : *GcovObjImpl o ( __GcovObj_ptr o__h )
@@ -534,17 +572,23 @@ $ `stdlib/core/rcbox.nu`
 
 @ gcov_total_blocks GcovObj o__h → i { ^ ( __gcov_total_blocks ( __GcovObj_ptr o__h ) ) }
 
+unsafe
+
 @ __gcov_total_blocks * GcovObjImpl o → i {
     ^ ( vec_len [i] . o blk_count )
 }
 
 @ gcov_total_arcs GcovObj o__h → i { ^ ( __gcov_total_arcs ( __GcovObj_ptr o__h ) ) }
 
+unsafe
+
 @ __gcov_total_arcs * GcovObjImpl o → i {
     ^ / ( vec_len [i] . o arcs ) GARC_W
 }
 
 @ gcov_block_count GcovObj o__h i fi i blk → i { ^ ( __gcov_block_count ( __GcovObj_ptr o__h ) fi blk ) }
+
+unsafe
 
 @ __gcov_block_count * GcovObjImpl o i fi i blk → i {
     ^ ?? ( vec_get [i] . o blk_count + ( __g_fn o fi GFN_BLK_OFF ) blk ) {
@@ -553,25 +597,35 @@ $ `stdlib/core/rcbox.nu`
     }
 }
 
+unsafe
+
 @ gcov_file_count GcovObj o__h → i {
     : *GcovObjImpl o ( __GcovObj_ptr o__h )
     ^ ( vec_len [String] . o files )
 }
+
+unsafe
 
 @ gcov_runs GcovObj o__h → i {
     : *GcovObjImpl o ( __GcovObj_ptr o__h )
     ^ . o runs
 }
 
+unsafe
+
 @ gcov_notes_path GcovObj o__h → s {
     : *GcovObjImpl o ( __GcovObj_ptr o__h )
     ^ ( string_data . o notes )
 }
 
+unsafe
+
 @ gcov_data_path GcovObj o__h → s {
     : *GcovObjImpl o ( __GcovObj_ptr o__h )
     ^ ( string_data . o data )
 }
+
+unsafe
 
 @ gcov_file_path GcovObj o__h i idx → s {
     : *GcovObjImpl o ( __GcovObj_ptr o__h )
@@ -589,15 +643,21 @@ $ `stdlib/core/rcbox.nu`
     ^ + ( __g_fn o fi GFN_BL_OFF ) * GBL_W ( __g_fn o fi GFN_BL_N )
 }
 
+unsafe
+
 @ gcov_bl_block GcovObj o__h i row → i {
     : *GcovObjImpl o ( __GcovObj_ptr o__h )
     ^ ?? ( vec_get [i] . o blines + row GBL_BLOCK ) { T x → x F _ → 0 }
 }
 
+unsafe
+
 @ gcov_bl_src GcovObj o__h i row → i {
     : *GcovObjImpl o ( __GcovObj_ptr o__h )
     ^ ?? ( vec_get [i] . o blines + row GBL_SRC ) { T x → x F _ → 0 }
 }
+
+unsafe
 
 @ gcov_bl_line GcovObj o__h i row → i {
     : *GcovObjImpl o ( __GcovObj_ptr o__h )
@@ -665,6 +725,8 @@ $ `stdlib/core/rcbox.nu`
 // return the way it was entered — the two disagree, and the difference
 // shows up as a percentage that is quietly a few points wrong.
 
+unsafe
+
 @ __g_arc_field * GcovObjImpl o i ai i field → i {
     ^ ?? ( vec_get [i] . o arcs + ai field ) { T x → x F _ → 0 }
 }
@@ -697,6 +759,8 @@ $ `stdlib/core/rcbox.nu`
     }
     ( vec_set [i] tail key + slot 1 )
 }
+
+unsafe
 
 @ __g_index_build * GcovObjImpl o → v {
     : i nblk ( __gcov_total_blocks o )
@@ -739,12 +803,16 @@ $ `stdlib/core/rcbox.nu`
 // chain cursor: non-zero is an arc slot plus one, zero is the end.
 @ gcov_edge_first GcovObj o__h i fi i blk i side → i { ^ ( __gcov_edge_first ( __GcovObj_ptr o__h ) fi blk side ) }
 
+unsafe
+
 @ __gcov_edge_first * GcovObjImpl o i fi i blk i side → i {
     : i key + ( __g_fn o fi GFN_BLK_OFF ) blk
     ^ ? == side 0 ( __g_ix . o pred_head key ) ( __g_ix . o succ_head key )
 }
 
 @ gcov_edge_next GcovObj o__h i cursor i side → i { ^ ( __gcov_edge_next ( __GcovObj_ptr o__h ) cursor side ) }
+
+unsafe
 
 @ __gcov_edge_next * GcovObjImpl o i cursor i side → i {
     ^ ? == side 0 ( __g_ix . o pred_next - cursor 1 ) ( __g_ix . o succ_next - cursor 1 )
@@ -794,6 +862,8 @@ $ `stdlib/core/rcbox.nu`
 // One walk out from `root` along the spanning tree. Each tree arc's count
 // is the excess of everything hanging off it: what the counted arcs on
 // that side could not account for.
+unsafe
+
 @ __g_propagate * GcovObjImpl o i fi i root ( Vec i ) visited ( Vec i ) st → v {
     : ~ i sp 0
     ( __g_st_push st sp root -1 0 )
@@ -849,6 +919,8 @@ $ `stdlib/core/rcbox.nu`
         }
     }
 }
+
+unsafe
 
 @ __g_solve_fn * GcovObjImpl o i fi ( Vec i ) st → v {
     : i nb ( __g_fn o fi GFN_NBLOCK )
@@ -906,6 +978,8 @@ $ `stdlib/core/rcbox.nu`
 
 // Without data there is nothing to solve: every counter is zero, every
 // block is zero, and the report says so.
+unsafe
+
 @ gcov_solve GcovObj o__h → v {
     : *GcovObjImpl o ( __GcovObj_ptr o__h )
     ? ! . o has_data { ^ v } {}
@@ -916,6 +990,8 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // ── Entry points ─────────────────────────────────────────────────
+
+unsafe
 
 @ gcov_new → GcovObj {
     : i o__box ( rcbox_zero [GcovObjImpl] )
@@ -949,6 +1025,8 @@ $ `stdlib/core/rcbox.nu`
 // A missing .gcda is NOT an error — it is the answer "this program was
 // built but never run", and a coverage report has to be able to say that.
 // Every counter then reads zero, which is exactly what it means.
+unsafe
+
 @ gcov_read s notes_path s data_path → !GcovObj GcovErr {
     : GcovObj h ( gcov_new )
     : *GcovObjImpl o ( __GcovObj_ptr h )

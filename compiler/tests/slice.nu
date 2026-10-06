@@ -10,6 +10,8 @@
 // --- Slice-logiikka: KAKSI SYNTAKSIA! ---
 
 // Versio 1: Token-optimoitu (4 tokenia)
+unsafe
+
 @ sum_slice_direct * i data i length → i {
     : ~ i total 0
     : ~ i index 0
@@ -24,6 +26,8 @@
 }
 
 // Versio 2: Struct-versio (8 tokenia, mutta tyyppiturva)
+unsafe
+
 @ sum_slice_struct Slice slice → i {
     : ~ i total 0
     : ~ i index 0
@@ -40,6 +44,8 @@
 }
 
 // --- Main ---
+
+unsafe
 
 @ main → i {
     ( nurl_print `--- NURL v0.3: Slice & Dynamic Array Test ---\n` )

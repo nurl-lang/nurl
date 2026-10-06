@@ -321,6 +321,8 @@ $ `bx.nu`
     }
 }
 
+unsafe
+
 @ __head_bytes s path i count → i {
     : ~ b ok T
     : ( Vec u ) data ( bx_slurp path ok )
@@ -387,6 +389,8 @@ $ `bx.nu`
 
 // Keep the last `count` lines in a ring of Strings so an input far
 // larger than memory still costs only the window.
+unsafe
+
 @ __tail_lines s path i count b from_start → i {
     ?? ( bx_reader path ) {
         F _ → { ^ 1 }
@@ -439,6 +443,8 @@ $ `bx.nu`
         }
     }
 }
+
+unsafe
 
 @ __tail_bytes s path i count b from_start → i {
     : ~ b ok T
@@ -718,6 +724,8 @@ $ `bx.nu`
 }
 
 // ── yes ───────────────────────────────────────────────────────────
+
+unsafe
 
 @ ap_yes ( Vec String ) argv → i {
     : String unit ( string_new )

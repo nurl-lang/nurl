@@ -68,6 +68,8 @@ $ `stdlib/std/float.nu`
 // rather than trap, so a renderer fed empty input yields an empty string
 // instead of crashing.
 
+unsafe
+
 @ chart_min ( Vec f ) v → f {
     : i n ( vec_len [f] v )
     ? == n 0 { ^ 0.0 } {}
@@ -78,6 +80,8 @@ $ `stdlib/std/float.nu`
     ^ m
 }
 
+unsafe
+
 @ chart_max ( Vec f ) v → f {
     : i n ( vec_len [f] v )
     ? == n 0 { ^ 0.0 } {}
@@ -87,6 +91,8 @@ $ `stdlib/std/float.nu`
     ~ < i n { : f x . dp i ? > x m { = m x } {} = i + i 1 }
     ^ m
 }
+
+unsafe
 
 @ chart_sum ( Vec f ) v → f {
     : i n ( vec_len [f] v )
@@ -108,6 +114,8 @@ $ `stdlib/std/float.nu`
 // One glyph per value, each mapped onto the eight block heights between
 // the series min and max. A flat series (range 0) draws as a mid-height
 // baseline rather than dividing by zero.
+
+unsafe
 
 @ chart_sparkline ( Vec f ) v → String {
     : i n ( vec_len [f] v )
@@ -172,6 +180,8 @@ $ `stdlib/std/float.nu`
 // row is `<label> <bar> <value>`; the value is printed with %g so whole
 // numbers stay whole.
 
+unsafe
+
 @ chart_bars ( Vec String ) labels ( Vec f ) values i width → String {
     : i n ( vec_len [f] values )
     : String out ( string_new )
@@ -229,6 +239,8 @@ $ `stdlib/std/float.nu`
     ( string_push_float dst hi )
     ( string_push_char dst 41 )  // )
 }
+
+unsafe
 
 @ chart_hist ( Vec f ) values i bins i width → String {
     : i n ( vec_len [f] values )
@@ -301,6 +313,8 @@ $ `stdlib/std/float.nu`
     ? < l gw { ( __push_spaces out - gw l ) } {}
     ( string_push_str out raw )
 }
+
+unsafe
 
 @ chart_plot ( Vec f ) values i width i height → String {
     : i n ( vec_len [f] values )

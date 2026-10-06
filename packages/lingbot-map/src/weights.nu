@@ -41,13 +41,19 @@ $ `deps/torchpt/src/torchpt.nu`
 // last owner releases it. lw_close is an optional early release.
 : Lw { s ctl }
 
+unsafe
+
 @ Lw_share Lw h → Lw { ^ @ Lw { # s ( rcbox_share # i . h ctl ) } }
 
 @ Lw_drop sink Lw h → v { ( mem_forget h ) ( rcbox_release [LwImpl] # i . h ctl ) }
 
+unsafe
+
 @ __Lw_ptr Lw h → *LwImpl { ^ ( rcbox_ptr [LwImpl] # i . h ctl ) }
 // No checkpoint (an empty slot until lw_open fills it).
 @ lw_none → Lw { ^ @ Lw { # s 0 } }
+
+unsafe
 
 @ lw_open s path → !Lw String {
     : !Pt String r ( pt_open path )
@@ -60,11 +66,19 @@ $ `deps/torchpt/src/torchpt.nu`
 // Release the checkpoint now (optional — its last owner does it anyway).
 @ lw_close sink Lw w → v {}
 
+unsafe
+
 @ lw_n_tensors Lw w__h → i { : *LwImpl w ( __Lw_ptr w__h ) ^ ( pt_n_tensors . w pt ) }
+
+unsafe
 
 @ lw_index Lw w__h s name → i { : *LwImpl w ( __Lw_ptr w__h ) ^ ( pt_find . w pt name ) }
 
+unsafe
+
 @ lw_has Lw w__h s name → b { : *LwImpl w ( __Lw_ptr w__h ) ^ >= ( pt_find . w pt name ) 0 }
+
+unsafe
 
 @ lw_ndim Lw w__h s name → i {
     : *LwImpl w ( __Lw_ptr w__h )
@@ -73,12 +87,16 @@ $ `deps/torchpt/src/torchpt.nu`
     ^ ( pt_ndim . w pt i0 )
 }
 
+unsafe
+
 @ lw_dim Lw w__h s name i axis → i {
     : *LwImpl w ( __Lw_ptr w__h )
     : i i0 ( pt_find . w pt name )
     ? < i0 0 { ^ 0 } {}
     ^ ( pt_dim . w pt i0 axis )
 }
+
+unsafe
 
 @ lw_nelems Lw w__h s name → i {
     : *LwImpl w ( __Lw_ptr w__h )
@@ -88,14 +106,20 @@ $ `deps/torchpt/src/torchpt.nu`
 }
 
 // Keep the first failure only; a later one is dropped with the call.
+unsafe
+
 @ __lw_fail * LwImpl w sink String m → v {
     ? == 0 ( vec_len [String] . w errs ) { ( vec_push [String] . w errs m ) } {}
 }
+
+unsafe
 
 @ lw_error Lw w__h → s {
     : *LwImpl w ( __Lw_ptr w__h )
     ?? ( vec_get [String] . w errs 0 ) { T s → ^ ( string_data s ) F → ^ `` }
 }
+
+unsafe
 
 @ lw_ok Lw w__h → b { : *LwImpl w ( __Lw_ptr w__h ) ^ == 0 ( vec_len [String] . w errs ) }
 
@@ -107,6 +131,8 @@ $ `deps/torchpt/src/torchpt.nu`
 // wants, so it can be uploaded with no conversion at all. Returns 0
 // when the tensor is absent, strided, a different dtype or a different
 // length, and the caller falls back to the converting read.
+unsafe
+
 @ lw_f32_ptr Lw w__h s name i n → *u {
     : *LwImpl w ( __Lw_ptr w__h )
     : i i0 ( pt_find . w pt name )
@@ -116,6 +142,8 @@ $ `deps/torchpt/src/torchpt.nu`
     ? == ( pt_nelems . w pt i0 ) n {} { ^ # *u 0 }
     ^ ( pt_tensor_ptr . w pt i0 )
 }
+
+unsafe
 
 @ lw_read Lw w__h s name * f dst i n → b {
     : *LwImpl w ( __Lw_ptr w__h )
@@ -151,6 +179,8 @@ $ `deps/torchpt/src/torchpt.nu`
 // Assert a tensor's presence and shape. Pass −1 for an axis that may be
 // anything, and for axes beyond the tensor's rank. Records the first
 // failure; returns whether THIS check passed.
+unsafe
+
 @ lw_require Lw w__h s name i d0 i d1 i d2 i d3 → b {
     : *LwImpl w ( __Lw_ptr w__h )
     : i i0 ( pt_find . w pt name )

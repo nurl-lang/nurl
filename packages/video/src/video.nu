@@ -109,6 +109,8 @@ $ `stdlib/core/rcbox.nu`
 // last owner closes it. vid_avi_close is an optional early release.
 : VidAvi { s ctl }
 
+unsafe
+
 @ VidAvi_share VidAvi h → VidAvi { ^ @ VidAvi { # s ( rcbox_share # i . h ctl ) } }
 
 @ VidAvi_drop sink VidAvi h → v {
@@ -116,23 +118,39 @@ $ `stdlib/core/rcbox.nu`
     ( rcbox_release [VidAviImpl] # i . h ctl )
 }
 
+unsafe
+
 @ __VidAvi_ptr VidAvi h → *VidAviImpl { ^ ( rcbox_ptr [VidAviImpl] # i . h ctl ) }
 
 // The stream's declared frame rate, fps_num / fps_den (dwRate / dwScale).
+unsafe
+
 @ vid_avi_fps_num VidAvi h → i { : *VidAviImpl v ( __VidAvi_ptr h ) ^ . v fps_num }
+
+unsafe
 
 @ vid_avi_fps_den VidAvi h → i { : *VidAviImpl v ( __VidAvi_ptr h ) ^ . v fps_den }
 // Index of the video stream (the NN of its 'NNdc' chunks).
+unsafe
+
 @ vid_avi_vstream VidAvi h → i { : *VidAviImpl v ( __VidAvi_ptr h ) ^ . v vstream }
 // The movi LIST's payload: [movi_off, movi_end) in the file.
+unsafe
+
 @ vid_avi_movi_off VidAvi h → i { : *VidAviImpl v ( __VidAvi_ptr h ) ^ . v movi_off }
 
+unsafe
+
 @ vid_avi_movi_end VidAvi h → i { : *VidAviImpl v ( __VidAvi_ptr h ) ^ . v movi_end }
+
+unsafe
 
 @ __vd_u32 ( Vec u ) b i off → i {
     : *u p ( vec_data [u] b )
     ^ + + + # i . p off << # i . p + off 1 8 << # i . p + off 2 16 << # i . p + off 3 24
 }
+
+unsafe
 
 @ __vd_fourcc ( Vec u ) b i off i a i b2 i c i d → b {
     : *u p ( vec_data [u] b )
@@ -150,6 +168,8 @@ $ `stdlib/core/rcbox.nu`
 // Walk the RIFF tree far enough to know the frame rate, which stream is
 // the video, and where the movi payload lives. Everything else in the
 // file is somebody else's business.
+unsafe
+
 @ vid_avi_open s path → !VidAvi String {
     : ~ i fsize 0
     ?? ( file_size path ) {
@@ -251,6 +271,8 @@ $ `stdlib/core/rcbox.nu`
 
 // The fourcc of this stream's compressed-video chunks: 'NNdc' where NN
 // is the stream index in decimal.
+unsafe
+
 @ __vd_dc_match ( Vec u ) h i stream → b {
     : *u p ( vec_data [u] h )
     : i d0 + 48 / stream 10
@@ -265,6 +287,8 @@ $ `stdlib/core/rcbox.nu`
 
 // Extract every `stride`-th video frame as a JPEG file into `outdir`,
 // stopping the numbering at what was kept. Returns the kept count.
+unsafe
+
 @ vid_avi_extract VidAvi v__h s outdir i stride → !i String {
     : *VidAviImpl v ( __VidAvi_ptr v__h )
     : ~ i off . v movi_off

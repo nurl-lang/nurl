@@ -69,6 +69,8 @@ $ `stdlib/core/vec.nu`
     ^ ^^ z >> z 31
 }
 
+unsafe
+
 @ main → i {
     // ── fixed edge cases ─────────────────────────────────────────────
     : u64 MAX 18446744073709551615

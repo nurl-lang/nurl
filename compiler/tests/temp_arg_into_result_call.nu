@@ -15,6 +15,8 @@ $ `stdlib/core/vec.nu`
 
 & `libc` @ nurl_free_count → i
 
+unsafe
+
 @ live → i { ^ - ( nurl_alloc_count ) ( nurl_free_count ) }
 
 @ report s what i d → v { ( nurl_print what ) ( nurl_print_int d ) ( nurl_print `\n` ) }

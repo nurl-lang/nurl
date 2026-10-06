@@ -424,6 +424,8 @@ $ `write.nu`
 }
 
 // f64 vector equality against a raw expected pointer + count
+unsafe
+
 @ __st_vec_eq ( Vec f ) got * f exp i n → b {
     ? != ( vec_len [f] got ) n { ^ F } {}
     : ~ i k 0
@@ -515,6 +517,8 @@ $ `write.nu`
 
 // Streaming-writer misuse must fail with clean errors, and the quant
 // encoders must round-trip through the dequant oracle.
+unsafe
+
 @ __st_stream_quant inout STCnt cn s gwpath → v {
     // 1. the twin file is byte-identical to the in-memory writer's
     : !String IoErr tf ( fs_tempfile `/tmp` `gguf-selftest-stream.` )
@@ -790,6 +794,8 @@ $ `write.nu`
     }
     ( __st_ck cn q8_badlen_rejected `Q8_0 encode rejects a non-multiple-of-32 input` )
 }
+
+unsafe
 
 @ __st_run → i {
     : ~ STCnt cn @ STCnt { 0 0 }

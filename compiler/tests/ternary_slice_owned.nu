@@ -9,6 +9,8 @@
 // shows as a wrong sum or a crash even without ASan; the suite's --san build
 // proves the leak side (this used to leak 24 B per fresh-slice ternary).
 
+unsafe
+
 @ main → i {
     : ~ i acc 0
 

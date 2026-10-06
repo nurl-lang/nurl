@@ -28,6 +28,8 @@ $ `../src/image.nu`
     : ( Vec i ) v ( vec_new [i] ) ( vec_push [i] v a ) ( vec_push [i] v b ) ( vec_push [i] v c ) ( vec_push [i] v d ) ^ v
 }
 
+unsafe
+
 @ main → i {
     : ( Vec String ) av ( env_args_list )
     ? < ( vec_len [String] av ) 4 { ( nurl_print `usage: seg_fwd <model> <input.ppm> <proto.f32>\n` ) ^ 2 } {}

@@ -66,6 +66,8 @@ $ `deps/iforest/src/iforest.nu`
 
 // ── VerModel ⇄ bytes ──────────────────────────────────────────────────
 
+unsafe
+
 @ __an_blob_push_ivec ( Vec u ) out ( Vec i ) xs → v {
     : i n ( vec_len [i] xs )
     ( bytes_push_u64_le out # u64 n )
@@ -76,6 +78,8 @@ $ `deps/iforest/src/iforest.nu`
         = k + k 1
     }
 }
+
+unsafe
 
 @ __an_blob_push_fvec ( Vec u ) out ( Vec f ) xs → v {
     : i n ( vec_len [f] xs )
@@ -142,6 +146,8 @@ $ `deps/iforest/src/iforest.nu`
 }
 
 // Every node index in xs must lie in [-1, n_nodes).
+unsafe
+
 @ __an_blob_idx_ok ( Vec i ) xs i n_nodes → b {
     : i n ( vec_len [i] xs )
     : *i dp ( vec_data [i] xs )
@@ -156,6 +162,8 @@ $ `deps/iforest/src/iforest.nu`
 
 // Parse a forest blob. None on any structural violation: bad magic, short
 // buffer, absurd counts, mismatched array lengths, out-of-range indices.
+unsafe
+
 @ vermodel_from_bytes ( Vec u ) buf → ?VerModel {
     : ( Vec u ) magic ( bytes_from_str `ANOMFOR1` )
     : b magic_ok ( bytes_starts_with buf magic )
@@ -974,6 +982,8 @@ $ `deps/iforest/src/iforest.nu`
 
 // ── The scored-verdict cache, as a blob ───────────────────────────────
 
+unsafe
+
 @ store_save_scores Store st s name ScoreCache c → b {
     ? . st ok {} { ^ F }
     : ( Vec u ) out ( vec_new [u] )
@@ -1015,6 +1025,8 @@ $ `deps/iforest/src/iforest.nu`
 
 // Load the cache; None when absent, truncated or structurally impossible.
 // A rejected cache costs a rescan, never a wrong verdict.
+unsafe
+
 @ store_load_scores Store st s name → ?ScoreCache {
     ?? ( __st_blob_get st name ANOM_KIND_SCORES ) {
         T buf → {
@@ -1493,6 +1505,8 @@ $ `deps/iforest/src/iforest.nu`
 }
 
 // One flat model directory into this organisation's database.
+unsafe
+
 @ store_migrate_dir Store st s root s name i now → b {
     ? . st ok {} { ^ F }
     : String meta ( __st_flat_text root name `metadata.json` )
@@ -1818,6 +1832,8 @@ $ `deps/iforest/src/iforest.nu`
 // has that name — two models of one name in one organisation is exactly
 // what the organisation-as-database rule exists to prevent. The source
 // keeps its rows if any part of the write fails.
+unsafe
+
 @ store_move_model Store src Store dst s name i now → b {
     ? & . src ok . dst ok {} { ^ F }
     ? ( store_exists src name ) {} { ^ F }

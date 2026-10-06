@@ -17,9 +17,13 @@ $ `stdlib/core/rcbox.nu`
 
 & `libc` @ nurl_free_count → i
 
+unsafe
+
 @ live → i { ^ - ( nurl_alloc_count ) ( nurl_free_count ) }
 
 : TbImpl { ( Vec String ) vals }
+
+unsafe
 
 @ at * TbImpl t i k → String {
     ?? ( vec_get [String] . t vals k ) { T s → ^ s F _ → ^ ( string_new ) }
@@ -35,6 +39,8 @@ $ `stdlib/core/rcbox.nu`
     = x ( at p 0 )
     ^ ( string_len x )
 }
+
+unsafe
 
 @ main → i {
     : i box ( rcbox_new [TbImpl] @ TbImpl { ( vec_new [String] ) } )

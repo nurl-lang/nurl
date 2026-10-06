@@ -11,6 +11,8 @@
 
 $ `stdlib/hal/mmio.nu`
 
+unsafe
+
 @ main → i {
     : i reg # i ( nurl_alloc 8 )
 

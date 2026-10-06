@@ -18,6 +18,8 @@ $ `stdlib/std/channel.nu`
 
 & `libc` @ nurl_free_count → i
 
+unsafe
+
 @ live → i { ^ - ( nurl_alloc_count ) ( nurl_free_count ) }
 
 : ~ i g_total 0

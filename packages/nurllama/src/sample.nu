@@ -30,6 +30,8 @@ $ `src/model.nu`
 // host-side softmax needs exp — bind libm directly, the stdlib idiom
 & `libm` @ exp f x → f
 
+unsafe
+
 @ sample_next Llm m Rng rng f temp i topk f topp → i {
     ? <= temp 0.0 { ^ ( sample_greedy m ) } {}
     : i n ( llm_n_vocab m )

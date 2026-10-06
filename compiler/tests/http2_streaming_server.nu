@@ -55,6 +55,8 @@ $ `stdlib/std/bytes.nu`
     }
 }
 
+unsafe
+
 @ main → i {
     : ( Vec i ) failures ( vec_new [i] )
     : ~ H2Connection c ( connection )

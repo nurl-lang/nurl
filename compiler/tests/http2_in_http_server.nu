@@ -87,6 +87,8 @@ $ `stdlib/ext/http2_client.nu`
 
 // Raw HTTP/1.1-style exchange on a plaintext socket: send `wire`, read to
 // EOF, print the first line of the reply.
+unsafe
+
 @ raw_exchange_first_line s name i port s wire → v {
     : !TcpConn NetErr cr ( tcp_connect `127.0.0.1` port )
     ?? cr {

@@ -120,6 +120,8 @@ $ `stdlib/ext/json.nu`
 // it's exposed to test through the same code path mcp_tools_list
 // uses internally — replicate the call shape here.
 
+unsafe
+
 @ run_tools_extract → v {
     ( nurl_print `── tools array extract ──\n` )
     : Json tools ( json_arr_new )

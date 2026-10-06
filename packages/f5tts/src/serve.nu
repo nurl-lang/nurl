@@ -52,17 +52,23 @@ $ `ui.nu`
 // The three globals each hold one owner of what they name, taken over from
 // the caller's handle: storing a new one drops the old one's owner here.
 // Readers take a view (`# F5Model g_f5_model`), which owns nothing.
+unsafe
+
 @ __f5s_hold_model sink F5Model m → v {
     : F5Model old @ F5Model { # s g_f5_model }
     = g_f5_model # i . m ctl
     ( mem_forget m )
 }
 
+unsafe
+
 @ __f5s_hold_voc sink Vocos vc → v {
     : Vocos old @ Vocos { # s g_f5_voc }
     = g_f5_voc # i . vc ctl
     ( mem_forget vc )
 }
+
+unsafe
 
 @ __f5s_hold_vocab sink F5Vocab vb → v {
     : F5Vocab old @ F5Vocab { # s g_f5_vocab }
@@ -146,6 +152,8 @@ $ `ui.nu`
 }
 
 : ~ i g_q_sync 0  // *F5Sync as an address (0 = never served)
+
+unsafe
 
 @ __f5s_sync → *F5Sync { ^ # *F5Sync g_q_sync }
 
@@ -306,6 +314,8 @@ $ `ui.nu`
 
 // ── the model thread ────────────────────────────────────────────────
 
+unsafe
+
 @ __f5s_submit * F5JobImpl j → b {
     ? != g_q_sync 0 {} { ^ F }
     : *F5Sync q ( __f5s_sync )
@@ -343,12 +353,16 @@ $ `ui.nu`
 
 // A store through the job's pointer does not drop what it overwrites: the
 // empty message leaves through a take first.
+unsafe
+
 @ __f5s_job_fail * F5JobImpl j s msg → v {
     : String old . j err
     ( mem_take old )
     = . j err ( string_from msg )
     = . j ok F
 }
+
+unsafe
 
 @ __f5s_run_job * F5JobImpl j → v {
     ? ( __f5s_switch_to ( string_data . j model_id ) ) {} {
@@ -373,6 +387,8 @@ $ `ui.nu`
     ? r {} { ( __f5s_job_fail j `synthesis failed` ) }
     = . j ok r
 }
+
+unsafe
 
 @ __f5s_model_loop → v {
     // A CUDA context belongs to the thread that made it current, and this is
@@ -419,6 +435,8 @@ $ `ui.nu`
         }
     }
 }
+
+unsafe
 
 @ __f5s_ticker → v {
     : *F5Sync q ( __f5s_sync )
@@ -483,6 +501,8 @@ $ `ui.nu`
 }
 
 // One line of a dialogue, synthesised and appended to `out`.
+unsafe
+
 @ __f5s_one s voice s text i steps f cfg f sway f speed f fade i seed
 i retries f max_wer i splitfail f target_rms s model_id ( Vec f ) out ( Vec i ) score String err → b {
     ? ( f5_voice_id_ok voice ) {} {
@@ -739,6 +759,8 @@ i retries f max_wer i splitfail f target_rms s model_id ( Vec f ) out ( Vec i ) 
 }
 
 // ── the server ──────────────────────────────────────────────────────
+
+unsafe
 
 @ f5_serve s ckpt s vocab_path s vocoder s voices_dir s models_dir s model_id
 s host i port s token i device i unload_s → i {

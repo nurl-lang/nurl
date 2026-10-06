@@ -164,6 +164,8 @@ $ `stdlib/core/rcbox.nu`
 // is an optional early release.
 : Whisper { s ctl }
 
+unsafe
+
 @ Whisper_share Whisper h → Whisper { ^ @ Whisper { # s ( rcbox_share # i . h ctl ) } }
 
 @ Whisper_drop sink Whisper h → v {
@@ -171,21 +173,37 @@ $ `stdlib/core/rcbox.nu`
     ( rcbox_release [WhisperImpl] # i . h ctl )
 }
 
+unsafe
+
 @ __Whisper_ptr Whisper h → *WhisperImpl { ^ ( rcbox_ptr [WhisperImpl] # i . h ctl ) }
 
 // The model's shape and device, for callers that size inputs or bind threads.
+unsafe
+
 @ wh_gpu Whisper h → Gpu { : *WhisperImpl w ( __Whisper_ptr h ) ^ . w g }
+
+unsafe
 
 @ wh_n_mels Whisper h → i { : *WhisperImpl w ( __Whisper_ptr h ) ^ . w n_mels }
 
+unsafe
+
 @ wh_d_model Whisper h → i { : *WhisperImpl w ( __Whisper_ptr h ) ^ . w d_model }
+
+unsafe
 
 @ wh_n_ctx_enc Whisper h → i { : *WhisperImpl w ( __Whisper_ptr h ) ^ . w n_ctx_enc }
 
+unsafe
+
 @ wh_n_enc_layer Whisper h → i { : *WhisperImpl w ( __Whisper_ptr h ) ^ . w n_enc_layer }
+
+unsafe
 
 @ wh_n_dec_layer Whisper h → i { : *WhisperImpl w ( __Whisper_ptr h ) ^ . w n_dec_layer }
 // the ggml container the model came from (the null handle in HF mode)
+unsafe
+
 @ wh_gg Whisper h → Gg { : *WhisperImpl w ( __Whisper_ptr h ) ^ . w gg }
 
 @ __wh_err s msg → !v String {
@@ -229,6 +247,8 @@ $ `stdlib/core/rcbox.nu`
     ^ ? ( nurl_str_eq name `decoder.token_embedding.weight` ) T F
 }
 
+unsafe
+
 @ __wh_probe_half_gg * WhisperImpl w → b {
     : *GgImpl gg ( _Gg_ptr . w gg )
     : ~ i seen 0
@@ -250,6 +270,8 @@ $ `stdlib/core/rcbox.nu`
     }
     ^ & > seen 0 all16
 }
+
+unsafe
 
 @ __wh_probe_half * WhisperImpl w → b {
     ? ( gg_is_open . w gg ) { ^ ( __wh_probe_half_gg w ) } {}
@@ -278,6 +300,8 @@ $ `stdlib/core/rcbox.nu`
 // upload the halves as they are and let the kernels widen at the point of
 // use. Everything else (norms, biases, convs, positions) still widens here:
 // their bytes are noise, and it keeps every other kernel untouched.
+unsafe
+
 @ __wh_up * WhisperImpl w s name → i {
     : b keep16 ( __wh_is_matrix name )
     ? ( gg_is_open . w gg ) {
@@ -342,6 +366,8 @@ $ `stdlib/core/rcbox.nu`
 // model's pointer is final at that moment — and its bytes are queued; the
 // queue goes up as one streamed batch (gpu_upload_batch: pinned staging,
 // four copy threads, DMA overlapping the fill) once every tensor is known.
+unsafe
+
 @ __wh_queue_init * WhisperImpl w → v {
     = . w up_q ( vec_new [GpuCopy] )
     = . w arena_cur 0
@@ -366,6 +392,8 @@ $ `stdlib/core/rcbox.nu`
 // full, an exact-size chunk for anything larger than that (the token
 // embedding). Every chunk sits in bufs, whose owners (bufo) the model drops.
 // 0 = out of device memory (and `oom` is set for the error message).
+unsafe
+
 @ __wh_carve * WhisperImpl w i bytes → i {
     : i need * / + bytes 255 256 256
     ? > need 0 {
@@ -397,6 +425,8 @@ $ `stdlib/core/rcbox.nu`
 // larger (in half mode the raw sources are a model's norms and biases,
 // a couple of megabytes in all; a checkpoint that widens every matrix
 // takes what it needs).
+unsafe
+
 @ __wh_carve_raw * WhisperImpl w i bytes → i {
     : i need * / + bytes 255 256 256
     ? > + . w raw_off need . w raw_cap {
@@ -417,6 +447,8 @@ $ `stdlib/core/rcbox.nu`
 
 // Carve `bytes` for the tensor at `host` and queue its upload. Returns the
 // device pointer the model keeps, -1 on OOM.
+unsafe
+
 @ __wh_queue * WhisperImpl w * u host i bytes → i {
     : i d ( __wh_carve w bytes )
     ? == d 0 { ^ -1 } {}
@@ -428,6 +460,8 @@ $ `stdlib/core/rcbox.nu`
 // into the raw arena, the f32 buffer is carved now (its pointer is what
 // the model keeps), and the widen kernel runs after the batch has landed.
 // Returns the f32 pointer, -1 on OOM.
+unsafe
+
 @ __wh_queue_widen * WhisperImpl w * u host i n b f16 → i {
     : i raw ( __wh_carve_raw w * n 2 )
     ? == raw 0 { ^ -1 } {}
@@ -443,6 +477,8 @@ $ `stdlib/core/rcbox.nu`
 
 // Send the queue, widen what was waiting on it, give the raw arena back.
 // F = the upload failed.
+unsafe
+
 @ __wh_queue_flush * WhisperImpl w → b {
     : i rc ( gpu_upload_batch . w up_q )
     ( vec_clear [GpuCopy] . w up_q )
@@ -470,6 +506,8 @@ $ `stdlib/core/rcbox.nu`
     ( vec_clear [i] . w cvt_f16 )
     ^ T
 }
+
+unsafe
 
 @ __wh_raw_release * WhisperImpl w → v {
     ( vec_clear [GpuBuffer] . w cvt_rawo )  // the raw chunks go back
@@ -532,6 +570,8 @@ $ `stdlib/core/rcbox.nu`
 // would have taken two hours to register — with the process unstoppable
 // (R state, ptrace could not attach) for the duration. The staged path
 // the gpu package takes for pageable memory is the right one here.
+unsafe
+
 @ __wh_source_done * WhisperImpl w → v {
     // the staging pair is 128 MB of page-locked memory — a loader that is
     // done loading gives it back
@@ -556,6 +596,8 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // "there was not enough room", with the numbers that make it actionable.
+unsafe
+
 @ __wh_oom_err * WhisperImpl w → !v String {
     : String m ( string_from `whisper: out of device memory loading the model` )
     : i fr ( gpu_mem_free . w g )
@@ -579,6 +621,8 @@ $ `stdlib/core/rcbox.nu`
         F → { ^ def }
     }
 }
+
+unsafe
 
 @ wh_open s config_path s weights_path → !Whisper String {
     // hyperparameters
@@ -653,6 +697,8 @@ $ `stdlib/core/rcbox.nu`
 
 // Open a whisper.cpp ggml container: hyperparameters and tokenizer live in
 // the same file as the weights, so the only argument is the file.
+unsafe
+
 @ wh_open_ggml s path → !Whisper String {
     ?? ( gg_open path ) {
         T gg → {
@@ -690,6 +736,8 @@ $ `stdlib/core/rcbox.nu`
 // Everything after "the weight source is open and probed" — one body for
 // both containers: device, kernels, every upload (in HF names — the ggml
 // source translates), caches, scratch.
+unsafe
+
 @ __wh_finish * WhisperImpl w i n_dctx → !v String {
     = . w g ( gpu_open ( gpu_best_device ) )
     ? ( gpu_ok . w g ) {} {
@@ -891,6 +939,8 @@ $ `stdlib/core/rcbox.nu`
 // Run the encoder over a 30-second log-mel spectrogram: `mel` is 3000 × n_mels,
 // row-major (a frame is contiguous) — exactly what packages/audio produces.
 // Leaves the 1500 encoder states on the device (wh_enc_out).
+unsafe
+
 @ wh_encode Whisper w__h ( Vec f ) mel → v {
     : *WhisperImpl w ( __Whisper_ptr w__h )
     : i nframe / ( vec_len [f] mel ) . w n_mels
@@ -956,6 +1006,8 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // The encoder states, back on the host: 1500 × d_model, row-major.
+unsafe
+
 @ wh_enc_out Whisper w__h → ( Vec f ) {
     : *WhisperImpl w ( __Whisper_ptr w__h )
     : i n * . w n_ctx_enc . w d_model
@@ -973,6 +1025,8 @@ $ `stdlib/core/rcbox.nu`
     ^ out
 }
 
+unsafe
+
 @ __wh_u32 * u p i o → i {
     ^ | # i . p o | << # i . p + o 1 8 | << # i . p + o 2 16 << # i . p + o 3 24
 }
@@ -983,6 +1037,8 @@ $ `stdlib/core/rcbox.nu`
 // change while a clip is being transcribed. So they are computed ONCE here,
 // after wh_encode — not once per generated token, which would redo 1500×d_model
 // of work for every word.
+unsafe
+
 @ wh_prepare_cross Whisper w__h → v {
     : *WhisperImpl w ( __Whisper_ptr w__h )
     : i dm . w d_model
@@ -1003,6 +1059,8 @@ $ `stdlib/core/rcbox.nu`
 // The self-attention needs no causal mask: there is exactly ONE query, at the
 // end, and the cache holds only what came before it. Masking is what you do when
 // you process several positions at once.
+unsafe
+
 @ wh_decode_step Whisper w__h i tok i pos → v {
     : *WhisperImpl w ( __Whisper_ptr w__h )
     : i dm . w d_model
@@ -1058,6 +1116,8 @@ $ `stdlib/core/rcbox.nu`
 
 // x += embed_positions[pos]. The row lives inside a matrix, so it is added by
 // pointing at the row rather than by a broadcast.
+unsafe
+
 @ wk_addv_row Whisper w__h i pos → v {
     : *WhisperImpl w ( __Whisper_ptr w__h )
     : i dm . w d_model
@@ -1066,6 +1126,8 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // The logits of the last step, on the host.
+unsafe
+
 @ wh_logits Whisper w__h → ( Vec f ) {
     : *WhisperImpl w ( __Whisper_ptr w__h )
     : GpuBuffer b ( gpu_buffer_view . w logits_d * . w n_vocab 4 )
@@ -1082,6 +1144,8 @@ $ `stdlib/core/rcbox.nu`
 // The greedy pick, without fetching the logits: the reduction runs on the
 // device and one integer comes back. Ties go to the lower index in the kernel
 // exactly as they do in wh_argmax below, so the token stream is the same one.
+unsafe
+
 @ wh_argmax_dev Whisper w__h → i {
     : *WhisperImpl w ( __Whisper_ptr w__h )
     ( wk_argmax . w ks . w logits_d . w n_vocab . w argmax_d )

@@ -5,6 +5,8 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/ext/compress.nu`
 
+unsafe
+
 @ vec_eq_bytes ( Vec u ) a ( Vec u ) b → b {
     : i na ( vec_len [u] a )
     : i nb ( vec_len [u] b )

@@ -105,6 +105,8 @@ $ `src/dynamic.nu`
     ^ + 20.0 # f % # i k 8
 }
 
+unsafe
+
 @ test_sequence Store st → v {
     : Model mo__h ( model_open_at st `tvseq` T0 )
     : *ModelImpl mo ( _Model_ptr mo__h )
@@ -187,6 +189,8 @@ $ `src/dynamic.nu`
     ( check ! . p has_tv `absent: no timevector verdict when the ring < window` )
     ( check >= . p n_versions 4 `absent: the other versions still answer` )
 }
+
+unsafe
 
 @ test_config Store st → v {
     // Round-trip: set 8/2, serialise, parse back.

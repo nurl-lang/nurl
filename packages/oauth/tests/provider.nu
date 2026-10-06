@@ -269,6 +269,8 @@ $ `stdlib/ext/http_response.nu`
     ^ ( prov_json 200 out )
 }
 
+unsafe
+
 @ prov_param ( Vec UrlParam ) ps s key → String {
     : i n ( vec_len [UrlParam] ps )
     : *UrlParam data ( vec_data [UrlParam] ps )

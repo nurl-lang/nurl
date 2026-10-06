@@ -12,6 +12,8 @@ $ `stdlib/core/vec.nu`
 
 & `libc` @ nurl_free_count → i
 
+unsafe
+
 @ live → i { ^ - ( nurl_alloc_count ) ( nurl_free_count ) }
 
 @ mk i n → ( Vec i ) {

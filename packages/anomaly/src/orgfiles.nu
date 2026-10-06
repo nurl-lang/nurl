@@ -44,6 +44,8 @@ $ `stdlib/ext/json.nu`
 
 : ~ i g_of_state 0
 
+unsafe
+
 @ __of_state → *OfState {
     ? != g_of_state 0 { ^ # *OfState g_of_state } {}
     : *OfState st # *OfState ( nurl_malloc Z OfState )
@@ -53,11 +55,15 @@ $ `stdlib/ext/json.nu`
     ^ st
 }
 
+unsafe
+
 @ orgfiles_set_root s root → v {
     : *OfState st ( __of_state )
     ( string_clear . st root )
     ( string_push_str . st root root )
 }
+
+unsafe
 
 @ __of_orgs_dir → String {
     : String p ( string_from ( string_data . ( __of_state ) root ) )
@@ -86,6 +92,8 @@ $ `stdlib/ext/json.nu`
 
 // The store root itself, for a module that needs the models beside the
 // organisation folders.
+unsafe
+
 @ orgfiles_root → s { ^ ( string_data . ( __of_state ) root ) }
 
 // Every organisation that has a folder under <root>/orgs — the names of
@@ -269,6 +277,8 @@ $ `stdlib/ext/json.nu`
 // sig = HMAC-SHA256(secret, "<org>\n<name>\n<exp>"), hex. The secret is 32
 // random bytes, generated on first use and kept at <root>/orgs/link.secret;
 // deleting the file revokes every link at once.
+
+unsafe
 
 @ __of_secret → s {
     : *OfState st ( __of_state )

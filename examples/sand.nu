@@ -23,6 +23,8 @@
 : i H 180
 : i FPS 60
 
+unsafe
+
 @ main → i {
     : i total_px * W H
 

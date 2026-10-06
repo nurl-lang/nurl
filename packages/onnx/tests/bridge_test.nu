@@ -25,6 +25,8 @@ $ `src/tensor_bridge.nu`
     ( nurl_print name ) ( nurl_print `\n` )
 }
 
+unsafe
+
 @ load_f32b s path * u pcell → *u {
     ?? ( read_file_bytes path ) {
         T bytes → {
@@ -41,6 +43,8 @@ $ `src/tensor_bridge.nu`
 @ sh2b i a i b → ( Vec i ) {
     : ( Vec i ) v ( vec_new [i] ) ( vec_push [i] v a ) ( vec_push [i] v b ) ^ v
 }
+
+unsafe
 
 @ main → i {
     // parse the model

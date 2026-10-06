@@ -93,6 +93,8 @@ $ `../../http/src/http.nu`
 
 // mode: 0 deflate, 1 corrupt gzip CRC, 2 valid expansion beyond a cap,
 // 3 zlib data incorrectly labelled gzip.
+unsafe
+
 @ h_compression i mode → HttpResponse {
     : ( Vec u ) plain ( bytes_from_str `the quick brown fox jumps over the lazy dog` )
     ? == mode 2 {

@@ -22,6 +22,8 @@ $ `src/preproc.nu`
 
 : i STRIDE 9973
 
+unsafe
+
 @ imnet_norm * f p i h i w → v {
     : ( Vec u ) mean__v ( vec_zeroed [u] 24 )
     : *f mean # *f ( vec_data [u] mean__v )
@@ -40,6 +42,8 @@ $ `src/preproc.nu`
         = c + c 1
     }
 }
+
+unsafe
 
 @ dump s label GkBuf b GpuKit kit i h i w s tail → v {
     : ( Vec f ) hv ( vec_with_cap [f] * h w )
@@ -60,6 +64,8 @@ $ `src/preproc.nu`
 
 // world_points, in the reference's own layout: H x W x 3, unprojected
 // at INTEGER pixel coordinates the way np.arange builds the grid.
+unsafe
+
 @ wdump GpuKit kit GkBuf pose GkBuf depth i h i w → v {
     : ( Vec f ) pv ( vec_with_cap [f] 9 )
     : b _pl ( vec_set_len [f] pv 9 )
@@ -93,6 +99,8 @@ $ `src/preproc.nu`
     }
     ( nurl_print `\n` )
 }
+
+unsafe
 
 @ main → i {
     ? < ( nurl_argc ) 3 { ( nurl_print `usage: depthcheck <ckpt.pt> <frame>\n` ) ^ 2 } {}

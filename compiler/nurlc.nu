@@ -4905,8 +4905,15 @@
             : s __pog ( __ptr_owner_gone syms name )
             ? != 0 ( nurl_str_len __pog ) {
                 : s __pos ( nurl_sym_get g_ptrtab ( nurl_str_cat __pog `__oname` ) )
-                ( bck_emit_error ( nurl_lex_filename lex ) __id_line ( nurl_str_cat3 ( nurl_str_cat3 `pointer '` name `' points into '` )
-                __pos `', which was dropped at the end of its block — this reads freed memory. Keep the owner alive as long as the pointer (declare it in the outer scope), or keep an owned copy instead of a pointer into it (a String: ( string_from p )).` ) )
+                : s __pmsg ( nurl_str_cat3 ( nurl_str_cat3 `pointer '` name `' points into '` )
+                __pos `', which was dropped at the end of its block — this reads freed memory. Keep the owner alive as long as the pointer (declare it in the outer scope), or keep an owned copy instead of a pointer into it (a String: ( string_from p )).` )
+                : s __pcond ( nurl_sym_get g_ptrtab ( nurl_str_cat name `@owncond` ) )
+                ? == 0 ( nurl_str_len __pcond ) { ( bck_emit_error ( nurl_lex_filename lex ) __id_line __pmsg ) } {
+                    // Only if that callee really keeps the view: decided at module end.
+                    : s __pend ( nurl_sym_get g_pending_escape `og` )
+                    : s __prec ( nurl_str_cat4 __pcond ` ` ( nurl_lex_filename lex ) ( nurl_str_cat3 ` ` ( nurl_str_int __id_line ) ( nurl_str_cat ` ` ( bck_swap_char __pmsg 32 31 ) ) ) )
+                    ( nurl_sym_set g_pending_escape `og` ? == 0 ( nurl_str_len __pend ) __prec ( nurl_str_cat3 __pend `\n` __prec ) )
+                }
                 ( __ptr_own_forget name )
             } {}
         } {}
@@ -11605,6 +11612,12 @@
         ? & & > arg_idx 0 != 0 __pk_vc | | != 2 __pk_vc == 0 ( nurl_sym_len g_fn_compiled call_name ) | ( nurl_sym_has_word g_fn_keeps call_name ( nurl_str_int arg_idx ) ) ( nurl_sym_has_word g_fn_escapes call_name ( nurl_str_int arg_idx ) ) { ? ( is_ptr_ty at ) {
                 : s __pk_c0 ( nurl_sym_get syms `__pk_c0__` )
                 : s __pkb ( nurl_sym_get syms `__last_borrow_src__` )
+                // A callee not compiled yet may or may not keep this view:
+                // whether the container holds it is decided at module end
+                // (resolve_pending_owner_gone).
+                ? & == __pk_vc 2 == 0 ( nurl_sym_len g_fn_compiled call_name ) {
+                    ( nurl_sym_def g_ptrtab ( nurl_str_cat __pk_c0 `@owncond` ) ( nurl_str_cat3 call_name ` ` ( nurl_str_int arg_idx ) ) )
+                } {}
                 ? != 0 ( nurl_str_len __pkb ) {
                     ( __ptr_own_note syms __pk_c0 __pkb )
                     ( __ptr_src_add __pk_c0 __pkb bck_arg_line )
@@ -32081,11 +32094,32 @@
     }
 }
 
+// A view handed to a callee that was not compiled yet, read after its
+// owner was dropped (parked by gen_ident): an error exactly when that
+// callee keeps the argument (its final keeps / escape summary).
+@ resolve_pending_owner_gone → v {
+    : ~ s rest ( nurl_sym_get g_pending_escape `og` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : i nl ( nurl_str_find rest `\n` )
+        : s rec ? < nl 0 ( nurl_str_cat rest `` ) ( nurl_str_slice rest 0 nl )
+        = rest ? < nl 0 `` ( nurl_str_slice rest + nl 1 - - ( nurl_str_len rest ) nl 1 )
+        : ~ s r ( nurl_str_cat rec `` )
+        : s cn ( str_first_word r ) = r ( str_skip_word r )
+        : s ai ( str_first_word r ) = r ( str_skip_word r )
+        : s file ( str_first_word r ) = r ( str_skip_word r )
+        : s ln ( str_first_word r ) = r ( str_skip_word r )
+        ? | ( nurl_sym_has_word g_fn_keeps cn ai ) ( nurl_sym_has_word g_fn_escapes cn ai ) {
+            ( bck_emit_error file ( nurl_str_to_int ln ) ( bck_swap_char r 31 32 ) )
+        } {}
+    }
+}
+
 @ resolve_pending_escapes → v {
     ? == g_borrowck 0 {} {
         ( resolve_pending_ret_escapes )
         ( resolve_pending_iter_mut )
         ( resolve_pending_stale )
+        ( resolve_pending_owner_gone )
         : ~ s rest ( nurl_sym_get g_pending_escape `l` )
         ~ != 0 ( nurl_str_len rest ) {
             : s cn ( str_first_word rest ) = rest ( str_skip_word rest )
@@ -42051,6 +42085,8 @@ u` ) ( nurl_print q ) ( nurl_print `:
         : ~ b malformed F
         : ~ s bindings ``  // "name val …" associated-type bindings of this impl
         ~ & != ( nurl_lex_type lex ) TT_RBRACE != ( nurl_lex_type lex ) TT_EOF {
+            // (`unsafe @ m …`: the prefix is the codegen pass's to read.)
+            ? == ( nurl_lex_type lex ) TT_UNSAFE { ( nurl_lex_advance lex ) } {}
             ? & == ( nurl_lex_type lex ) TT_IDENT ( seq ( nurl_lex_val lex ) `type` )
             { : s pair ( __parse_assoc_binding lex )
                 = bindings ? == 0 ( nurl_str_len bindings )
@@ -42973,7 +43009,10 @@ u` ) ( nurl_print q ) ( nurl_print `:
         ( expect lex TT_LBRACE )
         : ~ s provided ``
         : ~ s bindings ``  // associated-type bindings (re-collected for emit subst)
+        // `unsafe @ m …` inside the impl: that method may use raw memory.
+        : ~ b __impl_unsafe F
         ~ & != ( nurl_lex_type lex ) TT_RBRACE != ( nurl_lex_type lex ) TT_EOF {
+            ? == ( nurl_lex_type lex ) TT_UNSAFE { ( nurl_lex_advance lex ) = __impl_unsafe T } {}
             ? & == ( nurl_lex_type lex ) TT_IDENT ( seq ( nurl_lex_val lex ) `type` )
             { : s pair ( __parse_assoc_binding lex )
                 = bindings ? == 0 ( nurl_str_len bindings )
@@ -42987,6 +43026,11 @@ u` ) ( nurl_print q ) ( nurl_print `:
                         ( nurl_str_cat mname `` )
                         ( nurl_str_cat provided ( nurl_str_cat ` ` mname ) )
                         : s mangled ( nurl_str_cat mname ( nurl_str_cat `__` impl_mangle ) )
+                        ? __impl_unsafe {
+                            ? == g_unsafe_fns 0 { = g_unsafe_fns ( nurl_sym_new ) } {}
+                            ( nurl_sym_def g_unsafe_fns mangled `1` )
+                            = __impl_unsafe F
+                        } {}
                         // A struct's `% Drop` gets its fields' drop glue.
                         : b __glue & & ( seq tname `Drop` ) ( seq mname `drop` ) == ( nurl_str_get impl_llvm 0 ) 37
                         ? __glue { = g_drop_glue_ty ( nurl_str_cat impl_llvm `` ) } {}

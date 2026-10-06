@@ -15,6 +15,8 @@ $ `stdlib/core/string.nu`
 
 : Box { i a i b }
 
+unsafe
+
 @ mk_ok i n → !*Box Boom {
     : *Box p # *Box ( nurl_alloc Z Box )
     = . p a n
@@ -25,6 +27,8 @@ $ `stdlib/core/string.nu`
 @ mk_err → !*Box Boom {
     ^ @ !*Box Boom { F @ Boom { Bang } }
 }
+
+unsafe
 
 @ main → i {
     : !*Box Boom r ( mk_ok 21 )

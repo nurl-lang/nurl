@@ -19,6 +19,8 @@
 // a XOR b  =  (a | b) - (a & b)   when a,b ∈ {0,1}
 @ xor i a i b → i { ^ - | a b & a b }
 
+unsafe
+
 @ render * i row i w → v {
     : ~ i x 0
     ~ < x w {
@@ -29,6 +31,8 @@
     }
     ( nurl_print `\n` )
 }
+
+unsafe
 
 @ step * i cur * i nxt i w → v {
     : ~ i j 0
@@ -42,6 +46,8 @@
     }
 }
 
+unsafe
+
 @ copy * i src * i dst i w → v {
     : ~ i k 0
     ~ < k w {
@@ -49,6 +55,8 @@
         = k + k 1
     }
 }
+
+unsafe
 
 @ main → i {
     : i width 79

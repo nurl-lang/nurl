@@ -20,6 +20,8 @@ $ `src/gpu.nu`
 }
 
 // ── pure-CPU: argument encoding round-trips ──────────────────────
+unsafe
+
 @ test_args → v {
     ( nurl_print `[args]\n` )
     // f32 encoder must reproduce the IEEE-754 bit pattern of 2.5f.

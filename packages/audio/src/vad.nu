@@ -315,6 +315,8 @@ $ `stdlib/core/rcbox.nu`
 // every copy is the same stream, and the last owner releases it.
 : VadStream { s ctl }
 
+unsafe
+
 @ VadStream_share VadStream h → VadStream { ^ @ VadStream { # s ( rcbox_share # i . h ctl ) } }
 
 @ VadStream_drop sink VadStream h → v {
@@ -322,7 +324,11 @@ $ `stdlib/core/rcbox.nu`
     ( rcbox_release [VadStreamImpl] # i . h ctl )
 }
 
+unsafe
+
 @ __VadStream_ptr VadStream h → *VadStreamImpl { ^ ( rcbox_ptr [VadStreamImpl] # i . h ctl ) }
+
+unsafe
 
 @ vad_stream_new i rate VadOpts o → VadStream {
     : i st__box ( rcbox_zero [VadStreamImpl] )
@@ -354,6 +360,8 @@ $ `stdlib/core/rcbox.nu`
 
 // The trailing-minute percentile. ~6000 energies at most; sorting a copy once
 // a second is nothing next to one second of audio.
+unsafe
+
 @ __vads_refloor * VadStreamImpl st → v {
     : i n ( vec_len [f] . st e )
     ? < n 30 { ^ {} } {}
@@ -370,6 +378,8 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Close the run [run_frame, end_frame) into the pending segment slot.
+unsafe
+
 @ __vads_close * VadStreamImpl st i run_frame i end_frame → v {
     : ~ i s0 - * run_frame . st hop . st pad
     ? < s0 . st base { = s0 . st base } {}
@@ -383,6 +393,8 @@ $ `stdlib/core/rcbox.nu`
 // Feed samples. Frames are processed up to the data (or up to a pending
 // segment — one is handed over at a time, and processing resumes after
 // vad_stream_take).
+unsafe
+
 @ vad_stream_push VadStream st__h ( Vec f ) x → v {
     : *VadStreamImpl st ( __VadStream_ptr st__h )
     : ~ i k 0
@@ -392,6 +404,8 @@ $ `stdlib/core/rcbox.nu`
     }
     ( __vads_process st )
 }
+
+unsafe
 
 @ __vads_process * VadStreamImpl st → v {
     ~ & == . st seg_start -1
@@ -456,6 +470,8 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Drop buffer prefix below absolute sample `abs`.
+unsafe
+
 @ __vads_drop * VadStreamImpl st i abs → v {
     : i off - abs . st base
     ? <= off 0 { ^ {} } {}
@@ -471,12 +487,16 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Is a closed segment waiting?
+unsafe
+
 @ vad_stream_poll VadStream st__h → b {
     : *VadStreamImpl st ( __VadStream_ptr st__h )
     ^ != . st seg_start -1
 }
 
 // Where the pending segment sits, in absolute samples since stream start.
+unsafe
+
 @ vad_stream_seg VadStream st__h → VadSeg {
     : *VadStreamImpl st ( __VadStream_ptr st__h )
     ^ @ VadSeg { . st seg_start . st seg_end }
@@ -484,6 +504,8 @@ $ `stdlib/core/rcbox.nu`
 
 // The pending segment's audio. Clears the slot, releases what came before
 // it, and resumes frame processing.
+unsafe
+
 @ vad_stream_take VadStream st__h → ( Vec f ) {
     : *VadStreamImpl st ( __VadStream_ptr st__h )
     : ( Vec f ) out ( vec_new [f] )
@@ -504,6 +526,8 @@ $ `stdlib/core/rcbox.nu`
 
 // End of stream: close an open run (if it was ever long enough to be
 // speech). T = a segment is now pending.
+unsafe
+
 @ vad_stream_flush VadStream st__h → b {
     : *VadStreamImpl st ( __VadStream_ptr st__h )
     ? != . st seg_start -1 { ^ T } {}

@@ -31,6 +31,8 @@ $ `deps/gpukit/src/dev.nu`
     ( nurl_print `\n` )
 }
 
+unsafe
+
 @ main → i {
     : GpuKit kit ( gk_open 0 )
     ? ( gk_ok kit ) {} {

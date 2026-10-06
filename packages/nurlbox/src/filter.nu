@@ -51,6 +51,8 @@ $ `bx.nu`
 
 // ── tac ───────────────────────────────────────────────────────────
 
+unsafe
+
 @ ap_tac ( Vec String ) argv → i {
     : BxOpts o ( bx_getopt argv 1 `` `` )
     : ~ i rc 0
@@ -121,6 +123,8 @@ $ `bx.nu`
 }
 
 // ── nl ────────────────────────────────────────────────────────────
+
+unsafe
 
 @ ap_nl ( Vec String ) argv → i {
     : BxOpts o ( bx_getopt argv 1 `b:n:s:w:v:i:` `body-numbering=b,number-format=n,number-separator=s,number-width=w,starting-line-number=v,line-increment=i` )
@@ -243,6 +247,8 @@ $ `bx.nu`
     }
     ^ F
 }
+
+unsafe
 
 @ ap_cut ( Vec String ) argv → i {
     : BxOpts o ( bx_getopt argv 1 `b:c:f:d:sn` `bytes=b,characters=c,fields=f,delimiter=d,only-delimited=s` )
@@ -409,6 +415,8 @@ $ `bx.nu`
         }
     }
 }
+
+unsafe
 
 @ ap_tr ( Vec String ) argv → i {
     : BxOpts o ( bx_getopt argv 1 `dsc` `delete=d,squeeze-repeats=s,complement=c` )
@@ -610,6 +618,8 @@ $ `bx.nu`
     ^ ? != 0 & g_sort_flags SORT_REVERSE - 0 r r
 }
 
+unsafe
+
 @ ap_sort ( Vec String ) argv → i {
     : BxOpts o ( bx_getopt argv 1 `rnufbck:t:sz` `reverse=r,numeric-sort=n,unique=u,ignore-case=f,ignore-leading-blanks=b,check=c,key=k,field-separator=t,stable=s` )
     : ~ i rc 0
@@ -711,6 +721,8 @@ $ `bx.nu`
     }
 }
 
+unsafe
+
 @ ap_uniq ( Vec String ) argv → i {
     : BxOpts o ( bx_getopt argv 1 `cduif:s:w:` `count=c,repeated=d,unique=u,ignore-case=i,skip-fields=f,skip-chars=s,check-chars=w` )
     : ~ i rc 0
@@ -762,6 +774,8 @@ $ `bx.nu`
     }
     ^ rc
 }
+
+unsafe
 
 @ __uniq_emit String out String line i run b count b want_dup b want_uniq → v {
     ? & want_dup < run 2 { ^ } {}

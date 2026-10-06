@@ -29,6 +29,8 @@
     }
 }
 
+unsafe
+
 @ main → i {
     : i W 320
     : i H 140

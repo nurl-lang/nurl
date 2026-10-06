@@ -160,6 +160,8 @@ $ `stdlib/core/rcbox.nu`
 // every copy is the same tree, and the last owner releases it.
 : Pk { s ctl }
 
+unsafe
+
 @ Pk_share Pk h → Pk { ^ @ Pk { # s ( rcbox_share # i . h ctl ) } }
 
 @ Pk_drop sink Pk h → v {
@@ -167,7 +169,11 @@ $ `stdlib/core/rcbox.nu`
     ( rcbox_release [PkImpl] # i . h ctl )
 }
 
+unsafe
+
 @ __Pk_ptr Pk h → *PkImpl { ^ ( rcbox_ptr [PkImpl] # i . h ctl ) }
+
+unsafe
 
 @ pk_new → Pk {
     : i k__box ( rcbox_zero [PkImpl] )
@@ -200,17 +206,23 @@ $ `stdlib/core/rcbox.nu`
 
 @ pk_root Pk k__h → i { ^ ( __pk_root ( __Pk_ptr k__h ) ) }
 
+unsafe
+
 @ __pk_root * PkImpl k → i {
     ^ ( __pk_geti . k root 0 )
 }
 
 @ pk_n_nodes Pk k__h → i { ^ ( __pk_n_nodes ( __Pk_ptr k__h ) ) }
 
+unsafe
+
 @ __pk_n_nodes * PkImpl k → i {
     ^ ( vec_len [i] . k kind )
 }
 
 @ pk_kind Pk k__h i id → i { ^ ( __pk_kind ( __Pk_ptr k__h ) id ) }
+
+unsafe
 
 @ __pk_kind * PkImpl k i id → i {
     ? | < id 0 >= id ( vec_len [i] . k kind ) { ^ PK_OTHER } {}
@@ -219,6 +231,8 @@ $ `stdlib/core/rcbox.nu`
 
 @ pk_int Pk k__h i id → i { ^ ( __pk_int ( __Pk_ptr k__h ) id ) }
 
+unsafe
+
 @ __pk_int * PkImpl k i id → i {
     ? | < id 0 >= id ( vec_len [i] . k kind ) { ^ 0 } {}
     ^ ( __pk_geti . k va id )
@@ -226,12 +240,16 @@ $ `stdlib/core/rcbox.nu`
 
 @ pk_float Pk k__h i id → f { ^ ( __pk_float ( __Pk_ptr k__h ) id ) }
 
+unsafe
+
 @ __pk_float * PkImpl k i id → f {
     ? | < id 0 >= id ( vec_len [i] . k kind ) { ^ 0.0 } {}
     ^ ( bits_to_f64 ( __pk_geti . k va id ) )
 }
 
 @ pk_str Pk k__h i id → s { ^ ( __pk_str ( __Pk_ptr k__h ) id ) }
+
+unsafe
 
 @ __pk_str * PkImpl k i id → s {
     ? != ( __pk_kind k id ) PK_STR { ^ `` } {}
@@ -242,6 +260,8 @@ $ `stdlib/core/rcbox.nu`
 // Items in a tuple/list, pairs in a dict, bytes in a byte string.
 @ pk_len Pk k__h i id → i { ^ ( __pk_len ( __Pk_ptr k__h ) id ) }
 
+unsafe
+
 @ __pk_len * PkImpl k i id → i {
     : i kd ( __pk_kind k id )
     ? | | | == kd PK_TUPLE == kd PK_LIST == kd PK_DICT == kd PK_BYTES
@@ -250,6 +270,8 @@ $ `stdlib/core/rcbox.nu`
 }
 
 @ pk_item Pk k__h i id i j → i { ^ ( __pk_item ( __Pk_ptr k__h ) id j ) }
+
+unsafe
 
 @ __pk_item * PkImpl k i id i j → i {
     : i kd ( __pk_kind k id )
@@ -260,6 +282,8 @@ $ `stdlib/core/rcbox.nu`
 
 @ pk_key Pk k__h i id i j → i { ^ ( __pk_key ( __Pk_ptr k__h ) id j ) }
 
+unsafe
+
 @ __pk_key * PkImpl k i id i j → i {
     ? != ( __pk_kind k id ) PK_DICT { ^ -1 } {}
     ? | < j 0 >= j ( __pk_geti . k vb id ) { ^ -1 } {}
@@ -267,6 +291,8 @@ $ `stdlib/core/rcbox.nu`
 }
 
 @ pk_val Pk k__h i id i j → i { ^ ( __pk_val ( __Pk_ptr k__h ) id j ) }
+
+unsafe
 
 @ __pk_val * PkImpl k i id i j → i {
     ? != ( __pk_kind k id ) PK_DICT { ^ -1 } {}
@@ -288,12 +314,16 @@ $ `stdlib/core/rcbox.nu`
 
 @ pk_tensor_storage Pk k__h i id → i { ^ ( __pk_tensor_storage ( __Pk_ptr k__h ) id ) }
 
+unsafe
+
 @ __pk_tensor_storage * PkImpl k i id → i {
     ? != ( __pk_kind k id ) PK_TENSOR { ^ -1 } {}
     ^ ( __pk_geti . k tens * ( __pk_geti . k va id ) 4 )
 }
 
 @ pk_tensor_offset Pk k__h i id → i { ^ ( __pk_tensor_offset ( __Pk_ptr k__h ) id ) }
+
+unsafe
 
 @ __pk_tensor_offset * PkImpl k i id → i {
     ? != ( __pk_kind k id ) PK_TENSOR { ^ 0 } {}
@@ -302,12 +332,16 @@ $ `stdlib/core/rcbox.nu`
 
 @ pk_tensor_ndim Pk k__h i id → i { ^ ( __pk_tensor_ndim ( __Pk_ptr k__h ) id ) }
 
+unsafe
+
 @ __pk_tensor_ndim * PkImpl k i id → i {
     ? != ( __pk_kind k id ) PK_TENSOR { ^ 0 } {}
     ^ ( __pk_geti . k tens + * ( __pk_geti . k va id ) 4 2 )
 }
 
 @ pk_tensor_dim Pk k__h i id i j → i { ^ ( __pk_tensor_dim ( __Pk_ptr k__h ) id j ) }
+
+unsafe
 
 @ __pk_tensor_dim * PkImpl k i id i j → i {
     ? != ( __pk_kind k id ) PK_TENSOR { ^ 0 } {}
@@ -317,6 +351,8 @@ $ `stdlib/core/rcbox.nu`
 }
 
 @ pk_tensor_stride Pk k__h i id i j → i { ^ ( __pk_tensor_stride ( __Pk_ptr k__h ) id j ) }
+
+unsafe
 
 @ __pk_tensor_stride * PkImpl k i id i j → i {
     ? != ( __pk_kind k id ) PK_TENSOR { ^ 0 } {}
@@ -328,11 +364,15 @@ $ `stdlib/core/rcbox.nu`
 
 @ pk_n_storages Pk k__h → i { ^ ( __pk_n_storages ( __Pk_ptr k__h ) ) }
 
+unsafe
+
 @ __pk_n_storages * PkImpl k → i {
     ^ / ( vec_len [i] . k stor ) 3
 }
 
 @ pk_storage_dtype Pk k__h i sid → i { ^ ( __pk_storage_dtype ( __Pk_ptr k__h ) sid ) }
+
+unsafe
 
 @ __pk_storage_dtype * PkImpl k i sid → i {
     ? | < sid 0 >= sid ( __pk_n_storages k ) { ^ PKS_UNKNOWN } {}
@@ -340,6 +380,8 @@ $ `stdlib/core/rcbox.nu`
 }
 
 @ pk_storage_key Pk k__h i sid → s { ^ ( __pk_storage_key ( __Pk_ptr k__h ) sid ) }
+
+unsafe
 
 @ __pk_storage_key * PkImpl k i sid → s {
     ? | < sid 0 >= sid ( __pk_n_storages k ) { ^ `` } {}
@@ -349,12 +391,16 @@ $ `stdlib/core/rcbox.nu`
 
 @ pk_storage_numel Pk k__h i sid → i { ^ ( __pk_storage_numel ( __Pk_ptr k__h ) sid ) }
 
+unsafe
+
 @ __pk_storage_numel * PkImpl k i sid → i {
     ? | < sid 0 >= sid ( __pk_n_storages k ) { ^ 0 } {}
     ^ ( __pk_geti . k stor + * sid 3 2 )
 }
 
 // ── construction helpers ────────────────────────────────────────────
+
+unsafe
 
 @ __pk_node * PkImpl k i kd i a i b → i {
     : i id ( vec_len [i] . k kind )
@@ -364,15 +410,23 @@ $ `stdlib/core/rcbox.nu`
     ^ id
 }
 
+unsafe
+
 @ __pk_intern * PkImpl k s text → i {
     : i idx ( vec_len [String] . k strs )
     ( vec_push [String] . k strs ( string_from text ) )
     ^ idx
 }
 
+unsafe
+
 @ __pk_push * PkImpl k i id → v { ( vec_push [i] . k stack id ) }
 
+unsafe
+
 @ __pk_depth * PkImpl k → i { ^ ( vec_len [i] . k stack ) }
+
+unsafe
 
 @ __pk_pop * PkImpl k → i {
     : i n ( vec_len [i] . k stack )
@@ -382,6 +436,8 @@ $ `stdlib/core/rcbox.nu`
     ^ id
 }
 
+unsafe
+
 @ __pk_peek * PkImpl k i back → i {
     : i n ( vec_len [i] . k stack )
     ? | < back 0 >= back n { ^ -1 } {}
@@ -389,6 +445,8 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Stack index of the topmost MARK, or -1.
+unsafe
+
 @ __pk_find_mark * PkImpl k → i {
     : ~ i j - ( vec_len [i] . k stack ) 1
     ~ >= j 0 {
@@ -398,11 +456,15 @@ $ `stdlib/core/rcbox.nu`
     ^ -1
 }
 
+unsafe
+
 @ __pk_memo_put * PkImpl k i slot i id → v {
     ? | < slot 0 > slot 16777216 { ^ v } {}
     ~ <= ( vec_len [i] . k memo ) slot { ( vec_push [i] . k memo -1 ) }
     : b _s ( vec_set [i] . k memo slot id )
 }
+
+unsafe
 
 @ __pk_memo_get * PkImpl k i slot → i {
     ? | < slot 0 >= slot ( vec_len [i] . k memo ) { ^ -1 } {}
@@ -410,6 +472,8 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Record the first error and return the sentinel the step loop stops on.
+unsafe
+
 @ __pk_fail * PkImpl k s msg → i {
     ? == 0 ( vec_len [String] . k errs )
     { ( vec_push [String] . k errs ( string_from msg ) ) } {}
@@ -418,11 +482,15 @@ $ `stdlib/core/rcbox.nu`
 
 @ pk_error Pk k__h → s { ^ ( __pk_error ( __Pk_ptr k__h ) ) }
 
+unsafe
+
 @ __pk_error * PkImpl k → s {
     ?? ( vec_get [String] . k errs 0 ) { T s → ^ ( string_data s ) F → ^ `` }
 }
 
 // ── little-endian scalar reads ──────────────────────────────────────
+
+unsafe
 
 @ __pk_u8 * u p i off → i { ^ # i . p off }
 
@@ -470,6 +538,8 @@ $ `stdlib/core/rcbox.nu`
 //   (storage, storage_offset, size, stride, requires_grad, backward_hooks)
 // Returns the node id, or -1 when the argument shapes are not what the
 // name promises.
+unsafe
+
 @ __pk_build_tensor * PkImpl k i args → i {
     ? < ( __pk_len k args ) 4 { ^ -1 } {}
     : i sn ( __pk_item k args 0 )
@@ -506,6 +576,8 @@ $ `stdlib/core/rcbox.nu`
 
 // REDUCE / NEWOBJ: `callable` is a PK_GLOBAL naming a class we either
 // know how to represent as data, or do not. Nothing is ever invoked.
+unsafe
+
 @ __pk_reduce * PkImpl k i callable i args → i {
     ? != ( __pk_kind k callable ) PK_GLOBAL { ^ ( __pk_node k PK_OTHER 0 0 ) } {}
     : s nm ( __pk_str_of_global k callable )
@@ -529,11 +601,15 @@ $ `stdlib/core/rcbox.nu`
 // only kind that reads as text to callers.
 @ pk_str_of_global Pk k__h i id → s { ^ ( __pk_str_of_global ( __Pk_ptr k__h ) id ) }
 
+unsafe
+
 @ __pk_str_of_global * PkImpl k i id → s {
     ? != ( __pk_kind k id ) PK_GLOBAL { ^ `` } {}
     : i si ( __pk_geti . k va id )
     ?? ( vec_get [String] . k strs si ) { T s → ^ ( string_data s ) F → ^ `` }
 }
+
+unsafe
 
 @ __pk_global * PkImpl k s modname s qname → i {
     : String full ( string_from modname )
@@ -545,6 +621,8 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Collapse everything above the topmost MARK into one container node.
+unsafe
+
 @ __pk_collapse * PkImpl k i kd i mark → i {
     : i n ( vec_len [i] . k stack )
     : i count - - n mark 1
@@ -561,6 +639,8 @@ $ `stdlib/core/rcbox.nu`
 // has to be relocated once, on the first extend. Costs a copy of what
 // the container already holds, which for the build-then-fill shape that
 // pickle actually emits is a copy of nothing.
+unsafe
+
 @ __pk_make_room * PkImpl k i target i pair → v {
     : i kstart ( __pk_geti . k va target )
     : i kcount ( __pk_geti . k vb target )
@@ -573,6 +653,8 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Append the run above the topmost MARK to an existing list/dict node.
+unsafe
+
 @ __pk_extend * PkImpl k i target i mark i pair → b {
     : i n ( vec_len [i] . k stack )
     : i count - - n mark 1
@@ -593,6 +675,8 @@ $ `stdlib/core/rcbox.nu`
 //
 // Returns the offset just past the opcode it consumed, -1 on error
 // (message recorded in the VM) or -2 on STOP.
+
+unsafe
 
 @ __pk_step * PkImpl k * u p i n i at → i {
     : i op ( __pk_u8 p at )

@@ -59,6 +59,8 @@ $ `stdlib/std/float.nu`
 // Coefficient window for one output position along one axis.
 // Fills `wts` with the weights and returns the packed
 // (xmin + 65536·count) so a caller gets both without a second call.
+unsafe
+
 @ __ip_window i insize i outsize i idx * f wts → i {
     : f scale / # f insize # f outsize
     : f support ? >= scale 1.0 * 2.0 scale 2.0
@@ -95,6 +97,8 @@ $ `stdlib/std/float.nu`
 //
 // Separable, horizontal first, exactly as torch does it — resampling both
 // axes at once would give different sums.
+unsafe
+
 @ interp_bicubic_aa * f src i sw i sh i planes i dw i dh * f dst → v {
     ? | | | | <= sw 0 <= sh 0 <= dw 0 <= dh 0 <= planes 0 { ^ v } {}
     : i kx ( __ip_ksize sw dw )

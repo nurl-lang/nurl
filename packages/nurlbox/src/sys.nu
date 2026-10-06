@@ -146,6 +146,8 @@ $ `bx.nu`
 
 // Hand the process over to `cmd`. On success this never returns — the
 // image is replaced, which is exactly what `env VAR=x prog` means.
+unsafe
+
 @ __exec_argv ( Vec String ) args i from → i {
     : i n - ( vec_len [String] args ) from
     ? <= n 0 { ^ 127 } {}
@@ -326,6 +328,8 @@ $ `bx.nu`
     ^ + * q 2 / lo base
 }
 
+unsafe
+
 @ __pf_pad String out i width b left String body → v {
     : i n ( string_len body )
     ? & ! left > width n {
@@ -338,6 +342,8 @@ $ `bx.nu`
         ~ > k 0 { ( string_push_char out 32 ) = k - k 1 }
     } {}
 }
+
+unsafe
 
 @ ap_printf ( Vec String ) argv → i {
     : i n ( vec_len [String] argv )
@@ -543,6 +549,8 @@ $ `bx.nu`
     }
 }
 
+unsafe
+
 @ ap_uname ( Vec String ) argv → i {
     : BxOpts o ( bx_getopt argv 1 `asnrvmpioA` `all=a,kernel-name=s,nodename=n,kernel-release=r,kernel-version=v,machine=m,processor=p,hardware-platform=i,operating-system=o` )
     : ~ i rc 0
@@ -645,6 +653,8 @@ $ `bx.nu`
     }
 }
 
+unsafe
+
 @ ap_whoami ( Vec String ) argv → i {
     : String n ( __name_of_uid # i ( geteuid ) )
     ( nurl_print ( string_data n ) )
@@ -665,6 +675,8 @@ $ `bx.nu`
 }
 
 // The caller's supplementary groups, as gids.
+unsafe
+
 @ __group_ids → ( Vec i ) {
     : ( Vec i ) out ( vec_new [i] )
     : i32 n ( getgroups # i32 0 # *u 0 )
@@ -683,6 +695,8 @@ $ `bx.nu`
     }
     ^ out
 }
+
+unsafe
 
 @ ap_groups ( Vec String ) argv → i {
     // The effective group first, then the supplementary ones — the
@@ -711,6 +725,8 @@ $ `bx.nu`
     ^ 0
 }
 
+unsafe
+
 @ __id_pair String out s label i id → v {
     ( string_push_str out label )
     ( string_push_int out id )
@@ -722,6 +738,8 @@ $ `bx.nu`
         ( string_push_char out 41 )
     } {}
 }
+
+unsafe
 
 @ ap_id ( Vec String ) argv → i {
     : BxOpts o ( bx_getopt argv 1 `ugGnr` `user=u,group=g,groups=G,name=n,real=r` )
@@ -855,6 +873,8 @@ $ `bx.nu`
 
 // %Z, %z, %s and %N need the instant, not the calendar, so they are
 // substituted here and the rest handed to `time_format`.
+unsafe
+
 @ __date_prepass s fmt i epoch b utc → String {
     : String out ( string_new )
     : i n ( nurl_str_len fmt )

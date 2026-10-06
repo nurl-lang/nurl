@@ -11,6 +11,8 @@ $ `../src/window.nu`
 
 & `c` @ usleep i usec → i
 
+unsafe
+
 @ main → i {
     : ( Vec String ) av ( env_args_list )
     ? < ( vec_len [String] av ) 2 { ( nurl_print `usage: wintest <image.ppm> [iters]\n` ) ^ 2 } {}

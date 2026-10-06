@@ -103,12 +103,16 @@ $ `stdlib/core/rcbox.nu`
 // every copy is the same state, and the last owner releases it.
 : Meta { s ctl }
 
+unsafe
+
 @ Meta_share Meta h → Meta { ^ @ Meta { # s ( rcbox_share # i . h ctl ) } }
 
 @ Meta_drop sink Meta h → v {
     ( mem_forget h )
     ( rcbox_release [MetaImpl] # i . h ctl )
 }
+
+unsafe
 
 @ _Meta_ptr Meta h → *MetaImpl { ^ ( rcbox_ptr [MetaImpl] # i . h ctl ) }
 
@@ -313,6 +317,8 @@ $ `stdlib/core/rcbox.nu`
 
 // An owned copy of a model's version configuration — what a fork takes
 // from its source.
+unsafe
+
 @ meta_clone_versions Meta m__h → ( Vec VerCfg ) {
     : *MetaImpl m ( _Meta_ptr m__h )
     : i nv ( vec_len [VerCfg] . m versions )
@@ -348,6 +354,8 @@ $ `stdlib/core/rcbox.nu`
 
 // ── Meta lifecycle ────────────────────────────────────────────────────
 
+unsafe
+
 @ meta_new s name s created → Meta {
     : i m__box ( rcbox_zero [MetaImpl] )
     : *MetaImpl m ( rcbox_ptr [MetaImpl] m__box )
@@ -382,6 +390,8 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Index of column `name` in the metadata, or -1.
+unsafe
+
 @ __an_col_find * MetaImpl m s name → i {
     : i n ( vec_len [String] . m cols )
     : ~ i k 0
@@ -396,12 +406,16 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Column kind at index `ci` (COL_NUMERIC if somehow missing).
+unsafe
+
 @ __an_kind_at * MetaImpl m i ci → i {
     ?? ( vec_get [i] . m kinds ci ) { T k → { ^ k } F _ → { ^ COL_NUMERIC } }
 }
 
 // A model is "frozen" once it has an authoritative feature order (set at
 // first train). Before that, feature order is derived from the metadata.
+unsafe
+
 @ meta_is_frozen Meta m__h → b {
     : *MetaImpl m ( _Meta_ptr m__h )
     ^ > ( vec_len [String] . m feats ) 0
@@ -409,6 +423,8 @@ $ `stdlib/core/rcbox.nu`
 
 // Whether any column is a timestamp — the only kind whose encoding has
 // changed between ANOM_FEAT_ENC schemes.
+unsafe
+
 @ meta_has_timestamp Meta m__h → b {
     : *MetaImpl m ( _Meta_ptr m__h )
     : i n ( vec_len [i] . m kinds )
@@ -423,6 +439,8 @@ $ `stdlib/core/rcbox.nu`
 // A trained model whose frozen feature order was built under an older
 // calendar encoding: it still scores, the old way, but its next retrain
 // changes what it learns.
+unsafe
+
 @ meta_retrain_required Meta m__h → b {
     : *MetaImpl m ( _Meta_ptr m__h )
     ? >= . m feat_enc ANOM_FEAT_ENC { ^ F } {}
@@ -435,6 +453,8 @@ $ `stdlib/core/rcbox.nu`
 // code that should be an identity, not a magnitude. A column the model
 // already knows keeps its kind (its encoding is settled); returns T only
 // when the declaration took.
+unsafe
+
 @ meta_declare_column Meta m__h s name i kind → b {
     : *MetaImpl m ( _Meta_ptr m__h )
     ? >= ( __an_col_find m name ) 0 { ^ F } {}
@@ -526,6 +546,8 @@ $ `stdlib/core/rcbox.nu`
 // hour needs two days, weekday two weeks, month two years — and a later
 // retrain over a longer span brings the rest in. An unknown span (0: a
 // count clock, or a model from before the field) keeps every cycle.
+unsafe
+
 @ __an_cycle_seen Meta m__h i period → b {
     : *MetaImpl m ( _Meta_ptr m__h )
     ? <= . m train_span 0 { ^ T } {}
@@ -533,6 +555,8 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Append column `ci`'s feature names (in canonical order) to `out`.
+unsafe
+
 @ __an_push_col_feats Meta m__h i ci ( Vec String ) out → v {
     : *MetaImpl m ( _Meta_ptr m__h )
     ?? ( vec_get [String] . m cols ci ) {
@@ -587,6 +611,8 @@ $ `stdlib/core/rcbox.nu`
 // The feature order implied by the current metadata: columns in first-seen
 // order, each expanded canonically (categoricals over their sorted
 // categories). Deterministic for a given metadata state. Owned result.
+unsafe
+
 @ meta_derived_feats Meta m__h → ( Vec String ) {
     : *MetaImpl m ( _Meta_ptr m__h )
     : ( Vec String ) out ( vec_new [String] )
@@ -603,6 +629,8 @@ $ `stdlib/core/rcbox.nu`
 // for a one-hot level or a calendar feature. The flatline guard watches
 // only these: a category that does not change and a month that does not
 // change are not sensors.
+unsafe
+
 @ meta_numeric_feat_mask Meta m__h → ( Vec i ) {
     : *MetaImpl m ( _Meta_ptr m__h )
     : i nf ( vec_len [String] . m feats )
@@ -634,6 +662,8 @@ $ `stdlib/core/rcbox.nu`
 
 // Snapshot the derived feature order as authoritative (called at train
 // time). From now on scoring projects onto exactly this vector.
+unsafe
+
 @ meta_refresh_feats Meta m__h → v {
     : *MetaImpl m ( _Meta_ptr m__h )
     : ( Vec String ) old_feats . m feats
@@ -715,6 +745,8 @@ $ `stdlib/core/rcbox.nu`
 // categories are recorded in the metadata; otherwise an unseen category
 // just yields an all-zero one-hot. Returns an error message, or an empty
 // String on success.
+unsafe
+
 @ __an_encode_col Meta m__h i ci s cn Json jv ( Vec String ) names ( Vec f ) vals b learn → String {
     : *MetaImpl m ( _Meta_ptr m__h )
     : i kind ( __an_kind_at m ci )
@@ -792,6 +824,8 @@ $ `stdlib/core/rcbox.nu`
     ^ ( string_new )
 }
 
+unsafe
+
 @ __an_preprocess Meta m__h Json raw b learn → !EncPoint String {
     : *MetaImpl m ( _Meta_ptr m__h )
     : ( Vec String ) names ( vec_new [String] )
@@ -851,6 +885,8 @@ $ `stdlib/core/rcbox.nu`
 // standardisation is however many standard deviations 0 is from the
 // column's mean, and the range guard would then blame a value nobody
 // sent. Owned; empty when the point is complete.
+unsafe
+
 @ anomaly_missing_cols Meta m__h Json raw → ( Vec String ) {
     : *MetaImpl m ( _Meta_ptr m__h )
     : ( Vec String ) out ( vec_new [String] )
@@ -986,6 +1022,8 @@ $ `stdlib/core/rcbox.nu`
 // number of cells masked. A column with too few readings to say, or with
 // no spread at all, is left exactly as it is: not being able to tell is
 // not a licence to erase.
+unsafe
+
 @ anomaly_mask_absurd ( Vec f ) data i n_rows i n_cols ( Vec i ) counts → i {
     ? & > n_rows 0 > n_cols 0 {} { ^ 0 }
     : ~ i total 0
@@ -1080,6 +1118,8 @@ $ `stdlib/core/rcbox.nu`
 // the largest of them, so a single reading of 1e200 gives a std of about
 // 1e199 and not the infinity that once turned the persisted scaler into
 // JSON nulls the model could no longer be opened from.
+unsafe
+
 @ scaler_fit ( Vec f ) data i n_rows i n_cols → Scaler {
     : ( Vec f ) mean ( vec_with_cap [f] n_cols )
     : ( Vec f ) inv ( vec_with_cap [f] n_cols )
@@ -1154,6 +1194,8 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Standardise one point in place: x → (x - mean) * inv_std.
+unsafe
+
 @ scaler_apply Scaler sc ( Vec f ) point → v {
     : i n ( vec_len [f] point )
     : i nm ( vec_len [f] . sc mean )
@@ -1168,6 +1210,8 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Standardise a whole row-major matrix in place.
+unsafe
+
 @ scaler_apply_matrix Scaler sc ( Vec f ) data i n_rows i n_cols → v {
     : i nm ( vec_len [f] . sc mean )
     : *f dp ( vec_data [f] data )
@@ -1191,6 +1235,8 @@ $ `stdlib/core/rcbox.nu`
 
 // Persist a fitted scaler into metadata (stored as mean + std; zero
 // variance is stored as std = 1, matching its inv_std = 1).
+unsafe
+
 @ meta_set_scaler Meta m__h Scaler sc → v {
     : *MetaImpl m ( _Meta_ptr m__h )
     : ( Vec f ) old_sc_mean . m sc_mean
@@ -1220,6 +1266,8 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Rebuild a usable Scaler from persisted metadata. Owned result.
+unsafe
+
 @ meta_scaler Meta m__h → Scaler {
     : *MetaImpl m ( _Meta_ptr m__h )
     : i n ( vec_len [f] . m sc_mean )
@@ -1323,6 +1371,8 @@ $ `stdlib/core/rcbox.nu`
 
 // Serialise metadata to an owned Json object (fixed field order, so the
 // same metadata always stringifies identically).
+unsafe
+
 @ meta_to_json Meta m__h → Json {
     : *MetaImpl m ( _Meta_ptr m__h )
     : Json o ( json_obj_new )
@@ -1485,6 +1535,8 @@ $ `stdlib/core/rcbox.nu`
 
 // Parse metadata back from JSON. None on malformed shape (missing/mistyped
 // required fields).
+unsafe
+
 @ meta_from_json Json j → ?Meta {
     ? ( json_is_obj j ) {} { ^ @ ?Meta { F } }
 
@@ -1772,6 +1824,8 @@ $ `stdlib/core/rcbox.nu`
 // touch `versions`; the schedule lives on Meta directly.
 
 // Index of the version named `vname`, or -1.
+unsafe
+
 @ meta_find_version Meta m__h s vname → i {
     : *MetaImpl m ( _Meta_ptr m__h )
     : i nv ( vec_len [VerCfg] . m versions )
@@ -1787,6 +1841,8 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Is version `vname` enabled? `dflt` when there is no such version.
+unsafe
+
 @ meta_version_enabled Meta m__h s vname b dflt → b {
     : *MetaImpl m ( _Meta_ptr m__h )
     : i at ( meta_find_version m__h vname )
@@ -1799,6 +1855,8 @@ $ `stdlib/core/rcbox.nu`
 // from its forest blob — so margin changes (fine-tune, a config PUT) take
 // effect immediately, without a retrain. The blob's stored margin is only
 // the fallback for versions no longer present in the metadata.
+unsafe
+
 @ meta_version_margin Meta m__h s vname f dflt → f {
     : *MetaImpl m ( _Meta_ptr m__h )
     : i at ( meta_find_version m__h vname )
@@ -1812,6 +1870,8 @@ $ `stdlib/core/rcbox.nu`
 // it, and every cache entry carrying an older epoch is stale by
 // construction. One counter beats trying to reason about which caches a
 // given edit could have invalidated.
+unsafe
+
 @ meta_bump_epoch Meta m__h → v {
     : *MetaImpl m ( _Meta_ptr m__h )
     = . m score_epoch + . m score_epoch 1
@@ -1940,6 +2000,8 @@ $ `stdlib/core/rcbox.nu`
 // possible and still one flag away: `replace_versions` makes the object
 // the WHOLE list, which is how the dashboard's JSON editor adds and
 // removes them, and there the names it does not know are the point.
+unsafe
+
 @ meta_versions_patch_check Meta m__h Json vers b replace → String {
     : *MetaImpl m ( _Meta_ptr m__h )
     ? ( json_is_obj vers ) {} { ^ ( string_from `versions must be a JSON object of version configs` ) }
@@ -2009,6 +2071,8 @@ $ `stdlib/core/rcbox.nu`
 // patch may only edit versions the model has, and only a whole-list patch
 // (`replace_versions`) may name one it does not. This function is the
 // mechanism; the rule about who may use it lives with the patch.
+unsafe
+
 @ meta_apply_versions_json Meta m__h Json vers b replace → i {
     : *MetaImpl m ( _Meta_ptr m__h )
     ? ( json_is_obj vers ) {} { ^ -1 }

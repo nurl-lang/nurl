@@ -16,7 +16,9 @@ $ `stdlib/core/string.nu`
 
 : DH { * u buf }
 
-% Drop ( DH ) { @ drop DH h → v { = g_drops + g_drops 1 ( nurl_free # s . h buf ) } }
+% Drop ( DH ) { unsafe @ drop DH h → v { = g_drops + g_drops 1 ( nurl_free # s . h buf ) } }
+
+unsafe
 
 @ loop_drops_with_defer → i {
     ; { ( nurl_print `defer A saw ` ) ( nurl_print ( nurl_str_int g_drops ) ) ( nurl_print ` drops\n` ) }
@@ -37,6 +39,8 @@ $ `stdlib/core/string.nu`
     : s post ( nurl_str_cat `post-` `defer string` )
     ( nurl_print post ) ( nurl_print `\n` )
 }
+
+unsafe
 
 @ arm_drop_with_defer → i {
     ; { ( nurl_print `defer B\n` ) }

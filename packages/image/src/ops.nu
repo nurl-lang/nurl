@@ -346,6 +346,8 @@ $ `core.nu`
 //
 // Returns a table: slot 0 = ksize, then per output pixel a run of
 // (1 + ksize) slots holding `xmin` followed by ksize fixed-point weights.
+unsafe
+
 @ __img_coeffs i insize i outsize i filt → ( Vec i ) {
     : f scale / # f insize # f outsize
     : f fscale ? < scale 1.0 1.0 scale
@@ -403,6 +405,8 @@ $ `core.nu`
 
 // Shared separable resampler: the two fixed-point passes, parameterised
 // only by which kernel fills the coefficient windows.
+unsafe
+
 @ __img_resample Image im i nw i nh i filt → Image {
     : i w . im width
     : i h . im height

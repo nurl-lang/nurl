@@ -78,6 +78,8 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
 
 // Open the store at `db_path` and install the state (a state installed
 // before is released).
+unsafe
+
 @ ag_state_init s db_path → b {
     : i old g_ag_state
     = g_ag_state ( rcbox_new [AgState] @ AgState { ( ag_store_open db_path ) ( string_new ) ( string_new ) } )
@@ -85,7 +87,11 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
     ^ . . ( __ag_state ) store ok
 }
 
+unsafe
+
 @ __ag_state → *AgState { ^ ( rcbox_ptr [AgState] g_ag_state ) }
+
+unsafe
 
 @ ag_state_set_local s name → v {
     : *AgState p ( __ag_state )
@@ -95,11 +101,15 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
 }
 
 // A local identity that came from `@cwd`: remembered with its directory.
+unsafe
+
 @ ag_state_set_local_from s name s origin → v {
     ( ag_state_set_local name )
     : *AgState p ( __ag_state )
     ( string_push_str . p local_origin origin )
 }
+
+unsafe
 
 @ ag_local_origin → s {
     : *AgState p ( __ag_state )
@@ -107,10 +117,14 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
 }
 
 // The store handle, lent: the path String stays the state's.
+unsafe
+
 @ ag_store → AgStore {
     : *AgState p ( __ag_state )
     ^ @ AgStore { ( string_from ( string_data . . p store path ) ) . . p store ok @ ?Database { F } }
 }
+
+unsafe
 
 @ ag_local_identity → s {
     : *AgState p ( __ag_state )
@@ -240,12 +254,16 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
 
 : ~ i g_ag_refusal 0
 
+unsafe
+
 @ ag_set_local_refusal s why → v {
     ? == g_ag_refusal 0 { = g_ag_refusal ( rcbox_new [AgRefusal] @ AgRefusal { ( string_new ) } ) } {}
     : *AgRefusal p ( rcbox_ptr [AgRefusal] g_ag_refusal )
     ( string_clear . p why )
     ( string_push_str . p why why )
 }
+
+unsafe
 
 @ ag_local_refusal → s {
     ? == g_ag_refusal 0 { ^ `` } {}
@@ -491,6 +509,8 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
 // `#41 public alice 3m: body` — a mailbox message reads `dm` instead of
 // the channel, since the reader IS the mailbox. A body over `maxb`
 // bytes (0 = no limit) is cut, ending `… (+N bytes: msg id=41)`.
+unsafe
+
 @ __ag_msg_line String out AgMsg m i now i maxb → v {
     ( string_push_str out `#` )
     ( string_push_int out . m id )
@@ -1073,6 +1093,8 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
 : ~ i g_ag_wait_cap 0
 : ~ i g_ag_wait_cell 0
 
+unsafe
+
 @ ag_wait_cap_set i workers → v {
     : i reserve ? > / workers 4 2 / workers 4 2
     = g_ag_wait_cap ? > - workers reserve 1 - workers reserve 1
@@ -1088,6 +1110,8 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
 // then deliver. Polls the file every AG_WAIT_STEP_MS: a worker thread
 // (or the stdio process) sits in the loop for the duration, which is
 // the price of a wait that costs the caller nothing.
+unsafe
+
 @ __ag_op_wait AgStore st s me Json args i now → AgRes {
     : i timeout ( __ag_clamp ( _ag_arg_int args `timeout_s` AG_WAIT_DEFAULT ) 1 AG_WAIT_MAX )
     : ~ b busy F

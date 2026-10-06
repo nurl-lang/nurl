@@ -24,6 +24,8 @@ $ `src/infoshare.nu`
     ^ 1
 }
 
+unsafe
+
 @ __ic_read s dir s name i want → ( Vec f ) {
     : String p ( string_from dir )
     ( string_push_str p name )
@@ -47,6 +49,8 @@ $ `src/infoshare.nu`
     }
     ^ out
 }
+
+unsafe
 
 @ __ic_dump GpuKit kit s dir s name GkBuf b i n → b {
     : ( Vec f ) host ( vec_with_cap [f] n )
@@ -75,6 +79,8 @@ $ `src/infoshare.nu`
     }
     ^ ok
 }
+
+unsafe
 
 @ main → i {
     ? < ( nurl_argc ) 6 { ^ ( __ic_die `usage: infosharecheck <model> <dir> <V> <gh> <gw>` ) } {}

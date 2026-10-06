@@ -38,6 +38,8 @@ $ `stdlib/core/string.nu`
     ^ d
 }
 
+unsafe
+
 @ main → i {
     // ── 1. in-memory round-trip ──────────────────────────────────
     ( nurl_print `── round-trip ──\n` )

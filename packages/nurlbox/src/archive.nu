@@ -165,6 +165,8 @@ $ `bx.nu`
     }
 }
 
+unsafe
+
 @ __tar_list ( Vec TarEntry ) entries b verbose → v {
     : i n ( vec_len [TarEntry] entries )
     : String out ( string_new )
@@ -192,6 +194,8 @@ $ `bx.nu`
     }
     ( bx_write out )
 }
+
+unsafe
 
 @ ap_tar ( Vec String ) argv → i {
     // `tar cf x.tar dir` — the leading bundle with no dash is the

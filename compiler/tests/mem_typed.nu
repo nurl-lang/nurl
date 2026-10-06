@@ -1,6 +1,8 @@
 // Test: typed alloc/zalloc from stdlib/core/mem.nu
 $ `stdlib/core/mem.nu`
 
+unsafe
+
 @ main → i {
     ( nurl_print `typed alloc:\n` )
 

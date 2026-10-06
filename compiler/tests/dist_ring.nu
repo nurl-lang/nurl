@@ -35,6 +35,8 @@ $ `stdlib/dist/ring.nu`
     }
 }
 
+unsafe
+
 @ main → i {
     : ( Vec u ) a ( mkpk 10 )
     : ( Vec u ) b ( mkpk 80 )

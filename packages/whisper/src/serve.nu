@@ -83,7 +83,11 @@ $ `src/run.nu`
     Mutex m  // guards g_srv_w, g_srv_busy, the idle clock and the load counters
 }
 
+unsafe
+
 @ __srv_sync → *WhSync { ^ # *WhSync g_srv_sync }
+
+unsafe
 
 @ __srv_lock → v {
     ? != g_srv_sync 0 {
@@ -91,6 +95,8 @@ $ `src/run.nu`
         ( mutex_lock . q m )
     } {}
 }
+
+unsafe
 
 @ __srv_unlock → v {
     ? != g_srv_sync 0 {
@@ -169,6 +175,8 @@ $ `src/run.nu`
 // thread, so the device context is bound here first (gpu_bind_thread); the
 // model's own close releases the context, and the next load on the request
 // thread retains it again.
+unsafe
+
 @ __srv_reaper → v {
     ~ T {
         ( sleep_ms 200 )
@@ -521,6 +529,8 @@ $ `src/run.nu`
     : !v WsErr _w ( ws_send_text c ( string_data body ) )
 }
 
+unsafe
+
 @ __srv_ws_config TcpConn c ( Vec u ) payload → v {
     : String ps ( string_new )
     : ~ i k 0
@@ -641,6 +651,8 @@ $ `src/run.nu`
 
 // The upgrade hook: T = this was a WebSocket connection and it has been
 // served to completion; F = not an upgrade, fall through to the router.
+unsafe
+
 @ __srv_ws_hook TcpConn c HttpRequest rq → b {
     ? ( ws_is_upgrade rq ) {} { ^ F }
     // An unauthorized upgrade falls through to the ordinary handler: the
@@ -692,6 +704,8 @@ $ `src/run.nu`
 // a reload swap it); the caller keeps the tokenizer.
 // cert/key: PEM paths — both set = HTTPS (and wss: the TcpConn's TLS is
 // transparent to the WebSocket layer). Both empty = plain HTTP.
+unsafe
+
 @ __wh_serve_run sink Whisper w Tok t s dir s host i port s lang i maxtok b use_vad b with_ts s cert s key s token i unload_s → i {
     = g_srv_w # i . w ctl
     ( mem_forget w )  // the server owns it now (g_srv_w)

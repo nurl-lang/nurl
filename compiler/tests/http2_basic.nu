@@ -19,6 +19,8 @@ $ `stdlib/ext/http2_hpack.nu`
 
 // ── §A frame round-trips ─────────────────────────────────────────────
 
+unsafe
+
 @ section_a → v {
     ( nurl_print `--- A frame round-trips ---\n` )
 
@@ -127,6 +129,8 @@ $ `stdlib/ext/http2_hpack.nu`
 
 // ── §B HPACK vectors ─────────────────────────────────────────────────
 
+unsafe
+
 @ section_b → v {
     ( nurl_print `--- B HPACK vectors ---\n` )
 
@@ -197,6 +201,8 @@ $ `stdlib/ext/http2_hpack.nu`
 }
 
 // ── §C HPACK Huffman ─────────────────────────────────────────────────
+
+unsafe
 
 @ section_c → v {
     ( nurl_print `--- C HPACK Huffman ---\n` )

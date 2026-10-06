@@ -158,6 +158,8 @@ $ `src/sky.nu`
 @ __ma_is_dir s p → b { ^ == 2 ( nurl_path_type p ) }
 
 // ImageNet normalisation, in place over CHW planes.
+unsafe
+
 @ __ma_norm * f p i n → v {
     : ( Vec u ) mean__v ( vec_zeroed [u] 24 )
     : *f mean # *f ( vec_data [u] mean__v )
@@ -387,6 +389,8 @@ $ `src/sky.nu`
 }
 
 // ── main ────────────────────────────────────────────────────────────
+
+unsafe
 
 @ main → i {
     : Opts o ( __ma_parse )

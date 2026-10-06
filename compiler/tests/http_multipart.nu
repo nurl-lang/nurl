@@ -22,6 +22,8 @@ $ `stdlib/core/vec.nu`
 // Print a Vec[u] as ASCII with non-printable bytes shown as `[NN]`
 // hex pairs — the part-data field can contain arbitrary binary, so
 // we need a deterministic snapshot format.
+unsafe
+
 @ dump_data ( Vec u ) bytes → v {
     : i n ( vec_len [u] bytes )
     : *u data ( vec_data [u] bytes )
@@ -42,6 +44,8 @@ $ `stdlib/core/vec.nu`
         = k + k 1
     }
 }
+
+unsafe
 
 @ dump_part ( Vec MultipartPart ) parts i k → v {
     : *MultipartPart data ( vec_data [MultipartPart] parts )

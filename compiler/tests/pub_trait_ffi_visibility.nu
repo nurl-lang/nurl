@@ -16,6 +16,8 @@
 
 $ `compiler/tests/pub_trait_ffi_vis_mod.nu`
 
+unsafe
+
 @ main → i {
     : VtfWidget w @ VtfWidget { 42 }
     // Non-pub trait method, resolved by type across the file boundary.

@@ -20,6 +20,8 @@ $ `stdlib/std/thread.nu`
     ^ out
 }
 
+unsafe
+
 @ vec_to_str ( Vec u ) v → String {
     : i n ( vec_len [u] v )
     : *u p ( vec_data [u] v )

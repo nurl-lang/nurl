@@ -58,6 +58,8 @@ $ `stdlib/ext/http3_client.nu`
     ^ ( response_new 404 )
 }
 
+unsafe
+
 @ header_of HttpResponse r s name → String {
     : i n ( vec_len [Header] . r headers )
     : *Header d ( vec_data [Header] . r headers )

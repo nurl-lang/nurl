@@ -34,6 +34,8 @@ $ `src/hf.nu`
     ( nurl_print `\n` )
 }
 
+unsafe
+
 @ __tkcli_out ( Vec u ) b → v {
     : i n ( vec_len [u] b )
     ? > n 0 { : i _w ( write 1 # *u ( vec_data [u] b ) n ) } {}

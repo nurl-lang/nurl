@@ -23,17 +23,23 @@ $ `interp.nu`
 }
 
 // valtype of parameter k / the single result (127 = i32 default if unknown).
+unsafe
+
 @ __param_ty s ftp i k → i {
     ? == # i ftp 0 { ^ 127 } {}
     : *FuncType ft # *FuncType ftp
     ^ ?? ( vec_get [i] . ft params k ) { T x → x F → 127 }
 }
 
+unsafe
+
 @ __result_ty_at s ftp i k → i {
     ? == # i ftp 0 { ^ 127 } {}
     : *FuncType ft # *FuncType ftp
     ^ ?? ( vec_get [i] . ft results k ) { T x → x F → 127 }
 }
+
+unsafe
 
 @ __result_count s ftp → i {
     ? == # i ftp 0 { ^ 0 } {}

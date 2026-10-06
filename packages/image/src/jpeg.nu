@@ -109,6 +109,8 @@ $ `core.nu`
 // ── Bytes of the stream ───────────────────────────────────────────────
 
 // Byte `p` of the stream, 0 outside it (what _byte answers for a Vec).
+unsafe
+
 @ __jb inout Jpeg j i p → i {
     ? & >= p 0 < p . j len {
         : *u b . j bp

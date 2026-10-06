@@ -32,13 +32,13 @@
     }
 }
 
-@ sys::b N n → *N {
+unsafe @ sys::b N n → *N {
     : *N p # *N ( malloc Z N )
     = . p 0 n
     ^ p
 }
 
-@ sys::e * N n i a → !i i {
+unsafe @ sys::e * N n i a → !i i {
     ^ ?? . n 0 {
         A 0 y → @ !i i { F y }
         A x y → @ !i i { T + * x y a }
@@ -63,7 +63,7 @@
     ^ o
 }
 
-@ main → i {
+unsafe @ main → i {
     : ~ i q 0
     : [i s [i | 2 3 5 7 11]
 

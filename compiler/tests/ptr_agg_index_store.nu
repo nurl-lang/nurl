@@ -10,6 +10,8 @@ $ `stdlib/core/string.nu`
 
 : Pair { i a i b }
 
+unsafe
+
 @ main → i {
     : *Pair dst # *Pair ( nurl_zalloc * 4 16 )
     : *Pair src # *Pair ( nurl_zalloc * 4 16 )

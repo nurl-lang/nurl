@@ -63,6 +63,8 @@ $ `stdlib/core/rcbox.nu`
 // every copy is the same writer, and the last owner releases it.
 : StWriter { s ctl }
 
+unsafe
+
 @ StWriter_share StWriter h → StWriter { ^ @ StWriter { # s ( rcbox_share # i . h ctl ) } }
 
 @ StWriter_drop sink StWriter h → v {
@@ -70,7 +72,11 @@ $ `stdlib/core/rcbox.nu`
     ( rcbox_release [StWriterImpl] # i . h ctl )
 }
 
+unsafe
+
 @ __StWriter_ptr StWriter h → *StWriterImpl { ^ ( rcbox_ptr [StWriterImpl] # i . h ctl ) }
+
+unsafe
 
 @ stw_new → StWriter {
     : i w__box ( rcbox_zero [StWriterImpl] )
@@ -84,6 +90,8 @@ $ `stdlib/core/rcbox.nu`
 
 // Take ownership of `cb` as the next tensor's data region and write its
 // header entry.
+unsafe
+
 @ __stw_push_chunk * StWriterImpl w s name i dtype ( Vec i ) shape ( Vec u ) cb → v {
     : i at . w dlen
     : i endo + at ( vec_len [u] cb )
@@ -94,6 +102,8 @@ $ `stdlib/core/rcbox.nu`
 
 // Append the JSON header entry for a tensor whose bytes already sit in
 // . w data at [at, endo).
+unsafe
+
 @ __stw_entry * StWriterImpl w s name i dtype ( Vec i ) shape i at i endo → v {
     ? . w first { = . w first F } { ( string_push_str . w hdr `,` ) }
     ( string_push_str . w hdr `"` )
@@ -185,6 +195,8 @@ $ `stdlib/core/rcbox.nu`
 
 // The whole file as one byte vector (small files / tests; a big file
 // wants stw_write, which streams the chunks and never concatenates).
+unsafe
+
 @ stw_finish StWriter w__h → ( Vec u ) {
     : *StWriterImpl w ( __StWriter_ptr w__h )
     ( string_push_str . w hdr `}` )
@@ -214,6 +226,8 @@ $ `stdlib/core/rcbox.nu`
 // model's 16 GB merge briefly doubles the writer to 32 GB and is the
 // difference between finishing and the OOM killer. Zero extra copies
 // here; the on-disk bytes are identical.
+unsafe
+
 @ stw_write StWriter w__h s path → !v String {
     : *StWriterImpl w ( __StWriter_ptr w__h )
     ( string_push_str . w hdr `}` )

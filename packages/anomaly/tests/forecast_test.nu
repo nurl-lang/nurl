@@ -69,6 +69,8 @@ $ `src/dynamic.nu`
     b forest_hit  // any forest version flagged it
 }
 
+unsafe
+
 @ probe_of Model mo ! Verdict String r → Probe {
     : ~ Probe out @ Probe { F F 0.0 ( string_new ) F }
     ?? r {
@@ -117,6 +119,8 @@ $ `src/dynamic.nu`
     : !Verdict String r ( model_ingest_at mo j at )
     ^ ( probe_of mo r )
 }
+
+unsafe
 
 @ main → i {
     : ~ String root ( string_from `./anomaly_fc_test` )

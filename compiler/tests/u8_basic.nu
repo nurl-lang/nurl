@@ -5,6 +5,8 @@
 // `urem`). Arithmetic wraps mod 256. Casts: `# u i_expr` truncates,
 // `# i u_expr` zero-extends.
 
+unsafe
+
 @ main → i {
     // ── Bindings + literals + arithmetic wrap-around ────────────────
     : u a 200

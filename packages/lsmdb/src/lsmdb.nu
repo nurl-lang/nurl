@@ -71,12 +71,16 @@ $ `stdlib/core/rcbox.nu`
 
 : Lsm { s ctl }
 
+unsafe
+
 @ Lsm_share Lsm h → Lsm { ^ @ Lsm { # s ( rcbox_share # i . h ctl ) } }
 
 @ Lsm_drop sink Lsm h → v {
     ( mem_forget h )
     ( rcbox_release [LsmImpl] # i . h ctl )
 }
+
+unsafe
 
 @ __Lsm_ptr Lsm h → *LsmImpl { ^ ( rcbox_ptr [LsmImpl] # i . h ctl ) }
 
@@ -104,6 +108,8 @@ $ `stdlib/core/rcbox.nu`
 
 // ── paths ───────────────────────────────────────────────────────────
 
+unsafe
+
 @ __lsm_path * LsmImpl db s name → String {
     ^ ( path_join ( string_data . db dir ) name )
 }
@@ -125,6 +131,8 @@ $ `stdlib/core/rcbox.nu`
 // The manifest is the only thing that decides which tables exist. It is
 // replaced by rename, never edited in place, so a reader either sees the
 // whole old list or the whole new one.
+
+unsafe
 
 @ __lsm_manifest_write * LsmImpl db → !v String {
     : String tmp ( __lsm_path db `MANIFEST.tmp` )
@@ -179,6 +187,8 @@ next ` )
     ^ ( string_substr ln n - len n )
 }
 
+unsafe
+
 @ __lsm_manifest_read * LsmImpl db → !v String {
     ? ( file_exists ( string_data . db manpath ) ) {} { ^ @ !v String { T 0 } }
     : !String IoErr rr ( read_file ( string_data . db manpath ) )
@@ -219,6 +229,8 @@ next ` )
 }
 
 // ── open / close ────────────────────────────────────────────────────
+
+unsafe
 
 @ lsm_open s dir → !Lsm String {
     ?? ( dir_create_all dir ) {
@@ -298,6 +310,8 @@ next ` )
 // last owner closes the database: the log, every table, the memtable.
 @ lsm_close sink Lsm db → v {}
 
+unsafe
+
 @ lsm_seq Lsm db__h → i {
     : *LsmImpl db ( __Lsm_ptr db__h )
     ^ . db seq
@@ -306,15 +320,21 @@ next ` )
 // Force everything written so far to the device. Only needed after
 // running with durability switched off — a bulk import that wants one
 // fsync at the end instead of one per row.
+unsafe
+
 @ lsm_sync Lsm db__h → !v String {
     : *LsmImpl db ( __Lsm_ptr db__h )
     ^ ( wal_sync . db wal )
 }
 
+unsafe
+
 @ lsm_set_durable Lsm db__h b on → v {
     : *LsmImpl db ( __Lsm_ptr db__h )
     = . db durable ? on 1 0
 }
+
+unsafe
 
 @ lsm_set_memlimit Lsm db__h i n → v {
     : *LsmImpl db ( __Lsm_ptr db__h )
@@ -322,6 +342,8 @@ next ` )
 }
 
 // ── writes ──────────────────────────────────────────────────────────
+
+unsafe
 
 @ __lsm_write * LsmImpl db ( Vec u ) key ( Vec u ) val i kind → !v String {
     = . db seq + . db seq 1
@@ -353,6 +375,8 @@ next ` )
 
 // ── reads ───────────────────────────────────────────────────────────
 
+unsafe
+
 @ lsm_get Lsm db__h ( Vec u ) key → !LsmGet String {
     : *LsmImpl db ( __Lsm_ptr db__h )
     ^ ( __lsm_get_at db key . db seq )
@@ -365,6 +389,8 @@ next ` )
     : *LsmImpl db ( __Lsm_ptr db__h )
     ^ ( __lsm_get_at db key snap )
 }
+
+unsafe
 
 @ __lsm_get_at * LsmImpl db ( Vec u ) key i snap → !LsmGet String {
     : i node ( mt_find . db mem key snap )
@@ -420,6 +446,8 @@ next ` )
 
 : LsmIter { s ctl }
 
+unsafe
+
 @ LsmIter_share LsmIter h → LsmIter { ^ @ LsmIter { # s ( rcbox_share # i . h ctl ) } }
 
 @ LsmIter_drop sink LsmIter h → v {
@@ -427,7 +455,11 @@ next ` )
     ( rcbox_release [LsmIterImpl] # i . h ctl )
 }
 
+unsafe
+
 @ __LsmIter_ptr LsmIter h → *LsmIterImpl { ^ ( rcbox_ptr [LsmIterImpl] # i . h ctl ) }
+
+unsafe
 
 @ __it_new * LsmImpl db b usemem ( Vec u ) from i snap → LsmIter {
     : i it__box ( rcbox_zero [LsmIterImpl] )
@@ -457,6 +489,8 @@ next ` )
 
 // Select the source whose head sorts first. Returns -2 when every source
 // is exhausted.
+unsafe
+
 @ __it_pick * LsmIterImpl it → i {
     : ~ i best -2
     : ~ * u bp # *u 0
@@ -509,6 +543,8 @@ next ` )
     ^ best
 }
 
+unsafe
+
 @ __it_advance * LsmIterImpl it → v {
     ? == . it src -1 { = . it mnode ( mt_next . it mem . it mnode ) } {
         ? >= . it src 0 { ( _sc_next . it cur ) } {}
@@ -516,21 +552,29 @@ next ` )
 }
 
 // Key of the currently selected head, as an owned copy.
+unsafe
+
 @ __it_key * LsmIterImpl it → ( Vec u ) {
     ? == . it src -1 { ^ ( mt_key . it mem . it mnode ) } {}
     ^ ( _sc_key . it cur )
 }
+
+unsafe
 
 @ __it_val * LsmIterImpl it → ( Vec u ) {
     ? == . it src -1 { ^ ( mt_val . it mem . it mnode ) } {}
     ^ ( _sc_val . it cur )
 }
 
+unsafe
+
 @ __it_seq * LsmIterImpl it → i {
     ? == . it src -1 { ^ ( mt_seq . it mem . it mnode ) } {}
     : *SstCursorImpl cr . it cur
     ^ . cr seq
 }
+
+unsafe
 
 @ __it_kind * LsmIterImpl it → i {
     ? == . it src -1 { ^ ( mt_kind . it mem . it mnode ) } {}
@@ -568,6 +612,8 @@ next ` )
 // Every live key in [from, to) as of `snap`, in order. An empty `from`
 // starts at the beginning; an empty `to` runs to the end; limit <= 0
 // means no limit.
+unsafe
+
 @ lsm_scan Lsm db__h ( Vec u ) from ( Vec u ) to i limit i snap → !LsmScan String {
     : *LsmImpl db ( __Lsm_ptr db__h )
     : LsmIter ith ( __it_new db T from snap )
@@ -635,6 +681,8 @@ next ` )
     ^ ( __lsm_flush db )
 }
 
+unsafe
+
 @ __lsm_flush * LsmImpl db → !i String {
     : i n ( mt_count . db mem )
     ? == n 0 { ^ @ !i String { T 0 } } {}
@@ -691,6 +739,8 @@ next ` )
 // key and dropping tombstones. Returns the entries kept. The merge
 // iterator — and with it every cursor's share of a table — is gone when
 // this returns, so the old tables close as soon as the store lets them go.
+unsafe
+
 @ __lsm_merge_into * LsmImpl db SstWriter w → !i String {
     : ( Vec u ) nokey ( vec_new [u] )
     : LsmIter ith ( __it_new db F nokey . db seq )
@@ -738,6 +788,8 @@ next ` )
 // It also throws history away, deliberately — a snapshot read older than
 // this point can no longer be served, exactly as in LevelDB. Compaction
 // is a choice to trade the past for space.
+unsafe
+
 @ lsm_compact Lsm db__h → !i String {
     : *LsmImpl db ( __Lsm_ptr db__h )
     : i ntables ( vec_len [SstReader] . db tables )
@@ -803,6 +855,8 @@ next ` )
 }
 
 // ── stats ───────────────────────────────────────────────────────────
+
+unsafe
 
 @ lsm_stats Lsm db__h → LsmStats {
     : *LsmImpl db ( __Lsm_ptr db__h )

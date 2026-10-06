@@ -36,6 +36,8 @@ $ `src/runtime.nu`
     ^ ?? ( vec_get [String] av k ) { T x → ( nurl_str_to_int ( string_data x ) ) F _ → dflt }
 }
 
+unsafe
+
 @ synth i n → *u {
     : *u h ( nurl_alloc * n 4 )
     : ~ i k 0
@@ -48,6 +50,8 @@ $ `src/runtime.nu`
 }
 
 // Read a whole file into a fresh malloc'd buffer (caller frees).
+unsafe
+
 @ load_bytes s path * u pcell → *u {
     ?? ( read_file_bytes path ) {
         T bytes → {
@@ -65,6 +69,8 @@ $ `src/runtime.nu`
         F _ → { ( nurl_poke pcell 0 0 ) ^ # *u 0 }
     }
 }
+
+unsafe
 
 @ dump_out Engine e RTensor t s path → i {
     ? > . t nelem 0 {} { ( nurl_print `EMPTY output\n` ) ^ 1 }
@@ -93,6 +99,8 @@ $ `src/runtime.nu`
     ( vec_push [i] v a ) ( vec_push [i] v b ) ( vec_push [i] v c )
     ^ v
 }
+
+unsafe
 
 @ main → i {
     : String mode ( args 1 )

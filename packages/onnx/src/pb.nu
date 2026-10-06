@@ -164,6 +164,8 @@ $ `stdlib/ext/protobuf.nu`
 // `n` little-endian f32 values from `s` into `dst` (raw *u, 4-byte
 // stride), writing each one's exact 32-bit pattern — no float
 // round-trip. Elements past the end of the slice read as zero.
+unsafe
+
 @ slice_f32_into ( Slice u ) s * u dst i n → v {
     : ~ i k 0
     ~ < k n {
@@ -178,6 +180,8 @@ $ `stdlib/ext/protobuf.nu`
 }
 
 // `n` little-endian int64 values from `s` into `dst` (8-byte stride).
+unsafe
+
 @ slice_i64_into ( Slice u ) s * u dst i n → v {
     : ~ i k 0
     ~ < k n {

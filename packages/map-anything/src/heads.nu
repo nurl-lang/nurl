@@ -101,6 +101,8 @@ $ `src/load.nu`
 // floats: [tx ty tz | qw? qx? ...] — exactly fc_t then fc_rot, the
 // quaternion normalised; which convention the four are in is the
 // GEOMETRY's business (src/geom.nu), not this head's.
+unsafe
+
 @ ph_forward GpuKit kit PoseH p GkBuf fin i voff i np * f out → b {
     : GkBuf patches ( ma_view fin * voff PH_DIM * np PH_DIM )
     : GkBuf a ( gk_dbuf_new kit * np PH_HID GK_F32 )

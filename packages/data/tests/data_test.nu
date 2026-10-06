@@ -38,6 +38,8 @@ $ `src/data.nu`
 
 // Run a whole epoch, appending each emitted example's id (y[0]) to `ids`.
 // Also asserts x[0] == id (feature/label stay aligned per row).
+unsafe
+
 @ epoch_ids DataLoader dl ( Vec i ) ids * u okal → v {
     : ( Vec f ) bx ( vec_new [f] )
     : ( Vec f ) by ( vec_new [f] )
@@ -77,6 +79,8 @@ $ `src/data.nu`
     ~ < k ( vec_len [i] a ) { ? == ( gi a k ) ( gi b k ) {} { ^ F } = k + k 1 }
     ^ T
 }
+
+unsafe
 
 @ main → i {
     : i N 10

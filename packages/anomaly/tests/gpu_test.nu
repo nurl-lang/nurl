@@ -15,16 +15,11 @@ $ `src/prep.nu`
 $ `src/model.nu`
 $ `src/score.nu`
 $ `stdlib/std/thread.nu`
+$ `stdlib/std/channel.nu`
 
 : ~ i g_pass 0
 : ~ i g_fail 0
 : ~ i g_lcg 1
-
-// The status a thread left in a one-slot Vec (shared with its closure).
-@ flag_of ( Vec i ) v → i {
-    ?? ( vec_get [i] v 0 ) { T x → { ^ x } F _ → {} }
-    ^ 0
-}
 
 @ pline s x → v {
     ( nurl_print x )
@@ -64,6 +59,8 @@ $ `stdlib/std/thread.nu`
     }
     ^ data
 }
+
+unsafe
 
 @ main → i {
     : s engine ( anom_gpu_engine )
@@ -148,9 +145,9 @@ $ `stdlib/std/thread.nu`
     //    pool, and a CUDA context is current only on the thread that opened
     //    it. The accelerated path must bind the calling thread itself and
     //    give the pure loop's numbers from a thread the device was not
-    //    opened on. tflag: 1 same, 2 differs, -1 accelerator refused,
-    //    -2 no thread.
-    : ( Vec i ) tflag ( vec_zeroed [i] 1 )
+    //    opened on. The thread reports through a channel: 1 same,
+    //    2 differs, -1 accelerator refused; -2 no thread.
+    : ( Channel i ) tflag ( chan_new [i] )
     : ( @ v ) body \ → v {
         : ?( Vec f ) got ( anom_scores_gpu vm data ROWS COLS )
         ?? got {
@@ -164,18 +161,19 @@ $ `stdlib/std/thread.nu`
                     ? == . gp k . pp k {} { = st 2 }
                     = k + k 1
                 }
-                : b _set ( vec_set [i] tflag 0 st )
+                : b _sent ( chan_send [i] tflag st )
             }
-            F _ → { : b _set ( vec_set [i] tflag 0 -1 ) }
+            F _ → { : b _sent ( chan_send [i] tflag -1 ) }
         }
     }
+    : ~ i tf -2
     ?? ( thread_spawn body ) {
-        T th → { ( thread_join th ) }
-        F _ → { : b _set ( vec_set [i] tflag 0 -2 ) }
+        T th → { : i _j ( thread_join th ) = tf ?? ( chan_try_recv [i] tflag ) { T x → x F → -2 } }
+        F _ → {}
     }
-    ( check == ( flag_of tflag ) 1 `gpu: accelerated scoring runs, bit-identical, from a thread the device was not opened on` )
-    ? == ( flag_of tflag ) 1 {} {
-        ( nurl_print `gpu: thread status ` ) ( nurl_print_int ( flag_of tflag ) ) ( pline `` )
+    ( check == tf 1 `gpu: accelerated scoring runs, bit-identical, from a thread the device was not opened on` )
+    ? == tf 1 {} {
+        ( nurl_print `gpu: thread status ` ) ( nurl_print_int tf ) ( pline `` )
     }
 
     ( anom_gpu_close )

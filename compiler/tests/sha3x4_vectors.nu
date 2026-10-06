@@ -33,6 +33,8 @@ $ `stdlib/std/hash_sha3x4.nu`
     ^ v
 }
 
+unsafe
+
 @ __eq ( Vec u ) a ( Vec u ) b → b {
     ? != ( vec_len [u] a ) ( vec_len [u] b ) { ^ F } {}
     : ~ i i 0

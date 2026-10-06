@@ -156,6 +156,8 @@ $ `mp3tab.nu`
     ^ v
 }
 
+unsafe
+
 @ __mp3_bitrate_index i bitr i version → i {
     : ( Vec i ) t ( __mp3_bitrate_table )
     : *i p ( vec_data [i] t )
@@ -195,6 +197,8 @@ $ `mp3tab.nu`
 // The filterbank, rounded to the nine decimals the ISO tables carry. The
 // rounding is not cosmetic: it is what makes this filterbank the standard's
 // filterbank rather than one that merely comes very close to it.
+unsafe
+
 @ __mp3_build_fl → ( Vec f ) {
     : ( Vec f ) v ( _mp3_fzeros 2048 )
     : *f p ( vec_data [f] v )
@@ -218,6 +222,8 @@ $ `mp3tab.nu`
 
 // Window and basis folded into one table: the MDCT of a long block is a
 // 36-tap dot product per output, and the sine window belongs inside it.
+unsafe
+
 @ __mp3_build_cosl → ( Vec f ) {
     : ( Vec f ) v ( _mp3_fzeros 648 )
     : *f p ( vec_data [f] v )
@@ -242,6 +248,8 @@ $ `mp3tab.nu`
 // Table B.9: the butterfly between neighbouring bands cancels the aliasing
 // the filterbank introduced, and the decoder runs the same one backwards.
 // `which` 0 gives the c/sqrt(1+c²) half, 1 the 1/sqrt(1+c²) half.
+unsafe
+
 @ __mp3_alias_c i which → ( Vec f ) {
     : ( Vec f ) v ( _mp3_fzeros 8 )
     : *f p ( vec_data [f] v )
@@ -267,6 +275,8 @@ $ `mp3tab.nu`
 
 // x^(3/4) with the standard's -0.0946 offset and a rounding half, for every
 // integer a quantised value can reach before the escape path takes over.
+unsafe
+
 @ __mp3_build_idx34 → ( Vec i ) {
     : ( Vec i ) v ( _mp3_zeros 10000 )
     : *i p ( vec_data [i] v )
@@ -394,6 +404,8 @@ $ `mp3tab.nu`
 // 32 new samples in, 32 subband samples out. The window buffer is a ring of
 // 512: each call drops the oldest 32 and the cursor walks back by 32 (480
 // forward, modulo 512), which is why the samples go in backwards.
+unsafe
+
 @ __mp3_subband inout Mp3 m ( Vec f ) pcm i npcm i pos i stride i ch i sbase → v {
     : *f x ( vec_data [f] . m xbuf )
     : *f ew ( vec_data [f] . m enw )
@@ -451,6 +463,8 @@ $ `mp3tab.nu`
 }
 
 // Polyphase, then the MDCT of 18 previous subband samples with 18 new ones.
+unsafe
+
 @ __mp3_mdct inout Mp3 m ( Vec f ) pcm i npcm i base → v {
     : i chn . m channels
     : i gpf . m gpf
@@ -546,6 +560,8 @@ $ `mp3tab.nu`
 // Every spectral value divided by one step size and raised to 3/4, which is
 // the companding curve the format fixes. `step` is the exponent the decoder
 // will undo; a larger step is a coarser grid and fewer bits.
+unsafe
+
 @ __mp3_quantize inout Mp3 m i xrbase i ixbase i step f xrmax → i {
     : f e / # f - 0 step 4.0
     : f scale ( pow 2.0 e )
@@ -574,6 +590,8 @@ $ `mp3tab.nu`
     ^ mx
 }
 
+unsafe
+
 @ __mp3_ix_max inout Mp3 m i ixbase i begin i end → i {
     : *i ixp ( vec_data [i] . m ix )
     : ~ i mx 0
@@ -589,6 +607,8 @@ $ `mp3tab.nu`
 // A granule ends in zeros, and before them in values of at most one. Those
 // two tails get cheaper codings than the general one, so the boundaries
 // between the three areas are worth finding exactly.
+unsafe
+
 @ __mp3_calc_runlen inout Mp3 m i ixbase → v {
     : *i ixp ( vec_data [i] . m ix )
     : ~ i i MP3_GRAN
@@ -615,6 +635,8 @@ $ `mp3tab.nu`
 
 // The quadruple area has two code books and no way to tell in advance which
 // is cheaper, so both are counted and the smaller wins.
+unsafe
+
 @ __mp3_count1_bits inout Mp3 m i ixbase → i {
     : *i ixp ( vec_data [i] . m ix )
     : *i hl ( vec_data [i] . m hlen )
@@ -649,6 +671,8 @@ $ `mp3tab.nu`
 // Where the big-values area splits into its three regions. The split has to
 // land on a scalefactor band boundary, so this walks the band table down from
 // the nominal count until it finds one that fits.
+unsafe
+
 @ __mp3_subdivide inout Mp3 m → v {
     ? == . m c_bigv 0 {
         = . m c_r0 0
@@ -689,6 +713,8 @@ $ `mp3tab.nu`
     }
 }
 
+unsafe
+
 @ __mp3_count_bit inout Mp3 m i ixbase i start i end i table → i {
     ? == table 0 { ^ 0 } {}
     : *i ixp ( vec_data [i] . m ix )
@@ -722,6 +748,8 @@ $ `mp3tab.nu`
 // not arbitrary: the books come in families that only differ in how far they
 // reach, so the first one wide enough is the first one worth counting, and
 // only its near neighbours can beat it.
+unsafe
+
 @ __mp3_choose_table inout Mp3 m i ixbase i begin i end → i {
     : i mx0 ( __mp3_ix_max m ixbase begin end )
     ? == mx0 0 { ^ 0 } {}
@@ -871,6 +899,8 @@ $ `mp3tab.nu`
 
 // ------------------------------------------------------------ frame assembly
 
+unsafe
+
 @ __mp3_iteration inout Mp3 m → v {
     : i chn . m channels
     : i gpf . m gpf
@@ -930,6 +960,8 @@ $ `mp3tab.nu`
 // This encoder never carries bits forward into the next frame, so whatever a
 // granule did not spend has to be spent here, as stuffing. A frame that came
 // out short is a frame the next sync word starts in the middle of.
+unsafe
+
 @ __mp3_resv_end inout Mp3 m → v {
     : *i sip ( vec_data [i] . m si )
     = . m resv_drain 0
@@ -973,6 +1005,8 @@ $ `mp3tab.nu`
         }
     } {}
 }
+
+unsafe
 
 @ __mp3_side_info inout Mp3 m → v {
     : *i sip ( vec_data [i] . m si )
@@ -1033,6 +1067,8 @@ $ `mp3tab.nu`
     }
 }
 
+unsafe
+
 @ __mp3_huffman_pair inout Mp3 m i table i x0 i y0 → v {
     : *i hc ( vec_data [i] . m hcode )
     : *i hl ( vec_data [i] . m hlen )
@@ -1070,6 +1106,8 @@ $ `mp3tab.nu`
     }
 }
 
+unsafe
+
 @ __mp3_huffman_quad inout Mp3 m i table i v0 i w0 i x0 i y0 → v {
     : *i hc ( vec_data [i] . m hcode )
     : *i hl ( vec_data [i] . m hlen )
@@ -1094,6 +1132,8 @@ $ `mp3tab.nu`
     ? != y 0 { = code | << code 1 sy = cbits + cbits 1 } {}
     ( __mp3_putbits m code cbits )
 }
+
+unsafe
 
 @ __mp3_huffman_bits inout Mp3 m i gr i ch → v {
     : *i ixp ( vec_data [i] . m ix )
@@ -1151,6 +1191,8 @@ $ `mp3tab.nu`
         ( __mp3_putbits m ones left )
     } {}
 }
+
+unsafe
 
 @ __mp3_format inout Mp3 m → v {
     : *f xrp ( vec_data [f] . m xr )

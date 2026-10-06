@@ -31,6 +31,8 @@ $ `stdlib/std/float.nu`
     ( nurl_print label ) ( nurl_print ? ok ` ok\n` ` FAIL\n` )
 }
 
+unsafe
+
 @ main → i {
     // 4 int payloads, slot 3 bound
     : E q @ E { Quad 10 20 30 40 }

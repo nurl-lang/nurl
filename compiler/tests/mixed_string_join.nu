@@ -15,6 +15,8 @@ $ `stdlib/core/string.nu`
     : i d ( size ? choose borrowed ?? choose { T → borrowed F → ( nurl_str_cat `allocated` ` branch` ) } )
 }
 
+unsafe
+
 @ main → i {
     : i before ( nurl_free_count )
     ( exercise T )

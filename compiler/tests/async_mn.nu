@@ -21,6 +21,8 @@ $ `stdlib/std/thread.nu`
 : ~ i counter 0
 : ~ i joined 0
 
+unsafe
+
 @ main → i {
     ( runtime_init 4 )  // pin to 4 workers for the test
     : Mutex m ( mutex_new )

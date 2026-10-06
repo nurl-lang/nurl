@@ -73,6 +73,8 @@ $ `src/rope.nu`
     GkBuf cos3 GkBuf sin3
 }
 
+unsafe
+
 @ __ch_const GpuKit kit i n f v → GkBuf {
     : GkBuf b ( gk_dbuf_new kit n GK_F32 )
     : ( Vec f ) h ( vec_with_cap [f] n )
@@ -83,6 +85,8 @@ $ `src/rope.nu`
     : b _u ( gk_dbuf_upload kit b h )
     ^ b
 }
+
+unsafe
 
 @ ch_load Lw w GpuKit kit → CamHead {
     : ( Vec LmBlk ) tr ( vec_new [LmBlk] )

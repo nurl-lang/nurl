@@ -50,6 +50,8 @@ $ `src/prep.nu`
 
 // ── 1. Golden mixed-type record ───────────────────────────────────────
 
+unsafe
+
 @ test_golden → v {
     : Meta m__h ( meta_new `t1` `2026-07-03T00:00:00Z` )
     : *MetaImpl m ( _Meta_ptr m__h )
@@ -128,6 +130,8 @@ $ `src/prep.nu`
     ^ got
 }
 
+unsafe
+
 @ test_calendar_clock → v {
     : Meta m__h ( meta_new `t1b` `2026-07-03T00:00:00Z` )
     : *MetaImpl m ( _Meta_ptr m__h )
@@ -197,6 +201,8 @@ $ `src/prep.nu`
 }
 
 // ── 3. Frozen projection: stability rule ──────────────────────────────
+
+unsafe
 
 @ test_projection → v {
     : Meta m__h ( meta_new `t3` `2026-07-03T00:00:00Z` )
@@ -319,6 +325,8 @@ $ `src/prep.nu`
 
 // ── 6. Metadata JSON round-trip is byte-stable ────────────────────────
 
+unsafe
+
 @ test_meta_roundtrip → v {
     : Meta m__h ( meta_new `t6` `2026-07-03T00:00:00Z` )
     : *MetaImpl m ( _Meta_ptr m__h )
@@ -362,6 +370,8 @@ $ `src/prep.nu`
 }
 
 // ── 5b. Scaler: absent readings, extreme readings, the cap ────────────
+
+unsafe
 
 @ test_scaler_robust → v {
     // col0 has an absent reading (NaN): the mean and std come from the

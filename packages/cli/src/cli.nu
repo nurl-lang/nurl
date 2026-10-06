@@ -89,12 +89,16 @@ $ `stdlib/core/rcbox.nu`
 // owner releases it — its strings, flags and commands are dropped with it.
 : Cli { s ctl }
 
+unsafe
+
 @ Cli_share Cli h → Cli { ^ @ Cli { # s ( rcbox_share # i . h ctl ) } }
 
 @ Cli_drop sink Cli h → v {
     ( mem_forget h )
     ( rcbox_release [CliImpl] # i . h ctl )
 }
+
+unsafe
 
 @ __Cli_ptr Cli h → *CliImpl { ^ ( rcbox_ptr [CliImpl] # i . h ctl ) }
 
@@ -140,6 +144,8 @@ $ `stdlib/core/rcbox.nu`
 
 // ── Construction / teardown ───────────────────────────────────────────
 
+unsafe
+
 @ cli_new s prog s about s version → Cli {
     ^ @ Cli { # s ( rcbox_new [CliImpl] @ CliImpl {
             ( string_from prog ) ( string_from about ) ( string_from version )
@@ -151,6 +157,8 @@ $ `stdlib/core/rcbox.nu`
 @ cli_free sink Cli c → v {}
 
 // ── Flag builders (global flags; applied across all commands) ──────────
+
+unsafe
 
 @ __cli_add_flag * CliImpl c s long i short s metavar s help i kind s dflt s env → v {
     : CliFlag f @ CliFlag {
@@ -186,6 +194,8 @@ $ `stdlib/core/rcbox.nu`
 
 // ── Command registration ──────────────────────────────────────────────
 
+unsafe
+
 @ cli_cmd Cli c__h s name s help ( @ i CliCtx ) handler → v {
     : *CliImpl c ( __Cli_ptr c__h )
     : CliCmd cmd @ CliCmd { ( string_from name ) ( string_from help ) handler }
@@ -198,6 +208,8 @@ $ `stdlib/core/rcbox.nu`
 // a first non-option token that matches no registered command routes here
 // (and stays readable as ctx_arg 0), and a bare invocation runs it instead
 // of printing usage. Registered subcommands still win when they match.
+unsafe
+
 @ cli_default Cli c__h ( @ i CliCtx ) handler → v {
     : *CliImpl c ( __Cli_ptr c__h )
     : CliCmd cmd @ CliCmd { ( string_new ) ( string_new ) handler }
@@ -205,6 +217,8 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Index of the command named `name`, or None.
+unsafe
+
 @ __cli_find_cmd * CliImpl c s name → ?i {
     : i n ( vec_len [CliCmd] . c cmds )
     : ~ i k 0
@@ -223,6 +237,8 @@ $ `stdlib/core/rcbox.nu`
 // ── Context accessors (used inside handlers) ──────────────────────────
 
 // Resolve a string flag: explicit value → env fallback → default → "".
+unsafe
+
 @ __cli_fallback * CliImpl c s name → String {
     : i n ( vec_len [CliFlag] . c globals )
     : ~ i k 0
@@ -348,6 +364,8 @@ $ `stdlib/core/rcbox.nu`
     ~ < pw 24 { ( string_push_char out 32 ) = pw + pw 1 }
 }
 
+unsafe
+
 @ __cli_render_options * CliImpl c String out → v {
     : String hdr ( __sgr 1 `OPTIONS` )
     ( string_push_str out ( string_data hdr ) )
@@ -386,6 +404,8 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Longest command name, for column alignment.
+unsafe
+
 @ __cli_cmd_width * CliImpl c → i {
     : i n ( vec_len [CliCmd] . c cmds )
     : ~ i w 0
@@ -399,6 +419,8 @@ $ `stdlib/core/rcbox.nu`
     }
     ^ w
 }
+
+unsafe
 
 @ __cli_print_help * CliImpl c → v {
     : String out ( string_new )
@@ -465,6 +487,8 @@ $ `stdlib/core/rcbox.nu`
     ( nurl_print ( string_data out ) )
 }
 
+unsafe
+
 @ __cli_print_cmd_help * CliImpl c i idx → v {
     : String out ( string_new )
     ?? ( vec_get [CliCmd] . c cmds idx ) {
@@ -495,6 +519,8 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // A styled "error: <msg>" line + usage hint on stderr.
+unsafe
+
 @ __cli_err * CliImpl c s msg → v {
     : String pre ( __fg 1 `error:` )
     ( nurl_eprint ( string_data pre ) )
@@ -507,6 +533,8 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // ── Run ───────────────────────────────────────────────────────────────
+
+unsafe
 
 @ __cli_register_flags * CliImpl c ArgParser p → v {
     : i n ( vec_len [CliFlag] . c globals )
@@ -547,6 +575,8 @@ $ `stdlib/core/rcbox.nu`
     }
 }
 
+unsafe
+
 @ __cli_dispatch * CliImpl c i idx CliCtx ctx → i {
     ?? ( vec_get [CliCmd] . c cmds idx ) {
         T cm → {
@@ -557,6 +587,8 @@ $ `stdlib/core/rcbox.nu`
     }
 }
 
+unsafe
+
 @ __cli_print_version * CliImpl c → v {
     ( nurl_print ( string_data . c prog ) )
     ( nurl_print ` ` )
@@ -566,6 +598,8 @@ $ `stdlib/core/rcbox.nu`
 
 // Parse the real argv, route to a subcommand, and return its exit code.
 // Handles `--help` / `--version`, unknown commands, and parse errors.
+unsafe
+
 @ cli_run Cli c__h → i {
     : *CliImpl c ( __Cli_ptr c__h )
     ( __cli_detect_color )

@@ -8,6 +8,8 @@ $ `stdlib/std/fs.nu`
 $ `stdlib/ext/env.nu`
 $ `src/unigram.nu`
 
+unsafe
+
 @ main → i {
     : ( Vec String ) av ( env_args_list )
     ? >= ( vec_len [String] av ) 3 {} { ( nurl_print `usage: unigram_check <tokenizer.json> <corpus>\n` ) ^ 2 }

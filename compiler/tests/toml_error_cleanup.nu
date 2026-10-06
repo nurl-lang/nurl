@@ -28,6 +28,8 @@ $ `stdlib/ext/toml.nu`
     }
 }
 
+unsafe
+
 @ main → i {
     : ( Vec s ) inputs ( vec_new [s] )
     ( vec_push [s] inputs `[` )

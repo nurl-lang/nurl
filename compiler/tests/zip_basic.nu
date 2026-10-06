@@ -33,6 +33,8 @@ $ `stdlib/ext/zip.nu`
     ( string_free s )
 }
 
+unsafe
+
 @ main → i {
     // ── build ──
     : Zip z ( zip_new )

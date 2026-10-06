@@ -16,7 +16,11 @@ $ `stdlib/core/rcbox.nu`
 
 & `libc` @ nurl_free_count → i
 
+unsafe
+
 @ live → i { ^ - ( nurl_alloc_count ) ( nurl_free_count ) }
+
+unsafe
 
 @ allocs → i { ^ ( nurl_alloc_count ) }
 
@@ -24,6 +28,8 @@ $ `stdlib/core/rcbox.nu`
 
 : PairImpl { ( Vec i ) v0 ( Vec i ) v1 }
 : Pair { s ctl }
+
+unsafe
 
 @ Pair_share Pair h → Pair { ^ @ Pair { # s ( rcbox_share # i . h ctl ) } }
 
@@ -36,7 +42,11 @@ $ `stdlib/core/rcbox.nu`
     ^ v
 }
 
+unsafe
+
 @ pair_of sink ( Vec i ) a sink ( Vec i ) b → Pair { ^ @ Pair { # s ( rcbox_new [PairImpl] @ PairImpl { a b } ) } }
+
+unsafe
 
 @ pair_len Pair p → i {
     : *PairImpl q ( rcbox_ptr [PairImpl] # i . p ctl )

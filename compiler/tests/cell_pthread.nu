@@ -17,6 +17,8 @@ $ `stdlib/core/cell.nu`
 
 & `c` @ pthread_mutex_destroy *u m → i
 
+unsafe
+
 @ pure_mutex_new → Cell {
     : Cell c ( cell_for_native `pthread_mutex_t` )
     ? ( cell_is_null c ) { ^ c } {}
@@ -24,13 +26,19 @@ $ `stdlib/core/cell.nu`
     ^ c
 }
 
+unsafe
+
 @ pure_mutex_lock Cell c → v {
     ( pthread_mutex_lock ( cell_ptr c ) )
 }
 
+unsafe
+
 @ pure_mutex_unlock Cell c → v {
     ( pthread_mutex_unlock ( cell_ptr c ) )
 }
+
+unsafe
 
 @ pure_mutex_destroy Cell c → v {
     ( pthread_mutex_destroy ( cell_ptr c ) )

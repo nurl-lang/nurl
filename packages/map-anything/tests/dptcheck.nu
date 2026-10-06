@@ -21,6 +21,8 @@ $ `src/dpthead.nu`
     ^ 1
 }
 
+unsafe
+
 @ __dt_up GpuKit kit * u raw i off i n → GkBuf {
     : ( Vec f ) host ( vec_with_cap [f] n )
     : b _l ( vec_set_len [f] host n )
@@ -36,6 +38,8 @@ $ `src/dpthead.nu`
     : b _u ( gk_dbuf_upload kit b host )
     ^ b
 }
+
+unsafe
 
 @ __dt_dump GpuKit kit s dir s name GkBuf b i n → b {
     : ( Vec f ) host ( vec_with_cap [f] n )

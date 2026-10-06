@@ -21,6 +21,8 @@ $ `stdlib/std/floatbits.nu`
 $ `stdlib/std/float.nu`
 
 // f32 element idx out of the canonical little-endian buffer.
+unsafe
+
 @ __gq_f32 * u P i idx → f {
     : i o * idx 4
     : i bits | | | # i . P o << # i . P + o 1 8 << # i . P + o 2 16 << # i . P + o 3 24

@@ -26,6 +26,8 @@ $ `src/dino.nu`
     ^ 1
 }
 
+unsafe
+
 @ main → i {
     ? < ( nurl_argc ) 5 { ^ ( __dc_die `usage: dinocheck <model> <dir> <H> <W>` ) } {}
     : s model ( nurl_argv 1 )

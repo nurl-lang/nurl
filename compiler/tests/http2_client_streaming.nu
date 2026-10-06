@@ -34,6 +34,8 @@ $ `stdlib/std/thread.nu`
     } { ( send_frame tcp 1 4 sid block ) }
 }
 
+unsafe
+
 @ raw_peer TcpConn tcp → v {
     ( tcp_set_timeout tcp 3000 )
     ?? ( h2_read_preface tcp ) { T _ → {} F _ → { ^ } }

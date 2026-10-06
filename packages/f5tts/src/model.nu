@@ -125,12 +125,16 @@ $ `stdlib/core/rcbox.nu`
 // every copy is the same engine, and the last owner releases it.
 : F5Model { s ctl }
 
+unsafe
+
 @ F5Model_share F5Model h → F5Model { ^ @ F5Model { # s ( rcbox_share # i . h ctl ) } }
 
 @ F5Model_drop sink F5Model h → v {
     ( mem_forget h )
     ( rcbox_release [F5ModelImpl] # i . h ctl )
 }
+
+unsafe
 
 @ __F5Model_ptr F5Model h → *F5ModelImpl { ^ ( rcbox_ptr [F5ModelImpl] # i . h ctl ) }
 
@@ -171,9 +175,13 @@ $ `stdlib/core/rcbox.nu`
 //   model_state_dict.transformer.               the same checkpoint's live weights
 //   transformer.                                a bare state dict
 //
+unsafe
+
 @ __f5m_st_tensors * F5ModelImpl m → ( Vec StTensor ) {
     ^ ( st_tensors . m st )
 }
+
+unsafe
 
 @ __f5m_src_find * F5ModelImpl m s name → i {
     ? ( st_is_open . m st ) { ^ ( st_find_tensor . m st name ) } {}
@@ -182,12 +190,16 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // The same, with this checkpoint's prefix in front.
+unsafe
+
 @ __f5m_src_find_p * F5ModelImpl m s rest → i {
     : String full ( string_clone . m prefix )
     ( string_push_str full rest )
     : i idx ( __f5m_src_find m ( string_data full ) )
     ^ idx
 }
+
+unsafe
 
 @ __f5m_src_nelems * F5ModelImpl m i idx → i {
     ? ( st_is_open . m st ) {
@@ -199,6 +211,8 @@ $ `stdlib/core/rcbox.nu`
     ? ( pt_is_open . m pt ) { ^ ( pt_nelems . m pt idx ) } {}
     ^ 0
 }
+
+unsafe
 
 @ __f5m_src_dim * F5ModelImpl m i idx i k → i {
     ? ( st_is_open . m st ) {
@@ -216,6 +230,8 @@ $ `stdlib/core/rcbox.nu`
     ^ 0
 }
 
+unsafe
+
 @ __f5m_src_f32 * F5ModelImpl m i idx → b {
     ? ( st_is_open . m st ) {
         ?? ( vec_get [StTensor] ( __f5m_st_tensors m ) idx ) {
@@ -229,6 +245,8 @@ $ `stdlib/core/rcbox.nu`
     ^ F
 }
 
+unsafe
+
 @ __f5m_src_ptr * F5ModelImpl m i idx → *u {
     ? ( st_is_open . m st ) {
         ?? ( vec_get [StTensor] ( __f5m_st_tensors m ) idx ) {
@@ -239,6 +257,8 @@ $ `stdlib/core/rcbox.nu`
     ? ( pt_is_open . m pt ) { ^ ( pt_tensor_ptr . m pt idx ) } {}
     ^ # *u 0
 }
+
+unsafe
 
 @ __f5m_up * F5ModelImpl m s name → GkBuf {
     : i ti ( __f5m_src_find m name )
@@ -251,6 +271,8 @@ $ `stdlib/core/rcbox.nu`
     }
     ^ b
 }
+
+unsafe
 
 @ __f5m_name * F5ModelImpl m s pre i k s suf → String {
     : String s ( string_clone . m prefix )
@@ -267,6 +289,8 @@ $ `stdlib/core/rcbox.nu`
     ( string_push_str s suf )
     ^ s
 }
+
+unsafe
 
 @ __f5m_up1 * F5ModelImpl m s suf → GkBuf {
     : String s ( string_clone . m prefix )
@@ -289,6 +313,8 @@ $ `stdlib/core/rcbox.nu`
 // between one coalesced read and thirty-two scattered ones — and on the
 // position embedding's 31-tap grouped convolution it was 70 % of a whole
 // synthesis.
+unsafe
+
 @ __f5m_up_convw * F5ModelImpl m s name → GkBuf {
     : i ti ( __f5m_src_find m name )
     ? < ti 0 { ^ ( __f5m_nobuf ) } {}
@@ -322,6 +348,8 @@ $ `stdlib/core/rcbox.nu`
     ^ b
 }
 
+unsafe
+
 @ __f5m_up_convw1 * F5ModelImpl m s suf → GkBuf {
     : String s ( string_clone . m prefix )
     ( string_push_str s suf )
@@ -343,6 +371,8 @@ $ `stdlib/core/rcbox.nu`
 // output in 48 column tiles against 16, which is the difference between
 // leaving a quarter of a wave empty and filling it — 28.5 against 22.9
 // TFLOP/s, measured on the shapes this model runs.
+unsafe
+
 @ __f5m_up_stack3 * F5ModelImpl m i idx s a s b s c i rows i cols ( Vec GkBuf ) dst → b {
     : ( Vec i ) tis ( vec_new [i] )
     : String n1 ( __f5m_name m `transformer_blocks.` idx a )
@@ -386,6 +416,8 @@ $ `stdlib/core/rcbox.nu`
 // Stacked, the whole step is one GEMM — and since the timesteps are known
 // before the loop starts, ALL of them are one GEMM, so those 554 MB are read
 // once per utterance instead of once per step.
+unsafe
+
 @ __f5m_up_stack_mod * F5ModelImpl m → b {
     : i per * * 6 . m dim . m dim
     : i pb * 6 . m dim
@@ -421,6 +453,8 @@ $ `stdlib/core/rcbox.nu`
     ^ T
 }
 
+unsafe
+
 @ __f5m_layers * F5ModelImpl m → b {
     : ~ b ok ( __f5m_up_stack_mod m )
     : ~ i k 0
@@ -453,6 +487,8 @@ $ `stdlib/core/rcbox.nu`
     }
     ^ ok
 }
+
+unsafe
 
 @ __f5m_veclists * F5ModelImpl m → v {
     = . m tb_dw_w ( vec_new [GkBuf] )
@@ -519,6 +555,8 @@ $ `stdlib/core/rcbox.nu`
 // through the engine's pointer does not drop what it overwrites, so each
 // leaves through a take and is dropped when this returns — back in the pool
 // before the caller allocates the next utterance's.
+unsafe
+
 @ __f5m_scratch_zero * F5ModelImpl m → v {
     = . m n 0
     = . m batch 0
@@ -532,6 +570,8 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // The modulation schedule leaves the engine (dropped when this returns).
+unsafe
+
 @ __f5m_drop_mods * F5ModelImpl m → v {
     : GkBuf ma . m mod_all
     ( mem_take ma )
@@ -543,6 +583,8 @@ $ `stdlib/core/rcbox.nu`
 
 // The single-tensor weights leave the engine (dropped when this returns);
 // the per-layer lists are emptied by vec_clear, which drops their elements.
+unsafe
+
 @ __f5m_drop_top * F5ModelImpl m → v {
     : GkBuf w_tm0_w . m tm0_w
     ( mem_take w_tm0_w )
@@ -600,6 +642,8 @@ $ `stdlib/core/rcbox.nu`
 // Every weight, from the mapping to the device. Split out of f5_open because
 // --unload-after calls it again: a server that has been idle gives the card
 // back and pays this to answer the next request.
+unsafe
+
 @ __f5m_upload_all * F5ModelImpl m → b {
     ( vec_clear [GkBuf] . m tb_dw_w ) ( vec_clear [GkBuf] . m tb_dw_b )
     ( vec_clear [GkBuf] . m tb_n_w ) ( vec_clear [GkBuf] . m tb_n_b )
@@ -670,6 +714,8 @@ $ `stdlib/core/rcbox.nu`
 // long, the feed-forward's first matrix is [ff_mult*dim, dim], and the depth
 // is however many transformer_blocks.N there are. So F5TTS_Base, _Small, v1
 // and a finetune of any of them all load without being told which they are.
+unsafe
+
 @ __f5m_read_arch * F5ModelImpl m → b {
     : i po ( __f5m_src_find_p m `proj_out.weight` )
     ? >= po 0 {} { ^ F }
@@ -700,6 +746,8 @@ $ `stdlib/core/rcbox.nu`
     ^ F
 }
 
+unsafe
+
 @ __f5m_arch_ok * F5ModelImpl m i depth → b {
     = . m depth depth
     : ~ i nconv 0
@@ -719,6 +767,8 @@ $ `stdlib/core/rcbox.nu`
 // A checkpoint is a path to a .safetensors or a .pt. Which container, which
 // prefix and which architecture are all read out of the file: nothing here is
 // told what it is about to open.
+unsafe
+
 @ f5_open s ckpt s vocab_path i device → !F5Model String {
     // zeroed: every handle field starts as the null handle, so an early
     // return drops a half-built engine cleanly
@@ -771,12 +821,16 @@ $ `stdlib/core/rcbox.nu`
 // weights, the scratch, the mapping and the kit.
 @ f5_close sink F5Model m → v {}
 
+unsafe
+
 @ f5_vocab_n F5Model m__h → i {
     : *F5ModelImpl m ( __F5Model_ptr m__h )
     ^ . m vocab
 }
 
 // ── per-generation buffers ──────────────────────────────────────────
+
+unsafe
 
 @ f5_alloc F5Model m__h i n i batch → b {
     : *F5ModelImpl m ( __F5Model_ptr m__h )
@@ -832,6 +886,8 @@ $ `stdlib/core/rcbox.nu`
 
 // The rotary tables: one angle per PAIR of head features, the base 10000
 // exponent x_transformers uses.
+unsafe
+
 @ __f5m_rope_tables * F5ModelImpl m → b {
     : i n . m n
     : i half / . m hd 2
@@ -861,6 +917,8 @@ $ `stdlib/core/rcbox.nu`
 // utterance, not once per ODE step — and everything after it is on the
 // device, because four ConvNeXt blocks over three thousand positions is not.
 
+unsafe
+
 @ __f5m_u32 * u p i off → i {
     ^ | # i . p off | << # i . p + off 1 8 | << # i . p + off 2 16 << # i . p + off 3 24
 }
@@ -871,6 +929,8 @@ $ `stdlib/core/rcbox.nu`
 // features and sin for the second, over the same 256 frequencies — which is
 // NOT the layout its timestep embedding uses (sin first, then cos, over a
 // different frequency ladder). Two conventions, one model.
+unsafe
+
 @ __f5m_text_rows * F5ModelImpl m ( Vec i ) ids b drop ( Vec f ) out ( Vec f ) keep → v {
     : i n . m n
     : i td . m td
@@ -935,6 +995,8 @@ $ `stdlib/core/rcbox.nu`
 // The depthwise convolution is what gives the text encoder its receptive
 // field — there is no attention in it at all — and GRN is what keeps one
 // feature from swallowing the block.
+unsafe
+
 @ __f5m_convnext * F5ModelImpl m i idx GkBuf x i rows → b {
     : i td . m td
     : i inner * 2 td
@@ -961,6 +1023,8 @@ $ `stdlib/core/rcbox.nu`
 // written into txt2 at `row_off`. `drop` is the unconditional branch: the
 // characters become the filler token, but the PADDING MASK is still the real
 // text's — which is why the unconditional text embedding is not zero.
+unsafe
+
 @ f5_text_encode F5Model m__h ( Vec i ) ids b drop i row_off → b {
     : *F5ModelImpl m ( __F5Model_ptr m__h )
     : i n . m n
@@ -1001,6 +1065,8 @@ $ `stdlib/core/rcbox.nu`
 // exp(-i·ln(10000)/127) scaled by a thousand — a different ladder and a
 // different order from the position code its text encoder uses. Getting this
 // backwards does not crash; it conditions the whole network on the wrong time.
+unsafe
+
 @ f5_set_times F5Model m__h ( Vec f ) ts → b {
     : *F5ModelImpl m ( __F5Model_ptr m__h )
     : i dim . m dim
@@ -1049,12 +1115,16 @@ $ `stdlib/core/rcbox.nu`
     ^ ok
 }
 
+unsafe
+
 @ f5_set_step F5Model m__h i k → v {
     : *F5ModelImpl m ( __F5Model_ptr m__h )
     = . m cur_step k
 }
 
 // ── the forward ─────────────────────────────────────────────────────
+
+unsafe
 
 @ f5_forward F5Model m__h → b {
     : *F5ModelImpl m ( __F5Model_ptr m__h )
@@ -1152,35 +1222,49 @@ $ `stdlib/core/rcbox.nu`
     ^ ( __f5m_rope_tables m )
 }
 
+unsafe
+
 @ f5_buf_txt F5Model m__h → GkBuf {
     : *F5ModelImpl m ( __F5Model_ptr m__h )
     ^ . . m sc txt2
 }
+
+unsafe
 
 @ f5_buf_pred F5Model m__h → GkBuf {
     : *F5ModelImpl m ( __F5Model_ptr m__h )
     ^ . . m sc pred
 }
 
+unsafe
+
 @ f5_buf_x F5Model m__h → GkBuf {
     : *F5ModelImpl m ( __F5Model_ptr m__h )
     ^ . . m sc xbuf
 }
+
+unsafe
 
 @ f5_buf_cond F5Model m__h → GkBuf {
     : *F5ModelImpl m ( __F5Model_ptr m__h )
     ^ . . m sc cond2
 }
 
+unsafe
+
 @ f5_kit F5Model m__h → GpuKit {
     : *F5ModelImpl m ( __F5Model_ptr m__h )
     ^ . m kit
 }
 
+unsafe
+
 @ f5_n F5Model m__h → i {
     : *F5ModelImpl m ( __F5Model_ptr m__h )
     ^ . m n
 }
+
+unsafe
 
 @ f5_mel F5Model m__h → i {
     : *F5ModelImpl m ( __F5Model_ptr m__h )
@@ -1188,16 +1272,22 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Read `nel` elements of a device buffer back, growing `out` to fit.
+unsafe
+
 @ f5_download F5Model m__h GkBuf b ( Vec f ) out i nel → b {
     : *F5ModelImpl m ( __F5Model_ptr m__h )
     ~ < ( vec_len [f] out ) nel { ( vec_push [f] out 0.0 ) }
     ^ ( gk_dbuf_download . m kit ( __f5m_view b 0 nel ) out )
 }
 
+unsafe
+
 @ f5_set_x F5Model m__h ( Vec f ) x → b {
     : *F5ModelImpl m ( __F5Model_ptr m__h )
     ^ ( gk_dbuf_upload . m kit . . m sc xbuf x )
 }
+
+unsafe
 
 @ f5_set_cond F5Model m__h ( Vec f ) c → b {
     : *F5ModelImpl m ( __F5Model_ptr m__h )
@@ -1206,6 +1296,8 @@ $ `stdlib/core/rcbox.nu`
 
 // The unconditional half's conditioning audio is zero: classifier-free
 // guidance drops the reference voice, not only the text.
+unsafe
+
 @ f5_zero_cond_row F5Model m__h i row_off → b {
     : *F5ModelImpl m ( __F5Model_ptr m__h )
     : i nel * . m n . m mel
@@ -1215,6 +1307,8 @@ $ `stdlib/core/rcbox.nu`
     : b ok ( gk_dbuf_upload . m kit ( __f5m_view . . m sc cond2 * row_off . m mel nel ) z )
     ^ ok
 }
+
+unsafe
 
 @ f5_buf_vel F5Model m__h → GkBuf {
     : *F5ModelImpl m ( __F5Model_ptr m__h )
@@ -1228,10 +1322,14 @@ $ `stdlib/core/rcbox.nu`
 // back would mean re-reading it from disk — so a reload is a copy from the
 // page cache to the device and costs about as much as the first one did.
 
+unsafe
+
 @ f5_loaded F5Model m__h → b {
     : *F5ModelImpl m ( __F5Model_ptr m__h )
     ^ . m loaded
 }
+
+unsafe
 
 @ f5_unload F5Model m__h → v {
     : *F5ModelImpl m ( __F5Model_ptr m__h )
@@ -1256,6 +1354,8 @@ $ `stdlib/core/rcbox.nu`
     ( gk_pool_release . m kit )
 }
 
+unsafe
+
 @ f5_reload F5Model m__h → b {
     : *F5ModelImpl m ( __F5Model_ptr m__h )
     ? . m loaded { ^ T } {}
@@ -1271,25 +1371,35 @@ $ `stdlib/core/rcbox.nu`
     ^ ok
 }
 
+unsafe
+
 @ f5_dim F5Model m__h → i {
     : *F5ModelImpl m ( __F5Model_ptr m__h )
     ^ . m dim
 }
+
+unsafe
 
 @ f5_depth F5Model m__h → i {
     : *F5ModelImpl m ( __F5Model_ptr m__h )
     ^ . m depth
 }
 
+unsafe
+
 @ f5_heads F5Model m__h → i {
     : *F5ModelImpl m ( __F5Model_ptr m__h )
     ^ . m heads
 }
 
+unsafe
+
 @ f5_td F5Model m__h → i {
     : *F5ModelImpl m ( __F5Model_ptr m__h )
     ^ . m td
 }
+
+unsafe
 
 @ f5_prefix F5Model m__h → s {
     : *F5ModelImpl m ( __F5Model_ptr m__h )

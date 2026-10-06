@@ -36,6 +36,8 @@ $ `stdlib/std/float.nu`
 // normalising first, so a non-unit quaternion still produces a proper
 // rotation. Predicted quaternions are never exactly unit, and the two
 // spellings differ in the last bits — this one matches.
+unsafe
+
 @ quat_to_mat f qi f qj f qk f qr * f out → v {
     : f n2 + + + * qi qi * qj qj * qk qk * qr qr
     : f two_s ? > n2 0.0 / 2.0 n2 0.0
@@ -58,6 +60,8 @@ $ `stdlib/std/float.nu`
 // pivot, and the one with the largest |component| is kept — the standard
 // guard against the cancellation that ruins the naive trace formula near
 // a 180-degree rotation.
+unsafe
+
 @ mat_to_quat * f m * f out → v {
     : f m00 . m 0
     : f m01 . m 1
@@ -112,6 +116,8 @@ $ `stdlib/std/float.nu`
 // ── pose encoding → camera matrices ─────────────────────────────────
 
 // Extrinsics [R|t], world→camera, 3x4 row-major (12 doubles).
+unsafe
+
 @ pose_enc_to_extri * f pe * f out → v {
     : ( Vec u ) r__v ( vec_zeroed [u] 72 )
     : *f r # *f ( vec_data [u] r__v )
@@ -131,6 +137,8 @@ $ `stdlib/std/float.nu`
 // Intrinsics from the two field-of-view angles, 3x3 row-major.
 // The principal point is the image centre — the model is only ever fed
 // centre-cropped frames, and the reference assumes the same.
+unsafe
+
 @ pose_enc_to_intri * f pe i H i W * f out → v {
     : f fov_h . pe 7
     : f fov_w . pe 8
@@ -147,6 +155,8 @@ $ `stdlib/std/float.nu`
 
 // Inverse of an intrinsics matrix of the shape above (fx, fy, cx, cy) —
 // upper triangular, so the closed form is exact and needs no pivoting.
+unsafe
+
 @ intri_inverse * f k * f out → v {
     : f fx . k 0
     : f fy . k 4
@@ -164,6 +174,8 @@ $ `stdlib/std/float.nu`
 // Inverse of a 4x4 SE3 (rigid) matrix: [R|t] → [Rᵀ | −Rᵀt].
 // Closed form, not a general solve — the whole point is that a rigid
 // transform's inverse costs a transpose and a matrix-vector product.
+unsafe
+
 @ se3_inverse * f m * f out → v {
     : ~ i r 0
     ~ < r 3 {
@@ -191,6 +203,8 @@ $ `stdlib/std/float.nu`
 
 // Camera-to-world 4x4 from a pose encoding: build [R|t] world→camera,
 // lift to 4x4, invert.
+unsafe
+
 @ pose_enc_to_c2w * f pe * f out → v {
     : ( Vec u ) e__v ( vec_zeroed [u] 128 )
     : *f e # *f ( vec_data [u] e__v )
@@ -208,6 +222,8 @@ $ `stdlib/std/float.nu`
 //   camera point = ray · depth        (NOT ray normalised — the model's
 //                                      depth is along z, not range)
 //   world point  = c2w · (camera point, 1)
+unsafe
+
 @ unproject f px f py f depth * f kinv * f c2w * f out → v {
     : f cxp + + * . kinv 0 px * . kinv 1 py . kinv 2
     : f cyp + + * . kinv 3 px * . kinv 4 py . kinv 5

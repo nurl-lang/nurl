@@ -119,6 +119,8 @@ $ `bx.nu`
     }
 }
 
+unsafe
+
 @ bx_sum i kind ( Vec String ) argv → i {
     : BxOpts o ( bx_getopt argv 1 `cbtsw` `check=c,binary=b,text=t,status=s,warn=w` )
     : ~ i rc 0
@@ -162,6 +164,8 @@ $ `bx.nu`
 @ ap_sha512sum ( Vec String ) argv → i { ^ ( bx_sum HASH_SHA512 argv ) }
 
 // ── base64 ────────────────────────────────────────────────────────
+
+unsafe
 
 @ ap_base64 ( Vec String ) argv → i {
     : BxOpts o ( bx_getopt argv 1 `dw:` `decode=d,wrap=w` )
@@ -239,6 +243,8 @@ $ `bx.nu`
     }
     ^ t
 }
+
+unsafe
 
 @ __cksum ( Vec u ) data → i {
     : ( Vec i ) tbl ( __cksum_table )

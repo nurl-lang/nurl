@@ -31,6 +31,8 @@ $ `src/runtime.nu`
     ?? ( read_file_bytes path ) { T bytes → ^ bytes F _ → ^ ( vec_new [u] ) }
 }
 
+unsafe
+
 @ main → i {
     : ~ b have_model F
     : ~ OGraph g ( onnx_empty_graph )

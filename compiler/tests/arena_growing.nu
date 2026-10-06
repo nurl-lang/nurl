@@ -30,6 +30,8 @@ $ `stdlib/std/arena.nu`
     }
 }
 
+unsafe
+
 @ main → i {
     : ~ i f 0
 

@@ -62,6 +62,8 @@ $ `bx.nu`
 }
 
 // The `%`-directives `stat -c` understands.
+unsafe
+
 @ __stat_directive String out FileStat st s path i d → b {
     ? == d 110 { ( string_push_str out path ) ^ T } {}
     ? == d 115 { ( string_push_int out . st size ) ^ T } {}
@@ -99,6 +101,8 @@ $ `bx.nu`
     ^ F
 }
 
+unsafe
+
 @ __stat_timestamp String out i secs i nsec → v {
     : Time t ( time_local secs )
     : String base ( time_format t `%Y-%m-%d %H:%M:%S` )
@@ -120,6 +124,8 @@ $ `bx.nu`
     ? < mm 10 { ( string_push_char out 48 ) } {}
     ( string_push_int out mm )
 }
+
+unsafe
 
 @ __stat_default String out FileStat st s path → v {
     ( string_push_str out `  File: ` )
@@ -262,6 +268,8 @@ $ `bx.nu`
 : i DU_BYTES 8
 : i DU_MEGA 16
 : i DU_TOTAL 32
+
+unsafe
 
 @ __du_emit s path i bytes_512 i flags → v {
     : String out ( string_new )
@@ -435,6 +443,8 @@ $ `fileops.nu`
 // -exec CMD ... {} \;  — a real fork + exec, so the child writes to the
 // terminal itself instead of having its output captured and replayed
 // out of order.
+unsafe
+
 @ __find_exec ( Vec String ) toks i from i to s path → b {
     : i n - to from
     ? <= n 0 { ^ F } {}

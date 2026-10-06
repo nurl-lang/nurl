@@ -29,6 +29,8 @@ $ `stdlib/ext/cbor.nu`
 }
 
 // Vec[u] → lowercase hex (binary-safe: indexed *u read)
+unsafe
+
 @ tohex ( Vec u ) v → String {
     : i n ( vec_len [u] v )
     : *u p ( vec_data [u] v )

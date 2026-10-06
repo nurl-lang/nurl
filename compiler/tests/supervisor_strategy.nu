@@ -11,11 +11,15 @@
 $ `stdlib/core/string.nu`
 $ `stdlib/std/supervisor.nu`
 
+unsafe
+
 @ mk0 → *i {
     : *i p # *i ( nurl_alloc Z i )
     ( nurl_poke p 0 0 )
     ^ p
 }
+
+unsafe
 
 @ run_strategy s label SupStrategy st → v {
     : *i ca ( mk0 )

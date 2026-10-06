@@ -88,6 +88,8 @@ $ `torchpt.nu`
     ^ 0
 }
 
+unsafe
+
 @ cmd_stats Pt p s name → i {
     : i idx ( pt_find p name )
     ? < idx 0 { ( nurl_print `no such tensor\n` ) ^ 1 } {}
@@ -118,6 +120,8 @@ $ `torchpt.nu`
     ^ 0
 }
 
+unsafe
+
 @ cmd_head Pt p s name i count → i {
     : i idx ( pt_find p name )
     ? < idx 0 { ( nurl_print `no such tensor\n` ) ^ 1 } {}
@@ -143,6 +147,8 @@ $ `torchpt.nu`
 // "<name> <dtype> <shape> <v0> <v1> …" per tensor. Values print through
 // nurl_str_float, which round-trips — so a diff against torch is a diff
 // of numbers, not of formatting.
+unsafe
+
 @ cmd_dump Pt p → i {
     : i n ( pt_n_tensors p )
     : ~ i j 0

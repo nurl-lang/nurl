@@ -66,6 +66,8 @@ $ `stdlib/ext/http2_conn.nu`
     }
 }
 
+unsafe
+
 @ run → i {
     : ( Vec i ) fails ( vec_new [i] )
 

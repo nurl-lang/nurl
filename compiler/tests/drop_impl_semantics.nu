@@ -20,6 +20,8 @@ $ `stdlib/core/vec.nu`
 
 & `libc` @ nurl_free_count → i
 
+unsafe
+
 @ live → i { ^ - ( nurl_alloc_count ) ( nurl_free_count ) }
 
 : ~ i g_dropped 0
@@ -27,15 +29,17 @@ $ `stdlib/core/vec.nu`
 // Releases only its raw field; `d` and `t` are the glue's.
 : Raw { s name ( Vec i ) d String t }
 
-% Drop Raw { @ drop Raw r → v { ( nurl_free . r name ) = g_dropped + g_dropped 1 } }
+% Drop Raw { unsafe @ drop Raw r → v { ( nurl_free . r name ) = g_dropped + g_dropped 1 } }
 
 // Releases a managed field by hand too: the glue must skip it.
 : ByHand { s name ( Vec i ) d }
 
-% Drop ByHand { @ drop ByHand r → v { ( nurl_free . r name ) ( vec_free [i] . r d ) = g_dropped + g_dropped 1 } }
+% Drop ByHand { unsafe @ drop ByHand r → v { ( nurl_free . r name ) ( vec_free [i] . r d ) = g_dropped + g_dropped 1 } }
 
 // Hands itself to a disposer, which releases everything.
 : Disposed { s name ( Vec i ) d }
+
+unsafe
 
 @ disposed_free sink Disposed r → v { ( nurl_free . r name ) ( vec_free [i] . r d ) }
 

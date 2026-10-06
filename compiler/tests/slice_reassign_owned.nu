@@ -10,6 +10,8 @@
 // Values flow through acc so a wrong result also flags a regression; --san
 // (leak detection) proves the freed-old-buffer side of the reassign fixes.
 
+unsafe
+
 @ main → i {
     : ~ i acc 0
 

@@ -22,6 +22,8 @@ $ `stdlib/core/string.nu`
     ^ @ !v String { T 0 }
 }
 
+unsafe
+
 @ main → i {
     : ~ i acc 0
 

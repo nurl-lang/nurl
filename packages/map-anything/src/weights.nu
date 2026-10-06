@@ -46,13 +46,19 @@ $ `deps/safetensor/src/safetensor.nu`
 // last owner releases it. lw_close is an optional early release.
 : Lw { s ctl }
 
+unsafe
+
 @ Lw_share Lw h → Lw { ^ @ Lw { # s ( rcbox_share # i . h ctl ) } }
 
 @ Lw_drop sink Lw h → v { ( mem_forget h ) ( rcbox_release [LwImpl] # i . h ctl ) }
 
+unsafe
+
 @ __Lw_ptr Lw h → *LwImpl { ^ ( rcbox_ptr [LwImpl] # i . h ctl ) }
 // No checkpoint (an empty slot until lw_open fills it).
 @ lw_none → Lw { ^ @ Lw { # s 0 } }
+
+unsafe
 
 @ lw_open s path → !Lw String {
     : !St String r ( st_open path )
@@ -65,11 +71,19 @@ $ `deps/safetensor/src/safetensor.nu`
 // Release the checkpoint now (optional — its last owner does it anyway).
 @ lw_close sink Lw w → v {}
 
+unsafe
+
 @ lw_n_tensors Lw w__h → i { : *LwImpl w ( __Lw_ptr w__h ) ^ ( st_n_tensors . w st ) }
+
+unsafe
 
 @ lw_index Lw w__h s name → i { : *LwImpl w ( __Lw_ptr w__h ) ^ ( st_find_tensor . w st name ) }
 
+unsafe
+
 @ lw_has Lw w__h s name → b { : *LwImpl w ( __Lw_ptr w__h ) ^ >= ( st_find_tensor . w st name ) 0 }
+
+unsafe
 
 @ lw_ndim Lw w__h s name → i {
     : *LwImpl w ( __Lw_ptr w__h )
@@ -77,6 +91,8 @@ $ `deps/safetensor/src/safetensor.nu`
     ? < i0 0 { ^ 0 } {}
     ?? ( vec_get [StTensor] ( st_tensors . w st ) i0 ) { T t → ^ . t nd F → ^ 0 }
 }
+
+unsafe
 
 @ lw_dim Lw w__h s name i axis → i {
     : *LwImpl w ( __Lw_ptr w__h )
@@ -88,6 +104,8 @@ $ `deps/safetensor/src/safetensor.nu`
     }
 }
 
+unsafe
+
 @ lw_nelems Lw w__h s name → i {
     : *LwImpl w ( __Lw_ptr w__h )
     : i i0 ( st_find_tensor . w st name )
@@ -96,14 +114,20 @@ $ `deps/safetensor/src/safetensor.nu`
 }
 
 // Keep the first failure only; a later one is dropped with the call.
+unsafe
+
 @ __lw_fail * LwImpl w sink String m → v {
     ? == 0 ( vec_len [String] . w errs ) { ( vec_push [String] . w errs m ) } {}
 }
+
+unsafe
 
 @ lw_error Lw w__h → s {
     : *LwImpl w ( __Lw_ptr w__h )
     ?? ( vec_get [String] . w errs 0 ) { T s → ^ ( string_data s ) F → ^ `` }
 }
+
+unsafe
 
 @ lw_ok Lw w__h → b { : *LwImpl w ( __Lw_ptr w__h ) ^ == 0 ( vec_len [String] . w errs ) }
 
@@ -113,6 +137,8 @@ $ `deps/safetensor/src/safetensor.nu`
 // are contiguous by construction, so only the dtype and length are
 // checked. Returns 0 when the tensor is absent, a different dtype or a
 // different length, and the caller falls back to the converting read.
+unsafe
+
 @ lw_f32_ptr Lw w__h s name i n → *u {
     : *LwImpl w ( __Lw_ptr w__h )
     : i i0 ( st_find_tensor . w st name )
@@ -132,6 +158,8 @@ $ `deps/safetensor/src/safetensor.nu`
 // the wrong size, or unreadable. Every dtype widens through f32 (the
 // container's dequant path), which is exact for this checkpoint — the
 // file is F32 throughout.
+unsafe
+
 @ lw_read Lw w__h s name * f dst i n → b {
     : *LwImpl w ( __Lw_ptr w__h )
     : i i0 ( st_find_tensor . w st name )
@@ -184,6 +212,8 @@ $ `deps/safetensor/src/safetensor.nu`
 // Assert a tensor's presence and shape. Pass −1 for an axis that may be
 // anything, and for axes beyond the tensor's rank. Records the first
 // failure; returns whether THIS check passed.
+unsafe
+
 @ lw_require Lw w__h s name i d0 i d1 i d2 i d3 → b {
     : *LwImpl w ( __Lw_ptr w__h )
     : i i0 ( st_find_tensor . w st name )

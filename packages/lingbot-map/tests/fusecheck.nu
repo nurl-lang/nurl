@@ -18,6 +18,8 @@ $ `src/dpthead.nu`
 
 : i FC_CH 8  // stands in for DP_FEAT; the code is channel-generic
 
+unsafe
+
 @ gen GpuKit kit i n f phase → GkBuf {
     : GkBuf b ( gk_dbuf_new kit n GK_F32 )
     : ( Vec f ) h ( vec_with_cap [f] n )
@@ -28,6 +30,8 @@ $ `src/dpthead.nu`
     : b _u ( gk_dbuf_upload kit b h )
     ^ b
 }
+
+unsafe
 
 @ dump GpuKit kit s label GkBuf b i n → v {
     : ( Vec f ) h ( vec_with_cap [f] n )

@@ -25,6 +25,8 @@ $ `stdlib/core/vec.nu`
 // Print a Vec[u] with CR/LF mapped to "\r" / "\n" so the byte
 // sequence is readable in the snapshot file. Other bytes pass
 // through verbatim.
+unsafe
+
 @ dump_wire ( Vec u ) bytes → v {
     : i n ( vec_len [u] bytes )
     : *u data ( vec_data [u] bytes )

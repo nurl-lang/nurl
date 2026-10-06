@@ -14,6 +14,8 @@
     i len
 }
 
+unsafe
+
 @ box_set_both i cap i len → *Box {
     : *Box b # *Box ( nurl_alloc Z Box )
     // The bug shape: param name == field name. Pre-fix this miscompiled.
@@ -22,9 +24,15 @@
     ^ b
 }
 
+unsafe
+
 @ box_get_cap * Box b → i { ^ . b cap }
 
+unsafe
+
 @ box_get_len * Box b → i { ^ . b len }
+
+unsafe
 
 @ box_free sink * Box b → v { ( nurl_free # s b ) }
 
@@ -33,6 +41,8 @@
 // `len` is a loop index that happens to share a name with a struct
 // field) depends on this routing.
 : Pt { i x i y }
+
+unsafe
 
 @ pt_fill * Pt arr i n → v {
     : ~ i len 0  // local index var; NOT a param
@@ -46,6 +56,8 @@
         = len + len 1
     }
 }
+
+unsafe
 
 @ main → i {
     // ── gotcha-10 positive case ─────────────────────────────────

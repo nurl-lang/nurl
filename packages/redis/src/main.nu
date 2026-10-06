@@ -247,6 +247,8 @@ $ `redis.nu`
 
 // The whole program is one default command (redis-cli style): flags,
 // an optional redis://…/rediss://… URL positional, then one-shot or REPL.
+unsafe
+
 @ __redis_go CliCtx x → i {
     : String hostv ( ctx_str x `host` )
     : String passv ( ctx_str x `password` )

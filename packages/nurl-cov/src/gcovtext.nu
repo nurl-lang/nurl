@@ -234,6 +234,8 @@ $ `lines.nu`
     ^ out
 }
 
+unsafe
+
 @ __gt_slice s text i from i len → String {
     : *u at # *u + # i text from
     ^ ( string_from_bytes at len )

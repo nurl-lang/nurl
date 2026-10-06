@@ -21,6 +21,8 @@ $ `stdlib/std/zstd.nu`
 : i ZI_SKIP_LO 0x184D2A50
 : i ZI_SKIP_HI 0x184D2A5F
 
+unsafe
+
 @ __zi_u32 * u p i off → i {
     ^ | | | # i . p off
     << # i . p + off 1 8
@@ -73,6 +75,8 @@ $ `stdlib/std/zstd.nu`
 // Returns the number of header bytes, and reports through `slot`:
 //   slot 0 = block type, 1 = regenerated size, 2 = compressed size,
 //   slot 3 = stream count (0 for raw/RLE).
+unsafe
+
 @ __zi_literals * u p i off i avail ( Vec i ) slot → i {
     ? <= avail 0 { ^ -1 } {}
     : *i sp ( vec_data [i] slot )
@@ -149,6 +153,8 @@ $ `stdlib/std/zstd.nu`
 }
 
 // One frame, from `at`. Returns the offset just past it, or -1.
+unsafe
+
 @ __zi_frame ( Vec u ) src i at String out i idx → i {
     : *u p ( vec_data [u] src )
     : i n ( vec_len [u] src )

@@ -45,6 +45,8 @@ $ `stdlib/core/string.nu`
     ( panic `scope` )
 }
 
+unsafe
+
 @ consume sink s x → i {
     : i n ( nurl_str_len x )
     ( nurl_free x )
@@ -58,6 +60,8 @@ $ `stdlib/core/string.nu`
     ( nurl_print ( nurl_str_int n ) ) ( nurl_print kept ) ( nurl_print `\n` )
     ( panic `handed` )
 }
+
+unsafe
 
 @ consume_then_panic sink s x → i {
     ( nurl_print x ) ( nurl_print `\n` )
@@ -98,6 +102,8 @@ $ `stdlib/core/string.nu`
             ( panic_info_free p ) }
     }
 }
+
+unsafe
 
 @ main → i {
     ( guard \ → v { ( bound ) } )

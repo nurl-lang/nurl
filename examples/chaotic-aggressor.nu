@@ -53,6 +53,8 @@ $ `stdlib/std/float.nu`
 
 : Stack [T] { * T data i len i cap }
 
+unsafe
+
 @ stack_new [T] i cap → ( Stack T ) {
     ^ @ ( Stack T ) { # *T ( alloc [T] cap ) 0 cap }
 }
@@ -60,6 +62,8 @@ $ `stdlib/std/float.nu`
 // The store is raw `alloc` memory (axis 1 exercises exactly that), so it is
 // released by hand — the raw-memory exception described at the top. A
 // normal program would hold a `( Vec T )` here and free nothing.
+unsafe
+
 @ stack_free [T] ( Stack T ) st → v {
     ( nurl_free # s . st data )
 }
@@ -71,10 +75,14 @@ $ `stdlib/std/float.nu`
     = . s len + . s len 1
 }
 
+unsafe
+
 @ stack_pop [T] inout ( Stack T ) s → T {
     = . s len - . s len 1
     ^ . . s data . s len
 }
+
+unsafe
 
 @ stack_peek [T] inout ( Stack T ) s → T {
     ^ . . s data - . s len 1

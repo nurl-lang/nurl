@@ -74,12 +74,16 @@ $ `stdlib/core/rcbox.nu`
 // router, the strings and the middleware are dropped with it.
 : HttpApp { s ctl }
 
+unsafe
+
 @ HttpApp_share HttpApp h → HttpApp { ^ @ HttpApp { # s ( rcbox_share # i . h ctl ) } }
 
 @ HttpApp_drop sink HttpApp h → v {
     ( mem_forget h )
     ( rcbox_release [HttpAppImpl] # i . h ctl )
 }
+
+unsafe
 
 @ __HttpApp_ptr HttpApp h → *HttpAppImpl { ^ ( rcbox_ptr [HttpAppImpl] # i . h ctl ) }
 
@@ -90,6 +94,8 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // ── Construction / teardown ───────────────────────────────────────────
+
+unsafe
 
 @ http_app_new → HttpApp {
     : i a__box ( rcbox_zero [HttpAppImpl] )
@@ -153,6 +159,8 @@ $ `stdlib/core/rcbox.nu`
 // The app keeps its own copy of the wrapper (a stored closure is a
 // clone), and the handler it RETURNS is the facade's, released with its
 // own layers — nothing to free on either side.
+unsafe
+
 @ http_app_use HttpApp a__h ( @ ( @ HttpResponse HttpRequest ) ( @ HttpResponse HttpRequest ) ) f → v {
     : *HttpAppImpl a ( __HttpApp_ptr a__h )
     ( vec_clear [HttpMiddleware] . a mw )
@@ -164,6 +172,8 @@ $ `stdlib/core/rcbox.nu`
 // keep-alive lifetime, so at most `n` clients are in flight at once —
 // prefer http_app_async for servers that must scale past a handful of
 // concurrent connections.
+unsafe
+
 @ http_app_workers HttpApp a__h i n → v {
     : *HttpAppImpl a ( __HttpApp_ptr a__h )
     = . a workers n
@@ -171,6 +181,8 @@ $ `stdlib/core/rcbox.nu`
 
 // HTTP/3 on TLS listeners: on by default. `http_app_set_http3 a 0` keeps
 // a TLS listener TCP-only (no UDP socket, no Alt-Svc).
+unsafe
+
 @ http_app_set_http3 HttpApp a__h i on → v {
     : *HttpAppImpl a ( __HttpApp_ptr a__h )
     = . a http3 on
@@ -189,6 +201,8 @@ $ `stdlib/core/rcbox.nu`
 //
 // To serve ONLY an ML-DSA certificate, hand it to `http_app_listen_tls`
 // directly — the key form is auto-detected.
+unsafe
+
 @ http_app_set_pq_cert HttpApp a__h s cert s key → v {
     : *HttpAppImpl a ( __HttpApp_ptr a__h )
     ( string_free . a pq_cert )
@@ -203,6 +217,8 @@ $ `stdlib/core/rcbox.nu`
 // on the reactor instead of pinning a thread, for both plaintext and TLS
 // listeners. This is the scaling mode; it overrides http_app_workers.
 // Handlers must not assume a bounded number of concurrent invocations.
+unsafe
+
 @ http_app_async HttpApp a__h i n → v {
     : *HttpAppImpl a ( __HttpApp_ptr a__h )
     = . a use_async T
@@ -210,6 +226,8 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Keep-alive idle timeout in milliseconds (0 = server default).
+unsafe
+
 @ http_app_idle_ms HttpApp a__h i ms → v {
     : *HttpAppImpl a ( __HttpApp_ptr a__h )
     = . a idle_ms ms
@@ -218,18 +236,24 @@ $ `stdlib/core/rcbox.nu`
 // Request body byte cap (parser rejects larger with 413). The stdlib
 // default is 10 MiB — raise it for upload endpoints, lower it for
 // API-only servers.
+unsafe
+
 @ http_app_body_max HttpApp a__h i bytes → v {
     : *HttpAppImpl a ( __HttpApp_ptr a__h )
     = . a body_max bytes
 }
 
 // Request head byte cap (default 8 KiB).
+unsafe
+
 @ http_app_head_max HttpApp a__h i bytes → v {
     : *HttpAppImpl a ( __HttpApp_ptr a__h )
     = . a head_max bytes
 }
 
 // Per-connection keep-alive request cap (0 = close after one request).
+unsafe
+
 @ http_app_max_keepalive HttpApp a__h i n → v {
     : *HttpAppImpl a ( __HttpApp_ptr a__h )
     = . a max_keepalive n
@@ -237,6 +261,8 @@ $ `stdlib/core/rcbox.nu`
 
 // Per-request wall-clock budget in ms; overrun sends a stock 504 and
 // closes the connection (0 = disabled).
+unsafe
+
 @ http_app_request_timeout HttpApp a__h i ms → v {
     : *HttpAppImpl a ( __HttpApp_ptr a__h )
     = . a req_timeout_ms ms
@@ -252,18 +278,24 @@ $ `stdlib/core/rcbox.nu`
 @ http_app_recover HttpApp a b on → v {}
 
 // Log every request (method path → status) to stderr.
+unsafe
+
 @ http_app_logging HttpApp a__h → v {
     : *HttpAppImpl a ( __HttpApp_ptr a__h )
     = . a log_requests T
 }
 
 // Permissive CORS: reflect `*`, answer OPTIONS preflight with 204.
+unsafe
+
 @ http_app_cors HttpApp a__h → v {
     : *HttpAppImpl a ( __HttpApp_ptr a__h )
     = . a cors T
 }
 
 // Suppress the startup banner on stderr.
+unsafe
+
 @ http_app_quiet HttpApp a__h → v {
     : *HttpAppImpl a ( __HttpApp_ptr a__h )
     = . a quiet T
@@ -271,6 +303,8 @@ $ `stdlib/core/rcbox.nu`
 
 // Serve files from `dir` for any GET/HEAD the router leaves unmatched
 // (404). Path traversal is rejected by the underlying serve_static.
+unsafe
+
 @ http_app_static_dir HttpApp a__h s dir → v {
     : *HttpAppImpl a ( __HttpApp_ptr a__h )
     ( string_free . a webroot )
@@ -280,30 +314,42 @@ $ `stdlib/core/rcbox.nu`
 
 // ── Route registration (thin over the router) ─────────────────────────
 
+unsafe
+
 @ http_app_get HttpApp a__h s pattern ( @ HttpResponse HttpRequest Params ) handler → v {
     : *HttpAppImpl a ( __HttpApp_ptr a__h )
     ( router_get . a router pattern handler )
 }
+
+unsafe
 
 @ http_app_post HttpApp a__h s pattern ( @ HttpResponse HttpRequest Params ) handler → v {
     : *HttpAppImpl a ( __HttpApp_ptr a__h )
     ( router_post . a router pattern handler )
 }
 
+unsafe
+
 @ http_app_put HttpApp a__h s pattern ( @ HttpResponse HttpRequest Params ) handler → v {
     : *HttpAppImpl a ( __HttpApp_ptr a__h )
     ( router_put . a router pattern handler )
 }
+
+unsafe
 
 @ http_app_patch HttpApp a__h s pattern ( @ HttpResponse HttpRequest Params ) handler → v {
     : *HttpAppImpl a ( __HttpApp_ptr a__h )
     ( router_patch . a router pattern handler )
 }
 
+unsafe
+
 @ http_app_delete HttpApp a__h s pattern ( @ HttpResponse HttpRequest Params ) handler → v {
     : *HttpAppImpl a ( __HttpApp_ptr a__h )
     ( router_delete . a router pattern handler )
 }
+
+unsafe
 
 @ http_app_route HttpApp a__h s method s pattern ( @ HttpResponse HttpRequest Params ) handler → v {
     : *HttpAppImpl a ( __HttpApp_ptr a__h )
@@ -323,6 +369,8 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // The embedded router, for advanced use (mounting sub-routers, tests).
+unsafe
+
 @ http_app_router HttpApp a__h → Router {
     : *HttpAppImpl a ( __HttpApp_ptr a__h )
     ^ . a router
@@ -332,6 +380,8 @@ $ `stdlib/core/rcbox.nu`
 // empty one. For servers that assemble their routes elsewhere (e.g. a
 // `*_service_router → Router` that stays testable without a socket): build
 // the router, hand it to the app, and let the facade own the serving glue.
+unsafe
+
 @ http_app_use_router HttpApp a__h Router r → v {
     : *HttpAppImpl a ( __HttpApp_ptr a__h )
     ( router_free . a router )
@@ -349,6 +399,8 @@ $ `stdlib/core/rcbox.nu`
 
 // Router first; on a 404 for GET/HEAD with static enabled, fall through to
 // file serving (which itself returns a clean 404 when the file is absent).
+unsafe
+
 @ __httpapp_route_and_static * HttpAppImpl a HttpRequest req → HttpResponse {
     : HttpResponse resp ( router_handle . a router req )
     ? & . a has_static & == 404 . resp status ( __httpapp_is_get_or_head req ) {
@@ -364,6 +416,8 @@ $ `stdlib/core/rcbox.nu`
 // invocation (= this facade's full dispatch + middleware chain) in
 // `recover` and turns a panic into a 500, so the facade adds no wrapper
 // of its own.
+
+unsafe
 
 @ __httpapp_banner * HttpAppImpl a s scheme s host i port → v {
     ? . a quiet { ^ v } {}
@@ -390,6 +444,8 @@ $ `stdlib/core/rcbox.nu`
 
 // Resolve the app's limit knobs (-1 = keep the stdlib default) into a
 // concrete HttpLimits for the server.
+unsafe
+
 @ __httpapp_limits * HttpAppImpl a → HttpLimits {
     : ~ i bm . a body_max
     ? < bm 0 { = bm ( http_req_body_default_max ) } {}
@@ -417,6 +473,8 @@ $ `stdlib/core/rcbox.nu`
 // `cert` / `key` are the TLS listener's PEM paths ("" for plaintext): with
 // them, and `http3` on, the same host:port is bound over UDP and served as
 // HTTP/3 by the same handler on its own thread.
+unsafe
+
 @ __httpapp_serve * HttpAppImpl a TcpListener listener s scheme s host i port s cert s key → i {
     ( signal_install_shutdown listener )
     // Each middleware layer is held in its own binding so every closure
@@ -561,6 +619,8 @@ $ `stdlib/core/rcbox.nu`
 // Same, over TLS. `cert`/`key` are PEM paths (EC, RSA or ML-DSA leaf,
 // auto-detected; a fullchain PEM is accepted for `cert`). With
 // `http_app_set_pq_cert` an ML-DSA pair is served beside this one.
+unsafe
+
 @ http_app_listen_tls HttpApp a__h s host i port s cert s key → i {
     : *HttpAppImpl a ( __HttpApp_ptr a__h )
     // Advertise HTTP/2 and HTTP/1.1 over ALPN (RFC 7301), h2 preferred:

@@ -38,6 +38,8 @@
 }
 
 // ── Apufunktio: tulosta yksi Event ──────────────────────────
+unsafe
+
 @ describe * Event e → v {
     ?? . e 0 {
         Click x y → {
@@ -59,6 +61,8 @@
 }
 
 // ── Heap-allokoi event ──────────────────────────────────────
+unsafe
+
 @ box_event Event v → *Event {
     : *Event p # *Event ( malloc Z Event )
     = . p 0 v
@@ -72,6 +76,8 @@
 }
 
 // ── Laske kuinka moni event on Click ────────────────────────
+unsafe
+
 @ count_clicks [* Event events → i {
     : i n . events length
     : ~ i i 0
@@ -87,7 +93,7 @@
     ^ clicks
 }
 
-@ main → i {
+unsafe @ main → i {
     // (1) Eri payload-määrillä
     : *Event e1 ( box_event @ Event { Click 100 200 } )
     : *Event e2 ( box_event @ Event { KeyPress `A` 65 } )

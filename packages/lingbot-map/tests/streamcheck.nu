@@ -21,6 +21,8 @@ $ `src/preproc.nu`
 
 : i STRIDE 9973
 
+unsafe
+
 @ imnet_norm * f p i h i w → v {
     : ( Vec u ) mean__v ( vec_zeroed [u] 24 )
     : *f mean # *f ( vec_data [u] mean__v )
@@ -39,6 +41,8 @@ $ `src/preproc.nu`
         = c + c 1
     }
 }
+
+unsafe
 
 @ main → i {
     : i argc ( nurl_argc )

@@ -49,6 +49,8 @@
 }
 
 // ── Heap-allocate an Ast node (tiny helper) ──────────────────
+unsafe
+
 @ box_ast Ast node → *Ast {
     : *Ast p # *Ast ( malloc Z Ast )
     = . p 0 node  // *p = node  (field 0 of the boxed struct)
@@ -56,6 +58,8 @@
 }
 
 // ── Evaluator returning an Option (division-by-zero → None) ──
+unsafe
+
 @ eval * Ast e → ?i {
     = eval_count + eval_count 1
 
@@ -103,7 +107,7 @@
 @ bump i x → i { + x 100 }
 
 // ── A demo that wires everything together ───────────────────
-@ run_demo → v {
+unsafe @ run_demo → v {
     ( puts GREETING )
 
     // defer: runs on function exit, LIFO

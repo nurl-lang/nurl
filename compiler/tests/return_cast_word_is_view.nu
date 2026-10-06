@@ -15,10 +15,14 @@ $ `stdlib/core/rcbox.nu`
 
 & `libc` @ nurl_free_count → i
 
+unsafe
+
 @ live → i { ^ - ( nurl_alloc_count ) ( nurl_free_count ) }
 
 : HImpl { i v }
 : H { s ctl }
+
+unsafe
 
 @ H_share H h → H { ^ @ H { # s ( rcbox_share # i . h ctl ) } }
 
@@ -27,7 +31,11 @@ $ `stdlib/core/rcbox.nu`
     ( rcbox_release [HImpl] # i . h ctl )
 }
 
+unsafe
+
 @ h_new i v → H { ^ @ H { # s ( rcbox_new [HImpl] @ HImpl { v } ) } }
+
+unsafe
 
 @ h_get H h → i {
     : *HImpl p ( rcbox_ptr [HImpl] # i . h ctl )
@@ -41,6 +49,8 @@ $ `stdlib/core/rcbox.nu`
 
 // an owner: a share of it
 @ take ( Vec i ) tab i j → H { ^ ( H_share ( at tab j ) ) }
+
+unsafe
 
 @ main → i {
     : i l0 ( live )

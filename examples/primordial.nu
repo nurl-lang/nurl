@@ -119,6 +119,8 @@ $ `stdlib/core/vec.nu`
 
 // ─── Slot helpers ─────────────────────────────────────────────
 
+unsafe
+
 @ find_free * i bs i N → i {
     : ~ i k 0
     ~ < k N {
@@ -129,6 +131,8 @@ $ `stdlib/core/vec.nu`
 }
 
 // ─── Simulation tick ──────────────────────────────────────────
+
+unsafe
 
 @ tick * i xs * i ys * i bs i N → v {
 
@@ -194,6 +198,8 @@ $ `stdlib/core/vec.nu`
 
 // ─── Rendering ────────────────────────────────────────────────
 
+unsafe
+
 @ render i tick_no * i xs * i ys * i bs i N → v {
     // Cell bitmask buffer: a zeroed Vec, freed automatically on return
     : ( Vec i ) cells ( vec_zeroed [i] * W H )
@@ -241,6 +247,8 @@ $ `stdlib/core/vec.nu`
 }
 
 // ─── Init + main loop ─────────────────────────────────────────
+
+unsafe
 
 @ main → i {
     // The particle arrays are Vecs: they free themselves when main returns.

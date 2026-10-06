@@ -36,6 +36,8 @@ $ `stdlib/core/vec.nu`
 
 // Eight at a time: the tables below are long, and one call per value would
 // make them longer still.
+unsafe
+
 @ _mp3_pl8 * i p i at i a i b i c i d i e i f i g i h → i {
     = . p + at 0 a
     = . p + at 1 b
@@ -47,6 +49,8 @@ $ `stdlib/core/vec.nu`
     = . p + at 7 h
     ^ + at 8
 }
+
+unsafe
 
 @ _mp3_pf8 * f p i at f v0 f v1 f v2 f v3 f v4 f v5 f v6 f v7 → i {
     = . p + at 0 v0

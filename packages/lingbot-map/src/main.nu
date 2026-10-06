@@ -490,6 +490,8 @@ $ `src/preproc.nu`
 
 // ── one frame ───────────────────────────────────────────────────────
 
+unsafe
+
 @ __lm_norm * f p i h i w → v {
     : ( Vec u ) mean__v ( vec_zeroed [u] 24 )
     : *f mean # *f ( vec_data [u] mean__v )
@@ -519,6 +521,8 @@ $ `src/preproc.nu`
 // Emit the points of one frame into the PLY writer. `rgb` is the
 // un-normalised CHW image, `dep` and `cf` are the head's outputs,
 // `kinv` and `c2w` the camera. The writer buffers and flushes itself.
+unsafe
+
 @ __lm_emit PlyW p * f rgb * f dep * f cf * f kinv * f c2w
 i h i w f cmin i stride → v {
     : ( Vec u ) wp__v ( vec_zeroed [u] 24 )
@@ -621,6 +625,8 @@ i h i w f cmin i stride → v {
     ( nurl_print ( nurl_str_int % tenths 10 ) )
     ( nurl_print ` GB` )
 }
+
+unsafe
 
 @ main → i {
     // `lingbot-map view <cloud.ply>` — look at a cloud that already exists,

@@ -93,6 +93,8 @@ $ `src/dynamic.nu`
 
 // ── Scenario A: statistical behaviour at production limits ────────────
 
+unsafe
+
 @ test_stream Store st → v {
     = g_lcg 1
     : Model mo ( model_open_at st `stream` T0 )
@@ -147,6 +149,8 @@ $ `src/dynamic.nu`
 // squares overflowed, the persisted std became a JSON null, the metadata
 // no longer parsed, the model reopened empty over it and the old forests
 // walked a point of no columns off address zero.
+
+unsafe
 
 @ test_extreme Store st → v {
     = g_lcg 7
@@ -312,6 +316,8 @@ $ `src/dynamic.nu`
 }
 
 // ── Scenario B: streaming mechanics at tiny limits ────────────────────
+
+unsafe
 
 @ test_mechanics Store st → v {
     : Model mo__h ( model_open_at st `mech` T0 )

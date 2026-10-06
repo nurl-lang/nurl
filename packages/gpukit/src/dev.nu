@@ -55,6 +55,8 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
 
 : GkMem { s ctl }
 
+unsafe
+
 @ GkMem_share GkMem h → GkMem { ^ @ GkMem { # s ( rcbox_share # i . h ctl ) } }
 
 @ GkMem_drop sink GkMem h → v {
@@ -122,6 +124,8 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
 
 // ── Lifecycle ─────────────────────────────────────────────────────────
 
+unsafe
+
 @ gk_dbuf_new GpuKit kit__h i n i dtype → GkBuf {
     : *GpuKitImpl kit ( _GpuKit_ptr kit__h )
     ? & . kit ok > n 0 {} { ^ ( gk_buf_none dtype ) }
@@ -152,6 +156,8 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
 // missing elements upload as 0. The direct (non-converting) f64 path is
 // taken only when src actually holds b.n elements — a short vector goes
 // through the padding stage, never out of bounds.
+unsafe
+
 @ gk_dbuf_upload GpuKit kit GkBuf b ( Vec f ) src → b {
     ? ( gk_buf_ok b ) {} { ^ F }
     : i n . b n
@@ -177,6 +183,8 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
 // Device → host f64 vector (converted from the buffer's element type).
 // `dst` must already hold at least b.n elements (fails closed otherwise);
 // the first b.n are overwritten in place.
+unsafe
+
 @ gk_dbuf_download GpuKit kit GkBuf b ( Vec f ) dst → b {
     ? ( gk_buf_ok b ) {} { ^ F }
     : i n . b n
@@ -217,6 +225,8 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
 
 // Exact i64 host view (GK_I64 buffers only — index tensors must never make
 // a round trip through f64). Same length contracts as the f64 view.
+unsafe
+
 @ gk_dbuf_upload_i GpuKit kit GkBuf b ( Vec i ) src → b {
     ? & ( gk_buf_ok b ) == . b dtype GK_I64 {} { ^ F }
     : i n . b n
@@ -233,6 +243,8 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
     }
     ^ == ( gpu_upload gb sp ) 0
 }
+
+unsafe
 
 @ gk_dbuf_download_i GpuKit kit GkBuf b ( Vec i ) dst → b {
     ? & ( gk_buf_ok b ) == . b dtype GK_I64 {} { ^ F }
@@ -257,6 +269,8 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
 
 @ gk_autosync b on → v { = g_gk_autosync on }
 
+unsafe
+
 @ gk_sync GpuKit kit__h → b {
     : *GpuKitImpl kit ( _GpuKit_ptr kit__h )
     ? . kit census { ^ T } {}
@@ -277,6 +291,8 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
 // the program.
 : ~ b g_gk_prof F
 
+unsafe
+
 @ gk_prof GpuKit kit__h b on → v {
     : *GpuKitImpl kit ( _GpuKit_ptr kit__h )
     ? & on . kit ok {
@@ -292,6 +308,8 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
 
 // Drop every accumulated count — e.g. after a warm-up frame, so the
 // numbers describe the steady state and not the compiles.
+unsafe
+
 @ gk_prof_reset GpuKit kit__h → v {
     : *GpuKitImpl kit ( _GpuKit_ptr kit__h )
     : i base # i ( vec_data [GkKernelEntry] . kit cache )
@@ -306,6 +324,8 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
     }
 }
 
+unsafe
+
 @ __gk_prof_add * GpuKitImpl kit i slot i ns → v {
     ? & >= slot 0 < slot ( vec_len [GkKernelEntry] . kit cache ) {
         : *GkKernelEntry e # *GkKernelEntry + # i ( vec_data [GkKernelEntry] . kit cache ) * slot Z GkKernelEntry
@@ -315,6 +335,8 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
 }
 
 // Total device time accumulated so far, in nanoseconds.
+unsafe
+
 @ gk_prof_total GpuKit kit__h → i {
     : *GpuKitImpl kit ( _GpuKit_ptr kit__h )
     : i n ( vec_len [GkKernelEntry] . kit cache )
@@ -331,6 +353,8 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
 }
 
 // Kernels by device time, slowest first, with the share of the total.
+unsafe
+
 @ gk_prof_report GpuKit kit__h → v {
     : *GpuKitImpl kit ( _GpuKit_ptr kit__h )
     : i n ( vec_len [GkKernelEntry] . kit cache )
@@ -395,6 +419,8 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
         }
     }
 }
+
+unsafe
 
 @ gk_run_dev GpuKit kit__h s src s name i grid i block ( Vec i ) args → b {
     : *GpuKitImpl kit ( _GpuKit_ptr kit__h )

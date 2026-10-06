@@ -48,6 +48,8 @@ $ `wasmkernel.nu`
 // The user source is spliced into a generated NURL backtick literal; a
 // backtick would terminate it (NURL strings cannot contain one, escaped or
 // not), so reject it outright. Everything else is escaped below.
+unsafe
+
 @ cuda_src_ok s src → b {
     : i n ( nurl_str_len src )
     : ~ b ok T
@@ -62,6 +64,8 @@ $ `wasmkernel.nu`
 // Escape for embedding inside a generated backtick literal: the NURL lexer
 // recognises \n \t \r \\ and passes any other \X through verbatim — so
 // backslash, LF, TAB and CR are the exact set that must be encoded.
+unsafe
+
 @ __cuda_escape String w s src → v {
     : i n ( nurl_str_len src )
     : ~ i k 0

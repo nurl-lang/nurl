@@ -11,6 +11,8 @@ $ `stdlib/core/vec.nu`
 
 : Box { s raw }
 
+unsafe
+
 @ main → i {
     : ( Vec u ) v ( vec_new [u] )
     ( vec_push [u] v # u 7 )

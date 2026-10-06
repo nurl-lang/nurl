@@ -75,12 +75,16 @@ $ `stdlib/core/rcbox.nu`
 // every copy is the same writer, and the last owner releases it.
 : GgufW { s ctl }
 
+unsafe
+
 @ GgufW_share GgufW h → GgufW { ^ @ GgufW { # s ( rcbox_share # i . h ctl ) } }
 
 @ GgufW_drop sink GgufW h → v {
     ( mem_forget h )
     ( rcbox_release [GgufWImpl] # i . h ctl )
 }
+
+unsafe
 
 @ __GgufW_ptr GgufW h → *GgufWImpl { ^ ( rcbox_ptr [GgufWImpl] # i . h ctl ) }
 
@@ -94,6 +98,8 @@ $ `stdlib/core/rcbox.nu`
     ( __gw_pstr b key )
     ( bytes_push_u32_le b # u32 vt )
 }
+
+unsafe
 
 @ gw_new i align → !GgufW String {
     ? | | < align 1 > align 1048576 != & align - align 1 0 {
@@ -203,11 +209,15 @@ $ `stdlib/core/rcbox.nu`
     }
 }
 
+unsafe
+
 @ gw_kv_u32 GgufW w__h s key i v → v {
     : *GgufWImpl w ( __GgufW_ptr w__h )
     ( __gwkv_u32 . w kvb key v )
     = . w n_kv + . w n_kv 1
 }
+
+unsafe
 
 @ gw_kv_i32 GgufW w__h s key i v → v {
     : *GgufWImpl w ( __GgufW_ptr w__h )
@@ -215,11 +225,15 @@ $ `stdlib/core/rcbox.nu`
     = . w n_kv + . w n_kv 1
 }
 
+unsafe
+
 @ gw_kv_u64 GgufW w__h s key i v → v {
     : *GgufWImpl w ( __GgufW_ptr w__h )
     ( __gwkv_u64 . w kvb key v )
     = . w n_kv + . w n_kv 1
 }
+
+unsafe
 
 @ gw_kv_i64 GgufW w__h s key i v → v {
     : *GgufWImpl w ( __GgufW_ptr w__h )
@@ -227,11 +241,15 @@ $ `stdlib/core/rcbox.nu`
     = . w n_kv + . w n_kv 1
 }
 
+unsafe
+
 @ gw_kv_f32 GgufW w__h s key f x → v {
     : *GgufWImpl w ( __GgufW_ptr w__h )
     ( __gwkv_f32 . w kvb key x )
     = . w n_kv + . w n_kv 1
 }
+
+unsafe
 
 @ gw_kv_f64 GgufW w__h s key f x → v {
     : *GgufWImpl w ( __GgufW_ptr w__h )
@@ -239,11 +257,15 @@ $ `stdlib/core/rcbox.nu`
     = . w n_kv + . w n_kv 1
 }
 
+unsafe
+
 @ gw_kv_bool GgufW w__h s key b v → v {
     : *GgufWImpl w ( __GgufW_ptr w__h )
     ( __gwkv_bool . w kvb key v )
     = . w n_kv + . w n_kv 1
 }
+
+unsafe
 
 @ gw_kv_str GgufW w__h s key s val → v {
     : *GgufWImpl w ( __GgufW_ptr w__h )
@@ -251,17 +273,23 @@ $ `stdlib/core/rcbox.nu`
     = . w n_kv + . w n_kv 1
 }
 
+unsafe
+
 @ gw_kv_arr_i32 GgufW w__h s key ( Vec i ) vals → v {
     : *GgufWImpl w ( __GgufW_ptr w__h )
     ( __gwkv_arr_i32 . w kvb key vals )
     = . w n_kv + . w n_kv 1
 }
 
+unsafe
+
 @ gw_kv_arr_f32 GgufW w__h s key ( Vec f ) vals → v {
     : *GgufWImpl w ( __GgufW_ptr w__h )
     ( __gwkv_arr_f32 . w kvb key vals )
     = . w n_kv + . w n_kv 1
 }
+
+unsafe
 
 @ gw_kv_arr_str GgufW w__h s key ( Vec String ) vals → v {
     : *GgufWImpl w ( __GgufW_ptr w__h )
@@ -305,6 +333,8 @@ $ `stdlib/core/rcbox.nu`
 // Add a tensor: validates the declared shape against the payload size
 // with the same rules the parser enforces, aligns the data section,
 // and records the entry. Unused trailing dims pass 1.
+unsafe
+
 @ gw_tensor GgufW w__h s name i gt i nd i d0 i d1 i d2 i d3 ( Vec u ) bytes → !v String {
     : *GgufWImpl w ( __GgufW_ptr w__h )
     : ~ i nb -1
@@ -343,6 +373,8 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Serialise the complete GGUF v3 image.
+unsafe
+
 @ gw_finish GgufW w__h → ( Vec u ) {
     : *GgufWImpl w ( __GgufW_ptr w__h )
     : i nt ( vec_len [String] . w tnames )
@@ -422,6 +454,8 @@ $ `stdlib/core/rcbox.nu`
 // every copy is the same writer, and the last owner releases it.
 : GgufS { s ctl }
 
+unsafe
+
 @ GgufS_share GgufS h → GgufS { ^ @ GgufS { # s ( rcbox_share # i . h ctl ) } }
 
 @ GgufS_drop sink GgufS h → v {
@@ -429,11 +463,15 @@ $ `stdlib/core/rcbox.nu`
     ( rcbox_release [GgufSImpl] # i . h ctl )
 }
 
+unsafe
+
 @ __GgufS_ptr GgufS h → *GgufSImpl { ^ ( rcbox_ptr [GgufSImpl] # i . h ctl ) }
 
 @ __gws_err s msg → !v String {
     ^ @ !v String { F ( string_from msg ) }
 }
+
+unsafe
 
 @ gws_create s path i align → !GgufS String {
     ? | | < align 1 > align 1048576 != & align - align 1 0 {
@@ -473,11 +511,15 @@ $ `stdlib/core/rcbox.nu`
     }
 }
 
+unsafe
+
 @ gws_kv_u32 GgufS s__h s key i v → v {
     : *GgufSImpl s ( __GgufS_ptr s__h )
     ( __gwkv_u32 . s kvb key v )
     = . s n_kv + . s n_kv 1
 }
+
+unsafe
 
 @ gws_kv_i32 GgufS s__h s key i v → v {
     : *GgufSImpl s ( __GgufS_ptr s__h )
@@ -485,11 +527,15 @@ $ `stdlib/core/rcbox.nu`
     = . s n_kv + . s n_kv 1
 }
 
+unsafe
+
 @ gws_kv_u64 GgufS s__h s key i v → v {
     : *GgufSImpl s ( __GgufS_ptr s__h )
     ( __gwkv_u64 . s kvb key v )
     = . s n_kv + . s n_kv 1
 }
+
+unsafe
 
 @ gws_kv_i64 GgufS s__h s key i v → v {
     : *GgufSImpl s ( __GgufS_ptr s__h )
@@ -497,11 +543,15 @@ $ `stdlib/core/rcbox.nu`
     = . s n_kv + . s n_kv 1
 }
 
+unsafe
+
 @ gws_kv_f32 GgufS s__h s key f x → v {
     : *GgufSImpl s ( __GgufS_ptr s__h )
     ( __gwkv_f32 . s kvb key x )
     = . s n_kv + . s n_kv 1
 }
+
+unsafe
 
 @ gws_kv_f64 GgufS s__h s key f x → v {
     : *GgufSImpl s ( __GgufS_ptr s__h )
@@ -509,11 +559,15 @@ $ `stdlib/core/rcbox.nu`
     = . s n_kv + . s n_kv 1
 }
 
+unsafe
+
 @ gws_kv_bool GgufS s__h s key b v → v {
     : *GgufSImpl s ( __GgufS_ptr s__h )
     ( __gwkv_bool . s kvb key v )
     = . s n_kv + . s n_kv 1
 }
+
+unsafe
 
 @ gws_kv_str GgufS s__h s key s val → v {
     : *GgufSImpl s ( __GgufS_ptr s__h )
@@ -521,17 +575,23 @@ $ `stdlib/core/rcbox.nu`
     = . s n_kv + . s n_kv 1
 }
 
+unsafe
+
 @ gws_kv_arr_i32 GgufS s__h s key ( Vec i ) vals → v {
     : *GgufSImpl s ( __GgufS_ptr s__h )
     ( __gwkv_arr_i32 . s kvb key vals )
     = . s n_kv + . s n_kv 1
 }
 
+unsafe
+
 @ gws_kv_arr_f32 GgufS s__h s key ( Vec f ) vals → v {
     : *GgufSImpl s ( __GgufS_ptr s__h )
     ( __gwkv_arr_f32 . s kvb key vals )
     = . s n_kv + . s n_kv 1
 }
+
+unsafe
 
 @ gws_kv_arr_str GgufS s__h s key ( Vec String ) vals → v {
     : *GgufSImpl s ( __GgufS_ptr s__h )
@@ -540,6 +600,8 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Round `x` up to the writer's alignment.
+unsafe
+
 @ __gws_align_up * GgufSImpl s i x → i {
     : i r % x . s align
     ^ ? == r 0 x + x - . s align r
@@ -549,6 +611,8 @@ $ `stdlib/core/rcbox.nu`
 // declaration order. The data-section offset is fixed here, which is
 // what lets the whole tensor table serialise before any payload byte
 // exists.
+unsafe
+
 @ gws_tensor GgufS s__h s name i gt i nd i d0 i d1 i d2 i d3 → !v String {
     : *GgufSImpl s ( __GgufS_ptr s__h )
     ? != . s phase 0 { ^ ( __gws_err `gguf: streaming writer is past its declare phase` ) } {}
@@ -574,6 +638,8 @@ $ `stdlib/core/rcbox.nu`
     ^ @ !v String { T 0 }
 }
 
+unsafe
+
 @ __gws_write * GgufSImpl s ( Vec u ) bytes → !v String {
     ?? ( file_write_chunk . s fh bytes ) {
         T _ → { ^ @ !v String { T 0 } }
@@ -596,6 +662,8 @@ $ `stdlib/core/rcbox.nu`
 
 // Serialise the header, every KV and the whole tensor table, pad to
 // the alignment, and switch to the payload phase.
+unsafe
+
 @ gws_begin_data GgufS s__h → !v String {
     : *GgufSImpl s ( __GgufS_ptr s__h )
     ? != . s phase 0 { ^ ( __gws_err `gguf: streaming writer is past its declare phase` ) } {}
@@ -640,6 +708,8 @@ $ `stdlib/core/rcbox.nu`
 // Payload bytes for the current tensor, any chunking. When a tensor's
 // declared size is reached the writer advances to the next declared
 // tensor (inserting the alignment gap first). Overrun is an error.
+unsafe
+
 @ gws_data GgufS s__h ( Vec u ) bytes → !v String {
     : *GgufSImpl s ( __GgufS_ptr s__h )
     ? != . s phase 1 { ^ ( __gws_err `gguf: streaming writer is not in its data phase` ) } {}
@@ -676,6 +746,8 @@ $ `stdlib/core/rcbox.nu`
 
 // All payloads in? Flush and close. The file is closed here (not by the
 // last owner) so the caller sees the failure, not a silent short file.
+unsafe
+
 @ gws_finish GgufS s__h → !v String {
     : *GgufSImpl s ( __GgufS_ptr s__h )
     ? != . s phase 1 { ^ ( __gws_err `gguf: streaming writer is not in its data phase` ) } {}

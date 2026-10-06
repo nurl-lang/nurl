@@ -35,6 +35,8 @@ $ `stdlib/std/hash_blake3.nu`
 }
 
 // stream `data` through updates of `step` bytes and finalize
+unsafe
+
 @ sha_streamed ( Vec u ) data i step → ( Vec u ) {
     : Sha256 h ( sha256_init )
     : i n ( vec_len [u] data )
@@ -49,6 +51,8 @@ $ `stdlib/std/hash_blake3.nu`
     }
     ^ ( sha256_final h )
 }
+
+unsafe
 
 @ b3_streamed ( Vec u ) data i step → ( Vec u ) {
     : Blake3 h ( blake3_init )
@@ -68,6 +72,8 @@ $ `stdlib/std/hash_blake3.nu`
 @ eq_digest ( Vec u ) a ( Vec u ) b2 → b {
     ^ ( bytes_eq a b2 )
 }
+
+unsafe
 
 @ main → i {
     // ── SHA-256 vectors through the stream ──

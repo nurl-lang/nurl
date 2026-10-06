@@ -18,10 +18,14 @@ $ `deps/gpukit/src/devops.nu`
 $ `src/block.nu`
 $ `src/devblock.nu`
 
+unsafe
+
 @ gen * f p i n f phase → v {
     : ~ i j 0
     ~ < j n { = . p j * 0.3 ( float_sin + phase * 0.019 # f j ) = j + j 1 }
 }
+
+unsafe
 
 @ genpos * f p i n f phase f base → v {
     : ~ i j 0
@@ -29,6 +33,8 @@ $ `src/devblock.nu`
 }
 
 // Host buffer → a fresh device buffer of the same length.
+unsafe
+
 @ up GpuKit kit * f p i n → GkBuf {
     : GkBuf b ( gk_dbuf_new kit n GK_F32 )
     : ( Vec f ) v ( vec_with_cap [f] n )
@@ -43,6 +49,8 @@ $ `src/devblock.nu`
 // host reference in src/block.nu both use [out, in]. The host side here
 // keeps the original layout on purpose — the two must disagree in memory
 // and agree in result, which is exactly what this test is checking.
+unsafe
+
 @ upt GpuKit kit * f p i rows i cols → GkBuf {
     : i n * rows cols
     : GkBuf b ( gk_dbuf_new kit n GK_F32 )
@@ -59,6 +67,8 @@ $ `src/devblock.nu`
     ^ b
 }
 
+unsafe
+
 @ upi GpuKit kit * i p i n → GkBuf {
     : GkBuf b ( gk_dbuf_new kit n GK_I64 )
     : ( Vec i ) v ( vec_with_cap [i] n )
@@ -67,6 +77,8 @@ $ `src/devblock.nu`
     : b _o ( gk_dbuf_upload_i kit b v )
     ^ b
 }
+
+unsafe
 
 @ case GpuKit kit i gw i gh i nspecial i dim i heads i hidden b qk b rope → v {
     : i n + nspecial * gw gh

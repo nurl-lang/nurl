@@ -26,6 +26,8 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 
 // Build an owned Vec[u] from the bytes of a NUL-terminated string.
+unsafe
+
 @ str_to_vec s str → ( Vec u ) {
     : i n ( nurl_str_len str )
     : *u p # *u str

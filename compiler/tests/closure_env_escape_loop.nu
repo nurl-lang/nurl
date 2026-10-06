@@ -35,6 +35,8 @@
     ^ h
 }
 
+unsafe
+
 @ main → i {
     : Holder h ( hold 7 )
 

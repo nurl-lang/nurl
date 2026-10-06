@@ -16,6 +16,8 @@
 : Tiny { i8 t }
 : Handle { * i p }
 
+unsafe
+
 @ main → v {
     // field 0 is a plain i64 — passes straight through
     : Point pt @ Point { 42 99 }

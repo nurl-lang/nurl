@@ -229,6 +229,8 @@ extern "C" __global__ void ae_diff(const long long* meta, const double* Y, const
 
 // Open the context: buffers + the five kernels, on score.nu's device
 // singleton. Any failure → ok=F (caller falls back to mlp_fit).
+unsafe
+
 @ _aeg_open Mlp m i n i d i dout i bsz → AeGpu {
     : Gpu g ( gk_gpu ( __an_gpukit_ref ) )
     : s src ( _aeg_kernel_src )
@@ -281,6 +283,8 @@ extern "C" __global__ void ae_diff(const long long* meta, const double* Y, const
 // Adam state and t are updated in place, exactly as mlp_train leaves them.
 // On ANY device error sets `fail` and returns immediately (the caller
 // discards everything and reruns on the CPU).
+unsafe
+
 @ _aeg_train AeGpu cx Mlp m ( Vec f ) X i n i d i dout MlpCfg cfg inout i fail → MlpTrain {
     : Rng g2 ( rng_seed . cfg seed )
     : i oa2 ( _mlp_iget . m a_off . m n_layers )

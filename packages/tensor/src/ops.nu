@@ -77,6 +77,8 @@ $ `tensor.nu`
 
 // Let the tensor GPU singleton go (the process-lifetime owner the global
 // held). The next big matmul may re-probe (unlike tensor_gpu_off).
+unsafe
+
 @ tensor_gpu_close → v {
     // the global's owner, handed to the early release
     ? != g_t_kit 0 { ( gk_close @ GpuKit { # s g_t_kit } ) } {}

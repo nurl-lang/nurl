@@ -220,6 +220,8 @@ oops
     ^ out
 }
 
+unsafe
+
 @ test_ingest Store st → v {
     : Model mo__h ( model_open_at st `imported` T0 )
     : *ModelImpl mo ( _Model_ptr mo__h )
@@ -268,6 +270,8 @@ oops
     ?? ( vec_get [i] . mo times 0 ) { T x → { = newfirst x } F _ → {} }
     ( check == newfirst - T0 86400 `ingest: the older history is at the front` )
 }
+
+unsafe
 
 @ test_evict Store st → v {
     // A file bigger than the ring is a file whose TAIL the model keeps.

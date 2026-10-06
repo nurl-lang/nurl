@@ -35,6 +35,8 @@ $ `manifest.nu`
 }
 
 // Raw bytes to stdout (fd 1) — binary-safe, unlike the string printers.
+unsafe
+
 @ __cli_write_stdout ( Vec u ) data → v {
     : i n ( vec_len [u] data )
     ? > n 0 { : i _w ( write 1 # *u ( vec_data [u] data ) n ) } {}

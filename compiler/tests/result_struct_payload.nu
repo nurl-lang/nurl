@@ -15,10 +15,14 @@ $ `stdlib/core/vec.nu`
 // f0 is a pointer (s), but there are more fields — the tricky case.
 : Rec { s raw i a i b i c i d i e }
 
+unsafe
+
 @ mk_res → !Rec E {
     : s rp # s 777
     ^ @ !Rec E { T @ Rec { rp 11 22 33 44 55 } }
 }
+
+unsafe
 
 @ mk_opt → ?Rec {
     : s rp # s 777

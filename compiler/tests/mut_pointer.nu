@@ -15,6 +15,8 @@ $ `stdlib/core/vec.nu`
     ( nurl_print name ) ( nurl_print `\n` )
 }
 
+unsafe
+
 @ main → i {
     // 1. a mutable struct pointer walked through a 100k-link chain
     : i N 100000

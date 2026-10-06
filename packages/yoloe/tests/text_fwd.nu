@@ -17,6 +17,8 @@ $ `deps/onnx/src/runtime.nu`
     ?? ( read_file_bytes path ) { T b → ^ b F _ → ^ ( vec_new [u] ) }
 }
 
+unsafe
+
 @ main → i {
     : ( Vec String ) av ( env_args_list )
     : String mp ?? ( vec_get [String] av 1 ) { T x → x F _ → ( string_new ) }

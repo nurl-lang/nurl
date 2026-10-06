@@ -84,6 +84,8 @@ $ `stdlib/core/rcbox.nu`
 // every copy is the same roster, and the last owner releases it.
 : Roster { s ctl }
 
+unsafe
+
 @ Roster_share Roster h → Roster { ^ @ Roster { # s ( rcbox_share # i . h ctl ) } }
 
 @ Roster_drop sink Roster h → v {
@@ -91,7 +93,11 @@ $ `stdlib/core/rcbox.nu`
     ( rcbox_release [RosterImpl] # i . h ctl )
 }
 
+unsafe
+
 @ __Roster_ptr Roster h → *RosterImpl { ^ ( rcbox_ptr [RosterImpl] # i . h ctl ) }
+
+unsafe
 
 @ roster_new → Roster {
     ^ @ Roster { # s ( rcbox_new [RosterImpl] @ RosterImpl { ( vec_new [Member] ) } ) }
@@ -101,6 +107,8 @@ $ `stdlib/core/rcbox.nu`
 @ roster_free sink Roster r → v {}
 
 // Index of the member with `pubkey`, -1 if none.
+unsafe
+
 @ __roster_find * RosterImpl r ( Vec u ) pubkey → i {
     : i n ( vec_len [Member] . r members )
     : ~ i found -1 : ~ i k 0
@@ -116,12 +124,16 @@ $ `stdlib/core/rcbox.nu`
     ^ >= ( __roster_find r pubkey ) 0
 }
 
+unsafe
+
 @ roster_count Roster r__h → i {
     : *RosterImpl r ( __Roster_ptr r__h )
     ^ ( vec_len [Member] . r members )
 }
 
 // How many members advertise every capability bit in `mask`.
+unsafe
+
 @ roster_count_caps Roster r__h i mask → i {
     : *RosterImpl r ( __Roster_ptr r__h )
     : i n ( vec_len [Member] . r members )
@@ -135,6 +147,8 @@ $ `stdlib/core/rcbox.nu`
 
 // Fold a worker into the roster + ring, once. Returns T if newly added.
 // `now` is the caller's clock (ms); the member's liveness stamp starts there.
+unsafe
+
 @ roster_add Roster r__h Ring ring ( Vec u ) pubkey i id i vnodes i caps i now → b {
     : *RosterImpl r ( __Roster_ptr r__h )
     ? >= ( __roster_find r pubkey ) 0 { ^ F } {}
@@ -147,6 +161,8 @@ $ `stdlib/core/rcbox.nu`
 
 // Refresh a member's liveness stamp (a re-heard HELLO). Unknown pubkey: no-op.
 // The stamp is written in place, through the element's slot.
+unsafe
+
 @ roster_touch Roster r__h ( Vec u ) pubkey i now → v {
     : *RosterImpl r ( __Roster_ptr r__h )
     : i k ( __roster_find r pubkey )
@@ -164,6 +180,8 @@ $ `stdlib/core/rcbox.nu`
 // worker hears no HELLO of its own, so without the exemption it would time
 // itself out of its own ring and stop owning — and therefore stop executing —
 // every key it holds.
+unsafe
+
 @ roster_expire Roster r__h i now i ttl_ms ( Vec u ) exempt → ( Vec ( Vec u ) ) {
     : *RosterImpl r ( __Roster_ptr r__h )
     : ( Vec ( Vec u ) ) gone ( vec_new [( Vec u )] )
@@ -187,6 +205,8 @@ $ `stdlib/core/rcbox.nu`
 // stamp. Out of range → id 0. Used by the status tool, so an operator (or the
 // model) can see the cluster the coordinator believes it has.
 : MemberView { i id i caps i last_ms }
+
+unsafe
 
 @ roster_view Roster r__h i k → MemberView {
     : *RosterImpl r ( __Roster_ptr r__h )

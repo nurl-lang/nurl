@@ -64,6 +64,8 @@ $ `../src/oauth.nu`
     ( ok ! ( string_eq s1 s2 ) `two states differ` )
 }
 
+unsafe
+
 @ test_jwks_offline → v {
     : s doc `{"keys":[{"kty":"EC","crv":"P-256","kid":"a","alg":"ES256","use":"sig","x":"f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU","y":"x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0"},{"kty":"RSA","kid":"b","alg":"RS256","n":"AQAB","e":"AQAB"}]}`
     : ( Vec JwkKey ) ks ( jwks_parse doc )
@@ -224,6 +226,8 @@ $ `../src/oauth.nu`
     ^ out
 }
 
+unsafe
+
 @ test_rsa_offline → v {
     : ( Vec JwkKey ) ks ( jwks_parse ( rsa_jwks ) )
     ( ok == ( vec_len [JwkKey] ks ) 1 `RSA JWKS parses` )
@@ -282,6 +286,8 @@ $ `../src/oauth.nu`
     ^ msg
 }
 
+unsafe
+
 @ test_eddsa_offline → v {
     : ~ ( Vec u ) seed ( vec_new [u] )
     ?? ( bytes_from_hex `9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60` ) {
@@ -319,6 +325,8 @@ $ `../src/oauth.nu`
         F e → { ( ok_str ( oauth_err_name e ) `OaBadSignature` `a one-character edit breaks EdDSA` ) }
     }
 }
+
+unsafe
 
 @ test_hs256_offline → v {
     : ( Vec u ) secret ( bytes_from_str `a shared secret, configured on both sides` )

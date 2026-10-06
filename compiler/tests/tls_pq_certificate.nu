@@ -62,6 +62,8 @@ $ `stdlib/std/time.nu`
     ^ ok
 }
 
+unsafe
+
 @ main → i {
     : ~ b all T
 

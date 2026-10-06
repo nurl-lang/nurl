@@ -108,12 +108,16 @@ $ `stdlib/core/rcbox.nu`
 // every copy is the same state, and the last owner releases it.
 : Model { s ctl }
 
+unsafe
+
 @ Model_share Model h → Model { ^ @ Model { # s ( rcbox_share # i . h ctl ) } }
 
 @ Model_drop sink Model h → v {
     ( mem_forget h )
     ( rcbox_release [ModelImpl] # i . h ctl )
 }
+
+unsafe
 
 @ _Model_ptr Model h → *ModelImpl { ^ ( rcbox_ptr [ModelImpl] # i . h ctl ) }
 
@@ -134,6 +138,8 @@ $ `stdlib/core/rcbox.nu`
 // The actor is copied into a buffer allocated once for the process (the
 // caller's string lives only as long as its request; a long name is
 // cut). The action is always a literal and is kept as given.
+unsafe
+
 @ anomaly_set_actor s who → v {
     ? == ( nurl_str_eq g_an_actor `library` ) 1 { = g_an_actor ( nurl_zalloc + ANOM_ACTOR_MAX 1 ) } {}
     : ~ i n ( nurl_str_len who )
@@ -148,6 +154,8 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // The newest `limit` audit entries of a model (all when ≤ 0).
+unsafe
+
 @ model_audit Model mo__h i limit → Json {
     : *ModelImpl mo ( _Model_ptr mo__h )
     ^ ( store_load_audit . mo store ( string_data . mo mname ) limit )
@@ -180,12 +188,16 @@ $ `stdlib/core/rcbox.nu`
     }
 }
 
+unsafe
+
 @ __an_clear_forests Model mo__h → v {
     : *ModelImpl mo ( _Model_ptr mo__h )
     ( vec_clear [VerModel] . mo forests )
 }
 
 // The schedule step from the current ring fill: at capacity, retrain less.
+unsafe
+
 @ __an_sched_step Model mo__h → i {
     : *ModelImpl mo ( _Model_ptr mo__h )
     : *MetaImpl mm ( _Meta_ptr . mo meta )
@@ -207,6 +219,8 @@ $ `stdlib/core/rcbox.nu`
 @ __an_forestless s vname → b {
     ^ ( _an_forestless_name vname )
 }
+
+unsafe
 
 @ model_open_at Store st s name i now → Model {
     : i mo__box ( rcbox_zero [ModelImpl] )
@@ -365,6 +379,8 @@ $ `stdlib/core/rcbox.nu`
 // Set a version's sliding-window geometry (timevector). Takes effect at
 // the NEXT retrain — detect derives the live window from the trained
 // forest's width, so a config change can never desync scoring.
+unsafe
+
 @ model_set_version_window Model mo__h s vname i wsize i sstep → b {
     : *ModelImpl mo ( _Model_ptr mo__h )
     : *MetaImpl mm ( _Meta_ptr . mo meta )
@@ -392,6 +408,8 @@ $ `stdlib/core/rcbox.nu`
 // ── Which clock ───────────────────────────────────────────────────────
 
 // The newest stored stamp, or 0 on an empty ring.
+unsafe
+
 @ model_last_ts Model mo__h → i {
     : *ModelImpl mo ( _Model_ptr mo__h )
     : i np ( vec_len [i] . mo times )
@@ -400,6 +418,8 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // The oldest stored stamp, 0 for an empty ring.
+unsafe
+
 @ model_first_ts Model mo__h → i {
     : *ModelImpl mo ( _Model_ptr mo__h )
     ?? ( vec_get [i] . mo times 0 ) { T x → { ^ x } F _ → {} }
@@ -424,6 +444,8 @@ $ `stdlib/core/rcbox.nu`
 
 // "Now" for this model: the wall clock, or on the count clock the newest
 // tick — the moment the last point arrived is the only present it has.
+unsafe
+
 @ model_now Model mo__h → i {
     : *ModelImpl mo ( _Model_ptr mo__h )
     : *MetaImpl mm ( _Meta_ptr . mo meta )
@@ -437,6 +459,8 @@ $ `stdlib/core/rcbox.nu`
 
 // Test hook: shrink the warm-up / ring limits so eviction and scheduling
 // are exercisable without 150 000 points.
+unsafe
+
 @ model_set_limits Model mo__h i min_pts i max_pts → v {
     : *ModelImpl mo ( _Model_ptr mo__h )
     = . mo min_points min_pts
@@ -446,10 +470,14 @@ $ `stdlib/core/rcbox.nu`
     } {}
 }
 
+unsafe
+
 @ model_metadata Model mo__h → Meta {
     : *ModelImpl mo ( _Model_ptr mo__h )
     ^ . mo meta
 }
+
+unsafe
 
 @ model_n_points Model mo__h → i {
     : *ModelImpl mo ( _Model_ptr mo__h )
@@ -460,10 +488,14 @@ $ `stdlib/core/rcbox.nu`
 // changes and before the metadata is written: the listing reads the
 // metadata alone, and "points seen" is a lifetime count that keeps
 // climbing past the cap.
+unsafe
+
 @ __an_note_stored Model mo__h → v {
     : *ModelImpl mo ( _Model_ptr mo__h )
     = . ( _Meta_ptr . mo meta ) n_stored ( vec_len [String] . mo lines )
 }
+
+unsafe
 
 @ model_is_trained Model mo__h → b {
     : *ModelImpl mo ( _Model_ptr mo__h )
@@ -482,6 +514,8 @@ $ `stdlib/core/rcbox.nu`
 // timevector window is always the points BEFORE the one under judgement and
 // never leaks the future into a replayed verdict. None when the ring is too
 // short there, or a stored line no longer parses.
+unsafe
+
 @ __an_window_tail Model mo__h i need i end → ?( Vec f ) {
     : *ModelImpl mo ( _Model_ptr mo__h )
     : *MetaImpl mm ( _Meta_ptr . mo meta )
@@ -546,6 +580,8 @@ $ `stdlib/core/rcbox.nu`
 // every copy is the same state, and the last owner releases it.
 : Hist { s ctl }
 
+unsafe
+
 @ Hist_share Hist h → Hist { ^ @ Hist { # s ( rcbox_share # i . h ctl ) } }
 
 @ Hist_drop sink Hist h → v {
@@ -553,10 +589,14 @@ $ `stdlib/core/rcbox.nu`
     ( rcbox_release [HistImpl] # i . h ctl )
 }
 
+unsafe
+
 @ _Hist_ptr Hist h → *HistImpl { ^ ( rcbox_ptr [HistImpl] # i . h ctl ) }
 
 // Widest timevector window over the trained forests (1 when there is none):
 // the rows a scan of [lo, hi) needs encoded start at lo − width + 1.
+unsafe
+
 @ __an_hist_width Model mo__h → i {
     : *ModelImpl mo ( _Model_ptr mo__h )
     : i nfeat ( vec_len [String] . ( _Meta_ptr . mo meta ) feats )
@@ -579,6 +619,8 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Encode ring rows [from, to) and score them through every forest.
+unsafe
+
 @ __an_hist_build Model mo__h i from i to → Hist {
     : *ModelImpl mo ( _Model_ptr mo__h )
     : *MetaImpl mm ( _Meta_ptr . mo meta )
@@ -755,6 +797,8 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Row `at` of the ring as a standardised point, copied out of the history.
+unsafe
+
 @ __an_hist_row Hist h__h i at → ( Vec f ) {
     : *HistImpl h ( _Hist_ptr h__h )
     : i r - at . h base
@@ -768,6 +812,8 @@ $ `stdlib/core/rcbox.nu`
 // The `need` rows ending just before `end`, from the history — None when
 // any of them lies outside it or failed to encode (the caller then reads
 // the ring, exactly as without a history).
+unsafe
+
 @ __an_hist_tail Hist h__h i need i end → ?( Vec f ) {
     : *HistImpl h ( _Hist_ptr h__h )
     : i first - end need
@@ -802,6 +848,8 @@ $ `stdlib/core/rcbox.nu`
 // Score `p` as though it sat at ring position `end` — the point's own slot,
 // exclusive: rows [0, end) are its past and everything from `end` on is
 // future the verdict must not see.
+unsafe
+
 @ __an_score_enc_upto Model mo__h EncPoint p i end b absorb → Verdict {
     : *ModelImpl mo ( _Model_ptr mo__h )
     : *MetaImpl mm ( _Meta_ptr . mo meta )
@@ -821,6 +869,8 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Score ring row `at` out of an encoded history that covers it.
+unsafe
+
 @ __an_score_hist Model mo Hist h__h i at → Verdict {
     : *HistImpl h ( _Hist_ptr h__h )
     : i r - at . h base
@@ -842,6 +892,8 @@ $ `stdlib/core/rcbox.nu`
 // come out of it; without, they are computed here and read from the
 // ring, and `absorb` says the point is the ring's newest and the
 // forecast states take it in (the live ingest; detect_only leaves them).
+unsafe
+
 @ __an_score_core Model mo__h ( Vec f ) x ( Vec f ) araw ( Vec f ) fraw i end Hist h__h b absorb → Verdict {
     : *HistImpl h ( _Hist_ptr h__h )
     : *ModelImpl mo ( _Model_ptr mo__h )
@@ -1090,6 +1142,8 @@ $ `stdlib/core/rcbox.nu`
 // The live-point entry: `ring_has_current` is 1 when the point being scored
 // has already been appended to the ring (ingest) and 0 when it has not
 // (detect_only).
+unsafe
+
 @ __an_score_enc Model mo__h EncPoint p i ring_has_current → Verdict {
     : *ModelImpl mo ( _Model_ptr mo__h )
     ^ ( __an_score_enc_upto mo__h p - ( vec_len [String] . mo lines ) ring_has_current == ring_has_current 1 )
@@ -1099,6 +1153,8 @@ $ `stdlib/core/rcbox.nu`
 
 // The watched features' readings of ring row `k` (NaN where the row has
 // none, or did not parse).
+unsafe
+
 @ __an_fc_row Model mo__h i k → ( Vec f ) {
     : *ModelImpl mo ( _Model_ptr mo__h )
     : *FcModelImpl fc ( _FcModel_ptr . mo fc )
@@ -1132,6 +1188,8 @@ $ `stdlib/core/rcbox.nu`
 
 // Bring the states up to ring row `target` (exclusive): the rows between
 // are read from the ring and absorbed in order.
+unsafe
+
 @ __an_fc_sync Model mo__h i target → v {
     : *ModelImpl mo ( _Model_ptr mo__h )
     : *FcModelImpl fc ( _FcModel_ptr . mo fc )
@@ -1145,6 +1203,8 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Write forecast.json with the states as they stand.
+unsafe
+
 @ __an_fc_save Model mo__h → v {
     : *ModelImpl mo ( _Model_ptr mo__h )
     : *FcModelImpl fc ( _FcModel_ptr . mo fc )
@@ -1155,6 +1215,8 @@ $ `stdlib/core/rcbox.nu`
 
 // Do the trained models name features the metadata's order no longer
 // has at those places?
+unsafe
+
 @ __an_fc_stale Model mo__h → b {
     : *ModelImpl mo ( _Model_ptr mo__h )
     : *FcModelImpl fc ( _FcModel_ptr . mo fc )
@@ -1182,6 +1244,8 @@ $ `stdlib/core/rcbox.nu`
 
 // Ensure a `forecast` VerCfg exists (off by default): a model from
 // before the version gains it at its next retrain.
+unsafe
+
 @ _an_ensure_fc_cfg Model mo__h → v {
     : *ModelImpl mo ( _Model_ptr mo__h )
     : *MetaImpl mm ( _Meta_ptr . mo meta )
@@ -1191,6 +1255,8 @@ $ `stdlib/core/rcbox.nu`
 
 // The first row of the forecast's fit window over encoded rows whose
 // times are `ets`: the version's own window_minutes / window_points.
+unsafe
+
 @ __an_fc_from Model mo__h ( Vec i ) ets i now → i {
     : *ModelImpl mo ( _Model_ptr mo__h )
     : *MetaImpl mm ( _Meta_ptr . mo meta )
@@ -1218,6 +1284,8 @@ $ `stdlib/core/rcbox.nu`
     ^ from
 }
 
+unsafe
+
 @ __an_fc_season Model mo__h → i {
     : *ModelImpl mo ( _Model_ptr mo__h )
     : *MetaImpl mm ( _Meta_ptr . mo meta )
@@ -1230,6 +1298,8 @@ $ `stdlib/core/rcbox.nu`
 
 // Fit the forecast version from encoded ring rows (in ring order, with
 // their times) and persist it. Returns the features watched.
+unsafe
+
 @ __an_fc_fit Model mo__h ( Vec EncPoint ) encs ( Vec i ) ets i now → i {
     : *ModelImpl mo ( _Model_ptr mo__h )
     : i from ( __an_fc_from mo__h ets now )
@@ -1240,6 +1310,8 @@ $ `stdlib/core/rcbox.nu`
 
 // The forecast version's handle, its j-th model, and its states caught
 // up with the ring (for a forecast from the newest row).
+unsafe
+
 @ model_forecast Model mo__h → FcModel {
     : *ModelImpl mo ( _Model_ptr mo__h )
     ^ . mo fc
@@ -1247,6 +1319,8 @@ $ `stdlib/core/rcbox.nu`
 
 // The ring's step: the median gap between consecutive stored times, in
 // seconds (1 on a count clock; 0 when there are too few rows to say).
+unsafe
+
 @ model_step Model mo__h → i {
     : *ModelImpl mo ( _Model_ptr mo__h )
     ? . ( _Meta_ptr . mo meta ) count_clock { ^ 1 } {}
@@ -1285,6 +1359,8 @@ $ `stdlib/core/rcbox.nu`
 // it now, the season from the ring's step when the version has none
 // set, and switch it on. "" when the version is ready (already, or now);
 // otherwise why not (the model has not trained; no feature to forecast).
+unsafe
+
 @ model_forecast_ensure_at Model mo__h i now → String {
     : *ModelImpl mo ( _Model_ptr mo__h )
     : *FcModelImpl fc ( _FcModel_ptr . mo fc )
@@ -1296,6 +1372,8 @@ $ `stdlib/core/rcbox.nu`
 // A version whose season is 0 takes it from the ring's step (the day at
 // a step up to twelve hours, the week at a daily one); a season given
 // stands.
+unsafe
+
 @ __an_fc_season_from_step Model mo__h → v {
     : *ModelImpl mo ( _Model_ptr mo__h )
     ( _an_ensure_fc_cfg mo__h )
@@ -1323,6 +1401,8 @@ $ `stdlib/core/rcbox.nu`
 // it. `season: 144` beside ARIMA(0,1,0) with s = 0 is not a daily rhythm
 // being watched — it is the number the search was given and every
 // feature declined.
+unsafe
+
 @ _an_fc_season_json FcModel fc__h Json o → v {
     : *FcModelImpl fc ( _FcModel_ptr fc__h )
     ( json_obj_set o `season` ( json_int . fc season ) )
@@ -1332,6 +1412,8 @@ $ `stdlib/core/rcbox.nu`
         ( json_obj_set o `season_note` ( json_str_lit `season is the period the order search was offered, in rows; no feature's chosen form uses it (see "selected" per feature), so nothing here models a cycle of that length. train_forecast {season: N} offers a different one, -1 none at all.` ) )
     } {}
 }
+
+unsafe
 
 @ model_forecast_json Model mo__h i h → Json {
     : *ModelImpl mo ( _Model_ptr mo__h )
@@ -1414,6 +1496,8 @@ $ `stdlib/core/rcbox.nu`
 // before it, then the next `h` steps — the same shape as
 // model_forecast_json, with the origin's row and time, so a reader can
 // put the forecast beside what followed. The live states are untouched.
+unsafe
+
 @ model_forecast_from_json Model mo__h i h i origin → Json {
     : *ModelImpl mo ( _Model_ptr mo__h )
     : *FcModelImpl fc ( _FcModel_ptr . mo fc )
@@ -1487,6 +1571,8 @@ $ `stdlib/core/rcbox.nu`
 // value carried forward, and the value one season earlier — with the
 // skill against each (1 − MAE/MAE_baseline: 0 is no better, 1 is
 // perfect, negative is worse). Gaps are skipped.
+unsafe
+
 @ model_forecast_backtest Model mo__h i h i n → Json {
     : *ModelImpl mo ( _Model_ptr mo__h )
     : Json o ( json_obj_new )
@@ -1618,10 +1704,14 @@ $ `stdlib/core/rcbox.nu`
     ^ o
 }
 
+unsafe
+
 @ model_forecast_model Model mo__h i j → ArimaModel {
     : *ModelImpl mo ( _Model_ptr mo__h )
     ^ ( _fc_model_at . mo fc j )
 }
+
+unsafe
 
 @ model_forecast_sync Model mo__h → v {
     : *ModelImpl mo ( _Model_ptr mo__h )
@@ -1634,6 +1724,8 @@ $ `stdlib/core/rcbox.nu`
 @ model_train_forecast Model mo → String {
     ^ ( model_train_forecast_at mo ( model_now mo ) )
 }
+
+unsafe
 
 @ model_train_forecast_at Model mo__h i now → String {
     : *ModelImpl mo ( _Model_ptr mo__h )
@@ -1694,6 +1786,8 @@ $ `stdlib/core/rcbox.nu`
 // the feature order), refreshes the authoritative feature order, refits the
 // shared scaler over the full ring, then trains each version on its window.
 // Returns the number of ring points used (0 = not enough data, no change).
+unsafe
+
 @ model_force_train_at Model mo__h i now → i {
     : *ModelImpl mo ( _Model_ptr mo__h )
     : *MetaImpl mm ( _Meta_ptr . mo meta )
@@ -1966,6 +2060,8 @@ $ `stdlib/core/rcbox.nu`
     ^ -1
 }
 
+unsafe
+
 @ __an_retrain_ae Model mo__h i now → v {
     : *ModelImpl mo ( _Model_ptr mo__h )
     : *MetaImpl mm ( _Meta_ptr . mo meta )
@@ -1983,6 +2079,8 @@ $ `stdlib/core/rcbox.nu`
 
 // Ensure an `autoencoder` VerCfg exists in the metadata (margin tunable
 // through the same machinery as the forest versions; window fields 0).
+unsafe
+
 @ __an_ensure_ae_cfg Model mo__h → v {
     : *ModelImpl mo ( _Model_ptr mo__h )
     : *MetaImpl mm ( _Meta_ptr . mo meta )
@@ -2006,6 +2104,8 @@ $ `stdlib/core/rcbox.nu`
 // Ensure a `range_guard` VerCfg exists (SPEC §5.4): margin in standard
 // deviations, tunable like any other, window fields 0 — it has no
 // training of its own beyond the shared scaler.
+unsafe
+
 @ __an_ensure_guard_cfg Model mo__h → v {
     : *ModelImpl mo ( _Model_ptr mo__h )
     : *MetaImpl mm ( _Meta_ptr . mo meta )
@@ -2017,6 +2117,8 @@ $ `stdlib/core/rcbox.nu`
 
 // Ensure a `flatline` VerCfg exists (SPEC §5.4) — a model from before the
 // version gains it at its next retrain, where the references are fitted.
+unsafe
+
 @ __an_ensure_flat_cfg Model mo__h → v {
     : *ModelImpl mo ( _Model_ptr mo__h )
     : *MetaImpl mm ( _Meta_ptr . mo meta )
@@ -2025,6 +2127,8 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // The configured window, in rows.
+unsafe
+
 @ _an_flat_window Meta mm__h → i {
     : *MetaImpl mm ( _Meta_ptr mm__h )
     : i at ( meta_find_version mm__h ANOM_FLAT_NAME )
@@ -2040,6 +2144,8 @@ $ `stdlib/core/rcbox.nu`
 // The references are fitted when there is one per feature of the frozen
 // order (the retrain refits them; an edit that changes the features
 // bumps the epoch and retrains).
+unsafe
+
 @ __an_flat_fitted Model mo__h → b {
     : *ModelImpl mo ( _Model_ptr mo__h )
     : *MetaImpl mm ( _Meta_ptr . mo meta )
@@ -2056,6 +2162,8 @@ $ `stdlib/core/rcbox.nu`
 // not a numeric column, a ring shorter than the window, or a column whose
 // reference run is longer than the guard can look back gets -1: not
 // watched.
+unsafe
+
 @ __an_flat_fit Model mo__h ( Vec f ) big i n i nfeat → v {
     : *ModelImpl mo ( _Model_ptr mo__h )
     : *MetaImpl mm ( _Meta_ptr . mo meta )
@@ -2150,6 +2258,8 @@ $ `stdlib/core/rcbox.nu`
 // not watched. The margin is read against THIS, so one number (0.9) means
 // the same thing on a column quantised to whole degrees and on a smooth
 // one beside it.
+unsafe
+
 @ _an_flat_ref_len Meta mm__h i j → f {
     : *MetaImpl mm ( _Meta_ptr mm__h )
     : ( Vec f ) rr . mm flat_run
@@ -2165,6 +2275,8 @@ $ `stdlib/core/rcbox.nu`
 // for the longest reference run to be reached (so no watched column has a
 // bar its run can never touch). Bounded by the same cap the fit used to
 // decide what is watchable at all.
+unsafe
+
 @ _an_flat_need Meta mm__h → i {
     : *MetaImpl mm ( _Meta_ptr mm__h )
     : i W ( _an_flat_window mm__h )
@@ -2192,6 +2304,8 @@ $ `stdlib/core/rcbox.nu`
 // reference is 0: a column that never moved in training is not expected
 // to). The larger of the two, over the features, is the verdict's
 // fraction. The collapse rule reads the newest W rows of the look-back.
+unsafe
+
 @ __an_flat_judge Model mo__h ( Vec f ) x i end Hist h → FlatOut {
     : *ModelImpl mo ( _Model_ptr mo__h )
     : *MetaImpl mm ( _Meta_ptr . mo meta )
@@ -2267,6 +2381,8 @@ $ `stdlib/core/rcbox.nu`
 @ model_train_autoencoder Model mo ( Vec i ) hidden f contamination → String {
     ^ ( model_train_autoencoder_at mo hidden contamination ( model_now mo ) )
 }
+
+unsafe
 
 @ model_train_autoencoder_at Model mo__h ( Vec i ) hidden f contamination i now → String {
     : *ModelImpl mo ( _Model_ptr mo__h )
@@ -2361,6 +2477,8 @@ $ `stdlib/core/rcbox.nu`
 // ring (evicting the oldest at capacity), persist, retrain if the schedule
 // says so, then score it. Errors (bad numeric / timestamp values) leave the
 // model completely untouched.
+unsafe
+
 @ model_ingest_at Model mo__h Json raw i now → !Verdict String {
     : *ModelImpl mo ( _Model_ptr mo__h )
     : *MetaImpl mm ( _Meta_ptr . mo meta )
@@ -2416,6 +2534,8 @@ $ `stdlib/core/rcbox.nu`
     }
 }
 
+unsafe
+
 @ model_ingest Model mo__h Json raw → !Verdict String {
     : *ModelImpl mo ( _Model_ptr mo__h )
     : *MetaImpl mm ( _Meta_ptr . mo meta )
@@ -2427,6 +2547,8 @@ $ `stdlib/core/rcbox.nu`
 // retrain, no disk writes. Unknown columns/categories project to zeros;
 // a column the trained model knows and the point leaves out is an
 // error, named — a question about a point must carry the whole point.
+unsafe
+
 @ model_detect_only Model mo__h Json raw → !Verdict String {
     : *ModelImpl mo ( _Model_ptr mo__h )
     ? ( meta_is_frozen . mo meta ) {
@@ -2518,6 +2640,8 @@ $ `stdlib/core/rcbox.nu`
 // record's own stamp is ignored: the file's order is its time, and the
 // rows take the ticks after the newest stored point, one each. Returns
 // what happened.
+unsafe
+
 @ model_import_at Model mo__h ( Vec Json ) recs i now → ImportReport {
     : *ModelImpl mo ( _Model_ptr mo__h )
     : *MetaImpl mm ( _Meta_ptr . mo meta )
@@ -2736,6 +2860,8 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Rows the version would flag at `margin`: count of dfs <= -margin.
+unsafe
+
 @ cal_flagged_at CalVer cv f margin → i {
     : i n ( vec_len [f] . cv dfs )
     : *f dp ( vec_data [f] . cv dfs )
@@ -2763,6 +2889,8 @@ $ `stdlib/core/rcbox.nu`
 // would flag points the forest itself calls normal, and a rate the data
 // cannot supply is answered by the honest count next to the margin, not
 // by a margin below zero.
+unsafe
+
 @ cal_margin_for_rate CalVer cv f rate → f {
     : i n ( vec_len [f] . cv dfs )
     ? <= n 0 { ^ . cv cur_margin } {}
@@ -2833,6 +2961,8 @@ $ `stdlib/core/rcbox.nu`
 // live verdict path and collect each version's decision values. Rows are
 // scored as of their own ring position, exactly as the scan does, so a
 // timevector window never sees the future.
+unsafe
+
 @ model_calibrate Model mo__h i from_ts i to_ts → CalReport {
     : *ModelImpl mo ( _Model_ptr mo__h )
     : ( Vec CalVer ) items ( vec_new [CalVer] )
@@ -2974,6 +3104,8 @@ $ `stdlib/core/rcbox.nu`
 
 // Resolve (from, to, last) the way the HTTP layer spells it: `last` seconds
 // back from `to`, or from the newest stored point when `to` is unbounded.
+unsafe
+
 @ model_window_from_last Model mo__h i to_ts i last → i {
     : *ModelImpl mo ( _Model_ptr mo__h )
     ? <= last 0 { ^ 0 } {}
@@ -3034,6 +3166,8 @@ $ `stdlib/core/rcbox.nu`
 // same answer in words: "calibrated: false" with nothing beside it left a
 // reader to guess between four different situations, one of which
 // (already tuned) is the normal case and none of which is an error.
+unsafe
+
 @ model_autotune_why Model mo__h f rate → s {
     : *ModelImpl mo ( _Model_ptr mo__h )
     : *MetaImpl mm ( _Meta_ptr . mo meta )
@@ -3043,6 +3177,8 @@ $ `stdlib/core/rcbox.nu`
     ? >= * rate # f ( vec_len [String] . mo lines ) 1.0 {} { ^ `the history is too short for the rate to flag even one row; the import that brings enough rows calibrates` }
     ^ ``
 }
+
+unsafe
 
 @ model_autotune_at Model mo__h f rate i now → b {
     : *ModelImpl mo ( _Model_ptr mo__h )
@@ -3060,6 +3196,8 @@ $ `stdlib/core/rcbox.nu`
 // The forecast version's first margin, measured rather than assumed (see
 // model_train_forecast_at). Lives here because it needs FineTuneReport,
 // which is declared with the fine-tune machinery below.
+unsafe
+
 @ _an_fc_autotune Model mo__h → v {
     : *ModelImpl mo ( _Model_ptr mo__h )
     : *MetaImpl mm ( _Meta_ptr . mo meta )
@@ -3196,6 +3334,8 @@ $ `stdlib/core/rcbox.nu`
     ^ got
 }
 
+unsafe
+
 @ model_finetune_at Model mo__h f rate i from_ts i to_ts b apply ( Vec String ) only → FineTuneReport {
     : *ModelImpl mo ( _Model_ptr mo__h )
     ? apply { ( _an_set_action ? == ( nurl_str_eq g_an_action `autotune` ) 1 `autotune` `finetune` ) } {}
@@ -3308,6 +3448,8 @@ $ `stdlib/core/rcbox.nu`
 // point: window_min minutes back for a forest version, window_size points
 // back for timevector, and the whole ring (0) for the autoencoder, whose
 // training set is the whole ring too.
+unsafe
+
 @ model_version_from Model mo__h s vname → i {
     : *ModelImpl mo ( _Model_ptr mo__h )
     : *MetaImpl mm ( _Meta_ptr . mo meta )
@@ -3404,6 +3546,8 @@ $ `stdlib/core/rcbox.nu`
 // addressed by ring index at the API and by lifetime sequence number on
 // disk; the base of the ring is n_seen minus the rows it holds.
 
+unsafe
+
 @ model_seq_base Model mo__h → i {
     : *ModelImpl mo ( _Model_ptr mo__h )
     : *MetaImpl mm ( _Meta_ptr . mo meta )
@@ -3414,6 +3558,8 @@ $ `stdlib/core/rcbox.nu`
 // sequence number, -1 for an index outside the ring, -2 for a label
 // that is not one of ANOM_LABEL_*. Verdicts do not change, so the epoch
 // does not move.
+unsafe
+
 @ model_label_point Model mo__h i index s label s by s note i at → i {
     : *ModelImpl mo ( _Model_ptr mo__h )
     ? ( label_known label ) {} { ^ -2 }
@@ -3428,12 +3574,16 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // The labels in force (store_load_labels), evicted rows included.
+unsafe
+
 @ model_labels Model mo__h → ( Vec Label ) {
     : *ModelImpl mo ( _Model_ptr mo__h )
     ^ ( store_load_labels . mo store ( string_data . mo mname ) )
 }
 
 // Per ring position, the index into `labels` of its label, -1 for none.
+unsafe
+
 @ model_label_map Model mo__h ( Vec Label ) labels → ( Vec i ) {
     : *ModelImpl mo ( _Model_ptr mo__h )
     : i n ( vec_len [String] . mo lines )
@@ -3471,6 +3621,8 @@ $ `stdlib/core/rcbox.nu`
 // A `last` as a caller says it — seconds on a time clock, points on a count
 // clock — as the span model_window_from_last takes. N points back from the
 // newest is N ticks INCLUDING it, so the span is one short of N whole ticks.
+unsafe
+
 @ model_last_span Model mo__h i last → i {
     : *ModelImpl mo ( _Model_ptr mo__h )
     : *MetaImpl mm ( _Meta_ptr . mo meta )
@@ -3479,6 +3631,8 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // The default window: a day, or its worth of points (1440) on a count clock.
+unsafe
+
 @ model_default_last Model mo__h → i {
     : *ModelImpl mo ( _Model_ptr mo__h )
     : *MetaImpl mm ( _Meta_ptr . mo meta )
@@ -3517,6 +3671,8 @@ $ `stdlib/core/rcbox.nu`
 // retrains its short_term over three hours like its source, not over
 // everything it has ever seen. The autoencoder takes `hidden` as its
 // layout (empty = the 64-16-64 default) and `rate` as its pre-filter.
+unsafe
+
 @ model_train_whole Model mo__h f rate ( Vec i ) hidden → WholeTrain {
     : *ModelImpl mo ( _Model_ptr mo__h )
     : *MetaImpl mm ( _Meta_ptr . mo meta )
@@ -3700,6 +3856,8 @@ $ `stdlib/core/rcbox.nu`
 // Does the model flag the stored row at `index`? Read from the cached
 // ring scan, so a second question about the same model costs nothing.
 // -1 when there is no such row.
+unsafe
+
 @ model_row_is_anomaly Model mo__h i index → i {
     : *ModelImpl mo ( _Model_ptr mo__h )
     : i n ( vec_len [String] . mo lines )
@@ -3723,6 +3881,8 @@ $ `stdlib/core/rcbox.nu`
 // stable within an epoch by construction — anything that adds, removes or
 // toggles a version bumps the epoch — and it is written into the cache so a
 // mismatch is caught rather than silently misread as different versions.
+unsafe
+
 @ model_scan_versions Model mo__h → ( Vec String ) {
     : *ModelImpl mo ( _Model_ptr mo__h )
     : *MetaImpl mm ( _Meta_ptr . mo meta )
@@ -3784,6 +3944,8 @@ $ `stdlib/core/rcbox.nu`
 // verdict folded into cache words. `at` is the row being scored, so the
 // ring entries AFTER it are the future: a timevector window ends at `at`,
 // not at the ring tip.
+unsafe
+
 @ __an_scan_row Model mo__h Hist h__h ( Vec String ) vnames i at → ScoredPt {
     : *HistImpl h ( _Hist_ptr h__h )
     : *ModelImpl mo ( _Model_ptr mo__h )
@@ -3830,6 +3992,8 @@ $ `stdlib/core/rcbox.nu`
 // (<= 0 = no cap) taken from the END of the window. `force` recomputes
 // even when the cache is warm — the escape hatch for verifying the cache
 // itself, never needed for correctness.
+unsafe
+
 @ model_scan_at Model mo__h i from_ts i to_ts i limit b force → ScanOut {
     : *ModelImpl mo ( _Model_ptr mo__h )
     : *MetaImpl mm ( _Meta_ptr . mo meta )
@@ -3996,6 +4160,8 @@ $ `stdlib/core/rcbox.nu`
 
 // The raw stored record at a ring index, parsed (None when out of range or
 // no longer parsable).
+unsafe
+
 @ model_point_json Model mo__h i at → ?Json {
     : *ModelImpl mo ( _Model_ptr mo__h )
     ?? ( vec_get [String] . mo lines at ) {
@@ -4029,6 +4195,8 @@ $ `stdlib/core/rcbox.nu`
 // is how badly that feature failed to be predictable FROM THE OTHERS, so
 // the top entries name the broken relationship rather than the extreme
 // value. Empty when the model has no trained autoencoder.
+unsafe
+
 @ model_ae_contrib Model mo__h Json raw i topk → ( Vec AeContrib ) {
     : *ModelImpl mo ( _Model_ptr mo__h )
     : ( Vec AeContrib ) out ( vec_new [AeContrib] )
@@ -4095,6 +4263,8 @@ $ `stdlib/core/rcbox.nu`
 
 // Drop all data and trained forests but keep the model's name, schedule
 // and version configs. Learned columns/categories/features/scaler reset.
+unsafe
+
 @ model_reset Model mo__h → v {
     : *ModelImpl mo ( _Model_ptr mo__h )
     : *MetaImpl old ( _Meta_ptr . mo meta )
@@ -4157,6 +4327,8 @@ $ `stdlib/core/rcbox.nu`
 // (fine-tune, autotune, the CLI, a source's first train) and the metadata
 // patch (`edit`), which sets margins straight into the VerCfg and for two
 // releases moved them without a word in the log the tool promises.
+unsafe
+
 @ _an_audit_margin Model mo__h s vname f before f after → v {
     : *ModelImpl mo ( _Model_ptr mo__h )
     ? == ( f64_to_bits before ) ( f64_to_bits after ) { ^ } {}
@@ -4173,6 +4345,8 @@ $ `stdlib/core/rcbox.nu`
 // Set one version's decision margin in the metadata (persisted, effective
 // immediately at scoring — no retrain needed). Returns F for an unknown
 // version name.
+unsafe
+
 @ model_set_margin Model mo__h s vname f margin → b {
     : *ModelImpl mo ( _Model_ptr mo__h )
     : *MetaImpl mm ( _Meta_ptr . mo meta )
@@ -4204,6 +4378,8 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Update the retraining schedule (persisted immediately).
+unsafe
+
 @ model_set_schedule Model mo__h i below_max i at_max → v {
     : *ModelImpl mo ( _Model_ptr mo__h )
     : *MetaImpl mm ( _Meta_ptr . mo meta )
@@ -4222,6 +4398,8 @@ $ `stdlib/core/rcbox.nu`
 // forest trained against a feature order and scaler the model has since
 // moved past, and a stale width reads as a timevector window at scoring
 // time — a wrong verdict rather than an absent one.
+unsafe
+
 @ __an_drop_forest Model mo__h s vname → v {
     : *ModelImpl mo ( _Model_ptr mo__h )
     : ( Vec VerModel ) kept ( vec_new [VerModel] )
@@ -4245,6 +4423,8 @@ $ `stdlib/core/rcbox.nu`
 
 // Every forest whose version is now off (or gone from the metadata) loses
 // its blob. The autoencoder has no forest, so it is never touched here.
+unsafe
+
 @ __an_prune_disabled Model mo__h → v {
     : *ModelImpl mo ( _Model_ptr mo__h )
     : *MetaImpl mm ( _Meta_ptr . mo meta )
@@ -4279,6 +4459,8 @@ $ `stdlib/core/rcbox.nu`
 // its net carries its OWN frozen feature order, so it stays valid across
 // retrains and is far too expensive to throw away on a checkbox. Returns F
 // for an unknown version name.
+unsafe
+
 @ model_set_version_enabled Model mo__h s vname b on → b {
     : *ModelImpl mo ( _Model_ptr mo__h )
     : *MetaImpl mm ( _Meta_ptr . mo meta )
@@ -4345,6 +4527,8 @@ $ `stdlib/core/rcbox.nu`
 // sent `step_size: 0` read back a 1 and had nothing to blame but the
 // nearest flag it had also sent. Every field the patch names and the
 // config did not keep is reported back beside the change.
+unsafe
+
 @ _an_patch_adjustments Meta mm__h Json vers ( Vec String ) notes → v {
     : *MetaImpl mm ( _Meta_ptr mm__h )
     ? ( json_is_obj vers ) {} { ^ }
@@ -4410,6 +4594,8 @@ $ `stdlib/core/rcbox.nu`
 
 // How many versions are switched on right now — the ceiling on `votes`,
 // since a point cannot be flagged by a version that does not judge.
+unsafe
+
 @ _an_enabled_count Meta mm__h → i {
     : *MetaImpl mm ( _Meta_ptr mm__h )
     : ~ i n 0
@@ -4430,6 +4616,8 @@ $ `stdlib/core/rcbox.nu`
     : String r ( model_apply_meta_patch_notes mo patch sink )
     ^ r
 }
+
+unsafe
 
 @ model_apply_meta_patch_notes Model mo__h Json patch ( Vec String ) notes → String {
     : *ModelImpl mo ( _Model_ptr mo__h )

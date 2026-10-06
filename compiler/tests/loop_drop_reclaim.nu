@@ -7,7 +7,9 @@
 
 : Handle { * u buf }
 
-% Drop ( Handle ) { @ drop Handle h → v { ( nurl_free # s . h buf ) } }
+% Drop ( Handle ) { unsafe @ drop Handle h → v { ( nurl_free # s . h buf ) } }
+
+unsafe
 
 @ main → i {
     : ~ i k 0

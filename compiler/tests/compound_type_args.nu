@@ -18,6 +18,8 @@ $ `stdlib/core/pair.nu`
     ( Vec ( Pair s i ) ) entries
 }
 
+unsafe
+
 @ main → i {
     : ( Vec ( Pair s i ) ) v ( make_pairs )
     ( nurl_print `len=` )

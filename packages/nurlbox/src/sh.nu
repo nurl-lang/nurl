@@ -803,6 +803,8 @@ $ `filter.nu`
 
 : ShState { s ctl }
 
+unsafe
+
 @ ShState_share ShState h → ShState { ^ @ ShState { # s ( rcbox_share # i . h ctl ) } }
 
 @ ShState_drop sink ShState h → v {
@@ -812,9 +814,13 @@ $ `filter.nu`
 
 : ~ i g_sh_state 0
 
+unsafe
+
 @ __st → *ShStateImpl { ^ ( rcbox_ptr [ShStateImpl] g_sh_state ) }
 
 // A fresh state (counters zero), made the current one.
+unsafe
+
 @ __sh_state_new → ShState {
     : i p__box ( rcbox_zero [ShStateImpl] )
     : *ShStateImpl st ( rcbox_ptr [ShStateImpl] p__box )
@@ -828,6 +834,8 @@ $ `filter.nu`
     ^ @ ShState { # s p__box }
 }
 
+unsafe
+
 @ __sh_var_index s name → i {
     : *ShStateImpl st ( __st )
     : i n ( vec_len [String] . st names )
@@ -838,6 +846,8 @@ $ `filter.nu`
     }
     ^ -1
 }
+
+unsafe
 
 @ __sh_set s name s value → v {
     : *ShStateImpl st ( __st )
@@ -858,6 +868,8 @@ $ `filter.nu`
 
 // A shell variable, then the environment, then the empty string — the
 // order every shell resolves in.
+unsafe
+
 @ __sh_get s name → String {
     : *ShStateImpl st ( __st )
     : i idx ( __sh_var_index name )
@@ -868,6 +880,8 @@ $ `filter.nu`
     }
 }
 
+unsafe
+
 @ __sh_unset s name → v {
     : *ShStateImpl st ( __st )
     : i idx ( __sh_var_index name )
@@ -877,6 +891,8 @@ $ `filter.nu`
     } {}
     ?? ( env_unset name ) { T _ → {} F _ → {} }
 }
+
+unsafe
 
 @ __sh_func_index s name → i {
     : *ShStateImpl st ( __st )
@@ -925,6 +941,8 @@ $ `filter.nu`
 
 // Positional parameters joined with a space — `$*`, and `$@` outside
 // quotes where the split puts them back apart anyway.
+unsafe
+
 @ __sh_params_joined → String {
     : *ShStateImpl st ( __st )
     : String out ( string_new )
@@ -1088,6 +1106,8 @@ $ `filter.nu`
 
 @ __sh_default_ifs → s { ^ ` \t\n` }
 
+unsafe
+
 @ __sh_ifs → String {
     : i idx ( __sh_var_index `IFS` )
     ? >= idx 0 {
@@ -1121,6 +1141,8 @@ $ `filter.nu`
 }
 
 // `${NAME<op>word}` — the braced form, cursor just past the `{`.
+unsafe
+
 @ __sh_brace ShWord src i from i to ShWord acc i q → v {
     : ~ i i from
     // `${#NAME}` is the length of NAME.
@@ -1199,6 +1221,8 @@ $ `filter.nu`
 }
 
 // `$?`, `$#`, `$$`, `$0`…`$9`, `$*`, and ordinary names.
+unsafe
+
 @ __sh_special s name → String {
     : *ShStateImpl st ( __st )
     ? ( bx_streq name `?` ) { ^ ( string_from ( nurl_str_int . st status ) ) } {}
@@ -1227,6 +1251,8 @@ $ `filter.nu`
 
 // One word, expanded into `acc`; `$@` splits, so completed fields go to
 // `fields` and `acc` restarts.
+unsafe
+
 @ __sh_expand_into ShWord w ShWord acc ( Vec ShWord ) fields → v {
     : *ShStateImpl st ( __st )
     : i n ( __shw_len w )
@@ -1470,6 +1496,8 @@ $ `filter.nu`
 // says no.
 : ~ i g_sh_have_fork -1
 
+unsafe
+
 @ __sh_can_fork → b {
     ? < g_sh_have_fork 0 {
         : i32 pid ( fork )
@@ -1588,6 +1616,8 @@ $ `filter.nu`
 @ __sh_is_builtin s name → b {
     ^ | | | | | | | | | | | | | | | ( bx_streq name `cd` ) ( bx_streq name `exit` ) ( bx_streq name `export` ) ( bx_streq name `unset` ) ( bx_streq name `shift` ) ( bx_streq name `set` ) ( bx_streq name `read` ) ( bx_streq name `eval` ) ( bx_streq name `.` ) ( bx_streq name `source` ) ( bx_streq name `return` ) ( bx_streq name `break` ) ( bx_streq name `continue` ) ( bx_streq name `:` ) ( bx_streq name `local` ) ( bx_streq name `type` )
 }
+
+unsafe
 
 @ __sh_builtin ( Vec String ) argv → i {
     : *ShStateImpl st ( __st )
@@ -1810,6 +1840,8 @@ $ `filter.nu`
 
 // A function body, with `$1…` swapped for the call's arguments and put
 // back afterwards.
+unsafe
+
 @ __sh_call_func ( Vec ShNode ) arena i fidx ( Vec String ) argv → i {
     : *ShStateImpl st ( __st )
     : ( Vec String ) saved ( vec_new [String] )
@@ -1838,6 +1870,8 @@ $ `filter.nu`
 // An external program: fork, exec, wait. A machine with no processes
 // says so rather than reporting "not found" about a program that is
 // right there.
+unsafe
+
 @ __sh_exec_external ( Vec String ) argv → i {
     ? ! ( __sh_can_fork ) {
         ( __sh_no_processes ( bx_at argv 0 ) )
@@ -1867,6 +1901,8 @@ $ `filter.nu`
     : i raw ( nurl_peek statusbuf 0 )
     ^ ( nurl_wait_exit_status & raw 65535 )
 }
+
+unsafe
 
 @ __sh_exec_simple ( Vec ShNode ) arena i idx → i {
     : *ShStateImpl st ( __st )
@@ -1981,6 +2017,8 @@ $ `filter.nu`
 // can honestly do, and it is what makes `seq 3 | wc -l` answer on a
 // unikernel instead of refusing. A stage that never terminates will
 // never hand anything on; a real pipeline would have streamed it.
+unsafe
+
 @ __sh_pipe_sequential ( Vec ShNode ) arena i idx i stages → i {
     : ~ i rc 0
     ?? ( vec_get [ShNode] arena idx ) {
@@ -2071,6 +2109,8 @@ $ `filter.nu`
     ^ rc
 }
 
+unsafe
+
 @ __sh_exec_pipe ( Vec ShNode ) arena i idx → i {
     : ~ i rc 0
     ?? ( vec_get [ShNode] arena idx ) {
@@ -2139,10 +2179,14 @@ $ `filter.nu`
 
 // `pipe(2)` writes two ints; NURL reads them back a byte at a time
 // because an int is 32 bits and `nurl_peek` steps in 64.
+unsafe
+
 @ __le32_at s buf i off → i {
     : *u p # *u buf
     ^ | | | & 255 # i . p off << & 255 # i . p + off 1 8 << & 255 # i . p + off 2 16 << & 255 # i . p + off 3 24
 }
+
+unsafe
 
 @ __sh_exec ( Vec ShNode ) arena i idx → i {
     : *ShStateImpl st ( __st )
@@ -2363,6 +2407,8 @@ $ `filter.nu`
 // `$(…)`: the script runs in a child with stdout on a pipe, and the
 // trailing newlines come off the result — both of those are what makes
 // `x=$(pwd)` behave.
+unsafe
+
 @ __sh_capture s script → String {
     : String out ( string_new )
     ? ! ( __sh_can_fork ) {
@@ -2448,6 +2494,8 @@ $ `filter.nu`
 
 // ── The applet ────────────────────────────────────────────────────
 
+unsafe
+
 @ __sh_interactive → i {
     : *ShStateImpl st ( __st )
     : ~ String line ( string_new )
@@ -2463,6 +2511,8 @@ $ `filter.nu`
     }
     ^ . st exit_code
 }
+
+unsafe
 
 @ ap_sh ( Vec String ) argv → i {
     : i outer g_sh_state

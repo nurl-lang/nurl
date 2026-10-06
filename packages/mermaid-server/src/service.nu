@@ -49,6 +49,8 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // The installed set, lent: valid while it stays installed.
+unsafe
+
 @ mmd_state → MmdTemplateSet {
     : *MmdTemplateSet p ( rcbox_ptr [MmdTemplateSet] g_mmd_ts )
     ^ @ MmdTemplateSet { . p kind . p root . p items . p default_name }

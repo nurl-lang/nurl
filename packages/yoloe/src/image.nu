@@ -107,6 +107,8 @@ $ `deps/image/src/image.nu`
 
 // Pack to NCHW float tensor normalised to [0,1]: 3*H*W f32 as bytes —
 // hand `( vec_data [u] t )` to the runtime; the Vec releases itself.
+unsafe
+
 @ img_to_nchw_norm Image im → ( Vec u ) {
     : i W . im width
     : i H . im height

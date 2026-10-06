@@ -4,6 +4,8 @@
 
 $ `stdlib/core/box.nu`
 
+unsafe
+
 @ main → i {
     // box_new + box_get round-trip.
     : ( Box i ) b1 ( box_new [i] 42 )

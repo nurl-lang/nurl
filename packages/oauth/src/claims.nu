@@ -136,6 +136,8 @@ $ `stdlib/core/rcbox.nu`
     ^ out
 }
 
+unsafe
+
 @ __cl_list_has ( Vec String ) list s want → b {
     : i n ( vec_len [String] list )
     : *String data ( vec_data [String] list )
@@ -196,6 +198,8 @@ $ `stdlib/core/rcbox.nu`
 // every copy is the same state, and the last owner releases it.
 : OidcPolicy { s ctl }
 
+unsafe
+
 @ OidcPolicy_share OidcPolicy h → OidcPolicy { ^ @ OidcPolicy { # s ( rcbox_share # i . h ctl ) } }
 
 @ OidcPolicy_drop sink OidcPolicy h → v {
@@ -203,7 +207,11 @@ $ `stdlib/core/rcbox.nu`
     ( rcbox_release [OidcPolicyImpl] # i . h ctl )
 }
 
+unsafe
+
 @ _OidcPolicy_ptr OidcPolicy h → *OidcPolicyImpl { ^ ( rcbox_ptr [OidcPolicyImpl] # i . h ctl ) }
+
+unsafe
 
 @ oidc_policy_new s issuer s audience → OidcPolicy {
     : i p__box ( rcbox_zero [OidcPolicyImpl] )
@@ -223,45 +231,63 @@ $ `stdlib/core/rcbox.nu`
 // Let go of `p` now rather than at the end of its owner's scope.
 @ oidc_policy_free sink OidcPolicy p → v {}
 
+unsafe
+
 @ oidc_policy_set_issuer OidcPolicy p__h s issuer → v {
     : *OidcPolicyImpl p ( _OidcPolicy_ptr p__h )
     ( _oauth_set_str . p issuer issuer )
 }
+
+unsafe
 
 @ oidc_policy_set_audience OidcPolicy p__h s audience → v {
     : *OidcPolicyImpl p ( _OidcPolicy_ptr p__h )
     ( _oauth_set_str . p audience audience )
 }
 
+unsafe
+
 @ oidc_policy_set_nonce OidcPolicy p__h s nonce → v {
     : *OidcPolicyImpl p ( _OidcPolicy_ptr p__h )
     ( _oauth_set_str . p nonce nonce )
 }
+
+unsafe
 
 @ oidc_policy_set_algs OidcPolicy p__h s algs → v {
     : *OidcPolicyImpl p ( _OidcPolicy_ptr p__h )
     ( _oauth_set_str . p algs algs )
 }
 
+unsafe
+
 @ oidc_policy_set_leeway OidcPolicy p__h i secs → v {
     : *OidcPolicyImpl p ( _OidcPolicy_ptr p__h )
     = . p leeway secs
 }
+
+unsafe
 
 @ oidc_policy_set_max_age OidcPolicy p__h i secs → v {
     : *OidcPolicyImpl p ( _OidcPolicy_ptr p__h )
     = . p max_age secs
 }
 
+unsafe
+
 @ oidc_policy_require_sub OidcPolicy p__h b on → v {
     : *OidcPolicyImpl p ( _OidcPolicy_ptr p__h )
     = . p require_sub on
 }
 
+unsafe
+
 @ oidc_policy_require_exp OidcPolicy p__h b on → v {
     : *OidcPolicyImpl p ( _OidcPolicy_ptr p__h )
     = . p require_exp on
 }
+
+unsafe
 
 @ oidc_policy_allow_symmetric OidcPolicy p__h b on → v {
     : *OidcPolicyImpl p ( _OidcPolicy_ptr p__h )
@@ -271,6 +297,8 @@ $ `stdlib/core/rcbox.nu`
 // Is `alg` inside the policy's allowlist? An empty allowlist means "any
 // algorithm the verifier supports", which still excludes HS* unless the
 // caller deliberately allowed symmetric keys.
+unsafe
+
 @ oidc_policy_alg_allowed OidcPolicy p__h s alg → b {
     : *OidcPolicyImpl p ( _OidcPolicy_ptr p__h )
     ? == 0 ( string_len . p algs ) { ^ T } {}
@@ -300,6 +328,8 @@ $ `stdlib/core/rcbox.nu`
 @ claims_check_access Json c OidcPolicy pol__h i now → ?ClaimErr {
     ^ ( _claims_check c pol__h now T )
 }
+
+unsafe
 
 @ _claims_check Json c OidcPolicy pol__h i now b access → ?ClaimErr {
     : *OidcPolicyImpl pol ( _OidcPolicy_ptr pol__h )

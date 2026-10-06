@@ -5,6 +5,8 @@
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
 
+unsafe
+
 @ pick b take ( Vec u ) v → i {
     : *u p ( vec_data [u] v )
     // 1. sibling arms: the free is on the other path from the use
@@ -15,6 +17,8 @@ $ `stdlib/core/string.nu`
         ^ # i . p 0  // … and this one never runs it
     }
 }
+
+unsafe
 
 @ early sink ( Vec u ) v → i {
     : *u p ( vec_data [u] v )
@@ -34,6 +38,8 @@ $ `stdlib/core/string.nu`
 
 // 3. `??` arms are alternatives too: the grow in the T-arm must not make
 //    `p` stale in the F-arm.
+unsafe
+
 @ viamatch i k ( Vec u ) v → i {
     : *u p ( vec_data [u] v )
     ?? ( opt k ) {

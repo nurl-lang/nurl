@@ -416,6 +416,8 @@ $ `stdlib/ext/http_cli.nu`
 // every change that matters — an edit to runtime_core.c silently reused the
 // object compiled before it, and the module kept the old runtime until
 // something happened to touch the aggregator itself.
+unsafe
+
 @ wb_tu_text s dir s name ( Vec String ) seen String out → v {
     : i ns ( vec_len [String] seen )
     : ~ i sk 0

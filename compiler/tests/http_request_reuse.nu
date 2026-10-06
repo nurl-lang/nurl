@@ -9,6 +9,8 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/ext/http_request.nu`
 
+unsafe
+
 @ show HttpRequest req ( Vec Header ) spare s label → v {
     ( nurl_print label )
     ( nurl_print `: ` )

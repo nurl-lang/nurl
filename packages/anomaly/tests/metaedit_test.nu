@@ -116,6 +116,8 @@ $ `src/dynamic.nu`
 
 // ── Scenario 1: partial patches, adds, replace ────────────────────────
 
+unsafe
+
 @ test_patch Store st → v {
     = g_lcg 1
     : Model mo ( model_open_at st `patch` T0 )
@@ -226,6 +228,8 @@ $ `src/dynamic.nu`
 
 // ── Scenario 2: clamping ──────────────────────────────────────────────
 
+unsafe
+
 @ test_clamp Store st → v {
     = g_lcg 7
     : Model mo ( model_open_at st `clamp` T0 )
@@ -275,6 +279,8 @@ $ `src/dynamic.nu`
 
 // ── Scenario 3: enable / disable ──────────────────────────────────────
 
+unsafe
+
 @ test_toggle Store st → v {
     = g_lcg 3
     : Model mo__h ( model_open_at st `toggle` T0 )
@@ -311,6 +317,8 @@ $ `src/dynamic.nu`
 }
 
 // ── Scenario 4: refused shapes ────────────────────────────────────────
+
+unsafe
 
 @ test_errors Store st → v {
     = g_lcg 5
@@ -358,6 +366,8 @@ $ `src/dynamic.nu`
 // A display name, and nothing structural: it never reaches the store, a
 // file path or the feature order, which is why — unlike `name` — it may be
 // edited freely, hold spaces, and be cleared back to empty.
+
+unsafe
 
 @ test_alias Store st → v {
     = g_lcg 31
@@ -419,6 +429,8 @@ $ `src/dynamic.nu`
     ( check has_alias `alias: it is published in editable_fields` )
 
 }
+
+unsafe
 
 @ test_maxpoints Store st → v {
     = g_lcg 11

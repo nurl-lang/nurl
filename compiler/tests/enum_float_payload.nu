@@ -32,6 +32,8 @@
     ( nurl_print label ) ( nurl_print ? ok ` ok\n` ` FAIL\n` )
 }
 
+unsafe
+
 @ main → i {
     // slot 0 (double)
     : E a @ E { Num 3.5 }
@@ -98,10 +100,14 @@
     ^ 0
 }
 
+unsafe
+
 @ box_e E e → *E {
     : *E p ( my_alloc )
     = . p 0 e
     ^ p
 }
+
+unsafe
 
 @ my_alloc → *E { ^ # *E ( nurl_alloc Z E ) }

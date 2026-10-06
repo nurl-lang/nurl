@@ -1052,6 +1052,8 @@ $ `src/imptime.nu`
 // Import projected points into the source's model, claiming a model the
 // run brings into being for the organisation. Returns "" or why not.
 // The caller holds the service lock.
+unsafe
+
 @ __src_ingest s org Json src SrcProject sp i now b trained_out → String {
     : String model ( __src_jstr src `model` )
     : String who ( string_from `source:` )
@@ -1163,6 +1165,8 @@ $ `src/imptime.nu`
 // version on fits the daily rhythm the feed has, not a plain ARIMA. A
 // model tuned before, by hand or by an earlier run, is left as it is.
 // Returns whether the margins were calibrated now.
+unsafe
+
 @ __src_first_train Model mo Json src ( Vec Json ) points i now → b {
     : Meta mm__h ( model_metadata mo )
     : *MetaImpl mm ( _Meta_ptr mm__h )

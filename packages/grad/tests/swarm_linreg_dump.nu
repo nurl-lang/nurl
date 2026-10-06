@@ -33,6 +33,8 @@ $ `deps/tensor/src/tensor.nu`
 @ cROUNDS → i { ^ 120 }
 
 // One example's parameter gradients via the tape (fresh episode per call).
+unsafe
+
 @ tape_grads f a f b f xf f v * u ga * u gb → v {
     : GTape tp ( tape_new )
     : GVar pa ( sc tp a T )
@@ -47,6 +49,8 @@ $ `deps/tensor/src/tensor.nu`
     ( nurl_poke ga 0 ( f64_to_bits ( _tf . g1 data 0 ) ) )
     ( nurl_poke gb 0 ( f64_to_bits ( _tf . g2 data 0 ) ) )
 }
+
+unsafe
 
 @ main → i {
     // ── emit the kernel from ONE symbolic episode ────────────────────

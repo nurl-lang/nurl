@@ -84,6 +84,8 @@ $ `../src/metadata.nu`
     ^ @ !v GrpcError { T 0 }
 }
 
+unsafe
+
 @ metadata → !v GrpcError {
     : ( Vec Header ) meta ( grpc_metadata_new )
     \ ( grpc_metadata_add meta `authorization` `Bearer token` )

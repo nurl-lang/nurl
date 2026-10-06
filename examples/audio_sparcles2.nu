@@ -51,6 +51,8 @@
 }
 
 // Fade the whole framebuffer toward black (motion‑blur effect).
+unsafe
+
 @ fade_frame * i fb i total_px → v {
     : ~ i i 0
     ~ < i total_px {
@@ -65,6 +67,8 @@
 // --------------------------------------------------------------------
 //  Main program – microphone‑driven pixel fireworks
 // --------------------------------------------------------------------
+unsafe
+
 @ main → i {
     // Allocate particle pools (parallel i64 arrays).
     : *i px # *i ( malloc * MAX_PART 8 )

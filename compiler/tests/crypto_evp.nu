@@ -35,6 +35,8 @@ $ `stdlib/ext/crypto.nu`
 // Vec[u] → lowercase hex on stdout (no newline). Reads bytes via the
 // `. p k` indexed load, NOT nurl_str_get (which is NUL-bounded and
 // would truncate binary material at the first 0x00).
+unsafe
+
 @ phex ( Vec u ) v → v {
     : i n ( vec_len [u] v )
     : *u p ( vec_data [u] v )
@@ -59,6 +61,8 @@ $ `stdlib/ext/crypto.nu`
     ~ < k n { ( vec_push [u] out # u ( nurl_str_get str k ) ) = k + k 1 }
     ^ out
 }
+
+unsafe
 
 @ main → i {
     // ── AES-256-GCM: zero key/nonce, empty pt/aad → known tag ──────

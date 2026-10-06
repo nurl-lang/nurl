@@ -429,6 +429,8 @@ $ `stdlib/ext/env.nu`
     ^ ok
 }
 
+unsafe
+
 @ __kat_one s label i level s d s z s ekd s dkd → b {
     : ( Vec u ) dv ( __hexv d )
     : ( Vec u ) zv ( __hexv z )

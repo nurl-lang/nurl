@@ -51,6 +51,8 @@ $ `stdlib/core/vec.nu`
 // Read the response body Vec[u] as a freshly-owned String (zero-copy
 // would alias the response body buffer, which is freed below — the
 // owned copy lets us print AFTER http_response_free).
+unsafe
+
 @ body_to_string HttpResponse r → String {
     : i n ( vec_len [u] . r body )
     : *u data ( vec_data [u] . r body )

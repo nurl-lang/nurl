@@ -12,6 +12,8 @@ $ `src/geom.nu`
 
 @ pr_f f x → v { ( nurl_print ` ` ) ( nurl_print ( nurl_str_float x ) ) }
 
+unsafe
+
 @ dump_row s label * f v i n → v {
     ( nurl_print label )
     : ~ i j 0
@@ -22,12 +24,16 @@ $ `src/geom.nu`
 // Deterministic pseudo-random pose encodings — the same generator runs in
 // the python oracle, so both sides see identical inputs without a fixture
 // file. A 64-bit LCG, values in [-1, 1).
+unsafe
+
 @ lcg * i state → f {
     : i s + * . state 0 6364136223846793005 1442695040888963407
     = . state 0 s
     : i top & / s 2048 4294967295
     ^ - / # f top 2147483648.0 1.0
 }
+
+unsafe
 
 @ main → i {
     : ( Vec u ) st__v ( vec_zeroed [u] 8 )

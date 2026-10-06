@@ -10,6 +10,8 @@
 
 $ `stdlib/core/vec.nu`
 
+unsafe
+
 @ main → i {
     : ( Vec u ) out ( vec_new [u] )
     ( vec_push [u] out # u 7 )

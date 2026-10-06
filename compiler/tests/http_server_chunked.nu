@@ -65,6 +65,8 @@ $ `stdlib/ext/http_server.nu`
     ^ ( string_contains buf needle )
 }
 
+unsafe
+
 @ bytes_extend_str_from String buf ( Vec u ) chunk → v {
     : i n ( vec_len [u] chunk )
     : *u p ( vec_data [u] chunk )
@@ -74,6 +76,8 @@ $ `stdlib/ext/http_server.nu`
         = k + k 1
     }
 }
+
+unsafe
 
 @ run_live → i {
     : ~ i fails 0

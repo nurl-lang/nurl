@@ -15,6 +15,8 @@ $ `stdlib/core/string.nu`
 : Detection { i cls f score f cx f cy f w f h i ai }
 
 // value at (channel, anchor) for a [1, C, na] tensor flattened row-major.
+unsafe
+
 @ __at * u o i na i ch i a → f { ^ ( nurl_peek_f32 o + * ch na a ) }
 
 & `c` @ nurl_peek_f32 *u base i idx → f

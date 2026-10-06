@@ -41,6 +41,8 @@ $ `stdlib/std/float.nu`
 // count — entry p depends on p alone. The reference sizes its table by
 // the sequence length, which is simply a generous upper bound (783
 // tokens for a 37x21 grid whose largest coordinate is 37).
+unsafe
+
 @ rope2d_tables i half i maxpos * f cos_t * f sin_t → v {
     ? | <= half 0 <= maxpos 0 { ^ v } {}
     : i quarter / half 2
@@ -68,6 +70,8 @@ $ `stdlib/std/float.nu`
 // Rotate `x` in place. `x` is [heads, n, dim] contiguous; `rows` and
 // `cols` are the per-token grid coordinates (length n); the tables come
 // from rope2d_tables with half = dim/2.
+unsafe
+
 @ rope2d_apply * f x i heads i n i dim * i rows * i cols * f cos_t * f sin_t → v {
     ? | | | <= heads 0 <= n 0 <= dim 0 != % dim 2 0 { ^ v } {}
     : i half / dim 2
@@ -146,6 +150,8 @@ $ `stdlib/std/float.nu`
 // cos/sin for one axis, written into `out` at column `col0` of a row of
 // `width` — the three axes share one table so a token's 32 frequencies
 // are contiguous.
+unsafe
+
 @ __r3_axis i dim i maxpos i col0 i width * f cos_t * f sin_t → v {
     : i half / dim 2
     : ~ i p 0
@@ -184,6 +190,8 @@ $ `stdlib/std/float.nu`
 
 // Rotate `x` [heads, n, dim] in place. `fr` / `rw` / `cl` hold each
 // token's (frame, row, column) position. dim must be 2·width (64).
+unsafe
+
 @ rope3d_apply_fhw * f x i heads i n i dim i nt i nh * i fr * i rw * i cl
 * f cos_t * f sin_t → v {
     : i width / dim 2

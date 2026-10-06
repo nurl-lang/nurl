@@ -186,6 +186,8 @@ $ `src/mcp.nu`
 }
 
 // Print a verdict as one compact JSON object.
+unsafe
+
 @ __an_print_verdict Model mo__h Verdict vd → v {
     : *ModelImpl mo ( _Model_ptr mo__h )
     : Json o ( json_obj_new )
@@ -478,6 +480,8 @@ $ `src/mcp.nu`
     ^ rc
 }
 
+unsafe
+
 @ __an_cmd_train_ae CliCtx x → i {
     : String mname ( ctx_arg x 0 )
     : String root ( __an_store_root x )
@@ -508,6 +512,8 @@ $ `src/mcp.nu`
     }
     ^ rc
 }
+
+unsafe
 
 @ __an_cmd_train_fc CliCtx x → i {
     : String mname ( ctx_arg x 0 )
@@ -551,6 +557,8 @@ $ `src/mcp.nu`
     }
     ^ rc
 }
+
+unsafe
 
 @ __an_cmd_forecast CliCtx x → i {
     : String mname ( ctx_arg x 0 )

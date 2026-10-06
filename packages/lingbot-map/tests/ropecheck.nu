@@ -7,6 +7,8 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/std/float.nu`
 $ `src/rope.nu`
 
+unsafe
+
 @ case i heads i gw i gh i dim i nspecial → v {
     : i npatch * gw gh
     : i n + nspecial npatch
