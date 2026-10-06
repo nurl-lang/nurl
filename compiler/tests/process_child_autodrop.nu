@@ -19,9 +19,7 @@ $ `stdlib/ext/env.nu`
 
 & `libc` @ nurl_free_count → i
 
-unsafe
-
-@ live → i { ^ - ( nurl_alloc_count ) ( nurl_free_count ) }
+unsafe @ live → i { ^ - ( nurl_alloc_count ) ( nurl_free_count ) }
 
 : Holder { ProcChild ch i tag }
 
@@ -86,9 +84,7 @@ unsafe
     ^ w
 }
 
-unsafe
-
-@ main → i {
+unsafe @ main → i {
     // The children here are POSIX tools (echo, cat).
     ? ( is_windows ) { ( nurl_println `skip=posix-tools` ) ^ 0 } {}
     : ~ i v ( one_round )

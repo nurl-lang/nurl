@@ -34,9 +34,7 @@ $ `stdlib/std/float.nu`
 $ `stdlib/std/sort.nu`
 
 // (x, y, z, w) → row-major 3×3, the reference's quaternion_to_rotation_matrix.
-unsafe
-
-@ gm_quat_to_mat f x f y f z f w * f r → v {
+unsafe @ gm_quat_to_mat f x f y f z f w * f r → v {
     : f n ( float_sqrt + + + * x x * y y * z z * w w )
     : f nn ? > n 0.0 n 1.0
     : f qx / x nn
@@ -59,9 +57,7 @@ unsafe
 // [tx ty tz qx qy qz qw], `out` is [n, 3] interleaved — the layout the
 // PLY writer wants. Also emits the z-depth (camera-frame z · scale)
 // into `depthz`, which the edge mask needs.
-unsafe
-
-@ gm_world_points * f dirs * f depth * f pose f scale i n * f out * f depthz → v {
+unsafe @ gm_world_points * f dirs * f depth * f pose f scale i n * f out * f depthz → v {
     : ( Vec u ) r__v ( vec_zeroed [u] 72 )
     : *f r # *f ( vec_data [u] r__v )
     ( gm_quat_to_mat . pose 3 . pose 4 . pose 5 . pose 6 r )
@@ -82,9 +78,7 @@ unsafe
 }
 
 // sigmoid(x) > 0.5  ⇔  x > 0
-unsafe
-
-@ gm_nonambig * f logits i n * u mask → v {
+unsafe @ gm_nonambig * f logits i n * u mask → v {
     : ~ i j 0
     ~ < j n {
         = . mask j ? > . logits j 0.0 # u 1 # u 0
@@ -95,9 +89,7 @@ unsafe
 // AND a "confidence above the pct-th percentile" test into `mask`.
 // torch.quantile with linear interpolation, over ALL pixels (the
 // reference quantiles the un-masked confidence map).
-unsafe
-
-@ gm_conf_percentile * f conf i n f pct * u mask → v {
+unsafe @ gm_conf_percentile * f conf i n f pct * u mask → v {
     ? <= n 0 { ^ v } {}
     : ( Vec f ) sorted ( vec_with_cap [f] n )
     : ~ i j 0
@@ -127,9 +119,7 @@ unsafe
 }
 
 // 3×3 max of `v` masked by `m` (invalid → −inf), −inf outside.
-unsafe
-
-@ __gm_pool3 * f v * u m i h i w i y i x → f {
+unsafe @ __gm_pool3 * f v * u m i h i w i y i x → f {
     : ~ f best - 0.0 __GM_INF
     : ~ i dy -1
     ~ <= dy 1 {
@@ -154,9 +144,7 @@ unsafe
 // normals-edge tests both fire. `pts` is [n, 3] world points (already
 // masked-invalid entries are excluded via `mask`), `depthz` [n], and
 // `mask` is updated in place.
-unsafe
-
-@ gm_edge_mask * f pts * f depthz i h i w * u mask → v {
+unsafe @ gm_edge_mask * f pts * f depthz i h i w * u mask → v {
     : i n * h w
     // ── depth edge: maxpool(d) + maxpool(−d), relative tol 0.03 ──
     : f rtol 0.03
@@ -352,9 +340,7 @@ unsafe
 //   ( gm_sim3_apply pts n out13 ) → v    in place
 
 // Largest-eigenvalue eigenvector of a symmetric 4×4 by cyclic Jacobi.
-unsafe
-
-@ __gm_jacobi4 * f a * f evec → v {
+unsafe @ __gm_jacobi4 * f a * f evec → v {
     // V ← I
     : ( Vec u ) v__v ( vec_zeroed [u] 128 )
     : *f v # *f ( vec_data [u] v__v )
@@ -433,9 +419,7 @@ unsafe
 
 // Fit local→global: xs, ys are [n, 3] interleaved. Fails (F) below 3
 // pairs or on a degenerate spread.
-unsafe
-
-@ gm_sim3_fit * f xs * f ys i n * f out → b {
+unsafe @ gm_sim3_fit * f xs * f ys i n * f out → b {
     ? < n 3 { ^ F } {}
     : f fn # f n
     : ~ f mx0 0.0
@@ -553,9 +537,7 @@ unsafe
 }
 
 // p ← s·R·p + t, in place over [n, 3] interleaved points.
-unsafe
-
-@ gm_sim3_apply * f pts i n * f xf → v {
+unsafe @ gm_sim3_apply * f pts i n * f xf → v {
     : f s . xf 0
     : ~ i j 0
     ~ < j n {

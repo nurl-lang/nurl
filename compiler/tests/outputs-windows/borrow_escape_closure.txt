@@ -4,4 +4,4 @@ compiler/tests/borrow_escape_closure.nu:24: error: returning a value that refere
     ^ bump
 compiler/tests/borrow_escape_closure.nu:30: error: returning a value that references a stack binding by pointer — it dangles after this function returns (move the captured data to a heap-backed handle)
     ^ \ → v { = . c n + . c n 1 }
-error: compilation aborted — 2 borrow-checker violations (if the program is correct, this is a false positive: please report it as a bug at https://github.com/nurl-lang/nurl/issues)
+error: compilation aborted — 2 borrow-checker violations (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

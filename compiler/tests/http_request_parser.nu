@@ -124,9 +124,7 @@ $ `stdlib/ext/http.nu`
     ( vec_free [u] buf )
 }
 
-unsafe
-
-@ run_query_decode → v {
+unsafe @ run_query_decode → v {
     ( nurl_print `── parse_query / percent codec ──\n` )
     // Mix of `+` (form-urlencoded space), `%20` (RFC 3986 space) and a
     // bare key (`flag` with no `=`).

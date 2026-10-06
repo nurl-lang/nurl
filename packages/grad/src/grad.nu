@@ -115,9 +115,7 @@ $ `stdlib/core/rcbox.nu`
 // every copy is the same state, and the last owner releases it.
 : GTape { s ctl }
 
-unsafe
-
-@ GTape_share GTape h → GTape { ^ @ GTape { # s ( rcbox_share # i . h ctl ) } }
+unsafe @ GTape_share GTape h → GTape { ^ @ GTape { # s ( rcbox_share # i . h ctl ) } }
 
 @ GTape_drop sink GTape h → v {
     ( mem_forget h )
@@ -125,9 +123,7 @@ unsafe
 }
 
 // The state, for this package's own code.
-unsafe
-
-@ _GTape_ptr GTape h → *GTapeImpl { ^ ( rcbox_ptr [GTapeImpl] # i . h ctl ) }
+unsafe @ _GTape_ptr GTape h → *GTapeImpl { ^ ( rcbox_ptr [GTapeImpl] # i . h ctl ) }
 
 // The arena's raw cells — the *Tensor value / gradient per node and the
 // *GAux blocks — are the tape's own heap memory: its last owner releases
@@ -152,9 +148,7 @@ unsafe
 
 // ── construction / lifecycle ─────────────────────────────────────────
 
-unsafe
-
-@ tape_new → GTape {
+unsafe @ tape_new → GTape {
     : i tp__box ( rcbox_zero [GTapeImpl] )
     : *GTapeImpl tp ( rcbox_ptr [GTapeImpl] tp__box )
     = . tp ok 1
@@ -165,9 +159,7 @@ unsafe
     ^ @ GTape { # s tp__box }
 }
 
-unsafe
-
-@ _g_tfree s pp → v {
+unsafe @ _g_tfree s pp → v {
     ? != # i pp 0 {
         : *Tensor t # *Tensor pp
         ( vec_free [i] . t shape )
@@ -176,9 +168,7 @@ unsafe
     } {}
 }
 
-unsafe
-
-@ _g_auxfree s pp → v {
+unsafe @ _g_auxfree s pp → v {
     ? != # i pp 0 {
         : *GAux a # *GAux pp
         ( vec_free [i] . a starts )
@@ -191,9 +181,7 @@ unsafe
 // aux block it holds (the Drop below).
 @ tape_free sink GTape tp → v {}
 
-unsafe
-
-@ tape_ok GTape tp__h → b {
+unsafe @ tape_ok GTape tp__h → b {
     : *GTapeImpl tp ( _GTape_ptr tp__h )
     ^ == . tp ok 1
 }
@@ -209,9 +197,7 @@ unsafe
 // ONLY call it after a successful device capture: the CPU tape can no longer
 // forward/backward once its const values are gone. Freeing is null-safe —
 // tape_free / tape_reset_to re-read through the same guarded idiom.
-unsafe
-
-@ tape_drop_consts GTape tp__h → v {
+unsafe @ tape_drop_consts GTape tp__h → v {
     : *GTapeImpl tp ( _GTape_ptr tp__h )
     : i n ( vec_len [GNode] . tp nodes )
     : ~ i k 0
@@ -225,17 +211,13 @@ unsafe
     }
 }
 
-unsafe
-
-@ tape_len GTape tp__h → i {
+unsafe @ tape_len GTape tp__h → i {
     : *GTapeImpl tp ( _GTape_ptr tp__h )
     ^ ( vec_len [GNode] . tp nodes )
 }
 
 // Watermark for tape_reset_to: everything appended after `mark` is dropped.
-unsafe
-
-@ tape_mark GTape tp__h → i {
+unsafe @ tape_mark GTape tp__h → i {
     : *GTapeImpl tp ( _GTape_ptr tp__h )
     ^ ( vec_len [GNode] . tp nodes )
 }
@@ -243,9 +225,7 @@ unsafe
 // Drop every node at id >= mark (freeing its tensors) and ZERO the gradients
 // of what remains — a fresh episode over the surviving parameters. The vecs
 // keep their capacity, so a minibatch loop does not re-malloc the arena.
-unsafe
-
-@ tape_reset_to GTape tp__h i mark → v {
+unsafe @ tape_reset_to GTape tp__h i mark → v {
     : *GTapeImpl tp ( _GTape_ptr tp__h )
     : i n ( vec_len [GNode] . tp nodes )
     : ~ i k mark
@@ -278,9 +258,7 @@ unsafe
 
 // Move a Tensor VALUE into a fresh heap cell the tape owns. The value's Vec
 // handles alias into the cell — the caller must NOT free the value after.
-unsafe
-
-@ _g_heap Tensor t → s {
+unsafe @ _g_heap Tensor t → s {
     : *Tensor p # *Tensor ( nurl_alloc Z Tensor )
     = . p dtype . t dtype
     = . p shape . t shape
@@ -288,21 +266,15 @@ unsafe
     ^ # s p
 }
 
-unsafe
-
-@ _g_val * GTapeImpl tp i id → s {
+unsafe @ _g_val * GTapeImpl tp i id → s {
     ^ ?? ( vec_get [s] . tp vals id ) { T x → x F → # s 0 }
 }
 
-unsafe
-
-@ _g_grad_ptr * GTapeImpl tp i id → s {
+unsafe @ _g_grad_ptr * GTapeImpl tp i id → s {
     ^ ?? ( vec_get [s] . tp grads id ) { T x → x F → # s 0 }
 }
 
-unsafe
-
-@ _g_poison * GTapeImpl tp s why → GVar {
+unsafe @ _g_poison * GTapeImpl tp s why → GVar {
     ? == . tp ok 1 {
         ( nurl_eprint `grad: tape poisoned: ` )
         ( nurl_eprintln why )
@@ -319,9 +291,7 @@ unsafe
 }
 
 // Append a node whose value is `val` (ownership moves to the tape).
-unsafe
-
-@ _g_push * GTapeImpl tp i op i a i b f sc Tensor val → GVar {
+unsafe @ _g_push * GTapeImpl tp i op i a i b f sc Tensor val → GVar {
     : i id ( vec_len [GNode] . tp nodes )
     ( vec_push [GNode] . tp nodes @ GNode { op a b sc } )
     ( vec_push [s] . tp vals ( _g_heap val ) )
@@ -331,9 +301,7 @@ unsafe
 }
 
 // Equal-shape check for M1 binops.
-unsafe
-
-@ _g_same_shape s pa s pb → b {
+unsafe @ _g_same_shape s pa s pb → b {
     : *Tensor a # *Tensor pa
     : *Tensor b # *Tensor pb
     : i n ( vec_len [i] . a shape )
@@ -350,18 +318,14 @@ unsafe
 
 // Register a PARAMETER (requires-grad leaf). The tensor is COPIED in; the
 // live, optimizer-updated copy is the tape's (read it via gvar_value).
-unsafe
-
-@ grad_param GTape tp__h Tensor w → GVar {
+unsafe @ grad_param GTape tp__h Tensor w → GVar {
     : *GTapeImpl tp ( _GTape_ptr tp__h )
     ? == . tp ok 1 {} { ^ @ GVar { -1 } }
     ^ ( _g_push tp ( gop_param ) -1 -1 0.0 ( tensor_clone w ) )
 }
 
 // Register a CONSTANT (no gradient flows into it).
-unsafe
-
-@ grad_const GTape tp__h Tensor c → GVar {
+unsafe @ grad_const GTape tp__h Tensor c → GVar {
     : *GTapeImpl tp ( _GTape_ptr tp__h )
     ? == . tp ok 1 {} { ^ @ GVar { -1 } }
     ^ ( _g_push tp ( gop_const ) -1 -1 0.0 ( tensor_clone c ) )
@@ -379,9 +343,7 @@ unsafe
 //
 // The CPU tape CANNOT evaluate through a lazy const — it has no values.
 // Use it only on a graph that will be captured and run on the device.
-unsafe
-
-@ grad_const_lazy GTape tp__h ( Vec i ) shape i dtype → GVar {
+unsafe @ grad_const_lazy GTape tp__h ( Vec i ) shape i dtype → GVar {
     : *GTapeImpl tp ( _GTape_ptr tp__h )
     ? == . tp ok 1 {} { ^ @ GVar { -1 } }
     : Tensor t @ Tensor { dtype ( vec_clone [i] shape ) ( vec_new [f] ) }
@@ -392,9 +354,7 @@ unsafe
 
 // The node's value as a BORROWED Tensor view (do not free; invalid after
 // tape_free / a reset past this node).
-unsafe
-
-@ gvar_value GTape tp__h GVar v → Tensor {
+unsafe @ gvar_value GTape tp__h GVar v → Tensor {
     : *GTapeImpl tp ( _GTape_ptr tp__h )
     : *Tensor p # *Tensor ( _g_val tp . v id )
     ^ @ Tensor { . p dtype . p shape . p data }
@@ -402,9 +362,7 @@ unsafe
 
 // The accumulated gradient as a BORROWED Tensor view. Allocates a zero
 // gradient on first touch so the borrow is always valid.
-unsafe
-
-@ grad_of GTape tp__h GVar v → Tensor {
+unsafe @ grad_of GTape tp__h GVar v → Tensor {
     : *GTapeImpl tp ( _GTape_ptr tp__h )
     ( _g_ensure_grad tp . v id )
     : *Tensor p # *Tensor ( _g_grad_ptr tp . v id )
@@ -412,9 +370,7 @@ unsafe
 }
 
 // First element of the node's value — the scalar-loss readout.
-unsafe
-
-@ g_scalar GTape tp__h GVar v → f {
+unsafe @ g_scalar GTape tp__h GVar v → f {
     : *GTapeImpl tp ( _GTape_ptr tp__h )
     : *Tensor p # *Tensor ( _g_val tp . v id )
     ^ ( _tf . p data 0 )
@@ -423,16 +379,12 @@ unsafe
 // ── ops: binary (equal shapes) ───────────────────────────────────────
 
 // A borrowed Tensor view of a tape value (alias — never free).
-unsafe
-
-@ _g_view s pp → Tensor {
+unsafe @ _g_view s pp → Tensor {
     : *Tensor p # *Tensor pp
     ^ @ Tensor { . p dtype . p shape . p data }
 }
 
-unsafe
-
-@ _g_binop * GTapeImpl tp GVar a GVar b i op → GVar {
+unsafe @ _g_binop * GTapeImpl tp GVar a GVar b i op → GVar {
     ? == . tp ok 1 {} { ^ @ GVar { -1 } }
     ? & >= . a id 0 >= . b id 0 {} { ^ ( _g_poison tp `binop on a poisoned input` ) }
     : s pa ( _g_val tp . a id )
@@ -496,9 +448,7 @@ unsafe
 
 // ── ops: unary / scalar ──────────────────────────────────────────────
 
-unsafe
-
-@ _g_unary * GTapeImpl tp GVar a i op f sc → GVar {
+unsafe @ _g_unary * GTapeImpl tp GVar a i op f sc → GVar {
     ? == . tp ok 1 {} { ^ @ GVar { -1 } }
     ? >= . a id 0 {} { ^ ( _g_poison tp `unary on a poisoned input` ) }
     : *Tensor ta # *Tensor ( _g_val tp . a id )
@@ -577,9 +527,7 @@ unsafe
 
 // ── ops: all-axes reductions (result shape [1]) ─────────────────────
 
-unsafe
-
-@ _g_reduce * GTapeImpl tp GVar a i op → GVar {
+unsafe @ _g_reduce * GTapeImpl tp GVar a i op → GVar {
     ? == . tp ok 1 {} { ^ @ GVar { -1 } }
     ? >= . a id 0 {} { ^ ( _g_poison tp `reduce on a poisoned input` ) }
     : *Tensor ta # *Tensor ( _g_val tp . a id )
@@ -619,9 +567,7 @@ unsafe
 // out), so grad's results are the tensor package's results — including its
 // GPU matmul path and any future backend work.
 
-unsafe
-
-@ g_matmul GTape tp__h GVar a GVar b → GVar {
+unsafe @ g_matmul GTape tp__h GVar a GVar b → GVar {
     : *GTapeImpl tp ( _GTape_ptr tp__h )
     ? == . tp ok 1 {} { ^ @ GVar { -1 } }
     ? & >= . a id 0 >= . b id 0 {} { ^ ( _g_poison tp `matmul on a poisoned input` ) }
@@ -631,9 +577,7 @@ unsafe
     }
 }
 
-unsafe
-
-@ g_bmm GTape tp__h GVar a GVar b → GVar {
+unsafe @ g_bmm GTape tp__h GVar a GVar b → GVar {
     : *GTapeImpl tp ( _GTape_ptr tp__h )
     ? == . tp ok 1 {} { ^ @ GVar { -1 } }
     ? & >= . a id 0 >= . b id 0 {} { ^ ( _g_poison tp `bmm on a poisoned input` ) }
@@ -643,9 +587,7 @@ unsafe
     }
 }
 
-unsafe
-
-@ g_transpose GTape tp__h GVar a → GVar {
+unsafe @ g_transpose GTape tp__h GVar a → GVar {
     : *GTapeImpl tp ( _GTape_ptr tp__h )
     ? == . tp ok 1 {} { ^ @ GVar { -1 } }
     ? >= . a id 0 {} { ^ ( _g_poison tp `transpose on a poisoned input` ) }
@@ -656,9 +598,7 @@ unsafe
 }
 
 // `shape` is borrowed (copied here; tensor_reshape adopts the copy).
-unsafe
-
-@ g_reshape GTape tp__h GVar a ( Vec i ) shape → GVar {
+unsafe @ g_reshape GTape tp__h GVar a ( Vec i ) shape → GVar {
     : *GTapeImpl tp ( _GTape_ptr tp__h )
     ? == . tp ok 1 {} { ^ @ GVar { -1 } }
     ? >= . a id 0 {} { ^ ( _g_poison tp `reshape on a poisoned input` ) }
@@ -668,9 +608,7 @@ unsafe
     }
 }
 
-unsafe
-
-@ g_softmax GTape tp__h GVar a i axis → GVar {
+unsafe @ g_softmax GTape tp__h GVar a i axis → GVar {
     : *GTapeImpl tp ( _GTape_ptr tp__h )
     ? == . tp ok 1 {} { ^ @ GVar { -1 } }
     ? >= . a id 0 {} { ^ ( _g_poison tp `softmax on a poisoned input` ) }
@@ -679,9 +617,7 @@ unsafe
 }
 
 // starts/stops are borrowed; starts is retained (aux) for the backward scatter.
-unsafe
-
-@ g_slice GTape tp__h GVar a ( Vec i ) starts ( Vec i ) stops → GVar {
+unsafe @ g_slice GTape tp__h GVar a ( Vec i ) starts ( Vec i ) stops → GVar {
     : *GTapeImpl tp ( _GTape_ptr tp__h )
     ? == . tp ok 1 {} { ^ @ GVar { -1 } }
     ? >= . a id 0 {} { ^ ( _g_poison tp `slice on a poisoned input` ) }
@@ -697,9 +633,7 @@ unsafe
     }
 }
 
-unsafe
-
-@ g_concat GTape tp__h GVar a GVar b i axis → GVar {
+unsafe @ g_concat GTape tp__h GVar a GVar b i axis → GVar {
     : *GTapeImpl tp ( _GTape_ptr tp__h )
     ? == . tp ok 1 {} { ^ @ GVar { -1 } }
     ? & >= . a id 0 >= . b id 0 {} { ^ ( _g_poison tp `concat on a poisoned input` ) }
@@ -716,9 +650,7 @@ unsafe
 // size-1 or missing dst dim receives the sum over that out axis). sgn is
 // +1/-1 (sub/div's second input negates). Row-major walk of `c` — one
 // documented, deterministic accumulation order.
-unsafe
-
-@ _g_acc_reduce * GTapeImpl tp i dst Tensor c f sgn → v {
+unsafe @ _g_acc_reduce * GTapeImpl tp i dst Tensor c f sgn → v {
     ( _g_ensure_grad tp dst )
     : *Tensor gd # *Tensor ( _g_grad_ptr tp dst )
     : i nd ( vec_len [i] . c shape )
@@ -743,9 +675,7 @@ unsafe
 }
 
 // Allocate node id's gradient as zeros (same shape as its value) if absent.
-unsafe
-
-@ _g_ensure_grad * GTapeImpl tp i id → v {
+unsafe @ _g_ensure_grad * GTapeImpl tp i id → v {
     : s gp ( _g_grad_ptr tp id )
     ? != # i gp 0 { ^ v } {}
     : *Tensor vp # *Tensor ( _g_val tp id )
@@ -763,9 +693,7 @@ unsafe
 
 // dL/d(node) of `loss` seeds to ones; every earlier node receives the sum of
 // its consumers' contributions. Returns F on a poisoned/invalid tape.
-unsafe
-
-@ backward GTape tp__h GVar loss → b {
+unsafe @ backward GTape tp__h GVar loss → b {
     : *GTapeImpl tp ( _GTape_ptr tp__h )
     ? == . tp ok 1 {} { ^ F }
     ? >= . loss id 0 {} { ^ F }

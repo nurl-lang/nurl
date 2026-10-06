@@ -136,7 +136,12 @@ for rel in "${FILES[@]}"; do
         SKIPPED_IR=$((SKIPPED_IR + 1))
         continue
     fi
-    if ! "$NURLC" "$PASS1" >"$IR_FMT"  2>/dev/null; then
+    # The formatted copy keeps its original path under $TMPDIR: whether a
+    # file is the standard library (trusted to use raw memory outside
+    # `unsafe`) is decided by its path.
+    FMT_SRC="$TMPDIR/tree/$rel"
+    mkdir -p "$(dirname "$FMT_SRC")" && cp "$PASS1" "$FMT_SRC"
+    if ! "$NURLC" "$FMT_SRC" >"$IR_FMT"  2>/dev/null; then
         FAIL_IR+=("$rel  (formatted source failed to compile)")
         continue
     fi

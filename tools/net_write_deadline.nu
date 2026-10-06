@@ -7,7 +7,7 @@ $ `stdlib/std/time.nu`
 : ~ i deadline_mode 0
 : ~ i deadline_result 2
 
-@ deadline_write TcpConn conn i mode ( Vec u ) payload → i {
+unsafe @ deadline_write TcpConn conn i mode ( Vec u ) payload → i {
     : i raw ( tcp_conn_fd conn )
     : *u data ( vec_data [u] payload )
     : i size ( vec_len [u] payload )
@@ -32,7 +32,7 @@ $ `stdlib/std/time.nu`
     }
 }
 
-@ deadline_run → i {
+unsafe @ deadline_run → i {
     : !TcpConn NetErr connected ? >= deadline_mode 4
     ( tcp_connect_tls `127.0.0.1` deadline_port `localhost` 0 )
     ( tcp_connect `127.0.0.1` deadline_port )

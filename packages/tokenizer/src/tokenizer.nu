@@ -79,18 +79,14 @@ $ `stdlib/core/rcbox.nu`
 // every copy is the same tokenizer, and the last owner releases it.
 : Tok { s ctl }
 
-unsafe
-
-@ Tok_share Tok h → Tok { ^ @ Tok { # s ( rcbox_share # i . h ctl ) } }
+unsafe @ Tok_share Tok h → Tok { ^ @ Tok { # s ( rcbox_share # i . h ctl ) } }
 
 @ Tok_drop sink Tok h → v {
     ( mem_forget h )
     ( rcbox_release [TokImpl] # i . h ctl )
 }
 
-unsafe
-
-@ __Tok_ptr Tok h → *TokImpl { ^ ( rcbox_ptr [TokImpl] # i . h ctl ) }
+unsafe @ __Tok_ptr Tok h → *TokImpl { ^ ( rcbox_ptr [TokImpl] # i . h ctl ) }
 
 // ── string-keyed map helpers (yoloe/bpe.nu idiom) ───────────────────
 @ __tk_set ( HashMap s i ) m s key i val → v {
@@ -110,9 +106,7 @@ unsafe
 }
 
 // Borrowed data pointer of piece #k ("" when out of range).
-unsafe
-
-@ _tk_piece_data * TokImpl t i k → s {
+unsafe @ _tk_piece_data * TokImpl t i k → s {
     ?? ( vec_get [String] . t pieces k ) { T p → { ^ ( string_data p ) } F → { ^ `` } }
 }
 
@@ -181,9 +175,7 @@ unsafe
 //   scores  SPM merge scores (empty for BPE)
 //   types   token types (TT_NORMAL/CONTROL/USER/BYTE/…); empty = all NORMAL
 //   merges  BPE merge rules, "A B", in rank order (empty for SPM)
-unsafe
-
-@ tok_build TokSpec spec sink ( Vec String ) pieces sink ( Vec f ) scores sink ( Vec i ) types sink ( Vec String ) merges → !Tok String {
+unsafe @ tok_build TokSpec spec sink ( Vec String ) pieces sink ( Vec f ) scores sink ( Vec i ) types sink ( Vec String ) merges → !Tok String {
     : i nvocab ( vec_len [String] pieces )
     ? == nvocab 0 {
         ^ ( __tk_err `tokenizer: empty vocabulary` )
@@ -304,30 +296,22 @@ unsafe
 // Let go of `t` now rather than at the end of its owner's scope.
 @ tok_free sink Tok t → v {}
 
-unsafe
-
-@ tok_n_vocab Tok t__h → i {
+unsafe @ tok_n_vocab Tok t__h → i {
     : *TokImpl t ( __Tok_ptr t__h )
     ^ ( vec_len [String] . t pieces )
 }
 
-unsafe
-
-@ tok_bos Tok t__h → i {
+unsafe @ tok_bos Tok t__h → i {
     : *TokImpl t ( __Tok_ptr t__h )
     ^ . t bos
 }
 
-unsafe
-
-@ tok_eos Tok t__h → i {
+unsafe @ tok_eos Tok t__h → i {
     : *TokImpl t ( __Tok_ptr t__h )
     ^ . t eos
 }
 
-unsafe
-
-@ tok_unk Tok t__h → i {
+unsafe @ tok_unk Tok t__h → i {
     : *TokImpl t ( __Tok_ptr t__h )
     ^ . t unk
 }
@@ -336,9 +320,7 @@ unsafe
 
 // Push token(s) for one unmerged symbol: vocab piece, else per-byte
 // <0xNN>, else UNK once.
-unsafe
-
-@ __tk_spm_emit * TokImpl t s esc i off i len ( Vec i ) out → v {
+unsafe @ __tk_spm_emit * TokImpl t s esc i off i len ( Vec i ) out → v {
     : String sym ( string_new )
     ( string_push_bytes sym # *u + # i esc off len )
     ?? ( __tk_get . t lookup ( string_data sym ) ) {
@@ -357,9 +339,7 @@ unsafe
     }
 }
 
-unsafe
-
-@ __tk_spm_encode * TokImpl t s text ( Vec i ) out → v {
+unsafe @ __tk_spm_encode * TokImpl t s text ( Vec i ) out → v {
     // escape: optional leading space, then every ' ' → ▁ (E2 96 81)
     : String esc ( string_new )
     ? & . t add_space_prefix > ( nurl_str_len text ) 0 {
@@ -638,9 +618,7 @@ unsafe
 }
 
 // BPE-merge one pre-token (raw bytes text[off..off+len)) and append ids.
-unsafe
-
-@ __tk_bpe_word * TokImpl t s text i off i len ( Vec i ) out → v {
+unsafe @ __tk_bpe_word * TokImpl t s text i off i len ( Vec i ) out → v {
     // word = remapped single-byte symbols
     : ( Vec String ) word ( vec_new [String] )
     : ~ i j 0
@@ -713,9 +691,7 @@ unsafe
     }
 }
 
-unsafe
-
-@ __tk_bpe_encode * TokImpl t s text ( Vec i ) out → v {
+unsafe @ __tk_bpe_encode * TokImpl t s text ( Vec i ) out → v {
     : i n ( nurl_str_len text )
     : ~ i p 0
     ~ < p n {
@@ -729,9 +705,7 @@ unsafe
 
 // The longest special-token piece matching `text` at `p`, or -1. Only called
 // when text[p] is a byte some special piece starts with.
-unsafe
-
-@ __tk_special_at * TokImpl t s text i p i n → i {
+unsafe @ __tk_special_at * TokImpl t s text i p i n → i {
     : ~ i best -1
     : ~ i best_len 0
     : ~ i j 0
@@ -758,15 +732,11 @@ unsafe
 }
 
 // Encode one run of ordinary text (no special tokens inside it).
-unsafe
-
-@ __tk_encode_raw * TokImpl t s text ( Vec i ) out → v {
+unsafe @ __tk_encode_raw * TokImpl t s text ( Vec i ) out → v {
     ? == . t mode TOK_SPM { ( __tk_spm_encode t text out ) } { ( __tk_bpe_encode t text out ) }
 }
 
-unsafe
-
-@ tok_encode Tok t__h s text b add_special → ( Vec i ) {
+unsafe @ tok_encode Tok t__h s text b add_special → ( Vec i ) {
     : *TokImpl t ( __Tok_ptr t__h )
     : ( Vec i ) out ( vec_new [i] )
     ? & & add_special . t add_bos >= . t bos 0 { ( vec_push [i] out . t bos ) } {}
@@ -815,9 +785,7 @@ unsafe
 // the Tok is; "" out of range).
 @ tok_piece_str Tok t__h i id → s { ^ ( _tk_piece_data ( __Tok_ptr t__h ) id ) }
 
-unsafe
-
-@ __tk_piece * TokImpl t i id → ( Vec u ) {
+unsafe @ __tk_piece * TokImpl t i id → ( Vec u ) {
     : ( Vec u ) out ( vec_new [u] )
     ? | < id 0 >= id ( vec_len [String] . t pieces ) { ^ out } {}
     : i ty ( _tk_geti . t ttype id TT_NORMAL )

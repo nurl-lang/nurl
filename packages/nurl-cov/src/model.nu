@@ -54,23 +54,17 @@ $ `stdlib/core/rcbox.nu`
 // every copy is the same state, and the last owner releases it.
 : Cov { s ctl }
 
-unsafe
-
-@ Cov_share Cov h → Cov { ^ @ Cov { # s ( rcbox_share # i . h ctl ) } }
+unsafe @ Cov_share Cov h → Cov { ^ @ Cov { # s ( rcbox_share # i . h ctl ) } }
 
 @ Cov_drop sink Cov h → v {
     ( mem_forget h )
     ( rcbox_release [CovImpl] # i . h ctl )
 }
 
-unsafe
-
-@ __Cov_ptr Cov h → *CovImpl { ^ ( rcbox_ptr [CovImpl] # i . h ctl ) }
+unsafe @ __Cov_ptr Cov h → *CovImpl { ^ ( rcbox_ptr [CovImpl] # i . h ctl ) }
 
 // How many coverage objects were folded in.
-unsafe
-
-@ cov_objects Cov c__h → i {
+unsafe @ cov_objects Cov c__h → i {
     : *CovImpl c ( __Cov_ptr c__h )
     ^ . c objects
 }
@@ -84,9 +78,7 @@ unsafe
     i funcs_hit
 }
 
-unsafe
-
-@ cov_new → Cov {
+unsafe @ cov_new → Cov {
     : i c__box ( rcbox_zero [CovImpl] )
     : *CovImpl c ( rcbox_ptr [CovImpl] c__box )
     = . c files ( vec_new [CovFile] )
@@ -110,16 +102,12 @@ unsafe
     } {}
 }
 
-unsafe
-
-@ cov_file_count Cov c__h → i {
+unsafe @ cov_file_count Cov c__h → i {
     : *CovImpl c ( __Cov_ptr c__h )
     ^ ( vec_len [CovFile] . c files )
 }
 
-unsafe
-
-@ cov_file_path Cov c__h i idx → s {
+unsafe @ cov_file_path Cov c__h i idx → s {
     : *CovImpl c ( __Cov_ptr c__h )
     ^ ?? ( vec_get [CovFile] . c files idx ) {
         T f → ( string_data . f path )
@@ -130,9 +118,7 @@ unsafe
 // The row for `path`, created when this is the first object to mention it.
 @ cov_file_idx Cov c__h s path → i { ^ ( __cov_file_idx ( __Cov_ptr c__h ) path ) }
 
-unsafe
-
-@ __cov_file_idx * CovImpl c s path → i {
+unsafe @ __cov_file_idx * CovImpl c s path → i {
     : i n ( vec_len [CovFile] . c files )
     : ~ i i 0
     ~ < i n {
@@ -154,9 +140,7 @@ unsafe
 
 // ── Folding one object in ────────────────────────────────────────
 
-unsafe
-
-@ cov_add_object Cov c__h GcovObj o → v {
+unsafe @ cov_add_object Cov c__h GcovObj o → v {
     : *CovImpl c ( __Cov_ptr c__h )
     : i nf ( gcov_file_count o )
     : ~ i src 0
@@ -168,9 +152,7 @@ unsafe
     = . c objects + 1 . c objects
 }
 
-unsafe
-
-@ __cov_add_file * CovImpl c GcovObj o LineTab t i src → v {
+unsafe @ __cov_add_file * CovImpl c GcovObj o LineTab t i src → v {
     : i fidx ( __cov_file_idx c ( gcov_file_path o src ) )
     ?? ( vec_get [CovFile] . c files fidx ) {
         T f → {
@@ -264,9 +246,7 @@ unsafe
 // the package's coverage would drown the package: the number a maintainer
 // acts on is the coverage of the code they wrote.
 
-unsafe
-
-@ cov_keep_only Cov c__h ( Vec String ) prefixes → v {
+unsafe @ cov_keep_only Cov c__h ( Vec String ) prefixes → v {
     : *CovImpl c ( __Cov_ptr c__h )
     ? == 0 ( vec_len [String] prefixes ) { ^ v } {}
     : ( Vec CovFile ) keep ( vec_new [CovFile] )
@@ -312,9 +292,7 @@ unsafe
 }
 
 // Order the report the way a person reads it: by path.
-unsafe
-
-@ cov_sort Cov c__h → v {
+unsafe @ cov_sort Cov c__h → v {
     : *CovImpl c ( __Cov_ptr c__h )
     : i n ( vec_len [CovFile] . c files )
     : ~ i i 1
@@ -336,9 +314,7 @@ unsafe
 
 // ── Reading the model back ───────────────────────────────────────
 
-unsafe
-
-@ cov_file_stat Cov c__h i idx → CovStat {
+unsafe @ cov_file_stat Cov c__h i idx → CovStat {
     : *CovImpl c ( __Cov_ptr c__h )
     : ~ i lf 0
     : ~ i lh 0
@@ -380,9 +356,7 @@ unsafe
     ^ @ CovStat { lf lh bf bh ff fh }
 }
 
-unsafe
-
-@ cov_total Cov c__h → CovStat {
+unsafe @ cov_total Cov c__h → CovStat {
     : *CovImpl c ( __Cov_ptr c__h )
     : ~ i lf 0
     : ~ i lh 0
@@ -405,9 +379,7 @@ unsafe
     ^ @ CovStat { lf lh bf bh ff fh }
 }
 
-unsafe
-
-@ cov_max_line Cov c__h i idx → i {
+unsafe @ cov_max_line Cov c__h i idx → i {
     : *CovImpl c ( __Cov_ptr c__h )
     ^ ?? ( vec_get [CovFile] . c files idx ) {
         T f → ? > ( vec_len [i] . f exists ) 0 - ( vec_len [i] . f exists ) 1 0
@@ -415,9 +387,7 @@ unsafe
     }
 }
 
-unsafe
-
-@ cov_line_exists Cov c__h i idx i line → b {
+unsafe @ cov_line_exists Cov c__h i idx i line → b {
     : *CovImpl c ( __Cov_ptr c__h )
     ^ ?? ( vec_get [CovFile] . c files idx ) {
         T f → != 0 ( __cov_at . f exists line )
@@ -425,9 +395,7 @@ unsafe
     }
 }
 
-unsafe
-
-@ cov_line_count Cov c__h i idx i line → i {
+unsafe @ cov_line_count Cov c__h i idx i line → i {
     : *CovImpl c ( __Cov_ptr c__h )
     ^ ?? ( vec_get [CovFile] . c files idx ) {
         T f → ( __cov_at . f count line )
@@ -435,9 +403,7 @@ unsafe
     }
 }
 
-unsafe
-
-@ cov_branch_rows Cov c__h i idx → i {
+unsafe @ cov_branch_rows Cov c__h i idx → i {
     : *CovImpl c ( __Cov_ptr c__h )
     ^ ?? ( vec_get [CovFile] . c files idx ) {
         T f → / ( vec_len [i] . f branches ) CBR_W
@@ -445,9 +411,7 @@ unsafe
     }
 }
 
-unsafe
-
-@ cov_branch_field Cov c__h i idx i row i field → i {
+unsafe @ cov_branch_field Cov c__h i idx i row i field → i {
     : *CovImpl c ( __Cov_ptr c__h )
     ^ ?? ( vec_get [CovFile] . c files idx ) {
         T f → ( __cov_at . f branches + * row CBR_W field )
@@ -455,9 +419,7 @@ unsafe
     }
 }
 
-unsafe
-
-@ cov_fn_rows Cov c__h i idx → i {
+unsafe @ cov_fn_rows Cov c__h i idx → i {
     : *CovImpl c ( __Cov_ptr c__h )
     ^ ?? ( vec_get [CovFile] . c files idx ) {
         T f → ( vec_len [CovFn] . f funcs )
@@ -465,9 +427,7 @@ unsafe
     }
 }
 
-unsafe
-
-@ cov_fn_name Cov c__h i idx i row → s {
+unsafe @ cov_fn_name Cov c__h i idx i row → s {
     : *CovImpl c ( __Cov_ptr c__h )
     ^ ?? ( vec_get [CovFile] . c files idx ) {
         T f → ?? ( vec_get [CovFn] . f funcs row ) {
@@ -478,9 +438,7 @@ unsafe
     }
 }
 
-unsafe
-
-@ cov_fn_line Cov c__h i idx i row → i {
+unsafe @ cov_fn_line Cov c__h i idx i row → i {
     : *CovImpl c ( __Cov_ptr c__h )
     ^ ?? ( vec_get [CovFile] . c files idx ) {
         T f → ?? ( vec_get [CovFn] . f funcs row ) { T e → . e line F _ → 0 }
@@ -488,9 +446,7 @@ unsafe
     }
 }
 
-unsafe
-
-@ cov_fn_called Cov c__h i idx i row → i {
+unsafe @ cov_fn_called Cov c__h i idx i row → i {
     : *CovImpl c ( __Cov_ptr c__h )
     ^ ?? ( vec_get [CovFile] . c files idx ) {
         T f → ?? ( vec_get [CovFn] . f funcs row ) { T e → . e called F _ → 0 }

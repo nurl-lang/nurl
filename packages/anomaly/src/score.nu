@@ -134,9 +134,7 @@ $ `deps/gpukit/src/gpukit.nu`
 
 // Release the device + kernel cache (tests call this so leak checkers see a
 // closed shop; a long-running service just keeps the singleton).
-unsafe
-
-@ anom_gpu_close → v {
+unsafe @ anom_gpu_close → v {
     ? == g_ag_state 1 { ( gk_close @ GpuKit { # s g_ag_kit } ) } {}  // the global's owner
     = g_ag_state 0
     = g_ag_kit 0
@@ -176,9 +174,7 @@ unsafe
 
 // Accelerated path. None when the accelerator is unavailable or any step
 // fails (caller falls back; failures after a good probe are reported).
-unsafe
-
-@ anom_scores_gpu VerModel vm ( Vec f ) scaled i n_rows i n_cols → ?( Vec f ) {
+unsafe @ anom_scores_gpu VerModel vm ( Vec f ) scaled i n_rows i n_cols → ?( Vec f ) {
     ? ( __ag_ensure ) {} { ^ @ ?( Vec f ) { F } }
     : IForest fo . vm forest
     : i n_trees ( vec_len [i] . fo roots )
@@ -246,9 +242,7 @@ unsafe
 
 // decision_function for every row: -score - offset, same expression as
 // anom_decision.
-unsafe
-
-@ anom_decisions VerModel vm ( Vec f ) scaled i n_rows i n_cols → ( Vec f ) {
+unsafe @ anom_decisions VerModel vm ( Vec f ) scaled i n_rows i n_cols → ( Vec f ) {
     : ( Vec f ) ss ( anom_scores vm scaled n_rows n_cols )
     : *f sp ( vec_data [f] ss )
     : f off . vm offset
@@ -263,9 +257,7 @@ unsafe
 // ── Percentile (numpy 'linear' interpolation, for contamination) ──────
 
 // q in [0,1] over an ASCENDING-sorted vector.
-unsafe
-
-@ _an_percentile ( Vec f ) sorted f q → f {
+unsafe @ _an_percentile ( Vec f ) sorted f q → f {
     : i n ( vec_len [f] sorted )
     ? <= n 0 { ^ 0.0 } {}
     : *f dp ( vec_data [f] sorted )
@@ -284,9 +276,7 @@ unsafe
 // `cfg.max_samples` is clamped to the row count; contamination < 0 = "auto"
 // (offset pinned at -0.5), else offset_ is the 100*c percentile of the
 // training set's score_samples — so `predict == -1` flags ~c of training.
-unsafe
-
-@ anom_train_version ( Vec f ) scaled i n_rows i n_cols VerCfg cfg → VerModel {
+unsafe @ anom_train_version ( Vec f ) scaled i n_rows i n_cols VerCfg cfg → VerModel {
     : ~ i samp . cfg max_samples
     ? > samp n_rows { = samp n_rows } {}
     : IForest fo ( iforest_train scaled n_rows n_cols . cfg n_estimators samp ANOM_SEED )
@@ -322,9 +312,7 @@ unsafe
 // Fit a scaler over the raw matrix, train one version on the standardised
 // copy, then score every row. Anomaly ⇔ decision_function <= -cfg.margin
 // (margin 0 reproduces the reference's predict == -1 batch rule).
-unsafe
-
-@ anomaly_batch ( Vec f ) data i n_rows i n_cols VerCfg cfg → BatchReport {
+unsafe @ anomaly_batch ( Vec f ) data i n_rows i n_cols VerCfg cfg → BatchReport {
     : Scaler sc ( scaler_fit data n_rows n_cols )
     : ( Vec f ) scaled ( vec_clone [f] data )
     ( scaler_apply_matrix sc scaled n_rows n_cols )

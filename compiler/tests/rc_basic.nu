@@ -2,9 +2,7 @@
 
 $ `stdlib/std/rc.nu`
 
-unsafe
-
-@ main → i {
+unsafe @ main → i {
     // rc_new starts the count at 1.
     : ( Rc i ) r ( rc_new [i] 1000 )
     ( nurl_print `count=` ) ( nurl_print ( nurl_str_int ( rc_strong [i] r ) ) )

@@ -14,9 +14,7 @@ $ `stdlib/std/bytes.nu`
 
 & `libc` @ nurl_free_count → i
 
-unsafe
-
-@ live → i { ^ - ( nurl_alloc_count ) ( nurl_free_count ) }
+unsafe @ live → i { ^ - ( nurl_alloc_count ) ( nurl_free_count ) }
 
 @ put_v inout ( Vec u ) slot sink ( Vec u ) v → v { = slot v }
 

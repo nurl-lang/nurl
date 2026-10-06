@@ -70,31 +70,23 @@ $ `stdlib/core/rcbox.nu`
 // every copy is the same roster, and the last owner releases it.
 : Roster { s ctl }
 
-unsafe
-
-@ Roster_share Roster h → Roster { ^ @ Roster { # s ( rcbox_share # i . h ctl ) } }
+unsafe @ Roster_share Roster h → Roster { ^ @ Roster { # s ( rcbox_share # i . h ctl ) } }
 
 @ Roster_drop sink Roster h → v {
     ( mem_forget h )
     ( rcbox_release [RosterImpl] # i . h ctl )
 }
 
-unsafe
+unsafe @ __Roster_ptr Roster h → *RosterImpl { ^ ( rcbox_ptr [RosterImpl] # i . h ctl ) }
 
-@ __Roster_ptr Roster h → *RosterImpl { ^ ( rcbox_ptr [RosterImpl] # i . h ctl ) }
-
-unsafe
-
-@ roster_new → Roster {
+unsafe @ roster_new → Roster {
     ^ @ Roster { # s ( rcbox_new [RosterImpl] @ RosterImpl { ( vec_new [Member] ) } ) }
 }
 
 // Let go of `r` now rather than at the end of its owner's scope (optional).
 @ roster_free sink Roster r → v {}
 
-unsafe
-
-@ roster_has Roster r__h ( Vec u ) pubkey → b {
+unsafe @ roster_has Roster r__h ( Vec u ) pubkey → b {
     : *RosterImpl r ( __Roster_ptr r__h )
     : i n ( vec_len [Member] . r members )
     : ~ b found F : ~ i k 0
@@ -105,17 +97,13 @@ unsafe
     ^ found
 }
 
-unsafe
-
-@ roster_count Roster r__h → i {
+unsafe @ roster_count Roster r__h → i {
     : *RosterImpl r ( __Roster_ptr r__h )
     ^ ( vec_len [Member] . r members )
 }
 
 // Fold a worker into the roster + ring, once. Returns T if newly added.
-unsafe
-
-@ roster_add Roster r__h Ring ring ( Vec u ) pubkey i id i vnodes → b {
+unsafe @ roster_add Roster r__h Ring ring ( Vec u ) pubkey i id i vnodes → b {
     ? ( roster_has r__h pubkey ) { ^ F } {}
     : *RosterImpl r ( __Roster_ptr r__h )
     : ( Vec u ) cp ( vec_with_cap [u] ( vec_len [u] pubkey ) )

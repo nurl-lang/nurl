@@ -105,9 +105,7 @@ $ `src/dynamic.nu`
     ^ + 20.0 # f % # i k 8
 }
 
-unsafe
-
-@ test_sequence Store st → v {
+unsafe @ test_sequence Store st → v {
     : Model mo__h ( model_open_at st `tvseq` T0 )
     : *ModelImpl mo ( _Model_ptr mo__h )
     ( model_set_limits mo__h 20 150000 )
@@ -190,9 +188,7 @@ unsafe
     ( check >= . p n_versions 4 `absent: the other versions still answer` )
 }
 
-unsafe
-
-@ test_config Store st → v {
+unsafe @ test_config Store st → v {
     // Round-trip: set 8/2, serialise, parse back.
     : Model mo ( model_open_at st `tvcfg` T0 )
     : b _w ( model_set_version_window mo `timevector` 8 2 )

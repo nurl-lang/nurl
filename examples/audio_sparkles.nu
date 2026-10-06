@@ -71,9 +71,7 @@
     ^ | | * r 65536 * g 256 b
 }
 
-unsafe
-
-@ main → i {
+unsafe @ main → i {
     // Particle pools: parallel i64 arrays. Positions are in framebuffer
     // coords. vx/vy are pixels/frame × 100 (fixed-point Q8-ish).
     : *i px # *i ( malloc * MAX_PART 8 )

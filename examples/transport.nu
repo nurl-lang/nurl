@@ -21,9 +21,7 @@ $ `stdlib/net/transport.nu`
 
 @ group_id → ( Vec u ) { : ( Vec u ) v ( vec_new [u] ) : ~ i k 0 ~ < k 32 { ( vec_push [u] v # u + 200 k ) = k + k 1 } ^ v }
 
-unsafe
-
-@ frame s text i n → ( Vec u ) { : ( Vec u ) v ( vec_new [u] ) : *u sp # *u text : ~ i k 0 ~ < k n { ( vec_push [u] v # u . sp k ) = k + k 1 } ^ v }
+unsafe @ frame s text i n → ( Vec u ) { : ( Vec u ) v ( vec_new [u] ) : *u sp # *u text : ~ i k 0 ~ < k n { ( vec_push [u] v # u . sp k ) = k + k 1 } ^ v }
 
 @ main → i {
     : i argc ( env_args_count )

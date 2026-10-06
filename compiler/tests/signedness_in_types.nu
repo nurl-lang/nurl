@@ -19,16 +19,12 @@
 // Case 3: a generic over `* T` instantiated at `[ u64 ]` loads its
 // element as u64 (the raw type rides the monomorph) and divides
 // unsigned inside the generic body.
-unsafe
-
-@ first_half [T] * T p → T {
+unsafe @ first_half [T] * T p → T {
     : T x . p 0
     ^ / x # T 2
 }
 
-unsafe
-
-@ main → i {
+unsafe @ main → i {
     // Case 1: field-0 cast zero-extends an unsigned byte.
     : Wrap w @ Wrap { # u 200 1 }
     ( nurl_print ( nurl_str_int # i64 w ) ) ( nurl_print `\n` )

@@ -50,9 +50,7 @@ $ `grep.nu`
     ^ F
 }
 
-unsafe
-
-@ __test_unary s op s arg → b {
+unsafe @ __test_unary s op s arg → b {
     : i c ( nurl_str_get op 1 )
     ? == c 122 { ^ == ( nurl_str_len arg ) 0 } {}
     ? == c 110 { ^ != ( nurl_str_len arg ) 0 } {}
@@ -292,9 +290,7 @@ unsafe
 // `S : REGEX` — an anchored match; the result is the match length (or
 // the first captured group, which this engine does not offer, so the
 // length is what it always returns).
-unsafe
-
-@ __expr_match ( Vec String ) t → String {
+unsafe @ __expr_match ( Vec String ) t → String {
     : ~ String acc ( __expr_atom t )
     ~ & > ( __expr_left t ) 0 ( bx_streq ( __expr_tok t g_expr_pos ) `:` ) {
         = g_expr_pos + g_expr_pos 1
@@ -449,9 +445,7 @@ unsafe
 
 // ── xargs ─────────────────────────────────────────────────────────
 
-unsafe
-
-@ __xargs_run ( Vec String ) cmd b trace → i {
+unsafe @ __xargs_run ( Vec String ) cmd b trace → i {
     : i n ( vec_len [String] cmd )
     ? == n 0 { ^ 0 } {}
     ? trace {
@@ -488,9 +482,7 @@ unsafe
 // Split stdin into items: whitespace-separated, or NUL-separated with
 // -0. Quoting is honoured for the whitespace form, because `xargs` is
 // most often fed `ls` output and a quoted name must survive.
-unsafe
-
-@ __xargs_items b nul ( Vec String ) out → v {
+unsafe @ __xargs_items b nul ( Vec String ) out → v {
     : ( Vec u ) data ( read_all_stdin_bytes )
     : i n ( vec_len [u] data )
     : *u p ( vec_data [u] data )

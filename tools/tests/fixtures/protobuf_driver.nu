@@ -3,7 +3,7 @@
 $ `stdlib/ext/protobuf.nu`
 $ `stdlib/core/io.nu`
 
-@ transcode inout ProtoReader r ( Vec u ) out → !v ProtoError {
+unsafe @ transcode inout ProtoReader r ( Vec u ) out → !v ProtoError {
     ~ ( proto_more r ) {
         : ProtoReader before r
         : ProtoTag tag \ ( proto_read_tag r )

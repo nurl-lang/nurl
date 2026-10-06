@@ -61,51 +61,37 @@ $ `stdlib/core/rcbox.nu`
 // every copy is the same state, and the last owner releases it.
 : LineTab { s ctl }
 
-unsafe
-
-@ LineTab_share LineTab h → LineTab { ^ @ LineTab { # s ( rcbox_share # i . h ctl ) } }
+unsafe @ LineTab_share LineTab h → LineTab { ^ @ LineTab { # s ( rcbox_share # i . h ctl ) } }
 
 @ LineTab_drop sink LineTab h → v {
     ( mem_forget h )
     ( rcbox_release [LineTabImpl] # i . h ctl )
 }
 
-unsafe
-
-@ __LineTab_ptr LineTab h → *LineTabImpl { ^ ( rcbox_ptr [LineTabImpl] # i . h ctl ) }
+unsafe @ __LineTab_ptr LineTab h → *LineTabImpl { ^ ( rcbox_ptr [LineTabImpl] # i . h ctl ) }
 
 // The table's columns, lent: they live as long as the LineTab does.
-unsafe
-
-@ linetab_maxline LineTab t__h → i {
+unsafe @ linetab_maxline LineTab t__h → i {
     : *LineTabImpl t ( __LineTab_ptr t__h )
     ^ . t maxline
 }
 
-unsafe
-
-@ linetab_exists LineTab t__h → ( Vec i ) {
+unsafe @ linetab_exists LineTab t__h → ( Vec i ) {
     : *LineTabImpl t ( __LineTab_ptr t__h )
     ^ . t exists
 }
 
-unsafe
-
-@ linetab_count LineTab t__h → ( Vec i ) {
+unsafe @ linetab_count LineTab t__h → ( Vec i ) {
     : *LineTabImpl t ( __LineTab_ptr t__h )
     ^ . t count
 }
 
-unsafe
-
-@ linetab_br LineTab t__h → ( Vec i ) {
+unsafe @ linetab_br LineTab t__h → ( Vec i ) {
     : *LineTabImpl t ( __LineTab_ptr t__h )
     ^ . t br
 }
 
-unsafe
-
-@ linetab_fnrow LineTab t__h → ( Vec i ) {
+unsafe @ linetab_fnrow LineTab t__h → ( Vec i ) {
     : *LineTabImpl t ( __LineTab_ptr t__h )
     ^ . t fnrow
 }
@@ -144,9 +130,7 @@ unsafe
 // Let go of `t` now rather than at the end of its owner's scope.
 @ linetab_free sink LineTab t → v {}
 
-unsafe
-
-@ lines_build GcovObj o i src → LineTab {
+unsafe @ lines_build GcovObj o i src → LineTab {
     : i t__box ( rcbox_zero [LineTabImpl] )
     : *LineTabImpl t ( rcbox_ptr [LineTabImpl] t__box )
     = . t src src
@@ -208,9 +192,7 @@ unsafe
     }
 }
 
-unsafe
-
-@ __ln_add_occ * LineTabImpl t i line i fi i blk → v {
+unsafe @ __ln_add_occ * LineTabImpl t i line i fi i blk → v {
     : i slot / ( vec_len [i] . t occ ) LOC_W
     ( vec_push [i] . t occ line )
     ( vec_push [i] . t occ fi )
@@ -225,17 +207,13 @@ unsafe
     ? > line . t maxline { = . t maxline line } {}
 }
 
-unsafe
-
-@ __ln_occ * LineTabImpl t i slot i field → i {
+unsafe @ __ln_occ * LineTabImpl t i slot i field → i {
     ^ ( __ln_at . t occ + * slot LOC_W field )
 }
 
 // Is (fi, blk) one of the blocks on this line? The membership test is what
 // separates traffic entering the line from traffic already inside it.
-unsafe
-
-@ __ln_on_line * LineTabImpl t i line i fi i blk → b {
+unsafe @ __ln_on_line * LineTabImpl t i line i fi i blk → b {
     : ~ i slot ( __ln_at . t head line )
     ~ > slot 0 {
         : i s - slot 1
@@ -245,9 +223,7 @@ unsafe
     ^ F
 }
 
-unsafe
-
-@ __ln_resolve GcovObj o * LineTabImpl t → v {
+unsafe @ __ln_resolve GcovObj o * LineTabImpl t → v {
     : ~ i line 1
     ~ <= line . t maxline {
         ? != 0 ( __ln_at . t head line ) {
@@ -258,9 +234,7 @@ unsafe
     }
 }
 
-unsafe
-
-@ __ln_line_count GcovObj o * LineTabImpl t i line → i {
+unsafe @ __ln_line_count GcovObj o * LineTabImpl t i line → i {
     : ~ i total 0
     : ~ i slot ( __ln_at . t head line )
     ~ > slot 0 {
@@ -300,9 +274,7 @@ unsafe
 // all of them: zero means the decision was never reached, which reads very
 // differently from "reached, and always went the same way".
 
-unsafe
-
-@ __ln_line_branches GcovObj o * LineTabImpl t i line → v {
+unsafe @ __ln_line_branches GcovObj o * LineTabImpl t i line → v {
     : ~ i slot ( __ln_at . t head line )
     ~ > slot 0 {
         : i s - slot 1
@@ -351,9 +323,7 @@ unsafe
 // was drained. When no cycle is left, the total is the number of times the
 // line went round.
 
-unsafe
-
-@ __ln_cycles GcovObj o * LineTabImpl t i line → i {
+unsafe @ __ln_cycles GcovObj o * LineTabImpl t i line → i {
     // Collect the line's distinct blocks as the nodes of a sub-graph.
     : ( Vec i ) nd_fn ( vec_new [i] )
     : ( Vec i ) nd_blk ( vec_new [i] )

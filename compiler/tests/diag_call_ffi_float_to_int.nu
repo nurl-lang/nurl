@@ -5,7 +5,7 @@
 // garbage out, no diagnostic anywhere.
 & `c` @ labs i n → i
 
-@ main → i {
+unsafe @ main → i {
     : f y 1.5
     ^ ( labs y )
 }

@@ -39,14 +39,14 @@ $ `stdlib/core/string.nu`
 : ~ i g_p01_ddr 0  // $0000 CPU-port data-direction register
 : ~ i g_p01_data 0  // $0001 CPU-port data latch (banking bits 0-2)
 
-@ mem_raw → *u { ^ # *u g_mem }
+unsafe @ mem_raw → *u { ^ # *u g_mem }
 
 // Flat-RAM access (the byte under any ROM is always RAM).
-@ ram_rd i a → i { : *u m ( mem_raw ) ^ & # i . m & a 0xFFFF 255 }
+unsafe @ ram_rd i a → i { : *u m ( mem_raw ) ^ & # i . m & a 0xFFFF 255 }
 
-@ ram_wr i a i val → v { : *u m ( mem_raw ) = . m & a 0xFFFF # u & val 0xFF }
+unsafe @ ram_wr i a i val → v { : *u m ( mem_raw ) = . m & a 0xFFFF # u & val 0xFF }
 
-@ rom_rd s rom i off → i { : *u r # *u rom ^ & # i . r off 255 }
+unsafe @ rom_rd s rom i off → i { : *u r # *u rom ^ & # i . r off 255 }
 
 // The $0001 read: output bits return the latch, input bits float high.
 @ port01_read → i { ^ & | & g_p01_data g_p01_ddr & ^^ g_p01_ddr 0xFF 0xFF 0xFF }
@@ -308,14 +308,14 @@ $ `stdlib/core/string.nu`
 @ cpu_pc → i { ^ pc }
 
 // Load an up-to-64 KiB image into memory at `base`.
-@ mem_load * u src i n i base → v {
+unsafe @ mem_load * u src i n i base → v {
     : *u m ( mem_raw )
     : ~ i i 0
     ~ < i n { = . m & + base i 0xFFFF . src i = i + i 1 }
 }
 
 // Allocate the 64 KiB address space (call once before loading an image).
-@ mem_alloc → v { = g_mem ( nurl_zalloc 65536 ) }
+unsafe @ mem_alloc → v { = g_mem ( nurl_zalloc 65536 ) }
 
 // ── Single instruction step ─────────────────────────────────────────
 // Fetch + decode + execute one instruction; returns the T-cycles used.
@@ -573,12 +573,12 @@ $ `stdlib/core/string.nu`
 : ~ i g_restore 0  // RESTORE key held (wired straight to the NMI line)
 : ~ i g_nmi_prev 0  // previous NMI-line level (NMI is edge-triggered)
 
-@ vreg i r → i { : *u v # *u g_vicreg ^ & # i . v & r 0x3F 255 }
+unsafe @ vreg i r → i { : *u v # *u g_vicreg ^ & # i . v & r 0x3F 255 }
 
 @ cia2_pra → i { ^ c2_pra }
 
 // ── Keyboard matrix read (port B) ───────────────────────────────────
-@ kb_read → i {
+unsafe @ kb_read → i {
     : *u kb # *u g_kb
     : ~ i res 0xFF
     : ~ i col 0
@@ -713,7 +713,7 @@ $ `stdlib/core/string.nu`
 @ nmi_line → i { ^ ? != 0 | ( cia2_nmi ) g_restore 1 0 }
 
 // ── VIC-II / SID register access ────────────────────────────────────
-@ vic_read i reg → i {
+unsafe @ vic_read i reg → i {
     : *u v # *u g_vicreg
     ? == reg 0x11 { ^ | & & # i . v 0x11 255 0x7F << & >> g_raster 8 1 7 } {}
     ? == reg 0x12 { ^ & g_raster 0xFF } {}
@@ -726,12 +726,12 @@ $ `stdlib/core/string.nu`
     ^ & # i . v reg 255
 }
 // VIC raster/collision IRQ asserted = any latched source that is enabled.
-@ vic_irq → i {
+unsafe @ vic_irq → i {
     : *u v # *u g_vicreg
     ^ ? != 0 & & # i . v 0x19 # i . v 0x1A 0x0F 1 0
 }
 
-@ vic_write i reg i b → v {
+unsafe @ vic_write i reg i b → v {
     : *u v # *u g_vicreg
     ? == reg 0x19 {
         = . v 0x19 # u & & # i . v 0x19 255 ^^ b 0xFF  // writing 1 acks an IRQ latch bit
@@ -740,14 +740,14 @@ $ `stdlib/core/string.nu`
     }
 }
 
-@ sid_read i reg → i {
+unsafe @ sid_read i reg → i {
     : *u s # *u g_sidreg
     ? == reg 0x1B { ^ & >> ( peek_acc 2 ) 16 0xFF } {}  // OSC3 = voice-3 waveform hi byte
     ? == reg 0x1C { ^ & ( peek_env 2 ) 0xFF } {}  // ENV3 = voice-3 envelope
     ^ & # i . s reg 255
 }
 
-@ sid_write i reg i b → v { : *u s # *u g_sidreg = . s reg # u b }
+unsafe @ sid_write i reg i b → v { : *u s # *u g_sidreg = . s reg # u b }
 
 // ════════════════════════════════════════════════════════════════════
 //  SID (6581) — 3 voices, ADSR envelopes, tri/saw/pulse/noise. Mixed and
@@ -774,11 +774,11 @@ $ `stdlib/core/string.nu`
 : ~ i g_file_track 0
 : ~ i g_file_sector 0
 
-@ peek_acc i v → i { ^ ( nurl_peek g_v_acc v ) }
+unsafe @ peek_acc i v → i { ^ ( nurl_peek g_v_acc v ) }
 
-@ peek_env i v → i { ^ ( nurl_peek g_v_env v ) }
+unsafe @ peek_env i v → i { ^ ( nurl_peek g_v_env v ) }
 
-@ sreg i off → i { : *u s # *u g_sidreg ^ & # i . s off 255 }
+unsafe @ sreg i off → i { : *u s # *u g_sidreg ^ & # i . s off 255 }
 
 // ADSR rate-counter period (PAL SID clocks) for rate code 0..15.
 @ sid_rate i n → i {
@@ -799,7 +799,7 @@ $ `stdlib/core/string.nu`
     ^ 30
 }
 // 12-bit waveform output for a voice (tri/saw/pulse/noise AND-combined).
-@ sid_wave i v → i {
+unsafe @ sid_wave i v → i {
     : i base * v 7
     : i ctrl ( sreg + base 4 )
     : i acc ( nurl_peek g_v_acc v )
@@ -827,7 +827,7 @@ $ `stdlib/core/string.nu`
 // Emit one mixed stereo sample into the ring. Voices routed through the
 // filter ($D417) feed a Chamberlin state-variable filter (fixed-point,
 // 1/1024); $D418 selects which of LP/BP/HP reaches the output.
-@ sid_emit → v {
+unsafe @ sid_emit → v {
     ? >= g_audio_len g_audio_cap { ^ v } {}
     : i master & ( sreg 0x18 ) 0x0F
     : i v3off & ( sreg 0x18 ) 0x80
@@ -867,7 +867,7 @@ $ `stdlib/core/string.nu`
 }
 
 // Advance all three voices + envelopes by `cyc` SID clocks, resampling.
-@ sid_tick i cyc → v {
+unsafe @ sid_tick i cyc → v {
     : ~ i v 0
     ~ < v 3 {
         : i base * v 7
@@ -933,7 +933,7 @@ $ `stdlib/core/string.nu`
     ~ >= g_smp_acc 985248 { = g_smp_acc - g_smp_acc 985248 ( sid_emit ) }
 }
 
-@ sid_reset → v {
+unsafe @ sid_reset → v {
     = g_audio_len 0 = g_smp_acc 0
     = g_f_lp 0 = g_f_bp 0
     : ~ i v 0
@@ -947,7 +947,7 @@ $ `stdlib/core/string.nu`
 }
 
 // ── I/O window dispatch ($D000-$DFFF) ───────────────────────────────
-@ io_read i a → i {
+unsafe @ io_read i a → i {
     ? < a 0xD400 { ^ ( vic_read & a 0x3F ) } {}
     ? < a 0xD800 { ^ ( sid_read & a 0x1F ) } {}
     ? < a 0xDC00 { : *u c # *u g_color ^ | & & # i . c & a 0x3FF 255 0x0F 0xF0 } {}
@@ -956,7 +956,7 @@ $ `stdlib/core/string.nu`
     ^ 0xFF
 }
 
-@ io_write i a i b → v {
+unsafe @ io_write i a i b → v {
     ? < a 0xD400 { ( vic_write & a 0x3F b ) ^ v } {}
     ? < a 0xD800 { ( sid_write & a 0x1F b ) ^ v } {}
     ? < a 0xDC00 { : *u c # *u g_color = . c & a 0x3FF # u & b 0x0F ^ v } {}
@@ -965,7 +965,7 @@ $ `stdlib/core/string.nu`
 }
 
 // ── Video timing: advance the raster line by `cyc` cycles ────────────
-@ vic_tick i cyc → v {
+unsafe @ vic_tick i cyc → v {
     = g_rasdot + g_rasdot cyc
     ~ >= g_rasdot 63 {
         = g_rasdot - g_rasdot 63
@@ -1038,13 +1038,13 @@ $ `stdlib/core/string.nu`
 }
 
 // ── Allocation + ROM loading + boot ─────────────────────────────────
-@ blit_into s dst i n * u src → v {
+unsafe @ blit_into s dst i n * u src → v {
     : *u d # *u dst
     : ~ i i 0
     ~ < i n { = . d i . src i = i + i 1 }
 }
 
-@ c64_alloc → v {
+unsafe @ c64_alloc → v {
     = g_mem ( nurl_zalloc 65536 )
     = g_kernal ( nurl_zalloc 8192 )
     = g_basic ( nurl_zalloc 8192 )
@@ -1098,7 +1098,7 @@ $ `stdlib/core/string.nu`
 // the load address and, for a BASIC-area program ($0801), fix the
 // VARTAB/ARYTAB/STREND pointers so RUN sees the right end-of-program.
 // Returns the load address (0 on a malformed image).
-@ prg_load * u src i n → i {
+unsafe @ prg_load * u src i n → i {
     ? < n 3 { ^ 0 } {}
     : i addr | & # i . src 0 255 << & # i . src 1 255 8
     : ~ i i 2
@@ -1168,7 +1168,7 @@ $ `stdlib/core/string.nu`
     ^ * + sec s 256
 }
 
-@ disk_byte i off → i {
+unsafe @ disk_byte i off → i {
     ? | < off 0 >= off g_disk_size { ^ 0 } {}
     : *u d # *u g_disk
     ^ & # i . d off 255
@@ -1233,7 +1233,7 @@ $ `stdlib/core/string.nu`
     ^ 0
 }
 // Follow the track/sector chain from g_file_track/sector into g_filebuf.
-@ disk_read_file → i {
+unsafe @ disk_read_file → i {
     : ~ i t g_file_track : ~ i s g_file_sector
     : *u d # *u g_filebuf
     : ~ i len 0 : ~ i guard 0
@@ -1250,7 +1250,7 @@ $ `stdlib/core/string.nu`
     ^ len
 }
 
-@ disk_attach * u src i n → v {
+unsafe @ disk_attach * u src i n → v {
     : i cap ? > n 196608 196608 n
     = g_disk_size cap
     : *u d # *u g_disk
@@ -1258,7 +1258,7 @@ $ `stdlib/core/string.nu`
     ~ < i cap { = . d i . src i = i + i 1 }
 }
 // Auto-load + run the first program on the disk (drop-a-.d64 convenience).
-@ disk_autostart → i {
+unsafe @ disk_autostart → i {
     ? == 0 ( disk_find_first ) { ^ 0 } {}
     : i flen ( disk_read_file )
     ? < flen 3 { ^ 0 } {}
@@ -1266,7 +1266,7 @@ $ `stdlib/core/string.nu`
 }
 
 // ── KERNAL LOAD trap ($F4A5) — serve files straight from the image ──
-@ fbuf_byte i i → i { : *u fb # *u g_filebuf ^ & # i . fb i 255 }
+unsafe @ fbuf_byte i i → i { : *u fb # *u g_filebuf ^ & # i . fb i 255 }
 
 @ disk_rts → v { = pc & + ( pull16 ) 1 0xFFFF }
 // 3-letter file-type mnemonic for the directory listing.
@@ -1333,7 +1333,7 @@ $ `stdlib/core/string.nu`
     ( disk_rts )
 }
 
-@ disk_kernal_load → v {
+unsafe @ disk_kernal_load → v {
     : i sec ( rd8 0xB9 )
     : i namelen ( rd8 0xB7 )
     : i nameptr | ( rd8 0xBB ) << ( rd8 0xBC ) 8
@@ -1357,7 +1357,7 @@ $ `stdlib/core/string.nu`
 // ── Rendering: VIC-II → colour-index framebuffer ────────────────────
 // Plot a display pixel and record whether it's "foreground" (set bit /
 // MC high-bit) so bg-priority sprites can hide behind it.
-@ put_px i px i py i c i fg → v {
+unsafe @ put_px i px i py i c i fg → v {
     ? & & >= px 0 < px 384 & >= py 0 < py 272 {
         : *u fb # *u g_fb
         : *u fm # *u g_fg
@@ -1367,19 +1367,19 @@ $ `stdlib/core/string.nu`
     } {}
 }
 // CHARGEN ROM ($1000/$1800 in VIC bank 0) or a RAM character set.
-@ char_bits i cbase i sc i ln → i {
+unsafe @ char_bits i cbase i sc i ln → i {
     : *u cg # *u g_chargen
     ? == cbase 0x1000 { ^ & # i . cg + * sc 8 ln 255 } {}
     ? == cbase 0x1800 { ^ & # i . cg + 0x800 + * sc 8 ln 255 } {}
     ^ ( ram_rd + + cbase * sc 8 ln )
 }
 
-@ line_bg i r i ln → i {
+unsafe @ line_bg i r i ln → i {
     : *u lg # *u g_linebg
     ^ & & # i . lg + 50 + * r 8 ln 255 0x0F
 }
 
-@ render_frame → v {
+unsafe @ render_frame → v {
     : *u fb # *u g_fb
     : *u lb # *u g_lineborder
     : ~ i py 0
@@ -1401,7 +1401,7 @@ $ `stdlib/core/string.nu`
 }
 
 // Standard / multicolour character mode.
-@ render_text i mcm → v {
+unsafe @ render_text i mcm → v {
     : *u cram # *u g_color
     : i d18 ( vreg 0x18 )
     : i scrbase + * & ^^ ( cia2_pra ) 0xFF 3 0x4000 * & >> d18 4 0xF 0x400
@@ -1450,7 +1450,7 @@ $ `stdlib/core/string.nu`
 }
 
 // Hi-res (320x200) / multicolour (160x200) bitmap mode.
-@ render_bitmap i mcm → v {
+unsafe @ render_bitmap i mcm → v {
     : *u cram # *u g_color
     : i d18 ( vreg 0x18 )
     : i vbank * & ^^ ( cia2_pra ) 0xFF 3 0x4000
@@ -1499,7 +1499,7 @@ $ `stdlib/core/string.nu`
 // ── VIC-II hardware sprites (hi-res + multicolour + X/Y expand) ──────
 // Colour-index 255 is the transparent sentinel. With `prio` set the
 // sprite is behind foreground graphics, so skip pixels the bg marked fg.
-@ spr_px i fx i fy i c i s i prio → v {
+unsafe @ spr_px i fx i fy i c i s i prio → v {
     ? & & >= fx 0 < fx 384 & >= fy 0 < fy 272 {
         : *u fb # *u g_fb
         : *u fm # *u g_fg
@@ -1514,7 +1514,7 @@ $ `stdlib/core/string.nu`
     } {}
 }
 
-@ draw_sprite i s i scrbase i vbank i mc i mcm0 i mcm1 i col i xexp i yexp i prio → v {
+unsafe @ draw_sprite i s i scrbase i vbank i mc i mcm0 i mcm1 i col i xexp i yexp i prio → v {
     : *u v # *u g_vicreg
     : i x | & # i . v * s 2 255 ? != 0 & ( vreg 0x10 ) << 1 s 0x100 0
     : i y & # i . v + * s 2 1 255
@@ -1554,7 +1554,7 @@ $ `stdlib/core/string.nu`
     }
 }
 // Draw sprites 7→0 so sprite 0 lands on top (lower number = higher priority).
-@ render_sprites → v {
+unsafe @ render_sprites → v {
     : i en & ( vreg 0x15 ) 0xFF
     ? == en 0 { ^ v } {}
     // Reset per-pixel sprite coverage + this frame's collision accumulators.
@@ -1613,7 +1613,7 @@ $ `stdlib/core/string.nu`
 }
 
 // Native helper: summarise the SID audio ring (non-zero + peak sample).
-@ audio_stats → v {
+unsafe @ audio_stats → v {
     : ~ i nz 0
     : ~ i mx 0
     : ~ i sum 0
@@ -1634,9 +1634,9 @@ $ `stdlib/core/string.nu`
 }
 
 // Native helpers for verifying the VIC framebuffer headlessly.
-@ fb_color_at i x i y → i { : *u fb # *u g_fb ^ & # i . fb + * ? < y 272 y 271 384 ? < x 384 x 383 255 }
+unsafe @ fb_color_at i x i y → i { : *u fb # *u g_fb ^ & # i . fb + * ? < y 272 y 271 384 ? < x 384 x 383 255 }
 
-@ fb_hist → v {
+unsafe @ fb_hist → v {
     : *u fb # *u g_fb
     : ~ i ci 0
     ~ < ci 16 {
@@ -1715,7 +1715,7 @@ $ `stdlib/core/string.nu`
 
 // Copy the 384x272 colour-index framebuffer into the canvas surface (one
 // i64 per pixel; the low 32 bits carry the ARGB value).
-@ blit * i fb → v {
+unsafe @ blit * i fb → v {
     : *u src # *u g_fb
     : ~ i i 0
     ~ < i 104448 {
@@ -1725,14 +1725,14 @@ $ `stdlib/core/string.nu`
 }
 
 // Pull a fixed-size ROM bank from the host into a NURL buffer.
-@ pull_rom i bank i n → ( Vec u ) {
+unsafe @ pull_rom i bank i n → ( Vec u ) {
     : ( Vec u ) buf ( vec_with_cap [u] n )
     : ~ i i 0
     ~ < i n { ( vec_push [u] buf # u ( host_rom_byte bank i ) ) = i + i 1 }
     ^ buf
 }
 
-@ main → i {
+unsafe @ main → i {
     ( c64_alloc )
     // Load the three ROMs from the host, then cold-boot.
     : ( Vec u ) kbuf ( pull_rom 0 8192 ) ( load_kernal ( vec_data [u] kbuf ) 8192 )

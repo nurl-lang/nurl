@@ -39,7 +39,7 @@ $ `stdlib/core/vec.nu`
 
 @ audio_channels → i { ^ 1 }
 
-@ __aud_open i stream → s {
+unsafe @ __aud_open i stream → s {
     : ( Vec u ) hp ( vec_with_cap [u] 8 )
     : ~ i z 0 ~ < z 8 { ( vec_push [u] hp # u 0 ) = z + z 1 }
     : i rc ( snd_pcm_open ( vec_data [u] hp ) `default` stream 0 )
@@ -59,10 +59,10 @@ $ `stdlib/core/vec.nu`
 
 @ audio_capture_open → s { ^ ( __aud_open ( __snd_stream_capture ) ) }
 
-@ audio_close s pcm → v { ? != # i pcm 0 { ( snd_pcm_drain pcm ) ( snd_pcm_close pcm ) } {} }
+unsafe @ audio_close s pcm → v { ? != # i pcm 0 { ( snd_pcm_drain pcm ) ( snd_pcm_close pcm ) } {} }
 
 // Play one PCM frame (Vec u of LE int16). No-op on a null handle.
-@ audio_play s pcm ( Vec u ) frame → v {
+unsafe @ audio_play s pcm ( Vec u ) frame → v {
     ? == # i pcm 0 { ^ v } {}
     : i frames / ( vec_len [u] frame ) 2
     ? <= frames 0 { ^ v } {}
@@ -72,7 +72,7 @@ $ `stdlib/core/vec.nu`
 
 // Capture `frames` samples → PCM (Vec u, 2*frames bytes). Empty on null handle
 // (the app fills synth audio in that case) or on a short read.
-@ audio_capture s pcm i frames → ( Vec u ) {
+unsafe @ audio_capture s pcm i frames → ( Vec u ) {
     ? == # i pcm 0 { ^ ( vec_new [u] ) } {}
     : ( Vec u ) buf ( vec_with_cap [u] * frames 2 )
     : ~ i z 0 ~ < z * frames 2 { ( vec_push [u] buf # u 0 ) = z + z 1 }

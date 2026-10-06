@@ -75,9 +75,7 @@ $ `deps/gpukit/src/dev.nu`
 
 // Compare a device node against the CPU tape: 0 = bitwise equal, else the
 // worst relative difference (for the trans tier's CUDA tolerance).
-unsafe
-
-@ cmp_node GProg pg GTape tp GVar v b grads * u worst → b {
+unsafe @ cmp_node GProg pg GTape tp GVar v b grads * u worst → b {
     : Tensor ct ? grads ( grad_of tp v ) ( gvar_value tp v )
     : i n ( vec_len [f] . ct data )
     : ( Vec f ) dv ( vec_with_cap [f] n )
@@ -106,9 +104,7 @@ unsafe
 
 // ── A: the exact tier, every op, bitwise ─────────────────────────────
 
-unsafe
-
-@ exact_tier GpuKit kit → v {
+unsafe @ exact_tier GpuKit kit → v {
     : GTape tp ( tape_new )
     // params
     : ( Vec f ) av ( fillv 12 0.25 0.13 )
@@ -192,9 +188,7 @@ unsafe
 
 // ── B: the transcendental tier ───────────────────────────────────────
 
-unsafe
-
-@ trans_tier GpuKit kit b cpu_backend → v {
+unsafe @ trans_tier GpuKit kit b cpu_backend → v {
     : GTape tp ( tape_new )
     : ( Vec f ) xv ( fillv 12 0.35 0.19 )
     : ( Vec i ) xs ( shp2 3 4 )

@@ -61,9 +61,7 @@ $ `stdlib/core/string.nu`
 }
 
 // A full sign/verify cycle, plus the three ways it must fail.
-unsafe
-
-@ roundtrip s label i set → b {
+unsafe @ roundtrip s label i set → b {
     : ( Vec u ) a ( vec_new [u] )
     : ( Vec u ) b2 ( vec_new [u] )
     : ( Vec u ) c ( vec_new [u] )

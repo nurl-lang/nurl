@@ -114,18 +114,14 @@ $ `stdlib/core/rcbox.nu`
 // every copy is the same engine, and the last owner releases it.
 : Embed { s ctl }
 
-unsafe
-
-@ Embed_share Embed h → Embed { ^ @ Embed { # s ( rcbox_share # i . h ctl ) } }
+unsafe @ Embed_share Embed h → Embed { ^ @ Embed { # s ( rcbox_share # i . h ctl ) } }
 
 @ Embed_drop sink Embed h → v {
     ( mem_forget h )
     ( rcbox_release [EmbedImpl] # i . h ctl )
 }
 
-unsafe
-
-@ __Embed_ptr Embed h → *EmbedImpl { ^ ( rcbox_ptr [EmbedImpl] # i . h ctl ) }
+unsafe @ __Embed_ptr Embed h → *EmbedImpl { ^ ( rcbox_ptr [EmbedImpl] # i . h ctl ) }
 
 @ __em_err s msg → !Embed String {
     ^ @ !Embed String { F ( string_from msg ) }
@@ -148,9 +144,7 @@ unsafe
 // Upload one f32 tensor from the mapping to the device. On any miss or
 // dtype surprise the engine is marked broken and an empty buf returned —
 // nothing runs on a partially-loaded model.
-unsafe
-
-@ __em_up * EmbedImpl e St s2 s name → GkBuf {
+unsafe @ __em_up * EmbedImpl e St s2 s name → GkBuf {
     : i idx ( st_find_tensor s2 name )
     ? >= idx 0 {} { = . e ok F ^ ( gk_buf_none GK_F32 ) }
     ?? ( vec_get [StTensor] ( st_tensors s2 ) idx ) {
@@ -171,9 +165,7 @@ unsafe
 // carved from the arena: a new 128 MB chunk when the current one is full,
 // an exact-size chunk for anything larger (the 1 GB word embedding).
 // 0 = out of device memory.
-unsafe
-
-@ __em_carve * EmbedImpl e i bytes → i {
+unsafe @ __em_carve * EmbedImpl e i bytes → i {
     : i need * / + bytes 255 256 256
     ? > need ( __EM_ARENA_CHUNK ) {
         : GpuBuffer big ( gpu_alloc ( gk_gpu . e kit ) need )
@@ -199,9 +191,7 @@ unsafe
     ^ d
 }
 
-unsafe
-
-@ __em_arena_reset * EmbedImpl e → v {
+unsafe @ __em_arena_reset * EmbedImpl e → v {
     ( vec_clear [GpuBuffer] . e arenao )  // the chunks go back
     ( vec_clear [i] . e arena )
     ( vec_clear [i] . e arenasz )
@@ -246,9 +236,7 @@ unsafe
 // $NURL_GPU_DEVICE override. A named ordinal must BE a CUDA device:
 // falling back to the CPU backend behind an explicit --gpu would be
 // hiding exactly the mistake the flag exists to make loud.
-unsafe
-
-@ embed_open_dev s dir i gpu → !Embed String {
+unsafe @ embed_open_dev s dir i gpu → !Embed String {
     // zeroed: every handle field starts as the null handle, so an early
     // return drops a half-built engine cleanly
     : Embed h @ Embed { # s ( rcbox_zero [EmbedImpl] ) }
@@ -319,9 +307,7 @@ unsafe
 // that `embed_unload` undoes and `embed_reload` redoes. The config and the
 // tokenizer are not touched: they are the engine; the weights are what it
 // holds. `gpu` is the ordinal the caller named at open (-1 = best).
-unsafe
-
-@ __em_load_weights * EmbedImpl e → !v String {
+unsafe @ __em_load_weights * EmbedImpl e → !v String {
     : s dir ( string_data . e dir )
     : i gpu . e gpu
     // device: the one the caller named, else the BEST one — not driver
@@ -405,9 +391,7 @@ unsafe
 // config, tokenizer, the model dir for the reload. Idempotent.
 @ embed_unload Embed e__h → v { ( __em_unload ( __Embed_ptr e__h ) ) }
 
-unsafe
-
-@ __em_unload * EmbedImpl e → v {
+unsafe @ __em_unload * EmbedImpl e → v {
     ( __em_arena_reset e )
     ( vec_clear [EmbedLayer] . e layers )
     ( __em_drop_kit e )
@@ -417,9 +401,7 @@ unsafe
 // The kit leaves the engine and is dropped here: with the arena and the
 // layers already gone it is the last owner of the pool, the kernels and
 // the CUDA context, so they go back now, not when the engine does.
-unsafe
-
-@ __em_drop_kit * EmbedImpl e → v {
+unsafe @ __em_drop_kit * EmbedImpl e → v {
     : GpuKit old . e kit
     ( mem_take old )
     = . e kit @ GpuKit { # s 0 }
@@ -427,17 +409,13 @@ unsafe
 
 // Bring the weights back after embed_unload. F carries the loader's
 // message; the engine stays usable for tokenizing either way.
-unsafe
-
-@ embed_reload Embed e__h → !v String {
+unsafe @ embed_reload Embed e__h → !v String {
     : *EmbedImpl e ( __Embed_ptr e__h )
     ? . e loaded { ^ @ !v String { T 0 } } {}
     ^ ( __em_load_weights e )
 }
 
-unsafe
-
-@ embed_loaded Embed e__h → b {
+unsafe @ embed_loaded Embed e__h → b {
     : *EmbedImpl e ( __Embed_ptr e__h )
     ^ . e loaded
 }
@@ -445,9 +423,7 @@ unsafe
 // Pooling override: mode EM_POOL_CLS | EM_POOL_MEAN, normalize on/off.
 // (cfg is an inline struct; a field write through two levels is not an
 // lvalue in NURL, so the setters rebuild the struct.)
-unsafe
-
-@ embed_set_pooling Embed e__h i mode b normalize → v {
+unsafe @ embed_set_pooling Embed e__h i mode b normalize → v {
     : *EmbedImpl e ( __Embed_ptr e__h )
     : EmbedCfg c . e cfg
     = . e cfg @ EmbedCfg { . c layers . c heads . c dim . c ffn . c vocab . c maxpos . c padid . c eps mode normalize . c maxseq }
@@ -455,9 +431,7 @@ unsafe
 
 // Cap on tokens per text (specials included); clamped to the model's
 // position table.
-unsafe
-
-@ embed_set_maxseq Embed e__h i n → v {
+unsafe @ embed_set_maxseq Embed e__h i n → v {
     : *EmbedImpl e ( __Embed_ptr e__h )
     : EmbedCfg c . e cfg
     : i lim - - . c maxpos . c padid 1
@@ -466,47 +440,35 @@ unsafe
     } {}
 }
 
-unsafe
-
-@ embed_dim Embed e__h → i {
+unsafe @ embed_dim Embed e__h → i {
     : *EmbedImpl e ( __Embed_ptr e__h )
     ^ . . e cfg dim
 }
 
-unsafe
-
-@ embed_ok Embed e__h → b {
+unsafe @ embed_ok Embed e__h → b {
     : *EmbedImpl e ( __Embed_ptr e__h )
     ^ . e ok
 }
 
-unsafe
-
-@ embed_backend Embed e__h → s {
+unsafe @ embed_backend Embed e__h → s {
     : *EmbedImpl e ( __Embed_ptr e__h )
     ? . e loaded { ^ ( gk_backend . e kit ) } { ^ `none` }
 }
 
-unsafe
-
-@ embed_device_name Embed e__h → s {
+unsafe @ embed_device_name Embed e__h → s {
     : *EmbedImpl e ( __Embed_ptr e__h )
     ? . e loaded { ^ ( gk_device_name . e kit ) } { ^ `none (weights unloaded)` }
 }
 
 // Kernels the engine's kit has compiled so far (0 while unloaded) — a
 // server that stopped meeting new shapes stops growing this.
-unsafe
-
-@ embed_kernel_count Embed e__h → i {
+unsafe @ embed_kernel_count Embed e__h → i {
     : *EmbedImpl e ( __Embed_ptr e__h )
     ? . e loaded { ^ ( gk_kernel_count . e kit ) } {}
     ^ 0
 }
 
-unsafe
-
-@ embed_maxseq Embed e__h → i {
+unsafe @ embed_maxseq Embed e__h → i {
     : *EmbedImpl e ( __Embed_ptr e__h )
     ^ . . e cfg maxseq
 }
@@ -588,22 +550,16 @@ unsafe
 }
 
 // y[n,dim] = x[n,in] · W[dim,in]ᵀ + bias — the HF Linear shape.
-unsafe
-
-@ __em_linear * EmbedImpl e GkBuf y GkBuf x GkBuf w GkBuf bb i n i dout i din → b {
+unsafe @ __em_linear * EmbedImpl e GkBuf y GkBuf x GkBuf w GkBuf bb i n i dout i din → b {
     ^ ( gkd_gemm . e kit y x w bb 1 n dout din 1.0 1.0 1 )
 }
 
 // exact-erf GELU, in place semantics via a fresh output buffer
-unsafe
-
-@ __em_gelu * EmbedImpl e GkBuf y GkBuf x → b {
+unsafe @ __em_gelu * EmbedImpl e GkBuf y GkBuf x → b {
     ^ ( gkd_map . e kit `geluerf` `x*0.5f*(1.0f+erff(x*0.70710678f))` y x )
 }
 
-unsafe
-
-@ __em_new * EmbedImpl e i nfloats → GkBuf {
+unsafe @ __em_new * EmbedImpl e i nfloats → GkBuf {
     ^ ( gk_dbuf_new . e kit nfloats GK_F32 )
 }
 
@@ -628,9 +584,7 @@ unsafe
 // CPU backend, or a head width its register tile is not sized for) the
 // composed bmm/softmax/bmm path runs instead, with the same mask added
 // to the scores.
-unsafe
-
-@ __em_attn * EmbedImpl e GkBuf ctx GkBuf qh GkBuf kh GkBuf vh GkBuf mask i n → b {
+unsafe @ __em_attn * EmbedImpl e GkBuf ctx GkBuf qh GkBuf kh GkBuf vh GkBuf mask i n → b {
     : i dim . . e cfg dim
     : i heads . . e cfg heads
     : i hd / dim heads
@@ -670,9 +624,7 @@ unsafe
 
 // One transformer block over hidden[n,dim] (replaces `hid` content by
 // writing into it at the residual+LN steps). Returns F on any failure.
-unsafe
-
-@ __em_block * EmbedImpl e EmbedLayer l GkBuf hid GkBuf mask i n → b {
+unsafe @ __em_block * EmbedImpl e EmbedLayer l GkBuf hid GkBuf mask i n → b {
     : i dim . . e cfg dim
     : i heads . . e cfg heads
     : i hd / dim heads
@@ -731,9 +683,7 @@ unsafe
 // batched split would have baked a fresh NVRTC compile for per
 // (batch, length) pair. `mask` is [bq, np] additive rows, one per
 // sequence.
-unsafe
-
-@ __em_block_x * EmbedImpl e EmbedLayer l GkBuf hid GkBuf mask i bq i np → b {
+unsafe @ __em_block_x * EmbedImpl e EmbedLayer l GkBuf hid GkBuf mask i bq i np → b {
     : i dim . . e cfg dim
     : i heads . . e cfg heads
     : i hd / dim heads
@@ -772,9 +722,7 @@ unsafe
 // Tokenize (Unigram, <s>…</s>) with truncation to cfg.maxseq: the head
 // of the sequence is kept and </s> re-appended, sentence-transformers
 // style.
-unsafe
-
-@ embed_tokenize Embed e__h s text ( Vec i ) out → b {
+unsafe @ embed_tokenize Embed e__h s text ( Vec i ) out → b {
     : *EmbedImpl e ( __Embed_ptr e__h )
     ? ( uni_encode . e tok text T out ) {} { ^ F }
     : i cap . . e cfg maxseq
@@ -791,9 +739,7 @@ unsafe
 
 // The embedding for one text, normalized per the engine's configuration.
 // `out` receives embed_dim floats.
-unsafe
-
-@ embed_encode Embed e__h s text ( Vec f ) out → b {
+unsafe @ embed_encode Embed e__h s text ( Vec f ) out → b {
     : *EmbedImpl e ( __Embed_ptr e__h )
     ^ ( embed_encode_norm e__h text out . . e cfg normalize )
 }
@@ -801,9 +747,7 @@ unsafe
 // The same, with the L2 normalize decided by the caller — a request
 // carrying "normalize": false must not have to reconfigure the engine
 // (and a concurrent server must not be able to observe it doing so).
-unsafe
-
-@ embed_encode_norm Embed e__h s text ( Vec f ) out b normalize → b {
+unsafe @ embed_encode_norm Embed e__h s text ( Vec f ) out b normalize → b {
     : *EmbedImpl e ( __Embed_ptr e__h )
     ? . e ok {} { ^ F }
     : ( Vec i ) ids ( vec_new [i] )
@@ -812,9 +756,7 @@ unsafe
     ^ r
 }
 
-unsafe
-
-@ embed_encode_ids Embed e__h ( Vec i ) ids ( Vec f ) out → b {
+unsafe @ embed_encode_ids Embed e__h ( Vec i ) ids ( Vec f ) out → b {
     : *EmbedImpl e ( __Embed_ptr e__h )
     ^ ( embed_encode_ids_norm e__h ids out . . e cfg normalize )
 }
@@ -824,9 +766,7 @@ unsafe
 // width gkd_attention_ok refuses). Reads ids[from .. from+n) and writes
 // its dim floats into out at row `orow`. Callers hold the device bound
 // and `e` verified.
-unsafe
-
-@ __em_fwd_one * EmbedImpl e ( Vec i ) ids i from i n ( Vec f ) out i orow b normalize → b {
+unsafe @ __em_fwd_one * EmbedImpl e ( Vec i ) ids i from i n ( Vec f ) out i orow b normalize → b {
     ? > n 0 {} { ^ F }
     : i dim . . e cfg dim
     : i padid . . e cfg padid
@@ -941,9 +881,7 @@ unsafe
 // pool (see __em_bucket_b); their rows run the arithmetic and are then
 // pooled by an all-zero weight row and never copied out. Each real
 // text's vector lands in `out` at its ORIGINAL index — ord carries it.
-unsafe
-
-@ __em_fwd_batch * EmbedImpl e ( Vec i ) ids ( Vec i ) offs ( Vec i ) ord i at i take i bq i np b normalize ( Vec f ) out → b {
+unsafe @ __em_fwd_batch * EmbedImpl e ( Vec i ) ids ( Vec i ) offs ( Vec i ) ord i at i take i bq i np b normalize ( Vec f ) out → b {
     : i dim . . e cfg dim
     : i padid . . e cfg padid
     : i rows * bq np
@@ -1104,9 +1042,7 @@ unsafe
 // The CUDA context is thread-local and this may be called from a
 // server's worker rather than the thread that opened the model, so the
 // device is bound to the caller first.
-unsafe
-
-@ embed_encode_batch Embed e__h ( Vec i ) ids ( Vec i ) offs ( Vec f ) out b normalize → b {
+unsafe @ embed_encode_batch Embed e__h ( Vec i ) ids ( Vec i ) offs ( Vec f ) out b normalize → b {
     : *EmbedImpl e ( __Embed_ptr e__h )
     ? . e ok {} { ^ F }
     ? ( gk_bind_thread . e kit ) {} { ^ F }
@@ -1184,9 +1120,7 @@ unsafe
 }
 
 // Forward over one already-tokenized id sequence — a batch of one.
-unsafe
-
-@ embed_encode_ids_norm Embed e__h ( Vec i ) ids ( Vec f ) out b normalize → b {
+unsafe @ embed_encode_ids_norm Embed e__h ( Vec i ) ids ( Vec f ) out b normalize → b {
     : *EmbedImpl e ( __Embed_ptr e__h )
     ? . e ok {} { ^ F }
     : i dim . . e cfg dim

@@ -37,18 +37,18 @@ $ `stdlib/core/vec.nu`
 }
 
 // ── encoder ──────────────────────────────────────────────────────
-@ opus_enc_new → s {
+unsafe @ opus_enc_new → s {
     : ( Vec u ) err ( __obuf 8 )
     : s enc ( opus_encoder_create ( opus_rate ) ( opus_channels ) ( __opus_app_voip ) ( vec_data [u] err ) )
     ( vec_free [u] err )
     ^ enc
 }
 
-@ opus_enc_free sink s enc → v { ? != # i enc 0 { ( opus_encoder_destroy enc ) } {} }
+unsafe @ opus_enc_free sink s enc → v { ? != # i enc 0 { ( opus_encoder_destroy enc ) } {} }
 
 // Encode one frame of PCM (2*frame_samples bytes) → opaque packet bytes.
 // Empty (Vec u) on failure.
-@ opus_encode_frame s enc ( Vec u ) pcm → ( Vec u ) {
+unsafe @ opus_encode_frame s enc ( Vec u ) pcm → ( Vec u ) {
     : ( Vec u ) out ( __obuf ( __opus_max_packet ) )
     : i n ( opus_encode enc ( vec_data [u] pcm ) ( opus_frame_samples ) ( vec_data [u] out ) ( __opus_max_packet ) )
     ? < n 1 { ( vec_free [u] out ) ^ ( vec_new [u] ) } {}
@@ -57,17 +57,17 @@ $ `stdlib/core/vec.nu`
 }
 
 // ── decoder ──────────────────────────────────────────────────────
-@ opus_dec_new → s {
+unsafe @ opus_dec_new → s {
     : ( Vec u ) err ( __obuf 8 )
     : s dec ( opus_decoder_create ( opus_rate ) ( opus_channels ) ( vec_data [u] err ) )
     ( vec_free [u] err )
     ^ dec
 }
 
-@ opus_dec_free sink s dec → v { ? != # i dec 0 { ( opus_decoder_destroy dec ) } {} }
+unsafe @ opus_dec_free sink s dec → v { ? != # i dec 0 { ( opus_decoder_destroy dec ) } {} }
 
 // Decode one packet → PCM (2*samples bytes). Empty (Vec u) on failure.
-@ opus_decode_frame s dec ( Vec u ) packet → ( Vec u ) {
+unsafe @ opus_decode_frame s dec ( Vec u ) packet → ( Vec u ) {
     : i fs ( opus_frame_samples )
     : ( Vec u ) pcm ( __obuf * fs 2 )
     : i ns ( opus_decode dec ( vec_data [u] packet ) ( vec_len [u] packet ) ( vec_data [u] pcm ) fs 0 )

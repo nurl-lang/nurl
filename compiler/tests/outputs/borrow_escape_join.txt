@@ -10,4 +10,4 @@ compiler/tests/borrow_escape_join.nu:50: error: returning a value that reference
     ^ @ Slot { ? > . c n 0 f f }
 compiler/tests/borrow_escape_join.nu:58: error: passing a value that references a stack binding by pointer to 'vec_push' — it escapes the current stack frame and dangles (move it to a heap-backed handle)
     ( vec_push [Slot] heap @ Slot { ? > . c n 0 f f } )
-error: compilation aborted — 5 borrow-checker violations (if the program is correct, this is a false positive: please report it as a bug at https://github.com/nurl-lang/nurl/issues)
+error: compilation aborted — 5 borrow-checker violations (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

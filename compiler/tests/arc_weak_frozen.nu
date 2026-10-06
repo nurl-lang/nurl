@@ -12,9 +12,7 @@ $ `stdlib/std/arc.nu`
 
 & `libc` @ nurl_free_count → i
 
-unsafe
-
-@ live → i { ^ - ( nurl_alloc_count ) ( nurl_free_count ) }
+unsafe @ live → i { ^ - ( nurl_alloc_count ) ( nurl_free_count ) }
 
 @ show s label i n → v { ( nurl_print label ) ( nurl_print `=` ) ( nurl_print ( nurl_str_int n ) ) ( nurl_print `\n` ) }
 

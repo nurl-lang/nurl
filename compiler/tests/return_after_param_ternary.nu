@@ -15,17 +15,13 @@ $ `stdlib/core/rcbox.nu`
 
 & `libc` @ nurl_free_count → i
 
-unsafe
-
-@ live → i { ^ - ( nurl_alloc_count ) ( nurl_free_count ) }
+unsafe @ live → i { ^ - ( nurl_alloc_count ) ( nurl_free_count ) }
 
 : FooImpl { i max }
 
 : Foo { s ctl }
 
-unsafe
-
-@ Foo_share Foo h → Foo { ^ @ Foo { # s ( rcbox_share # i . h ctl ) } }
+unsafe @ Foo_share Foo h → Foo { ^ @ Foo { # s ( rcbox_share # i . h ctl ) } }
 
 @ Foo_drop sink Foo h → v {
     ( mem_forget h )
@@ -33,9 +29,7 @@ unsafe
 }
 
 // a field store of a ternary that selects the parameter
-unsafe
-
-@ foo_a i max → Foo {
+unsafe @ foo_a i max → Foo {
     : i box ( rcbox_zero [FooImpl] )
     : *FooImpl p ( rcbox_ptr [FooImpl] box )
     = . p max ? > max 0 max 64
@@ -43,9 +37,7 @@ unsafe
 }
 
 // the same ternary into a local that is never returned
-unsafe
-
-@ foo_b i max → Foo {
+unsafe @ foo_b i max → Foo {
     : i box ( rcbox_zero [FooImpl] )
     : *FooImpl p ( rcbox_ptr [FooImpl] box )
     : i m ? > max 0 max 64
@@ -54,9 +46,7 @@ unsafe
 }
 
 // no ternary selecting a parameter: correct
-unsafe
-
-@ foo_c i max → Foo {
+unsafe @ foo_c i max → Foo {
     : i box ( rcbox_zero [FooImpl] )
     : *FooImpl p ( rcbox_ptr [FooImpl] box )
     = . p max ? > max 0 1 64

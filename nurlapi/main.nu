@@ -297,9 +297,9 @@ $ `nurlapi/pptws.nu`
 }
 : ~ i g_rl_reg 0
 
-@ __rl_reg → *RlReg { ^ # *RlReg g_rl_reg }
+unsafe @ __rl_reg → *RlReg { ^ # *RlReg g_rl_reg }
 
-@ rl_install → v {
+unsafe @ rl_install → v {
     : *RlReg reg # *RlReg ( nurl_alloc Z RlReg )
     = . reg ips ( vec_new [String] )
     = . reg wins ( vec_new [i] )
@@ -338,7 +338,7 @@ $ `nurlapi/pptws.nu`
 // True when `key` (a class-prefixed client IP, e.g. "b:1.2.3.4") is
 // within its per-minute budget — and count the request. One coarse lock;
 // the section is a short vector scan.
-@ rl_allow s key i limit → b {
+unsafe @ rl_allow s key i limit → b {
     ? == g_rl_reg 0 { ^ T } {}
     : *RlReg reg ( __rl_reg )
     : i now ( now_ms )
@@ -3642,7 +3642,7 @@ s combined_stdout s combined_stderr → v {
 // nurl_str_find answers the FIRST hit, so the scan advances a borrowed
 // pointer past each one — the last hit wins, which matters because a
 // program's own output may legitimately contain the marker text.
-@ __uk_exit_code s log → i {
+unsafe @ __uk_exit_code s log → i {
     : ~ i best - 0 1
     : ~ s cur log
     : ~ b more T
@@ -5113,18 +5113,18 @@ s combined_stdout s combined_stderr → v {
 
 : ~ i g_compile_gate 0
 
-@ gate_install i slots → v {
+unsafe @ gate_install i slots → v {
     : *SemBox b # *SemBox ( nurl_alloc Z SemBox )
     = . b s ( sem_new slots )
     = g_compile_gate # i b
 }
 
-@ __gate → Semaphore {
+unsafe @ __gate → Semaphore {
     : *SemBox b # *SemBox g_compile_gate
     ^ . b s
 }
 
-@ gate_free → v {
+unsafe @ gate_free → v {
     ? == g_compile_gate 0 { ^ v } {}
     : *SemBox b # *SemBox g_compile_gate
     ( sem_free . b s )

@@ -164,7 +164,7 @@ $ `tools/nurl-lsp/jsonrpc.nu`
 
 // LSP positions count UTF-16 code units; the source and compiler offsets are
 // UTF-8 bytes. This also represents EOF on a final line without a newline.
-@ __position_at_byte s text i at → Json {
+unsafe @ __position_at_byte s text i at → Json {
     : i n ( nurl_str_len text )
     : *u p # *u text
     : ~ i k 0
@@ -310,7 +310,7 @@ $ `tools/nurl-lsp/jsonrpc.nu`
     ^ ( string_from uri )
 }
 
-@ __path_to_uri s path → String {
+unsafe @ __path_to_uri s path → String {
     : String out ( string_with_cap + 7 ( nurl_str_len path ) )
     ( string_push_str out `file://` )
     // Forward slashes form URI paths on every host. A Windows drive gets

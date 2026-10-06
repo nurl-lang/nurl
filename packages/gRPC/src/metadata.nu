@@ -10,9 +10,7 @@ $ `stdlib/ext/protobuf.nu`
 // Let go of `metadata` now rather than at the end of its owner's scope.
 @ grpc_metadata_free sink ( Vec Header ) metadata → v {}
 
-unsafe
-
-@ grpc_header_count ( Vec Header ) headers s name → i {
+unsafe @ grpc_header_count ( Vec Header ) headers s name → i {
     : ~ i count 0
     : ~ i header_index 0
     ~ < header_index ( vec_len [Header] headers ) {
@@ -22,9 +20,7 @@ unsafe
 }
 
 // Borrowed until headers are freed. Use count to distinguish absent/empty.
-unsafe
-
-@ grpc_header_value ( Vec Header ) headers s name → s {
+unsafe @ grpc_header_value ( Vec Header ) headers s name → s {
     : ~ i header_index 0
     ~ < header_index ( vec_len [Header] headers ) {
         : Header h . ( vec_data [Header] headers ) header_index
@@ -104,9 +100,7 @@ unsafe
     ^ @ !v GrpcError { T 0 }
 }
 
-unsafe
-
-@ grpc_headers_check_size ( Vec Header ) headers i limit → !v GrpcError {
+unsafe @ grpc_headers_check_size ( Vec Header ) headers i limit → !v GrpcError {
     ? <= limit 0 { ^ @ !v GrpcError { F ( grpc_error GRPC_INVALID_ARGUMENT `invalid metadata limit` ) } } {}
     : ~ i remaining limit
     : ~ i header_index 0
@@ -142,9 +136,7 @@ unsafe
     ^ result
 }
 
-unsafe
-
-@ grpc_metadata_encode ( Vec Header ) metadata i limit → !( Vec Header ) GrpcError {
+unsafe @ grpc_metadata_encode ( Vec Header ) metadata i limit → !( Vec Header ) GrpcError {
     \ ( grpc_headers_check_size metadata limit )
     : ( Vec Header ) out ( grpc_metadata_new )
     : ~ i remaining limit
@@ -221,9 +213,7 @@ unsafe
     ^ @ !v GrpcError { T 0 }
 }
 
-unsafe
-
-@ grpc_metadata_decode ( Vec Header ) headers i limit → !( Vec Header ) GrpcError {
+unsafe @ grpc_metadata_decode ( Vec Header ) headers i limit → !( Vec Header ) GrpcError {
     \ ( grpc_headers_check_size headers limit )
     : ( Vec Header ) out ( grpc_metadata_new )
     : ~ i remaining limit

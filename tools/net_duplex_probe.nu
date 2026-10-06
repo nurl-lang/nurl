@@ -7,7 +7,7 @@ $ `stdlib/std/async.nu`
 : ~ i duplex_port 0
 : ~ i duplex_result 2
 
-@ duplex_run → i {
+unsafe @ duplex_run → i {
     : TcpConn conn ?? ( tcp_connect_tls `127.0.0.1` duplex_port `localhost` 0 ) {
         T value → value
         F error → { ( nurl_eprintln ( net_err_name error ) ) ^ 2 }

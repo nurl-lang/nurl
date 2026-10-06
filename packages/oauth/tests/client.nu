@@ -64,9 +64,7 @@ $ `../src/oauth.nu`
     ( ok ! ( string_eq s1 s2 ) `two states differ` )
 }
 
-unsafe
-
-@ test_jwks_offline → v {
+unsafe @ test_jwks_offline → v {
     : s doc `{"keys":[{"kty":"EC","crv":"P-256","kid":"a","alg":"ES256","use":"sig","x":"f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU","y":"x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0"},{"kty":"RSA","kid":"b","alg":"RS256","n":"AQAB","e":"AQAB"}]}`
     : ( Vec JwkKey ) ks ( jwks_parse doc )
     ( ok == ( vec_len [JwkKey] ks ) 2 `JWKS parses both keys` )
@@ -226,9 +224,7 @@ unsafe
     ^ out
 }
 
-unsafe
-
-@ test_rsa_offline → v {
+unsafe @ test_rsa_offline → v {
     : ( Vec JwkKey ) ks ( jwks_parse ( rsa_jwks ) )
     ( ok == ( vec_len [JwkKey] ks ) 1 `RSA JWKS parses` )
     : i idx ( jwks_select ks `rsa1` `RS256` )
@@ -286,9 +282,7 @@ unsafe
     ^ msg
 }
 
-unsafe
-
-@ test_eddsa_offline → v {
+unsafe @ test_eddsa_offline → v {
     : ~ ( Vec u ) seed ( vec_new [u] )
     ?? ( bytes_from_hex `9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60` ) {
         T v → { = seed v }
@@ -326,9 +320,7 @@ unsafe
     }
 }
 
-unsafe
-
-@ test_hs256_offline → v {
+unsafe @ test_hs256_offline → v {
     : ( Vec u ) secret ( bytes_from_str `a shared secret, configured on both sides` )
     : String k64 ( b64_url_encode_vec secret )
     : String jwks ( string_with_cap 256 )

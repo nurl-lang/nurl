@@ -22,9 +22,7 @@ $ `src/preproc.nu`
 
 // ImageNet statistics, applied where the reference applies them — in the
 // aggregator, not in preprocessing.
-unsafe
-
-@ imnet_norm * f p i h i w → v {
+unsafe @ imnet_norm * f p i h i w → v {
     : ( Vec u ) mean__v ( vec_zeroed [u] 24 )
     : *f mean # *f ( vec_data [u] mean__v )
     : ( Vec u ) std__v ( vec_zeroed [u] 24 )
@@ -43,9 +41,7 @@ unsafe
     }
 }
 
-unsafe
-
-@ main → i {
+unsafe @ main → i {
     ? < ( nurl_argc ) 3 { ( nurl_print `usage: aggcheck <ckpt.pt> <frame>\n` ) ^ 2 } {}
     : GpuKit kit ( gk_open_best )
     ? ( gk_ok kit ) {} { ( nurl_print `no gpukit backend\n` ) ^ 1 }

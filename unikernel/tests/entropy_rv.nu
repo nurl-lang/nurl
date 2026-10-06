@@ -10,7 +10,7 @@ $ `stdlib/core/io.nu`
 
 & `c` @ nurl_rand_fill *u buf i n → i
 
-@ main → i {
+unsafe @ main → i {
     : ( Vec u ) b ( vec_with_cap [u] 32 )
     ( vec_set_len [u] b 32 )
     : i r ( nurl_rand_fill ( vec_data [u] b ) 32 )

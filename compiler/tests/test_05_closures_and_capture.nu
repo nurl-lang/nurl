@@ -42,9 +42,7 @@
 }
 
 // ── (3) Higher-order: ota closure ja sovella se sliceen ──────
-unsafe
-
-@ map_i [i src ( @ i i ) f → [i {
+unsafe @ map_i [i src ( @ i i ) f → [i {
     : i n . src length
     : *i buf # *i ( malloc * n 8 )
     : ~ i i 0

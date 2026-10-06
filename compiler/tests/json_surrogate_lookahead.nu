@@ -55,9 +55,7 @@ $ `stdlib/core/string.nu`
 }
 
 // Parse and print the FIRST string element's bytes as hex.
-unsafe
-
-@ show_hex s label s src → v {
+unsafe @ show_hex s label s src → v {
     ?? ( json_parse src ) {
         T j → {
             ( nurl_print label ) ( nurl_print `: ` )

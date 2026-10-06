@@ -109,9 +109,7 @@ $ `filter.nu`
 
 @ __i_wrap i v i n → i { ^ - v * n / v n }
 
-unsafe
-
-@ ap_paste ( Vec String ) argv → i {
+unsafe @ ap_paste ( Vec String ) argv → i {
     : BxOpts o ( bx_getopt argv 1 `d:s` `delimiters=d,serial=s` )
     : ~ i rc 0
     ? ! ( bx_ok o ) { = rc 1 } {
@@ -207,9 +205,7 @@ unsafe
 
 // ── fold ──────────────────────────────────────────────────────────
 
-unsafe
-
-@ ap_fold ( Vec String ) argv → i {
+unsafe @ ap_fold ( Vec String ) argv → i {
     // `fold -20` is the historical spelling.
     : ( Vec String ) av ( vec_new [String] )
     : i argn ( vec_len [String] argv )
@@ -489,9 +485,7 @@ unsafe
 
 // ── dos2unix / unix2dos ───────────────────────────────────────────
 
-unsafe
-
-@ __crlf_convert s path b to_dos b in_place → i {
+unsafe @ __crlf_convert s path b to_dos b in_place → i {
     : ~ b ok T
     : ( Vec u ) data ( bx_slurp path ok )
     ? ! ok {
@@ -623,9 +617,7 @@ unsafe
 
 // Two historical checksums, neither of them a hash: the BSD one is a
 // 16-bit rotate-and-add, the System V one a byte sum folded twice.
-unsafe
-
-@ __sum_bsd ( Vec u ) data → i {
+unsafe @ __sum_bsd ( Vec u ) data → i {
     : i n ( vec_len [u] data )
     : *u p ( vec_data [u] data )
     : ~ i s 0
@@ -638,9 +630,7 @@ unsafe
     ^ s
 }
 
-unsafe
-
-@ __sum_sysv ( Vec u ) data → i {
+unsafe @ __sum_sysv ( Vec u ) data → i {
     : i n ( vec_len [u] data )
     : *u p ( vec_data [u] data )
     : ~ i s 0

@@ -275,9 +275,7 @@ $ `ops.nu`  // _t_bshape / _t_eff_strides / _t_batch_eff (one broadcast impl)
 // ndarray API rejects out-of-range indices instead of zero-filling.
 
 // outer·ax·inner view of `shape` around `axis`.
-unsafe
-
-@ __dt_axview ( Vec i ) shape i axis * u pouter * u pinner → v {
+unsafe @ __dt_axview ( Vec i ) shape i axis * u pouter * u pinner → v {
     : i nd ( vec_len [i] shape )
     : ~ i outer 1
     : ~ i inner 1
@@ -302,9 +300,7 @@ unsafe
     ^ T
 }
 
-unsafe
-
-@ dtensor_gather GpuKit kit DTensor a i axis ( Vec i ) idx → ?DTensor {
+unsafe @ dtensor_gather GpuKit kit DTensor a i axis ( Vec i ) idx → ?DTensor {
     ? ( dtensor_ok a ) {} { ^ @ ?DTensor { F } }
     : i nd ( dtensor_ndim a )
     ? & >= axis 0 < axis nd {} { ^ @ ?DTensor { F } }
@@ -330,9 +326,7 @@ unsafe
 // out = a with out[.., idx[g], ..] = upd[.., g, ..] along `axis`; `upd`'s
 // shape must equal a's with the axis dim replaced by len(idx). Duplicate
 // indices leave which write survives unspecified (ONNX semantics).
-unsafe
-
-@ dtensor_scatter GpuKit kit DTensor a i axis ( Vec i ) idx DTensor upd → ?DTensor {
+unsafe @ dtensor_scatter GpuKit kit DTensor a i axis ( Vec i ) idx DTensor upd → ?DTensor {
     ? & ( dtensor_ok a ) ( dtensor_ok upd ) {} { ^ @ ?DTensor { F } }
     ? == . a dtype . upd dtype {} { ^ @ ?DTensor { F } }
     : i nd ( dtensor_ndim a )

@@ -51,9 +51,7 @@ $ `stdlib/core/vec.nu`
     ^ @ ?Tagged { T t }
 }
 
-unsafe
-
-@ main → i {
+unsafe @ main → i {
     // ── Pt2 (i, i) ─────────────────────────────────────────────────
     : ?Pt2 r1 ( make_pt 3 4 )
     ?? r1 {

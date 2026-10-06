@@ -5,9 +5,7 @@
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
 
-unsafe
-
-@ pick b take ( Vec u ) v → i {
+unsafe @ pick b take ( Vec u ) v → i {
     : *u p ( vec_data [u] v )
     // 1. sibling arms: the free is on the other path from the use
     ? take {
@@ -18,9 +16,7 @@ unsafe
     }
 }
 
-unsafe
-
-@ early sink ( Vec u ) v → i {
+unsafe @ early sink ( Vec u ) v → i {
     : *u p ( vec_data [u] v )
     // 2. this function consumes its input on both paths. The freeing arm
     // RETURNS, so its mutation cannot reach the code
@@ -38,9 +34,7 @@ unsafe
 
 // 3. `??` arms are alternatives too: the grow in the T-arm must not make
 //    `p` stale in the F-arm.
-unsafe
-
-@ viamatch i k ( Vec u ) v → i {
+unsafe @ viamatch i k ( Vec u ) v → i {
     : *u p ( vec_data [u] v )
     ?? ( opt k ) {
         T n → { ( vec_push [u] v # u 1 ) ^ -1 }

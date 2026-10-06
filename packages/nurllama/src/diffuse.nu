@@ -48,9 +48,7 @@ $ `src/model.nu`
 // from softmax(logits/temp). Appends the chosen id to `ids` and its
 // probability under the SAME distribution to `confs` (the reference
 // scores greedy confidence on the unscaled softmax).
-unsafe
-
-@ __dz_sample_row Llm m i row f temp Rng rng ( Vec i ) ids ( Vec f ) confs → v {
+unsafe @ __dz_sample_row Llm m i row f temp Rng rng ( Vec i ) ids ( Vec f ) confs → v {
     : i n ( llm_n_vocab m )
     : f t ? > temp 0.0 temp 1.0
     : ~ f mx -1.0e30

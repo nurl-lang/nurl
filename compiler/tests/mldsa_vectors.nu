@@ -88,9 +88,7 @@ $ `stdlib/core/string.nu`
 }
 
 // ── Round trip, tampering, and context binding ─────────────────────
-unsafe
-
-@ roundtrip s label i level → b {
+unsafe @ roundtrip s label i level → b {
     : ( Vec u ) xi ( vec_new [u] )
     : ( Vec u ) msg ( vec_new [u] )
     : ( Vec u ) ctx ( vec_new [u] )
@@ -160,9 +158,7 @@ unsafe
 // does not change the verdict (the garbage indices change the hint, so
 // c~ mismatches anyway) and so cannot be asserted here; it shows up as
 // a heap overflow under ASan, which is where it is checked.
-unsafe
-
-@ hint_cases s label i level → b {
+unsafe @ hint_cases s label i level → b {
     : ( Vec u ) xi ( vec_new [u] )
     : ( Vec u ) msg ( vec_new [u] )
     : ( Vec u ) ctx ( vec_new [u] )

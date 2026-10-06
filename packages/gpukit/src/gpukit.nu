@@ -107,31 +107,23 @@ $ `deps/gpu/src/gpu.nu`
 // every copy is the same kit, and the last owner releases it.
 : GpuKit { s ctl }
 
-unsafe
-
-@ GpuKit_share GpuKit h → GpuKit { ^ @ GpuKit { # s ( rcbox_share # i . h ctl ) } }
+unsafe @ GpuKit_share GpuKit h → GpuKit { ^ @ GpuKit { # s ( rcbox_share # i . h ctl ) } }
 
 @ GpuKit_drop sink GpuKit h → v {
     ( mem_forget h )
     ( rcbox_release [GpuKitImpl] # i . h ctl )
 }
 
-unsafe
+unsafe @ _GpuKit_ptr GpuKit h → *GpuKitImpl { ^ ( rcbox_ptr [GpuKitImpl] # i . h ctl ) }
 
-@ _GpuKit_ptr GpuKit h → *GpuKitImpl { ^ ( rcbox_ptr [GpuKitImpl] # i . h ctl ) }
-
-unsafe
-
-@ __gk_col ( Vec i ) v i k → i { ^ . ( vec_data [i] v ) k }
+unsafe @ __gk_col ( Vec i ) v i k → i { ^ . ( vec_data [i] v ) k }
 
 // ── Lifecycle ─────────────────────────────────────────────────────────
 
 // Open device `ordinal` (CUDA when present, else the gpu package's CPU
 // backend). The kit is a long-lived handle (its kernel cache and pool
 // persist across calls). Check `gk_ok`; a failed open is still a kit.
-unsafe
-
-@ gk_open i ordinal → GpuKit {
+unsafe @ gk_open i ordinal → GpuKit {
     : Gpu g ( gpu_open ordinal )
     : b ok ( gpu_ok g )
     ^ @ GpuKit { # s ( rcbox_new [GpuKitImpl] @ GpuKitImpl { g ok ( vec_new [GkKernelEntry] )
@@ -147,27 +139,21 @@ unsafe
 // other. Prefer this everywhere the ordinal is not a user choice.
 @ gk_open_best → GpuKit { ^ ( gk_open ( gpu_best_device ) ) }
 
-unsafe
-
-@ gk_ok GpuKit kit__h → b {
+unsafe @ gk_ok GpuKit kit__h → b {
     : *GpuKitImpl kit ( _GpuKit_ptr kit__h )
     ^ . kit ok
 }
 
 // The kit's device, for the gpu package's own calls (graphs, timers):
 // another owner of it, so it stays valid however long it is kept.
-unsafe
-
-@ gk_gpu GpuKit kit__h → Gpu {
+unsafe @ gk_gpu GpuKit kit__h → Gpu {
     : *GpuKitImpl kit ( _GpuKit_ptr kit__h )
     ^ . kit gpu
 }
 
 // "cuda" or "cpu". A census kit answers "cpu": it takes the static
 // backend's branches (see gk_open_census).
-unsafe
-
-@ gk_backend GpuKit kit__h → s {
+unsafe @ gk_backend GpuKit kit__h → s {
     : *GpuKitImpl kit ( _GpuKit_ptr kit__h )
     ? . kit census { ^ `cpu` } {}
     ? ( gpu_is_cpu ) { ^ `cpu` } { ^ `cuda` }
@@ -181,9 +167,7 @@ unsafe
 // a run-time shape can never be in such a set, so a wrapper that
 // specialises must ask this first and fall back to its generic kernel.
 // F on a census kit, which records what a static build must link.
-unsafe
-
-@ gk_jit GpuKit kit__h → b {
+unsafe @ gk_jit GpuKit kit__h → b {
     : *GpuKitImpl kit ( _GpuKit_ptr kit__h )
     ? . kit census { ^ F } {}
     : i be ( gpu_backend )
@@ -203,40 +187,30 @@ unsafe
 // from the same source builders that run on a device: nothing mirrored
 // by hand, nothing to rot. Buffers for the calls can be gk_buf_wrap
 // views over any nonzero address; nothing is dereferenced.
-unsafe
-
-@ gk_open_census → GpuKit {
+unsafe @ gk_open_census → GpuKit {
     ^ @ GpuKit { # s ( rcbox_new [GpuKitImpl] @ GpuKitImpl { ( gpu_none ) T ( vec_new [GkKernelEntry] )
             ( vec_new [GpuBuffer] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] )
             ( gpu_timer_none ) ( gpu_timer_none ) T ( vec_new [String] ) } ) }
 }
 
-unsafe
-
-@ gk_is_census GpuKit kit__h → b {
+unsafe @ gk_is_census GpuKit kit__h → b {
     : *GpuKitImpl kit ( _GpuKit_ptr kit__h )
     ^ . kit census
 }
 
 // What a census kit recorded: gk_kernel_count kernels, slot k's entry
 // name and source (borrowed from the kit; "" out of range).
-unsafe
-
-@ gk_census_name GpuKit kit__h i k → s {
+unsafe @ gk_census_name GpuKit kit__h i k → s {
     : *GpuKitImpl kit ( _GpuKit_ptr kit__h )
     ?? ( vec_get [GkKernelEntry] . kit cache k ) { T e → { ^ ( string_data . e name ) } F _ → { ^ `` } }
 }
 
-unsafe
-
-@ gk_census_src GpuKit kit__h i k → s {
+unsafe @ gk_census_src GpuKit kit__h i k → s {
     : *GpuKitImpl kit ( _GpuKit_ptr kit__h )
     ?? ( vec_get [String] . kit csrc k ) { T x → { ^ ( string_data x ) } F _ → { ^ `` } }
 }
 
-unsafe
-
-@ gk_device_name GpuKit kit__h → s {
+unsafe @ gk_device_name GpuKit kit__h → s {
     : *GpuKitImpl kit ( _GpuKit_ptr kit__h )
     ^ ( gpu_name . kit gpu )
 }
@@ -244,9 +218,7 @@ unsafe
 // Make the kit's device current on the CALLING thread — see
 // gpu_bind_thread. A single-threaded program never needs it; anything
 // that hands device work to a pool or a fiber runtime does.
-unsafe
-
-@ gk_bind_thread GpuKit kit__h → b {
+unsafe @ gk_bind_thread GpuKit kit__h → b {
     : *GpuKitImpl kit ( _GpuKit_ptr kit__h )
     ? . kit ok {} { ^ F }
     ^ ( gpu_bind_thread . kit gpu )
@@ -254,16 +226,12 @@ unsafe
 
 // Free / total device memory in bytes; 0 means the backend cannot say.
 // CUDA asks the driver; the CPU backends report host RAM.
-unsafe
-
-@ gk_mem_free GpuKit kit__h → i {
+unsafe @ gk_mem_free GpuKit kit__h → i {
     : *GpuKitImpl kit ( _GpuKit_ptr kit__h )
     ^ ( gpu_mem_free . kit gpu )
 }
 
-unsafe
-
-@ gk_mem_total GpuKit kit__h → i {
+unsafe @ gk_mem_total GpuKit kit__h → i {
     : *GpuKitImpl kit ( _GpuKit_ptr kit__h )
     ^ ( gpu_mem_total . kit gpu )
 }
@@ -334,9 +302,7 @@ unsafe
 // when set, else a quarter of the device's memory — enough that a steady
 // shape mix never evicts, small enough that a drifting one cannot eat the
 // card. Resolved once, on the first allocation.
-unsafe
-
-@ _gk_pool_default * GpuKitImpl kit → v {
+unsafe @ _gk_pool_default * GpuKitImpl kit → v {
     ? >= g_pool_max 0 { ^ } {}
     : ~ i fromenv 0
     ?? ( env_get `NURL_GK_POOL_MAX` ) {
@@ -350,9 +316,7 @@ unsafe
 
 // Drop row `k`: the last row moves into its slot, and the block that was
 // there goes with the row (freed to the driver).
-unsafe
-
-@ __gk_pool_drop * GpuKitImpl kit i k → v {
+unsafe @ __gk_pool_drop * GpuKitImpl kit i k → v {
     : i last - ( vec_len [i] . kit pdptr ) 1
     ? < k last {
         : b _a ( vec_swap [GpuBuffer] . kit pbuf k last )
@@ -371,9 +335,7 @@ unsafe
 
 // Evict least-recently-idled blocks until the idle side is inside the
 // budget. Called on every give, and whenever the budget changes.
-unsafe
-
-@ __gk_pool_trim * GpuKitImpl kit → v {
+unsafe @ __gk_pool_trim * GpuKitImpl kit → v {
     ? > g_pool_max 0 {} { ^ }
     ~ > g_pool_idle g_pool_max {
         : i n ( vec_len [i] . kit pdptr )
@@ -396,9 +358,7 @@ unsafe
 
 // An idle block of exactly `bytes`, marked in-use — its device pointer,
 // or 0.
-unsafe
-
-@ _gk_pool_take * GpuKitImpl kit i bytes → i {
+unsafe @ _gk_pool_take * GpuKitImpl kit i bytes → i {
     ? g_pool_on {} { ^ 0 }
     : i n ( vec_len [i] . kit pdptr )
     : *i by ( vec_data [i] . kit pbytes )
@@ -416,9 +376,7 @@ unsafe
 }
 
 // A fresh driver allocation joins the table, in use.
-unsafe
-
-@ _gk_pool_add * GpuKitImpl kit GpuBuffer gb → v {
+unsafe @ _gk_pool_add * GpuKitImpl kit GpuBuffer gb → v {
     ( vec_push [i] . kit pdptr . gb dptr )
     ( vec_push [i] . kit pbytes . gb bytes )
     ( vec_push [i] . kit pinuse 1 )
@@ -429,9 +387,7 @@ unsafe
 
 // The last owner of the block at `dptr` let go of it: idle in the pool,
 // or — with the pool off — straight back to the driver.
-unsafe
-
-@ _gk_pool_give * GpuKitImpl kit i dptr → v {
+unsafe @ _gk_pool_give * GpuKitImpl kit i dptr → v {
     : i n ( vec_len [i] . kit pdptr )
     : *i dp ( vec_data [i] . kit pdptr )
     : *i inuse ( vec_data [i] . kit pinuse )
@@ -458,9 +414,7 @@ unsafe
     ( _gk_pool_release kit )
 }
 
-unsafe
-
-@ _gk_pool_release * GpuKitImpl kit → v {
+unsafe @ _gk_pool_release * GpuKitImpl kit → v {
     : ~ i k - ( vec_len [i] . kit pdptr ) 1
     ~ >= k 0 {
         ? == ( __gk_col . kit pinuse k ) 0 {
@@ -483,33 +437,25 @@ unsafe
 // NURL `f` is a C double and `i` is a C long long (both 8 bytes), so an
 // `f` vector uploads as `double*` and an `i` vector as `long long*`.
 
-unsafe
-
-@ gk_in_f ( Vec f ) v → GkArg {
+unsafe @ gk_in_f ( Vec f ) v → GkArg {
     : *u h # *u ( vec_data [f] v )
     : i by * ( vec_len [f] v ) 8
     ^ @ GkArg { 0 h by 0 }
 }
 
-unsafe
-
-@ gk_in_i ( Vec i ) v → GkArg {
+unsafe @ gk_in_i ( Vec i ) v → GkArg {
     : *u h # *u ( vec_data [i] v )
     : i by * ( vec_len [i] v ) 8
     ^ @ GkArg { 0 h by 0 }
 }
 // Output buffers must be pre-sized by the caller; results are copied back in.
-unsafe
-
-@ gk_out_f ( Vec f ) v → GkArg {
+unsafe @ gk_out_f ( Vec f ) v → GkArg {
     : *u h # *u ( vec_data [f] v )
     : i by * ( vec_len [f] v ) 8
     ^ @ GkArg { 1 h by 0 }
 }
 
-unsafe
-
-@ gk_out_i ( Vec i ) v → GkArg {
+unsafe @ gk_out_i ( Vec i ) v → GkArg {
     : *u h # *u ( vec_data [i] v )
     : i by * ( vec_len [i] v ) 8
     ^ @ GkArg { 1 h by 0 }
@@ -543,9 +489,7 @@ unsafe
 // The cache SLOT for `name`, compiling on a miss; -1 when the compile
 // failed. A launch borrows the slot's kernel in place (_gk_slot_launch);
 // the slot is also what the profiler accumulates into.
-unsafe
-
-@ _gk_kernel_slot * GpuKitImpl kit s src s name → i {
+unsafe @ _gk_kernel_slot * GpuKitImpl kit s src s name → i {
     : i n ( vec_len [GkKernelEntry] . kit cache )
     : ~ i k 0
     ~ < k n {
@@ -571,9 +515,7 @@ unsafe
 // Launch the kernel in cache slot `slot`, borrowed in place (no copy of
 // the handle per launch). Nonzero = the gpu_launch error, or 1 for an
 // empty slot.
-unsafe
-
-@ _gk_slot_launch * GpuKitImpl kit i slot i grid i block ( Vec i ) args → i {
+unsafe @ _gk_slot_launch * GpuKitImpl kit i slot i grid i block ( Vec i ) args → i {
     ?? ( vec_get [GkKernelEntry] . kit cache slot ) {
         T e → { ^ ( gpu_launch . e kernel grid block args ) }
         F _ → { ^ 1 }
@@ -581,9 +523,7 @@ unsafe
 }
 
 // Kernels in the kit's cache (each compiled once, by name).
-unsafe
-
-@ gk_kernel_count GpuKit kit__h → i {
+unsafe @ gk_kernel_count GpuKit kit__h → i {
     : *GpuKitImpl kit ( _GpuKit_ptr kit__h )
     ^ ( vec_len [GkKernelEntry] . kit cache )
 }
@@ -591,9 +531,7 @@ unsafe
 // Warm the cache: compile `src` (entry `name`) into the kit now and report
 // whether it succeeded, so a long-lived caller can detect a bad kernel at
 // setup instead of on the first launch.
-unsafe
-
-@ gk_compile GpuKit kit__h s src s name → b {
+unsafe @ gk_compile GpuKit kit__h s src s name → b {
     : *GpuKitImpl kit ( _GpuKit_ptr kit__h )
     ? . kit ok {} { ^ F }
     ^ >= ( _gk_kernel_slot kit src name ) 0
@@ -604,9 +542,7 @@ unsafe
 // Compile-cached, marshal, launch, sync, download. `call` lists the
 // kernel's arguments in declaration order (buffers and scalars interleaved
 // exactly as the kernel signature expects). Returns F on any device error.
-unsafe
-
-@ gk_run GpuKit kit__h s src s name i grid i block ( Vec GkArg ) call → b {
+unsafe @ gk_run GpuKit kit__h s src s name i grid i block ( Vec GkArg ) call → b {
     : *GpuKitImpl kit ( _GpuKit_ptr kit__h )
     ? . kit ok {} { ^ F }
     : i slot ( _gk_kernel_slot kit src name )

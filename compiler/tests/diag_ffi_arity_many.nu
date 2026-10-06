@@ -4,7 +4,7 @@
 // ASSEMBLED and ran — the surplus silently ignored.
 & `m` @ sin f x → f
 
-@ main → i {
+unsafe @ main → i {
     : f z ( sin 1.0 2.0 )
     ^ 0
 }

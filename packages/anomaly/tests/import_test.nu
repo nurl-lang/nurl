@@ -220,9 +220,7 @@ oops
     ^ out
 }
 
-unsafe
-
-@ test_ingest Store st → v {
+unsafe @ test_ingest Store st → v {
     : Model mo__h ( model_open_at st `imported` T0 )
     : *ModelImpl mo ( _Model_ptr mo__h )
     ( model_set_limits mo__h 30 150000 )
@@ -271,9 +269,7 @@ unsafe
     ( check == newfirst - T0 86400 `ingest: the older history is at the front` )
 }
 
-unsafe
-
-@ test_evict Store st → v {
+unsafe @ test_evict Store st → v {
     // A file bigger than the ring is a file whose TAIL the model keeps.
     : Model mo__h ( model_open_at st `evicted` T0 )
     : *ModelImpl mo ( _Model_ptr mo__h )

@@ -15,9 +15,7 @@ $ `stdlib/std/simd.nu`
 
 // ── scalar references ────────────────────────────────────────────────
 
-unsafe
-
-@ ref_index_byte * u p i n i c → i {
+unsafe @ ref_index_byte * u p i n i c → i {
     : ~ i k 0
     ~ < k n {
         ? == & 255 # i . p k & c 255 { ^ k } {}
@@ -26,9 +24,7 @@ unsafe
     ^ -1
 }
 
-unsafe
-
-@ ref_index_crlf * u p i n → i {
+unsafe @ ref_index_crlf * u p i n → i {
     ? < n 2 { ^ -1 } {}
     : ~ i k 0
     ~ < k - n 1 {
@@ -38,9 +34,7 @@ unsafe
     ^ -1
 }
 
-unsafe
-
-@ ref_index_head_end * u p i n → i {
+unsafe @ ref_index_head_end * u p i n → i {
     ? < n 4 { ^ -1 } {}
     : ~ i k 0
     ~ <= + k 4 n {
@@ -51,9 +45,7 @@ unsafe
     ^ -1
 }
 
-unsafe
-
-@ ref_index_ows_end * u p i n → i {
+unsafe @ ref_index_ows_end * u p i n → i {
     : ~ i k 0
     ~ < k n {
         : i bb & 255 # i . p k
@@ -63,9 +55,7 @@ unsafe
     ^ n
 }
 
-unsafe
-
-@ ref_bytes_eq * u a * u b i n → b {
+unsafe @ ref_bytes_eq * u a * u b i n → b {
     : ~ i k 0
     ~ < k n {
         ? != & 255 # i . a k & 255 # i . b k { ^ F } {}
@@ -74,9 +64,7 @@ unsafe
     ^ T
 }
 
-unsafe
-
-@ ref_bytes_eq_ci * u a * u b i n → b {
+unsafe @ ref_bytes_eq_ci * u a * u b i n → b {
     : ~ i k 0
     ~ < k n {
         ? != ( simd_ascii_lower & 255 # i . a k ) ( simd_ascii_lower & 255 # i . b k ) { ^ F } {}
@@ -101,16 +89,12 @@ unsafe
     } {}
 }
 
-unsafe
-
-@ fill * u p i n i c → v {
+unsafe @ fill * u p i n i c → v {
     : ~ i k 0
     ~ < k n { = . p k # u c = k + k 1 }
 }
 
-unsafe
-
-@ main → i {
+unsafe @ main → i {
     : i cap 128
     : ( Vec u ) buf ( vec_with_cap [u] cap )
     : b _l1 ( vec_set_len [u] buf cap )

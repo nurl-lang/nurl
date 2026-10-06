@@ -26,7 +26,7 @@
 : i PIN_MASK 256  // 1 << 8       GPIO8
 
 // 32-bit memory-mapped write: *(volatile u32*)addr = val
-@ poke i addr i32 val → v {
+unsafe @ poke i addr i32 val → v {
     : *i32 p # *i32 addr
     = . p 0 val
 }

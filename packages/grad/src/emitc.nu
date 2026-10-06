@@ -39,9 +39,7 @@ $ `deps/tensor/src/tensor.nu`
 // The C expression bound to leaf node `k`: `p[j]` for the j-th parameter,
 // the caller's expression for a data leaf, else the leaf's recorded VALUE
 // as a literal (a frozen scalar const).
-unsafe
-
-@ __ec_leaf * GTapeImpl tp i k ( Vec i ) pids ( Vec i ) lids ( Vec s ) lexprs String o → v {
+unsafe @ __ec_leaf * GTapeImpl tp i k ( Vec i ) pids ( Vec i ) lids ( Vec s ) lexprs String o → v {
     : ~ i j 0
     ~ < j ( vec_len [i] pids ) {
         ? == ( _ti pids j ) k {
@@ -66,9 +64,7 @@ unsafe
 
 // Emit the whole device function. `has_v` picks the dataset-bearing
 // signature compute_iterate uses. F on any non-scalar node / unknown op.
-unsafe
-
-@ gemit_cuda_grad GTape tp__h GVar loss ( Vec i ) pids ( Vec i ) lids ( Vec s ) lexprs b has_v String out → b {
+unsafe @ gemit_cuda_grad GTape tp__h GVar loss ( Vec i ) pids ( Vec i ) lids ( Vec s ) lexprs b has_v String out → b {
     : *GTapeImpl tp ( _GTape_ptr tp__h )
     ? & ( tape_ok tp__h ) >= . loss id 0 {} { ^ F }
     : i top . loss id

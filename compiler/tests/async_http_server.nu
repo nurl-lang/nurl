@@ -37,9 +37,7 @@ $ `stdlib/core/string.nu`
     ^ ( response_text 200 `hello async\n` )
 }
 
-unsafe
-
-@ run_async_http_test → v {
+unsafe @ run_async_http_test → v {
     ( runtime_init 4 )
 
     : !TcpListener NetErr lr ( tcp_listen `127.0.0.1` 18920 )

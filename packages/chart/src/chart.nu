@@ -68,9 +68,7 @@ $ `stdlib/std/float.nu`
 // rather than trap, so a renderer fed empty input yields an empty string
 // instead of crashing.
 
-unsafe
-
-@ chart_min ( Vec f ) v → f {
+unsafe @ chart_min ( Vec f ) v → f {
     : i n ( vec_len [f] v )
     ? == n 0 { ^ 0.0 } {}
     : *f dp ( vec_data [f] v )
@@ -80,9 +78,7 @@ unsafe
     ^ m
 }
 
-unsafe
-
-@ chart_max ( Vec f ) v → f {
+unsafe @ chart_max ( Vec f ) v → f {
     : i n ( vec_len [f] v )
     ? == n 0 { ^ 0.0 } {}
     : *f dp ( vec_data [f] v )
@@ -92,9 +88,7 @@ unsafe
     ^ m
 }
 
-unsafe
-
-@ chart_sum ( Vec f ) v → f {
+unsafe @ chart_sum ( Vec f ) v → f {
     : i n ( vec_len [f] v )
     : *f dp ( vec_data [f] v )
     : ~ f s 0.0
@@ -115,9 +109,7 @@ unsafe
 // the series min and max. A flat series (range 0) draws as a mid-height
 // baseline rather than dividing by zero.
 
-unsafe
-
-@ chart_sparkline ( Vec f ) v → String {
+unsafe @ chart_sparkline ( Vec f ) v → String {
     : i n ( vec_len [f] v )
     : String out ( string_with_cap * n 3 )
     ? == n 0 { ^ out } {}
@@ -180,9 +172,7 @@ unsafe
 // row is `<label> <bar> <value>`; the value is printed with %g so whole
 // numbers stay whole.
 
-unsafe
-
-@ chart_bars ( Vec String ) labels ( Vec f ) values i width → String {
+unsafe @ chart_bars ( Vec String ) labels ( Vec f ) values i width → String {
     : i n ( vec_len [f] values )
     : String out ( string_new )
     ? == n 0 { ^ out } {}
@@ -240,9 +230,7 @@ unsafe
     ( string_push_char dst 41 )  // )
 }
 
-unsafe
-
-@ chart_hist ( Vec f ) values i bins i width → String {
+unsafe @ chart_hist ( Vec f ) values i bins i width → String {
     : i n ( vec_len [f] values )
     : String out ( string_new )
     ? == n 0 { ^ out } {}
@@ -314,9 +302,7 @@ unsafe
     ( string_push_str out raw )
 }
 
-unsafe
-
-@ chart_plot ( Vec f ) values i width i height → String {
+unsafe @ chart_plot ( Vec f ) values i width i height → String {
     : i n ( vec_len [f] values )
     : String out ( string_new )
     ? | < n 1 | < width 1 < height 1 { ^ out } {}

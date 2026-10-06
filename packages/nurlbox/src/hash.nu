@@ -119,9 +119,7 @@ $ `bx.nu`
     }
 }
 
-unsafe
-
-@ bx_sum i kind ( Vec String ) argv → i {
+unsafe @ bx_sum i kind ( Vec String ) argv → i {
     : BxOpts o ( bx_getopt argv 1 `cbtsw` `check=c,binary=b,text=t,status=s,warn=w` )
     : ~ i rc 0
     ? ! ( bx_ok o ) { = rc 1 } {
@@ -165,9 +163,7 @@ unsafe
 
 // ── base64 ────────────────────────────────────────────────────────
 
-unsafe
-
-@ ap_base64 ( Vec String ) argv → i {
+unsafe @ ap_base64 ( Vec String ) argv → i {
     : BxOpts o ( bx_getopt argv 1 `dw:` `decode=d,wrap=w` )
     : ~ i rc 0
     ? ! ( bx_ok o ) { = rc 1 } {
@@ -244,9 +240,7 @@ unsafe
     ^ t
 }
 
-unsafe
-
-@ __cksum ( Vec u ) data → i {
+unsafe @ __cksum ( Vec u ) data → i {
     : ( Vec i ) tbl ( __cksum_table )
     : ~ i crc 0
     : i n ( vec_len [u] data )

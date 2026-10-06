@@ -24,7 +24,7 @@
 
 & `m` @ sqrt f x → f
 
-@ main → i {
+unsafe @ main → i {
     : i STEPS 500000
     : f DT 0.01
     : f PI 3.141592653589793

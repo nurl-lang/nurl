@@ -17,9 +17,7 @@
 
 & `c` @ getpid → i32
 
-unsafe
-
-@ main → i {
+unsafe @ main → i {
     // ── i64 literal ─────────────────────────────────────────────
     : i64 a 42
     ( nurl_print `i64=` ) ( nurl_print ( nurl_str_int a ) ) ( nurl_print `\n` )

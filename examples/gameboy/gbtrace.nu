@@ -28,7 +28,7 @@ $ `stdlib/ext/env.nu`
     ( ls_pushhex4 s & w 0xFFFF )
 }
 
-@ mem_sum * u m i lo i hi → i {
+unsafe @ mem_sum * u m i lo i hi → i {
     : ~ i s 0
     : ~ i a lo
     ~ < a hi { = s + s & # i . m a 255 = a + a 1 }
@@ -41,7 +41,7 @@ $ `stdlib/ext/env.nu`
     ~ < cyc 70224 { = cyc + cyc ( cpu_advance ) }
 }
 
-@ fp_run s rompath i nf → i {
+unsafe @ fp_run s rompath i nf → i {
     : !( Vec u ) IoErr rr ( read_file_bytes rompath )
     ?? rr {
         F _ → { ( nurl_print `cannot read ROM\n` ) ^ 2 }
@@ -66,7 +66,7 @@ $ `stdlib/ext/env.nu`
     ^ 0
 }
 
-@ inject_apply * u s2 i nframes → i {
+unsafe @ inject_apply * u s2 i nframes → i {
     : i h0 | & # i . s2 0 255 << & # i . s2 1 255 8
     : i h1 | & # i . s2 2 255 << & # i . s2 3 255 8
     : i h2 | & # i . s2 4 255 << & # i . s2 5 255 8

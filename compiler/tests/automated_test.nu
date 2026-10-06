@@ -340,9 +340,7 @@ $ `stdlib/core/option.nu`
 // Testi 10: Memory allocation
 // ══════════════════════════════════════════════════════════════════════
 
-unsafe
-
-@ test_memory → b {
+unsafe @ test_memory → b {
     ( test_header `Memory Management` )
 
     // Varaa muistia 3 intille

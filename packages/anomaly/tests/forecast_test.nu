@@ -69,9 +69,7 @@ $ `src/dynamic.nu`
     b forest_hit  // any forest version flagged it
 }
 
-unsafe
-
-@ probe_of Model mo ! Verdict String r → Probe {
+unsafe @ probe_of Model mo ! Verdict String r → Probe {
     : ~ Probe out @ Probe { F F 0.0 ( string_new ) F }
     ?? r {
         T vd → {
@@ -120,9 +118,7 @@ unsafe
     ^ ( probe_of mo r )
 }
 
-unsafe
-
-@ main → i {
+unsafe @ main → i {
     : ~ String root ( string_from `./anomaly_fc_test` )
     ?? ( env_get `ANOMALY_TEST_DIR` ) {
         T d → { = root d }

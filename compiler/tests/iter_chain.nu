@@ -31,9 +31,7 @@ $ `stdlib/std/iter.nu`
     }
 }
 
-unsafe
-
-@ main → i {
+unsafe @ main → i {
     // ── iter_range + iter_collect ──
     : ( Vec i ) v1 ( iter_collect [i] ( iter_range 0 5 ) )
     ( nurl_print `range_collect=` ) ( print_vec_i v1 )

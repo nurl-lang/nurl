@@ -9,9 +9,7 @@
 // shows as a wrong sum or a crash; --san proves the leak side (each fresh-
 // slice match used to leak its buffer at function exit).
 
-unsafe
-
-@ main → i {
+unsafe @ main → i {
     : ~ i acc 0
 
     // Some → T-arm, a fresh slice literal

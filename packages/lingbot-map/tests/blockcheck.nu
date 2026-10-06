@@ -9,23 +9,17 @@ $ `src/block.nu`
 
 // The same generator the oracle uses: a bounded, non-repeating sequence
 // so nothing is accidentally symmetric.
-unsafe
-
-@ gen * f p i n f phase → v {
+unsafe @ gen * f p i n f phase → v {
     : ~ i j 0
     ~ < j n { = . p j * 0.3 ( float_sin + phase * 0.019 # f j ) = j + j 1 }
 }
 
-unsafe
-
-@ genpos * f p i n f phase f base → v {
+unsafe @ genpos * f p i n f phase f base → v {
     : ~ i j 0
     ~ < j n { = . p j + base * 0.1 ( float_sin + phase * 0.023 # f j ) = j + j 1 }
 }
 
-unsafe
-
-@ case i gw i gh i nspecial i dim i heads i hidden → v {
+unsafe @ case i gw i gh i nspecial i dim i heads i hidden → v {
     : i n + nspecial * gw gh
     : i hd / dim heads
     : ( Vec u ) x__v ( vec_zeroed [u] * 8 * n dim )

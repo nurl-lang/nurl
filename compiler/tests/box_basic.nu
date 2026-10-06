@@ -4,9 +4,7 @@
 
 $ `stdlib/core/box.nu`
 
-unsafe
-
-@ main → i {
+unsafe @ main → i {
     // box_new + box_get round-trip.
     : ( Box i ) b1 ( box_new [i] 42 )
     ( nurl_print `b1 get=` ) ( nurl_print ( nurl_str_int ( box_get [i] b1 ) ) )

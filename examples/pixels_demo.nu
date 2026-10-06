@@ -56,9 +56,7 @@
 // which can return negative on negative inputs — wrap via (t%L + L) % L.
 @ pmod i t i L → i { ^ % + % t L L L }
 
-unsafe
-
-@ main → i {
+unsafe @ main → i {
     // Build three channel-specific LUTs up-front. Each lut_X entry
     // already has its byte shifted into the final ARGB position
     // (r<<16, g<<8, b<<0) with the 0xFF alpha baked into lut_r.

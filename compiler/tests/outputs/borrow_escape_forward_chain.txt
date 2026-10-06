@@ -2,4 +2,4 @@ COMPILE FAIL
 ERRORS
 compiler/tests/borrow_escape_forward_chain.nu:21: error: passing a value that references a stack binding by pointer to 'outer' — it escapes the current stack frame and dangles (move it to a heap-backed handle)
     ( outer f )
-error: compilation aborted — 1 borrow-checker violation (if the program is correct, this is a false positive: please report it as a bug at https://github.com/nurl-lang/nurl/issues)
+error: compilation aborted — 1 borrow-checker violation (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

@@ -60,9 +60,7 @@ $ `stdlib/std/channel.nu`
     ^ data
 }
 
-unsafe
-
-@ main → i {
+unsafe @ main → i {
     : s engine ( anom_gpu_engine )
     ( nurl_print `gpu_test: engine = ` )
     ( pline engine )

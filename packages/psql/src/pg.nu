@@ -92,60 +92,44 @@ $ `stdlib/core/rcbox.nu`
 
 : PgConn { s ctl }
 
-unsafe
-
-@ PgConn_share PgConn h → PgConn { ^ @ PgConn { # s ( rcbox_share # i . h ctl ) } }
+unsafe @ PgConn_share PgConn h → PgConn { ^ @ PgConn { # s ( rcbox_share # i . h ctl ) } }
 
 @ PgConn_drop sink PgConn h → v {
     ( mem_forget h )
     ( rcbox_release [PgConnImpl] # i . h ctl )
 }
 
-unsafe
-
-@ __PgConn_ptr PgConn h → *PgConnImpl { ^ ( rcbox_ptr [PgConnImpl] # i . h ctl ) }
+unsafe @ __PgConn_ptr PgConn h → *PgConnImpl { ^ ( rcbox_ptr [PgConnImpl] # i . h ctl ) }
 
 // The connection's text fields, lent: they live as long as the PgConn.
 // lasterr is the last ErrorResponse (`[SQLSTATE] message`), empty if none.
-unsafe
-
-@ pg_conn_lasterr PgConn c__h → String {
+unsafe @ pg_conn_lasterr PgConn c__h → String {
     : *PgConnImpl c ( __PgConn_ptr c__h )
     ^ . c lasterr
 }
 
-unsafe
-
-@ pg_conn_server_version PgConn c__h → String {
+unsafe @ pg_conn_server_version PgConn c__h → String {
     : *PgConnImpl c ( __PgConn_ptr c__h )
     ^ . c srv_ver
 }
 
-unsafe
-
-@ pg_conn_db_name PgConn c__h → String {
+unsafe @ pg_conn_db_name PgConn c__h → String {
     : *PgConnImpl c ( __PgConn_ptr c__h )
     ^ . c db_name
 }
 
-unsafe
-
-@ pg_conn_user_name PgConn c__h → String {
+unsafe @ pg_conn_user_name PgConn c__h → String {
     : *PgConnImpl c ( __PgConn_ptr c__h )
     ^ . c user_name
 }
 
-unsafe
-
-@ pg_conn_host_name PgConn c__h → String {
+unsafe @ pg_conn_host_name PgConn c__h → String {
     : *PgConnImpl c ( __PgConn_ptr c__h )
     ^ . c host_name
 }
 
 // 1 when the connection runs over TLS, 0 when it is plaintext.
-unsafe
-
-@ pg_conn_tls PgConn c__h → i {
+unsafe @ pg_conn_tls PgConn c__h → i {
     : *PgConnImpl c ( __PgConn_ptr c__h )
     ^ . c tls
 }
@@ -224,9 +208,7 @@ unsafe
 }
 
 // ── transport ─────────────────────────────────────────────────────
-unsafe
-
-@ __pg_write * PgConnImpl c ( Vec u ) bytes → i {
+unsafe @ __pg_write * PgConnImpl c ( Vec u ) bytes → i {
     ? == . c tls 1 {
         ?? ( tls_write . c tc bytes ) { T _ → ^ 1 F _ → ^ 0 }
     } {
@@ -235,9 +217,7 @@ unsafe
 }
 
 // Read one chunk into rxbuf. Returns 1 on progress, 0 on EOF/error.
-unsafe
-
-@ __pg_fill * PgConnImpl c → i {
+unsafe @ __pg_fill * PgConnImpl c → i {
     ? == . c tls 1 {
         ?? ( tls_read . c tc 16384 ) {
             T v → {
@@ -257,9 +237,7 @@ unsafe
     }
 }
 
-unsafe
-
-@ __pg_ensure * PgConnImpl c i n → i {
+unsafe @ __pg_ensure * PgConnImpl c i n → i {
     ~ < ( vec_len [u] . c rxbuf ) n {
         ? == ( __pg_fill c ) 0 { ^ 0 } {}
     }
@@ -267,9 +245,7 @@ unsafe
 }
 
 // Pull the next backend message (type byte + length-framed payload).
-unsafe
-
-@ __pg_next * PgConnImpl c → !PgMsg PgErr {
+unsafe @ __pg_next * PgConnImpl c → !PgMsg PgErr {
     ? == ( __pg_ensure c 5 ) 0 { ^ @ !PgMsg PgErr { F # PgErr PgProtocol } } {}
     : i mtype ( __bget . c rxbuf 0 )
     : i len ( __rd32 . c rxbuf 1 )
@@ -359,9 +335,7 @@ unsafe
 }
 
 // Run the whole startup→auth→ReadyForQuery sequence.
-unsafe
-
-@ __pg_authenticate * PgConnImpl c s user s password → !v PgErr {
+unsafe @ __pg_authenticate * PgConnImpl c s user s password → !v PgErr {
     : ( Vec u ) pwbytes ( vec_new [u] )
     ( __push_raw pwbytes password )
 
@@ -464,9 +438,7 @@ unsafe
 // ── connection ────────────────────────────────────────────────────
 // Try the SSLRequest negotiation on the raw socket. Returns 'S'(83) if
 // the server agrees to TLS, 'N'(78) if not, <0 on I/O failure.
-unsafe
-
-@ __pg_ssl_request i raw → i {
+unsafe @ __pg_ssl_request i raw → i {
     : ( Vec u ) req ( vec_new [u] )
     ( __push32 req 8 )
     ( __push32 req 80877103 )
@@ -480,9 +452,7 @@ unsafe
     ^ r
 }
 
-unsafe
-
-@ pg_connect s host i port s user s password s database i sslmode → !PgConn PgErr {
+unsafe @ pg_connect s host i port s user s password s database i sslmode → !PgConn PgErr {
     : i rawfd ( nurl_tcp_connect host port )
     ? != ( nurl_tcp_err_kind rawfd ) 0 {
         ( nurl_tcp_close rawfd )  // failed handles still own their allocation
@@ -551,9 +521,7 @@ unsafe
 }
 
 // ── simple query ──────────────────────────────────────────────────
-unsafe
-
-@ pg_query PgConn c__h s sql → !PgResult PgErr {
+unsafe @ pg_query PgConn c__h s sql → !PgResult PgErr {
     : *PgConnImpl c ( __PgConn_ptr c__h )
     : ( Vec u ) payload ( vec_new [u] )
     ( __push_cstr payload sql )

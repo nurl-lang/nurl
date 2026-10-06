@@ -29,9 +29,7 @@ $ `stdlib/ext/http2_hpack.nu`
 
 @ yn b v → s { ^ ? v `T` `F` }
 
-unsafe
-
-@ hex_of ( Vec u ) v → String {
+unsafe @ hex_of ( Vec u ) v → String {
     : String s ( string_new )
     : i n ( vec_len [u] v )
     : *u p ( vec_data [u] v )
@@ -61,9 +59,7 @@ unsafe
 }
 
 // Decoded list equals the sample, names compared lowercased.
-unsafe
-
-@ matches_sample ( Vec Header ) got → b {
+unsafe @ matches_sample ( Vec Header ) got → b {
     ? != ( vec_len [Header] got ) 4 { ^ F } {}
     : *Header p ( vec_data [Header] got )
     : Header h0 . p 0

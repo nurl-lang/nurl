@@ -22,13 +22,9 @@ $ `stdlib/core/string.nu`
 
 // The disposer the Drop impl delegates to: it frees the value by hand, so
 // its own parameter is never dropped again.
-unsafe
+unsafe @ release sink Res r → v { ( nurl_free . r p ) }
 
-@ release sink Res r → v { ( nurl_free . r p ) }
-
-unsafe
-
-@ mkr i id → Res { ^ @ Res { id ( nurl_alloc 8 ) } }
+unsafe @ mkr i id → Res { ^ @ Res { id ( nurl_alloc 8 ) } }
 
 @ use Res r → v { ( nurl_print `use ` ) ( nurl_print_int . r id ) ( nurl_println `` ) }
 

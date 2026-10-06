@@ -169,9 +169,7 @@ $ `deps/tensor/src/tensor.nu`
 // The block, built from nn primitives. Params (registration order): the 14
 // adapter tensors A0 B0 A1 B1 … (q k v o gate up down). Writes param ids to
 // pav/pbv (7 each) when non-0.
-unsafe
-
-@ build_block GTape tp Blk bl * u pav * u pbv → GVar {
+unsafe @ build_block GTape tp Blk bl * u pav * u pbv → GVar {
     : i HT ( cT )
     : i H ( cH )
     : i QD * ( cNH ) ( cHD )

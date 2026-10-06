@@ -34,9 +34,7 @@ $ `src/rope.nu`
 : f BK_QK_EPS 0.00001
 
 // out[r, :] = (x[r, :] − mean) / sqrt(var + eps) · g + b, biased variance.
-unsafe
-
-@ bk_layernorm * f x i rows i cols * f g * f b f eps * f out → v {
+unsafe @ bk_layernorm * f x i rows i cols * f g * f b f eps * f out → v {
     ? | <= rows 0 <= cols 0 { ^ v } {}
     : ~ i r 0
     ~ < r rows {
@@ -62,9 +60,7 @@ unsafe
 // Exact GELU: x · Φ(x) = 0.5x(1 + erf(x/√2)). torch's nn.GELU default is
 // the exact form, NOT the tanh approximation — they differ in the fourth
 // decimal, which is plenty to move a pose.
-unsafe
-
-@ bk_gelu * f x i n * f out → v {
+unsafe @ bk_gelu * f x i n * f out → v {
     : ~ i j 0
     ~ < j n {
         : f v . x j
@@ -75,9 +71,7 @@ unsafe
 
 // out[rows, n] = x[rows, k] · weightᵀ + bias, weight laid out [n, k]
 // (torch's nn.Linear order). bias may be a null pointer for no bias.
-unsafe
-
-@ bk_linear * f x i rows i k * f weight * f bias i n * f out → v {
+unsafe @ bk_linear * f x i rows i k * f weight * f bias i n * f out → v {
     : ~ i r 0
     ~ < r rows {
         : i xr * r k
@@ -95,9 +89,7 @@ unsafe
 }
 
 // Softmax over the last axis, max-subtracted.
-unsafe
-
-@ bk_softmax_rows * f x i rows i cols → v {
+unsafe @ bk_softmax_rows * f x i rows i cols → v {
     : ~ i r 0
     ~ < r rows {
         : i base * r cols
@@ -122,9 +114,7 @@ unsafe
 //
 // `scratch` must hold at least 3·n·dim + n·n doubles: q, k, v laid out
 // [heads, n, head_dim] and then one attention matrix.
-unsafe
-
-@ bk_attention * f x i n i dim i heads * f qkv_w * f qkv_b
+unsafe @ bk_attention * f x i n i dim i heads * f qkv_w * f qkv_b
 * f qn_g * f qn_b * f kn_g * f kn_b * f proj_w * f proj_b
 * i grow * i gcol * f cos_t * f sin_t * f out * f scratch → v {
     ? | | <= n 0 <= heads 0 != % dim heads 0 { ^ v } {}
@@ -217,9 +207,7 @@ unsafe
 //
 // `x` is [n, dim] and is updated in place. `scratch` needs
 // 3·n·dim + n·n + n·dim + n·hidden doubles.
-unsafe
-
-@ bk_block * f x i n i dim i heads i hidden
+unsafe @ bk_block * f x i n i dim i heads i hidden
 * f n1_g * f n1_b * f qkv_w * f qkv_b
 * f qn_g * f qn_b * f kn_g * f kn_b * f proj_w * f proj_b * f ls1
 * f n2_g * f n2_b * f fc1_w * f fc1_b * f fc2_w * f fc2_b * f ls2

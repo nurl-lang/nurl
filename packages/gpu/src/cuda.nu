@@ -149,9 +149,7 @@ $ `stdlib/core/string.nu`
 // Allocate a zeroed 8-byte slot for a `*` out-parameter. Zeroing matters
 // for 4-byte int out-params (cuDeviceGetCount writes only the low 4
 // bytes; malloc's upper-4 garbage would corrupt a full 8-byte read).
-unsafe
-
-@ __outslot → *u {
+unsafe @ __outslot → *u {
     : *u p ( nurl_alloc 8 )
     ( nurl_poke p 0 0 )
     ^ p
@@ -172,18 +170,14 @@ unsafe
 : ~ i __cuda_init_done 0
 : ~ i __cuda_init_rc 0
 
-unsafe
-
-@ cuda_init → i {
+unsafe @ cuda_init → i {
     ? != __cuda_init_done 0 { ^ __cuda_init_rc } {}
     = __cuda_init_rc # i ( cuInit 0 )
     = __cuda_init_done 1
     ^ __cuda_init_rc
 }
 
-unsafe
-
-@ cuda_device_count → i {
+unsafe @ cuda_device_count → i {
     : *u s ( __outslot )
     ( cuDeviceGetCount s )
     : i n ( nurl_peek s 0 )
@@ -192,9 +186,7 @@ unsafe
 }
 
 // Device ordinal → CUdevice (itself a small int handle). -1 on failure.
-unsafe
-
-@ cuda_device i ordinal → i {
+unsafe @ cuda_device i ordinal → i {
     : *u s ( __outslot )
     ? != # i ( cuDeviceGet s # i32 ordinal ) 0 { ( nurl_free s ) ^ - 0 1 } {}
     : i dev ( nurl_peek s 0 )
@@ -205,9 +197,7 @@ unsafe
 // CUdevice → device name string in a fresh buffer. The CALLER owns the
 // returned buffer (free with nurl_free after use) — it cannot be a borrow,
 // there is nothing to borrow from.
-unsafe
-
-@ cuda_device_name i dev → s {
+unsafe @ cuda_device_name i dev → s {
     : *u buf ( nurl_alloc 256 )
     ( nurl_poke buf 0 0 )
     ( cuDeviceGetName buf 256 # i32 dev )
@@ -216,9 +206,7 @@ unsafe
 
 // Compute capability of a CUdevice as major*10 + minor (e.g. 89 for an
 // RTX 4090's sm_89). 0 when the query fails.
-unsafe
-
-@ cuda_device_cc i dev → i {
+unsafe @ cuda_device_cc i dev → i {
     : *u s ( __outslot )
     : ~ i major 0
     ? == # i ( cuDeviceGetAttribute s # i32 75 # i32 dev ) 0 { = major ( nurl_peek s 0 ) } {}
@@ -229,9 +217,7 @@ unsafe
 }
 
 // Total device memory in bytes (0 on failure).
-unsafe
-
-@ cuda_device_mem i dev → i {
+unsafe @ cuda_device_mem i dev → i {
     : *u s ( __outslot )
     ? != # i ( cuDeviceTotalMem_v2 s # i32 dev ) 0 { ( nurl_free s ) ^ 0 } {}
     : i n ( nurl_peek s 0 )
@@ -244,9 +230,7 @@ unsafe
 // it fails every driver call with CUDA_ERROR_INVALID_CONTEXT, which is
 // what a server that opens the device on its main thread and then runs
 // the model from a worker sees. Cheap enough to do per call.
-unsafe
-
-@ cuda_ctx_bind i ctx → b {
+unsafe @ cuda_ctx_bind i ctx → b {
     ? == ctx 0 { ^ F } {}
     ^ == # i ( cuCtxSetCurrent ctx ) 0
 }
@@ -257,9 +241,7 @@ unsafe
 // convention the CUDA runtime API uses — so device pointers can flow
 // between packages (gpukit buffers into an onnx graph, …). cuCtxCreate
 // would give each opener a private context and pointers could not cross.
-unsafe
-
-@ cuda_ctx_create i dev → i {
+unsafe @ cuda_ctx_create i dev → i {
     : *u s ( __outslot )
     ? != # i ( cuDevicePrimaryCtxRetain s # i32 dev ) 0 { ( nurl_free s ) ^ 0 } {}
     : i ctx ( nurl_peek s 0 )
@@ -270,24 +252,16 @@ unsafe
 
 // Release one retain on the device's primary context (the ctx handle is
 // not destroyed until every retain is released and the process exits).
-unsafe
+unsafe @ cuda_ctx_destroy_dev i dev → i { ^ # i ( cuDevicePrimaryCtxRelease_v2 # i32 dev ) }
 
-@ cuda_ctx_destroy_dev i dev → i { ^ # i ( cuDevicePrimaryCtxRelease_v2 # i32 dev ) }
+unsafe @ cuda_ctx_destroy i ctx → i { ^ # i ( cuCtxDestroy_v2 ctx ) }
 
-unsafe
-
-@ cuda_ctx_destroy i ctx → i { ^ # i ( cuCtxDestroy_v2 ctx ) }
-
-unsafe
-
-@ cuda_sync → i { ^ # i ( cuCtxSynchronize ) }
+unsafe @ cuda_sync → i { ^ # i ( cuCtxSynchronize ) }
 
 // ── NVRTC: compile CUDA-C source → PTX text buffer ────────────────
 // Returns a NUL-terminated PTX buffer (caller passes to cuda_module_load),
 // or 0 on a compile error after printing the NVRTC log to stderr.
-unsafe
-
-@ cuda_compile s src s name → *u {
+unsafe @ cuda_compile s src s name → *u {
     : *u ps ( __outslot )
     ? != # i ( nvrtcCreateProgram ps src name 0 0 0 ) 0 {
         ( nurl_eprint `[gpu/cuda] nvrtcCreateProgram failed\n` )
@@ -329,9 +303,7 @@ unsafe
 // error) and the caller falls back to the PTX path, which reports
 // errors properly. `szout` (8 bytes) receives the cubin length — cubin
 // is binary, there is no NUL to measure it by.
-unsafe
-
-@ cuda_compile_cubin s src s name i cc * u szout → *u {
+unsafe @ cuda_compile_cubin s src s name i cc * u szout → *u {
     : *u ps ( __outslot )
     ? != # i ( nvrtcCreateProgram ps src name 0 0 0 ) 0 {
         ( nurl_free ps )
@@ -378,9 +350,7 @@ unsafe
 }
 
 // ── module / function ─────────────────────────────────────────────
-unsafe
-
-@ cuda_module_load * u ptx → i {
+unsafe @ cuda_module_load * u ptx → i {
     : *u s ( __outslot )
     ? != # i ( cuModuleLoadData s ptx ) 0 { ( nurl_free s ) ^ 0 } {}
     : i module ( nurl_peek s 0 )
@@ -388,13 +358,9 @@ unsafe
     ^ module
 }
 
-unsafe
+unsafe @ cuda_module_unload i module → i { ^ # i ( cuModuleUnload module ) }
 
-@ cuda_module_unload i module → i { ^ # i ( cuModuleUnload module ) }
-
-unsafe
-
-@ cuda_function i module s name → i {
+unsafe @ cuda_function i module s name → i {
     : *u s ( __outslot )
     ? != # i ( cuModuleGetFunction s module name ) 0 { ( nurl_free s ) ^ 0 } {}
     : i fn ( nurl_peek s 0 )
@@ -403,9 +369,7 @@ unsafe
 }
 
 // ── device memory ─────────────────────────────────────────────────
-unsafe
-
-@ cuda_malloc i bytes → i {
+unsafe @ cuda_malloc i bytes → i {
     : *u s ( __outslot )
     ? != # i ( cuMemAlloc_v2 s bytes ) 0 { ( nurl_free s ) ^ 0 } {}
     : i dptr ( nurl_peek s 0 )
@@ -413,28 +377,18 @@ unsafe
     ^ dptr
 }
 
-unsafe
+unsafe @ cuda_free sink i dptr → i { ^ # i ( cuMemFree_v2 dptr ) }
 
-@ cuda_free sink i dptr → i { ^ # i ( cuMemFree_v2 dptr ) }
+unsafe @ cuda_htod i dptr * u host i bytes → i { ^ # i ( cuMemcpyHtoD_v2 dptr host bytes ) }
 
-unsafe
+unsafe @ cuda_dtoh * u host i dptr i bytes → i { ^ # i ( cuMemcpyDtoH_v2 host dptr bytes ) }
 
-@ cuda_htod i dptr * u host i bytes → i { ^ # i ( cuMemcpyHtoD_v2 dptr host bytes ) }
-
-unsafe
-
-@ cuda_dtoh * u host i dptr i bytes → i { ^ # i ( cuMemcpyDtoH_v2 host dptr bytes ) }
-
-unsafe
-
-@ cuda_dtod i dst i src i bytes → i { ^ # i ( cuMemcpyDtoD_v2 dst src bytes ) }
+unsafe @ cuda_dtod i dst i src i bytes → i { ^ # i ( cuMemcpyDtoD_v2 dst src bytes ) }
 
 // Page-locked (pinned) host memory: DMA-able, so an HtoD from it is a
 // straight PCIe transfer with no driver-internal staging copy, and an
 // ASYNC HtoD from it actually overlaps with host work. 0 on failure.
-unsafe
-
-@ cuda_host_alloc i bytes → *u {
+unsafe @ cuda_host_alloc i bytes → *u {
     : *u s ( __outslot )
     ? != # i ( cuMemHostAlloc s bytes 0 ) 0 { ( nurl_free s ) ^ # *u 0 } {}
     : i p ( nurl_peek s 0 )
@@ -442,29 +396,19 @@ unsafe
     ^ # *u p
 }
 
-unsafe
-
-@ cuda_host_free sink * u p → i { ^ # i ( cuMemFreeHost p ) }
+unsafe @ cuda_host_free sink * u p → i { ^ # i ( cuMemFreeHost p ) }
 
 // Page-lock an EXISTING host range (e.g. an mmap'd model file) so HtoD
 // copies out of it are direct DMA instead of driver-staged. Flag 8 =
 // CU_MEMHOSTREGISTER_READ_ONLY — required for PROT_READ mappings, which
 // is exactly what a model file is. `p` must be page-aligned (mmap is).
-unsafe
+unsafe @ cuda_host_register * u p i bytes → i { ^ # i ( cuMemHostRegister_v2 p bytes 8 ) }
 
-@ cuda_host_register * u p i bytes → i { ^ # i ( cuMemHostRegister_v2 p bytes 8 ) }
+unsafe @ cuda_host_unregister * u p → i { ^ # i ( cuMemHostUnregister p ) }
 
-unsafe
+unsafe @ cuda_htod_async i dptr * u host i bytes i stream → i { ^ # i ( cuMemcpyHtoDAsync_v2 dptr host bytes stream ) }
 
-@ cuda_host_unregister * u p → i { ^ # i ( cuMemHostUnregister p ) }
-
-unsafe
-
-@ cuda_htod_async i dptr * u host i bytes i stream → i { ^ # i ( cuMemcpyHtoDAsync_v2 dptr host bytes stream ) }
-
-unsafe
-
-@ cuda_stream_sync i stream → i { ^ # i ( cuStreamSynchronize stream ) }
+unsafe @ cuda_stream_sync i stream → i { ^ # i ( cuStreamSynchronize stream ) }
 
 // ── launch ────────────────────────────────────────────────────────
 // `params` is a void** array of pointers to the argument values (built
@@ -474,18 +418,14 @@ unsafe
 // cuda_graph_begin points this at one, cuda_graph_end restores 0.
 : ~ i g_cuda_stream 0
 
-unsafe
-
-@ cuda_launch i func i grid i block * u params → i {
+unsafe @ cuda_launch i func i grid i block * u params → i {
     ^ # i ( cuLaunchKernel func # i32 grid 1 1 # i32 block 1 1 0 g_cuda_stream params 0 )
 }
 
 // CUresult code → driver error-name string (e.g. "CUDA_ERROR_INVALID_VALUE").
 // The returned pointer is the driver's own static string — only the
 // out-slot is ours to release.
-unsafe
-
-@ cuda_error_name i code → s {
+unsafe @ cuda_error_name i code → s {
     : *u s ( __outslot )
     ? != # i ( cuGetErrorName # i32 code s ) 0 { ( nurl_free s ) ^ `CUDA_ERROR_UNKNOWN` } {}
     : i namep ( nurl_peek s 0 )
@@ -498,9 +438,7 @@ unsafe
 // failed. Events are recorded on the SAME stream the launches ride, so a
 // begin/end pair brackets exactly the work between them.
 
-unsafe
-
-@ cuda_event_create → i {
+unsafe @ cuda_event_create → i {
     : *u s ( __outslot )
     ? != # i ( cuEventCreate s 0 ) 0 { ( nurl_free s ) ^ 0 } {}
     : i ev ( nurl_peek s 0 )
@@ -508,20 +446,14 @@ unsafe
     ^ ev
 }
 
-unsafe
+unsafe @ cuda_event_record i ev → i { ^ # i ( cuEventRecord ev g_cuda_stream ) }
 
-@ cuda_event_record i ev → i { ^ # i ( cuEventRecord ev g_cuda_stream ) }
-
-unsafe
-
-@ cuda_event_sync i ev → i { ^ # i ( cuEventSynchronize ev ) }
+unsafe @ cuda_event_sync i ev → i { ^ # i ( cuEventSynchronize ev ) }
 
 // Milliseconds between two recorded events, as the raw 32-bit float
 // pattern the driver writes — the caller widens it (bits_to_f32). A
 // float-typed out parameter is why this cannot just nurl_peek a double.
-unsafe
-
-@ cuda_event_elapsed_bits i start i end → i {
+unsafe @ cuda_event_elapsed_bits i start i end → i {
     : *u s ( __outslot )
     ? != # i ( cuEventElapsedTime s start end ) 0 { ( nurl_free s ) ^ 0 } {}
     : i bits ( nurl_peek s 0 )
@@ -529,9 +461,7 @@ unsafe
     ^ & bits 4294967295
 }
 
-unsafe
-
-@ cuda_event_free sink i ev → v { ? != ev 0 { : i32 _r ( cuEventDestroy_v2 ev ) } {} }
+unsafe @ cuda_event_free sink i ev → v { ? != ev 0 { : i32 _r ( cuEventDestroy_v2 ev ) } {} }
 
 // ── CUDA Graphs: capture a launch sequence once, replay it as ONE call ──
 // The per-node replay engine's cost on small graphs is pure launch
@@ -542,9 +472,7 @@ unsafe
 // threads' work cannot invalidate a capture.
 : ~ i g_cuda_gstream 0
 
-unsafe
-
-@ __cuda_gstream → i {
+unsafe @ __cuda_gstream → i {
     ? != g_cuda_gstream 0 { ^ g_cuda_gstream } {}
     : *u out ( nurl_alloc 8 )
     // CU_STREAM_NON_BLOCKING: a blocking stream forms implicit dependencies
@@ -559,9 +487,7 @@ unsafe
 
 // Begin capturing: every cuda_launch until cuda_graph_end records into the
 // graph instead of executing. 0 = ok.
-unsafe
-
-@ cuda_graph_begin → i {
+unsafe @ cuda_graph_begin → i {
     : i st ( __cuda_gstream )
     ? != st 0 {} { ^ 1 }
     : i rc # i ( cuStreamBeginCapture_v2 st # i32 1 )
@@ -572,9 +498,7 @@ unsafe
 // End the capture and instantiate an executable graph. Returns the exec
 // handle (0 on failure). The interior CUgraph is destroyed after
 // instantiation — the exec carries everything needed to launch.
-unsafe
-
-@ cuda_graph_end → i {
+unsafe @ cuda_graph_end → i {
     : i st g_cuda_stream
     = g_cuda_stream 0
     ? != st 0 {} { ^ 0 }
@@ -593,17 +517,13 @@ unsafe
 }
 
 // Launch the captured sequence and wait for it. 0 = ok.
-unsafe
-
-@ cuda_graph_launch i exec → i {
+unsafe @ cuda_graph_launch i exec → i {
     : i st ( __cuda_gstream )
     : i rc # i ( cuGraphLaunch exec st )
     ? == rc 0 { ^ # i ( cuStreamSynchronize st ) } {}
     ^ rc
 }
 
-unsafe
-
-@ cuda_graph_free sink i exec → v {
+unsafe @ cuda_graph_free sink i exec → v {
     ? != exec 0 { : i _d # i ( cuGraphExecDestroy exec ) } {}
 }

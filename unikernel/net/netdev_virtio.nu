@@ -23,7 +23,7 @@ $ `unikernel/drivers/virtionet.nu`
     ^ 1
 }
 
-@ netdev_mac → i {
+unsafe @ netdev_mac → i {
     ? == g_nic 0 { ^ 0 } {}
     ^ ( vnet_mac # *VirtioNet g_nic )
 }
@@ -32,7 +32,7 @@ $ `unikernel/drivers/virtionet.nu`
 // unavoidable at this seam: the driver owns the receive buffer and
 // hands it straight back to the device, so a caller that kept a
 // pointer into it would be reading a buffer the device is refilling.
-@ netdev_rx s buf i cap → i {
+unsafe @ netdev_rx s buf i cap → i {
     ? == g_nic 0 { ^ 0 } {}
     : ( Vec u ) f ( vec_new [u] )
     : i n ( vnet_rx # *VirtioNet g_nic f )
@@ -41,7 +41,7 @@ $ `unikernel/drivers/virtionet.nu`
     ^ take
 }
 
-@ netdev_tx s buf i len → i {
+unsafe @ netdev_tx s buf i len → i {
     ? == g_nic 0 { ^ 0 } {}
     : ( Vec u ) f ( vec_new [u] )
     ( bytes_extend_raw f buf len )

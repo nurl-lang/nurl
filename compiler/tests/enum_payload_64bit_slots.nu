@@ -28,9 +28,7 @@
     ( nurl_print label ) ( nurl_print ? ok ` ok\n` ` FAIL\n` )
 }
 
-unsafe
-
-@ main → i {
+unsafe @ main → i {
     // i64 payload with high bits set (> 2^32) — upper half must survive.
     : W a @ W { Big 81985529216486895 }  // 0x0123456789ABCDEF
     ?? a {

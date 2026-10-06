@@ -14,9 +14,7 @@ $ `stdlib/core/string.nu`
 
 & `libc` @ nurl_free_count → i
 
-unsafe
-
-@ live → i { ^ - ( nurl_alloc_count ) ( nurl_free_count ) }
+unsafe @ live → i { ^ - ( nurl_alloc_count ) ( nurl_free_count ) }
 
 : Fh { s raw }
 
@@ -26,18 +24,14 @@ unsafe
 
 @ err s msg → !v String { ^ @ !v String { F ( string_from msg ) } }
 
-unsafe
-
-@ w_flush * W w → !v String {
+unsafe @ w_flush * W w → !v String {
     ?? ( flush @ Fh { . w fh } ) {
         T _ → { ^ @ !v String { T 0 } }
         F _ → { ^ ( err `flush failed` ) }
     }
 }
 
-unsafe
-
-@ data * W w → !v String {
+unsafe @ data * W w → !v String {
     ? != . w phase 1 { ^ ( err `not in data phase` ) } {}
     ?? ( w_flush w ) {
         T _ → {}
@@ -46,9 +40,7 @@ unsafe
     ^ @ !v String { T 0 }
 }
 
-unsafe
-
-@ main → i {
+unsafe @ main → i {
     : *W w # *W ( nurl_alloc 16 )
     = . w fh # s 0
     : i l0 ( live )

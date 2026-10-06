@@ -146,9 +146,7 @@ $ `bx.nu`
 
 // Hand the process over to `cmd`. On success this never returns — the
 // image is replaced, which is exactly what `env VAR=x prog` means.
-unsafe
-
-@ __exec_argv ( Vec String ) args i from → i {
+unsafe @ __exec_argv ( Vec String ) args i from → i {
     : i n - ( vec_len [String] args ) from
     ? <= n 0 { ^ 127 } {}
     : ( Vec u ) argvbuf_v ( vec_zeroed [u] * 8 + n 1 )
@@ -328,9 +326,7 @@ unsafe
     ^ + * q 2 / lo base
 }
 
-unsafe
-
-@ __pf_pad String out i width b left String body → v {
+unsafe @ __pf_pad String out i width b left String body → v {
     : i n ( string_len body )
     ? & ! left > width n {
         : ~ i k - width n
@@ -343,9 +339,7 @@ unsafe
     } {}
 }
 
-unsafe
-
-@ ap_printf ( Vec String ) argv → i {
+unsafe @ ap_printf ( Vec String ) argv → i {
     : i n ( vec_len [String] argv )
     ? < n 2 {
         ( bx_err `usage: printf FORMAT [ARGUMENT]...` )
@@ -549,9 +543,7 @@ unsafe
     }
 }
 
-unsafe
-
-@ ap_uname ( Vec String ) argv → i {
+unsafe @ ap_uname ( Vec String ) argv → i {
     : BxOpts o ( bx_getopt argv 1 `asnrvmpioA` `all=a,kernel-name=s,nodename=n,kernel-release=r,kernel-version=v,machine=m,processor=p,hardware-platform=i,operating-system=o` )
     : ~ i rc 0
     ? ! ( bx_ok o ) { = rc 1 } {
@@ -653,9 +645,7 @@ unsafe
     }
 }
 
-unsafe
-
-@ ap_whoami ( Vec String ) argv → i {
+unsafe @ ap_whoami ( Vec String ) argv → i {
     : String n ( __name_of_uid # i ( geteuid ) )
     ( nurl_print ( string_data n ) )
     ( nurl_print `\n` )
@@ -675,9 +665,7 @@ unsafe
 }
 
 // The caller's supplementary groups, as gids.
-unsafe
-
-@ __group_ids → ( Vec i ) {
+unsafe @ __group_ids → ( Vec i ) {
     : ( Vec i ) out ( vec_new [i] )
     : i32 n ( getgroups # i32 0 # *u 0 )
     ? <= # i n 0 { ^ out } {}
@@ -696,9 +684,7 @@ unsafe
     ^ out
 }
 
-unsafe
-
-@ ap_groups ( Vec String ) argv → i {
+unsafe @ ap_groups ( Vec String ) argv → i {
     // The effective group first, then the supplementary ones — the
     // order every `groups` prints, and not the order getgroups(2)
     // happens to return.
@@ -725,9 +711,7 @@ unsafe
     ^ 0
 }
 
-unsafe
-
-@ __id_pair String out s label i id → v {
+unsafe @ __id_pair String out s label i id → v {
     ( string_push_str out label )
     ( string_push_int out id )
     : String nm ( __name_of_gid id )
@@ -739,9 +723,7 @@ unsafe
     } {}
 }
 
-unsafe
-
-@ ap_id ( Vec String ) argv → i {
+unsafe @ ap_id ( Vec String ) argv → i {
     : BxOpts o ( bx_getopt argv 1 `ugGnr` `user=u,group=g,groups=G,name=n,real=r` )
     : ~ i rc 0
     ? ! ( bx_ok o ) { = rc 1 } {
@@ -873,9 +855,7 @@ unsafe
 
 // %Z, %z, %s and %N need the instant, not the calendar, so they are
 // substituted here and the rest handed to `time_format`.
-unsafe
-
-@ __date_prepass s fmt i epoch b utc → String {
+unsafe @ __date_prepass s fmt i epoch b utc → String {
     : String out ( string_new )
     : i n ( nurl_str_len fmt )
     : i off ? utc 0 ( tz_offset epoch )

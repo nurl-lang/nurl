@@ -66,7 +66,7 @@ $ `examples/c64/core.nu`
 
 // Copy the 384x272 colour-index framebuffer into the canvas surface (one
 // i64 per pixel; the low 32 bits carry the ARGB value).
-@ blit * i fb → v {
+unsafe @ blit * i fb → v {
     : *u src # *u g_fb
     : ~ i i 0
     ~ < i 104448 {
@@ -76,14 +76,14 @@ $ `examples/c64/core.nu`
 }
 
 // Pull a fixed-size ROM bank from the host into a NURL buffer.
-@ pull_rom i bank i n → ( Vec u ) {
+unsafe @ pull_rom i bank i n → ( Vec u ) {
     : ( Vec u ) buf ( vec_with_cap [u] n )
     : ~ i i 0
     ~ < i n { ( vec_push [u] buf # u ( host_rom_byte bank i ) ) = i + i 1 }
     ^ buf
 }
 
-@ main → i {
+unsafe @ main → i {
     ( c64_alloc )
     // Load the three ROMs from the host, then cold-boot.
     : ( Vec u ) kbuf ( pull_rom 0 8192 ) ( load_kernal ( vec_data [u] kbuf ) 8192 )

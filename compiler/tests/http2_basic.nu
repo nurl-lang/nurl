@@ -19,9 +19,7 @@ $ `stdlib/ext/http2_hpack.nu`
 
 // ── §A frame round-trips ─────────────────────────────────────────────
 
-unsafe
-
-@ section_a → v {
+unsafe @ section_a → v {
     ( nurl_print `--- A frame round-trips ---\n` )
 
     // RFC 9113 §6.5.3 — SETTINGS ACK: empty payload, type=4, flags=ACK
@@ -129,9 +127,7 @@ unsafe
 
 // ── §B HPACK vectors ─────────────────────────────────────────────────
 
-unsafe
-
-@ section_b → v {
+unsafe @ section_b → v {
     ( nurl_print `--- B HPACK vectors ---\n` )
 
     // RFC 7541 C.1.1: encode 10 with 5-bit prefix → 10
@@ -202,9 +198,7 @@ unsafe
 
 // ── §C HPACK Huffman ─────────────────────────────────────────────────
 
-unsafe
-
-@ section_c → v {
+unsafe @ section_c → v {
     ( nurl_print `--- C HPACK Huffman ---\n` )
 
     // RFC 7541 C.4.1: ":method GET" Huffman-encoded literal block

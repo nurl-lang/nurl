@@ -33,9 +33,7 @@ $ `stdlib/ext/zip.nu`
     ( string_free s )
 }
 
-unsafe
-
-@ main → i {
+unsafe @ main → i {
     // ── build ──
     : Zip z ( zip_new )
     : ( Vec u ) d1 ( mkbytes `hello, zip world` )

@@ -12,9 +12,7 @@
 // shows up as a wrong sum even without ASan; run the suite's san build
 // to prove the leak side.
 
-unsafe
-
-@ main → i {
+unsafe @ main → i {
     : ~ i acc 0
 
     // ? arm, inferred let — freed at the arm's fall-through

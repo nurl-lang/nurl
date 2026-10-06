@@ -28,9 +28,7 @@ $ `src/weights.nu`
     ? ok {} { = __wc_fails + __wc_fails 1 }
 }
 
-unsafe
-
-@ main → i {
+unsafe @ main → i {
     // argv[1] as a String (nurl_argv hands out a raw copy nobody released)
     : String pathv ? > ( nurl_argc ) 1 ( env_arg 1 ) ( string_from ( __wc_default ) )
     : s path ( string_data pathv )

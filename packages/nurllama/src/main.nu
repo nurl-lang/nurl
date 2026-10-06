@@ -157,9 +157,7 @@ $ `stdlib/std/term.nu`
     }
 }
 
-unsafe
-
-@ __nl_ids_eq ( Vec i ) got * i exp i n → b {
+unsafe @ __nl_ids_eq ( Vec i ) got * i exp i n → b {
     ? != ( vec_len [i] got ) n { ^ F } {}
     : ~ i k 0
     : ~ b ok T
@@ -559,9 +557,7 @@ unsafe
     }
 }
 
-unsafe
-
-@ main → i {
+unsafe @ main → i {
     : ArgParser p ( args_new `nurllama` `Run language models locally — phase 2: the GGUF-vocabulary tokenizer.` )
     ( args_flag p `help` 104 `show this help` )
     ( args_flag p `yes` 121 `start: reuse the existing config without asking` )

@@ -1,7 +1,13 @@
 COMPILE FAIL
 ERRORS
+compiler/tests/borrow_closure_stored_capture_freed.nu:18: error: 'a' is read here, but its value was moved into 'b' at line 17. A heap value has one owner; once it is stored into an aggregate, an Option or a container (vec_push), the old name is gone, because the owner may release or replace the value while the name still points at it. Read it through 'b' (a field read, or vec_get on it), or store a copy and keep the original: ( mem_dup a ).
+    ( nurl_println_int ( vec_len [i] a ) )
+compiler/tests/borrow_closure_stored_capture_freed.nu:19: error: 'a' is read here, but its value was moved into 'b' at line 17. A heap value has one owner; once it is stored into an aggregate, an Option or a container (vec_push), the old name is gone, because the owner may release or replace the value while the name still points at it. Read it through 'b' (a field read, or vec_get on it), or store a copy and keep the original: ( mem_dup a ).
+    ( vec_free [i] a )
 compiler/tests/borrow_closure_stored_capture_freed.nu:19: error: 'a' is released here, but a closure that captured it was stored into an owner at line 17, which may still invoke it — on freed memory (the free-then-invoke check follows a closure only by its name). Release it after that owner is gone, or have the closure capture a copy — ( mem_dup a ) bound to a name of its own.
+    ( vec_free [i] a )
+compiler/tests/borrow_closure_stored_capture_freed.nu:30: error: 'a' is read here, but its value was moved into an owner at line 29. A heap value has one owner; once it is stored into an aggregate, an Option or a container (vec_push), the old name is gone, because the owner may release or replace the value while the name still points at it. Read it through that owner, or store a copy and keep the original: ( mem_dup a ).
     ( vec_free [i] a )
 compiler/tests/borrow_closure_stored_capture_freed.nu:30: error: 'a' is released here, but a closure that captured it was stored into an owner at line 29, which may still invoke it — on freed memory (the free-then-invoke check follows a closure only by its name). Release it after that owner is gone, or have the closure capture a copy — ( mem_dup a ) bound to a name of its own.
     ( vec_free [i] a )
-error: compilation aborted — 2 borrow-checker violations (if the program is correct, this is a false positive: please report it as a bug at https://github.com/nurl-lang/nurl/issues)
+error: compilation aborted — 5 borrow-checker violations (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

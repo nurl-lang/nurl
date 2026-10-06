@@ -55,9 +55,7 @@ $ `stdlib/std/bytes.nu`
     }
 }
 
-unsafe
-
-@ main → i {
+unsafe @ main → i {
     : ( Vec i ) failures ( vec_new [i] )
     : ~ H2Connection c ( connection )
     : ~ HpackDynTable encoder ( hpack_dyn_new 4096 )

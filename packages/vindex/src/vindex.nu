@@ -55,23 +55,17 @@ $ `stdlib/core/rcbox.nu`
 
 : VIndex { s ctl }
 
-unsafe
-
-@ VIndex_share VIndex h → VIndex { ^ @ VIndex { # s ( rcbox_share # i . h ctl ) } }
+unsafe @ VIndex_share VIndex h → VIndex { ^ @ VIndex { # s ( rcbox_share # i . h ctl ) } }
 
 @ VIndex_drop sink VIndex h → v {
     ( mem_forget h )
     ( rcbox_release [VIndexImpl] # i . h ctl )
 }
 
-unsafe
-
-@ __VIndex_ptr VIndex h → *VIndexImpl { ^ ( rcbox_ptr [VIndexImpl] # i . h ctl ) }
+unsafe @ __VIndex_ptr VIndex h → *VIndexImpl { ^ ( rcbox_ptr [VIndexImpl] # i . h ctl ) }
 
 // The index built from its parts, as a handle.
-unsafe
-
-@ __vx_make sink ( Vec f ) data sink ( Vec f ) nrm i n i dim i metric i nlist sink ( Vec f ) cent sink ( Vec f ) cnrm sink ( Vec i ) loff sink ( Vec i ) members → VIndex {
+unsafe @ __vx_make sink ( Vec f ) data sink ( Vec f ) nrm i n i dim i metric i nlist sink ( Vec f ) cent sink ( Vec f ) cnrm sink ( Vec i ) loff sink ( Vec i ) members → VIndex {
     : i idx__box ( rcbox_zero [VIndexImpl] )
     : *VIndexImpl idx ( rcbox_ptr [VIndexImpl] idx__box )
     = . idx data data
@@ -121,9 +115,7 @@ unsafe
 
 // Score of stored vector `id` against query q (with precomputed qnorm for
 // cosine). Smaller = nearer.
-unsafe
-
-@ __vx_score * VIndexImpl idx i id ( Vec f ) q f qnorm → f {
+unsafe @ __vx_score * VIndexImpl idx i id ( Vec f ) q f qnorm → f {
     ? == . idx metric VX_L2 { ^ ( __vx_l2 . idx data id . idx dim q ) } {}
     : f dn * ( __vx_gf . idx norm id ) qnorm
     ? > dn 0.0 {} { ^ 1.0 }
@@ -279,9 +271,7 @@ unsafe
 
 // Fill out_ids/out_dists (cleared first) with the k nearest of query q.
 // nprobe is ignored for an exact index. Returns the number found.
-unsafe
-
-@ vx_search VIndex idx__h ( Vec f ) q i k i nprobe ( Vec i ) out_ids ( Vec f ) out_dists → i {
+unsafe @ vx_search VIndex idx__h ( Vec f ) q i k i nprobe ( Vec i ) out_ids ( Vec f ) out_dists → i {
     : *VIndexImpl idx ( __VIndex_ptr idx__h )
     : b _c1 ( vec_set_len [i] out_ids 0 )
     : b _c2 ( vec_set_len [f] out_dists 0 )
@@ -325,23 +315,17 @@ unsafe
     ^ ( vec_len [i] out_ids )
 }
 
-unsafe
-
-@ vx_n VIndex idx__h → i {
+unsafe @ vx_n VIndex idx__h → i {
     : *VIndexImpl idx ( __VIndex_ptr idx__h )
     ^ . idx n
 }
 
-unsafe
-
-@ vx_dim VIndex idx__h → i {
+unsafe @ vx_dim VIndex idx__h → i {
     : *VIndexImpl idx ( __VIndex_ptr idx__h )
     ^ . idx dim
 }
 
-unsafe
-
-@ vx_nlist VIndex idx__h → i {
+unsafe @ vx_nlist VIndex idx__h → i {
     : *VIndexImpl idx ( __VIndex_ptr idx__h )
     ^ . idx nlist
 }
@@ -354,9 +338,7 @@ unsafe
 //   data(n·dim f64) | [nlist>0: cent(nlist·dim f64) | list_off(nlist+1 i64)
 //   | members(n i64)]
 
-unsafe
-
-@ vx_save VIndex idx__h → ( Vec u ) {
+unsafe @ vx_save VIndex idx__h → ( Vec u ) {
     : *VIndexImpl idx ( __VIndex_ptr idx__h )
     : ( Vec u ) o ( vec_new [u] )
     ( vec_push [u] o # u 86 ) ( vec_push [u] o # u 73 )

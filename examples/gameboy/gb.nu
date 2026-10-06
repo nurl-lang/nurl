@@ -7,7 +7,7 @@ $ `examples/gameboy/core.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/ext/env.nu`
 
-@ ppu_dump → v {
+unsafe @ ppu_dump → v {
     : *u fb # *u g_fb
     : String row ( string_with_cap 168 )
     : ~ i y 0
@@ -43,7 +43,7 @@ $ `stdlib/ext/env.nu`
 // output as raw interleaved 16-bit little-endian stereo PCM (48 kHz) — for
 // verifying sound generation (plot/play with `ffplay -f s16le -ar 48000
 // -ch_layout stereo out.pcm`).
-@ audio_dump s path i frames s outpath → i {
+unsafe @ audio_dump s path i frames s outpath → i {
     : !( Vec u ) IoErr rr ( read_file_bytes path )
     ?? rr {
         F _ → { ( nurl_print `cannot read ROM\n` ) ^ 2 }

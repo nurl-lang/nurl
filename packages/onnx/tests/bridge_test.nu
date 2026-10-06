@@ -25,9 +25,7 @@ $ `src/tensor_bridge.nu`
     ( nurl_print name ) ( nurl_print `\n` )
 }
 
-unsafe
-
-@ load_f32b s path * u pcell → *u {
+unsafe @ load_f32b s path * u pcell → *u {
     ?? ( read_file_bytes path ) {
         T bytes → {
             : i n / ( vec_len [u] bytes ) 4
@@ -44,9 +42,7 @@ unsafe
     : ( Vec i ) v ( vec_new [i] ) ( vec_push [i] v a ) ( vec_push [i] v b ) ^ v
 }
 
-unsafe
-
-@ main → i {
+unsafe @ main → i {
     // parse the model
     : ~ OGraph g ( onnx_empty_graph )
     ?? ( read_file_bytes `tests/data/tiny.onnx` ) {

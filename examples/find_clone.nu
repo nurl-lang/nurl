@@ -46,9 +46,7 @@ $ `stdlib/ext/regex.nu`
 // from the closure — the i-return is purely for "any-match" testing
 // in main's exit-code decision).
 
-unsafe
-
-@ scan_lines s path s text ( @ b s ) test → i {
+unsafe @ scan_lines s path s text ( @ b s ) test → i {
     : i n ( nurl_str_len text )
     : *u p # *u text
     : ~ i hits 0
@@ -122,9 +120,7 @@ unsafe
 // inaccessible), returns -1 so the caller can fall back to the file
 // path.
 
-unsafe
-
-@ walk_dir s path ( @ b s ) test → i {
+unsafe @ walk_dir s path ( @ b s ) test → i {
     : !( Vec String ) IoErr r ( dir_list path )
     ?? r {
         T entries → {

@@ -35,9 +35,7 @@ $ `src/static_kernels.nu`
 }
 
 // bytes [at, at+len) of `t` as a String
-unsafe
-
-@ __sub s t i at i len → String { ^ ( string_from_bytes # *u + # i t at len ) }
+unsafe @ __sub s t i at i len → String { ^ ( string_from_bytes # *u + # i t at len ) }
 
 @ __is_id i c → b { ^ | | & >= c 97 <= c 122 & >= c 48 <= c 57 == c 95 }
 

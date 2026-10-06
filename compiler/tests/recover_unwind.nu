@@ -28,9 +28,7 @@ $ `stdlib/core/string.nu`
 
 // User `% Drop` value: its typed destructor is replayed by the unwind,
 // including one already dropped in a prior loop iteration (no double-drop).
-unsafe
-
-@ crash_drop → v {
+unsafe @ crash_drop → v {
     : ~ i k 0
     ~ < k 2 {
         : Handle tmp @ Handle { # *u ( malloc 24 ) }

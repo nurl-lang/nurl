@@ -100,9 +100,7 @@ $ `deps/mlp/src/mlp.nu`
 // (anomaly_project). The net cannot take one, so an absent reading is
 // filled with the midpoint of the column's training range — the value
 // that leans nowhere — and the normalised coordinates are capped.
-unsafe
-
-@ __ae_prepare_point MinMax amm ( Vec f ) x → v {
+unsafe @ __ae_prepare_point MinMax amm ( Vec f ) x → v {
     : i d . amm n_cols
     : i n ( vec_len [f] x )
     : *f xp ( vec_data [f] x )
@@ -129,9 +127,7 @@ unsafe
 // The training matrix with every absent reading filled with the
 // midpoint of its column's range over the readings present (a column
 // nobody ever sent is all 0). Owned copy.
-unsafe
-
-@ __ae_fill_matrix ( Vec f ) raw i n i d → ( Vec f ) {
+unsafe @ __ae_fill_matrix ( Vec f ) raw i n i d → ( Vec f ) {
     : ( Vec f ) out ( vec_clone [f] raw )
     : *f op ( vec_data [f] out )
     : ~ i c 0
@@ -159,9 +155,7 @@ unsafe
     ^ out
 }
 
-unsafe
-
-@ ae_train_matrix ( Vec f ) raw0 i n i d ( Vec String ) feats ( Vec i ) hidden f contamination i min_rows → AeTrainOut {
+unsafe @ ae_train_matrix ( Vec f ) raw0 i n i d ( Vec String ) feats ( Vec i ) hidden f contamination i min_rows → AeTrainOut {
     ? < n min_rows {
         ^ @ AeTrainOut { ( ae_empty ) ( string_from `not enough data points to train the autoencoder` ) }
     } {}

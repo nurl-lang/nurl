@@ -84,9 +84,7 @@ $ `stdlib/std/float.nu`
     Cos * Expr
 }
 
-unsafe
-
-@ ebox Expr e → *Expr {
+unsafe @ ebox Expr e → *Expr {
     : *Expr p ( alloc [Expr] 1 )
     = . p 0 e
     ^ p
@@ -107,9 +105,7 @@ unsafe
 @ e_cos * Expr a → *Expr { ^ ( ebox @ Expr { Cos a } ) }
 
 // Evaluate the tree at x = xv. Recursive match with 2-payload binding.
-unsafe
-
-@ e_eval * Expr p f xv → f {
+unsafe @ e_eval * Expr p f xv → f {
     : Expr e . p 0
     ?? e {
         Num c → c
@@ -124,9 +120,7 @@ unsafe
 
 // Symbolic differentiation d/dx — the autodiff core. Each arm rebuilds a
 // fresh subtree from the recursive results.
-unsafe
-
-@ e_diff * Expr p → *Expr {
+unsafe @ e_diff * Expr p → *Expr {
     : Expr e . p 0
     ?? e {
         Num c → ( e_num 0.0 )
@@ -141,9 +135,7 @@ unsafe
 
 // Constant-folding + identity simplification. Nested `??` inside arms —
 // pattern-matching depth stress.
-unsafe
-
-@ e_simplify * Expr p → *Expr {
+unsafe @ e_simplify * Expr p → *Expr {
     : Expr e . p 0
     ?? e {
         Add a b → {
@@ -189,9 +181,7 @@ unsafe
 // The trees are DAGs, not strict trees: e_diff reuses its input's
 // subtrees and e_simplify's leaf copies keep their children. To free them,
 // collect every node reachable from all roots exactly once.
-unsafe
-
-@ e_collect * Expr p ( Vec i ) seen → v {
+unsafe @ e_collect * Expr p ( Vec i ) seen → v {
     : i addr # i p
     ? ( vec_contains [i] seen addr \ i x i y → b { == x y } ) { ^ } {}
     ( vec_push [i] seen addr )
@@ -210,9 +200,7 @@ unsafe
 
 : PState { s text i len i pos }
 
-unsafe
-
-@ ps_new s input → *PState {
+unsafe @ ps_new s input → *PState {
     : *PState ps ( alloc [PState] 1 )
     = . ps text input
     = . ps len ( nurl_str_len input )
@@ -220,30 +208,22 @@ unsafe
     ^ ps
 }
 
-unsafe
-
-@ p_peek * PState ps i ch → b {
+unsafe @ p_peek * PState ps i ch → b {
     ? >= . ps pos . ps len { ^ F } {}
     ^ == ( nurl_str_get . ps text . ps pos ) ch
 }
 
-unsafe
-
-@ p_advance * PState ps → v { = . ps pos + . ps pos 1 }
+unsafe @ p_advance * PState ps → v { = . ps pos + . ps pos 1 }
 
 @ p_skip_ws * PState ps → v { ~ ( p_peek ps 32 ) { ( p_advance ps ) } }
 
-unsafe
-
-@ p_digit * PState ps → b {
+unsafe @ p_digit * PState ps → b {
     ? >= . ps pos . ps len { ^ F } {}
     : i c ( nurl_str_get . ps text . ps pos )
     ^ & >= c 48 <= c 57
 }
 
-unsafe
-
-@ p_number * PState ps → ?*Expr {
+unsafe @ p_number * PState ps → ?*Expr {
     : ~ f val 0.0
     : ~ i any 0
     ~ ( p_digit ps ) {
@@ -337,9 +317,7 @@ unsafe
 
 @ pf f x → v { ( nurl_print ( float_to_string x ) ) }
 
-unsafe
-
-@ main → i {
+unsafe @ main → i {
     // ── Axis A: dense vector math ──────────────────────────────
     : Vec3 a ( v3 1.0 2.0 3.0 )
     : Vec3 b ( v3 4.0 5.0 6.0 )

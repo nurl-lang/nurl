@@ -14,11 +14,11 @@
 // ASSIGN to it") — see cast_to_binding.nu; this is the backstop for
 // every other name.
 
-@ g → i {
+unsafe @ g → i {
     ^ 1
 }
 
-@ main → i {
+unsafe @ main → i {
     : *i p # *g 1
     ^ 0
 }

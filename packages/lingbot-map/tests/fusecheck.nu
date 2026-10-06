@@ -18,9 +18,7 @@ $ `src/dpthead.nu`
 
 : i FC_CH 8  // stands in for DP_FEAT; the code is channel-generic
 
-unsafe
-
-@ gen GpuKit kit i n f phase → GkBuf {
+unsafe @ gen GpuKit kit i n f phase → GkBuf {
     : GkBuf b ( gk_dbuf_new kit n GK_F32 )
     : ( Vec f ) h ( vec_with_cap [f] n )
     : b _sl ( vec_set_len [f] h n )
@@ -31,9 +29,7 @@ unsafe
     ^ b
 }
 
-unsafe
-
-@ dump GpuKit kit s label GkBuf b i n → v {
+unsafe @ dump GpuKit kit s label GkBuf b i n → v {
     : ( Vec f ) h ( vec_with_cap [f] n )
     : b _sl ( vec_set_len [f] h n )
     ? ( gk_dbuf_download kit b h ) {} { ( nurl_print `dl FAILED\n` ) ^ v }

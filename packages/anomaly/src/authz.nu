@@ -102,9 +102,7 @@ $ `deps/oauth/src/oauth.nu`
 
 : ~ i g_az_strs 0
 
-unsafe
-
-@ __az_strs → *AzStrings {
+unsafe @ __az_strs → *AzStrings {
     ? != g_az_strs 0 { ^ # *AzStrings g_az_strs } {}
     : *AzStrings a # *AzStrings ( nurl_malloc Z AzStrings )
     = . a s_issuer ( string_new )
@@ -117,9 +115,7 @@ unsafe
     ^ a
 }
 
-unsafe
-
-@ __az_set_str * AzStrings a i which s v → v {
+unsafe @ __az_set_str * AzStrings a i which s v → v {
     ? == which 0 { ( string_clear . a s_issuer ) ( string_push_str . a s_issuer v ) } {}
     ? == which 1 { ( string_clear . a s_client_id ) ( string_push_str . a s_client_id v ) } {}
     ? == which 2 { ( string_clear . a s_audience ) ( string_push_str . a s_audience v ) } {}
@@ -128,29 +124,19 @@ unsafe
     ? == which 5 { ( string_clear . a s_owner ) ( string_push_str . a s_owner v ) } {}
 }
 
-unsafe
+unsafe @ g_az_issuer → s { ^ ( string_data . ( __az_strs ) s_issuer ) }
 
-@ g_az_issuer → s { ^ ( string_data . ( __az_strs ) s_issuer ) }
+unsafe @ g_az_client_id → s { ^ ( string_data . ( __az_strs ) s_client_id ) }
 
-unsafe
+unsafe @ g_az_audience → s { ^ ( string_data . ( __az_strs ) s_audience ) }
 
-@ g_az_client_id → s { ^ ( string_data . ( __az_strs ) s_client_id ) }
-
-unsafe
-
-@ g_az_audience → s { ^ ( string_data . ( __az_strs ) s_audience ) }
-
-unsafe
-
-@ g_az_allowed → s { ^ ( string_data . ( __az_strs ) s_allowed ) }
+unsafe @ g_az_allowed → s { ^ ( string_data . ( __az_strs ) s_allowed ) }
 
 // The OWNER TENANT: the organisation whose admins administer the service
 // itself — approving other tenants, managing any organisation's users. It
 // is set in the configuration file and nowhere else. A tenant that could
 // grant itself that from the dashboard would not be an anchor.
-unsafe
-
-@ g_az_owner → s { ^ ( string_data . ( __az_strs ) s_owner ) }
+unsafe @ g_az_owner → s { ^ ( string_data . ( __az_strs ) s_owner ) }
 
 @ anomaly_authz_set_owner_tenant s tid → v { ( __az_set_str ( __az_strs ) 5 tid ) }
 
@@ -158,9 +144,7 @@ unsafe
 // turns a one-line configuration mistake — the wrong audience, a clock an
 // hour out, a tenant nobody listed — into an afternoon. The service is
 // single-threaded, so one slot is the whole story.
-unsafe
-
-@ anomaly_authz_last_error → s { ^ ( string_data . ( __az_strs ) s_last_err ) }
+unsafe @ anomaly_authz_last_error → s { ^ ( string_data . ( __az_strs ) s_last_err ) }
 
 @ __az_set_last_err s v → v { ( __az_set_str ( __az_strs ) 4 v ) }
 

@@ -40,9 +40,7 @@ $ `src/detect.nu`
     ( check & == ( img_w big ) 8 == ( img_h big ) 8 `resize dims` )
 }
 
-unsafe
-
-@ test_nchw → v {
+unsafe @ test_nchw → v {
     ( nurl_print `[nchw]\n` )
     : Image im ( img_blank 2 2 )
     ( img_set im 0 0 0 10 ) ( img_set im 1 0 0 20 )
@@ -59,9 +57,7 @@ unsafe
 
 // Build a 13x13x125 grid with one strong "dog" box planted at cell (6,6),
 // anchor 0, and verify decode finds it.
-unsafe
-
-@ test_decode → v {
+unsafe @ test_decode → v {
     ( nurl_print `[decode]\n` )
     : ( Vec u ) grid_v ( vec_zeroed [u] * 21125 4 )
     : *u grid ( vec_data [u] grid_v )

@@ -10,17 +10,13 @@
 // dropping one iteration. gen_loop now captures the speculative IR
 // into the print buffer and discards it.
 
-unsafe
-
-@ next_val * i st → i {
+unsafe @ next_val * i st → i {
     : i v . st 0
     = . st 0 + v 1
     ^ v
 }
 
-unsafe
-
-@ main → i {
+unsafe @ main → i {
     // Side-effecting condition: next_val returns 0,1,2,3,4,… and bumps
     // the counter. `< … 4` is true for 0,1,2,3 → 4 bodies, then 4 → F.
     : *i st # *i ( nurl_alloc 8 )

@@ -19,7 +19,7 @@
 // on all five language implementations printing the same line before it
 // reports a single timing number for the row.
 
-@ main → i {
+unsafe @ main → i {
     : i n 64
     : u64 iterations 5000000
     : *u64 values # *u64 ( malloc * n 8 )

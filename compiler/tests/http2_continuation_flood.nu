@@ -61,9 +61,7 @@ $ `stdlib/ext/http2_server.nu`
     ^ ?? r { T _ → T F _ → F }
 }
 
-unsafe
-
-@ run → i {
+unsafe @ run → i {
     : ~ i fails 0
     : !TcpListener NetErr lr ( tcp_listen `127.0.0.1` 18824 )
     ?? lr {

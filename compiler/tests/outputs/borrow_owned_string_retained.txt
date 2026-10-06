@@ -2,4 +2,4 @@ COMPILE FAIL
 ERRORS
 compiler/tests/borrow_owned_string_retained.nu:7: error: use of moved value 'raw' — a heap handle has exactly one owner, and this one was consumed at line 6 by string_from_take. After that the binding is dead: free or read the value through whatever owns it now, or rebind this name to a fresh value.
     ( nurl_println raw )
-error: compilation aborted — 1 borrow-checker violation (if the program is correct, this is a false positive: please report it as a bug at https://github.com/nurl-lang/nurl/issues)
+error: compilation aborted — 1 borrow-checker violation (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

@@ -1,11 +1,19 @@
 COMPILE FAIL
 ERRORS
+compiler/tests/borrow_store_consume.nu:21: error: 'x' is read here, but its value was moved into 'w' at line 20. A heap value has one owner; once it is stored into an aggregate, an Option or a container (vec_push), the old name is gone, because the owner may release or replace the value while the name still points at it. Read it through 'w' (a field read, or vec_get on it), or store a copy and keep the original: ( mem_dup x ).
+    ( string_free x )
 compiler/tests/borrow_store_consume.nu:21: error: 'x' is consumed here, but its value was stored into an owner at line 20 (an aggregate literal, or a call that keeps it, like vec_push) — that owner drops it now, so this is a second release (a double free). Reading 'x' is fine; to hand a value on AND keep one in the owner, store a copy: ( mem_dup x ) — for a shared handle (Arc, Mutex, Channel, Regex, …) that is one more reference to the same value.
     ( string_free x )
+compiler/tests/borrow_store_consume.nu:28: error: 'x' is read here, but its value was moved into 'a' at line 27. A heap value has one owner; once it is stored into an aggregate, an Option or a container (vec_push), the old name is gone, because the owner may release or replace the value while the name still points at it. Read it through 'a' (a field read, or vec_get on it), or store a copy and keep the original: ( mem_dup x ).
+    : W b @ W { x }
 compiler/tests/borrow_store_consume.nu:28: error: 'x' is stored into a second owner here, but its value was already stored into an owner at line 27 (an aggregate literal, or a call that keeps it, like vec_push) — that owner drops it now, so this is a second release (a double free). Reading 'x' is fine; to hand a value on AND keep one in the owner, store a copy: ( mem_dup x ) — for a shared handle (Arc, Mutex, Channel, Regex, …) that is one more reference to the same value.
     : W b @ W { x }
+compiler/tests/borrow_store_consume.nu:36: error: 'x' is read here, but its value was moved into an owner at line 35. A heap value has one owner; once it is stored into an aggregate, an Option or a container (vec_push), the old name is gone, because the owner may release or replace the value while the name still points at it. Read it through that owner, or store a copy and keep the original: ( mem_dup x ).
+    ( string_free x )
 compiler/tests/borrow_store_consume.nu:36: error: 'x' is consumed here, but its value was stored into an owner at line 35 (an aggregate literal, or a call that keeps it, like vec_push) — that owner drops it now, so this is a second release (a double free). Reading 'x' is fine; to hand a value on AND keep one in the owner, store a copy: ( mem_dup x ) — for a shared handle (Arc, Mutex, Channel, Regex, …) that is one more reference to the same value.
+    ( string_free x )
+compiler/tests/borrow_store_consume.nu:44: error: 'x' is read here, but its value was moved into 'vs' at line 43. A heap value has one owner; once it is stored into an aggregate, an Option or a container (vec_push), the old name is gone, because the owner may release or replace the value while the name still points at it. Read it through 'vs' (a field read, or vec_get on it), or store a copy and keep the original: ( mem_dup x ).
     ( string_free x )
 compiler/tests/borrow_store_consume.nu:44: error: 'x' is consumed here, but its value was stored into an owner at line 43 (an aggregate literal, or a call that keeps it, like vec_push) — that owner drops it now, so this is a second release (a double free). Reading 'x' is fine; to hand a value on AND keep one in the owner, store a copy: ( mem_dup x ) — for a shared handle (Arc, Mutex, Channel, Regex, …) that is one more reference to the same value.
     ( string_free x )
-error: compilation aborted — 4 borrow-checker violations (if the program is correct, this is a false positive: please report it as a bug at https://github.com/nurl-lang/nurl/issues)
+error: compilation aborted — 8 borrow-checker violations (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

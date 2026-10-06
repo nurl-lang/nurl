@@ -17,9 +17,7 @@ $ `stdlib/core/string.nu`
 
 // The __build_argv shape: the argument's address lands in a heap block the
 // callee returns. Nothing in here ever frees that address.
-unsafe
-
-@ borrow_into_block s text → s {
+unsafe @ borrow_into_block s text → s {
     : s block ( nurl_alloc 16 )
     : *u text_p # *u text
     ( nurl_poke block 0 # i text_p )
@@ -32,9 +30,7 @@ unsafe
 // upgrade a borrow into a move either.
 @ forward_into_block s text → s { ^ ( borrow_into_block text ) }
 
-unsafe
-
-@ borrowed → v {
+unsafe @ borrowed → v {
     : s owned ( nurl_str_cat `still` ` here` )
     : s direct ( borrow_into_block owned )
     ( nurl_free direct )
@@ -53,9 +49,7 @@ unsafe
     ( string_free owner )
 }
 
-unsafe
-
-@ main → i {
+unsafe @ main → i {
     : i before ( nurl_free_count )
     ( borrowed )
     // Two scratch blocks freed by hand, plus the auto-dropped string that

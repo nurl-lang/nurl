@@ -7,9 +7,7 @@ $ `stdlib/std/time.nu`
 $ `stdlib/ext/json.nu`
 $ `src/arima.nu`
 
-unsafe
-
-@ gauss * i seed → f {
+unsafe @ gauss * i seed → f {
     = . seed 0 % + * . seed 0 1103515245 12345 2147483648
     : f u / + # f . seed 0 1.0 2147483649.0
     = . seed 0 % + * . seed 0 1103515245 12345 2147483648

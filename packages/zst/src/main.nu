@@ -54,9 +54,7 @@ $ `inspect.nu`
 }
 
 // Read a whole input: a file, or all of stdin when the path is empty.
-unsafe
-
-@ __read_input s path ( Vec i ) okslot → ( Vec u ) {
+unsafe @ __read_input s path ( Vec i ) okslot → ( Vec u ) {
     : *i op ( vec_data [i] okslot )
     = . op 0 1
     ? ( __is_stdin path ) { ^ ( read_all_stdin_bytes ) } {}

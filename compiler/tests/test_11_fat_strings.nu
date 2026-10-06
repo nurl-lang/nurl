@@ -28,9 +28,7 @@
 // kun stdout on putki tai tiedosto — joten stdout on tyhjennettävä
 // ennen raakaa kirjoitusta, tai rivit tulostuvat väärässä
 // järjestyksessä. Sama sääntö kuin C:ssä printf + write(1, ...).
-unsafe
-
-@ safe_print String str → i {
+unsafe @ safe_print String str → i {
     ( nurl_flush_stdout )
     ( write 1 . str ptr . str len )
     ( write 1 `\n` 1 )
@@ -38,9 +36,7 @@ unsafe
 }
 
 // 4. Turvallinen merkin haku indeksistä (palauttaa merkin ASCII-koodin i:nä)
-unsafe
-
-@ char_at String str i index → i {
+unsafe @ char_at String str i index → i {
     // Bounds check: Jos index >= len, palautetaan -1 (eli ~0)
     ^ ? >= index . str len
     ~ 0

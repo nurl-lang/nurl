@@ -12,15 +12,11 @@ $ `stdlib/dist/lease.nu`
 @ mkkey i id → ( Vec u ) { : ( Vec u ) v ( vec_new [u] ) ( vec_push [u] v # u id ) ( vec_push [u] v # u 9 ) ^ v }
 
 // run the effect iff admitted; bump the shared effect counter via a *i cell
-unsafe
-
-@ effect LeaseTable t ( Vec u ) key i epoch i idem * i log → v {
+unsafe @ effect LeaseTable t ( Vec u ) key i epoch i idem * i log → v {
     ? ( lease_admit t key epoch idem ) { = . log 0 + . log 0 1 } {}
 }
 
-unsafe
-
-@ main → i {
+unsafe @ main → i {
     : ( Vec u ) k ( mkkey 1 )
 
     // ── split ownership, NEW owner acts first (token 2 then stale 1) ──

@@ -22,9 +22,7 @@ $ `deps/tensor/src/tensor.nu`
     ( nurl_print `\n` )
 }
 
-unsafe
-
-@ main → i {
+unsafe @ main → i {
     : Blk bl ( blk_new 42 F )
     ( dumpv `x` . bl x )
     ( dumpv `wq` . bl wq ) ( dumpv `bq` . bl bq )

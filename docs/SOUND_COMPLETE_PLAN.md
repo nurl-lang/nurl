@@ -104,3 +104,25 @@ the corpus safe. The target is a guarantee:
 - **P5 — the contract.** Rewrite MEMORY.md §6 as the guarantee and the
   argument for it; the ASan gate stays as a regression net, not as the
   guarantor.
+
+## Status (2026-10-06)
+
+- **P0** done: 17 probes in `tools/fuzz/holes/` (h01–h29), every one
+  rejected by default; the inverse-oracle fuzzer has seven ownership cores.
+- **P1** done: `unsafe` functions and methods (spec §3.3d), raw pointer
+  reads/writes, pointer casts, raw-memory primitives and foreign functions
+  outside the stdlib gated; `nurlc --unsafe-report`. The corpus marks its
+  raw code `unsafe` (the compiler itself: 204 functions). Open: safe
+  replacements for the commonest raw idiom (`vec_data` loops) —
+  `vec_at` / `vec_put` exist but cost ~4× the instructions until the
+  bounds check hoists, so hot loops in packages stay `unsafe` for now.
+- **P2** done: moves, borrows, views, keeping containers and callees,
+  closures (C1/C2) — the rules are the default; `NURL_SOUND=0` restores
+  the old checker for A/B triage only.
+- **P3** partly: a closure run on another thread moves its captures and
+  only share handles cross threads (Channel, Mutex, Arc; HttpServer became
+  one). Open: proving the lock is held by path (today a counted lint).
+- **P4** done for the documented seam (defer/return, per-path transfer
+  flag); the leak argument is MEMORY.md §6.2 + §7.
+- **P5** done: MEMORY.md §6 states the guarantee; ASan/LSan stay as the
+  compiler's regression net.

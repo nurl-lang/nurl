@@ -30,9 +30,7 @@ $ `stdlib/std/arena.nu`
     }
 }
 
-unsafe
-
-@ main → i {
+unsafe @ main → i {
     : ~ i f 0
 
     // Growing arena, tiny chunks (32 bytes ⇒ 4 i64 slots per chunk).

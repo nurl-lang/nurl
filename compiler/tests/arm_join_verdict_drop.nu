@@ -41,9 +41,7 @@ $ `stdlib/core/string.nu`
 
 % Drop ( DH ) { unsafe @ drop DH h → v { = g_drops + g_drops 1 ( nurl_free # s . h buf ) } }
 
-unsafe
-
-@ open i id → !DH String {
+unsafe @ open i id → !DH String {
     ? < id 0 { ^ @ !DH String { F ( string_from `negative` ) } } {}
     ^ @ !DH String { T @ DH { # *u ( malloc 16 ) id } }
 }
@@ -89,9 +87,7 @@ unsafe
 
 // 3. `?`: an arm-local Drop binding in a conditional whose tail is an
 //    assignment — gen_cond's twin of case 1.
-unsafe
-
-@ cond b flag → String {
+unsafe @ cond b flag → String {
     : ~ String out ( string_new )
     ? flag {
         : DH h @ DH { # *u ( malloc 16 ) 30 }
@@ -105,9 +101,7 @@ unsafe
 //    handle must survive the arm: the pointer it hands out is read by
 //    the consumer. Freed by hand afterwards so the pinned run stays
 //    leak-clean (the compiler leaves it, by the leak-not-UAF rule).
-unsafe
-
-@ consumed → i {
+unsafe @ consumed → i {
     : i before g_drops
     : *u p ?? ( open 4 ) {
         T db → { : *u q . db buf = . db buf q q }

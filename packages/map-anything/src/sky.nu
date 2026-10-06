@@ -55,9 +55,7 @@ $ `deps/onnx/src/runtime.nu`
 
 // AND "not sky" into `mask` for one view. `chw` is the fitted frame's
 // [3, h, w] planar [0,1] host buffer (pp_data), `mask` h·w bytes.
-unsafe
-
-@ sky_mask Sky s * f chw i w i h * u mask → b {
+unsafe @ sky_mask Sky s * f chw i w i h * u mask → b {
     ? . s ok {} { ^ F }
     // planar floats → interleaved u8, then the reference's 320×320
     : Image im ( image_new w h 3 )

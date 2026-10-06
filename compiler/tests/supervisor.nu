@@ -14,25 +14,19 @@
 $ `stdlib/core/string.nu`
 $ `stdlib/std/supervisor.nu`
 
-unsafe
-
-@ make_counter → *i {
+unsafe @ make_counter → *i {
     : *i p # *i ( nurl_alloc Z i )
     ( nurl_poke p 0 0 )
     ^ p
 }
 
-unsafe
-
-@ report s label * i ctr Supervisor s2 → v {
+unsafe @ report s label * i ctr Supervisor s2 → v {
     ( nurl_print label )
     ( nurl_print `counter=` ) ( nurl_print_int ( nurl_peek ctr 0 ) )
     ( nurl_print ` restarts=` ) ( nurl_println_int ( child_restarts s2 0 ) )
 }
 
-unsafe
-
-@ main → i {
+unsafe @ main → i {
     // ── 1. Transient: panic until the 4th run, then succeed ──────
     : *i c1 ( make_counter )
     : Supervisor s1 ( supervisor_new 10 100000 )

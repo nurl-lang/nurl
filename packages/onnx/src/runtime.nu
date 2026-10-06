@@ -54,23 +54,17 @@ $ `stdlib/core/rcbox.nu`
 // device block it allocated, and the device.
 : Engine { s ctl }
 
-unsafe
-
-@ Engine_share Engine h → Engine { ^ @ Engine { # s ( rcbox_share # i . h ctl ) } }
+unsafe @ Engine_share Engine h → Engine { ^ @ Engine { # s ( rcbox_share # i . h ctl ) } }
 
 @ Engine_drop sink Engine h → v {
     ( mem_forget h )
     ( rcbox_release [EngineImpl] # i . h ctl )
 }
 
-unsafe
-
-@ __Engine_ptr Engine h → *EngineImpl { ^ ( rcbox_ptr [EngineImpl] # i . h ctl ) }
+unsafe @ __Engine_ptr Engine h → *EngineImpl { ^ ( rcbox_ptr [EngineImpl] # i . h ctl ) }
 
 // The state, for this package's other files (tensor_bridge.nu).
-unsafe
-
-@ _rt_engine_ptr Engine h → *EngineImpl { ^ ( rcbox_ptr [EngineImpl] # i . h ctl ) }
+unsafe @ _rt_engine_ptr Engine h → *EngineImpl { ^ ( rcbox_ptr [EngineImpl] # i . h ctl ) }
 
 // GkBuf views over an RTensor's device allocation, for the gkd_* kernels.
 // Everything on the value map is f32 except the raw token input and ArgMax
@@ -93,13 +87,9 @@ unsafe
 & `c` @ nurl_peek_f32 *u base i idx → f
 
 // The current run's initializers (lent: the caller's graph holds them).
-unsafe
+unsafe @ __rt_inits * EngineImpl e → ( Vec OTensor ) { ^ # ( Vec OTensor ) . e inits_ref }
 
-@ __rt_inits * EngineImpl e → ( Vec OTensor ) { ^ # ( Vec OTensor ) . e inits_ref }
-
-unsafe
-
-@ __rt_init_find * EngineImpl e s name → i {
+unsafe @ __rt_init_find * EngineImpl e s name → i {
     ? == . e inits_ref 0 { ^ -1 } {}
     : ( Vec OTensor ) inits ( __rt_inits e )
     : ~ i k 0
@@ -122,9 +112,7 @@ unsafe
     ?? ( vec_get [OTensor] ( __rt_inits e ) idx ) { T t → { ^ ( otensor_host_ptr t ) } F _ → { ^ 0 } }
 }
 
-unsafe
-
-@ __init_i64 * EngineImpl e s name i k → i {  // k-th value of an INT64 init
+unsafe @ __init_i64 * EngineImpl e s name i k → i {  // k-th value of an INT64 init
     : i h ( __init_host e name )
     ? == h 0 { ^ 0 } { ^ ( nurl_peek # *u h k ) }
 }
@@ -135,9 +123,7 @@ unsafe
     ?? ( vec_get [OTensor] ( __rt_inits e ) idx ) { T t → { ^ . t nelem } F _ → { ^ 0 } }
 }
 
-unsafe
-
-@ __init_f32 * EngineImpl e s name i k → f {  // k-th value of a FLOAT init
+unsafe @ __init_f32 * EngineImpl e s name i k → f {  // k-th value of a FLOAT init
     : i h ( __init_host e name )
     ? == h 0 { ^ 0.0 } { ^ ( nurl_peek_f32 # *u h k ) }
 }
@@ -155,9 +141,7 @@ unsafe
 
 // Open a device. Kernels compile lazily on first use (gpukit caches them
 // in-process by name and on disk by source hash and architecture).
-unsafe
-
-@ rt_open i ordinal → Engine {
+unsafe @ rt_open i ordinal → Engine {
     : GpuKit kit ( gk_open ordinal )
     : b ok ( gk_ok kit )
     ^ @ Engine { # s ( rcbox_new [EngineImpl] @ EngineImpl { ( gk_gpu kit ) kit ( vec_new [RTensor] )
@@ -166,9 +150,7 @@ unsafe
 
 // Install the caller's graph for a run: its names are copied, its
 // initializers viewed (see EngineImpl). The graph stays the caller's.
-unsafe
-
-@ _rt_set_graph * EngineImpl e OGraph g → v {
+unsafe @ _rt_set_graph * EngineImpl e OGraph g → v {
     = . e inits_ref # i . g inits
     : String old_in . e input_name
     ( mem_take old_in )  // the previous run's copies go
@@ -185,9 +167,7 @@ unsafe
 // owner) and hand back its address. Aliased tensors (Reshape/Split share or
 // offset an existing buffer) are NOT recorded — only the real gpu_alloc
 // blocks, so each one is released exactly once.
-unsafe
-
-@ rt_own * EngineImpl e GpuBuffer b → i {
+unsafe @ rt_own * EngineImpl e GpuBuffer b → i {
     : i d . b dptr
     ( vec_push [GpuBuffer] . e owned b )
     ^ d
@@ -196,9 +176,7 @@ unsafe
 // Release every device buffer allocated during the previous run and clear
 // the value map. Lets one Engine serve many forward passes (e.g. one text
 // prompt per call) without holding the last pass's weights + activations.
-unsafe
-
-@ rt_reset Engine e__h → v {
+unsafe @ rt_reset Engine e__h → v {
     : *EngineImpl e ( __Engine_ptr e__h )
     ( vec_clear [GpuBuffer] . e owned )
     ( vec_clear [RTensor] . e vals )
@@ -208,25 +186,19 @@ unsafe
 // opened (yet)".
 @ rt_none → Engine { ^ @ Engine { # s 0 } }
 
-unsafe
-
-@ rt_ok Engine e__h → b {
+unsafe @ rt_ok Engine e__h → b {
     ? == 0 # i . e__h ctl { ^ F } {}
     : *EngineImpl e ( __Engine_ptr e__h )
     ^ . e ok
 }
 
-unsafe
-
-@ rt_name Engine e__h → s {
+unsafe @ rt_name Engine e__h → s {
     : *EngineImpl e ( __Engine_ptr e__h )
     ^ ( gpu_name . e g )
 }
 
 // Register a device tensor under `name` with an explicit shape vector.
-unsafe
-
-@ rt_put * EngineImpl e s name i dptr sink ( Vec i ) shape → v {
+unsafe @ rt_put * EngineImpl e s name i dptr sink ( Vec i ) shape → v {
     ( vec_push [RTensor] . e vals @ RTensor { ( string_from name ) dptr shape ( __prod shape ) } )
 }
 
@@ -237,9 +209,7 @@ unsafe
     ( vec_push [i] v a ) ( vec_push [i] v b ) ( vec_push [i] v c ) ( vec_push [i] v d ) ^ v
 }
 
-unsafe
-
-@ rt_find * EngineImpl e s name → i {
+unsafe @ rt_find * EngineImpl e s name → i {
     : ( Vec RTensor ) vs . e vals
     : ~ i k 0
     ~ < k ( vec_len [RTensor] vs ) {
@@ -249,9 +219,7 @@ unsafe
     ^ - 0 1
 }
 
-unsafe
-
-@ rt_at * EngineImpl e i idx → RTensor {
+unsafe @ rt_at * EngineImpl e i idx → RTensor {
     ?? ( vec_get [RTensor] . e vals idx ) { T t → ^ t F _ → ^ @ RTensor { ( string_new ) 0 ( vec_new [i] ) 0 } }
 }
 // Input name of a node (k-th), as an `s`.
@@ -423,9 +391,7 @@ unsafe
     ^ o
 }
 
-unsafe
-
-@ rt_load_inits * EngineImpl e OGraph g → v {
+unsafe @ rt_load_inits * EngineImpl e OGraph g → v {
     : ( Vec OTensor ) inits . g inits
     : ~ i k 0
     ~ < k ( vec_len [OTensor] inits ) {
@@ -448,9 +414,7 @@ unsafe
 
 // Allocate a fresh device tensor with `shape`, register under `name`,
 // return its dptr.
-unsafe
-
-@ rt_alloc_out * EngineImpl e s name sink ( Vec i ) shape → i {
+unsafe @ rt_alloc_out * EngineImpl e s name sink ( Vec i ) shape → i {
     : GpuBuffer buf ( gpu_alloc . e g * ( __prod shape ) 4 )
     : i bp ( rt_own e buf )
     ( rt_put e name bp shape )
@@ -458,9 +422,7 @@ unsafe
 }
 
 // ── op handlers ───────────────────────────────────────────────────
-unsafe
-
-@ rt_gemm * EngineImpl e ONode n → v {
+unsafe @ rt_gemm * EngineImpl e ONode n → v {
     : RTensor A ( __in e n 0 )
     : RTensor B ( __in e n 1 )
     : i transB ( node_attr_i n `transB` 0 )
@@ -477,18 +439,14 @@ unsafe
     ? ( gkd_gemm . e kit yb ( __rt_fbuf A ) ( __rt_fbuf B ) cb hasb M N K alpha beta transB ) {} { ( __rt_op_fail `Gemm` ) }
 }
 
-unsafe
-
-@ rt_relu * EngineImpl e ONode n → v {
+unsafe @ rt_relu * EngineImpl e ONode n → v {
     : RTensor X ( __in e n 0 )
     : i yd ( rt_alloc_out e ( __out_name n ) ( __shape_copy_rt . X shape ) )
     : GkBuf yb ( gk_buf_wrap yd . X nelem GK_F32 )
     ? ( gkd_relu . e kit yb ( __rt_fbuf X ) ) {} { ( __rt_op_fail `Relu` ) }
 }
 
-unsafe
-
-@ rt_conv * EngineImpl e ONode n → v {
+unsafe @ rt_conv * EngineImpl e ONode n → v {
     : RTensor X ( __in e n 0 )
     : RTensor W ( __in e n 1 )
     : i Cin ( rt_dim X 1 )
@@ -533,9 +491,7 @@ unsafe
 // Transposed convolution (ConvTranspose). Weight is [Cin, Cout, kh, kw].
 // Output size per ONNX: O = stride·(I−1) + output_padding + (k−1)·dil+1
 //   − pad_begin − pad_end. The seg Proto upsample is k2/s2/p0 → O = 2·I.
-unsafe
-
-@ rt_convtranspose * EngineImpl e ONode n → v {
+unsafe @ rt_convtranspose * EngineImpl e ONode n → v {
     : RTensor X ( __in e n 0 )
     : RTensor W ( __in e n 1 )
     : i Cin ( rt_dim X 1 )
@@ -562,9 +518,7 @@ unsafe
     ? ( gkd_convtranspose2d . e kit yb ( __rt_fbuf X ) ( __rt_fbuf W ) bb hasB Cin H Wd Cout kh kw OH OW phb pwb sh sw ) {} { ( __rt_op_fail `ConvTranspose` ) }
 }
 
-unsafe
-
-@ rt_maxpool * EngineImpl e ONode n → v {
+unsafe @ rt_maxpool * EngineImpl e ONode n → v {
     : RTensor X ( __in e n 0 )
     : i C ( rt_dim X 1 )
     : i H ( rt_dim X 2 )
@@ -601,9 +555,7 @@ unsafe
     ? ( gkd_maxpool2d . e kit yb ( __rt_fbuf X ) C H Wd kh kw OH OW sh sw ph pw ) {} { ( __rt_op_fail `MaxPool` ) }
 }
 
-unsafe
-
-@ rt_batchnorm * EngineImpl e ONode n → v {
+unsafe @ rt_batchnorm * EngineImpl e ONode n → v {
     : RTensor X ( __in e n 0 )
     : RTensor sc ( __in e n 1 )
     : RTensor B ( __in e n 2 )
@@ -617,9 +569,7 @@ unsafe
     ? ( gkd_batchnorm . e kit yb ( __rt_fbuf X ) ( __rt_fbuf sc ) ( __rt_fbuf B ) ( __rt_fbuf mn ) ( __rt_fbuf vr ) C HW eps ) {} { ( __rt_op_fail `BatchNormalization` ) }
 }
 
-unsafe
-
-@ rt_leakyrelu * EngineImpl e ONode n → v {
+unsafe @ rt_leakyrelu * EngineImpl e ONode n → v {
     : RTensor X ( __in e n 0 )
     : f alpha ( node_attr_f n `alpha` 0.01 )
     : i yd ( rt_alloc_out e ( __out_name n ) ( __shape_copy_rt . X shape ) )
@@ -636,9 +586,7 @@ unsafe
 // order); Sub/Div keep `in0 op in1`. Broadcast mode is inferred from the
 // operand element count: scalar, full, per-inner (a per-anchor stride
 // vector), or per-channel.
-unsafe
-
-@ rt_binop * EngineImpl e ONode n i op → v {
+unsafe @ rt_binop * EngineImpl e ONode n i op → v {
     : RTensor a ( __in e n 0 )
     : RTensor b ( __in e n 1 )
     : b comm | == op 0 == op 1
@@ -699,9 +647,7 @@ unsafe
 
 @ rt_ew_sym i op → s { ? == op 0 { ^ `*` } {} ? == op 1 { ^ `+` } {} ? == op 2 { ^ `-` } {} ^ `/` }
 
-unsafe
-
-@ rt_sigmoid * EngineImpl e ONode n → v {
+unsafe @ rt_sigmoid * EngineImpl e ONode n → v {
     : RTensor X ( __in e n 0 )
     : i yd ( rt_alloc_out e ( __out_name n ) ( __shape_copy_rt . X shape ) )
     : GkBuf yb ( gk_buf_wrap yd . X nelem GK_F32 )
@@ -735,9 +681,7 @@ unsafe
 // (inputs: data, starts, ends, axes[, steps]) — the shape torch 2.12 /
 // onnxsim emit for channel splits (older exports used Split, which has
 // its own handler). Negative axes normalise; ends clamp to the dim.
-unsafe
-
-@ rt_slice * EngineImpl e ONode n → v {
+unsafe @ rt_slice * EngineImpl e ONode n → v {
     : RTensor X ( __in e n 0 )
     : i nd0 ( rt_ndim X )
     : s st_name ( __rt_str_at . n inputs 1 )
@@ -779,9 +723,7 @@ unsafe
     }
 }
 
-unsafe
-
-@ rt_resize * EngineImpl e ONode n → v {
+unsafe @ rt_resize * EngineImpl e ONode n → v {
     : RTensor X ( __in e n 0 )
     : i C ( rt_dim X 1 )
     : i H ( rt_dim X 2 )
@@ -814,9 +756,7 @@ unsafe
 
 // General transpose (≤6-D): input dims + perm straight to gkd_perm (which
 // pads to its 6-D kernel with trailing 1s / identity).
-unsafe
-
-@ rt_transpose * EngineImpl e ONode n → v {
+unsafe @ rt_transpose * EngineImpl e ONode n → v {
     : RTensor X ( __in e n 0 )
     : i nd ( rt_ndim X )
     : ( Vec i ) dims ( vec_new [i] )
@@ -835,9 +775,7 @@ unsafe
 }
 
 // Softmax over `axis`, viewing the tensor as (outer, axis, inner).
-unsafe
-
-@ rt_softmax * EngineImpl e ONode n → v {
+unsafe @ rt_softmax * EngineImpl e ONode n → v {
     : RTensor X ( __in e n 0 )
     // ONNX permits a negative `axis` (counts from the end). Normalise it to
     // a non-negative index before deriving outer/axis-length/inner, or the
@@ -858,9 +796,7 @@ unsafe
 }
 
 // Concat along `axis`, viewing each input as (outer, axis_i, inner).
-unsafe
-
-@ rt_concat * EngineImpl e ONode n → v {
+unsafe @ rt_concat * EngineImpl e ONode n → v {
     : RTensor first ( __in e n 0 )
     // negative axis counts from the end (same normalisation softmax
     // needed — torch 2.12 emits Concat axis=-1 for the level merge)
@@ -905,9 +841,7 @@ unsafe
 // Split along `axis` into contiguous slices — alias each output onto the
 // input buffer at its byte offset (no copy). Sizes from the INT64 init
 // input[1] when present, else `num_outputs` equal parts.
-unsafe
-
-@ rt_split * EngineImpl e ONode n → v {
+unsafe @ rt_split * EngineImpl e ONode n → v {
     : RTensor X ( __in e n 0 )
     : i axis ( node_attr_i n `axis` 1 )
     : ~ i outer 1
@@ -951,9 +885,7 @@ unsafe
 // MatMul. Two cases: A[...,M,K] @ B[K,N] (2-D B) collapses leading dims
 // into M and uses Gemm; A[...,M,K] @ B[...,K,N] (matching batch dims, the
 // attention case) uses a batched matmul.
-unsafe
-
-@ rt_matmul * EngineImpl e ONode n → v {
+unsafe @ rt_matmul * EngineImpl e ONode n → v {
     : RTensor A ( __in e n 0 )
     : RTensor B ( __in e n 1 )
     : i Kd ( rt_last A )
@@ -982,9 +914,7 @@ unsafe
 }
 
 // LayerNormalization over the last axis (scale = in1, bias = in2).
-unsafe
-
-@ rt_layernorm * EngineImpl e ONode n → v {
+unsafe @ rt_layernorm * EngineImpl e ONode n → v {
     : RTensor X ( __in e n 0 )
     : RTensor sc ( __in e n 1 )
     : RTensor bi ( __in e n 2 )
@@ -996,9 +926,7 @@ unsafe
     ? ( gkd_layernorm . e kit yb ( __rt_fbuf X ) ( __rt_fbuf sc ) ( __rt_fbuf bi ) outer ax eps ) {} { ( __rt_op_fail `LayerNormalization` ) }
 }
 
-unsafe
-
-@ rt_erf * EngineImpl e ONode n → v {
+unsafe @ rt_erf * EngineImpl e ONode n → v {
     : RTensor X ( __in e n 0 )
     : i yd ( rt_alloc_out e ( __out_name n ) ( __shape_copy_rt . X shape ) )
     : GkBuf yb ( gk_buf_wrap yd . X nelem GK_F32 )
@@ -1009,9 +937,7 @@ unsafe
 // index built from (arange, argmax(tokens)) selecting each row's EOS token.
 // Rather than materialise the int64 index chain, gather directly from the
 // graph's token input: out[b,:] = data[b, argmax(tokens[b]), :].
-unsafe
-
-@ rt_gathernd * EngineImpl e ONode n → v {
+unsafe @ rt_gathernd * EngineImpl e ONode n → v {
     : RTensor data ( __in e n 0 )
     : i B ( rt_dim data 0 )
     : i L ( rt_dim data 1 )
@@ -1033,9 +959,7 @@ unsafe
 // read-out (ArgMax over token ids → Gather), which onnxsim leaves as a
 // plain ArgMax+Gather pair — the eos_gather fast path only matches the
 // old GatherND formulation.
-unsafe
-
-@ rt_argmax * EngineImpl e ONode n → v {
+unsafe @ rt_argmax * EngineImpl e ONode n → v {
     : RTensor x ( __in e n 0 )
     : i nd0 ( rt_ndim x )
     : ~ i axis ( node_attr_i n `axis` 0 )
@@ -1063,9 +987,7 @@ unsafe
     }
 }
 
-unsafe
-
-@ rt_gather * EngineImpl e ONode n → v {
+unsafe @ rt_gather * EngineImpl e ONode n → v {
     : RTensor data ( __in e n 0 )
     : ~ i axis ( node_attr_i n `axis` 0 )
     ? < axis 0 { = axis + axis ( rt_ndim data ) } {}
@@ -1111,9 +1033,7 @@ unsafe
 
 // Einsum "bchw,bkc->bkhw": region[1,C,H,W] · text[1,K,C] -> [1,K,H,W].
 // = Gemm(text[K,C], region[C,HW]) -> [K,HW].
-unsafe
-
-@ rt_einsum * EngineImpl e ONode n → v {
+unsafe @ rt_einsum * EngineImpl e ONode n → v {
     : s eq ( node_attr_s n `equation` `` )
     : RTensor region ( __in e n 0 )
     : RTensor text ( __in e n 1 )
@@ -1127,9 +1047,7 @@ unsafe
     ? ( gkd_gemm . e kit yb ( __rt_fbuf text ) ( __rt_fbuf region ) ( __rt_fbuf text ) 0 Kk HW C 1.0 0.0 0 ) {} { ( __rt_op_fail `Einsum` ) }
 }
 
-unsafe
-
-@ rt_reducel2 * EngineImpl e ONode n → v {
+unsafe @ rt_reducel2 * EngineImpl e ONode n → v {
     : RTensor X ( __in e n 0 )
     : i ax ( rt_last X )
     : i outer / . X nelem ax
@@ -1142,9 +1060,7 @@ unsafe
     ? ( gkd_reducel2 . e kit yb ( __rt_fbuf X ) outer ax ) {} { ( __rt_op_fail `ReduceL2` ) }
 }
 
-unsafe
-
-@ rt_clip * EngineImpl e ONode n → v {
+unsafe @ rt_clip * EngineImpl e ONode n → v {
     : RTensor X ( __in e n 0 )
     : ~ f lo - 0.0 1000000000.0
     : ~ f hi 1000000000.0
@@ -1165,9 +1081,7 @@ unsafe
 }
 
 // Expand the last axis (broadcast a (...,1) tensor to the target shape).
-unsafe
-
-@ rt_expand * EngineImpl e ONode n → v {
+unsafe @ rt_expand * EngineImpl e ONode n → v {
     : RTensor X ( __in e n 0 )
     : s shp_name ( __rt_str_at . n inputs 1 )
     : i nd ( __init_i64_len e shp_name )
@@ -1202,9 +1116,7 @@ unsafe
 // Run the graph on a host input buffer (raw f32). `shape` is the input
 // tensor shape (e.g. [1,3,416,416]), consumed (the value map keeps it).
 // Returns the output device tensor.
-unsafe
-
-@ rt_run_shaped Engine e__h OGraph g * u input_host sink ( Vec i ) shape → RTensor {
+unsafe @ rt_run_shaped Engine e__h OGraph g * u input_host sink ( Vec i ) shape → RTensor {
     : *EngineImpl e ( __Engine_ptr e__h )
     ( rt_reset e__h )
     ( _rt_set_graph e g )
@@ -1219,9 +1131,7 @@ unsafe
 
 // Token run: the single input is an INT64 token matrix [nrow, ncol] already
 // laid out in `tokhost` (8-byte LE). Uploaded as-is for the embedding Gather.
-unsafe
-
-@ rt_run_tokens Engine e__h OGraph g * u tokhost i nrow i ncol → RTensor {
+unsafe @ rt_run_tokens Engine e__h OGraph g * u tokhost i nrow i ncol → RTensor {
     : *EngineImpl e ( __Engine_ptr e__h )
     ( rt_reset e__h )
     ( _rt_set_graph e g )
@@ -1234,9 +1144,7 @@ unsafe
 }
 
 // Two-input run (e.g. image + text embeddings for a promptable model).
-unsafe
-
-@ rt_run_two Engine e__h OGraph g s n1 * u h1 sink ( Vec i ) s1 s n2 * u h2 sink ( Vec i ) s2 → RTensor {
+unsafe @ rt_run_two Engine e__h OGraph g s n1 * u h1 sink ( Vec i ) s1 s n2 * u h2 sink ( Vec i ) s2 → RTensor {
     : *EngineImpl e ( __Engine_ptr e__h )
     ( rt_reset e__h )
     ( _rt_set_graph e g )
@@ -1252,9 +1160,7 @@ unsafe
     ^ ( _rt_run_nodes e g )
 }
 
-unsafe
-
-@ _rt_run_nodes * EngineImpl e OGraph g → RTensor {
+unsafe @ _rt_run_nodes * EngineImpl e OGraph g → RTensor {
     // Chain every launch on the stream; one device sync at the end (the
     // CUDA stream serialises kernels, the CPU backend is synchronous).
     ( gk_autosync F )
@@ -1338,9 +1244,7 @@ unsafe
 // The model's SECOND output (segmentation proto) after a run — valid until
 // the next rt_reset. nelem 0 if the model has no second output. The value
 // map still holds it because reset only happens at the start of a run.
-unsafe
-
-@ rt_output1 Engine e__h → RTensor {
+unsafe @ rt_output1 Engine e__h → RTensor {
     : *EngineImpl e ( __Engine_ptr e__h )
     : s nm ( string_data . e output1_name )
     ? == ( nurl_str_len nm ) 0 { ^ @ RTensor { ( string_new ) 0 ( vec_new [i] ) 0 } } {}

@@ -18,9 +18,7 @@ $ `src/geom.nu`
     ? ok {} { = __s3_fails + __s3_fails 1 }
 }
 
-unsafe
-
-@ __s3_case f s f ax f ay f az f angle f tx f ty f tz f noise s label → v {
+unsafe @ __s3_case f s f ax f ay f az f angle f tx f ty f tz f noise s label → v {
     : i n 500
     // unit axis + quaternion for the ground-truth rotation
     : f al ( float_sqrt + + * ax ax * ay ay * az az )

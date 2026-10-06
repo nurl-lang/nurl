@@ -15,9 +15,7 @@ $ `stdlib/ext/json.nu`
 
 : | CE { CBad CNet }
 
-unsafe
-
-@ live → i { ^ - ( nurl_alloc_count ) ( nurl_free_count ) }
+unsafe @ live → i { ^ - ( nurl_alloc_count ) ( nurl_free_count ) }
 
 @ dec i k → ?Json { ? < k 0 { ^ @ ?Json { F } } {} ^ ?? ( json_parse `{"result":{"x":1}}` ) { T j → @ ?Json { T j } F _ → @ ?Json { F } } }
 

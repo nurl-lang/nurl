@@ -1,13 +1,13 @@
 // quicksort — sort 5000 LCG-generated ints in place, print a
 // position-weighted checksum (sum of (k+1)*a[k]) that only comes out
 // right if the array is actually sorted. Recursion + array mutation.
-@ swap *i a i p i q → v {
+unsafe @ swap *i a i p i q → v {
     : i t . a p
     = . a p . a q
     = . a q t
 }
 
-@ qsort *i a i lo i hi → v {
+unsafe @ qsort *i a i lo i hi → v {
     ? < lo hi {
         : i pivot . a hi
         : ~ i st lo
@@ -22,7 +22,7 @@
     } {}
 }
 
-@ main → i {
+unsafe @ main → i {
     : i N 5000
     : *i a # *i ( malloc * N 8 )
     : ~ i x 1

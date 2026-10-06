@@ -221,9 +221,7 @@ $ `manage.nu`
 : i AG_AUTH_CACHE_S 60
 : i AG_AUTH_CACHE_MAX 512
 
-unsafe
-
-@ __ag_auth → *AgAuth {
+unsafe @ __ag_auth → *AgAuth {
     ? == g_ag_auth 0 {
         = g_ag_auth ( rcbox_new [AgAuth] @ AgAuth {
             F F ( string_new ) ( string_new ) ( string_new ) ( string_new ) ( string_new ) ( string_new ) ( string_new )
@@ -236,16 +234,12 @@ unsafe
     ^ ( rcbox_ptr [AgAuth] g_ag_auth )
 }
 
-unsafe
-
-@ __ag_lock → v {
+unsafe @ __ag_lock → v {
     : *AgAuth _a ( __ag_auth )
     ( pthread_mutex_lock # *u g_ag_auth_mu )
 }
 
-unsafe
-
-@ __ag_unlock → v { ( pthread_mutex_unlock # *u g_ag_auth_mu ) }
+unsafe @ __ag_unlock → v { ( pthread_mutex_unlock # *u g_ag_auth_mu ) }
 
 @ __ag_set String dst s v → v {
     ( string_clear dst )
@@ -265,32 +259,22 @@ unsafe
 }
 
 // The directory everything of a signed-in service lives in.
-unsafe
-
-@ ag_auth_set_home s home → v {
+unsafe @ ag_auth_set_home s home → v {
     : *AgAuth a ( __ag_auth )
     ( __ag_set . a home home )
 }
 
-unsafe
+unsafe @ ag_auth_home → s { ^ ( string_data . ( __ag_auth ) home ) }
 
-@ ag_auth_home → s { ^ ( string_data . ( __ag_auth ) home ) }
-
-unsafe
-
-@ ag_auth_set_webroot s dir → v {
+unsafe @ ag_auth_set_webroot s dir → v {
     : *AgAuth a ( __ag_auth )
     ( __ag_set . a webroot dir )
 }
 
-unsafe
-
-@ ag_auth_webroot → s { ^ ( string_data . ( __ag_auth ) webroot ) }
+unsafe @ ag_auth_webroot → s { ^ ( string_data . ( __ag_auth ) webroot ) }
 
 // Switch the signed-in mode on (or off). `audience` '' = api://<client id>.
-unsafe
-
-@ ag_auth_configure b on b multi s issuer s client_id s audience s owner s allowed s public_url → v {
+unsafe @ ag_auth_configure b on b multi s issuer s client_id s audience s owner s allowed s public_url → v {
     : *AgAuth a ( __ag_auth )
     = . a oidc on
     = . a multi multi
@@ -351,33 +335,19 @@ unsafe
     ^ T
 }
 
-unsafe
+unsafe @ ag_auth_oidc → b { ^ . ( __ag_auth ) oidc }
 
-@ ag_auth_oidc → b { ^ . ( __ag_auth ) oidc }
+unsafe @ ag_auth_multi → b { ^ . ( __ag_auth ) multi }
 
-unsafe
+unsafe @ ag_auth_issuer → s { ^ ( string_data . ( __ag_auth ) issuer ) }
 
-@ ag_auth_multi → b { ^ . ( __ag_auth ) multi }
+unsafe @ ag_auth_client_id → s { ^ ( string_data . ( __ag_auth ) client_id ) }
 
-unsafe
+unsafe @ ag_auth_audience → s { ^ ( string_data . ( __ag_auth ) audience ) }
 
-@ ag_auth_issuer → s { ^ ( string_data . ( __ag_auth ) issuer ) }
+unsafe @ ag_auth_owner → s { ^ ( string_data . ( __ag_auth ) owner ) }
 
-unsafe
-
-@ ag_auth_client_id → s { ^ ( string_data . ( __ag_auth ) client_id ) }
-
-unsafe
-
-@ ag_auth_audience → s { ^ ( string_data . ( __ag_auth ) audience ) }
-
-unsafe
-
-@ ag_auth_owner → s { ^ ( string_data . ( __ag_auth ) owner ) }
-
-unsafe
-
-@ ag_auth_public_url → s { ^ ( string_data . ( __ag_auth ) public_url ) }
+unsafe @ ag_auth_public_url → s { ^ ( string_data . ( __ag_auth ) public_url ) }
 
 // The OAuth scope a client asks for: <audience>/access_as_user.
 @ ag_auth_scope → String {
@@ -443,9 +413,7 @@ unsafe
 }
 
 // Is `path` among the files whose schema this process made sure of?
-unsafe
-
-@ __ag_ready s path → b {
+unsafe @ __ag_ready s path → b {
     : ~ b ready F
     ( __ag_lock )
     : *AgAuth a ( __ag_auth )
@@ -462,9 +430,7 @@ unsafe
     ^ ready
 }
 
-unsafe
-
-@ __ag_mark_ready s path → v {
+unsafe @ __ag_mark_ready s path → v {
     ( __ag_lock )
     ( vec_push [String] . ( __ag_auth ) ready ( string_from path ) )
     ( __ag_unlock )
@@ -683,9 +649,7 @@ unsafe
 }
 
 // A remembered verdict for this token, if one is still good.
-unsafe
-
-@ __ag_cache_get String h i now → ?AgPrincipal {
+unsafe @ __ag_cache_get String h i now → ?AgPrincipal {
     ( __ag_lock )
     : *AgAuth a ( __ag_auth )
     : ~ ? AgPrincipal out @ ?AgPrincipal { F }
@@ -707,9 +671,7 @@ unsafe
     ^ out
 }
 
-unsafe
-
-@ __ag_cache_put String h i until AgPrincipal p → v {
+unsafe @ __ag_cache_put String h i until AgPrincipal p → v {
     ( __ag_lock )
     : *AgAuth a ( __ag_auth )
     // Full: start over. Every entry is at most a minute old, so the cost
@@ -729,18 +691,14 @@ unsafe
 }
 
 // Forget every remembered verdict (a role or a tenant decision changed).
-unsafe
-
-@ ag_auth_forget_all → v {
+unsafe @ ag_auth_forget_all → v {
     ( __ag_lock )
     ( vec_clear [AgAuthHit] . ( __ag_auth ) hits )
     ( __ag_unlock )
 }
 
 // The provider; discovered on first use. Call with the lock held.
-unsafe
-
-@ __ag_provider_locked → ?OidcProvider {
+unsafe @ __ag_provider_locked → ?OidcProvider {
     : *AgAuth a ( __ag_auth )
     ? != . a prov 0 { ^ @ ?OidcProvider { T ( OidcProvider_share # OidcProvider . a prov ) } } {}
     ? . a multi {
@@ -847,9 +805,7 @@ unsafe
 
 // Verify `token`; on success, the person, with their organisation's
 // database and their row in it made sure of.
-unsafe
-
-@ __ag_verify s token i now → AgPrincipal {
+unsafe @ __ag_verify s token i now → AgPrincipal {
     ? ( ag_auth_multi ) {
         : String tid0 ( __ag_unverified_tid token )
         ? ( ag_tenant_admitted ( string_data tid0 ) `` now ) {} {

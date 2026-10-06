@@ -9,9 +9,7 @@
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
 
-unsafe
-
-@ main → i {
+unsafe @ main → i {
     : ( Vec s ) v ( vec_new [s] )
     : ~ i k 0
     ~ < k 5 {

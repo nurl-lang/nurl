@@ -16,22 +16,16 @@ $ `stdlib/core/rcbox.nu`
 
 & `libc` @ nurl_free_count → i
 
-unsafe
+unsafe @ live → i { ^ - ( nurl_alloc_count ) ( nurl_free_count ) }
 
-@ live → i { ^ - ( nurl_alloc_count ) ( nurl_free_count ) }
-
-unsafe
-
-@ allocs → i { ^ ( nurl_alloc_count ) }
+unsafe @ allocs → i { ^ ( nurl_alloc_count ) }
 
 @ report s what i d → v { ( nurl_print what ) ( nurl_print_int d ) ( nurl_print `\n` ) }
 
 : PairImpl { ( Vec i ) v0 ( Vec i ) v1 }
 : Pair { s ctl }
 
-unsafe
-
-@ Pair_share Pair h → Pair { ^ @ Pair { # s ( rcbox_share # i . h ctl ) } }
+unsafe @ Pair_share Pair h → Pair { ^ @ Pair { # s ( rcbox_share # i . h ctl ) } }
 
 @ Pair_drop sink Pair h → v { ( mem_forget h ) ( rcbox_release [PairImpl] # i . h ctl ) }
 
@@ -42,13 +36,9 @@ unsafe
     ^ v
 }
 
-unsafe
+unsafe @ pair_of sink ( Vec i ) a sink ( Vec i ) b → Pair { ^ @ Pair { # s ( rcbox_new [PairImpl] @ PairImpl { a b } ) } }
 
-@ pair_of sink ( Vec i ) a sink ( Vec i ) b → Pair { ^ @ Pair { # s ( rcbox_new [PairImpl] @ PairImpl { a b } ) } }
-
-unsafe
-
-@ pair_len Pair p → i {
+unsafe @ pair_len Pair p → i {
     : *PairImpl q ( rcbox_ptr [PairImpl] # i . p ctl )
     ^ + ( vec_len [i] . q v0 ) ( vec_len [i] . q v1 )
 }

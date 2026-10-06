@@ -11,9 +11,7 @@ $ `stdlib/std/btree.nu`
 
 : i N 2000
 
-unsafe
-
-@ main → i {
+unsafe @ main → i {
     : ( @ i i i ) cmp \ i a i b → i { ^ - a b }
     : ( BTree i i ) m ( btree_new [i i] )
 

@@ -4,7 +4,7 @@
 // warning implicated is exercised here and produces the right answer.
 // What actually miscompiled was a pointer into a container that
 // REALLOCATED — an orthogonal hazard (it needs no `~` at all), diagnosed
-// by should_warn_stale_borrow.nu.
+// by diag_stale_borrow.nu.
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 
@@ -15,9 +15,7 @@ $ `stdlib/core/vec.nu`
     ( nurl_print name ) ( nurl_print `\n` )
 }
 
-unsafe
-
-@ main → i {
+unsafe @ main → i {
     // 1. a mutable struct pointer walked through a 100k-link chain
     : i N 100000
     : *u arena # *u ( nurl_alloc * N 16 )

@@ -18,14 +18,14 @@
 
 // One step of the 32-bit LCG, state held by pointer so a single stream
 // feeds both halves of every 64-bit hash.
-@ lcg_step * u64 st → u64 {
+unsafe @ lcg_step * u64 st → u64 {
     : ~ u64 s . st 0
     = s & + * s 1664525 1013904223 0xffffffff
     = . st 0 s
     ^ s
 }
 
-@ split_block_insert * u64 filter u64 hash → v {
+unsafe @ split_block_insert * u64 filter u64 hash → v {
     : ~ i lane 0
     ~ < lane 4 {
         : u64 word & >> hash * lane 8 255
@@ -37,7 +37,7 @@
 
 // Returns 1 when all four lanes are set, else 0 — the peers' `hit`
 // accumulator, kept as an integer so the caller can add it directly.
-@ split_block_maybe_contains * u64 filter u64 hash → u64 {
+unsafe @ split_block_maybe_contains * u64 filter u64 hash → u64 {
     : ~ u64 hit 1
     : ~ i lane 0
     ~ < lane 4 {
@@ -49,7 +49,7 @@
     ^ hit
 }
 
-@ main → i {
+unsafe @ main → i {
     : *u64 st # *u64 ( malloc 8 )
     = . st 0 # u64 123456789
     : *u64 filter # *u64 ( malloc * 256 8 )

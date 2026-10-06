@@ -95,9 +95,7 @@ $ `src/score.nu`
 
 // ── Determinism: fixed seed ⇒ identical scores ────────────────────────
 
-unsafe
-
-@ test_determinism → v {
+unsafe @ test_determinism → v {
     : ( Vec f ) data ( make_data )
     : VerCfg cfg1 ( test_cfg -1.0 0.1 )
     : VerCfg cfg2 ( test_cfg -1.0 0.1 )

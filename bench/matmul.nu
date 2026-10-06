@@ -1,7 +1,7 @@
 // matmul — multiply two 256x256 integer matrices, print the trace of
 // the product. Deterministic fill: A[i][j] = (i*N+j) % 7,
 // B[i][j] = (i+j) % 5. Stresses nested loops + flat-array indexing.
-@ main → i {
+unsafe @ main → i {
     : i N 256
     : *i a # *i ( malloc * * N N 8 )
     : *i b # *i ( malloc * * N N 8 )

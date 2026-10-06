@@ -19,9 +19,7 @@
 // a XOR b  =  (a | b) - (a & b)   when a,b ∈ {0,1}
 @ xor i a i b → i { ^ - | a b & a b }
 
-unsafe
-
-@ render * i row i w → v {
+unsafe @ render * i row i w → v {
     : ~ i x 0
     ~ < x w {
         ? == . row x 1
@@ -32,9 +30,7 @@ unsafe
     ( nurl_print `\n` )
 }
 
-unsafe
-
-@ step * i cur * i nxt i w → v {
+unsafe @ step * i cur * i nxt i w → v {
     : ~ i j 0
     ~ < j w {
         // Toroidal edges: index -1 wraps to w-1, index w wraps to 0.
@@ -46,9 +42,7 @@ unsafe
     }
 }
 
-unsafe
-
-@ copy * i src * i dst i w → v {
+unsafe @ copy * i src * i dst i w → v {
     : ~ i k 0
     ~ < k w {
         = . dst k . src k
@@ -56,9 +50,7 @@ unsafe
     }
 }
 
-unsafe
-
-@ main → i {
+unsafe @ main → i {
     : i width 79
     : i gens 40
 

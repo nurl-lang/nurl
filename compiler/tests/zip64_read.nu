@@ -43,9 +43,7 @@ $ `stdlib/ext/zip.nu`
     ( nurl_print `\n` )
 }
 
-unsafe
-
-@ main → i {
+unsafe @ main → i {
     : String hex ( z64_hex )
     : !( Vec u ) ParseErr hb ( bytes_from_hex ( string_data hex ) )
     ( string_free hex )

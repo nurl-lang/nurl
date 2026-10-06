@@ -214,9 +214,7 @@ GkBuf up GkBuf t1 GkBuf t2 GkBuf dst i ch i h i w → b {
 }
 
 // The whole head, for one view.
-unsafe
-
-@ dp_forward GpuKit kit Dpt d GkBuf h0 GkBuf h1 GkBuf h2 GkBuf h3
+unsafe @ dp_forward GpuKit kit Dpt d GkBuf h0 GkBuf h1 GkBuf h2 GkBuf h3
 i voff i gh i gw i h i w GkBuf rays GkBuf depth GkBuf conf GkBuf mask → b {
     : i np * gh gw
 

@@ -315,22 +315,16 @@ $ `stdlib/core/rcbox.nu`
 // every copy is the same stream, and the last owner releases it.
 : VadStream { s ctl }
 
-unsafe
-
-@ VadStream_share VadStream h → VadStream { ^ @ VadStream { # s ( rcbox_share # i . h ctl ) } }
+unsafe @ VadStream_share VadStream h → VadStream { ^ @ VadStream { # s ( rcbox_share # i . h ctl ) } }
 
 @ VadStream_drop sink VadStream h → v {
     ( mem_forget h )
     ( rcbox_release [VadStreamImpl] # i . h ctl )
 }
 
-unsafe
+unsafe @ __VadStream_ptr VadStream h → *VadStreamImpl { ^ ( rcbox_ptr [VadStreamImpl] # i . h ctl ) }
 
-@ __VadStream_ptr VadStream h → *VadStreamImpl { ^ ( rcbox_ptr [VadStreamImpl] # i . h ctl ) }
-
-unsafe
-
-@ vad_stream_new i rate VadOpts o → VadStream {
+unsafe @ vad_stream_new i rate VadOpts o → VadStream {
     : i st__box ( rcbox_zero [VadStreamImpl] )
     : *VadStreamImpl st ( rcbox_ptr [VadStreamImpl] st__box )
     = . st buf ( vec_new [f] )
@@ -360,9 +354,7 @@ unsafe
 
 // The trailing-minute percentile. ~6000 energies at most; sorting a copy once
 // a second is nothing next to one second of audio.
-unsafe
-
-@ __vads_refloor * VadStreamImpl st → v {
+unsafe @ __vads_refloor * VadStreamImpl st → v {
     : i n ( vec_len [f] . st e )
     ? < n 30 { ^ {} } {}
     : ( Vec f ) s ( vec_new [f] )
@@ -378,9 +370,7 @@ unsafe
 }
 
 // Close the run [run_frame, end_frame) into the pending segment slot.
-unsafe
-
-@ __vads_close * VadStreamImpl st i run_frame i end_frame → v {
+unsafe @ __vads_close * VadStreamImpl st i run_frame i end_frame → v {
     : ~ i s0 - * run_frame . st hop . st pad
     ? < s0 . st base { = s0 . st base } {}
     : ~ i s1 + * end_frame . st hop . st pad
@@ -393,9 +383,7 @@ unsafe
 // Feed samples. Frames are processed up to the data (or up to a pending
 // segment — one is handed over at a time, and processing resumes after
 // vad_stream_take).
-unsafe
-
-@ vad_stream_push VadStream st__h ( Vec f ) x → v {
+unsafe @ vad_stream_push VadStream st__h ( Vec f ) x → v {
     : *VadStreamImpl st ( __VadStream_ptr st__h )
     : ~ i k 0
     ~ < k ( vec_len [f] x ) {
@@ -405,9 +393,7 @@ unsafe
     ( __vads_process st )
 }
 
-unsafe
-
-@ __vads_process * VadStreamImpl st → v {
+unsafe @ __vads_process * VadStreamImpl st → v {
     ~ & == . st seg_start -1
     <= + * . st nframe . st hop . st win + . st base ( vec_len [f] . st buf ) {
         : i f . st nframe
@@ -470,9 +456,7 @@ unsafe
 }
 
 // Drop buffer prefix below absolute sample `abs`.
-unsafe
-
-@ __vads_drop * VadStreamImpl st i abs → v {
+unsafe @ __vads_drop * VadStreamImpl st i abs → v {
     : i off - abs . st base
     ? <= off 0 { ^ {} } {}
     : ( Vec f ) nb ( vec_new [f] )
@@ -487,26 +471,20 @@ unsafe
 }
 
 // Is a closed segment waiting?
-unsafe
-
-@ vad_stream_poll VadStream st__h → b {
+unsafe @ vad_stream_poll VadStream st__h → b {
     : *VadStreamImpl st ( __VadStream_ptr st__h )
     ^ != . st seg_start -1
 }
 
 // Where the pending segment sits, in absolute samples since stream start.
-unsafe
-
-@ vad_stream_seg VadStream st__h → VadSeg {
+unsafe @ vad_stream_seg VadStream st__h → VadSeg {
     : *VadStreamImpl st ( __VadStream_ptr st__h )
     ^ @ VadSeg { . st seg_start . st seg_end }
 }
 
 // The pending segment's audio. Clears the slot, releases what came before
 // it, and resumes frame processing.
-unsafe
-
-@ vad_stream_take VadStream st__h → ( Vec f ) {
+unsafe @ vad_stream_take VadStream st__h → ( Vec f ) {
     : *VadStreamImpl st ( __VadStream_ptr st__h )
     : ( Vec f ) out ( vec_new [f] )
     ? == . st seg_start -1 { ^ out } {}
@@ -526,9 +504,7 @@ unsafe
 
 // End of stream: close an open run (if it was ever long enough to be
 // speech). T = a segment is now pending.
-unsafe
-
-@ vad_stream_flush VadStream st__h → b {
+unsafe @ vad_stream_flush VadStream st__h → b {
     : *VadStreamImpl st ( __VadStream_ptr st__h )
     ? != . st seg_start -1 { ^ T } {}
     ? >= . st run_start 0 {

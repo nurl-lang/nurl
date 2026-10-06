@@ -3,9 +3,7 @@
 
 $ `stdlib/std/arc.nu`
 
-unsafe
-
-@ main → i {
+unsafe @ main → i {
     : ( Arc i ) a ( arc_new [i] 333 )
     ( nurl_print `count=` ) ( nurl_print ( nurl_str_int ( arc_strong [i] a ) ) )
     ( nurl_print ` value=` ) ( nurl_print ( nurl_str_int ( arc_get [i] a ) ) )

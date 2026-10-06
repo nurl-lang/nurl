@@ -19,7 +19,7 @@ $ `stdlib/core/vec.nu`
 // not grow it and the pointer stays valid at run time — which is
 // precisely why this is a WARNING and not an error (§2.10). The
 // diagnostic is conservative on purpose; the program is correct.
-@ main → i {
+unsafe @ main → i {
     : ~ ( Vec u ) v ( vec_with_cap [u] 8 )
     ( vec_push [u] v # u 1 )
     : *u p ( vec_data [u] v )

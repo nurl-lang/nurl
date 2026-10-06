@@ -49,18 +49,14 @@
 }
 
 // ── Heap-allocate an Ast node (tiny helper) ──────────────────
-unsafe
-
-@ box_ast Ast node → *Ast {
+unsafe @ box_ast Ast node → *Ast {
     : *Ast p # *Ast ( malloc Z Ast )
     = . p 0 node  // *p = node  (field 0 of the boxed struct)
     ^ p
 }
 
 // ── Evaluator returning an Option (division-by-zero → None) ──
-unsafe
-
-@ eval * Ast e → ?i {
+unsafe @ eval * Ast e → ?i {
     = eval_count + eval_count 1
 
     ?? . e 0 {

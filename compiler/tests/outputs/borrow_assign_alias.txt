@@ -1,5 +1,7 @@
 COMPILE FAIL
 ERRORS
-compiler/tests/borrow_assign_alias.nu:47: error: use of possibly-moved value 'a' — it may share its buffer with 'z', which was consumed at line 46; on that path this reads a freed buffer. Consume it on every path, or rebind it (= a …) on the path that consumed it
+compiler/tests/borrow_assign_alias.nu:36: error: use of moved value 't' — a heap handle has exactly one owner, and this one was consumed at line 35, when its handle was handed to 'prev' by an alias assignment. After that the binding is dead: free or read the value through whatever owns it now, or rebind this name to a fresh value.
+    : i seen ( vec_len [i] t )
+compiler/tests/borrow_assign_alias.nu:47: error: use of moved value 'a' — a heap handle has exactly one owner, and this one was consumed at line 45, when its handle was handed to 'z' by an alias assignment. After that the binding is dead: free or read the value through whatever owns it now, or rebind this name to a fresh value.
     ( vec_free [i] a )
-error: compilation aborted — 1 borrow-checker violation (if the program is correct, this is a false positive: please report it as a bug at https://github.com/nurl-lang/nurl/issues)
+error: compilation aborted — 2 borrow-checker violations (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

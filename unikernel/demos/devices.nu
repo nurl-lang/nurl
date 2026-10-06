@@ -27,7 +27,7 @@ $ `stdlib/hal/virtio.nu`
     ^ `other`
 }
 
-@ main → i {
+unsafe @ main → i {
     : s cl ( nurl_boot_cmdline )
     : i n ( virtio_mmio_count cl )
     ( nurl_print `cmdline devices: ` ) ( nurl_print ( nurl_str_int n ) ) ( nurl_print `\n` )

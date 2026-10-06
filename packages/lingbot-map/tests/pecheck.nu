@@ -7,9 +7,7 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/std/float.nu`
 $ `src/patchembed.nu`
 
-unsafe
-
-@ case i c i h i w i patch i nout → v {
+unsafe @ case i c i h i w i patch i nout → v {
     : i p ( pe_patches h w patch )
     : i k * c * patch patch
     : ( Vec u ) img__v ( vec_zeroed [u] * 8 * c * h w )

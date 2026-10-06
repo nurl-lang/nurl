@@ -114,9 +114,7 @@ $ `stdlib/core/rcbox.nu`
 
 // ── Small vector helpers ──────────────────────────────────────────────
 
-unsafe
-
-@ __ar_vec_copy ( Vec f ) src → ( Vec f ) {
+unsafe @ __ar_vec_copy ( Vec f ) src → ( Vec f ) {
     : i n ( vec_len [f] src )
     : ( Vec f ) out ( vec_zeroed [f] n )
     : *f s ( vec_data [f] src )
@@ -126,9 +124,7 @@ unsafe
     ^ out
 }
 
-unsafe
-
-@ __ar_copy_into ( Vec f ) dst ( Vec f ) src → v {
+unsafe @ __ar_copy_into ( Vec f ) dst ( Vec f ) src → v {
     : i n ( vec_len [f] dst )
     : *f d ( vec_data [f] dst )
     : *f s ( vec_data [f] src )
@@ -136,18 +132,14 @@ unsafe
     ~ < k n { = . d k . s k = k + k 1 }
 }
 
-unsafe
-
-@ __ar_fill ( Vec f ) v f x → v {
+unsafe @ __ar_fill ( Vec f ) v f x → v {
     : i n ( vec_len [f] v )
     : *f p ( vec_data [f] v )
     : ~ i k 0
     ~ < k n { = . p k x = k + k 1 }
 }
 
-unsafe
-
-@ __ar_max_abs ( Vec f ) v → f {
+unsafe @ __ar_max_abs ( Vec f ) v → f {
     : i n ( vec_len [f] v )
     : *f p ( vec_data [f] v )
     : ~ f m 0.0
@@ -162,9 +154,7 @@ unsafe
 
 // Polynomial product: (1 + Σ a_i B^i)(1 + Σ b_j B^j) → the coefficients
 // beyond the leading 1, length len(a) + len(b).
-unsafe
-
-@ __ar_poly_mul ( Vec f ) a ( Vec f ) b → ( Vec f ) {
+unsafe @ __ar_poly_mul ( Vec f ) a ( Vec f ) b → ( Vec f ) {
     : i na ( vec_len [f] a )
     : i nb ( vec_len [f] b )
     : ( Vec f ) out ( vec_zeroed [f] + na nb )
@@ -188,9 +178,7 @@ unsafe
 }
 
 // A seasonal polynomial 1 + Σ c_j B^{s j} spread to lag form.
-unsafe
-
-@ __ar_seasonal_spread ( Vec f ) c i s → ( Vec f ) {
+unsafe @ __ar_seasonal_spread ( Vec f ) c i s → ( Vec f ) {
     : i n ( vec_len [f] c )
     : ( Vec f ) out ( vec_zeroed [f] * n s )
     : *f o ( vec_data [f] out )
@@ -205,9 +193,7 @@ unsafe
 
 // The AR side as "1 − Σ φ B^k" coefficients: φ(B)Φ(B^s) expanded, the
 // signs such that the result is the φ_k of the expanded polynomial.
-unsafe
-
-@ _ar_expand_ar ( Vec f ) phi ( Vec f ) sphi i s → ( Vec f ) {
+unsafe @ _ar_expand_ar ( Vec f ) phi ( Vec f ) sphi i s → ( Vec f ) {
     // Work with the "1 + a B" convention: a = −φ.
     : ( Vec f ) a ( __ar_vec_copy phi )
     : ( Vec f ) b ( __ar_seasonal_spread sphi s )
@@ -236,9 +222,7 @@ unsafe
 
 // The differencing polynomial (1 − B)^d (1 − B^s)^D as "1 − Σ δ_k B^k":
 // returns δ (length d + s·D), so that y_t = w_t + Σ δ_k y_{t−k}.
-unsafe
-
-@ _ar_delta i d i D i s → ( Vec f ) {
+unsafe @ _ar_delta i d i D i s → ( Vec f ) {
     : ~ ( Vec f ) poly ( vec_new [f] )  // "1 + Σ c B^k" convention
     : ~ i k 0
     ~ < k d {
@@ -264,9 +248,7 @@ unsafe
 }
 
 // Δ^d Δ_s^D y: the first d + s·D values are consumed.
-unsafe
-
-@ arima_difference ( Vec f ) y i d i D i s → ( Vec f ) {
+unsafe @ arima_difference ( Vec f ) y i d i D i s → ( Vec f ) {
     : ~ ( Vec f ) cur ( __ar_vec_copy y )
     : ~ i k 0
     ~ < k d {
@@ -300,9 +282,7 @@ unsafe
 // image is a stationary polynomial. The inverse recovers the raw values
 // from a stationary polynomial; a non-stationary one has no preimage.
 
-unsafe
-
-@ _ar_partrans ( Vec f ) raw i off i n → ( Vec f ) {
+unsafe @ _ar_partrans ( Vec f ) raw i off i n → ( Vec f ) {
     : ( Vec f ) out ( vec_zeroed [f] n )
     ? == n 0 { ^ out } {}
     : ( Vec f ) work ( vec_zeroed [f] n )
@@ -333,9 +313,7 @@ unsafe
 
 // Inverse: AR coefficients → raw. Returns F when the polynomial is not
 // stationary (a partial autocorrelation reaches 1 in magnitude).
-unsafe
-
-@ _ar_invpartrans ( Vec f ) phi ( Vec f ) raw i off → b {
+unsafe @ _ar_invpartrans ( Vec f ) phi ( Vec f ) raw i off → b {
     : i n ( vec_len [f] phi )
     ? == n 0 { ^ T } {}
     : ( Vec f ) nw ( __ar_vec_copy phi )
@@ -390,9 +368,7 @@ unsafe
 }
 
 // Raw (transformed) vector → coefficients. Layout: φ, θ, Φ, Θ, μ.
-unsafe
-
-@ _ar_coef_of_raw ArimaSpec sp ( Vec f ) raw → ArimaCoef {
+unsafe @ _ar_coef_of_raw ArimaSpec sp ( Vec f ) raw → ArimaCoef {
     : ~ i off 0
     : ( Vec f ) phi ( _ar_partrans raw off . sp p )
     = off + off . sp p
@@ -418,9 +394,7 @@ unsafe
 
 // Coefficients → raw vector; F when a polynomial is outside its region
 // (then `raw` is left as it was for that polynomial).
-unsafe
-
-@ __ar_raw_of_coef ArimaSpec sp ArimaCoef c ( Vec f ) raw → b {
+unsafe @ __ar_raw_of_coef ArimaSpec sp ArimaCoef c ( Vec f ) raw → b {
     : ~ b ok T
     : ~ i off 0
     ? ( _ar_invpartrans . c phi raw off ) {} { = ok F }
@@ -468,9 +442,7 @@ unsafe
 }
 
 // Has the covariance recursion converged (see _ar_step)?
-unsafe
-
-@ _ar_ss_steady ArimaSS ss → b {
+unsafe @ _ar_ss_steady ArimaSS ss → b {
     : *f fz ( vec_data [f] . ss fz )
     ^ != . fz 1 0.0
 }
@@ -481,9 +453,7 @@ unsafe
 
 // Build the form from expanded polynomials (ar: "1 − Σ φ B^k" φ's; ma:
 // "1 + Σ θ B^k" θ's) and the differencing δ.
-unsafe
-
-@ _ar_ss_new ( Vec f ) ar ( Vec f ) ma ( Vec f ) delta → ArimaSS {
+unsafe @ _ar_ss_new ( Vec f ) ar ( Vec f ) ma ( Vec f ) delta → ArimaSS {
     : i pf ( vec_len [f] ar )
     : i qf ( vec_len [f] ma )
     : ~ i r pf
@@ -508,9 +478,7 @@ unsafe
 // out = T · X for a square X (rd × rd), T the transition matrix by its
 // structure: rows < r are the companion (φ_{i+1} x_0 + x_{i+1}), row r is
 // Z (the observation row), rows beyond shift the differencing states.
-unsafe
-
-@ __ar_tmul ArimaSS ss ( Vec f ) x ( Vec f ) out → v {
+unsafe @ __ar_tmul ArimaSS ss ( Vec f ) x ( Vec f ) out → v {
     : i r . ss r
     : i rd . ss rd
     : i nd . ss nd
@@ -548,9 +516,7 @@ unsafe
 }
 
 // out = M · Tᵀ: the same structure applied on the right.
-unsafe
-
-@ __ar_tmul_right ArimaSS ss ( Vec f ) m ( Vec f ) out → v {
+unsafe @ __ar_tmul_right ArimaSS ss ( Vec f ) m ( Vec f ) out → v {
     : i r . ss r
     : i rd . ss rd
     : i nd . ss nd
@@ -581,9 +547,7 @@ unsafe
 }
 
 // a ← T a.
-unsafe
-
-@ __ar_tvec ArimaSS ss → v {
+unsafe @ __ar_tvec ArimaSS ss → v {
     : i r . ss r
     : i rd . ss rd
     : i nd . ss nd
@@ -611,9 +575,7 @@ unsafe
 }
 
 // P ← T P Tᵀ + V, V = θ θᵀ on the ARMA block.
-unsafe
-
-@ __ar_predict_cov ArimaSS ss → v {
+unsafe @ __ar_predict_cov ArimaSS ss → v {
     ( __ar_tmul ss . ss pm . ss scratch )
     ( __ar_tmul_right ss . ss scratch . ss pm )
     : i r . ss r
@@ -632,9 +594,7 @@ unsafe
 }
 
 // Z a and Z P Zᵀ, P Z into pz.
-unsafe
-
-@ __ar_observe ArimaSS ss → f {
+unsafe @ __ar_observe ArimaSS ss → f {
     : i r . ss r
     : i rd . ss rd
     : i nd . ss nd
@@ -655,9 +615,7 @@ unsafe
     ^ fv
 }
 
-unsafe
-
-@ __ar_predicted ArimaSS ss → f {
+unsafe @ __ar_predicted ArimaSS ss → f {
     : *f A ( vec_data [f] . ss a )
     : *f dl ( vec_data [f] . ss delta )
     : ~ f y . A 0
@@ -682,9 +640,7 @@ unsafe
 // transition. Before that, the O(r_d²) covariance form. The two agree
 // to the last bit with what the covariance form would go on producing,
 // short of the increments it stopped adding.
-unsafe
-
-@ _ar_step ArimaSS ss f y → ArimaStep {
+unsafe @ _ar_step ArimaSS ss f y → ArimaStep {
     : i rd . ss rd
     : *f A ( vec_data [f] . ss a )
     : *f fz ( vec_data [f] . ss fz )
@@ -741,9 +697,7 @@ unsafe
 
 // Solve M x = b for a small dense system by Gaussian elimination with
 // partial pivoting; M and b are overwritten, x lands in b. F when singular.
-unsafe
-
-@ _ar_solve ( Vec f ) M ( Vec f ) b i n → b {
+unsafe @ _ar_solve ( Vec f ) M ( Vec f ) b i n → b {
     : *f pm ( vec_data [f] M )
     : *f pb ( vec_data [f] b )
     : ~ i c 0
@@ -796,9 +750,7 @@ unsafe
 // The autocovariances γ(0..m−1) of the ARMA(p', q') with expanded
 // polynomials (σ² = 1): the Yule–Walker system for γ(0..p'), then the
 // recursion. Also the ψ weights ψ(0..m−1). F when the system is singular.
-unsafe
-
-@ _ar_autocov ( Vec f ) ar ( Vec f ) ma i m ( Vec f ) gamma ( Vec f ) psi → b {
+unsafe @ _ar_autocov ( Vec f ) ar ( Vec f ) ma i m ( Vec f ) gamma ( Vec f ) psi → b {
     : i pf ( vec_len [f] ar )
     : i qf ( vec_len [f] ma )
     : *f par ( vec_data [f] ar )
@@ -866,9 +818,7 @@ unsafe
 // doubling recursion needed dozens of them for a seasonal polynomial's
 // roots close to the circle. Writes the ARMA block of pm; the
 // differencing block gets the diffuse prior.
-unsafe
-
-@ _ar_init_cov ArimaSS ss → b {
+unsafe @ _ar_init_cov ArimaSS ss → b {
     : i r . ss r
     : i rd . ss rd
     : *f P ( vec_data [f] . ss pm )
@@ -958,9 +908,7 @@ unsafe
 
 // The same by doubling (P_{k+1} = P_k + A_k P_k A_kᵀ, A_{k+1} = A_k²):
 // kept as the independent check of the closed form.
-unsafe
-
-@ _ar_init_cov_doubling ArimaSS ss → b {
+unsafe @ _ar_init_cov_doubling ArimaSS ss → b {
     : i r . ss r
     : i rd . ss rd
     : *f P ( vec_data [f] . ss pm )
@@ -1062,9 +1010,7 @@ unsafe
     ( Vec f ) theta
 }
 
-unsafe
-
-@ _ar_arma_new ( Vec f ) ar ( Vec f ) ma → ArimaArma {
+unsafe @ _ar_arma_new ( Vec f ) ar ( Vec f ) ma → ArimaArma {
     : i pf ( vec_len [f] ar )
     : i qf ( vec_len [f] ma )
     : ~ i r pf
@@ -1091,9 +1037,7 @@ unsafe
 // four terms of _ar_init_cov applied to the unit vector instead of
 // multiplied out — Φ(Γ Φᵀe₀) + Φ(C Θᵀe₀) + Θ(Bᵀe₀) + Θ(Θᵀe₀) with B = ΦC.
 // It is all the Chandrasekhar recursion needs of P.
-unsafe
-
-@ _ar_init_col i r ( Vec f ) phiv ( Vec f ) thv ( Vec f ) out → b {
+unsafe @ _ar_init_col i r ( Vec f ) phiv ( Vec f ) thv ( Vec f ) out → b {
     : *f phi ( vec_data [f] phiv )
     : *f th ( vec_data [f] thv )
     : *f po ( vec_data [f] out )
@@ -1168,9 +1112,7 @@ unsafe
 // start needs nothing else: F₁ = P₀₀, K₁ = T P e₀ / F₁, W₁ = K₁,
 // M₁ = −F₁). Once the increment is below 10⁻¹⁴ (1 + F) in every element
 // the gain is fixed — the steady state — and only the state moves.
-unsafe
-
-@ _ar_filter_arma ( Vec f ) phiv ( Vec f ) thv ( Vec f ) col ( Vec f ) w f mu → ArimaLik {
+unsafe @ _ar_filter_arma ( Vec f ) phiv ( Vec f ) thv ( Vec f ) col ( Vec f ) w f mu → ArimaLik {
     : i r ( vec_len [f] phiv )
     : i n ( vec_len [f] w )
     : *f phi ( vec_data [f] phiv )
@@ -1291,9 +1233,7 @@ unsafe
 // different observations, and the ones that drop more of the start win
 // on the drop, not the fit (measured on a true AR(1): AR(4) by 5 AICc,
 // against the exact likelihood's AR(1) by 4).
-unsafe
-
-@ __ar_loglik_css ArimaSpec sp ArimaCoef c ( Vec f ) w i ncond → ArimaLik {
+unsafe @ __ar_loglik_css ArimaSpec sp ArimaCoef c ( Vec f ) w i ncond → ArimaLik {
     : ( Vec f ) ar ( _ar_expand_ar . c phi . c sphi . sp s )
     : ( Vec f ) ma ( _ar_expand_ma . c theta . c stheta . sp s )
     : i pf ( vec_len [f] ar )
@@ -1369,9 +1309,7 @@ unsafe
     ^ 1000000000000.0
 }
 
-unsafe
-
-@ __ar_objective * ArimaObj o ( Vec f ) raw → f {
+unsafe @ __ar_objective * ArimaObj o ( Vec f ) raw → f {
     = . o evals + . o evals 1
     ^ ( __ar_eval . o sp . o w . o method . o ncond raw )
 }
@@ -1397,9 +1335,7 @@ unsafe
     i stride
 }
 
-unsafe
-
-@ __ar_job_run * ArimaJob j → v {
+unsafe @ __ar_job_run * ArimaJob j → v {
     ? >= . j kind 2 {
         : b natural | == . j kind 3 == . j kind 5
         : b cov < . j kind 4
@@ -1413,9 +1349,7 @@ unsafe
     }
 }
 
-unsafe
-
-@ __ar_lane_run * ArimaLane ln → v {
+unsafe @ __ar_lane_run * ArimaLane ln → v {
     : i n ( vec_len [i] . ln jobs )
     : ~ i k . ln lane
     ~ < k n {
@@ -1427,9 +1361,7 @@ unsafe
 
 // Run every job: on a pool of __ar_threads workers striding the list
 // when `par`, else in place. Frees the jobs.
-unsafe
-
-@ _ar_jobs_run ( Vec i ) jobs b par → v {
+unsafe @ _ar_jobs_run ( Vec i ) jobs b par → v {
     : i n ( vec_len [i] jobs )
     : ~ i nt ? par ( __ar_threads ) 1
     ? > nt n { = nt n } {}
@@ -1464,9 +1396,7 @@ unsafe
 }
 
 // Free the jobs of a batch (their results have been read).
-unsafe
-
-@ _ar_jobs_free sink ( Vec i ) jobs → v {
+unsafe @ _ar_jobs_free sink ( Vec i ) jobs → v {
     : i n ( vec_len [i] jobs )
     : ~ i k 0
     ~ < k n { ( nurl_free # s ( _ar_geti jobs k ) ) = k + k 1 }
@@ -1487,9 +1417,7 @@ unsafe
     f mu
 }
 
-unsafe
-
-@ _ar_prep_free sink * ArimaPrep p → v {
+unsafe @ _ar_prep_free sink * ArimaPrep p → v {
     ( vec_free [f] . p phi ) ( vec_free [f] . p theta ) ( vec_free [f] . p p0 )
     ( vec_free [f] . p ar ) ( vec_free [f] . p ma )
     ( nurl_free # s p )
@@ -1497,9 +1425,7 @@ unsafe
 
 // Prepare at `raw` (transformed parameters when natural = F, natural
 // coefficients when T); with_cov adds the stationary covariance.
-unsafe
-
-@ _ar_prep_at ArimaSpec sp ( Vec f ) raw b natural b with_cov → *ArimaPrep {
+unsafe @ _ar_prep_at ArimaSpec sp ( Vec f ) raw b natural b with_cov → *ArimaPrep {
     : ArimaCoef cf ? natural ( _ar_coef_of_natural sp raw ) ( _ar_coef_of_raw sp raw )
     : *ArimaPrep p # *ArimaPrep ( nurl_malloc Z ArimaPrep )
     = . p ar ( _ar_expand_ar . cf phi . cf sphi . sp s )
@@ -1523,9 +1449,7 @@ unsafe
     ^ p
 }
 
-unsafe
-
-@ _ar_job_new ArimaSpec sp ( Vec f ) w i method i ncond ( Vec f ) raw ( Vec f ) out i idx i kind → i {
+unsafe @ _ar_job_new ArimaSpec sp ( Vec f ) w i method i ncond ( Vec f ) raw ( Vec f ) out i idx i kind → i {
     : *ArimaJob j # *ArimaJob ( nurl_malloc Z ArimaJob )
     = . j sp sp
     = . j w w
@@ -1539,9 +1463,7 @@ unsafe
     ^ # i j
 }
 
-unsafe
-
-@ __ar_work * ArimaObj o → i {
+unsafe @ __ar_work * ArimaObj o → i {
     : ArimaSpec sp . o sp
     : i n ( vec_len [f] . o w )
     : i pf + . sp p * . sp s . sp P
@@ -1556,9 +1478,7 @@ unsafe
 // Evaluate the objective at every row of `raws` into `out`: on threads,
 // __ar_threads at a time, when an evaluation is worth one; otherwise
 // in place. Either way the answers are the same numbers.
-unsafe
-
-@ __ar_eval_batch * ArimaObj o ( Vec ( Vec f ) ) raws ( Vec f ) out → v {
+unsafe @ __ar_eval_batch * ArimaObj o ( Vec ( Vec f ) ) raws ( Vec f ) out → v {
     : i m ( vec_len [( Vec f )] raws )
     = . o evals + . o evals m
     : b par & > ( __ar_work o ) ARIMA_PAR_WORK > m 1
@@ -1612,9 +1532,7 @@ unsafe
     b done
 }
 
-unsafe
-
-@ __ar_bfgs_new ( Vec f ) raw0 → *ArimaBfgs {
+unsafe @ __ar_bfgs_new ( Vec f ) raw0 → *ArimaBfgs {
     : i k ( vec_len [f] raw0 )
     : *ArimaBfgs st # *ArimaBfgs ( nurl_malloc Z ArimaBfgs )
     = . st k k
@@ -1642,9 +1560,7 @@ unsafe
     ^ st
 }
 
-unsafe
-
-@ __ar_bfgs_free sink * ArimaBfgs st → v {
+unsafe @ __ar_bfgs_free sink * ArimaBfgs st → v {
     ( vec_free [f] . st raw ) ( vec_free [f] . st g ) ( vec_free [f] . st d ) ( vec_free [f] . st s )
     ( vec_free [f] . st yv ) ( vec_free [f] . st hy ) ( vec_free [f] . st trial ) ( vec_free [f] . st H )
     ( vec_free [f] . st hs )
@@ -1653,9 +1569,7 @@ unsafe
 
 // The 2k stencil points around raw, with the step of each coordinate
 // recorded in hs.
-unsafe
-
-@ __ar_bfgs_stencil * ArimaBfgs st ( Vec ( Vec f ) ) out → v {
+unsafe @ __ar_bfgs_stencil * ArimaBfgs st ( Vec ( Vec f ) ) out → v {
     : i k . st k
     : *f pr ( vec_data [f] . st raw )
     : *f ph ( vec_data [f] . st hs )
@@ -1677,9 +1591,7 @@ unsafe
 }
 
 // What the machine wants evaluated next (owned by the caller).
-unsafe
-
-@ __ar_bfgs_requests * ArimaBfgs st → ( Vec ( Vec f ) ) {
+unsafe @ __ar_bfgs_requests * ArimaBfgs st → ( Vec ( Vec f ) ) {
     : ( Vec ( Vec f ) ) out ( vec_new [( Vec f )] )
     ? . st done { ^ out } {}
     ? == . st phase ARIMA_PH_START {
@@ -1692,9 +1604,7 @@ unsafe
 }
 
 // The gradient from stencil values starting at `off` in vals, into `into`.
-unsafe
-
-@ __ar_bfgs_take_grad * ArimaBfgs st ( Vec f ) vals i off ( Vec f ) into → v {
+unsafe @ __ar_bfgs_take_grad * ArimaBfgs st ( Vec f ) vals i off ( Vec f ) into → v {
     : i k . st k
     : *f pv ( vec_data [f] vals )
     : *f ph ( vec_data [f] . st hs )
@@ -1709,9 +1619,7 @@ unsafe
 // From a gradient at raw: the direction d = −H g, and the first trial —
 // no coordinate moving by more than one, the transform saturating beyond
 // a few units.
-unsafe
-
-@ __ar_bfgs_direction * ArimaBfgs st → v {
+unsafe @ __ar_bfgs_direction * ArimaBfgs st → v {
     : i k . st k
     : *f pg ( vec_data [f] . st g )
     : *f pd ( vec_data [f] . st d )
@@ -1752,9 +1660,7 @@ unsafe
 }
 
 // Take the values of the last request. Returns T when the machine is done.
-unsafe
-
-@ __ar_bfgs_absorb * ArimaBfgs st ( Vec f ) vals → b {
+unsafe @ __ar_bfgs_absorb * ArimaBfgs st ( Vec f ) vals → b {
     ? . st done { ^ T } {}
     : i k . st k
     : *f pv ( vec_data [f] vals )
@@ -1881,9 +1787,7 @@ unsafe
 
 // Minimise the objective from `raw` (updated in place): the machine
 // driven with the batch evaluator.
-unsafe
-
-@ __ar_bfgs * ArimaObj o ( Vec f ) raw → ArimaOpt {
+unsafe @ __ar_bfgs * ArimaObj o ( Vec f ) raw → ArimaOpt {
     : i k ( vec_len [f] raw )
     ? == k 0 { ^ @ ArimaOpt { T ( __ar_objective o raw ) 0 } } {}
     : *ArimaBfgs st ( __ar_bfgs_new raw )
@@ -1936,22 +1840,16 @@ unsafe
 // every copy is the same state, and the last owner releases it.
 : ArimaModel { s ctl }
 
-unsafe
-
-@ ArimaModel_share ArimaModel h → ArimaModel { ^ @ ArimaModel { # s ( rcbox_share # i . h ctl ) } }
+unsafe @ ArimaModel_share ArimaModel h → ArimaModel { ^ @ ArimaModel { # s ( rcbox_share # i . h ctl ) } }
 
 @ ArimaModel_drop sink ArimaModel h → v {
     ( mem_forget h )
     ( rcbox_release [ArimaModelImpl] # i . h ctl )
 }
 // The state, for this package's own code.
-unsafe
-
-@ _ArimaModel_ptr ArimaModel h → *ArimaModelImpl { ^ ( rcbox_ptr [ArimaModelImpl] # i . h ctl ) }
+unsafe @ _ArimaModel_ptr ArimaModel h → *ArimaModelImpl { ^ ( rcbox_ptr [ArimaModelImpl] # i . h ctl ) }
 // Does the model carry regressors at all?
-unsafe
-
-@ __ar_has_x * ArimaModelImpl m → b {
+unsafe @ __ar_has_x * ArimaModelImpl m → b {
     ^ > ( vec_len [f] . m xcoef ) 0
 }
 
@@ -1961,9 +1859,7 @@ unsafe
 
 // The deterministic seasonal at row `t`: the intercept and the Fourier
 // terms of every period (0.0 when the model has none).
-unsafe
-
-@ __ar_fourier * ArimaModelImpl m i t → f {
+unsafe @ __ar_fourier * ArimaModelImpl m i t → f {
     ? ( __ar_has_x m ) {} { ^ 0.0 }
     : *f c ( vec_data [f] . m xcoef )
     : *i per ( vec_data [i] . m xper )
@@ -1987,133 +1883,97 @@ unsafe
     ^ mu
 }
 
-unsafe
-
-@ arima_spec_of ArimaModel m__h → ArimaSpec {
+unsafe @ arima_spec_of ArimaModel m__h → ArimaSpec {
     : *ArimaModelImpl m ( _ArimaModel_ptr m__h )
     ^ . m spec
 }
 
-unsafe
-
-@ arima_sigma2 ArimaModel m__h → f {
+unsafe @ arima_sigma2 ArimaModel m__h → f {
     : *ArimaModelImpl m ( _ArimaModel_ptr m__h )
     ^ . m sigma2
 }
 
-unsafe
-
-@ arima_loglik ArimaModel m__h → f {
+unsafe @ arima_loglik ArimaModel m__h → f {
     : *ArimaModelImpl m ( _ArimaModel_ptr m__h )
     ^ . m loglik
 }
 
-unsafe
-
-@ arima_aic ArimaModel m__h → f {
+unsafe @ arima_aic ArimaModel m__h → f {
     : *ArimaModelImpl m ( _ArimaModel_ptr m__h )
     ^ . m aic
 }
 
-unsafe
-
-@ arima_aicc ArimaModel m__h → f {
+unsafe @ arima_aicc ArimaModel m__h → f {
     : *ArimaModelImpl m ( _ArimaModel_ptr m__h )
     ^ . m aicc
 }
 
-unsafe
-
-@ arima_n ArimaModel m__h → i {
+unsafe @ arima_n ArimaModel m__h → i {
     : *ArimaModelImpl m ( _ArimaModel_ptr m__h )
     ^ . m n
 }
 
-unsafe
-
-@ arima_converged ArimaModel m__h → b {
+unsafe @ arima_converged ArimaModel m__h → b {
     : *ArimaModelImpl m ( _ArimaModel_ptr m__h )
     ^ . m converged
 }
 
 // Objective evaluations the fit took.
-unsafe
-
-@ arima_evals ArimaModel m__h → i {
+unsafe @ arima_evals ArimaModel m__h → i {
     : *ArimaModelImpl m ( _ArimaModel_ptr m__h )
     ^ . m evals
 }
 
 // Standard errors, coefficient order (may hold NaN). Borrowed: valid
 // while the model is.
-unsafe
-
-@ arima_se ArimaModel m__h → ( Vec f ) {
+unsafe @ arima_se ArimaModel m__h → ( Vec f ) {
     : *ArimaModelImpl m ( _ArimaModel_ptr m__h )
     ^ . m se
 }
 
 // The regressors (see arima_fit_regress): harmonics per period, the
 // coefficients (borrowed), the next observation's row, 1 with a trend.
-unsafe
-
-@ arima_xk ArimaModel m__h → i {
+unsafe @ arima_xk ArimaModel m__h → i {
     : *ArimaModelImpl m ( _ArimaModel_ptr m__h )
     ^ . m xk
 }
 
-unsafe
-
-@ arima_xcoef ArimaModel m__h → ( Vec f ) {
+unsafe @ arima_xcoef ArimaModel m__h → ( Vec f ) {
     : *ArimaModelImpl m ( _ArimaModel_ptr m__h )
     ^ . m xcoef
 }
 
-unsafe
-
-@ arima_xt ArimaModel m__h → i {
+unsafe @ arima_xt ArimaModel m__h → i {
     : *ArimaModelImpl m ( _ArimaModel_ptr m__h )
     ^ . m xt
 }
 
-unsafe
-
-@ arima_xtr ArimaModel m__h → i {
+unsafe @ arima_xtr ArimaModel m__h → i {
     : *ArimaModelImpl m ( _ArimaModel_ptr m__h )
     ^ . m xtr
 }
 
-unsafe
-
-@ arima_phi ArimaModel m__h → ( Vec f ) {
+unsafe @ arima_phi ArimaModel m__h → ( Vec f ) {
     : *ArimaModelImpl m ( _ArimaModel_ptr m__h )
     : ArimaCoef c . m coef ^ . c phi
 }
 
-unsafe
-
-@ arima_theta ArimaModel m__h → ( Vec f ) {
+unsafe @ arima_theta ArimaModel m__h → ( Vec f ) {
     : *ArimaModelImpl m ( _ArimaModel_ptr m__h )
     : ArimaCoef c . m coef ^ . c theta
 }
 
-unsafe
-
-@ arima_sphi ArimaModel m__h → ( Vec f ) {
+unsafe @ arima_sphi ArimaModel m__h → ( Vec f ) {
     : *ArimaModelImpl m ( _ArimaModel_ptr m__h )
     : ArimaCoef c . m coef ^ . c sphi
 }
 
-unsafe
-
-@ arima_stheta ArimaModel m__h → ( Vec f ) {
+unsafe @ arima_stheta ArimaModel m__h → ( Vec f ) {
     : *ArimaModelImpl m ( _ArimaModel_ptr m__h )
     : ArimaCoef c . m coef ^ . c stheta
 }
 
-unsafe
-
-@ arima_mu ArimaModel m__h → f {
+unsafe @ arima_mu ArimaModel m__h → f {
     : *ArimaModelImpl m ( _ArimaModel_ptr m__h )
     : ArimaCoef c . m coef ^ . c mu
 }
@@ -2131,9 +1991,7 @@ unsafe
 
 // Run the full model over the raw series to reach its end state. The
 // mean is removed on the way in (the state holds y − μ).
-unsafe
-
-@ __ar_run_full * ArimaModelImpl m ( Vec f ) y → v {
+unsafe @ __ar_run_full * ArimaModelImpl m ( Vec f ) y → v {
     : i n ( vec_len [f] y )
     : *f py ( vec_data [f] y )
     : ArimaCoef mc . m coef
@@ -2150,9 +2008,7 @@ unsafe
 
 // Numerical Hessian of −loglik over the natural coefficients at the
 // optimum → standard errors. NaN where the curvature is not positive.
-unsafe
-
-@ __ar_stderr * ArimaModelImpl m ( Vec f ) w → ( Vec f ) {
+unsafe @ __ar_stderr * ArimaModelImpl m ( Vec f ) w → ( Vec f ) {
     : ArimaSpec sp . m spec
     : i k ( __ar_ncoef sp )
     ? == k 0 { ^ ( vec_zeroed [f] 0 ) } {}
@@ -2188,9 +2044,7 @@ unsafe
 
 // The stencil of the Hessian of −loglik over the natural coefficients at
 // the model's optimum: four points per (i ≤ j) pair, natural coordinates.
-unsafe
-
-@ __ar_hessian_points * ArimaModelImpl m → ( Vec ( Vec f ) ) {
+unsafe @ __ar_hessian_points * ArimaModelImpl m → ( Vec ( Vec f ) ) {
     : ArimaSpec sp . m spec
     : i k ( __ar_ncoef sp )
     : ( Vec f ) x ( _ar_natural_of_coef sp . m coef )
@@ -2222,9 +2076,7 @@ unsafe
 
 // The stencil's values → standard errors (NaN where the curvature is
 // not positive, or the Hessian is singular).
-unsafe
-
-@ __ar_hessian_fold * ArimaModelImpl m ( Vec f ) vals → ( Vec f ) {
+unsafe @ __ar_hessian_fold * ArimaModelImpl m ( Vec f ) vals → ( Vec f ) {
     : ArimaSpec sp . m spec
     : i k ( __ar_ncoef sp )
     : ( Vec f ) se ( vec_zeroed [f] k )
@@ -2322,9 +2174,7 @@ unsafe
 }
 
 // Natural coefficients (φ, θ, Φ, Θ, μ in one vector) → the bundle.
-unsafe
-
-@ _ar_coef_of_natural ArimaSpec sp ( Vec f ) x → ArimaCoef {
+unsafe @ _ar_coef_of_natural ArimaSpec sp ( Vec f ) x → ArimaCoef {
     : ArimaCoef c ( _ar_coef_new sp )
     : *f px ( vec_data [f] x )
     : ~ i off 0
@@ -2344,9 +2194,7 @@ unsafe
 }
 
 // The bundle → the natural vector.
-unsafe
-
-@ _ar_natural_of_coef ArimaSpec sp ArimaCoef mc → ( Vec f ) {
+unsafe @ _ar_natural_of_coef ArimaSpec sp ArimaCoef mc → ( Vec f ) {
     : i k ( __ar_ncoef sp )
     : ( Vec f ) x ( vec_zeroed [f] k )
     : *f px ( vec_data [f] x )
@@ -2375,9 +2223,7 @@ unsafe
 // order; the search passes the largest order it screens); without
 // `with_se` the model has neither standard errors nor a filtered state —
 // a screened candidate, judged by its AICc and discarded.
-unsafe
-
-@ __ar_fit_cond ( Vec f ) y ArimaSpec sp0 i method i ncond b with_se → ArimaModel {
+unsafe @ __ar_fit_cond ( Vec f ) y ArimaSpec sp0 i method i ncond b with_se → ArimaModel {
     : ArimaSpec sp ( arima_spec_with_mean sp0 . sp0 mean )
     : ( Vec f ) w ( arima_difference y . sp d . sp D . sp s )
     : ( Vec f ) raw ( __ar_raw_start w sp )
@@ -2403,9 +2249,7 @@ unsafe
 
 // The model at an optimum: coefficients, statistics, standard errors,
 // and the full state filtered over the raw series.
-unsafe
-
-@ __ar_model_from_raw ( Vec f ) y ( Vec f ) w ArimaSpec sp i method i ncond ( Vec f ) raw b converged i iters i evals b with_se b with_state → ArimaModel {
+unsafe @ __ar_model_from_raw ( Vec f ) y ( Vec f ) w ArimaSpec sp i method i ncond ( Vec f ) raw b converged i iters i evals b with_se b with_state → ArimaModel {
     : i k ( __ar_ncoef sp )
     : ArimaCoef c ( _ar_coef_of_raw sp raw )
     : ArimaLik lk ? == method ARIMA_CSS ( __ar_loglik_css sp c w ncond ) ( __ar_loglik_ml sp c w )
@@ -2445,9 +2289,7 @@ unsafe
 }
 
 // The starting parameters for a fit: zeros, the mean at the sample mean.
-unsafe
-
-@ __ar_raw_start ( Vec f ) w ArimaSpec sp → ( Vec f ) {
+unsafe @ __ar_raw_start ( Vec f ) w ArimaSpec sp → ( Vec f ) {
     : i k ( __ar_ncoef sp )
     : ( Vec f ) raw ( vec_zeroed [f] k )
     ? . sp mean {
@@ -2491,9 +2333,7 @@ unsafe
 
 // The threaded CPU evaluator: every item on a thread of its own,
 // __ar_threads at a time, when one is worth it.
-unsafe
-
-@ arima_eval_cpu ( Vec ArimaEvalItem ) items ( Vec ArimaCtx ) ctxs ( Vec f ) out → v {
+unsafe @ arima_eval_cpu ( Vec ArimaEvalItem ) items ( Vec ArimaCtx ) ctxs ( Vec f ) out → v {
     : i m ( vec_len [ArimaEvalItem] items )
     : ~ i big 0
     : ~ i i 0
@@ -2552,9 +2392,7 @@ unsafe
 
 // Fit `series` (each a raw series) under `sp` by `method`, the
 // evaluations batched through `evaluator`.
-unsafe
-
-@ arima_fit_many_with ( Vec ( Vec f ) ) series ArimaSpec sp0 i method ( @ v ( Vec ArimaEvalItem ) ( Vec ArimaCtx ) ( Vec f ) ) evaluator → ( Vec ArimaModel ) {
+unsafe @ arima_fit_many_with ( Vec ( Vec f ) ) series ArimaSpec sp0 i method ( @ v ( Vec ArimaEvalItem ) ( Vec ArimaCtx ) ( Vec f ) ) evaluator → ( Vec ArimaModel ) {
     : ArimaSpec sp ( arima_spec_with_mean sp0 . sp0 mean )
     : i K ( vec_len [( Vec f )] series )
     // Per-model state lives on the heap, addressed through these.
@@ -2747,9 +2585,7 @@ unsafe
 
 // h steps ahead from the model's current state: means and standard
 // errors (σ² applied). The state is left where it was.
-unsafe
-
-@ arima_forecast ArimaModel m__h i h → ArimaForecast {
+unsafe @ arima_forecast ArimaModel m__h i h → ArimaForecast {
     : *ArimaModelImpl m ( _ArimaModel_ptr m__h )
     : ( Vec f ) mean ( vec_zeroed [f] h )
     : ( Vec f ) se ( vec_zeroed [f] h )
@@ -2798,9 +2634,7 @@ unsafe
 // restart. The answer then carries what the model predicted and the
 // variance it would have judged an observation by; innovation and z are
 // NaN, because there was nothing to be surprised by.
-unsafe
-
-@ arima_update ArimaModel m__h f y → ArimaUpdate {
+unsafe @ arima_update ArimaModel m__h f y → ArimaUpdate {
     : *ArimaModelImpl m ( _ArimaModel_ptr m__h )
     : ArimaCoef mc . m coef
     : ArimaSS ss . m ss
@@ -2847,9 +2681,7 @@ unsafe
 // observation has, counted from the fit's origin (negative for rows
 // before it) — a replay that begins elsewhere than the fit did keeps the
 // seasonal's phase. A model without regressors ignores it.
-unsafe
-
-@ arima_restart_at ArimaModel m__h i t0 → v {
+unsafe @ arima_restart_at ArimaModel m__h i t0 → v {
     : *ArimaModelImpl m ( _ArimaModel_ptr m__h )
     ( _ar_ss_free . m ss )
     = . m ss ( __ar_full_ss . m spec . m coef )
@@ -2862,9 +2694,7 @@ unsafe
 
 // A deep copy: coefficients, fit statistics, standard errors and the
 // state, so the copy can be stepped without moving the original.
-unsafe
-
-@ arima_clone ArimaModel m__h → ArimaModel {
+unsafe @ arima_clone ArimaModel m__h → ArimaModel {
     : *ArimaModelImpl m ( _ArimaModel_ptr m__h )
     : i c__box ( rcbox_zero [ArimaModelImpl] )
     : *ArimaModelImpl c ( rcbox_ptr [ArimaModelImpl] c__box )
@@ -2954,9 +2784,7 @@ unsafe
     ^ m
 }
 
-unsafe
-
-@ __ar_attach_fourier * ArimaModelImpl m ( Vec i ) periods i k b trend ( Vec f ) coef i n → v {
+unsafe @ __ar_attach_fourier * ArimaModelImpl m ( Vec i ) periods i k b trend ( Vec f ) coef i n → v {
     ( vec_free [i] . m xper )
     ( vec_free [f] . m xcoef )
     = . m xper ( __ar_veci_copy periods )
@@ -2968,9 +2796,7 @@ unsafe
 
 // One row of the design: 1, then per period and harmonic sin, cos,
 // then t when a trend is fitted.
-unsafe
-
-@ __ar_fourier_row ( Vec i ) periods i k b trend i t ( Vec f ) row → v {
+unsafe @ __ar_fourier_row ( Vec i ) periods i k b trend i t ( Vec f ) row → v {
     : *f x ( vec_data [f] row )
     = . x 0 1.0
     : ~ i q 1
@@ -2994,9 +2820,7 @@ unsafe
 // Least squares by the normal equations (a handful of columns; rows
 // with a NaN reading are left out). Zeros when the system is singular
 // — fewer rows than columns.
-unsafe
-
-@ __ar_fourier_ols ( Vec f ) y ( Vec i ) periods i k b trend → ( Vec f ) {
+unsafe @ __ar_fourier_ols ( Vec f ) y ( Vec i ) periods i k b trend → ( Vec f ) {
     : i n ( vec_len [f] y )
     : i nc + + 1 * 2 * k ( vec_len [i] periods ) ? trend 1 0
     : ( Vec f ) M ( vec_zeroed [f] * nc nc )
@@ -3025,9 +2849,7 @@ unsafe
     ^ b
 }
 
-unsafe
-
-@ __ar_fourier_residuals ( Vec f ) y ( Vec i ) periods i k b trend ( Vec f ) coef → ( Vec f ) {
+unsafe @ __ar_fourier_residuals ( Vec f ) y ( Vec i ) periods i k b trend ( Vec f ) coef → ( Vec f ) {
     : i n ( vec_len [f] y )
     : i nc ( vec_len [f] coef )
     : ( Vec f ) res ( vec_zeroed [f] n )
@@ -3059,9 +2881,7 @@ unsafe
 
 // The KPSS statistic for level stationarity of `x`, with the Bartlett
 // long-run variance over l = 4 (n/100)^{1/4} lags (Kwiatkowski et al.).
-unsafe
-
-@ arima_kpss ( Vec f ) x → f {
+unsafe @ arima_kpss ( Vec f ) x → f {
     : i n ( vec_len [f] x )
     ? < n 8 { ^ 0.0 } {}
     : *f px ( vec_data [f] x )
@@ -3114,9 +2934,7 @@ unsafe
 }
 
 // The sample autocorrelation of x at lag k.
-unsafe
-
-@ arima_acf ( Vec f ) x i k → f {
+unsafe @ arima_acf ( Vec f ) x i k → f {
     : i n ( vec_len [f] x )
     ? | <= k 0 >= k n { ^ 0.0 } {}
     : *f px ( vec_data [f] x )
@@ -3228,9 +3046,7 @@ unsafe
 
 // ── Reporting ─────────────────────────────────────────────────────────
 
-unsafe
-
-@ _ar_jarr ( Vec f ) v → Json {
+unsafe @ _ar_jarr ( Vec f ) v → Json {
     : Json a ( json_arr_new )
     : i n ( vec_len [f] v )
     : *f p ( vec_data [f] v )
@@ -3253,9 +3069,7 @@ unsafe
 }
 
 // Coefficients and fit statistics as JSON, for a report or a table.
-unsafe
-
-@ arima_coef ArimaModel m__h → Json {
+unsafe @ arima_coef ArimaModel m__h → Json {
     : *ArimaModelImpl m ( _ArimaModel_ptr m__h )
     : Json o ( json_obj_new )
     : ArimaCoef mc . m coef
@@ -3300,9 +3114,7 @@ unsafe
     ^ a
 }
 
-unsafe
-
-@ __ar_jbits ( Vec f ) v → Json {
+unsafe @ __ar_jbits ( Vec f ) v → Json {
     : Json a ( json_arr_new )
     : i n ( vec_len [f] v )
     : *f p ( vec_data [f] v )
@@ -3318,9 +3130,7 @@ unsafe
     ^ ( json_int ( f64_to_bits x ) )
 }
 
-unsafe
-
-@ __ar_unbits Json a → ( Vec f ) {
+unsafe @ __ar_unbits Json a → ( Vec f ) {
     : i n ( json_arr_len a )
     : ( Vec f ) out ( vec_zeroed [f] n )
     : *f p ( vec_data [f] out )
@@ -3352,9 +3162,7 @@ unsafe
     ^ 0
 }
 
-unsafe
-
-@ arima_to_json ArimaModel m__h → String {
+unsafe @ arima_to_json ArimaModel m__h → String {
     : *ArimaModelImpl m ( _ArimaModel_ptr m__h )
     : Json o ( json_obj_new )
     : ArimaCoef mc . m coef
@@ -3408,9 +3216,7 @@ unsafe
     ^ @ ArimaSpec { ( __ar_jint so `p` ) ( __ar_jint so `d` ) ( __ar_jint so `q` ) ( __ar_jint so `P` ) ( __ar_jint so `D` ) ( __ar_jint so `Q` ) ( __ar_jint so `s` ) ?? ( json_obj_get so `mean` ) { T mv → ( json_as_bool mv ) F _ → F } }
 }
 
-unsafe
-
-@ arima_from_json s src → ?ArimaModel {
+unsafe @ arima_from_json s src → ?ArimaModel {
     ?? ( json_parse src ) {
         T o → {
             : ~ b ok ( json_is_obj o )

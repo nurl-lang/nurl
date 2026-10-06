@@ -223,7 +223,7 @@ $ `stdlib/ext/env.nu`
 
 // Verify RUN/STOP+RESTORE: a .prg blacks the border, then the NMI warm-start
 // restores it. (STOP = keyboard matrix col7/row7; RESTORE = the NMI line.)
-@ run_nmi s kpath s bpath s cpath s prog → i {
+unsafe @ run_nmi s kpath s bpath s cpath s prog → i {
     ( c64_alloc )
     ? ( load_rom_into kpath 0 ) {} { ^ 2 }
     ? ( load_rom_into bpath 1 ) {} { ^ 2 }

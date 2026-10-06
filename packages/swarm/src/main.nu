@@ -76,22 +76,16 @@ $ `work.nu`
 // transport, ring, roster and job node with it.
 : Swarm { s ctl }
 
-unsafe
-
-@ Swarm_share Swarm h → Swarm { ^ @ Swarm { # s ( rcbox_share # i . h ctl ) } }
+unsafe @ Swarm_share Swarm h → Swarm { ^ @ Swarm { # s ( rcbox_share # i . h ctl ) } }
 
 @ Swarm_drop sink Swarm h → v {
     ( mem_forget h )
     ( rcbox_release [SwarmImpl] # i . h ctl )
 }
 
-unsafe
+unsafe @ __Swarm_ptr Swarm h → *SwarmImpl { ^ ( rcbox_ptr [SwarmImpl] # i . h ctl ) }
 
-@ __Swarm_ptr Swarm h → *SwarmImpl { ^ ( rcbox_ptr [SwarmImpl] # i . h ctl ) }
-
-unsafe
-
-@ swarm_new RelayClient rc i id i role → Swarm {
+unsafe @ swarm_new RelayClient rc i id i role → Swarm {
     : ( Vec u ) me ( pk_from_id id )
     : Transport tr ( transport_open # s 0 rc 1 )
     : Ring ring ( ring_new )
@@ -106,33 +100,25 @@ unsafe
 @ swarm_free sink Swarm sw → v {}
 
 // How many workers this node has folded into its ring.
-unsafe
-
-@ swarm_worker_count Swarm sw__h → i {
+unsafe @ swarm_worker_count Swarm sw__h → i {
     : *SwarmImpl sw ( __Swarm_ptr sw__h )
     ^ ( roster_count . sw roster )
 }
 
-unsafe
-
-@ swarm_join_group Swarm sw__h → v {
+unsafe @ swarm_join_group Swarm sw__h → v {
     : *SwarmImpl sw ( __Swarm_ptr sw__h )
     ?? ( transport_group_join . sw transport . sw group ) { T _ → {} F _ → {} }
 }
 
 // Announce ourselves to the group. `want` asks hearers to reply so a newcomer
 // learns the existing members.
-unsafe
-
-@ swarm_announce Swarm sw__h i want → v {
+unsafe @ swarm_announce Swarm sw__h i want → v {
     : *SwarmImpl sw ( __Swarm_ptr sw__h )
     : ( Vec u ) msg ( hello_build . sw self_id . sw role want . sw self_pk )
     ?? ( transport_broadcast . sw transport . sw group msg ) { T _ → {} F _ → {} }
 }
 
-unsafe
-
-@ swarm_on_hello Swarm sw__h Hello h → v {
+unsafe @ swarm_on_hello Swarm sw__h Hello h → v {
     : *SwarmImpl sw ( __Swarm_ptr sw__h )
     // Only workers join the ring; a client announcing itself is reachable but
     // owns no keys.
@@ -148,9 +134,7 @@ unsafe
 }
 
 // Drain inbound transport messages, dispatching census HELLO and job traffic.
-unsafe
-
-@ swarm_pump Swarm sw__h i max → v {
+unsafe @ swarm_pump Swarm sw__h i max → v {
     : *SwarmImpl sw ( __Swarm_ptr sw__h )
     : ~ b more T
     ~ more {
@@ -188,9 +172,7 @@ unsafe
     }
 }
 
-unsafe
-
-@ swarm_register_handlers Swarm sw__h → v {
+unsafe @ swarm_register_handlers Swarm sw__h → v {
     : *SwarmImpl sw ( __Swarm_ptr sw__h )
     ( job_register . sw job ( kind_primes ) ( primes_handler ) )
     ( job_register . sw job ( kind_sumsq ) ( sumsq_handler ) )
@@ -226,9 +208,7 @@ unsafe
     ~ < t rounds { ( swarm_pump sw 200 ) = t + t 1 }
 }
 
-unsafe
-
-@ run_submit s host i port i kind i lo i hi → i {
+unsafe @ run_submit s host i port i kind i lo i hi → i {
     ?? ( relay_dial host port ) {
         T rc → {
             : i myid ( rand_u64 )

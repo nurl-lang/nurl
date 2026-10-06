@@ -21,7 +21,7 @@ $ `unikernel/drivers/virtioblk.nu`
 : ~ i g_blk 0
 : ~ b g_probed F
 
-@ __blkdev → *VirtioBlk {
+unsafe @ __blkdev → *VirtioBlk {
     ? != g_blk 0 { ^ # *VirtioBlk g_blk } {}
     ? g_probed { ^ # *VirtioBlk 0 } {}
     = g_probed T

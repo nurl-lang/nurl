@@ -15,7 +15,7 @@
 // on all five language implementations printing the same line before it
 // reports a single timing number for the row.
 
-@ main → i {
+unsafe @ main → i {
     : i bin_count 64
     : u64 iterations 20000000
     : *u64 bins # *u64 ( malloc * bin_count 8 )

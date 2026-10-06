@@ -56,9 +56,7 @@ $ `src/store.nu`
 
 : ~ i g_mcp_wiring 0
 
-unsafe
-
-@ __mcp_wiring → *McpWiring {
+unsafe @ __mcp_wiring → *McpWiring {
     ? != g_mcp_wiring 0 { ^ # *McpWiring g_mcp_wiring } {}
     : *McpWiring w # *McpWiring ( nurl_malloc Z McpWiring )
     = . w router ( router_new )
@@ -73,9 +71,7 @@ unsafe
 // `r` afterwards are not seen. The wiring lives in memory kept by hand, so
 // the router it held — the empty one, or an earlier service router's copy
 // and with it that router's routes — is taken out and dropped here.
-unsafe
-
-@ an_mcp_attach_router Router r → v {
+unsafe @ an_mcp_attach_router Router r → v {
     : *McpWiring w ( __mcp_wiring )
     : Router old_router . w router
     ( mem_take old_router )  // a store through the pointer drops nothing
@@ -85,17 +81,13 @@ unsafe
 // `[service] public_url` — the origin clients reach the service at, when
 // it sits behind a proxy that rewrites Host. Empty: derived per request
 // from Host / X-Forwarded-*.
-unsafe
-
-@ an_mcp_set_public_url s url → v {
+unsafe @ an_mcp_set_public_url s url → v {
     : *McpWiring w ( __mcp_wiring )
     ( string_clear . w public_url )
     ( string_push_str . w public_url url )
 }
 
-unsafe
-
-@ __mcp_server → McpServer {
+unsafe @ __mcp_server → McpServer {
     : *McpWiring w ( __mcp_wiring )
     ? . w has_server {} {
         = . w server ( __mcp_build_server )
@@ -179,9 +171,7 @@ unsafe
 
 // The general form: a body of any content type (empty `content_type` =
 // no body).
-unsafe
-
-@ __mcp_api_send Json ctx s method s path String query s content_type s text → ApiOut {
+unsafe @ __mcp_api_send Json ctx s method s path String query s content_type s text → ApiOut {
     : HttpRequest req ( request_new )
     ( string_push_str . req method method )
     ( string_push_str . req path path )
@@ -3376,9 +3366,7 @@ Every member may build scratch models named llm_… (fork_model: a slice of an e
 // ── HTTP ─────────────────────────────────────────────────────────────
 
 // The origin to build absolute URLs on: configured, else from the request.
-unsafe
-
-@ __mcp_base HttpRequest req → String {
+unsafe @ __mcp_base HttpRequest req → String {
     : *McpWiring w ( __mcp_wiring )
     ? > ( string_len . w public_url ) 0 { ^ ( string_from ( string_data . w public_url ) ) } {}
     ^ ( mcp_auth_base_url req `` )

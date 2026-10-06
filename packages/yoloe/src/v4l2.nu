@@ -43,19 +43,13 @@ $ `stdlib/core/rcbox.nu`
 
 : Camera { s ctl }
 
-unsafe
-
-@ Camera_share Camera h → Camera { ^ @ Camera { # s ( rcbox_share # i . h ctl ) } }
+unsafe @ Camera_share Camera h → Camera { ^ @ Camera { # s ( rcbox_share # i . h ctl ) } }
 
 @ Camera_drop sink Camera h → v { ( mem_forget h ) ( rcbox_release [CameraImpl] # i . h ctl ) }
 
-unsafe
+unsafe @ __Camera_ptr Camera h → *CameraImpl { ^ ( rcbox_ptr [CameraImpl] # i . h ctl ) }
 
-@ __Camera_ptr Camera h → *CameraImpl { ^ ( rcbox_ptr [CameraImpl] # i . h ctl ) }
-
-unsafe
-
-@ __cam_new CameraImpl c → Camera { ^ @ Camera { # s ( rcbox_new [CameraImpl] c ) } }
+unsafe @ __cam_new CameraImpl c → Camera { ^ @ Camera { # s ( rcbox_new [CameraImpl] c ) } }
 
 @ __O_RDWR → i { ^ 2 }
 
@@ -78,17 +72,13 @@ unsafe
 @ __MAP_SHARED → i { ^ 1 }
 
 // Zero `nslots` 4-byte slots of a buffer.
-unsafe
-
-@ __zero * u b i nslots → v {
+unsafe @ __zero * u b i nslots → v {
     : ~ i k 0
     ~ < k nslots { ( nurl_poke_i32 b k 0 ) = k + k 1 }
 }
 
 // Open a webcam and start YUYV streaming at w×h with `nbuf` ring buffers.
-unsafe
-
-@ cam_open s path i w i h i nbuf → Camera {
+unsafe @ cam_open s path i w i h i nbuf → Camera {
     : i fd # i ( open path # i32 ( __O_RDWR ) )
     ? < fd 0 { ^ ( __cam_new @ CameraImpl { - 0 1 w h 0 ( vec_new [i] ) ( vec_new [i] ) 0 } ) } {}
 
@@ -156,25 +146,17 @@ unsafe
     ^ ( __cam_new @ CameraImpl { fd aw ah got ptrs lens 1 } )
 }
 
-unsafe
+unsafe @ cam_ok Camera h → b { : *CameraImpl c ( __Camera_ptr h ) ^ != . c ok 0 }
 
-@ cam_ok Camera h → b { : *CameraImpl c ( __Camera_ptr h ) ^ != . c ok 0 }
+unsafe @ cam_w Camera h → i { : *CameraImpl c ( __Camera_ptr h ) ^ . c w }
 
-unsafe
-
-@ cam_w Camera h → i { : *CameraImpl c ( __Camera_ptr h ) ^ . c w }
-
-unsafe
-
-@ cam_h Camera h → i { : *CameraImpl c ( __Camera_ptr h ) ^ . c h }
+unsafe @ cam_h Camera h → i { : *CameraImpl c ( __Camera_ptr h ) ^ . c h }
 
 @ __clip255 i v → i { ^ ? < v 0 0 ? > v 255 255 v }
 
 // Grab one frame: dequeue a filled buffer, convert YUYV→RGB into `rgb`
 // (packed, 3 bytes/pixel, w*h*3 bytes), and requeue. Returns T on success.
-unsafe
-
-@ cam_grab Camera cam__h ( Vec u ) rgb → b {
+unsafe @ cam_grab Camera cam__h ( Vec u ) rgb → b {
     : *CameraImpl c ( __Camera_ptr cam__h )
     : ( Vec u ) bfv ( vec_zeroed [u] 88 )
     : *u bf ( vec_data [u] bfv )
@@ -219,9 +201,7 @@ unsafe
 }
 
 // Stop streaming, unmap the ring and close the fd.
-unsafe
-
-@ __cam_release_parts i fd i nbuf ( Vec i ) ptrs ( Vec i ) lens → v {
+unsafe @ __cam_release_parts i fd i nbuf ( Vec i ) ptrs ( Vec i ) lens → v {
     ? >= fd 0 {
         : ( Vec u ) tv ( vec_zeroed [u] 4 )
         : *u t ( vec_data [u] tv )
@@ -242,9 +222,7 @@ unsafe
 
 // Release the camera now (optional — its last owner does it anyway). The
 // fields are cleared, so the drop finds nothing left to release.
-unsafe
-
-@ cam_close Camera h → v {
+unsafe @ cam_close Camera h → v {
     : *CameraImpl c ( __Camera_ptr h )
     ( __cam_release_parts . c fd . c nbuf . c bufptr . c buflen )
     = . c nbuf 0

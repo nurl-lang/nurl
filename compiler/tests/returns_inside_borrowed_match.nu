@@ -36,9 +36,7 @@ $ `stdlib/core/vec.nu`
     }
 }
 
-unsafe
-
-@ main → i {
+unsafe @ main → i {
     : ( Vec String ) v ( vec_new [String] ) ( vec_push [String] v ( string_from `x` ) )
     : ~ i l - ( nurl_alloc_count ) ( nurl_free_count ) : ~ i k 0
     ~ < k 20 { : ?String r ( f1 v ) = k + k 1 } ( nurl_println ( nurl_str_cat `f1 ` ( nurl_str_int - - ( nurl_alloc_count ) ( nurl_free_count ) l ) ) )

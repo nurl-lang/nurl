@@ -93,7 +93,7 @@ $ `stdlib/std/fs.nu`
 
 // ── stderr chrome ─────────────────────────────────────────────────────
 
-@ eput s msg → v {
+unsafe @ eput s msg → v {
     : i _w ( write 2 # *u msg ( nurl_str_len msg ) )
 }
 
@@ -191,7 +191,7 @@ $ `stdlib/std/fs.nu`
 
 // ── evaluation ────────────────────────────────────────────────────────
 
-@ __repl_eval ( Vec String ) imports ( Vec String ) defs s body → v {
+unsafe @ __repl_eval ( Vec String ) imports ( Vec String ) defs s body → v {
     : String prog ( __build_program imports defs body )
     : !v IoErr _w ( write_file `/tmp/nurl_repl_eval.nu` ( string_data prog ) )
     ?? _w { T _ → {} F e → { ( eput `could not write temp file\n` ) } }

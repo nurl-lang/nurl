@@ -3,7 +3,7 @@
 // callee read an unset ABI register for y, silently.
 & `m` @ pow f x f y → f
 
-@ main → i {
+unsafe @ main → i {
     : f z ( pow 2.0 )
     ^ 0
 }

@@ -71,9 +71,7 @@ $ `deps/hub/src/hub.nu`
 }
 
 // "HOST:PORT" → host into `hout`, returns port (or def on parse trouble)
-unsafe
-
-@ __cli_addr s addr String hout i def → i {
+unsafe @ __cli_addr s addr String hout i def → i {
     : i n ( nurl_str_len addr )
     : ~ i colon -1
     : ~ i k 0

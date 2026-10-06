@@ -595,9 +595,7 @@ $ `token.nu`
 // worker names under $TMPDIR (preopened into the sandbox via --dir); the
 // exact byte length is validated (8·(hi−lo), or 8·K for a histogram).
 // Runtime params ride argv as f64-bit-pattern decimals.
-unsafe
-
-@ __wasm_run_gpu String path GpuChunk c → GpuOut {
+unsafe @ __wasm_run_gpu String path GpuChunk c → GpuOut {
     : String tmp ( env_var_or `TMPDIR` `/tmp` )
     : b vecmode | | | == . c mode ( gpu_mode_sample ) == . c mode ( gpu_mode_shuffle_map ) == . c mode ( gpu_mode_shuffle_reduce ) | == . c mode ( gpu_mode_hist ) == . c mode ( gpu_mode_vecreduce )
     : b hasdata > ( vec_len [u] . c data ) 0

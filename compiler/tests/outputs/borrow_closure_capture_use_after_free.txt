@@ -16,4 +16,4 @@ compiler/tests/borrow_closure_capture_use_after_free.nu:109: error: use of moved
     ( nurl_print ( nurl_str_int ( outer ) ) )
 compiler/tests/borrow_closure_capture_use_after_free.nu:116: error: use of moved value 'q' — a heap handle has exactly one owner, and this one was consumed at line 115 by vec_free. After that the binding is dead: free or read the value through whatever owns it now, or rebind this name to a fresh value. The closure 'qc' still holds 'q', so invoking it reads the freed buffer.
     ( nurl_print ( nurl_str_int ( qc ) ) )
-error: compilation aborted — 8 borrow-checker violations (if the program is correct, this is a false positive: please report it as a bug at https://github.com/nurl-lang/nurl/issues)
+error: compilation aborted — 8 borrow-checker violations (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

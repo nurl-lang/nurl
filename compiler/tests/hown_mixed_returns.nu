@@ -29,13 +29,9 @@ $ `stdlib/core/rcbox.nu`
 : ~ i g_state 0
 : ~ b g_local F
 
-unsafe
+unsafe @ state → *State { ^ ( rcbox_ptr [State] g_state ) }
 
-@ state → *State { ^ ( rcbox_ptr [State] g_state ) }
-
-unsafe
-
-@ the_store → Store {
+unsafe @ the_store → Store {
     : *State p ( state )
     ^ @ Store { . . p store path . . p store ok }
 }
@@ -51,9 +47,7 @@ unsafe
 @ who_fresh i st → Who { ^ @ Who { st ( string_from `two` ) ( owned_store ) } }
 
 // handle: lends the global's String, or a fresh one
-unsafe
-
-@ name → String {
+unsafe @ name → String {
     ? g_local { ^ . ( state ) name } {}
     ^ ( string_from `fresh` )
 }
@@ -83,9 +77,7 @@ unsafe
     ^ + + ( bind_struct st ) ( join_struct st ) + ( bind_string ) ( join_string st )
 }
 
-unsafe
-
-@ main → i {
+unsafe @ main → i {
     = g_state ( rcbox_new [State] @ State { @ Store { ( string_from `agora.db` ) T } ( string_from `global` ) } )
     : ~ i acc 0
     : ~ i k 0

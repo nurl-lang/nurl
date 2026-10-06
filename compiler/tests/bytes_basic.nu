@@ -20,9 +20,7 @@ $ `stdlib/ext/env.nu`
     }
 }
 
-unsafe
-
-@ main → i {
+unsafe @ main → i {
     // ── Vec[u] CRUD via the raw vec_* API works, demonstrating that the
     //    byte buffer IS just a Vec[u] under the hood. ─────────────────
     : ( Vec u ) v ( vec_with_cap [u] 4 )

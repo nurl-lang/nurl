@@ -21,9 +21,7 @@ $ `src/preproc.nu`
 
 : i STRIDE 9973
 
-unsafe
-
-@ imnet_norm * f p i h i w → v {
+unsafe @ imnet_norm * f p i h i w → v {
     : ( Vec u ) mean__v ( vec_zeroed [u] 24 )
     : *f mean # *f ( vec_data [u] mean__v )
     : ( Vec u ) std__v ( vec_zeroed [u] 24 )
@@ -42,9 +40,7 @@ unsafe
     }
 }
 
-unsafe
-
-@ main → i {
+unsafe @ main → i {
     : i argc ( nurl_argc )
     ? < argc 3 { ( nurl_print `usage: streamcheck <ckpt.pt> <frame>...\n` ) ^ 2 } {}
     : i nframes - argc 2

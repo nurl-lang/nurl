@@ -3,7 +3,7 @@
 // scans for primes ≤ √N marking multiples, then counts the zeros.
 & `c` @ memset s buf i v i sz → s
 
-@ main → i {
+unsafe @ main → i {
     : i n 10000000
     : s buf ( malloc n )
     ( memset buf 0 n )

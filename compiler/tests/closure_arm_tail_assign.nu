@@ -27,9 +27,7 @@ $ `stdlib/core/string.nu`
     ^ ( base 1 )
 }
 
-unsafe
-
-@ main → i {
+unsafe @ main → i {
     : i r0 ( run T 5 )
     : i before - ( nurl_alloc_count ) ( nurl_free_count )
     : ~ i n 0

@@ -8,24 +8,18 @@
 : Box { i state i other }
 
 // field name `state` collides with the parameter `state`
-unsafe
-
-@ via_ptr * Box bx i state → i { ^ + . bx state * 100 state }
+unsafe @ via_ptr * Box bx i state → i { ^ + . bx state * 100 state }
 
 // same collision, struct passed BY VALUE (was already correct — guard it)
 @ via_val Box bx i state → i { ^ + . bx state * 100 state }
 
 // field name collides with a LOCAL binding, not a parameter
-unsafe
-
-@ via_local * Box bx → i {
+unsafe @ via_local * Box bx → i {
     : i state 9
     ^ + . bx state state  // field(.) + local — field must win on the left
 }
 
-unsafe
-
-@ main → i {
+unsafe @ main → i {
     : *Box p # *Box ( nurl_alloc Z Box )
     = . p state 7
     = . p other 0

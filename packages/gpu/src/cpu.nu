@@ -282,9 +282,7 @@ static void __nurl_ensure(int n) {
 
 // Compile CUDA-C `src` (entry `name`) to a host shared object and dlopen it.
 // Returns the dlopen handle (0 on failure), analogous to cuda_module_load.
-unsafe
-
-@ cpu_compile s src s name → *u {
+unsafe @ cpu_compile s src s name → *u {
     : String casts ( __parse_casts src name )
     : String c ( string_with_cap + 2048 ( nurl_str_len src ) )
     ( string_push_str c ( __cpu_header ) )
@@ -379,9 +377,7 @@ unsafe
 }
 
 // The generated grid-loop entry point in a compiled module (0 if absent).
-unsafe
-
-@ cpu_function * u handle → i { ^ # i ( dlsym handle `__cpu_launch` ) }
+unsafe @ cpu_function * u handle → i { ^ # i ( dlsym handle `__cpu_launch` ) }
 // Do NOT dlclose: a kernel module compiled with -fopenmp keeps libgomp worker
 // threads alive; unloading it out from under them crashes libgomp at thread
 // teardown. Leaving the (small) module mapped for the process lifetime is the
@@ -392,35 +388,23 @@ unsafe
 // Buffers are f32/i32/i64 arrays (4-byte-aligned, sizes a multiple of 4), so
 // copy word-by-word — avoids declaring libc memcpy (the compiler emits its
 // own memcpy for aggregate copies, and a duplicate FFI declaration collides).
-unsafe
+unsafe @ cpu_malloc i bytes → i { ^ # i ( nurl_alloc bytes ) }
 
-@ cpu_malloc i bytes → i { ^ # i ( nurl_alloc bytes ) }
+unsafe @ cpu_free sink i ptr → v { ( nurl_free # *u ptr ) }
 
-unsafe
-
-@ cpu_free sink i ptr → v { ( nurl_free # *u ptr ) }
-
-unsafe
-
-@ __copy_words * u dst * u src i bytes → v {
+unsafe @ __copy_words * u dst * u src i bytes → v {
     : i words / bytes 4
     : ~ i k 0
     ~ < k words { ( nurl_poke_i32 dst k ( nurl_peek_i32 src k ) ) = k + k 1 }
 }
 
-unsafe
+unsafe @ cpu_htod i dst * u host i bytes → i { ( __copy_words # *u dst host bytes ) ^ 0 }
 
-@ cpu_htod i dst * u host i bytes → i { ( __copy_words # *u dst host bytes ) ^ 0 }
-
-unsafe
-
-@ cpu_dtoh * u host i src i bytes → i { ( __copy_words host # *u src bytes ) ^ 0 }
+unsafe @ cpu_dtoh * u host i src i bytes → i { ( __copy_words host # *u src bytes ) ^ 0 }
 
 // Run a compiled kernel: `fn` is the __cpu_launch pointer, `params` the same
 // void** array gpu_launch builds for CUDA. 0 == success.
-unsafe
-
-@ cpu_launch i fn i params i grid i block → i {
+unsafe @ cpu_launch i fn i params i grid i block → i {
     ( nurl_cpu_launch # *u fn # *u params grid block )
     ^ 0
 }

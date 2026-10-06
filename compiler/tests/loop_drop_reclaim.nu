@@ -9,9 +9,7 @@
 
 % Drop ( Handle ) { unsafe @ drop Handle h → v { ( nurl_free # s . h buf ) } }
 
-unsafe
-
-@ main → i {
+unsafe @ main → i {
     : ~ i k 0
     ~ < k 100 {
         : Handle h @ Handle { # *u ( malloc 32 ) }

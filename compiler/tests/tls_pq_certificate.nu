@@ -62,9 +62,7 @@ $ `stdlib/std/time.nu`
     ^ ok
 }
 
-unsafe
-
-@ main → i {
+unsafe @ main → i {
     : ~ b all T
 
     // ── an ML-DSA-65 identity and a certificate for it ──

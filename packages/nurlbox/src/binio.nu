@@ -52,9 +52,7 @@ $ `bx.nu`
 }
 
 // `size` bytes at `off`, little-endian, as an unsigned value.
-unsafe
-
-@ __od_word * u p i n i off i size → i {
+unsafe @ __od_word * u p i n i off i size → i {
     : ~ i v 0
     : ~ i k - size 1
     ~ >= k 0 {
@@ -104,9 +102,7 @@ unsafe
     ( bx_push_octal out off 7 )
 }
 
-unsafe
-
-@ __od_line String out * u p i n i off i take i kind i size i addr_kind → v {
+unsafe @ __od_line String out * u p i n i off i take i kind i size i addr_kind → v {
     ( __od_addr out addr_kind off )
     : ~ i k 0
     ~ < k take {
@@ -135,9 +131,7 @@ unsafe
     ( string_push_char out 10 )
 }
 
-unsafe
-
-@ ap_od ( Vec String ) argv → i {
+unsafe @ ap_od ( Vec String ) argv → i {
     : BxOpts o ( bx_getopt argv 1 `A:t:N:j:vbcdosxh` `address-radix=A,format=t,read-bytes=N,skip-bytes=j,output-duplicates=v` )
     : ~ i rc 0
     ? ! ( bx_ok o ) { = rc 1 } {
@@ -222,9 +216,7 @@ unsafe
 
 // ── hexdump ───────────────────────────────────────────────────────
 
-unsafe
-
-@ ap_hexdump ( Vec String ) argv → i {
+unsafe @ ap_hexdump ( Vec String ) argv → i {
     : BxOpts o ( bx_getopt argv 1 `Cn:vs:x` `` )
     : ~ i rc 0
     ? ! ( bx_ok o ) { = rc 1 } {
@@ -315,9 +307,7 @@ unsafe
     ^ -1
 }
 
-unsafe
-
-@ ap_xxd ( Vec String ) argv → i {
+unsafe @ ap_xxd ( Vec String ) argv → i {
     : BxOpts o ( bx_getopt argv 1 `pruc:g:l:s:` `plain=p,revert=r,upper=u,cols=c,groupsize=g,len=l,seek=s` )
     : ~ i rc 0
     ? ! ( bx_ok o ) { = rc 1 } {
@@ -428,9 +418,7 @@ unsafe
     }
 }
 
-unsafe
-
-@ ap_cmp ( Vec String ) argv → i {
+unsafe @ ap_cmp ( Vec String ) argv → i {
     : BxOpts o ( bx_getopt argv 1 `sln:` `silent=s,verbose=l,bytes=n` )
     : ~ i rc 0
     ? ! ( bx_ok o ) { = rc 2 } {
@@ -507,9 +495,7 @@ unsafe
 
 // ── strings ───────────────────────────────────────────────────────
 
-unsafe
-
-@ ap_strings ( Vec String ) argv → i {
+unsafe @ ap_strings ( Vec String ) argv → i {
     : BxOpts o ( bx_getopt argv 1 `n:at:f` `bytes=n,all=a,radix=t,print-file-name=f` )
     : ~ i rc 0
     ? ! ( bx_ok o ) { = rc 1 } {
@@ -586,9 +572,7 @@ unsafe
     }
 }
 
-unsafe
-
-@ __split_write s prefix i index i width b numeric ( Vec u ) data i from i len → i {
+unsafe @ __split_write s prefix i index i width b numeric ( Vec u ) data i from i len → i {
     : String name ( string_from prefix )
     ( __split_suffix name index width numeric )
     : ( Vec u ) piece ( vec_new [u] )
@@ -609,9 +593,7 @@ unsafe
     ^ rc
 }
 
-unsafe
-
-@ ap_split ( Vec String ) argv → i {
+unsafe @ ap_split ( Vec String ) argv → i {
     : BxOpts o ( bx_getopt argv 1 `b:l:a:d` `bytes=b,lines=l,suffix-length=a,numeric-suffixes=d` )
     : ~ i rc 0
     ? ! ( bx_ok o ) { = rc 1 } {
@@ -692,9 +674,7 @@ unsafe
     }
 }
 
-unsafe
-
-@ ap_dd ( Vec String ) argv → i {
+unsafe @ ap_dd ( Vec String ) argv → i {
     : String inf_s ( string_new )
     : String outf_s ( string_new )
     : String bs_str ( string_new )

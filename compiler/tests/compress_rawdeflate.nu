@@ -7,9 +7,7 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/ext/compress.nu`
 
-unsafe
-
-@ vec_eq_bytes ( Vec u ) a ( Vec u ) b → b {
+unsafe @ vec_eq_bytes ( Vec u ) a ( Vec u ) b → b {
     : i na ( vec_len [u] a )
     : i nb ( vec_len [u] b )
     ? != na nb { ^ F } {}
@@ -35,9 +33,7 @@ unsafe
 
 // permessage-deflate sender: compress, then strip the trailing
 // `00 00 FF FF` the sync flush appends (RFC 7692 §7.2.1).
-unsafe
-
-@ pmce_compress ZDeflate d ( Vec u ) input → ( Vec u ) {
+unsafe @ pmce_compress ZDeflate d ( Vec u ) input → ( Vec u ) {
     : !( Vec u ) CompressErr r ( raw_deflate_block d input )
     ^ ?? r {
         T comp → {

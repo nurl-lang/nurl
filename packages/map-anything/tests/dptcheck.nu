@@ -21,9 +21,7 @@ $ `src/dpthead.nu`
     ^ 1
 }
 
-unsafe
-
-@ __dt_up GpuKit kit * u raw i off i n → GkBuf {
+unsafe @ __dt_up GpuKit kit * u raw i off i n → GkBuf {
     : ( Vec f ) host ( vec_with_cap [f] n )
     : b _l ( vec_set_len [f] host n )
     : *f hp ( vec_data [f] host )
@@ -39,9 +37,7 @@ unsafe
     ^ b
 }
 
-unsafe
-
-@ __dt_dump GpuKit kit s dir s name GkBuf b i n → b {
+unsafe @ __dt_dump GpuKit kit s dir s name GkBuf b i n → b {
     : ( Vec f ) host ( vec_with_cap [f] n )
     : b _hl ( vec_set_len [f] host n )
     ? ( gk_dbuf_download kit b host ) {} { ^ F }

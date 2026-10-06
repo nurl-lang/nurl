@@ -614,9 +614,7 @@ $ `stdlib/ext/protobuf.nu`
     ^ @ !v ProtoError { T }
 }
 
-unsafe
-
-@ api_boundaries → !v ProtoError {
+unsafe @ api_boundaries → !v ProtoError {
     : ( Slice u ) empty @ ( Slice u ) { # *u 0 0 }
     : ( Slice u ) invalid @ ( Slice u ) { # *u 0 -1 }
     ?? ( proto_reader_with_limits invalid 1 1 ) {

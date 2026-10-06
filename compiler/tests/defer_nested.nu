@@ -1,9 +1,7 @@
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
 
-unsafe
-
-@ ordered b arm → v {
+unsafe @ ordered b arm → v {
     ; { ( nurl_print `earliest\n` ) }
     ; {
         : ( Vec i ) values ( vec_new [i] )

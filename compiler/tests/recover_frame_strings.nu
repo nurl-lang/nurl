@@ -45,9 +45,7 @@ $ `stdlib/core/string.nu`
     ( panic `scope` )
 }
 
-unsafe
-
-@ consume sink s x → i {
+unsafe @ consume sink s x → i {
     : i n ( nurl_str_len x )
     ( nurl_free x )
     ^ n
@@ -61,9 +59,7 @@ unsafe
     ( panic `handed` )
 }
 
-unsafe
-
-@ consume_then_panic sink s x → i {
+unsafe @ consume_then_panic sink s x → i {
     ( nurl_print x ) ( nurl_print `\n` )
     ( panic `in callee` )
     ( nurl_free x )
@@ -103,9 +99,7 @@ unsafe
     }
 }
 
-unsafe
-
-@ main → i {
+unsafe @ main → i {
     ( guard \ → v { ( bound ) } )
     ( guard \ → v { ( rebound_in_loop ) } )
     ( guard \ → v { ( inner_scope_released 1 ) } )

@@ -17,7 +17,7 @@
 // on all five language implementations printing the same line before it
 // reports a single timing number for the row.
 
-@ lcg_step * u64 st → u64 {
+unsafe @ lcg_step * u64 st → u64 {
     : ~ u64 s . st 0
     = s & + * s 1664525 1013904223 0xffffffff
     = . st 0 s
@@ -30,7 +30,7 @@
     ^ + & >> key 57 0x7f 1
 }
 
-@ bloom_add * u64 bloom u64 h → v {
+unsafe @ bloom_add * u64 bloom u64 h → v {
     : ~ i lane 0
     ~ < lane 4 {
         : u64 bit_idx & >> h * lane 13 4095
@@ -41,7 +41,7 @@
     }
 }
 
-@ bloom_maybe * u64 bloom u64 h → b {
+unsafe @ bloom_maybe * u64 bloom u64 h → b {
     : ~ i lane 0
     ~ < lane 4 {
         : u64 bit_idx & >> h * lane 13 4095
@@ -56,7 +56,7 @@
 // Group-probing insert: scan 16 consecutive slots at a time for an empty
 // slot or a fingerprint+key match, advancing group by group. If the
 // grouped scan runs out of rounds, fall back to plain linear probing.
-@ grouped_insert * u64 ctrl * u64 keys * u64 vals u64 key u64 val b partitioned → v {
+unsafe @ grouped_insert * u64 ctrl * u64 keys * u64 vals u64 key u64 val b partitioned → v {
     : u64 fp ( fp7 key )
     : u64 part & >> key 62 3
     : ~ u64 group ? partitioned & & key 63 48 & & key 255 240
@@ -102,7 +102,7 @@
 
 // Returns 1 and writes the payload to `out[0]` on a hit, 0 on a miss.
 // An empty control slot ends the scan — the same early-out the peers use.
-@ grouped_probe * u64 ctrl * u64 keys * u64 vals u64 probe_key b partitioned * u64 out → i {
+unsafe @ grouped_probe * u64 ctrl * u64 keys * u64 vals u64 probe_key b partitioned * u64 out → i {
     : u64 fp ( fp7 probe_key )
     : u64 part & >> probe_key 62 3
     : ~ u64 group ? partitioned & & probe_key 63 48 & & probe_key 255 240
@@ -128,7 +128,7 @@
     ^ 0
 }
 
-@ zero_block * u64 p i n → v {
+unsafe @ zero_block * u64 p i n → v {
     : ~ i k 0
     ~ < k n {
         = . p k # u64 0
@@ -136,7 +136,7 @@
     }
 }
 
-@ main → i {
+unsafe @ main → i {
     : i cap 256
     : i bloom_words 64
     : i compact_chunk 64

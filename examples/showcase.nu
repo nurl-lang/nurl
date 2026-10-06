@@ -49,18 +49,14 @@
 }
 
 // ── Heap-allocate an Ast node (tiny helper) ──────────────────
-unsafe
-
-@ box_ast Ast node → *Ast {
+unsafe @ box_ast Ast node → *Ast {
     : *Ast p # *Ast ( malloc Z Ast )
     = . p 0 node  // *p = node  (field 0 of the boxed struct)
     ^ p
 }
 
 // ── Free a boxed Ast tree, children first ────────────────────
-unsafe
-
-@ free_ast * Ast e → v {
+unsafe @ free_ast * Ast e → v {
     ?? . e 0 {
         Num n → {}
         Neg inner → ( free_ast inner )
@@ -73,9 +69,7 @@ unsafe
 }
 
 // ── Evaluator returning an Option (division-by-zero → None) ──
-unsafe
-
-@ eval * Ast e → ?i {
+unsafe @ eval * Ast e → ?i {
     = eval_count + eval_count 1
 
     ?? . e 0 {

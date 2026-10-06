@@ -18,9 +18,7 @@ $ `stdlib/ext/websocket.nu`
 
 @ pb s tag b v → v { ( pl tag ? v `T` `F` ) }
 
-unsafe
-
-@ vec_eq ( Vec u ) a ( Vec u ) b → b {
+unsafe @ vec_eq ( Vec u ) a ( Vec u ) b → b {
     : i na ( vec_len [u] a )
     ? != na ( vec_len [u] b ) { ^ F } {}
     : *u pa ( vec_data [u] a )

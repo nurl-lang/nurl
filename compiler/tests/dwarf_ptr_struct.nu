@@ -16,9 +16,7 @@
 
 : Cell { i v i w }
 
-unsafe
-
-@ main → i {
+unsafe @ main → i {
     : *Cell p # *Cell ( nurl_alloc Z Cell )
     = . p v 7
     = . p w 9

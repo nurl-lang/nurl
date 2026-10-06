@@ -11,9 +11,7 @@ $ `stdlib/core/string.nu`
 
 @ pb s label b ok → v { ( nurl_print label ) ( nurl_print ? ok `OK\n` `BAD\n` ) }
 
-unsafe
-
-@ main → i {
+unsafe @ main → i {
     : *Box t # *Box ( nurl_alloc Z Box )
     // Locals whose names exactly match the struct fields.
     : i lo 11

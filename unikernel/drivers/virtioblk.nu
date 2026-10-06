@@ -89,7 +89,7 @@ $ `stdlib/hal/virtio.nu`
 // Find the first virtio-blk device the command line names and bring it
 // up. A null pointer means there is no such device — a fact about the
 // machine, not an error.
-@ vblk_open i qsize → *VirtioBlk {
+unsafe @ vblk_open i qsize → *VirtioBlk {
     : s cl ( nurl_boot_cmdline )
     : i n ( virtio_mmio_count cl )
     : ~ i k 0
@@ -104,7 +104,7 @@ $ `stdlib/hal/virtio.nu`
     ^ # *VirtioBlk 0
 }
 
-@ __vblk_bring_up i base i qsize → *VirtioBlk {
+unsafe @ __vblk_bring_up i base i qsize → *VirtioBlk {
     // What the device offers decides what we ask for. FLUSH is the one
     // that matters: without it there is no way to make a write durable,
     // and a filesystem promising `fsync` over a device that cannot do
@@ -152,22 +152,22 @@ $ `stdlib/hal/virtio.nu`
     ^ v
 }
 
-@ vblk_ready * VirtioBlk d → b {
+unsafe @ vblk_ready * VirtioBlk d → b {
     ? == # i d 0 { ^ F } {}
     ^ . d ready
 }
 
-@ vblk_capacity * VirtioBlk d → i {
+unsafe @ vblk_capacity * VirtioBlk d → i {
     ? ! ( vblk_ready d ) { ^ 0 } {}
     ^ . d capacity
 }
 
-@ vblk_readonly * VirtioBlk d → b {
+unsafe @ vblk_readonly * VirtioBlk d → b {
     ? == # i d 0 { ^ T } {}
     ^ . d readonly
 }
 
-@ __put_hdr * VirtioBlk d i type i sector → v {
+unsafe @ __put_hdr * VirtioBlk d i type i sector → v {
     : ~ i k 0
     ~ < k ( vblk_hdr_len ) { : b _z ( vec_set [u] . d hdr k # u 0 ) = k + k 1 }
     = k 0
@@ -182,7 +182,7 @@ $ `stdlib/hal/virtio.nu`
 // The three descriptors are allocated BEFORE anything is published: a
 // partially built chain on the available ring is a chain the device
 // will follow into whatever the `next` field happened to hold.
-@ __request * VirtioBlk d i type i sector s buf i nbytes b dev_writes → b {
+unsafe @ __request * VirtioBlk d i type i sector s buf i nbytes b dev_writes → b {
     ? ! ( vblk_ready d ) { ^ F } {}
     : b has_data && != 0 # i buf > nbytes 0
 
@@ -241,14 +241,14 @@ $ `stdlib/hal/virtio.nu`
     ^ == # i ?? ( vec_get [u] . d st 0 ) { T x → x F → # u 255 } 0
 }
 
-@ vblk_read * VirtioBlk d i lba s buf i nsec → b {
+unsafe @ vblk_read * VirtioBlk d i lba s buf i nsec → b {
     ? ! ( vblk_ready d ) { ^ F } {}
     ? <= nsec 0 { ^ F } {}
     ? > + lba nsec . d capacity { ^ F } {}
     ^ ( __request d ( vblk_type_in ) lba buf * nsec ( vblk_sector ) T )
 }
 
-@ vblk_write * VirtioBlk d i lba s buf i nsec → b {
+unsafe @ vblk_write * VirtioBlk d i lba s buf i nsec → b {
     ? ! ( vblk_ready d ) { ^ F } {}
     ? . d readonly { ^ F } {}
     ? <= nsec 0 { ^ F } {}
@@ -259,7 +259,7 @@ $ `stdlib/hal/virtio.nu`
 // A device that never negotiated FLUSH has no volatile cache to flush,
 // so success is the truthful answer — not a refusal, and not a request
 // the device would reject as unsupported.
-@ vblk_flush * VirtioBlk d → b {
+unsafe @ vblk_flush * VirtioBlk d → b {
     ? ! ( vblk_ready d ) { ^ F } {}
     ? . d readonly { ^ T } {}
     ? ! . d flush_ok { ^ T } {}
@@ -269,7 +269,7 @@ $ `stdlib/hal/virtio.nu`
 // The releases here are not bookkeeping autodrop could do: the rings and
 // buffers are memory the DEVICE writes into, so they may be handed back
 // only after virtio_reset has stopped it, never at some scope end before.
-@ vblk_close * VirtioBlk d → v {
+unsafe @ vblk_close * VirtioBlk d → v {
     ? == # i d 0 { ^ } {}
     ( virtio_reset . d base )
     ( vec_free [u] . d hdr )

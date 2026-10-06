@@ -24,9 +24,7 @@ $ `src/weights.nu`
     ( nurl_print `\n` )
 }
 
-unsafe
-
-@ main → i {
+unsafe @ main → i {
     ? < ( nurl_argc ) 2 { ( nurl_print `usage: wcheck <checkpoint.pt>\n` ) ^ 2 } {}
     : !Lw String o ( lw_open ( nurl_argv 1 ) )
     ?? o {

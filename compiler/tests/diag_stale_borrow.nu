@@ -7,7 +7,7 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/std/bytes.nu`
 
-@ main → i {
+unsafe @ main → i {
     : ( Vec u ) v ( vec_with_cap [u] 4 )
     ( vec_push [u] v # u 7 )
     : ~ * u p ( vec_data [u] v )
@@ -16,7 +16,7 @@ $ `stdlib/std/bytes.nu`
         ( vec_push [u] v # u 1 )  // grows → realloc → p dangles
         = k + k 1
     }
-    : i stale # i . p 0  // warns: 'p' is stale
+    : i stale # i . p 0  // error: 'p' is stale
     = p ( vec_data [u] v )  // re-fetch
     : i fresh # i . p 0  // silent
     ( nurl_print ( nurl_str_int + - stale stale fresh ) ) ( nurl_print `\n` )
@@ -30,7 +30,7 @@ $ `stdlib/std/bytes.nu`
     ( bytes_push_u16_le b 1 )
     : ~ * u bp ( vec_data [u] b )
     ( bytes_push_int b 2 )  // may realloc → bp dangles
-    : i sb # i . bp 0  // warns: 'bp' is stale
+    : i sb # i . bp 0  // error: 'bp' is stale
     ( nurl_print ( nurl_str_int - sb sb ) ) ( nurl_print `\n` )
     ( vec_free [u] b )
 
@@ -41,7 +41,7 @@ $ `stdlib/std/bytes.nu`
     ( vec_push [u] c # u 3 )
     : *u cp ( vec_data [u] c )
     ? > ( vec_len [u] c ) 0 { ( vec_push [u] c # u 4 ) } {}
-    ( nurl_print ( nurl_str_int # i . cp 0 ) ) ( nurl_print `\n` )  // warns
+    ( nurl_print ( nurl_str_int # i . cp 0 ) ) ( nurl_print `\n` )  // error
     ( vec_free [u] c )
 
     // …and the same join through a `??`: the T-arm grows and falls through.
@@ -52,7 +52,7 @@ $ `stdlib/std/bytes.nu`
         T q → { ( vec_push [u] e q ) }
         F _ → {}
     }
-    ( nurl_print ( nurl_str_int # i . ep 0 ) ) ( nurl_print `\n` )  // warns
+    ( nurl_print ( nurl_str_int # i . ep 0 ) ) ( nurl_print `\n` )  // error
     ( vec_free [u] e )
     ^ 0
 }

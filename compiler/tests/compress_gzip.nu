@@ -6,9 +6,7 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/ext/compress.nu`
 
-unsafe
-
-@ vec_eq_bytes ( Vec u ) a ( Vec u ) b → b {
+unsafe @ vec_eq_bytes ( Vec u ) a ( Vec u ) b → b {
     : i na ( vec_len [u] a )
     : i nb ( vec_len [u] b )
     ? != na nb { ^ F } {}
@@ -33,9 +31,7 @@ unsafe
     ^ buf
 }
 
-unsafe
-
-@ main → i {
+unsafe @ main → i {
     : ( Vec u ) input ( make_input )
     : i orig_len ( vec_len [u] input )
 

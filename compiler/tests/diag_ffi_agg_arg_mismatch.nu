@@ -9,7 +9,7 @@
 
 & `c` @ labs i x → i
 
-@ main → i {
+unsafe @ main → i {
     : ?i o @ ?i { T 5 }
     : i r ( labs o )
     ( nurl_print_int r )

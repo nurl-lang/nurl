@@ -34,9 +34,7 @@ $ `decode.nu`
 
 // Read a detection's nm mask coefficients from output0 (channels
 // 4+nc .. 4+nc+nm at anchor `ai`) into a fresh host f32 buffer.
-unsafe
-
-@ mask_coeffs * u out i na i nc i ai → ( Vec u ) {
+unsafe @ mask_coeffs * u out i na i nc i ai → ( Vec u ) {
     : i nm ( mask_nm )
     : ( Vec u ) cv ( vec_zeroed [u] * nm 4 )
     : *u c ( vec_data [u] cv )
@@ -51,9 +49,7 @@ unsafe
 // Build the 160×160 mask logit map for one detection: logit[y,x] =
 // Σ_m coeff[m]·proto[m,y,x]. proto is laid out [nm, MH, MW] row-major.
 // Returns a fresh host f32 buffer of MH*MW.
-unsafe
-
-@ mask_logits * u proto * u coeff i MH i MW → ( Vec u ) {
+unsafe @ mask_logits * u proto * u coeff i MH i MW → ( Vec u ) {
     : i nm ( mask_nm )
     : i hw * MH MW
     : ( Vec u ) lv ( vec_zeroed [u] * hw 4 )
@@ -74,9 +70,7 @@ unsafe
 
 // Bilinear sample of an MH×MW grid at fractional (fy,fx); out-of-range
 // coordinates clamp to the edge (align_corners=False convention).
-unsafe
-
-@ mask_sample * u L i MH i MW f fy f fx → f {
+unsafe @ mask_sample * u L i MH i MW f fy f fx → f {
     : f cy ? < fy 0.0 0.0 ? > fy # f - MH 1 # f - MH 1 fy
     : f cx ? < fx 0.0 0.0 ? > fx # f - MW 1 # f - MW 1 fx
     : i y0 # i cy

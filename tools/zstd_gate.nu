@@ -139,7 +139,7 @@ $ `stdlib/std/zstd.nu`
 // where resident size is only a sample. A buffer orphaned once per round
 // trip moves it by one per iteration however small the buffer, and RSS
 // can miss that for a whole run (zstd_decode's output buffer did).
-@ __cmd_leak s inp i iters i level → i {
+unsafe @ __cmd_leak s inp i iters i level → i {
     ?? ( __read inp ) {
         T src → {
             : ~ i warm 0
@@ -180,7 +180,7 @@ $ `stdlib/std/zstd.nu`
 
 // Decode and report what the frame's sequences look like:
 // "seqs N lit L match M rep R"
-@ __cmd_stats s inp → i {
+unsafe @ __cmd_stats s inp → i {
     ?? ( __read inp ) {
         T src → {
             : ~ i rc 0

@@ -6,9 +6,7 @@ $ `stdlib/core/vec.nu`
 
 : Pool { i cap ( Vec i ) slots }
 
-unsafe
-
-@ pool_new i cap → *Pool {
+unsafe @ pool_new i cap → *Pool {
     : *Pool p # *Pool ( nurl_alloc Z Pool )
     = . p cap cap
     = . p slots ( vec_new [i] )
@@ -18,26 +16,20 @@ unsafe
 }
 
 // A borrowing query.
-unsafe
-
-@ pool_num_free * Pool p → i { ^ ( vec_len [i] . p slots ) }
+unsafe @ pool_num_free * Pool p → i { ^ ( vec_len [i] . p slots ) }
 
 // A second shape: takes an extra argument, still returns a value.
 @ pool_bytes_free * Pool p i unit → i { ^ * ( pool_num_free p ) unit }
 
 // The release contract consumes the pool.
-unsafe
-
-@ pool_free sink * Pool p → v {
+unsafe @ pool_free sink * Pool p → v {
     ( vec_free [i] . p slots )
     ( free p )
 }
 
 @ pb s label b v → v { ( nurl_print label ) ( nurl_print ? v `YES\n` `NO\n` ) }
 
-unsafe
-
-@ main → i {
+unsafe @ main → i {
     : *Pool p ( pool_new 4 )
     // Calling the query repeatedly must not move `p`.
     : i a ( pool_num_free p )

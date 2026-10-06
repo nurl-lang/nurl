@@ -6,4 +6,4 @@ compiler/tests/diag_pointer_outlives_owner.nu:31: error: pointer 'args' points i
     ^ ( vec_len [s] args )
 compiler/tests/diag_pointer_outlives_owner.nu:40: error: pointer 'args' points into 'parts', which was dropped at the end of its block — this reads freed memory. Keep the owner alive as long as the pointer (declare it in the outer scope), or keep an owned copy instead of a pointer into it (a String: ( string_from p )).
     ^ ( vec_len [s] args )
-error: compilation aborted — 3 borrow-checker violations (if the program is correct, this is a false positive: please report it as a bug at https://github.com/nurl-lang/nurl/issues)
+error: compilation aborted — 3 borrow-checker violations (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

@@ -9,9 +9,7 @@ $ `stdlib/net/transport.nu`
 
 @ pb s label b v → v { ( nurl_print label ) ( nurl_print ? v `YES\n` `NO\n` ) }
 
-unsafe
-
-@ new_path i mode → s {
+unsafe @ new_path i mode → s {
     : *PeerPath p # *PeerPath ( nurl_alloc Z PeerPath )
     = . p pubkey ( vec_new [u] )
     = . p mode mode
@@ -20,13 +18,9 @@ unsafe
     ^ # s p
 }
 
-unsafe
+unsafe @ free_path s pp → v { : *PeerPath p # *PeerPath pp ( vec_free [u] . p pubkey ) ( nurl_free # s p ) }
 
-@ free_path s pp → v { : *PeerPath p # *PeerPath pp ( vec_free [u] . p pubkey ) ( nurl_free # s p ) }
-
-unsafe
-
-@ main → i {
+unsafe @ main → i {
     // peer starts on the relay leg (has_relay = 1)
     : s pp ( new_path ( mode_relay ) )
     : *PeerPath p # *PeerPath pp

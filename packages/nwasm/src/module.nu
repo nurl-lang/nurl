@@ -35,9 +35,7 @@ $ `stdlib/core/rcbox.nu`
 
 @ wc_eof inout Wc c → b { ^ >= . c pos . c len }
 
-unsafe
-
-@ wc_u8 inout Wc c → i {
+unsafe @ wc_u8 inout Wc c → i {
     : i p . c pos
     = . c pos + p 1
     ? | < p 0 >= p . c cap { ^ 0 } {}
@@ -45,9 +43,7 @@ unsafe
     ^ # i . d p
 }
 
-unsafe
-
-@ wc_peek inout Wc c → i {
+unsafe @ wc_peek inout Wc c → i {
     : i p . c pos
     ? | < p 0 >= p . c cap { ^ 0 } {}
     : *u d . c data
@@ -156,22 +152,16 @@ unsafe
 // every copy is the same module, and the last owner releases it.
 : Module { s ctl }
 
-unsafe
-
-@ Module_share Module h → Module { ^ @ Module { # s ( rcbox_share # i . h ctl ) } }
+unsafe @ Module_share Module h → Module { ^ @ Module { # s ( rcbox_share # i . h ctl ) } }
 
 @ Module_drop sink Module h → v {
     ( mem_forget h )
     ( rcbox_release [ModuleImpl] # i . h ctl )
 }
 
-unsafe
+unsafe @ _Module_ptr Module h → *ModuleImpl { ^ ( rcbox_ptr [ModuleImpl] # i . h ctl ) }
 
-@ _Module_ptr Module h → *ModuleImpl { ^ ( rcbox_ptr [ModuleImpl] # i . h ctl ) }
-
-unsafe
-
-@ __ft_free sink * FuncType ft → v { ( vec_free [i] . ft params ) ( vec_free [i] . ft results ) ( nurl_free # s ft ) }
+unsafe @ __ft_free sink * FuncType ft → v { ( vec_free [i] . ft params ) ( vec_free [i] . ft results ) ( nurl_free # s ft ) }
 
 // The section records are raw blocks behind the `( Vec s )` tables; the last
 // owner of the Module releases them here, and the tables themselves (with
@@ -206,33 +196,25 @@ unsafe
 @ module_free sink Module m → v {}
 
 // Did the module decode? When not, module_err says why.
-unsafe
-
-@ module_ok Module p__h → b {
+unsafe @ module_ok Module p__h → b {
     : *ModuleImpl p ( _Module_ptr p__h )
     ^ . p ok
 }
 
 // The decode error message (empty when module_ok) — the module's own bytes, lent.
-unsafe
-
-@ module_err Module p__h → ( Vec u ) {
+unsafe @ module_err Module p__h → ( Vec u ) {
     : *ModuleImpl p ( _Module_ptr p__h )
     ^ . p err
 }
 
 // Imported functions occupy function indices 0 .. this-1.
-unsafe
-
-@ module_num_import_funcs Module p__h → i {
+unsafe @ module_num_import_funcs Module p__h → i {
     : *ModuleImpl p ( _Module_ptr p__h )
     ^ . p num_import_funcs
 }
 
 // Record a decode error (first error wins; frees the previous message).
-unsafe
-
-@ __mod_err * ModuleImpl m s msg → v {
+unsafe @ __mod_err * ModuleImpl m s msg → v {
     ? ! . m ok { ^ v } {}
     = . m ok F
     ( vec_free [u] . m err )
@@ -283,9 +265,7 @@ unsafe
 
 // ── section decoders ─────────────────────────────────────────────
 
-unsafe
-
-@ __read_functype inout Wc c * ModuleImpl m → *FuncType {
+unsafe @ __read_functype inout Wc c * ModuleImpl m → *FuncType {
     ( wc_u8 c )  // 0x60 form byte (assumed)
     : i np ( __chk_count c m ( wc_uleb c ) `bad param count` )
     : ( Vec i ) params ( vec_new [i] )
@@ -301,25 +281,19 @@ unsafe
     ^ ft
 }
 
-unsafe
-
-@ __decode_type_sec inout Wc c * ModuleImpl m → v {
+unsafe @ __decode_type_sec inout Wc c * ModuleImpl m → v {
     : i n ( __chk_count c m ( wc_uleb c ) `bad type count` )
     : ~ i k 0
     ~ < k n { ( vec_push [s] . m types # s ( __read_functype c m ) ) = k + k 1 }
 }
 
-unsafe
-
-@ __decode_func_sec inout Wc c * ModuleImpl m → v {
+unsafe @ __decode_func_sec inout Wc c * ModuleImpl m → v {
     : i n ( __chk_count c m ( wc_uleb c ) `bad function count` )
     : ~ i k 0
     ~ < k n { ( vec_push [i] . m functypes ( wc_uleb c ) ) = k + k 1 }
 }
 
-unsafe
-
-@ __decode_export_sec inout Wc c * ModuleImpl m → v {
+unsafe @ __decode_export_sec inout Wc c * ModuleImpl m → v {
     : i n ( __chk_count c m ( wc_uleb c ) `bad export count` )
     : ~ i k 0
     ~ < k n {
@@ -342,9 +316,7 @@ unsafe
 // flag bit 0 = a maximum follows; bit 1 = SHARED (the threads proposal),
 // where the maximum is mandatory because every thread must agree on where
 // the buffer can end.
-unsafe
-
-@ __decode_mem_sec inout Wc c * ModuleImpl m → v {
+unsafe @ __decode_mem_sec inout Wc c * ModuleImpl m → v {
     : i n ( __chk_count c m ( wc_uleb c ) `bad memory count` )
     : ~ i k 0
     ~ < k n {
@@ -364,9 +336,7 @@ unsafe
 
 // Data section: active segments (flag 0/2) carry an i32.const offset expr then
 // raw bytes; passive segments (flag 1) carry bytes only (memory.init source).
-unsafe
-
-@ __decode_data_sec inout Wc c * ModuleImpl m → v {
+unsafe @ __decode_data_sec inout Wc c * ModuleImpl m → v {
     : i n ( __chk_count c m ( wc_uleb c ) `bad data count` )
     : ~ i k 0
     ~ < k n {
@@ -408,9 +378,7 @@ unsafe
 // host/WASI implementation at call time). A table / memory / global import is
 // a hard decode error — this runtime has nothing to satisfy it with, and
 // running anyway would silently corrupt the module's own state.
-unsafe
-
-@ __decode_import_sec inout Wc c * ModuleImpl m → v {
+unsafe @ __decode_import_sec inout Wc c * ModuleImpl m → v {
     : i n ( __chk_count c m ( wc_uleb c ) `bad import count` )
     : ~ i k 0
     ~ < k n {
@@ -448,9 +416,7 @@ unsafe
 }
 
 // Global section: each global = valtype, mutability, const init expr.
-unsafe
-
-@ __decode_global_sec inout Wc c * ModuleImpl m → v {
+unsafe @ __decode_global_sec inout Wc c * ModuleImpl m → v {
     : i n ( __chk_count c m ( wc_uleb c ) `bad global count` )
     : ~ i k 0
     ~ < k n {
@@ -467,9 +433,7 @@ unsafe
 // tables share the representation: entries are function indices or −1
 // for null — and without the GC proposal a module can only ever put
 // null (ref.null extern) into an externref table, so −1 covers it.
-unsafe
-
-@ __decode_table_sec inout Wc c * ModuleImpl m → v {
+unsafe @ __decode_table_sec inout Wc c * ModuleImpl m → v {
     : i n ( __chk_count c m ( wc_uleb c ) `bad table count` )
     // One table is materialised; accepting more would let table-1 ops
     // silently operate on table 0 — reject instead of misexecute.
@@ -512,9 +476,7 @@ unsafe
 //   or declared (passive); bit2 element EXPRS instead of func indices.
 // Active segments are applied to the table image here and then count as
 // dropped; passive ones are stored for table.init.
-unsafe
-
-@ __decode_elem_sec inout Wc c * ModuleImpl m → v {
+unsafe @ __decode_elem_sec inout Wc c * ModuleImpl m → v {
     : i n ( __chk_count c m ( wc_uleb c ) `bad element count` )
     : ~ i k 0
     ~ < k n {
@@ -562,9 +524,7 @@ unsafe
 
 // Code section: for each function, parse local declarations and record the
 // [start,end) byte range of its instruction stream (ending at the final `end`).
-unsafe
-
-@ __decode_code_sec inout Wc c * ModuleImpl m → v {
+unsafe @ __decode_code_sec inout Wc c * ModuleImpl m → v {
     : i n ( __chk_count c m ( wc_uleb c ) `bad code count` )
     : ~ i k 0
     ~ < k n {
@@ -602,9 +562,7 @@ unsafe
 
 // Custom section: if it is the "name" section, harvest subsection 1
 // (function names) for diagnostics; anything else is skipped.
-unsafe
-
-@ __decode_custom_sec inout Wc c * ModuleImpl m i sec_end → v {
+unsafe @ __decode_custom_sec inout Wc c * ModuleImpl m i sec_end → v {
     : i nlen ( wc_uleb c )
     ? != nlen 4 { ^ v } {}
     : b isname & & & == ( wc_u8 c ) 110 == ( wc_u8 c ) 97 == ( wc_u8 c ) 109 == ( wc_u8 c ) 101
@@ -638,9 +596,7 @@ unsafe
 
 // The name-section name of function `fidx` as a fresh byte vector (empty if
 // unknown). Cold path — linear scan is fine (used only for trap backtraces).
-unsafe
-
-@ _module_func_name * ModuleImpl m i fidx → ( Vec u ) {
+unsafe @ _module_func_name * ModuleImpl m i fidx → ( Vec u ) {
     : i n ( vec_len [i] . m name_idx )
     : ~ i k 0
     ~ < k n {
@@ -664,9 +620,7 @@ unsafe
 
 // Decode a whole module. On error, module_ok is F and module_err says why.
 // The module takes over `bytes` as its image (functions index into it).
-unsafe
-
-@ module_decode sink ( Vec u ) bytes → Module {
+unsafe @ module_decode sink ( Vec u ) bytes → Module {
     : i m__box ( rcbox_zero [ModuleImpl] )
     : *ModuleImpl m ( rcbox_ptr [ModuleImpl] m__box )
     = . m types ( vec_new [s] )
@@ -728,9 +682,7 @@ unsafe
 // Find an exported GLOBAL's index by name (-1 if absent). wasi-threads
 // needs one: `__stack_pointer` is what gives a spawned thread its own
 // stack, and only the host can set it before the thread's first call.
-unsafe
-
-@ _module_export_global * ModuleImpl m s name → i {
+unsafe @ _module_export_global * ModuleImpl m s name → i {
     : i n ( vec_len [s] . m exports )
     : ~ i found -1
     : ~ i k 0
@@ -748,9 +700,7 @@ unsafe
 @ module_export_global Module m__h s name → i { ^ ( _module_export_global ( _Module_ptr m__h ) name ) }
 
 // Find an exported function index by name (-1 if absent).
-unsafe
-
-@ _module_export_func * ModuleImpl m s name → i {
+unsafe @ _module_export_func * ModuleImpl m s name → i {
     : i n ( vec_len [s] . m exports )
     : ~ i found -1
     : ~ i k 0
@@ -769,9 +719,7 @@ unsafe
 
 // The *FuncType of any function index — imported (low indices) or defined —
 // as an opaque pointer; #s 0 if out of range.
-unsafe
-
-@ _module_func_type * ModuleImpl m i fidx → s {
+unsafe @ _module_func_type * ModuleImpl m i fidx → s {
     ? < fidx 0 { ^ # s 0 } {}
     : ~ i ti -1
     ? < fidx . m num_import_funcs {
@@ -792,9 +740,7 @@ unsafe
 
 // Structural function-type equality (the call_indirect runtime check): same
 // parameter and result valtypes, in order.
-unsafe
-
-@ functype_eq * FuncType a * FuncType b → b {
+unsafe @ functype_eq * FuncType a * FuncType b → b {
     : i np ( vec_len [i] . a params )
     ? != np ( vec_len [i] . b params ) { ^ F } {}
     : i nr ( vec_len [i] . a results )

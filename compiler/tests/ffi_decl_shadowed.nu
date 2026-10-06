@@ -28,9 +28,7 @@ $ `stdlib/core/io.nu`
 // must survive. `strlen` is a real libc symbol, so the link proves it.
 & `c` @ strlen s p → i
 
-unsafe
-
-@ main → i {
+unsafe @ main → i {
     ( nurl_print `shadowed(4)=` )
     ( nurl_print ( nurl_str_int ( nurl_test_shadowed_fn 4 ) ) )
     ( nurl_print `\n` )

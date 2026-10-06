@@ -57,9 +57,7 @@ sys.stdout.write('%d %s' % (n, h.hexdigest()[:16]))
 }
 
 // Print header bytes with CR/LF made visible, as http_response_builder does.
-unsafe
-
-@ dump_head ( Vec u ) bytes → v {
+unsafe @ dump_head ( Vec u ) bytes → v {
     : i n ( vec_len [u] bytes )
     : *u data ( vec_data [u] bytes )
     : ~ i k 0

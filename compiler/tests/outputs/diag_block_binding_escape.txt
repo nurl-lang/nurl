@@ -2,4 +2,4 @@ COMPILE FAIL
 ERRORS
 compiler/tests/diag_block_binding_escape.nu:13: error: binding 'f' to a value that references a more deeply scoped binding by pointer — it dangles once that inner scope exits
     : ( @ v ) f {
-error: compilation aborted — 1 borrow-checker violation (if the program is correct, this is a false positive: please report it as a bug at https://github.com/nurl-lang/nurl/issues)
+error: compilation aborted — 1 borrow-checker violation (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

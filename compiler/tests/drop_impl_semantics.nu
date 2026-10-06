@@ -20,9 +20,7 @@ $ `stdlib/core/vec.nu`
 
 & `libc` @ nurl_free_count → i
 
-unsafe
-
-@ live → i { ^ - ( nurl_alloc_count ) ( nurl_free_count ) }
+unsafe @ live → i { ^ - ( nurl_alloc_count ) ( nurl_free_count ) }
 
 : ~ i g_dropped 0
 
@@ -39,9 +37,7 @@ unsafe
 // Hands itself to a disposer, which releases everything.
 : Disposed { s name ( Vec i ) d }
 
-unsafe
-
-@ disposed_free sink Disposed r → v { ( nurl_free . r name ) ( vec_free [i] . r d ) }
+unsafe @ disposed_free sink Disposed r → v { ( nurl_free . r name ) ( vec_free [i] . r d ) }
 
 % Drop Disposed { @ drop Disposed r → v { = g_dropped + g_dropped 1 ( disposed_free r ) } }
 

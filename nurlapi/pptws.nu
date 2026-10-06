@@ -36,9 +36,9 @@ $ `stdlib/core/rcbox.nu`
     ( rcbox_release [PptMemberImpl] # i . h ctl )
 }
 
-@ PptMember_share PptMember h → PptMember { ^ @ PptMember { # s ( rcbox_share # i . h ctl ) } }
+unsafe @ PptMember_share PptMember h → PptMember { ^ @ PptMember { # s ( rcbox_share # i . h ctl ) } }
 
-@ __ppt_m PptMember h → *PptMemberImpl { ^ ( rcbox_ptr [PptMemberImpl] # i . h ctl ) }
+unsafe @ __ppt_m PptMember h → *PptMemberImpl { ^ ( rcbox_ptr [PptMemberImpl] # i . h ctl ) }
 
 : PptReg {
     ( Vec PptMember ) members
@@ -46,7 +46,7 @@ $ `stdlib/core/rcbox.nu`
 }
 : ~ i g_ppt_reg 0  // *PptReg as int (set once in ppt_install)
 
-@ __ppt_reg → *PptReg { ^ # *PptReg g_ppt_reg }
+unsafe @ __ppt_reg → *PptReg { ^ # *PptReg g_ppt_reg }
 
 // channel id from "/pptws/<id>"  ("/pptws/" is 7 chars) → "<id>", default public
 @ __ppt_chan String path → String {
@@ -60,7 +60,7 @@ $ `stdlib/core/rcbox.nu`
 @ __ppt_same String a String b → b { ^ != 0 ( nurl_str_eq ( string_data a ) ( string_data b ) ) }
 
 // write under the per-conn write lock; mark the member dead on any write error
-@ __ppt_send_bin * PptMemberImpl m ( Vec u ) payload → v {
+unsafe @ __ppt_send_bin * PptMemberImpl m ( Vec u ) payload → v {
     ? != . m alive 1 { ^ v } {}
     ( mutex_lock . m wlock )
     : !v WsErr wr ( ws_send_binary . m conn payload )
@@ -68,7 +68,7 @@ $ `stdlib/core/rcbox.nu`
     ( mutex_unlock . m wlock )
 }
 
-@ __ppt_send_text * PptMemberImpl m s text → v {
+unsafe @ __ppt_send_text * PptMemberImpl m s text → v {
     ? != . m alive 1 { ^ v } {}
     ( mutex_lock . m wlock )
     : !v WsErr wr ( ws_send_text . m conn text )
@@ -76,7 +76,7 @@ $ `stdlib/core/rcbox.nu`
     ( mutex_unlock . m wlock )
 }
 
-@ __ppt_count * PptReg reg String chan → i {
+unsafe @ __ppt_count * PptReg reg String chan → i {
     : i n ( vec_len [PptMember] . reg members )
     : ~ i c 0 : ~ i k 0
     ~ < k n {
@@ -90,7 +90,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // presence: tell everyone on `chan` the current member count
-@ __ppt_presence * PptReg reg String chan → v {
+unsafe @ __ppt_presence * PptReg reg String chan → v {
     ( mutex_lock . reg lock )
     : i cnt ( __ppt_count reg chan )
     : String js ( string_from `{"type":"presence","count":` )
@@ -109,7 +109,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // forward one voice frame to every OTHER member on the sender's channel
-@ __ppt_forward * PptReg reg * PptMemberImpl from ( Vec u ) payload → v {
+unsafe @ __ppt_forward * PptReg reg * PptMemberImpl from ( Vec u ) payload → v {
     ( mutex_lock . reg lock )
     : i n ( vec_len [PptMember] . reg members )
     : ~ i k 0
@@ -126,7 +126,7 @@ $ `stdlib/core/rcbox.nu`
     ( mutex_unlock . reg lock )
 }
 
-@ __ppt_join * PptReg reg TcpConn conn String chan → PptMember {
+unsafe @ __ppt_join * PptReg reg TcpConn conn String chan → PptMember {
     : PptMember h @ PptMember { # s ( rcbox_new [PptMemberImpl] @ PptMemberImpl { conn ( mutex_new ) ( string_from ( string_data chan ) ) 1 } ) }
     ( mutex_lock . reg lock )
     ( vec_push [PptMember] . reg members ( PptMember_share h ) )
@@ -135,7 +135,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // The registry's copy goes; the connection's own goes with its scope.
-@ __ppt_leave * PptReg reg PptMember h → v {
+unsafe @ __ppt_leave * PptReg reg PptMember h → v {
     ( mutex_lock . reg lock )
     : i n ( vec_len [PptMember] . reg members )
     : ~ i k 0
@@ -150,7 +150,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // per-connection frame loop: forward binary (voice), answer ping, end on close
-@ __ppt_loop * PptReg reg * PptMemberImpl me TcpConn conn → v {
+unsafe @ __ppt_loop * PptReg reg * PptMemberImpl me TcpConn conn → v {
     : WsLimits lim @ WsLimits { 262144 1048576 30000 64 }
     : ~ b done F
     ~ ! done {
@@ -175,7 +175,7 @@ $ `stdlib/core/rcbox.nu`
 
 // Install the /pptws/<channel> WebSocket relay as the server's upgrade hook.
 // Call once before server_run.
-@ ppt_install → v {
+unsafe @ ppt_install → v {
     : *PptReg reg # *PptReg ( nurl_alloc Z PptReg )
     = . reg members ( vec_new [PptMember] )
     = . reg lock ( mutex_new )

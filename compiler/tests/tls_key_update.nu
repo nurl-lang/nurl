@@ -27,9 +27,7 @@ $ `stdlib/std/tls.nu`
     ^ bytes
 }
 
-unsafe
-
-@ ku_invalid i kind i length i request i extra i direction → b {
+unsafe @ ku_invalid i kind i length i request i extra i direction → b {
     : TlsConn h ( ku_state )
     : ~ * TlsConnImpl c ( _tls_ptr h )
     : ( Vec u ) bytes ( ku_msg kind length request extra )
@@ -42,9 +40,7 @@ unsafe
     ^ & rejected & unchanged & closed alert_sent
 }
 
-unsafe
-
-@ main → i {
+unsafe @ main → i {
     : ~ i failures 0
     ? ! ( ku_invalid 24 0 0 0 0 ) { = failures + failures 1 } {}
     ? ! ( ku_invalid 24 2 0 1 0 ) { = failures + failures 1 } {}

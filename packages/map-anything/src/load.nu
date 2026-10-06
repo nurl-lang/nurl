@@ -53,9 +53,7 @@ $ `src/devblock.nu`
 
 // Upload a [rows, cols] tensor TRANSPOSED, as [cols, rows] — straight
 // out of the mapping, permuted on the device.
-unsafe
-
-@ maw_upload_t Lw w GpuKit kit s name i rows i cols → GkBuf {
+unsafe @ maw_upload_t Lw w GpuKit kit s name i rows i cols → GkBuf {
     : i n ( lw_nelems w name )
     ? | <= n 0 != n * rows cols {
         : b _r ( lw_require w name rows cols -1 -1 )

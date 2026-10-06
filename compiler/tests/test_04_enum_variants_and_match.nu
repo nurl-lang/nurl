@@ -38,9 +38,7 @@
 }
 
 // ── Apufunktio: tulosta yksi Event ──────────────────────────
-unsafe
-
-@ describe * Event e → v {
+unsafe @ describe * Event e → v {
     ?? . e 0 {
         Click x y → {
             ( puts `click at ` )
@@ -61,9 +59,7 @@ unsafe
 }
 
 // ── Heap-allokoi event ──────────────────────────────────────
-unsafe
-
-@ box_event Event v → *Event {
+unsafe @ box_event Event v → *Event {
     : *Event p # *Event ( malloc Z Event )
     = . p 0 v
     ^ p
@@ -76,9 +72,7 @@ unsafe
 }
 
 // ── Laske kuinka moni event on Click ────────────────────────
-unsafe
-
-@ count_clicks [* Event events → i {
+unsafe @ count_clicks [* Event events → i {
     : i n . events length
     : ~ i i 0
     : ~ i clicks 0

@@ -10,9 +10,7 @@
 // Values flow through acc so a wrong result also flags a regression; --san
 // (leak detection) proves the freed-old-buffer side of the reassign fixes.
 
-unsafe
-
-@ main → i {
+unsafe @ main → i {
     : ~ i acc 0
 
     // reassign with a fresh ternary RHS: frees the old [1 2 3], stores [10 20]

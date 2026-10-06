@@ -27,9 +27,7 @@ $ `stdlib/ext/json.nu`
 
 @ round Json d → i { ^ ?? ( array_of d ) { T a → ( json_arr_len a ) F → -1 } }
 
-unsafe
-
-@ main → i {
+unsafe @ main → i {
     : Json d ( json_obj_new )
     : Json arr ( json_arr_new ) ( json_arr_push arr ( json_int 1 ) )
     ( json_obj_set d `data` arr )

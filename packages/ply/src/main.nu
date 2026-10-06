@@ -96,9 +96,7 @@ $ `view.nu`
 
 // Print the header lines of a PLY, verbatim — they were written to be
 // read — plus what the body size implies about them.
-unsafe
-
-@ __pc_info → i {
+unsafe @ __pc_info → i {
     ? < ( nurl_argc ) 3 {
         ( nurl_print `ply: which cloud? — ply info cloud.ply\n` )
         ^ 2
