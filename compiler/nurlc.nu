@@ -1365,6 +1365,11 @@
 // …and, for one that a thread or a fiber will run, the captures it takes
 // over from bindings the function no longer uses (gen_closure_expr).
 : ~ s g_env_moved ``
+// The detached closure's captures taken by share (__clo_detach_moves);
+// consumed by gen_closure_expr like the moved set.
+: ~ s g_clo_detach_shared ``
+// …and the same set while that closure's env is built and described.
+: ~ s g_env_shared ``
 // Set by a call compiling a closure literal as the closure a thread or a
 // fiber runs, or by a `:` binding of one (its name): read and cleared at
 // the head of gen_closure_expr.
@@ -12590,6 +12595,12 @@
             : i __cac ( nurl_str_find __ca `:` )
             : s __cai ( nurl_str_slice __ca 0 __cac )
             : s __cacaps ( bck_swap_char ( nurl_str_slice __ca + __cac 1 - - ( nurl_str_len __ca ) __cac 1 ) 44 32 )
+            // …and, when the callee runs it on another thread or fiber, the
+            // closure takes its captures along (decided at the walk).
+            // (A handle shared on copy — Channel, Mutex, Arc — goes as a
+            // share of its own, gen_closure_expr: not moved.)
+            : s __cmcaps ( bck_unshared_caps syms __cacaps )
+            ? != 0 ( nurl_str_len __cmcaps ) { ( bck_stash_cdep `-` ( nurl_lex_line lex ) call_name ( nurl_str_cat __cai `!` ) __cmcaps ) } {}
             : ~ s __cw_rest ( nurl_str_cat arg_idents `` )
             : ~ i __cwi 0
             ~ != 0 ( nurl_str_len __cw_rest ) {
@@ -20204,6 +20215,21 @@
 // The row is resolved during the analyze walk, which for a function
 // carrying one of these rows is deferred to the end of the module
 // (borrowck_fn_end → g_deferred_bck) so every summary is final.
+// The captures in `caps` that a detached closure moves: all but the
+// handles whose copy is a share of the same object.
+@ bck_unshared_caps i syms s caps → s {
+    : ~ s out ``
+    : ~ s rest ( nurl_str_cat caps `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s v ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s vt ( nurl_sym_get syms v )
+        ? & ( __is_libh vt ) ( seq ( __libh_copy_op vt ) `share` ) {} {
+            = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat v `` ) ( nurl_str_cat3 out ` ` v )
+        }
+    }
+    ^ out
+}
+
 // A copy of `str` with every byte `from` replaced by `to`.
 @ bck_swap_char s str i from i to → s {
     : s out ( nurl_strdup str )
@@ -20387,7 +20413,8 @@
             : s cix ( str_first_word crest ) = crest ( str_skip_word crest )
             : s ccaps ( str_first_word crest ) = crest ( str_skip_word crest )
             ( nurl_sym_set g_bck `reads` ( bck_swap_char ccaps 44 32 ) )
-            ( bck_record2 `cdep` cnm ( nurl_str_to_int cln ) ccal cix )
+            : b cmv & > ( nurl_str_len cix ) 0 == ( nurl_str_get cix - ( nurl_str_len cix ) 1 ) 33
+            ( bck_record2 ? cmv `cmove` `cdep` cnm ( nurl_str_to_int cln ) ccal ? cmv ( nurl_str_slice cix 0 - ( nurl_str_len cix ) 1 ) cix )
         }
         // …and the calls whose move effect is not decidable yet.
         : ~ s prest ( nurl_sym_get g_bck `ppends` )
@@ -20936,7 +20963,7 @@
 @ bck_xlate_row s rec → s {
     : s kind ( bck_field rec 0 )
     : s w ( bck_field rec 1 )
-    : b __pend | | | | | | | ( seq kind `pendcall` ) ( seq kind `pendretain` ) ( seq kind `store` ) ( seq kind `pendstore` ) ( seq kind `pendkeep` ) ( seq kind `xfer` ) ( seq kind `maybealias` ) ( seq kind `cdep` )
+    : b __pend | | | | | | | | ( seq kind `pendcall` ) ( seq kind `pendretain` ) ( seq kind `store` ) ( seq kind `pendstore` ) ( seq kind `pendkeep` ) ( seq kind `xfer` ) ( seq kind `maybealias` ) ( seq kind `cdep` ) ( seq kind `cmove` )
     : s w2 ? | | | | | ( seq kind `let` ) ( seq kind `assign` ) ( seq kind `move` ) ( seq kind `borrow` )
     | | ( seq kind `maybemove` ) ( seq kind `maybealias` ) ( seq kind `fieldset` ) __pend
     ( nurl_str_int ( bck_intern w ) ) ( nurl_str_cat w `` )
@@ -21378,6 +21405,29 @@
                 : s after_defers ( bck_apply_defers st )
                 = st ( nurl_str_cat `!` `` )
                 = p hi
+                = done T
+            } {}
+            ? & ! done ( seq kind `cmove` ) {
+                // A closure that captured the read owners went to a callee that
+                // runs it on another thread or fiber (directly, or through a
+                // parameter that crosses): it takes them along. The spawner
+                // may not name them again — sharing goes through Arc / Mutex /
+                // a channel, each shared explicitly.
+                : s mcal ( bck_field rec 5 )
+                ? | ( __thr_is_detach ( bck_generic_base mcal ) ) != 0 ( nurl_sym_len g_pending_impl ( nurl_str_cat4 `sendreq##` mcal `##` ( bck_field rec 6 ) ) ) {
+                    : ~ s mr ( nurl_str_cat ( bck_field rec 2 ) `` )
+                    ~ != 0 ( nurl_str_len mr ) {
+                        : s c ( str_first_word mr ) = mr ( str_skip_word mr )
+                        : i ci ( nurl_str_to_int c )
+                        ? ! ( bck_dead_state ( bck_st_get st ci ) ) {
+                            = st ( bck_st_set st ci BCK_MOVED )
+                            ( nurl_sym_set g_bck ( nurl_str_cat `ml_` c ) ( bck_field rec 3 ) )
+                            ( nurl_sym_set g_bck ( nurl_str_cat3 `mc_` ( nurl_sym_get2 g_bck `rv_` c ) ( bck_field rec 3 ) )
+                            ( nurl_str_cat3 `the closure that '` mcal `' runs on another thread or fiber, which takes it along (to keep using a value here, give the closure a copy — ( mem_dup x ) — or share it through Arc / Mutex / a channel, shared before the spawn)` ) )
+                        } {}
+                    }
+                } {}
+                = p + p 1
                 = done T
             } {}
             ? & ! done ( seq kind `cdep` ) {
@@ -28418,7 +28468,7 @@
         {}
         // A String / Vec / owning struct a returned closure captured is the
         // env's own (gen_env_allocation moved or copied it in).
-        ? & & & & | != 0 g_env_owns_handles ( str_contains_word g_env_moved var ) ( __is_handle_ty vty ) ! ( __is_capture_byref var syms ) ! ( __capture_lends var syms )
+        ? & & & & | | != 0 g_env_owns_handles ( str_contains_word g_env_moved var ) ( str_contains_word g_env_shared var ) ( __is_handle_ty vty ) ! ( __is_capture_byref var syms ) ! ( __capture_lends var syms )
         ! ( str_contains_word g_env_released var )
         { : s ht ( nurl_llty vty )
             : s hm ( __drop_mangle vty )
@@ -28556,7 +28606,12 @@
         // …and a String / Vec / owning struct captured by a returned closure
         // moves in: the env drops it (gen_env_vtable). A value the binding
         // only borrowed is copied in instead.
-        ? & & & | != 0 g_env_owns_handles ( str_contains_word g_env_moved var ) ! cap_byref ( __is_handle_ty var_type ) ! ( __capture_lends var syms ) {
+        // A capture the thread takes a share of (still named by the
+        // spawner): the env's copy is another owner — the spawner keeps its own.
+        ? & & ( str_contains_word g_env_shared var ) ! cap_byref ( __is_handle_ty var_type ) {
+            = loaded ( mem_emit_cloneif cg var_type loaded `1` )
+        } {}
+        ? & & & & | != 0 g_env_owns_handles ( str_contains_word g_env_moved var ) ! ( str_contains_word g_env_shared var ) ! cap_byref ( __is_handle_ty var_type ) ! ( __capture_lends var syms ) {
             : s up ( mem_udrop_ptr_of syms var )
             ? != 0 ( nurl_str_len up ) {
                 : s f ( mem_udrop_flag_get syms cg up )
@@ -29081,7 +29136,13 @@
     = rest ( nurl_str_cat cand `` )
     ~ != 0 ( nurl_str_len rest ) {
         : s v ( str_first_word rest ) = rest ( str_skip_word rest )
-        ? ! ( str_contains_word used v ) { = out ( nurl_str_cat3 out ` ` v ) } {}
+        ? ! ( str_contains_word used v ) { = out ( nurl_str_cat3 out ` ` v ) } {
+            // Still named here, and a handle whose copy is another owner of
+            // the same object (Channel, Mutex, Arc, a server): the thread
+            // takes a share of its own, so either side may end first.
+            : s vt ( nurl_sym_get syms v )
+            ? & ( __is_libh vt ) ( seq ( __libh_copy_op vt ) `share` ) { = g_clo_detach_shared ( nurl_str_cat3 g_clo_detach_shared ` ` v ) } {}
+        }
     }
     ^ out
 }
@@ -29921,8 +29982,11 @@
             { ( __record_param_idx syms `__fn_retclo__` __cv ) } {}
         }
     } {}
+    = g_clo_detach_shared ``
     : s clo_moved ? & > captured_count 0 ! clo_returned
     ( __clo_detach_moves lex syms captured_vars clo_detach_lit clo_bind_name ) ``
+    : s clo_shared ( nurl_str_cat g_clo_detach_shared `` )
+    = g_clo_detach_shared ``
 
     // Stop capturing and store as deferred closure function
     : s funcdef ( nurl_print_buf_stop )
@@ -29931,11 +29995,13 @@
     { = g_env_owns_handles ? clo_returned 1 ? != 0 ( nurl_str_len clo_released ) 2 0
         = g_env_released clo_released
         = g_env_moved clo_moved
+        = g_env_shared clo_shared
         ( store_closure_func ( nurl_str_cat funcdef
         ( gen_env_vtable closure_fn_name env_struct_name captured_vars syms ) ) )
         = g_env_owns_handles 0
         = g_env_released ``
-        = g_env_moved `` }
+        = g_env_moved ``
+        = g_env_shared `` }
     { ( store_closure_func funcdef ) }
     // Restore the enclosing function's DWARF context — subsequent
     // instructions emitted by gen_stmt continue under its DISubprogram.
@@ -29976,10 +30042,12 @@
     {
         = g_env_owns_handles ? clo_returned 1 ? != 0 ( nurl_str_len clo_released ) 2 0
         = g_env_moved clo_moved
+        = g_env_shared clo_shared
         = env_ptr ( gen_env_allocation env_struct_name captured_vars
         ( nurl_str_cat `@__cenv_vt.` closure_fn_name ) syms cg )
         = g_env_owns_handles 0
         = g_env_moved ``
+        = g_env_shared ``
     }
     {}
 

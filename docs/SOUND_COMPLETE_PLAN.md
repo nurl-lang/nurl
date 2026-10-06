@@ -45,6 +45,41 @@ the corpus safe. The target is a guarantee:
    borrow of the element, so their implementation can later become a
    projection into the slot without changing a line of user code.
 
+### Refinements found by running the rules over the corpus
+
+- **Two kinds of borrow.** A *handle borrow* (a Vec / String / struct
+  handle copy: `vec_get`, a field read, a cursor `: ~ b a`) points at the
+  owner's control block, so growing the container does not end it; it ends
+  when an owner is released, moved, reassigned, has a field replaced, or is
+  handed to a call that may drop its elements. A *view* (`string_data`,
+  `vec_data`) also ends at any mutation that may reallocate.
+- **Borrows flatten to owners.** A borrow of a borrow borrows from what
+  that one borrows from: re-pointing a cursor frees nothing. Dropping
+  elements or replacing a field *through* a borrow reaches its owners.
+- **Assignment moves an owner, copies a borrow.** `= z a` / `: T z a`.
+- **A call result borrows only from the arguments the callee lends or
+  hands back** (its summaries; all arguments for a callee not yet
+  compiled). A result the call consumed its argument into is owned.
+- **Only values with something to release move**: a struct of scalars or
+  an enum of unit variants (an error code) is copied.
+- **Payloads of a borrowed parameter are borrows**: consuming one needs the
+  parameter declared `sink`.
+- **Closures.** A closure handed to a call that may keep it makes the
+  call's other owners depend on its captures (C1). A closure run on
+  another thread or fiber moves its captures (C2) — except handles whose
+  copy is a share of one object (Channel, Mutex, Arc): the closure's env
+  takes a share of its own (code generation, not only the checker), so
+  the spawner keeps using its handle and either side may end first.
+
+### Corpus work the rules surfaced
+
+- Types shared across threads that are plain structs today must become
+  library handles with `_share` (HttpServer).
+- Containers that hold views of strings another container owns (the
+  resolver's and lru's maps keyed by `string_data`) are sound only by an
+  argument the checker cannot make: they become `unsafe` with that
+  argument written down, or own their keys.
+
 ## Phases
 
 - **P0 — the oracle.** `tools/fuzz/holes/` holds one probe per proven
