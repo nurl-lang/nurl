@@ -143,7 +143,7 @@ $ `stdlib/core/vec.nu`
 
 @ rjs_fastoff → i { ^ 27 }  // that entry's offset (0 = none)
 
-@ rjs_glob → i { ^ 28 }  // 1: the function reads or writes globals (r9 = their base, reserved)
+@ rjs_glob → i { ^ 28 }  // the function reads or writes globals: 1 in a loop (r9 = their base, reserved), 2 only outside
 
 @ rjs_pcc → i { ^ 29 }  // a fused test/bt set the flags for the next IFZ/BRIF: the jcc meaning "zero" (-1 none)
 
@@ -372,7 +372,16 @@ $ `stdlib/core/vec.nu`
 @ rj_pop Rj c i r → v { ( rj_rex c 0 0 0 r 0 ) ( rj_b c + 88 & r 7 ) }
 
 // lea dst, [base + idx<<sc + disp] (w=0: the 32-bit form, which wraps)
-@ rj_lea Rj c i w i dst i base i idx i sc i disp → v { ( rj_rm c 0 w 0 141 dst base idx sc disp 0 ) }
+// An rbp / r13 base takes a displacement byte even for 0, and base + index
+// + displacement is the slow, 3-cycle lea on Intel: unscaled, the two swap;
+// scaled, dst takes the base first (a mov — no flags touched)
+@ rj_lea Rj c i w i dst i base i idx i sc i disp → v {
+    ? & & & == disp 0 >= idx 0 >= base 0 == 5 & base 7 {
+        ? & & == sc 0 != idx 4 != 5 & idx 7 { ( rj_rm c 0 w 0 141 dst idx base 0 0 0 ) ^ v } {}
+        ? & != dst idx != 5 & dst 7 { ( rj_mov_rr c w dst base ) ( rj_rm c 0 w 0 141 dst dst idx sc 0 0 ) ^ v } {}
+    } {}
+    ( rj_rm c 0 w 0 141 dst base idx sc disp 0 )
+}
 
 // [pfx] [REX] [0F] opc ModRM(reg, [rip + literal v]) — a wide constant as a
 // memory operand. The disp32 is the instruction's last field (no immediate
@@ -3121,14 +3130,39 @@ $ `stdlib/core/vec.nu`
     ( rj_stg c ( rj_dloc c od ) ( rj_ds c od ) 0 )
 }
 
+// Globals touched only outside loops leave r9 to the allocator: each
+// access then loads their base from the context (rj_globase)
+@ rj_globmode Rj c → v {
+    ? != 1 ( rj_get c ( rjs_glob ) ) { ^ v } {}
+    : i n ( rj_get c ( rjs_n ) )
+    : ~ i r 0
+    ~ < r n {
+        : i op ( rj_rw c r 0 )
+        ? | == op 52 == op 53 { ? > ( vec_at [i] . c depth r ) 1 { ^ v } {} } {}
+        = r + r 1
+    }
+    ( rj_set c ( rjs_glob ) 2 )
+    ( rj_set c ( rjs_forbid ) - ( rj_get c ( rjs_forbid ) ) 512 )
+}
+
+// the register holding the globals base: r9 when reserved, else s loaded
+// from the context (in rdi, or saved at [rsp] when rdi was handed out)
+@ rj_globase Rj c i s → i {
+    ? == 1 ( rj_get c ( rjs_glob ) ) { ^ 9 } {}
+    ? ( rj_uses c 7 ) { ( rj_rm c 0 1 0 139 s 4 -1 0 0 0 ) ( rj_rm c 0 1 0 139 s s -1 0 24 0 ) } {  // mov s,[rsp]; mov s,[s+24]
+        ( rj_rm c 0 1 0 139 s 7 -1 0 24 0 ) }  // mov s,[rdi+24]
+    ^ s
+}
+
 @ rj_e_gget Rj c i r → v {
     : i od ( rj_dd c r 0 )
     ? ! ( rj_dlive c od ) { ^ v } {}
     : i disp * ( rj_rw c r 2 ) 8
     : i dl ( rj_dloc c od )
-    ? ( rj_isx dl ) { ( rj_rm c 242 0 1 16 - dl 16 9 -1 0 disp 0 ) ^ v } {}  // movsd x,[r9+8g]
+    : i gb ( rj_globase c 0 )
+    ? ( rj_isx dl ) { ( rj_rm c 242 0 1 16 - dl 16 gb -1 0 disp 0 ) ^ v } {}  // movsd x,[base+8g]
     : i tr ? ( rj_isg dl ) dl 0
-    ( rj_rm c 0 1 0 139 tr 9 -1 0 disp 0 )  // mov r,[r9+8g]
+    ( rj_rm c 0 1 0 139 tr gb -1 0 disp 0 )  // mov r,[base+8g]
     ? != tr dl { ( rj_stg c dl ( rj_ds c od ) tr ) } {}
 }
 
@@ -3136,10 +3170,17 @@ $ `stdlib/core/vec.nu`
     : i o ( rj_u c r 0 )
     : i l ( rj_uloc c o )
     : i disp * ( rj_rw c r 1 ) 8
-    ? ( rj_isx l ) { ( rj_rm c 242 0 1 17 - l 16 9 -1 0 disp 0 ) ^ v } {}  // movsd [r9+8g],x
-    : ~ i vr ( rj_greg l )
-    ? < vr 0 { ( rj_ldg c 0 l ( rj_us c o ) 0 ) = vr 0 } {}
-    ( rj_rm c 0 1 0 137 vr 9 -1 0 disp 0 )  // mov [r9+8g],r
+    ? | ( rj_isx l ) ( rj_isg l ) {
+        : i gb ( rj_globase c 0 )
+        ? ( rj_isx l ) { ( rj_rm c 242 0 1 17 - l 16 gb -1 0 disp 0 ) } { ( rj_rm c 0 1 0 137 l gb -1 0 disp 0 ) }  // movsd / mov [base+8g],v
+        ^ v
+    } {}
+    ( rj_ldg c 0 l ( rj_us c o ) 0 )
+    : ~ i t 9
+    ? != 1 ( rj_get c ( rjs_glob ) ) { = t ( rj_tmp_on c 0 ) } {}
+    : i gb ( rj_globase c t )
+    ( rj_rm c 0 1 0 137 0 gb -1 0 disp 0 )  // mov [base+8g],rax
+    ? != t 9 { ( rj_tmp_off c t ) } {}
 }
 
 @ rj_e_const Rj c i r → v {
@@ -3612,6 +3653,7 @@ $ `stdlib/core/vec.nu`
     ? ( rj_failed c ) { ^ F } {}
     ( rj_canon c )
     ( rj_depths c )
+    ( rj_globmode c )
     ( rj_facts c )
     ( rj_sens c )
     ( rj_zx c )
