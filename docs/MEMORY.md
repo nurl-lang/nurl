@@ -1,166 +1,103 @@
 # NURL Memory Model
 
-This document is the single reference for how NURL manages memory: who
-owns a heap allocation, when it is freed, and what the compiler checks
-statically. It covers the model as implemented in `nurlc.nu` (grammar
-v2.3).
+This document describes how NURL manages memory: who owns a heap
+allocation, when it is released, which rules the compiler enforces, and
+what the resulting guarantee covers. The raw-memory boundary itself is
+specified in spec §3.3d.
 
 ## TL;DR
 
-- **Single owner, deterministic drop.** Every heap allocation has
-  exactly one owning binding. The compiler inserts the matching free
-  at the end of that binding's scope. No garbage collector. `String`,
-  `Vec`, the enums and structs that hold them, and the library containers
-  (`HashMap`, `Set`, `Deque`, `BTree`, `Box`, `Rc`, `Arc`) are dropped by
-  the compiler like everything else (§7.6). Opaque library state —
-  `Mutex`, `Channel`, `Regex`, `TlsConn`, `File`, … — is a handle over a
-  counted block whose last copy releases it (§7.4). Nothing is ever
-  released by hand: `vec_free` / `string_free` / `*_close` … remain as an
-  explicit early release, never a requirement. A closure's env is owned wherever the closure is kept and
-  dropped by that owner, and freeing one by hand is a compile error.
-- **Rc cycles are collected** (§7.7): a payload type that can hold an Rc
-  back to itself is traced by a synchronous cycle collector (the one place
-  anything is traced); every other
-  type pays nothing. Long `Rc` chains are released without recursion.
-- **Automatic cleanup includes unwind paths.** A per-fiber journal
-  runs registered scope drops across `panic`/`recover` (§7.2). The compiler
-  tracks owned strings, slices, struct fields, enum owners, `% Drop` values
-  and closure environments. Compiler leak gates and the leak-checked
-  test corpus (every test, under LeakSanitizer) verify these paths.
-- **The guarantee (§6): every program accepted without an `unsafe`
-  function of its own is memory-safe and leak-free.** An owned value has
-  one owner and *moves*: storing it, sending it, returning it, handing it
-  to a `sink` parameter or to a thread moves it, and the old name is
-  gone. A read that does not take ownership — `vec_get`, a field read,
-  `string_data` — is a *borrow* of its source, and it ends when that
-  source is moved, released, reassigned or reallocated. Raw memory (`*T`
-  reads and writes, pointer casts, `nurl_alloc` / `nurl_free`, foreign
-  functions) is allowed only inside a function declared `unsafe`, which
-  vouches for itself (spec §3.3d); `nurlc --unsafe-report` lists them.
-- **The rules are conservative.** A program they cannot prove safe is
-  rejected with the rule it breaks and a way to satisfy it (clone the
-  value, keep the owner alive longer, pass it through a channel, declare
-  the parameter `sink`). Diagnostics are hard errors and every one
-  surfaces in one run; the checker never changes generated code.
-  `--no-borrowck` is deprecated and warns.
+- **Single owner, deterministic drop.** Every value that holds memory has
+  exactly one owner, and the compiler releases it when the owner's scope
+  ends. There is no garbage collector. `String`, `Vec`, the structs and
+  enums that hold them, closures and the library containers (`HashMap`,
+  `Set`, `Deque`, `BTree`, `Box`, `Rc`, `Arc`) are dropped by the compiler
+  (§7.6). Opaque library state (`Mutex`, `Channel`, `Regex`, `File`,
+  `TlsConn`, …) is a handle over a counted block that its last copy
+  releases.
+- **Nothing is released by hand.** `vec_free`, `string_free`, `*_close`
+  and the other release calls remain as an optional *early* release. Raw
+  memory (`nurl_alloc`, `nurl_free`, `mem_forget`, `*T` access, foreign
+  calls) exists only inside `unsafe` functions.
+- **Owned values move; reads borrow.** Storing, sending, returning or
+  handing a value to a `sink` parameter moves it, and the old name is
+  gone. A read that does not take ownership (`vec_get`, a field read,
+  `string_data`) is a borrow that ends when its source is moved,
+  released, reassigned or reallocated (§6.2).
+- **The guarantee (§6.2).** Every program the compiler accepts outside
+  the bodies of `unsafe` functions is memory-safe and leak-free, data
+  races and the panic path included.
+- **Conservative, with a fix.** A program the rules cannot prove safe is
+  rejected. Each diagnostic names the rule and a concrete change that
+  satisfies it (§6.3).
+- **Cycles.** `Rc` cycles are collected, and only types that can form one
+  pay for it. Cycles of thread-shared handles are rejected at compile
+  time (§7.7).
 
 ## 1. Ownership and auto-drop
 
-NURL has no GC. Values live on the stack by default; heap memory is
-obtained through the C runtime (`malloc`/`free` via FFI). The compiler
-tracks which bindings own a heap resource and emits the free for you.
+NURL has no garbage collector. Values live on the stack by default, heap
+memory comes from the runtime allocator, and the compiler tracks which
+binding owns each heap value and emits its release.
 
 ### What gets owned
 
-A `:` binding becomes the **owner** of a heap resource when its
-initialiser is a *fresh allocation produced on the spot*:
+A binding owns a value when its initialiser produces a fresh one:
 
-- a slice literal `[ T | ... ]`,
-- a slice-returning call,
-- an allocating string call (`nurl_str_cat`, `_cat3/4`, `_int`,
-  `_float`, `_slice`, `nurl_read_file`, `nurl_argv`, `nurl_argv_get`),
-- a named-struct literal `@ T { ... }` whose fields are themselves
-  fresh allocations (each such field is tracked individually),
-- a value of a type with a user `Drop` trait impl.
+- a slice literal `[ T | … ]` or a slice-returning call,
+- an allocating string call (`nurl_str_cat`, `nurl_str_int`,
+  `nurl_read_file`, `nurl_argv_get`, …),
+- a constructor of a `String`, `Vec`, owning struct, enum, closure or
+  library handle,
+- a named-struct literal `@ T { … }` whose fields are fresh values (each
+  field is tracked on its own),
+- a value of a type with a `% Drop` impl.
 
-At the end of the owning binding's scope the compiler emits the
-matching `nurl_free` / `drop`. Reassigning an owned binding frees the
-previous value first. Returning a fresh allocation **transfers
-ownership** to the caller and suppresses the local drop.
+At the end of the owner's scope the compiler emits the matching drop.
+Reassigning an owner drops the previous value first. Returning a value
+transfers ownership to the caller. Both argv accessors return owned
+copies, including an allocated empty string for an absent argument.
 
-Both argv accessors return owned copies, including an allocated empty string
-for an absent argument. Bindings and temporary arguments are reclaimed
-automatically; do not add a manual `nurl_free`.
+A `?` or `??` expression may select between a borrowed value and an owned
+one. The result carries per-path ownership: the owned path is released by
+whoever receives the result, the borrowed path is not.
 
-A `?` or `??` expression can select between a borrowed raw pointer and an
-owned string. Its value keeps the selected pointer's identity; a separate
-ownership value is null on borrowed branches and holds the allocation on
-owned branches. Arguments, bindings, returns and reassignment preserve that
-ownership, including nested joins. The compiler never copies an unproved
-borrow: `s` can also hold an opaque foreign handle.
+### Where values are dropped
 
-A helper that retains an owned raw string, such as `string_from_take`, takes
-over its buffer at the call. The compiler evaluates all arguments first, then
-clears the caller's ownership slot. This permits a later argument to inspect
-the same buffer's length. A conditional call transfers only on the branch
-that executes it; the other branch still drops the original owner. Named
-arguments and forward declarations use the same transfer rule. The receiving
-handle now owns the buffer, so the original binding must no longer be used.
+Every scope drops what it owns on every exit:
 
-### A closure body has two exits, and both drop
+- a function or closure body, whether it returns with `^` or falls off its
+  end;
+- a `?` / `??` arm and a loop body, at its closing brace (a loop body once
+  per iteration);
+- a bare block.
 
-A closure is lifted into its own function, so its body is a scope whose
-end emits the epilogue like any other. It has two ends:
+A value that becomes the result of its construct is not dropped there: an
+arm whose value is the match's value hands it to the join, and a body
+whose final expression is an owned binding returns it. When the
+construct's value is discarded (a statement-level match), what its arms
+produced is dropped.
 
-```nurl
-( each v \ i x → v { : s k ( nurl_str_int x ) ( nurl_print k ) } )   // falls off
-( fold v \ i x → i { : s k ( nurl_str_int x ) ^ ( nurl_str_len k ) } )  // returns
-```
+A closure body is its own scope. It drops the values it creates and never
+the enclosing frame's.
 
-Both reclaim `k`. Until 0.55 only the second did: the fall-off exit
-emitted a bare `ret` and dropped nothing, so the first leaked one
-allocation per call — in exactly the shape a callback is usually written
-in. A hand-written `nurl_free` was the only way to keep such a body from
-growing, and is now a double free (§2.1b rejects it).
+### Temporaries
 
-The rosters the epilogue walks are shadowed to empty when the body's scope
-is pushed, so a closure drops its OWN values and never the enclosing
-frame's — whose allocas do not exist in the lifted function. When the body
-falls off with a value and that value is a bare identifier, the binding's
-drop is skipped: its handle is the closure's result.
-
-### An arm drops what the join throws away
-
-A `?` / `??` arm is a scope too, and a value it owns is freed at its
-closing brace — but only the *join* knows whether that value survives as
-the construct's own value:
+An allocating call used directly as another call's argument is a
+**temporary**. It is dropped right after that call, unless the callee
+keeps it (a `sink` parameter, or a parameter the callee stores into an
+aggregate or container) or hands it back, in which case it leaves with
+the result:
 
 ```nurl
-?? ( db_open path ) { T db → { = out ( label db ) } F e → { } }
-```
-
-The arm's tail is an assignment, and an assignment publishes its LHS
-type, so the arm looks like it carries a `%String`. Until 0.61 the
-compiler refused to drop inside an arm whose type was not scalar — what
-is dropped might BE the value the join is about to take — so every
-arm-local `% Drop` value and owned struct field in that shape leaked,
-even when the match was a statement and nobody read its result.
-
-The arm no longer has to decide. Drops pending in an unsafe arm are
-parked in an exit block (`arm_exit_N`) the arm branches to instead of the
-join, and the block is emitted at the join once the verdict is in: the
-match used as an expression → a bare `br`; a statement match, or an
-untyped one → the drops go in it. A `?` / `??` that is the *last*
-statement of its block cannot judge alone, because its value is the
-block's value, so it hands the records up and the construct that knows
-the answer emits them — an enclosing arm folds them into its own join, a
-loop or bare block body drops them, a function or closure body drops them
-iff it returns nothing, a block in expression position keeps the value
-alive. An arm whose value IS derived from the droppable still keeps it
-alive, as before.
-
-### Temporaries, and the release calls you no longer write
-
-An allocating call whose result goes straight into another call's
-argument list is a **temporary**, and it is dropped right after that
-call — unless the callee keeps it (a `sink` parameter, a position it
-stores into an aggregate or a container) or hands it back, in which case
-it leaves with the result:
-
-```nurl
-( nurl_eprint ( nurl_str_int . resp status ) )   // freed after the call
+( nurl_eprint ( nurl_str_int . resp status ) )   // released after the call
 : i n ( takes ( string_from `x` ) )              // likewise
 ```
 
-This used to leak — `ext/http_router.nu` and `ext/http_middleware.nu`
-each lost one string per HTTP request until 0.46.0 — and `--lint` asked
-for a binding at every such call site. Neither is needed now. (For a
-number there is still a shorter answer: `( nurl_eprint_int … )` and the
-other `_int` print overloads format on the stack and allocate nothing.)
+### Explicit early release
 
-The same holds for bindings: a `String`, a `Vec`, a library handle or an
-owning struct bound with `:` is dropped at the end of its scope, so the
-release call that code written before the memory model ends with —
+A release call on an owned binding is allowed and moves the value: the
+binding is consumed and its drop does not run again.
 
 ```nurl
 : String s ( string_from `x` )
@@ -169,314 +106,166 @@ release call that code written before the memory model ends with —
 ^ n
 ```
 
-— releases exactly what the drop would. `--lint` reports it
-(`[redundant-free]`) when the call sits at the **tail** of a block —
-nothing but more such calls after it, then `^` or the `}` of the block
-that declared the binding — and `tools/fix_redundant_free.py FILE…`
-removes every one it reports. An *early* release (anything follows it)
-is left alone: it can be what keeps a peak down, and it stays legal —
-the call moves the value, and the binding's drop flag clears.
-
-Do **not** release by hand what the compiler drops *and* keep using the
-binding's drop: an explicit `nurl_free` on an auto-dropped binding is a
-double-free, and that one is an `error:` (§2.1b).
-
-### Conservative by construction
-
-Every value has exactly one owner at a time. Storing an owned binding
-into a struct field moves it (the binding's drop flag clears); storing a
-*borrowed* one stores a copy — so the compiler never emits a
-double-free of its own accord. This conservatism is why the auto-drop
-layer is safe on its own; the borrow checker (below) is what catches
-the mistakes a *programmer* can still write.
+When such a call sits at the tail of its scope it is redundant, and
+`--lint` reports it as `[redundant-free]`. An earlier release (more code
+follows it) is legitimate; it lowers peak memory.
 
 ### Parameter passing conventions
 
-A parameter is an **immutable borrow by default** (the `in`
-convention — it may be written explicitly but is normally omitted): a
-struct-typed parameter is copied into a fresh `alloca` at function
-entry (C/Go/Zig semantics), and `= . p field val` inside the callee
-writes that local copy, leaving the caller's struct unchanged.
+A parameter has one of three conventions:
 
-To let a callee mutate the caller's value in place, mark the
-parameter **`inout`**:
+| Convention | Spelling | Meaning |
+|---|---|---|
+| `in` | default (may be written) | an immutable borrow; a struct argument is copied into the callee's frame |
+| `inout` | `inout T x` | an exclusive mutable borrow; passed by address |
+| `sink` | `sink T x` | the callee takes ownership; the caller's binding is consumed |
 
-```
+**`inout`.** The argument must be a mutable (`: ~`) binding or a field of
+one (`. obj field`), and the callee's writes land in the caller's storage.
+A value assigned through an `inout` parameter replaces the caller's and
+drops what it overwrites. A field the callee hands to a consumer, or takes
+with `mem_take`, is emptied in the caller's struct, so nothing is released
+twice. Reassigning an `inout` raw string (`s`) is an error, because the
+callee cannot know whether the caller's old string is owned.
+
+```nurl
 @ bump inout Counter c → v { = . c n + . c n 1 }
-...
 : ~ Counter c @ Counter { 0 10 }
-( bump c )                       // c.n is now 1, in the caller
+( bump c )                       // c.n is now 1 in the caller
 ```
 
-`inout` lowers to a by-address (`<T>*`) parameter. The argument must
-be a mutable (`: ~`) binding; it is passed by address, so the
-callee's writes land on the caller's storage. `inout` is the
-preferred replacement for the three older mutation idioms — returning
-the modified struct, a `*T` parameter, or a single-handle struct
-wrapper — though all three still work. Ordinary and generic `inout` signatures are available before body
-compilation, including calls before the declaration
-(`@ store [A] inout ( Box A ) b → v`).
+**`sink`.** The callee owns the argument and drops it unless it moves it
+on (returns it, stores it, passes it to another `sink`). Using the
+caller's binding afterwards is a use-after-move.
 
-An `inout` argument may also be a *field target* — `. obj field`
-passes the address of that single struct field, so the callee
-mutates exactly that field of the caller's struct in place
-(`( add100 . g turns )`). `obj` must be a mutable (`: ~`) struct
-binding; the field may itself be a struct.
-
-What an `inout` parameter holds is the caller's own value, so a value
-assigned through it **replaces** the caller's: `= . h item it` and
-`= s ( string_from … )` drop the String / Vec / handle / closure they
-overwrite, exactly as the same assignment to an owned local does. A
-field the callee hands to a consumer first (`( item_free . h item )`),
-or takes with `( mem_take x )` after `: … x . h body`, is emptied in the
-caller's struct, so the store that follows releases nothing twice. A
-call that may hand the same value back (`= c ( prune c )`) leaves it
-where it is.
-
-A **`sink`** parameter consumes (takes ownership of) its argument —
-the callee owns the value, and the caller may not use the argument
-binding afterwards (the borrow checker reports a later use as a
-use-after-move):
-
-```
+```nurl
 @ give_away sink ( Vec i ) g → v {}   // g is dropped here, by the callee
-...
 : ( Vec i ) xs ( vec_new [i] )
-( give_away xs )                 // xs is consumed; using it now is a move error
+( give_away xs )                       // xs is consumed
 ```
 
-`sink` uses a by-value ABI, and the callee owns what it is given: a
-`String`, `Vec`, owning struct, library handle or `Drop` value is dropped
-by the callee unless it releases or hands it on first (§7.6). For a
-compiler-managed enum, ownership transfers to the callee: the caller's
-owner slot becomes inactive before the call, and the callee drops its owner
-on exit unless it returns or transfers it onward. An inferred conditional
-sink owns the argument on both paths, including a path that does not
-explicitly release it. Borrowed enum parameters do not acquire this drop
-obligation. Ordinary functions, generic instances and trait impl methods
-can declare `sink` parameters.
+**Inferred `sink`.** A parameter does not have to be spelled `sink` to be
+one. If the body consumes it (releases it, stores it in an owner, passes
+it to another `sink` position) or returns it, the parameter is a `sink`
+for every caller:
 
-A raw owned string (`s` from `nurl_str_cat` and friends) and an owned
-slice are the exception: their transfer to an explicit sink is still
-rejected at the call site — an implementation limitation, not a language
-design rule. `compiler/tests/should_fail_sink_autodrop.nu` records it.
-
-A parameter does not have to be *spelled* `sink` to be one. When a
-function's body consumes a parameter — passes it to a typed destructor,
-or on to another function's `sink` position — the checker records that
-index as an **auto-`sink`**, so the caller of the wrapper loses the
-binding exactly as if the marker had been written:
-
-```
+```nurl
 @ dispose ( Vec i ) xs → v { ( vec_free [i] xs ) }   // param 0 is a sink
-...
-( dispose xs ) ( dispose xs )     // use-after-move at the second call
+( dispose xs ) ( dispose xs )                          // use-after-move at the second call
 ```
 
-Explicit contracts are collected with signatures. Ordinary bodies and actual
-generic instances then contribute parameter-to-parameter implications, at
-any argument position. These implications propagate to a fixed point after
-all bodies have been compiled, including forward calls. A function's name
-and return type are never evidence of consumption: a void `report_free`
-can borrow, and a consuming function can return a value. Local callable
-bindings use their own identity rather than a same-named global contract. Destructors that release
-fields or raw memory should declare their consuming parameters explicitly:
-inference propagates bare-parameter calls and does not provide general
-field-level ownership provenance. Existing custom release functions that
-relied on a `_free` spelling need this contract.
+Inference is decided after the whole module is compiled, so the order in
+which functions are defined never changes the result. A function's name
+and return type are never evidence of consumption. A destructor that
+releases fields or raw memory declares its consuming parameter
+explicitly.
 
-Compiler-managed enum transfer uses static LLVM constants emitted after this
-inference. They let LLVM remove the unused ownership path without depending
-on declaration order. Ownership inference and transfer code generation remain
-active with the deprecated `--no-borrowck`; that flag only disables
-diagnostics, and every ownership summary codegen reads is recorded either way.
+**Closure parameters** are always borrowed (§7.5).
 
-## 2. The borrow checker
+One implementation limit remains: a raw owned string (`s`) and an owned
+slice cannot be passed to an explicit `sink` parameter. Wrap them in a
+`String` / `Vec`.
 
-The borrow checker is a **diagnostic-only** static analysis. It is
-**always on**; `--no-borrowck` (deprecated, warns) disables it. Because it only emits
-diagnostics and never lowers anything, a borrow-clean program produces
-the exact same IR either way — the bootstrap fixed point is
-unaffected.
+## 2. The ownership rules
 
-All eleven rules below (§2.1–§2.8, plus §2.1b, §2.11 and §2.12) emit `error:`. A corner case that
-rejects a correct program is a false positive: report it as a bug. And
-`--strict-borrowck` (off by default) to add three opt-in checks on top —
-see §2.9.
+The rules below are checked on every compile. They are a static analysis
+only: they never change generated code, so an accepted program compiles
+to the same IR with or without them. A violation is an `error:` that
+stops the build, and every violation in a run is reported.
 
-### 2.1 Move checking — use-after-move
+`--no-borrowck` is deprecated and prints a warning: a program compiled
+without the checker is not held to the rules, so nothing guarantees it is
+memory-safe. A correct program the rules reject is a bug worth reporting.
 
-Ownership *moves* out of a binding when it is consumed:
+### 2.1 Moves — use after move
 
-- passed to an explicit or inferred `sink` parameter (`vec_free`,
-  `string_free` and other release APIs declare their consuming positions), or
-- copied into another binding (see 2.2).
+An owned value moves out of a binding when it is:
 
-After a move the binding holds freed-or-about-to-be-freed memory.
-Reading it again is reported:
+- passed to a `sink` parameter (explicit or inferred),
+- stored into an aggregate literal, an Option, a container or a field,
+- sent through a channel,
+- returned,
+- copied into another immutable binding (§2.2),
+- captured by a closure that runs on another thread or fiber.
+
+Reading the binding afterwards is an error:
 
 ```
 error: use of moved value 'v' - it was consumed at line N
-         (pass a fresh value or rebind it before reuse)
 ```
 
-Re-binding the name (`: ...` or `= ...`) revives it.
+Rebinding the name (`:` or `=`) makes it usable again.
 
-A binding consumed on only **some** paths — freed on one arm of a `?`,
-or captured by a closure that frees it and has since been used — is
-*maybe-freed*, and using it is an error too, a read as much as a second
-free: on the path that consumed it the read is a use-after-free.
+A value moved on only **some** paths is *maybe-moved*. Reading it is an
+error too, because on the path that moved it the read touches released
+memory:
 
 ```
 error: use of possibly-moved value 'x' — it was consumed on only some
-       paths, at line N; on that path this reads a freed buffer
+       paths, at line N
 ```
 
-The rule is path-aware where the program is:
+The analysis follows the program's paths:
 
-- a `break` or `continue` ends its path, so `? c { ( string_free t )
-  break } {}` followed by a read of `t` is clean — the freeing path
-  never reaches the read;
-- a binding declared in a loop body (a foreach element included) is a
-  fresh one in every iteration, so freeing it does not carry into the
-  next;
-- a closure frees what it captured when it **runs**: the capture stays
-  readable until the closure's first use (an invocation, or handing the
-  closure on), and is maybe-freed after it — a second invocation is the
-  double free;
-- a module-level global is left alone: any call may reassign it.
+- `break` and `continue` end their path: a value released before a
+  `break` is still readable after the loop on the other paths;
+- a binding declared in a loop body, the foreach element included, is a
+  fresh binding in every iteration;
+- a closure that releases a capture does so when it runs, so the capture
+  is maybe-moved after the closure's first invocation;
+- a module-level global is not tracked, since any call may reassign it.
 
-A handle handed to a second name on some path (`= prev t`, a `?` that
-selected it, a call that may return it) is not a free: the two names are
-*alias partners* on that path, the buffer lives on through both, and
-reading either is fine. Consuming one of them is what frees the buffer
-under the other, so from that point the other is maybe-freed on the
-aliasing path — reading it, or freeing it again, is the error above. The
-relation follows the path: a handover on one arm of a `?` leaves the
-other arm alone, the reassigned side of the `: tmp cur` `= cur nxt`
-`= nxt tmp` swap had already handed its handle on (nothing drops), and a
-name rebound (`:`, `=`, a `??` payload on the next pass) shares nothing
-with anyone. The one handover not followed is a call to a function
-defined further down that may return its argument; its second consume is
-the `--strict-borrowck` check (§2.9).
+A value with nothing to release (a struct of scalars, an enum of unit
+variants) is copied, never moved.
 
-Regressions: `borrow_maybe_freed_read.nu` (the positive and every
-control above), `borrow_maybe_double_free.nu`,
-`borrow_generic_maybe_double_free.nu`, `borrow_closure_free_then_read.nu`.
+### 2.1b Releasing what the compiler releases
 
-### 2.1b Freeing what the compiler already frees
-
-`nurl_free` is excluded from the move rule above because it normally
-reclaims raw `nurl_alloc` memory that nothing tracks. When its argument
-names a binding auto-drop **did** register, though — an owned string, an
-owned slice, a `Drop` value, a struct with owned fields — the scope exit
-frees that pointer a second time:
+Inside an `unsafe` function, `nurl_free` on a binding the compiler already
+drops (an owned string, slice, `Drop` value or owning struct) would free
+it twice, and is an error:
 
 ```
 error: 'piece' is auto-dropped at the end of its scope, so freeing it
-       here frees it twice - delete this call. Only memory the compiler
-       does NOT track (a raw 'nurl_alloc' buffer, an FFI pointer) needs
-       a hand-written 'nurl_free'
+       here frees it twice - delete this call
 ```
 
-The binding is identified from the identifier the argument expression
-loaded, not from its first token, so the cast spelling every FFI pointer
-uses — `( nurl_free # s piece )` — is covered as exactly as the bare one.
-Reassigning an owned binding already frees its previous value, and a
-binding whose ownership has left it is no longer registered, so at
-function scope there is no legitimate counter-case.
+The rule recognises the binding through casts (`( nurl_free # s piece )`)
+and applies inside closure bodies too. Only memory the compiler does not
+track (a raw `nurl_alloc` block, a pointer from foreign code) is released
+with `nurl_free`.
 
-The rule reaches inside a closure body too. It did not while only ONE of a
-closure's two exits ran the drop epilogue — a body returning through `^`
-freed what it registered, a body falling off its end emitted a bare `ret`
-and freed nothing, so a hand-written free there was what kept the binding
-from leaking. `gen_closure_expr`'s fall-off exit now runs the epilogue as
-well (§1, "A closure body has two exits"), so registration is a proof in
-both. Regressions: `compiler/tests/should_fail_free_autodropped.nu` and
-`should_fail_free_in_closure.nu` (rejected), `closure_falloff_drop.nu` (the
-same shape WITHOUT the free, reclaimed anyway).
+### 2.2 Second names
 
-### 2.2 Alias and double-free detection
+A value can acquire a second name in several ways. Each one is decided
+the same way: an owner moves, a borrow is copied.
 
-An immutable binding-to-binding copy of an owned heap aggregate ---
-`: (Vec i) b a` --- makes `b` the new owner and **moves** `a`. Any
-later use of `a` (including a second `vec_free a`) is then the
-use-after-move warning above. This closes the silent-alias
-double-free: two live bindings can no longer own the same buffer
-unnoticed.
+- `: ( Vec i ) b a` moves `a` into `b` when `a` owns its value; `a` is
+  then dead.
+- `: ~ ( Vec i ) cur a` is a *cursor*: a mutable working binding that
+  borrows `a` (§7.6).
+- `= b a` moves an owner and copies a borrow, like `:`.
+- A `?` / `??` that selects one of several bindings
+  (`: ( Vec i ) chosen ? flag a ( make )`) moves the selected owner on the
+  paths that select it. The other paths keep their own owners.
+- A call whose callee may return one of its arguments takes that argument
+  as `sink` (§1), so the caller's binding is consumed rather than
+  aliased.
 
-A *mutable* copy `: ~ T b a` is treated as a working cursor (a borrow,
-not a move) and is left alone — distinguishing a borrow from a move
-in the general case is the job of the parameter-convention surface
-(`in` / `inout` / `sink`).
+So two live names can never both own one buffer.
 
-**A handle does not have to arrive by that syntax.** A binding-to-binding
-copy is only the simplest way for one buffer to acquire a second name;
-any construct that *yields a value* can yield an existing handle. Three
-more do, and each one used to be an ownership blind spot in which both
-names looked like sole owners and freeing both compiled clean:
+### 2.3 Stack references must not escape
 
-```
-: ( Vec i ) chosen ? flag a ( make )   // a `?` SELECTS between handles
-= prev t                               // an assignment hands one over
-: ( Vec i ) c ( pick a 1 )             // a callee hands an argument back
-```
+A closure that captures a `: ~` mutable multi-field struct captures it by
+pointer into the enclosing frame. Such a value is a *stack reference* and
+must not outlive that frame. The checker tracks the scope depth a stack
+reference points into, through bindings, assignments, field stores,
+aggregate and closure literals, and `?` / `??` joins. An escape is an
+error when a stack reference reaches:
 
-`gen_cond` / `gen_match` publish which bindings their live arms could
-select and whether every live arm selects the same one; the `:` / `=`
-that receives the value turns that into a move. Which kind of move
-depends on what is actually known:
-
-- **Definite** (an ordinary move, reported by default) when the result
-  IS one binding's handle on every path — every live arm names it, or
-  the other arm returned. Any later use is a use-after-move.
-- **Conditional** — the *maybe-alias*: the handle went to the other
-  name on some path, and the buffer lives on through one of them. This
-  covers the `?` with one aliasing arm, every assignment handover, and
-  every returned-handle case. Reading either name is fine; a second
-  consume is reported under `--strict-borrowck`. (A binding *freed* on
-  some paths is a different state — maybe-freed — and any use of it is
-  an error by default, §2.1.)
-
-The assignment and interprocedural cases are conditional even though
-the handover itself is certain, and that is a statement about the
-analysis rather than about the code. After `= prev t` the old name is
-still a legal way to read the live buffer — the stdlib's HKDF expansion
-does exactly that — and only *liveness*, which this checker does not
-compute, could say when it stops being one. Flagging reads would reject
-working code, so it declines to guess and waits for the consume.
-
-The interprocedural case reads a **returned-handle summary**,
-`g_fn_ret_alias[fname]`: the parameter indices whose handle the body may
-hand back, inferred in codegen order from `^ p` and from a `?` / `??`
-return whose arms select one. It is deliberately a **separate map** from
-the returned-parameter summary of §2.8 rather than more entries in it:
-§2.8 asks whether the result may be a *stack reference* and drives
-refdepth propagation, this asks whether it may be an argument's *heap
-handle* and drives move tracking. Widening one map to answer both
-questions would have quietly moved every escape diagnostic that reads
-it.
-
-### 2.3 Escape analysis
-
-A closure that captures a `: ~`-mutable multi-field struct captures it
-**by pointer** into the enclosing function's stack frame. Such a
-closure is a *stack reference*: it must not outlive the frame it
-points into. The checker assigns every binding a **region** (its
-block-nesting depth — the function body is depth 1, each nested
-`?`/`~`/`??`/`{ }` one deeper, the caller depth 0) and tags a stack
-reference with the deepest region it points into. Reference-ness
-propagates through closure and aggregate literals, `let` copies, `=`
-assignments, `= . obj field` **field stores** (the struct inherits the
-reference, so returning it later fires), and the **phi of a `?` / `??`**
-— the join publishes the deepest depth any *live* arm carries, since one
-arm holding the reference is enough to dangle on that path. An escape is
-reported when a stack reference reaches:
-
-- `^`-return (it would dangle the moment the function returns),
-- `vec_push` / `vec_insert` / `vec_set` / `thread_spawn` (it outlives
-  the current scope inside a container or on a worker thread),
-- an `=` into a binding declared in a longer-lived (shallower) region.
+- a `^` return,
+- a container (`vec_push`, `vec_insert`, `vec_set`) or a thread
+  (`thread_spawn`),
+- an assignment into a binding of a longer-lived scope.
 
 ```
 error: returning a value that references a stack binding by pointer
@@ -484,1502 +273,682 @@ error: returning a value that references a stack binding by pointer
          (move the captured data to a heap-backed handle)
 ```
 
-Closures that capture by *value* (the snapshot case — an immutable
-`:` capture, or a single-handle struct) never escape and are not
-flagged.
+Closures that capture by value (an immutable `:` capture, a single-handle
+struct) never escape this way.
 
 ### 2.4 Exclusive access for `inout` arguments
 
-An `inout` argument (section 1) is an *exclusive* mutable borrow for
-the duration of its call. A binding passed `inout` must therefore be
-the only argument path to its value at that call site: passing the
-same binding again — as a second `inout`, or as a plain by-value
-argument — is reported.
+An `inout` argument is an exclusive mutable borrow for the duration of
+its call. Passing the same binding again in the same call, as another
+`inout` or as an ordinary argument, is an error:
 
 ```
 ( swap_counters c c )    // error: 'c' is both mutably borrowed
-                         //          and aliased by another argument
+                         //        and aliased by another argument
 ```
 
-This is the "N readers XOR 1 writer" rule, scoped to a single call
-(an `inout` borrow does not outlive its call, so there is no
-cross-statement aliasing to track).
-
-By default only the **bare-identifier** spelling is reported, and that
-is deliberate rather than unfinished: every sibling read is a snapshot
-taken *before* the callee runs, so `( grow v ( vec_len v ) )` is
-ordinary correct code and flagging it would cost the no-false-positive
-property. `--strict-borrowck` (§2.9) reports any read of the binding in
-a sibling argument — a `. c n` field read, a read inside a nested call
-(`( f inout c ( peek c ) )`), at any depth, and in either argument
-order. Which spelling the read wears does not change the answer there.
+Reads of the binding inside other arguments (`( grow v ( vec_len v ) )`)
+are evaluated before the call runs and are allowed.
 
 ### 2.5 Iterator invalidation
 
-A `~ x xs { ... }` foreach loop borrows the container `xs` for the
-body's duration — the loop snapshots `xs`'s buffer pointer and length
-once, up front. Mutating `xs` inside the body would leave the loop
-cursor pointing at a stale or freed buffer (`vec_push` may
-reallocate; `vec_free` releases the buffer outright), so it is
-reported:
+A foreach loop `~ x xs { … }` borrows `xs` for its body. Mutating `xs`
+inside the body is an error:
 
 ```
 ~ x xs { ( vec_push xs x ) }   // error: cannot mutate 'xs'
-                               //          while iterating over it
+                               //        while iterating over it
 ```
 
-The check fires for a stdlib container mutator applied to the
-iterated container (`vec_push` / `vec_insert` / `vec_remove` /
-`vec_pop` / `vec_clear` / `vec_set` / `vec_set_len` / `vec_reserve` /
-`vec_shrink_to_fit` / `vec_extend` / `vec_free` / `vec_free_with` /
-`vec_swap` / `vec_reverse`), for any `inout` argument naming it, and
-for a **helper** whose summary says it mutates the container handed to
-that parameter — whether that helper is defined above the loop or
-below it, since a call to a not-yet-compiled callee parks the question
-and replays it after the module.
-A counter loop (`~ k 0 ...`, a while-loop) borrows nothing, so
-`( vec_set xs k v )` in an index loop stays legal — only the
-element-borrowing `~ x xs` foreach form is guarded.
+This covers the stdlib mutators (`vec_push`, `vec_insert`, `vec_remove`,
+`vec_pop`, `vec_clear`, `vec_set`, `vec_reserve`, `vec_extend`,
+`vec_free`, `vec_swap`, `vec_reverse`, …), an `inout` argument naming the
+container, and any function that mutates the container passed to it,
+wherever that function is defined. A counter loop (`~ < k n { … }`)
+borrows nothing, so `vec_set xs k v` inside it is allowed.
 
 ### 2.6 Loop-carried moves
 
-A `~` loop body runs more than once, so a binding consumed inside it
-is moved on entry to the *next* iteration. If that binding was live
-**before** the loop and the body never re-binds it, re-reading it on
-the second pass is a guaranteed use-after-move — the classic "free
-inside a loop" double-free:
+A loop body runs more than once. A binding that existed before the loop
+and is consumed in the body, without being rebound before the next
+iteration, is moved when the next iteration reads it:
 
 ```
 : ( Vec i ) xs ( vec_new [i] )
 ~ < k 3 { ( vec_free [i] xs ) = k + k 1 }   // error: use of moved value 'xs'
 ```
 
-After the analysis walk reaches the loop's fixpoint, it re-walks the
-body once more, seeded with the loop's *back-edge* state: every outer
-binding the body leaves moved is seeded `Moved`, and the controlling
-`~ cond` is re-checked too (it is re-evaluated each turn). A read of
-such a definitely-moved binding is then reported. The same applies to
-a foreach whose body frees an outer binding (`~ y ys { ( vec_free xs ) }`).
+Three shapes are fresh in every iteration and are allowed: consuming the
+foreach element, consuming a binding declared in the body, and consuming
+an outer binding that the body rebinds before its next read.
 
-Three shapes are deliberately **not** flagged, because each is freshly
-owned on every iteration:
+### 2.7 Escape through a callee
 
-- freeing the **loop element** — `~ x xs { ( string_free x ) }` (the
-  element is a fresh load each pass);
-- freeing a binding **declared inside** the loop body;
-- freeing an outer binding the body **re-binds** before the next read
-  (`( vec_free buf ) = buf ( vec_new [i] )`).
-
-Only bindings that already existed at loop entry are carried, so none
-of these three false-positive. This rests on the lattice join being
-exact at the back-edge: a binding moved on only the body path joins to
-`MaybeMoved`, never `Moved` — every merge routes through the same
-`Uninit ⊔ Moved = MaybeMoved` rule.
-
-### 2.7 Interprocedural escape
-
-§2.3 catches a stack reference that escapes through a sink *in the
-current function*. A reference can also escape through a **helper**:
-hand it to a function that stores it in a heap container or detaches it
-onto a thread, and it outlives the call just the same — but a
-per-function pass cannot see what the callee does with it.
-
-The checker closes this with a per-function **escape summary**,
-computed in codegen order exactly like the auto-`sink` summary (§1). A
-parameter is recorded as *escaping* when the body passes it to an
-escaping argument position: a built-in heap/thread sink (the element of
-`vec_push` / `vec_insert` / `vec_set`, or the `thread_spawn` closure),
-or — transitively — an already-known escaping parameter of another
-function. At a call site, passing a **stack reference** to an escaping
-parameter is then reported:
+A function that stores a parameter in a container or hands it to a thread
+makes that parameter *escaping*. Passing a stack reference (§2.3) to an
+escaping parameter is an error, as is passing it on to another function's
+escaping parameter, at any depth:
 
 ```
-@ detach ( @ v ) cb → v { ( thread_spawn cb ) ... }   // param 0 escapes
-...
-: ( @ v ) f \ → v { = . c n + . c n 1 }   // captures a `: ~` Counter by pointer
+@ detach ( @ v ) cb → v { ( thread_spawn cb ) }   // param 0 escapes
+: ( @ v ) f \ → v { = . c n + . c n 1 }          // captures a `: ~` struct by pointer
 ( detach f )   // error: passing a value that references a stack binding
                //        by pointer to 'detach' - it escapes …
 ```
 
-The summary is built as each function compiles, so a **forward call** —
-or a call to a **generic** not yet instantiated — has no summary to
-consult inline. Rather than miss it, the call site **parks** the check
-(a stack-reference argument to a not-yet-known user callee is rare, so
-the parked list stays tiny) and `resolve_pending_escapes()` replays it
-once the whole module — including the generic instantiation flush — has
-compiled and the summary is final. So `( detach f )` is flagged whether
-`detach` is defined above or below the call, and a generic escaping
-helper is caught once its instantiation has populated the summary.
+Passing a field of a stack reference counts the same. A parameter the
+callee only reads or invokes does not escape. Summaries are final only
+after the whole module is compiled, so forward and generic callees are
+judged the same as functions defined above the call.
 
-Parking the *check* is only half of it. A body that hands its own
-parameter to a not-yet-compiled callee cannot infer its own summary
-either, so that **propagation step is parked too**, as an implication
-— "parameter *i* of `F` escapes if parameter *j* of the callee does" —
-and `resolve_pending_impls()` runs the implications to a **fixed
-point** before any parked check replays. That is what makes a *pure
-forward chain* (`leaky` → `outer` → `detach`, each defined below the
-last) behave like the same three functions written bottom-up: one round
-resolves the deepest link, the next carries it one hop outward.
-Definition order no longer decides the verdict anywhere in §2.7.
+### 2.8 Escape through a return
 
-The argument does not have to be the parameter itself: a **field of
-it** reaching an escaping slot (`( thread_spawn . box cb )`) makes the
-whole parameter escape, since the callee keeps a pointer into the
-struct the caller passed. A parameter that the callee only *reads* or
-*invokes* (not stores) is not escaping, so passing a stack reference to
-it stays legal — the distinction the §2.7 summary turns on. (A reference handed back *out*
-of a helper, rather than stored by it, is the separate return-escape
-case — see §2.8.)
-
-### 2.8 Return escape (a reference passed back out)
-
-§2.7 propagates a stack reference *into* a callee. The mirror image is
-a reference flowing *out* of a call: a helper that **returns one of its
-parameters** hands the reference straight back, so the result of
-`( id ref )` is the reference itself. A per-function pass sees only a
-call result of the right type — not that it aliases an argument.
-
-The checker records a second summary, again in codegen order: a
-parameter is *returned* when the body has `^ p` (a bare-parameter
-return). At a call site, the result's **referent depth** becomes the
-max depth among the arguments at those returned positions. The result
-then carries the reference, so the existing §2.3 / §2.7 sinks fire on
-it uniformly:
+A function that returns one of its parameters hands a stack reference
+straight back. The result of such a call carries the reference, so the
+rules of §2.3 and §2.7 apply to it:
 
 ```
-@ id ( @ v ) cb → ( @ v ) { ^ cb }   // returns param 0
-...
-: ( @ v ) f \ → v { = . c n + . c n 1 }   // stack ref into this frame
-^ ( id f )                  // error: returning a value that references a
-                            //        stack binding by pointer …
-( thread_spawn ( id f ) )   // error: … escapes … to 'thread_spawn'
+@ id ( @ v ) cb → ( @ v ) { ^ cb }
+: ( @ v ) f \ → v { = . c n + . c n 1 }
+^ ( id f )                  // error: returning a value that references
+                            //        a stack binding by pointer …
 ```
 
-A helper that takes the reference but returns a **fresh** value
-(`@ runit ( @ v ) cb → i { ( cb ) ^ 0 }`) is not a passthrough, so
-`( runit f )` is not a reference and may be returned freely: the call
-result's referent depth is *authoritative* (an explicit `0` when it is
-not a reference).
+A parameter can leave through a struct field (at any depth), a closure's
+captured environment, a local binding, another function that returns it,
+or one arm of a join; all count. A function that takes a reference and
+returns a fresh value is not a passthrough.
 
-A parameter can leave by more than a bare `^ p`, and every way it can
-is the same situation with different syntax between the `^` and the
-name. All of these record it:
+### 2.9 `--strict-borrowck`
 
-| the parameter leaves via | spelling |
-|---|---|
-| a struct field | `^ @ Slot { cb }` |
-| a struct field one level deeper | `^ @ Outer { @ Inner { cb } }` |
-| a closure's captured env | `^ \ → v { ( cb ) }` |
-| a local name it was bound to | `: ( @ v ) t cb  ^ t` |
-| another helper that returns it | `^ ( id cb ) }` |
-| one arm of a join | `^ ? c cb ( fresh )` |
+`--strict-borrowck` adds three audit checks on top of the rules:
 
-The last three work because a *binding* carries the parameters its
-initialiser carried (`<name>__paramsrc`) and a *call result* carries the
-parameters sitting at the callee's returned positions, so the chain
-composes to any depth. An ordinary constructor returning a struct of
-*value* parameters (`@ mk i a i b → Point { @ Point { a b } }`) records
-them too but never false-positives: an `int` argument has depth 0.
+1. an `inout` binding read by a sibling argument in any form (a field
+   read, a read nested in another call), not only as a bare name;
+2. a raw pointer taken with `# *T` from an owned binding that may outlive
+   the binding's drop;
+3. consuming a binding whose value may have passed to another name on
+   some path.
 
-**Forward and generic callees** are handled the way §2.7 handles them,
-and for the same reason: at `^ ( id f )` where `id` is defined below, an
-empty summary means "not known yet", not "returns nothing". The check is
-parked with the argument positions that were stack references and
-replayed by `resolve_pending_ret_escapes()` against the finished
-summary; the *propagation* ("this function returns its parameter if the
-callee returns its own") is parked as an implication and resolved in the
-same fixed point as the escape ones.
+These checks flag code that is safe, so they are off by default. The
+guarantee of §6.2 does not depend on them.
 
-### 2.9 `--strict-borrowck` — three opt-in checks
+### 2.10 Views end when their source may reallocate
 
-The default rules (§2.1–§2.8, §2.1b, §2.11, §2.12) always run. `--strict-borrowck` (off by
-default) adds three further checks, all diagnostic-only and all emitting
-`error:` like the rest:
-
-1. **Aliased mutation through any sibling read.** §2.4 flags an `inout`
-   binding aliased by another *bare-identifier* argument of the same
-   call. Strict mode generalises this to every other way the same
-   binding can be read by a sibling argument: a `. obj field`
-   projection, a read nested inside a called helper's arguments
-   (`( f inout c ( peek c ) )`), at any depth, and with the read on
-   either side of the `inout` one. Measured against the whole
-   first-party corpus, the generalisation adds **no** new strict
-   failures — it removes an inconsistency, it does not widen the net.
-2. **`# *T` raw-pointer escape.** A raw pointer taken (`# *T …`) from an
-   owned binding whose pointer may outlive that binding's drop is
-   reported — a narrow check on the otherwise-untracked `*T` surface
-   (§3).
-3. **Consuming a MAYBE-ALIASED binding (§6.2/§6.5).** A binding freed
-   on some paths only is an error by default, for a consume and a read
-   alike (§2.1). What strict mode adds is the second consume of a
-   binding whose handle went to *another name* on some path — a
-   double-free when that other name is consumed too, which this
-   checker cannot see. The routes into that state:
-   - its handle selected by a value-producing `?` / `??` and bound
-     elsewhere;
-   - stored into an aggregate literal built as a call argument whose
-     callee may not keep it (`( f @ ?T { T h } )`) — recorded as
-     maybe-moved rather than moved on purpose, because recording it as
-     definite rejects the option-wrapper idiom (a store the compiler
-     knows is kept — a bound or returned literal, `vec_push` — is the
-     default §2.12 error instead);
-   - handed to another name by an alias assignment (`= z a`);
-   - captured by a closure whose body frees it, before that closure is
-     used (after a use it is maybe-freed — the default rule);
-   - passed to a call that may hand the handle back.
-
-   A consume of *both* partners is a default error (§2.1); what strict
-   mode adds is a consume of a maybe-aliased binding whose partner the
-   walk cannot name — a call to a function defined further down that may
-   return its argument. Off by default because that partner is usually a
-   borrow that never consumes (`: ( Vec String ) pos ( args_positionals p )`
-   followed by freeing `p`).
-
-It is **off by default** because the extensions have a meaningful
-false-positive rate against existing stdlib code; it is a tightening
-knob for auditing a specific module, not part of the standard contract.
-The default-on rules remain the guarantee everything else in this
-document refers to.
-
-### 2.10 Stale container borrows (`vec_data` / `string_data`)
-
-`( vec_data v )` (and `string_data`) hands out a raw pointer *into* the
-container's heap buffer. If
-`v` is then grown — `vec_push`, `vec_extend`, `vec_reserve` — the
-buffer may be reallocated somewhere else, and every pointer taken
-before that mutation points into freed memory. `vec_clear` / `vec_free`
-do the same by releasing it outright. Reading such a pointer is a
-use-after-free that produces plausible-looking garbage rather than a
-crash, which is what makes it worth diagnosing:
+`( string_data s )` and `( vec_data v )` return a *view*: a pointer into
+the container's buffer. A view ends when its source is mutated in a way
+that may reallocate (`vec_push`, `vec_extend`, `vec_reserve`, …) or is
+released, moved or reassigned. Reading a view after that is an error:
 
 ```
-: * u p ( vec_data [u] v )     // borrow
-( vec_push [u] v # u 1 )       // may realloc → p dangles
-: i x # i . p 0                // error: pointer 'p' borrowed from 'v'
-                               //          is stale: 'v' was mutated on
-                               //          line N and may have
-                               //          reallocated its buffer
+: *u p ( vec_data [u] v )
+( vec_push [u] v # u 1 )       // may reallocate
+: i x # i . p 0                // error: pointer 'p' borrowed from 'v' is
+                               //        stale: 'v' was mutated on line N
 ```
 
-The fix is to re-fetch the pointer after the mutation (`= p ( vec_data
-[u] v )`), which clears the diagnostic for that pointer. It is an
-**error**, including inside an `unsafe` function: a push into a
-pre-reserved container would not reallocate, but the rules decide from
-the program text, not from the capacity at run time (§6.3). A `string_data`
-view — the one a safe program uses — follows the same rule.
+Fetch the view again after the mutation. The rule applies in `unsafe`
+code too, because it is decided from the program text, not from the
+capacity at run time. A mutation inside one `?` arm does not end a view
+in the other arm, and a function that mutates the container passed to it
+ends views exactly as an inline mutation does, wherever it is defined.
 
-The check is path-aware in the one way that matters for false positives:
-the two arms of a `?` are alternatives, so a free or push in one arm does
-not make a pointer stale in the *other* (the guard-clause shape
-`? bad { ( string_free s ) ^ err } {}`). At
-the join it takes the union of the arms that actually fall through — an
-arm that returns cannot invalidate anything downstream of the `?`.
+### 2.11 Closures hold their captures
 
-The mutation counts however it is spelled. A stdlib mutator applied to
-the container invalidates its borrows, and so does a **helper** that
-mutates the container handed to one of its parameters — the same
-per-function summary §2.5 consults. Without that, the inline
-`( vec_push v … )` warned and `( grow v )` did not, which reads as
-"wrap the push in a function" being the cure for the diagnostic rather
-than for the bug. Definition order does not decide it either: a call to
-a not-yet-compiled callee kills the pointer **provisionally**, carrying
-the callee it is conditional on inside the stale-set entry, so the arm
-snapshot / union machinery treats it exactly as it treats a certain
-kill. The use site then *parks* its report, and
-`resolve_pending_stale` prints it after the module, when the summary is
-final. A certain mutation supersedes a parked question — entry, line
-and all — so the report names the call that really reallocates.
-
-This hazard has nothing to do with `~` mutability — a `: *T` borrow
-dangles identically. (nurlc used to warn about `: ~ *T` bindings on the
-theory that mutable pointers miscompiled in long write loops; they do
-not, and `compiler/tests/mut_pointer.nu` pins that. The realloc above
-was the real bug all along.)
-
-### 2.11 Closure captures outlive the free
-
-A closure literal copies each captured binding's handle into its heap
-env. The closure therefore *holds* those handles for as long as it can
-be called, and freeing one through the original name leaves the closure
-pointing at released memory:
+A closure holds every value it captured for as long as it can run.
+Invoking a closure reads all of its captures, so releasing a capture
+through its original name and then invoking the closure is a use after
+move:
 
 ```
 : ( Vec i ) v ( vec_new [i] )
-( vec_push [i] v 41 )
 : ( @ i ) f \ → i { ^ ( vec_len [i] v ) }
 ( vec_free [i] v )
 ( nurl_println_int ( f ) )     // error: use of moved value 'v' …
-                               //        The closure 'f' still holds 'v',
-                               //        so invoking it reads the freed
-                               //        buffer.
+                               //        the closure 'f' still holds 'v'
 ```
 
-An **invocation of the closure is a read of everything it captured**.
-That is the whole rule; the report is the ordinary use-after-move of
-§2.1, and the diagnostic names the closure because the line it points at
-spells the call, not the handle.
+This holds for a direct call, for a call through a function that invokes
+its closure parameter, for a closure captured by another closure, and for
+a mutation inside the body as much as a read. Capturing an
+already-released value is rejected at the closure literal. A closure
+stored into a struct, or handed to a function that keeps it, makes that
+owner depend on the captures: releasing a capture while the owner may
+still run the closure is an error. Loading a closure value, and dropping
+the closure's own environment at the end of its scope, is not a use.
 
-It applies to every spelling of the invocation, because the handle is
-what is at stake rather than the syntax:
+### 2.12 A stored value belongs to its owner
 
-- a direct call, `( f )`;
-- a call one hop away, `( apply f )`, when the callee only ever *invokes*
-  that parameter — its invoke-only set (§7.4) is the positive signal.
-  A callee that stores or detaches the closure is not covered, and an
-  unknown or forward callee reports nothing;
-- a closure captured by another closure — the outer one reaches
-  everything the inner one holds, at any depth;
-- a mutation as much as a read: `\ → v { ( vec_push [i] w 7 ) }` after
-  `( vec_free [i] w )` is the same bug;
-- either binding form, `: ( @ i ) f \ …` and `= f \ …`.
-
-**Capturing** is a read too, so a closure that captures an
-already-freed binding is rejected at the literal itself, even if it is
-never called.
-
-The discriminator is invocation, not "the argument is a closure". Merely
-*loading* a closure value is not a use of its captures, and neither is
-the drop of the closure's own env at the end of its scope (§7.5), which
-happens after the captured handles are freed and is correct.
-
-A closure that leaves the frame is followed too. Stored into a struct
-field — a literal's or an assignment's — its captures are stored into that
-struct (§2.12): reading them is fine, releasing one while the struct may
-still invoke the closure is an error. Returned — bare or inside a returned
-literal — its captures move into its env (§7.5), which the caller's value
-then drops. What is not followed is a closure handed to a callee that
-keeps it: the callee keeps a copy of the env (§7.5), but the copy still
-names the captured buffer, so freeing that buffer through its own name
-afterwards is the aggregate-conduit boundary in §3. Regressions:
-`borrow_closure_stored_capture_freed.nu`, `closure_returned_in_struct.nu`.
-
-Before this rule the whole family was invisible: a closure body is
-analysed as its own function, where a capture is never seeded and so can
-never be reported, and the enclosing function's walk never saw the
-body's reads at all. Nothing connected `( vec_free v )` to a later
-`( f )`, and the Vec form segfaulted while the String and HashMap forms
-quietly read a released control block.
-`compiler/tests/borrow_closure_capture_use_after_free.nu` pins it.
-
-### 2.12 Consuming a value after storing it into an owner
-
-A value stored into something that drops it — a bound or returned
-aggregate literal, a container (`vec_push`, `map_set`), a callee that
-keeps its parameter in an owner — belongs to that owner from then on.
-Releasing it again through the original name (`( vec_push v s )
-( string_free s )`) is a second release, and is an error:
+A value stored into an owner (an aggregate literal, a container through
+`vec_push` or `map_set`, a function that keeps its parameter) belongs to
+that owner. Releasing it again through the original name is an error:
 
 ```
 error: 's' is consumed here, but its value was stored into an owner at line N …
 ```
 
-Reading the value after the store is still fine — while the owner holds
-it. When the owner lets go, the value goes with it, and a read through
-the original name is a use of a moved value: the owner consumed or
-reassigned (`( release h )`, `= h …`), a container the value was pushed
-into released (`( vec_free all )` after `( vec_push all a )`), or a
-handle field of the owner assigned a new value (`= . h v …` — which
-field held the value is not tracked, so it is maybe-freed), or a stdlib
-container call that drops some elements or hands one out (`vec_clear`,
-`vec_truncate`, `vec_set`, `vec_pop`, `vec_remove`, `vec_replace`,
-`map_set`, `map_remove`, `set_remove`, `deque_pop_front` /
-`deque_pop_back`, `btree_set`, `btree_remove` — again maybe-freed, as
-which element went is not tracked). To hand a
-value on and keep one in the owner, store a copy (`string_clone`,
-`vec_clone`, `mem_dup`). A struct of plain words (a device buffer's
-address and length) is copied, not owned, and is not reported.
-`compiler/tests/borrow_store_consume.nu` and
-`borrow_stored_owner_dropped.nu` pin it.
+To hand a value on and keep one, store a copy (`string_clone`,
+`vec_clone`, `mem_dup`).
 
-## 3. What is NOT checked
+## 3. Outside the rules
 
-The borrow checker targets the bug classes that ordinary NURL code
-hits in practice. It deliberately does **not** cover:
+The rules cover all safe code. What they do not check is a stated
+boundary:
 
-- **The body of an `unsafe` function.** Raw pointers, pointer casts,
-  the raw-memory primitives and foreign calls are allowed there and
-  nowhere else (spec §3.3d); the function's author vouches for it. The
-  standard library is such a vouched base.
-- **Aliased mutation beyond a single call.** The exclusive-access
-  check (§2.4) covers a binding aliased among one call's arguments —
-  by default the bare-identifier spelling, and under
-  `--strict-borrowck` a sibling read at any depth (a field projection,
-  a read nested inside another call). What is *not* done is any
-  longer-range aliased-mutation analysis across statements. (Escape
-  across a forward or generic call used to be listed here; it is not a
-  boundary any more — every rule that consults a per-function summary
-  parks what it cannot answer and resolves it after the module, so
-  definition order no longer changes any verdict, §6.4.)
-- **`recover` / panic unwind — reclaimed, not modelled.** A panic is a
-  `setjmp`/`longjmp` jump to the nearest `recover` frame (no exception
-  tables, no unwinding destructors). The owned allocations the `longjmp`
-  skips no longer leak: an **allocation journal** (§7.2), per fiber —
-  the thread's own outside fibers —
-  records every owned auto-drop allocation made inside a recover extent —
-  raw buffers *and* `% Drop` / autodrop-enum values (whose typed
-  destructor it replays) — and reclaims the still-live ones *before* the
-  jump. A value that escapes
-  the extent (assigned into a by-ref-captured caller binding) is
-  forgotten from the journal first, so the unwind frees only genuinely
-  abandoned scratch — never what the caller now owns. The reclamation is
-  therefore a *leak* fix, never a use-after-free. The checker still
-  treats `recover` as an ordinary call and does not model the panic
-  edge — it does not need to, since the journal runs at the panic itself.
+- **The body of an `unsafe` function.** Raw pointers, pointer casts, the
+  raw-memory primitives and foreign calls are allowed only there, and the
+  function's author vouches for it (spec §3.3d).
+- **Marker assertions.** `% Send`, `% Sync`, `% NotSend`, `% NotSync` and
+  `% Resource` are assertions about a type the compiler cannot verify
+  (§6.5, §7.7).
+- **Whether a lock is held.** Mutation of shared state outside a `Mutex`
+  is rejected, but whether a `mutex_lock` is held at a given point is
+  counted, not proved per path (§6.5).
+- **Logical leaks.** A cache or map that a program keeps growing and never
+  shrinks holds memory that is still reachable. That is program
+  behaviour, not a leak the memory model can see.
+
+A panic is not outside the model: what a panic abandons is reclaimed
+(§7.2).
 
 ## 4. Practical guidance
 
-- Read the diagnostic as a rule and a fix. It names what moved or
-  ended where, and the change that satisfies the rule (clone it, keep
-  the owner in the outer scope, send it through a channel, declare the
-  parameter `sink`). Most rejections are real bugs; the rest are
-  programs the conservative rules cannot prove — restructure them the
-  way the message says rather than reaching for `--no-borrowck`.
-- To share a closure beyond the scope of the data it mutates, move
-  that data to a heap-backed handle (a single-handle struct over a
-  `Vec` or a heap allocation) and capture the handle by value.
-- To hand an owned container to a consumer and keep using it, you
-  cannot — that is the move. Take a fresh copy, or restructure so the
-  consumer borrows.
-- `--no-borrowck` exists for bisecting a suspected false positive or
-  for builds that must match pre-checker behaviour exactly. If you hit
-  a genuine false positive, it is a compiler bug worth reporting — the
-  corpus is verified clean.
+- **Read the diagnostic as a rule and a fix.** It names what moved or
+  ended where, and the change that satisfies the rule: clone the value,
+  keep the owner in an outer scope, send it through a channel, declare
+  the parameter `sink`.
+- **Copy to keep.** Handing an owned value to a consumer and keeping it is
+  not possible; that is the move. Take a copy (`string_clone`,
+  `vec_clone`, `mem_dup`) or restructure so the consumer borrows.
+- **Use the safe element access.** `vec_at`, `vec_put` and `vec_get` are
+  bounds-checked and compile to the same loop as raw pointer access.
+  `vec_data` + `unsafe` is not faster.
+- **Share mutable state through a handle.** Between threads use `Channel`,
+  `Mutex` or `Arc` (§6.5). Within a thread, to share a closure beyond the
+  data it mutates, move that data into a heap-backed handle and capture
+  the handle by value.
+- **Graphs.** A graph that is built once can be an `Rc` / `Arc` structure.
+  A large graph that is rewired constantly is simpler and cheaper as a
+  `Vec` of nodes addressed by index (§7.7).
 
-  The flag is now exercised, which it had not been: a closure body saved
-  and restored the checker's own per-function state without the gate every
-  other site uses, and that state only *exists* when the checker is on, so
-  `--no-borrowck` was an internal compiler panic on any program containing
-  a closure. `compiler/tests/nobck_closure.nu` runs the flag over five
-  closure shapes and its record is the ordinary COMPILE / LINK / EXIT /
-  OUTPUT one — the flag has to leave a program not just compiling but
-  RUNNING. The runner gives any `nobck_*` test that treatment.
+## 5. Summary of checks
 
-## 5. Status
-
-| Bug class | Checked? |
+| Fault | Where it is caught |
 |---|---|
-| Use-after-move | yes (`error:`) |
-| Alias double-free | yes (`error:`) |
-| Closure / stack-reference escape | yes (`error:`) |
-| `inout` exclusive access (call-site aliasing) | yes (`error:`) |
-| Iterator invalidation (mutate container in `~`-foreach) | yes (`error:`) |
-| Loop-carried move (free an outer binding inside a `~` loop) | yes (`error:`) |
-| Interprocedural escape (stack ref stored by a helper) | yes (`error:`) |
-| Return escape (helper returns a passed-in stack ref) | yes (`error:`) |
-| Aliased mutation via nested-argument reads | yes (`--strict-borrowck`, §2.9) |
-| Escape through a `?` / `??` join, or into a struct field | yes (`error:`) |
-| Return escape (through a field, a nested field, a closure env, a local name, a second helper, a forward / generic callee) | yes (`error:`) |
-| Use-after-free through a closure capture (invoke after the free) | yes (`error:`, §2.11) |
-| Handle released by name after being stored into an owner | yes (`error:`, §2.12) |
-| Raw pointer read after the block that dropped its owner (`= p ( string_data x )` into an outer binding / `Vec s`) | yes (`error:`) |
-| Closure returned past the local it borrows | yes (`error:`) |
-| Handle read by name after it was stored, sent or captured (moved) | yes (`error:`) |
-| Borrow (`vec_get`, field read, view) used after its owner was moved, released, reassigned or reallocated | yes (`error:`) |
-| Value shared with a thread without a share handle (Channel, Mutex, Arc) | yes (`error:`) |
-| `*T` raw pointers, pointer casts, raw-memory primitives, foreign calls | only inside `unsafe` (spec §3.3d) |
+| Use after move, maybe-moved read | §2.1 |
+| Double release (two owners of one buffer) | §2.1, §2.2, §2.12 |
+| `nurl_free` of a compiler-dropped value | §2.1b |
+| Stack reference escaping its frame | §2.3, §2.7, §2.8 |
+| Aliased `inout` argument | §2.4 |
+| Mutating a container while iterating it | §2.5 |
+| Consuming an outer binding in a loop | §2.6 |
+| Stale view after reallocation | §2.10 |
+| Releasing a value a closure still holds | §2.11 |
+| Borrow used after its owner moved, ended, or was reassigned | §6.2 |
+| Non-shareable value crossing a thread boundary | §6.5 |
+| Shared mutation outside a lock | §6.5 |
+| Cycle of thread-shared handles | §7.7 |
+| Out-of-bounds element access | bounds-checked (`vec_at` panics, `vec_get` returns None) |
+| Raw pointers, casts, raw memory, foreign calls | only inside `unsafe` (spec §3.3d) |
 
-## 6. The soundness contract
+Integer division and remainder by zero panic with a message; they are not
+undefined behaviour.
 
-This section states precisely what the model guarantees, what it does
-not, and what those guarantees are conditional on. It is the part to
-read before relying on the checker — or before assuming it is Rust.
+## 6. The guarantee
 
-### 6.1 Two layers, two different jobs
+### 6.1 Two layers
 
-Memory safety in NURL rests on **two** mechanisms, and it is worth
-keeping them apart:
+Memory safety rests on two mechanisms:
 
-1. **Auto-drop (§1) is what makes the base safe.** It is conservative
-   by construction: every value has exactly one owner at a time, tracked
-   by a drop flag that a move clears (§7.6); a borrowed value stored into
-   an owner is copied rather than shared. So the compiler **never emits a
-   double-free of its own accord**, for any program, checked or not. This is a structural
-   property, not an analysis result.
-
-2. **The borrow checker (§2) catches the mistakes a *programmer* can
-   still write** on top of that base — consuming a value and reading it
-   again, aliasing two owners onto one buffer, letting a stack
-   reference outlive its frame. It is a flow-sensitive **diagnostic**
-   pass: it emits `error:` and exits non-zero, and it lowers nothing.
+1. **Auto-drop (§1, §7) makes the base safe.** Every value has one owner
+   at a time, tracked by a drop flag that a move clears (§7.6), and a
+   borrowed value stored into an owner is copied. The compiler therefore
+   never releases a value twice of its own accord.
+2. **The ownership rules (§2, §6.2) reject the programs** in which the
+   programmer's code would: a value read after it moved, a borrow used
+   after its source ended, a reference that outlives its frame, state
+   shared between threads without synchronisation.
 
 ### 6.2 The guarantee
 
 **Every program the compiler accepts, outside the bodies of `unsafe`
-functions, is memory-safe and leak-free**: no use after free, no double
-free, no read of a dangling view, no data race on an owned value, and
-nothing it allocated is left unreleased (the panic edge included, §7.2;
-Rc cycles are collected, §7.7). AddressSanitizer and LeakSanitizer stay
-in CI as a check on the *compiler* (§6.6); they are no longer what a
-program's safety rests on.
+functions, is memory-safe and leak-free:** no use after free, no double
+free, no read through a dangling view, no out-of-bounds access, no data
+race, and nothing it allocated is left unreleased, on the panic path as
+much as the normal one (§7.2). Rc cycles are collected (§7.7).
 
-The rules that carry it (docs/SOUND_COMPLETE_PLAN.md has the derivation):
+The rules that carry it:
 
 - **An owned value moves.** Storing it into an aggregate, an Option or a
   container, sending it, returning it, handing it to a `sink` parameter
-  (a function that returns a parameter takes it as `sink`) or capturing
-  it in a closure another thread runs moves it; a later read of the old
-  name — or of a name it moved out of on *some* path — is an error. A
-  value with nothing to release (a struct of scalars, an enum of unit
-  variants) is copied, not moved.
+  or capturing it in a closure another thread runs moves it. A later read
+  of the old name, or of a name it moved out of on *some* path, is an
+  error. A value with nothing to release is copied.
 - **A read that does not take ownership is a borrow.** `vec_get`, a field
-  read, a match payload of a borrowed value, a call result the callee
-  lends (its summary; every argument while the callee is not compiled
-  yet) borrow from their source, and so does a view (`string_data`,
-  `vec_data`). A borrow can be read and passed on, never released,
-  stored as an owner or sent; it ends when a source is moved, released,
-  reassigned or has the field replaced — a view also when its source may
-  reallocate — and any read after that is an error. Borrows of borrows
-  flatten to the owners. `vec_get` and its kin are specified as returning
-  a borrow of the element, so they can become projections into the slot
-  without changing user code.
-- **A container keeps what it is handed.** A view pushed into a Vec,
-  used as a map key or handed to a function that keeps its argument (the
-  callee's keeps / escapes summary, decided after the module when the
-  callee is defined below) lives no longer than its source.
-- **Threads and fibers.** A closure run on another thread moves its
-  captures. Handles whose copy is a share of one object (Channel, Mutex,
-  Arc, HttpServer) are captured as a share of their own, so both sides
-  keep using them and either may end first. Shared mutable state goes
-  through one of those handles — never through a plain Vec two threads
-  hold.
+  read, a match payload of a borrowed value, and a call result the callee
+  lends all borrow from their source. A borrow can be read and passed on,
+  never released, stored as an owner or sent. It ends when its source is
+  moved, released, reassigned, has the field replaced, or is handed to a
+  call that may drop its elements; any read after that is an error. A
+  borrow of a borrow borrows from the original owner.
+- **A view also ends at reallocation.** `string_data` / `vec_data` are
+  views of the buffer and end at any mutation that may reallocate it
+  (§2.10).
+- **A container keeps what it is handed.** A view stored in a `Vec`, used
+  as a map key or handed to a function that keeps its argument may live no
+  longer than its source.
+- **Threads and fibers.** A closure run on another thread or fiber moves
+  its captures. Handles whose copy is a share of one object (`Channel`,
+  `Mutex`, `Arc`, `HttpServer`) are captured as a share of their own, so
+  both sides keep using them and either may end first. Shared mutable
+  state goes through one of those handles (§6.5).
 - **Raw memory only in `unsafe`** (spec §3.3d).
 
-Every verdict is independent of definition order: a question that
-depends on a callee's final summary is parked and answered after the
-module (§6.4).
+`vec_get` and its kin are specified as returning a borrow of the element.
+Every verdict is independent of the order in which functions are defined:
+a question that depends on a callee is answered once the whole module is
+compiled.
 
 ### 6.3 Conservative, with a fix in every message
 
 The rules decide from the program text, so they reject some programs that
-would have run correctly — the price of a guarantee that does not depend
-on the program's inputs. Each diagnostic names the rule, the line where
-the value moved or the borrow ended, and a concrete change that
-satisfies the rule. A program they reject that you believe is correct is
-still worth reporting (https://github.com/nurl-lang/nurl/issues): the
-corpus — compiler tests, examples and every package — is held to the
-rules, and a rejection that has no good fix is a rule to refine.
-
-Because the pass lowers nothing, an accepted program compiles to
-**byte-identical IR** with or without it — which is why turning it on
-left the self-hosting bootstrap fixed point untouched.
+would have run correctly. That is the price of a guarantee that does not
+depend on the program's inputs. Each diagnostic names the rule, the line
+where the value moved or the borrow ended, and a change that satisfies
+the rule. A rejected program that has no reasonable fix is a rule to
+refine: report it at https://github.com/nurl-lang/nurl/issues.
 
 ### 6.4 Trusted computing base
 
-The guarantee in §6.2 rests on a small surface that is trusted, not
-checked:
+The guarantee rests on a surface that is trusted rather than checked:
 
-- **`unsafe` functions.** Their bodies may use raw pointers, raw memory
-  and foreign functions; each one vouches that it is memory-safe and
-  leak-free for every caller. `nurlc --unsafe-report` lists the ones a
-  program contains outside the standard library.
-- **The standard library and the runtime.** Their raw code is the
-  vouched base every safe program stands on, held to the sanitizer and
-  leak gates (§6.6).
-- ~~**Definition order.**~~ **No longer a boundary — every rule is
-  order-independent.** Summaries are built in codegen order, so a check
-  that consults one *inline* sees an empty answer for a callee defined
-  below it, and each rule that could be decided that way now parks its
-  question instead. §2.7 and §2.8 park both the check and the propagation, and
-  resolve them after the module (`resolve_pending_impls`,
-  `resolve_pending_escapes`, `resolve_pending_ret_escapes`). The *sink*
-  check does not miss a **generic** callee either — a generic function's
-  `inout` / `sink` index sets, auto-`sink` included, are derived from the
-  stored template as it is declared, so a call site sees them before any
-  instantiation exists (§1). The *move* half —
-  auto-`sink` (§2.2) and the returned-handle summary `g_fn_ret_alias` —
-  does not depend on order either: a call to a not-yet-compiled callee
-  parks a `pendcall` row, and the whole function's borrow walk is
-  deferred to the end of the module, where both summaries are final.
-  (Deferred rather than repeated: analysing a function twice would
-  report every diagnostic it holds twice.) §2.5 parks its use of
-  `g_fn_mutates` and replays it after the module, so the loop rule does
-  not depend on order either.
+- **`unsafe` functions.** Each one vouches that it is memory-safe and
+  leak-free for every caller. `nurlc --unsafe-report` lists those a
+  program contains outside the standard library, which is the whole
+  surface a reviewer of that program has to trust.
+- **The standard library and the runtime.** Their raw code, the `Rc`
+  cycle collector and the panic journal included, is the base every safe
+  program stands on.
+- **Marker assertions** (`% Send`, `% Sync`, `% NotSend`, `% NotSync`,
+  `% Resource`) on types whose safety the compiler cannot see.
+- **The compiler itself.** A program accepted in violation of §6.2 is a
+  compiler bug (§6.6).
 
-  **§2.10** was the last one that did, and it is the interesting case
-  because its diagnostic fires at a *later read* of the pointer rather
-  than at the call, so there is no single site to park. What is parked
-  is instead the finished *report*, plus the callee it is conditional
-  on: the call kills the pointer **provisionally**, the condition rides
-  inside the stale-set entry (so the `?`/`??` snapshot-restore-union
-  machinery carries it unchanged), and `resolve_pending_stale` prints
-  the report only if the callee's final summary says it mutates. A
-  certain mutation supersedes a parked question, entry and line
-  together, so the report always names the call that really
-  reallocates. Definition order is now unable to change any verdict the
-  model gives.
+### 6.5 Threads, and how this compares to Rust
 
-### 6.5 This is not Rust
+The model uses Rust's vocabulary (move, borrow, readers XOR writer) for
+ideas that are genuinely analogous, but the mechanics differ:
 
-The model borrows vocabulary — *move*, *borrow*, “N readers XOR 1
-writer” — for ideas that are genuinely analogous, but the machinery is
-deliberately simpler and the equivalence does **not** hold:
+- Ownership is single-owner with scope-bound drop. There are **no
+  lifetimes** in types, no lifetime parameters and no lifetime syntax.
+- A borrow cannot be stored in a struct or outlive the call or scope that
+  produced it. Where Rust would store a reference, NURL code stores an
+  owned copy, an `Rc` / `Arc`, or an index into an owning container.
+- `in` / `inout` / `sink` are call conventions resolved per call, not
+  reference types.
+- Leaks are part of the guarantee. Safe Rust permits leaks
+  (`mem::forget`, `Rc` cycles); in NURL `mem_forget` is `unsafe` and `Rc`
+  cycles are collected.
 
-- Ownership is **single-owner with deterministic scope-bound drop**
-  (RAII-shaped), not an affine type system. There are **no lifetimes in
-  types**, no lifetime parameters, and no generic borrow inference.
-- `in` / `inout` / `sink` are **call conventions** (by-value copy /
-  by-address exclusive mutation / by-value consume), not
-  lifetime-polymorphic reference types. They are resolved per call, not
-  threaded through signatures as `&'a`.
-- The checker is a **flow-sensitive diagnostic lint** layered on the
-  auto-drop base, not a total borrow system that *proves* a program
-  safe. Its boundary (§3) is real and intentional, not a TODO list of
-  Rust features pending.
+**Send and Sync.** `Send` ("may move to another thread") and `Sync` ("may
+be reached from two threads at once") are marker traits
+(`stdlib/core/marker.nu`) that the compiler derives structurally over a
+type's whole graph: struct fields, enum payloads, generic arguments,
+aggregate members and closure captures. Two leaves are built in:
 
-Concretely — and this is the comparison that matters — code that
-compiles clean, uses no `*T`, and calls no FFI can still do things
-safe Rust cannot:
+| | Send | Sync | why |
+|---|---|---|---|
+| `Rc` | ✗ | ✗ | the reference count is not atomic |
+| `Cell` | ✓ | ✗ | a raw byte buffer with unsynchronised writes |
+| everything else | ✓ | ✓ | unless a field says otherwise |
 
-1. **Double-free through a forward-declared returning call.** A value
-   freed on one arm of a `?` and then used, or a handle handed to a
-   second name and consumed through both, is an error by default (§2.1).
-   What is not flagged by default is the one handover the walk cannot
-   name the partner of — the result of a call to a function defined
-   further down that may return its argument — consumed through both
-   names: `--strict-borrowck` reports it (§2.9, check 3), at the cost of
-   also flagging the common case where that result is a borrow that
-   never consumes.
-2. **Data-race on shared heap state.** There is a `Send`/`Sync`
-   system, and it is a *lint over types*, not a proof about programs.
-   `Send` ("may move to another thread") and `Sync` ("may be reached
-   from two threads at once") are marker traits
-   (`stdlib/core/marker.nu`) that the compiler **derives structurally
-   over a type's whole graph** — struct fields, enum payloads, generic
-   arguments, aggregate members, closure captures — from two
-   language-level leaves:
+They are checked where a value crosses: `thread_spawn` and `spawn` (every
+capture must be Send), `chan_send` (the value must be Send), and `Arc T`
+(T must be Send and Sync). `[T: Send]` bounds are answered by the same
+derivation.
 
-   | | Send | Sync | why |
-   |---|---|---|---|
-   | `Rc` | ✗ | ✗ | the refcount is not atomic |
-   | `Cell` | ✓ | ✗ | a raw byte buffer, writes unsynchronised |
-   | everything else | ✓ | ✓ | until a field says otherwise |
+A closure's captures are not part of its type, so for closures the
+question is asked of the **value**, followed from where the closure is
+built to where it crosses: through bindings, struct fields, calls that
+return it, other closures that capture it, and parameters of functions
+that spawn or keep it. The error is reported where the value leaves,
+naming the capture and the line the closure was built on. A closure
+whose origin cannot be followed (a `Vec` element, a call through a
+closure value) is rejected where it crosses; build it at the hand-over
+or take it as a parameter.
 
-   The derivation is checked where a value actually crosses:
-   `thread_spawn` and `spawn` (every capture must be Send), `chan_send`
-   (the value must be Send), and `Arc T` (T must be Send **and** Sync —
-   an Arc exists to be shared, so its payload faces the harder
-   question). `[T: Send]` bounds are answered by the same derivation
-   rather than by an impl lookup.
+The derivation can be wrong in two directions, and each has a marker:
+`% Send T { }` / `% Sync T { }` assert safety the compiler cannot see
+(`Mutex` is what makes its contents shareable), `% NotSend T { }` /
+`% NotSync T { }` assert danger it cannot see (a foreign connection
+handle). A negative marker outranks a positive one on the same type.
 
-   A closure's captures are not in its type (`( @ v )` says nothing
-   about what it holds), so for closures the question is asked of the
-   **value**, followed from where it is built to where it crosses. Each
-   closure literal carries a capture set — every capture that is not
-   Send, with its name and the line the closure was built on — through
-   bindings, struct literals, fields read back out, calls that return
-   it, and the capture sets of closures that capture it. A value
-   crosses when a detach runs it, when a callee keeps it inside a
-   thread-shared handle (`chan_send` into a `Channel`, a handler stored
-   in a job or server node, an `Arc`/`Mutex` state built around it),
-   and when it is handed to a parameter that crosses — a function that
-   spawns the closure it is passed makes that parameter a boundary, and
-   every caller's closure is checked against it (to a fixed point over
-   the whole program at module end, so declaration order does not
-   matter). The error is reported at the call where the value leaves,
-   naming the capture and the closure's line; adding a store somewhere
-   else never changes a struct type's verdict, because there is no type
-   verdict — only the values that reach a boundary are judged. A
-   closure whose origin cannot be followed (a Vec element, a join, a
-   call through a closure value) is rejected where it crosses: build it
-   where it is handed over, or take it as a parameter so each caller's
-   is checked.
+**Shared mutation.** A closure run on another thread moves its captures,
+so the spawner cannot keep using a plain `Vec` a worker was handed. Only
+share handles (`Channel`, `Mutex`, `Arc`) are used on both sides. A
+thread that mutates the contents of an `Arc` it did not create, without
+holding a lock, is rejected: `Arc` makes the reference count atomic, not
+the data. Put the data behind a `Mutex`. Whether the lock is held is
+counted over `mutex_lock` / `mutex_unlock` calls, not proved per path
+(§3).
 
-   Because it is structural it is wrong in exactly two directions, and
-   there is a marker for each: `% Send T { }` / `% Sync T { }` assert
-   safety the compiler cannot see (`Mutex` is `{ Cell c }` and is
-   nonetheless what *makes* contents shareable), and `% NotSend T { }`
-   / `% NotSync T { }` assert danger it cannot see (a `sqlite3*` is an
-   `s`, and `s` is Send; the connection is not). A marker impl is
-   NURL's spelling of Rust's `unsafe impl` — an assertion, not a proof
-   — and a negative one always outranks a positive one on the same
-   type.
+### 6.6 How the guarantee is checked
 
-   Separately, a `thread_spawn`/`spawn` closure that mutates the
-   *contents* of an `Arc` it did not create — inline or through a
-   helper — without holding a lock is rejected. `Arc ( Vec i )` shared
-   by two pushing workers segfaulted 5 runs in 8 and silently lost half
-   its updates in the rest, because `arc_get` over a shared-control
-   handle hands back a *copy of the handle* aliasing one buffer. `Arc`
-   makes the *refcount* atomic, not your data — put the data behind a
-   `Mutex` the worker locks itself.
+The guarantee is a property of the rules. The compiler's implementation
+of them is tested continuously:
 
-   These two checks are complementary and neither subsumes the other.
-   Send/Sync answer "may this value cross?", never "is this program
-   race-free": `( Vec i )` is Send and Sync, correctly, because sharing
-   one read-only is ordinary code — two threads *mutating* it is the
-   race the second check catches, at the mutation.
+- **Hole probes.** Every way safe code has been shown to break the
+  guarantee is kept as a program that must be rejected.
+- **Inverse-oracle fuzzing.** Generated programs that violate ownership,
+  nested in every context the language has (`?` / `??` arms, loops,
+  defers, closures, generic bodies, trait methods), must be rejected with
+  the matching diagnostic.
+- **Consistency.** The same situation written in different spellings must
+  get the same verdict, and correct controls must keep compiling.
+- **Sanitizers.** The whole test corpus, the compiler's self-compile and
+  a serving HTTP process run under AddressSanitizer, UndefinedBehavior-
+  Sanitizer and LeakSanitizer and must report nothing. These check the
+  compiler; a program's safety does not depend on running them.
 
-   The parent thread cannot mutate what a worker was handed: a closure
-   run on another thread moves its captures (§6.2), and only a share
-   handle (Channel, Mutex, Arc) is used on both sides. An opaque FFI
-   handle comes out of an `unsafe` binding, whose author vouches for
-   whether it may cross threads (`% NotSend` says it may not); the lock
-   check counts `mutex_lock`/`mutex_unlock` as a lint on top of that.
-
-Integer division and remainder by zero panic with a clear message —
-they are not UB.
-
-So the accurate one-line claim is: **memory-safer than C by
-construction, with the common bug classes machine-checked — not
-memory-safe by proof, and not data-race-free.** Anyone needing the
-latter two guarantees today should reach for Rust; anyone reading a
-"NURL is memory-safe like Rust" claim should be pointed here.
-
-`Send`/`Sync` does not change that sentence. NURL derives both and
-checks them at every thread boundary, but the derivation rests on
-markers a human writes and on leaves the compiler happens to know, and
-an unmarked FFI handle crosses without a word. It removes a large,
-enumerable class of data races — every route by which an `Rc` or a
-`Cell` reaches a worker — and proves nothing about the rest.
-
-### 6.6 The gates — how the guarantees are checked
-
-Everything above is enforced by two CI jobs
-(`.github/workflows/ci.yml`), a diagnostic-coverage harness, a targeted
-leak tool, and a weekly inverse-oracle fuzzer
-(`.github/workflows/fuzz.yml`). This subsection
-is the single source of truth for *what is actually run*; other
-sections point here rather than re-describe it.
-
-**One fact resolves the usual confusion:** on Linux x86-64,
-`-fsanitize=address` **is** the leak detector — ASan integrates LSan and
-runs it at process exit, and `detect_leaks` merely toggles it. So "ASan"
-and "LSan" name the *same* instrumented run with the leak check off or
-on; they are not two separate tools or two separate builds.
-
-1. **Functional gate** — `./build.sh`. The bootstrap fixed point
-   (stage1 ≡ stage2, byte-identical IR) plus the golden-output test
-   corpus (`run_tests.sh`, **no** sanitizers) plus
-   `tools/check_examples.sh` (frontend-compiles every `examples/` /
-   `bench/` / `duo/` program). Catches miscompiles, output regressions,
-   and a broken self-host.
-
-2. **Sanitizer gate** — `./build.sh --san` (runtime + every stage built
-   with `-fsanitize=address,undefined`) then
-   `compiler/tests/run_san_tests.sh`, which links each corpus test with
-   `-fsanitize=address,undefined` and runs it under **ASan + UBSan +
-   LSan** (`detect_leaks=1`, `use_stacks=0`). This is the gate that
-   catches the dangerous classes — use-after-free, double-free,
-   out-of-bounds, undefined behaviour — **and leaks**, across the
-   **whole** corpus; a clean branch is `SAN_FAIL: 0`. It is the gate
-   every claim of "no use-after-free / double-free / leak" in this
-   document refers to. The sanitized compiler that builds each test runs
-   under the same leak check, so a leak in a compiler path only one test
-   reaches (the `select` codegen, say) fails here too.
-
-   It used to run with the leak check **off**, on the expectation that
-   the compiler's process-lifetime structures and tests that exit
-   without freeing a handle would flag. An LSan run over every test
-   showed neither did; the three leaks it found were compiler bugs,
-   fixed in the same change that turned the check on
-   (`guard_reassign_owned`, `ret_moved_owned`). `LSAN_DETECT_LEAKS=0`
-   still gives a memory-safety-only pass locally.
-
-3. **Diagnostic-coverage gate** — `tools/metamorph/spellings.py`, in
-   the build-test job. Not a memory gate but a *consistency* one: it
-   writes the same semantic situation N ways and requires the same
-   verdict from the checker for all of them, across sixteen classes
-   (handle-second-name, use-after-free, loop-carried-free,
-   iterator-invalidation, arc-shared-mutation, thread-nonsend /
-   -nonsync, option-payload-type, invalid-input, intraproc-escape,
-   ret-escape, escape-into-callee, aliased-mutation, stale-borrow,
-   raw-ptr-escape, forward-callee-move) plus a
-   `controls` class of correct programs, which must keep compiling. Its
-   baseline (`known_gaps.json`) is **empty**: any new gap fails.
-   It carries a second, **runtime** axis for the one part of the model
-   no compile verdict can answer: the panic-unwind journal (§7.2) is a
-   mechanism, not a diagnostic, so the `panic-reclaim` class asks
-   instead whether the same abandoned allocation — spelled nine ways
-   inside a recover extent (a `?` arm, a `??` arm, a loop body, two
-   frames deep, a nested extent, a second extent after the first, an
-   escaped value the journal must *not* free) — comes back clean under
-   LSan. It runs in the sanitizers job, where the `--san` build has
-   already produced the instrumented runtime it needs, and it skips
-   *loudly* without one. It runs with `use_stacks=0`: with the default,
-   an allocation whose only owner is a live `main` frame reads as
-   "still reachable", and a deliberately-leaking control passed — the
-   oracle was mutation-tested in both directions (a leak reads `leak`,
-   a double free reads `crash`) before being trusted.
-
-   It also checks one invariant on every accepted program, whatever its
-   class: the emitted module must pass `llvm-as`. A disagreement is not
-   assumed to be a bug — `--verify` rebuilds the accepted-but-suspect
-   program with `--no-borrowck`, stamps `sanitize_address` on the
-   generated IR (which hand-written IR does not carry, and without which
-   ASan sees only the runtime's own allocations) and runs it with
-   `detect_stack_use_after_return=1`, which is exactly the failure mode
-   a dangling closure has.
-
-4. **Leak verification beyond the corpus** — gate 2 holds every test
-   leak-clean; two more checks cover what a test program does not:
-   - `tools/leakcheck/run.sh` — an end-to-end gate that builds the HTTP
-     server with ASan+LSan (`detect_leaks=1`), serves 21 requests, and
-     fails on *any* leak; it locks the per-request leak class
-     (None-placeholder allocations, the keepalive-500 response, and
-     router/handler closure envs).
-   - `tools/leakgate.sh` — the self-compile. `nurlc compiler/nurlc.nu`
-     under `detect_leaks=1` must report nothing at all. This is the
-     largest NURL program there is, so it exercises the ownership rules
-     at a density no test does; the July 2026 campaign took it from
-     2,793,226 leaked allocations / 33.4 MB to zero (peak RSS
-     115.9 → 18.5 MB) and this is what holds the line. Zero tolerance
-     by design: unlike the RSS gate there is no budget to raise, because
-     the number a leak gate accepts is zero.
-
-   Both are wired into `ci.yml`: `tools/leakcheck/run.sh` runs in the
-   build-test job, and `tools/leakgate.sh` runs in the sanitizers job —
-   reusing its `--san` build, and only when `compiler/nurlc.nu` itself
-   changed. So a leak regression fails CI, not just a manual audit.
-
-5. **Inverse-oracle fuzzing** — `tools/fuzz/genreject.py`
-   (`FUZZ_GEN=reject`), in the weekly `fuzz.yml` run rather than on every
-   PR, because its value is breadth over time. Gates 1–4 ask whether an
-   *accepted* program behaves; this one asks the question a checker is
-   actually judged on — does an **invalid** program get caught? It crosses
-   a set of violation cores (alias double free, one binding freed twice,
-   use after move, `String` double free, loop-carried free, iterator
-   invalidation) with every context the language offers (`?` arms, `~`
-   loops, foreach bodies, bare blocks, `;` defers, `??` arms, helpers,
-   generic bodies, trait methods, closure bodies) and nests them. The
-   oracle is the **diagnostic marker**, not the exit status: the compile
-   must fail *and* carry the message that violation deserves, so a
-   rejection for an unrelated reason does not count. A missed rejection is
-   the one failure mode nothing else here catches — the program compiles,
-   runs, and corrupts the heap. Its first sweep (0.53.0) found exactly
-   that in two contexts, a `??` arm and a closure body, and its first
-   *weekly CI* run found a third: a `;` defer body, in every context that
-   arms the defer only conditionally (a `?` arm, a `??` arm, a `~` body,
-   a foreach body). A defer body is not analysed where it is written but
-   replayed at function exit, and only a site the exit state showed as
-   definitely armed was replayed — the `?` join weakens that arming to
-   maybe, a `??` arm discards it, a loop drops it as loop-local, so those
-   bodies were never walked at all. Arming is conditional; the body is
-   not, so a site the exit replay does not reach is now swept from an
-   EMPTY state (the `??`-arm rule above), tracking only the bindings the
-   body itself declares. All three are analysed now, and 400 seeds at
-   depth 4 are clean.
-
-## 7. Leaks versus memory safety
-
-A leak is **not** a memory-safety violation: no use-after-free, no
-double-free, no undefined behaviour — just memory the process never
-returns. The checked classes (§5) are all memory-*safety*; leaks are a
-separate axis.
-
-The contract is sharp: **the compiler never leaks an allocation it
-owns.** Everything auto-drop owns is freed at scope exit on the normal
-path (§7.1) and reclaimed across a `panic` unwind too (§7.2) — so there
-are *no known compiler-owned leaks*. What is left to you is raw memory
-(§7.4) — `nurl_alloc` behind a pointer, and what `mem_forget` hands over
-— freed by you exactly as C requires `free` for `malloc`. Used per that contract, programs are leak-free. There is
-no "leaks by design" tier here — only "the compiler's job" and "your
-job", with the boundary drawn precisely below.
+## 7. Release of memory
 
 ### 7.1 Ordinary code does not leak
 
-In straight-line code, across `?` / `??` branches, and through loop
-bodies, auto-drop is exhaustive: owned strings, owned slices, `Drop`
-values, and **owned struct fields — including fields nested inside
-inner struct literals** — are all freed at scope exit, and a binding
-declared in a `?` / match / loop arm that *falls through* (no `^`) is
-dropped at arm end, not leaked. The leak-checked corpus holds these
-behaviours leak-clean — `struct_nested_field_drop`, `arm_local_drop` and
-`arm_local_trailing_drop` pin them specifically (§6.6). Do **not** treat
-them as open limitations.
+Auto-drop is exhaustive in straight-line code, across `?` / `??`
+branches and through loop bodies: owned strings, slices, `Drop` values,
+closures, library handles and owned struct fields at any nesting depth
+are released at scope exit. A binding declared in an arm that falls
+through is dropped at the end of the arm.
 
-This holds with `;` **defers** in the function too: values registered
-before a defer statement (which its body may reference) are reclaimed
-in the function's cleanup block *after* the defer chain runs; values
-registered after it drop at their normal scope exits. Pinned by
-`defer_drop_reclaim`, `defer_scoped`, `defer_ret_transfer` (spec
-§5.3 has the full semantics, including the one documented leak seam:
-a pre-defer owned value returned on one path but not another leaks on
-the non-returning path — never a double free).
+`;` defers are covered as well. Values registered before a defer (which
+its body may use) are released after the defer chain runs, and values
+registered after it at their normal scope exits. An owned value returned
+on one path and not on another is released on the path that does not
+return it (spec §5.3).
 
-### 7.2 The panic-unwind allocation journal
+### 7.2 Panics
 
-A panic `longjmp`s straight to the recover frame, skipping every
-scope-exit drop the compiler queued between (§3). Historically that
-leaked any owned allocation made inside the extent. An **allocation
-journal** closes that gap without exception tables. It belongs to the
-thread outside fibers and to the fiber inside one: the scheduler hands a
-fiber its own journal and recover-frame chain on every switch, so fibers
-interleaving on a worker (or moving between workers) never see — or
-drain — each other's extents (`compiler/tests/recover_fiber_interleave.nu`,
-`fiber_migration_tls.nu`).
+A panic jumps to the nearest `recover` frame without unwinding through
+the frames in between. Their drops are performed by an **allocation
+journal** instead:
 
-- While a `recover` frame is active, the compiler records every owned
-  auto-drop allocation it registers, in one of two forms:
-  - a **raw buffer** (`nurl_journal_push`) for an owned string
-    (`nurl_str_cat` / `nurl_read_file` / …), an owned slice
-    (`[ T | … ]`), or each owned **struct-field buffer** (a fresh
-    string/slice field of a `@ T { … }` literal). The journal holds the
-    raw pointer; `nurl_free` — the single choke point every auto-drop
-    release flows through — removes it again, so a value freed normally
-    before the panic leaves no entry (no stale-slot hazard) and an
-    aliased buffer is freed once.
-  - a **frame table** for a function's owned string *bindings*: one
-    `[n+1 x ptr]` per function, registered once at entry
-    (`nurl_journal_push_drop2(table, null, nurl_jframe_drop)`) and
-    forgotten before every `ret`. A binding's entry points at its slot
-    once the slot holds an owned value — one store, no hashing. A slot
-    holds exactly what its scope exit will free (a hand-off to a callee
-    nulls it, a release nulls it), so the drain frees each registered
-    slot's current value. A value that leaves through a struct is
-    `nurl_journal_disown`ed: its pointer entry is forgotten and every
-    frame slot holding it is unregistered. The drain records what it
-    frees and skips a second free of the same address, which stands in
-    for the alias removal a pointer entry gets from `nurl_free`.
-  - a **raw `sink` parameter** taken over from the caller: the callee
-    registers it as a raw buffer at entry, under the same module-end flag
-    that decides the caller's hand-off (`@.__nurl_argtransfer.<n>`), so a
-    panic between the hand-off and the callee's own free reclaims it.
-  - a **typed destructor** (`nurl_journal_push_drop`) for a value with a
-    `% Drop` impl or a heap-boxing autodrop enum. The journal holds the
-    value's *alloca* and a generated `__jdrop_<T>` thunk that loads and
-    runs the destructor; the compiler `forget`s the entry wherever that
-    destructor runs on the normal path (scope exit, branch/loop arm,
-    move-out), so a value dropped before the panic is never re-dropped.
-- On a panic, `nurl_panic` drains the entries recorded since the target
-  recover frame's mark — the allocations still live, neither freed nor
-  escaped — *before* the `longjmp`, while the owning C frames are still
-  valid: a raw entry is freed, a typed entry runs its `__jdrop` thunk.
-- A value that **escapes** the extent — assigned into a by-ref-captured
-  caller binding (the `= resp ( f req )` typed-return pattern) — has its
-  heap leaves (and, for a moved `% Drop` value, its alloca entry)
-  *forgotten* from the journal at the assignment, so the drain never
-  frees what the caller now owns.
+- While a `recover` frame is active, every owned value registered in a
+  frame inside it is recorded: raw buffers (owned strings, slices, struct
+  field buffers), owned bindings together with their drop flags, `sink`
+  arguments taken over from the caller, and values with a typed drop.
+- A value released normally, or moved out of the extent (assigned into a
+  binding the caller owns), is removed from the journal, so the journal
+  never releases something twice or releases what the caller now owns.
+- On a panic, the values still recorded since the target frame's mark are
+  released before the jump, while their frames are still valid.
 
-The journal supports owned strings, slices, struct-field buffers and user
-`% Drop` / autodrop-enum values. Its recovery marks are registration sequence
-numbers, so removing an outer owner or compacting the entry array cannot move
-a new inner owner outside its recovery extent. A pointer index makes normal
-removal proportional to one hash bucket, with amortized compaction and growth;
-normal frees do not scan every live allocation. Registrations are removed
-before invoking a destructor, which may itself forget another owner or enter
-a nested recovery scope.
+The journal belongs to the thread outside fibers and to the fiber inside
+one. The scheduler switches it with the fiber, so fibers sharing a worker,
+or moving between workers, never drain each other's extents. Functions
+that cannot reach a panic do not register anything and pay nothing.
 
-String argument temporaries use the callee's completed parameter summaries.
-An integer result can preserve an input buffer's address through casts,
-arithmetic, locals, assignments or calls, so a scalar return type alone is
-not evidence that the caller may free that buffer. The dependency graph keeps
-loop and forward-call origins until the module reaches a fixed point. Named
-arguments use their declared parameter position. A forward result used directly
-as an argument captures its dynamic ownership proof before another call runs.
+### 7.3 What a panic does not reclaim
 
-This relies on the compiler registering each ownership obligation correctly.
-`recover_unwind`, `recover_reassign_temps` and `recover_frame_strings` pin
-reclamation on their covered paths; `tools/tests/test_panic_journal.py` also compares generated nested scopes
-with an independent ownership model. Known gaps in forward string-return and
-argument ownership remain tracked in [the hardening ledger](dev/V1_HARDENING.md).
-Where in the extent the allocation was made does not change that either:
-the `panic-reclaim` class (§6.6) enumerates the spellings — a `?` arm, a
-`??` arm, a loop body, two frames deep, a nested extent, a second extent
-after the first — and requires all of them to come back clean under the
-same `use_stacks=0` leak check the whole corpus runs with.
-Single-owner scalars and slices are captured *by value* by a closure, so
-they cannot
-escape a recover extent by reference and need no forget; only multi-field
-structs (and the `% Drop` move) can, which the escape-forget covers.
-
-### 7.3 What a panic does **not** reclaim
-
-Only **manually-managed memory** (§7.4) — raw `nurl_alloc` blocks and
-what `mem_forget` hands over — survives a panic unfreed, because it is
-never auto-dropped in the first place: *you* free it. A panic that abandons one mid-scope leaks it exactly as
-forgetting its free would — no different from the manual-handle contract
-everywhere else. The mitigation is the same as any manual resource: hold
-it in the *caller's* frame (the `: ~` by-ref-capture pattern
-`stdlib/std/panic.nu` documents), not in the scope the panic abandons.
+Raw memory managed by an `unsafe` function (§7.4) is never auto-dropped,
+so a panic that abandons it mid-scope leaks it, exactly as omitting its
+`nurl_free` would. An `unsafe` function that holds raw memory across a
+call that may panic keeps it in the caller's frame (`stdlib/std/panic.nu`
+shows the pattern).
 
 ### 7.4 Manually-managed memory
 
-What the compiler does not own is memory a program allocates as raw
-bytes — `nurl_alloc` behind a `*T`, a buffer reached only through a
-pointer — and what it deliberately hands over with `( mem_forget x )`.
-Those are released by the program (`nurl_free`). `Vec`, `String`, the
-structs that hold them and closure envs are not on this list: they are
-dropped by their owners (§7.5, §7.6). A value passed to a **`sink`**
-parameter is the callee's to drop or free.
+The compiler does not track memory allocated as raw bytes (`nurl_alloc`
+behind a `*T`) or a value given up with `mem_forget`. Both are possible
+only in `unsafe` code, which releases them with `nurl_free`. Nothing else
+is managed by hand: `string_free`, `vec_free` and the other release calls
+on compiler-managed values and handles are optional early releases.
 
-`vec_free` / `vec_free_with` / `string_free` stay available as an early,
-explicit release: they clear the binding's drop flag, so the value is
-released once. The checker still tracks these moves — a `vec_free`d
-`Vec`, or a `sink`-consumed value, cannot be used again (§2.1).
-
-The standard library keeps nothing on this list for its users: every
-type it hands out releases itself. Opaque state lives behind a library
-handle over an rcbox (`stdlib/core/rcbox.nu`: `[ owners ][ T ]`, the last
-owner drops `T`) — `Mutex`, `Channel`, `Regex`, `Rng`, `Bitset`, the
-QUIC / HTTP/3 / HTTP/2 connection state, the dist `Ring` / `LeaseTable`,
-`ProcChild` and the rest — so every copy (a struct field, a `Vec`
-element, a closure capture, `T_share`) is the same object and the last
-one releases it. A `ProcChild`'s last owner shuts its child down as
-`proc_free` always did (pipes closed, SIGTERM, a 500 ms grace, SIGKILL,
-reaped); a lazy iterator chain (`stdlib/std/iter.nu`) is released with
-the outermost closure, consumed or not. Their `*_free` functions remain
-as optional early releases of one owner.
+Everything the standard library hands out releases itself. Opaque state
+lives behind a library handle over a counted block (`stdlib/core/rcbox.nu`:
+`[ owners ][ T ]`, the last owner drops `T`): `Mutex`, `Channel`,
+`Regex`, `Rng`, `Bitset`, `File`, `TlsConn`, the QUIC and HTTP connection
+state, `ProcChild` and others. Every copy (a struct field, a `Vec`
+element, a closure capture, `T_share`) is the same object, and the last
+one releases it. The last owner of a `ProcChild` shuts the child down
+(pipes closed, SIGTERM, a short grace period, SIGKILL, reaped); the last
+owner of a thread handle detaches it unless it was joined. The `*_free` /
+`*_close` functions remain as an early release of one owner.
 
 ### 7.5 Closure environments
 
-A capturing closure `\ → … x …` is a value `{ fn, env }` whose env is one
-heap block. That env is **owned by exactly one place at a time, and that
-place drops it** — there is no escape hatch and no hand-written free:
+A capturing closure is a value `{ fn, env }` whose environment is one
+heap block. The environment is owned by exactly one place at a time,
+which drops it:
 
-| Where the closure is kept | Who drops the env |
+| Where the closure is kept | Who drops the environment |
 |---|---|
 | a `:` binding | the binding, at scope exit (each iteration in a loop) |
-| a closure literal or call result passed straight to a call | the call site, right after the call — unless it went into an aggregate literal first (`( keep @ S { \ → … } )`): then the aggregate owns it |
-| a statement whose value is thrown away | that statement |
-| the result of a function returning a closure | the caller — every return path hands over an env the caller owns |
-| a struct field (literal, `= . s f …`, a returned struct) | the struct, with its other owned fields — its drop graph, wherever the struct goes (a `Vec`, a return, another struct); a copy of the struct copies the env |
-| a slice of closures `[( @ … ) \| …]` | the slice, element by element |
-| another closure's captures | that closure's env (nested envs form a tree) |
-| a `?` / `??` join | whatever consumes the join, like a call result |
-| a spawned fiber, a thread, a signal handler, a sqlite authorizer | the runtime, which keeps its **own copy** |
+| a closure or call result passed straight to a call | the call site, right after the call, unless it went into an aggregate literal first |
+| a statement whose value is discarded | that statement |
+| a function result | the caller |
+| a struct field | the struct, with its other fields; copying the struct copies the environment |
+| a slice of closures | the slice, element by element |
+| another closure's captures | that closure's environment (nested environments form a tree) |
+| a `?` / `??` join | whatever consumes the join |
+| a fiber, a thread, a signal handler, a sqlite authorizer | the runtime, which keeps its own copy |
 
 Two rules make this sound without reference counting:
 
 - **A place that keeps a closure it did not create stores a copy.**
-  `nurl_closure_clone` copies the env block (and, through the env's
-  descriptor, the envs of closures it captured). So a callee only ever
-  *borrows* its closure arguments: one that stores the closure into a
-  struct, captures it, spawns it or returns it keeps a copy, and the
-  caller's closure stays the caller's. Spawning one closure a hundred
-  times, or letting it go out of scope right after `spawn`, is correct.
-  A **`sink`** closure parameter is the exception: the callee takes the
-  closure over. A temporary handed to one moves in (the call site does not
-  drop it), a binding is handed a copy and stays its owner's, and the
-  callee drops what it took unless it moves it on — returned, or captured
-  by a closure it returns (`iter_map ( iter_range 0 n ) f` builds its chain
-  without copying it).
-- **A move clears the source on its own path only.** `: h g` / `= h g`
-  hand `g`'s env to `h`, and `^ g` hands it to the caller; each binding
-  has a hidden owner slot, and the move stores null into `g`'s slot on
-  that path, so a path that did *not* move `g` still drops it.
+  `nurl_closure_clone` copies the environment and, through its
+  descriptor, the environments of closures it captured. A function that
+  stores, captures, spawns or returns a closure argument keeps a copy,
+  and the caller's closure stays the caller's. A `sink` closure parameter
+  is the exception: the callee takes the closure over.
+- **A move clears the source on its own path only.** `: h g`, `= h g` and
+  `^ g` hand `g`'s environment on; a path that did not move `g` still
+  drops it.
 
-Every env's first word points at a compiler-emitted descriptor
-`{ size, drop, clone }`; `drop` / `clone` are null unless the closure
-captured other closures. `nurl_closure_drop` (null-safe) is what every
-owner calls.
+Every environment starts with a pointer to a compiler-emitted descriptor
+`{ size, drop, clone }`. `nurl_closure_drop` (null-safe) is what every
+owner calls. Releasing an environment by hand is a compile error.
+`unsafe` code that hands an environment to C and needs it past the call
+keeps a `nurl_closure_clone` and releases that with `nurl_closure_drop`.
 
-Freeing a closure's env by hand — `( nurl_free # s # *u f 1 )`, or through
-a `: *u e # *u f 1` local — is a compile error when `f` owns its env or is
-a parameter: either way someone else drops it. Code that hands a raw
-`( # *u f 1 )` env to C and must keep it past the call keeps a
-`nurl_closure_clone` of it and releases that with `nurl_closure_drop`
-(stdlib/ext/sqlite.nu's authorizer is the pattern). Heap structures built
-from raw pointers (`*RouteImpl` and friends) own the closures stored into
-them — a field store of a closure stores a copy — and release them with
-`nurl_closure_drop` when the structure is freed.
+A closure run by a thread or fiber moves the bindings it captures into its
+environment (§6.2); share handles are captured as a share of their own.
 
-A closure a thread or a fiber runs (a literal handed to `thread_spawn` /
-`spawn`, or a binding the function later hands to one) takes over the
-String / Vec / handle bindings it captured that the rest of the function
-never names again and that no loop around it captures again: they move
-into its env, and the runtime's copy owns its own. A captured binding still
-named later — a Vec the threads fill for the spawner — stays shared.
+**Closure parameters are always borrowed.** A call through a closure value
+cannot see what the body does with its arguments, so the contract is
+fixed:
 
-**A closure's parameters are always borrowed.** A call through a closure
-value cannot see what the body does with its arguments — `( @ R P )`
-carries no ownership summary, and one closure type has many bodies — so
-the contract is fixed instead of inferred:
+- the caller keeps what it passes and drops a temporary it made for the
+  call right after it;
+- what the body stores or returns is a copy, and every closure result is
+  owned by its caller;
+- releasing a parameter inside the body is a compile error.
 
-- the caller keeps what it passes, and drops a temporary it made for the
-  call (`( f ( string_from … ) )`) right after it;
-- what the body stores (`vec_push`, a field, a struct literal) or hands
-  back (`^ p`, a field of `p`, a join over parameters, the fall-off tail)
-  is a **copy** — and every closure result is its caller's own;
-- releasing a parameter (`( string_free p )`, any `sink` slot) is a compile
-  error: the caller would release it again.
+Accordingly, every `*_free_with` (`vec_free_with`, `box_free_with`,
+`rc_free_with`, `arc_free_with`, `btree_free_with`, …) *lends* each
+element to its hook and then drops the container as `*_free` does. A hook
+is for teardown the element type does not do itself (counting, logging,
+closing a foreign handle), never for releasing what the container owns.
 
-So every `*_free_with` (`vec_free_with`, `box_free_with`, `rc_free_with`,
-`arc_free_with`, `btree_free_with`, …) **lends** each element to its hook
-and then drops the container as `*_free` does, elements included. A hook is
-for teardown the element type does not do itself — closing a raw C handle,
-counting, logging — never for releasing what the container owns.
+A `String` or `Vec` captured by value is a snapshot the body may modify
+locally: an assignment to it is discarded when the closure returns (the
+compiler warns), and the assigned value is dropped then.
 
-A String / Vec captured **by value** is a snapshot the body may scratch:
-it borrows the env's value, and an assignment over it is discarded when
-the closure returns (the compiler warns). The value so assigned is the
-invocation's own and is dropped then.
+### 7.6 Drop flags, handles and copies
 
-What is not covered: a closure inside an option / result payload or an
-enum variant (those follow the manual-handle rules of the payload), and a
-generic container instantiated with a closure element type (`Vec` of
-closures does not compile).
+**Drop flags.** Every owning binding carries a drop flag, and its drop is
+gated on it, so a value leaves its binding exactly once whichever way it
+goes:
 
-### 7.6 Drop flags
-
-A value whose type has a `% Drop` impl (a user one, or a compiler-auto
-enum) is dropped by the binding that owns it at scope exit. Each such
-binding carries a **drop flag** — an `i1` beside its alloca — and every
-drop is gated on it, so a value leaves its binding exactly once whichever
-way it goes:
-
-- `: b a` / `= b a` over a binding that owns its value **move** it: `b`
-  takes `a`'s flag and `a`'s is cleared on that path. Over a binding that
-  does not own one (a parameter, a borrowed local) `b` borrows too.
-- A value from a borrowing call (`vec_get`, an accessor that returns what
-  a parameter holds) is borrowed; a constructor's result is owned.
-- A `sink` argument clears the caller's flag, and the callee owns the
-  value: it drops it on the way out unless it moved it on. A parameter
-  consumed only by *inference* (it is handed to a sink further down) is
-  decided by the same module-end summary the call sites use.
+- `: b a` / `= b a` over an owner moves the value: `b` takes `a`'s flag
+  and `a`'s is cleared on that path. Over a binding that does not own its
+  value (a parameter, a borrow) `b` borrows too.
+- A value from a lending call (`vec_get`, an accessor returning what a
+  parameter holds) is borrowed; a constructor's result is owned.
+- A `sink` argument clears the caller's flag, and the callee drops the
+  value unless it moves it on.
 - `= a ( make … )` drops the value `a` held first.
-- A **disposer** — the function a Drop impl hands its receiver to, such as
-  a `release sink T x` that frees `x`'s parts by hand — never drops that
-  parameter itself; otherwise the drop would call the Drop impl again. The
-  compiler learns this from the Drop impl, at module end.
-- **Drop glue.** A Drop impl releases what only it knows how to (a raw
-  `s` buffer, an OS resource); the fields the compiler manages — `String`,
-  `Vec`, library handles, values with a `% Drop` of their own — are dropped
-  after it returns, as a Rust `Drop`'s fields are (`drop_glue__<T>`). A
-  field the impl released by hand is emptied in the parameter and skipped;
-  an impl that hands its value to a disposer leaves the fields to it. A
-  raw `s` field of a Drop type is the impl's alone: the compiler does not
-  free it as an owned struct field.
-- A `% Drop` type is dropped by its impl wherever it lives — a local, a
-  `Vec` element, a struct field. A struct holding one is **move-only** (it
-  cannot be copied, so it is not a handle) and gets a compiler-written
-  drop that drops its fields, running the impl of each Drop one.
 
-Before the flags, `: T b a` registered both bindings and dropped the value
-twice, a `sink` parameter rejected Drop values outright, and a reassigned
-binding leaked what it held. `compiler/tests/drop_flags.nu` pins every
-shape.
+**Drop glue.** A `% Drop` impl releases what only it knows how to (a raw
+buffer, an OS resource). The fields the compiler manages (`String`,
+`Vec`, library handles, values with a `% Drop` of their own) are dropped
+after it returns, as a Rust `Drop`'s fields are. A field the impl
+released by hand is emptied and skipped. A raw `s` field of a `Drop` type
+belongs to the impl alone. A function a `Drop` impl hands its receiver to
+(a disposer) never drops that parameter itself.
 
-**String, Vec and owning structs.** `String`, `Vec T` and every plain
-struct whose fields own a `String` / `Vec` (or such a struct) are dropped
-the same way, through `drop__String`, `drop__Vec__<T>` (which drops the
-elements) and `drop__<S>` from the drop graph. A struct with an enum or
-trait-object (`%Trait`) field is move-only and gets the compiler-written
-field-by-field drop described above (the `%dyn` object's synthesized Drop
-counts as a Drop impl for that purpose); a struct with a `% Drop` of its
-own keeps its impl. A `( dyn Trait v )` box OWNS `v`: boxing an owned
-local moves it in, boxing a borrowed value (a parameter, a field) copies
-it, and a `%dyn` built right in a call's argument is dropped as a whole
-after the call (`compiler/tests/dyn_box_owns_value.nu`). These
-handles are freely aliased, so their bindings follow a few more rules:
+A `% Drop` type is dropped by its impl wherever it lives: a local, a
+`Vec` element, a struct field. A struct holding one is move-only and gets
+a compiler-written drop of its fields. A struct with an enum or
+trait-object field is move-only in the same way. A `( dyn Trait v )` box
+owns `v`: boxing an owned local moves it in, boxing a borrowed value
+copies it.
 
-- **Cursors.** `: cur root` borrows: `root` keeps its value and `cur`
-  remembers whom it borrows (a may-alias set). Consuming the cursor (a
-  `sink`, a store) consumes that value; returning a cursor over a
-  parameter lends the parameter back. Reassigning an owner while a cursor
-  still holds its value (`= old_r r = r nr`, a Euclid rotation) hands the
-  value to the cursor instead of dropping it — decided at run time by the
-  identity of the value's buffer. A source from an inner scope (`= m mp`
-  in a loop body) moves instead.
-- **Stores move.** A value stored into a struct or enum literal, a field,
-  or an element (`vec_push`'s `= . data len x`) leaves its binding. A
-  parameter stored that way is **kept** (`g_fn_keeps`): its caller hands
-  the value over, through module-end constants like a `sink`'s, without
-  it becoming a borrow-checker move. A parameter stored into a heap
-  object this function allocated is kept only if that object is not
-  freed here (scratch state such as `inflate_stream`'s `*InflState`
-  borrows).
-- **Borrowed values are copied into owners.** A borrowed `String` / `Vec`
-  / owning struct — a `?? ( vec_get … )` payload, a field read, a join —
-  stored into a literal, a field of a value, or an argument its callee
-  stores (`g_fn_stores`) is deep-copied (`nurl_vec_clone`,
-  `__nurl_clone_<T>`), so the new owner and the old never free the same
-  buffer. A literal that is returned as is lends instead (`vec_get`'s
-  `^ @ ?A { T x }`), and so does a field written back where it was read
-  (`: item . p k … = . p k item`).
-- **Fields.** A field of an owned struct handed to a consumer
-  (`( string_free . kr key )`) is zeroed in the struct, so the struct's
-  drop skips it. A field returned out of a struct this function owns is
-  copied (or, into a returned literal, moved and zeroed); a field of a
-  parameter is taken when the function consumes the parameter anyway and
-  lent when it does not, settled at module end (`retlend##`).
-- **Call results.** Whether a call hands back an owned value or a view of
-  an argument is read from the callee's `@.__nurl_retown` constant once
-  every return summary is final, so a forward or recursive callee is
-  answered correctly.
-- **Per-call answers.** A function that lends on some paths and hands
-  over a fresh value on others answers per call (`@.__nurl_retdyn`, a
-  thread-local bit read right after the call). Every consumer takes that
-  bit: a `:` binding (of a handle or an owning struct), a `?` join of two
-  calls (a phi of their bits — for an owning struct too), a store, a
-  `??` over the call. A static "lends" summary alone would leak each
-  fresh result; a static "owned" would free what was lent.
-- **Values that cannot be copied.** A `% Drop` value with no Clone (a
-  sqlite `Database` or `Statement`, a handle) read out of a parameter's
-  field (`^ . h db`) or bound as the payload of `?? . st db` is lent: the
-  caller or the arm does not drop it — its owner still holds it. Such a
-  value answers per call like any other, so a function may lend one on
-  one path and open a fresh one on another (a per-operation connection
-  handed out of a store). Where a copy would be needed — stored into an
-  owner, handed to a callee that keeps it — compilation stops with an
-  error naming the type: there is no second value to give. A struct field
-  `?T` of such a type is dropped with its struct (tag, then T's drop).
-- **Joins.** A `?` / `??` that yields a `String` / `Vec` hands its
-  binding whatever the chosen arm owned — a payload or arm-local moves
-  out, a fresh call or literal is owned — through a phi of per-arm
-  ownership bits; an arm that yields an outer binding lends it. A fresh
-  `? T` / `! T E`'s payload is owned by the arm that binds it.
-- **Option bindings.** `: ?String o ( f )` owns its payload and drops it
-  at scope exit (registered under a named twin `%__opt.<T>`, since the
-  drop registry is a space-separated list). A `?? o` payload is a cursor
-  over `o`: freeing, storing or returning it takes `o`'s ownership along,
-  and moving it into an outer binding takes it over before `o`'s scope
-  ends.
-- **Returns.** A returned local binding that turns out not to own what
-  it holds (it borrowed another local through a join, or read an element
-  through a pointer) is copied on the way out, so the caller always owns
-  the result.
-- `( mem_forget x )` gives up `x`'s value — for a hand-written disposer
-  (`vec_free`, `string_free`) and for a table kept in a global for the
-  program's lifetime.
-- `( mem_take x )` is its dual: `x`, read out of a container by hand,
-  owns that value from here on because the container gave it up
-  (`vec_pop`, `vec_remove`, `deque_pop_front` after shortening their
-  buffer). It is dropped at scope exit and moved when stored or returned.
-- `( mem_put_back x )` marks the next store of `x` through a pointer as a
-  write-back: `x` was read out of that slot (a getter), updated, and goes
-  back as is — neither copied nor taken over; the container still owns
-  it. For getter / setter pairs over a container's elements.
-- A `! T E` binding whose `T` is a `String` or `Vec` (and whose `E` owns
-  nothing) is dropped like a `? T` binding.
-- `( mem_dup x )` is an owned copy of `x`'s value — deep for a `String`,
-  a `Vec`, a library handle or an owning struct / enum, the value itself
-  for anything that owns nothing. It is how a generic container copies
-  elements it knows nothing about (`HashMap_clone`).
+**Handles.** `String`, `Vec T`, owning structs, owning enums (`Json`,
+`TomlValue`), Options and results that own memory, and library handles
+are dropped, moved and copied by the same rules:
 
-**Containers drop their elements.** `vec_free` / `vec_clear` drop the
-elements (and `vec_append` moves them from one Vec onto another; the
-bitwise `vec_extend` is for elements that own nothing). An element
-consumed through `vec_get` / a foreach binding / a field read through a
-pointer is emptied in its slot, so the container's drop skips it — a
-field of such an element too (`( string_free . f path )` on a `vec_get`
-payload empties that field in the slot).
+- **Cursors.** `: ~ cur root` borrows `root`. Consuming the cursor
+  consumes `root`'s value; reassigning the cursor releases nothing.
+- **Stores move.** A value stored into a literal, a field or a container
+  element leaves its binding. A parameter stored that way makes the
+  function keep its argument, which the caller hands over like a `sink`.
+- **Borrowed values are copied into owners.** A borrowed value (a `vec_get`
+  payload, a field read, a join) stored into a literal, a field or a
+  keeping parameter is deep-copied, so the new owner and the old never
+  share a buffer. A literal returned as is lends instead, and so does a
+  field written back where it was read.
+- **Fields.** A field of an owned struct handed to a consumer is emptied
+  in the struct, so the struct's drop skips it. A field returned out of a
+  struct this function owns is copied (or moved, into a returned
+  literal).
+- **Call results.** Whether a call returns an owned value or a borrow of
+  an argument is taken from the callee's summary. A function that lends
+  on some paths and returns a fresh value on others answers per call, at
+  run time.
+- **Values that cannot be copied.** A `% Drop` value with no clone (a
+  sqlite `Database`, a `Statement`) read out of a parameter is lent.
+  Where a copy would be needed (stored into an owner, handed to a keeping
+  callee), compilation stops with an error naming the type.
+- **Joins.** A `?` / `??` yielding an owning value hands its binding what
+  the chosen arm owned; an arm that yields an outer binding lends it.
+- **Returns.** A returned binding that does not own what it holds is
+  copied on the way out, so the caller always owns the result.
 
-**Memory managed by hand.** A struct behind a `nurl_malloc` / `nurl_alloc`
-pointer is not dropped by the compiler; what is stored there follows the
-program's own protocol:
-- A parameter stored there only — `= . j raw raw` in a job constructor —
-  is a *view*: the callee never drops it (on any path), and handing it a
-  `vec_get` payload or a field read through a pointer leaves the source in
-  place. Passing such a parameter on to another function's view parameter
-  makes it a view as well.
-- A field of an owned local stored there (`= . p phi . am phi`) is copied:
-  the local keeps its own, still readable, and drops it.
-- A parameter's field stored there (`= . p shape . t shape`, wrapping `t`
-  on the heap) is taken over: the caller hands `t` in, and the parameter's
-  drop skips the moved field. A binding over an owned local's field
-  (`: ~ M m . out m … = . h m m`) takes the field over the same way.
-- A global holding a handle's address, cast back (`^ # ( Vec T ) g_tbl`),
-  is lent, never owned by the caller.
+**Ownership primitives** for library code:
 
-**A closure that releases its captures.** A closure body that frees a
-captured handle itself (`( string_free r2 )` in a thread body) takes that
-capture over when it is created: the enclosing binding no longer drops it,
-and the env's drop skips it.
+| Call | Meaning |
+|---|---|
+| `( mem_take x )` | `x`, read out of a container by hand, owns that value from here on (`vec_pop`, `vec_remove`) |
+| `( mem_put_back x )` | the next store of `x` through a pointer writes back a value read from that slot; the container keeps owning it |
+| `( mem_dup x )` | an owned copy: deep for an owning value, the value itself otherwise |
+| `( mem_forget x )` | gives up `x`'s value without releasing it; `unsafe` only |
 
-**Vector signatures.** A function taking or returning a SIMD vector by
-value is `alwaysinline`: a `simd` clone passes a `<4 x i64>` in a ymm
-register where a baseline callee expects it in memory, and only inlining
-makes the two agree (at `-O0` as well as `-O2`).
-
-**Options and results that own memory are handles too**, wherever they
-sit — a `:` binding (through its `%__opt.<T>` twin), a struct field, a
-`Vec` element: dropping one releases the payload when present (a
-result's error when not), and copying one copies that. The payload of a
-None literal is released where the literal is built.
-
-**Enums that own memory are handles.** An enum whose payloads own a
-`String`, a `Vec` or a boxed struct — `Json`, `TomlValue` — is dropped,
-copied and moved like a `String` when every payload can be copied.
-`json_free` / `toml_value_free` are early releases.
+**Containers drop their elements.** `vec_free` and `vec_clear` drop the
+elements, and `vec_append` moves them from one `Vec` to another
+(`vec_extend` copies bits, for elements that own nothing).
 
 **Library handles.** A generic struct `S` whose module defines
-`S_drop [..] sink ( S .. ) x` — and, to be copyable, `S_clone` (a copy
-owning copies of the contents) or `S_share` (another owner of the same
-value, a reference count going up) — is a *library handle*: every
-instance is owned, dropped and copied like a `Vec`, and the module keeps
-its layout to itself. The compiler instantiates `S_drop` / `S_clone` for
-each concrete type the program uses (`HashMap_drop__i64__String`).
-`HashMap`, `Set`, `Deque`, `BTree`, `Box`, `Rc`, `Arc` and `Channel` are
-library handles; their `*_free` functions are early releases, their
-`*_free_with` the same release with a hook lent each element first (§7.5). A program's own
-`% Drop` impl for an instance (`% Drop ( Box i )`) wins over the library's.
+`S_drop [..] sink ( S .. ) x` is a library handle. Defining `S_clone` (an
+owner of copied contents) or `S_share` (another owner of the same value)
+makes it copyable. Every instance is owned, dropped and copied like a
+`Vec`, and the module keeps its layout private. `HashMap`, `Set`,
+`Deque`, `BTree`, `Box`, `Rc`, `Arc` and `Channel` are library handles. A
+non-generic struct with `S_drop sink S x` is one too: `Mutex`, `Cond`
+and `Semaphore` are each one reference-counted object, and every copy is
+the same lock. A program's own `% Drop` impl for an instance wins over
+the library's.
 
-A plain (non-generic) struct is a library handle the same way when its
-module defines `S_drop sink S x`: `S_drop` / `S_share` / `S_clone` are
-ordinary functions then, nothing is instantiated. `Mutex`, `Cond` and
-`Semaphore` are: each is one reference-counted pthread object, every copy
-of the handle (a thread closure's capture, a struct field, `Mutex_share`)
-is the same lock, and the last owner destroys it. `Channel` counts its
-owners the same way and releases what is still queued with it. A literal
-of a handle's own type is an owner even when it is built from another
-handle's pointer — that is how `S_share` mints one.
+**Raw memory reached from an `unsafe` structure.** A struct behind a
+`nurl_alloc` pointer is not dropped by the compiler. A parameter stored
+there only is a view, never dropped by the callee. A field of an owned
+local stored there is copied. A parameter's field stored there is taken
+over from the caller.
 
-**What still takes a hand.** The special cases, each an explicit call:
-files and sockets, closed by their `*_close`; memory the program manages
-itself (`nurl_alloc` / `*T` blocks, arenas, globals kept for the program's
-lifetime). A child process and a thread are released by their last owner:
-the child shut down as `proc_free` always did, the thread detached unless
-it was joined or detached already (`thread_join` / `thread_detach` settle
-it once, through any copy).
-
-**Panics unwind them too.** A String / Vec / owning struct / library
-handle binding is registered with the panic journal together with its drop
-flag (`nurl_journal_push_drop2`): a panic that unwinds past the binding
-drops its value only if the flag says the binding still owns one. The
-compiler drops the registration (and its `nurl_journal_forget_slot`) from
-every function no panic can reach — a call graph over the finished IR,
-where `nurl_panic`, calls through pointers and runtime entries that run
-handed-in code can panic — so code that cannot unwind pays nothing.
-
-**A stored value belongs to its owner.** A binding whose value was stored
-into an aggregate literal, or passed bare to a callee that stores it into
-an owner (`vec_push`'s element), may still be read — the owner keeps the
-value alive — but consuming it again (a sink, a free, a second store) is
-a double free, and the borrow checker rejects it
-(`compiler/tests/borrow_store_consume.nu`). A literal built as an
-argument to a function that only reads it moves nothing
-(`compiler/tests/store_then_read_ok.nu`).
-
-`compiler/tests/drop_handles.nu` pins these shapes.
-
-Outside this manual-handle set, nothing leaks. The corpus-wide
-sanitizer gate runs every test with leak detection **on** (§6.6), the
-compiler's own compile included; `tools/leakgate.sh` and
-`tools/leakcheck` cover the self-compile and a serving HTTP process. A
-program that honours the contract leaks nothing.
+**SIMD.** A function taking or returning a SIMD vector by value is always
+inlined, so callers and callees agree on how the vector is passed.
 
 ### 7.7 Reference-count cycles
 
-Reference counting frees a value when its last handle goes — except a value
-that, through its own contents, holds a handle to itself. A graph node
-listing its neighbours, a parent and child that point at each other, a
-callback stored in the value it captured: every count in such a cycle stays
-above zero after the last outside handle is gone. NURL collects them, so
-**Rc operations do not leak memory in any known situation**: not through a
-cycle, not through a closure, not through a long chain.
+Reference counting releases a value when its last handle goes, except a
+value that holds, through its own contents, a handle to itself: a graph
+node listing its neighbours, a parent and child pointing at each other, a
+callback stored in the value it captured. NURL collects such cycles.
 
-**Only types that can close pay.** The compiler walks a payload type's
-ownership graph — fields, option and enum payloads, `Vec` elements, library
-handle contents (`HashMap`, `Deque`, `BTree`, `Set`, `Box`), closure
-captures — to the `Rc` handles it can hold. `Rc T` is *cyclic* when that
-graph leads from `T` back to `T`, or to a closure (whose captures no type
-names): `( mem_cyclic [T] )` answers it as a constant. Every other
-instance — `Rc String`, `Rc Config`, a tree of `Rc` whose nodes hold no
-`Rc` back — compiles to plain counting and never reaches the collector.
-`Arc` and `Channel` contents are `Send` / `Sync` and cannot hold an `Rc`;
-a `Weak` owns nothing; neither is an edge.
+**Only types that can close a cycle pay.** The compiler walks a payload
+type's ownership graph (fields, Option and enum payloads, `Vec` elements,
+library handle contents, closure captures) to the `Rc` handles it can
+hold. `Rc T` is *cyclic* when that graph leads from `T` back to `T`, or to
+a closure. `( mem_cyclic [T] )` answers it as a constant. Every other
+instance (`Rc String`, `Rc Config`, a tree whose nodes hold no `Rc` back)
+compiles to plain counting.
 
-**The collector** (stdlib/runtime_core.c) is Bacon and Rajan's synchronous
-cycle collection. A cyclic block is `[ strong ][ weak ][ cc ][ value ]`; a
-handle that goes without taking its count to zero files the block as a
-possible root, and a block whose count does reach zero leaves the buffer at
-once. When the buffer passes a threshold (twice what survived the last
-collection, at least 4096), and when the context ends — the thread, the
-fiber, the program at exit — trial deletion finds the blocks held only by
-each other: their edges into live blocks are counted back, their values
-dropped (an edge into a block being collected is a no-op), their blocks
-freed. The compiler gives each cyclic type a table of two functions — trace
-(hand every handle the value holds to the collector) and drop — generated
-like the drop and clone graphs; a library handle supplies `S_trace`, and a
-closure env's descriptor carries a trace of exactly the handles the env
-owns (a capture it only borrows is no edge: counting it would be wrong).
-`Rc` is not `Send`, so every block belongs to one context and its buffer is
-that context's, swapped with the fiber like the panic journal: collection
-takes no lock. `( rc_collect )` runs one now.
+**The collector** is synchronous trial deletion (Bacon and Rajan) in the
+runtime. A cyclic block is `[ strong ][ weak ][ cc ][ value ]`. A handle
+that goes without taking the count to zero files its block as a possible
+root. When enough roots accumulate, on `( rc_collect )`, and when the
+owning context ends (the thread, the fiber, the program), trial deletion
+finds the blocks held only by each other, drops their values and frees
+them. The compiler generates a trace function for each cyclic type, and a
+closure environment's descriptor traces the handles the environment owns.
+`Rc` is not `Send`, so every block belongs to one thread or fiber, and
+collection takes no lock.
 
-**When a cycle is released: memory waits, resources do not.** A value whose
-last handle goes is dropped right there, cyclic type or not. Only a value
-already caught in an unreachable cycle waits — for the threshold or the end
-of its context. For memory that is invisible. For a file, a socket, a child
-process it is not: a program opening files in a loop would run out of
-descriptors while the garbage holding them waits. So the release is
-deterministic for exactly those:
+**Memory waits, resources do not.** A value whose last handle goes is
+dropped immediately, cyclic type or not. Only a value already caught in
+an unreachable cycle waits for a collection. That is invisible for
+memory, but not for a file or a socket, so:
 
-- *What counts as a resource is marked, not guessed.* `% Resource T { }`
-  (stdlib/core/marker.nu) is on the stdlib's OS handles — `File`,
-  `BufReader`, `UdpSocket`, `TlsConn`, `HttpConn`, `QuicClient`,
-  `ProcChild`, `Database`, `Statement`. Anything that *owns* one — a field,
-  an element, an option or enum payload, a library handle's contents, the
-  payload of an `Rc` it holds — is one by structure; `( mem_resource [T] )`
-  answers it for a cyclic `Rc T` as a constant. Releasing memory, a lock or
-  a count is not externally observable: `Mutex` is not a resource. A type
-  of your own whose drop the outside world sees (an FFI close, a flush to a
-  socket) takes the same one-line mark.
-- *A cyclic `Rc` of such a type is collected the moment it may have become
-  garbage.* A handle that goes without taking the count to zero runs trial
-  deletion from that one block (`nurl_cc_collect_now`) instead of filing it:
-  the cycle's files close where the last handle from outside went, before
-  the next statement. Inside a collection or a nested release it waits for
-  that to finish; inside a container's release (`nurl_vec_drop`) it waits for
-  the end of the release, so dropping a `Vec` of handles into one graph is
-  one pass, not one per handle.
-- *The cost, measured.* Trial deletion from a block visits what is reachable
-  from it. Tearing a structure down is linear — a ring of 16 000 resource
-  nodes held by a `Vec` of handles: 2 ms. Mutating a large **live**
-  resource-capable graph is not: every decrement that leaves a count above
-  zero (an `rc_set` replacing a node that pointed into the graph) walks the
-  graph once to find it still alive. Building that ring by rewiring it,
-  2 × n `rc_set`: n = 1 000 → 11 ms, 4 000 → 127 ms, 8 000 → 507 ms,
-  16 000 → 1.97 s — quadratic, against 2 ms for the same graph without a
-  resource in its type. Keep a large mutable graph's OS handles outside it
-  (a table of files the nodes refer to by index) so the graph's type is not
-  resource-capable; a graph of a few hundred nodes does not notice.
-- *The net under it.* A resource the compiler cannot see in a type — behind
-  a trait object (`dyn`), inside a closure's captures — is released by the
-  collector as before. When an open fails for want of descriptors (EMFILE /
-  ENFILE: `fopen` in std/fs.nu, `socket` / `accept` in the runtime), the
-  context's unreachable cycles are collected and the open retried once
-  (`nurl_cc_reclaim_fds`). It costs nothing on a successful open; it does
-  not reach a cycle held by another fiber's collector.
+- A type whose drop is externally observable carries `% Resource`
+  (`stdlib/core/marker.nu`): `File`, `BufReader`, `UdpSocket`, `TlsConn`,
+  `HttpConn`, `QuicClient`, `ProcChild`, `Database`, `Statement`. Anything
+  that owns one is one by structure, and `( mem_resource [T] )` answers it
+  as a constant. Releasing memory, a lock or a count is not observable:
+  `Mutex` is not a resource. Mark a type of your own when its drop does
+  something the outside world sees.
+- A cyclic `Rc` of a resource type is collected the moment it may have
+  become garbage: a handle that goes without taking the count to zero runs
+  trial deletion from that block at once, so the cycle's files close where
+  the last outside handle went. Inside a container's release this waits
+  until the release finishes, so dropping a `Vec` of handles into one
+  graph is a single pass.
+- Tearing such a structure down is linear. Rewiring a large *live*
+  resource-capable graph is not: every replaced edge that leaves a count
+  above zero walks the graph to find it still alive. Keep a large mutable
+  graph's OS handles outside it (a table the nodes refer to by index) so
+  the graph's type is not resource-capable.
+- A resource hidden from the type (behind a `dyn`, inside closure
+  captures) is released by the collector. When opening a file or socket
+  fails for lack of descriptors (EMFILE / ENFILE), the current context's
+  unreachable cycles are collected and the open is retried once.
 
-**A long chain is released without recursion.** Dropping the head of a
-million-node list of `Rc` would recurse a million frames deep. A release of
-a value that holds further handles goes through the runtime
-(`nurl_rc_drop_value`), which nests at most 64 deep and queues the rest for
-the outermost release to drain in a loop.
+**Long chains** are released without recursion: a release nests at most
+64 deep and queues the rest, so dropping the head of a million-node list
+does not overflow the stack.
 
-**Weak** (`rc_downgrade` / `weak_upgrade`) is a non-owning handle for a
-back-edge whose target should die with its strong handles: the value is
-dropped when the strong count reaches zero, the block freed when the weak
-count is zero too.
+**Weak handles.** `rc_downgrade` / `weak_upgrade` give a non-owning
+handle for a back-edge. The value is dropped when the strong count reaches
+zero, and the block is freed when the weak count is zero too.
 
-**Thread-shared handles: cycles are ruled out at compile time.** `Arc`,
-`Channel`, `DChannel` and the library handles over a counted block (Route,
-Supervisor, QuicServer, JobNode, …) cross threads; a collector would have to
-stop every thread at a point where no data structure is half-updated, which
-no safepoint the runtime has can promise. So their cycles cannot be built:
+**Thread-shared handles cannot form cycles.** `Arc`, `Channel`,
+`DChannel` and the library handles over a counted block cross threads,
+and a collector for them would have to stop every thread at a safe point.
+Their cycles are rejected at compile time instead:
 
-- *An `Arc` whose payload can lead back to it is frozen once made.*
-  `( mem_ts_cyclic [( Arc T )] )` walks the thread-shared graph (a handle's
-  state type is learned from its drop, `rcbox_release [XImpl]`); for such an
-  Arc, `arc_get` hands out a copy — nothing done to it reaches the shared
-  value — and `arc_set` / `arc_ptr` are compile errors. The payload is built
-  first and shared whole, a tree from its leaves up. `ArcWeak`
-  (`arc_downgrade` / `arc_weak_upgrade`) points back without owning.
-- *A store into an existing thread-shared handle may not hold that handle.*
-  A closure's captures are not in its type, so the compiler follows values:
-  what a closure can capture travels with the literal, its bindings, the
-  functions that return one and the bindings it is handed to alongside it
-  (a router its routes' handlers went into). A call that keeps a value and
-  is handed an existing thread-shared handle — `job_register node … f`,
-  `chan_send ch v`, `supervisor_add sup … start` — is decided at module end:
-  if the value's captures lead back to that handle, it is a compile error
-  (`should_fail_ts_closure_self_cycle.nu`). A handle VALUE stored there is
-  judged by its type: one that can lead to the owner's type is rejected even
-  when it is another instance — the types cannot tell a tree from a loop —
-  so a structure of shared handles is built from its leaves up, or points
-  back with a weak or raw back-reference; a queue receiving a value of its
-  own channel's type is the same rule. A forwarded closure parameter carries the rule
-  to its callers. A handle being built (a constructor) is reachable from
-  nothing, and needs no check. This rule found a real cycle in
-  packages/swarm-mcp (a job handler capturing its own swarm).
+- **An `Arc` whose payload can lead back to it is frozen once made.**
+  `( mem_ts_cyclic [( Arc T )] )` walks the thread-shared graph. For such
+  an `Arc`, `arc_get` returns a copy, and `arc_set` / `arc_ptr` are
+  compile errors. The payload is built first and shared whole, a tree
+  from its leaves up. `ArcWeak` (`arc_downgrade` / `arc_weak_upgrade`)
+  points back without owning.
+- **A store into an existing thread-shared handle may not lead back to
+  it.** A call that keeps a value and is handed an existing thread-shared
+  handle (`chan_send ch v`, `job_register node … f`,
+  `supervisor_add sup … start`) is checked: if the value, or a closure's
+  captures, can reach that handle, it is a compile error. A handle value
+  stored there is judged by its type, so a structure of shared handles is
+  built from its leaves up or points back with a weak reference. A closure
+  whose captures cannot be followed is rejected rather than guessed at.
 
-**What is outside.** A cycle through raw memory — a `*T` written by hand, an
-`s` pointer to a block, `rc_ptr` stores, `mem_forget` — is invisible, as raw
-memory always is (§7.4); the non-owning back-pointer in
-stdlib/ext/http3_server.nu is the deliberate use of exactly that. A closure
-whose captures cannot be followed (it came out of a field, an element or a
-call through a closure value) stored into an existing thread-shared handle
-is rejected rather than guessed at; a function that builds one is followed,
-also when it is compiled after its caller (the call is resolved at module
-end, `should_fail_ts_factory_cycle.nu`).
+A cycle through raw memory (a hand-written `*T`, `rc_ptr` stores,
+`mem_forget`) is invisible, as raw memory always is (§7.4), and exists
+only in `unsafe` code.
