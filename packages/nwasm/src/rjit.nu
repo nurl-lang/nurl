@@ -1847,9 +1847,11 @@ $ `stdlib/core/vec.nu`
     ? ! ( rj_dlive c od ) { ^ v } {}
     : i op ( rj_rw c r 0 )
     : i dl ( rj_dloc c od )
-    // and x, 0xffffffff with x zero-extended already, in dst's own register: nothing to do
-    ? & & == op 2 ( rj_ukonst c r 1 ) ( rj_isg dl ) {
-        ? & & == ( rj_kval c ( rj_us c ob ) ) 4294967295 == 1 ( rj_uzx c oa ) == dl ( rj_uloc c oa ) { ^ v } {}
+    // and x, 0xffffffff with x zero-extended already: a copy (none at all in x's own register)
+    ? & == op 2 ( rj_ukonst c r 1 ) {
+        ? & == ( rj_kval c ( rj_us c ob ) ) 4294967295 == 1 ( rj_uzx c oa ) {
+            ( rj_move c dl ( rj_ds c od ) ( rj_uloc c oa ) ( rj_us c oa ) ) ^ v
+        } {}
     } {}
     : i nw ? ( rj_narrow c r op ) 0 w
     : i _tr ( rj_alu3 c ext nw ( rj_uloc c oa ) ( rj_us c oa ) ( rj_uloc c ob ) ( rj_us c ob ) dl ( rj_ds c od ) ( rj_dcanon c od ) F )
