@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.34.1] — 2026-10-07
+
+Requires NURL 0.71.0, whose ownership rules are on by default: the
+functions that work with raw pointers are declared `unsafe`, and values
+are read before they move rather than after. The published 0.34.0 does
+not compile under 0.71.0. A point committed from a streamed line read
+that line after it had moved into the model's ring; it is read from the
+ring now.
+
 ## [0.34.0] — 2026-10-03
 
 Nothing in the package is released by hand any more. Needs toolchain 0.69.0.

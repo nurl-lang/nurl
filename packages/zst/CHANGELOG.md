@@ -4,6 +4,13 @@ All notable changes to `zst` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the version
 scheme is [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] — 2026-10-07
+
+Requires NURL 0.71.0, whose ownership rules are on by default: the
+functions that work with raw pointers are declared `unsafe`, and values
+are read before they move rather than after. The published 0.2.1 does
+not compile under 0.71.0.
+
 ## [0.2.1] — 2026-10-03
 
 ### Changed

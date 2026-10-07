@@ -1106,7 +1106,7 @@ unsafe @ __st_run → i {
         ^ 0
     } {}
     ? ( args_present p `version` ) {
-        ( nurl_print `gguf 0.4.0\n` )
+        ( nurl_print `gguf 0.4.1\n` )
         ^ 0
     } {}
     ? < ( args_positional_count p ) 1 {

@@ -2,6 +2,13 @@
 
 All notable changes to the `nurllama` package.
 
+## [0.18.1] — 2026-10-07
+
+Requires NURL 0.71.0, whose ownership rules are on by default: the
+functions that work with raw pointers are declared `unsafe`, and values
+are read before they move rather than after. The published 0.18.0 does
+not compile under 0.71.0.
+
 ## [0.18.0] — 2026-10-03
 
 Nothing is released by hand any more. Requires NURL 0.69.0.

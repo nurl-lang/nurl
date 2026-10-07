@@ -63,7 +63,7 @@ unsafe @ __cli_write_stdout ( Vec u ) data → v {
         ^ 0
     } {}
     ? ( args_present p `version` ) {
-        ( nurl_print `cas 0.1.3\n` )
+        ( nurl_print `cas 0.1.4\n` )
         ^ 0
     } {}
 

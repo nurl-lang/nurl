@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.1] — 2026-10-07
+
+Requires NURL 0.71.0, whose ownership rules are on by default: the
+functions that work with raw pointers are declared `unsafe`, and values
+are read before they move rather than after. The published 0.10.0 does
+not compile under 0.71.0.
+
 ## [0.10.0] — 2026-10-03
 
 **Engine is a self-releasing handle** (`*Engine` → `Engine`; the last copy

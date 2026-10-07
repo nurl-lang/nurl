@@ -2,6 +2,13 @@
 
 All notable changes to this package are documented here.
 
+## [0.3.3] — 2026-10-07
+
+Requires NURL 0.71.0, whose ownership rules are on by default: the
+functions that work with raw pointers are declared `unsafe`, and values
+are read before they move rather than after. The published 0.3.2 does
+not compile under 0.71.0.
+
 ## [0.3.2] — unreleased
 
 No API change.

@@ -1,7 +1,7 @@
 [package]
 name = "grpc"
-version = "0.2.0"
-nurl-version = "0.69.0"
+version = "0.2.1"
+nurl-version = "0.71.0"
 description = "Native gRPC client and server for NURL over HTTP/2: unary and streaming RPCs, protobuf payloads, deadlines, cancellation, metadata and bounded message compression."
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/nurl-lang/nurl/tree/main/packages/gRPC"
