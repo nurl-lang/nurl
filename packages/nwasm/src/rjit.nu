@@ -1958,9 +1958,16 @@ $ `stdlib/core/vec.nu`
         } {}
         = r + r 1
     }
-    // runs, web by web
+    // runs, web by web: grow one read at a time while some register stays
+    // free across all of it — the candidates narrow as the run grows — up
+    // to 64 reads; keep the longest prefix every block inside is entered
+    // from within
     : ~ i used ( rj_get c ( rjs_used ) )
     : i forbid ( rj_get c ( rjs_forbid ) )
+    : ~ i all 0
+    = k 0
+    ~ < k 10 { : i l ( rj_cgpr k ) ? == 0 & ( rj_shr forbid l ) 1 { = all | all << 1 l } {} = k + k 1 }
+    : i csav | | << 1 5 << 1 12 | | << 1 13 << 1 14 << 1 15  // rbp, r12..r15
     = wv 0
     ~ < wv nw {
         ? == 1 ( vec_at [i] cand wv ) {
@@ -1975,20 +1982,35 @@ $ `stdlib/core/vec.nu`
                 ~ adv { = adv F ? < d d1 { ? < ( vec_at [i] drec d ) r1 { = d + d 1 = adv T } {} } {} }
                 : ~ i dnext n  // the first write at or after r1: the run ends there
                 ? < d d1 { = dnext ( vec_at [i] drec d ) } {}
-                // grow the run read by read; remember the longest valid one
+                : ~ i mask all
                 : ~ i b a
-                : ~ i end r1
+                : ~ i end -1
                 : ~ i hi -1  // latest predecessor any block start inside needs covered
                 : ~ i best -1
                 : ~ i bend r1
+                : ~ i bmask 0
                 : ~ b go T
                 ~ go {
-                    // extend over read b + 1 (the first step takes read a itself)
                     : ~ i e2 ( vec_at [i] urec b )
                     ? > ( rj_andz c e2 ) 0 { = e2 + e2 1 } {}  // the eqz behind a fused and reads x
                     ? > ( vec_at [i] urec b ) dnext { = go F } {}  // a read after the next write
-                    : ~ i q + end 1
-                    ? == b a { = q + r1 1 } {}
+                    ? go {
+                        // the registers still free over the positions the run gains
+                        : i p0 ? < end 0 * 2 r1 + * 2 end 1
+                        : i p1 * 2 e2
+                        ? <= p0 p1 {
+                            = k 0
+                            ~ < k 10 {
+                                : i l ( rj_cgpr k )
+                                ? != 0 & ( rj_shr mask l ) 1 { ? ( rj_bfree bm words l p0 p1 ) {} { = mask ^^ mask << 1 l } } {}
+                                = k + k 1
+                            }
+                        } {}
+                        ? ( rj_crosses . c callr * 2 r1 * 2 e2 ) { = mask & mask csav } {}  // across a call: callee-saved only
+                        ? ( rj_crosses . c dxr * 2 r1 * 2 e2 ) { = mask & mask ^^ -1 4 } {}  // across a div / bit scan: no rdx
+                        ? == mask 0 { = go F } {}
+                    } {}
+                    : ~ i q ? < end 0 + r1 1 + end 1
                     ~ & go <= q e2 {
                         ? > ( vec_at [i] pmax q ) -1 {
                             ? < ( vec_at [i] pmin q ) r1 { = go F } {}
@@ -1998,23 +2020,16 @@ $ `stdlib/core/vec.nu`
                     }
                     ? go {
                         = end ? > e2 end e2 end
-                        ? <= hi end { = best b = bend end } {}
+                        ? <= hi end { = best b = bend end = bmask mask } {}
                         ? == ( vec_at [i] urec b ) dnext { = go F } {}  // read, then written: the register goes stale
                         = b + b 1
-                        ? >= b u1 { = go F } {}
+                        ? | >= b u1 > - b a 64 { = go F } {}
                     } {}
                 }
                 : ~ i got -1
-                ? > best a {  // two reads or more
-                    : b crosscall ( rj_crosses . c callr * 2 r1 * 2 bend )
-                    : b crossdx ( rj_crosses . c dxr * 2 r1 * 2 bend )
+                ? > best a {  // two reads or more: the first candidate left (caller-saved ones first)
                     = k 0
-                    ~ & < got 0 < k 10 {
-                        : i l ( rj_cgpr k )
-                        : b okl & & & == 0 & ( rj_shr forbid l ) 1 | ! crosscall ( rj_calleesaved l ) | ! crossdx != l 2 ( rj_bfree bm words l * 2 r1 * 2 bend )
-                        ? okl { = got l } {}
-                        = k + k 1
-                    }
+                    ~ & < got 0 < k 10 { : i l ( rj_cgpr k ) ? != 0 & ( rj_shr bmask l ) 1 { = got l } {} = k + k 1 }
                 } {}
                 ? >= got 0 {
                     ( rj_bmark bm words got * 2 r1 * 2 bend )
