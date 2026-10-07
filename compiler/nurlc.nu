@@ -7809,6 +7809,7 @@ unsafe @ nurl_str_get s str i idx → i {
 unsafe @ nurl_str_cat s a s b → s {
     : i la ( strlen a )
     : i lb ( strlen b )
+    ? == 0 + la lb { ^ # s ( nurl_strdup_n a 0 ) } {}
     : s r # s ( nurl_alloc + + la lb 1 )
     ( memcpy r a la )
     : *u rp # *u r
@@ -7821,6 +7822,7 @@ unsafe @ nurl_str_cat3 s a s b s c → s {
     : i la ( strlen a )
     : i lb ( strlen b )
     : i lc ( strlen c )
+    ? == 0 + + la lb lc { ^ # s ( nurl_strdup_n a 0 ) } {}
     : s r # s ( nurl_alloc + + + la lb lc 1 )
     ( memcpy r a la )
     : *u rp # *u r
@@ -7836,6 +7838,7 @@ unsafe @ nurl_str_cat4 s a s b s c s d → s {
     : i lb ( strlen b )
     : i lc ( strlen c )
     : i ld ( strlen d )
+    ? == 0 + + + la lb lc ld { ^ # s ( nurl_strdup_n a 0 ) } {}
     : s r # s ( nurl_alloc + + + + la lb lc ld 1 )
     ( memcpy r a la )
     : *u rp # *u r
@@ -7863,14 +7866,9 @@ unsafe @ nurl_str_slice s str i start i n → s {
     : i slen ( strnlen str want )
     ? > st slen { = st slen } {}
     ? > k - slen st { = k - slen st } {}
-    : s r # s ( nurl_alloc + k 1 )
     : *u sp # *u str
     : *u sat # *u + # i sp st
-    ( memcpy r # s sat k )
-    : *u rp # *u r
-    : u zero # u 0
-    = . rp k zero
-    ^ r
+    ^ # s ( nurl_strdup_n # s sat k )
 }
 
 unsafe @ nurl_parse_int_range s p i len → i {
@@ -9734,11 +9732,7 @@ unsafe @ nurl_lex_src_slice i h i start i n → s {
     : i avail - len st
     ? < k 0 { = k 0 } {}
     ? > k avail { = k avail } {}
-    : s out # s ( nurl_alloc + k 1 )
-    ( memcpy out # s + # i # *u # s ( nurl_peek p LX_SRC ) st k )
-    : *u op # *u out
-    = . op k # u 0
-    ^ out
+    ^ # s ( nurl_strdup_n # s + # i # *u # s ( nurl_peek p LX_SRC ) st k )
 }
 
 unsafe @ nurl_lex_set_pos i h i new_pos → v {
@@ -30931,13 +30925,8 @@ unsafe @ __word_end s list i n i pos → i {
 unsafe @ __span_dup s list i pos i end → s {
     : ~ i k - end pos
     ? < k 0 { = k 0 } {}
-    : s r # s ( nurl_alloc + k 1 )
     : *u sp # *u list
-    ( memcpy r # s + # i sp pos k )
-    : *u rp # *u r
-    : u zero # u 0
-    = . rp k zero
-    ^ r
+    ^ # s ( nurl_strdup_n # s + # i sp pos k )
 }
 
 // str_contains_word: true if 'word' appears as a whole word in space-separated 'list'.

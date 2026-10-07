@@ -703,6 +703,14 @@ only in `unsafe` code, which releases them with `nurl_free`. Nothing else
 is managed by hand: `string_free`, `vec_free` and the other release calls
 on compiler-managed values and handles are optional early releases.
 
+An empty owned string allocates nothing. Every empty copy (`nurl_strdup`
+of the empty literal, an empty `nurl_strdup_n`, slice or concatenation)
+is the runtime's one shared empty string, which never goes away:
+`nurl_free` releases it by doing nothing and `nurl_realloc` grows it into
+a block of its own. So `unsafe` code releases an owned string with
+`nurl_free`, never libc `free`, grows it with `nurl_realloc`, and writes
+nothing past its terminator.
+
 Everything the standard library hands out releases itself. Opaque state
 lives behind a library handle over a counted block (`stdlib/core/rcbox.nu`:
 `[ owners ][ T ]`, the last owner drops `T`): `Mutex`, `Channel`,

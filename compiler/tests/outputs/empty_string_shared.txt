@@ -1,0 +1,11 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+empty copies allocated: 0
+total length: 0
+grown!
+still empty: 0
+4
+panics caught: 2
+live: 0
