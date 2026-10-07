@@ -2644,6 +2644,8 @@ $ `stdlib/core/vec.nu`
     : i al ( rj_uloc c oa )
     : i as ( rj_us c oa )
     : i dl ( rj_dloc c od )
+    // a wrap only the low half of is read, of a value already zero-extended: a copy
+    ? & & == op 36 ! ( rj_dcanon c od ) == 1 ( rj_uzx c oa ) { ( rj_move c dl ( rj_ds c od ) al as ) ^ v } {}
     : i tr ? ( rj_isg dl ) dl 0
     ? == al ( rjl_imm ) {
         : i kq ( rj_kval c as )
