@@ -124,12 +124,6 @@ $ `stdlib/core/errors.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 
-// memchr — glibc's SIMD-vectorised byte search. Used in
-// `__jp_parse_string`'s fast path to find the closing quote and (in
-// the same direction) the first backslash, replacing a byte-by-byte
-// NURL loop. Returns NULL when the byte is not present in [buf, buf+n).
-& `c` @ memchr s buf i c i n → s
-
 : | Json {
     JNull
     JBool b
@@ -547,26 +541,42 @@ $ `stdlib/core/vec.nu`
     ^ acc
 }
 
-// RFC 8259 §7: U+0000..U+001F must be escaped inside a string — a raw
-// one makes the document invalid. Returns the offset of the first such
-// byte in [span, span+n), or -1. There is no memchr for "any byte below
-// N" (32 separate memchr passes would cost more than one walk), so the
-// escape-free fast path pays one linear scan for conformance. It still
-// skips the whole per-char push loop, which is where its speed came
-// from.
+// A byte that ends a verbatim string body: the closing quote, a
+// backslash, or a raw control byte (RFC 8259 §7: U+0000..U+001F must be
+// escaped inside a string — a raw one makes the document invalid).
+@ __jp_special i c → b { ^ | | == c 34 == c 92 < c 32 }
+
+// The offset of the first such byte in [span, span+n), or -1 — one pass
+// where the fast path used to take three (memchr for the quote, memchr
+// for a backslash, a byte walk for control bytes). Eight bytes a step
+// (SWAR): a byte equal to b leaves a zero byte in w ^ (b × 0x0101…), and
+// (x - k × 0x0101…) & ~x & 0x8080… lights the high bit of every byte of x
+// below k (k = 1: the zero bytes). A borrow can light only bytes after the
+// first true hit, so the lowest lit byte is the answer.
 //
-// The walk must read through a raw pointer: `span` points into the
-// middle of the document, so `nurl_str_get`'s per-call strlen runs to
-// the document's END on every byte — the scan that shipped with the
+// The walk reads through a raw pointer: `span` points into the middle of
+// the document, so `nurl_str_get`'s per-call strlen would run to the
+// document's END on every byte — the scan that shipped with the
 // conformance fix did exactly that and took json_parse from fastest in
 // the benchmark table (8.8 ms) to slowest (42 ms).
-@ __jp_span_ctrl s span i n → i {
+@ __jp_span_special s span i n → i {
     : *u p # *u span
     : ~ i k 0
-    ~ < k n {
-        ? < & # i . p k 255 32 { ^ k } {}
-        = k + k 1
+    ~ <= + k 8 n {
+        : *u64 wp # *u64 + # i p k
+        : u64 w . wp 0
+        : u64 q ^^ w # u64 2459565876494606882  // '"' × 8
+        : u64 bs ^^ w # u64 6655295901103053916  // '\' × 8
+        : u64 ones # u64 72340172838076673
+        : u64 hi # u64 -9187201950435737472
+        : u64 m | | & & - q ones ^^ q # u64 -1 hi & & - bs ones ^^ bs # u64 -1 hi & & - w # u64 2314885530818453536 ^^ w # u64 -1 hi
+        ? != m # u64 0 {
+            : ~ i j k
+            ~ < j + k 8 { ? ( __jp_special & # i . p j 255 ) { ^ j } {} = j + j 1 }
+        } {}
+        = k + k 8
     }
+    ~ < k n { ? ( __jp_special & # i . p k 255 ) { ^ k } {} = k + k 1 }
     ^ -1
 }
 
@@ -591,35 +601,21 @@ $ `stdlib/core/vec.nu`
     : i body_start . p pos
     : i remaining - len body_start
     : s body_start_ptr # s + # i bp body_start
-    // First locate the closing quote (the common case — every record-
-    // shape string in well-formed JSON has one). memchr is SIMD-fast.
-    : s close_p ( memchr body_start_ptr 34 remaining )
-    ? != # i close_p 0 {
-        : i close_off - # i close_p # i bp
-        : i hit_len - close_off body_start
-        // Then check whether the spanned range contains a backslash —
-        // if not, the bytes are literal and we can memcpy-slice them
-        // directly without walking the escape decoder.
-        : s esc_p ( memchr body_start_ptr 92 hit_len )
-        ? == # i esc_p 0 {
-            // The bytes are literal — which is exactly why they still
-            // have to be checked. This path memcpy'd the span verbatim,
-            // so a raw control byte in an escape-free string was copied
-            // straight through and never saw the decoder below.
-            : i ctrl ( __jp_span_ctrl body_start_ptr hit_len )
-            ? >= ctrl 0 {
-                ^ @ !String JsonError { F ( __jp_err_at p + body_start ctrl @ ParseErr { BadFormat } ) }
-            } {}
+    // The first byte that is not copied verbatim: when it is the closing
+    // quote, the whole body is literal (no escape, no raw control byte)
+    // and becomes the String in one memcpy.
+    : i stop ( __jp_span_special body_start_ptr remaining )
+    ? >= stop 0 {
+        ? == 34 & # i . bp + body_start stop 255 {
             : *u from # *u body_start_ptr
-            : String fs ( string_from_bytes_packed from hit_len )
-            = . p pos + close_off 1
+            : String fs ( string_from_bytes_packed from stop )
+            = . p pos + + body_start stop 1
             ^ @ !String JsonError { T fs }
         } {}
     } {}
-    // Else: contains an escape, or no close before EOF. Fall through to
-    // the canonical char-by-char loop, which handles both.
-    // Else: contains an escape, or hit EOF before a close. Fall through
-    // to the canonical char-by-char loop, which handles both.
+    // Else a backslash, a raw control byte or EOF before any close: the
+    // canonical char-by-char loop decodes the escapes, and rejects a
+    // control byte or the missing quote at the same position it always has.
 
     : String out ( string_with_cap 16 )
     : ~ b done F

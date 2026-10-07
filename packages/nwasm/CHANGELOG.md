@@ -1,5 +1,50 @@
 # Changelog
 
+## [2.1.0] — 2026-10-07
+
+The JIT gets a second, optimizing tier, and the fuzzer that now reaches it
+found three places where every engine disagreed with the specification.
+The CLI and the library API are unchanged.
+
+### Added
+
+- **Tier 8: a register-allocating JIT** (`src/rjit.nu`), on by default on
+  x86-64 wherever the template JIT runs (guard-page memory, or no memory at
+  all). It lowers the same predecoded records as the template tier, but
+  with their slot liveness solved, each slot's independent values split
+  into webs, and those webs given registers by a linear scan that spills by
+  use density: 12 GPRs and 14 xmm registers instead of a handful of pins
+  over a memory frame. On top of that:
+  - a register calling convention between tier-8 functions (up to five
+    arguments in registers, the result in rax), frameless leaves, and
+    direct `call rel32` links patched in as callees are compiled — all
+    code lives in one address-space reservation so every link reaches;
+  - integer division and remainder by a constant as shifts or a multiply
+    by the reciprocal; `memory.copy` / `memory.fill` inline when in bounds;
+  - a compare feeding the selects behind it, or a bit test / mask test
+    feeding the branch behind it, as one flag-setting instruction;
+  - BMI2 shifts and lzcnt/tzcnt on x86-64-v3 CPUs.
+  `NURL_NWASM_RJIT=0` keeps the template tier; `NURL_NWASM_BMI2=0` keeps
+  tier 8 on baseline x86-64; `NURL_NWASM_RJIT_DBG=1` reports a function
+  tier 8 declined (and why) or compiled but could not install;
+  `NURL_NWASM_RJIT_TRACE=<fidx>` prints a function's webs and where they
+  went; `NURL_NWASM_PERFMAP=1` writes `/tmp/perf-<pid>.map` for `perf`.
+- `tests/divconst_diff.sh`: every div/rem opcode against ~45 constant
+  divisors per width, all engines against the reference wasmtime.
+
+### Fixed
+
+- `i32.reinterpret_f32` left the f32's bits zero-extended in the slot, in
+  every engine. Every i32 a slot holds is sign-extended — the predecoder
+  drops `i64.extend_i32_s` on the strength of it — so a negative pattern
+  reinterpreted and widened came out positive. `f32.reinterpret_i32` now
+  zero-extends, matching every other f32 slot.
+- Declared `externref` / `funcref` locals started out 0 instead of null,
+  in every engine, so `ref.is_null` of a fresh local was false.
+- The template JIT's overflow stub returned without the result in rax.
+- The fuzz harness (`tests/fuzz_diff.sh`) also runs the template tier, and
+  skips exports whose names a CLI would read as an option.
+
 ## [2.0.0] — 2026-10-03
 
 Nothing is released by hand any more: `Module` and `Interp` free themselves.

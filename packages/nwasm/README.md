@@ -296,13 +296,50 @@ native** — the `onnx` test even matches its onnxruntime reference.
 > would additionally add an id↔pointer handle table in the bridge; the seam is a
 > single `__gpu_ptr` / handle-passthrough boundary.
 
-## The template JIT
+## The JIT
 
 On a hosted x86-64 build the predecoded records are lowered to machine code per
-function and run natively; everything else — other architectures, wasm32 builds
-of `nwasm` itself, metered (`--fuel`) and shared-memory (threads) runs —
-executes on the interpreter, which remains the semantic reference.
-`NURL_NWASM_JIT=0` turns the JIT off.
+function, the first time each function is called; everything else — other
+architectures, wasm32 builds of `nwasm` itself, metered (`--fuel`) and
+shared-memory (threads) runs — executes on the interpreter, which remains the
+semantic reference. `NURL_NWASM_JIT=0` turns the JIT off. Two tiers share one
+calling convention, one code arena and one call-out protocol, so a function of
+either tier calls one of the other directly.
+
+### Tier 8: the register-allocating JIT (`src/rjit.nu`)
+
+The default wherever the code needs no bounds checks — guard-page memory, or
+no linear memory at all. A function it cannot lower falls to tier 7.
+
+- **Liveness, webs, linear scan.** Every record's slot uses and defs are
+  decoded once; records split into basic blocks, and a branch that moves
+  values (block results, loop parameters) gets an edge block holding them as
+  one parallel copy. Slot liveness is solved over the blocks, each slot's
+  independent values are split into *webs*, and the webs get registers by a
+  linear scan that spills the least densely used one: 12 GPRs, 14 xmm
+  registers, the slot's frame home when a web must live in memory. A web live
+  across a call takes a callee-saved register; rdx and rcx go only to webs no
+  record that needs them as scratch touches.
+- **Calls.** A tier-8 function with at most five parameters and one result
+  gets a register entry (arguments in registers, the result in rax) beside
+  the memory entry every other caller uses. Call sites are `call rel32`,
+  linked to the callee when it is compiled — every function's code lives in
+  one address-space reservation, so every link reaches. Leaves that need no
+  frame get none. `call_indirect` checks the signature inline.
+- **Instruction selection.** Division and remainder by a constant become
+  shifts or a multiply by the reciprocal; `memory.copy` / `memory.fill` run
+  inline when the ranges are in bounds; a compare feeding the selects behind
+  it, and a bit test or mask test feeding the branch behind it, become one
+  flag-setting instruction; an i32 is sign-extended only when a consumer
+  reads its high half; wide constants come from a RIP-relative literal pool.
+  On an x86-64-v3 CPU, shifts use BMI2 and the bit counts lzcnt/tzcnt
+  (`NURL_NWASM_BMI2=0` keeps baseline x86-64).
+- `NURL_NWASM_RJIT=0` keeps tier 7; `NURL_NWASM_RJIT_DBG=1` names every
+  function tier 8 declined and why; `NURL_NWASM_RJIT_TRACE=<fidx>` prints a
+  function's webs and where they went; `NURL_NWASM_PERFMAP=1` writes
+  `/tmp/perf-<pid>.map` so `perf` names JIT frames.
+
+### Tier 7: the template JIT
 
 - **Templates, not an optimizer.** Each record maps to a fixed x86-64 sequence
   against the frame's register file (`disp32(%rbx)` slots); branches patch
@@ -314,13 +351,17 @@ executes on the interpreter, which remains the semantic reference.
 - **Function-wide slot pinning.** The hottest integer slots of a function are
   pinned into callee-saved registers for its whole body, and pure-f64 slots ride
   in `xmm8`–`xmm11`. `NURL_NWASM_PIN=0` keeps every slot in memory (A/B, debug).
-- **The interpreter handles what templates can't.** A function with any record
-  outside the template set stays interpreted — per function, not per module.
-  Calls out of JIT code (imports, `memory.grow`, the bulk-memory/`fc` bridge,
-  `call_indirect` resolution) return to a driver that does the work with the
-  interpreter's own machinery and re-enters the code at a resume point, so both
-  engines always agree — the correctness gate is byte-identical output across
-  both, including a `nurlc.wasm` self-compile.
+
+### Both tiers
+
+- **The interpreter handles what neither can.** A function with any record
+  outside both tiers' sets stays interpreted — per function, not per module.
+  Calls out of JIT code (imports, `memory.grow`, the bulk-memory/`fc` bridge)
+  go to a handler that does the work with the interpreter's own machinery, so
+  every engine always agrees — the correctness gates are byte-identical output
+  across all three, including a `nurlc.wasm` self-compile, and
+  `tests/fuzz_diff.sh`, which runs random modules on every engine against the
+  reference wasmtime.
 - **Traps carry their real message** (`unreachable`, `integer divide by zero`,
   bounds), same text as the interpreter; JIT frames don't record positions, so
   backtraces come from interpreted frames only.
@@ -332,10 +373,10 @@ executes on the interpreter, which remains the semantic reference.
   steers the faulting frame to that function's out-of-bounds stub — the same
   trap, the same message, the explicit check just never executes. Growth never
   moves the base (`memory.grow` is an `mprotect`, not a realloc). Where the
-  plumbing is unavailable the memory falls back to a heap buffer and the JIT
-  emits its checks; `NURL_NWASM_GUARD=0` forces that path.
+  plumbing is unavailable the memory falls back to a heap buffer, tier 8 steps
+  aside and tier 7 emits its checks; `NURL_NWASM_GUARD=0` forces that path.
 
-`NURL_NWASM_JIT_DUMP=1` emits every sealed code page as decimal bytes on stderr.
+`NURL_NWASM_JIT_DUMP=1` emits every sealed function as decimal bytes on stderr.
 
 ## Performance
 
@@ -344,9 +385,11 @@ the current report is [`bench/WASMRESULTS.md`](../../bench/WASMRESULTS.md),
 which compares this runtime against the reference Cranelift JIT over the same
 wasm modules. Two figures worth stating here:
 
-- the JIT runs the benchmark corpus at roughly **0.41×** the interpreter's wall
-  clock (local, best-of-3), with the memory-bound rows near 0.25× and
-  call-dominated `fib` at parity;
+- on one local machine (i7-5930K, 2026-10-07) nwasm ran 44 of the 45 corpus
+  modules (15 benchmarks × NURL, C and Rust builds) faster than the reference
+  Cranelift JIT, wall clock including start-up, and tied the 45th (`nbody`,
+  Rust: a sqrt → divide latency chain both compilers share); the `nurlc.wasm`
+  self-compile takes 3.7 s against wasmtime's 3.95 s;
 - read any single-machine corpus ratio as "this is what one machine did".
   `wasmbench.sh` measures one revision on one runner, and a runner swap moves
   every column by more than most individual changes do.
@@ -367,7 +410,8 @@ needs the compiler's live set under 4 GiB, or memory64.
 
 ```
 src/module.nu   wasm binary decoder: byte cursor, LEB128, sections (incl. imports), the module model
-src/interp.nu   the stack-machine interpreter + template JIT: control flow, integer + float ops, the WASI host calls
+src/interp.nu   the predecoder, the interpreter, the template JIT (tier 7) and the JIT runtime: control flow, integer + float ops, the WASI host calls
+src/rjit.nu     the register-allocating JIT (tier 8): liveness, webs, linear-scan allocation, the x86-64 encoder
 src/main.nu     CLI: WASI command mode (run _start) and direct --invoke mode
 ```
 
@@ -385,6 +429,14 @@ NURL_STDLIB=<repo> ../../nurl.sh tests/wasi_test.nu  /tmp/nwasm && /tmp/nwasm
 
 # Same idea for wasi-threads: four threads over one shared heap.
 ./tests/threads_test.sh
+
+# Every suite above also runs under NURL_NWASM_RJIT=0 (tier 7),
+# NURL_NWASM_JIT=0 (the interpreter) and NURL_NWASM_BMI2=0; tier 8 alone:
+NURL_STDLIB=<repo> ../../nurl.sh tests/rjit_smoke.nu /tmp/rs && /tmp/rs
+
+# Differential against the reference wasmtime (needs wasm-tools, wasmtime):
+./tests/fuzz_diff.sh <nwasm-binary> 400        # random modules, every engine
+./tests/divconst_diff.sh <nwasm-binary>        # division by constants
 ```
 
 ## License
