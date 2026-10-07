@@ -21117,7 +21117,9 @@ unsafe @ bck_field s rec i idx → s {
     : *u rp # *u rec
     : ~ i pos start
     ~ & != 0 # i . rp pos != 9 # i . rp pos { = pos + pos 1 }
-    ^ ( nurl_str_slice rec start - pos start )
+    // The scan already proved this exact span readable; __span_dup keeps
+    // the owned-return contract without rescanning the record to clamp it.
+    ^ ( __span_dup rec start pos )
 }
 
 // Byte offset where tab-separated field `idx` of `rec` starts, or -1 when
@@ -30880,21 +30882,26 @@ unsafe @ bck_loop_mask s pre s post → s {
 
 // ── Generic function helpers (Group E) ──────────────────────────────
 
+// str_first_word / str_skip_word: the length already bounds every byte
+// read. Scan that range directly; nurl_str_get would call strnlen again
+// for every byte (about ten million bounded scans per self-compile).
 // str_first_word: first space-delimited word in str.
-@ str_first_word s str → s {
+unsafe @ str_first_word s str → s {
     : i slen ( nurl_str_len str )
+    : *u p # *u str
     : ~ i pos 0
-    ~ & < pos slen != ( nurl_str_get str pos ) 32 { = pos + pos 1 }
-    ( nurl_str_slice str 0 pos )
+    ~ & < pos slen != 32 # i . p pos { = pos + pos 1 }
+    ^ # s ( nurl_strdup_n str pos )
 }
 
 // str_skip_word: str with first word (and following space) removed.
-@ str_skip_word s str → s {
+unsafe @ str_skip_word s str → s {
     : i slen ( nurl_str_len str )
+    : *u p # *u str
     : ~ i pos 0
-    ~ & < pos slen != ( nurl_str_get str pos ) 32 { = pos + pos 1 }
-    ? & < pos slen == ( nurl_str_get str pos ) 32 { = pos + pos 1 } {}
-    ( nurl_str_slice str pos - slen pos )
+    ~ & < pos slen != 32 # i . p pos { = pos + pos 1 }
+    ? < pos slen { = pos + pos 1 } {}
+    ^ # s ( nurl_strdup_n # s + # i p pos - slen pos )
 }
 
 // ── Cursor walk over a space-separated list ──────────────────────
@@ -30934,10 +30941,9 @@ unsafe @ __span_dup s list i pos i end → s {
 //
 // The obvious walk — first_word / skip_word per step — is the shape that
 // was already found and fixed inside the borrow checker's state lookup,
-// and it was still here: `str_first_word` scans with `nurl_str_get`,
-// which re-runs strlen per byte, and then allocates the word;
+// and it was still here: `str_first_word` allocates the word while
 // `str_skip_word` allocates a copy of the ENTIRE remaining tail. On an
-// L-byte list of W words that is O(L^2) bytes copied and 2W mallocs —
+// L-byte list of W words that is O(L^2) bytes copied and 2W allocations —
 // per containment test, and these run on every owned-string, drop and
 // borrow decision the compiler makes.
 //

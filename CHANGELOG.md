@@ -62,6 +62,14 @@ program's safety no longer rests on them.
 
 ### Performance
 
+- **Compiler word and record scans reuse bounds they already proved.**
+  The space-delimited word helpers scan their once-measured ranges directly,
+  and borrow-checker record extraction copies the span its delimiter walk
+  found without asking `strnlen` to prove it again. This removes about 12
+  million redundant bounded scans per fixed-source self-compile: 3.3% fewer
+  instructions (11.711 to 11.328 billion), 1.4% fewer cycles (8.843 to 8.723
+  billion), and about 1.2% less wall time (2.218 to 2.190 seconds; fifteen-run
+  means).
 - **An empty owned string allocates nothing.** The ownership model gave
   every owned string a heap block of its own, the empty ones included,
   and empty copies (a lookup miss returning the empty literal, an empty
