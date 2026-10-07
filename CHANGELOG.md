@@ -70,6 +70,13 @@ program's safety no longer rests on them.
   `bench/json_parse.nu` as wasm: 6.5 % fewer interpreted instructions, 5.5 %
   fewer under precompiled wasmtime; natively 2 % fewer. JSONTestSuite
   verdicts are unchanged (283/283; 31 of 35 implementation-defined accepted).
+- **nwasm 2.2.0: tier 8 closes on Cranelift** (packages/nwasm/CHANGELOG.md).
+  i64 arithmetic whose high half nobody reads runs in 32 bits, unsigned
+  compares feed carry-only cmovs, r9 is allocatable where globals stay out of
+  loops, zero-extended addresses index memory directly, AVX three-operand
+  floats on x86-64-v3, and no slow lea. `--scale 100` cycles against
+  precompiled wasmtime: sort_window 1.19–1.28 → 1.03–1.07, ring_write 0.87,
+  histogram_bins 0.77, collatz 0.97.
 - **nwasm 2.1.0: a register-allocating JIT tier** (packages/nwasm/CHANGELOG.md).
   Locally it runs 44 of the 45 wasmbench modules faster than wasmtime's
   Cranelift and ties the 45th, and the `nurlc.wasm` self-compile in 3.7 s
