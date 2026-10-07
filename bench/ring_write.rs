@@ -1,5 +1,8 @@
 // benchmark-contract: ring-write-xs13;seed=123456789;iterations=20000000;words=64;value=state32x2;xorshift=13
-const ITERATIONS: u64 = 20_000_000;
+
+// The workload multiplier: bench/wasmbench.sh --scale N rewrites this 1.
+const BENCH_SCALE: u64 = 1;
+const ITERATIONS: u64 = 20_000_000 * BENCH_SCALE;
 const WORDS: usize = 64;
 const SEED: u64 = 123_456_789;
 const MASK: u64 = 0xffff_ffff;

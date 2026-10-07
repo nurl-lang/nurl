@@ -44,7 +44,9 @@ unsafe @ bubble_sort8 * u64 arr → v {
 }
 
 unsafe @ main → i {
-    : u64 iterations 2000000
+    // The workload multiplier: bench/wasmbench.sh --scale N rewrites this 1.
+    : u64 BENCH_SCALE 1
+    : u64 iterations * 2000000 BENCH_SCALE
     : u64 mask 0xffffffff
     : *u64 window # *u64 ( malloc * 8 8 )
     : ~ i z 0

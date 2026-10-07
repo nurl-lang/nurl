@@ -7,6 +7,9 @@
 // Contract: the process prints exactly one line — the longest chain.
 #include <stdio.h>
 
+// The workload multiplier: bench/wasmbench.sh --scale N rewrites this 1.
+#define BENCH_SCALE 1ULL
+
 static long long steps(long long n) {
   long long c = 0;
   while (n > 1) {
@@ -18,7 +21,7 @@ static long long steps(long long n) {
 
 int main(void) {
   long long best = 0;
-  for (long long k = 1; k < 100000; ++k) {
+  for (long long k = 1; k < 100000LL * (long long)BENCH_SCALE; ++k) {
     long long s = steps(k);
     if (s > best) {
       best = s;

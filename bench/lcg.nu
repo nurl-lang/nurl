@@ -12,7 +12,9 @@
 // signed 64-bit integer, matching the peers that have no unsigned type.
 
 @ main → i {
-    : u64 iterations 20000000
+    // The workload multiplier: bench/wasmbench.sh --scale N rewrites this 1.
+    : u64 BENCH_SCALE 1
+    : u64 iterations * 20000000 BENCH_SCALE
     : ~ u64 x 1
     : ~ u64 k 0
     ~ < k iterations {

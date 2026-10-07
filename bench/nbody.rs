@@ -6,8 +6,11 @@
 // Rust never contracts a multiply-add into an fma without an explicit
 // `f64::mul_add`, and no rustc opt-level implies fast-math, so this
 // port needs no flag to stay bit-identical with the other four.
+
+// The workload multiplier: bench/wasmbench.sh --scale N rewrites this 1.
+const BENCH_SCALE: u64 = 1;
 const NBODY: usize = 5;
-const STEPS: u32 = 500_000;
+const STEPS: u32 = 500_000 * BENCH_SCALE as u32; // u32 as before: x1 is the same program
 const DT: f64 = 0.01;
 
 const PI: f64 = 3.141592653589793;

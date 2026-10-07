@@ -42,6 +42,15 @@ program's safety no longer rests on them.
 
 ### Added
 
+- **`bench/wasmbench.sh --scale N`** (and the wasm-bench workflow's `scale`
+  input): every benchmark does N times its work, set before compilation.
+  Each NURL, C and Rust source defines `BENCH_SCALE` once and multiplies its
+  iteration count by it, or repeats its kernel (`fib`, `sieve`, `matmul`);
+  the harness rewrites that one number in a copy, so x1 is the published
+  contract unchanged (the modules are instruction-identical) and a large N
+  amortises start-up and module compilation. A xN run writes
+  `WASMRESULTS-xN.md` beside the x1 report.
+
 - **Safe Vec element access at raw-pointer cost.** A loop over `vec_at`,
   `vec_put` or `vec_get` executes the instructions of the same loop over a
   `vec_data` pointer (it was 3.6–7.6× more): the bounds check folds away

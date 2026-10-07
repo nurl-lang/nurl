@@ -10,31 +10,34 @@
 #include <stdlib.h>
 #include <string.h>
 
+// The workload multiplier: bench/wasmbench.sh --scale N rewrites this 1.
+#define BENCH_SCALE 1ULL
+
 int main(void) {
   const int n = 10000000;
   unsigned char* mark = (unsigned char*)malloc((size_t)n);
   if (mark == NULL) {
     return 1;
   }
-  memset(mark, 0, (size_t)n);
-  mark[0] = 1;
-  mark[1] = 1;
-
-  for (long long p = 2; p * p < n; ++p) {
-    if (mark[p] == 0) {
-      for (long long m = p * p; m < n; m += p) {
-        mark[m] = 1;
+  // BENCH_SCALE full sieves over the same buffer; the counts add up.
+  long long count = 0;
+  for (unsigned long long rep = 0; rep < BENCH_SCALE; ++rep) {
+    memset(mark, 0, (size_t)n);
+    mark[0] = 1;
+    mark[1] = 1;
+    for (long long p = 2; p * p < n; ++p) {
+      if (mark[p] == 0) {
+        for (long long m = p * p; m < n; m += p) {
+          mark[m] = 1;
+        }
+      }
+    }
+    for (int k = 2; k < n; ++k) {
+      if (mark[k] == 0) {
+        ++count;
       }
     }
   }
-
-  long long count = 0;
-  for (int k = 2; k < n; ++k) {
-    if (mark[k] == 0) {
-      ++count;
-    }
-  }
-
   printf("%lld\n", count);
   free(mark);
   return 0;

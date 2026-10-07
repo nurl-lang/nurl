@@ -25,7 +25,9 @@
 & `m` @ sqrt f x → f
 
 unsafe @ main → i {
-    : i STEPS 500000
+    // The workload multiplier: bench/wasmbench.sh --scale N rewrites this 1.
+    : u64 BENCH_SCALE 1
+    : i STEPS * 500000 # i BENCH_SCALE
     : f DT 0.01
     : f PI 3.141592653589793
     : f SOLAR_MASS * * 4.0 PI PI

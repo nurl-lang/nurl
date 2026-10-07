@@ -1,4 +1,8 @@
 // collatz — longest Collatz chain length for starts in [1, 100000).
+
+// The workload multiplier: bench/wasmbench.sh --scale N rewrites this 1.
+const BENCH_SCALE: u64 = 1;
+
 fn steps(mut n: u64) -> u64 {
     let mut c = 0;
     while n > 1 {
@@ -10,7 +14,7 @@ fn steps(mut n: u64) -> u64 {
 
 fn main() {
     let mut best = 0;
-    for k in 1..100000 {
+    for k in 1..100000 * BENCH_SCALE {
         let s = steps(k);
         if s > best {
             best = s;

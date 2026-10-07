@@ -9,6 +9,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+// The workload multiplier: bench/wasmbench.sh --scale N rewrites this 1.
+#define BENCH_SCALE 1ULL
+
 int main(void) {
   const int n = 256;
   long long* a = (long long*)malloc((size_t)n * n * sizeof(long long));
@@ -18,28 +21,32 @@ int main(void) {
     return 1;
   }
 
-  for (int i = 0; i < n; ++i) {
-    for (int j = 0; j < n; ++j) {
-      int idx = i * n + j;
-      a[idx] = idx % 7;
-      b[idx] = (i + j) % 5;
-      c[idx] = 0;
-    }
-  }
-
-  for (int ri = 0; ri < n; ++ri) {
-    for (int cj = 0; cj < n; ++cj) {
-      long long s = 0;
-      for (int k = 0; k < n; ++k) {
-        s += a[ri * n + k] * b[k * n + cj];
-      }
-      c[ri * n + cj] = s;
-    }
-  }
-
+  // BENCH_SCALE products, the inputs shifted by the repetition so no two
+  // are the same computation; the traces add up.
   long long tr = 0;
-  for (int d = 0; d < n; ++d) {
-    tr += c[d * n + d];
+  for (long long rep = 0; rep < (long long)BENCH_SCALE; ++rep) {
+    for (int i = 0; i < n; ++i) {
+      for (int j = 0; j < n; ++j) {
+        int idx = i * n + j;
+        a[idx] = (idx + rep) % 7;
+        b[idx] = (i + j + rep) % 5;
+        c[idx] = 0;
+      }
+    }
+
+    for (int ri = 0; ri < n; ++ri) {
+      for (int cj = 0; cj < n; ++cj) {
+        long long s = 0;
+        for (int k = 0; k < n; ++k) {
+          s += a[ri * n + k] * b[k * n + cj];
+        }
+        c[ri * n + cj] = s;
+      }
+    }
+
+    for (int d = 0; d < n; ++d) {
+      tr += c[d * n + d];
+    }
   }
 
   printf("%lld\n", tr);

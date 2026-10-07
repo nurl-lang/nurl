@@ -13,12 +13,15 @@
 #include <stdint.h>
 #include <stdio.h>
 
+// The workload multiplier: bench/wasmbench.sh --scale N rewrites this 1.
+#define BENCH_SCALE 1ULL
+
 int main(void) {
   // Unsigned arithmetic so the wrap-around is defined; the printed value
   // is the same bit pattern read as int64, which is what NURL, Rust,
   // Python and Node print.
   uint64_t x = 1;
-  for (uint64_t i = 0; i < 20000000ULL; ++i) {
+  for (uint64_t i = 0; i < 20000000ULL * BENCH_SCALE; ++i) {
     x = x * 6364136223846793005ULL + 1442695040888963407ULL;
     x ^= x >> 33;
   }

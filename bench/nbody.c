@@ -49,8 +49,11 @@
 #include <stdio.h>
 #include <string.h>
 
+// The workload multiplier: bench/wasmbench.sh --scale N rewrites this 1.
+#define BENCH_SCALE 1ULL
+
 #define NBODY 5
-#define STEPS 500000
+#define STEPS (500000ULL * BENCH_SCALE)
 #define DT 0.01
 
 #define PI 3.141592653589793
@@ -155,7 +158,7 @@ static double energy(void) {
 
 int main(void) {
   offset_momentum();
-  for (int s = 0; s < STEPS; ++s) {
+  for (unsigned long long s = 0; s < STEPS; ++s) {
     advance(DT);
   }
   double e = energy();

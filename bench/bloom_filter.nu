@@ -50,6 +50,8 @@ unsafe @ split_block_maybe_contains * u64 filter u64 hash → u64 {
 }
 
 unsafe @ main → i {
+    // The workload multiplier: bench/wasmbench.sh --scale N rewrites this 1.
+    : u64 BENCH_SCALE 1
     : *u64 st # *u64 ( malloc 8 )
     = . st 0 # u64 123456789
     : *u64 filter # *u64 ( malloc * 256 8 )
@@ -69,7 +71,7 @@ unsafe @ main → i {
 
     : ~ u64 hits 0
     = k 0
-    ~ < k 4000000 {
+    ~ < k * 4000000 # i BENCH_SCALE {
         : u64 high ( lcg_step st )
         : u64 low ( lcg_step st )
         = hits + hits ( split_block_maybe_contains filter | << high 32 low )

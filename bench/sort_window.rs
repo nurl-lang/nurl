@@ -1,5 +1,8 @@
 // benchmark-contract: sort-window;seed=123456789;iterations=2000000;width=8;algorithm=bubble
-const ITERATIONS: u64 = 2_000_000;
+
+// The workload multiplier: bench/wasmbench.sh --scale N rewrites this 1.
+const BENCH_SCALE: u64 = 1;
+const ITERATIONS: u64 = 2_000_000 * BENCH_SCALE;
 const SEED: u64 = 123_456_789;
 const MASK: u64 = 0xffff_ffff;
 

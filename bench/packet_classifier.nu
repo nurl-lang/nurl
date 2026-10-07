@@ -11,7 +11,9 @@
 // reports a single timing number for the row.
 
 @ main → i {
-    : u64 iterations 25000000
+    // The workload multiplier: bench/wasmbench.sh --scale N rewrites this 1.
+    : u64 BENCH_SCALE 1
+    : u64 iterations * 25000000 BENCH_SCALE
     : u64 threshold 2147483648
     : ~ u64 state 123456789
     : ~ u64 k 0

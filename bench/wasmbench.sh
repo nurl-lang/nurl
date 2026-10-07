@@ -35,7 +35,17 @@
 #      ./bench/wasmbench.sh --quick            # 1 rep/cell, for a smoke test
 #      ./bench/wasmbench.sh --bench lcg --bench sieve
 #      ./bench/wasmbench.sh --nwasm-all-langs   # + C/Rust on the interpreter
+#      ./bench/wasmbench.sh --scale 100        # every benchmark does 100x the work
 #      ./bench/wasmbench.sh --stdout           # print the report, touch nothing
+#
+#  --scale N multiplies every benchmark's workload by N before it is
+#  compiled: each source defines `BENCH_SCALE` once (1) and multiplies its
+#  iteration count by it, or repeats its kernel that many times, so a xN
+#  program is the same program with a bigger constant. x1 is the published
+#  contract, exactly as before; a large N amortises process start-up and
+#  the runtimes' module compilation and leaves the generated code. A xN run
+#  writes WASMRESULTS-xN.md and results/wasm-xN.json beside the x1 report
+#  instead of replacing it.
 #
 #  Everything but the interpreter costs about what bench.sh does. The
 #  interpreter is ~500x slower than native, so its column alone is ~15
@@ -76,9 +86,11 @@ JSON_OUT="$BENCH/results/wasm-latest.json"
 MD_OUT="$BENCH/WASMRESULTS.md"
 WRITE=1
 NWASM_ALL_LANGS=0        # also run C/Rust on the interpreter (--nwasm-all-langs)
+SCALE=1                  # workload multiplier (--scale N): BENCH_SCALE in every source
+JSON_SET=0; MD_SET=0
 SELECTED=()
 
-usage() { sed -n '4,50p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+usage() { sed -n '4,60p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 
 while (( $# > 0 )); do
     case "$1" in
@@ -87,8 +99,9 @@ while (( $# > 0 )); do
         --budget-ms)     BUDGET_MS="$2"; shift 2 ;;
         --timeout)       TIMEOUT_S="$2"; shift 2 ;;
         --compile-reps)  COMPILE_REPS="$2"; shift 2 ;;
-        --json)          JSON_OUT="$2"; shift 2 ;;
-        --md)            MD_OUT="$2"; shift 2 ;;
+        --json)          JSON_OUT="$2"; JSON_SET=1; shift 2 ;;
+        --md)            MD_OUT="$2"; MD_SET=1; shift 2 ;;
+        --scale)         SCALE="$2"; shift 2 ;;
         --stdout)        WRITE=0; shift ;;
         --nwasm-all-langs)  NWASM_ALL_LANGS=1; shift ;;
         --quick)         MAX_REPS=1; BUDGET_MS=1; COMPILE_REPS=1; shift ;;
@@ -96,6 +109,16 @@ while (( $# > 0 )); do
         *)               echo "wasmbench.sh: unknown argument '$1'" >&2; usage 2 ;;
     esac
 done
+
+if [[ ! "$SCALE" =~ ^[1-9][0-9]{0,8}$ ]]; then
+    echo "wasmbench.sh: --scale wants a positive integer below 10^9, got '$SCALE'" >&2
+    exit 2
+fi
+# A xN run is its own report: the x1 table stays the published one.
+if (( SCALE != 1 )); then
+    (( JSON_SET )) || JSON_OUT="$BENCH/results/wasm-x$SCALE.json"
+    (( MD_SET )) || MD_OUT="$BENCH/WASMRESULTS-x$SCALE.md"
+fi
 
 mkdir -p "$BUILD"
 
@@ -370,6 +393,46 @@ if (( ${#names[@]} == 0 )); then
     exit 2
 fi
 
+# ── workload scale ───────────────────────────────────────────────
+# Every benchmark source defines its workload multiplier on one line —
+# `: u64 BENCH_SCALE 1` (NURL), `#define BENCH_SCALE 1ULL` (C),
+# `const BENCH_SCALE: u64 = 1;` (Rust) — and multiplies its iteration count
+# by it, or repeats its kernel that many times. x1 compiles the sources as
+# they stand. xN compiles copies with that one number rewritten, so every
+# implementation of a row does the same N times the work and the gate still
+# compares like with like. A source without exactly one such line stops the
+# run: a x1 cell in a xN table would be invisible once the numbers are read.
+SRC_DIR="$BUILD/src"
+scale_pattern() {   # <ext> -> "<ERE matching the definition>|<replacement>"
+    case "$1" in
+        nu) printf '%s|%s' '^([[:space:]]*: u64 BENCH_SCALE )1$' "\\1$SCALE" ;;
+        c)  printf '%s|%s' '^(#define BENCH_SCALE )1ULL$' "\\1${SCALE}ULL" ;;
+        rs) printf '%s|%s' '^(const BENCH_SCALE: u64 = )1;$' "\\1$SCALE;" ;;
+    esac
+}
+src_for() {         # <bench> <ext> -> the source to compile at this scale
+    local in="$BENCH/$1.$2" pr pat new out
+    if (( SCALE == 1 )); then printf '%s' "$in"; return 0; fi
+    pr="$(scale_pattern "$2")"; pat="${pr%%|*}"; new="${pr#*|}"
+    out="$SRC_DIR/$1.$2"
+    sed -E "s/$pat/$new/" "$in" > "$out"
+    printf '%s' "$out"
+}
+if (( SCALE != 1 )); then
+    mkdir -p "$SRC_DIR"
+    bad=()
+    for b in "${names[@]}"; do
+        for ext in nu c rs; do
+            pr="$(scale_pattern "$ext")"
+            [[ "$(grep -cE "${pr%%|*}" "$BENCH/$b.$ext")" == 1 ]] || bad+=("$b.$ext")
+        done
+    done
+    if (( ${#bad[@]} > 0 )); then
+        echo "wasmbench.sh: --scale $SCALE needs exactly one BENCH_SCALE definition in: ${bad[*]}" >&2
+        exit 2
+    fi
+fi
+
 # json_parse reads a generated fixture; make sure it exists before the gate
 # runs, or every implementation fails identically and the row looks fine.
 [[ -f "$BENCH/data.json" ]] || python3 "$BENCH/gen_data.py"
@@ -452,15 +515,16 @@ progress() { printf '\r\033[K  %-18s %s' "$1" "$2" >&2; }
 for idx in "${!names[@]}"; do
     b="${names[$idx]}"
 
+    src_nu="$(src_for "$b" nu)"; src_c="$(src_for "$b" c)"; src_rs="$(src_for "$b" rs)"
     progress "$b" "compiling native…"
-    read -r cc_fe cc_nurl <<<"$(compile_nurl_native "$BENCH/$b.nu" "$BUILD/$b")"
-    cc_c="$(compile_c_native "$BENCH/$b.c" "$BUILD/$b")"
-    cc_rust="$(compile_rust_native "$BENCH/$b.rs" "$BUILD/$b")"
+    read -r cc_fe cc_nurl <<<"$(compile_nurl_native "$src_nu" "$BUILD/$b")"
+    cc_c="$(compile_c_native "$src_c" "$BUILD/$b")"
+    cc_rust="$(compile_rust_native "$src_rs" "$BUILD/$b")"
     progress "$b" "compiling wasm…"
-    cc_nurl_wasm="$(compile_nurl_wasm "$BENCH/$b.nu" "$BUILD/$b")"
-    cc_nurl_wasm_nogc="$(compile_nurl_wasm_nogc "$BENCH/$b.nu" "$BUILD/$b")"
-    cc_c_wasm="$(compile_c_wasm "$BENCH/$b.c" "$BUILD/$b")"
-    cc_rust_wasm="$(compile_rust_wasm "$BENCH/$b.rs" "$BUILD/$b")"
+    cc_nurl_wasm="$(compile_nurl_wasm "$src_nu" "$BUILD/$b")"
+    cc_nurl_wasm_nogc="$(compile_nurl_wasm_nogc "$src_nu" "$BUILD/$b")"
+    cc_c_wasm="$(compile_c_wasm "$src_c" "$BUILD/$b")"
+    cc_rust_wasm="$(compile_rust_wasm "$src_rs" "$BUILD/$b")"
     r_cc_nurl_fe+=("${cc_fe:-FAIL}"); r_cc_nurl+=("${cc_nurl:-FAIL}")
     r_cc_nurl_wasm+=("$cc_nurl_wasm"); r_cc_nurl_wasm_nogc+=("$cc_nurl_wasm_nogc")
     r_cc_c+=("$cc_c"); r_cc_c_wasm+=("$cc_c_wasm")
@@ -588,6 +652,7 @@ emit_json() {
     printf '{\n'
     printf '  "schema": 1,\n'
     printf '  "kind": "wasm",\n'
+    printf '  "workload_scale": %s,\n' "$SCALE"
     printf '  "generated_utc": "%s",\n' "$(jstr "$NOW")"
     printf '  "commit": "%s",\n' "$(jstr "$COMMIT")"
     printf '  "run_url": "%s",\n' "$(jstr "$RUN_URL")"
@@ -714,9 +779,17 @@ wins() {                   # <runtime-array-name> <reference-array-name>
 
 emit_md() {
     printf '# WebAssembly benchmark results — NURL native vs NURL wasm\n\n'
+    local json_rel="${JSON_OUT#"$BENCH"/}"
     printf 'Generated `%s` by `bench/wasmbench.sh`. **Do not edit by hand** —\n' "$NOW"
     printf 'the next run overwrites it. The machine-readable form of this same run\n'
-    printf 'is [`results/wasm-latest.json`](results/wasm-latest.json).\n\n'
+    printf 'is [`%s`](%s).\n\n' "$json_rel" "$json_rel"
+    if (( SCALE != 1 )); then
+        printf '**Workload ×%s.** Every benchmark below does %s times its published\n' "$SCALE" "$SCALE"
+        printf 'work (`BENCH_SCALE` in each source: the iteration count, or the number of\n'
+        printf 'repetitions of the kernel, multiplied before compilation), so process\n'
+        printf 'start-up and module compilation are amortised and the generated code is\n'
+        printf 'what the cells measure. The ×1 report is [`WASMRESULTS.md`](WASMRESULTS.md).\n\n'
+    fi
     printf 'This is the sibling of [`RESULTS.md`](RESULTS.md): same corpus, same\n'
     printf 'protocol, one axis rotated. `RESULTS.md` asks how fast NURL is against\n'
     printf 'four other languages; this file asks what **targeting wasm** costs, and\n'
@@ -741,10 +814,11 @@ emit_md() {
     printf '| C → wasm | `%s cc --target=%s` |\n' "$ZIG_VERSION" "$WASM_TARGET_C"
     printf '| Rust → wasm | `rustc --target %s` |\n' "$WASM_TARGET_RS"
     printf '| wasm runtime (reference) | `%s` — Cranelift JIT |\n' "$WASMTIME_VERSION"
-    printf '| wasm runtime (NURL) | `packages/nwasm` (%s) — template JIT + interpreter, built from this repo, `NURL_SPLIT=0` (release build; see below) |\n' "$NWASM_VERSION"
+    printf '| wasm runtime (NURL) | `packages/nwasm` (%s) — register-allocating JIT, template JIT and interpreter, built from this repo, `NURL_SPLIT=0` (release build; see below) |\n' "$NWASM_VERSION"
     printf '\n'
     printf '| Setting | Value |\n|---|---|\n'
     printf '| Optimisation | NURL/C `%s`, Rust `-C opt-level=2`, both targets |\n' "$OPT"
+    printf '| Workload scale | ×%s%s |\n' "$SCALE" "$( (( SCALE == 1 )) && echo ' — the published contract (`--scale N` multiplies it)' || echo " — every benchmark's work multiplied by $SCALE before compilation" )"
     printf '| Timed runs per cell | up to %s, adaptive: as many as fit in %s ms |\n' "$MAX_REPS" "$BUDGET_MS"
     printf '| Timed compiles per cell | %s (median) |\n' "$COMPILE_REPS"
     printf '| Per-run timeout | %s s |\n' "$TIMEOUT_S"

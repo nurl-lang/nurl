@@ -11,9 +11,11 @@
 }
 
 @ main → i {
+    // The workload multiplier: bench/wasmbench.sh --scale N rewrites this 1.
+    : u64 BENCH_SCALE 1
     : ~ i best 0
     : ~ i k 1
-    ~ < k 100000 {
+    ~ < k * 100000 # i BENCH_SCALE {
         : i s ( steps k )
         ? > s best { = best s } {}
         = k + k 1

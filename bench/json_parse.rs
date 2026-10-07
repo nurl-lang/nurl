@@ -3,6 +3,10 @@
 // recursive-descent parser to match the "what's in the box" baseline:
 // each language uses the parser shipped with its stdlib + this file,
 // no extra dependencies.
+
+// The workload multiplier: bench/wasmbench.sh --scale N rewrites this 1.
+const BENCH_SCALE: u64 = 1;
+
 use std::fs::File;
 use std::io::Read;
 use std::str;
@@ -103,7 +107,7 @@ fn main() {
     let mut src = Vec::new();
     File::open(&path).unwrap().read_to_end(&mut src).unwrap();
     let mut ok = 0u32;
-    for _ in 0..20 {
+    for _ in 0..20 * BENCH_SCALE as i32 { // i32 as before: x1 is the same program
         let mut p = P { s: &src, i: 0 };
         if p.parse().is_some() { ok += 1; }
     }
