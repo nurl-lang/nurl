@@ -99,6 +99,8 @@ unsafe @ __result_count s ftp → i {
                     ?? ( env_get `NURL_NWASM_PIN` ) { T pv → { ? != 0 ( nurl_str_eq ( string_data pv ) `0` ) { ( interp_disable_pin ) } {} } F → {} }
                     ?? ( env_get `NURL_NWASM_JIT_DUMP` ) { T dv → { ? != 0 ( nurl_str_eq ( string_data dv ) `1` ) { ( interp_enable_jitdump ) } {} } F → {} }
                     ?? ( env_get `NURL_NWASM_RJIT` ) { T rv → { ? != 0 ( nurl_str_eq ( string_data rv ) `0` ) { ( interp_disable_rjit ) } {} } F → {} }
+                    ?? ( env_get `NURL_NWASM_BMI2` ) { T bv → { ? != 0 ( nurl_str_eq ( string_data bv ) `0` ) { ( interp_disable_bmi2 ) } {} } F → {} }
+                    ?? ( env_get `NURL_NWASM_RJIT_TRACE` ) { T tv → { ( interp_rjit_trace ( nurl_str_to_int ( string_data tv ) ) ) } F → {} }
                     ?? ( env_get `NURL_NWASM_RJIT_DBG` ) { T qv → { ? != 0 ( nurl_str_eq ( string_data qv ) `1` ) { ( interp_enable_rjdbg ) } {} } F → {} }
                     ?? ( env_get `NURL_NWASM_PERFMAP` ) { T mv → { ? != 0 ( nurl_str_eq ( string_data mv ) `1` ) { ( interp_enable_perfmap ) } {} } F → {} }
                     ( exec_func it fidx )
@@ -174,6 +176,8 @@ unsafe @ __result_count s ftp → i {
                     ?? ( env_get `NURL_NWASM_PIN` ) { T pv → { ? != 0 ( nurl_str_eq ( string_data pv ) `0` ) { ( interp_disable_pin ) } {} } F → {} }
                     ?? ( env_get `NURL_NWASM_JIT_DUMP` ) { T dv → { ? != 0 ( nurl_str_eq ( string_data dv ) `1` ) { ( interp_enable_jitdump ) } {} } F → {} }
                     ?? ( env_get `NURL_NWASM_RJIT` ) { T rv → { ? != 0 ( nurl_str_eq ( string_data rv ) `0` ) { ( interp_disable_rjit ) } {} } F → {} }
+                    ?? ( env_get `NURL_NWASM_BMI2` ) { T bv → { ? != 0 ( nurl_str_eq ( string_data bv ) `0` ) { ( interp_disable_bmi2 ) } {} } F → {} }
+                    ?? ( env_get `NURL_NWASM_RJIT_TRACE` ) { T tv → { ( interp_rjit_trace ( nurl_str_to_int ( string_data tv ) ) ) } F → {} }
                     ?? ( env_get `NURL_NWASM_RJIT_DBG` ) { T qv → { ? != 0 ( nurl_str_eq ( string_data qv ) `1` ) { ( interp_enable_rjdbg ) } {} } F → {} }
                     ?? ( env_get `NURL_NWASM_PERFMAP` ) { T mv → { ? != 0 ( nurl_str_eq ( string_data mv ) `1` ) { ( interp_enable_perfmap ) } {} } F → {} }
                     ( exec_func it fidx )

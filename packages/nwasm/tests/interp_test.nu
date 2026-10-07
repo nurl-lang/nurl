@@ -69,6 +69,7 @@ $ `src/interp.nu`
     ?? ( env_get `NURL_NWASM_JIT` ) { T jv → { ? == 0 ( nurl_str_eq ( string_data jv ) `0` ) { ( interp_enable_jit ) } {} } F → { ( interp_enable_jit ) } }
     ?? ( env_get `NURL_NWASM_PIN` ) { T pv → { ? != 0 ( nurl_str_eq ( string_data pv ) `0` ) { ( interp_disable_pin ) } {} } F → {} }
     ?? ( env_get `NURL_NWASM_RJIT` ) { T rv → { ? != 0 ( nurl_str_eq ( string_data rv ) `0` ) { ( interp_disable_rjit ) } {} } F → {} }
+    ?? ( env_get `NURL_NWASM_BMI2` ) { T bv → { ? != 0 ( nurl_str_eq ( string_data bv ) `0` ) { ( interp_disable_bmi2 ) } {} } F → {} }
     ?? ( env_get `NURL_NWASM_GUARD` ) { T gv → { ? != 0 ( nurl_str_eq ( string_data gv ) `0` ) { ( interp_disable_guard ) } {} } F → {} }
     // add: locals + i32.add + call frame
     ( pi `add 2 3:       ` ( run2 ( wasm_add ) `add` 2 3 ) 5 )

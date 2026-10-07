@@ -5,8 +5,8 @@
 // saturating float→int truncation, unsigned i64 conversions, NaN-correct
 // comparisons and min/max, call_indirect signature checks, table.* ops,
 // passive segments + memory.init/data.drop, memory.copy/fill, memory.grow
-// limits, division by constants, and the start section. Run from the
-// package root:
+// limits, division by constants, bit tests and shifts, reinterprets,
+// null reference locals, and the start section. Run from the package root:
 //   NURL_STDLIB=<repo> ../../nurl.sh tests/semantics_test.nu /tmp/st && /tmp/st
 
 $ `stdlib/core/string.nu`
@@ -70,6 +70,17 @@ $ `src/interp.nu`
 // `x OP K` for one K; the JIT turns these into shifts and multiplies.
 // The exhaustive sweep is tests/divconst_diff.sh.
 @ wasm_divk → s { ^ `0061736d01000000010b0260017f017e60017e017e03111000000000000000000001010101010101079401100775333264313630000007753332723136300001057533326437000207753332726269670003057333326437000406733332646d330005067333327231300006057333326438000707733332726d31360008067336346431300009087336347231303030000a057536346437000b06753634723130000c06733634646d38000d0775363464703430000e06733634726d37000f0a9201100900200041a0016eac0b0900200041a00170ac0b0800200041076eac0b08002000417e70ac0b0800200041076dac0b08002000417d6dac0b08002000410a6fac0b0800200041086dac0b0800200041706fac0b07002000420a7f0b0800200042e807810b070020004207800b07002000420a820b0700200042787f0b0c00200042808080808020800b070020004279810b` }
+
+// Branches on a bit or a mask (the JIT's bt / test fusion), variable
+// shifts with counts past the width (BMI2 or cl), the bit counts, and a
+// loop keeping many values live through bit tests and selects.
+@ wasm_flags → s { ^ `0061736d0100000001270760027e7e017f60017e017f60017f017f60027f7f017e60027e7e017e60017e017e60017f017e03111000010201030303040404040202050506077c100362747600000362746b0001057473743332000205747374363400030573686c33320004057368723332000505736172333200060573686c36340007057368723634000805736172363400090673656c667368000a05636c7a3332000b0563747a3332000c05636c7a3634000d0563747a3634000e036d6978000f0aa702101300200020018842018350047f410a0541140b0b1500027f41072000423f88420183a70d001a41030b0b1300200041818080807871047f41010541000b0b10002000427e8350047f41010541000b0b08002000200174ac0b08002000200176ac0b08002000200175ac0b070020002001860b070020002001880b070020002001870b0b002000200186210120010b05002000670b05002000680b05002000790b050020007a0b7f02017f057e4295f8a9fa97b7de9b9e7f21020340200242adfed5e4d485fda8d8007e42cf829ebbefefde82147c210220022001ad88420183500440200320027c210305200420028521040b2003200420032004561b2105200620052002423f83867c2106200141016a210120012000490d000b200320047c200520067c7c0b002c046e616d650218010f0700016e010169020178030161040162050163060164030b0201010001620f0100014c` }
+
+// i32.reinterpret_f32 yields a canonical i32 (read back through the
+// i64.extend_i32_s the predecoder drops), demote/promote whose source
+// dies into the result's register, and reference-typed locals that
+// start out null — on a fresh frame and on a recycled one.
+@ wasm_rint → s { ^ `0061736d010000000109026000017e6000017f030b0a0000010001010101010104040170000207450904726e656700000472696e6600010664666c6f6f7200020670666c6f6f72000305666269747300040365787400050366756e0006056d69786564000705616761696e00090907010041000b01080a9e010a0900430000c0bfbcac0b0e0044be74af13e4f1b2efb6bcac0b0e0044be74af13e4f1b2ef9cb6bc0b0a0043000020c08ebbbd0b100041808080fe7bbe430000803f92bc0b0701016f2000d10b070101702000d10b1a05017e016f017c0170017f2001d12003d16a2000a720046a6a0b0d0101702000d14100250021000b1f01027f0340200110086a2101200041016a2100200041e400490d000b20010b001e046e616d650104010801670209010902000169010173030601090100014c` }
 
 // Run `export` with the given i64-cell args; returns the top of the value
 // stack, or `traps` (out-param via sentinel −77777) when the module traps.
@@ -183,6 +194,7 @@ $ `src/interp.nu`
     ?? ( env_get `NURL_NWASM_JIT` ) { T jv → { ? == 0 ( nurl_str_eq ( string_data jv ) `0` ) { ( interp_enable_jit ) } {} } F → { ( interp_enable_jit ) } }
     ?? ( env_get `NURL_NWASM_PIN` ) { T pv → { ? != 0 ( nurl_str_eq ( string_data pv ) `0` ) { ( interp_disable_pin ) } {} } F → {} }
     ?? ( env_get `NURL_NWASM_RJIT` ) { T rv → { ? != 0 ( nurl_str_eq ( string_data rv ) `0` ) { ( interp_disable_rjit ) } {} } F → {} }
+    ?? ( env_get `NURL_NWASM_BMI2` ) { T bv → { ? != 0 ( nurl_str_eq ( string_data bv ) `0` ) { ( interp_disable_bmi2 ) } {} } F → {} }
     ?? ( env_get `NURL_NWASM_GUARD` ) { T gv → { ? != 0 ( nurl_str_eq ( string_data gv ) `0` ) { ( interp_disable_guard ) } {} } F → {} }
     // ── multi-value blocks / branches ──
     ( ck `mvblock:        ` ( ev0 ( wasm_mv ) `mvblock` ) 7 )
@@ -263,6 +275,93 @@ $ `src/interp.nu`
     ( ck `copy grown page:` ( ev0 cf `cpgrow` ) 5208208757389214273 )
     ( ck `live across:    ` ( ev1 cf `live` 10 ) 235 )
     ( ck `copy loop 300:  ` ( ev1 cf `loopcp` 300 ) 78436 )
+
+    // ── bit / mask branches, variable shifts, bit counts ──
+    : s fl ( wasm_flags )
+    ( ck `btv #0:         ` ( ev2 fl `btv` -1 0 ) 20 )
+    ( ck `btv #1:         ` ( ev2 fl `btv` -1 63 ) 20 )
+    ( ck `btv #2:         ` ( ev2 fl `btv` 5 64 ) 20 )
+    ( ck `btv #3:         ` ( ev2 fl `btv` 5 65 ) 10 )
+    ( ck `btv #4:         ` ( ev2 fl `btv` 4611686018427387904 62 ) 20 )
+    ( ck `btv #5:         ` ( ev2 fl `btv` 1 -1 ) 10 )
+    ( ck `btv #6:         ` ( ev2 fl `btv` -9223372036854775808 -1 ) 20 )
+    ( ck `btv #7:         ` ( ev2 fl `btv` 2 1 ) 20 )
+    ( ck `btk #0:         ` ( ev1 fl `btk` -1 ) 7 )
+    ( ck `btk #1:         ` ( ev1 fl `btk` 1 ) 3 )
+    ( ck `btk #2:         ` ( ev1 fl `btk` -9223372036854775808 ) 7 )
+    ( ck `btk #3:         ` ( ev1 fl `btk` 0 ) 3 )
+    ( ck `tst32 #0:       ` ( ev1 fl `tst32` 0 ) 0 )
+    ( ck `tst32 #1:       ` ( ev1 fl `tst32` 1 ) 1 )
+    ( ck `tst32 #2:       ` ( ev1 fl `tst32` -2147483648 ) 1 )
+    ( ck `tst32 #3:       ` ( ev1 fl `tst32` 2 ) 0 )
+    ( ck `tst32 #4:       ` ( ev1 fl `tst32` -1 ) 1 )
+    ( ck `tst64 #0:       ` ( ev1 fl `tst64` 0 ) 1 )
+    ( ck `tst64 #1:       ` ( ev1 fl `tst64` 1 ) 1 )
+    ( ck `tst64 #2:       ` ( ev1 fl `tst64` 2 ) 0 )
+    ( ck `tst64 #3:       ` ( ev1 fl `tst64` -1 ) 0 )
+    ( ck `tst64 #4:       ` ( ev1 fl `tst64` -9223372036854775808 ) 0 )
+    ( ck `shl32 #0:       ` ( ev2 fl `shl32` 1 31 ) -2147483648 )
+    ( ck `shl32 #1:       ` ( ev2 fl `shl32` 1 32 ) 1 )
+    ( ck `shl32 #2:       ` ( ev2 fl `shl32` 1 33 ) 2 )
+    ( ck `shl32 #3:       ` ( ev2 fl `shl32` -1 -1 ) -2147483648 )
+    ( ck `shl32 #4:       ` ( ev2 fl `shl32` 1073741824 1 ) -2147483648 )
+    ( ck `shl32 #5:       ` ( ev2 fl `shl32` 3 -31 ) 6 )
+    ( ck `shr32 #0:       ` ( ev2 fl `shr32` -1 1 ) 2147483647 )
+    ( ck `shr32 #1:       ` ( ev2 fl `shr32` -1 32 ) -1 )
+    ( ck `shr32 #2:       ` ( ev2 fl `shr32` -2147483648 31 ) 1 )
+    ( ck `shr32 #3:       ` ( ev2 fl `shr32` -2147483648 -1 ) 1 )
+    ( ck `shr32 #4:       ` ( ev2 fl `shr32` 5 33 ) 2 )
+    ( ck `sar32 #0:       ` ( ev2 fl `sar32` -2147483648 31 ) -1 )
+    ( ck `sar32 #1:       ` ( ev2 fl `sar32` -2147483648 32 ) -2147483648 )
+    ( ck `sar32 #2:       ` ( ev2 fl `sar32` -1 7 ) -1 )
+    ( ck `sar32 #3:       ` ( ev2 fl `sar32` 1073741824 -2 ) 1 )
+    ( ck `shl64 #0:       ` ( ev2 fl `shl64` 1 63 ) -9223372036854775808 )
+    ( ck `shl64 #1:       ` ( ev2 fl `shl64` 1 64 ) 1 )
+    ( ck `shl64 #2:       ` ( ev2 fl `shl64` 1 -1 ) -9223372036854775808 )
+    ( ck `shl64 #3:       ` ( ev2 fl `shl64` 3 65 ) 6 )
+    ( ck `shl64 #4:       ` ( ev2 fl `shl64` -1 32 ) -4294967296 )
+    ( ck `shr64 #0:       ` ( ev2 fl `shr64` -1 1 ) 9223372036854775807 )
+    ( ck `shr64 #1:       ` ( ev2 fl `shr64` -1 64 ) -1 )
+    ( ck `shr64 #2:       ` ( ev2 fl `shr64` -9223372036854775808 63 ) 1 )
+    ( ck `shr64 #3:       ` ( ev2 fl `shr64` -1 -1 ) 1 )
+    ( ck `shr64 #4:       ` ( ev2 fl `shr64` 7 129 ) 3 )
+    ( ck `sar64 #0:       ` ( ev2 fl `sar64` -9223372036854775808 63 ) -1 )
+    ( ck `sar64 #1:       ` ( ev2 fl `sar64` -9223372036854775808 64 ) -9223372036854775808 )
+    ( ck `sar64 #2:       ` ( ev2 fl `sar64` -2 -1 ) -1 )
+    ( ck `sar64 #3:       ` ( ev2 fl `sar64` 1 1 ) 0 )
+    ( ck `selfsh #0:      ` ( ev2 fl `selfsh` 3 4 ) 48 )
+    ( ck `selfsh #1:      ` ( ev2 fl `selfsh` -1 63 ) -9223372036854775808 )
+    ( ck `selfsh #2:      ` ( ev2 fl `selfsh` 5 64 ) 5 )
+    ( ck `clz32 #0:       ` ( ev1 fl `clz32` 0 ) 32 )
+    ( ck `clz32 #1:       ` ( ev1 fl `clz32` 1 ) 31 )
+    ( ck `clz32 #2:       ` ( ev1 fl `clz32` -1 ) 0 )
+    ( ck `clz32 #3:       ` ( ev1 fl `clz32` 65536 ) 15 )
+    ( ck `ctz32 #0:       ` ( ev1 fl `ctz32` 0 ) 32 )
+    ( ck `ctz32 #1:       ` ( ev1 fl `ctz32` 1 ) 0 )
+    ( ck `ctz32 #2:       ` ( ev1 fl `ctz32` -2147483648 ) 31 )
+    ( ck `ctz32 #3:       ` ( ev1 fl `ctz32` 65536 ) 16 )
+    ( ck `clz64 #0:       ` ( ev1 fl `clz64` 0 ) 64 )
+    ( ck `clz64 #1:       ` ( ev1 fl `clz64` 1 ) 63 )
+    ( ck `clz64 #2:       ` ( ev1 fl `clz64` -1 ) 0 )
+    ( ck `clz64 #3:       ` ( ev1 fl `clz64` 4294967296 ) 31 )
+    ( ck `ctz64 #0:       ` ( ev1 fl `ctz64` 0 ) 64 )
+    ( ck `ctz64 #1:       ` ( ev1 fl `ctz64` -9223372036854775808 ) 63 )
+    ( ck `ctz64 #2:       ` ( ev1 fl `ctz64` 4294967296 ) 32 )
+    ( ck `ctz64 #3:       ` ( ev1 fl `ctz64` 6 ) 1 )
+    ( ck `mix #0:         ` ( ev1 fl `mix` 1000 ) -7772899469867135293 )
+    ( ck `mix #1:         ` ( ev1 fl `mix` 1 ) -8736760740920937472 )
+
+    // ── reinterprets, demote/promote, null reference locals ──
+    : s ri ( wasm_rint )
+    ( ck `rneg:           ` ( ev0 ri `rneg` ) -1077936128 )
+    ( ck `rinf:           ` ( ev0 ri `rinf` ) -8388608 )
+    ( ck `dfloor:         ` ( ev0 ri `dfloor` ) -8388608 )
+    ( ck `pfloor:         ` ( ev0 ri `pfloor` ) -4609434218613702656 )
+    ( ck `fbits:          ` ( ev0 ri `fbits` ) -1090519040 )
+    ( ck `ext:            ` ( ev0 ri `ext` ) 1 )
+    ( ck `fun:            ` ( ev0 ri `fun` ) 1 )
+    ( ck `mixed:          ` ( ev0 ri `mixed` ) 2 )
+    ( ck `again:          ` ( ev0 ri `again` ) 100 )
 
     // ── division / remainder by a constant ──
     : s dk ( wasm_divk )

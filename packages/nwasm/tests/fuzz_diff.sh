@@ -34,6 +34,7 @@ for ((i=0;i<N;i++)); do
   while IFS=$'\t' read -r f flag; do
     [ "$flag" = N ] && continue
     [ -z "$f" ] && continue
+    [[ "$f" == -* ]] && continue  # both CLIs would read the export's name as an option
     ref=$(timeout 10 wasmtime run -C cache=n -W trap-on-grow-failure=y --invoke "$f" "$WORK/m.wasm" 2>&1); rrc=$?
     a=$(timeout 10 "$NW" run --invoke "$f" "$WORK/m.wasm" 2>&1); arc=$?
     b=$(timeout 10 env NURL_NWASM_RJIT=0 NURL_NWASM_PIN=0 "$NW" run --invoke "$f" "$WORK/m.wasm" 2>&1); brc=$?

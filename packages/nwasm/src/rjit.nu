@@ -44,7 +44,7 @@ $ `stdlib/core/vec.nu`
     ( Vec i ) code  // the records, 6 words each (copy)
     ( Vec i ) aux  // br_table rows, 4 words each (copy)
     ( Vec i ) kv  // the constant pool (copy)
-    ( Vec i ) ltype  // per local slot: 0 i32, 1 i64, 2 f32, 3 f64
+    ( Vec i ) ltype  // per local slot: 0 i32, 1 i64, 2 f32, 3 f64, 4 a reference (null = -1)
     ( Vec i ) rsig  // per record: a call's callee nparams*65536 + nresults (-1 none/unknown)
     ( Vec i ) uoff  // per record (n+1): its uses are [uoff[r], uoff[r+1])
     ( Vec i ) uslot
@@ -83,6 +83,9 @@ $ `stdlib/core/vec.nu`
     ( Vec i ) wsens  // per web: 1 when some consumer reads bits 32..63 (an i32 def must sign-extend)
     ( Vec i ) wdx  // per web: 1 when live across a record that clobbers rdx (div/rem, bit counts)
     ( Vec i ) dxr  // those records, ascending
+    ( Vec i ) wcx  // per web: 1 when it touches a record whose lowering writes rcx
+    ( Vec i ) cxr  // those records, ascending
+    ( Vec i ) cxb  // per record: 1 when a web in rcx is live across it (a borrower parks rcx)
     ( Vec i ) cs_off  // direct call sites: the rel32's buffer offset …
     ( Vec i ) cs_fx  // … the callee …
     ( Vec i ) cs_ab  // … its argument base …
@@ -141,7 +144,9 @@ $ `stdlib/core/vec.nu`
 
 @ rjs_glob → i { ^ 28 }  // 1: the function reads or writes globals (r9 = their base, reserved)
 
-@ rjs_nst → i { ^ 29 }
+@ rjs_pcc → i { ^ 29 }  // a fused test/bt set the flags for the next IFZ/BRIF: the jcc meaning "zero" (-1 none)
+
+@ rjs_nst → i { ^ 30 }
 
 @ rj_get Rj c i k → i { ^ ( vec_at [i] . c st k ) }
 
@@ -311,6 +316,39 @@ $ `stdlib/core/vec.nu`
 @ rj_shift_cl Rj c i w i ext i dst → v {
     ( rj_rex c w 0 0 dst 0 ) ( rj_b c 211 ) ( rj_modrr c ext dst )
 }
+
+// x86-64-v3 (BMI1/BMI2, LZCNT) in the emitted code: -1 = ask the CPU on
+// first use, 0 = baseline x86-64 only, 1 = use it
+: ~ i g_rjbmi -1
+
+@ rj_set_bmi i v → v { = g_rjbmi v }
+
+@ rj_bmi → b {
+    ? < g_rjbmi 0 { = g_rjbmi ? != 0 # i ( nurl_cpu_x86_v3 ) 1 0 } {}
+    ^ == g_rjbmi 1
+}
+
+// BMI2 shlx (pp 1) / sarx (pp 2) / shrx (pp 3): dst = src shifted by cnt,
+// any three registers, the count masked like the legacy forms; flags
+// untouched. VEX.LZ.0F38.W F7 /r, the count in vvvv.
+@ rj_shx Rj c i w i pp i dst i src i cnt → v {
+    ( rj_b c 196 )
+    ( rj_b c | | | << ^^ & >> dst 3 1 1 7 64 << ^^ & >> src 3 1 1 5 2 )
+    ( rj_b c | | << w 7 << ^^ & cnt 15 15 3 pp )
+    ( rj_b c 247 )
+    ( rj_modrr c dst src )
+}
+
+// A second scratch GPR for an instruction whose own register is `reg`:
+// rax when that is not rax, else rcx — parked in xmm1 until rj_tmp_off,
+// since rcx may hold a web (movq leaves the flags alone)
+@ rj_tmp_on Rj c i reg → i {
+    ? != reg 0 { ^ 0 } {}
+    ( rj_movq_xg c 1 1 )  // movq xmm1,rcx
+    ^ 1
+}
+
+@ rj_tmp_off Rj c i t → v { ? == t 1 { ( rj_movq_gx c 1 1 ) } {} }  // movq rcx,xmm1
 
 // movsxd dst, src32
 @ rj_movsxd Rj c i dst i src → v { ( rj_rr c 0 1 0 99 dst src 0 ) }
@@ -1024,7 +1062,7 @@ $ `stdlib/core/vec.nu`
             ( vec_push [i] . c wcls 0 ) ( vec_push [i] . c wwt 0 )
             ( vec_push [i] . c wst 2147483647 ) ( vec_push [i] . c wen -1 )
             ( vec_push [i] . c wuse 0 ) ( vec_push [i] . c wloc ( rjl_mem ) )
-            ( vec_push [i] . c whint -1 ) ( vec_push [i] . c wcc 0 ) ( vec_push [i] . c wsens 0 ) ( vec_push [i] . c wdx 0 )
+            ( vec_push [i] . c whint -1 ) ( vec_push [i] . c wcc 0 ) ( vec_push [i] . c wsens 0 ) ( vec_push [i] . c wdx 0 ) ( vec_push [i] . c wcx 0 )
             = nw + nw 1
         } {}
         = k + k 1
@@ -1231,7 +1269,7 @@ $ `stdlib/core/vec.nu`
         : i s ( vec_at [i] . c wslot wv )
         ? & < s nl < s ( vec_len [i] . c ltype ) {
             : i ty ( vec_at [i] . c ltype s )
-            ( rj_vote c wv ? >= ty 2 2 1 + 4 ( vec_at [i] . c wwt wv ) )
+            ( rj_vote c wv ? & >= ty 2 <= ty 3 2 1 + 4 ( vec_at [i] . c wwt wv ) )
         } {}
         // votes → class: 1 = xmm when the float evidence outweighs the int
         : i vt ( vec_at [i] . c wcls wv )
@@ -1244,8 +1282,17 @@ $ `stdlib/core/vec.nu`
         : i op9 ( rj_rw c r 0 )
         ? ( rj_iscall op9 ) { ( vec_push [i] . c callr r ) } {}
         ? ( rj_clobdx op9 ) { ( vec_push [i] . c dxr r ) } {}
+        ? ( rj_clobcx c r ) { ( vec_push [i] . c cxr r ) } {}
         = r + r 1
     }
+    : i ncx ( vec_len [i] . c cxr )
+    ? > ncx 0 {
+        = wv 0
+        ~ < wv nw {
+            ? ( rj_touches . c cxr ( vec_at [i] . c wst wv ) ( vec_at [i] . c wen wv ) ) { ( vec_put [i] . c wcx wv 1 ) } {}
+            = wv + wv 1
+        }
+    } {}
     : i ndx ( vec_len [i] . c dxr )
     ? > ndx 0 {
         = wv 0
@@ -1280,17 +1327,18 @@ $ `stdlib/core/vec.nu`
 // rdx cost nothing; r9/r10/r8 one instruction at every call and return;
 // the callee-saved ones a push and a pop per invocation; rdi (the
 // context) a push, a pop and a reload before every call.
-@ rj_gpool i k → i {  // 11 entries
+@ rj_gpool i k → i {  // 12 entries
     ? == k 0 { ^ 6 } {}  // rsi
     ? == k 1 { ^ 2 } {}  // rdx (arg0 on calls; scratch of div/rem and the bit counts)
     ? == k 2 { ^ 9 } {}  // r9  (globals base: put back before calls)
     ? == k 3 { ^ 10 } {}  // r10 (memory bytes: put back before calls)
     ? == k 4 { ^ 8 } {}  // r8  (the anchor: rematerialised before calls)
-    ? == k 5 { ^ 12 } {}
-    ? == k 6 { ^ 13 } {}
-    ? == k 7 { ^ 14 } {}
-    ? == k 8 { ^ 15 } {}
-    ? == k 9 { ^ 5 } {}  // rbp
+    ? == k 5 { ^ 1 } {}  // rcx (only for webs no rcx-writing record touches)
+    ? == k 6 { ^ 12 } {}
+    ? == k 7 { ^ 13 } {}
+    ? == k 8 { ^ 14 } {}
+    ? == k 9 { ^ 15 } {}
+    ? == k 10 { ^ 5 } {}  // rbp
     ^ 7  // rdi (the context: saved at entry, reloaded before calls)
 }
 
@@ -1299,12 +1347,47 @@ $ `stdlib/core/vec.nu`
 @ rj_allowed i l i cls i cross → b {
     ? == cls 1 { ^ & ( rj_isx l ) & == cross 0 >= l 18 } {}
     ? ! ( rj_isg l ) { ^ F } {}
-    ? | | | | | == l 2 == l 6 == l 7 == l 8 == l 9 == l 10 { ^ == cross 0 } {}
+    ? | | | | | | == l 1 == l 2 == l 6 == l 7 == l 8 == l 9 == l 10 { ^ == cross 0 } {}
     ^ ( rj_calleesaved l )
 }
 
-// records whose lowering uses rdx as scratch (its webs may not be live across them)
-@ rj_clobdx i op → b { ^ | | | | & >= op 96 <= op 99 & >= op 105 <= op 108 == op 93 == op 94 | == op 102 == op 103 }
+// records whose lowering uses rdx as scratch (its webs may not be live
+// across them): div/rem, and the bit scans on a CPU without lzcnt/tzcnt
+@ rj_clobdx i op → b {
+    ? | & >= op 96 <= op 99 & >= op 105 <= op 108 { ^ T } {}
+    ^ & ! ( rj_bmi ) | | | == op 93 == op 94 == op 102 == op 103
+}
+
+// is use k of record r a constant-pool slot?
+@ rj_ukonst Rj c i r i k → b { ^ < ( vec_at [i] . c uweb ( rj_u c r k ) ) 0 }
+
+// Records whose lowering may leave something of its own in rcx — no web
+// that touches one may live there. Every other record's lowering was
+// checked to keep rcx intact: rax is its scratch, and where it needs a
+// second one it parks rcx in xmm1 (rj_tmp_on, the stores' cxb test).
+@ rj_clobcx Rj c i r → b {
+    : i op ( rj_rw c r 0 )
+    ? | ( rj_isalu op ) ( rj_isfused op ) {
+        ? | | | == op 3 == op 12 | == op 6 == op 179 | == op 8 == op 10 {  // shifts: cl, unless BMI2 or a constant count
+            ^ & ! ( rj_bmi ) ! ( rj_ukonst c r 1 )
+        } {}
+        ? | | == op 16 == op 17 == op 30 { ^ & ! ( rj_bmi ) ! ( rj_ukonst c r ? == op 16 2 1 ) } {}  // a fused shift by a variable count
+        ^ F
+    } {}
+    ? ( rj_isrot op ) { ^ ! ( rj_ukonst c r 1 ) } {}
+    ? & >= op 56 <= op 75 { ^ F } {}  // compares
+    ? | | | | == op 43 == op 44 == op 46 == op 47 == op 51 { ^ F } {}  // eqz, SEL, MOV, CONST
+    ? | | | | == op 36 == op 37 & >= op 157 <= op 161 == op 175 & >= op 153 <= op 156 { ^ F } {}  // wrap / extends / reinterprets
+    ? | == op 52 == op 53 { ^ F } {}  // globals
+    ? >= ( rj_memkind op ) 0 { ^ F } {}  // loads and stores
+    ? & >= op 205 <= op 208 { ^ ! ( rj_ukonst c r ? >= op 207 2 1 ) } {}  // LOADSHL: cl for a variable count
+    ? | == op 211 == op 212 { ^ F } {}
+    ? | | | | == op 49 == op 54 == op 48 == op 45 | == op 38 == op 177 { ^ F } {}  // branches without moves
+    ? | == op 167 == op 168 { ^ F } {}  // branches with moves: the cycle breaker is xmm1
+    ? | | | == op 172 == op 162 == op 166 | == op 95 == op 104 { ^ F } {}  // unreachable, memory.size, ref.is_null, popcnt
+    ? | | | == op 93 == op 94 == op 102 == op 103 { ^ ! ( rj_bmi ) } {}  // lzcnt / tzcnt
+    ^ T  // calls, call-outs, RET, div/rem, br_table, floats, …
+}
 
 // is some record c of the ascending list `rs` inside (ws, we) — 2c ≥ ws, 2c+2 ≤ we?
 @ rj_crosses ( Vec i ) rs i ws i we → b {
@@ -1316,6 +1399,20 @@ $ `stdlib/core/vec.nu`
         ? < * 2 ( vec_at [i] rs mid ) ws { = lo + mid 1 } { = hi mid }
     }
     ? < lo nr { ^ <= + * 2 ( vec_at [i] rs lo ) 2 we } {}
+    ^ F
+}
+
+// is some record c of the ascending list `rs` touched by [ws, we] — its
+// reads (2c) or writes (2c+1) inside it?
+@ rj_touches ( Vec i ) rs i ws i we → b {
+    : i nr ( vec_len [i] rs )
+    : ~ i lo 0
+    : ~ i hi nr
+    ~ < lo hi {
+        : i mid / + lo hi 2
+        ? < + * 2 ( vec_at [i] rs mid ) 1 ws { = lo + mid 1 } { = hi mid }
+    }
+    ? < lo nr { ^ <= * 2 ( vec_at [i] rs lo ) we } {}
     ^ F
 }
 
@@ -1344,6 +1441,22 @@ $ `stdlib/core/vec.nu`
         ( vec_put [i] nxt k ( vec_at [i] head p ) ) ( vec_put [i] head p k )
         = k - k 1
     }
+    // a compare whose every use is a fused SEL right behind it is never
+    // materialised — those SELs read the flags — so its web needs no place
+    : ( Vec i ) flagonly ( vec_new [i] )
+    = k 0
+    ~ < k nw { ( vec_push [i] flagonly 0 ) = k + k 1 }
+    : ~ i r 0
+    ~ < r n {
+        : i op ( rj_rw c r 0 )
+        ? & >= op 56 <= op 75 {
+            : i wd ( vec_at [i] . c dweb ( rj_dd c r 0 ) )
+            : i nf ( rj_selrun c r wd )
+            ? & > nf 0 == nf ( vec_at [i] . c wuse wd ) { ( vec_put [i] flagonly wd 1 ) } {}
+        } {}
+        ? > ( rj_cfuse c r ) 0 { ( vec_put [i] flagonly ( vec_at [i] . c dweb ( rj_dd c r 0 ) ) 1 ) } {}
+        = r + r 1
+    }
     : ( Vec i ) occ ( vec_new [i] )
     = k 0
     ~ < k 32 { ( vec_push [i] occ -1 ) = k + k 1 }
@@ -1353,7 +1466,7 @@ $ `stdlib/core/vec.nu`
         : ~ i wv ( vec_at [i] head p )
         ~ >= wv 0 {
             : b dead == 0 ( vec_at [i] . c wuse wv )  // a dead def still needs somewhere to land
-            ? T {
+            ? == 0 ( vec_at [i] flagonly wv ) {
                 : i ws ( vec_at [i] . c wst wv )
                 = k 0
                 ~ < k 32 {
@@ -1364,20 +1477,22 @@ $ `stdlib/core/vec.nu`
                 : i cls ( vec_at [i] . c wcls wv )
                 : i cross ( vec_at [i] . c wcc wv )
                 : i nodx ( vec_at [i] . c wdx wv )
+                : i nocx ( vec_at [i] . c wcx wv )
                 : ~ i pick -1
                 : i h ( vec_at [i] . c whint wv )
                 ? >= h 0 {
                     : i hl ( vec_at [i] . c wloc h )
                     ? & < hl 32 ( rj_allowed hl cls cross ) { ? < ( vec_at [i] occ hl ) 0 { = pick hl } {} } {}
                 } {}
-                : i npool ? == cls 1 14 11
+                : i npool ? == cls 1 14 12
                 : i forbid ( rj_get c ( rjs_forbid ) )
                 ? & >= pick 0 != 0 & ( rj_shr forbid pick ) 1 { = pick -1 } {}
                 ? & == pick 2 != 0 nodx { = pick -1 } {}
+                ? & == pick 1 != 0 nocx { = pick -1 } {}
                 = k 0
                 ~ & < pick 0 < k npool {
                     : i l ? == cls 1 + 18 k ( rj_gpool k )
-                    ? & & & ( rj_allowed l cls cross ) < ( vec_at [i] occ l ) 0 == 0 & ( rj_shr forbid l ) 1 | != l 2 == 0 nodx { = pick l } {}
+                    ? & & & & ( rj_allowed l cls cross ) < ( vec_at [i] occ l ) 0 == 0 & ( rj_shr forbid l ) 1 | != l 2 == 0 nodx | != l 1 == 0 nocx { = pick l } {}
                     = k + k 1
                 }
                 ? & < pick 0 ! dead {  // full: evict the holder that uses its register least densely
@@ -1387,7 +1502,7 @@ $ `stdlib/core/vec.nu`
                     ~ < k npool {
                         : i l ? == cls 1 + 18 k ( rj_gpool k )
                         : i ow ( vec_at [i] occ l )
-                        ? & & & ( rj_allowed l cls cross ) >= ow 0 == 0 & ( rj_shr forbid l ) 1 | != l 2 == 0 nodx {
+                        ? & & & & ( rj_allowed l cls cross ) >= ow 0 == 0 & ( rj_shr forbid l ) 1 | != l 2 == 0 nodx | != l 1 == 0 nocx {
                             : i od ( rj_dens c ow )
                             ? < od vw { = vw od = vl l } {}
                         } {}
@@ -1415,6 +1530,45 @@ $ `stdlib/core/vec.nu`
         = k + k 1
     }
     ( rj_set c ( rjs_used ) used )
+}
+
+// NURL_NWASM_RJIT_TRACE=<fidx>: that function's webs and where they went
+: ~ i g_rjtrace -1
+
+@ rj_set_trace i f → v { = g_rjtrace f }
+
+@ rj_trace Rj c → v {
+    : i nw ( rj_get c ( rjs_nw ) )
+    ( nurl_eprint `[rjit] web slot [start,end] uses weight dens cls cc dx cx → loc\n` )
+    : ~ i wv 0
+    ~ < wv nw {
+        ( nurl_eprint `[rjit] ` ) ( nurl_eprint ( nurl_str_int wv ) ) ( nurl_eprint ` s` ) ( nurl_eprint ( nurl_str_int ( vec_at [i] . c wslot wv ) ) )
+        ( nurl_eprint ` [` ) ( nurl_eprint ( nurl_str_int ( vec_at [i] . c wst wv ) ) ) ( nurl_eprint `,` ) ( nurl_eprint ( nurl_str_int ( vec_at [i] . c wen wv ) ) ) ( nurl_eprint `] ` )
+        ( nurl_eprint ( nurl_str_int ( vec_at [i] . c wuse wv ) ) ) ( nurl_eprint ` ` ) ( nurl_eprint ( nurl_str_int ( vec_at [i] . c wwt wv ) ) )
+        ( nurl_eprint ` ` ) ( nurl_eprint ( nurl_str_int ( rj_dens c wv ) ) ) ( nurl_eprint ` ` ) ( nurl_eprint ( nurl_str_int ( vec_at [i] . c wcls wv ) ) )
+        ( nurl_eprint ` ` ) ( nurl_eprint ( nurl_str_int ( vec_at [i] . c wcc wv ) ) ) ( nurl_eprint ` ` ) ( nurl_eprint ( nurl_str_int ( vec_at [i] . c wdx wv ) ) )
+        ( nurl_eprint ` ` ) ( nurl_eprint ( nurl_str_int ( vec_at [i] . c wcx wv ) ) ) ( nurl_eprint ` → ` ) ( nurl_eprint ( nurl_str_int ( vec_at [i] . c wloc wv ) ) ) ( nurl_eprint `\n` )
+        = wv + wv 1
+    }
+}
+
+// cxb: per record, 1 when a web in rcx is live across it — read before,
+// still needed after — so a record that borrows rcx parks it first.
+// The webs in rcx never overlap, so this is linear in the function.
+@ rj_cxbusy Rj c → v {
+    : i n ( rj_get c ( rjs_n ) )
+    : ~ i r 0
+    ~ < r n { ( vec_push [i] . c cxb 0 ) = r + r 1 }
+    : i nw ( rj_get c ( rjs_nw ) )
+    : ~ i wv 0
+    ~ < wv nw {
+        ? == 1 ( vec_at [i] . c wloc wv ) {
+            : i we ( vec_at [i] . c wen wv )
+            : ~ i q / + ( vec_at [i] . c wst wv ) 1 2  // first record with 2q ≥ the start
+            ~ & < q n <= + * 2 q 2 we { ( vec_put [i] . c cxb q 1 ) = q + q 1 }
+        } {}
+        = wv + wv 1
+    }
 }
 
 // ── operands ────────────────────────────────────────────────────
@@ -1500,11 +1654,15 @@ $ `stdlib/core/vec.nu`
 // A register operand's GPR, or -1 when the operand lives elsewhere.
 @ rj_greg i loc → i { ^ ? ( rj_isg loc ) loc -1 }
 
-// `op R, operand` for the ALU group `ext`, width w. Uses rcx when the
-// operand has no direct form.
+// `op R, operand` for the ALU group `ext`, width w. An operand in an xmm
+// register goes through a scratch GPR (rj_tmp_on).
 @ rj_opsrc Rj c i w i ext i reg i loc i s → v {
     ? ( rj_isg loc ) { ( rj_alu_rr c w ext reg loc ) ^ v } {}
-    ? ( rj_isx loc ) { ( rj_movq_gx c 1 - loc 16 ) ( rj_alu_rr c w ext reg 1 ) ^ v } {}
+    ? ( rj_isx loc ) {
+        : i t ( rj_tmp_on c reg )
+        ( rj_movq_gx c t - loc 16 ) ( rj_alu_rr c w ext reg t ) ( rj_tmp_off c t )
+        ^ v
+    } {}
     ? == loc ( rjl_mem ) { ( rj_alu_rf c w ext reg s ) ^ v } {}
     : ~ i kq ( rj_kval c s )
     ? == w 0 { = kq >> << kq 32 32 } {}  // a 32-bit op reads the low half, sign-extended imm32
@@ -1540,13 +1698,31 @@ $ `stdlib/core/vec.nu`
     : i dl ( rj_dloc c od )
     : i ds ( rj_ds c od )
     : i tr ? ( rj_isg dl ) dl 0
+    : i pp ? == ext 4 1 ? == ext 7 2 ? == ext 5 3 0  // shlx / sarx / shrx
     ? == bl ( rjl_imm ) {
         ( rj_ldg c tr al as 0 )
         ( rj_shift_ri c w ext tr & ( rj_kval c bs ) ? == w 1 63 31 )
     } {
-        ( rj_ldg c 1 bl bs 0 )  // the count first: dst may be the count's register
-        ( rj_ldg c tr al as 0 )
-        ( rj_shift_cl c w ext tr )
+        ? & ( rj_bmi ) > pp 0 {
+            // BMI2: any count register, rcx untouched
+            : i cr0 ( rj_greg bl )
+            ? == tr cr0 {  // the count already sits in dst's register
+                : ~ i sr ( rj_greg al )
+                ? < sr 0 { ( rj_ldg c 0 al as 0 ) = sr 0 } {}
+                ( rj_shx c w pp tr sr tr )
+            } {
+                ( rj_ldg c tr al as 0 )
+                : ~ i cr cr0
+                : ~ i t -1
+                ? < cr 0 { = t ( rj_tmp_on c tr ) ( rj_ldg c t bl bs 0 ) = cr t } {}
+                ( rj_shx c w pp tr tr cr )
+                ? >= t 0 { ( rj_tmp_off c t ) } {}
+            }
+        } {
+            ( rj_ldg c 1 bl bs 0 )  // the count first: dst may be the count's register
+            ( rj_ldg c tr al as 0 )
+            ( rj_shift_cl c w ext tr )
+        }
     }
     ? & == w 0 ( rj_dcanon c od ) { ( rj_movsxd c tr tr ) } {}
     ? != tr dl { ( rj_stg c dl ds tr ) } {}
@@ -1562,7 +1738,8 @@ $ `stdlib/core/vec.nu`
         ? ( rj_fits32 kq ) { ( rj_imul_rri c w reg reg kq ) } { ( rj_ripop c 0 w 1 175 reg kq ) }
         ^ v
     } {}
-    ( rj_ldg c 1 loc s 0 ) ( rj_imul_rr c w reg 1 )
+    : i t ( rj_tmp_on c reg )
+    ( rj_ldg c t loc s 0 ) ( rj_imul_rr c w reg t ) ( rj_tmp_off c t )
 }
 
 @ rj_e_mul Rj c i r i w → v {
@@ -1609,8 +1786,20 @@ $ `stdlib/core/vec.nu`
     ? | | | == op 14 == op 15 == op 16 == op 22 { ( rj_opsrc c 1 0 tr l2 s2 ) ^ v } {}  // add
     ? == op 13 { ( rj_imulsrc c 1 tr l2 s2 ) ^ v } {}  // mul
     ? == op 33 { ( rj_opsrc c 1 6 tr l2 s2 ) ^ v } {}  // xor
-    // shr_u by s2 (SHRUAND / SHRUXOR): the count is loaded before s1 lands
-    ? == l2 ( rjl_imm ) { ( rj_shift_ri c 1 5 tr & ( rj_kval c s2 ) 63 ) } { ( rj_shift_cl c 1 5 tr ) }
+    // shr_u by s2 (SHRUAND / SHRUXOR): without BMI2 the count was loaded
+    // into rcx before s1 landed
+    ? == l2 ( rjl_imm ) { ( rj_shift_ri c 1 5 tr & ( rj_kval c s2 ) 63 ) ^ v } {}
+    ? ( rj_bmi ) { ( rj_shrx_by c tr l2 s2 ) } { ( rj_shift_cl c 1 5 tr ) }
+}
+
+// tr >>u= operand with shrx: the count from its register, else a scratch
+// (tr is never the count's register — the callers keep them apart)
+@ rj_shrx_by Rj c i tr i l i s → v {
+    : ~ i cr ( rj_greg l )
+    : ~ i t -1
+    ? < cr 0 { = t ( rj_tmp_on c tr ) ( rj_ldg c t l s 0 ) = cr t } {}
+    ( rj_shx c 1 3 tr tr cr )
+    ? >= t 0 { ( rj_tmp_off c t ) } {}
 }
 
 @ rj_e_fused Rj c i r → v {
@@ -1630,8 +1819,9 @@ $ `stdlib/core/vec.nu`
     : b shr1 | == op 17 == op 30
     : b comm2 ! == op 16  // the second op commutes except ADDSHRU's shift
     // dst already holds x and op2 commutes: t in rax, then one op into dst
+    : b precx & & shr1 != l2 ( rjl_imm ) ! ( rj_bmi )  // the count into rcx first
     ? & & ( rj_isg dl ) == dl l3 comm2 {
-        ? & shr1 != l2 ( rjl_imm ) { ( rj_ldg c 1 l2 s2 0 ) } {}
+        ? precx { ( rj_ldg c 1 l2 s2 0 ) } {}
         ( rj_ldg c 0 l1 s1 0 )
         ( rj_fop1 c op 0 l2 s2 )
         ? | == op 13 == op 22 { ( rj_alu_rr c 1 0 dl 0 ) } {}
@@ -1641,7 +1831,7 @@ $ `stdlib/core/vec.nu`
         ^ v
     } {}
     : i tr ? & & ( rj_isg dl ) != dl l2 != dl l3 dl 0
-    ? & shr1 != l2 ( rjl_imm ) { ( rj_ldg c 1 l2 s2 0 ) } {}
+    ? precx { ( rj_ldg c 1 l2 s2 0 ) } {}
     ( rj_ldg c tr l1 s1 0 )
     ( rj_fop1 c op tr l2 s2 )
     ? | == op 13 == op 22 { ( rj_opsrc c 1 0 tr l3 s3 ) } {}  // + x
@@ -1650,7 +1840,8 @@ $ `stdlib/core/vec.nu`
     ? == op 30 { ( rj_opsrc c 1 6 tr l3 s3 ) } {}  // ^ x
     ? == op 16 {  // >>u x
         ? == l3 ( rjl_imm ) { ( rj_shift_ri c 1 5 tr & ( rj_kval c s3 ) 63 ) } {
-            ( rj_ldg c 1 l3 s3 0 ) ( rj_shift_cl c 1 5 tr ) }
+            ? ( rj_bmi ) { ( rj_shrx_by c tr l3 s3 ) } { ( rj_ldg c 1 l3 s3 0 ) ( rj_shift_cl c 1 5 tr ) }
+        }
     } {}
     ? != tr dl { ( rj_stg c dl ( rj_ds c od ) tr ) } {}
 }
@@ -1675,6 +1866,41 @@ $ `stdlib/core/vec.nu`
 @ rj_cmp Rj c i w i al i as i bl i bs i cc → i {
     ? & == al ( rjl_imm ) != bl ( rjl_imm ) { ( rj_cmp1 c w bl bs al as ) ^ ( rj_ccswap cc ) } {}
     ( rj_cmp1 c w al as bl bs ) ^ cc
+}
+
+// Does record r's value feed only the IFZ / BRIF right behind it, so the
+// pair can become one flag-setting instruction and a jcc? 1: i32/i64.and
+// with an imm32 → test; 2: SHRUAND by anything, mask 1 → bt. 0: neither.
+@ rj_cfuse Rj c i r → i {
+    : i n ( rj_get c ( rjs_n ) )
+    ? >= + r 1 n { ^ 0 } {}
+    : i op ( rj_rw c r 0 )
+    : ~ i kind 0
+    : ~ i w 1
+    ? | == op 2 == op 11 {
+        : i ka ( rj_ukonst c r 0 )
+        : i kb ( rj_ukonst c r 1 )
+        ? != ka kb {  // exactly one constant operand
+            : i kq ( rj_kval c ( rj_us c ( rj_u c r ? kb 1 0 ) ) )
+            ? | == op 11 ( rj_fits32 kq ) { = kind 1 } {}
+            = w ? == op 2 1 0
+        } {}
+    } {}
+    ? & == op 17 ( rj_ukonst c r 2 ) {
+        ? == 1 ( rj_kval c ( rj_us c ( rj_u c r 2 ) ) ) { = kind 2 } {}
+    } {}
+    ? == kind 0 { ^ 0 } {}
+    : i q + r 1
+    : i qop ( rj_rw c q 0 )
+    ? & != qop 48 != qop 54 { ^ 0 } {}
+    ? != 0 ( vec_at [i] . c tgt q ) { ^ 0 } {}
+    : i wd ( vec_at [i] . c dweb ( rj_dd c r 0 ) )
+    ? != ( vec_at [i] . c uweb ( rj_u c q 0 ) ) wd { ^ 0 } {}
+    ? != 1 ( vec_at [i] . c wuse wd ) { ^ 0 } {}
+    // the branch reads the width the value was made at (bt's 0/1 is either)
+    : i qw ? & == qop 48 == 1 ( rj_rw c q 3 ) 1 0
+    ? & == kind 1 != qw w { ^ 0 } {}
+    ^ kind
 }
 
 // the fused-SEL run right behind a compare whose 0/1 is web wd
@@ -1727,6 +1953,45 @@ $ `stdlib/core/vec.nu`
     ( rj_ldg c 0 loc s 0 ) ( rj_test_rr c w 0 0 )
 }
 
+// test a, imm / bt x, s for the IFZ / BRIF behind (rj_cfuse): only the
+// flags; rjs_pcc tells the branch which jcc means "the value is zero"
+@ rj_e_cfuse Rj c i r i kind → v {
+    ? == kind 1 {
+        : i op ( rj_rw c r 0 )
+        : i w ? == op 2 1 0
+        : b kb ( rj_ukonst c r 1 )
+        : i ox ( rj_u c r ? kb 0 1 )
+        : ~ i kq ( rj_kval c ( rj_us c ( rj_u c r ? kb 1 0 ) ) )
+        ? == w 0 { = kq ( rj_sx32 kq ) } {}
+        : i xl ( rj_uloc c ox )
+        : i xs ( rj_us c ox )
+        ? == xl ( rjl_mem ) { ( rj_rm c 0 w 0 247 0 3 -1 0 ( rj_home xs ) 0 ) ( rj_d c kq ) } {  // test [m], imm32
+            : ~ i xr ( rj_greg xl )
+            ? < xr 0 { ( rj_ldg c 0 xl xs 0 ) = xr 0 } {}
+            ( rj_rex c w 0 0 xr 0 ) ( rj_b c 247 ) ( rj_modrr c 0 xr ) ( rj_d c kq )  // test r, imm32
+        }
+        ( rj_set c ( rjs_pcc ) 4 )  // je
+        ^ v
+    } {}
+    // bt x, s: CF = bit s of x (s mod 64, as shr_u reads it)
+    : i o1 ( rj_u c r 0 )
+    : i o2 ( rj_u c r 1 )
+    : i l1 ( rj_uloc c o1 )
+    : i l2 ( rj_uloc c o2 )
+    : ~ i xr ( rj_greg l1 )
+    ? < xr 0 { ( rj_ldg c 0 l1 ( rj_us c o1 ) 0 ) = xr 0 } {}
+    ? == l2 ( rjl_imm ) {
+        ( rj_rex c 1 0 0 xr 0 ) ( rj_b c 15 ) ( rj_b c 186 ) ( rj_modrr c 4 xr ) ( rj_b c & ( rj_kval c ( rj_us c o2 ) ) 63 )  // bt r, imm8
+    } {
+        : ~ i sr ( rj_greg l2 )
+        : ~ i t -1
+        ? < sr 0 { = t ( rj_tmp_on c xr ) ( rj_ldg c t l2 ( rj_us c o2 ) 0 ) = sr t } {}
+        ( rj_rr c 0 1 1 163 sr xr 0 )  // bt r, r
+        ? >= t 0 { ( rj_tmp_off c t ) } {}
+    }
+    ( rj_set c ( rjs_pcc ) 3 )  // jae: CF clear
+}
+
 @ rj_e_eqz Rj c i r i w → v {
     : i oa ( rj_u c r 0 )
     : i od ( rj_dd c r 0 )
@@ -1739,11 +2004,13 @@ $ `stdlib/core/vec.nu`
     ( rj_setbool c 4 dl ( rj_ds c od ) pre )
 }
 
-// cmov<cc> R, operand (64-bit); immediates and xmm through rcx (flags kept)
+// cmov<cc> R, operand (64-bit); immediates and xmm through a scratch GPR
+// (the flags survive: the loads are movs, the park is a movq)
 @ rj_cmovsrc Rj c i cc i reg i loc i s → v {
     ? ( rj_isg loc ) { ( rj_cmov_rr c 1 cc reg loc ) ^ v } {}
     ? == loc ( rjl_mem ) { ( rj_cmov_rf c 1 cc reg s ) ^ v } {}
-    ( rj_ldg c 1 loc s 1 ) ( rj_cmov_rr c 1 cc reg 1 )
+    : i t ( rj_tmp_on c reg )
+    ( rj_ldg c t loc s 1 ) ( rj_cmov_rr c 1 cc reg t ) ( rj_tmp_off c t )
 }
 
 @ rj_e_sel Rj c i r → v {
@@ -1797,11 +2064,15 @@ $ `stdlib/core/vec.nu`
         ( rj_mov_ri c tr rv 0 )
     } {
         : ~ i sl al
-        ? ( rj_isx al ) { ( rj_movq_gx c 1 - al 16 ) = sl 1 } {}
+        ? ( rj_isx al ) { ( rj_movq_gx c 0 - al 16 ) = sl 0 } {}
         : b memop == sl ( rjl_mem )
         // reg form: opcode bytes on the register; mem form: on the home
-        ? | == op 36 == op 161 {  // movsxd
-            ? memop { ( rj_rm c 0 1 0 99 tr 3 -1 0 ( rj_home as ) 0 ) } { ( rj_movsxd c tr sl ) }
+        ? | == op 36 == op 161 {
+            ? & == op 36 ! ( rj_dcanon c od ) {  // a wrap whose consumers read only the low half: a copy
+                ? memop { ( rj_rm c 0 0 0 139 tr 3 -1 0 ( rj_home as ) 0 ) } { ( rj_mov_rr c 1 tr sl ) }
+            } {
+                ? memop { ( rj_rm c 0 1 0 99 tr 3 -1 0 ( rj_home as ) 0 ) } { ( rj_movsxd c tr sl ) }  // movsxd
+            }
         } {}
         ? == op 37 {  // mov r32, r/m32
             ? memop { ( rj_rm c 0 0 0 139 tr 3 -1 0 ( rj_home as ) 0 ) } { ( rj_mov32 c tr sl ) }
@@ -1822,6 +2093,11 @@ $ `stdlib/core/vec.nu`
     : i od ( rj_dd c r 0 )
     ? ! ( rj_dlive c od ) { ^ v } {}
     ( rj_ldg c 0 ( rj_uloc c oa ) ( rj_us c oa ) 0 )
+    ? ( rj_bmi ) {
+        ( rj_rr c 243 0 1 189 0 0 0 )  // lzcnt eax,eax: 32 for zero
+        ( rj_stg c ( rj_dloc c od ) ( rj_ds c od ) 0 )
+        ^ v
+    } {}
     ( rj_b c 186 ) ( rj_d c -1 )  // mov edx,-1
     ( rj_b c 15 ) ( rj_b c 189 ) ( rj_b c 200 )  // bsr ecx,eax (ZF=1 on zero)
     ( rj_b c 15 ) ( rj_b c 68 ) ( rj_b c 202 )  // cmovz ecx,edx
@@ -1904,12 +2180,17 @@ $ `stdlib/core/vec.nu`
         ? == wid 2 { ( rj_mrm c 102 0 0 199 0 off 0 ) ( rj_b c kq ) ( rj_b c >> kq 8 ) ^ v } {}
         ? == wid 1 { ( rj_mrm c 0 0 0 198 0 off 0 ) ( rj_b c kq ) ^ v } {}
     } {}
+    // the value in a register: rcx when it has none (rax is the address),
+    // parked in xmm1 around the store when a web lives in rcx across it
     : ~ i vr ( rj_greg vl )
+    : b park & < vr 0 != 0 ( vec_at [i] . c cxb r )
+    ? park { ( rj_movq_xg c 1 1 ) } {}
     ? < vr 0 { ( rj_ldg c 1 vl vs 0 ) = vr 1 } {}
     ? == wid 8 { ( rj_mrm c 0 1 0 137 vr off 0 ) } {}
     ? == wid 4 { ( rj_mrm c 0 0 0 137 vr off 0 ) } {}
     ? == wid 2 { ( rj_mrm c 102 0 0 137 vr off 0 ) } {}
     ? == wid 1 { ( rj_mrm c 0 0 0 136 vr off 2 ) } {}
+    ? park { ( rj_movq_gx c 1 1 ) } {}
 }
 
 // LOADSHL: dst = mem[(x << k) w32 + off]; LOADSHLADD adds a base first
@@ -1967,7 +2248,7 @@ $ `stdlib/core/vec.nu`
 
 // One parallel copy: dl[k]/ds[k] ← sl[k]/ss[k] for every k at once. A
 // move goes once nothing still pending reads its destination; a cycle is
-// broken through rcx.
+// broken through xmm1 (a scratch no web lives in — any GPR may hold one).
 @ rj_pmove Rj c ( Vec i ) dl ( Vec i ) ds ( Vec i ) sl ( Vec i ) ss → v {
     : ~ i left ( vec_len [i] dl )
     : ( Vec i ) done ( vec_new [i] )
@@ -2005,12 +2286,12 @@ $ `stdlib/core/vec.nu`
             } {}
             = q + q 1
         }
-        ? prog {} {  // every pending move waits on another: park one source in rcx
+        ? prog {} {  // every pending move waits on another: park one source in xmm1
             = q 0
             ~ < q tot {
                 ? == 0 ( vec_at [i] done q ) {
-                    ( rj_ldg c 1 ( vec_at [i] sl q ) ( vec_at [i] ss q ) 0 )
-                    ( vec_put [i] sl q 1 ) ( vec_put [i] ss q -1 )
+                    ( rj_move c 17 -1 ( vec_at [i] sl q ) ( vec_at [i] ss q ) )
+                    ( vec_put [i] sl q 17 ) ( vec_put [i] ss q -1 )
                     = q tot
                 } { = q + q 1 }
             }
@@ -2603,9 +2884,22 @@ $ `stdlib/core/vec.nu`
 }
 
 @ rj_e_mov Rj c i r → v {
+    : i op ( rj_rw c r 0 )
     : i o ( rj_u c r 0 )
     : i od ( rj_dd c r 0 )
     ? ! ( rj_dlive c od ) { ^ v } {}
+    // i32.reinterpret_f32 makes an i32 (canonical: sign-extended when a
+    // consumer reads the high half); f32.reinterpret_i32 an f32, whose bits
+    // a place holds zero-extended
+    : b sx & == op 153 ( rj_dcanon c od )
+    ? | sx == op 155 {
+        : i dl ( rj_dloc c od )
+        : i tr ? ( rj_isg dl ) dl 0
+        ( rj_ldg c tr ( rj_uloc c o ) ( rj_us c o ) 0 )
+        ? sx { ( rj_movsxd c tr tr ) } { ( rj_mov32 c tr tr ) }
+        ? != tr dl { ( rj_stg c dl ( rj_ds c od ) tr ) } {}
+        ^ v
+    } {}
     ( rj_move c ( rj_dloc c od ) ( rj_ds c od ) ( rj_uloc c o ) ( rj_us c o ) )
 }
 
@@ -2645,9 +2939,17 @@ $ `stdlib/core/vec.nu`
                     ( rj_rm c 0 1 0 139 0 6 -1 0 disp 0 ) ( rj_stf c 1 s 0 ) } }
         }
     } {
-        ? ( rj_isg l ) { ( rj_rr c 0 0 0 49 l l 0 ) } {
-            ? ( rj_isx l ) { ( rj_rr c 0 0 1 87 - l 16 - l 16 0 ) } {
-                ( rj_rm c 0 1 0 199 0 3 -1 0 ( rj_home s ) 0 ) ( rj_d c 0 ) } }
+        // a declared local: zero, or null (-1) for a reference
+        : b isref & < s ( vec_len [i] . c ltype ) == 4 ( vec_at [i] . c ltype s )
+        ? isref {
+            ? ( rj_isg l ) { ( rj_mov_ri c l -1 0 ) } {
+                ? ( rj_isx l ) { ( rj_mov_ri c 0 -1 0 ) ( rj_movq_xg c - l 16 0 ) } {
+                    ( rj_rm c 0 1 0 199 0 3 -1 0 ( rj_home s ) 0 ) ( rj_d c -1 ) } }
+        } {
+            ? ( rj_isg l ) { ( rj_rr c 0 0 0 49 l l 0 ) } {
+                ? ( rj_isx l ) { ( rj_rr c 0 0 1 87 - l 16 - l 16 0 ) } {
+                    ( rj_rm c 0 1 0 199 0 3 -1 0 ( rj_home s ) 0 ) ( rj_d c 0 ) } }
+        }
     }
 }
 
@@ -2855,6 +3157,9 @@ $ `stdlib/core/vec.nu`
 @ rj_e_rec Rj c i r → v {
     : i op ( rj_rw c r 0 )
     ? != op 46 { ( rj_set c ( rjs_fsel ) 0 ) ( rj_set c ( rjs_fweb ) -1 ) } {}  // flags feed only the fused SELs
+    ? & != op 48 != op 54 { ( rj_set c ( rjs_pcc ) -1 ) } {}
+    : i fk ( rj_cfuse c r )
+    ? > fk 0 { ( rj_e_cfuse c r fk ) ^ v } {}
     ? | == op 0 == op 9 { ( rj_e_bin c r 0 ? == op 0 1 0 ) ^ v } {}
     ? | == op 1 == op 181 { ( rj_e_mul c r ? == op 1 1 0 ) ^ v } {}
     ? | == op 2 == op 11 { ( rj_e_bin c r 4 ? == op 2 1 0 ) ^ v } {}
@@ -2882,8 +3187,13 @@ $ `stdlib/core/vec.nu`
     ? == op 49 { ( rj_goto c r ( rj_tgtrec ( rj_rw c r 1 ) ) ) ^ v } {}
     ? | == op 54 == op 48 {
         : i o ( rj_u c r 0 )
-        ( rj_testop c ? | == op 54 == 0 ( rj_rw c r 3 ) 0 1 ( rj_uloc c o ) ( rj_us c o ) )  // i32 conditions; an IFZ fused from i64.eqz says so in C
-        ( rj_jcc c ? == op 54 5 4 ( rj_tgtrec ( rj_rw c r 1 ) ) )
+        : ~ i zc ( rj_get c ( rjs_pcc ) )  // the record before already set the flags (rj_cfuse)
+        ( rj_set c ( rjs_pcc ) -1 )
+        ? < zc 0 {
+            ( rj_testop c ? | == op 54 == 0 ( rj_rw c r 3 ) 0 1 ( rj_uloc c o ) ( rj_us c o ) )  // i32 conditions; an IFZ fused from i64.eqz says so in C
+            = zc 4
+        } {}
+        ( rj_jcc c ? == op 54 ^^ zc 1 zc ( rj_tgtrec ( rj_rw c r 1 ) ) )  // BRIF: not zero
         ^ v
     } {}
     ? == op 45 { ( rj_e_brifc c r ) ^ v } {}
@@ -2968,7 +3278,7 @@ $ `stdlib/core/vec.nu`
     ~ < k ( rjs_nst ) { ( vec_push [i] st 0 ) = k + k 1 }
     ( vec_put [i] st ( rjs_n ) n ) ( vec_put [i] st ( rjs_nl ) nl ) ( vec_put [i] st ( rjs_ns ) ns )
     ( vec_put [i] st ( rjs_np ) np ) ( vec_put [i] st ( rjs_nr ) nr ) ( vec_put [i] st ( rjs_sb ) sb )
-    ( vec_put [i] st ( rjs_fweb ) -1 )
+    ( vec_put [i] st ( rjs_fweb ) -1 ) ( vec_put [i] st ( rjs_pcc ) -1 )
     ^ @ Rj {
         ( vec_new [u] ) st ( vec_clone [i] code ) ( vec_clone [i] aux ) ( vec_clone [i] kv ) ( vec_clone [i] ltype )
         ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] )
@@ -2980,6 +3290,7 @@ $ `stdlib/core/vec.nu`
         ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] )
         ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] )
         ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] )
+        ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] )
     }
 }
 
@@ -3028,6 +3339,8 @@ $ `stdlib/core/vec.nu`
     ( rj_facts c )
     ( rj_sens c )
     ( rj_alloc c )
+    ( rj_cxbusy c )
+    ? == fidx g_rjtrace { ( rj_trace c ) } {}
     ( rj_emit c )
     ^ ! ( rj_failed c )
 }
@@ -3183,6 +3496,7 @@ $ `stdlib/core/vec.nu`
     ? | == op 152 == op 147 {  // promote (cvtss2sd) / demote (cvtsd2ss)
         : ~ i xs 1
         ? ( rj_isx al ) { = xs - al 16 } { ( rj_ldx c 1 al as ) }
+        ? == xs x { ( rj_movx c 1 x ) = xs 1 } {}  // the source shares the result's register: clear of the xorps
         ( rj_rr c 0 0 1 87 x x 0 )  // xorps x,x — the f32 result's upper bits must be zero
         ( rj_rr c ? == op 152 243 242 0 1 90 x xs 0 )
         ( rj_fun_fin c od x )
@@ -3275,12 +3589,16 @@ $ `stdlib/core/vec.nu`
     ? | == op 95 == op 104 {  // popcnt rax,rax / eax,eax
         ( rj_rr c 243 w 1 184 0 0 0 )
     } {
-        ? == op 102 {  // i64.clz: 63 - bsr, 64 for zero
-            ( rj_rr c 0 1 1 189 1 0 0 ) ( rj_mov_ri c 2 -1 0 ) ( rj_cmov_rr c 1 4 1 2 )  // bsr rcx,rax; mov rdx,-1; cmovz rcx,rdx
-            ( rj_mov_ri c 0 63 0 ) ( rj_alu_rr c 1 5 0 1 )  // mov eax,63; sub rax,rcx
-        } {  // ctz: bsf, the width for zero
-            ( rj_rr c 0 w 1 188 1 0 0 ) ( rj_mov_ri c 2 ? == w 1 64 32 0 ) ( rj_cmov_rr c 1 4 1 2 )  // bsf; mov edx,W; cmovz rcx,rdx
-            ( rj_mov_rr c 1 0 1 )
+        ? ( rj_bmi ) {  // lzcnt / tzcnt: the width for zero, as wasm wants
+            ( rj_rr c 243 w 1 ? == op 102 189 188 0 0 0 )
+        } {
+            ? == op 102 {  // i64.clz: 63 - bsr, 64 for zero
+                ( rj_rr c 0 1 1 189 1 0 0 ) ( rj_mov_ri c 2 -1 0 ) ( rj_cmov_rr c 1 4 1 2 )  // bsr rcx,rax; mov rdx,-1; cmovz rcx,rdx
+                ( rj_mov_ri c 0 63 0 ) ( rj_alu_rr c 1 5 0 1 )  // mov eax,63; sub rax,rcx
+            } {  // ctz: bsf, the width for zero
+                ( rj_rr c 0 w 1 188 1 0 0 ) ( rj_mov_ri c 2 ? == w 1 64 32 0 ) ( rj_cmov_rr c 1 4 1 2 )  // bsf; mov edx,W; cmovz rcx,rdx
+                ( rj_mov_rr c 1 0 1 )
+            }
         }
     }
     ( rj_stg c ( rj_dloc c od ) ( rj_ds c od ) 0 )

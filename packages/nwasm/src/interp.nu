@@ -398,7 +398,7 @@ unsafe @ __Interp_ptr Interp h → *InterpImpl { ^ ( rcbox_ptr [InterpImpl] # i 
 // and re-deriving them per call means walking funcs → typeidx → types and
 // two `vec_len`s inside `module_func_type` — pure repeat work on a value
 // that is fixed for the life of the module.
-: PFunc { ( Vec i ) code ( Vec i ) aux i count i nlocals i nslots i nparams i nresults i code_start i sbase ( Vec i ) kv s free ( Vec i ) bytes s jit i jitlen }
+: PFunc { ( Vec i ) code ( Vec i ) aux i count i nlocals i nslots i nparams i nresults i code_start i sbase ( Vec i ) kv s free ( Vec i ) bytes s jit i jitlen ( Vec i ) refl }
 
 @ __page → i { ^ 65536 }
 
@@ -1317,6 +1317,13 @@ unsafe @ __call_import * InterpImpl it * ModuleImpl m i fidx → v {
 // one flat array, locals first, stack slots after; the driver copies call
 // arguments straight from the caller's slots, so only the outermost frame
 // touches the value stack.
+// the reference-typed declared locals of a fresh or recycled frame: null
+unsafe @ __refl_null * PFunc pf * i rb → v {
+    : i nr ( vec_len [i] . pf refl )
+    : ~ i k 0
+    ~ < k nr { = . rb ( vec_at [i] . pf refl k ) -1 = k + k 1 }
+}
+
 unsafe @ __frame_new * InterpImpl it * ModuleImpl m i fidx i ret_dst → s {
     : s pins ( __pfunc_for it m fidx )
     ? == # i pins 0 { ( __trap it `bad function index` ) ^ # s 0 } {}
@@ -1336,6 +1343,7 @@ unsafe @ __frame_new * InterpImpl it * ModuleImpl m i fidx i ret_dst → s {
             : *i rb ( vec_data [i] . rfr regs )
             : ~ i zk . pfc nparams
             ~ < zk . pfc nlocals { = . rb zk 0 = zk + zk 1 }
+            ( __refl_null pfc rb )
             = . rfr pos 0
             = . rfr ret_dst ret_dst
             ? < ret_dst 0 {
@@ -1360,6 +1368,7 @@ unsafe @ __frame_new * InterpImpl it * ModuleImpl m i fidx i ret_dst → s {
         : ~ i kk 0
         ~ < kk knum { = . kb + kbase kk ?? ( vec_get [i] . pfc kv kk ) { T x → x F → 0 } = kk + kk 1 }
     } {}
+    ( __refl_null pfc ( vec_data [i] regs ) )
     ? < ret_dst 0 {
         // outermost: pop the arguments off the value stack, last first
         : ~ i pk . pfc nparams
@@ -1417,6 +1426,7 @@ unsafe @ __pf_free sink s pp → v {
     ( vec_free [i] . pf aux )
     ( vec_free [i] . pf kv )
     ( vec_free [i] . pf bytes )
+    ( vec_free [i] . pf refl )
     ? != . pf jitlen 0 {
         ( nurl_guard_code_del # *u . pf jit )  // no-op when never registered
         ? > . pf jitlen 0 { ( nurl_code_free # *u . pf jit . pf jitlen ) } {}  // < 0: in the arena, freed with it
@@ -2319,6 +2329,14 @@ unsafe @ __predecode * ModuleImpl m * WFunc f → s {
     } {}
     : i L + nparams ( vec_len [i] . f locals )
     = . pf nlocals L
+    // declared locals of a reference type start out null (-1), not zero
+    = . pf refl ( vec_new [i] )
+    : ~ i rlk 0
+    ~ < rlk ( vec_len [i] . f locals ) {
+        : i rlt ( vec_at [i] . f locals rlk )
+        ? | == rlt 111 == rlt 112 { ( vec_push [i] . pf refl + nparams rlk ) } {}
+        = rlk + rlk 1
+    }
     // Locals occupy [0, L); the constant pool [L, L + |kv|); the operand
     // stack everything above. Both boundaries are fixed before the pass, so
     // every slot a record carries is final the moment it is emitted.
@@ -2670,6 +2688,7 @@ unsafe @ __predecode * ModuleImpl m * WFunc f → s {
         ( __pf_emit pf ( __R_TRAPUN ) 0 0 0 0 . f code_start )
         = . pf count 1
         = . pf nlocals nparams
+        ( vec_clear [i] . pf refl )
         = . pf sbase nparams
         = . pf nslots + nparams 4
         = . pf nparams nparams
@@ -2787,6 +2806,12 @@ unsafe @ __trap_backtrace * InterpImpl it * ModuleImpl m s top → v {
 @ interp_enable_jit → v { = g_jit 1 }
 
 @ interp_disable_rjit → v { = g_rjit 0 }
+
+// NURL_NWASM_BMI2=0: tier 8 sticks to baseline x86-64 (no shlx/sarx/shrx,
+// lzcnt, tzcnt) even on a CPU that has them — for testing those paths
+@ interp_disable_bmi2 → v { ( rj_set_bmi 0 ) }
+
+@ interp_rjit_trace i f → v { ( rj_set_trace f ) }
 
 @ interp_enable_rjdbg → v { = g_rjdbg 1 }
 
@@ -4079,8 +4104,10 @@ unsafe @ __jit_ctx_put * InterpImpl it * i b → v {
         ( __jit_b buf 72 ) ( __jit_b buf 15 ) ( __jit_b buf 186 ) ( __jit_b buf ? == op 125 240 248 ) ( __jit_b buf 63 )  // btr/btc rax,63
         ( __jit_strax_m buf pmap xmap cvals a ) ^ v
     } {}
-    ? & >= op 153 <= op 156 {  // reinterprets: raw slot copy
+    ? & >= op 153 <= op 156 {  // reinterprets: a slot copy — the i32 sign-extended, the f32 zero-extended
         ? != raxslot b { ( __jit_ldrax_m buf pmap xmap cvals b ) } {}
+        ? == op 153 { ( __jit_b buf 72 ) ( __jit_b buf 99 ) ( __jit_b buf 192 ) } {}  // movsxd rax,eax
+        ? == op 155 { ( __jit_b buf 137 ) ( __jit_b buf 192 ) } {}  // mov eax,eax
         ( __jit_strax_m buf pmap xmap cvals a ) ^ v
     } {}
     ? | | == op 157 == op 159 | == op 158 == op 160 {  // extend8/16_s (i32+i64): movsx from the slot's low byte/word
@@ -4705,6 +4732,7 @@ unsafe @ __jit_install * InterpImpl it * ModuleImpl m * PFunc pf ( Vec u ) buf (
     ? == t 127 { ^ 0 } {}
     ? == t 125 { ^ 2 } {}
     ? == t 124 { ^ 3 } {}
+    ? | == t 111 == t 112 { ^ 4 } {}  // externref / funcref: a 64-bit integer whose zero is -1
     ^ 1
 }
 
@@ -4925,6 +4953,12 @@ unsafe @ __jit_try * InterpImpl it * ModuleImpl m * PFunc pf i fidx9 → v {
             ( __jit_b buf 185 ) ( __jit_d buf - nl np )  // mov ecx, nlocals-nparams
             ( __jit_b buf 243 ) ( __jit_b buf 72 ) ( __jit_b buf 171 )  // rep stosq — zero locals
             ( __jit_b buf 95 )  // pop rdi
+        }
+        // reference-typed locals start out null
+        : ~ i rlk 0
+        ~ < rlk ( vec_len [i] . pf refl ) {
+            ( __jit_b buf 72 ) ( __jit_b buf 199 ) ( __jit_b buf 131 ) ( __jit_d buf * ( vec_at [i] . pf refl rlk ) 8 ) ( __jit_d buf -1 )  // mov qword [rbx+8k],-1
+            = rlk + rlk 1
         }
     } {}
     ? > knum 0 {
@@ -5879,9 +5913,9 @@ unsafe @ __exec_func * InterpImpl it i fidx → v {
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     ? == op 150 { = . rbase ra ( __convert it 185 . rbase rb ) ? != 0 . it halt { ( __fr_setpos tp r0 ) = pc pend } {} } {  // f64.convert_i64_s
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         ? == op 151 { = . rbase ra ( __convert it 186 . rbase rb ) ? != 0 . it halt { ( __fr_setpos tp r0 ) = pc pend } {} } {  // f64.convert_i64_u
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             ? == op 152 { = . rbase ra ( __convert it 187 . rbase rb ) ? != 0 . it halt { ( __fr_setpos tp r0 ) = pc pend } {} } {  // f64.promote_f32
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                ? == op 153 { = . rbase ra . rbase rb } {  // i32.reinterpret_f32
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                ? == op 153 { = . rbase ra >> << . rbase rb 32 32 } {  // i32.reinterpret_f32: the canonical (sign-extended) i32
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     ? == op 154 { = . rbase ra . rbase rb } {  // i64.reinterpret_f64
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        ? == op 155 { = . rbase ra . rbase rb } {  // f32.reinterpret_i32
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        ? == op 155 { = . rbase ra & . rbase rb 4294967295 } {  // f32.reinterpret_i32: an f32 slot holds its bits zero-extended
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             ? == op 156 { = . rbase ra . rbase rb } {  // f64.reinterpret_i64
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 ? == op 157 { = . rbase ra ( __runary 192 . rbase rb ) } {  // i32.extend8_s
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     ? == op 158 { = . rbase ra ( __runary 193 . rbase rb ) } {  // i32.extend16_s
@@ -6133,6 +6167,7 @@ unsafe @ __rdo_call * InterpImpl it * ModuleImpl m s caller i callee i argbase *
         : *i rb ( vec_data [i] . rfr regs )
         : ~ i zk . pfc nparams
         ~ < zk . pfc nlocals { = . rb zk 0 = zk + zk 1 }
+        ( __refl_null pfc rb )
         : i np . pfc nparams
         : ~ i ak 0
         ~ < ak np { = . rb ak . caller_rbase + argbase ak = ak + ak 1 }
@@ -6355,7 +6390,9 @@ unsafe @ __f32_unary i op i ab → i {
     ? == op 167 { ^ ( __w32 ab ) } {}  // i32.wrap_i64
     ? == op 172 { ^ ( __w32 ab ) } {}  // i64.extend_i32_s
     ? == op 173 { ^ & ab 4294967295 } {}  // i64.extend_i32_u
-    ? & >= op 188 <= op 191 { ^ ab } {}  // *.reinterpret_* : no-op
+    ? == op 188 { ^ ( __w32 ab ) } {}  // i32.reinterpret_f32: the canonical i32
+    ? == op 190 { ^ & ab 4294967295 } {}  // f32.reinterpret_i32: the zero-extended f32 bits
+    ? | == op 189 == op 191 { ^ ab } {}  // the 64-bit reinterprets: the same bits
     // trapping float→int truncation (NaN / out-of-range → trap, per spec)
     ? == op 168 {  // i32.trunc_f32_s
         ^ ( __w32 # i ( __trunc_ck it ( __f32_nan ab ) # f ( bits_to_f32 ab ) -2147483648.0 2147483648.0 ) ) } {}
