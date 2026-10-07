@@ -66,6 +66,7 @@ $ `src/interp.nu`
     // the pure interpreter, PIN=0 unpins, GUARD=0 keeps bounds checks.
     ?? ( env_get `NURL_NWASM_JIT` ) { T jv → { ? == 0 ( nurl_str_eq ( string_data jv ) `0` ) { ( interp_enable_jit ) } {} } F → { ( interp_enable_jit ) } }
     ?? ( env_get `NURL_NWASM_PIN` ) { T pv → { ? != 0 ( nurl_str_eq ( string_data pv ) `0` ) { ( interp_disable_pin ) } {} } F → {} }
+    ?? ( env_get `NURL_NWASM_RJIT` ) { T rv → { ? != 0 ( nurl_str_eq ( string_data rv ) `0` ) { ( interp_disable_rjit ) } {} } F → {} }
     ?? ( env_get `NURL_NWASM_GUARD` ) { T gv → { ? != 0 ( nurl_str_eq ( string_data gv ) `0` ) { ( interp_disable_guard ) } {} } F → {} }
     // bit patterns: 1.5, 2.25, 3.75, 3.375, 2.0, sqrt2, 7.9, 7.0
     // f64.add(1.5, 2.25) → 3.75

@@ -23,6 +23,7 @@ $ `stdlib/std/thread.nu`
 $ `stdlib/std/time.nu`
 $ `stdlib/core/rcbox.nu`
 $ `module.nu`
+$ `rjit.nu`
 
 // round-to-nearest-even (wasm f*.nearest) — libm rint honours the default mode.
 & `m` @ rint f x → f
@@ -2734,7 +2735,13 @@ unsafe @ __trap_backtrace * InterpImpl it * ModuleImpl m s top → v {
 : ~ i g_jit_depth 0  // JIT call-out nesting; beyond a cap, callees interpret (1M-deep-safe)
 : ~ i g_pin 1  // tier-7 slot pinning (NURL_NWASM_PIN=0 keeps every slot in memory; A/B, debug)
 : ~ i g_jitdump 0  // NURL_NWASM_JIT_DUMP=1: emit every sealed page as decimal bytes on stderr
+: ~ i g_rjit 1  // tier 8 (rjit.nu) first; NURL_NWASM_RJIT=0 keeps the template tier alone (A/B, debug)
+: ~ i g_rjdbg 0  // NURL_NWASM_RJIT_DBG=1: say on stderr which functions tier 8 declined, and why
 @ interp_enable_jit → v { = g_jit 1 }
+
+@ interp_disable_rjit → v { = g_rjit 0 }
+
+@ interp_enable_rjdbg → v { = g_rjdbg 1 }
 
 @ interp_disable_pin → v { = g_pin 0 }
 
@@ -4419,8 +4426,125 @@ unsafe @ __jit_pin_select * PFunc pf ( Vec i ) xpins i guard → ( Vec i ) {
     ^ pins
 }
 
+// Copy a finished function into an executable page, turn its jump-table
+// entries into absolute addresses, seal it, and register its out-of-bounds
+// stub (label n) with the fault-to-trap handler in guard mode. Shared by the
+// template tier and tier 8 (rjit.nu): both hand over the code, the label
+// table and the page-relative jump-table entries.
+unsafe @ __jit_install * PFunc pf ( Vec u ) buf ( Vec i ) lab ( Vec i ) pta_off ( Vec i ) pta_stub i n i guard i fidx9 → v {
+    : i len ( vec_len [u] buf )
+    : *u page ( nurl_code_alloc + len 16 )
+    ? == # i page 0 { = . pf jit # s -1 ^ v } {}  // no executable memory (wasm)
+    : ~ i k 0
+    ~ < k len { = . page k ?? ( vec_get [u] buf k ) { T x → x F → # u 0 } = k + k 1 }
+    // jump-table entries become absolute addresses now that the page is known
+    : i npt ( vec_len [i] pta_off )
+    : ~ i ptk 0
+    ~ < ptk npt {
+        : i eo ?? ( vec_get [i] pta_off ptk ) { T x → x F → 0 }
+        : i av + # i page ?? ( vec_get [i] pta_stub ptk ) { T x → x F → 0 }
+        : ~ i bb 0
+        ~ < bb 8 { = . page + eo bb # u & ( __lshr64 av * bb 8 ) 255 = bb + bb 1 }
+        = ptk + ptk 1
+    }
+    ? != 0 ( nurl_code_seal page + len 16 ) { ( nurl_code_free page + len 16 ) = . pf jit # s -1 ^ v } {}
+    ? != 0 g_jitdump {  // decimal byte stream; tools/jitdump.py turns it back into objdump input
+        ( nurl_eprint `[jitdump] cs=` ) ( nurl_eprint ( nurl_str_int . pf code_start ) )
+        ( nurl_eprint ` fidx=` ) ( nurl_eprint ( nurl_str_int fidx9 ) )
+        ( nurl_eprint ` page=` ) ( nurl_eprint ( nurl_str_int # i page ) )
+        ( nurl_eprint ` len=` ) ( nurl_eprint ( nurl_str_int len ) )
+        ( nurl_eprint ` bytes=` )
+        : ~ i jdk 0
+        ~ < jdk len {
+            ? > jdk 0 { ( nurl_eprint `,` ) } {}
+            ( nurl_eprint ( nurl_str_int # i . page jdk ) )
+            = jdk + jdk 1
+        }
+        ( nurl_eprint `\n` )
+    } {}
+    // Register the sealed page for fault-to-trap conversion: a guest
+    // access past the committed pages faults, and the handler steers the
+    // frame to this function's out-of-bounds stub (label n). Room was
+    // checked before emitting; failing here anyway would leave unguarded
+    // uncheckable code, so the page is dropped instead.
+    ? != 0 guard {
+        : i oobs ?? ( vec_get [i] lab n ) { T x → x F → 0 }
+        ? != 0 ( nurl_guard_code_add page + len 16 # *u + # i page oobs ) {
+            ( nurl_code_free page + len 16 ) = . pf jit # s -1 ^ v
+        } {}
+    } {}
+    = . pf jit # s page
+    = . pf jitlen + len 16
+}
+
+// valtype byte → the rjit local-type code (0 i32, 1 i64, 2 f32, 3 f64)
+@ __rj_ty i t → i {
+    ? == t 127 { ^ 0 } {}
+    ? == t 125 { ^ 2 } {}
+    ? == t 124 { ^ 3 } {}
+    ^ 1
+}
+
+// Tier 8: compile pf with the register allocator (rjit.nu). Guard-page mode
+// only — it emits no bounds checks. False leaves the function to the
+// template tier.
+unsafe @ __rj_try * InterpImpl it * ModuleImpl m * PFunc pf i fidx9 i guard → b {
+    : i n . pf count
+    : ( Vec i ) lt ( vec_new [i] )
+    : s ftp ( _module_func_type m fidx9 )
+    ? != # i ftp 0 {
+        : *FuncType ft # *FuncType ftp
+        : i npar ( vec_len [i] . ft params )
+        : ~ i k 0
+        ~ < k npar { ( vec_push [i] lt ( __rj_ty ( vec_at [i] . ft params k ) ) ) = k + k 1 }
+    } {}
+    : i di - fidx9 . m num_import_funcs
+    ? & >= di 0 < di ( vec_len [s] . m funcs ) {
+        : s wfp ( vec_at [s] . m funcs di )
+        ? != # i wfp 0 {
+            : *WFunc wf # *WFunc wfp
+            : i nloc ( vec_len [i] . wf locals )
+            : ~ i k 0
+            ~ < k nloc { ( vec_push [i] lt ( __rj_ty ( vec_at [i] . wf locals k ) ) ) = k + k 1 }
+        } {}
+    } {}
+    // per record: a call's callee arity
+    : ( Vec i ) rsig ( vec_new [i] )
+    : ( Vec i ) code . pf code
+    : ~ i r 0
+    ~ < r n {
+        : i op ( vec_at [i] code * r 6 )
+        : ~ s cft # s 0
+        ? | == op 50 == op 210 { = cft ( _module_func_type m ( vec_at [i] code + * r 6 1 ) ) } {}
+        ? == op 170 {
+            : i tix ( vec_at [i] code + * r 6 1 )
+            ? & >= tix 0 < tix ( vec_len [s] . m types ) { = cft ( vec_at [s] . m types tix ) } {}
+        } {}
+        ? != # i cft 0 {
+            : *FuncType cf # *FuncType cft
+            ( vec_push [i] rsig + * ( vec_len [i] . cf params ) 65536 ( vec_len [i] . cf results ) )
+        } { ( vec_push [i] rsig -1 ) }
+        = r + r 1
+    }
+    : Rj c ( rj_new . pf code . pf aux . pf kv lt n . pf nlocals . pf nslots . pf nparams . pf nresults . pf sbase )
+    ? ( rj_compile c rsig . m num_import_funcs . it jit_spcell ( nurl_code_trap_addr ) . it jit_co_fn . it jit_co_env fidx9 ) {
+        ( __jit_install pf . c buf . c lab . c pta_off . c pta_stub n guard fidx9 )
+        ^ T
+    } {}
+    ? != 0 g_rjdbg {
+        ( nurl_eprint `[rjit] declined fidx=` ) ( nurl_eprint ( nurl_str_int fidx9 ) )
+        ( nurl_eprint ` reason=` ) ( nurl_eprint ( nurl_str_int ( rj_get c ( rjs_fail ) ) ) ) ( nurl_eprint `\n` )
+    } {}
+    ^ F
+}
+
 unsafe @ __jit_try * InterpImpl it * ModuleImpl m * PFunc pf i fidx9 → v {
     ? != # i . pf jit 0 { ^ v } {}  // already tried (handle or -1)
+    // tier 8 emits no bounds checks: guard-page memory, or no memory at all
+    ? & != 0 g_rjit | != 0 . it mem_raw != 1 . m has_mem {
+        ( __jit_state_init it m )
+        ? != 0 ( nurl_guard_code_room ) { ? ( __rj_try it m pf fidx9 1 ) { ^ v } {} } {}
+    } {}
     ? == 0 ( __jit_ok pf ) { = . pf jit # s -1 ^ v } {}
     ( __jit_state_init it m )
     // Guard-page mode decides r10's availability as a pin, so it is
@@ -5031,6 +5155,7 @@ unsafe @ __jit_try * InterpImpl it * ModuleImpl m * PFunc pf i fidx9 → v {
     ( __jit_b buf 72 ) ( __jit_b buf 199 ) ( __jit_b buf 71 ) ( __jit_b buf 32 ) ( __jit_d buf fidx9 )  // mov qword[rdi+32], own fidx
     ( __jit_b buf 72 ) ( __jit_b buf 199 ) ( __jit_b buf 71 ) ( __jit_b buf 40 ) ( __jit_d buf 0 )  // mov qword[rdi+40], 0
     ( __jit_inline_call buf pat_at pat_rec n 20 spcell cofn9 coenv9 )
+    ( __jit_b buf 72 ) ( __jit_b buf 139 ) ( __jit_b buf 3 )  // mov rax,[rbx] — result 0 for a direct caller
     ( __jit_retseq buf npin )
     // n+4: signed-division overflow — status 10, into the gate.
     ( vec_push [i] lab ( vec_len [u] buf ) )
@@ -5050,47 +5175,7 @@ unsafe @ __jit_try * InterpImpl it * ModuleImpl m * PFunc pf i fidx9 → v {
         ( vec_set [u] buf + at 3 # u & ( __lshr64 rel 24 ) 255 )
         = pk + pk 1
     }
-    : i len ( vec_len [u] buf )
-    : *u page ( nurl_code_alloc + len 16 )
-    ? == # i page 0 { = . pf jit # s -1 ^ v } {}  // no executable memory (wasm)
-    : ~ i k 0
-    ~ < k len { = . page k ?? ( vec_get [u] buf k ) { T x → x F → # u 0 } = k + k 1 }
-    // jump-table entries become absolute addresses now that the page is known
-    : i npt ( vec_len [i] pta_off )
-    : ~ i ptk 0
-    ~ < ptk npt {
-        : i eo ?? ( vec_get [i] pta_off ptk ) { T x → x F → 0 }
-        : i av + # i page ?? ( vec_get [i] pta_stub ptk ) { T x → x F → 0 }
-        : ~ i bb 0
-        ~ < bb 8 { = . page + eo bb # u & ( __lshr64 av * bb 8 ) 255 = bb + bb 1 }
-        = ptk + ptk 1
-    }
-    ? != 0 ( nurl_code_seal page + len 16 ) { ( nurl_code_free page + len 16 ) = . pf jit # s -1 ^ v } {}
-    ? != 0 g_jitdump {  // decimal byte stream; tools/jitdump.py turns it back into objdump input
-        ( nurl_eprint `[jitdump] cs=` ) ( nurl_eprint ( nurl_str_int . pf code_start ) )
-        ( nurl_eprint ` len=` ) ( nurl_eprint ( nurl_str_int len ) )
-        ( nurl_eprint ` bytes=` )
-        : ~ i jdk 0
-        ~ < jdk len {
-            ? > jdk 0 { ( nurl_eprint `,` ) } {}
-            ( nurl_eprint ( nurl_str_int # i . page jdk ) )
-            = jdk + jdk 1
-        }
-        ( nurl_eprint `\n` )
-    } {}
-    // Register the sealed page for fault-to-trap conversion: a guest
-    // access past the committed pages faults, and the handler steers the
-    // frame to this function's out-of-bounds stub (label n). Room was
-    // checked before emitting; failing here anyway would leave unguarded
-    // uncheckable code, so the page is dropped instead.
-    ? != 0 guard {
-        : i oobs ?? ( vec_get [i] lab n ) { T x → x F → 0 }
-        ? != 0 ( nurl_guard_code_add page + len 16 # *u + # i page oobs ) {
-            ( nurl_code_free page + len 16 ) = . pf jit # s -1 ^ v
-        } {}
-    } {}
-    = . pf jit # s page
-    = . pf jitlen + len 16
+    ( __jit_install pf buf lab pta_off pta_stub n guard fidx9 )
 }
 
 // Run an already-built, JIT-compiled frame `fj` to completion, handling
@@ -5244,6 +5329,7 @@ unsafe @ __jit_callee * InterpImpl it * ModuleImpl m i callee * i caller_rbase i
     ? == st 3 { ( __trap it `unreachable` ) ^ 1 } {}
     ? == st 4 { ( __trap it `integer divide by zero` ) ^ 1 } {}
     ? == st 10 { ( __trap it `integer overflow` ) ^ 1 } {}
+    ? == st 12 { ( __trap it `invalid conversion to integer` ) ^ 1 } {}
     ? == st 1 { ( __trap it `memory access out of bounds` ) ^ 1 } {}
     ? | ( __interp_trapped it ) != 0 . it halt { ^ 1 } {}
     ^ 0
@@ -5295,6 +5381,7 @@ unsafe @ __exec_func * InterpImpl it i fidx → v {
                 ? == status 3 { ( __trap it `unreachable` ) ( __frame_recycle fr0 ) ^ v } {}
                 ? == status 4 { ( __trap it `integer divide by zero` ) ( __frame_recycle fr0 ) ^ v } {}
                 ? == status 10 { ( __trap it `integer overflow` ) ( __frame_recycle fr0 ) ^ v } {}
+                ? == status 12 { ( __trap it `invalid conversion to integer` ) ( __frame_recycle fr0 ) ^ v } {}
                 ? == status 11 { ( __frame_recycle fr0 ) ^ v } {}  // trap/halt already recorded by an inline call-out
                 ? != 0 status { ( __trap it `memory access out of bounds` ) ( __frame_recycle fr0 ) ^ v } {}
                 ? | ( __interp_trapped it ) != 0 . it halt { ( __frame_recycle fr0 ) ^ v } {}

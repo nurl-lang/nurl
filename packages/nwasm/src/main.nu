@@ -98,6 +98,8 @@ unsafe @ __result_count s ftp → i {
                     ?? ( env_get `NURL_NWASM_JIT` ) { T jv → { ? == 0 ( nurl_str_eq ( string_data jv ) `0` ) { ( interp_enable_jit ) } {} } F → { ( interp_enable_jit ) } }
                     ?? ( env_get `NURL_NWASM_PIN` ) { T pv → { ? != 0 ( nurl_str_eq ( string_data pv ) `0` ) { ( interp_disable_pin ) } {} } F → {} }
                     ?? ( env_get `NURL_NWASM_JIT_DUMP` ) { T dv → { ? != 0 ( nurl_str_eq ( string_data dv ) `1` ) { ( interp_enable_jitdump ) } {} } F → {} }
+                    ?? ( env_get `NURL_NWASM_RJIT` ) { T rv → { ? != 0 ( nurl_str_eq ( string_data rv ) `0` ) { ( interp_disable_rjit ) } {} } F → {} }
+                    ?? ( env_get `NURL_NWASM_RJIT_DBG` ) { T qv → { ? != 0 ( nurl_str_eq ( string_data qv ) `1` ) { ( interp_enable_rjdbg ) } {} } F → {} }
                     ( exec_func it fidx )
                     ? ( interp_trapped it ) {
                         ( nurl_print `nwasm: trap: ` ) ( nurl_print ( string_data ( bytes_to_str ( interp_trapmsg it ) ) ) ) ( nurl_print `\n` )
@@ -170,6 +172,8 @@ unsafe @ __result_count s ftp → i {
                     ?? ( env_get `NURL_NWASM_JIT` ) { T jv → { ? == 0 ( nurl_str_eq ( string_data jv ) `0` ) { ( interp_enable_jit ) } {} } F → { ( interp_enable_jit ) } }
                     ?? ( env_get `NURL_NWASM_PIN` ) { T pv → { ? != 0 ( nurl_str_eq ( string_data pv ) `0` ) { ( interp_disable_pin ) } {} } F → {} }
                     ?? ( env_get `NURL_NWASM_JIT_DUMP` ) { T dv → { ? != 0 ( nurl_str_eq ( string_data dv ) `1` ) { ( interp_enable_jitdump ) } {} } F → {} }
+                    ?? ( env_get `NURL_NWASM_RJIT` ) { T rv → { ? != 0 ( nurl_str_eq ( string_data rv ) `0` ) { ( interp_disable_rjit ) } {} } F → {} }
+                    ?? ( env_get `NURL_NWASM_RJIT_DBG` ) { T qv → { ? != 0 ( nurl_str_eq ( string_data qv ) `1` ) { ( interp_enable_rjdbg ) } {} } F → {} }
                     ( exec_func it fidx )
                     ( interp_flush it )  // _start may return without proc_exit
                     ? ( interp_trapped it ) {
