@@ -6,12 +6,17 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.71.0] — 2026-10-07
 
 The ownership rules become the language: **every program accepted without
 an `unsafe` function of its own is memory-safe and leak-free**
 (docs/MEMORY.md §6). ASan and LSan remain CI checks on the compiler; a
-program's safety no longer rests on them.
+program's safety no longer rests on them. Rc cycles are collected and Arc
+cycles are ruled out at compile time, so counted handles no longer leak
+either. Library functions compile only when the program reaches them (a
+corpus-wide 40 % fewer compile instructions), the HTTP/1.1 server runs 29 %
+fewer instructions per request, and nwasm gains a register-allocating JIT
+tier that runs most wasmbench modules faster than wasmtime's Cranelift.
 
 ### Changed
 
@@ -39,9 +44,42 @@ program's safety no longer rests on them.
   cannot tell whether the caller's string is owned or borrowed, so the
   replaced value either leaked or would be freed under a borrower. Return
   the new string, or take a `String`.
+- **Thread-shared cycles are ruled out at compile time.** Thread-shared
+  counts are not collected, so a store that could close one is an error:
+  a value kept in an existing thread-shared handle's state (a closure's
+  captures, a channel queue, a handle) that can lead back to that handle,
+  and `arc_set` / `arc_ptr` on an Arc whose payload could close a cycle —
+  such an Arc is built first and shared whole, and `arc_get` hands out a
+  copy (docs/MEMORY.md §7.7). The rule found a real cycle: swarm-mcp's
+  kernel job handler captured its own Swarm.
+- **A closure's parameters are borrowed.** A call through a closure value
+  cannot see what the body does with its arguments, so the contract is
+  fixed: the caller keeps and drops what it passes, the body copies a
+  parameter it keeps, and releasing one (a `sink` parameter) is a compile
+  error. Every `*_free_with` lends each element to its hook.
+- **`--no-borrowck` is deprecated.** It still disables the checker, but
+  warns: a correct program the checker rejects is a false positive to
+  report, not a build to force. Ownership summaries no longer depend on the
+  checker running (under the flag, a temporary a callee handed back was
+  dropped after the call).
+- `docs/MEMORY.md` describes the memory model and nothing else — ownership
+  and auto-drop, the rules, the guarantee and its trusted base, threads,
+  release, panics and Rc cycles (111 KB → 45 KB; section numbers kept).
 
 ### Added
 
+- **Rc cycles are collected.** A value that holds an Rc to itself through
+  its own contents kept every count in the cycle above zero forever. Rc now
+  has a per-execution-context Bacon–Rajan collector (trial deletion,
+  iterative walks, collection at a threshold and when a fiber, thread or
+  the program ends) that only cycle-capable types reach: the compiler
+  walks the ownership graph and generates trace functions for exactly the
+  types whose Rc payloads can close a cycle; every other type compiles to
+  plain counting (docs/MEMORY.md §7.7). `rc_collect` runs it on demand.
+- **`Weak` and `ArcWeak`.** `rc_downgrade` / `weak_upgrade` and
+  `arc_downgrade` / `arc_weak_upgrade` (Rust's scheme: the strong handles
+  together hold one weak count; an upgrade succeeds only while a strong
+  handle lives).
 - **`bench/wasmbench.sh --scale N`** (and the wasm-bench workflow's `scale`
   input): every benchmark does N times its work, set before compilation.
   Each NURL, C and Rust source defines `BENCH_SCALE` once and multiplies its
@@ -71,6 +109,31 @@ program's safety no longer rests on them.
 
 ### Performance
 
+- **Library functions compile only when the program reaches them.** nurlc
+  generated, borrow-checked and emitted every function of every imported
+  module and let the dead-function pass throw most of it away: an empty
+  `main` beside `$ stdlib/ext/json.nu` cost 556 M instructions for 312
+  functions, 310 of them dropped. The signature prescan now records which
+  names each body spells, and a library function nothing reaches from the
+  project's own files is skipped (a function generated code still refers
+  to compiles late, from its kept source). Compiling every test, example
+  and benchmark (1,190 files): 1364 G → 815 G instructions, −40 % together
+  with the symbol-table change below; that json import 556 M → 154 M. Off
+  under `--no-dce`, `--lint` and `-g`.
+- **The compiler's symbol table redefines in place and hashes in constant
+  work.** A name defined again in the scope that holds it takes the new
+  value in place instead of appending a shadowing duplicate (the side
+  channels did so ~60 times per call), and the hash reads at most three
+  8-byte windows. −5.2 % instructions on a fixed input set; IR
+  byte-identical. Each brace block is lexed once to be stepped over by the
+  later passes, and the prescan lexes each body once.
+- **HTTP/1.1 runs 29 % fewer user-space instructions per request**
+  (`bench/http_server.nu`, 13 790 → 9 805): Vec growth is checked at the
+  call site, header control bytes are found with one vector scan, field
+  names are checked against two 64-bit tchar masks, digits are written
+  straight into the buffer, and every header lookup measures the name once.
+  The runtime journal's fast paths test the pointer before the
+  thread-local counter, which lets every program fold those reads away.
 - **`stdlib/ext/json.nu` finds the end of a string body in one pass.** The
   escape-free fast path took three: `memchr` for the closing quote, `memchr`
   for a backslash, then a byte walk for raw control bytes. One eight-bytes-
@@ -148,6 +211,31 @@ program's safety no longer rests on them.
   statement of its own).
 - `nurl_println` / `nurl_println_int` print a line in one locked write, so
   lines from fibers on several threads no longer interleave.
+- **`fiber_join` freed a fiber its worker was still switching out of** —
+  a finished fiber publishes its done flag before it swaps back, and a
+  joiner on another thread that read it early freed it under
+  `nurl__rctx_swap`. The joiner now waits until the worker is through.
+- **The relay and rendezvous servers are safe on the multi-threaded fiber
+  runtime.** Their per-connection fibers run on several worker threads, but
+  the servers were written for one: two forwarders wrote the same socket
+  at once (swarm-mcp's tasks smoke stalled in one run of six), and tables
+  were grown while other threads read them (a use-after-free under ASan).
+  Tables are now guarded by a server mutex never held across I/O, and each
+  relay connection has exactly one writer fiber draining its queue.
+- An enum payload that is a one-pointer library handle (Rc, Box, …) was
+  dropped and cloned as a boxed value: dropping `@ Held { Shared rc }`
+  crashed.
+- A handle cached in a global (`= g # i v`, handed out again) was still
+  owned by the binding that made it, so returning that binding freed what
+  the global pointed to — a use-after-free in packages/anomaly and f5tts.
+  Storing an owned handle's address in a global now hands it to manual
+  management.
+- Leaks: a temporary passed to a function that hands it on to a closure
+  value; a raw string temporary a callee may hand back; and 13 examples
+  that allocated raw memory and never freed it (each LSan-clean now,
+  output unchanged — the particle arrays are Vecs).
+- Re-parsing a generic template padded its newlines one character at a
+  time, quadratic in the line it sits on; it is linear.
 
 ## [0.70.0] — 2026-10-04
 
