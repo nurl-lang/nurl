@@ -80,6 +80,7 @@ $ `stdlib/core/vec.nu`
     ( Vec i ) wloc  // per web: location (rjl_*)
     ( Vec i ) whint  // per web: a web whose register it would like
     ( Vec i ) wcc  // per web: 1 when live across a call
+    ( Vec i ) wsens  // per web: 1 when some consumer reads bits 32..63 (an i32 def must sign-extend)
     ( Vec i ) depth  // per record: loop weight (8^depth, capped)
     ( Vec i ) callr  // records that clobber caller-saved registers, ascending
     ( Vec i ) tgt  // per record: 1 when some branch targets it
@@ -995,7 +996,7 @@ $ `stdlib/core/vec.nu`
             ( vec_push [i] . c wcls 0 ) ( vec_push [i] . c wwt 0 )
             ( vec_push [i] . c wst 2147483647 ) ( vec_push [i] . c wen -1 )
             ( vec_push [i] . c wuse 0 ) ( vec_push [i] . c wloc ( rjl_mem ) )
-            ( vec_push [i] . c whint -1 ) ( vec_push [i] . c wcc 0 )
+            ( vec_push [i] . c whint -1 ) ( vec_push [i] . c wcc 0 ) ( vec_push [i] . c wsens 0 )
             = nw + nw 1
         } {}
         = k + k 1
@@ -1043,6 +1044,93 @@ $ `stdlib/core/vec.nu`
         = r + r 1
     }
 }
+
+// Does use k of op read bits 32..63 of its operand? Every i32 a slot holds
+// is sign-extended (the predecoder drops i64.extend_i32_s on the strength
+// of it), but only these consumers can tell: an i32 def whose web feeds none
+// of them skips the movsxd. Copies (MOV, SEL's values, edge moves) pass the
+// question on to their destination instead of answering it.
+@ rj_usens i op i k → b {
+    ? | | ( rj_isalu op ) & >= op 56 <= op 65 & >= op 96 <= op 101 {  // i32 ALU, compares, div/rem, rotates
+        ? & & ( rj_isalu op ) <= op 8 >= op 0 { ^ T } {}  // the i64 half of the ALU set
+        ^ F
+    } {}
+    ? | | | == op 43 == op 36 == op 37 & >= op 93 <= op 95 { ^ F } {}
+    ? & >= op 157 <= op 161 { ^ F } {}  // extendN_s reads the low bits
+    ? | | == op 148 == op 143 | == op 149 == op 144 { ^ F } {}  // i32 → float
+    ? | | | == op 54 == op 168 == op 169 | == op 170 == op 163 { ^ F } {}  // i32 conditions / indices / deltas
+    ? == op 177 { ^ F } {}  // ADDBRIFC32
+    ? == op 45 { ^ T } {}  // decided per record (the compare's width) in rj_sens
+    : i mk ( rj_memkind op )
+    ? >= mk 0 {
+        ? == 0 & mk 1 { ^ F } {}  // a load's base and index are wrapped to 32 bits
+        ? == k 0 { ^ F } {}  // a store's address
+        ^ >= >> mk 2 8  // the stored value matters in full only at width 8
+    } {}
+    ? & >= op 205 <= op 208 { ^ F } {}
+    ? | | == op 211 == op 212 & >= op 194 <= op 197 { ^ ? == k 0 F T } {}  // the base wraps; x is a full value
+    ? == op 46 { ^ F } {}  // SEL: the condition is an i32 (tested 32-bit); the values are copies
+    ^ T
+}
+
+// the sensitivity facts: direct consumers, then back through every copy
+@ rj_sens Rj c → v {
+    : i n ( rj_get c ( rjs_n ) )
+    : ( Vec i ) csrc ( vec_new [i] )  // copy edges src → dst
+    : ( Vec i ) cdst ( vec_new [i] )
+    : ~ i r 0
+    ~ < r n {
+        : i op ( rj_rw c r 0 )
+        : i u0 ( vec_at [i] . c uoff r )
+        : ~ i o u0
+        : i oe ( vec_at [i] . c uoff + r 1 )
+        ~ < o oe {
+            : i wv ( vec_at [i] . c uweb o )
+            ? >= wv 0 {
+                : i k - o u0
+                : ~ b sens ( rj_usens op k )
+                ? == op 45 { = sens >= ( rj_rw c r 4 ) 66 } {}  // BRIFC: an i64 compare reads the full value
+                ? | == op 47 & == op 46 < k 2 {  // a copy: the destination decides
+                    = sens F
+                    ( vec_push [i] csrc wv ) ( vec_push [i] cdst ( vec_at [i] . c dweb ( vec_at [i] . c doff r ) ) )
+                } {}
+                ? & >= op 153 <= op 156 { = sens T } {}
+                ? sens { ( vec_put [i] . c wsens wv 1 ) } {}
+            } {}
+            = o + o 1
+        }
+        = r + r 1
+    }
+    : i nb ( rj_get c ( rjs_nb ) )
+    : ~ i k ( rj_get c ( rjs_nreal ) )
+    ~ < k nb {
+        : ~ i q ( vec_at [i] . c emoff k )
+        : i qe ( vec_at [i] . c emoff + k 1 )
+        ~ < q qe {
+            : i su ( vec_at [i] . c emu q )
+            ? >= su 0 { ( vec_push [i] csrc su ) ( vec_push [i] cdst ( vec_at [i] . c emd q ) ) } {}
+            = q + q 1
+        }
+        = k + k 1
+    }
+    // back through the copies until nothing changes
+    : i ne ( vec_len [i] csrc )
+    : ~ b changed T
+    ~ changed {
+        = changed F
+        : ~ i q 0
+        ~ < q ne {
+            : i sw ( vec_at [i] csrc q )
+            ? & != 0 ( vec_at [i] . c wsens ( vec_at [i] cdst q ) ) == 0 ( vec_at [i] . c wsens sw ) {
+                ( vec_put [i] . c wsens sw 1 ) = changed T
+            } {}
+            = q + q 1
+        }
+    }
+}
+
+// must record r's i32 def number k come out sign-extended?
+@ rj_dcanon Rj c i od → b { ^ != 0 ( vec_at [i] . c wsens ( vec_at [i] . c dweb od ) ) }
 
 @ rj_facts Rj c → v {
     : i n ( rj_get c ( rjs_n ) )
@@ -1363,7 +1451,7 @@ $ `stdlib/core/vec.nu`
     : i ob ( rj_u c r 1 )
     : i od ( rj_dd c r 0 )
     ? ! ( rj_dlive c od ) { ^ v } {}
-    : i _tr ( rj_alu3 c ext w ( rj_uloc c oa ) ( rj_us c oa ) ( rj_uloc c ob ) ( rj_us c ob ) ( rj_dloc c od ) ( rj_ds c od ) )
+    : i _tr ( rj_alu3 c ext w ( rj_uloc c oa ) ( rj_us c oa ) ( rj_uloc c ob ) ( rj_us c ob ) ( rj_dloc c od ) ( rj_ds c od ) ( rj_dcanon c od ) )
 }
 
 // shifts and rotates: ext shl 4, shr 5, sar 7, rol 0, ror 1
@@ -1387,7 +1475,7 @@ $ `stdlib/core/vec.nu`
         ( rj_ldg c tr al as 0 )
         ( rj_shift_cl c w ext tr )
     }
-    ? == w 0 { ( rj_movsxd c tr tr ) } {}
+    ? & == w 0 ( rj_dcanon c od ) { ( rj_movsxd c tr tr ) } {}
     ? != tr dl { ( rj_stg c dl ds tr ) } {}
 }
 
@@ -1439,7 +1527,7 @@ $ `stdlib/core/vec.nu`
             ? == tr bl { ( rj_imulsrc c w tr al as ) } { ( rj_ldg c tr al as 0 ) ( rj_imulsrc c w tr bl bs ) }
         }
     }
-    ? == w 0 { ( rj_movsxd c tr tr ) } {}
+    ? & == w 0 ( rj_dcanon c od ) { ( rj_movsxd c tr tr ) } {}
     ? != tr dl { ( rj_stg c dl ds tr ) } {}
 }
 
@@ -1599,7 +1687,7 @@ $ `stdlib/core/vec.nu`
     } {
         ( rj_set c ( rjs_fsel ) 0 ) ( rj_set c ( rjs_fweb ) -1 )
         ? ! ( rj_dlive c od ) { ^ v } {}
-        ( rj_testop c 1 ( rj_uloc c oc ) ( rj_us c oc ) )
+        ( rj_testop c 0 ( rj_uloc c oc ) ( rj_us c oc ) )  // the condition is an i32
     }
     ? ! ( rj_dlive c od ) { ^ v } {}
     : i tl ( rj_uloc c ot )
@@ -1880,7 +1968,7 @@ $ `stdlib/core/vec.nu`
 
 @ rj_e_brifm Rj c i r → v {
     : i oc ( rj_u c r 0 )
-    ( rj_testop c 1 ( rj_uloc c oc ) ( rj_us c oc ) )
+    ( rj_testop c 0 ( rj_uloc c oc ) ( rj_us c oc ) )  // an i32 condition
     : i skip ( rj_jcc_fwd c 4 )  // je past the moves
     ( rj_e_brm c r )
     ( rj_land c skip )
@@ -1924,7 +2012,7 @@ $ `stdlib/core/vec.nu`
 }
 
 // dst = a OP b into dst's place; returns the GPR holding the result
-@ rj_alu3 Rj c i ext i w i al i as i bl i bs i dl i ds → i {
+@ rj_alu3 Rj c i ext i w i al i as i bl i bs i dl i ds b cn → i {
     : i comm ? | | | == ext 0 == ext 1 == ext 4 == ext 6 1 0
     : ~ i tr 0
     ? ( rj_isg dl ) {
@@ -1950,7 +2038,7 @@ $ `stdlib/core/vec.nu`
             }
         }
     } { ( rj_ldg c 0 al as 0 ) ( rj_opsrc c w ext 0 bl bs ) }
-    ? == w 0 { ( rj_movsxd c tr tr ) } {}
+    ? & == w 0 cn { ( rj_movsxd c tr tr ) } {}
     ? != tr dl { ( rj_stg c dl ds tr ) } {}
     ^ tr
 }
@@ -1964,7 +2052,7 @@ $ `stdlib/core/vec.nu`
     : i orh ( rj_u c r 2 )
     : i od ( rj_dd c r 0 )
     : i dl ? ( rj_dlive c od ) ( rj_dloc c od ) ( rjl_mem )
-    : i tr ( rj_alu3 c 0 w ( rj_uloc c o1 ) ( rj_us c o1 ) ( rj_uloc c o2 ) ( rj_us c o2 ) dl ( rj_ds c od ) )
+    : i tr ( rj_alu3 c 0 w ( rj_uloc c o1 ) ( rj_us c o1 ) ( rj_uloc c o2 ) ( rj_us c o2 ) dl ( rj_ds c od ) ( rj_dcanon c od ) )
     : i cop >> ( rj_rw c r 5 ) 21
     ( rj_opsrc c w 7 tr ( rj_uloc c orh ) ( rj_us c orh ) )
     ( rj_jcc c ( rj_cmpcc cop ) ( rj_tgtrec ( rj_rw c r 1 ) ) )
@@ -2117,7 +2205,7 @@ $ `stdlib/core/vec.nu`
         ? | == op 98 == op 107 { ( rj_mov_rr c 1 0 2 ) } {}
         ? >= skip 0 { ( rj_land c skip ) } {}
     }
-    ? == w 0 { ( rj_movsxd c 0 0 ) } {}
+    ? & == w 0 ( rj_dcanon c od ) { ( rj_movsxd c 0 0 ) } {}
     ( rj_stg c ( rj_dloc c od ) ( rj_ds c od ) 0 )
 }
 
@@ -2319,7 +2407,7 @@ $ `stdlib/core/vec.nu`
     ? == op 49 { ( rj_goto c r ( rj_tgtrec ( rj_rw c r 1 ) ) ) ^ v } {}
     ? | == op 54 == op 48 {
         : i o ( rj_u c r 0 )
-        ( rj_testop c 1 ( rj_uloc c o ) ( rj_us c o ) )
+        ( rj_testop c ? == op 54 0 1 ( rj_uloc c o ) ( rj_us c o ) )  // br_if's condition is an i32; IFZ may test an i64 (eqz fusion)
         ( rj_jcc c ? == op 54 5 4 ( rj_tgtrec ( rj_rw c r 1 ) ) )
         ^ v
     } {}
@@ -2415,7 +2503,7 @@ $ `stdlib/core/vec.nu`
         ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] )
         ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] )
         ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] )
-        ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] )
+        ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] )
     }
 }
 
@@ -2461,6 +2549,7 @@ $ `stdlib/core/vec.nu`
     ( rj_canon c )
     ( rj_depths c )
     ( rj_facts c )
+    ( rj_sens c )
     ( rj_alloc c )
     ( rj_emit c )
     ^ ! ( rj_failed c )
