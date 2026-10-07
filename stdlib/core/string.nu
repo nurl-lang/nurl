@@ -186,10 +186,14 @@ $ `stdlib/core/char.nu`
     ^ & # i b 255
 }
 
-// Concatenate two strings; result is heap-allocated, NUL-terminated.
+// Concatenate two strings; result is heap-allocated, NUL-terminated. An
+// empty result is the runtime's shared empty string (runtime_core.c §9a),
+// which nurl_free releases like any other, so an empty concatenation or
+// slice allocates nothing.
 @ nurl_str_cat s a s b → s {
     : i la ( strlen a )
     : i lb ( strlen b )
+    ? == 0 + la lb { ^ # s ( nurl_strdup_n a 0 ) } {}
     : s r # s ( nurl_alloc + + la lb 1 )
     ( memcpy r a la )
     : *u rp # *u r
@@ -203,6 +207,7 @@ $ `stdlib/core/char.nu`
     : i la ( strlen a )
     : i lb ( strlen b )
     : i lc ( strlen c )
+    ? == 0 + + la lb lc { ^ # s ( nurl_strdup_n a 0 ) } {}
     : s r # s ( nurl_alloc + + + la lb lc 1 )
     ( memcpy r a la )
     : *u rp # *u r
@@ -221,6 +226,7 @@ $ `stdlib/core/char.nu`
     : i lb ( strlen b )
     : i lc ( strlen c )
     : i ld ( strlen d )
+    ? == 0 + + + la lb lc ld { ^ # s ( nurl_strdup_n a 0 ) } {}
     : s r # s ( nurl_alloc + + + + la lb lc ld 1 )
     ( memcpy r a la )
     : *u rp # *u r
@@ -248,14 +254,9 @@ $ `stdlib/core/char.nu`
     : i slen ( strnlen str want )
     ? > st slen { = st slen } {}
     ? > k - slen st { = k - slen st } {}
-    : s r # s ( nurl_alloc + k 1 )
     : *u sp # *u str
     : *u sat # *u + # i sp st
-    ( memcpy r # s sat k )
-    : *u rp # *u r
-    : u zero # u 0
-    = . rp k zero
-    ^ r
+    ^ # s ( nurl_strdup_n # s sat k )
 }
 
 // Parse i64 from byte range [p, p+len). Optional leading '-' / '+',

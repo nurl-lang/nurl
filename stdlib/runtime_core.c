@@ -154,10 +154,33 @@ static void *nurl__xcalloc(size_t a, size_t b) {
     if (!p && a && b) nurl__oom((unsigned long long)a * b);
     return p;
 }
+/* The owned empty string (§9a): nurl_strdup and nurl_strdup_n give every
+ * empty copy this one immortal block instead of a fresh allocation, and
+ * releasing it does nothing. Declared ahead of the libc wrappers so they
+ * pass over it too — an owned NURL string can reach the FFI half's free()
+ * (nurl_http_response_free releases what the pure-NURL client built) and
+ * realloc(). 64 zero bytes on a line of their own: a wide load past the
+ * terminator stays inside, and a store of the terminator (s[len] = 0)
+ * leaves it as it was. */
+static _Alignas(64) char nurl__empty_str[64];
 static void *nurl__xrealloc(void *q, size_t n) {
+    if (q == (void *)nurl__empty_str) {
+        /* Growing it starts a block holding what it held, the terminator;
+         * shrinking it to nothing releases it, as realloc(p, 0) does.
+         * (NURL code grows strings through nurl_realloc, which counts the
+         * new block; this is the runtime's own C, whose frees are libc's.) */
+        if (!n) return NULL;
+        void *p = malloc(n);
+        if (!p) nurl__oom((unsigned long long)n);
+        *(char *)p = 0;
+        return p;
+    }
     void *p = realloc(q, n);
     if (!p && n) nurl__oom((unsigned long long)n);
     return p;
+}
+static void nurl__xfree(void *p) {
+    if (p != (void *)nurl__empty_str) free(p);
 }
 /* Duplication routes through nurl_strdup (§9a) rather than libc's
  * strdup, so a copy comes off the small-allocation cache like every
@@ -170,6 +193,14 @@ void  nurl_free(void *ptr);  /* §9a */
 void  nurl_closure_drop(void *env);  /* closure envs, see nurl_closure_clone */
 char *nurl_strdup(const char *s);   /* §9a */
 static char *nurl__xstrdup(const char *s) {
+    /* The runtime's own copies stay blocks of their own, never the shared
+     * empty string: C code here may write into one or hand it to a
+     * library that frees it. */
+    if (s && !*s) {
+        char *p = (char *)nurl_alloc(1);  /* aborts on OOM, never NULL */
+        *p = 0;
+        return p;
+    }
     char *p = nurl_strdup(s);
     if (!p && s) nurl__oom((unsigned long long)strlen(s) + 1);
     return p;
@@ -178,6 +209,7 @@ static char *nurl__xstrdup(const char *s) {
 #define calloc(a, b)  nurl__xcalloc(a, b)
 #define realloc(p, n) nurl__xrealloc(p, n)
 #define strdup(s)     nurl__xstrdup(s)
+#define free(p)       nurl__xfree(p)
 
 /* ── Toolchain version ──────────────────────────────────────────
  * NURL_VERSION is supplied by stdlib/nurl_version_gen.h, which build.sh
@@ -2792,9 +2824,19 @@ NURL_TLS_FN void* nurl_zalloc(long long bytes) {
  * above. Taking the copy from libc instead left that loop open at one
  * end: the classes filled to their budget once and then every free paid
  * a usable-size query only to hand the block straight back to libc.
- * Same block, same lifetime, a freelist pop instead of a malloc. */
+ * Same block, same lifetime, a freelist pop instead of a malloc.
+ *
+ * An empty copy is no allocation at all but the shared nurl__empty_str,
+ * as an empty Rust String allocates nothing. Empty copies were a third
+ * of a self-compile's allocations (9.8M of 29.4M — every lookup miss
+ * returning ``, every empty slice) and their journal registrations and
+ * frees came with them. An owned string's obligations are to read as a
+ * NUL-terminated string and to be released through nurl_free (grown
+ * through nurl_realloc): the shared block meets both, and nurl_free,
+ * nurl_realloc, the libc wrappers and the panic journal pass over it. */
 char *nurl_strdup(const char *s) {
     if (!s) return NULL;
+    if (!*s) return nurl__empty_str;
     size_t n = strlen(s) + 1;
     char *p = (char *)nurl_alloc((long long)n);
     memcpy(p, s, n);
@@ -2806,7 +2848,7 @@ char *nurl_strdup(const char *s) {
  * copied and a NUL appended; src must have at least n readable bytes. */
 char *nurl_strdup_n(const char *s, long long n) {
     if (!s) return NULL;
-    if (n < 0) n = 0;
+    if (n <= 0) return nurl__empty_str;
     char *p = (char *)nurl_alloc(n + 1);
     memcpy(p, s, (size_t)n);
     p[n] = 0;
@@ -2814,7 +2856,17 @@ char *nurl_strdup_n(const char *s, long long n) {
 }
 long long nurl_alloc_count(void)               { return (long long)nurl__actr_total(0); }
 long long nurl_free_count(void)                { return (long long)nurl__actr_total(1); }
-void* nurl_realloc(void *ptr, long long bytes) { return realloc(ptr, (size_t)bytes); }
+void* nurl_realloc(void *ptr, long long bytes) {
+    /* Growing the shared empty string starts a block of its own holding
+     * its terminator — counted, as the nurl_free that releases it is. */
+    if (ptr == (void *)nurl__empty_str) {
+        if (bytes <= 0) return NULL;
+        char *p = (char *)nurl_alloc(bytes);
+        *p = 0;
+        return p;
+    }
+    return realloc(ptr, (size_t)bytes);
+}
 
 /* Dynamic string-return proof belongs to the executing thread. The compiler
  * captures it immediately after a call, before any destructor or defer can
@@ -3018,6 +3070,8 @@ static void nurl__journal_thread_exit(void) {
  * register, instead of paying this body's prologue to learn that. */
 __attribute__((noinline))
 static void nurl__jrnl_push2_slow(void *p, void (*drop)(void*), const unsigned char *flag) {
+    /* The shared empty string (§9a) owes no release: nothing to reclaim. */
+    if (p == (void *)nurl__empty_str) return;
     if (__builtin_expect(nurl__jrnl_len >= nurl__jrnl_cap, 0)) nurl__jrnl_grow();
     if (nurl__jrnl_sequence == UINT64_MAX) {
         fputs("nurl: panic journal sequence exhausted\n", stderr);
@@ -3192,7 +3246,7 @@ NURL_TLS_FN void nurl_jframe_drop(void *table) {
  * pointer journal removed every alias in one step; a frame slot is found
  * by its value. */
 NURL_TLS_FN void nurl_journal_disown(void *p) {
-    if (!p) return;
+    if (!p || p == (void *)nurl__empty_str) return;
     nurl_journal_forget(p);
     for (size_t i = nurl__jslot_len; i-- > 0; ) {
         NurlSlotEntry *e = &nurl__jslot[i];
@@ -3276,7 +3330,9 @@ static void nurl__jrnl_drain_body(uint64_t mark) {
  * self-compile makes ~20M such calls against ~15M real frees. The body
  * saves five callee-saved registers before it could test the pointer, so
  * the test lives in a wrapper of its own that touches no thread-local
- * (free to inline under LTO) and tail-calls the body. */
+ * (free to inline under LTO) and tail-calls the body. The shared empty
+ * string (§9a) is tested there too: it is never journaled and never
+ * counted, so releasing it is the test alone. */
 __attribute__((noinline, cold))
 static int nurl__free_draining(void *ptr) {
     if (nurl__jrnl_cap) nurl__jrnl_forget_body(ptr);
@@ -3290,7 +3346,9 @@ NURL_TLS_FN static void nurl__free_nonnull(void *ptr) {
     nurl__actr_bump(&nurl__actr_slot()->freed);
     if (!nurl__sc_push(ptr)) free(ptr);
 }
-void nurl_free(void *ptr)                                    { if (ptr) nurl__free_nonnull(ptr); }
+void nurl_free(void *ptr) {
+    if (ptr && ptr != (void *)nurl__empty_str) nurl__free_nonnull(ptr);
+}
 void  nurl_memcpy(void *dst, const void *src, long long bytes) {
     memcpy(dst, src, (size_t)bytes);
 }

@@ -62,6 +62,16 @@ program's safety no longer rests on them.
 
 ### Performance
 
+- **An empty owned string allocates nothing.** The ownership model gave
+  every owned string a heap block of its own, the empty ones included,
+  and empty copies (a lookup miss returning the empty literal, an empty
+  slice or concatenation) were a third of a self-compile's allocations:
+  9.8 of 29.4 million, each with its free and its panic-journal
+  registration. Every empty copy is now the runtime's one shared empty
+  string, which `nurl_free` releases by doing nothing (docs/MEMORY.md
+  §7.4). A fixed-source self-compile executes 8.8% fewer instructions
+  (11.81 to 10.78 billion) and compiling the 46 package mains 7.1% fewer;
+  the emitted IR is byte-identical for every tracked `.nu` file.
 - **String equality rejects unlike compiler names before calling `strcmp`.**
   Comparing the first two bytes inline handles the common token/type-name
   mismatch while preserving `strcmp` for the remaining suffix. A fixed-source
