@@ -1,0 +1,55 @@
+(module
+  (memory 1 2)
+  (data (i32.const 0) "ABCDEFGH")
+  ;; memory.copy(d, s, n), then the 8 bytes at 0 as an i64
+  (func (export "cp") (param i32 i32 i32) (result i64)
+    (memory.copy (local.get 0) (local.get 1) (local.get 2))
+    (i64.load (i32.const 0)))
+  ;; memory.fill(d, v, n), then the 8 bytes at 0
+  (func (export "fl") (param i32 i32 i32) (result i64)
+    (memory.fill (local.get 0) (local.get 1) (local.get 2))
+    (i64.load (i32.const 0)))
+  ;; the last 4 bytes of the memory
+  (func (export "cpend") (result i32)
+    (memory.copy (i32.const 65532) (i32.const 0) (i32.const 4))
+    (i32.load (i32.const 65532)))
+  ;; zero length exactly at the memory's end is in bounds
+  (func (export "cpz") (result i32)
+    (memory.copy (i32.const 65536) (i32.const 65536) (i32.const 0))
+    (memory.fill (i32.const 65536) (i32.const 0) (i32.const 0))
+    (i32.const 7))
+  ;; a copy into a page memory.grow just added
+  (func (export "cpgrow") (result i64)
+    (drop (memory.grow (i32.const 1)))
+    (memory.copy (i32.const 65544) (i32.const 0) (i32.const 8))
+    (i64.load (i32.const 65544)))
+  ;; values live across both operations must survive them
+  (func (export "live") (param $a i32) (result i32)
+    (local $x i32) (local $y i32) (local $z i32) (local $w i64) (local $f f64)
+    (local.set $x (i32.add (local.get $a) (i32.const 1)))
+    (local.set $y (i32.mul (local.get $a) (i32.const 3)))
+    (local.set $z (i32.xor (local.get $a) (i32.const 0x55)))
+    (local.set $w (i64.extend_i32_s (local.get $a)))
+    (local.set $f (f64.convert_i32_s (local.get $a)))
+    (memory.copy (i32.const 100) (i32.const 0) (i32.const 8))
+    (memory.fill (i32.const 200) (local.get $x) (i32.const 3))
+    (i32.add
+      (i32.add (i32.add (local.get $x) (local.get $y))
+               (i32.add (local.get $z) (i32.wrap_i64 (local.get $w))))
+      (i32.add (i32.load8_u (i32.const 201))
+               (i32.add (i32.trunc_f64_s (local.get $f)) (i32.load8_u (i32.const 103))))))
+  ;; a hot loop of overlapping (bridge) and disjoint (inline) copies
+  (func (export "loopcp") (param $n i32) (result i32)
+    (local $i i32) (local $s i32)
+    (loop $L
+      (i32.store (i32.const 16) (local.get $i))
+      (memory.copy (i32.const 17) (i32.const 16) (i32.const 4))
+      (memory.copy (i32.const 32) (i32.const 17) (i32.const 4))
+      (memory.copy (i32.const 40) (i32.const 41) (i32.const 7))
+      (memory.fill (i32.const 48) (local.get $i) (local.get $i))
+      (local.set $s (i32.add (local.get $s)
+        (i32.add (i32.load (i32.const 32)) (i32.load (i32.const 40)))))
+      (local.set $s (i32.add (local.get $s) (i32.load8_u (i32.const 48))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br_if $L (i32.lt_u (local.get $i) (local.get $n))))
+    (local.get $s)))

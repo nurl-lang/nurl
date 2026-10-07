@@ -43,7 +43,7 @@ unsafe @ __result_count s ftp → i {
 
 // Keep in step with nurl.toml's [package] version — `--version` is what a
 // bug report quotes, so a stale literal here misattributes the bug.
-@ __nwasm_version → s { ^ `nwasm 2.0.0 (pure NURL)` }
+@ __nwasm_version → s { ^ `nwasm 2.1.0 (pure NURL)` }
 
 @ usage → v {
     ( nurl_print `nwasm — a WebAssembly runtime in pure NURL\n\n` )
@@ -98,6 +98,11 @@ unsafe @ __result_count s ftp → i {
                     ?? ( env_get `NURL_NWASM_JIT` ) { T jv → { ? == 0 ( nurl_str_eq ( string_data jv ) `0` ) { ( interp_enable_jit ) } {} } F → { ( interp_enable_jit ) } }
                     ?? ( env_get `NURL_NWASM_PIN` ) { T pv → { ? != 0 ( nurl_str_eq ( string_data pv ) `0` ) { ( interp_disable_pin ) } {} } F → {} }
                     ?? ( env_get `NURL_NWASM_JIT_DUMP` ) { T dv → { ? != 0 ( nurl_str_eq ( string_data dv ) `1` ) { ( interp_enable_jitdump ) } {} } F → {} }
+                    ?? ( env_get `NURL_NWASM_RJIT` ) { T rv → { ? != 0 ( nurl_str_eq ( string_data rv ) `0` ) { ( interp_disable_rjit ) } {} } F → {} }
+                    ?? ( env_get `NURL_NWASM_BMI2` ) { T bv → { ? != 0 ( nurl_str_eq ( string_data bv ) `0` ) { ( interp_disable_bmi2 ) } {} } F → {} }
+                    ?? ( env_get `NURL_NWASM_RJIT_TRACE` ) { T tv → { ( interp_rjit_trace ( nurl_str_to_int ( string_data tv ) ) ) } F → {} }
+                    ?? ( env_get `NURL_NWASM_RJIT_DBG` ) { T qv → { ? != 0 ( nurl_str_eq ( string_data qv ) `1` ) { ( interp_enable_rjdbg ) } {} } F → {} }
+                    ?? ( env_get `NURL_NWASM_PERFMAP` ) { T mv → { ? != 0 ( nurl_str_eq ( string_data mv ) `1` ) { ( interp_enable_perfmap ) } {} } F → {} }
                     ( exec_func it fidx )
                     ? ( interp_trapped it ) {
                         ( nurl_print `nwasm: trap: ` ) ( nurl_print ( string_data ( bytes_to_str ( interp_trapmsg it ) ) ) ) ( nurl_print `\n` )
@@ -170,6 +175,11 @@ unsafe @ __result_count s ftp → i {
                     ?? ( env_get `NURL_NWASM_JIT` ) { T jv → { ? == 0 ( nurl_str_eq ( string_data jv ) `0` ) { ( interp_enable_jit ) } {} } F → { ( interp_enable_jit ) } }
                     ?? ( env_get `NURL_NWASM_PIN` ) { T pv → { ? != 0 ( nurl_str_eq ( string_data pv ) `0` ) { ( interp_disable_pin ) } {} } F → {} }
                     ?? ( env_get `NURL_NWASM_JIT_DUMP` ) { T dv → { ? != 0 ( nurl_str_eq ( string_data dv ) `1` ) { ( interp_enable_jitdump ) } {} } F → {} }
+                    ?? ( env_get `NURL_NWASM_RJIT` ) { T rv → { ? != 0 ( nurl_str_eq ( string_data rv ) `0` ) { ( interp_disable_rjit ) } {} } F → {} }
+                    ?? ( env_get `NURL_NWASM_BMI2` ) { T bv → { ? != 0 ( nurl_str_eq ( string_data bv ) `0` ) { ( interp_disable_bmi2 ) } {} } F → {} }
+                    ?? ( env_get `NURL_NWASM_RJIT_TRACE` ) { T tv → { ( interp_rjit_trace ( nurl_str_to_int ( string_data tv ) ) ) } F → {} }
+                    ?? ( env_get `NURL_NWASM_RJIT_DBG` ) { T qv → { ? != 0 ( nurl_str_eq ( string_data qv ) `1` ) { ( interp_enable_rjdbg ) } {} } F → {} }
+                    ?? ( env_get `NURL_NWASM_PERFMAP` ) { T mv → { ? != 0 ( nurl_str_eq ( string_data mv ) `1` ) { ( interp_enable_perfmap ) } {} } F → {} }
                     ( exec_func it fidx )
                     ( interp_flush it )  // _start may return without proc_exit
                     ? ( interp_trapped it ) {

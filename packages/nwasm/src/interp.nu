@@ -23,6 +23,7 @@ $ `stdlib/std/thread.nu`
 $ `stdlib/std/time.nu`
 $ `stdlib/core/rcbox.nu`
 $ `module.nu`
+$ `rjit.nu`
 
 // round-to-nearest-even (wasm f*.nearest) — libm rint honours the default mode.
 & `m` @ rint f x → f
@@ -50,6 +51,18 @@ $ `module.nu`
 & `c` @ nurl_call_code_at2 *u fn i off *u a *u b → i
 
 & `c` @ nurl_code_free *u p i n → v
+
+// Page permissions for the JIT code arena (PROT_READ|PROT_WRITE = 3,
+// PROT_READ|PROT_EXEC = 5): functions are packed into shared pages, so a
+// page holding sealed code turns writable only while a neighbour is copied
+// in, then executable again.
+& `c` @ mprotect *u addr i len i32 prot → i32
+
+// NURL_NWASM_PERFMAP=1: a perf JIT map (/tmp/perf-<pid>.map, "start size
+// name" per line), which `perf report` reads to name generated code
+& `c` @ getpid → i32
+
+& `c` @ creat s path i32 mode → i32
 
 // Guard-page linear memory: an 8 GiB PROT_NONE reservation swallows every
 // address a 32-bit index + 32-bit offset can form, so JIT code needs no
@@ -285,6 +298,23 @@ $ `module.nu`
     i jit_slab  // raw slab base address (0 = not yet allocated)
     i jit_slab_end  // slab base + byte length
     i jit_spcell  // address of the anchor block [sp, slab end, ftab..]
+    // The code arena: compiled functions are packed into shared chunks
+    // instead of one mapping each — a page per function put every entry
+    // point at the same page offset, so the hot ones fought over the same
+    // L1i sets, and spread the code over an iTLB entry apiece. Each chunk
+    // starts with a 64-byte header [previous chunk, chunk bytes].
+    i jit_arena  // current chunk (0 = none yet)
+    i jit_arena_used  // bytes handed out in it
+    i jit_arena_cap  // its size
+    // Direct call sites waiting for their callee (tier 8 calls rel32; a site
+    // aims at its own stub until the callee's entry exists): per defined
+    // function the head of a list of sites, linked through jit_lnext, each
+    // the absolute address of a rel32 in the arena.
+    ( Vec i ) jit_lhead
+    ( Vec i ) jit_lnext
+    ( Vec i ) jit_laddr
+    ( Vec i ) jit_lkind  // 1: a register-argument site (links to the callee's fast entry)
+    ( Vec i ) jit_fast  // per defined function: tier 8's register-argument entry (0 = none)
     b gpu_ok  // env/CUDA host imports enabled (opt-in; default off)
     b net_ok  // nurl_net host imports (real sockets) enabled (opt-in; default off)
     // Shared memory changes what a narrow store is allowed to touch: see
@@ -368,7 +398,7 @@ unsafe @ __Interp_ptr Interp h → *InterpImpl { ^ ( rcbox_ptr [InterpImpl] # i 
 // and re-deriving them per call means walking funcs → typeidx → types and
 // two `vec_len`s inside `module_func_type` — pure repeat work on a value
 // that is fixed for the life of the module.
-: PFunc { ( Vec i ) code ( Vec i ) aux i count i nlocals i nslots i nparams i nresults i code_start i sbase ( Vec i ) kv s free ( Vec i ) bytes s jit i jitlen }
+: PFunc { ( Vec i ) code ( Vec i ) aux i count i nlocals i nslots i nparams i nresults i code_start i sbase ( Vec i ) kv s free ( Vec i ) bytes s jit i jitlen ( Vec i ) refl }
 
 @ __page → i { ^ 65536 }
 
@@ -447,6 +477,14 @@ unsafe @ interp_new Module m__h → Interp {
     = . it jit_slab 0
     = . it jit_slab_end 0
     = . it jit_spcell 0
+    = . it jit_arena 0
+    = . it jit_arena_used 0
+    = . it jit_arena_cap 0
+    = . it jit_lhead ( vec_new [i] )
+    = . it jit_lnext ( vec_new [i] )
+    = . it jit_laddr ( vec_new [i] )
+    = . it jit_lkind ( vec_new [i] )
+    = . it jit_fast ( vec_new [i] )
     = . it jit_lc_pf 0
     = . it jit_co_fn 0
     = . it jit_co_env 0
@@ -557,9 +595,17 @@ unsafe @ __freefd s pp → v {
 
 // The JIT's lazily made raw state: the free list of call contexts, the
 // slab, the anchor block and the call-out bridge's copy of its env.
-unsafe @ __jit_state_free i ctxs i slab i spcell i coenv → v {
+unsafe @ __jit_state_free i ctxs i slab i spcell i coenv i arena → v {
     : ~ i cb ctxs
     ~ != 0 cb { : *i c # *i cb : i nx . c 0 ( nurl_free # s cb ) = cb nx }
+    : ~ i ch arena
+    ~ != 0 ch {
+        : *i h # *i ch
+        : i nx . h 0
+        : i sz . h 1
+        ? < sz 0 { ( nurl_vmem_release # *u ch - 0 sz ) } { ( nurl_code_free # *u ch sz ) }
+        = ch nx
+    }
     ? != 0 slab { ( nurl_free # s slab ) } {}
     ? != 0 spcell { ( nurl_free # s spcell ) } {}
     ? != 0 coenv { ( nurl_closure_drop # *u coenv ) } {}
@@ -602,7 +648,7 @@ unsafe @ __free_args ( Vec s ) args → v {
         : ~ i fi 0
         ~ < fi fn { ?? ( vec_get [s] . it fds fi ) { T pp → ( __freefd pp ) F → {} } = fi + fi 1 }
         ( __free_pfuncs . it pfuncs )
-        ( __jit_state_free . it jit_ctx_free . it jit_slab . it jit_spcell . it jit_co_env )
+        ( __jit_state_free . it jit_ctx_free . it jit_slab . it jit_spcell . it jit_co_env . it jit_arena )
     }
 }
 
@@ -623,7 +669,7 @@ unsafe @ __interp_thread_free * InterpImpl it → v {
     ( vec_free [i] . it netkinds )
     ( vec_free [s] . it fds )
     ( vec_free [u] . it trapmsg )
-    ( __jit_state_free . it jit_ctx_free . it jit_slab . it jit_spcell . it jit_co_env )
+    ( __jit_state_free . it jit_ctx_free . it jit_slab . it jit_spcell . it jit_co_env . it jit_arena )
     ( vec_free [u] . it capout )
     ( vec_free [u] . it caperr )
     ( __free_pfuncs . it pfuncs )
@@ -1271,6 +1317,13 @@ unsafe @ __call_import * InterpImpl it * ModuleImpl m i fidx → v {
 // one flat array, locals first, stack slots after; the driver copies call
 // arguments straight from the caller's slots, so only the outermost frame
 // touches the value stack.
+// the reference-typed declared locals of a fresh or recycled frame: null
+unsafe @ __refl_null * PFunc pf * i rb → v {
+    : i nr ( vec_len [i] . pf refl )
+    : ~ i k 0
+    ~ < k nr { = . rb ( vec_at [i] . pf refl k ) -1 = k + k 1 }
+}
+
 unsafe @ __frame_new * InterpImpl it * ModuleImpl m i fidx i ret_dst → s {
     : s pins ( __pfunc_for it m fidx )
     ? == # i pins 0 { ( __trap it `bad function index` ) ^ # s 0 } {}
@@ -1290,6 +1343,7 @@ unsafe @ __frame_new * InterpImpl it * ModuleImpl m i fidx i ret_dst → s {
             : *i rb ( vec_data [i] . rfr regs )
             : ~ i zk . pfc nparams
             ~ < zk . pfc nlocals { = . rb zk 0 = zk + zk 1 }
+            ( __refl_null pfc rb )
             = . rfr pos 0
             = . rfr ret_dst ret_dst
             ? < ret_dst 0 {
@@ -1314,6 +1368,7 @@ unsafe @ __frame_new * InterpImpl it * ModuleImpl m i fidx i ret_dst → s {
         : ~ i kk 0
         ~ < kk knum { = . kb + kbase kk ?? ( vec_get [i] . pfc kv kk ) { T x → x F → 0 } = kk + kk 1 }
     } {}
+    ( __refl_null pfc ( vec_data [i] regs ) )
     ? < ret_dst 0 {
         // outermost: pop the arguments off the value stack, last first
         : ~ i pk . pfc nparams
@@ -1371,9 +1426,10 @@ unsafe @ __pf_free sink s pp → v {
     ( vec_free [i] . pf aux )
     ( vec_free [i] . pf kv )
     ( vec_free [i] . pf bytes )
-    ? > . pf jitlen 0 {
+    ( vec_free [i] . pf refl )
+    ? != . pf jitlen 0 {
         ( nurl_guard_code_del # *u . pf jit )  // no-op when never registered
-        ( nurl_code_free # *u . pf jit . pf jitlen )
+        ? > . pf jitlen 0 { ( nurl_code_free # *u . pf jit . pf jitlen ) } {}  // < 0: in the arena, freed with it
     } {}
     ( nurl_free # s pf )
 }
@@ -1411,7 +1467,7 @@ unsafe @ __pf_free sink s pp → v {
 
 @ __R_ATOM → i { ^ 174 }  // vs bridge: A=sub B=memarg offset C=srcbase D=pops<<1|push
 @ __R_FCB → i { ^ 171 }  // vs bridge: A=sub B=idx-imm C=srcbase D=pops<<1|push
-@ __R_IFZ → i { ^ 48 }  // A=target B=cond — jump when cond == 0
+@ __R_IFZ → i { ^ 48 }  // A=target B=cond C=1 when cond is an i64 (eqz fusion) — jump when cond == 0
 @ __R_BRIFC → i { ^ 45 }  // A=target B=lhs C=rhs D=compare op — jump when it holds
 // 38 was i64.extend_i32_s, which the canonical-form skip removed from
 // every record stream — the number is recycled into the hot first-64
@@ -1875,6 +1931,7 @@ unsafe @ __fuse_branch * PFunc pf i lastp i labfloor i cond i tgt i byte → i {
         ( vec_set [i] . pf code base ( __R_IFZ ) )
         ( vec_set [i] . pf code + base 1 tgt )
         ( vec_set [i] . pf code + base 2 lb )
+        ( vec_set [i] . pf code + base 3 ? == lop 44 1 0 )  // the operand's width for the JIT (1 = i64); the interpreter ignores C
         ( vec_set [i] . pf code + base 5 byte )
         ^ lastp
     } {}
@@ -2272,6 +2329,14 @@ unsafe @ __predecode * ModuleImpl m * WFunc f → s {
     } {}
     : i L + nparams ( vec_len [i] . f locals )
     = . pf nlocals L
+    // declared locals of a reference type start out null (-1), not zero
+    = . pf refl ( vec_new [i] )
+    : ~ i rlk 0
+    ~ < rlk ( vec_len [i] . f locals ) {
+        : i rlt ( vec_at [i] . f locals rlk )
+        ? | == rlt 111 == rlt 112 { ( vec_push [i] . pf refl + nparams rlk ) } {}
+        = rlk + rlk 1
+    }
     // Locals occupy [0, L); the constant pool [L, L + |kv|); the operand
     // stack everything above. Both boundaries are fixed before the pass, so
     // every slot a record carries is final the moment it is emitted.
@@ -2623,6 +2688,7 @@ unsafe @ __predecode * ModuleImpl m * WFunc f → s {
         ( __pf_emit pf ( __R_TRAPUN ) 0 0 0 0 . f code_start )
         = . pf count 1
         = . pf nlocals nparams
+        ( vec_clear [i] . pf refl )
         = . pf sbase nparams
         = . pf nslots + nparams 4
         = . pf nparams nparams
@@ -2734,7 +2800,60 @@ unsafe @ __trap_backtrace * InterpImpl it * ModuleImpl m s top → v {
 : ~ i g_jit_depth 0  // JIT call-out nesting; beyond a cap, callees interpret (1M-deep-safe)
 : ~ i g_pin 1  // tier-7 slot pinning (NURL_NWASM_PIN=0 keeps every slot in memory; A/B, debug)
 : ~ i g_jitdump 0  // NURL_NWASM_JIT_DUMP=1: emit every sealed page as decimal bytes on stderr
+: ~ i g_rjit 1  // tier 8 (rjit.nu) first; NURL_NWASM_RJIT=0 keeps the template tier alone (A/B, debug)
+: ~ i g_rjdbg 0  // NURL_NWASM_RJIT_DBG=1: say on stderr which functions tier 8 declined, and why
+: ~ i g_perfmap -1  // NURL_NWASM_PERFMAP=1: fd of /tmp/perf-<pid>.map (-1 = off)
 @ interp_enable_jit → v { = g_jit 1 }
+
+@ interp_disable_rjit → v { = g_rjit 0 }
+
+// NURL_NWASM_BMI2=0: tier 8 sticks to baseline x86-64 (no shlx/sarx/shrx,
+// lzcnt, tzcnt) even on a CPU that has them — for testing those paths
+@ interp_disable_bmi2 → v { ( rj_set_bmi 0 ) }
+
+@ interp_rjit_trace i f → v { ( rj_set_trace f ) }
+
+@ interp_enable_rjdbg → v { = g_rjdbg 1 }
+
+unsafe @ interp_enable_perfmap → v {
+    : String p ( string_from `/tmp/perf-` )
+    ( string_push_int p # i ( getpid ) )
+    ( string_push_str p `.map` )
+    = g_perfmap # i ( creat ( string_data p ) # i32 420 )
+}
+
+@ __pm_hex ( Vec u ) out i x → v {
+    : ~ i sh 60
+    : ~ b lead T
+    ~ >= sh 0 {
+        : i d & >> x sh 15
+        ? | ! lead | != d 0 == sh 0 {
+            = lead F
+            ( vec_push [u] out # u ? < d 10 + 48 d + 87 d )
+        } {}
+        = sh - sh 4
+    }
+}
+
+// one perf-map line for a function just placed at [start, start+len)
+unsafe @ __perfmap_add * ModuleImpl m i fidx i start i len → v {
+    : ( Vec u ) line ( vec_new [u] )
+    ( __pm_hex line start ) ( vec_push [u] line # u 32 ) ( __pm_hex line len ) ( vec_push [u] line # u 32 )
+    : ( Vec u ) nm ( _module_func_name m fidx )
+    ? > ( vec_len [u] nm ) 0 {
+        : i nn ( vec_len [u] nm )
+        : ~ i k 0
+        ~ < k nn { ( vec_push [u] line ( vec_at [u] nm k ) ) = k + k 1 }
+    } {
+        : ( Vec u ) w ( vec_new [u] )
+        ( __msg_push_str w `wasm[` ) ( __msg_push_int w fidx ) ( __msg_push_str w `]` )
+        : i nw ( vec_len [u] w )
+        : ~ i k 0
+        ~ < k nw { ( vec_push [u] line ( vec_at [u] w k ) ) = k + k 1 }
+    }
+    ( vec_push [u] line # u 10 )
+    : i _w ( write # i32 g_perfmap # *u ( vec_data [u] line ) ( vec_len [u] line ) )
+}
 
 @ interp_disable_pin → v { = g_pin 0 }
 
@@ -3749,7 +3868,7 @@ unsafe @ __jit_ctx_get * InterpImpl it → *i {
         = . it jit_ctx_free . b 0
         ^ b
     } {}
-    ^ # *i ( nurl_zalloc 64 )
+    ^ # *i ( nurl_zalloc 72 )
 }
 
 unsafe @ __jit_ctx_put * InterpImpl it * i b → v {
@@ -3985,8 +4104,10 @@ unsafe @ __jit_ctx_put * InterpImpl it * i b → v {
         ( __jit_b buf 72 ) ( __jit_b buf 15 ) ( __jit_b buf 186 ) ( __jit_b buf ? == op 125 240 248 ) ( __jit_b buf 63 )  // btr/btc rax,63
         ( __jit_strax_m buf pmap xmap cvals a ) ^ v
     } {}
-    ? & >= op 153 <= op 156 {  // reinterprets: raw slot copy
+    ? & >= op 153 <= op 156 {  // reinterprets: a slot copy — the i32 sign-extended, the f32 zero-extended
         ? != raxslot b { ( __jit_ldrax_m buf pmap xmap cvals b ) } {}
+        ? == op 153 { ( __jit_b buf 72 ) ( __jit_b buf 99 ) ( __jit_b buf 192 ) } {}  // movsxd rax,eax
+        ? == op 155 { ( __jit_b buf 137 ) ( __jit_b buf 192 ) } {}  // mov eax,eax
         ( __jit_strax_m buf pmap xmap cvals a ) ^ v
     } {}
     ? | | == op 157 == op 159 | == op 158 == op 160 {  // extend8/16_s (i32+i64): movsx from the slot's low byte/word
@@ -4140,19 +4261,45 @@ unsafe @ __jit_inline_co * InterpImpl it → v {
 // direct-call table, sized once per Interp. 4 MiB of slots; a frame that
 // does not fit returns status 8 and the driver bridges to the
 // interpreter, so deep recursion degrades instead of trapping.
+// The smallest type index structurally equal to type `ftp` (-1 when it
+// names no type): two functions may be called through each other's
+// call_indirect exactly when these agree.
+unsafe @ __jit_sigcanon * ModuleImpl m s ftp → i {
+    ? == # i ftp 0 { ^ -1 } {}
+    : i nt ( vec_len [s] . m types )
+    : ~ i k 0
+    ~ < k nt {
+        : s tp ( vec_at [s] . m types k )
+        ? != # i tp 0 { ? ( functype_eq # *FuncType tp # *FuncType ftp ) { ^ k } {} } {}
+        = k + k 1
+    }
+    ^ -1
+}
+
 unsafe @ __jit_state_init * InterpImpl it * ModuleImpl m → v {
     ? != 0 . it jit_slab { ^ v } {}
     : i bytes 16777216
     = . it jit_slab # i ( nurl_zalloc bytes )
     = . it jit_slab_end + . it jit_slab bytes
     // anchor block, held in r8 by the emitted code: [sp, slab end,
-    // direct-entry table]; sized from the MODULE — pfuncs grows lazily
-    // and may still be short
+    // direct-entry table (one per defined function), canonical signature
+    // id (one per function index, imports first), the table's Vec
+    // control block]; sized from the MODULE — pfuncs grows lazily and may
+    // still be short. Tier 8's inline call_indirect reads the last two.
     : i nf ( vec_len [s] . m funcs )
-    = . it jit_spcell # i ( nurl_zalloc + 16 * nf 8 )
+    : i nall + nf . m num_import_funcs
+    = . it jit_spcell # i ( nurl_zalloc + + 16 * nf 8 * + nall 1 8 )
     : *i spc # *i . it jit_spcell
     = . spc 0 . it jit_slab
     = . spc 1 . it jit_slab_end
+    : ~ i fk 0
+    ~ < fk nall {
+        = . spc + + 2 nf fk ( __jit_sigcanon m ( _module_func_type m fk ) )
+        = fk + fk 1
+    }
+    = . spc + + 2 nf nall # i . . it table ctl
+    : ~ i lk 0
+    ~ < lk nf { ( vec_push [i] . it jit_lhead -1 ) ( vec_push [i] . it jit_fast 0 ) = lk + lk 1 }
     // The inline call-out bridge: decompose a capturing closure into
     // (fn, env) the way recover/thread_spawn do — the emitted code calls
     // fn(env) directly. The interpreter keeps its own copy of the env
@@ -4419,8 +4566,251 @@ unsafe @ __jit_pin_select * PFunc pf ( Vec i ) xpins i guard → ( Vec i ) {
     ^ pins
 }
 
+@ __jit_pg_lo i p → i { ^ & p -4096 }
+
+@ __jit_pg_hi i p → i { ^ & + p 4095 -4096 }
+
+// n bytes of code space at a 64-byte boundary in the instance's arena, the
+// pages under it writable (0 when no executable memory exists).
+unsafe @ __jit_arena_alloc * InterpImpl it i n → i {
+    : i need & + n 63 -64
+    // First use: one 1 GiB address-space reservation, committed page by
+    // page as code arrives, so every function stays within a rel32 call of
+    // every other — separate mappings landed gigabytes apart (the guard
+    // memory's reservation between them) and left direct calls on their
+    // stubs. A negative size in the header marks it for vmem release.
+    ? == 0 . it jit_arena {
+        : i rspan 1073741824
+        : *u rv ( nurl_vmem_reserve rspan )
+        ? != # i rv 0 {
+            ? == 0 ( mprotect rv 4096 # i32 3 ) {
+                : *i rh # *i rv
+                = . rh 0 0
+                = . rh 1 - 0 rspan
+                = . it jit_arena # i rv
+                = . it jit_arena_used 64
+                = . it jit_arena_cap rspan
+            } { ( nurl_vmem_release rv rspan ) }
+        } {}
+    } {}
+    ? | == 0 . it jit_arena > + . it jit_arena_used need . it jit_arena_cap {
+        : i want + need 64
+        : i csz ? > want 1048576 ( __jit_pg_hi want ) 1048576
+        : *u ch ( nurl_code_alloc csz )
+        ? == # i ch 0 { ^ 0 } {}
+        : *i hd # *i ch
+        = . hd 0 . it jit_arena
+        = . hd 1 csz
+        = . it jit_arena # i ch
+        = . it jit_arena_used 64
+        = . it jit_arena_cap csz
+    } {}
+    : i p + . it jit_arena . it jit_arena_used
+    = . it jit_arena_used + . it jit_arena_used need
+    : i lo ( __jit_pg_lo p )
+    ? != 0 ( mprotect # *u lo - ( __jit_pg_hi + p n ) lo # i32 3 ) { ^ 0 } {}
+    ^ p
+}
+
+// Point the rel32 at `site` to `entry`; false when it cannot reach (the
+// site then stays on its stub, which is correct, only slower).
+unsafe @ __jit_put_rel32 i site i ent → b {
+    : i rel - ent + site 4
+    ? | < rel -2147483648 > rel 2147483647 { ^ F } {}
+    : *u q # *u site
+    = . q 0 # u & rel 255
+    = . q 1 # u & >> rel 8 255
+    = . q 2 # u & >> rel 16 255
+    = . q 3 # u & >> rel 24 255
+    ^ T
+}
+
+// Publish defined function d's direct entry, and link every call site that
+// was waiting for it (their pages are sealed: writable just for the patch).
+unsafe @ __jit_publish * InterpImpl it i d i ent → v {
+    : *i ftw # *i + . it jit_spcell 16
+    = . ftw d ent
+    ? | < d 0 >= d ( vec_len [i] . it jit_lhead ) { ^ v } {}
+    : i fast ( vec_at [i] . it jit_fast d )
+    : ~ i sk ( vec_at [i] . it jit_lhead d )
+    ~ >= sk 0 {
+        : i site ( vec_at [i] . it jit_laddr sk )
+        // a register-argument site only links to a register-argument entry;
+        // with none (the template tier compiled the callee) its stub stays
+        : i tgt ? == 1 ( vec_at [i] . it jit_lkind sk ) fast ent
+        ? != tgt 0 {
+            : i lo ( __jit_pg_lo site )
+            : i hi ( __jit_pg_hi + site 4 )
+            ? == 0 ( mprotect # *u lo - hi lo # i32 3 ) {
+                : b _ok ( __jit_put_rel32 site tgt )
+                : i32 _r ( mprotect # *u lo - hi lo # i32 5 )
+            } {}
+        } {}
+        = sk ( vec_at [i] . it jit_lnext sk )
+    }
+    ( vec_put [i] . it jit_lhead d -1 )
+}
+
+// Copy a finished function into an executable page, turn its jump-table
+// entries into absolute addresses, seal it, and register its out-of-bounds
+// stub (label n) with the fault-to-trap handler in guard mode. Shared by the
+// template tier and tier 8 (rjit.nu): both hand over the code, the label
+// table and the page-relative jump-table entries.
+unsafe @ __jit_install * InterpImpl it * ModuleImpl m * PFunc pf ( Vec u ) buf ( Vec i ) lab ( Vec i ) pta_off ( Vec i ) pta_stub ( Vec i ) cs_off ( Vec i ) cs_fx ( Vec i ) cs_kind i n i guard i fidx9 → v {
+    : i len ( vec_len [u] buf )
+    : i pa ( __jit_arena_alloc it + len 16 )
+    ? == pa 0 { = . pf jit # s -1 ^ v } {}  // no executable memory (wasm)
+    : *u page # *u pa
+    : ~ i k 0
+    ~ < k len { = . page k ?? ( vec_get [u] buf k ) { T x → x F → # u 0 } = k + k 1 }
+    // jump-table entries become absolute addresses now that the page is known
+    : i npt ( vec_len [i] pta_off )
+    : ~ i ptk 0
+    ~ < ptk npt {
+        : i eo ?? ( vec_get [i] pta_off ptk ) { T x → x F → 0 }
+        : i av + # i page ?? ( vec_get [i] pta_stub ptk ) { T x → x F → 0 }
+        : ~ i bb 0
+        ~ < bb 8 { = . page + eo bb # u & ( __lshr64 av * bb 8 ) 255 = bb + bb 1 }
+        = ptk + ptk 1
+    }
+    // direct call sites: to the callee now when it is compiled, else queued
+    // until it is published
+    : i ncs ( vec_len [i] cs_off )
+    : *i ftab # *i + . it jit_spcell 16
+    : ~ i ck 0
+    ~ < ck ncs {
+        : i site + pa ( vec_at [i] cs_off ck )
+        : i d - ( vec_at [i] cs_fx ck ) . m num_import_funcs
+        : i kind ( vec_at [i] cs_kind ck )
+        : b ind & >= d 0 < d ( vec_len [i] . it jit_lhead )
+        : i ent ? ind . ftab d 0
+        : i tgt ? == kind 1 ? ind ( vec_at [i] . it jit_fast d ) 0 ent
+        ? != tgt 0 { : b _ok ( __jit_put_rel32 site tgt ) } {
+            ? & ind == ent 0 {  // not compiled yet: wait for its publication
+                ( vec_push [i] . it jit_lnext ( vec_at [i] . it jit_lhead d ) )
+                ( vec_push [i] . it jit_laddr site )
+                ( vec_push [i] . it jit_lkind kind )
+                ( vec_put [i] . it jit_lhead d - ( vec_len [i] . it jit_laddr ) 1 )
+            } {}
+        }
+        = ck + ck 1
+    }
+    : i plo ( __jit_pg_lo pa )
+    ? != 0 ( mprotect # *u plo - ( __jit_pg_hi + + pa len 16 ) plo # i32 5 ) { = . pf jit # s -1 ^ v } {}
+    ? >= g_perfmap 0 { ( __perfmap_add m fidx9 pa len ) } {}
+    ? != 0 g_jitdump {  // decimal byte stream; tools/jitdump.py turns it back into objdump input
+        ( nurl_eprint `[jitdump] cs=` ) ( nurl_eprint ( nurl_str_int . pf code_start ) )
+        ( nurl_eprint ` fidx=` ) ( nurl_eprint ( nurl_str_int fidx9 ) )
+        ( nurl_eprint ` page=` ) ( nurl_eprint ( nurl_str_int # i page ) )
+        ( nurl_eprint ` len=` ) ( nurl_eprint ( nurl_str_int len ) )
+        ( nurl_eprint ` bytes=` )
+        : ~ i jdk 0
+        ~ < jdk len {
+            ? > jdk 0 { ( nurl_eprint `,` ) } {}
+            ( nurl_eprint ( nurl_str_int # i . page jdk ) )
+            = jdk + jdk 1
+        }
+        ( nurl_eprint `\n` )
+    } {}
+    // Register the sealed page for fault-to-trap conversion: a guest
+    // access past the committed pages faults, and the handler steers the
+    // frame to this function's out-of-bounds stub (label n). Room was
+    // checked before emitting; failing here anyway would leave unguarded
+    // uncheckable code, so the page is dropped instead.
+    ? != 0 guard {
+        : i oobs ?? ( vec_get [i] lab n ) { T x → x F → 0 }
+        ? != 0 ( nurl_guard_code_add page + len 16 # *u + # i page oobs ) {
+            = . pf jit # s -1 ^ v  // the space stays in the arena
+        } {}
+    } {}
+    = . pf jit # s page
+    = . pf jitlen - 0 + len 16  // < 0: arena-placed
+}
+
+// valtype byte → the rjit local-type code (0 i32, 1 i64, 2 f32, 3 f64)
+@ __rj_ty i t → i {
+    ? == t 127 { ^ 0 } {}
+    ? == t 125 { ^ 2 } {}
+    ? == t 124 { ^ 3 } {}
+    ? | == t 111 == t 112 { ^ 4 } {}  // externref / funcref: a 64-bit integer whose zero is -1
+    ^ 1
+}
+
+// Tier 8: compile pf with the register allocator (rjit.nu). Guard-page mode
+// only — it emits no bounds checks. False leaves the function to the
+// template tier.
+unsafe @ __rj_try * InterpImpl it * ModuleImpl m * PFunc pf i fidx9 i guard → b {
+    : i n . pf count
+    : ( Vec i ) lt ( vec_new [i] )
+    : s ftp ( _module_func_type m fidx9 )
+    ? != # i ftp 0 {
+        : *FuncType ft # *FuncType ftp
+        : i npar ( vec_len [i] . ft params )
+        : ~ i k 0
+        ~ < k npar { ( vec_push [i] lt ( __rj_ty ( vec_at [i] . ft params k ) ) ) = k + k 1 }
+    } {}
+    : i di - fidx9 . m num_import_funcs
+    ? & >= di 0 < di ( vec_len [s] . m funcs ) {
+        : s wfp ( vec_at [s] . m funcs di )
+        ? != # i wfp 0 {
+            : *WFunc wf # *WFunc wfp
+            : i nloc ( vec_len [i] . wf locals )
+            : ~ i k 0
+            ~ < k nloc { ( vec_push [i] lt ( __rj_ty ( vec_at [i] . wf locals k ) ) ) = k + k 1 }
+        } {}
+    } {}
+    // per record: a call's callee arity
+    : ( Vec i ) rsig ( vec_new [i] )
+    : ( Vec i ) code . pf code
+    : ~ i r 0
+    ~ < r n {
+        : i op ( vec_at [i] code * r 6 )
+        : ~ s cft # s 0
+        ? | == op 50 == op 210 { = cft ( _module_func_type m ( vec_at [i] code + * r 6 1 ) ) } {}
+        ? == op 170 {
+            : i tix ( vec_at [i] code + * r 6 1 )
+            ? & >= tix 0 < tix ( vec_len [s] . m types ) { = cft ( vec_at [s] . m types tix ) } {}
+        } {}
+        ? != # i cft 0 {
+            : *FuncType cf # *FuncType cft
+            : i canon ? == op 170 ( __jit_sigcanon m cft ) 0
+            ( vec_push [i] rsig + + << canon 32 * ( vec_len [i] . cf params ) 65536 ( vec_len [i] . cf results ) )
+        } { ( vec_push [i] rsig -1 ) }
+        = r + r 1
+    }
+    : Rj c ( rj_new . pf code . pf aux . pf kv lt n . pf nlocals . pf nslots . pf nparams . pf nresults . pf sbase )
+    : i nfd ( vec_len [s] . m funcs )
+    : i sigoff + 16 * nfd 8
+    : i tbloff + sigoff * + nfd . m num_import_funcs 8
+    ? ( rj_compile c rsig . m num_import_funcs . it jit_spcell ( nurl_code_trap_addr ) . it jit_co_fn . it jit_co_env fidx9 sigoff tbloff ) {
+        ( __jit_install it m pf . c buf . c lab . c pta_off . c pta_stub . c cs_off . c cs_fx . c cs_kind n guard fidx9 )
+        ? & != 0 g_rjdbg == # i . pf jit -1 { ( nurl_eprint `[rjit] compiled but not installed fidx=` ) ( nurl_eprint ( nurl_str_int fidx9 ) ) ( nurl_eprint `\n` ) } {}
+        // the register-argument entry, for sites the publication links
+        : i foff ( rj_get c ( rjs_fastoff ) )
+        : i fd - fidx9 . m num_import_funcs
+        ? & & > foff 0 != # i . pf jit -1 & >= fd 0 < fd ( vec_len [i] . it jit_fast ) {
+            ( vec_put [i] . it jit_fast fd + # i . pf jit foff )
+        } {}
+        ^ T
+    } {}
+    ? != 0 g_rjdbg {
+        ( nurl_eprint `[rjit] declined fidx=` ) ( nurl_eprint ( nurl_str_int fidx9 ) )
+        ( nurl_eprint ` reason=` ) ( nurl_eprint ( nurl_str_int ( rj_get c ( rjs_fail ) ) ) ) ( nurl_eprint `\n` )
+    } {}
+    ^ F
+}
+
 unsafe @ __jit_try * InterpImpl it * ModuleImpl m * PFunc pf i fidx9 → v {
     ? != # i . pf jit 0 { ^ v } {}  // already tried (handle or -1)
+    // tier 8 emits no bounds checks: guard-page memory, or no memory at all
+    ? & != 0 g_rjit | != 0 . it mem_raw != 1 . m has_mem {
+        ( __jit_state_init it m )
+        // fault-to-trap registration only for code that can touch a guard
+        // memory: with no memory there is nothing to fault on, and the
+        // registry exists only once a guard memory does
+        : i rguard ? != 0 . it mem_raw 1 0
+        ? | == 0 rguard != 0 ( nurl_guard_code_room ) { ? ( __rj_try it m pf fidx9 rguard ) { ^ v } {} } {}
+    } {}
     ? == 0 ( __jit_ok pf ) { = . pf jit # s -1 ^ v } {}
     ( __jit_state_init it m )
     // Guard-page mode decides r10's availability as a pin, so it is
@@ -4563,6 +4953,12 @@ unsafe @ __jit_try * InterpImpl it * ModuleImpl m * PFunc pf i fidx9 → v {
             ( __jit_b buf 185 ) ( __jit_d buf - nl np )  // mov ecx, nlocals-nparams
             ( __jit_b buf 243 ) ( __jit_b buf 72 ) ( __jit_b buf 171 )  // rep stosq — zero locals
             ( __jit_b buf 95 )  // pop rdi
+        }
+        // reference-typed locals start out null
+        : ~ i rlk 0
+        ~ < rlk ( vec_len [i] . pf refl ) {
+            ( __jit_b buf 72 ) ( __jit_b buf 199 ) ( __jit_b buf 131 ) ( __jit_d buf * ( vec_at [i] . pf refl rlk ) 8 ) ( __jit_d buf -1 )  // mov qword [rbx+8k],-1
+            = rlk + rlk 1
         }
     } {}
     ? > knum 0 {
@@ -5031,6 +5427,7 @@ unsafe @ __jit_try * InterpImpl it * ModuleImpl m * PFunc pf i fidx9 → v {
     ( __jit_b buf 72 ) ( __jit_b buf 199 ) ( __jit_b buf 71 ) ( __jit_b buf 32 ) ( __jit_d buf fidx9 )  // mov qword[rdi+32], own fidx
     ( __jit_b buf 72 ) ( __jit_b buf 199 ) ( __jit_b buf 71 ) ( __jit_b buf 40 ) ( __jit_d buf 0 )  // mov qword[rdi+40], 0
     ( __jit_inline_call buf pat_at pat_rec n 20 spcell cofn9 coenv9 )
+    ( __jit_b buf 72 ) ( __jit_b buf 139 ) ( __jit_b buf 3 )  // mov rax,[rbx] — result 0 for a direct caller
     ( __jit_retseq buf npin )
     // n+4: signed-division overflow — status 10, into the gate.
     ( vec_push [i] lab ( vec_len [u] buf ) )
@@ -5050,47 +5447,8 @@ unsafe @ __jit_try * InterpImpl it * ModuleImpl m * PFunc pf i fidx9 → v {
         ( vec_set [u] buf + at 3 # u & ( __lshr64 rel 24 ) 255 )
         = pk + pk 1
     }
-    : i len ( vec_len [u] buf )
-    : *u page ( nurl_code_alloc + len 16 )
-    ? == # i page 0 { = . pf jit # s -1 ^ v } {}  // no executable memory (wasm)
-    : ~ i k 0
-    ~ < k len { = . page k ?? ( vec_get [u] buf k ) { T x → x F → # u 0 } = k + k 1 }
-    // jump-table entries become absolute addresses now that the page is known
-    : i npt ( vec_len [i] pta_off )
-    : ~ i ptk 0
-    ~ < ptk npt {
-        : i eo ?? ( vec_get [i] pta_off ptk ) { T x → x F → 0 }
-        : i av + # i page ?? ( vec_get [i] pta_stub ptk ) { T x → x F → 0 }
-        : ~ i bb 0
-        ~ < bb 8 { = . page + eo bb # u & ( __lshr64 av * bb 8 ) 255 = bb + bb 1 }
-        = ptk + ptk 1
-    }
-    ? != 0 ( nurl_code_seal page + len 16 ) { ( nurl_code_free page + len 16 ) = . pf jit # s -1 ^ v } {}
-    ? != 0 g_jitdump {  // decimal byte stream; tools/jitdump.py turns it back into objdump input
-        ( nurl_eprint `[jitdump] cs=` ) ( nurl_eprint ( nurl_str_int . pf code_start ) )
-        ( nurl_eprint ` len=` ) ( nurl_eprint ( nurl_str_int len ) )
-        ( nurl_eprint ` bytes=` )
-        : ~ i jdk 0
-        ~ < jdk len {
-            ? > jdk 0 { ( nurl_eprint `,` ) } {}
-            ( nurl_eprint ( nurl_str_int # i . page jdk ) )
-            = jdk + jdk 1
-        }
-        ( nurl_eprint `\n` )
-    } {}
-    // Register the sealed page for fault-to-trap conversion: a guest
-    // access past the committed pages faults, and the handler steers the
-    // frame to this function's out-of-bounds stub (label n). Room was
-    // checked before emitting; failing here anyway would leave unguarded
-    // uncheckable code, so the page is dropped instead.
-    ? != 0 guard {
-        : i oobs ?? ( vec_get [i] lab n ) { T x → x F → 0 }
-        ? != 0 ( nurl_guard_code_add page + len 16 # *u + # i page oobs ) {
-            ( nurl_code_free page + len 16 ) = . pf jit # s -1 ^ v
-        } {}
-    } {}
-    = . pf jit # s page
-    = . pf jitlen + len 16
+    : ( Vec i ) nocs ( vec_new [i] )
+    ( __jit_install it m pf buf lab pta_off pta_stub nocs nocs nocs n guard fidx9 )
 }
 
 // Run an already-built, JIT-compiled frame `fj` to completion, handling
@@ -5134,6 +5492,7 @@ unsafe @ __jit_callout * InterpImpl it * ModuleImpl m i st * i cd → i {
         // jrb is the raw args pointer (the entry passed it as the frame
         // base, argbase 0). g_jit off for the subtree — the slab stays
         // full for exactly as long as this call is running.
+        ? != 0 g_rjdbg { ( nurl_eprint `[rjit] slab exhausted entering fidx=` ) ( nurl_eprint ( nurl_str_int callee ) ) ( nurl_eprint `, interpreting its calls\n` ) } {}
         : s ct20 ( _module_func_type m callee )
         : ~ i cp20 0
         : ~ i cr20 0
@@ -5166,6 +5525,7 @@ unsafe @ __jit_run * InterpImpl it * ModuleImpl m * PFunc pfj i argsp → i {
     = . cd 2 . it mem_bytes
     = . cd 3 # i ( vec_data [i] . it globals )
     = . cd 4 0 = . cd 5 0 = . cd 6 0 = . cd 7 0
+    = . cd 8 . it jit_slab_end  // tier 8's frame check reads it here (no anchor register needed)
     : i occ0 . it jit_cur_cd
     = . it jit_cur_cd # i cd
     : i status ( nurl_call_code2_sj # *u jh # *u cd # *u argsp )
@@ -5203,8 +5563,7 @@ unsafe @ __jit_callee * InterpImpl it * ModuleImpl m i callee * i caller_rbase i
         : s njh . pfc jit
         ? & != # i njh 0 != # i njh -1 {
             // publish the DIRECT entry: page + the 28-byte driver preamble
-            : *i ftw # *i + . it jit_spcell 16
-            = . ftw - callee . m num_import_funcs + # i njh 28
+            ( __jit_publish it - callee . m num_import_funcs + # i njh 28 )
         } {}
     } {}
     : s jh . pfc jit
@@ -5244,6 +5603,7 @@ unsafe @ __jit_callee * InterpImpl it * ModuleImpl m i callee * i caller_rbase i
     ? == st 3 { ( __trap it `unreachable` ) ^ 1 } {}
     ? == st 4 { ( __trap it `integer divide by zero` ) ^ 1 } {}
     ? == st 10 { ( __trap it `integer overflow` ) ^ 1 } {}
+    ? == st 12 { ( __trap it `invalid conversion to integer` ) ^ 1 } {}
     ? == st 1 { ( __trap it `memory access out of bounds` ) ^ 1 } {}
     ? | ( __interp_trapped it ) != 0 . it halt { ^ 1 } {}
     ^ 0
@@ -5281,20 +5641,21 @@ unsafe @ __exec_func * InterpImpl it i fidx → v {
             : s njh . pfj jit
             ? & != # i njh 0 != # i njh -1 {
                 // publish the DIRECT entry: page + the 28-byte driver preamble
-                : *i ftw2 # *i + . it jit_spcell 16
-                = . ftw2 - fidx . m num_import_funcs + # i njh 28
+                ( __jit_publish it - fidx . m num_import_funcs + # i njh 28 )
             } {}
         } {}
         : s jh . pfj jit
         ? & != # i jh 0 != # i jh -1 {
             : *i jrb ( vec_data [i] . fj regs )
             : i status ( __jit_run it m pfj # i jrb )
+            ? & != 0 g_rjdbg != 0 status { ( nurl_eprint `[rjit] outermost fidx=` ) ( nurl_eprint ( nurl_str_int fidx ) ) ( nurl_eprint ` status=` ) ( nurl_eprint ( nurl_str_int status ) ) ( nurl_eprint `\n` ) } {}
             // status 8 (slab full before anything ran) falls through to the
             // interpreter driver below — the args are still in the frame.
             ? != status 8 {
                 ? == status 3 { ( __trap it `unreachable` ) ( __frame_recycle fr0 ) ^ v } {}
                 ? == status 4 { ( __trap it `integer divide by zero` ) ( __frame_recycle fr0 ) ^ v } {}
                 ? == status 10 { ( __trap it `integer overflow` ) ( __frame_recycle fr0 ) ^ v } {}
+                ? == status 12 { ( __trap it `invalid conversion to integer` ) ( __frame_recycle fr0 ) ^ v } {}
                 ? == status 11 { ( __frame_recycle fr0 ) ^ v } {}  // trap/halt already recorded by an inline call-out
                 ? != 0 status { ( __trap it `memory access out of bounds` ) ( __frame_recycle fr0 ) ^ v } {}
                 ? | ( __interp_trapped it ) != 0 . it halt { ( __frame_recycle fr0 ) ^ v } {}
@@ -5552,9 +5913,9 @@ unsafe @ __exec_func * InterpImpl it i fidx → v {
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     ? == op 150 { = . rbase ra ( __convert it 185 . rbase rb ) ? != 0 . it halt { ( __fr_setpos tp r0 ) = pc pend } {} } {  // f64.convert_i64_s
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         ? == op 151 { = . rbase ra ( __convert it 186 . rbase rb ) ? != 0 . it halt { ( __fr_setpos tp r0 ) = pc pend } {} } {  // f64.convert_i64_u
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             ? == op 152 { = . rbase ra ( __convert it 187 . rbase rb ) ? != 0 . it halt { ( __fr_setpos tp r0 ) = pc pend } {} } {  // f64.promote_f32
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                ? == op 153 { = . rbase ra . rbase rb } {  // i32.reinterpret_f32
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                ? == op 153 { = . rbase ra >> << . rbase rb 32 32 } {  // i32.reinterpret_f32: the canonical (sign-extended) i32
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     ? == op 154 { = . rbase ra . rbase rb } {  // i64.reinterpret_f64
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        ? == op 155 { = . rbase ra . rbase rb } {  // f32.reinterpret_i32
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        ? == op 155 { = . rbase ra & . rbase rb 4294967295 } {  // f32.reinterpret_i32: an f32 slot holds its bits zero-extended
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             ? == op 156 { = . rbase ra . rbase rb } {  // f64.reinterpret_i64
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 ? == op 157 { = . rbase ra ( __runary 192 . rbase rb ) } {  // i32.extend8_s
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     ? == op 158 { = . rbase ra ( __runary 193 . rbase rb ) } {  // i32.extend16_s
@@ -5806,6 +6167,7 @@ unsafe @ __rdo_call * InterpImpl it * ModuleImpl m s caller i callee i argbase *
         : *i rb ( vec_data [i] . rfr regs )
         : ~ i zk . pfc nparams
         ~ < zk . pfc nlocals { = . rb zk 0 = zk + zk 1 }
+        ( __refl_null pfc rb )
         : i np . pfc nparams
         : ~ i ak 0
         ~ < ak np { = . rb ak . caller_rbase + argbase ak = ak + ak 1 }
@@ -6028,7 +6390,9 @@ unsafe @ __f32_unary i op i ab → i {
     ? == op 167 { ^ ( __w32 ab ) } {}  // i32.wrap_i64
     ? == op 172 { ^ ( __w32 ab ) } {}  // i64.extend_i32_s
     ? == op 173 { ^ & ab 4294967295 } {}  // i64.extend_i32_u
-    ? & >= op 188 <= op 191 { ^ ab } {}  // *.reinterpret_* : no-op
+    ? == op 188 { ^ ( __w32 ab ) } {}  // i32.reinterpret_f32: the canonical i32
+    ? == op 190 { ^ & ab 4294967295 } {}  // f32.reinterpret_i32: the zero-extended f32 bits
+    ? | == op 189 == op 191 { ^ ab } {}  // the 64-bit reinterprets: the same bits
     // trapping float→int truncation (NaN / out-of-range → trap, per spec)
     ? == op 168 {  // i32.trunc_f32_s
         ^ ( __w32 # i ( __trunc_ck it ( __f32_nan ab ) # f ( bits_to_f32 ab ) -2147483648.0 2147483648.0 ) ) } {}

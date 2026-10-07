@@ -681,6 +681,37 @@ pct() { awk -v a="$1" -v b="$2" 'BEGIN {
     d = (b - a) * 100 / a
     printf "%s%.0f %%", (d > 0 ? "+" : (d < 0 ? "−" : "")), (d < 0 ? -d : d) }'; }
 
+# The cells of one table row with the fastest of them in bold — every cell
+# that ties for it, so a dead heat reads as one. A cell that is not a number
+# (SKIPPED, FAIL, TIMEOUT) prints as it is and cannot win. <wrap> goes
+# around every cell, `_` for the italic floor row.
+row_fastest_bold() {       # <wrap> <cell>...
+    local wrap="$1"; shift
+    awk -v w="$wrap" -v cells="$*" 'BEGIN {
+        n = split(cells, v, " "); min = ""
+        for (i = 1; i <= n; i++)
+            if (v[i] ~ /^[0-9.]+$/ && (min == "" || v[i] + 0 < min + 0)) min = v[i]
+        for (i = 1; i <= n; i++) {
+            c = v[i]
+            if (min != "" && c ~ /^[0-9.]+$/ && c + 0 == min + 0) c = "**" c "**"
+            printf " %s%s%s |", w, c, w
+        }
+    }'
+}
+
+# How many rows <runtime> beats <reference> on, out of the rows where both
+# cells are numbers: "9 of 15", or an em dash when no row has both.
+wins() {                   # <runtime-array-name> <reference-array-name>
+    local -n _a="$1" _b="$2"
+    local i won=0 both=0
+    for i in "${!_a[@]}"; do
+        [[ "${_a[$i]}" =~ ^[0-9.]+$ && "${_b[$i]:-}" =~ ^[0-9.]+$ ]] || continue
+        both=$(( both + 1 ))
+        awk -v a="${_a[$i]}" -v b="${_b[$i]}" 'BEGIN { exit !(a + 0 < b + 0) }' && won=$(( won + 1 ))
+    done
+    if (( both > 0 )); then printf '%s of %s' "$won" "$both"; else printf '—'; fi
+}
+
 emit_md() {
     printf '# WebAssembly benchmark results — NURL native vs NURL wasm\n\n'
     printf 'Generated `%s` by `bench/wasmbench.sh`. **Do not edit by hand** —\n' "$NOW"
@@ -784,17 +815,40 @@ emit_md() {
     printf 'and `nwasm` only decodes it, compiling nothing but what runs. That\n'
     printf 'crossover is the honest answer to "which runtime should I use": it\n'
     printf 'depends entirely on how long the guest runs.\n\n'
-    printf '| Benchmark | NURL on `nwasm` | vs JIT | vs native | C on `nwasm` | Rust on `nwasm` |\n'
+    printf 'Both runtimes side by side first: whole-process wall clock in\n'
+    printf 'milliseconds, each language'"'"'s module on the reference runtime and on\n'
+    printf '`nwasm`. The fastest of the six cells in a row is in **bold**.\n\n'
+    printf '| Benchmark | NURL on `wasmtime` | NURL on `nwasm` | C on `wasmtime` | C on `nwasm` | Rust on `wasmtime` | Rust on `nwasm` |\n'
+    printf '|---|---:|---:|---:|---:|---:|---:|\n'
+    printf '| _(floor: empty program)_ |%s\n' "$(row_fastest_bold _ \
+        "$floor_nurl_ref" "$floor_nurl_nw" "$floor_c_ref" "$floor_c_nw" \
+        "$floor_rust_ref" "$floor_rust_nw")"
+    for i in "${!names[@]}"; do
+        printf '| `%s` |%s\n' "${names[$i]}" "$(row_fastest_bold '' \
+            "${r_nurl_ref[$i]}" "${r_nurl_nw[$i]}" "${r_c_ref[$i]}" "${r_c_nw[$i]}" \
+            "${r_rust_ref[$i]}" "${r_rust_nw[$i]}")"
+    done
+    printf '\n'
+    printf '`nwasm` is faster than the reference runtime on %s NURL modules,\n' \
+        "$(wins r_nurl_nw r_nurl_ref)"
+    printf '%s C modules and %s Rust modules.\n\n' \
+        "$(wins r_c_nw r_c_ref)" "$(wins r_rust_nw r_rust_ref)"
+    printf 'The same cells as ratios: `vs JIT` is `nwasm` ÷ the reference runtime\n'
+    printf 'for the same module, `vs native` is the NURL module on `nwasm` ÷ the\n'
+    printf 'native NURL binary.\n\n'
+    printf '| Benchmark | NURL on `nwasm` | vs JIT | vs native | C vs JIT | Rust vs JIT |\n'
     printf '|---|---:|---:|---:|---:|---:|\n'
     printf '| _(floor: empty program)_ | _%s_ | _%s_ | _%s_ | _%s_ | _%s_ |\n' \
         "$floor_nurl_nw" "$(ratio "$floor_nurl_nw" "$floor_nurl_ref")" \
-        "$(ratio "$floor_nurl_nw" "$floor_nurl")" "$floor_c_nw" "$floor_rust_nw"
+        "$(ratio "$floor_nurl_nw" "$floor_nurl")" \
+        "$(ratio "$floor_c_nw" "$floor_c_ref")" "$(ratio "$floor_rust_nw" "$floor_rust_ref")"
     for i in "${!names[@]}"; do
         printf '| `%s` | %s | %s | %s | %s | %s |\n' "${names[$i]}" \
             "${r_nurl_nw[$i]}" \
             "$(ratio "${r_nurl_nw[$i]}" "${r_nurl_ref[$i]}")" \
             "$(ratio "${r_nurl_nw[$i]}" "${r_nurl[$i]}")" \
-            "${r_c_nw[$i]}" "${r_rust_nw[$i]}"
+            "$(ratio "${r_c_nw[$i]}" "${r_c_ref[$i]}")" \
+            "$(ratio "${r_rust_nw[$i]}" "${r_rust_ref[$i]}")"
     done
     printf '\n'
     if (( NWASM_ALL_LANGS )); then
@@ -803,7 +857,7 @@ emit_md() {
         printf 'they run at all is a correctness result, and that they run at a similar\n'
         printf 'ratio says the interpreter has no NURL-shaped fast path.\n\n'
     else
-        printf 'The C and Rust columns are `SKIPPED`: they are the cross-frontend\n'
+        printf 'The C and Rust `nwasm` cells are `SKIPPED`: they are the cross-frontend\n'
         printf 'control — modules this runtime never saw during development, from two\n'
         printf 'other LLVM frontends — and running them costs about three times the\n'
         printf 'whole rest of the suite, so they are opt-in. `--nwasm-all-langs` fills\n'

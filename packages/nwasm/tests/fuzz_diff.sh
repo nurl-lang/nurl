@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Differential fuzz for nwasm: random wasm modules (wasm-tools smith),
-# every no-param exported function invoked under nwasm JIT / JIT-nopin /
+# every no-param exported function invoked under nwasm's register-allocating
+# JIT (tier 8, the default) / template JIT / template JIT without pins /
 # interpreter and the reference wasmtime.
 #
 #   tests/fuzz_diff.sh <nwasm-binary> [N-modules] [first-seed]
@@ -33,17 +34,19 @@ for ((i=0;i<N;i++)); do
   while IFS=$'\t' read -r f flag; do
     [ "$flag" = N ] && continue
     [ -z "$f" ] && continue
+    [[ "$f" == -* ]] && continue  # both CLIs would read the export's name as an option
     ref=$(timeout 10 wasmtime run -C cache=n -W trap-on-grow-failure=y --invoke "$f" "$WORK/m.wasm" 2>&1); rrc=$?
     a=$(timeout 10 "$NW" run --invoke "$f" "$WORK/m.wasm" 2>&1); arc=$?
-    b=$(timeout 10 env NURL_NWASM_PIN=0 "$NW" run --invoke "$f" "$WORK/m.wasm" 2>&1); brc=$?
+    b=$(timeout 10 env NURL_NWASM_RJIT=0 NURL_NWASM_PIN=0 "$NW" run --invoke "$f" "$WORK/m.wasm" 2>&1); brc=$?
+    d=$(timeout 10 env NURL_NWASM_RJIT=0 "$NW" run --invoke "$f" "$WORK/m.wasm" 2>&1); drc=$?
     c=$(timeout 10 env NURL_NWASM_JIT=0 "$NW" run --invoke "$f" "$WORK/m.wasm" 2>&1); crc=$?
     refv=$(grep -v '^warning:' <<<"$ref")
     cls() { if [ "$1" = 0 ]; then echo "V:$2"; else echo "T"; fi; }
-    ca=$(cls $arc "$a"); cb=$(cls $brc "$b"); cc=$(cls $crc "$c")
+    ca=$(cls $arc "$a"); cb=$(cls $brc "$b"); cc=$(cls $crc "$c"); cd=$(cls $drc "$d")
     cr=$(cls $rrc "$refv")
     ninv=$((ninv+1)); [ "$arc" = 0 ] && nval=$((nval+1))
-    if [ "$ca" != "$cb" ] || [ "$ca" != "$cc" ]; then
-      echo "INTERNAL-DIVERGE seed=$seed f=$f jit=[$arc:$a] nopin=[$brc:$b] interp=[$crc:$c]"
+    if [ "$ca" != "$cb" ] || [ "$ca" != "$cc" ] || [ "$ca" != "$cd" ]; then
+      echo "INTERNAL-DIVERGE seed=$seed f=$f rjit=[$arc:$a] tmpl=[$drc:$d] nopin=[$brc:$b] interp=[$crc:$c]"
       cp "$WORK/m.wasm" "$WORK/bad_${seed}_$f.wasm"; fail=1
     else
       ok=1

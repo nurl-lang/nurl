@@ -62,6 +62,19 @@ program's safety no longer rests on them.
 
 ### Performance
 
+- **`stdlib/ext/json.nu` finds the end of a string body in one pass.** The
+  escape-free fast path took three: `memchr` for the closing quote, `memchr`
+  for a backslash, then a byte walk for raw control bytes. One eight-bytes-
+  a-step scan now finds the first of the three, and anything but the quote
+  goes to the canonical decoder, which reports it at the same position.
+  `bench/json_parse.nu` as wasm: 6.5 % fewer interpreted instructions, 5.5 %
+  fewer under precompiled wasmtime; natively 2 % fewer. JSONTestSuite
+  verdicts are unchanged (283/283; 31 of 35 implementation-defined accepted).
+- **nwasm 2.1.0: a register-allocating JIT tier** (packages/nwasm/CHANGELOG.md).
+  Locally it runs 44 of the 45 wasmbench modules faster than wasmtime's
+  Cranelift and ties the 45th, and the `nurlc.wasm` self-compile in 3.7 s
+  against wasmtime's 3.95 s. `bench/wasmbench.sh` now shows the two runtimes
+  side by side, the faster cell of each row in bold.
 - **Compiler word and record scans reuse bounds they already proved.**
   The space-delimited word helpers scan their once-measured ranges directly,
   and borrow-checker record extraction copies the span its delimiter walk
