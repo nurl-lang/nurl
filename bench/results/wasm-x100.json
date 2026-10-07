@@ -1,0 +1,327 @@
+{
+  "schema": 1,
+  "kind": "wasm",
+  "workload_scale": 100,
+  "generated_utc": "2026-10-07T21:40:15Z",
+  "commit": "7f9c039b8eaaff1d5acc9536be869b13d9d084cc",
+  "run_url": "https://github.com/nurl-lang/nurl/actions/runs/37687919677",
+  "host": {
+    "label": "GitHub Actions ubuntu-latest runner",
+    "kernel": "Linux 6.17.0-1022-azure x86_64",
+    "cpu": "AMD EPYC 7763 64-Core Processor",
+    "cores": 4,
+    "mem_kb": 16373452
+  },
+  "toolchains": {
+    "nurl": "v0.70.0-39-g7f9c039b",
+    "clang": "Ubuntu clang version 18.1.3 (1ubuntu1)",
+    "rustc": "rustc 1.99.0 (b940084d7 2026-09-28)",
+    "zig": "zig 0.16.0",
+    "wasmbuilder": "wasmbuilder 0.3.2",
+    "wasm_runtime_ref": "wasmtime 48.0.2 (e9f1ea232 2026-09-10)",
+    "wasm_runtime_nurl": "nwasm 2.3.0 (pure NURL)"
+  },
+  "settings": {
+    "opt": "-O2",
+    "wasm_target_c": "wasm32-wasi",
+    "wasm_target_rust": "wasm32-wasip1",
+    "max_reps": 5,
+    "budget_ms": 8000,
+    "timeout_s": 900,
+    "compile_reps": 3,
+    "interpreter_all_languages": true
+  },
+  "floor_ms": {
+    "native": { "nurl": 1.516, "c": 1.585, "rust": 1.738 },
+    "wasm_ref": { "nurl": 12.511, "c": 7.430, "rust": 36.036, "nurl_no_gc_sections": 152.572 },
+    "wasm_nwasm": { "nurl": 3.238, "c": 3.399, "rust": 4.416 }
+  },
+  "floor_compile_ms": { "nurl_frontend": 3.576, "nurl_native": 108.043, "nurl_wasm": 55.105, "nurl_wasm_no_gc_sections": 56.876, "c_native": 62.264, "c_wasm": 44.032, "rust_native": 66.723, "rust_wasm": 80.478 },
+  "benchmarks": [
+    {
+      "name": "lcg",
+      "blurb": "20M-step 64-bit LCG + xorshift",
+      "measures": "Loop-carried mul/add/shift/xor dependency the unroller cannot compose",
+      "checksum": "5013499978263536346",
+      "verified": true,
+      "run_ms": {
+        "native":   { "nurl": 3736.880, "c": 3736.421, "rust": 3736.917 },
+        "wasm_ref": { "nurl": 3763.569, "c": 3763.698, "rust": 3769.446, "nurl_no_gc_sections": 3888.875 },
+        "wasm_nwasm":  { "nurl": 3739.062, "c": 3744.616, "rust": 3743.073 }
+      },
+      "reps": {
+        "native":   { "nurl": 2, "c": 2, "rust": 2 },
+        "wasm_ref": { "nurl": 2, "c": 2, "rust": 2, "nurl_no_gc_sections": 2 },
+        "wasm_nwasm":  { "nurl": 2, "c": 2, "rust": 2 }
+      },
+      "compile_ms": { "nurl_frontend": 3.793, "nurl_native": 125.986, "nurl_wasm": 54.254, "nurl_wasm_no_gc_sections": 55.526, "c_native": 72.245, "c_wasm": 43.092, "rust_native": 73.242, "rust_wasm": 88.876 },
+      "bytes": { "nurl_native": 17616, "nurl_wasm": 26846, "nurl_wasm_no_gc_sections": 318717, "c_native": 16008, "c_wasm": 937006, "rust_native": 4537072, "rust_wasm": 2179463 }
+    },
+    {
+      "name": "packet_classifier",
+      "blurb": "25M unpredictable branches",
+      "measures": "A data-dependent 50/50 branch the predictor cannot learn",
+      "checksum": "3449592071",
+      "verified": true,
+      "run_ms": {
+        "native":   { "nurl": 5446.446, "c": 5446.205, "rust": 5447.148 },
+        "wasm_ref": { "nurl": 5087.062, "c": 5085.736, "rust": 5094.250, "nurl_no_gc_sections": 5209.124 },
+        "wasm_nwasm":  { "nurl": 4675.433, "c": 4677.491, "rust": 4677.027 }
+      },
+      "reps": {
+        "native":   { "nurl": 1, "c": 1, "rust": 1 },
+        "wasm_ref": { "nurl": 1, "c": 1, "rust": 1, "nurl_no_gc_sections": 1 },
+        "wasm_nwasm":  { "nurl": 1, "c": 1, "rust": 1 }
+      },
+      "compile_ms": { "nurl_frontend": 3.987, "nurl_native": 127.111, "nurl_wasm": 54.955, "nurl_wasm_no_gc_sections": 55.757, "c_native": 71.709, "c_wasm": 46.418, "rust_native": 72.769, "rust_wasm": 85.698 },
+      "bytes": { "nurl_native": 17616, "nurl_wasm": 26772, "nurl_wasm_no_gc_sections": 318568, "c_native": 16024, "c_wasm": 937028, "rust_native": 4537488, "rust_wasm": 2179375 }
+    },
+    {
+      "name": "ring_write",
+      "blurb": "20M ring-buffer stores",
+      "measures": "Dependent store per iteration plus address computation",
+      "checksum": "6773938213699575018",
+      "verified": true,
+      "run_ms": {
+        "native":   { "nurl": 4050.329, "c": 4048.219, "rust": 4048.182 },
+        "wasm_ref": { "nurl": 5009.623, "c": 5007.607, "rust": 5013.414, "nurl_no_gc_sections": 5127.897 },
+        "wasm_nwasm":  { "nurl": 4361.261, "c": 4366.867, "rust": 4367.485 }
+      },
+      "reps": {
+        "native":   { "nurl": 1, "c": 1, "rust": 1 },
+        "wasm_ref": { "nurl": 1, "c": 1, "rust": 1, "nurl_no_gc_sections": 1 },
+        "wasm_nwasm":  { "nurl": 1, "c": 1, "rust": 1 }
+      },
+      "compile_ms": { "nurl_frontend": 4.223, "nurl_native": 132.587, "nurl_wasm": 56.211, "nurl_wasm_no_gc_sections": 56.450, "c_native": 73.223, "c_wasm": 44.673, "rust_native": 76.956, "rust_wasm": 89.443 },
+      "bytes": { "nurl_native": 17712, "nurl_wasm": 26856, "nurl_wasm_no_gc_sections": 318747, "c_native": 16064, "c_wasm": 937318, "rust_native": 4537488, "rust_wasm": 2179416 }
+    },
+    {
+      "name": "histogram_bins",
+      "blurb": "20M binned increments",
+      "measures": "Read-modify-write at a data-dependent index",
+      "checksum": "3532155438",
+      "verified": true,
+      "run_ms": {
+        "native":   { "nurl": 3779.079, "c": 3944.089, "rust": 3736.008 },
+        "wasm_ref": { "nurl": 5302.726, "c": 4764.626, "rust": 4771.618, "nurl_no_gc_sections": 5042.065 },
+        "wasm_nwasm":  { "nurl": 3887.599, "c": 4054.400, "rust": 4285.320 }
+      },
+      "reps": {
+        "native":   { "nurl": 2, "c": 2, "rust": 2 },
+        "wasm_ref": { "nurl": 1, "c": 1, "rust": 1, "nurl_no_gc_sections": 1 },
+        "wasm_nwasm":  { "nurl": 2, "c": 1, "rust": 1 }
+      },
+      "compile_ms": { "nurl_frontend": 4.251, "nurl_native": 133.455, "nurl_wasm": 56.109, "nurl_wasm_no_gc_sections": 60.289, "c_native": 75.320, "c_wasm": 43.982, "rust_native": 78.991, "rust_wasm": 89.168 },
+      "bytes": { "nurl_native": 17712, "nurl_wasm": 26922, "nurl_wasm_no_gc_sections": 318871, "c_native": 16072, "c_wasm": 937508, "rust_native": 4537752, "rust_wasm": 2179520 }
+    },
+    {
+      "name": "prefix_scan",
+      "blurb": "1M 16-wide prefix scans",
+      "measures": "Store-bound fill then a serial load/add dependency chain",
+      "checksum": "1287806229",
+      "verified": true,
+      "run_ms": {
+        "native":   { "nurl": 2009.327, "c": 2008.423, "rust": 2013.962 },
+        "wasm_ref": { "nurl": 875.777, "c": 888.897, "rust": 883.426, "nurl_no_gc_sections": 998.565 },
+        "wasm_nwasm":  { "nurl": 632.261, "c": 820.049, "rust": 635.396 }
+      },
+      "reps": {
+        "native":   { "nurl": 3, "c": 3, "rust": 3 },
+        "wasm_ref": { "nurl": 5, "c": 5, "rust": 5, "nurl_no_gc_sections": 5 },
+        "wasm_nwasm":  { "nurl": 5, "c": 5, "rust": 5 }
+      },
+      "compile_ms": { "nurl_frontend": 4.383, "nurl_native": 133.608, "nurl_wasm": 55.765, "nurl_wasm_no_gc_sections": 57.882, "c_native": 77.859, "c_wasm": 44.157, "rust_native": 77.945, "rust_wasm": 90.866 },
+      "bytes": { "nurl_native": 17616, "nurl_wasm": 27223, "nurl_wasm_no_gc_sections": 318887, "c_native": 16016, "c_wasm": 938241, "rust_native": 4537712, "rust_wasm": 2179770 }
+    },
+    {
+      "name": "binary_search",
+      "blurb": "5M lower-bound searches",
+      "measures": "Pointer-chasing: each load address depends on the last compare",
+      "checksum": "3557324949",
+      "verified": true,
+      "run_ms": {
+        "native":   { "nurl": 3579.361, "c": 3577.218, "rust": 4083.520 },
+        "wasm_ref": { "nurl": 5735.901, "c": 6017.311, "rust": 6014.131, "nurl_no_gc_sections": 5886.114 },
+        "wasm_nwasm":  { "nurl": 4698.489, "c": 4797.301, "rust": 5180.336 }
+      },
+      "reps": {
+        "native":   { "nurl": 2, "c": 2, "rust": 1 },
+        "wasm_ref": { "nurl": 1, "c": 1, "rust": 1, "nurl_no_gc_sections": 1 },
+        "wasm_nwasm":  { "nurl": 1, "c": 1, "rust": 1 }
+      },
+      "compile_ms": { "nurl_frontend": 4.524, "nurl_native": 131.028, "nurl_wasm": 57.991, "nurl_wasm_no_gc_sections": 57.834, "c_native": 71.972, "c_wasm": 44.356, "rust_native": 81.693, "rust_wasm": 92.564 },
+      "bytes": { "nurl_native": 17664, "nurl_wasm": 26951, "nurl_wasm_no_gc_sections": 318615, "c_native": 16016, "c_wasm": 938031, "rust_native": 4538384, "rust_wasm": 2180296 }
+    },
+    {
+      "name": "sort_window",
+      "blurb": "2M 8-element bubble sorts",
+      "measures": "Branchless compare/exchange mill over a 64-byte window (~50 cmovs/iter)",
+      "checksum": "5384552423",
+      "verified": true,
+      "run_ms": {
+        "native":   { "nurl": 2557.604, "c": 2554.008, "rust": 2492.522 },
+        "wasm_ref": { "nurl": 3861.159, "c": 2931.445, "rust": 3005.073, "nurl_no_gc_sections": 4035.001 },
+        "wasm_nwasm":  { "nurl": 4407.367, "c": 4264.467, "rust": 4048.184 }
+      },
+      "reps": {
+        "native":   { "nurl": 3, "c": 3, "rust": 3 },
+        "wasm_ref": { "nurl": 2, "c": 2, "rust": 2, "nurl_no_gc_sections": 1 },
+        "wasm_nwasm":  { "nurl": 1, "c": 1, "rust": 1 }
+      },
+      "compile_ms": { "nurl_frontend": 4.722, "nurl_native": 136.805, "nurl_wasm": 56.573, "nurl_wasm_no_gc_sections": 59.004, "c_native": 79.879, "c_wasm": 44.615, "rust_native": 87.003, "rust_wasm": 96.584 },
+      "bytes": { "nurl_native": 17616, "nurl_wasm": 27224, "nurl_wasm_no_gc_sections": 319271, "c_native": 16016, "c_wasm": 938534, "rust_native": 4537816, "rust_wasm": 2179872 }
+    },
+    {
+      "name": "bloom_filter",
+      "blurb": "4M Bloom-filter queries",
+      "measures": "Four unpredictable loads per query over a 2 KB working set",
+      "checksum": "235255863",
+      "verified": true,
+      "run_ms": {
+        "native":   { "nurl": 1373.432, "c": 1635.760, "rust": 1651.260 },
+        "wasm_ref": { "nurl": 1506.310, "c": 1586.604, "rust": 1495.338, "nurl_no_gc_sections": 1635.416 },
+        "wasm_nwasm":  { "nurl": 1169.646, "c": 1311.915, "rust": 1317.213 }
+      },
+      "reps": {
+        "native":   { "nurl": 5, "c": 4, "rust": 4 },
+        "wasm_ref": { "nurl": 5, "c": 5, "rust": 5, "nurl_no_gc_sections": 4 },
+        "wasm_nwasm":  { "nurl": 5, "c": 5, "rust": 5 }
+      },
+      "compile_ms": { "nurl_frontend": 5.408, "nurl_native": 141.275, "nurl_wasm": 58.783, "nurl_wasm_no_gc_sections": 61.272, "c_native": 83.078, "c_wasm": 44.191, "rust_native": 80.848, "rust_wasm": 94.222 },
+      "bytes": { "nurl_native": 17712, "nurl_wasm": 27088, "nurl_wasm_no_gc_sections": 319025, "c_native": 16072, "c_wasm": 938585, "rust_native": 4537680, "rust_wasm": 2179634 }
+    },
+    {
+      "name": "hash_join",
+      "blurb": "5M hash-table probes",
+      "measures": "Cheap Bloom early-out plus a rare, branchy join path",
+      "checksum": "0",
+      "verified": true,
+      "run_ms": {
+        "native":   { "nurl": 2617.343, "c": 2806.523, "rust": 2806.538 },
+        "wasm_ref": { "nurl": 3572.067, "c": 4190.446, "rust": 4171.489, "nurl_no_gc_sections": 3733.230 },
+        "wasm_nwasm":  { "nurl": 3650.741, "c": 3721.848, "rust": 3773.067 }
+      },
+      "reps": {
+        "native":   { "nurl": 3, "c": 2, "rust": 2 },
+        "wasm_ref": { "nurl": 2, "c": 1, "rust": 1, "nurl_no_gc_sections": 2 },
+        "wasm_nwasm":  { "nurl": 2, "c": 2, "rust": 2 }
+      },
+      "compile_ms": { "nurl_frontend": 9.418, "nurl_native": 258.862, "nurl_wasm": 70.961, "nurl_wasm_no_gc_sections": 71.343, "c_native": 126.559, "c_wasm": 44.189, "rust_native": 117.580, "rust_wasm": 128.979 },
+      "bytes": { "nurl_native": 25904, "nurl_wasm": 29001, "nurl_wasm_no_gc_sections": 321607, "c_native": 16064, "c_wasm": 945689, "rust_native": 4539864, "rust_wasm": 2181935 }
+    },
+    {
+      "name": "sieve",
+      "blurb": "Sieve of Eratosthenes to 10M",
+      "measures": "Irregular-stride byte writes, then one linear scan",
+      "checksum": "66457900",
+      "verified": true,
+      "run_ms": {
+        "native":   { "nurl": 1542.363, "c": 1544.886, "rust": 1537.713 },
+        "wasm_ref": { "nurl": 2130.352, "c": 2139.490, "rust": 2175.996, "nurl_no_gc_sections": 2244.251 },
+        "wasm_nwasm":  { "nurl": 1928.691, "c": 2020.141, "rust": 2002.297 }
+      },
+      "reps": {
+        "native":   { "nurl": 5, "c": 5, "rust": 5 },
+        "wasm_ref": { "nurl": 3, "c": 3, "rust": 3, "nurl_no_gc_sections": 3 },
+        "wasm_nwasm":  { "nurl": 4, "c": 3, "rust": 3 }
+      },
+      "compile_ms": { "nurl_frontend": 4.552, "nurl_native": 136.309, "nurl_wasm": 56.544, "nurl_wasm_no_gc_sections": 56.942, "c_native": 85.774, "c_wasm": 44.141, "rust_native": 87.811, "rust_wasm": 98.802 },
+      "bytes": { "nurl_native": 17712, "nurl_wasm": 26916, "nurl_wasm_no_gc_sections": 318884, "c_native": 16160, "c_wasm": 938325, "rust_native": 4537048, "rust_wasm": 2179404 }
+    },
+    {
+      "name": "fib",
+      "blurb": "Recursive fib(35)",
+      "measures": "The call/return path: ~15M calls after LLVM turns one recursion into a loop",
+      "checksum": "922746500",
+      "verified": true,
+      "run_ms": {
+        "native":   { "nurl": 2346.785, "c": 2818.656, "rust": 2626.666 },
+        "wasm_ref": { "nurl": 3899.039, "c": 4046.294, "rust": 3771.889, "nurl_no_gc_sections": 4232.971 },
+        "wasm_nwasm":  { "nurl": 3509.072, "c": 3167.842, "rust": 2829.505 }
+      },
+      "reps": {
+        "native":   { "nurl": 3, "c": 2, "rust": 3 },
+        "wasm_ref": { "nurl": 2, "c": 1, "rust": 2, "nurl_no_gc_sections": 1 },
+        "wasm_nwasm":  { "nurl": 2, "c": 2, "rust": 2 }
+      },
+      "compile_ms": { "nurl_frontend": 4.107, "nurl_native": 127.703, "nurl_wasm": 54.792, "nurl_wasm_no_gc_sections": 55.622, "c_native": 73.042, "c_wasm": 43.845, "rust_native": 74.338, "rust_wasm": 87.278 },
+      "bytes": { "nurl_native": 17672, "nurl_wasm": 26787, "nurl_wasm_no_gc_sections": 318509, "c_native": 16040, "c_wasm": 937001, "rust_native": 4536632, "rust_wasm": 2179010 }
+    },
+    {
+      "name": "collatz",
+      "blurb": "Longest Collatz chain below 100k",
+      "measures": "Control-flow-heavy inner loop with no array at all",
+      "checksum": "685",
+      "verified": true,
+      "run_ms": {
+        "native":   { "nurl": 1515.430, "c": 1515.140, "rust": 1516.445 },
+        "wasm_ref": { "nurl": 2496.612, "c": 2494.693, "rust": 2498.275, "nurl_no_gc_sections": 2616.683 },
+        "wasm_nwasm":  { "nurl": 2469.543, "c": 2474.820, "rust": 2473.670 }
+      },
+      "reps": {
+        "native":   { "nurl": 5, "c": 5, "rust": 5 },
+        "wasm_ref": { "nurl": 3, "c": 3, "rust": 3, "nurl_no_gc_sections": 3 },
+        "wasm_nwasm":  { "nurl": 3, "c": 3, "rust": 3 }
+      },
+      "compile_ms": { "nurl_frontend": 4.208, "nurl_native": 128.108, "nurl_wasm": 56.262, "nurl_wasm_no_gc_sections": 55.800, "c_native": 72.676, "c_wasm": 44.964, "rust_native": 73.117, "rust_wasm": 88.456 },
+      "bytes": { "nurl_native": 17616, "nurl_wasm": 26756, "nurl_wasm_no_gc_sections": 318600, "c_native": 16016, "c_wasm": 937046, "rust_native": 4536520, "rust_wasm": 2178988 }
+    },
+    {
+      "name": "matmul",
+      "blurb": "256x256 integer matrix product",
+      "measures": "Triple-nested loop, flat indexing, column-strided reads",
+      "checksum": "39321553",
+      "verified": true,
+      "run_ms": {
+        "native":   { "nurl": 3113.838, "c": 3119.654, "rust": 3101.261 },
+        "wasm_ref": { "nurl": 2928.775, "c": 2513.954, "rust": 2346.142, "nurl_no_gc_sections": 3052.211 },
+        "wasm_nwasm":  { "nurl": 2633.148, "c": 2479.184, "rust": 2254.603 }
+      },
+      "reps": {
+        "native":   { "nurl": 2, "c": 2, "rust": 2 },
+        "wasm_ref": { "nurl": 2, "c": 3, "rust": 3, "nurl_no_gc_sections": 2 },
+        "wasm_nwasm":  { "nurl": 3, "c": 3, "rust": 3 }
+      },
+      "compile_ms": { "nurl_frontend": 5.944, "nurl_native": 142.002, "nurl_wasm": 58.362, "nurl_wasm_no_gc_sections": 59.181, "c_native": 85.893, "c_wasm": 44.036, "rust_native": 97.259, "rust_wasm": 105.767 },
+      "bytes": { "nurl_native": 17712, "nurl_wasm": 27166, "nurl_wasm_no_gc_sections": 318830, "c_native": 16160, "c_wasm": 938939, "rust_native": 4537912, "rust_wasm": 2180130 }
+    },
+    {
+      "name": "json_parse",
+      "blurb": "20 parses of a 64 KB document",
+      "measures": "Allocator pressure, string handling, recursive descent",
+      "checksum": "2000",
+      "verified": true,
+      "run_ms": {
+        "native":   { "nurl": 709.279, "c": 688.094, "rust": 974.339 },
+        "wasm_ref": { "nurl": 1521.928, "c": 607.873, "rust": 1134.981, "nurl_no_gc_sections": 1750.622 },
+        "wasm_nwasm":  { "nurl": 1881.506, "c": 662.486, "rust": 1414.092 }
+      },
+      "reps": {
+        "native":   { "nurl": 5, "c": 5, "rust": 5 },
+        "wasm_ref": { "nurl": 5, "c": 5, "rust": 5, "nurl_no_gc_sections": 4 },
+        "wasm_nwasm":  { "nurl": 4, "c": 5, "rust": 5 }
+      },
+      "compile_ms": { "nurl_frontend": 48.031, "nurl_native": 683.725, "nurl_wasm": 155.364, "nurl_wasm_no_gc_sections": 155.580, "c_native": 129.376, "c_wasm": 44.310, "rust_native": 176.682, "rust_wasm": 159.616 },
+      "bytes": { "nurl_native": 41584, "nurl_wasm": 51193, "nurl_wasm_no_gc_sections": 338561, "c_native": 16632, "c_wasm": 1031498, "rust_native": 4551200, "rust_wasm": 2210493 }
+    },
+    {
+      "name": "nbody",
+      "blurb": "500k n-body integration steps",
+      "measures": "IEEE-754 doubles: sqrt and divide throughput, the FPU rather than the ALU",
+      "checksum": "4595259045357180835",
+      "verified": true,
+      "run_ms": {
+        "native":   { "nurl": 3902.326, "c": 3899.370, "rust": 3703.302 },
+        "wasm_ref": { "nurl": 4362.114, "c": 3833.835, "rust": 3899.014, "nurl_no_gc_sections": 4505.207 },
+        "wasm_nwasm":  { "nurl": 4315.121, "c": 3867.225, "rust": 4394.144 }
+      },
+      "reps": {
+        "native":   { "nurl": 2, "c": 2, "rust": 2 },
+        "wasm_ref": { "nurl": 1, "c": 2, "rust": 2, "nurl_no_gc_sections": 1 },
+        "wasm_nwasm":  { "nurl": 1, "c": 2, "rust": 1 }
+      },
+      "compile_ms": { "nurl_frontend": 7.126, "nurl_native": 151.713, "nurl_wasm": 68.549, "nurl_wasm_no_gc_sections": 68.436, "c_native": 102.248, "c_wasm": 44.006, "rust_native": 96.530, "rust_wasm": 107.633 },
+      "bytes": { "nurl_native": 17664, "nurl_wasm": 28718, "nurl_wasm_no_gc_sections": 320382, "c_native": 16480, "c_wasm": 941103, "rust_native": 4538368, "rust_wasm": 2180680 }
+    }
+  ]
+}
