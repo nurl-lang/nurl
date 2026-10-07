@@ -113,6 +113,7 @@ $ `stdlib/core/vec.nu`
     ( Vec i ) clreg  // … the register it fills …
     ( Vec i ) clslot  // … from this slot's frame home
     ( Vec i ) wlcar  // per web: 1 when a record inside a loop writes it
+    ( Vec i ) rpi32  // per record: a call's callee parameters that are i32, bit k for parameter k (rj_set_pi32)
 }
 
 // scalar state indices
@@ -570,6 +571,28 @@ $ `stdlib/core/vec.nu`
 @ rj_sig_nr i sig → i { ^ ? < sig 0 0 & sig 65535 }
 
 @ rj_sig_canon i sig → i { ^ ? < sig 0 -1 >> sig 32 }
+
+// per call record: which of the callee's parameters are i32 (bit k), so an
+// i32 argument is sign-extended where it is passed rather than where it is
+// made; without it every argument counts as read in full
+@ rj_set_pi32 Rj c ( Vec i ) v → v {
+    : i nv ( vec_len [i] v )
+    : ~ i k 0
+    ~ < k nv { ( vec_push [i] . c rpi32 ( vec_at [i] v k ) ) = k + k 1 }
+}
+
+@ rj_pi32 Rj c i r i k → b {
+    ? & < r ( vec_len [i] . c rpi32 ) < k 62 { ^ != 0 & ( rj_shr ( vec_at [i] . c rpi32 r ) k ) 1 } {}
+    ^ F
+}
+
+// argument k of call record r (use o) is an i32 whose web skips the
+// sign extension — the call must do it
+@ rj_argext Rj c i r i k i o → b {
+    : i w ( vec_at [i] . c uweb o )
+    ? < w 0 { ^ F } {}  // a constant: canonical in the pool
+    ^ & ( rj_pi32 c r k ) == 0 ( vec_at [i] . c wsens w )
+}
 
 // Decode record r's uses and defs, in the fixed per-op order the emitter
 // reads them back in.
@@ -1152,7 +1175,7 @@ $ `stdlib/core/vec.nu`
     ? | | | == op 43 == op 36 == op 37 & >= op 93 <= op 95 { ^ F } {}
     ? & >= op 157 <= op 161 { ^ F } {}  // extendN_s reads the low bits
     ? | | == op 148 == op 143 | == op 149 == op 144 { ^ F } {}  // i32 → float
-    ? | | | == op 54 == op 168 == op 169 | == op 170 == op 163 { ^ F } {}  // i32 conditions / indices / deltas
+    ? | | | == op 54 == op 168 == op 169 == op 163 { ^ F } {}  // i32 conditions / indices / deltas
     ? == op 48 { ^ T } {}  // IFZ: decided per record (C = 1: an i64 operand) in rj_sens
     ? == op 177 { ^ F } {}  // ADDBRIFC32
     ? == op 45 { ^ T } {}  // decided per record (the compare's width) in rj_sens
@@ -1224,6 +1247,9 @@ $ `stdlib/core/vec.nu`
                 ? >= lk 0 { = sens == lk 2 } {}
                 ? == lk 1 { ( vec_push [i] csrc wv ) ( vec_push [i] cdst ( vec_at [i] . c dweb ( rj_dd c r 0 ) ) ) } {}  // the def decides
                 ? == op 45 { = sens >= ( rj_rw c r 4 ) 66 } {}  // BRIFC: an i64 compare reads the full value
+                ? | | == op 50 == op 210 == op 170 {  // an i32 argument is extended where it is passed (rj_argext); call_indirect's table index is an i32
+                    = sens ? < k ( rj_sig_np ( vec_at [i] . c rsig r ) ) ! ( rj_pi32 c r k ) F
+                } {}
                 ? == op 48 { = sens != 0 ( rj_rw c r 3 ) } {}  // IFZ of an i64 (eqz fusion) tests all 64 bits
                 ? | == op 47 & == op 46 < k 2 {  // a copy: the destination decides
                     = sens F
@@ -3145,6 +3171,18 @@ $ `stdlib/core/vec.nu`
 // lea rcx,[rbx + nslots*8] — the callee's frame base (the end of ours)
 @ rj_frame_end Rj c → v { ( rj_lea c 1 1 3 -1 0 * ( rj_get c ( rjs_ns ) ) 8 ) }
 
+// a memory-ABI call's arguments into the window [rbx + 8*(ab + k)], each i32
+// one the web left zero-extended sign-extended there
+@ rj_args_home Rj c i r i np i ab → v {
+    : ~ i k 0
+    ~ < k np {
+        : i o ( rj_u c r k )
+        ( rj_move c ( rjl_mem ) + ab k ( rj_uloc c o ) ( rj_us c o ) )
+        ? ( rj_argext c r k o ) { ( rj_rm c 0 1 0 99 0 3 -1 0 ( rj_home + ab k ) 0 ) ( rj_stf c 1 + ab k 0 ) } {}  // movsxd rax,dword[home]; mov [home],rax
+        = k + k 1
+    }
+}
+
 @ rj_e_call Rj c i r → v {
     : i op ( rj_rw c r 0 )
     : i fx ( rj_rw c r 1 )
@@ -3171,6 +3209,8 @@ $ `stdlib/core/vec.nu`
             = k + k 1
         }
         ( rj_pmove c dl ds sl ss )
+        = k 0
+        ~ < k np { ? ( rj_argext c r k ( rj_u c r k ) ) { ( rj_movsxd c ( rj_areg k ) ( rj_areg k ) ) } {} = k + k 1 }
         ( rj_restore_ctx c )
         ( rj_frame_end c )
         ( rj_lea c 1 6 3 -1 0 * ab 8 )  // lea rsi,[rbx+argbase*8] — the window, for the slab-full path
@@ -3184,13 +3224,8 @@ $ `stdlib/core/vec.nu`
         ( rj_reglob c )
     } {
         // arguments to their homes: the callee and every bridge read them there
-        = k 0
-        ~ < k np {
-            : i o ( rj_u c r k )
-            ( rj_move c ( rjl_mem ) + ab k ( rj_uloc c o ) ( rj_us c o ) )
-            = k + k 1
-        }
-        ? & direct == np 1 { : i o0 ( rj_u c r 0 ) ( rj_ldg c 2 ( rj_uloc c o0 ) ( rj_us c o0 ) 0 ) } {}  // arg0 rides in rdx
+        ( rj_args_home c r np ab )
+        ? & direct == np 1 { : i o0 ( rj_u c r 0 ) ( rj_ldg c 2 ( rj_uloc c o0 ) ( rj_us c o0 ) 0 ) ? ( rj_argext c r 0 o0 ) { ( rj_movsxd c 2 2 ) } {} } {}  // arg0 rides in rdx
         ( rj_restore_inv c )
         ( rj_frame_end c )
         ? direct {
@@ -3970,7 +4005,7 @@ $ `stdlib/core/vec.nu`
         ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] )
         ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] )
         ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] )
-        ( vec_new [i] )
+        ( vec_new [i] ) ( vec_new [i] )
     }
 }
 
@@ -4549,16 +4584,12 @@ $ `stdlib/core/vec.nu`
     : i nr ( rj_sig_nr sig )
     : i canon ( rj_sig_canon sig )
     : ~ i k 0
-    ~ < k np {
-        : i o ( rj_u c r k )
-        ( rj_move c ( rjl_mem ) + ab k ( rj_uloc c o ) ( rj_us c o ) )
-        = k + k 1
-    }
+    ( rj_args_home c r np ab )
     // the index first: arg0's load into rdx would clobber an index living there
     : i oi ( rj_u c r np )
     ( rj_ldg c 0 ( rj_uloc c oi ) ( rj_us c oi ) 0 )
     ( rj_mov32 c 0 0 )
-    ? == np 1 { : i o0 ( rj_u c r 0 ) ( rj_ldg c 2 ( rj_uloc c o0 ) ( rj_us c o0 ) 0 ) } {}  // arg0 rides in rdx
+    ? == np 1 { : i o0 ( rj_u c r 0 ) ( rj_ldg c 2 ( rj_uloc c o0 ) ( rj_us c o0 ) 0 ) ? ( rj_argext c r 0 o0 ) { ( rj_movsxd c 2 2 ) } {} } {}  // arg0 rides in rdx
     ( rj_restore_inv c )
     ( rj_b c 72 ) ( rj_b c 137 ) ( rj_b c 71 ) ( rj_b c 32 )  // mov [rdi+32],rax — the index, for the bridge
     : ( Vec i ) toBridge ( vec_new [i] )

@@ -4759,8 +4759,9 @@ unsafe @ __rj_try * InterpImpl it * ModuleImpl m * PFunc pf i fidx9 i guard → 
             ~ < k nloc { ( vec_push [i] lt ( __rj_ty ( vec_at [i] . wf locals k ) ) ) = k + k 1 }
         } {}
     } {}
-    // per record: a call's callee arity
+    // per record: a call's callee arity, and which of its parameters are i32
     : ( Vec i ) rsig ( vec_new [i] )
+    : ( Vec i ) pi32 ( vec_new [i] )
     : ( Vec i ) code . pf code
     : ~ i r 0
     ~ < r n {
@@ -4775,10 +4776,16 @@ unsafe @ __rj_try * InterpImpl it * ModuleImpl m * PFunc pf i fidx9 i guard → 
             : *FuncType cf # *FuncType cft
             : i canon ? == op 170 ( __jit_sigcanon m cft ) 0
             ( vec_push [i] rsig + + << canon 32 * ( vec_len [i] . cf params ) 65536 ( vec_len [i] . cf results ) )
-        } { ( vec_push [i] rsig -1 ) }
+            : i npar ( vec_len [i] . cf params )
+            : ~ i mask 0
+            : ~ i k 0
+            ~ < k npar { ? & < k 62 == 127 ( vec_at [i] . cf params k ) { = mask | mask << 1 k } {} = k + k 1 }
+            ( vec_push [i] pi32 mask )
+        } { ( vec_push [i] rsig -1 ) ( vec_push [i] pi32 0 ) }
         = r + r 1
     }
     : Rj c ( rj_new . pf code . pf aux . pf kv lt n . pf nlocals . pf nslots . pf nparams . pf nresults . pf sbase )
+    ( rj_set_pi32 c pi32 )
     : i nfd ( vec_len [s] . m funcs )
     : i sigoff + 16 * nfd 8
     : i tbloff + sigoff * + nfd . m num_import_funcs 8
