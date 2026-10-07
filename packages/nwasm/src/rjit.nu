@@ -2068,6 +2068,26 @@ $ `stdlib/core/vec.nu`
 // operand exchange
 @ rj_cmp Rj c i w i al i as i bl i bs i cc → i {
     ? & == al ( rjl_imm ) != bl ( rjl_imm ) { ( rj_cmp1 c w bl bs al as ) ^ ( rj_ccswap cc ) } {}
+    // above / below-or-equal read CF and ZF — two flag groups, an extra uop
+    // in every cmov and setcc on Intel; the exchanged compare reads CF alone
+    ? & | == cc 7 == cc 6 != bl ( rjl_imm ) { ( rj_cmp1 c w bl bs al as ) ^ ( rj_ccswap cc ) } {}
+    // against a constant k: a > k is a ≥ k + 1, a ≤ k is a < k + 1
+    ? & | == cc 7 == cc 6 == bl ( rjl_imm ) {
+        : ~ i k ( rj_kval c bs )
+        : ~ b ok F
+        ? == w 0 {
+            = k & k 4294967295
+            ? != k 4294967295 { = ok T = k ( rj_sx32 + k 1 ) } {}
+        } {
+            ? & != k -1 != k 9223372036854775807 { = ok ( rj_fits32 + k 1 ) = k + k 1 } {}
+        }
+        ? ok {
+            ? ( rj_isg al ) { ( rj_alu_ri c w 7 al k ) } {
+                ? == al ( rjl_mem ) { ( rj_alu_fi c w 7 as k ) } { ( rj_ldg c 0 al as 0 ) ( rj_alu_ri c w 7 0 k ) }
+            }
+            ^ ? == cc 7 3 2
+        } {}
+    } {}
     ( rj_cmp1 c w al as bl bs ) ^ cc
 }
 
