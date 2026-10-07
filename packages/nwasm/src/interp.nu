@@ -4756,6 +4756,7 @@ unsafe @ __rj_try * InterpImpl it * ModuleImpl m * PFunc pf i fidx9 i guard → 
     : i tbloff + sigoff * + nfd . m num_import_funcs 8
     ? ( rj_compile c rsig . m num_import_funcs . it jit_spcell ( nurl_code_trap_addr ) . it jit_co_fn . it jit_co_env fidx9 sigoff tbloff ) {
         ( __jit_install it m pf . c buf . c lab . c pta_off . c pta_stub . c cs_off . c cs_fx . c cs_kind n guard fidx9 )
+        ? & != 0 g_rjdbg == # i . pf jit -1 { ( nurl_eprint `[rjit] compiled but not installed fidx=` ) ( nurl_eprint ( nurl_str_int fidx9 ) ) ( nurl_eprint `\n` ) } {}
         // the register-argument entry, for sites the publication links
         : i foff ( rj_get c ( rjs_fastoff ) )
         : i fd - fidx9 . m num_import_funcs
@@ -4776,7 +4777,11 @@ unsafe @ __jit_try * InterpImpl it * ModuleImpl m * PFunc pf i fidx9 → v {
     // tier 8 emits no bounds checks: guard-page memory, or no memory at all
     ? & != 0 g_rjit | != 0 . it mem_raw != 1 . m has_mem {
         ( __jit_state_init it m )
-        ? != 0 ( nurl_guard_code_room ) { ? ( __rj_try it m pf fidx9 1 ) { ^ v } {} } {}
+        // fault-to-trap registration only for code that can touch a guard
+        // memory: with no memory there is nothing to fault on, and the
+        // registry exists only once a guard memory does
+        : i rguard ? != 0 . it mem_raw 1 0
+        ? | == 0 rguard != 0 ( nurl_guard_code_room ) { ? ( __rj_try it m pf fidx9 rguard ) { ^ v } {} } {}
     } {}
     ? == 0 ( __jit_ok pf ) { = . pf jit # s -1 ^ v } {}
     ( __jit_state_init it m )
@@ -5453,6 +5458,7 @@ unsafe @ __jit_callout * InterpImpl it * ModuleImpl m i st * i cd → i {
         // jrb is the raw args pointer (the entry passed it as the frame
         // base, argbase 0). g_jit off for the subtree — the slab stays
         // full for exactly as long as this call is running.
+        ? != 0 g_rjdbg { ( nurl_eprint `[rjit] slab exhausted entering fidx=` ) ( nurl_eprint ( nurl_str_int callee ) ) ( nurl_eprint `, interpreting its calls\n` ) } {}
         : s ct20 ( _module_func_type m callee )
         : ~ i cp20 0
         : ~ i cr20 0
@@ -5608,6 +5614,7 @@ unsafe @ __exec_func * InterpImpl it i fidx → v {
         ? & != # i jh 0 != # i jh -1 {
             : *i jrb ( vec_data [i] . fj regs )
             : i status ( __jit_run it m pfj # i jrb )
+            ? & != 0 g_rjdbg != 0 status { ( nurl_eprint `[rjit] outermost fidx=` ) ( nurl_eprint ( nurl_str_int fidx ) ) ( nurl_eprint ` status=` ) ( nurl_eprint ( nurl_str_int status ) ) ( nurl_eprint `\n` ) } {}
             // status 8 (slab full before anything ran) falls through to the
             // interpreter driver below — the args are still in the frame.
             ? != status 8 {

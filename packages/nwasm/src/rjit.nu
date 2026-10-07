@@ -2332,8 +2332,203 @@ $ `stdlib/core/vec.nu`
     ( rj_epilogue c )
 }
 
+// ── division by a constant ──────────────────────────────────────
+// Hacker's Delight magicu2, W = 32 (w 0) or 64 (w 1): unsigned division by
+// d (3 ≤ d < 2^W, not a power of two) is q = mulhu(x, M) >> s, or — the add
+// indicator a = 1 — the same with the W+1-bit magic M + 2^W. [M, a, s]
+@ rj_magicu i dd i w → ( Vec i ) {
+    : u64 d # u64 dd
+    : u64 mask ? == w 1 # u64 -1 # u64 4294967295
+    : u64 nc ? == w 1 # u64 9223372036854775807 # u64 2147483647
+    : u64 hb + nc # u64 1
+    : i wb ? == w 1 64 32
+    : ~ i a 0
+    : ~ i p - wb 1
+    : ~ u64 q / nc d
+    : ~ u64 r - nc * q d
+    : ~ u64 pw # u64 0
+    : ~ b go T
+    ~ go {
+        = p + p 1
+        ? == p wb { = pw # u64 1 } { = pw & * pw # u64 2 mask }
+        ? >= + r # u64 1 - d r {
+            ? >= q nc { = a 1 } {}
+            = q & + * q # u64 2 # u64 1 mask
+            = r & - + * r # u64 2 # u64 1 d mask
+        } {
+            ? >= q hb { = a 1 } {}
+            = q & * q # u64 2 mask
+            = r & + * r # u64 2 # u64 1 mask
+        }
+        : u64 delta & - - d # u64 1 r mask
+        = go & < p * 2 wb | < pw delta & == pw delta == r # u64 0
+    }
+    : ( Vec i ) out ( vec_new [i] )
+    ( vec_push [i] out # i & + q # u64 1 mask ) ( vec_push [i] out a ) ( vec_push [i] out - p wb )
+    ^ out
+}
+
+// Hacker's Delight magic (signed), W = 32 / 64, 3 ≤ |d| < 2^(W-1):
+// q = mulhs(x, M) (+ x when d > 0 and M < 0, − x when d < 0 and M > 0),
+// arithmetic-shifted by s, plus its own sign bit. M comes back as the
+// signed W-bit value, sign-extended. [M, s]
+@ rj_magics i dd i w → ( Vec i ) {
+    : u64 mask ? == w 1 # u64 -1 # u64 4294967295
+    : u64 two ? == w 1 # u64 9223372036854775808 # u64 2147483648
+    : i wb ? == w 1 64 32
+    : u64 ad # u64 ? < dd 0 - 0 dd dd
+    : u64 t + two # u64 ? < dd 0 1 0
+    : u64 anc - - t # u64 1 % t ad
+    : ~ i p - wb 1
+    : ~ u64 q1 / two anc
+    : ~ u64 r1 - two * q1 anc
+    : ~ u64 q2 / two ad
+    : ~ u64 r2 - two * q2 ad
+    : ~ b go T
+    ~ go {
+        = p + p 1
+        = q1 & * q1 # u64 2 mask
+        = r1 & * r1 # u64 2 mask
+        ? >= r1 anc { = q1 & + q1 # u64 1 mask = r1 - r1 anc } {}
+        = q2 & * q2 # u64 2 mask
+        = r2 & * r2 # u64 2 mask
+        ? >= r2 ad { = q2 & + q2 # u64 1 mask = r2 - r2 ad } {}
+        : u64 delta - ad r2
+        = go | < q1 delta & == q1 delta == r1 # u64 0
+    }
+    : ~ u64 m & + q2 # u64 1 mask
+    ? < dd 0 { = m & - # u64 0 m mask } {}
+    : ~ i mi # i m
+    ? == w 0 { = mi >> << mi 32 32 } {}
+    : ( Vec i ) out ( vec_new [i] )
+    ( vec_push [i] out mi ) ( vec_push [i] out - p wb )
+    ^ out
+}
+
+// reg ← operand; an i32 (w 0) widened from its low half — sign-extended
+// when sgn, zero-extended otherwise (a div/rem operand need not be canonical)
+@ rj_ldw Rj c i reg i loc i s i w i sgn → v {
+    ? == w 1 { ( rj_ldg c reg loc s 0 ) ^ v } {}
+    : i src ? ( rj_isg loc ) loc reg
+    ? ! ( rj_isg loc ) { ( rj_ldg c reg loc s 0 ) } {}
+    ? == sgn 1 { ( rj_movsxd c reg src ) } { ( rj_mov32 c reg src ) }
+}
+
+// one-operand group 3 on rcx: mul 4, imul 5, neg 3 (on `rm`)
+@ rj_grp3 Rj c i ext i rm → v { ( rj_rex c 1 0 0 rm 0 ) ( rj_b c 247 ) ( rj_modrr c ext rm ) }
+
+// rax ← rax * k (64-bit)
+@ rj_imul_k Rj c i k → v {
+    ? ( rj_fits32 k ) { ( rj_imul_rri c 1 0 0 k ) } { ( rj_ripop c 0 1 1 175 0 k ) }
+}
+
+// rax ← rcx − rax: the remainder from x (rcx) and q·d (rax)
+@ rj_rem_tail Rj c → v { ( rj_grp3 c 3 0 ) ( rj_alu_rr c 1 0 0 1 ) }  // neg rax; add rax,rcx
+
+// Division by a constant divisor: shifts for a power of two, otherwise a
+// multiply by the reciprocal (Hacker's Delight ch. 10) — no div, no zero
+// test. Leaves the record to rj_e_div (F) when the divisor is not a
+// constant, is 0, is −1 under a signed quotient (MIN / −1 traps), is the
+// signed minimum, or is ≥ 2^63 unsigned.
+@ rj_e_divk Rj c i r → b {
+    : i op ( rj_rw c r 0 )
+    : i ob ( rj_u c r 1 )
+    ? != ( rj_uloc c ob ) ( rjl_imm ) { ^ F } {}
+    : i w ? >= op 105 1 0
+    : b uns | | | == op 97 == op 99 == op 106 == op 108
+    : b rem | | | == op 98 == op 99 == op 107 == op 108
+    : ~ i d ( rj_kval c ( rj_us c ob ) )
+    ? == w 0 { = d ? uns & d 4294967295 ( rj_sx32 d ) } {}
+    ? == d 0 { ^ F } {}
+    ? & ! uns & == d -1 ! rem { ^ F } {}
+    ? & ! uns == d ? == w 1 -9223372036854775808 -2147483648 { ^ F } {}
+    ? & uns < d 0 { ^ F } {}  // ≥ 2^63
+    : i oa ( rj_u c r 0 )
+    : i od ( rj_dd c r 0 )
+    ? ! ( rj_dlive c od ) { ^ T } {}  // cannot trap: nothing to do
+    : i al ( rj_uloc c oa )
+    : i as ( rj_us c oa )
+    : i ad ? < d 0 - 0 d d
+    : b pow2 == 0 & ad - ad 1
+    : ~ i k 0
+    ? pow2 { ~ < << 1 k ad { = k + k 1 } } {}
+    ? == ad 1 {  // x / ±1 (+1 only here) and x rem ±1
+        ? rem { ( rj_rr c 0 0 0 49 0 0 0 ) } { ( rj_ldw c 0 al as w 1 ) }  // xor eax,eax / the canonical x
+    } {
+        ? uns {
+            ( rj_ldw c 1 al as w 0 )
+            ? pow2 {
+                ( rj_mov_rr c 1 0 1 )
+                ? rem {
+                    ? <= k 31 { ( rj_alu_ri c 1 4 0 - << 1 k 1 ) } { ( rj_shift_ri c 1 4 0 - 64 k ) ( rj_shift_ri c 1 5 0 - 64 k ) }
+                } { ( rj_shift_ri c 1 5 0 k ) }
+            } {
+                : ( Vec i ) mg ( rj_magicu d w )
+                : i m ( vec_at [i] mg 0 )
+                : i a ( vec_at [i] mg 1 )
+                : i s ( vec_at [i] mg 2 )
+                ? == w 0 {
+                    ? ( rj_fits32 m ) { ( rj_imul_rri c 1 0 1 m ) } { ( rj_mov_rr c 1 0 1 ) ( rj_ripop c 0 1 1 175 0 m ) }
+                    ? == a 0 { ( rj_shift_ri c 1 5 0 + 32 s ) } {
+                        ( rj_shift_ri c 1 5 0 32 ) ( rj_alu_rr c 1 0 0 1 )  // shr rax,32; add rax,rcx
+                        ? > s 0 { ( rj_shift_ri c 1 5 0 s ) } {}
+                    }
+                } {
+                    ( rj_mov_ri c 0 m 0 ) ( rj_grp3 c 4 1 )  // mov rax,M; mul rcx
+                    ? == a 0 {
+                        ? > s 0 { ( rj_shift_ri c 1 5 2 s ) } {}
+                        ( rj_mov_rr c 1 0 2 )
+                    } {
+                        ( rj_mov_rr c 1 0 1 ) ( rj_alu_rr c 1 5 0 2 )  // rax = x - t
+                        ( rj_shift_ri c 1 5 0 1 ) ( rj_alu_rr c 1 0 0 2 )  // (x - t) >> 1 + t
+                        ? > s 1 { ( rj_shift_ri c 1 5 0 - s 1 ) } {}
+                    }
+                }
+                ? rem {
+                    ( rj_imul_k c d ) ( rj_rem_tail c )
+                    ? & & == w 0 > d 2147483648 ( rj_dcanon c od ) { ( rj_movsxd c 0 0 ) } {}  // a u32 remainder ≥ 2^31
+                } {}
+            }
+        } {
+            ( rj_ldw c 1 al as w 1 )
+            ? pow2 {
+                ( rj_mov_rr c 1 0 1 ) ( rj_shift_ri c 1 7 0 63 ) ( rj_shift_ri c 1 5 0 - 64 k )  // t = 2^k − 1 when x < 0
+                ( rj_alu_rr c 1 0 0 1 )  // x + t
+                ? rem {
+                    ? <= k 31 { ( rj_alu_ri c 1 4 0 - 0 << 1 k ) } { ( rj_shift_ri c 1 7 0 k ) ( rj_shift_ri c 1 4 0 k ) }
+                    ( rj_rem_tail c )
+                } {
+                    ( rj_shift_ri c 1 7 0 k )
+                    ? < d 0 { ( rj_grp3 c 3 0 ) } {}
+                }
+            } {
+                : ( Vec i ) mg ( rj_magics d w )
+                : i m ( vec_at [i] mg 0 )
+                : i s ( vec_at [i] mg 1 )
+                : i hq ? == w 0 0 2  // where mulhs lands: rax (i32) / rdx (i64)
+                ? == w 0 {
+                    ( rj_imul_rri c 1 0 1 m ) ( rj_shift_ri c 1 7 0 32 )  // (x·M) >> 32
+                } {
+                    ( rj_mov_ri c 0 m 0 ) ( rj_grp3 c 5 1 )  // mov rax,M; imul rcx
+                }
+                ? & > d 0 < m 0 { ( rj_alu_rr c 1 0 hq 1 ) } {}
+                ? & < d 0 > m 0 { ( rj_alu_rr c 1 5 hq 1 ) } {}
+                ? > s 0 { ( rj_shift_ri c 1 7 hq s ) } {}
+                // q += q >>> 63, landing in rax: the sign goes to whichever of
+                // rax/rdx does not hold q, then add rax,rdx
+                : i ot ? == hq 0 2 0
+                ( rj_mov_rr c 1 ot hq ) ( rj_shift_ri c 1 5 ot 63 ) ( rj_alu_rr c 1 0 0 2 )
+                ? rem { ( rj_imul_k c d ) ( rj_rem_tail c ) } {}
+            }
+        }
+    }
+    ( rj_stg c ( rj_dloc c od ) ( rj_ds c od ) 0 )
+    ^ T
+}
+
 // ── lowering: the rest ──────────────────────────────────────────
 @ rj_e_div Rj c i r → v {
+    ? ( rj_e_divk c r ) { ^ v } {}
     : i op ( rj_rw c r 0 )
     : i w ? >= op 105 1 0
     : i oa ( rj_u c r 0 )

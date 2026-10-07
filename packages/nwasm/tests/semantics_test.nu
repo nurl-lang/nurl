@@ -5,7 +5,8 @@
 // saturating float→int truncation, unsigned i64 conversions, NaN-correct
 // comparisons and min/max, call_indirect signature checks, table.* ops,
 // passive segments + memory.init/data.drop, memory.copy/fill, memory.grow
-// limits, and the start section. Run from the package root:
+// limits, division by constants, and the start section. Run from the
+// package root:
 //   NURL_STDLIB=<repo> ../../nurl.sh tests/semantics_test.nu /tmp/st && /tmp/st
 
 $ `stdlib/core/string.nu`
@@ -62,6 +63,13 @@ $ `src/interp.nu`
 // copy with the runtime's backward one. Exports cp fl cpend cpz cpgrow
 // live loopcp; every expectation from the reference wasmtime.
 @ wasm_copyfill → s { ^ `0061736d0100000001150460037f7f7f017e6000017f6000017e60017f017f03080700000101020303050401010102073207026370000002666c0001056370656e6400020363707a000306637067726f770004046c6976650005066c6f6f70637000060aaf02071100200020012002fc0a000041002903000b1000200020012002fc0b0041002903000b150041fcff0341004104fc0a000041fcff032802000b1d0041808004418080044100fc0a00004180800441004100fc0b0041070b1a00410140001a4188800441004108fc0a0000418880042903000b5b03037f017e017c200041016a2101200041036c2102200041d5007321032000ac21042000b7210541e40041004108fc0a000041c80120014103fc0b00200120026a20032004a76a6a41c9012d00002005aa41e7002d00006a6a6a0b5f01027f034041102001360200411141104104fc0a0000412041114104fc0a0000412841294107fc0a0000413020012001fc0b002002412028020041282802006a6a2102200241302d00006a2102200141016a210120012000490d000b20020b0b0e010041000b084142434445464748002f046e616d65022002050600016101017802017903017a040177050166060300016e010169020173030601060100014c` }
+
+// Integer division and remainder by constants (both widths, both
+// signednesses, powers of two, an add-indicator magic, a u32 remainder
+// above 2^31 read back through i64.extend_i32_s): each export is
+// `x OP K` for one K; the JIT turns these into shifts and multiplies.
+// The exhaustive sweep is tests/divconst_diff.sh.
+@ wasm_divk → s { ^ `0061736d01000000010b0260017f017e60017e017e03111000000000000000000001010101010101079401100775333264313630000007753332723136300001057533326437000207753332726269670003057333326437000406733332646d330005067333327231300006057333326438000707733332726d31360008067336346431300009087336347231303030000a057536346437000b06753634723130000c06733634646d38000d0775363464703430000e06733634726d37000f0a9201100900200041a0016eac0b0900200041a00170ac0b0800200041076eac0b08002000417e70ac0b0800200041076dac0b08002000417d6dac0b08002000410a6fac0b0800200041086dac0b0800200041706fac0b07002000420a7f0b0800200042e807810b070020004207800b07002000420a820b0700200042787f0b0c00200042808080808020800b070020004279810b` }
 
 // Run `export` with the given i64-cell args; returns the top of the value
 // stack, or `traps` (out-param via sentinel −77777) when the module traps.
@@ -255,6 +263,73 @@ $ `src/interp.nu`
     ( ck `copy grown page:` ( ev0 cf `cpgrow` ) 5208208757389214273 )
     ( ck `live across:    ` ( ev1 cf `live` 10 ) 235 )
     ( ck `copy loop 300:  ` ( ev1 cf `loopcp` 300 ) 78436 )
+
+    // ── division / remainder by a constant ──
+    : s dk ( wasm_divk )
+    ( ck `u32d160 x0:     ` ( ev1 dk `u32d160` 2147483647 ) 13421772 )
+    ( ck `u32d160 x1:     ` ( ev1 dk `u32d160` -2147483648 ) 13421772 )
+    ( ck `u32d160 x2:     ` ( ev1 dk `u32d160` -1 ) 26843545 )
+    ( ck `u32d160 x3:     ` ( ev1 dk `u32d160` 12345 ) 77 )
+    ( ck `u32r160 x0:     ` ( ev1 dk `u32r160` 2147483647 ) 127 )
+    ( ck `u32r160 x1:     ` ( ev1 dk `u32r160` -2147483648 ) 128 )
+    ( ck `u32r160 x2:     ` ( ev1 dk `u32r160` -1 ) 95 )
+    ( ck `u32r160 x3:     ` ( ev1 dk `u32r160` 12345 ) 25 )
+    ( ck `u32d7 x0:       ` ( ev1 dk `u32d7` 2147483647 ) 306783378 )
+    ( ck `u32d7 x1:       ` ( ev1 dk `u32d7` -2147483648 ) 306783378 )
+    ( ck `u32d7 x2:       ` ( ev1 dk `u32d7` -1 ) 613566756 )
+    ( ck `u32d7 x3:       ` ( ev1 dk `u32d7` 12345 ) 1763 )
+    ( ck `u32rbig x0:     ` ( ev1 dk `u32rbig` 2147483647 ) 2147483647 )
+    ( ck `u32rbig x1:     ` ( ev1 dk `u32rbig` -2147483648 ) -2147483648 )
+    ( ck `u32rbig x2:     ` ( ev1 dk `u32rbig` -1 ) 1 )
+    ( ck `u32rbig x3:     ` ( ev1 dk `u32rbig` 12345 ) 12345 )
+    ( ck `s32d7 x0:       ` ( ev1 dk `s32d7` 2147483647 ) 306783378 )
+    ( ck `s32d7 x1:       ` ( ev1 dk `s32d7` -2147483648 ) -306783378 )
+    ( ck `s32d7 x2:       ` ( ev1 dk `s32d7` -1 ) 0 )
+    ( ck `s32d7 x3:       ` ( ev1 dk `s32d7` 12345 ) 1763 )
+    ( ck `s32dm3 x0:      ` ( ev1 dk `s32dm3` 2147483647 ) -715827882 )
+    ( ck `s32dm3 x1:      ` ( ev1 dk `s32dm3` -2147483648 ) 715827882 )
+    ( ck `s32dm3 x2:      ` ( ev1 dk `s32dm3` -1 ) 0 )
+    ( ck `s32dm3 x3:      ` ( ev1 dk `s32dm3` 12345 ) -4115 )
+    ( ck `s32r10 x0:      ` ( ev1 dk `s32r10` 2147483647 ) 7 )
+    ( ck `s32r10 x1:      ` ( ev1 dk `s32r10` -2147483648 ) -8 )
+    ( ck `s32r10 x2:      ` ( ev1 dk `s32r10` -1 ) -1 )
+    ( ck `s32r10 x3:      ` ( ev1 dk `s32r10` 12345 ) 5 )
+    ( ck `s32d8 x0:       ` ( ev1 dk `s32d8` 2147483647 ) 268435455 )
+    ( ck `s32d8 x1:       ` ( ev1 dk `s32d8` -2147483648 ) -268435456 )
+    ( ck `s32d8 x2:       ` ( ev1 dk `s32d8` -1 ) 0 )
+    ( ck `s32d8 x3:       ` ( ev1 dk `s32d8` 12345 ) 1543 )
+    ( ck `s32rm16 x0:     ` ( ev1 dk `s32rm16` 2147483647 ) 15 )
+    ( ck `s32rm16 x1:     ` ( ev1 dk `s32rm16` -2147483648 ) 0 )
+    ( ck `s32rm16 x2:     ` ( ev1 dk `s32rm16` -1 ) -1 )
+    ( ck `s32rm16 x3:     ` ( ev1 dk `s32rm16` 12345 ) 9 )
+    ( ck `s64d10 x0:      ` ( ev1 dk `s64d10` -9223372036854775808 ) -922337203685477580 )
+    ( ck `s64d10 x1:      ` ( ev1 dk `s64d10` 9223372036854775807 ) 922337203685477580 )
+    ( ck `s64d10 x2:      ` ( ev1 dk `s64d10` -1 ) 0 )
+    ( ck `s64d10 x3:      ` ( ev1 dk `s64d10` -123456789 ) -12345678 )
+    ( ck `s64r1000 x0:    ` ( ev1 dk `s64r1000` -9223372036854775808 ) -808 )
+    ( ck `s64r1000 x1:    ` ( ev1 dk `s64r1000` 9223372036854775807 ) 807 )
+    ( ck `s64r1000 x2:    ` ( ev1 dk `s64r1000` -1 ) -1 )
+    ( ck `s64r1000 x3:    ` ( ev1 dk `s64r1000` -123456789 ) -789 )
+    ( ck `u64d7 x0:       ` ( ev1 dk `u64d7` -9223372036854775808 ) 1317624576693539401 )
+    ( ck `u64d7 x1:       ` ( ev1 dk `u64d7` 9223372036854775807 ) 1317624576693539401 )
+    ( ck `u64d7 x2:       ` ( ev1 dk `u64d7` -1 ) 2635249153387078802 )
+    ( ck `u64d7 x3:       ` ( ev1 dk `u64d7` -123456789 ) 2635249153369442118 )
+    ( ck `u64r10 x0:      ` ( ev1 dk `u64r10` -9223372036854775808 ) 8 )
+    ( ck `u64r10 x1:      ` ( ev1 dk `u64r10` 9223372036854775807 ) 7 )
+    ( ck `u64r10 x2:      ` ( ev1 dk `u64r10` -1 ) 5 )
+    ( ck `u64r10 x3:      ` ( ev1 dk `u64r10` -123456789 ) 7 )
+    ( ck `s64dm8 x0:      ` ( ev1 dk `s64dm8` -9223372036854775808 ) 1152921504606846976 )
+    ( ck `s64dm8 x1:      ` ( ev1 dk `s64dm8` 9223372036854775807 ) -1152921504606846975 )
+    ( ck `s64dm8 x2:      ` ( ev1 dk `s64dm8` -1 ) 0 )
+    ( ck `s64dm8 x3:      ` ( ev1 dk `s64dm8` -123456789 ) 15432098 )
+    ( ck `u64dp40 x0:     ` ( ev1 dk `u64dp40` -9223372036854775808 ) 8388608 )
+    ( ck `u64dp40 x1:     ` ( ev1 dk `u64dp40` 9223372036854775807 ) 8388607 )
+    ( ck `u64dp40 x2:     ` ( ev1 dk `u64dp40` -1 ) 16777215 )
+    ( ck `u64dp40 x3:     ` ( ev1 dk `u64dp40` -123456789 ) 16777215 )
+    ( ck `s64rm7 x0:      ` ( ev1 dk `s64rm7` -9223372036854775808 ) -1 )
+    ( ck `s64rm7 x1:      ` ( ev1 dk `s64rm7` 9223372036854775807 ) 0 )
+    ( ck `s64rm7 x2:      ` ( ev1 dk `s64rm7` -1 ) -1 )
+    ( ck `s64rm7 x3:      ` ( ev1 dk `s64rm7` -123456789 ) -1 )
 
     // ── start section runs at instantiation ──
     ( ck `start section:  ` ( ev0 ( wasm_start ) `g` ) 99 )
