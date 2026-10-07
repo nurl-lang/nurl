@@ -3332,11 +3332,70 @@ $ `stdlib/core/vec.nu`
     }
 }
 
+// memory.copy (fc 10) and memory.fill (fc 11) without the bridge: the
+// operands in rax/rdx/rcx, both bounds checked up front against the
+// context's memory size (no partial writes), then rep movsb / rep stosb.
+// An out-of-bounds operand — and a copy whose destination starts inside
+// its own source, which a forward copy would smear — takes the bridge,
+// which traps with the interpreter's message or does the overlap right.
+// Returns the bridge-path sites (empty: no fast path for this op).
+@ rj_fcb_fast Rj c i r → ( Vec i ) {
+    : ( Vec i ) br ( vec_new [i] )
+    : i sub ( rj_rw c r 1 )
+    ? & != sub 10 != sub 11 { ^ br } {}
+    : ( Vec i ) dl ( vec_new [i] )
+    : ( Vec i ) ds ( vec_new [i] )
+    : ( Vec i ) sl ( vec_new [i] )
+    : ( Vec i ) ss ( vec_new [i] )
+    : ~ i k 0
+    ~ < k 3 {  // dst → rax, src / value → rdx, n → rcx
+        : i o ( rj_u c r k )
+        ( vec_push [i] dl ? == k 0 0 ? == k 1 2 1 ) ( vec_push [i] ds -1 )
+        ( vec_push [i] sl ( rj_uloc c o ) ) ( vec_push [i] ss ( rj_us c o ) )
+        = k + k 1
+    }
+    ( rj_pmove c dl ds sl ss )
+    ( rj_mov32 c 0 0 ) ( rj_mov32 c 1 1 )  // u32 views (the value keeps its low byte)
+    ? == sub 10 { ( rj_mov32 c 2 2 ) } {}
+    ( rj_restore_ctx c )
+    ( rj_rm c 0 1 0 139 8 7 -1 0 16 0 )  // mov r8,[rdi+16] — the memory size in bytes
+    // scratch: r8 and r10 (r9 may be the reserved globals base)
+    ( rj_lea c 1 10 0 1 0 0 ) ( rj_alu_rr c 1 7 10 8 )  // lea r10,[rax+rcx]; cmp r10,r8
+    ( vec_push [i] br ( rj_jcc_fwd c 7 ) )  // ja → bridge
+    ? == sub 10 {
+        ( rj_lea c 1 10 2 1 0 0 ) ( rj_alu_rr c 1 7 10 8 )  // lea r10,[rdx+rcx]; cmp r10,r8
+        ( vec_push [i] br ( rj_jcc_fwd c 7 ) )
+        ( rj_mov_rr c 1 10 0 ) ( rj_alu_rr c 1 5 10 2 ) ( rj_alu_rr c 1 7 10 1 )  // r10 = dst - src; cmp r10,rcx
+        ( vec_push [i] br ( rj_jcc_fwd c 2 ) )  // jb: dst inside [src, src+n) → bridge
+    } {}
+    ( rj_push c 7 ) ( rj_push c 6 )
+    ( rj_rm c 0 1 0 141 7 11 0 0 0 0 )  // lea rdi,[r11+rax]
+    ? == sub 10 {
+        ( rj_rm c 0 1 0 141 6 11 2 0 0 0 )  // lea rsi,[r11+rdx]
+        ( rj_b c 243 ) ( rj_b c 164 )  // rep movsb
+    } {
+        ( rj_mov_rr c 1 0 2 )  // al = the fill byte
+        ( rj_b c 243 ) ( rj_b c 170 )  // rep stosb
+    }
+    ( rj_pop c 6 ) ( rj_pop c 7 )
+    ^ br
+}
+
 @ rj_e_fcb Rj c i r → v {
     : i cb ( rj_rw c r 3 )
     : i d ( rj_rw c r 4 )
+    : ( Vec i ) br ( rj_fcb_fast c r )
+    : i nbr ( vec_len [i] br )
+    : ~ i done -1
+    ? > nbr 0 {
+        = done ( rj_jmp_fwd c )
+        : ~ i q 0
+        ~ < q nbr { ( rj_land c ( vec_at [i] br q ) ) = q + q 1 }
+        // the bridge reads its operands from the homes: they are in rax/rdx/rcx
+        ( rj_stf c 1 cb 0 ) ( rj_stf c 1 + cb 1 2 ) ( rj_stf c 1 + cb 2 1 )
+    } {}
     : ~ i k 0
-    ~ < k >> d 1 {
+    ~ & == nbr 0 < k >> d 1 {
         : i o ( rj_u c r k )
         ( rj_move c ( rjl_mem ) + cb k ( rj_uloc c o ) ( rj_us c o ) )
         = k + k 1
@@ -3349,4 +3408,5 @@ $ `stdlib/core/vec.nu`
     ( rj_frame_end c ) ( rj_b c 73 ) ( rj_b c 137 ) ( rj_b c 8 )  // mov [r8],rcx
     ( rj_callout c 19 )
     ( rj_reload_defs c r )
+    ? >= done 0 { ( rj_land c done ) } {}
 }

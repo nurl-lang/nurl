@@ -4,8 +4,8 @@
 // Covers: multi-value blocks/branches, integer div/rem traps, trapping and
 // saturating float→int truncation, unsigned i64 conversions, NaN-correct
 // comparisons and min/max, call_indirect signature checks, table.* ops,
-// passive segments + memory.init/data.drop, memory.grow limits, and the
-// start section. Run from the package root:
+// passive segments + memory.init/data.drop, memory.copy/fill, memory.grow
+// limits, and the start section. Run from the package root:
 //   NURL_STDLIB=<repo> ../../nurl.sh tests/semantics_test.nu /tmp/st && /tmp/st
 
 $ `stdlib/core/string.nu`
@@ -54,6 +54,14 @@ $ `src/interp.nu`
 
 // start section sets a global to 99; export g reads it back
 @ wasm_start → s { ^ `0061736d010000000108026000006000017f03030200010606017f0141000b070501016700010801000a0e02070041e30024000b040023000b0011046e616d65010401000173070401000167` }
+
+// tests/wat/copyfill.wat: memory.copy / memory.fill — both overlap
+// directions, adjacent and empty ranges, the memory's last bytes, every
+// operand out of bounds (negative i32s included), a freshly grown page,
+// values live across the operations, and a hot loop mixing the inline
+// copy with the runtime's backward one. Exports cp fl cpend cpz cpgrow
+// live loopcp; every expectation from the reference wasmtime.
+@ wasm_copyfill → s { ^ `0061736d0100000001150460037f7f7f017e6000017f6000017e60017f017f03080700000101020303050401010102073207026370000002666c0001056370656e6400020363707a000306637067726f770004046c6976650005066c6f6f70637000060aaf02071100200020012002fc0a000041002903000b1000200020012002fc0b0041002903000b150041fcff0341004104fc0a000041fcff032802000b1d0041808004418080044100fc0a00004180800441004100fc0b0041070b1a00410140001a4188800441004108fc0a0000418880042903000b5b03037f017e017c200041016a2101200041036c2102200041d5007321032000ac21042000b7210541e40041004108fc0a000041c80120014103fc0b00200120026a20032004a76a6a41c9012d00002005aa41e7002d00006a6a6a0b5f01027f034041102001360200411141104104fc0a0000412041114104fc0a0000412841294107fc0a0000413020012001fc0b002002412028020041282802006a6a2102200241302d00006a2102200141016a210120012000490d000b20020b0b0e010041000b084142434445464748002f046e616d65022002050600016101017802017903017a040177050166060300016e010169020173030601060100014c` }
 
 // Run `export` with the given i64-cell args; returns the top of the value
 // stack, or `traps` (out-param via sentinel −77777) when the module traps.
@@ -132,6 +140,16 @@ $ `src/interp.nu`
     : ( Vec i ) a ( vec_new [i] ) : i r ( ev hex export a T ) ^ r
 }
 
+@ ev3 s hex s export i x i y i z → i {
+    : ( Vec i ) a ( vec_new [i] ) ( vec_push [i] a x ) ( vec_push [i] a y ) ( vec_push [i] a z )
+    : i r ( ev hex export a F ) ^ r
+}
+
+@ trap3 s hex s export i x i y i z → i {
+    : ( Vec i ) a ( vec_new [i] ) ( vec_push [i] a x ) ( vec_push [i] a y ) ( vec_push [i] a z )
+    : i r ( ev hex export a T ) ^ r
+}
+
 @ trap1 s hex s export i x → i {
     : ( Vec i ) a ( vec_new [i] ) ( vec_push [i] a x )
     : i r ( ev hex export a T ) ^ r
@@ -207,6 +225,36 @@ $ `src/interp.nu`
     ( ck `grow 1 (max 2): ` ( ev1 ( wasm_bulk ) `grow` 1 ) 1 )
     ( ck `grow 5 → -1:    ` ( ev1 ( wasm_bulk ) `grow` 5 ) -1 )
     ( ck `size:           ` ( ev0 ( wasm_bulk ) `size` ) 1 )
+
+    // ── memory.copy / memory.fill: overlap, bounds, live values ──
+    : s cf ( wasm_copyfill )
+    ( ck `copy d>s overlap:` ( ev3 cf `cp` 2 0 6 ) 5063528411713061441 )
+    ( ck `copy d<s overlap:` ( ev3 cf `cp` 0 2 6 ) 5208210965036090435 )
+    ( ck `copy d==s:      ` ( ev3 cf `cp` 0 0 8 ) 5208208757389214273 )
+    ( ck `copy n=0:       ` ( ev3 cf `cp` 1 0 0 ) 5208208757389214273 )
+    ( ck `copy adjacent:  ` ( ev3 cf `cp` 4 0 4 ) 4918848066104279617 )
+    ( ck `copy overlap 1: ` ( ev3 cf `cp` 3 0 4 ) 5207361020988965441 )
+    ( ck `copy 0 @ end:   ` ( ev3 cf `cp` 65536 0 0 ) 5208208757389214273 )
+    ( ck `copy to end:    ` ( ev3 cf `cp` 65528 0 8 ) 5208208757389214273 )
+    ( ck `copy dst oob:   ` ( trap3 cf `cp` 65534 0 4 ) 1 )
+    ( ck `copy src oob:   ` ( trap3 cf `cp` 0 65534 4 ) 1 )
+    ( ck `copy dst -1:    ` ( trap3 cf `cp` -1 0 1 ) 1 )
+    ( ck `copy src -1:    ` ( trap3 cf `cp` 0 -1 1 ) 1 )
+    ( ck `copy n -1:      ` ( trap3 cf `cp` 0 0 -1 ) 1 )
+    ( ck `copy 0 past end:` ( trap3 cf `cp` 65537 0 0 ) 1 )
+    ( ck `fill low byte:  ` ( ev3 cf `fl` 1 4660 3 ) 5208208757119792193 )
+    ( ck `fill -1:        ` ( ev3 cf `fl` 0 -1 2 ) 5208208757389262847 )
+    ( ck `fill 0 @ end:   ` ( ev3 cf `fl` 65536 7 0 ) 5208208757389214273 )
+    ( ck `fill to end:    ` ( ev3 cf `fl` 65534 1 2 ) 5208208757389214273 )
+    ( ck `fill oob:       ` ( trap3 cf `fl` 65535 0 2 ) 1 )
+    ( ck `fill dst -1:    ` ( trap3 cf `fl` -1 0 1 ) 1 )
+    ( ck `fill n -1:      ` ( trap3 cf `fl` 0 0 -1 ) 1 )
+    ( ck `fill 0 past end:` ( trap3 cf `fl` 65537 7 0 ) 1 )
+    ( ck `copy last bytes:` ( ev0 cf `cpend` ) 1145258561 )
+    ( ck `copy+fill empty:` ( ev0 cf `cpz` ) 7 )
+    ( ck `copy grown page:` ( ev0 cf `cpgrow` ) 5208208757389214273 )
+    ( ck `live across:    ` ( ev1 cf `live` 10 ) 235 )
+    ( ck `copy loop 300:  ` ( ev1 cf `loopcp` 300 ) 78436 )
 
     // ── start section runs at instantiation ──
     ( ck `start section:  ` ( ev0 ( wasm_start ) `g` ) 99 )

@@ -599,7 +599,13 @@ unsafe @ __jit_state_free i ctxs i slab i spcell i coenv i arena → v {
     : ~ i cb ctxs
     ~ != 0 cb { : *i c # *i cb : i nx . c 0 ( nurl_free # s cb ) = cb nx }
     : ~ i ch arena
-    ~ != 0 ch { : *i h # *i ch : i nx . h 0 ( nurl_code_free # *u ch . h 1 ) = ch nx }
+    ~ != 0 ch {
+        : *i h # *i ch
+        : i nx . h 0
+        : i sz . h 1
+        ? < sz 0 { ( nurl_vmem_release # *u ch - 0 sz ) } { ( nurl_code_free # *u ch sz ) }
+        = ch nx
+    }
     ? != 0 slab { ( nurl_free # s slab ) } {}
     ? != 0 spcell { ( nurl_free # s spcell ) } {}
     ? != 0 coenv { ( nurl_closure_drop # *u coenv ) } {}
@@ -4541,6 +4547,25 @@ unsafe @ __jit_pin_select * PFunc pf ( Vec i ) xpins i guard → ( Vec i ) {
 // pages under it writable (0 when no executable memory exists).
 unsafe @ __jit_arena_alloc * InterpImpl it i n → i {
     : i need & + n 63 -64
+    // First use: one 1 GiB address-space reservation, committed page by
+    // page as code arrives, so every function stays within a rel32 call of
+    // every other — separate mappings landed gigabytes apart (the guard
+    // memory's reservation between them) and left direct calls on their
+    // stubs. A negative size in the header marks it for vmem release.
+    ? == 0 . it jit_arena {
+        : i rspan 1073741824
+        : *u rv ( nurl_vmem_reserve rspan )
+        ? != # i rv 0 {
+            ? == 0 ( mprotect rv 4096 # i32 3 ) {
+                : *i rh # *i rv
+                = . rh 0 0
+                = . rh 1 - 0 rspan
+                = . it jit_arena # i rv
+                = . it jit_arena_used 64
+                = . it jit_arena_cap rspan
+            } { ( nurl_vmem_release rv rspan ) }
+        } {}
+    } {}
     ? | == 0 . it jit_arena > + . it jit_arena_used need . it jit_arena_cap {
         : i want + need 64
         : i csz ? > want 1048576 ( __jit_pg_hi want ) 1048576
