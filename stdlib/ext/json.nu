@@ -562,6 +562,10 @@ $ `stdlib/core/vec.nu`
 @ __jp_span_special s span i n → i {
     : *u p # *u span
     : ~ i k 0
+    // byte by byte up to an 8-byte boundary, so every word load is aligned
+    // (a misaligned one traps into emulation on some targets)
+    : i head & - 0 # i span 7
+    ~ & < k head < k n { ? ( __jp_special & # i . p k 255 ) { ^ k } {} = k + k 1 }
     ~ <= + k 8 n {
         : *u64 wp # *u64 + # i p k
         : u64 w . wp 0
