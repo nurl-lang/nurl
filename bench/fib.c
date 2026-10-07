@@ -8,6 +8,9 @@
 // Contract: the process prints exactly one line — fib(35) = 9227465.
 #include <stdio.h>
 
+// The workload multiplier: bench/wasmbench.sh --scale N rewrites this 1.
+#define BENCH_SCALE 1ULL
+
 static long long fib(long long n) {
   if (n < 2) {
     return n;
@@ -16,6 +19,12 @@ static long long fib(long long n) {
 }
 
 int main(void) {
-  printf("%lld\n", fib(35));
+  // BENCH_SCALE calls of fib(35), summed. The argument is 35 + (total >> 62):
+  // always 35, but not provably constant, so the call cannot be hoisted.
+  long long total = 0;
+  for (unsigned long long rep = 0; rep < BENCH_SCALE; ++rep) {
+    total += fib(35 + (total >> 62));
+  }
+  printf("%lld\n", total);
   return 0;
 }

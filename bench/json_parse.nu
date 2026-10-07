@@ -3,8 +3,10 @@
 $ `stdlib/ext/json.nu`
 
 @ main → i {
+    // The workload multiplier: bench/wasmbench.sh --scale N rewrites this 1.
+    : u64 BENCH_SCALE 1
     : s src ( nurl_read_file `bench/data.json` )
-    : ~ i iters 20
+    : ~ i iters * 20 # i BENCH_SCALE
     : ~ i ok 0
     ~ > iters 0 {
         : !Json JsonError r ( json_parse src )

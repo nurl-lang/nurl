@@ -137,6 +137,8 @@ unsafe @ zero_block * u64 p i n → v {
 }
 
 unsafe @ main → i {
+    // The workload multiplier: bench/wasmbench.sh --scale N rewrites this 1.
+    : u64 BENCH_SCALE 1
     : i cap 256
     : i bloom_words 64
     : i compact_chunk 64
@@ -159,7 +161,7 @@ unsafe @ main → i {
     = . out 0 # u64 0
 
     : u64 build_rows 160
-    : u64 total_queries 5000000
+    : u64 total_queries * 5000000 BENCH_SCALE
     : b use_partitioned & >= build_rows 128 >= total_queries 200000
 
     : ~ u64 row 0

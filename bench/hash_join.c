@@ -4,6 +4,9 @@
 #include <stdint.h>
 #include <stdio.h>
 
+// The workload multiplier: bench/wasmbench.sh --scale N rewrites this 1.
+#define BENCH_SCALE 1ULL
+
 static inline void emit_checksum(uint64_t value) {
   // Every peer prints this one line and nothing else; the 63-bit mask
   // keeps the value printable by the languages without unsigned 64-bit
@@ -136,7 +139,7 @@ int main(void) {
   uint64_t built_keys[BUILD_ROWS] = {0};
 
   const uint64_t build_rows = BUILD_ROWS;
-  const uint64_t total_queries = 5000000ULL;
+  const uint64_t total_queries = 5000000ULL * BENCH_SCALE;
   const bool use_partitioned = (build_rows >= 128ULL) && (total_queries >= 200000ULL);
 
   for (uint64_t i = 0; i < build_rows; ++i) {

@@ -1,5 +1,8 @@
 // benchmark-contract: binary-search;seed=123456789;queries=5000000;values=even-0..126;algorithm=lower-bound
-const ITERATIONS: u64 = 5_000_000;
+
+// The workload multiplier: bench/wasmbench.sh --scale N rewrites this 1.
+const BENCH_SCALE: u64 = 1;
+const ITERATIONS: u64 = 5_000_000 * BENCH_SCALE;
 const SEED: u64 = 123_456_789;
 
 fn finish(value: u64) -> ! {

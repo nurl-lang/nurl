@@ -34,6 +34,10 @@ on:
         description: 'Also run C/Rust on the NURL interpreter (roughly triples the run)'
         type: boolean
         default: false
+      scale:
+        description: 'Workload multiplier N (1 = the published contract; 100 amortises start-up and JIT compile). N≠1 writes WASMRESULTS-xN.md beside the x1 report.'
+        required: false
+        default: '1'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -156,6 +160,30 @@ jobs:
       - name: Build nurlc (bootstrap fixed point + runtime.o)
         run: ./build.sh --no-tests
 
+      - name: Resolve the workload scale and its report files
+        # The scale reaches the shell through the environment, never spliced
+        # into the script text. x1 writes the published WASMRESULTS.md; any
+        # other N its own WASMRESULTS-xN.md (wasmbench.sh picks the same
+        # names), so the x1 table is never replaced by a scaled one.
+        env:
+          SCALE: ${{ inputs.scale }}
+        run: |
+          SCALE="${SCALE:-1}"
+          if [[ ! "$SCALE" =~ ^[1-9][0-9]{0,8}$ ]]; then
+            echo "::error::scale must be a positive integer below 10^9, got '$SCALE'"
+            exit 1
+          fi
+          if [[ "$SCALE" == 1 ]]; then
+            md=bench/WASMRESULTS.md; json=bench/results/wasm-latest.json
+          else
+            md="bench/WASMRESULTS-x$SCALE.md"; json="bench/results/wasm-x$SCALE.json"
+          fi
+          {
+            echo "BENCH_SCALE=$SCALE"
+            echo "REPORT_MD=$md"
+            echo "REPORT_JSON=$json"
+          } >> "$GITHUB_ENV"
+
       - name: Run the wasm benchmark
         env:
           # Read by wasmbench.sh and written into the report so the table
@@ -175,16 +203,17 @@ jobs:
           if [[ '${{ inputs.nwasm_all_langs }}' == 'true' ]]; then
             args+=(--nwasm-all-langs)
           fi
+          args+=(--scale "$BENCH_SCALE")
           echo "running: ./bench/wasmbench.sh ${args[*]}"
           ./bench/wasmbench.sh "${args[@]}"
 
       - name: Publish the report to the run summary
         if: always()
         run: |
-          if [[ -f bench/WASMRESULTS.md ]]; then
-            cat bench/WASMRESULTS.md >> "$GITHUB_STEP_SUMMARY"
+          if [[ -f "$REPORT_MD" ]]; then
+            cat "$REPORT_MD" >> "$GITHUB_STEP_SUMMARY"
           else
-            echo '`bench/WASMRESULTS.md` was not produced — the run failed before the report stage.' \
+            echo "\`$REPORT_MD\` was not produced — the run failed before the report stage." \
               >> "$GITHUB_STEP_SUMMARY"
           fi
 
@@ -194,8 +223,8 @@ jobs:
         with:
           name: wasm-bench-results-${{ github.run_id }}
           path: |
-            bench/results/wasm-latest.json
-            bench/WASMRESULTS.md
+            ${{ env.REPORT_JSON }}
+            ${{ env.REPORT_MD }}
           retention-days: 90
 
       - name: Commit the refreshed report to main
@@ -210,10 +239,14 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.BENCH_PUSH_TOKEN || github.token }}
         run: |
-          if git diff --quiet -- bench/results/wasm-latest.json bench/WASMRESULTS.md; then
+          # a xN report may be new: add it before asking whether it changed
+          git add -N -- "$REPORT_JSON" "$REPORT_MD"
+          if git diff --quiet -- "$REPORT_JSON" "$REPORT_MD"; then
             echo "report unchanged — nothing to commit."
             exit 0
           fi
+          scale_tag=""
+          [[ "$BENCH_SCALE" == 1 ]] || scale_tag=" x$BENCH_SCALE"
 
           today="$(date -u +%Y-%m-%d)"
           git config user.name 'github-actions[bot]'
@@ -228,25 +261,29 @@ jobs:
             "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
 
           git fetch origin main
-          git stash push -- bench/results/wasm-latest.json bench/WASMRESULTS.md
-          git checkout -B main origin/main
-          git checkout stash@{0} -- bench/results/wasm-latest.json bench/WASMRESULTS.md
-          git stash drop
+          keep_pre="$(mktemp -d)"
+          cp "$REPORT_JSON" "$keep_pre/report.json"
+          cp "$REPORT_MD" "$keep_pre/report.md"
+          git reset -q -- "$REPORT_JSON" "$REPORT_MD"
+          git checkout -f -B main origin/main
+          mkdir -p "$(dirname "$REPORT_JSON")"
+          cp "$keep_pre/report.json" "$REPORT_JSON"
+          cp "$keep_pre/report.md" "$REPORT_MD"
 
           # [skip ci] because this commit is two data files and nothing
           # else — no need to spin up the full CI matrix against unchanged
           # code. The report was produced by a run that passed the
           # correctness gate before committing.
-          git add bench/results/wasm-latest.json bench/WASMRESULTS.md
-          git commit -m "bench: refresh WASMRESULTS ($today) [skip ci]"
+          git add -- "$REPORT_JSON" "$REPORT_MD"
+          git commit -m "bench: refresh WASMRESULTS$scale_tag ($today) [skip ci]"
 
           # Keep the measured files OUTSIDE the worktree for the replay
           # below. Stashing them cannot work there: by that point they are
           # committed, so `git stash push -- <paths>` finds nothing to save
           # and the replay would silently drop the run's results.
           keep="$(mktemp -d)"
-          cp bench/results/wasm-latest.json "$keep/wasm-latest.json"
-          cp bench/WASMRESULTS.md "$keep/WASMRESULTS.md"
+          cp "$REPORT_JSON" "$keep/report.json"
+          cp "$REPORT_MD" "$keep/report.md"
 
           # The suite takes hours; another merge can land in that window.
           # Replay the two files onto the new tip rather than failing — the
@@ -256,13 +293,14 @@ jobs:
             echo "push refused (attempt $attempt) — replaying onto the new tip"
             git fetch origin main
             git reset --hard origin/main
-            cp "$keep/wasm-latest.json" bench/results/wasm-latest.json
-            cp "$keep/WASMRESULTS.md" bench/WASMRESULTS.md
-            if git diff --quiet -- bench/results/wasm-latest.json bench/WASMRESULTS.md; then
+            cp "$keep/report.json" "$REPORT_JSON"
+            cp "$keep/report.md" "$REPORT_MD"
+            git add -- "$REPORT_JSON" "$REPORT_MD"
+            if git diff --cached --quiet -- "$REPORT_JSON" "$REPORT_MD"; then
               echo "the new tip already carries this report — nothing to do."
               exit 0
             fi
-            git commit -am "bench: refresh WASMRESULTS ($today) [skip ci]"
+            git commit -m "bench: refresh WASMRESULTS$scale_tag ($today) [skip ci]"
           done
           echo "::error::could not push refreshed report after 3 attempts."
           echo "::error::If this is GH013, BENCH_PUSH_TOKEN's account is not in the"

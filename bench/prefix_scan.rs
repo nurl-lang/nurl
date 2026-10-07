@@ -1,5 +1,8 @@
 // benchmark-contract: prefix-scan;seed=123456789;batches=1000000;width=16;value-mask=65535
-const BATCHES: u64 = 1_000_000;
+
+// The workload multiplier: bench/wasmbench.sh --scale N rewrites this 1.
+const BENCH_SCALE: u64 = 1;
+const BATCHES: u64 = 1_000_000 * BENCH_SCALE;
 const SEED: u64 = 123_456_789;
 
 fn finish(value: u64) -> ! {

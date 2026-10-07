@@ -1,4 +1,7 @@
 // benchmark-contract: bloom-filter;seed=123456789;build=10000;queries=4000000;words=256;lanes=4
+
+// The workload multiplier: bench/wasmbench.sh --scale N rewrites this 1.
+const BENCH_SCALE: u64 = 1;
 const SEED: u64 = 123_456_789;
 
 fn finish(value: u64) -> ! {
@@ -50,7 +53,7 @@ fn main() {
 
     let mut hits = 0u64;
     i = 0;
-    while i < 4_000_000 {
+    while i < 4_000_000 * BENCH_SCALE {
         let h = (lcg_step(&mut state) << 32) | lcg_step(&mut state);
         hits = hits.wrapping_add(split_block_maybe_contains(&filter, h));
         i += 1;

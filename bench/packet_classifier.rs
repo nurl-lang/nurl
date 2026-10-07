@@ -1,5 +1,8 @@
 // benchmark-contract: branch-lcg32;seed=123456789;iterations=25000000;threshold=2147483648
-const ITERATIONS: u64 = 25_000_000;
+
+// The workload multiplier: bench/wasmbench.sh --scale N rewrites this 1.
+const BENCH_SCALE: u64 = 1;
+const ITERATIONS: u64 = 25_000_000 * BENCH_SCALE;
 const THRESHOLD: u64 = 1u64 << 31;
 const SEED: u64 = 123_456_789;
 const MASK: u64 = 0xffff_ffff;

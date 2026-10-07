@@ -2,6 +2,9 @@
 #include <stdint.h>
 #include <stdio.h>
 
+// The workload multiplier: bench/wasmbench.sh --scale N rewrites this 1.
+#define BENCH_SCALE 1ULL
+
 static inline void emit_checksum(uint64_t value) {
   // Every peer prints this one line and nothing else; the 63-bit mask
   // keeps the value printable by the languages without unsigned 64-bit
@@ -11,7 +14,7 @@ static inline void emit_checksum(uint64_t value) {
 }
 
 int main(void) {
-  const uint64_t iterations = 5000000ULL;
+  const uint64_t iterations = 5000000ULL * BENCH_SCALE;
   const uint64_t values[64] = {
       0ULL,   2ULL,   4ULL,   6ULL,   8ULL,   10ULL,  12ULL,  14ULL,
       16ULL,  18ULL,  20ULL,  22ULL,  24ULL,  26ULL,  28ULL,  30ULL,

@@ -195,7 +195,25 @@ wasm on **NURL's own runtime** costs:
 ./bench/wasmbench.sh                 # the whole suite (~15 min)
 ./bench/wasmbench.sh --nwasm-all-langs  # + C/Rust on the interpreter (~45 min)
 ./bench/wasmbench.sh --quick --bench lcg
+./bench/wasmbench.sh --scale 100     # every benchmark does 100x the work
 ```
+
+`--scale N` multiplies every benchmark's workload before it is compiled.
+Each NURL, C and Rust source defines its multiplier once — `: u64
+BENCH_SCALE 1`, `#define BENCH_SCALE 1ULL`, `const BENCH_SCALE: u64 = 1;`
+— and multiplies its iteration count by it (`lcg` 20M → 2G steps at x100),
+or repeats its kernel that many times where a bigger problem would change
+the program's memory behaviour: `fib` sums N calls of `fib(35)`, `sieve`
+re-sieves the same 10 MB, `matmul` multiplies N differently-seeded pairs.
+The script rewrites that one number in a copy of each source, so a xN
+program is the same program with a bigger constant, and it refuses to run
+if any source has no such line. x1 compiles the sources as they stand —
+the published contract, instruction for instruction what it was before
+the multiplier existed. A large N amortises process start-up and the
+runtimes' module compilation, which at x1 are a large share of a 40 ms
+cell, and leaves the generated code; a xN run writes `WASMRESULTS-xN.md`
+and `results/wasm-xN.json` beside the x1 report rather than replacing it.
+The Python and JavaScript peers have no multiplier: `bench.sh` runs x1.
 
 Everything but the interpreter column costs about what `bench.sh` does;
 the interpreter is ~500× native, so it is the whole budget. Running the C
@@ -247,7 +265,8 @@ refreshed report, the same way `bench.yml` does for `RESULTS.md`. It is
 manual-only — trigger it from the Actions tab, as with `http-bench` and
 `pq-bench` — because the interpreter column makes a full run hours long.
 Its `quick` input smoke-tests the harness at one repetition per cell and
-skips the commit.
+skips the commit; its `scale` input runs the suite at xN and commits
+`WASMRESULTS-xN.md` beside the x1 report.
 
 ## Beyond wall clock
 

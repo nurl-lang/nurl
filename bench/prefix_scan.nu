@@ -15,8 +15,10 @@
 // reports a single timing number for the row.
 
 unsafe @ main → i {
+    // The workload multiplier: bench/wasmbench.sh --scale N rewrites this 1.
+    : u64 BENCH_SCALE 1
     : i width 16
-    : u64 batches 1000000
+    : u64 batches * 1000000 BENCH_SCALE
     : *u64 values # *u64 ( malloc * width 8 )
     : ~ i z 0
     ~ < z width {

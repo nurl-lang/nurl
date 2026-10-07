@@ -29,6 +29,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+// The workload multiplier: bench/wasmbench.sh --scale N rewrites this 1.
+#define BENCH_SCALE 1ULL
+
 typedef enum { J_NULL, J_BOOL, J_NUM, J_STR, J_ARR, J_OBJ } JTag;
 
 typedef struct JVal JVal;
@@ -287,7 +290,7 @@ int main(void) {
   fclose(f);
 
   int ok = 0;
-  for (int pass = 0; pass < 20; ++pass) {
+  for (int pass = 0; pass < 20 * (int)BENCH_SCALE; ++pass) {
     P p = {src, (size_t)size, 0};
     JVal root;
     if (parse_value(&p, &root)) {

@@ -3,6 +3,9 @@
 #include <stdint.h>
 #include <stdio.h>
 
+// The workload multiplier: bench/wasmbench.sh --scale N rewrites this 1.
+#define BENCH_SCALE 1ULL
+
 static inline void emit_checksum(uint64_t value) {
   // Every peer prints this one line and nothing else; the 63-bit mask
   // keeps the value printable by the languages without unsigned 64-bit
@@ -54,7 +57,7 @@ int main(void) {
   }
 
   uint64_t hits = 0;
-  for (uint64_t i = 0; i < 4000000ULL; ++i) {
+  for (uint64_t i = 0; i < 4000000ULL * BENCH_SCALE; ++i) {
     uint64_t h = draw64(&state);
     hits += split_block_maybe_contains(filter, h);
   }

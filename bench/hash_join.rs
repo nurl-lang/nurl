@@ -1,4 +1,7 @@
 // benchmark-contract: hash-join;seed=123456789;build=160;queries=5000000;cap=256;bloom=64;group=16;probe=alternating-built-random
+
+// The workload multiplier: bench/wasmbench.sh --scale N rewrites this 1.
+const BENCH_SCALE: u64 = 1;
 const CAP: usize = 256;
 const GROUP: u64 = 16;
 const BLOOM_WORDS: usize = 64;
@@ -175,7 +178,7 @@ fn main() {
     let mut built_keys = [0u64; BUILD_ROWS];
 
     let build_rows = BUILD_ROWS as u64;
-    let total_queries = 5_000_000u64;
+    let total_queries = 5_000_000u64 * BENCH_SCALE;
     let use_partitioned = build_rows >= 128 && total_queries >= 200_000;
 
     let mut i = 0u64;

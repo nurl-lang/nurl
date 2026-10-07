@@ -3,9 +3,13 @@
 // lcg — 20M iterations of the MMIX LCG with a PCG-style xorshift mix
 // each step (see the C peer for why the mix is there). Unsigned
 // arithmetic, printed as i64 to match the peers.
+
+// The workload multiplier: bench/wasmbench.sh --scale N rewrites this 1.
+const BENCH_SCALE: u64 = 1;
+
 fn main() {
     let mut x: u64 = 1;
-    for _ in 0..20_000_000u64 {
+    for _ in 0..20_000_000u64 * BENCH_SCALE {
         x = x
             .wrapping_mul(6364136223846793005)
             .wrapping_add(1442695040888963407);
