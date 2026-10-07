@@ -112,6 +112,7 @@ $ `stdlib/core/vec.nu`
     ( Vec i ) clnext  // … the next one at the same record …
     ( Vec i ) clreg  // … the register it fills …
     ( Vec i ) clslot  // … from this slot's frame home
+    ( Vec i ) wlcar  // per web: 1 when a record inside a loop writes it
 }
 
 // scalar state indices
@@ -1080,7 +1081,7 @@ $ `stdlib/core/vec.nu`
             ( vec_push [i] . c wcls 0 ) ( vec_push [i] . c wwt 0 )
             ( vec_push [i] . c wst 2147483647 ) ( vec_push [i] . c wen -1 )
             ( vec_push [i] . c wuse 0 ) ( vec_push [i] . c wloc ( rjl_mem ) )
-            ( vec_push [i] . c whint -1 ) ( vec_push [i] . c wcc 0 ) ( vec_push [i] . c wsens 0 ) ( vec_push [i] . c wdx 0 ) ( vec_push [i] . c wcx 0 ) ( vec_push [i] . c wzx 0 )
+            ( vec_push [i] . c whint -1 ) ( vec_push [i] . c wcc 0 ) ( vec_push [i] . c wsens 0 ) ( vec_push [i] . c wdx 0 ) ( vec_push [i] . c wcx 0 ) ( vec_push [i] . c wzx 0 ) ( vec_push [i] . c wlcar 0 )
             = nw + nw 1
         } {}
         = k + k 1
@@ -1293,6 +1294,7 @@ $ `stdlib/core/vec.nu`
             : i wv ( vec_at [i] . c dweb o )
             ( rj_ext c wv + * 2 r 1 )
             ( rj_addwt c wv dw )
+            ? > dw 1 { ( vec_put [i] . c wlcar wv 1 ) } {}
             ( rj_vote c wv ( rj_dcls op ) dw )
             = o + o 1
         }
@@ -1484,10 +1486,15 @@ $ `stdlib/core/vec.nu`
 }
 
 // spill priority: weight per unit of live length — a short temporary on a
-// dependency chain keeps its register, a sparse long-lived value gives it up
+// dependency chain keeps its register, a sparse long-lived value gives it up.
+// A value a loop writes counts eight times over: spilled, every write is a
+// store its next read waits on (a loop-carried chain through memory), where
+// a loop-invariant one only reloads, and the load issues early.
 @ rj_dens Rj c i wv → i {
     : i len - ( vec_at [i] . c wen wv ) ( vec_at [i] . c wst wv )
-    ^ / * ( vec_at [i] . c wwt wv ) 256 + len 8
+    : i d / * ( vec_at [i] . c wwt wv ) 256 + len 8
+    ? == 1 ( vec_at [i] . c wlcar wv ) { ^ * d 8 } {}
+    ^ d
 }
 
 @ rj_alloc Rj c → v {
@@ -3948,6 +3955,7 @@ $ `stdlib/core/vec.nu`
         ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] )
         ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] )
         ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] )
+        ( vec_new [i] )
     }
 }
 
