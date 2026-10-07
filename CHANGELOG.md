@@ -81,10 +81,13 @@ program's safety no longer rests on them.
   verdicts are unchanged (283/283; 31 of 35 implementation-defined accepted).
 - **nwasm 2.3.0: tier 8 spills smarter** (packages/nwasm/CHANGELOG.md). A
   spilled value's reads take a free register where one is free across them,
-  values a loop writes keep their registers before values it only reads, and
-  loop weights no longer compound per `continue`. `--scale 100` cycles
-  against precompiled wasmtime: hash_join.nu 1.16 → 1.12, nbody.rs 1.11 →
-  1.06, json_parse.c 0.91 → 0.80.
+  values a loop writes keep their registers before values it only reads,
+  loop weights no longer compound per `continue`, and an i32 argument is
+  sign-extended at the call instead of at its (hot) def. `--scale 100`
+  cycles against precompiled wasmtime: hash_join.nu 1.16 → 1.10,
+  binary_search.rs 1.03 → 0.93, nbody.rs 1.11 → 1.05, json_parse.c 0.91 →
+  0.81. Fixed: i32 arguments through `call_indirect` could arrive
+  zero-extended in tier 8 since 2.1.0.
 - **nwasm 2.2.0: tier 8 closes on Cranelift** (packages/nwasm/CHANGELOG.md).
   i64 arithmetic whose high half nobody reads runs in 32 bits, unsigned
   compares feed carry-only cmovs, r9 is allocatable where globals stay out of
