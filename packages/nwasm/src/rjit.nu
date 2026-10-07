@@ -106,6 +106,12 @@ $ `stdlib/core/vec.nu`
     ( Vec i ) litv  // the literal pool: wide constants read RIP-relative …
     ( Vec i ) lsite  // … the disp32 sites that read them …
     ( Vec i ) lidx  // … and which literal each one names
+    ( Vec i ) uover  // per use: the register a cached read of a spilled web takes (-1 none — rj_cache)
+    ( Vec i ) wflag  // per web: 1 when only fused flags read it (it gets no place)
+    ( Vec i ) clhead  // per record: its first cache load (-1 none) …
+    ( Vec i ) clnext  // … the next one at the same record …
+    ( Vec i ) clreg  // … the register it fills …
+    ( Vec i ) clslot  // … from this slot's frame home
 }
 
 // scalar state indices
@@ -552,7 +558,7 @@ $ `stdlib/core/vec.nu`
     ^ & >= op 194 <= op 201  // the fused f64 family
 }
 
-@ rj_use Rj c i s → v { ( vec_push [i] . c uslot s ) ( vec_push [i] . c uweb -1 ) }
+@ rj_use Rj c i s → v { ( vec_push [i] . c uslot s ) ( vec_push [i] . c uweb -1 ) ( vec_push [i] . c uover -1 ) }
 
 @ rj_def Rj c i s → v { ( vec_push [i] . c dslot s ) ( vec_push [i] . c dweb -1 ) }
 
@@ -1515,6 +1521,8 @@ $ `stdlib/core/vec.nu`
         } {}
         = r + r 1
     }
+    = k 0
+    ~ < k nw { ( vec_push [i] . c wflag ( vec_at [i] flagonly k ) ) = k + k 1 }
     : ( Vec i ) occ ( vec_new [i] )
     = k 0
     ~ < k 32 { ( vec_push [i] occ -1 ) = k + k 1 }
@@ -1607,6 +1615,18 @@ $ `stdlib/core/vec.nu`
         ( nurl_eprint ` ` ) ( nurl_eprint ( nurl_str_int ( vec_at [i] . c wcc wv ) ) ) ( nurl_eprint ` ` ) ( nurl_eprint ( nurl_str_int ( vec_at [i] . c wdx wv ) ) )
         ( nurl_eprint ` ` ) ( nurl_eprint ( nurl_str_int ( vec_at [i] . c wcx wv ) ) ) ( nurl_eprint ` → ` ) ( nurl_eprint ( nurl_str_int ( vec_at [i] . c wloc wv ) ) ) ( nurl_eprint `\n` )
         = wv + wv 1
+    }
+    // the runs rj_cache gave a register: where the home is loaded, into what
+    : i n ( rj_get c ( rjs_n ) )
+    : ~ i r 0
+    ~ < r n {
+        : ~ i q ( vec_at [i] . c clhead r )
+        ~ >= q 0 {
+            ( nurl_eprint `[rjit] cached at record ` ) ( nurl_eprint ( nurl_str_int r ) ) ( nurl_eprint `: slot ` )
+            ( nurl_eprint ( nurl_str_int ( vec_at [i] . c clslot q ) ) ) ( nurl_eprint ` → ` ) ( nurl_eprint ( nurl_str_int ( vec_at [i] . c clreg q ) ) ) ( nurl_eprint `\n` )
+            = q ( vec_at [i] . c clnext q )
+        }
+        = r + r 1
     }
 }
 
@@ -1715,6 +1735,288 @@ $ `stdlib/core/vec.nu`
     }
 }
 
+// ── spilled webs, cached ────────────────────────────────────────
+// The scan keeps a web in one place over its whole hull, so a long-lived
+// value the hot code reads stays in its frame home once shorter, denser
+// webs fill the registers somewhere along it. Many of its reads still sit
+// where a register is free: a run of them with no def of the web between,
+// no clobber of the register across it (the scan's own rules — a call
+// leaves only the callee-saved ones, a div or bit scan no rdx) and no
+// branch into it from outside loads the home once, at the run's first
+// record, and reads the register after that. rcx (the borrowers' scratch)
+// and rdi (the context) never cache.
+
+// bits [p, q] of register l's row in the position bitmap: all clear?
+@ rj_bfree ( Vec i ) bm i words i l i p i q → b {
+    : i base * l words
+    : ~ i w >> p 6
+    : i we >> q 6
+    ~ <= w we {
+        : i a ? == w >> p 6 & p 63 0
+        : i z ? == w we & q 63 63
+        : i m & << -1 a ( rj_shr -1 - 63 z )
+        ? != 0 & ( vec_at [i] bm + base w ) m { ^ F } {}
+        = w + w 1
+    }
+    ^ T
+}
+
+@ rj_bmark ( Vec i ) bm i words i l i p i q → v {
+    : i base * l words
+    : ~ i w >> p 6
+    : i we >> q 6
+    ~ <= w we {
+        : i a ? == w >> p 6 & p 63 0
+        : i z ? == w we & q 63 63
+        : i m & << -1 a ( rj_shr -1 - 63 z )
+        ( vec_put [i] bm + base w | ( vec_at [i] bm + base w ) m )
+        = w + w 1
+    }
+}
+
+// the GPRs a cached read may take: rdx rsi r8 r9 r10 rbp r12..r15
+@ rj_cgpr i k → i {
+    ? == k 0 { ^ 6 } {}
+    ? == k 1 { ^ 10 } {}
+    ? == k 2 { ^ 8 } {}
+    ? == k 3 { ^ 9 } {}
+    ? == k 4 { ^ 2 } {}
+    ? == k 5 { ^ 15 } {}
+    ? == k 6 { ^ 14 } {}
+    ? == k 7 { ^ 13 } {}
+    ? == k 8 { ^ 12 } {}
+    ^ 5
+}
+
+@ rj_cache Rj c → v {
+    : i n ( rj_get c ( rjs_n ) )
+    : i nw ( rj_get c ( rjs_nw ) )
+    : ~ i r 0
+    ~ < r n { ( vec_push [i] . c clhead -1 ) = r + r 1 }
+    ? ( rj_frameless c ) { ^ v } {}
+    : i npos + * 2 n 2
+    : i words + >> npos 6 1
+    // candidates: GPR-class webs in memory, read at least twice
+    : ( Vec i ) cand ( vec_new [i] )
+    : ~ i ncand 0
+    : ~ i wv 0
+    ~ < wv nw {
+        : b ok & & & == ( vec_at [i] . c wloc wv ) ( rjl_mem ) == 0 ( vec_at [i] . c wflag wv ) == 0 ( vec_at [i] . c wcls wv ) >= ( vec_at [i] . c wuse wv ) 2
+        ( vec_push [i] cand ? ok 1 0 )
+        ? ok { = ncand + ncand 1 } {}
+        = wv + wv 1
+    }
+    ? == ncand 0 { ^ v } {}
+    // where each register is taken: the hulls of the webs in it
+    : ( Vec i ) bm ( vec_new [i] )
+    : ~ i k 0
+    ~ < k * 16 words { ( vec_push [i] bm 0 ) = k + k 1 }
+    = wv 0
+    ~ < wv nw {
+        : i l ( vec_at [i] . c wloc wv )
+        ? & ( rj_isg l ) == 0 ( vec_at [i] . c wflag wv ) {
+            : ~ i ws ( vec_at [i] . c wst wv )
+            : ~ i we ( vec_at [i] . c wen wv )
+            ? < ws 0 { = ws 0 } {}
+            ? >= we npos { = we - npos 1 } {}
+            ? <= ws we { ( rj_bmark bm words l ws we ) } {}
+        } {}
+        = wv + wv 1
+    }
+    // per record: the first and last branch source among its predecessors
+    // (a block start inside a run must be entered from within the run)
+    : ( Vec i ) pmin ( vec_new [i] )
+    : ( Vec i ) pmax ( vec_new [i] )
+    = r 0
+    ~ < r n { ( vec_push [i] pmin n ) ( vec_push [i] pmax -1 ) = r + r 1 }
+    : i nreal ( rj_get c ( rjs_nreal ) )
+    = k 0
+    ~ < k nreal {
+        : i src - ( vec_at [i] . c blast k ) 1
+        : ~ i q ( vec_at [i] . c soff k )
+        : i qe ( vec_at [i] . c soff + k 1 )
+        ~ < q qe {
+            : ~ i t ( vec_at [i] . c ssucc q )
+            ? >= t nreal { = t ( vec_at [i] . c ssucc ( vec_at [i] . c soff t ) ) } {}  // through its edge block
+            : i tr ( vec_at [i] . c bfirst t )
+            ? < src ( vec_at [i] pmin tr ) { ( vec_put [i] pmin tr src ) } {}
+            ? > src ( vec_at [i] pmax tr ) { ( vec_put [i] pmax tr src ) } {}
+            = q + q 1
+        }
+        = k + k 1
+    }
+    // per candidate web, its reads and its writes in record order — edge
+    // moves into it write it at their branch record
+    : ( Vec i ) ucnt ( vec_new [i] )
+    : ( Vec i ) dcnt ( vec_new [i] )
+    = wv 0
+    ~ < wv + nw 1 { ( vec_push [i] ucnt 0 ) ( vec_push [i] dcnt 0 ) = wv + wv 1 }
+    : i nu ( vec_len [i] . c uweb )
+    : ~ i o 0
+    ~ < o nu {
+        : i w ( vec_at [i] . c uweb o )
+        ? >= w 0 { ? == 1 ( vec_at [i] cand w ) { ( vec_put [i] ucnt + w 1 + ( vec_at [i] ucnt + w 1 ) 1 ) } {} } {}
+        = o + o 1
+    }
+    : i nd ( vec_len [i] . c dweb )
+    = o 0
+    ~ < o nd {
+        : i w ( vec_at [i] . c dweb o )
+        ? >= w 0 { ? == 1 ( vec_at [i] cand w ) { ( vec_put [i] dcnt + w 1 + ( vec_at [i] dcnt + w 1 ) 1 ) } {} } {}
+        = o + o 1
+    }
+    : i nb ( rj_get c ( rjs_nb ) )
+    = k nreal
+    ~ < k nb {
+        : ~ i q ( vec_at [i] . c emoff k )
+        : i qe ( vec_at [i] . c emoff + k 1 )
+        ~ < q qe {
+            : i w ( vec_at [i] . c emd q )
+            ? >= w 0 { ? == 1 ( vec_at [i] cand w ) { ( vec_put [i] dcnt + w 1 + ( vec_at [i] dcnt + w 1 ) 1 ) } {} } {}
+            = q + q 1
+        }
+        = k + k 1
+    }
+    = wv 0
+    ~ < wv nw {
+        ( vec_put [i] ucnt + wv 1 + ( vec_at [i] ucnt + wv 1 ) ( vec_at [i] ucnt wv ) )
+        ( vec_put [i] dcnt + wv 1 + ( vec_at [i] dcnt + wv 1 ) ( vec_at [i] dcnt wv ) )
+        = wv + wv 1
+    }
+    : ( Vec i ) urec ( vec_new [i] )  // per candidate read: its record …
+    : ( Vec i ) uidx ( vec_new [i] )  // … and its use index
+    : ( Vec i ) drec ( vec_new [i] )  // per candidate write: its record
+    : ( Vec i ) ufill ( vec_new [i] )
+    : ( Vec i ) dfill ( vec_new [i] )
+    = wv 0
+    ~ < wv nw { ( vec_push [i] ufill ( vec_at [i] ucnt wv ) ) ( vec_push [i] dfill ( vec_at [i] dcnt wv ) ) = wv + wv 1 }
+    = k 0
+    ~ < k ( vec_at [i] ucnt nw ) { ( vec_push [i] urec 0 ) ( vec_push [i] uidx 0 ) = k + k 1 }
+    = k 0
+    ~ < k ( vec_at [i] dcnt nw ) { ( vec_push [i] drec 0 ) = k + k 1 }
+    = r 0
+    ~ < r n {
+        = o ( vec_at [i] . c uoff r )
+        : i oe ( vec_at [i] . c uoff + r 1 )
+        ~ < o oe {
+            : i w ( vec_at [i] . c uweb o )
+            ? >= w 0 {
+                ? == 1 ( vec_at [i] cand w ) {
+                    : i at ( vec_at [i] ufill w )
+                    ( vec_put [i] urec at r ) ( vec_put [i] uidx at o ) ( vec_put [i] ufill w + at 1 )
+                } {}
+            } {}
+            = o + o 1
+        }
+        = o ( vec_at [i] . c doff r )
+        : i de ( vec_at [i] . c doff + r 1 )
+        ~ < o de {
+            : i w ( vec_at [i] . c dweb o )
+            ? >= w 0 {
+                ? == 1 ( vec_at [i] cand w ) {
+                    : i at ( vec_at [i] dfill w )
+                    ( vec_put [i] drec at r ) ( vec_put [i] dfill w + at 1 )
+                } {}
+            } {}
+            = o + o 1
+        }
+        // the edge moves this record's branch carries
+        : i e0 ( vec_at [i] . c eblk r )
+        ? >= e0 0 {
+            = k e0
+            ~ & < k nb == r ( vec_at [i] . c bfirst k ) {
+                : ~ i q ( vec_at [i] . c emoff k )
+                : i qe ( vec_at [i] . c emoff + k 1 )
+                ~ < q qe {
+                    : i w ( vec_at [i] . c emd q )
+                    ? >= w 0 {
+                        ? == 1 ( vec_at [i] cand w ) {
+                            : i at ( vec_at [i] dfill w )
+                            ( vec_put [i] drec at r ) ( vec_put [i] dfill w + at 1 )
+                        } {}
+                    } {}
+                    = q + q 1
+                }
+                = k + k 1
+            }
+        } {}
+        = r + r 1
+    }
+    // runs, web by web
+    : ~ i used ( rj_get c ( rjs_used ) )
+    : i forbid ( rj_get c ( rjs_forbid ) )
+    = wv 0
+    ~ < wv nw {
+        ? == 1 ( vec_at [i] cand wv ) {
+            : i u0 ( vec_at [i] ucnt wv )
+            : i u1 ( vec_at [i] ucnt + wv 1 )
+            : ~ i d ( vec_at [i] dcnt wv )
+            : i d1 ( vec_at [i] dcnt + wv 1 )
+            : ~ i a u0
+            ~ < a u1 {
+                : i r1 ( vec_at [i] urec a )
+                : ~ b adv T
+                ~ adv { = adv F ? < d d1 { ? < ( vec_at [i] drec d ) r1 { = d + d 1 = adv T } {} } {} }
+                : ~ i dnext n  // the first write at or after r1: the run ends there
+                ? < d d1 { = dnext ( vec_at [i] drec d ) } {}
+                // grow the run read by read; remember the longest valid one
+                : ~ i b a
+                : ~ i end r1
+                : ~ i hi -1  // latest predecessor any block start inside needs covered
+                : ~ i best -1
+                : ~ i bend r1
+                : ~ b go T
+                ~ go {
+                    // extend over read b + 1 (the first step takes read a itself)
+                    : ~ i e2 ( vec_at [i] urec b )
+                    ? > ( rj_andz c e2 ) 0 { = e2 + e2 1 } {}  // the eqz behind a fused and reads x
+                    ? > ( vec_at [i] urec b ) dnext { = go F } {}  // a read after the next write
+                    : ~ i q + end 1
+                    ? == b a { = q + r1 1 } {}
+                    ~ & go <= q e2 {
+                        ? > ( vec_at [i] pmax q ) -1 {
+                            ? < ( vec_at [i] pmin q ) r1 { = go F } {}
+                            ? > ( vec_at [i] pmax q ) hi { = hi ( vec_at [i] pmax q ) } {}
+                        } {}
+                        = q + q 1
+                    }
+                    ? go {
+                        = end ? > e2 end e2 end
+                        ? <= hi end { = best b = bend end } {}
+                        ? == ( vec_at [i] urec b ) dnext { = go F } {}  // read, then written: the register goes stale
+                        = b + b 1
+                        ? >= b u1 { = go F } {}
+                    } {}
+                }
+                : ~ i got -1
+                ? > best a {  // two reads or more
+                    : b crosscall ( rj_crosses . c callr * 2 r1 * 2 bend )
+                    : b crossdx ( rj_crosses . c dxr * 2 r1 * 2 bend )
+                    = k 0
+                    ~ & < got 0 < k 10 {
+                        : i l ( rj_cgpr k )
+                        : b okl & & & == 0 & ( rj_shr forbid l ) 1 | ! crosscall ( rj_calleesaved l ) | ! crossdx != l 2 ( rj_bfree bm words l * 2 r1 * 2 bend )
+                        ? okl { = got l } {}
+                        = k + k 1
+                    }
+                } {}
+                ? >= got 0 {
+                    ( rj_bmark bm words got * 2 r1 * 2 bend )
+                    = used | used << 1 got
+                    : ~ i q a
+                    ~ <= q best { ( vec_put [i] . c uover ( vec_at [i] uidx q ) got ) = q + q 1 }
+                    : i nl ( vec_len [i] . c clreg )
+                    ( vec_push [i] . c clreg got ) ( vec_push [i] . c clslot ( vec_at [i] . c wslot wv ) )
+                    ( vec_push [i] . c clnext ( vec_at [i] . c clhead r1 ) ) ( vec_put [i] . c clhead r1 nl )
+                    = a + best 1
+                } { = a + a 1 }
+            }
+        } {}
+        = wv + wv 1
+    }
+    ( rj_set c ( rjs_used ) used )
+}
+
 // cxb: per record, 1 when a web in rcx is live across it — read before,
 // still needed after — so a record that borrows rcx parks it first.
 // The webs in rcx never overlap, so this is linear in the function.
@@ -1738,6 +2040,8 @@ $ `stdlib/core/vec.nu`
 @ rj_uloc Rj c i o → i {
     : i wv ( vec_at [i] . c uweb o )
     ? < wv 0 { ^ ( rjl_imm ) } {}  // a constant-pool slot
+    : i ov ( vec_at [i] . c uover o )
+    ? >= ov 0 { ^ ov } {}  // a spilled web's cached read (rj_cache)
     ^ ( vec_at [i] . c wloc wv )
 }
 
@@ -3576,6 +3880,8 @@ $ `stdlib/core/vec.nu`
         ? == tg 2 { ( rj_align16 c ) } {}  // a loop head: its speed must not depend on where code ended
         ( vec_push [i] . c lab ( rj_here c ) )
         ? != tg 0 { ( rj_set c ( rjs_fsel ) 0 ) ( rj_set c ( rjs_fweb ) -1 ) } {}
+        : ~ i cq ( vec_at [i] . c clhead r )
+        ~ >= cq 0 { ( rj_ldf c 1 ( vec_at [i] . c clreg cq ) ( vec_at [i] . c clslot cq ) ) = cq ( vec_at [i] . c clnext cq ) }  // cached homes (rj_cache)
         ( rj_e_rec c r )
         = r + r 1
     }
@@ -3630,6 +3936,7 @@ $ `stdlib/core/vec.nu`
         ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] )
         ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] )
         ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] )
+        ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] )
     }
 }
 
@@ -3681,6 +3988,7 @@ $ `stdlib/core/vec.nu`
     ( rj_zx c )
     ( rj_alloc c )
     ( rj_cxbusy c )
+    ( rj_cache c )
     ? == fidx g_rjtrace { ( rj_trace c ) } {}
     ( rj_emit c )
     ^ ! ( rj_failed c )
