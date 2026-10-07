@@ -273,8 +273,11 @@ links with the toolchain's bundled `zig cc` (wasi-libc + wasm-ld built in);
 `wasmbuilder --doctor` shows how everything resolves on your machine.
 `nwasm` runs wasm32-wasi modules (preopened dirs, `--allow-net` for
 sockets, `--allow-gpu` for the CUDA host bridge) on a register-record
-interpreter with a **template JIT** on top — on by default,
-`NURL_NWASM_JIT=0` keeps the pure interpreter, and metered (`--fuel`),
-shared-memory and non-x86-64 runs fall back to it on their own. Its CLI
+interpreter with two JIT tiers on top: a **register-allocating JIT**
+(the default on x86-64 with guard-page memory) and a template JIT for the
+functions it declines. `NURL_NWASM_RJIT=0` keeps the template tier and
+`NURL_NWASM_JIT=0` the pure interpreter; metered (`--fuel`),
+shared-memory and non-x86-64 runs fall back to the interpreter on their
+own. Its CLI
 is a drop-in for the reference `wasmtime`'s `run` subset. Both packages'
 READMEs carry the full option surface.

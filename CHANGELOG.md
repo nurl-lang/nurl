@@ -10,13 +10,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 The ownership rules become the language: **every program accepted without
 an `unsafe` function of its own is memory-safe and leak-free**
-(docs/MEMORY.md §6). ASan and LSan remain CI checks on the compiler; a
-program's safety no longer rests on them. Rc cycles are collected and Arc
+(docs/MEMORY.md §6), with one known exception, below. ASan and LSan remain
+CI checks on the compiler; a program's safety no longer rests on them. Rc cycles are collected and Arc
 cycles are ruled out at compile time, so counted handles no longer leak
 either. Library functions compile only when the program reaches them (a
 corpus-wide 40 % fewer compile instructions), the HTTP/1.1 server runs 29 %
 fewer instructions per request, and nwasm gains a register-allocating JIT
 tier that runs most wasmbench modules faster than wasmtime's Cranelift.
+
+Code that works with raw pointers outside an `unsafe` function no longer
+compiles, and owned values move: a program the older rules accepted may
+need `unsafe` on its raw-memory functions, or a read moved before the
+value is handed on. The registry packages are republished for 0.71.0.
+
+### Known issue
+
+- **A `Slice` of a `Vec` is not tracked as a view of it** — the one known
+  exception to the guarantee. `slice_from_vec`, `slice_sub` and
+  `slice_from_raw` (stdlib/core/slice.nu), and protobuf's `ProtoReader`,
+  which holds one, return a Slice the compiler does not tie to its Vec the
+  way it ties a `vec_data` pointer: freeing or growing the Vec while the
+  Slice is still read compiles, and reads freed memory. It is kept as the
+  open hole probe `tools/fuzz/holes/h32`; until it is closed, read a Slice
+  only while its Vec is alive and unchanged.
 
 ### Changed
 
@@ -88,7 +104,6 @@ tier that runs most wasmbench modules faster than wasmtime's Cranelift.
   contract unchanged (the modules are instruction-identical) and a large N
   amortises start-up and module compilation. A xN run writes
   `WASMRESULTS-xN.md` beside the x1 report.
-
 - **Safe Vec element access at raw-pointer cost.** A loop over `vec_at`,
   `vec_put` or `vec_get` executes the instructions of the same loop over a
   `vec_data` pointer (it was 3.6–7.6× more): the bounds check folds away

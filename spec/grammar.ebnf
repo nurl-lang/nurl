@@ -1,5 +1,5 @@
 (* NURL — Neural Unified Representation Language
-   Grammar v2.7 — complete language specification
+   Grammar v2.8 — complete language specification
    File extension: .nu
 
    All expressions use PREFIX NOTATION.
@@ -65,8 +65,9 @@ decl = import_decl                 (*  $                             *)
      ;
 
 (* A function declaration may carry any of these prefixes, in any order
-   (`simd` grammar v2.6, `inline` v2.7). `simd` and `inline` are accepted
-   ONLY on `@` — on any other decl either is a diagnostic, not a silent
+   (`simd` grammar v2.6, `inline` v2.7, `unsafe` v2.8). `simd`, `inline`
+   and `unsafe` are accepted ONLY on `@` — on any other decl each is a
+   diagnostic, not a silent
    no-op, because a prefix left pending drifts onto the next `@` the
    parser reaches, which after an import boundary is a function in a
    different file. `pub` had exactly that bug before v2.0 made it
@@ -75,8 +76,15 @@ decl = import_decl                 (*  $                             *)
    `inline` puts LLVM's `alwaysinline` on the definition. It is rejected
    on a generic (the prefix does not survive monomorphisation) and in
    combination with `simd` (which replaces the function with a
-   CPU-dispatching stub — the opaque call `inline` asks to remove). *)
-decl_prefix = 'pub' | 'simd' | 'inline' ;
+   CPU-dispatching stub — the opaque call `inline` asks to remove).
+
+   `unsafe` (docs/spec.md §3.3d) marks the only functions whose body may
+   read or write through a raw pointer, cast to a pointer type, call a
+   raw-memory primitive or a foreign function declared outside the
+   standard library; the author vouches that the function is safe for
+   every caller, so calling one needs no marking. A method in an `impl`
+   block may carry it too. *)
+decl_prefix = 'pub' | 'simd' | 'inline' | 'unsafe' ;
 
 
 (* $ `path` IDENT?
@@ -311,7 +319,7 @@ fn_header  = '@' IDENT type_params? param* '→' type ;
    the built-in protocols work. An impl of an undeclared trait has no
    contract to check and emits its methods under the mangled name; a
    typo is caught at the call site instead. *)
-impl_decl = '%' IDENT type_params? type '{' fn_decl* '}' ;
+impl_decl = '%' IDENT type_params? type '{' ( 'unsafe'? fn_decl )* '}' ;
 
 
 (* ── BLOCK & STATEMENTS ───────────────────────────────────────── *)
@@ -924,6 +932,7 @@ IDENT       = IDENT_PLAIN ( '::' IDENT_PLAIN )* ;
      pub                     →  visibility prefix         (TT_PUB)
      simd                    →  CPU-dispatch prefix (v2.6) (TT_SIMD)
      inline                  →  always-inline prefix (v2.7) (TT_INLINE)
+     unsafe                  →  raw-memory prefix (v2.8)  (TT_UNSAFE)
      break                   →  leave innermost loop      (TT_BREAK)
      continue                →  next iteration            (TT_CONTINUE)
 
