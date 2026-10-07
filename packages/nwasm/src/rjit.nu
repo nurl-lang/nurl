@@ -83,6 +83,10 @@ $ `stdlib/core/vec.nu`
     ( Vec i ) wsens  // per web: 1 when some consumer reads bits 32..63 (an i32 def must sign-extend)
     ( Vec i ) wdx  // per web: 1 when live across a record that clobbers rdx (div/rem, bit counts)
     ( Vec i ) dxr  // those records, ascending
+    ( Vec i ) cs_off  // direct call sites: the rel32's buffer offset …
+    ( Vec i ) cs_fx  // … the callee …
+    ( Vec i ) cs_ab  // … its argument base …
+    ( Vec i ) cs_nr  // … and its result count (the site's slow stub needs all four)
     ( Vec i ) depth  // per record: loop weight (8^depth, capped)
     ( Vec i ) callr  // records that clobber caller-saved registers, ascending
     ( Vec i ) tgt  // per record: 1 when some branch targets it
@@ -368,6 +372,8 @@ $ `stdlib/core/vec.nu`
 @ rj_stub_iovf Rj c → i { ^ + ( rj_get c ( rjs_n ) ) 4 }
 
 @ rj_stub_inval Rj c → i { ^ + ( rj_get c ( rjs_n ) ) 5 }
+
+@ rj_lab_entry Rj c → i { ^ + ( rj_get c ( rjs_n ) ) 6 }  // the direct entry (+28)
 
 // condition nibbles: o 0 no 1 b 2 ae 3 e 4 ne 5 be 6 a 7 s 8 ns 9 p 10 np 11 l 12 ge 13 le 14 g 15
 // compare micro-op (56..75) → the nibble that means "true"
@@ -2166,23 +2172,26 @@ $ `stdlib/core/vec.nu`
     ? & direct == np 1 { : i o0 ( rj_u c r 0 ) ( rj_ldg c 2 ( rj_uloc c o0 ) ( rj_us c o0 ) 0 ) } {}  // arg0 rides in rdx
     ( rj_restore_inv c )
     ( rj_frame_end c )
-    : ~ i okj -1
     ? direct {
-        : i fto + 16 * - fx nimp 8
-        ( rj_rm c 0 1 0 139 0 8 -1 0 fto 0 )  // mov rax,[r8+ftab]
-        ( rj_test_rr c 1 0 0 )
-        : i jz ( rj_jcc_fwd c 4 )  // not compiled yet: the bridge
+        // A direct call: rel32 to the callee's entry once it is compiled
+        // (the installer patches it in; a self-call knows it already), to
+        // this site's stub until then — the stub tail-jumps through the
+        // entry table, or runs the call on the bridge.
         ( rj_lea c 1 6 3 -1 0 * ab 8 )  // lea rsi,[rbx+argbase*8]
-        ( rj_b c 255 ) ( rj_b c 208 )  // call rax — a trap longjmps past us; a return IS success
-        = okj ( rj_jmp_fwd c )
-        ( rj_land c jz )
-    } {}
-    ( rj_b c 73 ) ( rj_b c 137 ) ( rj_b c 8 )  // mov [r8],rcx — the driver may run guest code above us
-    ( rj_b c 72 ) ( rj_b c 199 ) ( rj_b c 71 ) ( rj_b c 32 ) ( rj_d c fx )  // mov qword[rdi+32], fidx
-    ( rj_b c 72 ) ( rj_b c 199 ) ( rj_b c 71 ) ( rj_b c 40 ) ( rj_d c ab )  // mov qword[rdi+40], argbase
-    ( rj_callout c 16 )
-    ? == nr 1 { ( rj_ldf c 1 0 ab ) } {}  // the bridge left result 0 in memory only
-    ? >= okj 0 { ( rj_land c okj ) } {}
+        ( rj_b c 232 ) ( rj_d c 0 )  // call rel32
+        ? == fx ( rj_get c ( rjs_fidx ) ) {
+            ( vec_push [i] . c pat_at - ( rj_here c ) 4 ) ( vec_push [i] . c pat_rec ( rj_lab_entry c ) )
+        } {
+            ( vec_push [i] . c cs_off - ( rj_here c ) 4 ) ( vec_push [i] . c cs_fx fx )
+            ( vec_push [i] . c cs_ab ab ) ( vec_push [i] . c cs_nr nr )
+        }
+    } {
+        ( rj_b c 73 ) ( rj_b c 137 ) ( rj_b c 8 )  // mov [r8],rcx — the driver may run guest code above us
+        ( rj_b c 72 ) ( rj_b c 199 ) ( rj_b c 71 ) ( rj_b c 32 ) ( rj_d c fx )  // mov qword[rdi+32], fidx
+        ( rj_b c 72 ) ( rj_b c 199 ) ( rj_b c 71 ) ( rj_b c 40 ) ( rj_d c ab )  // mov qword[rdi+40], argbase
+        ( rj_callout c 16 )
+        ? == nr 1 { ( rj_ldf c 1 0 ab ) } {}  // the bridge left result 0 in memory only
+    }
     // results: result 0 is in rax on both paths; the rest are in their homes
     = k 0
     ~ < k nr {
@@ -2415,6 +2424,31 @@ $ `stdlib/core/vec.nu`
     ( rj_b c 191 ) ( rj_d c 10 ) ( rj_jmp c ( rj_stub_gate c ) )
     ( vec_push [i] . c lab ( rj_here c ) )  // n+5: NaN to integer → status 12
     ( rj_b c 191 ) ( rj_d c 12 ) ( rj_jmp c ( rj_stub_gate c ) )
+    ( vec_push [i] . c lab 28 )  // n+6: the direct entry
+    // one stub per direct call site, the target of its rel32 until the
+    // callee is linked: [rsp] holds the site's return address, so the stub
+    // either tail-jumps into the callee or runs the call on the bridge and
+    // returns with result 0 in rax, exactly as the callee would
+    : i nimp ( rj_get c ( rjs_nimp ) )
+    : i ncs ( vec_len [i] . c cs_off )
+    : ~ i k 0
+    ~ < k ncs {
+        ( rj_patch32 c ( vec_at [i] . c cs_off k ) ( rj_here c ) )
+        : i fx ( vec_at [i] . c cs_fx k )
+        : i ab ( vec_at [i] . c cs_ab k )
+        ( rj_rm c 0 1 0 139 0 8 -1 0 + 16 * - fx nimp 8 0 )  // mov rax,[r8+ftab]
+        ( rj_test_rr c 1 0 0 )
+        : i jz ( rj_jcc_fwd c 4 )
+        ( rj_b c 255 ) ( rj_b c 224 )  // jmp rax
+        ( rj_land c jz )
+        ( rj_b c 73 ) ( rj_b c 137 ) ( rj_b c 8 )  // mov [r8],rcx
+        ( rj_b c 72 ) ( rj_b c 199 ) ( rj_b c 71 ) ( rj_b c 32 ) ( rj_d c fx )  // mov qword[rdi+32], fidx
+        ( rj_b c 72 ) ( rj_b c 199 ) ( rj_b c 71 ) ( rj_b c 40 ) ( rj_d c ab )  // mov qword[rdi+40], argbase
+        ( rj_callout c 16 )
+        ? == ( vec_at [i] . c cs_nr k ) 1 { ( rj_ldf c 1 0 ab ) } {}
+        ( rj_b c 195 )  // ret
+        = k + k 1
+    }
 }
 
 // multi-byte NOPs up to the next 16-byte boundary
@@ -2562,6 +2596,7 @@ $ `stdlib/core/vec.nu`
         ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] )
         ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] )
         ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] )
+        ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] )
     }
 }
 

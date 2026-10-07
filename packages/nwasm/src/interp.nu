@@ -52,6 +52,12 @@ $ `rjit.nu`
 
 & `c` @ nurl_code_free *u p i n → v
 
+// Page permissions for the JIT code arena (PROT_READ|PROT_WRITE = 3,
+// PROT_READ|PROT_EXEC = 5): functions are packed into shared pages, so a
+// page holding sealed code turns writable only while a neighbour is copied
+// in, then executable again.
+& `c` @ mprotect *u addr i len i32 prot → i32
+
 // Guard-page linear memory: an 8 GiB PROT_NONE reservation swallows every
 // address a 32-bit index + 32-bit offset can form, so JIT code needs no
 // bounds checks — an out-of-bounds access faults and the runtime's SIGSEGV
@@ -286,6 +292,21 @@ $ `rjit.nu`
     i jit_slab  // raw slab base address (0 = not yet allocated)
     i jit_slab_end  // slab base + byte length
     i jit_spcell  // address of the anchor block [sp, slab end, ftab..]
+    // The code arena: compiled functions are packed into shared chunks
+    // instead of one mapping each — a page per function put every entry
+    // point at the same page offset, so the hot ones fought over the same
+    // L1i sets, and spread the code over an iTLB entry apiece. Each chunk
+    // starts with a 64-byte header [previous chunk, chunk bytes].
+    i jit_arena  // current chunk (0 = none yet)
+    i jit_arena_used  // bytes handed out in it
+    i jit_arena_cap  // its size
+    // Direct call sites waiting for their callee (tier 8 calls rel32; a site
+    // aims at its own stub until the callee's entry exists): per defined
+    // function the head of a list of sites, linked through jit_lnext, each
+    // the absolute address of a rel32 in the arena.
+    ( Vec i ) jit_lhead
+    ( Vec i ) jit_lnext
+    ( Vec i ) jit_laddr
     b gpu_ok  // env/CUDA host imports enabled (opt-in; default off)
     b net_ok  // nurl_net host imports (real sockets) enabled (opt-in; default off)
     // Shared memory changes what a narrow store is allowed to touch: see
@@ -448,6 +469,12 @@ unsafe @ interp_new Module m__h → Interp {
     = . it jit_slab 0
     = . it jit_slab_end 0
     = . it jit_spcell 0
+    = . it jit_arena 0
+    = . it jit_arena_used 0
+    = . it jit_arena_cap 0
+    = . it jit_lhead ( vec_new [i] )
+    = . it jit_lnext ( vec_new [i] )
+    = . it jit_laddr ( vec_new [i] )
     = . it jit_lc_pf 0
     = . it jit_co_fn 0
     = . it jit_co_env 0
@@ -558,9 +585,11 @@ unsafe @ __freefd s pp → v {
 
 // The JIT's lazily made raw state: the free list of call contexts, the
 // slab, the anchor block and the call-out bridge's copy of its env.
-unsafe @ __jit_state_free i ctxs i slab i spcell i coenv → v {
+unsafe @ __jit_state_free i ctxs i slab i spcell i coenv i arena → v {
     : ~ i cb ctxs
     ~ != 0 cb { : *i c # *i cb : i nx . c 0 ( nurl_free # s cb ) = cb nx }
+    : ~ i ch arena
+    ~ != 0 ch { : *i h # *i ch : i nx . h 0 ( nurl_code_free # *u ch . h 1 ) = ch nx }
     ? != 0 slab { ( nurl_free # s slab ) } {}
     ? != 0 spcell { ( nurl_free # s spcell ) } {}
     ? != 0 coenv { ( nurl_closure_drop # *u coenv ) } {}
@@ -603,7 +632,7 @@ unsafe @ __free_args ( Vec s ) args → v {
         : ~ i fi 0
         ~ < fi fn { ?? ( vec_get [s] . it fds fi ) { T pp → ( __freefd pp ) F → {} } = fi + fi 1 }
         ( __free_pfuncs . it pfuncs )
-        ( __jit_state_free . it jit_ctx_free . it jit_slab . it jit_spcell . it jit_co_env )
+        ( __jit_state_free . it jit_ctx_free . it jit_slab . it jit_spcell . it jit_co_env . it jit_arena )
     }
 }
 
@@ -624,7 +653,7 @@ unsafe @ __interp_thread_free * InterpImpl it → v {
     ( vec_free [i] . it netkinds )
     ( vec_free [s] . it fds )
     ( vec_free [u] . it trapmsg )
-    ( __jit_state_free . it jit_ctx_free . it jit_slab . it jit_spcell . it jit_co_env )
+    ( __jit_state_free . it jit_ctx_free . it jit_slab . it jit_spcell . it jit_co_env . it jit_arena )
     ( vec_free [u] . it capout )
     ( vec_free [u] . it caperr )
     ( __free_pfuncs . it pfuncs )
@@ -1372,9 +1401,9 @@ unsafe @ __pf_free sink s pp → v {
     ( vec_free [i] . pf aux )
     ( vec_free [i] . pf kv )
     ( vec_free [i] . pf bytes )
-    ? > . pf jitlen 0 {
+    ? != . pf jitlen 0 {
         ( nurl_guard_code_del # *u . pf jit )  // no-op when never registered
-        ( nurl_code_free # *u . pf jit . pf jitlen )
+        ? > . pf jitlen 0 { ( nurl_code_free # *u . pf jit . pf jitlen ) } {}  // < 0: in the arena, freed with it
     } {}
     ( nurl_free # s pf )
 }
@@ -4185,6 +4214,8 @@ unsafe @ __jit_state_init * InterpImpl it * ModuleImpl m → v {
         = fk + fk 1
     }
     = . spc + + 2 nf nall # i . . it table ctl
+    : ~ i lk 0
+    ~ < lk nf { ( vec_push [i] . it jit_lhead -1 ) = lk + lk 1 }
     // The inline call-out bridge: decompose a capturing closure into
     // (fn, env) the way recover/thread_spawn do — the emitted code calls
     // fn(env) directly. The interpreter keeps its own copy of the env
@@ -4451,15 +4482,76 @@ unsafe @ __jit_pin_select * PFunc pf ( Vec i ) xpins i guard → ( Vec i ) {
     ^ pins
 }
 
+@ __jit_pg_lo i p → i { ^ & p -4096 }
+
+@ __jit_pg_hi i p → i { ^ & + p 4095 -4096 }
+
+// n bytes of code space at a 64-byte boundary in the instance's arena, the
+// pages under it writable (0 when no executable memory exists).
+unsafe @ __jit_arena_alloc * InterpImpl it i n → i {
+    : i need & + n 63 -64
+    ? | == 0 . it jit_arena > + . it jit_arena_used need . it jit_arena_cap {
+        : i want + need 64
+        : i csz ? > want 1048576 ( __jit_pg_hi want ) 1048576
+        : *u ch ( nurl_code_alloc csz )
+        ? == # i ch 0 { ^ 0 } {}
+        : *i hd # *i ch
+        = . hd 0 . it jit_arena
+        = . hd 1 csz
+        = . it jit_arena # i ch
+        = . it jit_arena_used 64
+        = . it jit_arena_cap csz
+    } {}
+    : i p + . it jit_arena . it jit_arena_used
+    = . it jit_arena_used + . it jit_arena_used need
+    : i lo ( __jit_pg_lo p )
+    ? != 0 ( mprotect # *u lo - ( __jit_pg_hi + p n ) lo # i32 3 ) { ^ 0 } {}
+    ^ p
+}
+
+// Point the rel32 at `site` to `entry`; false when it cannot reach (the
+// site then stays on its stub, which is correct, only slower).
+unsafe @ __jit_put_rel32 i site i ent → b {
+    : i rel - ent + site 4
+    ? | < rel -2147483648 > rel 2147483647 { ^ F } {}
+    : *u q # *u site
+    = . q 0 # u & rel 255
+    = . q 1 # u & >> rel 8 255
+    = . q 2 # u & >> rel 16 255
+    = . q 3 # u & >> rel 24 255
+    ^ T
+}
+
+// Publish defined function d's direct entry, and link every call site that
+// was waiting for it (their pages are sealed: writable just for the patch).
+unsafe @ __jit_publish * InterpImpl it i d i ent → v {
+    : *i ftw # *i + . it jit_spcell 16
+    = . ftw d ent
+    ? | < d 0 >= d ( vec_len [i] . it jit_lhead ) { ^ v } {}
+    : ~ i sk ( vec_at [i] . it jit_lhead d )
+    ~ >= sk 0 {
+        : i site ( vec_at [i] . it jit_laddr sk )
+        : i lo ( __jit_pg_lo site )
+        : i hi ( __jit_pg_hi + site 4 )
+        ? == 0 ( mprotect # *u lo - hi lo # i32 3 ) {
+            : b _ok ( __jit_put_rel32 site ent )
+            : i32 _r ( mprotect # *u lo - hi lo # i32 5 )
+        } {}
+        = sk ( vec_at [i] . it jit_lnext sk )
+    }
+    ( vec_put [i] . it jit_lhead d -1 )
+}
+
 // Copy a finished function into an executable page, turn its jump-table
 // entries into absolute addresses, seal it, and register its out-of-bounds
 // stub (label n) with the fault-to-trap handler in guard mode. Shared by the
 // template tier and tier 8 (rjit.nu): both hand over the code, the label
 // table and the page-relative jump-table entries.
-unsafe @ __jit_install * PFunc pf ( Vec u ) buf ( Vec i ) lab ( Vec i ) pta_off ( Vec i ) pta_stub i n i guard i fidx9 → v {
+unsafe @ __jit_install * InterpImpl it * ModuleImpl m * PFunc pf ( Vec u ) buf ( Vec i ) lab ( Vec i ) pta_off ( Vec i ) pta_stub ( Vec i ) cs_off ( Vec i ) cs_fx i n i guard i fidx9 → v {
     : i len ( vec_len [u] buf )
-    : *u page ( nurl_code_alloc + len 16 )
-    ? == # i page 0 { = . pf jit # s -1 ^ v } {}  // no executable memory (wasm)
+    : i pa ( __jit_arena_alloc it + len 16 )
+    ? == pa 0 { = . pf jit # s -1 ^ v } {}  // no executable memory (wasm)
+    : *u page # *u pa
     : ~ i k 0
     ~ < k len { = . page k ?? ( vec_get [u] buf k ) { T x → x F → # u 0 } = k + k 1 }
     // jump-table entries become absolute addresses now that the page is known
@@ -4472,7 +4564,26 @@ unsafe @ __jit_install * PFunc pf ( Vec u ) buf ( Vec i ) lab ( Vec i ) pta_off 
         ~ < bb 8 { = . page + eo bb # u & ( __lshr64 av * bb 8 ) 255 = bb + bb 1 }
         = ptk + ptk 1
     }
-    ? != 0 ( nurl_code_seal page + len 16 ) { ( nurl_code_free page + len 16 ) = . pf jit # s -1 ^ v } {}
+    // direct call sites: to the callee now when it is compiled, else queued
+    // until it is published
+    : i ncs ( vec_len [i] cs_off )
+    : *i ftab # *i + . it jit_spcell 16
+    : ~ i ck 0
+    ~ < ck ncs {
+        : i site + pa ( vec_at [i] cs_off ck )
+        : i d - ( vec_at [i] cs_fx ck ) . m num_import_funcs
+        : i ent ? & >= d 0 < d ( vec_len [i] . it jit_lhead ) . ftab d 0
+        ? != ent 0 { : b _ok ( __jit_put_rel32 site ent ) } {
+            ? & >= d 0 < d ( vec_len [i] . it jit_lhead ) {
+                ( vec_push [i] . it jit_lnext ( vec_at [i] . it jit_lhead d ) )
+                ( vec_push [i] . it jit_laddr site )
+                ( vec_put [i] . it jit_lhead d - ( vec_len [i] . it jit_laddr ) 1 )
+            } {}
+        }
+        = ck + ck 1
+    }
+    : i plo ( __jit_pg_lo pa )
+    ? != 0 ( mprotect # *u plo - ( __jit_pg_hi + + pa len 16 ) plo # i32 5 ) { = . pf jit # s -1 ^ v } {}
     ? != 0 g_jitdump {  // decimal byte stream; tools/jitdump.py turns it back into objdump input
         ( nurl_eprint `[jitdump] cs=` ) ( nurl_eprint ( nurl_str_int . pf code_start ) )
         ( nurl_eprint ` fidx=` ) ( nurl_eprint ( nurl_str_int fidx9 ) )
@@ -4495,11 +4606,11 @@ unsafe @ __jit_install * PFunc pf ( Vec u ) buf ( Vec i ) lab ( Vec i ) pta_off 
     ? != 0 guard {
         : i oobs ?? ( vec_get [i] lab n ) { T x → x F → 0 }
         ? != 0 ( nurl_guard_code_add page + len 16 # *u + # i page oobs ) {
-            ( nurl_code_free page + len 16 ) = . pf jit # s -1 ^ v
+            = . pf jit # s -1 ^ v  // the space stays in the arena
         } {}
     } {}
     = . pf jit # s page
-    = . pf jitlen + len 16
+    = . pf jitlen - 0 + len 16  // < 0: arena-placed
 }
 
 // valtype byte → the rjit local-type code (0 i32, 1 i64, 2 f32, 3 f64)
@@ -4557,7 +4668,7 @@ unsafe @ __rj_try * InterpImpl it * ModuleImpl m * PFunc pf i fidx9 i guard → 
     : i sigoff + 16 * nfd 8
     : i tbloff + sigoff * + nfd . m num_import_funcs 8
     ? ( rj_compile c rsig . m num_import_funcs . it jit_spcell ( nurl_code_trap_addr ) . it jit_co_fn . it jit_co_env fidx9 sigoff tbloff ) {
-        ( __jit_install pf . c buf . c lab . c pta_off . c pta_stub n guard fidx9 )
+        ( __jit_install it m pf . c buf . c lab . c pta_off . c pta_stub . c cs_off . c cs_fx n guard fidx9 )
         ^ T
     } {}
     ? != 0 g_rjdbg {
@@ -5204,7 +5315,8 @@ unsafe @ __jit_try * InterpImpl it * ModuleImpl m * PFunc pf i fidx9 → v {
         ( vec_set [u] buf + at 3 # u & ( __lshr64 rel 24 ) 255 )
         = pk + pk 1
     }
-    ( __jit_install pf buf lab pta_off pta_stub n guard fidx9 )
+    : ( Vec i ) nocs ( vec_new [i] )
+    ( __jit_install it m pf buf lab pta_off pta_stub nocs nocs n guard fidx9 )
 }
 
 // Run an already-built, JIT-compiled frame `fj` to completion, handling
@@ -5317,8 +5429,7 @@ unsafe @ __jit_callee * InterpImpl it * ModuleImpl m i callee * i caller_rbase i
         : s njh . pfc jit
         ? & != # i njh 0 != # i njh -1 {
             // publish the DIRECT entry: page + the 28-byte driver preamble
-            : *i ftw # *i + . it jit_spcell 16
-            = . ftw - callee . m num_import_funcs + # i njh 28
+            ( __jit_publish it - callee . m num_import_funcs + # i njh 28 )
         } {}
     } {}
     : s jh . pfc jit
@@ -5396,8 +5507,7 @@ unsafe @ __exec_func * InterpImpl it i fidx → v {
             : s njh . pfj jit
             ? & != # i njh 0 != # i njh -1 {
                 // publish the DIRECT entry: page + the 28-byte driver preamble
-                : *i ftw2 # *i + . it jit_spcell 16
-                = . ftw2 - fidx . m num_import_funcs + # i njh 28
+                ( __jit_publish it - fidx . m num_import_funcs + # i njh 28 )
             } {}
         } {}
         : s jh . pfj jit
