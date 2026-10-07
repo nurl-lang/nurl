@@ -3483,9 +3483,67 @@ $ `stdlib/core/vec.nu`
     ^ 94
 }
 
+// ── AVX (VEX) scalar forms, on an x86-64-v3 CPU ─────────────────
+// vop x, v1, src: three operands, so a result in a register of its own
+// needs no movaps copy first, and none carries a dependency on the
+// destination's old value. pp: 2 = the ss forms (F3), 3 = sd (F2).
+// Only the 128-bit forms run — they clear bits 128..255, so mixing them
+// with the SSE forms costs no transition.
+@ rj_vex Rj c i pp i dst i v1 i bb i xx → v {  // the prefix; bb / xx: rm's base / index register (-1 none)
+    : i r ^^ & >> dst 3 1 1
+    : i b ? < bb 0 1 ^^ & >> bb 3 1 1
+    : i xb ? < xx 0 1 ^^ & >> xx 3 1 1
+    : i vv << ^^ & v1 15 15 3
+    ? & == b 1 == xb 1 {
+        ( rj_b c 197 ) ( rj_b c | | << r 7 vv pp )  // C5 R̄ vvvv L=0 pp (map 0F)
+    } {
+        ( rj_b c 196 ) ( rj_b c | | | << r 7 << xb 6 << b 5 1 )  // C4 R̄ X̄ B̄ map 0F
+        ( rj_b c | vv pp )  // W=0 vvvv L=0 pp
+    }
+}
+
+// vop x, v1, operand (the float operand of rj_fsrc's kinds)
+@ rj_vfsrc Rj c i pp i opc i x i v1 i loc i s → v {
+    ? ( rj_isx loc ) {
+        : i rm - loc 16
+        ( rj_vex c pp x v1 rm -1 ) ( rj_b c opc ) ( rj_modrr c x rm ) ^ v
+    } {}
+    ? == loc ( rjl_mem ) {
+        ( rj_vex c pp x v1 3 -1 ) ( rj_b c opc ) ( rj_modmem c x 3 -1 0 ( rj_home s ) ) ^ v
+    } {}
+    ? == loc ( rjl_imm ) {
+        ( rj_vex c pp x v1 -1 -1 ) ( rj_b c opc ) ( rj_b c | << & x 7 3 5 )  // [rip+k]
+        : i kq ( rj_kval c s )
+        : ~ i k 0
+        : i nl ( vec_len [i] . c litv )
+        : ~ i hit -1
+        ~ < k nl { ? == ( vec_at [i] . c litv k ) kq { = hit k = k nl } { = k + k 1 } }
+        ? < hit 0 { = hit nl ( vec_push [i] . c litv kq ) } {}
+        ( vec_push [i] . c lsite ( rj_here c ) ) ( vec_push [i] . c lidx hit )
+        ( rj_d c 0 )
+        ^ v
+    } {}
+    ( rj_movq_xg c 1 loc )  // a GPR holding the bits: through xmm1
+    ( rj_vex c pp x v1 1 -1 ) ( rj_b c opc ) ( rj_modrr c x 1 )
+}
+
 // dst = a op b into dst's place
 @ rj_fbin3 Rj c i pf i opc i al i as i bl i bs i dl i ds → v {
     : b comm | == opc 88 == opc 89
+    ? ( rj_bmi ) {  // AVX: one vop, a's register as the first source
+        : i pp ? == pf 242 3 2
+        : i x ? ( rj_isx dl ) - dl 16 0
+        : ~ i ar -1
+        : ~ i ol bl
+        : ~ i os bs
+        ? ( rj_isx al ) { = ar - al 16 } {
+            ? & comm ( rj_isx bl ) { = ar - bl 16 = ol al = os as } {}  // b in a register, a not: swap
+        }
+        ? < ar 0 { ( rj_ldx c 0 al as ) = ar 0 } {}  // a into xmm0 (no web lives there)
+        ( rj_vfsrc c pp opc x ar ol os )
+        ? ! ( rj_isx dl ) { ( rj_stx c dl ds 0 ) } {}  // built in xmm0
+        ^ v
+    } {}
     ? ( rj_isx dl ) {
         : i x - dl 16
         ? == dl al { ( rj_fsrc c pf opc x bl bs ) ^ v } {}
@@ -3526,7 +3584,14 @@ $ `stdlib/core/vec.nu`
     : i od ( rj_dd c r 0 )
     ? ! ( rj_dlive c od ) { ^ v } {}
     : i x ( rj_fun_dst c od )
-    ( rj_ldx c x ( rj_uloc c oa ) ( rj_us c oa ) )
+    : i al ( rj_uloc c oa )
+    ? & ( rj_bmi ) ( rj_isx al ) {  // vsqrtsd x, a, a: the source's own register supplies the upper bits
+        : i ar - al 16
+        ( rj_vex c ? == op 131 3 2 x ar ar -1 ) ( rj_b c 81 ) ( rj_modrr c x ar )
+        ( rj_fun_fin c od x )
+        ^ v
+    } {}
+    ( rj_ldx c x al ( rj_us c oa ) )
     ( rj_rr c ? == op 131 242 243 0 1 81 x x 0 )  // sqrtsd / sqrtss x,x
     ( rj_fun_fin c od x )
 }
@@ -3674,6 +3739,19 @@ $ `stdlib/core/vec.nu`
     : i s3 ( rj_us c o3 )
     : i op1 ? == op 201 92 89
     : i op2 ? == op 198 88 ? == op 201 89 92
+    ? ( rj_bmi ) {  // AVX: t = s1 op1 s2 in xmm0, then one vop into the result's register
+        : i d ? ( rj_isx dl ) - dl 16 0
+        : ~ i a1 -1
+        ? ( rj_isx l1 ) { = a1 - l1 16 } { ( rj_ldx c 0 l1 ( rj_us c o1 ) ) = a1 0 }
+        ( rj_vfsrc c 3 op1 0 a1 l2 ( rj_us c o2 ) )
+        ? == op 200 {  // x - t: x is the first source, so it needs a register
+            : ~ i a3 -1
+            ? ( rj_isx l3 ) { = a3 - l3 16 } { ( rj_ldx c 1 l3 s3 ) = a3 1 }
+            ( rj_vex c 3 d a3 0 -1 ) ( rj_b c 92 ) ( rj_modrr c d 0 )  // vsubsd d, x, xmm0
+        } { ( rj_vfsrc c 3 op2 d 0 l3 s3 ) }  // t op2 x
+        ? ! ( rj_isx dl ) { ( rj_stx c dl ds 0 ) } {}
+        ^ v
+    } {}
     ? == op 200 {  // t = s1*s2 in xmm0; dst = x - t
         ( rj_ldx c 0 l1 ( rj_us c o1 ) ) ( rj_fsrc c 242 89 0 l2 ( rj_us c o2 ) )
         ? & ( rj_isx dl ) == dl l3 { ( rj_rr c 242 0 1 92 - dl 16 0 0 ) ^ v } {}
