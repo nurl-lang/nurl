@@ -81,6 +81,8 @@ $ `stdlib/core/vec.nu`
     ( Vec i ) whint  // per web: a web whose register it would like
     ( Vec i ) wcc  // per web: 1 when live across a call
     ( Vec i ) wsens  // per web: 1 when some consumer reads bits 32..63 (an i32 def must sign-extend)
+    ( Vec i ) wdx  // per web: 1 when live across a record that clobbers rdx (div/rem, bit counts)
+    ( Vec i ) dxr  // those records, ascending
     ( Vec i ) depth  // per record: loop weight (8^depth, capped)
     ( Vec i ) callr  // records that clobber caller-saved registers, ascending
     ( Vec i ) tgt  // per record: 1 when some branch targets it
@@ -996,7 +998,7 @@ $ `stdlib/core/vec.nu`
             ( vec_push [i] . c wcls 0 ) ( vec_push [i] . c wwt 0 )
             ( vec_push [i] . c wst 2147483647 ) ( vec_push [i] . c wen -1 )
             ( vec_push [i] . c wuse 0 ) ( vec_push [i] . c wloc ( rjl_mem ) )
-            ( vec_push [i] . c whint -1 ) ( vec_push [i] . c wcc 0 ) ( vec_push [i] . c wsens 0 )
+            ( vec_push [i] . c whint -1 ) ( vec_push [i] . c wcc 0 ) ( vec_push [i] . c wsens 0 ) ( vec_push [i] . c wdx 0 )
             = nw + nw 1
         } {}
         = k + k 1
@@ -1210,7 +1212,20 @@ $ `stdlib/core/vec.nu`
     }
     // live across a call: some call record c with 2c ≥ start and 2c+2 ≤ end
     = r 0
-    ~ < r n { ? ( rj_iscall ( rj_rw c r 0 ) ) { ( vec_push [i] . c callr r ) } {} = r + r 1 }
+    ~ < r n {
+        : i op9 ( rj_rw c r 0 )
+        ? ( rj_iscall op9 ) { ( vec_push [i] . c callr r ) } {}
+        ? ( rj_clobdx op9 ) { ( vec_push [i] . c dxr r ) } {}
+        = r + r 1
+    }
+    : i ndx ( vec_len [i] . c dxr )
+    ? > ndx 0 {
+        = wv 0
+        ~ < wv nw {
+            ? ( rj_crosses . c dxr ( vec_at [i] . c wst wv ) ( vec_at [i] . c wen wv ) ) { ( vec_put [i] . c wdx wv 1 ) } {}
+            = wv + wv 1
+        }
+    } {}
     : i ncr ( vec_len [i] . c callr )
     ? > ncr 0 {
         = wv 0
@@ -1233,16 +1248,17 @@ $ `stdlib/core/vec.nu`
 // ── linear scan ─────────────────────────────────────────────────
 // GPR order: caller-saved first (no prologue cost), callee-saved after;
 // a web live across a call may only take a callee-saved one.
-@ rj_gpool i k → i {  // 10 entries
+@ rj_gpool i k → i {  // 11 entries
     ? == k 0 { ^ 6 } {}  // rsi
     ? == k 1 { ^ 9 } {}  // r9  (globals base: put back before calls)
     ? == k 2 { ^ 10 } {}  // r10 (memory bytes: put back before calls)
     ? == k 3 { ^ 8 } {}  // r8  (the anchor: rematerialised before calls)
     ? == k 4 { ^ 7 } {}  // rdi (the context: saved at entry, reloaded before calls)
-    ? == k 5 { ^ 12 } {}
-    ? == k 6 { ^ 13 } {}
-    ? == k 7 { ^ 14 } {}
-    ? == k 8 { ^ 15 } {}
+    ? == k 5 { ^ 2 } {}  // rdx (arg0 on calls; scratch of div/rem and the bit counts)
+    ? == k 6 { ^ 12 } {}
+    ? == k 7 { ^ 13 } {}
+    ? == k 8 { ^ 14 } {}
+    ? == k 9 { ^ 15 } {}
     ^ 5  // rbp
 }
 
@@ -1251,8 +1267,24 @@ $ `stdlib/core/vec.nu`
 @ rj_allowed i l i cls i cross → b {
     ? == cls 1 { ^ & ( rj_isx l ) & == cross 0 >= l 18 } {}
     ? ! ( rj_isg l ) { ^ F } {}
-    ? | | | | == l 6 == l 7 == l 8 == l 9 == l 10 { ^ == cross 0 } {}
+    ? | | | | | == l 2 == l 6 == l 7 == l 8 == l 9 == l 10 { ^ == cross 0 } {}
     ^ ( rj_calleesaved l )
+}
+
+// records whose lowering uses rdx as scratch (its webs may not be live across them)
+@ rj_clobdx i op → b { ^ | | | | & >= op 96 <= op 99 & >= op 105 <= op 108 == op 93 == op 94 | == op 102 == op 103 }
+
+// is some record c of the ascending list `rs` inside (ws, we) — 2c ≥ ws, 2c+2 ≤ we?
+@ rj_crosses ( Vec i ) rs i ws i we → b {
+    : i nr ( vec_len [i] rs )
+    : ~ i lo 0
+    : ~ i hi nr
+    ~ < lo hi {
+        : i mid / + lo hi 2
+        ? < * 2 ( vec_at [i] rs mid ) ws { = lo + mid 1 } { = hi mid }
+    }
+    ? < lo nr { ^ <= + * 2 ( vec_at [i] rs lo ) 2 we } {}
+    ^ F
 }
 
 // spill priority: weight per unit of live length — a short temporary on a
@@ -1298,19 +1330,21 @@ $ `stdlib/core/vec.nu`
                 }
                 : i cls ( vec_at [i] . c wcls wv )
                 : i cross ( vec_at [i] . c wcc wv )
+                : i nodx ( vec_at [i] . c wdx wv )
                 : ~ i pick -1
                 : i h ( vec_at [i] . c whint wv )
                 ? >= h 0 {
                     : i hl ( vec_at [i] . c wloc h )
                     ? & < hl 32 ( rj_allowed hl cls cross ) { ? < ( vec_at [i] occ hl ) 0 { = pick hl } {} } {}
                 } {}
-                : i npool ? == cls 1 14 10
+                : i npool ? == cls 1 14 11
                 : i forbid ( rj_get c ( rjs_forbid ) )
                 ? & >= pick 0 != 0 & ( rj_shr forbid pick ) 1 { = pick -1 } {}
+                ? & == pick 2 != 0 nodx { = pick -1 } {}
                 = k 0
                 ~ & < pick 0 < k npool {
                     : i l ? == cls 1 + 18 k ( rj_gpool k )
-                    ? & & ( rj_allowed l cls cross ) < ( vec_at [i] occ l ) 0 == 0 & ( rj_shr forbid l ) 1 { = pick l } {}
+                    ? & & & ( rj_allowed l cls cross ) < ( vec_at [i] occ l ) 0 == 0 & ( rj_shr forbid l ) 1 | != l 2 == 0 nodx { = pick l } {}
                     = k + k 1
                 }
                 ? < pick 0 {  // full: evict the holder that uses its register least densely
@@ -1320,7 +1354,7 @@ $ `stdlib/core/vec.nu`
                     ~ < k npool {
                         : i l ? == cls 1 + 18 k ( rj_gpool k )
                         : i ow ( vec_at [i] occ l )
-                        ? & & ( rj_allowed l cls cross ) >= ow 0 == 0 & ( rj_shr forbid l ) 1 {
+                        ? & & & ( rj_allowed l cls cross ) >= ow 0 == 0 & ( rj_shr forbid l ) 1 | != l 2 == 0 nodx {
                             : i od ( rj_dens c ow )
                             ? < od vw { = vw od = vl l } {}
                         } {}
@@ -1893,7 +1927,7 @@ $ `stdlib/core/vec.nu`
 @ rj_place i loc i s → i { ^ ? < loc 32 loc ? == loc ( rjl_mem ) + 64 s -1 }
 
 // An edge block's parallel copy. A move goes once nothing still pending
-// reads its destination; a cycle is broken through rdx.
+// reads its destination; a cycle is broken through rcx.
 @ rj_e_moves Rj c i e → v {
     : i q0 ( vec_at [i] . c emoff e )
     : i q1 ( vec_at [i] . c emoff + e 1 )
@@ -1946,12 +1980,12 @@ $ `stdlib/core/vec.nu`
             } {}
             = q + q 1
         }
-        ? prog {} {  // every pending move waits on another: park one source in rdx
+        ? prog {} {  // every pending move waits on another: park one source in rcx
             = q 0
             ~ < q tot {
                 ? == 0 ( vec_at [i] done q ) {
-                    ( rj_ldg c 2 ( vec_at [i] sl q ) ( vec_at [i] ss q ) 0 )
-                    ( vec_put [i] sl q 2 ) ( vec_put [i] ss q -1 )
+                    ( rj_ldg c 1 ( vec_at [i] sl q ) ( vec_at [i] ss q ) 0 )
+                    ( vec_put [i] sl q 1 ) ( vec_put [i] ss q -1 )
                     = q tot
                 } { = q + q 1 }
             }
@@ -2317,12 +2351,22 @@ $ `stdlib/core/vec.nu`
     ( rj_frame_end c )
     ( rj_rm c 0 1 0 59 1 8 -1 0 8 0 )  // cmp rcx,[r8+8] — slab end
     ( rj_jcc c 7 ( rj_stub_ovf c ) )  // ja
-    // entry values; whatever took rsi goes last — rsi is the window pointer
+    // entry values; whatever took rsi goes last — rsi is the window
+    // pointer — and with one parameter, its web goes first: it arrives in
+    // rdx, which another entry value may be about to take
     : i ne ( vec_len [i] . c entw )
     : ~ i q 0
+    ? == np 1 {
+        ~ < q ne {
+            : i wv ( vec_at [i] . c entw q )
+            ? & & > ( vec_at [i] . c wuse wv ) 0 == ( vec_at [i] . c wslot wv ) 0 != ( vec_at [i] . c wloc wv ) 6 { ( rj_entry1 c wv ) } {}
+            = q + q 1
+        }
+        = q 0
+    } {}
     ~ < q ne {
         : i wv ( vec_at [i] . c entw q )
-        ? & > ( vec_at [i] . c wuse wv ) 0 != ( vec_at [i] . c wloc wv ) 6 { ( rj_entry1 c wv ) } {}
+        ? & & > ( vec_at [i] . c wuse wv ) 0 != ( vec_at [i] . c wloc wv ) 6 | != np 1 != ( vec_at [i] . c wslot wv ) 0 { ( rj_entry1 c wv ) } {}
         = q + q 1
     }
     = q 0
@@ -2503,7 +2547,7 @@ $ `stdlib/core/vec.nu`
         ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] )
         ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] )
         ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] )
-        ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] )
+        ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] )
     }
 }
 
