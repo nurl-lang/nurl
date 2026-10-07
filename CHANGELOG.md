@@ -79,6 +79,12 @@ program's safety no longer rests on them.
   `bench/json_parse.nu` as wasm: 6.5 % fewer interpreted instructions, 5.5 %
   fewer under precompiled wasmtime; natively 2 % fewer. JSONTestSuite
   verdicts are unchanged (283/283; 31 of 35 implementation-defined accepted).
+- **nwasm 2.3.0: tier 8 spills smarter** (packages/nwasm/CHANGELOG.md). A
+  spilled value's reads take a free register where one is free across them,
+  values a loop writes keep their registers before values it only reads, and
+  loop weights no longer compound per `continue`. `--scale 100` cycles
+  against precompiled wasmtime: hash_join.nu 1.16 → 1.12, nbody.rs 1.11 →
+  1.06, json_parse.c 0.91 → 0.80.
 - **nwasm 2.2.0: tier 8 closes on Cranelift** (packages/nwasm/CHANGELOG.md).
   i64 arithmetic whose high half nobody reads runs in 32 bits, unsigned
   compares feed carry-only cmovs, r9 is allocatable where globals stay out of
