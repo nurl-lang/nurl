@@ -6,8 +6,8 @@
 // comparisons and min/max, call_indirect signature checks, table.* ops,
 // passive segments + memory.init/data.drop, memory.copy/fill, memory.grow
 // limits, division by constants, bit tests and shifts, reinterprets,
-// null reference locals, narrowed i64 arithmetic, unsigned compares,
-// and the start section. Run from the package root:
+// null reference locals, narrowed i64 arithmetic, unsigned compares, i32
+// call arguments, and the start section. Run from the package root:
 //   NURL_STDLIB=<repo> ../../nurl.sh tests/semantics_test.nu /tmp/st && /tmp/st
 
 $ `stdlib/core/string.nu`
@@ -91,6 +91,13 @@ $ `src/interp.nu`
 // selects, materialized 0/1s of both widths, constants at the edges of
 // the imm32 range and of the type, a branch, compare-exchange in a loop.
 @ wasm_ucmp → s { ^ `0061736d01000000011d0560027e7e017e60027f7f017e60017f017e60017e017e60027e7f017e030a09000000010203000004073a0903736774000003736c650001036d67740002056d677433320003036b33320004036b363400050473656c6b00060362726b0007036e657400080aed02090c002000200120002001561b0b0c002000200120002001581b0b12002000200156ad2000200158ad42027e7c0b1200200020014bad200020014dad42027e7c0b34002000417f4bad2000417f4dad42027e7c200041ffffffff074bad42047e7c2000417e4dad42087e7c200041054bad42107e7c0b4f002000427f56ad2000427f58ad42027e7c200042ffffffff0756ad42047e7c200042feffffff0758ad42087e7c200042ffffffffffffffffff0056ad42107e7c200042ffffffff7756ad42207e7c0b0d0020002001200042e400561b0b1800024020002001560d0020004207580d0042030f0b42040b7f02047e017f2000210220004295f8a9fa97b7de9b9e7f7e21032000420d89210403402002200320022003561b21052003200220022003561b2102200521032003200420032004581b21052004200320032004581b210420054295f8a9fa97b7de9b9e7f7e2004852103200641016a22062001490d000b200220038520047c0b0066046e616d6502520900020001610101620102000161010162020200016101016203020001610101620401000161050100016106020001610101620702000161010162080700017801016e02016103016204016305017406016b030b020701000178080100016c` }
+
+// i32 arguments the JIT left zero-extended (no reader of the value needs
+// its high half — except the callee, which may widen it): wrapped sums
+// through call_indirect and a direct register-argument call, mixed i32 /
+// i64 parameters, six arguments past the register ABI, and an i32 made in
+// a loop and passed only after it (Rust's bounds-check panic shape).
+@ wasm_callargs → s { ^ `0061736d01000000011d0460017f017e60037f7e7f017e60067f7f7f7f7f7f017e60027f7f017e030908000102030303030004040170000407240503696e640003036469720004036d69780005037369780006086c6f6f7063616c6c0007090a010041000b04000102000ada010805002000ac0b0c002000ac20017c2002ac7d0b19002000ac2001ac7c2002ac7c2003ac7c2004ac7c2005ac7c0b0c00200020016a41001100000b0900200020016a10000b2200200020016a427b200020016c1001200020016a4207200020016b41011101007c0b4600200020016a200020016c200020016b2000410174200141037420002001731002200020016a200020016c200020016b20004101742001410374200020017341021102007d0b2a01027f0340200241f0ffffff076a2102200141016a22012000490d000b20021000200241031100007c0b005f046e616d650114030005776964656e01046d697833020473756d36022c050302000161010162040200016101016205020001610101620602000161010162070300016e010169020178030601070100016c040c030001740102743302027436` }
 
 // i32.reinterpret_f32 yields a canonical i32 (read back through the
 // i64.extend_i32_s the predecoder drops), demote/promote whose source
@@ -366,6 +373,23 @@ $ `src/interp.nu`
     ( ck `ctz64 #3:       ` ( ev1 fl `ctz64` 6 ) 1 )
     ( ck `mix #0:         ` ( ev1 fl `mix` 1000 ) -7772899469867135293 )
     ( ck `mix #1:         ` ( ev1 fl `mix` 1 ) -8736760740920937472 )
+
+    // ── i32 arguments sign-extended where they are passed ──
+    : s ca ( wasm_callargs )
+    ( ck `ind #0:         ` ( ev2 ca `ind` 2147483647 1 ) -2147483648 )
+    ( ck `ind #1:         ` ( ev2 ca `ind` -1 -1 ) -2 )
+    ( ck `ind #2:         ` ( ev2 ca `ind` 5 6 ) 11 )
+    ( ck `dir #0:         ` ( ev2 ca `dir` 2147483647 1 ) -2147483648 )
+    ( ck `dir #1:         ` ( ev2 ca `dir` -2147483648 -1 ) 2147483647 )
+    ( ck `mix #0:         ` ( ev2 ca `mix` 2147483647 1 ) -8589934587 )
+    ( ck `mix #1:         ` ( ev2 ca `mix` -1 -2147483648 ) 4294967297 )
+    ( ck `mix #2:         ` ( ev2 ca `mix` 65536 65536 ) 262146 )
+    ( ck `six #0:         ` ( ev2 ca `six` 2147483647 1 ) 0 )
+    ( ck `six #1:         ` ( ev2 ca `six` -1 1073741824 ) 0 )
+    ( ck `six #2:         ` ( ev2 ca `six` 123456 -654321 ) 0 )
+    ( ck `loopcall #0:    ` ( ev1 ca `loopcall` 3 ) 4294967200 )
+    ( ck `loopcall #1:    ` ( ev1 ca `loopcall` 5 ) 4294967136 )
+    ( ck `loopcall #2:    ` ( ev1 ca `loopcall` 17 ) 4294966752 )
 
     // ── unsigned > / <= with the operands exchanged ──
     : s uc ( wasm_ucmp )

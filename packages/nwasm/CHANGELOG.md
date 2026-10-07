@@ -1,5 +1,44 @@
 # Changelog
 
+## [2.3.0] — 2026-10-07
+
+Tier 8's register allocation gets smarter about what it spills. Nothing
+outside the JIT's output changed.
+
+### Changed
+
+- **A spilled value's reads take a free register where they can.** The
+  linear scan keeps a value in one place for its whole live range, so a
+  long-lived one the hot code reads stays in its frame slot once shorter,
+  denser values fill the registers somewhere along it. After allocation,
+  every run of its reads with no write between, no branch into it from
+  outside, and a register no other value holds across it (calls leave only
+  the callee-saved ones) loads the slot once and reads the register.
+- **A value a loop writes holds its register before one it only reads.**
+  Spilled, the first puts a store and a store-forwarded reload on its own
+  loop-carried chain every iteration; the second only reloads, early.
+- **A loop's records weigh once, whatever its back edges.** Each `continue`
+  multiplied the spill weight of the code it spans by eight again.
+- **A wrap of a value already zero-extended is a plain copy.**
+- **An i32 argument is sign-extended where it is passed**, not where it is
+  made: the predecoded call records carry which callee parameters are i32,
+  so a value whose only full-width reader is a call — an index passed to a
+  bounds-check panic on a cold path, as in every Rust slice access — no
+  longer pays a `movsxd` in the hot loop.
+
+Cycles at `--scale 100` against precompiled wasmtime on an i7-5930K:
+hash_join 1.16 / 0.97 / 0.91 → 1.10 / 0.94 / 0.89 of wasmtime (NURL / C /
+Rust), binary_search.rs 1.03 → 0.93, nbody.rs 1.11 → 1.05, json_parse.c
+0.91 → 0.81.
+
+### Fixed
+
+- **i32 arguments through `call_indirect` arrived zero-extended** in tier 8
+  (since 2.1.0) when nothing else read the value's high half: a callee that
+  widened the parameter read 2147483648 for −2147483648. The template tier
+  and the interpreter were right. `tests/semantics_test.nu` gains 14 checks
+  on wrapped i32 arguments through every call path (324 in all).
+
 ## [2.2.0] — 2026-10-07
 
 Tier 8 closes most of what was left between it and Cranelift on
