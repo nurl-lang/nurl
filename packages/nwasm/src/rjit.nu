@@ -1110,22 +1110,31 @@ $ `stdlib/core/vec.nu`
 }
 
 // loop weights: every backward branch multiplies the span it closes by 8
+// A loop counts once, from its head to its furthest back edge — each
+// `continue` is another branch to the same head, not another level.
 @ rj_depths Rj c → v {
     : i n ( rj_get c ( rjs_n ) )
+    : ( Vec i ) far ( vec_new [i] )
     : ~ i r 0
-    ~ < r n { ( vec_push [i] . c depth 1 ) = r + r 1 }
+    ~ < r n { ( vec_push [i] . c depth 1 ) ( vec_push [i] far -1 ) = r + r 1 }
     = r 0
     ~ < r n {
         : i t ( rj_target c r )
-        ? & >= t 0 <= t r {
+        ? & >= t 0 <= t r { ? > r ( vec_at [i] far t ) { ( vec_put [i] far t r ) } {} } {}
+        = r + r 1
+    }
+    : ~ i t 0
+    ~ < t n {
+        : i e ( vec_at [i] far t )
+        ? >= e 0 {
             : ~ i k t
-            ~ <= k r {
+            ~ <= k e {
                 : i dw ( vec_at [i] . c depth k )
                 ? < dw 32768 { ( vec_put [i] . c depth k * dw 8 ) } {}
                 = k + k 1
             }
         } {}
-        = r + r 1
+        = t + t 1
     }
 }
 
