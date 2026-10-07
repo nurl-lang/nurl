@@ -58,6 +58,12 @@ $ `rjit.nu`
 // in, then executable again.
 & `c` @ mprotect *u addr i len i32 prot → i32
 
+// NURL_NWASM_PERFMAP=1: a perf JIT map (/tmp/perf-<pid>.map, "start size
+// name" per line), which `perf report` reads to name generated code
+& `c` @ getpid → i32
+
+& `c` @ creat s path i32 mode → i32
+
 // Guard-page linear memory: an 8 GiB PROT_NONE reservation swallows every
 // address a 32-bit index + 32-bit offset can form, so JIT code needs no
 // bounds checks — an out-of-bounds access faults and the runtime's SIGSEGV
@@ -307,6 +313,8 @@ $ `rjit.nu`
     ( Vec i ) jit_lhead
     ( Vec i ) jit_lnext
     ( Vec i ) jit_laddr
+    ( Vec i ) jit_lkind  // 1: a register-argument site (links to the callee's fast entry)
+    ( Vec i ) jit_fast  // per defined function: tier 8's register-argument entry (0 = none)
     b gpu_ok  // env/CUDA host imports enabled (opt-in; default off)
     b net_ok  // nurl_net host imports (real sockets) enabled (opt-in; default off)
     // Shared memory changes what a narrow store is allowed to touch: see
@@ -475,6 +483,8 @@ unsafe @ interp_new Module m__h → Interp {
     = . it jit_lhead ( vec_new [i] )
     = . it jit_lnext ( vec_new [i] )
     = . it jit_laddr ( vec_new [i] )
+    = . it jit_lkind ( vec_new [i] )
+    = . it jit_fast ( vec_new [i] )
     = . it jit_lc_pf 0
     = . it jit_co_fn 0
     = . it jit_co_env 0
@@ -2767,11 +2777,52 @@ unsafe @ __trap_backtrace * InterpImpl it * ModuleImpl m s top → v {
 : ~ i g_jitdump 0  // NURL_NWASM_JIT_DUMP=1: emit every sealed page as decimal bytes on stderr
 : ~ i g_rjit 1  // tier 8 (rjit.nu) first; NURL_NWASM_RJIT=0 keeps the template tier alone (A/B, debug)
 : ~ i g_rjdbg 0  // NURL_NWASM_RJIT_DBG=1: say on stderr which functions tier 8 declined, and why
+: ~ i g_perfmap -1  // NURL_NWASM_PERFMAP=1: fd of /tmp/perf-<pid>.map (-1 = off)
 @ interp_enable_jit → v { = g_jit 1 }
 
 @ interp_disable_rjit → v { = g_rjit 0 }
 
 @ interp_enable_rjdbg → v { = g_rjdbg 1 }
+
+unsafe @ interp_enable_perfmap → v {
+    : String p ( string_from `/tmp/perf-` )
+    ( string_push_int p # i ( getpid ) )
+    ( string_push_str p `.map` )
+    = g_perfmap # i ( creat ( string_data p ) # i32 420 )
+}
+
+@ __pm_hex ( Vec u ) out i x → v {
+    : ~ i sh 60
+    : ~ b lead T
+    ~ >= sh 0 {
+        : i d & >> x sh 15
+        ? | ! lead | != d 0 == sh 0 {
+            = lead F
+            ( vec_push [u] out # u ? < d 10 + 48 d + 87 d )
+        } {}
+        = sh - sh 4
+    }
+}
+
+// one perf-map line for a function just placed at [start, start+len)
+unsafe @ __perfmap_add * ModuleImpl m i fidx i start i len → v {
+    : ( Vec u ) line ( vec_new [u] )
+    ( __pm_hex line start ) ( vec_push [u] line # u 32 ) ( __pm_hex line len ) ( vec_push [u] line # u 32 )
+    : ( Vec u ) nm ( _module_func_name m fidx )
+    ? > ( vec_len [u] nm ) 0 {
+        : i nn ( vec_len [u] nm )
+        : ~ i k 0
+        ~ < k nn { ( vec_push [u] line ( vec_at [u] nm k ) ) = k + k 1 }
+    } {
+        : ( Vec u ) w ( vec_new [u] )
+        ( __msg_push_str w `wasm[` ) ( __msg_push_int w fidx ) ( __msg_push_str w `]` )
+        : i nw ( vec_len [u] w )
+        : ~ i k 0
+        ~ < k nw { ( vec_push [u] line ( vec_at [u] w k ) ) = k + k 1 }
+    }
+    ( vec_push [u] line # u 10 )
+    : i _w ( write # i32 g_perfmap # *u ( vec_data [u] line ) ( vec_len [u] line ) )
+}
 
 @ interp_disable_pin → v { = g_pin 0 }
 
@@ -3786,7 +3837,7 @@ unsafe @ __jit_ctx_get * InterpImpl it → *i {
         = . it jit_ctx_free . b 0
         ^ b
     } {}
-    ^ # *i ( nurl_zalloc 64 )
+    ^ # *i ( nurl_zalloc 72 )
 }
 
 unsafe @ __jit_ctx_put * InterpImpl it * i b → v {
@@ -4215,7 +4266,7 @@ unsafe @ __jit_state_init * InterpImpl it * ModuleImpl m → v {
     }
     = . spc + + 2 nf nall # i . . it table ctl
     : ~ i lk 0
-    ~ < lk nf { ( vec_push [i] . it jit_lhead -1 ) = lk + lk 1 }
+    ~ < lk nf { ( vec_push [i] . it jit_lhead -1 ) ( vec_push [i] . it jit_fast 0 ) = lk + lk 1 }
     // The inline call-out bridge: decompose a capturing closure into
     // (fn, env) the way recover/thread_spawn do — the emitted code calls
     // fn(env) directly. The interpreter keeps its own copy of the env
@@ -4528,14 +4579,20 @@ unsafe @ __jit_publish * InterpImpl it i d i ent → v {
     : *i ftw # *i + . it jit_spcell 16
     = . ftw d ent
     ? | < d 0 >= d ( vec_len [i] . it jit_lhead ) { ^ v } {}
+    : i fast ( vec_at [i] . it jit_fast d )
     : ~ i sk ( vec_at [i] . it jit_lhead d )
     ~ >= sk 0 {
         : i site ( vec_at [i] . it jit_laddr sk )
-        : i lo ( __jit_pg_lo site )
-        : i hi ( __jit_pg_hi + site 4 )
-        ? == 0 ( mprotect # *u lo - hi lo # i32 3 ) {
-            : b _ok ( __jit_put_rel32 site ent )
-            : i32 _r ( mprotect # *u lo - hi lo # i32 5 )
+        // a register-argument site only links to a register-argument entry;
+        // with none (the template tier compiled the callee) its stub stays
+        : i tgt ? == 1 ( vec_at [i] . it jit_lkind sk ) fast ent
+        ? != tgt 0 {
+            : i lo ( __jit_pg_lo site )
+            : i hi ( __jit_pg_hi + site 4 )
+            ? == 0 ( mprotect # *u lo - hi lo # i32 3 ) {
+                : b _ok ( __jit_put_rel32 site tgt )
+                : i32 _r ( mprotect # *u lo - hi lo # i32 5 )
+            } {}
         } {}
         = sk ( vec_at [i] . it jit_lnext sk )
     }
@@ -4547,7 +4604,7 @@ unsafe @ __jit_publish * InterpImpl it i d i ent → v {
 // stub (label n) with the fault-to-trap handler in guard mode. Shared by the
 // template tier and tier 8 (rjit.nu): both hand over the code, the label
 // table and the page-relative jump-table entries.
-unsafe @ __jit_install * InterpImpl it * ModuleImpl m * PFunc pf ( Vec u ) buf ( Vec i ) lab ( Vec i ) pta_off ( Vec i ) pta_stub ( Vec i ) cs_off ( Vec i ) cs_fx i n i guard i fidx9 → v {
+unsafe @ __jit_install * InterpImpl it * ModuleImpl m * PFunc pf ( Vec u ) buf ( Vec i ) lab ( Vec i ) pta_off ( Vec i ) pta_stub ( Vec i ) cs_off ( Vec i ) cs_fx ( Vec i ) cs_kind i n i guard i fidx9 → v {
     : i len ( vec_len [u] buf )
     : i pa ( __jit_arena_alloc it + len 16 )
     ? == pa 0 { = . pf jit # s -1 ^ v } {}  // no executable memory (wasm)
@@ -4572,11 +4629,15 @@ unsafe @ __jit_install * InterpImpl it * ModuleImpl m * PFunc pf ( Vec u ) buf (
     ~ < ck ncs {
         : i site + pa ( vec_at [i] cs_off ck )
         : i d - ( vec_at [i] cs_fx ck ) . m num_import_funcs
-        : i ent ? & >= d 0 < d ( vec_len [i] . it jit_lhead ) . ftab d 0
-        ? != ent 0 { : b _ok ( __jit_put_rel32 site ent ) } {
-            ? & >= d 0 < d ( vec_len [i] . it jit_lhead ) {
+        : i kind ( vec_at [i] cs_kind ck )
+        : b ind & >= d 0 < d ( vec_len [i] . it jit_lhead )
+        : i ent ? ind . ftab d 0
+        : i tgt ? == kind 1 ? ind ( vec_at [i] . it jit_fast d ) 0 ent
+        ? != tgt 0 { : b _ok ( __jit_put_rel32 site tgt ) } {
+            ? & ind == ent 0 {  // not compiled yet: wait for its publication
                 ( vec_push [i] . it jit_lnext ( vec_at [i] . it jit_lhead d ) )
                 ( vec_push [i] . it jit_laddr site )
+                ( vec_push [i] . it jit_lkind kind )
                 ( vec_put [i] . it jit_lhead d - ( vec_len [i] . it jit_laddr ) 1 )
             } {}
         }
@@ -4584,6 +4645,7 @@ unsafe @ __jit_install * InterpImpl it * ModuleImpl m * PFunc pf ( Vec u ) buf (
     }
     : i plo ( __jit_pg_lo pa )
     ? != 0 ( mprotect # *u plo - ( __jit_pg_hi + + pa len 16 ) plo # i32 5 ) { = . pf jit # s -1 ^ v } {}
+    ? >= g_perfmap 0 { ( __perfmap_add m fidx9 pa len ) } {}
     ? != 0 g_jitdump {  // decimal byte stream; tools/jitdump.py turns it back into objdump input
         ( nurl_eprint `[jitdump] cs=` ) ( nurl_eprint ( nurl_str_int . pf code_start ) )
         ( nurl_eprint ` fidx=` ) ( nurl_eprint ( nurl_str_int fidx9 ) )
@@ -4668,7 +4730,13 @@ unsafe @ __rj_try * InterpImpl it * ModuleImpl m * PFunc pf i fidx9 i guard → 
     : i sigoff + 16 * nfd 8
     : i tbloff + sigoff * + nfd . m num_import_funcs 8
     ? ( rj_compile c rsig . m num_import_funcs . it jit_spcell ( nurl_code_trap_addr ) . it jit_co_fn . it jit_co_env fidx9 sigoff tbloff ) {
-        ( __jit_install it m pf . c buf . c lab . c pta_off . c pta_stub . c cs_off . c cs_fx n guard fidx9 )
+        ( __jit_install it m pf . c buf . c lab . c pta_off . c pta_stub . c cs_off . c cs_fx . c cs_kind n guard fidx9 )
+        // the register-argument entry, for sites the publication links
+        : i foff ( rj_get c ( rjs_fastoff ) )
+        : i fd - fidx9 . m num_import_funcs
+        ? & & > foff 0 != # i . pf jit -1 & >= fd 0 < fd ( vec_len [i] . it jit_fast ) {
+            ( vec_put [i] . it jit_fast fd + # i . pf jit foff )
+        } {}
         ^ T
     } {}
     ? != 0 g_rjdbg {
@@ -5316,7 +5384,7 @@ unsafe @ __jit_try * InterpImpl it * ModuleImpl m * PFunc pf i fidx9 → v {
         = pk + pk 1
     }
     : ( Vec i ) nocs ( vec_new [i] )
-    ( __jit_install it m pf buf lab pta_off pta_stub nocs nocs n guard fidx9 )
+    ( __jit_install it m pf buf lab pta_off pta_stub nocs nocs nocs n guard fidx9 )
 }
 
 // Run an already-built, JIT-compiled frame `fj` to completion, handling
@@ -5392,6 +5460,7 @@ unsafe @ __jit_run * InterpImpl it * ModuleImpl m * PFunc pfj i argsp → i {
     = . cd 2 . it mem_bytes
     = . cd 3 # i ( vec_data [i] . it globals )
     = . cd 4 0 = . cd 5 0 = . cd 6 0 = . cd 7 0
+    = . cd 8 . it jit_slab_end  // tier 8's frame check reads it here (no anchor register needed)
     : i occ0 . it jit_cur_cd
     = . it jit_cur_cd # i cd
     : i status ( nurl_call_code2_sj # *u jh # *u cd # *u argsp )

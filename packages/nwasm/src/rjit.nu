@@ -86,7 +86,9 @@ $ `stdlib/core/vec.nu`
     ( Vec i ) cs_off  // direct call sites: the rel32's buffer offset …
     ( Vec i ) cs_fx  // … the callee …
     ( Vec i ) cs_ab  // … its argument base …
-    ( Vec i ) cs_nr  // … and its result count (the site's slow stub needs all four)
+    ( Vec i ) cs_nr  // … its result count (the site's slow stub needs all four) …
+    ( Vec i ) cs_kind  // … 1 for a register-argument site …
+    ( Vec i ) cs_np  // … and its argument count
     ( Vec i ) depth  // per record: loop weight (8^depth, capped)
     ( Vec i ) callr  // records that clobber caller-saved registers, ascending
     ( Vec i ) tgt  // per record: 1 when some branch targets it
@@ -131,7 +133,15 @@ $ `stdlib/core/vec.nu`
 
 @ rjs_tbloff → i { ^ 24 }  // anchor offset of the table's Vec control pointer
 
-@ rjs_nst → i { ^ 25 }
+@ rjs_fl → i { ^ 25 }  // 1: frameless (no calls, nothing in memory: no rbx, no slab frame)
+
+@ rjs_fast → i { ^ 26 }  // 1: the function gets a register-argument entry (≤ 5 params, ≤ 1 result)
+
+@ rjs_fastoff → i { ^ 27 }  // that entry's offset (0 = none)
+
+@ rjs_glob → i { ^ 28 }  // 1: the function reads or writes globals (r9 = their base, reserved)
+
+@ rjs_nst → i { ^ 29 }
 
 @ rj_get Rj c i k → i { ^ ( vec_at [i] . c st k ) }
 
@@ -373,7 +383,9 @@ $ `stdlib/core/vec.nu`
 
 @ rj_stub_inval Rj c → i { ^ + ( rj_get c ( rjs_n ) ) 5 }
 
-@ rj_lab_entry Rj c → i { ^ + ( rj_get c ( rjs_n ) ) 6 }  // the direct entry (+28)
+@ rj_lab_entry Rj c → i { ^ + ( rj_get c ( rjs_n ) ) 6 }  // the memory entry (+28)
+
+@ rj_lab_fast Rj c → i { ^ + ( rj_get c ( rjs_n ) ) 7 }  // the register-argument entry
 
 // condition nibbles: o 0 no 1 b 2 ae 3 e 4 ne 5 be 6 a 7 s 8 ns 9 p 10 np 11 l 12 ge 13 le 14 g 15
 // compare micro-op (56..75) → the nibble that means "true"
@@ -1340,7 +1352,8 @@ $ `stdlib/core/vec.nu`
     ~ < p npos {
         : ~ i wv ( vec_at [i] head p )
         ~ >= wv 0 {
-            ? > ( vec_at [i] . c wuse wv ) 0 {
+            : b dead == 0 ( vec_at [i] . c wuse wv )  // a dead def still needs somewhere to land
+            ? T {
                 : i ws ( vec_at [i] . c wst wv )
                 = k 0
                 ~ < k 32 {
@@ -1367,7 +1380,7 @@ $ `stdlib/core/vec.nu`
                     ? & & & ( rj_allowed l cls cross ) < ( vec_at [i] occ l ) 0 == 0 & ( rj_shr forbid l ) 1 | != l 2 == 0 nodx { = pick l } {}
                     = k + k 1
                 }
-                ? < pick 0 {  // full: evict the holder that uses its register least densely
+                ? & < pick 0 ! dead {  // full: evict the holder that uses its register least densely
                     : ~ i vl -1
                     : ~ i vw ( rj_dens c wv )
                     = k 0
@@ -1388,6 +1401,12 @@ $ `stdlib/core/vec.nu`
         }
         = p + p 1
     }
+    // frameless: no call or call-out, and no web in memory — nothing
+    // addresses the frame, so no rbx and no slab bump
+    : ~ b fl == 0 ( vec_len [i] . c callr )
+    = k 0
+    ~ & fl < k nw { ? == ( vec_at [i] . c wloc k ) ( rjl_mem ) { = fl F } {} = k + k 1 }
+    ( rj_set c ( rjs_fl ) ? fl 1 0 )
     // the registers that ended up holding something (evictions included)
     = k 0
     ~ < k nw {
@@ -1946,37 +1965,23 @@ $ `stdlib/core/vec.nu`
 // the destination of an edge move, as a place no other location aliases
 @ rj_place i loc i s → i { ^ ? < loc 32 loc ? == loc ( rjl_mem ) + 64 s -1 }
 
-// An edge block's parallel copy. A move goes once nothing still pending
-// reads its destination; a cycle is broken through rcx.
-@ rj_e_moves Rj c i e → v {
-    : i q0 ( vec_at [i] . c emoff e )
-    : i q1 ( vec_at [i] . c emoff + e 1 )
-    : i md ( vec_at [i] . c bmd e )
-    : i ms ( vec_at [i] . c bms e )
-    : ( Vec i ) dl ( vec_new [i] )
-    : ( Vec i ) ds ( vec_new [i] )
-    : ( Vec i ) sl ( vec_new [i] )
-    : ( Vec i ) ss ( vec_new [i] )
-    : ~ i q q0
-    ~ < q q1 {
-        : i dw ( vec_at [i] . c emd q )
-        ? > ( vec_at [i] . c wuse dw ) 0 {
-            : i su ( vec_at [i] . c emu q )
-            : i l1 ( vec_at [i] . c wloc dw )
-            : i s1 + md - q q0
-            : i l2 ? < su 0 ( rjl_imm ) ( vec_at [i] . c wloc su )
-            : i s2 + ms - q q0
-            ? != ( rj_place l1 s1 ) ( rj_place l2 s2 ) {
-                ( vec_push [i] dl l1 ) ( vec_push [i] ds s1 ) ( vec_push [i] sl l2 ) ( vec_push [i] ss s2 )
-            } {}
-        } {}
-        = q + q 1
-    }
+// One parallel copy: dl[k]/ds[k] ← sl[k]/ss[k] for every k at once. A
+// move goes once nothing still pending reads its destination; a cycle is
+// broken through rcx.
+@ rj_pmove Rj c ( Vec i ) dl ( Vec i ) ds ( Vec i ) sl ( Vec i ) ss → v {
     : ~ i left ( vec_len [i] dl )
     : ( Vec i ) done ( vec_new [i] )
-    = q 0
-    ~ < q left { ( vec_push [i] done 0 ) = q + q 1 }
+    : ~ i q 0
+    ~ < q left {
+        ? == ( rj_place ( vec_at [i] dl q ) ( vec_at [i] ds q ) ) ( rj_place ( vec_at [i] sl q ) ( vec_at [i] ss q ) ) {
+            ( vec_push [i] done 1 )  // already in place
+        } { ( vec_push [i] done 0 ) }
+        = q + q 1
+    }
     : i tot left
+    = left 0
+    = q 0
+    ~ < q tot { ? == 0 ( vec_at [i] done q ) { = left + left 1 } {} = q + q 1 }
     ~ > left 0 {
         : ~ b prog F
         = q 0
@@ -2011,6 +2016,29 @@ $ `stdlib/core/vec.nu`
             }
         }
     }
+}
+
+// An edge block's parallel copy.
+@ rj_e_moves Rj c i e → v {
+    : i q0 ( vec_at [i] . c emoff e )
+    : i q1 ( vec_at [i] . c emoff + e 1 )
+    : i md ( vec_at [i] . c bmd e )
+    : i ms ( vec_at [i] . c bms e )
+    : ( Vec i ) dl ( vec_new [i] )
+    : ( Vec i ) ds ( vec_new [i] )
+    : ( Vec i ) sl ( vec_new [i] )
+    : ( Vec i ) ss ( vec_new [i] )
+    : ~ i q q0
+    ~ < q q1 {
+        : i dw ( vec_at [i] . c emd q )
+        ? > ( vec_at [i] . c wuse dw ) 0 {
+            : i su ( vec_at [i] . c emu q )
+            ( vec_push [i] dl ( vec_at [i] . c wloc dw ) ) ( vec_push [i] ds + md - q q0 )
+            ( vec_push [i] sl ? < su 0 ( rjl_imm ) ( vec_at [i] . c wloc su ) ) ( vec_push [i] ss + ms - q q0 )
+        } {}
+        = q + q 1
+    }
+    ( rj_pmove c dl ds sl ss )
 }
 
 // the edge block a branch record owns (BRM / BRIFM)
@@ -2112,6 +2140,40 @@ $ `stdlib/core/vec.nu`
     ( rj_jcc c ( rj_cmpcc cop ) ( rj_tgtrec ( rj_rw c r 1 ) ) )
 }
 
+// ── the register calling convention (tier 8 → tier 8) ──────────
+// A callee with at most five parameters and at most one result gets a
+// second, FAST entry: argument k arrives in rj_areg(k), the result leaves
+// in rax, and nothing is stored to or reloaded from the caller's window.
+// rcx is still the callee's frame base and rsi the window (the slab-full
+// path spills the arguments there), rdi the context. Neither side keeps
+// r8/r9/r10 as invariants across a fast call: tier 8 rematerialises the
+// anchor wherever it reads it, reserves r9 for the globals base only in
+// a function that touches globals (and reloads it after every call), and
+// reads the memory size from the context. The memory entry (+28) — the
+// driver's, the template tier's and the bridges' way in — is a wrapper:
+// it loads the window into the argument registers, calls the fast entry,
+// stores the result back and re-establishes the invariants its callers
+// rely on.
+@ rj_areg i k → i {
+    ? == k 0 { ^ 2 } {}  // rdx
+    ? == k 1 { ^ 0 } {}  // rax
+    ? == k 2 { ^ 9 } {}  // r9
+    ? == k 3 { ^ 10 } {}  // r10
+    ^ 8  // r8
+}
+
+@ rj_fastsig i sig → b { ^ & & >= sig 0 <= ( rj_sig_np sig ) 5 <= ( rj_sig_nr sig ) 1 }
+
+// rdi back to the context (a callee and every call-out need it there)
+@ rj_restore_ctx Rj c → v {
+    ? ( rj_uses c 7 ) { ( rj_b c 72 ) ( rj_b c 139 ) ( rj_b c 60 ) ( rj_b c 36 ) } {}  // mov rdi,[rsp]
+}
+
+// r9 back to the globals base after something may have clobbered it
+@ rj_reglob Rj c → v {
+    ? == 1 ( rj_get c ( rjs_glob ) ) { ( rj_b c 76 ) ( rj_b c 139 ) ( rj_b c 79 ) ( rj_b c 24 ) } {}  // mov r9,[rdi+24]
+}
+
 // ── lowering: calls ─────────────────────────────────────────────
 // the inline call-out into the runtime (the template tier's own sequence)
 @ rj_callout Rj c i kind → v {
@@ -2140,15 +2202,22 @@ $ `stdlib/core/vec.nu`
 // function that allocated them puts them back before control leaves it
 @ rj_uses Rj c i l → b { ^ != 0 & ( rj_shr ( rj_get c ( rjs_used ) ) l ) 1 }
 
+// The invariants a template-tier function, a bridge or a memory-entry
+// caller expects: rdi the context, r8 the anchor, r9 the globals base, r10
+// the memory size. Re-established before every memory-ABI call, call-out
+// and memory-entry return — unconditionally, since a fast callee may have
+// left anything in r8..r10.
 @ rj_restore_inv Rj c → v {
-    ? ( rj_uses c 7 ) { ( rj_b c 72 ) ( rj_b c 139 ) ( rj_b c 60 ) ( rj_b c 36 ) } {}  // mov rdi,[rsp] — the saved context
-    ? ( rj_uses c 8 ) { ( rj_b c 73 ) ( rj_b c 184 ) ( rj_q c ( rj_get c ( rjs_spcell ) ) ) } {}  // movabs r8, anchor
-    ? ( rj_uses c 9 ) { ( rj_b c 76 ) ( rj_b c 139 ) ( rj_b c 79 ) ( rj_b c 24 ) } {}  // mov r9,[rdi+24]
-    ? ( rj_uses c 10 ) { ( rj_b c 76 ) ( rj_b c 139 ) ( rj_b c 87 ) ( rj_b c 16 ) } {}  // mov r10,[rdi+16]
+    ( rj_restore_ctx c )
+    ( rj_b c 73 ) ( rj_b c 184 ) ( rj_q c ( rj_get c ( rjs_spcell ) ) )  // movabs r8, anchor
+    ( rj_b c 76 ) ( rj_b c 139 ) ( rj_b c 79 ) ( rj_b c 24 )  // mov r9,[rdi+24]
+    ( rj_b c 76 ) ( rj_b c 139 ) ( rj_b c 87 ) ( rj_b c 16 )  // mov r10,[rdi+16]
 }
 
 // the args pointer's stack offset: above the saved context when rdi was handed out
 @ rj_argsp Rj c → i { ^ ? ( rj_uses c 7 ) 8 0 }
+
+@ rj_frameless Rj c → b { ^ == 1 ( rj_get c ( rjs_fl ) ) }
 
 // lea rcx,[rbx + nslots*8] — the callee's frame base (the end of ours)
 @ rj_frame_end Rj c → v { ( rj_lea c 1 1 3 -1 0 * ( rj_get c ( rjs_ns ) ) 8 ) }
@@ -2160,37 +2229,65 @@ $ `stdlib/core/vec.nu`
     : i sig ( vec_at [i] . c rsig r )
     : i np ( rj_sig_np sig )
     : i nr ( rj_sig_nr sig )
-    // arguments to their homes: the callee and every bridge read them there
     : ~ i k 0
-    ~ < k np {
-        : i o ( rj_u c r k )
-        ( rj_move c ( rjl_mem ) + ab k ( rj_uloc c o ) ( rj_us c o ) )
-        = k + k 1
-    }
     : i nimp ( rj_get c ( rjs_nimp ) )
     : b direct & == op 50 >= fx nimp
-    ? & direct == np 1 { : i o0 ( rj_u c r 0 ) ( rj_ldg c 2 ( rj_uloc c o0 ) ( rj_us c o0 ) 0 ) } {}  // arg0 rides in rdx
-    ( rj_restore_inv c )
-    ( rj_frame_end c )
-    ? direct {
-        // A direct call: rel32 to the callee's entry once it is compiled
-        // (the installer patches it in; a self-call knows it already), to
-        // this site's stub until then — the stub tail-jumps through the
-        // entry table, or runs the call on the bridge.
-        ( rj_lea c 1 6 3 -1 0 * ab 8 )  // lea rsi,[rbx+argbase*8]
+    : b fast & direct ( rj_fastsig sig )
+    ? fast {
+        // a register-argument call: the arguments go straight into rdx,
+        // rax, r9, r10, r8 (one parallel copy), nothing through memory
+        : ( Vec i ) dl ( vec_new [i] )
+        : ( Vec i ) ds ( vec_new [i] )
+        : ( Vec i ) sl ( vec_new [i] )
+        : ( Vec i ) ss ( vec_new [i] )
+        = k 0
+        ~ < k np {
+            : i o ( rj_u c r k )
+            ( vec_push [i] dl ( rj_areg k ) ) ( vec_push [i] ds -1 )
+            ( vec_push [i] sl ( rj_uloc c o ) ) ( vec_push [i] ss ( rj_us c o ) )
+            = k + k 1
+        }
+        ( rj_pmove c dl ds sl ss )
+        ( rj_restore_ctx c )
+        ( rj_frame_end c )
+        ( rj_lea c 1 6 3 -1 0 * ab 8 )  // lea rsi,[rbx+argbase*8] — the window, for the slab-full path
         ( rj_b c 232 ) ( rj_d c 0 )  // call rel32
         ? == fx ( rj_get c ( rjs_fidx ) ) {
-            ( vec_push [i] . c pat_at - ( rj_here c ) 4 ) ( vec_push [i] . c pat_rec ( rj_lab_entry c ) )
+            ( vec_push [i] . c pat_at - ( rj_here c ) 4 ) ( vec_push [i] . c pat_rec ( rj_lab_fast c ) )
         } {
             ( vec_push [i] . c cs_off - ( rj_here c ) 4 ) ( vec_push [i] . c cs_fx fx )
-            ( vec_push [i] . c cs_ab ab ) ( vec_push [i] . c cs_nr nr )
+            ( vec_push [i] . c cs_ab ab ) ( vec_push [i] . c cs_nr nr ) ( vec_push [i] . c cs_kind 1 ) ( vec_push [i] . c cs_np np )
         }
+        ( rj_reglob c )
     } {
-        ( rj_b c 73 ) ( rj_b c 137 ) ( rj_b c 8 )  // mov [r8],rcx — the driver may run guest code above us
-        ( rj_b c 72 ) ( rj_b c 199 ) ( rj_b c 71 ) ( rj_b c 32 ) ( rj_d c fx )  // mov qword[rdi+32], fidx
-        ( rj_b c 72 ) ( rj_b c 199 ) ( rj_b c 71 ) ( rj_b c 40 ) ( rj_d c ab )  // mov qword[rdi+40], argbase
-        ( rj_callout c 16 )
-        ? == nr 1 { ( rj_ldf c 1 0 ab ) } {}  // the bridge left result 0 in memory only
+        // arguments to their homes: the callee and every bridge read them there
+        = k 0
+        ~ < k np {
+            : i o ( rj_u c r k )
+            ( rj_move c ( rjl_mem ) + ab k ( rj_uloc c o ) ( rj_us c o ) )
+            = k + k 1
+        }
+        ? & direct == np 1 { : i o0 ( rj_u c r 0 ) ( rj_ldg c 2 ( rj_uloc c o0 ) ( rj_us c o0 ) 0 ) } {}  // arg0 rides in rdx
+        ( rj_restore_inv c )
+        ( rj_frame_end c )
+        ? direct {
+            // a direct memory-ABI call: rel32 to the callee's memory entry
+            // once it is compiled, to this site's stub until then
+            ( rj_lea c 1 6 3 -1 0 * ab 8 )  // lea rsi,[rbx+argbase*8]
+            ( rj_b c 232 ) ( rj_d c 0 )  // call rel32
+            ? == fx ( rj_get c ( rjs_fidx ) ) {
+                ( vec_push [i] . c pat_at - ( rj_here c ) 4 ) ( vec_push [i] . c pat_rec ( rj_lab_entry c ) )
+            } {
+                ( vec_push [i] . c cs_off - ( rj_here c ) 4 ) ( vec_push [i] . c cs_fx fx )
+                ( vec_push [i] . c cs_ab ab ) ( vec_push [i] . c cs_nr nr ) ( vec_push [i] . c cs_kind 0 ) ( vec_push [i] . c cs_np np )
+            }
+        } {
+            ( rj_b c 73 ) ( rj_b c 137 ) ( rj_b c 8 )  // mov [r8],rcx — the driver may run guest code above us
+            ( rj_b c 72 ) ( rj_b c 199 ) ( rj_b c 71 ) ( rj_b c 32 ) ( rj_d c fx )  // mov qword[rdi+32], fidx
+            ( rj_b c 72 ) ( rj_b c 199 ) ( rj_b c 71 ) ( rj_b c 40 ) ( rj_d c ab )  // mov qword[rdi+40], argbase
+            ( rj_callout c 16 )
+            ? == nr 1 { ( rj_ldf c 1 0 ab ) } {}  // the bridge left result 0 in memory only
+        }
     }
     // results: result 0 is in rax on both paths; the rest are in their homes
     = k 0
@@ -2208,17 +2305,25 @@ $ `stdlib/core/vec.nu`
 
 @ rj_e_ret Rj c i r → v {
     : i nres ( rj_rw c r 2 )
-    ( rj_rm c 0 1 0 139 1 4 -1 0 ( rj_argsp c ) 0 )  // mov rcx,[rsp(+8)] — the args pointer
+    ? == 1 ( rj_get c ( rjs_fast ) ) {  // the register ABI: result 0 in rax, nothing else
+        ? > nres 0 { : i o0 ( rj_u c r 0 ) ( rj_ldg c 0 ( rj_uloc c o0 ) ( rj_us c o0 ) 0 ) } {}
+        ( rj_epilogue c )
+        ^ v
+    } {}
+    // the args pointer: still in rsi when a frameless function never took
+    // rsi, else saved on the stack
+    : i ap ? & ( rj_frameless c ) ! ( rj_uses c 6 ) 6 1
+    ? == ap 1 { ( rj_rm c 0 1 0 139 1 4 -1 0 ( rj_argsp c ) 0 ) } {}  // mov rcx,[rsp(+8)]
     : ~ i k 0
     ~ < k nres {
         : i o ( rj_u c r k )
         : i l ( rj_uloc c o )
         : i s ( rj_us c o )
         : i disp * k 8
-        ? ( rj_isx l ) { ( rj_rm c 242 0 1 17 - l 16 1 -1 0 disp 0 ) } {  // movsd [rcx+8k], x
+        ? ( rj_isx l ) { ( rj_rm c 242 0 1 17 - l 16 ap -1 0 disp 0 ) } {  // movsd [ap+8k], x
             : ~ i vr ( rj_greg l )
             ? < vr 0 { ( rj_ldg c 0 l s 0 ) = vr 0 } {}
-            ( rj_rm c 0 1 0 137 vr 1 -1 0 disp 0 )  // mov [rcx+8k], r
+            ( rj_rm c 0 1 0 137 vr ap -1 0 disp 0 )  // mov [ap+8k], r
         }
         = k + k 1
     }
@@ -2318,7 +2423,7 @@ $ `stdlib/core/vec.nu`
 @ rj_epilogue Rj c → v {
     : i used ( rj_get c ( rjs_used ) )
     ? ( rj_uses c 7 ) { ( rj_pop c 7 ) } {}  // the context, back in rdi for the caller
-    ( rj_pop c 6 ) ( rj_pop c 3 )  // rsi, rbx
+    ? ( rj_frameless c ) { ? ( rj_uses c 6 ) { ( rj_pop c 6 ) } {} } { ( rj_pop c 6 ) ( rj_pop c 3 ) }  // rsi, rbx
     : ~ i k 4
     ~ >= k 0 {
         : i l ( rj_saved k )
@@ -2360,7 +2465,28 @@ $ `stdlib/core/vec.nu`
     ( rj_b c 76 ) ( rj_b c 139 ) ( rj_b c 79 ) ( rj_b c 24 )  // mov r9,[rdi+24]
     ? == np 1 { ( rj_b c 72 ) ( rj_b c 139 ) ( rj_b c 22 ) } { ( rj_b c 15 ) ( rj_b c 31 ) ( rj_b c 0 ) }  // mov rdx,[rsi] / nop3
     ( rj_b c 73 ) ( rj_b c 139 ) ( rj_b c 8 )  // mov rcx,[r8]
-    // the direct entry (+28)
+    // the memory entry (+28); a register-argument function's is a wrapper:
+    // window → argument registers, the fast entry, result → window, and
+    // the invariants a memory-ABI caller relies on
+    : b fast == 1 ( rj_get c ( rjs_fast ) )
+    ? fast {
+        : i nr ( rj_get c ( rjs_nr ) )
+        : ~ i k 0
+        ~ < k np {
+            ? | != k 0 != np 1 { ( rj_rm c 0 1 0 139 ( rj_areg k ) 6 -1 0 * k 8 0 ) } {}  // mov A[k],[rsi+8k]
+            = k + k 1
+        }
+        ( rj_b c 232 ) ( rj_d c 0 )  // call the fast entry
+        ( vec_push [i] . c pat_at - ( rj_here c ) 4 ) ( vec_push [i] . c pat_rec ( rj_lab_fast c ) )
+        ? == nr 1 { ( rj_rm c 0 1 0 137 0 6 -1 0 0 0 ) } {}  // mov [rsi],rax
+        // rdi is the context again (the fast body gave it back)
+        ( rj_b c 73 ) ( rj_b c 184 ) ( rj_q c ( rj_get c ( rjs_spcell ) ) )  // movabs r8, anchor
+        ( rj_b c 76 ) ( rj_b c 139 ) ( rj_b c 79 ) ( rj_b c 24 )  // mov r9,[rdi+24]
+        ( rj_b c 76 ) ( rj_b c 139 ) ( rj_b c 87 ) ( rj_b c 16 )  // mov r10,[rdi+16]
+        ( rj_b c 195 )  // ret
+        ( rj_align16 c )
+        ( rj_set c ( rjs_fastoff ) ( rj_here c ) )
+    } {}
     : i used ( rj_get c ( rjs_used ) )
     : ~ i k 0
     ~ < k 5 {
@@ -2368,17 +2494,55 @@ $ `stdlib/core/vec.nu`
         ? != 0 & ( rj_shr used l ) 1 { ( rj_push c l ) } {}
         = k + k 1
     }
-    ( rj_push c 3 ) ( rj_push c 6 )  // rbx, rsi (the args pointer, read back at RET)
-    ? ( rj_uses c 7 ) { ( rj_push c 7 ) } {}  // the context, when rdi is handed out
-    ( rj_mov_rr c 1 3 1 )  // mov rbx,rcx
-    ( rj_frame_end c )
-    ( rj_rm c 0 1 0 59 1 8 -1 0 8 0 )  // cmp rcx,[r8+8] — slab end
-    ( rj_jcc c 7 ( rj_stub_ovf c ) )  // ja
+    ? ( rj_frameless c ) {
+        ? ( rj_uses c 6 ) { ( rj_push c 6 ) } {}  // rsi only when a web takes it
+        ? ( rj_uses c 7 ) { ( rj_push c 7 ) } {}
+    } {
+        ( rj_push c 3 ) ( rj_push c 6 )  // rbx, rsi (the args pointer, read back at RET)
+        ? ( rj_uses c 7 ) { ( rj_push c 7 ) } {}  // the context, when rdi is handed out
+        ( rj_mov_rr c 1 3 1 )  // mov rbx,rcx
+        ( rj_frame_end c )
+        ( rj_rm c 0 1 0 59 1 7 -1 0 64 0 )  // cmp rcx,[rdi+64] — the slab end (ctx[8])
+        ( rj_jcc c 7 ( rj_stub_ovf c ) )  // ja
+    }
+    // a register-argument entry's parameters: one parallel copy out of the
+    // argument registers (before anything else lands in them)
+    ? fast {
+        : ( Vec i ) dl ( vec_new [i] )
+        : ( Vec i ) ds ( vec_new [i] )
+        : ( Vec i ) sl ( vec_new [i] )
+        : ( Vec i ) ss ( vec_new [i] )
+        : i ne0 ( vec_len [i] . c entw )
+        : ~ i q0 0
+        ~ < q0 ne0 {
+            : i wv ( vec_at [i] . c entw q0 )
+            : i sp ( vec_at [i] . c wslot wv )
+            ? & > ( vec_at [i] . c wuse wv ) 0 < sp np {
+                ( vec_push [i] dl ( vec_at [i] . c wloc wv ) ) ( vec_push [i] ds sp )
+                ( vec_push [i] sl ( rj_areg sp ) ) ( vec_push [i] ss -1 )
+            } {}
+            = q0 + q0 1
+        }
+        ( rj_pmove c dl ds sl ss )
+        // r9 = the globals base (r9 may have carried an argument)
+        ? == 1 ( rj_get c ( rjs_glob ) ) {
+            ? ( rj_uses c 7 ) { ( rj_rm c 0 1 0 139 9 4 -1 0 0 0 ) ( rj_rm c 0 1 0 139 9 9 -1 0 24 0 ) } {  // mov r9,[rsp]; mov r9,[r9+24]
+                ( rj_reglob c ) }
+        } {}
+    } {}
     // entry values; whatever took rsi goes last — rsi is the window
     // pointer — and with one parameter, its web goes first: it arrives in
     // rdx, which another entry value may be about to take
     : i ne ( vec_len [i] . c entw )
     : ~ i q 0
+    ? fast {  // the parameters are placed: zero the live-in locals
+        ~ < q ne {
+            : i wv ( vec_at [i] . c entw q )
+            ? & > ( vec_at [i] . c wuse wv ) 0 >= ( vec_at [i] . c wslot wv ) np { ( rj_entry1 c wv ) } {}
+            = q + q 1
+        }
+        ^ v
+    } {}
     ? == np 1 {
         ~ < q ne {
             : i wv ( vec_at [i] . c entw q )
@@ -2414,6 +2578,11 @@ $ `stdlib/core/vec.nu`
     // with the raw args pointer as its frame base; nothing was allocated
     // and no callee-saved register touched, so the entry pushes unwind
     ( vec_push [i] . c lab ( rj_here c ) )
+    ? == 1 ( rj_get c ( rjs_fast ) ) {  // register arguments → the window rsi still points at
+        : i np ( rj_get c ( rjs_np ) )
+        : ~ i k 0
+        ~ < k np { ( rj_rm c 0 1 0 137 ( rj_areg k ) 6 -1 0 * k 8 0 ) = k + k 1 }
+    } {}
     ( rj_rm c 0 1 0 139 3 4 -1 0 ( rj_argsp c ) 0 )  // mov rbx,[rsp(+8)] — the args pointer
     ( rj_b c 72 ) ( rj_b c 199 ) ( rj_b c 71 ) ( rj_b c 32 ) ( rj_d c ( rj_get c ( rjs_fidx ) ) )  // mov qword[rdi+32], fidx
     ( rj_b c 72 ) ( rj_b c 199 ) ( rj_b c 71 ) ( rj_b c 40 ) ( rj_d c 0 )  // mov qword[rdi+40], 0
@@ -2424,31 +2593,50 @@ $ `stdlib/core/vec.nu`
     ( rj_b c 191 ) ( rj_d c 10 ) ( rj_jmp c ( rj_stub_gate c ) )
     ( vec_push [i] . c lab ( rj_here c ) )  // n+5: NaN to integer → status 12
     ( rj_b c 191 ) ( rj_d c 12 ) ( rj_jmp c ( rj_stub_gate c ) )
-    ( vec_push [i] . c lab 28 )  // n+6: the direct entry
+    ( vec_push [i] . c lab 28 )  // n+6: the memory entry
+    ( vec_push [i] . c lab ? > ( rj_get c ( rjs_fastoff ) ) 0 ( rj_get c ( rjs_fastoff ) ) 28 )  // n+7: the fast entry
     // one stub per direct call site, the target of its rel32 until the
-    // callee is linked: [rsp] holds the site's return address, so the stub
-    // either tail-jumps into the callee or runs the call on the bridge and
-    // returns with result 0 in rax, exactly as the callee would
+    // callee is linked; [rsp] holds the site's return address. A site's
+    // stub only spills its register arguments (a fast site) and names the
+    // callee and the window; one shared tail per function either
+    // tail-jumps into the callee's memory entry or runs the call on the
+    // bridge and returns with result 0 in rax, exactly as the callee would.
     : i nimp ( rj_get c ( rjs_nimp ) )
     : i ncs ( vec_len [i] . c cs_off )
+    : ( Vec i ) tojoin ( vec_new [i] )
     : ~ i k 0
     ~ < k ncs {
         ( rj_patch32 c ( vec_at [i] . c cs_off k ) ( rj_here c ) )
-        : i fx ( vec_at [i] . c cs_fx k )
         : i ab ( vec_at [i] . c cs_ab k )
-        ( rj_rm c 0 1 0 139 0 8 -1 0 + 16 * - fx nimp 8 0 )  // mov rax,[r8+ftab]
+        ? == 1 ( vec_at [i] . c cs_kind k ) {  // register arguments → the caller's window
+            : i snp ( vec_at [i] . c cs_np k )
+            : ~ i j 0
+            ~ < j snp { ( rj_stf c 1 + ab j ( rj_areg j ) ) = j + j 1 }
+        } {}
+        ( rj_b c 72 ) ( rj_b c 199 ) ( rj_b c 71 ) ( rj_b c 40 ) ( rj_d c ab )  // mov qword[rdi+40], argbase
+        ( rj_b c 184 ) ( rj_d c ( vec_at [i] . c cs_fx k ) )  // mov eax, fidx
+        ( vec_push [i] tojoin ( rj_jmp_fwd c ) )
+        = k + k 1
+    }
+    ? > ncs 0 {
+        : i nj ( vec_len [i] tojoin )
+        = k 0
+        ~ < k nj { ( rj_land c ( vec_at [i] tojoin k ) ) = k + k 1 }
+        ( rj_b c 72 ) ( rj_b c 137 ) ( rj_b c 71 ) ( rj_b c 32 )  // mov [rdi+32],rax — the callee, for the bridge
+        ( rj_b c 73 ) ( rj_b c 184 ) ( rj_q c ( rj_get c ( rjs_spcell ) ) )  // movabs r8, anchor
+        ( rj_b c 76 ) ( rj_b c 139 ) ( rj_b c 79 ) ( rj_b c 24 )  // mov r9,[rdi+24]
+        ( rj_b c 76 ) ( rj_b c 139 ) ( rj_b c 87 ) ( rj_b c 16 )  // mov r10,[rdi+16]
+        ( rj_rm c 0 1 0 139 0 8 0 3 - 16 * nimp 8 0 )  // mov rax,[r8+rax*8+16-8*nimp] — its memory entry
         ( rj_test_rr c 1 0 0 )
         : i jz ( rj_jcc_fwd c 4 )
         ( rj_b c 255 ) ( rj_b c 224 )  // jmp rax
         ( rj_land c jz )
-        ( rj_b c 73 ) ( rj_b c 137 ) ( rj_b c 8 )  // mov [r8],rcx
-        ( rj_b c 72 ) ( rj_b c 199 ) ( rj_b c 71 ) ( rj_b c 32 ) ( rj_d c fx )  // mov qword[rdi+32], fidx
-        ( rj_b c 72 ) ( rj_b c 199 ) ( rj_b c 71 ) ( rj_b c 40 ) ( rj_d c ab )  // mov qword[rdi+40], argbase
+        ( rj_b c 73 ) ( rj_b c 137 ) ( rj_b c 8 )  // mov [r8],rcx — the frame end, for the driver
         ( rj_callout c 16 )
-        ? == ( vec_at [i] . c cs_nr k ) 1 { ( rj_ldf c 1 0 ab ) } {}
+        ( rj_rm c 0 1 0 139 0 7 -1 0 40 0 )  // mov rax,[rdi+40] — the argbase
+        ( rj_rm c 0 1 0 139 0 3 0 3 0 0 )  // mov rax,[rbx+rax*8] — result 0
         ( rj_b c 195 )  // ret
-        = k + k 1
-    }
+    } {}
 }
 
 // multi-byte NOPs up to the next 16-byte boundary
@@ -2596,7 +2784,7 @@ $ `stdlib/core/vec.nu`
         ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] )
         ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] )
         ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] )
-        ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] )
+        ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] )
     }
 }
 
@@ -2621,12 +2809,12 @@ $ `stdlib/core/vec.nu`
             : i moff ( rj_rw c r 3 )
             ? | < moff 0 > moff 2147483639 { ( rj_fail c 10 ) ^ F } {}
         } {}
-        ? | == op 52 == op 53 { = forbid | forbid 512 } {}  // r9 is the globals base
-        ? == op 162 { = forbid | forbid 1024 } {}  // r10 is the memory size
+        ? | == op 52 == op 53 { = forbid | forbid 512 ( rj_set c ( rjs_glob ) 1 ) } {}  // r9 is the globals base
         ( vec_push [i] . c rsig ? < r ( vec_len [i] rsig ) ( vec_at [i] rsig r ) -1 )
         = r + r 1
     }
     ( rj_set c ( rjs_forbid ) forbid )
+    ( rj_set c ( rjs_fast ) ? & <= ( rj_get c ( rjs_np ) ) 5 <= ( rj_get c ( rjs_nr ) ) 1 1 0 )
     = r 0
     ~ < r n {
         ( vec_push [i] . c uoff ( vec_len [i] . c uslot ) ) ( vec_push [i] . c doff ( vec_len [i] . c dslot ) )
@@ -3058,7 +3246,9 @@ $ `stdlib/core/vec.nu`
 @ rj_e_memsize Rj c i r → v {
     : i od ( rj_dd c r 0 )
     ? ! ( rj_dlive c od ) { ^ v } {}
-    ( rj_mov_rr c 1 0 10 ) ( rj_shift_ri c 1 5 0 16 )  // pages = r10 >> 16
+    ? ( rj_uses c 7 ) { ( rj_rm c 0 1 0 139 0 4 -1 0 0 0 ) ( rj_rm c 0 1 0 139 0 0 -1 0 16 0 ) } {  // rax = ctx[2] via the saved context
+        ( rj_rm c 0 1 0 139 0 7 -1 0 16 0 ) }  // mov rax,[rdi+16]
+    ( rj_shift_ri c 1 5 0 16 )  // pages = bytes >> 16
     ( rj_stg c ( rj_dloc c od ) ( rj_ds c od ) 0 )
 }
 
