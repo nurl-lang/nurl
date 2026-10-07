@@ -1458,6 +1458,12 @@ $ `stdlib/core/vec.nu`
             ? & > nf 0 == nf ( vec_at [i] . c wuse wd ) { ( vec_put [i] flagonly wd 1 ) } {}
         } {}
         ? > ( rj_cfuse c r ) 0 { ( vec_put [i] flagonly ( vec_at [i] . c dweb ( rj_dd c r 0 ) ) 1 ) } {}
+        ? > ( rj_andz c r ) 0 { ( vec_put [i] flagonly ( vec_at [i] . c dweb ( rj_dd c r 0 ) ) 1 ) } {}
+        ? | == op 43 == op 44 {
+            : i we ( vec_at [i] . c dweb ( rj_dd c r 0 ) )
+            : i nfe ( rj_selrun c r we )
+            ? & > nfe 0 == nfe ( vec_at [i] . c wuse we ) { ( vec_put [i] flagonly we 1 ) } {}
+        } {}
         = r + r 1
     }
     : ( Vec i ) occ ( vec_new [i] )
@@ -1786,7 +1792,7 @@ $ `stdlib/core/vec.nu`
     : i ob ( rj_u c r 1 )
     : i od ( rj_dd c r 0 )
     ? ! ( rj_dlive c od ) { ^ v } {}
-    : i _tr ( rj_alu3 c ext w ( rj_uloc c oa ) ( rj_us c oa ) ( rj_uloc c ob ) ( rj_us c ob ) ( rj_dloc c od ) ( rj_ds c od ) ( rj_dcanon c od ) )
+    : i _tr ( rj_alu3 c ext w ( rj_uloc c oa ) ( rj_us c oa ) ( rj_uloc c ob ) ( rj_us c ob ) ( rj_dloc c od ) ( rj_ds c od ) ( rj_dcanon c od ) F )
 }
 
 // shifts and rotates: ext shl 4, shr 5, sar 7, rol 0, ror 1
@@ -1906,6 +1912,26 @@ $ `stdlib/core/vec.nu`
     ? >= t 0 { ( rj_tmp_off c t ) } {}
 }
 
+// tr = s1 op1 s2 for the fused pairs, straight from s1's register when it
+// has one: imul tr, s1, imm / lea tr, [s1 + s2 or imm] — no copy of s1 first
+@ rj_fop1_from Rj c i op i tr i l1 i s1 i l2 i s2 → v {
+    ? & ( rj_isg l1 ) != tr l1 {
+        ? & == op 13 == l2 ( rjl_imm ) {
+            : i kq ( rj_kval c s2 )
+            ? ( rj_fits32 kq ) { ( rj_imul_rri c 1 tr l1 kq ) ^ v } {}
+        } {}
+        ? | | | == op 14 == op 15 == op 16 == op 22 {
+            ? & ( rj_isg l2 ) != tr l2 { ( rj_lea c 1 tr l1 l2 0 0 ) ^ v } {}
+            ? == l2 ( rjl_imm ) {
+                : i kq ( rj_kval c s2 )
+                ? ( rj_fits32 kq ) { ( rj_lea c 1 tr l1 -1 0 kq ) ^ v } {}
+            } {}
+        } {}
+    } {}
+    ( rj_ldg c tr l1 s1 0 )
+    ( rj_fop1 c op tr l2 s2 )
+}
+
 @ rj_e_fused Rj c i r → v {
     : i op ( rj_rw c r 0 )
     : i od ( rj_dd c r 0 )
@@ -1926,8 +1952,7 @@ $ `stdlib/core/vec.nu`
     : b precx & & shr1 != l2 ( rjl_imm ) ! ( rj_bmi )  // the count into rcx first
     ? & & ( rj_isg dl ) == dl l3 comm2 {
         ? precx { ( rj_ldg c 1 l2 s2 0 ) } {}
-        ( rj_ldg c 0 l1 s1 0 )
-        ( rj_fop1 c op 0 l2 s2 )
+        ( rj_fop1_from c op 0 l1 s1 l2 s2 )
         ? | == op 13 == op 22 { ( rj_alu_rr c 1 0 dl 0 ) } {}
         ? | == op 14 == op 17 { ( rj_alu_rr c 1 4 dl 0 ) } {}
         ? | == op 15 == op 33 { ( rj_imul_rr c 1 dl 0 ) } {}
@@ -1936,8 +1961,7 @@ $ `stdlib/core/vec.nu`
     } {}
     : i tr ? & & ( rj_isg dl ) != dl l2 != dl l3 dl 0
     ? precx { ( rj_ldg c 1 l2 s2 0 ) } {}
-    ( rj_ldg c tr l1 s1 0 )
-    ( rj_fop1 c op tr l2 s2 )
+    ( rj_fop1_from c op tr l1 s1 l2 s2 )
     ? | == op 13 == op 22 { ( rj_opsrc c 1 0 tr l3 s3 ) } {}  // + x
     ? | == op 14 == op 17 { ( rj_opsrc c 1 4 tr l3 s3 ) } {}  // & x
     ? | == op 15 == op 33 { ( rj_imulsrc c 1 tr l3 s3 ) } {}  // * x
@@ -2096,16 +2120,78 @@ $ `stdlib/core/vec.nu`
     ( rj_set c ( rjs_pcc ) 3 )  // jae: CF clear
 }
 
+// Is record q an and with a constant whose value only the eqz right behind
+// it reads (same width, no branch lands between)? 1: test x, imm32; 2: bt x,
+// b for a single-bit 64-bit mask; 0: neither. The and itself emits nothing.
+@ rj_andz Rj c i q → i {
+    : i n ( rj_get c ( rjs_n ) )
+    ? | < q 0 >= + q 1 n { ^ 0 } {}
+    : i op ( rj_rw c q 0 )
+    ? & != op 2 != op 11 { ^ 0 } {}
+    : i r + q 1
+    : i rop ( rj_rw c r 0 )
+    ? & != rop 43 != rop 44 { ^ 0 } {}
+    ? != ? == op 2 1 0 ? == rop 44 1 0 { ^ 0 } {}
+    ? != 0 ( vec_at [i] . c tgt r ) { ^ 0 } {}
+    : i wd ( vec_at [i] . c dweb ( rj_dd c q 0 ) )
+    ? != ( vec_at [i] . c uweb ( rj_u c r 0 ) ) wd { ^ 0 } {}
+    ? != 1 ( vec_at [i] . c wuse wd ) { ^ 0 } {}
+    : b ka ( rj_ukonst c q 0 )
+    : b kb ( rj_ukonst c q 1 )
+    ? == ka kb { ^ 0 } {}
+    : i kq ( rj_kval c ( rj_us c ( rj_u c q ? kb 1 0 ) ) )
+    ? | == op 11 ( rj_fits32 kq ) { ^ 1 } {}
+    ? & > kq 0 == 0 & kq - kq 1 { ^ 2 } {}
+    ^ 0
+}
+
+// the flags for eqz(and(x, k)) from x itself; returns the jcc/cmov nibble
+// that means "the and is zero"
+@ rj_e_andtest Rj c i q i ak → i {
+    : i op ( rj_rw c q 0 )
+    : i w ? == op 2 1 0
+    : b kb ( rj_ukonst c q 1 )
+    : i ox ( rj_u c q ? kb 0 1 )
+    : ~ i kq ( rj_kval c ( rj_us c ( rj_u c q ? kb 1 0 ) ) )
+    : i xl ( rj_uloc c ox )
+    : i xs ( rj_us c ox )
+    ? == ak 2 {  // bt x, b: CF is the bit, so "zero" is ae
+        : ~ i b 0
+        ~ < << 1 b kq { = b + b 1 }
+        : ~ i xr ( rj_greg xl )
+        ? < xr 0 { ( rj_ldg c 0 xl xs 0 ) = xr 0 } {}
+        ( rj_rex c 1 0 0 xr 0 ) ( rj_b c 15 ) ( rj_b c 186 ) ( rj_modrr c 4 xr ) ( rj_b c b )  // bt r, imm8
+        ^ 3
+    } {}
+    ? == w 0 { = kq ( rj_sx32 kq ) } {}
+    ? == xl ( rjl_mem ) { ( rj_rm c 0 w 0 247 0 3 -1 0 ( rj_home xs ) 0 ) ( rj_d c kq ) } {  // test [m], imm32
+        : ~ i xr ( rj_greg xl )
+        ? < xr 0 { ( rj_ldg c 0 xl xs 0 ) = xr 0 } {}
+        ( rj_rex c w 0 0 xr 0 ) ( rj_b c 247 ) ( rj_modrr c 0 xr ) ( rj_d c kq )  // test r, imm32
+    }
+    ^ 4
+}
+
 @ rj_e_eqz Rj c i r i w → v {
     : i oa ( rj_u c r 0 )
     : i od ( rj_dd c r 0 )
     ? ! ( rj_dlive c od ) { ^ v } {}
     : i al ( rj_uloc c oa )
     : i dl ( rj_dloc c od )
+    // a run of SELs right behind that reads it as its condition takes the
+    // flags; only another consumer makes the 0/1 itself necessary
+    : i wd ( vec_at [i] . c dweb od )
+    : i nf ( rj_selrun c r wd )
+    : i mat ? > ( vec_at [i] . c wuse wd ) nf 1 0
+    // A fused and's x is read here, after its web ended at the and — so
+    // dst may sit in x's register: no pre-zeroing then, setcc + movzx after
+    : i ak ( rj_andz c - r 1 )
     : ~ i pre 0
-    ? & ( rj_isg dl ) != dl al { ( rj_rr c 0 0 0 49 dl dl 0 ) = pre 1 } {}
-    ( rj_testop c w al ( rj_us c oa ) )
-    ( rj_setbool c 4 dl ( rj_ds c od ) pre )
+    ? & & & == mat 1 ( rj_isg dl ) != dl al == ak 0 { ( rj_rr c 0 0 0 49 dl dl 0 ) = pre 1 } {}
+    : ~ i zc 4
+    ? > ak 0 { = zc ( rj_e_andtest c - r 1 ak ) } { ( rj_testop c w al ( rj_us c oa ) ) }
+    ? == mat 1 { ( rj_setbool c zc dl ( rj_ds c od ) pre ) } {}
+    ? > nf 0 { ( rj_set c ( rjs_fweb ) wd ) ( rj_set c ( rjs_fcc ) zc ) ( rj_set c ( rjs_fsel ) nf ) } {}
 }
 
 // cmov<cc> R, operand (64-bit); immediates and xmm through a scratch GPR
@@ -2488,7 +2574,8 @@ $ `stdlib/core/vec.nu`
 }
 
 // dst = a OP b into dst's place; returns the GPR holding the result
-@ rj_alu3 Rj c i ext i w i al i as i bl i bs i dl i ds b cn → i {
+// nolea: the flags must come from the op itself (an lea sets none)
+@ rj_alu3 Rj c i ext i w i al i as i bl i bs i dl i ds b cn b nolea → i {
     : i comm ? | | | == ext 0 == ext 1 == ext 4 == ext 6 1 0
     : ~ i tr 0
     ? ( rj_isg dl ) {
@@ -2501,7 +2588,7 @@ $ `stdlib/core/vec.nu`
                 }
             } {
                 : ~ b done F
-                ? & == ext 0 ( rj_isg al ) {
+                ? & & == ext 0 ( rj_isg al ) ! nolea {
                     ? ( rj_isg bl ) { ( rj_lea c w dl al bl 0 0 ) = done T } {
                         ? == bl ( rjl_imm ) {
                             : ~ i kq ( rj_kval c bs )
@@ -2509,6 +2596,11 @@ $ `stdlib/core/vec.nu`
                             ? ( rj_fits32 kq ) { ( rj_lea c w dl al -1 0 kq ) = done T } {}
                         } {}
                     }
+                } {}
+                // and with the low-32 mask (or an i32 and with -1): one mov r32
+                ? & & & ! done == ext 4 == bl ( rjl_imm ) ( rj_isg al ) {
+                    : i kq ( rj_kval c bs )
+                    ? | & == w 1 == kq 4294967295 & == w 0 == ( rj_sx32 kq ) -1 { ( rj_mov32 c dl al ) = done T } {}
                 } {}
                 ? done {} { ( rj_ldg c dl al as 0 ) ( rj_opsrc c w ext dl bl bs ) }
             }
@@ -2528,10 +2620,13 @@ $ `stdlib/core/vec.nu`
     : i orh ( rj_u c r 2 )
     : i od ( rj_dd c r 0 )
     : i dl ? ( rj_dlive c od ) ( rj_dloc c od ) ( rjl_mem )
-    : i tr ( rj_alu3 c 0 w ( rj_uloc c o1 ) ( rj_us c o1 ) ( rj_uloc c o2 ) ( rj_us c o2 ) dl ( rj_ds c od ) ( rj_dcanon c od ) )
     : i cop >> ( rj_rw c r 5 ) 21
-    ( rj_opsrc c w 7 tr ( rj_uloc c orh ) ( rj_us c orh ) )
-    ( rj_jcc c ( rj_cmpcc cop ) ( rj_tgtrec ( rj_rw c r 1 ) ) )
+    : i cc ( rj_cmpcc cop )
+    // == / != 0 needs no cmp: the add's own ZF says it (an lea would set none)
+    : b zcmp & & | == cc 4 == cc 5 == ( rj_uloc c orh ) ( rjl_imm ) == 0 ( rj_kval c ( rj_us c orh ) )
+    : i tr ( rj_alu3 c 0 w ( rj_uloc c o1 ) ( rj_us c o1 ) ( rj_uloc c o2 ) ( rj_us c o2 ) dl ( rj_ds c od ) ( rj_dcanon c od ) zcmp )
+    ? zcmp {} { ( rj_opsrc c w 7 tr ( rj_uloc c orh ) ( rj_us c orh ) ) }
+    ( rj_jcc c cc ( rj_tgtrec ( rj_rw c r 1 ) ) )
 }
 
 // ── the register calling convention (tier 8 → tier 8) ──────────
@@ -3274,6 +3369,7 @@ $ `stdlib/core/vec.nu`
     ( rj_set c ( rjs_aidx ) 0 )  // rax, unless this record's rj_addr hands the base's own register over
     : i fk ( rj_cfuse c r )
     ? > fk 0 { ( rj_e_cfuse c r fk ) ^ v } {}
+    ? > ( rj_andz c r ) 0 { ^ v } {}  // the eqz right behind tests x itself
     ? | == op 0 == op 9 { ( rj_e_bin c r 0 ? == op 0 1 0 ) ^ v } {}
     ? | == op 1 == op 181 { ( rj_e_mul c r ? == op 1 1 0 ) ^ v } {}
     ? | == op 2 == op 11 { ( rj_e_bin c r 4 ? == op 2 1 0 ) ^ v } {}
