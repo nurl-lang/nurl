@@ -1,6 +1,6 @@
 # NURL HTTP-server peer-comparison
 
-Generated `2026-10-06T04:09:34Z` by `bench/run_http.sh`. **Do not edit by hand** — the next run overwrites it.
+Generated `2026-10-07T14:05:36Z` by `bench/run_http.sh`. **Do not edit by hand** — the next run overwrites it.
 
 Each implementation accepts a TCP connection, parses one HTTP/1.1 request and writes a 14-byte `Hello, World!\n` body (`text/plain`), keep-alive. The TLS section runs the *same* servers and the same load over a self-signed EC (P-256) certificate, which `oha` accepts with `--insecure`. The NURL server is the `packages/http` HttpApp facade (`http_app_listen` / `http_app_listen_tls`) in `http_app_async` mode — fiber per connection on the M:N async runtime, one worker pthread per core, the surface a scaling NURL service deploys (and the same model as the Rust peer's tokio multi-thread runtime).
 
@@ -14,11 +14,11 @@ Each implementation accepts a TCP connection, parses one HTTP/1.1 request and wr
 |---|---|
 | Host | `GitHub Actions ubuntu-latest runner` |
 | Kernel | `Linux 6.17.0-1022-azure x86_64` |
-| CPU | AMD EPYC 7763 64-Core Processor (4 logical cores) |
+| CPU | AMD EPYC 9V74 80-Core Processor (4 logical cores) |
 | Memory | 16373452 KiB |
-| Commit | `0ae00340604700fba67fd8e9fd5309e85da8fa82` |
-| CI run | https://github.com/nurl-lang/nurl/actions/runs/37412013843 |
-| NURL | `v0.70.0-12-g0ae00340` |
+| Commit | `9a6f570dfab380c1dfe912ab815e9896a0add0ba` |
+| CI run | https://github.com/nurl-lang/nurl/actions/runs/37633235978 |
+| NURL | `v0.70.0-29-g9a6f570d` |
 | Rust | rustc 1.99.0 (b940084d7 2026-09-28) |
 | Node | v22.23.3 |
 | Load generator | oha 1.8.0 |
@@ -31,41 +31,41 @@ Each implementation accepts a TCP connection, parses one HTTP/1.1 request and wr
 | TLS cert | self-signed EC P-256, `CN=localhost` |
 | Core isolation | server on cores `0-1`, generator on cores `2-3` (`taskset`) |
 | Worker threads | 2 per server (`NURL_WORKERS` / `TOKIO_WORKER_THREADS`); Node's server is single-threaded |
-| Machine load | 1.87 at start (quiet) |
+| Machine load | 1.79 at start (quiet) |
 
 ## 1. Plaintext HTTP
 
 |              | Server  | C = 1 | C = 10 | C = 50 | C = 200 |
 |--------------|---------|--------:|--------:|--------:|--------:|
-| **req/s**    | NURL    | **28 681** | 98 088 | 117 382 | **120 699** |
-|              | Rust    | 15 183 | **98 795** | **118 072** | 118 427 |
-|              | Node    | 10 861 | 32 339 | 32 948 | 30 572 |
-| **p50 (ms)** | NURL    | **0.03** | **0.10** | **0.45** | **1.52** |
-|              | Rust    | 0.06 | **0.10** | **0.45** | 1.57 |
-|              | Node    | 0.09 | 0.26 | 1.47 | 6.49 |
-| **p99 (ms)** | NURL    | **0.06** | 0.16 | 0.63 | 2.40 |
-|              | Rust    | 0.08 | **0.15** | **0.55** | **2.12** |
-|              | Node    | 0.12 | 0.58 | 2.95 | 7.46 |
-| **CPU us/req** | NURL    | 34.85 | 17.69 | 16.07 | 15.88 |
-|              | Rust    | **28.00** | **17.00** | **15.30** | **14.91** |
-|              | Node    | 60.99 | 30.96 | 30.43 | 32.83 |
+| **req/s**    | NURL    | **39 031** | **140 895** | 155 512 | 152 222 |
+|              | Rust    | 26 442 | 138 342 | **156 121** | **153 399** |
+|              | Node    | 19 453 | 59 312 | 59 463 | 57 447 |
+| **p50 (ms)** | NURL    | **0.02** | **0.07** | **0.35** | 1.22 |
+|              | Rust    | 0.03 | **0.07** | **0.35** | **1.21** |
+|              | Node    | 0.05 | 0.14 | 0.82 | 3.46 |
+| **p99 (ms)** | NURL    | **0.08** | 0.11 | 0.45 | 1.68 |
+|              | Rust    | 0.10 | **0.10** | **0.41** | **1.60** |
+|              | Node    | 0.13 | 0.36 | 1.63 | 3.92 |
+| **CPU us/req** | NURL    | 25.48 | 12.85 | 12.11 | 11.97 |
+|              | Rust    | **15.20** | **12.01** | **11.20** | **10.69** |
+|              | Node    | 31.20 | 16.68 | 16.76 | 17.49 |
 
 ## 2. TLS (HTTPS)
 
 |              | Server  | C = 1 | C = 10 | C = 50 | C = 200 |
 |--------------|---------|--------:|--------:|--------:|--------:|
-| **req/s**    | NURL    | **20 978** | 77 142 | 93 142 | 93 728 |
-|              | Rust    | 13 624 | **78 581** | **93 529** | **96 265** |
-|              | Node    | 9 276 | 24 270 | 24 724 | 23 531 |
-| **p50 (ms)** | NURL    | **0.05** | **0.12** | **0.56** | 1.94 |
-|              | Rust    | 0.07 | **0.12** | 0.57 | **1.91** |
-|              | Node    | 0.11 | 0.39 | 1.98 | 8.24 |
-| **p99 (ms)** | NURL    | **0.07** | 0.24 | 0.88 | 3.34 |
-|              | Rust    | 0.09 | **0.18** | **0.71** | **2.56** |
-|              | Node    | 0.14 | 0.78 | 2.50 | 9.56 |
-| **CPU us/req** | NURL    | 47.28 | 22.85 | 20.78 | 20.98 |
-|              | Rust    | **30.04** | **20.36** | **18.23** | **17.04** |
-|              | Node    | 79.57 | 41.22 | 40.62 | 42.92 |
+| **req/s**    | NURL    | **32 988** | **114 454** | **125 495** | 120 765 |
+|              | Rust    | 25 440 | 111 035 | 123 344 | **121 504** |
+|              | Node    | 16 359 | 42 677 | 41 733 | 34 627 |
+| **p50 (ms)** | NURL    | **0.03** | **0.08** | **0.42** | **1.52** |
+|              | Rust    | 0.04 | 0.09 | 0.43 | 1.53 |
+|              | Node    | 0.06 | 0.22 | 1.14 | 5.47 |
+| **p99 (ms)** | NURL    | 0.09 | 0.16 | 0.63 | 2.47 |
+|              | Rust    | **0.05** | **0.12** | **0.55** | **2.17** |
+|              | Node    | 0.08 | 0.45 | 1.78 | 8.07 |
+| **CPU us/req** | NURL    | 30.24 | 16.28 | 15.64 | 16.28 |
+|              | Rust    | **16.37** | **14.31** | **12.95** | **12.35** |
+|              | Node    | 45.02 | 23.43 | 24.25 | 27.94 |
 
 (Best per row in **bold**; latency winners are chosen only among non-starved cells. ‡ = closed-loop starved. `n/a` = tool absent; `FAIL` = the server did not complete that cell.)
 
@@ -75,9 +75,9 @@ Each implementation accepts a TCP connection, parses one HTTP/1.1 request and wr
 
 | Server | http conn/s | https handshakes/s |
 |--------|------------:|-------------------:|
-| NURL   | **17 622** | 5 533 |
-| Rust   | 17 602 | **5 582** |
-| Node   | 9 715 | 1 724 |
+| NURL   | **26 065** | 6 943 |
+| Rust   | 26 050 | **7 509** |
+| Node   | 16 319 | 2 197 |
 
 ## Notes
 
