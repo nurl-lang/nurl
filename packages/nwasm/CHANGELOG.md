@@ -1,5 +1,56 @@
 # Changelog
 
+## [2.2.0] — 2026-10-07
+
+Tier 8 closes most of what was left between it and Cranelift on
+register-heavy code. Nothing outside the JIT's output changed: the CLI,
+the library API and every result are the same.
+
+### Changed
+
+- **i64 arithmetic whose high half nobody reads runs in 32 bits.** The
+  analysis that lets an i32 result skip its sign extension now reaches
+  through the i64 ops whose low half depends only on their operands' low
+  halves (+ − × & | ^, shl, the fused pairs of them); an op whose readers
+  take only the low half — a wrap, a narrow store, an and with a mask below
+  2^32 — gets the 32-bit instruction, whose result is zero-extended for
+  free. The 32-bit LCG every benchmark draws from loses its mask from the
+  loop-carried chain.
+- **Unsigned > and <= read the carry flag alone.** `a >u b` compiled to
+  `cmp a, b` + `cmova` / `seta`, which read CF and ZF — two flag groups, an
+  extra uop per cmov / setcc on Intel. The compare exchanges its operands
+  (or tests `a >=u k + 1` against a constant) so the consumer is `cmovb` /
+  `setae`.
+- **r9 is allocatable where globals stay out of loops.** A function that
+  touched any global reserved r9 as their base for its whole body; when no
+  global access sits inside a loop, the base is loaded where used instead.
+- **No slow lea.** An rbp / r13 base takes a displacement byte even for 0,
+  and base + index + displacement is Intel's 3-cycle lea: unscaled, base and
+  index swap; scaled, the base is copied into the destination first.
+- **A zero-extended address indexes memory as it stands** — no
+  `mov eax, r32` before `[r11 + rax]` when the address's web provably has a
+  clear high half (32-bit ALU results, zero-extending loads, compares,
+  non-negative constants, copies of those).
+- **AVX three-operand scalar floats** (`vaddsd x, a, b`) on x86-64-v3, so a
+  result in a register of its own needs no copy of its first operand. FMA
+  stays out: one rounding instead of two would change wasm's results.
+  `NURL_NWASM_BMI2=0` keeps SSE.
+- **eqz and and-tests fuse into flags**: an eqz feeding selects hands them
+  its flags; `and x, k` read only by an eqz becomes `test x, imm32` or
+  `bt x, b`; an add-and-branch on `== 0` / `!= 0` uses the add's own ZF; the
+  fused pairs start from their first operand's register (`imul r, s, imm`,
+  `lea r, [s + t]`).
+
+Cycles at `--scale 100` against precompiled wasmtime on an i7-5930K:
+sort_window 1.25 / 1.28 / 1.19 → 1.03 / 1.06 / 1.07 of wasmtime (NURL /
+C / Rust), ring_write 0.94 → 0.87, histogram_bins 0.93 → 0.77, collatz
+1.50 → 0.97, packet_classifier 1.10 → 0.90.
+
+### Added
+
+- `tests/semantics_test.nu`: 85 checks on narrowed arithmetic and unsigned
+  compares (310 in all), every expectation from wasmtime.
+
 ## [2.1.0] — 2026-10-07
 
 The JIT gets a second, optimizing tier, and the fuzzer that now reaches it

@@ -6,7 +6,8 @@
 // comparisons and min/max, call_indirect signature checks, table.* ops,
 // passive segments + memory.init/data.drop, memory.copy/fill, memory.grow
 // limits, division by constants, bit tests and shifts, reinterprets,
-// null reference locals, and the start section. Run from the package root:
+// null reference locals, narrowed i64 arithmetic, unsigned compares,
+// and the start section. Run from the package root:
 //   NURL_STDLIB=<repo> ../../nurl.sh tests/semantics_test.nu /tmp/st && /tmp/st
 
 $ `stdlib/core/string.nu`
@@ -75,6 +76,21 @@ $ `src/interp.nu`
 // shifts with counts past the width (BMI2 or cl), the bit counts, and a
 // loop keeping many values live through bit tests and selects.
 @ wasm_flags → s { ^ `0061736d0100000001270760027e7e017f60017e017f60017f017f60027f7f017e60027e7e017e60017e017e60017f017e03111000010201030303040404040202050506077c100362747600000362746b0001057473743332000205747374363400030573686c33320004057368723332000505736172333200060573686c36340007057368723634000805736172363400090673656c667368000a05636c7a3332000b0563747a3332000c05636c7a3634000d0563747a3634000e036d6978000f0aa702101300200020018842018350047f410a0541140b0b1500027f41072000423f88420183a70d001a41030b0b1300200041818080807871047f41010541000b0b10002000427e8350047f41010541000b0b08002000200174ac0b08002000200176ac0b08002000200175ac0b070020002001860b070020002001880b070020002001870b0b002000200186210120010b05002000670b05002000680b05002000790b050020007a0b7f02017f057e4295f8a9fa97b7de9b9e7f21020340200242adfed5e4d485fda8d8007e42cf829ebbefefde82147c210220022001ad88420183500440200320027c210305200420028521040b2003200420032004561b2105200620052002423f83867c2106200141016a210120012000490d000b200320047c200520067c7c0b002c046e616d650218010f0700016e010169020178030161040162050163060164030b0201010001620f0100014c` }
+
+// i64 arithmetic whose high half nobody reads (the JIT then computes it
+// with 32-bit instructions): an LCG masked to 32 bits and read in full,
+// chains read only through wraps, i64.store32/16, shl by constants on both
+// sides of 32 and by a variable count past it, (a + b) & low masks, a
+// product read both ways, a loop-carried value read only through a wrap,
+// an and the zero-extension makes redundant, the fused pairs, an and with
+// a mask above 2^32, shift counts computed in i64, and a two-def web.
+@ wasm_narrow → s { ^ `0061736d01000000011f0560027e7f017e60027e7e017e60017e017e60027f7e017e60037e7e7e017e0313120001020101010100030404010101010101000503010001079c0112076c63676d61736b00000977726170636861696e00010473686c6b00020473686c760003076164646d61736b0004086164646d61736b320005056d697865640006097068696e6172726f770007067a786d61736b000806786f726d756c000906667573656477000a0473756272000b05616e646869000c0473687266000d03636e74000e04616e647a000f047374333200100674776f64656600110ab703123501017f03402000428dcce5007e42dfe6bbe3037c42ffffffff0f832200420d882000852100200241016a22022001490d000b20000b0f00200020017e20008520017da7ac0b1c002000421f86a7ad2000422886a7ad7c200042218620007ca7ad7c0b09002000200186a7ac0b0e00200020017c42ffffffff0f830b0e00200020017c428180808008830b1301017e200020017e2202a7ad2002422088850b3a02017e027f20002102034020024295f8a9fa97b7de9b9e7f7e20024207867c210220042002a7732104200341016a22032001490d000b2004ac0b0f002000ad42ffffffff0f8320017c0b0c00200020018520027ea7ac0b1e00200020017c20027e200020017c20027c85200020027e20017c7da7ac0b0900200020017da7ac0b0e00200020017c42ffffffff1f830b1500200042288820018320004203882001857ca7ac0b0e00200020014280808080107c860b0d00200020017e42ff018350ad0b2f004100427f3703004108427f3703004100200020017e3e02004108200020017c3d010041002903004108290300850b2301017e4110200037030020010440200020007c210205411029030021020b2002a7ac0b00bd01046e616d6502a80112000300017301016e02016b01020001610101620201000161030200016101016e040200016101016205020001610101620603000161010162020170070500016101016e02017803016b0403616363080200016101016209030001610101620201630a030001610101620201630b020001610101620c020001610101620d020001610101620e0200016101016e0f0200016101016210020001610101621103000161010163020178030b02000100016c070100016c` }
+
+// Unsigned > and <= (the JIT exchanges the compare's operands, or turns
+// a > k into a >= k + 1, so the condition reads the carry flag alone):
+// selects, materialized 0/1s of both widths, constants at the edges of
+// the imm32 range and of the type, a branch, compare-exchange in a loop.
+@ wasm_ucmp → s { ^ `0061736d01000000011d0560027e7e017e60027f7f017e60017f017e60017e017e60027e7f017e030a09000000010203000004073a0903736774000003736c650001036d67740002056d677433320003036b33320004036b363400050473656c6b00060362726b0007036e657400080aed02090c002000200120002001561b0b0c002000200120002001581b0b12002000200156ad2000200158ad42027e7c0b1200200020014bad200020014dad42027e7c0b34002000417f4bad2000417f4dad42027e7c200041ffffffff074bad42047e7c2000417e4dad42087e7c200041054bad42107e7c0b4f002000427f56ad2000427f58ad42027e7c200042ffffffff0756ad42047e7c200042feffffff0758ad42087e7c200042ffffffffffffffffff0056ad42107e7c200042ffffffff7756ad42207e7c0b0d0020002001200042e400561b0b1800024020002001560d0020004207580d0042030f0b42040b7f02047e017f2000210220004295f8a9fa97b7de9b9e7f7e21032000420d89210403402002200320022003561b21052003200220022003561b2102200521032003200420032004581b21052004200320032004581b210420054295f8a9fa97b7de9b9e7f7e2004852103200641016a22062001490d000b200220038520047c0b0066046e616d6502520900020001610101620102000161010162020200016101016203020001610101620401000161050100016106020001610101620702000161010162080700017801016e02016103016204016305017406016b030b020701000178080100016c` }
 
 // i32.reinterpret_f32 yields a canonical i32 (read back through the
 // i64.extend_i32_s the predecoder drops), demote/promote whose source
@@ -350,6 +366,97 @@ $ `src/interp.nu`
     ( ck `ctz64 #3:       ` ( ev1 fl `ctz64` 6 ) 1 )
     ( ck `mix #0:         ` ( ev1 fl `mix` 1000 ) -7772899469867135293 )
     ( ck `mix #1:         ` ( ev1 fl `mix` 1 ) -8736760740920937472 )
+
+    // ── unsigned > / <= with the operands exchanged ──
+    : s uc ( wasm_ucmp )
+    ( ck `sgt #0:         ` ( ev2 uc `sgt` 3 5 ) 5 )
+    ( ck `sgt #1:         ` ( ev2 uc `sgt` -1 5 ) -1 )
+    ( ck `sgt #2:         ` ( ev2 uc `sgt` 5 -1 ) -1 )
+    ( ck `sgt #3:         ` ( ev2 uc `sgt` 7 7 ) 7 )
+    ( ck `sle #0:         ` ( ev2 uc `sle` 3 5 ) 3 )
+    ( ck `sle #1:         ` ( ev2 uc `sle` -1 5 ) 5 )
+    ( ck `sle #2:         ` ( ev2 uc `sle` 5 -1 ) 5 )
+    ( ck `sle #3:         ` ( ev2 uc `sle` 7 7 ) 7 )
+    ( ck `mgt #0:         ` ( ev2 uc `mgt` 3 5 ) 2 )
+    ( ck `mgt #1:         ` ( ev2 uc `mgt` -1 0 ) 1 )
+    ( ck `mgt #2:         ` ( ev2 uc `mgt` 0 -1 ) 2 )
+    ( ck `mgt #3:         ` ( ev2 uc `mgt` 9 9 ) 2 )
+    ( ck `mgt32 #0:       ` ( ev2 uc `mgt32` 3 5 ) 2 )
+    ( ck `mgt32 #1:       ` ( ev2 uc `mgt32` -1 0 ) 1 )
+    ( ck `mgt32 #2:       ` ( ev2 uc `mgt32` 0 -1 ) 2 )
+    ( ck `mgt32 #3:       ` ( ev2 uc `mgt32` -2147483648 2147483647 ) 1 )
+    ( ck `k32 #0:         ` ( ev1 uc `k32` 0 ) 10 )
+    ( ck `k32 #1:         ` ( ev1 uc `k32` -1 ) 22 )
+    ( ck `k32 #2:         ` ( ev1 uc `k32` 2147483647 ) 26 )
+    ( ck `k32 #3:         ` ( ev1 uc `k32` -2147483648 ) 30 )
+    ( ck `k32 #4:         ` ( ev1 uc `k32` -2 ) 30 )
+    ( ck `k32 #5:         ` ( ev1 uc `k32` 6 ) 26 )
+    ( ck `k32 #6:         ` ( ev1 uc `k32` 5 ) 10 )
+    ( ck `k64 #0:         ` ( ev1 uc `k64` 0 ) 10 )
+    ( ck `k64 #1:         ` ( ev1 uc `k64` -1 ) 54 )
+    ( ck `k64 #2:         ` ( ev1 uc `k64` 2147483647 ) 2 )
+    ( ck `k64 #3:         ` ( ev1 uc `k64` 2147483648 ) 6 )
+    ( ck `k64 #4:         ` ( ev1 uc `k64` 2147483646 ) 10 )
+    ( ck `k64 #5:         ` ( ev1 uc `k64` 9223372036854775807 ) 6 )
+    ( ck `k64 #6:         ` ( ev1 uc `k64` -9223372036854775808 ) 22 )
+    ( ck `k64 #7:         ` ( ev1 uc `k64` -2147483649 ) 22 )
+    ( ck `k64 #8:         ` ( ev1 uc `k64` -2147483648 ) 54 )
+    ( ck `selk #0:        ` ( ev2 uc `selk` 100 7 ) 7 )
+    ( ck `selk #1:        ` ( ev2 uc `selk` 101 7 ) 101 )
+    ( ck `selk #2:        ` ( ev2 uc `selk` -1 7 ) -1 )
+    ( ck `brk #0:         ` ( ev2 uc `brk` 5 3 ) 4 )
+    ( ck `brk #1:         ` ( ev2 uc `brk` 3 5 ) 4 )
+    ( ck `brk #2:         ` ( ev2 uc `brk` 7 9 ) 4 )
+    ( ck `brk #3:         ` ( ev2 uc `brk` 8 9 ) 3 )
+    ( ck `brk #4:         ` ( ev2 uc `brk` -1 -1 ) 3 )
+    ( ck `net #0:         ` ( ev2 uc `net` 123456789 1000 ) -9002760088169185386 )
+    ( ck `net #1:         ` ( ev2 uc `net` -1 37 ) 988515955879865134 )
+    ( ck `net #2:         ` ( ev2 uc `net` 0 5 ) 0 )
+
+    // ── i64 arithmetic whose high half nobody reads ──
+    : s nr ( wasm_narrow )
+    ( ck `lcgmask #0:     ` ( ev2 nr `lcgmask` 123456789 1000 ) 3848359177 )
+    ( ck `lcgmask #1:     ` ( ev2 nr `lcgmask` -1 7 ) 3010282294 )
+    ( ck `lcgmask #2:     ` ( ev2 nr `lcgmask` 1311768467463790320 33 ) 832811405 )
+    ( ck `wrapchain #0:   ` ( ev2 nr `wrapchain` 1311768467463790320 -3 ) -1250574909 )
+    ( ck `wrapchain #1:   ` ( ev2 nr `wrapchain` -1 -1 ) -1 )
+    ( ck `wrapchain #2:   ` ( ev2 nr `wrapchain` 81985529216486895 9223372036854775807 ) -1 )
+    ( ck `shlk #0:        ` ( ev1 nr `shlk` 1311768467463790320 ) 2596069104 )
+    ( ck `shlk #1:        ` ( ev1 nr `shlk` -1 ) 6442450943 )
+    ( ck `shlk #2:        ` ( ev1 nr `shlk` 3 ) 2147483651 )
+    ( ck `shlv #0:        ` ( ev2 nr `shlv` 1311768467463790320 33 ) 0 )
+    ( ck `shlv #1:        ` ( ev2 nr `shlv` 1311768467463790320 31 ) 0 )
+    ( ck `shlv #2:        ` ( ev2 nr `shlv` -1 64 ) -1 )
+    ( ck `shlv #3:        ` ( ev2 nr `shlv` 5 96 ) 0 )
+    ( ck `addmask #0:     ` ( ev2 nr `addmask` 4294967295 1 ) 0 )
+    ( ck `addmask #1:     ` ( ev2 nr `addmask` -1 -1 ) 4294967294 )
+    ( ck `addmask #2:     ` ( ev2 nr `addmask` 1311768467463790320 81985529216486895 ) 610839775 )
+    ( ck `addmask2 #0:    ` ( ev2 nr `addmask2` 4294967295 2 ) 1 )
+    ( ck `addmask2 #1:    ` ( ev2 nr `addmask2` -2 3 ) 1 )
+    ( ck `mixed #0:       ` ( ev2 nr `mixed` 1311768467463790320 81985529216486895 ) 3312743065 )
+    ( ck `mixed #1:       ` ( ev2 nr `mixed` -1 -1 ) 1 )
+    ( ck `phinarrow #0:   ` ( ev2 nr `phinarrow` 1311768467463790320 100 ) -1720186624 )
+    ( ck `phinarrow #1:   ` ( ev2 nr `phinarrow` -1 3 ) 1877237887 )
+    ( ck `zxmask #0:      ` ( ev2 nr `zxmask` -1 5 ) 4294967300 )
+    ( ck `zxmask #1:      ` ( ev2 nr `zxmask` 7 -1 ) 6 )
+    ( ck `xormul #0:      ` ( ev3 nr `xormul` 1311768467463790320 -3 81985529216486895 ) 1406288931 )
+    ( ck `fusedw #0:      ` ( ev3 nr `fusedw` 1311768467463790320 -3 81985529216486895 ) 1193538194 )
+    ( ck `fusedw #1:      ` ( ev3 nr `fusedw` -1 -1 -1 ) -1 )
+    ( ck `subr #0:        ` ( ev2 nr `subr` 3 1311768467463790320 ) 1698898195 )
+    ( ck `subr #1:        ` ( ev2 nr `subr` -1311768467463790320 7 ) 1698898185 )
+    ( ck `andhi #0:       ` ( ev2 nr `andhi` -1 -1 ) 8589934590 )
+    ( ck `andhi #1:       ` ( ev2 nr `andhi` 4294967295 4294967297 ) 0 )
+    ( ck `shrf #0:        ` ( ev2 nr `shrf` 1311768467463790320 -81985529216486895 ) 1695799775 )
+    ( ck `cnt #0:         ` ( ev2 nr `cnt` 3 4 ) 48 )
+    ( ck `cnt #1:         ` ( ev2 nr `cnt` 1311768467463790320 -1 ) 0 )
+    ( ck `andz #0:        ` ( ev2 nr `andz` 256 1 ) 1 )
+    ( ck `andz #1:        ` ( ev2 nr `andz` 1311768467463790320 81985529216486895 ) 0 )
+    ( ck `andz #2:        ` ( ev2 nr `andz` 16 16 ) 1 )
+    ( ck `st32 #0:        ` ( ev2 nr `st32` 1311768467463790320 81985529216486895 ) 4040556239 )
+    ( ck `st32 #1:        ` ( ev2 nr `st32` -1 -1 ) 4294967295 )
+    ( ck `twodef #0:      ` ( ev2 nr `twodef` 1311768467463790320 1 ) 897170912 )
+    ( ck `twodef #1:      ` ( ev2 nr `twodef` 1311768467463790320 0 ) -1698898192 )
+    ( ck `twodef #2:      ` ( ev2 nr `twodef` -3 1 ) -6 )
 
     // ── reinterprets, demote/promote, null reference locals ──
     : s ri ( wasm_rint )

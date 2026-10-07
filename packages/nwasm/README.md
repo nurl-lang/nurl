@@ -316,10 +316,11 @@ no linear memory at all. A function it cannot lower falls to tier 7.
   values (block results, loop parameters) gets an edge block holding them as
   one parallel copy. Slot liveness is solved over the blocks, each slot's
   independent values are split into *webs*, and the webs get registers by a
-  linear scan that spills the least densely used one: 12 GPRs, 14 xmm
-  registers, the slot's frame home when a web must live in memory. A web live
-  across a call takes a callee-saved register; rdx and rcx go only to webs no
-  record that needs them as scratch touches.
+  linear scan that spills the least densely used one: 12 GPRs (r9 among them
+  unless a global is read or written inside a loop), 14 xmm registers, the
+  slot's frame home when a web must live in memory. A web live across a call
+  takes a callee-saved register; rdx and rcx go only to webs no record that
+  needs them as scratch touches.
 - **Calls.** A tier-8 function with at most five parameters and one result
   gets a register entry (arguments in registers, the result in rax) beside
   the memory entry every other caller uses. Call sites are `call rel32`,
@@ -330,10 +331,14 @@ no linear memory at all. A function it cannot lower falls to tier 7.
   shifts or a multiply by the reciprocal; `memory.copy` / `memory.fill` run
   inline when the ranges are in bounds; a compare feeding the selects behind
   it, and a bit test or mask test feeding the branch behind it, become one
-  flag-setting instruction; an i32 is sign-extended only when a consumer
-  reads its high half; wide constants come from a RIP-relative literal pool.
-  On an x86-64-v3 CPU, shifts use BMI2 and the bit counts lzcnt/tzcnt
-  (`NURL_NWASM_BMI2=0` keeps baseline x86-64).
+  flag-setting instruction (an unsigned `>` / `<=` with its operands
+  exchanged, so cmov and setcc read the carry flag alone); an i32 is
+  sign-extended only when a consumer reads its high half, and i64 arithmetic
+  whose high half no consumer reads runs as 32-bit instructions; an address
+  whose high half is provably clear indexes memory as it stands; wide
+  constants come from a RIP-relative literal pool. On an x86-64-v3 CPU,
+  shifts use BMI2, the bit counts lzcnt/tzcnt and scalar floats the AVX
+  three-operand forms (`NURL_NWASM_BMI2=0` keeps baseline x86-64).
 - `NURL_NWASM_RJIT=0` keeps tier 7; `NURL_NWASM_RJIT_DBG=1` names every
   function tier 8 declined and why; `NURL_NWASM_RJIT_TRACE=<fidx>` prints a
   function's webs and where they went; `NURL_NWASM_PERFMAP=1` writes

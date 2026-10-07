@@ -86,6 +86,7 @@ $ `stdlib/core/vec.nu`
     ( Vec i ) wcx  // per web: 1 when it touches a record whose lowering writes rcx
     ( Vec i ) cxr  // those records, ascending
     ( Vec i ) cxb  // per record: 1 when a web in rcx is live across it (a borrower parks rcx)
+    ( Vec i ) wzx  // per web: 1 when every value it holds has bits 32..63 clear (an address can index as it stands)
     ( Vec i ) cs_off  // direct call sites: the rel32's buffer offset …
     ( Vec i ) cs_fx  // … the callee …
     ( Vec i ) cs_ab  // … its argument base …
@@ -142,11 +143,13 @@ $ `stdlib/core/vec.nu`
 
 @ rjs_fastoff → i { ^ 27 }  // that entry's offset (0 = none)
 
-@ rjs_glob → i { ^ 28 }  // 1: the function reads or writes globals (r9 = their base, reserved)
+@ rjs_glob → i { ^ 28 }  // the function reads or writes globals: 1 in a loop (r9 = their base, reserved), 2 only outside
 
 @ rjs_pcc → i { ^ 29 }  // a fused test/bt set the flags for the next IFZ/BRIF: the jcc meaning "zero" (-1 none)
 
-@ rjs_nst → i { ^ 30 }
+@ rjs_aidx → i { ^ 30 }  // the index register of [r11 + idx + off] the current record's address set up (0 = rax)
+
+@ rjs_nst → i { ^ 31 }
 
 @ rj_get Rj c i k → i { ^ ( vec_at [i] . c st k ) }
 
@@ -369,7 +372,16 @@ $ `stdlib/core/vec.nu`
 @ rj_pop Rj c i r → v { ( rj_rex c 0 0 0 r 0 ) ( rj_b c + 88 & r 7 ) }
 
 // lea dst, [base + idx<<sc + disp] (w=0: the 32-bit form, which wraps)
-@ rj_lea Rj c i w i dst i base i idx i sc i disp → v { ( rj_rm c 0 w 0 141 dst base idx sc disp 0 ) }
+// An rbp / r13 base takes a displacement byte even for 0, and base + index
+// + displacement is the slow, 3-cycle lea on Intel: unscaled, the two swap;
+// scaled, dst takes the base first (a mov — no flags touched)
+@ rj_lea Rj c i w i dst i base i idx i sc i disp → v {
+    ? & & & == disp 0 >= idx 0 >= base 0 == 5 & base 7 {
+        ? & & == sc 0 != idx 4 != 5 & idx 7 { ( rj_rm c 0 w 0 141 dst idx base 0 0 0 ) ^ v } {}
+        ? & != dst idx != 5 & dst 7 { ( rj_mov_rr c w dst base ) ( rj_rm c 0 w 0 141 dst dst idx sc 0 0 ) ^ v } {}
+    } {}
+    ( rj_rm c 0 w 0 141 dst base idx sc disp 0 )
+}
 
 // [pfx] [REX] [0F] opc ModRM(reg, [rip + literal v]) — a wide constant as a
 // memory operand. The disp32 is the instruction's last field (no immediate
@@ -1062,7 +1074,7 @@ $ `stdlib/core/vec.nu`
             ( vec_push [i] . c wcls 0 ) ( vec_push [i] . c wwt 0 )
             ( vec_push [i] . c wst 2147483647 ) ( vec_push [i] . c wen -1 )
             ( vec_push [i] . c wuse 0 ) ( vec_push [i] . c wloc ( rjl_mem ) )
-            ( vec_push [i] . c whint -1 ) ( vec_push [i] . c wcc 0 ) ( vec_push [i] . c wsens 0 ) ( vec_push [i] . c wdx 0 ) ( vec_push [i] . c wcx 0 )
+            ( vec_push [i] . c whint -1 ) ( vec_push [i] . c wcc 0 ) ( vec_push [i] . c wsens 0 ) ( vec_push [i] . c wdx 0 ) ( vec_push [i] . c wcx 0 ) ( vec_push [i] . c wzx 0 )
             = nw + nw 1
         } {}
         = k + k 1
@@ -1140,6 +1152,42 @@ $ `stdlib/core/vec.nu`
     ^ T
 }
 
+// is use k of record r a constant in [0, 2^32)?
+@ rj_kin32 Rj c i r i k → b {
+    ? ( rj_ukonst c r k ) { : i kq ( rj_kval c ( rj_us c ( rj_u c r k ) ) ) ^ & >= kq 0 <= kq 4294967295 } {}
+    ^ F
+}
+
+// The i64 ops whose result's low half needs only their operands' low
+// halves (+ - * & | ^, shl, and the fused pairs built from them) answer
+// for use k themselves: 1 the operand's high half matters exactly when the
+// result's does (the def decides, as for a copy — rj_narrow then computes
+// it with a 32-bit instruction), 0 never (a shift count is read mod 64;
+// the other side of an and with a constant below 2^32 lands in bits the
+// mask clears), 2 always; -1 for any other op (rj_usens decides).
+@ rj_lowk Rj c i r i op i k → i {
+    ? | | | == op 0 == op 1 == op 4 | == op 5 == op 7 { ^ 1 } {}
+    ? == op 2 { ^ ? ( rj_kin32 c r - 1 k ) 0 1 } {}
+    ? == op 8 { ^ ? == k 0 1 0 } {}  // the low half of x << n needs x's low half only
+    ? | | | == op 3 == op 6 == op 109 == op 110 { ^ ? == k 0 2 0 } {}
+    ? | | | == op 13 == op 15 == op 22 == op 33 { ^ 1 } {}
+    ? == op 14 { ^ ? & < k 2 ( rj_kin32 c r 2 ) 0 1 } {}  // (s1 + s2) & x
+    ? == op 16 { ^ ? == k 2 0 2 } {}  // (s1 + s2) >>u x
+    ? | == op 17 == op 30 { ^ ? == k 0 2 ? == k 1 0 1 } {}  // (s1 >>u s2) & x, ^ x
+    ^ -1
+}
+
+// Does record r compute its i64 result with a 32-bit instruction? Only when
+// no consumer reads the high half, and only where the low half comes out
+// the same: + - * & | ^, shl by a constant below 32, the fused pairs of
+// those. The 32-bit instruction leaves the high half clear (rj_defzx).
+@ rj_narrow Rj c i r i op → b {
+    : ~ b ok | | | | == op 0 == op 1 == op 2 | | == op 4 == op 5 == op 7 | | | | == op 13 == op 14 == op 15 == op 22 == op 33
+    ? == op 8 { ? ( rj_ukonst c r 1 ) { = ok < & ( rj_kval c ( rj_us c ( rj_u c r 1 ) ) ) 63 32 } {} } {}
+    ? ok { ^ ! ( rj_dcanon c ( rj_dd c r 0 ) ) } {}
+    ^ F
+}
+
 // the sensitivity facts: direct consumers, then back through every copy
 @ rj_sens Rj c → v {
     : i n ( rj_get c ( rjs_n ) )
@@ -1156,6 +1204,9 @@ $ `stdlib/core/vec.nu`
             ? >= wv 0 {
                 : i k - o u0
                 : ~ b sens ( rj_usens op k )
+                : i lk ( rj_lowk c r op k )
+                ? >= lk 0 { = sens == lk 2 } {}
+                ? == lk 1 { ( vec_push [i] csrc wv ) ( vec_push [i] cdst ( vec_at [i] . c dweb ( rj_dd c r 0 ) ) ) } {}  // the def decides
                 ? == op 45 { = sens >= ( rj_rw c r 4 ) 66 } {}  // BRIFC: an i64 compare reads the full value
                 ? == op 48 { = sens != 0 ( rj_rw c r 3 ) } {}  // IFZ of an i64 (eqz fusion) tests all 64 bits
                 ? | == op 47 & == op 46 < k 2 {  // a copy: the destination decides
@@ -1181,18 +1232,19 @@ $ `stdlib/core/vec.nu`
         }
         = k + k 1
     }
-    // back through the copies until nothing changes
+    // back through the copies until nothing changes — last edge first, so
+    // a straight chain of them settles in one pass
     : i ne ( vec_len [i] csrc )
     : ~ b changed T
     ~ changed {
         = changed F
-        : ~ i q 0
-        ~ < q ne {
+        : ~ i q - ne 1
+        ~ >= q 0 {
             : i sw ( vec_at [i] csrc q )
             ? & != 0 ( vec_at [i] . c wsens ( vec_at [i] cdst q ) ) == 0 ( vec_at [i] . c wsens sw ) {
                 ( vec_put [i] . c wsens sw 1 ) = changed T
             } {}
-            = q + q 1
+            = q - q 1
         }
     }
 }
@@ -1455,6 +1507,12 @@ $ `stdlib/core/vec.nu`
             ? & > nf 0 == nf ( vec_at [i] . c wuse wd ) { ( vec_put [i] flagonly wd 1 ) } {}
         } {}
         ? > ( rj_cfuse c r ) 0 { ( vec_put [i] flagonly ( vec_at [i] . c dweb ( rj_dd c r 0 ) ) 1 ) } {}
+        ? > ( rj_andz c r ) 0 { ( vec_put [i] flagonly ( vec_at [i] . c dweb ( rj_dd c r 0 ) ) 1 ) } {}
+        ? | == op 43 == op 44 {
+            : i we ( vec_at [i] . c dweb ( rj_dd c r 0 ) )
+            : i nfe ( rj_selrun c r we )
+            ? & > nfe 0 == nfe ( vec_at [i] . c wuse we ) { ( vec_put [i] flagonly we 1 ) } {}
+        } {}
         = r + r 1
     }
     : ( Vec i ) occ ( vec_new [i] )
@@ -1549,6 +1607,111 @@ $ `stdlib/core/vec.nu`
         ( nurl_eprint ` ` ) ( nurl_eprint ( nurl_str_int ( vec_at [i] . c wcc wv ) ) ) ( nurl_eprint ` ` ) ( nurl_eprint ( nurl_str_int ( vec_at [i] . c wdx wv ) ) )
         ( nurl_eprint ` ` ) ( nurl_eprint ( nurl_str_int ( vec_at [i] . c wcx wv ) ) ) ( nurl_eprint ` → ` ) ( nurl_eprint ( nurl_str_int ( vec_at [i] . c wloc wv ) ) ) ( nurl_eprint `\n` )
         = wv + wv 1
+    }
+}
+
+// What a def leaves in bits 32..63 of its web: 1 clear (a 32-bit x86
+// instruction wrote it, or a small non-negative value), 0 unknown, 2 a copy
+// of use 0, 3 a copy of uses 0 and 1 (SEL's two values).
+@ rj_defzx Rj c i r i op i o → i {
+    : b canon ( rj_dcanon c o )
+    // the i32 ALU: a 32-bit instruction, sign-extended only for a consumer that reads the high half
+    ? | | | | | == op 9 == op 11 == op 180 == op 185 == op 184 | | | | | == op 12 == op 179 == op 10 == op 181 == op 100 == op 101 { ^ ? canon 0 1 } {}
+    ? | | == op 20 == op 36 == op 153 { ^ ? canon 0 1 } {}  // i32.load, wrap, i32.reinterpret_f32: mov r32 then
+    ? ( rj_narrow c r op ) { ^ 1 } {}  // the i64 ALU computed in 32 bits
+    ? == op 2 { ? | ( rj_kin32 c r 0 ) ( rj_kin32 c r 1 ) { ^ 1 } {} } {}  // and with a constant below 2^32
+    ? | == op 14 == op 17 { ? ( rj_kin32 c r 2 ) { ^ 1 } {} } {}
+    ? == op 3 { ? ( rj_ukonst c r 1 ) { ? >= & ( rj_kval c ( rj_us c ( rj_u c r 1 ) ) ) 63 32 { ^ 1 } {} } {} } {}  // shr_u by 32 or more
+    ? & >= op 56 <= op 75 { ^ 1 } {}  // compares: 0 / 1
+    ? | | == op 43 == op 44 == op 37 { ^ 1 } {}  // eqz; extend_i32_u
+    ? | | | | | == op 21 == op 25 == op 23 == op 26 == op 182 == op 24 { ^ 1 } {}  // movzx / mov r32 loads
+    ? | == op 162 == op 166 { ^ 1 } {}  // memory.size, ref.is_null
+    ? | | | | | == op 93 == op 94 == op 95 == op 102 == op 103 == op 104 { ^ 1 } {}  // the bit counts
+    ? == op 51 { : i kq ( rj_rw c r 2 ) ^ ? & >= kq 0 <= kq 4294967295 1 0 } {}  // mov r32, imm32
+    ? == op 47 { ^ 2 } {}
+    ? == op 46 { ^ 3 } {}
+    ^ 0
+}
+
+// is the value a constant-pool slot holds zero-extended as mov_ri materialises it?
+@ rj_kzx Rj c i s → b { : i kq ( rj_kval c s ) ^ & >= kq 0 <= kq 4294967295 }
+
+// wzx: every def of the web leaves bits 32..63 clear. Parameters arrive
+// canonical (sign-extended), a reference local starts at -1, anything not
+// listed in rj_defzx is unknown; copies (MOV, SEL, edge moves) are clear
+// exactly when their sources are, settled by a fixpoint.
+@ rj_zx Rj c → v {
+    : i n ( rj_get c ( rjs_n ) )
+    : i nw ( rj_get c ( rjs_nw ) )
+    : i np ( rj_get c ( rjs_np ) )
+    : ~ i w 0
+    ~ < w nw { ( vec_put [i] . c wzx w 1 ) = w + w 1 }
+    : i ne ( vec_len [i] . c entw )
+    : ~ i q 0
+    ~ < q ne {
+        : i wv ( vec_at [i] . c entw q )
+        : i s ( vec_at [i] . c wslot wv )
+        : b isref & < s ( vec_len [i] . c ltype ) == 4 ( vec_at [i] . c ltype s )
+        ? | < s np isref { ( vec_put [i] . c wzx wv 0 ) } {}
+        = q + q 1
+    }
+    : ( Vec i ) cd ( vec_new [i] )  // copy edges: dst web ← src web
+    : ( Vec i ) cs ( vec_new [i] )
+    : ~ i r 0
+    ~ < r n {
+        : i op ( rj_rw c r 0 )
+        : i d0 ( vec_at [i] . c doff r )
+        : i d1 ( vec_at [i] . c doff + r 1 )
+        : ~ i o d0
+        ~ < o d1 {
+            : i wd ( vec_at [i] . c dweb o )
+            : i k ? == - d1 d0 1 ( rj_defzx c r op o ) 0
+            ? == k 0 { ( vec_put [i] . c wzx wd 0 ) } {}
+            ? >= k 2 {
+                : ~ i u 0
+                ~ < u - k 1 {
+                    : i uo ( rj_u c r ? == op 46 u 0 )
+                    : i sw ( vec_at [i] . c uweb uo )
+                    ? < sw 0 {
+                        ? ! ( rj_kzx c ( rj_us c uo ) ) { ( vec_put [i] . c wzx wd 0 ) } {}
+                    } { ( vec_push [i] cd wd ) ( vec_push [i] cs sw ) }
+                    = u + u 1
+                }
+            } {}
+            = o + o 1
+        }
+        = r + r 1
+    }
+    // edge moves: dst web ← src web, or ← a constant-pool slot
+    : i nb ( rj_get c ( rjs_nb ) )
+    : ~ i k ( rj_get c ( rjs_nreal ) )
+    ~ < k nb {
+        : i ms ( vec_at [i] . c bms k )
+        : i q0 ( vec_at [i] . c emoff k )
+        : i q1 ( vec_at [i] . c emoff + k 1 )
+        = q q0
+        ~ < q q1 {
+            : i dw ( vec_at [i] . c emd q )
+            : i su ( vec_at [i] . c emu q )
+            ? < su 0 {
+                ? ! ( rj_kzx c + ms - q q0 ) { ( vec_put [i] . c wzx dw 0 ) } {}
+            } { ( vec_push [i] cd dw ) ( vec_push [i] cs su ) }
+            = q + q 1
+        }
+        = k + k 1
+    }
+    : i ncp ( vec_len [i] cd )
+    : ~ b ch T
+    ~ ch {
+        = ch F
+        = q 0
+        ~ < q ncp {
+            : i dw ( vec_at [i] cd q )
+            ? & == 1 ( vec_at [i] . c wzx dw ) == 0 ( vec_at [i] . c wzx ( vec_at [i] cs q ) ) {
+                ( vec_put [i] . c wzx dw 0 ) = ch T
+            } {}
+            = q + q 1
+        }
     }
 }
 
@@ -1682,15 +1845,25 @@ $ `stdlib/core/vec.nu`
     : i ob ( rj_u c r 1 )
     : i od ( rj_dd c r 0 )
     ? ! ( rj_dlive c od ) { ^ v } {}
-    : i _tr ( rj_alu3 c ext w ( rj_uloc c oa ) ( rj_us c oa ) ( rj_uloc c ob ) ( rj_us c ob ) ( rj_dloc c od ) ( rj_ds c od ) ( rj_dcanon c od ) )
+    : i op ( rj_rw c r 0 )
+    : i dl ( rj_dloc c od )
+    // and x, 0xffffffff with x zero-extended already: a copy (none at all in x's own register)
+    ? & == op 2 ( rj_ukonst c r 1 ) {
+        ? & == ( rj_kval c ( rj_us c ob ) ) 4294967295 == 1 ( rj_uzx c oa ) {
+            ( rj_move c dl ( rj_ds c od ) ( rj_uloc c oa ) ( rj_us c oa ) ) ^ v
+        } {}
+    } {}
+    : i nw ? ( rj_narrow c r op ) 0 w
+    : i _tr ( rj_alu3 c ext nw ( rj_uloc c oa ) ( rj_us c oa ) ( rj_uloc c ob ) ( rj_us c ob ) dl ( rj_ds c od ) ( rj_dcanon c od ) F )
 }
 
 // shifts and rotates: ext shl 4, shr 5, sar 7, rol 0, ror 1
-@ rj_e_shift Rj c i r i ext i w → v {
+@ rj_e_shift Rj c i r i ext i w0 → v {
     : i oa ( rj_u c r 0 )
     : i ob ( rj_u c r 1 )
     : i od ( rj_dd c r 0 )
     ? ! ( rj_dlive c od ) { ^ v } {}
+    : i w ? ( rj_narrow c r ( rj_rw c r 0 ) ) 0 w0
     : i al ( rj_uloc c oa )
     : i as ( rj_us c oa )
     : i bl ( rj_uloc c ob )
@@ -1742,11 +1915,12 @@ $ `stdlib/core/vec.nu`
     ( rj_ldg c t loc s 0 ) ( rj_imul_rr c w reg t ) ( rj_tmp_off c t )
 }
 
-@ rj_e_mul Rj c i r i w → v {
+@ rj_e_mul Rj c i r i w0 → v {
     : i oa ( rj_u c r 0 )
     : i ob ( rj_u c r 1 )
     : i od ( rj_dd c r 0 )
     ? ! ( rj_dlive c od ) { ^ v } {}
+    : i w ? ( rj_narrow c r ( rj_rw c r 0 ) ) 0 w0
     : ~ i al ( rj_uloc c oa )
     : ~ i as ( rj_us c oa )
     : ~ i bl ( rj_uloc c ob )
@@ -1782,10 +1956,10 @@ $ `stdlib/core/vec.nu`
 }
 
 // the fused i64 pairs: dst = (s1 op1 s2) op2 x
-@ rj_fop1 Rj c i op i tr i l2 i s2 → v {  // tr op1= s2
-    ? | | | == op 14 == op 15 == op 16 == op 22 { ( rj_opsrc c 1 0 tr l2 s2 ) ^ v } {}  // add
-    ? == op 13 { ( rj_imulsrc c 1 tr l2 s2 ) ^ v } {}  // mul
-    ? == op 33 { ( rj_opsrc c 1 6 tr l2 s2 ) ^ v } {}  // xor
+@ rj_fop1 Rj c i op i w i tr i l2 i s2 → v {  // tr op1= s2 (w = 0: in 32 bits)
+    ? | | | == op 14 == op 15 == op 16 == op 22 { ( rj_opsrc c w 0 tr l2 s2 ) ^ v } {}  // add
+    ? == op 13 { ( rj_imulsrc c w tr l2 s2 ) ^ v } {}  // mul
+    ? == op 33 { ( rj_opsrc c w 6 tr l2 s2 ) ^ v } {}  // xor
     // shr_u by s2 (SHRUAND / SHRUXOR): without BMI2 the count was loaded
     // into rcx before s1 landed
     ? == l2 ( rjl_imm ) { ( rj_shift_ri c 1 5 tr & ( rj_kval c s2 ) 63 ) ^ v } {}
@@ -1800,6 +1974,26 @@ $ `stdlib/core/vec.nu`
     ? < cr 0 { = t ( rj_tmp_on c tr ) ( rj_ldg c t l s 0 ) = cr t } {}
     ( rj_shx c 1 3 tr tr cr )
     ? >= t 0 { ( rj_tmp_off c t ) } {}
+}
+
+// tr = s1 op1 s2 for the fused pairs, straight from s1's register when it
+// has one: imul tr, s1, imm / lea tr, [s1 + s2 or imm] — no copy of s1 first
+@ rj_fop1_from Rj c i op i w i tr i l1 i s1 i l2 i s2 → v {
+    ? & ( rj_isg l1 ) != tr l1 {
+        : ~ i kq 0
+        ? == l2 ( rjl_imm ) { = kq ( rj_kval c s2 ) ? == w 0 { = kq ( rj_sx32 kq ) } {} } {}
+        ? & == op 13 == l2 ( rjl_imm ) {
+            ? ( rj_fits32 kq ) { ( rj_imul_rri c w tr l1 kq ) ^ v } {}
+        } {}
+        ? | | | == op 14 == op 15 == op 16 == op 22 {
+            ? & ( rj_isg l2 ) != tr l2 { ( rj_lea c w tr l1 l2 0 0 ) ^ v } {}
+            ? == l2 ( rjl_imm ) {
+                ? ( rj_fits32 kq ) { ( rj_lea c w tr l1 -1 0 kq ) ^ v } {}
+            } {}
+        } {}
+    } {}
+    ( rj_ldg c tr l1 s1 0 )
+    ( rj_fop1 c op w tr l2 s2 )
 }
 
 @ rj_e_fused Rj c i r → v {
@@ -1818,25 +2012,36 @@ $ `stdlib/core/vec.nu`
     : i dl ( rj_dloc c od )
     : b shr1 | == op 17 == op 30
     : b comm2 ! == op 16  // the second op commutes except ADDSHRU's shift
+    // w = 0: in 32 bits — no consumer reads the high half, or (s1 + s2) & x
+    // with x below 2^32, whose high half is clear anyway; the and is then
+    // left out when x keeps all 32 low bits
+    : b and32 & == op 14 ( rj_kin32 c r 2 )
+    : i w ? | ( rj_narrow c r op ) and32 0 1
+    ? and32 {
+        ? == ( rj_kval c s3 ) 4294967295 {
+            : i t2 ? & ( rj_isg dl ) != dl l2 dl 0
+            ( rj_fop1_from c op 0 t2 l1 s1 l2 s2 )
+            ? != t2 dl { ( rj_stg c dl ( rj_ds c od ) t2 ) } {}
+            ^ v
+        } {}
+    } {}
     // dst already holds x and op2 commutes: t in rax, then one op into dst
     : b precx & & shr1 != l2 ( rjl_imm ) ! ( rj_bmi )  // the count into rcx first
     ? & & ( rj_isg dl ) == dl l3 comm2 {
         ? precx { ( rj_ldg c 1 l2 s2 0 ) } {}
-        ( rj_ldg c 0 l1 s1 0 )
-        ( rj_fop1 c op 0 l2 s2 )
-        ? | == op 13 == op 22 { ( rj_alu_rr c 1 0 dl 0 ) } {}
-        ? | == op 14 == op 17 { ( rj_alu_rr c 1 4 dl 0 ) } {}
-        ? | == op 15 == op 33 { ( rj_imul_rr c 1 dl 0 ) } {}
+        ( rj_fop1_from c op w 0 l1 s1 l2 s2 )
+        ? | == op 13 == op 22 { ( rj_alu_rr c w 0 dl 0 ) } {}
+        ? | == op 14 == op 17 { ( rj_alu_rr c w 4 dl 0 ) } {}
+        ? | == op 15 == op 33 { ( rj_imul_rr c w dl 0 ) } {}
         ? == op 30 { ( rj_alu_rr c 1 6 dl 0 ) } {}
         ^ v
     } {}
     : i tr ? & & ( rj_isg dl ) != dl l2 != dl l3 dl 0
     ? precx { ( rj_ldg c 1 l2 s2 0 ) } {}
-    ( rj_ldg c tr l1 s1 0 )
-    ( rj_fop1 c op tr l2 s2 )
-    ? | == op 13 == op 22 { ( rj_opsrc c 1 0 tr l3 s3 ) } {}  // + x
-    ? | == op 14 == op 17 { ( rj_opsrc c 1 4 tr l3 s3 ) } {}  // & x
-    ? | == op 15 == op 33 { ( rj_imulsrc c 1 tr l3 s3 ) } {}  // * x
+    ( rj_fop1_from c op w tr l1 s1 l2 s2 )
+    ? | == op 13 == op 22 { ( rj_opsrc c w 0 tr l3 s3 ) } {}  // + x
+    ? | == op 14 == op 17 { ( rj_opsrc c w 4 tr l3 s3 ) } {}  // & x
+    ? | == op 15 == op 33 { ( rj_imulsrc c w tr l3 s3 ) } {}  // * x
     ? == op 30 { ( rj_opsrc c 1 6 tr l3 s3 ) } {}  // ^ x
     ? == op 16 {  // >>u x
         ? == l3 ( rjl_imm ) { ( rj_shift_ri c 1 5 tr & ( rj_kval c s3 ) 63 ) } {
@@ -1865,6 +2070,26 @@ $ `stdlib/core/vec.nu`
 // operand exchange
 @ rj_cmp Rj c i w i al i as i bl i bs i cc → i {
     ? & == al ( rjl_imm ) != bl ( rjl_imm ) { ( rj_cmp1 c w bl bs al as ) ^ ( rj_ccswap cc ) } {}
+    // above / below-or-equal read CF and ZF — two flag groups, an extra uop
+    // in every cmov and setcc on Intel; the exchanged compare reads CF alone
+    ? & | == cc 7 == cc 6 != bl ( rjl_imm ) { ( rj_cmp1 c w bl bs al as ) ^ ( rj_ccswap cc ) } {}
+    // against a constant k: a > k is a ≥ k + 1, a ≤ k is a < k + 1
+    ? & | == cc 7 == cc 6 == bl ( rjl_imm ) {
+        : ~ i k ( rj_kval c bs )
+        : ~ b ok F
+        ? == w 0 {
+            = k & k 4294967295
+            ? != k 4294967295 { = ok T = k ( rj_sx32 + k 1 ) } {}
+        } {
+            ? & != k -1 != k 9223372036854775807 { = ok ( rj_fits32 + k 1 ) = k + k 1 } {}
+        }
+        ? ok {
+            ? ( rj_isg al ) { ( rj_alu_ri c w 7 al k ) } {
+                ? == al ( rjl_mem ) { ( rj_alu_fi c w 7 as k ) } { ( rj_ldg c 0 al as 0 ) ( rj_alu_ri c w 7 0 k ) }
+            }
+            ^ ? == cc 7 3 2
+        } {}
+    } {}
     ( rj_cmp1 c w al as bl bs ) ^ cc
 }
 
@@ -1992,16 +2217,78 @@ $ `stdlib/core/vec.nu`
     ( rj_set c ( rjs_pcc ) 3 )  // jae: CF clear
 }
 
+// Is record q an and with a constant whose value only the eqz right behind
+// it reads (same width, no branch lands between)? 1: test x, imm32; 2: bt x,
+// b for a single-bit 64-bit mask; 0: neither. The and itself emits nothing.
+@ rj_andz Rj c i q → i {
+    : i n ( rj_get c ( rjs_n ) )
+    ? | < q 0 >= + q 1 n { ^ 0 } {}
+    : i op ( rj_rw c q 0 )
+    ? & != op 2 != op 11 { ^ 0 } {}
+    : i r + q 1
+    : i rop ( rj_rw c r 0 )
+    ? & != rop 43 != rop 44 { ^ 0 } {}
+    ? != ? == op 2 1 0 ? == rop 44 1 0 { ^ 0 } {}
+    ? != 0 ( vec_at [i] . c tgt r ) { ^ 0 } {}
+    : i wd ( vec_at [i] . c dweb ( rj_dd c q 0 ) )
+    ? != ( vec_at [i] . c uweb ( rj_u c r 0 ) ) wd { ^ 0 } {}
+    ? != 1 ( vec_at [i] . c wuse wd ) { ^ 0 } {}
+    : b ka ( rj_ukonst c q 0 )
+    : b kb ( rj_ukonst c q 1 )
+    ? == ka kb { ^ 0 } {}
+    : i kq ( rj_kval c ( rj_us c ( rj_u c q ? kb 1 0 ) ) )
+    ? | == op 11 ( rj_fits32 kq ) { ^ 1 } {}
+    ? & > kq 0 == 0 & kq - kq 1 { ^ 2 } {}
+    ^ 0
+}
+
+// the flags for eqz(and(x, k)) from x itself; returns the jcc/cmov nibble
+// that means "the and is zero"
+@ rj_e_andtest Rj c i q i ak → i {
+    : i op ( rj_rw c q 0 )
+    : i w ? == op 2 1 0
+    : b kb ( rj_ukonst c q 1 )
+    : i ox ( rj_u c q ? kb 0 1 )
+    : ~ i kq ( rj_kval c ( rj_us c ( rj_u c q ? kb 1 0 ) ) )
+    : i xl ( rj_uloc c ox )
+    : i xs ( rj_us c ox )
+    ? == ak 2 {  // bt x, b: CF is the bit, so "zero" is ae
+        : ~ i b 0
+        ~ < << 1 b kq { = b + b 1 }
+        : ~ i xr ( rj_greg xl )
+        ? < xr 0 { ( rj_ldg c 0 xl xs 0 ) = xr 0 } {}
+        ( rj_rex c 1 0 0 xr 0 ) ( rj_b c 15 ) ( rj_b c 186 ) ( rj_modrr c 4 xr ) ( rj_b c b )  // bt r, imm8
+        ^ 3
+    } {}
+    ? == w 0 { = kq ( rj_sx32 kq ) } {}
+    ? == xl ( rjl_mem ) { ( rj_rm c 0 w 0 247 0 3 -1 0 ( rj_home xs ) 0 ) ( rj_d c kq ) } {  // test [m], imm32
+        : ~ i xr ( rj_greg xl )
+        ? < xr 0 { ( rj_ldg c 0 xl xs 0 ) = xr 0 } {}
+        ( rj_rex c w 0 0 xr 0 ) ( rj_b c 247 ) ( rj_modrr c 0 xr ) ( rj_d c kq )  // test r, imm32
+    }
+    ^ 4
+}
+
 @ rj_e_eqz Rj c i r i w → v {
     : i oa ( rj_u c r 0 )
     : i od ( rj_dd c r 0 )
     ? ! ( rj_dlive c od ) { ^ v } {}
     : i al ( rj_uloc c oa )
     : i dl ( rj_dloc c od )
+    // a run of SELs right behind that reads it as its condition takes the
+    // flags; only another consumer makes the 0/1 itself necessary
+    : i wd ( vec_at [i] . c dweb od )
+    : i nf ( rj_selrun c r wd )
+    : i mat ? > ( vec_at [i] . c wuse wd ) nf 1 0
+    // A fused and's x is read here, after its web ended at the and — so
+    // dst may sit in x's register: no pre-zeroing then, setcc + movzx after
+    : i ak ( rj_andz c - r 1 )
     : ~ i pre 0
-    ? & ( rj_isg dl ) != dl al { ( rj_rr c 0 0 0 49 dl dl 0 ) = pre 1 } {}
-    ( rj_testop c w al ( rj_us c oa ) )
-    ( rj_setbool c 4 dl ( rj_ds c od ) pre )
+    ? & & & == mat 1 ( rj_isg dl ) != dl al == ak 0 { ( rj_rr c 0 0 0 49 dl dl 0 ) = pre 1 } {}
+    : ~ i zc 4
+    ? > ak 0 { = zc ( rj_e_andtest c - r 1 ak ) } { ( rj_testop c w al ( rj_us c oa ) ) }
+    ? == mat 1 { ( rj_setbool c zc dl ( rj_ds c od ) pre ) } {}
+    ? > nf 0 { ( rj_set c ( rjs_fweb ) wd ) ( rj_set c ( rjs_fcc ) zc ) ( rj_set c ( rjs_fsel ) nf ) } {}
 }
 
 // cmov<cc> R, operand (64-bit); immediates and xmm through a scratch GPR
@@ -2068,8 +2355,8 @@ $ `stdlib/core/vec.nu`
         : b memop == sl ( rjl_mem )
         // reg form: opcode bytes on the register; mem form: on the home
         ? | == op 36 == op 161 {
-            ? & == op 36 ! ( rj_dcanon c od ) {  // a wrap whose consumers read only the low half: a copy
-                ? memop { ( rj_rm c 0 0 0 139 tr 3 -1 0 ( rj_home as ) 0 ) } { ( rj_mov_rr c 1 tr sl ) }
+            ? & == op 36 ! ( rj_dcanon c od ) {  // a wrap whose consumers read only the low half: mov r32 (zero-extends — rj_zx counts on it)
+                ? memop { ( rj_rm c 0 0 0 139 tr 3 -1 0 ( rj_home as ) 0 ) } { ( rj_mov32 c tr sl ) }
             } {
                 ? memop { ( rj_rm c 0 1 0 99 tr 3 -1 0 ( rj_home as ) 0 ) } { ( rj_movsxd c tr sl ) }  // movsxd
             }
@@ -2107,10 +2394,13 @@ $ `stdlib/core/vec.nu`
 }
 
 // ── lowering: linear memory (guard-page mode: no bounds checks) ──
-// eax ← the wrapped 32-bit address (base + idx), idx an operand or none
-@ rj_addr Rj c i bl i bs i xl i xs i hasx → v {
+// eax ← the wrapped 32-bit address (base + idx), idx an operand or none —
+// or, when the base alone is the address and its web is zero-extended
+// (bz), nothing at all: its own register becomes the index (rjs_aidx)
+@ rj_addr Rj c i bl i bs i xl i xs i hasx i bz → v {
     ? | == hasx 0 == xl ( rjl_imm ) {
         : i xk ? == hasx 0 0 ( rj_rj32 c xs )
+        ? & & == bz 1 == xk 0 ( rj_isg bl ) { ( rj_set c ( rjs_aidx ) bl ) ^ v } {}
         ? == bl ( rjl_imm ) { ( rj_mov_ri c 0 & + ( rj_kval c bs ) xk 4294967295 0 ) ^ v } {}
         ? ( rj_isg bl ) {
             ? == xk 0 { ( rj_mov32 c 0 bl ) } { ( rj_lea c 0 0 bl -1 0 xk ) }
@@ -2129,8 +2419,11 @@ $ `stdlib/core/vec.nu`
 // a constant's low 32 bits, sign-extended (a displacement / imm32)
 @ rj_rj32 Rj c i s → i { ^ ( rj_sx32 ( rj_kval c s ) ) }
 
-// [r11 + rax + off]
-@ rj_mrm Rj c i pfx i w i esc i opc i reg i off i b8 → v { ( rj_rm c pfx w esc opc reg 11 0 0 off b8 ) }
+// [r11 + idx + off], idx the register rj_addr left the address in (rax unless a zero-extended base)
+@ rj_mrm Rj c i pfx i w i esc i opc i reg i off i b8 → v { ( rj_rm c pfx w esc opc reg 11 ( rj_get c ( rjs_aidx ) ) 0 off b8 ) }
+
+// use o's web holds only zero-extended values (a constant: no — rj_addr folds those)
+@ rj_uzx Rj c i o → i { : i w ( vec_at [i] . c uweb o ) ^ ? < w 0 0 ( vec_at [i] . c wzx w ) }
 
 // load wid bytes (sg: sign-extend) from [r11+rax+off] into GPR tr
 @ rj_ldmem Rj c i tr i wid i sg i off → v {
@@ -2157,8 +2450,10 @@ $ `stdlib/core/vec.nu`
     : i ob ( rj_u c r 0 )
     : i ox ( rj_u c r 1 )
     : i od ( rj_dd c r 0 )
-    ( rj_addr c ( rj_uloc c ob ) ( rj_us c ob ) ( rj_uloc c ox ) ( rj_us c ox ) 1 )
-    ( rj_ldto c od >> mk 2 & >> mk 1 1 ( rj_rw c r 3 ) )
+    ( rj_addr c ( rj_uloc c ob ) ( rj_us c ob ) ( rj_uloc c ox ) ( rj_us c ox ) 1 ( rj_uzx c ob ) )
+    // i32.load sign-extends for the canonical i32 — unless no consumer reads the high half
+    : i sg ? & == op 20 ! ( rj_dcanon c od ) 0 & >> mk 1 1
+    ( rj_ldto c od >> mk 2 sg ( rj_rw c r 3 ) )
 }
 
 @ rj_e_store Rj c i r → v {
@@ -2167,7 +2462,7 @@ $ `stdlib/core/vec.nu`
     : i oa ( rj_u c r 0 )
     : i ov ( rj_u c r 1 )
     : i off ( rj_rw c r 3 )
-    ( rj_addr c ( rj_uloc c oa ) ( rj_us c oa ) 0 0 0 )
+    ( rj_addr c ( rj_uloc c oa ) ( rj_us c oa ) 0 0 0 ( rj_uzx c oa ) )
     : i vl ( rj_uloc c ov )
     : i vs ( rj_us c ov )
     ? & ( rj_isx vl ) | == wid 8 == wid 4 {
@@ -2180,12 +2475,13 @@ $ `stdlib/core/vec.nu`
         ? == wid 2 { ( rj_mrm c 102 0 0 199 0 off 0 ) ( rj_b c kq ) ( rj_b c >> kq 8 ) ^ v } {}
         ? == wid 1 { ( rj_mrm c 0 0 0 198 0 off 0 ) ( rj_b c kq ) ^ v } {}
     } {}
-    // the value in a register: rcx when it has none (rax is the address),
-    // parked in xmm1 around the store when a web lives in rcx across it
+    // the value in a register: rax when the address did not take it, else
+    // rcx — parked in xmm1 around the store when a web lives in rcx across it
     : ~ i vr ( rj_greg vl )
-    : b park & < vr 0 != 0 ( vec_at [i] . c cxb r )
+    : i ai ( rj_get c ( rjs_aidx ) )
+    : b park & & < vr 0 == ai 0 != 0 ( vec_at [i] . c cxb r )
     ? park { ( rj_movq_xg c 1 1 ) } {}
-    ? < vr 0 { ( rj_ldg c 1 vl vs 0 ) = vr 1 } {}
+    ? < vr 0 { : i vt ? == ai 0 1 0 ( rj_ldg c vt vl vs 0 ) = vr vt } {}
     ? == wid 8 { ( rj_mrm c 0 1 0 137 vr off 0 ) } {}
     ? == wid 4 { ( rj_mrm c 0 0 0 137 vr off 0 ) } {}
     ? == wid 2 { ( rj_mrm c 102 0 0 137 vr off 0 ) } {}
@@ -2226,7 +2522,7 @@ $ `stdlib/core/vec.nu`
     : i ob ( rj_u c r 0 )
     : i ox ( rj_u c r 1 )
     : i od ( rj_dd c r 0 )
-    ( rj_addr c ( rj_uloc c ob ) ( rj_us c ob ) 0 0 0 )
+    ( rj_addr c ( rj_uloc c ob ) ( rj_us c ob ) 0 0 0 ( rj_uzx c ob ) )
     : i dl ( rj_dloc c od )
     : i xl ( rj_uloc c ox )
     : i xs ( rj_us c ox )
@@ -2375,7 +2671,8 @@ $ `stdlib/core/vec.nu`
 }
 
 // dst = a OP b into dst's place; returns the GPR holding the result
-@ rj_alu3 Rj c i ext i w i al i as i bl i bs i dl i ds b cn → i {
+// nolea: the flags must come from the op itself (an lea sets none)
+@ rj_alu3 Rj c i ext i w i al i as i bl i bs i dl i ds b cn b nolea → i {
     : i comm ? | | | == ext 0 == ext 1 == ext 4 == ext 6 1 0
     : ~ i tr 0
     ? ( rj_isg dl ) {
@@ -2388,7 +2685,7 @@ $ `stdlib/core/vec.nu`
                 }
             } {
                 : ~ b done F
-                ? & == ext 0 ( rj_isg al ) {
+                ? & & == ext 0 ( rj_isg al ) ! nolea {
                     ? ( rj_isg bl ) { ( rj_lea c w dl al bl 0 0 ) = done T } {
                         ? == bl ( rjl_imm ) {
                             : ~ i kq ( rj_kval c bs )
@@ -2396,6 +2693,11 @@ $ `stdlib/core/vec.nu`
                             ? ( rj_fits32 kq ) { ( rj_lea c w dl al -1 0 kq ) = done T } {}
                         } {}
                     }
+                } {}
+                // and with the low-32 mask (or an i32 and with -1): one mov r32
+                ? & & & ! done == ext 4 == bl ( rjl_imm ) ( rj_isg al ) {
+                    : i kq ( rj_kval c bs )
+                    ? | & == w 1 == kq 4294967295 & == w 0 == ( rj_sx32 kq ) -1 { ( rj_mov32 c dl al ) = done T } {}
                 } {}
                 ? done {} { ( rj_ldg c dl al as 0 ) ( rj_opsrc c w ext dl bl bs ) }
             }
@@ -2415,10 +2717,13 @@ $ `stdlib/core/vec.nu`
     : i orh ( rj_u c r 2 )
     : i od ( rj_dd c r 0 )
     : i dl ? ( rj_dlive c od ) ( rj_dloc c od ) ( rjl_mem )
-    : i tr ( rj_alu3 c 0 w ( rj_uloc c o1 ) ( rj_us c o1 ) ( rj_uloc c o2 ) ( rj_us c o2 ) dl ( rj_ds c od ) ( rj_dcanon c od ) )
     : i cop >> ( rj_rw c r 5 ) 21
-    ( rj_opsrc c w 7 tr ( rj_uloc c orh ) ( rj_us c orh ) )
-    ( rj_jcc c ( rj_cmpcc cop ) ( rj_tgtrec ( rj_rw c r 1 ) ) )
+    : i cc ( rj_cmpcc cop )
+    // == / != 0 needs no cmp: the add's own ZF says it (an lea would set none)
+    : b zcmp & & | == cc 4 == cc 5 == ( rj_uloc c orh ) ( rjl_imm ) == 0 ( rj_kval c ( rj_us c orh ) )
+    : i tr ( rj_alu3 c 0 w ( rj_uloc c o1 ) ( rj_us c o1 ) ( rj_uloc c o2 ) ( rj_us c o2 ) dl ( rj_ds c od ) ( rj_dcanon c od ) zcmp )
+    ? zcmp {} { ( rj_opsrc c w 7 tr ( rj_uloc c orh ) ( rj_us c orh ) ) }
+    ( rj_jcc c cc ( rj_tgtrec ( rj_rw c r 1 ) ) )
 }
 
 // ── the register calling convention (tier 8 → tier 8) ──────────
@@ -2847,14 +3152,39 @@ $ `stdlib/core/vec.nu`
     ( rj_stg c ( rj_dloc c od ) ( rj_ds c od ) 0 )
 }
 
+// Globals touched only outside loops leave r9 to the allocator: each
+// access then loads their base from the context (rj_globase)
+@ rj_globmode Rj c → v {
+    ? != 1 ( rj_get c ( rjs_glob ) ) { ^ v } {}
+    : i n ( rj_get c ( rjs_n ) )
+    : ~ i r 0
+    ~ < r n {
+        : i op ( rj_rw c r 0 )
+        ? | == op 52 == op 53 { ? > ( vec_at [i] . c depth r ) 1 { ^ v } {} } {}
+        = r + r 1
+    }
+    ( rj_set c ( rjs_glob ) 2 )
+    ( rj_set c ( rjs_forbid ) - ( rj_get c ( rjs_forbid ) ) 512 )
+}
+
+// the register holding the globals base: r9 when reserved, else s loaded
+// from the context (in rdi, or saved at [rsp] when rdi was handed out)
+@ rj_globase Rj c i s → i {
+    ? == 1 ( rj_get c ( rjs_glob ) ) { ^ 9 } {}
+    ? ( rj_uses c 7 ) { ( rj_rm c 0 1 0 139 s 4 -1 0 0 0 ) ( rj_rm c 0 1 0 139 s s -1 0 24 0 ) } {  // mov s,[rsp]; mov s,[s+24]
+        ( rj_rm c 0 1 0 139 s 7 -1 0 24 0 ) }  // mov s,[rdi+24]
+    ^ s
+}
+
 @ rj_e_gget Rj c i r → v {
     : i od ( rj_dd c r 0 )
     ? ! ( rj_dlive c od ) { ^ v } {}
     : i disp * ( rj_rw c r 2 ) 8
     : i dl ( rj_dloc c od )
-    ? ( rj_isx dl ) { ( rj_rm c 242 0 1 16 - dl 16 9 -1 0 disp 0 ) ^ v } {}  // movsd x,[r9+8g]
+    : i gb ( rj_globase c 0 )
+    ? ( rj_isx dl ) { ( rj_rm c 242 0 1 16 - dl 16 gb -1 0 disp 0 ) ^ v } {}  // movsd x,[base+8g]
     : i tr ? ( rj_isg dl ) dl 0
-    ( rj_rm c 0 1 0 139 tr 9 -1 0 disp 0 )  // mov r,[r9+8g]
+    ( rj_rm c 0 1 0 139 tr gb -1 0 disp 0 )  // mov r,[base+8g]
     ? != tr dl { ( rj_stg c dl ( rj_ds c od ) tr ) } {}
 }
 
@@ -2862,10 +3192,17 @@ $ `stdlib/core/vec.nu`
     : i o ( rj_u c r 0 )
     : i l ( rj_uloc c o )
     : i disp * ( rj_rw c r 1 ) 8
-    ? ( rj_isx l ) { ( rj_rm c 242 0 1 17 - l 16 9 -1 0 disp 0 ) ^ v } {}  // movsd [r9+8g],x
-    : ~ i vr ( rj_greg l )
-    ? < vr 0 { ( rj_ldg c 0 l ( rj_us c o ) 0 ) = vr 0 } {}
-    ( rj_rm c 0 1 0 137 vr 9 -1 0 disp 0 )  // mov [r9+8g],r
+    ? | ( rj_isx l ) ( rj_isg l ) {
+        : i gb ( rj_globase c 0 )
+        ? ( rj_isx l ) { ( rj_rm c 242 0 1 17 - l 16 gb -1 0 disp 0 ) } { ( rj_rm c 0 1 0 137 l gb -1 0 disp 0 ) }  // movsd / mov [base+8g],v
+        ^ v
+    } {}
+    ( rj_ldg c 0 l ( rj_us c o ) 0 )
+    : ~ i t 9
+    ? != 1 ( rj_get c ( rjs_glob ) ) { = t ( rj_tmp_on c 0 ) } {}
+    : i gb ( rj_globase c t )
+    ( rj_rm c 0 1 0 137 0 gb -1 0 disp 0 )  // mov [base+8g],rax
+    ? != t 9 { ( rj_tmp_off c t ) } {}
 }
 
 @ rj_e_const Rj c i r → v {
@@ -3158,8 +3495,10 @@ $ `stdlib/core/vec.nu`
     : i op ( rj_rw c r 0 )
     ? != op 46 { ( rj_set c ( rjs_fsel ) 0 ) ( rj_set c ( rjs_fweb ) -1 ) } {}  // flags feed only the fused SELs
     ? & != op 48 != op 54 { ( rj_set c ( rjs_pcc ) -1 ) } {}
+    ( rj_set c ( rjs_aidx ) 0 )  // rax, unless this record's rj_addr hands the base's own register over
     : i fk ( rj_cfuse c r )
     ? > fk 0 { ( rj_e_cfuse c r fk ) ^ v } {}
+    ? > ( rj_andz c r ) 0 { ^ v } {}  // the eqz right behind tests x itself
     ? | == op 0 == op 9 { ( rj_e_bin c r 0 ? == op 0 1 0 ) ^ v } {}
     ? | == op 1 == op 181 { ( rj_e_mul c r ? == op 1 1 0 ) ^ v } {}
     ? | == op 2 == op 11 { ( rj_e_bin c r 4 ? == op 2 1 0 ) ^ v } {}
@@ -3290,7 +3629,7 @@ $ `stdlib/core/vec.nu`
         ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] )
         ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] )
         ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] )
-        ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] )
+        ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] )
     }
 }
 
@@ -3336,8 +3675,10 @@ $ `stdlib/core/vec.nu`
     ? ( rj_failed c ) { ^ F } {}
     ( rj_canon c )
     ( rj_depths c )
+    ( rj_globmode c )
     ( rj_facts c )
     ( rj_sens c )
+    ( rj_zx c )
     ( rj_alloc c )
     ( rj_cxbusy c )
     ? == fidx g_rjtrace { ( rj_trace c ) } {}
@@ -3368,9 +3709,67 @@ $ `stdlib/core/vec.nu`
     ^ 94
 }
 
+// ── AVX (VEX) scalar forms, on an x86-64-v3 CPU ─────────────────
+// vop x, v1, src: three operands, so a result in a register of its own
+// needs no movaps copy first, and none carries a dependency on the
+// destination's old value. pp: 2 = the ss forms (F3), 3 = sd (F2).
+// Only the 128-bit forms run — they clear bits 128..255, so mixing them
+// with the SSE forms costs no transition.
+@ rj_vex Rj c i pp i dst i v1 i bb i xx → v {  // the prefix; bb / xx: rm's base / index register (-1 none)
+    : i r ^^ & >> dst 3 1 1
+    : i b ? < bb 0 1 ^^ & >> bb 3 1 1
+    : i xb ? < xx 0 1 ^^ & >> xx 3 1 1
+    : i vv << ^^ & v1 15 15 3
+    ? & == b 1 == xb 1 {
+        ( rj_b c 197 ) ( rj_b c | | << r 7 vv pp )  // C5 R̄ vvvv L=0 pp (map 0F)
+    } {
+        ( rj_b c 196 ) ( rj_b c | | | << r 7 << xb 6 << b 5 1 )  // C4 R̄ X̄ B̄ map 0F
+        ( rj_b c | vv pp )  // W=0 vvvv L=0 pp
+    }
+}
+
+// vop x, v1, operand (the float operand of rj_fsrc's kinds)
+@ rj_vfsrc Rj c i pp i opc i x i v1 i loc i s → v {
+    ? ( rj_isx loc ) {
+        : i rm - loc 16
+        ( rj_vex c pp x v1 rm -1 ) ( rj_b c opc ) ( rj_modrr c x rm ) ^ v
+    } {}
+    ? == loc ( rjl_mem ) {
+        ( rj_vex c pp x v1 3 -1 ) ( rj_b c opc ) ( rj_modmem c x 3 -1 0 ( rj_home s ) ) ^ v
+    } {}
+    ? == loc ( rjl_imm ) {
+        ( rj_vex c pp x v1 -1 -1 ) ( rj_b c opc ) ( rj_b c | << & x 7 3 5 )  // [rip+k]
+        : i kq ( rj_kval c s )
+        : ~ i k 0
+        : i nl ( vec_len [i] . c litv )
+        : ~ i hit -1
+        ~ < k nl { ? == ( vec_at [i] . c litv k ) kq { = hit k = k nl } { = k + k 1 } }
+        ? < hit 0 { = hit nl ( vec_push [i] . c litv kq ) } {}
+        ( vec_push [i] . c lsite ( rj_here c ) ) ( vec_push [i] . c lidx hit )
+        ( rj_d c 0 )
+        ^ v
+    } {}
+    ( rj_movq_xg c 1 loc )  // a GPR holding the bits: through xmm1
+    ( rj_vex c pp x v1 1 -1 ) ( rj_b c opc ) ( rj_modrr c x 1 )
+}
+
 // dst = a op b into dst's place
 @ rj_fbin3 Rj c i pf i opc i al i as i bl i bs i dl i ds → v {
     : b comm | == opc 88 == opc 89
+    ? ( rj_bmi ) {  // AVX: one vop, a's register as the first source
+        : i pp ? == pf 242 3 2
+        : i x ? ( rj_isx dl ) - dl 16 0
+        : ~ i ar -1
+        : ~ i ol bl
+        : ~ i os bs
+        ? ( rj_isx al ) { = ar - al 16 } {
+            ? & comm ( rj_isx bl ) { = ar - bl 16 = ol al = os as } {}  // b in a register, a not: swap
+        }
+        ? < ar 0 { ( rj_ldx c 0 al as ) = ar 0 } {}  // a into xmm0 (no web lives there)
+        ( rj_vfsrc c pp opc x ar ol os )
+        ? ! ( rj_isx dl ) { ( rj_stx c dl ds 0 ) } {}  // built in xmm0
+        ^ v
+    } {}
     ? ( rj_isx dl ) {
         : i x - dl 16
         ? == dl al { ( rj_fsrc c pf opc x bl bs ) ^ v } {}
@@ -3411,7 +3810,14 @@ $ `stdlib/core/vec.nu`
     : i od ( rj_dd c r 0 )
     ? ! ( rj_dlive c od ) { ^ v } {}
     : i x ( rj_fun_dst c od )
-    ( rj_ldx c x ( rj_uloc c oa ) ( rj_us c oa ) )
+    : i al ( rj_uloc c oa )
+    ? & ( rj_bmi ) ( rj_isx al ) {  // vsqrtsd x, a, a: the source's own register supplies the upper bits
+        : i ar - al 16
+        ( rj_vex c ? == op 131 3 2 x ar ar -1 ) ( rj_b c 81 ) ( rj_modrr c x ar )
+        ( rj_fun_fin c od x )
+        ^ v
+    } {}
+    ( rj_ldx c x al ( rj_us c oa ) )
     ( rj_rr c ? == op 131 242 243 0 1 81 x x 0 )  // sqrtsd / sqrtss x,x
     ( rj_fun_fin c od x )
 }
@@ -3521,8 +3927,8 @@ $ `stdlib/core/vec.nu`
         : i oc ( rj_u c r 2 )
         ( rj_ldx c 0 ( rj_uloc c ob ) ( rj_us c ob ) )
         ( rj_fsrc c 242 88 0 ( rj_uloc c oc ) ( rj_us c oc ) )
-        ( rj_addr c ( rj_uloc c oa ) ( rj_us c oa ) 0 0 0 )
-        ( rj_mrm c 242 0 1 17 0 ( rj_rw c r 4 ) 0 )  // movsd [r11+rax+off],xmm0
+        ( rj_addr c ( rj_uloc c oa ) ( rj_us c oa ) 0 0 0 ( rj_uzx c oa ) )
+        ( rj_mrm c 242 0 1 17 0 ( rj_rw c r 4 ) 0 )  // movsd [r11+idx+off],xmm0
         ^ v
     } {}
     : i od ( rj_dd c r 0 )
@@ -3533,7 +3939,7 @@ $ `stdlib/core/vec.nu`
         : i ox ( rj_u c r 1 )
         : i xl ( rj_uloc c ox )
         : i xs ( rj_us c ox )
-        ( rj_addr c ( rj_uloc c ob ) ( rj_us c ob ) 0 0 0 )
+        ( rj_addr c ( rj_uloc c ob ) ( rj_us c ob ) 0 0 0 ( rj_uzx c ob ) )
         : i off ( rj_rw c r 3 )
         : i opc ? == op 194 89 ? == op 195 88 92
         ? & ( rj_isx dl ) == dl xl {  // dst holds x: the load is the memory operand
@@ -3559,6 +3965,19 @@ $ `stdlib/core/vec.nu`
     : i s3 ( rj_us c o3 )
     : i op1 ? == op 201 92 89
     : i op2 ? == op 198 88 ? == op 201 89 92
+    ? ( rj_bmi ) {  // AVX: t = s1 op1 s2 in xmm0, then one vop into the result's register
+        : i d ? ( rj_isx dl ) - dl 16 0
+        : ~ i a1 -1
+        ? ( rj_isx l1 ) { = a1 - l1 16 } { ( rj_ldx c 0 l1 ( rj_us c o1 ) ) = a1 0 }
+        ( rj_vfsrc c 3 op1 0 a1 l2 ( rj_us c o2 ) )
+        ? == op 200 {  // x - t: x is the first source, so it needs a register
+            : ~ i a3 -1
+            ? ( rj_isx l3 ) { = a3 - l3 16 } { ( rj_ldx c 1 l3 s3 ) = a3 1 }
+            ( rj_vex c 3 d a3 0 -1 ) ( rj_b c 92 ) ( rj_modrr c d 0 )  // vsubsd d, x, xmm0
+        } { ( rj_vfsrc c 3 op2 d 0 l3 s3 ) }  // t op2 x
+        ? ! ( rj_isx dl ) { ( rj_stx c dl ds 0 ) } {}
+        ^ v
+    } {}
     ? == op 200 {  // t = s1*s2 in xmm0; dst = x - t
         ( rj_ldx c 0 l1 ( rj_us c o1 ) ) ( rj_fsrc c 242 89 0 l2 ( rj_us c o2 ) )
         ? & ( rj_isx dl ) == dl l3 { ( rj_rr c 242 0 1 92 - dl 16 0 0 ) ^ v } {}
