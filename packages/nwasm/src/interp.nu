@@ -1412,7 +1412,7 @@ unsafe @ __pf_free sink s pp → v {
 
 @ __R_ATOM → i { ^ 174 }  // vs bridge: A=sub B=memarg offset C=srcbase D=pops<<1|push
 @ __R_FCB → i { ^ 171 }  // vs bridge: A=sub B=idx-imm C=srcbase D=pops<<1|push
-@ __R_IFZ → i { ^ 48 }  // A=target B=cond — jump when cond == 0
+@ __R_IFZ → i { ^ 48 }  // A=target B=cond C=1 when cond is an i64 (eqz fusion) — jump when cond == 0
 @ __R_BRIFC → i { ^ 45 }  // A=target B=lhs C=rhs D=compare op — jump when it holds
 // 38 was i64.extend_i32_s, which the canonical-form skip removed from
 // every record stream — the number is recycled into the hot first-64
@@ -1876,6 +1876,7 @@ unsafe @ __fuse_branch * PFunc pf i lastp i labfloor i cond i tgt i byte → i {
         ( vec_set [i] . pf code base ( __R_IFZ ) )
         ( vec_set [i] . pf code + base 1 tgt )
         ( vec_set [i] . pf code + base 2 lb )
+        ( vec_set [i] . pf code + base 3 ? == lop 44 1 0 )  // the operand's width for the JIT (1 = i64); the interpreter ignores C
         ( vec_set [i] . pf code + base 5 byte )
         ^ lastp
     } {}
@@ -4147,19 +4148,43 @@ unsafe @ __jit_inline_co * InterpImpl it → v {
 // direct-call table, sized once per Interp. 4 MiB of slots; a frame that
 // does not fit returns status 8 and the driver bridges to the
 // interpreter, so deep recursion degrades instead of trapping.
+// The smallest type index structurally equal to type `ftp` (-1 when it
+// names no type): two functions may be called through each other's
+// call_indirect exactly when these agree.
+unsafe @ __jit_sigcanon * ModuleImpl m s ftp → i {
+    ? == # i ftp 0 { ^ -1 } {}
+    : i nt ( vec_len [s] . m types )
+    : ~ i k 0
+    ~ < k nt {
+        : s tp ( vec_at [s] . m types k )
+        ? != # i tp 0 { ? ( functype_eq # *FuncType tp # *FuncType ftp ) { ^ k } {} } {}
+        = k + k 1
+    }
+    ^ -1
+}
+
 unsafe @ __jit_state_init * InterpImpl it * ModuleImpl m → v {
     ? != 0 . it jit_slab { ^ v } {}
     : i bytes 16777216
     = . it jit_slab # i ( nurl_zalloc bytes )
     = . it jit_slab_end + . it jit_slab bytes
     // anchor block, held in r8 by the emitted code: [sp, slab end,
-    // direct-entry table]; sized from the MODULE — pfuncs grows lazily
-    // and may still be short
+    // direct-entry table (one per defined function), canonical signature
+    // id (one per function index, imports first), the table's Vec
+    // control block]; sized from the MODULE — pfuncs grows lazily and may
+    // still be short. Tier 8's inline call_indirect reads the last two.
     : i nf ( vec_len [s] . m funcs )
-    = . it jit_spcell # i ( nurl_zalloc + 16 * nf 8 )
+    : i nall + nf . m num_import_funcs
+    = . it jit_spcell # i ( nurl_zalloc + + 16 * nf 8 * + nall 1 8 )
     : *i spc # *i . it jit_spcell
     = . spc 0 . it jit_slab
     = . spc 1 . it jit_slab_end
+    : ~ i fk 0
+    ~ < fk nall {
+        = . spc + + 2 nf fk ( __jit_sigcanon m ( _module_func_type m fk ) )
+        = fk + fk 1
+    }
+    = . spc + + 2 nf nall # i . . it table ctl
     // The inline call-out bridge: decompose a capturing closure into
     // (fn, env) the way recover/thread_spawn do — the emitted code calls
     // fn(env) directly. The interpreter keeps its own copy of the env
@@ -4522,12 +4547,16 @@ unsafe @ __rj_try * InterpImpl it * ModuleImpl m * PFunc pf i fidx9 i guard → 
         } {}
         ? != # i cft 0 {
             : *FuncType cf # *FuncType cft
-            ( vec_push [i] rsig + * ( vec_len [i] . cf params ) 65536 ( vec_len [i] . cf results ) )
+            : i canon ? == op 170 ( __jit_sigcanon m cft ) 0
+            ( vec_push [i] rsig + + << canon 32 * ( vec_len [i] . cf params ) 65536 ( vec_len [i] . cf results ) )
         } { ( vec_push [i] rsig -1 ) }
         = r + r 1
     }
     : Rj c ( rj_new . pf code . pf aux . pf kv lt n . pf nlocals . pf nslots . pf nparams . pf nresults . pf sbase )
-    ? ( rj_compile c rsig . m num_import_funcs . it jit_spcell ( nurl_code_trap_addr ) . it jit_co_fn . it jit_co_env fidx9 ) {
+    : i nfd ( vec_len [s] . m funcs )
+    : i sigoff + 16 * nfd 8
+    : i tbloff + sigoff * + nfd . m num_import_funcs 8
+    ? ( rj_compile c rsig . m num_import_funcs . it jit_spcell ( nurl_code_trap_addr ) . it jit_co_fn . it jit_co_env fidx9 sigoff tbloff ) {
         ( __jit_install pf . c buf . c lab . c pta_off . c pta_stub n guard fidx9 )
         ^ T
     } {}

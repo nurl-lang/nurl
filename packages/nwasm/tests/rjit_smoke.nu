@@ -18,7 +18,7 @@ $ `../src/rjit.nu`
     : ( Vec i ) rsig ( vec_new [i] )
     ( vec_push [i] rsig -1 ) ( vec_push [i] rsig -1 )
     : Rj c ( rj_new code aux kv lt 2 2 4 2 1 3 )
-    : b ok ( rj_compile c rsig 0 0 0 0 0 0 )
+    : b ok ( rj_compile c rsig 0 0 0 0 0 0 16 16 )
     ? ! ok {
         ( nurl_print `rjit_smoke: compile failed, reason ` ) ( nurl_println_int ( rj_get c ( rjs_fail ) ) )
         ^ 1

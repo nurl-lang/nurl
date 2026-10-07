@@ -123,7 +123,11 @@ $ `stdlib/core/vec.nu`
 @ rjs_fsel → i { ^ 21 }  // fused SELs still to come on the live flags
 @ rjs_forbid → i { ^ 22 }  // registers this function may not allocate
 
-@ rjs_nst → i { ^ 23 }
+@ rjs_sigoff → i { ^ 23 }  // anchor offset of the canonical signature ids
+
+@ rjs_tbloff → i { ^ 24 }  // anchor offset of the table's Vec control pointer
+
+@ rjs_nst → i { ^ 25 }
 
 @ rj_get Rj c i k → i { ^ ( vec_at [i] . c st k ) }
 
@@ -484,9 +488,13 @@ $ `stdlib/core/vec.nu`
 
 @ rj_def Rj c i s → v { ( vec_push [i] . c dslot s ) ( vec_push [i] . c dweb -1 ) }
 
-@ rj_sig_np i sig → i { ^ ? < sig 0 0 / sig 65536 }
+// a call record's signature word: canon<<32 | nparams<<16 | nresults
+// (canon: call_indirect's expected type, canonicalised; -1 = unknown)
+@ rj_sig_np i sig → i { ^ ? < sig 0 0 & >> sig 16 65535 }
 
-@ rj_sig_nr i sig → i { ^ ? < sig 0 0 % sig 65536 }
+@ rj_sig_nr i sig → i { ^ ? < sig 0 0 & sig 65535 }
+
+@ rj_sig_canon i sig → i { ^ ? < sig 0 -1 >> sig 32 }
 
 // Decode record r's uses and defs, in the fixed per-op order the emitter
 // reads them back in.
@@ -1061,6 +1069,7 @@ $ `stdlib/core/vec.nu`
     ? & >= op 157 <= op 161 { ^ F } {}  // extendN_s reads the low bits
     ? | | == op 148 == op 143 | == op 149 == op 144 { ^ F } {}  // i32 → float
     ? | | | == op 54 == op 168 == op 169 | == op 170 == op 163 { ^ F } {}  // i32 conditions / indices / deltas
+    ? == op 48 { ^ T } {}  // IFZ: decided per record (C = 1: an i64 operand) in rj_sens
     ? == op 177 { ^ F } {}  // ADDBRIFC32
     ? == op 45 { ^ T } {}  // decided per record (the compare's width) in rj_sens
     : i mk ( rj_memkind op )
@@ -1092,6 +1101,7 @@ $ `stdlib/core/vec.nu`
                 : i k - o u0
                 : ~ b sens ( rj_usens op k )
                 ? == op 45 { = sens >= ( rj_rw c r 4 ) 66 } {}  // BRIFC: an i64 compare reads the full value
+                ? == op 48 { = sens != 0 ( rj_rw c r 3 ) } {}  // IFZ of an i64 (eqz fusion) tests all 64 bits
                 ? | == op 47 & == op 46 < k 2 {  // a copy: the destination decides
                     = sens F
                     ( vec_push [i] csrc wv ) ( vec_push [i] cdst ( vec_at [i] . c dweb ( vec_at [i] . c doff r ) ) )
@@ -1248,18 +1258,22 @@ $ `stdlib/core/vec.nu`
 // ── linear scan ─────────────────────────────────────────────────
 // GPR order: caller-saved first (no prologue cost), callee-saved after;
 // a web live across a call may only take a callee-saved one.
+// Ordered by what a register costs the function that takes it: rsi and
+// rdx cost nothing; r9/r10/r8 one instruction at every call and return;
+// the callee-saved ones a push and a pop per invocation; rdi (the
+// context) a push, a pop and a reload before every call.
 @ rj_gpool i k → i {  // 11 entries
     ? == k 0 { ^ 6 } {}  // rsi
-    ? == k 1 { ^ 9 } {}  // r9  (globals base: put back before calls)
-    ? == k 2 { ^ 10 } {}  // r10 (memory bytes: put back before calls)
-    ? == k 3 { ^ 8 } {}  // r8  (the anchor: rematerialised before calls)
-    ? == k 4 { ^ 7 } {}  // rdi (the context: saved at entry, reloaded before calls)
-    ? == k 5 { ^ 2 } {}  // rdx (arg0 on calls; scratch of div/rem and the bit counts)
-    ? == k 6 { ^ 12 } {}
-    ? == k 7 { ^ 13 } {}
-    ? == k 8 { ^ 14 } {}
-    ? == k 9 { ^ 15 } {}
-    ^ 5  // rbp
+    ? == k 1 { ^ 2 } {}  // rdx (arg0 on calls; scratch of div/rem and the bit counts)
+    ? == k 2 { ^ 9 } {}  // r9  (globals base: put back before calls)
+    ? == k 3 { ^ 10 } {}  // r10 (memory bytes: put back before calls)
+    ? == k 4 { ^ 8 } {}  // r8  (the anchor: rematerialised before calls)
+    ? == k 5 { ^ 12 } {}
+    ? == k 6 { ^ 13 } {}
+    ? == k 7 { ^ 14 } {}
+    ? == k 8 { ^ 15 } {}
+    ? == k 9 { ^ 5 } {}  // rbp
+    ^ 7  // rdi (the context: saved at entry, reloaded before calls)
 }
 
 @ rj_calleesaved i l → b { ^ | | == l 5 == l 12 | | == l 13 == l 14 == l 15 }
@@ -2451,7 +2465,7 @@ $ `stdlib/core/vec.nu`
     ? == op 49 { ( rj_goto c r ( rj_tgtrec ( rj_rw c r 1 ) ) ) ^ v } {}
     ? | == op 54 == op 48 {
         : i o ( rj_u c r 0 )
-        ( rj_testop c ? == op 54 0 1 ( rj_uloc c o ) ( rj_us c o ) )  // br_if's condition is an i32; IFZ may test an i64 (eqz fusion)
+        ( rj_testop c ? | == op 54 == 0 ( rj_rw c r 3 ) 0 1 ( rj_uloc c o ) ( rj_us c o ) )  // i32 conditions; an IFZ fused from i64.eqz says so in C
         ( rj_jcc c ? == op 54 5 4 ( rj_tgtrec ( rj_rw c r 1 ) ) )
         ^ v
     } {}
@@ -2556,7 +2570,8 @@ $ `stdlib/core/vec.nu`
 // function — record and stub labels in `lab`, absolute jump-table entries in
 // pta_off/pta_stub (page-relative) — false to leave it to the template tier
 // (`rjs_fail` says why).
-@ rj_compile Rj c ( Vec i ) rsig i nimp i spcell i trapfn i cofn i coenv i fidx → b {
+@ rj_compile Rj c ( Vec i ) rsig i nimp i spcell i trapfn i cofn i coenv i fidx i sigoff i tbloff → b {
+    ( rj_set c ( rjs_sigoff ) sigoff ) ( rj_set c ( rjs_tbloff ) tbloff )
     ( rj_set c ( rjs_nimp ) nimp ) ( rj_set c ( rjs_spcell ) spcell ) ( rj_set c ( rjs_trapfn ) trapfn )
     ( rj_set c ( rjs_cofn ) cofn ) ( rj_set c ( rjs_coenv ) coenv ) ( rj_set c ( rjs_fidx ) fidx )
     : i n ( rj_get c ( rjs_n ) )
@@ -3024,26 +3039,72 @@ $ `stdlib/core/vec.nu`
     ( rj_reload_defs c r )
 }
 
+// call_indirect: resolve the table entry inline and call the callee's
+// direct entry; an index out of range, a null entry, a signature
+// mismatch, an import or a callee not compiled yet all take the bridge,
+// which traps with the interpreter's own message or runs the call there.
 @ rj_e_callind Rj c i r → v {
     : i ab ( rj_rw c r 2 )
     : i sig ( vec_at [i] . c rsig r )
     : i np ( rj_sig_np sig )
+    : i nr ( rj_sig_nr sig )
+    : i canon ( rj_sig_canon sig )
     : ~ i k 0
     ~ < k np {
         : i o ( rj_u c r k )
         ( rj_move c ( rjl_mem ) + ab k ( rj_uloc c o ) ( rj_us c o ) )
         = k + k 1
     }
+    // the index first: arg0's load into rdx would clobber an index living there
     : i oi ( rj_u c r np )
     ( rj_ldg c 0 ( rj_uloc c oi ) ( rj_us c oi ) 0 )
     ( rj_mov32 c 0 0 )
+    ? == np 1 { : i o0 ( rj_u c r 0 ) ( rj_ldg c 2 ( rj_uloc c o0 ) ( rj_us c o0 ) 0 ) } {}  // arg0 rides in rdx
     ( rj_restore_inv c )
-    ( rj_b c 72 ) ( rj_b c 137 ) ( rj_b c 71 ) ( rj_b c 32 )  // mov [rdi+32],rax — the table index
+    ( rj_b c 72 ) ( rj_b c 137 ) ( rj_b c 71 ) ( rj_b c 32 )  // mov [rdi+32],rax — the index, for the bridge
+    : ( Vec i ) toBridge ( vec_new [i] )
+    : ~ i okj -1
+    ? >= canon 0 {
+        : i nimp ( rj_get c ( rjs_nimp ) )
+        ( rj_rm c 0 1 0 139 1 8 -1 0 ( rj_get c ( rjs_tbloff ) ) 0 )  // mov rcx,[r8+tbl] — the table's Vec
+        ( rj_rm c 0 1 0 59 0 1 -1 0 8 0 )  // cmp rax,[rcx+8] — its length
+        ( vec_push [i] toBridge ( rj_jcc_fwd c 3 ) )  // jae
+        ( rj_rm c 0 1 0 139 1 1 -1 0 0 0 )  // mov rcx,[rcx] — its data
+        ( rj_rm c 0 1 0 139 0 1 0 3 0 0 )  // mov rax,[rcx+rax*8] — the function index
+        ( rj_test_rr c 1 0 0 )
+        ( vec_push [i] toBridge ( rj_jcc_fwd c 8 ) )  // js — a null entry
+        ( rj_rm c 0 1 0 129 7 8 0 3 ( rj_get c ( rjs_sigoff ) ) 0 ) ( rj_d c canon )  // cmp qword[r8+sig+rax*8], canon
+        ( vec_push [i] toBridge ( rj_jcc_fwd c 5 ) )  // jne — a signature mismatch
+        ( rj_alu_ri c 1 5 0 nimp )  // sub rax, nimp
+        ( vec_push [i] toBridge ( rj_jcc_fwd c 2 ) )  // jb — an import
+        ( rj_rm c 0 1 0 139 0 8 0 3 16 0 )  // mov rax,[r8+16+rax*8] — its direct entry
+        ( rj_test_rr c 1 0 0 )
+        ( vec_push [i] toBridge ( rj_jcc_fwd c 4 ) )  // jz — not compiled yet
+        ( rj_frame_end c )
+        ( rj_lea c 1 6 3 -1 0 * ab 8 )  // lea rsi,[rbx+argbase*8]
+        ( rj_b c 255 ) ( rj_b c 208 )  // call rax
+        = okj ( rj_jmp_fwd c )
+    } {}
+    : i nbj ( vec_len [i] toBridge )
+    = k 0
+    ~ < k nbj { ( rj_land c ( vec_at [i] toBridge k ) ) = k + k 1 }
+    ( rj_frame_end c ) ( rj_b c 73 ) ( rj_b c 137 ) ( rj_b c 8 )  // mov [r8],rcx
     ( rj_b c 72 ) ( rj_b c 199 ) ( rj_b c 71 ) ( rj_b c 40 ) ( rj_d c ab )  // mov qword[rdi+40], argbase
     ( rj_b c 72 ) ( rj_b c 199 ) ( rj_b c 71 ) ( rj_b c 56 ) ( rj_d c ( rj_rw c r 1 ) )  // mov qword[rdi+56], typeidx
-    ( rj_frame_end c ) ( rj_b c 73 ) ( rj_b c 137 ) ( rj_b c 8 )  // mov [r8],rcx
     ( rj_callout c 17 )
-    ( rj_reload_defs c r )
+    ? == nr 1 { ( rj_ldf c 1 0 ab ) } {}  // result 0 into rax, as the direct path leaves it
+    ? >= okj 0 { ( rj_land c okj ) } {}
+    = k 0
+    ~ < k nr {
+        : i o ( rj_dd c r k )
+        ? ( rj_dlive c o ) {
+            : i dl ( rj_dloc c o )
+            ? == nr 1 { ? != dl ( rjl_mem ) { ( rj_stg c dl ( rj_ds c o ) 0 ) } {} } {
+                ? != dl ( rjl_mem ) { ( rj_move c dl ( rj_ds c o ) ( rjl_mem ) + ab k ) } {}
+            }
+        } {}
+        = k + k 1
+    }
 }
 
 @ rj_e_fcb Rj c i r → v {
