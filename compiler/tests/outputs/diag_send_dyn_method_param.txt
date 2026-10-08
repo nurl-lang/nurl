@@ -1,0 +1,3 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_send_dyn_method_param.nu:32: error: 'run_twice' runs its parameter 2 on another thread or fiber, but the closure built on line 32 captures 'r', which is not Send: it reaches an 'Rc', whose refcount is NOT atomic — two threads cloning or dropping the same Rc race on its control-block count, which is UB. Use 'Arc' (stdlib/std/arc.nu) for any handle that crosses a thread boundary; it is the same API with a SEQ_CST count. If the type holding it IS safe to send and the compiler cannot see why, assert that with a '% Send <Type> { }' marker impl (stdlib/core/marker.nu).

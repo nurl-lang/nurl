@@ -35570,6 +35570,10 @@ unsafe @ bck_record_expr_return i syms i tt s value → v {
             = changed | changed ( __keyed_union_into `retpart##` vn fn )
             = changed | changed ( __keyed_union_into `retread##` vn fn )
             = changed | changed ( __keyed_union_into `retvia##` vn fn )
+            = changed | changed ( __keyed_union_into `retptr##` vn fn )
+            = changed | changed ( __keyed_union_into `retpass##` vn fn )
+            = changed | changed ( __keyed_union_into `putback##` vn fn )
+            = changed | changed ( __keyed_union_into `retclo##` vn fn )
             ? | != 0 ( nurl_sym_len2 g_root_syms fn `__ret_borrow` ) != 0 ( nurl_sym_len2 g_root_syms fn `__ret_borrow_x` ) {
                 ? == 0 ( nurl_sym_len2 g_root_syms vn `__ret_borrow` ) {
                     ( nurl_sym_def g_root_syms ( nurl_str_cat vn `__ret_borrow` ) `1` )
@@ -35584,6 +35588,34 @@ unsafe @ bck_record_expr_return i syms i tt s value → v {
         }
         ? ! ( seq inter ( nurl_sym_get g_fn_invoke_only vn ) ) { ( nurl_sym_def g_fn_invoke_only vn inter ) = changed T } {}
         ( nurl_sym_def g_root_syms ( nurl_str_cat vn `__body_done` ) `1` )
+    }
+    ^ changed
+}
+
+// The thread-sharing facts of a `dyn` call's virtual callee, per argument
+// (`ccprop##F##K`, `sendreq##F##K`): every impl's at once. One pass of the
+// cycle and Send fixed points (resolve_cc_checks, resolve_send_checks),
+// which find those facts after the summaries above.
+@ __dyn_virtual_arg_round s prefix → b {
+    : ~ b changed F
+    : ~ s rest ( nurl_sym_get g_pending_impl `dynvirt` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s vn ( str_first_word rest ) = rest ( str_skip_word rest )
+        : ~ s fns ( __dyn_impl_fns vn )
+        ~ != 0 ( nurl_str_len fns ) {
+            : s fn ( str_first_word fns ) = fns ( str_skip_word fns )
+            : ~ i k 0
+            ~ < k 16 {
+                : s add ( nurl_sym_get g_pending_impl ( nurl_str_cat4 prefix fn `##` ( nurl_str_int k ) ) )
+                ? != 0 ( nurl_str_len add ) {
+                    : s vk ( nurl_str_cat4 prefix vn `##` ( nurl_str_int k ) )
+                    : s cur ( nurl_sym_get g_pending_impl vk )
+                    : s nw ( __bar_union cur add )
+                    ? ! ( seq nw cur ) { ( nurl_sym_def g_pending_impl vk nw ) = changed T } {}
+                } {}
+                = k + k 1
+            }
+        }
     }
     ^ changed
 }
@@ -41772,6 +41804,7 @@ unsafe @ __lazy_scan → v {
             } {}
             = i + i 1
         }
+        ? ( __dyn_virtual_arg_round `ccprop##` ) { = changed T } {}
     }
     : ~ i i 0
     ~ < i n {
@@ -41897,6 +41930,7 @@ unsafe @ __lazy_scan → v {
             } {}
             = i + i 1
         }
+        ? ( __dyn_virtual_arg_round `sendreq##` ) { = changed T } {}
     }
     // The verdicts.
     = j 0
@@ -46028,7 +46062,11 @@ unsafe @ __body_end_note i lex i at i stop → v {
                     != ( nurl_lex_type lex ) TT_AT
                     != ( nurl_lex_type lex ) TT_RBRACE
                     != ( nurl_lex_type lex ) TT_EOF {
-                        ( nurl_lex_advance lex )
+                        // A parenthesised parameter type as a whole: a
+                        // closure type's own `@` (`( @ v ) f`) is not the
+                        // next method's, and stopping on it read the header
+                        // as having no return type.
+                        ? == ( nurl_lex_type lex ) TT_LPAREN { ( skip_one_type lex ) } { ( nurl_lex_advance lex ) }
                     }
                     // Every other spelling of a function header requires the
                     // arrow: a plain `@ f i o { … }` and an IMPL method both
