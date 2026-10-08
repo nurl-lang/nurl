@@ -98,10 +98,11 @@ $ `stdlib/ext/http2_server.nu`
 
 // Preserve a caller's existing deadline. RPC work and I/O both have a bound;
 // the terminal status after an RPC timeout uses the connection's I/O bound.
-@ __grpc_server_write_begin GrpcServer server i rpc_deadline → i {
-    : TcpConn tcp . . server transport tcp
+// Arms the connection's write deadline (the server's transport only: a
+// call read out of the table stays valid across it).
+@ __grpc_server_write_begin TcpConn tcp i idle_timeout_ns i rpc_deadline → i {
     : i previous ( tcp_write_deadline tcp )
-    : ~ i deadline ( grpc_deadline_after ( monotonic_ns ) . . server limits idle_timeout_ns )
+    : ~ i deadline ( grpc_deadline_after ( monotonic_ns ) idle_timeout_ns )
     ? & > rpc_deadline 0 < rpc_deadline deadline { = deadline rpc_deadline } {}
     ? & > previous 0 < previous deadline { = deadline previous } {}
     ( tcp_set_write_deadline tcp deadline )
@@ -111,14 +112,14 @@ $ `stdlib/ext/http2_server.nu`
 @ grpc_server_deadline GrpcServer server i sid → !i GrpcError {
     : i idx ( __grpc_server_index server sid )
     ? < idx 0 { ^ @ !i GrpcError { F ( grpc_error GRPC_NOT_FOUND `unknown RPC stream` ) } } {}
-    : GrpcServerCall call ( __grpc_server_get server idx )
+    : GrpcServerCall call ( __grpc_server_get . server calls idx )
     ^ @ !i GrpcError { T . call deadline_ns }
 }
 
 @ grpc_server_is_cancelled GrpcServer server i sid → b {
     : i idx ( __grpc_server_index server sid )
     ? | . server closed < idx 0 { ^ T } {}
-    : GrpcServerCall call ( __grpc_server_get server idx )
+    : GrpcServerCall call ( __grpc_server_get . server calls idx )
     ^ | . call cancelled & > . call deadline_ns 0 >= ( monotonic_ns ) . call deadline_ns
 }
 
@@ -151,8 +152,10 @@ unsafe @ __grpc_server_index GrpcServer server i sid → i {
     ^ -1
 }
 
-unsafe @ __grpc_server_get GrpcServer server i idx → GrpcServerCall {
-    ^ . ( vec_data [GrpcServerCall] . server calls ) idx
+// The call in slot `idx` of the server's table (`. server calls`): a borrow
+// of that table only.
+unsafe @ __grpc_server_get ( Vec GrpcServerCall ) calls i idx → GrpcServerCall {
+    ^ . ( vec_data [GrpcServerCall] calls ) idx
 }
 
 unsafe @ __grpc_server_put GrpcServer server i idx GrpcServerCall call → v {
@@ -186,7 +189,7 @@ unsafe @ __grpc_server_prune GrpcServer server → v {
     : ~ i total 0
     : ~ i k 0
     ~ < k ( vec_len [GrpcServerCall] . server calls ) {
-        : GrpcServerCall call ( __grpc_server_get server k )
+        : GrpcServerCall call ( __grpc_server_get . server calls k )
         : GrpcDecoder decoder . call decoder
         = total + total + ( vec_len [u] . decoder pending ) ( vec_len [u] . call outgoing )
         = k + k 1
@@ -198,7 +201,7 @@ unsafe @ __grpc_server_prune GrpcServer server → v {
     ? . server closed { ^ @ !i GrpcError { F ( grpc_error GRPC_UNAVAILABLE `server connection is closed` ) } } {}
     : i idx ( __grpc_server_index server sid )
     ? < idx 0 { ^ @ !i GrpcError { F ( grpc_error GRPC_NOT_FOUND `unknown RPC stream` ) } } {}
-    : GrpcServerCall call ( __grpc_server_get server idx )
+    : GrpcServerCall call ( __grpc_server_get . server calls idx )
     ? | . call cancelled . call output_finished { ^ @ !i GrpcError { F ( grpc_error GRPC_CANCELLED `RPC has ended` ) } } {}
     ? & > . call deadline_ns 0 >= ( monotonic_ns ) . call deadline_ns {
         ^ @ !i GrpcError { F ( grpc_error GRPC_DEADLINE_EXCEEDED `RPC deadline exceeded` ) }
@@ -228,7 +231,7 @@ unsafe @ __grpc_server_headers ( Vec Header ) metadata i encoding i max_metadata
 
 @ grpc_server_send_metadata inout GrpcServer server i sid ( Vec Header ) metadata i encoding → !v GrpcError {
     : i idx \ ( __grpc_server_alive server sid )
-    : GrpcServerCall call ( __grpc_server_get server idx )
+    : GrpcServerCall call ( __grpc_server_get . server calls idx )
     ? | . call headers_sent . call finish_requested {
         ^ @ !v GrpcError { F ( grpc_error GRPC_FAILED_PRECONDITION `response headers already sent` ) }
     } {}
@@ -237,7 +240,7 @@ unsafe @ __grpc_server_headers ( Vec Header ) metadata i encoding i max_metadata
         ^ @ !v GrpcError { F ( grpc_error GRPC_UNIMPLEMENTED `response encoding is not supported by the peer` ) }
     } {}
     : ( Vec Header ) headers \ ( __grpc_server_headers metadata encoding . . server limits max_metadata )
-    : i previous ( __grpc_server_write_begin server . call deadline_ns )
+    : i previous ( __grpc_server_write_begin . . server transport tcp . . server limits idle_timeout_ns . call deadline_ns )
     : !v H2ConnErr written ( h2_stream_headers . server transport sid headers F )
     ( tcp_set_write_deadline . . server transport tcp previous )
     ?? written { T _ → {} F e → { = . server closed T ^ @ !v GrpcError { F ( __grpc_server_transport_error e ) } } }
@@ -261,9 +264,9 @@ unsafe @ grpc_server_flush inout GrpcServer server → !v GrpcError {
         = progress F
         : ~ i k 0
         ~ < k ( vec_len [GrpcServerCall] . server calls ) {
-            : GrpcServerCall call ( __grpc_server_get server k )
+            : GrpcServerCall call ( __grpc_server_get . server calls k )
             ? & ! . call cancelled ! . call output_finished {
-                : i previous ( __grpc_server_write_begin server . call deadline_ns )
+                : i previous ( __grpc_server_write_begin . . server transport tcp . . server limits idle_timeout_ns . call deadline_ns )
                 : i length ( vec_len [u] . call outgoing )
                 ? > length . call outgoing_pos {
                     : *u p ( vec_data [u] . call outgoing )
@@ -308,10 +311,10 @@ unsafe @ grpc_server_flush inout GrpcServer server → !v GrpcError {
 // server owns the encoded frame until all bytes have reached the peer.
 @ grpc_server_send inout GrpcServer server i sid ( Vec u ) message → !v GrpcError {
     : i idx \ ( __grpc_server_alive server sid )
-    : GrpcServerCall initial ( __grpc_server_get server idx )
+    : GrpcServerCall initial ( __grpc_server_get . server calls idx )
     ? . initial finish_requested { ^ @ !v GrpcError { F ( grpc_error GRPC_FAILED_PRECONDITION `status trailers already queued` ) } } {}
     ? ! . initial headers_sent { \ ( __grpc_server_default_headers server sid ) } {}
-    : GrpcServerCall call ( __grpc_server_get server idx )
+    : GrpcServerCall call ( __grpc_server_get . server calls idx )
     : ( Vec u ) frame \ ( grpc_frame message . call output_encoding . . server limits max_message )
     : i n ( vec_len [u] frame )
     : i queued - ( vec_len [u] . call outgoing ) . call outgoing_pos
@@ -333,14 +336,14 @@ unsafe @ grpc_server_flush inout GrpcServer server → !v GrpcError {
 
 @ grpc_server_finish inout GrpcServer server i sid GrpcStatus status ( Vec Header ) metadata → !v GrpcError {
     : i idx \ ( __grpc_server_alive server sid )
-    : GrpcServerCall initial ( __grpc_server_get server idx )
+    : GrpcServerCall initial ( __grpc_server_get . server calls idx )
     ? . initial finish_requested { ^ @ !v GrpcError { F ( grpc_error GRPC_FAILED_PRECONDITION `status trailers already queued` ) } } {}
     : ( Vec Header ) trailers \ ( grpc_status_headers status metadata . . server limits max_metadata )
     ? ! . initial headers_sent {
         : !v GrpcError hr ( __grpc_server_default_headers server sid )
         ?? hr { T _ → {} F e → { ^ @ !v GrpcError { F e } } }
     } {}
-    : GrpcServerCall call ( __grpc_server_get server idx )
+    : GrpcServerCall call ( __grpc_server_get . server calls idx )
     ( grpc_metadata_free . call trailers )
     = . call trailers trailers
     = . call finish_requested T
@@ -363,12 +366,12 @@ unsafe @ __grpc_server_reject inout GrpcServer server i sid i code s message i h
     : ~ b headers_sent F
     : ~ b output_finished F
     ? >= idx 0 {
-        : GrpcServerCall call ( __grpc_server_get server idx )
+        : GrpcServerCall call ( __grpc_server_get . server calls idx )
         = headers_sent . call headers_sent
         = output_finished . call output_finished
     } {}
     ? output_finished { ^ @ !v GrpcError { T 0 } } {}
-    : i previous ( __grpc_server_write_begin server 0 )
+    : i previous ( __grpc_server_write_begin . . server transport tcp . . server limits idle_timeout_ns 0 )
     : ~ ! v H2ConnErr result @ !v H2ConnErr { T 0 }
     ? headers_sent {
         = result ( h2_stream_trailers . server transport sid trailers )
@@ -394,7 +397,7 @@ unsafe @ __grpc_server_reject inout GrpcServer server i sid i code s message i h
     ( tcp_set_write_deadline . . server transport tcp previous )
     ?? result { T _ → {} F e → { = . server closed T ^ @ !v GrpcError { F ( __grpc_server_transport_error e ) } } }
     ? >= idx 0 {
-        : GrpcServerCall call ( __grpc_server_get server idx )
+        : GrpcServerCall call ( __grpc_server_get . server calls idx )
         ( vec_free [u] . call outgoing )
         = . call outgoing ( vec_new [u] )
         = . call outgoing_pos 0
@@ -495,7 +498,7 @@ unsafe @ __grpc_server_reject inout GrpcServer server i sid i code s message i h
     : ~ i visited 0
     ~ < visited count {
         : i idx % + . server cursor visited count
-        : ~ GrpcServerCall call ( __grpc_server_get server idx )
+        : ~ GrpcServerCall call ( __grpc_server_get . server calls idx )
         // A reject writes the table; the stream id outlives it.
         : i sid . call stream_id
         ? . call output_finished {
@@ -507,7 +510,7 @@ unsafe @ __grpc_server_reject inout GrpcServer server i sid i code s message i h
             ? . call input_ended { = . call end_notified T } {}
             ( __grpc_server_put server idx call )
             // The put wrote the table: read the slot as it now is.
-            = call ( __grpc_server_get server idx )
+            = call ( __grpc_server_get . server calls idx )
         } {}
         ? & ! . call cancelled > . call deadline_ns 0 {
             ? & ! . call output_finished >= ( monotonic_ns ) . call deadline_ns {
@@ -518,7 +521,7 @@ unsafe @ __grpc_server_reject inout GrpcServer server i sid i code s message i h
         ? & ! . call cancelled ! . call end_notified {
             : !GrpcMessage GrpcError decoded ( grpc_decoder_next . call decoder )
             ( __grpc_server_put server idx call )
-            = call ( __grpc_server_get server idx )
+            = call ( __grpc_server_get . server calls idx )
             ?? decoded {
                 F e → {
                     : i code . e code
@@ -547,7 +550,7 @@ unsafe @ __grpc_server_reject inout GrpcServer server i sid i code s message i h
                     T _ → {
                         = . call end_notified T
                         ( __grpc_server_put server idx call )
-                        = call ( __grpc_server_get server idx )
+                        = call ( __grpc_server_get . server calls idx )
                         = . server cursor + idx 1
                         ^ @ !GrpcServerEvent GrpcError { T @ GrpcServerEvent {
                                 ( grpc_server_event_half_close ) sid ( string_clone . call method )
@@ -571,7 +574,7 @@ unsafe @ __grpc_server_reject inout GrpcServer server i sid i code s message i h
     } {}
     : i idx ( __grpc_server_index server sid )
     ? >= idx 0 {
-        : ~ GrpcServerCall call ( __grpc_server_get server idx )
+        : ~ GrpcServerCall call ( __grpc_server_get . server calls idx )
         ? == kind ( h2_event_reset ) {
             = . call cancelled T
             ( __grpc_server_put server idx call )
@@ -590,7 +593,7 @@ unsafe @ __grpc_server_reject inout GrpcServer server i sid i code s message i h
             } {}
             : !v GrpcError fed ( grpc_decoder_feed . call decoder . event data )
             ( __grpc_server_put server idx call )
-            = call ( __grpc_server_get server idx )
+            = call ( __grpc_server_get . server calls idx )
             ?? fed {
                 T _ → {}
                 F e → {
@@ -609,7 +612,7 @@ unsafe @ __grpc_server_reject inout GrpcServer server i sid i code s message i h
                     ( grpc_metadata_free . call request_trailers )
                     = . call request_trailers metadata
                     ( __grpc_server_put server idx call )
-                    = call ( __grpc_server_get server idx )
+                    = call ( __grpc_server_get . server calls idx )
                 }
                 F e → {
                     : i code . e code
@@ -652,7 +655,7 @@ unsafe @ __grpc_server_reject inout GrpcServer server i sid i code s message i h
     ? & > poll_deadline_ns 0 < poll_deadline_ns deadline { = deadline poll_deadline_ns } {}
     : ~ i k 0
     ~ < k ( vec_len [GrpcServerCall] . server calls ) {
-        : GrpcServerCall call ( __grpc_server_get server k )
+        : GrpcServerCall call ( __grpc_server_get . server calls k )
         ? & & ! . call cancelled ! . call output_finished > . call deadline_ns 0 {
             ? < . call deadline_ns deadline { = deadline . call deadline_ns } {}
         } {}

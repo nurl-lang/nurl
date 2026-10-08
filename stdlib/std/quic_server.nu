@@ -141,31 +141,32 @@ $ `stdlib/core/rcbox.nu`
 
 // Register every id the connection answers to (issued ids may grow),
 // and forget the ones the peer retired: a stale entry would keep a
-// finished connection alive.
-@ __qs_register inout QuicServerImpl s QuicConn c → v {
+// finished connection alive. Only the id table changes (the server's
+// `by_cid`), so a connection read out of the server's list stays valid.
+@ __qs_register ( HashMap i QuicConn ) by_cid QuicConn c → v {
     : ( Vec u ) cids ( quic_conn_cids c )
     : ~ i off 0
     ~ < + off 8 + ( vec_len [u] cids ) 1 {
         : i key ( __qs_key cids off )
-        ? ! ( __qs_map_has . s by_cid key ) { ( __qs_map_set . s by_cid key c ) } {}
+        ? ! ( __qs_map_has by_cid key ) { ( __qs_map_set by_cid key c ) } {}
         = off + off 8
     }
     : ( Vec u ) gone ( quic_conn_retired_cids c )
     ? > ( vec_len [u] gone ) 0 {
         = off 0
         ~ < + off 8 + ( vec_len [u] gone ) 1 {
-            ( __qs_map_del . s by_cid ( __qs_key gone off ) )
+            ( __qs_map_del by_cid ( __qs_key gone off ) )
             = off + off 8
         }
         ( quic_conn_clear_retired_cids c )
     } {}
 }
 
-@ __qs_unregister inout QuicServerImpl s QuicConn c → v {
+@ __qs_unregister ( HashMap i QuicConn ) by_cid QuicConn c → v {
     : ( Vec u ) cids ( quic_conn_cids c )
     : ~ i off 0
     ~ < + off 8 + ( vec_len [u] cids ) 1 {
-        ( __qs_map_del . s by_cid ( __qs_key cids off ) )
+        ( __qs_map_del by_cid ( __qs_key cids off ) )
         = off + off 8
     }
 }
@@ -181,7 +182,7 @@ $ `stdlib/core/rcbox.nu`
         }
     }
     // issued connection ids may have grown
-    ( __qs_register s c )
+    ( __qs_register . s by_cid c )
 }
 
 // Send everything `conn` has ready.
@@ -216,7 +217,7 @@ $ `stdlib/core/rcbox.nu`
                 = c ( quic_conn_new_server scid dcid from . s creds . s alpn_prefs . s tp now )
                 ( vec_push [QuicConn] . s conns ( QuicConn_share c ) )
                 ( __qs_map_set . s by_cid ( __qs_key dcid 0 ) c )
-                ( __qs_register s c )
+                ( __qs_register . s by_cid c )
                 = . s accepted + . s accepted 1
             } { = . s rejected + . s rejected 1 }
         }
@@ -265,7 +266,7 @@ $ `stdlib/core/rcbox.nu`
                 ? >= ( quic_conn_state c ) 4 {
                     : ( @ v QuicConn i ) ev . s on_event
                     ( ev c 3 )
-                    ( __qs_unregister s c )
+                    ( __qs_unregister . s by_cid c )
                     : ( Vec u ) od ( quic_conn_odcid c )
                     ? >= ( vec_len [u] od ) 8 { ( __qs_map_del . s by_cid ( __qs_key od 0 ) ) } {}
                     = gone T

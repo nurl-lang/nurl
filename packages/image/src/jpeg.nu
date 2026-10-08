@@ -535,8 +535,19 @@ unsafe @ __jpg_prog_ac2 inout Jpeg j i ci ( Vec i ) cf i bidx → v {
 }
 
 // Run one progressive scan: interleaved (ns>1, MCU order) or single
-// component (its own unpadded block raster).
+// component (its own unpadded block raster). The coefficient planes leave
+// the decoder for the scan: the decoder (its bit reader and tables) and
+// the plane a block is decoded into are then two values, not a value and
+// a borrow of it.
 unsafe @ __jpg_prog_scan inout Jpeg j → v {
+    : ( Vec ( Vec i ) ) coefs . j coefs
+    ( mem_take coefs )
+    = . j coefs ( vec_new [( Vec i )] )
+    ( __jpg_prog_scan_planes j coefs )
+    = . j coefs coefs
+}
+
+unsafe @ __jpg_prog_scan_planes inout Jpeg j ( Vec ( Vec i ) ) coefs → v {
     : i ns . j nscomp
     ? == ns 1 {
         : i ci ( _b_i . j scomp 0 )
@@ -545,7 +556,7 @@ unsafe @ __jpg_prog_scan inout Jpeg j → v {
         : i nbw / + cw 7 8
         : i nbh / + chh 7 8
         : i bw ( _b_i . j cbw ci )
-        ?? ( vec_get [( Vec i )] . j coefs ci ) {
+        ?? ( vec_get [( Vec i )] coefs ci ) {
             T cf → {
                 : ~ i cnt 0
                 : ~ i by 0
@@ -577,7 +588,7 @@ unsafe @ __jpg_prog_scan inout Jpeg j → v {
                     : i hf ( _b_i . j chf ci )
                     : i vf ( _b_i . j cvf ci )
                     : i bw ( _b_i . j cbw ci )
-                    ?? ( vec_get [( Vec i )] . j coefs ci ) {
+                    ?? ( vec_get [( Vec i )] coefs ci ) {
                         T cf → {
                             : ~ i by 0
                             ~ < by vf {
