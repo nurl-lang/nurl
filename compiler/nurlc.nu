@@ -35565,9 +35565,10 @@ unsafe @ bck_record_expr_return i syms i tt s value → v {
                     = changed T
                 } {}
             } {}
-            // Only invoked by every impl: the intersection.
+            // Only invoked by every impl: the intersection. (Statements, not
+            // a `?` join: the join's fresh string was nobody's — LSan.)
             : s io ( nurl_sym_get g_fn_invoke_only fn )
-            = inter ? first ( nurl_str_cat io `` ) ( __words_common inter io )
+            ? first { = inter ( nurl_str_cat io `` ) } { = inter ( __words_common inter io ) }
             = first F
         }
         ? ! ( seq inter ( nurl_sym_get g_fn_invoke_only vn ) ) { ( nurl_sym_def g_fn_invoke_only vn inter ) = changed T } {}

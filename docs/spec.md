@@ -1023,14 +1023,15 @@ identity for concrete values — the runtime representation exists only for the
   `%dyn.<Trait>`, which runs the vtable's slot-0 destructor on the boxed value
   (freeing *its* owned resources transitively) and then frees the box. No leak
   and no double-free — verified under AddressSanitizer.
-- **Return ownership through dyn.** A method that returns owned data should return
-  `String`, not a raw `s`. Ownership of a raw `s` result is impl-dependent (one
-  impl may return a `.rodata` literal, another a heap allocation), and the vtable
-  erases which impl ran, so an `s` result crossing the dynamic boundary is treated
-  as **borrowed** and never auto-freed — the conservative choice that can never
-  free a literal. (Static dispatch knows the concrete impl and *does* auto-free an
-  owned `s` result, same as any function; the asymmetry is inherent to type
-  erasure. Use `String` for owned returns you want dropped through a `%Trait`.)
+- **Ownership through dyn.** A call through a `%Trait` object reaches whichever
+  impl the object holds, and is checked as a call of all of them at once: what
+  it may keep, consume or lend back of its arguments is the union of the
+  impls' summaries, and the impl that ran answers per call whether its result
+  is the caller's to drop (a fresh `String` or raw `s`) or lent (a field of
+  `self`, a literal). Impls that disagree on keeping an argument, and an impl that keeps
+  its receiver (the object only lends it), are rejected at the call
+  (docs/MEMORY.md §1, "Methods"). `sink` and `inout` parameters other than the
+  receiver dispatch as declared.
 
 The static surface is pinned by tests: `trait_bounds` / `should_fail_trait_
 bound` (bounds), `test_09_trait_defaults` (defaults), `should_fail_duplicate_
@@ -1039,7 +1040,9 @@ impl` / `should_fail_ambiguous_method` (coherence), `trait_supertraits` /
 assoc_import` / `should_fail_missing_assoc` (associated types). The dynamic
 surface is pinned by `dyn_dispatch` (object construction + vtable dispatch with a
 value parameter), `dyn_diamond` (supertrait upcast + inherited default +
-override), and `should_fail_dyn_not_object_safe` (object-safety rejection).
+override), `dyn_call_ownership` (arguments and results across impls),
+`diag_dyn_impls_disagree` / `diag_dyn_keeps_receiver` (the ownership checks),
+and `should_fail_dyn_not_object_safe` (object-safety rejection).
 
 ## 5. Statements
 

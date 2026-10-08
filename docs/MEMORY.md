@@ -163,6 +163,16 @@ explicitly.
 
 **Closure parameters** are always borrowed (§7.5).
 
+**Methods.** A method call is a call of the impl its receiver's type
+selects, and the conventions above, declared or inferred, are that
+impl's. A call through a trait object (`%Trait`) reaches whichever impl
+the object holds, so every impl of the method must take each parameter
+the same way: an impl that keeps an argument while another only reads it
+is an error at the call (declare the parameter `sink` in the trait, or
+keep a copy), and an impl may not keep its receiver, which the object
+only lends. A raw-pointer parameter (`*T`) hands nothing over: storing it
+is the raw code's business.
+
 One implementation limit remains: a raw owned string (`s`) and an owned
 slice cannot be passed to an explicit `sink` parameter. Wrap them in a
 `String` / `Vec`.

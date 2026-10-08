@@ -26,9 +26,11 @@ Every class below is closed at its root, with the probes it found:
 | K — accessors by summary | raw provenance decides what a raw function lends, writes, reallocates | h72–h76 |
 | P — field paths | a field argument lends and loses its field; nested fields are their binding's storage | h82–h88 |
 | G — allocation arithmetic | `alloc_size` / `alloc_count_add` / `alloc_grow_cap` / `alloc_grow_pow2` | h77–h79 |
-| temporaries | a part of a temporary is copied; one that cannot be is an error | h96 |
+| temporaries | a part of a temporary is copied; one that cannot be is an error; an instance of a generic callee is asked whether its result is its own | h96, h105 |
 | F — the foreign surface | `"nurl.raw"` builtins, raw-result calls and `*u` buffer types are `unsafe` to call; safe forms beside each; generic stdlib internals stay internal | h97–h101, h103, h104 |
 | N — null strings | runtime prints and `"nurl.cstr"` parameters read null as `""` | h102 |
+| M — method calls | a statically dispatched call asks its impl what a call of any function asks; a `dyn` call asks every impl at once (`m__dyn__T`, the union of their summaries; handle results owned per call), and impls that disagree on keeping an argument, or keep the receiver, are rejected; a raw method signature is raw to call | h106, h107, h110–h112 |
+| O — ownership summaries | a `sink` parameter handed back is the caller's own value, not a second name of its argument; a raw-pointer parameter hands nothing over | h108, h109 |
 
 Gates (pre-production-hardening tip): `tools/fuzz/holes/check.sh` 92
 probes, 86 rejected, 6 clean, **holes: 0** (in CI's build-test job);

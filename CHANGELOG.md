@@ -9,8 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 The memory guarantee has **no exception**: 0.71.0's one known hole (a
-`Slice` of a `Vec`, probe h32) is closed, along with 72 more found around
-it (probes h33–h104), each at its root — every probe is now rejected or
+`Slice` of a `Vec`, probe h32) is closed, along with 80 more found around
+it (probes h33–h112), each at its root — every probe is now rejected or
 runs clean under ASan/UBSan/LSan, and `tools/fuzz/holes/check.sh` runs in
 CI. Compile time is 3.2 % below 0.71.0's main (self-compile instructions),
 run time is flat or better. Code that handed raw pointers or caller-given
@@ -55,7 +55,36 @@ beside each raw one (*Changed*).
   took the element for the temporary Vec itself: the Vec was never
   dropped. The element is copied and the temporary dropped after the
   call; an element that cannot be copied is an error naming the fix
-  (h96).
+  (h96). A temporary an instance of a generic function hands back was
+  freed under the result: the instance is compiled after its callers, so
+  the call did not ask it whether its result was its own (h105).
+- **A method call is its impl's.** A method call was judged by the
+  trait's bare name, which has a contract and no body: an impl that kept
+  its argument had it dropped under it by the caller, a temporary handed
+  to a method (or a temporary receiver) leaked, and a method taking or
+  handing back a raw pointer was callable from safe code (h106, h107). A
+  call the receiver's type dispatches statically now asks its impl
+  everything a call of a function asks. A call through a `%Trait` object
+  asks every impl at once: its arguments are kept, lent or dropped as any
+  impl may, and a handle result is owned per call. Impls that disagree on
+  keeping an argument, or an impl that keeps its receiver (the object
+  still owns it), are an error where the object is called (h110–h112).
+  `sink` and `inout` parameters in a trait's signature no longer make
+  every `dyn` call of the method an arity error.
+- **A `sink` parameter handed back is the caller's.** `^ x` out of a
+  `sink` parameter — a builder that takes its value and returns it
+  changed — was read as a second name of the argument the caller had
+  handed over, so the result was nobody's and leaked (h108).
+- **A raw-pointer parameter hands nothing over.** A `*T` parameter was
+  summarised as keeping what it was handed when its function stored it
+  in raw memory: `json_parse_n`'s text, held by its scratch parser, made
+  `json_parse` keep its text, and every temporary handed to it leaked
+  (h109).
+- **Three dangling views in packages**, rejected by the view checks:
+  anomaly's multi-tenant issuer template and nurl-mcp's `--token` were
+  views of locals kept in globals, and f5tts read its bearer token and
+  `{id}` path capture through views of copies freed at the end of a match
+  arm — each a read of freed memory.
 - **The raw foreign surface is `unsafe`.** A C primitive that reads or
   writes as far as its caller says (`memmem`, `memcmp`, `fwrite`,
   `nurl_fast_atof`, the TCP/UDP buffers), takes a `FILE*` or a format
@@ -120,7 +149,7 @@ beside each raw one (*Changed*).
 - `slice_of_str`, `slice_byte`, `slice_parse_int`, `slice_parse_float`,
   `string_adopt`, `write_string`, `b64_encode_string`, `utf8_decode_at`:
   the safe forms of the raw-length helpers above.
-- Hole probes h33–h104 (`tools/fuzz/holes/`) and their check in CI: each
+- Hole probes h33–h112 (`tools/fuzz/holes/`) and their check in CI: each
   must be rejected or run clean under the sanitizers.
 - **Five cryptographic benchmark rows** — `chacha20`, `poly1305`,
   `blake2b`, `sha512` and `x25519` — in NURL, C and Rust. The NURL side
