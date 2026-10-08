@@ -335,7 +335,7 @@ $ `stdlib/ext/semver.nu`
 //   * a leading `v` and surrounding whitespace (CRLF from a Windows pipe)
 //     are ignored; otherwise SemVer precedence, real prereleases included
 //     (0.65.0-rc.1 is older than 0.65.0).
-@ __sv_all_digits s text i from i to → b {
+@ __mf_all_digits s text i from i to → b {
     ? >= from to { ^ F } {}
     : ~ i k from
     ~ < k to {
@@ -346,7 +346,7 @@ $ `stdlib/ext/semver.nu`
     ^ T
 }
 
-@ __sv_all_hex s text i from i to → b {
+@ __mf_all_hex s text i from i to → b {
     ? >= from to { ^ F } {}
     : ~ i k from
     ~ < k to {
@@ -375,10 +375,10 @@ $ `stdlib/ext/semver.nu`
     : ~ i g - end 1
     ~ & >= g 0 != ( nurl_str_get text g ) 45 { = g - g 1 }
     ? & > g 0 & < + g 1 end == ( nurl_str_get text + g 1 ) 103 {
-        ? ( __sv_all_hex text + g 2 end ) {
+        ? ( __mf_all_hex text + g 2 end ) {
             : ~ i c - g 1
             ~ & >= c 0 != ( nurl_str_get text c ) 45 { = c - c 1 }
-            ? & > c 0 ( __sv_all_digits text + c 1 g ) { = end c } {}
+            ? & > c 0 ( __mf_all_digits text + c 1 g ) { = end c } {}
         } {}
     } {}
     ^ end
