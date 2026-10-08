@@ -3293,6 +3293,9 @@ unsafe @ nurl_cg_lbl i h s hint → s {
 }
 
 @ mem_store_return_proof i syms s proof → v {
+    // A path that may hand over an owned result: without one the function
+    // never does, and its callers need not ask (`__ret_unowned`).
+    ? ! ( seq proof `0` ) { ( nurl_sym_set_deep syms `__fn_ret_proof_live__` `1` ) } {}
     : s slot ( nurl_sym_get syms `__ret_proof_slot__` )
     ( nurl_print `  store i64 ` ) ( nurl_print proof )
     ( nurl_print `, i64* ` ) ( nurl_print slot ) ( nurl_print `\n` )
@@ -7729,6 +7732,8 @@ unsafe @ origin_guard_retained i root → b {
 
 // A user call without an all-paths static marker asks the callee for
 // this invocation's ownership proof, even after its body was compiled.
+// (A body whose every path answers "not owned" is such a marker:
+// `__ret_unowned`.)
 // The hidden slot holds null for borrowed/opaque results. Capture it before
 // argument cleanup; binding, forwarding and argument use share the slot.
 @ mem_emit_fwd_own_guard i syms i cg s cn s res s rlt → s {
@@ -7736,6 +7741,7 @@ unsafe @ origin_guard_retained i root → b {
     ? ! ( seq ( nurl_llty rlt ) `i8*` ) { ^ ( nurl_str_cat `` `` ) } {}
     ? == 0 ( nurl_sym_len2 syms cn `__nurlfn` ) { ^ ( nurl_str_cat `` `` ) } {}
     ? != 0 ( nurl_str_len ( __ret_owned_of syms cn ) ) { ^ ( nurl_str_cat `` `` ) } {}
+    ? != 0 ( nurl_sym_len2 syms cn `__ret_unowned` ) { ^ ( nurl_str_cat `` `` ) } {}
     ^ ( mem_capture_return_guard cg res rlt )
 }
 
@@ -32809,6 +32815,7 @@ unsafe @ bck_loop_mask s pre s post → s {
     ( nurl_sym_def body_syms `__ret_hown_slot__` `` )
     ( nurl_sym_def body_syms `__fn_ret_str_owned__` `` )
     ( nurl_sym_def body_syms `__fn_ret_str_mixed__` `` )
+    ( nurl_sym_def body_syms `__fn_ret_proof_live__` `` )
 
     // Register closure parameters
     : ~ s bp_types ( nurl_str_cat param_types `` )
@@ -37314,6 +37321,7 @@ unsafe @ __lazy_scan → v {
         ( nurl_sym_def syms `__user_drops__` `` )
         ( nurl_sym_def syms `__fn_ret_str_owned__` `` )
         ( nurl_sym_def syms `__fn_ret_str_mixed__` `` )
+        ( nurl_sym_def syms `__fn_ret_proof_live__` `` )
         ( nurl_sym_def syms `__fn_ret_struct_owned__` `` )
     }
     {}
@@ -38038,6 +38046,11 @@ unsafe @ __lazy_scan → v {
     == 0 ( nurl_sym_len syms `__fn_ret_borrow_x__` ) == 0 ( nurl_sym_len syms `__fn_ret_borrow_read__` )
     & != 0 ( nurl_sym_len syms `__fn_retlend__` ) == 0 ( nurl_str_len ( mem_fn_lent_params syms fname ) )
     : i fn_ret_borrow_flag ? & != 0 ( nurl_sym_len syms `__fn_ret_borrow__` ) ! fn_ret_borrow_kept 1 0
+    // Every return path stored the proof 0 (a borrow, a raw pointer, a
+    // literal): the result is never this function's to hand over, and a
+    // caller compiled after this body need not ask for it per call.
+    : b fn_ret_unowned & & != 0 g_auto_drop_strings ( seq ( nurl_llty ret_ty ) `i8*` )
+    & & == 0 ( nurl_sym_len syms `__fn_ret_proof_live__` ) == 0 fn_ret_str_owned_flag == 0 fn_ret_owned_flag
     // A4c: snapshot the returned struct's owned-field list (colon format)
     // BEFORE the pop frees the scope entry. Empty unless this function
     // returns a by-value struct with fresh-owned fields.
@@ -38070,6 +38083,7 @@ unsafe @ __lazy_scan → v {
     ? != 0 fn_ret_borrow_flag
     { ( nurl_sym_def syms ( nurl_str_cat fname `__ret_borrow` ) `1` ) }
     {}
+    ? fn_ret_unowned { ( nurl_sym_def syms ( nurl_str_cat fname `__ret_unowned` ) `1` ) } {}
     ? != 0 ( nurl_sym_len syms `__fn_ret_borrow_x__` )
     { ( nurl_sym_def syms ( nurl_str_cat fname `__ret_borrow_x` ) `1` ) }
     {}
