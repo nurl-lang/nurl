@@ -6642,6 +6642,21 @@ unsafe @ nurl_cg_lbl i h s hint → s {
     : s attrs ( nurl_str_slice line + rp 1 - ( nurl_str_len line ) + rp 1 )
     : b read_only ( str_contains_word attrs `readonly` )
     : b no_free ( str_contains_word attrs `nofree` )
+    // A raw-memory primitive by contract (`"nurl.raw"`): a caller-given
+    // length, a caller's buffer, a C `FILE*` or format string, raw
+    // allocation, or the runtime's own machinery. Only an `unsafe` caller
+    // may vouch for it (bck_check_raw_call).
+    ? >= ( nurl_str_find attrs `"nurl.raw"` ) 0 { ( nurl_sym_def syms ( nurl_str_cat name `__rawcall` ) `1` ) } {}
+    // Its C-string parameters (`"nurl.cstr"="0 1"`): C reads each to its
+    // NUL, so a null `s` passed there reads as the empty string (gen_call).
+    : s cmark `"nurl.cstr"="`
+    : i cm ( nurl_str_find attrs cmark )
+    ? >= cm 0 {
+        : i cst + cm ( nurl_str_len cmark )
+        : s csuf ( nurl_str_slice attrs cst - ( nurl_str_len attrs ) cst )
+        : i cend ( nurl_str_find csuf `"` )
+        ? >= cend 0 { ( nurl_sym_def syms ( nurl_str_cat name `__cstr` ) ( nurl_str_slice csuf 0 cend ) ) } {}
+    } {}
     // LLVM's nocapture/nofree apply only to pointer parameters. Runtime
     // ABI lengths and allocation sizes are scalar data, not address carriers;
     // their explicit value-only contract must not be inferred from i64.
@@ -7927,7 +7942,7 @@ unsafe @ origin_guard_retained i root → b {
 // `nurlc.nu` has no `$`-imports — the linker sees only this local
 // copy in the nurlc binary, only the stdlib copy in user binaries.
 
-@ nurl_memcmp_lex s a i la s b i lb → i {
+unsafe @ nurl_memcmp_lex s a i la s b i lb → i {
     : i n ? < la lb la lb
     ? > n 0 {
         : i c # i ( memcmp a b n )
@@ -7938,7 +7953,11 @@ unsafe @ origin_guard_retained i root → b {
     ^ 0
 }
 
-@ nurl_str_len s str → i {
+// The compiler's own string helpers are `unsafe`: its strings come from
+// its lexer and tables, never a null from a user's program, so a C string
+// primitive here takes them as they are — no null select at every strlen
+// (__cstr_coalesce_here), which the self-compile measured.
+unsafe @ nurl_str_len s str → i {
     ^ ( strlen str )
 }
 
@@ -7963,7 +7982,7 @@ unsafe @ nurl_str_eq s a s b → i {
     ^ 0
 }
 
-@ nurl_str_to_int s str → i {
+unsafe @ nurl_str_to_int s str → i {
     ^ ( atoll str )
 }
 
@@ -8010,7 +8029,7 @@ unsafe @ nurl_str_to_float s str → f {
     ^ ( nurl_fast_atof # s + # i str k - n k )
 }
 
-@ nurl_str_starts s str s prefix → i {
+unsafe @ nurl_str_starts s str s prefix → i {
     : i n ( strlen prefix )
     : i c # i ( strncmp str prefix n )
     ^ ? == c 0 1 0
@@ -8146,7 +8165,7 @@ unsafe @ nurl_parse_int_range s p i len → i {
 // nurlc.nu uses it to probe stage-0 sentinel files; mirrored here
 // because nurlc.nu can't `$`-import its own stdlib/std/fs.nu.
 
-@ nurl_file_exists s path → i {
+unsafe @ nurl_file_exists s path → i {
     ? == # i path 0 { ^ 0 } {}
     : i32 rc ( access path # i32 0 )  // F_OK = 0
     ^ ? == # i rc 0 1 0
@@ -8164,7 +8183,7 @@ unsafe @ nurl_parse_int_range s p i len → i {
 // `strtod`; `nurl_fast_atof` takes the range directly, is correctly
 // rounded, and is 4.5-8.4x faster than strtod even before the copy.
 // 0.0 on empty / null input, and on anything that is not a number.
-@ nurl_parse_float_range s p i len → f {
+unsafe @ nurl_parse_float_range s p i len → f {
     ^ ( nurl_fast_atof p len )
 }
 
@@ -13068,6 +13087,19 @@ unsafe @ nurl_lex_peek4_type i h → i {
                         {}
                     }
                 } {}
+                // A C string primitive's string parameter (`"nurl.cstr"`): a
+                // null `s` reads as the empty string there, as everywhere —
+                // C would dereference it. (A literal folds away.)
+                // (Nested: `&` evaluates both sides, and the lookup is the
+                // dear one — only a string argument outside `unsafe` asks.)
+                ? & ( seq ( nurl_llty at ) `i8*` ) ( __cstr_coalesce_here ) { ? ( nurl_sym_has_word2 syms fname `__cstr` ( nurl_str_int arg_idx ) ) {
+                        : s __cz ( nurl_cg_reg cg )
+                        : s __cv ( nurl_cg_reg cg )
+                        ( nurl_print `  ` ) ( nurl_print __cz ) ( nurl_print ` = icmp eq i8* ` ) ( nurl_print av ) ( nurl_print `, null\n` )
+                        ( nurl_print `  ` ) ( nurl_print __cv ) ( nurl_print ` = select i1 ` ) ( nurl_print __cz )
+                        ( nurl_print `, i8* @.nurl.cstr.empty, i8* ` ) ( nurl_print av ) ( nurl_print `\n` )
+                        = av __cv
+                    } {} } {}
             } {}
             // NURL callee (no __ffi_params): the same scalar agreement
             // against the DECLARED parameter's source type. A sized-int
@@ -20785,6 +20817,17 @@ unsafe @ mem_own_add_user_drop i syms i cg s ptr s vt → v {
     ^ g_ut_res
 }
 
+// Where a null `s` reads as the empty string at a C string primitive
+// (`"nurl.cstr"`): code that does not vouch for its strings — safe code,
+// and the standard library, which serves it. A program's own `unsafe`
+// function vouches for what it hands C (and its hot string helpers keep
+// their size: the select at every strlen kept the compiler's own
+// nurl_str_cat from being inlined).
+@ __cstr_coalesce_here → b {
+    ? == 0 g_in_unsafe { ^ T } {}
+    ^ ( bck_trusted_file ( vis_current_src_file ) )
+}
+
 // The raw-memory primitives: what they hand out or take is memory the
 // checker cannot follow.
 @ bck_raw_call s base → b {
@@ -20811,6 +20854,28 @@ unsafe @ mem_own_add_user_drop i syms i cg s ptr s vt → v {
     ^ F
 }
 
+: ~ i g_rawret_memo 0  // callee name → `1` / `0`: __fn_raw_ret's answer
+
+// A function that hands back a raw pointer (`→ *T`, outside a closure
+// type): what it points at is memory the compiler stops following once the
+// address is out, and only an `unsafe` caller can vouch for what is done
+// with it — read through it, kept, or passed on as a string.
+@ __fn_raw_ret i syms s cn → b {
+    ? != 0 ( nurl_sym_len2 syms cn `__rawret` ) { ^ T } {}
+    // Only a generic instance or a file-private name (a `__` in it) has a
+    // source name of its own to ask — answered once per name: every
+    // declaration's marker is in place before the first body compiles.
+    ? < ( nurl_str_find cn `__` ) 0 { ^ F } {}
+    ? == g_rawret_memo 0 { = g_rawret_memo ( nurl_sym_new ) } {}
+    : s hit ( nurl_sym_get g_rawret_memo cn )
+    ? != 0 ( nurl_str_len hit ) { ^ ( seq hit `1` ) } {}
+    : i fp ( nurl_str_find cn `__fp` )
+    : s nm ? > fp 0 ( nurl_str_slice cn 0 fp ) ( nurl_str_cat cn `` )
+    : b r | != 0 ( nurl_sym_len2 syms nm `__rawret` ) != 0 ( nurl_sym_len2 syms ( bck_generic_base nm ) `__rawret` )
+    ( nurl_sym_def g_rawret_memo cn ? r `1` `0` )
+    ^ r
+}
+
 // A standard-library function whose name begins with `__` is the library's
 // own machinery: it takes control blocks and buffers as plain `s` and trusts
 // them, so outside the library only an `unsafe` caller may use it.
@@ -20826,7 +20891,7 @@ unsafe @ mem_own_add_user_drop i syms i cg s ptr s vt → v {
 @ bck_check_raw_call i lex i syms s call_name → v {
     ? | ! ( bck_sound ) ( bck_unsafe_ctx ) { ^ v } {}
     : s base ( bck_generic_base call_name )
-    ? ( bck_raw_call base ) {
+    ? | ( bck_raw_call base ) != 0 ( nurl_sym_len2 syms call_name `__rawcall` ) {
         ( die lex ( nurl_str_cat3 `'` base `' handles raw memory, which only an 'unsafe' function may do: what it returns or takes is memory the compiler cannot follow, so a mistake there is a use-after-free, a double free or a leak no check can see. Use the owning types instead (String, Vec, HashMap, Box/Rc, a struct of them — they release themselves), or, if this function genuinely needs raw memory and you vouch for its memory safety, declare it 'unsafe @ name …'.` ) )
         ^ v
     } {}
@@ -20835,6 +20900,9 @@ unsafe @ mem_own_add_user_drop i syms i cg s ptr s vt → v {
     } {}
     ? ( __fn_raw_param syms call_name ) {
         ( die lex ( nurl_str_cat3 `'` base `' takes a raw pointer ('*T') and reads or writes through it as far as its caller says, which only an 'unsafe' function may vouch for: a pointer carries no length, so the compiler cannot check that the memory is there. Use the safe API over the owning value (a Vec, a String, a Slice of a Vec), or, if this function genuinely needs raw memory and you vouch for its memory safety, declare it 'unsafe @ name …'.` ) )
+    } {}
+    ? ( __fn_raw_ret syms call_name ) {
+        ( die lex ( nurl_str_cat3 `'` base `' hands back a raw pointer ('*T'), which only an 'unsafe' function may take: the compiler stops following what it points at once the address is out, so reading through it, keeping it, or passing it on as a string ('s') can reach freed memory or run past the buffer. Use the safe API over the owning value (vec_get or iteration for a Vec, a Slice of it, string_data for a String's text), or, if this function genuinely needs the raw pointer and you vouch for its memory safety, declare it 'unsafe @ name …'.` ) )
     } {}
     ? ( __fn_stdlib_internal call_name ) {
         ( die lex ( nurl_str_cat3 `'` base `' is internal to the standard library (its name begins with '__'): it takes control blocks and buffers as plain values and trusts them, so outside the library only an 'unsafe' function may call it. Use the public API it implements, or, if this function genuinely needs the library's internals and you vouch for its memory safety, declare it 'unsafe @ name …'.` ) )
@@ -44161,27 +44229,27 @@ u` ) ( nurl_print q ) ( nurl_print `:
     ( __emit_rt_decl syms `declare void @llvm.dbg.declare(metadata, metadata, metadata)` )
     ( __emit_rt_decl syms `declare float @llvm.trunc.f32(float)` )
     ( __emit_rt_decl syms `declare double @llvm.trunc.f64(double)` )
-    ( __emit_rt_decl syms `declare i32  @puts(i8* nocapture nofree)` )
-    ( __emit_rt_decl syms `declare i32  @printf(i8* nocapture nofree, ...)` )
-    ( __emit_rt_decl syms `declare i8*  @malloc(i64) "nurl.value-only"="0"` )
-    ( __emit_rt_decl syms `declare void @free(i8*)` )
+    ( __emit_rt_decl syms `declare i32  @puts(i8* nocapture nofree) "nurl.cstr"="0"` )
+    ( __emit_rt_decl syms `declare i32  @printf(i8* nocapture nofree, ...) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare i8*  @malloc(i64) "nurl.value-only"="0" "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare void @free(i8*) "nurl.raw"="1"` )
     // libc string / parse primitives — declared here so the pure-NURL
     // `nurl_str_*` helpers can call them globally without per-file
     // `&`-FFI declarations. Returns mapped at their native C widths
     // (i32 for int-returners, i8* for ptr-returners); NURL callers do
     // their own widening via `# i` if they need i64.
-    ( __emit_rt_decl syms `declare i64  @strlen(i8* nocapture nofree)` )
-    ( __emit_rt_decl syms `declare i64  @strnlen(i8* nocapture nofree, i64) "nurl.value-only"="1"` )
-    ( __emit_rt_decl syms `declare i32  @strcmp(i8* nocapture nofree, i8* nocapture nofree)` )
-    ( __emit_rt_decl syms `declare i32  @strncmp(i8* nocapture nofree, i8* nocapture nofree, i64) "nurl.value-only"="2"` )
-    ( __emit_rt_decl syms `declare i32  @memcmp(i8* nocapture nofree, i8* nocapture nofree, i64) "nurl.value-only"="2"` )
-    ( __emit_rt_decl syms `declare i8*  @strstr(i8*, i8* nocapture nofree) readonly nofree` )
-    ( __emit_rt_decl syms `declare i8*  @memmem(i8*, i64, i8* nocapture nofree, i64) readonly nofree "nurl.value-only"="1 3"` )
-    ( __emit_rt_decl syms `declare i64  @atoll(i8* nocapture nofree)` )
-    ( __emit_rt_decl syms `declare double @atof(i8* nocapture nofree)` )
-    ( __emit_rt_decl syms `declare double @strtod(i8*, i8**)` )
-    ( __emit_rt_decl syms `declare i8*  @memcpy(i8*, i8* nocapture nofree, i64) "nurl.value-only"="2"` )
-    ( __emit_rt_decl syms `declare i8*  @strdup(i8* nocapture nofree)` )
+    ( __emit_rt_decl syms `declare i64  @strlen(i8* nocapture nofree) "nurl.cstr"="0"` )
+    ( __emit_rt_decl syms `declare i64  @strnlen(i8* nocapture nofree, i64) "nurl.value-only"="1" "nurl.cstr"="0"` )
+    ( __emit_rt_decl syms `declare i32  @strcmp(i8* nocapture nofree, i8* nocapture nofree) "nurl.cstr"="0 1"` )
+    ( __emit_rt_decl syms `declare i32  @strncmp(i8* nocapture nofree, i8* nocapture nofree, i64) "nurl.value-only"="2" "nurl.cstr"="0 1"` )
+    ( __emit_rt_decl syms `declare i32  @memcmp(i8* nocapture nofree, i8* nocapture nofree, i64) "nurl.value-only"="2" "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare i8*  @strstr(i8*, i8* nocapture nofree) readonly nofree "nurl.cstr"="0 1"` )
+    ( __emit_rt_decl syms `declare i8*  @memmem(i8*, i64, i8* nocapture nofree, i64) readonly nofree "nurl.value-only"="1 3" "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare i64  @atoll(i8* nocapture nofree) "nurl.cstr"="0"` )
+    ( __emit_rt_decl syms `declare double @atof(i8* nocapture nofree) "nurl.cstr"="0"` )
+    ( __emit_rt_decl syms `declare double @strtod(i8*, i8**) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare i8*  @memcpy(i8*, i8* nocapture nofree, i64) "nurl.value-only"="2" "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare i8*  @strdup(i8* nocapture nofree) "nurl.cstr"="0"` )
     // The runtime's strdup (runtime_core.c §9a). Every copy the code
     // generator mints — reassignment of an owned string, a match arm's
     // result, an owned struct field — is released through nurl_free,
@@ -44189,34 +44257,34 @@ u` ) ( nurl_print q ) ( nurl_print `:
     // taking the copy from libc instead meant nothing was ever handed
     // back out of that cache. Same block, same lifetime.
     ( __emit_rt_decl syms `declare i8*  @nurl_strdup(i8* nocapture nofree)` )
-    ( __emit_rt_decl syms `declare i8*  @nurl_strdup_n(i8* nocapture nofree, i64) "nurl.value-only"="1"` )
+    ( __emit_rt_decl syms `declare i8*  @nurl_strdup_n(i8* nocapture nofree, i64) "nurl.value-only"="1" "nurl.raw"="1"` )
     // libc stdio primitives — declared here so the pure-NURL
     // `nurl_file_*` helpers in stdlib/std/fs.nu can call them
     // globally.
-    ( __emit_rt_decl syms `declare i8*  @fopen(i8* nocapture nofree, i8* nocapture nofree)` )
-    ( __emit_rt_decl syms `declare i32  @fclose(i8*)` )
-    ( __emit_rt_decl syms `declare i32  @fputs(i8* nocapture nofree, i8*)` )
-    ( __emit_rt_decl syms `declare i64  @fwrite(i8* nocapture nofree, i64, i64, i8*)` )
-    ( __emit_rt_decl syms `declare i32  @fputc(i32, i8*)` )
-    ( __emit_rt_decl syms `declare i64  @fread(i8*, i64, i64, i8*)` )
-    ( __emit_rt_decl syms `declare i32  @feof(i8*)` )
+    ( __emit_rt_decl syms `declare i8*  @fopen(i8* nocapture nofree, i8* nocapture nofree) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare i32  @fclose(i8*) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare i32  @fputs(i8* nocapture nofree, i8*) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare i64  @fwrite(i8* nocapture nofree, i64, i64, i8*) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare i32  @fputc(i32, i8*) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare i64  @fread(i8*, i64, i64, i8*) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare i32  @feof(i8*) "nurl.raw"="1"` )
     // fseek/ftell — POSIX stdio file-position primitives. Pure-NURL
     // file_size + future random-access I/O use these to learn the
     // file's length without going through `stat(2)` (whose `struct
     // stat` layout varies per platform). SEEK_END = 2 universally.
-    ( __emit_rt_decl syms `declare i32  @fseek(i8*, i64, i32)` )
-    ( __emit_rt_decl syms `declare i64  @ftell(i8*)` )
+    ( __emit_rt_decl syms `declare i32  @fseek(i8*, i64, i32) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare i64  @ftell(i8*) "nurl.raw"="1"` )
     // POSIX access(2) for the pure-NURL nurl_file_exists @-fn.
-    ( __emit_rt_decl syms `declare i32  @access(i8* nocapture nofree, i32)` )
+    ( __emit_rt_decl syms `declare i32  @access(i8* nocapture nofree, i32) "nurl.cstr"="0"` )
     // getenv(3) — import-path resolution consults $NURL_STDLIB so an
     // installed toolchain finds stdlib regardless of cwd (see
     // __norm_import_path).
-    ( __emit_rt_decl syms `declare i8*  @getenv(i8* nocapture nofree)` )
+    ( __emit_rt_decl syms `declare i8*  @getenv(i8* nocapture nofree) "nurl.cstr"="0"` )
     // realpath(3) — the import DEDUP key is the canonical path so the same
     // file reached through two symlink chains (diamond package deps:
     // deps/a/deps/gpu vs deps/gpu) compiles exactly once (see
     // __canon_import_key). Diagnostics keep the as-written path.
-    ( __emit_rt_decl syms `declare i8*  @realpath(i8* nocapture nofree, i8*)` )
+    ( __emit_rt_decl syms `declare i8*  @realpath(i8* nocapture nofree, i8*) "nurl.raw"="1"` )
     // Dynamic return-ownership channel. A `→ s` function stores, on every
     // return path, whether the value it hands back is a fresh buffer the
     // caller may free. A call site that cannot resolve the callee's static
@@ -44231,23 +44299,23 @@ u` ) ( nurl_print q ) ( nurl_print `:
     // handle must never be freed by a caller that mistook it for a string.
     // The flag carries the callee's OWN proof, so a handle-returner — which
     // proves nothing — publishes 0 and no caller frees it.
-    ( __emit_rt_decl syms `declare i64 @nurl_ret_owned_get()` )
-    ( __emit_rt_decl syms `declare void @nurl_ret_owned_set(i64)` )
+    ( __emit_rt_decl syms `declare i64 @nurl_ret_owned_get() "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare void @nurl_ret_owned_set(i64) "nurl.raw"="1"` )
     ( __emit_rt_decl syms `declare i64 @nurl_ret_hown_get()` )
-    ( __emit_rt_decl syms `declare void @nurl_vec_slot_clear_if(i1, i8*, i64, i64, i64, i64)` )
+    ( __emit_rt_decl syms `declare void @nurl_vec_slot_clear_if(i1, i8*, i64, i64, i64, i64) "nurl.raw"="1"` )
     ( __emit_rt_decl syms `declare void @nurl_ret_hown_set(i64)` )
     // Closure envs (docs/MEMORY.md §7.4): every owner releases one through
     // nurl_closure_drop (which also frees the envs of closures it
     // captured); a borrowed closure placed into an owning slot is copied
     // with nurl_closure_clone. nurl_closure_own clones unless `owner` says
     // the env is already the caller's.
-    ( __emit_rt_decl syms `declare void @nurl_closure_drop(i8*)` )
-    ( __emit_rt_decl syms `declare i8* @nurl_closure_clone(i8*)` )
-    ( __emit_rt_decl syms `declare void @nurl_closure_cc_trace(i8*, i8*)` )
-    ( __emit_rt_decl syms `declare void @nurl_cc_visit(i8*, i8*, i8*)` )
-    ( __emit_rt_decl syms `declare i8* @nurl_closure_own(i8*, i8*)` )
-    ( __emit_rt_decl syms `declare void @nurl_closure_slice_drop(i8*, i64)` )
-    ( __emit_rt_decl syms `declare void @nurl_init(i32, i8**)` )
+    ( __emit_rt_decl syms `declare void @nurl_closure_drop(i8*) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare i8* @nurl_closure_clone(i8*) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare void @nurl_closure_cc_trace(i8*, i8*) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare void @nurl_cc_visit(i8*, i8*, i8*) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare i8* @nurl_closure_own(i8*, i8*) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare void @nurl_closure_slice_drop(i8*, i64) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare void @nurl_init(i32, i8**) "nurl.raw"="1"` )
     ( __emit_rt_decl syms `declare void @nurl_print(i8* nocapture nofree)` )
     ( __emit_rt_decl syms `declare void @nurl_println(i8* nocapture nofree)` )
     ( __emit_rt_decl syms `declare void @nurl_eprint(i8* nocapture nofree)` )
@@ -44277,11 +44345,11 @@ u` ) ( nurl_print q ) ( nurl_print `:
     // @-fns (libc-thin wrappers calling strlen / strcmp / strncmp /
     // strstr / memcmp / memmem / atoll / atof directly via the global
     // preamble declarations emitted above).
-    ( __emit_rt_decl syms `declare i64    @nurl_scan_byte3(i8* nocapture nofree, i64, i64, i64, i64) "nurl.value-only"="1 2 3 4"` )
-    ( __emit_rt_decl syms `declare i64    @nurl_byte_substr(i8* nocapture nofree, i64, i8* nocapture nofree, i64) "nurl.value-only"="1 3"` )
-    ( __emit_rt_decl syms `declare i64    @nurl_count_byte(i8* nocapture nofree, i64, i64) "nurl.value-only"="1 2"` )
-    ( __emit_rt_decl syms `declare double @nurl_fast_atof(i8* nocapture nofree, i64) "nurl.value-only"="1"` )
-    ( __emit_rt_decl syms `declare double @nurl_fast_atof_ex(i8* nocapture nofree, i64, i64* nocapture nofree) "nurl.value-only"="1"` )
+    ( __emit_rt_decl syms `declare i64    @nurl_scan_byte3(i8* nocapture nofree, i64, i64, i64, i64) "nurl.value-only"="1 2 3 4" "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare i64    @nurl_byte_substr(i8* nocapture nofree, i64, i8* nocapture nofree, i64) "nurl.value-only"="1 3" "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare i64    @nurl_count_byte(i8* nocapture nofree, i64, i64) "nurl.value-only"="1 2" "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare double @nurl_fast_atof(i8* nocapture nofree, i64) "nurl.value-only"="1" "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare double @nurl_fast_atof_ex(i8* nocapture nofree, i64, i64* nocapture nofree) "nurl.value-only"="1" "nurl.raw"="1"` )
     // nurl_str_slice is a pure-NURL @-fn.
     // nurl_map_* (string→i64) is not part of the runtime — use the
     // generic `stdlib/std/hashmap.nu` HashMap[K V] at [s i] instead.
@@ -44299,27 +44367,27 @@ u` ) ( nurl_print q ) ( nurl_print `:
     ( __emit_rt_decl syms `declare void @nurl_print_buf_reset()` )
     // nurl_lex_filename, nurl_sym_*, nurl_cg_*, nurl_get_last_type
     // and _set_last_type are pure-NURL @-fns (see top of this file).
-    ( __emit_rt_decl syms `declare i8*  @nurl_malloc(i64) "nurl.value-only"="0"` )
-    ( __emit_rt_decl syms `declare i8*  @nurl_alloc(i64) "nurl.value-only"="0"` )
-    ( __emit_rt_decl syms `declare i8*  @nurl_zalloc(i64) "nurl.value-only"="0"` )
-    ( __emit_rt_decl syms `declare i8*  @nurl_realloc(i8*, i64) "nurl.value-only"="1"` )
-    ( __emit_rt_decl syms `declare void @nurl_free(i8*)` )
+    ( __emit_rt_decl syms `declare i8*  @nurl_malloc(i64) "nurl.value-only"="0" "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare i8*  @nurl_alloc(i64) "nurl.value-only"="0" "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare i8*  @nurl_zalloc(i64) "nurl.value-only"="0" "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare i8*  @nurl_realloc(i8*, i64) "nurl.value-only"="1" "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare void @nurl_free(i8*) "nurl.raw"="1"` )
     // CPU dispatch for the `simd` prefix (grammar v2.6). Cached in the
     // runtime and answered from a constructor, so the dispatcher a
     // marked function grows is a load, a test and a branch the predictor
     // gets right every time. Always declared: with no marked function in
     // the module it is unreferenced and the optimiser drops it.
     ( __emit_rt_decl syms `declare i32  @nurl_cpu_x86_v3()` )
-    ( __emit_rt_decl syms `declare void @nurl_journal_push(i8*)` )
-    ( __emit_rt_decl syms `declare void @nurl_journal_push_drop(i8*, ptr)` )
-    ( __emit_rt_decl syms `declare void @nurl_journal_push_drop2(ptr, ptr, ptr)` )
-    ( __emit_rt_decl syms `declare void @nurl_journal_forget_slot(ptr)` )
-    ( __emit_rt_decl syms `declare void @nurl_journal_forget(i8*)` )
-    ( __emit_rt_decl syms `declare void @nurl_journal_disown(i8*)` )
-    ( __emit_rt_decl syms `declare void @nurl_jframe_drop(ptr)` )
-    ( __emit_rt_decl syms `declare void @nurl_memcpy(i8* nocapture nofree, i8* nocapture nofree, i64) "nurl.value-only"="2"` )
-    ( __emit_rt_decl syms `declare void @nurl_memmove(i8* nocapture nofree, i8* nocapture nofree, i64) "nurl.value-only"="2"` )
-    ( __emit_rt_decl syms `declare void @nurl_memset(i8* nocapture nofree, i64, i64) "nurl.value-only"="2"` )
+    ( __emit_rt_decl syms `declare void @nurl_journal_push(i8*) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare void @nurl_journal_push_drop(i8*, ptr) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare void @nurl_journal_push_drop2(ptr, ptr, ptr) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare void @nurl_journal_forget_slot(ptr) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare void @nurl_journal_forget(i8*) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare void @nurl_journal_disown(i8*) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare void @nurl_jframe_drop(ptr) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare void @nurl_memcpy(i8* nocapture nofree, i8* nocapture nofree, i64) "nurl.value-only"="2" "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare void @nurl_memmove(i8* nocapture nofree, i8* nocapture nofree, i64) "nurl.value-only"="2" "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare void @nurl_memset(i8* nocapture nofree, i64, i64) "nurl.value-only"="2" "nurl.raw"="1"` )
     // ── The memory accessors are DEFINED here, not declared ───────
     //
     // `nurl_peek` is a null check and a load, and it is what every Vec
@@ -44344,6 +44412,11 @@ u` ) ( nurl_print q ) ( nurl_print `:
     // cheaper there than a select. nurl_vctl_get below is the branchless
     // form, where hoisting the load out of a loop is the point.)
     ( emit `@.nurl.peek.zero = linkonce_odr constant i64 0` )
+    // What a null `s` reads as at a C string primitive (`"nurl.cstr"`).
+    // Private, so a partitioned build (--split) copies it into every part
+    // that names it — a linkonce_odr one stays in part 0, where nothing
+    // may use it, and is dropped there.
+    ( emit `@.nurl.cstr.empty = private constant [1 x i8] zeroinitializer` )
     ( emit `define linkonce_odr i64 @nurl_peek(i8* %p, i64 %i) alwaysinline {` )
     ( emit `entry:` )
     ( emit `  %pk.n = icmp eq i8* %p, null` )
@@ -44565,8 +44638,8 @@ u` ) ( nurl_print q ) ( nurl_print `:
     ( emit `  ret i64 %mv.r` )
     ( emit `}` )
     ( emit_simd_preamble )
-    ( __emit_rt_decl syms `declare void @nurl_vec_drop(i8*, ptr, i64)` )
-    ( __emit_rt_decl syms `declare i8* @nurl_vec_clone(i8*, ptr, i64)` )
+    ( __emit_rt_decl syms `declare void @nurl_vec_drop(i8*, ptr, i64) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare i8* @nurl_vec_clone(i8*, ptr, i64) "nurl.raw"="1"` )
     // nurl_file_* (open/write/write_range/write_byte/close/read_chunk
     // /eof/exists/del/dir_create/dir_remove) are pure-NURL @-fns in
     // stdlib/std/fs.nu, calling libc fopen/fputs/fwrite/fputc/fclose/
@@ -44593,7 +44666,7 @@ u` ) ( nurl_print q ) ( nurl_print `:
     ( __emit_rt_decl syms `declare i8*  @nurl_http_stream_next(i64)` )
     ( __emit_rt_decl syms `declare void @nurl_http_stream_close(i64)` )
     ( __emit_rt_decl syms `declare i64  @nurl_http_stream_pump_headers(i64)` )
-    ( __emit_rt_decl syms `declare i64  @nurl_proc_run(i8*, i8*, i64, i8*)` )
+    ( __emit_rt_decl syms `declare i64  @nurl_proc_run(i8*, i8*, i64, i8*) "nurl.raw"="1"` )
     ( __emit_rt_decl syms `declare i64  @nurl_proc_exit_code(i64)` )
     ( __emit_rt_decl syms `declare i64  @nurl_proc_err_kind(i64)` )
     ( __emit_rt_decl syms `declare i8*  @nurl_proc_stdout(i64)` )
@@ -44604,7 +44677,7 @@ u` ) ( nurl_print q ) ( nurl_print `:
     ( __emit_rt_decl syms `declare i64  @nurl_proc_spawn(i8*, i8*, i64)` )
     ( __emit_rt_decl syms `declare i64  @nurl_proc_spawn_err_kind(i64)` )
     ( __emit_rt_decl syms `declare i64  @nurl_proc_spawn_pid(i64)` )
-    ( __emit_rt_decl syms `declare i64  @nurl_proc_spawn_write(i64, i8*, i64)` )
+    ( __emit_rt_decl syms `declare i64  @nurl_proc_spawn_write(i64, i8*, i64) "nurl.raw"="1"` )
     ( __emit_rt_decl syms `declare void @nurl_proc_spawn_close_stdin(i64)` )
     ( __emit_rt_decl syms `declare i8*  @nurl_proc_spawn_read_line(i64, i64)` )
     ( __emit_rt_decl syms `declare i64  @nurl_proc_spawn_read_line_len(i64)` )
@@ -44630,8 +44703,8 @@ u` ) ( nurl_print q ) ( nurl_print `:
     ( __emit_rt_decl syms `declare i64  @nurl_tcp_tls_require_client_cert(i64, i8*, i64)` )
     ( __emit_rt_decl syms `declare i8*  @nurl_tcp_peer_cert_subject(i64)` )
     ( __emit_rt_decl syms `declare i64  @nurl_tcp_accept(i64)` )
-    ( __emit_rt_decl syms `declare i64  @nurl_tcp_read(i64, i8*, i64)` )
-    ( __emit_rt_decl syms `declare i64  @nurl_tcp_write(i64, i8*, i64)` )
+    ( __emit_rt_decl syms `declare i64  @nurl_tcp_read(i64, i8*, i64) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare i64  @nurl_tcp_write(i64, i8*, i64) "nurl.raw"="1"` )
     ( __emit_rt_decl syms `declare void @nurl_tcp_close(i64)` )
     ( __emit_rt_decl syms `declare void @nurl_tcp_shutdown(i64)` )
     ( __emit_rt_decl syms `declare i64  @nurl_tcp_err_kind(i64)` )
@@ -44645,7 +44718,7 @@ u` ) ( nurl_print q ) ( nurl_print `:
     ( __emit_rt_decl syms `declare void @nurl_signal_install_shutdown(i64)` )
     ( __emit_rt_decl syms `declare void @nurl_signal_trigger_shutdown()` )
     ( __emit_rt_decl syms `declare void @nurl_panic(i8* nocapture) noreturn` )
-    ( __emit_rt_decl syms `declare i64  @nurl_recover(i8*, i8*)` )
+    ( __emit_rt_decl syms `declare i64  @nurl_recover(i8*, i8*) "nurl.raw"="1"` )
     ( __emit_rt_decl syms `declare i8*  @nurl_panic_last_msg()` )
     ( emit `` )
 }
@@ -47368,9 +47441,15 @@ unsafe @ defer_trait_impl i lex i impl_pos s tname s impl_nurl s impl_llvm s imp
                                 // consumed `main`, the module linked without
                                 // one, and the only report was the linker's.
                                 : ~ i __gd 0
+                                // (Where the return type starts: the token after
+                                // the arrow — what __fn_raw_ret reads.)
+                                : ~ i __grs -1
+                                : ~ b __garr F
                                 ~ & & != ( nurl_lex_type lex ) TT_LBRACE != ( nurl_lex_type lex ) TT_EOF
                                 ! & == ( nurl_lex_type lex ) TT_AT == __gd 0
-                                { ? == ( nurl_lex_type lex ) TT_LPAREN { = __gd + __gd 1 } {}
+                                { ? __garr { = __grs ( nurl_lex_cur_start lex ) = __garr F } {}
+                                    ? & == ( nurl_lex_type lex ) TT_ARROW == __gd 0 { = __garr T } {}
+                                    ? == ( nurl_lex_type lex ) TT_LPAREN { = __gd + __gd 1 } {}
                                     ? == ( nurl_lex_type lex ) TT_RPAREN { = __gd - __gd 1 } {}
                                     ? & ( is_ident_tok ( nurl_lex_type lex ) )
                                     ( seq ( nurl_lex_val lex ) `inout` )
@@ -47381,6 +47460,13 @@ unsafe @ defer_trait_impl i lex i impl_pos s tname s impl_nurl s impl_llvm s imp
                                 { ( nurl_sym_def syms ( nurl_str_cat fname `__has_inout` ) `1` ) }
                                 {}
                                 ? == ( nurl_lex_type lex ) TT_LBRACE {
+                                    // A raw-pointer result (`→ *A`, not one in a
+                                    // closure type's signature): __fn_raw_ret.
+                                    ? >= __grs 0 {
+                                        : s __grt ( nurl_lex_src_slice lex __grs - ( nurl_lex_cur_start lex ) __grs )
+                                        ? & >= ( nurl_str_find __grt `*` ) 0 < ( nurl_str_find __grt `( @` ) 0
+                                        { ( nurl_sym_def syms ( nurl_str_cat fname `__rawret` ) `1` ) } {}
+                                    } {}
                                     ( scan_note_empty_body lex syms fname )
                                     // (A generic hook — `Set_drop [A]` — is instantiated by
                                     // the late emitters: what it calls must be reached.)
@@ -47496,7 +47582,11 @@ unsafe @ defer_trait_impl i lex i impl_pos s tname s impl_nurl s impl_llvm s imp
                                 {}
                                 ? == ( nurl_lex_type lex ) TT_ARROW
                                 { ( nurl_lex_advance lex )
+                                    : i __ret_star0 g_pt_star
                                     : s ret_ty ( parse_type lex )
+                                    // A raw-pointer result: calling it is raw
+                                    // memory (__fn_raw_ret).
+                                    ? != g_pt_star __ret_star0 { ( nurl_sym_def syms ( nurl_str_cat fname `__rawret` ) `1` ) } {}
                                     // ret_ty is the raw internal repr —
                                     // a `u`-returning fn records `u8` and
                                     // call sites widen with zext off the
@@ -47598,7 +47688,10 @@ unsafe @ defer_trait_impl i lex i impl_pos s tname s impl_nurl s impl_llvm s imp
                             ? != g_pt_star __ffi_star0 { ( nurl_sym_def syms ( nurl_str_cat fname `__rawparam` ) `1` ) } {}
                             ? == ( nurl_lex_type lex ) TT_ARROW
                             { ( nurl_lex_advance lex )
+                                : i __ffi_rstar0 g_pt_star
                                 : s ret_ty ( parse_type lex )
+                                // …and a raw-pointer result (__fn_raw_ret).
+                                ? != g_pt_star __ffi_rstar0 { ( nurl_sym_def syms ( nurl_str_cat fname `__rawret` ) `1` ) } {}
                                 ( nurl_sym_def syms fname ret_ty )
                                 ( nurl_sym_def syms ( nurl_str_cat fname `__ffi_params` ) ptypes )
                                 ( nurl_sym_def syms ( nurl_str_cat fname `__ffi_scanned` ) `1` )

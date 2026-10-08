@@ -740,6 +740,9 @@ void nurl__io_release(void);
  * line printed in two parts (text, newline) holds the lock across both,
  * so a line from another thread cannot land between them. */
 static void nurl__print_locked(const char *s) {
+    /* A null `s` is a real NURL value (`# s 0`, an unset getenv): it reads
+     * as the empty string, as in every string primitive. */
+    if (!s) return;
     if (g_outbuf_mode) {
         size_t n = strlen(s);
         outbuf_reserve(n);
@@ -791,8 +794,8 @@ void nurl_println(const char *s)  { NURL_IO_LOCK(); nurl__print_locked(s); nurl_
  * produced them. The extra fflush is free when nothing is pending, and
  * stderr writes are diagnostics — orders of magnitude rarer than the
  * stdout prints this buffering is here to make cheap. */
-void nurl_eprint(const char *s)   { NURL_IO_LOCK(); fflush(stdout); fputs(s, stderr); fflush(stderr); NURL_IO_UNLOCK(); }
-void nurl_eprintln(const char *s) { NURL_IO_LOCK(); fflush(stdout); fputs(s, stderr); fputc('\n', stderr); fflush(stderr); NURL_IO_UNLOCK(); }
+void nurl_eprint(const char *s)   { if (!s) s = ""; NURL_IO_LOCK(); fflush(stdout); fputs(s, stderr); fflush(stderr); NURL_IO_UNLOCK(); }
+void nurl_eprintln(const char *s) { if (!s) s = ""; NURL_IO_LOCK(); fflush(stdout); fputs(s, stderr); fputc('\n', stderr); fflush(stderr); NURL_IO_UNLOCK(); }
 
 /* The integer overloads on stderr. Same stack digit loop as
  * nurl_print_int — no allocation, so a diagnostic that prints a count
@@ -3350,12 +3353,16 @@ void nurl_free(void *ptr) {
     if (ptr && ptr != (void *)nurl__empty_str) nurl__free_nonnull(ptr);
 }
 void  nurl_memcpy(void *dst, const void *src, long long bytes) {
+    /* Zero bytes touch nothing — not even a null source (an empty or
+     * null string's bytes), which C's memcpy may not be handed. */
+    if (bytes <= 0) return;
     memcpy(dst, src, (size_t)bytes);
 }
 /* Overlap-safe sibling of nurl_memcpy — use when dst/src can alias
  * (e.g. shifting the tail of a buffer over its head after consuming a
  * prefix). nurl_memcpy stays strict so ASan keeps flagging accidents. */
 void  nurl_memmove(void *dst, const void *src, long long bytes) {
+    if (bytes <= 0) return;
     memmove(dst, src, (size_t)bytes);
 }
 void  nurl_memset(void *dst, long long byte, long long bytes) {

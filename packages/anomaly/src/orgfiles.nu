@@ -25,6 +25,7 @@ $ `stdlib/std/bytes.nu`
 $ `stdlib/std/random.nu`
 $ `stdlib/std/hash_sha256.nu`
 $ `stdlib/ext/json.nu`
+$ `stdlib/core/slice.nu`
 
 : i OF_NAME_MAX 128
 : i OF_LINK_TTL_DEFAULT 604800  // a week
@@ -121,12 +122,13 @@ unsafe @ orgfiles_root → s { ^ ( string_data . ( __of_state ) root ) }
 // One safe alphabet for file names: [A-Za-z0-9._-], no leading dot, at
 // most OF_NAME_MAX bytes.
 @ orgfiles_name_ok s name → b {
-    : i n ( nurl_str_len name )
+    : ( Slice u ) name_b ( slice_of_str name )
+    : i n ( slice_len [u] name_b )
     ? | == n 0 > n OF_NAME_MAX { ^ F } {}
-    ? == ( nurl_str_at name n 0 ) 46 { ^ F } {}
+    ? == ( slice_byte name_b 0 ) 46 { ^ F } {}
     : ~ i k 0
     ~ < k n {
-        : i c ( nurl_str_at name n k )
+        : i c ( slice_byte name_b k )
         : b digit & >= c 48 <= c 57
         : b lower & >= c 97 <= c 122
         : b upper & >= c 65 <= c 90
@@ -142,10 +144,11 @@ unsafe @ orgfiles_root → s { ^ ( string_data . ( __of_state ) root ) }
 // Empty in, empty out — the caller picks a default.
 @ orgfiles_safe_name s raw → String {
     : String out ( string_new )
-    : i n ( nurl_str_len raw )
+    : ( Slice u ) raw_b ( slice_of_str raw )
+    : i n ( slice_len [u] raw_b )
     : ~ i k 0
     ~ & < k n < ( string_len out ) OF_NAME_MAX {
-        : i c ( nurl_str_at raw n k )
+        : i c ( slice_byte raw_b k )
         : b digit & >= c 48 <= c 57
         : b lower & >= c 97 <= c 122
         : b upper & >= c 65 <= c 90
@@ -310,12 +313,14 @@ unsafe @ __of_secret → s {
 // Constant-time equality: a link check must not leak how much of a
 // guess was right.
 @ __of_eq_ct s a s b → b {
-    : i n ( nurl_str_len a )
-    ? != n ( nurl_str_len b ) { ^ F } {}
+    : ( Slice u ) a_b ( slice_of_str a )
+    : ( Slice u ) b_b ( slice_of_str b )
+    : i n ( slice_len [u] a_b )
+    ? != n ( slice_len [u] b_b ) { ^ F } {}
     : ~ i acc 0
     : ~ i k 0
     ~ < k n {
-        : i d - ( nurl_str_at a n k ) ( nurl_str_at b n k )
+        : i d - ( slice_byte a_b k ) ( slice_byte b_b k )
         = acc + acc * d d
         = k + k 1
     }

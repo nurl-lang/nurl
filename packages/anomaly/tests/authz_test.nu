@@ -20,6 +20,7 @@ $ `stdlib/ext/json.nu`
 $ `stdlib/std/encode.nu`
 $ `stdlib/ext/sqlite.nu`
 $ `src/authz.nu`
+$ `stdlib/core/slice.nu`
 
 : ~ i g_pass 0
 : ~ i g_fail 0
@@ -39,8 +40,10 @@ $ `src/authz.nu`
 
 // Does `hay` contain `needle`?
 @ __has s hay s needle → b {
-    : i hn ( nurl_str_len hay )
-    : i nn ( nurl_str_len needle )
+    : ( Slice u ) hay_b ( slice_of_str hay )
+    : i hn ( slice_len [u] hay_b )
+    : ( Slice u ) needle_b ( slice_of_str needle )
+    : i nn ( slice_len [u] needle_b )
     ? == nn 0 { ^ T } {}
     ? > nn hn { ^ F } {}
     : ~ i k 0
@@ -48,7 +51,7 @@ $ `src/authz.nu`
         : ~ b same T
         : ~ i j 0
         ~ & same < j nn {
-            ? == ( nurl_str_at hay hn + k j ) ( nurl_str_at needle nn j ) {} { = same F }
+            ? == ( slice_byte hay_b + k j ) ( slice_byte needle_b j ) {} { = same F }
             = j + j 1
         }
         ? same { ^ T } {}

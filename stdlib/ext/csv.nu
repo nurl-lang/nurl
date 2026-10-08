@@ -36,9 +36,9 @@
 // String allocs are paid only on `csv_table_get` (owned-copy
 // accessor); the `csv_table_view` path stays zero-copy.
 //
-// Cell views are NOT NUL-terminated — they are raw byte pointers into
-// the content (or escape) buffer. Combine with `csv_table_view_len`
-// for length. Borrows are valid while the table lives.
+// A cell is not NUL-terminated — it sits in the content (or escape)
+// buffer — so its view is a `( Slice u )` that carries where it ends.
+// Views are valid while the table lives.
 //
 // Memory: CSVReader, CSVDictReader, CSVWriter, CSVDictWriter and
 // CSVTable are library handles (docs/MEMORY.md §7.6) — every copy is the
@@ -50,6 +50,7 @@
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
+$ `stdlib/core/slice.nu`
 $ `stdlib/core/option.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/std/sort.nu`
@@ -527,14 +528,20 @@ $ `stdlib/core/rcbox.nu`
     ^ . rlp row
 }
 
-// Borrowed `s` view of (row, col). NOT NUL-terminated; pair with
-// csv_table_view_len. `# s 0` (NULL) when (row, col) is out of range.
+// Borrowed view of (row, col): the cell's bytes and their length (a cell
+// is not NUL-terminated, so a plain `s` of it read on past its end). The
+// empty view when (row, col) is out of range.
 //
 // Cells whose underlying offset is < 0 came from a quoted field with
 // embedded `""` escapes — the materialized bytes live in
 // `t.escape_buf` at index `-off - 1`. Unquoted cells and quoted cells
 // without escapes both stay zero-copy into `t.content`.
-@ csv_table_view CSVTable t__h i row i col → s { ^ ( __csv_view ( __CSVTable_ptr t__h ) row col ) }
+@ csv_table_view CSVTable t__h i row i col → ( Slice u ) {
+    : *CSVTableImpl t ( __CSVTable_ptr t__h )
+    : s p ( __csv_view t row col )
+    ? == # i p 0 { ^ ( slice_empty [u] ) } {}
+    ^ @ ( Slice u ) { # *u p ( __csv_view_len t row col ) }
+}
 
 @ __csv_view * CSVTableImpl t i row i col → s {
     : i nr ( __csv_n_rows t )
@@ -599,13 +606,13 @@ $ `stdlib/core/rcbox.nu`
     ^ @ ?i { F 0 }
 }
 
-// Borrowed `s` view by column name. `# s 0` (NULL) on miss.
-@ csv_table_view_by_name CSVTable t__h i row s name → s {
+// Borrowed view by column name; the empty view on a miss.
+@ csv_table_view_by_name CSVTable t__h i row s name → ( Slice u ) {
     : *CSVTableImpl t ( __CSVTable_ptr t__h )
     : ?i col_opt ( __csv_col_index t name )
     ?? col_opt {
-        T col → { ^ ( __csv_view t row col ) }
-        F → { ^ # s 0 }
+        T col → { ^ ( csv_table_view t__h row col ) }
+        F → { ^ ( slice_empty [u] ) }
     }
 }
 

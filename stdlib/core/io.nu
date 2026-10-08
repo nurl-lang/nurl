@@ -160,11 +160,18 @@ $ `stdlib/core/posix.nu`  // buffered stdin bridge
 // It shares stdout's stdio buffer and tty-flush rule with the ordinary
 // prints, so mixing the two never reorders output (unlike a raw write(2)
 // on fd 1, which would need an explicit ( flush ) first).
-& `c` @ nurl_print_bytes s p i n → v
+& `c` @ nurl_print_bytes *u p i n → v
 
 @ write_bytes ( Vec u ) v → v {
     : i n ( vec_len [u] v )
-    ? > n 0 { ( nurl_print_bytes # s ( vec_data [u] v ) n ) } {}
+    ? > n 0 { ( nurl_print_bytes ( vec_data [u] v ) n ) } {}
+}
+
+// …and a String's bytes, exactly: the String knows its own length, so
+// what follows an interior NUL is written too.
+@ write_string String str → v {
+    : i n ( string_len str )
+    ? > n 0 { ( nurl_print_bytes # *u ( string_data str ) n ) } {}
 }
 
 @ flush → v {

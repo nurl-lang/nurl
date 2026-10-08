@@ -991,7 +991,7 @@ $ `stdlib/ext/http2_hpack.nu`
 
 // Convenience for string_from with a length cap (used for the path/query
 // split above; cleaner than string_slice in this context).
-@ string_from_n s raw i len → String {
+@ string_from_n * u raw i len → String {
     : ~ String s ( string_with_cap len )
     : ~ i k 0
     ~ < k len {
@@ -1004,7 +1004,7 @@ $ `stdlib/ext/http2_hpack.nu`
 // Unsafe slice into a NUL-terminated `s` returning a pointer into the
 // SAME storage. Caller MUST consume immediately because the source's
 // lifetime governs validity. Used only in the path/query split above.
-@ nurl_str_slice_unsafe s raw i from → s {
+@ nurl_str_slice_unsafe * u raw i from → s {
     // The runtime guarantees `s` is a flat byte buffer; offsetting the
     // pointer gives us a substring view at the cost of losing the
     // NUL-termination property (the slice is still NUL-terminated at

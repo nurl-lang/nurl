@@ -68,6 +68,7 @@ $ `src/analyze.nu`
 $ `src/sources.nu`
 $ `src/mcp.nu`
 $ `stdlib/std/thread.nu`
+$ `stdlib/core/slice.nu`
 
 // Store root used by every handler; set once before serving.
 : ~ s g_an_root `.`
@@ -284,11 +285,12 @@ $ `stdlib/std/thread.nu`
 // Sanitize a reason before it goes into a header: part of it is copied from
 // a token, and a CR LF in there is response splitting, not a diagnostic.
 @ __an_safe_reason s raw → String {
-    : i n ( nurl_str_len raw )
+    : ( Slice u ) raw_b ( slice_of_str raw )
+    : i n ( slice_len [u] raw_b )
     : String out ( string_new )
     : ~ i k 0
     ~ & < k n < k 200 {
-        : i c ( nurl_str_at raw n k )
+        : i c ( slice_byte raw_b k )
         ? | | < c 32 == c 34 == c 92 { ( string_push_char out 32 ) } { ( string_push_char out c ) }
         = k + k 1
     }
@@ -4154,11 +4156,12 @@ unsafe @ __an_lock → Mutex { ^ # Mutex g_an_lock }
 }
 
 @ __an_task_id_ok s id → b {
-    : i n ( nurl_str_len id )
+    : ( Slice u ) id_b ( slice_of_str id )
+    : i n ( slice_len [u] id_b )
     ? != n 24 { ^ F } {}
     : ~ i k 0
     ~ < k n {
-        : i c ( nurl_str_at id n k )
+        : i c ( slice_byte id_b k )
         ? | & >= c 48 <= c 57 & >= c 97 <= c 102 {} { ^ F }
         = k + k 1
     }

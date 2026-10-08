@@ -10,7 +10,7 @@
 
 $ `stdlib/core/builtins.nu`
 
-@ main → i {
+unsafe @ main → i {
     ( nurl_println ( nurl_str_float 2.5 ) )
     ( nurl_println ( nurl_str_int -42 ) )
     ( nurl_println_int ( nurl_count_byte `abcabc` 6 97 ) )

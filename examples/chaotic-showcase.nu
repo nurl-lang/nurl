@@ -90,19 +90,19 @@ unsafe @ ebox Expr e → *Expr {
     ^ p
 }
 
-@ e_num f x → *Expr { ^ ( ebox @ Expr { Num x } ) }
+unsafe @ e_num f x → *Expr { ^ ( ebox @ Expr { Num x } ) }
 
-@ e_var → *Expr { ^ ( ebox @ Expr { Var } ) }
+unsafe @ e_var → *Expr { ^ ( ebox @ Expr { Var } ) }
 
-@ e_add * Expr a * Expr b → *Expr { ^ ( ebox @ Expr { Add a b } ) }
+unsafe @ e_add * Expr a * Expr b → *Expr { ^ ( ebox @ Expr { Add a b } ) }
 
-@ e_mul * Expr a * Expr b → *Expr { ^ ( ebox @ Expr { Mul a b } ) }
+unsafe @ e_mul * Expr a * Expr b → *Expr { ^ ( ebox @ Expr { Mul a b } ) }
 
-@ e_neg * Expr a → *Expr { ^ ( ebox @ Expr { Neg a } ) }
+unsafe @ e_neg * Expr a → *Expr { ^ ( ebox @ Expr { Neg a } ) }
 
-@ e_sin * Expr a → *Expr { ^ ( ebox @ Expr { Sin a } ) }
+unsafe @ e_sin * Expr a → *Expr { ^ ( ebox @ Expr { Sin a } ) }
 
-@ e_cos * Expr a → *Expr { ^ ( ebox @ Expr { Cos a } ) }
+unsafe @ e_cos * Expr a → *Expr { ^ ( ebox @ Expr { Cos a } ) }
 
 // Evaluate the tree at x = xv. Recursive match with 2-payload binding.
 unsafe @ e_eval * Expr p f xv → f {

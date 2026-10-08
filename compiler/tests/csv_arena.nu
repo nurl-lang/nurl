@@ -94,9 +94,7 @@ $ `stdlib/ext/csv.nu`
     // ── 9. filter: keep rows where col 0 (int) > 0 ────────────────────
     : CSVTable t6 ( load_table `n,tag\n5,a\n-1,b\n0,c\n7,d\n-3,e\n2,f\n` )
     ( csv_table_filter t6 \ CSVTable tt i row → b {
-        : s sv ( csv_table_view tt row 0 )
-        : i sl ( csv_table_view_len tt row 0 )
-        : i n ( nurl_parse_int_range sv sl )
+        : i n ( slice_parse_int ( csv_table_view tt row 0 ) )
         ^ > n 0
     } )
     ( nurl_print `filter_n_rows=` ) ( nurl_print ( nurl_str_int ( csv_table_n_rows t6 ) ) ) ( nurl_print `\n` )

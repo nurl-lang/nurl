@@ -46,7 +46,7 @@ $ `stdlib/hal/virtio.nu`
     ^ w
 }
 
-@ dev_base ( Vec u ) w → i { ^ # i ( vec_data [u] w ) }
+unsafe @ dev_base ( Vec u ) w → i { ^ # i ( vec_data [u] w ) }
 
 @ dev_set i base i off i val → v { ( mmio_write32 + base off # i32 val ) }
 

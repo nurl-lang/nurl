@@ -60,7 +60,7 @@ $ `stdlib/std/bufio.nu`
 // ordinary buffer, so it never reorders against `nurl_print`.
 @ bx_write String buf → v {
     : i n ( string_len buf )
-    ? > n 0 { ( nurl_print_bytes ( string_data buf ) n ) } {}
+    ? > n 0 { ( write_string buf ) } {}
 }
 
 unsafe @ bx_write_bytes ( Vec u ) buf → v {

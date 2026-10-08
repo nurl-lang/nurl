@@ -160,10 +160,16 @@ $ `stdlib/core/errors.nu`
     ^ ( b64_encode_len str len )
 }
 
-@ b64_encode_len s str i len → String {
+@ b64_encode_len * u str i len → String {
     : String out ( string_with_cap * 4 + 1 / len 3 )
     ( __b64_emit out str len F T )
     ^ out
+}
+
+// A String's bytes, every one of them (an interior NUL included): the
+// String's own length, not one its caller could get wrong.
+@ b64_encode_string String str → String {
+    ^ ( b64_encode_len # *u ( string_data str ) ( string_len str ) )
 }
 
 @ b64_encode_vec ( Vec u ) v → String {
@@ -393,7 +399,7 @@ $ `stdlib/core/errors.nu`
     ^ ( b32_encode_len str len )
 }
 
-@ b32_encode_len s str i len → String {
+@ b32_encode_len * u str i len → String {
     : String out ( string_with_cap * 8 + 1 / len 5 )
     ( __b32_emit out str len T )
     ^ out

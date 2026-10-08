@@ -15,6 +15,7 @@ $ `stdlib/std/bytes.nu`
 $ `stdlib/std/floatbits.nu`
 $ `ply.nu`
 $ `view.nu`
+$ `stdlib/core/slice.nu`
 
 // Kept in step with nurl.toml by the test suite, which compares the two.
 @ __pc_version → v { ( nurl_print `ply 0.3.1\n` ) }
@@ -42,8 +43,9 @@ $ `view.nu`
 @ __pc_streq s a s b → b { ^ == 0 ( nurl_str_cmp a b ) }
 
 @ __pc_is_flag s a → b {
-    : i n ( nurl_str_len a )
-    ^ & > n 1 == 45 ( nurl_str_at a n 0 )
+    : ( Slice u ) a_b ( slice_of_str a )
+    : i n ( slice_len [u] a_b )
+    ^ & > n 1 == 45 ( slice_byte a_b 0 )
 }
 
 // `view`, parsed from argv[first] on so both `ply view x.ply` and

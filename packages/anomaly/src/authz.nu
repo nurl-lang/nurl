@@ -54,6 +54,7 @@ $ `src/config.nu`
 $ `stdlib/ext/http_request.nu`
 $ `stdlib/ext/http_auth.nu`
 $ `deps/oauth/src/oauth.nu`
+$ `stdlib/core/slice.nu`
 
 // ── Configuration ─────────────────────────────────────────────────────
 //
@@ -451,12 +452,13 @@ unsafe @ anomaly_authz_configure_tenancy b multi s allowed → v {
 // which is collision-free enough to key a database on and cannot contain a
 // path separator, a dot-dot, or a NUL by construction.
 @ __az_org_key s raw → String {
-    : i n ( nurl_str_len raw )
+    : ( Slice u ) raw_b ( slice_of_str raw )
+    : i n ( slice_len [u] raw_b )
     : ~ b plain > n 0
     ? > n 64 { = plain F } {}
     : ~ i k 0
     ~ & plain < k n {
-        : i c ( nurl_str_at raw n k )
+        : i c ( slice_byte raw_b k )
         : b digit & >= c 48 <= c 57
         : b lower & >= c 97 <= c 122
         : b upper & >= c 65 <= c 90
@@ -476,10 +478,11 @@ unsafe @ anomaly_authz_configure_tenancy b multi s allowed → v {
 
 @ __az_lower s raw → String {
     : String out ( string_new )
-    : i n ( nurl_str_len raw )
+    : ( Slice u ) raw_b ( slice_of_str raw )
+    : i n ( slice_len [u] raw_b )
     : ~ i k 0
     ~ < k n {
-        : i c ( nurl_str_at raw n k )
+        : i c ( slice_byte raw_b k )
         ? & >= c 65 <= c 90 { ( string_push_char out + c 32 ) } { ( string_push_char out c ) }
         = k + k 1
     }
@@ -487,12 +490,14 @@ unsafe @ anomaly_authz_configure_tenancy b multi s allowed → v {
 }
 
 @ __az_starts s hay s pre → b {
-    : i hn ( nurl_str_len hay )
-    : i pn ( nurl_str_len pre )
+    : ( Slice u ) hay_b ( slice_of_str hay )
+    : i hn ( slice_len [u] hay_b )
+    : ( Slice u ) pre_b ( slice_of_str pre )
+    : i pn ( slice_len [u] pre_b )
     ? >= hn pn {} { ^ F }
     : ~ i k 0
     ~ < k pn {
-        ? == ( nurl_str_at hay hn k ) ( nurl_str_at pre pn k ) {} { ^ F }
+        ? == ( slice_byte hay_b k ) ( slice_byte pre_b k ) {} { ^ F }
         = k + k 1
     }
     ^ T
@@ -1384,19 +1389,21 @@ unsafe @ anomaly_authz_configure_tenancy b multi s allowed → v {
 : KeyParts { b ok String kp_id String kp_secret }
 
 @ __az_key_split s token → KeyParts {
-    : i pn ( nurl_str_len AZ_KEY_PREFIX )
-    : i n ( nurl_str_len token )
+    : ( Slice u ) AZ_KEY_PREFIX_b ( slice_of_str AZ_KEY_PREFIX )
+    : i pn ( slice_len [u] AZ_KEY_PREFIX_b )
+    : ( Slice u ) token_b ( slice_of_str token )
+    : i n ( slice_len [u] token_b )
     : ~ b pre > n pn
     : ~ i k 0
     ~ & pre < k pn {
-        ? == ( nurl_str_at token n k ) ( nurl_str_at AZ_KEY_PREFIX pn k ) {} { = pre F }
+        ? == ( slice_byte token_b k ) ( slice_byte AZ_KEY_PREFIX_b k ) {} { = pre F }
         = k + k 1
     }
     ? pre {} { ^ @ KeyParts { F ( string_new ) ( string_new ) } }
     : String id ( string_new )
     : ~ i j pn
-    ~ & < j n != ( nurl_str_at token n j ) 95 {
-        ( string_push_char id ( nurl_str_at token n j ) )
+    ~ & < j n != ( slice_byte token_b j ) 95 {
+        ( string_push_char id ( slice_byte token_b j ) )
         = j + j 1
     }
     ? < j n {} {
@@ -1404,7 +1411,7 @@ unsafe @ anomaly_authz_configure_tenancy b multi s allowed → v {
     }
     = j + j 1
     : String sec ( string_new )
-    ~ < j n { ( string_push_char sec ( nurl_str_at token n j ) ) = j + j 1 }
+    ~ < j n { ( string_push_char sec ( slice_byte token_b j ) ) = j + j 1 }
     ? & > ( string_len id ) 0 > ( string_len sec ) 0 {} {
         ^ @ KeyParts { F ( string_new ) ( string_new ) }
     }
@@ -1574,10 +1581,12 @@ unsafe @ __az_provider → ?OidcProvider {
 // template with `{tenantid}` replaced. Empty when there is no template or
 // no tenant, which is a refusal rather than a wildcard.
 @ __az_issuer_for s tid → String {
-    : i tn ( nurl_str_len g_az_iss_tmpl )
+    : ( Slice u ) g_az_iss_tmpl_b ( slice_of_str g_az_iss_tmpl )
+    : i tn ( slice_len [u] g_az_iss_tmpl_b )
     ? & > tn 0 > ( nurl_str_len tid ) 0 {} { ^ ( string_new ) }
     : s needle `{tenantid}`
-    : i nn ( nurl_str_len needle )
+    : ( Slice u ) needle_b ( slice_of_str needle )
+    : i nn ( slice_len [u] needle_b )
     : String out ( string_new )
     : ~ i k 0
     : ~ b hit F
@@ -1586,7 +1595,7 @@ unsafe @ __az_provider → ?OidcProvider {
         ? here {
             : ~ i j 0
             ~ & here < j nn {
-                ? == ( nurl_str_at g_az_iss_tmpl tn + k j ) ( nurl_str_at needle nn j ) {} { = here F }
+                ? == ( slice_byte g_az_iss_tmpl_b + k j ) ( slice_byte needle_b j ) {} { = here F }
                 = j + j 1
             }
         } {}
@@ -1595,7 +1604,7 @@ unsafe @ __az_provider → ?OidcProvider {
             = k + k nn
             = hit T
         } {
-            ( string_push_char out ( nurl_str_at g_az_iss_tmpl tn k ) )
+            ( string_push_char out ( slice_byte g_az_iss_tmpl_b k ) )
             = k + k 1
         }
     }

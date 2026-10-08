@@ -50,7 +50,7 @@ $ `deps/image/src/image.nu`
 
 @ pp_height Frame fr → i { ^ . fr height }
 
-@ pp_data Frame fr → *f { ^ ( vec_data [f] . fr data ) }
+unsafe @ pp_data Frame fr → *f { ^ ( vec_data [f] . fr data ) }
 
 // The reference's RESOLUTION_MAPPINGS[518]: aspect-ratio key → (w, h),
 // all divisible by 14. Keys ascending, exactly the floats the table

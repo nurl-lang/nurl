@@ -43,7 +43,7 @@ unsafe @ borrowed → v {
 
 @ consumed → v {
     : s raw ( nurl_str_cat `adopted` `` )
-    : String owner ( string_from_take raw + ( nurl_str_len raw ) 1 )
+    : String owner ( string_adopt raw )
     ( nurl_print ( string_data owner ) )
     ( nurl_print `\n` )
     ( string_free owner )

@@ -949,7 +949,7 @@ unsafe @ __tpl_render_ptr i sp s tsrc Json jctx → !String String {
 }
 
 // Same, with a TplSet so `{% include 'name' %}` resolves.
-@ tpl_render_with TplSet t s tsrc Json jctx → !String String {
+unsafe @ tpl_render_with TplSet t s tsrc Json jctx → !String String {
     ^ ( __tpl_render_ptr # i ( __TplSet_ptr t ) tsrc jctx )
 }
 

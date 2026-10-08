@@ -89,66 +89,66 @@ $ `stdlib/core/marker.nu`
 
 & `sqlite3` @ sqlite3_open_v2 s filename *u out_db i flags s vfs → i
 
-& `sqlite3` @ sqlite3_close s db → i
+& `sqlite3` @ sqlite3_close *u db → i
 
-& `sqlite3` @ sqlite3_busy_timeout s db i ms → i
+& `sqlite3` @ sqlite3_busy_timeout *u db i ms → i
 
-& `sqlite3` @ sqlite3_exec s db s sql *u cb *u data *u out_err → i
+& `sqlite3` @ sqlite3_exec *u db s sql *u cb *u data *u out_err → i
 
-& `sqlite3` @ sqlite3_prepare_v2 s db s sql i n *u out_stmt *u tail → i
+& `sqlite3` @ sqlite3_prepare_v2 *u db s sql i n *u out_stmt *u tail → i
 
-& `sqlite3` @ sqlite3_step s stmt → i
+& `sqlite3` @ sqlite3_step *u stmt → i
 
-& `sqlite3` @ sqlite3_finalize s stmt → i
+& `sqlite3` @ sqlite3_finalize *u stmt → i
 
-& `sqlite3` @ sqlite3_reset s stmt → i
+& `sqlite3` @ sqlite3_reset *u stmt → i
 
-& `sqlite3` @ sqlite3_clear_bindings s stmt → i
+& `sqlite3` @ sqlite3_clear_bindings *u stmt → i
 
-& `sqlite3` @ sqlite3_bind_int64 s stmt i idx i value → i
+& `sqlite3` @ sqlite3_bind_int64 *u stmt i idx i value → i
 
-& `sqlite3` @ sqlite3_bind_text s stmt i idx s value i n *u destructor → i
+& `sqlite3` @ sqlite3_bind_text *u stmt i idx *u value i n *u destructor → i
 
-& `sqlite3` @ sqlite3_bind_blob s stmt i idx s value i n *u destructor → i
+& `sqlite3` @ sqlite3_bind_blob *u stmt i idx *u value i n *u destructor → i
 
-& `sqlite3` @ sqlite3_bind_null s stmt i idx → i
+& `sqlite3` @ sqlite3_bind_null *u stmt i idx → i
 
-& `sqlite3` @ sqlite3_bind_double s stmt i idx f value → i
+& `sqlite3` @ sqlite3_bind_double *u stmt i idx f value → i
 
-& `sqlite3` @ sqlite3_column_double s stmt i idx → f
+& `sqlite3` @ sqlite3_column_double *u stmt i idx → f
 
-& `sqlite3` @ sqlite3_column_int64 s stmt i idx → i
+& `sqlite3` @ sqlite3_column_int64 *u stmt i idx → i
 
-& `sqlite3` @ sqlite3_column_text s stmt i idx → s
+& `sqlite3` @ sqlite3_column_text *u stmt i idx → s
 
-& `sqlite3` @ sqlite3_column_blob s stmt i idx → s
+& `sqlite3` @ sqlite3_column_blob *u stmt i idx → *u
 
-& `sqlite3` @ sqlite3_column_bytes s stmt i idx → i
+& `sqlite3` @ sqlite3_column_bytes *u stmt i idx → i
 
-& `sqlite3` @ sqlite3_column_count s stmt → i
+& `sqlite3` @ sqlite3_column_count *u stmt → i
 
-& `sqlite3` @ sqlite3_column_type s stmt i idx → i
+& `sqlite3` @ sqlite3_column_type *u stmt i idx → i
 
-& `sqlite3` @ sqlite3_changes s db → i
+& `sqlite3` @ sqlite3_changes *u db → i
 
-& `sqlite3` @ sqlite3_errmsg s db → s
+& `sqlite3` @ sqlite3_errmsg *u db → s
 
-& `sqlite3` @ sqlite3_free s p → v
+& `sqlite3` @ sqlite3_free *u p → v
 
-& `sqlite3` @ sqlite3_last_insert_rowid s db → i
+& `sqlite3` @ sqlite3_last_insert_rowid *u db → i
 
-& `sqlite3` @ sqlite3_extended_result_codes s db i onoff → i
+& `sqlite3` @ sqlite3_extended_result_codes *u db i onoff → i
 
-& `sqlite3` @ sqlite3_extended_errcode s db → i
+& `sqlite3` @ sqlite3_extended_errcode *u db → i
 
-& `sqlite3` @ sqlite3_limit s db i id i newVal → i
+& `sqlite3` @ sqlite3_limit *u db i id i newVal → i
 
-& `sqlite3` @ sqlite3_set_authorizer s db *u xAuth *u pUserData → i
+& `sqlite3` @ sqlite3_set_authorizer *u db *u xAuth *u pUserData → i
 
 // sqlite3_db_config(sqlite3*, int op, ...) is variadic in C. For the
 // (int onoff, int *pRes) verbs we use (DEFENSIVE / ENABLE_LOAD_EXTENSION)
 // the `...` marker makes nurlc emit the correct variadic-call ABI.
-& `sqlite3` @ sqlite3_db_config s db i op ... → i
+& `sqlite3` @ sqlite3_db_config *u db i op ... → i
 
 // SQLITE_TRANSIENT — the documented constant value `((sqlite3_destructor_type)-1)`
 // telling sqlite3_bind_text / _blob to copy the caller's bytes immediately.

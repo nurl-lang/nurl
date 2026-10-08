@@ -19,7 +19,7 @@ $ `stdlib/std/float.nu`
 // format -> parse -> bit-compare
 @ rt s label f x → v {
     : s txt ( nurl_str_float x )
-    : f back ( nurl_fast_atof txt ( nurl_str_len txt ) )
+    : f back ( nurl_str_to_float txt )
     ( nurl_print label )
     ( nurl_print ` ` )
     ( nurl_print txt )
@@ -34,7 +34,7 @@ $ `stdlib/std/float.nu`
 // parse a literal text and compare against the double the compiler
 // produced for the same literal (LLVM parses it correctly rounded)
 @ lit s txt f want → v {
-    : f got ( nurl_fast_atof txt ( nurl_str_len txt ) )
+    : f got ( nurl_str_to_float txt )
     ( nurl_print txt )
     ( nurl_print ? == ( f64_to_bits got ) ( f64_to_bits want ) ` ok` ` MISMATCH` )
     ( nurl_print `\n` )
@@ -103,8 +103,8 @@ $ `stdlib/std/float.nu`
     ( lit `Infinity` ? T / 1.0 0.0 0.0 )
     ( lit `-inf` ? T / -1.0 0.0 0.0 )
     // NaN has no single bit pattern to compare, so check the predicate.
-    ( nurl_print ? ( float_is_nan ( nurl_fast_atof `nan` 3 ) ) `nan ok\n` `nan MISMATCH\n` )
-    ( nurl_print ? ( float_is_nan ( nurl_fast_atof `NaN` 3 ) ) `NaN ok\n` `NaN MISMATCH\n` )
+    ( nurl_print ? ( float_is_nan ( nurl_str_to_float `nan` ) ) `nan ok\n` `nan MISMATCH\n` )
+    ( nurl_print ? ( float_is_nan ( nurl_str_to_float `NaN` ) ) `NaN ok\n` `NaN MISMATCH\n` )
     // …and nothing that merely starts like them is one.
     ( lit `infin` ? T / 1.0 0.0 0.0 )  // "inf" then garbage: still inf
     ( lit `na` 0.0 )

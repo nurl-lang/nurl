@@ -1,6 +1,6 @@
 $ `stdlib/std/arena.nu`
 
-@ main → i {
+unsafe @ main → i {
     : Arena ar ( arena_with_cap 1024 )
 
     : *u p1 ( arena_alloc ar 100 )

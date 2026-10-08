@@ -19,6 +19,7 @@
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
+$ `stdlib/core/slice.nu`
 
 // The shimming below rewrites IR symbols with whole-string
 // string_replace (rename `@main` → `@__main_argc_argv`, libc fns →
@@ -271,9 +272,10 @@ $ `stdlib/core/vec.nu`
 }
 
 @ __wb_ir_ty_is_ptr s ty → b {
-    : i n ( nurl_str_len ty )
+    : ( Slice u ) ty_b ( slice_of_str ty )
+    : i n ( slice_len [u] ty_b )
     ? == n 0 { ^ F } {}
-    ^ == ( nurl_str_at ty n - n 1 ) 42
+    ^ == ( slice_byte ty_b - n 1 ) 42
 }
 
 // How to get a value of type `from` into type `to`:

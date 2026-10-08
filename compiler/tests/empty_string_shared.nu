@@ -38,11 +38,11 @@ unsafe @ live → i { ^ - ( nurl_alloc_count ) ( nurl_free_count ) }
 // A String grown from the shared empty string owns a block of its own;
 // both are dropped when this returns.
 @ grow_from_empty → v {
-    : String g ( string_from_take ( lookup `miss` ) 1 )
+    : String g ( string_adopt ( lookup `miss` ) )
     ( string_push_str g `grown` )
     ( string_push_char g 33 )
     ( nurl_print ( string_data g ) ) ( nurl_print `\n` )
-    : String h ( string_from_take ( nurl_str_slice `xyz` 0 0 ) 1 )
+    : String h ( string_adopt ( nurl_str_slice `xyz` 0 0 ) )
     ( string_push_str h `` )
     ( nurl_print `still empty: ` ) ( nurl_print_int ( string_len h ) ) ( nurl_print `\n` )
 }

@@ -43,6 +43,7 @@ $ `src/wfs.nu`
 $ `src/httpsrc.nu`
 $ `src/sources.nu`
 $ `src/service.nu`
+$ `stdlib/core/slice.nu`
 
 : ~ i g_pass 0
 : ~ i g_fail 0
@@ -1187,12 +1188,14 @@ unsafe @ test_wide Store st → v {
 }
 
 @ starts_text s hay s pre → b {
-    : i hn ( nurl_str_len hay )
-    : i pn ( nurl_str_len pre )
+    : ( Slice u ) hay_b ( slice_of_str hay )
+    : i hn ( slice_len [u] hay_b )
+    : ( Slice u ) pre_b ( slice_of_str pre )
+    : i pn ( slice_len [u] pre_b )
     ? > pn hn { ^ F } {}
     : ~ i k 0
     ~ < k pn {
-        ? == ( nurl_str_at hay hn k ) ( nurl_str_at pre pn k ) {} { ^ F }
+        ? == ( slice_byte hay_b k ) ( slice_byte pre_b k ) {} { ^ F }
         = k + k 1
     }
     ^ T

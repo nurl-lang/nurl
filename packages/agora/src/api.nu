@@ -33,6 +33,7 @@ $ `stdlib/ext/json.nu`
 $ `stdlib/ext/mcp.nu`
 $ `store.nu`
 $ `stdlib/core/rcbox.nu`
+$ `stdlib/core/slice.nu`
 
 : s AG_VERSION `0.5.2`
 
@@ -476,8 +477,9 @@ unsafe @ ag_local_refusal → s {
 // never splitting a UTF-8 sequence.
 @ ag_cut_at s body i n i maxb → i {
     ? | <= maxb 0 <= n maxb { ^ n } {}
+    : ( Slice u ) bb ( slice_of_str body )
     : ~ i k maxb
-    ~ & > k 0 & >= ( nurl_str_at body n k ) 128 < ( nurl_str_at body n k ) 192 { = k - k 1 }
+    ~ & > k 0 & >= ( slice_byte bb k ) 128 < ( slice_byte bb k ) 192 { = k - k 1 }
     ^ k
 }
 
@@ -1491,7 +1493,7 @@ unsafe @ __ag_op_wait AgStore st s me Json args i now → AgRes {
     : s b ( string_data body )
     : i n ( string_len body )
     : ~ i e 0
-    ~ & < e n != ( nurl_str_at b n e ) 10 { = e + e 1 }
+    ~ & < e n != ( string_get body e ) 10 { = e + e 1 }
     : i k ( ag_cut_at b e 200 )
     : String out ( string_substr body 0 k )
     ^ out

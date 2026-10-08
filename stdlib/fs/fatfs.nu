@@ -1215,7 +1215,7 @@ $ `stdlib/fs/fat.nu`
 
 // ── read ────────────────────────────────────────────────────────────
 
-@ fatfs_read_raw i h s buf i n → i {
+@ fatfs_read_raw i h * u buf i n → i {
     ? ! ( fat_mounted ) { ^ ( fe_io ) } {}
     : *FatVol v ( fat_vol )
     : *FatFile f ( __file h )
@@ -1296,7 +1296,7 @@ $ `stdlib/fs/fat.nu`
     ^ ok
 }
 
-@ fatfs_write_raw i h s buf i n → i {
+@ fatfs_write_raw i h * u buf i n → i {
     ? ! ( fat_mounted ) { ^ ( fe_io ) } {}
     : *FatVol v ( fat_vol )
     : *FatFile f ( __file h )

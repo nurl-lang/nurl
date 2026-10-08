@@ -16,6 +16,7 @@ $ `stdlib/ext/json.nu`
 $ `stdlib/ext/cbor.nu`
 $ `stdlib/ext/csv.nu`
 $ `src/report.nu`
+$ `stdlib/core/slice.nu`
 
 // ---- deterministic input generators (setup, never timed) --------------
 
@@ -318,14 +319,14 @@ unsafe @ __qs_i * i a i lo i hi → v {
 @ bench_utf8_decode → BenchRow {
     : String s ( __gen_utf8 262144 )
     : i bytes ( string_len s )
-    : s sd ( string_data s )
+    : ( Slice u ) sd ( slice_of_str ( string_data s ) )
     : ( Vec i ) sink ( vec_new [i] )
     ( vec_push [i] sink 0 )
     : BenchRow r ( bench_thpt `utf8 decode` bytes `MB/s` \ → v {
         : ~ i pos 0
         : ~ i cps 0
         ~ < pos bytes {
-            : Utf8Dec d ( utf8_decode_n sd bytes pos )
+            : Utf8Dec d ( utf8_decode_at sd pos )
             : i w ? > . d width 0 . d width 1
             = pos + pos w
             = cps + cps 1
@@ -415,9 +416,9 @@ unsafe @ __csv_sort_keys i n → ( Vec i ) {
     : ( Vec i ) key ( vec_with_cap [i] n )
     : ~ i r0 0
     ~ < r0 n {
-        : i tid ( __type_id # *u ( csv_table_view t r0 cty ) )
-        : i dk ( __date_key # *u ( csv_table_view t r0 cda ) )
-        : i uu & ( __hex16 # *u ( csv_table_view t r0 cuu ) ) 140737488355327
+        : i tid ( __type_id ( slice_data [u] ( csv_table_view t r0 cty ) ) )
+        : i dk ( __date_key ( slice_data [u] ( csv_table_view t r0 cda ) ) )
+        : i uu & ( __hex16 ( slice_data [u] ( csv_table_view t r0 cuu ) ) ) 140737488355327
         ( vec_push [i] key | | << tid 58 << dk 47 uu )
         = r0 + r0 1
     }

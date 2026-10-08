@@ -1272,7 +1272,6 @@ unsafe @ mcp_swarm → Swarm { : *McpState st # *McpState g_mcp ^ ( Swarm_share 
 
 @ mcp_pump i rounds → v {
     : Swarm sw__h ( mcp_swarm )
-    : *SwarmImpl sw ( __Swarm_ptr sw__h )
     : ~ i k 0
     ~ < k rounds { ( swarm_pump sw__h 150 ) = k + k 1 }
     // Every pump also ages the roster: a worker that died stops heartbeating,
@@ -1907,7 +1906,6 @@ unsafe @ __iterate_round Swarm sw__h ( Vec u ) wasm i S i A ( Vec i ) xparams i 
 // The packed param buffer the update kernel reads is state ++ acc ++ [N] ++
 // xparams. Returns the failed-chunk count (0 = the whole state came back).
 @ __iterate_update Swarm sw__h ( Vec u ) uwasm i S i A ( Vec f ) grad i N ( Vec i ) xparams ( Vec f ) state → i {
-    : *SwarmImpl sw ( __Swarm_ptr sw__h )
     : ( Vec i ) up ( vec_new [i] )
     : ~ i j 0
     ~ < j S { ( vec_push [i] up ( f64_to_bits ?? ( vec_get [f] state j ) { T x → x F → 0.0 } ) ) = j + j 1 }
@@ -1940,7 +1938,6 @@ unsafe @ __iterate_round Swarm sw__h ( Vec u ) wasm i S i A ( Vec i ) xparams i 
 @ __ft_round_retries → i { ^ 3 }
 
 @ __iterate_round_ft Swarm sw__h ( Vec u ) wasm i S i A ( Vec i ) xparams i rlo i rhi ( Vec f ) state i dsid ( Vec String ) seeded inout i nseed_cell ( Vec f ) grad → i {
-    : *SwarmImpl sw ( __Swarm_ptr sw__h )
     : ~ i nf 1
     : ~ i att 0
     ~ & > nf 0 < att ( __ft_round_retries ) {
@@ -1952,7 +1949,6 @@ unsafe @ __iterate_round Swarm sw__h ( Vec u ) wasm i S i A ( Vec i ) xparams i 
 }
 
 @ __iterate_update_ft Swarm sw__h ( Vec u ) uwasm i S i A ( Vec f ) grad i N ( Vec i ) xparams ( Vec f ) state → i {
-    : *SwarmImpl sw ( __Swarm_ptr sw__h )
     : ~ i nf 1
     : ~ i att 0
     ~ & > nf 0 < att ( __ft_round_retries ) {
@@ -3374,7 +3370,6 @@ unsafe @ mcp_reconnect → b {
 // gone — reconnect to the next. Returns T once a live relay is in place.
 @ mcp_ensure_relay → b {
     : Swarm sw__h ( mcp_swarm )
-    : *SwarmImpl sw ( __Swarm_ptr sw__h )
     ? ( swarm_announce_ok sw__h 0 ) { ^ T } {}
     ^ ( mcp_reconnect )
 }

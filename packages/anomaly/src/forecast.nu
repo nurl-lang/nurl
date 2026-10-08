@@ -401,7 +401,7 @@ unsafe @ __fc_lane_run i base i n i lane i stride → v {
 
 // Run the fits, one thread per lane of jobs; a spawn that fails runs its
 // lane here. Every lane is joined before the jobs are read.
-@ __fc_jobs_run ( Vec FcJob ) jobs → v {
+unsafe @ __fc_jobs_run ( Vec FcJob ) jobs → v {
     : i n ( vec_len [FcJob] jobs )
     : i base # i ( vec_data [FcJob] jobs )
     : i nt ( __fc_threads n )

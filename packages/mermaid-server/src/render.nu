@@ -21,16 +21,17 @@ $ `stdlib/core/vec.nu`
 $ `graph.nu`
 $ `theme.nu`
 $ `layout.nu`
+$ `stdlib/core/slice.nu`
 
 // ── Text helpers ─────────────────────────────────────────────────────
 
 // XML-escape `text[from,to)` into `out`. The range form is what the
 // multi-line label writer needs — slicing a copy per line would allocate
 // once per tspan for nothing.
-@ __mmdr_escape_range String out s text i n i from i to → v {
+@ __mmdr_escape_range String out ( Slice u ) text i from i to → v {
     : ~ i k from
     ~ < k to {
-        : i c ( nurl_str_at text n k )
+        : i c ( slice_byte text k )
         ? == c 38 { ( string_push_str out `&amp;` ) } {
             ? == c 60 { ( string_push_str out `&lt;` ) } {
                 ? == c 62 { ( string_push_str out `&gt;` ) } {
@@ -47,8 +48,8 @@ $ `layout.nu`
 }
 
 @ __mmdr_escape String out s text → v {
-    : i n ( nurl_str_len text )
-    ( __mmdr_escape_range out text n 0 n )
+    : ( Slice u ) tb ( slice_of_str text )
+    ( __mmdr_escape_range out tb 0 ( slice_len [u] tb ) )
 }
 
 @ __mmdr_attr_i String out s name i val → v {
@@ -360,20 +361,22 @@ $ `layout.nu`
     ( __mmdr_attr_s out `fill` fill )
     ( string_push_str out `>` )
 
-    : i n ( nurl_str_len label )
+    : ( Slice u ) label_b ( slice_of_str label )
+
+    : i n ( slice_len [u] label_b )
     : ~ i start 0
     : ~ i li 0
     : ~ i k 0
     ~ <= k n {
         : b at_end == k n
-        : i c ? at_end 10 ( nurl_str_at label n k )
+        : i c ? at_end 10 ( slice_byte label_b k )
         ? | at_end == c 10 {
             ( string_push_str out `<tspan` )
             ( __mmdr_attr_i out `x` cx )
             ( string_push_str out ` dy="` )
             ( string_push_int out ? == li 0 / * - 1 lines line_h - 0 2 line_h )
             ( string_push_str out `">` )
-            ( __mmdr_escape_range out label n start k )
+            ( __mmdr_escape_range out label_b start k )
             ( string_push_str out `</tspan>` )
             = li + li 1
             = start + k 1

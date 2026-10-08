@@ -37,11 +37,11 @@ $ `stdlib/ext/env.nu`  // $COLUMNS / $LINES fallback for term_width
 
 & `c` @ isatty i32 fd → i32
 
-& `c` @ tcgetattr i32 fd s buf → i32
+& `c` @ tcgetattr i32 fd *u buf → i32
 
-& `c` @ tcsetattr i32 fd i32 act s buf → i32
+& `c` @ tcsetattr i32 fd i32 act *u buf → i32
 
-& `c` @ cfmakeraw s buf → v
+& `c` @ cfmakeraw *u buf → v
 
 : TermState { i fd s saved }
 

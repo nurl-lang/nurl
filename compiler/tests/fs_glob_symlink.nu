@@ -28,6 +28,7 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/std/sort.nu`
 $ `stdlib/std/cmp.nu`
+$ `stdlib/core/slice.nu`
 
 // Print `label: <count> <basename>…`, basenames sorted so the on-disk
 // order of readdir cannot reach the golden.
@@ -44,16 +45,17 @@ $ `stdlib/std/cmp.nu`
                 ?? mo {
                     T m → {
                         : s full ( string_data m )
-                        : i ln ( nurl_str_len full )
+                        : ( Slice u ) full_b ( slice_of_str full )
+                        : i ln ( slice_len [u] full_b )
                         : ~ i cut 0
                         : ~ i j 0
                         ~ < j ln {
-                            ? == ( nurl_str_at full ln j ) 47 { = cut + j 1 } {}
+                            ? == ( slice_byte full_b j ) 47 { = cut + j 1 } {}
                             = j + j 1
                         }
                         : String bn ( string_with_cap + - ln cut 1 )
                         : ~ i q cut
-                        ~ < q ln { ( string_push_char bn ( nurl_str_at full ln q ) ) = q + q 1 }
+                        ~ < q ln { ( string_push_char bn ( slice_byte full_b q ) ) = q + q 1 }
                         ( vec_push [String] names bn )
                     }
                     F _ → {}

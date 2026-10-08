@@ -29,6 +29,7 @@ $ `src/model.nu`
 $ `src/lcov.nu`
 $ `src/jsonout.nu`
 $ `src/runner.nu`
+$ `stdlib/core/slice.nu`
 
 : ~ i g_fail 0
 : ~ i g_pass 0
@@ -107,12 +108,14 @@ $ `src/runner.nu`
 }
 
 @ ends_with s text s suffix → b {
-    : i n ( nurl_str_len text )
-    : i m ( nurl_str_len suffix )
+    : ( Slice u ) text_b ( slice_of_str text )
+    : i n ( slice_len [u] text_b )
+    : ( Slice u ) suffix_b ( slice_of_str suffix )
+    : i m ( slice_len [u] suffix_b )
     ? > m n { ^ F } {}
     : ~ i k 0
     ~ < k m {
-        ? != ( nurl_str_at text n + - n m k ) ( nurl_str_at suffix m k ) { ^ F } {}
+        ? != ( slice_byte text_b + - n m k ) ( slice_byte suffix_b k ) { ^ F } {}
         = k + k 1
     }
     ^ T
@@ -326,7 +329,7 @@ $ `src/runner.nu`
 // spell the magic reversed, which is how a reader tells the endianness.
 @ put_header ( Vec u ) v s magic i stamp → v {
     : ~ i k 0
-    ~ < k 4 { ( vec_push [u] v # u ( nurl_str_at magic 4 k ) ) = k + k 1 }
+    ~ < k 4 { ( vec_push [u] v # u ( nurl_str_get magic k ) ) = k + k 1 }
     ( vec_push [u] v # u 42 )
     ( vec_push [u] v # u 56 )
     ( vec_push [u] v # u 48 )

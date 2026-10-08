@@ -18,6 +18,14 @@
 //
 // Most of these have a friendlier, Result-typed stdlib wrapper — each
 // section names it. Prefer the wrapper unless you need the raw call.
+//
+// Two contracts ride on the preamble's declarations. A raw-memory
+// primitive — one that reads or writes as far as its caller says (a
+// length, a buffer), takes a C `FILE*` or a format string, allocates or
+// frees, or is the runtime's own machinery — is marked `"nurl.raw"` and
+// only an `unsafe` function may call it (each is noted below). A C string
+// parameter is marked `"nurl.cstr"`: C reads it to its NUL, and a null
+// `s` (`# s 0`, an unset getenv) arrives as the empty string.
 
 // ── Printing ────────────────────────────────────────────────────────
 // Formatted templates live in stdlib/std/fmt.nu (println_fmt1…4);
@@ -87,6 +95,7 @@
 // (the same double `strtod` returns, ties to even), no locale, no
 // leading space, no hex. Recognises `inf` / `infinity` / `nan`
 // case-insensitively, because `nurl_str_float` prints them.
+// (Raw memory: only an `unsafe` function may call it.)
 & `c` @ nurl_fast_atof s p i len → f
 
 // The same parser, answering the two questions a validating caller
@@ -95,6 +104,7 @@
 // the value is out of range — overflow to ±inf, or an underflow below
 // the smallest normal, which is what libc reports as ERANGE.
 // stdlib/std/float.nu's `float_parse` is built on this.
+// (Raw memory: only an `unsafe` function may call it.)
 & `c` @ nurl_fast_atof_ex s p i len *u out → f
 
 // libc: parse an integer from a NUL-terminated string.
@@ -113,13 +123,16 @@
 
 // Offset of the first byte in p[0..len) equal to b0, b1, or b2, else
 // `len`. SSE2-vectorised; duplicate a byte to scan for fewer targets.
+// (Raw memory: only an `unsafe` function may call it.)
 & `c` @ nurl_scan_byte3 s p i len i b0 i b1 i b2 → i
 
 // First-occurrence offset of needle[0..nlen) in hay[0..hlen), or -1.
 // Empty needle returns 0.
+// (Raw memory: only an `unsafe` function may call it.)
 & `c` @ nurl_byte_substr s hay i hlen s needle i nlen → i
 
 // Count occurrences of byte `target` in p[0..len). memchr loop.
+// (Raw memory: only an `unsafe` function may call it.)
 & `c` @ nurl_count_byte s p i len i target → i
 
 // libc string primitives (NUL-terminated).
@@ -133,14 +146,17 @@
 
 & `c` @ strncmp s a s b i n → i32
 
+// (Raw memory: only an `unsafe` function may call it.)
 & `c` @ memcmp s a s b i n → i32
 
 & `c` @ strstr s hay s needle → s
 
+// (Raw memory: only an `unsafe` function may call it.)
 & `c` @ memmem s hay i hlen s needle i nlen → s
 
 & `c` @ strdup s text → s
 
+// (Raw memory: only an `unsafe` function may call it.)
 & `c` @ memcpy s dst s src i n → s
 
 // ── Files & directories ────────────────────────────────────────────
@@ -162,22 +178,31 @@
 & `c` @ nurl_dir_list_close i handle → v
 
 // libc stdio pass-throughs (FILE* carried as `s`).
+// (Raw memory: only an `unsafe` function may call it.)
 & `c` @ fopen s path s mode → s
 
+// (Raw memory: only an `unsafe` function may call it.)
 & `c` @ fclose s handle → i32
 
+// (Raw memory: only an `unsafe` function may call it.)
 & `c` @ fputs s text s handle → i32
 
+// (Raw memory: only an `unsafe` function may call it.)
 & `c` @ fwrite s buf i size i count s handle → i
 
+// (Raw memory: only an `unsafe` function may call it.)
 & `c` @ fputc i32 ch s handle → i32
 
+// (Raw memory: only an `unsafe` function may call it.)
 & `c` @ fread s buf i size i count s handle → i
 
+// (Raw memory: only an `unsafe` function may call it.)
 & `c` @ feof s handle → i32
 
+// (Raw memory: only an `unsafe` function may call it.)
 & `c` @ fseek s handle i offset i32 whence → i32
 
+// (Raw memory: only an `unsafe` function may call it.)
 & `c` @ ftell s handle → i
 
 & `c` @ access s path i32 mode → i32
@@ -207,6 +232,7 @@
 
 // libc: canonical absolute path (symlinks/.. resolved); null on
 // failure. Pass null (`# *u 0`) as `resolved` to get a malloc'd result.
+// (Raw memory: only an `unsafe` function may call it.)
 & `c` @ realpath s path s resolved → s
 
 // ── Output capture ──────────────────────────────────────────────────
@@ -226,14 +252,19 @@
 
 // Allocate `bytes` (small sizes hit a freelist cache) / zero-filled /
 // resize / free. nurl_malloc is the uncached variant.
+// (Raw memory: only an `unsafe` function may call it.)
 & `c` @ nurl_alloc i bytes → s
 
+// (Raw memory: only an `unsafe` function may call it.)
 & `c` @ nurl_zalloc i bytes → s
 
+// (Raw memory: only an `unsafe` function may call it.)
 & `c` @ nurl_realloc s ptr i bytes → s
 
+// (Raw memory: only an `unsafe` function may call it.)
 & `c` @ nurl_free s ptr → v
 
+// (Raw memory: only an `unsafe` function may call it.)
 & `c` @ nurl_malloc i bytes → s
 
 // Closure environments (docs/MEMORY.md §7.4). A capturing closure's env
@@ -244,8 +275,10 @@
 // closure's raw `( # *u f 1 )` env to C and must keep it past the call:
 // keep a clone, and drop the clone when C is done with it. Both accept
 // the null env of a closure that captures nothing.
+// (Raw memory: only an `unsafe` function may call it.)
 & `c` @ nurl_closure_drop *u env → v
 
+// (Raw memory: only an `unsafe` function may call it.)
 & `c` @ nurl_closure_clone *u env → *u
 
 // Copy a NUL-terminated string onto a fresh block from the same
@@ -255,19 +288,25 @@
 
 // nurl_strdup when the caller already knows the source's length: copies
 // the first `n` bytes and appends a NUL, with no strlen.
+// (Raw memory: only an `unsafe` function may call it.)
 & `c` @ nurl_strdup_n s src i n → s
 
 // Raw byte moves/fill over possibly-overlapping regions.
+// (Raw memory: only an `unsafe` function may call it.)
 & `c` @ nurl_memcpy s dst s src i n → v
 
+// (Raw memory: only an `unsafe` function may call it.)
 & `c` @ nurl_memmove s dst s src i n → v
 
+// (Raw memory: only an `unsafe` function may call it.)
 & `c` @ nurl_memset s dst i byte i n → v
 
 // libc allocator (prefer nurl_alloc/nurl_free, which the leak tooling
 // tracks).
+// (Raw memory: only an `unsafe` function may call it.)
 & `c` @ malloc i bytes → s
 
+// (Raw memory: only an `unsafe` function may call it.)
 & `c` @ free s ptr → v
 
 // ── Floats ──────────────────────────────────────────────────────────
@@ -307,6 +346,7 @@
 
 // Run to completion: argv is NUL-joined, returns a handle; exit code,
 // captured stdout/stderr (+ byte lengths) via accessors; free releases.
+// (Raw memory: only an `unsafe` function may call it.)
 & `c` @ nurl_proc_run s argv s stdin_data i stdin_len s cwd → i
 
 & `c` @ nurl_proc_exit_code i handle → i
@@ -332,6 +372,7 @@
 
 & `c` @ nurl_proc_spawn_pid i handle → i
 
+// (Raw memory: only an `unsafe` function may call it.)
 & `c` @ nurl_proc_spawn_write i handle s data i len → i
 
 & `c` @ nurl_proc_spawn_close_stdin i handle → v
@@ -377,8 +418,10 @@
 // error); close/shutdown; error kind, peer address, IO timeout (ms).
 & `c` @ nurl_tcp_accept i listener → i
 
+// (Raw memory: only an `unsafe` function may call it.)
 & `c` @ nurl_tcp_read i conn s buf i cap → i
 
+// (Raw memory: only an `unsafe` function may call it.)
 & `c` @ nurl_tcp_write i conn s buf i len → i
 
 & `c` @ nurl_tcp_close i conn → v
@@ -405,6 +448,7 @@
 // a recover arm.
 & `c` @ nurl_panic s msg → v
 
+// (Raw memory: only an `unsafe` function may call it.)
 & `c` @ nurl_recover s fn_ptr s env_ptr → i
 
 & `c` @ nurl_panic_last_msg → s
