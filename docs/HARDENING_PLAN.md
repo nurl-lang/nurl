@@ -32,15 +32,19 @@ Every class below is closed at its root, with the probes it found:
 | M — method calls | a statically dispatched call asks its impl what a call of any function asks; a `dyn` call asks every impl at once (`m__dyn__T`, the union of their summaries; handle results owned per call), and impls that disagree on keeping an argument, or keep the receiver, are rejected; a raw method signature is raw to call | h106, h107, h110–h112 |
 | O — ownership summaries | a `sink` parameter handed back is the caller's own value, not a second name of its argument; a raw-pointer parameter hands nothing over | h108, h109 |
 
-Gates (pre-production-hardening tip): `tools/fuzz/holes/check.sh` 92
-probes, 86 rejected, 6 clean, **holes: 0** (in CI's build-test job);
-`./build.sh` fixed point and 1211 tests pass; ASan/UBSan/LSan corpus 0
-failures; `tools/leakgate.sh` zero leaks; the package compile sweep
-(441 files that compiled before) has no new failure after the migration.
-Performance: self-compile 3.2 % fewer instructions than main's compiler
-on the same input (12.02 G against 12.41 G); the runtime kernels of
-`bench/perfstat.sh` within ±0.03 % of main, blake2b −0.19 %, json_parse
-−0.24 %.
+Gates (pre-production-hardening tip): `tools/fuzz/holes/check.sh` 100
+probes, 88 rejected, 12 clean, **holes: 0** (in CI's build-test job);
+`./build.sh` fixed point and 1219 tests pass; ASan/UBSan/LSan corpus 0
+failures; `tools/leakgate.sh` zero leaks. Every tracked `.nu` file outside
+the stdlib and the compiler (1884), compiled by each side's own toolchain:
+1397 compile on main and the same 1397 here — after three package sites the
+view checks rejected as real reads of freed memory were fixed (anomaly,
+f5tts, nurl-mcp; CHANGELOG).
+Performance, against main back to back in one environment
+(instructions:u): self-compile 0.73 % fewer on the same input (12.47 G
+against 12.56 G); every runtime kernel of the bench set the same or fewer —
+blake2b −0.18 %, json_parse −0.24 %, x25519 −0.03 %, the rest within
+±0.01 %.
 
 ## Baseline (main 92a83993, 2026-10-08, clean `build/`)
 

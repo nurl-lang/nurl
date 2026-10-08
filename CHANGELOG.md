@@ -12,7 +12,7 @@ The memory guarantee has **no exception**: 0.71.0's one known hole (a
 `Slice` of a `Vec`, probe h32) is closed, along with 80 more found around
 it (probes h33–h112), each at its root — every probe is now rejected or
 runs clean under ASan/UBSan/LSan, and `tools/fuzz/holes/check.sh` runs in
-CI. Compile time is 3.2 % below 0.71.0's main (self-compile instructions),
+CI. Compile time is 0.7 % below 0.71.0's main (self-compile instructions),
 run time is flat or better. Code that handed raw pointers or caller-given
 lengths around outside `unsafe` may need `unsafe`, or the safe API now
 beside each raw one (*Changed*).
@@ -173,16 +173,18 @@ beside each raw one (*Changed*).
 
 ### Performance
 
-- **Compile time 3.2 % below 0.71.0's main** (self-compile 12.41 G →
-  12.02 G instructions, each compiler built by itself, same input) with
-  the larger borrow walk: the raw-provenance graph is integers, walk rows
-  are cheaper, and…
+- **Compile time 0.7 % below 0.71.0's main** (self-compile 12.56 G →
+  12.47 G instructions, each compiler built by itself, same input) with
+  the larger borrow walk and every call now asked of the right callee:
+  the raw-provenance graph is integers, walk rows are cheaper, and…
 - **…a function that never hands over its result is not asked per call.**
   Every `s`-returning call queried the runtime for an ownership proof
   (two opaque calls and a `free(NULL)`); a callee whose every path returns
   a borrow, a raw read or a literal now says so statically
-  (`__ret_unowned`). blake2b −0.19 %, json_parse −0.40 % instructions;
-  every other benchmark kernel within ±0.03 %.
+  (`__ret_unowned`), and so does every call with a raw-pointer result,
+  which nothing owns. Against main, every benchmark kernel retires the
+  same instructions or fewer: blake2b −0.18 %, json_parse −0.24 %, x25519
+  −0.03 %.
 - Growth paths test for overflow once per growth, not once per doubling,
   and divide only for sizes past 2^31.
 
