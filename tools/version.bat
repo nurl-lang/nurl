@@ -12,10 +12,10 @@ REM       <tag>-<n>-g<sha>[-dirty] on a dev checkout).
 REM    2. newest released CHANGELOG.md section (source tarball, no git).
 REM    3. v0.0.0.
 REM
-REM  Every step yields a SemVer-shaped string. `package.nurl-version`
-REM  compares this against a package's declared minimum, and a version
-REM  that cannot be parsed compares as "too old" - every package refused
-REM  by a toolchain that is in fact current. `--always` answered a
+REM  Every step yields a SemVer-shaped string. nurlpkg no longer gates on
+REM  `package.nurl-version`, but up to v0.71.0 a version that could not be
+REM  parsed compared as "too old" - every package refused by a toolchain
+REM  that was in fact current. `--always` answered a
 REM  tagless checkout (a shallow CI clone) with a bare commit SHA
 REM  instead of letting step 2 run. See tools/version.sh.
 REM ============================================================

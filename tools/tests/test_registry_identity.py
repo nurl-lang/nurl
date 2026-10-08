@@ -334,44 +334,47 @@ class RegistryIdentityTest(unittest.TestCase):
         (self.project/'src/main.nu').rename(self.project/'src/lib.nu')
         self.assert_publish_gate_failed(env, b'no installed compiler')
 
-    def test_publish_checks_minimum_against_selected_compiler(self):
+    # package.nurl-version is informational (docs/TOOLING.md): no install or
+    # publish compares it against the toolchain. A gate that misread the
+    # toolchain refused every package on Windows v0.71.0; these tests pin
+    # that a declared minimum far above any toolchain refuses nothing.
+    def test_publish_ignores_nurl_version(self):
         env = self.publish_project()
         root = self.publish_toolchain()
         manifest = self.project/'nurl.toml'
         original = manifest.read_text()
-        manifest.write_text(original.replace('[package]', '[package]\nnurl-version="999.0.0"'))
-        self.assert_publish_gate_failed({**env, 'NURL_STDLIB': str(root)}, b'requires NURL >= 999.0.0')
-        manifest.write_text(original.replace('[package]', '[package]\nnurl-version="0.1.0"'))
-        run = self.run_pkg('publish', '--dry-run', env={**env, 'NURL_STDLIB': str(root)})
-        self.assertEqual(run.returncode, 0, run.stdout+run.stderr)
+        for minimum in ['999.0.0', '0.1.0']:
+            with self.subTest(minimum=minimum):
+                manifest.write_text(original.replace('[package]', f'[package]\nnurl-version="{minimum}"'))
+                run = self.run_pkg('publish', '--dry-run', env={**env, 'NURL_STDLIB': str(root)})
+                self.assertEqual(run.returncode, 0, run.stdout+run.stderr)
+                self.assertIn(b'every gate passed', run.stdout)
+                self.assertNotIn(b'requires NURL', run.stderr)
 
-    def test_root_and_path_minimum_reject_before_link_or_lock(self):
+    def test_root_and_path_nurl_version_does_not_block_install(self):
         self.manifest([])
         manifest = self.project/'nurl.toml'
         original = manifest.read_text()
         manifest.write_text(original.replace('[package]', '[package]\nnurl-version="999.0.0"'))
-        self.assert_failed_without_publish(token=b'requires NURL >= 999.0.0')
+        run = self.run_pkg('install')
+        self.assertEqual(run.returncode, 0, run.stdout+run.stderr)
         target = self.project/'local/foo'
         target.mkdir(parents=True)
         (target/'nurl.toml').write_text('[package]\nname="foo"\nversion="1.0.0"\nnurl-version="999.0.0"\n')
         manifest.write_text(original+'foo={path="local/foo"}\n')
-        self.assert_failed_without_publish(token=b'requires NURL >= 999.0.0')
-        self.assertFalse((self.project/'deps/foo').exists())
-
-    def test_signed_minimum_checked_before_extract_and_preserves_prior_install(self):
-        self.package('b', 'foo', nurl_version='999.0.0')
-        self.manifest([('foo', 'b')])
-        self.assert_failed_without_publish(token=b'PkgToolchain')
-        self.assertFalse((self.project/'deps/foo').exists())
-        self.package('b', 'foo', nurl_version='0.1.0')
         run = self.run_pkg('install')
         self.assertEqual(run.returncode, 0, run.stdout+run.stderr)
-        old = (self.project/'deps/foo/nurl.toml').read_bytes()
-        self.package('b', 'foo', nurl_version='999.0.0')
-        self.assert_failed_without_publish(token=b'PkgToolchain')
-        self.assertEqual((self.project/'deps/foo/nurl.toml').read_bytes(), old)
+        self.assertTrue((self.project/'deps/foo/nurl.toml').exists())
 
-    def test_existing_path_link_rechecks_changed_transitive_minimum(self):
+    def test_signed_nurl_version_does_not_block_registry_install(self):
+        self.package('b', 'foo', nurl_version='999.0.0')
+        self.manifest([('foo', 'b')])
+        run = self.run_pkg('install')
+        self.assertEqual(run.returncode, 0, run.stdout+run.stderr)
+        self.assertNotIn(b'PkgToolchain', run.stderr)
+        self.assertIn(b'nurl-version="999.0.0"', (self.project/'deps/foo/nurl.toml').read_bytes())
+
+    def test_existing_path_link_ignores_changed_transitive_nurl_version(self):
         self.manifest([])
         manifest = self.project/'nurl.toml'
         manifest.write_text(manifest.read_text()+'foo={path="local/foo"}\n')
@@ -384,7 +387,8 @@ class RegistryIdentityTest(unittest.TestCase):
         run = self.run_pkg('install')
         self.assertEqual(run.returncode, 0, run.stdout+run.stderr)
         (bar/'nurl.toml').write_text(original+'nurl-version="999.0.0"\n')
-        self.assert_failed_without_publish(token=b'bar requires NURL >= 999.0.0')
+        run = self.run_pkg('install')
+        self.assertEqual(run.returncode, 0, run.stdout+run.stderr)
 
     def test_existing_directory_cannot_substitute_local_path_dependency(self):
         self.manifest([])
@@ -400,11 +404,9 @@ class RegistryIdentityTest(unittest.TestCase):
         self.assert_failed_without_publish(token=b'existing deps entry is not the declared path')
         self.assertEqual((installed/'nurl.toml').read_text(), prior)
         self.assertFalse(installed.is_symlink())
-        # The caller can explicitly select the in-place directory; then that
-        # actual manifest, including its minimum, is what must be checked.
+        # The caller can explicitly select the in-place directory; its
+        # nurl-version is informational and does not refuse it.
         manifest.write_text(original+'foo={path="./deps/../deps/foo"}\n')
-        self.assert_failed_without_publish(token=b'requires NURL >= 999.0.0')
-        (installed/'nurl.toml').write_text(prior.replace('999.0.0', '0.1.0'))
         run = self.run_pkg('install')
         self.assertEqual(run.returncode, 0, run.stdout+run.stderr)
 
@@ -482,7 +484,7 @@ class RegistryIdentityTest(unittest.TestCase):
         for defect, diagnostic in [
                 ('http', b'PkgHttp'), ('checksum', b'PkgChecksumMismatch'),
                 ('signature', b'PkgBadSig'), ('identity', b'PkgBadIdentity'),
-                ('minimum', b'PkgToolchain'), ('gzip', b'PkgDecompress'),
+                ('gzip', b'PkgDecompress'),
                 ('extract', b'PkgUnpack')]:
             with self.subTest(defect=defect):
                 self.routes.clear()
@@ -491,7 +493,6 @@ class RegistryIdentityTest(unittest.TestCase):
                 url = self.package('b', 'foo',
                     identity=('impostor', '1.0.0') if defect == 'identity' else None,
                     signature=defect != 'signature',
-                    nurl_version='999.0.0' if defect == 'minimum' else None,
                     extra=[('../escape.nu', b'forbidden')] if defect == 'extract' else [])
                 if defect == 'http':
                     self.statuses[url] = 503

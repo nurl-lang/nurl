@@ -126,7 +126,8 @@ deps follow the newest published version, path deps the local copy's
 `lock`, `verify`, `publish`, `login`, `logout [--revoke]`, `search`,
 `yank` / `unyank`, `test`, `bench`, `self-update`, `version`, `help`.
 
-Packages can declare a minimum compiler, standard library and runtime release:
+Packages can declare the compiler, standard library and runtime release they
+were written against:
 
 ```toml
 [package]
@@ -135,17 +136,14 @@ version = "1.0.0"
 nurl-version = "0.65.0"
 ```
 
-`nurl-version` is an optional, nonempty SemVer version, compared using SemVer
-precedence (a release candidate does not satisfy the corresponding stable
-release). Installation checks the root project and local dependencies, including
-existing links, and authenticated registry manifests before extracting files.
-Incompatible packages leave the prior package and lock intact. The target is
-the compiler selected by `NURL_STDLIB`, the default installed compiler, or the
-CLI's own version when no installed compiler exists. An explicitly selected but
-unusable compiler cannot satisfy a declared minimum. The publication gate queries
-the installed compiler's version and typechecks every packaged source module
-against its standard library. Legacy package managers predating this field
-cannot enforce it; upgrade the toolchain before using packages that require it.
+`nurl-version` is an optional, nonempty SemVer version. It is **informational**:
+the manifest parser validates its shape, but neither `nurlpkg install` nor
+`nurlpkg publish` compares it against the toolchain, and no package is ever
+refused because of it. Earlier releases did refuse, and v0.71.0 on Windows
+read its own version wrong and refused every package on a toolchain that met
+every requirement; a gate that can fail that way is worse than none. A package
+that needs a newer toolchain than the one compiling it fails at compile time,
+with the compiler's own error.
 
 Registry dependencies carry a `(registry URL, package name)` identity through
 resolution, index caching, downloads, signature checks and `nurl.lock`.
