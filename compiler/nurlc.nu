@@ -14571,21 +14571,25 @@ unsafe @ gen_cond i lex i syms i cg → s {
 // disarm) lives in stdlib/std/channel.nu.
 //
 // Lowering (no default):
-//   { : i W ( select_waiter_new )
-//     : i CTLk  # i . ( chexpr_k ) ctl          // once per case
-//     : ~ b DONE F
-//     ~ ! DONE {
+//   { : ~ i WHICH -1
+//     : ~ ?Tk Vk @ ?Tk { F }                    // one slot per case
+//     : SelWaiter W ( select_waiter_new )
+//     ~ < WHICH 0 {
 //       ( select_waiter_prepare W )
-//       ( chan_raw_arm CTLk W )                  // every case
-//       ? ! DONE { : ?Tk bind ( chan_try_recv [Tk] ( chexpr_k ) )
-//                  ? | ( opt_is_some [Tk] bind ) ( chan_raw_closed CTLk )
-//                    { = DONE T <body_k> } {} } {}
-//       ? ! DONE { ( select_waiter_wait W ) } {}
-//       ( chan_raw_disarm CTLk W ) }            // every case
-//     ( select_waiter_free W ) }
+//       ( chan_select_arm [Tk] chexpr_k W )      // every case
+//       ? < WHICH 0 { ? > ( chan_select_poll [Tk] chexpr_k ) 0 {
+//           = WHICH k = Vk ( chan_try_recv [Tk] chexpr_k ) } {} } {}
+//       ? < WHICH 0 { ( select_waiter_wait W ) } {}
+//       ( chan_select_disarm [Tk] chexpr_k W ) } // every case
+//     ? == WHICH k { : ?Tk bind_k Vk <body_k> } {}   // every case
+//   }                                            // W dropped here
+//
+// The bodies run after the loop, every channel disarmed: a `break` or
+// `continue` in one belongs to the author's loop, and leaving through `^`
+// drops a waiter no channel can fire any more.
 //
 // With a `_` default arm there is no waiter and no loop: poll each case
-// once, then run the default body.
+// once, then run the chosen body or the default one.
 // `sel_line` / `sel_col` are the '??'s OWN position, captured by gen_match
 // before it consumed the token — by the time a select arm's body is
 // re-lexed the outer lexer has moved past the whole construct, and the
@@ -14596,12 +14600,14 @@ unsafe @ gen_cond i lex i syms i cg → s {
 
     : s uid ( nurl_cg_lbl cg `sel` )
     : s w_name ( nurl_str_cat `__` ( nurl_str_cat uid `w` ) )
-    : s done_name ( nurl_str_cat `__` ( nurl_str_cat uid `done` ) )
+    // The chosen arm's index, -1 until one is ready.
+    : s which_name ( nurl_str_cat `__` ( nurl_str_cat uid `which` ) )
 
-    : ~ s ctl_decls ``
+    : ~ s slot_decls ``
     : ~ s arm_block ``
     : ~ s disarm_block ``
     : ~ s poll_block ``
+    : ~ s body_block ``
     : ~ s default_body ``
     : ~ i has_default 0
     : ~ i bidx 0
@@ -14648,37 +14654,32 @@ unsafe @ gen_cond i lex i syms i cg → s {
             : i bend ( nurl_lex_cur_start lex )
             : s btext ( nurl_lex_src_slice lex bstart - bend bstart )
 
-            : s ctl_name ( nurl_str_cat3 `__` uid ( nurl_str_cat `ctl` ( nurl_str_int bidx ) ) )
-            // The channel operand is READ inline (never let-bound to a
-            // fresh `( Channel T )` local — that would move it under the
-            // borrow checker, and a `( ch )` wrapper would lex as a
-            // call). `: i CTL # i . <ch> ctl` binds only an i64, so no
-            // move; chtext must be a simple read (identifier or a
-            // parenthesised call), `. <ch> ctl` resolving its `ctl`
-            // field. The poll's chan_try_recv reads it the same way.
-            = ctl_decls ( nurl_str_cat ctl_decls
-            ( nurl_str_cat4 `: i ` ctl_name ( nurl_str_cat3 ` # i . ` chtext ` ctl` ) `\n` ) )
+            // The channel operand is READ inline at each use (never let-bound
+            // to a fresh `( Channel T )` local — that would move it under the
+            // borrow checker); chtext must be a simple read (an identifier or
+            // a parenthesised call). The arm's received value waits in its
+            // own slot until the loop is left, and the body runs after the
+            // disarm: a `break` / `continue` in it then means the author's
+            // loop, and a `^` leaves no channel holding the waiter.
+            : s v_name ( nurl_str_cat3 `__` uid ( nurl_str_cat `v` ( nurl_str_int bidx ) ) )
+            : s targ ( nurl_str_cat3 ` [` ttext `] ` )
+            = slot_decls ( nurl_str_cat slot_decls
+            ( nurl_str_cat4 `: ~ ?` ttext ( nurl_str_cat3 ` ` v_name ` @ ?` ) ( nurl_str_cat ttext ` { F }\n` ) ) )
             = arm_block ( nurl_str_cat arm_block
-            ( nurl_str_cat4 `( chan_raw_arm ` ctl_name ( nurl_str_cat ` ` w_name ) ` )\n` ) )
+            ( nurl_str_cat4 `( chan_select_arm` targ chtext ( nurl_str_cat3 ` ` w_name ` )\n` ) ) )
             = disarm_block ( nurl_str_cat disarm_block
-            ( nurl_str_cat4 `( chan_raw_disarm ` ctl_name ( nurl_str_cat ` ` w_name ) ` )\n` ) )
-
-            // Readiness is fully type-erased (chan_raw_poll reads only
-            // the queue length + closed flag), so the element type is
-            // needed only for the chosen arm's chan_try_recv. poll:
-            //   ? ! DONE {
-            //     : i P ( chan_raw_poll CTL )       // 0 none / 1 value / 2 closed
-            //     ? > P 0 { = DONE T : ?T bind ( chan_try_recv [T] ( CH ) ) <body> } {}
-            //   } {}
-            : s poll_name ( nurl_str_cat3 `__` uid ( nurl_str_cat `p` ( nurl_str_int bidx ) ) )
-            : s recv_call ( nurl_str_cat4 `( chan_try_recv [` ttext `] ` ( nurl_str_cat chtext ` )` ) )
-            : s decl ( nurl_str_cat4 `: ?` ttext ( nurl_str_cat3 ` ` bind ` ` ) recv_call )
-            : s p_decl ( nurl_str_cat4 `: i ` poll_name ` ( chan_raw_poll ` ( nurl_str_cat ctl_name ` )` ) )
-            : s fire ( nurl_str_cat4 `= ` done_name ( nurl_str_cat3 ` T ` decl ` ` ) btext )
-            : s guard ( nurl_str_cat4 `? > ` poll_name ( nurl_str_cat3 ` 0 { ` fire ` } {}` ) `` )
-            : s poll ( nurl_str_cat4 `? ! ` done_name
-            ( nurl_str_cat4 ` { ` p_decl ( nurl_str_cat ` ` guard ) ` } {}\n` ) `` )
-            = poll_block ( nurl_str_cat poll_block poll )
+            ( nurl_str_cat4 `( chan_select_disarm` targ chtext ( nurl_str_cat3 ` ` w_name ` )\n` ) ) )
+            // poll:  ? < WHICH 0 { ? > ( chan_select_poll [T] CH ) 0 {
+            //            = WHICH k = V ( chan_try_recv [T] CH ) } {} } {}
+            : s recv_call ( nurl_str_cat4 `( chan_try_recv` targ chtext ` )` )
+            : s take ( nurl_str_cat4 `= ` which_name ( nurl_str_cat3 ` ` ( nurl_str_int bidx ) ` = ` ) ( nurl_str_cat3 v_name ` ` recv_call ) )
+            : s ready ( nurl_str_cat4 `? > ( chan_select_poll` targ chtext ( nurl_str_cat3 ` ) 0 { ` take ` } {}` ) )
+            = poll_block ( nurl_str_cat poll_block
+            ( nurl_str_cat4 `? < ` which_name ( nurl_str_cat3 ` 0 { ` ready ` } {}\n` ) `` ) )
+            // body:  ? == WHICH k { : ?T bind V { … } } {}
+            : s bhead ( nurl_str_cat4 `? == ` which_name ( nurl_str_cat3 ` ` ( nurl_str_int bidx ) ` { : ?` ) ttext )
+            = body_block ( nurl_str_cat body_block
+            ( nurl_str_cat4 bhead ( nurl_str_cat3 ` ` bind ` ` ) ( nurl_str_cat3 v_name ` ` btext ) ` } {}\n` ) )
             = bidx + bidx 1
         } {
             // ── _ → { body }  (default / non-blocking) ──
@@ -14702,26 +14703,27 @@ unsafe @ gen_cond i lex i syms i cg → s {
 
     // ── Assemble the synthesised source ──
     : ~ s src `{\n`
-    = src ( nurl_str_cat src ctl_decls )
-    = src ( nurl_str_cat4 src `: ~ b ` done_name ` F\n` )
+    = src ( nurl_str_cat4 src `: ~ i ` which_name ` -1\n` )
+    = src ( nurl_str_cat src slot_decls )
     ? != 0 has_default {
-        // Non-blocking: poll once, then default.
+        // Non-blocking: poll once; the chosen arm's body, or the default.
         = src ( nurl_str_cat src poll_block )
-        : s dhead ( nurl_str_cat3 `? ! ` done_name ` { ` )
-        : s dtail ( nurl_str_cat3 ` = ` done_name ` T } {}\n` )
-        = src ( nurl_str_cat4 src dhead default_body dtail )
+        = src ( nurl_str_cat src body_block )
+        = src ( nurl_str_cat4 src ( nurl_str_cat3 `? < ` which_name ` 0 ` ) default_body ` {}\n` )
     } {
-        // Blocking: arm / poll / wait / disarm loop.
-        = src ( nurl_str_cat4 src `: i ` w_name ` ( select_waiter_new )\n` )
-        = src ( nurl_str_cat4 src `~ ! ` done_name ` {\n` )
+        // Blocking: arm / poll / wait / disarm until an arm is chosen,
+        // then its body. The waiter is dropped with the block — after the
+        // last disarm, whichever way the body leaves.
+        = src ( nurl_str_cat4 src `: SelWaiter ` w_name ` ( select_waiter_new )\n` )
+        = src ( nurl_str_cat4 src `~ < ` which_name ` 0 {\n` )
         = src ( nurl_str_cat4 src `( select_waiter_prepare ` w_name ` )\n` )
         = src ( nurl_str_cat src arm_block )
         = src ( nurl_str_cat src poll_block )
-        = src ( nurl_str_cat4 src ( nurl_str_cat3 `? ! ` done_name ` { ( select_waiter_wait ` )
+        = src ( nurl_str_cat4 src ( nurl_str_cat3 `? < ` which_name ` 0 { ( select_waiter_wait ` )
         ( nurl_str_cat3 w_name ` )` ` } {}\n` ) `` )
         = src ( nurl_str_cat src disarm_block )
         = src ( nurl_str_cat src `}\n` )
-        = src ( nurl_str_cat4 src `( select_waiter_free ` w_name ` )\n` )
+        = src ( nurl_str_cat src body_block )
     }
     = src ( nurl_str_cat src `}\n` )
 
@@ -33554,7 +33556,7 @@ unsafe @ __ha_is_ret s line → b {
     // (…and the library functions the compiler's own desugarings call by
     // name: a `select` over channels.)
     : ~ s cur ( nurl_str_cat ( nurl_sym_get g_lazy_edges `__roots__` )
-    ` select_waiter_new select_waiter_prepare select_waiter_wait select_waiter_free chan_raw_arm chan_raw_disarm chan_raw_closed chan_raw_poll chan_try_recv` )
+    ` select_waiter_new select_waiter_prepare select_waiter_wait SelWaiter_drop chan_select_arm chan_select_disarm chan_select_poll chan_try_recv` )
     : ~ b first T
     ~ | first < qi qn {
         ? first { = first F } {

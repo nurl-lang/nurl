@@ -126,11 +126,8 @@ $ `stdlib/std/async_ffi.nu`
     ( Vec i ) select_waiters
 }
 
-// A select rendezvous token. One per in-flight `?? {}` select; the
-// selecting thread registers its address on every channel it waits on
-// (chan_raw_arm), then blocks on `c` until any of those channels fires
-// it (a sender / closer calls __select_waiter_fire). `fired` is the
-// condition predicate guarding lost + spurious wakeups; reset to 0 at
+// The block behind a SelWaiter (the select machinery below): `fired` is
+// the condition predicate guarding lost + spurious wakeups, reset to 0 at
 // the top of every scan iteration (select_waiter_prepare).
 : SelectWaiter {
     Mutex m
@@ -315,38 +312,45 @@ $ `stdlib/std/async_ffi.nu`
 
 // ── select (`?? {}`) machinery ─────────────────────────────────────
 //
-// The compiler lowers a `?? { [T] ch → v { … } … }` select into calls
-// to the helpers below. ALL of them are non-generic and take a raw
-// `ctl` pointer (the Channel handle's single field, as an i64) so the
-// element type drops out — the only type-specific operation is the
-// `chan_try_recv [T]` the compiler emits for the chosen arm.
+// The compiler lowers a `?? { [T] ch → v { … } … }` select into calls to
+// the functions below (compiler/nurlc.nu gen_select). Each takes the
+// Channel itself and the select's waiter, so nothing raw reaches the
+// lowered program: the element type is a type argument, and the only
+// element-typed operation is the `chan_try_recv [T]` of the chosen arm.
 //
 // Protocol (no default arm):
-//   loop:
-//     select_waiter_prepare w          // fired = 0
-//     chan_raw_arm ctl_i w             // for every case channel
-//     // poll, in case order:
-//     : ?T bi ( chan_try_recv [T] ch_i )    // atomic pop-if-present
-//     ?? bi { T v → disarm all; <body>; done
-//             F   → ? chan_raw_closed ctl_i { disarm all; <body w/ None>; done } {} }
-//     select_waiter_wait w             // block until fired
-//     chan_raw_disarm ctl_i w          // for every case channel
-//     goto loop
-//   done: select_waiter_free w
+//   : SelWaiter w ( select_waiter_new )
+//   loop until an arm is chosen:
+//     select_waiter_prepare w                   // fired = 0
+//     chan_select_arm [T] ch_i w                // for every case channel
+//     // poll, in case order: the first ready arm is chosen and its
+//     // value taken with chan_try_recv (None when the channel closed)
+//     select_waiter_wait w                      // only if none was ready
+//     chan_select_disarm [T] ch_i w             // for every case channel
+//   run the chosen arm's body                   // after the disarm
+//   (w is dropped when the select's block ends)
 //
 // With a `_ → { … }` default arm there is no waiter at all: poll once,
 // then run the default body.
 
-@ select_waiter_new → i {
+// A select rendezvous token: one per in-flight blocking select. The
+// selecting thread arms it on every channel it waits on, and a sender or
+// closer fires it (__select_waiter_fire). Its block is released by its
+// drop, which the lowering reaches only after every channel let go of it.
+: SelWaiter { s ctl }
+
+@ select_waiter_new → SelWaiter {
     : *SelectWaiter w # *SelectWaiter ( nurl_alloc Z SelectWaiter )
     = . w m ( mutex_new )
     = . w c ( cond_new )
     = . w fired 0
-    ^ # i w
+    ^ @ SelWaiter { # s w }
 }
 
-@ select_waiter_free sink i wp → v {
-    : *SelectWaiter w # *SelectWaiter wp
+@ SelWaiter_drop sink SelWaiter h → v {
+    // This IS the drop: `h` is not dropped again on the way out.
+    ( mem_forget h )
+    : *SelectWaiter w # *SelectWaiter . h ctl
     : Cond c . w c
     ( mem_take c )
     : Mutex m . w m
@@ -356,8 +360,8 @@ $ `stdlib/std/async_ffi.nu`
 
 // Reset the fired flag before a scan iteration arms its channels. Done
 // under the waiter mutex so a fire racing the reset is ordered.
-@ select_waiter_prepare i wp → v {
-    : *SelectWaiter w # *SelectWaiter wp
+@ select_waiter_prepare SelWaiter h → v {
+    : *SelectWaiter w # *SelectWaiter . h ctl
     ( mutex_lock . w m )
     = . w fired 0
     ( mutex_unlock . w m )
@@ -366,14 +370,22 @@ $ `stdlib/std/async_ffi.nu`
 // Block until some armed channel fires us. Standard condvar predicate
 // loop on `fired`, so a fire that arrives between arming and waiting is
 // not lost (fired is already 1 → no sleep).
-@ select_waiter_wait i wp → v {
-    : *SelectWaiter w # *SelectWaiter wp
+@ select_waiter_wait SelWaiter h → v {
+    : *SelectWaiter w # *SelectWaiter . h ctl
     ( mutex_lock . w m )
     ~ == . w fired 0 {
         ( cond_wait . w c . w m )
     }
     ( mutex_unlock . w m )
 }
+
+// Register / unregister the selecting thread's waiter on a channel.
+@ chan_select_arm [A] ( Channel A ) ch SelWaiter h → v { ( __chan_raw_arm # i . ch ctl # i . h ctl ) }
+
+@ chan_select_disarm [A] ( Channel A ) ch SelWaiter h → v { ( __chan_raw_disarm # i . ch ctl # i . h ctl ) }
+
+// Readiness: 0 not ready, 1 a value is queued, 2 closed and drained.
+@ chan_select_poll [A] ( Channel A ) ch → i { ^ ( __chan_raw_poll # i . ch ctl ) }
 
 // Called by a sender / closer (while holding the channel mutex) for
 // each registered selecting thread.
@@ -399,14 +411,14 @@ $ `stdlib/std/async_ffi.nu`
 }
 
 // Register / unregister a selecting thread's waiter on a channel.
-@ chan_raw_arm i ctl i wp → v {
+@ __chan_raw_arm i ctl i wp → v {
     : *ChannelRaw impl # *ChannelRaw ctl
     ( mutex_lock . impl m )
     ( vec_push [i] . impl select_waiters wp )
     ( mutex_unlock . impl m )
 }
 
-@ chan_raw_disarm i ctl i wp → v {
+@ __chan_raw_disarm i ctl i wp → v {
     : *ChannelRaw impl # *ChannelRaw ctl
     ( mutex_lock . impl m )
     : i n ( vec_len [i] . impl select_waiters )
@@ -427,22 +439,12 @@ $ `stdlib/std/async_ffi.nu`
     ( mutex_unlock . impl m )
 }
 
-// True once the channel is closed (drained or not) — a closed channel
-// makes its select case permanently ready (recv yields None).
-@ chan_raw_closed i ctl → b {
-    : *ChannelRaw impl # *ChannelRaw ctl
-    ( mutex_lock . impl m )
-    : b cl != 0 . impl closed
-    ( mutex_unlock . impl m )
-    ^ cl
-}
-
 // Type-erased readiness probe used by the compiler-emitted select scan:
 //   0  not ready (queue empty AND channel open)
 //   1  a value is queued        → the chosen arm's chan_try_recv gets it
 //   2  closed and drained       → chan_recv would yield None (closed signal)
 // Reads only the queue length + closed flag, both element-type-agnostic.
-@ chan_raw_poll i ctl → i {
+@ __chan_raw_poll i ctl → i {
     : *ChannelRaw impl # *ChannelRaw ctl
     ( mutex_lock . impl m )
     : i ql ( vec_len [i] . impl q )

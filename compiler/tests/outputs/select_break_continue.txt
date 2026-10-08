@@ -1,0 +1,7 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+rounds after break: 1
+bodies reached after continue: 0
+returned: 104
