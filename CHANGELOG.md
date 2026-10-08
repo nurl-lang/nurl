@@ -70,7 +70,9 @@ beside each raw one (*Changed*).
   keeping an argument, or an impl that keeps its receiver (the object
   still owns it), are an error where the object is called (h110–h112).
   `sink` and `inout` parameters in a trait's signature no longer make
-  every `dyn` call of the method an arity error.
+  every `dyn` call of the method an arity error, and a trait method with
+  a closure parameter (`( @ v ) f`) parses — its header scan stopped at
+  the closure type's `@`.
 - **A `sink` parameter handed back is the caller's.** `^ x` out of a
   `sink` parameter — a builder that takes its value and returns it
   changed — was read as a second name of the argument the caller had

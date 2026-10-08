@@ -34,7 +34,7 @@ Every class below is closed at its root, with the probes it found:
 
 Gates (pre-production-hardening tip): `tools/fuzz/holes/check.sh` 100
 probes, 88 rejected, 12 clean, **holes: 0** (in CI's build-test job);
-`./build.sh` fixed point and 1219 tests pass; ASan/UBSan/LSan corpus 0
+`./build.sh` fixed point and 1221 tests pass; ASan/UBSan/LSan corpus 0
 failures; `tools/leakgate.sh` zero leaks. Every tracked `.nu` file outside
 the stdlib and the compiler (1884), compiled by each side's own toolchain:
 1397 compile on main and the same 1397 here — after three package sites the
