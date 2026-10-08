@@ -1,6 +1,6 @@
 # Benchmark results — NURL vs C vs Rust vs Node vs Python
 
-Generated `2026-10-08T03:58:45Z` by `bench/bench.sh`. **Do not edit by hand** — the next
+Generated `2026-10-08T07:55:38Z` by `bench/bench.sh`. **Do not edit by hand** — the next
 run overwrites it. The machine-readable form of this same run is
 [`results/latest.json`](results/latest.json), which is what the landing
 page renders its table from.
@@ -11,11 +11,11 @@ page renders its table from.
 |---|---|
 | Host | `GitHub Actions ubuntu-latest runner` |
 | Kernel | `Linux 6.17.0-1022-azure x86_64` |
-| CPU | AMD EPYC 9V74 80-Core Processor (4 logical cores) |
+| CPU | AMD EPYC 9V45 96-Core Processor (4 logical cores) |
 | Memory | 16373452 KiB |
-| Commit | `20b76fd965c43bccd0d45ca27cf1bbf258404e0b` |
-| CI run | https://github.com/nurl-lang/nurl/actions/runs/37724914308 |
-| NURL | `v0.71.0` |
+| Commit | `d8561da68d3f93ce07777bfacff5aa35165e80e1` |
+| CI run | https://github.com/nurl-lang/nurl/actions/runs/37746051259 |
+| NURL | `v0.71.0-4-gd8561da6` |
 | C | Ubuntu clang version 18.1.3 (1ubuntu1) |
 | Rust | rustc 1.99.0 (b940084d7 2026-09-28) |
 | Node | v22.23.3 |
@@ -30,31 +30,38 @@ page renders its table from.
 | Timed runs per cell | up to 5, adaptive: as many as fit in 8000 ms |
 | Timed compiles per cell | 3 (median) |
 | Per-run timeout | 300 s |
+| Workload scale | ×1 — the published contract (`--scale N` / `BENCH_SCALE=N` multiplies it) |
 
 ## 1. Run time (median wall clock, ms — lower is better)
 
 Whole-process wall clock, start-up included. Every implementation of a
-row prints the same line (section 3), so these are five timings of the
-same computation. **Bold** is the fastest cell in the row.
+row prints the same line (section 3), so a row's cells are timings of the
+same computation. **Bold** is the fastest cell in the row; `n/a` is a
+language the row is not implemented in (bench/manifest.tsv).
 
 | Benchmark | NURL | C | Rust | Node | Python |
 |---|---:|---:|---:|---:|---:|
-| _(floor: empty program)_ | _1.227_ | _1.192_ | _1.390_ | _18.735_ | _13.694_ |
-| `lcg` | 34.137 | **34.092** | 34.282 | 1407.727 | 4118.502 |
-| `packet_classifier` | 49.190 | **49.136** | 49.364 | 123.969 | 3548.503 |
-| `ring_write` | 36.874 | **36.867** | 36.997 | 57.156 | 4965.320 |
-| `histogram_bins` | 34.521 | **34.511** | 34.654 | 58.513 | 4733.646 |
-| `prefix_scan` | **18.877** | 18.980 | 19.068 | 55.126 | 3746.805 |
-| `binary_search` | 32.252 | **27.634** | 33.470 | 86.860 | 4907.641 |
-| `sort_window` | 23.236 | **23.189** | 23.365 | 129.990 | 8630.860 |
-| `bloom_filter` | **13.389** | 14.409 | 15.933 | 2194.134 | 6072.163 |
-| `hash_join` | **21.511** | 22.183 | 23.366 | 2707.849 | 6512.212 |
-| `sieve` | 15.926 | **15.571** | 15.863 | 56.321 | 2816.349 |
-| `fib` | **21.573** | 25.756 | 25.806 | 111.728 | 997.659 |
-| `collatz` | 10.579 | **10.534** | 10.752 | 41.387 | 584.808 |
-| `matmul` | **35.114** | 35.306 | 36.351 | 66.022 | 2837.737 |
-| `json_parse` | **6.275** | 6.854 | 9.483 | 30.558 | 30.820 |
-| `nbody` | **20.735** | 34.841 | 20.819 | 74.475 | 2517.631 |
+| _(floor: empty program)_ | _1.149_ | _1.148_ | _1.326_ | _18.317_ | _11.955_ |
+| `lcg` | **29.489** | 29.668 | 29.687 | 1121.174 | 3145.709 |
+| `packet_classifier` | **42.435** | 42.533 | 43.565 | 131.657 | 2625.106 |
+| `ring_write` | 29.656 | **29.625** | 29.860 | 50.484 | 3722.531 |
+| `histogram_bins` | 29.478 | **29.302** | 29.596 | 50.498 | 3491.032 |
+| `prefix_scan` | 16.219 | **16.051** | 16.831 | 47.503 | 2559.716 |
+| `binary_search` | 14.371 | **14.171** | 15.149 | 68.688 | 3504.020 |
+| `sort_window` | 19.812 | **19.560** | 20.238 | 134.476 | 7116.642 |
+| `bloom_filter` | **8.851** | 8.941 | 9.140 | 1610.874 | 4545.023 |
+| `hash_join` | **16.534** | 17.343 | 18.296 | 1923.463 | 4462.282 |
+| `sieve` | 11.930 | 12.079 | **11.574** | 46.188 | 1791.337 |
+| `fib` | 19.203 | 18.794 | **18.739** | 75.285 | 650.526 |
+| `collatz` | 9.345 | **9.216** | 9.419 | 37.851 | 413.445 |
+| `matmul` | **20.477** | 21.415 | 21.264 | 53.817 | 1855.745 |
+| `json_parse` | **5.120** | 5.406 | 7.152 | 26.400 | 26.148 |
+| `nbody` | **17.014** | 25.022 | 17.287 | 60.556 | 1459.717 |
+| `chacha20` | 29.238 | 20.508 | **19.651** | n/a | n/a |
+| `poly1305` | **25.822** | 26.005 | 32.067 | n/a | n/a |
+| `blake2b` | 117.461 | **45.082** | 48.310 | n/a | n/a |
+| `sha512` | 32.899 | **32.755** | 33.016 | n/a | n/a |
+| `x25519` | 35.088 | **30.806** | 31.373 | n/a | n/a |
 
 ## 2. Compile time (median, ms)
 
@@ -74,26 +81,31 @@ at run time, inside their own cells above.
 
 | Benchmark | NURL `nurlc` | NURL `clang` | **NURL total** | NURL rebuild | C `clang` | Rust `rustc` |
 |---|---:|---:|---:|---:|---:|---:|
-| _(floor: empty program)_ | _3.058_ | _84.169_ | _**87.227**_ | _51.741_ | _68.879_ | _51.162_ |
-| `lcg` | 3.178 | 93.470 | **96.648** | 52.409 | 76.016 | 56.872 |
-| `packet_classifier` | 3.341 | 94.096 | **97.437** | 52.825 | 78.693 | 58.114 |
-| `ring_write` | 3.489 | 95.322 | **98.811** | 53.339 | 78.975 | 59.076 |
-| `histogram_bins` | 3.549 | 102.194 | **105.743** | 52.887 | 91.663 | 64.870 |
-| `prefix_scan` | 3.636 | 96.478 | **100.114** | 53.167 | 82.203 | 61.390 |
-| `binary_search` | 3.731 | 96.271 | **100.002** | 53.304 | 80.886 | 62.561 |
-| `sort_window` | 3.918 | 98.075 | **101.993** | 53.525 | 87.268 | 66.307 |
-| `bloom_filter` | 4.329 | 101.200 | **105.529** | 55.353 | 87.831 | 64.207 |
-| `hash_join` | 7.083 | 204.642 | **211.725** | 56.880 | 171.074 | 99.845 |
-| `sieve` | 3.808 | 97.340 | **101.148** | 53.902 | 88.229 | 68.818 |
-| `fib` | 3.426 | 97.915 | **101.341** | 54.796 | 79.208 | 60.554 |
-| `collatz` | 3.493 | 98.551 | **102.044** | 54.279 | 79.623 | 59.246 |
-| `matmul` | 4.788 | 100.440 | **105.228** | 57.562 | 93.163 | 76.406 |
-| `json_parse` | 36.652 | 362.017 | **398.669** | 88.353 | 132.348 | 138.679 |
-| `nbody` | 5.669 | 113.419 | **119.088** | 57.222 | 106.278 | 89.743 |
+| _(floor: empty program)_ | _2.830_ | _80.108_ | _**82.938**_ | _48.102_ | _66.206_ | _50.567_ |
+| `lcg` | 2.964 | 86.645 | **89.609** | 48.361 | 71.360 | 56.303 |
+| `packet_classifier` | 3.030 | 89.258 | **92.288** | 49.057 | 73.582 | 57.655 |
+| `ring_write` | 3.091 | 89.629 | **92.720** | 49.377 | 76.188 | 58.429 |
+| `histogram_bins` | 3.294 | 93.731 | **97.025** | 49.365 | 85.543 | 62.522 |
+| `prefix_scan` | 3.212 | 91.650 | **94.862** | 49.400 | 77.662 | 60.535 |
+| `binary_search` | 3.492 | 91.337 | **94.829** | 50.237 | 78.146 | 63.121 |
+| `sort_window` | 3.344 | 86.894 | **90.238** | 47.206 | 77.346 | 62.668 |
+| `bloom_filter` | 3.735 | 91.593 | **95.328** | 49.643 | 82.185 | 62.388 |
+| `hash_join` | 5.742 | 173.074 | **178.816** | 50.424 | 144.880 | 92.805 |
+| `sieve` | 3.347 | 88.971 | **92.318** | 48.857 | 81.180 | 66.551 |
+| `fib` | 3.158 | 89.242 | **92.400** | 49.043 | 77.787 | 56.854 |
+| `collatz` | 3.081 | 87.609 | **90.690** | 47.592 | 74.735 | 59.096 |
+| `matmul` | 3.940 | 89.729 | **93.669** | 49.984 | 103.070 | 71.603 |
+| `json_parse` | 29.647 | 308.928 | **338.575** | 76.475 | 115.269 | 131.606 |
+| `nbody` | 4.529 | 100.284 | **104.813** | 50.079 | 94.781 | 82.086 |
+| `chacha20` | 21.568 | 209.109 | **230.677** | 66.273 | 103.648 | 159.160 |
+| `poly1305` | 14.686 | 167.674 | **182.360** | 63.026 | 116.697 | 104.822 |
+| `blake2b` | 22.430 | 276.459 | **298.889** | 68.486 | 108.996 | 116.572 |
+| `sha512` | 19.921 | 272.954 | **292.875** | 66.944 | 103.049 | 87.034 |
+| `x25519` | 23.506 | 246.452 | **269.958** | 70.347 | 746.340 | 331.839 |
 
 ## 3. Correctness gate
 
-Each row is timed only when all five implementations print the same
+Each row is timed only when all of its implementations print the same
 line. A speed number for a program computing something else is worthless,
 so a mismatch drops the row out of the tables above rather than being
 reported as a fast cell.
@@ -115,6 +127,11 @@ reported as a fast cell.
 | `matmul` | `393199` | identical across 5 languages |
 | `json_parse` | `20` | identical across 5 languages |
 | `nbody` | `4595260366167553674` | identical across 5 languages |
+| `chacha20` | `3720502699256473595` | identical across 3 languages |
+| `poly1305` | `2498856793803813402` | identical across 3 languages |
+| `blake2b` | `8590291023788228918` | identical across 3 languages |
+| `sha512` | `7091519178481951668` | identical across 3 languages |
+| `x25519` | `6127485567278337128` | identical across 3 languages |
 
 ## 4. Reading the numbers
 
@@ -125,7 +142,7 @@ reported as a fast cell.
   be clever: LLVM will fold an affine recurrence or unroll a loop by a
   different factor in each language. A cell measures optimised throughput
   of the same algorithm, not the source-level iteration count.
-* Nine of the fifteen benchmarks are defined over 64-bit unsigned integers.
+* Nine of the original fifteen benchmarks are defined over 64-bit unsigned integers.
   Python has arbitrary-precision integers and masks; JS has no 64-bit
   integer at all, so those rows use `BigInt` where the algorithm genuinely
   needs 64 bits and Numbers with `Math.imul` where 32 bits suffice. Each
@@ -144,6 +161,16 @@ reported as a fast cell.
   parser in its own box (Python `json`, Node `JSON.parse`, NURL
   `stdlib/ext/json.nu`), and C and Rust — whose boxes are empty — carry a
   small hand-written recursive-descent parser in the benchmark file.
+* `chacha20`, `poly1305`, `blake2b`, `sha512` and `x25519` are NURL / C /
+  Rust only. Their NURL file is a driver around the standard library's own
+  implementation (stdlib/std/chacha20poly1305.nu, hash_blake2b.nu,
+  hash_sha512.nu, x25519.nu) — the row measures the stdlib a NURL program
+  actually gets. C and Rust, whose standard libraries have none of the
+  five, carry the same formulation written out by hand: poly1305-donna-64
+  and the donna-c64 X25519 field with native 128-bit products, scalar
+  ChaCha20 (the stdlib runs it on `v128` lanes). Each source names its
+  RFC/FIPS test vector; x25519 at x1 reproduces RFC 7748's 1000-iteration
+  value.
 * Wall clock on a machine that was not quiesced drifts a few per cent
   between runs, and more on a shared CI runner. Compare deltas between
   runs of the same workflow, not absolutes across machines.
