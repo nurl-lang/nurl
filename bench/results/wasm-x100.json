@@ -2,9 +2,9 @@
   "schema": 1,
   "kind": "wasm",
   "workload_scale": 100,
-  "generated_utc": "2026-10-07T21:40:15Z",
-  "commit": "7f9c039b8eaaff1d5acc9536be869b13d9d084cc",
-  "run_url": "https://github.com/nurl-lang/nurl/actions/runs/37687919677",
+  "generated_utc": "2026-10-08T10:03:05Z",
+  "commit": "f750a8857819e99191803b760307ce203da21196",
+  "run_url": "https://github.com/nurl-lang/nurl/actions/runs/37754569976",
   "host": {
     "label": "GitHub Actions ubuntu-latest runner",
     "kernel": "Linux 6.17.0-1022-azure x86_64",
@@ -13,11 +13,11 @@
     "mem_kb": 16373452
   },
   "toolchains": {
-    "nurl": "v0.70.0-39-g7f9c039b",
+    "nurl": "v0.71.0-6-gf750a885",
     "clang": "Ubuntu clang version 18.1.3 (1ubuntu1)",
     "rustc": "rustc 1.99.0 (b940084d7 2026-09-28)",
     "zig": "zig 0.16.0",
-    "wasmbuilder": "wasmbuilder 0.3.2",
+    "wasmbuilder": "wasmbuilder 0.3.3",
     "wasm_runtime_ref": "wasmtime 48.0.2 (e9f1ea232 2026-09-10)",
     "wasm_runtime_nurl": "nwasm 2.3.0 (pure NURL)"
   },
@@ -32,11 +32,11 @@
     "interpreter_all_languages": true
   },
   "floor_ms": {
-    "native": { "nurl": 1.516, "c": 1.585, "rust": 1.738 },
-    "wasm_ref": { "nurl": 12.511, "c": 7.430, "rust": 36.036, "nurl_no_gc_sections": 152.572 },
-    "wasm_nwasm": { "nurl": 3.238, "c": 3.399, "rust": 4.416 }
+    "native": { "nurl": 1.412, "c": 1.480, "rust": 1.593 },
+    "wasm_ref": { "nurl": 10.657, "c": 6.090, "rust": 33.444, "nurl_no_gc_sections": 147.416 },
+    "wasm_nwasm": { "nurl": 3.633, "c": 3.162, "rust": 4.501 }
   },
-  "floor_compile_ms": { "nurl_frontend": 3.576, "nurl_native": 108.043, "nurl_wasm": 55.105, "nurl_wasm_no_gc_sections": 56.876, "c_native": 62.264, "c_wasm": 44.032, "rust_native": 66.723, "rust_wasm": 80.478 },
+  "floor_compile_ms": { "nurl_frontend": 3.343, "nurl_native": 100.037, "nurl_wasm": 49.628, "nurl_wasm_no_gc_sections": 49.599, "c_native": 57.401, "c_wasm": 41.223, "rust_native": 52.985, "rust_wasm": 67.057 },
   "benchmarks": [
     {
       "name": "lcg",
@@ -45,16 +45,16 @@
       "checksum": "5013499978263536346",
       "verified": true,
       "run_ms": {
-        "native":   { "nurl": 3736.880, "c": 3736.421, "rust": 3736.917 },
-        "wasm_ref": { "nurl": 3763.569, "c": 3763.698, "rust": 3769.446, "nurl_no_gc_sections": 3888.875 },
-        "wasm_nwasm":  { "nurl": 3739.062, "c": 3744.616, "rust": 3743.073 }
+        "native":   { "nurl": 3732.376, "c": 3733.353, "rust": 3735.162 },
+        "wasm_ref": { "nurl": 3759.483, "c": 3759.779, "rust": 3766.430, "nurl_no_gc_sections": 3879.970 },
+        "wasm_nwasm":  { "nurl": 3736.445, "c": 3739.978, "rust": 3739.450 }
       },
       "reps": {
         "native":   { "nurl": 2, "c": 2, "rust": 2 },
         "wasm_ref": { "nurl": 2, "c": 2, "rust": 2, "nurl_no_gc_sections": 2 },
         "wasm_nwasm":  { "nurl": 2, "c": 2, "rust": 2 }
       },
-      "compile_ms": { "nurl_frontend": 3.793, "nurl_native": 125.986, "nurl_wasm": 54.254, "nurl_wasm_no_gc_sections": 55.526, "c_native": 72.245, "c_wasm": 43.092, "rust_native": 73.242, "rust_wasm": 88.876 },
+      "compile_ms": { "nurl_frontend": 3.631, "nurl_native": 117.326, "nurl_wasm": 50.414, "nurl_wasm_no_gc_sections": 52.376, "c_native": 66.158, "c_wasm": 42.836, "rust_native": 56.900, "rust_wasm": 71.526 },
       "bytes": { "nurl_native": 17616, "nurl_wasm": 26846, "nurl_wasm_no_gc_sections": 318717, "c_native": 16008, "c_wasm": 937006, "rust_native": 4537072, "rust_wasm": 2179463 }
     },
     {
@@ -64,16 +64,16 @@
       "checksum": "3449592071",
       "verified": true,
       "run_ms": {
-        "native":   { "nurl": 5446.446, "c": 5446.205, "rust": 5447.148 },
-        "wasm_ref": { "nurl": 5087.062, "c": 5085.736, "rust": 5094.250, "nurl_no_gc_sections": 5209.124 },
-        "wasm_nwasm":  { "nurl": 4675.433, "c": 4677.491, "rust": 4677.027 }
+        "native":   { "nurl": 5446.104, "c": 5445.010, "rust": 5444.951 },
+        "wasm_ref": { "nurl": 5082.200, "c": 5082.968, "rust": 5087.657, "nurl_no_gc_sections": 5202.379 },
+        "wasm_nwasm":  { "nurl": 4670.599, "c": 4675.099, "rust": 4672.517 }
       },
       "reps": {
         "native":   { "nurl": 1, "c": 1, "rust": 1 },
         "wasm_ref": { "nurl": 1, "c": 1, "rust": 1, "nurl_no_gc_sections": 1 },
         "wasm_nwasm":  { "nurl": 1, "c": 1, "rust": 1 }
       },
-      "compile_ms": { "nurl_frontend": 3.987, "nurl_native": 127.111, "nurl_wasm": 54.955, "nurl_wasm_no_gc_sections": 55.757, "c_native": 71.709, "c_wasm": 46.418, "rust_native": 72.769, "rust_wasm": 85.698 },
+      "compile_ms": { "nurl_frontend": 3.728, "nurl_native": 117.377, "nurl_wasm": 50.741, "nurl_wasm_no_gc_sections": 51.915, "c_native": 66.623, "c_wasm": 40.371, "rust_native": 57.521, "rust_wasm": 71.395 },
       "bytes": { "nurl_native": 17616, "nurl_wasm": 26772, "nurl_wasm_no_gc_sections": 318568, "c_native": 16024, "c_wasm": 937028, "rust_native": 4537488, "rust_wasm": 2179375 }
     },
     {
@@ -83,16 +83,16 @@
       "checksum": "6773938213699575018",
       "verified": true,
       "run_ms": {
-        "native":   { "nurl": 4050.329, "c": 4048.219, "rust": 4048.182 },
-        "wasm_ref": { "nurl": 5009.623, "c": 5007.607, "rust": 5013.414, "nurl_no_gc_sections": 5127.897 },
-        "wasm_nwasm":  { "nurl": 4361.261, "c": 4366.867, "rust": 4367.485 }
+        "native":   { "nurl": 4044.981, "c": 4045.027, "rust": 4043.726 },
+        "wasm_ref": { "nurl": 5002.829, "c": 5005.681, "rust": 5010.466, "nurl_no_gc_sections": 5120.341 },
+        "wasm_nwasm":  { "nurl": 4358.173, "c": 4361.177, "rust": 4361.813 }
       },
       "reps": {
         "native":   { "nurl": 1, "c": 1, "rust": 1 },
         "wasm_ref": { "nurl": 1, "c": 1, "rust": 1, "nurl_no_gc_sections": 1 },
         "wasm_nwasm":  { "nurl": 1, "c": 1, "rust": 1 }
       },
-      "compile_ms": { "nurl_frontend": 4.223, "nurl_native": 132.587, "nurl_wasm": 56.211, "nurl_wasm_no_gc_sections": 56.450, "c_native": 73.223, "c_wasm": 44.673, "rust_native": 76.956, "rust_wasm": 89.443 },
+      "compile_ms": { "nurl_frontend": 3.913, "nurl_native": 118.863, "nurl_wasm": 50.939, "nurl_wasm_no_gc_sections": 52.473, "c_native": 67.565, "c_wasm": 41.638, "rust_native": 58.203, "rust_wasm": 72.525 },
       "bytes": { "nurl_native": 17712, "nurl_wasm": 26856, "nurl_wasm_no_gc_sections": 318747, "c_native": 16064, "c_wasm": 937318, "rust_native": 4537488, "rust_wasm": 2179416 }
     },
     {
@@ -102,16 +102,16 @@
       "checksum": "3532155438",
       "verified": true,
       "run_ms": {
-        "native":   { "nurl": 3779.079, "c": 3944.089, "rust": 3736.008 },
-        "wasm_ref": { "nurl": 5302.726, "c": 4764.626, "rust": 4771.618, "nurl_no_gc_sections": 5042.065 },
-        "wasm_nwasm":  { "nurl": 3887.599, "c": 4054.400, "rust": 4285.320 }
+        "native":   { "nurl": 3778.288, "c": 3941.481, "rust": 3732.179 },
+        "wasm_ref": { "nurl": 5293.580, "c": 4754.868, "rust": 4764.571, "nurl_no_gc_sections": 5026.716 },
+        "wasm_nwasm":  { "nurl": 3884.135, "c": 4050.910, "rust": 4280.684 }
       },
       "reps": {
         "native":   { "nurl": 2, "c": 2, "rust": 2 },
         "wasm_ref": { "nurl": 1, "c": 1, "rust": 1, "nurl_no_gc_sections": 1 },
         "wasm_nwasm":  { "nurl": 2, "c": 1, "rust": 1 }
       },
-      "compile_ms": { "nurl_frontend": 4.251, "nurl_native": 133.455, "nurl_wasm": 56.109, "nurl_wasm_no_gc_sections": 60.289, "c_native": 75.320, "c_wasm": 43.982, "rust_native": 78.991, "rust_wasm": 89.168 },
+      "compile_ms": { "nurl_frontend": 3.962, "nurl_native": 121.634, "nurl_wasm": 51.007, "nurl_wasm_no_gc_sections": 52.924, "c_native": 70.481, "c_wasm": 40.312, "rust_native": 60.062, "rust_wasm": 73.803 },
       "bytes": { "nurl_native": 17712, "nurl_wasm": 26922, "nurl_wasm_no_gc_sections": 318871, "c_native": 16072, "c_wasm": 937508, "rust_native": 4537752, "rust_wasm": 2179520 }
     },
     {
@@ -121,16 +121,16 @@
       "checksum": "1287806229",
       "verified": true,
       "run_ms": {
-        "native":   { "nurl": 2009.327, "c": 2008.423, "rust": 2013.962 },
-        "wasm_ref": { "nurl": 875.777, "c": 888.897, "rust": 883.426, "nurl_no_gc_sections": 998.565 },
-        "wasm_nwasm":  { "nurl": 632.261, "c": 820.049, "rust": 635.396 }
+        "native":   { "nurl": 2007.195, "c": 2007.970, "rust": 2012.803 },
+        "wasm_ref": { "nurl": 869.268, "c": 890.615, "rust": 876.810, "nurl_no_gc_sections": 987.809 },
+        "wasm_nwasm":  { "nurl": 632.695, "c": 822.632, "rust": 632.222 }
       },
       "reps": {
         "native":   { "nurl": 3, "c": 3, "rust": 3 },
         "wasm_ref": { "nurl": 5, "c": 5, "rust": 5, "nurl_no_gc_sections": 5 },
         "wasm_nwasm":  { "nurl": 5, "c": 5, "rust": 5 }
       },
-      "compile_ms": { "nurl_frontend": 4.383, "nurl_native": 133.608, "nurl_wasm": 55.765, "nurl_wasm_no_gc_sections": 57.882, "c_native": 77.859, "c_wasm": 44.157, "rust_native": 77.945, "rust_wasm": 90.866 },
+      "compile_ms": { "nurl_frontend": 4.083, "nurl_native": 122.920, "nurl_wasm": 50.975, "nurl_wasm_no_gc_sections": 52.391, "c_native": 71.091, "c_wasm": 40.560, "rust_native": 60.583, "rust_wasm": 75.745 },
       "bytes": { "nurl_native": 17616, "nurl_wasm": 27223, "nurl_wasm_no_gc_sections": 318887, "c_native": 16016, "c_wasm": 938241, "rust_native": 4537712, "rust_wasm": 2179770 }
     },
     {
@@ -140,16 +140,16 @@
       "checksum": "3557324949",
       "verified": true,
       "run_ms": {
-        "native":   { "nurl": 3579.361, "c": 3577.218, "rust": 4083.520 },
-        "wasm_ref": { "nurl": 5735.901, "c": 6017.311, "rust": 6014.131, "nurl_no_gc_sections": 5886.114 },
-        "wasm_nwasm":  { "nurl": 4698.489, "c": 4797.301, "rust": 5180.336 }
+        "native":   { "nurl": 3565.073, "c": 3601.224, "rust": 4087.196 },
+        "wasm_ref": { "nurl": 5728.624, "c": 5997.547, "rust": 6015.777, "nurl_no_gc_sections": 5874.631 },
+        "wasm_nwasm":  { "nurl": 4698.374, "c": 4798.644, "rust": 5183.292 }
       },
       "reps": {
         "native":   { "nurl": 2, "c": 2, "rust": 1 },
         "wasm_ref": { "nurl": 1, "c": 1, "rust": 1, "nurl_no_gc_sections": 1 },
         "wasm_nwasm":  { "nurl": 1, "c": 1, "rust": 1 }
       },
-      "compile_ms": { "nurl_frontend": 4.524, "nurl_native": 131.028, "nurl_wasm": 57.991, "nurl_wasm_no_gc_sections": 57.834, "c_native": 71.972, "c_wasm": 44.356, "rust_native": 81.693, "rust_wasm": 92.564 },
+      "compile_ms": { "nurl_frontend": 4.451, "nurl_native": 122.476, "nurl_wasm": 51.865, "nurl_wasm_no_gc_sections": 53.168, "c_native": 68.847, "c_wasm": 41.014, "rust_native": 62.843, "rust_wasm": 76.926 },
       "bytes": { "nurl_native": 17664, "nurl_wasm": 26951, "nurl_wasm_no_gc_sections": 318615, "c_native": 16016, "c_wasm": 938031, "rust_native": 4538384, "rust_wasm": 2180296 }
     },
     {
@@ -159,16 +159,16 @@
       "checksum": "5384552423",
       "verified": true,
       "run_ms": {
-        "native":   { "nurl": 2557.604, "c": 2554.008, "rust": 2492.522 },
-        "wasm_ref": { "nurl": 3861.159, "c": 2931.445, "rust": 3005.073, "nurl_no_gc_sections": 4035.001 },
-        "wasm_nwasm":  { "nurl": 4407.367, "c": 4264.467, "rust": 4048.184 }
+        "native":   { "nurl": 2552.521, "c": 2552.500, "rust": 2489.862 },
+        "wasm_ref": { "nurl": 3855.960, "c": 2925.777, "rust": 2997.114, "nurl_no_gc_sections": 4030.865 },
+        "wasm_nwasm":  { "nurl": 4391.550, "c": 4279.757, "rust": 4040.687 }
       },
       "reps": {
         "native":   { "nurl": 3, "c": 3, "rust": 3 },
         "wasm_ref": { "nurl": 2, "c": 2, "rust": 2, "nurl_no_gc_sections": 1 },
         "wasm_nwasm":  { "nurl": 1, "c": 1, "rust": 1 }
       },
-      "compile_ms": { "nurl_frontend": 4.722, "nurl_native": 136.805, "nurl_wasm": 56.573, "nurl_wasm_no_gc_sections": 59.004, "c_native": 79.879, "c_wasm": 44.615, "rust_native": 87.003, "rust_wasm": 96.584 },
+      "compile_ms": { "nurl_frontend": 4.491, "nurl_native": 129.195, "nurl_wasm": 52.150, "nurl_wasm_no_gc_sections": 53.321, "c_native": 74.397, "c_wasm": 40.833, "rust_native": 66.656, "rust_wasm": 80.989 },
       "bytes": { "nurl_native": 17616, "nurl_wasm": 27224, "nurl_wasm_no_gc_sections": 319271, "c_native": 16016, "c_wasm": 938534, "rust_native": 4537816, "rust_wasm": 2179872 }
     },
     {
@@ -178,16 +178,16 @@
       "checksum": "235255863",
       "verified": true,
       "run_ms": {
-        "native":   { "nurl": 1373.432, "c": 1635.760, "rust": 1651.260 },
-        "wasm_ref": { "nurl": 1506.310, "c": 1586.604, "rust": 1495.338, "nurl_no_gc_sections": 1635.416 },
-        "wasm_nwasm":  { "nurl": 1169.646, "c": 1311.915, "rust": 1317.213 }
+        "native":   { "nurl": 1371.596, "c": 1634.680, "rust": 1650.164 },
+        "wasm_ref": { "nurl": 1505.458, "c": 1581.403, "rust": 1487.023, "nurl_no_gc_sections": 1629.348 },
+        "wasm_nwasm":  { "nurl": 1162.748, "c": 1305.919, "rust": 1315.950 }
       },
       "reps": {
         "native":   { "nurl": 5, "c": 4, "rust": 4 },
         "wasm_ref": { "nurl": 5, "c": 5, "rust": 5, "nurl_no_gc_sections": 4 },
         "wasm_nwasm":  { "nurl": 5, "c": 5, "rust": 5 }
       },
-      "compile_ms": { "nurl_frontend": 5.408, "nurl_native": 141.275, "nurl_wasm": 58.783, "nurl_wasm_no_gc_sections": 61.272, "c_native": 83.078, "c_wasm": 44.191, "rust_native": 80.848, "rust_wasm": 94.222 },
+      "compile_ms": { "nurl_frontend": 4.986, "nurl_native": 128.971, "nurl_wasm": 54.166, "nurl_wasm_no_gc_sections": 55.547, "c_native": 74.779, "c_wasm": 40.570, "rust_native": 63.312, "rust_wasm": 78.002 },
       "bytes": { "nurl_native": 17712, "nurl_wasm": 27088, "nurl_wasm_no_gc_sections": 319025, "c_native": 16072, "c_wasm": 938585, "rust_native": 4537680, "rust_wasm": 2179634 }
     },
     {
@@ -197,16 +197,16 @@
       "checksum": "0",
       "verified": true,
       "run_ms": {
-        "native":   { "nurl": 2617.343, "c": 2806.523, "rust": 2806.538 },
-        "wasm_ref": { "nurl": 3572.067, "c": 4190.446, "rust": 4171.489, "nurl_no_gc_sections": 3733.230 },
-        "wasm_nwasm":  { "nurl": 3650.741, "c": 3721.848, "rust": 3773.067 }
+        "native":   { "nurl": 2613.418, "c": 2812.091, "rust": 2808.051 },
+        "wasm_ref": { "nurl": 3573.137, "c": 4175.662, "rust": 4150.877, "nurl_no_gc_sections": 3732.345 },
+        "wasm_nwasm":  { "nurl": 3637.681, "c": 3709.370, "rust": 3770.036 }
       },
       "reps": {
         "native":   { "nurl": 3, "c": 2, "rust": 2 },
         "wasm_ref": { "nurl": 2, "c": 1, "rust": 1, "nurl_no_gc_sections": 2 },
         "wasm_nwasm":  { "nurl": 2, "c": 2, "rust": 2 }
       },
-      "compile_ms": { "nurl_frontend": 9.418, "nurl_native": 258.862, "nurl_wasm": 70.961, "nurl_wasm_no_gc_sections": 71.343, "c_native": 126.559, "c_wasm": 44.189, "rust_native": 117.580, "rust_wasm": 128.979 },
+      "compile_ms": { "nurl_frontend": 8.736, "nurl_native": 246.986, "nurl_wasm": 66.910, "nurl_wasm_no_gc_sections": 65.933, "c_native": 118.764, "c_wasm": 40.532, "rust_native": 97.530, "rust_wasm": 112.562 },
       "bytes": { "nurl_native": 25904, "nurl_wasm": 29001, "nurl_wasm_no_gc_sections": 321607, "c_native": 16064, "c_wasm": 945689, "rust_native": 4539864, "rust_wasm": 2181935 }
     },
     {
@@ -216,16 +216,16 @@
       "checksum": "66457900",
       "verified": true,
       "run_ms": {
-        "native":   { "nurl": 1542.363, "c": 1544.886, "rust": 1537.713 },
-        "wasm_ref": { "nurl": 2130.352, "c": 2139.490, "rust": 2175.996, "nurl_no_gc_sections": 2244.251 },
-        "wasm_nwasm":  { "nurl": 1928.691, "c": 2020.141, "rust": 2002.297 }
+        "native":   { "nurl": 1532.260, "c": 1532.337, "rust": 1531.312 },
+        "wasm_ref": { "nurl": 1865.334, "c": 1797.966, "rust": 1817.848, "nurl_no_gc_sections": 1985.470 },
+        "wasm_nwasm":  { "nurl": 1688.323, "c": 1764.896, "rust": 1759.300 }
       },
       "reps": {
         "native":   { "nurl": 5, "c": 5, "rust": 5 },
-        "wasm_ref": { "nurl": 3, "c": 3, "rust": 3, "nurl_no_gc_sections": 3 },
-        "wasm_nwasm":  { "nurl": 4, "c": 3, "rust": 3 }
+        "wasm_ref": { "nurl": 4, "c": 4, "rust": 4, "nurl_no_gc_sections": 4 },
+        "wasm_nwasm":  { "nurl": 4, "c": 4, "rust": 4 }
       },
-      "compile_ms": { "nurl_frontend": 4.552, "nurl_native": 136.309, "nurl_wasm": 56.544, "nurl_wasm_no_gc_sections": 56.942, "c_native": 85.774, "c_wasm": 44.141, "rust_native": 87.811, "rust_wasm": 98.802 },
+      "compile_ms": { "nurl_frontend": 4.410, "nurl_native": 126.260, "nurl_wasm": 52.278, "nurl_wasm_no_gc_sections": 57.913, "c_native": 79.019, "c_wasm": 40.234, "rust_native": 70.486, "rust_wasm": 81.916 },
       "bytes": { "nurl_native": 17712, "nurl_wasm": 26916, "nurl_wasm_no_gc_sections": 318884, "c_native": 16160, "c_wasm": 938325, "rust_native": 4537048, "rust_wasm": 2179404 }
     },
     {
@@ -235,16 +235,16 @@
       "checksum": "922746500",
       "verified": true,
       "run_ms": {
-        "native":   { "nurl": 2346.785, "c": 2818.656, "rust": 2626.666 },
-        "wasm_ref": { "nurl": 3899.039, "c": 4046.294, "rust": 3771.889, "nurl_no_gc_sections": 4232.971 },
-        "wasm_nwasm":  { "nurl": 3509.072, "c": 3167.842, "rust": 2829.505 }
+        "native":   { "nurl": 2342.727, "c": 2818.936, "rust": 2626.140 },
+        "wasm_ref": { "nurl": 3877.538, "c": 4088.527, "rust": 3767.430, "nurl_no_gc_sections": 4213.915 },
+        "wasm_nwasm":  { "nurl": 3504.810, "c": 3151.701, "rust": 2828.851 }
       },
       "reps": {
         "native":   { "nurl": 3, "c": 2, "rust": 3 },
         "wasm_ref": { "nurl": 2, "c": 1, "rust": 2, "nurl_no_gc_sections": 1 },
         "wasm_nwasm":  { "nurl": 2, "c": 2, "rust": 2 }
       },
-      "compile_ms": { "nurl_frontend": 4.107, "nurl_native": 127.703, "nurl_wasm": 54.792, "nurl_wasm_no_gc_sections": 55.622, "c_native": 73.042, "c_wasm": 43.845, "rust_native": 74.338, "rust_wasm": 87.278 },
+      "compile_ms": { "nurl_frontend": 3.866, "nurl_native": 118.667, "nurl_wasm": 50.549, "nurl_wasm_no_gc_sections": 51.148, "c_native": 67.047, "c_wasm": 40.548, "rust_native": 58.169, "rust_wasm": 72.010 },
       "bytes": { "nurl_native": 17672, "nurl_wasm": 26787, "nurl_wasm_no_gc_sections": 318509, "c_native": 16040, "c_wasm": 937001, "rust_native": 4536632, "rust_wasm": 2179010 }
     },
     {
@@ -254,16 +254,16 @@
       "checksum": "685",
       "verified": true,
       "run_ms": {
-        "native":   { "nurl": 1515.430, "c": 1515.140, "rust": 1516.445 },
-        "wasm_ref": { "nurl": 2496.612, "c": 2494.693, "rust": 2498.275, "nurl_no_gc_sections": 2616.683 },
-        "wasm_nwasm":  { "nurl": 2469.543, "c": 2474.820, "rust": 2473.670 }
+        "native":   { "nurl": 1514.820, "c": 1514.040, "rust": 1515.368 },
+        "wasm_ref": { "nurl": 2493.304, "c": 2491.463, "rust": 2495.676, "nurl_no_gc_sections": 2610.877 },
+        "wasm_nwasm":  { "nurl": 2468.319, "c": 2472.306, "rust": 2472.289 }
       },
       "reps": {
         "native":   { "nurl": 5, "c": 5, "rust": 5 },
         "wasm_ref": { "nurl": 3, "c": 3, "rust": 3, "nurl_no_gc_sections": 3 },
         "wasm_nwasm":  { "nurl": 3, "c": 3, "rust": 3 }
       },
-      "compile_ms": { "nurl_frontend": 4.208, "nurl_native": 128.108, "nurl_wasm": 56.262, "nurl_wasm_no_gc_sections": 55.800, "c_native": 72.676, "c_wasm": 44.964, "rust_native": 73.117, "rust_wasm": 88.456 },
+      "compile_ms": { "nurl_frontend": 3.977, "nurl_native": 120.303, "nurl_wasm": 50.719, "nurl_wasm_no_gc_sections": 51.605, "c_native": 68.222, "c_wasm": 40.658, "rust_native": 58.574, "rust_wasm": 72.124 },
       "bytes": { "nurl_native": 17616, "nurl_wasm": 26756, "nurl_wasm_no_gc_sections": 318600, "c_native": 16016, "c_wasm": 937046, "rust_native": 4536520, "rust_wasm": 2178988 }
     },
     {
@@ -273,16 +273,16 @@
       "checksum": "39321553",
       "verified": true,
       "run_ms": {
-        "native":   { "nurl": 3113.838, "c": 3119.654, "rust": 3101.261 },
-        "wasm_ref": { "nurl": 2928.775, "c": 2513.954, "rust": 2346.142, "nurl_no_gc_sections": 3052.211 },
-        "wasm_nwasm":  { "nurl": 2633.148, "c": 2479.184, "rust": 2254.603 }
+        "native":   { "nurl": 3107.978, "c": 3092.851, "rust": 3070.528 },
+        "wasm_ref": { "nurl": 2906.334, "c": 2505.249, "rust": 2339.127, "nurl_no_gc_sections": 3027.149 },
+        "wasm_nwasm":  { "nurl": 2619.820, "c": 2467.788, "rust": 2246.139 }
       },
       "reps": {
         "native":   { "nurl": 2, "c": 2, "rust": 2 },
         "wasm_ref": { "nurl": 2, "c": 3, "rust": 3, "nurl_no_gc_sections": 2 },
         "wasm_nwasm":  { "nurl": 3, "c": 3, "rust": 3 }
       },
-      "compile_ms": { "nurl_frontend": 5.944, "nurl_native": 142.002, "nurl_wasm": 58.362, "nurl_wasm_no_gc_sections": 59.181, "c_native": 85.893, "c_wasm": 44.036, "rust_native": 97.259, "rust_wasm": 105.767 },
+      "compile_ms": { "nurl_frontend": 5.689, "nurl_native": 130.287, "nurl_wasm": 54.103, "nurl_wasm_no_gc_sections": 55.578, "c_native": 80.501, "c_wasm": 41.138, "rust_native": 77.848, "rust_wasm": 88.550 },
       "bytes": { "nurl_native": 17712, "nurl_wasm": 27166, "nurl_wasm_no_gc_sections": 318830, "c_native": 16160, "c_wasm": 938939, "rust_native": 4537912, "rust_wasm": 2180130 }
     },
     {
@@ -292,16 +292,16 @@
       "checksum": "2000",
       "verified": true,
       "run_ms": {
-        "native":   { "nurl": 709.279, "c": 688.094, "rust": 974.339 },
-        "wasm_ref": { "nurl": 1521.928, "c": 607.873, "rust": 1134.981, "nurl_no_gc_sections": 1750.622 },
-        "wasm_nwasm":  { "nurl": 1881.506, "c": 662.486, "rust": 1414.092 }
+        "native":   { "nurl": 704.377, "c": 685.745, "rust": 970.082 },
+        "wasm_ref": { "nurl": 1508.168, "c": 607.955, "rust": 1125.935, "nurl_no_gc_sections": 1741.656 },
+        "wasm_nwasm":  { "nurl": 1877.635, "c": 658.880, "rust": 1411.295 }
       },
       "reps": {
         "native":   { "nurl": 5, "c": 5, "rust": 5 },
         "wasm_ref": { "nurl": 5, "c": 5, "rust": 5, "nurl_no_gc_sections": 4 },
         "wasm_nwasm":  { "nurl": 4, "c": 5, "rust": 5 }
       },
-      "compile_ms": { "nurl_frontend": 48.031, "nurl_native": 683.725, "nurl_wasm": 155.364, "nurl_wasm_no_gc_sections": 155.580, "c_native": 129.376, "c_wasm": 44.310, "rust_native": 176.682, "rust_wasm": 159.616 },
+      "compile_ms": { "nurl_frontend": 46.762, "nurl_native": 661.958, "nurl_wasm": 152.797, "nurl_wasm_no_gc_sections": 151.242, "c_native": 122.299, "c_wasm": 41.382, "rust_native": 155.226, "rust_wasm": 140.894 },
       "bytes": { "nurl_native": 41584, "nurl_wasm": 51193, "nurl_wasm_no_gc_sections": 338561, "c_native": 16632, "c_wasm": 1031498, "rust_native": 4551200, "rust_wasm": 2210493 }
     },
     {
@@ -311,17 +311,112 @@
       "checksum": "4595259045357180835",
       "verified": true,
       "run_ms": {
-        "native":   { "nurl": 3902.326, "c": 3899.370, "rust": 3703.302 },
-        "wasm_ref": { "nurl": 4362.114, "c": 3833.835, "rust": 3899.014, "nurl_no_gc_sections": 4505.207 },
-        "wasm_nwasm":  { "nurl": 4315.121, "c": 3867.225, "rust": 4394.144 }
+        "native":   { "nurl": 3907.948, "c": 3898.580, "rust": 3701.893 },
+        "wasm_ref": { "nurl": 4352.828, "c": 3829.133, "rust": 3887.660, "nurl_no_gc_sections": 4485.235 },
+        "wasm_nwasm":  { "nurl": 4315.867, "c": 3856.582, "rust": 4392.131 }
       },
       "reps": {
         "native":   { "nurl": 2, "c": 2, "rust": 2 },
         "wasm_ref": { "nurl": 1, "c": 2, "rust": 2, "nurl_no_gc_sections": 1 },
         "wasm_nwasm":  { "nurl": 1, "c": 2, "rust": 1 }
       },
-      "compile_ms": { "nurl_frontend": 7.126, "nurl_native": 151.713, "nurl_wasm": 68.549, "nurl_wasm_no_gc_sections": 68.436, "c_native": 102.248, "c_wasm": 44.006, "rust_native": 96.530, "rust_wasm": 107.633 },
+      "compile_ms": { "nurl_frontend": 6.878, "nurl_native": 141.367, "nurl_wasm": 63.049, "nurl_wasm_no_gc_sections": 64.456, "c_native": 96.497, "c_wasm": 40.428, "rust_native": 80.633, "rust_wasm": 92.963 },
       "bytes": { "nurl_native": 17664, "nurl_wasm": 28718, "nurl_wasm_no_gc_sections": 320382, "c_native": 16480, "c_wasm": 941103, "rust_native": 4538368, "rust_wasm": 2180680 }
+    },
+    {
+      "name": "chacha20",
+      "blurb": "ChaCha20 over 16 MiB (RFC 8439)",
+      "measures": "32-bit add/rotate/xor rounds; NURL calls stdlib chacha20_xor (v128 lanes)",
+      "checksum": "8394054855872980010",
+      "verified": true,
+      "run_ms": {
+        "native":   { "nurl": 1948.030, "c": 3948.744, "rust": 4178.149 },
+        "wasm_ref": { "nurl": 4478.189, "c": 4268.531, "rust": 4325.683, "nurl_no_gc_sections": 4590.747 },
+        "wasm_nwasm":  { "nurl": 7892.719, "c": 8202.890, "rust": 8351.613 }
+      },
+      "reps": {
+        "native":   { "nurl": 4, "c": 2, "rust": 1 },
+        "wasm_ref": { "nurl": 1, "c": 1, "rust": 1, "nurl_no_gc_sections": 1 },
+        "wasm_nwasm":  { "nurl": 1, "c": 1, "rust": 1 }
+      },
+      "compile_ms": { "nurl_frontend": 38.283, "nurl_native": 440.831, "nurl_wasm": 146.536, "nurl_wasm_no_gc_sections": 147.589, "c_native": 108.866, "c_wasm": 40.225, "rust_native": 96.438, "rust_wasm": 109.338 },
+      "bytes": { "nurl_native": 32088, "nurl_wasm": 47055, "nurl_wasm_no_gc_sections": 339370, "c_native": 16112, "c_wasm": 944713, "rust_native": 4538088, "rust_wasm": 2180604 }
+    },
+    {
+      "name": "poly1305",
+      "blurb": "Poly1305 MACs over 64 MiB (RFC 8439)",
+      "measures": "Serial 64x64->128 multiply/carry chain through the accumulator, radix 2^44",
+      "checksum": "8248528072407566179",
+      "verified": true,
+      "run_ms": {
+        "native":   { "nurl": 3899.910, "c": 3729.881, "rust": 4222.685 },
+        "wasm_ref": { "nurl": 24255.376, "c": 26434.393, "rust": 29105.358, "nurl_no_gc_sections": 25426.185 },
+        "wasm_nwasm":  { "nurl": 17397.134, "c": 16692.611, "rust": 20085.507 }
+      },
+      "reps": {
+        "native":   { "nurl": 2, "c": 2, "rust": 1 },
+        "wasm_ref": { "nurl": 1, "c": 1, "rust": 1, "nurl_no_gc_sections": 1 },
+        "wasm_nwasm":  { "nurl": 1, "c": 1, "rust": 1 }
+      },
+      "compile_ms": { "nurl_frontend": 22.654, "nurl_native": 305.829, "nurl_wasm": 89.212, "nurl_wasm_no_gc_sections": 104.267, "c_native": 120.002, "c_wasm": 40.813, "rust_native": 114.084, "rust_wasm": 120.437 },
+      "bytes": { "nurl_native": 28016, "nurl_wasm": 33243, "nurl_wasm_no_gc_sections": 322405, "c_native": 16112, "c_wasm": 943650, "rust_native": 4539016, "rust_wasm": 2180883 }
+    },
+    {
+      "name": "blake2b",
+      "blurb": "BLAKE2b-512 over 32 MiB (RFC 7693)",
+      "measures": "64-bit add/xor/rotate G mixes with SIGMA-permuted message gathers",
+      "checksum": "1931941996404473087",
+      "verified": true,
+      "run_ms": {
+        "native":   { "nurl": 24224.943, "c": 6377.683, "rust": 6692.487 },
+        "wasm_ref": { "nurl": 63519.007, "c": 7119.274, "rust": 8866.123, "nurl_no_gc_sections": 63682.420 },
+        "wasm_nwasm":  { "nurl": 47769.350, "c": 13334.235, "rust": 15131.582 }
+      },
+      "reps": {
+        "native":   { "nurl": 1, "c": 1, "rust": 1 },
+        "wasm_ref": { "nurl": 1, "c": 1, "rust": 1, "nurl_no_gc_sections": 1 },
+        "wasm_nwasm":  { "nurl": 1, "c": 1, "rust": 1 }
+      },
+      "compile_ms": { "nurl_frontend": 36.363, "nurl_native": 393.377, "nurl_wasm": 125.784, "nurl_wasm_no_gc_sections": 116.833, "c_native": 111.714, "c_wasm": 40.008, "rust_native": 111.395, "rust_wasm": 119.527 },
+      "bytes": { "nurl_native": 32368, "nurl_wasm": 39107, "nurl_wasm_no_gc_sections": 329582, "c_native": 16208, "c_wasm": 947593, "rust_native": 4540440, "rust_wasm": 2182688 }
+    },
+    {
+      "name": "sha512",
+      "blurb": "SHA-512 over 16 MiB (FIPS 180-4)",
+      "measures": "80-round 64-bit serial compression chain plus the message schedule",
+      "checksum": "6821780943419649564",
+      "verified": true,
+      "run_ms": {
+        "native":   { "nurl": 4978.271, "c": 4886.351, "rust": 5031.705 },
+        "wasm_ref": { "nurl": 5726.508, "c": 5719.254, "rust": 5856.574, "nurl_no_gc_sections": 5871.699 },
+        "wasm_nwasm":  { "nurl": 5996.465, "c": 6010.737, "rust": 6222.685 }
+      },
+      "reps": {
+        "native":   { "nurl": 1, "c": 1, "rust": 1 },
+        "wasm_ref": { "nurl": 1, "c": 1, "rust": 1, "nurl_no_gc_sections": 1 },
+        "wasm_nwasm":  { "nurl": 1, "c": 1, "rust": 1 }
+      },
+      "compile_ms": { "nurl_frontend": 32.191, "nurl_native": 379.765, "nurl_wasm": 111.262, "nurl_wasm_no_gc_sections": 112.801, "c_native": 96.656, "c_wasm": 40.530, "rust_native": 97.100, "rust_wasm": 108.606 },
+      "bytes": { "nurl_native": 32168, "nurl_wasm": 37790, "nurl_wasm_no_gc_sections": 327973, "c_native": 16176, "c_wasm": 943935, "rust_native": 4539080, "rust_wasm": 2181613 }
+    },
+    {
+      "name": "x25519",
+      "blurb": "1000 chained X25519 scalar mults (RFC 7748)",
+      "measures": "Montgomery ladder over GF(2^255-19): radix-2^51 128-bit field multiplies",
+      "checksum": "293414653143968088",
+      "verified": true,
+      "run_ms": {
+        "native":   { "nurl": 5490.785, "c": 5403.714, "rust": 5054.736 },
+        "wasm_ref": { "nurl": 37918.106, "c": 36909.981, "rust": 42414.749, "nurl_no_gc_sections": 38085.298 },
+        "wasm_nwasm":  { "nurl": 26826.593, "c": 26698.443, "rust": 30844.441 }
+      },
+      "reps": {
+        "native":   { "nurl": 1, "c": 1, "rust": 1 },
+        "wasm_ref": { "nurl": 1, "c": 1, "rust": 1, "nurl_no_gc_sections": 1 },
+        "wasm_nwasm":  { "nurl": 1, "c": 1, "rust": 1 }
+      },
+      "compile_ms": { "nurl_frontend": 38.771, "nurl_native": 469.986, "nurl_wasm": 133.401, "nurl_wasm_no_gc_sections": 134.205, "c_native": 781.815, "c_wasm": 41.693, "rust_native": 630.822, "rust_wasm": 647.755 },
+      "bytes": { "nurl_native": 36328, "nurl_wasm": 42792, "nurl_wasm_no_gc_sections": 334257, "c_native": 48856, "c_wasm": 1188854, "rust_native": 4571104, "rust_wasm": 2235282 }
     }
   ]
 }
