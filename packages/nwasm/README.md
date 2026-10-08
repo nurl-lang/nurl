@@ -318,9 +318,12 @@ no linear memory at all. A function it cannot lower falls to tier 7.
   independent values are split into *webs*, and the webs get registers by a
   linear scan that spills the least densely used one: 12 GPRs (r9 among them
   unless a global is read or written inside a loop), 14 xmm registers, the
-  slot's frame home when a web must live in memory. A web live across a call
-  takes a callee-saved register; rdx and rcx go only to webs no record that
-  needs them as scratch touches.
+  slot's frame home when a web must live in memory. A value a loop writes
+  ranks eight times denser than one it only reads, and after allocation a
+  run of a spilled web's reads with a register free across it loads the
+  home once and reads the register. A web live across a call takes a
+  callee-saved register; rdx and rcx go only to webs no record that needs
+  them as scratch touches.
 - **Calls.** A tier-8 function with at most five parameters and one result
   gets a register entry (arguments in registers, the result in rax) beside
   the memory entry every other caller uses. Call sites are `call rel32`,
@@ -341,7 +344,8 @@ no linear memory at all. A function it cannot lower falls to tier 7.
   three-operand forms (`NURL_NWASM_BMI2=0` keeps baseline x86-64).
 - `NURL_NWASM_RJIT=0` keeps tier 7; `NURL_NWASM_RJIT_DBG=1` names every
   function tier 8 declined and why; `NURL_NWASM_RJIT_TRACE=<fidx>` prints a
-  function's webs and where they went; `NURL_NWASM_PERFMAP=1` writes
+  function's webs, where they went and the runs of spilled reads it cached;
+  `NURL_NWASM_PERFMAP=1` writes
   `/tmp/perf-<pid>.map` so `perf` names JIT frames.
 
 ### Tier 7: the template JIT
@@ -390,26 +394,23 @@ the current report is [`bench/WASMRESULTS.md`](../../bench/WASMRESULTS.md),
 which compares this runtime against the reference Cranelift JIT over the same
 wasm modules. Two figures worth stating here:
 
-- on one local machine (i7-5930K, 2026-10-07) nwasm ran 44 of the 45 corpus
+- on the CI runner (AMD EPYC 7763, 2026-10-07) nwasm 2.1.0 ran all 45 corpus
   modules (15 benchmarks × NURL, C and Rust builds) faster than the reference
-  Cranelift JIT, wall clock including start-up, and tied the 45th (`nbody`,
-  Rust: a sqrt → divide latency chain both compilers share); the `nurlc.wasm`
-  self-compile takes 3.7 s against wasmtime's 3.95 s;
+  Cranelift JIT, wall clock including start-up (geometric mean 0.59× for the
+  NURL modules, 0.60× and 0.59× for the C and Rust ones), and 2.3.0 the 15
+  NURL modules again; the `nurlc.wasm` self-compile takes 3.7 s against
+  wasmtime's 3.95 s on an i7-5930K;
 - read any single-machine corpus ratio as "this is what one machine did".
   `wasmbench.sh` measures one revision on one runner, and a runner swap moves
   every column by more than most individual changes do.
 
 ## Self-hosting
 
-The NURL compiler runs on this runtime: `nurlc.wasm --no-borrowck nurlc.nu`
-compiles the full 65k-line compiler **byte-identically to the native compiler**.
-
-The remaining caveat is memory, not correctness: self-compiling `nurlc` keeps
-~11.7 GB of allocations live (native peak RSS), and wasm32 linear memory tops
-out at 4 GiB. With the borrow checker on, the ceiling is hit mid-analysis. The
-runtime aborts loudly on OOM (`nurl: out of memory`) rather than handing back a
-NULL that address 0 makes writable on wasm32. Full self-host *with* borrowck
-needs the compiler's live set under 4 GiB, or memory64.
+The NURL compiler runs on this runtime: `nurlc.wasm nurlc.nu` compiles the
+full 47k-line compiler — ownership rules on — **byte-identically to the
+native compiler**, in 4.7 s at 134 MB peak RSS (i7-5930K, 2026-10-07). The
+runtime aborts loudly on OOM (`nurl: out of memory`) rather than handing back
+a NULL that address 0 makes writable on wasm32.
 
 ## Layout
 

@@ -877,9 +877,11 @@ emit_md() {
 
     printf '## 3. The pure-NURL runtime (`packages/nwasm`)\n\n'
     printf 'The identical modules from section 1, executed by a runtime written in\n'
-    printf 'NURL instead of in Rust: a register-record interpreter with a template\n'
-    printf 'JIT on top (on by default; `NURL_NWASM_JIT=0` keeps the pure interpreter,\n'
-    printf 'and metered or shared-memory runs fall back to it on their own).\n'
+    printf 'NURL instead of in Rust: a register-record interpreter with two JIT tiers\n'
+    printf 'on top — a register-allocating JIT, the default on x86-64, and the template\n'
+    printf 'JIT it falls back to (`NURL_NWASM_RJIT=0` keeps the template tier,\n'
+    printf '`NURL_NWASM_JIT=0` the pure interpreter; metered or shared-memory runs\n'
+    printf 'fall back to the interpreter on their own).\n'
     printf '`vs JIT` is the cost of the runtime; `vs native` is the end-to-end\n'
     printf 'cost of choosing this way to ship. The size of the gap is measured\n'
     printf 'rather than assumed, per benchmark, so it can be aimed at.\n\n'
@@ -903,10 +905,15 @@ emit_md() {
             "${r_rust_ref[$i]}" "${r_rust_nw[$i]}")"
     done
     printf '\n'
-    printf '`nwasm` is faster than the reference runtime on %s NURL modules,\n' \
-        "$(wins r_nurl_nw r_nurl_ref)"
-    printf '%s C modules and %s Rust modules.\n\n' \
-        "$(wins r_c_nw r_c_ref)" "$(wins r_rust_nw r_rust_ref)"
+    local w_nu w_c w_rs
+    w_nu="$(wins r_nurl_nw r_nurl_ref)"; w_c="$(wins r_c_nw r_c_ref)"; w_rs="$(wins r_rust_nw r_rust_ref)"
+    if [[ "$w_c" == "—" && "$w_rs" == "—" ]]; then
+        printf '`nwasm` is faster than the reference runtime on %s NURL modules (the C\n' "$w_nu"
+        printf 'and Rust modules were not run on `nwasm` this time).\n\n'
+    else
+        printf '`nwasm` is faster than the reference runtime on %s NURL modules,\n' "$w_nu"
+        printf '%s C modules and %s Rust modules.\n\n' "$w_c" "$w_rs"
+    fi
     printf 'The same cells as ratios: `vs JIT` is `nwasm` ÷ the reference runtime\n'
     printf 'for the same module, `vs native` is the NURL module on `nwasm` ÷ the\n'
     printf 'native NURL binary.\n\n'

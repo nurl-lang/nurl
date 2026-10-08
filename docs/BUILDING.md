@@ -155,6 +155,18 @@ program (`examples/static_server.nu`: 1,416 emitted functions down to
 469, 6.6 s of clang down to 3.8 s). The final binary is unchanged —
 LTO was already removing the same code, just later.
 
+Since 0.71.0 `nurlc` does not even compile a library function nothing
+reaches. The signature prescan records which names each function body
+spells; following them from the project's own files (every function of
+those is compiled, used or not — their diagnostics are the author's),
+`main`, every `%` block and the hooks the compiler instantiates, a
+function of `stdlib/` or `deps/` that nothing reaches is skipped before
+code generation (an empty `main` beside the json import: 556 M → 154 M
+compiler instructions). Should generated code still name a skipped
+function, it is compiled late from its kept source; `NURL_LAZY_TRACE`
+reports such a late compile. It is off under `--no-dce`, `--lint`, `-g`
+and for files without `main`.
+
 The pass runs over the finished IR text, so it needs no special
 knowledge of closures, generic monomorphisations, drop glue or dyn
 vtables: a function is live when something emitted names it. Roots are
@@ -425,7 +437,8 @@ adds UBSan checks to the **C runtime**, not source-level checks to previously
 generated NURL IR. NURL separately emits checked panic paths for invalid dynamic
 shift counts, integer division/remainder by zero, signed `MIN / -1` and
 `MIN % -1`, and out-of-range/NaN/infinite float-to-integer casts. These checks
-also apply without sanitizers and with borrow checking disabled. Integer `+`,
+also apply without sanitizers and even under the deprecated
+`--no-borrowck`. Integer `+`,
 `-` and `*` wrap at their width. `tools/tests/test_arithmetic_safety.py` checks
 the source panic behavior and valid boundaries in normal, instrumented and
 split builds. Remaining lifetime and safety work is tracked in

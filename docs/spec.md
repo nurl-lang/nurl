@@ -1,6 +1,6 @@
 # NURL Language Reference
 
-**Status:** language specification, grammar v2.7. This document is the
+**Status:** language specification, grammar v2.8. This document is the
 normative reference for the NURL — Neural Unified Representation Language —
 source language as implemented by `compiler/nurlc.nu`.
 
@@ -413,7 +413,9 @@ vouches that its body is memory-safe and leak-free for every caller, the
 way the standard library vouches for its own raw code. Calling an
 `unsafe` function needs no marking. The rest of the program is held to
 the ownership rules (docs/MEMORY.md §6), and **every program accepted
-without an `unsafe` function of its own is memory-safe and leak-free**.
+without an `unsafe` function of its own is memory-safe and leak-free** —
+with one known exception in 0.71.0: a `Slice` of a `Vec` is not yet
+tracked as a view of it (docs/MEMORY.md §6.2).
 `nurlc --unsafe-report` lists the `unsafe` functions a program
 contains outside the standard library — the whole surface a reviewer has
 to trust.
@@ -698,8 +700,11 @@ scalarised sequence everywhere else.
 `*T` is a raw pointer to T. `*void` is rewritten to `i8*` in the IR
 (LLVM forbids `void*`).
 
-`*T` is the FFI ABI escape hatch — NURL's `unsafe`. The borrow checker
-does not track `*T` lifetimes; the programmer is responsible for them.
+Reading or writing through a `*T`, and casting to a pointer type (except
+the null `# *T 0`), is allowed only inside an `unsafe` function (§3.3d),
+whose author vouches for those lifetimes. Holding or passing a `*T` is
+ordinary code; a view from `vec_data` / `string_data` is tracked against
+its container (docs/MEMORY.md §2.10).
 
 ### 4.3 Optional `?T`
 
@@ -1073,9 +1078,9 @@ The index form is chosen by the LHS LLVM type:
 
 | Object type | Index | Effect |
 |---|---|---|
-| struct pointer `%T*` | IDENT | field lookup |
-| raw pointer `T*` | INT literal | array slot, constant index |
-| raw pointer `T*` | expression | array slot, computed index |
+| struct pointer `%T*` | IDENT | field lookup (inside `unsafe` only) |
+| raw pointer `T*` | INT literal | array slot, constant index (inside `unsafe` only) |
+| raw pointer `T*` | expression | array slot, computed index (inside `unsafe` only) |
 | slice `{ T*, i64 }` | INT or expr | slice element via data ptr |
 
 The object may itself be a **field path**, so a struct inside a struct is
@@ -1260,7 +1265,7 @@ Integer `+`, `-` and `*` wrap at the operand width. Integer division and
 remainder by zero panic with `division by zero` / `remainder by zero`.
 Signed `MIN / -1` and `MIN % -1` panic with `division overflow` /
 `remainder overflow`. These checks apply in ordinary and instrumented builds,
-including with borrow checking disabled. Floating division/remainder retain
+even under the deprecated `--no-borrowck`. Floating division/remainder retain
 their IEEE infinity/NaN behavior.
 
 Comparison operators yield `b` (`i1`). All other binary operators
@@ -1559,9 +1564,9 @@ The compilation rule is chosen by the LLVM type of `obj`:
 
 | Object type | Index | Effect |
 |---|---|---|
-| struct pointer `%T*` | IDENT | GEP field lookup + load |
-| raw pointer `T*` | INT | array slot, constant index |
-| raw pointer `T*` | expr | array slot, computed index |
+| struct pointer `%T*` | IDENT | GEP field lookup + load (inside `unsafe` only) |
+| raw pointer `T*` | INT | array slot, constant index (inside `unsafe` only) |
+| raw pointer `T*` | expr | array slot, computed index (inside `unsafe` only) |
 | `{ i1, T }` (opt `?T`) | 0 / 1 | tag / payload |
 | `{ i1, T, E }` (res `!T E`) | 0 / 1 / 2 | tag / Ok payload / Err payload |
 | slice `{ T*, i64 }` | 0 / 1 | data ptr / length |
@@ -1584,6 +1589,9 @@ pattern:
 # *u closure 0                   // extract fn ptr from closure
 # *u closure 1                   // extract env ptr from closure
 ```
+
+Pointer casts (except the null `# *T 0`), closure fn / env extraction and
+`nurl_alloc` compile only inside an `unsafe` function (§3.3d).
 
 The trailing INT (0 or 1) is consumed only when the source expression
 is a closure-shaped struct and the destination type is a pointer — the
@@ -1736,8 +1744,8 @@ whole-module fixed point.
 
 ## 8. Memory model
 
-NURL has no GC. Heap allocations are managed by **single-owner
-auto-drop**: the compiler tracks which binding owns each heap resource
+NURL has no tracing GC (`Rc` cycles are collected, docs/MEMORY.md §7.7).
+Heap allocations are managed by **single-owner auto-drop**: the compiler tracks which binding owns each heap resource
 and inserts the matching free at the end of that binding's scope. See
 [`docs/MEMORY.md`](MEMORY.md) for the implementation-level reference
 and the borrow checker's per-rule semantics.
@@ -1810,13 +1818,14 @@ whichever way it leaves:
 - storing it into a struct or enum literal, a field, or a container
   element moves it; a parameter stored that way is taken over from the
   caller;
-- `: cur root` makes a cursor that borrows `root`'s value;
+- `: ~ cur root` makes a cursor that borrows `root`'s value (an
+  immutable `: cur root` moves it);
 - a borrowed value stored into an owner is copied;
 - a `?` / `??` join hands over what its chosen arm owned, and a fresh
   `? T` / `! T E` returned by a call owns its payload in the arm that
   binds it;
-- `( mem_forget x )` gives up `x`'s value for good — for a hand-written
-  disposer, or a table kept in a global for the program's lifetime;
+- `( mem_forget x )` (only inside an `unsafe` function, §3.3d) gives up
+  `x`'s value for good — for a hand-written disposer;
 - `( mem_take x )` claims `x`'s value — for a container operation that
   hands an element out (`vec_pop`), so the element is owned, not lent.
 - `( mem_put_back x )` stores `x` back into the slot it was read from
@@ -1829,8 +1838,9 @@ borrow.
 ## 9. Borrow checker
 
 The borrow checker is a static analysis pass over the parsed program.
-It is **always on** (`--no-borrowck` is deprecated: a correct program it
-rejects is a false positive to report as a bug), and
+It is **always on** (`--no-borrowck` is deprecated and warns: without the
+checker nothing guarantees memory safety). The rules are conservative,
+and each diagnostic names a fix (docs/MEMORY.md §6.3).
 `--strict-borrowck` (off by default) adds three opt-in checks on top
 (see [`docs/MEMORY.md` §2.9](MEMORY.md)). Diagnostics are **hard
 errors**; the compiler exits non-zero
@@ -1838,23 +1848,26 @@ with a count of violations after walking the whole program. The checker
 is **diagnostic-only** — emitted IR is byte-identical whether it runs or
 not.
 
-Ten rules are enforced. The semantic level is summarised here; for
+Eleven rules are enforced. The semantic level is summarised here; for
 exact phrasing and the soundness contract see
 [`docs/MEMORY.md` §2 and §6](MEMORY.md).
 
 ### 9.1 Move (use-after-move)
 
-A binding is *moved* when consumed: passed to an explicit or inferred
-`sink` parameter, or copied into another binding
-(see §9.2). After a move, reading the binding is rejected.
+A binding is *moved* when consumed: stored into an aggregate, an Option
+or a container, sent on a channel, returned, passed to an explicit or
+inferred `sink` parameter, captured by a closure another thread or fiber
+runs, or bound to another immutable name (see §9.2). After a move —
+including a move on *some* path — reading the binding is rejected. A
+value with nothing to release is copied instead.
 
 ### 9.2 Alias / double-free
 
 An immutable `: T b a` copy of an owned-heap binding `a` is treated as
 a *move* — ownership passes to `b`. A `: ~` mutable copy is treated as
 a borrow / cursor, not a move (this is the conventional disambiguation
-between "owning copy" and "working alias"). Distinguishing borrow from
-move in the general case is the job of a later reference-surface phase.
+between "owning copy" and "working alias"). `: T b a` / `= b a` move an
+owner and copy a borrow; `: ~ T b a` borrows.
 
 ### 9.3 Escape analysis
 
@@ -1944,7 +1957,9 @@ another closure carries its handles outward at any depth.
 
 Merely *loading* a closure value is not a use of its captures — that is
 how a closure's heap environment is reclaimed once it is dead, which
-legitimately happens after the captured handles are freed.
+legitimately happens after the captured handles are freed. A closure kept
+by a struct or by a callee ties that owner to its captures in the same
+way.
 
 ### 9.10 Consume after store
 
@@ -1955,13 +1970,27 @@ when the owner drops it), and so is reading it: the value moved. To keep
 one and hand one on, store a copy (`( string_clone x )`), or read it
 through its owner (`. w s`).
 
-### 9.11 What is NOT checked
+### 9.11 Borrows and views
+
+A read that does not take ownership — `vec_get`, a field read, a match
+payload of a borrowed value, a call result the callee lends — is a
+*borrow* of its source. It may be read and passed on, never released,
+stored as an owner or sent, and it ends when the source is moved,
+released, reassigned or has the field replaced; reading it after that is
+rejected. A view from `string_data` / `vec_data` also ends at any
+mutation that may reallocate the buffer
+([`docs/MEMORY.md` §6.2 and §2.10](MEMORY.md)).
+
+### 9.12 What is NOT checked
 
 The body of an `unsafe` function (§3.3d): raw pointers, pointer casts,
 the raw-memory primitives and foreign calls are its author's to get
 right. Everything else is held to the rules above — every program
 accepted without an `unsafe` function of its own is memory-safe and
-leak-free ([`docs/MEMORY.md` §6.2](MEMORY.md)).
+leak-free ([`docs/MEMORY.md` §6.2](MEMORY.md)), with one known exception
+in 0.71.0: a `Slice` built from a `Vec` (`slice_from_vec`, `slice_sub`,
+`slice_from_raw`, protobuf's `ProtoReader`) is not yet tracked as a view
+of it.
 
 ## 10. Diagnostics
 
@@ -2042,16 +2071,16 @@ Four new diagnostics shipped 2026-05-25 closing the remaining
 
 ### 11.1 Grammar version
 
-This document corresponds to **grammar v2.7** (the `inline` always-inline
-prefix, §3.3c; v2.6 added the `simd` CPU-dispatch prefix, §3.3b, and the
+This document corresponds to **grammar v2.8** (the `unsafe` raw-memory
+prefix, §3.3d; v2.7 added the `inline` always-inline prefix, §3.3c; v2.6 added the `simd` CPU-dispatch prefix, §3.3b, and the
 `v256` lane type; v2.5 the `v128` SIMD lane type, §4.1b; v2.4
 `break` / `continue`; v2.3 dynamic trait objects). The authoritative grammar lives in
 [`spec/grammar.ebnf`](../spec/grammar.ebnf); changes since v1.x are
 tracked in that file's prelude.
 
-A compiler is "v2.7 conformant" if it accepts every program the EBNF
+A compiler is "v2.8 conformant" if it accepts every program the EBNF
 generates and rejects every program the EBNF does not generate, with
-the semantics defined here. A program is "v2.7 portable" if it relies
+the semantics defined here. A program is "v2.8 portable" if it relies
 only on features documented in this spec or in
 [`spec/grammar.ebnf`](../spec/grammar.ebnf) — not on
 compiler-internal accidents.

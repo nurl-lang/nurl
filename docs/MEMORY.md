@@ -26,7 +26,8 @@ specified in spec §3.3d.
   released, reassigned or reallocated (§6.2).
 - **The guarantee (§6.2).** Every program the compiler accepts outside
   the bodies of `unsafe` functions is memory-safe and leak-free, data
-  races and the panic path included.
+  races and the panic path included — with one known exception in
+  0.71.0: a `Slice` of a `Vec` is not yet tracked as a view (§6.2).
 - **Conservative, with a fix.** A program the rules cannot prove safe is
   rejected. Each diagnostic names the rule and a concrete change that
   satisfies it (§6.3).
@@ -381,10 +382,11 @@ that may reallocate (`vec_push`, `vec_extend`, `vec_reserve`, …) or is
 released, moved or reassigned. Reading a view after that is an error:
 
 ```
-: *u p ( vec_data [u] v )
-( vec_push [u] v # u 1 )       // may reallocate
-: i x # i . p 0                // error: pointer 'p' borrowed from 'v' is
-                               //        stale: 'v' was mutated on line N
+: ~ String t ( string_from `a heap string` )
+: s p ( string_data t )
+( string_push_str t `, grown` ) // may reallocate
+( nurl_println p )              // error: pointer 'p' borrowed from 't' is
+                                //        stale: 't' was mutated on line N
 ```
 
 Fetch the view again after the mutation. The rule applies in `unsafe`
@@ -517,6 +519,14 @@ free, no read through a dangling view, no out-of-bounds access, no data
 race, and nothing it allocated is left unreleased, on the panic path as
 much as the normal one (§7.2). Rc cycles are collected (§7.7).
 
+**One known exception (0.71.0).** A `Slice` (`stdlib/core/slice.nu`)
+built from a `Vec` — `slice_from_vec`, `slice_sub`, `slice_from_raw`, and
+protobuf's `ProtoReader`, which holds one — is not yet tracked as a view of
+its Vec the way a `vec_data` pointer is (§2.10). Freeing or growing the
+Vec while the Slice is still read compiles, and reads freed memory (hole
+probe `tools/fuzz/holes/h32`). Until it is tracked, read a Slice only
+while its Vec is alive and unchanged.
+
 The rules that carry it:
 
 - **An owned value moves.** Storing it into an aggregate, an Option or a
@@ -568,7 +578,8 @@ The guarantee rests on a surface that is trusted rather than checked:
   surface a reviewer of that program has to trust.
 - **The standard library and the runtime.** Their raw code, the `Rc`
   cycle collector and the panic journal included, is the base every safe
-  program stands on.
+  program stands on. One of its safe-looking APIs is known not to hold
+  up: the `Slice` constructors (§6.2).
 - **Marker assertions** (`% Send`, `% Sync`, `% NotSend`, `% NotSync`,
   `% Resource`) on types whose safety the compiler cannot see.
 - **The compiler itself.** A program accepted in violation of §6.2 is a
@@ -638,7 +649,9 @@ The guarantee is a property of the rules. The compiler's implementation
 of them is tested continuously:
 
 - **Hole probes.** Every way safe code has been shown to break the
-  guarantee is kept as a program that must be rejected.
+  guarantee is kept as a program that must be rejected
+  (`tools/fuzz/holes/check.sh` counts the ones that still compile: in
+  0.71.0, h32, the `Slice` exception of §6.2).
 - **Inverse-oracle fuzzing.** Generated programs that violate ownership,
   nested in every context the language has (`?` / `??` arms, loops,
   defers, closures, generic bodies, trait methods), must be rejected with

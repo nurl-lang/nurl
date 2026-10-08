@@ -51,6 +51,10 @@ main()
  ├─ emit_header                     — module preamble, runtime declares
  ├─ verify_super_obligations       — require each implemented supertrait
  ├─ scan_dyn_types       (prepass)  — %Trait dyn-object vtables needed
+ ├─ lazy_reach                      — library functions (stdlib/, deps/)
+ │                                    nothing reaches are skipped by the
+ │                                    walk below (off under --no-dce,
+ │                                    --lint, -g; NURL_LAZY_TRACE)
  ├─ parse_program                   — THE fused walk (parse + typecheck
  │                                    + borrowck + memdrop + IR emit,
  │                                    one function at a time; deferred
