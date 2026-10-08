@@ -1,0 +1,161 @@
+# Pre-production hardening: views, sealed representations, exclusive calls
+
+Goal (owner, 2026-10-08), branch `pre-production-hardening`: close the
+`Slice` hole (h32), the one known exception to the 0.71.0 guarantee
+([`MEMORY.md` §6.2](MEMORY.md)), with the best design rather than a patch;
+fix every hole found on the way at its root; keep or improve performance.
+This is the v1.0 hardening pass of [`improvements_for_v1.md`](improvements_for_v1.md)
+§2 ("close the remaining safe-looking ownership holes", "check all
+allocation and capacity arithmetic").
+
+> Exit criterion: `tools/fuzz/holes/check.sh` reports `holes: 0` over every
+> probe, held by CI; MEMORY.md §6.2 states the guarantee with **no**
+> exception; every gate below is green; compile and run time are at or
+> below the baseline.
+
+## Baseline (main 92a83993, 2026-10-08, clean `build/`)
+
+| measure | value |
+|---|---|
+| `./build.sh` | build 1m05s, tests 2m35s (1225 tests), wall 3:40 |
+| self-compile `nurlc compiler/nurlc.nu` | 11.21 G instructions:u, 8.67 G cycles, 2.22 s, max RSS 74 MB |
+| compile set (46 package mains + 10 tests/stdlib) | 34.31 G instructions:u |
+| `bench/perfstat.sh` micro set | saved TSV (15 kernels; e.g. hash_join 321.6 M instr) |
+| `tools/vec_parity.sh` | safe = raw on sum / put / get |
+| sanitized corpus (`run_san_tests.sh`) | 1205 pass, 20 skip, 0 SAN_FAIL (315 s) |
+| `tools/leakgate.sh` | zero leaks |
+| reject fuzz (`FUZZ_GEN=reject fuzz.sh 1 400`) | 400/400 caught |
+| hole probes | **48 holes** (h32 + 47 found while preparing this plan) |
+
+## The holes, by root cause
+
+Probing the shapes around h32 found it is one instance of seven classes.
+Every probe below compiles today without `unsafe` and faults under
+ASan/LSan.
+
+| class | probes | root cause |
+|---|---|---|
+| **V — views not tracked as values** | h32–h50 | A view (a pointer into another value's buffer) is tracked only while it is a `*T` / `s` *binding*. Held in a struct (`Slice`, `ProtoReader`, a user struct, h37/h46), an Option (h49), a container (h40), a closure (h39), a global (h47), returned through a function (h35/h48), assigned to a longer-lived binding (h50) or sent to a thread (h44), it is an untracked copy. Handle borrows escape the same ways (h50). |
+| **R — representations can be forged** | h51–h62 | Safe code can build a struct literal of a raw-representation type (`Slice`, `Vec`, `Box`), write its fields, read its raw fields, or cast an integer to it (h58/h59: the cast check covers only `*T` targets). Stdlib functions whose safety depends on the caller (`slice_from_raw`, `vec_borrow_raw`, `vec_set_len`) are callable from safe code. |
+| **A — aliased call arguments** | h63–h68 | A call may pass a container to a parameter that mutates it together with a borrow or view of it (or the same container twice); inside the callee the two names are unrelated, so the mutation leaves the other dangling. |
+| **C — closure effects** | h69–h71 | A closure that mutates a captured container ends views/borrows of it only when the closure is *built* and only for `*T`/`s` views; running it later (directly or through a callee) is not a mutation of the capture. |
+| **K — container accessors by name** | h72–h76 | `vec_get` is a borrow by name (`__last_value_borrow__`); `map_get`, `box_get`, `deque_get`, `btree_get` results are not, so `map_set` / `box_set` / `deque_pop_*` / `btree_set` replacing the value leave them dangling. |
+| **G — allocation arithmetic** | h77–h79 | `n * size` / `n + 1` wrap in `vec_with_cap`, `vec_zeroed`, `string_with_cap`: a tiny buffer with a huge capacity or length. |
+
+## Design
+
+### V. Views are values (closes h32)
+
+A **view** is a value that points into a buffer another binding owns:
+`string_data` / `vec_data` / `slice_data` results, a `Slice`, and anything
+that holds one — a struct with a view field, an Option or Result of one, a
+container of them, a closure that captured one. Every view carries its
+**sources**: the owners whose buffers it points into (borrows flatten to
+owners, as today).
+
+- **Sources are computed where a view is produced**: the producer
+  built-ins; a call whose result type can hold a view (sources = the
+  arguments its summary says the result views — a new `retview` summary
+  derived from the return statements — and every owning/view argument for
+  a callee not yet summarised); a struct/Option/Result literal (union of
+  its view fields); a field read or payload of a view (same sources); a
+  copy (same sources); a keeping container (the container now depends on
+  the sources, as h27 does today for `s`).
+- **A view ends** when a source is released, moved, reassigned, has a
+  field replaced, goes out of scope, or is **mutated in a way that may
+  reallocate** — inline (`vec_push`, `string_push_*`, …), through a callee
+  whose mutation summary covers that parameter, or by running a closure
+  whose body does (class C). Reading an ended view is an error naming the
+  line where it ended. Dropping it is not a read.
+- **A view may not outlive its sources**: returning one whose sources are
+  locals, storing one into a global, or capturing one in a closure that
+  crosses a thread is rejected. Raw pointers are not `Send`.
+- **One mechanism.** This runs in the module-end walk (`bck_walk_seq`),
+  where every summary is final, as a `view` dependency beside the existing
+  handle borrows (`bs_` / `bb_`) and closure dependencies (`dd_`). The
+  codegen-time pointer table (`__ptr_src__` / `__ptr_dead__`) it
+  generalises is retired once the walk reproduces its verdicts
+  (`diag_stale_borrow*` goldens, h07, h25–h29).
+- The code that *reads* a view is unchanged: no runtime cost.
+
+### R. Sealed representations
+
+A struct type is **sealed** when it declares a raw-pointer (`*T`) field,
+or it is a library handle (a `T_drop` hook) whose representation is raw —
+every standard-library handle, and a program's own handle whose hooks are
+`unsafe`. Outside `unsafe` functions (and the trusted standard library):
+
+- a sealed type cannot be built with a literal, its fields cannot be
+  written, and its raw (`s`, `*T`) fields cannot be read — the safe API
+  (`slice_len`, `slice_empty`, `vec_len`, …) is the interface;
+- a cast to a type that is or contains a pointer (raw pointer, `s`, a
+  handle, a closure, an aggregate of them) is rejected — the null
+  `# *T 0` stays legal;
+- a call to a function with a raw-pointer parameter is rejected (the
+  caller vouches for what the pointer covers: `slice_from_raw`,
+  `vec_borrow_raw`, `vec_borrow_into`), and `vec_set_len` joins the
+  raw-memory primitives (it declares raw writes initialised).
+- Trusted code relies only on invariants the types enforce: a field safe
+  code may write (`ProtoReader.pos`) is validated before it reaches raw
+  arithmetic.
+
+### A. Exclusive calls
+
+At a call, an argument whose parameter the callee may mutate (its
+mutation summary; `inout`; a container mutator) must not also reach the
+callee through another argument: the same owner twice, or a borrow or
+view of it. A handle borrow conflicts with a mutation that may drop or
+replace elements; a view conflicts with any mutation. The message names
+both arguments and the fix (take a copy, or split the call).
+
+### C. Closure effects
+
+A closure's body is summarised like a function's: which captures it
+mutates, reallocates or drops elements of. Running it — a direct call, or
+handing it to a callee that may invoke it — applies that effect to the
+captures at that point, ending the views and borrows of them exactly as
+the inline statements would.
+
+### K. Accessor results are borrows by summary
+
+Whether a call result is lent from an argument is a summary, never a
+name: a value read out of a parameter's storage (directly, or through a
+raw load in trusted code) is lent from that parameter. `vec_get`'s name
+special case goes; `map_get`, `box_get`, `deque_get`, `btree_get`, … get
+the same answer from their bodies. Which calls drop or hand out elements
+(`bck_is_elem_dropper`) is likewise derived from the summaries of the
+trusted bodies, not a list.
+
+### G. Checked allocation arithmetic
+
+One checked `size × count + extra` helper in the runtime and the stdlib
+growth paths (`Vec`, `String`, `HashMap`, `Set`, `Deque`, `BTree`,
+`vec_zeroed`, `vec_resize_zeroed`, `string_repeat`, …): a negative or
+unrepresentable size panics with a message before anything is allocated.
+The check sits on growth (cold) paths only.
+
+## Order of work
+
+1. Probes (done: h33–h79) and this plan.
+2. **R** — sealed types, pointer casts, raw-parameter calls (small, closes
+   12 probes, and V relies on safe code being unable to forge a view).
+3. **K** — lend summaries for accessors; derived element droppers.
+4. **V** — views in the walk; retire the pointer table.
+5. **A** and **C** — exclusive calls, closure effects (both read the
+   mutation summaries V needs).
+6. **G** — checked allocation arithmetic.
+7. Corpus migration (report mode first: every rejection in the tree is
+   triaged as a real bug or a rule to refine), docs (MEMORY.md §6, spec,
+   LIMITATIONS, CHANGELOG, ROADMAP, improvements_for_v1), the hole check
+   in CI, genreject cores for views and aliasing.
+
+Each step keeps every gate green: `./build.sh`, `tools/tree_sweep.sh`
+(every changed verdict read and justified), `run_san_tests.sh`,
+`tools/leakgate.sh`, the hole check, reject fuzz, `bench/perfstat.sh`,
+`tools/vec_parity.sh`, self-compile and compile-set instructions.
+
+## Out of scope here (tracked in improvements_for_v1.md)
+
+Lock-held-by-path proofs for shared `Arc` mutation, fiber handle
+lifetime, unsupported-async platforms — concurrency and runtime items, not
+the single-threaded memory holes this branch closes.
