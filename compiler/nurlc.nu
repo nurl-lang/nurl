@@ -6843,12 +6843,13 @@ unsafe @ nurl_cg_lbl i h s hint → s {
 @ mem_raw_lendback i syms i cg s cn s words s res s rlt → v {
     ? | == 0 ( nurl_str_len words ) ! ( seq ( nurl_llty rlt ) `i8*` ) { ^ } {}
     : ~ s guard ( nurl_sym_get syms `__last_call_guard__` )
-    // A callee that hands over its result on no path (`__ret_unowned`) is
-    // not asked, so it has no guard — but a temporary its result IS still
+    // A callee that hands over its result on no path (`__ret_unowned`, or a
+    // raw pointer: __ret_never_owned) is not asked, so it has no guard —
+    // but a temporary its result IS still
     // needs a slot to become the result's owner in: one holding the answer
     // every path gives, null. Published, so the binding, the consuming
     // argument or the return takes it like any guard.
-    ? & == 0 ( nurl_str_len guard ) != 0 ( nurl_sym_len2 syms cn `__ret_unowned` ) {
+    ? & == 0 ( nurl_str_len guard ) ( __ret_never_owned syms cn ) {
         = guard ( nurl_cg_reg cg )
         ( nurl_print `  ` ) ( nurl_print guard ) ( nurl_print ` = alloca i8*\n` )
         ( nurl_print `  store i8* null, i8** ` ) ( nurl_print guard ) ( nurl_print `\n` )
@@ -7813,8 +7814,18 @@ unsafe @ origin_guard_retained i root → b {
     ? & == 0 ( nurl_sym_len2 syms cn `__nurlfn` ) == 0 ( nurl_sym_len2 syms gn `__garity` )
     { ^ ( nurl_str_cat `` `` ) } {}
     ? != 0 ( nurl_str_len ( __ret_owned_of syms cn ) ) { ^ ( nurl_str_cat `` `` ) } {}
-    ? != 0 ( nurl_sym_len2 syms cn `__ret_unowned` ) { ^ ( nurl_str_cat `` `` ) } {}
+    ? ( __ret_never_owned syms cn ) { ^ ( nurl_str_cat `` `` ) } {}
     ^ ( mem_capture_return_guard cg res rlt )
+}
+
+// A result no path hands over: every path answers "not owned"
+// (`__ret_unowned`), or it is a raw pointer (`→ *T`, a generic instance's
+// too: `vec_data [u8]`), which nothing owns — asking per call, as every
+// instance of a generic raw accessor was asked, cost the crypto kernels
+// 2 % of their instructions.
+@ __ret_never_owned i syms s cn → b {
+    ? != 0 ( nurl_sym_len2 syms cn `__ret_unowned` ) { ^ T } {}
+    ^ ( __fn_raw_ret syms cn )
 }
 
 // Closure and dyn calls obey the same result protocol without a static name.
