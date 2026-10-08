@@ -166,28 +166,33 @@
 
 // The byte size of `n` items of `size` bytes each, or the panic: a
 // negative count, or a product past what a size can hold.
-@ alloc_size i size i n → i {
+inline @ alloc_size i size i n → i {
+    // (Both under 2^31: the product fits — no division on the common path.)
+    ? & & >= n 0 < n 2147483648 < size 2147483648 { ^ * size n } {}
     ? | < n 0 & > size 0 > n / 9223372036854775807 size { ( __alloc_size_panic size n ) } {}
     ^ * size n
 }
 
 // `a + b` for two counts (a length and what is added to it), or the panic.
-@ alloc_count_add i a i b → i {
+inline @ alloc_count_add i a i b → i {
     ? | | < a 0 < b 0 > a - 9223372036854775807 b { ( __alloc_count_panic a b ) } {}
     ^ + a b
 }
 
 // The capacity a growing buffer doubles to from `cap` (4 when empty)
 // until it holds `need` — `need` itself where doubling would overflow.
-@ alloc_grow_cap i cap i need → i {
+inline @ alloc_grow_cap i cap i need → i {
     : ~ i c ? > cap 0 cap 4
-    ~ < c need { = c ? > c 4611686018427387903 need * c 2 }
+    // (Up to 2^62 every doubling below `need` fits: one test, not one per
+    // doubling.)
+    ? > need 4611686018427387904 { ^ ? > c need c need } {}
+    ~ < c need { = c * c 2 }
     ^ c
 }
 
 // …a power of two from `first` (a hash table's), or the panic when `need`
 // is past the largest one.
-@ alloc_grow_pow2 i cap i need i first → i {
+inline @ alloc_grow_pow2 i cap i need i first → i {
     ? > need 4611686018427387904 { ( __alloc_size_panic 1 need ) } {}
     : ~ i c ? > cap 0 cap first
     ~ < c need { = c * c 2 }
