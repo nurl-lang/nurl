@@ -786,7 +786,7 @@ unsafe @ nurl_tcp_read i conn s buf i cap → i {
     ^ -1
 }
 
-@ nurl_tcp_write i conn s buf i len → i {
+unsafe @ nurl_tcp_write i conn * u buf i len → i {
     : SockTab st ( __tab )
     ? <= len 0 { ^ 0 } {}
     : ( Vec u ) src ( vec_new [u] )
@@ -836,7 +836,7 @@ unsafe @ nurl_tcp_read i conn s buf i cap → i {
     ^ rc
 }
 
-@ nurl_tcp_read_nowait i conn s buf i len → i {
+unsafe @ nurl_tcp_read_nowait i conn * u buf i len → i {
     : SockTab st ( __tab )
     : b previous ( sock_is_nonblock st conn )
     ( sock_set_nonblock st conn T )
@@ -845,7 +845,7 @@ unsafe @ nurl_tcp_read i conn s buf i cap → i {
     ^ got
 }
 
-@ nurl_tcp_write_nowait i conn s buf i len → i {
+unsafe @ nurl_tcp_write_nowait i conn * u buf i len → i {
     : SockTab st ( __tab )
     ? == ( sock_write_wait_ms st conn ( monotonic_ns ) ) 0 { ^ -1 } {}
     : b previous ( sock_is_nonblock st conn )
@@ -875,7 +875,7 @@ unsafe @ nurl_reactor_wait_io i fd i events i timeout_ms → i {
 // call). The sans-IO stack has no scatter/gather send, so it is two
 // writes under nurl_tcp_write2's contract: the count spans both
 // segments, head first, and a short head is a short total.
-@ nurl_tcp_write2 i conn s b1 i n1 s b2 i n2 → i {
+unsafe @ nurl_tcp_write2 i conn * u b1 i n1 * u b2 i n2 → i {
     ? <= n1 0 { ^ ( nurl_tcp_write conn b2 n2 ) } {}
     : i w1 ( nurl_tcp_write conn b1 n1 )
     ? | < w1 n1 <= n2 0 { ^ w1 } {}
@@ -995,7 +995,7 @@ unsafe @ nurl_udp_close i handle → v {
     ^ 0
 }
 
-@ __udp_send SockTab st i handle i ip i port s buf i n → i {
+unsafe @ __udp_send SockTab st i handle i ip i port * u buf i n → i {
     // NOT `n <= 0 → 0`. A zero-length datagram is a datagram: it is
     // sent, it arrives, and the receiver reads 0 bytes — which is a
     // different fact from "nothing has arrived yet". Short-circuiting
@@ -1015,7 +1015,7 @@ unsafe @ nurl_udp_close i handle → v {
     ^ r
 }
 
-@ nurl_udp_send_to i handle s buf i n s host i port → i {
+unsafe @ nurl_udp_send_to i handle * u buf i n s host i port → i {
     : SockTab st ( __tab )
     : i ip ( __resolve host )
     ? < ip 0 {
@@ -1024,7 +1024,7 @@ unsafe @ nurl_udp_close i handle → v {
     ^ ( __udp_send st handle ip port buf n )
 }
 
-@ nurl_udp_send i handle s buf i n → i {
+unsafe @ nurl_udp_send i handle * u buf i n → i {
     ^ ( __udp_send ( __tab ) handle -1 0 buf n )
 }
 
@@ -1054,7 +1054,7 @@ unsafe @ __udp_recv i handle s buf i n → i {
     ^ -1
 }
 
-@ nurl_udp_recv_from i handle s buf i n → i { ^ ( __udp_recv handle buf n ) }
+unsafe @ nurl_udp_recv_from i handle * u buf i n → i { ^ ( __udp_recv handle buf n ) }
 
 // ── address-carrying UDP (§18b-ii) ───────────────────────────────
 //
@@ -1088,7 +1088,7 @@ unsafe @ __udp_addr_port s addr → i {
     ^ | << # i . ap 2 8 # i . ap 3
 }
 
-@ nurl_udp_recv_into i handle s buf i cap s addr_out → i {
+unsafe @ nurl_udp_recv_into i handle * u buf i cap * u addr_out → i {
     : i got ( __udp_recv handle buf cap )
     ? < got 0 { ^ got } {}
     ? != # i addr_out 0 {
@@ -1098,7 +1098,7 @@ unsafe @ __udp_addr_port s addr → i {
     ^ got
 }
 
-@ nurl_udp_send_addr i handle s buf i n s addr → i {
+unsafe @ nurl_udp_send_addr i handle * u buf i n * u addr → i {
     : i ip ( __udp_addr_ip addr )
     ? < ip 0 { ^ -1 } {}
     ^ ( __udp_send ( __tab ) handle ip ( __udp_addr_port addr ) buf n )
@@ -1194,7 +1194,7 @@ unsafe @ nurl_udp_addr_format s addr → s {
 // (the caller treats a failed reuseport/GSO opt-in as "not available").
 @ nurl_udp_setsockopt_int i handle i level i opt i val → i { ^ -1 }
 
-@ nurl_udp_recv i handle s buf i n → i { ^ ( __udp_recv handle buf n ) }
+unsafe @ nurl_udp_recv i handle * u buf i n → i { ^ ( __udp_recv handle buf n ) }
 
 // The address the last received datagram came from, cached per fd so
 // the borrowed view outlives the call the way the ABI promises.

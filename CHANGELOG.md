@@ -9,8 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 The memory guarantee has **no exception**: 0.71.0's one known hole (a
-`Slice` of a `Vec`, probe h32) is closed, along with 71 more found around
-it (probes h33–h103), each at its root — every probe is now rejected or
+`Slice` of a `Vec`, probe h32) is closed, along with 72 more found around
+it (probes h33–h104), each at its root — every probe is now rejected or
 runs clean under ASan/UBSan/LSan, and `tools/fuzz/holes/check.sh` runs in
 CI. Compile time is 3.2 % below 0.71.0's main (self-compile instructions),
 run time is flat or better. Code that handed raw pointers or caller-given
@@ -65,7 +65,10 @@ beside each raw one (*Changed*).
   `slice_data`, `arena_alloc`, `box_ptr`) is too, like one that takes one.
   A raw pointer could become a string (`( nurl_println ( vec_data v ) )`)
   and a CSV cell, which is not NUL-terminated, was handed out as one
-  (h97–h101, h103).
+  (h97–h101, h103). A generic standard-library internal (`__vec_grow`)
+  slipped past the check that keeps `__` functions inside the library —
+  its instance name hid the declaration — and could be handed a string
+  for a Vec's control block (h104).
 - **A null string reads as the empty string.** `# s 0` and an unset
   `getenv` crashed `nurl_println`, `nurl_str_len`, `strlen`, `string_from`
   and every string primitive built on them; a C string parameter
@@ -117,7 +120,7 @@ beside each raw one (*Changed*).
 - `slice_of_str`, `slice_byte`, `slice_parse_int`, `slice_parse_float`,
   `string_adopt`, `write_string`, `b64_encode_string`, `utf8_decode_at`:
   the safe forms of the raw-length helpers above.
-- Hole probes h33–h103 (`tools/fuzz/holes/`) and their check in CI: each
+- Hole probes h33–h104 (`tools/fuzz/holes/`) and their check in CI: each
   must be rejected or run clean under the sanitizers.
 - **Five cryptographic benchmark rows** — `chacha20`, `poly1305`,
   `blake2b`, `sha512` and `x25519` — in NURL, C and Rust. The NURL side

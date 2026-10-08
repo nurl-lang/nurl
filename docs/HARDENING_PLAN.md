@@ -27,11 +27,11 @@ Every class below is closed at its root, with the probes it found:
 | P — field paths | a field argument lends and loses its field; nested fields are their binding's storage | h82–h88 |
 | G — allocation arithmetic | `alloc_size` / `alloc_count_add` / `alloc_grow_cap` / `alloc_grow_pow2` | h77–h79 |
 | temporaries | a part of a temporary is copied; one that cannot be is an error | h96 |
-| F — the foreign surface | `"nurl.raw"` builtins, raw-result calls and `*u` buffer types are `unsafe` to call; safe forms beside each | h97–h101, h103 |
+| F — the foreign surface | `"nurl.raw"` builtins, raw-result calls and `*u` buffer types are `unsafe` to call; safe forms beside each; generic stdlib internals stay internal | h97–h101, h103, h104 |
 | N — null strings | runtime prints and `"nurl.cstr"` parameters read null as `""` | h102 |
 
-Gates (pre-production-hardening tip): `tools/fuzz/holes/check.sh` 91
-probes, 85 rejected, 6 clean, **holes: 0** (in CI's build-test job);
+Gates (pre-production-hardening tip): `tools/fuzz/holes/check.sh` 92
+probes, 86 rejected, 6 clean, **holes: 0** (in CI's build-test job);
 `./build.sh` fixed point and 1211 tests pass; ASan/UBSan/LSan corpus 0
 failures; `tools/leakgate.sh` zero leaks; the package compile sweep
 (441 files that compiled before) has no new failure after the migration.

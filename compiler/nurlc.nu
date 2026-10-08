@@ -20882,8 +20882,21 @@ unsafe @ mem_own_add_user_drop i syms i cg s ptr s vt → v {
 @ __fn_stdlib_internal s cn → b {
     ? == 0 ( nurl_str_starts cn `__` ) { ^ F } {}
     : s f ( nurl_sym_get2 g_vis_syms cn `__src_file` )
-    : s ff ? == 0 ( nurl_str_len f ) ( nurl_sym_get2 g_vis_syms ( bck_generic_base cn ) `__src_file` ) f
+    : s ff ? == 0 ( nurl_str_len f ) ( nurl_sym_get2 g_vis_syms ( __callee_decl_name cn ) `__src_file` ) f
     ^ & != 0 ( nurl_str_len ff ) ( bck_trusted_file ff )
+}
+
+// The declared name behind a call name: a generic instance of a
+// file-private function keeps its file tag and loses its type arguments
+// (`__vec_grow__fp1__u8` → `__vec_grow__fp1`) — bck_generic_base cuts at
+// the first `__`, which in a private name is its first two bytes.
+@ __callee_decl_name s cn → s {
+    : i fp ( nurl_str_find cn `__fp` )
+    ? < fp 0 { ^ ( bck_generic_base cn ) } {}
+    : i n ( nurl_str_len cn )
+    : ~ i e + fp 4
+    ~ & < e n & >= ( nurl_str_get cn e ) 48 <= ( nurl_str_get cn e ) 57 { = e + e 1 }
+    ^ ( nurl_str_slice cn 0 e )
 }
 
 // A call to a raw-memory primitive, or to a foreign function declared
@@ -20905,7 +20918,7 @@ unsafe @ mem_own_add_user_drop i syms i cg s ptr s vt → v {
         ( die lex ( nurl_str_cat3 `'` base `' hands back a raw pointer ('*T'), which only an 'unsafe' function may take: the compiler stops following what it points at once the address is out, so reading through it, keeping it, or passing it on as a string ('s') can reach freed memory or run past the buffer. Use the safe API over the owning value (vec_get or iteration for a Vec, a Slice of it, string_data for a String's text), or, if this function genuinely needs the raw pointer and you vouch for its memory safety, declare it 'unsafe @ name …'.` ) )
     } {}
     ? ( __fn_stdlib_internal call_name ) {
-        ( die lex ( nurl_str_cat3 `'` base `' is internal to the standard library (its name begins with '__'): it takes control blocks and buffers as plain values and trusts them, so outside the library only an 'unsafe' function may call it. Use the public API it implements, or, if this function genuinely needs the library's internals and you vouch for its memory safety, declare it 'unsafe @ name …'.` ) )
+        ( die lex ( nurl_str_cat3 `'` ( bck_fn_show call_name ) `' is internal to the standard library (its name begins with '__'): it takes control blocks and buffers as plain values and trusts them, so outside the library only an 'unsafe' function may call it. Use the public API it implements, or, if this function genuinely needs the library's internals and you vouch for its memory safety, declare it 'unsafe @ name …'.` ) )
     } {}
 }
 

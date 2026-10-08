@@ -190,7 +190,7 @@ jobs:
         # memory guarantee (docs/MEMORY.md §6.6). The compiler must reject
         # it, or its program must run clean under the sanitizers; the exit
         # status is the number that still compile and fault. Measured at
-        # 12 s for the 91 probes of the pre-production hardening.
+        # 12 s for the 92 probes of the pre-production hardening.
         run: ./tools/fuzz/holes/check.sh
 
       - name: Enum ownership across compiled modules

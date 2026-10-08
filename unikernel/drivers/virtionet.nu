@@ -102,9 +102,9 @@ unsafe @ __vec_box ( Vec u ) v → i {
     ^ v
 }
 
-@ __buf_phys ( Vec u ) v → i { ^ # i ( vec_data [u] v ) }
+unsafe @ __buf_phys ( Vec u ) v → i { ^ # i ( vec_data [u] v ) }
 
-@ __vq_phys Virtq q i off → i { ^ + # i ( vec_data [u] ( virtq_mem q ) ) off }
+unsafe @ __vq_phys Virtq q i off → i { ^ + # i ( vec_data [u] ( virtq_mem q ) ) off }
 
 // Find the first virtio-net device the command line names, bring it
 // up, and hand back a driver with both queues live. A null pointer

@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_raw_result_call.nu:20:35: error: 'vec_data' hands back a raw pointer ('*T'), which only an 'unsafe' function may take: the compiler stops following what it points at once the address is out, so reading through it, keeping it, or passing it on as a string ('s') can reach freed memory or run past the buffer. Use the safe API over the owning value (vec_get or iteration for a Vec, a Slice of it, string_data for a String's text), or, if this function genuinely needs the raw pointer and you vouch for its memory safety, declare it 'unsafe @ name …'.
+    ( nurl_println ( vec_data [u] v ) )
+                                  ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.
