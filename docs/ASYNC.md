@@ -147,10 +147,11 @@ itself.
 - **Spawn is not a thread.** The closure runs on some worker's fiber; a
   CPU-bound fiber that never yields occupies its worker until it does.
   `yield` inside long computations keeps latency flat.
-- **Crossing fibers follows the same ownership rules as threads.** The
-  borrow checker's escape analysis applies to `spawn` closures like
-  `thread_spawn` ones; shared mutable state belongs behind a heap-backed
-  handle (see [Operational caveats](#operational-caveats)).
+- **Crossing fibers follows the same ownership rules as threads.** A
+  `spawn` closure moves its owned captures (naming one again is an error)
+  and takes its own share of each `Channel` / `Mutex` / `Arc`
+  ([`MEMORY.md` §6.2](MEMORY.md)); shared mutable state belongs behind one
+  of those handles (see [Operational caveats](#operational-caveats)).
 
 ## 5. Platform support
 
@@ -231,11 +232,11 @@ source-level traps.
   completion decrements it. A long-running accept fiber that never returns
   keeps `runtime_run` blocked forever — which is exactly what a server wants.
   Call `server_stop` / `runtime_shutdown` to drain on demand.
-- **Capturing a stack-borrowed pointer in a spawned closure** is the same
-  hazard as `thread_spawn`. The borrow checker's escape analysis catches the
-  documented shapes (see [`MEMORY.md` §2.3](MEMORY.md)); for shared mutable
-  state across fibers use a heap-backed handle (`Mutex` + `Vec[i]`, …) rather
-  than a `: ~`-captured stack struct.
+- **A spawned closure moves what it captures.** A `: ~` by-reference
+  capture may not reach a `spawn` closure, as for `thread_spawn` (see
+  [`MEMORY.md` §2.3](MEMORY.md)); for shared mutable state across fibers
+  use a share handle (`Mutex` + `Vec[i]`, `Arc`, a `Channel`) rather than a
+  stack struct.
 
 ### Implementation notes (runtime maintainers)
 

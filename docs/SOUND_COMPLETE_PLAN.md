@@ -1,9 +1,11 @@
 # Sound and complete: every accepted program is memory-safe and leak-free
 
-Goal (owner, 2026-10-06): retire the "sound, not complete" contract of
-[`MEMORY.md` §6.2](MEMORY.md). Today every diagnostic is a real bug, but a
-clean compile proves nothing, and AddressSanitizer is what actually keeps
-the corpus safe. The target is a guarantee:
+Goal (owner, 2026-10-06), reached in 0.71.0: retire the "sound, not
+complete" contract [`MEMORY.md` §6.2](MEMORY.md) stated until 0.70.0, under
+which every diagnostic was a real bug but a clean compile proved nothing and
+AddressSanitizer was what actually kept the corpus safe. The target, now
+stated in MEMORY.md §6 with one known exception (h32, a `Slice` of a
+`Vec`), is a guarantee:
 
 > A program that compiles without an `unsafe` declaration is memory-safe
 > (no use-after-free, double free, dangling reference, out-of-bounds
@@ -39,8 +41,10 @@ the corpus safe. The target is a guarantee:
      the borrow can be read but never released, stored as an owner or sent
      (the fix the message gives: clone it), and it ends when its source is
      moved, released, reassigned or mutated in a way that may reallocate;
-   - a function that returns a parameter takes it by move (auto-`sink`),
-     so the caller's binding is gone, never aliased.
+   - a function that returns a parameter hands it back as a borrow: the
+     argument stays the owner and the result borrows from it (see
+     "A call result borrows only…" below — the implementation chose this
+     over an auto-`sink` move).
    `vec_get` and its kin are specified from the start as returning a
    borrow of the element, so their implementation can later become a
    projection into the slot without changing a line of user code.
@@ -107,8 +111,10 @@ the corpus safe. The target is a guarantee:
 
 ## Status (2026-10-06)
 
-- **P0** done: 17 probes in `tools/fuzz/holes/` (h01–h29), every one
+- **P0** done: 19 probes in `tools/fuzz/holes/` (h01–h31), every one
   rejected by default; the inverse-oracle fuzzer has seven ownership cores.
+  h32 (2026-10-07, found while preparing 0.71.0) is open: a `Slice` built
+  from a `Vec` is not tracked as a view of it.
 - **P1** done: `unsafe` functions and methods (spec §3.3d), raw pointer
   reads/writes, pointer casts, raw-memory primitives and foreign functions
   outside the stdlib gated; `nurlc --unsafe-report`. The corpus marks its

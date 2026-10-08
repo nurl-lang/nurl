@@ -60,7 +60,12 @@ accurate user-facing documentation. A local one-off pass is not sufficient.
 
 ## 2. Language and runtime safety
 
-- [ ] **P0 — Close the remaining safe-looking ownership holes.** Code using no
+- [ ] **P0 — Close the remaining safe-looking ownership holes.** *(0.71.0,
+  #1165–#1167: maybe-moved reads, conditional double-frees, owner state
+  through aggregates and containers, and closures kept by a callee are
+  rejected; hole probes h01–h31 are all rejected and safe programs carry a
+  stated guarantee, docs/MEMORY.md §6. Open: h32, a `Slice` of a `Vec`.)*
+  Code using no
   raw pointer or FFI can still read a maybe-moved value in both modes, and can
   conditionally double-free under the default checker. Reads through a released
   aggregate owner and escaped closures also cross the current analysis boundary
@@ -75,8 +80,9 @@ accurate user-facing documentation. A local one-off pass is not sufficient.
   - Add minimal positive and negative witnesses for default,
     `--strict-borrowck`, `--no-borrowck`, raw-pointer/FFI, closure, aggregate,
     loop, and interprocedural paths, plus ASan/LSan runs.
-  - Preserve the honest claim from `docs/MEMORY.md`: NURL is memory-safer than
-    C, not Rust-equivalent, unless the implementation genuinely changes that.
+  - Keep the claim in `docs/MEMORY.md` exactly as strong as the checks: since
+    0.71.0 it is a guarantee for programs without `unsafe`, with the known
+    exceptions listed beside it.
 
 - [ ] **P0 — Make drop and generic ownership complete and machine-checkable.**
   Current documented gaps include option parameters whose untouched payload can
@@ -96,9 +102,9 @@ accurate user-facing documentation. A local one-off pass is not sufficient.
 
 - [ ] **P0 — Resolve reproducible compiler-owned leak seams and correct the
   blanket leak claim.** Current open evidence includes direct slice returns,
-  mismatched owning-struct reassignment, and the documented pre-defer
-  path-dependent return leak, while `docs/MEMORY.md` says there are no known
-  compiler-owned leaks.
+  mismatched owning-struct reassignment, while `docs/MEMORY.md` says there are
+  no known compiler-owned leaks. (The pre-defer path-dependent return leak
+  is closed in 0.71.0.)
   - First turn each suspected current seam into a focused witness; do not reopen
     historical source comments whose guarded/binding form is already fixed.
     Then fix, reject, or narrow the guarantee for every reproducer. Include
@@ -112,7 +118,9 @@ accurate user-facing documentation. A local one-off pass is not sufficient.
 - [ ] **P0 — Make fiber handles lifetime-safe.** A detached `Fiber` can be
   reclaimed by a worker while `fiber_join` still dereferences the handle; the
   wasm-threads path can also free it again (`stdlib/std/async.nu`,
-  `stdlib/runtime_ffi.c`).
+  `stdlib/runtime_ffi.c`). *(0.71.0, #1166: `fiber_join` now waits until the
+  worker is through with a finished fiber; the detached-handle case is not
+  re-verified.)*
   - Use distinct `DetachedFiber` and `JoinHandle` types, or a refcounted/registered
     control block whose state remains valid through join.
   - Make wrong-kind joins unrepresentable at compile time where possible;
@@ -159,7 +167,8 @@ accurate user-facing documentation. A local one-off pass is not sufficient.
   - Add ThreadSanitizer where compatible and targeted high-contention/model
     tests where it is not.
 
-- [ ] **P1 — Freeze the raw-pointer boundary as an explicit unsafe contract.**
+- [x] **P1 — Freeze the raw-pointer boundary as an explicit unsafe contract.**
+  *(0.71.0: `unsafe @` functions, spec §3.3d, and `nurlc --unsafe-report`.)*
   `*T` is intentionally the unchecked FFI escape hatch; that design need not be
   replaced with Rust lifetimes, but v1 must make the boundary impossible to
   mistake for safe code.
@@ -751,7 +760,7 @@ open work above, and all of them must pass again for the release-candidate SHA.
   CI paths.
 - [x] Default borrow checking, compiler-inserted auto-drop, drop flags, panic
   allocation journaling, and focused move/escape/container checks are implemented
-  and documented with a deliberately narrower-than-Rust contract.
+  and documented as a guarantee for programs without `unsafe` (MEMORY.md §6).
 - [x] Whole-corpus ASan/UBSan/LSan gates, compiler cleanup controls, peak-RSS,
   DCE, symbol-collision, arithmetic-domain, and source-I/O checks exist.
 - [x] Differential, structural, inverse-ownership, parser-mutational,

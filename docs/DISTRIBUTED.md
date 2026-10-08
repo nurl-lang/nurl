@@ -178,7 +178,7 @@ relay}`; any peer **looks** another up by pubkey. This is **control plane only**
 
 Server: `rz_server_start` / `_run` / `_stop` (the last owner releases it). Client:
 `rz_client_connect` · `peer_record_new` / `peer_record_add_endpoint` ·
-`rz_register_self` · `rz_lookup_peer` → `*PeerRecord` · `rz_client_close`.
+`rz_register_self` · `rz_lookup_peer` → `?PeerRecord` · `rz_client_close`.
 
 The looked-up endpoints feed `transport_try_direct`; the relay field is the
 guaranteed fallback.

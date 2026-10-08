@@ -7,8 +7,8 @@ Anything marked done here has a regression test in
 [`compiler/tests/`](compiler/tests/) and is covered by the bootstrap fixed
 point.
 
-_Last reviewed: 2026-09-30 · Current release: **0.68.0** · Language: **Grammar
-v2.7** ([`spec/grammar.ebnf`](spec/grammar.ebnf))._
+_Last reviewed: 2026-10-07 · Current release: **0.71.0** · Language: **Grammar
+v2.8** ([`spec/grammar.ebnf`](spec/grammar.ebnf))._
 
 ---
 
@@ -21,7 +21,7 @@ stage2). The only build dependency is clang / LLVM 15+.
 
 What is solid today:
 
-- **Language (Grammar v2.7).** Sum types (`|`) and product types (structs),
+- **Language (Grammar v2.8).** Sum types (`|`) and product types (structs),
   generics over structs and functions (incl. generics over option/result
   types), pattern matching with **match guards**, **or-patterns**, and
   **N-ary payloads**, **trait bounds** on type parameters (`[A: Ord]`), **compile-time constant
@@ -45,17 +45,23 @@ What is solid today:
   `alwaysinline`, for the case where the cost model is structurally wrong
   — a helper whose arguments are constants at every call site, scored on
   its whole body, called from a caller large enough to push the decision
-  the other way. The grammar decision
+  the other way. 0.71.0 adds the third, **`unsafe`** (grammar v2.8,
+  §3.3d): the only functions whose body may touch raw memory. The grammar
+  decision
   for prefix-arity (no grouping delimiter) is formally locked, and since
   0.37.0 the n-ary `&`/`|` arity trap it makes possible is a **hard error
   by default** (`--no-strict-arity` demotes it to a warning) — the shape
   compiled to working, wrong code before.
 - **Memory & safety.** Single-owner memory with compiler-inserted auto-drop at
-  scope exit — no GC, no hidden boxing. A **static borrow checker, on
-  by default** (`--no-borrowck` to disable, `--strict-borrowck` to tighten),
-  catches use-after-move, alias double-free, escaping closure captures,
+  scope exit — no tracing GC, no hidden boxing. The **ownership rules are
+  always on** (`--strict-borrowck` adds audit checks) and reject
+  use-after-move, alias double-free, escaping closure captures,
   interprocedural/return escape, loop-carried double-frees, a release
   after storing into an owner, and iterator invalidation as hard errors without changing generated code.
+  Since 0.71.0 every program accepted without an `unsafe` function of its
+  own is **memory-safe and leak-free** (one known exception: a `Slice` of a
+  `Vec`, [`docs/MEMORY.md`](docs/MEMORY.md) §6.2); `Rc` cycles are
+  collected and thread-shared cycles are rejected at compile time.
   Since 0.44.0 **no rule depends on definition order**: every check that
   consults a per-function summary parks what it cannot answer and
   resolves it after the module, so where a helper is written can no
@@ -85,9 +91,10 @@ What is solid today:
   boundary — `thread_spawn`, `spawn`, `chan_send`, and an `Arc`'s payload
   — so an `Rc` or a `Cell` reaching a worker is a compile error however
   it is spelled, and `% NotSend` / `% Send` mark the cases a structural
-  derivation cannot see either way. It is a sound lint, not a proof:
-  [`docs/MEMORY.md`](docs/MEMORY.md) §6.5 states what it does and does
-  not guarantee. Since 0.58.0 the Linux I/O path has no reactor thread:
+  derivation cannot see either way. Since 0.71.0 a thread closure moves
+  its captures and only `Channel` / `Mutex` / `Arc` cross threads, so data
+  races are inside the guarantee; marker assertions and whether a lock is
+  held are the trusted part ([`docs/MEMORY.md`](docs/MEMORY.md) §3, §6.5). Since 0.58.0 the Linux I/O path has no reactor thread:
   an **idle worker becomes the poller** and blocks in `epoll_wait`
   itself, so a ready fiber resumes on that worker with no queue hop, no
   cross-thread wake and no migration (the Go netpoller / tokio driver
@@ -133,14 +140,15 @@ A high-level map of what exists. Dates and per-feature detail are in
 - Self-hosted compiler (`compiler/nurlc.nu`) with a deterministic, byte-identical
   bootstrap; stage-0 links the committed `nurlc_lastgood.ll` snapshot (no
   Python in the toolchain).
-- Grammar evolved v0.1 → **v2.7** (snapshots in [`spec/`](spec/)). v2.x added:
+- Grammar evolved v0.1 → **v2.8** (snapshots in [`spec/`](spec/)). v2.x added:
   visibility (`pub`) enforcement across functions, types, consts, and enum
   variants; trait bounds; match guards + or-patterns; const folding; channel
   select; **dynamic trait objects** (`%Trait` + `( dyn Trait v )`, v2.3);
   **`break` / `continue`** as reserved identifiers (v2.4); the **`v128`**
   SIMD lane type (v2.5); the **`simd` CPU-dispatch prefix** on `@`
-  declarations (v2.6); the **`inline` always-inline prefix** (v2.7); and
-  locked the prefix-arity grouping decision.
+  declarations (v2.6); the **`inline` always-inline prefix** (v2.7); the
+  **`unsafe` raw-memory prefix** (v2.8); and locked the prefix-arity
+  grouping decision.
 - Type system: strong, static, inferred, algebraic; no subtyping, no implicit
   conversions. Sized integer/float types with **signedness carried in the
   type representation itself** (`u`/`u16`/`u32`/`u64` distinct from the
@@ -178,7 +186,12 @@ A high-level map of what exists. Dates and per-feature detail are in
   (a function that lends on one path and gives on another no longer leaks
   or double-frees), a borrowed value of a type that cannot be copied is
   never silently duplicated (a compile error says where to clone or move),
-  and `--debug` builds at the default -O2. Model and known gaps: [`docs/MEMORY.md`](docs/MEMORY.md).
+  and `--debug` builds at the default -O2. Since 0.71.0 the rules are a
+  guarantee — every program accepted without an `unsafe` function of its
+  own is memory-safe and leak-free — `Rc` cycles are collected by a cycle
+  collector, `Weak` and `ArcWeak` exist, and a cycle of thread-shared
+  handles is a compile error. Model, guarantee and trusted base:
+  [`docs/MEMORY.md`](docs/MEMORY.md).
 - Front-end is diagnostic-first: malformed prefix-arity programs, undefined
   identifiers, call-arity mismatches, unbalanced braces / stray top-level
   tokens, and visibility violations are hard errors with source locations —
@@ -209,8 +222,10 @@ A high-level map of what exists. Dates and per-feature detail are in
   whether a surviving mutant's module is even valid, and `tools/tree_sweep.sh`,
   which requires byte-identical diagnostics over every tracked first-party
   `.nu` file so a new rejection rejects nothing that was valid.
-- Emission: only the functions `main` can reach the `.ll`
-  (`--no-dce` to emit everything). Reachability is computed over the
+- Emission: since 0.71.0 a library function (stdlib/, deps/) nothing in
+  the program reaches is not compiled at all — about 40% fewer compile
+  instructions across the corpus. Only the functions `main` can reach the
+  `.ll` (`--no-dce` to emit everything). Reachability is computed over the
   finished IR, so closures, monomorphs, drop glue and dyn vtable thunks
   need no special casing — worth 30–40% of the clang step on a
   stdlib-heavy program. What survives is then emitted as several
@@ -282,9 +297,9 @@ platform-specific shims.
   HTTP/2 CONTINUATION-flood + stream-accounting, and clean cross-thread
   listener shutdown) with regression tests, and its serve path is
   peer-benchmarked against Rust hyper and Node
-  ([`bench/HTTP_RESULTS.md`](bench/HTTP_RESULTS.md): since 0.58.0 ahead
-  of hyper on req/s, p50, p95 *and* p99 at every measured concurrency,
-  an HTTP request served in 2 syscalls).
+  ([`bench/HTTP_RESULTS.md`](bench/HTTP_RESULTS.md): within about 1% of
+  hyper's throughput at every measured concurrency and ahead of it at c=1
+  and c=10, an HTTP request served in 2 syscalls).
 - **ext/data services** — `sqlite` (production-hardened), `mqtt` 5.0 client,
   `smtp` (mail submission). Postgres and Redis clients live in the registry
   packages `psql` and `redis` (pure NURL — no libpq, no hiredis).
@@ -324,18 +339,18 @@ platform-specific shims.
 - A **WebAssembly runtime written in pure NURL** (`packages/nwasm`) that
   decodes and executes real `wasm32-wasi` modules (full int/float instruction
   set, linear/bulk memory, tables + `call_indirect`, threads + atomics,
-  sockets, WASI + `--dir` file ops), with no external runtime — and with a
-  **template JIT** on top that emits x86-64 for hot functions over
-  guard-page linear memory. Over `bench/wasmbench.sh`'s corpus it runs the
-  same modules at a **geometric mean 0.78×** the reference Cranelift JIT's
-  wall clock, 12 of 15 rows at or below parity — and the control columns
-  say this is not a NURL-shaped fast path: the same corpus emitted by
-  **clang and rustc** runs at 0.73× and 0.73×, the foreign frontends
-  slightly ahead of the one that wrote the runtime. The compiler
+  sockets, WASI + `--dir` file ops), with no external runtime — and with
+  two JIT tiers on top over guard-page linear memory: a **register-allocating
+  JIT** (tier 8, the default on x86-64) and the template JIT it falls back
+  to. Over `bench/wasmbench.sh`'s corpus it runs every one of the 45
+  modules faster than the reference Cranelift JIT's wall clock (nwasm
+  2.1.0, 2026-10-07: geometric mean 0.59× for the NURL modules) — and the
+  control columns say this is not a NURL-shaped fast path: the same corpus
+  emitted by **clang and rustc** runs at 0.60× and 0.59×. The compiler
   **self-hosts on wasm**: `nurlc` compiled to `wasm32-wasi` recompiles
   `nurlc.nu` to byte-identical IR, both under the external reference
   `wasmtime` and under this pure-NURL runtime — and identically under its
-  interpreter and its JIT.
+  interpreter and both JIT tiers.
 - Static cross-compiles: Linux ARM64 / RISC-V64 (musl). Milk-V Duo (RISC-V
   C906) validated on-device.
 - **Unikernel: a NURL program boots as its own kernel** — no host OS, no
@@ -480,15 +495,24 @@ new language features.
 
 ### Documentation precision (safety & soundness)
 
-- [x] **State the safety contract exactly** — which bug classes the borrow
-  checker rejects vs. tolerates, with no implied Rust-equivalence
+- [x] **State the safety contract exactly** — which bug classes the
+  ownership rules reject, with no implied Rust-equivalence
   ([`docs/MEMORY.md`](docs/MEMORY.md), [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md)).
+  *(Resolved in 0.71.0: safe programs are guaranteed memory-safe and
+  leak-free, MEMORY.md §6, with the `Slice` exception stated there.)*
 - [x] **Write the soundness story** — decide and document whether
   interprocedural escape analysis and `*T` raw-pointer flows are on the
-  roadmap or out of scope by design; the checker is currently incomplete
-  there by design. *(Resolved: interprocedural escape and return-escape implemented.)*
+  roadmap or out of scope by design. *(Resolved: interprocedural escape and
+  return-escape implemented; in 0.71.0 raw pointers, casts, raw-memory
+  primitives and user FFI are confined to `unsafe` functions, spec §3.3d,
+  `nurlc --unsafe-report`.)*
 - [x] **Document the known auto-drop leaks** (nested owned-struct fields,
   arm-local fall-through bindings, allocations inside a `recover` scope). *(Resolved: leaks fixed.)*
+- [ ] **Close the `Slice` hole** — a `Slice` built from a `Vec`
+  (`slice_from_vec`, `slice_sub`, `slice_from_raw`, protobuf's
+  `ProtoReader`) is not tracked as a view of it, the one known exception to
+  the 0.71.0 guarantee (hole probe `tools/fuzz/holes/h32`). Track views
+  held in structs the way a `vec_data` pointer is tracked.
 
 ### Evidence for the "LLM-native" thesis
 
