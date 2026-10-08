@@ -4694,7 +4694,7 @@ unsafe @ nurl_cg_lbl i h s hint → s {
         ? == ret_first_tt TT_DOT { = __rl ( nurl_sym_get syms `__last_raw_prov__` ) } {}
         ? ( is_ident_tok ret_first_tt ) { = __rl ( nurl_sym_get2 syms ret_first_val `__rlent` ) } {}
         ? & != 0 ( nurl_str_len __rl ) | ( __is_handle_ty lt ) ( __type_needs_drop lt g_root_syms ) {
-            ( __rprov_record_lend syms __rl )
+            ( __rprov_record_lend syms __rl T )
             ( nurl_sym_set_deep syms `__fn_ret_borrow__` `1` )
             = hbit ( nurl_str_cat `false` `` )
             = __rb_rlent T
@@ -6753,6 +6753,10 @@ unsafe @ nurl_cg_lbl i h s hint → s {
     ( nurl_sym_has_word g_fn_escapes fname arg ) { ^ F } {}
     ? | ( nurl_sym_has_word g_fn_ret_param fname arg )
     ( nurl_sym_has_word g_fn_ret_alias fname arg ) { ^ F } {}
+    // …nor may hand back part of it (`vec_get`'s element): the result is
+    // copied and the temporary dropped where the result can be copied
+    // (mem_own_lendback); where it cannot, the temporary stays.
+    ? ( str_contains_word ( mem_fn_lent_params syms fname ) arg ) { ^ F } {}
     ^ != 0 ( nurl_sym_len2 syms fname `__body_done` )
 }
 
@@ -10917,7 +10921,7 @@ unsafe @ nurl_lex_peek4_type i h → i {
         {}
         // A String / Vec / struct temporary: the same rule as a positional
         // argument's.
-        ( mem_arg_temps syms cg fname fname slot origin_tt at av F )
+        ( mem_arg_temps lex syms cg fname fname slot origin_tt at av F )
         : s __at_o ( nurl_sym_get syms `__argtmp_owned__` )
         ? != 0 ( nurl_str_len __at_o ) { = owned_temps ? == 0 ( nurl_str_len owned_temps ) ( nurl_str_cat __at_o `` ) ( nurl_str_cat3 owned_temps ` ` __at_o ) } {}
         : s __at_1 ( nurl_sym_get syms `__argtmp_one__` )
@@ -13208,7 +13212,7 @@ unsafe @ nurl_lex_peek4_type i h → i {
         // What this argument leaves the caller to drop after the call, and
         // whether the result is it (mem_arg_temps).
         ( nurl_sym_def syms `__argtmp_litown__` arg_lit_own )
-        ( mem_arg_temps syms cg call_name fname arg_idx bck_arg_tt at av __callee_shadowed )
+        ( mem_arg_temps lex syms cg call_name fname arg_idx bck_arg_tt at av __callee_shadowed )
         : s __at_o ( nurl_sym_get syms `__argtmp_owned__` )
         ? != 0 ( nurl_str_len __at_o ) { = owned_arg_temps ? == 0 ( nurl_str_len owned_arg_temps ) ( nurl_str_cat __at_o `` ) ( nurl_str_cat3 owned_arg_temps ` ` __at_o ) } {}
         : s __at_1 ( nurl_sym_get syms `__argtmp_one__` )
@@ -19129,7 +19133,7 @@ unsafe @ gen_match i lex i syms i cg → s {
 // `__argtmp_one__` / `__argtmp_part__` (i1: the result is this temporary, or
 // was copied from it — mem_own_lendback). Shared by positional and named
 // calls, so neither drops an argument the other would not.
-@ mem_arg_temps i syms i cg s call_name s fname i arg_idx i arg_tt s at s av b shadowed → v {
+@ mem_arg_temps i lex i syms i cg s call_name s fname i arg_idx i arg_tt s at s av b shadowed → v {
     : ~ s owned ``
     ( nurl_sym_def syms `__argtmp_one__` `` )
     ( nurl_sym_def syms `__argtmp_part__` `` )
@@ -19248,7 +19252,18 @@ unsafe @ gen_match i lex i syms i cg → s {
                     ( nurl_sym_def syms `__argtmp_part__` __tlp )
                     = __tlany ( nurl_cg_reg cg )
                     ( nurl_print `  ` ) ( nurl_print __tlany ) ( nurl_print ` = or i1 ` ) ( nurl_print __tlo ) ( nurl_print `, ` ) ( nurl_print __tlq ) ( nurl_print `\n` )
-                } {}
+                } {
+                    // A result that cannot be copied, lent out of a
+                    // temporary: nothing could drop the temporary once the
+                    // result is used. Whether the callee lends part of it
+                    // is a module-end fact (resolve_nocopy_lends).
+                    : i __ncn ( nurl_str_to_int ( nurl_sym_get g_pending_impl `nocopylend_n` ) )
+                    ( nurl_sym_def g_pending_impl `nocopylend_n` ( nurl_str_int + __ncn 1 ) )
+                    ( nurl_sym_def g_pending_impl ( nurl_str_cat `nocopylend#` ( nurl_str_int __ncn ) )
+                    ( nurl_str_cat4 ( nurl_str_cat4 call_name ` ` fname ` ` )
+                    ( nurl_str_cat4 ( nurl_str_int arg_idx ) ` ` ( nurl_sym_get syms `__last_retown_const__` ) ` ` )
+                    ( nurl_str_cat3 ( nurl_str_int ( nurl_lex_line lex ) ) ` ` ( nurl_lex_filename lex ) ) ( nurl_str_cat ` ` ( __wrap_show __crt ) ) ) )
+                }
                 : s __tln ( nurl_cg_reg cg )
                 ( nurl_print `  ` ) ( nurl_print __tln ) ( nurl_print ` = xor i1 ` ) ( nurl_print __tlany ) ( nurl_print `, 1\n` )
                 : s __tc3 ( nurl_cg_reg cg )
@@ -19394,7 +19409,15 @@ unsafe @ gen_match i lex i syms i cg → s {
             ( nurl_sym_def syms `__last_call_ret_view__` `` )
             ( nurl_sym_def syms `__last_value_borrow__` `` )
         } {}
-    } {}
+    } {
+        // …and one compiled after this caller (a generic instance) whose
+        // lent result is copied here: its borrow channel is only a guess
+        // by name (`vec_get`'s, taken for a borrow on every path), while
+        // this bit is final at module end — under the guess, the copy was
+        // nobody's and leaked. (A result that cannot be copied stays a
+        // borrow of the temporary.)
+        ? != 0 ( nurl_str_len part ) { ( nurl_sym_def syms `__last_value_borrow__` `` ) } {}
+    }
     ^ out
 }
 
@@ -20957,7 +20980,8 @@ unsafe @ mem_own_add_user_drop i syms i cg s ptr s vt → v {
 // and 6 the pointer result found here, 7 the parameters it mutates, 8 those
 // it reallocates, 9 on the work list, 10 one past its highest parameter
 // index past 62 (bit 63 stands for those), 11 its first record (the
-// resolver's per-function record list).
+// resolver's per-function record list), 12 the lends of 5 that are a value
+// read through what the parameters reach — part of them, never one whole.
 : ~ i g_rpg_f 0
 : ~ i g_rpg_nfn 0
 : ~ i g_rpg_fcap 0
@@ -20967,9 +20991,9 @@ unsafe @ mem_own_add_user_drop i syms i cg s ptr s vt → v {
 : ~ s g_rpg_me_self ``  // the function compiling now and its number (-1: not asked yet)
 : ~ i g_rpg_me_id -1
 
-unsafe @ __rpg_fget i f i k → i { ^ ( nurl_peek # s g_rpg_f + * f 12 k ) }
+unsafe @ __rpg_fget i f i k → i { ^ ( nurl_peek # s g_rpg_f + * f 13 k ) }
 
-unsafe @ __rpg_fset i f i k i v → v { ( nurl_poke # s g_rpg_f + * f 12 k v ) }
+unsafe @ __rpg_fset i f i k i v → v { ( nurl_poke # s g_rpg_f + * f 13 k v ) }
 
 // Function `name`'s number: a fresh row the first time.
 unsafe @ __rpg_fn_id s name → i {
@@ -20979,10 +21003,10 @@ unsafe @ __rpg_fn_id s name → i {
     : i id g_rpg_nfn
     ? >= id g_rpg_fcap {
         = g_rpg_fcap ? == g_rpg_fcap 0 256 * g_rpg_fcap 2
-        = g_rpg_f # i ( nurl_realloc # s g_rpg_f * g_rpg_fcap 96 )
+        = g_rpg_f # i ( nurl_realloc # s g_rpg_f * g_rpg_fcap 104 )
     } {}
     : ~ i k 1
-    ~ < k 12 { ( __rpg_fset id k 0 ) = k + k 1 }
+    ~ < k 13 { ( __rpg_fset id k 0 ) = k + k 1 }
     ( __rpg_fset id 0 # i ( nurl_strdup name ) )
     ( nurl_sym_def g_rpg_fid name ( nurl_str_int id ) )
     = g_rpg_nfn + id 1
@@ -21211,17 +21235,17 @@ unsafe @ __rpg_rget i r i k → i { ^ ( nurl_peek # s g_rpg_rec + * r 6 k ) }
     = g_rpg_tmp + g_rpg_tmp 1
     ( __rprov_bind syms nm vt reads rhs_tt F )
     ( __rpg_push 8 ( __rpg_slot syms nm ) 0 0 0 )
-    ? value { ( __rprov_record_lend syms nm ) } {}
+    ? value { ( __rprov_record_lend syms nm F ) } {}
 }
 
 // What a returned value is lent by: the names it was read through (a raw
 // read) or the lent binding itself — resolved at module end.
-@ __rprov_record_lend i syms s names → v {
+@ __rprov_record_lend i syms s names b part → v {
     ? ! ( __rpg_live ) { ^ v } {}
     : ~ s rest ( nurl_str_cat names `` )
     ~ != 0 ( nurl_str_len rest ) {
         : s w ( str_first_word rest ) = rest ( str_skip_word rest )
-        ( __rpg_push 7 ( __rpg_slot syms w ) 0 0 0 )
+        ( __rpg_push 7 ( __rpg_slot syms w ) ? part 1 0 0 0 )
     }
 }
 
@@ -29851,7 +29875,7 @@ unsafe @ bck_loop_mask s pre s post → s {
             ? == fld_first_tt TT_DOT { = __frl ( nurl_sym_get syms `__last_raw_prov__` ) } {}
             ? ( is_ident_tok fld_first_tt ) { = __frl ( nurl_sym_get2 syms fld_first_val `__rlent` ) } {}
             ? & != 0 ( nurl_str_len __frl ) | ( __is_handle_ty fty ) ( __type_needs_drop fty g_root_syms ) {
-                ( __rprov_record_lend syms __frl )
+                ( __rprov_record_lend syms __frl T )
                 = fld_lent ( nurl_str_cat `1` `` )
                 = fld_rlent T
             } {}
@@ -35384,6 +35408,11 @@ unsafe @ __rpg_summarise i f i rlo i rhi b trace → b {
             : i cur ( __rpg_fget f slot )
             : i reach ? == kind 7 ( nurl_peek # s g_rpg_v x ) ( nurl_peek # s g_rpg_u x )
             : i nw | cur reach
+            // (A value read through what they reach is part of them.)
+            ? & == kind 7 == ( __rpg_rget r 3 ) 1 {
+                : i pc ( __rpg_fget f 12 )
+                ? != | pc reach pc { ( __rpg_fset f 12 | pc reach ) = grew T } {}
+            } {}
             ? != nw cur {
                 ( __rpg_fset f slot nw )
                 = grew T
@@ -35569,6 +35598,14 @@ unsafe @ resolve_raw_provenance → v {
             ? != 0 ( __rpg_fget f 5 ) {
                 : s lk ( nurl_str_cat `retlend##` nm2 )
                 ( nurl_sym_set g_pending_impl lk ( __rpg_mask_add f ( nurl_sym_get g_pending_impl lk ) ( __rpg_fget f 5 ) ) )
+            } {}
+            // …those read through a parameter are part of it (`vec_get`'s
+            // element): a caller handing over a temporary copies the result
+            // and drops it, never takes the result for the temporary itself
+            // (mem_fn_lend_kind).
+            ? != 0 ( __rpg_fget f 12 ) {
+                : s qk ( nurl_str_cat `retpart##` nm2 )
+                ( nurl_sym_set g_pending_impl qk ( __rpg_mask_add f ( nurl_sym_get g_pending_impl qk ) ( __rpg_fget f 12 ) ) )
             } {}
             ? != 0 ( __rpg_fget f 6 ) {
                 : s pk ( nurl_str_cat `retptr##` nm2 )
@@ -41295,6 +41332,42 @@ unsafe @ __lazy_scan → v {
 // point: a function that spawns the closure it is passed makes its
 // callers' closures cross). The error names the capture and where the
 // closure was built, at the place the value leaves.
+// A result that cannot be copied, lent in part out of a temporary that
+// may be the caller's own (mem_arg_temps' `nocopylend#` records): the
+// temporary could not be dropped after the call — the result points into
+// it — nor after the result's last use, which nothing tracks. An error
+// with the fix, not a silent leak.
+@ resolve_nocopy_lends i syms → v {
+    : i n ( nurl_str_to_int ( nurl_sym_get g_pending_impl `nocopylend_n` ) )
+    : ~ i j 0
+    ~ < j n {
+        : s rec ( nurl_sym_get g_pending_impl ( nurl_str_cat `nocopylend#` ( nurl_str_int j ) ) )
+        : ~ s r ( nurl_str_cat rec `` )
+        : s callee ( str_first_word r ) = r ( str_skip_word r )
+        : s generic ( str_first_word r ) = r ( str_skip_word r )
+        : s index ( str_first_word r ) = r ( str_skip_word r )
+        : s retk ( str_first_word r ) = r ( str_skip_word r )
+        : s line ( str_first_word r ) = r ( str_skip_word r )
+        : s file ( str_first_word r ) = r ( str_skip_word r )
+        : s who ? != 0 ( nurl_sym_len2 syms callee `__body_done` ) callee generic
+        ? == ( mem_fn_lend_kind syms who ( nurl_str_to_int index ) ) 2 {
+            // …and only a temporary that may be owned: one a call lent is
+            // its owner's to drop.
+            : s pair ( __retown_pair retk )
+            : s ic ( str_first_word pair )
+            : s ig ( str_first_word ( str_skip_word pair ) )
+            ? | | == 0 ( nurl_str_len ic ) ! ( __callee_lent syms ic ig ) | ( __hown_dyn syms ic 0 ) ( __hown_dyn syms ig 0 ) {
+                ( bck_emit_error file ( nurl_str_to_int line ) ( nurl_str_cat4
+                ( nurl_str_cat3 `the result of '` ( bck_fn_show callee ) `' borrows part of its argument ` )
+                ( nurl_str_int + ( nurl_str_to_int index ) 1 )
+                ( nurl_str_cat3 `, a temporary: a '` r `' cannot be copied out of it, so the temporary would have to outlive this call, and no binding owns it. ` )
+                `Bind the argument to a name first (': T x ( … )') — it then lives to the end of that scope, and the result borrows from it.` ) )
+            } {}
+        } {}
+        = j + j 1
+    }
+}
+
 @ resolve_send_checks i syms → v {
     : i n ( nurl_str_to_int ( nurl_sym_get g_pending_impl `ccchk_n` ) )
     : i m ( nurl_str_to_int ( nurl_sym_get g_pending_impl `sendchk_n` ) )
@@ -41363,6 +41436,15 @@ unsafe @ __lazy_scan → v {
         = a ( __libh_targ ty i )
     }
     ^ ( nurl_str_cat out ` )` )
+}
+
+// …and a wrap of one: `?T`, `!T E`.
+@ __wrap_show s ty → s {
+    ? == 0 ( nurl_str_starts ty `{ i1, ` ) { ^ ( __ty_show ty ) } {}
+    : s a ( __wrap_part ty 0 )
+    : s b ( __wrap_part ty 1 )
+    ? == 0 ( nurl_str_len b ) { ^ ( nurl_str_cat `?` ( __ty_show a ) ) } {}
+    ^ ( nurl_str_cat4 `!` ( __ty_show a ) ` ` ( __ty_show b ) )
 }
 
 // Mark every `?pK` of `cs` as a parameter of `encl` that crosses; true
@@ -50475,6 +50557,7 @@ unsafe @ split_emit_module i n i mlen → v {
         ( resolve_send_checks syms )
         ( emit_sink_flags )
         ( mem_emit_arg_flags syms )
+        ( resolve_nocopy_lends syms )
         ( lint_free_resolve )
         ( mem_emit_env_flags )
         ( mem_emit_dtor_flags )
