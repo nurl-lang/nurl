@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.6] — 2026-10-07
+
+Requires NURL 0.71.0, whose ownership rules are on by default: the
+functions that work with raw pointers are declared `unsafe`, and values
+are read before they move rather than after. The published 0.1.5 does
+not compile under 0.71.0.
+
 ## [0.1.5] — 2026-10-03
 
 **Nothing is released by hand.** An `IForest` is an owning struct whose node

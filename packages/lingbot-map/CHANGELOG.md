@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.1] — 2026-10-07
+
+Requires NURL 0.71.0, whose ownership rules are on by default: the
+functions that work with raw pointers are declared `unsafe`, and values
+are read before they move rather than after. The published 0.10.0 does
+not compile under 0.71.0.
+
 ## [0.10.0] — 2026-10-03
 
 Requires NURL 0.69.0, gpukit ^0.9, torchpt ^0.2 and ply ^0.3.

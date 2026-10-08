@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.9] — 2026-10-07
+
+Requires NURL 0.71.0, whose ownership rules are on by default: the
+functions that work with raw pointers are declared `unsafe`, and values
+are read before they move rather than after. The published 0.3.8 does
+not compile under 0.71.0.
+
 ## [0.3.8] — 2026-10-03
 
 **Nothing is released by hand.** An `Mlp` and a `MinMax` are owning structs

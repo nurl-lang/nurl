@@ -302,7 +302,7 @@ unsafe @ process_frame Image im OGraph g Engine e ( Vec String ) names i nc b wa
 }
 
 @ main → i {
-    : Cli c ( cli_new `yoloe` `promptable open-vocabulary detection & instance segmentation (pure NURL, GPU)` `0.7.0` )
+    : Cli c ( cli_new `yoloe` `promptable open-vocabulary detection & instance segmentation (pure NURL, GPU)` `0.7.1` )
     ( cli_flag_str c `model` 109 `MODEL.onnx` `YOLOE-seg export from tools/export.py (~45 MB, not bundled)` `` `` )
     ( cli_flag_str c `classes` 99 `FILE` `vocabulary, one prompt word per line` `` `` )
     ( cli_flag_str c `image` 105 `IMG` `detect/seg input (PNG, JPEG or PPM)` `` `` )

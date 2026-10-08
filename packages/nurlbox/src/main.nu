@@ -33,7 +33,7 @@ $ `archive.nu`
 $ `proc.nu`
 $ `sh.nu`
 
-: s NURLBOX_VERSION `0.3.0`
+: s NURLBOX_VERSION `0.3.1`
 
 // argv[0]'s basename, with a `.exe` suffix and any `nurlbox-` prefix
 // stripped — the three spellings an installed multi-call binary meets.

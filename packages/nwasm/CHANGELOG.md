@@ -3,7 +3,8 @@
 ## [2.3.0] — 2026-10-07
 
 Tier 8's register allocation gets smarter about what it spills. Nothing
-outside the JIT's output changed.
+outside the JIT's output changed. Requires NURL 0.71.0: the functions
+that work with raw pointers are declared `unsafe`, as 0.71.0 requires.
 
 ### Changed
 

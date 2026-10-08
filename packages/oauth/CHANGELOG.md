@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.2] — 2026-10-07
+
+Requires NURL 0.71.0, whose ownership rules are on by default: the
+functions that work with raw pointers are declared `unsafe`, and values
+are read before they move rather than after. The published 0.2.1 does
+not compile under 0.71.0.
+
 ## [0.2.1] — 2026-10-04
 
 ### Fixed

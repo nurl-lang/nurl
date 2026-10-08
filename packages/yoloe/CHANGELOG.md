@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.7.1] — 2026-10-07
+
+Requires NURL 0.71.0, whose ownership rules are on by default: the
+functions that work with raw pointers are declared `unsafe`, and values
+are read before they move rather than after. The published 0.7.0 does
+not compile under 0.71.0. The BPE tokenizer registers a merge rank
+before the line moves into its arena.
+
 ## [0.7.0] — 2026-10-03
 
 Nothing is released by hand any more. Needs toolchain 0.69.0 and onnx 0.9.1
