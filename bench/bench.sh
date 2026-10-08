@@ -4,11 +4,12 @@
 # ============================================================
 #  bench/bench.sh — the one benchmark runner.
 #
-#  Every benchmark in bench/manifest.tsv is implemented five times —
-#  NURL, C, Rust, Node, Python — and every implementation prints one
-#  line. This script compiles what needs compiling, gates the row on all
-#  five printing the *same* line, then times them and writes two
-#  artefacts:
+#  Every benchmark in bench/manifest.tsv is implemented in NURL, C and
+#  Rust, and most also in Node and Python (the manifest's optional fourth
+#  column names a row's languages); every implementation prints one line.
+#  This script compiles what needs compiling, gates the row on all of its
+#  implementations printing the *same* line, then times them and writes
+#  two artefacts:
 #
 #    bench/results/latest.json   machine-readable; the landing page's
 #                                table is generated from this file at
@@ -28,9 +29,20 @@
 #      ./bench/bench.sh --bench lcg --bench sieve
 #      ./bench/bench.sh --reps 9 --budget-ms 20000
 #      ./bench/bench.sh --stdout            # print the report, touch nothing
+#      ./bench/bench.sh --scale 100         # every benchmark does 100x the work
 #
-#  Requires nurlc (./build.sh), clang, rustc, node and python3. A missing
-#  toolchain is a hard error: a table with a hole in it is worse than no
+#  --scale N (default: $BENCH_SCALE, else 1) multiplies every benchmark's
+#  workload by N before it is compiled: each NURL, C and Rust source
+#  defines `BENCH_SCALE` once (1) and multiplies its iteration count by
+#  it, or repeats its kernel that many times — the same rewrite
+#  wasmbench.sh does. x1 is the published contract and compiles the
+#  sources as they stand. Node and Python have no multiplier, so a xN run
+#  is NURL / C / Rust only, and it writes RESULTS-xN.md and
+#  results/xN.json beside the x1 report instead of replacing it.
+#
+#  Requires nurlc (./build.sh), clang, rustc, and node and python3 when a
+#  selected row runs them (never at --scale N > 1). A missing toolchain is
+#  a hard error: a table with a hole in it is worse than no
 #  table, because the hole is invisible once the numbers are copied out.
 # ============================================================
 set -u
@@ -56,7 +68,10 @@ MD_OUT="$BENCH/RESULTS.md"
 WRITE=1
 SELECTED=()
 
-usage() { sed -n '4,40p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+SCALE="${BENCH_SCALE:-1}"   # workload multiplier (--scale N): BENCH_SCALE in every source
+JSON_SET=0; MD_SET=0
+
+usage() { sed -n '4,52p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 
 while (( $# > 0 )); do
     case "$1" in
@@ -65,8 +80,9 @@ while (( $# > 0 )); do
         --budget-ms)    BUDGET_MS="$2"; shift 2 ;;
         --timeout)      TIMEOUT_S="$2"; shift 2 ;;
         --compile-reps) COMPILE_REPS="$2"; shift 2 ;;
-        --json)         JSON_OUT="$2"; shift 2 ;;
-        --md)           MD_OUT="$2"; shift 2 ;;
+        --json)         JSON_OUT="$2"; JSON_SET=1; shift 2 ;;
+        --md)           MD_OUT="$2"; MD_SET=1; shift 2 ;;
+        --scale)        SCALE="$2"; shift 2 ;;
         --stdout)       WRITE=0; shift ;;
         --quick)        MAX_REPS=1; BUDGET_MS=1; COMPILE_REPS=1; shift ;;
         -h|--help)      usage 0 ;;
@@ -74,7 +90,50 @@ while (( $# > 0 )); do
     esac
 done
 
+if [[ ! "$SCALE" =~ ^[1-9][0-9]{0,8}$ ]]; then
+    echo "bench.sh: --scale (or BENCH_SCALE) wants a positive integer below 10^9, got '$SCALE'" >&2
+    exit 2
+fi
+# A xN run is its own report: the x1 table stays the published one.
+if (( SCALE != 1 )); then
+    (( JSON_SET )) || JSON_OUT="$BENCH/results/x$SCALE.json"
+    (( MD_SET )) || MD_OUT="$BENCH/RESULTS-x$SCALE.md"
+fi
+
 mkdir -p "$BUILD"
+
+# ── roster ───────────────────────────────────────────────────────
+# The optional fourth manifest column names a row's languages; without it
+# a row is all five. Node and Python have no BENCH_SCALE multiplier, so at
+# xN they drop out of every row — a x1 cell in a xN table would be
+# invisible once the numbers are read.
+names=(); blurbs=(); shapes=(); has_node=(); has_python=()
+while IFS=$'\t' read -r name blurb shape langs; do
+    [[ -z "${name:-}" || "$name" == \#* ]] && continue
+    if (( ${#SELECTED[@]} > 0 )); then
+        selected_hit=0
+        for s in "${SELECTED[@]}"; do [[ "$s" == "$name" ]] && selected_hit=1; done
+        (( selected_hit )) || continue
+    fi
+    langs="${langs:-nurl c rust node python}"
+    hn=0; hp=0
+    if (( SCALE == 1 )); then
+        [[ " $langs " == *" node "* ]] && hn=1
+        [[ " $langs " == *" python "* ]] && hp=1
+    fi
+    names+=("$name"); blurbs+=("$blurb"); shapes+=("$shape")
+    has_node+=("$hn"); has_python+=("$hp")
+done < "$MANIFEST"
+
+if (( ${#names[@]} == 0 )); then
+    echo "bench.sh: no benchmarks selected" >&2
+    exit 2
+fi
+NEED_NODE=0; NEED_PYTHON=0
+for idx in "${!names[@]}"; do
+    (( has_node[idx] )) && NEED_NODE=1
+    (( has_python[idx] )) && NEED_PYTHON=1
+done
 
 # ── toolchain detection ──────────────────────────────────────────
 NURLC="$ROOT/build/nurlc"
@@ -83,8 +142,8 @@ missing=()
 [[ -x "$NURLC" && -f "$RUNTIME" ]] || missing+=("nurlc (run ./build.sh)")
 command -v clang   >/dev/null || missing+=("clang")
 command -v rustc   >/dev/null || missing+=("rustc")
-command -v node    >/dev/null || missing+=("node")
-command -v python3 >/dev/null || missing+=("python3")
+(( NEED_NODE ))   && { command -v node    >/dev/null || missing+=("node"); }
+(( NEED_PYTHON )) && { command -v python3 >/dev/null || missing+=("python3"); }
 if (( ${#missing[@]} > 0 )); then
     printf 'bench.sh: missing toolchain: %s\n' "${missing[*]}" >&2
     exit 1
@@ -104,8 +163,9 @@ NURL_VERSION="$("$NURLC" --version 2>/dev/null | head -1)"
 [[ -n "$NURL_VERSION" ]] || NURL_VERSION="$(git -C "$ROOT" describe --tags --always --dirty 2>/dev/null)"
 CLANG_VERSION="$(clang --version | head -1)"
 RUSTC_VERSION="$(rustc --version)"
-NODE_VERSION="$(node --version)"
-PYTHON_VERSION="$(python3 --version 2>&1)"
+NODE_VERSION="n/a"; PYTHON_VERSION="n/a"
+(( NEED_NODE ))   && NODE_VERSION="$(node --version)"
+(( NEED_PYTHON )) && PYTHON_VERSION="$(python3 --version 2>&1)"
 
 HOST_KERNEL="$(uname -srm)"
 HOST_CPU="$(grep -m1 'model name' /proc/cpuinfo 2>/dev/null | sed 's/.*: //')"
@@ -267,26 +327,51 @@ compile_rust() {           # <src.rs> <outbase> -> "<ms>" or FAIL
     median "${out[@]}"
 }
 
-# ── roster ───────────────────────────────────────────────────────
-names=(); blurbs=(); shapes=()
-while IFS=$'\t' read -r name blurb shape; do
-    [[ -z "${name:-}" || "$name" == \#* ]] && continue
-    if (( ${#SELECTED[@]} > 0 )); then
-        selected_hit=0
-        for s in "${SELECTED[@]}"; do [[ "$s" == "$name" ]] && selected_hit=1; done
-        (( selected_hit )) || continue
+# ── workload scale ───────────────────────────────────────────────
+# Every NURL, C and Rust source defines its workload multiplier on one
+# line — `: u64 BENCH_SCALE 1`, `#define BENCH_SCALE 1ULL`,
+# `const BENCH_SCALE: u64 = 1;` — the same contract wasmbench.sh rewrites.
+# x1 compiles the sources as they stand; xN compiles copies with that one
+# number rewritten, so every implementation of a row does the same N times
+# the work and the gate still compares like with like. A source without
+# exactly one such line stops the run.
+SRC_DIR="$BUILD/src-x$SCALE"
+scale_pattern() {   # <ext> -> "<ERE matching the definition>|<replacement>"
+    case "$1" in
+        nu) printf '%s|%s' '^([[:space:]]*: u64 BENCH_SCALE )1$' "\\1$SCALE" ;;
+        c)  printf '%s|%s' '^(#define BENCH_SCALE )1ULL$' "\\1${SCALE}ULL" ;;
+        rs) printf '%s|%s' '^(const BENCH_SCALE: u64 = )1;$' "\\1$SCALE;" ;;
+    esac
+}
+src_for() {         # <bench> <ext> -> the source to compile at this scale
+    local in="$BENCH/$1.$2" pr pat new out
+    if (( SCALE == 1 )); then printf '%s' "$in"; return 0; fi
+    pr="$(scale_pattern "$2")"; pat="${pr%%|*}"; new="${pr#*|}"
+    out="$SRC_DIR/$1.$2"
+    sed -E "s/$pat/$new/" "$in" > "$out"
+    printf '%s' "$out"
+}
+if (( SCALE != 1 )); then
+    mkdir -p "$SRC_DIR"
+    bad=()
+    for b in "${names[@]}"; do
+        for ext in nu c rs; do
+            pr="$(scale_pattern "$ext")"
+            [[ "$(grep -cE "${pr%%|*}" "$BENCH/$b.$ext")" == 1 ]] || bad+=("$b.$ext")
+        done
+    done
+    if (( ${#bad[@]} > 0 )); then
+        echo "bench.sh: --scale $SCALE needs exactly one BENCH_SCALE definition in: ${bad[*]}" >&2
+        exit 2
     fi
-    names+=("$name"); blurbs+=("$blurb"); shapes+=("$shape")
-done < "$MANIFEST"
-
-if (( ${#names[@]} == 0 )); then
-    echo "bench.sh: no benchmarks selected" >&2
-    exit 2
 fi
 
 # json_parse reads a generated fixture; make sure it exists before the
 # gate runs, or four languages fail identically and the row looks fine.
-[[ -f "$BENCH/data.json" ]] || python3 "$BENCH/gen_data.py"
+if [[ ! -f "$BENCH/data.json" ]]; then
+    command -v python3 >/dev/null || { echo "bench.sh: bench/data.json is missing and python3 (gen_data.py) is not installed" >&2; exit 1; }
+    python3 "$BENCH/gen_data.py"
+fi
 
 # ── process-start-up floor ───────────────────────────────────────
 # What each language costs for a program that does nothing. Subtract it
@@ -310,13 +395,14 @@ floor_cc_rust="$(compile_rust "$floor_dir/floor.rs" "$floor_dir/floor")"
 read -r floor_nurl _   <<<"$(cd "$ROOT" && time_cell "$floor_dir/floor.nurl.bin")"
 read -r floor_c _      <<<"$(cd "$ROOT" && time_cell "$floor_dir/floor.c.bin")"
 read -r floor_rust _   <<<"$(cd "$ROOT" && time_cell "$floor_dir/floor.rs.bin")"
-read -r floor_node _   <<<"$(cd "$ROOT" && time_cell node "$floor_dir/floor.js")"
-read -r floor_python _ <<<"$(cd "$ROOT" && time_cell python3 "$floor_dir/floor.py")"
+floor_node=n/a; floor_python=n/a
+(( NEED_NODE ))   && read -r floor_node _   <<<"$(cd "$ROOT" && time_cell node "$floor_dir/floor.js")"
+(( NEED_PYTHON )) && read -r floor_python _ <<<"$(cd "$ROOT" && time_cell python3 "$floor_dir/floor.py")"
 
 # ── measure ──────────────────────────────────────────────────────
 # Per-benchmark results, collected as parallel arrays (bash 3 has no
 # nested structures and the report needs them in manifest order anyway).
-r_checksum=(); r_verified=(); r_detail=()
+r_checksum=(); r_verified=(); r_detail=(); r_langs=()
 r_nurl=(); r_c=(); r_rust=(); r_node=(); r_python=()
 r_nurl_reps=(); r_c_reps=(); r_rust_reps=(); r_node_reps=(); r_python_reps=()
 r_cc_nurl_fe=(); r_cc_nurl=(); r_cc_nurl_warm=(); r_cc_c=(); r_cc_rust=()
@@ -327,9 +413,9 @@ for idx in "${!names[@]}"; do
     b="${names[$idx]}"
 
     progress "$b" "compiling…"
-    read -r cc_fe cc_nurl cc_nurl_warm <<<"$(compile_nurl "$BENCH/$b.nu" "$BUILD/$b")"
-    cc_c="$(compile_c "$BENCH/$b.c" "$BUILD/$b")"
-    cc_rust="$(compile_rust "$BENCH/$b.rs" "$BUILD/$b")"
+    read -r cc_fe cc_nurl cc_nurl_warm <<<"$(compile_nurl "$(src_for "$b" nu)" "$BUILD/$b")"
+    cc_c="$(compile_c "$(src_for "$b" c)" "$BUILD/$b")"
+    cc_rust="$(compile_rust "$(src_for "$b" rs)" "$BUILD/$b")"
     r_cc_nurl_fe+=("${cc_fe:-FAIL}"); r_cc_nurl+=("${cc_nurl:-FAIL}")
     r_cc_nurl_warm+=("${cc_nurl_warm:-FAIL}")
     r_cc_c+=("$cc_c"); r_cc_rust+=("$cc_rust")
@@ -338,11 +424,19 @@ for idx in "${!names[@]}"; do
     out_nurl="$(cd "$ROOT" && timeout "${TIMEOUT_S}s" "$BUILD/$b.nurl.bin" 2>/dev/null)"
     out_c="$(cd "$ROOT" && timeout "${TIMEOUT_S}s" "$BUILD/$b.c.bin" 2>/dev/null)"
     out_rust="$(cd "$ROOT" && timeout "${TIMEOUT_S}s" "$BUILD/$b.rs.bin" 2>/dev/null)"
-    out_node="$(cd "$ROOT" && timeout "${TIMEOUT_S}s" node "$BENCH/$b.js" 2>/dev/null)"
-    out_python="$(cd "$ROOT" && timeout "${TIMEOUT_S}s" python3 "$BENCH/$b.py" 2>/dev/null)"
+    pairs=("NURL:$out_nurl" "C:$out_c" "Rust:$out_rust")
+    if (( has_node[idx] )); then
+        out_node="$(cd "$ROOT" && timeout "${TIMEOUT_S}s" node "$BENCH/$b.js" 2>/dev/null)"
+        pairs+=("Node:$out_node")
+    fi
+    if (( has_python[idx] )); then
+        out_python="$(cd "$ROOT" && timeout "${TIMEOUT_S}s" python3 "$BENCH/$b.py" 2>/dev/null)"
+        pairs+=("Python:$out_python")
+    fi
+    r_langs+=("${#pairs[@]}")
 
     verified=true; detail=""
-    for pair in "NURL:$out_nurl" "C:$out_c" "Rust:$out_rust" "Node:$out_node" "Python:$out_python"; do
+    for pair in "${pairs[@]}"; do
         lang="${pair%%:*}"; got="${pair#*:}"
         [[ "$got" == "$out_nurl" ]] || verified=false
         [[ -n "$got" ]] || verified=false
@@ -363,10 +457,18 @@ for idx in "${!names[@]}"; do
     r_c+=("$ms"); r_c_reps+=("$reps")
     progress "$b" "timing Rust…";   read -r ms reps <<<"$(cd "$ROOT" && time_cell "$BUILD/$b.rs.bin")"
     r_rust+=("$ms"); r_rust_reps+=("$reps")
-    progress "$b" "timing Node…";   read -r ms reps <<<"$(cd "$ROOT" && time_cell node "$BENCH/$b.js")"
-    r_node+=("$ms"); r_node_reps+=("$reps")
-    progress "$b" "timing Python…"; read -r ms reps <<<"$(cd "$ROOT" && time_cell python3 "$BENCH/$b.py")"
-    r_python+=("$ms"); r_python_reps+=("$reps")
+    if (( has_node[idx] )); then
+        progress "$b" "timing Node…";   read -r ms reps <<<"$(cd "$ROOT" && time_cell node "$BENCH/$b.js")"
+        r_node+=("$ms"); r_node_reps+=("$reps")
+    else
+        r_node+=(n/a); r_node_reps+=(0)
+    fi
+    if (( has_python[idx] )); then
+        progress "$b" "timing Python…"; read -r ms reps <<<"$(cd "$ROOT" && time_cell python3 "$BENCH/$b.py")"
+        r_python+=("$ms"); r_python_reps+=("$reps")
+    else
+        r_python+=(n/a); r_python_reps+=(0)
+    fi
 
     printf '\r\033[K  %-18s nurl %9s  c %9s  rust %9s  node %9s  python %9s\n' \
         "$b" "${r_nurl[$idx]}" "${r_c[$idx]}" "${r_rust[$idx]}" "${r_node[$idx]}" "${r_python[$idx]}" >&2
@@ -403,7 +505,8 @@ emit_json() {
     printf '    "max_reps": %s,\n' "$MAX_REPS"
     printf '    "budget_ms": %s,\n' "$BUDGET_MS"
     printf '    "timeout_s": %s,\n' "$TIMEOUT_S"
-    printf '    "compile_reps": %s\n' "$COMPILE_REPS"
+    printf '    "compile_reps": %s,\n' "$COMPILE_REPS"
+    printf '    "workload_scale": %s\n' "$SCALE"
     printf '  },\n'
     printf '  "floor_ms": { "nurl": %s, "c": %s, "rust": %s, "node": %s, "python": %s },\n' \
         "$(jnum "$floor_nurl")" "$(jnum "$floor_c")" "$(jnum "$floor_rust")" \
@@ -419,6 +522,7 @@ emit_json() {
         printf '      "name": "%s",\n'     "$(jstr "${names[$i]}")"
         printf '      "blurb": "%s",\n'    "$(jstr "${blurbs[$i]}")"
         printf '      "measures": "%s",\n' "$(jstr "${shapes[$i]}")"
+        printf '      "languages": %s,\n' "$(langs_json "$i")"
         printf '      "checksum": "%s",\n' "$(jstr "${r_checksum[$i]}")"
         printf '      "verified": %s,\n'   "${r_verified[$i]}"
         printf '      "run_ms": { "nurl": %s, "c": %s, "rust": %s, "node": %s, "python": %s },\n' \
@@ -437,6 +541,14 @@ emit_json() {
     printf '}\n'
 }
 
+# The row's measured languages as a JSON array.
+langs_json() {
+    local i="$1" out='"nurl", "c", "rust"'
+    (( has_node[i] ))   && out="$out, \"node\""
+    (( has_python[i] )) && out="$out, \"python\""
+    printf '[%s]' "$out"
+}
+
 # Markdown cell: bold when this language is the fastest in its row.
 mdcell() {
     local val="$1" best="$2"
@@ -450,9 +562,19 @@ fastest_of() {
 emit_md() {
     printf '# Benchmark results — NURL vs C vs Rust vs Node vs Python\n\n'
     printf 'Generated `%s` by `bench/bench.sh`. **Do not edit by hand** — the next\n' "$NOW"
-    printf 'run overwrites it. The machine-readable form of this same run is\n'
-    printf '[`results/latest.json`](results/latest.json), which is what the landing\n'
-    printf 'page renders its table from.\n\n'
+    if (( SCALE == 1 )); then
+        printf 'run overwrites it. The machine-readable form of this same run is\n'
+        printf '[`results/latest.json`](results/latest.json), which is what the landing\n'
+        printf 'page renders its table from.\n\n'
+    else
+        printf 'run at this scale overwrites it. The machine-readable form of this same\n'
+        printf 'run is [`results/x%s.json`](results/x%s.json).\n\n' "$SCALE" "$SCALE"
+        printf '**Workload ×%s.** Every benchmark below does %s times its published\n' "$SCALE" "$SCALE"
+        printf 'work (`BENCH_SCALE` in each source: the iteration count, or the number of\n'
+        printf 'kernel repetitions), so start-up is a smaller share of every cell. Node and\n'
+        printf 'Python have no multiplier and are not run; the x1 table is\n'
+        printf '[`RESULTS.md`](RESULTS.md).\n\n'
+    fi
 
     printf '## Environment\n\n| Item | Value |\n|---|---|\n'
     printf '| Host | `%s` |\n' "$HOST_LABEL"
@@ -475,12 +597,14 @@ emit_md() {
     printf '| Timed runs per cell | up to %s, adaptive: as many as fit in %s ms |\n' "$MAX_REPS" "$BUDGET_MS"
     printf '| Timed compiles per cell | %s (median) |\n' "$COMPILE_REPS"
     printf '| Per-run timeout | %s s |\n' "$TIMEOUT_S"
+    printf '| Workload scale | ×%s%s |\n' "$SCALE" "$( (( SCALE == 1 )) && echo ' — the published contract (`--scale N` / `BENCH_SCALE=N` multiplies it)' || echo " — every benchmark's work multiplied by $SCALE before compilation" )"
     printf '\n'
 
     printf '## 1. Run time (median wall clock, ms — lower is better)\n\n'
     printf 'Whole-process wall clock, start-up included. Every implementation of a\n'
-    printf 'row prints the same line (section 3), so these are five timings of the\n'
-    printf 'same computation. **Bold** is the fastest cell in the row.\n\n'
+    printf 'row prints the same line (section 3), so a row'"'"'s cells are timings of the\n'
+    printf 'same computation. **Bold** is the fastest cell in the row; `n/a` is a\n'
+    printf 'language the row is not implemented in (bench/manifest.tsv).\n\n'
     printf '| Benchmark | NURL | C | Rust | Node | Python |\n|---|---:|---:|---:|---:|---:|\n'
     printf '| _(floor: empty program)_ | _%s_ | _%s_ | _%s_ | _%s_ | _%s_ |\n' \
         "$floor_nurl" "$floor_c" "$floor_rust" "$floor_node" "$floor_python"
@@ -526,14 +650,14 @@ emit_md() {
     printf '\n'
 
     printf '## 3. Correctness gate\n\n'
-    printf 'Each row is timed only when all five implementations print the same\n'
+    printf 'Each row is timed only when all of its implementations print the same\n'
     printf 'line. A speed number for a program computing something else is worthless,\n'
     printf 'so a mismatch drops the row out of the tables above rather than being\n'
     printf 'reported as a fast cell.\n\n'
     printf '| Benchmark | Output | Verdict |\n|---|---|---|\n'
     for i in "${!names[@]}"; do
         if [[ "${r_verified[$i]}" == true ]]; then
-            printf '| `%s` | `%s` | identical across 5 languages |\n' "${names[$i]}" "${r_checksum[$i]}"
+            printf '| `%s` | `%s` | identical across %s languages |\n' "${names[$i]}" "${r_checksum[$i]}" "${r_langs[$i]}"
         else
             printf '| `%s` | — | **MISMATCH** — %s |\n' "${names[$i]}" "${r_detail[$i]}"
         fi
@@ -548,7 +672,7 @@ emit_md() {
     printf '  be clever: LLVM will fold an affine recurrence or unroll a loop by a\n'
     printf '  different factor in each language. A cell measures optimised throughput\n'
     printf '  of the same algorithm, not the source-level iteration count.\n'
-    printf '* Nine of the fifteen benchmarks are defined over 64-bit unsigned integers.\n'
+    printf '* Nine of the original fifteen benchmarks are defined over 64-bit unsigned integers.\n'
     printf '  Python has arbitrary-precision integers and masks; JS has no 64-bit\n'
     printf '  integer at all, so those rows use `BigInt` where the algorithm genuinely\n'
     printf '  needs 64 bits and Numbers with `Math.imul` where 32 bits suffice. Each\n'
@@ -567,6 +691,16 @@ emit_md() {
     printf '  parser in its own box (Python `json`, Node `JSON.parse`, NURL\n'
     printf "  \`stdlib/ext/json.nu\`), and C and Rust — whose boxes are empty — carry a\n"
     printf '  small hand-written recursive-descent parser in the benchmark file.\n'
+    printf '* `chacha20`, `poly1305`, `blake2b`, `sha512` and `x25519` are NURL / C /\n'
+    printf '  Rust only. Their NURL file is a driver around the standard library'"'"'s own\n'
+    printf '  implementation (stdlib/std/chacha20poly1305.nu, hash_blake2b.nu,\n'
+    printf '  hash_sha512.nu, x25519.nu) — the row measures the stdlib a NURL program\n'
+    printf '  actually gets. C and Rust, whose standard libraries have none of the\n'
+    printf '  five, carry the same formulation written out by hand: poly1305-donna-64\n'
+    printf '  and the donna-c64 X25519 field with native 128-bit products, scalar\n'
+    printf '  ChaCha20 (the stdlib runs it on `v128` lanes). Each source names its\n'
+    printf '  RFC/FIPS test vector; x25519 at x1 reproduces RFC 7748'"'"'s 1000-iteration\n'
+    printf '  value.\n'
     printf '* Wall clock on a machine that was not quiesced drifts a few per cent\n'
     printf '  between runs, and more on a shared CI runner. Compare deltas between\n'
     printf '  runs of the same workflow, not absolutes across machines.\n'

@@ -1,9 +1,11 @@
 # NURL benchmarks
 
-Fifteen benchmarks. Five languages each — **NURL**, **C**, **Rust**,
-**Node** and **Python** — one algorithm per benchmark, one runner, one
-report. A row is timed only when all five implementations print the same
-line, so no cell can be fast by computing something else.
+Twenty benchmarks. Fifteen of them in five languages — **NURL**, **C**,
+**Rust**, **Node** and **Python** — and five cryptographic kernels
+(`chacha20`, `poly1305`, `blake2b`, `sha512`, `x25519`) in NURL, C and
+Rust; one algorithm per benchmark, one runner, one report. A row is timed
+only when all of its implementations print the same line, so no cell can
+be fast by computing something else.
 
 Two runners read the same roster: `bench.sh` compares languages on the
 native target, and [`wasmbench.sh`](#the-wasm-suite--wasmbenchsh) compares
@@ -15,7 +17,16 @@ native against `wasm32-wasi` on two runtimes.
 ./bench/bench.sh --quick   # one run per cell, for a smoke test
 ./bench/bench.sh --bench lcg --bench sieve
 ./bench/bench.sh --stdout  # print the report, write nothing
+./bench/bench.sh --scale 100   # every benchmark does 100x the work (NURL/C/Rust)
+BENCH_SCALE=100 ./bench/bench.sh   # the same, from the environment
 ```
+
+`--scale N` (default `$BENCH_SCALE`, else 1) is the workload multiplier
+[described under the wasm suite](#the-wasm-suite--wasmbenchsh): x1 is the
+published contract, and a xN run is NURL / C / Rust only — the Node and
+Python peers have no multiplier — written to `RESULTS-xN.md` and
+`results/xN.json` beside the x1 report, never over it. `bench.yml` takes
+the same `scale` input on a manual run; push and tag runs are always x1.
 
 It writes two files:
 
@@ -41,12 +52,23 @@ pwsh bench\bench.ps1               # the whole suite
 pwsh bench\bench.ps1 -Quick        # one run per cell, for a smoke test
 pwsh bench\bench.ps1 -Bench lcg,sieve
 pwsh bench\bench.ps1 -Stdout       # print the report, write nothing
+pwsh bench\bench.ps1 -Scale 100    # x100, NURL/C/Rust (or set BENCH_SCALE)
+pwsh bench\wasmbench.ps1 -Quick    # the wasm suite, see below
 ```
 
 It writes [`results/latest-windows.json`](results/latest-windows.json) and
 `RESULTS-WINDOWS.md`, deliberately **not** the two files above: those are
 the Linux CI numbers the landing page publishes, and a local Windows run
 must not be able to end up in that table by accident.
+
+[`wasmbench.ps1`](wasmbench.ps1) is the matching port of `wasmbench.sh`
+(below): same ten cells per row, same gate, `-Scale`, `-NwasmAllLangs`,
+writing `results/wasm-latest-windows.json` and `WASMRESULTS-WINDOWS.md`. It
+builds `wasmbuilder` and `nwasm` through `nurl.bat` and additionally needs
+zig, `rustup target add wasm32-wasip1` and `wasmtime`. It has been run
+under pwsh on Linux, not yet on a Windows host — treat its first Windows
+run as the test of the Windows-only branches (the `nurl.bat` package build
+and the `-lwinhttp` native link).
 
 ## The contract
 
@@ -59,14 +81,14 @@ Every implementation of a benchmark:
    64-bit type can print it too;
 3. prints nothing else.
 
-`bench.sh` runs all five, compares the five lines, and only then times
-them. A mismatch fails the run rather than producing a table with a
+`bench.sh` runs all of a row's implementations, compares their lines,
+and only then times them. A mismatch fails the run rather than producing a table with a
 plausible-looking wrong cell in it.
 
 The `// benchmark-contract:` line at the top of each source file is the
 algorithm's parameters in one line — seed, iteration count, constants —
-so the five files can be checked against each other by reading, not just
-by running.
+so the files can be checked against each other by reading, not just by
+running.
 
 ## The roster
 
@@ -90,10 +112,40 @@ and `perfstat.sh` read.
 | `matmul` | Triple-nested loop, flat indexing, column-strided reads |
 | `json_parse` | Allocator pressure, string handling, recursive descent |
 | `nbody` | IEEE-754 doubles: sqrt and divide throughput, the FPU rather than the ALU |
+| `chacha20` | 32-bit add/rotate/xor rounds; NURL calls stdlib `chacha20_xor` (v128 lanes) |
+| `poly1305` | Serial 64x64→128 multiply/carry chain through the accumulator, radix 2^44 |
+| `blake2b` | 64-bit add/xor/rotate G mixes with SIGMA-permuted message gathers |
+| `sha512` | 80-round 64-bit serial compression chain plus the message schedule |
+| `x25519` | Montgomery ladder over GF(2^255−19): radix-2^51 128-bit field multiplies |
 
 No two rows measure the same shape. That is a deliberate property, and
 the reason the previous `stream_lcg` kernel is gone: it was `lcg` with
 32-bit constants, so it made the table longer without making it say more.
+
+### The crypto rows
+
+The last five rows test **the standard library**, not a hand-written
+kernel: each `.nu` file is a short driver around the stdlib's own
+implementation — `chacha20_xor` and `poly1305_mac`
+(stdlib/std/chacha20poly1305.nu), `blake2b512_pure`
+(stdlib/std/hash_blake2b.nu), `sha512_pure` (stdlib/std/hash_sha512.nu)
+and `x25519` (stdlib/std/x25519.nu) — because that code is what a NURL
+program doing TLS, Noise or age actually runs. C and Rust have none of the
+five in their standard libraries, so their files carry the algorithm
+written out by hand, line for line the same in both, and in the
+formulation the stdlib uses: poly1305-donna-64 (radix 2^44) and the
+TweetNaCl ladder over the donna-c64 field (radix 2^51) with native 128-bit
+products where NURL uses `nurl_umulhi`, the ref10 inversion chain. ChaCha20
+is the one deliberate difference: the stdlib runs it on `v128` lanes, C and
+Rust carry the scalar RFC rounds (the stdlib's own big-endian fallback),
+and that gap is what the row shows.
+
+Every workload is chained — a digest feeds the next message, a tag the
+next key, an X25519 result the next scalar — so nothing can be hoisted,
+and every source names its RFC/FIPS test vector. `x25519` is RFC 7748
+§5.2's iteration test, so its x1 output is the RFC's own 1000-iteration
+value. Node and Python are `n/a` on these rows (manifest column 4): a JS
+or Python port of a 64-bit cipher would measure BigInt, not the language.
 
 `nbody` is the one row not defined over integers, and it is here for two
 reasons. It is the only one whose critical path runs through the FPU's
@@ -104,8 +156,8 @@ terms: see below.
 
 ### How the languages are held to the same algorithm
 
-Nine of the fifteen are defined over 64-bit unsigned integers, which two
-of the five languages do not have:
+Nine of the fifteen five-language rows are defined over 64-bit unsigned
+integers, which two of the five languages do not have:
 
 * **Python** has arbitrary-precision integers, so every step masks
   explicitly. Always exact, and slow — that is the measurement.
@@ -198,7 +250,8 @@ wasm on **NURL's own runtime** costs:
 ./bench/wasmbench.sh --scale 100     # every benchmark does 100x the work
 ```
 
-`--scale N` multiplies every benchmark's workload before it is compiled.
+`--scale N` (default `$BENCH_SCALE`, else 1) multiplies every
+benchmark's workload before it is compiled.
 Each NURL, C and Rust source defines its multiplier once — `: u64
 BENCH_SCALE 1`, `#define BENCH_SCALE 1ULL`, `const BENCH_SCALE: u64 = 1;`
 — and multiplies its iteration count by it (`lcg` 20M → 2G steps at x100),
@@ -213,7 +266,9 @@ the multiplier existed. A large N amortises process start-up and the
 runtimes' module compilation, which at x1 are a large share of a 40 ms
 cell, and leaves the generated code; a xN run writes `WASMRESULTS-xN.md`
 and `results/wasm-xN.json` beside the x1 report rather than replacing it.
-The Python and JavaScript peers have no multiplier: `bench.sh` runs x1.
+`bench.sh` takes the same `--scale` (and `BENCH_SCALE`); the Python and
+JavaScript peers have no multiplier, so a scaled `bench.sh` run is NURL /
+C / Rust only.
 
 Everything but the interpreter column costs about what `bench.sh` does;
 the interpreter is ~500× native, so it is the whole budget. Running the C

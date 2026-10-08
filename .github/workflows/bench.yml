@@ -1,8 +1,8 @@
 name: bench
 
-# Runs the whole benchmark suite — 15 benchmarks × 5 languages (NURL, C,
-# Rust, Node, Python) — on a fixed `ubuntu-latest` runner and commits the
-# result back to the repository:
+# Runs the whole benchmark suite — 20 benchmarks in NURL, C and Rust, 15 of
+# them also in Node and Python (bench/manifest.tsv) — on a fixed
+# `ubuntu-latest` runner and commits the result back to the repository:
 #
 #   bench/results/latest.json   machine-readable; webdocs' build step
 #                               (tools/gen-bench-table.mjs) renders the
@@ -46,6 +46,7 @@ on:
       # excluded so a results merge doesn't spin up another full run.
       - '!bench/results/**'
       - '!bench/RESULTS.md'
+      - '!bench/RESULTS-x*.md'
       - 'compiler/**'
       - 'stdlib/**'
       - '.github/workflows/bench.yml'
@@ -53,7 +54,19 @@ on:
   # Manual runs also commit the refreshed numbers — for re-measuring
   # between releases (runner microarchitecture drift, toolchain bumps,
   # noise-floor changes) without waiting for the next tag.
+  #
+  # `scale` is the workload multiplier, BENCH_SCALE in every NURL, C and
+  # Rust source (the same knob wasm-bench.yml has). 1 is the published
+  # contract and the only value push and tag runs use. Any other N writes
+  # RESULTS-xN.md and results/xN.json beside the x1 report — NURL / C /
+  # Rust only, since the Node and Python peers have no multiplier — and
+  # never replaces the table the landing page renders.
   workflow_dispatch:
+    inputs:
+      scale:
+        description: 'Workload multiplier N (1 = the published contract). N≠1 writes RESULTS-xN.md beside the x1 report, NURL/C/Rust only.'
+        required: false
+        default: '1'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -64,7 +77,7 @@ permissions:
 
 jobs:
   bench:
-    name: 15 benchmarks × NURL / C / Rust / Node / Python
+    name: 20 benchmarks × NURL / C / Rust (+ Node / Python)
     runs-on: ubuntu-latest
     # The suite is bounded by its slowest language, not by NURL: several
     # of the u64 kernels take tens of seconds under CPython and Node
@@ -121,6 +134,32 @@ jobs:
       - name: Build nurlc (bootstrap fixed point + runtime.o)
         run: ./build.sh --no-tests
 
+      - name: Resolve the workload scale and its report files
+        # The scale reaches the shell through the environment, never spliced
+        # into the script text. Push and tag runs have no inputs, so they
+        # fall through to 1. x1 writes the published RESULTS.md /
+        # latest.json; any other N its own RESULTS-xN.md / xN.json
+        # (bench.sh picks the same names), so the x1 table is never
+        # replaced by a scaled one.
+        env:
+          SCALE: ${{ inputs.scale }}
+        run: |
+          SCALE="${SCALE:-1}"
+          if [[ ! "$SCALE" =~ ^[1-9][0-9]{0,8}$ ]]; then
+            echo "::error::scale must be a positive integer below 10^9, got '$SCALE'"
+            exit 1
+          fi
+          if [[ "$SCALE" == 1 ]]; then
+            md=bench/RESULTS.md; json=bench/results/latest.json
+          else
+            md="bench/RESULTS-x$SCALE.md"; json="bench/results/x$SCALE.json"
+          fi
+          {
+            echo "BENCH_SCALE=$SCALE"
+            echo "REPORT_MD=$md"
+            echo "REPORT_JSON=$json"
+          } >> "$GITHUB_ENV"
+
       - name: Run the suite
         env:
           # Both are read by bench.sh and land in the results file, so the
@@ -131,9 +170,11 @@ jobs:
           # — as it did the first time this ran, on a runner reporting 4.
           BENCH_HOST_LABEL: GitHub Actions ubuntu-latest runner
           BENCH_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        # A row whose five implementations disagree makes bench.sh exit
+        # A row whose implementations disagree makes bench.sh exit
         # non-zero: the timings would be comparing different computations.
-        run: ./bench/bench.sh --timeout 300
+        # bench.sh also reads BENCH_SCALE from the environment; passing it
+        # explicitly keeps the command line in the log self-describing.
+        run: ./bench/bench.sh --timeout 300 --scale "$BENCH_SCALE"
 
       - name: Physical-floor check (chaincheck)
         # Every serial-chain row must run no faster than its dependency
@@ -151,10 +192,10 @@ jobs:
         # downloading an artifact or waiting for the site to publish.
         if: always()
         run: |
-          if [[ -f bench/RESULTS.md ]]; then
-            cat bench/RESULTS.md >> "$GITHUB_STEP_SUMMARY"
+          if [[ -f "$REPORT_MD" ]]; then
+            cat "$REPORT_MD" >> "$GITHUB_STEP_SUMMARY"
           else
-            echo '`bench/RESULTS.md` was not produced — the run failed before the report stage.' \
+            echo "\`$REPORT_MD\` was not produced — the run failed before the report stage." \
               >> "$GITHUB_STEP_SUMMARY"
           fi
 
@@ -166,8 +207,8 @@ jobs:
         with:
           name: bench-results-${{ github.run_id }}
           path: |
-            bench/results/latest.json
-            bench/RESULTS.md
+            ${{ env.REPORT_JSON }}
+            ${{ env.REPORT_MD }}
           retention-days: 90
 
       - name: Commit the refreshed results to main
@@ -191,10 +232,14 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.BENCH_PUSH_TOKEN || github.token }}
         run: |
-          if git diff --quiet -- bench/results/latest.json bench/RESULTS.md; then
+          # a xN report may be new: add it before asking whether it changed
+          git add -N -- "$REPORT_JSON" "$REPORT_MD"
+          if git diff --quiet -- "$REPORT_JSON" "$REPORT_MD"; then
             echo "results unchanged — nothing to commit."
             exit 0
           fi
+          scale_tag=""
+          [[ "$BENCH_SCALE" == 1 ]] || scale_tag=" x$BENCH_SCALE"
 
           today="$(date -u +%Y-%m-%d)"
           git config user.name 'github-actions[bot]'
@@ -212,11 +257,18 @@ jobs:
 
           # A tag build has a detached HEAD; commit onto main explicitly so
           # the results land where the site reads them from.
+          # Carry the measured files across the switch to main outside the
+          # worktree: a xN report is untracked, which `git stash` would
+          # leave behind.
           git fetch origin main
-          git stash push -- bench/results/latest.json bench/RESULTS.md
-          git checkout -B main origin/main
-          git checkout stash@{0} -- bench/results/latest.json bench/RESULTS.md
-          git stash drop
+          keep_pre="$(mktemp -d)"
+          cp "$REPORT_JSON" "$keep_pre/report.json"
+          cp "$REPORT_MD" "$keep_pre/report.md"
+          git reset -q -- "$REPORT_JSON" "$REPORT_MD"
+          git checkout -f -B main origin/main
+          mkdir -p "$(dirname "$REPORT_JSON")"
+          cp "$keep_pre/report.json" "$REPORT_JSON"
+          cp "$keep_pre/report.md" "$REPORT_MD"
 
           # [skip ci] because this commit is two data files and nothing
           # else. ci.yml and windows-tests.yml have no paths filter, so
@@ -227,8 +279,8 @@ jobs:
           # was never a loop; there was a second full CI round per merge,
           # which is pure waste. The numbers were produced by a run that
           # passed the correctness gate and chaincheck before committing.
-          git add bench/results/latest.json bench/RESULTS.md
-          git commit -m "bench: refresh measured numbers ($today) [skip ci]"
+          git add -- "$REPORT_JSON" "$REPORT_MD"
+          git commit -m "bench: refresh measured numbers$scale_tag ($today) [skip ci]"
 
           # Keep the measured files OUTSIDE the worktree for the replay
           # below. Stashing them cannot work there: by that point they are
@@ -236,8 +288,8 @@ jobs:
           # leaves no stash@{0}, and the replay silently drops the run's
           # results instead of publishing them.
           keep="$(mktemp -d)"
-          cp bench/results/latest.json "$keep/latest.json"
-          cp bench/RESULTS.md "$keep/RESULTS.md"
+          cp "$REPORT_JSON" "$keep/report.json"
+          cp "$REPORT_MD" "$keep/report.md"
 
           # The suite takes tens of minutes; another merge can land in that
           # window. Replay the two files onto the new tip rather than failing
@@ -253,13 +305,14 @@ jobs:
             echo "push refused (attempt $attempt) — replaying onto the new tip"
             git fetch origin main
             git reset --hard origin/main
-            cp "$keep/latest.json" bench/results/latest.json
-            cp "$keep/RESULTS.md" bench/RESULTS.md
-            if git diff --quiet -- bench/results/latest.json bench/RESULTS.md; then
+            cp "$keep/report.json" "$REPORT_JSON"
+            cp "$keep/report.md" "$REPORT_MD"
+            git add -- "$REPORT_JSON" "$REPORT_MD"
+            if git diff --cached --quiet -- "$REPORT_JSON" "$REPORT_MD"; then
               echo "the new tip already carries these numbers — nothing to do."
               exit 0
             fi
-            git commit -am "bench: refresh measured numbers ($today) [skip ci]"
+            git commit -m "bench: refresh measured numbers$scale_tag ($today) [skip ci]"
           done
           echo "::error::could not push refreshed results after 3 attempts."
           echo "::error::If this is GH013, BENCH_PUSH_TOKEN's account is not in the"

@@ -38,10 +38,11 @@
 #      ./bench/wasmbench.sh --scale 100        # every benchmark does 100x the work
 #      ./bench/wasmbench.sh --stdout           # print the report, touch nothing
 #
-#  --scale N multiplies every benchmark's workload by N before it is
-#  compiled: each source defines `BENCH_SCALE` once (1) and multiplies its
-#  iteration count by it, or repeats its kernel that many times, so a xN
-#  program is the same program with a bigger constant. x1 is the published
+#  --scale N (default: $BENCH_SCALE, else 1) multiplies every benchmark's
+#  workload by N before it is compiled: each source defines `BENCH_SCALE`
+#  once (1) and multiplies its iteration count by it, or repeats its
+#  kernel that many times, so a xN program is the same program with a
+#  bigger constant. x1 is the published
 #  contract, exactly as before; a large N amortises process start-up and
 #  the runtimes' module compilation and leaves the generated code. A xN run
 #  writes WASMRESULTS-xN.md and results/wasm-xN.json beside the x1 report
@@ -86,7 +87,7 @@ JSON_OUT="$BENCH/results/wasm-latest.json"
 MD_OUT="$BENCH/WASMRESULTS.md"
 WRITE=1
 NWASM_ALL_LANGS=0        # also run C/Rust on the interpreter (--nwasm-all-langs)
-SCALE=1                  # workload multiplier (--scale N): BENCH_SCALE in every source
+SCALE="${BENCH_SCALE:-1}"  # workload multiplier (--scale N, default $BENCH_SCALE): BENCH_SCALE in every source
 JSON_SET=0; MD_SET=0
 SELECTED=()
 
@@ -111,7 +112,7 @@ while (( $# > 0 )); do
 done
 
 if [[ ! "$SCALE" =~ ^[1-9][0-9]{0,8}$ ]]; then
-    echo "wasmbench.sh: --scale wants a positive integer below 10^9, got '$SCALE'" >&2
+    echo "wasmbench.sh: --scale (or BENCH_SCALE) wants a positive integer below 10^9, got '$SCALE'" >&2
     exit 2
 fi
 # A xN run is its own report: the x1 table stays the published one.
@@ -378,7 +379,9 @@ fsize() { [[ -f "$1" ]] && stat -c%s "$1" 2>/dev/null || echo 0; }
 
 # ── roster ───────────────────────────────────────────────────────
 names=(); blurbs=(); shapes=()
-while IFS=$'\t' read -r name blurb shape; do
+# A fourth manifest column, when present, lists the row's bench.sh languages;
+# every row has NURL, C and Rust, which is all this suite runs.
+while IFS=$'\t' read -r name blurb shape _langs; do
     [[ -z "${name:-}" || "$name" == \#* ]] && continue
     if (( ${#SELECTED[@]} > 0 )); then
         selected_hit=0

@@ -7,11 +7,12 @@
 #  of bench/bench.sh: same corpus, same manifest, same protocol,
 #  same two artefacts.
 #
-#  Every benchmark in bench/manifest.tsv is implemented five times —
-#  NURL, C, Rust, Node, Python — and every implementation prints one
-#  line. This script compiles what needs compiling, gates the row on all
-#  five printing the *same* line, then times them and writes two
-#  artefacts:
+#  Every benchmark in bench/manifest.tsv is implemented in NURL, C and
+#  Rust, and most also in Node and Python (the manifest's optional fourth
+#  column names a row's languages); every implementation prints one line.
+#  This script compiles what needs compiling, gates the row on all of its
+#  implementations printing the *same* line, then times them and writes
+#  two artefacts:
 #
 #    bench/results/latest-windows.json   machine-readable, schema 1 —
 #                                        the same shape the landing
@@ -26,9 +27,18 @@
 #      pwsh bench\bench.ps1 -Bench lcg,sieve
 #      pwsh bench\bench.ps1 -Reps 9 -BudgetMs 20000
 #      pwsh bench\bench.ps1 -Stdout            # print the report, touch nothing
+#      pwsh bench\bench.ps1 -Scale 100         # every benchmark does 100x the work
+#
+#  -Scale N (default: $env:BENCH_SCALE, else 1) multiplies every
+#  benchmark's workload by N before it is compiled, exactly as bench.sh's
+#  --scale does: each NURL, C and Rust source defines `BENCH_SCALE` once
+#  (1) and a copy with that one number rewritten is compiled. Node and
+#  Python have no multiplier, so a xN run is NURL / C / Rust only and
+#  writes RESULTS-WINDOWS-xN.md / results\xN-windows.json.
 #
 #  Requires build\nurlc.exe + stdlib\runtime.o (build.bat), clang, rustc,
-#  node and python. A missing toolchain is a hard error: a table with a
+#  and node and python when a selected row runs them (never at -Scale > 1).
+#  A missing toolchain is a hard error: a table with a
 #  hole in it is worse than no table, because the hole is invisible once
 #  the numbers are copied out.
 #
@@ -58,7 +68,7 @@
 #
 #  * OUTPUT COMPARISON NORMALISES LINE ENDINGS. C's and Python's stdio
 #    are in text mode on Windows and emit CRLF; the NURL runtime and
-#    Node emit LF. Comparing raw bytes would fail all fifteen rows for a
+#    Node emit LF. Comparing raw bytes would fail every row for a
 #    reason that has nothing to do with the benchmark.
 #
 #  * PYTHON IS RESOLVED TO A REAL INTERPRETER PATH. `python3` usually
@@ -86,7 +96,9 @@ param(
     # Print the Markdown report to stdout and write nothing.
     [switch]$Stdout,
     # 1 rep/cell, 1 compile/cell — a smoke test of the harness itself.
-    [switch]$Quick
+    [switch]$Quick,
+    # Workload multiplier: BENCH_SCALE in every NURL, C and Rust source.
+    [string]$Scale = $(if ($env:BENCH_SCALE) { $env:BENCH_SCALE } else { '1' })
 )
 $ErrorActionPreference = 'Stop'
 
@@ -100,8 +112,19 @@ $Manifest  = Join-Path $BenchDir 'manifest.tsv'
 $MaxReps = $Reps
 $Opt     = '-O2'
 if ($Quick) { $MaxReps = 1; $BudgetMs = 1; $CompileReps = 1 }
-if (-not $Json) { $Json = Join-Path $BenchDir 'results\latest-windows.json' }
-if (-not $Md)   { $Md   = Join-Path $BenchDir 'RESULTS-WINDOWS.md' }
+if ($Scale -notmatch '^[1-9][0-9]{0,8}$') {
+    Write-Host "bench.ps1: -Scale (or BENCH_SCALE) wants a positive integer below 10^9, got '$Scale'" -ForegroundColor Red
+    exit 2
+}
+$ScaleN = [int64]$Scale
+# A xN run is its own report: the x1 table stays the reference one.
+if ($ScaleN -eq 1) {
+    if (-not $Json) { $Json = Join-Path $BenchDir 'results\latest-windows.json' }
+    if (-not $Md)   { $Md   = Join-Path $BenchDir 'RESULTS-WINDOWS.md' }
+} else {
+    if (-not $Json) { $Json = Join-Path $BenchDir "results\x$Scale-windows.json" }
+    if (-not $Md)   { $Md   = Join-Path $BenchDir "RESULTS-WINDOWS-x$Scale.md" }
+}
 
 # nurlc resolves `$ "stdlib/..."` imports relative to its working
 # directory, so every compile and every run happens from $Root.
@@ -109,6 +132,42 @@ Set-Location $Root
 New-Item -ItemType Directory -Force -Path $BuildDir | Out-Null
 
 $Utf8NoBom = New-Object System.Text.UTF8Encoding $false
+
+# ── roster ───────────────────────────────────────────────────────
+# `pwsh bench\bench.ps1 -Bench lcg,sieve` is -File invocation, and -File
+# hands every argument over as a literal string — so the comma list arrives
+# as ONE element, not three, and every name silently fails to match. Split
+# it here so the documented spelling works from pwsh, cmd and a PowerShell
+# prompt alike; `-Bench lcg,sieve` dot-sourced still binds as a real array
+# and splitting it is a no-op.
+if ($Bench) {
+    $Bench = @($Bench | ForEach-Object { $_ -split '[,;\s]+' } | Where-Object { $_ })
+}
+
+# The optional fourth column names a row's languages; without it a row is
+# all five. Node and Python have no BENCH_SCALE multiplier, so at xN they
+# drop out of every row.
+$names = @(); $blurbs = @(); $shapes = @(); $hasNode = @(); $hasPython = @()
+foreach ($line in [System.IO.File]::ReadAllLines($Manifest)) {
+    if (-not $line -or $line.StartsWith('#')) { continue }
+    $cols = $line -split "`t"
+    if ($cols.Count -lt 3) { continue }
+    $n = $cols[0].Trim()
+    if (-not $n) { continue }
+    if ($Bench -and ($Bench -notcontains $n)) { continue }
+    $langs = if ($cols.Count -ge 4 -and $cols[3].Trim()) { @($cols[3].Trim() -split '\s+') } else { @('nurl', 'c', 'rust', 'node', 'python') }
+    $names     += $n
+    $blurbs    += $cols[1]
+    $shapes    += $cols[2]
+    $hasNode   += (($ScaleN -eq 1) -and ($langs -contains 'node'))
+    $hasPython += (($ScaleN -eq 1) -and ($langs -contains 'python'))
+}
+if ($names.Count -eq 0) {
+    Write-Host 'bench.ps1: no benchmarks selected' -ForegroundColor Red
+    exit 2
+}
+$NeedNode   = $hasNode -contains $true
+$NeedPython = $hasPython -contains $true
 
 # ── toolchain detection ──────────────────────────────────────────
 $Nurlc   = Join-Path $Root 'build\nurlc.exe'
@@ -166,8 +225,8 @@ $Clang  = Resolve-Exe ($env:CLANG ? $env:CLANG : 'clang') @(
               "$env:ProgramFiles\LLVM\bin\clang.exe",
               "${env:ProgramFiles(x86)}\LLVM\bin\clang.exe")
 $Rustc  = Resolve-Exe 'rustc' @("$env:USERPROFILE\.cargo\bin\rustc.exe")
-$Node   = Resolve-Exe 'node'  @("$env:ProgramFiles\nodejs\node.exe")
-$Python = Resolve-Python
+$Node   = if ($NeedNode)   { Resolve-Exe 'node'  @("$env:ProgramFiles\nodejs\node.exe") } else { $null }
+$Python = if ($NeedPython) { Resolve-Python } else { $null }
 
 function First-Line([string]$s) {
     if (-not $s) { return '' }
@@ -189,8 +248,8 @@ function Get-ToolVersion([string]$exe) {
 
 $ClangVersion  = Get-ToolVersion $Clang
 $RustcVersion  = Get-ToolVersion $Rustc
-$NodeVersion   = Get-ToolVersion $Node
-$PythonVersion = Get-ToolVersion $Python
+$NodeVersion   = if ($NeedNode)   { Get-ToolVersion $Node }   else { 'n/a' }
+$PythonVersion = if ($NeedPython) { Get-ToolVersion $Python } else { 'n/a' }
 
 $missing = @()
 if (-not (Test-Path -LiteralPath $Nurlc) -or -not (Test-Path -LiteralPath $Runtime)) {
@@ -200,9 +259,11 @@ if     (-not $Clang)        { $missing += 'clang (install LLVM, or set CLANG=<pa
 elseif (-not $ClangVersion) { $missing += "clang at $Clang does not run" }
 if     (-not $Rustc)        { $missing += 'rustc (install Rust: winget install Rustlang.Rustup)' }
 elseif (-not $RustcVersion) { $missing += "rustc at $Rustc does not run (a rustup shim with no toolchain? run: rustup default stable)" }
-if     (-not $Node)         { $missing += 'node' }
-elseif (-not $NodeVersion)  { $missing += "node at $Node does not run" }
-if     (-not $Python)       { $missing += 'python (set NURL_BENCH_PYTHON=<path> to override)' }
+if ($NeedNode) {
+    if     (-not $Node)        { $missing += 'node' }
+    elseif (-not $NodeVersion) { $missing += "node at $Node does not run" }
+}
+if ($NeedPython -and -not $Python) { $missing += 'python (set NURL_BENCH_PYTHON=<path> to override)' }
 if ($missing.Count -gt 0) {
     Write-Host "bench.ps1: missing toolchain: $($missing -join ', ')" -ForegroundColor Red
     exit 1
@@ -402,38 +463,51 @@ function Compile-Rust([string]$src, [string]$outbase) {
     return (Median $out)
 }
 
-# ── roster ───────────────────────────────────────────────────────
-# `pwsh bench\bench.ps1 -Bench lcg,sieve` is -File invocation, and -File
-# hands every argument over as a literal string — so the comma list arrives
-# as ONE element, not three, and every name silently fails to match. Split
-# it here so the documented spelling works from pwsh, cmd and a PowerShell
-# prompt alike; `-Bench lcg,sieve` dot-sourced still binds as a real array
-# and splitting it is a no-op.
-if ($Bench) {
-    $Bench = @($Bench | ForEach-Object { $_ -split '[,;\s]+' } | Where-Object { $_ })
+# ── workload scale ───────────────────────────────────────────────
+# The same one-line contract bench.sh and wasmbench.sh rewrite:
+# `: u64 BENCH_SCALE 1`, `#define BENCH_SCALE 1ULL`,
+# `const BENCH_SCALE: u64 = 1;`. x1 compiles the sources as they stand;
+# xN compiles copies with that one number rewritten. A source without
+# exactly one such line stops the run.
+$ScalePatterns = @{
+    nu = @('(?m)^(\s*: u64 BENCH_SCALE )1\r?$',          ('${1}' + $Scale))
+    c  = @('(?m)^(#define BENCH_SCALE )1ULL\r?$',         ('${1}' + $Scale + 'ULL'))
+    rs = @('(?m)^(const BENCH_SCALE: u64 = )1;\r?$',      ('${1}' + $Scale + ';'))
 }
-
-$names = @(); $blurbs = @(); $shapes = @()
-foreach ($line in [System.IO.File]::ReadAllLines($Manifest)) {
-    if (-not $line -or $line.StartsWith('#')) { continue }
-    $cols = $line -split "`t"
-    if ($cols.Count -lt 3) { continue }
-    $n = $cols[0].Trim()
-    if (-not $n) { continue }
-    if ($Bench -and ($Bench -notcontains $n)) { continue }
-    $names  += $n
-    $blurbs += $cols[1]
-    $shapes += $cols[2]
+$SrcDir = Join-Path $BuildDir "src-x$Scale"
+function Src-For([string]$b, [string]$ext) {
+    $in = Join-Path $BenchDir "$b.$ext"
+    if ($ScaleN -eq 1) { return $in }
+    $pat = $ScalePatterns[$ext]
+    $out = Join-Path $SrcDir "$b.$ext"
+    $text = [System.IO.File]::ReadAllText($in)
+    [System.IO.File]::WriteAllText($out, ([regex]::Replace($text, $pat[0], $pat[1])), $Utf8NoBom)
+    return $out
 }
-if ($names.Count -eq 0) {
-    Write-Host 'bench.ps1: no benchmarks selected' -ForegroundColor Red
-    exit 2
+if ($ScaleN -ne 1) {
+    New-Item -ItemType Directory -Force -Path $SrcDir | Out-Null
+    $bad = @()
+    foreach ($b in $names) {
+        foreach ($ext in 'nu', 'c', 'rs') {
+            $text = [System.IO.File]::ReadAllText((Join-Path $BenchDir "$b.$ext"))
+            if ([regex]::Matches($text, $ScalePatterns[$ext][0]).Count -ne 1) { $bad += "$b.$ext" }
+        }
+    }
+    if ($bad.Count -gt 0) {
+        Write-Host "bench.ps1: -Scale $Scale needs exactly one BENCH_SCALE definition in: $($bad -join ' ')" -ForegroundColor Red
+        exit 2
+    }
 }
 
 # json_parse reads a generated fixture; make sure it exists before the
 # gate runs, or four languages fail identically and the row looks fine.
 if (-not (Test-Path -LiteralPath (Join-Path $BenchDir 'data.json'))) {
-    & $Python (Join-Path $BenchDir 'gen_data.py') | Out-Null
+    $gen = if ($Python) { $Python } else { Resolve-Python }
+    if (-not $gen) {
+        Write-Host 'bench.ps1: bench\data.json is missing and no python is installed to run gen_data.py' -ForegroundColor Red
+        exit 1
+    }
+    & $gen (Join-Path $BenchDir 'gen_data.py') | Out-Null
 }
 
 # ── process-start-up floor ───────────────────────────────────────
@@ -463,8 +537,8 @@ $ccFloorRust = Compile-Rust (Join-Path $floorDir 'floor.rs') $fbase
 $floorNurl   = (Time-Cell "$fbase.nurl.exe").Ms
 $floorC      = (Time-Cell "$fbase.c.exe").Ms
 $floorRust   = (Time-Cell "$fbase.rs.exe").Ms
-$floorNode   = (Time-Cell $Node   @((Join-Path $floorDir 'floor.js'))).Ms
-$floorPython = (Time-Cell $Python @((Join-Path $floorDir 'floor.py'))).Ms
+$floorNode   = if ($NeedNode)   { (Time-Cell $Node   @((Join-Path $floorDir 'floor.js'))).Ms } else { 'n/a' }
+$floorPython = if ($NeedPython) { (Time-Cell $Python @((Join-Path $floorDir 'floor.py'))).Ms } else { 'n/a' }
 
 # ── measure ──────────────────────────────────────────────────────
 # Per-benchmark results, collected as parallel arrays in manifest order —
@@ -489,21 +563,21 @@ foreach ($i in 0..($names.Count - 1)) {
     $base = Join-Path $BuildDir $b
 
     Progress-Line $b 'compiling…'
-    $ccNurl = Compile-Nurl (Join-Path $BenchDir "$b.nu") $base
-    $ccC    = Compile-C    (Join-Path $BenchDir "$b.c")  $base
-    $ccRust = Compile-Rust (Join-Path $BenchDir "$b.rs") $base
+    $ccNurl = Compile-Nurl (Src-For $b 'nu') $base
+    $ccC    = Compile-C    (Src-For $b 'c')  $base
+    $ccRust = Compile-Rust (Src-For $b 'rs') $base
 
     Progress-Line $b 'verifying…'
     $outNurl   = Run-Output "$base.nurl.exe"
     $outC      = Run-Output "$base.c.exe"
     $outRust   = Run-Output "$base.rs.exe"
-    $outNode   = Run-Output $Node   @((Join-Path $BenchDir "$b.js"))
-    $outPython = Run-Output $Python @((Join-Path $BenchDir "$b.py"))
+    $pairs = @(@('NURL', $outNurl), @('C', $outC), @('Rust', $outRust))
+    if ($hasNode[$i])   { $pairs += ,@('Node',   (Run-Output $Node   @((Join-Path $BenchDir "$b.js")))) }
+    if ($hasPython[$i]) { $pairs += ,@('Python', (Run-Output $Python @((Join-Path $BenchDir "$b.py")))) }
 
     $verified = $true
     $details  = @()
-    foreach ($pair in @(@('NURL', $outNurl), @('C', $outC), @('Rust', $outRust),
-                        @('Node', $outNode), @('Python', $outPython))) {
+    foreach ($pair in $pairs) {
         $lang = $pair[0]; $got = $pair[1]
         if ($got -cne $outNurl) { $verified = $false }
         if (-not $got)          { $verified = $false }
@@ -513,7 +587,8 @@ foreach ($i in 0..($names.Count - 1)) {
 
     $row = [ordered]@{
         name = $b; blurb = $blurbs[$i]; measures = $shapes[$i]
-        checksum = $outNurl; verified = $verified; detail = $detail
+        checksum = $outNurl; verified = $verified; detail = $detail; langs = $pairs.Count
+        has_node = [bool]$hasNode[$i]; has_python = [bool]$hasPython[$i]
         cc_nurl_fe = $ccNurl.Frontend; cc_nurl = $ccNurl.Total; cc_c = $ccC; cc_rust = $ccRust
     }
 
@@ -532,10 +607,14 @@ foreach ($i in 0..($names.Count - 1)) {
     $row.ms_c = $t.Ms;      $row.reps_c = $t.Reps
     Progress-Line $b 'timing Rust…';   $t = Time-Cell "$base.rs.exe"
     $row.ms_rust = $t.Ms;   $row.reps_rust = $t.Reps
-    Progress-Line $b 'timing Node…';   $t = Time-Cell $Node   @((Join-Path $BenchDir "$b.js"))
-    $row.ms_node = $t.Ms;   $row.reps_node = $t.Reps
-    Progress-Line $b 'timing Python…'; $t = Time-Cell $Python @((Join-Path $BenchDir "$b.py"))
-    $row.ms_python = $t.Ms; $row.reps_python = $t.Reps
+    if ($hasNode[$i]) {
+        Progress-Line $b 'timing Node…';   $t = Time-Cell $Node   @((Join-Path $BenchDir "$b.js"))
+        $row.ms_node = $t.Ms;   $row.reps_node = $t.Reps
+    } else { $row.ms_node = 'n/a'; $row.reps_node = 0 }
+    if ($hasPython[$i]) {
+        Progress-Line $b 'timing Python…'; $t = Time-Cell $Python @((Join-Path $BenchDir "$b.py"))
+        $row.ms_python = $t.Ms; $row.reps_python = $t.Reps
+    } else { $row.ms_python = 'n/a'; $row.reps_python = 0 }
 
     Write-Host ("`r`e[K  {0,-18} nurl {1,9}  c {2,9}  rust {3,9}  node {4,9}  python {5,9}" -f `
         $b, $row.ms_nurl, $row.ms_c, $row.ms_rust, $row.ms_node, $row.ms_python)
@@ -585,7 +664,8 @@ function Emit-Json {
     & $w "    ""max_reps"": $MaxReps,"
     & $w "    ""budget_ms"": $BudgetMs,"
     & $w "    ""timeout_s"": $TimeoutS,"
-    & $w "    ""compile_reps"": $CompileReps"
+    & $w "    ""compile_reps"": $CompileReps,"
+    & $w "    ""workload_scale"": $Scale"
     & $w '  },'
     & $w ("  ""floor_ms"": {{ ""nurl"": {0}, ""c"": {1}, ""rust"": {2}, ""node"": {3}, ""python"": {4} }}," -f `
         (JNum $floorNurl), (JNum $floorC), (JNum $floorRust), (JNum $floorNode), (JNum $floorPython))
@@ -598,6 +678,10 @@ function Emit-Json {
         & $w "      ""name"": ""$(JStr $r.name)"","
         & $w "      ""blurb"": ""$(JStr $r.blurb)"","
         & $w "      ""measures"": ""$(JStr $r.measures)"","
+        $lj = '"nurl", "c", "rust"'
+        if ($r.has_node)   { $lj += ', "node"' }
+        if ($r.has_python) { $lj += ', "python"' }
+        & $w "      ""languages"": [$lj],"
         & $w "      ""checksum"": ""$(JStr $r.checksum)"","
         & $w "      ""verified"": $(if ($r.verified) { 'true' } else { 'false' }),"
         & $w ("      ""run_ms"": {{ ""nurl"": {0}, ""c"": {1}, ""rust"": {2}, ""node"": {3}, ""python"": {4} }}," -f `
@@ -656,6 +740,12 @@ function Emit-Md {
     & $a 'platform, which is the property worth measuring; both make the NURL column'
     & $a 'incomparable to a Linux run cell-for-cell.'
     & $a ''
+    if ($ScaleN -ne 1) {
+        & $a "**Workload ×$Scale.** Every benchmark below does $Scale times its published"
+        & $a 'work (`BENCH_SCALE` in each source), so start-up is a smaller share of'
+        & $a 'every cell. Node and Python have no multiplier and are not run.'
+        & $a ''
+    }
 
     & $a '## Environment'
     & $a ''
@@ -680,13 +770,15 @@ function Emit-Md {
     & $a "| Timed runs per cell | up to $MaxReps, adaptive: as many as fit in $BudgetMs ms |"
     & $a "| Timed compiles per cell | $CompileReps (median) |"
     & $a "| Per-run timeout | $TimeoutS s |"
+    & $a "| Workload scale | ×$Scale |"
     & $a ''
 
     & $a '## 1. Run time (median wall clock, ms — lower is better)'
     & $a ''
     & $a 'Whole-process wall clock, start-up included. Every implementation of a'
-    & $a 'row prints the same line (section 3), so these are five timings of the'
-    & $a 'same computation. **Bold** is the fastest cell in the row.'
+    & $a 'row prints the same line (section 3), so a row''s cells are timings of the'
+    & $a 'same computation. **Bold** is the fastest cell in the row; `n/a` is a'
+    & $a 'language the row is not implemented in (bench/manifest.tsv).'
     & $a ''
     & $a '| Benchmark | NURL | C | Rust | Node | Python |'
     & $a '|---|---:|---:|---:|---:|---:|'
@@ -723,7 +815,7 @@ function Emit-Md {
 
     & $a '## 3. Correctness gate'
     & $a ''
-    & $a 'Each row is timed only when all five implementations print the same'
+    & $a 'Each row is timed only when all of its implementations print the same'
     & $a 'line. A speed number for a program computing something else is worthless,'
     & $a 'so a mismatch drops the row out of the tables above rather than being'
     & $a 'reported as a fast cell. Comparison is on the text, with CRLF normalised'
@@ -734,7 +826,7 @@ function Emit-Md {
     & $a '|---|---|---|'
     foreach ($r in $rows) {
         if ($r.verified) {
-            & $a ("| ``{0}`` | ``{1}`` | identical across 5 languages |" -f $r.name, $r.checksum)
+            & $a ("| ``{0}`` | ``{1}`` | identical across {2} languages |" -f $r.name, $r.checksum, $r.langs)
         } else {
             & $a ("| ``{0}`` | — | **MISMATCH** — {1} |" -f $r.name, $r.detail)
         }
@@ -751,7 +843,7 @@ function Emit-Md {
     & $a '  be clever: LLVM will fold an affine recurrence or unroll a loop by a'
     & $a '  different factor in each language. A cell measures optimised throughput'
     & $a '  of the same algorithm, not the source-level iteration count.'
-    & $a '* Nine of the fifteen benchmarks are defined over 64-bit unsigned integers.'
+    & $a '* Nine of the original fifteen benchmarks are defined over 64-bit unsigned integers.'
     & $a '  Python has arbitrary-precision integers and masks; JS has no 64-bit'
     & $a '  integer at all, so those rows use `BigInt` where the algorithm genuinely'
     & $a '  needs 64 bits and Numbers with `Math.imul` where 32 bits suffice. Each'
@@ -761,6 +853,10 @@ function Emit-Md {
     & $a '  parser in its own box (Python `json`, Node `JSON.parse`, NURL'
     & $a "  ``stdlib/ext/json.nu``), and C and Rust — whose boxes are empty — carry a"
     & $a '  small hand-written recursive-descent parser in the benchmark file.'
+    & $a '* `chacha20`, `poly1305`, `blake2b`, `sha512` and `x25519` are NURL / C /'
+    & $a '  Rust only. Their NURL file is a driver around the standard library''s own'
+    & $a '  implementation; C and Rust carry the same formulation written out by hand'
+    & $a '  (see bench.sh''s report and each source''s header).'
     & $a '* Wall clock on a machine that was not quiesced drifts a few per cent'
     & $a '  between runs, and more on a laptop that can thermally throttle or drop'
     & $a '  to a power-saving governor mid-suite. Compare deltas between runs on the'

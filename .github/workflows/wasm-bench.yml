@@ -48,7 +48,7 @@ permissions:
 
 jobs:
   wasm-bench:
-    name: 15 benchmarks × NURL / C / Rust × native / JIT / interpreter
+    name: 20 benchmarks × NURL / C / Rust × native / JIT / interpreter
     runs-on: ubuntu-latest
     # The interpreter is ~500x slower than native — that is the
     # measurement, not a defect of the harness — and wasmbench.sh keeps it

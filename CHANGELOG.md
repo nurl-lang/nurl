@@ -6,6 +6,30 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Five cryptographic benchmark rows** — `chacha20`, `poly1305`,
+  `blake2b`, `sha512` and `x25519` — in NURL, C and Rust. The NURL side
+  is a driver around the standard library's own implementation
+  (stdlib/std/chacha20poly1305.nu, hash_blake2b.nu, hash_sha512.nu,
+  x25519.nu), so the rows measure the stdlib a NURL program gets; C and
+  Rust carry the same formulation by hand (poly1305-donna-64, the
+  donna-c64 X25519 field with native 128-bit products, scalar ChaCha20).
+  Every source is checked against its RFC/FIPS vector, and all three
+  languages also pass the wasm suite's ten-cell gate.
+- `bench/manifest.tsv` takes an optional fourth column naming a row's
+  languages; Node and Python report `n/a` on the NURL/C/Rust-only rows.
+- `bench/bench.sh --scale N` (default `$BENCH_SCALE`, else 1), the
+  workload multiplier `wasmbench.sh` already had: a xN run is NURL / C /
+  Rust only and writes `RESULTS-xN.md` / `results/xN.json` beside the x1
+  report. `bench.yml` gains the matching `scale` input; push and tag runs
+  stay x1. `wasmbench.sh` now also defaults `--scale` to `$BENCH_SCALE`.
+- `bench/bench.ps1 -Scale N`, and `bench/wasmbench.ps1`, a port of
+  `wasmbench.sh` for Windows (exercised under pwsh on Linux; its
+  Windows-only branches are not yet run on a Windows host).
+
 ## [0.71.0] — 2026-10-07
 
 The ownership rules become the language: **every program accepted without
