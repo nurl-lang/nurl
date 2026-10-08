@@ -133,7 +133,7 @@ $ `stdlib/core/slice.nu`
     ( check == ( string_len none ) 0 `tenancy: no template yields no issuer` )
 
     // The provider's own template, with the token's tenant substituted.
-    = g_az_iss_tmpl `https://login.example.com/{tenantid}/v2.0`
+    ( anomaly_authz_set_iss_tmpl `https://login.example.com/{tenantid}/v2.0` )
     : String iss ( __az_issuer_for `1111-2222` )
     ( check ( streq iss `https://login.example.com/1111-2222/v2.0` )
     `tenancy: the tenant is substituted into the template` )
@@ -145,10 +145,10 @@ $ `stdlib/core/slice.nu`
     // A template with no placeholder is a fixed string somebody wrote by
     // mistake; substituting nothing into it would silently accept every
     // tenant under one issuer, so it is refused.
-    = g_az_iss_tmpl `https://login.example.com/fixed/v2.0`
+    ( anomaly_authz_set_iss_tmpl `https://login.example.com/fixed/v2.0` )
     : String noph ( __az_issuer_for `1111-2222` )
     ( check == ( string_len noph ) 0 `tenancy: a template without the placeholder is refused` )
-    = g_az_iss_tmpl `https://login.example.com/{tenantid}/v2.0`
+    ( anomaly_authz_set_iss_tmpl `https://login.example.com/{tenantid}/v2.0` )
 
     // The allowlist. Empty admits everyone — that is what multi-tenant
     // asks for — and a list admits exactly what it names.
@@ -188,7 +188,7 @@ $ `stdlib/core/slice.nu`
 
     ( anomaly_authz_configure T T `https://id.example/organizations/v2.0` `cid` `api://cid` )
     ( anomaly_authz_configure_tenancy T `` )
-    = g_az_iss_tmpl `https://id.example/{tenantid}/v2.0`
+    ( anomaly_authz_set_iss_tmpl `https://id.example/{tenantid}/v2.0` )
     : Principal p1 ( __az_token_principal ( string_data tok ) 1700000000 )
     ( check ! . p1 authed `wiring: an unapproved organisation is refused` )
     ( check ( __has ( anomaly_authz_last_error ) `not approved` )
@@ -207,7 +207,7 @@ $ `stdlib/core/slice.nu`
     : OidcProvider fake ( oidc_provider_new `https://id.example/organizations/v2.0` )
     : b _j ( oidc_provider_set_jwks fake `{"keys":[]}` )
     = g_az_prov_addr # i fake
-    = g_az_iss_tmpl `https://id.example/{tenantid}/v2.0`
+    ( anomaly_authz_set_iss_tmpl `https://id.example/{tenantid}/v2.0` )
     : Principal p2 ( __az_token_principal ( string_data tok ) 1700000000 )
     ( check ! . p2 authed `wiring: an unsigned token is still refused` )
     ( check ! ( __has ( anomaly_authz_last_error ) `not approved` )

@@ -99,6 +99,7 @@ $ `stdlib/core/slice.nu`
     String s_allowed
     String s_last_err  // why the last token verification failed
     String s_owner  // the owner tenant: config-only, the trust anchor
+    String s_iss_tmpl  // multi-tenant: the provider's issuer template
 }
 
 : ~ i g_az_strs 0
@@ -112,6 +113,7 @@ unsafe @ __az_strs → *AzStrings {
     = . a s_allowed ( string_new )
     = . a s_last_err ( string_new )
     = . a s_owner ( string_new )
+    = . a s_iss_tmpl ( string_new )
     = g_az_strs # i a
     ^ a
 }
@@ -123,6 +125,7 @@ unsafe @ __az_set_str * AzStrings a i which s v → v {
     ? == which 3 { ( string_clear . a s_allowed ) ( string_push_str . a s_allowed v ) } {}
     ? == which 4 { ( string_clear . a s_last_err ) ( string_push_str . a s_last_err v ) } {}
     ? == which 5 { ( string_clear . a s_owner ) ( string_push_str . a s_owner v ) } {}
+    ? == which 6 { ( string_clear . a s_iss_tmpl ) ( string_push_str . a s_iss_tmpl v ) } {}
 }
 
 unsafe @ g_az_issuer → s { ^ ( string_data . ( __az_strs ) s_issuer ) }
@@ -132,6 +135,15 @@ unsafe @ g_az_client_id → s { ^ ( string_data . ( __az_strs ) s_client_id ) }
 unsafe @ g_az_audience → s { ^ ( string_data . ( __az_strs ) s_audience ) }
 
 unsafe @ g_az_allowed → s { ^ ( string_data . ( __az_strs ) s_allowed ) }
+
+// The multi-tenant issuer template, read from the provider's discovery
+// document (__az_provider_multi): every token's `iss` is measured against
+// it with `{tenantid}` replaced. Owned here like the configured strings —
+// it once was a view of the discovery reader's local String, which was
+// freed when the reader returned, so every later check read freed memory.
+unsafe @ g_az_iss_tmpl → s { ^ ( string_data . ( __az_strs ) s_iss_tmpl ) }
+
+unsafe @ anomaly_authz_set_iss_tmpl s t → v { ( __az_set_str ( __az_strs ) 6 t ) }
 
 // The OWNER TENANT: the organisation whose admins administer the service
 // itself — approving other tenants, managing any organisation's users. It
@@ -186,7 +198,6 @@ unsafe @ __az_set_last_err s v → v { ( __az_set_str ( __az_strs ) 4 v ) }
 // which may; empty means any, which is what "multi-tenant" asks for and
 // should be a deliberate answer rather than a default nobody saw.
 : ~ b g_az_multi F
-: ~ s g_az_iss_tmpl ``
 
 @ anomaly_authz_set_root s root → v {
     = g_az_root root
@@ -213,7 +224,7 @@ unsafe @ anomaly_authz_configure_tenancy b multi s allowed → v {
     // A change of tenancy mode changes what the provider must be built
     // from, so the cached one is no longer the right one.
     = g_az_prov_addr 0
-    = g_az_iss_tmpl ``
+    ( anomaly_authz_set_iss_tmpl `` )
 }
 
 @ anomaly_authz_multi_tenant → b { ^ g_az_multi }
@@ -1564,8 +1575,7 @@ unsafe @ __az_provider → ?OidcProvider {
 
     : OidcProvider p ( oidc_provider_new ( g_az_issuer ) )
     ( oidc_provider_set_jwks_uri p ( string_data jwks ) )
-    // tmpl backs g_az_iss_tmpl for the process's lifetime: kept.
-    = g_az_iss_tmpl ( string_data tmpl )
+    ( anomaly_authz_set_iss_tmpl ( string_data tmpl ) )
     ( __az_keep_provider p )
     ^ @ ?OidcProvider { T p }
 }
@@ -1581,7 +1591,7 @@ unsafe @ __az_provider → ?OidcProvider {
 // template with `{tenantid}` replaced. Empty when there is no template or
 // no tenant, which is a refusal rather than a wildcard.
 @ __az_issuer_for s tid → String {
-    : ( Slice u ) g_az_iss_tmpl_b ( slice_of_str g_az_iss_tmpl )
+    : ( Slice u ) g_az_iss_tmpl_b ( slice_of_str ( g_az_iss_tmpl ) )
     : i tn ( slice_len [u] g_az_iss_tmpl_b )
     ? & > tn 0 > ( nurl_str_len tid ) 0 {} { ^ ( string_new ) }
     : s needle `{tenantid}`
