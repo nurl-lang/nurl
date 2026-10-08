@@ -40,7 +40,6 @@ $ `stdlib/ext/manifest.nu`
     PkgBadIdentity  // URL/index/archive does not identify the requested package
     PkgUntrustedRegistry  // no signing key configured for this registry
     PkgTrustConfig  // malformed or unreadable explicit trust configuration
-    PkgToolchain  // package requires a newer compiler/stdlib/runtime
 }
 
 @ pkg_err_name PkgFetchErr e → s {
@@ -54,7 +53,6 @@ $ `stdlib/ext/manifest.nu`
         PkgBadIdentity → `PkgBadIdentity`
         PkgUntrustedRegistry → `PkgUntrustedRegistry`
         PkgTrustConfig → `PkgTrustConfig`
-        PkgToolchain → `PkgToolchain: upgrade NURL to satisfy package.nurl-version`
     }
 }
 
@@ -158,8 +156,9 @@ $ `stdlib/ext/manifest.nu`
     }
 }
 
+// `toolchain` is accepted and ignored: `package.nurl-version` is
+// informational and never refuses an install (docs/TOOLING.md).
 @ __pkg_archive_identity ( Vec TarEntry ) entries s name s version s toolchain → !v PkgFetchErr {
-    : ~ b compatible T
     : ~ i manifests 0
     : ~ b valid F
     : i n ( vec_len [TarEntry] entries )
@@ -177,7 +176,6 @@ $ `stdlib/ext/manifest.nu`
                             T manifest → {
                                 = valid & != 0 ( nurl_str_eq ( string_data . manifest name ) name )
                                 != 0 ( nurl_str_eq ( string_data . manifest version ) version )
-                                = compatible ( manifest_supports_toolchain manifest toolchain )
                             }
                             F _ → {}
                         }
@@ -189,7 +187,6 @@ $ `stdlib/ext/manifest.nu`
         = k + k 1
     }
     ? | != manifests 1 ! valid { ^ @ !v PkgFetchErr { F PkgBadIdentity } } {}
-    ? ! compatible { ^ @ !v PkgFetchErr { F PkgToolchain } } {}
     ^ @ !v PkgFetchErr { T 0 }
 }
 

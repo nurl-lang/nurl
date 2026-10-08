@@ -12,11 +12,10 @@
 #    2. newest released CHANGELOG.md section (source tarball, no git).
 #    3. v0.0.0.
 #
-#  Every step yields a SemVer-shaped string, and that is a contract, not a
-#  cosmetic preference: `package.nurl-version` compares this against a
-#  package's declared minimum (manifest_supports_toolchain), and a version
-#  it cannot parse compares as "too old" — every package refused, by a
-#  toolchain that is in fact current. `--always` broke exactly that. A
+#  Every step yields a SemVer-shaped string. nurlpkg no longer gates on
+#  `package.nurl-version`, but up to v0.71.0 it did, and a version it could
+#  not parse compared as "too old" — every package refused, by a toolchain
+#  that was in fact current. `--always` broke exactly that. A
 #  shallow CI checkout, or any clone whose tags were not fetched, has no
 #  tag to describe, and `--always` answers with a bare commit SHA instead
 #  of letting step 2 do its job. Ask for a tag; fall through when there is

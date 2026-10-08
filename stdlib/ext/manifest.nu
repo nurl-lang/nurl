@@ -317,6 +317,9 @@ $ `stdlib/ext/semver.nu`
 }
 
 // Is the toolchain at least the package's `package.nurl-version`?
+// Advisory only: nurlpkg calls this nowhere, and no install or publish is
+// refused on its answer (docs/TOOLING.md). It is kept for tools that want
+// to print a hint, with the rules a hint should follow:
 //
 // The answer is F only when the toolchain's version is KNOWN and strictly
 // older. A requirement check that cannot tell is not evidence of an old

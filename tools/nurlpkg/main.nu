@@ -1479,18 +1479,16 @@ unsafe @ __update_candidate Manifest m Dep d → !String i {
     } {}
     : String mfpath ( string_from target_s )
     ( string_push_str mfpath `/nurl.toml` )
-    : ~ i minimum_rc 1
+    : ~ i manifest_rc 1
     ?? ( manifest_load ( string_data mfpath ) ) {
-        T manifest → {
-            = minimum_rc ( __check_selected_toolchain manifest )
-        }
+        T manifest → { = manifest_rc 0 }
         F error → {
             ( nurl_eprint `nurlpkg: cannot parse local dependency ` )
             ( nurl_eprint ( string_data mfpath ) ) ( nurl_eprint `: ` )
             ( nurl_eprintln ( manifest_err_name error ) )
         }
     }
-    ? != minimum_rc 0 { ^ 1 } {}
+    ? != manifest_rc 0 { ^ 1 } {}
     : String linkpath ( __deps_path name )
     : s linkpath_s ( string_data linkpath )
     ? ( file_exists linkpath_s ) {
@@ -2542,65 +2540,17 @@ unsafe @ __cmd_registry_info s name → i {
     ^ bad
 }
 
-@ __check_manifest_toolchain Manifest m s actual → i {
-    ? ( manifest_supports_toolchain m actual ) { ^ 0 } {}
-    ( nurl_eprint `nurlpkg: ` ) ( nurl_eprint ( string_data . m name ) )
-    ( nurl_eprint ` requires NURL >= ` ) ( nurl_eprint ( string_data . m nurl_version ) )
-    ( nurl_eprint `; selected toolchain is ` ) ( nurl_eprintln actual )
-    ( nurl_eprintln `nurlpkg: run nurl upgrade or select a compatible installed toolchain.` )
-    ^ 1
-}
-
-// Match installation to the same target compiler used by the publication gate.
-// Without an installed prefix, the source-built CLI and runtime form the target.
-@ __selected_toolchain_version → String {
-    : String root ( __toolchain_stdlib_root )
-    : String cc ( __installed_nurlc root )
-    : ~ String version ( string_new )
-    ? > ( string_len cc ) 0 {
-        : ( Vec s ) args ( vec_new [s] )
-        ( vec_push [s] args `--version` )
-        ?? ( process_run ( string_data cc ) args `` ) {
-            F _ → {}
-            T output → {
-                ? ( output_success output ) {
-                    : String raw ( string_from ( output_stdout output ) )
-                    = version ( string_trim raw )
-                } {}
-            }
-        }
-    } {
-        : ~ b selected F
-        ?? ( env_get `NURL_STDLIB` ) {
-            T value → { = selected > ( string_len value ) 0 }
-            F empty → {}
-        }
-        ? ! selected { ( string_push_str version ( nurl_version ) ) } {}
-    }
-    // No answer from the compiler: nurlpkg ships in the same toolchain, so
-    // its own baked-in version is the best evidence left. An empty or
-    // unparseable answer is accepted by manifest_supports_toolchain anyway.
-    ? == ( string_len version ) 0 { ( string_push_str version ( nurl_version ) ) } {}
-    ^ version
-}
-
-@ __check_selected_toolchain Manifest manifest → i {
-    ? == ( string_len . manifest nurl_version ) 0 { ^ 0 } {}
-    : String version ( __selected_toolchain_version )
-    : i result ( __check_manifest_toolchain manifest ( string_data version ) )
-    ^ result
-}
-
+// `package.nurl-version` is informational: no install or publish compares
+// it against the toolchain. A version gate that reads the toolchain wrong
+// refuses every package on a toolchain that is in fact current — it did,
+// on every Windows install of v0.71.0 — and a gate that can fail that way
+// costs more than the incompatibility it was meant to catch.
 @ __install_locked_for_selected_toolchain RegistryTrust trust LockPkg pkg s dest → !i PkgFetchErr {
-    : String version ( __selected_toolchain_version )
-    : !i PkgFetchErr result ( pkg_install_locked_for_toolchain trust pkg dest ( string_data version ) )
-    ^ result
+    ^ ( pkg_install_locked trust pkg dest )
 }
 
 @ __install_for_selected_toolchain s registry s name s version s checksum s dest → !i PkgFetchErr {
-    : String toolchain ( __selected_toolchain_version )
-    : !i PkgFetchErr result ( pkg_install_one_for_toolchain registry name version checksum dest ( string_data toolchain ) )
-    ^ result
+    ^ ( pkg_install_one registry name version checksum dest )
 }
 
 @ __check_builds_against_installed Manifest manifest → i {
@@ -2630,20 +2580,6 @@ unsafe @ __cmd_registry_info s name → i {
     }
 
     : ~ i bad 0
-    ? > ( string_len . manifest nurl_version ) 0 {
-        : ( Vec s ) args ( vec_new [s] )
-        ( vec_push [s] args `--version` )
-        ?? ( process_run ( string_data cc ) args `` ) {
-            F _ → { = bad 1 ( nurl_eprintln `nurlpkg: could not query installed compiler version` ) }
-            T output → {
-                : String raw_version ( string_from ( output_stdout output ) )
-                : String version ( string_trim raw_version )
-                ? ! ( output_success output ) { = bad 1 } {
-                    = bad ( __check_manifest_toolchain manifest ( string_data version ) )
-                }
-            }
-        }
-    } {}
     ? != bad 0 { ^ bad } {}
     ?? ( pkg_pack_list `.` ) {
         T files → {
@@ -3624,9 +3560,6 @@ unsafe @ __check_pathdep_drift Manifest m s reg → i {
             = rc 1
         }
         T root → {
-            ? != ( __check_selected_toolchain root ) 0 {
-                ^ 1
-            } {}
             : i n ( vec_len [Dep] . root dependencies )
             ( nurl_print `installing ` )
             ( nurl_print ( nurl_str_int n ) )

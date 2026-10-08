@@ -12,16 +12,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`nurlpkg install` refused every package on Windows** with
   `PkgToolchain: upgrade NURL to satisfy package.nurl-version`, on a
-  toolchain that met the requirement. nurlpkg looked for the installed
-  compiler at `<prefix>\bin\nurlc.exe`, but the install puts the binary
-  at `build\nurlc.exe` and only a `.bat` shim in `bin\`; it found
-  nothing, read an empty version, and an empty version compared as too
-  old. It now finds `build/nurlc[.exe]` (then `bin/`), falls back to its
-  own baked-in version, and `package.nurl-version` refuses only a
-  toolchain whose version is known and strictly older: an unknown
-  version is accepted, and a `git describe` dev build
-  (`v0.71.0-3-gabc1234[-dirty]`) compares as its tag, not as a
-  prerelease of it.
+  v0.71.0 toolchain that met every requirement (`nq`, `nwasm`, `anomaly`,
+  `zst`, …). nurlpkg looked for the installed compiler at
+  `<prefix>\bin\nurlc.exe`; the install puts it at `build\nurlc.exe` and
+  only a `.bat` shim in `bin\`, so it read an empty version, and an empty
+  version compared as too old.
+
+### Changed
+
+- **`package.nurl-version` no longer gates anything.** `nurlpkg install`
+  (registry packages, the root project, local dependencies) and
+  `nurlpkg publish` no longer compare it against the toolchain, and the
+  `PkgToolchain` error is gone. A gate that reads the toolchain wrong
+  refuses every package on a current toolchain; that costs more than the
+  incompatibility it guards against, which still surfaces as a compile
+  error. The field is still parsed and validated. nurlpkg also finds the
+  installed compiler at `build/nurlc[.exe]` now, which `publish`'s
+  typecheck of packaged sources needed on Windows. Toolchains up to
+  v0.71.0 keep the old gate until they are upgraded.
 
 ### Added
 
