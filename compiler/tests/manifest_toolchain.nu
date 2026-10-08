@@ -33,8 +33,24 @@ $ `stdlib/ext/manifest.nu`
     ( supports `nurl-version="0.65.0"` `v0.65.0-rc.1` F )
     ( supports `nurl-version="0.65.0-rc.1"` `v0.65.0-rc.2` T )
     ( supports `nurl-version="0.65.0"` `v0.65.0+build.1` T )
-    ( supports `nurl-version="0.65.0"` `` F )
-    ( supports `nurl-version="0.65.0"` `unknown` F )
+    // A toolchain that cannot say what it is is not refused: only a
+    // version known to be older is.
+    ( supports `nurl-version="0.65.0"` `` T )
+    ( supports `nurl-version="0.65.0"` `unknown` T )
+    ( supports `nurl-version="0.65.0"` `v0.0.0` T )
+    ( supports `nurl-version="0.65.0"` `1a2b3c4` T )
+    // `nurlc --version` as it arrives through a Windows pipe
+    ( supports `nurl-version="0.71.0"` `v0.71.0\r\n` T )
+    ( supports `nurl-version="0.71.0"` `  v0.71.0  ` T )
+    ( supports `nurl-version="0.71.0"` `v0.71.1` T )
+    ( supports `nurl-version="0.71.0"` `v0.72.0` T )
+    ( supports `nurl-version="0.71.0"` `v1.0.0` T )
+    ( supports `nurl-version="0.71.0"` `v0.70.9` F )
+    // `git describe` dev builds are the tag plus commits: never older
+    ( supports `nurl-version="0.71.0"` `v0.71.0-3-gabc1234` T )
+    ( supports `nurl-version="0.71.0"` `v0.71.0-dirty` T )
+    ( supports `nurl-version="0.71.0"` `v0.71.0-12-g0123456789abcdef-dirty` T )
+    ( supports `nurl-version="0.71.0"` `v0.70.0-3-gabc1234` F )
     ( invalid `nurl-version=65` )
     ( invalid `nurl-version=["0.65.0"]` )
     ( invalid `nurl-version="^0.65.0"` )

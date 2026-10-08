@@ -8,6 +8,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`nurlpkg install` refused every package on Windows** with
+  `PkgToolchain: upgrade NURL to satisfy package.nurl-version`, on a
+  toolchain that met the requirement. nurlpkg looked for the installed
+  compiler at `<prefix>\bin\nurlc.exe`, but the install puts the binary
+  at `build\nurlc.exe` and only a `.bat` shim in `bin\`; it found
+  nothing, read an empty version, and an empty version compared as too
+  old. It now finds `build/nurlc[.exe]` (then `bin/`), falls back to its
+  own baked-in version, and `package.nurl-version` refuses only a
+  toolchain whose version is known and strictly older: an unknown
+  version is accepted, and a `git describe` dev build
+  (`v0.71.0-3-gabc1234[-dirty]`) compares as its tag, not as a
+  prerelease of it.
+
 ### Added
 
 - **Five cryptographic benchmark rows** — `chacha20`, `poly1305`,

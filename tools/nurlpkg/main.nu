@@ -2483,10 +2483,17 @@ unsafe @ __cmd_registry_info s name → i {
 // Missing or unlaunchable compilers cannot establish compatibility. Refuse
 // publication in both cases. Invoke the compiler with argv, never shell text:
 // toolchain paths are literal paths even when they contain shell metacharacters.
+// The installed compiler. install-toolchain.{sh,bat} put the real binary
+// at <prefix>/build/nurlc[.exe] and only a PATH shim in bin/ — on Windows a
+// .bat, which process_run cannot launch. Looking only in bin/ found nothing
+// on Windows, read an empty version, and refused every package.
 @ __installed_nurlc String root → String {
     : String p ( string_from ( string_data root ) )
-    ( string_push_str p ? ( __is_windows ) `/bin/nurlc.exe` `/bin/nurlc` )
+    ( string_push_str p ? ( __is_windows ) `/build/nurlc.exe` `/build/nurlc` )
     ? ( file_exists ( string_data p ) ) { ^ p } {}
+    : String b ( string_from ( string_data root ) )
+    ( string_push_str b ? ( __is_windows ) `/bin/nurlc.exe` `/bin/nurlc` )
+    ? ( file_exists ( string_data b ) ) { ^ b } {}
     ^ ( string_new )
 }
 
@@ -2546,7 +2553,6 @@ unsafe @ __cmd_registry_info s name → i {
 
 // Match installation to the same target compiler used by the publication gate.
 // Without an installed prefix, the source-built CLI and runtime form the target.
-// An explicitly selected prefix with no working compiler fails closed.
 @ __selected_toolchain_version → String {
     : String root ( __toolchain_stdlib_root )
     : String cc ( __installed_nurlc root )
@@ -2571,6 +2577,10 @@ unsafe @ __cmd_registry_info s name → i {
         }
         ? ! selected { ( string_push_str version ( nurl_version ) ) } {}
     }
+    // No answer from the compiler: nurlpkg ships in the same toolchain, so
+    // its own baked-in version is the best evidence left. An empty or
+    // unparseable answer is accepted by manifest_supports_toolchain anyway.
+    ? == ( string_len version ) 0 { ( string_push_str version ( nurl_version ) ) } {}
     ^ version
 }
 

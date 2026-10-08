@@ -316,24 +316,99 @@ $ `stdlib/ext/semver.nu`
     }
 }
 
-// Minimum toolchain comparison follows SemVer, including prereleases.
-// Toolchain --version output has a conventional leading 'v'; manifests do not.
+// Is the toolchain at least the package's `package.nurl-version`?
+//
+// The answer is F only when the toolchain's version is KNOWN and strictly
+// older. A requirement check that cannot tell is not evidence of an old
+// toolchain, and refusing on it turned a lookup bug into "nothing installs"
+// (a Windows install found no compiler where it looked, read an empty
+// version, and refused every package). So:
+//
+//   * an empty or unparseable toolchain version (`unknown`, a bare SHA)
+//     and the build scripts' `v0.0.0` no-version fallback are accepted;
+//   * a `git describe` dev build — `v0.71.0-3-gabc1234`, `v0.71.0-dirty`,
+//     `v0.71.0-3-gabc1234-dirty` — is the tag plus later commits, so it
+//     compares as its tag (0.71.0), not as a 0.71.0 prerelease;
+//   * a leading `v` and surrounding whitespace (CRLF from a Windows pipe)
+//     are ignored; otherwise SemVer precedence, real prereleases included
+//     (0.65.0-rc.1 is older than 0.65.0).
+@ __sv_all_digits s text i from i to → b {
+    ? >= from to { ^ F } {}
+    : ~ i k from
+    ~ < k to {
+        : i c ( nurl_str_get text k )
+        ? | < c 48 > c 57 { ^ F } {}
+        = k + k 1
+    }
+    ^ T
+}
+
+@ __sv_all_hex s text i from i to → b {
+    ? >= from to { ^ F } {}
+    : ~ i k from
+    ~ < k to {
+        : i c ( nurl_str_get text k )
+        : b digit & >= c 48 <= c 57
+        : b lower & >= c 97 <= c 102
+        : b upper & >= c 65 <= c 70
+        ? ! | | digit lower upper { ^ F } {}
+        = k + k 1
+    }
+    ^ T
+}
+
+// Length of `text` with a trailing `git describe` suffix removed:
+// `-dirty`, then `-<commits>-g<hex sha>`.
+@ __toolchain_describe_core_len s text i n → i {
+    : ~ i end n
+    ? >= end 6 {
+        : b dirty & & & & & == ( nurl_str_get text - end 6 ) 45
+        == ( nurl_str_get text - end 5 ) 100 == ( nurl_str_get text - end 4 ) 105
+        == ( nurl_str_get text - end 3 ) 114 == ( nurl_str_get text - end 2 ) 116
+        == ( nurl_str_get text - end 1 ) 121
+        ? dirty { = end - end 6 } {}
+    } {}
+    // last '-' before end: start of the -g<sha> part
+    : ~ i g - end 1
+    ~ & >= g 0 != ( nurl_str_get text g ) 45 { = g - g 1 }
+    ? & > g 0 & < + g 1 end == ( nurl_str_get text + g 1 ) 103 {
+        ? ( __sv_all_hex text + g 2 end ) {
+            : ~ i c - g 1
+            ~ & >= c 0 != ( nurl_str_get text c ) 45 { = c - c 1 }
+            ? & > c 0 ( __sv_all_digits text + c 1 g ) { = end c } {}
+        } {}
+    } {}
+    ^ end
+}
+
 @ manifest_supports_toolchain Manifest manifest s actual → b {
     ? == ( string_len . manifest nurl_version ) 0 { ^ T } {}
-    : s version ? == ( nurl_str_get actual 0 ) 118 # s + # i actual 1 actual
-    ?? ( semver_parse version ) {
-        F _ → ^ F
+    : String raw ( string_from actual )
+    : String trimmed ( string_trim raw )
+    : ~ i from 0
+    ? > ( string_len trimmed ) 0 {
+        ? == ( string_get trimmed 0 ) 118 { = from 1 } {}
+    } {}
+    : i n - ( string_len trimmed ) from
+    : String rest ( string_substr trimmed from n )
+    : i core ( __toolchain_describe_core_len ( string_data rest ) n )
+    : String version ( string_substr rest 0 core )
+    : ~ b supported T
+    ?? ( semver_parse ( string_data version ) ) {
+        F _ → {}
         T current → {
-            : ~ b supported F
-            ?? ( semver_parse ( string_data . manifest nurl_version ) ) {
-                F _ → {}
-                T required → {
-                    = supported >= ( semver_compare current required ) 0
+            : b unknown & & == . current major 0 == . current minor 0 == . current patch 0
+            ? ! unknown {
+                ?? ( semver_parse ( string_data . manifest nurl_version ) ) {
+                    F _ → {}
+                    T required → {
+                        = supported >= ( semver_compare current required ) 0
+                    }
                 }
-            }
-            ^ supported
+            } {}
         }
     }
+    ^ supported
 }
 
 // Read `path` from disk and parse it. Returns ManifestReadFailed when
