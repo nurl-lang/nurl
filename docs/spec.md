@@ -392,9 +392,23 @@ A function or method declaration may carry a leading `unsafe` prefix
   `. p k`);
 - cast to a pointer type (`# *T x`, `# i8* x`) — the null pointer
   `# *T 0` stays safe;
+- call a function that takes or hands back a raw pointer (`*T` in a
+  parameter or in the result, outside a closure type: `vec_data`,
+  `slice_data`, `nurl_str_at`, a program's own `→ *T`);
+- build a sealed representation field by field, or read or write its raw
+  fields — a struct that declares a raw-pointer field, or a library
+  handle (`Slice`, `Vec`, `Box`, …);
 - call a raw-memory primitive (`nurl_alloc`, `nurl_free`, `nurl_realloc`,
-  `mem_forget`, `nurl_peek*` / `nurl_poke*`, `nurl_memcpy`, …);
+  `mem_forget`, `nurl_peek*` / `nurl_poke*`, `nurl_memcpy`, …) or a C
+  primitive that reads or writes as far as its caller says, takes a
+  `FILE*` or a format string (`memmem`, `fwrite`, `fopen`, `printf`, …:
+  the builtins marked raw in `stdlib/core/builtins.nu`);
 - call a foreign (`&`) function declared outside the standard library.
+
+A string (`s`) in safe code is therefore NUL-terminated or null: nothing
+safe can turn a raw pointer into one. A null string reads as the empty
+string at every string primitive (`nurl_println`, `strlen`,
+`string_from`, …).
 
 ```
 // The rest of the program sees a safe function: it takes a String and
@@ -413,9 +427,9 @@ vouches that its body is memory-safe and leak-free for every caller, the
 way the standard library vouches for its own raw code. Calling an
 `unsafe` function needs no marking. The rest of the program is held to
 the ownership rules (docs/MEMORY.md §6), and **every program accepted
-without an `unsafe` function of its own is memory-safe and leak-free** —
-with one known exception in 0.71.0: a `Slice` of a `Vec` is not yet
-tracked as a view of it (docs/MEMORY.md §6.2).
+without an `unsafe` function of its own is memory-safe and leak-free**
+(docs/MEMORY.md §6.2 — with no exception since the pre-production
+hardening closed 0.71.0's `Slice` hole).
 `nurlc --unsafe-report` lists the `unsafe` functions a program
 contains outside the standard library — the whole surface a reviewer has
 to trust.
