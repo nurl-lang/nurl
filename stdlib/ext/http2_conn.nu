@@ -680,6 +680,17 @@ $ `stdlib/ext/http2_hpack.nu`
     ^ @ !( Vec u ) H2ConnErr { T out }
 }
 
+// Store a stream's freshly decoded header list: the old list is taken out
+// of the slot and dropped here, the new one moves in.
+@ __h2_put_decoded H2Connection c i sidx sink ( Vec Header ) hdrs → v {
+    : H2Stream s ( __h2_get_stream c sidx )
+    : ( Vec Header ) old . s decoded_headers
+    ( mem_take old )
+    = . s decoded_headers hdrs
+    = . s headers_decoded T
+    ( __h2_set_stream c sidx s )
+}
+
 // Apply HPACK to a stream's accumulated header_block and store the
 // decoded headers on the stream. Updates the connection's dec_dyn.
 @ __h2_decode_stream_headers H2Connection c i sidx → !H2Connection H2ConnErr {
@@ -688,13 +699,7 @@ $ `stdlib/ext/http2_hpack.nu`
     : !HpackDecoded HpackErr dr ( hpack_decode_block . s header_block . cur dec_dyn )
     ?? dr {
         T dd → {
-            // Replace decoded_headers on the stream; the old list is
-            // taken out of the slot and dropped here.
-            : ( Vec Header ) old . s decoded_headers
-            ( mem_take old )
-            = . s decoded_headers . dd headers
-            = . s headers_decoded T
-            ( __h2_set_stream cur sidx s )
+            ( __h2_put_decoded cur sidx . dd headers )
             ^ @ !H2Connection H2ConnErr { T cur }
         }
         F _ → {
@@ -1158,19 +1163,22 @@ $ `stdlib/ext/http2_hpack.nu`
             = . s decoded_headers . dd headers
             = . s headers_decoded T
             ( __h2_set_stream c idx s )
-            : ?H2ConnErr vr ( __h2_check_request_headers s )
+            // The slot as it now is: `s` was a copy of it, and writing the
+            // connection may have changed what the table holds.
+            : H2Stream cur ( __h2_get_stream c idx )
+            : ?H2ConnErr vr ( __h2_check_request_headers cur )
             ?? vr { T e → { ^ @ !H2Event H2ConnErr { F e } } F _ → {} }
-            ? & . s end_stream_received ( __h2_content_length_mismatch s ) {
+            ? & . cur end_stream_received ( __h2_content_length_mismatch cur ) {
                 ^ @ !H2Event H2ConnErr { F H2ConnProtocol }
             } {}
-            ? . s refused {
+            ? . cur refused {
                 : !v H2ConnErr rs ( h2_stream_reset c sid ( h2_err_refused_stream ) )
                 ?? rs { T _ → {} F e → { ^ @ !H2Event H2ConnErr { F e } } }
                 ^ @ !H2Event H2ConnErr { T ( __h2_event ( h2_event_reset ) sid T ( h2_err_refused_stream ) ) }
             } {}
             ^ @ !H2Event H2ConnErr { T @ H2Event {
-                    ( h2_event_headers ) sid ( __h2_copy_headers . s decoded_headers )
-                    ( vec_new [u] ) . s end_stream_received 0 } }
+                    ( h2_event_headers ) sid ( __h2_copy_headers . cur decoded_headers )
+                    ( vec_new [u] ) . cur end_stream_received 0 } }
         }
     }
 }
@@ -1236,8 +1244,10 @@ $ `stdlib/ext/http2_hpack.nu`
             : i grant - . c our_initial_window_size . s recv_window
             : !v H2FrameErr wr ( __h2_send_window_update c . s id grant )
             ?? wr { T _ → {} F e → { ^ @ !v H2ConnErr { F ( __h2_frame_err_to_conn e ) } } }
-            = . s recv_window . c our_initial_window_size
-            ( __h2_set_stream c k s )
+            // Queuing the frame wrote the connection: the slot as it is now.
+            : H2Stream upd ( __h2_get_stream c k )
+            = . upd recv_window . c our_initial_window_size
+            ( __h2_set_stream c k upd )
         } {}
         = k + k 1
     }
@@ -1611,9 +1621,10 @@ $ `stdlib/ext/http2_hpack.nu`
 @ h2_stream_reset inout H2Connection c i sid i code → !v H2ConnErr {
     : i idx ( __h2_find_stream_index c sid )
     ? < idx 0 { ^ @ !v H2ConnErr { F H2ConnProtocol } } {}
-    : H2Stream s ( __h2_get_stream c idx )
     : !v H2FrameErr wr ( __h2_send_rst_stream c sid code )
     ?? wr { T _ → {} F e → { ^ @ !v H2ConnErr { F ( __h2_frame_err_to_conn e ) } } }
+    // Read after the frame was queued: that wrote the connection.
+    : H2Stream s ( __h2_get_stream c idx )
     = . s state ( h2_state_closed )
     = . s refused T
     ( __h2_set_stream c idx s )
@@ -1687,11 +1698,13 @@ $ `stdlib/ext/http2_hpack.nu`
     ? != status_count 1 { ^ @ !v H2ConnErr { F H2ConnProtocol } } {}
     : !v H2ConnErr wr ( __h2_write_header_block c sid headers end_stream )
     ?? wr { T _ → {} F e → { ^ @ !v H2ConnErr { F e } } }
-    = . s response_headers_sent T
+    // Writing the block wrote the connection: the slot as it is now.
+    : H2Stream sent ( __h2_get_stream c idx )
+    = . sent response_headers_sent T
     ? end_stream {
-        : H2Stream ended ( __h2_local_end s )
+        : H2Stream ended ( __h2_local_end sent )
         ( __h2_set_stream c idx ended )
-    } { ( __h2_set_stream c idx s ) }
+    } { ( __h2_set_stream c idx sent ) }
     ^ @ !v H2ConnErr { T 0 }
 }
 
@@ -1706,7 +1719,9 @@ $ `stdlib/ext/http2_hpack.nu`
     ? ! ( __h2_trailers_valid headers ) { ^ @ !v H2ConnErr { F H2ConnProtocol } } {}
     : !v H2ConnErr wr ( __h2_write_header_block c sid headers T )
     ?? wr { T _ → {} F e → { ^ @ !v H2ConnErr { F e } } }
-    : H2Stream ended ( __h2_local_end s )
+    // Writing the block wrote the connection: the slot as it is now.
+    : H2Stream sent ( __h2_get_stream c idx )
+    : H2Stream ended ( __h2_local_end sent )
     ( __h2_set_stream c idx ended )
     ^ @ !v H2ConnErr { T 0 }
 }
@@ -1741,11 +1756,13 @@ $ `stdlib/ext/http2_hpack.nu`
     : !v H2FrameErr wr ( __h2_queue_frame c ( h2_type_data ) ? ended ( h2_flag_end_stream ) 0 sid view )
     ?? wr { T _ → {} F e → { ^ @ !i H2ConnErr { F ( __h2_frame_err_to_conn e ) } } }
     = . c conn_send_window - . c conn_send_window count
-    = . s send_window - . s send_window count
+    // Queuing the frame wrote the connection: the slot as it is now.
+    : H2Stream sent ( __h2_get_stream c idx )
+    = . sent send_window - . sent send_window count
     ? ended {
-        : H2Stream finished ( __h2_local_end s )
+        : H2Stream finished ( __h2_local_end sent )
         ( __h2_set_stream c idx finished )
-    } { ( __h2_set_stream c idx s ) }
+    } { ( __h2_set_stream c idx sent ) }
     ^ @ !i H2ConnErr { T count }
 }
 // ── Buffered HttpApp adapter ──────────────────────────────────────────

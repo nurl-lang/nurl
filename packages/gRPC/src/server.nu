@@ -496,6 +496,8 @@ unsafe @ __grpc_server_reject inout GrpcServer server i sid i code s message i h
     ~ < visited count {
         : i idx % + . server cursor visited count
         : ~ GrpcServerCall call ( __grpc_server_get server idx )
+        // A reject writes the table; the stream id outlives it.
+        : i sid . call stream_id
         ? . call output_finished {
             ? > ( vec_len [u] . . call decoder pending ) 0 {
                 ( vec_free [u] . . call decoder pending )
@@ -504,28 +506,31 @@ unsafe @ __grpc_server_reject inout GrpcServer server i sid i code s message i h
             = . . call decoder pos 0
             ? . call input_ended { = . call end_notified T } {}
             ( __grpc_server_put server idx call )
+            // The put wrote the table: read the slot as it now is.
+            = call ( __grpc_server_get server idx )
         } {}
         ? & ! . call cancelled > . call deadline_ns 0 {
             ? & ! . call output_finished >= ( monotonic_ns ) . call deadline_ns {
-                \ ( __grpc_server_reject server . call stream_id GRPC_DEADLINE_EXCEEDED `RPC deadline exceeded` 200 )
-                ^ @ !GrpcServerEvent GrpcError { T ( __grpc_server_event ( grpc_server_event_cancelled ) . call stream_id GRPC_DEADLINE_EXCEEDED ) }
+                \ ( __grpc_server_reject server sid GRPC_DEADLINE_EXCEEDED `RPC deadline exceeded` 200 )
+                ^ @ !GrpcServerEvent GrpcError { T ( __grpc_server_event ( grpc_server_event_cancelled ) sid GRPC_DEADLINE_EXCEEDED ) }
             } {}
         } {}
         ? & ! . call cancelled ! . call end_notified {
             : !GrpcMessage GrpcError decoded ( grpc_decoder_next . call decoder )
             ( __grpc_server_put server idx call )
+            = call ( __grpc_server_get server idx )
             ?? decoded {
                 F e → {
                     : i code . e code
-                    : !v GrpcError rejected ( __grpc_server_reject server . call stream_id code ( string_data . e message ) 200 )
+                    : !v GrpcError rejected ( __grpc_server_reject server sid code ( string_data . e message ) 200 )
                     \ rejected
-                    ^ @ !GrpcServerEvent GrpcError { T ( __grpc_server_event ( grpc_server_event_cancelled ) . call stream_id code ) }
+                    ^ @ !GrpcServerEvent GrpcError { T ( __grpc_server_event ( grpc_server_event_cancelled ) sid code ) }
                 }
                 T message → {
                     ? . message present {
                         = . server cursor + idx 1
                         ^ @ !GrpcServerEvent GrpcError { T @ GrpcServerEvent {
-                                ( grpc_server_event_message ) . call stream_id ( string_clone . call method )
+                                ( grpc_server_event_message ) sid ( string_clone . call method )
                                 ( grpc_metadata_new ) . message data GRPC_OK } }
                     } {}
                 }
@@ -535,16 +540,17 @@ unsafe @ __grpc_server_reject inout GrpcServer server i sid i code s message i h
                 ?? finished {
                     F e → {
                         : i code . e code
-                        : !v GrpcError rejected ( __grpc_server_reject server . call stream_id code ( string_data . e message ) 200 )
+                        : !v GrpcError rejected ( __grpc_server_reject server sid code ( string_data . e message ) 200 )
                         \ rejected
-                        ^ @ !GrpcServerEvent GrpcError { T ( __grpc_server_event ( grpc_server_event_cancelled ) . call stream_id code ) }
+                        ^ @ !GrpcServerEvent GrpcError { T ( __grpc_server_event ( grpc_server_event_cancelled ) sid code ) }
                     }
                     T _ → {
                         = . call end_notified T
                         ( __grpc_server_put server idx call )
+                        = call ( __grpc_server_get server idx )
                         = . server cursor + idx 1
                         ^ @ !GrpcServerEvent GrpcError { T @ GrpcServerEvent {
-                                ( grpc_server_event_half_close ) . call stream_id ( string_clone . call method )
+                                ( grpc_server_event_half_close ) sid ( string_clone . call method )
                                 ( grpc_metadata_clone . call request_trailers ) ( vec_new [u] ) GRPC_OK } }
                     }
                 }
@@ -584,6 +590,7 @@ unsafe @ __grpc_server_reject inout GrpcServer server i sid i code s message i h
             } {}
             : !v GrpcError fed ( grpc_decoder_feed . call decoder . event data )
             ( __grpc_server_put server idx call )
+            = call ( __grpc_server_get server idx )
             ?? fed {
                 T _ → {}
                 F e → {
@@ -597,8 +604,12 @@ unsafe @ __grpc_server_reject inout GrpcServer server i sid i code s message i h
         ? == kind ( h2_event_trailers ) {
             ?? ( grpc_metadata_decode . event headers . . server limits max_metadata ) {
                 T metadata → {
+                    // The old trailers are freed here, so the slot must take
+                    // the new ones now, whether or not the stream ends.
                     ( grpc_metadata_free . call request_trailers )
                     = . call request_trailers metadata
+                    ( __grpc_server_put server idx call )
+                    = call ( __grpc_server_get server idx )
                 }
                 F e → {
                     : i code . e code
