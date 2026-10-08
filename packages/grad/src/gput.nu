@@ -1023,7 +1023,7 @@ unsafe @ _gp_run * GProgImpl pg s name i grid i block ( Vec i ) args → b {
     ^ r
 }
 
-@ _gp_fill_buf * GProgImpl pg GkBuf b f v → b {
+unsafe @ _gp_fill_buf * GProgImpl pg GkBuf b f v → b {
     : ( Vec i ) a ( vec_new [i] )
     ( vec_push [i] a ( gk_arg_dev b ) )
     ( vec_push [i] a ( gpu_arg_i64 . b n ) )
@@ -1033,7 +1033,7 @@ unsafe @ _gp_run * GProgImpl pg s name i grid i block ( Vec i ) args → b {
 }
 
 // One forward launch for node `k`. Leaves are data — nothing to do.
-@ _gp_fwd_node * GProgImpl pg i k → b {
+unsafe @ _gp_fwd_node * GProgImpl pg i k → b {
     : GpNode nd ( _gp_node pg k )
     : i op . nd op
     ? <= op ( gop_const ) { ^ T } {}
@@ -1194,7 +1194,7 @@ unsafe @ gput_forward GProg pg__h → b {
 
 // The out-shaped contribution `src` accumulated into input `dst`'s gradient
 // over the broadcast axes (block at `moff`, odometer size `tfree`).
-@ _gp_accred * GProgImpl pg GpNode dst GpNode nd GkBuf src i moff i tfree f sgn → b {
+unsafe @ _gp_accred * GProgImpl pg GpNode dst GpNode nd GkBuf src i moff i tfree f sgn → b {
     : ( Vec i ) a ( vec_new [i] )
     ( vec_push [i] a ( gk_arg_dev . dst grad ) )
     ( vec_push [i] a ( gk_arg_dev src ) )
@@ -1208,7 +1208,7 @@ unsafe @ gput_forward GProg pg__h → b {
 }
 
 // g (out-shaped) ⊙ other-input → scr, via the ew block at `moff`.
-@ _gp_scr_ew * GProgImpl pg GpNode nd GkBuf x GkBuf y i moff i op → b {
+unsafe @ _gp_scr_ew * GProgImpl pg GpNode nd GkBuf x GkBuf y i moff i op → b {
     : ( Vec i ) a ( vec_new [i] )
     ( vec_push [i] a ( gk_arg_dev x ) )
     ( vec_push [i] a ( gk_arg_dev y ) )
@@ -1221,7 +1221,7 @@ unsafe @ gput_forward GProg pg__h → b {
     ^ r
 }
 
-@ _gp_bwd_node * GProgImpl pg i k → b {
+unsafe @ _gp_bwd_node * GProgImpl pg i k → b {
     : GpNode nd ( _gp_node pg k )
     ? == . nd reach 1 {} { ^ T }
     : i op . nd op
@@ -1636,25 +1636,25 @@ unsafe @ __gpopt_mv_ul * GpOptImpl o * GProgImpl pg b want_v i pi ( Vec f ) src 
     ^ ( _gp_ul . pg kit b src )
 }
 
-@ gpopt_m_download GpOpt o__h GProg pg__h i pi ( Vec f ) out → b {
+unsafe @ gpopt_m_download GpOpt o__h GProg pg__h i pi ( Vec f ) out → b {
     : *GpOptImpl o ( _GpOpt_ptr o__h )
     : *GProgImpl pg ( _GProg_ptr pg__h )
     ^ ( __gpopt_mv_dl o pg F pi out )
 }
 
-@ gpopt_v_download GpOpt o__h GProg pg__h i pi ( Vec f ) out → b {
+unsafe @ gpopt_v_download GpOpt o__h GProg pg__h i pi ( Vec f ) out → b {
     : *GpOptImpl o ( _GpOpt_ptr o__h )
     : *GProgImpl pg ( _GProg_ptr pg__h )
     ^ ( __gpopt_mv_dl o pg T pi out )
 }
 
-@ gpopt_m_upload GpOpt o__h GProg pg__h i pi ( Vec f ) src → b {
+unsafe @ gpopt_m_upload GpOpt o__h GProg pg__h i pi ( Vec f ) src → b {
     : *GpOptImpl o ( _GpOpt_ptr o__h )
     : *GProgImpl pg ( _GProg_ptr pg__h )
     ^ ( __gpopt_mv_ul o pg F pi src )
 }
 
-@ gpopt_v_upload GpOpt o__h GProg pg__h i pi ( Vec f ) src → b {
+unsafe @ gpopt_v_upload GpOpt o__h GProg pg__h i pi ( Vec f ) src → b {
     : *GpOptImpl o ( _GpOpt_ptr o__h )
     : *GProgImpl pg ( _GProg_ptr pg__h )
     ^ ( __gpopt_mv_ul o pg T pi src )

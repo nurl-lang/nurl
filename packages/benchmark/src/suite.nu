@@ -95,14 +95,14 @@ $ `src/report.nu`
 unsafe @ __b * u p i k → i { ^ # i . p k }
 
 // decimal digit at offset k
-@ __dig * u p i k → i { ^ - ( __b p k ) 48 }
+unsafe @ __dig * u p i k → i { ^ - ( __b p k ) 48 }
 
 // "type" cell → 0..9 (the ten words start with distinct letters a..j)
-@ __type_id * u p → i { ^ - ( __b p 0 ) 97 }
+unsafe @ __type_id * u p → i { ^ - ( __b p 0 ) 97 }
 
 // "YYYY-MM-DD" → a compact, order-preserving day key in [0, ~1112) (11 bits),
 // so type+date+uuid pack into one non-negative i64 for a radix sort.
-@ __date_key * u p → i {
+unsafe @ __date_key * u p → i {
     : i y + + + * ( __dig p 0 ) 1000 * ( __dig p 1 ) 100 * ( __dig p 2 ) 10 ( __dig p 3 )
     : i mo + * ( __dig p 5 ) 10 ( __dig p 6 )
     : i da + * ( __dig p 8 ) 10 ( __dig p 9 )
@@ -113,7 +113,7 @@ unsafe @ __b * u p i k → i { ^ # i . p k }
 @ __hexv i c → i { ? <= c 57 - c 48 - c 87 }
 
 // first 16 hex chars of a uuid → an i64 tie-breaker
-@ __hex16 * u p → i {
+unsafe @ __hex16 * u p → i {
     : ~ i acc 0
     : ~ i k 0
     ~ < k 16 {
@@ -174,7 +174,7 @@ unsafe @ __ins_i * i a i lo i hi → v {
     }
 }
 
-@ __qs_i * i a i lo i hi → v {
+unsafe @ __qs_i * i a i lo i hi → v {
     : ~ i l lo
     : ~ i h hi
     ~ < l h {

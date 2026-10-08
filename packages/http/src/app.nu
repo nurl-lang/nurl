@@ -539,7 +539,7 @@ unsafe @ __httpapp_serve * HttpAppImpl a TcpListener listener s scheme s host i 
 
 // Bind host:port and serve until the listener is closed (SIGINT/SIGTERM or
 // error). Returns a process exit code (0 clean, 1 on bind/serve error).
-@ http_app_listen HttpApp a__h s host i port → i {
+unsafe @ http_app_listen HttpApp a__h s host i port → i {
     : *HttpAppImpl a ( __HttpApp_ptr a__h )
     : !TcpListener NetErr lr ( tcp_listen host port )
     ?? lr {

@@ -19,7 +19,7 @@ unsafe @ pool_new i cap → *Pool {
 unsafe @ pool_num_free * Pool p → i { ^ ( vec_len [i] . p slots ) }
 
 // A second shape: takes an extra argument, still returns a value.
-@ pool_bytes_free * Pool p i unit → i { ^ * ( pool_num_free p ) unit }
+unsafe @ pool_bytes_free * Pool p i unit → i { ^ * ( pool_num_free p ) unit }
 
 // The release contract consumes the pool.
 unsafe @ pool_free sink * Pool p → v {

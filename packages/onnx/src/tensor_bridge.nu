@@ -29,7 +29,7 @@ $ `runtime.nu`
 // Run a graph with a device-resident input: no host staging, no upload.
 // The DTensor must be TE_F32 and shaped as the graph expects. Returns the
 // graph's first output (engine-owned, valid until the next rt_reset).
-@ rt_run_dtensor Engine e__h OGraph g DTensor d → RTensor {
+unsafe @ rt_run_dtensor Engine e__h OGraph g DTensor d → RTensor {
     : *EngineImpl e ( _rt_engine_ptr e__h )
     ? & ( dtensor_ok d ) == ( dtensor_dtype d ) TE_F32 {} {
         ^ @ RTensor { ( string_new ) 0 ( vec_new [i] ) 0 }

@@ -161,11 +161,11 @@ unsafe @ __f5s_sync → *F5Sync { ^ # *F5Sync g_q_sync }
 
 : ~ i g_vc_rms 0  // ( Vec f ) — the loudness each was prepared at
 
-@ __f5s_vc_ids → ( Vec String ) { ^ # ( Vec String ) g_vc_ids }
+unsafe @ __f5s_vc_ids → ( Vec String ) { ^ # ( Vec String ) g_vc_ids }
 
-@ __f5s_vc_ptrs → ( Vec F5Voice ) { ^ # ( Vec F5Voice ) g_vc_ptrs }
+unsafe @ __f5s_vc_ptrs → ( Vec F5Voice ) { ^ # ( Vec F5Voice ) g_vc_ptrs }
 
-@ __f5s_vc_rms → ( Vec f ) { ^ # ( Vec f ) g_vc_rms }
+unsafe @ __f5s_vc_rms → ( Vec f ) { ^ # ( Vec f ) g_vc_rms }
 
 // A voice is cached with the loudness it was normalised TO. A request asking
 // for a different target_rms gets the recording prepared again rather than
@@ -237,9 +237,9 @@ unsafe @ __f5s_sync → *F5Sync { ^ # *F5Sync g_q_sync }
 // once would be faster to switch between and would also mean several
 // gigabytes of a card standing idle, which is the opposite of what
 // --unload-after is for.
-@ __f5s_cur_id → String { ^ # String g_f5_cur_id }
+unsafe @ __f5s_cur_id → String { ^ # String g_f5_cur_id }
 
-@ __f5s_switch_to s id → b {
+unsafe @ __f5s_switch_to s id → b {
     ? == 0 ( nurl_str_len id ) { ^ T } {}
     ? != 0 ( nurl_str_eq ( string_data ( __f5s_cur_id ) ) id ) { ^ T } {}
     : String ck ( string_new )
@@ -324,7 +324,7 @@ unsafe @ __f5s_submit * F5JobImpl j → b {
     ^ . j ok
 }
 
-@ __f5s_reload → b {
+unsafe @ __f5s_reload → b {
     : F5Model m # F5Model g_f5_model
     : Vocos vc # Vocos g_f5_voc
     ? ( f5_loaded m ) { ^ T } {}
@@ -553,7 +553,7 @@ i retries f max_wer i splitfail f target_rms s model_id ( Vec f ) out ( Vec i ) 
 // POST /dialogue — {"inputs":[{"voice_id":…,"text":…}, …], …}
 // POST /tts      — {"voice_id":…,"text":…, …}, which is the same thing with
 //                  one input, exactly as the reference service builds it.
-@ __f5s_post_json HttpRequest req b single → HttpResponse {
+unsafe @ __f5s_post_json HttpRequest req b single → HttpResponse {
     ? ( __f5s_authed req ) {} { ^ ( __f5s_jerr 401 `unauthorized — pass 'Authorization: Bearer <token>'` ) }
     : String bodys ( string_new )
     ( string_push_bytes bodys ( vec_data [u] . req body ) ( vec_len [u] . req body ) )
@@ -724,7 +724,7 @@ i retries f max_wer i splitfail f target_rms s model_id ( Vec f ) out ( Vec i ) 
     ^ r
 }
 
-@ __f5s_health HttpRequest req → HttpResponse {
+unsafe @ __f5s_health HttpRequest req → HttpResponse {
     : Json o ( json_obj_new )
     : b loaded ( f5_loaded # F5Model g_f5_model )
     : b _a ( json_obj_set o `status` ( json_str_lit ? loaded `ok` `idle` ) )
@@ -933,7 +933,7 @@ s host i port s token i device i unload_s → i {
     ^ out
 }
 
-@ __f5s_part_str ( Vec MultipartPart ) parts s name → String {
+unsafe @ __f5s_part_str ( Vec MultipartPart ) parts s name → String {
     : String out ( string_new )
     : ~ i k 0
     ~ < k ( vec_len [MultipartPart] parts ) {

@@ -116,7 +116,7 @@ unsafe @ cov_file_path Cov c__h i idx → s {
 }
 
 // The row for `path`, created when this is the first object to mention it.
-@ cov_file_idx Cov c__h s path → i { ^ ( __cov_file_idx ( __Cov_ptr c__h ) path ) }
+unsafe @ cov_file_idx Cov c__h s path → i { ^ ( __cov_file_idx ( __Cov_ptr c__h ) path ) }
 
 unsafe @ __cov_file_idx * CovImpl c s path → i {
     : i n ( vec_len [CovFile] . c files )

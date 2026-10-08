@@ -7,7 +7,7 @@ $ `stdlib/ext/manifest.nu`
     }
 }
 
-@ exercise → !v IoErr {
+unsafe @ exercise → !v IoErr {
     : String directory \ ( fs_tempdir `.` `.nurl-manifest-load-` )
     ; { ( string_free directory ) }
     ; { ?? ( dir_remove_all ( string_data directory ) ) { T _ → {} F _ → {} } }

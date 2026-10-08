@@ -82,6 +82,9 @@ $ `stdlib/std/utf8.nu`
     : *u data . . r bytes data
     : i end . . r bytes len
     : ~ i p . r pos
+    // A reader's cursor is a plain field safe code can set: only its bytes
+    // are guaranteed, so the cursor is checked before the first read.
+    ? | < p 0 > p end { ^ @ !u64 ProtoError { F @ ProtoError { ProtoBadRange . r base } } } {}
     : ~ u64 value # u64 0
     : ~ i k 0
     ~ < k 10 {
@@ -122,7 +125,7 @@ $ `stdlib/std/utf8.nu`
 }
 
 @ __proto_take inout ProtoReader r i n → !( Slice u ) ProtoError {
-    ? < n 0 { ^ @ !( Slice u ) ProtoError { F ( __proto_error r ProtoBadRange ) } } {}
+    ? | | < n 0 < . r pos 0 > . r pos . . r bytes len { ^ @ !( Slice u ) ProtoError { F ( __proto_error r ProtoBadRange ) } } {}
     ? > n ( proto_remaining r ) { ^ @ !( Slice u ) ProtoError { F ( __proto_error r ProtoTruncated ) } } {}
     : *u start # *u + # i . . r bytes data . r pos
     = . r pos + . r pos n

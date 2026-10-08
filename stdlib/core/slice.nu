@@ -46,6 +46,12 @@ $ `stdlib/core/vec.nu`
     }
 }
 
+// The empty slice: no data, length 0. What a reader that has nothing to
+// read holds — the one Slice built from no Vec.
+@ slice_empty [A] → ( Slice A ) {
+    ^ @ ( Slice A ) { # *A 0 0 }
+}
+
 // Sub-range view `[from, to)`. Bounds are clamped to `[0, len(s))` —
 // `from > to` after clamping returns None; equal indices returns an
 // empty slice (data still points into v but len == 0).

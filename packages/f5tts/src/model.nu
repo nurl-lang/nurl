@@ -275,7 +275,7 @@ unsafe @ __f5m_up1 * F5ModelImpl m s suf → GkBuf {
     ^ b
 }
 
-@ __f5m_upl * F5ModelImpl m s pre i k s suf ( Vec GkBuf ) dst → b {
+unsafe @ __f5m_upl * F5ModelImpl m s pre i k s suf ( Vec GkBuf ) dst → b {
     : String s ( __f5m_name m pre k suf )
     : GkBuf b ( __f5m_up m ( string_data s ) )
     : b ok ( gk_buf_ok b )
@@ -329,7 +329,7 @@ unsafe @ __f5m_up_convw1 * F5ModelImpl m s suf → GkBuf {
     ^ b
 }
 
-@ __f5m_up_convwl * F5ModelImpl m s pre i idx s suf ( Vec GkBuf ) dst → b {
+unsafe @ __f5m_up_convwl * F5ModelImpl m s pre i idx s suf ( Vec GkBuf ) dst → b {
     : String s ( __f5m_name m pre idx suf )
     : GkBuf b ( __f5m_up_convw m ( string_data s ) )
     : b ok ( gk_buf_ok b )
@@ -637,7 +637,7 @@ unsafe @ __f5m_upload_all * F5ModelImpl m → b {
 // Which of the four prefixes this checkpoint actually uses, found by asking
 // for a tensor every F5-TTS has. Empty when none of them do, which is what a
 // file that is not an F5-TTS checkpoint looks like from here.
-@ __f5m_probe_prefix * F5ModelImpl m → String {
+unsafe @ __f5m_probe_prefix * F5ModelImpl m → String {
     : ( Vec String ) cands ( vec_new [String] )
     ( vec_push [String] cands ( string_from `ema_model.transformer.` ) )
     ( vec_push [String] cands ( string_from `ema_model_state_dict.ema_model.transformer.` ) )
@@ -1147,7 +1147,7 @@ unsafe @ f5_forward F5Model m__h → b {
 
 // ── the handles a caller needs ──────────────────────────────────────
 
-@ f5_rope F5Model m__h → b {
+unsafe @ f5_rope F5Model m__h → b {
     : *F5ModelImpl m ( __F5Model_ptr m__h )
     ^ ( __f5m_rope_tables m )
 }

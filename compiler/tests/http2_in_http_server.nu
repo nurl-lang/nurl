@@ -52,7 +52,7 @@ $ `stdlib/ext/http2_client.nu`
 }
 
 // One HTTP/2 GET over an established client; prints status + body.
-@ h2_get_and_print s name H2Client client s scheme s path → v {
+unsafe @ h2_get_and_print s name H2Client client s scheme s path → v {
     : ( Vec Header ) hs ( vec_new [Header] )
     : ( Vec u ) body ( vec_new [u] )
     : !i H2ClientErr sr ( h2_client_submit client `GET` scheme `127.0.0.1` path hs body )

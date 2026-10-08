@@ -204,7 +204,7 @@ unsafe @ ndf_l NdfStream st__h → i {
 }
 
 // Read example `idx`: append its d features to x_out and l labels to y_out.
-@ ndf_read_row NdfStream st__h i idx ( Vec f ) x_out ( Vec f ) y_out → b {
+unsafe @ ndf_read_row NdfStream st__h i idx ( Vec f ) x_out ( Vec f ) y_out → b {
     ^ ( __ndf_read_row ( __NdfStream_ptr st__h ) idx x_out y_out )
 }
 

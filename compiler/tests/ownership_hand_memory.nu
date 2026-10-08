@@ -173,7 +173,7 @@ unsafe @ case_field_alias → i {
 // table the program keeps, never dropped by whoever asked for it.
 : ~ i g_names 0
 
-@ names → ( Vec String ) {
+unsafe @ names → ( Vec String ) {
     ? != g_names 0 { ^ # ( Vec String ) g_names } {}
     : ( Vec String ) v ( vec_new [String] )
     = g_names # i v

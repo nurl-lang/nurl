@@ -1068,11 +1068,11 @@ unsafe @ c64_alloc → v {
     = g_filebuf ( nurl_zalloc 65536 )
 }
 
-@ load_kernal * u src i n → v { ( blit_into g_kernal ? > n 8192 8192 n src ) }
+unsafe @ load_kernal * u src i n → v { ( blit_into g_kernal ? > n 8192 8192 n src ) }
 
-@ load_basic * u src i n → v { ( blit_into g_basic ? > n 8192 8192 n src ) }
+unsafe @ load_basic * u src i n → v { ( blit_into g_basic ? > n 8192 8192 n src ) }
 
-@ load_chargen * u src i n → v { ( blit_into g_chargen ? > n 4096 4096 n src ) }
+unsafe @ load_chargen * u src i n → v { ( blit_into g_chargen ? > n 4096 4096 n src ) }
 
 // Cold-boot the machine: ROMs must already be loaded. Sets the CPU port
 // to the default $37 (all ROMs + I/O), resets the CIA, and fetches the
@@ -1139,7 +1139,7 @@ unsafe @ prg_load * u src i n → i {
     ( kbuf_push 0x0D )
 }
 // Load a .prg and queue its autostart (RUN for $0801, else SYS load-addr).
-@ prg_autostart * u src i n → i {
+unsafe @ prg_autostart * u src i n → i {
     : i addr ( prg_load src n )
     ? == addr 0 { ^ 0 } {}
     ? == addr 0x0801 { ( autorun_basic ) } { ( autorun_sys addr ) }

@@ -41,7 +41,7 @@ $ `unikernel/drivers/virtionet.nu`
 
 // Move whatever the stack has queued onto the wire, then whatever the
 // wire has for us into the stack. One turn.
-@ pump * VirtioNet nic NetStack st PktBuf out → i {
+unsafe @ pump * VirtioNet nic NetStack st PktBuf out → i {
     : i n ( pktbuf_count out )
     : ~ i k 0
     ~ < k n {
@@ -65,7 +65,7 @@ $ `unikernel/drivers/virtionet.nu`
     ^ got
 }
 
-@ main → i {
+unsafe @ main → i {
     : *VirtioNet nic ( vnet_open 64 )
     ? ! ( vnet_ready nic ) {
         ( nurl_print `no virtio-net device\n` )

@@ -78,7 +78,7 @@ $ `manage.nu`
     TomlValue root
 }
 
-@ ag_config_load s path → AgConfig {
+unsafe @ ag_config_load s path → AgConfig {
     ? > ( nurl_str_len path ) 0 {} { ^ @ AgConfig { F ( string_new ) ( string_new ) # TomlValue TBool } }
     : !String IoErr r ( read_file path )
     ?? r {

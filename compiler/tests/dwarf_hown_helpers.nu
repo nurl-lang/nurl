@@ -9,7 +9,7 @@
 // only has to run: a stream that was never opened releases nothing.
 $ `stdlib/ext/http_pure.nu`
 
-@ main → i {
+unsafe @ main → i {
     : b open F
     ? open {
         : HttpStreamState st ( hp_stream_open `GET` `http://127.0.0.1:1/` # *u 0 0 `` 0 0 0 `` 1000 )

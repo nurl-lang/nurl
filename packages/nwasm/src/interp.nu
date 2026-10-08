@@ -705,11 +705,11 @@ unsafe @ interp_stderr_bytes Interp it__h → ( Vec u ) {
 // trap visible, which is what an embedder wants to report.
 unsafe @ __interp_trapped * InterpImpl it → b { ^ != 0 & . it halt 1 }
 
-@ interp_trapped Interp it__h → b { ^ ( __interp_trapped ( __Interp_ptr it__h ) ) }
+unsafe @ interp_trapped Interp it__h → b { ^ ( __interp_trapped ( __Interp_ptr it__h ) ) }
 
 unsafe @ __interp_exited * InterpImpl it → b { ^ != 0 & . it halt 2 }
 
-@ interp_exited Interp it__h → b { ^ ( __interp_exited ( __Interp_ptr it__h ) ) }
+unsafe @ interp_exited Interp it__h → b { ^ ( __interp_exited ( __Interp_ptr it__h ) ) }
 
 // The trap message (empty unless interp_trapped) — the Interp's own bytes, lent.
 unsafe @ interp_trapmsg Interp it__h → ( Vec u ) {
@@ -1019,25 +1019,25 @@ unsafe @ __trap * InterpImpl it s msg → v {
 // wasm div/rem semantics: divide-by-zero traps; signed div overflow
 // (minv / −1, where minv = INT32_MIN or INT64_MIN) traps; signed rem by −1 is
 // defined as 0 (also dodging the host SIGFPE on INT_MIN % −1).
-@ __div_s * InterpImpl it i a i b i minv → i {
+unsafe @ __div_s * InterpImpl it i a i b i minv → i {
     ? == b 0 { ( __trap it `integer divide by zero` ) ^ 0 } {}
     ? & == a minv == b -1 { ( __trap it `integer overflow` ) ^ 0 } {}
     ^ / a b
 }
 
-@ __rem_s * InterpImpl it i a i b → i {
+unsafe @ __rem_s * InterpImpl it i a i b → i {
     ? == b 0 { ( __trap it `integer divide by zero` ) ^ 0 } {}
     ? == b -1 { ^ 0 } {}
     ^ % a b
 }
 
 // Unsigned variants over already-nonnegative operands (u32 zero-extended).
-@ __div_u * InterpImpl it i a i b → i {
+unsafe @ __div_u * InterpImpl it i a i b → i {
     ? == b 0 { ( __trap it `integer divide by zero` ) ^ 0 } {}
     ^ / a b
 }
 
-@ __rem_u * InterpImpl it i a i b → i {
+unsafe @ __rem_u * InterpImpl it i a i b → i {
     ? == b 0 { ( __trap it `integer divide by zero` ) ^ 0 } {}
     ^ % a b
 }
@@ -1108,7 +1108,7 @@ unsafe @ __trap * InterpImpl it s msg → v {
 // Trapping float→int truncation core (wasm's two distinct traps): NaN →
 // `invalid conversion to integer`; trunc(x) outside [lo, hi) → `integer
 // overflow`. Returns the integral value as f64.
-@ __trunc_ck * InterpImpl it b isnan f x f lo f hi → f {
+unsafe @ __trunc_ck * InterpImpl it b isnan f x f lo f hi → f {
     ? isnan { ( __trap it `invalid conversion to integer` ) ^ 0.0 } {}
     : f t ( trunc x )
     ? ! & >= t lo < t hi { ( __trap it `integer overflow` ) ^ 0.0 } {}
@@ -2074,7 +2074,7 @@ unsafe @ __const_pool * ModuleImpl m * WFunc f ( Vec i ) kv → v {
 
 // Bind height `h` to the constant `cv`: the pool slot when the pre-scan
 // interned it, otherwise the CONST record into the canonical slot.
-@ __kbind * PFunc pf ( Vec i ) vm ( Vec i ) kv i L i sb i h i cv i live i byte → v {
+unsafe @ __kbind * PFunc pf ( Vec i ) vm ( Vec i ) kv i L i sb i h i cv i live i byte → v {
     : i idx ( __kfind kv cv )
     ? >= idx 0 { ( __vset vm h + L idx ) } {
         ? != 0 live { ( __pf_emit pf ( __R_CONST ) + sb h cv 0 0 byte ) } {}
@@ -2090,7 +2090,7 @@ unsafe @ __const_pool * ModuleImpl m * WFunc f ( Vec i ) kv → v {
 // Materialise every alias below `h` into its canonical slot, then reset the
 // whole map. `h` = 0 makes it a pure reset; `live` = 0 means nothing was
 // aliased in the first place, so the reset alone is the whole job.
-@ __vflush * PFunc pf ( Vec i ) vm i sb i h i live i byte → v {
+unsafe @ __vflush * PFunc pf ( Vec i ) vm i sb i h i live i byte → v {
     : i n ( vec_len [i] vm )
     : ~ i k 0
     ~ < k n {
@@ -2169,7 +2169,7 @@ unsafe @ __fold_set * PFunc pf ( Vec i ) vm i lastp i sb i hm1 i li → b {
 // A write to local `li` invalidates every live stack entry aliasing it:
 // those are copied to their canonical slots first, while `li` still holds
 // the old value.
-@ __vkill * PFunc pf ( Vec i ) vm i sb i h i li i live i byte → v {
+unsafe @ __vkill * PFunc pf ( Vec i ) vm i sb i h i li i live i byte → v {
     : i n ( vec_len [i] vm )
     : i lim ? < h n h n
     : ~ i k 0
@@ -3602,7 +3602,7 @@ unsafe @ __jit_call_win * ModuleImpl m i op i a → i {
 // Is slot s provably dead at record `start` — overwritten before any
 // read on every path? DFS over the record CFG; anything the walker does
 // not understand counts as a read.
-@ __jit_slot_dead * ModuleImpl m ( Vec i ) auxv ( Vec i ) code i n i start i s → i {
+unsafe @ __jit_slot_dead * ModuleImpl m ( Vec i ) auxv ( Vec i ) code i n i start i s → i {
     ? | < start 0 >= start n { ^ 1 } {}  // fell off the end: the trailing RET reads nothing
     : ( Vec i ) seen ( vec_new [i] )
     : ~ i z 0
@@ -6145,7 +6145,7 @@ unsafe @ __exec_func * InterpImpl it i fidx → v {
     = . it fuel ? < fuel0 0 -1 ? < fuel 0 0 fuel
 }
 
-@ exec_func Interp it__h i fidx → v { ( __exec_func ( __Interp_ptr it__h ) fidx ) }
+unsafe @ exec_func Interp it__h i fidx → v { ( __exec_func ( __Interp_ptr it__h ) fidx ) }
 
 // Perform a call from the register driver: `argbase` is the caller slot of
 // the first argument (and the destination of the results). Imports bridge
@@ -6244,7 +6244,7 @@ unsafe @ __rdo_import * InterpImpl it * ModuleImpl m i callee i argbase * i call
 // register for the frame's slot base. `op` here is the wasm opcode: each
 // arm passes its own literal, so the arm keeps only the one branch it
 // needs.
-@ __rdiv * InterpImpl it i op i a i b → i {
+unsafe @ __rdiv * InterpImpl it i op i a i b → i {
     ? == op 127 { ^ ( __div_s it a b -9223372036854775808 ) } {}
     ? == op 128 { ? == b 0 { ( __trap it `integer divide by zero` ) ^ 0 } {} ^ ( __udiv64 a b ) } {}  // i64.div_u
     ? == op 129 { ^ ( __rem_s it a b ) } {}
@@ -6393,7 +6393,7 @@ unsafe @ __f32_unary i op i ab → i {
 // The int↔float conversions (0xa7..0xbf). Reinterpret (0xbc..0xbf) is the
 // identity because a value already lives as its bit pattern; the trapping
 // truncations report through `it` and their result is then dead.
-@ __convert * InterpImpl it i op i ab → i {
+unsafe @ __convert * InterpImpl it i op i ab → i {
     ? == op 167 { ^ ( __w32 ab ) } {}  // i32.wrap_i64
     ? == op 172 { ^ ( __w32 ab ) } {}  // i64.extend_i32_s
     ? == op 173 { ^ & ab 4294967295 } {}  // i64.extend_i32_u
@@ -6459,9 +6459,9 @@ unsafe @ __f32_unary i op i ab → i {
     ^ eq
 }
 
-@ __m_get_u32 * InterpImpl it i a → i { ^ & ( __mem_load it a 4 0 ) 4294967295 }
+unsafe @ __m_get_u32 * InterpImpl it i a → i { ^ & ( __mem_load it a 4 0 ) 4294967295 }
 
-@ __m_put_u32 * InterpImpl it i a i val → v { ( __mem_store it a 4 val ) }
+unsafe @ __m_put_u32 * InterpImpl it i a i val → v { ( __mem_store it a 4 val ) }
 
 // Overwrite/extend a file fd's buffer at byte offset `at` (gap zero-filled —
 // the file-semantics core shared by fd_write and fd_pwrite).
@@ -7067,7 +7067,7 @@ unsafe @ __interp_flush * InterpImpl it → v {
     ~ < k n { ?? ( vec_get [s] . ho fds k ) { T pp → ? != # i pp 0 { ( __fd_flush # *WFd pp ) } {} F → {} } = k + k 1 }
 }
 
-@ interp_flush Interp it__h → v { ( __interp_flush ( __Interp_ptr it__h ) ) }
+unsafe @ interp_flush Interp it__h → v { ( __interp_flush ( __Interp_ptr it__h ) ) }
 
 unsafe @ __wasi_fd_close * InterpImpl it → v {
     : i fd ( __pop it )
@@ -7138,7 +7138,7 @@ unsafe @ __wasi_environ_get * InterpImpl it → v {
 
 // clock_time_get(id, precision, time_ptr): realtime (0) from the wall clock,
 // everything else from the monotonic clock. Nanoseconds.
-@ __wasi_clock_time_get * InterpImpl it → v {
+unsafe @ __wasi_clock_time_get * InterpImpl it → v {
     : i t_p ( __pop it )
     ( __pop it )  // precision (i64)
     : i id ( __pop it )
@@ -7284,7 +7284,7 @@ unsafe @ __trap_named * InterpImpl it s prefix ( Vec u ) name → v {
 
 // Host base address of the guest linear memory (recomputed per call — a
 // memory.grow between host calls may relocate the backing).
-@ __gpu_base * InterpImpl it → i { ^ ( __mem_base it ) }
+unsafe @ __gpu_base * InterpImpl it → i { ^ ( __mem_base it ) }
 
 // Guest offset → host pointer (NULL stays NULL).
 unsafe @ __gpu_ptr * InterpImpl it i off → *u {
@@ -7413,7 +7413,7 @@ unsafe @ __cu_launch_kernel * InterpImpl it → v {
     ( __push it rc )
 }
 
-@ __cu_get_error_name * InterpImpl it → v {
+unsafe @ __cu_get_error_name * InterpImpl it → v {
     // Writes a HOST const char* into the guest out-slot — unusable as a guest
     // offset. Write NULL so cuda_error_name falls back to a static string;
     // diagnostics only, never on the compute path.
@@ -7493,7 +7493,7 @@ unsafe @ __nvrtc_destroy * InterpImpl it → v {
 }
 
 // GPU host-import dispatch (module "env"). Returns T if handled.
-@ __gpu_dispatch * InterpImpl it ( Vec u ) field → b {
+unsafe @ __gpu_dispatch * InterpImpl it ( Vec u ) field → b {
     ? ( __feq field `cuInit` ) { ( __cu_init it ) ^ T } {}
     ? ( __feq field `cuDeviceGetCount` ) { ( __cu_device_get_count it ) ^ T } {}
     ? ( __feq field `cuDeviceGet` ) { ( __cu_device_get it ) ^ T } {}
@@ -7573,7 +7573,7 @@ unsafe @ __net_cstr * InterpImpl it i off → s {
 // answer the byte count — the import ABI for every host call that
 // produces text (addresses, DNS answers), because the host cannot
 // allocate inside the guest's linear memory.
-@ __net_put_str * InterpImpl it i off i cap s src → i {
+unsafe @ __net_put_str * InterpImpl it i off i cap s src → i {
     ? == # i src 0 { ^ 0 } {}
     : i n ( nurl_str_len src )
     : ~ i m n
@@ -7666,7 +7666,7 @@ unsafe @ __net_close_handles ( Vec i ) hs ( Vec i ) kinds → v {
     }
 }
 
-@ interp_net_close_all Interp it__h → v { ( __interp_net_close_all ( __Interp_ptr it__h ) ) }
+unsafe @ interp_net_close_all Interp it__h → v { ( __interp_net_close_all ( __Interp_ptr it__h ) ) }
 
 unsafe @ __net_dispatch * InterpImpl it ( Vec u ) field → b {
     // ── TCP ──
@@ -8086,7 +8086,7 @@ unsafe @ __atom_wait * InterpImpl it i ea i w i expected i timeout → i {
     ^ 5  // rmw: 2 pops, 1 push
 }
 
-@ __exec_atomic * InterpImpl it i sub i off → v {
+unsafe @ __exec_atomic * InterpImpl it i sub i off → v {
     ? == sub 3 { ^ v } {}  // atomic.fence — the lock is the fence
     ? == sub 0 {  // memory.atomic.notify
         : i count ( __pop it )

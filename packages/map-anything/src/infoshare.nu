@@ -64,7 +64,7 @@ $ `src/load.nu`
     ( Vec f ) scaletok  // [1536] host — placed once per run
 }
 
-@ is_load Lw w GpuKit kit → InfoShare {
+unsafe @ is_load Lw w GpuKit kit → InfoShare {
     : ( Vec MaBlk ) bs ( vec_new [MaBlk] )
     : ~ i i0 0
     ~ < i0 IS_DEPTH {

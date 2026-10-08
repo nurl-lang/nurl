@@ -273,7 +273,7 @@ $ `src/preproc.nu`
     ^ T
 }
 
-@ __lm_parse → Opts {
+unsafe @ __lm_parse → Opts {
     : ( Vec String ) fr ( vec_new [String] )
     : ~ s model ``
     : ~ s out `cloud.ply`

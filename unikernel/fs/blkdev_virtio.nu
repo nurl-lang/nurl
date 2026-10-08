@@ -31,25 +31,25 @@ unsafe @ __blkdev → *VirtioBlk {
     ^ d
 }
 
-@ nurl_blk_sector_count → i {
+unsafe @ nurl_blk_sector_count → i {
     : *VirtioBlk d ( __blkdev )
     ? == # i d 0 { ^ 0 } {}
     ^ ( vblk_capacity d )
 }
 
-@ nurl_blk_read i lba s buf i nsec → i {
+unsafe @ nurl_blk_read i lba s buf i nsec → i {
     : *VirtioBlk d ( __blkdev )
     ? == # i d 0 { ^ - 0 1 } {}
     ^ ? ( vblk_read d lba buf nsec ) nsec - 0 1
 }
 
-@ nurl_blk_write i lba s buf i nsec → i {
+unsafe @ nurl_blk_write i lba s buf i nsec → i {
     : *VirtioBlk d ( __blkdev )
     ? == # i d 0 { ^ - 0 1 } {}
     ^ ? ( vblk_write d lba buf nsec ) nsec - 0 1
 }
 
-@ nurl_blk_flush → i {
+unsafe @ nurl_blk_flush → i {
     : *VirtioBlk d ( __blkdev )
     ? == # i d 0 { ^ - 0 1 } {}
     ^ ? ( vblk_flush d ) 0 - 0 1
@@ -58,7 +58,7 @@ unsafe @ __blkdev → *VirtioBlk {
 // Whether the DEVICE refuses writes, which is a different question from
 // whether the volume was mounted read-only: `-drive …,readonly=on` is
 // the hypervisor's decision and `disk=ro` is ours.
-@ nurl_blk_device_readonly → i {
+unsafe @ nurl_blk_device_readonly → i {
     : *VirtioBlk d ( __blkdev )
     ? == # i d 0 { ^ 1 } {}
     ^ ? ( vblk_readonly d ) 1 0

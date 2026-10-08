@@ -912,7 +912,7 @@ unsafe @ vermodel_from_bytes ( Vec u ) buf → ?VerModel {
     ^ ok
 }
 
-@ store_load_ae Store st s name → ?AeModel {
+unsafe @ store_load_ae Store st s name → ?AeModel {
     ?? ( __st_blob_get st name ANOM_KIND_AE ) {
         F _ → { ^ @ ?AeModel { F } }
         T data → {
@@ -930,7 +930,7 @@ unsafe @ vermodel_from_bytes ( Vec u ) buf → ?VerModel {
     ^ ok
 }
 
-@ store_load_fc Store st s name → ?FcModel {
+unsafe @ store_load_fc Store st s name → ?FcModel {
     ?? ( __st_blob_get st name ANOM_KIND_FC ) {
         F _ → { ^ @ ?FcModel { F } }
         T data → {

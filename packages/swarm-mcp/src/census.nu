@@ -111,7 +111,7 @@ unsafe @ __roster_find * RosterImpl r ( Vec u ) pubkey → i {
     ^ found
 }
 
-@ roster_has Roster r__h ( Vec u ) pubkey → b {
+unsafe @ roster_has Roster r__h ( Vec u ) pubkey → b {
     : *RosterImpl r ( __Roster_ptr r__h )
     ^ >= ( __roster_find r pubkey ) 0
 }

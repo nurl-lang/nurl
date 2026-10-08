@@ -107,7 +107,7 @@ $ `stdlib/std/rng.nu`
 //
 // Draw `psi` distinct row indices from [0, n) without replacement via a
 // partial Fisher–Yates shuffle, then truncate. Returns an owned ( Vec i ).
-@ __subsample Rng g i n i psi → ( Vec i ) {
+unsafe @ __subsample Rng g i n i psi → ( Vec i ) {
     : ( Vec i ) all ( vec_iota 0 n )
     : ~ i m psi
     ? > m n { = m n } {}
@@ -202,7 +202,7 @@ unsafe @ __build_node IForest fo * f dp i n_cols sink ( Vec i ) idx i depth i he
 
 // ── Training ──────────────────────────────────────────────────────────
 
-@ iforest_train ( Vec f ) data i n_rows i n_cols i n_trees i sample_size i seed → IForest {
+unsafe @ iforest_train ( Vec f ) data i n_rows i n_cols i n_trees i sample_size i seed → IForest {
     : ~ i psi sample_size
     ? > psi n_rows { = psi n_rows } {}
     ? < psi 1 { = psi 1 } {}
@@ -268,7 +268,7 @@ unsafe @ __path_len IForest fo i root * f point → f {
 // path, "no information" — rather than being read past its end: a
 // forest trained on two columns handed an empty point once walked its
 // trees over whatever lay at address zero.
-@ iforest_score IForest fo ( Vec f ) point → f {
+unsafe @ iforest_score IForest fo ( Vec f ) point → f {
     ? == ( vec_len [f] point ) . fo n_cols {} { ^ 0.5 }
     : *f pp ( vec_data [f] point )
     ^ ( __score_ptr fo pp )

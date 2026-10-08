@@ -8,7 +8,7 @@ $ `stdlib/core/string.nu`
 
 : ~ i g_v 0
 
-@ cache → ( Vec String ) {
+unsafe @ cache → ( Vec String ) {
     ? != g_v 0 { ^ # ( Vec String ) g_v } {}
     : ( Vec String ) v ( vec_new [String] )
     = g_v # i v

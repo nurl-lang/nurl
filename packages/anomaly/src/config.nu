@@ -44,7 +44,7 @@ $ `stdlib/ext/toml.nu`
 }
 
 @ config_empty → AnomalyConfig {
-    ^ @ AnomalyConfig { F ( string_new ) ( string_new ) # TomlValue TBool }
+    ^ @ AnomalyConfig { F ( string_new ) ( string_new ) @ TomlValue { TBool F } }
 }
 
 // Read and parse `path`. A file that does not exist is not an error — the
@@ -66,7 +66,7 @@ $ `stdlib/ext/toml.nu`
                     : String msg ( string_from path )
                     ( string_push_str msg `: ` )
                     ( string_push_str msg ( toml_err_name e ) )
-                    ^ @ AnomalyConfig { F ( string_from path ) msg # TomlValue TBool }
+                    ^ @ AnomalyConfig { F ( string_from path ) msg @ TomlValue { TBool F } }
                 }
             }
         }

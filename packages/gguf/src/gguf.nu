@@ -182,7 +182,7 @@ $ `stdlib/core/rcbox.nu`
 // The mapping is the raw resource: its last owner unmaps it, as gguf_close
 // did. The tables and the buffer go with the drop glue.
 % Drop GgufImpl {
-    @ drop GgufImpl g → v {
+    unsafe @ drop GgufImpl g → v {
         ? . g from_mmap { : i32 _u ( munmap . g map . g map_size ) } {}
     }
 }
@@ -221,7 +221,7 @@ unsafe @ __Gguf_ptr Gguf h → *GgufImpl { ^ ( rcbox_ptr [GgufImpl] # i . h ctl 
 
 // Overflow-safe budget check: compares k against (n - off), never
 // forms off + k (a huge attacker-chosen k must not wrap negative).
-@ __gc_need inout GCur c i k → b {
+unsafe @ __gc_need inout GCur c i k → b {
     ? . c fail { ^ F } {}
     ? | < k 0 > k - . c n . c off { = . c fail T ^ F } {}
     ^ T
@@ -296,7 +296,7 @@ unsafe @ __gc_str inout GCur c i maxlen b forbid_nul → String {
     ^ 0
 }
 
-@ __g_read_int inout GCur c i vt → i {
+unsafe @ __g_read_int inout GCur c i vt → i {
     ? == vt 0 { ^ ( __gc_u8 c ) } {}
     ? == vt 1 {
         : i x ( __gc_u8 c )
@@ -321,7 +321,7 @@ unsafe @ __gc_str inout GCur c i maxlen b forbid_nul → String {
     ^ 0
 }
 
-@ __g_read_f inout GCur c i vt → f {
+unsafe @ __g_read_f inout GCur c i vt → f {
     ? == vt 6 {
         : i bits ( __gc_u32 c )
         ^ # f ( bits_to_f32 bits )
@@ -339,7 +339,7 @@ unsafe @ __gc_str inout GCur c i maxlen b forbid_nul → String {
 // Both always return a fully-initialised value (owned fields present
 // even on failure) so error paths free exactly one shape.
 
-@ __g_parse_kv inout GCur c → GgufKv {
+unsafe @ __g_parse_kv inout GCur c → GgufKv {
     : String key ( __gc_str c 65536 T )
     : i vt ( __gc_u32 c )
     : ~ i ival 0
@@ -397,7 +397,7 @@ unsafe @ __gc_str inout GCur c i maxlen b forbid_nul → String {
 
 // Per-dimension cap 2^48 and running-product cap 2^48 keep
 // nelems * max-block-bytes (292) far away from i64 overflow.
-@ __g_parse_tensor inout GCur c → GgufTensor {
+unsafe @ __g_parse_tensor inout GCur c → GgufTensor {
     : String name ( __gc_str c 4096 T )
     : i nd ( __gc_u32 c )
     : ~ i d0 1
@@ -689,7 +689,7 @@ unsafe @ gguf_open s path → !Gguf String {
 
 // Parse an in-memory GGUF image. The Gguf keeps `data` (its tensors point
 // into it).
-@ gguf_parse_bytes sink ( Vec u ) data → !Gguf String {
+unsafe @ gguf_parse_bytes sink ( Vec u ) data → !Gguf String {
     ^ ( __gguf_parse ( vec_data [u] data ) ( vec_len [u] data ) data )
 }
 

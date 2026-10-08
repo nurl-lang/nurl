@@ -106,7 +106,7 @@ $ `stdlib/std/quic_tls.nu`
     ^ ( quic_tls_srv_crypto s level off msg )
 }
 
-@ main → i {
+unsafe @ main → i {
     : ~ i fails 0
 
     // ── credentials: a fresh self-signed P-256 leaf ──────────────

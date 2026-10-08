@@ -30,7 +30,7 @@ $ `src/devblock.nu`
 // One tensor onto the device. The staging vector is written through its
 // own data pointer — pt_read_f64 fills a raw span — so the elements are
 // copied once, not twice.
-@ lmw_upload Lw w GpuKit kit s name → GkBuf {
+unsafe @ lmw_upload Lw w GpuKit kit s name → GkBuf {
     : i n ( lw_nelems w name )
     ? <= n 0 {
         : b _r ( lw_require w name -1 -1 -1 -1 )

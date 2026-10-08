@@ -142,7 +142,7 @@ unsafe @ swarm_join_group Swarm sw__h → v {
 
 // Announce presence; returns whether the broadcast reached the relay. A
 // failed send is the reconnect loop's signal that the relay is gone.
-@ swarm_announce_ok Swarm sw__h i want → b {
+unsafe @ swarm_announce_ok Swarm sw__h i want → b {
     ^ ( __swarm_announce_ok_at ( __Swarm_ptr sw__h ) want )
 }
 

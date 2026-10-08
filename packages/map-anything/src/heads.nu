@@ -184,7 +184,7 @@ unsafe @ ph_forward GpuKit kit PoseH p GkBuf fin i voff i np * f out → b {
 
 // The metric scale from the final scale-token feature (row `row` of the
 // final sequence). Returns exp(x) clipped to ≥ 1e-8, or -1 on error.
-@ sh_forward GpuKit kit ScaleH s GkBuf fin i row → f {
+unsafe @ sh_forward GpuKit kit ScaleH s GkBuf fin i row → f {
     : GkBuf tokrow ( ma_view fin * row PH_DIM PH_DIM )
     : GkBuf h1 ( gk_dbuf_new kit SH_HID GK_F32 )
     : GkBuf h2 ( gk_dbuf_new kit SH_HID GK_F32 )

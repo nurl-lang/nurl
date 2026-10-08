@@ -169,7 +169,7 @@ unsafe @ __r3_axis i dim i maxpos i col0 i width * f cos_t * f sin_t → v {
 // aggregator's global blocks have head_dim 64 and split 20/22/22, the
 // camera head's trunk has head_dim 128 and splits 40/44/44. Same
 // kernel, same theta, different geometry.
-@ rope3d_tables_fhw i td i hd i wd i maxpos * f cos_t * f sin_t → v {
+unsafe @ rope3d_tables_fhw i td i hd i wd i maxpos * f cos_t * f sin_t → v {
     : i width / + + td hd wd 2
     ( __r3_axis td maxpos 0 width cos_t sin_t )
     ( __r3_axis hd maxpos / td 2 width cos_t sin_t )
@@ -178,7 +178,7 @@ unsafe @ __r3_axis i dim i maxpos i col0 i width * f cos_t * f sin_t → v {
 }
 
 // The aggregator's split: 20/22/22 over a 64-dim head.
-@ rope3d_tables i maxpos * f cos_t * f sin_t → v {
+unsafe @ rope3d_tables i maxpos * f cos_t * f sin_t → v {
     ( rope3d_tables_fhw R3_T R3_H R3_W maxpos cos_t sin_t )
 }
 
@@ -212,6 +212,6 @@ unsafe @ rope3d_apply_fhw * f x i heads i n i dim i nt i nh * i fr * i rw * i cl
     }
 }
 
-@ rope3d_apply * f x i heads i n i dim * i fr * i rw * i cl * f cos_t * f sin_t → v {
+unsafe @ rope3d_apply * f x i heads i n i dim * i fr * i rw * i cl * f cos_t * f sin_t → v {
     ( rope3d_apply_fhw x heads n dim ( rope3d_nt ) ( rope3d_nh ) fr rw cl cos_t sin_t )
 }

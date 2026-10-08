@@ -573,6 +573,11 @@ unsafe @ nurl_llty s t → s {
     ^ out
 }
 
+// Raw-pointer types parse_type has read (`*T` anywhere but inside a
+// closure type): a struct field whose type moves it is a raw field, and its
+// struct a sealed representation (__ty_sealed).
+: ~ i g_pt_star 0
+
 @ parse_type i lex → s {
     : i tt ( nurl_lex_type lex )
     ? == tt TT_STAR { ^ ( parse_type_ptr lex ) } {}
@@ -600,6 +605,7 @@ unsafe @ nurl_llty s t → s {
 
 @ parse_type_ptr i lex → s {
     ( nurl_lex_advance lex )
+    = g_pt_star + g_pt_star 1
     : s inner ( parse_type lex )
     // void* is invalid in LLVM IR — use i8* instead
     ? ( seq inner `void` ) { ^ ( nurl_str_cat `i8*` `` ) } { ^ ( nurl_str_cat inner `*` ) }
@@ -679,6 +685,8 @@ unsafe @ nurl_llty s t → s {
     ( nurl_lex_advance lex )  // consume '('
     ? == ( nurl_lex_type lex ) TT_AT
     { ( nurl_lex_advance lex )  // consume '@'
+        // A raw pointer in a closure's signature is not one the value holds.
+        : i __pt_star0 g_pt_star
         : s ret ( parse_type lex )
         : ~ s params ``
         ~ & != ( nurl_lex_type lex ) TT_RPAREN != ( nurl_lex_type lex ) TT_EOF {
@@ -687,6 +695,7 @@ unsafe @ nurl_llty s t → s {
             ( nurl_str_cat p `` )
             ( nurl_str_cat params ( nurl_str_cat `, ` p ) )
         }
+        = g_pt_star __pt_star0
         ( expect lex TT_RPAREN )  // consume ')'
         // Return a closure struct type: { ret (i8*, params...)*, i8* }
         : ~ s fn_sig ( nurl_str_cat ret ` (i8*` )
@@ -7587,6 +7596,11 @@ unsafe @ origin_guard_retained i root → b {
         `inout field argument: binding '` obj
         `' must be mutable ': ~' — the callee mutates its field in place` ) ) }
     {}
+    // The callee writes the field: a sealed representation's fields change
+    // only through its API (__ty_sealed).
+    ? & & ( bck_sound ) ( __ty_sealed objty ) ! ( bck_unsafe_ctx ) {
+        ( __sealed_die lex objty ( nurl_str_cat3 `handing the field '` ( nurl_lex_val lex ) `' to an inout parameter, which writes it, is a write to a field of` ) )
+    } {}
     ? ( is_ptr_ty objty ) {
         : s element ( nurl_str_slice objty 0 - ( nurl_str_len objty ) 1 )
         ? | ( seq element `void` ) >= ( nurl_str_find element `(` ) 0 {
@@ -20094,7 +20108,37 @@ unsafe @ mem_own_add_user_drop i syms i cg s ptr s vt → v {
 // The raw-memory primitives: what they hand out or take is memory the
 // checker cannot follow.
 @ bck_raw_call s base → b {
-    ^ ( str_contains_word `nurl_alloc nurl_zalloc nurl_free nurl_realloc alloc zalloc mem_forget nurl_peek nurl_poke nurl_vctl_get nurl_vctl_set nurl_vctl_data nurl_memcpy nurl_memmove nurl_memset malloc calloc realloc free memcpy memmove memset nurl_closure_drop nurl_closure_clone rcbox_ptr` base )
+    // (`vec_set_len` declares raw writes initialised: the elements it
+    // exposes are whatever the memory held.)
+    ^ ( str_contains_word `nurl_alloc nurl_zalloc nurl_free nurl_realloc alloc zalloc mem_forget nurl_peek nurl_poke nurl_vctl_get nurl_vctl_set nurl_vctl_data nurl_memcpy nurl_memmove nurl_memset malloc calloc realloc free memcpy memmove memset nurl_closure_drop nurl_closure_clone rcbox_ptr vec_set_len` base )
+}
+
+// A function that takes a raw pointer (`*T` in a parameter's type, outside
+// a closure type): it reads or writes through it as far as its caller says,
+// and only an `unsafe` caller can vouch for that.
+@ __fn_raw_param i syms s cn → b {
+    ? != 0 ( nurl_sym_len2 syms cn `__rawparam` ) { ^ T } {}
+    : ~ s src ( nurl_sym_get2 syms cn `__ptypes_src` )
+    ? == 0 ( nurl_str_len src ) { = src ( nurl_sym_get2 syms ( bck_generic_base cn ) `__ptypes_src` ) } {}
+    ? < ( nurl_str_find src `*` ) 0 { ^ F } {}
+    : ~ s rest ( nurl_str_cat src `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : i k ( nurl_str_find rest `;` )
+        : s span ? < k 0 ( nurl_str_cat rest `` ) ( nurl_str_slice rest 0 k )
+        = rest ? < k 0 `` ( nurl_str_slice rest + k 1 - - ( nurl_str_len rest ) k 1 )
+        ? & >= ( nurl_str_find span `*` ) 0 < ( nurl_str_find span `( @` ) 0 { ^ T } {}
+    }
+    ^ F
+}
+
+// A standard-library function whose name begins with `__` is the library's
+// own machinery: it takes control blocks and buffers as plain `s` and trusts
+// them, so outside the library only an `unsafe` caller may use it.
+@ __fn_stdlib_internal s cn → b {
+    ? == 0 ( nurl_str_starts cn `__` ) { ^ F } {}
+    : s f ( nurl_sym_get2 g_vis_syms cn `__src_file` )
+    : s ff ? == 0 ( nurl_str_len f ) ( nurl_sym_get2 g_vis_syms ( bck_generic_base cn ) `__src_file` ) f
+    ^ & != 0 ( nurl_str_len ff ) ( bck_trusted_file ff )
 }
 
 // A call to a raw-memory primitive, or to a foreign function declared
@@ -20109,6 +20153,59 @@ unsafe @ mem_own_add_user_drop i syms i cg s ptr s vt → v {
     ? & != 0 ( nurl_sym_len2 syms call_name `__ffi` ) ! ( bck_trusted_file ( nurl_sym_get2 syms call_name `__ffi_src` ) ) {
         ( die lex ( nurl_str_cat3 `'` call_name `' is a foreign (FFI) function declared outside the standard library: the compiler cannot see what it does with the memory it is handed. Call it only from an 'unsafe' function ('unsafe @ name …'), which vouches that the call is memory-safe, and give the rest of the program a safe wrapper around it.` ) )
     } {}
+    ? ( __fn_raw_param syms call_name ) {
+        ( die lex ( nurl_str_cat3 `'` base `' takes a raw pointer ('*T') and reads or writes through it as far as its caller says, which only an 'unsafe' function may vouch for: a pointer carries no length, so the compiler cannot check that the memory is there. Use the safe API over the owning value (a Vec, a String, a Slice of a Vec), or, if this function genuinely needs raw memory and you vouch for its memory safety, declare it 'unsafe @ name …'.` ) )
+    } {}
+    ? ( __fn_stdlib_internal call_name ) {
+        ( die lex ( nurl_str_cat3 `'` base `' is internal to the standard library (its name begins with '__'): it takes control blocks and buffers as plain values and trusts them, so outside the library only an 'unsafe' function may call it. Use the public API it implements, or, if this function genuinely needs the library's internals and you vouch for its memory safety, declare it 'unsafe @ name …'.` ) )
+    } {}
+}
+
+// ── Sealed representations ─────────────────────────────────────────
+//
+// A struct whose representation is raw memory: it declares a raw-pointer
+// field (a `*` anywhere in a field's type), or it is a library handle whose
+// hooks are raw code — every standard-library handle, and a program's own
+// handle whose drop hook is `unsafe`. Its fields carry an invariant the
+// code managing them relies on (a Slice's `len` covers its `data`, a Vec's
+// `ctl` is its one control block), so outside `unsafe` code such a value
+// is built and changed only through its API: a literal of it, a write to
+// one of its fields and a read of one of its raw fields are raw memory.
+@ __ty_sealed s ty → b {
+    : i n ( nurl_str_len ty )
+    ? | < n 2 != ( nurl_str_get ty 0 ) 37 { ^ F } {}
+    ? == ( nurl_str_get ty - n 1 ) 42 { ^ F } {}
+    : s memo ( nurl_sym_get2 g_impl_name_syms `sealed##` ty )
+    ? != 0 ( nurl_str_len memo ) { ^ ( seq memo `1` ) } {}
+    : s sname ( nurl_str_slice ty 1 - n 1 )
+    : ~ b sealed F
+    ? == 0 ( nurl_sym_len2 g_root_syms sname `__variants` ) {
+        ? != 0 ( nurl_sym_len2 g_root_syms sname `__rawrep` ) { = sealed T } {
+            ? | | ( seq ty `%String` ) != 0 ( nurl_str_starts ty `%Vec__` ) ( __is_libh ty ) {
+                : s gbase ( nurl_sym_get2 g_impl_name_syms `libhs##` ty )
+                : s base ? == 0 ( nurl_str_len gbase ) sname gbase
+                : s dfile ? == 0 ( nurl_str_len gbase ) ( nurl_sym_get2 g_vis_syms base `__src_file` ) ( nurl_sym_get2 g_generic_struct_syms base `__sfile` )
+                ? ( bck_trusted_file dfile ) { = sealed T } {
+                    = sealed & != 0 g_unsafe_fns != 0 ( nurl_sym_len2 g_unsafe_fns base `_drop` )
+                }
+            } {}
+        }
+    } {}
+    ( nurl_sym_def g_impl_name_syms ( nurl_str_cat `sealed##` ty ) ? sealed `1` `-` )
+    ^ sealed
+}
+
+// A type as its source spells it: `( Slice u8 )` for a generic instance.
+@ __ty_src_show s ty → s {
+    : s gb ( nurl_sym_get2 g_impl_name_syms `libhs##` ty )
+    ? == 0 ( nurl_str_len gb ) { ^ ( __ty_show ty ) } {}
+    ^ ( nurl_str_cat4 `( ` gb ` ` ( nurl_str_cat ( nurl_sym_get2 g_impl_name_syms `libhta##` ty ) ` )` ) )
+}
+
+// `what` (a literal of / a write to … of) a sealed `ty` outside `unsafe`.
+@ __sealed_die i lex s ty s what → v {
+    ( die lex ( nurl_str_cat4 what ` '` ( __ty_src_show ty )
+    `' is raw memory, which only an 'unsafe' function may touch: its representation (a raw-pointer field, or a library handle's control block) carries an invariant the code managing it relies on, so a value built or changed field by field could point anywhere. Build and change it through its API — its constructors and accessors (slice_from_vec / slice_empty / slice_len, vec_new / vec_len, …) — or, if this function genuinely manages that memory and you vouch for its memory safety, declare it 'unsafe @ name …'.` ) )
 }
 
 // The arguments the result of the call just generated may borrow from:
@@ -24970,6 +25067,12 @@ unsafe @ bck_loop_mask s pre s post → s {
     : s pv ? nested ( gen_nested_lvalue_addr lex syms cg )
     ( gen_expr lex syms cg )  // pointer/aggregate value
     : s pt ( nurl_get_last_type )  // LLVM type, e.g. "%Node*", "i64*", "{ T*, i64 }", or "%Pair"
+    // A field of a sealed representation changes only through its API.
+    ? & ( bck_sound ) ! ( bck_unsafe_ctx ) {
+        : i __fs_ptl ( nurl_str_len pt )
+        : s __fs_sty ? & > __fs_ptl 1 == ( nurl_str_get pt - __fs_ptl 1 ) 42 ( nurl_str_slice pt 0 - __fs_ptl 1 ) ( nurl_str_cat pt `` )
+        ? ( __ty_sealed __fs_sty ) { ( __sealed_die lex __fs_sty ( nurl_str_cat3 `writing the field '` ( nurl_lex_val lex ) `' of` ) ) } {}
+    } {}
     // Writing through a raw pointer: raw memory (sound rules, P1). (A
     // nested lvalue path walked by address is the struct's own storage.)
     ? & & & ( bck_sound ) ( is_ptr_ty pt ) ! nested ! ( bck_unsafe_ctx ) {
@@ -25597,7 +25700,59 @@ unsafe @ bck_loop_mask s pre s post → s {
     ^ == ( nurl_str_get ty - n 1 ) 42
 }
 
+// Whether a value of LLVM type `ty` holds an address (a pointer, an `s`, a
+// closure, a handle) or a payload tag (an enum with payloads), anywhere in
+// it: what a cast may not make outside `unsafe`. Numbers, unit-only enums
+// and aggregates of them hold neither.
+@ __ty_holds_addr s ty i depth → b {
+    : i n ( nurl_str_len ty )
+    ? | == n 0 > depth 16 { ^ F } {}
+    ? == ( nurl_str_get ty - n 1 ) 42 { ^ T } {}
+    : i c0 ( nurl_str_get ty 0 )
+    // `{ … }` (an option, a result, a closure) and `[ N x T ]`: their parts.
+    ? | == c0 123 == c0 91 {
+        ? >= ( nurl_str_find ty `*` ) 0 { ^ T } {}
+        : ~ i k 0
+        ~ < k n {
+            ? == ( nurl_str_get ty k ) 37 {
+                : ~ i e + k 1
+                ~ & < e n ! | | | == ( nurl_str_get ty e ) 44 == ( nurl_str_get ty e ) 32 == ( nurl_str_get ty e ) 125 == ( nurl_str_get ty e ) 93 { = e + e 1 }
+                ? ( __ty_holds_addr ( nurl_str_slice ty k - e k ) + depth 1 ) { ^ T } {}
+                = k e
+            } { = k + k 1 }
+        }
+        ^ F
+    } {}
+    ? != c0 37 { ^ F } {}
+    : s memo ( nurl_sym_get2 g_impl_name_syms `haddr##` ty )
+    ? != 0 ( nurl_str_len memo ) { ^ ( seq memo `1` ) } {}
+    : s sname ( nurl_str_slice ty 1 - n 1 )
+    : ~ b r F
+    ? != 0 ( nurl_sym_len2 g_root_syms sname `__variants` ) {
+        = r != 0 ( nurl_str_to_int ( nurl_sym_get2 g_root_syms sname `__max_payloads` ) )
+    } {
+        ? | | ( seq ty `%String` ) != 0 ( nurl_str_starts ty `%Vec__` ) ( __is_libh ty ) { = r T } {
+            : i fc ( nurl_str_to_int ( nurl_sym_get2 g_root_syms sname `__field_count` ) )
+            : ~ i fi 0
+            ~ & < fi fc ! r {
+                = r ( __ty_holds_addr ( nurl_sym_get2 g_root_syms sname ( nurl_str_cat3 `__idx_` ( nurl_str_int fi ) `__type` ) ) + depth 1 )
+                = fi + fi 1
+            }
+            // A type whose layout is unknown here is assumed to hold one.
+            ? == 0 ( nurl_sym_len2 g_root_syms sname `__field_count` ) { = r T } {}
+        }
+    }
+    ( nurl_sym_def g_impl_name_syms ( nurl_str_cat `haddr##` ty ) ? r `1` `-` )
+    ^ r
+}
+
+// Set while the payload of a None literal is generated, when that payload
+// is a cast (gen_agg_lit): the one cast whose value nothing can read.
+: ~ i g_dead_payload 0
+
 @ gen_cast i lex i syms i cg → s {
+    : b __cast_dead != 0 g_dead_payload
+    = g_dead_payload 0
     // Where the '#' IS, captured before it is consumed. Every check from
     // the operand onward fires once that operand has been parsed, so a
     // plain `die lex` anchored on the NEXT statement — the caret landed
@@ -25683,6 +25838,15 @@ unsafe @ bck_loop_mask s pre s post → s {
     : s source_val ( nurl_lex_val lex )
     : s val ( gen_operand lex syms cg )
     : s st ( nurl_get_last_type )
+    // …and so does a conversion into anything else that holds an address
+    // or a payload tag: a String, a Vec, a closure, a struct or option of
+    // one, an enum with payloads. Its code relies on those bits, and a cast
+    // makes them out of another value's (`# String 4096`, a handle
+    // smuggled through an integer and back). A cast to the type the value
+    // already has reinterprets nothing.
+    ? & & & & & ( bck_sound ) ! __cast_dead ! ( is_ptr_ty dt ) ! ( seq st dt ) ( __ty_holds_addr dt 0 ) ! ( bck_unsafe_ctx ) {
+        ( die_pos lex __cast_line __cast_col ( nurl_str_cat3 `'# ` ( __ty_src_show dt ) ` …' makes a value that holds addresses or a payload tag (a String, a Vec, a closure, a struct or option of one, an enum with payloads) out of another value's bits, which only an 'unsafe' function may do: such a value is valid only as its own code built it. Build it with its constructor or literal instead, or, if this function genuinely needs to reinterpret memory and you vouch for its memory safety, declare it 'unsafe @ name …'.` ) )
+    } {}
     ( bck_save_expr_carriers syms `__last_cast_params__` source_tt source_val )
     // `# T x` of a T binding is x itself (mem_udrop_bind_flag: a cursor).
     ( nurl_sym_def syms `__last_cast_ident__` ? & ( is_ident_tok source_tt ) ( seq st dt ) ( nurl_str_cat source_val `` ) `` )
@@ -26176,6 +26340,16 @@ unsafe @ bck_loop_mask s pre s post → s {
     ? & & ( bck_sound ) ( is_ptr_ty ot ) ! ( bck_unsafe_ctx ) {
         ( die lex ( nurl_str_cat3 `reading through the raw pointer '` ? ( is_ident_tok __mb_tt ) __mb_val `this pointer` `' is raw memory, which only an 'unsafe' function may touch: the compiler cannot tell whether what it points at is still alive or in bounds. Read the element with vec_get (or iterate the Vec, or use the slice) instead of going through vec_data, or, if this function genuinely needs raw memory and you vouch for its memory safety, declare it 'unsafe @ name …'.` ) )
     } {}
+    // A raw field of a sealed representation (a Slice's `data`, a handle's
+    // `ctl`) is the memory its API manages: not readable outside `unsafe`.
+    ? & & ( bck_sound ) ( is_ident_tok ( nurl_lex_type lex ) ) ! ( bck_unsafe_ctx ) {
+        ? ( __ty_sealed ot ) {
+            : s __mb_fty ( nurl_sym_get2 g_root_syms ( nurl_str_slice ot 1 - ( nurl_str_len ot ) 1 ) ( nurl_str_cat3 `__` ( nurl_lex_val lex ) `__type` ) )
+            : i __mb_fl ( nurl_str_len __mb_fty )
+            ? & > __mb_fl 0 | == ( nurl_str_get __mb_fty - __mb_fl 1 ) 42 & != 0 ( nurl_str_starts __mb_fty `{ i1, ` ) >= ( nurl_str_find __mb_fty `*` ) 0
+            { ( __sealed_die lex ot ( nurl_str_cat3 `reading the raw field '` ( nurl_lex_val lex ) `' of` ) ) } {}
+        } {}
+    } {}
     // The binding a field chain reads from (`. . s a h` → s): what closures
     // the field can hold is what that binding can (__clo_cs_expr).
     ? ( is_ident_tok __mb_tt ) { ( nurl_sym_def syms `__last_member_root__` __mb_val ) } {
@@ -26493,6 +26667,8 @@ unsafe @ bck_loop_mask s pre s post → s {
     : b agg_moves_fields | agg_returned agg_nested
     ( nurl_sym_set_deep syms `__ret_agg__` `` )
     : s agg_ty ( parse_type lex )  // parse the aggregate type
+    // A sealed representation is built by its API, not field by field.
+    ? & & ( bck_sound ) ( __ty_sealed agg_ty ) ! ( bck_unsafe_ctx ) { ( __sealed_die lex agg_ty `a literal of` ) } {}
     // A POINTER target has no fields to insert into: `@ *T { … }` reads
     // as "heap-allocate a T with these fields", which NURL does not
     // have. Left alone, the field loop below inserted into a pointer
@@ -26784,7 +26960,11 @@ unsafe @ bck_loop_mask s pre s post → s {
         // the return under the closure the caller then ran — `^ @ Box { \ →
         // i { ^ ( vec_len [i] a ) } }` read a freed Vec.
         ? & agg_moves_fields == fld_first_tt TT_BACKSLASH { ( nurl_sym_set_deep syms `__ret_clo__` `1` ) } {}
+        // A None's payload is never read: a cast written there as its
+        // placeholder (`@ ?T { F # T 0 }`) makes nothing anyone can use.
+        = g_dead_payload ? & & opt_is_none == idx 1 == fld_first_tt TT_HASH 1 0
         : ~ s fval ( gen_expr lex syms cg )
+        = g_dead_payload 0
         : s fty ( nurl_get_last_type )
         : s __fcs ( __clo_cs_expr syms fld_first_tt fld_first_val fty )
         = agg_cs ( __bar_union agg_cs __fcs )
@@ -33062,7 +33242,9 @@ unsafe @ __tok_src_text i lex → s {
                     // flt is the SUBSTITUTED field's raw internal type —
                     // signedness included (`( Pair u64 i )` records a
                     // `u64` field), mirroring gen_struct_decl.
+                    : i __ft_star g_pt_star
                     : s flt ( parse_type lex2 )
+                    ? != g_pt_star __ft_star { ( nurl_sym_def syms ( nurl_str_cat mangled `__rawrep` ) `1` ) } {}
                     ? ( is_ident_tok ( nurl_lex_type lex2 ) )
                     { : s fname ( nurl_lex_val lex2 )
                         ( nurl_lex_advance lex2 )
@@ -35229,7 +35411,9 @@ unsafe @ __lazy_scan → v {
     ~ != ( nurl_lex_type lex ) TT_RBRACE {
         : i __ft_line ( nurl_lex_line lex )
         : i __ft_col ( nurl_lex_col lex )
+        : i __ft_star g_pt_star
         : s flt ( parse_type lex )
+        ? != g_pt_star __ft_star { ( nurl_sym_def syms ( nurl_str_cat sname `__rawrep` ) `1` ) } {}
         // A field whose type is the struct itself BY VALUE makes the struct
         // infinitely sized (`: Node { i v  Node next }`). LLVM only rejects the
         // recursive value type later, at an `insertvalue` / `store` use site,
@@ -43333,6 +43517,10 @@ unsafe @ defer_trait_impl i lex i impl_pos s tname s impl_nurl s impl_llvm s imp
                         : s body ( collect_fn_body lex `generic struct` )
                         ( nurl_sym_def g_generic_struct_syms ( nurl_str_cat sname `__stparams` ) tparams )
                         ( nurl_sym_def g_generic_struct_syms ( nurl_str_cat sname `__sbody` ) body )
+                        // …and where it is declared: a library handle of the
+                        // standard library is a sealed representation
+                        // (__ty_sealed).
+                        ( nurl_sym_def g_generic_struct_syms ( nurl_str_cat sname `__sfile` ) ( nurl_lex_filename lex ) )
                         // Lint: generic struct templates never reach
                         // vis_record_type, so register the name here.
                         // This scan recurses into imports without
@@ -43979,6 +44167,7 @@ unsafe @ defer_trait_impl i lex i impl_pos s tname s impl_nurl s impl_llvm s imp
                             // gen_ffi_decl's param loop exactly to stay in sync.
                             : ~ s ptypes ``
                             : ~ i pct 0
+                            : i __ffi_star0 g_pt_star
                             ~ & != ( nurl_lex_type lex ) TT_ARROW != ( nurl_lex_type lex ) TT_EOF
                             { ? == ( nurl_lex_type lex ) TT_ELLIPSIS
                                 { ( nurl_lex_advance lex ) }
@@ -43988,6 +44177,9 @@ unsafe @ defer_trait_impl i lex i impl_pos s tname s impl_nurl s impl_llvm s imp
                                     = pct + pct 1
                                 }
                             }
+                            // A raw-pointer parameter: calling it is raw memory
+                            // (__fn_raw_param).
+                            ? != g_pt_star __ffi_star0 { ( nurl_sym_def syms ( nurl_str_cat fname `__rawparam` ) `1` ) } {}
                             ? == ( nurl_lex_type lex ) TT_ARROW
                             { ( nurl_lex_advance lex )
                                 : s ret_ty ( parse_type lex )

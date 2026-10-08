@@ -138,7 +138,7 @@ unsafe @ g_az_allowed → s { ^ ( string_data . ( __az_strs ) s_allowed ) }
 // grant itself that from the dashboard would not be an anchor.
 unsafe @ g_az_owner → s { ^ ( string_data . ( __az_strs ) s_owner ) }
 
-@ anomaly_authz_set_owner_tenant s tid → v { ( __az_set_str ( __az_strs ) 5 tid ) }
+unsafe @ anomaly_authz_set_owner_tenant s tid → v { ( __az_set_str ( __az_strs ) 5 tid ) }
 
 // Why the last presented token was refused. A 401 with no reason is what
 // turns a one-line configuration mistake — the wrong audience, a clock an
@@ -146,7 +146,7 @@ unsafe @ g_az_owner → s { ^ ( string_data . ( __az_strs ) s_owner ) }
 // single-threaded, so one slot is the whole story.
 unsafe @ anomaly_authz_last_error → s { ^ ( string_data . ( __az_strs ) s_last_err ) }
 
-@ __az_set_last_err s v → v { ( __az_set_str ( __az_strs ) 4 v ) }
+unsafe @ __az_set_last_err s v → v { ( __az_set_str ( __az_strs ) 4 v ) }
 
 // The identity provider, discovered lazily and then reused: it owns the
 // JWKS cache, and re-fetching a key set per request would turn every
@@ -195,7 +195,7 @@ unsafe @ anomaly_authz_last_error → s { ^ ( string_data . ( __az_strs ) s_last
 // reachable without credentials while a fleet of already-deployed data
 // producers is migrated onto keys. It is a migration setting: with it on,
 // anyone who can reach the port can write points into any model.
-@ anomaly_authz_configure b on b open_ingest s issuer s client_id s audience → v {
+unsafe @ anomaly_authz_configure b on b open_ingest s issuer s client_id s audience → v {
     = g_az_mode ? on AZ_MODE_OIDC AZ_MODE_SIMPLE
     = g_az_open_ingest open_ingest
     : *AzStrings a ( __az_strs )
@@ -206,7 +206,7 @@ unsafe @ anomaly_authz_last_error → s { ^ ( string_data . ( __az_strs ) s_last
 
 // Multi-tenant acceptance. `allowed` is a comma-separated tenant list;
 // empty admits every organisation the provider will sign for.
-@ anomaly_authz_configure_tenancy b multi s allowed → v {
+unsafe @ anomaly_authz_configure_tenancy b multi s allowed → v {
     = g_az_multi multi
     ( __az_set_str ( __az_strs ) 3 allowed )
     // A change of tenancy mode changes what the provider must be built
@@ -1499,7 +1499,7 @@ unsafe @ anomaly_authz_last_error → s { ^ ( string_data . ( __az_strs ) s_last
 
 // The provider, discovered on first use. None when discovery fails, which
 // makes every token unverifiable — a closed door, not an open one.
-@ __az_provider → ?OidcProvider {
+unsafe @ __az_provider → ?OidcProvider {
     ? != g_az_prov_addr 0 {
         ^ @ ?OidcProvider { T ( OidcProvider_share # OidcProvider g_az_prov_addr ) }
     } {}

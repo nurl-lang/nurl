@@ -215,7 +215,7 @@ unsafe @ p_peek * PState ps i ch → b {
 
 unsafe @ p_advance * PState ps → v { = . ps pos + . ps pos 1 }
 
-@ p_skip_ws * PState ps → v { ~ ( p_peek ps 32 ) { ( p_advance ps ) } }
+unsafe @ p_skip_ws * PState ps → v { ~ ( p_peek ps 32 ) { ( p_advance ps ) } }
 
 unsafe @ p_digit * PState ps → b {
     ? >= . ps pos . ps len { ^ F } {}
@@ -247,7 +247,7 @@ unsafe @ p_number * PState ps → ?*Expr {
 }
 
 // atom := 'x' | number | '(' expr ')' | '-' atom | 's' atom | 'c' atom
-@ p_atom * PState ps → ?*Expr {
+unsafe @ p_atom * PState ps → ?*Expr {
     ( p_skip_ws ps )
     ? ( p_peek ps 120 ) { ( p_advance ps ) ^ @ ?*Expr { T ( e_var ) } } {}
     ? ( p_peek ps 40 ) {
@@ -277,7 +277,7 @@ unsafe @ p_number * PState ps → ?*Expr {
 
 // The combinator: left-associative chain of `sub` separated by `opch`,
 // folded with `build`. RETURNS a closure that CAPTURES sub, opch, build.
-@ p_chainl ( @ ?*Expr * PState ) sub i opch ( @ *Expr * Expr * Expr ) build → ( @ ?*Expr * PState ) {
+unsafe @ p_chainl ( @ ?*Expr * PState ) sub i opch ( @ *Expr * Expr * Expr ) build → ( @ ?*Expr * PState ) {
     ^ \ * PState ps → ?*Expr {
         : ?*Expr first ( sub ps )
         ?? first {
@@ -298,7 +298,7 @@ unsafe @ p_number * PState ps → ?*Expr {
 }
 
 // term := atom (('*') atom)*   — built via the combinator.
-@ p_term * PState ps → ?*Expr {
+unsafe @ p_term * PState ps → ?*Expr {
     : ( @ ?*Expr * PState ) mulp ( p_chainl
     \ * PState s → ?*Expr { ( p_atom s ) }
     42
@@ -307,7 +307,7 @@ unsafe @ p_number * PState ps → ?*Expr {
 }
 
 // expr := term (('+') term)*   — also via the combinator.
-@ p_expr * PState ps → ?*Expr {
+unsafe @ p_expr * PState ps → ?*Expr {
     : ( @ ?*Expr * PState ) addp ( p_chainl
     \ * PState s → ?*Expr { ( p_term s ) }
     43

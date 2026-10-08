@@ -80,7 +80,7 @@ $ `src/safetensor.nu`
     }
 }
 
-@ st_selftest → i {
+unsafe @ st_selftest → i {
     ( nurl_print `safetensor selftest — a header that lies must be a clean error` ) ( nurl_print `\n` )
 
     // ── the honest file parses, and its numbers come back ──────────────

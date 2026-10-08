@@ -25,7 +25,7 @@ unsafe @ live → i { ^ - ( nurl_alloc_count ) ( nurl_free_count ) }
 
 @ mk → Conn { ^ @ Conn { ( vec_new [i] ) ( string_from `conn` ) } }
 
-@ prune Conn c → Conn {
+unsafe @ prune Conn c → Conn {
     : ~ Conn cur c
     : b _sl ( vec_set_len [i] . cur xs 1 )
     ^ cur

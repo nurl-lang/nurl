@@ -242,7 +242,7 @@ unsafe @ __ma_norm * f p i n → v {
     i vtls
 }
 
-@ __ma_parse → Opts {
+unsafe @ __ma_parse → Opts {
     : ~ s model ``
     : ~ s out `cloud.ply`
     : ~ s video ``

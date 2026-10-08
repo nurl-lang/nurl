@@ -160,24 +160,24 @@ unsafe @ __cli_add_flag * CliImpl c s long i short s metavar s help i kind s dfl
     ( vec_push [CliFlag] . c globals f )
 }
 
-@ cli_flag_bool Cli c__h s long i short s help → v {
+unsafe @ cli_flag_bool Cli c__h s long i short s help → v {
     : *CliImpl c ( __Cli_ptr c__h )
     ( __cli_add_flag c long short `` help 2 `` `` )
 }
 
-@ cli_flag_str Cli c__h s long i short s metavar s help s dflt s env → v {
+unsafe @ cli_flag_str Cli c__h s long i short s metavar s help s dflt s env → v {
     : *CliImpl c ( __Cli_ptr c__h )
     ( __cli_add_flag c long short metavar help 0 dflt env )
 }
 
-@ cli_flag_int Cli c__h s long i short s metavar s help i dflt s env → v {
+unsafe @ cli_flag_int Cli c__h s long i short s metavar s help i dflt s env → v {
     : *CliImpl c ( __Cli_ptr c__h )
     : String d ( string_new )
     ( string_push_int d dflt )
     ( __cli_add_flag c long short metavar help 1 ( string_data d ) env )
 }
 
-@ cli_flag_float Cli c__h s long i short s metavar s help f dflt s env → v {
+unsafe @ cli_flag_float Cli c__h s long i short s metavar s help f dflt s env → v {
     : *CliImpl c ( __Cli_ptr c__h )
     : String d ( string_new )
     ( string_push_float d dflt )
@@ -246,7 +246,7 @@ unsafe @ __cli_fallback * CliImpl c s name → String {
     ^ ( string_new )
 }
 
-@ ctx_str CliCtx x s name → String {
+unsafe @ ctx_str CliCtx x s name → String {
     ?? ( args_value . x parser name ) {
         T v → { ^ v }
         F junk → { ( string_free junk ) }
@@ -530,7 +530,7 @@ unsafe @ __cli_register_flags * CliImpl c ArgParser p → v {
 // Some(rc) when it ran (or when --help short-circuited it); None when no
 // default exists. The ctx carries an EMPTY cmdname so ctx_arg/ctx_nargs
 // treat every positional as an argument.
-@ __cli_try_default Cli c__h ArgParser p → ?i {
+unsafe @ __cli_try_default Cli c__h ArgParser p → ?i {
     : *CliImpl c ( __Cli_ptr c__h )
     ?? ( __cli_find_cmd c `` ) {
         T didx → {

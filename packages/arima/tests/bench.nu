@@ -16,7 +16,7 @@ unsafe @ gauss * i seed → f {
 }
 
 // SARMA(1,0,1)(1,0,1)_s by simulation from the expanded polynomials.
-@ sim i n i s f phi f th f sphi f sth i seed0 → ( Vec f ) {
+unsafe @ sim i n i s f phi f th f sphi f sth i seed0 → ( Vec f ) {
     : ( Vec f ) y ( vec_zeroed [f] n )
     : ( Vec f ) e ( vec_zeroed [f] n )
     : ( Vec i ) seedv ( vec_zeroed [i] 1 )

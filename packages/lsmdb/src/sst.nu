@@ -742,9 +742,9 @@ unsafe @ sc_koff SstCursor c__h → i {
     ^ . c koff
 }
 
-@ sc_key SstCursor c__h → ( Vec u ) { ^ ( _sc_key ( _SstCursor_ptr c__h ) ) }
+unsafe @ sc_key SstCursor c__h → ( Vec u ) { ^ ( _sc_key ( _SstCursor_ptr c__h ) ) }
 
-@ sc_val SstCursor c__h → ( Vec u ) { ^ ( _sc_val ( _SstCursor_ptr c__h ) ) }
+unsafe @ sc_val SstCursor c__h → ( Vec u ) { ^ ( _sc_val ( _SstCursor_ptr c__h ) ) }
 
 unsafe @ _sc_key * SstCursorImpl c → ( Vec u ) { ^ ( _mt_slice . c blk . c koff . c kl ) }
 
@@ -792,7 +792,7 @@ unsafe @ sc_first SstCursor c__h → v {
     : b _ok ( __sc_load c 0 )
 }
 
-@ sc_next SstCursor c__h → v {
+unsafe @ sc_next SstCursor c__h → v {
     : *SstCursorImpl c ( _SstCursor_ptr c__h )
     ( _sc_next c )
 }

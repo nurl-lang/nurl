@@ -65,7 +65,7 @@ unsafe @ __dt_dump GpuKit kit s dir s name GkBuf b i n → b {
     ^ ok
 }
 
-@ main → i {
+unsafe @ main → i {
     ? < ( nurl_argc ) 5 { ^ ( __dt_die `usage: dptcheck <model> <dir> <gh> <gw>` ) } {}
     : s model ( nurl_argv 1 )
     : s dir ( nurl_argv 2 )

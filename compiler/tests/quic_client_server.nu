@@ -77,7 +77,7 @@ $ `stdlib/ext/http3_server.nu`
     ( vec_free [i] ids )
 }
 
-@ run → v {
+unsafe @ run → v {
     : X509SelfSigned cert ( x509_selfsigned_p256 `localhost` 1 )
     : s cp `/tmp/nurl_quic_client_server.crt`
     : s kp `/tmp/nurl_quic_client_server.key`
@@ -136,7 +136,7 @@ $ `stdlib/ext/http3_server.nu`
 }
 
 // verify = 0: the self-signed leaf is accepted; everything else is checked.
-@ client_round → v {
+unsafe @ client_round → v {
     : QuicTp tp ( quic_client_default_tp )
     : QuicClient cl ( quic_client_connect `127.0.0.1` 18962 `localhost` `echo` tp 0 5000 )
     ? == 0 # i . cl ctl { ( label `connect` `NO-SOCKET` ) ( quic_tp_free tp ) ^ } {}
@@ -189,7 +189,7 @@ $ `stdlib/ext/http3_server.nu`
 
 // verify = 1: a self-signed certificate is not trusted; the handshake
 // must fail with CRYPTO_ERROR(bad_certificate) and open no stream.
-@ client_round_verify → v {
+unsafe @ client_round_verify → v {
     : QuicTp tp ( quic_client_default_tp )
     : QuicClient cl ( quic_client_connect `127.0.0.1` 18962 `localhost` `echo` tp 1 5000 )
     ? == 0 # i . cl ctl { ( label `verify_selfsigned` `NO-SOCKET` ) ( quic_tp_free tp ) ^ } {}

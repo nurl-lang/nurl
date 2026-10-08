@@ -315,7 +315,7 @@ $ `stdlib/ext/env.nu`
 // that negotiated X25519MLKEM768 perfectly was reported "handshake
 // failed" — conflating "not post-quantum" with "not trusted", which are
 // exactly the two things a probe exists to keep apart.
-@ __cmd_probe s host i port → i {
+unsafe @ __cmd_probe s host i port → i {
     ( __pad host )
     : ~ b trusted T
     : ~ TlsConn conn @ TlsConn { # s 0 }

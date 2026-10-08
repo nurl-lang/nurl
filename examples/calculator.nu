@@ -97,7 +97,7 @@ unsafe @ eval * Expr e → ?i {
     }
 }
 
-@ main → i {
+unsafe @ main → i {
     ( nurl_print `Calculator example\n\n` )
 
     // Build: (10 + 5) * 2 = 30

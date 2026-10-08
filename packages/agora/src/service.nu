@@ -224,7 +224,7 @@ Remember: note_set / note / notes for facts about the repository that outlive th
 //                    plus the query string
 //   nothing / else   the query string as flat strings (handlers accept
 //                    numeric strings)
-@ __ag_http_args HttpRequest req s op → Json {
+unsafe @ __ag_http_args HttpRequest req s op → Json {
     : b has_body > ( vec_len [u] . req body ) 0
     : ~ b is_text F
     : ~ b is_form F

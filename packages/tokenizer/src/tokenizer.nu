@@ -779,11 +779,11 @@ unsafe @ tok_encode Tok t__h s text b add_special → ( Vec i ) {
 // Raw bytes of one token: SPM BYTE pieces become their byte, ▁ becomes
 // a space, control tokens become nothing; BPE pieces run the inverse
 // byte remap.
-@ tok_piece Tok t__h i id → ( Vec u ) { ^ ( __tk_piece ( __Tok_ptr t__h ) id ) }
+unsafe @ tok_piece Tok t__h i id → ( Vec u ) { ^ ( __tk_piece ( __Tok_ptr t__h ) id ) }
 
 // The text of piece `id` as stored in the vocabulary (borrowed: valid while
 // the Tok is; "" out of range).
-@ tok_piece_str Tok t__h i id → s { ^ ( _tk_piece_data ( __Tok_ptr t__h ) id ) }
+unsafe @ tok_piece_str Tok t__h i id → s { ^ ( _tk_piece_data ( __Tok_ptr t__h ) id ) }
 
 unsafe @ __tk_piece * TokImpl t i id → ( Vec u ) {
     : ( Vec u ) out ( vec_new [u] )
@@ -840,7 +840,7 @@ unsafe @ __tk_piece * TokImpl t i id → ( Vec u ) {
     ^ out
 }
 
-@ tok_decode Tok t__h ( Vec i ) ids → ( Vec u ) {
+unsafe @ tok_decode Tok t__h ( Vec i ) ids → ( Vec u ) {
     : *TokImpl t ( __Tok_ptr t__h )
     : ( Vec u ) out ( vec_new [u] )
     : ~ i k 0

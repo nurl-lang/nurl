@@ -395,7 +395,7 @@ unsafe @ __em_run ( Vec String ) texts b normalize → HttpResponse {
     ^ have
 }
 
-@ __em_post HttpRequest req → HttpResponse {
+unsafe @ __em_post HttpRequest req → HttpResponse {
     ? ( __em_authed req ) {} { ^ ( __em_jerr 401 `unauthorized — pass 'Authorization: Bearer <token>'` ) }
     // the body is raw bytes; JSON wants a NUL-terminated string
     : String bodys ( string_new )
@@ -439,7 +439,7 @@ unsafe @ __em_run ( Vec String ) texts b normalize → HttpResponse {
     ^ ( __em_run texts normalize )
 }
 
-@ __em_health HttpRequest req → HttpResponse {
+unsafe @ __em_health HttpRequest req → HttpResponse {
     : Embed e # Embed g_em
     : Json o ( json_obj_new )
     // `healthy` either way: an engine whose weights are unloaded under

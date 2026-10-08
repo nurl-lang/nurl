@@ -3776,7 +3776,7 @@ unsafe @ __an_h_import HttpRequest req Params p → HttpResponse {
 // lent to the caller, and the server's own binding releases it.
 : ~ i g_an_lock 0
 
-@ __an_lock → Mutex { ^ # Mutex g_an_lock }
+unsafe @ __an_lock → Mutex { ^ # Mutex g_an_lock }
 
 @ __an_lock_acquire → v { ? != g_an_lock 0 { ( mutex_lock ( __an_lock ) ) } {} }
 

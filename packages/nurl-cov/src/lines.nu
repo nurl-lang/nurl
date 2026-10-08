@@ -162,7 +162,7 @@ unsafe @ lines_build GcovObj o i src → LineTab {
 // gcov visits them and therefore the order a line's blocks are listed in.
 // The notes store them per block already, but nothing in the format
 // promises ascending order, so the rows are chained per block first.
-@ __ln_scan_fn GcovObj o * LineTabImpl t i fi i src → v {
+unsafe @ __ln_scan_fn GcovObj o * LineTabImpl t i fi i src → v {
     : i nb ( gcov_fn_nblocks o fi )
     ? == nb 0 { ^ v } {}
     : i first ( gcov_fn_bl_first o fi )

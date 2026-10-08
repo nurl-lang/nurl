@@ -139,7 +139,7 @@ unsafe @ mmd_state → MmdTemplateSet {
     ^ out
 }
 
-@ __mmds_body HttpRequest req → String {
+unsafe @ __mmds_body HttpRequest req → String {
     : i n ( vec_len [u] . req body )
     ? == n 0 { ^ ( string_new ) } {}
     ^ ( string_from_bytes ( vec_data [u] . req body ) n )

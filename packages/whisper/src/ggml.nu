@@ -82,7 +82,7 @@ $ `stdlib/core/rcbox.nu`
 
 // The mapping is raw: the last owner unmaps it (gg_release_data may have
 // done so already). The Vecs are dropped by the compiler after this.
-% Drop GgImpl { @ drop GgImpl x → v {
+% Drop GgImpl { unsafe @ drop GgImpl x → v {
         ? & . x from_mmap != # i . x map 0 { : i32 _u ( munmap . x map . x nbytes ) } {}
     } }
 

@@ -124,7 +124,7 @@ unsafe @ inject_apply * u s2 i nframes → i {
     ^ 0
 }
 
-@ inject_run s rompath s statepath i nframes → i {
+unsafe @ inject_run s rompath s statepath i nframes → i {
     : !( Vec u ) IoErr rr ( read_file_bytes rompath )
     ?? rr {
         F _ → { ( nurl_print `cannot read ROM\n` ) ^ 2 }
@@ -138,7 +138,7 @@ unsafe @ inject_apply * u s2 i nframes → i {
     ^ 0
 }
 
-@ trace_run s rompath i fromf i nsteps → i {
+unsafe @ trace_run s rompath i fromf i nsteps → i {
     : !( Vec u ) IoErr rr ( read_file_bytes rompath )
     ?? rr {
         F _ → { ( nurl_print `cannot read ROM\n` ) ^ 2 }

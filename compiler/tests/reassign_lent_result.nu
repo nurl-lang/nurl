@@ -25,12 +25,12 @@ unsafe @ at * TbImpl t i k → String {
     ?? ( vec_get [String] . t vals k ) { T s → ^ s F _ → ^ ( string_new ) }
 }
 
-@ bound * TbImpl p → i {
+unsafe @ bound * TbImpl p → i {
     : String y ( at p 0 )
     ^ ( string_len y )
 }
 
-@ assigned * TbImpl p → i {
+unsafe @ assigned * TbImpl p → i {
     : ~ String x ( string_new )
     = x ( at p 0 )
     ^ ( string_len x )

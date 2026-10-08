@@ -70,7 +70,7 @@ unsafe @ header_of HttpResponse r s name → String {
     ^ ( string_new )
 }
 
-@ client_round → v {
+unsafe @ client_round → v {
     : H3Client cl ( h3_client_connect `127.0.0.1` 18963 `localhost` 0 5000 )
     ? == 0 # i . cl ctl { ( label `connect` `NO-SOCKET` ) ^ } {}
     ( label `connect` ? ( h3_client_connected cl ) `OK` `FAIL` )
@@ -119,7 +119,7 @@ unsafe @ header_of HttpResponse r s name → String {
     ( h3_client_free cl )
 }
 
-@ run → v {
+unsafe @ run → v {
     : X509SelfSigned cert ( x509_selfsigned_p256 `localhost` 1 )
     : s cp `/tmp/nurl_http3_client_server.crt`
     : s kp `/tmp/nurl_http3_client_server.key`

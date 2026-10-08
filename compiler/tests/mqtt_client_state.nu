@@ -25,7 +25,7 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/std/net.nu`
 
 // A client over a conn that is never read or written.
-@ dummy_client i keepalive_ms → MqttClient {
+unsafe @ dummy_client i keepalive_ms → MqttClient {
     : TcpConn conn @ TcpConn { `` 0 0 }
     ^ @ MqttClient { conn ( vec_new [u] ) ( __mqtt_ctl_new 0 ) keepalive_ms
         ( vec_new [i] ) F }
@@ -38,7 +38,7 @@ $ `stdlib/std/net.nu`
 }
 
 // Allocate `n` ids the way a publish path does — one call per packet.
-@ take_ids MqttClient cl i n → v {
+unsafe @ take_ids MqttClient cl i n → v {
     : ~ i k 0
     ~ < k n {
         ( nurl_print ( nurl_str_int ( __mqtt_next_pid cl ) ) )
@@ -48,7 +48,7 @@ $ `stdlib/std/net.nu`
     ( nurl_print `\n` )
 }
 
-@ main → i {
+unsafe @ main → i {
     ( nurl_print `--- packet ids advance ---\n` )
     : MqttClient cl ( dummy_client 60000 )
     ( take_ids cl 5 )

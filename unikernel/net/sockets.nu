@@ -1368,7 +1368,7 @@ unsafe @ __dns_query * Shim sh s host → s {
     ^ out
 }
 
-@ nurl_dns_resolve s host → s {
+unsafe @ nurl_dns_resolve s host → s {
     ? ( __dns_is_local host ) { ^ ( nurl_str_cat `127.0.0.1` `\n` ) } {}
     ? ( __dns_is_v6_literal host ) { ^ ( nurl_str_cat host `\n` ) } {}
     ?? ( ipv4_parse host ) {

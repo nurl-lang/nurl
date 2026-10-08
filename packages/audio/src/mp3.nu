@@ -141,7 +141,7 @@ $ `mp3tab.nu`
 // bitrates[index][version], version 0 = MPEG-2.5, 2 = MPEG-2, 3 = MPEG-1.
 // Index 0 is free format and 15 is forbidden; both read as -1 here, so no
 // caller can ask for them by accident.
-@ __mp3_bitrate_table → ( Vec i ) {
+unsafe @ __mp3_bitrate_table → ( Vec i ) {
     : ( Vec i ) v ( _mp3_zeros 64 )
     : *i p ( vec_data [i] v )
     : ~ i at 0
@@ -172,7 +172,7 @@ unsafe @ __mp3_bitrate_index i bitr i version → i {
 // Which big-values width gets how many scalefactor bands in region 0 and
 // region 1. The two regions exist so three different Huffman books can cover
 // one granule; the split points have to fall on band boundaries.
-@ __mp3_subdv0 → ( Vec i ) {
+unsafe @ __mp3_subdv0 → ( Vec i ) {
     : ( Vec i ) v ( _mp3_zeros 24 )
     : *i p ( vec_data [i] v )
     : ~ i at 0
@@ -182,7 +182,7 @@ unsafe @ __mp3_bitrate_index i bitr i version → i {
     ^ v
 }
 
-@ __mp3_subdv1 → ( Vec i ) {
+unsafe @ __mp3_subdv1 → ( Vec i ) {
     : ( Vec i ) v ( _mp3_zeros 24 )
     : *i p ( vec_data [i] v )
     : ~ i at 0

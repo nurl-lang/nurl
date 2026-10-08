@@ -96,7 +96,7 @@ $ `stdlib/ext/http_server.nu`
 
 // One exchange on `conn`; prints status/body/err, returns the released
 // transport (none when the response made it single-use).
-@ exchange s name HttpConn conn s method s target i body_max → ?HttpConn {
+unsafe @ exchange s name HttpConn conn s method s target i body_max → ?HttpConn {
     : HttpStreamState st ( hp_stream_open_on conn method `127.0.0.1` 18951 0 target # *u 0 0 `` `nurl-test` )
     ( hp_stream_set_body_max st body_max )
     ~ == ( hp_stream_finished st ) 0 { ( hp_stream_pump st ) }
@@ -182,7 +182,7 @@ $ `stdlib/ext/http_server.nu`
     ^ r
 }
 
-@ real_server_case → v {
+unsafe @ real_server_case → v {
     ?? ( hp_conn_open 0 `127.0.0.1` 18952 `127.0.0.1` 0 ) {
         T c0 → {
             : ~ ? HttpConn cur @ ?HttpConn { T c0 }

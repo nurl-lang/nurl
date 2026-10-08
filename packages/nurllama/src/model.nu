@@ -646,7 +646,7 @@ unsafe @ __lm_upload_opt * LlmImpl m Gguf gg i layer s suffix → i {
     }
 }
 
-@ __lm_upload_layer * LlmImpl m Gguf gg i layer s suffix ( Vec i ) dst ( Vec i ) tdst → b {
+unsafe @ __lm_upload_layer * LlmImpl m Gguf gg i layer s suffix ( Vec i ) dst ( Vec i ) tdst → b {
     : String nm ( __lm_tname layer suffix )
     : i d ( __lm_upload m gg ( string_data nm ) )
     ? < d 0 { ^ F } {}
@@ -1247,7 +1247,7 @@ unsafe @ llm_logit Llm m__h i idx → f {
 // runs per position over the cache this same batch already filled (its
 // causal window differs per position). Logits are produced for the LAST
 // position only, which is all a prefill or a decode step needs.
-@ llm_eval_n Llm m__h ( Vec i ) ids i first i count i pos0 → v {
+unsafe @ llm_eval_n Llm m__h ( Vec i ) ids i first i count i pos0 → v {
     : *LlmImpl m ( __Llm_ptr m__h )
     ( __lm_eval_core m ids first count pos0 0 T 1 )
 }
@@ -1259,7 +1259,7 @@ unsafe @ llm_logit Llm m__h i idx → f {
 // denoise step samples all of them). The window's K/V rows land in the
 // cache at pos0.., overwriting the previous step's; earlier (frozen)
 // blocks keep theirs, which is exactly the block-diffusion mask.
-@ llm_eval_win Llm m__h ( Vec i ) ids i first i count i pos0 i kvlen b want_logits → v {
+unsafe @ llm_eval_win Llm m__h ( Vec i ) ids i first i count i pos0 i kvlen b want_logits → v {
     : *LlmImpl m ( __Llm_ptr m__h )
     ( __lm_eval_core m ids first count pos0 kvlen F ? want_logits 2 0 )
 }
@@ -1657,7 +1657,7 @@ unsafe @ llm_win_prob Llm m__h i row → f {
 
 // Greedy window eval: run the forward and reduce to (id, prob) per
 // position on the device (no full-vocab download).
-@ llm_win_greedy Llm m__h ( Vec i ) ids i first i count i pos0 i kvlen → v {
+unsafe @ llm_win_greedy Llm m__h ( Vec i ) ids i first i count i pos0 i kvlen → v {
     : *LlmImpl m ( __Llm_ptr m__h )
     ( __lm_eval_core m ids first count pos0 kvlen F 3 )
 }

@@ -260,7 +260,7 @@ unsafe @ __pg_next * PgConnImpl c → !PgMsg PgErr {
 }
 
 // Frame and send a typed frontend message.
-@ __pg_send_typed * PgConnImpl c i mtype ( Vec u ) payload → i {
+unsafe @ __pg_send_typed * PgConnImpl c i mtype ( Vec u ) payload → i {
     : ( Vec u ) msg ( vec_with_cap [u] + ( vec_len [u] payload ) 5 )
     ( vec_push [u] msg # u mtype )
     ( __push32 msg + 4 ( vec_len [u] payload ) )
@@ -298,7 +298,7 @@ unsafe @ __pg_next * PgConnImpl c → !PgMsg PgErr {
 
 // ── authentication ────────────────────────────────────────────────
 // MD5: "md5" + md5_hex( md5_hex(password ++ user) ++ salt )
-@ __pg_md5_auth * PgConnImpl c s user s password ( Vec u ) salt → i {
+unsafe @ __pg_md5_auth * PgConnImpl c s user s password ( Vec u ) salt → i {
     : ( Vec u ) inner ( vec_new [u] )
     ( __push_raw inner password )
     ( __push_raw inner user )
@@ -322,7 +322,7 @@ unsafe @ __pg_next * PgConnImpl c → !PgMsg PgErr {
 
 // SCRAM-SHA-256 exchange. Returns 1 on the messages being sent OK; the
 // final server-signature check happens when SASLFinal arrives.
-@ __pg_scram_init * PgConnImpl c String cfb → i {
+unsafe @ __pg_scram_init * PgConnImpl c String cfb → i {
     : String full ( string_with_cap + 8 ( string_len cfb ) )
     ( string_push_str full `n,,` )
     ( string_push_str full ( string_data cfb ) )

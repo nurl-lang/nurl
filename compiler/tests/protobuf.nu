@@ -445,7 +445,7 @@ $ `stdlib/ext/protobuf.nu`
     ^ @ !v ProtoError { T }
 }
 
-@ structures → !v ProtoError {
+unsafe @ structures → !v ProtoError {
     : ( Vec u ) out ( vec_new [u] )
     : ( Vec u ) child ( hx `089601` )
     \ ( proto_write_bytes out 3 child )
@@ -538,7 +538,7 @@ $ `stdlib/ext/protobuf.nu`
     ^ @ !v ProtoError { T }
 }
 
-@ limits → !v ProtoError {
+unsafe @ limits → !v ProtoError {
     : ( Vec u ) bytes ( hx `0b0b0c0c` )
     : ~ ProtoReader r \ ( proto_reader_with_limits ( slice_from_vec [u] bytes ) 4 1 )
     ?? ( proto_read_raw_field r ) {

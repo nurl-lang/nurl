@@ -104,7 +104,7 @@ unsafe @ mask_sample * u L i MH i MW f fy f fx → f {
 // ORIGINAL-image pixels (x0,y0,ow,oh); for each pixel we map back through the
 // letterbox to the 160×160 mask grid and threshold the bilinearly-sampled
 // logit at 0 (sigmoid > 0.5). `S` is the model input side (640).
-@ mask_overlay Image im * u L Letterbox lb i S i x0 i y0 i ow i oh i r i gg i bb i alpha → i {
+unsafe @ mask_overlay Image im * u L Letterbox lb i S i x0 i y0 i ow i oh i r i gg i bb i alpha → i {
     : i MH ( mask_dim )
     : i MW ( mask_dim )
     : f scale . lb scale

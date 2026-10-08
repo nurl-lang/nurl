@@ -108,7 +108,7 @@ unsafe @ take_readable * Conn c → ( Vec i ) {
 
 @ fresh_vec → ( Vec i ) { ^ ( vec_new [i] ) }
 
-@ from_field_handover * Conn c → i {
+unsafe @ from_field_handover * Conn c → i {
     : ( Vec i ) r ( take_readable c )
     : i n ( vec_len [i] r )
     ( vec_free [i] r )

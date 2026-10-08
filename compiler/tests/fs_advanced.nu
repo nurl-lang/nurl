@@ -26,7 +26,7 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/errors.nu`
 
-@ main → i {
+unsafe @ main → i {
     : s root `nurl_fs_adv_test`
     : s deep `nurl_fs_adv_test/a/b/c`
     : s data_path `nurl_fs_adv_test/a/b/c/data.bin`

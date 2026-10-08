@@ -710,9 +710,9 @@ unsafe @ gpu_host_alloc i bytes → GpuHost {
 }
 
 // No buffer — the placeholder for "not allocated yet".
-@ gpu_host_none → GpuHost { ^ @ GpuHost { # *u 0 0 ( __gpu_nores ) } }
+unsafe @ gpu_host_none → GpuHost { ^ @ GpuHost { # *u 0 0 ( __gpu_nores ) } }
 
-@ gpu_host_ptr GpuHost h → *u { ^ . h ptr }
+unsafe @ gpu_host_ptr GpuHost h → *u { ^ . h ptr }
 
 @ gpu_host_bytes GpuHost h → i { ^ . h bytes }
 
@@ -1072,7 +1072,7 @@ unsafe @ __gpu_upload_each ( Vec GpuCopy ) items → i {
 // most ONE range is tracked; returns F when registration fails (not a
 // CUDA backend, read-only registration unsupported, out of lockable
 // memory) and uploads simply keep their staged path.
-@ gpu_host_register * u p i bytes → b {
+unsafe @ gpu_host_register * u p i bytes → b {
     ? != __gpu_backend 0 { ^ F } {}
     ? != ( cuda_host_register p bytes ) 0 { ^ F } {}
     = __gpu_reg_base # i p
@@ -1080,7 +1080,7 @@ unsafe @ __gpu_upload_each ( Vec GpuCopy ) items → i {
     ^ T
 }
 
-@ gpu_host_unregister * u p → v {
+unsafe @ gpu_host_unregister * u p → v {
     ? != __gpu_backend 0 { ^ {} } {}
     ? == # i p __gpu_reg_base {
         : i _u ( cuda_host_unregister p )

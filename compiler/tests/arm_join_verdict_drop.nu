@@ -181,7 +181,7 @@ unsafe @ consumed → i {
 // 9. Tail of a closure body (void): the arm's value is a pointer into
 //    the payload, nobody reads it, so the payload is dropped — INSIDE the
 //    closure, whose IR owns the exit block.
-@ closure_tail → i {
+unsafe @ closure_tail → i {
     : ( @ v ) f \ → v {
         ?? ( open 9 ) {
             T db → {

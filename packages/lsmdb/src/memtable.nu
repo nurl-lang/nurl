@@ -86,7 +86,7 @@ unsafe @ lsm_bytes_cmp_raw * u ap i aoff i alen * u bp i boff i blen → i {
 }
 
 // Compare two whole byte vectors.
-@ lsm_bytes_cmp ( Vec u ) a ( Vec u ) b → i {
+unsafe @ lsm_bytes_cmp ( Vec u ) a ( Vec u ) b → i {
     ^ ( lsm_bytes_cmp_raw ( vec_data [u] a ) 0 ( vec_len [u] a )
     ( vec_data [u] b ) 0 ( vec_len [u] b ) )
 }
@@ -214,7 +214,7 @@ unsafe @ __mt_rand * MemTableImpl m → i {
     ^ & x 9223372036854775807
 }
 
-@ __mt_pick_level * MemTableImpl m → i {
+unsafe @ __mt_pick_level * MemTableImpl m → i {
     : ~ i lvl 1
     : ~ b climb T
     ~ climb {
@@ -286,12 +286,12 @@ unsafe @ mt_put MemTable m__h ( Vec u ) key ( Vec u ) val i seq i kind → v {
 
 // First node with (key, seq) >= (probe, snap) — i.e. the newest version
 // of `key` no newer than `snap`, or the next key after it. 0 = end.
-@ mt_seek MemTable m__h ( Vec u ) key i snap → i {
+unsafe @ mt_seek MemTable m__h ( Vec u ) key i snap → i {
     : *MemTableImpl m ( __MemTable_ptr m__h )
     ^ ( __mt_seek m key snap )
 }
 
-@ __mt_seek * MemTableImpl m ( Vec u ) key i snap → i {
+unsafe @ __mt_seek * MemTableImpl m ( Vec u ) key i snap → i {
     : ( Vec i ) none ( vec_new [i] )
     : i x ( __mt_descend m ( vec_data [u] key ) 0 ( vec_len [u] key ) snap none )
     ^ ( __mt_link m x 0 )
@@ -309,12 +309,12 @@ unsafe @ mt_find MemTable m__h ( Vec u ) key i snap → i {
     ^ ? == c 0 cand 0
 }
 
-@ mt_first MemTable m__h → i {
+unsafe @ mt_first MemTable m__h → i {
     : *MemTableImpl m ( __MemTable_ptr m__h )
     ^ ( __mt_link m 0 0 )
 }
 
-@ mt_next MemTable m__h i node → i {
+unsafe @ mt_next MemTable m__h i node → i {
     : *MemTableImpl m ( __MemTable_ptr m__h )
     ^ ( __mt_link m node 0 )
 }

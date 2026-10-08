@@ -15,7 +15,7 @@ $ `unikernel/drivers/virtionet.nu`
 
 : ~ i g_nic 0
 
-@ netdev_open → i {
+unsafe @ netdev_open → i {
     ? != g_nic 0 { ^ 1 } {}
     : *VirtioNet nic ( vnet_open 64 )
     ? ! ( vnet_ready nic ) { ^ 0 } {}

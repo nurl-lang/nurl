@@ -56,7 +56,7 @@ $ `tensor.nu`
 }
 
 // Lent: the global keeps its owner.
-@ __t_kit → GpuKit { ^ # GpuKit g_t_kit }
+unsafe @ __t_kit → GpuKit { ^ # GpuKit g_t_kit }
 
 // Opt IN with a caller-opened kit (any backend — the caller chose it).
 // tensor holds the kit (one more owner of it) until tensor_gpu_close /

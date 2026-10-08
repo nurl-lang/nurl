@@ -73,7 +73,7 @@ $ `hf.nu`
     }
 }
 
-@ hub_fetch_blob String root s url s staging s expected → !String String {
+unsafe @ hub_fetch_blob String root s url s staging s expected → !String String {
     // already cached? a content-addressed name is its own proof.
     ? == ( nurl_str_len expected ) 64 {
         : String bp0 ( hub_blob_path root expected )

@@ -285,7 +285,7 @@ unsafe @ _g_poison * GTapeImpl tp s why → GVar {
 
 // Poison the tape from outside (a builder that meets a shape it cannot
 // express): reports `why` once and hands back the invalid GVar.
-@ grad_poison GTape tp__h s why → GVar {
+unsafe @ grad_poison GTape tp__h s why → GVar {
     : *GTapeImpl tp ( _GTape_ptr tp__h )
     ^ ( _g_poison tp why )
 }
@@ -426,22 +426,22 @@ unsafe @ _g_binop * GTapeImpl tp GVar a GVar b i op → GVar {
     ^ ( _g_push tp op . a id . b id 0.0 val )
 }
 
-@ g_add GTape tp__h GVar a GVar b → GVar {
+unsafe @ g_add GTape tp__h GVar a GVar b → GVar {
     : *GTapeImpl tp ( _GTape_ptr tp__h )
     ^ ( _g_binop tp a b ( gop_add ) )
 }
 
-@ g_sub GTape tp__h GVar a GVar b → GVar {
+unsafe @ g_sub GTape tp__h GVar a GVar b → GVar {
     : *GTapeImpl tp ( _GTape_ptr tp__h )
     ^ ( _g_binop tp a b ( gop_sub ) )
 }
 
-@ g_mul GTape tp__h GVar a GVar b → GVar {
+unsafe @ g_mul GTape tp__h GVar a GVar b → GVar {
     : *GTapeImpl tp ( _GTape_ptr tp__h )
     ^ ( _g_binop tp a b ( gop_mul ) )
 }
 
-@ g_div GTape tp__h GVar a GVar b → GVar {
+unsafe @ g_div GTape tp__h GVar a GVar b → GVar {
     : *GTapeImpl tp ( _GTape_ptr tp__h )
     ^ ( _g_binop tp a b ( gop_div ) )
 }
@@ -480,47 +480,47 @@ unsafe @ _g_unary * GTapeImpl tp GVar a i op f sc → GVar {
     ^ ( _g_push tp op . a id -1 sc val )
 }
 
-@ g_neg GTape tp__h GVar a → GVar {
+unsafe @ g_neg GTape tp__h GVar a → GVar {
     : *GTapeImpl tp ( _GTape_ptr tp__h )
     ^ ( _g_unary tp a ( gop_neg ) 0.0 )
 }
 
-@ g_adds GTape tp__h GVar a f sc → GVar {
+unsafe @ g_adds GTape tp__h GVar a f sc → GVar {
     : *GTapeImpl tp ( _GTape_ptr tp__h )
     ^ ( _g_unary tp a ( gop_adds ) sc )
 }
 
-@ g_muls GTape tp__h GVar a f sc → GVar {
+unsafe @ g_muls GTape tp__h GVar a f sc → GVar {
     : *GTapeImpl tp ( _GTape_ptr tp__h )
     ^ ( _g_unary tp a ( gop_muls ) sc )
 }
 
-@ g_relu GTape tp__h GVar a → GVar {
+unsafe @ g_relu GTape tp__h GVar a → GVar {
     : *GTapeImpl tp ( _GTape_ptr tp__h )
     ^ ( _g_unary tp a ( gop_relu ) 0.0 )
 }
 
-@ g_sigmoid GTape tp__h GVar a → GVar {
+unsafe @ g_sigmoid GTape tp__h GVar a → GVar {
     : *GTapeImpl tp ( _GTape_ptr tp__h )
     ^ ( _g_unary tp a ( gop_sigmoid ) 0.0 )
 }
 
-@ g_tanh GTape tp__h GVar a → GVar {
+unsafe @ g_tanh GTape tp__h GVar a → GVar {
     : *GTapeImpl tp ( _GTape_ptr tp__h )
     ^ ( _g_unary tp a ( gop_tanh ) 0.0 )
 }
 
-@ g_exp GTape tp__h GVar a → GVar {
+unsafe @ g_exp GTape tp__h GVar a → GVar {
     : *GTapeImpl tp ( _GTape_ptr tp__h )
     ^ ( _g_unary tp a ( gop_exp ) 0.0 )
 }
 
-@ g_log GTape tp__h GVar a → GVar {
+unsafe @ g_log GTape tp__h GVar a → GVar {
     : *GTapeImpl tp ( _GTape_ptr tp__h )
     ^ ( _g_unary tp a ( gop_log ) 0.0 )
 }
 
-@ g_sqrt GTape tp__h GVar a → GVar {
+unsafe @ g_sqrt GTape tp__h GVar a → GVar {
     : *GTapeImpl tp ( _GTape_ptr tp__h )
     ^ ( _g_unary tp a ( gop_sqrt ) 0.0 )
 }
@@ -544,12 +544,12 @@ unsafe @ _g_reduce * GTapeImpl tp GVar a i op → GVar {
     ^ ( _g_push tp op . a id -1 0.0 val )
 }
 
-@ g_sum GTape tp__h GVar a → GVar {
+unsafe @ g_sum GTape tp__h GVar a → GVar {
     : *GTapeImpl tp ( _GTape_ptr tp__h )
     ^ ( _g_reduce tp a ( gop_sum ) )
 }
 
-@ g_mean GTape tp__h GVar a → GVar {
+unsafe @ g_mean GTape tp__h GVar a → GVar {
     : *GTapeImpl tp ( _GTape_ptr tp__h )
     ^ ( _g_reduce tp a ( gop_mean ) )
 }

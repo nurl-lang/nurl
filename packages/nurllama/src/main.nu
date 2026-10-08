@@ -302,7 +302,7 @@ unsafe @ __nl_ids_eq ( Vec i ) got * i exp i n → b {
     ^ != ok 0
 }
 
-@ __nl_selftest → i {
+unsafe @ __nl_selftest → i {
     : ~ NlCnt cn @ NlCnt { 0 0 }
     : !String IoErr tf ( fs_tempfile `/tmp` `nurllama-selftest.` )
     : ~ String path ( string_new )

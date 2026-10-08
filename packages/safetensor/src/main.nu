@@ -54,7 +54,7 @@ $ `src/selftest.nu`
     }
 }
 
-@ __cmd_stats St st s name → i {
+unsafe @ __cmd_stats St st s name → i {
     : i idx ( st_find_tensor st name )
     ? < idx 0 {
         ( nurl_eprintln `safetensor: no such tensor` )

@@ -25,7 +25,7 @@ $ `stdlib/core/rcbox.nu`
 // read — past it a read yields 0, as an out-of-range vec_get did.
 : Wc { * u data i pos i len i cap }
 
-@ wc_new ( Vec u ) buf → Wc {
+unsafe @ wc_new ( Vec u ) buf → Wc {
     : i n ( vec_len [u] buf )
     ^ @ Wc { ( vec_data [u] buf ) 0 n n }
 }
@@ -90,7 +90,7 @@ unsafe @ wc_peek inout Wc c → i {
 }
 
 // Skip n bytes.
-@ wc_skip inout Wc c i n → v { = . c pos + . c pos n }
+unsafe @ wc_skip inout Wc c i n → v { = . c pos + . c pos n }
 
 // Bytes physically remaining in the input (never negative).
 @ wc_avail inout Wc c → i { : i r - . c len . c pos ? < r 0 { ^ 0 } {} ^ r }
@@ -229,7 +229,7 @@ unsafe @ __mod_err * ModuleImpl m s msg → v {
 // not allocate or iterate on it. This single discipline bounds every
 // decode-time allocation and loop to the size of the input, closing the
 // unbounded-allocation / count-overflow class.
-@ __chk_count inout Wc c * ModuleImpl m i cnt s what → i {
+unsafe @ __chk_count inout Wc c * ModuleImpl m i cnt s what → i {
     ? | < cnt 0 > cnt ( wc_avail c ) {
         ( __mod_err m what )
         ^ 0
@@ -241,7 +241,7 @@ unsafe @ __mod_err * ModuleImpl m s msg → v {
 // constant expression may only reference an imported global (spec), and those
 // are rejected at decode — so hitting one here is itself a decode error.
 // Consumes through the trailing `end`.
-@ __const_expr inout Wc c * ModuleImpl m → i {
+unsafe @ __const_expr inout Wc c * ModuleImpl m → i {
     : i op0 ( wc_u8 c )
     : ~ i val 0
     // Every immediate must be CONSUMED, not scanned over: an f32/f64 bit
@@ -616,7 +616,7 @@ unsafe @ _module_func_name * ModuleImpl m i fidx → ( Vec u ) {
     ^ ( vec_new [u] )
 }
 
-@ module_func_name Module m__h i fidx → ( Vec u ) { ^ ( _module_func_name ( _Module_ptr m__h ) fidx ) }
+unsafe @ module_func_name Module m__h i fidx → ( Vec u ) { ^ ( _module_func_name ( _Module_ptr m__h ) fidx ) }
 
 // Decode a whole module. On error, module_ok is F and module_err says why.
 // The module takes over `bytes` as its image (functions index into it).
@@ -697,7 +697,7 @@ unsafe @ _module_export_global * ModuleImpl m s name → i {
     ^ found
 }
 
-@ module_export_global Module m__h s name → i { ^ ( _module_export_global ( _Module_ptr m__h ) name ) }
+unsafe @ module_export_global Module m__h s name → i { ^ ( _module_export_global ( _Module_ptr m__h ) name ) }
 
 // Find an exported function index by name (-1 if absent).
 unsafe @ _module_export_func * ModuleImpl m s name → i {
@@ -715,7 +715,7 @@ unsafe @ _module_export_func * ModuleImpl m s name → i {
     ^ found
 }
 
-@ module_export_func Module m__h s name → i { ^ ( _module_export_func ( _Module_ptr m__h ) name ) }
+unsafe @ module_export_func Module m__h s name → i { ^ ( _module_export_func ( _Module_ptr m__h ) name ) }
 
 // The *FuncType of any function index — imported (low indices) or defined —
 // as an opaque pointer; #s 0 if out of range.
@@ -736,7 +736,7 @@ unsafe @ _module_func_type * ModuleImpl m i fidx → s {
     ^ ?? ( vec_get [s] . m types ti ) { T x → x F → # s 0 }
 }
 
-@ module_func_type Module m__h i fidx → s { ^ ( _module_func_type ( _Module_ptr m__h ) fidx ) }
+unsafe @ module_func_type Module m__h i fidx → s { ^ ( _module_func_type ( _Module_ptr m__h ) fidx ) }
 
 // Structural function-type equality (the call_indirect runtime check): same
 // parameter and result valtypes, in order.

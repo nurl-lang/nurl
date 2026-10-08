@@ -582,7 +582,7 @@ unsafe @ __gws_write * GgufSImpl s ( Vec u ) bytes → !v String {
 }
 
 // Write `n` zero bytes (alignment padding) to the file.
-@ __gws_pad * GgufSImpl s i n → !v String {
+unsafe @ __gws_pad * GgufSImpl s i n → !v String {
     ? <= n 0 { ^ @ !v String { T 0 } } {}
     : ( Vec u ) z ( vec_new [u] )
     : ~ i k 0

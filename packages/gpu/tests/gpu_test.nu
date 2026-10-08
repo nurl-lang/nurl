@@ -35,7 +35,7 @@ unsafe @ test_args → v {
 }
 
 // ── on-device: real vector add ───────────────────────────────────
-@ test_device → v {
+unsafe @ test_device → v {
     ( nurl_print `[device]\n` )
     : i count ( gpu_device_count )
     ? <= count 0 {
@@ -97,7 +97,7 @@ unsafe @ test_args → v {
 // not true. This test is what holds it true.
 //
 // Runs on whichever backend gpu_open picks, so the suite is run twice.
-@ test_coop → v {
+unsafe @ test_coop → v {
     ( nurl_print `[cooperative]\n` )
     : Gpu g ( gpu_open ( gpu_best_device ) )
     ? ! ( gpu_ok g ) { ( check F `open a device (any backend)` ) ^ {} } {}
@@ -155,7 +155,7 @@ unsafe @ test_args → v {
 // end. Each buffer gets its own pattern (value = index*7 + tensor id) so a
 // byte landing in the wrong buffer or at the wrong offset is caught by the
 // spot checks at both ends and the middle of every tensor.
-@ test_batch → v {
+unsafe @ test_batch → v {
     ( nurl_print `[upload_batch]\n` )
     : Gpu g ( gpu_open ( gpu_best_device ) )
     ? ! ( gpu_ok g ) { ( check F `open a device (any backend)` ) ^ {} } {}
@@ -245,7 +245,7 @@ unsafe @ test_args → v {
     ^ ( gpu_alloc g * mb 1048576 )
 }
 
-@ test_release → v {
+unsafe @ test_release → v {
     ( nurl_print `[release]\n` )
     : Gpu g ( gpu_open ( gpu_best_device ) )
     ? ! ( gpu_ok g ) { ( check F `open a device (any backend)` ) ^ {} } {}

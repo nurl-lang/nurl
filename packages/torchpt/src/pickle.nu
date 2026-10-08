@@ -198,40 +198,40 @@ unsafe @ pk_new → Pk {
     ?? ( vec_get [i] v idx ) { T x → ^ x F → ^ 0 }
 }
 
-@ pk_root Pk k__h → i { ^ ( __pk_root ( __Pk_ptr k__h ) ) }
+unsafe @ pk_root Pk k__h → i { ^ ( __pk_root ( __Pk_ptr k__h ) ) }
 
 unsafe @ __pk_root * PkImpl k → i {
     ^ ( __pk_geti . k root 0 )
 }
 
-@ pk_n_nodes Pk k__h → i { ^ ( __pk_n_nodes ( __Pk_ptr k__h ) ) }
+unsafe @ pk_n_nodes Pk k__h → i { ^ ( __pk_n_nodes ( __Pk_ptr k__h ) ) }
 
 unsafe @ __pk_n_nodes * PkImpl k → i {
     ^ ( vec_len [i] . k kind )
 }
 
-@ pk_kind Pk k__h i id → i { ^ ( __pk_kind ( __Pk_ptr k__h ) id ) }
+unsafe @ pk_kind Pk k__h i id → i { ^ ( __pk_kind ( __Pk_ptr k__h ) id ) }
 
 unsafe @ __pk_kind * PkImpl k i id → i {
     ? | < id 0 >= id ( vec_len [i] . k kind ) { ^ PK_OTHER } {}
     ^ ( __pk_geti . k kind id )
 }
 
-@ pk_int Pk k__h i id → i { ^ ( __pk_int ( __Pk_ptr k__h ) id ) }
+unsafe @ pk_int Pk k__h i id → i { ^ ( __pk_int ( __Pk_ptr k__h ) id ) }
 
 unsafe @ __pk_int * PkImpl k i id → i {
     ? | < id 0 >= id ( vec_len [i] . k kind ) { ^ 0 } {}
     ^ ( __pk_geti . k va id )
 }
 
-@ pk_float Pk k__h i id → f { ^ ( __pk_float ( __Pk_ptr k__h ) id ) }
+unsafe @ pk_float Pk k__h i id → f { ^ ( __pk_float ( __Pk_ptr k__h ) id ) }
 
 unsafe @ __pk_float * PkImpl k i id → f {
     ? | < id 0 >= id ( vec_len [i] . k kind ) { ^ 0.0 } {}
     ^ ( bits_to_f64 ( __pk_geti . k va id ) )
 }
 
-@ pk_str Pk k__h i id → s { ^ ( __pk_str ( __Pk_ptr k__h ) id ) }
+unsafe @ pk_str Pk k__h i id → s { ^ ( __pk_str ( __Pk_ptr k__h ) id ) }
 
 unsafe @ __pk_str * PkImpl k i id → s {
     ? != ( __pk_kind k id ) PK_STR { ^ `` } {}
@@ -240,7 +240,7 @@ unsafe @ __pk_str * PkImpl k i id → s {
 }
 
 // Items in a tuple/list, pairs in a dict, bytes in a byte string.
-@ pk_len Pk k__h i id → i { ^ ( __pk_len ( __Pk_ptr k__h ) id ) }
+unsafe @ pk_len Pk k__h i id → i { ^ ( __pk_len ( __Pk_ptr k__h ) id ) }
 
 unsafe @ __pk_len * PkImpl k i id → i {
     : i kd ( __pk_kind k id )
@@ -249,7 +249,7 @@ unsafe @ __pk_len * PkImpl k i id → i {
     ^ 0
 }
 
-@ pk_item Pk k__h i id i j → i { ^ ( __pk_item ( __Pk_ptr k__h ) id j ) }
+unsafe @ pk_item Pk k__h i id i j → i { ^ ( __pk_item ( __Pk_ptr k__h ) id j ) }
 
 unsafe @ __pk_item * PkImpl k i id i j → i {
     : i kd ( __pk_kind k id )
@@ -258,7 +258,7 @@ unsafe @ __pk_item * PkImpl k i id i j → i {
     ^ ( __pk_geti . k kids + ( __pk_geti . k va id ) j )
 }
 
-@ pk_key Pk k__h i id i j → i { ^ ( __pk_key ( __Pk_ptr k__h ) id j ) }
+unsafe @ pk_key Pk k__h i id i j → i { ^ ( __pk_key ( __Pk_ptr k__h ) id j ) }
 
 unsafe @ __pk_key * PkImpl k i id i j → i {
     ? != ( __pk_kind k id ) PK_DICT { ^ -1 } {}
@@ -266,7 +266,7 @@ unsafe @ __pk_key * PkImpl k i id i j → i {
     ^ ( __pk_geti . k kids + ( __pk_geti . k va id ) * j 2 )
 }
 
-@ pk_val Pk k__h i id i j → i { ^ ( __pk_val ( __Pk_ptr k__h ) id j ) }
+unsafe @ pk_val Pk k__h i id i j → i { ^ ( __pk_val ( __Pk_ptr k__h ) id j ) }
 
 unsafe @ __pk_val * PkImpl k i id i j → i {
     ? != ( __pk_kind k id ) PK_DICT { ^ -1 } {}
@@ -274,7 +274,7 @@ unsafe @ __pk_val * PkImpl k i id i j → i {
     ^ ( __pk_geti . k kids + + ( __pk_geti . k va id ) * j 2 1 )
 }
 
-@ pk_dict_get Pk k__h i id s key → i {
+unsafe @ pk_dict_get Pk k__h i id s key → i {
     : *PkImpl k ( __Pk_ptr k__h )
     : i n ( __pk_len k id )
     : ~ i j 0
@@ -286,28 +286,28 @@ unsafe @ __pk_val * PkImpl k i id i j → i {
     ^ -1
 }
 
-@ pk_tensor_storage Pk k__h i id → i { ^ ( __pk_tensor_storage ( __Pk_ptr k__h ) id ) }
+unsafe @ pk_tensor_storage Pk k__h i id → i { ^ ( __pk_tensor_storage ( __Pk_ptr k__h ) id ) }
 
 unsafe @ __pk_tensor_storage * PkImpl k i id → i {
     ? != ( __pk_kind k id ) PK_TENSOR { ^ -1 } {}
     ^ ( __pk_geti . k tens * ( __pk_geti . k va id ) 4 )
 }
 
-@ pk_tensor_offset Pk k__h i id → i { ^ ( __pk_tensor_offset ( __Pk_ptr k__h ) id ) }
+unsafe @ pk_tensor_offset Pk k__h i id → i { ^ ( __pk_tensor_offset ( __Pk_ptr k__h ) id ) }
 
 unsafe @ __pk_tensor_offset * PkImpl k i id → i {
     ? != ( __pk_kind k id ) PK_TENSOR { ^ 0 } {}
     ^ ( __pk_geti . k tens + * ( __pk_geti . k va id ) 4 1 )
 }
 
-@ pk_tensor_ndim Pk k__h i id → i { ^ ( __pk_tensor_ndim ( __Pk_ptr k__h ) id ) }
+unsafe @ pk_tensor_ndim Pk k__h i id → i { ^ ( __pk_tensor_ndim ( __Pk_ptr k__h ) id ) }
 
 unsafe @ __pk_tensor_ndim * PkImpl k i id → i {
     ? != ( __pk_kind k id ) PK_TENSOR { ^ 0 } {}
     ^ ( __pk_geti . k tens + * ( __pk_geti . k va id ) 4 2 )
 }
 
-@ pk_tensor_dim Pk k__h i id i j → i { ^ ( __pk_tensor_dim ( __Pk_ptr k__h ) id j ) }
+unsafe @ pk_tensor_dim Pk k__h i id i j → i { ^ ( __pk_tensor_dim ( __Pk_ptr k__h ) id j ) }
 
 unsafe @ __pk_tensor_dim * PkImpl k i id i j → i {
     ? != ( __pk_kind k id ) PK_TENSOR { ^ 0 } {}
@@ -316,7 +316,7 @@ unsafe @ __pk_tensor_dim * PkImpl k i id i j → i {
     ^ ( __pk_geti . k dims + ( __pk_geti . k tens + t 3 ) j )
 }
 
-@ pk_tensor_stride Pk k__h i id i j → i { ^ ( __pk_tensor_stride ( __Pk_ptr k__h ) id j ) }
+unsafe @ pk_tensor_stride Pk k__h i id i j → i { ^ ( __pk_tensor_stride ( __Pk_ptr k__h ) id j ) }
 
 unsafe @ __pk_tensor_stride * PkImpl k i id i j → i {
     ? != ( __pk_kind k id ) PK_TENSOR { ^ 0 } {}
@@ -326,20 +326,20 @@ unsafe @ __pk_tensor_stride * PkImpl k i id i j → i {
     ^ ( __pk_geti . k dims + + ( __pk_geti . k tens + t 3 ) nd j )
 }
 
-@ pk_n_storages Pk k__h → i { ^ ( __pk_n_storages ( __Pk_ptr k__h ) ) }
+unsafe @ pk_n_storages Pk k__h → i { ^ ( __pk_n_storages ( __Pk_ptr k__h ) ) }
 
 unsafe @ __pk_n_storages * PkImpl k → i {
     ^ / ( vec_len [i] . k stor ) 3
 }
 
-@ pk_storage_dtype Pk k__h i sid → i { ^ ( __pk_storage_dtype ( __Pk_ptr k__h ) sid ) }
+unsafe @ pk_storage_dtype Pk k__h i sid → i { ^ ( __pk_storage_dtype ( __Pk_ptr k__h ) sid ) }
 
 unsafe @ __pk_storage_dtype * PkImpl k i sid → i {
     ? | < sid 0 >= sid ( __pk_n_storages k ) { ^ PKS_UNKNOWN } {}
     ^ ( __pk_geti . k stor * sid 3 )
 }
 
-@ pk_storage_key Pk k__h i sid → s { ^ ( __pk_storage_key ( __Pk_ptr k__h ) sid ) }
+unsafe @ pk_storage_key Pk k__h i sid → s { ^ ( __pk_storage_key ( __Pk_ptr k__h ) sid ) }
 
 unsafe @ __pk_storage_key * PkImpl k i sid → s {
     ? | < sid 0 >= sid ( __pk_n_storages k ) { ^ `` } {}
@@ -347,7 +347,7 @@ unsafe @ __pk_storage_key * PkImpl k i sid → s {
     ?? ( vec_get [String] . k strs si ) { T s → ^ ( string_data s ) F → ^ `` }
 }
 
-@ pk_storage_numel Pk k__h i sid → i { ^ ( __pk_storage_numel ( __Pk_ptr k__h ) sid ) }
+unsafe @ pk_storage_numel Pk k__h i sid → i { ^ ( __pk_storage_numel ( __Pk_ptr k__h ) sid ) }
 
 unsafe @ __pk_storage_numel * PkImpl k i sid → i {
     ? | < sid 0 >= sid ( __pk_n_storages k ) { ^ 0 } {}
@@ -416,7 +416,7 @@ unsafe @ __pk_fail * PkImpl k s msg → i {
     ^ -1
 }
 
-@ pk_error Pk k__h → s { ^ ( __pk_error ( __Pk_ptr k__h ) ) }
+unsafe @ pk_error Pk k__h → s { ^ ( __pk_error ( __Pk_ptr k__h ) ) }
 
 unsafe @ __pk_error * PkImpl k → s {
     ?? ( vec_get [String] . k errs 0 ) { T s → ^ ( string_data s ) F → ^ `` }
@@ -426,11 +426,11 @@ unsafe @ __pk_error * PkImpl k → s {
 
 unsafe @ __pk_u8 * u p i off → i { ^ # i . p off }
 
-@ __pk_u16 * u p i off → i { ^ + ( __pk_u8 p off ) * ( __pk_u8 p + off 1 ) 256 }
+unsafe @ __pk_u16 * u p i off → i { ^ + ( __pk_u8 p off ) * ( __pk_u8 p + off 1 ) 256 }
 
-@ __pk_u32 * u p i off → i { ^ + ( __pk_u16 p off ) * ( __pk_u16 p + off 2 ) 65536 }
+unsafe @ __pk_u32 * u p i off → i { ^ + ( __pk_u16 p off ) * ( __pk_u16 p + off 2 ) 65536 }
 
-@ __pk_i32 * u p i off → i {
+unsafe @ __pk_i32 * u p i off → i {
     : i v ( __pk_u32 p off )
     ^ ? >= v 2147483648 - v 4294967296 v
 }
@@ -445,7 +445,7 @@ unsafe @ __pk_u8 * u p i off → i { ^ # i . p off }
 // LONG1/LONG4 payload: little-endian two's-complement, arbitrary length.
 // Anything wider than 8 bytes cannot be a real dimension or count; it
 // reads as 0 rather than silently wrapping into a plausible number.
-@ __pk_long * u p i off i len → i {
+unsafe @ __pk_long * u p i off i len → i {
     ? | <= len 0 > len 8 { ^ 0 } {}
     : ~ i acc 0
     : ~ i j - len 1
@@ -457,7 +457,7 @@ unsafe @ __pk_u8 * u p i off → i { ^ # i . p off }
 
 // BINFLOAT is IEEE-754 double, BIG-endian — the one big-endian field in
 // an otherwise little-endian protocol.
-@ __pk_f64be * u p i off → i {
+unsafe @ __pk_f64be * u p i off → i {
     : ~ i bits 0
     : ~ i j 0
     ~ < j 8 { = bits + * bits 256 ( __pk_u8 p + off j ) = j + j 1 }
@@ -527,7 +527,7 @@ unsafe @ __pk_reduce * PkImpl k i callable i args → i {
 
 // A GLOBAL's dotted name. Kept separate from pk_str so PK_STR stays the
 // only kind that reads as text to callers.
-@ pk_str_of_global Pk k__h i id → s { ^ ( __pk_str_of_global ( __Pk_ptr k__h ) id ) }
+unsafe @ pk_str_of_global Pk k__h i id → s { ^ ( __pk_str_of_global ( __Pk_ptr k__h ) id ) }
 
 unsafe @ __pk_str_of_global * PkImpl k i id → s {
     ? != ( __pk_kind k id ) PK_GLOBAL { ^ `` } {}
@@ -828,7 +828,7 @@ unsafe @ __pk_step * PkImpl k * u p i n i at → i {
     ^ r
 }
 
-@ pk_parse * u p i n → !Pk String {
+unsafe @ pk_parse * u p i n → !Pk String {
     : Pk kh ( pk_new )
     : *PkImpl k ( __Pk_ptr kh )
     ? <= n 0 {

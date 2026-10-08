@@ -91,7 +91,7 @@ unsafe @ tset_add TplSet t__h s name s tsrc → v {
     }
 }
 
-@ tset_has TplSet t s name → b {
+unsafe @ tset_has TplSet t s name → b {
     ^ >= ( __tset_find ( __TplSet_ptr t ) name ) 0
 }
 
@@ -252,7 +252,7 @@ unsafe @ __tpl_at * TplRImpl r i k → i {
     ^ F
 }
 
-@ __tpl_ws * TplRImpl r i k i bnd → i {
+unsafe @ __tpl_ws * TplRImpl r i k i bnd → i {
     : ~ i j k
     ~ & < j bnd ( __tpl_is_ws ( __tpl_at r j ) ) { = j + j 1 }
     ^ j
@@ -282,7 +282,7 @@ unsafe @ __tpl_kw_is * TplRImpl r i a i bnd s lit → b {
 }
 
 // Does span [a,b) begin with the literal `lit`?
-@ __tpl_span_starts * TplRImpl r i a i bnd s lit → b {
+unsafe @ __tpl_span_starts * TplRImpl r i a i bnd s lit → b {
     : i n ( nurl_str_len lit )
     ? < - bnd a n { ^ F } {}
     ^ ( __tpl_kw_is r a + a n lit )
@@ -312,7 +312,7 @@ unsafe @ __tpl_key_set * TplRImpl r i a i n → v {
 }
 
 // Parse span [a,b) as a non-negative decimal integer; -1 when not one.
-@ __tpl_span_int * TplRImpl r i a i bnd → i {
+unsafe @ __tpl_span_int * TplRImpl r i a i bnd → i {
     ? >= a bnd { ^ - 0 1 } {}
     : ~ i k a
     : ~ i acc 0

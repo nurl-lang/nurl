@@ -13,7 +13,7 @@ $ `stdlib/ext/toml.nu`
     }
 }
 
-@ prefixes s text → v {
+unsafe @ prefixes s text → v {
     : i length ( nurl_str_len text )
     : ~ i count 0
     ~ <= count length {
