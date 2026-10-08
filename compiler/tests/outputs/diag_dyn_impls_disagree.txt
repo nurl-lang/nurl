@@ -1,0 +1,5 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_dyn_impls_disagree.nu:27: error: impls of method 'f' of trait 'Tr' disagree on argument 2 (counting the receiver): one keeps what it is handed, the impl for 'Reader' only reads it — and a call through a '%Tr' object cannot tell which runs, so the argument would leak whenever that one does. Declare the parameter 'sink' in the trait (every impl then owns what it is handed), or have every impl keep a copy.
+    : i r ( f d a )
+error: compilation aborted — 1 borrow-checker violation (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)
