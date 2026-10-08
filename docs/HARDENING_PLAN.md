@@ -41,6 +41,8 @@ ASan/LSan.
 | **C — closure effects** | h69–h71 | A closure that mutates a captured container ends views/borrows of it only when the closure is *built* and only for `*T`/`s` views; running it later (directly or through a callee) is not a mutation of the capture. |
 | **K — container accessors by name** | h72–h76 | `vec_get` is a borrow by name (`__last_value_borrow__`); `map_get`, `box_get`, `deque_get`, `btree_get` results are not, so `map_set` / `box_set` / `deque_pop_*` / `btree_set` replacing the value leave them dangling. |
 | **G — allocation arithmetic** | h77–h79 | `n * size` / `n + 1` wrap in `vec_with_cap`, `vec_zeroed`, `string_with_cap`: a tiny buffer with a huge capacity or length. |
+| **F — the trusted foreign surface** | (t72: `memmem`) | Foreign functions declared in the standard library are callable from safe code, and some take a buffer as `s` with a caller-given length (`memmem`, `strnlen`, `fwrite`, `nurl_fast_atof`, …), as do 57 NURL-level stdlib functions: a short buffer with a long length reads or writes past it. |
+| **N — null strings** | (t74) | `# s 0` is legal in safe code (174 sites outside the stdlib) and `getenv` returns null, but `nurl_println` / `nurl_str_len` / `nurl_str_cat` of a null `s` crash. |
 
 ## Design
 
@@ -99,6 +101,25 @@ every standard-library handle, and a program's own handle whose hooks are
   code may write (`ProtoReader.pos`) is validated before it reaches raw
   arithmetic.
 
+### F. `s` is a string, `*T` is raw memory
+
+A parameter that a function reads or writes for a caller-given length is
+raw memory and is typed `*T` — in a foreign declaration and in a NURL
+function alike — and a function with a raw-pointer parameter is unsafe to
+call (R). The stdlib's foreign declarations and its `s`-plus-length
+functions are audited and retyped accordingly (`memmem`, `strnlen`,
+`fwrite` / `fread`, `nurl_fast_atof`, `nurl_print_bytes`, …); the safe API
+takes a `String`, a `Vec u8` or a `Slice`, whose length cannot lie. An `s`
+parameter means a NUL-terminated string the callee reads to its NUL.
+
+### N. Null strings
+
+The null `s` is a real value (C APIs return it), so the string primitives
+treat it as the empty string instead of crashing; the stdlib's own raw
+readers guard it the same way. (To confirm with the owner: the
+alternative — no null `s` outside `unsafe` — breaks 174 sites and every
+`getenv`-style result.)
+
 ### A. Exclusive calls
 
 At a call, an argument whose parameter the callee may mutate (its
@@ -143,7 +164,8 @@ The check sits on growth (cold) paths only.
 4. **V** — views in the walk; retire the pointer table.
 5. **A** and **C** — exclusive calls, closure effects (both read the
    mutation summaries V needs).
-6. **G** — checked allocation arithmetic.
+6. **G** — checked allocation arithmetic; **F** and **N** — the stdlib
+   surface audit.
 7. Corpus migration (report mode first: every rejection in the tree is
    triaged as a real bug or a rule to refine), docs (MEMORY.md §6, spec,
    LIMITATIONS, CHANGELOG, ROADMAP, improvements_for_v1), the hole check
