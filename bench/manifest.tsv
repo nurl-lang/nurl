@@ -1,11 +1,20 @@
 # bench/manifest.tsv — the timing roster.
 #
 # One row per benchmark, in report order. Every listed benchmark MUST have
-# all five implementations (<name>.nu, .c, .rs, .js, .py) and all five must
-# print the same single line; `bench/bench.sh` refuses to time a row whose
-# outputs disagree.
+# an implementation in each of its languages (<name>.nu, .c, .rs, and .js
+# and .py for the five-language rows) and all of them must print the same
+# single line; `bench/bench.sh` refuses to time a row whose outputs
+# disagree.
 #
-# Columns: name <TAB> blurb <TAB> what it measures
+# Columns: name <TAB> blurb <TAB> what it measures [<TAB> languages]
+#
+# The optional fourth column lists the row's languages, space-separated;
+# left out, it is all five (nurl c rust node python). NURL, C and Rust are
+# required on every row — they are the columns wasmbench.sh rotates and the
+# only ones with a BENCH_SCALE multiplier. The crypto rows are NURL/C/Rust
+# only: their NURL side calls the standard library's own implementation
+# (stdlib/std/*.nu), and a pure-JS/pure-Python port of a 64-bit cipher
+# would measure BigInt, not the language; Node and Python print `n/a`.
 #
 # Benchmarks that live in this directory but are NOT listed here are not
 # part of the timing suite: brackets, csv_sum, histogram, quicksort, rot13
@@ -27,3 +36,8 @@ collatz	Longest Collatz chain below 100k	Control-flow-heavy inner loop with no a
 matmul	256x256 integer matrix product	Triple-nested loop, flat indexing, column-strided reads
 json_parse	20 parses of a 64 KB document	Allocator pressure, string handling, recursive descent
 nbody	500k n-body integration steps	IEEE-754 doubles: sqrt and divide throughput, the FPU rather than the ALU
+chacha20	ChaCha20 over 16 MiB (RFC 8439)	32-bit add/rotate/xor rounds; NURL calls stdlib chacha20_xor (v128 lanes)	nurl c rust
+poly1305	Poly1305 MACs over 64 MiB (RFC 8439)	Serial 64x64->128 multiply/carry chain through the accumulator, radix 2^44	nurl c rust
+blake2b	BLAKE2b-512 over 32 MiB (RFC 7693)	64-bit add/xor/rotate G mixes with SIGMA-permuted message gathers	nurl c rust
+sha512	SHA-512 over 16 MiB (FIPS 180-4)	80-round 64-bit serial compression chain plus the message schedule	nurl c rust
+x25519	1000 chained X25519 scalar mults (RFC 7748)	Montgomery ladder over GF(2^255-19): radix-2^51 128-bit field multiplies	nurl c rust
