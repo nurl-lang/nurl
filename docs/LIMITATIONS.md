@@ -64,7 +64,7 @@ thread-safety expectation the rules do not state.
 |---|---|
 | Freeing a field of a match payload (`?? o { T t → ( string_free . t name ) }`) hands the rest of the payload to the arm: it is dropped at the arm's end, and `o` must not be read after that match | Take the payload whole (`: Tagged x t`), or free the field after the last use of `o` |
 | Storing a *borrowed* `String` / `Vec` into an owner (a struct literal, a field of a value, an element via `vec_push`) stores a **copy**; mutations through the new owner are not seen through the old binding | Store the owned value (move it in), or keep the shared buffer behind a pointer-reached struct, whose fields are stored as is |
-| **Known hole (0.71.0):** a `Slice` built from a `Vec` (`slice_from_vec`, `slice_sub`, `slice_from_raw` — and protobuf's `ProtoReader`, which holds one) is not yet tracked as a view of the Vec, so freeing or growing the Vec while the Slice is still read compiles (hole probe `tools/fuzz/holes/h32`) — the one known exception to [`MEMORY.md` §6.2](MEMORY.md) | Treat a Slice like a `vec_data` view: read it only while its Vec is alive and unchanged |
+| An element borrowed out of a temporary container (`( vec_get [T] ( mk ) 0 )`) is copied before the temporary is dropped; when `T` cannot be copied (a `% Drop` struct with no clone) that is an error, since nothing would own the temporary | Bind the container to a name first (`: ( Vec T ) v ( mk )`): it lives to the end of its scope, and the element borrows from it |
 
 ## Imports
 

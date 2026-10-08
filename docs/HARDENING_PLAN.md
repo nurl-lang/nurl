@@ -13,6 +13,33 @@ allocation and capacity arithmetic").
 > exception; every gate below is green; compile and run time are at or
 > below the baseline.
 
+## Status (2026-10-08): done
+
+Every class below is closed at its root, with the probes it found:
+
+| class | closed by | probes |
+|---|---|---|
+| V — views are values | the borrow walk tracks a view through structs, Options, containers, closures, globals and results (source expressions evaluated after the module) | h32–h50, h80, h81, h89–h95 |
+| R — sealed representations | literals, raw-field reads/writes and casts of raw representations are `unsafe`; caller-trusting stdlib functions are `unsafe` to call | h51–h62 |
+| A — exclusive calls | a container a call may change cannot also reach it as another argument (`callx` rows) | h63–h68 |
+| C — closure effects | a closure's run applies its body's effects to its captures (`pendeff` rows) | h69–h71 |
+| K — accessors by summary | raw provenance decides what a raw function lends, writes, reallocates | h72–h76 |
+| P — field paths | a field argument lends and loses its field; nested fields are their binding's storage | h82–h88 |
+| G — allocation arithmetic | `alloc_size` / `alloc_count_add` / `alloc_grow_cap` / `alloc_grow_pow2` | h77–h79 |
+| temporaries | a part of a temporary is copied; one that cannot be is an error | h96 |
+| F — the foreign surface | `"nurl.raw"` builtins, raw-result calls and `*u` buffer types are `unsafe` to call; safe forms beside each | h97–h101, h103 |
+| N — null strings | runtime prints and `"nurl.cstr"` parameters read null as `""` | h102 |
+
+Gates (pre-production-hardening tip): `tools/fuzz/holes/check.sh` 91
+probes, 85 rejected, 6 clean, **holes: 0** (in CI's build-test job);
+`./build.sh` fixed point and 1211 tests pass; ASan/UBSan/LSan corpus 0
+failures; `tools/leakgate.sh` zero leaks; the package compile sweep
+(441 files that compiled before) has no new failure after the migration.
+Performance: self-compile 3.2 % fewer instructions than main's compiler
+on the same input (12.02 G against 12.41 G); the runtime kernels of
+`bench/perfstat.sh` within ±0.03 % of main, blake2b −0.19 %, json_parse
+−0.24 %.
+
 ## Baseline (main 92a83993, 2026-10-08, clean `build/`)
 
 | measure | value |

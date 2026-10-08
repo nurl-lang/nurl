@@ -291,6 +291,15 @@ its call. Passing the same binding again in the same call, as another
 Reads of the binding inside other arguments (`( grow v ( vec_len v ) )`)
 are evaluated before the call runs and are allowed.
 
+The same holds for any argument a callee may change, `inout` or not —
+what its summary says it mutates, reallocates or drops elements of: that
+container cannot also reach the call through another argument, as the
+same owner or as a view or borrow of it. Inside the callee the two names
+are unrelated, so the change would leave the other one dangling — a
+function that grows `v` and then reads `s`, called as
+`( grow_then_read v ( slice_from_vec [i] v ) )`, reads freed memory. The
+message names both arguments; take a copy, or split the call.
+
 ### 2.5 Iterator invalidation
 
 A foreach loop `~ x xs { … }` borrows `xs` for its body. Mutating `xs`
@@ -389,7 +398,11 @@ released, moved or reassigned. Reading a view after that is an error:
                                 //        stale: 't' was mutated on line N
 ```
 
-Fetch the view again after the mutation. The rule applies in `unsafe`
+Fetch the view again after the mutation. A view stays a view wherever it
+goes: held in a `Slice` (`slice_from_vec`, `slice_of_str`, a CSV cell
+from `csv_table_view`), a struct, an Option or a container, captured by a
+closure, stored in a global or returned from a function, it is still a
+view of its source and ends with it. The rule applies in `unsafe`
 code too, because it is decided from the program text, not from the
 capacity at run time. A mutation inside one `?` arm does not end a view
 in the other arm, and a function that mutates the container passed to it
@@ -412,8 +425,11 @@ move:
 
 This holds for a direct call, for a call through a function that invokes
 its closure parameter, for a closure captured by another closure, and for
-a mutation inside the body as much as a read. Capturing an
-already-released value is rejected at the closure literal. A closure
+a mutation inside the body as much as a read. Running a closure is also
+what its body does to its captures: one that changes, reallocates or
+drops elements of a capture ends the views and borrows of that capture at
+the call — made directly, or by a callee the closure is handed to.
+Capturing an already-released value is rejected at the closure literal. A closure
 stored into a struct, or handed to a function that keeps it, makes that
 owner depend on the captures: releasing a capture while the owner may
 still run the closure is an error. Loading a closure value, and dropping
@@ -484,7 +500,10 @@ A panic is not outside the model: what a panic abandons is reclaimed
 | Aliased `inout` argument | §2.4 |
 | Mutating a container while iterating it | §2.5 |
 | Consuming an outer binding in a loop | §2.6 |
-| Stale view after reallocation | §2.10 |
+| Stale view after reallocation, wherever the view was put | §2.10 |
+| A container changed by a call while a view of it is another argument | §2.4 |
+| A closure run that changes a capture with live views | §2.11 |
+| A borrowed part of a temporary that cannot be copied | §6.2 |
 | Releasing a value a closure still holds | §2.11 |
 | Borrow used after its owner moved, ended, or was reassigned | §6.2 |
 | Non-shareable value crossing a thread boundary | §6.5 |
@@ -492,6 +511,9 @@ A panic is not outside the model: what a panic abandons is reclaimed
 | Cycle of thread-shared handles | §7.7 |
 | Out-of-bounds element access | bounds-checked (`vec_at` panics, `vec_get` returns None) |
 | Raw pointers, casts, raw memory, foreign calls | only inside `unsafe` (spec §3.3d) |
+| A raw pointer handed out by a call, a caller-given length, a C `FILE*` | only inside `unsafe` (§6.2) |
+| A null string read as text | reads as the empty string |
+| An allocation size that cannot be represented | panics before allocating |
 
 Integer division and remainder by zero panic with a message; they are not
 undefined behaviour.
@@ -519,13 +541,9 @@ free, no read through a dangling view, no out-of-bounds access, no data
 race, and nothing it allocated is left unreleased, on the panic path as
 much as the normal one (§7.2). Rc cycles are collected (§7.7).
 
-**One known exception (0.71.0).** A `Slice` (`stdlib/core/slice.nu`)
-built from a `Vec` — `slice_from_vec`, `slice_sub`, `slice_from_raw`, and
-protobuf's `ProtoReader`, which holds one — is not yet tracked as a view of
-its Vec the way a `vec_data` pointer is (§2.10). Freeing or growing the
-Vec while the Slice is still read compiles, and reads freed memory (hole
-probe `tools/fuzz/holes/h32`). Until it is tracked, read a Slice only
-while its Vec is alive and unchanged.
+There is no exception. 0.71.0 named one: a `Slice` built from a `Vec`
+was not tracked as a view of it (hole probe `tools/fuzz/holes/h32`).
+Views are now values (§2.10), tracked through every place one can be put.
 
 The rules that carry it:
 
@@ -541,9 +559,20 @@ The rules that carry it:
   moved, released, reassigned, has the field replaced, or is handed to a
   call that may drop its elements; any read after that is an error. A
   borrow of a borrow borrows from the original owner.
-- **A view also ends at reallocation.** `string_data` / `vec_data` are
-  views of the buffer and end at any mutation that may reallocate it
-  (§2.10).
+- **A view also ends at reallocation.** `string_data`, a `Slice` and
+  whatever holds one are views of the buffer and end at any mutation that
+  may reallocate it (§2.10), wherever the view has travelled.
+- **A call is exclusive.** A container a call may change cannot also
+  reach it as another argument — the same owner twice, or a view or
+  borrow of it: inside the callee the two names are unrelated (§2.4).
+- **Running a closure is what its body does.** A closure that changes,
+  reallocates or drops elements of a capture ends the views and borrows of
+  that capture where it runs — called directly, or handed to a callee that
+  may run it (§2.11).
+- **A part of a temporary is a copy.** An element borrowed out of a call's
+  fresh result (`( vec_get [String] ( mk ) 0 )`) is copied before the
+  temporary is dropped; one that cannot be copied is an error naming the
+  fix — bind the container to a name.
 - **A container keeps what it is handed.** A view stored in a `Vec`, used
   as a map key or handed to a function that keeps its argument may live no
   longer than its source.
@@ -552,7 +581,13 @@ The rules that carry it:
   `Mutex`, `Arc`, `HttpServer`) are captured as a share of their own, so
   both sides keep using them and either may end first. Shared mutable
   state goes through one of those handles (§6.5).
-- **Raw memory only in `unsafe`** (spec §3.3d).
+- **Raw memory only in `unsafe`** (spec §3.3d): a raw pointer taken by a
+  call or handed back by one, a primitive that reads or writes as far as
+  its caller says (`memmem`, `fwrite`, `nurl_str_at`), a C `FILE*`. A
+  string (`s`) in safe code is NUL-terminated, or null — and a null string
+  reads as the empty string.
+- **Allocation sizes are checked.** A count whose byte size cannot be
+  represented panics before anything is allocated.
 
 `vec_get` and its kin are specified as returning a borrow of the element.
 Every verdict is independent of the order in which functions are defined:
@@ -649,9 +684,9 @@ The guarantee is a property of the rules. The compiler's implementation
 of them is tested continuously:
 
 - **Hole probes.** Every way safe code has been shown to break the
-  guarantee is kept as a program that must be rejected
-  (`tools/fuzz/holes/check.sh` counts the ones that still compile: in
-  0.71.0, h32, the `Slice` exception of §6.2).
+  guarantee is kept as a program that must be rejected, or run clean
+  under the sanitizers (`tools/fuzz/holes/check.sh`, in CI: no probe may
+  still compile and fault).
 - **Inverse-oracle fuzzing.** Generated programs that violate ownership,
   nested in every context the language has (`?` / `??` arms, loops,
   defers, closures, generic bodies, trait methods), must be rejected with

@@ -4,8 +4,8 @@ Goal (owner, 2026-10-06), reached in 0.71.0: retire the "sound, not
 complete" contract [`MEMORY.md` §6.2](MEMORY.md) stated until 0.70.0, under
 which every diagnostic was a real bug but a clean compile proved nothing and
 AddressSanitizer was what actually kept the corpus safe. The target, now
-stated in MEMORY.md §6 with one known exception (h32, a `Slice` of a
-`Vec`), is a guarantee:
+stated in MEMORY.md §6 (since the pre-production hardening with no
+exception: h32, a `Slice` of a `Vec`, is closed), is a guarantee:
 
 > A program that compiles without an `unsafe` declaration is memory-safe
 > (no use-after-free, double free, dangling reference, out-of-bounds
@@ -113,8 +113,9 @@ stated in MEMORY.md §6 with one known exception (h32, a `Slice` of a
 
 - **P0** done: 19 probes in `tools/fuzz/holes/` (h01–h31), every one
   rejected by default; the inverse-oracle fuzzer has seven ownership cores.
-  h32 (2026-10-07, found while preparing 0.71.0) is open: a `Slice` built
-  from a `Vec` is not tracked as a view of it.
+  h32 (2026-10-07, found while preparing 0.71.0) was the open one: a
+  `Slice` built from a `Vec` was not tracked as a view of it. Closed with
+  h33–h103 by docs/HARDENING_PLAN.md (views are values).
 - **P1** done: `unsafe` functions and methods (spec §3.3d), raw pointer
   reads/writes, pointer casts, raw-memory primitives and foreign functions
   outside the stdlib gated; `nurlc --unsafe-report`. The corpus marks its

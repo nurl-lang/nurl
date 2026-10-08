@@ -8,7 +8,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+The memory guarantee has **no exception**: 0.71.0's one known hole (a
+`Slice` of a `Vec`, probe h32) is closed, along with 71 more found around
+it (probes h33–h103), each at its root — every probe is now rejected or
+runs clean under ASan/UBSan/LSan, and `tools/fuzz/holes/check.sh` runs in
+CI. Compile time is 3.2 % below 0.71.0's main (self-compile instructions),
+run time is flat or better. Code that handed raw pointers or caller-given
+lengths around outside `unsafe` may need `unsafe`, or the safe API now
+beside each raw one (*Changed*).
+
 ### Fixed
+
+- **Views are values.** A view — a `Slice`, a struct, Option or container
+  holding one, a view a closure captured, one stored in a global or
+  returned from a function — is tracked as a view of its source wherever
+  it goes, and ends with it (docs/MEMORY.md §2.10). Freeing or growing a
+  `Vec` while a `Slice` of it (or protobuf's `ProtoReader`) is still read,
+  0.71.0's known exception, is rejected (h32–h50, h80, h81, h89–h95).
+- **Sealed representations.** A `Slice`, `Vec`, `String`, `Box`, a library
+  handle, or any struct with a raw-pointer field can no longer be built
+  field by field, have a raw field written or read, or be made by a cast
+  outside `unsafe`; `slice_from_raw`, `vec_borrow_raw` and `vec_set_len`
+  are `unsafe` to call (h51–h62).
+- **Exclusive calls.** A container a call may change cannot also reach it
+  as another argument — the same owner twice, or a view or borrow of it
+  (h63–h68, docs/MEMORY.md §2.4).
+- **Running a closure is its effects.** A closure that changes,
+  reallocates or drops elements of a capture ends the views and borrows of
+  it where it runs, directly or through a callee it is handed to
+  (h69–h71, §2.11).
+- **Accessors borrow by summary, not by name.** What a call lends, writes
+  and reallocates is read from its body (raw provenance), so `map_get`,
+  `box_get`, `deque_get` and `btree_get` results borrow from their
+  container as `vec_get`'s do, and replacing the value ends them
+  (h72–h76).
+- **Borrows through field paths.** A field handed to a call
+  (`( vec_at [String] . b items 0 )`) lends and loses its field like a
+  binding does; a nested field (`. . o b name`) moved into a `sink`
+  parameter or replaced is its binding's own storage — no double free, no
+  leak (h82–h88).
+- **Allocation sizes are checked.** `n * size` and `n + 1` wrapped in
+  `vec_with_cap`, `vec_zeroed`, `string_with_cap` and every Vec / HashMap /
+  Set growth; a count whose byte size cannot be represented now panics
+  before anything is allocated (h77–h79).
+- **A part of a temporary is a copy.** `( vec_get [String] ( mk ) 0 )`
+  took the element for the temporary Vec itself: the Vec was never
+  dropped. The element is copied and the temporary dropped after the
+  call; an element that cannot be copied is an error naming the fix
+  (h96).
+- **The raw foreign surface is `unsafe`.** A C primitive that reads or
+  writes as far as its caller says (`memmem`, `memcmp`, `fwrite`,
+  `nurl_fast_atof`, the TCP/UDP buffers), takes a `FILE*` or a format
+  string (`fopen`, `fclose`, `printf`), allocates or frees, or is the
+  runtime's own machinery is marked `"nurl.raw"` and callable only from
+  `unsafe` code; a call that hands back a raw pointer (`vec_data`,
+  `slice_data`, `arena_alloc`, `box_ptr`) is too, like one that takes one.
+  A raw pointer could become a string (`( nurl_println ( vec_data v ) )`)
+  and a CSV cell, which is not NUL-terminated, was handed out as one
+  (h97–h101, h103).
+- **A null string reads as the empty string.** `# s 0` and an unset
+  `getenv` crashed `nurl_println`, `nurl_str_len`, `strlen`, `string_from`
+  and every string primitive built on them; a C string parameter
+  (`"nurl.cstr"`) now takes a null as `""` (h102).
+- **`select` arm bodies run after the wait loop**: a `break` or `^` in an
+  arm body left the select's own loop and skipped the disarm, freeing the
+  waiter while other channels still held it.
 
 - **`nurlpkg install` refused every package on Windows** with
   `PkgToolchain: upgrade NURL to satisfy package.nurl-version`, on a
@@ -20,6 +84,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Raw-length helpers take a raw pointer and are `unsafe` to call** —
+  `nurl_str_at`, `nurl_memcmp_lex`, `nurl_memmem_range`,
+  `nurl_parse_int_range`, `nurl_parse_float_range`, `string_from_take`,
+  `string_from_n`, `json_parse_n`, `bytes_extend_raw`, `b64_encode_len`,
+  `b32_encode_len`, `proc_write`, `constant_time_eq_n`, `utf8_decode_n`:
+  each trusted its caller's length. The safe forms carry their own:
+  `slice_of_str` + `slice_byte` for a scan (O(1) per byte, like
+  `nurl_str_at`), `string_adopt`, `write_string`, `b64_encode_string`,
+  `utf8_decode_at`, `slice_parse_int` / `slice_parse_float`.
+- **`csv_table_view` and `csv_table_view_by_name` return a `( Slice u )`**
+  — the cell's bytes with their length (a cell is not NUL-terminated); the
+  empty view when out of range.
+- **Standard-library foreign declarations say what they take.** A buffer,
+  an out-struct or a C handle is `*u` (sqlite3 handles and statements,
+  termios, `stat` and socket address buffers, the Rc collector's
+  internals), a string is `s`: what is raw memory is `unsafe` to call by
+  its type.
 - **`package.nurl-version` no longer gates anything.** `nurlpkg install`
   (registry packages, the root project, local dependencies) and
   `nurlpkg publish` no longer compare it against the toolchain, and the
@@ -33,6 +114,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `slice_of_str`, `slice_byte`, `slice_parse_int`, `slice_parse_float`,
+  `string_adopt`, `write_string`, `b64_encode_string`, `utf8_decode_at`:
+  the safe forms of the raw-length helpers above.
+- Hole probes h33–h103 (`tools/fuzz/holes/`) and their check in CI: each
+  must be rejected or run clean under the sanitizers.
 - **Five cryptographic benchmark rows** — `chacha20`, `poly1305`,
   `blake2b`, `sha512` and `x25519` — in NURL, C and Rust. The NURL side
   is a driver around the standard library's own implementation
@@ -52,6 +138,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `bench/bench.ps1 -Scale N`, and `bench/wasmbench.ps1`, a port of
   `wasmbench.sh` for Windows (exercised under pwsh on Linux; its
   Windows-only branches are not yet run on a Windows host).
+
+### Performance
+
+- **Compile time 3.2 % below 0.71.0's main** (self-compile 12.41 G →
+  12.02 G instructions, each compiler built by itself, same input) with
+  the larger borrow walk: the raw-provenance graph is integers, walk rows
+  are cheaper, and…
+- **…a function that never hands over its result is not asked per call.**
+  Every `s`-returning call queried the runtime for an ownership proof
+  (two opaque calls and a `free(NULL)`); a callee whose every path returns
+  a borrow, a raw read or a literal now says so statically
+  (`__ret_unowned`). blake2b −0.19 %, json_parse −0.40 % instructions;
+  every other benchmark kernel within ±0.03 %.
+- Growth paths test for overflow once per growth, not once per doubling,
+  and divide only for sizes past 2^31.
 
 ## [0.71.0] — 2026-10-07
 
