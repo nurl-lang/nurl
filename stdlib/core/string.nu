@@ -352,7 +352,8 @@ $ `stdlib/core/char.nu`
 }
 
 @ string_with_cap i n → String {
-    : i want ? > n 0 + n 1 1
+    // (Room for the terminating NUL: a count that cannot take one panics.)
+    : i want ? > n 0 ( alloc_count_add n 1 ) 1
     : ( Vec u ) tmp ( vec_with_cap [u] want )
     : *u p ( vec_data [u] tmp )
     : u zero # u 0
@@ -833,7 +834,7 @@ $ `stdlib/core/char.nu`
 // Concatenate `str` with itself `times` times. times ≤ 0 yields empty.
 @ string_repeat String str i times → String {
     : i n ( string_len str )
-    : i want ? > times 0 * n times 0
+    : i want ? > times 0 ( alloc_size n times ) 0
     : String out ( string_with_cap want )
     : ~ i k 0
     ~ < k times {

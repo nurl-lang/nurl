@@ -8,11 +8,16 @@
 //   ( zalloc [T] n )   →  *T    zero-initialised buffer for n items
 //
 // Release with ( nurl_free #s p ). Typed `drop`/`resize` may follow.
+//
+// Sizes are checked (`alloc_size`, stdlib/core/vec.nu): a count whose byte
+// size cannot be represented panics before anything is allocated.
+
+$ `stdlib/core/vec.nu`
 
 @ alloc [T] i n → *T {
-    ^ # *T ( nurl_alloc * Z T n )
+    ^ # *T ( nurl_alloc ( alloc_size Z T n ) )
 }
 
 @ zalloc [T] i n → *T {
-    ^ # *T ( nurl_zalloc * Z T n )
+    ^ # *T ( nurl_zalloc ( alloc_size Z T n ) )
 }

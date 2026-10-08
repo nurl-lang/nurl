@@ -45,6 +45,8 @@
 // `hash_int`/`eq_int`) — import `stdlib/std/hashmap.nu` alongside this
 // file to get them; set.nu itself does not depend on it.
 
+$ `stdlib/core/vec.nu`
+
 : Set [E] { s ctl }
 
 // ── Internal helpers ────────────────────────────────────────────────
@@ -60,8 +62,8 @@
 @ __set_tomb_raw s ctl → i { ^ ( nurl_peek ctl 4 ) }
 
 @ __set_alloc_buffers [E] s ctl i cap → v {
-    : s keys ( nurl_zalloc * Z E cap )
-    : s states ( nurl_zalloc * 8 cap )
+    : s keys ( nurl_zalloc ( alloc_size Z E cap ) )
+    : s states ( nurl_zalloc ( alloc_size 8 cap ) )
     ( nurl_poke ctl 0 # i keys )
     ( nurl_poke ctl 1 # i states )
     ( nurl_poke ctl 3 cap )
@@ -114,8 +116,7 @@
 // power of two ≥ 8 ≥ target). Tombstones drop during rehash.
 @ __set_grow [E] s ctl i target_cap ( @ i E ) hash_fn → v {
     : i old_cap ( __set_cap_raw ctl )
-    : ~ i new_cap ? > old_cap 0 old_cap 8
-    ~ < new_cap target_cap { = new_cap * new_cap 2 }
+    : i new_cap ( alloc_grow_pow2 old_cap target_cap 8 )
     : s old_keys_raw ( __set_keys_raw ctl )
     : s old_states_raw ( __set_states_raw ctl )
     : *E old_keys # *E old_keys_raw
