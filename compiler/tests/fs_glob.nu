@@ -57,12 +57,8 @@ $ `stdlib/std/cmp.nu`
                 ?? ro { T r → { ( nurl_print ( string_data r ) ) ( nurl_print ` ` ) } F _ → {} }
                 = j + j 1
             }
-            : i rn ( vec_len [String] rels )
-            : ~ i fk 0
-            ~ < fk rn { : ?String ro2 ( vec_get [String] rels fk ) ?? ro2 { T r → ( string_free r ) F _ → {} } = fk + fk 1 }
+            // (Each Vec drops its Strings with it.)
             ( vec_free [String] rels )
-            : ~ i mk 0
-            ~ < mk n { : ?String mo2 ( vec_get [String] matches mk ) ?? mo2 { T m → ( string_free m ) F _ → {} } = mk + mk 1 }
             ( vec_free [String] matches )
         }
         F _ → ( nurl_print `<err>` )

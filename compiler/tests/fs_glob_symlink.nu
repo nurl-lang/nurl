@@ -69,19 +69,8 @@ $ `stdlib/std/cmp.nu`
                 ?? no { T x → { ( nurl_print ` ` ) ( nurl_print ( string_data x ) ) } F _ → {} }
                 = p + p 1
             }
-            : ~ i f 0
-            ~ < f ( vec_len [String] names ) {
-                : ?String no2 ( vec_get [String] names f )
-                ?? no2 { T x → ( string_free x ) F _ → {} }
-                = f + f 1
-            }
+            // (Each Vec drops its Strings with it.)
             ( vec_free [String] names )
-            : ~ i mk 0
-            ~ < mk n {
-                : ?String mo2 ( vec_get [String] ms mk )
-                ?? mo2 { T m → ( string_free m ) F _ → {} }
-                = mk + mk 1
-            }
             ( vec_free [String] ms )
         }
         F _ → ( nurl_print `<err>` )

@@ -617,7 +617,7 @@ unsafe @ __free_args ( Vec s ) args → v {
     ~ < k n { ?? ( vec_get [s] args k ) { T pp → ? != # i pp 0 { : *Arg a # *Arg pp ( vec_free [u] . a bytes ) ( nurl_free # s a ) } {} F → {} } = k + k 1 }
 }
 
-@ __free_pfuncs ( Vec s ) pfs → v {
+unsafe @ __free_pfuncs ( Vec s ) pfs → v {
     : i n ( vec_len [s] pfs )
     : ~ i k 0
     ~ < k n { ?? ( vec_get [s] pfs k ) { T pp → ( __pf_free pp ) F → {} } = k + k 1 }

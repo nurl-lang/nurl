@@ -48,14 +48,8 @@ $ `stdlib/ext/resolver.nu`
     ^ @ Dep { ( string_from name ) ( string_new ) ( string_from req ) ( string_new ) }
 }
 
+// (The Vec drops each Dep with it.)
 @ deps_free sink ( Vec Dep ) v → v {
-    : i n ( vec_len [Dep] v )
-    : ~ i k 0
-    ~ < k n {
-        : ?Dep d ( vec_get [Dep] v k )
-        ?? d { T dv → ( dep_free dv ) F → {} }
-        = k + k 1
-    }
     ( vec_free [Dep] v )
 }
 

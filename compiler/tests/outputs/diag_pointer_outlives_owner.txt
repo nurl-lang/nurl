@@ -1,9 +1,9 @@
 COMPILE FAIL
 ERRORS
-compiler/tests/diag_pointer_outlives_owner.nu:25: error: pointer 'p' points into 'x', which was dropped at the end of its block — this reads freed memory. Keep the owner alive as long as the pointer (declare it in the outer scope), or keep an owned copy instead of a pointer into it (a String: ( string_from p )).
+compiler/tests/diag_pointer_outlives_owner.nu:28: error: 'p' borrows from 'x', which ended at line 27 — it went out of scope at the end of its block. A borrow (a vec_get result, a field read, a view) lives only as long as its source is unchanged, so 'p' is gone too. Read it before that line, or take a copy that lives on its own where it is bound: ( mem_dup p ).
     ^ ( nurl_str_len p )
-compiler/tests/diag_pointer_outlives_owner.nu:31: error: pointer 'args' points into 'x', which was dropped at the end of its block — this reads freed memory. Keep the owner alive as long as the pointer (declare it in the outer scope), or keep an owned copy instead of a pointer into it (a String: ( string_from p )).
+compiler/tests/diag_pointer_outlives_owner.nu:34: error: 'args' holds a view of 'x' (one stored into it, or captured by it), and 'x' ended at line 33 — it went out of scope at the end of its block. Using 'args' now would read freed memory. End 'x' only after 'args' is done, or have 'args' hold a copy that owns its data (string_from, slice_to_vec).
     ^ ( vec_len [s] args )
-compiler/tests/diag_pointer_outlives_owner.nu:40: error: pointer 'args' points into 'parts', which was dropped at the end of its block — this reads freed memory. Keep the owner alive as long as the pointer (declare it in the outer scope), or keep an owned copy instead of a pointer into it (a String: ( string_from p )).
+compiler/tests/diag_pointer_outlives_owner.nu:43: error: 'args' holds a view of 'parts' (one stored into it, or captured by it), and 'parts' ended at line 42 — it went out of scope at the end of its block. Using 'args' now would read freed memory. End 'parts' only after 'args' is done, or have 'args' hold a copy that owns its data (string_from, slice_to_vec).
     ^ ( vec_len [s] args )
 error: compilation aborted — 3 borrow-checker violations (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)
