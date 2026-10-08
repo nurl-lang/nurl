@@ -6831,9 +6831,21 @@ unsafe @ nurl_cg_lbl i h s hint → s {
 //     temporary lives until the function returns;
 //   * otherwise (the result is the callee's own) it is dropped now.
 // A result type other than a raw string keeps the argdrop rule alone.
-@ mem_raw_lendback i syms i cg s words s res s rlt → v {
+// `cn` is the name the call's guard was decided for (mem_emit_fwd_own_guard).
+@ mem_raw_lendback i syms i cg s cn s words s res s rlt → v {
     ? | == 0 ( nurl_str_len words ) ! ( seq ( nurl_llty rlt ) `i8*` ) { ^ } {}
-    : s guard ( nurl_sym_get syms `__last_call_guard__` )
+    : ~ s guard ( nurl_sym_get syms `__last_call_guard__` )
+    // A callee that hands over its result on no path (`__ret_unowned`) is
+    // not asked, so it has no guard — but a temporary its result IS still
+    // needs a slot to become the result's owner in: one holding the answer
+    // every path gives, null. Published, so the binding, the consuming
+    // argument or the return takes it like any guard.
+    ? & == 0 ( nurl_str_len guard ) != 0 ( nurl_sym_len2 syms cn `__ret_unowned` ) {
+        = guard ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print guard ) ( nurl_print ` = alloca i8*\n` )
+        ( nurl_print `  store i8* null, i8** ` ) ( nurl_print guard ) ( nurl_print `\n` )
+        ( nurl_sym_def syms `__last_call_guard__` guard )
+    } {}
     : ~ s rest ( nurl_str_cat words `` )
     ~ != 0 ( nurl_str_len rest ) {
         : ~ s w ( str_first_word rest ) = rest ( str_skip_word rest )
@@ -6853,7 +6865,7 @@ unsafe @ nurl_cg_lbl i h s hint → s {
         ( emit_sink_flag_load ( mem_lend_const syms `part` callee generic index ) part )
         : s nad ( mem_emit_i1 cg `xor` ad `1` )
         : s any ( mem_emit_i1 cg `and` ( mem_emit_i1 cg `or` one part ) nad )
-        // No guard: the callee's result is its own on every path.
+        // No guard now: the callee's result is its own on every path.
         : ~ s g `null`
         : ~ s notowned `false`
         ? != 0 ( nurl_str_len guard ) {
@@ -7755,6 +7767,10 @@ unsafe @ origin_guard_retained i root → b {
 // `__ret_unowned`.)
 // The hidden slot holds null for borrowed/opaque results. Capture it before
 // argument cleanup; binding, forwarding and argument use share the slot.
+// No slot is one of the two static answers: owned on every path, or on
+// none — which reads, wherever an owner is only loaded, as a slot holding
+// null. The one consumer that stores an owner into the slot, a temporary
+// the result is (mem_raw_lendback), makes the slot for the second.
 @ mem_emit_fwd_own_guard i syms i cg s cn s res s rlt → s {
     ? == 0 g_auto_drop_strings { ^ ( nurl_str_cat `` `` ) } {}
     ? ! ( seq ( nurl_llty rlt ) `i8*` ) { ^ ( nurl_str_cat `` `` ) } {}
@@ -10983,7 +10999,7 @@ unsafe @ nurl_lex_peek4_type i h → i {
     ( nurl_sym_def syms `__last_call_guard__`
     ( mem_emit_fwd_own_guard syms cg fname res rlt ) )
     ( mem_capture_hown syms cg fname rlt )
-    ( mem_raw_lendback syms cg raw_lends res rlt )
+    ( mem_raw_lendback syms cg fname raw_lends res rlt )
     = res ( mem_own_lendback syms cg fname res rlt lend_one lend_part lend_idx )
     ( mem_drop_arg_temps owned_temps )
     ( nurl_set_last_type rlt )
@@ -13841,7 +13857,7 @@ unsafe @ nurl_lex_peek4_type i h → i {
             ( nurl_sym_def syms `__last_call_guard__`
             ( mem_emit_fwd_own_guard syms cg impl_name res impl_ret ) )
             ( mem_capture_hown syms cg impl_name impl_ret )
-            ( mem_raw_lendback syms cg raw_lends res impl_ret )
+            ( mem_raw_lendback syms cg impl_name raw_lends res impl_ret )
             ( mem_drop_arg_temps owned_arg_temps ) ( mem_drop_closure_temps closure_envs_free )
             ( nurl_set_last_type impl_ret )
             ^ res
@@ -13998,7 +14014,7 @@ unsafe @ nurl_lex_peek4_type i h → i {
                 ( nurl_sym_def syms `__last_call_guard__`
                 ( mem_emit_fwd_own_guard syms cg call_name res rlt ) )
                 ( mem_capture_hown syms cg call_name rlt )
-                ( mem_raw_lendback syms cg raw_lends res rlt )
+                ( mem_raw_lendback syms cg call_name raw_lends res rlt )
                 = res ( mem_own_lendback syms cg call_name res rlt lendback_bits lendpart_bits lendback_idx )
                 ( mem_note_vec_get syms cg call_name argstr )
                 // A returned closure is the caller's (mem_retclo_own_result):
@@ -20882,8 +20898,21 @@ unsafe @ mem_own_add_user_drop i syms i cg s ptr s vt → v {
 @ __fn_stdlib_internal s cn → b {
     ? == 0 ( nurl_str_starts cn `__` ) { ^ F } {}
     : s f ( nurl_sym_get2 g_vis_syms cn `__src_file` )
-    : s ff ? == 0 ( nurl_str_len f ) ( nurl_sym_get2 g_vis_syms ( bck_generic_base cn ) `__src_file` ) f
+    : s ff ? == 0 ( nurl_str_len f ) ( nurl_sym_get2 g_vis_syms ( __callee_decl_name cn ) `__src_file` ) f
     ^ & != 0 ( nurl_str_len ff ) ( bck_trusted_file ff )
+}
+
+// The declared name behind a call name: a generic instance of a
+// file-private function keeps its file tag and loses its type arguments
+// (`__vec_grow__fp1__u8` → `__vec_grow__fp1`) — bck_generic_base cuts at
+// the first `__`, which in a private name is its first two bytes.
+@ __callee_decl_name s cn → s {
+    : i fp ( nurl_str_find cn `__fp` )
+    ? < fp 0 { ^ ( bck_generic_base cn ) } {}
+    : i n ( nurl_str_len cn )
+    : ~ i e + fp 4
+    ~ & < e n & >= ( nurl_str_get cn e ) 48 <= ( nurl_str_get cn e ) 57 { = e + e 1 }
+    ^ ( nurl_str_slice cn 0 e )
 }
 
 // A call to a raw-memory primitive, or to a foreign function declared
@@ -20905,7 +20934,7 @@ unsafe @ mem_own_add_user_drop i syms i cg s ptr s vt → v {
         ( die lex ( nurl_str_cat3 `'` base `' hands back a raw pointer ('*T'), which only an 'unsafe' function may take: the compiler stops following what it points at once the address is out, so reading through it, keeping it, or passing it on as a string ('s') can reach freed memory or run past the buffer. Use the safe API over the owning value (vec_get or iteration for a Vec, a Slice of it, string_data for a String's text), or, if this function genuinely needs the raw pointer and you vouch for its memory safety, declare it 'unsafe @ name …'.` ) )
     } {}
     ? ( __fn_stdlib_internal call_name ) {
-        ( die lex ( nurl_str_cat3 `'` base `' is internal to the standard library (its name begins with '__'): it takes control blocks and buffers as plain values and trusts them, so outside the library only an 'unsafe' function may call it. Use the public API it implements, or, if this function genuinely needs the library's internals and you vouch for its memory safety, declare it 'unsafe @ name …'.` ) )
+        ( die lex ( nurl_str_cat3 `'` ( bck_fn_show call_name ) `' is internal to the standard library (its name begins with '__'): it takes control blocks and buffers as plain values and trusts them, so outside the library only an 'unsafe' function may call it. Use the public API it implements, or, if this function genuinely needs the library's internals and you vouch for its memory safety, declare it 'unsafe @ name …'.` ) )
     } {}
 }
 

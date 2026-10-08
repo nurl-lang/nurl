@@ -6831,9 +6831,21 @@ unsafe @ nurl_cg_lbl i h s hint → s {
 //     temporary lives until the function returns;
 //   * otherwise (the result is the callee's own) it is dropped now.
 // A result type other than a raw string keeps the argdrop rule alone.
-@ mem_raw_lendback i syms i cg s words s res s rlt → v {
+// `cn` is the name the call's guard was decided for (mem_emit_fwd_own_guard).
+@ mem_raw_lendback i syms i cg s cn s words s res s rlt → v {
     ? | == 0 ( nurl_str_len words ) ! ( seq ( nurl_llty rlt ) `i8*` ) { ^ } {}
-    : s guard ( nurl_sym_get syms `__last_call_guard__` )
+    : ~ s guard ( nurl_sym_get syms `__last_call_guard__` )
+    // A callee that hands over its result on no path (`__ret_unowned`) is
+    // not asked, so it has no guard — but a temporary its result IS still
+    // needs a slot to become the result's owner in: one holding the answer
+    // every path gives, null. Published, so the binding, the consuming
+    // argument or the return takes it like any guard.
+    ? & == 0 ( nurl_str_len guard ) != 0 ( nurl_sym_len2 syms cn `__ret_unowned` ) {
+        = guard ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print guard ) ( nurl_print ` = alloca i8*\n` )
+        ( nurl_print `  store i8* null, i8** ` ) ( nurl_print guard ) ( nurl_print `\n` )
+        ( nurl_sym_def syms `__last_call_guard__` guard )
+    } {}
     : ~ s rest ( nurl_str_cat words `` )
     ~ != 0 ( nurl_str_len rest ) {
         : ~ s w ( str_first_word rest ) = rest ( str_skip_word rest )
@@ -6853,7 +6865,7 @@ unsafe @ nurl_cg_lbl i h s hint → s {
         ( emit_sink_flag_load ( mem_lend_const syms `part` callee generic index ) part )
         : s nad ( mem_emit_i1 cg `xor` ad `1` )
         : s any ( mem_emit_i1 cg `and` ( mem_emit_i1 cg `or` one part ) nad )
-        // No guard: the callee's result is its own on every path.
+        // Still no guard: the callee's result is its own on every path.
         : ~ s g `null`
         : ~ s notowned `false`
         ? != 0 ( nurl_str_len guard ) {
@@ -7755,10 +7767,18 @@ unsafe @ origin_guard_retained i root → b {
 // `__ret_unowned`.)
 // The hidden slot holds null for borrowed/opaque results. Capture it before
 // argument cleanup; binding, forwarding and argument use share the slot.
-@ mem_emit_fwd_own_guard i syms i cg s cn s res s rlt → s {
+// No slot is one of the two static answers: owned on every path, or on
+// none — which reads, wherever an owner is only loaded, as a slot holding
+// null. The one consumer that stores an owner into the slot, a temporary
+// the result is (mem_raw_lendback), makes the slot for the second.
+// `gn` is the declared name: an instance of a generic function is compiled
+// after its callers, so neither its name nor any marker is known here yet —
+// but it answers like every other NURL body, and is asked.
+@ mem_emit_fwd_own_guard i syms i cg s cn s gn s res s rlt → s {
     ? == 0 g_auto_drop_strings { ^ ( nurl_str_cat `` `` ) } {}
     ? ! ( seq ( nurl_llty rlt ) `i8*` ) { ^ ( nurl_str_cat `` `` ) } {}
-    ? == 0 ( nurl_sym_len2 syms cn `__nurlfn` ) { ^ ( nurl_str_cat `` `` ) } {}
+    ? & == 0 ( nurl_sym_len2 syms cn `__nurlfn` ) == 0 ( nurl_sym_len2 syms gn `__garity` )
+    { ^ ( nurl_str_cat `` `` ) } {}
     ? != 0 ( nurl_str_len ( __ret_owned_of syms cn ) ) { ^ ( nurl_str_cat `` `` ) } {}
     ? != 0 ( nurl_sym_len2 syms cn `__ret_unowned` ) { ^ ( nurl_str_cat `` `` ) } {}
     ^ ( mem_capture_return_guard cg res rlt )
@@ -10981,9 +11001,9 @@ unsafe @ nurl_lex_peek4_type i h → i {
     ( nurl_print ` @` ) ( nurl_print ( llvm_source_fn fname ) )
     ( nurl_print `(` ) ( nurl_print argstr ) ( nurl_print `)` ) ( emit_dbg_eol )
     ( nurl_sym_def syms `__last_call_guard__`
-    ( mem_emit_fwd_own_guard syms cg fname res rlt ) )
+    ( mem_emit_fwd_own_guard syms cg fname fname res rlt ) )
     ( mem_capture_hown syms cg fname rlt )
-    ( mem_raw_lendback syms cg raw_lends res rlt )
+    ( mem_raw_lendback syms cg fname raw_lends res rlt )
     = res ( mem_own_lendback syms cg fname res rlt lend_one lend_part lend_idx )
     ( mem_drop_arg_temps owned_temps )
     ( nurl_set_last_type rlt )
@@ -13839,9 +13859,9 @@ unsafe @ nurl_lex_peek4_type i h → i {
             ( nurl_print ` @` ) ( nurl_print ( llvm_source_fn impl_name ) )
             ( nurl_print `(` ) ( nurl_print argstr ) ( nurl_print `)` ) ( emit_dbg_eol )
             ( nurl_sym_def syms `__last_call_guard__`
-            ( mem_emit_fwd_own_guard syms cg impl_name res impl_ret ) )
+            ( mem_emit_fwd_own_guard syms cg impl_name impl_name res impl_ret ) )
             ( mem_capture_hown syms cg impl_name impl_ret )
-            ( mem_raw_lendback syms cg raw_lends res impl_ret )
+            ( mem_raw_lendback syms cg impl_name raw_lends res impl_ret )
             ( mem_drop_arg_temps owned_arg_temps ) ( mem_drop_closure_temps closure_envs_free )
             ( nurl_set_last_type impl_ret )
             ^ res
@@ -13996,9 +14016,9 @@ unsafe @ nurl_lex_peek4_type i h → i {
                 // the signedness straight off the type — argument
                 // evaluation can no longer clobber it.
                 ( nurl_sym_def syms `__last_call_guard__`
-                ( mem_emit_fwd_own_guard syms cg call_name res rlt ) )
+                ( mem_emit_fwd_own_guard syms cg call_name fname res rlt ) )
                 ( mem_capture_hown syms cg call_name rlt )
-                ( mem_raw_lendback syms cg raw_lends res rlt )
+                ( mem_raw_lendback syms cg call_name raw_lends res rlt )
                 = res ( mem_own_lendback syms cg call_name res rlt lendback_bits lendpart_bits lendback_idx )
                 ( mem_note_vec_get syms cg call_name argstr )
                 // A returned closure is the caller's (mem_retclo_own_result):
