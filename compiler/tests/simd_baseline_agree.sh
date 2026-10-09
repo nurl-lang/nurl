@@ -15,8 +15,9 @@
 #  and nothing in the tree noticed either way: `--no-cpu-dispatch`
 #  appeared in no build script and no workflow.
 #
-#  Every function the prefix marks today is post-quantum cryptography
-#  (ML-KEM, ML-DSA, the x4 Keccak sponge under both). A divergence
+#  Every function the prefix marks today is cryptography (ML-KEM,
+#  ML-DSA, the x4 Keccak sponge under both, ChaCha20, the X25519
+#  ladder). A divergence
 #  between the two lowerings there is not a slow path — it is a wrong
 #  key on half the machines in a fleet, on the half that was never
 #  tested.
@@ -98,9 +99,10 @@ bad()  { note "$1" "FAIL — $2"; fails=$((fails + 1)); }
 
 # The corpus tests that drive the marked kernels through their public
 # API across the parameter seams: all three ML-KEM levels, all three
-# ML-DSA levels, the x4 sponge either side of both rates, and ChaCha20
-# across its one-, two-, four- and eight-block kernels' seams.
-DRIVERS=(mlkem_vectors mldsa_vectors sha3x4_vectors chacha20_simd_agree)
+# ML-DSA levels, the x4 sponge either side of both rates, ChaCha20
+# across its one-, two-, four- and eight-block kernels' seams, and the
+# X25519 ladder on the RFC chain and the low-order and non-canonical u.
+DRIVERS=(mlkem_vectors mldsa_vectors sha3x4_vectors chacha20_simd_agree x25519_simd_agree)
 
 # ── 0. What this host will actually dispatch to ─────────────────────
 # Without this the whole script is theatre on an AVX2-less machine: the
@@ -148,12 +150,15 @@ build_leg() {  # build_leg <test> <leg: on|off>
         -lm -lpthread $DL_LIB 2> "$WORK/$name.$leg.lerr" || return 1
 }
 
-# ymm instructions inside the bodies of the .x86v3 symbols only. The
-# baseline build has no such symbols, so its count is 0 by construction
-# — which is why the whole-binary count is checked for it instead.
+# Instructions only the wide feature set has — a ymm register (AVX2) or
+# BMI2's mulx, which is all a scalar kernel like the X25519 ladder gains —
+# inside the bodies of the .x86v3 symbols only. The baseline build has no
+# such symbols, so its count is 0 by construction — which is why the
+# whole-binary count is checked for it instead.
+WIDE_INSN='ymm|mulx'
 ymm_in_wide() {
     objdump -d "$1" 2>/dev/null |
-        awk '/^[0-9a-f]+ <[^>]*\.x86v3>:/{p=1} /^$/{p=0} p' | grep -c 'ymm'
+        awk '/^[0-9a-f]+ <[^>]*\.x86v3>:/{p=1} /^$/{p=0} p' | grep -cE "$WIDE_INSN"
 }
 
 have_objdump=1
@@ -186,20 +191,20 @@ for name in "${DRIVERS[@]}"; do
     fi
 
     # The two binaries must be different machine code, or agreement is
-    # a tautology. The wide build carries ymm inside its clones; the
-    # baseline build carries none anywhere, because nurlc emits no
-    # target triple and clang's default x86-64 has no AVX.
+    # a tautology. The wide build carries ymm or mulx inside its clones;
+    # the baseline build carries neither anywhere, because nurlc emits no
+    # target triple and clang's default x86-64 has no AVX and no BMI2.
     if (( have_objdump )); then
         w=$(ymm_in_wide "$WORK/$name.on")
-        b=$(objdump -d "$WORK/$name.off" 2>/dev/null | grep -c 'ymm')
+        b=$(objdump -d "$WORK/$name.off" 2>/dev/null | grep -cE "$WIDE_INSN")
         n_clone=$(grep -cE '^define .*\.x86v3\(' "$WORK/$name.on.ll")
         n_off=$(grep -cE '^define .*(\.base|\.x86v3)\(' "$WORK/$name.off.ll")
         if (( w > 0 && b == 0 && n_clone > 0 && n_off == 0 )); then
             ok "$name: the two legs are different code" \
-               "$n_clone clone$( ((n_clone == 1)) || echo s), $w ymm vs 0"
+               "$n_clone clone$( ((n_clone == 1)) || echo s), $w ymm/mulx vs 0"
         else
             bad "$name: the two legs are different code" \
-                "wide-ymm=$w baseline-ymm=$b clones=$n_clone off-clones=$n_off"
+                "wide-ymm/mulx=$w baseline-ymm/mulx=$b clones=$n_clone off-clones=$n_off"
         fi
     else
         note "$name: the two legs are different code" "skipped (no objdump)"

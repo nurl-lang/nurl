@@ -6,7 +6,11 @@
 // 64x64->128 products via `nurl_umulhi` / `nurl_mac_*`) and the ref10
 // inversion chain. The C and Rust peers carry that same formulation
 // written out by hand, with their native 128-bit integers — their
-// standard libraries have no X25519.
+// standard libraries have no X25519. On a CPU with x86-64-v3 the ladder
+// runs its `simd` clone, chosen at run time, whose products are BMI2
+// `mulx`; the peers are built for baseline x86-64 like every row and
+// multiply with `mul`, the instruction the library's baseline lowering
+// uses everywhere else.
 //
 // The workload is RFC 7748 §5.2's iteration test: k = u = 9, then 1000
 // times (k, u) <- (X25519(k, u), k), so each scalar multiplication

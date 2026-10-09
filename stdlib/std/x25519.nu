@@ -100,15 +100,6 @@ $ `stdlib/core/vec.nu`
     ~ < k 5 { = . dp k . sp k = k + k 1 }
 }
 
-// The constant 121665 as a gf — it fits limb 0 whole. The ladder's
-// `( _M a c k121665 )` is a full field multiply by this element, which is
-// exactly a·121665, so keeping it as a gf leaves the ladder untouched.
-@ __gf_121665 → ( Vec i ) {
-    : ( Vec i ) o ( _gf_zero )
-    ( _vset o 0 121665 )
-    ^ o
-}
-
 // Constant-time conditional swap of p and q when b = 1.
 @ _sel25519 ( Vec i ) p ( Vec i ) q i b → v {
     : i c - 0 b
@@ -415,60 +406,345 @@ $ `stdlib/core/vec.nu`
     ( _gf_into io z10 )
 }
 
+// ── the ladder's field, in registers ──────────────────────────────
+// The variable-base ladder runs on scalar limbs: its field elements are
+// u64 locals, five to an element, and the field operations are `inline`
+// helpers taking the limbs they write `inout` — so after inlining every
+// limb is a register value the optimiser schedules freely. A `( Vec i )`
+// element lives behind a pointer the optimiser cannot see through: each
+// _M/_S/_A/_Z stored its five limbs and the next operation loaded them
+// back, and every _M/_S was a call saving and restoring six registers.
+// The arithmetic is _A/_Z/_M/_S's, limb for limb.
+
+// o ← a + b (_A)
+inline @ __fe_add inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 inout u64 o4 u64 a0 u64 a1 u64 a2 u64 a3 u64 a4 u64 b0 u64 b1 u64 b2 u64 b3 u64 b4 → v {
+    = o0 + a0 b0
+    = o1 + a1 b1
+    = o2 + a2 b2
+    = o3 + a3 b3
+    = o4 + a4 b4
+}
+
+// o ← a − b + 2p (_Z)
+inline @ __fe_sub inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 inout u64 o4 u64 a0 u64 a1 u64 a2 u64 a3 u64 a4 u64 b0 u64 b1 u64 b2 u64 b3 u64 b4 → v {
+    = o0 - + a0 4503599627370458 b0
+    = o1 - + a1 4503599627370494 b1
+    = o2 - + a2 4503599627370494 b2
+    = o3 - + a3 4503599627370494 b3
+    = o4 - + a4 4503599627370494 b4
+}
+
+// o ← a · b mod p (_M)
+inline @ __fe_mul inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 inout u64 o4 u64 a0 u64 a1 u64 a2 u64 a3 u64 a4 u64 b0 u64 b1 u64 b2 u64 b3 u64 b4 → v {
+    : u64 f1 * a1 19
+    : u64 f2 * a2 19
+    : u64 f3 * a3 19
+    : u64 f4 * a4 19
+    : ~ u64 l0 * a0 b0
+    : ~ u64 h0 ( nurl_umulhi a0 b0 )
+    = h0 + h0 ( nurl_mac_hi f4 b1 l0 0 ) = l0 ( nurl_mac_lo f4 b1 l0 0 )
+    = h0 + h0 ( nurl_mac_hi f1 b4 l0 0 ) = l0 ( nurl_mac_lo f1 b4 l0 0 )
+    = h0 + h0 ( nurl_mac_hi f2 b3 l0 0 ) = l0 ( nurl_mac_lo f2 b3 l0 0 )
+    = h0 + h0 ( nurl_mac_hi f3 b2 l0 0 ) = l0 ( nurl_mac_lo f3 b2 l0 0 )
+    : ~ u64 l1 * a0 b1
+    : ~ u64 h1 ( nurl_umulhi a0 b1 )
+    = h1 + h1 ( nurl_mac_hi a1 b0 l1 0 ) = l1 ( nurl_mac_lo a1 b0 l1 0 )
+    = h1 + h1 ( nurl_mac_hi f4 b2 l1 0 ) = l1 ( nurl_mac_lo f4 b2 l1 0 )
+    = h1 + h1 ( nurl_mac_hi f2 b4 l1 0 ) = l1 ( nurl_mac_lo f2 b4 l1 0 )
+    = h1 + h1 ( nurl_mac_hi f3 b3 l1 0 ) = l1 ( nurl_mac_lo f3 b3 l1 0 )
+    : ~ u64 l2 * a0 b2
+    : ~ u64 h2 ( nurl_umulhi a0 b2 )
+    = h2 + h2 ( nurl_mac_hi a1 b1 l2 0 ) = l2 ( nurl_mac_lo a1 b1 l2 0 )
+    = h2 + h2 ( nurl_mac_hi a2 b0 l2 0 ) = l2 ( nurl_mac_lo a2 b0 l2 0 )
+    = h2 + h2 ( nurl_mac_hi f4 b3 l2 0 ) = l2 ( nurl_mac_lo f4 b3 l2 0 )
+    = h2 + h2 ( nurl_mac_hi f3 b4 l2 0 ) = l2 ( nurl_mac_lo f3 b4 l2 0 )
+    : ~ u64 l3 * a0 b3
+    : ~ u64 h3 ( nurl_umulhi a0 b3 )
+    = h3 + h3 ( nurl_mac_hi a1 b2 l3 0 ) = l3 ( nurl_mac_lo a1 b2 l3 0 )
+    = h3 + h3 ( nurl_mac_hi a2 b1 l3 0 ) = l3 ( nurl_mac_lo a2 b1 l3 0 )
+    = h3 + h3 ( nurl_mac_hi a3 b0 l3 0 ) = l3 ( nurl_mac_lo a3 b0 l3 0 )
+    = h3 + h3 ( nurl_mac_hi f4 b4 l3 0 ) = l3 ( nurl_mac_lo f4 b4 l3 0 )
+    : ~ u64 l4 * a0 b4
+    : ~ u64 h4 ( nurl_umulhi a0 b4 )
+    = h4 + h4 ( nurl_mac_hi a1 b3 l4 0 ) = l4 ( nurl_mac_lo a1 b3 l4 0 )
+    = h4 + h4 ( nurl_mac_hi a2 b2 l4 0 ) = l4 ( nurl_mac_lo a2 b2 l4 0 )
+    = h4 + h4 ( nurl_mac_hi a3 b1 l4 0 ) = l4 ( nurl_mac_lo a3 b1 l4 0 )
+    = h4 + h4 ( nurl_mac_hi a4 b0 l4 0 ) = l4 ( nurl_mac_lo a4 b0 l4 0 )
+    ( __fe_carry o0 o1 o2 o3 o4 l0 h0 l1 h1 l2 h2 l3 h3 l4 h4 )
+}
+
+// o ← a² mod p (_S)
+inline @ __fe_sq inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 inout u64 o4 u64 a0 u64 a1 u64 a2 u64 a3 u64 a4 → v {
+    : u64 d0 * a0 2
+    : u64 d1 * a1 2
+    : u64 d2 * a2 38
+    : u64 d419 * a4 19
+    : u64 d4 * d419 2
+    : u64 a319 * a3 19
+    : ~ u64 l0 * a0 a0
+    : ~ u64 h0 ( nurl_umulhi a0 a0 )
+    = h0 + h0 ( nurl_mac_hi d4 a1 l0 0 ) = l0 ( nurl_mac_lo d4 a1 l0 0 )
+    = h0 + h0 ( nurl_mac_hi d2 a3 l0 0 ) = l0 ( nurl_mac_lo d2 a3 l0 0 )
+    : ~ u64 l1 * d0 a1
+    : ~ u64 h1 ( nurl_umulhi d0 a1 )
+    = h1 + h1 ( nurl_mac_hi d4 a2 l1 0 ) = l1 ( nurl_mac_lo d4 a2 l1 0 )
+    = h1 + h1 ( nurl_mac_hi a3 a319 l1 0 ) = l1 ( nurl_mac_lo a3 a319 l1 0 )
+    : ~ u64 l2 * d0 a2
+    : ~ u64 h2 ( nurl_umulhi d0 a2 )
+    = h2 + h2 ( nurl_mac_hi a1 a1 l2 0 ) = l2 ( nurl_mac_lo a1 a1 l2 0 )
+    = h2 + h2 ( nurl_mac_hi d4 a3 l2 0 ) = l2 ( nurl_mac_lo d4 a3 l2 0 )
+    : ~ u64 l3 * d0 a3
+    : ~ u64 h3 ( nurl_umulhi d0 a3 )
+    = h3 + h3 ( nurl_mac_hi d1 a2 l3 0 ) = l3 ( nurl_mac_lo d1 a2 l3 0 )
+    = h3 + h3 ( nurl_mac_hi a4 d419 l3 0 ) = l3 ( nurl_mac_lo a4 d419 l3 0 )
+    : ~ u64 l4 * d0 a4
+    : ~ u64 h4 ( nurl_umulhi d0 a4 )
+    = h4 + h4 ( nurl_mac_hi d1 a3 l4 0 ) = l4 ( nurl_mac_lo d1 a3 l4 0 )
+    = h4 + h4 ( nurl_mac_hi a2 a2 l4 0 ) = l4 ( nurl_mac_lo a2 a2 l4 0 )
+    ( __fe_carry o0 o1 o2 o3 o4 l0 h0 l1 h1 l2 h2 l3 h3 l4 h4 )
+}
+
+// five 128-bit column sums (lo, hi) → five 51-bit limbs (__mul_carry_out)
+inline @ __fe_carry inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 inout u64 o4 u64 pl0 u64 ph0 u64 pl1 u64 ph1 u64 pl2 u64 ph2 u64 pl3 u64 ph3 u64 pl4 u64 ph4 → v {
+    : ~ u64 l1 pl1
+    : ~ u64 h1 ph1
+    : ~ u64 l2 pl2
+    : ~ u64 h2 ph2
+    : ~ u64 l3 pl3
+    : ~ u64 h3 ph3
+    : ~ u64 l4 pl4
+    : ~ u64 h4 ph4
+    : ~ u64 g0 & pl0 2251799813685247
+    : ~ u64 c | << ph0 13 >> pl0 51
+    = l1 + l1 c = h1 + h1 ? < l1 c 1 0
+    : ~ u64 g1 & l1 2251799813685247
+    = c | << h1 13 >> l1 51
+    = l2 + l2 c = h2 + h2 ? < l2 c 1 0
+    : u64 g2 & l2 2251799813685247
+    = c | << h2 13 >> l2 51
+    = l3 + l3 c = h3 + h3 ? < l3 c 1 0
+    = o3 & l3 2251799813685247
+    = c | << h3 13 >> l3 51
+    = l4 + l4 c = h4 + h4 ? < l4 c 1 0
+    = o4 & l4 2251799813685247
+    = c | << h4 13 >> l4 51
+    = g0 + g0 * c 19
+    = c >> g0 51
+    = o0 & g0 2251799813685247
+    = g1 + g1 c
+    = c >> g1 51
+    = o1 & g1 2251799813685247
+    = o2 + g2 c
+}
+
+// p, q ← q, p when m is all ones, unchanged when m is 0 — in constant time (_sel25519)
+inline @ __fe_cswap inout u64 p0 inout u64 p1 inout u64 p2 inout u64 p3 inout u64 p4 inout u64 q0 inout u64 q1 inout u64 q2 inout u64 q3 inout u64 q4 u64 m → v {
+    : u64 t0 & m ^^ p0 q0
+    = p0 ^^ p0 t0 = q0 ^^ q0 t0
+    : u64 t1 & m ^^ p1 q1
+    = p1 ^^ p1 t1 = q1 ^^ q1 t1
+    : u64 t2 & m ^^ p2 q2
+    = p2 ^^ p2 t2 = q2 ^^ q2 t2
+    : u64 t3 & m ^^ p3 q3
+    = p3 ^^ p3 t3 = q3 ^^ q3 t3
+    : u64 t4 & m ^^ p4 q4
+    = p4 ^^ p4 t4 = q4 ^^ q4 t4
+}
+
+// o ← o^(2^n): n back-to-back squarings (_sqn25519)
+inline @ __fe_sqn inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 inout u64 o4 i n → v {
+    : ~ u64 t0 0
+    : ~ u64 t1 0
+    : ~ u64 t2 0
+    : ~ u64 t3 0
+    : ~ u64 t4 0
+    : ~ i k 0
+    ~ < k n { ( __fe_sq t0 t1 t2 t3 t4 o0 o1 o2 o3 o4 ) = o0 t0 = o1 t1 = o2 t2 = o3 t3 = o4 t4 = k + k 1 }
+}
+
+// o ← z^(p−2) = 1/z — _inv25519's ref10 addition chain on scalar limbs
+inline @ __fe_inv inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 inout u64 o4 u64 z0 u64 z1 u64 z2 u64 z3 u64 z4 → v {
+    : ~ u64 q0 0
+    : ~ u64 q1 0
+    : ~ u64 q2 0
+    : ~ u64 q3 0
+    : ~ u64 q4 0
+    : ~ u64 n0 0
+    : ~ u64 n1 0
+    : ~ u64 n2 0
+    : ~ u64 n3 0
+    : ~ u64 n4 0
+    : ~ u64 j0 0
+    : ~ u64 j1 0
+    : ~ u64 j2 0
+    : ~ u64 j3 0
+    : ~ u64 j4 0
+    : ~ u64 f0 0
+    : ~ u64 f1 0
+    : ~ u64 f2 0
+    : ~ u64 f3 0
+    : ~ u64 f4 0
+    : ~ u64 g0 0
+    : ~ u64 g1 0
+    : ~ u64 g2 0
+    : ~ u64 g3 0
+    : ~ u64 g4 0
+    : ~ u64 t0 0
+    : ~ u64 t1 0
+    : ~ u64 t2 0
+    : ~ u64 t3 0
+    : ~ u64 t4 0
+    : ~ u64 y0 0
+    : ~ u64 y1 0
+    : ~ u64 y2 0
+    : ~ u64 y3 0
+    : ~ u64 y4 0
+    : ~ u64 w0 0
+    : ~ u64 w1 0
+    : ~ u64 w2 0
+    : ~ u64 w3 0
+    : ~ u64 w4 0
+    ( __fe_sq q0 q1 q2 q3 q4 z0 z1 z2 z3 z4 )
+    // z^2
+    ( __fe_sq n0 n1 n2 n3 n4 q0 q1 q2 q3 q4 )
+    ( __fe_sq w0 w1 w2 w3 w4 n0 n1 n2 n3 n4 ) = n0 w0 = n1 w1 = n2 w2 = n3 w3 = n4 w4
+    ( __fe_mul w0 w1 w2 w3 w4 n0 n1 n2 n3 n4 z0 z1 z2 z3 z4 ) = n0 w0 = n1 w1 = n2 w2 = n3 w3 = n4 w4
+    // z^9
+    ( __fe_mul j0 j1 j2 j3 j4 n0 n1 n2 n3 n4 q0 q1 q2 q3 q4 )
+    // z^11
+    ( __fe_sq f0 f1 f2 f3 f4 j0 j1 j2 j3 j4 )
+    ( __fe_mul w0 w1 w2 w3 w4 f0 f1 f2 f3 f4 n0 n1 n2 n3 n4 ) = f0 w0 = f1 w1 = f2 w2 = f3 w3 = f4 w4
+    // z^(2^5−1)
+    = g0 f0 = g1 f1 = g2 f2 = g3 f3 = g4 f4
+    ( __fe_sqn g0 g1 g2 g3 g4 5 )
+    ( __fe_mul w0 w1 w2 w3 w4 g0 g1 g2 g3 g4 f0 f1 f2 f3 f4 ) = g0 w0 = g1 w1 = g2 w2 = g3 w3 = g4 w4
+    // z^(2^10−1)
+    = t0 g0 = t1 g1 = t2 g2 = t3 g3 = t4 g4
+    ( __fe_sqn t0 t1 t2 t3 t4 10 )
+    ( __fe_mul w0 w1 w2 w3 w4 t0 t1 t2 t3 t4 g0 g1 g2 g3 g4 ) = t0 w0 = t1 w1 = t2 w2 = t3 w3 = t4 w4
+    // z^(2^20−1)
+    = y0 t0 = y1 t1 = y2 t2 = y3 t3 = y4 t4
+    ( __fe_sqn y0 y1 y2 y3 y4 20 )
+    ( __fe_mul w0 w1 w2 w3 w4 y0 y1 y2 y3 y4 t0 t1 t2 t3 t4 ) = y0 w0 = y1 w1 = y2 w2 = y3 w3 = y4 w4
+    // z^(2^40−1)
+    ( __fe_sqn y0 y1 y2 y3 y4 10 )
+    ( __fe_mul w0 w1 w2 w3 w4 y0 y1 y2 y3 y4 g0 g1 g2 g3 g4 ) = y0 w0 = y1 w1 = y2 w2 = y3 w3 = y4 w4
+    // z^(2^50−1)
+    = t0 y0 = t1 y1 = t2 y2 = t3 y3 = t4 y4
+    ( __fe_sqn t0 t1 t2 t3 t4 50 )
+    ( __fe_mul w0 w1 w2 w3 w4 t0 t1 t2 t3 t4 y0 y1 y2 y3 y4 ) = t0 w0 = t1 w1 = t2 w2 = t3 w3 = t4 w4
+    // z^(2^100−1)
+    = g0 t0 = g1 t1 = g2 t2 = g3 t3 = g4 t4
+    ( __fe_sqn g0 g1 g2 g3 g4 100 )
+    ( __fe_mul w0 w1 w2 w3 w4 g0 g1 g2 g3 g4 t0 t1 t2 t3 t4 ) = g0 w0 = g1 w1 = g2 w2 = g3 w3 = g4 w4
+    // z^(2^200−1)
+    ( __fe_sqn g0 g1 g2 g3 g4 50 )
+    ( __fe_mul w0 w1 w2 w3 w4 g0 g1 g2 g3 g4 y0 y1 y2 y3 y4 ) = g0 w0 = g1 w1 = g2 w2 = g3 w3 = g4 w4
+    // z^(2^250−1)
+    ( __fe_sqn g0 g1 g2 g3 g4 5 )
+    ( __fe_mul o0 o1 o2 o3 o4 g0 g1 g2 g3 g4 j0 j1 j2 j3 j4 )
+    // z^(2^255−21)
+}
+
 // ── the ladder ────────────────────────────────────────────────────
 // q ← scalar · point, both 32-byte little-endian. Scalar is clamped.
-@ __scalarmult ( Vec u ) scalar ( Vec u ) point → ( Vec u ) {
+// TweetNaCl's ladder step for step, on the scalar-limb field above:
+// a, c are x2, z2 and b, d are x3, z3; t is scratch for a product whose
+// destination is also one of its operands. `simd`: on an x86-64-v3 CPU
+// the clone forms its products with BMI2 `mulx`, which names its output
+// registers instead of claiming rax and rdx — 18 % faster here.
+simd @ __scalarmult ( Vec u ) scalar ( Vec u ) point → ( Vec u ) {
     : ( Vec u ) z ( _zeros_u 32 )
     : ~ i k 0
     ~ < k 32 { ( _bset z k ( _x_bget scalar k ) ) = k + k 1 }
     ( _bset z 31 | & ( _x_bget scalar 31 ) 127 64 )
     ( _bset z 0 & ( _x_bget scalar 0 ) 248 )
 
-    : ( Vec i ) x ( _unpack25519 point )
-    : ( Vec i ) a ( _gf_zero )
-    : ( Vec i ) b ( _gf_copy x )
-    : ( Vec i ) c ( _gf_zero )
-    : ( Vec i ) d ( _gf_zero )
-    : ( Vec i ) e ( _gf_zero )
-    : ( Vec i ) f ( _gf_zero )
-    : ( Vec i ) k121665 ( __gf_121665 )
-    ( _vset a 0 1 )
-    ( _vset d 0 1 )
+    : ( Vec i ) xv ( _unpack25519 point )
+    : u64 x0 # u64 ( _vget xv 0 )
+    : u64 x1 # u64 ( _vget xv 1 )
+    : u64 x2 # u64 ( _vget xv 2 )
+    : u64 x3 # u64 ( _vget xv 3 )
+    : u64 x4 # u64 ( _vget xv 4 )
+    : ~ u64 a0 1
+    : ~ u64 a1 0
+    : ~ u64 a2 0
+    : ~ u64 a3 0
+    : ~ u64 a4 0
+    : ~ u64 b0 x0
+    : ~ u64 b1 x1
+    : ~ u64 b2 x2
+    : ~ u64 b3 x3
+    : ~ u64 b4 x4
+    : ~ u64 c0 0
+    : ~ u64 c1 0
+    : ~ u64 c2 0
+    : ~ u64 c3 0
+    : ~ u64 c4 0
+    : ~ u64 d0 1
+    : ~ u64 d1 0
+    : ~ u64 d2 0
+    : ~ u64 d3 0
+    : ~ u64 d4 0
+    : ~ u64 e0 0
+    : ~ u64 e1 0
+    : ~ u64 e2 0
+    : ~ u64 e3 0
+    : ~ u64 e4 0
+    : ~ u64 f0 0
+    : ~ u64 f1 0
+    : ~ u64 f2 0
+    : ~ u64 f3 0
+    : ~ u64 f4 0
+    : ~ u64 t0 0
+    : ~ u64 t1 0
+    : ~ u64 t2 0
+    : ~ u64 t3 0
+    : ~ u64 t4 0
 
     : ~ i i 254
     ~ >= i 0 {
-        : i r & >> ( _x_bget z >> i 3 ) & i 7 1
-        ( _sel25519 a b r )
-        ( _sel25519 c d r )
-        ( _A e a c )
-        ( _Z a a c )
-        ( _A c b d )
-        ( _Z b b d )
-        ( _S d e )
-        ( _S f a )
-        ( _M a c a )
-        ( _M c b e )
-        ( _A e a c )
-        ( _Z a a c )
-        ( _S b a )
-        ( _Z c d f )
-        ( _M a c k121665 )
-        ( _A a a d )
-        ( _M c c a )
-        ( _M a d f )
-        ( _M d b x )
-        ( _S b e )
-        ( _sel25519 a b r )
-        ( _sel25519 c d r )
+        : u64 m - # u64 0 # u64 & >> ( _x_bget z >> i 3 ) & i 7 1
+        ( __fe_cswap a0 a1 a2 a3 a4 b0 b1 b2 b3 b4 m )
+        ( __fe_cswap c0 c1 c2 c3 c4 d0 d1 d2 d3 d4 m )
+        = e0 + a0 c0 = e1 + a1 c1 = e2 + a2 c2 = e3 + a3 c3 = e4 + a4 c4
+        = a0 - + a0 4503599627370458 c0 = a1 - + a1 4503599627370494 c1 = a2 - + a2 4503599627370494 c2 = a3 - + a3 4503599627370494 c3 = a4 - + a4 4503599627370494 c4
+        = c0 + b0 d0 = c1 + b1 d1 = c2 + b2 d2 = c3 + b3 d3 = c4 + b4 d4
+        = b0 - + b0 4503599627370458 d0 = b1 - + b1 4503599627370494 d1 = b2 - + b2 4503599627370494 d2 = b3 - + b3 4503599627370494 d3 = b4 - + b4 4503599627370494 d4
+        ( __fe_sq d0 d1 d2 d3 d4 e0 e1 e2 e3 e4 )
+        ( __fe_sq f0 f1 f2 f3 f4 a0 a1 a2 a3 a4 )
+        ( __fe_mul t0 t1 t2 t3 t4 c0 c1 c2 c3 c4 a0 a1 a2 a3 a4 ) = a0 t0 = a1 t1 = a2 t2 = a3 t3 = a4 t4
+        ( __fe_mul c0 c1 c2 c3 c4 b0 b1 b2 b3 b4 e0 e1 e2 e3 e4 )
+        = e0 + a0 c0 = e1 + a1 c1 = e2 + a2 c2 = e3 + a3 c3 = e4 + a4 c4
+        = a0 - + a0 4503599627370458 c0 = a1 - + a1 4503599627370494 c1 = a2 - + a2 4503599627370494 c2 = a3 - + a3 4503599627370494 c3 = a4 - + a4 4503599627370494 c4
+        ( __fe_sq b0 b1 b2 b3 b4 a0 a1 a2 a3 a4 )
+        = c0 - + d0 4503599627370458 f0 = c1 - + d1 4503599627370494 f1 = c2 - + d2 4503599627370494 f2 = c3 - + d3 4503599627370494 f3 = c4 - + d4 4503599627370494 f4
+        ( __fe_mul a0 a1 a2 a3 a4 c0 c1 c2 c3 c4 121665 0 0 0 0 )  // TweetNaCl's multiply by the element 121665; the zero limbs fold away
+        = a0 + a0 d0 = a1 + a1 d1 = a2 + a2 d2 = a3 + a3 d3 = a4 + a4 d4
+        ( __fe_mul t0 t1 t2 t3 t4 c0 c1 c2 c3 c4 a0 a1 a2 a3 a4 ) = c0 t0 = c1 t1 = c2 t2 = c3 t3 = c4 t4
+        ( __fe_mul a0 a1 a2 a3 a4 d0 d1 d2 d3 d4 f0 f1 f2 f3 f4 )
+        ( __fe_mul d0 d1 d2 d3 d4 b0 b1 b2 b3 b4 x0 x1 x2 x3 x4 )
+        ( __fe_sq b0 b1 b2 b3 b4 e0 e1 e2 e3 e4 )
+        ( __fe_cswap a0 a1 a2 a3 a4 b0 b1 b2 b3 b4 m )
+        ( __fe_cswap c0 c1 c2 c3 c4 d0 d1 d2 d3 d4 m )
         = i - i 1
     }
 
     // Recover the affine X-coordinate: x2 · z2^-1. (a = x2, c = z2.)
-    ( _inv25519 c )
-    ( _M a a c )
-    : ( Vec u ) out ( _pack25519 a )
-
-    ^ out
+    : ~ u64 v0 0
+    : ~ u64 v1 0
+    : ~ u64 v2 0
+    : ~ u64 v3 0
+    : ~ u64 v4 0
+    ( __fe_inv v0 v1 v2 v3 v4 c0 c1 c2 c3 c4 )
+    ( __fe_mul t0 t1 t2 t3 t4 a0 a1 a2 a3 a4 v0 v1 v2 v3 v4 ) = a0 t0 = a1 t1 = a2 t2 = a3 t3 = a4 t4
+    : ( Vec i ) xa ( _gf_zero )
+    ( _vset xa 0 # i a0 )
+    ( _vset xa 1 # i a1 )
+    ( _vset xa 2 # i a2 )
+    ( _vset xa 3 # i a3 )
+    ( _vset xa 4 # i a4 )
+    ^ ( _pack25519 xa )
 }
 
 // scalar · point — the ECDH primitive. `scalar` and `point` are 32-byte
