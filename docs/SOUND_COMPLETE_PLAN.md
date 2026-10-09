@@ -115,7 +115,7 @@ exception: h32, a `Slice` of a `Vec`, is closed), is a guarantee:
   rejected by default; the inverse-oracle fuzzer has seven ownership cores.
   h32 (2026-10-07, found while preparing 0.71.0) was the open one: a
   `Slice` built from a `Vec` was not tracked as a view of it. Closed with
-  h33–h120 by docs/HARDENING_PLAN.md (views are values).
+  h33–h127 by docs/HARDENING_PLAN.md (views are values).
 - **P1** done: `unsafe` functions and methods (spec §3.3d), raw pointer
   reads/writes, pointer casts, raw-memory primitives and foreign functions
   outside the stdlib gated; `nurlc --unsafe-report`. The corpus marks its

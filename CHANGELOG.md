@@ -9,8 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 The memory guarantee has **no exception**: 0.71.0's one known hole (a
-`Slice` of a `Vec`, probe h32) is closed, along with 88 more found around
-it (probes h33–h120), each at its root — every probe is now rejected or
+`Slice` of a `Vec`, probe h32) is closed, along with 95 more found around
+it (probes h33–h127), each at its root — every probe is now rejected or
 runs clean under ASan/UBSan/LSan, and `tools/fuzz/holes/check.sh` runs in
 CI. Compile time is 0.7 % below 0.71.0's main (self-compile instructions),
 run time is flat or better. Code that handed raw pointers or caller-given
@@ -108,7 +108,17 @@ beside each raw one (*Changed*).
   it is given.** Since such a callee stopped being asked per call, the
   binding had no owner slot, and a tracked local assigned to it — copied,
   as it must be — leaked once per assignment (h119, h120). It gets the
-  empty owner slot a binding born from a name gets.
+  empty owner slot a binding born from a name gets; so does one born from
+  a struct's field, whose owned strings leaked the same way (h122).
+- **A string field its struct owns keeps owning.** A field a struct
+  literal gave a fresh string is freed with the struct; assigned a view,
+  an owned local or a literal, it stored that pointer as it came — a
+  double free, an invalid free, or (the struct handed back) a caller
+  reading a String the callee had dropped — and a fresh value assigned
+  to it leaked the one it replaced (h123–h127). A field read assigned to
+  a string binding that owns its value was stored the same way (h121).
+  Both now hold their own copy of anything not fresh, and free what they
+  replace.
 - **The raw foreign surface is `unsafe`.** A C primitive that reads or
   writes as far as its caller says (`memmem`, `memcmp`, `fwrite`,
   `nurl_fast_atof`, the TCP/UDP buffers), takes a `FILE*` or a format
@@ -173,7 +183,7 @@ beside each raw one (*Changed*).
 - `slice_of_str`, `slice_byte`, `slice_parse_int`, `slice_parse_float`,
   `string_adopt`, `write_string`, `b64_encode_string`, `utf8_decode_at`:
   the safe forms of the raw-length helpers above.
-- Hole probes h33–h120 (`tools/fuzz/holes/`) and their check in CI: each
+- Hole probes h33–h127 (`tools/fuzz/holes/`) and their check in CI: each
   must be rejected or run clean under the sanitizers.
 - **Five cryptographic benchmark rows** — `chacha20`, `poly1305`,
   `blake2b`, `sha512` and `x25519` — in NURL, C and Rust. The NURL side
