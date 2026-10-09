@@ -11661,8 +11661,11 @@ unsafe @ __loop_cond_sdepth_enter i syms → s {
 // (compiler/nurlc.nu 148 s), md2html (a 1.2 MB document 36 s). A fixed
 // index costs O(index), not a scan, and is let through; so is a string
 // bound inside the loop, which each pass measures afresh anyway.
-// Called with the lexer on the first argument.
-@ __strget_loop_warn i lex i syms → v {
+// `( utf8_decode X i )` is the same shape: it measures all of X per call
+// (tokenizer's SentencePiece split, 1.2 MB of text 49 s); its loop form is
+// utf8_decode_at over the view. Called with the lexer on the first
+// argument.
+@ __strget_loop_warn i lex i syms s fname → v {
     : s sd ( nurl_sym_get syms `__loop_sdepth__` )
     ? == 0 ( nurl_str_len sd ) { ^ v } {}
     ? != ( nurl_lex_type lex ) TT_IDENT { ^ v } {}
@@ -11670,6 +11673,13 @@ unsafe @ __loop_cond_sdepth_enter i syms → s {
     : s x ( nurl_lex_val lex )
     : i d ( nurl_sym_depth_of syms x )
     ? | < d 0 >= d ( nurl_str_to_int sd ) { ^ v } {}
+    ? ( seq fname `utf8_decode` ) {
+        ( warn lex ( nurl_str_cat3 ( nurl_str_cat4
+        `'utf8_decode' measures '` x `' (strlen) on every call, so decoding it in this loop is quadratic in its length. Measure it once before the loop — ': ( Slice u ) ` x )
+        ( nurl_str_cat3 `_v ( slice_of_str ` x ` )' (stdlib/core/slice.nu) — and decode with '( utf8_decode_at ` )
+        ( nurl_str_cat x `_v i )', which is O(1) per position.` ) ) )
+        ^ v
+    } {}
     ( warn lex ( nurl_str_cat3 ( nurl_str_cat4
     `'nurl_str_get' re-measures '` x `' from its start on every call, so walking it in this loop is quadratic in its length. Measure it once before the loop — ': ( Slice u ) ` x )
     ( nurl_str_cat3 `_v ( slice_of_str ` x ` )' (stdlib/core/slice.nu) — and read '( slice_byte ` )
@@ -11745,7 +11755,7 @@ unsafe @ __loop_cond_sdepth_enter i syms → s {
         `' cannot be a call target: '(' begins a function call, but operator expressions are written without parentheses (e.g. '. obj field', not '( . obj field )')` ) ) }
     {}
     ( nurl_lex_advance lex )
-    ? ( seq fname `nurl_str_get` ) { ( __strget_loop_warn lex syms ) } {}
+    ? | ( seq fname `nurl_str_get` ) ( seq fname `utf8_decode` ) { ( __strget_loop_warn lex syms fname ) } {}
     // Tail-call optimisation: snapshot + consume the tail-position
     // flag at function entry. Argument evaluation below recurses
     // through gen_expr → gen_call; clearing the flag here means

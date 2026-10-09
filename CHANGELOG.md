@@ -212,8 +212,10 @@ beside each raw one (*Changed*).
   (the stdlib's parsers, tokenizer 0.3.0, nurlfmt, md2html, nurl-lsp).
   The warning names the binding and the O(1) form: measure once with
   `slice_of_str`, read with `slice_byte` (0 outside the string, like
-  `nurl_str_get`). A fixed index (O(index), not a scan) and a string
-  bound inside the loop are let through. `compiler/tests/
+  `nurl_str_get`). `utf8_decode`, which measures the whole string per
+  call, is flagged the same way and pointed at `utf8_decode_at`. A fixed
+  index (O(index), not a scan) and a string bound inside the loop are let
+  through. `compiler/tests/
   should_warn_strget_loop.nu` pins both sides.
 
 - `slice_of_str`, `slice_byte`, `slice_parse_int`, `slice_parse_float`,

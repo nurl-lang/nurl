@@ -1,8 +1,11 @@
 COMPILE OK
 WARNINGS
-compiler/tests/should_warn_strget_loop.nu:18:29: warning: 'nurl_str_get' re-measures 'src' from its start on every call, so walking it in this loop is quadratic in its length. Measure it once before the loop — ': ( Slice u ) src_v ( slice_of_str src )' (stdlib/core/slice.nu) — and read '( slice_byte src_v i )', which is O(1) and, like nurl_str_get, reads 0 outside the string.
+compiler/tests/should_warn_strget_loop.nu:20:29: warning: 'nurl_str_get' re-measures 'src' from its start on every call, so walking it in this loop is quadratic in its length. Measure it once before the loop — ': ( Slice u ) src_v ( slice_of_str src )' (stdlib/core/slice.nu) — and read '( slice_byte src_v i )', which is O(1) and, like nurl_str_get, reads 0 outside the string.
         ? == ( nurl_str_get src k ) 10 { = c + c 1 } {}
                             ^
+compiler/tests/should_warn_strget_loop.nu:66:35: warning: 'utf8_decode' measures 'src' (strlen) on every call, so decoding it in this loop is quadratic in its length. Measure it once before the loop — ': ( Slice u ) src_v ( slice_of_str src )' (stdlib/core/slice.nu) — and decode with '( utf8_decode_at src_v i )', which is O(1) per position.
+        : Utf8Dec d ( utf8_decode src p )
+                                  ^
 LINK OK
 EXIT 0
 OUTPUT
@@ -10,4 +13,6 @@ OUTPUT
 3
 291
 294
+4
+4
 0
