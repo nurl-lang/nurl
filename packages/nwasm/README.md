@@ -363,6 +363,15 @@ no linear memory at all. A function it cannot lower falls to tier 7.
 
 ### Both tiers
 
+- **A 128-bit multiply is a multiply.** Core wasm has no wide multiply, so a
+  C `unsigned __int128`, a Rust `u128` or NURL's `nurl_umulhi` product
+  compiles to a call of compiler-rt's `__multi3`, which rebuilds it from four
+  32×32 products — half of a Poly1305 or X25519 module's run time. The
+  predecoder recognises the two bodies today's toolchains link (LLVM's
+  compiler-rt and Rust's compiler-builtins) by their exact bytes, never by
+  name, and lowers a direct call to either into one `mul` for the high word
+  of the low product, three multiplies and the body's own two stores, in
+  its order. Poly1305 and X25519 run 1.8–2.1× faster in every language.
 - **The interpreter handles what neither can.** A function with any record
   outside both tiers' sets stays interpreted — per function, not per module.
   Calls out of JIT code (imports, `memory.grow`, the bulk-memory/`fc` bridge)

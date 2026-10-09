@@ -533,6 +533,7 @@ $ `stdlib/core/vec.nu`
     ? | | == op 169 == op 55 == op 172 { ^ T } {}
     ? | == op 50 == op 210 { ^ T } {}
     ? | & >= op 96 <= op 99 & >= op 105 <= op 108 { ^ T } {}  // div / rem
+    ? == op 186 { ^ T } {}  // MULHU64 (a __multi3 call — interp.nu __m3_emit)
     ? == op 93 { ^ T } {}  // i32.clz
     ? ( rj_isrot op ) { ^ T } {}
     ? ( rj_isfloat op ) { ^ T } {}
@@ -606,6 +607,7 @@ $ `stdlib/core/vec.nu`
     ? | | | | ( rj_isalu op ) & >= op 56 <= op 75 & >= op 96 <= op 99 & >= op 105 <= op 108 ( rj_isrot op ) {
         ( rj_use c b ) ( rj_use c cc ) ( rj_def c a ) ^ v
     } {}
+    ? == op 186 { ( rj_use c b ) ( rj_use c cc ) ( rj_def c a ) ^ v } {}  // MULHU64
     ? | | ( rj_isfbin op ) ( rj_isfcmp op ) ( rj_isfminmax op ) { ( rj_use c b ) ( rj_use c cc ) ( rj_def c a ) ^ v } {}
     ? | | | | == op 94 == op 95 == op 102 == op 103 | == op 104 == op 166 { ( rj_use c b ) ( rj_def c a ) ^ v } {}
     ? | | == op 111 == op 112 & >= op 113 <= op 116 { ( rj_use c b ) ( rj_def c a ) ^ v } {}
@@ -1449,7 +1451,7 @@ $ `stdlib/core/vec.nu`
 // records whose lowering uses rdx as scratch (its webs may not be live
 // across them): div/rem, and the bit scans on a CPU without lzcnt/tzcnt
 @ rj_clobdx i op → b {
-    ? | & >= op 96 <= op 99 & >= op 105 <= op 108 { ^ T } {}
+    ? | | & >= op 96 <= op 99 & >= op 105 <= op 108 == op 186 { ^ T } {}  // and MULHU64's rdx:rax
     ^ & ! ( rj_bmi ) | | | == op 93 == op 94 == op 102 == op 103
 }
 
@@ -3485,6 +3487,20 @@ $ `stdlib/core/vec.nu`
 }
 
 // ── lowering: the rest ──────────────────────────────────────────
+// MULHU64: rdx:rax ← rax·rcx, and the high word is the result — the
+// registers a div uses, so the same rules keep them clear: no web touching
+// the record lives in rcx (rj_clobcx) and none live across it in rdx
+// (rj_clobdx).
+@ rj_e_mulhu Rj c i r → v {
+    : i oa ( rj_u c r 0 )
+    : i ob ( rj_u c r 1 )
+    : i od ( rj_dd c r 0 )
+    ( rj_ldg c 1 ( rj_uloc c ob ) ( rj_us c ob ) 0 )
+    ( rj_ldg c 0 ( rj_uloc c oa ) ( rj_us c oa ) 0 )
+    ( rj_rex c 1 0 0 1 0 ) ( rj_b c 247 ) ( rj_modrr c 4 1 )  // mul rcx
+    ( rj_stg c ( rj_dloc c od ) ( rj_ds c od ) 2 )
+}
+
 @ rj_e_div Rj c i r → v {
     ? ( rj_e_divk c r ) { ^ v } {}
     : i op ( rj_rw c r 0 )
@@ -3916,6 +3932,7 @@ $ `stdlib/core/vec.nu`
     ? == op 172 { ( rj_b c 191 ) ( rj_d c 3 ) ( rj_jmp c ( rj_stub_gate c ) ) ^ v } {}  // unreachable → status 3
     ? | == op 50 == op 210 { ( rj_e_call c r ) ^ v } {}
     ? | & >= op 96 <= op 99 & >= op 105 <= op 108 { ( rj_e_div c r ) ^ v } {}
+    ? == op 186 { ( rj_e_mulhu c r ) ^ v } {}
     ? == op 93 { ( rj_e_clz c r ) ^ v } {}
     ? ( rj_isfbin op ) { ( rj_e_fbin c r ) ^ v } {}
     ? ( rj_isfcmp op ) { ( rj_e_fcmp c r ) ^ v } {}

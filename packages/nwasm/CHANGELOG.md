@@ -1,5 +1,32 @@
 # Changelog
 
+## [2.4.0] — 2026-10-09
+
+### Changed
+
+- **A call to `__multi3` runs as the multiply it is.** Core wasm has no
+  64×64→128 multiply, so every wasm32 toolchain lowers a 128-bit product —
+  C's `unsigned __int128`, Rust's `u128`, NURL's `nurl_umulhi` /
+  `nurl_mac_*` — to a call of compiler-rt's `__multi3(ret, a_lo, a_hi, b_lo,
+  b_hi)`, which rebuilds the product from four 32×32 multiplies and stores it
+  through `ret`. That function was 52 % of a Poly1305 module's run time. The
+  predecoder now recognises the two `__multi3` bodies the toolchains link
+  (LLVM's compiler-rt — zig cc and NURL modules — and Rust's
+  compiler-builtins) by their exact bytes and signature, never by name, and
+  predecodes a direct call to either into three multiplies, two adds, a new
+  multiply-high record (`mul` on x86-64, in every tier) and the body's two
+  stores in the order the body makes them, so a trap on the second leaves
+  memory as the body would. Anything else stays a call.
+
+  | Module (bench/, cycles) | before | after |
+  |---|---:|---:|
+  | poly1305 C / Rust / NURL | 794M / 877M / 771M | 416M / 419M / 441M |
+  | x25519 C / Rust / NURL | 1375M / 1447M / 1325M | 724M / 731M / 715M |
+
+  Checked on every tier against the reference wasmtime: 6561 edge-value
+  128×128 products and 2M random ones from C and Rust, out-of-bounds stores
+  in both store orders, and `tests/fuzz_diff.sh`.
+
 ## [2.3.1] — 2026-10-09
 
 Requires NURL 0.72.0, which draws the raw-memory boundary at every call:
