@@ -873,38 +873,52 @@ $ `stdlib/std/bytes.nu`
     ^ & ^^ ^^ << # i . d i 10 << # i . d + i 1 5 # i . d + i 2 32767
 }
 
-@ __df_matchlen * u d i pos i cur i n → i {
-    : i maxlen ? < - n pos 258 - n pos 258
+// The little-endian u64 at d[o .. o+8]; the eight byte loads fold into one
+// unaligned load.
+@ __df_ld64 * u d i o → i {
+    : i lo | | | # i . d o << # i . d + o 1 8 << # i . d + o 2 16 << # i . d + o 3 24
+    : i hi | | | # i . d + o 4 << # i . d + o 5 8 << # i . d + o 6 16 << # i . d + o 7 24
+    ^ | lo << hi 32
+}
+
+// Length of the common run of d[pos..] and d[cur..], at most `maxlen`:
+// eight bytes a step while eight remain, the first differing byte found by
+// the lowest set bit of their difference, then a byte at a time.
+@ __df_matchlen * u d i pos i cur i maxlen → i {
     : ~ i l 0
+    ~ <= + l 8 maxlen {
+        : i x ^^ ( __df_ld64 d + cur l ) ( __df_ld64 d + pos l )
+        ? != x 0 { ^ + l >> # i ( nurl_ctz # u64 x ) 3 } {}
+        = l + l 8
+    }
     ~ & < l maxlen == # i . d + cur l # i . d + pos l { = l + l 1 }
     ^ l
 }
 
-// Find the length symbol index (0..28) for a match length 3..258.
+// Find the length symbol index (0..28) for a match length 3..258: the last
+// base not above it. Bases are ascending, so a binary search finds the
+// same index the linear scan did.
 @ __df_len_sym ( Vec i ) lenbase i length → i {
-    : ~ i li 28
-    : ~ b done F
-    : ~ i k 0
-    ~ & ! done < k 29 {
-        ? & >= length ( __df_get lenbase k ) | == k 28 < length ( __df_get lenbase + k 1 ) {
-            = li k = done T
-        } {}
-        = k + k 1
+    : *i bp ( vec_data [i] lenbase )
+    ? >= length 258 { ^ 28 } {}
+    : ~ i lo 0
+    : ~ i hi 27  // the answer is in [lo, hi]
+    ~ < lo hi {
+        : i mid >> + + lo hi 1 1
+        ? <= . bp mid length { = lo mid } { = hi - mid 1 }
     }
-    ^ li
+    ^ lo
 }
 
 @ __df_dist_sym ( Vec i ) distbase i dist → i {
-    : ~ i ds 29
-    : ~ b done F
-    : ~ i k 0
-    ~ & ! done < k 30 {
-        ? & >= dist ( __df_get distbase k ) | == k 29 < dist ( __df_get distbase + k 1 ) {
-            = ds k = done T
-        } {}
-        = k + k 1
+    : *i bp ( vec_data [i] distbase )
+    : ~ i lo 0
+    : ~ i hi 29
+    ~ < lo hi {
+        : i mid >> + + lo hi 1 1
+        ? <= . bp mid dist { = lo mid } { = hi - mid 1 }
     }
-    ^ ds
+    ^ lo
 }
 
 @ __df_emit_match inout BitW w i length i dist
@@ -937,14 +951,20 @@ $ `stdlib/std/bytes.nu`
     ( __df_bits w 1 2 )  // BTYPE=01 (fixed Huffman)
 
     : ( Vec i ) head ( __df_fill -1 32768 )
-    : ( Vec i ) prev ( __df_fill -1 ? > n 1 n 1 )
+    // The chain links of the last 32 KiB of positions, by position mod
+    // 32768: the chain never follows a link more than 32768 back (the
+    // distance check below), and the slot of position c is next written
+    // at c + 32768 — after every walk that may still read it. A table
+    // over the whole input gave the same links from a footprint eight
+    // bytes a position wide, where every chain step missed the cache.
+    : ( Vec i ) prev ( __df_fill -1 32768 )
 
     // Seed the dictionary region [0, start) into the hash chains.
     : ~ i si 0
     ~ < si start {
         ? <= si - n 3 {
             : i sh ( __df_hash d si )
-            ( __df_set prev si ( __df_get head sh ) )
+            ( __df_set prev & si 32767 ( __df_get head sh ) )
             ( __df_set head sh si )
         } {}
         = si + si 1
@@ -959,23 +979,31 @@ $ `stdlib/std/bytes.nu`
             : ~ i bestdist 0
             : ~ i chain 0
             : ~ i c cand
-            ~ & >= c 0 < chain 128 {
+            : i maxlen ? < - n i 258 - n i 258
+            // A candidate can only beat `bestlen` if it also matches at
+            // offset `bestlen`: one byte compare skips the rest, and once
+            // `bestlen` is the longest possible no candidate can — the
+            // chain picks the same match a full comparison of every
+            // candidate would.
+            ~ & & >= c 0 < chain 128 < bestlen maxlen {
                 : i dist - i c
                 ? > dist 32768 { = c -1 } {
-                    : i ml ( __df_matchlen d i c n )
-                    ? > ml bestlen { = bestlen ml = bestdist dist } {}
-                    = c ( __df_get prev c )
+                    ? == # i . d + c bestlen # i . d + i bestlen {
+                        : i ml ( __df_matchlen d i c maxlen )
+                        ? > ml bestlen { = bestlen ml = bestdist dist } {}
+                    } {}
+                    = c ( __df_get prev & c 32767 )
                     = chain + chain 1
                 }
             }
-            ( __df_set prev i cand )
+            ( __df_set prev & i 32767 cand )
             ( __df_set head h i )
             ? >= bestlen 3 {
                 ( __df_emit_match w bestlen bestdist lenbase lenext distbase distext )
                 : ~ i k 1
                 ~ & < k bestlen <= + i k - n 3 {
                     : i hk ( __df_hash d + i k )
-                    ( __df_set prev + i k ( __df_get head hk ) )
+                    ( __df_set prev & + i k 32767 ( __df_get head hk ) )
                     ( __df_set head hk + i k )
                     = k + k 1
                 }
