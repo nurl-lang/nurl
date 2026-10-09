@@ -27,6 +27,26 @@
   128×128 products and 2M random ones from C and Rust, out-of-bounds stores
   in both store orders, and `tests/fuzz_diff.sh`.
 
+- **A spilled value is read from the register it was just stored from.**
+  Tier 8 computes a spilled web's definition in rax and stores it to the
+  web's frame home; the next record, reading that web, loaded it straight
+  back — a store and a store-forwarded reload, four or five cycles, on
+  every link of the dependency chain. ChaCha20 and BLAKE2b update sixteen
+  state words in place, more than there are registers, so their quarter
+  rounds were made of such links. When nothing at all has been emitted
+  since that store, and no label lies between (a branch target or a
+  forward jump's landing forgets it), a read of the slot — a load, or the
+  memory operand of an ALU op or `imul` — now takes rax instead. The store
+  stays for later readers.
+
+  | Module (bench/, cycles) | before | after | wasmtime |
+  |---|---:|---:|---:|
+  | chacha20 C / Rust / NURL | 254M / 261M / 230M | 203M / 206M / 178M | 196M / 209M / 167M |
+  | blake2b C / Rust / NURL | 447M / 521M / 284M | 394M / 478M / 243M | 347M / 444M / 216M |
+
+  Every other bench module runs within noise of before, and all 60 print
+  what they printed.
+
 ## [2.3.1] — 2026-10-09
 
 Requires NURL 0.72.0, which draws the raw-memory boundary at every call:

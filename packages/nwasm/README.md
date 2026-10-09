@@ -321,7 +321,11 @@ no linear memory at all. A function it cannot lower falls to tier 7.
   slot's frame home when a web must live in memory. A value a loop writes
   ranks eight times denser than one it only reads, and after allocation a
   run of a spilled web's reads with a register free across it loads the
-  home once and reads the register. A web live across a call takes a
+  home once and reads the register. A spilled value is computed in rax and
+  stored to its home; a read of that home emitted straight after the store
+  — a load, or an ALU or `imul` memory operand — takes rax instead, so a
+  chain of in-place updates (ChaCha20's and BLAKE2b's state words) does not
+  wait on store forwarding at every link. A web live across a call takes a
   callee-saved register; rdx and rcx go only to webs no record that needs
   them as scratch touches.
 - **Calls.** A tier-8 function with at most five parameters and one result

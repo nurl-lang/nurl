@@ -157,7 +157,14 @@ $ `stdlib/core/vec.nu`
 
 @ rjs_aidx → i { ^ 30 }  // the index register of [r11 + idx + off] the current record's address set up (0 = rax)
 
-@ rjs_nst → i { ^ 31 }
+// The frame slot whose value rax still holds because the last thing emitted
+// stored rax there (a spilled web's def), and the code offset right after
+// that store; -1 when none (rj_ldf_fwd).
+@ rjs_raxs → i { ^ 31 }
+
+@ rjs_raxpos → i { ^ 32 }
+
+@ rjs_nst → i { ^ 33 }
 
 @ rj_get Rj c i k → i { ^ ( vec_at [i] . c st k ) }
 
@@ -426,7 +433,12 @@ $ `stdlib/core/vec.nu`
 
 @ rj_jmp_fwd Rj c → i { ( rj_b c 233 ) ( rj_d c 0 ) ^ - ( rj_here c ) 4 }
 
-@ rj_land Rj c i site → v { ( rj_patch32 c site ( rj_here c ) ) }
+// A forward jump lands here: control arrives from somewhere rax was not
+// necessarily stored from, so rax no longer mirrors a slot (rj_ldf_fwd).
+@ rj_land Rj c i site → v {
+    ( rj_patch32 c site ( rj_here c ) )
+    ( rj_set c ( rjs_raxs ) -1 )
+}
 
 // stub labels, after the n record labels
 @ rj_stub_oob Rj c → i { ^ ( rj_get c ( rjs_n ) ) }
@@ -2135,7 +2147,7 @@ $ `stdlib/core/vec.nu`
 @ rj_ldg Rj c i reg i loc i s i keep → v {
     ? ( rj_isg loc ) { ( rj_mov_rr c 1 reg loc ) ^ v } {}
     ? ( rj_isx loc ) { ( rj_movq_gx c reg - loc 16 ) ^ v } {}
-    ? == loc ( rjl_mem ) { ( rj_ldf c 1 reg s ) ^ v } {}
+    ? == loc ( rjl_mem ) { ( rj_ldf_fwd c reg s ) ^ v } {}
     ( rj_mov_ri c reg ( rj_kval c s ) keep )
 }
 
@@ -2154,7 +2166,31 @@ $ `stdlib/core/vec.nu`
     ? ( rj_isg loc ) { ( rj_mov_rr c 1 loc reg ) ^ v } {}
     ? ( rj_isx loc ) { ( rj_movq_xg c - loc 16 reg ) ^ v } {}
     ( rj_stf c 1 s reg )
+    ? == reg 0 { ( rj_set c ( rjs_raxs ) s ) ( rj_set c ( rjs_raxpos ) ( rj_here c ) ) } {}
 }
+
+// reg ← slot s's frame home. A spilled web lives in memory, so a value the
+// last record computed in rax and stored there used to be loaded straight
+// back by the next one: its dependency chain went through a store and a
+// store-forwarded reload, four or five cycles a link — what kept ChaCha20
+// and BLAKE2b, whose state is sixteen words all updated in place, at half
+// the reference JIT's speed. When nothing at all was emitted since that
+// store (no instruction can have touched rax, and no label lets control in
+// from elsewhere — rj_emit forgets the slot at a branch target) the value
+// is taken from rax instead. The store stays: later reads still find it.
+@ rj_ldf_fwd Rj c i reg i s → v {
+    ? ( rj_inrax c s ) {
+        ? != reg 0 { ( rj_mov_rr c 1 reg 0 ) ( rj_keeprax c ) } {}
+        ^ v
+    } {}
+    ( rj_ldf c 1 reg s )
+}
+
+// rax holds slot s's value: nothing was emitted since rj_stg stored it there
+@ rj_inrax Rj c i s → b { ^ & == s ( rj_get c ( rjs_raxs ) ) == ( rj_here c ) ( rj_get c ( rjs_raxpos ) ) }
+
+// the instruction just emitted read rax and wrote some other register
+@ rj_keeprax Rj c → v { ( rj_set c ( rjs_raxpos ) ( rj_here c ) ) }
 
 // def location ← XMM x
 @ rj_stx Rj c i loc i s i x → v {
@@ -2189,7 +2225,14 @@ $ `stdlib/core/vec.nu`
         ( rj_movq_gx c t - loc 16 ) ( rj_alu_rr c w ext reg t ) ( rj_tmp_off c t )
         ^ v
     } {}
-    ? == loc ( rjl_mem ) { ( rj_alu_rf c w ext reg s ) ^ v } {}
+    ? == loc ( rjl_mem ) {
+        ? ( rj_inrax c s ) {  // op R, rax — not the copy rax was just stored to
+            ( rj_alu_rr c w ext reg 0 )
+            ? != reg 0 { ( rj_keeprax c ) } {}
+            ^ v
+        } {}
+        ( rj_alu_rf c w ext reg s ) ^ v
+    } {}
     : ~ i kq ( rj_kval c s )
     ? == w 0 { = kq >> << kq 32 32 } {}  // a 32-bit op reads the low half, sign-extended imm32
     ? ( rj_fits32 kq ) { ( rj_alu_ri c w ext reg kq ) ^ v } {}
@@ -2267,7 +2310,14 @@ $ `stdlib/core/vec.nu`
 // imul R, operand
 @ rj_imulsrc Rj c i w i reg i loc i s → v {
     ? ( rj_isg loc ) { ( rj_imul_rr c w reg loc ) ^ v } {}
-    ? == loc ( rjl_mem ) { ( rj_imul_rf c w reg s ) ^ v } {}
+    ? == loc ( rjl_mem ) {
+        ? ( rj_inrax c s ) {
+            ( rj_imul_rr c w reg 0 )
+            ? != reg 0 { ( rj_keeprax c ) } {}
+            ^ v
+        } {}
+        ( rj_imul_rf c w reg s ) ^ v
+    } {}
     ? == loc ( rjl_imm ) {
         : ~ i kq ( rj_kval c s )
         ? == w 0 { = kq ( rj_sx32 kq ) } {}
@@ -3957,16 +4007,16 @@ $ `stdlib/core/vec.nu`
 
 @ rj_emit Rj c → v {
     : i n ( rj_get c ( rjs_n ) )
-    ( rj_set c ( rjs_fweb ) -1 ) ( rj_set c ( rjs_fsel ) 0 )
+    ( rj_set c ( rjs_fweb ) -1 ) ( rj_set c ( rjs_fsel ) 0 ) ( rj_set c ( rjs_raxs ) -1 )
     ( rj_prologue c )
     : ~ i r 0
     ~ < r n {
         : i tg ( vec_at [i] . c tgt r )
         ? == tg 2 { ( rj_align16 c ) } {}  // a loop head: its speed must not depend on where code ended
         ( vec_push [i] . c lab ( rj_here c ) )
-        ? != tg 0 { ( rj_set c ( rjs_fsel ) 0 ) ( rj_set c ( rjs_fweb ) -1 ) } {}
+        ? != tg 0 { ( rj_set c ( rjs_fsel ) 0 ) ( rj_set c ( rjs_fweb ) -1 ) ( rj_set c ( rjs_raxs ) -1 ) } {}
         : ~ i cq ( vec_at [i] . c clhead r )
-        ~ >= cq 0 { ( rj_ldf c 1 ( vec_at [i] . c clreg cq ) ( vec_at [i] . c clslot cq ) ) = cq ( vec_at [i] . c clnext cq ) }  // cached homes (rj_cache)
+        ~ >= cq 0 { ( rj_ldf_fwd c ( vec_at [i] . c clreg cq ) ( vec_at [i] . c clslot cq ) ) = cq ( vec_at [i] . c clnext cq ) }  // cached homes (rj_cache)
         ( rj_e_rec c r )
         = r + r 1
     }
