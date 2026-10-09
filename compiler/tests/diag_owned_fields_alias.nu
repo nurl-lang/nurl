@@ -1,19 +1,20 @@
-// diag_owned_fields_alias.nu — a struct given a fresh raw string field,
-// copied to a binding that outlives it. `tmp`'s field was freed when
-// `tmp`'s block ended while `out` still pointed at it (this program read
-// freed memory before the rules). A raw string field is a view in safe
-// code (docs/MEMORY.md §2.13), so the fresh string is rejected where it is
-// stored. The fix: an owning field type (String), so the value moves.
+// diag_owned_fields_alias.nu — a struct whose slice field it owns (the
+// literal gave it a fresh slice), copied to a binding that outlives it.
+// `tmp`'s field is freed when `tmp`'s block ends; `out` would still point
+// at it (this program read freed memory before the rule). The fix: an
+// owning field type (a Vec), so the value moves, or build the struct where
+// it is kept. (A raw string field cannot own a fresh string in safe code
+// at all — docs/MEMORY.md §2.13, diag_raw_string_in_value.)
 $ `stdlib/core/string.nu`
 
-: Resp { s body i code }
+: Bag { [i items i tag }
 
 @ main → i {
-    : ~ Resp out @ Resp { `none` 500 }
+    : ~ Bag out @ Bag { [i | 0] 500 }
     ? > ( nurl_str_len `ab` ) 1 {
-        : Resp tmp @ Resp { ( nurl_str_cat `escaped-` `field` ) 201 }
+        : Bag tmp @ Bag { [i | 1 2 3] 201 }
         = out tmp
     } {}
-    ( nurl_print . out body ) ( nurl_print `\n` )
+    ( nurl_print_int . out tag ) ( nurl_print `\n` )
     ^ 0
 }

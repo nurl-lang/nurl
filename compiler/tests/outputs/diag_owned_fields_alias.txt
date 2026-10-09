@@ -1,7 +1,7 @@
 COMPILE FAIL
 ERRORS
-compiler/tests/diag_owned_fields_alias.nu:14:29: error: a fresh string stored here is owned by nothing: a raw string ('s') held by a struct, an option, an enum or a slice is a view of a string something else owns (docs/MEMORY.md §2.13), so nothing would ever release it. Hold a String instead (string_from, string_adopt), or bind the string first (': s x ( … )') and store the binding — the struct then holds a view of it.
-        : Resp tmp @ Resp { ( nurl_str_cat `escaped-` `field` ) 201 }
-                            ^
+compiler/tests/diag_owned_fields_alias.nu:17:5: error: 'tmp' owns raw string or slice fields that are freed when 'tmp' goes out of scope; 'out' would be a second name for them that can outlive them (a use after free). Give the struct owning field types (String, Vec) so the value can move, or build the struct where it is kept instead of copying it from 'tmp' (code that manages those fields by hand belongs in an 'unsafe' function).
+    } {}
+    ^
 error: aborting due to 1 previous error
 note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

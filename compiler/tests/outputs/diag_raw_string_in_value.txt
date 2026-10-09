@@ -1,0 +1,19 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_raw_string_in_value.nu:19:21: error: a fresh string stored here is owned by nothing: a raw string ('s') held by a struct, an option, an enum or a slice is a view of a string something else owns (docs/MEMORY.md §2.13), so nothing would ever release it. Hold a String instead (string_from, string_adopt), or bind the string first (': s x ( … )') and store the binding — the struct then holds a view of it.
+    : Rec r @ Rec { ( nurl_str_cat `a` `b` ) 1 }
+                    ^
+compiler/tests/diag_raw_string_in_value.nu:24:21: error: a fresh string stored here is owned by nothing: a raw string ('s') held by a struct, an option, an enum or a slice is a view of a string something else owns (docs/MEMORY.md §2.13), so nothing would ever release it. Hold a String instead (string_from, string_adopt), or bind the string first (': s x ( … )') and store the binding — the struct then holds a view of it.
+    : ?s o @ ?s { T ( nurl_str_cat `a` `b` ) }
+                    ^
+compiler/tests/diag_raw_string_in_value.nu:29:18: error: a fresh string stored here is owned by nothing: a raw string ('s') held by a struct, an option, an enum or a slice is a view of a string something else owns (docs/MEMORY.md §2.13), so nothing would ever release it. Hold a String instead (string_from, string_adopt), or bind the string first (': s x ( … )') and store the binding — the struct then holds a view of it.
+    : [s xs [s | ( nurl_str_cat `a` `b` ) `c`]
+                 ^
+compiler/tests/diag_raw_string_in_value.nu:35:16: error: a fresh string stored here is owned by nothing: a raw string ('s') held by a struct, an option, an enum or a slice is a view of a string something else owns (docs/MEMORY.md §2.13), so nothing would ever release it. Hold a String instead (string_from, string_adopt), or bind the string first (': s x ( … )') and store the binding — the struct then holds a view of it.
+    = . r name ( nurl_str_cat `a` `b` )
+               ^
+compiler/tests/diag_raw_string_in_value.nu:41:15: error: 'x' owns its string, and this struct is handed back holding it in a raw string field — a view, which owns nothing (docs/MEMORY.md §2.13), so the string would go with 'x' on the way out. Give the struct a String field (string_from) to hand an owned string back.
+    ^ @ Rec { x 1 }
+              ^
+error: aborting due to 5 previous errors
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.
