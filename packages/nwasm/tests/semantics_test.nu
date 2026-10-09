@@ -7,7 +7,8 @@
 // passive segments + memory.init/data.drop, memory.copy/fill, memory.grow
 // limits, division by constants, bit tests and shifts, reinterprets,
 // null reference locals, narrowed i64 arithmetic, unsigned compares, i32
-// call arguments, and the start section. Run from the package root:
+// call arguments, the start section, double-eqz branches and pointer
+// parameters. Run from the package root:
 //   NURL_STDLIB=<repo> ../../nurl.sh tests/semantics_test.nu /tmp/st && /tmp/st
 
 $ `stdlib/core/string.nu`
@@ -104,6 +105,15 @@ $ `src/interp.nu`
 // dies into the result's register, and reference-typed locals that
 // start out null — on a fresh frame and on a recycled one.
 @ wasm_rint → s { ^ `0061736d010000000109026000017e6000017f030b0a0000010001010101010104040170000207450904726e656700000472696e6600010664666c6f6f7200020670666c6f6f72000305666269747300040365787400050366756e0006056d69786564000705616761696e00090907010041000b01080a9e010a0900430000c0bfbcac0b0e0044be74af13e4f1b2efb6bcac0b0e0044be74af13e4f1b2ef9cb6bc0b0a0043000020c08ebbbd0b100041808080fe7bbe430000803f92bc0b0701016f2000d10b070101702000d10b1a05017e016f017c0170017f2001d12003d16a2000a720046a6a0b0d0101702000d14100250021000b1f01027f0340200110086a2101200041016a2100200041e400490d000b20010b001e046e616d650104010801670209010902000169010173030601090100014c` }
+
+// `i64.eqz; i32.eqz` is `x != 0` — the predecoder turns the inner eqz into
+// a compare against the pool's zero (`__fuse_eqz2`): as a loop branch on a
+// counter whose low half is zero, as br_if, select, if and a plain value,
+// and with the inner 0/1 tee'd into a local that must still be written.
+// Then pointer parameters tier 8 zero-extends on entry (no reader of their
+// high half) beside one whose high half a sign-extension reads.
+// exports cnt64 br64 br32 tee sel val ifz ptr ptrx sum
+@ wasm_eqzbr → s { ^ `0061736d01000000011d0560017e017f60017f017f60037e7f7f017f60027f7f017f60017f017e030b0a00000100020000030403050301000107420a05636e743634000004627236340001046272333200020374656500030373656c00040376616c00050369667a0006037074720007047074727800080373756d00090aca010a1f01017f0340200141016a210120004280808080107d220050450d000b20010b10000240200050450d0041000f0b41010b10000240200045450d0041000f0b41010b1a01017f02402000502201450d002001410a6a0f0b200141146a0b0b0020012002200050451b0b0d002000504520005041026c6a0b0e0020005045047f41070541090b0b130020002d000120012d00026a20002d00036a0b0b0020003100012000ac7c0b2201027f03402002200020036a2d00006a2102200341016a22032001490d000b20020b0b16010041000b100102030405060708090a0b0c0d0e0f10003f046e616d6501380a0005636e7436340104627236340204627233320303746565040373656c050376616c060369667a0703707472080470747278090373756d` }
 
 // Run `export` with the given i64-cell args; returns the top of the value
 // stack, or `traps` (out-param via sentinel −77777) when the module traps.
@@ -586,6 +596,27 @@ $ `src/interp.nu`
     ( ck `fold at loop t0:` ( ev1 ( wasm_addrfold ) `loopfuse` 0 ) 10 )
     ( ck `fold + memarg:  ` ( ev1 ( wasm_addrfold ) `off` 0 ) 4 )
     ( ck `fold oob traps: ` ( trap1 ( wasm_addrfold ) `oob` 1 ) 1 )
+
+    // ── a double eqz is a compare against zero; pointer parameters ──
+    : s eb ( wasm_eqzbr )
+    ( ck `cnt64 3<<32:    ` ( ev1 eb `cnt64` 12884901888 ) 3 )
+    ( ck `cnt64 1<<32:    ` ( ev1 eb `cnt64` 4294967296 ) 1 )
+    ( ck `br64 0:         ` ( ev1 eb `br64` 0 ) 0 )
+    ( ck `br64 1<<32:     ` ( ev1 eb `br64` 4294967296 ) 1 )
+    ( ck `br64 -1:        ` ( ev1 eb `br64` -1 ) 1 )
+    ( ck `br32 0:         ` ( ev1 eb `br32` 0 ) 0 )
+    ( ck `br32 min:       ` ( ev1 eb `br32` -2147483648 ) 1 )
+    ( ck `tee 0:          ` ( ev1 eb `tee` 0 ) 11 )
+    ( ck `tee 1<<32:      ` ( ev1 eb `tee` 4294967296 ) 20 )
+    ( ck `sel 0:          ` ( ev3 eb `sel` 0 3 4 ) 4 )
+    ( ck `sel 1<<32:      ` ( ev3 eb `sel` 4294967296 3 4 ) 3 )
+    ( ck `val 0:          ` ( ev1 eb `val` 0 ) 2 )
+    ( ck `val 2<<32:      ` ( ev1 eb `val` 8589934592 ) 1 )
+    ( ck `ifz 0:          ` ( ev1 eb `ifz` 0 ) 9 )
+    ( ck `ifz i64 min:    ` ( ev1 eb `ifz` -9223372036854775808 ) 7 )
+    ( ck `ptr params:     ` ( ev2 eb `ptr` 4 6 ) 23 )
+    ( ck `ptr + sext:     ` ( ev1 eb `ptrx` 5 ) 12 )
+    ( ck `ptr in a loop:  ` ( ev2 eb `sum` 2 9 ) 63 )
 
     ? > g_fail 0 { ( nurl_print `FAILURES: ` ) ( nurl_println_int g_fail ) ^ 1 } {}
     ( nurl_print `all semantics tests passed\n` )

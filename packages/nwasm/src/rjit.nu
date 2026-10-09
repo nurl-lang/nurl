@@ -112,8 +112,10 @@ $ `stdlib/core/vec.nu`
     ( Vec i ) clnext  // … the next one at the same record …
     ( Vec i ) clreg  // … the register it fills …
     ( Vec i ) clslot  // … from this slot's frame home
-    ( Vec i ) wlcar  // per web: 1 when a record inside a loop writes it
+    ( Vec i ) wlcar  // per web: 1 when a record inside a loop writes it (a copy only on terms — rj_lcar_moves)
     ( Vec i ) rpi32  // per record: a call's callee parameters that are i32, bit k for parameter k (rj_set_pi32)
+    ( Vec i ) lhead  // per record: the head of the innermost loop holding it (-1 none) …
+    ( Vec i ) lend  // … and that loop's furthest back edge
 }
 
 // scalar state indices
@@ -1154,7 +1156,7 @@ $ `stdlib/core/vec.nu`
     : i n ( rj_get c ( rjs_n ) )
     : ( Vec i ) far ( vec_new [i] )
     : ~ i r 0
-    ~ < r n { ( vec_push [i] . c depth 1 ) ( vec_push [i] far -1 ) = r + r 1 }
+    ~ < r n { ( vec_push [i] . c depth 1 ) ( vec_push [i] far -1 ) ( vec_push [i] . c lhead -1 ) ( vec_push [i] . c lend -1 ) = r + r 1 }
     = r 0
     ~ < r n {
         : i t ( rj_target c r )
@@ -1169,6 +1171,7 @@ $ `stdlib/core/vec.nu`
             ~ <= k e {
                 : i dw ( vec_at [i] . c depth k )
                 ? < dw 32768 { ( vec_put [i] . c depth k * dw 8 ) } {}
+                ( vec_put [i] . c lhead k t ) ( vec_put [i] . c lend k e )  // heads ascend: the innermost loop writes last
                 = k + k 1
             }
         } {}
@@ -1305,12 +1308,133 @@ $ `stdlib/core/vec.nu`
     }
 }
 
+// A loop's MOVs move values from slot to slot, and whether a copy makes its
+// destination loop-carried in the sense rj_dens's ×8 means — a chain whose
+// next link waits on this write — depends on what it copies. A copy of a
+// value this iteration computed is that computation's result and counts as
+// it would. A copy of the previous iteration's value of another web (SHA-2's
+// h = g, g = f, f = e, through as many copies as the compiler routed them),
+// or of a value from before the loop, or of a constant, is a delay line:
+// spilled, its store has the rest of the iteration before the read that
+// waits on it. Such a destination earns the ×8 only when one of its reads
+// sits within a few records of the write it reads (rj_gap) — SHA-2's a,
+// copied at the top of the round and read right behind, is one. Without
+// this, the eight rotating words ranked alike, and the scan spilled the two
+// the round computes — a and e, each a store and a reload on the round's
+// own critical path.
+@ rj_lcar_moves Rj c ( Vec i ) movr → v {
+    : i nm ( vec_len [i] movr )
+    ? == nm 0 { ^ v } {}
+    : i n ( rj_get c ( rjs_n ) )
+    : i nw ( rj_get c ( rjs_nw ) )
+    // per web: its defs and its reads, ascending (singly linked, built back to front)
+    : ( Vec i ) dh ( vec_new [i] )
+    : ( Vec i ) uh ( vec_new [i] )
+    : ( Vec i ) lr ( vec_new [i] )  // node → record
+    : ( Vec i ) ln ( vec_new [i] )  // node → next node
+    : ~ i w 0
+    ~ < w nw { ( vec_push [i] dh -1 ) ( vec_push [i] uh -1 ) = w + w 1 }
+    : ~ i r - n 1
+    ~ >= r 0 {
+        : ~ i o ( vec_at [i] . c doff r )
+        : i de ( vec_at [i] . c doff + r 1 )
+        ~ < o de {
+            : i wv ( vec_at [i] . c dweb o )
+            ? >= wv 0 { ( vec_push [i] lr r ) ( vec_push [i] ln ( vec_at [i] dh wv ) ) ( vec_put [i] dh wv - ( vec_len [i] lr ) 1 ) } {}
+            = o + o 1
+        }
+        = o ( vec_at [i] . c uoff r )
+        : i ue ( vec_at [i] . c uoff + r 1 )
+        ~ < o ue {
+            : i wv ( vec_at [i] . c uweb o )
+            ? >= wv 0 { ( vec_push [i] lr r ) ( vec_push [i] ln ( vec_at [i] uh wv ) ) ( vec_put [i] uh wv - ( vec_len [i] lr ) 1 ) } {}
+            = o + o 1
+        }
+        = r - r 1
+    }
+    : ~ i k 0
+    ~ < k nm {
+        : i m ( vec_at [i] movr k )
+        : i wv ( vec_at [i] . c dweb ( vec_at [i] . c doff m ) )
+        ? & >= wv 0 == 0 ( vec_at [i] . c wlcar wv ) {
+            : i h ( vec_at [i] . c lhead m )
+            : i e ( vec_at [i] . c lend m )
+            ? | ! ( rj_mov_delay c dh lr ln m h 0 ) <= ( rj_gap dh uh lr ln wv h e ) 4 {
+                ( vec_put [i] . c wlcar wv 1 )
+            } {}
+        } {}
+        = k + k 1
+    }
+}
+
+// The last def of web w at a record in [lo, hi): -1 none, -2 when the
+// list ran past 256 nodes first (the caller then assumes the worst).
+@ rj_lastdef ( Vec i ) dh ( Vec i ) lr ( Vec i ) ln i w i lo i hi → i {
+    : ~ i q ( vec_at [i] dh w )
+    : ~ i best -1
+    : ~ i k 0
+    ~ & >= q 0 < k 256 {
+        : i r ( vec_at [i] lr q )
+        ? >= r hi { ^ best } {}
+        ? >= r lo { = best r } {}
+        = q ( vec_at [i] ln q )
+        = k + k 1
+    }
+    ? >= q 0 { ^ -2 } {}
+    ^ best
+}
+
+// Does MOV record m, in the loop headed at h, copy a value no record of this
+// iteration computed — through any chain of up to six copies?
+@ rj_mov_delay Rj c ( Vec i ) dh ( Vec i ) lr ( Vec i ) ln i m i h i hops → b {
+    ? > hops 6 { ^ F } {}
+    : i o ( vec_at [i] . c uoff m )
+    ? >= o ( vec_at [i] . c uoff + m 1 ) { ^ T } {}
+    : i sw ( vec_at [i] . c uweb o )
+    ? < sw 0 { ^ T } {}  // a constant
+    : i d ( rj_lastdef dh lr ln sw h m )
+    ? == d -1 { ^ T } {}  // the previous iteration's value, or the one the loop was entered with
+    ? == d -2 { ^ F } {}
+    ? == ( rj_rw c d 0 ) 47 { ^ ( rj_mov_delay c dh lr ln d h + hops 1 ) } {}
+    ^ F
+}
+
+// The fewest records from a def of web w to a read of it inside the loop
+// [h, e]; a read ahead of the iteration's first def reads the previous
+// iteration's last one, around the back edge. 0 when there are too many
+// to look at, a large number when the loop never reads w.
+@ rj_gap ( Vec i ) dh ( Vec i ) uh ( Vec i ) lr ( Vec i ) ln i w i h i e → i {
+    : ~ i best 1000000
+    : ~ i q ( vec_at [i] uh w )
+    : ~ i k 0
+    ~ >= q 0 {
+        ? >= k 256 { ^ 0 } {}
+        : i u ( vec_at [i] lr q )
+        ? > u e { ^ best } {}
+        ? >= u h {
+            : i d ( rj_lastdef dh lr ln w h u )
+            ? == d -2 { ^ 0 } {}
+            : ~ i g - u d
+            ? < d 0 {
+                : i d2 ( rj_lastdef dh lr ln w u + e 1 )
+                ? == d2 -2 { ^ 0 } {}
+                = g ? >= d2 0 + + - e d2 - u h 1 1000000
+            } {}
+            ? < g best { = best g } {}
+        } {}
+        = q ( vec_at [i] ln q )
+        = k + k 1
+    }
+    ^ best
+}
+
 // must record r's i32 def number k come out sign-extended?
 @ rj_dcanon Rj c i od → b { ^ != 0 ( vec_at [i] . c wsens ( vec_at [i] . c dweb od ) ) }
 
 @ rj_facts Rj c → v {
     : i n ( rj_get c ( rjs_n ) )
     : i nl ( rj_get c ( rjs_nl ) )
+    : ( Vec i ) movr ( vec_new [i] )  // the MOVs inside loops (rj_lcar_moves)
     : ~ i r 0
     ~ < r n {
         : i op ( rj_rw c r 0 )
@@ -1334,7 +1458,7 @@ $ `stdlib/core/vec.nu`
             : i wv ( vec_at [i] . c dweb o )
             ( rj_ext c wv + * 2 r 1 )
             ( rj_addwt c wv dw )
-            ? > dw 1 { ( vec_put [i] . c wlcar wv 1 ) } {}
+            ? > dw 1 { ? == op 47 { ( vec_push [i] movr r ) } { ( vec_put [i] . c wlcar wv 1 ) } } {}
             ( rj_vote c wv ( rj_dcls op ) dw )
             = o + o 1
         }
@@ -1347,6 +1471,7 @@ $ `stdlib/core/vec.nu`
         } {}
         = r + r 1
     }
+    ( rj_lcar_moves c movr )
     // edge moves, at their branch record's position
     : i nb ( rj_get c ( rjs_nb ) )
     : ~ i k ( rj_get c ( rjs_nreal ) )
@@ -1712,10 +1837,19 @@ $ `stdlib/core/vec.nu`
 // is the value a constant-pool slot holds zero-extended as mov_ri materialises it?
 @ rj_kzx Rj c i s → b { : i kq ( rj_kval c s ) ^ & >= kq 0 <= kq 4294967295 }
 
+// A parameter's GPR web that no consumer reads bits 32..63 of: the entry
+// zero-extends it (rj_prologue, rj_entry1), so the web counts as clear —
+// a pointer parameter then indexes memory as it stands at every access,
+// instead of each access zero-extending it into rax first.
+@ rj_pzx Rj c i wv → b {
+    ? >= ( vec_at [i] . c wslot wv ) ( rj_get c ( rjs_np ) ) { ^ F } {}
+    ^ & == 0 ( vec_at [i] . c wcls wv ) == 0 ( vec_at [i] . c wsens wv )
+}
+
 // wzx: every def of the web leaves bits 32..63 clear. Parameters arrive
-// canonical (sign-extended), a reference local starts at -1, anything not
-// listed in rj_defzx is unknown; copies (MOV, SEL, edge moves) are clear
-// exactly when their sources are, settled by a fixpoint.
+// canonical (sign-extended) unless rj_pzx, a reference local starts at -1,
+// anything not listed in rj_defzx is unknown; copies (MOV, SEL, edge moves)
+// are clear exactly when their sources are, settled by a fixpoint.
 @ rj_zx Rj c → v {
     : i n ( rj_get c ( rjs_n ) )
     : i nw ( rj_get c ( rjs_nw ) )
@@ -1728,7 +1862,7 @@ $ `stdlib/core/vec.nu`
         : i wv ( vec_at [i] . c entw q )
         : i s ( vec_at [i] . c wslot wv )
         : b isref & < s ( vec_len [i] . c ltype ) == 4 ( vec_at [i] . c ltype s )
-        ? | < s np isref { ( vec_put [i] . c wzx wv 0 ) } {}
+        ? | & < s np ! ( rj_pzx c wv ) isref { ( vec_put [i] . c wzx wv 0 ) } {}
         = q + q 1
     }
     : ( Vec i ) cd ( vec_new [i] )  // copy edges: dst web ← src web
@@ -3704,14 +3838,17 @@ $ `stdlib/core/vec.nu`
     : i l ( vec_at [i] . c wloc wv )
     : i np ( rj_get c ( rjs_np ) )
     ? < s np {
+        : i zw ? ( rj_pzx c wv ) 0 1  // 0: a 32-bit move, which zero-extends
         ? == np 1 {
-            ? ( rj_isg l ) { ( rj_mov_rr c 1 l 2 ) } {
-                ? ( rj_isx l ) { ( rj_movq_xg c - l 16 2 ) } { ( rj_stf c 1 s 2 ) } }
+            ? ( rj_isg l ) { ? | != l 2 == zw 0 { ( rj_rr c 0 zw 0 137 2 l 0 ) } {} } {  // mov r,rdx
+                ? ( rj_isx l ) { ( rj_movq_xg c - l 16 2 ) } {
+                    ? == zw 0 { ( rj_mov32 c 2 2 ) } {}
+                    ( rj_stf c 1 s 2 ) } }
         } {
             : i disp * s 8
-            ? ( rj_isg l ) { ( rj_rm c 0 1 0 139 l 6 -1 0 disp 0 ) } {  // mov r,[rsi+8s]
+            ? ( rj_isg l ) { ( rj_rm c 0 zw 0 139 l 6 -1 0 disp 0 ) } {  // mov r,[rsi+8s]
                 ? ( rj_isx l ) { ( rj_rm c 242 0 1 16 - l 16 6 -1 0 disp 0 ) } {  // movsd x,[rsi+8s]
-                    ( rj_rm c 0 1 0 139 0 6 -1 0 disp 0 ) ( rj_stf c 1 s 0 ) } }
+                    ( rj_rm c 0 zw 0 139 0 6 -1 0 disp 0 ) ( rj_stf c 1 s 0 ) } }
         }
     } {
         // a declared local: zero, or null (-1) for a reference
@@ -3790,6 +3927,7 @@ $ `stdlib/core/vec.nu`
             : i wv ( vec_at [i] . c entw q0 )
             : i sp ( vec_at [i] . c wslot wv )
             ? & > ( vec_at [i] . c wuse wv ) 0 < sp np {
+                ? ( rj_pzx c wv ) { ( rj_mov32 c ( rj_areg sp ) ( rj_areg sp ) ) } {}  // past the slab check: the interpreter never sees it
                 ( vec_push [i] dl ( vec_at [i] . c wloc wv ) ) ( vec_push [i] ds sp )
                 ( vec_push [i] sl ( rj_areg sp ) ) ( vec_push [i] ss -1 )
             } {}
@@ -4072,7 +4210,7 @@ $ `stdlib/core/vec.nu`
         ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] )
         ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] )
         ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] )
-        ( vec_new [i] ) ( vec_new [i] )
+        ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] )
     }
 }
 

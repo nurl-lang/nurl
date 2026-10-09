@@ -1950,6 +1950,28 @@ unsafe @ __fuse_branch * PFunc pf i lastp i labfloor i cond i tgt i byte → i {
     ^ -1
 }
 
+// `i32.eqz (eqz x)` is `x != 0` — what LLVM writes for a 64-bit loop
+// counter's `while (n != 0)`, `i64.eqz; i32.eqz; br_if`. Left alone it is
+// an eqz the JIT has to materialise as a 0/1 (setcc) for the IFZ behind it
+// to test again. When the inner eqz is the record just emitted and writes
+// exactly the stack temp the outer one reads, it is rewritten in place into
+// `ne x, 0` against the constant pool's zero (slot nlocals, interned
+// first), and the outer eqz emits nothing: the compare writes the same slot
+// with the same value, and `__fuse_branch` folds it into the branch. The
+// temp is popped by the outer eqz, so nothing else reads the inner one's
+// 0/1; no label can sit between the two (lastp is -1 across merge points).
+unsafe @ __fuse_eqz2 * PFunc pf i lastp i sb i src → b {
+    ? < lastp 0 { ^ F } {}
+    ? != ( vec_len [i] . pf code ) * + lastp 1 6 { ^ F } {}
+    : i base * lastp 6
+    : i lop ?? ( vec_get [i] . pf code base ) { T x → x F → -1 }
+    ? ! | == lop 43 == lop 44 { ^ F } {}
+    ? | < src sb != ?? ( vec_get [i] . pf code + base 1 ) { T x → x F → -1 } src { ^ F } {}
+    ( vec_set [i] . pf code base ? == lop 43 57 67 )  // i32.ne / i64.ne
+    ( vec_set [i] . pf code + base 3 . pf nlocals )
+    ^ T
+}
+
 // Emit a branch to label depth `k` (top of `open` = depth 0). `cond` is the
 // condition slot for br_if (-1 = unconditional). `h` is the height AFTER any
 // condition pop. Fills patch sites for forward targets. Returns nothing; the
@@ -2656,7 +2678,11 @@ unsafe @ __predecode * ModuleImpl m * WFunc f → s {
                                                                                                                         ? == op 64 { ( wc_u8 c ) ? != 0 live { ( __pf_emit pf ( __R_MEMGROW ) + SB - h 1 ( __vg vm SB - h 1 ) 0 0 byte ) ( __vset vm - h 1 -1 ) } {} } {
                                                                                                                             ? | == op 69 | == op 80 | & >= op 103 <= op 105 | & >= op 121 <= op 123 & >= op 192 <= op 196 {
                                                                                                                                 // integer unary: in place at the top slot
-                                                                                                                                ? != 0 live { ( __pf_emit pf ( __iop op ) + SB - h 1 ( __vg vm SB - h 1 ) 0 0 byte ) ( __vset vm - h 1 -1 ) } {}
+                                                                                                                                ? != 0 live {
+                                                                                                                                    : i usrc ( __vg vm SB - h 1 )
+                                                                                                                                    ? & == op 69 ( __fuse_eqz2 pf lastp SB usrc ) {} { ( __pf_emit pf ( __iop op ) + SB - h 1 usrc 0 0 byte ) }
+                                                                                                                                    ( __vset vm - h 1 -1 )
+                                                                                                                                } {}
                                                                                                                             } {
                                                                                                                                 ? | & >= op 70 <= op 79 | & >= op 81 <= op 90 | & >= op 106 <= op 120 & >= op 124 <= op 138 {
                                                                                                                                     // integer binary: dst = h-2, operands h-2 / h-1

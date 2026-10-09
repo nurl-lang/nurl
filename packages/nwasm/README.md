@@ -319,7 +319,9 @@ no linear memory at all. A function it cannot lower falls to tier 7.
   linear scan that spills the least densely used one: 12 GPRs (r9 among them
   unless a global is read or written inside a loop), 14 xmm registers, the
   slot's frame home when a web must live in memory. A value a loop writes
-  ranks eight times denser than one it only reads, and after allocation a
+  ranks eight times denser than one it only reads — unless the loop only
+  copies another web's previous value into it (a delay line, SHA-2's
+  h = g) and reads it far from the copy — and after allocation a
   run of a spilled web's reads with a register free across it loads the
   home once and reads the register. A spilled value is computed in rax and
   stored to its home; a read of that home emitted straight after the store
@@ -342,7 +344,10 @@ no linear memory at all. A function it cannot lower falls to tier 7.
   exchanged, so cmov and setcc read the carry flag alone); an i32 is
   sign-extended only when a consumer reads its high half, and i64 arithmetic
   whose high half no consumer reads runs as 32-bit instructions; an address
-  whose high half is provably clear indexes memory as it stands; wide
+  whose high half is provably clear indexes memory as it stands, and a
+  parameter no consumer reads the high half of is zero-extended on entry so
+  that a pointer parameter is one; a 64-bit counter's `i64.eqz; i32.eqz;
+  br_if` is a single compare-and-branch; wide
   constants come from a RIP-relative literal pool. On an x86-64-v3 CPU,
   shifts use BMI2, the bit counts lzcnt/tzcnt and scalar floats the AVX
   three-operand forms (`NURL_NWASM_BMI2=0` keeps baseline x86-64).
