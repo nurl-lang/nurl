@@ -276,13 +276,229 @@ $ `stdlib/core/vec.nu`
     ( nurl_v128_st # s + # i dst 112 ( nurl_v128_add32 d1 s3b ) )
 }
 
+& `c` @ nurl_simd128_native → i
+
+// Four blocks at once, one block per lane — the layout the fast ChaCha20s
+// all use. Vector x_w holds state word w of blocks ctr..ctr+3, so a
+// quarter-round is eight plain vector operations on four whole vectors
+// and the diagonal round needs no lane rotation at all: the kernels above
+// spend a third of their work turning diagonals into columns and back, and
+// stall on one block's chain where this one has four in flight. The words
+// come back to block order through 4×4 transposes (__cc_xor4) on the way
+// out.
+inline @ __cc_qr4 inout v128 a inout v128 b inout v128 c inout v128 d → v {
+    = a ( nurl_v128_add32 a b )
+    = d ( nurl_v128_rotl32 ( nurl_v128_xor d a ) 16 )
+    = c ( nurl_v128_add32 c d )
+    = b ( nurl_v128_rotl32 ( nurl_v128_xor b c ) 12 )
+    = a ( nurl_v128_add32 a b )
+    = d ( nurl_v128_rotl32 ( nurl_v128_xor d a ) 8 )
+    = c ( nurl_v128_add32 c d )
+    = b ( nurl_v128_rotl32 ( nurl_v128_xor b c ) 7 )
+}
+
+// Words w..w+3 of the four blocks (x0..x3: word w+k of block j in lane j),
+// transposed so each block's four words are one vector, XORed with the
+// input at block j's offset 64·j + 4·w and stored to the output.
+inline @ __cc_xor4 v128 x0 v128 x1 v128 x2 v128 x3 * u src * u dst i w → v {
+    : v128 t0 ( nurl_v128_unpacklo32 x0 x1 )
+    : v128 t1 ( nurl_v128_unpacklo32 x2 x3 )
+    : v128 t2 ( nurl_v128_unpackhi32 x0 x1 )
+    : v128 t3 ( nurl_v128_unpackhi32 x2 x3 )
+    : i o * w 4
+    ( nurl_v128_st # s + # i dst o ( nurl_v128_xor ( nurl_v128_ld # s + # i src o ) ( nurl_v128_unpacklo64 t0 t1 ) ) )
+    ( nurl_v128_st # s + # i dst + o 64 ( nurl_v128_xor ( nurl_v128_ld # s + # i src + o 64 ) ( nurl_v128_unpackhi64 t0 t1 ) ) )
+    ( nurl_v128_st # s + # i dst + o 128 ( nurl_v128_xor ( nurl_v128_ld # s + # i src + o 128 ) ( nurl_v128_unpacklo64 t2 t3 ) ) )
+    ( nurl_v128_st # s + # i dst + o 192 ( nurl_v128_xor ( nurl_v128_ld # s + # i src + o 192 ) ( nurl_v128_unpackhi64 t2 t3 ) ) )
+}
+
+// dst[0..256) = src[0..256) XOR the keystream of blocks ctr..ctr+3, the key
+// and nonce given as their little-endian words.
+inline @ __chacha20_xor4_v128 i k0 i k1 i k2 i k3 i k4 i k5 i k6 i k7 i ctr i n0 i n1 i n2 * u src * u dst → v {
+    : v128 ct ( nurl_v128_set32 ctr + ctr 1 + ctr 2 + ctr 3 )
+    : ~ v128 x0 ( nurl_v128_bcast32 1634760805 )
+    : ~ v128 x1 ( nurl_v128_bcast32 857760878 )
+    : ~ v128 x2 ( nurl_v128_bcast32 2036477234 )
+    : ~ v128 x3 ( nurl_v128_bcast32 1797285236 )
+    : ~ v128 x4 ( nurl_v128_bcast32 k0 )
+    : ~ v128 x5 ( nurl_v128_bcast32 k1 )
+    : ~ v128 x6 ( nurl_v128_bcast32 k2 )
+    : ~ v128 x7 ( nurl_v128_bcast32 k3 )
+    : ~ v128 x8 ( nurl_v128_bcast32 k4 )
+    : ~ v128 x9 ( nurl_v128_bcast32 k5 )
+    : ~ v128 x10 ( nurl_v128_bcast32 k6 )
+    : ~ v128 x11 ( nurl_v128_bcast32 k7 )
+    : ~ v128 x12 ct
+    : ~ v128 x13 ( nurl_v128_bcast32 n0 )
+    : ~ v128 x14 ( nurl_v128_bcast32 n1 )
+    : ~ v128 x15 ( nurl_v128_bcast32 n2 )
+    : ~ i r 0
+    ~ < r 10 {
+        ( __cc_qr4 x0 x4 x8 x12 )
+        ( __cc_qr4 x1 x5 x9 x13 )
+        ( __cc_qr4 x2 x6 x10 x14 )
+        ( __cc_qr4 x3 x7 x11 x15 )
+        ( __cc_qr4 x0 x5 x10 x15 )
+        ( __cc_qr4 x1 x6 x11 x12 )
+        ( __cc_qr4 x2 x7 x8 x13 )
+        ( __cc_qr4 x3 x4 x9 x14 )
+        = r + r 1
+    }
+    ( __cc_xor4 ( nurl_v128_add32 x0 ( nurl_v128_bcast32 1634760805 ) ) ( nurl_v128_add32 x1 ( nurl_v128_bcast32 857760878 ) ) ( nurl_v128_add32 x2 ( nurl_v128_bcast32 2036477234 ) ) ( nurl_v128_add32 x3 ( nurl_v128_bcast32 1797285236 ) ) src dst 0 )
+    ( __cc_xor4 ( nurl_v128_add32 x4 ( nurl_v128_bcast32 k0 ) ) ( nurl_v128_add32 x5 ( nurl_v128_bcast32 k1 ) ) ( nurl_v128_add32 x6 ( nurl_v128_bcast32 k2 ) ) ( nurl_v128_add32 x7 ( nurl_v128_bcast32 k3 ) ) src dst 4 )
+    ( __cc_xor4 ( nurl_v128_add32 x8 ( nurl_v128_bcast32 k4 ) ) ( nurl_v128_add32 x9 ( nurl_v128_bcast32 k5 ) ) ( nurl_v128_add32 x10 ( nurl_v128_bcast32 k6 ) ) ( nurl_v128_add32 x11 ( nurl_v128_bcast32 k7 ) ) src dst 8 )
+    ( __cc_xor4 ( nurl_v128_add32 x12 ct ) ( nurl_v128_add32 x13 ( nurl_v128_bcast32 n0 ) ) ( nurl_v128_add32 x14 ( nurl_v128_bcast32 n1 ) ) ( nurl_v128_add32 x15 ( nurl_v128_bcast32 n2 ) ) src dst 12 )
+}
+
+// Eight blocks at once over v256 — the same one-block-per-lane layout as
+// __chacha20_xor4_v128, twice as wide. Worth it only with 256-bit
+// registers (on a CPU without AVX2 every v256 operation is two SSE2 ones
+// and sixteen live state vectors no longer fit), so chacha20_xor_range
+// runs it only where nurl_cpu_x86_v3 says the AVX2 clone is the one
+// running.
+inline @ __cc_qr8 inout v256 a inout v256 b inout v256 c inout v256 d → v {
+    = a ( nurl_v256_add32 a b )
+    = d ( nurl_v256_rotl32 ( nurl_v256_xor d a ) 16 )
+    = c ( nurl_v256_add32 c d )
+    = b ( nurl_v256_rotl32 ( nurl_v256_xor b c ) 12 )
+    = a ( nurl_v256_add32 a b )
+    = d ( nurl_v256_rotl32 ( nurl_v256_xor d a ) 8 )
+    = c ( nurl_v256_add32 c d )
+    = b ( nurl_v256_rotl32 ( nurl_v256_xor b c ) 7 )
+}
+
+// x0..x3 hold words w..w+3 of the eight blocks (block j in lane j); the
+// in-half 4x4 transpose leaves block j's four words in half j/4 of output
+// j mod 4.
+inline @ __cc_tr8 inout v256 x0 inout v256 x1 inout v256 x2 inout v256 x3 → v {
+    : v256 t0 ( nurl_v256_unpacklo32 x0 x1 )
+    : v256 t1 ( nurl_v256_unpacklo32 x2 x3 )
+    : v256 t2 ( nurl_v256_unpackhi32 x0 x1 )
+    : v256 t3 ( nurl_v256_unpackhi32 x2 x3 )
+    = x0 ( nurl_v256_unpacklo64 t0 t1 )
+    = x1 ( nurl_v256_unpackhi64 t0 t1 )
+    = x2 ( nurl_v256_unpacklo64 t2 t3 )
+    = x3 ( nurl_v256_unpackhi64 t2 t3 )
+}
+
+// dst[at .. at+32) = src[at .. at+32) XOR v.
+inline @ __cc_x32 * u src * u dst i at v256 v → v {
+    ( nurl_v256_st # s + # i dst at ( nurl_v256_xor ( nurl_v256_ld # s + # i src at ) v ) )
+}
+
+// dst[0..512) = src[0..512) XOR the keystream of blocks ctr..ctr+7.
+inline @ __chacha20_xor8_v256 i k0 i k1 i k2 i k3 i k4 i k5 i k6 i k7 i ctr i n0 i n1 i n2 * u src * u dst → v {
+    // 0..7 in the eight 32-bit lanes (two per 64-bit lane, low first)
+    : v256 ct ( nurl_v256_add32 ( nurl_v256_bcast32 ctr ) ( nurl_v256_set64 4294967296 12884901890 21474836484 30064771078 ) )
+    : ~ v256 x0 ( nurl_v256_bcast32 1634760805 )
+    : ~ v256 x1 ( nurl_v256_bcast32 857760878 )
+    : ~ v256 x2 ( nurl_v256_bcast32 2036477234 )
+    : ~ v256 x3 ( nurl_v256_bcast32 1797285236 )
+    : ~ v256 x4 ( nurl_v256_bcast32 k0 )
+    : ~ v256 x5 ( nurl_v256_bcast32 k1 )
+    : ~ v256 x6 ( nurl_v256_bcast32 k2 )
+    : ~ v256 x7 ( nurl_v256_bcast32 k3 )
+    : ~ v256 x8 ( nurl_v256_bcast32 k4 )
+    : ~ v256 x9 ( nurl_v256_bcast32 k5 )
+    : ~ v256 x10 ( nurl_v256_bcast32 k6 )
+    : ~ v256 x11 ( nurl_v256_bcast32 k7 )
+    : ~ v256 x12 ct
+    : ~ v256 x13 ( nurl_v256_bcast32 n0 )
+    : ~ v256 x14 ( nurl_v256_bcast32 n1 )
+    : ~ v256 x15 ( nurl_v256_bcast32 n2 )
+    : ~ i r 0
+    ~ < r 10 {
+        ( __cc_qr8 x0 x4 x8 x12 )
+        ( __cc_qr8 x1 x5 x9 x13 )
+        ( __cc_qr8 x2 x6 x10 x14 )
+        ( __cc_qr8 x3 x7 x11 x15 )
+        ( __cc_qr8 x0 x5 x10 x15 )
+        ( __cc_qr8 x1 x6 x11 x12 )
+        ( __cc_qr8 x2 x7 x8 x13 )
+        ( __cc_qr8 x3 x4 x9 x14 )
+        = r + r 1
+    }
+    = x0 ( nurl_v256_add32 x0 ( nurl_v256_bcast32 1634760805 ) )
+    = x1 ( nurl_v256_add32 x1 ( nurl_v256_bcast32 857760878 ) )
+    = x2 ( nurl_v256_add32 x2 ( nurl_v256_bcast32 2036477234 ) )
+    = x3 ( nurl_v256_add32 x3 ( nurl_v256_bcast32 1797285236 ) )
+    = x4 ( nurl_v256_add32 x4 ( nurl_v256_bcast32 k0 ) )
+    = x5 ( nurl_v256_add32 x5 ( nurl_v256_bcast32 k1 ) )
+    = x6 ( nurl_v256_add32 x6 ( nurl_v256_bcast32 k2 ) )
+    = x7 ( nurl_v256_add32 x7 ( nurl_v256_bcast32 k3 ) )
+    = x8 ( nurl_v256_add32 x8 ( nurl_v256_bcast32 k4 ) )
+    = x9 ( nurl_v256_add32 x9 ( nurl_v256_bcast32 k5 ) )
+    = x10 ( nurl_v256_add32 x10 ( nurl_v256_bcast32 k6 ) )
+    = x11 ( nurl_v256_add32 x11 ( nurl_v256_bcast32 k7 ) )
+    = x12 ( nurl_v256_add32 x12 ct )
+    = x13 ( nurl_v256_add32 x13 ( nurl_v256_bcast32 n0 ) )
+    = x14 ( nurl_v256_add32 x14 ( nurl_v256_bcast32 n1 ) )
+    = x15 ( nurl_v256_add32 x15 ( nurl_v256_bcast32 n2 ) )
+    ( __cc_tr8 x0 x1 x2 x3 )
+    ( __cc_tr8 x4 x5 x6 x7 )
+    ( __cc_tr8 x8 x9 x10 x11 )
+    ( __cc_tr8 x12 x13 x14 x15 )
+    // block j (j < 4): words 0-7 = low halves of x_j and x_{4+j}, words 8-15
+    // = low halves of x_{8+j} and x_{12+j}; block j+4 the high halves
+    ( __cc_x32 src dst 0 ( nurl_v256_permlo128 x0 x4 ) )
+    ( __cc_x32 src dst 32 ( nurl_v256_permlo128 x8 x12 ) )
+    ( __cc_x32 src dst 256 ( nurl_v256_permhi128 x0 x4 ) )
+    ( __cc_x32 src dst 288 ( nurl_v256_permhi128 x8 x12 ) )
+    ( __cc_x32 src dst 64 ( nurl_v256_permlo128 x1 x5 ) )
+    ( __cc_x32 src dst 96 ( nurl_v256_permlo128 x9 x13 ) )
+    ( __cc_x32 src dst 320 ( nurl_v256_permhi128 x1 x5 ) )
+    ( __cc_x32 src dst 352 ( nurl_v256_permhi128 x9 x13 ) )
+    ( __cc_x32 src dst 128 ( nurl_v256_permlo128 x2 x6 ) )
+    ( __cc_x32 src dst 160 ( nurl_v256_permlo128 x10 x14 ) )
+    ( __cc_x32 src dst 384 ( nurl_v256_permhi128 x2 x6 ) )
+    ( __cc_x32 src dst 416 ( nurl_v256_permhi128 x10 x14 ) )
+    ( __cc_x32 src dst 192 ( nurl_v256_permlo128 x3 x7 ) )
+    ( __cc_x32 src dst 224 ( nurl_v256_permlo128 x11 x15 ) )
+    ( __cc_x32 src dst 448 ( nurl_v256_permhi128 x3 x7 ) )
+    ( __cc_x32 src dst 480 ( nurl_v256_permhi128 x11 x15 ) )
+}
+
+// The wide passes over n bytes from dp to op, block counter ctr: eight
+// blocks a pass over v256 lanes in the x86-64-v3 clone, four over v128
+// lanes after that. Returns the bytes done — a multiple of 256, the rest
+// left to the caller's narrower kernels. A function of its own, called
+// only where v128 is native: a wasm module (whose v128 scalarises) carries
+// it but its JIT never compiles it, and the caller stays small enough for
+// a register allocator to keep its two-block loop in registers.
+simd @ __chacha20_xor_wide ( Vec u ) key i ctr0 i nn0 i nn1 i nn2 * u dp * u op i n → i {
+    : i k0 ( __ld32 key 0 )
+    : i k1 ( __ld32 key 4 )
+    : i k2 ( __ld32 key 8 )
+    : i k3 ( __ld32 key 12 )
+    : i k4 ( __ld32 key 16 )
+    : i k5 ( __ld32 key 20 )
+    : i k6 ( __ld32 key 24 )
+    : i k7 ( __ld32 key 28 )
+    : ~ i ctr ctr0
+    : ~ i off 0
+    ? & >= n 512 != 0 # i ( nurl_cpu_x86_v3 ) {
+        ~ <= + off 512 n {
+            ( __chacha20_xor8_v256 k0 k1 k2 k3 k4 k5 k6 k7 ctr nn0 nn1 nn2 # *u + # i dp off # *u + # i op off )
+            = ctr + ctr 8
+            = off + off 512
+        }
+    } {}
+    ~ <= + off 256 n {
+        ( __chacha20_xor4_v128 k0 k1 k2 k3 k4 k5 k6 k7 ctr nn0 nn1 nn2 # *u + # i dp off # *u + # i op off )
+        = ctr + ctr 4
+        = off + off 256
+    }
+    ^ off
+}
+
 // out[0..n) = data[doff..doff+n) XOR ChaCha20(key, counter, nonce).
 //
-// Dispatches to the vector kernel on a little-endian host — every
+// Dispatches to the vector kernels on a little-endian host — every
 // platform NURL targets in practice — and to the scalar reference
-// otherwise. The vector path XORs a whole block straight from the input
-// pointer to the output pointer through four 16-byte loads and stores;
-// only a final partial block goes through a 64-byte keystream scratch.
+// otherwise: the wide passes where vectors are native (__chacha20_xor_wide),
+// then two blocks a pass, then one. The vector paths XOR whole blocks
+// straight from the input pointer to the output pointer; only a final
+// partial block goes through a 64-byte keystream scratch.
 @ chacha20_xor_range ( Vec u ) key i counter ( Vec u ) nonce ( Vec u ) data i doff i n → ( Vec u ) {
     ? == 0 ( __le_words )
     { ^ ( _chacha20_xor_range_scalar key counter nonce data doff n ) } {}
@@ -299,8 +515,13 @@ $ `stdlib/core/vec.nu`
     : *u ks # *u + # i op ( __xor_scratch_at n )
     : ~ i ctr counter
     : ~ i off 0
-    // Two blocks a pass while at least 128 bytes remain; the tail falls
-    // through to the one-block kernel and then to a byte loop.
+    // The wide passes while at least 256 bytes remain, then two blocks a
+    // pass while 128 do; the tail falls through to the one-block kernel
+    // and then to a byte loop.
+    ? & >= n 256 != 0 ( nurl_simd128_native ) {
+        = off ( __chacha20_xor_wide key ctr nn0 nn1 nn2 dp op n )
+        = ctr + ctr >> off 6
+    } {}
     ~ <= + off 128 n {
         ( __chacha20_block2_v128 s0 s1 s2
         ( nurl_v128_set32 ctr nn0 nn1 nn2 )
@@ -695,14 +916,15 @@ $ `stdlib/core/vec.nu`
     ^ out
 }
 
-// ── Poly1305 (poly1305-donna, radix 2^44) ─────────────────────────
-// The accumulator is THREE 44/44/42-bit limbs, not five 26-bit ones.
-// The wider radix is what `nurl_umulhi` (64×64→128) buys: each h·r term
-// is a full 128-bit product instead of one kept artificially under 2^63,
-// so the schoolbook is 9 multiplies a block against the 25 the 26-bit
-// form needed — and this MAC runs over every byte of every TLS record,
-// both directions. (Floodyberry's poly1305-donna-64, the reference every
-// fast Poly1305 descends from.)
+// ── Poly1305 (radix 2^64) ──────────────────────────────────────────
+// The accumulator is two full 64-bit words and a few bits above them
+// (h = h2·2^128 + h1·2^64 + h0, h2 ≤ 7), and r is two words. The clamp
+// leaves r1 a multiple of 4, so 2^130 ≡ 5 folds into s1 = r1 + r1/4
+// (= 5·r1/4) exactly, and a block is FOUR 64×64→128 products plus two
+// small ones (h2·s1, h2·r0) — against the nine of the radix-2^44 donna-64
+// form this replaced, at 2.3 cycles a byte the larger half of every
+// ChaCha20-Poly1305 record. This is the formulation OpenSSL's and
+// BoringSSL's scalar x86-64 code use.
 
 // Little-endian 64-bit load of the 8 bytes at `mp[off .. off+7]`, built
 // from bytes so it is correct on any target and needs no alignment. The
@@ -714,24 +936,42 @@ $ `stdlib/core/vec.nu`
     ^ | lo << hi 32
 }
 
+// h ← (h + m + pad·2^128) · r, partially reduced mod 2^130 − 5: the
+// result's h2 stays below 8, which is all the next block's h2 products
+// need.
+inline @ __poly_block inout u64 h0 inout u64 h1 inout u64 h2 u64 t0 u64 t1 u64 pad u64 kr0 u64 kr1 u64 ks1 → v {
+    // h += m
+    : u64 a0 ( nurl_addc_lo h0 t0 0 )
+    : u64 a1 ( nurl_addc_lo h1 t1 ( nurl_addc_hi h0 t0 0 ) )
+    : u64 a2 + + h2 ( nurl_addc_hi h1 t1 ( nurl_addc_hi h0 t0 0 ) ) pad
+    // d0 = a0·r0 + a1·s1
+    : u64 x1 * a1 ks1
+    : u64 d0lo ( nurl_mac_lo a0 kr0 x1 0 )
+    : u64 d0hi + ( nurl_mac_hi a0 kr0 x1 0 ) ( nurl_umulhi a1 ks1 )
+    // d1 = a0·r1 + a1·r0 + a2·s1
+    : u64 e1 * a2 ks1
+    : u64 p1lo ( nurl_mac_lo a0 kr1 e1 0 )
+    : u64 p1hi ( nurl_mac_hi a0 kr1 e1 0 )
+    : u64 d1lo ( nurl_mac_lo a1 kr0 p1lo 0 )
+    : u64 d1hi + ( nurl_mac_hi a1 kr0 p1lo 0 ) p1hi
+    // h = d0 + d1·2^64 + a2·r0·2^128
+    : u64 g1 ( nurl_addc_lo d1lo d0hi 0 )
+    : u64 g2 + + * a2 kr0 d1hi ( nurl_addc_hi d1lo d0hi 0 )
+    // fold the bits above 2^130: c·2^130 ≡ 5c = (g2 & ~3) + (g2 >> 2)
+    : u64 c + & g2 -4 >> g2 2
+    = h0 ( nurl_addc_lo d0lo c 0 )
+    : u64 k0 ( nurl_addc_hi d0lo c 0 )
+    = h1 ( nurl_addc_lo g1 k0 0 )
+    = h2 + & g2 3 ( nurl_addc_hi g1 k0 0 )
+}
+
 // otk = 32-byte one-time key (r || s). Returns the 16-byte tag.
-//
-// h and r are held as three unsigned limbs at radix 2^44 (h2/r2 are the
-// 42-bit top). Each h·r term is a full 64×64→128 product, accumulated as
-// an explicit (lo, hi) pair — NURL's `*` gives the low half, nurl_umulhi
-// the high — because the sum of three such products overflows 64 bits and
-// the reduction needs the bits above 2^44 that a truncating multiply drops.
 @ poly1305_mac ( Vec u ) otk ( Vec u ) msg → ( Vec u ) {
     : *u kp ( vec_data [u] otk )
-    // Clamp r (otk[0..15]) into three 44-bit limbs. These are RFC 8439's
-    // clamp mask re-expressed for the 44/44/42 split (poly1305-donna-64).
-    : u64 kt0 # u64 ( __ld64 kp 0 )
-    : u64 kt1 # u64 ( __ld64 kp 8 )
-    : u64 r0 & kt0 0xffc0fffffff
-    : u64 r1 & | >> kt0 44 << kt1 20 0xfffffc0ffff
-    : u64 r2 & >> kt1 24 0x00ffffffc0f
-    : u64 s1 * r1 20  // 5·r1·4 → the 2^130-5 wrap fold (5<<2)
-    : u64 s2 * r2 20
+    // RFC 8439's clamp on the two little-endian words of r
+    : u64 r0 & # u64 ( __ld64 kp 0 ) 0x0ffffffc0fffffff
+    : u64 r1 & # u64 ( __ld64 kp 8 ) 0x0ffffffc0ffffffc
+    : u64 s1 + r1 >> r1 2
 
     : ~ u64 h0 0
     : ~ u64 h1 0
@@ -739,125 +979,47 @@ $ `stdlib/core/vec.nu`
 
     : i mlen ( vec_len [u] msg )
     : *u mp ( vec_data [u] msg )
+    : i full & mlen -16
     : ~ i off 0
-    ~ < off mlen {
-        : i rem - mlen off
-        : ~ u64 t0 0
-        : ~ u64 t1 0
-        : ~ u64 hibit 0x10000000000  // 1<<40: the 2^128 block marker in h2
-        ? >= rem 16 {
-            = t0 # u64 ( __ld64 mp off )
-            = t1 # u64 ( __ld64 mp + off 8 )
-        } {
-            // Tail: the remaining bytes, zero-padded to 16, with the 0x01
-            // marker byte after them — assembled little-endian straight
-            // into t0/t1 — and `hibit` cleared: the marker now rides
-            // inside t0/t1 at its natural position.
-            : i blk rem
-            : ~ i j 0
-            ~ <= j blk {
-                : u64 bv ? < j blk # u64 . mp + off j # u64 1
-                ? < j 8 { = t0 | t0 << bv # u64 * 8 j } { = t1 | t1 << bv # u64 * 8 - j 8 }
-                = j + j 1
-            }
-            = hibit 0
-        }
-        // h += m (three 44/44/42-bit limbs plus the block-marker bit).
-        = h0 + h0 & t0 0xfffffffffff
-        = h1 + h1 & | >> t0 44 << t1 20 0xfffffffffff
-        = h2 + + h2 & >> t1 24 0x3ffffffffff hibit
-
-        // d0 = h0·r0 + h1·s2 + h2·s1, as a 128-bit (lo,hi) accumulator.
-        : ~ u64 d0lo * h0 r0
-        : ~ u64 d0hi ( nurl_umulhi h0 r0 )
-        : u64 pa * h1 s2
-        = d0lo + d0lo pa
-        = d0hi + + d0hi ( nurl_umulhi h1 s2 ) ? < d0lo pa 1 0
-        : u64 pb * h2 s1
-        = d0lo + d0lo pb
-        = d0hi + + d0hi ( nurl_umulhi h2 s1 ) ? < d0lo pb 1 0
-        // d1 = h0·r1 + h1·r0 + h2·s2
-        : ~ u64 d1lo * h0 r1
-        : ~ u64 d1hi ( nurl_umulhi h0 r1 )
-        : u64 pc * h1 r0
-        = d1lo + d1lo pc
-        = d1hi + + d1hi ( nurl_umulhi h1 r0 ) ? < d1lo pc 1 0
-        : u64 pd * h2 s2
-        = d1lo + d1lo pd
-        = d1hi + + d1hi ( nurl_umulhi h2 s2 ) ? < d1lo pd 1 0
-        // d2 = h0·r2 + h1·r1 + h2·r0
-        : ~ u64 d2lo * h0 r2
-        : ~ u64 d2hi ( nurl_umulhi h0 r2 )
-        : u64 pe * h1 r1
-        = d2lo + d2lo pe
-        = d2hi + + d2hi ( nurl_umulhi h1 r1 ) ? < d2lo pe 1 0
-        : u64 pf * h2 r0
-        = d2lo + d2lo pf
-        = d2hi + + d2hi ( nurl_umulhi h2 r0 ) ? < d2lo pf 1 0
-
-        // Partial reduction: carry each di>>44 (di>>42 for d2) up a limb.
-        : ~ u64 c | << d0hi 20 >> d0lo 44
-        = h0 & d0lo 0xfffffffffff
-        = d1lo + d1lo c
-        = d1hi + d1hi ? < d1lo c 1 0
-        = c | << d1hi 20 >> d1lo 44
-        = h1 & d1lo 0xfffffffffff
-        = d2lo + d2lo c
-        = d2hi + d2hi ? < d2lo c 1 0
-        = c | << d2hi 22 >> d2lo 42
-        = h2 & d2lo 0x3ffffffffff
-        = h0 + h0 * c 5
-        = c >> h0 44
-        = h0 & h0 0xfffffffffff
-        = h1 + h1 c
-
+    ~ < off full {
+        ( __poly_block h0 h1 h2 # u64 ( __ld64 mp off ) # u64 ( __ld64 mp + off 8 ) 1 r0 r1 s1 )
         = off + off 16
     }
+    ? < off mlen {
+        // Tail: the remaining bytes, zero-padded to 16, with the 0x01
+        // marker byte after them — assembled little-endian straight into
+        // t0/t1 — and no 2^128 bit: the marker rides inside the block.
+        : i blk - mlen off
+        : ~ u64 t0 0
+        : ~ u64 t1 0
+        : ~ i j 0
+        ~ <= j blk {
+            : u64 bv ? < j blk # u64 . mp + off j # u64 1
+            ? < j 8 { = t0 | t0 << bv # u64 * 8 j } { = t1 | t1 << bv # u64 * 8 - j 8 }
+            = j + j 1
+        }
+        ( __poly_block h0 h1 h2 t0 t1 0 r0 r1 s1 )
+    } {}
 
-    // Fully carry h.
-    : ~ u64 c >> h1 44
-    = h1 & h1 0xfffffffffff
-    = h2 + h2 c
-    = c >> h2 42
-    = h2 & h2 0x3ffffffffff
-    = h0 + h0 * c 5
-    = c >> h0 44
-    = h0 & h0 0xfffffffffff
-    = h1 + h1 c
+    // h mod p: h + 5 reaches 2^130 exactly when h ≥ p (h < 2p here), and
+    // then the low 128 bits of h + 5 are h − p's. Constant-time select.
+    : u64 g0 ( nurl_addc_lo h0 5 0 )
+    : u64 g1 ( nurl_addc_lo h1 0 ( nurl_addc_hi h0 5 0 ) )
+    : u64 g2 + h2 ( nurl_addc_hi h1 0 ( nurl_addc_hi h0 5 0 ) )
+    : u64 mask - 0 >> g2 2  // all ones when h ≥ p
+    : u64 f0 | & h0 ~ mask & g0 mask
+    : u64 f1 | & h1 ~ mask & g1 mask
 
-    // Compute h + -p and select h if h < p (constant-time).
-    : ~ u64 g0 + h0 5
-    : ~ u64 cc >> g0 44
-    = g0 & g0 0xfffffffffff
-    : ~ u64 g1 + h1 cc
-    = cc >> g1 44
-    = g1 & g1 0xfffffffffff
-    : ~ u64 g2 - + h2 cc 0x40000000000  // − (1<<42)
-
-    // g2's top bit is set exactly when it borrowed (h < p): mask 0 keeps h,
-    // otherwise all-ones takes g. `>> g2 63` is a logical shift (u64).
-    : u64 mask - >> g2 63 1
-    = g0 & g0 mask
-    = g1 & g1 mask
-    = g2 & g2 mask
-    : u64 imask ^^ mask -1
-    = h0 | & h0 imask g0
-    = h1 | & h1 imask g1
-    = h2 | & h2 imask g2
-
-    // tag = (h + s) mod 2^128: repack the three limbs into two 64-bit
-    // words at the 44-bit boundary, add the pad s = otk[16..32] with carry.
+    // tag = (h + s) mod 2^128
     : u64 st0 # u64 ( __ld64 kp 16 )
     : u64 st1 # u64 ( __ld64 kp 24 )
-    : ~ u64 f0 | h0 << h1 44
-    : ~ u64 f1 | >> h1 20 << h2 24
-    = f0 + f0 st0
-    = f1 + + f1 st1 ? < f0 st0 1 0
+    : u64 w0 ( nurl_addc_lo f0 st0 0 )
+    : u64 w1 ( nurl_addc_lo f1 st1 ( nurl_addc_hi f0 st0 0 ) )
     : ( Vec u ) tag ( vec_with_cap [u] 16 )
-    ( __push_le32 tag # i & f0 4294967295 )
-    ( __push_le32 tag # i & >> f0 32 4294967295 )
-    ( __push_le32 tag # i & f1 4294967295 )
-    ( __push_le32 tag # i & >> f1 32 4294967295 )
+    ( __push_le32 tag # i & w0 4294967295 )
+    ( __push_le32 tag # i & >> w0 32 4294967295 )
+    ( __push_le32 tag # i & w1 4294967295 )
+    ( __push_le32 tag # i & >> w1 32 4294967295 )
     ^ tag
 }
 

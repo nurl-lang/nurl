@@ -494,7 +494,7 @@ unsafe @ nurl_llty s t → s {
     // one is already LLVM-shaped: only an unsigned spelling (it has a
     // `u`) or a vector (`v…`) is rewritten — everything else is a copy.
     : i __uat ( nurl_str_find t `u` )
-    ? & < __uat 0 != ( nurl_str_get t 0 ) 118 { ^ # s ( nurl_strdup t ) } {}
+    ? & < __uat 0 < ( nurl_str_find t `v` ) 0 { ^ # s ( nurl_strdup t ) } {}
     ? ( seq t `u8` ) { ^ # s ( nurl_strdup `i8` ) } {}
     ? ( seq t `u16` ) { ^ # s ( nurl_strdup `i16` ) } {}
     ? ( seq t `u32` ) { ^ # s ( nurl_strdup `i32` ) } {}
@@ -550,6 +550,15 @@ unsafe @ nurl_llty s t → s {
             : s tail ( nurl_str_slice t + p 1 - tl + p 1 )
             ^ ( nurl_llty ( nurl_str_cat3 head `i` tail ) ) }
         {}
+        // A vector inside a compound spelling — the `v128*` an `inout v128`
+        // passes, a `{ i1, v128 }` option — lowers like the bare one; left
+        // alone it reached the IR as the undefined type `v128`.
+        ? & == ( nurl_str_get t p ) 118 | ( __llty_word_at t p `v128` ) ( __llty_word_at t p `v256` ) {
+            : s head ? > p 0 ( nurl_str_slice t 0 p ) ``
+            : s tail ( nurl_str_slice t + p 4 - tl + p 4 )
+            : s vt ? ( __llty_word_at t p `v128` ) `<4 x i32>` `<4 x i64>`
+            ^ ( nurl_llty ( nurl_str_cat3 head vt tail ) )
+        } {}
         = p + p 1
     }
     ^ # s ( nurl_strdup t )
@@ -3480,6 +3489,16 @@ unsafe @ nurl_cg_lbl i h s hint → s {
     ( nurl_print `  ` ) ( nurl_print owner ) ( nurl_print ` = load i8*, i8** ` )
     ( nurl_print ( nurl_sym_get syms `__ret_owner_slot__` ) ) ( nurl_print `\n` )
     ( nurl_print `  call void @nurl_journal_forget(i8* ` ) ( nurl_print owner ) ( nurl_print `)\n` )
+    // A named function returning a raw pointer (`→ *T`) has no reader: its
+    // direct callers take the result as never owned (__ret_never_owned, the
+    // same __fn_raw_ret answer), a `dyn` thunk answers for its impl
+    // (emit_dyn_method_thunk), and a bare function name is not a value, so
+    // nothing calls one through a closure. The store it would make is a
+    // TLS write behind an `asm volatile` memory clobber — every load the
+    // caller made before the call is reloaded after it — paid by every
+    // vec_data in the standard library.
+    : s self ( nurl_sym_get syms `__fn_self_name__` )
+    ? & & == g_bck_closure_depth 0 == 0 ( nurl_str_starts self `__closure_` ) ( __fn_raw_ret syms self ) { ^ } {}
     : s proof ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print proof ) ( nurl_print ` = load i64, i64* ` )
     ( nurl_print ( nurl_sym_get syms `__ret_proof_slot__` ) ) ( nurl_print `\n` )
@@ -44613,6 +44632,33 @@ u` ) ( nurl_print q ) ( nurl_print `:
     ( emit `  %w3.r = shufflevector <4 x i32> %a, <4 x i32> undef, <4 x i32> <i32 3, i32 0, i32 1, i32 2>` )
     ( emit `  ret <4 x i32> %w3.r` )
     ( emit `}` )
+    // ── lane interleave ───────────────────────────────────────────
+    // Two vectors' lanes zipped together, low halves or high halves, at
+    // 32- or 64-bit granularity: punpck{l,h}{dq,qdq} on x86, zip1/zip2 on
+    // AArch64, a shuffle on wasm. Four of them transpose a 4×4 block of
+    // 32-bit words, which is how a kernel that keeps one item per lane
+    // (ChaCha20 over four blocks at once) hands each item's words back in
+    // order.
+    ( emit `define linkonce_odr <4 x i32> @nurl_v128_unpacklo32(<4 x i32> %a, <4 x i32> %b) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %z1.r = shufflevector <4 x i32> %a, <4 x i32> %b, <4 x i32> <i32 0, i32 4, i32 1, i32 5>` )
+    ( emit `  ret <4 x i32> %z1.r` )
+    ( emit `}` )
+    ( emit `define linkonce_odr <4 x i32> @nurl_v128_unpackhi32(<4 x i32> %a, <4 x i32> %b) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %z2.r = shufflevector <4 x i32> %a, <4 x i32> %b, <4 x i32> <i32 2, i32 6, i32 3, i32 7>` )
+    ( emit `  ret <4 x i32> %z2.r` )
+    ( emit `}` )
+    ( emit `define linkonce_odr <4 x i32> @nurl_v128_unpacklo64(<4 x i32> %a, <4 x i32> %b) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %z3.r = shufflevector <4 x i32> %a, <4 x i32> %b, <4 x i32> <i32 0, i32 1, i32 4, i32 5>` )
+    ( emit `  ret <4 x i32> %z3.r` )
+    ( emit `}` )
+    ( emit `define linkonce_odr <4 x i32> @nurl_v128_unpackhi64(<4 x i32> %a, <4 x i32> %b) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %z4.r = shufflevector <4 x i32> %a, <4 x i32> %b, <4 x i32> <i32 2, i32 3, i32 6, i32 7>` )
+    ( emit `  ret <4 x i32> %z4.r` )
+    ( emit `}` )
     // ── byte compare → bitmask ────────────────────────────────────
     // The whole point of a vector byte scan: sixteen comparisons in one
     // instruction, their results read out as a 16-bit integer whose bit
@@ -44833,6 +44879,80 @@ u` ) ( nurl_print q ) ( nurl_print `:
     ( emit `}` )
     ( emit `declare <4 x i64> @llvm.fshl.v4i64(<4 x i64>, <4 x i64>, <4 x i64>)` )
 
+    // ── v256: eight 32-bit lanes ──────────────────────────────────
+    //
+    // ChaCha20 over eight blocks at once, one block per lane: vector x_w
+    // holds word w of eight consecutive blocks, so a quarter-round is
+    // eight operations on whole vectors (vpaddd, vpxor, a vpshufb or
+    // shift pair per rotate under AVX2). The interleaves work within each
+    // 128-bit half, as vpunpck* does, and the two half-permutes
+    // (vperm2i128) pair one half of each operand — together they turn
+    // eight blocks' words back into each block's bytes.
+    ( emit `define linkonce_odr <4 x i64> @nurl_v256_add32(<4 x i64> %a, <4 x i64> %b) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %qa.a = bitcast <4 x i64> %a to <8 x i32>` )
+    ( emit `  %qa.b = bitcast <4 x i64> %b to <8 x i32>` )
+    ( emit `  %qa.s = add <8 x i32> %qa.a, %qa.b` )
+    ( emit `  %qa.r = bitcast <8 x i32> %qa.s to <4 x i64>` )
+    ( emit `  ret <4 x i64> %qa.r` )
+    ( emit `}` )
+    ( emit `define linkonce_odr <4 x i64> @nurl_v256_rotl32(<4 x i64> %a, i64 %n) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %qr.a = bitcast <4 x i64> %a to <8 x i32>` )
+    ( emit `  %qr.t = trunc i64 %n to i32` )
+    ( emit `  %qr.m = and i32 %qr.t, 31` )
+    ( emit `  %qr.0 = insertelement <8 x i32> undef, i32 %qr.m, i32 0` )
+    ( emit `  %qr.s = shufflevector <8 x i32> %qr.0, <8 x i32> undef, <8 x i32> zeroinitializer` )
+    ( emit `  %qr.v = call <8 x i32> @llvm.fshl.v8i32(<8 x i32> %qr.a, <8 x i32> %qr.a, <8 x i32> %qr.s)` )
+    ( emit `  %qr.r = bitcast <8 x i32> %qr.v to <4 x i64>` )
+    ( emit `  ret <4 x i64> %qr.r` )
+    ( emit `}` )
+    ( emit `declare <8 x i32> @llvm.fshl.v8i32(<8 x i32>, <8 x i32>, <8 x i32>)` )
+    ( emit `define linkonce_odr <4 x i64> @nurl_v256_bcast32(i64 %x) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %qb.t = trunc i64 %x to i32` )
+    ( emit `  %qb.0 = insertelement <8 x i32> undef, i32 %qb.t, i32 0` )
+    ( emit `  %qb.s = shufflevector <8 x i32> %qb.0, <8 x i32> undef, <8 x i32> zeroinitializer` )
+    ( emit `  %qb.r = bitcast <8 x i32> %qb.s to <4 x i64>` )
+    ( emit `  ret <4 x i64> %qb.r` )
+    ( emit `}` )
+    ( emit `define linkonce_odr <4 x i64> @nurl_v256_unpacklo32(<4 x i64> %a, <4 x i64> %b) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %qu1.a = bitcast <4 x i64> %a to <8 x i32>` )
+    ( emit `  %qu1.b = bitcast <4 x i64> %b to <8 x i32>` )
+    ( emit `  %qu1.s = shufflevector <8 x i32> %qu1.a, <8 x i32> %qu1.b, <8 x i32> <i32 0, i32 8, i32 1, i32 9, i32 4, i32 12, i32 5, i32 13>` )
+    ( emit `  %qu1.r = bitcast <8 x i32> %qu1.s to <4 x i64>` )
+    ( emit `  ret <4 x i64> %qu1.r` )
+    ( emit `}` )
+    ( emit `define linkonce_odr <4 x i64> @nurl_v256_unpackhi32(<4 x i64> %a, <4 x i64> %b) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %qu2.a = bitcast <4 x i64> %a to <8 x i32>` )
+    ( emit `  %qu2.b = bitcast <4 x i64> %b to <8 x i32>` )
+    ( emit `  %qu2.s = shufflevector <8 x i32> %qu2.a, <8 x i32> %qu2.b, <8 x i32> <i32 2, i32 10, i32 3, i32 11, i32 6, i32 14, i32 7, i32 15>` )
+    ( emit `  %qu2.r = bitcast <8 x i32> %qu2.s to <4 x i64>` )
+    ( emit `  ret <4 x i64> %qu2.r` )
+    ( emit `}` )
+    ( emit `define linkonce_odr <4 x i64> @nurl_v256_unpacklo64(<4 x i64> %a, <4 x i64> %b) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %qu3.r = shufflevector <4 x i64> %a, <4 x i64> %b, <4 x i32> <i32 0, i32 4, i32 2, i32 6>` )
+    ( emit `  ret <4 x i64> %qu3.r` )
+    ( emit `}` )
+    ( emit `define linkonce_odr <4 x i64> @nurl_v256_unpackhi64(<4 x i64> %a, <4 x i64> %b) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %qu4.r = shufflevector <4 x i64> %a, <4 x i64> %b, <4 x i32> <i32 1, i32 5, i32 3, i32 7>` )
+    ( emit `  ret <4 x i64> %qu4.r` )
+    ( emit `}` )
+    ( emit `define linkonce_odr <4 x i64> @nurl_v256_permlo128(<4 x i64> %a, <4 x i64> %b) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %qp1.r = shufflevector <4 x i64> %a, <4 x i64> %b, <4 x i32> <i32 0, i32 1, i32 4, i32 5>` )
+    ( emit `  ret <4 x i64> %qp1.r` )
+    ( emit `}` )
+    ( emit `define linkonce_odr <4 x i64> @nurl_v256_permhi128(<4 x i64> %a, <4 x i64> %b) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %qp2.r = shufflevector <4 x i64> %a, <4 x i64> %b, <4 x i32> <i32 2, i32 3, i32 6, i32 7>` )
+    ( emit `  ret <4 x i64> %qp2.r` )
+    ( emit `}` )
+
     // ── v256: sixteen 16-bit lanes ────────────────────────────────
     //
     // The lattice half of the PQ stack. ML-KEM's field is 12 bits, its
@@ -44937,6 +45057,10 @@ u` ) ( nurl_print q ) ( nurl_print `:
     ( nurl_sym_def syms `nurl_v128_rotlanes1` `v128` )
     ( nurl_sym_def syms `nurl_v128_rotlanes2` `v128` )
     ( nurl_sym_def syms `nurl_v128_rotlanes3` `v128` )
+    ( nurl_sym_def syms `nurl_v128_unpacklo32` `v128` )
+    ( nurl_sym_def syms `nurl_v128_unpackhi32` `v128` )
+    ( nurl_sym_def syms `nurl_v128_unpacklo64` `v128` )
+    ( nurl_sym_def syms `nurl_v128_unpackhi64` `v128` )
     ( nurl_sym_def syms `nurl_v128_eqmask8` `u64` )
     ( nurl_sym_def syms `nurl_v128_ltmask8` `u64` )
     ( nurl_sym_def syms `nurl_v128_lower8` `v128` )
@@ -44954,6 +45078,15 @@ u` ) ( nurl_print q ) ( nurl_print `:
     ( nurl_sym_def syms `nurl_v256_not` `v256` )
     ( nurl_sym_def syms `nurl_v256_rotl64` `v256` )
     ( nurl_sym_def syms `nurl_v256_add16` `v256` )
+    ( nurl_sym_def syms `nurl_v256_add32` `v256` )
+    ( nurl_sym_def syms `nurl_v256_rotl32` `v256` )
+    ( nurl_sym_def syms `nurl_v256_bcast32` `v256` )
+    ( nurl_sym_def syms `nurl_v256_unpacklo32` `v256` )
+    ( nurl_sym_def syms `nurl_v256_unpackhi32` `v256` )
+    ( nurl_sym_def syms `nurl_v256_unpacklo64` `v256` )
+    ( nurl_sym_def syms `nurl_v256_unpackhi64` `v256` )
+    ( nurl_sym_def syms `nurl_v256_permlo128` `v256` )
+    ( nurl_sym_def syms `nurl_v256_permhi128` `v256` )
     ( nurl_sym_def syms `nurl_v256_sub16` `v256` )
     ( nurl_sym_def syms `nurl_v256_mullo16` `v256` )
     ( nurl_sym_def syms `nurl_v256_mulhi16` `v256` )
@@ -47323,6 +47456,11 @@ unsafe @ defer_trait_impl i lex i impl_pos s tname s impl_nurl s impl_llvm s imp
             = g_use_hown 1
             ( nurl_print `  call void @__nurl_hown_fwd(ptr @.__nurl_retdyn.` ) ( nurl_print k )
             ( nurl_print `, ptr @.__nurl_retown.` ) ( nurl_print k ) ( nurl_print `)\n` )
+        } {}
+        // A raw-pointer result is never owned, and its impl publishes
+        // nothing (mem_publish_return_proof) — the `dyn` caller still asks.
+        ? & ( seq ( nurl_llty ret ) `i8*` ) ( __fn_raw_ret g_root_syms ( nurl_str_cat m ( nurl_str_cat `__` impl_mangle ) ) ) {
+            ( nurl_print `  call void @nurl_ret_owned_set(i64 0)\n` )
         } {}
         ( nurl_print `  ret ` ) ( nurl_print ( nurl_llty ret ) ) ( nurl_print ` %r\n}\n` ) }
 }

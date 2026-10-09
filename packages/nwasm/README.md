@@ -319,9 +319,15 @@ no linear memory at all. A function it cannot lower falls to tier 7.
   linear scan that spills the least densely used one: 12 GPRs (r9 among them
   unless a global is read or written inside a loop), 14 xmm registers, the
   slot's frame home when a web must live in memory. A value a loop writes
-  ranks eight times denser than one it only reads, and after allocation a
+  ranks eight times denser than one it only reads — unless the loop only
+  copies another web's previous value into it (a delay line, SHA-2's
+  h = g) and reads it far from the copy — and after allocation a
   run of a spilled web's reads with a register free across it loads the
-  home once and reads the register. A web live across a call takes a
+  home once and reads the register. A spilled value is computed in rax and
+  stored to its home; a read of that home emitted straight after the store
+  — a load, or an ALU or `imul` memory operand — takes rax instead, so a
+  chain of in-place updates (ChaCha20's and BLAKE2b's state words) does not
+  wait on store forwarding at every link. A web live across a call takes a
   callee-saved register; rdx and rcx go only to webs no record that needs
   them as scratch touches.
 - **Calls.** A tier-8 function with at most five parameters and one result
@@ -338,7 +344,10 @@ no linear memory at all. A function it cannot lower falls to tier 7.
   exchanged, so cmov and setcc read the carry flag alone); an i32 is
   sign-extended only when a consumer reads its high half, and i64 arithmetic
   whose high half no consumer reads runs as 32-bit instructions; an address
-  whose high half is provably clear indexes memory as it stands; wide
+  whose high half is provably clear indexes memory as it stands, and a
+  parameter no consumer reads the high half of is zero-extended on entry so
+  that a pointer parameter is one; a 64-bit counter's `i64.eqz; i32.eqz;
+  br_if` is a single compare-and-branch; wide
   constants come from a RIP-relative literal pool. On an x86-64-v3 CPU,
   shifts use BMI2, the bit counts lzcnt/tzcnt and scalar floats the AVX
   three-operand forms (`NURL_NWASM_BMI2=0` keeps baseline x86-64).
@@ -363,6 +372,15 @@ no linear memory at all. A function it cannot lower falls to tier 7.
 
 ### Both tiers
 
+- **A 128-bit multiply is a multiply.** Core wasm has no wide multiply, so a
+  C `unsigned __int128`, a Rust `u128` or NURL's `nurl_umulhi` product
+  compiles to a call of compiler-rt's `__multi3`, which rebuilds it from four
+  32×32 products — half of a Poly1305 or X25519 module's run time. The
+  predecoder recognises the two bodies today's toolchains link (LLVM's
+  compiler-rt and Rust's compiler-builtins) by their exact bytes, never by
+  name, and lowers a direct call to either into one `mul` for the high word
+  of the low product, three multiplies and the body's own two stores, in
+  its order. Poly1305 and X25519 run 1.8–2.1× faster in every language.
 - **The interpreter handles what neither can.** A function with any record
   outside both tiers' sets stays interpreted — per function, not per module.
   Calls out of JIT code (imports, `memory.grow`, the bulk-memory/`fc` bridge)

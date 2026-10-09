@@ -15,8 +15,8 @@
 #  and nothing in the tree noticed either way: `--no-cpu-dispatch`
 #  appeared in no build script and no workflow.
 #
-#  Every function the prefix marks today is post-quantum cryptography
-#  (ML-KEM, ML-DSA, the x4 Keccak sponge under both). A divergence
+#  Every function the prefix marks today is cryptography (ML-KEM,
+#  ML-DSA, the x4 Keccak sponge under both, ChaCha20). A divergence
 #  between the two lowerings there is not a slow path — it is a wrong
 #  key on half the machines in a fleet, on the half that was never
 #  tested.
@@ -98,8 +98,9 @@ bad()  { note "$1" "FAIL — $2"; fails=$((fails + 1)); }
 
 # The corpus tests that drive the marked kernels through their public
 # API across the parameter seams: all three ML-KEM levels, all three
-# ML-DSA levels, and the x4 sponge either side of both rates.
-DRIVERS=(mlkem_vectors mldsa_vectors sha3x4_vectors)
+# ML-DSA levels, the x4 sponge either side of both rates, and ChaCha20
+# across its one-, two-, four- and eight-block kernels' seams.
+DRIVERS=(mlkem_vectors mldsa_vectors sha3x4_vectors chacha20_simd_agree)
 
 # ── 0. What this host will actually dispatch to ─────────────────────
 # Without this the whole script is theatre on an AVX2-less machine: the

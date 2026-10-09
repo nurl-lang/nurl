@@ -451,6 +451,18 @@ $ `stdlib/core/slice.nu`
     : String r1 ( string_replace res ` @main(` ` @__main_argc_argv(` )
     = res r1
 
+    // 1b. The native-SIMD gates are answered here: a wasm32 module built
+    //     without simd128 has no v128 instruction to run a vector kernel
+    //     with (LLVM scalarises it) and no x86 feature set. Folded to 0,
+    //     the branches they guard fold away and --gc-sections drops the
+    //     kernels — which otherwise sat in every module importing them,
+    //     compiled by a JIT that cannot run them (ChaCha20's eight- and
+    //     four-block kernels: 27 KB of a 75 KB module).
+    : String r1b ( string_replace res `call i64 @nurl_simd128_native()` `add i64 0, 0` )
+    = res r1b
+    : String r1c ( string_replace res `call i32 @nurl_cpu_x86_v3()` `add i32 0, 0` )
+    = res r1c
+
     // 2. Prepend WASM triple and datalayout.
     : String head ( string_from `target datalayout = "e-m:e-p:32:32-p10:8:8-p20:8:8-i64:64-n32:64-S128-ni:1:10:20"\ntarget triple = "wasm32-unknown-wasi"\n` )
     : String r3 ( string_concat head res )

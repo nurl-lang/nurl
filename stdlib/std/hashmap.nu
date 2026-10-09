@@ -13,7 +13,8 @@
 // nurl_peek/poke as raw i64 words:
 //   word 0: keys ptr   (raw i8*; bitcast to *K when accessing)
 //   word 1: vals ptr   (raw i8*; bitcast to *V)
-//   word 2: states ptr (raw i8*; bitcast to *i; per-slot 0=empty/1=occupied/2=tombstone)
+//   word 2: states ptr (raw i8*; one byte per slot: 0 = empty, 1 = tombstone,
+//           128..255 = occupied, the low 7 bits a fragment of the key's hash)
 //   word 3: len        (occupied count, NOT counting tombstones)
 //   word 4: cap        (always power-of-two; 0 means no buffer yet)
 //   word 5: tombstones (count of slots in tombstone state)
@@ -130,13 +131,21 @@ $ `stdlib/core/string.nu`
 
 @ __map_tomb_raw s ctl → i { ^ ( nurl_peek ctl 5 ) }
 
+// The state byte of an occupied slot: 128 | seven bits of the key's hash
+// (its mixed high bits — the slot index already spends the low ones). A
+// probe compares keys only where the byte matches, so a collision chain is
+// walked in the one-byte-per-slot states array, not in the keys.
+@ __map_frag i h → i { ^ | 128 & >> * h -7046029254386353131 57 127 }
+
+@ __map_occupied i st → b { ^ >= st 128 }
+
 // __map_alloc_buffers: allocate keys/vals/states arrays for `cap` slots
 // and store the raw i8* pointers into ctl[0..2]. States are zalloc'd so
 // every slot starts empty (state == 0). Also writes cap into word 4.
 @ __map_alloc_buffers [K V] s ctl i cap → v {
     : s keys ( nurl_zalloc ( alloc_size Z K cap ) )
     : s vals ( nurl_zalloc ( alloc_size Z V cap ) )
-    : s states ( nurl_zalloc ( alloc_size 8 cap ) )
+    : s states ( nurl_zalloc ( alloc_size 1 cap ) )
     ( nurl_poke ctl 0 # i keys )
     ( nurl_poke ctl 1 # i vals )
     ( nurl_poke ctl 2 # i states )
@@ -151,25 +160,25 @@ $ `stdlib/core/string.nu`
 //   The map_set caller resizes proactively before probing, so this loop
 //   always finds either a match, an empty slot, or a tombstone within
 //   cap iterations; the "table full" case never occurs in practice.
-@ __map_probe_for [K V] s ctl K key ( @ i K ) hash_fn ( @ b K K ) eq_fn → i {
+@ __map_probe_for [K V] s ctl K key i h ( @ b K K ) eq_fn → i {
     : i cap ( __map_cap_raw ctl )
     : i mask - cap 1
-    : i h ( hash_fn key )
     : i start & h mask
+    : i frag ( __map_frag h )
     : *K keys # *K ( nurl_peek ctl 0 )
-    : *i states # *i ( nurl_peek ctl 2 )
+    : *u states # *u ( nurl_peek ctl 2 )
     : ~ i first_free -1
     : ~ i probe 0
     : ~ i result -1
     : ~ b done F
     ~ & ! done < probe cap {
         : i idx & + start probe mask
-        : i st . states idx
+        : i st # i . states idx
         ? == st 0
         { ? < first_free 0 { = first_free idx } {}
             = done T
         }
-        { ? == st 1
+        { ? == st frag
             { : K k . keys idx
                 ? ( eq_fn k key )
                 { = result idx
@@ -177,7 +186,7 @@ $ `stdlib/core/string.nu`
                 }
                 {}
             }
-            { ? < first_free 0 { = first_free idx } {} }
+            { ? & == st 1 < first_free 0 { = first_free idx } {} }
         }
         = probe + probe 1
     }
@@ -200,7 +209,7 @@ $ `stdlib/core/string.nu`
     : s old_states_raw ( __map_states_raw ctl )
     : *K old_keys # *K old_keys_raw
     : *V old_vals # *V old_vals_raw
-    : *i old_states # *i old_states_raw
+    : *u old_states # *u old_states_raw
     // Allocate fresh buffers; reset len + tombstones.
     ( __map_alloc_buffers [K V] ctl new_cap )
     ( nurl_poke ctl 3 0 )
@@ -208,19 +217,19 @@ $ `stdlib/core/string.nu`
     : i mask - new_cap 1
     : *K new_keys # *K ( nurl_peek ctl 0 )
     : *V new_vals # *V ( nurl_peek ctl 1 )
-    : *i new_states # *i ( nurl_peek ctl 2 )
+    : *u new_states # *u ( nurl_peek ctl 2 )
     : ~ i new_len 0
     : ~ i i 0
     ~ < i old_cap {
-        ? == . old_states i 1 {
+        ? ( __map_occupied # i . old_states i ) {
             : K k . old_keys i
             : V v . old_vals i
             : i h ( hash_fn k )
             : ~ i idx & h mask
-            ~ != . new_states idx 0 { = idx & + idx 1 mask }
+            ~ != # i . new_states idx 0 { = idx & + idx 1 mask }
             = . new_keys idx k
             = . new_vals idx v
-            = . new_states idx 1
+            = . new_states idx # u ( __map_frag h )
             = new_len + new_len 1
         } {}
         = i + i 1
@@ -267,7 +276,7 @@ $ `stdlib/core/string.nu`
     ? == ( __map_cap_raw ctl ) 0
     { ^ @ ?V { F # V 0 } }
     {}
-    : i slot ( __map_probe_for [K V] ctl key hash_fn eq_fn )
+    : i slot ( __map_probe_for [K V] ctl key ( hash_fn key ) eq_fn )
     ? < slot 0
     { ^ @ ?V { F # V 0 } }
     {}
@@ -280,7 +289,7 @@ $ `stdlib/core/string.nu`
     ? == ( __map_cap_raw ctl ) 0
     { ^ F }
     {}
-    : i slot ( __map_probe_for [K V] ctl key hash_fn eq_fn )
+    : i slot ( __map_probe_for [K V] ctl key ( hash_fn key ) eq_fn )
     ^ >= slot 0
 }
 
@@ -301,10 +310,11 @@ $ `stdlib/core/string.nu`
     {}
 
     // Probe in (possibly resized) table.
-    : i slot ( __map_probe_for [K V] ctl key hash_fn eq_fn )
+    : i h ( hash_fn key )
+    : i slot ( __map_probe_for [K V] ctl key h eq_fn )
     : *K keys # *K ( nurl_peek ctl 0 )
     : *V vals # *V ( nurl_peek ctl 1 )
-    : *i states # *i ( nurl_peek ctl 2 )
+    : *u states # *u ( nurl_peek ctl 2 )
     ? >= slot 0
     { : V prev . vals slot
         // The old value leaves the map: the caller owns it.
@@ -313,12 +323,12 @@ $ `stdlib/core/string.nu`
         ^ @ ?V { T prev }
     }
     { : i ins - -1 slot
-        : i st_old . states ins
+        : i st_old # i . states ins
         = . keys ins key
         = . vals ins val
-        = . states ins 1
+        = . states ins # u ( __map_frag h )
         ( nurl_poke ctl 3 + ( __map_len_raw ctl ) 1 )
-        ? == st_old 2
+        ? == st_old 1
         { ( nurl_poke ctl 5 - ( __map_tomb_raw ctl ) 1 ) }
         {}
         ^ @ ?V { F # V 0 }
@@ -330,12 +340,12 @@ $ `stdlib/core/string.nu`
     ? == ( __map_cap_raw ctl ) 0
     { ^ @ ?V { F # V 0 } }
     {}
-    : i slot ( __map_probe_for [K V] ctl key hash_fn eq_fn )
+    : i slot ( __map_probe_for [K V] ctl key ( hash_fn key ) eq_fn )
     ? < slot 0
     { ^ @ ?V { F # V 0 } }
     {}
     : *V vals # *V ( nurl_peek ctl 1 )
-    : *i states # *i ( nurl_peek ctl 2 )
+    : *u states # *u ( nurl_peek ctl 2 )
     : *K keys # *K ( nurl_peek ctl 0 )
     // The stored key leaves with its entry (dropped here); the value is
     // handed to the caller.
@@ -343,7 +353,7 @@ $ `stdlib/core/string.nu`
     ( mem_take gone )
     : V prev . vals slot
     ( mem_take prev )
-    = . states slot 2
+    = . states slot # u 1
     ( nurl_poke ctl 3 - ( __map_len_raw ctl ) 1 )
     ( nurl_poke ctl 5 + ( __map_tomb_raw ctl ) 1 )
     ^ @ ?V { T prev }
@@ -363,10 +373,10 @@ $ `stdlib/core/string.nu`
     ? > cap 0 {
         : *K keys # *K ( nurl_peek ctl 0 )
         : *V vals # *V ( nurl_peek ctl 1 )
-        : *i states # *i ( nurl_peek ctl 2 )
+        : *u states # *u ( nurl_peek ctl 2 )
         : ~ i i 0
         ~ < i cap {
-            ? == . states i 1 {
+            ? ( __map_occupied # i . states i ) {
                 : K k . keys i
                 ( mem_take k )
                 : V v . vals i
@@ -401,14 +411,14 @@ $ `stdlib/core/string.nu`
         ( __map_alloc_buffers [K V] dctl cap )
         : *K skeys # *K ( nurl_peek sctl 0 )
         : *V svals # *V ( nurl_peek sctl 1 )
-        : *i sstates # *i ( nurl_peek sctl 2 )
+        : *u sstates # *u ( nurl_peek sctl 2 )
         : *K dkeys # *K ( nurl_peek dctl 0 )
         : *V dvals # *V ( nurl_peek dctl 1 )
-        : *i dstates # *i ( nurl_peek dctl 2 )
+        : *u dstates # *u ( nurl_peek dctl 2 )
         : ~ i i 0
         ~ < i cap {
             = . dstates i . sstates i
-            ? == . sstates i 1 {
+            ? ( __map_occupied # i . sstates i ) {
                 : K k . skeys i
                 = . dkeys i ( mem_dup k )
                 : V v . svals i
@@ -433,10 +443,10 @@ $ `stdlib/core/string.nu`
     ? > cap 0 {
         : *K keys # *K ( nurl_peek ctl 0 )
         : *V vals # *V ( nurl_peek ctl 1 )
-        : *i states # *i ( nurl_peek ctl 2 )
+        : *u states # *u ( nurl_peek ctl 2 )
         : ~ i i 0
         ~ < i cap {
-            ? == . states i 1
+            ? ( __map_occupied # i . states i )
             { ( f . keys i . vals i ) }
             {}
             = i + i 1
@@ -451,10 +461,10 @@ $ `stdlib/core/string.nu`
     ? > cap 0 {
         : *K keys # *K ( nurl_peek ctl 0 )
         : *V vals # *V ( nurl_peek ctl 1 )
-        : *i states # *i ( nurl_peek ctl 2 )
+        : *u states # *u ( nurl_peek ctl 2 )
         : ~ i i 0
         ~ < i cap {
-            ? == . states i 1
+            ? ( __map_occupied # i . states i )
             { = acc ( f acc . keys i . vals i ) }
             {}
             = i + i 1
@@ -473,10 +483,10 @@ $ `stdlib/core/string.nu`
     : ( Vec K ) out ( vec_with_cap [K] len )
     ? > cap 0 {
         : *K keys # *K ( nurl_peek ctl 0 )
-        : *i states # *i ( nurl_peek ctl 2 )
+        : *u states # *u ( nurl_peek ctl 2 )
         : ~ i i 0
         ~ < i cap {
-            ? == . states i 1
+            ? ( __map_occupied # i . states i )
             { ( vec_push [K] out . keys i ) }
             {}
             = i + i 1
@@ -510,12 +520,12 @@ $ `stdlib/core/string.nu`
         ? == cap 0 { ^ @ ?( Pair K V ) { F # ( Pair K V ) 0 } } {}
         : *K keys # *K ( nurl_peek ctl 0 )
         : *V vals # *V ( nurl_peek ctl 1 )
-        : *i states # *i ( nurl_peek ctl 2 )
+        : *u states # *u ( nurl_peek ctl 2 )
         : ~ i idx ( nurl_peek st 0 )
         : ~ b found F
         : ~ ? ( Pair K V ) out @ ?( Pair K V ) { F # ( Pair K V ) 0 }
         ~ & ! found < idx cap {
-            ? == . states idx 1 {
+            ? ( __map_occupied # i . states idx ) {
                 : K k . keys idx
                 : V v . vals idx
                 = out @ ?( Pair K V ) { T ( pair_new [K V] k v ) }
@@ -536,10 +546,10 @@ $ `stdlib/core/string.nu`
     : ( Vec V ) out ( vec_with_cap [V] len )
     ? > cap 0 {
         : *V vals # *V ( nurl_peek ctl 1 )
-        : *i states # *i ( nurl_peek ctl 2 )
+        : *u states # *u ( nurl_peek ctl 2 )
         : ~ i i 0
         ~ < i cap {
-            ? == . states i 1
+            ? ( __map_occupied # i . states i )
             { ( vec_push [V] out . vals i ) }
             {}
             = i + i 1
@@ -572,14 +582,14 @@ $ `stdlib/core/string.nu`
         ( __map_alloc_buffers [K V] dctl cap )
         : *K skeys # *K ( nurl_peek sctl 0 )
         : *V svals # *V ( nurl_peek sctl 1 )
-        : *i sstates # *i ( nurl_peek sctl 2 )
+        : *u sstates # *u ( nurl_peek sctl 2 )
         : *K dkeys # *K ( nurl_peek dctl 0 )
         : *V dvals # *V ( nurl_peek dctl 1 )
-        : *i dstates # *i ( nurl_peek dctl 2 )
+        : *u dstates # *u ( nurl_peek dctl 2 )
         : ~ i i 0
         ~ < i cap {
             = . dstates i . sstates i
-            ? == . sstates i 1 {
+            ? ( __map_occupied # i . sstates i ) {
                 : K k . skeys i
                 : V v . svals i
                 = . dkeys i ( clone_k k )

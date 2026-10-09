@@ -89,14 +89,27 @@ $ `stdlib/std/bytes.nu`
 //
 // Limbs go through raw `*u64` / `*u` rather than the bounds-checked Vec
 // accessors, and the 80-word message schedule `w` is the caller's scratch
-// — allocated once per hash instead of once per block. Same change, same
-// reasoning as hash_sha256.nu.
+// — allocated once per hash instead of once per block. The rounds run
+// eight to a pass with no word moved, as in hash_sha256.nu — same change,
+// same reasoning.
 
 @ __sha512_be64 * u p i o → u64 {
     ^ | | | | | | | << # u64 . p o # u64 56 << # u64 . p + o 1 # u64 48
     << # u64 . p + o 2 # u64 40 << # u64 . p + o 3 # u64 32
     << # u64 . p + o 4 # u64 24 << # u64 . p + o 5 # u64 16
     << # u64 . p + o 6 # u64 8 # u64 . p + o 7
+}
+
+// One round: T1 = h + Σ1(e) + Ch(e, f, g) + k + w, T2 = Σ0(a) + Maj(a, b, c);
+// d += T1, h = T1 + T2 — the next round sees h as a, d as e.
+inline @ __sha512_rnd u64 a u64 b u64 c inout u64 d u64 e u64 f u64 g inout u64 h u64 k u64 w → v {
+    : u64 s1 ^^ ^^ ( __sha512_rotr e 14 ) ( __sha512_rotr e 18 ) ( __sha512_rotr e 41 )
+    : u64 ch ^^ g & e ^^ f g
+    : u64 t1 + + + + h s1 ch k w
+    : u64 s0 ^^ ^^ ( __sha512_rotr a 28 ) ( __sha512_rotr a 34 ) ( __sha512_rotr a 39 )
+    : u64 mj ^^ & a b & c ^^ a b
+    = d + d t1
+    = h + t1 + s0 mj
 }
 
 @ __sha512_transform ( Vec u64 ) state ( Vec u ) block i offset ( Vec u64 ) K ( Vec u64 ) w → v {
@@ -127,23 +140,19 @@ $ `stdlib/std/bytes.nu`
     : ~ u64 g . sp 6
     : ~ u64 h . sp 7
 
+    // Eight rounds a pass: eight rounds rotate a..h back to their own
+    // names, so no round moves a word.
     : ~ i ri 0
     ~ < ri 80 {
-        : u64 S1 ^^ ^^ ( __sha512_rotr e 14 ) ( __sha512_rotr e 18 ) ( __sha512_rotr e 41 )
-        : u64 ch ^^ & e f & ~ e g
-        : u64 t1 + + + + h S1 ch . kp ri . wp ri
-        : u64 S0 ^^ ^^ ( __sha512_rotr a 28 ) ( __sha512_rotr a 34 ) ( __sha512_rotr a 39 )
-        : u64 mj ^^ ^^ & a b & a c & b c
-        : u64 t2 + S0 mj
-        = h g
-        = g f
-        = f e
-        = e + d t1
-        = d c
-        = c b
-        = b a
-        = a + t1 t2
-        = ri + ri 1
+        ( __sha512_rnd a b c d e f g h . kp ri . wp ri )
+        ( __sha512_rnd h a b c d e f g . kp + ri 1 . wp + ri 1 )
+        ( __sha512_rnd g h a b c d e f . kp + ri 2 . wp + ri 2 )
+        ( __sha512_rnd f g h a b c d e . kp + ri 3 . wp + ri 3 )
+        ( __sha512_rnd e f g h a b c d . kp + ri 4 . wp + ri 4 )
+        ( __sha512_rnd d e f g h a b c . kp + ri 5 . wp + ri 5 )
+        ( __sha512_rnd c d e f g h a b . kp + ri 6 . wp + ri 6 )
+        ( __sha512_rnd b c d e f g h a . kp + ri 7 . wp + ri 7 )
+        = ri + ri 8
     }
 
     = . sp 0 + . sp 0 a

@@ -83,10 +83,29 @@ $ `stdlib/std/bytes.nu`
 //
 // The schedule `mp` is the caller's 64-word scratch, allocated once per
 // hash instead of once per block; the block is the 64 bytes at `bp`.
+//
+// The rounds run eight to a pass, each one `inline` call updating the two
+// words a round changes (`inout`) with the variables written already
+// rotated into their roles, so no round moves a word — 1.21x the rolled
+// loop that shifted all eight every round. Fully unrolled, with the
+// schedule in registers too, the transform was 10 KB of code, slower than
+// this, and every program that hashes compiled a third of a second longer.
 
 @ __sha256_be32 * u p i o → u32 {
     ^ | | | << # u32 . p o # u32 24 << # u32 . p + o 1 # u32 16
     << # u32 . p + o 2 # u32 8 # u32 . p + o 3
+}
+
+// One round: T1 = h + Σ1(e) + Ch(e, f, g) + k + w, T2 = Σ0(a) + Maj(a, b, c);
+// d += T1, h = T1 + T2 — the next round sees h as a, d as e.
+inline @ __sha256_rnd u32 a u32 b u32 c inout u32 d u32 e u32 f u32 g inout u32 h u32 k u32 w → v {
+    : u32 s1 ^^ ^^ ( __sha256_rotr e 6 ) ( __sha256_rotr e 11 ) ( __sha256_rotr e 25 )
+    : u32 ch ^^ g & e ^^ f g
+    : u32 t1 + + + + h s1 ch k w
+    : u32 s0 ^^ ^^ ( __sha256_rotr a 2 ) ( __sha256_rotr a 13 ) ( __sha256_rotr a 22 )
+    : u32 mj ^^ & a b & c ^^ a b
+    = d + d t1
+    = h + t1 + s0 mj
 }
 
 @ __sha256_transform * u32 sp * u bp * u32 kp * u32 mp → v {
@@ -113,23 +132,19 @@ $ `stdlib/std/bytes.nu`
     : ~ u32 g . sp 6
     : ~ u32 h . sp 7
 
+    // Eight rounds a pass: eight rounds rotate a..h back to their own
+    // names, so no round moves a word.
     : ~ i ri 0
     ~ < ri 64 {
-        : u32 S1 ^^ ^^ ( __sha256_rotr e 6 ) ( __sha256_rotr e 11 ) ( __sha256_rotr e 25 )
-        : u32 ch ^^ & e f & ~ e g
-        : u32 t1 + + + + h S1 ch . kp ri . mp ri
-        : u32 S0 ^^ ^^ ( __sha256_rotr a 2 ) ( __sha256_rotr a 13 ) ( __sha256_rotr a 22 )
-        : u32 mj ^^ ^^ & a b & a c & b c
-        : u32 t2 + S0 mj
-        = h g
-        = g f
-        = f e
-        = e + d t1
-        = d c
-        = c b
-        = b a
-        = a + t1 t2
-        = ri + ri 1
+        ( __sha256_rnd a b c d e f g h . kp ri . mp ri )
+        ( __sha256_rnd h a b c d e f g . kp + ri 1 . mp + ri 1 )
+        ( __sha256_rnd g h a b c d e f . kp + ri 2 . mp + ri 2 )
+        ( __sha256_rnd f g h a b c d e . kp + ri 3 . mp + ri 3 )
+        ( __sha256_rnd e f g h a b c d . kp + ri 4 . mp + ri 4 )
+        ( __sha256_rnd d e f g h a b c . kp + ri 5 . mp + ri 5 )
+        ( __sha256_rnd c d e f g h a b . kp + ri 6 . mp + ri 6 )
+        ( __sha256_rnd b c d e f g h a . kp + ri 7 . mp + ri 7 )
+        = ri + ri 8
     }
 
     = . sp 0 + . sp 0 a

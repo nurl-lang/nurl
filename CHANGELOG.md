@@ -157,6 +157,10 @@ beside each raw one (*Changed*).
   only a `.bat` shim in `bin\`, so it read an empty version, and an empty
   version compared as too old.
 
+- A `v128` or `v256` inside a compound type — a struct field, an
+  `inout` parameter (`v128*`) — lowered to an unknown IR type; it now
+  lowers like the scalar it is.
+
 ### Changed
 
 - **A raw string in a value is a view** (docs/MEMORY.md §2.13). In safe
@@ -225,8 +229,49 @@ beside each raw one (*Changed*).
   `wasmbench.sh` for Windows (exercised under pwsh on Linux; its
   Windows-only branches are not yet run on a Windows host).
 
+- `nurl_v128_unpacklo32` / `unpackhi32` / `unpacklo64` / `unpackhi64`,
+  and `nurl_v256_add32` / `rotl32` / `bcast32` / `unpacklo32` /
+  `unpackhi32` / `unpacklo64` / `unpackhi64` / `permlo128` / `permhi128`
+  (docs/spec.md); `nurl_simd128_native()` answers whether v128 is native
+  (0 on a wasm target LLVM scalarises it for).
+
 ### Performance
 
+- **The standard library's hashes, ciphers and codecs, rewritten for
+  speed** (bench/ crypto rows, i7-5930K, the same output everywhere):
+  BLAKE2b 5.1x (the bench row ~1.9x faster than its C peer), BLAKE3 10x,
+  SHA-1 3.4x, MD5 2.6x, SHA-256 1.21x, SHA-512 1.17x; ChaCha20 2.4x
+  (four blocks a pass over v128 lanes, eight over v256 lanes in the
+  x86-64-v3 clone); Poly1305 1.67x (radix 2^64, four products a block —
+  the bench's C and Rust peers carry the same formulation); X25519 1.15x
+  (field elements as scalar limbs). The pattern that did it: working
+  words as scalar locals, `inline` helpers taking the words they update
+  `inout`, rounds unrolled one rotation period per pass with permutations
+  as argument order — not the whole function, whose compile time grows
+  faster than its speed (see the last item).
+- **Compression and checksums:** CRC-32 slicing-by-8 3.9x, Adler-32 with
+  deferred modulo 8.3x, a table-driven inflate 2.4x (zlib's speed), and
+  deflate's match search 1.7x with byte-identical output.
+- **Collections and text:** `hashmap` keeps one state byte per slot with
+  a 7-bit hash fragment (insert 1.7x, lookup 1.3x, same iteration order);
+  `sort_by` is a branchless Lomuto introsort with run detection and a
+  sorted-prefix merge (2-25x; only a sorted run with 1 % scattered
+  outliers is 24 % slower); base64 decode works by quartets (3.4 → 0.9
+  ns/byte); `utf8_valid` skips ASCII eight bytes at a time.
+- **A raw-pointer return publishes no ownership proof.** Every `→ *T`
+  function ended by storing its proof to the thread-local channel through
+  an `asm volatile` with a memory clobber, which forced every caller to
+  reload what it had cached: blake3 −6.0 % instructions, the blake2b
+  bench −3.8 %. A dyn thunk over such a function publishes 0.
+- **Single-threaded wasm modules recycle small allocations** through the
+  runtime's size-class cache (it was off wherever the non-atomic TLS path
+  was): bench/json_parse as wasm on nwasm −6 % cycles.
+- **What it costs to compile:** a program that does TLS compiles 4.6 %
+  more instructions than before these changes, most of it ChaCha20's
+  eight-block kernel in both clones. Fully unrolled SHA-2 and SHA-1, and
+  an X25519 ladder with every field operation inlined, were measured and
+  rejected for compile time (the X25519 one cost a TLS program three
+  seconds).
 - **Compile time 0.7 % below 0.71.0's main** (self-compile 12.56 G →
   12.47 G instructions, each compiler built by itself, same input) with
   the larger borrow walk and every call now asked of the right callee:

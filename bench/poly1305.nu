@@ -1,9 +1,10 @@
 // benchmark-contract: poly1305;rfc8439;message=16384;macs=4096;key=chained;checksum=tag-le64
 //
 // poly1305 — the RFC 8439 one-time authenticator through the standard
-// library's `poly1305_mac` (stdlib/std/chacha20poly1305.nu, the
-// poly1305-donna-64 formulation: three limbs at radix 2^44, nine
-// 64x64->128 products a block). A 16 KiB message is MACed 4096 times
+// library's `poly1305_mac` (stdlib/std/chacha20poly1305.nu, radix 2^64:
+// the accumulator in two 64-bit words and a few bits above, four
+// 64x64->128 products a block and two small ones — OpenSSL's and
+// BoringSSL's scalar formulation). A 16 KiB message is MACed 4096 times
 // (64 MiB); every tag is XORed back into both halves of the key, so each
 // MAC depends on the one before and none can be hoisted. The C and Rust
 // peers carry the same formulation written out by hand — their standard

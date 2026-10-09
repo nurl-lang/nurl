@@ -7,119 +7,135 @@
 //
 // API:
 //   ( sha1_pure ( Vec u ) data ) → ( Vec u )   20-byte digest (owned)
+//
+// Shape: the five working words and the sixteen-word message schedule are
+// scalar locals; each of the 80 steps is one `inline` call that takes the
+// words it updates `inout`, written out with the working words already
+// rotated into place, so no step moves a word and no round selects its
+// function at run time. The schedule is the 16-word ring of FIPS 180-4
+// §6.1.3, expanded in place one word ahead of the step that reads it.
 
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 
-// Bounds-checked unwrappers — caller guarantees index in range, the
-// F-arm is dead code.
-@ __sha1_vu32 ( Vec u32 ) v i idx → u32 {
-    : ?u32 o ( vec_get [u32] v idx )
-    ?? o { T x → { ^ x } F → { ^ # u32 0 } }
-}
-
-@ __sha1_vu8 ( Vec u ) v i idx → i {
-    : ?u o ( vec_get [u] v idx )
-    ?? o { T x → { ^ # i x } F → { ^ 0 } }
-}
-
 // Left-rotate u32 by c bits (0 < c < 32).
-@ __sha1_rotl u32 x i c → u32 {
-    // One `rol` instruction via the compiler's funnel-shift primitive,
-    // rather than a shift pair, an `or` and the two intermediate
-    // values they need materialised — see __sha256_rotr for the full
-    // note. Every ISA NURL targets has the instruction.
+inline @ __sha1_rotl u32 x i c → u32 {
+    // One `rol` instruction via the compiler's funnel-shift primitive.
     ^ # u32 ( nurl_rotl32 # u64 x # u64 c )
 }
 
-// ── Round constants for the four 20-round groups ───────────────────
-
-@ __sha1_K i group → u32 {
-    ? == group 0 { ^ # u32 1518500249 } {}  // 0x5A827999
-    ? == group 1 { ^ # u32 1859775393 } {}  // 0x6ED9EBA1
-    ? == group 2 { ^ # u32 2400959708 } {}  // 0x8F1BBCDC (signed: -1894007588)
-    ^ # u32 3395469782  // 0xCA62C1D6
+// One step, e += rotl(a, 5) + f(b, c, d) + K + w; b = rotl(b, 30) — for
+// each of the four 20-step groups (Ch, Parity, Maj, Parity).
+inline @ __sha1_f1 u32 a inout u32 b u32 c u32 d inout u32 e u32 w → v {
+    = e + + + + e ( __sha1_rotl a 5 ) | & b c & ~ b d # u32 1518500249 w  // 0x5A827999
+    = b ( __sha1_rotl b 30 )
 }
 
-// ── Transform: one 64-byte block. Mutates `state` (5 × u32) in place.
+inline @ __sha1_f2 u32 a inout u32 b u32 c u32 d inout u32 e u32 w → v {
+    = e + + + + e ( __sha1_rotl a 5 ) ^^ ^^ b c d # u32 1859775393 w  // 0x6ED9EBA1
+    = b ( __sha1_rotl b 30 )
+}
 
-@ __sha1_transform ( Vec u32 ) state ( Vec u ) block i offset → v {
-    // Decode 16 big-endian u32 words; expand to 80 via the SHA-1
-    // message schedule.
-    : ( Vec u32 ) w ( vec_with_cap [u32] 80 )
-    : ~ i wi 0
-    ~ < wi 16 {
-        : ?u32 wo ( bytes_read_u32_be block + offset * wi 4 )
-        : u32 wv ?? wo { T x → x F → # u32 0 }
-        ( vec_push [u32] w wv )
-        = wi + wi 1
-    }
-    ~ < wi 80 {
-        : u32 w3 ( __sha1_vu32 w - wi 3 )
-        : u32 w8 ( __sha1_vu32 w - wi 8 )
-        : u32 w14 ( __sha1_vu32 w - wi 14 )
-        : u32 w16 ( __sha1_vu32 w - wi 16 )
-        : u32 xv ^^ ^^ ^^ w3 w8 w14 w16
-        ( vec_push [u32] w ( __sha1_rotl xv 1 ) )
-        = wi + wi 1
-    }
+inline @ __sha1_f3 u32 a inout u32 b u32 c u32 d inout u32 e u32 w → v {
+    = e + + + + e ( __sha1_rotl a 5 ) | & b c & d | b c # u32 2400959708 w  // 0x8F1BBCDC
+    = b ( __sha1_rotl b 30 )
+}
 
-    : ~ u32 a ( __sha1_vu32 state 0 )
-    : ~ u32 b ( __sha1_vu32 state 1 )
-    : ~ u32 c ( __sha1_vu32 state 2 )
-    : ~ u32 d ( __sha1_vu32 state 3 )
-    : ~ u32 e ( __sha1_vu32 state 4 )
+inline @ __sha1_f4 u32 a inout u32 b u32 c u32 d inout u32 e u32 w → v {
+    = e + + + + e ( __sha1_rotl a 5 ) ^^ ^^ b c d # u32 3395469782 w  // 0xCA62C1D6
+    = b ( __sha1_rotl b 30 )
+}
 
-    : ~ i ri 0
-    ~ < ri 80 {
-        : ~ u32 f # u32 0
-        : i grp / ri 20
-        ? == grp 0 { = f | & b c & ~ b d } {
-            ? == grp 1 { = f ^^ ^^ b c d } {
-                ? == grp 2 { = f | | & b c & b d & c d } {
-                    = f ^^ ^^ b c d
-                }
-            }
-        }
-        : u32 kv ( __sha1_K grp )
-        : u32 wv ( __sha1_vu32 w ri )
-        : u32 t + + + + ( __sha1_rotl a 5 ) f e kv wv
-        = e d
-        = d c
-        = c ( __sha1_rotl b 30 )
-        = b a
-        = a t
-        = ri + ri 1
+// The big-endian u32 at `blk[off .. off+4]`; every caller reads inside a
+// block it has already sized, so the out-of-range arm never runs.
+@ __sha1_w ( Vec u ) blk i off → u32 {
+    ?? ( bytes_read_u32_be blk off ) { T x → ^ x F → ^ # u32 0 }
+}
+
+// ── Transform: one 64-byte block at `blk[off ..]` into h0..h4. ─────
+// The 80-word schedule is expanded into the caller's scratch `wp` first;
+// the steps then run five to a pass, each one `inline` call updating the
+// two words a step changes (`inout`) with the variables written already
+// rotated into their roles, so five steps bring a..e back to their own
+// names and no step moves a word. Fully unrolled over a schedule held in
+// sixteen locals the transform was no faster, and a program hashing with
+// SHA-1 compiled 60 % more instructions.
+@ __sha1_transform inout u32 h0 inout u32 h1 inout u32 h2 inout u32 h3 inout u32 h4 ( Vec u ) blk i off * u32 wp → v {
+    : ~ i k 0
+    ~ < k 16 { = . wp k ( __sha1_w blk + off * k 4 ) = k + k 1 }
+    ~ < k 80 {
+        = . wp k ( __sha1_rotl ^^ ^^ ^^ . wp - k 3 . wp - k 8 . wp - k 14 . wp - k 16 1 )
+        = k + k 1
     }
 
-    : u32 s0 ( __sha1_vu32 state 0 )
-    : u32 s1 ( __sha1_vu32 state 1 )
-    : u32 s2 ( __sha1_vu32 state 2 )
-    : u32 s3 ( __sha1_vu32 state 3 )
-    : u32 s4 ( __sha1_vu32 state 4 )
-    : b _0 ( vec_set [u32] state 0 + s0 a )
-    : b _1 ( vec_set [u32] state 1 + s1 b )
-    : b _2 ( vec_set [u32] state 2 + s2 c )
-    : b _3 ( vec_set [u32] state 3 + s3 d )
-    : b _4 ( vec_set [u32] state 4 + s4 e )
+    : ~ u32 a h0
+    : ~ u32 b h1
+    : ~ u32 c h2
+    : ~ u32 d h3
+    : ~ u32 e h4
 
+    : ~ i t 0
+    ~ < t 20 {
+        ( __sha1_f1 a b c d e . wp t )
+        ( __sha1_f1 e a b c d . wp + t 1 )
+        ( __sha1_f1 d e a b c . wp + t 2 )
+        ( __sha1_f1 c d e a b . wp + t 3 )
+        ( __sha1_f1 b c d e a . wp + t 4 )
+        = t + t 5
+    }
+    = t 20
+    ~ < t 40 {
+        ( __sha1_f2 a b c d e . wp t )
+        ( __sha1_f2 e a b c d . wp + t 1 )
+        ( __sha1_f2 d e a b c . wp + t 2 )
+        ( __sha1_f2 c d e a b . wp + t 3 )
+        ( __sha1_f2 b c d e a . wp + t 4 )
+        = t + t 5
+    }
+    = t 40
+    ~ < t 60 {
+        ( __sha1_f3 a b c d e . wp t )
+        ( __sha1_f3 e a b c d . wp + t 1 )
+        ( __sha1_f3 d e a b c . wp + t 2 )
+        ( __sha1_f3 c d e a b . wp + t 3 )
+        ( __sha1_f3 b c d e a . wp + t 4 )
+        = t + t 5
+    }
+    = t 60
+    ~ < t 80 {
+        ( __sha1_f4 a b c d e . wp t )
+        ( __sha1_f4 e a b c d . wp + t 1 )
+        ( __sha1_f4 d e a b c . wp + t 2 )
+        ( __sha1_f4 c d e a b . wp + t 3 )
+        ( __sha1_f4 b c d e a . wp + t 4 )
+        = t + t 5
+    }
+
+    = h0 + h0 a
+    = h1 + h1 b
+    = h2 + h2 c
+    = h3 + h3 d
+    = h4 + h4 e
 }
 
 // ── Public entry — same shape as `md5_pure`. ──────────────────────
 
 @ sha1_pure ( Vec u ) data → ( Vec u ) {
-    : ( Vec u32 ) state ( vec_with_cap [u32] 5 )
-    ( vec_push [u32] state # u32 1732584193 )  // 0x67452301
-    ( vec_push [u32] state # u32 4023233417 )  // 0xEFCDAB89
-    ( vec_push [u32] state # u32 2562383102 )  // 0x98BADCFE
-    ( vec_push [u32] state # u32 271733878 )  // 0x10325476
-    ( vec_push [u32] state # u32 3285377520 )  // 0xC3D2E1F0
+    : ~ u32 h0 # u32 1732584193  // 0x67452301
+    : ~ u32 h1 # u32 4023233417  // 0xEFCDAB89
+    : ~ u32 h2 # u32 2562383102  // 0x98BADCFE
+    : ~ u32 h3 # u32 271733878  // 0x10325476
+    : ~ u32 h4 # u32 3285377520  // 0xC3D2E1F0
 
     : i n ( vec_len [u] data )
+    // the 80-word message schedule, one per hash
+    : ( Vec u32 ) ws ( vec_with_cap [u32] 80 )
+    : b _wl ( vec_set_len [u32] ws 80 )
+    : *u32 wp ( vec_data [u32] ws )
 
     : ~ i off 0
     ~ <= + off 64 n {
-        ( __sha1_transform state data off )
+        ( __sha1_transform h0 h1 h2 h3 h4 data off wp )
         = off + off 64
     }
 
@@ -127,8 +143,7 @@ $ `stdlib/std/bytes.nu`
     : ( Vec u ) tail ( vec_with_cap [u] 128 )
     : ~ i ti off
     ~ < ti n {
-        : i bv ( __sha1_vu8 data ti )
-        ( vec_push [u] tail # u & bv 255 )
+        ( vec_push [u] tail ( vec_at [u] data ti ) )
         = ti + ti 1
     }
     ( vec_push [u] tail # u 128 )
@@ -154,22 +169,16 @@ $ `stdlib/std/bytes.nu`
     : i tail_len ( vec_len [u] tail )
     : ~ i toff 0
     ~ < toff tail_len {
-        ( __sha1_transform state tail toff )
+        ( __sha1_transform h0 h1 h2 h3 h4 tail toff wp )
         = toff + toff 64
     }
 
-    // Serialise state[0..5] as 20 big-endian bytes.
+    // Serialise h0..h4 as 20 big-endian bytes.
     : ( Vec u ) out ( vec_with_cap [u] 20 )
-    : ~ i si 0
-    ~ < si 5 {
-        : u32 sv ( __sha1_vu32 state si )
-        : i siv # i sv
-        ( vec_push [u] out # u & >> siv 24 255 )
-        ( vec_push [u] out # u & >> siv 16 255 )
-        ( vec_push [u] out # u & >> siv 8 255 )
-        ( vec_push [u] out # u & siv 255 )
-        = si + si 1
-    }
-
+    ( bytes_push_u32_be out h0 )
+    ( bytes_push_u32_be out h1 )
+    ( bytes_push_u32_be out h2 )
+    ( bytes_push_u32_be out h3 )
+    ( bytes_push_u32_be out h4 )
     ^ out
 }

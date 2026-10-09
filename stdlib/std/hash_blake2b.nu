@@ -9,169 +9,153 @@
 // 64-bit words, 128-byte blocks, 12 rounds. u64 constants above 2^63-1 are
 // written as their negative-two's-complement i64 (no hex literals); `# u64 -N`
 // reinterprets the bit pattern.
+//
+// Shape: the sixteen working words, the sixteen message words and the eight
+// chaining words are scalar locals, never a Vec. The mixing function G and
+// the round take their working words `inout`, and both are `inline`, so after
+// inlining every word is an SSA value the register allocator sees whole — the
+// same code the C reference gets from its G/ROUND macros. The message
+// schedule σ is not a table: each of the twelve round calls below passes the
+// message words in that round's σ order, so every gather is resolved at
+// compile time and costs nothing at run time. No bounds check survives in the
+// rounds, because there is nothing indexed left in them.
 
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 
-@ __b2b_vu64 ( Vec u64 ) v i idx → u64 {
-    : ?u64 o ( vec_get [u64] v idx )
-    ?? o { T x → { ^ x } F → { ^ # u64 0 } }
+// G, the quarter-round, on four working words in place.
+inline @ __b2b_g inout u64 a inout u64 b inout u64 c inout u64 d u64 x u64 y → v {
+    = a + + a b x
+    = d ( nurl_rotr64 ^^ d a 32 )
+    = c + c d
+    = b ( nurl_rotr64 ^^ b c 24 )
+    = a + + a b y
+    = d ( nurl_rotr64 ^^ d a 16 )
+    = c + c d
+    = b ( nurl_rotr64 ^^ b c 63 )
 }
 
-@ __b2b_vu ( Vec u ) v i idx → i {
-    : ?u o ( vec_get [u] v idx )
-    ?? o { T x → { ^ # i x } F → { ^ 0 } }
+// One round: the four column mixes, then the four diagonal mixes. s0..s15 are
+// the message words already permuted by this round's σ row.
+inline @ __b2b_round inout u64 v0 inout u64 v1 inout u64 v2 inout u64 v3 inout u64 v4 inout u64 v5 inout u64 v6 inout u64 v7 inout u64 v8 inout u64 v9 inout u64 v10 inout u64 v11 inout u64 v12 inout u64 v13 inout u64 v14 inout u64 v15 u64 s0 u64 s1 u64 s2 u64 s3 u64 s4 u64 s5 u64 s6 u64 s7 u64 s8 u64 s9 u64 s10 u64 s11 u64 s12 u64 s13 u64 s14 u64 s15 → v {
+    ( __b2b_g v0 v4 v8 v12 s0 s1 )
+    ( __b2b_g v1 v5 v9 v13 s2 s3 )
+    ( __b2b_g v2 v6 v10 v14 s4 s5 )
+    ( __b2b_g v3 v7 v11 v15 s6 s7 )
+    ( __b2b_g v0 v5 v10 v15 s8 s9 )
+    ( __b2b_g v1 v6 v11 v12 s10 s11 )
+    ( __b2b_g v2 v7 v8 v13 s12 s13 )
+    ( __b2b_g v3 v4 v9 v14 s14 s15 )
 }
 
-// Right-rotate a u64 by c bits (0 < c < 64).
-@ __b2b_rotr u64 x i c → u64 {
-    // One `ror` instruction via the compiler's funnel-shift primitive,
-    // rather than a shift pair, an `or` and the two intermediate
-    // values they need materialised — see __sha256_rotr for the full
-    // note. Every ISA NURL targets has the instruction.
-    ^ # u64 ( nurl_rotr64 # u64 x # u64 c )
+// The little-endian u64 at `blk[off .. off+8]`. Every caller reads inside a
+// block it has already sized, so the out-of-range arm never runs.
+@ __b2b_m ( Vec u ) blk i off → u64 {
+    ?? ( bytes_read_u64_le blk off ) { T x → ^ x F → ^ # u64 0 }
 }
 
-// The eight BLAKE2b IV words (identical to the SHA-512 IV).
-@ __b2b_iv → ( Vec u64 ) {
-    : ( Vec u64 ) v ( vec_with_cap [u64] 8 )
-    ( vec_push [u64] v # u64 7640891576956012808 )
-    ( vec_push [u64] v # u64 -4942790177534073029 )
-    ( vec_push [u64] v # u64 4354685564936845355 )
-    ( vec_push [u64] v # u64 -6534734903238641935 )
-    ( vec_push [u64] v # u64 5840696475078001361 )
-    ( vec_push [u64] v # u64 -7276294671716946913 )
-    ( vec_push [u64] v # u64 2270897969802886507 )
-    ( vec_push [u64] v # u64 6620516959819538809 )
-    ^ v
-}
+// Compress the 128-byte block at `blk[off ..]` into the chaining words h0..h7.
+// `t` = bytes hashed through this block (the high counter word is always 0
+// for a Vec-sized input); `last` marks the final block.
+@ __b2b_compress inout u64 h0 inout u64 h1 inout u64 h2 inout u64 h3 inout u64 h4 inout u64 h5 inout u64 h6 inout u64 h7 ( Vec u ) blk i off u64 t b last → v {
+    : u64 m0 ( __b2b_m blk off )
+    : u64 m1 ( __b2b_m blk + off 8 )
+    : u64 m2 ( __b2b_m blk + off 16 )
+    : u64 m3 ( __b2b_m blk + off 24 )
+    : u64 m4 ( __b2b_m blk + off 32 )
+    : u64 m5 ( __b2b_m blk + off 40 )
+    : u64 m6 ( __b2b_m blk + off 48 )
+    : u64 m7 ( __b2b_m blk + off 56 )
+    : u64 m8 ( __b2b_m blk + off 64 )
+    : u64 m9 ( __b2b_m blk + off 72 )
+    : u64 m10 ( __b2b_m blk + off 80 )
+    : u64 m11 ( __b2b_m blk + off 88 )
+    : u64 m12 ( __b2b_m blk + off 96 )
+    : u64 m13 ( __b2b_m blk + off 104 )
+    : u64 m14 ( __b2b_m blk + off 112 )
+    : u64 m15 ( __b2b_m blk + off 120 )
 
-// The message-word permutation schedule σ, flattened to 12·16 entries
-// (round-major). Parsed once from a decimal string.
-@ __b2b_sigma → ( Vec u ) {
-    : s s ( nurl_str_cat
-    `0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 14 10 4 8 9 15 13 6 1 12 0 2 11 7 5 3 11 8 12 0 5 2 15 13 10 14 3 6 7 1 9 4 7 9 3 1 13 12 11 14 2 6 5 10 4 0 15 8 9 0 5 7 2 4 10 15 14 1 11 12 6 8 3 13 2 12 6 10 0 11 8 3 4 13 7 5 15 14 1 9 `
-    `12 5 1 15 14 13 4 10 0 7 6 3 9 2 8 11 13 11 7 14 12 1 3 9 5 0 15 4 8 6 2 10 6 15 14 9 11 3 0 8 12 2 13 7 1 4 10 5 10 2 8 4 7 6 1 5 15 11 9 14 3 12 13 0 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 14 10 4 8 9 15 13 6 1 12 0 2 11 7 5 3` )
-    : ( Vec u ) out ( vec_new [u] )
-    : i n ( nurl_str_len s )
-    : ~ i k 0
-    : ~ i cur 0
-    : ~ b indig F
-    ~ < k n {
-        : i c ( nurl_str_at s n k )
-        ? & >= c 48 <= c 57
-        { = cur + * cur 10 - c 48 = indig T }
-        { ? indig { ( vec_push [u] out # u cur ) = cur 0 = indig F } {} }
-        = k + k 1
-    }
-    ? indig { ( vec_push [u] out # u cur ) } {}
-    ^ out
-}
+    // v = h ‖ IV, with the counter folded into v12 and the final-block flag
+    // into v14 (the IV words are those of SHA-512).
+    : ~ u64 v0 h0
+    : ~ u64 v1 h1
+    : ~ u64 v2 h2
+    : ~ u64 v3 h3
+    : ~ u64 v4 h4
+    : ~ u64 v5 h5
+    : ~ u64 v6 h6
+    : ~ u64 v7 h7
+    : ~ u64 v8 # u64 7640891576956012808
+    : ~ u64 v9 # u64 -4942790177534073029
+    : ~ u64 v10 # u64 4354685564936845355
+    : ~ u64 v11 # u64 -6534734903238641935
+    : ~ u64 v12 ^^ # u64 5840696475078001361 t
+    : ~ u64 v13 # u64 -7276294671716946913
+    : ~ u64 v14 # u64 2270897969802886507
+    : ~ u64 v15 # u64 6620516959819538809
+    ? last { = v14 ~ v14 } {}
 
-// The G mixing function, in place on the working vector v (16 u64).
-@ __b2b_g ( Vec u64 ) v i a i b i c i d u64 x u64 y → v {
-    : ~ u64 va ( __b2b_vu64 v a )
-    : ~ u64 vb ( __b2b_vu64 v b )
-    : ~ u64 vc ( __b2b_vu64 v c )
-    : ~ u64 vd ( __b2b_vu64 v d )
-    = va + + va vb x
-    = vd ( __b2b_rotr ^^ vd va 32 )
-    = vc + vc vd
-    = vb ( __b2b_rotr ^^ vb vc 24 )
-    = va + + va vb y
-    = vd ( __b2b_rotr ^^ vd va 16 )
-    = vc + vc vd
-    = vb ( __b2b_rotr ^^ vb vc 63 )
-    ( vec_set [u64] v a va )
-    ( vec_set [u64] v b vb )
-    ( vec_set [u64] v c vc )
-    ( vec_set [u64] v d vd )
-}
+    ( __b2b_round v0 v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15 m0 m1 m2 m3 m4 m5 m6 m7 m8 m9 m10 m11 m12 m13 m14 m15 )
+    ( __b2b_round v0 v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15 m14 m10 m4 m8 m9 m15 m13 m6 m1 m12 m0 m2 m11 m7 m5 m3 )
+    ( __b2b_round v0 v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15 m11 m8 m12 m0 m5 m2 m15 m13 m10 m14 m3 m6 m7 m1 m9 m4 )
+    ( __b2b_round v0 v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15 m7 m9 m3 m1 m13 m12 m11 m14 m2 m6 m5 m10 m4 m0 m15 m8 )
+    ( __b2b_round v0 v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15 m9 m0 m5 m7 m2 m4 m10 m15 m14 m1 m11 m12 m6 m8 m3 m13 )
+    ( __b2b_round v0 v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15 m2 m12 m6 m10 m0 m11 m8 m3 m4 m13 m7 m5 m15 m14 m1 m9 )
+    ( __b2b_round v0 v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15 m12 m5 m1 m15 m14 m13 m4 m10 m0 m7 m6 m3 m9 m2 m8 m11 )
+    ( __b2b_round v0 v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15 m13 m11 m7 m14 m12 m1 m3 m9 m5 m0 m15 m4 m8 m6 m2 m10 )
+    ( __b2b_round v0 v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15 m6 m15 m14 m9 m11 m3 m0 m8 m12 m2 m13 m7 m1 m4 m10 m5 )
+    ( __b2b_round v0 v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15 m10 m2 m8 m4 m7 m6 m1 m5 m15 m11 m9 m14 m3 m12 m13 m0 )
+    ( __b2b_round v0 v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15 m0 m1 m2 m3 m4 m5 m6 m7 m8 m9 m10 m11 m12 m13 m14 m15 )
+    ( __b2b_round v0 v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15 m14 m10 m4 m8 m9 m15 m13 m6 m1 m12 m0 m2 m11 m7 m5 m3 )
 
-// One message word m[j], the j-th little-endian u64 in `block` at `off`.
-@ __b2b_m ( Vec u ) block i off i j → u64 {
-    : ?u64 o ( bytes_read_u64_le block + off * j 8 )
-    ?? o { T x → { ^ x } F → { ^ # u64 0 } }
-}
-
-// Compress one 128-byte block into state h. `t` = bytes hashed through this
-// block; `last` != 0 marks the final block.
-@ __b2b_compress ( Vec u64 ) h ( Vec u ) block i off u64 t i last ( Vec u ) sigma → v {
-    : ( Vec u64 ) iv ( __b2b_iv )
-    : ( Vec u64 ) v ( vec_with_cap [u64] 16 )
-    : ~ i i 0
-    ~ < i 8 { ( vec_push [u64] v ( __b2b_vu64 h i ) ) = i + i 1 }
-    = i 0
-    ~ < i 8 { ( vec_push [u64] v ( __b2b_vu64 iv i ) ) = i + i 1 }
-    // v[12] ^= t_lo ; v[13] ^= t_hi (0 for our sizes) ; v[14] ^= ~0 if last
-    ( vec_set [u64] v 12 ^^ ( __b2b_vu64 v 12 ) t )
-    ? != last 0 { ( vec_set [u64] v 14 ^^ ( __b2b_vu64 v 14 ) # u64 -1 ) } {}
-    // read the 16 message words
-    : ( Vec u64 ) m ( vec_with_cap [u64] 16 )
-    = i 0
-    ~ < i 16 { ( vec_push [u64] m ( __b2b_m block off i ) ) = i + i 1 }
-    : ~ i r 0
-    ~ < r 12 {
-        : i base * r 16
-        ( __b2b_g v 0 4 8 12 ( __b2b_vu64 m ( __b2b_vu sigma + base 0 ) ) ( __b2b_vu64 m ( __b2b_vu sigma + base 1 ) ) )
-        ( __b2b_g v 1 5 9 13 ( __b2b_vu64 m ( __b2b_vu sigma + base 2 ) ) ( __b2b_vu64 m ( __b2b_vu sigma + base 3 ) ) )
-        ( __b2b_g v 2 6 10 14 ( __b2b_vu64 m ( __b2b_vu sigma + base 4 ) ) ( __b2b_vu64 m ( __b2b_vu sigma + base 5 ) ) )
-        ( __b2b_g v 3 7 11 15 ( __b2b_vu64 m ( __b2b_vu sigma + base 6 ) ) ( __b2b_vu64 m ( __b2b_vu sigma + base 7 ) ) )
-        ( __b2b_g v 0 5 10 15 ( __b2b_vu64 m ( __b2b_vu sigma + base 8 ) ) ( __b2b_vu64 m ( __b2b_vu sigma + base 9 ) ) )
-        ( __b2b_g v 1 6 11 12 ( __b2b_vu64 m ( __b2b_vu sigma + base 10 ) ) ( __b2b_vu64 m ( __b2b_vu sigma + base 11 ) ) )
-        ( __b2b_g v 2 7 8 13 ( __b2b_vu64 m ( __b2b_vu sigma + base 12 ) ) ( __b2b_vu64 m ( __b2b_vu sigma + base 13 ) ) )
-        ( __b2b_g v 3 4 9 14 ( __b2b_vu64 m ( __b2b_vu sigma + base 14 ) ) ( __b2b_vu64 m ( __b2b_vu sigma + base 15 ) ) )
-        = r + r 1
-    }
-    = i 0
-    ~ < i 8 {
-        ( vec_set [u64] h i ^^ ( __b2b_vu64 h i ) ^^ ( __b2b_vu64 v i ) ( __b2b_vu64 v + i 8 ) )
-        = i + i 1
-    }
-}
-
-@ __b2b_zeros i n → ( Vec u ) {
-    : ( Vec u ) v ( vec_with_cap [u] n )
-    : ~ i i 0
-    ~ < i n { ( vec_push [u] v # u 0 ) = i + i 1 }
-    ^ v
+    = h0 ^^ ^^ h0 v0 v8
+    = h1 ^^ ^^ h1 v1 v9
+    = h2 ^^ ^^ h2 v2 v10
+    = h3 ^^ ^^ h3 v3 v11
+    = h4 ^^ ^^ h4 v4 v12
+    = h5 ^^ ^^ h5 v5 v13
+    = h6 ^^ ^^ h6 v6 v14
+    = h7 ^^ ^^ h7 v7 v15
 }
 
 @ blake2b512_pure ( Vec u ) data → ( Vec u ) {
-    : ( Vec u ) sigma ( __b2b_sigma )
-    : ( Vec u64 ) h ( __b2b_iv )
-    // h[0] ^= 0x01010040 (params: digest length 64, no key, fanout/depth 1)
-    ( vec_set [u64] h 0 ^^ ( __b2b_vu64 h 0 ) # u64 16842816 )
+    // h = IV, with h0 ^= 0x01010040 (digest length 64, no key, fanout and
+    // depth 1).
+    : ~ u64 h0 ^^ # u64 7640891576956012808 # u64 16842816
+    : ~ u64 h1 # u64 -4942790177534073029
+    : ~ u64 h2 # u64 4354685564936845355
+    : ~ u64 h3 # u64 -6534734903238641935
+    : ~ u64 h4 # u64 5840696475078001361
+    : ~ u64 h5 # u64 -7276294671716946913
+    : ~ u64 h6 # u64 2270897969802886507
+    : ~ u64 h7 # u64 6620516959819538809
+
+    // Every block but the last straight from the input; the last one (which
+    // may be partial, or empty for an empty input) from a zero-padded copy.
     : i n ( vec_len [u] data )
-    ? == n 0 {
-        : ( Vec u ) blk ( __b2b_zeros 128 )
-        ( __b2b_compress h blk 0 # u64 0 1 sigma )
-    } {
-        : ~ i off 0
-        : ~ u64 t # u64 0
-        : ~ b done F
-        ~ ! done {
-            : i remain - n off
-            ? > remain 128 {
-                = t + t # u64 128
-                ( __b2b_compress h data off t 0 sigma )
-                = off + off 128
-            } {
-                = t + t # u64 remain
-                : ( Vec u ) blk ( __b2b_zeros 128 )
-                : ~ i j 0
-                ~ < j remain {
-                    ( vec_set [u] blk j # u ( __b2b_vu data + off j ) )
-                    = j + j 1
-                }
-                ( __b2b_compress h blk 0 t 1 sigma )
-                = done T
-            }
-        }
+    : ~ i off 0
+    ~ > - n off 128 {
+        ( __b2b_compress h0 h1 h2 h3 h4 h5 h6 h7 data off # u64 + off 128 F )
+        = off + off 128
     }
+    : i rem - n off
+    : ( Vec u ) blk ( vec_zeroed [u] 128 )
+    : ~ i j 0
+    ~ < j rem {
+        ( vec_put [u] blk j ( vec_at [u] data + off j ) )
+        = j + j 1
+    }
+    ( __b2b_compress h0 h1 h2 h3 h4 h5 h6 h7 blk 0 # u64 n T )
+
     // serialize h → 64 little-endian bytes
     : ( Vec u ) out ( vec_with_cap [u] 64 )
-    : ~ i i 0
-    ~ < i 8 { ( bytes_push_u64_le out ( __b2b_vu64 h i ) ) = i + i 1 }
+    ( bytes_push_u64_le out h0 )
+    ( bytes_push_u64_le out h1 )
+    ( bytes_push_u64_le out h2 )
+    ( bytes_push_u64_le out h3 )
+    ( bytes_push_u64_le out h4 )
+    ( bytes_push_u64_le out h5 )
+    ( bytes_push_u64_le out h6 )
+    ( bytes_push_u64_le out h7 )
     ^ out
 }

@@ -9,10 +9,12 @@
 //
 // The NURL column calls the standard library's `poly1305_mac`
 // (stdlib/std/chacha20poly1305.nu). This file is that implementation's
-// formulation written out in C — poly1305-donna-64: the accumulator and
-// the clamped key in three limbs at radix 2^44 (44/44/42 bits), each
-// block nine full 64x64->128 products (here `unsigned __int128`, in NURL
-// `nurl_umulhi`) and a carry chain with the 2^130 = 5 fold.
+// formulation written out in C — radix 2^64, as OpenSSL's and BoringSSL's
+// scalar code has it: the accumulator in two 64-bit words and a few bits
+// above, the clamped key in two words with s1 = r1 + r1/4 carrying the
+// 2^130 = 5 fold, each block four full 64x64->128 products (here
+// `unsigned __int128`, in NURL `nurl_umulhi` / `nurl_mac_*`) and two small
+// ones.
 //
 // Contract: the process prints exactly one line — the final tag's first
 // eight bytes as a little-endian integer, masked to 63 bits — and nothing
@@ -25,9 +27,6 @@
 // The workload multiplier: bench/bench.sh / wasmbench.sh --scale N rewrites this 1.
 #define BENCH_SCALE 1ULL
 
-#define M44 0xfffffffffffULL
-#define M42 0x3ffffffffffULL
-
 typedef unsigned __int128 u128;
 
 static uint64_t le64(const uint8_t *p, uint64_t o) {
@@ -36,97 +35,72 @@ static uint64_t le64(const uint8_t *p, uint64_t o) {
   return v;
 }
 
+// h = (h + m + pad * 2^128) * r, partially reduced mod 2^130 - 5 (h2 < 8)
+static void poly_block(uint64_t *h, uint64_t t0, uint64_t t1, uint64_t pad, uint64_t r0, uint64_t r1,
+                       uint64_t s1) {
+  u128 a = (u128)h[0] + t0;
+  uint64_t a0 = (uint64_t)a;
+  a = (u128)h[1] + t1 + (uint64_t)(a >> 64);
+  uint64_t a1 = (uint64_t)a;
+  uint64_t a2 = h[2] + (uint64_t)(a >> 64) + pad;
+
+  u128 d0 = (u128)a0 * r0 + (u128)a1 * s1;
+  u128 d1 = (u128)a0 * r1 + (u128)a1 * r0 + a2 * s1;
+  uint64_t d2 = a2 * r0;
+
+  d1 = d1 + (uint64_t)(d0 >> 64);
+  uint64_t g2 = d2 + (uint64_t)(d1 >> 64);
+  uint64_t c = (g2 & ~3ULL) + (g2 >> 2);  // c * 2^130 = 5c
+  u128 e = (u128)(uint64_t)d0 + c;
+  h[0] = (uint64_t)e;
+  e = (u128)(uint64_t)d1 + (uint64_t)(e >> 64);
+  h[1] = (uint64_t)e;
+  h[2] = (g2 & 3) + (uint64_t)(e >> 64);
+}
+
 // tag[0..15] = Poly1305(key[0..31], msg[0..len-1]).
 static void poly1305_mac(uint8_t *tag, const uint8_t *key, const uint8_t *msg, uint64_t len) {
-  uint64_t kt0 = le64(key, 0);
-  uint64_t kt1 = le64(key, 8);
-  uint64_t r0 = kt0 & 0xffc0fffffffULL;
-  uint64_t r1 = ((kt0 >> 44) | (kt1 << 20)) & 0xfffffc0ffffULL;
-  uint64_t r2 = (kt1 >> 24) & 0x00ffffffc0fULL;
-  uint64_t s1 = r1 * 20;
-  uint64_t s2 = r2 * 20;
-  uint64_t h0 = 0, h1 = 0, h2 = 0;
+  uint64_t r0 = le64(key, 0) & 0x0ffffffc0fffffffULL;
+  uint64_t r1 = le64(key, 8) & 0x0ffffffc0ffffffcULL;
+  uint64_t s1 = r1 + (r1 >> 2);
+  uint64_t h[3] = {0, 0, 0};
 
   uint64_t off = 0;
-  while (off < len) {
-    uint64_t rem = len - off;
-    uint64_t t0 = 0, t1 = 0;
-    uint64_t hibit = 1ULL << 40;
-    if (rem >= 16) {
-      t0 = le64(msg, off);
-      t1 = le64(msg, off + 8);
-    } else {
-      // tail: the bytes, the 0x01 marker after them, zeros; no hibit
-      for (uint64_t j = 0; j <= rem; ++j) {
-        uint64_t bv = 1;
-        if (j < rem) bv = msg[off + j];
-        if (j < 8) {
-          t0 = t0 | (bv << (8 * j));
-        } else {
-          t1 = t1 | (bv << (8 * (j - 8)));
-        }
-      }
-      hibit = 0;
-    }
-    h0 = h0 + (t0 & M44);
-    h1 = h1 + (((t0 >> 44) | (t1 << 20)) & M44);
-    h2 = h2 + ((t1 >> 24) & M42) + hibit;
-
-    u128 d0 = (u128)h0 * r0 + (u128)h1 * s2 + (u128)h2 * s1;
-    u128 d1 = (u128)h0 * r1 + (u128)h1 * r0 + (u128)h2 * s2;
-    u128 d2 = (u128)h0 * r2 + (u128)h1 * r1 + (u128)h2 * r0;
-
-    uint64_t c = (uint64_t)(d0 >> 44);
-    h0 = (uint64_t)d0 & M44;
-    d1 = d1 + c;
-    c = (uint64_t)(d1 >> 44);
-    h1 = (uint64_t)d1 & M44;
-    d2 = d2 + c;
-    c = (uint64_t)(d2 >> 42);
-    h2 = (uint64_t)d2 & M42;
-    h0 = h0 + c * 5;
-    c = h0 >> 44;
-    h0 = h0 & M44;
-    h1 = h1 + c;
-
+  uint64_t full = len & ~15ULL;
+  while (off < full) {
+    poly_block(h, le64(msg, off), le64(msg, off + 8), 1, r0, r1, s1);
     off = off + 16;
   }
+  if (off < len) {
+    // tail: the bytes, the 0x01 marker after them, zeros; no 2^128 bit
+    uint64_t rem = len - off;
+    uint64_t t0 = 0, t1 = 0;
+    for (uint64_t j = 0; j <= rem; ++j) {
+      uint64_t bv = 1;
+      if (j < rem) bv = msg[off + j];
+      if (j < 8) {
+        t0 = t0 | (bv << (8 * j));
+      } else {
+        t1 = t1 | (bv << (8 * (j - 8)));
+      }
+    }
+    poly_block(h, t0, t1, 0, r0, r1, s1);
+  }
 
-  // fully carry h
-  uint64_t c = h1 >> 44;
-  h1 = h1 & M44;
-  h2 = h2 + c;
-  c = h2 >> 42;
-  h2 = h2 & M42;
-  h0 = h0 + c * 5;
-  c = h0 >> 44;
-  h0 = h0 & M44;
-  h1 = h1 + c;
-
-  // g = h + 5 - 2^130; keep h if g borrowed (h < p), else take g
-  uint64_t g0 = h0 + 5;
-  c = g0 >> 44;
-  g0 = g0 & M44;
-  uint64_t g1 = h1 + c;
-  c = g1 >> 44;
-  g1 = g1 & M44;
-  uint64_t g2 = h2 + c - (1ULL << 42);
-  uint64_t mask = (g2 >> 63) - 1;
-  g0 = g0 & mask;
-  g1 = g1 & mask;
-  g2 = g2 & mask;
-  uint64_t imask = ~mask;
-  h0 = (h0 & imask) | g0;
-  h1 = (h1 & imask) | g1;
-  h2 = (h2 & imask) | g2;
+  // h + 5 reaches 2^130 exactly when h >= p; then its low 128 bits are h - p
+  u128 g = (u128)h[0] + 5;
+  uint64_t g0 = (uint64_t)g;
+  g = (u128)h[1] + (uint64_t)(g >> 64);
+  uint64_t g1 = (uint64_t)g;
+  uint64_t g2 = h[2] + (uint64_t)(g >> 64);
+  uint64_t mask = 0 - (g2 >> 2);
+  uint64_t f0 = (h[0] & ~mask) | (g0 & mask);
+  uint64_t f1 = (h[1] & ~mask) | (g1 & mask);
 
   // tag = (h + s) mod 2^128
-  uint64_t st0 = le64(key, 16);
-  uint64_t st1 = le64(key, 24);
-  uint64_t f0 = h0 | (h1 << 44);
-  uint64_t f1 = (h1 >> 20) | (h2 << 24);
-  f0 = f0 + st0;
-  f1 = f1 + st1 + (f0 < st0 ? 1 : 0);
+  u128 w = (u128)f0 + le64(key, 16);
+  f0 = (uint64_t)w;
+  f1 = f1 + le64(key, 24) + (uint64_t)(w >> 64);
   for (uint64_t k = 0; k < 8; ++k) {
     tag[k] = (uint8_t)((f0 >> (8 * k)) & 255);
     tag[k + 8] = (uint8_t)((f1 >> (8 * k)) & 255);

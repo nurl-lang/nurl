@@ -1,5 +1,102 @@
 # Changelog
 
+## [2.4.0] — 2026-10-09
+
+### Changed
+
+- **A call to `__multi3` runs as the multiply it is.** Core wasm has no
+  64×64→128 multiply, so every wasm32 toolchain lowers a 128-bit product —
+  C's `unsigned __int128`, Rust's `u128`, NURL's `nurl_umulhi` /
+  `nurl_mac_*` — to a call of compiler-rt's `__multi3(ret, a_lo, a_hi, b_lo,
+  b_hi)`, which rebuilds the product from four 32×32 multiplies and stores it
+  through `ret`. That function was 52 % of a Poly1305 module's run time. The
+  predecoder now recognises the two `__multi3` bodies the toolchains link
+  (LLVM's compiler-rt — zig cc and NURL modules — and Rust's
+  compiler-builtins) by their exact bytes and signature, never by name, and
+  predecodes a direct call to either into three multiplies, two adds, a new
+  multiply-high record (`mul` on x86-64, in every tier) and the body's two
+  stores in the order the body makes them, so a trap on the second leaves
+  memory as the body would. Anything else stays a call.
+
+  | Module (bench/, cycles) | before | after |
+  |---|---:|---:|
+  | poly1305 C / Rust / NURL | 794M / 877M / 771M | 416M / 419M / 441M |
+  | x25519 C / Rust / NURL | 1375M / 1447M / 1325M | 724M / 731M / 715M |
+
+  Checked on every tier against the reference wasmtime: 6561 edge-value
+  128×128 products and 2M random ones from C and Rust, out-of-bounds stores
+  in both store orders, and `tests/fuzz_diff.sh`.
+
+- **A spilled value is read from the register it was just stored from.**
+  Tier 8 computes a spilled web's definition in rax and stores it to the
+  web's frame home; the next record, reading that web, loaded it straight
+  back — a store and a store-forwarded reload, four or five cycles, on
+  every link of the dependency chain. ChaCha20 and BLAKE2b update sixteen
+  state words in place, more than there are registers, so their quarter
+  rounds were made of such links. When nothing at all has been emitted
+  since that store, and no label lies between (a branch target or a
+  forward jump's landing forgets it), a read of the slot — a load, or the
+  memory operand of an ALU op or `imul` — now takes rax instead. The store
+  stays for later readers.
+
+  | Module (bench/, cycles) | before | after | wasmtime |
+  |---|---:|---:|---:|
+  | chacha20 C / Rust / NURL | 254M / 261M / 230M | 203M / 206M / 178M | 196M / 209M / 167M |
+  | blake2b C / Rust / NURL | 447M / 521M / 284M | 394M / 478M / 243M | 347M / 444M / 216M |
+
+  Every other bench module runs within noise of before, and all 60 print
+  what they printed.
+
+- **`while (n != 0)` on a 64-bit counter is one branch.** LLVM spells it
+  `i64.eqz; i32.eqz; br_if`, and the inner eqz was a record of its own:
+  tier 8 materialised its 0/1 with `setcc` for the branch behind to test
+  again — five instructions where `add -1; jne` is two. The predecoder now
+  rewrites an `i32.eqz` of the eqz it just emitted into `ne x, 0` against
+  the constant pool's zero; the compare-and-branch fusion folds that into
+  the branch, and into the add in front of it. Every C module of the
+  corpus has a dozen such loops, and NURL's have more.
+
+- **Loop-carried by a copy is not loop-carried by a computation.** Tier 8
+  ranks a web some loop writes eight times denser for a register, since a
+  spilled one puts a store and a reload on its loop-carried chain. A
+  SHA-2 round rotates eight words, six of them by plain copies (h = g,
+  g = f, …): a delay line, whose spilled store has the rest of the round
+  before the read that waits on it. The ranking could not tell those from
+  the two words the round computes, and the scan spilled a and e — the
+  round's critical path, a store and a reload per round on each. A copy
+  of the previous iteration's value of another web (through any chain of
+  copies), of a value from before the loop or of a constant now earns the
+  ×8 only when a read of its destination sits within four records of the
+  write.
+
+- **A pointer parameter is zero-extended once, at the entry.** A memory
+  access through an i32 parameter zero-extended it into rax first, every
+  time, because the parameter arrived sign-extended — and a store whose
+  value was in rax then had to reload it. A parameter whose high half no
+  consumer reads is now zero-extended by the entry instead (a 32-bit load
+  from the argument window, or `mov r32, r32` on the register entry, past
+  the slab check, so the interpreter fallback never sees it), its web
+  counts as zero-extended, and every access indexes `[r11 + reg + off]` as
+  it stands.
+
+  The three together (bench/, cycles, the other modules within noise, all
+  60 printing what they printed):
+
+  | Module | before | after | wasmtime |
+  |---|---:|---:|---:|
+  | sha512 C / Rust | 302M / 300M | 260M / 293M | 241M / 287M |
+  | blake2b C / Rust | 390M / 473M | 365M / 451M | 347M / 444M |
+  | bloom_filter C / Rust | 5.37G / 5.18G | 4.96G / 4.83G | 5.23G / 5.32G |
+  | poly1305 NURL | 428M | 399M | 829M |
+  | hash_join Rust | 18.0G | 17.5G | 20.2G |
+
+  `tests/semantics_test.nu` covers the double eqz as a loop branch on a
+  counter whose low half is zero, as br_if, select, if and a value, with
+  its inner 0/1 tee'd into a local, and pointer parameters with and
+  without a reader of their high half. `tests/fuzz_diff.sh` (400 modules)
+  is clean and the `nurlc.wasm` self-compile is byte-identical to the
+  native compiler.
+
 ## [2.3.1] — 2026-10-09
 
 Requires NURL 0.72.0, which draws the raw-memory boundary at every call:

@@ -21,6 +21,7 @@
 //   ( b32_decode s )           → ! String ParseErr   standard, padding optional,
 //                                                     case-insensitive (TOTP)
 
+$ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/errors.nu`
 
@@ -256,8 +257,41 @@ $ `stdlib/core/errors.nu`
     ^ -1
 }
 
+// The decode table of one alphabet — a digit's value, 255 for every byte
+// that is not one (whitespace, '=', anything else) — built once per
+// process and shared (publish-once slots 8 and 9, the registry is in
+// stdlib/std/tls_server.nu).
+: ~ i g_b64_tab_std 0
+: ~ i g_b64_tab_url 0
+
+& `c` @ nurl_once_slot i id i candidate → i
+
+@ __b64_tab b url → *u {
+    : i cur ? url g_b64_tab_url g_b64_tab_std
+    ? != cur 0 { ^ # *u ( nurl_peek # s cur 0 ) } {}
+    : ( Vec u ) t ( vec_with_cap [u] 256 )
+    : ~ i c 0
+    ~ < c 256 {
+        : i v ( __b64_value c url )
+        ( vec_push [u] t # u ? < v 0 255 v )
+        = c + c 1
+    }
+    : i won ( nurl_once_slot ? url 9 8 # i . t ctl )
+    // The winner lives for the rest of the program, through the global.
+    ? == won # i . t ctl { ( mem_forget t ) } {}
+    ? url { = g_b64_tab_url won } { = g_b64_tab_std won }
+    ^ # *u ( nurl_peek # s won 0 )
+}
+
 // Internal decoder: ignores ASCII whitespace, fills `out` with bytes,
 // returns ! v ParseErr. Active alphabet selected by `url`.
+//
+// Whole quartets of alphabet digits at a digit boundary (no bits pending,
+// no padding seen) take the fast path: four table lookups, three bytes
+// written straight into room reserved for the whole run. Anything else —
+// whitespace, '=', a byte outside the alphabet — goes one byte at a time
+// through the general loop, which is the only place an error is decided,
+// so the errors are the ones it always gave.
 @ __b64_decode_into String out s str b url → !v ParseErr {
     : i len ( nurl_str_len str )
     // Read through a raw pointer: nurl_str_get re-runs strlen on every
@@ -268,40 +302,66 @@ $ `stdlib/core/errors.nu`
     : ~ i acc 0
     : ~ i nbits 0
     : ~ i i 0
+    : *u tab ( __b64_tab url )
     ~ < i len {
-        : i c & 255 # i . P i
-        = i + i 1
-        // Skip ASCII whitespace: space, tab, lf, cr, ff, vt
-        ? | | | | | == c 32 == c 9 == c 10 == c 13 == c 12 == c 11 {} {
-            : i v ( __b64_value c url )
-            ? == v -2 {
-                = pad + pad 1
-                ? > pad 2 {
-                    ^ @ !v ParseErr { F @ ParseErr { TrailingGarbage } }
-                } {}
-            } {
-                ? > pad 0 {
-                    // Non-padding char after '=' is malformed.
-                    ^ @ !v ParseErr { F @ ParseErr { TrailingGarbage } }
-                } {}
-                ? < v 0 {
-                    ^ @ !v ParseErr { F @ ParseErr { BadFormat } }
-                } {}
-                = acc + * acc 64 v
-                = nbits + nbits 6
-                ? >= nbits 8 {
-                    = nbits - nbits 8
-                    // Bottom-of-byte alignment after consuming 6 bits at a time:
-                    // nbits is the residual count after this group (0..5). The
-                    // emitted byte is the top 8 bits of `acc`, so shift right by
-                    // `nbits` and mask.
-                    : i mask - << 1 nbits 1
-                    : i byte & 255 >> acc nbits
-                    ( string_push_char out byte )
-                    = acc & acc mask
-                } {}
+        : ~ b slow T
+        ? & & <= + i 4 len == nbits 0 == pad 0 {
+            : i maxq / - len i 4
+            : *u w ( string_reserve_at out * maxq 3 )
+            : ~ i q 0
+            : ~ b go T
+            ~ & go < q maxq {
+                : i v0 # i . tab & 255 # i . P i
+                : i v1 # i . tab & 255 # i . P + i 1
+                : i v2 # i . tab & 255 # i . P + i 2
+                : i v3 # i . tab & 255 # i . P + i 3
+                ? > | | | v0 v1 v2 v3 63 { = go F } {
+                    : i o * q 3
+                    = . w o # u | << v0 2 >> v1 4
+                    = . w + o 1 # u & 255 | << v1 4 >> v2 2
+                    = . w + o 2 # u & 255 | << v2 6 v3
+                    = q + q 1
+                    = i + i 4
+                }
             }
-        }
+            ( string_commit out * q 3 )
+            = slow == q 0
+        } {}
+        ? slow {
+            : i c & 255 # i . P i
+            = i + i 1
+            // Skip ASCII whitespace: space, tab, lf, cr, ff, vt
+            ? | | | | | == c 32 == c 9 == c 10 == c 13 == c 12 == c 11 {} {
+                : i v ( __b64_value c url )
+                ? == v -2 {
+                    = pad + pad 1
+                    ? > pad 2 {
+                        ^ @ !v ParseErr { F @ ParseErr { TrailingGarbage } }
+                    } {}
+                } {
+                    ? > pad 0 {
+                        // Non-padding char after '=' is malformed.
+                        ^ @ !v ParseErr { F @ ParseErr { TrailingGarbage } }
+                    } {}
+                    ? < v 0 {
+                        ^ @ !v ParseErr { F @ ParseErr { BadFormat } }
+                    } {}
+                    = acc + * acc 64 v
+                    = nbits + nbits 6
+                    ? >= nbits 8 {
+                        = nbits - nbits 8
+                        // Bottom-of-byte alignment after consuming 6 bits at a time:
+                        // nbits is the residual count after this group (0..5). The
+                        // emitted byte is the top 8 bits of `acc`, so shift right by
+                        // `nbits` and mask.
+                        : i mask - << 1 nbits 1
+                        : i byte & 255 >> acc nbits
+                        ( string_push_char out byte )
+                        = acc & acc mask
+                    } {}
+                }
+            }
+        } {}
     }
     // A final group needs at least two alphabet digits. If padding is
     // present it must fill exactly a quartet; accepting "A", "A=" or

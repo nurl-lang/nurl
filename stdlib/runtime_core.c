@@ -2672,19 +2672,40 @@ static unsigned long long nurl__actr_total(int freed) {
 #    include <pthread.h>
 #  endif
 #endif
+/* A wasm32-wasi module without threads has one thread for its whole life,
+ * and its libc (zig's) answers malloc_usable_size: the cache works as it
+ * does natively, minus the exit hook — no thread ever exits before the
+ * process. Without it every String and Vec buffer of a NURL module went
+ * through the libc allocator, which put a NURL JSON parse at 2.9x the C
+ * module's guest time on the same runtime (natively the two are equal).
+ * The wasi-threads build keeps its own locked allocator and no cache. */
+#if !defined(NURL__SC_ASAN) && defined(__wasi__) && !defined(__wasm_atomics__)
+#  define NURL__SC_ENABLED 1
+#  define NURL__SC_ONE_THREAD 1
+#  include <malloc.h>
+#  define nurl__sc_usable(p) malloc_usable_size(p)
+#endif
 
 #ifdef NURL__SC_ENABLED
+#  ifdef NURL__SC_ONE_THREAD
+#    define NURL__SC_TLS
+#  else
+#    define NURL__SC_TLS __thread
+#  endif
 enum {
     NURL__SC_MIN_SHIFT = 4,                    /* smallest class: 16 B  */
     NURL__SC_MAX_SHIFT = 9,                    /* largest class:  512 B */
     NURL__SC_CLASSES   = NURL__SC_MAX_SHIFT - NURL__SC_MIN_SHIFT + 1,
     NURL__SC_CLASS_BUDGET_SHIFT = 20,          /* 1 MB cached per class */
 };
-static __thread void     *nurl__sc_head [NURL__SC_CLASSES];
-static __thread unsigned  nurl__sc_count[NURL__SC_CLASSES];
-static __thread int       nurl__sc_registered;
+static NURL__SC_TLS void     *nurl__sc_head [NURL__SC_CLASSES];
+static NURL__SC_TLS unsigned  nurl__sc_count[NURL__SC_CLASSES];
+static NURL__SC_TLS int       nurl__sc_registered;
 static int nurl__sc_on = -1;   /* -1 unknown, 0 off, 1 on; benign race */
 
+#ifdef NURL__SC_ONE_THREAD
+static void nurl__sc_register(void) { nurl__sc_registered = 1; }
+#else
 static pthread_key_t  nurl__sc_key;
 static pthread_once_t nurl__sc_once = PTHREAD_ONCE_INIT;
 static void nurl__sc_thread_flush(void *unused) {
@@ -2708,6 +2729,7 @@ static void nurl__sc_register(void) {
      * cache — best effort, bounded by the class budgets. */
     pthread_setspecific(nurl__sc_key, (void*)1);
 }
+#endif
 
 /* glibc keeps a chunk's size in the word before it, so the usable size a
  * free needs is one load away — no PLT call into malloc_usable_size, which
@@ -3514,6 +3536,20 @@ __attribute__((constructor)) static void nurl__cpu_ctor(void) {
 int nurl_cpu_x86_v3(void) {
     if (nurl__cpu_v3 < 0) nurl__cpu_detect();
     return nurl__cpu_v3;
+}
+
+/* 1 when a NURL v128 lowers to real 128-bit vector registers — SSE2 on
+ * x86-64, NEON on AArch64, simd128 on wasm — and 0 when it is scalarised,
+ * as on a wasm32 module built without simd128. A kernel that only pays
+ * off in registers (ChaCha20's four-blocks-a-lane layout keeps sixteen
+ * vectors live: sixty-four scalars once scalarised) asks before it runs.
+ * A link-time constant, so natively the question folds away. */
+long long nurl_simd128_native(void) {
+#if defined(__wasm__) && !defined(__wasm_simd128__)
+    return 0;
+#else
+    return 1;
+#endif
 }
 
 /* Indirect-call trampoline for the packages/gpu CPU backend. A CUDA-C kernel

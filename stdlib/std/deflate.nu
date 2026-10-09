@@ -64,29 +64,79 @@ $ `stdlib/std/bytes.nu`
     ^ t
 }
 
+// Slicing-by-8 (Kounavis & Berry): T0 is Sarwate's table above and
+// Tk[b] = (Tk-1[b] >> 8) ^ T0[Tk-1[b] & 255] — the CRC of byte b followed by
+// k zero bytes — so eight input bytes fold into the CRC through eight
+// independent lookups instead of eight dependent ones. 8 × 256 u32 entries,
+// 8 KiB, built once per process and shared (publish-once slot 7, the
+// registry is in stdlib/std/tls_server.nu).
+: ~ i g_crc32_tab8 0
+
+& `c` @ nurl_once_slot i id i candidate → i
+
+@ __crc32_tab8_build → ( Vec u32 ) {
+    : ( Vec i ) t0 ( __crc32_table )
+    : *i t0p ( vec_data [i] t0 )
+    : ( Vec u32 ) t ( vec_with_cap [u32] 2048 )
+    : b _l ( vec_set_len [u32] t 2048 )
+    : *u32 tp ( vec_data [u32] t )
+    : ~ i j 0
+    ~ < j 256 { = . tp j # u32 . t0p j = j + j 1 }
+    ~ < j 2048 {
+        : i prev # i . tp - j 256
+        = . tp j # u32 ^^ >> prev 8 . t0p & prev 255
+        = j + j 1
+    }
+    ^ t
+}
+
+@ __crc32_tab8 → ( Vec u32 ) {
+    ? == g_crc32_tab8 0 {
+        : ( Vec u32 ) t ( __crc32_tab8_build )
+        : i won ( nurl_once_slot 7 # i . t ctl )
+        // The winner lives for the rest of the program, through the global.
+        ? == won # i . t ctl { ( mem_forget t ) } {}
+        = g_crc32_tab8 won
+    } {}
+    ^ @ ( Vec u32 ) { # s g_crc32_tab8 }
+}
+
 // CRC-32 (IEEE, reflected, poly 0xEDB88320).
 //
 // Two implementations of the same function, chosen by input size. The
 // bitwise loop runs eight shift-mask-xor rounds per byte and needs no
-// setup; the table-driven loop costs 2048 steps to build its table and
-// then one lookup per byte. They break even around 300 bytes, so
-// anything from 512 up takes the table — and that is where the callers
-// that matter live: a gzip member, a tar payload, a PNG chunk, a
-// database block. Measured on a 4 KiB block, the table is 7.8x faster
-// (2048 + 4096 steps against 32768), and it took an LSM store's point
-// reads — 66 % of their cycles were inside this function — down with it.
-//
-// The small path is kept rather than always building the table because a
-// short input (a gzip header, a 4-byte trailer) would otherwise pay
-// 2048 steps to checksum 8 bytes. Both paths are the same algorithm and
+// table; slicing-by-8 then takes eight bytes per step through the shared
+// tables. The tables are built once per process, so the cut-over only
+// keeps a short input (a gzip header, a 4-byte trailer) from touching
+// 8 KiB of table for a few bytes. Both paths are the same function and
 // produce identical output for every input; std/deflate's own tests and
 // tools/crc32_gate.sh check that against an independent implementation.
 @ crc32_update i crc0 ( Vec u ) data → i {
     : ~ i crc ^^ crc0 4294967295  // crc ^ 0xFFFFFFFF
     : i n ( vec_len [u] data )
     : *u d ( vec_data [u] data )
-    ? < n 512 {
-        : ~ i i 0
+    : ~ i i 0
+    ? >= n 64 {
+        : ( Vec u32 ) tab ( __crc32_tab8 )
+        : *u32 t ( vec_data [u32] tab )
+        ~ <= + i 8 n {
+            // The low word folds the running CRC in; the high word rides
+            // along. Byte k of the eight is followed by 7 − k more, so it
+            // goes through T(7 − k).
+            : i lo ^^ crc | | | # i . d i << # i . d + i 1 8 << # i . d + i 2 16 << # i . d + i 3 24
+            : i hi | | | # i . d + i 4 << # i . d + i 5 8 << # i . d + i 6 16 << # i . d + i 7 24
+            : i x0 ^^ # i . t + 1792 & lo 255 # i . t + 1536 & >> lo 8 255
+            : i x1 ^^ # i . t + 1280 & >> lo 16 255 # i . t + 1024 >> lo 24
+            : i x2 ^^ # i . t + 768 & hi 255 # i . t + 512 & >> hi 8 255
+            : i x3 ^^ # i . t + 256 & >> hi 16 255 # i . t >> hi 24
+            = crc ^^ ^^ x0 x1 ^^ x2 x3
+            = i + i 8
+        }
+        ~ < i n {
+            = crc ^^ # i . t & 255 ^^ crc # i . d i >> crc 8
+            = i + i 1
+        }
+    } {
         ~ < i n {
             = crc ^^ crc # i . d i
             : ~ i k 0
@@ -95,16 +145,6 @@ $ `stdlib/std/bytes.nu`
                 = crc ^^ >> crc 1 & 3988292384 mask  // 0xEDB88320
                 = k + k 1
             }
-            = i + i 1
-        }
-    } {
-        : ( Vec i ) t ( __crc32_table )
-        : *i tp ( vec_data [i] t )
-        : ~ i i 0
-        ~ < i n {
-            : i idx & 255 ^^ crc # i . d i
-            : i tv . tp idx
-            = crc ^^ tv >> crc 8
             = i + i 1
         }
     }
@@ -117,55 +157,45 @@ $ `stdlib/std/bytes.nu`
 
 // ── reusable CRC-32 context ─────────────────────────────────────────
 //
-// crc32_update above rebuilds its table on every call that is big enough
-// to want one. That is the right trade for a caller that checksums one
-// payload, and the wrong one for a caller that checksums thousands: a
-// database verifying a 4 KiB block per read spends a third of the
-// checksum on building the same 256 entries again.
-//
-// So hold the table: build it once, hand it to every call.
-//
-//   : Crc32 c ( crc32_ctx )
-//   : i sum ( crc32_ctx_hash c block )     // per block, no setup cost
+// Kept for its callers: a context once carried the byte table a caller
+// checksumming thousands of blocks did not want rebuilt per call. The
+// tables are process-wide now (__crc32_tab8), so a context holds nothing
+// a call needs and an update is crc32_update.
 //
 // The table goes with `c` (a struct holding a Vec, dropped by its owner).
-//
-// Same algorithm, same values as crc32 / crc32_update — the context is
-// purely about where the table lives.
 
 : Crc32 { ( Vec i ) tbl }
 
-@ crc32_ctx → Crc32 { ^ @ Crc32 { ( __crc32_table ) } }
+@ crc32_ctx → Crc32 { ^ @ Crc32 { ( vec_new [i] ) } }
 
 @ crc32_ctx_update Crc32 c i crc0 ( Vec u ) data → i {
-    : ~ i crc ^^ crc0 4294967295
-    : i n ( vec_len [u] data )
-    : *u d ( vec_data [u] data )
-    : *i tp ( vec_data [i] . c tbl )
-    : ~ i i 0
-    ~ < i n {
-        : i idx & 255 ^^ crc # i . d i
-        : i tv . tp idx
-        = crc ^^ tv >> crc 8
-        = i + i 1
-    }
-    ^ & ^^ crc 4294967295 4294967295
+    ^ ( crc32_update crc0 data )
 }
 
 @ crc32_ctx_hash Crc32 c ( Vec u ) data → i {
     ^ ( crc32_ctx_update c 0 data )
 }
 
+// Adler-32 (RFC 1950 §8.2). The two sums are reduced mod 65521 once per
+// MiB rather than once per byte: from below 65521, a MiB of 255s takes b
+// to at most 65520·(2^20 + 1) + 255·2^20·(2^20 + 1)/2 < 2^48, nowhere near
+// an i64's 2^63 — so the inner loop is two adds a byte.
 @ adler32 ( Vec u ) data → i {
     : ~ i a 1
     : ~ i b 0
     : i n ( vec_len [u] data )
-    : *u d ( vec_data [u] data )
-    : ~ i i 0
-    ~ < i n {
-        = a % + a # i . d i 65521
-        = b % + b a 65521
-        = i + i 1
+    : ~ i off 0
+    ~ < off n {
+        : i end ? < - n off 1048576 n + off 1048576
+        : ~ i i off
+        ~ < i end {
+            = a + a # i ( vec_at [u] data i )
+            = b + b a
+            = i + i 1
+        }
+        = a % a 65521
+        = b % b 65521
+        = off end
     }
     ^ | << b 16 a
 }
@@ -216,6 +246,32 @@ $ `stdlib/std/bytes.nu`
 : Huff {
     ( Vec i ) count  // count[len] = number of codes of that length (0..15)
     ( Vec i ) symbol  // symbols sorted by (length, value)
+    ( Vec i ) fast  // 2^9 entries by the next 9 input bits: sym·16 + length, 0 = a longer code
+}
+
+// Codes up to this many bits decode with one lookup in Huff.fast; a longer
+// one (rare — the encoder gives them to rare symbols) takes the canonical
+// bit-at-a-time walk. 9 covers every fixed-Huffman code.
+@ __INFL_FAST_BITS → i { ^ 9 }
+
+// Top the bit buffer up from the input, a byte at a time, while it has
+// room: at most 56 live bits, so bit 63 stays clear and the arithmetic
+// `>>` that consumes bits never drags a sign in. 48+ bits is a whole
+// length/distance pair (15 + 5 + 15 + 13).
+@ __infl_fill inout InflState st → v {
+    : ~ i val . st bitbuf
+    : ~ i cnt . st bitcnt
+    : ~ i pos . st pos
+    : i len . st len
+    : *u d . st data
+    ~ & <= cnt 48 < pos len {
+        = val | val << # i . d pos cnt
+        = pos + pos 1
+        = cnt + cnt 8
+    }
+    = . st bitbuf val
+    = . st bitcnt cnt
+    = . st pos pos
 }
 
 // Read `need` bits LSB-first. Sets st.err on input underflow.
@@ -235,8 +291,25 @@ $ `stdlib/std/bytes.nu`
     ^ & val - << 1 need 1
 }
 
-// Decode one symbol with Huffman table h (puff.c algorithm).
+// Decode one symbol with Huffman table h: one lookup in h.fast when the
+// next code is at most __INFL_FAST_BITS long and its bits are all in, else
+// the canonical walk below (puff.c's algorithm), which also reports a
+// truncated or invalid code exactly as it always did.
 @ __infl_decode inout InflState st Huff h → i {
+    ? != . st err 0 { ^ -1 } {}
+    ? < . st bitcnt 15 { ( __infl_fill st ) } {}
+    : *i fp ( vec_data [i] . h fast )
+    : i e . fp & . st bitbuf 511
+    : i el & e 15
+    ? & != el 0 <= el . st bitcnt {
+        = . st bitbuf >> . st bitbuf el
+        = . st bitcnt - . st bitcnt el
+        ^ >> e 4
+    } {}
+    ^ ( __infl_decode_slow st h )
+}
+
+@ __infl_decode_slow inout InflState st Huff h → i {
     : ~ i code 0
     : ~ i first 0
     : ~ i index 0
@@ -288,7 +361,40 @@ $ `stdlib/std/bytes.nu`
         } {}
         = s + s 1
     }
-    ^ @ Huff { count symbol }
+    // The fast table. Canonical codes are handed out in (length, symbol)
+    // order, which is `symbol`'s order; DEFLATE sends a code's bits
+    // most-significant first into an LSB-first stream, so a code of length
+    // L reversed is the low L bits of the buffer, and it owns every entry
+    // whose low L bits match — every 2^L-th from there. An oversubscribed
+    // length list writes past its own codes; __infl_huff_valid rejects
+    // such a table before any symbol is decoded with it.
+    : ( Vec i ) fast ( __df_zeros 512 )
+    : *i fp ( vec_data [i] fast )
+    : *i cp ( vec_data [i] count )
+    : *i sp ( vec_data [i] symbol )
+    : ~ i code 0
+    : ~ i idx 0
+    : ~ i bits 1
+    ~ <= bits ( __INFL_FAST_BITS ) {
+        : i cnt . cp bits
+        : ~ i j 0
+        ~ < j cnt {
+            : ~ i rev 0
+            : ~ i b 0
+            ~ < b bits { = rev | << rev 1 & >> code b 1 = b + b 1 }
+            ? < rev 512 {
+                : i e | << . sp idx 4 bits
+                : ~ i f rev
+                ~ < f 512 { = . fp f e = f + f << 1 bits }
+            } {}
+            = code + code 1
+            = idx + idx 1
+            = j + j 1
+        }
+        = code << code 1
+        = bits + bits 1
+    }
+    ^ @ Huff { count symbol fast }
 }
 
 // A complete tree fills every code slot. Literal/distance alphabets may
@@ -349,41 +455,124 @@ $ `stdlib/std/bytes.nu`
 }
 
 // Decode a Huffman-coded block body (fixed or dynamic) into st.out.
+//
+// The hot loop keeps the bit reader in locals — the state's fields would
+// otherwise be reloaded after every byte written through the output
+// pointer, which may alias them as far as the optimiser can tell — and
+// decodes a symbol, and its extra bits, straight from the buffer when they
+// are all in it and the code is in the fast table. Everything else (a long
+// code, the input running out, an invalid code) goes through the
+// state-based helpers above with the locals written back first and read
+// back after, so every error is the one, at the place, it always was.
 @ __infl_codes inout InflState st ( Vec u ) out Huff lencode Huff distcode
 ( Vec i ) lenbase ( Vec i ) lenext ( Vec i ) distbase ( Vec i ) distext → v {
+    : *u d . st data
+    : i len . st len
+    : *i lfast ( vec_data [i] . lencode fast )
+    : *i dfast ( vec_data [i] . distcode fast )
+    : *i lb ( vec_data [i] lenbase )
+    : *i lx ( vec_data [i] lenext )
+    : *i db ( vec_data [i] distbase )
+    : *i dx ( vec_data [i] distext )
+    : ~ i bb . st bitbuf
+    : ~ i bc . st bitcnt
+    : ~ i pos . st pos
     : ~ b done F
-    ~ & ! done == . st err 0 {
-        : i sym ( __infl_decode st lencode )
-        ? != . st err 0 { ^ v } {}
-        ? < sym 0 { = . st err 2 } {
-            ? == sym 256 { = done T } {
+    ~ ! done {
+        ~ & <= bc 48 < pos len { = bb | bb << # i . d pos bc = pos + pos 1 = bc + bc 8 }
+        : ~ i sym -1
+        : i e . lfast & bb 511
+        : i el & e 15
+        ? & != el 0 <= el bc {
+            = bb >> bb el
+            = bc - bc el
+            = sym >> e 4
+        } {
+            = . st bitbuf bb = . st bitcnt bc = . st pos pos
+            = sym ( __infl_decode_slow st lencode )
+            = bb . st bitbuf = bc . st bitcnt = pos . st pos
+        }
+        ? != . st err 0 { = done T } {
+            ? < sym 0 { = . st err 2 = done T } {
                 ? < sym 256 {
-                    ? ( __infl_room st out 1 ) { ( vec_push [u] out # u sym ) } {}
+                    ? ( __infl_room st out 1 ) { ( vec_push [u] out # u sym ) } { = done T }
                 } {
-                    // length/distance back-reference
-                    : i li - sym 257
-                    ? >= li 29 { = . st err 2 } {
-                        : i length + ( __df_get lenbase li ) ( __infl_bits st ( __df_get lenext li ) )
-                        : i dsym ( __infl_decode st distcode )
-                        ? != . st err 0 { ^ v } {}
-                        ? | < dsym 0 >= dsym 30 { = . st err 4 } {
-                            : i dist + ( __df_get distbase dsym ) ( __infl_bits st ( __df_get distext dsym ) )
-                            : i outlen ( vec_len [u] out )
-                            ? != . st err 0 { ^ v } {}
-                            ? | > dist outlen > dist . st window { = . st err 4 } {
-                                ? ! ( __infl_room st out length ) { ^ v } {}
-                                : ~ i k 0
-                                ~ < k length {
-                                    : i srcidx - ( vec_len [u] out ) dist
-                                    : *u op ( vec_data [u] out )
-                                    ( vec_push [u] out # u . op srcidx )
-                                    = k + k 1
+                    ? == sym 256 { = done T } {
+                        // length/distance back-reference
+                        : i li - sym 257
+                        ? >= li 29 { = . st err 2 = done T } {
+                            : i lext . lx li
+                            : ~ i length . lb li
+                            ? <= lext bc {
+                                = length + length & bb - << 1 lext 1
+                                = bb >> bb lext
+                                = bc - bc lext
+                            } {
+                                = . st bitbuf bb = . st bitcnt bc = . st pos pos
+                                = length + length ( __infl_bits st lext )
+                                = bb . st bitbuf = bc . st bitcnt = pos . st pos
+                            }
+                            ? != . st err 0 { = done T } {
+                                ~ & <= bc 48 < pos len { = bb | bb << # i . d pos bc = pos + pos 1 = bc + bc 8 }
+                                : ~ i dsym -1
+                                : i de . dfast & bb 511
+                                : i del & de 15
+                                ? & != del 0 <= del bc {
+                                    = bb >> bb del
+                                    = bc - bc del
+                                    = dsym >> de 4
+                                } {
+                                    = . st bitbuf bb = . st bitcnt bc = . st pos pos
+                                    = dsym ( __infl_decode_slow st distcode )
+                                    = bb . st bitbuf = bc . st bitcnt = pos . st pos
+                                }
+                                ? != . st err 0 { = done T } {
+                                    ? | < dsym 0 >= dsym 30 { = . st err 4 = done T } {
+                                        : i dext . dx dsym
+                                        : ~ i dist . db dsym
+                                        ? <= dext bc {
+                                            = dist + dist & bb - << 1 dext 1
+                                            = bb >> bb dext
+                                            = bc - bc dext
+                                        } {
+                                            = . st bitbuf bb = . st bitcnt bc = . st pos pos
+                                            = dist + dist ( __infl_bits st dext )
+                                            = bb . st bitbuf = bc . st bitcnt = pos . st pos
+                                        }
+                                        : i outlen ( vec_len [u] out )
+                                        ? != . st err 0 { = done T } {
+                                            ? | > dist outlen > dist . st window { = . st err 4 = done T } {
+                                                ? ! ( __infl_room st out length ) { = done T } {
+                                                    // Room first, then copy inside the
+                                                    // buffer: one memcpy when source and
+                                                    // destination do not overlap, else
+                                                    // byte by byte forward, so a run reads
+                                                    // the bytes it just wrote.
+                                                    ( vec_reserve [u] out length )
+                                                    : *u op ( vec_data [u] out )
+                                                    : i src - outlen dist
+                                                    ? >= dist length {
+                                                        ( nurl_memcpy # s + # i op outlen # s + # i op src length )
+                                                    } {
+                                                        : ~ i k 0
+                                                        ~ < k length { = . op + outlen k . op + src k = k + k 1 }
+                                                    }
+                                                    : b _n ( vec_set_len [u] out + outlen length )
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
-                } } }
+                }
+            }
+        }
     }
+    = . st bitbuf bb
+    = . st bitcnt bc
+    = . st pos pos
 }
 
 // Fixed Huffman tables (RFC 1951 §3.2.6).
@@ -496,7 +685,10 @@ $ `stdlib/std/bytes.nu`
             = last != bfinal 0
             ? != . st err 0 {} {
                 ? == btype 0 {
-                    // Stored: align to byte, read LEN/NLEN, copy.
+                    // Stored: align to byte, read LEN/NLEN, copy. The
+                    // buffer may hold whole bytes read ahead of the
+                    // partial one (__infl_fill): those go back to the input.
+                    = . st pos - . st pos >> . st bitcnt 3
                     = . st bitbuf 0
                     = . st bitcnt 0
                     ? > + . st pos 4 . st len { = . st err 5 } {
@@ -509,11 +701,7 @@ $ `stdlib/std/bytes.nu`
                         ? != ^^ blen complement 65535 { = . st err 3 } {}
                         ? > blen - . st len . st pos { = . st err 5 } {}
                         ? & == . st err 0 ( __infl_room st out blen ) {
-                            : ~ i k 0
-                            ~ < k blen {
-                                ( vec_push [u] out # u . d + . st pos k )
-                                = k + k 1
-                            }
+                            ( bytes_extend_raw out # s + # i d . st pos blen )
                             = . st pos + . st pos blen
                         } {}
                     }
@@ -554,7 +742,8 @@ $ `stdlib/std/bytes.nu`
     ? != . st err 0 {
         ^ @ !Inflated DeflateErr { F ( __df_err . st err ) }
     } {}
-    ^ @ !Inflated DeflateErr { T @ Inflated { out . st pos } }
+    // Whole bytes still in the bit buffer were read ahead, not consumed.
+    ^ @ !Inflated DeflateErr { T @ Inflated { out - . st pos >> . st bitcnt 3 } }
 }
 
 // Decode one stream from src[start..], leaving trailers to the caller.
@@ -684,38 +873,52 @@ $ `stdlib/std/bytes.nu`
     ^ & ^^ ^^ << # i . d i 10 << # i . d + i 1 5 # i . d + i 2 32767
 }
 
-@ __df_matchlen * u d i pos i cur i n → i {
-    : i maxlen ? < - n pos 258 - n pos 258
+// The little-endian u64 at d[o .. o+8]; the eight byte loads fold into one
+// unaligned load.
+@ __df_ld64 * u d i o → i {
+    : i lo | | | # i . d o << # i . d + o 1 8 << # i . d + o 2 16 << # i . d + o 3 24
+    : i hi | | | # i . d + o 4 << # i . d + o 5 8 << # i . d + o 6 16 << # i . d + o 7 24
+    ^ | lo << hi 32
+}
+
+// Length of the common run of d[pos..] and d[cur..], at most `maxlen`:
+// eight bytes a step while eight remain, the first differing byte found by
+// the lowest set bit of their difference, then a byte at a time.
+@ __df_matchlen * u d i pos i cur i maxlen → i {
     : ~ i l 0
+    ~ <= + l 8 maxlen {
+        : i x ^^ ( __df_ld64 d + cur l ) ( __df_ld64 d + pos l )
+        ? != x 0 { ^ + l >> # i ( nurl_ctz # u64 x ) 3 } {}
+        = l + l 8
+    }
     ~ & < l maxlen == # i . d + cur l # i . d + pos l { = l + l 1 }
     ^ l
 }
 
-// Find the length symbol index (0..28) for a match length 3..258.
+// Find the length symbol index (0..28) for a match length 3..258: the last
+// base not above it. Bases are ascending, so a binary search finds the
+// same index the linear scan did.
 @ __df_len_sym ( Vec i ) lenbase i length → i {
-    : ~ i li 28
-    : ~ b done F
-    : ~ i k 0
-    ~ & ! done < k 29 {
-        ? & >= length ( __df_get lenbase k ) | == k 28 < length ( __df_get lenbase + k 1 ) {
-            = li k = done T
-        } {}
-        = k + k 1
+    : *i bp ( vec_data [i] lenbase )
+    ? >= length 258 { ^ 28 } {}
+    : ~ i lo 0
+    : ~ i hi 27  // the answer is in [lo, hi]
+    ~ < lo hi {
+        : i mid >> + + lo hi 1 1
+        ? <= . bp mid length { = lo mid } { = hi - mid 1 }
     }
-    ^ li
+    ^ lo
 }
 
 @ __df_dist_sym ( Vec i ) distbase i dist → i {
-    : ~ i ds 29
-    : ~ b done F
-    : ~ i k 0
-    ~ & ! done < k 30 {
-        ? & >= dist ( __df_get distbase k ) | == k 29 < dist ( __df_get distbase + k 1 ) {
-            = ds k = done T
-        } {}
-        = k + k 1
+    : *i bp ( vec_data [i] distbase )
+    : ~ i lo 0
+    : ~ i hi 29
+    ~ < lo hi {
+        : i mid >> + + lo hi 1 1
+        ? <= . bp mid dist { = lo mid } { = hi - mid 1 }
     }
-    ^ ds
+    ^ lo
 }
 
 @ __df_emit_match inout BitW w i length i dist
@@ -748,14 +951,20 @@ $ `stdlib/std/bytes.nu`
     ( __df_bits w 1 2 )  // BTYPE=01 (fixed Huffman)
 
     : ( Vec i ) head ( __df_fill -1 32768 )
-    : ( Vec i ) prev ( __df_fill -1 ? > n 1 n 1 )
+    // The chain links of the last 32 KiB of positions, by position mod
+    // 32768: the chain never follows a link more than 32768 back (the
+    // distance check below), and the slot of position c is next written
+    // at c + 32768 — after every walk that may still read it. A table
+    // over the whole input gave the same links from a footprint eight
+    // bytes a position wide, where every chain step missed the cache.
+    : ( Vec i ) prev ( __df_fill -1 32768 )
 
     // Seed the dictionary region [0, start) into the hash chains.
     : ~ i si 0
     ~ < si start {
         ? <= si - n 3 {
             : i sh ( __df_hash d si )
-            ( __df_set prev si ( __df_get head sh ) )
+            ( __df_set prev & si 32767 ( __df_get head sh ) )
             ( __df_set head sh si )
         } {}
         = si + si 1
@@ -770,23 +979,31 @@ $ `stdlib/std/bytes.nu`
             : ~ i bestdist 0
             : ~ i chain 0
             : ~ i c cand
-            ~ & >= c 0 < chain 128 {
+            : i maxlen ? < - n i 258 - n i 258
+            // A candidate can only beat `bestlen` if it also matches at
+            // offset `bestlen`: one byte compare skips the rest, and once
+            // `bestlen` is the longest possible no candidate can — the
+            // chain picks the same match a full comparison of every
+            // candidate would.
+            ~ & & >= c 0 < chain 128 < bestlen maxlen {
                 : i dist - i c
                 ? > dist 32768 { = c -1 } {
-                    : i ml ( __df_matchlen d i c n )
-                    ? > ml bestlen { = bestlen ml = bestdist dist } {}
-                    = c ( __df_get prev c )
+                    ? == # i . d + c bestlen # i . d + i bestlen {
+                        : i ml ( __df_matchlen d i c maxlen )
+                        ? > ml bestlen { = bestlen ml = bestdist dist } {}
+                    } {}
+                    = c ( __df_get prev & c 32767 )
                     = chain + chain 1
                 }
             }
-            ( __df_set prev i cand )
+            ( __df_set prev & i 32767 cand )
             ( __df_set head h i )
             ? >= bestlen 3 {
                 ( __df_emit_match w bestlen bestdist lenbase lenext distbase distext )
                 : ~ i k 1
                 ~ & < k bestlen <= + i k - n 3 {
                     : i hk ( __df_hash d + i k )
-                    ( __df_set prev + i k ( __df_get head hk ) )
+                    ( __df_set prev & + i k 32767 ( __df_get head hk ) )
                     ( __df_set head hk + i k )
                     = k + k 1
                 }

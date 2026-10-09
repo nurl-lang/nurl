@@ -1461,6 +1461,7 @@ unsafe @ __pf_free sink s pp → v {
 @ __R_CALLIMP → i { ^ 210 }  // A=fidx B=argbase — an import, known at predecode
 @ __R_LOADMULI64 → i { ^ 211 }  // A=dst B=base C=off D=x: dst = mem64 * x
 @ __R_LOADADDI64 → i { ^ 212 }  // A=dst B=base C=off D=x: dst = mem64 + x
+@ __R_MULHU64 → i { ^ 186 }  // A=dst B=s1 C=s2: dst = the high 64 bits of the unsigned 128-bit s1·s2 (__m3_emit)
 @ __R_UNREACH → i { ^ 172 }
 
 @ __R_TRAPUN → i { ^ 173 }  // unsupported opcode (0xfd/unknown)
@@ -1949,6 +1950,28 @@ unsafe @ __fuse_branch * PFunc pf i lastp i labfloor i cond i tgt i byte → i {
     ^ -1
 }
 
+// `i32.eqz (eqz x)` is `x != 0` — what LLVM writes for a 64-bit loop
+// counter's `while (n != 0)`, `i64.eqz; i32.eqz; br_if`. Left alone it is
+// an eqz the JIT has to materialise as a 0/1 (setcc) for the IFZ behind it
+// to test again. When the inner eqz is the record just emitted and writes
+// exactly the stack temp the outer one reads, it is rewritten in place into
+// `ne x, 0` against the constant pool's zero (slot nlocals, interned
+// first), and the outer eqz emits nothing: the compare writes the same slot
+// with the same value, and `__fuse_branch` folds it into the branch. The
+// temp is popped by the outer eqz, so nothing else reads the inner one's
+// 0/1; no label can sit between the two (lastp is -1 across merge points).
+unsafe @ __fuse_eqz2 * PFunc pf i lastp i sb i src → b {
+    ? < lastp 0 { ^ F } {}
+    ? != ( vec_len [i] . pf code ) * + lastp 1 6 { ^ F } {}
+    : i base * lastp 6
+    : i lop ?? ( vec_get [i] . pf code base ) { T x → x F → -1 }
+    ? ! | == lop 43 == lop 44 { ^ F } {}
+    ? | < src sb != ?? ( vec_get [i] . pf code + base 1 ) { T x → x F → -1 } src { ^ F } {}
+    ( vec_set [i] . pf code base ? == lop 43 57 67 )  // i32.ne / i64.ne
+    ( vec_set [i] . pf code + base 3 . pf nlocals )
+    ^ T
+}
+
 // Emit a branch to label depth `k` (top of `open` = depth 0). `cond` is the
 // condition slot for br_if (-1 = unconditional). `h` is the height AFTER any
 // condition pop. Fills patch sites for forward targets. Returns nothing; the
@@ -2314,6 +2337,90 @@ unsafe @ __wrap_skippable * ModuleImpl m inout Wc c → b {
     ^ F
 }
 
+// ── __multi3: a 64×64→128 multiply the guest had to call for ─────
+// Core wasm has no wide multiply, so every toolchain lowers a 128-bit
+// product (C's `unsigned __int128`, Rust's u128, NURL's nurl_umulhi /
+// nurl_mac) to a call of compiler-rt's `__multi3(ret*, a_lo, a_hi, b_lo,
+// b_hi)`, which rebuilds it from four 32×32 products and stores the 128-bit
+// result through `ret`. Half of a Poly1305 or X25519 module's run time on
+// this runtime went into that function. A direct call to it is predecoded
+// into the product itself — one multiply-high and three multiplies — and
+// the body's own two stores.
+//
+// The callee is recognised by its exact bytes, never by name: the two
+// bodies the wasm32 toolchains link today, LLVM's compiler-rt (zig cc for C,
+// and NURL modules) and Rust's compiler-builtins, from the first
+// instruction to the final `end`, with their local declarations and the
+// signature (i32 i64 i64 i64 i64) → (). Anything else stays a call.
+@ __m3_crt → s { ^ `2000200420017e200220037e7c20034220882202200142208822047e7c200342ffffffff0f832203200142ffffffff0f8322017e2205422088200320047e7c22034220887c200342ffffffff0f83200220017e7c22014220887c37030820002001422086200542ffffffff0f83843703000b` }
+
+@ __m3_rust → s { ^ `2000200342ffffffff0f832205200142ffffffff0f8322067e22072003422088220820067e22062005200142208822097e7c22054220867c220a3703002000200820097e2005200654ad4220862005422088847c200a200754ad7c200420017e200320027e7c7c3703080b` }
+
+@ __m3_nib i ch → i { ^ ? <= ch 57 - ch 48 - ch 87 }
+
+// Does `f`'s body, from its first instruction on, spell `hex` byte for byte,
+// with `nloc` declared locals, all i64?
+unsafe @ __m3_eq * ModuleImpl m * WFunc f s hex i nloc → b {
+    : i n - . f code_end . f code_start
+    : i hl ( nurl_str_len hex )
+    ? != * n 2 hl { ^ F } {}
+    ? != ( vec_len [i] . f locals ) nloc { ^ F } {}
+    : ~ i k 0
+    ~ < k nloc { ? != ( vec_at [i] . f locals k ) 126 { ^ F } {} = k + k 1 }
+    : *u cp ( vec_data [u] . m code )
+    = k 0
+    ~ < k n {
+        : i want + << ( __m3_nib ( nurl_str_at hex hl * k 2 ) ) 4 ( __m3_nib ( nurl_str_at hex hl + * k 2 1 ) )
+        ? != # i . cp + . f code_start k want { ^ F } {}
+        = k + k 1
+    }
+    ^ T
+}
+
+// 1 when function `fi` is compiler-rt's __multi3, 2 when it is
+// compiler-builtins' (the two store their halves in opposite orders), else 0.
+unsafe @ __m3_kind * ModuleImpl m i fi → i {
+    : i ni . m num_import_funcs
+    ? < fi ni { ^ 0 } {}
+    : s ct ( _module_func_type m fi )
+    ? == # i ct 0 { ^ 0 } {}
+    : *FuncType ft # *FuncType ct
+    ? | != ( vec_len [i] . ft params ) 5 != ( vec_len [i] . ft results ) 0 { ^ 0 } {}
+    ? != ( vec_at [i] . ft params 0 ) 127 { ^ 0 } {}
+    : ~ i k 1
+    ~ < k 5 { ? != ( vec_at [i] . ft params k ) 126 { ^ 0 } {} = k + k 1 }
+    : s fs ?? ( vec_get [s] . m funcs - fi ni ) { T x → x F → # s 0 }
+    ? == # i fs 0 { ^ 0 } {}
+    : *WFunc f # *WFunc fs
+    ? ( __m3_eq m f ( __m3_crt ) 1 ) { ^ 1 } {}
+    ? ( __m3_eq m f ( __m3_rust ) 6 ) { ^ 2 } {}
+    ^ 0
+}
+
+// The call's argument window A..A+4 holds ret, a_lo, a_hi, b_lo, b_hi, and
+// is dead after it, so the product is computed in place: the low word is
+// a_lo·b_lo, the high word a_lo·b_hi + a_hi·b_lo + mulhu(a_lo, b_lo), each
+// mod 2^64 — then stored in the order the matched body stores them, so a
+// trap on the second store leaves memory as the body would.
+unsafe @ __m3_emit * PFunc pf i a i kind i byte → v {
+    : i mul ( __iop 126 )  // i64.mul
+    : i add ( __iop 124 )  // i64.add
+    : i st ( __iop 55 )  // i64.store
+    ( __pf_emit pf mul + a 2 + a 2 + a 3 0 byte )  // a_hi·b_lo
+    ( __pf_emit pf mul + a 4 + a 1 + a 4 0 byte )  // a_lo·b_hi
+    ( __pf_emit pf add + a 2 + a 2 + a 4 0 byte )
+    ( __pf_emit pf ( __R_MULHU64 ) + a 4 + a 1 + a 3 0 byte )
+    ( __pf_emit pf add + a 2 + a 2 + a 4 0 byte )  // the high word
+    ( __pf_emit pf mul + a 1 + a 1 + a 3 0 byte )  // the low word
+    ? == kind 1 {
+        ( __pf_emit pf st a + a 2 8 0 byte )
+        ( __pf_emit pf st a + a 1 0 0 byte )
+    } {
+        ( __pf_emit pf st a + a 1 0 0 byte )
+        ( __pf_emit pf st a + a 2 8 0 byte )
+    }
+}
+
 unsafe @ __predecode * ModuleImpl m * WFunc f → s {
     : *PFunc pf # *PFunc ( nurl_alloc Z PFunc )
     = . pf code ( vec_new [i] )
@@ -2488,13 +2595,19 @@ unsafe @ __predecode * ModuleImpl m * WFunc f → s {
                                             : i fi ( wc_uleb c )
                                             ? != 0 live {
                                                 ( __vflush pf vm SB h live byte )
-                                                : s ct ( _module_func_type m fi )
-                                                : ~ i cp 0
-                                                : ~ i cr 0
-                                                ? != # i ct 0 { : *FuncType ctt # *FuncType ct = cp ( vec_len [i] . ctt params ) = cr ( vec_len [i] . ctt results ) } {}
-                                                ( __pf_emit pf ? < fi . m num_import_funcs ( __R_CALLIMP ) ( __R_CALL ) fi + SB - h cp 0 0 byte )
-                                                = h + - h cp cr
-                                                ? > h maxh { = maxh h } {}
+                                                : i m3 ( __m3_kind m fi )
+                                                ? != m3 0 {
+                                                    ( __m3_emit pf + SB - h 5 m3 byte )
+                                                    = h - h 5
+                                                } {
+                                                    : s ct ( _module_func_type m fi )
+                                                    : ~ i cp 0
+                                                    : ~ i cr 0
+                                                    ? != # i ct 0 { : *FuncType ctt # *FuncType ct = cp ( vec_len [i] . ctt params ) = cr ( vec_len [i] . ctt results ) } {}
+                                                    ( __pf_emit pf ? < fi . m num_import_funcs ( __R_CALLIMP ) ( __R_CALL ) fi + SB - h cp 0 0 byte )
+                                                    = h + - h cp cr
+                                                    ? > h maxh { = maxh h } {}
+                                                }
                                             } {}
                                         } {
                                             ? == op 17 {  // call_indirect
@@ -2565,7 +2678,11 @@ unsafe @ __predecode * ModuleImpl m * WFunc f → s {
                                                                                                                         ? == op 64 { ( wc_u8 c ) ? != 0 live { ( __pf_emit pf ( __R_MEMGROW ) + SB - h 1 ( __vg vm SB - h 1 ) 0 0 byte ) ( __vset vm - h 1 -1 ) } {} } {
                                                                                                                             ? | == op 69 | == op 80 | & >= op 103 <= op 105 | & >= op 121 <= op 123 & >= op 192 <= op 196 {
                                                                                                                                 // integer unary: in place at the top slot
-                                                                                                                                ? != 0 live { ( __pf_emit pf ( __iop op ) + SB - h 1 ( __vg vm SB - h 1 ) 0 0 byte ) ( __vset vm - h 1 -1 ) } {}
+                                                                                                                                ? != 0 live {
+                                                                                                                                    : i usrc ( __vg vm SB - h 1 )
+                                                                                                                                    ? & == op 69 ( __fuse_eqz2 pf lastp SB usrc ) {} { ( __pf_emit pf ( __iop op ) + SB - h 1 usrc 0 0 byte ) }
+                                                                                                                                    ( __vset vm - h 1 -1 )
+                                                                                                                                } {}
                                                                                                                             } {
                                                                                                                                 ? | & >= op 70 <= op 79 | & >= op 81 <= op 90 | & >= op 106 <= op 120 & >= op 124 <= op 138 {
                                                                                                                                     // integer binary: dst = h-2, operands h-2 / h-1
@@ -3170,6 +3287,7 @@ unsafe @ __perfmap_add * ModuleImpl m i fidx i start i len → v {
     ? == op 93 { ^ 1 } {}  // i32.clz
     ? | == op 99 == op 108 { ^ 1 } {}  // i32/i64.rem_u
     ? | | & >= op 96 <= op 98 == op 105 | == op 106 == op 107 { ^ 1 } {}  // div_s/div_u/rem_s, i32+i64
+    ? == op 186 { ^ 1 } {}  // MULHU64 (a __multi3 call, __m3_emit)
     ? == op 170 { ^ 1 } {}  // call_indirect (tier 5b)
     ? & >= op 153 <= op 156 { ^ 1 } {}  // reinterprets (slot copies)
     ? & >= op 157 <= op 161 { ^ 1 } {}  // extendN_s family
@@ -3566,6 +3684,7 @@ unsafe @ __jit_ok * PFunc pf → i {
         ^ ? | == a s == b s 1 0 } {}  // store: addr+value
     ? | == op 36 | == op 37 | == op 93 | == op 131 | == op 125 | == op 126 & >= op 153 <= op 161 { ^ ? == b s 1 0 } {}
     ? | | & >= op 96 <= op 99 & >= op 105 <= op 108 == op 162 { ? == op 162 { ^ 0 } {} ^ ? | == b s == c s 1 0 } {}
+    ? == op 186 { ^ ? | == b s == c s 1 0 } {}  // MULHU64
     ? | == op 205 == op 206 { ^ ? | == b s == d s 1 0 } {}
     ? | == op 207 == op 208 { ^ ? | | == b s == d s == w5 s 1 0 } {}
     ? | == op 211 == op 212 { ^ ? | == b s == d s 1 0 } {}
@@ -3736,7 +3855,7 @@ unsafe @ __jit_kv_writes * PFunc pf ( Vec i ) pmap ( Vec i ) xmap ( Vec i ) cval
         ? | == op 22 | == op 30 == op 33 { = known 1 } {}
         ? & >= op 36 <= op 75 { = known 1 } {}
         ? & >= op 179 <= op 185 { = known 1 } {}
-        ? | == op 93 | & >= op 96 <= op 99 | & >= op 105 <= op 108 | == op 125 == op 126 { = known 1 } {}
+        ? | == op 93 | & >= op 96 <= op 99 | & >= op 105 <= op 108 | == op 125 | == op 126 == op 186 { = known 1 } {}
         ? | == op 131 | & >= op 153 <= op 156 | & >= op 157 <= op 163 & >= op 169 <= op 172 { = known 1 } {}
         ? | & >= op 194 <= op 201 | & >= op 205 <= op 208 | == op 177 | | == op 210 == op 211 == op 212 { = known 1 } {}
         ? >= ( __jit_memkind op ) 0 { = known 1 } {}
@@ -3987,6 +4106,13 @@ unsafe @ __jit_ctx_put * InterpImpl it * i b → v {
         ( __jit_b buf 247 ) ( __jit_b buf 241 )  // div ecx → edx=rem
         ( __jit_b buf 137 ) ( __jit_b buf 208 )  // mov eax,edx
         ( __jit_movslq buf )  // canonical i32
+        ( __jit_strax_m buf pmap xmap cvals a ) ^ v
+    } {}
+    ? == op 186 {  // MULHU64: the high word of the unsigned 128-bit product
+        ? != raxslot b { ( __jit_ldrax_m buf pmap xmap cvals b ) } {}
+        ( __jit_ldrcx_m buf pmap xmap cvals c )
+        ( __jit_b buf 72 ) ( __jit_b buf 247 ) ( __jit_b buf 225 )  // mul rcx → rdx:rax
+        ( __jit_b buf 72 ) ( __jit_b buf 137 ) ( __jit_b buf 208 )  // mov rax,rdx
         ( __jit_strax_m buf pmap xmap cvals a ) ^ v
     } {}
     ? == op 106 {  // i64.div_u — trap on zero divisor
@@ -4404,6 +4530,7 @@ unsafe @ __jit_state_init * InterpImpl it * ModuleImpl m → v {
     ? == op 93 { ( __jit_sc_add sc a wt ) ( __jit_sc_add sc b wt ) ( __jit_hd_add hd b ) ^ 0 } {}  // i32.clz: 32-bit read
     ? == op 99 { ( __jit_sc_add sc a wt ) ( __jit_sc_add sc b wt ) ( __jit_sc_add sc c wt ) ( __jit_hd_add hd b ) ( __jit_hd_add hd c ) ^ 0 } {}  // i32.rem_u: 32-bit reads
     ? == op 108 { ( __jit_sc_add sc a wt ) ( __jit_sc_add sc b wt ) ( __jit_sc_add sc c wt ) ^ 0 } {}  // i64.rem_u
+    ? == op 186 { ( __jit_sc_add sc a wt ) ( __jit_sc_add sc b wt ) ( __jit_sc_add sc c wt ) ^ 0 } {}  // MULHU64
     ? | | & >= op 96 <= op 98 == op 105 | == op 106 == op 107 { ( __jit_sc_add sc a wt ) ( __jit_sc_add sc b wt ) ( __jit_sc_add sc c wt ) ^ 0 } {}  // div family (i32 forms consume via full loads)
     ? | == op 205 == op 206 { ( __jit_sc_add sc a wt ) ( __jit_sc_add sc b wt ) ( __jit_sc_add sc d wt ) ( __jit_hd_add hd b ) ^ 0 } {}  // LOADSHL: 32-bit read of x
     ? | == op 207 == op 208 { ( __jit_sc_add sc a wt ) ( __jit_sc_add sc b wt ) ( __jit_sc_add sc d wt ) ( __jit_sc_add sc w5 wt ) ( __jit_hd_add hd b ) ( __jit_hd_add hd d ) ^ 0 } {}  // LOADSHLADD: fused base + 32-bit x
@@ -6098,7 +6225,9 @@ unsafe @ __exec_func * InterpImpl it i fidx → v {
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 } {
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     ? == op 172 { ( __trap it `unreachable` ) ( __fr_setpos tp r0 ) = pc pend } {  // __R_UNREACH
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         ? == op 173 { ( __trap it `unsupported opcode` ) ( __fr_setpos tp r0 ) = pc pend } {  // __R_TRAPUN
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            ( __trap it `unsupported opcode` ) ( __fr_setpos tp r0 ) = pc pend
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            ? == op 186 { = . rbase ra # i ( nurl_umulhi # u64 . rbase rb # u64 . rbase rc ) } {  // __R_MULHU64
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                ( __trap it `unsupported opcode` ) ( __fr_setpos tp r0 ) = pc pend
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            }
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } }
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } }
                                                                                                                                                                                                                                                                                                                                                                                                                                                                 } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } }

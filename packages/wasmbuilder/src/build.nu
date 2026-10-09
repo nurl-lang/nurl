@@ -129,6 +129,9 @@ $ `toolchain.nu`
     ~ < attempt 2 {
         : ( Vec s ) args ( vec_new [s] )
         ( vec_push [s] args nu_path )
+        // no x86-64-v3 clone of a `simd` function: wasm32 is not x86-64
+        // (nurl.sh passes the same flag for every non-x86-64 target)
+        ( vec_push [s] args `--no-cpu-dispatch` )
         ? with_flag { ( vec_push [s] args `--ffi-host-imports` ) } {}
         : !Output ProcessErr r ( process_run nurlc args `` )
         ?? r {
