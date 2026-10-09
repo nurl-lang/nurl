@@ -2,6 +2,24 @@
 
 All notable changes to this package are documented here.
 
+## [0.3.5] — 2026-10-09
+
+### Fixed
+
+- **No x86-64 clones in a wasm module.** A `simd`-marked function reached
+  the module twice — its baseline body and its x86-64-v3 clone, compiled
+  for wasm32 with the x86 feature list ignored — behind a dispatcher
+  asking the runtime for a CPU it can never be. nurlc now runs with
+  `--no-cpu-dispatch`, as `nurl.sh` does for every non-x86-64 target.
+- **The native-SIMD gates fold to 0.** `nurl_simd128_native` (and the
+  x86 feature probe `nurl_cpu_x86_v3`) answer 0 in every module this
+  builds — no simd128, no x86 — but as calls into the runtime they kept
+  the vector kernels they guard alive in the module: ChaCha20's four- and
+  eight-block kernels were 26 KB of a 75 KB module, compiled whole by a
+  reference JIT on every cold start (`wasmtime -C cache=n` 483M cycles
+  without them, 750M with). The IR rewrite replaces both calls with 0;
+  the guarded branches fold away and `--gc-sections` drops the kernels.
+
 ## [0.3.4] — 2026-10-09
 
 Requires NURL 0.72.0, which draws the raw-memory boundary at every call:
