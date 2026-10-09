@@ -106,13 +106,30 @@ $ `stdlib/core/slice.nu`
 }
 
 // True iff `str` is well-formed UTF-8 end to end.
+// The eight bytes at p[o .. o+8] as one little-endian word (the byte
+// loads fold into one load).
+@ __utf8_ld64 * u p i o → i {
+    : i lo | | | # i . p o << # i . p + o 1 8 << # i . p + o 2 16 << # i . p + o 3 24
+    : i hi | | | # i . p + o 4 << # i . p + o 5 8 << # i . p + o 6 16 << # i . p + o 7 24
+    ^ | lo << hi 32
+}
+
 @ utf8_valid s str → b {
     : i n ( nurl_str_len str )
+    : *u p # *u str
     : ~ i pos 0
     : ~ b ok T
     ~ & < pos n ok {
-        : Utf8Dec d ( utf8_decode_n str n pos )
-        ? == . d ok 0 { = ok F } { = pos + pos . d width }
+        // ASCII — most text, all of HTTP's and JSON's syntax — eight bytes
+        // at a time: no byte has its top bit set. A lone ASCII byte skips
+        // the decoder too.
+        ~ & <= + pos 8 n == 0 & ( __utf8_ld64 p pos ) -9187201950435737472 { = pos + pos 8 }
+        ? < pos n {
+            ? < # i . p pos 128 { = pos + pos 1 } {
+                : Utf8Dec d ( utf8_decode_n str n pos )
+                ? == . d ok 0 { = ok F } { = pos + pos . d width }
+            }
+        } {}
     }
     ^ ok
 }
