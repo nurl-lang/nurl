@@ -73,36 +73,58 @@ $ `stdlib/std/bytes.nu`
 
 // ── Transform one 64-byte block. Mutates state (8 × u32) in place.
 //
-// Every limb here goes through a raw `*u32` / `*u` rather than the
-// bounds-checked Vec accessors. One block used to make about 380 of those
-// calls — 64 pushes to build the message schedule, 192 gets to expand it,
-// and 128 more to read K and the schedule back in the round loop — for a
-// compression function whose actual work is 64 rounds of ALU. The indices
-// are all fixed-count and provably in range, so the checks were pure
-// overhead; they showed up as 12% of a TLS handshake.
-//
-// The schedule `mp` is the caller's 64-word scratch, allocated once per
-// hash instead of once per block; the block is the 64 bytes at `bp`.
+// The block is the 64 bytes at `bp`; the state the eight words at `sp`.
+// The eight working variables and the 16-word message schedule are scalar
+// locals: each of the 64 rounds is one `inline` call that updates the two
+// words a round changes (`inout`), written out with the variables already
+// rotated into their roles and the round constant as a literal, so no
+// round moves a word or loads a constant. The schedule is FIPS 180-4's
+// 16-word ring, expanded in place one word ahead of the round that reads
+// it. (`kp` and `mp` — the constant table and a 64-word schedule — are
+// what a rolled loop needed; the callers still pass them.)
 
 @ __sha256_be32 * u p i o → u32 {
     ^ | | | << # u32 . p o # u32 24 << # u32 . p + o 1 # u32 16
     << # u32 . p + o 2 # u32 8 # u32 . p + o 3
 }
 
+// One round: T1 = h + Σ1(e) + Ch(e, f, g) + k + w, T2 = Σ0(a) + Maj(a, b, c);
+// d += T1, h = T1 + T2 — the next round sees h as a, d as e.
+inline @ __sha256_rnd u32 a u32 b u32 c inout u32 d u32 e u32 f u32 g inout u32 h u32 k u32 w → v {
+    : u32 s1 ^^ ^^ ( __sha256_rotr e 6 ) ( __sha256_rotr e 11 ) ( __sha256_rotr e 25 )
+    : u32 ch ^^ g & e ^^ f g
+    : u32 t1 + + + + h s1 ch k w
+    : u32 s0 ^^ ^^ ( __sha256_rotr a 2 ) ( __sha256_rotr a 13 ) ( __sha256_rotr a 22 )
+    : u32 mj ^^ & a b & c ^^ a b
+    = d + d t1
+    = h + t1 + s0 mj
+}
+
+// w[t] = σ1(w[t-2]) + w[t-7] + σ0(w[t-15]) + w[t-16], w[t-16] being the
+// ring slot w[t] overwrites.
+inline @ __sha256_sch inout u32 w u32 w2 u32 w7 u32 w15 → v {
+    : u32 s0 ^^ ^^ ( __sha256_rotr w15 7 ) ( __sha256_rotr w15 18 ) >> w15 # u32 3
+    : u32 s1 ^^ ^^ ( __sha256_rotr w2 17 ) ( __sha256_rotr w2 19 ) >> w2 # u32 10
+    = w + + + w s1 w7 s0
+}
+
 @ __sha256_transform * u32 sp * u bp * u32 kp * u32 mp → v {
-    : ~ i wi 0
-    ~ < wi 16 {
-        = . mp wi ( __sha256_be32 bp * wi 4 )
-        = wi + wi 1
-    }
-    ~ < wi 64 {
-        : u32 m15 . mp - wi 15
-        : u32 m2 . mp - wi 2
-        : u32 s0 ^^ ^^ ( __sha256_rotr m15 7 ) ( __sha256_rotr m15 18 ) >> m15 # u32 3
-        : u32 s1 ^^ ^^ ( __sha256_rotr m2 17 ) ( __sha256_rotr m2 19 ) >> m2 # u32 10
-        = . mp wi + + + . mp - wi 16 s0 . mp - wi 7 s1
-        = wi + wi 1
-    }
+    : ~ u32 w0 ( __sha256_be32 bp 0 )
+    : ~ u32 w1 ( __sha256_be32 bp 4 )
+    : ~ u32 w2 ( __sha256_be32 bp 8 )
+    : ~ u32 w3 ( __sha256_be32 bp 12 )
+    : ~ u32 w4 ( __sha256_be32 bp 16 )
+    : ~ u32 w5 ( __sha256_be32 bp 20 )
+    : ~ u32 w6 ( __sha256_be32 bp 24 )
+    : ~ u32 w7 ( __sha256_be32 bp 28 )
+    : ~ u32 w8 ( __sha256_be32 bp 32 )
+    : ~ u32 w9 ( __sha256_be32 bp 36 )
+    : ~ u32 w10 ( __sha256_be32 bp 40 )
+    : ~ u32 w11 ( __sha256_be32 bp 44 )
+    : ~ u32 w12 ( __sha256_be32 bp 48 )
+    : ~ u32 w13 ( __sha256_be32 bp 52 )
+    : ~ u32 w14 ( __sha256_be32 bp 56 )
+    : ~ u32 w15 ( __sha256_be32 bp 60 )
 
     : ~ u32 a . sp 0
     : ~ u32 b . sp 1
@@ -113,24 +135,118 @@ $ `stdlib/std/bytes.nu`
     : ~ u32 g . sp 6
     : ~ u32 h . sp 7
 
-    : ~ i ri 0
-    ~ < ri 64 {
-        : u32 S1 ^^ ^^ ( __sha256_rotr e 6 ) ( __sha256_rotr e 11 ) ( __sha256_rotr e 25 )
-        : u32 ch ^^ & e f & ~ e g
-        : u32 t1 + + + + h S1 ch . kp ri . mp ri
-        : u32 S0 ^^ ^^ ( __sha256_rotr a 2 ) ( __sha256_rotr a 13 ) ( __sha256_rotr a 22 )
-        : u32 mj ^^ ^^ & a b & a c & b c
-        : u32 t2 + S0 mj
-        = h g
-        = g f
-        = f e
-        = e + d t1
-        = d c
-        = c b
-        = b a
-        = a + t1 t2
-        = ri + ri 1
-    }
+    ( __sha256_rnd a b c d e f g h # u32 1116352408 w0 )
+    ( __sha256_rnd h a b c d e f g # u32 1899447441 w1 )
+    ( __sha256_rnd g h a b c d e f # u32 3049323471 w2 )
+    ( __sha256_rnd f g h a b c d e # u32 3921009573 w3 )
+    ( __sha256_rnd e f g h a b c d # u32 961987163 w4 )
+    ( __sha256_rnd d e f g h a b c # u32 1508970993 w5 )
+    ( __sha256_rnd c d e f g h a b # u32 2453635748 w6 )
+    ( __sha256_rnd b c d e f g h a # u32 2870763221 w7 )
+    ( __sha256_rnd a b c d e f g h # u32 3624381080 w8 )
+    ( __sha256_rnd h a b c d e f g # u32 310598401 w9 )
+    ( __sha256_rnd g h a b c d e f # u32 607225278 w10 )
+    ( __sha256_rnd f g h a b c d e # u32 1426881987 w11 )
+    ( __sha256_rnd e f g h a b c d # u32 1925078388 w12 )
+    ( __sha256_rnd d e f g h a b c # u32 2162078206 w13 )
+    ( __sha256_rnd c d e f g h a b # u32 2614888103 w14 )
+    ( __sha256_rnd b c d e f g h a # u32 3248222580 w15 )
+    ( __sha256_sch w0 w14 w9 w1 )
+    ( __sha256_rnd a b c d e f g h # u32 3835390401 w0 )
+    ( __sha256_sch w1 w15 w10 w2 )
+    ( __sha256_rnd h a b c d e f g # u32 4022224774 w1 )
+    ( __sha256_sch w2 w0 w11 w3 )
+    ( __sha256_rnd g h a b c d e f # u32 264347078 w2 )
+    ( __sha256_sch w3 w1 w12 w4 )
+    ( __sha256_rnd f g h a b c d e # u32 604807628 w3 )
+    ( __sha256_sch w4 w2 w13 w5 )
+    ( __sha256_rnd e f g h a b c d # u32 770255983 w4 )
+    ( __sha256_sch w5 w3 w14 w6 )
+    ( __sha256_rnd d e f g h a b c # u32 1249150122 w5 )
+    ( __sha256_sch w6 w4 w15 w7 )
+    ( __sha256_rnd c d e f g h a b # u32 1555081692 w6 )
+    ( __sha256_sch w7 w5 w0 w8 )
+    ( __sha256_rnd b c d e f g h a # u32 1996064986 w7 )
+    ( __sha256_sch w8 w6 w1 w9 )
+    ( __sha256_rnd a b c d e f g h # u32 2554220882 w8 )
+    ( __sha256_sch w9 w7 w2 w10 )
+    ( __sha256_rnd h a b c d e f g # u32 2821834349 w9 )
+    ( __sha256_sch w10 w8 w3 w11 )
+    ( __sha256_rnd g h a b c d e f # u32 2952996808 w10 )
+    ( __sha256_sch w11 w9 w4 w12 )
+    ( __sha256_rnd f g h a b c d e # u32 3210313671 w11 )
+    ( __sha256_sch w12 w10 w5 w13 )
+    ( __sha256_rnd e f g h a b c d # u32 3336571891 w12 )
+    ( __sha256_sch w13 w11 w6 w14 )
+    ( __sha256_rnd d e f g h a b c # u32 3584528711 w13 )
+    ( __sha256_sch w14 w12 w7 w15 )
+    ( __sha256_rnd c d e f g h a b # u32 113926993 w14 )
+    ( __sha256_sch w15 w13 w8 w0 )
+    ( __sha256_rnd b c d e f g h a # u32 338241895 w15 )
+    ( __sha256_sch w0 w14 w9 w1 )
+    ( __sha256_rnd a b c d e f g h # u32 666307205 w0 )
+    ( __sha256_sch w1 w15 w10 w2 )
+    ( __sha256_rnd h a b c d e f g # u32 773529912 w1 )
+    ( __sha256_sch w2 w0 w11 w3 )
+    ( __sha256_rnd g h a b c d e f # u32 1294757372 w2 )
+    ( __sha256_sch w3 w1 w12 w4 )
+    ( __sha256_rnd f g h a b c d e # u32 1396182291 w3 )
+    ( __sha256_sch w4 w2 w13 w5 )
+    ( __sha256_rnd e f g h a b c d # u32 1695183700 w4 )
+    ( __sha256_sch w5 w3 w14 w6 )
+    ( __sha256_rnd d e f g h a b c # u32 1986661051 w5 )
+    ( __sha256_sch w6 w4 w15 w7 )
+    ( __sha256_rnd c d e f g h a b # u32 2177026350 w6 )
+    ( __sha256_sch w7 w5 w0 w8 )
+    ( __sha256_rnd b c d e f g h a # u32 2456956037 w7 )
+    ( __sha256_sch w8 w6 w1 w9 )
+    ( __sha256_rnd a b c d e f g h # u32 2730485921 w8 )
+    ( __sha256_sch w9 w7 w2 w10 )
+    ( __sha256_rnd h a b c d e f g # u32 2820302411 w9 )
+    ( __sha256_sch w10 w8 w3 w11 )
+    ( __sha256_rnd g h a b c d e f # u32 3259730800 w10 )
+    ( __sha256_sch w11 w9 w4 w12 )
+    ( __sha256_rnd f g h a b c d e # u32 3345764771 w11 )
+    ( __sha256_sch w12 w10 w5 w13 )
+    ( __sha256_rnd e f g h a b c d # u32 3516065817 w12 )
+    ( __sha256_sch w13 w11 w6 w14 )
+    ( __sha256_rnd d e f g h a b c # u32 3600352804 w13 )
+    ( __sha256_sch w14 w12 w7 w15 )
+    ( __sha256_rnd c d e f g h a b # u32 4094571909 w14 )
+    ( __sha256_sch w15 w13 w8 w0 )
+    ( __sha256_rnd b c d e f g h a # u32 275423344 w15 )
+    ( __sha256_sch w0 w14 w9 w1 )
+    ( __sha256_rnd a b c d e f g h # u32 430227734 w0 )
+    ( __sha256_sch w1 w15 w10 w2 )
+    ( __sha256_rnd h a b c d e f g # u32 506948616 w1 )
+    ( __sha256_sch w2 w0 w11 w3 )
+    ( __sha256_rnd g h a b c d e f # u32 659060556 w2 )
+    ( __sha256_sch w3 w1 w12 w4 )
+    ( __sha256_rnd f g h a b c d e # u32 883997877 w3 )
+    ( __sha256_sch w4 w2 w13 w5 )
+    ( __sha256_rnd e f g h a b c d # u32 958139571 w4 )
+    ( __sha256_sch w5 w3 w14 w6 )
+    ( __sha256_rnd d e f g h a b c # u32 1322822218 w5 )
+    ( __sha256_sch w6 w4 w15 w7 )
+    ( __sha256_rnd c d e f g h a b # u32 1537002063 w6 )
+    ( __sha256_sch w7 w5 w0 w8 )
+    ( __sha256_rnd b c d e f g h a # u32 1747873779 w7 )
+    ( __sha256_sch w8 w6 w1 w9 )
+    ( __sha256_rnd a b c d e f g h # u32 1955562222 w8 )
+    ( __sha256_sch w9 w7 w2 w10 )
+    ( __sha256_rnd h a b c d e f g # u32 2024104815 w9 )
+    ( __sha256_sch w10 w8 w3 w11 )
+    ( __sha256_rnd g h a b c d e f # u32 2227730452 w10 )
+    ( __sha256_sch w11 w9 w4 w12 )
+    ( __sha256_rnd f g h a b c d e # u32 2361852424 w11 )
+    ( __sha256_sch w12 w10 w5 w13 )
+    ( __sha256_rnd e f g h a b c d # u32 2428436474 w12 )
+    ( __sha256_sch w13 w11 w6 w14 )
+    ( __sha256_rnd d e f g h a b c # u32 2756734187 w13 )
+    ( __sha256_sch w14 w12 w7 w15 )
+    ( __sha256_rnd c d e f g h a b # u32 3204031479 w14 )
+    ( __sha256_sch w15 w13 w8 w0 )
+    ( __sha256_rnd b c d e f g h a # u32 3329325298 w15 )
 
     = . sp 0 + . sp 0 a
     = . sp 1 + . sp 1 b
