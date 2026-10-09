@@ -46,12 +46,6 @@ inline @ __sha1_f4 u32 a inout u32 b u32 c u32 d inout u32 e u32 w → v {
     = b ( __sha1_rotl b 30 )
 }
 
-// Schedule: w[t] = rotl(w[t-16] ⊕ w[t-3] ⊕ w[t-8] ⊕ w[t-14], 1), with w[t-16]
-// the ring slot w[t] overwrites.
-inline @ __sha1_x inout u32 w u32 x u32 y u32 z → v {
-    = w ( __sha1_rotl ^^ ^^ ^^ w x y z 1 )
-}
-
 // The big-endian u32 at `blk[off .. off+4]`; every caller reads inside a
 // block it has already sized, so the out-of-range arm never runs.
 @ __sha1_w ( Vec u ) blk i off → u32 {
@@ -59,24 +53,20 @@ inline @ __sha1_x inout u32 w u32 x u32 y u32 z → v {
 }
 
 // ── Transform: one 64-byte block at `blk[off ..]` into h0..h4. ─────
-
-@ __sha1_transform inout u32 h0 inout u32 h1 inout u32 h2 inout u32 h3 inout u32 h4 ( Vec u ) blk i off → v {
-    : ~ u32 w0 ( __sha1_w blk off )
-    : ~ u32 w1 ( __sha1_w blk + off 4 )
-    : ~ u32 w2 ( __sha1_w blk + off 8 )
-    : ~ u32 w3 ( __sha1_w blk + off 12 )
-    : ~ u32 w4 ( __sha1_w blk + off 16 )
-    : ~ u32 w5 ( __sha1_w blk + off 20 )
-    : ~ u32 w6 ( __sha1_w blk + off 24 )
-    : ~ u32 w7 ( __sha1_w blk + off 28 )
-    : ~ u32 w8 ( __sha1_w blk + off 32 )
-    : ~ u32 w9 ( __sha1_w blk + off 36 )
-    : ~ u32 w10 ( __sha1_w blk + off 40 )
-    : ~ u32 w11 ( __sha1_w blk + off 44 )
-    : ~ u32 w12 ( __sha1_w blk + off 48 )
-    : ~ u32 w13 ( __sha1_w blk + off 52 )
-    : ~ u32 w14 ( __sha1_w blk + off 56 )
-    : ~ u32 w15 ( __sha1_w blk + off 60 )
+// The 80-word schedule is expanded into the caller's scratch `wp` first;
+// the steps then run five to a pass, each one `inline` call updating the
+// two words a step changes (`inout`) with the variables written already
+// rotated into their roles, so five steps bring a..e back to their own
+// names and no step moves a word. Fully unrolled over a schedule held in
+// sixteen locals the transform was no faster, and a program hashing with
+// SHA-1 compiled 60 % more instructions.
+@ __sha1_transform inout u32 h0 inout u32 h1 inout u32 h2 inout u32 h3 inout u32 h4 ( Vec u ) blk i off * u32 wp → v {
+    : ~ i k 0
+    ~ < k 16 { = . wp k ( __sha1_w blk + off * k 4 ) = k + k 1 }
+    ~ < k 80 {
+        = . wp k ( __sha1_rotl ^^ ^^ ^^ . wp - k 3 . wp - k 8 . wp - k 14 . wp - k 16 1 )
+        = k + k 1
+    }
 
     : ~ u32 a h0
     : ~ u32 b h1
@@ -84,150 +74,42 @@ inline @ __sha1_x inout u32 w u32 x u32 y u32 z → v {
     : ~ u32 d h3
     : ~ u32 e h4
 
-    ( __sha1_f1 a b c d e w0 )
-    ( __sha1_f1 e a b c d w1 )
-    ( __sha1_f1 d e a b c w2 )
-    ( __sha1_f1 c d e a b w3 )
-    ( __sha1_f1 b c d e a w4 )
-    ( __sha1_f1 a b c d e w5 )
-    ( __sha1_f1 e a b c d w6 )
-    ( __sha1_f1 d e a b c w7 )
-    ( __sha1_f1 c d e a b w8 )
-    ( __sha1_f1 b c d e a w9 )
-    ( __sha1_f1 a b c d e w10 )
-    ( __sha1_f1 e a b c d w11 )
-    ( __sha1_f1 d e a b c w12 )
-    ( __sha1_f1 c d e a b w13 )
-    ( __sha1_f1 b c d e a w14 )
-    ( __sha1_f1 a b c d e w15 )
-    ( __sha1_x w0 w13 w8 w2 )
-    ( __sha1_f1 e a b c d w0 )
-    ( __sha1_x w1 w14 w9 w3 )
-    ( __sha1_f1 d e a b c w1 )
-    ( __sha1_x w2 w15 w10 w4 )
-    ( __sha1_f1 c d e a b w2 )
-    ( __sha1_x w3 w0 w11 w5 )
-    ( __sha1_f1 b c d e a w3 )
-    ( __sha1_x w4 w1 w12 w6 )
-    ( __sha1_f2 a b c d e w4 )
-    ( __sha1_x w5 w2 w13 w7 )
-    ( __sha1_f2 e a b c d w5 )
-    ( __sha1_x w6 w3 w14 w8 )
-    ( __sha1_f2 d e a b c w6 )
-    ( __sha1_x w7 w4 w15 w9 )
-    ( __sha1_f2 c d e a b w7 )
-    ( __sha1_x w8 w5 w0 w10 )
-    ( __sha1_f2 b c d e a w8 )
-    ( __sha1_x w9 w6 w1 w11 )
-    ( __sha1_f2 a b c d e w9 )
-    ( __sha1_x w10 w7 w2 w12 )
-    ( __sha1_f2 e a b c d w10 )
-    ( __sha1_x w11 w8 w3 w13 )
-    ( __sha1_f2 d e a b c w11 )
-    ( __sha1_x w12 w9 w4 w14 )
-    ( __sha1_f2 c d e a b w12 )
-    ( __sha1_x w13 w10 w5 w15 )
-    ( __sha1_f2 b c d e a w13 )
-    ( __sha1_x w14 w11 w6 w0 )
-    ( __sha1_f2 a b c d e w14 )
-    ( __sha1_x w15 w12 w7 w1 )
-    ( __sha1_f2 e a b c d w15 )
-    ( __sha1_x w0 w13 w8 w2 )
-    ( __sha1_f2 d e a b c w0 )
-    ( __sha1_x w1 w14 w9 w3 )
-    ( __sha1_f2 c d e a b w1 )
-    ( __sha1_x w2 w15 w10 w4 )
-    ( __sha1_f2 b c d e a w2 )
-    ( __sha1_x w3 w0 w11 w5 )
-    ( __sha1_f2 a b c d e w3 )
-    ( __sha1_x w4 w1 w12 w6 )
-    ( __sha1_f2 e a b c d w4 )
-    ( __sha1_x w5 w2 w13 w7 )
-    ( __sha1_f2 d e a b c w5 )
-    ( __sha1_x w6 w3 w14 w8 )
-    ( __sha1_f2 c d e a b w6 )
-    ( __sha1_x w7 w4 w15 w9 )
-    ( __sha1_f2 b c d e a w7 )
-    ( __sha1_x w8 w5 w0 w10 )
-    ( __sha1_f3 a b c d e w8 )
-    ( __sha1_x w9 w6 w1 w11 )
-    ( __sha1_f3 e a b c d w9 )
-    ( __sha1_x w10 w7 w2 w12 )
-    ( __sha1_f3 d e a b c w10 )
-    ( __sha1_x w11 w8 w3 w13 )
-    ( __sha1_f3 c d e a b w11 )
-    ( __sha1_x w12 w9 w4 w14 )
-    ( __sha1_f3 b c d e a w12 )
-    ( __sha1_x w13 w10 w5 w15 )
-    ( __sha1_f3 a b c d e w13 )
-    ( __sha1_x w14 w11 w6 w0 )
-    ( __sha1_f3 e a b c d w14 )
-    ( __sha1_x w15 w12 w7 w1 )
-    ( __sha1_f3 d e a b c w15 )
-    ( __sha1_x w0 w13 w8 w2 )
-    ( __sha1_f3 c d e a b w0 )
-    ( __sha1_x w1 w14 w9 w3 )
-    ( __sha1_f3 b c d e a w1 )
-    ( __sha1_x w2 w15 w10 w4 )
-    ( __sha1_f3 a b c d e w2 )
-    ( __sha1_x w3 w0 w11 w5 )
-    ( __sha1_f3 e a b c d w3 )
-    ( __sha1_x w4 w1 w12 w6 )
-    ( __sha1_f3 d e a b c w4 )
-    ( __sha1_x w5 w2 w13 w7 )
-    ( __sha1_f3 c d e a b w5 )
-    ( __sha1_x w6 w3 w14 w8 )
-    ( __sha1_f3 b c d e a w6 )
-    ( __sha1_x w7 w4 w15 w9 )
-    ( __sha1_f3 a b c d e w7 )
-    ( __sha1_x w8 w5 w0 w10 )
-    ( __sha1_f3 e a b c d w8 )
-    ( __sha1_x w9 w6 w1 w11 )
-    ( __sha1_f3 d e a b c w9 )
-    ( __sha1_x w10 w7 w2 w12 )
-    ( __sha1_f3 c d e a b w10 )
-    ( __sha1_x w11 w8 w3 w13 )
-    ( __sha1_f3 b c d e a w11 )
-    ( __sha1_x w12 w9 w4 w14 )
-    ( __sha1_f4 a b c d e w12 )
-    ( __sha1_x w13 w10 w5 w15 )
-    ( __sha1_f4 e a b c d w13 )
-    ( __sha1_x w14 w11 w6 w0 )
-    ( __sha1_f4 d e a b c w14 )
-    ( __sha1_x w15 w12 w7 w1 )
-    ( __sha1_f4 c d e a b w15 )
-    ( __sha1_x w0 w13 w8 w2 )
-    ( __sha1_f4 b c d e a w0 )
-    ( __sha1_x w1 w14 w9 w3 )
-    ( __sha1_f4 a b c d e w1 )
-    ( __sha1_x w2 w15 w10 w4 )
-    ( __sha1_f4 e a b c d w2 )
-    ( __sha1_x w3 w0 w11 w5 )
-    ( __sha1_f4 d e a b c w3 )
-    ( __sha1_x w4 w1 w12 w6 )
-    ( __sha1_f4 c d e a b w4 )
-    ( __sha1_x w5 w2 w13 w7 )
-    ( __sha1_f4 b c d e a w5 )
-    ( __sha1_x w6 w3 w14 w8 )
-    ( __sha1_f4 a b c d e w6 )
-    ( __sha1_x w7 w4 w15 w9 )
-    ( __sha1_f4 e a b c d w7 )
-    ( __sha1_x w8 w5 w0 w10 )
-    ( __sha1_f4 d e a b c w8 )
-    ( __sha1_x w9 w6 w1 w11 )
-    ( __sha1_f4 c d e a b w9 )
-    ( __sha1_x w10 w7 w2 w12 )
-    ( __sha1_f4 b c d e a w10 )
-    ( __sha1_x w11 w8 w3 w13 )
-    ( __sha1_f4 a b c d e w11 )
-    ( __sha1_x w12 w9 w4 w14 )
-    ( __sha1_f4 e a b c d w12 )
-    ( __sha1_x w13 w10 w5 w15 )
-    ( __sha1_f4 d e a b c w13 )
-    ( __sha1_x w14 w11 w6 w0 )
-    ( __sha1_f4 c d e a b w14 )
-    ( __sha1_x w15 w12 w7 w1 )
-    ( __sha1_f4 b c d e a w15 )
+    : ~ i t 0
+    ~ < t 20 {
+        ( __sha1_f1 a b c d e . wp t )
+        ( __sha1_f1 e a b c d . wp + t 1 )
+        ( __sha1_f1 d e a b c . wp + t 2 )
+        ( __sha1_f1 c d e a b . wp + t 3 )
+        ( __sha1_f1 b c d e a . wp + t 4 )
+        = t + t 5
+    }
+    = t 20
+    ~ < t 40 {
+        ( __sha1_f2 a b c d e . wp t )
+        ( __sha1_f2 e a b c d . wp + t 1 )
+        ( __sha1_f2 d e a b c . wp + t 2 )
+        ( __sha1_f2 c d e a b . wp + t 3 )
+        ( __sha1_f2 b c d e a . wp + t 4 )
+        = t + t 5
+    }
+    = t 40
+    ~ < t 60 {
+        ( __sha1_f3 a b c d e . wp t )
+        ( __sha1_f3 e a b c d . wp + t 1 )
+        ( __sha1_f3 d e a b c . wp + t 2 )
+        ( __sha1_f3 c d e a b . wp + t 3 )
+        ( __sha1_f3 b c d e a . wp + t 4 )
+        = t + t 5
+    }
+    = t 60
+    ~ < t 80 {
+        ( __sha1_f4 a b c d e . wp t )
+        ( __sha1_f4 e a b c d . wp + t 1 )
+        ( __sha1_f4 d e a b c . wp + t 2 )
+        ( __sha1_f4 c d e a b . wp + t 3 )
+        ( __sha1_f4 b c d e a . wp + t 4 )
+        = t + t 5
+    }
 
     = h0 + h0 a
     = h1 + h1 b
@@ -246,10 +128,14 @@ inline @ __sha1_x inout u32 w u32 x u32 y u32 z → v {
     : ~ u32 h4 # u32 3285377520  // 0xC3D2E1F0
 
     : i n ( vec_len [u] data )
+    // the 80-word message schedule, one per hash
+    : ( Vec u32 ) ws ( vec_with_cap [u32] 80 )
+    : b _wl ( vec_set_len [u32] ws 80 )
+    : *u32 wp ( vec_data [u32] ws )
 
     : ~ i off 0
     ~ <= + off 64 n {
-        ( __sha1_transform h0 h1 h2 h3 h4 data off )
+        ( __sha1_transform h0 h1 h2 h3 h4 data off wp )
         = off + off 64
     }
 
@@ -283,7 +169,7 @@ inline @ __sha1_x inout u32 w u32 x u32 y u32 z → v {
     : i tail_len ( vec_len [u] tail )
     : ~ i toff 0
     ~ < toff tail_len {
-        ( __sha1_transform h0 h1 h2 h3 h4 tail toff )
+        ( __sha1_transform h0 h1 h2 h3 h4 tail toff wp )
         = toff + toff 64
     }
 
