@@ -702,10 +702,16 @@ a CPUID probe.
 | extract / insert | `nurl_v256_get64(v, i) → u64`, `_put64(v, i, x) → v256` |
 | bitwise | `nurl_v256_xor`, `_and`, `_or`, `_andnot`, `_not` |
 | 64-bit lanes | `nurl_v256_rotl64(v, n)` |
+| 32-bit lanes | `nurl_v256_add32`, `_rotl32(v, n)`, `_bcast32(x)` |
 | 16-bit lanes | `nurl_v256_add16`, `_sub16`, `_mullo16`, `_mulhi16`, `_sra16` |
+| interleave | `nurl_v256_unpacklo32(a, b)`, `_unpackhi32`, `_unpacklo64`, `_unpackhi64` — within each 128-bit half, as `vpunpck*` |
+| half permute | `nurl_v256_permlo128(a, b)` → low halves of a and b, `_permhi128` → high halves (`vperm2i128`) |
 
 The 64-bit group is what four-way Keccak needs (rotate and xor); the
-16-bit group is what an ML-KEM / ML-DSA NTT butterfly needs.
+16-bit group is what an ML-KEM / ML-DSA NTT butterfly needs; the 32-bit
+group, the interleaves and the half permutes are what eight-way ChaCha20
+needs — eight blocks a lane, and the transposes that hand each block's
+words back in order.
 
 `_mulhi16` is spelled as the widen-multiply-narrow sequence LLVM
 pattern-matches back into a single `vpmulhw`, rather than as an

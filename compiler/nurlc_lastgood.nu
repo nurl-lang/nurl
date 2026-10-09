@@ -494,7 +494,7 @@ unsafe @ nurl_llty s t → s {
     // one is already LLVM-shaped: only an unsigned spelling (it has a
     // `u`) or a vector (`v…`) is rewritten — everything else is a copy.
     : i __uat ( nurl_str_find t `u` )
-    ? & < __uat 0 != ( nurl_str_get t 0 ) 118 { ^ # s ( nurl_strdup t ) } {}
+    ? & < __uat 0 < ( nurl_str_find t `v` ) 0 { ^ # s ( nurl_strdup t ) } {}
     ? ( seq t `u8` ) { ^ # s ( nurl_strdup `i8` ) } {}
     ? ( seq t `u16` ) { ^ # s ( nurl_strdup `i16` ) } {}
     ? ( seq t `u32` ) { ^ # s ( nurl_strdup `i32` ) } {}
@@ -550,6 +550,15 @@ unsafe @ nurl_llty s t → s {
             : s tail ( nurl_str_slice t + p 1 - tl + p 1 )
             ^ ( nurl_llty ( nurl_str_cat3 head `i` tail ) ) }
         {}
+        // A vector inside a compound spelling — the `v128*` an `inout v128`
+        // passes, a `{ i1, v128 }` option — lowers like the bare one; left
+        // alone it reached the IR as the undefined type `v128`.
+        ? & == ( nurl_str_get t p ) 118 | ( __llty_word_at t p `v128` ) ( __llty_word_at t p `v256` ) {
+            : s head ? > p 0 ( nurl_str_slice t 0 p ) ``
+            : s tail ( nurl_str_slice t + p 4 - tl + p 4 )
+            : s vt ? ( __llty_word_at t p `v128` ) `<4 x i32>` `<4 x i64>`
+            ^ ( nurl_llty ( nurl_str_cat3 head vt tail ) )
+        } {}
         = p + p 1
     }
     ^ # s ( nurl_strdup t )
@@ -44870,6 +44879,80 @@ u` ) ( nurl_print q ) ( nurl_print `:
     ( emit `}` )
     ( emit `declare <4 x i64> @llvm.fshl.v4i64(<4 x i64>, <4 x i64>, <4 x i64>)` )
 
+    // ── v256: eight 32-bit lanes ──────────────────────────────────
+    //
+    // ChaCha20 over eight blocks at once, one block per lane: vector x_w
+    // holds word w of eight consecutive blocks, so a quarter-round is
+    // eight operations on whole vectors (vpaddd, vpxor, a vpshufb or
+    // shift pair per rotate under AVX2). The interleaves work within each
+    // 128-bit half, as vpunpck* does, and the two half-permutes
+    // (vperm2i128) pair one half of each operand — together they turn
+    // eight blocks' words back into each block's bytes.
+    ( emit `define linkonce_odr <4 x i64> @nurl_v256_add32(<4 x i64> %a, <4 x i64> %b) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %qa.a = bitcast <4 x i64> %a to <8 x i32>` )
+    ( emit `  %qa.b = bitcast <4 x i64> %b to <8 x i32>` )
+    ( emit `  %qa.s = add <8 x i32> %qa.a, %qa.b` )
+    ( emit `  %qa.r = bitcast <8 x i32> %qa.s to <4 x i64>` )
+    ( emit `  ret <4 x i64> %qa.r` )
+    ( emit `}` )
+    ( emit `define linkonce_odr <4 x i64> @nurl_v256_rotl32(<4 x i64> %a, i64 %n) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %qr.a = bitcast <4 x i64> %a to <8 x i32>` )
+    ( emit `  %qr.t = trunc i64 %n to i32` )
+    ( emit `  %qr.m = and i32 %qr.t, 31` )
+    ( emit `  %qr.0 = insertelement <8 x i32> undef, i32 %qr.m, i32 0` )
+    ( emit `  %qr.s = shufflevector <8 x i32> %qr.0, <8 x i32> undef, <8 x i32> zeroinitializer` )
+    ( emit `  %qr.v = call <8 x i32> @llvm.fshl.v8i32(<8 x i32> %qr.a, <8 x i32> %qr.a, <8 x i32> %qr.s)` )
+    ( emit `  %qr.r = bitcast <8 x i32> %qr.v to <4 x i64>` )
+    ( emit `  ret <4 x i64> %qr.r` )
+    ( emit `}` )
+    ( emit `declare <8 x i32> @llvm.fshl.v8i32(<8 x i32>, <8 x i32>, <8 x i32>)` )
+    ( emit `define linkonce_odr <4 x i64> @nurl_v256_bcast32(i64 %x) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %qb.t = trunc i64 %x to i32` )
+    ( emit `  %qb.0 = insertelement <8 x i32> undef, i32 %qb.t, i32 0` )
+    ( emit `  %qb.s = shufflevector <8 x i32> %qb.0, <8 x i32> undef, <8 x i32> zeroinitializer` )
+    ( emit `  %qb.r = bitcast <8 x i32> %qb.s to <4 x i64>` )
+    ( emit `  ret <4 x i64> %qb.r` )
+    ( emit `}` )
+    ( emit `define linkonce_odr <4 x i64> @nurl_v256_unpacklo32(<4 x i64> %a, <4 x i64> %b) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %qu1.a = bitcast <4 x i64> %a to <8 x i32>` )
+    ( emit `  %qu1.b = bitcast <4 x i64> %b to <8 x i32>` )
+    ( emit `  %qu1.s = shufflevector <8 x i32> %qu1.a, <8 x i32> %qu1.b, <8 x i32> <i32 0, i32 8, i32 1, i32 9, i32 4, i32 12, i32 5, i32 13>` )
+    ( emit `  %qu1.r = bitcast <8 x i32> %qu1.s to <4 x i64>` )
+    ( emit `  ret <4 x i64> %qu1.r` )
+    ( emit `}` )
+    ( emit `define linkonce_odr <4 x i64> @nurl_v256_unpackhi32(<4 x i64> %a, <4 x i64> %b) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %qu2.a = bitcast <4 x i64> %a to <8 x i32>` )
+    ( emit `  %qu2.b = bitcast <4 x i64> %b to <8 x i32>` )
+    ( emit `  %qu2.s = shufflevector <8 x i32> %qu2.a, <8 x i32> %qu2.b, <8 x i32> <i32 2, i32 10, i32 3, i32 11, i32 6, i32 14, i32 7, i32 15>` )
+    ( emit `  %qu2.r = bitcast <8 x i32> %qu2.s to <4 x i64>` )
+    ( emit `  ret <4 x i64> %qu2.r` )
+    ( emit `}` )
+    ( emit `define linkonce_odr <4 x i64> @nurl_v256_unpacklo64(<4 x i64> %a, <4 x i64> %b) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %qu3.r = shufflevector <4 x i64> %a, <4 x i64> %b, <4 x i32> <i32 0, i32 4, i32 2, i32 6>` )
+    ( emit `  ret <4 x i64> %qu3.r` )
+    ( emit `}` )
+    ( emit `define linkonce_odr <4 x i64> @nurl_v256_unpackhi64(<4 x i64> %a, <4 x i64> %b) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %qu4.r = shufflevector <4 x i64> %a, <4 x i64> %b, <4 x i32> <i32 1, i32 5, i32 3, i32 7>` )
+    ( emit `  ret <4 x i64> %qu4.r` )
+    ( emit `}` )
+    ( emit `define linkonce_odr <4 x i64> @nurl_v256_permlo128(<4 x i64> %a, <4 x i64> %b) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %qp1.r = shufflevector <4 x i64> %a, <4 x i64> %b, <4 x i32> <i32 0, i32 1, i32 4, i32 5>` )
+    ( emit `  ret <4 x i64> %qp1.r` )
+    ( emit `}` )
+    ( emit `define linkonce_odr <4 x i64> @nurl_v256_permhi128(<4 x i64> %a, <4 x i64> %b) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %qp2.r = shufflevector <4 x i64> %a, <4 x i64> %b, <4 x i32> <i32 2, i32 3, i32 6, i32 7>` )
+    ( emit `  ret <4 x i64> %qp2.r` )
+    ( emit `}` )
+
     // ── v256: sixteen 16-bit lanes ────────────────────────────────
     //
     // The lattice half of the PQ stack. ML-KEM's field is 12 bits, its
@@ -44995,6 +45078,15 @@ u` ) ( nurl_print q ) ( nurl_print `:
     ( nurl_sym_def syms `nurl_v256_not` `v256` )
     ( nurl_sym_def syms `nurl_v256_rotl64` `v256` )
     ( nurl_sym_def syms `nurl_v256_add16` `v256` )
+    ( nurl_sym_def syms `nurl_v256_add32` `v256` )
+    ( nurl_sym_def syms `nurl_v256_rotl32` `v256` )
+    ( nurl_sym_def syms `nurl_v256_bcast32` `v256` )
+    ( nurl_sym_def syms `nurl_v256_unpacklo32` `v256` )
+    ( nurl_sym_def syms `nurl_v256_unpackhi32` `v256` )
+    ( nurl_sym_def syms `nurl_v256_unpacklo64` `v256` )
+    ( nurl_sym_def syms `nurl_v256_unpackhi64` `v256` )
+    ( nurl_sym_def syms `nurl_v256_permlo128` `v256` )
+    ( nurl_sym_def syms `nurl_v256_permhi128` `v256` )
     ( nurl_sym_def syms `nurl_v256_sub16` `v256` )
     ( nurl_sym_def syms `nurl_v256_mullo16` `v256` )
     ( nurl_sym_def syms `nurl_v256_mulhi16` `v256` )
