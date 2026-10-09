@@ -248,6 +248,20 @@ beside each raw one (*Changed*).
 
 ### Performance
 
+- **Programs with `simd` functions build on every core: 3.7–4.7x faster
+  cold builds, 5.5–6.2x faster edit rebuilds.** `nurl.sh` lowers a large
+  program as up to one module per core, but a module holding any `simd`
+  function was never split — and every program that does TLS or
+  post-quantum crypto holds some, so the largest NURL programs were the
+  ones lowered on one core. The partition now keeps each `simd` function
+  — dispatcher, both clones, and everything they reach — in one part,
+  whole, and splits the rest as usual (the group is 6.7 % of agora). The
+  wide clone sees exactly the code it saw before: ML-DSA-65 sign + verify
+  retires −0.6 % instructions against the one-module build, where cutting
+  the group apart costs +60 %. 6-core Haswell-E: `packages/agora` 61.3 →
+  16.6 s cold, 59.4 → 10.9 s after a one-line edit; `packages/anomaly`
+  106.7 → 22.9 s cold, 102.6 → 16.6 s after an edit. Peak RSS of the
+  agora build 354 → 260 MB.
 - **The standard library's hashes, ciphers and codecs, rewritten for
   speed** (bench/ crypto rows, i7-5930K, the same output everywhere):
   BLAKE2b 5.1x (the bench row ~1.9x faster than its C peer), BLAKE3 10x,

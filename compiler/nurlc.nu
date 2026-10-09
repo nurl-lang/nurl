@@ -2500,9 +2500,11 @@ unsafe @ emit_coverage_modules s module → b {
 : ~ i g_bck_sc_cap 0
 : ~ i g_bck_sc 0
 
-// Set by emit_multiversion the first time it runs. The splitter reads
-// it and declines to partition the module — see split_emit_module.
-: ~ i g_have_simd_fn 0
+// Every `simd` function emit_multiversion has written, by its IR name
+// (`__nurl_fn.f`), space-separated. The splitter keeps each one — its
+// dispatcher, both clones and everything they reach — in ONE part: see
+// __sp_pin_simd.
+: ~ s g_simd_fns ``
 
 // Which wider ISA the `simd` prefix dispatches to. 1 = x86-64-v3
 // (AVX2 + BMI2 + FMA), 0 = no dispatch, emit the function once.
@@ -37676,7 +37678,7 @@ unsafe @ __ha_is_ret s line → b {
     ? < bi 0 { ( emit_hoisted fn_ir ) ^ v } {}
     : s body ( nurl_str_slice fn_ir bi - ( strlen fn_ir ) bi )
     : b is_void ( seq ret_ll `void` )
-    = g_have_simd_fn 1
+    = g_simd_fns ? == 0 ( nurl_str_len g_simd_fns ) ( nurl_str_cat lname `` ) ( nurl_str_cat3 g_simd_fns ` ` lname )
 
     : s hdr_b ( nurl_str_cat ( nurl_str_cat3 `define ` ret_ll ` @` )
     ( nurl_str_cat3 lname `.base(` ( nurl_str_cat params `) {` ) ) )
@@ -50811,28 +50813,6 @@ unsafe @ __ir_write_function i st i en i part → v {
 // processes cost more to start than they save.
 @ __sp_parts i mlen → i {
     ? == 0 g_split_max { ^ 0 } {}
-    // A module holding a `simd`-marked function is not partitioned.
-    // Splitting costs run speed everywhere (the note above measures
-    // 3.4% on a self-compile), but on a multiversioned function it
-    // costs an order more, because the whole point of the wide clone is
-    // that its callees are inlined INTO it and vectorised there — and
-    // a callee in another part is a callee ThinLTO has to import back
-    // across a boundary that did not have to exist.
-    //
-    // Measured, ML-DSA-65 sign on this module (i7-5930K, us/op):
-    //
-    //     no split                     352      <- what the prefix buys
-    //     split x3                     509
-    //     split x3, no -plugin-opt,O3  422
-    //     unmarked, either way        ~600
-    //
-    // So the split gives back most of a 1.7x win to save 7 s of cold
-    // build. The prefix is an explicit statement that this module's
-    // code generation is what matters; honour it. The cost lands only
-    // on programs that actually use marked code, and the "no parts
-    // written" answer is one the drivers already handle — it is the
-    // same one a module too small to split gives.
-    ? != 0 g_have_simd_fn { ^ 0 } {}
     : i want / mlen g_split_min
     : ~ i n g_split_max
     ? < want n { = n want } {}
@@ -51316,6 +51296,108 @@ unsafe @ __sp_close → v {
     }
 }
 
+// ── simd groups ─────────────────────────────────────────────────────
+//
+// A `simd` function is never cut away from what it calls. Its wide
+// clone exists so that its callees are inlined INTO it and vectorised
+// there; a callee in another part is one ThinLTO has to import back
+// across a boundary, and the import decision does not know the clone
+// wanted it. Measured, ML-DSA-65 sign, when such a module was cut like
+// any other (i7-5930K, µs/op):
+//
+//     no split                     352      <- what the prefix buys
+//     split x3                     509
+//     split x3, no -plugin-opt,O3  422
+//     unmarked, either way        ~600
+//
+// So the dispatcher, both clones and the transitive closure of what
+// they name go to ONE part, whole: that part holds exactly the code a
+// one-module build has in view when it compiles the clone, and the
+// other parts share the rest. Fixed-input ML-DSA-65 sign + verify, 12
+// parts against one module: −0.6 % instructions with the group kept
+// whole, +60 % with it cut apart. The group is small next to the
+// program around it (packages/agora: 233 of 4665 functions, 6.7 % of
+// the bytes), which is why keeping it whole costs no parallelism —
+// where the rule this replaced, "a module holding any simd function is
+// not split", lowered every TLS program on one core: agora 61 s cold,
+// 17 s split; anomaly 107 s, 23 s.
+
+: ~ i g_sp_pin 0  // i64[n]: 1 when a simd function reaches the function
+: ~ i g_sp_pq 0  // i64[n]: worklist of pinned-but-unscanned indices
+: ~ i g_sp_pqn 0  // worklist length
+
+// Pin the live function called `nm` and queue its body for scanning.
+unsafe @ __sp_pin_name s nm → v {
+    : s ent ( nurl_sym_get g_dce_map nm )
+    ? == 0 ( nurl_str_len ent ) { ^ v } {}
+    : i idx ( nurl_str_to_int ent )
+    ? == 0 ( nurl_peek # s g_dce_live idx ) { ^ v } {}
+    ? != 0 ( nurl_peek # s g_sp_pin idx ) { ^ v } {}
+    ( nurl_poke # s g_sp_pin idx 1 )
+    ( nurl_poke # s g_sp_pq g_sp_pqn idx )
+    = g_sp_pqn + g_sp_pqn 1
+}
+
+// Pin every function an `@name` in module bytes [from, to) names — the
+// same deliberately context-free scan __dce_scan makes.
+unsafe @ __sp_pin_scan i from i to → v {
+    : *u mp # *u # s g_dce_mod
+    : ~ i p from
+    ~ < p to {
+        ? != & # i . mp p 255 64 { = p + p 1 } {  // '@'
+            : ~ i q + p 1
+            ~ & < q to ( __dce_ident_byte & # i . mp q 255 ) { = q + q 1 }
+            ? == q + p 1 { = p q } {
+                : u sv . mp q
+                = . mp q # u 0
+                ( __sp_pin_name # s + # i mp + p 1 )
+                = . mp q sv
+                = p q
+            }
+        }
+    }
+}
+
+// Pin each simd function emit_multiversion wrote — its dispatcher and
+// both clones — and everything they reach. Returns the pinned bytes; a
+// `linkonce_odr` body goes to every part anyway and is not counted.
+unsafe @ __sp_pin_simd i n → i {
+    = g_sp_pin # i # s ( nurl_zalloc * n 8 )
+    = g_sp_pq # i # s ( nurl_zalloc * n 8 )
+    = g_sp_pqn 0
+    : ~ s names ( nurl_str_cat g_simd_fns `` )
+    ~ != 0 ( nurl_str_len names ) {
+        : s nm ( str_first_word names ) = names ( str_skip_word names )
+        ( __sp_pin_name nm )
+        ( __sp_pin_name ( nurl_str_cat nm `.base` ) )
+        ( __sp_pin_name ( nurl_str_cat nm `.x86v3` ) )
+    }
+    : ~ i qh 0
+    ~ < qh g_sp_pqn {
+        : i fi ( nurl_peek # s g_sp_pq qh )
+        ( __sp_pin_scan ( nurl_peek # s g_dce_start fi ) ( nurl_peek # s g_dce_end fi ) )
+        = qh + qh 1
+    }
+    : *u mp # *u # s g_dce_mod
+    : ~ i bytes 0
+    : ~ i fi 0
+    ~ < fi n {
+        ? != 0 ( nurl_peek # s g_sp_pin fi ) {
+            : i st ( nurl_peek # s g_dce_start fi )
+            ? == 0 ( nurl_str_starts # s + # i mp st `define linkonce_odr ` )
+            { = bytes + bytes - ( nurl_peek # s g_dce_end fi ) st } {}
+        } {}
+        = fi + fi 1
+    }
+    ^ bytes
+}
+
+unsafe @ __sp_pin_free → v {
+    ? != 0 g_sp_pin { ( nurl_free # s g_sp_pin ) = g_sp_pin 0 } {}
+    ? != 0 g_sp_pq { ( nurl_free # s g_sp_pq ) = g_sp_pq 0 } {}
+    = g_sp_pqn 0
+}
+
 // Partition the indexed module across g_split_n files.
 unsafe @ split_emit_module i n i mlen → v {
     : *u mp # *u # s g_dce_mod
@@ -51333,19 +51415,37 @@ unsafe @ split_emit_module i n i mlen → v {
     }
     = g_split_n ( __sp_parts live )
     ? == 0 g_split_n { ^ v } {}
+    // A simd function and everything it reaches go to the LAST part,
+    // whole (see __sp_pin_simd); the runs below share out the rest.
+    : ~ i pinned 0
+    ? != 0 ( nurl_str_len g_simd_fns ) { = pinned ( __sp_pin_simd n ) } {}
+    : ~ i target ? > / live g_split_n 1 / live g_split_n 1
+    ? > pinned target {
+        // The group outweighs an even share: it is a part on its own,
+        // and the rest gets as many of the others as the size floor
+        // lets it fill. None at all means the group is (nearly) the
+        // whole module, and one module is what it gets.
+        : i rest - live pinned
+        : ~ i k / rest g_split_min
+        ? > k - g_split_n 1 { = k - g_split_n 1 } {}
+        ? < k 1 { = g_split_n 0 ( __sp_pin_free ) ^ v } {}
+        = g_split_n + k 1
+        = target ? > / rest k 1 / rest k 1
+    } {}
+    : i simd_part - g_split_n 1
     = g_split_part # i # s ( nurl_zalloc * n 8 )
     = g_split_fill # i # s ( nurl_zalloc * g_split_n 8 )
     = g_split_priv ( nurl_sym_new )
-    // Cut the function sequence into g_split_n CONTIGUOUS runs of about
-    // `live / g_split_n` bytes each — not round-robin, and not
+    // Cut the rest of the function sequence into CONTIGUOUS runs of
+    // about `target` bytes each — not round-robin, and not
     // smallest-bin-first. Both of those balance better and produce a
     // slower program: emission order is call-graph order (a module's
     // functions are emitted together, a generic's monomorphs right
     // after the call that needed them), so interleaving parts scatters
     // every caller away from its callee and leaves ThinLTO to import
     // back across a boundary that did not have to exist. Contiguous
-    // runs are what a hand-written multi-file project looks like.
-    : i target ? > / live g_split_n 1 / live g_split_n 1
+    // runs are what a hand-written multi-file project looks like. The
+    // last run shares its part with the simd group, if there is one.
     : ~ i cur 0  // part being filled
     : ~ i acc 0  // bytes in it so far
     : ~ i fi 0
@@ -51356,13 +51456,21 @@ unsafe @ split_emit_module i n i mlen → v {
         { ( nurl_poke # s g_split_part fi g_split_n ) }
         { ? != 0 ( nurl_str_starts # s + # i mp st `define linkonce_odr ` )
             { ( nurl_poke # s g_split_part fi + g_split_n 1 ) }
-            { ? & >= acc target < cur - g_split_n 1 { = cur + cur 1 = acc 0 } {}
-                ( nurl_poke # s g_split_part fi cur )
-                = acc + acc - en st
-                ( nurl_poke # s g_split_fill cur + ( nurl_peek # s g_split_fill cur ) - en st )
-            } }
+            {  // (`&` evaluates both operands, so the array is tested first.)
+                : ~ i pin 0
+                ? != 0 g_sp_pin { = pin ( nurl_peek # s g_sp_pin fi ) } {}
+                ? != 0 pin {
+                    ( nurl_poke # s g_split_part fi simd_part )
+                    ( nurl_poke # s g_split_fill simd_part + ( nurl_peek # s g_split_fill simd_part ) - en st )
+                } {
+                    ? & >= acc target < cur - g_split_n 1 { = cur + cur 1 = acc 0 } {}
+                    ( nurl_poke # s g_split_part fi cur )
+                    = acc + acc - en st
+                    ( nurl_poke # s g_split_fill cur + ( nurl_peek # s g_split_fill cur ) - en st )
+                } } }
         = fi + fi 1
     }
+    ( __sp_pin_free )
     // Register every private global, then attribute it to the parts
     // that name it — module scope first, so a constant a global's own
     // initializer reaches is pinned to every part before any single

@@ -236,6 +236,33 @@ That floor is not about build time — cutting a small module up makes it
 at any part count, and `bench/hash_join.nu` (27 KB) 23% slower at twelve,
 while the compiler's 3.2 MB is unaffected at every count tried.
 
+**`simd` functions stay whole.** A `simd` function (spec §3.3b) gets a
+wide clone so that its callees are inlined into it and vectorised there,
+and a callee in another part is one ThinLTO imports back only if it is
+small. So the partition keeps each `simd` function — its dispatcher,
+both clones, and the transitive closure of everything they call — in one
+part, whole, and cuts the rest of the module as usual. The closure is
+small next to the program that carries it: in `packages/agora`, 233 of
+4665 functions, 6.7% of the IR. Measured on fixed-input ML-DSA-65
+sign + verify:
+
+| | instructions | cycles |
+|---|---:|---:|
+| one module | 0.689e9 | 0.27e9 |
+| 12 parts, `simd` closure kept whole | 0.685e9 | 0.26e9 |
+| 12 parts, cut like any other code | 1.101e9 | 0.38e9 |
+
+Before this, a module holding any `simd` function was not split at all —
+and every program that speaks TLS or post-quantum crypto holds some, so
+the largest NURL programs were exactly the ones lowered on one core.
+Measured on a 6-core / 12-thread Haswell-E:
+
+| program | IR | cold build | | rebuild after a one-line edit | |
+|---|---:|---:|---:|---:|---:|
+| | | before | after | before | after |
+| `packages/agora` | 11 MB | 61.3 s | **16.6 s** | 59.4 s | **10.9 s** |
+| `packages/anomaly` | 18 MB | 106.7 s | **22.9 s** | 102.6 s | **16.6 s** |
+
 Splitting is off for `--emit-ir`, `--emit-asm`, `-O0`, `NURL_SAN=1`, and
 `--debug` / `--coverage` — `nurlc` refuses `--split` together with `--g`,
 because DWARF is a per-module metadata graph that a function's `!dbg`
