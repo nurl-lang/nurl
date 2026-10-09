@@ -98,8 +98,9 @@ bad()  { note "$1" "FAIL — $2"; fails=$((fails + 1)); }
 
 # The corpus tests that drive the marked kernels through their public
 # API across the parameter seams: all three ML-KEM levels, all three
-# ML-DSA levels, and the x4 sponge either side of both rates.
-DRIVERS=(mlkem_vectors mldsa_vectors sha3x4_vectors)
+# ML-DSA levels, the x4 sponge either side of both rates, and ChaCha20
+# across its one-, two-, four- and eight-block kernels' seams.
+DRIVERS=(mlkem_vectors mldsa_vectors sha3x4_vectors chacha20_simd_agree)
 
 # ── 0. What this host will actually dispatch to ─────────────────────
 # Without this the whole script is theatre on an AVX2-less machine: the

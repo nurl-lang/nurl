@@ -350,6 +350,114 @@ inline @ __chacha20_xor4_v128 i k0 i k1 i k2 i k3 i k4 i k5 i k6 i k7 i ctr i n0
     ( __cc_xor4 ( nurl_v128_add32 x12 ct ) ( nurl_v128_add32 x13 ( nurl_v128_bcast32 n0 ) ) ( nurl_v128_add32 x14 ( nurl_v128_bcast32 n1 ) ) ( nurl_v128_add32 x15 ( nurl_v128_bcast32 n2 ) ) src dst 12 )
 }
 
+// Eight blocks at once over v256 — the same one-block-per-lane layout as
+// __chacha20_xor4_v128, twice as wide. Worth it only with 256-bit
+// registers (on a CPU without AVX2 every v256 operation is two SSE2 ones
+// and sixteen live state vectors no longer fit), so chacha20_xor_range
+// runs it only where nurl_cpu_x86_v3 says the AVX2 clone is the one
+// running.
+inline @ __cc_qr8 inout v256 a inout v256 b inout v256 c inout v256 d → v {
+    = a ( nurl_v256_add32 a b )
+    = d ( nurl_v256_rotl32 ( nurl_v256_xor d a ) 16 )
+    = c ( nurl_v256_add32 c d )
+    = b ( nurl_v256_rotl32 ( nurl_v256_xor b c ) 12 )
+    = a ( nurl_v256_add32 a b )
+    = d ( nurl_v256_rotl32 ( nurl_v256_xor d a ) 8 )
+    = c ( nurl_v256_add32 c d )
+    = b ( nurl_v256_rotl32 ( nurl_v256_xor b c ) 7 )
+}
+
+// x0..x3 hold words w..w+3 of the eight blocks (block j in lane j); the
+// in-half 4x4 transpose leaves block j's four words in half j/4 of output
+// j mod 4.
+inline @ __cc_tr8 inout v256 x0 inout v256 x1 inout v256 x2 inout v256 x3 → v {
+    : v256 t0 ( nurl_v256_unpacklo32 x0 x1 )
+    : v256 t1 ( nurl_v256_unpacklo32 x2 x3 )
+    : v256 t2 ( nurl_v256_unpackhi32 x0 x1 )
+    : v256 t3 ( nurl_v256_unpackhi32 x2 x3 )
+    = x0 ( nurl_v256_unpacklo64 t0 t1 )
+    = x1 ( nurl_v256_unpackhi64 t0 t1 )
+    = x2 ( nurl_v256_unpacklo64 t2 t3 )
+    = x3 ( nurl_v256_unpackhi64 t2 t3 )
+}
+
+// dst[at .. at+32) = src[at .. at+32) XOR v.
+inline @ __cc_x32 * u src * u dst i at v256 v → v {
+    ( nurl_v256_st # s + # i dst at ( nurl_v256_xor ( nurl_v256_ld # s + # i src at ) v ) )
+}
+
+// dst[0..512) = src[0..512) XOR the keystream of blocks ctr..ctr+7.
+inline @ __chacha20_xor8_v256 i k0 i k1 i k2 i k3 i k4 i k5 i k6 i k7 i ctr i n0 i n1 i n2 * u src * u dst → v {
+    // 0..7 in the eight 32-bit lanes (two per 64-bit lane, low first)
+    : v256 ct ( nurl_v256_add32 ( nurl_v256_bcast32 ctr ) ( nurl_v256_set64 4294967296 12884901890 21474836484 30064771078 ) )
+    : ~ v256 x0 ( nurl_v256_bcast32 1634760805 )
+    : ~ v256 x1 ( nurl_v256_bcast32 857760878 )
+    : ~ v256 x2 ( nurl_v256_bcast32 2036477234 )
+    : ~ v256 x3 ( nurl_v256_bcast32 1797285236 )
+    : ~ v256 x4 ( nurl_v256_bcast32 k0 )
+    : ~ v256 x5 ( nurl_v256_bcast32 k1 )
+    : ~ v256 x6 ( nurl_v256_bcast32 k2 )
+    : ~ v256 x7 ( nurl_v256_bcast32 k3 )
+    : ~ v256 x8 ( nurl_v256_bcast32 k4 )
+    : ~ v256 x9 ( nurl_v256_bcast32 k5 )
+    : ~ v256 x10 ( nurl_v256_bcast32 k6 )
+    : ~ v256 x11 ( nurl_v256_bcast32 k7 )
+    : ~ v256 x12 ct
+    : ~ v256 x13 ( nurl_v256_bcast32 n0 )
+    : ~ v256 x14 ( nurl_v256_bcast32 n1 )
+    : ~ v256 x15 ( nurl_v256_bcast32 n2 )
+    : ~ i r 0
+    ~ < r 10 {
+        ( __cc_qr8 x0 x4 x8 x12 )
+        ( __cc_qr8 x1 x5 x9 x13 )
+        ( __cc_qr8 x2 x6 x10 x14 )
+        ( __cc_qr8 x3 x7 x11 x15 )
+        ( __cc_qr8 x0 x5 x10 x15 )
+        ( __cc_qr8 x1 x6 x11 x12 )
+        ( __cc_qr8 x2 x7 x8 x13 )
+        ( __cc_qr8 x3 x4 x9 x14 )
+        = r + r 1
+    }
+    = x0 ( nurl_v256_add32 x0 ( nurl_v256_bcast32 1634760805 ) )
+    = x1 ( nurl_v256_add32 x1 ( nurl_v256_bcast32 857760878 ) )
+    = x2 ( nurl_v256_add32 x2 ( nurl_v256_bcast32 2036477234 ) )
+    = x3 ( nurl_v256_add32 x3 ( nurl_v256_bcast32 1797285236 ) )
+    = x4 ( nurl_v256_add32 x4 ( nurl_v256_bcast32 k0 ) )
+    = x5 ( nurl_v256_add32 x5 ( nurl_v256_bcast32 k1 ) )
+    = x6 ( nurl_v256_add32 x6 ( nurl_v256_bcast32 k2 ) )
+    = x7 ( nurl_v256_add32 x7 ( nurl_v256_bcast32 k3 ) )
+    = x8 ( nurl_v256_add32 x8 ( nurl_v256_bcast32 k4 ) )
+    = x9 ( nurl_v256_add32 x9 ( nurl_v256_bcast32 k5 ) )
+    = x10 ( nurl_v256_add32 x10 ( nurl_v256_bcast32 k6 ) )
+    = x11 ( nurl_v256_add32 x11 ( nurl_v256_bcast32 k7 ) )
+    = x12 ( nurl_v256_add32 x12 ct )
+    = x13 ( nurl_v256_add32 x13 ( nurl_v256_bcast32 n0 ) )
+    = x14 ( nurl_v256_add32 x14 ( nurl_v256_bcast32 n1 ) )
+    = x15 ( nurl_v256_add32 x15 ( nurl_v256_bcast32 n2 ) )
+    ( __cc_tr8 x0 x1 x2 x3 )
+    ( __cc_tr8 x4 x5 x6 x7 )
+    ( __cc_tr8 x8 x9 x10 x11 )
+    ( __cc_tr8 x12 x13 x14 x15 )
+    // block j (j < 4): words 0-7 = low halves of x_j and x_{4+j}, words 8-15
+    // = low halves of x_{8+j} and x_{12+j}; block j+4 the high halves
+    ( __cc_x32 src dst 0 ( nurl_v256_permlo128 x0 x4 ) )
+    ( __cc_x32 src dst 32 ( nurl_v256_permlo128 x8 x12 ) )
+    ( __cc_x32 src dst 256 ( nurl_v256_permhi128 x0 x4 ) )
+    ( __cc_x32 src dst 288 ( nurl_v256_permhi128 x8 x12 ) )
+    ( __cc_x32 src dst 64 ( nurl_v256_permlo128 x1 x5 ) )
+    ( __cc_x32 src dst 96 ( nurl_v256_permlo128 x9 x13 ) )
+    ( __cc_x32 src dst 320 ( nurl_v256_permhi128 x1 x5 ) )
+    ( __cc_x32 src dst 352 ( nurl_v256_permhi128 x9 x13 ) )
+    ( __cc_x32 src dst 128 ( nurl_v256_permlo128 x2 x6 ) )
+    ( __cc_x32 src dst 160 ( nurl_v256_permlo128 x10 x14 ) )
+    ( __cc_x32 src dst 384 ( nurl_v256_permhi128 x2 x6 ) )
+    ( __cc_x32 src dst 416 ( nurl_v256_permhi128 x10 x14 ) )
+    ( __cc_x32 src dst 192 ( nurl_v256_permlo128 x3 x7 ) )
+    ( __cc_x32 src dst 224 ( nurl_v256_permlo128 x11 x15 ) )
+    ( __cc_x32 src dst 448 ( nurl_v256_permhi128 x3 x7 ) )
+    ( __cc_x32 src dst 480 ( nurl_v256_permhi128 x11 x15 ) )
+}
+
 // out[0..n) = data[doff..doff+n) XOR ChaCha20(key, counter, nonce).
 //
 // Dispatches to the vector kernel on a little-endian host — every
@@ -385,6 +493,13 @@ simd @ chacha20_xor_range ( Vec u ) key i counter ( Vec u ) nonce ( Vec u ) data
         : i k5 ( __ld32 key 20 )
         : i k6 ( __ld32 key 24 )
         : i k7 ( __ld32 key 28 )
+        ? & >= n 512 != 0 # i ( nurl_cpu_x86_v3 ) {
+            ~ <= + off 512 n {
+                ( __chacha20_xor8_v256 k0 k1 k2 k3 k4 k5 k6 k7 ctr nn0 nn1 nn2 # *u + # i dp off # *u + # i op off )
+                = ctr + ctr 8
+                = off + off 512
+            }
+        } {}
         ~ <= + off 256 n {
             ( __chacha20_xor4_v128 k0 k1 k2 k3 k4 k5 k6 k7 ctr nn0 nn1 nn2 # *u + # i dp off # *u + # i op off )
             = ctr + ctr 4

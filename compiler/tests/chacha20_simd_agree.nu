@@ -5,9 +5,11 @@
 // vector kernel actually has are at the seams the vectors never touch:
 // the two-block fast path handing over to the one-block path, that
 // handing over to the byte tail, and the block counter having to keep
-// counting across all three. So this walks every length from 0 to 300 —
-// crossing 64, 128, 192 and 256 by construction — at two different
-// starting counters and a non-zero data offset, and compares every byte.
+// counting across all of them. So this walks every length from 0 to 300 —
+// crossing 64, 128, 192 and 256 by construction — then every 7th length
+// to 1300, across the eight-block (512) and four-block (256) kernels'
+// seams, at different starting counters and a non-zero data offset, and
+// compares every byte.
 
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/chacha20poly1305.nu`
@@ -27,7 +29,7 @@ unsafe @ sweep i counter i doff → v {
     ~ < k 12 { = . np k # u & 255 + k 3 = k + k 1 }
 
     : ~ i n 0
-    ~ <= n 300 {
+    ~ <= n 1300 {
         : i total + n doff
         : ( Vec u ) dat ( vec_with_cap [u] ? > total 0 total 1 )
         : b _c ( vec_set_len [u] dat total )
@@ -53,7 +55,7 @@ unsafe @ sweep i counter i doff → v {
             = j + j 1
         }
         ( vec_free [u] o1 ) ( vec_free [u] o2 ) ( vec_free [u] dat )
-        = n + n 1
+        = n ? < n 300 + n 1 + n 7
     }
     ( vec_free [u] key ) ( vec_free [u] non )
 }
