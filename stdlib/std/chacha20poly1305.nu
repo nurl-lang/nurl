@@ -460,11 +460,13 @@ inline @ __chacha20_xor8_v256 i k0 i k1 i k2 i k3 i k4 i k5 i k6 i k7 i ctr i n0
 
 // out[0..n) = data[doff..doff+n) XOR ChaCha20(key, counter, nonce).
 //
-// Dispatches to the vector kernel on a little-endian host — every
+// Dispatches to the vector kernels on a little-endian host — every
 // platform NURL targets in practice — and to the scalar reference
-// otherwise. The vector path XORs a whole block straight from the input
-// pointer to the output pointer through four 16-byte loads and stores;
-// only a final partial block goes through a 64-byte keystream scratch.
+// otherwise: eight blocks a pass over v256 lanes in the x86-64-v3 clone,
+// four over v128 lanes where vectors are native, then two, then one. The
+// vector paths XOR whole blocks straight from the input pointer to the
+// output pointer; only a final partial block goes through a 64-byte
+// keystream scratch.
 simd @ chacha20_xor_range ( Vec u ) key i counter ( Vec u ) nonce ( Vec u ) data i doff i n → ( Vec u ) {
     ? == 0 ( __le_words )
     { ^ ( _chacha20_xor_range_scalar key counter nonce data doff n ) } {}

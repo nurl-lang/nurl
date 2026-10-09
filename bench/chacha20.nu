@@ -6,11 +6,14 @@
 // across passes (pass p starts at 1 + p*256) so no two blocks repeat; each
 // pass encrypts the previous pass's ciphertext.
 //
-// The stdlib's block function is written over `v128` lanes — four
-// quarter-rounds a vector instruction — on every little-endian target.
-// The C and Rust peers carry the portable scalar RFC formulation (their
-// standard libraries have no ChaCha20), the one the stdlib keeps as its
-// big-endian fallback. That difference is what this row measures.
+// The stdlib's kernels are written over vector lanes: four blocks at a
+// time, each 128-bit lane holding one state word of all four, and eight
+// at a time over 256-bit lanes in the function's `simd` clone, which runs
+// when the CPU has x86-64-v3 (AVX2) — chosen at run time, so the same
+// binary runs the four-block kernel elsewhere. The C and Rust peers carry
+// the portable scalar RFC formulation (their standard libraries have no
+// ChaCha20), the one the stdlib keeps as its big-endian fallback. That
+// difference is what this row measures.
 //
 // The key, nonce and counter are RFC 8439 §2.3.2's block-function test
 // vector, so the first keystream block is the one the RFC prints.
