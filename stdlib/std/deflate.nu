@@ -64,29 +64,79 @@ $ `stdlib/std/bytes.nu`
     ^ t
 }
 
+// Slicing-by-8 (Kounavis & Berry): T0 is Sarwate's table above and
+// Tk[b] = (Tk-1[b] >> 8) ^ T0[Tk-1[b] & 255] — the CRC of byte b followed by
+// k zero bytes — so eight input bytes fold into the CRC through eight
+// independent lookups instead of eight dependent ones. 8 × 256 u32 entries,
+// 8 KiB, built once per process and shared (publish-once slot 7, the
+// registry is in stdlib/std/tls_server.nu).
+: ~ i g_crc32_tab8 0
+
+& `c` @ nurl_once_slot i id i candidate → i
+
+@ __crc32_tab8_build → ( Vec u32 ) {
+    : ( Vec i ) t0 ( __crc32_table )
+    : *i t0p ( vec_data [i] t0 )
+    : ( Vec u32 ) t ( vec_with_cap [u32] 2048 )
+    : b _l ( vec_set_len [u32] t 2048 )
+    : *u32 tp ( vec_data [u32] t )
+    : ~ i j 0
+    ~ < j 256 { = . tp j # u32 . t0p j = j + j 1 }
+    ~ < j 2048 {
+        : i prev # i . tp - j 256
+        = . tp j # u32 ^^ >> prev 8 . t0p & prev 255
+        = j + j 1
+    }
+    ^ t
+}
+
+@ __crc32_tab8 → ( Vec u32 ) {
+    ? == g_crc32_tab8 0 {
+        : ( Vec u32 ) t ( __crc32_tab8_build )
+        : i won ( nurl_once_slot 7 # i . t ctl )
+        // The winner lives for the rest of the program, through the global.
+        ? == won # i . t ctl { ( mem_forget t ) } {}
+        = g_crc32_tab8 won
+    } {}
+    ^ @ ( Vec u32 ) { # s g_crc32_tab8 }
+}
+
 // CRC-32 (IEEE, reflected, poly 0xEDB88320).
 //
 // Two implementations of the same function, chosen by input size. The
 // bitwise loop runs eight shift-mask-xor rounds per byte and needs no
-// setup; the table-driven loop costs 2048 steps to build its table and
-// then one lookup per byte. They break even around 300 bytes, so
-// anything from 512 up takes the table — and that is where the callers
-// that matter live: a gzip member, a tar payload, a PNG chunk, a
-// database block. Measured on a 4 KiB block, the table is 7.8x faster
-// (2048 + 4096 steps against 32768), and it took an LSM store's point
-// reads — 66 % of their cycles were inside this function — down with it.
-//
-// The small path is kept rather than always building the table because a
-// short input (a gzip header, a 4-byte trailer) would otherwise pay
-// 2048 steps to checksum 8 bytes. Both paths are the same algorithm and
+// table; slicing-by-8 then takes eight bytes per step through the shared
+// tables. The tables are built once per process, so the cut-over only
+// keeps a short input (a gzip header, a 4-byte trailer) from touching
+// 8 KiB of table for a few bytes. Both paths are the same function and
 // produce identical output for every input; std/deflate's own tests and
 // tools/crc32_gate.sh check that against an independent implementation.
 @ crc32_update i crc0 ( Vec u ) data → i {
     : ~ i crc ^^ crc0 4294967295  // crc ^ 0xFFFFFFFF
     : i n ( vec_len [u] data )
     : *u d ( vec_data [u] data )
-    ? < n 512 {
-        : ~ i i 0
+    : ~ i i 0
+    ? >= n 64 {
+        : ( Vec u32 ) tab ( __crc32_tab8 )
+        : *u32 t ( vec_data [u32] tab )
+        ~ <= + i 8 n {
+            // The low word folds the running CRC in; the high word rides
+            // along. Byte k of the eight is followed by 7 − k more, so it
+            // goes through T(7 − k).
+            : i lo ^^ crc | | | # i . d i << # i . d + i 1 8 << # i . d + i 2 16 << # i . d + i 3 24
+            : i hi | | | # i . d + i 4 << # i . d + i 5 8 << # i . d + i 6 16 << # i . d + i 7 24
+            : i x0 ^^ # i . t + 1792 & lo 255 # i . t + 1536 & >> lo 8 255
+            : i x1 ^^ # i . t + 1280 & >> lo 16 255 # i . t + 1024 >> lo 24
+            : i x2 ^^ # i . t + 768 & hi 255 # i . t + 512 & >> hi 8 255
+            : i x3 ^^ # i . t + 256 & >> hi 16 255 # i . t >> hi 24
+            = crc ^^ ^^ x0 x1 ^^ x2 x3
+            = i + i 8
+        }
+        ~ < i n {
+            = crc ^^ # i . t & 255 ^^ crc # i . d i >> crc 8
+            = i + i 1
+        }
+    } {
         ~ < i n {
             = crc ^^ crc # i . d i
             : ~ i k 0
@@ -95,16 +145,6 @@ $ `stdlib/std/bytes.nu`
                 = crc ^^ >> crc 1 & 3988292384 mask  // 0xEDB88320
                 = k + k 1
             }
-            = i + i 1
-        }
-    } {
-        : ( Vec i ) t ( __crc32_table )
-        : *i tp ( vec_data [i] t )
-        : ~ i i 0
-        ~ < i n {
-            : i idx & 255 ^^ crc # i . d i
-            : i tv . tp idx
-            = crc ^^ tv >> crc 8
             = i + i 1
         }
     }
@@ -117,55 +157,45 @@ $ `stdlib/std/bytes.nu`
 
 // ── reusable CRC-32 context ─────────────────────────────────────────
 //
-// crc32_update above rebuilds its table on every call that is big enough
-// to want one. That is the right trade for a caller that checksums one
-// payload, and the wrong one for a caller that checksums thousands: a
-// database verifying a 4 KiB block per read spends a third of the
-// checksum on building the same 256 entries again.
-//
-// So hold the table: build it once, hand it to every call.
-//
-//   : Crc32 c ( crc32_ctx )
-//   : i sum ( crc32_ctx_hash c block )     // per block, no setup cost
+// Kept for its callers: a context once carried the byte table a caller
+// checksumming thousands of blocks did not want rebuilt per call. The
+// tables are process-wide now (__crc32_tab8), so a context holds nothing
+// a call needs and an update is crc32_update.
 //
 // The table goes with `c` (a struct holding a Vec, dropped by its owner).
-//
-// Same algorithm, same values as crc32 / crc32_update — the context is
-// purely about where the table lives.
 
 : Crc32 { ( Vec i ) tbl }
 
-@ crc32_ctx → Crc32 { ^ @ Crc32 { ( __crc32_table ) } }
+@ crc32_ctx → Crc32 { ^ @ Crc32 { ( vec_new [i] ) } }
 
 @ crc32_ctx_update Crc32 c i crc0 ( Vec u ) data → i {
-    : ~ i crc ^^ crc0 4294967295
-    : i n ( vec_len [u] data )
-    : *u d ( vec_data [u] data )
-    : *i tp ( vec_data [i] . c tbl )
-    : ~ i i 0
-    ~ < i n {
-        : i idx & 255 ^^ crc # i . d i
-        : i tv . tp idx
-        = crc ^^ tv >> crc 8
-        = i + i 1
-    }
-    ^ & ^^ crc 4294967295 4294967295
+    ^ ( crc32_update crc0 data )
 }
 
 @ crc32_ctx_hash Crc32 c ( Vec u ) data → i {
     ^ ( crc32_ctx_update c 0 data )
 }
 
+// Adler-32 (RFC 1950 §8.2). The two sums are reduced mod 65521 once per
+// MiB rather than once per byte: from below 65521, a MiB of 255s takes b
+// to at most 65520·(2^20 + 1) + 255·2^20·(2^20 + 1)/2 < 2^48, nowhere near
+// an i64's 2^63 — so the inner loop is two adds a byte.
 @ adler32 ( Vec u ) data → i {
     : ~ i a 1
     : ~ i b 0
     : i n ( vec_len [u] data )
-    : *u d ( vec_data [u] data )
-    : ~ i i 0
-    ~ < i n {
-        = a % + a # i . d i 65521
-        = b % + b a 65521
-        = i + i 1
+    : ~ i off 0
+    ~ < off n {
+        : i end ? < - n off 1048576 n + off 1048576
+        : ~ i i off
+        ~ < i end {
+            = a + a # i ( vec_at [u] data i )
+            = b + b a
+            = i + i 1
+        }
+        = a % a 65521
+        = b % b 65521
+        = off end
     }
     ^ | << b 16 a
 }

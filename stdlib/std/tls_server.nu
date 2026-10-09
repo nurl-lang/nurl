@@ -100,6 +100,7 @@ $ `stdlib/core/rcbox.nu`
 //   3  SHA-256 round constants (std/hash_sha256.nu)
 //   4  X25519 niels table (std/x25519.nu)
 //   5, 6  P-256 comb tables T1, T2 (std/ecdsa_p256.nu)
+//   7  CRC-32 slicing-by-8 tables (std/deflate.nu)
 & `c` @ nurl_once_slot i id i candidate → i
 
 @ _tls_ticket_key_ensure → v {
