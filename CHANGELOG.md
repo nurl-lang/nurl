@@ -262,6 +262,14 @@ beside each raw one (*Changed*).
   16.6 s cold, 59.4 → 10.9 s after a one-line edit; `packages/anomaly`
   106.7 → 22.9 s cold, 102.6 → 16.6 s after an edit. Peak RSS of the
   agora build 354 → 260 MB.
+- **`nurlfmt` is linear: `compiler/nurlc.nu` 148 s → 0.07 s.** Its
+  tokenizer read every byte with `nurl_str_get`, which measures the
+  string from its start on each call, so formatting was quadratic in the
+  file (16 000 lines 12.4 s → 0.02 s). The two 2.8 MB compiler sources
+  cost the pre-commit hook two and a half minutes per compiler commit,
+  and CI's `nurlfmt_check.sh` as much. It now reads through
+  `slice_of_str` + `slice_byte`; output is byte-identical on all 2227
+  tracked sources.
 - **The standard library's hashes, ciphers and codecs, rewritten for
   speed** (bench/ crypto rows, i7-5930K, the same output everywhere):
   BLAKE2b 5.1x (the bench row ~1.9x faster than its C peer), BLAKE3 10x,

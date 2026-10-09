@@ -19,6 +19,7 @@
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
+$ `stdlib/core/slice.nu`
 
 // ── Token kinds ─────────────────────────────────────────────────
 : i TT_FMT_IDENT 1  // identifier, type keyword, T/F bool, ::-merged
@@ -130,25 +131,29 @@ unsafe @ __fmt_emit ( Vec FmtTok ) toks ( Vec u ) buf s src i start i end i kind
 }
 
 // Match a UTF-8 `→` (E2 86 92) at index i. Out-of-range slots read
-// as 0 from nurl_str_get so the bounds check is implicit.
-@ __fmt_is_arrow s src i i → b {
-    & == 226 ( nurl_str_get src i )
-    & == 134 ( nurl_str_get src + i 1 )
-    == 146 ( nurl_str_get src + i 2 )
+// as 0 from slice_byte so the bounds check is implicit.
+@ __fmt_is_arrow ( Slice u ) sv i i → b {
+    & == 226 ( slice_byte sv i )
+    & == 134 ( slice_byte sv + i 1 )
+    == 146 ( slice_byte sv + i 2 )
 }
 
 // ── Main tokenise driver ───────────────────────────────────────
 // Returns the token stream, ending with one TT_FMT_EOF entry.
 @ tokenize s src → FmtToks {
     : ( Vec FmtTok ) toks ( vec_with_cap [FmtTok] 256 )
-    : i n ( nurl_str_len src )
+    // Every byte is read through the measured view: an O(1) read, where
+    // nurl_str_get re-measured the source from its start on each call —
+    // quadratic, 144 s for compiler/nurlc.nu.
+    : ( Slice u ) sv ( slice_of_str src )
+    : i n ( slice_len [u] sv )
     : ( Vec u ) buf ( vec_with_cap [u] + + n / n 2 16 )
     : ~ i i 0
     : ~ i nl_acc 0
 
     ~ < i n {
-        : i c ( nurl_str_get src i )
-        : i c2 ( nurl_str_get src + i 1 )
+        : i c ( slice_byte sv i )
+        : i c2 ( slice_byte sv + i 1 )
 
         // 1) Whitespace: space / tab / CR are skipped silently.
         //    LF bumps the newline accumulator for the next emitted token.
@@ -168,7 +173,7 @@ unsafe @ __fmt_emit ( Vec FmtTok ) toks ( Vec u ) buf s src i start i end i kind
             // 2) Line comment `// ... up to LF`
             ? & == c 47 == c2 47 {
                 : ~ i j + i 2
-                ~ & < j n != ( nurl_str_get src j ) 10 {
+                ~ & < j n != ( slice_byte sv j ) 10 {
                     = j + j 1
                 }
                 ( __fmt_emit toks buf src i j TT_FMT_COMMENT nl_acc )
@@ -192,9 +197,9 @@ unsafe @ __fmt_emit ( Vec FmtTok ) toks ( Vec u ) buf s src i start i end i kind
                         ? >= j n {
                             = done T
                         } {
-                            : i ch ( nurl_str_get src j )
+                            : i ch ( slice_byte sv j )
                             ? & == ch 92 < + j 1 n {
-                                : i nx ( nurl_str_get src + j 1 )
+                                : i nx ( slice_byte sv + j 1 )
                                 ? | | | == nx 110 == nx 116 == nx 114 == nx 92 {
                                     = j + j 2
                                 } {
@@ -226,38 +231,38 @@ unsafe @ __fmt_emit ( Vec FmtTok ) toks ( Vec u ) buf s src i start i end i kind
                         // body digits are alphanumeric, so scan the whole
                         // run as one token instead of letting the decimal
                         // loop stop at the `x`/`b`/`o` and split the literal.
-                        ? & == ( nurl_str_get src j ) 48
-                        ( fmt_is_base_marker ( nurl_str_get src + j 1 ) )
+                        ? & == ( slice_byte sv j ) 48
+                        ( fmt_is_base_marker ( slice_byte sv + j 1 ) )
                         {
                             = j + j 2
-                            ~ & < j n ( fmt_is_ident_cont ( nurl_str_get src j ) ) {
+                            ~ & < j n ( fmt_is_ident_cont ( slice_byte sv j ) ) {
                                 = j + j 1
                             }
                             ( __fmt_emit toks buf src i j TT_FMT_INT nl_acc )
                             = nl_acc 0
                             = i j
                         } {
-                            ~ & < j n ( fmt_is_digit ( nurl_str_get src j ) ) {
+                            ~ & < j n ( fmt_is_digit ( slice_byte sv j ) ) {
                                 = j + j 1
                             }
                             : ~ i kind TT_FMT_INT
                             // FLOAT requires `.` followed by another digit.
-                            ? & == ( nurl_str_get src j ) 46
-                            ( fmt_is_digit ( nurl_str_get src + j 1 ) )
+                            ? & == ( slice_byte sv j ) 46
+                            ( fmt_is_digit ( slice_byte sv + j 1 ) )
                             {
                                 = kind TT_FMT_FLOAT
                                 = j + j 1
-                                ~ & < j n ( fmt_is_digit ( nurl_str_get src j ) ) {
+                                ~ & < j n ( fmt_is_digit ( slice_byte sv j ) ) {
                                     = j + j 1
                                 }
-                                : i ec ( nurl_str_get src j )
+                                : i ec ( slice_byte sv j )
                                 ? | == ec 101 == ec 69 {
                                     = j + j 1
-                                    : i es ( nurl_str_get src j )
+                                    : i es ( slice_byte sv j )
                                     ? | == es 43 == es 45 {
                                         = j + j 1
                                     } {}
-                                    ~ & < j n ( fmt_is_digit ( nurl_str_get src j ) ) {
+                                    ~ & < j n ( fmt_is_digit ( slice_byte sv j ) ) {
                                         = j + j 1
                                     }
                                 } {}
@@ -272,15 +277,15 @@ unsafe @ __fmt_emit ( Vec FmtTok ) toks ( Vec u ) buf s src i start i end i kind
                         //    IDENT_PLAIN [ '::' IDENT_PLAIN ]*
                         ? ( fmt_is_ident_start c ) {
                             : ~ i j + i 1
-                            ~ & < j n ( fmt_is_ident_cont ( nurl_str_get src j ) ) {
+                            ~ & < j n ( fmt_is_ident_cont ( slice_byte sv j ) ) {
                                 = j + j 1
                             }
                             ~ & & < + j 1 n
-                            == ( nurl_str_get src j ) 58
-                            == ( nurl_str_get src + j 1 ) 58
+                            == ( slice_byte sv j ) 58
+                            == ( slice_byte sv + j 1 ) 58
                             {
                                 = j + j 2
-                                ~ & < j n ( fmt_is_ident_cont ( nurl_str_get src j ) ) {
+                                ~ & < j n ( fmt_is_ident_cont ( slice_byte sv j ) ) {
                                     = j + j 1
                                 }
                             }
@@ -290,7 +295,7 @@ unsafe @ __fmt_emit ( Vec FmtTok ) toks ( Vec u ) buf s src i start i end i kind
                         } {
 
                             // 6) Multi-byte arrow `→` (E2 86 92)
-                            ? ( __fmt_is_arrow src i ) {
+                            ? ( __fmt_is_arrow sv i ) {
                                 ( __fmt_emit toks buf src i + i 3 TT_FMT_OP nl_acc )
                                 = nl_acc 0
                                 = i + i 3
@@ -299,10 +304,10 @@ unsafe @ __fmt_emit ( Vec FmtTok ) toks ( Vec u ) buf s src i start i end i kind
                                 // 6b) Ellipsis `...` — grammar v1.9 variadic-FFI
                                 //     marker. Must precede the single-byte `.`
                                 //     fallback so three dots fuse into one OP
-                                //     token rather than three. nurl_str_get
+                                //     token rather than three. slice_byte
                                 //     returns 0 for OOB indices, so the third-
                                 //     byte check is bounds-safe at end-of-input.
-                                ? & & == c 46 == c2 46 == ( nurl_str_get src + i 2 ) 46 {
+                                ? & & == c 46 == c2 46 == ( slice_byte sv + i 2 ) 46 {
                                     ( __fmt_emit toks buf src i + i 3 TT_FMT_OP nl_acc )
                                     = nl_acc 0
                                     = i + i 3
