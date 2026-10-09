@@ -3480,6 +3480,16 @@ unsafe @ nurl_cg_lbl i h s hint → s {
     ( nurl_print `  ` ) ( nurl_print owner ) ( nurl_print ` = load i8*, i8** ` )
     ( nurl_print ( nurl_sym_get syms `__ret_owner_slot__` ) ) ( nurl_print `\n` )
     ( nurl_print `  call void @nurl_journal_forget(i8* ` ) ( nurl_print owner ) ( nurl_print `)\n` )
+    // A named function returning a raw pointer (`→ *T`) has no reader: its
+    // direct callers take the result as never owned (__ret_never_owned, the
+    // same __fn_raw_ret answer), a `dyn` thunk answers for its impl
+    // (emit_dyn_method_thunk), and a bare function name is not a value, so
+    // nothing calls one through a closure. The store it would make is a
+    // TLS write behind an `asm volatile` memory clobber — every load the
+    // caller made before the call is reloaded after it — paid by every
+    // vec_data in the standard library.
+    : s self ( nurl_sym_get syms `__fn_self_name__` )
+    ? & & == g_bck_closure_depth 0 == 0 ( nurl_str_starts self `__closure_` ) ( __fn_raw_ret syms self ) { ^ } {}
     : s proof ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print proof ) ( nurl_print ` = load i64, i64* ` )
     ( nurl_print ( nurl_sym_get syms `__ret_proof_slot__` ) ) ( nurl_print `\n` )
@@ -47323,6 +47333,11 @@ unsafe @ defer_trait_impl i lex i impl_pos s tname s impl_nurl s impl_llvm s imp
             = g_use_hown 1
             ( nurl_print `  call void @__nurl_hown_fwd(ptr @.__nurl_retdyn.` ) ( nurl_print k )
             ( nurl_print `, ptr @.__nurl_retown.` ) ( nurl_print k ) ( nurl_print `)\n` )
+        } {}
+        // A raw-pointer result is never owned, and its impl publishes
+        // nothing (mem_publish_return_proof) — the `dyn` caller still asks.
+        ? & ( seq ( nurl_llty ret ) `i8*` ) ( __fn_raw_ret g_root_syms ( nurl_str_cat m ( nurl_str_cat `__` impl_mangle ) ) ) {
+            ( nurl_print `  call void @nurl_ret_owned_set(i64 0)\n` )
         } {}
         ( nurl_print `  ret ` ) ( nurl_print ( nurl_llty ret ) ) ( nurl_print ` %r\n}\n` ) }
 }
