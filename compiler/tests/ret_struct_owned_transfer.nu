@@ -19,6 +19,11 @@
 // locks compile + run + output. The "no double-free" half is locked by
 // the san run: if the callee's drop were NOT skipped, the second drop
 // would fire there.
+//
+// A raw string field owns a fresh string only in `unsafe` code and the
+// trusted library; safe code holds a String there, or a view of a
+// binding (docs/MEMORY.md §2.13). The functions that build such structs
+// are `unsafe` to keep exercising that machinery.
 
 $ `stdlib/core/string.nu`
 
@@ -26,12 +31,12 @@ $ `stdlib/core/string.nu`
 : Outer { Inner inner i tag }
 
 // Direct construction return — leaked pre-fix.
-@ mk_direct → Inner {
+unsafe @ mk_direct → Inner {
     ^ @ Inner { ( nurl_str_cat `direct-` `owned` ) 1 }
 }
 
 // Bound-then-return — use-after-free pre-fix.
-@ mk_bound → Inner {
+unsafe @ mk_bound → Inner {
     : Inner v @ Inner { ( nurl_str_cat `bound-` `owned` ) 2 }
     ^ v
 }
@@ -42,7 +47,7 @@ $ `stdlib/core/string.nu`
 }
 
 // Nested owned field reached through an outer struct.
-@ mk_nested → Outer {
+unsafe @ mk_nested → Outer {
     ^ @ Outer { @ Inner { ( nurl_str_cat `nested-` `owned` ) 3 } 9 }
 }
 

@@ -6,6 +6,11 @@
 // free from NURL code; this exercises the dotted-path extractvalue +
 // free path under ASan-style runs and verifies the user-visible
 // round-trip reads the right bytes.
+//
+// A raw string field owns a fresh string only in `unsafe` code and the
+// trusted library; safe code holds a String there, or a view of a
+// binding (docs/MEMORY.md §2.13). The functions that build such structs
+// are `unsafe` to keep exercising that machinery.
 
 $ `stdlib/core/string.nu`
 
@@ -19,7 +24,7 @@ $ `stdlib/core/string.nu`
     i tag
 }
 
-@ main → i {
+unsafe @ main → i {
     : Outer o @ Outer { @ Inner { ( nurl_str_cat `hello ` `nested` ) 3 } 7 }
     ( nurl_print . . o inner msg ) ( nurl_print `\n` )
     ( nurl_print ( nurl_str_int . . o inner n ) ) ( nurl_print `\n` )

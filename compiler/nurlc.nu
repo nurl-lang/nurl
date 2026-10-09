@@ -4011,6 +4011,12 @@ unsafe @ nurl_cg_lbl i h s hint → s {
     // container of views): what those point into (its dependencies).
     : b __ret_dep & & != 0 g_srcx_on >= __ret_cls 3 ( is_ident_tok ret_first_tt )
     ? __ret_dep { = __ret_sx ( nurl_str_cat ret_first_val `` ) } {}
+    // …and a closure or a literal handed back as written (`^ \ → …`, `^ @
+    // T { … }`): what the views it holds point into, by its source
+    // expression — none of which is handed over with it (a captured owned
+    // string stays the function's, and is released on the way out: h141).
+    : b __ret_exp & & & != 0 g_srcx_on >= __ret_cls 3 ! __ret_dep | == ret_first_tt TT_BACKSLASH == ret_first_tt TT_AT
+    ? __ret_exp { = __ret_sx ( __sx_operand syms ret_first_tt ret_first_val ( nurl_get_last_type ) ( __sx_froot syms ret_first_tt ( nurl_get_last_type ) ) __rsxn0 ) } {}
     : b __rv_raw ( seq ( nurl_llty ( nurl_get_last_type ) ) `i8*` )
     // Whether this path hands the caller a value it owns — published when
     // this function answers per call (mem_publish_hown); `true` unless a
@@ -4523,7 +4529,7 @@ unsafe @ nurl_cg_lbl i h s hint → s {
     // Borrow checker: record this return statement (with a view's source
     // expression, field 8).
     = g_bck_ret_sx ( nurl_str_cat __ret_sx `` )
-    = g_bck_ret_dep ? __ret_dep 1 0
+    = g_bck_ret_dep ? __ret_dep 1 ? __ret_exp 2 0
     ( bck_flush_vpass )
     ( bck_record `ret` `` bck_line )
     = g_bck_ret_sx ``
@@ -6798,6 +6804,74 @@ unsafe @ nurl_cg_lbl i h s hint → s {
         ( nurl_str_cat4 ` ` generic ` ` ( nurl_str_int index ) ) ) )
     } {}
     ^ ( nurl_str_cat `@.__nurl_argdrop.` ( nurl_str_int number ) )
+}
+
+// A raw string a call made right in an argument (`( keep_it ( nurl_str_cat
+// a b ) )`), handed to a parameter the callee keeps — stores where it
+// outlives the call — without taking it over (`sink`): nothing releases it,
+// because a container, a struct or a global of raw strings owns none of
+// them (docs/MEMORY.md §2.13; h128). Decided at module end, when the
+// callee's summaries are final (resolve_owned_strings_kept). `unsafe` code
+// and the trusted library release raw strings by hand.
+@ mem_note_owned_string_arg i lex i syms s callee s generic i index i tt → v {
+    ? ( bck_unsafe_ctx ) { ^ v } {}
+    // (Owned for certain — a call that always hands its result over, or a
+    // join or block, taken as one, `+ +` — or per call, by the guard of the
+    // call that made it, named here: whether it ever hands one over is
+    // known at module end.)
+    : b st | ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `str` ) != tt TT_LPAREN
+    : s mk0 ? st `` ( __last_call_pair syms )
+    : s mk ? | st == 0 ( nurl_str_len mk0 ) `+ +` mk0
+    : i n ( nurl_str_to_int ( nurl_sym_get g_pending_impl `oskept_n` ) )
+    ( nurl_sym_def g_pending_impl `oskept_n` ( nurl_str_int + n 1 ) )
+    ( nurl_sym_def g_pending_impl ( nurl_str_cat `oskept#` ( nurl_str_int n ) )
+    ( nurl_str_cat4 ( nurl_str_cat4 callee ` ` generic ` ` ) ( nurl_str_cat3 ( nurl_str_int index ) ` ` mk ) ` `
+    ( nurl_str_cat3 ( nurl_str_int ( nurl_lex_line lex ) ) ` ` ( nurl_lex_filename lex ) ) ) )
+}
+
+// The call just emitted, as `callee generic` (the names behind its retown
+// constant, mem_call_retown_const, without making one): `` when no call
+// name was published.
+@ __last_call_pair i syms → s {
+    : ~ s cn ( nurl_sym_get syms `__last_call_name__` )
+    : ~ s gn ``
+    ? != 0 ( nurl_sym_len syms `__last_call_forward__` ) {
+        : s fw ( nurl_sym_get syms `__last_call_forward__` )
+        = cn ( str_first_word fw ) = gn ( str_first_word ( str_skip_word fw ) )
+    } {}
+    ? == 0 ( nurl_str_len cn ) { ^ ( nurl_str_cat `` `` ) } {}
+    ? == 0 ( nurl_str_len gn ) { = gn cn } {}
+    ^ ( nurl_str_cat3 cn ` ` gn )
+}
+
+// May a call (`ic ig`, `+ +` for certain) hand over its result — not only
+// lend it? (resolve_owned_strings_kept.)
+@ __pair_may_own i syms s ic s ig → b {
+    ? ( seq ic `+` ) { ^ T } {}
+    ^ | ! ( __callee_lent syms ic ig ) | ( __hown_dyn syms ic 0 ) ( __hown_dyn syms ig 0 )
+}
+
+// The rule's words for a fresh raw string stored into a field (gen_agg_lit,
+// the field store): `moved`, an owned local handed back in the struct.
+@ __owned_s_field_msg b moved s name → s {
+    ? moved {
+        ^ ( nurl_str_cat ( nurl_str_cat3 `'` name `' owns its string, and this struct is handed back holding it in a raw string field — a view, which owns nothing (docs/MEMORY.md §2.13), so the string would go with '` )
+        ( nurl_str_cat name `' on the way out. Give the struct a String field (string_from) to hand an owned string back.` ) )
+    } {}
+    ^ ( nurl_str_cat `a fresh string stored here is owned by nothing: a raw string ('s') held by a struct, an option, an enum or a slice is a view of a string something else owns (docs/MEMORY.md §2.13), so nothing would ever release it. `
+    `Hold a String instead (string_from, string_adopt), or bind the string first (': s x ( … )') and store the binding — the struct then holds a view of it.` )
+}
+
+// A field given what a call answering per call hands back (gen_agg_lit, the
+// field store): settled at module end (resolve_owned_strings_kept) — an
+// error when that call may hand over its result.
+@ mem_note_owned_string_field i lex i syms i line → v {
+    : s mk ( __last_call_pair syms )
+    ? == 0 ( nurl_str_len mk ) { ^ v } {}
+    : i n ( nurl_str_to_int ( nurl_sym_get g_pending_impl `osfield_n` ) )
+    ( nurl_sym_def g_pending_impl `osfield_n` ( nurl_str_int + n 1 ) )
+    ( nurl_sym_def g_pending_impl ( nurl_str_cat `osfield#` ( nurl_str_int n ) )
+    ( nurl_str_cat4 mk ` ` ( nurl_str_int line ) ( nurl_str_cat ` ` ( nurl_lex_filename lex ) ) ) )
 }
 
 @ mem_arg_owner i syms i cg s callee s generic i index s value → s {
@@ -11004,6 +11078,7 @@ unsafe @ nurl_lex_peek4_type i h → i {
         : s argument_owner ( mem_argument_value syms cg at origin_tt av )
         ? & != 0 g_auto_drop_strings != 0 ( nurl_str_len argument_owner )
         { : s owner ( mem_arg_owner syms cg fname fname slot argument_owner )
+            ( mem_note_owned_string_arg lex syms fname fname slot origin_tt )
             ( mem_journal_push_raw owner )
             = owned_temps ? == 0 ( nurl_str_len owned_temps ) ( nurl_str_cat owner `` ) ( nurl_str_cat3 owned_temps ` ` owner )
             : s __rlw ( mem_raw_lend_word syms fname fname slot argument_owner av )
@@ -13336,6 +13411,7 @@ unsafe @ nurl_lex_peek4_type i h → i {
         : s argument_owner ( mem_argument_value syms cg at bck_arg_tt av )
         ? & & != 0 g_auto_drop_strings != 0 ( nurl_str_len argument_owner ) ! __callee_shadowed
         { : s owner ( mem_arg_owner syms cg call_name fname arg_idx argument_owner )
+            ( mem_note_owned_string_arg lex syms call_name fname arg_idx bck_arg_tt )
             ( mem_journal_push_raw owner )
             = owned_arg_temps ? == 0 ( nurl_str_len owned_arg_temps )
             ( nurl_str_cat owner `` )
@@ -21043,7 +21119,7 @@ unsafe @ mem_own_add_user_drop i syms i cg s ptr s vt → v {
             ? __rc_vw { = rec ( nurl_str_cat4 rec `\t` g_bck_view_reads ? != 0 ( nurl_str_len g_bck_rhs_sx ) ( nurl_str_cat `\t` g_bck_rhs_sx ) `` ) } {}
         } {}
         // A return's: field 8 (field 5 `d`: an owner by name).
-        ? & ( seq kind `ret` ) != 0 ( nurl_str_len g_bck_ret_sx ) { = rec ( nurl_str_cat3 rec ? == g_bck_ret_dep 1 `\td\t\t\t` `\t\t\t\t` g_bck_ret_sx ) } {}
+        ? & ( seq kind `ret` ) != 0 ( nurl_str_len g_bck_ret_sx ) { = rec ( nurl_str_cat3 rec ? == g_bck_ret_dep 1 `\td\t\t\t` ? == g_bck_ret_dep 2 `\te\t\t\t` `\t\t\t\t` g_bck_ret_sx ) } {}
         ( nurl_sym_append g_bck `stmts`
         ? == 0 ( nurl_sym_len g_bck `stmts` ) rec ( nurl_str_cat `\n` rec ) )
         // What the right-hand side of a binding read: the sources a borrow
@@ -23895,7 +23971,7 @@ unsafe @ bck_sx_ev s st s e b arg → s {
             } {}
             ? & ! done == kc 20 {
                 // A view handed back points into what the caller has.
-                ? >= ( __bck_field_off rec 8 ) 0 { ( bck_ret_view_check st ( bck_field rec 8 ) ( bck_field_int rec 3 ) ( seq ( bck_field rec 5 ) `d` ) ) } {}
+                ? >= ( __bck_field_off rec 8 ) 0 { ( bck_ret_view_check st ( bck_field rec 8 ) ( bck_field_int rec 3 ) ( seq ( bck_field rec 5 ) `d` ) ! ( seq ( bck_field rec 5 ) `e` ) ) } {}
                 : s after_defers ( bck_apply_defers st )
                 = st ( nurl_str_cat `!` `` )
                 = p hi
@@ -24397,9 +24473,12 @@ unsafe @ bck_sx_ev s st s e b arg → s {
 // A view handed back (`^`, its source expression `sx`) must point into
 // what the caller has — a parameter, a global — not into a binding this
 // function releases on its way out.
-@ bck_ret_view_check s st s sx i line b deps → v {
+@ bck_ret_view_check s st s sx i line b deps b hand → v {
     // (An owner handed back by name: what the views it holds point into.)
-    = g_sxe_handover T
+    // (`hand`: the value is the binding the source expression names; a
+    // closure or a literal written in the return hands nothing it holds
+    // over — mark `e`.)
+    = g_sxe_handover hand
     : s srcs ? deps ( nurl_sym_get g_bck ( bck_bkey `vds_` ( nurl_str_int ( bck_path_root ( nurl_str_to_int sx ) ) ) ) ) ( __src_plain0 ( bck_sx_sources st sx -1 ) )
     = g_sxe_handover F
     ? ( seq srcs `*` ) { ^ } {}
@@ -28636,6 +28715,7 @@ unsafe @ bck_loop_mask s pre s post → s {
                 : i __fs_tt ( nurl_lex_type lex )
                 : s __fs_v1 ( nurl_str_cat ( nurl_lex_val lex ) `` )
                 : i __fs_l1 ( nurl_lex_line lex )
+                : i __fs_c1 ( nurl_lex_col lex )
 
                 ( __clo_tmp_set `` )
                 // (Whether the value is fresh: an owned string field below.)
@@ -28709,7 +28789,14 @@ unsafe @ bck_loop_mask s pre s post → s {
                 // came, a view or a literal was freed with the struct and a
                 // replaced value leaked (tools/fuzz/holes h123–h126).
                 : ~ s __fs_sval ( nurl_str_cat rhsc `` )
-                ? & & != 0 g_auto_drop_strings ( seq ( nurl_llty ftype ) `i8*` ) ( mem_struct_field_owned syms alloca_ptr ( nurl_str_int fidx ) `str` ) {
+                : b __fs_sreg ( mem_struct_field_owned syms alloca_ptr ( nurl_str_int fidx ) `str` )
+                // One it does not own is a view (docs/MEMORY.md §2.13): a
+                // fresh string stored there is owned by nothing (h134, h135).
+                ? & & & != 0 g_auto_drop_strings ( seq ( nurl_llty ftype ) `i8*` ) ! __fs_sreg ! ( bck_unsafe_ctx ) {
+                    ? __fs_fresh { ( die_pos lex __fs_l1 __fs_c1 ( __owned_s_field_msg F `` ) ) } {}
+                    ? & ! __fs_fresh != 0 ( nurl_str_len __fs_guard ) { ( mem_note_owned_string_field lex syms __fs_l1 ) } {}
+                } {}
+                ? & & != 0 g_auto_drop_strings ( seq ( nurl_llty ftype ) `i8*` ) __fs_sreg {
                     ? ! __fs_fresh {
                         : s __fsd ( nurl_cg_reg cg )
                         ( nurl_print `  ` ) ( nurl_print __fsd ) ( nurl_print ` = call i8* @nurl_strdup(i8* ` ) ( nurl_print rhsc ) ( nurl_print `)` ) ( emit_dbg_eol )
@@ -30651,6 +30738,22 @@ unsafe @ bck_loop_mask s pre s post → s {
         ? > fld_refdepth agg_refdepth { = agg_refdepth fld_refdepth } {}
         : s ret_owned ( nurl_sym_get syms `__last_call_ret_owned__` )
         : b is_str_fresh & ( seq ( nurl_llty fty ) `i8*` ) | ( seq ret_owned `str` ) fld_moved_str
+        // In safe code a raw string held by a struct, an option or an enum
+        // is a view (docs/MEMORY.md §2.13): it owns nothing. One the program
+        // made fresh — a string call's result, or an owned local handed back
+        // in the struct — would be released by no one wherever the value went
+        // after (a temporary, a Vec, an option, a join, a reassignment:
+        // h129–h133, h136–h139). A String
+        // holds an owned string; a binding of the fresh one, stored here as a
+        // view, lives as long as the walk lets the struct use it.
+        ? & & != 0 g_auto_drop_strings is_str_fresh ! ( bck_unsafe_ctx ) {
+            ( die_pos lex __fld_line __fld_col ( __owned_s_field_msg fld_moved_str fld_first_val ) )
+        } {}
+        // …and one that may be fresh (a call that answers per call), once
+        // the call's summaries are final.
+        ? & & & & != 0 g_auto_drop_strings ! is_str_fresh ( seq ( nurl_llty fty ) `i8*` ) == fld_first_tt TT_LPAREN ! ( bck_unsafe_ctx ) {
+            ? != 0 ( nurl_sym_len syms `__last_call_guard__` ) { ( mem_note_owned_string_field lex syms __fld_line ) } {}
+        } {}
         : b is_slice_fresh & ( mem_is_slice_ty fty ) | fld_is_slice_lit ( seq ret_owned `1` )
         : s idx_str ( nurl_str_int idx )
         ? & != 0 g_auto_drop_strings is_str_fresh
@@ -31492,9 +31595,20 @@ unsafe @ bck_loop_mask s pre s post → s {
         // trust a bare VARIANT spelling (`Red`), never ident residue.
         : i __setok ( nurl_lex_type lex )
         : s __sev0 ( nurl_str_cat ( nurl_lex_val lex ) `` )
+        : i __sel ( nurl_lex_line lex )
+        : i __sec ( nurl_lex_col lex )
         ( __clo_tmp_set `` )
+        ( nurl_sym_def syms `__last_call_ret_owned__` `` )
         : ~ s v ( gen_expr lex syms cg )
         : ~ s vt ( nurl_get_last_type )
+        // A raw string element is a view (docs/MEMORY.md §2.13): the slice
+        // owns its buffer, not what the strings in it point at, so a fresh
+        // one there is owned by nothing (h140) — and one a call may hand
+        // over, once that call's summaries are final.
+        ? & & != 0 g_auto_drop_strings ( seq ( nurl_llty vt ) `i8*` ) ! ( bck_unsafe_ctx ) {
+            ? ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `str` ) { ( die_pos lex __sel __sec ( __owned_s_field_msg F `` ) ) } {}
+            ? & == __setok TT_LPAREN != 0 ( nurl_sym_len syms `__last_call_guard__` ) { ( mem_note_owned_string_field lex syms __sel ) } {}
+        } {}
         // A slice of closures owns its elements' envs (docs/MEMORY.md
         // §7.4): a borrowed element is cloned in.
         ? ( __is_closure_ty vt ) { = v ( mem_clo_into_owner syms cg vt v __setok ) } {}
@@ -41968,6 +42082,48 @@ unsafe @ __lazy_scan → v {
 // temporary could not be dropped after the call — the result points into
 // it — nor after the result's last use, which nothing tracks. An error
 // with the fix, not a silent leak.
+// mem_note_owned_string_arg's calls and mem_note_owned_string_field's
+// fields, against the final summaries.
+@ resolve_owned_strings_kept i syms → v {
+    : i fnn ( nurl_str_to_int ( nurl_sym_get g_pending_impl `osfield_n` ) )
+    : ~ i fj 0
+    ~ < fj fnn {
+        : ~ s fr ( nurl_sym_get g_pending_impl ( nurl_str_cat `osfield#` ( nurl_str_int fj ) ) )
+        : s fic ( str_first_word fr ) = fr ( str_skip_word fr )
+        : s fig ( str_first_word fr ) = fr ( str_skip_word fr )
+        : s fline ( str_first_word fr ) = fr ( str_skip_word fr )
+        ? ( __pair_may_own syms fic fig ) {
+            ( bck_emit_error fr ( nurl_str_to_int fline ) ( nurl_str_cat3 `the string '` ( bck_fn_show fic ) `' hands back here may be a fresh one, owned by nothing once it is stored as a raw string: a raw string ('s') held by a struct, an option, an enum or a slice is a view (docs/MEMORY.md §2.13). Hold a String instead (string_from), or bind the result first (': s x ( … )') and store the binding.` ) )
+        } {}
+        = fj + fj 1
+    }
+    : i n ( nurl_str_to_int ( nurl_sym_get g_pending_impl `oskept_n` ) )
+    : ~ i j 0
+    ~ < j n {
+        : s rec ( nurl_sym_get g_pending_impl ( nurl_str_cat `oskept#` ( nurl_str_int j ) ) )
+        : ~ s r ( nurl_str_cat rec `` )
+        : s callee ( str_first_word r ) = r ( str_skip_word r )
+        : s generic ( str_first_word r ) = r ( str_skip_word r )
+        : s index ( str_first_word r ) = r ( str_skip_word r )
+        : s ic ( str_first_word r ) = r ( str_skip_word r )
+        : s ig ( str_first_word r ) = r ( str_skip_word r )
+        : s line ( str_first_word r ) = r ( str_skip_word r )
+        // (The rest is the file, spaces and all.)
+        : s who ? != 0 ( nurl_sym_len2 syms callee `__body_done` ) callee generic
+        // Owned at all: for certain, or by a call that may hand its result
+        // over (one that only lends it gives the temporary to no one).
+        : b owned ( __pair_may_own syms ic ig )
+        ? & & owned | ( nurl_sym_has_word g_fn_keeps who index ) ( nurl_sym_has_word g_fn_escapes who index ) ! ( nurl_sym_has_word g_fn_sink who index ) {
+            ( bck_emit_error r ( nurl_str_to_int line ) ( nurl_str_cat4
+            ( nurl_str_cat3 `the string made here is handed to '` ( bck_fn_show callee ) `' (argument ` )
+            ( nurl_str_int + ( nurl_str_to_int index ) 1 )
+            `), which keeps it: a raw string kept in a container, a struct or a global is owned by none of them, so nothing ever releases it. `
+            `Bind it first (': s x ( … )') — the binding releases it, and what keeps it holds a view of the binding — or keep a String (string_from; a ( Vec String )), or declare the parameter 'sink' if the callee takes the string over.` ) )
+        } {}
+        = j + j 1
+    }
+}
+
 @ resolve_nocopy_lends i syms → v {
     : i n ( nurl_str_to_int ( nurl_sym_get g_pending_impl `nocopylend_n` ) )
     : ~ i j 0
@@ -51250,6 +51406,7 @@ unsafe @ split_emit_module i n i mlen → v {
         ( emit_sink_flags )
         ( mem_emit_arg_flags syms )
         ( resolve_nocopy_lends syms )
+        ( resolve_owned_strings_kept syms )
         ( lint_free_resolve )
         ( mem_emit_env_flags )
         ( mem_emit_dtor_flags )

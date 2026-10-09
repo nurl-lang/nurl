@@ -3,6 +3,11 @@
 // holding an address). Every case is a legacy spelling the package sweep
 // for memory model v1 found crashing (docs/MEMORY.md §7.6); each returns 0
 // when the values it hands around are still intact.
+//
+// A raw string field owns a fresh string only in `unsafe` code and the
+// trusted library; safe code holds a String there, or a view of a
+// binding (docs/MEMORY.md §2.13). The functions that build such structs
+// are `unsafe` to keep exercising that machinery.
 
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
@@ -204,7 +209,7 @@ unsafe @ names → ( Vec String ) {
 // option parser): it leaves with the struct, the scope does not free it.
 : Opt { s model i bad }
 
-@ parse_opt i which → Opt {
+unsafe @ parse_opt i which → Opt {
     : ~ s model ``
     ? > which 0 { : s v ( nurl_str_cat `model-` `path` ) = model v } {}
     ^ @ Opt { model 0 }

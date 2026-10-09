@@ -3,6 +3,11 @@
 // strings AND owned struct-fields dropped at arm end, not leaked to the
 // caller's owned list (which would produce invalid IR) and not left
 // allocated (which ASan would flag as a leak).
+//
+// A raw string field owns a fresh string only in `unsafe` code and the
+// trusted library; safe code holds a String there, or a view of a
+// binding (docs/MEMORY.md §2.13). The functions that build such structs
+// are `unsafe` to keep exercising that machinery.
 
 $ `stdlib/core/string.nu`
 
@@ -11,7 +16,7 @@ $ `stdlib/core/string.nu`
     i n
 }
 
-@ main → i {
+unsafe @ main → i {
     // Arm-local owned string — falls through.
     ? 1
     { : s s1 ( nurl_str_cat `arm ` `string` )

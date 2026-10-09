@@ -8,6 +8,11 @@
 // soundness boundary; run under LSan (LSAN_DETECT_LEAKS=1) it is
 // leak-clean, and under ASan it is free of the double-free / use-after-
 // free that an unsound unwind would cause.
+//
+// A raw string field owns a fresh string only in `unsafe` code and the
+// trusted library; safe code holds a String there, or a view of a
+// binding (docs/MEMORY.md §2.13). The functions that build such structs
+// are `unsafe` to keep exercising that machinery.
 
 $ `stdlib/std/panic.nu`
 $ `stdlib/core/string.nu`
@@ -50,7 +55,7 @@ unsafe @ crash_drop → v {
 // Owned struct-field scratch + earlier loop allocation (stale-entry test:
 // each iteration's string is freed mid-body, so its journal entry is gone
 // by the time the panic drains — no double free).
-@ crash_struct → v {
+unsafe @ crash_struct → v {
     : ~ i k 0
     ~ < k 3 {
         : s t ( nurl_str_cat `iter-` `buffer` )

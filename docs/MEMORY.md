@@ -51,7 +51,8 @@ A binding owns a value when its initialiser produces a fresh one:
 - a constructor of a `String`, `Vec`, owning struct, enum, closure or
   library handle,
 - a named-struct literal `@ T { … }` whose fields are fresh values (each
-  field is tracked on its own),
+  field is tracked on its own; a fresh raw string field only in `unsafe`
+  code — in safe code a raw string in a value is a view, §2.13),
 - a value of a type with a `% Drop` impl,
 - a mutable string binding born from a literal or an owned string: it
   takes its own copy, and a copy of every value assigned to it after.
@@ -468,6 +469,33 @@ error: 's' is consumed here, but its value was stored into an owner at line N �
 
 To hand a value on and keep one, store a copy (`string_clone`,
 `vec_clone`, `mem_dup`).
+
+### 2.13 A raw string in a value is a view
+
+A raw string (`s`) held by a struct, an option, an enum, a slice or a
+container is a view: it owns nothing, and nothing releases what it points
+at. Owned text in a value is a `String` (a field, a payload, a
+`( Vec String )`), which releases itself wherever the value goes. So in
+safe code a *fresh* string — the result of a call that hands its string
+over (`nurl_str_cat`, `nurl_str_int`, `nurl_read_file`, …) — cannot be
+stored there, nor handed to a parameter that keeps it (`vec_push [s]`,
+`map_set`):
+
+```
+: Rec r @ Rec { ( nurl_str_cat a b ) 1 }   // error: a fresh string stored
+                                           // here is owned by nothing
+( vec_push [s] names ( nurl_str_int k ) )  // error: … handed to 'vec_push',
+                                           // which keeps it
+```
+
+Hold a `String` instead, or bind the string first — `: s x ( nurl_str_cat
+a b )` — and store the binding: the value then holds a view of `x`, which
+the walk keeps from outliving it (§2.10). A string binding that owns its
+buffer is an owner like a `String`: a copy of it is a view of the buffer,
+and a closure or a struct handed back holding one is checked like any
+view. A parameter that takes a string over says so with `sink`. `unsafe`
+code and the standard library manage raw strings by hand, and there a
+field a struct literal gave a fresh string is the struct's to release.
 
 ## 3. Outside the rules
 

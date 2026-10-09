@@ -12,6 +12,11 @@
 //   - a raw string field of a `% Drop` type was released by the compiler
 //     AND by the impl (a double free), and a nested one produced invalid IR;
 //   - fields the impl did not release by hand leaked.
+//
+// A raw string field owns a fresh string only in `unsafe` code and the
+// trusted library; safe code holds a String there, or a view of a
+// binding (docs/MEMORY.md §2.13). The functions that build such structs
+// are `unsafe` to keep exercising that machinery.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
@@ -45,14 +50,14 @@ unsafe @ disposed_free sink Disposed r → v { ( nurl_free . r name ) ( vec_free
 : Holder { Raw r i n }
 : Outer { Holder h ( Vec i ) extra }
 
-@ raw_new i k → Raw {
+unsafe @ raw_new i k → Raw {
     : s n ( nurl_str_cat `raw-` ( nurl_str_int k ) )
     ^ @ Raw { n ( vec_new [i] ) ( string_from `t` ) }
 }
 
-@ by_hand_new → ByHand { : s n ( nurl_str_cat `a` `b` ) ^ @ ByHand { n ( vec_new [i] ) } }
+unsafe @ by_hand_new → ByHand { : s n ( nurl_str_cat `a` `b` ) ^ @ ByHand { n ( vec_new [i] ) } }
 
-@ disposed_new → Disposed { : s n ( nurl_str_cat `a` `b` ) ^ @ Disposed { n ( vec_new [i] ) } }
+unsafe @ disposed_new → Disposed { : s n ( nurl_str_cat `a` `b` ) ^ @ Disposed { n ( vec_new [i] ) } }
 
 @ holder_new → Holder { ^ @ Holder { ( raw_new 7 ) 1 } }
 

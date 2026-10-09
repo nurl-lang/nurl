@@ -7,31 +7,36 @@
 // strings assigned to it after. The struct handed back carries its copy.
 // The sanitizer corpus runs this with leak detection (tools/fuzz/holes
 // h121–h127).
+//
+// A raw string field owns a fresh string only in `unsafe` code and the
+// trusted library; safe code holds a String there, or a view of a
+// binding (docs/MEMORY.md §2.13). The functions that build such structs
+// are `unsafe` to keep exercising that machinery.
 $ `stdlib/core/string.nu`
 
 : Rec { s name i n }
 
-@ view_in → i {
+unsafe @ view_in → i {
     : String t ( string_from `view` )
     : ~ Rec r @ Rec { ( nurl_str_cat `a` `b` ) 1 }
     = . r name ( string_data t )
     ^ ( nurl_str_len . r name )
 }
 
-@ fresh_in → i {
+unsafe @ fresh_in → i {
     : ~ Rec r @ Rec { ( nurl_str_cat `a` `b` ) 1 }
     = . r name ( nurl_str_cat `c` `de` )
     = . r name ( nurl_str_cat `f` `ghi` )
     ^ ( nurl_str_len . r name )
 }
 
-@ literal_in → i {
+unsafe @ literal_in → i {
     : ~ Rec r @ Rec { ( nurl_str_cat `a` `b` ) 1 }
     = . r name `lit`
     ^ ( nurl_str_len . r name )
 }
 
-@ local_in → i {
+unsafe @ local_in → i {
     : ~ Rec r @ Rec { ( nurl_str_cat `a` `b` ) 1 }
     : s x ( nurl_str_cat `x` `yz` )
     = . r name x
@@ -39,7 +44,7 @@ $ `stdlib/core/string.nu`
     ^ ( nurl_str_len . r name )
 }
 
-@ handed_back → Rec {
+unsafe @ handed_back → Rec {
     : String t ( string_from `kept` )
     : ~ Rec r @ Rec { ( nurl_str_cat `a` `b` ) 1 }
     = . r name ( string_data t )

@@ -408,7 +408,9 @@ A function or method declaration may carry a leading `unsafe` prefix
 A string (`s`) in safe code is therefore NUL-terminated or null: nothing
 safe can turn a raw pointer into one. A null string reads as the empty
 string at every string primitive (`nurl_println`, `strlen`,
-`string_from`, …).
+`string_from`, …). A raw string held by a struct, an option, an enum, a
+slice or a container is a view: a fresh one is stored as a `String`, or
+bound first and stored as a view of the binding (docs/MEMORY.md §2.13).
 
 ```
 // The rest of the program sees a safe function: it takes a String and

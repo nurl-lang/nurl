@@ -513,8 +513,8 @@ new language features.
   `ProtoReader`) was not tracked as a view of it, the one known exception to
   the 0.71.0 guarantee (hole probe `tools/fuzz/holes/h32`). *(Resolved: views
   are values in the borrow walk — tracked through structs, Options,
-  containers, closures, globals and function results — with 95 more probes
-  (h33–h127) closed on the way: sealed representations, exclusive calls,
+  containers, closures, globals and function results — with 109 more probes
+  (h33–h141) closed on the way: sealed representations, exclusive calls,
   closure effects, checked allocation sizes, the raw foreign surface, null
   strings, and method calls asked of their impls, static and `dyn`. MEMORY.md §6.2 states the guarantee with no exception;
   docs/HARDENING_PLAN.md.)*

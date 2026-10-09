@@ -4,6 +4,11 @@
 // observe the free directly from NURL code; this test exercises the
 // path under valgrind / AddressSanitizer-style runs and verifies the
 // user-visible behaviour (field reads still return the right bytes).
+//
+// A raw string field owns a fresh string only in `unsafe` code and the
+// trusted library; safe code holds a String there, or a view of a
+// binding (docs/MEMORY.md §2.13). The functions that build such structs
+// are `unsafe` to keep exercising that machinery.
 
 $ `stdlib/core/string.nu`
 
@@ -12,7 +17,7 @@ $ `stdlib/core/string.nu`
     i n
 }
 
-@ main → i {
+unsafe @ main → i {
     : Greeting g @ Greeting { ( nurl_str_cat `hello ` `world` ) 42 }
     ( nurl_print . g msg ) ( nurl_print `\n` )
     ( nurl_print ( nurl_str_int . g n ) ) ( nurl_print `\n` )

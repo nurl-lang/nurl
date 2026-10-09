@@ -9,8 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 The memory guarantee has **no exception**: 0.71.0's one known hole (a
-`Slice` of a `Vec`, probe h32) is closed, along with 95 more found around
-it (probes h33–h127), each at its root — every probe is now rejected or
+`Slice` of a `Vec`, probe h32) is closed, along with 109 more found around
+it (probes h33–h141), each at its root — every probe is now rejected or
 runs clean under ASan/UBSan/LSan, and `tools/fuzz/holes/check.sh` runs in
 CI. Compile time is 0.7 % below 0.71.0's main (self-compile instructions),
 run time is flat or better. Code that handed raw pointers or caller-given
@@ -119,6 +119,14 @@ beside each raw one (*Changed*).
   a string binding that owns its value was stored the same way (h121).
   Both now hold their own copy of anything not fresh, and free what they
   replace.
+- **A fresh raw string stored where nothing releases it** — an option
+  payload, a slice element, a struct temporary, a struct pushed into a
+  Vec, a field assigned after the struct was built with a literal or a
+  view, a join or a reassignment of struct literals, a `vec_push [s]`
+  (h128–h140) — leaked; it is now rejected (*Changed*). And a closure or
+  a struct literal handed back as written was not checked for what its
+  views point into: one that captured an owned local string read it after
+  the function released it (h141).
 - **The raw foreign surface is `unsafe`.** A C primitive that reads or
   writes as far as its caller says (`memmem`, `memcmp`, `fwrite`,
   `nurl_fast_atof`, the TCP/UDP buffers), takes a `FILE*` or a format
@@ -150,6 +158,17 @@ beside each raw one (*Changed*).
 
 ### Changed
 
+- **A raw string in a value is a view** (docs/MEMORY.md §2.13). In safe
+  code a raw string (`s`) held by a struct, an option, an enum, a slice
+  or a container owns nothing, so a fresh one — a call's result that hands
+  its string over — can no longer be stored there (`@ T { ( nurl_str_cat …
+  ) }`, `@ ?s { T … }`, `[ s | … ]`, `= . r name ( … )`) nor handed to a
+  parameter that keeps it (`vec_push [s]`, `map_set`): each leaked (h128–
+  h140). Hold a `String` (a field, a payload, a `( Vec String )`), or bind
+  the string and store the binding — a view the walk keeps from outliving
+  it. A parameter that takes a string over is declared `sink`. `unsafe`
+  code and the standard library keep managing raw strings by hand. In the
+  repository only tests built structs that way; they are `unsafe` now.
 - **Raw-length helpers take a raw pointer and are `unsafe` to call** —
   `nurl_str_at`, `nurl_memcmp_lex`, `nurl_memmem_range`,
   `nurl_parse_int_range`, `nurl_parse_float_range`, `string_from_take`,
@@ -183,7 +202,7 @@ beside each raw one (*Changed*).
 - `slice_of_str`, `slice_byte`, `slice_parse_int`, `slice_parse_float`,
   `string_adopt`, `write_string`, `b64_encode_string`, `utf8_decode_at`:
   the safe forms of the raw-length helpers above.
-- Hole probes h33–h127 (`tools/fuzz/holes/`) and their check in CI: each
+- Hole probes h33–h141 (`tools/fuzz/holes/`) and their check in CI: each
   must be rejected or run clean under the sanitizers.
 - **Five cryptographic benchmark rows** — `chacha20`, `poly1305`,
   `blake2b`, `sha512` and `x25519` — in NURL, C and Rust. The NURL side

@@ -1,8 +1,9 @@
-// diag_owned_fields_alias.nu — a struct whose raw string field it owns,
-// copied to a binding that outlives it. `tmp`'s field is freed when
-// `tmp`'s block ends; `out` would still point at it (this program read
-// freed memory before the rule). The fix: an owning field type (String)
-// so the value moves, or build the struct where it is kept.
+// diag_owned_fields_alias.nu — a struct given a fresh raw string field,
+// copied to a binding that outlives it. `tmp`'s field was freed when
+// `tmp`'s block ended while `out` still pointed at it (this program read
+// freed memory before the rules). A raw string field is a view in safe
+// code (docs/MEMORY.md §2.13), so the fresh string is rejected where it is
+// stored. The fix: an owning field type (String), so the value moves.
 $ `stdlib/core/string.nu`
 
 : Resp { s body i code }
