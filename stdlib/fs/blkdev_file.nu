@@ -95,7 +95,7 @@ $ `stdlib/hal/blockdev.nu`
 
 @ nurl_blk_sector_count → i { ^ g_blksectors }
 
-@ nurl_blk_read i lba s buf i nsec → i {
+@ nurl_blk_read i lba * u buf i nsec → i {
     ? < g_blkfd 0 { ^ - 0 1 } {}
     : i want * nsec ( blk_sector_size )
     : i got ( nurl_pread # i32 g_blkfd # *u buf want * lba ( blk_sector_size ) )
@@ -103,7 +103,7 @@ $ `stdlib/hal/blockdev.nu`
     ^ nsec
 }
 
-@ nurl_blk_write i lba s buf i nsec → i {
+@ nurl_blk_write i lba * u buf i nsec → i {
     ? < g_blkfd 0 { ^ - 0 1 } {}
     ? g_blkro { ^ - 0 1 } {}
     : i want * nsec ( blk_sector_size )

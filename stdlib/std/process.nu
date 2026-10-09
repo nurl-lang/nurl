@@ -1357,7 +1357,7 @@ $ `stdlib/std/time.nu`
     ^ ( nurl_proc_spawn_pid raw )
 }
 
-@ proc_write ProcChild p s buf i n → i {
+@ proc_write ProcChild p * u buf i n → i {
     : i raw ( __proc_raw p )
     ? != ( posix_const `O_NONBLOCK` ) -1 {
         ^ ( __proc_write_posix raw buf n )

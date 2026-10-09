@@ -32,7 +32,7 @@ $ `stdlib/core/string.nu`
 // Write one byte on every page of a freshly allocated block. The write
 // is the assertion: a page the allocator handed out but nobody mapped
 // faults here rather than silently later.
-@ touch_pages i blocks i bytes → i {
+unsafe @ touch_pages i blocks i bytes → i {
     : ~ i pages 0
     : ~ i b 0
     ~ < b blocks {

@@ -508,11 +508,16 @@ new language features.
   `nurlc --unsafe-report`.)*
 - [x] **Document the known auto-drop leaks** (nested owned-struct fields,
   arm-local fall-through bindings, allocations inside a `recover` scope). *(Resolved: leaks fixed.)*
-- [ ] **Close the `Slice` hole** — a `Slice` built from a `Vec`
+- [x] **Close the `Slice` hole** — a `Slice` built from a `Vec`
   (`slice_from_vec`, `slice_sub`, `slice_from_raw`, protobuf's
-  `ProtoReader`) is not tracked as a view of it, the one known exception to
-  the 0.71.0 guarantee (hole probe `tools/fuzz/holes/h32`). Track views
-  held in structs the way a `vec_data` pointer is tracked.
+  `ProtoReader`) was not tracked as a view of it, the one known exception to
+  the 0.71.0 guarantee (hole probe `tools/fuzz/holes/h32`). *(Resolved: views
+  are values in the borrow walk — tracked through structs, Options,
+  containers, closures, globals and function results — with 109 more probes
+  (h33–h141) closed on the way: sealed representations, exclusive calls,
+  closure effects, checked allocation sizes, the raw foreign surface, null
+  strings, and method calls asked of their impls, static and `dyn`. MEMORY.md §6.2 states the guarantee with no exception;
+  docs/HARDENING_PLAN.md.)*
 
 ### Evidence for the "LLM-native" thesis
 

@@ -36,7 +36,7 @@ $ `stdlib/core/rcbox.nu`
 // and the handshake said 0.1.0 as well — three numbers, one of them
 // right. A hand-written second copy of a version is a copy that goes
 // stale; swarm-mcp's had frozen five releases back.
-: s MMD_VERSION `0.3.1`
+: s MMD_VERSION `0.3.2`
 
 : ~ i g_mmd_ts 0
 
@@ -139,7 +139,7 @@ unsafe @ mmd_state → MmdTemplateSet {
     ^ out
 }
 
-@ __mmds_body HttpRequest req → String {
+unsafe @ __mmds_body HttpRequest req → String {
     : i n ( vec_len [u] . req body )
     ? == n 0 { ^ ( string_new ) } {}
     ^ ( string_from_bytes ( vec_data [u] . req body ) n )

@@ -41,7 +41,7 @@ $ `gpu.nu`
 @ say s msg → v { ( nurl_print msg ) ( nurl_print `\n` ) }
 
 // ── demo: vector add  c = a + b ───────────────────────────────────
-@ demo_vadd Gpu g i n → i {
+unsafe @ demo_vadd Gpu g i n → i {
     ( say `\n[vadd] c[i] = a[i] + b[i]` )
     : GpuKernel k ( gpu_compile g ( k_vadd ) `vadd` )
     ? ! ( gpu_kernel_ok k ) { ( say `  compile FAILED` ) ^ 1 } {}
@@ -95,7 +95,7 @@ $ `gpu.nu`
 }
 
 // ── demo: SAXPY  y = alpha*x + y  (scalar float + int args) ───────
-@ demo_saxpy Gpu g i n → i {
+unsafe @ demo_saxpy Gpu g i n → i {
     ( say `\n[saxpy] y[i] = alpha*x[i] + y[i],  alpha=2.5` )
     : GpuKernel k ( gpu_compile g ( k_saxpy ) `saxpy` )
     ? ! ( gpu_kernel_ok k ) { ( say `  compile FAILED` ) ^ 1 } {}

@@ -60,7 +60,7 @@ unsafe @ _mp3_pf8 * f p i at f v0 f v1 f v2 f v3 f v4 f v5 f v6 f v7 → i {
     ^ + at 8
 }
 
-@ _mp3_hcode → ( Vec i ) {
+unsafe @ _mp3_hcode → ( Vec i ) {
     : ( Vec i ) v ( _mp3_zeros 1416 )
     : *i p ( vec_data [i] v )
     : ~ i at 0
@@ -245,7 +245,7 @@ unsafe @ _mp3_pf8 * f p i at f v0 f v1 f v2 f v3 f v4 f v5 f v6 f v7 → i {
 }
 
 // Code lengths in bits, in the same order as _mp3_hcode.
-@ _mp3_hlen → ( Vec i ) {
+unsafe @ _mp3_hlen → ( Vec i ) {
     : ( Vec i ) v ( _mp3_zeros 1416 )
     : *i p ( vec_data [i] v )
     : ~ i at 0
@@ -430,7 +430,7 @@ unsafe @ _mp3_pf8 * f p i at f v0 f v1 f v2 f v3 f v4 f v5 f v6 f v7 → i {
 }
 
 // Per-table x extent (max x index + 1).
-@ _mp3_hxlen → ( Vec i ) {
+unsafe @ _mp3_hxlen → ( Vec i ) {
     : ( Vec i ) v ( _mp3_zeros 40 )
     : *i p ( vec_data [i] v )
     : ~ i at 0
@@ -443,7 +443,7 @@ unsafe @ _mp3_pf8 * f p i at f v0 f v1 f v2 f v3 f v4 f v5 f v6 f v7 → i {
 }
 
 // Per-table y extent; the pair (x,y) indexes at x*ylen + y.
-@ _mp3_hylen → ( Vec i ) {
+unsafe @ _mp3_hylen → ( Vec i ) {
     : ( Vec i ) v ( _mp3_zeros 40 )
     : *i p ( vec_data [i] v )
     : ~ i at 0
@@ -456,7 +456,7 @@ unsafe @ _mp3_pf8 * f p i at f v0 f v1 f v2 f v3 f v4 f v5 f v6 f v7 → i {
 }
 
 // Escape-value width in bits, 0 for the tables without one.
-@ _mp3_hlinbits → ( Vec i ) {
+unsafe @ _mp3_hlinbits → ( Vec i ) {
     : ( Vec i ) v ( _mp3_zeros 40 )
     : *i p ( vec_data [i] v )
     : ~ i at 0
@@ -469,7 +469,7 @@ unsafe @ _mp3_pf8 * f p i at f v0 f v1 f v2 f v3 f v4 f v5 f v6 f v7 → i {
 }
 
 // Largest value an escape of that width can carry.
-@ _mp3_hlinmax → ( Vec i ) {
+unsafe @ _mp3_hlinmax → ( Vec i ) {
     : ( Vec i ) v ( _mp3_zeros 40 )
     : *i p ( vec_data [i] v )
     : ~ i at 0
@@ -482,7 +482,7 @@ unsafe @ _mp3_pf8 * f p i at f v0 f v1 f v2 f v3 f v4 f v5 f v6 f v7 → i {
 }
 
 // Where each table's data starts in the two flat arrays.
-@ _mp3_hoff → ( Vec i ) {
+unsafe @ _mp3_hoff → ( Vec i ) {
     : ( Vec i ) v ( _mp3_zeros 40 )
     : *i p ( vec_data [i] v )
     : ~ i at 0
@@ -496,7 +496,7 @@ unsafe @ _mp3_pf8 * f p i at f v0 f v1 f v2 f v3 f v4 f v5 f v6 f v7 → i {
 
 // ISO Table B.8 (MPEG-1) and B.2 (MPEG-2/2.5): where each of the 21
 // scalefactor bands starts, per samplerate index, 23 entries each.
-@ _mp3_sfb_index → ( Vec i ) {
+unsafe @ _mp3_sfb_index → ( Vec i ) {
     : ( Vec i ) v ( _mp3_zeros 208 )
     : *i p ( vec_data [i] v )
     : ~ i at 0
@@ -531,7 +531,7 @@ unsafe @ _mp3_pf8 * f p i at f v0 f v1 f v2 f v3 f v4 f v5 f v6 f v7 → i {
 
 // The analysis window C[i] of ISO 11172-3 Annex C, in the order and with
 // the signs the folding below expects. 512 coefficients, |C| <= 0.035781.
-@ _mp3_enwindow → ( Vec f ) {
+unsafe @ _mp3_enwindow → ( Vec f ) {
     : ( Vec f ) v ( _mp3_fzeros 512 )
     : *f p ( vec_data [f] v )
     : ~ i at 0

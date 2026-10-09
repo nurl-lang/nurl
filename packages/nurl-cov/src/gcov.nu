@@ -162,7 +162,7 @@ unsafe @ __g_u32 * u p i off → i {
 }
 
 // Counters are 64-bit, stored low word first.
-@ __g_u64 * u p i off → i {
+unsafe @ __g_u64 * u p i off → i {
     ^ | ( __g_u32 p off ) << ( __g_u32 p + off 4 ) 32
 }
 
@@ -489,7 +489,7 @@ unsafe @ __g_arc * GcovObjImpl o i ai i field → i {
     ^ ?? ( vec_get [i] . o arcs + ai field ) { T x → x F _ → 0 }
 }
 
-@ __g_fn_by_ident * GcovObjImpl o i ident → i {
+unsafe @ __g_fn_by_ident * GcovObjImpl o i ident → i {
     : i n ( __gcov_fn_count o )
     : ~ i i 0
     ~ < i n {
@@ -499,7 +499,7 @@ unsafe @ __g_arc * GcovObjImpl o i ai i field → i {
     ^ -1
 }
 
-@ gcov_fn_count GcovObj o__h → i { ^ ( __gcov_fn_count ( __GcovObj_ptr o__h ) ) }
+unsafe @ gcov_fn_count GcovObj o__h → i { ^ ( __gcov_fn_count ( __GcovObj_ptr o__h ) ) }
 
 unsafe @ __gcov_fn_count * GcovObjImpl o → i {
     ^ / ( vec_len [i] . o fns ) GFN_W
@@ -510,41 +510,41 @@ unsafe @ gcov_fn_name GcovObj o__h i fi → s {
     ^ ?? ( vec_get [String] . o fn_names fi ) { T x → ( string_data x ) F _ → `` }
 }
 
-@ gcov_fn_src GcovObj o__h i fi → i {
+unsafe @ gcov_fn_src GcovObj o__h i fi → i {
     : *GcovObjImpl o ( __GcovObj_ptr o__h )
     ^ ( __g_fn o fi GFN_SRC )
 }
 
-@ gcov_fn_line GcovObj o__h i fi → i {
+unsafe @ gcov_fn_line GcovObj o__h i fi → i {
     : *GcovObjImpl o ( __GcovObj_ptr o__h )
     ^ ( __g_fn o fi GFN_LINE )
 }
 
-@ gcov_fn_nblocks GcovObj o__h i fi → i {
+unsafe @ gcov_fn_nblocks GcovObj o__h i fi → i {
     : *GcovObjImpl o ( __GcovObj_ptr o__h )
     ^ ( __g_fn o fi GFN_NBLOCK )
 }
 
 // Where this function's blocks start in the object-wide block table. An
 // index over all blocks needs one flat numbering, and this is it.
-@ gcov_fn_blk_off GcovObj o__h i fi → i {
+unsafe @ gcov_fn_blk_off GcovObj o__h i fi → i {
     : *GcovObjImpl o ( __GcovObj_ptr o__h )
     ^ ( __g_fn o fi GFN_BLK_OFF )
 }
 
-@ gcov_total_blocks GcovObj o__h → i { ^ ( __gcov_total_blocks ( __GcovObj_ptr o__h ) ) }
+unsafe @ gcov_total_blocks GcovObj o__h → i { ^ ( __gcov_total_blocks ( __GcovObj_ptr o__h ) ) }
 
 unsafe @ __gcov_total_blocks * GcovObjImpl o → i {
     ^ ( vec_len [i] . o blk_count )
 }
 
-@ gcov_total_arcs GcovObj o__h → i { ^ ( __gcov_total_arcs ( __GcovObj_ptr o__h ) ) }
+unsafe @ gcov_total_arcs GcovObj o__h → i { ^ ( __gcov_total_arcs ( __GcovObj_ptr o__h ) ) }
 
 unsafe @ __gcov_total_arcs * GcovObjImpl o → i {
     ^ / ( vec_len [i] . o arcs ) GARC_W
 }
 
-@ gcov_block_count GcovObj o__h i fi i blk → i { ^ ( __gcov_block_count ( __GcovObj_ptr o__h ) fi blk ) }
+unsafe @ gcov_block_count GcovObj o__h i fi i blk → i { ^ ( __gcov_block_count ( __GcovObj_ptr o__h ) fi blk ) }
 
 unsafe @ __gcov_block_count * GcovObjImpl o i fi i blk → i {
     ^ ?? ( vec_get [i] . o blk_count + ( __g_fn o fi GFN_BLK_OFF ) blk ) {
@@ -579,12 +579,12 @@ unsafe @ gcov_file_path GcovObj o__h i idx → s {
 }
 
 // The block-line rows of one function, as a half-open range over `blines`.
-@ gcov_fn_bl_first GcovObj o__h i fi → i {
+unsafe @ gcov_fn_bl_first GcovObj o__h i fi → i {
     : *GcovObjImpl o ( __GcovObj_ptr o__h )
     ^ ( __g_fn o fi GFN_BL_OFF )
 }
 
-@ gcov_fn_bl_end GcovObj o__h i fi → i {
+unsafe @ gcov_fn_bl_end GcovObj o__h i fi → i {
     : *GcovObjImpl o ( __GcovObj_ptr o__h )
     ^ + ( __g_fn o fi GFN_BL_OFF ) * GBL_W ( __g_fn o fi GFN_BL_N )
 }
@@ -604,40 +604,40 @@ unsafe @ gcov_bl_line GcovObj o__h i row → i {
     ^ ?? ( vec_get [i] . o blines + row GBL_LINE ) { T x → x F _ → 0 }
 }
 
-@ gcov_fn_arc_first GcovObj o__h i fi → i {
+unsafe @ gcov_fn_arc_first GcovObj o__h i fi → i {
     : *GcovObjImpl o ( __GcovObj_ptr o__h )
     ^ ( __g_fn o fi GFN_ARC_OFF )
 }
 
-@ gcov_fn_arc_end GcovObj o__h i fi → i { ^ ( __gcov_fn_arc_end ( __GcovObj_ptr o__h ) fi ) }
+unsafe @ gcov_fn_arc_end GcovObj o__h i fi → i { ^ ( __gcov_fn_arc_end ( __GcovObj_ptr o__h ) fi ) }
 
-@ __gcov_fn_arc_end * GcovObjImpl o i fi → i {
+unsafe @ __gcov_fn_arc_end * GcovObjImpl o i fi → i {
     ^ + ( __g_fn o fi GFN_ARC_OFF ) * GARC_W ( __g_fn o fi GFN_ARC_N )
 }
 
-@ gcov_arc_src GcovObj o__h i ai → i {
+unsafe @ gcov_arc_src GcovObj o__h i ai → i {
     : *GcovObjImpl o ( __GcovObj_ptr o__h )
     ^ ( __g_arc o ai GARC_SRC )
 }
 
-@ gcov_arc_dst GcovObj o__h i ai → i {
+unsafe @ gcov_arc_dst GcovObj o__h i ai → i {
     : *GcovObjImpl o ( __GcovObj_ptr o__h )
     ^ ( __g_arc o ai GARC_DST )
 }
 
-@ gcov_arc_flags GcovObj o__h i ai → i {
+unsafe @ gcov_arc_flags GcovObj o__h i ai → i {
     : *GcovObjImpl o ( __GcovObj_ptr o__h )
     ^ ( __g_arc o ai GARC_FLAGS )
 }
 
-@ gcov_arc_count GcovObj o__h i ai → i {
+unsafe @ gcov_arc_count GcovObj o__h i ai → i {
     : *GcovObjImpl o ( __GcovObj_ptr o__h )
     ^ ( __g_arc o ai GARC_COUNT )
 }
 
 // An arc the instrumenter treated as a real branch. Fake arcs (the ones
 // LLVM adds for abnormal exits) are not branches a test can take.
-@ gcov_arc_is_branch GcovObj o__h i ai → b {
+unsafe @ gcov_arc_is_branch GcovObj o__h i ai → b {
     : *GcovObjImpl o ( __GcovObj_ptr o__h )
     ^ == 0 & ( __g_arc o ai GARC_FLAGS ) GCOV_ARC_FAKE
 }
@@ -669,7 +669,7 @@ unsafe @ __g_arc_field * GcovObjImpl o i ai i field → i {
     ^ ?? ( vec_get [i] . o arcs + ai field ) { T x → x F _ → 0 }
 }
 
-@ __g_on_tree * GcovObjImpl o i ai → b {
+unsafe @ __g_on_tree * GcovObjImpl o i ai → b {
     ^ != 0 & ( __g_arc_field o ai GARC_FLAGS ) GCOV_ARC_ON_TREE
 }
 
@@ -737,14 +737,14 @@ unsafe @ __g_index_build * GcovObjImpl o → v {
 
 // The first arc entering (`side` 0) or leaving (`side` 1) a block, as a
 // chain cursor: non-zero is an arc slot plus one, zero is the end.
-@ gcov_edge_first GcovObj o__h i fi i blk i side → i { ^ ( __gcov_edge_first ( __GcovObj_ptr o__h ) fi blk side ) }
+unsafe @ gcov_edge_first GcovObj o__h i fi i blk i side → i { ^ ( __gcov_edge_first ( __GcovObj_ptr o__h ) fi blk side ) }
 
 unsafe @ __gcov_edge_first * GcovObjImpl o i fi i blk i side → i {
     : i key + ( __g_fn o fi GFN_BLK_OFF ) blk
     ^ ? == side 0 ( __g_ix . o pred_head key ) ( __g_ix . o succ_head key )
 }
 
-@ gcov_edge_next GcovObj o__h i cursor i side → i { ^ ( __gcov_edge_next ( __GcovObj_ptr o__h ) cursor side ) }
+unsafe @ gcov_edge_next GcovObj o__h i cursor i side → i { ^ ( __gcov_edge_next ( __GcovObj_ptr o__h ) cursor side ) }
 
 unsafe @ __gcov_edge_next * GcovObjImpl o i cursor i side → i {
     ^ ? == side 0 ( __g_ix . o pred_next - cursor 1 ) ( __g_ix . o succ_next - cursor 1 )

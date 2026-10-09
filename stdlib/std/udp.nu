@@ -97,13 +97,13 @@ $ `stdlib/std/async_ffi.nu`
 
 & `c` @ nurl_udp_connect i handle s host i port → i
 
-& `c` @ nurl_udp_send_to i handle s buf i n s host i port → i
+& `c` @ nurl_udp_send_to i handle *u buf i n s host i port → i
 
-& `c` @ nurl_udp_recv_from i handle s buf i n → i
+& `c` @ nurl_udp_recv_from i handle *u buf i n → i
 
-& `c` @ nurl_udp_send i handle s buf i n → i
+& `c` @ nurl_udp_send i handle *u buf i n → i
 
-& `c` @ nurl_udp_recv i handle s buf i n → i
+& `c` @ nurl_udp_recv i handle *u buf i n → i
 
 & `c` @ nurl_udp_peer_addr i handle → s
 
@@ -131,13 +131,13 @@ $ `stdlib/std/async_ffi.nu`
 
 & `c` @ nurl_udp_set_multicast_loop i handle i on → i
 
-& `c` @ nurl_udp_recv_into i handle s buf i cap s addr_out → i
+& `c` @ nurl_udp_recv_into i handle *u buf i cap *u addr_out → i
 
-& `c` @ nurl_udp_send_addr i handle s buf i n s addr → i
+& `c` @ nurl_udp_send_addr i handle *u buf i n *u addr → i
 
-& `c` @ nurl_udp_addr_resolve s host i port s addr_out → i
+& `c` @ nurl_udp_addr_resolve s host i port *u addr_out → i
 
-& `c` @ nurl_udp_addr_format s addr → s
+& `c` @ nurl_udp_addr_format *u addr → s
 
 & `c` @ nurl_udp_setsockopt_int i handle i level i opt i val → i
 

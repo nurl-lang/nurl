@@ -30,7 +30,7 @@ $ `src/devblock.nu`
 @ __maw_none → GkBuf { ^ ( gk_buf_none GK_F32 ) }
 
 // One tensor onto the device, layout unchanged.
-@ maw_upload Lw w GpuKit kit s name → GkBuf {
+unsafe @ maw_upload Lw w GpuKit kit s name → GkBuf {
     : i n ( lw_nelems w name )
     ? <= n 0 {
         : b _r ( lw_require w name -1 -1 -1 -1 )

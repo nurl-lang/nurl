@@ -47,6 +47,7 @@
 
 $ `stdlib/core/errors.nu`
 $ `stdlib/core/vec.nu`
+$ `stdlib/core/slice.nu`
 $ `stdlib/core/char.nu`
 // Note: do NOT include stdlib/std/bytes.nu here. bytes.nu depends on
 // String (e.g. `bytes_to_str → String`); a circular include would force
@@ -59,7 +60,7 @@ $ `stdlib/core/char.nu`
 //    `memcpy` / `strdup` are declared globally by the nurlc preamble,
 //    so call sites don't need a per-file `&`-FFI declaration.
 
-@ nurl_memcmp_lex s a i la s b i lb → i {
+@ nurl_memcmp_lex * u a i la * u b i lb → i {
     : i n ? < la lb la lb
     ? > n 0 {
         : i c # i ( memcmp a b n )
@@ -132,7 +133,7 @@ $ `stdlib/core/char.nu`
     ^ ? == c 0 1 0
 }
 
-@ nurl_memmem_range s hay i hlen s needle i nlen → i {
+@ nurl_memmem_range * u hay i hlen * u needle i nlen → i {
     ? | < hlen 0 < nlen 0 { ^ -1 } {}
     ? == nlen 0 { ^ 0 } {}
     ? > nlen hlen { ^ -1 } {}
@@ -179,7 +180,7 @@ $ `stdlib/core/char.nu`
 //
 //   : i n ( nurl_str_len src )
 //   ~ < k n { : i c ( nurl_str_at src n k ) … }
-@ nurl_str_at s str i len i idx → i {
+@ nurl_str_at * u str i len i idx → i {
     ? | < idx 0 >= idx len { ^ 0 } {}
     : *u p # *u str
     : u b . p idx
@@ -263,7 +264,7 @@ $ `stdlib/core/char.nu`
 // then decimal digits; stops on first non-digit. Returns 0 on empty
 // or all-non-digit input (callers that need to distinguish "parse
 // failure" from "real zero" use int_parse on a NUL-terminated input).
-@ nurl_parse_int_range s p i len → i {
+@ nurl_parse_int_range * u p i len → i {
     ? == # i p 0 { ^ 0 } {}
     ? <= len 0 { ^ 0 } {}
     : *u q # *u p
@@ -295,9 +296,15 @@ $ `stdlib/core/char.nu`
 // `strtod`; `nurl_fast_atof` takes the range directly, is correctly
 // rounded, and is 4.5-8.4x faster than strtod even before the copy.
 // 0.0 on empty / null input, and on anything that is not a number.
-@ nurl_parse_float_range s p i len → f {
+@ nurl_parse_float_range * u p i len → f {
     ^ ( nurl_fast_atof p len )
 }
+
+// …the same two over a view (slice_of_str, a CSV cell): its length is its
+// own, so a wrong one cannot send the parse past the bytes.
+@ slice_parse_int ( Slice u ) b → i { ^ ( nurl_parse_int_range ( slice_data [u] b ) ( slice_len [u] b ) ) }
+
+@ slice_parse_float ( Slice u ) b → f { ^ ( nurl_parse_float_range ( slice_data [u] b ) ( slice_len [u] b ) ) }
 
 : String {
     s ctl
@@ -352,7 +359,8 @@ $ `stdlib/core/char.nu`
 }
 
 @ string_with_cap i n → String {
-    : i want ? > n 0 + n 1 1
+    // (Room for the terminating NUL: a count that cannot take one panics.)
+    : i want ? > n 0 ( alloc_count_add n 1 ) 1
     : ( Vec u ) tmp ( vec_with_cap [u] want )
     : *u p ( vec_data [u] tmp )
     : u zero # u 0
@@ -384,13 +392,23 @@ $ `stdlib/core/char.nu`
 // Used by fast file I/O paths (CSV / arena loaders) to avoid the
 // `nurl_memcpy` over the full content — for a 100 MB CSV that's
 // ~33 ms saved per load.
-@ string_from_take sink s raw i raw_cap → String {
+@ string_from_take sink * u raw i raw_cap → String {
     : i n ( nurl_str_len raw )
     : s ctl ( nurl_zalloc 24 )
     ( nurl_poke ctl 0 # i raw )
     ( nurl_poke ctl 1 n )
     ( nurl_poke ctl 2 raw_cap )
     ^ @ String { ctl }
+}
+
+// Take an owned C string over as a String, with no copy: what it was
+// allocated with holds its bytes and its NUL, so that is the capacity
+// (string_from_take's, measured rather than taken on trust). A borrowed
+// argument is copied on its way in, as for any `sink`. Null is the
+// empty String.
+@ string_adopt sink s raw → String {
+    ? == # i raw 0 { ^ ( string_new ) } {}
+    ^ ( string_from_take # *u raw + ( strlen raw ) 1 )
 }
 
 // Build an owned String from a raw byte range. `src` is a borrowed
@@ -833,7 +851,7 @@ $ `stdlib/core/char.nu`
 // Concatenate `str` with itself `times` times. times ≤ 0 yields empty.
 @ string_repeat String str i times → String {
     : i n ( string_len str )
-    : i want ? > times 0 * n times 0
+    : i want ? > times 0 ( alloc_size n times ) 0
     : String out ( string_with_cap want )
     : ~ i k 0
     ~ < k times {

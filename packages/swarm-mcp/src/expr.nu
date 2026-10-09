@@ -229,7 +229,7 @@ unsafe @ __ep_primary * EParserImpl p → i {
     ^ 0
 }
 
-@ __ep_unary * EParserImpl p → i {
+unsafe @ __ep_unary * EParserImpl p → i {
     ? == ( __ep_kind p ) 4 { ( __ep_adv p ) ^ ( __ep_node p 2 ( __ep_unary p ) 0 0 ) } {}  // -unary → NEG
     ^ ( __ep_primary p )
 }
@@ -318,9 +318,9 @@ unsafe @ expr_parse ( Vec u ) src EParser p__h → i {
 
 unsafe @ __ar * EParserImpl p i node i off → i { ^ ?? ( vec_get [i] . p arena + * node 4 off ) { T x → x F → 0 } }
 
-inline @ expr_eval EParser p__h i node i x → i { ^ ( _expr_eval ( _EParser_ptr p__h ) node x ) }
+unsafe inline @ expr_eval EParser p__h i node i x → i { ^ ( _expr_eval ( _EParser_ptr p__h ) node x ) }
 
-@ _expr_eval * EParserImpl p i node i x → i {
+unsafe @ _expr_eval * EParserImpl p i node i x → i {
     : i tag ( __ar p node 0 )
     : i a ( __ar p node 1 )
     : i b ( __ar p node 2 )
@@ -355,9 +355,9 @@ inline @ expr_eval EParser p__h i node i x → i { ^ ( _expr_eval ( _EParser_ptr
 // f64 bit pattern and are reinterpreted back. Div/mod by zero → 0.0; mod is the
 // truncated remainder (a − b·trunc(a/b)), matching the int evaluator's rule.
 
-inline @ expr_eval_f EParser p__h i node f x → f { ^ ( _expr_eval_f ( _EParser_ptr p__h ) node x ) }
+unsafe inline @ expr_eval_f EParser p__h i node f x → f { ^ ( _expr_eval_f ( _EParser_ptr p__h ) node x ) }
 
-@ _expr_eval_f * EParserImpl p i node f x → f {
+unsafe @ _expr_eval_f * EParserImpl p i node f x → f {
     : i tag ( __ar p node 0 )
     : i a ( __ar p node 1 )
     : i b ( __ar p node 2 )

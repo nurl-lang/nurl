@@ -27,6 +27,7 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/std/fs.nu`
 $ `gcov.nu`
 $ `lines.nu`
+$ `stdlib/core/slice.nu`
 
 // Right-align into a fixed column, the way gcov lays out its gutter.
 @ __gt_pad String out s text i width → v {
@@ -220,11 +221,12 @@ $ `lines.nu`
 // ends in one: gcov numbers the lines a person would count.
 @ __gt_split_lines s text → ( Vec String ) {
     : ( Vec String ) out ( vec_new [String] )
-    : i n ( nurl_str_len text )
+    : ( Slice u ) text_b ( slice_of_str text )
+    : i n ( slice_len [u] text_b )
     : ~ i start 0
     : ~ i i 0
     ~ < i n {
-        ? == 10 ( nurl_str_at text n i ) {
+        ? == 10 ( slice_byte text_b i ) {
             ( vec_push [String] out ( __gt_slice text start - i start ) )
             = start + i 1
         } {}

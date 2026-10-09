@@ -148,7 +148,7 @@ unsafe @ ply_count PlyW w__h → i {
 
 // Write out whatever is buffered. Idempotent; ply_vertex calls it on
 // its own past PLY_FLUSH_AT bytes.
-@ ply_flush PlyW w__h → b {
+unsafe @ ply_flush PlyW w__h → b {
     ^ ( __ply_flush ( __PlyW_ptr w__h ) )
 }
 

@@ -3,7 +3,7 @@
 $ `stdlib/std/tls.nu`
 
 // A connection with no socket, keyed for both directions, mid-sequence.
-@ ku_state → TlsConn {
+unsafe @ ku_state → TlsConn {
     : TlsConn h ( _tls_conn_new 0 )
     : ~ * TlsConnImpl c ( _tls_ptr h )
     ( ku_setup . c 0 )

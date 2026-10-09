@@ -129,7 +129,7 @@ unsafe @ grpc_headers_check_size ( Vec Header ) headers i limit → !v GrpcError
 }
 
 @ __grpc_base64 String value → String {
-    : String padded ( b64_encode_len ( string_data value ) ( string_len value ) )
+    : String padded ( b64_encode_string value )
     : ~ i n ( string_len padded )
     ~ & > n 0 == ( string_get padded - n 1 ) 61 { = n - n 1 }
     : String result ( string_substr padded 0 n )

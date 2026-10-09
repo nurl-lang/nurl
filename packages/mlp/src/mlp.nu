@@ -220,7 +220,7 @@ unsafe @ __mlp_forward Mlp m * f xp i x_at ( Vec f ) acts → v {
 }
 
 // Predict one row (a ( Vec f ) of the input width) → an OWNED output vec.
-@ mlp_predict Mlp m ( Vec f ) x → ( Vec f ) {
+unsafe @ mlp_predict Mlp m ( Vec f ) x → ( Vec f ) {
     : ( Vec f ) acts ( __zeros . m n_a )
     ( __mlp_forward m ( vec_data [f] x ) 0 acts )
     : i dout ( _mlp_iget . m sizes . m n_layers )

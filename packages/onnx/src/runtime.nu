@@ -106,7 +106,7 @@ unsafe @ __rt_init_find * EngineImpl e s name → i {
 // element count, read in place — never a copy of the tensor: these run
 // once per element in the shape-arithmetic loops, and an initializer can
 // be a weight block hundreds of megabytes long.
-@ __init_host * EngineImpl e s name → i {
+unsafe @ __init_host * EngineImpl e s name → i {
     : i idx ( __rt_init_find e name )
     ? < idx 0 { ^ 0 } {}
     ?? ( vec_get [OTensor] ( __rt_inits e ) idx ) { T t → { ^ ( otensor_host_ptr t ) } F _ → { ^ 0 } }
@@ -117,7 +117,7 @@ unsafe @ __init_i64 * EngineImpl e s name i k → i {  // k-th value of an INT64
     ? == h 0 { ^ 0 } { ^ ( nurl_peek # *u h k ) }
 }
 
-@ __init_i64_len * EngineImpl e s name → i {
+unsafe @ __init_i64_len * EngineImpl e s name → i {
     : i idx ( __rt_init_find e name )
     ? < idx 0 { ^ 0 } {}
     ?? ( vec_get [OTensor] ( __rt_inits e ) idx ) { T t → { ^ . t nelem } F _ → { ^ 0 } }
@@ -223,7 +223,7 @@ unsafe @ rt_at * EngineImpl e i idx → RTensor {
     ?? ( vec_get [RTensor] . e vals idx ) { T t → ^ t F _ → ^ @ RTensor { ( string_new ) 0 ( vec_new [i] ) 0 } }
 }
 // Input name of a node (k-th), as an `s`.
-@ __in * EngineImpl e ONode n i k → RTensor {
+unsafe @ __in * EngineImpl e ONode n i k → RTensor {
     : ( Vec String ) ins . n inputs
     : i idx ( rt_find e ( __rt_str_at ins k ) )
     ^ ( rt_at e idx )
@@ -253,7 +253,7 @@ unsafe @ rt_at * EngineImpl e i idx → RTensor {
 // keeps working unchanged.
 : i RT_HOSTI - 0 1
 
-@ __hi_put * EngineImpl e s name ( Vec i ) vals → v {
+unsafe @ __hi_put * EngineImpl e s name ( Vec i ) vals → v {
     ( rt_put e name RT_HOSTI vals )
 }
 
@@ -261,7 +261,7 @@ unsafe @ rt_at * EngineImpl e i idx → RTensor {
 // INT64 initializer's, else empty. The returned vec is FRESH (caller
 // frees). Device tensors yield empty — float weights never alias an
 // INT64 name — so "non-empty" doubles as "this is host data".
-@ __hi_vals * EngineImpl e s name → ( Vec i ) {
+unsafe @ __hi_vals * EngineImpl e s name → ( Vec i ) {
     : ( Vec i ) out ( vec_new [i] )
     ? == ( nurl_str_len name ) 0 { ^ out } {}
     : i idx ( rt_find e name )
@@ -285,7 +285,7 @@ unsafe @ rt_at * EngineImpl e i idx → RTensor {
 // Execute a node entirely on the host when its data is host-int. Returns
 // T when the node was consumed (its output registered, or deliberately
 // dropped), F when the device dispatch should have it.
-@ __rt_host_step * EngineImpl e ONode n → b {
+unsafe @ __rt_host_step * EngineImpl e ONode n → b {
     : s op ( string_data . n op_type )
     ? ( streq2 op `Constant` ) {
         // The payload's INT64 values were folded into the `value`
@@ -657,7 +657,7 @@ unsafe @ rt_sigmoid * EngineImpl e ONode n → v {
 // Reshape: pure reinterpret (data is contiguous) → alias the input buffer
 // under the output name with the new shape. Shape comes from the INT64
 // initializer input[1]; a -1 entry is inferred, 0 copies the input dim.
-@ rt_reshape * EngineImpl e ONode n → v {
+unsafe @ rt_reshape * EngineImpl e ONode n → v {
     : RTensor X ( __in e n 0 )
     : s shp_name ( __rt_str_at . n inputs 1 )
     : i nd ( __init_i64_len e shp_name )
@@ -1098,7 +1098,7 @@ unsafe @ rt_expand * EngineImpl e ONode n → v {
 
 // Unsqueeze: insert size-1 axes — pure reshape (alias). New shape from the
 // input's shape with 1s inserted at the `axes` positions.
-@ rt_unsqueeze * EngineImpl e ONode n → v {
+unsafe @ rt_unsqueeze * EngineImpl e ONode n → v {
     : RTensor X ( __in e n 0 )
     : s ax_name ( __rt_str_at . n inputs 1 )
     : i a0 ( __init_i64 e ax_name 0 )
@@ -1228,13 +1228,13 @@ unsafe @ _rt_run_nodes * EngineImpl e OGraph g → RTensor {
 }
 
 // Convenience for a 2-D (dense) input.
-@ rt_run Engine e__h OGraph g * u input_host i in_rows i in_cols → RTensor {
+unsafe @ rt_run Engine e__h OGraph g * u input_host i in_rows i in_cols → RTensor {
     ^ ( rt_run_shaped e__h g input_host ( __shape2 in_rows in_cols ) )
 }
 
 // Download a device tensor into a fresh host f32 buffer — a GpuHost,
 // released with its last owner (`gpu_host_ptr` / `gpu_host_get_f32` read it).
-@ rt_download Engine e__h RTensor t → GpuHost {
+unsafe @ rt_download Engine e__h RTensor t → GpuHost {
     : i n . t nelem
     : GpuHost host ( gpu_host_alloc * n 4 )
     : i _rc ( gpu_download ( gpu_host_ptr host ) ( gpu_buffer_view . t dptr * n 4 ) )

@@ -21,7 +21,7 @@ unsafe @ __at * u o i na i ch i a → f { ^ ( nurl_peek_f32 o + * ch na a ) }
 
 // Decode the best detections above `thresh`. nc = number of classes, na =
 // anchors, no = total channels (4 + nc + masks).
-@ yolo_decode * u out i na i nc f thresh → ( Vec Detection ) {
+unsafe @ yolo_decode * u out i na i nc f thresh → ( Vec Detection ) {
     : ( Vec Detection ) dets ( vec_new [Detection] )
     : ~ i a 0
     ~ < a na {

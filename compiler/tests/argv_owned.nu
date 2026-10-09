@@ -21,7 +21,7 @@ $ `stdlib/std/args.nu`
 @ adopt_choice b adopt → v {
     : s raw ( nurl_argv_get -1 )
     ? adopt {
-        : String owned ( string_from_take raw + ( nurl_str_len raw ) 1 )
+        : String owned ( string_adopt raw )
         ( string_free owned )
     } {}
 }
@@ -64,4 +64,4 @@ unsafe @ main → i {
 
 @ forward_arg i index → s { ^ ( nurl_argv_get index ) }
 
-@ take_forward s raw i capacity → String { ^ ( string_from_take raw capacity ) }
+unsafe @ take_forward s raw i capacity → String { ^ ( string_from_take raw capacity ) }

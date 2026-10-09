@@ -36,7 +36,7 @@ $ `stdlib/core/vec.nu`
     ^ @ !Wide s { T @ Wide { ( string_from x ) ( string_from `bee` ) 7 } }
 }
 
-@ main → i {
+unsafe @ main → i {
     : ( Vec MPart ) v ( vec_new [MPart] )
     ( vec_push [MPart] v ( mk_part `alpha` 4 ) )
     ( vec_push [MPart] v ( mk_part `beta` 2 ) )

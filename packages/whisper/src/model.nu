@@ -497,14 +497,14 @@ unsafe @ __wh_raw_release * WhisperImpl w → v {
     ^ s2
 }
 
-@ __wh_up_dlayer * WhisperImpl w i layer s suffix ( Vec i ) dst → b {
+unsafe @ __wh_up_dlayer * WhisperImpl w i layer s suffix ( Vec i ) dst → b {
     : String nm ( __wh_dname layer suffix )
     : i d ( __wh_up w ( string_data nm ) )
     ( vec_push [i] dst d )
     ^ >= d 0
 }
 
-@ __wh_up_layer * WhisperImpl w i layer s suffix ( Vec i ) dst → b {
+unsafe @ __wh_up_layer * WhisperImpl w i layer s suffix ( Vec i ) dst → b {
     : String nm ( __wh_lname layer suffix )
     : i d ( __wh_up w ( string_data nm ) )
     ( vec_push [i] dst d )
@@ -549,7 +549,7 @@ unsafe @ __wh_source_done * WhisperImpl w → v {
     } {}
 }
 
-@ __wh_scratch * WhisperImpl w i nfloats → i {
+unsafe @ __wh_scratch * WhisperImpl w i nfloats → i {
     : i d ( __wh_carve w * nfloats 4 )
     ? == d 0 { ^ -1 } {}
     ^ d

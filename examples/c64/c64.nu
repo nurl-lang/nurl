@@ -31,7 +31,7 @@ $ `stdlib/ext/env.nu`
 
 // ── Run the functional test, watching for the trap self-loop ────────
 // Returns 0 on success ($3469 reached), 1 on a failure trap, 2 on error.
-@ run_test s path i budget i success → i {
+unsafe @ run_test s path i budget i success → i {
     : !( Vec u ) IoErr rr ( read_file_bytes path )
     : ~ i status 2
     ?? rr {
@@ -78,7 +78,7 @@ $ `stdlib/ext/env.nu`
 }
 
 // ── Boot mode: load the three C64 ROMs, run, dump the text screen ───
-@ run_boot s kpath s bpath s cpath i frames → i {
+unsafe @ run_boot s kpath s bpath s cpath i frames → i {
     ( c64_alloc )
     ?? ( read_file_bytes kpath ) {
         T k → { ( load_kernal ( vec_data [u] k ) ( vec_len [u] k ) ) }
@@ -101,7 +101,7 @@ $ `stdlib/ext/env.nu`
 }
 
 // ── PRG mode: boot, load a .prg, autostart it, dump the text screen ──
-@ load_rom_into s path i bank → b {  // bank: 0 kernal, 1 basic, 2 chargen
+unsafe @ load_rom_into s path i bank → b {  // bank: 0 kernal, 1 basic, 2 chargen
     ?? ( read_file_bytes path ) {
         T d → {
             ?? bank {
@@ -115,7 +115,7 @@ $ `stdlib/ext/env.nu`
     }
 }
 
-@ run_prg s kpath s bpath s cpath s prog i frames → i {
+unsafe @ run_prg s kpath s bpath s cpath s prog i frames → i {
     ( c64_alloc )
     ? ( load_rom_into kpath 0 ) {} { ^ 2 }
     ? ( load_rom_into bpath 1 ) {} { ^ 2 }
@@ -149,7 +149,7 @@ $ `stdlib/ext/env.nu`
 }
 
 // ── Disk mode: boot, attach a .d64, autostart its first program ─────
-@ run_d64 s kpath s bpath s cpath s dpath i frames → i {
+unsafe @ run_d64 s kpath s bpath s cpath s dpath i frames → i {
     ( c64_alloc )
     ? ( load_rom_into kpath 0 ) {} { ^ 2 }
     ? ( load_rom_into bpath 1 ) {} { ^ 2 }
@@ -194,7 +194,7 @@ $ `stdlib/ext/env.nu`
     ~ < f frames { ( run_one_frame ) = f + f 1 }
 }
 // Exercise the KERNAL LOAD trap: LOAD"$",8 then LIST the directory.
-@ run_d64dir s kpath s bpath s cpath s dpath → i {
+unsafe @ run_d64dir s kpath s bpath s cpath s dpath → i {
     ( c64_alloc )
     ? ( load_rom_into kpath 0 ) {} { ^ 2 }
     ? ( load_rom_into bpath 1 ) {} { ^ 2 }

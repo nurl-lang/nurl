@@ -997,7 +997,7 @@ $ `src/imptime.nu`
 // lock.
 : ~ i g_src_running 0
 
-@ __src_running → ( Vec String ) {
+unsafe @ __src_running → ( Vec String ) {
     ? != g_src_running 0 { ^ # ( Vec String ) g_src_running } {}
     : ( Vec String ) v ( vec_new [String] )
     = g_src_running # i v

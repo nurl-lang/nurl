@@ -142,7 +142,7 @@ unsafe @ swarm_join_group Swarm sw__h → v {
 
 // Announce presence; returns whether the broadcast reached the relay. A
 // failed send is the reconnect loop's signal that the relay is gone.
-@ swarm_announce_ok Swarm sw__h i want → b {
+unsafe @ swarm_announce_ok Swarm sw__h i want → b {
     ^ ( __swarm_announce_ok_at ( __Swarm_ptr sw__h ) want )
 }
 
@@ -1272,7 +1272,6 @@ unsafe @ mcp_swarm → Swarm { : *McpState st # *McpState g_mcp ^ ( Swarm_share 
 
 @ mcp_pump i rounds → v {
     : Swarm sw__h ( mcp_swarm )
-    : *SwarmImpl sw ( __Swarm_ptr sw__h )
     : ~ i k 0
     ~ < k rounds { ( swarm_pump sw__h 150 ) = k + k 1 }
     // Every pump also ages the roster: a worker that died stops heartbeating,
@@ -1907,7 +1906,6 @@ unsafe @ __iterate_round Swarm sw__h ( Vec u ) wasm i S i A ( Vec i ) xparams i 
 // The packed param buffer the update kernel reads is state ++ acc ++ [N] ++
 // xparams. Returns the failed-chunk count (0 = the whole state came back).
 @ __iterate_update Swarm sw__h ( Vec u ) uwasm i S i A ( Vec f ) grad i N ( Vec i ) xparams ( Vec f ) state → i {
-    : *SwarmImpl sw ( __Swarm_ptr sw__h )
     : ( Vec i ) up ( vec_new [i] )
     : ~ i j 0
     ~ < j S { ( vec_push [i] up ( f64_to_bits ?? ( vec_get [f] state j ) { T x → x F → 0.0 } ) ) = j + j 1 }
@@ -1940,7 +1938,6 @@ unsafe @ __iterate_round Swarm sw__h ( Vec u ) wasm i S i A ( Vec i ) xparams i 
 @ __ft_round_retries → i { ^ 3 }
 
 @ __iterate_round_ft Swarm sw__h ( Vec u ) wasm i S i A ( Vec i ) xparams i rlo i rhi ( Vec f ) state i dsid ( Vec String ) seeded inout i nseed_cell ( Vec f ) grad → i {
-    : *SwarmImpl sw ( __Swarm_ptr sw__h )
     : ~ i nf 1
     : ~ i att 0
     ~ & > nf 0 < att ( __ft_round_retries ) {
@@ -1952,7 +1949,6 @@ unsafe @ __iterate_round Swarm sw__h ( Vec u ) wasm i S i A ( Vec i ) xparams i 
 }
 
 @ __iterate_update_ft Swarm sw__h ( Vec u ) uwasm i S i A ( Vec f ) grad i N ( Vec i ) xparams ( Vec f ) state → i {
-    : *SwarmImpl sw ( __Swarm_ptr sw__h )
     : ~ i nf 1
     : ~ i att 0
     ~ & > nf 0 < att ( __ft_round_retries ) {
@@ -3177,7 +3173,7 @@ unsafe @ __mcp_task_augment s name Json args → ?Json {
 // server/discover and the --version banner all read this. It had
 // drifted to a hand-written 0.20.0 once already.
 
-@ sm_version → s { ^ `0.30.1` }
+@ sm_version → s { ^ `0.30.2` }
 
 @ sm_instructions → s {
     ^ `Distributed compute over a swarm cluster: submit expression / NURL / CUDA-C kernels over integer ranges or uploaded datasets, sample or histogram on GPU workers, and iterate (SGD or a custom update rule). Call swarm_help first — topic "start" for the workflow, "limits" for the envelope.`
@@ -3374,7 +3370,6 @@ unsafe @ mcp_reconnect → b {
 // gone — reconnect to the next. Returns T once a live relay is in place.
 @ mcp_ensure_relay → b {
     : Swarm sw__h ( mcp_swarm )
-    : *SwarmImpl sw ( __Swarm_ptr sw__h )
     ? ( swarm_announce_ok sw__h 0 ) { ^ T } {}
     ^ ( mcp_reconnect )
 }

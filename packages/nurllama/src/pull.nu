@@ -128,7 +128,7 @@ $ `src/store.nu`
     }
 }
 
-@ nl_pull String root s src s name_override → !v String {
+unsafe @ nl_pull String root s src s name_override → !v String {
     : !v String ir ( nl_store_init root )
     ?? ir {
         T _ → {}

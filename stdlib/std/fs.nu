@@ -251,11 +251,11 @@ $ `stdlib/core/rcbox.nu`
 // value: Windows has no st_blocks and no user database, and the
 // unikernel has neither plus no nanosecond timestamps.
 
-& `c` @ nurl_stat_into s path s out → i
+& `c` @ nurl_stat_into s path *u out → i
 
-& `c` @ nurl_lstat_into s path s out → i
+& `c` @ nurl_lstat_into s path *u out → i
 
-& `c` @ nurl_fstat_into i fd s out → i
+& `c` @ nurl_fstat_into i fd *u out → i
 
 & `c` @ nurl_stat_kind i mode → i
 
@@ -363,7 +363,7 @@ $ `stdlib/core/rcbox.nu`
 // an unanswerable question are different, and a caller that treats the
 // second as the first refuses to write for no reason.
 
-& `c` @ nurl_statfs_into s path s out → i
+& `c` @ nurl_statfs_into s path *u out → i
 
 : FsStat {
     i bsize  // preferred I/O size
@@ -495,7 +495,7 @@ $ `stdlib/core/rcbox.nu`
 // POSIX readlink(2) — writes the symlink's target into `buf` (NOT
 // NUL-terminated) and returns the byte count, or -1 with errno set
 // (EINVAL when `path` is not a symlink). `bufsiz` caps the write.
-& `c` @ readlink s path s buf i bufsiz → i
+& `c` @ readlink s path *u buf i bufsiz → i
 
 // Read the target a symbolic link points to, as an owned String.
 // Returns IoErr {Other} when `path` is not a symlink (errno = EINVAL),
@@ -623,9 +623,9 @@ $ `stdlib/core/rcbox.nu`
 
 // Buffered stdio bridge: retries interrupted reads, distinguishes I/O errors
 // from EOF, and preserves a prefix already read before an interruption.
-& `c` @ nurl_stream_read s stream *u dst i room → i
+& `c` @ nurl_stream_read *u stream *u dst i room → i
 
-& `c` @ fileno s stream → i32
+& `c` @ fileno *u stream → i32
 
 // File size is only a capacity hint from the opened regular file. Pipes,
 // procfs, growing files and short reads all use the same EOF-driven reader.
@@ -751,7 +751,7 @@ $ `stdlib/core/rcbox.nu`
 
 // `file_read_chunk` below calls fread(buf, 1, n, h) directly into a
 // Vec[u]'s data buffer; ferror gates the read-error path.
-& `c` @ ferror s h → i32
+& `c` @ ferror *u h → i32
 
 // ── probe + mutation ───────────────────────────────────────────────
 // access(2) / remove(3) / mkdir(2) / rmdir(2) wrappers. `access`
@@ -1029,7 +1029,7 @@ $ `stdlib/core/rcbox.nu`
 : i FS_SEEK_CUR 1
 : i FS_SEEK_END 2
 
-& `c` @ fflush s h → i32
+& `c` @ fflush *u h → i32
 
 @ __file_open_mode s path s mode → !File IoErr {
     : *v h ( nurl_file_open path mode )
@@ -1152,13 +1152,13 @@ $ `stdlib/core/rcbox.nu`
 // publication boundary. It never unlinks the old destination before success.
 & `c` @ nurl_fs_rename s oldp s newp → i32
 
-& `c` @ nurl_fs_tempdir s template → i32
+& `c` @ nurl_fs_tempdir *u template → i32
 
 // libc mkstemp(3): the template's trailing "XXXXXX" is replaced in
 // place with a unique suffix; creates the file 0600 and returns an
 // open fd (or -1). We close the fd and hand back the path — callers
 // write through the normal write_file* helpers.
-& `c` @ mkstemp s template → i32
+& `c` @ mkstemp *u template → i32
 
 // Rename / move `from` to `to`, atomically replacing an existing file on
 // the same filesystem. Cross-device and platform sharing restrictions fail

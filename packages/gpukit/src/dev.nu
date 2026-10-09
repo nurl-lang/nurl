@@ -51,7 +51,7 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
 // pool it came from (held, so the kit — and its device — outlive it).
 : GkMemImpl { i dptr GpuKit kit }
 
-% Drop GkMemImpl { @ drop GkMemImpl x → v { ( _gk_pool_give ( _GpuKit_ptr . x kit ) . x dptr ) } }
+% Drop GkMemImpl { unsafe @ drop GkMemImpl x → v { ( _gk_pool_give ( _GpuKit_ptr . x kit ) . x dptr ) } }
 
 : GkMem { s ctl }
 
@@ -210,7 +210,7 @@ unsafe @ gk_dbuf_download GpuKit kit GkBuf b ( Vec f ) dst → b {
 // walks every element through f64 twice (widen on read, narrow on
 // upload) and allocates two host buffers the size of the tensor to do
 // it. On a 4.6 GB model that is most of the load.
-@ gk_dbuf_upload_raw GpuKit kit GkBuf b * u src → b {
+unsafe @ gk_dbuf_upload_raw GpuKit kit GkBuf b * u src → b {
     ? & ( gk_buf_ok b ) != # i src 0 {} { ^ F }
     ^ == ( gpu_upload ( gpu_buffer_view . b dptr * . b n ( __gk_esz . b dtype ) ) src ) 0
 }

@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.2.2] — 2026-10-09
+
+Requires NURL 0.72.0, which draws the raw-memory boundary at every call:
+only an `unsafe` function may call one taking or handing back a raw
+pointer (`*T`), build a library handle (a `Slice`, a `Vec`, …) field by
+field, or call a C primitive that reads as far as its caller says. The
+published 0.2.1 does not compile under 0.72.0.
+
+### Changed
+
+- The server reads a call out of its table as a borrow of the table
+  alone, and reads it again after each write to its slot, as 0.72.0's
+  exclusivity rules require; a received trailer block goes into the
+  table at once. Metadata values are base64-encoded with
+  `b64_encode_string`. Nothing changes on the wire.
+
 ## [0.2.1] — 2026-10-07
 
 Requires NURL 0.71.0, whose ownership rules are on by default: the

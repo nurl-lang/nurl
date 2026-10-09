@@ -102,7 +102,7 @@ unsafe @ gpfuse_plan_bnames GpPlan pl__h → ( Vec String ) {
 // ── analysis ─────────────────────────────────────────────────────────
 
 // Is node k row-local over B rows? (see the header for the definition)
-@ _gpf_rowlocal * GProgImpl pg i k i B → b {
+unsafe @ _gpf_rowlocal * GProgImpl pg i k i B → b {
     : GpNode nd ( _gp_node pg k )
     ? & == . nd rows B > . nd cols 0 {} { ^ F }
     : i op . nd op
@@ -160,7 +160,7 @@ unsafe @ gpfuse_plan_bnames GpPlan pl__h → ( Vec String ) {
 }
 
 // One fused-segment kernel over nodes [lo, hi].
-@ _gpf_emit_seg * GProgImpl pg i lo i hi i B s kname String o → v {
+unsafe @ _gpf_emit_seg * GProgImpl pg i lo i hi i B s kname String o → v {
     ( string_push_str o `extern "C" __global__ void ` )
     ( string_push_str o kname )
     ( string_push_str o `(const long long* vt, long long B)\n{\n` )
@@ -242,7 +242,7 @@ unsafe @ gpfuse_plan_bnames GpPlan pl__h → ( Vec String ) {
 }
 
 // `b`-side element: matched shape, per-row vector, or scalar.
-@ _gpf_inb String o * GProgImpl pg i inid i C → v {
+unsafe @ _gpf_inb String o * GProgImpl pg i inid i C → v {
     : GpNode nb ( _gp_node pg inid )
     ? & == . nb rows 0 == . nb n 1 {
         ( _gpf_t o inid )
@@ -259,7 +259,7 @@ unsafe @ gpfuse_plan_bnames GpPlan pl__h → ( Vec String ) {
 
 // The per-element expression for fused node k — the EXACT per-node kernel
 // arithmetic (gp_ew_bc / gp_scal / gp_trans / gp_matmul), spelled inline.
-@ _gpf_expr * GProgImpl pg i k String o → v {
+unsafe @ _gpf_expr * GProgImpl pg i k String o → v {
     : GpNode nd ( _gp_node pg k )
     : i op . nd op
     : i C . nd cols
@@ -596,7 +596,7 @@ unsafe @ gpfuse_forward GProg pg__h GpPlan pl__h → b {
 }
 
 // Is ew input `inid` the same [B,c] shape as consumer `nd`?
-@ _gpf_same * GProgImpl pg i inid i B i C → b {
+unsafe @ _gpf_same * GProgImpl pg i inid i B i C → b {
     : GpNode m ( _gp_node pg inid )
     ^ & == . m rows B == . m cols C
 }
@@ -624,7 +624,7 @@ unsafe @ gpfuse_forward GProg pg__h GpPlan pl__h → b {
 }
 
 // Row-space bwd kernel body for segment [lo,hi]; stage count returned.
-@ _gpf_emit_bwd_stages * GProgImpl pg i lo i hi i B String o ( Vec i ) vids ( Vec i ) gids → i {
+unsafe @ _gpf_emit_bwd_stages * GProgImpl pg i lo i hi i B String o ( Vec i ) vids ( Vec i ) gids → i {
     : ~ i stages 0
     : ~ i k hi
     ~ >= k lo {
@@ -819,7 +819,7 @@ unsafe @ gpfuse_forward GProg pg__h GpPlan pl__h → b {
 
 // Param-space jobs of segment [lo,hi], descending consumer order, encoded
 // as (target, kind, consumer) triples — kind 0 = matmul dW, 1 = ew b-side.
-@ _gpf_param_jobs * GProgImpl pg i lo i hi i B ( Vec i ) jobs → v {
+unsafe @ _gpf_param_jobs * GProgImpl pg i lo i hi i B ( Vec i ) jobs → v {
     : ~ i k hi
     ~ >= k lo {
         : GpNode nd ( _gp_node pg k )
@@ -848,7 +848,7 @@ unsafe @ gpfuse_forward GProg pg__h GpPlan pl__h → b {
 
 // Order safety: no gradient may collect BOTH row-space and param-space
 // contributions inside one segment (the split would reorder them).
-@ _gpf_bwd_ok * GProgImpl pg i lo i hi i B → b {
+unsafe @ _gpf_bwd_ok * GProgImpl pg i lo i hi i B → b {
     : ( Vec i ) rowt ( vec_new [i] )
     : ~ i k lo
     ~ <= k hi {
@@ -887,7 +887,7 @@ unsafe @ gpfuse_forward GProg pg__h GpPlan pl__h → b {
 // The param-space kernel: one grid-stride stage per distinct target, jobs
 // serial inside each thread — gp_bw_mm_b / gp_bw_accred element order.
 // Returns the widest target n (grid sizing); 0 when there are no jobs.
-@ _gpf_emit_param * GProgImpl pg i lo i hi i B String body ( Vec i ) vids ( Vec i ) gids → i {
+unsafe @ _gpf_emit_param * GProgImpl pg i lo i hi i B String body ( Vec i ) vids ( Vec i ) gids → i {
     : ( Vec i ) jobs ( vec_new [i] )
     ( _gpf_param_jobs pg lo hi B jobs )
     : i nj / ( vec_len [i] jobs ) 3
@@ -1003,7 +1003,7 @@ unsafe @ gpfuse_forward GProg pg__h GpPlan pl__h → b {
 }
 
 // Assemble the row-space bwd kernel; F when the segment has no stages.
-@ _gpf_emit_bwd_seg * GProgImpl pg i lo i hi i B s kname String o → b {
+unsafe @ _gpf_emit_bwd_seg * GProgImpl pg i lo i hi i B s kname String o → b {
     : String body ( string_new )
     : ( Vec i ) vids ( vec_new [i] )
     : ( Vec i ) gids ( vec_new [i] )
@@ -1031,7 +1031,7 @@ unsafe @ gpfuse_forward GProg pg__h GpPlan pl__h → b {
 }
 
 // Assemble the param-space kernel; returns the widest target n (0 = none).
-@ _gpf_emit_param_seg * GProgImpl pg i lo i hi i B s kname String o → i {
+unsafe @ _gpf_emit_param_seg * GProgImpl pg i lo i hi i B s kname String o → i {
     : String body ( string_new )
     : ( Vec i ) vids ( vec_new [i] )
     : ( Vec i ) gids ( vec_new [i] )
@@ -1219,7 +1219,7 @@ unsafe @ _gpf_in_rowseg * GpPlanImpl pl i k → b {
     ^ F
 }
 
-@ _gpf_serial_ok * GProgImpl pg i k → b {
+unsafe @ _gpf_serial_ok * GProgImpl pg i k → b {
     : GpNode nd ( _gp_node pg k )
     : i op . nd op
     ? <= op ( gop_const ) { ^ F }
@@ -1252,13 +1252,13 @@ unsafe @ _gpf_in_rowseg * GpPlanImpl pl i k → b {
 }
 
 // b-side element with the scalar-[1] broadcast collapsed to [0].
-@ _gpf_sinb String o * GProgImpl pg i inid s ix → v {
+unsafe @ _gpf_sinb String o * GProgImpl pg i inid s ix → v {
     : GpNode nb ( _gp_node pg inid )
     ( _gpf_sel o inid ? == . nb n 1 `0` ix )
 }
 
 // Serial forward stages; node values in program order, exact expressions.
-@ _gpf_emit_ser_stages * GProgImpl pg i lo i hi String o ( Vec i ) vids → i {
+unsafe @ _gpf_emit_ser_stages * GProgImpl pg i lo i hi String o ( Vec i ) vids → i {
     : ~ i stages 0
     : ~ i k lo
     ~ <= k hi {
@@ -1300,7 +1300,7 @@ unsafe @ _gpf_in_rowseg * GpPlanImpl pl i k → b {
 
 // The serial per-element expression at flat index e (gp_ew_bc / gp_scal /
 // gp_trans forms with the trivial layouts this class permits).
-@ _gpf_sexpr * GProgImpl pg i k String o → v {
+unsafe @ _gpf_sexpr * GProgImpl pg i k String o → v {
     : GpNode nd ( _gp_node pg k )
     : i op . nd op
     ? == op ( gop_add ) { ( string_push_str o `__dadd_rn(` ) ( _gpf_sel o . nd a `e` ) ( string_push_str o `, ` ) ( _gpf_sinb o pg . nd b `e` ) ( string_push_str o `)` ) ^ v } {}
@@ -1328,7 +1328,7 @@ unsafe @ _gpf_in_rowseg * GpPlanImpl pl i k → b {
 
 // Serial backward stages hi→lo — gp_bw_reduce / gp_bw_unary / accred
 // element order, one thread, exact accumulate order per element.
-@ _gpf_emit_ser_bwd_stages * GProgImpl pg i lo i hi String o ( Vec i ) vids ( Vec i ) gids → i {
+unsafe @ _gpf_emit_ser_bwd_stages * GProgImpl pg i lo i hi String o ( Vec i ) vids ( Vec i ) gids → i {
     : ~ i stages 0
     : ~ i k hi
     ~ >= k lo {
@@ -1451,7 +1451,7 @@ unsafe @ _gpf_in_rowseg * GpPlanImpl pl i k → b {
 }
 
 // mul/div/add/sub b-side source element (accred's scr chain, inline).
-@ _gpf_ser_bsrc * GProgImpl pg i k String o → v {
+unsafe @ _gpf_ser_bsrc * GProgImpl pg i k String o → v {
     : GpNode nd ( _gp_node pg k )
     : i op . nd op
     ? == op ( gop_mul ) {
@@ -1476,7 +1476,7 @@ unsafe @ _gpf_in_rowseg * GpPlanImpl pl i k → b {
 }
 
 // gp_bw_unary's accumulate expression with gi bound, serial index e.
-@ _gpf_ser_unary * GProgImpl pg i k String o → v {
+unsafe @ _gpf_ser_unary * GProgImpl pg i k String o → v {
     : GpNode nd ( _gp_node pg k )
     : i op . nd op
     ? == op ( gop_neg ) { ( string_push_str o `__dsub_rn(` ) ( _gpf_sgel o . nd a `e` ) ( string_push_str o `, gi)` ) ^ v } {}
@@ -1495,7 +1495,7 @@ unsafe @ _gpf_in_rowseg * GpPlanImpl pl i k → b {
 }
 
 // Assemble the serial fwd kernel (T on success — always has stages).
-@ _gpf_emit_ser_seg * GProgImpl pg i lo i hi s kname String o → b {
+unsafe @ _gpf_emit_ser_seg * GProgImpl pg i lo i hi s kname String o → b {
     : String body ( string_new )
     : ( Vec i ) vids ( vec_new [i] )
     : i stages ( _gpf_emit_ser_stages pg lo hi body vids )
@@ -1517,7 +1517,7 @@ unsafe @ _gpf_in_rowseg * GpPlanImpl pl i k → b {
 }
 
 // Assemble the serial bwd kernel (F when no reach-1 stages).
-@ _gpf_emit_ser_bwd_seg * GProgImpl pg i lo i hi s kname String o → b {
+unsafe @ _gpf_emit_ser_bwd_seg * GProgImpl pg i lo i hi s kname String o → b {
     : String body ( string_new )
     : ( Vec i ) vids ( vec_new [i] )
     : ( Vec i ) gids ( vec_new [i] )

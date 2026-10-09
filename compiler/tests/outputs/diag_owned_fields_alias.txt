@@ -1,6 +1,6 @@
 COMPILE FAIL
 ERRORS
-compiler/tests/diag_owned_fields_alias.nu:15:5: error: 'tmp' owns raw string or slice fields that are freed when 'tmp' goes out of scope; 'out' would be a second name for them that can outlive them (a use after free). Give the struct owning field types (String, Vec) so the value can move, or build the struct where it is kept instead of copying it from 'tmp' (code that manages those fields by hand belongs in an 'unsafe' function).
+compiler/tests/diag_owned_fields_alias.nu:17:5: error: 'tmp' owns raw string or slice fields that are freed when 'tmp' goes out of scope; 'out' would be a second name for them that can outlive them (a use after free). Give the struct owning field types (String, Vec) so the value can move, or build the struct where it is kept instead of copying it from 'tmp' (code that manages those fields by hand belongs in an 'unsafe' function).
     } {}
     ^
 error: aborting due to 1 previous error

@@ -14,12 +14,14 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/std/fs.nu`
 $ `model.nu`
 $ `report.nu`
+$ `stdlib/core/slice.nu`
 
 @ __ht_esc String out s text → v {
-    : i n ( nurl_str_len text )
+    : ( Slice u ) text_b ( slice_of_str text )
+    : i n ( slice_len [u] text_b )
     : ~ i k 0
     ~ < k n {
-        : i ch ( nurl_str_at text n k )
+        : i ch ( slice_byte text_b k )
         ? == ch 38 { ( string_push_str out `&amp;` ) } {
             ? == ch 60 { ( string_push_str out `&lt;` ) } {
                 ? == ch 62 { ( string_push_str out `&gt;` ) } {
@@ -174,11 +176,12 @@ $ `report.nu`
 
 @ __ht_split s text → ( Vec String ) {
     : ( Vec String ) out ( vec_new [String] )
-    : i n ( nurl_str_len text )
+    : ( Slice u ) text_b ( slice_of_str text )
+    : i n ( slice_len [u] text_b )
     : ~ i start 0
     : ~ i i 0
     ~ < i n {
-        ? == 10 ( nurl_str_at text n i ) {
+        ? == 10 ( slice_byte text_b i ) {
             ( vec_push [String] out ( __ht_slice text start - i start ) )
             = start + i 1
         } {}

@@ -41,7 +41,7 @@ $ `stdlib/core/posix.nu`  // posix_const + nurl_errno_get
 
 & `c` @ unsetenv s name → i32
 
-& `c` @ getcwd s buf i size → s
+& `c` @ getcwd *u buf i size → s
 
 & `c` @ chdir s path → i32
 

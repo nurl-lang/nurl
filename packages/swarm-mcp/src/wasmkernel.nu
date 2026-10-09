@@ -44,6 +44,7 @@ $ `deps/nwasm/src/module.nu`
 $ `deps/nwasm/src/interp.nu`
 $ `blob.nu`
 $ `token.nu`
+$ `stdlib/core/slice.nu`
 
 @ kind_wasm → i { ^ 2 }
 
@@ -394,11 +395,12 @@ $ `token.nu`
 @ chunk_err_max → i { ^ 400 }
 
 @ chunk_err_push ( Vec u ) r s msg → v {
-    : i n0 ( nurl_str_len msg )
+    : ( Slice u ) msg_b ( slice_of_str msg )
+    : i n0 ( slice_len [u] msg_b )
     ? == n0 0 { ^ v } {}
     : i n ? > n0 ( chunk_err_max ) ( chunk_err_max ) n0
     : ~ i k 0
-    ~ < k n { ( vec_push [u] r # u ( nurl_str_at msg n0 k ) ) = k + k 1 }
+    ~ < k n { ( vec_push [u] r # u ( slice_byte msg_b k ) ) = k + k 1 }
     ( bytes_push_u16_be r # u16 n )
     ( vec_push [u] r # u ( chunk_err_marker ) )
 }

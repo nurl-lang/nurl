@@ -36,6 +36,7 @@ $ `stdlib/std/fs.nu`
 $ `stdlib/std/encode.nu`
 $ `stdlib/ext/json.nu`
 $ `stdlib/core/rcbox.nu`
+$ `stdlib/core/slice.nu`
 
 : UnigramImpl {
     ( Vec String ) pieces
@@ -99,10 +100,11 @@ unsafe @ __Unigram_ptr Unigram h → *UnigramImpl { ^ ( rcbox_ptr [UnigramImpl] 
 : i UNI_FNV_PRIME 1099511628211
 
 @ __uni_fnv s ptr i len → i {
+    : ( Slice u ) pb ( slice_of_str ptr )
     : ~ i h UNI_FNV_OFF
     : ~ i k 0
     ~ < k len {
-        = h ^^ h ( nurl_str_at ptr len k )
+        = h ^^ h ( slice_byte pb k )
         = h * h UNI_FNV_PRIME
         = k + k 1
     }

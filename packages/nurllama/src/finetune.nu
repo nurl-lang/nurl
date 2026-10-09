@@ -1007,7 +1007,7 @@ unsafe @ ft_stream_upload FtModel m__h GProg pg → b {
 }
 
 // The element count of pids entry `pi` (A blocks are even, B odd).
-@ __ft_ckpt_n * FtModelImpl m i r i pi → i {
+unsafe @ __ft_ckpt_n * FtModelImpl m i r i pi → i {
     : i sl / pi 2
     ? == % pi 2 0 { ^ * ( __ft_ain m sl ) r } {}
     ^ * r ( __ft_aout m sl )
@@ -1025,7 +1025,7 @@ unsafe @ ft_stream_upload FtModel m__h GProg pg → b {
     } { ( __ft_st_add so name val n 0 ) }
 }
 
-@ __ft_ckpt_save s path * FtModelImpl m i r GProg pg GpOpt go ( Vec i ) pids i nslot i step i dtype i wstr → b {
+unsafe @ __ft_ckpt_save s path * FtModelImpl m i r GProg pg GpOpt go ( Vec i ) pids i nslot i step i dtype i wstr → b {
     : StWriter so ( stw_new )
     : ( Vec i ) meta ( vec_new [i] )
     ( vec_push [i] meta 1 )
@@ -1143,7 +1143,7 @@ unsafe @ __ft_ckpt_vals64 St st StTensor t → ( Vec f ) {
 // caller starts fresh); a shape/meta MISMATCH also reports F after
 // printing why — resuming a different run over it would be silent ruin,
 // so the caller must treat mismatch as fatal (mismb is poked 1).
-@ __ft_ckpt_load s path * FtModelImpl m i r GProg pg GpOpt go ( Vec i ) pids i nslot i wstr inout i stepout inout b mismatch → b {
+unsafe @ __ft_ckpt_load s path * FtModelImpl m i r GProg pg GpOpt go ( Vec i ) pids i nslot i wstr inout i stepout inout b mismatch → b {
     = mismatch F
     ?? ( st_open path ) {
         T st → {

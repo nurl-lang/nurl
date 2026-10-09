@@ -337,7 +337,7 @@ unsafe @ __lsm_write * LsmImpl db ( Vec u ) key ( Vec u ) val i kind → !v Stri
     ^ @ !v String { T 0 }
 }
 
-@ lsm_put Lsm db__h ( Vec u ) key ( Vec u ) val → !v String {
+unsafe @ lsm_put Lsm db__h ( Vec u ) key ( Vec u ) val → !v String {
     : *LsmImpl db ( __Lsm_ptr db__h )
     ? == ( vec_len [u] key ) 0 {
         ^ @ !v String { F ( __lsm_err `lsmdb: the empty key is not a key` ) }
@@ -345,7 +345,7 @@ unsafe @ __lsm_write * LsmImpl db ( Vec u ) key ( Vec u ) val i kind → !v Stri
     ^ ( __lsm_write db key val MT_PUT )
 }
 
-@ lsm_del Lsm db__h ( Vec u ) key → !v String {
+unsafe @ lsm_del Lsm db__h ( Vec u ) key → !v String {
     : *LsmImpl db ( __Lsm_ptr db__h )
     : ( Vec u ) empty ( vec_new [u] )
     ^ ( __lsm_write db key empty MT_DEL )
@@ -361,7 +361,7 @@ unsafe @ lsm_get Lsm db__h ( Vec u ) key → !LsmGet String {
 // The read path in full: memtable, then tables newest to oldest. The
 // FIRST version found wins, and a tombstone counts as found — that is
 // what stops an older table's stale value from resurrecting a deleted key.
-@ lsm_get_at Lsm db__h ( Vec u ) key i snap → !LsmGet String {
+unsafe @ lsm_get_at Lsm db__h ( Vec u ) key i snap → !LsmGet String {
     : *LsmImpl db ( __Lsm_ptr db__h )
     ^ ( __lsm_get_at db key snap )
 }
@@ -630,7 +630,7 @@ unsafe @ lsm_scan Lsm db__h ( Vec u ) from ( Vec u ) to i limit i snap → !LsmS
 // newest — the memtable is the newest data in the database, and throwing
 // away its history here would silently break snapshot reads that the
 // tables themselves still support.
-@ lsm_flush Lsm db__h → !i String {
+unsafe @ lsm_flush Lsm db__h → !i String {
     : *LsmImpl db ( __Lsm_ptr db__h )
     ^ ( __lsm_flush db )
 }

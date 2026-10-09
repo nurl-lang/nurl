@@ -60,11 +60,13 @@ accurate user-facing documentation. A local one-off pass is not sufficient.
 
 ## 2. Language and runtime safety
 
-- [ ] **P0 — Close the remaining safe-looking ownership holes.** *(0.71.0,
+- [x] **P0 — Close the remaining safe-looking ownership holes.** *(0.71.0,
   #1165–#1167: maybe-moved reads, conditional double-frees, owner state
   through aggregates and containers, and closures kept by a callee are
   rejected; hole probes h01–h31 are all rejected and safe programs carry a
-  stated guarantee, docs/MEMORY.md §6. Open: h32, a `Slice` of a `Vec`.)*
+  stated guarantee, docs/MEMORY.md §6. Then h32, a `Slice` of a `Vec`, and
+  the 109 probes found around it (h33–h141) — every one rejected or clean;
+  the guarantee has no exception. docs/HARDENING_PLAN.md.)*
   Code using no
   raw pointer or FFI can still read a maybe-moved value in both modes, and can
   conditionally double-free under the default checker. Reads through a released
@@ -142,7 +144,13 @@ accurate user-facing documentation. A local one-off pass is not sufficient.
     noinline/LTO-sensitive TLS-read boundary, and the rule that edge-triggered
     wrappers attempt I/O before waiting.
 
-- [ ] **P0 — Check all allocation and capacity arithmetic before allocation.**
+- [x] **P0 — Check all allocation and capacity arithmetic before allocation.**
+  *(Resolved: `alloc_size`, `alloc_count_add`, `alloc_grow_cap` and
+  `alloc_grow_pow2` in stdlib/core/vec.nu carry every size the library
+  allocates for a caller's count — Vec, String, HashMap, Set, Bitset,
+  `alloc` — and panic before anything is allocated (probes h77–h79). The
+  runtime's length-taking entry points are raw primitives, callable only
+  from `unsafe` code, whose caller vouches for the length.)*
   Vec, HashMap, and Set growth contain unchecked addition, multiplication, and
   doubling; runtime entry points can cast negative signed lengths to `size_t`
   (`stdlib/core/vec.nu`, `stdlib/std/hashmap.nu`, `stdlib/std/set.nu`, and

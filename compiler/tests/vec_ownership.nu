@@ -1,5 +1,6 @@
-// Test: Vec[String] ownership — caller iterates and string_free's each
-// element before vec_free, since Vec does NOT auto-drop elements.
+// Test: Vec[String] ownership — the Vec owns its elements: vec_free drops
+// each String with it. An element read with vec_get is a borrow, which the
+// program never releases by its own name.
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
 
@@ -32,16 +33,7 @@ $ `stdlib/core/string.nu`
         = i + i 1
     }
 
-    // Element cleanup: walk the Vec and free each String, then free the Vec.
-    = i 0
-    ~ < i ( vec_len [String] v ) {
-        : ?String got ( vec_get [String] v i )
-        ?? got {
-            T s → ( string_free s )
-            F → {}
-        }
-        = i + i 1
-    }
+    // Cleanup: the Vec drops each String with it.
     ( vec_free [String] v )
 
     ( nurl_print `done\n` )

@@ -24,6 +24,7 @@ $ `stdlib/std/fs.nu`
 $ `gcov.nu`
 $ `lines.nu`
 $ `stdlib/core/rcbox.nu`
+$ `stdlib/core/slice.nu`
 
 : CovFn {
     String name
@@ -116,7 +117,7 @@ unsafe @ cov_file_path Cov c__h i idx → s {
 }
 
 // The row for `path`, created when this is the first object to mention it.
-@ cov_file_idx Cov c__h s path → i { ^ ( __cov_file_idx ( __Cov_ptr c__h ) path ) }
+unsafe @ cov_file_idx Cov c__h s path → i { ^ ( __cov_file_idx ( __Cov_ptr c__h ) path ) }
 
 unsafe @ __cov_file_idx * CovImpl c s path → i {
     : i n ( vec_len [CovFile] . c files )
@@ -279,11 +280,13 @@ unsafe @ cov_keep_only Cov c__h ( Vec String ) prefixes → v {
 }
 
 @ __cov_has_prefix s path s prefix → b {
-    : i n ( nurl_str_len prefix )
-    ? > n ( nurl_str_len path ) { ^ F } {}
+    : ( Slice u ) pb ( slice_of_str prefix )
+    : ( Slice u ) hb ( slice_of_str path )
+    : i n ( slice_len [u] pb )
+    ? > n ( slice_len [u] hb ) { ^ F } {}
     : ~ i k 0
     ~ < k n {
-        ? != ( nurl_str_at path ( nurl_str_len path ) k ) ( nurl_str_at prefix n k ) {
+        ? != ( slice_byte hb k ) ( slice_byte pb k ) {
             ^ F
         } {}
         = k + k 1

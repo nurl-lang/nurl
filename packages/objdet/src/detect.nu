@@ -58,7 +58,7 @@ $ `stdlib/std/float.nu`
 unsafe @ __gv * u grid i ch i cy i cx → f { ^ ( nurl_peek_f32 grid + * ch 169 + * cy 13 cx ) }
 
 // Decode the grid into detections above `thresh`.
-@ yolo_decode * u grid f thresh → ( Vec Detection ) {
+unsafe @ yolo_decode * u grid f thresh → ( Vec Detection ) {
     : ( Vec Detection ) out ( vec_new [Detection] )
     : ~ i cy 0
     ~ < cy 13 {

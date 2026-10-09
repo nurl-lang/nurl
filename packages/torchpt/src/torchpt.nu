@@ -84,7 +84,7 @@ $ `stdlib/core/rcbox.nu`
 // The mapping is the raw resource: its last owner unmaps it, as pt_close
 // did. The tensor table and the buffer go with the drop glue.
 % Drop PtImpl {
-    @ drop PtImpl p → v {
+    unsafe @ drop PtImpl p → v {
         ? . p from_mmap { : i32 _u ( munmap . p map . p map_size ) } {}
     }
 }
@@ -127,17 +127,17 @@ unsafe @ pt_n_tensors Pt p__h → i {
 
 unsafe @ __pt_at * PtImpl p i idx → ?PtTensor { ^ ( vec_get [PtTensor] . p tensors idx ) }
 
-@ pt_name Pt p__h i idx → s {
+unsafe @ pt_name Pt p__h i idx → s {
     : *PtImpl p ( __Pt_ptr p__h )
     ?? ( __pt_at p idx ) { T t → ^ ( string_data . t name ) F → ^ `` }
 }
 
-@ pt_dtype Pt p__h i idx → i {
+unsafe @ pt_dtype Pt p__h i idx → i {
     : *PtImpl p ( __Pt_ptr p__h )
     ?? ( __pt_at p idx ) { T t → ^ . t dtype F → ^ PKS_UNKNOWN }
 }
 
-@ pt_ndim Pt p__h i idx → i {
+unsafe @ pt_ndim Pt p__h i idx → i {
     : *PtImpl p ( __Pt_ptr p__h )
     ?? ( __pt_at p idx ) { T t → ^ . t ndim F → ^ 0 }
 }
@@ -164,22 +164,22 @@ unsafe @ pt_stride Pt p__h i idx i j → i {
     }
 }
 
-@ pt_nelems Pt p__h i idx → i {
+unsafe @ pt_nelems Pt p__h i idx → i {
     : *PtImpl p ( __Pt_ptr p__h )
     ?? ( __pt_at p idx ) { T t → ^ . t nelems F → ^ 0 }
 }
 
-@ pt_nbytes Pt p__h i idx → i {
+unsafe @ pt_nbytes Pt p__h i idx → i {
     : *PtImpl p ( __Pt_ptr p__h )
     ?? ( __pt_at p idx ) { T t → ^ . t nbytes F → ^ 0 }
 }
 
-@ pt_is_contiguous Pt p__h i idx → b {
+unsafe @ pt_is_contiguous Pt p__h i idx → b {
     : *PtImpl p ( __Pt_ptr p__h )
     ?? ( __pt_at p idx ) { T t → ^ == . t contiguous 1 F → ^ F }
 }
 
-@ pt_offset Pt p__h i idx → i {
+unsafe @ pt_offset Pt p__h i idx → i {
     : *PtImpl p ( __Pt_ptr p__h )
     ?? ( __pt_at p idx ) { T t → ^ . t data_off F → ^ -1 }
 }
@@ -549,9 +549,9 @@ unsafe @ __pt_elem_index * PtImpl p i idx i n → i {
 
 unsafe @ __pt_u16 * u P i o → i { ^ + # i . P o * # i . P + o 1 256 }
 
-@ __pt_u32 * u P i o → i { ^ + ( __pt_u16 P o ) * ( __pt_u16 P + o 2 ) 65536 }
+unsafe @ __pt_u32 * u P i o → i { ^ + ( __pt_u16 P o ) * ( __pt_u16 P + o 2 ) 65536 }
 
-@ __pt_u64 * u P i o → i { ^ + ( __pt_u32 P o ) * ( __pt_u32 P + o 4 ) 4294967296 }
+unsafe @ __pt_u64 * u P i o → i { ^ + ( __pt_u32 P o ) * ( __pt_u32 P + o 4 ) 4294967296 }
 
 unsafe @ __pt_elem_f32bits i dtype * u P i off → i {
     ? == dtype PKS_F32 { ^ ( __pt_u32 P off ) } {}
@@ -578,7 +578,7 @@ unsafe @ __pt_elem_f32bits i dtype * u P i off → i {
     ^ 0
 }
 
-@ pt_dequant_range Pt p__h i idx i first i count → !( Vec u ) String {
+unsafe @ pt_dequant_range Pt p__h i idx i first i count → !( Vec u ) String {
     : *PtImpl p ( __Pt_ptr p__h )
     ? | < idx 0 >= idx ( pt_n_tensors p__h ) { ^ ( __pt_err_vec `torchpt: tensor index out of range` ) } {}
     : i nelems ( pt_nelems p__h idx )

@@ -591,7 +591,7 @@ $ `src/service.nu`
     ^ 0
 }
 
-@ body_of HttpResponse resp → String {
+unsafe @ body_of HttpResponse resp → String {
     ^ ( string_from_bytes ( vec_data [u] . resp body ) ( vec_len [u] . resp body ) )
 }
 

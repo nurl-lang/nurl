@@ -128,10 +128,12 @@ $ `clip_merges_data.nu`
     ^ -1
 }
 
-// Register a key→id mapping, taking ownership of `key` in the arena.
-@ __enc_put Tokenizer tk String key i id → v {
-    ( vec_push [String] . tk arena key )
-    ( __msi_set . tk enc ( string_data key ) id )
+// Register a key→id mapping, taking ownership of `key` in the arena. It
+// changes only the arena and the encoder table (`. tk arena`, `. tk enc`),
+// so a symbol read out of `. tk byte_enc` stays valid across it.
+@ __enc_put ( Vec String ) arena ( HashMap s i ) enc String key i id → v {
+    ( vec_push [String] arena key )
+    ( __msi_set enc ( string_data key ) id )
 }
 
 // The tokenizer that encodes nothing (sot=-1): a placeholder for a struct
@@ -161,11 +163,11 @@ $ `clip_merges_data.nu`
         : String sym ?? ( vec_get [String] . tk byte_enc b ) { T s → s F _ → ( string_new ) }
         // base symbol (id j): key = a fresh copy so the arena owns it
         : String k0 ( string_from ( string_data sym ) )
-        ( __enc_put tk k0 j )
+        ( __enc_put . tk arena . tk enc k0 j )
         // </w> variant (id 256+j)
         : String k1 ( string_from ( string_data sym ) )
         ( string_push_str k1 `</w>` )
-        ( __enc_put tk k1 + 256 j )
+        ( __enc_put . tk arena . tk enc k1 + 256 j )
         = j + j 1
     }
     // merges: line r → rank r, vocab token (a+b) → id 512+r
@@ -202,10 +204,10 @@ $ `clip_merges_data.nu`
         : i b ( _ig order j )
         : String sym ?? ( vec_get [String] . tk byte_enc b ) { T s → s F _ → ( string_new ) }
         : String k0 ( string_from ( string_data sym ) )
-        ( __enc_put tk k0 j )
+        ( __enc_put . tk arena . tk enc k0 j )
         : String k1 ( string_from ( string_data sym ) )
         ( string_push_str k1 `</w>` )
-        ( __enc_put tk k1 + 256 j )
+        ( __enc_put . tk arena . tk enc k1 + 256 j )
         = j + j 1
     }
     // the table is embedded as line-aligned chunks (see embed_merges.py)
@@ -251,9 +253,9 @@ $ `clip_merges_data.nu`
 // here — the caller sets .sot/.eot on its own copy.
 @ __tokenizer_specials Tokenizer tk → v {
     : String s_sot ( string_from `<start_of_text>` )
-    ( __enc_put tk s_sot 49406 )
+    ( __enc_put . tk arena . tk enc s_sot 49406 )
     : String s_eot ( string_from `<end_of_text>` )
-    ( __enc_put tk s_eot 49407 )
+    ( __enc_put . tk arena . tk enc s_eot 49407 )
 }
 
 // Consume one merge line (held as raw bytes in `cur`): record rank + vocab id.
@@ -275,7 +277,7 @@ $ `clip_merges_data.nu`
     // rank: key = the whole "a b" line (arena-owned)
     ( __msi_set . tk ranks ( string_data line ) rank )
     ( vec_push [String] . tk arena line )
-    ( __enc_put tk tokv + 512 rank )
+    ( __enc_put . tk arena . tk enc tokv + 512 rank )
 }
 
 // ── bpe ──────────────────────────────────────────────────────────

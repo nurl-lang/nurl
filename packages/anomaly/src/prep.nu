@@ -31,6 +31,7 @@ $ `stdlib/std/sort.nu`
 $ `stdlib/std/time.nu`
 $ `stdlib/ext/json.nu`
 $ `stdlib/core/rcbox.nu`
+$ `stdlib/core/slice.nu`
 
 // ── Column kinds ──────────────────────────────────────────────────────
 
@@ -671,22 +672,23 @@ unsafe @ meta_refresh_feats Meta m__h → v {
 // "-05:30" → -19800, "Z" or no designator → 0. The stamp has already
 // passed time_parse_iso, so the tail is well-formed.
 @ _an_iso_offset s stamp → i {
-    : i n ( nurl_str_len stamp )
+    : ( Slice u ) stamp_b ( slice_of_str stamp )
+    : i n ( slice_len [u] stamp_b )
     : ~ i k 19
     // Skip fractional seconds.
-    ? & < k n == ( nurl_str_at stamp n k ) 46 {
+    ? & < k n == ( slice_byte stamp_b k ) 46 {
         = k + k 1
-        ~ & < k n & >= ( nurl_str_at stamp n k ) 48 <= ( nurl_str_at stamp n k ) 57 { = k + k 1 }
+        ~ & < k n & >= ( slice_byte stamp_b k ) 48 <= ( slice_byte stamp_b k ) 57 { = k + k 1 }
     } {}
     ? >= k n { ^ 0 } {}
-    : i sc ( nurl_str_at stamp n k )
+    : i sc ( slice_byte stamp_b k )
     ? & != sc 43 != sc 45 { ^ 0 } {}
     : ~ i hh 0
     : ~ i mm 0
     : ~ i seen 0
     = k + k 1
     ~ < k n {
-        : i c ( nurl_str_at stamp n k )
+        : i c ( slice_byte stamp_b k )
         ? & >= c 48 <= c 57 {
             ? < seen 2 { = hh + * hh 10 - c 48 } { = mm + * mm 10 - c 48 }
             = seen + seen 1

@@ -134,9 +134,9 @@ $ `stdlib/core/string.nu`
 // and store the raw i8* pointers into ctl[0..2]. States are zalloc'd so
 // every slot starts empty (state == 0). Also writes cap into word 4.
 @ __map_alloc_buffers [K V] s ctl i cap → v {
-    : s keys ( nurl_zalloc * Z K cap )
-    : s vals ( nurl_zalloc * Z V cap )
-    : s states ( nurl_zalloc * 8 cap )
+    : s keys ( nurl_zalloc ( alloc_size Z K cap ) )
+    : s vals ( nurl_zalloc ( alloc_size Z V cap ) )
+    : s states ( nurl_zalloc ( alloc_size 8 cap ) )
     ( nurl_poke ctl 0 # i keys )
     ( nurl_poke ctl 1 # i vals )
     ( nurl_poke ctl 2 # i states )
@@ -193,8 +193,7 @@ $ `stdlib/core/string.nu`
 // power of two ≥ 8 ≥ target). Tombstones are dropped during rehash.
 @ __map_grow [K V] s ctl i target_cap ( @ i K ) hash_fn → v {
     : i old_cap ( __map_cap_raw ctl )
-    : ~ i new_cap ? > old_cap 0 old_cap 8
-    ~ < new_cap target_cap { = new_cap * new_cap 2 }
+    : i new_cap ( alloc_grow_pow2 old_cap target_cap 8 )
     // Snapshot old buffers (raw i8* + typed views).
     : s old_keys_raw ( __map_keys_raw ctl )
     : s old_vals_raw ( __map_vals_raw ctl )

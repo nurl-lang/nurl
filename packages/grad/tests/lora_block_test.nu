@@ -54,7 +54,7 @@ $ `deps/gpukit/src/dev.nu`
 }
 
 // loss of a block variant (fresh tape each call — the FD probe path)
-@ block_loss Blk bl → f {
+unsafe @ block_loss Blk bl → f {
     : GTape tp ( tape_new )
     : GVar l ( build_block tp bl # *u 0 # *u 0 )
     : f v ( g_scalar tp l )

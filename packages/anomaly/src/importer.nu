@@ -29,6 +29,7 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/ext/json.nu`
 $ `src/imptime.nu`
+$ `stdlib/core/slice.nu`
 
 // A file bigger than this is refused before it is parsed. Generous enough
 // for years of minute-resolution history, small enough that a mistaken
@@ -74,10 +75,11 @@ $ `src/imptime.nu`
 // ── Detection ─────────────────────────────────────────────────────────
 
 @ __imp_first_glyph s text → i {
-    : i n ( nurl_str_len text )
+    : ( Slice u ) text_b ( slice_of_str text )
+    : i n ( slice_len [u] text_b )
     : ~ i k 0
     ~ < k n {
-        : i c ( nurl_str_at text n k )
+        : i c ( slice_byte text_b k )
         ? | | | == c 32 == c 9 == c 13 == c 10 { = k + k 1 } { ^ c }
     }
     ^ 0
@@ -114,13 +116,14 @@ $ `src/imptime.nu`
 // holds most of. Guessing beats asking: an export from a Finnish locale is
 // semicolon-separated and its author has no reason to know that.
 @ __imp_delim s header → i {
-    : i n ( nurl_str_len header )
+    : ( Slice u ) header_b ( slice_of_str header )
+    : i n ( slice_len [u] header_b )
     : ~ i comma 0
     : ~ i semi 0
     : ~ i tab 0
     : ~ i k 0
     ~ < k n {
-        : i c ( nurl_str_at header n k )
+        : i c ( slice_byte header_b k )
         ? == c 44 { = comma + comma 1 } {}
         ? == c 59 { = semi + semi 1 } {}
         ? == c 9 { = tab + tab 1 } {}
@@ -135,15 +138,16 @@ $ `src/imptime.nu`
 // data, and `""` inside a quoted field is one quote.
 @ __imp_split_row s line i delim → ( Vec String ) {
     : ( Vec String ) out ( vec_new [String] )
-    : i n ( nurl_str_len line )
+    : ( Slice u ) line_b ( slice_of_str line )
+    : i n ( slice_len [u] line_b )
     : ~ String cur ( string_new )
     : ~ b quoted F
     : ~ i k 0
     ~ < k n {
-        : i c ( nurl_str_at line n k )
+        : i c ( slice_byte line_b k )
         ? quoted {
             ? == c 34 {
-                ? & < + k 1 n == ( nurl_str_at line n + k 1 ) 34 {
+                ? & < + k 1 n == ( slice_byte line_b + k 1 ) 34 {
                     ( string_push_char cur 34 )
                     = k + k 2
                 } { = quoted F = k + k 1 }

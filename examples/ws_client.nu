@@ -17,7 +17,7 @@ $ `stdlib/std/net.nu`
 $ `stdlib/ext/env.nu`
 $ `stdlib/ext/websocket.nu`
 
-@ print_payload s tag ( Vec u ) payload → v {
+unsafe @ print_payload s tag ( Vec u ) payload → v {
     : *u p ( vec_data [u] payload )
     : i n ( vec_len [u] payload )
     : String s ( string_from_bytes p n )

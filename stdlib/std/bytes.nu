@@ -97,7 +97,7 @@ $ `stdlib/core/errors.nu`
 // owned byte buffer whose length is known independently of any NUL
 // terminator (e.g. a streamed HTTP body chunk that may contain NULs).
 // `raw` is BORROWED. No-op when `n <= 0`.
-@ bytes_extend_raw ( Vec u ) v s raw i n → v {
+@ bytes_extend_raw ( Vec u ) v * u raw i n → v {
     ? > n 0 {
         ( vec_reserve [u] v n )
         : *u src # *u raw

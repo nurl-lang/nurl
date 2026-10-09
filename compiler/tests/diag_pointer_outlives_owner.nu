@@ -1,14 +1,20 @@
-// diag_pointer_outlives_owner.nu — a raw pointer into a value cannot be
-// read after the block that drops the value has ended.
+// diag_pointer_outlives_owner.nu — a view into a value cannot be read
+// after the block that drops the value has ended.
 //
 // `( string_data x )` / `( vec_data v )` point into x's buffer. Assigned to
 // a binding of an outer scope, or pushed into an outer `( Vec s )`, the
-// pointer outlived x — dropped at the end of its block — and every later
-// read was a use-after-free with nothing said (packages/wasmbuilder's link
-// argv carried freed strings this way). A pointer read from a vector
-// element (`T x → ( string_data x )`) points into the vector. The controls
-// compile: an owner declared in the outer scope, an owner moved into a
-// container that outlives the pointer, a use inside the owner's block.
+// view outlived x — dropped at the end of its block — and every later read
+// was a use-after-free with nothing said (packages/wasmbuilder's link argv
+// carried freed strings this way). The borrow walk ends a block's bindings
+// at its `}`: a view of one ends there, and a container a view was pushed
+// into holds a view of it (depends on it). A view read from a vector
+// element (`T x → ( string_data x )`) points into the vector's element.
+// The controls compile: an owner declared in the outer scope, an owner
+// moved into a container that outlives the view, a use inside the owner's
+// block, and a string binding that owns its value (one born from a
+// literal): assigned a view, it takes its own copy — no view of x, so
+// nothing of it dangles. The binding that dangles is one that owns
+// nothing, a view of something else to begin with.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
@@ -20,7 +26,8 @@ $ `stdlib/core/vec.nu`
 }
 
 @ assigned → i {
-    : ~ s p ``
+    : String keep ( string_from `outer` )
+    : ~ s p ( string_data keep )
     ? T { : String x ( string_from `abc` ) = p ( string_data x ) } {}
     ^ ( nurl_str_len p )
 }
@@ -58,10 +65,16 @@ $ `stdlib/core/vec.nu`
     ^ ( vec_len [s] args )
 }
 
+@ assigned_copy → i {
+    : ~ s p ``
+    ? T { : String x ( string_from `abc` ) = p ( string_data x ) } {}
+    ^ ( nurl_str_len p )
+}
+
 @ used_inside → i {
     : ~ i n 0
     ? T { : String x ( string_from `abc` ) : s p ( string_data x ) = n ( nurl_str_len p ) } {}
     ^ n
 }
 
-@ main → i { ^ + + + + + ( assigned ) ( pushed ) ( pushed_from_element ) ( owner_outside ) ( owner_moved_on ) ( used_inside ) }
+@ main → i { ^ + + + + + + ( assigned ) ( pushed ) ( pushed_from_element ) ( owner_outside ) ( owner_moved_on ) ( assigned_copy ) ( used_inside ) }

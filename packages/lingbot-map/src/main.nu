@@ -45,6 +45,7 @@ $ `src/camhead.nu`
 $ `src/dpthead.nu`
 $ `src/geom.nu`
 $ `src/preproc.nu`
+$ `stdlib/core/slice.nu`
 
 : i LM_SIZE 518
 : i LM_PATCH 14
@@ -156,15 +157,16 @@ $ `src/preproc.nu`
 // Kept in step with nurl.toml by the test suite, which compares the two.
 // 0.4.0 shipped saying 0.3.0: the manifest was bumped and this was not,
 // and nothing anywhere would have noticed.
-@ __lm_version → v { ( nurl_print `lingbot-map 0.10.1\n` ) }
+@ __lm_version → v { ( nurl_print `lingbot-map 0.10.2\n` ) }
 
 @ __lm_streq s a s b → b { ^ == 0 ( nurl_str_cmp a b ) }
 
 // Anything that looks like an option, so a typo is reported as one
 // instead of being taken for a frame and failing later as a missing file.
 @ __lm_is_flag s a → b {
-    : i n ( nurl_str_len a )
-    ^ & > n 1 == 45 ( nurl_str_at a n 0 )
+    : ( Slice u ) a_b ( slice_of_str a )
+    : i n ( slice_len [u] a_b )
+    ^ & > n 1 == 45 ( slice_byte a_b 0 )
 }
 
 // The options that take a value, in one place: the argument loop needs to
@@ -200,12 +202,14 @@ $ `src/preproc.nu`
 // frame folder off a phone or out of a video split is as likely to hold
 // .JPEG, and there is no reason for the case to matter.
 @ __lm_ext_is s name s ext → b {
-    : i n ( nurl_str_len name )
-    : i m ( nurl_str_len ext )
+    : ( Slice u ) name_b ( slice_of_str name )
+    : i n ( slice_len [u] name_b )
+    : ( Slice u ) ext_b ( slice_of_str ext )
+    : i m ( slice_len [u] ext_b )
     ? <= n m { ^ F } {}
     : ~ i k 0
     ~ < k m {
-        ? != ( __lm_lower ( nurl_str_at name n + - n m k ) ) ( nurl_str_at ext m k ) {
+        ? != ( __lm_lower ( slice_byte name_b + - n m k ) ) ( slice_byte ext_b k ) {
             ^ F
         } {}
         = k + k 1
@@ -273,7 +277,7 @@ $ `src/preproc.nu`
     ^ T
 }
 
-@ __lm_parse → Opts {
+unsafe @ __lm_parse → Opts {
     : ( Vec String ) fr ( vec_new [String] )
     : ~ s model ``
     : ~ s out `cloud.ply`
@@ -443,9 +447,10 @@ $ `src/preproc.nu`
 // Hugging Face. Without this, `--model ~/typo.pt` reports whatever the
 // network said about a repository named `~`.
 @ __lm_looks_local s a → b {
-    : i n ( nurl_str_len a )
+    : ( Slice u ) a_b ( slice_of_str a )
+    : i n ( slice_len [u] a_b )
     ? == n 0 { ^ F } {}
-    : i c0 ( nurl_str_at a n 0 )
+    : i c0 ( slice_byte a_b 0 )
     ^ | | == c0 47 == c0 46 == c0 126
 }
 

@@ -2,7 +2,7 @@
 
 $ `stdlib/std/fs.nu`
 
-@ main → i {
+unsafe @ main → i {
     ( nurl_print `File I/O test...\n` )
 
     // Write a new file

@@ -43,7 +43,7 @@ $ `stdlib/ext/env.nu`
 // Read one chunk from the live child and print it bracketed (the
 // trailing newline from the child stays inside the brackets). Returns
 // bytes read: 0 ⇒ EOF, -1 ⇒ error.
-@ read_chunk ProcChild p s tag → i {
+unsafe @ read_chunk ProcChild p s tag → i {
     : ~ i got -1
     : !( Vec u ) ProcessErr r ( proc_read_chunk p 4096 )
     ?? r {

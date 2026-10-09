@@ -99,7 +99,7 @@ unsafe @ __voc_up * VocosImpl v s name → GkBuf {
     ^ b
 }
 
-@ __voc_upl * VocosImpl v i k s suf ( Vec GkBuf ) dst → b {
+unsafe @ __voc_upl * VocosImpl v i k s suf ( Vec GkBuf ) dst → b {
     : String s ( string_from `backbone.convnext.` )
     ( string_push_int s k )
     ( string_push_str s suf )
@@ -143,7 +143,7 @@ unsafe @ __voc_up_convw * VocosImpl v s name i cout i ipg i K → GkBuf {
     ^ b
 }
 
-@ __voc_upl_convw * VocosImpl v i k s suf i cout i ipg i K ( Vec GkBuf ) dst → b {
+unsafe @ __voc_upl_convw * VocosImpl v i k s suf i cout i ipg i K ( Vec GkBuf ) dst → b {
     : String s ( string_from `backbone.convnext.` )
     ( string_push_int s k )
     ( string_push_str s suf )
@@ -390,7 +390,7 @@ unsafe @ __voc_drop_top * VocosImpl v → v {
     = . v out_b ( __voc_nobuf )
 }
 
-@ voc_reload Vocos v__h → b {
+unsafe @ voc_reload Vocos v__h → b {
     : *VocosImpl v ( __Vocos_ptr v__h )
     ? ( voc_loaded v__h ) { ^ T } {}
     ^ ( __voc_upload_all v )

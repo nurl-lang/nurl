@@ -3,7 +3,7 @@
 Native gRPC over HTTP/2 for NURL. The library transports protobuf bytes and
 supports unary, client streaming, server streaming and bidirectional calls.
 TCP, TLS, HTTP/2, HPACK, gzip and protobuf use NURL's standard library.
-Requires NURL 0.71.0 or newer.
+Requires NURL 0.72.0 or newer.
 
 ```toml
 [dependencies]

@@ -38,7 +38,7 @@ $ `detect.nu`
 
 // Run the detector on one image, draw boxes in place, print detections.
 // Returns the number of detections.
-@ detect_image Engine e OGraph g Image im f conf f iou → i {
+unsafe @ detect_image Engine e OGraph g Image im f conf f iou → i {
     : Image in416 ? & == ( img_w im ) 416 == ( img_h im ) 416 im ( img_resize im 416 416 )
     : ( Vec u ) host ( img_to_nchw in416 )
     : RTensor out ( rt_run_shaped e g ( vec_data [u] host ) ( shape4 1 3 416 416 ) )

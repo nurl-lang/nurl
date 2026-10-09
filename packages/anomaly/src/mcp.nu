@@ -40,7 +40,7 @@ $ `src/imptime.nu`
 $ `src/store.nu`
 
 // One version for the CLI banner and the MCP handshake.
-: s ANOMALY_VERSION `0.34.1`
+: s ANOMALY_VERSION `0.34.2`
 
 // ── Wiring ───────────────────────────────────────────────────────────
 

@@ -16,6 +16,7 @@ $ `stdlib/ext/json.nu`
 $ `stdlib/ext/cbor.nu`
 $ `stdlib/ext/csv.nu`
 $ `src/report.nu`
+$ `stdlib/core/slice.nu`
 
 // ---- deterministic input generators (setup, never timed) --------------
 
@@ -95,14 +96,14 @@ $ `src/report.nu`
 unsafe @ __b * u p i k → i { ^ # i . p k }
 
 // decimal digit at offset k
-@ __dig * u p i k → i { ^ - ( __b p k ) 48 }
+unsafe @ __dig * u p i k → i { ^ - ( __b p k ) 48 }
 
 // "type" cell → 0..9 (the ten words start with distinct letters a..j)
-@ __type_id * u p → i { ^ - ( __b p 0 ) 97 }
+unsafe @ __type_id * u p → i { ^ - ( __b p 0 ) 97 }
 
 // "YYYY-MM-DD" → a compact, order-preserving day key in [0, ~1112) (11 bits),
 // so type+date+uuid pack into one non-negative i64 for a radix sort.
-@ __date_key * u p → i {
+unsafe @ __date_key * u p → i {
     : i y + + + * ( __dig p 0 ) 1000 * ( __dig p 1 ) 100 * ( __dig p 2 ) 10 ( __dig p 3 )
     : i mo + * ( __dig p 5 ) 10 ( __dig p 6 )
     : i da + * ( __dig p 8 ) 10 ( __dig p 9 )
@@ -113,7 +114,7 @@ unsafe @ __b * u p i k → i { ^ # i . p k }
 @ __hexv i c → i { ? <= c 57 - c 48 - c 87 }
 
 // first 16 hex chars of a uuid → an i64 tie-breaker
-@ __hex16 * u p → i {
+unsafe @ __hex16 * u p → i {
     : ~ i acc 0
     : ~ i k 0
     ~ < k 16 {
@@ -174,7 +175,7 @@ unsafe @ __ins_i * i a i lo i hi → v {
     }
 }
 
-@ __qs_i * i a i lo i hi → v {
+unsafe @ __qs_i * i a i lo i hi → v {
     : ~ i l lo
     : ~ i h hi
     ~ < l h {
@@ -318,14 +319,14 @@ unsafe @ __ins_i * i a i lo i hi → v {
 @ bench_utf8_decode → BenchRow {
     : String s ( __gen_utf8 262144 )
     : i bytes ( string_len s )
-    : s sd ( string_data s )
+    : ( Slice u ) sd ( slice_of_str ( string_data s ) )
     : ( Vec i ) sink ( vec_new [i] )
     ( vec_push [i] sink 0 )
     : BenchRow r ( bench_thpt `utf8 decode` bytes `MB/s` \ → v {
         : ~ i pos 0
         : ~ i cps 0
         ~ < pos bytes {
-            : Utf8Dec d ( utf8_decode_n sd bytes pos )
+            : Utf8Dec d ( utf8_decode_at sd pos )
             : i w ? > . d width 0 . d width 1
             = pos + pos w
             = cps + cps 1
@@ -415,9 +416,9 @@ unsafe @ __csv_sort_keys i n → ( Vec i ) {
     : ( Vec i ) key ( vec_with_cap [i] n )
     : ~ i r0 0
     ~ < r0 n {
-        : i tid ( __type_id # *u ( csv_table_view t r0 cty ) )
-        : i dk ( __date_key # *u ( csv_table_view t r0 cda ) )
-        : i uu & ( __hex16 # *u ( csv_table_view t r0 cuu ) ) 140737488355327
+        : i tid ( __type_id ( slice_data [u] ( csv_table_view t r0 cty ) ) )
+        : i dk ( __date_key ( slice_data [u] ( csv_table_view t r0 cda ) ) )
+        : i uu & ( __hex16 ( slice_data [u] ( csv_table_view t r0 cuu ) ) ) 140737488355327
         ( vec_push [i] key | | << tid 58 << dk 47 uu )
         = r0 + r0 1
     }

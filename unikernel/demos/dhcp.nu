@@ -35,7 +35,7 @@ $ `unikernel/drivers/virtionet.nu`
 // One turn: whatever the client wants to send goes out as a broadcast
 // datagram from 0.0.0.0 (the shape DHCP needs before an address
 // exists), and whatever arrives is fed back to it.
-@ turn * VirtioNet nic NetStack st DhcpClient c i now → b {
+unsafe @ turn * VirtioNet nic NetStack st DhcpClient c i now → b {
     : PktBuf out ( pktbuf_new )
     : i want ( dhcp_tick c now )
     ? != want 0 {
@@ -75,7 +75,7 @@ $ `unikernel/drivers/virtionet.nu`
     ^ progressed
 }
 
-@ main → i {
+unsafe @ main → i {
     : *VirtioNet nic ( vnet_open 64 )
     ? ! ( vnet_ready nic ) {
         ( nurl_print `no virtio-net device\n` )

@@ -3748,7 +3748,10 @@ unsafe @ __check_pathdep_drift Manifest m s reg → i {
 }
 
 // True iff the golden file's bytes equal stdout[0..outlen).
-@ __golden_match s goldp s out i outlen → b {
+// (The capture's own length: an interior NUL in the output still counts.)
+unsafe @ __golden_match s goldp Output o → b {
+    : s out ( output_stdout o )
+    : i outlen ( output_stdout_len o )
     : ~ b ok F
     ?? ( read_file goldp ) {
         T g → {
@@ -3799,7 +3802,7 @@ unsafe @ __check_pathdep_drift Manifest m s reg → i {
                 ? != ec 0 {
                     ( __test_report name `FAIL` `(nonzero exit)` )
                 } ? ( file_exists ( string_data goldp ) ) {
-                    ? ( __golden_match ( string_data goldp ) ( output_stdout out ) ( output_stdout_len out ) ) {
+                    ? ( __golden_match ( string_data goldp ) out ) {
                         ( __test_report name `PASS` `` ) = result 0
                     } {
                         ( __test_report name `FAIL` `(output mismatch)` )

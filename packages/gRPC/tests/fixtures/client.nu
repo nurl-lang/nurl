@@ -74,22 +74,24 @@ $ `stdlib/core/io.nu`
     ^ @ !v GrpcError { T 0 }
 }
 
+// Twelve calls in flight on one connection: every request is sent before
+// any reply is read. Each call is sent on its own binding and kept in
+// `calls`; the replies are then read in the order the calls were opened.
 @ multiplex GrpcClient client GrpcCallOptions opts ( Vec Header ) metadata ( Vec u ) request → !v GrpcError {
     : ( Vec GrpcCall ) calls ( vec_new [GrpcCall] )
     : ~ i k 0
     ~ < k 12 {
-        : GrpcCall opened \ ( grpc_call_open client `/test.Echo/Unary` metadata opts )
+        : ~ GrpcCall opened \ ( grpc_call_open client `/test.Echo/Unary` metadata opts )
+        \ ( grpc_call_send opened request )
+        \ ( grpc_call_half_close opened )
         ( vec_push [GrpcCall] calls opened )
-        : ~ * GrpcCall p ( vec_data [GrpcCall] calls )
-        \ ( grpc_call_send . p k request )
-        \ ( grpc_call_half_close . p k )
         = k + k 1
     }
-    = k 0
-    ~ < k 12 {
-        : ~ * GrpcCall p ( vec_data [GrpcCall] calls )
-        \ ( finish_one . p k request )
-        = k + k 1
+    ~ > ( vec_len [GrpcCall] calls ) 0 {
+        ?? ( vec_remove [GrpcCall] calls 0 ) {
+            T c → { : ~ GrpcCall stream c \ ( finish_one stream request ) }
+            F → {}
+        }
     }
     ^ @ !v GrpcError { T 0 }
 }

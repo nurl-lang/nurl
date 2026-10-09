@@ -46,7 +46,7 @@ $ `pb.nu`
 
 // The host data's address (0 when there is none) — for an upload or a
 // peek; valid while the tensor is.
-@ otensor_host_ptr OTensor t → i {
+unsafe @ otensor_host_ptr OTensor t → i {
     ? == ( vec_len [u] . t host ) 0 { ^ 0 } {}
     ^ # i ( vec_data [u] . t host )
 }

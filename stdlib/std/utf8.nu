@@ -18,6 +18,7 @@
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
+$ `stdlib/core/slice.nu`
 
 : i UTF8_REPLACEMENT 65533  // U+FFFD
 : i UTF8_MAX 1114111  // U+10FFFF, the largest legal scalar
@@ -44,9 +45,15 @@ $ `stdlib/core/vec.nu`
     ^ ( utf8_decode_n str ( nurl_str_len str ) pos )
 }
 
+// The code point at byte `pos` of a view (slice_of_str, slice_from_vec):
+// O(1) per position against a length that cannot lie — the loop form.
+@ utf8_decode_at ( Slice u ) b i pos → Utf8Dec {
+    ^ ( utf8_decode_n ( slice_data [u] b ) ( slice_len [u] b ) pos )
+}
+
 // Same, with the byte length supplied by the caller (hoist it outside
 // the loop). Bytes are read through a raw pointer — O(1) per access.
-@ utf8_decode_n s str i n i pos → Utf8Dec {
+@ utf8_decode_n * u str i n i pos → Utf8Dec {
     ? >= pos n { ^ @ Utf8Dec { 0 0 0 } } {}  // end of string
     : *u P # *u str
     : i b0 & 255 # i . P pos

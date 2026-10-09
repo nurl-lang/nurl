@@ -21,11 +21,12 @@
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `graph.nu`
+$ `stdlib/core/slice.nu`
 
 // ── Parser state ─────────────────────────────────────────────────────
 
 : MmdParser {
-    s src
+    ( Slice u ) src  // the source's bytes, measured once
     i n
     i pos
     i stop  // end of the statement currently being parsed
@@ -38,14 +39,16 @@ $ `graph.nu`
 }
 
 @ __mmd_parser_new s src → MmdParser {
-    ^ @ MmdParser { src ( nurl_str_len src ) 0 ( nurl_str_len src ) 1 0 F ( string_new ) 0 0 }
+    : ( Slice u ) sb ( slice_of_str src )
+    : i n ( slice_len [u] sb )
+    ^ @ MmdParser { sb n 0 n 1 0 F ( string_new ) 0 0 }
 }
 
 // Byte at `p`, or -1 past the end of the current statement window.
 @ __mmd_at inout MmdParser ps i p → i {
     ? >= p . ps stop { ^ - 0 1 } {}
     ? < p 0 { ^ - 0 1 } {}
-    ^ ( nurl_str_at . ps src . ps n p )
+    ^ ( slice_byte . ps src p )
 }
 
 // Byte at `p` ignoring the statement window (used by the statement
@@ -53,7 +56,7 @@ $ `graph.nu`
 @ __mmd_raw_at inout MmdParser ps i p → i {
     ? >= p . ps n { ^ - 0 1 } {}
     ? < p 0 { ^ - 0 1 } {}
-    ^ ( nurl_str_at . ps src . ps n p )
+    ^ ( slice_byte . ps src p )
 }
 
 @ __mmd_fail inout MmdParser ps s msg i at → v {
@@ -114,7 +117,7 @@ $ `graph.nu`
     : String out ( string_with_cap + 1 - b a )
     : ~ i k a
     ~ < k b {
-        ( string_push_char out ( nurl_str_at . ps src . ps n k ) )
+        ( string_push_char out ( slice_byte . ps src k ) )
         = k + k 1
     }
     ^ out
@@ -123,8 +126,8 @@ $ `graph.nu`
 @ __mmd_slice_trim inout MmdParser ps i from i to → String {
     : ~ i a from
     : ~ i b to
-    ~ & < a b ( __mmd_is_space ( nurl_str_at . ps src . ps n a ) ) { = a + a 1 }
-    ~ & < a b ( __mmd_is_space ( nurl_str_at . ps src . ps n - b 1 ) ) { = b - b 1 }
+    ~ & < a b ( __mmd_is_space ( slice_byte . ps src a ) ) { = a + a 1 }
+    ~ & < a b ( __mmd_is_space ( slice_byte . ps src - b 1 ) ) { = b - b 1 }
     ^ ( __mmd_slice ps a b )
 }
 

@@ -191,7 +191,7 @@ unsafe @ __r_read_reply * RedisConnImpl c → !RedisReply RedisErr {
 // Send a command (array of bulk strings) and return its reply. A RESP error
 // reply is surfaced as RedisServerError with the text in conn.lasterr. The
 // caller keeps `args` and owns the returned reply.
-@ redis_command RedisConn c__h ( Vec String ) args → !RedisReply RedisErr { ^ ( __redis_command ( __RedisConn_ptr c__h ) args ) }
+unsafe @ redis_command RedisConn c__h ( Vec String ) args → !RedisReply RedisErr { ^ ( __redis_command ( __RedisConn_ptr c__h ) args ) }
 
 unsafe @ __redis_command * RedisConnImpl c ( Vec String ) args → !RedisReply RedisErr {
     : ( Vec u ) req ( resp_encode args )
@@ -238,14 +238,14 @@ unsafe @ __redis_command * RedisConnImpl c ( Vec String ) args → !RedisReply R
 }
 
 // Build and send in one shot; the args go with the call.
-@ __cmd_reply * RedisConnImpl c sink ( Vec String ) args → !RedisReply RedisErr {
+unsafe @ __cmd_reply * RedisConnImpl c sink ( Vec String ) args → !RedisReply RedisErr {
     ^ ( __redis_command c args )
 }
 
 // ── typed reply extractors ─────────────────────────────────────────
 
 // Integer reply (e.g. DEL, INCR, EXISTS count).
-@ __reply_int * RedisConnImpl c ( Vec String ) args → !i RedisErr {
+unsafe @ __reply_int * RedisConnImpl c ( Vec String ) args → !i RedisErr {
     ?? ( __cmd_reply c args ) {
         F e → ^ @ !i RedisErr { F e }
         T rep → {
@@ -258,7 +258,7 @@ unsafe @ __redis_command * RedisConnImpl c ( Vec String ) args → !RedisReply R
 }
 
 // Integer reply interpreted as a boolean (1 → true).
-@ __reply_bool * RedisConnImpl c ( Vec String ) args → !b RedisErr {
+unsafe @ __reply_bool * RedisConnImpl c ( Vec String ) args → !b RedisErr {
     ?? ( __reply_int c args ) {
         F e → ^ @ !b RedisErr { F e }
         T n → ^ @ !b RedisErr { T == n 1 }
@@ -266,7 +266,7 @@ unsafe @ __redis_command * RedisConnImpl c ( Vec String ) args → !RedisReply R
 }
 
 // Status reply (+OK and friends); we only care that it wasn't an error.
-@ __reply_ok * RedisConnImpl c ( Vec String ) args → !v RedisErr {
+unsafe @ __reply_ok * RedisConnImpl c ( Vec String ) args → !v RedisErr {
     ?? ( __cmd_reply c args ) {
         F e → ^ @ !v RedisErr { F e }
         T rep → { ^ @ !v RedisErr { T 0 } }
@@ -275,7 +275,7 @@ unsafe @ __redis_command * RedisConnImpl c ( Vec String ) args → !RedisReply R
 
 // Bulk-string reply, nil-aware. Integers are rendered to text so commands
 // that may answer either way still produce a value.
-@ __reply_str * RedisConnImpl c ( Vec String ) args → !RedisStr RedisErr {
+unsafe @ __reply_str * RedisConnImpl c ( Vec String ) args → !RedisStr RedisErr {
     ?? ( __cmd_reply c args ) {
         F e → ^ @ !RedisStr RedisErr { F e }
         T rep → {
@@ -296,7 +296,7 @@ unsafe @ __redis_command * RedisConnImpl c ( Vec String ) args → !RedisReply R
 
 // Array reply flattened to a Vec of owned Strings (bulk elements; integer
 // elements rendered; nils → empty string). Nil array → empty Vec.
-@ __reply_strvec * RedisConnImpl c ( Vec String ) args → !( Vec String ) RedisErr {
+unsafe @ __reply_strvec * RedisConnImpl c ( Vec String ) args → !( Vec String ) RedisErr {
     ?? ( __cmd_reply c args ) {
         F e → ^ @ !( Vec String ) RedisErr { F e }
         T rep → {
@@ -384,7 +384,7 @@ unsafe @ redis_is_tls RedisConn c__h → b {
 
 // AUTH: one-arg (password only) or two-arg (ACL user + password). Pass an
 // empty user for the legacy single-argument form.
-@ redis_auth RedisConn c__h s user s password → !v RedisErr {
+unsafe @ redis_auth RedisConn c__h s user s password → !v RedisErr {
     : *RedisConnImpl c ( __RedisConn_ptr c__h )
     ? == ( nurl_str_len user ) 0 { ^ ( __reply_ok c ( __args2 `AUTH` password ) ) } {}
     ^ ( __reply_ok c ( __args3 `AUTH` user password ) )
@@ -397,7 +397,7 @@ unsafe @ redis_select RedisConn c__h i db → !v RedisErr {
     ?? r { T _ → { = . c db_index db ^ @ !v RedisErr { T 0 } } F e → ^ @ !v RedisErr { F e } }
 }
 
-@ redis_ping RedisConn c__h → !b RedisErr {
+unsafe @ redis_ping RedisConn c__h → !b RedisErr {
     : *RedisConnImpl c ( __RedisConn_ptr c__h )
     ?? ( __cmd_reply c ( __args1 `PING` ) ) {
         F e → ^ @ !b RedisErr { F e }
@@ -409,83 +409,83 @@ unsafe @ redis_select RedisConn c__h i db → !v RedisErr {
     }
 }
 
-@ redis_echo RedisConn c__h s msg → !RedisStr RedisErr {
+unsafe @ redis_echo RedisConn c__h s msg → !RedisStr RedisErr {
     : *RedisConnImpl c ( __RedisConn_ptr c__h )
     ^ ( __reply_str c ( __args2 `ECHO` msg ) )
 }
 
 // ── strings / keys ─────────────────────────────────────────────────
 
-@ redis_set RedisConn c__h s key s val → !v RedisErr {
+unsafe @ redis_set RedisConn c__h s key s val → !v RedisErr {
     : *RedisConnImpl c ( __RedisConn_ptr c__h )
     ^ ( __reply_ok c ( __args3 `SET` key val ) )
 }
 
-@ redis_get RedisConn c__h s key → !RedisStr RedisErr {
+unsafe @ redis_get RedisConn c__h s key → !RedisStr RedisErr {
     : *RedisConnImpl c ( __RedisConn_ptr c__h )
     ^ ( __reply_str c ( __args2 `GET` key ) )
 }
 
-@ redis_del RedisConn c__h s key → !i RedisErr {
+unsafe @ redis_del RedisConn c__h s key → !i RedisErr {
     : *RedisConnImpl c ( __RedisConn_ptr c__h )
     ^ ( __reply_int c ( __args2 `DEL` key ) )
 }
 
-@ redis_exists RedisConn c__h s key → !b RedisErr {
+unsafe @ redis_exists RedisConn c__h s key → !b RedisErr {
     : *RedisConnImpl c ( __RedisConn_ptr c__h )
     ^ ( __reply_bool c ( __args2 `EXISTS` key ) )
 }
 
-@ redis_incr RedisConn c__h s key → !i RedisErr {
+unsafe @ redis_incr RedisConn c__h s key → !i RedisErr {
     : *RedisConnImpl c ( __RedisConn_ptr c__h )
     ^ ( __reply_int c ( __args2 `INCR` key ) )
 }
 
-@ redis_decr RedisConn c__h s key → !i RedisErr {
+unsafe @ redis_decr RedisConn c__h s key → !i RedisErr {
     : *RedisConnImpl c ( __RedisConn_ptr c__h )
     ^ ( __reply_int c ( __args2 `DECR` key ) )
 }
 
-@ redis_incrby RedisConn c__h s key i n → !i RedisErr {
+unsafe @ redis_incrby RedisConn c__h s key i n → !i RedisErr {
     : *RedisConnImpl c ( __RedisConn_ptr c__h )
     : ( Vec String ) a ( __args2 `INCRBY` key ) ( redis_arg_i a n )
     ^ ( __reply_int c a )
 }
 
-@ redis_expire RedisConn c__h s key i secs → !b RedisErr {
+unsafe @ redis_expire RedisConn c__h s key i secs → !b RedisErr {
     : *RedisConnImpl c ( __RedisConn_ptr c__h )
     : ( Vec String ) a ( __args2 `EXPIRE` key ) ( redis_arg_i a secs )
     ^ ( __reply_bool c a )
 }
 
-@ redis_ttl RedisConn c__h s key → !i RedisErr {
+unsafe @ redis_ttl RedisConn c__h s key → !i RedisErr {
     : *RedisConnImpl c ( __RedisConn_ptr c__h )
     ^ ( __reply_int c ( __args2 `TTL` key ) )
 }
 
-@ redis_keys RedisConn c__h s pattern → !( Vec String ) RedisErr {
+unsafe @ redis_keys RedisConn c__h s pattern → !( Vec String ) RedisErr {
     : *RedisConnImpl c ( __RedisConn_ptr c__h )
     ^ ( __reply_strvec c ( __args2 `KEYS` pattern ) )
 }
 
 // ── lists ──────────────────────────────────────────────────────────
 
-@ redis_lpush RedisConn c__h s key s val → !i RedisErr {
+unsafe @ redis_lpush RedisConn c__h s key s val → !i RedisErr {
     : *RedisConnImpl c ( __RedisConn_ptr c__h )
     ^ ( __reply_int c ( __args3 `LPUSH` key val ) )
 }
 
-@ redis_rpush RedisConn c__h s key s val → !i RedisErr {
+unsafe @ redis_rpush RedisConn c__h s key s val → !i RedisErr {
     : *RedisConnImpl c ( __RedisConn_ptr c__h )
     ^ ( __reply_int c ( __args3 `RPUSH` key val ) )
 }
 
-@ redis_llen RedisConn c__h s key → !i RedisErr {
+unsafe @ redis_llen RedisConn c__h s key → !i RedisErr {
     : *RedisConnImpl c ( __RedisConn_ptr c__h )
     ^ ( __reply_int c ( __args2 `LLEN` key ) )
 }
 
-@ redis_lrange RedisConn c__h s key i start i stop → !( Vec String ) RedisErr {
+unsafe @ redis_lrange RedisConn c__h s key i start i stop → !( Vec String ) RedisErr {
     : *RedisConnImpl c ( __RedisConn_ptr c__h )
     : ( Vec String ) a ( __args2 `LRANGE` key ) ( redis_arg_i a start ) ( redis_arg_i a stop )
     ^ ( __reply_strvec c a )
@@ -493,38 +493,38 @@ unsafe @ redis_select RedisConn c__h i db → !v RedisErr {
 
 // ── hashes ─────────────────────────────────────────────────────────
 
-@ redis_hset RedisConn c__h s key s field s val → !i RedisErr {
+unsafe @ redis_hset RedisConn c__h s key s field s val → !i RedisErr {
     : *RedisConnImpl c ( __RedisConn_ptr c__h )
     : ( Vec String ) a ( __args3 `HSET` key field ) ( redis_arg a val )
     ^ ( __reply_int c a )
 }
 
-@ redis_hget RedisConn c__h s key s field → !RedisStr RedisErr {
+unsafe @ redis_hget RedisConn c__h s key s field → !RedisStr RedisErr {
     : *RedisConnImpl c ( __RedisConn_ptr c__h )
     ^ ( __reply_str c ( __args3 `HGET` key field ) )
 }
 
 // Flat [field, value, field, value, …] of the whole hash.
-@ redis_hgetall RedisConn c__h s key → !( Vec String ) RedisErr {
+unsafe @ redis_hgetall RedisConn c__h s key → !( Vec String ) RedisErr {
     : *RedisConnImpl c ( __RedisConn_ptr c__h )
     ^ ( __reply_strvec c ( __args2 `HGETALL` key ) )
 }
 
 // ── sets ───────────────────────────────────────────────────────────
 
-@ redis_sadd RedisConn c__h s key s member → !i RedisErr {
+unsafe @ redis_sadd RedisConn c__h s key s member → !i RedisErr {
     : *RedisConnImpl c ( __RedisConn_ptr c__h )
     ^ ( __reply_int c ( __args3 `SADD` key member ) )
 }
 
-@ redis_smembers RedisConn c__h s key → !( Vec String ) RedisErr {
+unsafe @ redis_smembers RedisConn c__h s key → !( Vec String ) RedisErr {
     : *RedisConnImpl c ( __RedisConn_ptr c__h )
     ^ ( __reply_strvec c ( __args2 `SMEMBERS` key ) )
 }
 
 // ── pub/sub ────────────────────────────────────────────────────────
 
-@ redis_publish RedisConn c__h s channel s msg → !i RedisErr {
+unsafe @ redis_publish RedisConn c__h s channel s msg → !i RedisErr {
     : *RedisConnImpl c ( __RedisConn_ptr c__h )
     ^ ( __reply_int c ( __args3 `PUBLISH` channel msg ) )
 }
@@ -572,7 +572,7 @@ unsafe @ redis_select RedisConn c__h i db → !v RedisErr {
     ^ @ RedisMessage { kind channel pattern payload count }
 }
 
-@ __sub_cmd * RedisConnImpl c s verb s arg → !RedisMessage RedisErr {
+unsafe @ __sub_cmd * RedisConnImpl c s verb s arg → !RedisMessage RedisErr {
     ?? ( __cmd_reply c ( __args2 verb arg ) ) {
         F e → ^ @ !RedisMessage RedisErr { F e }
         T rep → {
@@ -585,22 +585,22 @@ unsafe @ redis_select RedisConn c__h i db → !v RedisErr {
 // Subscribe to a channel (or pattern). Returns the subscription confirmation;
 // thereafter call redis_next_message to receive published messages. While
 // subscribed only (P)SUBSCRIBE / (P)UNSUBSCRIBE / PING are valid commands.
-@ redis_subscribe RedisConn c__h s channel → !RedisMessage RedisErr {
+unsafe @ redis_subscribe RedisConn c__h s channel → !RedisMessage RedisErr {
     : *RedisConnImpl c ( __RedisConn_ptr c__h )
     ^ ( __sub_cmd c `SUBSCRIBE` channel )
 }
 
-@ redis_unsubscribe RedisConn c__h s channel → !RedisMessage RedisErr {
+unsafe @ redis_unsubscribe RedisConn c__h s channel → !RedisMessage RedisErr {
     : *RedisConnImpl c ( __RedisConn_ptr c__h )
     ^ ( __sub_cmd c `UNSUBSCRIBE` channel )
 }
 
-@ redis_psubscribe RedisConn c__h s pattern → !RedisMessage RedisErr {
+unsafe @ redis_psubscribe RedisConn c__h s pattern → !RedisMessage RedisErr {
     : *RedisConnImpl c ( __RedisConn_ptr c__h )
     ^ ( __sub_cmd c `PSUBSCRIBE` pattern )
 }
 
-@ redis_punsubscribe RedisConn c__h s pattern → !RedisMessage RedisErr {
+unsafe @ redis_punsubscribe RedisConn c__h s pattern → !RedisMessage RedisErr {
     : *RedisConnImpl c ( __RedisConn_ptr c__h )
     ^ ( __sub_cmd c `PUNSUBSCRIBE` pattern )
 }
@@ -608,7 +608,7 @@ unsafe @ redis_select RedisConn c__h i db → !v RedisErr {
 // Block until the next pub/sub frame arrives, then decode it. Returns a
 // `message` / `pmessage` for delivered payloads, or a (un)subscribe control
 // frame; RedisIo on a closed connection.
-@ redis_next_message RedisConn c__h → !RedisMessage RedisErr {
+unsafe @ redis_next_message RedisConn c__h → !RedisMessage RedisErr {
     : *RedisConnImpl c ( __RedisConn_ptr c__h )
     ?? ( __r_read_reply c ) {
         F e → ^ @ !RedisMessage RedisErr { F e }
@@ -621,7 +621,7 @@ unsafe @ redis_select RedisConn c__h i db → !v RedisErr {
 
 // ── admin ──────────────────────────────────────────────────────────
 
-@ redis_flushdb RedisConn c__h → !v RedisErr {
+unsafe @ redis_flushdb RedisConn c__h → !v RedisErr {
     : *RedisConnImpl c ( __RedisConn_ptr c__h )
     ^ ( __reply_ok c ( __args1 `FLUSHDB` ) )
 }

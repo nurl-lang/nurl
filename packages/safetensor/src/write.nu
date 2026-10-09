@@ -116,7 +116,7 @@ unsafe @ __stw_entry * StWriterImpl w s name i dtype ( Vec i ) shape i at i endo
 
 // Any dtype: `bytes` is the tensor's raw little-endian payload (borrowed:
 // copied into a fresh chunk, the caller keeps its own vec).
-@ stw_add_raw StWriter w__h s name i dtype ( Vec i ) shape ( Vec u ) bytes → v {
+unsafe @ stw_add_raw StWriter w__h s name i dtype ( Vec i ) shape ( Vec u ) bytes → v {
     : *StWriterImpl w ( __StWriter_ptr w__h )
     : ( Vec u ) cb ( vec_with_cap [u] ( vec_len [u] bytes ) )
     ( bytes_extend_bytes cb bytes )
@@ -124,7 +124,7 @@ unsafe @ __stw_entry * StWriterImpl w s name i dtype ( Vec i ) shape i at i endo
 }
 
 // F32: host f64 rounded to float32 on write.
-@ stw_add_f32 StWriter w__h s name ( Vec i ) shape ( Vec f ) v → v {
+unsafe @ stw_add_f32 StWriter w__h s name ( Vec i ) shape ( Vec f ) v → v {
     : *StWriterImpl w ( __StWriter_ptr w__h )
     : ( Vec u ) cb ( vec_with_cap [u] * 4 ( vec_len [f] v ) )
     : ~ i k 0
@@ -136,7 +136,7 @@ unsafe @ __stw_entry * StWriterImpl w s name i dtype ( Vec i ) shape i at i endo
 }
 
 // F64: host f64 exact.
-@ stw_add_f64 StWriter w__h s name ( Vec i ) shape ( Vec f ) v → v {
+unsafe @ stw_add_f64 StWriter w__h s name ( Vec i ) shape ( Vec f ) v → v {
     : *StWriterImpl w ( __StWriter_ptr w__h )
     : ( Vec u ) cb ( vec_with_cap [u] * 8 ( vec_len [f] v ) )
     : ~ i k 0
@@ -148,7 +148,7 @@ unsafe @ __stw_entry * StWriterImpl w s name i dtype ( Vec i ) shape i at i endo
 }
 
 // F16: host f64 → IEEE half (round-to-nearest-even via floatbits).
-@ stw_add_f16 StWriter w__h s name ( Vec i ) shape ( Vec f ) v → v {
+unsafe @ stw_add_f16 StWriter w__h s name ( Vec i ) shape ( Vec f ) v → v {
     : *StWriterImpl w ( __StWriter_ptr w__h )
     : ( Vec u ) cb ( vec_with_cap [u] * 2 ( vec_len [f] v ) )
     : ~ i k 0
@@ -160,7 +160,7 @@ unsafe @ __stw_entry * StWriterImpl w s name i dtype ( Vec i ) shape i at i endo
 }
 
 // BF16: host f64 → bfloat16 (truncated top 16 bits of the f32).
-@ stw_add_bf16 StWriter w__h s name ( Vec i ) shape ( Vec f ) v → v {
+unsafe @ stw_add_bf16 StWriter w__h s name ( Vec i ) shape ( Vec f ) v → v {
     : *StWriterImpl w ( __StWriter_ptr w__h )
     : ( Vec u ) cb ( vec_with_cap [u] * 2 ( vec_len [f] v ) )
     : ~ i k 0
@@ -172,7 +172,7 @@ unsafe @ __stw_entry * StWriterImpl w s name i dtype ( Vec i ) shape i at i endo
 }
 
 // I64 from a host i vector.
-@ stw_add_i64 StWriter w__h s name ( Vec i ) shape ( Vec i ) v → v {
+unsafe @ stw_add_i64 StWriter w__h s name ( Vec i ) shape ( Vec i ) v → v {
     : *StWriterImpl w ( __StWriter_ptr w__h )
     : ( Vec u ) cb ( vec_with_cap [u] * 8 ( vec_len [i] v ) )
     : ~ i k 0

@@ -274,7 +274,7 @@ unsafe @ __api_ensure s name → String {
 //
 // Streams NDJSON frames as tokens decode (stream=true), or accumulates
 // and answers with a single object (stream=false).
-@ __api_generate TcpConn c s model String prompt s field b stream
+unsafe @ __api_generate TcpConn c s model String prompt s field b stream
 i npredict f temp i topk f topp i seed → b {
     : Llm m # Llm g_api_llm
     : Tok t ( llm_tok m )
@@ -600,7 +600,7 @@ i npredict f temp i topk f topp i seed → b {
 // Ensure the configured model is loaded, render the message history
 // through its chat template, and return the assistant's reply — or
 // the reason it cannot (no model configured / the load failed).
-@ __web_reply Json history s new_content → !String String {
+unsafe @ __web_reply Json history s new_content → !String String {
     ? == 0 ( nurl_str_len g_api_model ) {
         ^ @ !String String { F ( string_from `no model is configured — restart the server with a model: nurllama serve MODEL (or run the setup wizard: nurllama start)` ) }
     } {}

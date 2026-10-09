@@ -33,15 +33,17 @@
 // identities  a^b = (a|b) - (a&b)  and  ~m = -1 - m  (two's complement),
 // both exact and carry-free per bit.
 
+$ `stdlib/core/vec.nu`
+
 : Bitset { s words i nbits i nwords }
 
 @ bitset_new i nbits → Bitset {
     : i nb ? > nbits 0 nbits 0
-    : i nw / + nb 63 64
+    : i nw / ( alloc_count_add nb 63 ) 64
     // `[ owners ][ word 0 ] …`; `words` points at word 0.
     : ~ i w 0
     ? > nw 0 {
-        : s blk ( nurl_zalloc * + nw 1 8 )
+        : s blk ( nurl_zalloc ( alloc_size 8 + nw 1 ) )
         ( nurl_poke blk 0 1 )
         = w + # i blk 8
     } {}

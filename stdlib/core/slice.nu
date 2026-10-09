@@ -7,11 +7,12 @@
 // designed to replace the leak-prone `vec_data` + manual index
 // arithmetic pattern that shows up in every hot-loop accessor today.
 //
-// Lifetime rule: a Slice is valid only while its backing storage is
-// alive AND unchanged in capacity. Any `vec_push` / `vec_reserve` /
-// `vec_set_len` / `vec_extend` that may grow the underlying buffer
-// invalidates every outstanding slice. The compiler does not check
-// this — same discipline as a C pointer-into-buffer.
+// Lifetime rule: a Slice is a view of its storage (docs/MEMORY.md
+// §2.10), valid only while that storage is alive and unchanged in
+// capacity. Any `vec_push` / `vec_reserve` / `vec_extend` that may grow
+// the underlying buffer, or freeing the Vec, ends every outstanding slice
+// of it — and the compiler checks this wherever the slice has gone: a
+// struct or container holding it, a closure that captured it, a result.
 //
 // Examples:
 //
@@ -25,8 +26,12 @@
 //   // Bounds-checked single-element read.
 //   : ? i x ( slice_get [i] s 3 )
 //
-//   // Raw pointer (no checks) for tight loops that already know the
-//   // bound. Equivalent to `vec_data` but documented as borrowed.
+//   // A string's bytes, measured once; 0 past the end.
+//   : ( Slice u ) b ( slice_of_str text )
+//   : i c ( slice_byte b 0 )
+//
+//   // Raw pointer (no checks), for `unsafe` code that already knows the
+//   // bound — like `vec_data`, only an `unsafe` function may take it.
 //   : * i p ( slice_data [i] s )
 //
 // Slices do not own; never free them — let them go out of scope.
@@ -44,6 +49,21 @@ $ `stdlib/core/vec.nu`
         ( vec_data [A] v )
         ( vec_len [A] v )
     }
+}
+
+// The bytes of a NUL-terminated string, measured once: a scan indexes it
+// in O(1) against a length that cannot lie (`nurl_str_at` took its
+// caller's, so a wrong one read past the string — it is raw memory now).
+// A null string is the empty slice.
+@ slice_of_str s text → ( Slice u ) {
+    ? == # i text 0 { ^ ( slice_empty [u] ) } {}
+    ^ @ ( Slice u ) { # *u text ( strlen text ) }
+}
+
+// The empty slice: no data, length 0. What a reader that has nothing to
+// read holds — the one Slice built from no Vec.
+@ slice_empty [A] → ( Slice A ) {
+    ^ @ ( Slice A ) { # *A 0 0 }
 }
 
 // Sub-range view `[from, to)`. Bounds are clamped to `[0, len(s))` —
@@ -90,6 +110,14 @@ $ `stdlib/core/vec.nu`
     ? | < idx 0 >= idx . s len { ^ @ ?A { F # A 0 } } {}
     : *A p . s data
     ^ @ ?A { T . p idx }
+}
+
+// The byte at `idx` (0..255), or 0 outside [0, len): the read a parser
+// makes one or two bytes past its cursor, with no Option to unwrap.
+inline @ slice_byte ( Slice u ) s i idx → i {
+    ? | < idx 0 >= idx . s len { ^ 0 } {}
+    : *u p . s data
+    ^ & # i . p idx 255
 }
 
 // First / last element — convenience wrappers, same None-on-empty

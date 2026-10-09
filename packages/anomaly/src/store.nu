@@ -24,6 +24,7 @@ $ `src/model.nu`
 $ `src/autoenc.nu`
 $ `src/forecast.nu`
 $ `deps/iforest/src/iforest.nu`
+$ `stdlib/core/slice.nu`
 
 // Refuse to load blobs claiming more than this many arena nodes / trees /
 // name bytes — bounds untrusted counts before any allocation.
@@ -463,11 +464,12 @@ unsafe @ vermodel_from_bytes ( Vec u ) buf → ?VerModel {
 // `_root.db` is the tenant registry, not an organisation, and the flat-store
 // migration walks these names looking for one that claims a model.
 @ __st_org_ok s org → b {
-    : i n ( nurl_str_len org )
+    : ( Slice u ) org_b ( slice_of_str org )
+    : i n ( slice_len [u] org_b )
     ? | == n 0 > n 64 { ^ F } {}
     : ~ i k 0
     ~ < k n {
-        : i c ( nurl_str_at org n k )
+        : i c ( slice_byte org_b k )
         : b digit & >= c 48 <= c 57
         : b lower & >= c 97 <= c 122
         : b upper & >= c 65 <= c 90
@@ -912,7 +914,7 @@ unsafe @ vermodel_from_bytes ( Vec u ) buf → ?VerModel {
     ^ ok
 }
 
-@ store_load_ae Store st s name → ?AeModel {
+unsafe @ store_load_ae Store st s name → ?AeModel {
     ?? ( __st_blob_get st name ANOM_KIND_AE ) {
         F _ → { ^ @ ?AeModel { F } }
         T data → {
@@ -930,7 +932,7 @@ unsafe @ vermodel_from_bytes ( Vec u ) buf → ?VerModel {
     ^ ok
 }
 
-@ store_load_fc Store st s name → ?FcModel {
+unsafe @ store_load_fc Store st s name → ?FcModel {
     ?? ( __st_blob_get st name ANOM_KIND_FC ) {
         F _ → { ^ @ ?FcModel { F } }
         T data → {
@@ -1440,24 +1442,28 @@ unsafe @ store_load_scores Store st s name → ?ScoreCache {
 // nothing and a rollback is a directory move back.
 
 @ __st_starts s hay s pre → b {
-    : i hn ( nurl_str_len hay )
-    : i pn ( nurl_str_len pre )
+    : ( Slice u ) hay_b ( slice_of_str hay )
+    : i hn ( slice_len [u] hay_b )
+    : ( Slice u ) pre_b ( slice_of_str pre )
+    : i pn ( slice_len [u] pre_b )
     ? > pn hn { ^ F } {}
     : ~ i k 0
     ~ < k pn {
-        ? == ( nurl_str_at hay hn k ) ( nurl_str_at pre pn k ) {} { ^ F }
+        ? == ( slice_byte hay_b k ) ( slice_byte pre_b k ) {} { ^ F }
         = k + k 1
     }
     ^ T
 }
 
 @ __st_ends s hay s suf → b {
-    : i hn ( nurl_str_len hay )
-    : i sn ( nurl_str_len suf )
+    : ( Slice u ) hay_b ( slice_of_str hay )
+    : i hn ( slice_len [u] hay_b )
+    : ( Slice u ) suf_b ( slice_of_str suf )
+    : i sn ( slice_len [u] suf_b )
     ? > sn hn { ^ F } {}
     : ~ i k 0
     ~ < k sn {
-        ? == ( nurl_str_at hay hn + - hn sn k ) ( nurl_str_at suf sn k ) {} { ^ F }
+        ? == ( slice_byte hay_b + - hn sn k ) ( slice_byte suf_b k ) {} { ^ F }
         = k + k 1
     }
     ^ T
@@ -1664,10 +1670,11 @@ unsafe @ store_migrate_dir Store st s root s name i now → b {
                     T e → {
                         : s en ( string_data e )
                         ? & == ( string_len found ) 0 ( __st_ends en `.db` ) {
-                            : i el ( nurl_str_len en )
+                            : ( Slice u ) en_b ( slice_of_str en )
+                            : i el ( slice_len [u] en_b )
                             : String org ( string_new )
                             : ~ i c 0
-                            ~ < c - el 3 { ( string_push_char org ( nurl_str_at en el c ) ) = c + c 1 }
+                            ~ < c - el 3 { ( string_push_char org ( slice_byte en_b c ) ) = c + c 1 }
                             ? ( __st_org_ok ( string_data org ) ) {
                                 : Store probe ( store_open_org root ( string_data org ) )
                                 ? . probe ok {

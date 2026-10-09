@@ -2,6 +2,20 @@
 
 All notable changes to this package are documented here.
 
+## [0.13.2] — 2026-10-09
+
+Requires NURL 0.72.0, which tracks a view wherever it goes and rejects
+one that outlives what it views. The published 0.13.1 does not compile
+under 0.72.0.
+
+### Changed
+
+- The `--token` value reaches the HTTP transport as an argument of
+  `run_http` (`run_http srv host port token`) instead of through a
+  global view of `main`'s String, which 0.72.0 rejects: a global
+  outlives the String it points into. Requests are authenticated as
+  before.
+
 ## [0.13.1] — 2026-10-03
 
 No change to the MCP tools, their arguments or their results. Requires

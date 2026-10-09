@@ -223,13 +223,13 @@ $ `stdlib/core/cell.nu`
 // per platform (Linux glibc = 19, macOS = 21) and porting that
 // offset table into NURL buys nothing.
 
-& `c` @ opendir s path → s
+& `c` @ opendir s path → *u
 
-& `c` @ readdir s dirp → s
+& `c` @ readdir *u dirp → *u
 
-& `c` @ closedir s dirp → i32
+& `c` @ closedir *u dirp → i32
 
-& `c` @ nurl_dirent_name s de → s  // borrowed `de->d_name`
+& `c` @ nurl_dirent_name *u de → s  // borrowed `de->d_name`
 
 // ── Signal handling ───────────────────────────────────────────────
 

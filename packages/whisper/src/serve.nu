@@ -323,7 +323,7 @@ unsafe @ __srv_reaper → v {
 
 // The transcription itself, after the request has been picked apart.
 // Takes `wav`.
-@ __srv_run sink ( Vec u ) wav s lang b use_vad b with_ts b as_text → HttpResponse {
+unsafe @ __srv_run sink ( Vec u ) wav s lang b use_vad b with_ts b as_text → HttpResponse {
     ?? ( __srv_pcm16 wav ) {
         T at16 → {
 
@@ -460,7 +460,7 @@ unsafe @ __srv_reaper → v {
     ^ ( response_text 404 `test page not found — reinstall the package (nurlpkg stages views/ into share/whisper/), or run from the package directory\n` )
 }
 
-@ __srv_health HttpRequest req → HttpResponse {
+unsafe @ __srv_health HttpRequest req → HttpResponse {
     : Json o ( json_obj_new )
     // `ok` = loaded and serving; `idle` = unloaded by --unload-after, the
     // next request reloads it (still healthy — a client should not treat
@@ -593,7 +593,7 @@ unsafe @ __srv_ws_config TcpConn c ( Vec u ) payload → v {
 }
 
 // A closed utterance: transcribe it, send {"text","t0","t1"}.
-@ __srv_ws_emit TcpConn c VadStream vs → v {
+unsafe @ __srv_ws_emit TcpConn c VadStream vs → v {
     : VadSeg g ( vad_stream_seg vs )
     : ( Vec f ) seg ( vad_stream_take vs )
     : ~ s lang g_srv_lang

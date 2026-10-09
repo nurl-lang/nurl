@@ -96,13 +96,13 @@ $ `bx.nu`
                 : ~ i i 0
                 ~ < i nops {
                     : String b ( __basename_of ( bx_operand o i ) ( bx_val o `s` ) )
-                    ( nurl_print_bytes ( string_data b ) ( string_len b ) )
+                    ( write_string b )
                     ( nurl_print ? == term 0 `` `\n` )
                     = i + i 1
                 }
             } {
                 : String b ( __basename_of ( bx_operand o 0 ) ? > nops 1 ( bx_operand o 1 ) `` )
-                ( nurl_print_bytes ( string_data b ) ( string_len b ) )
+                ( write_string b )
                 ( nurl_print ? == term 0 `` `\n` )
             }
         }

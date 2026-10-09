@@ -9,6 +9,11 @@
 //   - a parameter the function keeps (freed on one path) returned inside a
 //     wrapped struct (`^ @ ?Tt { T @ Tt { 1 shape } }`): the caller hands
 //     its value over, so what comes back is owned, not a borrow of it.
+//
+// A raw string field owns a fresh string only in `unsafe` code and the
+// trusted library; safe code holds a String there, or a view of a
+// binding (docs/MEMORY.md §2.13). The functions that build such structs
+// are `unsafe` to keep exercising that machinery.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
@@ -21,18 +26,18 @@ unsafe @ live → i { ^ - ( nurl_alloc_count ) ( nurl_free_count ) }
 
 : Opt { s model i bad }
 
-@ opt_bound → Opt {
+unsafe @ opt_bound → Opt {
     : s model ( nurl_str_cat `model-` `path` )
     ^ @ Opt { model 0 }
 }
 
-@ opt_reassigned i which → Opt {
+unsafe @ opt_reassigned i which → Opt {
     : ~ s model ``
     ? > which 0 { : s v ( nurl_str_cat `model-` `path` ) = model v } {}
     ^ @ Opt { model 0 }
 }
 
-@ opt_fresh → Opt {
+unsafe @ opt_fresh → Opt {
     ^ @ Opt { ( nurl_str_cat `model-` `path` ) 0 }
 }
 

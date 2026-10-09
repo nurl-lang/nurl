@@ -15,14 +15,7 @@ $ `stdlib/core/string.nu`
             ( nurl_print `Round-trip output:\n` )
             ( nurl_print ( string_data output ) )
 
-            // Cleanup rows
-            : i nr ( vec_len [( Vec String )] rows )
-            : ~ i i 0
-            ~ < i nr {
-                : ?( Vec String ) row_opt ( vec_get [( Vec String )] rows i )
-                ?? row_opt { T row → ( _csv_row_free row ) F → {} }
-                = i + i 1
-            }
+            // Cleanup: the Vec drops each row, and each row its Strings.
             ( vec_free [( Vec String )] rows )
             ( string_free output )
         }

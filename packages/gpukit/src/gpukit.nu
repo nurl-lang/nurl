@@ -290,7 +290,7 @@ unsafe @ gk_mem_total GpuKit kit__h → i {
 @ gk_pool_idle_bytes → i { ^ g_pool_idle }
 
 // Cap the idle side at `bytes` (0 = unlimited). Trims immediately.
-@ gk_pool_budget GpuKit kit__h i bytes → v {
+unsafe @ gk_pool_budget GpuKit kit__h i bytes → v {
     : *GpuKitImpl kit ( _GpuKit_ptr kit__h )
     = g_pool_max ? < bytes 0 { 0 } { bytes }
     ( __gk_pool_trim kit )
@@ -409,7 +409,7 @@ unsafe @ _gk_pool_give * GpuKitImpl kit i dptr → v {
 
 // Hand every idle block back to the driver and drop it from the table.
 // In-use blocks stay — this is a trim, not a reset.
-@ gk_pool_release GpuKit kit__h → v {
+unsafe @ gk_pool_release GpuKit kit__h → v {
     : *GpuKitImpl kit ( _GpuKit_ptr kit__h )
     ( _gk_pool_release kit )
 }
@@ -462,21 +462,21 @@ unsafe @ gk_out_i ( Vec i ) v → GkArg {
 }
 // Raw buffers, for element layouts other than f64/i64 (e.g. a packed float32
 // host buffer): pass the host pointer and byte size directly.
-@ gk_buf_in * u host i bytes → GkArg { ^ @ GkArg { 0 host bytes 0 } }
+unsafe @ gk_buf_in * u host i bytes → GkArg { ^ @ GkArg { 0 host bytes 0 } }
 
-@ gk_buf_out * u host i bytes → GkArg { ^ @ GkArg { 1 host bytes 0 } }
+unsafe @ gk_buf_out * u host i bytes → GkArg { ^ @ GkArg { 1 host bytes 0 } }
 
-@ gk_i64 i v → GkArg {
+unsafe @ gk_i64 i v → GkArg {
     : *u nullp # *u 0
     ^ @ GkArg { 2 nullp 0 ( gpu_arg_i64 v ) }
 }
 
-@ gk_i32 i v → GkArg {
+unsafe @ gk_i32 i v → GkArg {
     : *u nullp # *u 0
     ^ @ GkArg { 2 nullp 0 ( gpu_arg_i32 v ) }
 }
 
-@ gk_f32 f v → GkArg {
+unsafe @ gk_f32 f v → GkArg {
     : *u nullp # *u 0
     ^ @ GkArg { 2 nullp 0 ( gpu_arg_f32 v ) }
 }

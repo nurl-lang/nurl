@@ -1,0 +1,10 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_raw_method.nu:23:19: error: 'addr' hands back a raw pointer ('*T'), which only an 'unsafe' function may take: the compiler stops following what it points at once the address is out, so reading through it, keeping it, or passing it on as a string ('s') can reach freed memory or run past the buffer. Use the safe API over the owning value (vec_get or iteration for a Vec, a Slice of it, string_data for a String's text), or, if this function genuinely needs the raw pointer and you vouch for its memory safety, declare it 'unsafe @ name …'.
+    : *u p ( addr l )
+                  ^
+compiler/tests/diag_raw_method.nu:30:19: error: 'addr' hands back a raw pointer ('*T'), which only an 'unsafe' function may take: the compiler stops following what it points at once the address is out, so reading through it, keeping it, or passing it on as a string ('s') can reach freed memory or run past the buffer. Use the safe API over the owning value (vec_get or iteration for a Vec, a Slice of it, string_data for a String's text), or, if this function genuinely needs the raw pointer and you vouch for its memory safety, declare it 'unsafe @ name …'.
+    : *u p ( addr d )
+                  ^
+error: aborting due to 2 previous errors
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

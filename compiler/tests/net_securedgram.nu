@@ -64,7 +64,7 @@ $ `stdlib/net/securedgram.nu`
 
 // A bare PeerState with only what __sdg_reasm touches — the hand-fed
 // hostile cases go straight at the reassembler.
-@ mk_peer → PeerState {
+unsafe @ mk_peer → PeerState {
     : ( Vec u ) nopk ( vec_new [u] )
     ^ ( __peer_new nopk `` 0 0 )
 }
@@ -81,7 +81,7 @@ $ `stdlib/net/securedgram.nu`
     ^ v
 }
 
-@ main → i {
+unsafe @ main → i {
     : i cb ( securedgram_chunk_bytes )
 
     // ── the reassembler, fed by hand ────────────────────────────

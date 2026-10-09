@@ -40,7 +40,7 @@ $ `stdlib/std/quic_frame.nu`
 }
 
 // Parse `buf` from 0 and expect failure.
-@ expect_bad s label ( Vec u ) buf → i {
+unsafe @ expect_bad s label ( Vec u ) buf → i {
     : QuicFrame f ( quic_frame_parse buf 0 )
     ? == 0 # i . f ctl {
         ( nurl_print label ) ( nurl_print `: PASS\n` )
@@ -53,7 +53,7 @@ $ `stdlib/std/quic_frame.nu`
     }
 }
 
-@ main → i {
+unsafe @ main → i {
     : ~ i fails 0
     : ( Vec u ) out ( vec_new [u] )
 

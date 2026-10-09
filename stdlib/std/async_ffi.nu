@@ -71,8 +71,8 @@
 // Wait for either readable(1) or writable(2) readiness on one fd.
 & `c` @ nurl_reactor_wait_io i fd i events i timeout_ms → i
 
-& `c` @ nurl_tcp_write_nowait i handle s bytes i length → i
+& `c` @ nurl_tcp_write_nowait i handle *u bytes i length → i
 
 & `c` @ nurl_tcp_wait_io i handle i events i timeout_ms → i
 
-& `c` @ nurl_tcp_read_nowait i handle s bytes i length → i
+& `c` @ nurl_tcp_read_nowait i handle *u bytes i length → i

@@ -864,7 +864,7 @@ $ `stdlib/core/rcbox.nu`
     : ~ i frames 0
     // Bound each write burst so a peer with large windows cannot starve reads.
     ~ & < idx ns < frames 32 {
-        : H2CStream s ( __h2c_get_stream c idx )
+        : ~ H2CStream s ( __h2c_get_stream c idx )
         ? & ! . s req_done ! . s complete {
             : i plen ( vec_len [u] . s pending_body )
             : ~ b blocked F
@@ -890,17 +890,22 @@ $ `stdlib/core/rcbox.nu`
                     }
                     : H2Frame df @ H2Frame { ( h2_type_data )
                         ? last ( h2_flag_end_stream ) 0 . s id part }
+                    // The slot holds the progress so far before the write
+                    // touches the connection, and is read back after it.
+                    ( __h2c_set_stream c idx s )
                     : !v H2FrameErr wr ( __h2c_write_frame c df mfs )
                     ?? wr { T _ → {} F e → {
                             = . c conn_error 1
-                            ( __h2c_set_stream c idx s )
                             ^ @ !v H2ClientErr { F ( __h2c_frame_err_to_client e ) }
                         } }
+                    = s ( __h2c_get_stream c idx )
                     = . s send_pos + . s send_pos count
                     = . s send_window - . s send_window count
-                    ( __h2c_set_conn_window c - cw count )
                     = frames + frames 1
                     ? last { = . s req_done T } {}
+                    ( __h2c_set_stream c idx s )
+                    ( __h2c_set_conn_window c - cw count )
+                    = s ( __h2c_get_stream c idx )
                 }
             }
             ? == . s send_pos plen {
@@ -1213,16 +1218,15 @@ $ `stdlib/core/rcbox.nu`
                                 // credited only on take_data for streaming consumers.
                                 : i credit ? . s streaming - plen dl plen
                                 ? . s streaming { = . s recv_credit + . s recv_credit dl } {}
+                                ? & ! es > credit 0 { = . s recv_window + . s recv_window credit } {}
+                                // The slot is written before the credit goes out:
+                                // sending it writes the connection.
+                                ( __h2c_set_stream c idx s )
                                 ? & ! es > credit 0 {
-                                    = . s recv_window + . s recv_window credit
                                     : !v H2ClientErr wr ( __h2c_control_result
                                     ( __h2c_send_window c sid credit ) )
-                                    ?? wr { T _ → {} F e → {
-                                            ( __h2c_set_stream c idx s )
-                                            ^ @ !v H2ClientErr { F e }
-                                        } }
+                                    ?? wr { T _ → {} F e → { ^ @ !v H2ClientErr { F e } } }
                                 } {}
-                                ( __h2c_set_stream c idx s )
                             }
                         } {}
                     } {}
@@ -1340,8 +1344,9 @@ $ `stdlib/core/rcbox.nu`
         : H2CStream s ( __h2c_get_stream c k )
         ? & & ! . s complete > . s deadline_ns 0 >= now . s deadline_ns {
             = . s deadline_expired T
+            : i sid . s id
             ( __h2c_set_stream c k s )
-            : !v H2ClientErr cr ( __h2c_cancel c . s id ( h2_err_cancel ) )
+            : !v H2ClientErr cr ( __h2c_cancel c sid ( h2_err_cancel ) )
             ?? cr { T _ → {} F e → { ^ @ !v H2ClientErr { F e } } }
         } {}
         = k + k 1

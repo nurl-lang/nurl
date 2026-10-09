@@ -2768,7 +2768,7 @@ unsafe @ arima_clone ArimaModel m__h → ArimaModel {
 // fixed amount a row is ARIMA(0,1,0) with drift exactly, and without the
 // term the order search has only a unit root to climb with. Everything
 // is least squares first, the ARIMA on the residuals after.
-@ arima_fit_regress ( Vec f ) y ( Vec i ) periods i k b trend ArimaSpec sp i method → ArimaModel {
+unsafe @ arima_fit_regress ( Vec f ) y ( Vec i ) periods i k b trend ArimaSpec sp i method → ArimaModel {
     : ( Vec f ) coef ( __ar_fourier_ols y periods k trend )
     : ( Vec f ) res ( __ar_fourier_residuals y periods k trend coef )
     : ArimaModel m ( arima_fit_method res sp method )
@@ -2776,7 +2776,7 @@ unsafe @ arima_clone ArimaModel m__h → ArimaModel {
     ^ m
 }
 
-@ arima_auto_regress ( Vec f ) y ( Vec i ) periods i k b trend i s → ArimaModel {
+unsafe @ arima_auto_regress ( Vec f ) y ( Vec i ) periods i k b trend i s → ArimaModel {
     : ( Vec f ) coef ( __ar_fourier_ols y periods k trend )
     : ( Vec f ) res ( __ar_fourier_residuals y periods k trend coef )
     : ArimaModel m ( arima_auto res s )

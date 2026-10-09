@@ -87,7 +87,7 @@ unsafe @ show_hex s label s src → v {
     }
 }
 
-@ main → i {
+unsafe @ main → i {
     ( show `surrogate then escaped quote` `["\uD800\\"]` )
     ( show `surrogate then bare escape-u` `["\uD800\\u"]` )
     ( show `surrogate then 1-digit escape` `["\uD800\\u1"]` )

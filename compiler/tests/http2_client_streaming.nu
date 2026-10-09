@@ -101,7 +101,7 @@ unsafe @ raw_peer TcpConn tcp → v {
     ( tcp_close_conn tcp )
 }
 
-@ run_client H2Client c → i {
+unsafe @ run_client H2Client c → i {
     : ~ i failures 0
     : ( Vec Header ) hs ( vec_new [Header] )
     : i sid ?? ( h2_client_open c `POST` `http` `localhost` `/svc/Call` hs ) {

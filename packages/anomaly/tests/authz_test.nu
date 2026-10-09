@@ -20,6 +20,7 @@ $ `stdlib/ext/json.nu`
 $ `stdlib/std/encode.nu`
 $ `stdlib/ext/sqlite.nu`
 $ `src/authz.nu`
+$ `stdlib/core/slice.nu`
 
 : ~ i g_pass 0
 : ~ i g_fail 0
@@ -39,8 +40,10 @@ $ `src/authz.nu`
 
 // Does `hay` contain `needle`?
 @ __has s hay s needle → b {
-    : i hn ( nurl_str_len hay )
-    : i nn ( nurl_str_len needle )
+    : ( Slice u ) hay_b ( slice_of_str hay )
+    : i hn ( slice_len [u] hay_b )
+    : ( Slice u ) needle_b ( slice_of_str needle )
+    : i nn ( slice_len [u] needle_b )
     ? == nn 0 { ^ T } {}
     ? > nn hn { ^ F } {}
     : ~ i k 0
@@ -48,7 +51,7 @@ $ `src/authz.nu`
         : ~ b same T
         : ~ i j 0
         ~ & same < j nn {
-            ? == ( nurl_str_at hay hn + k j ) ( nurl_str_at needle nn j ) {} { = same F }
+            ? == ( slice_byte hay_b + k j ) ( slice_byte needle_b j ) {} { = same F }
             = j + j 1
         }
         ? same { ^ T } {}
@@ -130,7 +133,7 @@ $ `src/authz.nu`
     ( check == ( string_len none ) 0 `tenancy: no template yields no issuer` )
 
     // The provider's own template, with the token's tenant substituted.
-    = g_az_iss_tmpl `https://login.example.com/{tenantid}/v2.0`
+    ( anomaly_authz_set_iss_tmpl `https://login.example.com/{tenantid}/v2.0` )
     : String iss ( __az_issuer_for `1111-2222` )
     ( check ( streq iss `https://login.example.com/1111-2222/v2.0` )
     `tenancy: the tenant is substituted into the template` )
@@ -142,10 +145,10 @@ $ `src/authz.nu`
     // A template with no placeholder is a fixed string somebody wrote by
     // mistake; substituting nothing into it would silently accept every
     // tenant under one issuer, so it is refused.
-    = g_az_iss_tmpl `https://login.example.com/fixed/v2.0`
+    ( anomaly_authz_set_iss_tmpl `https://login.example.com/fixed/v2.0` )
     : String noph ( __az_issuer_for `1111-2222` )
     ( check == ( string_len noph ) 0 `tenancy: a template without the placeholder is refused` )
-    = g_az_iss_tmpl `https://login.example.com/{tenantid}/v2.0`
+    ( anomaly_authz_set_iss_tmpl `https://login.example.com/{tenantid}/v2.0` )
 
     // The allowlist. Empty admits everyone — that is what multi-tenant
     // asks for — and a list admits exactly what it names.
@@ -185,7 +188,7 @@ $ `src/authz.nu`
 
     ( anomaly_authz_configure T T `https://id.example/organizations/v2.0` `cid` `api://cid` )
     ( anomaly_authz_configure_tenancy T `` )
-    = g_az_iss_tmpl `https://id.example/{tenantid}/v2.0`
+    ( anomaly_authz_set_iss_tmpl `https://id.example/{tenantid}/v2.0` )
     : Principal p1 ( __az_token_principal ( string_data tok ) 1700000000 )
     ( check ! . p1 authed `wiring: an unapproved organisation is refused` )
     ( check ( __has ( anomaly_authz_last_error ) `not approved` )
@@ -204,7 +207,7 @@ $ `src/authz.nu`
     : OidcProvider fake ( oidc_provider_new `https://id.example/organizations/v2.0` )
     : b _j ( oidc_provider_set_jwks fake `{"keys":[]}` )
     = g_az_prov_addr # i fake
-    = g_az_iss_tmpl `https://id.example/{tenantid}/v2.0`
+    ( anomaly_authz_set_iss_tmpl `https://id.example/{tenantid}/v2.0` )
     : Principal p2 ( __az_token_principal ( string_data tok ) 1700000000 )
     ( check ! . p2 authed `wiring: an unsigned token is still refused` )
     ( check ! ( __has ( anomaly_authz_last_error ) `not approved` )

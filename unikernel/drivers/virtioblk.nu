@@ -82,9 +82,9 @@ $ `stdlib/hal/virtio.nu`
     ^ c
 }
 
-@ __phys ( Vec u ) v → i { ^ # i ( vec_data [u] v ) }
+unsafe @ __phys ( Vec u ) v → i { ^ # i ( vec_data [u] v ) }
 
-@ __vq_phys Virtq q i off → i { ^ + # i ( vec_data [u] ( virtq_mem q ) ) off }
+unsafe @ __vq_phys Virtq q i off → i { ^ + # i ( vec_data [u] ( virtq_mem q ) ) off }
 
 // Find the first virtio-blk device the command line names and bring it
 // up. A null pointer means there is no such device — a fact about the

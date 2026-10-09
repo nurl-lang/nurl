@@ -42,18 +42,21 @@ $ `stdlib/std/fs.nu`
 $ `stdlib/std/path.nu`
 $ `stdlib/std/process.nu`
 $ `stdlib/core/rcbox.nu`
+$ `stdlib/core/slice.nu`
 
 // ── what is a video ─────────────────────────────────────────────────
 
 @ __vd_lower i c → i { ^ ? & >= c 65 <= c 90 + c 32 c }
 
 @ __vd_ext_is s name s ext → b {
-    : i n ( nurl_str_len name )
-    : i m ( nurl_str_len ext )
+    : ( Slice u ) name_b ( slice_of_str name )
+    : i n ( slice_len [u] name_b )
+    : ( Slice u ) ext_b ( slice_of_str ext )
+    : i m ( slice_len [u] ext_b )
     ? <= n m { ^ F } {}
     : ~ i k 0
     ~ < k m {
-        ? != ( __vd_lower ( nurl_str_at name n + - n m k ) ) ( nurl_str_at ext m k ) { ^ F } {}
+        ? != ( __vd_lower ( slice_byte name_b + - n m k ) ) ( slice_byte ext_b k ) { ^ F } {}
         = k + k 1
     }
     ^ T
@@ -78,16 +81,17 @@ $ `stdlib/core/rcbox.nu`
     : String base ( path_basename path )
     // strip the extension: everything from the last '.' on
     : s bd ( string_data base )
-    : i bl ( nurl_str_len bd )
+    : ( Slice u ) bd_b ( slice_of_str bd )
+    : i bl ( slice_len [u] bd_b )
     : ~ i dot bl
     : ~ i k 0
     ~ < k bl {
-        ? == ( nurl_str_at bd bl k ) 46 { = dot k } {}
+        ? == ( slice_byte bd_b k ) 46 { = dot k } {}
         = k + k 1
     }
     : String stem ( string_new )
     = k 0
-    ~ < k dot { ( string_push_char stem ( nurl_str_at bd bl k ) ) = k + k 1 }
+    ~ < k dot { ( string_push_char stem ( slice_byte bd_b k ) ) = k + k 1 }
     ( string_push_str stem `_frames` )
     : String out ( path_join ( string_data d ) ( string_data stem ) )
     ^ out
@@ -385,13 +389,14 @@ unsafe @ vid_avi_extract VidAvi v__h s outdir i stride → !i String {
                 ?? ( vec_get [String] names k ) {
                     T nm → {
                         : s nd ( string_data nm )
-                        : i nl ( nurl_str_len nd )
+                        : ( Slice u ) nd_b ( slice_of_str nd )
+                        : i nl ( slice_len [u] nd_b )
                         : b frame | ( __vd_ext_is nd `.jpg` ) ( __vd_ext_is nd `.png` )
                         ? & frame == nl 10 {
                             : ~ b digits T
                             : ~ i d 0
                             ~ < d 6 {
-                                : i c ( nurl_str_at nd nl d )
+                                : i c ( slice_byte nd_b d )
                                 ? | < c 48 > c 57 { = digits F } {}
                                 = d + d 1
                             }

@@ -196,7 +196,7 @@ $ `stdlib/std/quic_frame.nu`
     ( quic_push_handshake_done out )
 }
 
-@ main → i {
+unsafe @ main → i {
     : ~ i bad 0
     : ~ i parsed_ok 0
     : ~ i parsed_bad 0

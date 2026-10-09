@@ -41,7 +41,7 @@ $ `stdlib/std/quic_tp.nu`
 }
 
 // Decode `hex` as a client's parameters and expect rejection.
-@ expect_reject s label s hex → i {
+unsafe @ expect_reject s label s hex → i {
     : ( Vec u ) b ( hx hex )
     : QuicTp t ( quic_tp_decode b T )
     ( vec_free [u] b )
@@ -58,7 +58,7 @@ $ `stdlib/std/quic_tp.nu`
 // A minimal valid client set: initial_source_connection_id only.
 @ minimal_client → s { ^ `0f08c1c2c3c4c5c6c7c8` }
 
-@ main → i {
+unsafe @ main → i {
     : ~ i fails 0
 
     // ── the RFC 9001 A.2 ClientHello's parameters, verbatim ──────

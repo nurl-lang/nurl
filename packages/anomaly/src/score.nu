@@ -125,12 +125,12 @@ $ `deps/gpukit/src/gpukit.nu`
 }
 
 // The live kit (only valid when g_ag_state == 1).
-@ __ag_kit → GpuKit { ^ # GpuKit g_ag_kit }
+unsafe @ __ag_kit → GpuKit { ^ # GpuKit g_ag_kit }
 
 // Public view of the kit for sibling modules (aegpu.nu shares the device —
 // __-prefixed functions are file-scoped). Only valid after anom_gpu_engine
 // reported `cuda` or `cpu`.
-@ anom_gpu_kit → GpuKit { ^ # GpuKit g_ag_kit }
+unsafe @ anom_gpu_kit → GpuKit { ^ # GpuKit g_ag_kit }
 
 // Release the device + kernel cache (tests call this so leak checkers see a
 // closed shop; a long-running service just keeps the singleton).

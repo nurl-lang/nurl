@@ -62,7 +62,7 @@ $ `stdlib/fs/fatfmt.nu`
 
 // ── helpers ─────────────────────────────────────────────────────────
 
-@ put s path s text → i {
+unsafe @ put s path s text → i {
     : i h ( fatfs_open path | | ( fo_rdwr ) ( fo_creat ) ( fo_trunc ) )
     ? < h 0 { ^ h } {}
     : i n ( fatfs_write_raw h text ( nurl_str_len text ) )
@@ -131,7 +131,7 @@ $ `stdlib/fs/fatfmt.nu`
 
 // ── the body, run once per layout ───────────────────────────────────
 
-@ run_layout s tag i sectors i want_type → v {
+unsafe @ run_layout s tag i sectors i want_type → v {
     ( nurl_print `--- ` )
     ( nurl_print tag )
     ( nurl_print ` ---\n` )

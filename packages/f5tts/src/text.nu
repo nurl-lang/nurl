@@ -244,7 +244,7 @@ unsafe @ __f5t_id_multi * F5VocabImpl v s text i off i len → i {
 
 // Emit one segment's characters, preceded by the space F5-TTS inserts in
 // front of a multi-character pure-ASCII segment. Returns the new `last`.
-@ __f5t_emit_seg * F5VocabImpl v s text i from i to ( Vec i ) out i last → i {
+unsafe @ __f5t_emit_seg * F5VocabImpl v s text i from i to ( Vec i ) out i last → i {
     : ~ i lst last
     ? & > - to from 1 ( __f5t_needs_space lst ) {
         ( vec_push [i] out ( __f5t_id_ascii v 32 ) )
@@ -263,7 +263,7 @@ unsafe @ __f5t_id_multi * F5VocabImpl v s text i off i len → i {
 // A stretch of a han block with no dictionary word in it: the skip class
 // takes the alphanumeric runs, and each gap between them is ONE segment
 // (finalseg yields the split's leftovers whole, not character by character).
-@ __f5t_scan_plain * F5VocabImpl v s text i from i to ( Vec i ) out i last → i {
+unsafe @ __f5t_scan_plain * F5VocabImpl v s text i from i to ( Vec i ) out i last → i {
     : ~ i lst last
     : ~ i j from
     : ~ i gs -1
@@ -312,7 +312,7 @@ unsafe @ __f5t_id_multi * F5VocabImpl v s text i off i len → i {
     ^ ( __f5t_lit_at text pos end `c#` )
 }
 
-@ __f5t_scan_block * F5VocabImpl v s text i from i to ( Vec i ) out i last → i {
+unsafe @ __f5t_scan_block * F5VocabImpl v s text i from i to ( Vec i ) out i last → i {
     : ~ i lst last
     : ~ i i from
     : ~ i start from
@@ -330,7 +330,7 @@ unsafe @ __f5t_id_multi * F5VocabImpl v s text i off i len → i {
 }
 
 // The character sequence, as vocabulary ids, appended to `out`.
-@ f5_text_ids F5Vocab v__h s text ( Vec i ) out → v {
+unsafe @ f5_text_ids F5Vocab v__h s text ( Vec i ) out → v {
     : *F5VocabImpl v ( __F5Vocab_ptr v__h )
     : i n ( nurl_str_len text )
     : ~ i last -2

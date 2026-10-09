@@ -32,7 +32,7 @@ unsafe @ __gq_f32 * u P i idx → f {
 }
 
 // f32-LE → f16-LE, round-to-nearest-even per element.
-@ gq_f16_encode ( Vec u ) f32le → !( Vec u ) String {
+unsafe @ gq_f16_encode ( Vec u ) f32le → !( Vec u ) String {
     : i nb ( vec_len [u] f32le )
     ? != % nb 4 0 { ^ ( __gq_err `gguf: f16 encode input is not whole f32 elements` ) } {}
     : i n / nb 4
@@ -49,7 +49,7 @@ unsafe @ __gq_f32 * u P i idx → f {
 }
 
 // f32-LE → bf16-LE, round-to-nearest-even per element.
-@ gq_bf16_encode ( Vec u ) f32le → !( Vec u ) String {
+unsafe @ gq_bf16_encode ( Vec u ) f32le → !( Vec u ) String {
     : i nb ( vec_len [u] f32le )
     ? != % nb 4 0 { ^ ( __gq_err `gguf: bf16 encode input is not whole f32 elements` ) } {}
     : i n / nb 4
@@ -69,7 +69,7 @@ unsafe @ __gq_f32 * u P i idx → f {
 // then 32 bytes of roundf(x * (127/amax)) two's-complement int8.
 // ggml's quantize_row_q8_0_ref, including the id = d ? 1/d : 0 guard
 // (an all-zero block stores d = 0 and 32 zero quants).
-@ gq_q8_0_encode ( Vec u ) f32le → !( Vec u ) String {
+unsafe @ gq_q8_0_encode ( Vec u ) f32le → !( Vec u ) String {
     : i nb ( vec_len [u] f32le )
     ? != % nb 4 0 { ^ ( __gq_err `gguf: Q8_0 encode input is not whole f32 elements` ) } {}
     : i n / nb 4

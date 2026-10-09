@@ -218,7 +218,7 @@ unsafe @ __em_arena_reset * EmbedImpl e → v {
     ^ s2
 }
 
-@ __em_up_layer * EmbedImpl e St s2 i layer s suffix → GkBuf {
+unsafe @ __em_up_layer * EmbedImpl e St s2 i layer s suffix → GkBuf {
     : String nm ( __em_lname layer suffix )
     : GkBuf b ( __em_up e s2 ( string_data nm ) )
     ^ b
@@ -389,7 +389,7 @@ unsafe @ __em_load_weights * EmbedImpl e → !v String {
 // Give the device back: every weight (the arena chunks), the kit — its
 // buffer pool, its kernels, the CUDA context. What stays is the engine:
 // config, tokenizer, the model dir for the reload. Idempotent.
-@ embed_unload Embed e__h → v { ( __em_unload ( __Embed_ptr e__h ) ) }
+unsafe @ embed_unload Embed e__h → v { ( __em_unload ( __Embed_ptr e__h ) ) }
 
 unsafe @ __em_unload * EmbedImpl e → v {
     ( __em_arena_reset e )

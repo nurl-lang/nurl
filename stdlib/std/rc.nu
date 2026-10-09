@@ -55,15 +55,15 @@
 // Shared mutation: `rc_set` / `rc_replace` change what EVERY handle sees —
 // there is no copy-on-write. Check `rc_is_unique` first when that matters.
 
-& `c` @ nurl_cc_possible_root s impl s ops → v
+& `c` @ nurl_cc_possible_root *u impl *u ops → v
 
-& `c` @ nurl_cc_collect_now s impl s ops → v
+& `c` @ nurl_cc_collect_now *u impl *u ops → v
 
-& `c` @ nurl_cc_dead s impl → i32
+& `c` @ nurl_cc_dead *u impl → i32
 
-& `c` @ nurl_rc_drop_value s impl s ops → v
+& `c` @ nurl_rc_drop_value *u impl *u ops → v
 
-& `c` @ nurl_cc_buffered s impl → i32
+& `c` @ nurl_cc_buffered *u impl → i32
 
 & `c` @ nurl_cc_collect → v
 

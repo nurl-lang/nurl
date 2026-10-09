@@ -640,7 +640,7 @@ unsafe @ __hc_do_h1 * HttpClientImpl c * HcOriginImpl o s method s path ( Vec He
 
 // Assemble an HttpResponse (status, headers, body) from a finished h1
 // stream, decoding the body if it is compressed and decompression is on.
-@ __hc_response_from_stream * HttpClientImpl c HttpStreamState st s method → !HttpResponse HttpClientErr {
+unsafe @ __hc_response_from_stream * HttpClientImpl c HttpStreamState st s method → !HttpResponse HttpClientErr {
     : HttpResponse r ( response_new ( hp_stream_status st ) )
     : i hc ( hp_stream_header_count st )
     : ~ i k 0
@@ -990,7 +990,7 @@ unsafe @ __hc_clone_headers ( Vec Header ) hs → ( Vec Header ) {
 @ http_client_status HttpResponse r → i { ^ . r status }
 
 // The response body as a borrowed String view (valid until free).
-@ http_client_body_str HttpResponse r → String {
+unsafe @ http_client_body_str HttpResponse r → String {
     ^ ( string_from_bytes ( vec_data [u] . r body ) ( vec_len [u] . r body ) )
 }
 

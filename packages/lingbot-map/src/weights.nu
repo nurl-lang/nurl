@@ -200,7 +200,6 @@ unsafe @ lw_require Lw w__h s name i d0 i d1 i d2 i d3 → b {
 // from 0 until one is missing — the layer count, read off the file
 // rather than hard-coded.
 @ lw_count_indexed Lw w__h s prefix s suffix → i {
-    : *LwImpl w ( __Lw_ptr w__h )
     : ~ i n 0
     : ~ b more T
     ~ & more < n 4096 {

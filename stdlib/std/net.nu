@@ -1126,7 +1126,7 @@ $ `stdlib/std/pkey.nu`
 // counts allowed; -1 = nothing written, err_kind set). With one segment
 // empty it is exactly nurl_tcp_write. Declared here rather than in the
 // compiler preamble, like the other stdlib-only runtime entry points.
-& `c` @ nurl_tcp_write2 i conn s b1 i n1 s b2 i n2 → i
+& `c` @ nurl_tcp_write2 i conn *u b1 i n1 *u b2 i n2 → i
 
 // The one blocking send loop behind tcp_write_all, tcp_write_str and
 // tcp_write_all2: writes the logical concatenation `p1[0..n1)‖p2[0..n2)`

@@ -489,7 +489,7 @@ $ `stdlib/core/vec.nu`
 // than the previous bare `_fullpath` path (returns NULL for missing
 // paths, matching POSIX), which matches what `path_canonical` callers
 // want.
-& `c` @ realpath s path s resolved → s
+& `c` @ realpath s path *u resolved → s
 
 @ path_canonical Path p → ?Path {
     : s raw ( realpath ( path_str p ) # s 0 )

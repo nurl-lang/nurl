@@ -1,0 +1,5 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_dyn_keeps_receiver.nu:21: error: an impl of method 'name' of trait 'Named' keeps its receiver, but a call through a '%Named' object only lends it: the object still owns that value and drops it while it is kept. Have the impl keep a copy, or call the method on the concrete type.
+    ( nurl_print_int ( name o ) ) ( nurl_print `\n` )
+error: compilation aborted — 1 borrow-checker violation (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

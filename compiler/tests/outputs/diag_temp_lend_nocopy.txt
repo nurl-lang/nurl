@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_temp_lend_nocopy.nu:31: error: the result of 'vec_get' borrows part of its argument 1, a temporary: a '?DH' cannot be copied out of it, so the temporary would have to outlive this call, and no binding owns it. Bind the argument to a name first (': T x ( … )') — it then lives to the end of that scope, and the result borrows from it.
+    ?? ( vec_get [DH] ( mk ) 1 ) { T e → { ( nurl_println_int . e id ) } F → {} }
+compiler/tests/diag_temp_lend_nocopy.nu:32: error: the result of 'vec_get' borrows part of its argument 1, a temporary: a '?DH' cannot be copied out of it, so the temporary would have to outlive this call, and no binding owns it. Bind the argument to a name first (': T x ( … )') — it then lives to the end of that scope, and the result borrows from it.
+    : ?DH o ( vec_get [DH] ( mk ) 0 )
+error: compilation aborted — 2 borrow-checker violations (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

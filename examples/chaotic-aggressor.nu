@@ -64,7 +64,7 @@ unsafe @ stack_free [T] ( Stack T ) st → v {
     ( nurl_free # s . st data )
 }
 
-@ stack_push [T] inout ( Stack T ) s T v → v {
+unsafe @ stack_push [T] inout ( Stack T ) s T v → v {
     // nested member-path assignment + variable-index pointer store:
     // s.data[s.len] = v
     = . . s data . s len v

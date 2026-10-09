@@ -124,7 +124,7 @@ $ `token.nu`
     ^ ( kernel_handler_ka key \ → v {} )
 }
 
-@ kernel_handler_ka ( Vec u ) key ( @ v ) ka → ( @ ( Vec u ) ( Vec u ) ) {
+unsafe @ kernel_handler_ka ( Vec u ) key ( @ v ) ka → ( @ ( Vec u ) ( Vec u ) ) {
     ^ \ ( Vec u ) p → ( Vec u ) {
         ?? ( token_untag key p ) {
             F → {

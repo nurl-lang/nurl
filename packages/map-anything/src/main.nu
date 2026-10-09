@@ -47,11 +47,12 @@ $ `src/heads.nu`
 $ `src/geom.nu`
 $ `src/preproc.nu`
 $ `src/sky.nu`
+$ `stdlib/core/slice.nu`
 
 : s MA_DEFAULT_REF `facebook/map-anything-apache`
 
 // Kept in step with nurl.toml by tests/version_test.sh.
-@ __ma_version → v { ( nurl_print `map-anything 0.5.1\n` ) }
+@ __ma_version → v { ( nurl_print `map-anything 0.5.2\n` ) }
 
 @ __ma_usage → v {
     ( nurl_print `map-anything - metric 3-D reconstruction from images, in pure NURL\n` )
@@ -86,18 +87,20 @@ $ `src/sky.nu`
 
 @ __ma_is_flag s a → b {
     ? == ( nurl_str_len a ) 0 { ^ F } {}
-    ^ == ( nurl_str_at a ( nurl_str_len a ) 0 ) 45
+    ^ == ( nurl_str_get a 0 ) 45
 }
 
 @ __ma_lower i c → i { ^ ? & >= c 65 <= c 90 + c 32 c }
 
 @ __ma_ext_is s name s ext → b {
-    : i n ( nurl_str_len name )
-    : i m ( nurl_str_len ext )
+    : ( Slice u ) name_b ( slice_of_str name )
+    : i n ( slice_len [u] name_b )
+    : ( Slice u ) ext_b ( slice_of_str ext )
+    : i m ( slice_len [u] ext_b )
     ? <= n m { ^ F } {}
     : ~ i k 0
     ~ < k m {
-        ? != ( __ma_lower ( nurl_str_at name n + - n m k ) ) ( nurl_str_at ext m k ) {
+        ? != ( __ma_lower ( slice_byte name_b + - n m k ) ) ( slice_byte ext_b k ) {
             ^ F
         } {}
         = k + k 1
@@ -242,7 +245,7 @@ unsafe @ __ma_norm * f p i n → v {
     i vtls
 }
 
-@ __ma_parse → Opts {
+unsafe @ __ma_parse → Opts {
     : ~ s model ``
     : ~ s out `cloud.ply`
     : ~ s video ``

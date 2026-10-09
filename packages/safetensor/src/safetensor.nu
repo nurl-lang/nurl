@@ -128,7 +128,7 @@ $ `stdlib/core/rcbox.nu`
 // The mapping is the raw resource: its last owner unmaps it, as st_close
 // did. The tensor table and the buffer go with the drop glue.
 % Drop StImpl {
-    @ drop StImpl s → v {
+    unsafe @ drop StImpl s → v {
         ? . s from_mmap { : i32 _u ( munmap . s map . s map_size ) } {}
     }
 }
@@ -417,7 +417,7 @@ unsafe @ st_open s path → !St String {
 }
 
 // Parse an in-memory image. The St keeps `data` (its tensors point into it).
-@ st_parse_bytes sink ( Vec u ) data → !St String {
+unsafe @ st_parse_bytes sink ( Vec u ) data → !St String {
     ^ ( __st_parse ( vec_data [u] data ) ( vec_len [u] data ) data )
 }
 
@@ -479,7 +479,7 @@ unsafe @ _st_u32 * u P i o → i {
     ^ | # i . P o | << # i . P + o 1 8 | << # i . P + o 2 16 << # i . P + o 3 24
 }
 
-@ __st_u64 * u P i o → i {
+unsafe @ __st_u64 * u P i o → i {
     : i lo ( _st_u32 P o )
     : i hi ( _st_u32 P + o 4 )
     ^ | lo << hi 32
@@ -491,12 +491,12 @@ unsafe @ __st_i8 * u P i o → i {
     ^ ? > v 127 - v 256 v
 }
 
-@ __st_i16 * u P i o → i {
+unsafe @ __st_i16 * u P i o → i {
     : i v ( __st_u16 P o )
     ^ ? > v 32767 - v 65536 v
 }
 
-@ __st_i32 * u P i o → i {
+unsafe @ __st_i32 * u P i o → i {
     : i v ( _st_u32 P o )
     ^ ? > v 2147483647 - v 4294967296 v
 }

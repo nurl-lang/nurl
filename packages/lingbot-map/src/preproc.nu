@@ -40,7 +40,7 @@ $ `deps/image/src/image.nu`
 
 @ pp_height Frame fr → i { ^ . fr height }
 
-@ pp_data Frame fr → *f { ^ ( vec_data [f] . fr data ) }
+unsafe @ pp_data Frame fr → *f { ^ ( vec_data [f] . fr data ) }
 
 @ __pp_err s msg s detail → !Frame String {
     : String m ( string_from msg )

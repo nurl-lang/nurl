@@ -111,9 +111,9 @@ unsafe @ __wallclock → i {
     ^ ( fatfs_open path flags )
 }
 
-@ nurl_disk_read i h s buf i n → i { ^ ( fatfs_read_raw h buf n ) }
+unsafe @ nurl_disk_read i h * u buf i n → i { ^ ( fatfs_read_raw h buf n ) }
 
-@ nurl_disk_write i h s buf i n → i { ^ ( fatfs_write_raw h buf n ) }
+unsafe @ nurl_disk_write i h * u buf i n → i { ^ ( fatfs_write_raw h buf n ) }
 
 @ nurl_disk_lseek i h i off i whence → i { ^ ( fatfs_seek h off whence ) }
 

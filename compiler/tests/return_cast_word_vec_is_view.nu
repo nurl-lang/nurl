@@ -12,9 +12,9 @@ $ `stdlib/core/string.nu`
 : Engine { i inits_ref i name_ref }
 
 // The engine's initializers (lent: the caller's graph holds them).
-@ inits Engine e → ( Vec i ) { ^ # ( Vec i ) . e inits_ref }
+unsafe @ inits Engine e → ( Vec i ) { ^ # ( Vec i ) . e inits_ref }
 
-@ name Engine e → String { ^ # String . e name_ref }
+unsafe @ name Engine e → String { ^ # String . e name_ref }
 
 @ find Engine e i want → i {
     : ( Vec i ) v ( inits e )

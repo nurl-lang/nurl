@@ -45,11 +45,10 @@ $ `deps/wasmbuilder/src/build.nu`
 //               (only the spawning process can reach the server); over
 //               HTTP it is 0 unless --allow-run is passed, because run
 //               is unsandboxed code execution.
-// g_token     : non-empty ⇒ HTTP requests must carry
-//               `Authorization: Bearer <g_token>`.
+// (The --token value is run_http's: non-empty ⇒ HTTP requests must
+// carry `Authorization: Bearer <token>`.)
 : ~ i g_read_only 0
 : ~ i g_run_allowed 1
-: ~ s g_token ``
 
 // ── Version ─────────────────────────────────────────────────────────
 //
@@ -59,7 +58,7 @@ $ `deps/wasmbuilder/src/build.nu`
 // to bump (previously the banners drifted to a stale 0.2.0 while the
 // handshake reported 0.4.0).
 
-@ nm_version → s { ^ `0.13.1` }
+@ nm_version → s { ^ `0.13.2` }
 
 // Log a startup banner "nurl-mcp <version> <suffix>" through mcp_log,
 // building the line from the single-source version so the banners can
@@ -1095,7 +1094,9 @@ version = "0.0.0"
     ^ F
 }
 
-@ run_http McpServer srv s host i port → i {
+// `token` is main's --token value, which lives as long as main: kept in a
+// global it was a view a global outlived.
+@ run_http McpServer srv s host i port s token → i {
     : !TcpListener NetErr lr ( tcp_listen host port )
     ?? lr {
         T listener → {
@@ -1103,7 +1104,7 @@ version = "0.0.0"
             ( mcp_http_handler ( mcp_server_http_dispatch srv ) )
             : ( @ HttpResponse HttpRequest ) authed
             ( mcp_server_with_bearer_auth
-            \ HttpRequest req → HttpResponse { ^ ( inner req ) } g_token )
+            \ HttpRequest req → HttpResponse { ^ ( inner req ) } token )
             // OPTIONS bypasses auth: a browser preflight carries no
             // Authorization header, so requiring one 401s the preflight
             // and the real request is never sent.
@@ -1111,7 +1112,7 @@ version = "0.0.0"
                 ? != ( nurl_str_eq ( string_data . req method ) `OPTIONS` ) 0 {
                     ^ ( inner req )
                 } {}
-                ? == ( nurl_str_len g_token ) 0 { ^ ( inner req ) } {}
+                ? == ( nurl_str_len token ) 0 { ^ ( inner req ) } {}
                 : HttpResponse r ( authed req )
                 ? == . r status 401 { ( nm_cors r ) } {}
                 ^ r
@@ -1170,7 +1171,6 @@ version = "0.0.0"
     } {
         = g_run_allowed ? read_only 0 1
     }
-    = g_token ( string_data token )
 
     // Built after the policy globals are set: which tools exist is a
     // function of --read-only / --allow-run, and the server is
@@ -1191,7 +1191,7 @@ version = "0.0.0"
             } {
                 ( nm_log_banner `ready (http) — nurl_run disabled (pass --allow-run to enable)` )
             }
-            = rc ( run_http srv ( string_data host ) port )
+            = rc ( run_http srv ( string_data host ) port ( string_data token ) )
         }
     } {
         ( nm_log_banner `ready (stdio)` )

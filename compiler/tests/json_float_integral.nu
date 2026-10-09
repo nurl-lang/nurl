@@ -1,6 +1,6 @@
 $ `stdlib/ext/json.nu`
 
-@ show s label Json j → v {
+unsafe @ show s label Json j → v {
     : String out ( json_stringify j )
     ( printf `%s: %s\n` label ( string_data out ) )
     ( string_free out )

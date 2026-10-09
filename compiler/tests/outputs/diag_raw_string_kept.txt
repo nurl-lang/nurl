@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_raw_string_kept.nu:27: error: the string 'maybe_fresh' hands back here may be a fresh one, owned by nothing once it is stored as a raw string: a raw string ('s') held by a struct, an option, an enum or a slice is a view (docs/MEMORY.md §2.13). Hold a String instead (string_from), or bind the result first (': s x ( … )') and store the binding.
+    : Rec r @ Rec { ( maybe_fresh a 1 ) 1 }
+compiler/tests/diag_raw_string_kept.nu:15: error: the string made here is handed to 'vec_push' (argument 2), which keeps it: a raw string kept in a container, a struct or a global is owned by none of them, so nothing ever releases it. Bind it first (': s x ( … )') — the binding releases it, and what keeps it holds a view of the binding — or keep a String (string_from; a ( Vec String )), or declare the parameter 'sink' if the callee takes the string over.
+    ( vec_push [s] v ( nurl_str_int 42 ) )
+error: compilation aborted — 2 borrow-checker violations (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

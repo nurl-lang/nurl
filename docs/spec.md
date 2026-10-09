@@ -392,9 +392,25 @@ A function or method declaration may carry a leading `unsafe` prefix
   `. p k`);
 - cast to a pointer type (`# *T x`, `# i8* x`) — the null pointer
   `# *T 0` stays safe;
+- call a function that takes or hands back a raw pointer (`*T` in a
+  parameter or in the result, outside a closure type: `vec_data`,
+  `slice_data`, `nurl_str_at`, a program's own `→ *T`);
+- build a sealed representation field by field, or read or write its raw
+  fields — a struct that declares a raw-pointer field, or a library
+  handle (`Slice`, `Vec`, `Box`, …);
 - call a raw-memory primitive (`nurl_alloc`, `nurl_free`, `nurl_realloc`,
-  `mem_forget`, `nurl_peek*` / `nurl_poke*`, `nurl_memcpy`, …);
+  `mem_forget`, `nurl_peek*` / `nurl_poke*`, `nurl_memcpy`, …) or a C
+  primitive that reads or writes as far as its caller says, takes a
+  `FILE*` or a format string (`memmem`, `fwrite`, `fopen`, `printf`, …:
+  the builtins marked raw in `stdlib/core/builtins.nu`);
 - call a foreign (`&`) function declared outside the standard library.
+
+A string (`s`) in safe code is therefore NUL-terminated or null: nothing
+safe can turn a raw pointer into one. A null string reads as the empty
+string at every string primitive (`nurl_println`, `strlen`,
+`string_from`, …). A raw string held by a struct, an option, an enum, a
+slice or a container is a view: a fresh one is stored as a `String`, or
+bound first and stored as a view of the binding (docs/MEMORY.md §2.13).
 
 ```
 // The rest of the program sees a safe function: it takes a String and
@@ -413,9 +429,9 @@ vouches that its body is memory-safe and leak-free for every caller, the
 way the standard library vouches for its own raw code. Calling an
 `unsafe` function needs no marking. The rest of the program is held to
 the ownership rules (docs/MEMORY.md §6), and **every program accepted
-without an `unsafe` function of its own is memory-safe and leak-free** —
-with one known exception in 0.71.0: a `Slice` of a `Vec` is not yet
-tracked as a view of it (docs/MEMORY.md §6.2).
+without an `unsafe` function of its own is memory-safe and leak-free**
+(docs/MEMORY.md §6.2 — with no exception since the pre-production
+hardening closed 0.71.0's `Slice` hole).
 `nurlc --unsafe-report` lists the `unsafe` functions a program
 contains outside the standard library — the whole surface a reviewer has
 to trust.
@@ -1009,14 +1025,15 @@ identity for concrete values — the runtime representation exists only for the
   `%dyn.<Trait>`, which runs the vtable's slot-0 destructor on the boxed value
   (freeing *its* owned resources transitively) and then frees the box. No leak
   and no double-free — verified under AddressSanitizer.
-- **Return ownership through dyn.** A method that returns owned data should return
-  `String`, not a raw `s`. Ownership of a raw `s` result is impl-dependent (one
-  impl may return a `.rodata` literal, another a heap allocation), and the vtable
-  erases which impl ran, so an `s` result crossing the dynamic boundary is treated
-  as **borrowed** and never auto-freed — the conservative choice that can never
-  free a literal. (Static dispatch knows the concrete impl and *does* auto-free an
-  owned `s` result, same as any function; the asymmetry is inherent to type
-  erasure. Use `String` for owned returns you want dropped through a `%Trait`.)
+- **Ownership through dyn.** A call through a `%Trait` object reaches whichever
+  impl the object holds, and is checked as a call of all of them at once: what
+  it may keep, consume or lend back of its arguments is the union of the
+  impls' summaries, and the impl that ran answers per call whether its result
+  is the caller's to drop (a fresh `String` or raw `s`) or lent (a field of
+  `self`, a literal). Impls that disagree on keeping an argument, and an impl that keeps
+  its receiver (the object only lends it), are rejected at the call
+  (docs/MEMORY.md §1, "Methods"). `sink` and `inout` parameters other than the
+  receiver dispatch as declared.
 
 The static surface is pinned by tests: `trait_bounds` / `should_fail_trait_
 bound` (bounds), `test_09_trait_defaults` (defaults), `should_fail_duplicate_
@@ -1025,7 +1042,9 @@ impl` / `should_fail_ambiguous_method` (coherence), `trait_supertraits` /
 assoc_import` / `should_fail_missing_assoc` (associated types). The dynamic
 surface is pinned by `dyn_dispatch` (object construction + vtable dispatch with a
 value parameter), `dyn_diamond` (supertrait upcast + inherited default +
-override), and `should_fail_dyn_not_object_safe` (object-safety rejection).
+override), `dyn_call_ownership` (arguments and results across impls),
+`diag_dyn_impls_disagree` / `diag_dyn_keeps_receiver` (the ownership checks),
+and `should_fail_dyn_not_object_safe` (object-safety rejection).
 
 ## 5. Statements
 

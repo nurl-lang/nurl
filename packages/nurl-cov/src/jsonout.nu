@@ -16,13 +16,15 @@
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `model.nu`
+$ `stdlib/core/slice.nu`
 
 @ __js_str String out s text → v {
     ( string_push_char out 34 )
-    : i n ( nurl_str_len text )
+    : ( Slice u ) text_b ( slice_of_str text )
+    : i n ( slice_len [u] text_b )
     : ~ i k 0
     ~ < k n {
-        : i ch ( nurl_str_at text n k )
+        : i ch ( slice_byte text_b k )
         ? == ch 34 { ( string_push_str out `\\"` ) } {
             ? == ch 92 { ( string_push_str out `\\\\` ) } {
                 ? == ch 10 { ( string_push_str out `\\n` ) } {

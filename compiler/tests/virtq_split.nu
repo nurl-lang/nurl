@@ -74,7 +74,7 @@ unsafe @ mock_service * MockDev d Virtq q i written → i {
     ^ head
 }
 
-@ main → i {
+unsafe @ main → i {
     // ── layout arithmetic against the spec ───────────────────────
     ( pb `qsize 8 valid: ` ( virtq_size_valid 8 ) )
     ( pb `qsize 0 invalid: ` ! ( virtq_size_valid 0 ) )

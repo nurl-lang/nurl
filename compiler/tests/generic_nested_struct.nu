@@ -68,7 +68,7 @@ unsafe @ wrap_free [A] sink * ( Wrap A ) w → v {
     ( nurl_free # s w )
 }
 
-@ main → i {
+unsafe @ main → i {
     // ── Case 1: nested generic structs (Inner inside Outer) ─────
     : ( Outer i ) oi ( mk_outer [i] 42 )
     ( nurl_print `i_count=` )

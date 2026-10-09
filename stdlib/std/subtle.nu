@@ -29,7 +29,7 @@
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 
-@ constant_time_eq_n s a s b i n → b {
+@ constant_time_eq_n * u a * u b i n → b {
     // Read bytes through the `*u` + `. p k` indexed load, NOT
     // nurl_str_get: that bounds-checks with strlen, so on binary
     // material (a MAC or key with no trailing NUL — exactly what

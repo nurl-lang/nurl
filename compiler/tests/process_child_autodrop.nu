@@ -23,7 +23,7 @@ unsafe @ live → i { ^ - ( nurl_alloc_count ) ( nurl_free_count ) }
 
 : Holder { ProcChild ch i tag }
 
-@ spawn1 s cmd s a0 → ProcChild {
+unsafe @ spawn1 s cmd s a0 → ProcChild {
     ?? ( process_spawn1 cmd a0 ) {
         T c → { ^ c }
         F e → {

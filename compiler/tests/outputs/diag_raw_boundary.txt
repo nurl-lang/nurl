@@ -1,0 +1,19 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_raw_boundary.nu:19:16: error: '# String …' makes a value that holds addresses or a payload tag (a String, a Vec, a closure, a struct or option of one, an enum with payloads) out of another value's bits, which only an 'unsafe' function may do: such a value is valid only as its own code built it. Build it with its constructor or literal instead, or, if this function genuinely needs to reinterpret memory and you vouch for its memory safety, declare it 'unsafe @ name …'.
+    : String t # String 4096
+               ^
+compiler/tests/diag_raw_boundary.nu:24:36: error: a literal of '( Slice u )' is raw memory, which only an 'unsafe' function may touch: its representation (a raw-pointer field, or a library handle's control block) carries an invariant the code managing it relies on, so a value built or changed field by field could point anywhere. Build and change it through its API — its constructors and accessors (slice_from_vec / slice_empty / slice_len, vec_new / vec_len, …) — or, if this function genuinely manages that memory and you vouch for its memory safety, declare it 'unsafe @ name …'.
+    : ( Slice u ) sl @ ( Slice u ) { # *u 0 64 }
+                                   ^
+compiler/tests/diag_raw_boundary.nu:29:21: error: 'nurl_str_at' takes a raw pointer ('*T') and reads or writes through it as far as its caller says, which only an 'unsafe' function may vouch for: a pointer carries no length, so the compiler cannot check that the memory is there. Use the safe API over the owning value (a Vec, a String, a Slice of a Vec), or, if this function genuinely needs raw memory and you vouch for its memory safety, declare it 'unsafe @ name …'.
+    ^ ( nurl_str_at ( string_data s ) 64 3 )
+                    ^
+compiler/tests/diag_raw_boundary.nu:33:7: warning: '__vec_grow' is file-private (defined in stdlib/core/vec.nu); cross-file use of a '__' function is OBSOLETE and will stop resolving in a future release — rename it with ONE underscore ('_name'), at its definition and at every call site, if it is meant to be shared. A '__' name is file-scoped by design; nothing in the stdlib or the first-party tree relies on this path any more.
+    ( __vec_grow [u] ( string_data s ) 64 )
+      ^
+compiler/tests/diag_raw_boundary.nu:33:22: error: '__vec_grow' is internal to the standard library (its name begins with '__'): it takes control blocks and buffers as plain values and trusts them, so outside the library only an 'unsafe' function may call it. Use the public API it implements, or, if this function genuinely needs the library's internals and you vouch for its memory safety, declare it 'unsafe @ name …'.
+    ( __vec_grow [u] ( string_data s ) 64 )
+                     ^
+error: aborting due to 4 previous errors
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

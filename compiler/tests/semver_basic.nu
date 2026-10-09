@@ -148,9 +148,7 @@ $ `stdlib/core/vec.nu`
         }
         F → {}
     }
-    : i nvs ( vec_len [Semver] vs )
-    : ~ i fk 0
-    ~ < fk nvs { : ?Semver t ( vec_get [Semver] vs fk ) ?? t { T x → ( semver_free x ) F → {} } = fk + fk 1 }
+    // (The Vec drops each Semver with it.)
     ( vec_free [Semver] vs )
 
     // ── 5. parse errors ──────────────────────────────────────────

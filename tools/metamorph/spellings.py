@@ -1260,7 +1260,12 @@ CLASSES = [
                "spelled: inline, through a helper, on a field, in a "
                "loop.",
         "expect": WARN,
-        "expect_msg": ["is stale", "may have reallocated"],
+        # (In safe code a view is a value — docs/MEMORY.md §2.10 — and
+        # reading one after its source may have moved its buffer is an
+        # error naming the call: "which may move or free its buffer".
+        # Raw code keeps the pointer tracker's warning.)
+        "expect_msg": ["is stale", "may have reallocated",
+                       "which may move or free its buffer"],
         "spellings": {
             "push-after-borrow": prog(
                 "    : ~ ( Vec u ) v ( vec_new [u] )\n"

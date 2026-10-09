@@ -91,7 +91,7 @@ $ `grep.nu`
     ^ F
 }
 
-@ __sed_compile_re String pat b icase → Regex {
+unsafe @ __sed_compile_re String pat b icase → Regex {
     : String work ? icase ( _grep_lower ( string_data pat ) ) ( string_clone pat )
     : String ere ? g_sed_ere ( string_clone work ) ( _bre_to_ere ( string_data work ) )
     : ~ Regex out @ Regex { # s 0 }
@@ -176,7 +176,7 @@ $ `grep.nu`
     }
 }
 
-@ __sed_parse s src ( Vec SedCmd ) out → v {
+unsafe @ __sed_parse s src ( Vec SedCmd ) out → v {
     : i n ( nurl_str_len src )
     = g_sed_pos 0
     ~ < g_sed_pos n {

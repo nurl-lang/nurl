@@ -136,7 +136,7 @@ $ `tools/nurlfmt/format.nu`
             }
         } {}
         ? path_arg {
-            ( vec_push [String] paths ( string_from_take a + ( nurl_str_len a ) 1 ) )
+            ( vec_push [String] paths ( string_adopt a ) )
         } {}
         = idx + idx 1
     }

@@ -31,7 +31,7 @@ $ `stdlib/ext/protobuf.nu`
 // A reader that has already failed — the neutral value a construction
 // failure degrades to, so `pb_new` needs no error branch at its call site.
 @ pb_empty ProtoError e → PReader {
-    ^ @ PReader { @ ProtoReader { @ ( Slice u ) { # *u 0 0 } 0 0 0 PROTO_DEFAULT_DEPTH } T e }
+    ^ @ PReader { @ ProtoReader { ( slice_empty [u] ) 0 0 0 PROTO_DEFAULT_DEPTH } T e }
 }
 
 @ pb_new ( Vec u ) bytes → PReader {
@@ -119,10 +119,10 @@ $ `stdlib/ext/protobuf.nu`
 // A length-delimited field's raw payload, borrowed in place. The slice
 // borrows the caller's model buffer — valid as long as that buffer is.
 @ pb_bytes inout PReader p → ( Slice u ) {
-    ? . p failed { ^ @ ( Slice u ) { # *u 0 0 } } {}
+    ? . p failed { ^ ( slice_empty [u] ) } {}
     ?? ( proto_read_bytes . p r ) {
         T s → ^ s
-        F e → { ( __pb_fail p e ) ^ @ ( Slice u ) { # *u 0 0 } }
+        F e → { ( __pb_fail p e ) ^ ( slice_empty [u] ) }
     }
 }
 
@@ -195,10 +195,10 @@ unsafe @ slice_i64_into ( Slice u ) s * u dst i n → v {
 
 // The same two over a whole byte vector — how the tools read a plain
 // little-endian `.f32` file.
-@ vec_f32_into ( Vec u ) bytes * u dst i n → v {
+unsafe @ vec_f32_into ( Vec u ) bytes * u dst i n → v {
     ( slice_f32_into ( slice_from_vec [u] bytes ) dst n )
 }
 
-@ vec_i64_into ( Vec u ) bytes * u dst i n → v {
+unsafe @ vec_i64_into ( Vec u ) bytes * u dst i n → v {
     ( slice_i64_into ( slice_from_vec [u] bytes ) dst n )
 }

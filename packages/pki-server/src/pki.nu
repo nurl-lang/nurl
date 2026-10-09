@@ -125,7 +125,7 @@ unsafe @ pki_ca_cn PkiCa ca → s { ^ ( string_data . ( __PkiCa_ptr ca ) cn ) }
 
 // The public key as it appears in the SubjectPublicKeyInfo BIT STRING —
 // what the key identifier is computed over, and what verification needs.
-@ pki_ca_public PkiCa ca → ( Vec u ) { ^ ( __pki_ca_pub ( __PkiCa_ptr ca ) ) }
+unsafe @ pki_ca_public PkiCa ca → ( Vec u ) { ^ ( __pki_ca_pub ( __PkiCa_ptr ca ) ) }
 
 unsafe @ __pki_ca_pub * PkiCaImpl ca → ( Vec u ) {
     ? == . ca alg 0 { ^ . ca pubkey } {}

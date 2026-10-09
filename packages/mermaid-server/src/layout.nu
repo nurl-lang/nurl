@@ -32,6 +32,7 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `graph.nu`
 $ `theme.nu`
+$ `stdlib/core/slice.nu`
 
 : MmdPt {
     i x
@@ -145,12 +146,13 @@ $ `theme.nu`
 
 // Width in percent-of-font-size units of the widest `\n`-separated line.
 @ _mmdl_text_units s text → i {
-    : i n ( nurl_str_len text )
+    : ( Slice u ) text_b ( slice_of_str text )
+    : i n ( slice_len [u] text_b )
     : ~ i best 0
     : ~ i cur 0
     : ~ i k 0
     ~ < k n {
-        : i c ( nurl_str_at text n k )
+        : i c ( slice_byte text_b k )
         ? == c 10 {
             ? > cur best { = best cur } {}
             = cur 0
@@ -162,11 +164,12 @@ $ `theme.nu`
 }
 
 @ mmd_text_lines s text → i {
-    : i n ( nurl_str_len text )
+    : ( Slice u ) text_b ( slice_of_str text )
+    : i n ( slice_len [u] text_b )
     : ~ i lines 1
     : ~ i k 0
     ~ < k n {
-        ? == ( nurl_str_at text n k ) 10 { = lines + lines 1 } {}
+        ? == ( slice_byte text_b k ) 10 { = lines + lines 1 } {}
         = k + k 1
     }
     ^ lines

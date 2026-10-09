@@ -80,7 +80,7 @@ $ `src/patchembed.nu`
 }
 
 // A tensor read into a host vector, sized from the checkpoint.
-@ _dn_host Lw w s name → ( Vec f ) {
+unsafe @ _dn_host Lw w s name → ( Vec f ) {
     : i n ( lw_nelems w name )
     : i cap ? > n 0 n 1
     : ( Vec f ) v ( vec_with_cap [f] cap )
@@ -94,7 +94,7 @@ $ `src/patchembed.nu`
 // pos_embed resampled to this frame's grid, as a host vector laid out
 // [1 + gh·gw, 1536]: the cls row unchanged, then the grid. Cached; the
 // returned Vec is BORROWED — it is the Dino's, do not free it.
-@ dn_pos_cached Dino d i gh i gw → ( Vec f ) {
+unsafe @ dn_pos_cached Dino d i gh i gw → ( Vec f ) {
     : b hit & == 2 ( vec_len [i] . d poskey )
     & == gh ?? ( vec_get [i] . d poskey 0 ) { T v → v F → -1 }
     == gw ?? ( vec_get [i] . d poskey 1 ) { T v → v F → -1 }

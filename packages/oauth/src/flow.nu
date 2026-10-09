@@ -427,7 +427,7 @@ unsafe @ oauth_userinfo OidcProvider p__h s access_token → !Json OauthErr {
 // from a signed token — for a provider whose access tokens are opaque.
 // The `sub` MUST match the ID token's when both are in play (OIDC core
 // §5.3.2); with no ID token in hand, pass "" to skip that.
-@ oauth_userinfo_identity OidcProvider p__h s access_token s expect_sub → !OidcIdentity OauthErr {
+unsafe @ oauth_userinfo_identity OidcProvider p__h s access_token s expect_sub → !OidcIdentity OauthErr {
     : *OidcProviderImpl p ( _OidcProvider_ptr p__h )
     ?? ( oauth_userinfo p__h access_token ) {
         T j → {

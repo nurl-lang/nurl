@@ -29,6 +29,7 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/ext/json.nu`
 $ `stdlib/std/time.nu`
+$ `stdlib/core/slice.nu`
 
 // The caller's "use the server's local zone" sentinel for a tz offset.
 : i ANOM_TZ_LOCAL -1000000
@@ -61,26 +62,29 @@ $ `stdlib/std/time.nu`
 : __ItNum { i val i len }
 
 // Up to `max` digits at `start`; len 0 when there is none.
-@ __it_digits s p i n i start i max → __ItNum {
+@ __it_digits ( Slice u ) p i start i max → __ItNum {
+    : i n ( slice_len [u] p )
     : ~ i acc 0
     : ~ i k 0
     : ~ b go T
     ~ & go & < k max < + start k n {
-        : i c ( nurl_str_at p n + start k )
+        : i c ( slice_byte p + start k )
         ? & >= c 48 <= c 57 { = acc + * acc 10 - c 48 = k + k 1 } { = go F }
     }
     ^ @ __ItNum { acc k }
 }
 
-@ __it_is_digit s p i n i k → b {
+@ __it_is_digit ( Slice u ) p i k → b {
+    : i n ( slice_len [u] p )
     ? >= k n { ^ F } {}
-    : i c ( nurl_str_at p n k )
+    : i c ( slice_byte p k )
     ^ & >= c 48 <= c 57
 }
 
-@ __it_skip_ws s p i n i k → i {
+@ __it_skip_ws ( Slice u ) p i k → i {
+    : i n ( slice_len [u] p )
     : ~ i j k
-    ~ & < j n | == ( nurl_str_at p n j ) 32 == ( nurl_str_at p n j ) 9 { = j + j 1 }
+    ~ & < j n | == ( slice_byte p j ) 32 == ( slice_byte p j ) 9 { = j + j 1 }
     ^ j
 }
 
@@ -97,23 +101,24 @@ $ `stdlib/std/time.nu`
 
 // A whole-number time of day at k: HH:MM[:SS[.frac]]. Returns the
 // seconds after midnight and where it stopped, or len 0.
-@ __it_clock_at s p i n i k → __ItNum {
-    : __ItNum h ( __it_digits p n k 2 )
+@ __it_clock_at ( Slice u ) p i k → __ItNum {
+    : i n ( slice_len [u] p )
+    : __ItNum h ( __it_digits p k 2 )
     ? | == . h len 0 > . h val 23 { ^ @ __ItNum { 0 0 } } {}
     : i k1 + k . h len
-    ? & < k1 n == ( nurl_str_at p n k1 ) 58 {} { ^ @ __ItNum { 0 0 } }
-    : __ItNum m ( __it_digits p n + k1 1 2 )
+    ? & < k1 n == ( slice_byte p k1 ) 58 {} { ^ @ __ItNum { 0 0 } }
+    : __ItNum m ( __it_digits p + k1 1 2 )
     ? | != . m len 2 > . m val 59 { ^ @ __ItNum { 0 0 } } {}
     : ~ i k2 + + k1 1 2
     : ~ i secs + * . h val 3600 * . m val 60
-    ? & < k2 n == ( nurl_str_at p n k2 ) 58 {
-        : __ItNum sec ( __it_digits p n + k2 1 2 )
+    ? & < k2 n == ( slice_byte p k2 ) 58 {
+        : __ItNum sec ( __it_digits p + k2 1 2 )
         ? & == . sec len 2 <= . sec val 60 {
             = secs + secs . sec val
             = k2 + + k2 1 2
-            ? & < k2 n == ( nurl_str_at p n k2 ) 46 {
+            ? & < k2 n == ( slice_byte p k2 ) 46 {
                 = k2 + k2 1
-                ~ ( __it_is_digit p n k2 ) { = k2 + k2 1 }
+                ~ ( __it_is_digit p k2 ) { = k2 + k2 1 }
             } {}
         } {}
     } {}
@@ -122,24 +127,25 @@ $ `stdlib/std/time.nu`
 
 // A zone suffix at k: Z, UTC, GMT, ±HH[:MM], ±HHMM. `val` is the offset
 // in seconds east; `len` 0 means none was there.
-@ __it_zone_at s p i n i k → __ItNum {
+@ __it_zone_at ( Slice u ) p i k → __ItNum {
+    : i n ( slice_len [u] p )
     ? >= k n { ^ @ __ItNum { 0 0 } } {}
-    : i c ( nurl_str_at p n k )
+    : i c ( slice_byte p k )
     ? | == c 90 == c 122 { ^ @ __ItNum { 0 1 } } {}
     ? <= + k 3 n {
-        : i c1 ( nurl_str_at p n + k 1 )
-        : i c2 ( nurl_str_at p n + k 2 )
+        : i c1 ( slice_byte p + k 1 )
+        : i c2 ( slice_byte p + k 2 )
         ? & & == c 85 == c1 84 == c2 67 { ^ @ __ItNum { 0 3 } } {}  // UTC
         ? & & == c 71 == c1 77 == c2 84 { ^ @ __ItNum { 0 3 } } {}  // GMT
     } {}
     ? | == c 43 == c 45 {
         : i sign ? == c 45 -1 1
-        : __ItNum hh ( __it_digits p n + k 1 2 )
+        : __ItNum hh ( __it_digits p + k 1 2 )
         ? != . hh len 2 { ^ @ __ItNum { 0 0 } } {}
         : ~ i j + + k 1 2
         : ~ i mins 0
-        ? & < j n == ( nurl_str_at p n j ) 58 { = j + j 1 } {}
-        : __ItNum mm ( __it_digits p n j 2 )
+        ? & < j n == ( slice_byte p j ) 58 { = j + j 1 } {}
+        : __ItNum mm ( __it_digits p j 2 )
         ? == . mm len 2 { = mins . mm val = j + j 2 } {}
         ^ @ __ItNum { * sign + * . hh val 3600 * mins 60 - j k }
     } {}
@@ -149,7 +155,8 @@ $ `stdlib/std/time.nu`
 // After a date ending at k: optional [T| ]HH:MM[:SS], optional zone,
 // then nothing but spaces. Returns the stamp, or NONE when the tail is
 // not a time.
-@ __it_tail s p i n i k i y i mo i d → ImpStamp {
+@ __it_tail ( Slice u ) p i k i y i mo i d → ImpStamp {
+    : i n ( slice_len [u] p )
     : !i ParseErr mk ( time_make y mo d 0 0 0 )
     : ~ i base 0
     ?? mk { T x → { = base x } F _ → { ^ ( __it_none ) } }
@@ -157,20 +164,20 @@ $ `stdlib/std/time.nu`
     : ~ b had_time F
     : ~ i tod 0
     ? < j n {
-        : i c ( nurl_str_at p n j )
+        : i c ( slice_byte p j )
         ? | | == c 84 == c 116 == c 32 {
-            = j ( __it_skip_ws p n + j 1 )
-            : __ItNum cl ( __it_clock_at p n j )
+            = j ( __it_skip_ws p + j 1 )
+            : __ItNum cl ( __it_clock_at p j )
             ? > . cl len 0 { = tod . cl val = j + j . cl len = had_time T } {
                 // "2026-08-29 " with nothing after it is still a date.
                 ? == c 32 {} { ^ ( __it_none ) }
             }
         } {}
     } {}
-    = j ( __it_skip_ws p n j )
-    : __ItNum z ( __it_zone_at p n j )
+    = j ( __it_skip_ws p j )
+    : __ItNum z ( __it_zone_at p j )
     = j + j . z len
-    = j ( __it_skip_ws p n j )
+    = j ( __it_skip_ws p j )
     ? == j n {} { ^ ( __it_none ) }
     : i secs + base tod
     ? > . z len 0 { ^ @ ImpStamp { ? had_time STAMP_DATETIME STAMP_DATE - secs . z val T } } {}
@@ -194,27 +201,28 @@ $ `stdlib/std/time.nu`
     : String t0 ( string_from raw )
     : String t ( string_trim t0 )
     : s p ( string_data t )
-    : i n ( nurl_str_len p )
+    : ( Slice u ) p_b ( slice_of_str p )
+    : i n ( slice_len [u] p_b )
     ? > n 0 {} { ^ ( __it_none ) }
 
     // All digits: a compact date, or a Unix number.
     : ~ i nd 0
-    ~ & < nd n ( __it_is_digit p n nd ) { = nd + nd 1 }
+    ~ & < nd n ( __it_is_digit p_b nd ) { = nd + nd 1 }
     ? == nd n {
         ? == n 8 {
-            : __ItNum y ( __it_digits p n 0 4 )
-            : __ItNum mo ( __it_digits p n 4 2 )
-            : __ItNum d ( __it_digits p n 6 2 )
-            : ImpStamp st ( __it_tail p n 8 . y val . mo val . d val )
+            : __ItNum y ( __it_digits p_b 0 4 )
+            : __ItNum mo ( __it_digits p_b 4 2 )
+            : __ItNum d ( __it_digits p_b 6 2 )
+            : ImpStamp st ( __it_tail p_b 8 . y val . mo val . d val )
             ^ st
         } {}
         ? == n 14 {
-            : __ItNum y ( __it_digits p n 0 4 )
-            : __ItNum mo ( __it_digits p n 4 2 )
-            : __ItNum d ( __it_digits p n 6 2 )
-            : __ItNum hh ( __it_digits p n 8 2 )
-            : __ItNum mi ( __it_digits p n 10 2 )
-            : __ItNum ss ( __it_digits p n 12 2 )
+            : __ItNum y ( __it_digits p_b 0 4 )
+            : __ItNum mo ( __it_digits p_b 4 2 )
+            : __ItNum d ( __it_digits p_b 6 2 )
+            : __ItNum hh ( __it_digits p_b 8 2 )
+            : __ItNum mi ( __it_digits p_b 10 2 )
+            : __ItNum ss ( __it_digits p_b 12 2 )
             : !i ParseErr mk ( time_make . y val . mo val . d val . hh val . mi val . ss val )
             ?? mk { T x → { ^ @ ImpStamp { STAMP_DATETIME x F } } F _ → { ^ ( __it_none ) } }
         } {}
@@ -229,19 +237,19 @@ $ `stdlib/std/time.nu`
     }
 
     // 8 digits with a T: 20260829T0010[00]
-    ? & > n 9 & == nd 8 | == ( nurl_str_at p n 8 ) 84 == ( nurl_str_at p n 8 ) 116 {
-        : __ItNum y ( __it_digits p n 0 4 )
-        : __ItNum mo ( __it_digits p n 4 2 )
-        : __ItNum d ( __it_digits p n 6 2 )
-        : __ItNum hh ( __it_digits p n 9 2 )
-        : __ItNum mi ( __it_digits p n 11 2 )
-        : __ItNum ss ( __it_digits p n 13 2 )
+    ? & > n 9 & == nd 8 | == ( slice_byte p_b 8 ) 84 == ( slice_byte p_b 8 ) 116 {
+        : __ItNum y ( __it_digits p_b 0 4 )
+        : __ItNum mo ( __it_digits p_b 4 2 )
+        : __ItNum d ( __it_digits p_b 6 2 )
+        : __ItNum hh ( __it_digits p_b 9 2 )
+        : __ItNum mi ( __it_digits p_b 11 2 )
+        : __ItNum ss ( __it_digits p_b 13 2 )
         : !i ParseErr mk ( time_make . y val . mo val . d val . hh val . mi val ? == . ss len 2 . ss val 0 )
         ?? mk {
             T x → {
-                : i j ( __it_skip_ws p n ? == . ss len 2 15 13 )
-                : __ItNum z ( __it_zone_at p n j )
-                ? == ( __it_skip_ws p n + j . z len ) n {
+                : i j ( __it_skip_ws p_b ? == . ss len 2 15 13 )
+                : __ItNum z ( __it_zone_at p_b j )
+                ? == ( __it_skip_ws p_b + j . z len ) n {
                     ^ @ ImpStamp { STAMP_DATETIME ? > . z len 0 - x . z val x > . z len 0 }
                 } {}
             }
@@ -250,16 +258,16 @@ $ `stdlib/std/time.nu`
     } {}
 
     // Year first: YYYY-MM-DD or YYYY/MM/DD.
-    : __ItNum a ( __it_digits p n 0 4 )
+    : __ItNum a ( __it_digits p_b 0 4 )
     ? & == . a len 4 < 4 n {
-        : i sep ( nurl_str_at p n 4 )
+        : i sep ( slice_byte p_b 4 )
         ? | == sep 45 == sep 47 {
-            : __ItNum mo ( __it_digits p n 5 2 )
+            : __ItNum mo ( __it_digits p_b 5 2 )
             : i k1 + 5 . mo len
-            ? & > . mo len 0 & < k1 n == ( nurl_str_at p n k1 ) sep {
-                : __ItNum d ( __it_digits p n + k1 1 2 )
+            ? & > . mo len 0 & < k1 n == ( slice_byte p_b k1 ) sep {
+                : __ItNum d ( __it_digits p_b + k1 1 2 )
                 ? > . d len 0 {
-                    : ImpStamp st ( __it_tail p n + + k1 1 . d len . a val . mo val . d val )
+                    : ImpStamp st ( __it_tail p_b + + k1 1 . d len . a val . mo val . d val )
                     ? > . st kind 0 { ^ st } {}
                 } {}
             } {}
@@ -267,21 +275,21 @@ $ `stdlib/std/time.nu`
     } {}
 
     // Day first: D.M.YYYY, D/M/YYYY, D-M-YYYY (and M/D/YYYY when D > 12).
-    : __ItNum b1 ( __it_digits p n 0 2 )
+    : __ItNum b1 ( __it_digits p_b 0 2 )
     ? & > . b1 len 0 < . b1 len n {
-        : i sep ( nurl_str_at p n . b1 len )
+        : i sep ( slice_byte p_b . b1 len )
         ? | | == sep 46 == sep 47 == sep 45 {
-            : __ItNum b2 ( __it_digits p n + . b1 len 1 2 )
+            : __ItNum b2 ( __it_digits p_b + . b1 len 1 2 )
             : i k2 + + . b1 len 1 . b2 len
-            ? & > . b2 len 0 & < k2 n == ( nurl_str_at p n k2 ) sep {
-                : __ItNum y ( __it_digits p n + k2 1 4 )
+            ? & > . b2 len 0 & < k2 n == ( slice_byte p_b k2 ) sep {
+                : __ItNum y ( __it_digits p_b + k2 1 4 )
                 ? == . y len 4 {
                     : ~ i d . b1 val
                     : ~ i mo . b2 val
                     // 08/29/2026: the second number cannot be a month, so
                     // the file is month-first.
                     ? & == sep 47 & > mo 12 <= d 12 { = d . b2 val = mo . b1 val } {}
-                    : ImpStamp st ( __it_tail p n + + k2 1 4 . y val mo d )
+                    : ImpStamp st ( __it_tail p_b + + k2 1 4 . y val mo d )
                     ? > . st kind 0 { ^ st } {}
                 } {}
             } {}
@@ -289,8 +297,8 @@ $ `stdlib/std/time.nu`
     } {}
 
     // A time of day alone.
-    : __ItNum cl ( __it_clock_at p n 0 )
-    ? & > . cl len 0 == ( __it_skip_ws p n . cl len ) n {
+    : __ItNum cl ( __it_clock_at p_b 0 )
+    ? & > . cl len 0 == ( __it_skip_ws p_b . cl len ) n {
         ^ @ ImpStamp { STAMP_CLOCK . cl val F }
     } {}
 
@@ -337,15 +345,16 @@ $ `stdlib/std/time.nu`
     : String t0 ( string_from raw )
     : String t ( string_trim t0 )
     : s p ( string_data t )
-    : i n ( nurl_str_len p )
+    : ( Slice u ) p_b ( slice_of_str p )
+    : i n ( slice_len [u] p_b )
     : ~ i nd 0
-    ~ & < nd n ( __it_is_digit p n nd ) { = nd + nd 1 }
+    ~ & < nd n ( __it_is_digit p nd ) { = nd + nd 1 }
     ? == nd 0 { ^ 0 } {}
-    : __ItNum num ( __it_digits p n 0 nd )
+    : __ItNum num ( __it_digits p 0 nd )
     : ~ i unit 1
     ? == nd n {} {
         ? == + nd 1 n {} { ^ 0 }
-        : i c ( nurl_str_at p n nd )
+        : i c ( slice_byte p_b nd )
         ? == c 115 { = unit 1 } {
             ? == c 109 { = unit 60 } {
                 ? == c 104 { = unit 3600 } {
@@ -375,8 +384,9 @@ $ `stdlib/std/time.nu`
                 : s z ( json_str_data v )
                 ? | == ( nurl_str_eq z `local` ) 1 == ( nurl_str_len z ) 0 { ^ ANOM_TZ_LOCAL } {}
                 ? | | == ( nurl_str_eq z `utc` ) 1 == ( nurl_str_eq z `UTC` ) 1 == ( nurl_str_eq z `Z` ) 1 { ^ 0 } {}
-                : i n ( nurl_str_len z )
-                : __ItNum zo ( __it_zone_at z n 0 )
+                : ( Slice u ) zb ( slice_of_str z )
+                : i n ( slice_len [u] zb )
+                : __ItNum zo ( __it_zone_at zb 0 )
                 ? & > . zo len 0 == . zo len n { ^ . zo val } {}
             } {}
         }
@@ -394,11 +404,12 @@ $ `stdlib/std/time.nu`
     : String lo ( string_to_lower lo0 )
     : String out ( string_new )
     : s p ( string_data lo )
-    : i n ( nurl_str_len p )
+    : ( Slice u ) p_b ( slice_of_str p )
+    : i n ( slice_len [u] p_b )
     : ~ i depth 0
     : ~ i k 0
     ~ < k n {
-        : i c ( nurl_str_at p n k )
+        : i c ( slice_byte p_b k )
         ? | == c 91 == c 40 { = depth + depth 1 } {
             ? | == c 93 == c 41 { ? > depth 0 { = depth - depth 1 } {} } {
                 ? == depth 0 { ( string_push_char out c ) } {}

@@ -45,6 +45,63 @@ unsafe @ tail_view s x → s { ? > ( nurl_str_len x ) 100 { ^ # s + # i x 1 } {}
     ^ t
 }
 
+// A callee that hands over its result on NO path answers "not owned"
+// without being asked (`__ret_unowned`: its callers do not ask it per
+// call), and its result may still be the temporary or point into it. The
+// same three outcomes hold for it: `always_view` hands back its argument,
+// `always_tail` a view into it, `first_x` what `strstr` finds in it.
+@ always_view s x → s { ^ x }
+
+unsafe @ always_tail s x → s { ^ # s + # i x 1 }
+
+unsafe @ first_x s x → s { ^ ( strstr x `x` ) }
+
+@ upick i n → i { : s r ( always_view ( mk n ) ) ^ ( nurl_str_len r ) }
+
+@ upick2 i n → i { ^ ( nurl_str_len ( always_view ( mk n ) ) ) }
+
+@ upick3 b c i n → i { : s r ? c ( always_view ( mk n ) ) ( mk n ) ^ ( nurl_str_len r ) }
+
+@ utail i n → i { : s r ( always_tail ( mk n ) ) ^ ( nurl_str_len r ) }
+
+@ utail2 i n → i { ^ ( nurl_str_len ( always_tail ( mk n ) ) ) }
+
+@ ufind i n → i { : s r ( first_x ( mk n ) ) ^ ( nurl_str_len r ) }
+
+@ uout i n → s { : s r ( always_view ( mk n ) ) ^ r }
+
+@ uout2 i n → s { ^ ( always_view ( mk n ) ) }
+
+@ uchain i n → i { ^ ( nurl_str_len ( always_view ( always_view ( mk n ) ) ) ) }
+
+@ uloop i n → i {
+    : ~ i t 0
+    : ~ i k 0
+    ~ < k 5 { : s r ( always_view ( mk n ) ) = t + t ( nurl_str_len r ) = k + k 1 }
+    ~ < k 10 { : s r ( first_x ( mk n ) ) = t + t ( nurl_str_len r ) = k + k 1 }
+    ^ t
+}
+
+// An instance of a generic callee is compiled after its callers: nothing
+// about its result is known at the call, so the call asks it, as it asks
+// any NURL body (tools/fuzz/holes h105).
+@ gview [T] T tag s x → s { ^ x }
+
+@ gmaybe [T] T tag s x → s { ? > ( nurl_str_len x ) 100 { ^ x } {} ^ ( nurl_str_cat x `!` ) }
+
+@ gpick i n → i { : s r ( gview [i] 0 ( mk n ) ) ^ ( nurl_str_len r ) }
+
+@ gpick2 i n → i { ^ ( nurl_str_len ( gmaybe [i] 0 ( mk n ) ) ) }
+
+@ gout i n → s { ^ ( gview [i] 0 ( mk n ) ) }
+
+@ gloop i n → i {
+    : ~ i t 0
+    : ~ i k 0
+    ~ < k 5 { : s r ( gmaybe [i] 0 ( mk n ) ) = t + t ( nurl_str_len r ) = k + k 1 }
+    ^ t
+}
+
 @ main → i {
     : ~ i t 0
     : ~ i n 5
@@ -57,5 +114,27 @@ unsafe @ tail_view s x → s { ? > ( nurl_str_len x ) 100 { ^ # s + # i x 1 } {}
         = n 150 = j + j 1
     }
     ( nurl_print_int t ) ( nurl_print `\n` )
+    : ~ i u 0
+    = n 5
+    = j 0
+    ~ < j 2 {
+        = u + u ( upick n ) = u + u ( upick2 n ) = u + u ( upick3 T n ) = u + u ( upick3 F n )
+        = u + u ( utail n ) = u + u ( utail2 n ) = u + u ( ufind n )
+        = u + u ( uchain n ) = u + u ( uloop n )
+        : s a ( uout n ) : s b ( uout2 n )
+        = u + u + ( nurl_str_len a ) ( nurl_str_len b )
+        = n 150 = j + j 1
+    }
+    ( nurl_print_int u ) ( nurl_print `\n` )
+    : ~ i g 0
+    = n 5
+    = j 0
+    ~ < j 2 {
+        = g + g ( gpick n ) = g + g ( gpick2 n ) = g + g ( gloop n )
+        : s c ( gout n )
+        = g + g ( nurl_str_len c )
+        = n 150 = j + j 1
+    }
+    ( nurl_print_int g ) ( nurl_print `\n` )
     ^ 0
 }

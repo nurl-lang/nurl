@@ -123,7 +123,7 @@ cannot leak how many leading bytes matched.
 
 ## Status
 
-v0.13.1 — stdio + token-authenticated HTTP transport, both served through
+v0.13.2 — stdio + token-authenticated HTTP transport, both served through
 `stdlib/ext/mcp_server.nu`, so the dual-era handshake (`server/discover`, the
 protocol version gate, `_meta` serverInfo) and per-handler panic isolation come
 from one implementation shared with the rest of the tree. Not yet bundled with

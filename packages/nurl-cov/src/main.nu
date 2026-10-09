@@ -34,8 +34,9 @@ $ `lcov.nu`
 $ `html.nu`
 $ `jsonout.nu`
 $ `runner.nu`
+$ `stdlib/core/slice.nu`
 
-: s NURLCOV_VERSION `0.2.1`
+: s NURLCOV_VERSION `0.2.2`
 
 @ __usage → v {
     ( nurl_print `nurl-cov — test-coverage mapper for NURL\n\n` )
@@ -95,13 +96,14 @@ $ `runner.nu`
 // "80", or "79.5". It is carried in tenths so the comparison against the
 // report is exact.
 @ __pct_tenths s text → i {
-    : i n ( nurl_str_len text )
+    : ( Slice u ) text_b ( slice_of_str text )
+    : i n ( slice_len [u] text_b )
     : ~ i whole 0
     : ~ i frac 0
     : ~ b after F
     : ~ i k 0
     ~ < k n {
-        : i ch ( nurl_str_at text n k )
+        : i ch ( slice_byte text_b k )
         ? == ch 46 { = after T } {
             ? & >= ch 48 <= ch 57 {
                 ? after {
@@ -186,7 +188,7 @@ $ `runner.nu`
 // compiler wrote them that way so a program can be started from anywhere.
 // A filter given as `src` has to be made absolute to match.
 @ __abs s rel → String {
-    ? == 47 ( nurl_str_at rel ( nurl_str_len rel ) 0 ) { ^ ( string_from rel ) } {}
+    ? == 47 ( nurl_str_get rel 0 ) { ^ ( string_from rel ) } {}
     ^ ?? ( env_cwd ) {
         T cwd → {
             : String out ( string_clone cwd )

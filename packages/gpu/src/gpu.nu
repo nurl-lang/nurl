@@ -33,6 +33,7 @@ $ `stdlib/std/thread.nu`
 $ `stdlib/core/rcbox.nu`
 $ `cuda.nu`
 $ `cpu.nu`
+$ `stdlib/core/slice.nu`
 
 // f32 → its 32-bit IEEE-754 bit pattern (for scalar kernel args).
 // The C param is `float`, so it must be declared `f32` (not `f`/double)
@@ -323,19 +324,21 @@ unsafe @ gpu_name Gpu g → s {
         F _e → { ^ 0 }
         T t → {
             : s d ( string_data t )
-            : i n ( nurl_str_len d )
-            : i tl ( nurl_str_len tag )
+            : ( Slice u ) d_b ( slice_of_str d )
+            : i n ( slice_len [u] d_b )
+            : ( Slice u ) tag_b ( slice_of_str tag )
+            : i tl ( slice_len [u] tag_b )
             : ~ i k 0
             : ~ i val 0
             ~ & < k - n tl == val 0 {
                 : ~ i m 0
-                ~ & < m tl == ( nurl_str_at d n + k m ) ( nurl_str_at tag tl m ) { = m + m 1 }
+                ~ & < m tl == ( slice_byte d_b + k m ) ( slice_byte tag_b m ) { = m + m 1 }
                 ? == m tl {
                     // parse the digits after the tag; the unit is kB
                     : ~ i j + k tl
-                    ~ & < j n | < ( nurl_str_at d n j ) 48 > ( nurl_str_at d n j ) 57 { = j + j 1 }
-                    ~ & < j n & >= ( nurl_str_at d n j ) 48 <= ( nurl_str_at d n j ) 57 {
-                        = val + * val 10 - ( nurl_str_at d n j ) 48
+                    ~ & < j n | < ( slice_byte d_b j ) 48 > ( slice_byte d_b j ) 57 { = j + j 1 }
+                    ~ & < j n & >= ( slice_byte d_b j ) 48 <= ( slice_byte d_b j ) 57 {
+                        = val + * val 10 - ( slice_byte d_b j ) 48
                         = j + j 1
                     }
                 } {}
@@ -710,9 +713,9 @@ unsafe @ gpu_host_alloc i bytes → GpuHost {
 }
 
 // No buffer — the placeholder for "not allocated yet".
-@ gpu_host_none → GpuHost { ^ @ GpuHost { # *u 0 0 ( __gpu_nores ) } }
+unsafe @ gpu_host_none → GpuHost { ^ @ GpuHost { # *u 0 0 ( __gpu_nores ) } }
 
-@ gpu_host_ptr GpuHost h → *u { ^ . h ptr }
+unsafe @ gpu_host_ptr GpuHost h → *u { ^ . h ptr }
 
 @ gpu_host_bytes GpuHost h → i { ^ . h bytes }
 
@@ -976,7 +979,7 @@ unsafe @ __gpu_upload_each ( Vec GpuCopy ) items → i {
     ^ rc
 }
 
-@ gpu_upload_batch ( Vec GpuCopy ) items → i {
+unsafe @ gpu_upload_batch ( Vec GpuCopy ) items → i {
     ? != __gpu_backend 0 { ^ ( __gpu_upload_each items ) } {}
     ? == __gpu_stage_a 0 { = __gpu_stage_a # i ( cuda_host_alloc ( __GPU_STAGE_CHUNK ) ) } {}
     ? == __gpu_stage_b 0 { = __gpu_stage_b # i ( cuda_host_alloc ( __GPU_STAGE_CHUNK ) ) } {}
@@ -1072,7 +1075,7 @@ unsafe @ __gpu_upload_each ( Vec GpuCopy ) items → i {
 // most ONE range is tracked; returns F when registration fails (not a
 // CUDA backend, read-only registration unsupported, out of lockable
 // memory) and uploads simply keep their staged path.
-@ gpu_host_register * u p i bytes → b {
+unsafe @ gpu_host_register * u p i bytes → b {
     ? != __gpu_backend 0 { ^ F } {}
     ? != ( cuda_host_register p bytes ) 0 { ^ F } {}
     = __gpu_reg_base # i p
@@ -1080,7 +1083,7 @@ unsafe @ __gpu_upload_each ( Vec GpuCopy ) items → i {
     ^ T
 }
 
-@ gpu_host_unregister * u p → v {
+unsafe @ gpu_host_unregister * u p → v {
     ? != __gpu_backend 0 { ^ {} } {}
     ? == # i p __gpu_reg_base {
         : i _u ( cuda_host_unregister p )

@@ -23,7 +23,7 @@ unsafe @ ppu_dump → v {
     }
 }
 
-@ run_rom_ppu s path i frames → i {
+unsafe @ run_rom_ppu s path i frames → i {
     : !( Vec u ) IoErr rr ( read_file_bytes path )
     ?? rr {
         F _ → { ( nurl_print `cannot read ROM\n` ) ^ 2 }
@@ -93,7 +93,7 @@ unsafe @ audio_dump s path i frames s outpath → i {
     ^ F
 }
 
-@ run_rom s path i budget → i {
+unsafe @ run_rom s path i budget → i {
     : !( Vec u ) IoErr rr ( read_file_bytes path )
     : ~ i status 2
     ?? rr {

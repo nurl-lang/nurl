@@ -54,6 +54,7 @@ $ `src/config.nu`
 $ `stdlib/ext/http_request.nu`
 $ `stdlib/ext/http_auth.nu`
 $ `deps/oauth/src/oauth.nu`
+$ `stdlib/core/slice.nu`
 
 // ── Configuration ─────────────────────────────────────────────────────
 //
@@ -98,6 +99,7 @@ $ `deps/oauth/src/oauth.nu`
     String s_allowed
     String s_last_err  // why the last token verification failed
     String s_owner  // the owner tenant: config-only, the trust anchor
+    String s_iss_tmpl  // multi-tenant: the provider's issuer template
 }
 
 : ~ i g_az_strs 0
@@ -111,6 +113,7 @@ unsafe @ __az_strs → *AzStrings {
     = . a s_allowed ( string_new )
     = . a s_last_err ( string_new )
     = . a s_owner ( string_new )
+    = . a s_iss_tmpl ( string_new )
     = g_az_strs # i a
     ^ a
 }
@@ -122,6 +125,7 @@ unsafe @ __az_set_str * AzStrings a i which s v → v {
     ? == which 3 { ( string_clear . a s_allowed ) ( string_push_str . a s_allowed v ) } {}
     ? == which 4 { ( string_clear . a s_last_err ) ( string_push_str . a s_last_err v ) } {}
     ? == which 5 { ( string_clear . a s_owner ) ( string_push_str . a s_owner v ) } {}
+    ? == which 6 { ( string_clear . a s_iss_tmpl ) ( string_push_str . a s_iss_tmpl v ) } {}
 }
 
 unsafe @ g_az_issuer → s { ^ ( string_data . ( __az_strs ) s_issuer ) }
@@ -132,13 +136,22 @@ unsafe @ g_az_audience → s { ^ ( string_data . ( __az_strs ) s_audience ) }
 
 unsafe @ g_az_allowed → s { ^ ( string_data . ( __az_strs ) s_allowed ) }
 
+// The multi-tenant issuer template, read from the provider's discovery
+// document (__az_provider_multi): every token's `iss` is measured against
+// it with `{tenantid}` replaced. Owned here like the configured strings —
+// it once was a view of the discovery reader's local String, which was
+// freed when the reader returned, so every later check read freed memory.
+unsafe @ g_az_iss_tmpl → s { ^ ( string_data . ( __az_strs ) s_iss_tmpl ) }
+
+unsafe @ anomaly_authz_set_iss_tmpl s t → v { ( __az_set_str ( __az_strs ) 6 t ) }
+
 // The OWNER TENANT: the organisation whose admins administer the service
 // itself — approving other tenants, managing any organisation's users. It
 // is set in the configuration file and nowhere else. A tenant that could
 // grant itself that from the dashboard would not be an anchor.
 unsafe @ g_az_owner → s { ^ ( string_data . ( __az_strs ) s_owner ) }
 
-@ anomaly_authz_set_owner_tenant s tid → v { ( __az_set_str ( __az_strs ) 5 tid ) }
+unsafe @ anomaly_authz_set_owner_tenant s tid → v { ( __az_set_str ( __az_strs ) 5 tid ) }
 
 // Why the last presented token was refused. A 401 with no reason is what
 // turns a one-line configuration mistake — the wrong audience, a clock an
@@ -146,7 +159,7 @@ unsafe @ g_az_owner → s { ^ ( string_data . ( __az_strs ) s_owner ) }
 // single-threaded, so one slot is the whole story.
 unsafe @ anomaly_authz_last_error → s { ^ ( string_data . ( __az_strs ) s_last_err ) }
 
-@ __az_set_last_err s v → v { ( __az_set_str ( __az_strs ) 4 v ) }
+unsafe @ __az_set_last_err s v → v { ( __az_set_str ( __az_strs ) 4 v ) }
 
 // The identity provider, discovered lazily and then reused: it owns the
 // JWKS cache, and re-fetching a key set per request would turn every
@@ -185,7 +198,6 @@ unsafe @ anomaly_authz_last_error → s { ^ ( string_data . ( __az_strs ) s_last
 // which may; empty means any, which is what "multi-tenant" asks for and
 // should be a deliberate answer rather than a default nobody saw.
 : ~ b g_az_multi F
-: ~ s g_az_iss_tmpl ``
 
 @ anomaly_authz_set_root s root → v {
     = g_az_root root
@@ -195,7 +207,7 @@ unsafe @ anomaly_authz_last_error → s { ^ ( string_data . ( __az_strs ) s_last
 // reachable without credentials while a fleet of already-deployed data
 // producers is migrated onto keys. It is a migration setting: with it on,
 // anyone who can reach the port can write points into any model.
-@ anomaly_authz_configure b on b open_ingest s issuer s client_id s audience → v {
+unsafe @ anomaly_authz_configure b on b open_ingest s issuer s client_id s audience → v {
     = g_az_mode ? on AZ_MODE_OIDC AZ_MODE_SIMPLE
     = g_az_open_ingest open_ingest
     : *AzStrings a ( __az_strs )
@@ -206,13 +218,13 @@ unsafe @ anomaly_authz_last_error → s { ^ ( string_data . ( __az_strs ) s_last
 
 // Multi-tenant acceptance. `allowed` is a comma-separated tenant list;
 // empty admits every organisation the provider will sign for.
-@ anomaly_authz_configure_tenancy b multi s allowed → v {
+unsafe @ anomaly_authz_configure_tenancy b multi s allowed → v {
     = g_az_multi multi
     ( __az_set_str ( __az_strs ) 3 allowed )
     // A change of tenancy mode changes what the provider must be built
     // from, so the cached one is no longer the right one.
     = g_az_prov_addr 0
-    = g_az_iss_tmpl ``
+    ( anomaly_authz_set_iss_tmpl `` )
 }
 
 @ anomaly_authz_multi_tenant → b { ^ g_az_multi }
@@ -451,12 +463,13 @@ unsafe @ anomaly_authz_last_error → s { ^ ( string_data . ( __az_strs ) s_last
 // which is collision-free enough to key a database on and cannot contain a
 // path separator, a dot-dot, or a NUL by construction.
 @ __az_org_key s raw → String {
-    : i n ( nurl_str_len raw )
+    : ( Slice u ) raw_b ( slice_of_str raw )
+    : i n ( slice_len [u] raw_b )
     : ~ b plain > n 0
     ? > n 64 { = plain F } {}
     : ~ i k 0
     ~ & plain < k n {
-        : i c ( nurl_str_at raw n k )
+        : i c ( slice_byte raw_b k )
         : b digit & >= c 48 <= c 57
         : b lower & >= c 97 <= c 122
         : b upper & >= c 65 <= c 90
@@ -476,10 +489,11 @@ unsafe @ anomaly_authz_last_error → s { ^ ( string_data . ( __az_strs ) s_last
 
 @ __az_lower s raw → String {
     : String out ( string_new )
-    : i n ( nurl_str_len raw )
+    : ( Slice u ) raw_b ( slice_of_str raw )
+    : i n ( slice_len [u] raw_b )
     : ~ i k 0
     ~ < k n {
-        : i c ( nurl_str_at raw n k )
+        : i c ( slice_byte raw_b k )
         ? & >= c 65 <= c 90 { ( string_push_char out + c 32 ) } { ( string_push_char out c ) }
         = k + k 1
     }
@@ -487,12 +501,14 @@ unsafe @ anomaly_authz_last_error → s { ^ ( string_data . ( __az_strs ) s_last
 }
 
 @ __az_starts s hay s pre → b {
-    : i hn ( nurl_str_len hay )
-    : i pn ( nurl_str_len pre )
+    : ( Slice u ) hay_b ( slice_of_str hay )
+    : i hn ( slice_len [u] hay_b )
+    : ( Slice u ) pre_b ( slice_of_str pre )
+    : i pn ( slice_len [u] pre_b )
     ? >= hn pn {} { ^ F }
     : ~ i k 0
     ~ < k pn {
-        ? == ( nurl_str_at hay hn k ) ( nurl_str_at pre pn k ) {} { ^ F }
+        ? == ( slice_byte hay_b k ) ( slice_byte pre_b k ) {} { ^ F }
         = k + k 1
     }
     ^ T
@@ -1384,19 +1400,21 @@ unsafe @ anomaly_authz_last_error → s { ^ ( string_data . ( __az_strs ) s_last
 : KeyParts { b ok String kp_id String kp_secret }
 
 @ __az_key_split s token → KeyParts {
-    : i pn ( nurl_str_len AZ_KEY_PREFIX )
-    : i n ( nurl_str_len token )
+    : ( Slice u ) AZ_KEY_PREFIX_b ( slice_of_str AZ_KEY_PREFIX )
+    : i pn ( slice_len [u] AZ_KEY_PREFIX_b )
+    : ( Slice u ) token_b ( slice_of_str token )
+    : i n ( slice_len [u] token_b )
     : ~ b pre > n pn
     : ~ i k 0
     ~ & pre < k pn {
-        ? == ( nurl_str_at token n k ) ( nurl_str_at AZ_KEY_PREFIX pn k ) {} { = pre F }
+        ? == ( slice_byte token_b k ) ( slice_byte AZ_KEY_PREFIX_b k ) {} { = pre F }
         = k + k 1
     }
     ? pre {} { ^ @ KeyParts { F ( string_new ) ( string_new ) } }
     : String id ( string_new )
     : ~ i j pn
-    ~ & < j n != ( nurl_str_at token n j ) 95 {
-        ( string_push_char id ( nurl_str_at token n j ) )
+    ~ & < j n != ( slice_byte token_b j ) 95 {
+        ( string_push_char id ( slice_byte token_b j ) )
         = j + j 1
     }
     ? < j n {} {
@@ -1404,7 +1422,7 @@ unsafe @ anomaly_authz_last_error → s { ^ ( string_data . ( __az_strs ) s_last
     }
     = j + j 1
     : String sec ( string_new )
-    ~ < j n { ( string_push_char sec ( nurl_str_at token n j ) ) = j + j 1 }
+    ~ < j n { ( string_push_char sec ( slice_byte token_b j ) ) = j + j 1 }
     ? & > ( string_len id ) 0 > ( string_len sec ) 0 {} {
         ^ @ KeyParts { F ( string_new ) ( string_new ) }
     }
@@ -1499,7 +1517,7 @@ unsafe @ anomaly_authz_last_error → s { ^ ( string_data . ( __az_strs ) s_last
 
 // The provider, discovered on first use. None when discovery fails, which
 // makes every token unverifiable — a closed door, not an open one.
-@ __az_provider → ?OidcProvider {
+unsafe @ __az_provider → ?OidcProvider {
     ? != g_az_prov_addr 0 {
         ^ @ ?OidcProvider { T ( OidcProvider_share # OidcProvider g_az_prov_addr ) }
     } {}
@@ -1557,8 +1575,7 @@ unsafe @ anomaly_authz_last_error → s { ^ ( string_data . ( __az_strs ) s_last
 
     : OidcProvider p ( oidc_provider_new ( g_az_issuer ) )
     ( oidc_provider_set_jwks_uri p ( string_data jwks ) )
-    // tmpl backs g_az_iss_tmpl for the process's lifetime: kept.
-    = g_az_iss_tmpl ( string_data tmpl )
+    ( anomaly_authz_set_iss_tmpl ( string_data tmpl ) )
     ( __az_keep_provider p )
     ^ @ ?OidcProvider { T p }
 }
@@ -1574,10 +1591,12 @@ unsafe @ anomaly_authz_last_error → s { ^ ( string_data . ( __az_strs ) s_last
 // template with `{tenantid}` replaced. Empty when there is no template or
 // no tenant, which is a refusal rather than a wildcard.
 @ __az_issuer_for s tid → String {
-    : i tn ( nurl_str_len g_az_iss_tmpl )
+    : ( Slice u ) g_az_iss_tmpl_b ( slice_of_str ( g_az_iss_tmpl ) )
+    : i tn ( slice_len [u] g_az_iss_tmpl_b )
     ? & > tn 0 > ( nurl_str_len tid ) 0 {} { ^ ( string_new ) }
     : s needle `{tenantid}`
-    : i nn ( nurl_str_len needle )
+    : ( Slice u ) needle_b ( slice_of_str needle )
+    : i nn ( slice_len [u] needle_b )
     : String out ( string_new )
     : ~ i k 0
     : ~ b hit F
@@ -1586,7 +1605,7 @@ unsafe @ anomaly_authz_last_error → s { ^ ( string_data . ( __az_strs ) s_last
         ? here {
             : ~ i j 0
             ~ & here < j nn {
-                ? == ( nurl_str_at g_az_iss_tmpl tn + k j ) ( nurl_str_at needle nn j ) {} { = here F }
+                ? == ( slice_byte g_az_iss_tmpl_b + k j ) ( slice_byte needle_b j ) {} { = here F }
                 = j + j 1
             }
         } {}
@@ -1595,7 +1614,7 @@ unsafe @ anomaly_authz_last_error → s { ^ ( string_data . ( __az_strs ) s_last
             = k + k nn
             = hit T
         } {
-            ( string_push_char out ( nurl_str_at g_az_iss_tmpl tn k ) )
+            ( string_push_char out ( slice_byte g_az_iss_tmpl_b k ) )
             = k + k 1
         }
     }

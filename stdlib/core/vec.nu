@@ -138,6 +138,67 @@
     ^ < ( __vec_cap_raw ctl ) 0
 }
 
+// ── Allocation sizes ────────────────────────────────────────────────
+// Every size the library allocates for a caller's count is checked: a
+// count whose byte size cannot be represented panics before anything is
+// allocated — a size that wrapped would hand back a tiny buffer that the
+// count then writes past. The checks sit on growth paths only.
+//
+//   ( alloc_size size n )              →  i   n * size, or the panic
+//   ( alloc_count_add a b )            →  i   a + b, or the panic
+//   ( alloc_grow_cap cap need )        →  i   doubled from cap until need fits
+//   ( alloc_grow_pow2 cap need first ) →  i   …a power of two, from `first`
+
+// Never return: defined ahead of their callers (the noreturn registry).
+@ __alloc_size_panic i size i n → v {
+    ( nurl_eprint `allocation too large: ` ) ( nurl_eprint_int n )
+    ( nurl_eprint ` items of ` ) ( nurl_eprint_int size )
+    ( nurl_eprintln ` bytes cannot be represented` )
+    ( nurl_panic `allocation size overflow` )
+}
+
+@ __alloc_count_panic i a i b → v {
+    ( nurl_eprint `allocation too large: ` ) ( nurl_eprint_int a )
+    ( nurl_eprint ` + ` ) ( nurl_eprint_int b )
+    ( nurl_eprintln ` items cannot be represented` )
+    ( nurl_panic `allocation size overflow` )
+}
+
+// The byte size of `n` items of `size` bytes each, or the panic: a
+// negative count, or a product past what a size can hold.
+inline @ alloc_size i size i n → i {
+    // (Both under 2^31: the product fits — no division on the common path.)
+    ? & & >= n 0 < n 2147483648 < size 2147483648 { ^ * size n } {}
+    ? | < n 0 & > size 0 > n / 9223372036854775807 size { ( __alloc_size_panic size n ) } {}
+    ^ * size n
+}
+
+// `a + b` for two counts (a length and what is added to it), or the panic.
+inline @ alloc_count_add i a i b → i {
+    ? | | < a 0 < b 0 > a - 9223372036854775807 b { ( __alloc_count_panic a b ) } {}
+    ^ + a b
+}
+
+// The capacity a growing buffer doubles to from `cap` (4 when empty)
+// until it holds `need` — `need` itself where doubling would overflow.
+inline @ alloc_grow_cap i cap i need → i {
+    : ~ i c ? > cap 0 cap 4
+    // (Up to 2^62 every doubling below `need` fits: one test, not one per
+    // doubling.)
+    ? > need 4611686018427387904 { ^ ? > c need c need } {}
+    ~ < c need { = c * c 2 }
+    ^ c
+}
+
+// …a power of two from `first` (a hash table's), or the panic when `need`
+// is past the largest one.
+inline @ alloc_grow_pow2 i cap i need i first → i {
+    ? > need 4611686018427387904 { ( __alloc_size_panic 1 need ) } {}
+    : ~ i c ? > cap 0 cap first
+    ~ < c need { = c * c 2 }
+    ^ c
+}
+
 // Grow the underlying buffer so that cap >= need. Uses nurl_realloc;
 // safe to call when the current data pointer is null (cap == 0).
 // (Callers test `cap < need` first: this is the slow path, and a call per
@@ -150,10 +211,8 @@
         // elements into a fresh owned buffer and leave the source
         // untouched. From here on this is an ordinary owned Vec.
         : i len ( __vec_len_raw ctl )
-        : ~ i new_cap 4
-        ~ < new_cap need { = new_cap * new_cap 2 }
-        ~ < new_cap len { = new_cap * new_cap 2 }
-        : s fresh ( nurl_alloc * Z A new_cap )
+        : i new_cap ( alloc_grow_cap 4 ? > len need len need )
+        : s fresh ( nurl_alloc ( alloc_size Z A new_cap ) )
         : i copy_bytes * Z A len
         ? > copy_bytes 0 { ( nurl_memcpy fresh ( __vec_data_raw ctl ) copy_bytes ) } {}
         ( nurl_vctl_set ctl 0 # i fresh )
@@ -161,10 +220,11 @@
         ^
     } {}
     ? < cap need {
-        : ~ i new_cap ? == cap 0 4 cap
-        ~ < new_cap need { = new_cap * new_cap 2 }
+        // (Checked: a capacity past what memory can hold panics here,
+        // before anything is allocated — alloc_size.)
+        : i new_cap ( alloc_grow_cap cap need )
         : s cur ( __vec_data_raw ctl )
-        : i bytes * Z A new_cap
+        : i bytes ( alloc_size Z A new_cap )
         // If `cur` lives in the same alloc as ctl (the packed-string
         // layout from string_from_bytes_packed — data sits at ctl+24),
         // realloc() would walk into the middle of another malloc block
@@ -278,7 +338,7 @@
 @ vec_zeroed [A] i n → ( Vec A ) {
     : s ctl ( nurl_zalloc 24 )
     ? > n 0 {
-        : s data ( nurl_zalloc * Z A n )
+        : s data ( nurl_zalloc ( alloc_size Z A n ) )
         ( nurl_vctl_set ctl 0 # i data )
         ( nurl_vctl_set ctl 1 n )
         ( nurl_vctl_set ctl 2 n )

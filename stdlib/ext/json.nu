@@ -904,7 +904,7 @@ $ `stdlib/core/vec.nu`
 // an embedded NUL is an ordinary byte: inside a string it is a bare
 // control character (BadFormat), between tokens it is an unexpected
 // byte (BadFormat) — rejected, never silently truncated.
-@ json_parse_n s src i len → !Json JsonError {
+@ json_parse_n * u src i len → !Json JsonError {
     ? <= len 0 {
         : JsonError e @ JsonError {
             @ ParseErr { Empty }

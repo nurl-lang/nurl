@@ -37,7 +37,7 @@ unsafe @ h_get H h → i {
 @ word_at ( Vec i ) tab i j → i { ^ ?? ( vec_get [i] tab j ) { T x → x F _ → 0 } }
 
 // a view of the table's handle
-@ at ( Vec i ) tab i j → H { ^ # H ( word_at tab j ) }
+unsafe @ at ( Vec i ) tab i j → H { ^ # H ( word_at tab j ) }
 
 // an owner: a share of it
 @ take ( Vec i ) tab i j → H { ^ ( H_share ( at tab j ) ) }

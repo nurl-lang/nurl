@@ -8,7 +8,146 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+The memory guarantee has **no exception**: 0.71.0's one known hole (a
+`Slice` of a `Vec`, probe h32) is closed, along with 109 more found around
+it (probes h33–h141), each at its root — every probe is now rejected or
+runs clean under ASan/UBSan/LSan, and `tools/fuzz/holes/check.sh` runs in
+CI. Compile time is 0.7 % below 0.71.0's main (self-compile instructions),
+run time is flat or better on every bench kernel but json_parse (+0.2 %: the
+null-safe string length and the checked growth). Code that handed raw pointers or caller-given
+lengths around outside `unsafe` may need `unsafe`, or the safe API now
+beside each raw one (*Changed*).
+
 ### Fixed
+
+- **Views are values.** A view — a `Slice`, a struct, Option or container
+  holding one, a view a closure captured, one stored in a global or
+  returned from a function — is tracked as a view of its source wherever
+  it goes, and ends with it (docs/MEMORY.md §2.10). Freeing or growing a
+  `Vec` while a `Slice` of it (or protobuf's `ProtoReader`) is still read,
+  0.71.0's known exception, is rejected (h32–h50, h80, h81, h89–h95).
+- **Sealed representations.** A `Slice`, `Vec`, `String`, `Box`, a library
+  handle, or any struct with a raw-pointer field can no longer be built
+  field by field, have a raw field written or read, or be made by a cast
+  outside `unsafe`; `slice_from_raw`, `vec_borrow_raw` and `vec_set_len`
+  are `unsafe` to call (h51–h62).
+- **Exclusive calls.** A container a call may change cannot also reach it
+  as another argument — the same owner twice, or a view or borrow of it
+  (h63–h68, docs/MEMORY.md §2.4).
+- **Running a closure is its effects.** A closure that changes,
+  reallocates or drops elements of a capture ends the views and borrows of
+  it where it runs, directly or through a callee it is handed to
+  (h69–h71, §2.11).
+- **Accessors borrow by summary, not by name.** What a call lends, writes
+  and reallocates is read from its body (raw provenance), so `map_get`,
+  `box_get`, `deque_get` and `btree_get` results borrow from their
+  container as `vec_get`'s do, and replacing the value ends them
+  (h72–h76).
+- **Borrows through field paths.** A field handed to a call
+  (`( vec_at [String] . b items 0 )`) lends and loses its field like a
+  binding does; a nested field (`. . o b name`) moved into a `sink`
+  parameter or replaced is its binding's own storage — no double free, no
+  leak (h82–h88).
+- **Allocation sizes are checked.** `n * size` and `n + 1` wrapped in
+  `vec_with_cap`, `vec_zeroed`, `string_with_cap` and every Vec / HashMap /
+  Set growth; a count whose byte size cannot be represented now panics
+  before anything is allocated (h77–h79).
+- **A part of a temporary is a copy.** `( vec_get [String] ( mk ) 0 )`
+  took the element for the temporary Vec itself: the Vec was never
+  dropped. The element is copied and the temporary dropped after the
+  call; an element that cannot be copied is an error naming the fix
+  (h96). A temporary an instance of a generic function hands back was
+  freed under the result: the instance is compiled after its callers, so
+  the call did not ask it whether its result was its own (h105).
+- **A method call is its impl's.** A method call was judged by the
+  trait's bare name, which has a contract and no body: an impl that kept
+  its argument had it dropped under it by the caller, a temporary handed
+  to a method (or a temporary receiver) leaked, and a method taking or
+  handing back a raw pointer was callable from safe code (h106, h107). A
+  call the receiver's type dispatches statically now asks its impl
+  everything a call of a function asks. A call through a `%Trait` object
+  asks every impl at once: its arguments are kept, lent or dropped as any
+  impl may, and a handle result is owned per call. Impls that disagree on
+  keeping an argument, or an impl that keeps its receiver (the object
+  still owns it), are an error where the object is called (h110–h112).
+  `sink` and `inout` parameters in a trait's signature no longer make
+  every `dyn` call of the method an arity error, and a trait method with
+  a closure parameter (`( @ v ) f`) parses — its header scan stopped at
+  the closure type's `@`.
+- **A `sink` parameter handed back is the caller's.** `^ x` out of a
+  `sink` parameter — a builder that takes its value and returns it
+  changed — was read as a second name of the argument the caller had
+  handed over, so the result was nobody's and leaked (h108).
+- **A raw-pointer parameter hands nothing over.** A `*T` parameter was
+  summarised as keeping what it was handed when its function stored it
+  in raw memory: `json_parse_n`'s text, held by its scratch parser, made
+  `json_parse` keep its text, and every temporary handed to it leaked
+  (h109).
+- **Two dangling views in packages**, rejected by the view checks:
+  anomaly's multi-tenant issuer template was a view of the discovery
+  reader's String, freed when the reader returned — every later token
+  check read freed memory; nurl-mcp's `--token` was a view of `main`'s
+  String kept in a global, which outlives it (in practice `main` held it
+  as long as the server ran).
+- **A string binding that owns its buffer is an owner.** One bound to an
+  owning call, or a mutable one born from a literal or an owned string,
+  owns its buffer: every value assigned to it after is fresh or its own
+  copy. The view walk took every `s` for a view. A copy of an owning one
+  (`: s y x`) borrowed nothing, so it was read after `= x …` freed the
+  buffer (h113–h115), handed back while the owner was dropped on the way
+  out (h116), or reached through a result that may be the argument itself
+  (h117) or the whole rest of a split cursor (h118) — each a read of
+  freed memory. And a view assigned into an owning binding, which copies
+  it, was taken for a borrow of its source, rejecting correct code: a
+  match arm's payload, the String of a shorter block (f5tts's bearer
+  check and `{id}` capture were rewritten around this; they are back as
+  they were). Now a copy of an owning `s` is a view of its buffer, ending
+  when the binding is given a new value or ends; the binding handed back
+  by name goes to the caller; a binding that copies what it is given, or
+  takes an owned value, holds a fresh one.
+- **A mutable string born from a call that hands nothing over owns what
+  it is given.** Since such a callee stopped being asked per call, the
+  binding had no owner slot, and a tracked local assigned to it — copied,
+  as it must be — leaked once per assignment (h119, h120). It gets the
+  empty owner slot a binding born from a name gets; so does one born from
+  a struct's field, whose owned strings leaked the same way (h122).
+- **A string field its struct owns keeps owning.** A field a struct
+  literal gave a fresh string is freed with the struct; assigned a view,
+  an owned local or a literal, it stored that pointer as it came — a
+  double free, an invalid free, or (the struct handed back) a caller
+  reading a String the callee had dropped — and a fresh value assigned
+  to it leaked the one it replaced (h123–h127). A field read assigned to
+  a string binding that owns its value was stored the same way (h121).
+  Both now hold their own copy of anything not fresh, and free what they
+  replace.
+- **A fresh raw string stored where nothing releases it** — an option
+  payload, a slice element, a struct temporary, a struct pushed into a
+  Vec, a field assigned after the struct was built with a literal or a
+  view, a join or a reassignment of struct literals, a `vec_push [s]`
+  (h128–h140) — leaked; it is now rejected (*Changed*). And a closure or
+  a struct literal handed back as written was not checked for what its
+  views point into: one that captured an owned local string read it after
+  the function released it (h141).
+- **The raw foreign surface is `unsafe`.** A C primitive that reads or
+  writes as far as its caller says (`memmem`, `memcmp`, `fwrite`,
+  `nurl_fast_atof`, the TCP/UDP buffers), takes a `FILE*` or a format
+  string (`fopen`, `fclose`, `printf`), allocates or frees, or is the
+  runtime's own machinery is marked `"nurl.raw"` and callable only from
+  `unsafe` code; a call that hands back a raw pointer (`vec_data`,
+  `slice_data`, `arena_alloc`, `box_ptr`) is too, like one that takes one.
+  A raw pointer could become a string (`( nurl_println ( vec_data v ) )`)
+  and a CSV cell, which is not NUL-terminated, was handed out as one
+  (h97–h101, h103). A generic standard-library internal (`__vec_grow`)
+  slipped past the check that keeps `__` functions inside the library —
+  its instance name hid the declaration — and could be handed a string
+  for a Vec's control block (h104).
+- **A null string reads as the empty string.** `# s 0` and an unset
+  `getenv` crashed `nurl_println`, `nurl_str_len`, `strlen`, `string_from`
+  and every string primitive built on them; a C string parameter
+  (`"nurl.cstr"`) now takes a null as `""` (h102).
+- **`select` arm bodies run after the wait loop**: a `break` or `^` in an
+  arm body left the select's own loop and skipped the disarm, freeing the
+  waiter while other channels still held it.
 
 - **`nurlpkg install` refused every package on Windows** with
   `PkgToolchain: upgrade NURL to satisfy package.nurl-version`, on a
@@ -20,6 +159,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A raw string in a value is a view** (docs/MEMORY.md §2.13). In safe
+  code a raw string (`s`) held by a struct, an option, an enum, a slice
+  or a container owns nothing, so a fresh one — a call's result that hands
+  its string over — can no longer be stored there (`@ T { ( nurl_str_cat …
+  ) }`, `@ ?s { T … }`, `[ s | … ]`, `= . r name ( … )`) nor handed to a
+  parameter that keeps it (`vec_push [s]`, `map_set`): each leaked (h128–
+  h140). Hold a `String` (a field, a payload, a `( Vec String )`), or bind
+  the string and store the binding — a view the walk keeps from outliving
+  it. A parameter that takes a string over is declared `sink`. `unsafe`
+  code and the standard library keep managing raw strings by hand. In the
+  repository only tests built structs that way; they are `unsafe` now.
+- **Raw-length helpers take a raw pointer and are `unsafe` to call** —
+  `nurl_str_at`, `nurl_memcmp_lex`, `nurl_memmem_range`,
+  `nurl_parse_int_range`, `nurl_parse_float_range`, `string_from_take`,
+  `string_from_n`, `json_parse_n`, `bytes_extend_raw`, `b64_encode_len`,
+  `b32_encode_len`, `proc_write`, `constant_time_eq_n`, `utf8_decode_n`:
+  each trusted its caller's length. The safe forms carry their own:
+  `slice_of_str` + `slice_byte` for a scan (O(1) per byte, like
+  `nurl_str_at`), `string_adopt`, `write_string`, `b64_encode_string`,
+  `utf8_decode_at`, `slice_parse_int` / `slice_parse_float`.
+- **`csv_table_view` and `csv_table_view_by_name` return a `( Slice u )`**
+  — the cell's bytes with their length (a cell is not NUL-terminated); the
+  empty view when out of range.
+- **Standard-library foreign declarations say what they take.** A buffer,
+  an out-struct or a C handle is `*u` (sqlite3 handles and statements,
+  termios, `stat` and socket address buffers, the Rc collector's
+  internals), a string is `s`: what is raw memory is `unsafe` to call by
+  its type.
 - **`package.nurl-version` no longer gates anything.** `nurlpkg install`
   (registry packages, the root project, local dependencies) and
   `nurlpkg publish` no longer compare it against the toolchain, and the
@@ -33,6 +200,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `slice_of_str`, `slice_byte`, `slice_parse_int`, `slice_parse_float`,
+  `string_adopt`, `write_string`, `b64_encode_string`, `utf8_decode_at`:
+  the safe forms of the raw-length helpers above.
+- Hole probes h33–h141 (`tools/fuzz/holes/`) and their check in CI: each
+  must be rejected or run clean under the sanitizers.
 - **Five cryptographic benchmark rows** — `chacha20`, `poly1305`,
   `blake2b`, `sha512` and `x25519` — in NURL, C and Rust. The NURL side
   is a driver around the standard library's own implementation
@@ -52,6 +224,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `bench/bench.ps1 -Scale N`, and `bench/wasmbench.ps1`, a port of
   `wasmbench.sh` for Windows (exercised under pwsh on Linux; its
   Windows-only branches are not yet run on a Windows host).
+
+### Performance
+
+- **Compile time 0.7 % below 0.71.0's main** (self-compile 12.56 G →
+  12.47 G instructions, each compiler built by itself, same input) with
+  the larger borrow walk and every call now asked of the right callee:
+  the raw-provenance graph is integers, walk rows are cheaper, and…
+- **…a function that never hands over its result is not asked per call.**
+  Every `s`-returning call queried the runtime for an ownership proof
+  (two opaque calls and a `free(NULL)`); a callee whose every path returns
+  a borrow, a raw read or a literal now says so statically
+  (`__ret_unowned`), and so does every call with a raw-pointer result,
+  which nothing owns. Against main, every benchmark kernel retires the
+  same instructions or fewer: blake2b −0.18 %, json_parse −0.24 %, x25519
+  −0.03 %.
+- Growth paths test for overflow once per growth, not once per doubling,
+  and divide only for sizes past 2^31.
 
 ## [0.71.0] — 2026-10-07
 

@@ -27,9 +27,9 @@ $ `stdlib/core/vec.nu`
 
 & `libc` @ nurl_blk_sector_count → i
 
-& `libc` @ nurl_blk_read i lba s buf i nsec → i
+& `libc` @ nurl_blk_read i lba *u buf i nsec → i
 
-& `libc` @ nurl_blk_write i lba s buf i nsec → i
+& `libc` @ nurl_blk_write i lba *u buf i nsec → i
 
 & `libc` @ nurl_blk_flush → i
 
@@ -79,12 +79,12 @@ $ `stdlib/core/vec.nu`
 // The same two, straight at a pointer. A filesystem transferring whole
 // sectors into a caller's buffer has nowhere to put a Vec, and copying
 // through one would double every byte of every read.
-@ blk_read_raw s buf i lba i nsec → b {
+@ blk_read_raw * u buf i lba i nsec → b {
     ? ! ( __blk_range_ok lba nsec ) { ^ F } {}
     ^ == ( nurl_blk_read lba buf nsec ) nsec
 }
 
-@ blk_write_raw s buf i lba i nsec → b {
+@ blk_write_raw * u buf i lba i nsec → b {
     ? ! ( __blk_range_ok lba nsec ) { ^ F } {}
     ^ == ( nurl_blk_write lba buf nsec ) nsec
 }
