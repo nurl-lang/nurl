@@ -105,7 +105,6 @@ $ `stdlib/core/slice.nu`
     ^ @ Utf8Dec { UTF8_REPLACEMENT 1 0 }
 }
 
-// True iff `str` is well-formed UTF-8 end to end.
 // The eight bytes at p[o .. o+8] as one little-endian word (the byte
 // loads fold into one load).
 @ __utf8_ld64 * u p i o → i {
@@ -114,6 +113,7 @@ $ `stdlib/core/slice.nu`
     ^ | lo << hi 32
 }
 
+// True iff `str` is well-formed UTF-8 end to end.
 @ utf8_valid s str → b {
     : i n ( nurl_str_len str )
     : *u p # *u str
