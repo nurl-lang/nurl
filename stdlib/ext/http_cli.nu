@@ -40,6 +40,7 @@ $ `stdlib/std/fs.nu`
 $ `stdlib/std/process.nu`
 $ `stdlib/ext/env.nu`
 $ `stdlib/ext/http_cli_types.nu`
+$ `stdlib/core/slice.nu`
 
 // HttpcResp carries the status, the true body length `blen`, and the body
 // bytes with one extra trailing NUL (so httpc_body_str can hand back a
@@ -79,10 +80,11 @@ $ `stdlib/ext/http_cli_types.nu`
 
 // Copy bytes [a, b) of `str` into a fresh owned String.
 @ __httpc_substr s str i a i b → String {
+    : ( Slice u ) str_v ( slice_of_str str )
     : String out ( string_with_cap + - b a 1 )
     : ~ i k a
     ~ < k b {
-        ( string_push_char out ( nurl_str_get str k ) )
+        ( string_push_char out ( slice_byte str_v k ) )
         = k + k 1
     }
     ^ out

@@ -26,6 +26,7 @@ $ `stdlib/std/url.nu`
 $ `stdlib/ext/env.nu`
 $ `stdlib/ext/json.nu`
 $ `tools/nurl-lsp/jsonrpc.nu`
+$ `stdlib/core/slice.nu`
 
 : ~ b g_shutdown_received F
 : ~ b g_exit_requested F
@@ -183,21 +184,22 @@ unsafe @ __position_at_byte s text i at → Json {
 // A source byte column is clamped at the end of its line, then converted
 // to UTF-16. Missing columns (borrow diagnostics) underline the whole line.
 @ __diagnostic_range s content i ln i cn → Json {
+    : ( Slice u ) content_v ( slice_of_str content )
     : i n ( nurl_str_len content )
     : ~ i start 0
     : ~ i row 1
     ~ & < start n < row ln {
-        ? == ( nurl_str_get content start ) 10 { = row + row 1 } {}
+        ? == ( slice_byte content_v start ) 10 { = row + row 1 } {}
         = start + start 1
     }
     : ~ i end start
-    ~ & < end n & != ( nurl_str_get content end ) 10 != ( nurl_str_get content end ) 13 { = end + end 1 }
+    ~ & < end n & != ( slice_byte content_v end ) 10 != ( slice_byte content_v end ) 13 { = end + end 1 }
     ? > cn 0 {
         = start + start - cn 1
         ? > start end { = start end } {}
         : ~ i next + start 1
         // Include an entire UTF-8 character, never half a surrogate pair.
-        ~ & < next end & >= ( nurl_str_get content next ) 128 < ( nurl_str_get content next ) 192 { = next + next 1 }
+        ~ & < next end & >= ( slice_byte content_v next ) 128 < ( slice_byte content_v next ) 192 { = next + next 1 }
         ? < next end { = end next } {}
     } {}
     : Json range ( json_obj_new )
@@ -210,33 +212,34 @@ unsafe @ __position_at_byte s text i at → Json {
 // another colon inside a filename is not a diagnostic separator. Requiring
 // the severity prefix also excludes the compiler's source/caret decoration.
 @ __parse_diag_line s line s source_path s content → ?Json {
+    : ( Slice u ) line_v ( slice_of_str line )
     : i n ( nurl_str_len line )
     : ~ i k 0
     ~ < k n {
-        ? != ( nurl_str_get line k ) 58 { = k + k 1 continue } {}
+        ? != ( slice_byte line_v k ) 58 { = k + k 1 continue } {}
         : i path_end k
         = k + k 1
         : i digits k
         : ~ i ln 0
-        ~ & < k n & >= ( nurl_str_get line k ) 48 <= ( nurl_str_get line k ) 57 {
+        ~ & < k n & >= ( slice_byte line_v k ) 48 <= ( slice_byte line_v k ) 57 {
             ? > ln 100000000 { ^ @ ?Json { F } } {}
-            = ln + * ln 10 - ( nurl_str_get line k ) 48
+            = ln + * ln 10 - ( slice_byte line_v k ) 48
             = k + k 1
         }
-        ? | == k digits | <= ln 0 | >= k n != ( nurl_str_get line k ) 58 { continue } {}
+        ? | == k digits | <= ln 0 | >= k n != ( slice_byte line_v k ) 58 { continue } {}
         = k + k 1
         : ~ i cn 0
         : i cols k
-        ~ & < k n & >= ( nurl_str_get line k ) 48 <= ( nurl_str_get line k ) 57 {
+        ~ & < k n & >= ( slice_byte line_v k ) 48 <= ( slice_byte line_v k ) 57 {
             ? > cn 100000000 { ^ @ ?Json { F } } {}
-            = cn + * cn 10 - ( nurl_str_get line k ) 48
+            = cn + * cn 10 - ( slice_byte line_v k ) 48
             = k + k 1
         }
         ? > k cols {
-            ? | <= cn 0 | >= k n != ( nurl_str_get line k ) 58 { continue } {}
+            ? | <= cn 0 | >= k n != ( slice_byte line_v k ) 58 { continue } {}
             = k + k 1
         } {}
-        ~ & < k n | == ( nurl_str_get line k ) 32 == ( nurl_str_get line k ) 9 { = k + k 1 }
+        ~ & < k n | == ( slice_byte line_v k ) 32 == ( slice_byte line_v k ) 9 { = k + k 1 }
         : String msg ( __substr line k n )
         : b warning ( __string_starts_with msg `warning: ` )
         ? ! | warning ( __string_starts_with msg `error: ` ) { continue } {}
@@ -357,31 +360,43 @@ unsafe @ __path_to_uri s path → String {
 
 // ── Tiny string helpers (local-use only) ──────────────────────────
 
-@ __index_of_byte s str i from i to i target → i {
+// The view forms take a string the caller measured once — what a scan
+// over a document needs; the string forms measure their argument per call,
+// for the short ones (a line, a URI, a definition record).
+@ __index_of_byte_v ( Slice u ) str_v i from i to i target → i {
     : ~ i k from
     ~ < k to {
-        ? == ( nurl_str_get str k ) target { ^ k } {}
+        ? == ( slice_byte str_v k ) target { ^ k } {}
         = k + k 1
     }
     ^ - 0 1
 }
 
-@ __substr s str i from i to → String {
+@ __index_of_byte s str i from i to i target → i {
+    ^ ( __index_of_byte_v ( slice_of_str str ) from to target )
+}
+
+@ __substr_v ( Slice u ) str_v i from i to → String {
     : String out ( string_with_cap - to from )
     : ~ i k from
     ~ < k to {
-        ( string_push_char out ( nurl_str_get str k ) )
+        ( string_push_char out ( slice_byte str_v k ) )
         = k + k 1
     }
     ^ out
 }
 
+@ __substr s str i from i to → String {
+    ^ ( __substr_v ( slice_of_str str ) from to )
+}
+
 @ __string_starts_with String str s prefix → b {
+    : ( Slice u ) prefix_v ( slice_of_str prefix )
     : i n ( nurl_str_len prefix )
     ? > n ( string_len str ) { ^ F } {}
     : ~ i k 0
     ~ < k n {
-        ? != ( string_get str k ) ( nurl_str_get prefix k ) { ^ F } {}
+        ? != ( string_get str k ) ( slice_byte prefix_v k ) { ^ F } {}
         = k + k 1
     }
     ^ T
@@ -636,10 +651,12 @@ unsafe @ __path_to_uri s path → String {
     } {}
 }
 
-// Skip leading whitespace; return new position.
-@ __skip_ws s src i pos i n → i {
+// Skip leading whitespace; return new position. `src_v` is the document
+// measured once by the caller: these two run per token, and measuring the
+// document here would make indexing it quadratic.
+@ __skip_ws ( Slice u ) src_v i pos i n → i {
     : ~ i p pos
-    ~ & < p n ( __is_space ( nurl_str_get src p ) ) {
+    ~ & < p n ( __is_space ( slice_byte src_v p ) ) {
         = p + p 1
     }
     ^ p
@@ -648,12 +665,12 @@ unsafe @ __path_to_uri s path → String {
 // Read an IDENT starting at pos. Returns its end position; the name
 // itself is the slice [pos..end). Empty (end == pos) when the byte
 // at pos isn't an ident-start.
-@ __scan_ident s src i pos i n → i {
+@ __scan_ident ( Slice u ) src_v i pos i n → i {
     ? >= pos n { ^ pos } {}
-    : i first ( nurl_str_get src pos )
+    : i first ( slice_byte src_v pos )
     ? ! ( __is_ident_start first ) { ^ pos } {}
     : ~ i p + pos 1
-    ~ & < p n ( __is_ident_byte ( nurl_str_get src p ) ) {
+    ~ & < p n ( __is_ident_byte ( slice_byte src_v p ) ) {
         = p + p 1
     }
     ^ p
@@ -684,6 +701,7 @@ unsafe @ __path_to_uri s path → String {
 // brace-depth tracking + backtick strings + `//` comments interact
 // correctly with decl boundaries.
 @ __index_content s uri s content → v {
+    : ( Slice u ) content_v ( slice_of_str content )
     : i n ( nurl_str_len content )
     : ~ i pos 0
     : ~ i line 1
@@ -692,7 +710,7 @@ unsafe @ __path_to_uri s path → String {
     : ~ i in_comment 0  // 1 while inside // line comment
     : ~ i at_line_start 1
     ~ < pos n {
-        : i c ( nurl_str_get content pos )
+        : i c ( slice_byte content_v pos )
         ? != in_string 0 {
             ? == c 96 { = in_string 0 } {}
             ? == c 10 { = line + line 1 = at_line_start 1 } {}
@@ -703,7 +721,7 @@ unsafe @ __path_to_uri s path → String {
                 = pos + pos 1
             } {
                 ? == c 96 { = in_string 1 = pos + pos 1 = at_line_start 0 } {
-                    ? & == c 47 & < + pos 1 n == ( nurl_str_get content + pos 1 ) 47 {
+                    ? & == c 47 & < + pos 1 n == ( slice_byte content_v + pos 1 ) 47 {
                         = in_comment 1
                         = pos + pos 2
                     } {
@@ -729,63 +747,63 @@ unsafe @ __path_to_uri s path → String {
                                             // no go-to-definition, no symbol, no
                                             // rename, for exactly the functions
                                             // marked as another file's API.
-                                            : i sp ( __skip_ws content pos n )
+                                            : i sp ( __skip_ws content_v pos n )
                                             : ~ i p sp
                                             : ~ b more T
                                             ~ more {
                                                 = more F
-                                                : i ie ( __scan_ident content p n )
+                                                : i ie ( __scan_ident content_v p n )
                                                 ? > ie p {
-                                                    : String tok ( __substr content p ie )
+                                                    : String tok ( __substr_v content_v p ie )
                                                     : s td ( string_data tok )
                                                     ? | | | != 0 ( nurl_str_eq td `pub` ) != 0 ( nurl_str_eq td `simd` ) != 0 ( nurl_str_eq td `inline` ) != 0 ( nurl_str_eq td `unsafe` ) {
-                                                        = p ( __skip_ws content ie n )
+                                                        = p ( __skip_ws content_v ie n )
                                                         = more T
                                                     } {}
                                                 } {}
                                             }
                                             ? < p n {
-                                                : i c2 ( nurl_str_get content p )
+                                                : i c2 ( slice_byte content_v p )
                                                 ? == c2 64 {
                                                     // `@ name` — fn decl (SymbolKind 12 Function)
-                                                    : i ai ( __skip_ws content + p 1 n )
-                                                    : i ae ( __scan_ident content ai n )
+                                                    : i ai ( __skip_ws content_v + p 1 n )
+                                                    : i ae ( __scan_ident content_v ai n )
                                                     ? > ae ai {
-                                                        : String nm ( __substr content ai ae )
+                                                        : String nm ( __substr_v content_v ai ae )
                                                         ( __register_def ( string_data nm ) uri line 12 )
                                                     } {}
                                                 } {
                                                     ? == c2 58 {
                                                         // `:` — either struct, enum, or const.
-                                                        : ~ i cp ( __skip_ws content + p 1 n )
+                                                        : ~ i cp ( __skip_ws content_v + p 1 n )
                                                         // Optional `~`
-                                                        ? & < cp n == ( nurl_str_get content cp ) 126 {
-                                                            = cp ( __skip_ws content + cp 1 n )
+                                                        ? & < cp n == ( slice_byte content_v cp ) 126 {
+                                                            = cp ( __skip_ws content_v + cp 1 n )
                                                         } {}
                                                         ? < cp n {
-                                                            : i c3 ( nurl_str_get content cp )
+                                                            : i c3 ( slice_byte content_v cp )
                                                             ? == c3 124 {
                                                                 // `: | Name { variants }` enum (SymbolKind 10)
-                                                                : i ep ( __skip_ws content + cp 1 n )
-                                                                : i ee ( __scan_ident content ep n )
+                                                                : i ep ( __skip_ws content_v + cp 1 n )
+                                                                : i ee ( __scan_ident content_v ep n )
                                                                 ? > ee ep {
-                                                                    : String nm ( __substr content ep ee )
+                                                                    : String nm ( __substr_v content_v ep ee )
                                                                     ( __register_def ( string_data nm ) uri line 10 )
                                                                     // Walk the body for variant names.
-                                                                    : i bb ( __skip_ws content ee n )
-                                                                    ? & < bb n == ( nurl_str_get content bb ) 123 {
+                                                                    : i bb ( __skip_ws content_v ee n )
+                                                                    ? & < bb n == ( slice_byte content_v bb ) 123 {
                                                                         : ~ i wp + bb 1
                                                                         : ~ i body_depth 1
                                                                         : ~ i body_line line
                                                                         ~ & < wp n > body_depth 0 {
-                                                                            : i wc ( nurl_str_get content wp )
+                                                                            : i wc ( slice_byte content_v wp )
                                                                             ? == wc 123 { = body_depth + body_depth 1 = wp + wp 1 } {
                                                                                 ? == wc 125 { = body_depth - body_depth 1 = wp + wp 1 } {
                                                                                     ? == wc 10 { = body_line + body_line 1 = wp + wp 1 } {
                                                                                         ? ( __is_space wc ) { = wp + wp 1 } {
-                                                                                            : i ve ( __scan_ident content wp n )
+                                                                                            : i ve ( __scan_ident content_v wp n )
                                                                                             ? > ve wp {
-                                                                                                : String vn ( __substr content wp ve )
+                                                                                                : String vn ( __substr_v content_v wp ve )
                                                                                                 // SymbolKind 22 EnumMember
                                                                                                 ( __register_def ( string_data vn ) uri body_line 22 )
                                                                                                 = wp ve
@@ -799,15 +817,15 @@ unsafe @ __path_to_uri s path → String {
                                                                 } {}
                                                             } {
                                                                 // `: IDENT …` — could be struct OR const.
-                                                                : i ne ( __scan_ident content cp n )
+                                                                : i ne ( __scan_ident content_v cp n )
                                                                 ? > ne cp {
-                                                                    : String tok ( __substr content cp ne )
+                                                                    : String tok ( __substr_v content_v cp ne )
                                                                     ? ( __is_type_kw ( string_data tok ) ) {
                                                                         // const: `: TYPE NAME ...` (SymbolKind 14)
-                                                                        : i np ( __skip_ws content ne n )
-                                                                        : i ke ( __scan_ident content np n )
+                                                                        : i np ( __skip_ws content_v ne n )
+                                                                        : i ke ( __scan_ident content_v np n )
                                                                         ? > ke np {
-                                                                            : String nm ( __substr content np ke )
+                                                                            : String nm ( __substr_v content_v np ke )
                                                                             ( __register_def ( string_data nm ) uri line 14 )
                                                                         } {}
                                                                     } {
@@ -820,12 +838,12 @@ unsafe @ __path_to_uri s path → String {
                                                     } {
                                                         ? == c2 38 {
                                                             // `& \`lib\` @ name` FFI (SymbolKind 12 Function)
-                                                            : i ap ( __index_of_byte content + p 1 n 64 )
+                                                            : i ap ( __index_of_byte_v content_v + p 1 n 64 )
                                                             ? >= ap 0 {
-                                                                : i nm_s ( __skip_ws content + ap 1 n )
-                                                                : i nm_e ( __scan_ident content nm_s n )
+                                                                : i nm_s ( __skip_ws content_v + ap 1 n )
+                                                                : i nm_e ( __scan_ident content_v nm_s n )
                                                                 ? > nm_e nm_s {
-                                                                    : String nm ( __substr content nm_s nm_e )
+                                                                    : String nm ( __substr_v content_v nm_s nm_e )
                                                                     ( __register_def ( string_data nm ) uri line 12 )
                                                                 } {}
                                                             } {}
@@ -897,6 +915,7 @@ unsafe @ __path_to_uri s path → String {
 // Walk `content` and collect every `$ `path`` import as raw relative
 // paths. Returns an OWNED Vec[String].
 @ __collect_imports s content → ( Vec String ) {
+    : ( Slice u ) content_v ( slice_of_str content )
     : ( Vec String ) out ( vec_new [String] )
     : i n ( nurl_str_len content )
     : ~ i pos 0
@@ -904,7 +923,7 @@ unsafe @ __path_to_uri s path → String {
     : ~ i in_comment 0
     : ~ i prev_was_dollar 0
     ~ < pos n {
-        : i c ( nurl_str_get content pos )
+        : i c ( slice_byte content_v pos )
         ? != in_string 0 {
             ? == c 96 { = in_string 0 } {}
             = pos + pos 1
@@ -917,11 +936,11 @@ unsafe @ __path_to_uri s path → String {
                     ? != prev_was_dollar 0 {
                         // Capture path until matching backtick.
                         : ~ i ep + pos 1
-                        ~ & < ep n != ( nurl_str_get content ep ) 96 {
+                        ~ & < ep n != ( slice_byte content_v ep ) 96 {
                             = ep + ep 1
                         }
                         ? < ep n {
-                            : String path ( __substr content + pos 1 ep )
+                            : String path ( __substr_v content_v + pos 1 ep )
                             ( vec_push [String] out path )
                             = pos + ep 1
                         } { = pos n }
@@ -931,7 +950,7 @@ unsafe @ __path_to_uri s path → String {
                         = pos + pos 1
                     }
                 } {
-                    ? & == c 47 & < + pos 1 n == ( nurl_str_get content + pos 1 ) 47 {
+                    ? & == c 47 & < + pos 1 n == ( slice_byte content_v + pos 1 ) 47 {
                         = in_comment 1
                         = pos + pos 2
                         = prev_was_dollar 0
@@ -1120,39 +1139,40 @@ unsafe @ __path_to_uri s path → String {
 // whitespace, punctuation, or past the end of file.
 
 @ __token_at s content i line i col → ?String {
+    : ( Slice u ) content_v ( slice_of_str content )
     : i n ( nurl_str_len content )
     // Advance to the start of `line`.
     : ~ i pos 0
     : ~ i cur_line 0
     ~ & < pos n < cur_line line {
-        ? == ( nurl_str_get content pos ) 10 { = cur_line + cur_line 1 } {}
+        ? == ( slice_byte content_v pos ) 10 { = cur_line + cur_line 1 } {}
         = pos + pos 1
     }
     // pos is now at the start of `line`. Advance by UTF-16 code units,
     // stopping at newline.
     : i line_start pos
     : ~ i k 0
-    ~ & & < pos n != ( nurl_str_get content pos ) 10 < k col {
-        : i c ( nurl_str_get content pos )
+    ~ & & < pos n != ( slice_byte content_v pos ) 10 < k col {
+        : i c ( slice_byte content_v pos )
         ? | < c 128 >= c 192 { = k + k ? >= c 240 2 1 } {}
         = pos + pos 1
-        ~ & < pos n & >= ( nurl_str_get content pos ) 128 < ( nurl_str_get content pos ) 192 { = pos + pos 1 }
+        ~ & < pos n & >= ( slice_byte content_v pos ) 128 < ( slice_byte content_v pos ) 192 { = pos + pos 1 }
     }
     ? >= pos n { ^ @ ?String { F } } {}
-    : i c ( nurl_str_get content pos )
+    : i c ( slice_byte content_v pos )
     ? == c 10 { ^ @ ?String { F } } {}
     ? ! ( __is_ident_byte c ) { ^ @ ?String { F } } {}
     // Expand left.
     : ~ i lo pos
-    ~ & > lo line_start ( __is_ident_byte ( nurl_str_get content - lo 1 ) ) {
+    ~ & > lo line_start ( __is_ident_byte ( slice_byte content_v - lo 1 ) ) {
         = lo - lo 1
     }
     // Expand right.
     : ~ i hi + pos 1
-    ~ & < hi n ( __is_ident_byte ( nurl_str_get content hi ) ) {
+    ~ & < hi n ( __is_ident_byte ( slice_byte content_v hi ) ) {
         = hi + hi 1
     }
-    ^ @ ?String { T ( __substr content lo hi ) }
+    ^ @ ?String { T ( __substr_v content_v lo hi ) }
 }
 
 // ── Definition handler ──────────────────────────────────────────
@@ -1329,35 +1349,37 @@ unsafe @ __path_to_uri s path → String {
 // the line with any leading whitespace and the trailing newline
 // stripped, so the result drops cleanly into a fenced code block.
 @ __extract_source_line s content i line0 → String {
+    : ( Slice u ) content_v ( slice_of_str content )
     : i n ( nurl_str_len content )
     : ~ i pos 0
     : ~ i cur 0
     ~ & < pos n < cur line0 {
-        ? == ( nurl_str_get content pos ) 10 { = cur + cur 1 } {}
+        ? == ( slice_byte content_v pos ) 10 { = cur + cur 1 } {}
         = pos + pos 1
     }
     // Trim leading spaces / tabs.
-    ~ & < pos n | == ( nurl_str_get content pos ) 32 == ( nurl_str_get content pos ) 9 {
+    ~ & < pos n | == ( slice_byte content_v pos ) 32 == ( slice_byte content_v pos ) 9 {
         = pos + pos 1
     }
     : ~ i ep pos
-    ~ & < ep n != ( nurl_str_get content ep ) 10 {
+    ~ & < ep n != ( slice_byte content_v ep ) 10 {
         = ep + ep 1
     }
     // Also trim trailing \r if present (CRLF files).
-    ? & > ep pos == ( nurl_str_get content - ep 1 ) 13 { = ep - ep 1 } {}
-    ^ ( __substr content pos ep )
+    ? & > ep pos == ( slice_byte content_v - ep 1 ) 13 { = ep - ep 1 } {}
+    ^ ( __substr_v content_v pos ep )
 }
 
 // Find the basename slot in `path` (everything after the last '/').
 // Returns an OWNED String. For `file:///x/y/lib.nu` the caller should
 // __uri_to_path first.
 @ __basename s path → String {
+    : ( Slice u ) path_v ( slice_of_str path )
     : i n ( nurl_str_len path )
     : ~ i last - 0 1
     : ~ i k 0
     ~ < k n {
-        ? == ( nurl_str_get path k ) 47 { = last k } {}
+        ? == ( slice_byte path_v k ) 47 { = last k } {}
         = k + k 1
     }
     : i start ? >= last 0 + last 1 0
@@ -1507,34 +1529,37 @@ unsafe @ __path_to_uri s path → String {
 // Returns "" when the cursor is on whitespace or after a non-ident
 // byte — the LSP client treats an empty prefix as "show everything".
 @ __prefix_at s content i line i col → String {
+    : ( Slice u ) content_v ( slice_of_str content )
     : i n ( nurl_str_len content )
     : ~ i pos 0
     : ~ i cur_line 0
     ~ & < pos n < cur_line line {
-        ? == ( nurl_str_get content pos ) 10 { = cur_line + cur_line 1 } {}
+        ? == ( slice_byte content_v pos ) 10 { = cur_line + cur_line 1 } {}
         = pos + pos 1
     }
     : i line_start pos
     : ~ i k 0
-    ~ & & < pos n != ( nurl_str_get content pos ) 10 < k col {
+    ~ & & < pos n != ( slice_byte content_v pos ) 10 < k col {
         = pos + pos 1
         = k + k 1
     }
     : ~ i lo pos
-    ~ & > lo line_start ( __is_ident_byte ( nurl_str_get content - lo 1 ) ) {
+    ~ & > lo line_start ( __is_ident_byte ( slice_byte content_v - lo 1 ) ) {
         = lo - lo 1
     }
-    ^ ( __substr content lo pos )
+    ^ ( __substr_v content_v lo pos )
 }
 
 @ __starts_with s str s prefix → b {
+    : ( Slice u ) prefix_v ( slice_of_str prefix )
+    : ( Slice u ) str_v ( slice_of_str str )
     : i np ( nurl_str_len prefix )
     ? == np 0 { ^ T } {}
     : i ns ( nurl_str_len str )
     ? > np ns { ^ F } {}
     : ~ i k 0
     ~ < k np {
-        ? != ( nurl_str_get str k ) ( nurl_str_get prefix k ) { ^ F } {}
+        ? != ( slice_byte str_v k ) ( slice_byte prefix_v k ) { ^ F } {}
         = k + k 1
     }
     ^ T
@@ -1703,6 +1728,8 @@ unsafe @ __path_to_uri s path → String {
 
 // Case-insensitive substring search. Empty `needle` matches anything.
 @ __ci_contains s hay s needle → b {
+    : ( Slice u ) needle_v ( slice_of_str needle )
+    : ( Slice u ) hay_v ( slice_of_str hay )
     : i nn ( nurl_str_len needle )
     ? == nn 0 { ^ T } {}
     : i nh ( nurl_str_len hay )
@@ -1713,8 +1740,8 @@ unsafe @ __path_to_uri s path → String {
         : ~ b match T
         : ~ i j 0
         ~ & match < j nn {
-            : i hc ( __byte_lower ( nurl_str_get hay + i j ) )
-            : i nc ( __byte_lower ( nurl_str_get needle j ) )
+            : i hc ( __byte_lower ( slice_byte hay_v + i j ) )
+            : i nc ( __byte_lower ( slice_byte needle_v j ) )
             ? != hc nc { = match F } {}
             = j + j 1
         }
@@ -1791,6 +1818,7 @@ unsafe @ __path_to_uri s path → String {
     : s uri ( __extract_uri params )
     ? > ( nurl_str_len uri ) 0 {
         : s content ( nurl_sym_get g_docs uri )
+        : ( Slice u ) content_v ( slice_of_str content )
         : i n ( nurl_str_len content )
         : ( Vec i ) stack ( vec_new [i] )
         : ~ i pos 0
@@ -1798,7 +1826,7 @@ unsafe @ __path_to_uri s path → String {
         : ~ i in_string 0
         : ~ i in_comment 0
         ~ < pos n {
-            : i c ( nurl_str_get content pos )
+            : i c ( slice_byte content_v pos )
             ? != in_string 0 {
                 ? == c 96 { = in_string 0 } {}
                 ? == c 10 { = line + line 1 } {}
@@ -1809,7 +1837,7 @@ unsafe @ __path_to_uri s path → String {
                     = pos + pos 1
                 } {
                     ? == c 96 { = in_string 1 = pos + pos 1 } {
-                        ? & == c 47 & < + pos 1 n == ( nurl_str_get content + pos 1 ) 47 {
+                        ? & == c 47 & < + pos 1 n == ( slice_byte content_v + pos 1 ) 47 {
                             = in_comment 1
                             = pos + pos 2
                         } {
@@ -1857,12 +1885,14 @@ unsafe @ __path_to_uri s path → String {
 // always included.
 
 // Compare content[st .. st+len) to `name` byte-for-byte (no alloc).
-@ __slice_eq s content i st i len s name → b {
-    ? != len ( nurl_str_len name ) { ^ F } {}
+// Both are views the caller measured once: this runs per identifier of a
+// document, so measuring either here would make a scan quadratic.
+@ __slice_eq ( Slice u ) content_v i st i len ( Slice u ) name_v → b {
+    ? != len ( slice_len [u] name_v ) { ^ F } {}
     : ~ i k 0
     : ~ b eq T
     ~ & < k len eq {
-        ? != ( nurl_str_get content + st k ) ( nurl_str_get name k ) { = eq F } {}
+        ? != ( slice_byte content_v + st k ) ( slice_byte name_v k ) { = eq F } {}
         = k + k 1
     }
     ^ eq
@@ -1872,6 +1902,8 @@ unsafe @ __path_to_uri s path → String {
 // document's content, skipping strings + comments. Positions are
 // emitted 0-based (LSP coordinates) directly.
 @ __collect_refs_in_doc s uri s content s name Json out → v {
+    : ( Slice u ) content_v ( slice_of_str content )
+    : ( Slice u ) name_v ( slice_of_str name )
     : i n ( nurl_str_len content )
     : ~ i pos 0
     : ~ i line 0
@@ -1879,7 +1911,7 @@ unsafe @ __path_to_uri s path → String {
     : ~ i in_str 0
     : ~ i in_com 0
     ~ < pos n {
-        : i c ( nurl_str_get content pos )
+        : i c ( slice_byte content_v pos )
         ? == c 10 { = line + line 1 = pos + pos 1 = line_start pos = in_com 0 } {
             ? != in_str 0 {
                 ? == c 96 { = in_str 0 } {}
@@ -1887,14 +1919,14 @@ unsafe @ __path_to_uri s path → String {
             } {
                 ? != in_com 0 { = pos + pos 1 } {
                     ? == c 96 { = in_str 1 = pos + pos 1 } {
-                        ? & & == c 47 < + pos 1 n == ( nurl_str_get content + pos 1 ) 47 {
+                        ? & & == c 47 < + pos 1 n == ( slice_byte content_v + pos 1 ) 47 {
                             = in_com 1 = pos + pos 2
                         } {
                             ? ( __is_ident_start c ) {
                                 : i st pos
-                                ~ & < pos n ( __is_ident_byte ( nurl_str_get content pos ) ) { = pos + pos 1 }
+                                ~ & < pos n ( __is_ident_byte ( slice_byte content_v pos ) ) { = pos + pos 1 }
                                 : i len - pos st
-                                ? ( __slice_eq content st len name ) {
+                                ? ( __slice_eq content_v st len name_v ) {
                                     : i scol - st line_start
                                     : Json range ( json_obj_new )
                                     ( json_obj_set range `start` ( __build_position line scol ) )
@@ -1999,12 +2031,13 @@ unsafe @ __path_to_uri s path → String {
 
 // Is `name` lexically a valid NURL identifier?
 @ __valid_ident s name → b {
+    : ( Slice u ) name_v ( slice_of_str name )
     : i n ( nurl_str_len name )
     ? == n 0 { ^ F } {}
-    ? ! ( __is_ident_start ( nurl_str_get name 0 ) ) { ^ F } {}
+    ? ! ( __is_ident_start ( slice_byte name_v 0 ) ) { ^ F } {}
     : ~ i k 1
     ~ < k n {
-        ? ! ( __is_ident_byte ( nurl_str_get name k ) ) { ^ F } {}
+        ? ! ( __is_ident_byte ( slice_byte name_v k ) ) { ^ F } {}
         = k + k 1
     }
     ^ T
@@ -2190,13 +2223,15 @@ unsafe @ __path_to_uri s path → String {
 // True when `uri` already appears as a full line in the newline-
 // separated roster.
 @ __uri_in_list s list s uri → b {
-    : i n ( nurl_str_len list )
+    : ( Slice u ) list_v ( slice_of_str list )
+    : ( Slice u ) uri_v ( slice_of_str uri )
+    : i n ( slice_len [u] list_v )
     : ~ i pos 0
     : ~ b found F
     ~ & < pos n ! found {
-        : i nl ( __index_of_byte list pos n 10 )
+        : i nl ( __index_of_byte_v list_v pos n 10 )
         : i end ? < nl 0 n nl
-        ? ( __slice_eq list pos - end pos uri ) { = found T } {}
+        ? ( __slice_eq list_v pos - end pos uri_v ) { = found T } {}
         = pos ? < nl 0 n + nl 1
     }
     ^ found

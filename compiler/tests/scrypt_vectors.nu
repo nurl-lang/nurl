@@ -6,12 +6,14 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/scrypt.nu`
 $ `stdlib/std/pbkdf2.nu`
+$ `stdlib/core/slice.nu`
 
 @ sv s raw → ( Vec u ) {
+    : ( Slice u ) raw_v ( slice_of_str raw )
     : i n ( nurl_str_len raw )
     : ( Vec u ) v ( vec_with_cap [u] ? > n 0 n 1 )
     : ~ i k 0
-    ~ < k n { ( vec_push [u] v # u ( nurl_str_get raw k ) ) = k + k 1 }
+    ~ < k n { ( vec_push [u] v # u ( slice_byte raw_v k ) ) = k + k 1 }
     ^ v
 }
 

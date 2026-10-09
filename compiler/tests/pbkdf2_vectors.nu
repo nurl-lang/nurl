@@ -7,12 +7,14 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/pbkdf2.nu`
+$ `stdlib/core/slice.nu`
 
 @ sv s raw → ( Vec u ) {
+    : ( Slice u ) raw_v ( slice_of_str raw )
     : ( Vec u ) v ( vec_new [u] )
     : i n ( nurl_str_len raw )
     : ~ i k 0
-    ~ < k n { ( vec_push [u] v # u ( nurl_str_get raw k ) ) = k + k 1 }
+    ~ < k n { ( vec_push [u] v # u ( slice_byte raw_v k ) ) = k + k 1 }
     ^ v
 }
 

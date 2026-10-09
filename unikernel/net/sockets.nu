@@ -58,6 +58,7 @@ $ `stdlib/net/tcp.nu`
 $ `stdlib/net/tcpstack.nu`
 $ `stdlib/net/socket.nu`
 $ `stdlib/net/dnsclient.nu`
+$ `stdlib/core/slice.nu`
 
 // The interface, whichever one this build has: netdev_virtio.nu in the
 // guest, netdev_none.nu everywhere else. Two implementations of three
@@ -1257,12 +1258,13 @@ unsafe @ nurl_udp_peer_addr i handle → s {
 // and `getaddrinfo` hands it straight back. Refusing it here would
 // make a program that merely PARSES `::1` fail at the parse.
 @ __dns_is_v6_literal s host → b {
+    : ( Slice u ) host_v ( slice_of_str host )
     : i n ( nurl_str_len host )
     ? == n 0 { ^ F } {}
     : ~ b colon F
     : ~ i k 0
     ~ < k n {
-        : i c ( nurl_str_get host k )
+        : i c ( slice_byte host_v k )
         ? == c 58 { = colon T } {}
         ? ! || || == c 58 || == c 46 && >= c 48 <= c 57
         || && >= c 97 <= c 102 && >= c 65 <= c 70 { ^ F } {}
@@ -1385,6 +1387,7 @@ unsafe @ nurl_dns_resolve s host → s {
 
 unsafe @ nurl_dns_resolve_port s host i port → s {
     : s base ( nurl_dns_resolve host )
+    : ( Slice u ) base_v ( slice_of_str base )
     ? == 0 ( nurl_str_len base ) { ^ base } {}
     // "ip:port\n" — and "[v6]:port", because a colon inside the
     // address and the colon before the port are the same character,
@@ -1396,7 +1399,7 @@ unsafe @ nurl_dns_resolve_port s host i port → s {
     : ~ i k 0
     ? v6 { ( string_push_char out 91 ) } {}
     ~ < k n {
-        : i c ( nurl_str_get base k )
+        : i c ( slice_byte base_v k )
         ? == c 10 {
             ? v6 { ( string_push_char out 93 ) } {}
             ( string_push_char out 58 )

@@ -66,6 +66,7 @@
 $ `stdlib/core/string.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/ext/regex.nu`
+$ `stdlib/core/slice.nu`
 
 // Terminal helpers added to stdlib/runtime.c: report whether stdout is
 // a real terminal, and (Windows only) turn on ANSI escape processing.
@@ -90,6 +91,7 @@ $ `stdlib/ext/regex.nu`
 // (not the malloc-per-call nurl_str_int), and colour is applied inline.
 
 @ print_match b color s path i lineno i col i mlen s line → v {
+    : ( Slice u ) line_v ( slice_of_str line )
     : String out ( string_new )
     ? color { ( push_ansi out `36` ) } {}
     ( string_push_str out path ) ( string_push_char out 58 )
@@ -106,7 +108,7 @@ $ `stdlib/ext/regex.nu`
         ~ < i ln {
             ? == i s0 { ( push_ansi out `1;31` ) = open T } {}
             ? & open == i e0 { ( push_ansi out `0` ) = open F } {}
-            ( string_push_char out ( nurl_str_get line i ) )
+            ( string_push_char out ( slice_byte line_v i ) )
             = i + i 1
         }
         ? open { ( push_ansi out `0` ) } {}

@@ -45,6 +45,7 @@ $ `stdlib/std/tls.nu`
 $ `stdlib/std/url.nu`
 $ `stdlib/std/thread.nu`
 $ `stdlib/core/rcbox.nu`
+$ `stdlib/core/slice.nu`
 
 // nurl_tcp_connect/read/write/close are compiler builtins (declared by
 // nurlc); tls_* come from tls.nu; the rest (malloc/strdup/nurl_*) are
@@ -1059,6 +1060,7 @@ i follow i maxredir i verify s ua i timeout_ms → HttpStreamState {
 // RFC 3986 §5.2.4 on "path?query": "." and ".." segments are resolved in
 // the path part; the query rides along untouched.
 @ __hp_remove_dot_segments s in → String {
+    : ( Slice u ) in_v ( slice_of_str in )
     : i q ( nurl_str_find in `?` )
     : i plen ? >= q 0 q ( nurl_str_len in )
     : ( Vec String ) segs ( vec_new [String] )
@@ -1066,7 +1068,7 @@ i follow i maxredir i verify s ua i timeout_ms → HttpStreamState {
     : ~ b trailing_slash F
     ~ < k plen {
         : ~ i e k
-        ~ & < e plen != ( nurl_str_get in e ) 47 { = e + e 1 }
+        ~ & < e plen != ( slice_byte in_v e ) 47 { = e + e 1 }
         : s seg ( nurl_str_slice in k - e k )
         ? ( nurl_str_eq seg `..` ) {
             : i n ( vec_len [String] segs )
@@ -1089,7 +1091,7 @@ i follow i maxredir i verify s ua i timeout_ms → HttpStreamState {
         ( string_push_str out ( string_data sg ) )
         = i + i 1
     }
-    ? & > n 0 | trailing_slash == ( nurl_str_get in - plen 1 ) 47 { ( string_push_str out `/` ) } {}
+    ? & > n 0 | trailing_slash == ( slice_byte in_v - plen 1 ) 47 { ( string_push_str out `/` ) } {}
     ? >= q 0 { ( string_push_str out ( nurl_str_slice in q - ( nurl_str_len in ) q ) ) } {}
     ^ out
 }

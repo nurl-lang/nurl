@@ -12,6 +12,7 @@ $ `stdlib/ext/http_request.nu`
 $ `stdlib/ext/http.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
+$ `stdlib/core/slice.nu`
 
 @ println_str s prefix s value → v {
     ( nurl_print prefix )
@@ -20,11 +21,12 @@ $ `stdlib/core/vec.nu`
 }
 
 @ buf_from_str s src → ( Vec u ) {
+    : ( Slice u ) src_v ( slice_of_str src )
     : i n ( nurl_str_len src )
     : ( Vec u ) buf ( vec_with_cap [u] n )
     : ~ i k 0
     ~ < k n {
-        : i c & 255 ( nurl_str_get src k )
+        : i c & 255 ( slice_byte src_v k )
         : u byte # u c
         ( vec_push [u] buf byte )
         = k + k 1

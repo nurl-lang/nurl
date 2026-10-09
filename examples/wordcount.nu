@@ -11,8 +11,10 @@
 //   clang /tmp/wc.ll stdlib/runtime.o -o /tmp/wc
 //   /tmp/wc examples/wordcount.nu
 
-// nurl_str_get is a pure-NURL @-fn — needs the core/string include.
+// nurl_str_len comes from core/string; the measured byte view the scan
+// reads (slice_of_str / slice_byte) from core/slice.
 $ `stdlib/core/string.nu`
+$ `stdlib/core/slice.nu`
 
 : Stats {
     i lines
@@ -21,6 +23,7 @@ $ `stdlib/core/string.nu`
 }
 
 @ count_stats s text → Stats {
+    : ( Slice u ) text_v ( slice_of_str text )
     : i len ( nurl_str_len text )
     : ~ i lines 0
     : ~ i words 0
@@ -29,7 +32,7 @@ $ `stdlib/core/string.nu`
 
     : ~ i idx 0
     ~ < idx len {
-        : i ch ( nurl_str_get text idx )
+        : i ch ( slice_byte text_v idx )
 
         // Newline
         ? == ch 10 {
@@ -52,7 +55,7 @@ $ `stdlib/core/string.nu`
     }
 
     // Count last line if no trailing newline
-    ? & > len 0 != ( nurl_str_get text - len 1 ) 10 {
+    ? & > len 0 != ( slice_byte text_v - len 1 ) 10 {
         = lines + lines 1
     } {}
 

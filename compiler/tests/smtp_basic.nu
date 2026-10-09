@@ -11,6 +11,7 @@
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/ext/smtp.nu`
+$ `stdlib/core/slice.nu`
 
 @ pshow s label String v → v {
     ( nurl_print label ) ( nurl_print `: ` )
@@ -32,9 +33,10 @@ $ `stdlib/ext/smtp.nu`
 }
 
 @ vappend_str ( Vec u ) v s txt → v {
+    : ( Slice u ) txt_v ( slice_of_str txt )
     : i n ( nurl_str_len txt )
     : ~ i k 0
-    ~ < k n { ( vec_push [u] v # u ( nurl_str_get txt k ) ) = k + k 1 }
+    ~ < k n { ( vec_push [u] v # u ( slice_byte txt_v k ) ) = k + k 1 }
 }
 
 @ vappend_crlf ( Vec u ) v → v {

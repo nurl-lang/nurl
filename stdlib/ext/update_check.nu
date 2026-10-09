@@ -27,17 +27,19 @@ $ `stdlib/ext/env.nu`
 $ `stdlib/ext/json.nu`
 $ `stdlib/ext/semver.nu`
 $ `stdlib/ext/http_cli.nu`
+$ `stdlib/core/slice.nu`
 
 // one day, in seconds
 : i __UC_TTL 86400
 
 // strip a single leading 'v' — "v0.24.0" → "0.24.0"
 @ __uc_strip_v s ver → String {
-    ? & > ( nurl_str_len ver ) 0 == ( nurl_str_get ver 0 ) 118 {
+    : ( Slice u ) ver_v ( slice_of_str ver )
+    ? & > ( nurl_str_len ver ) 0 == ( slice_byte ver_v 0 ) 118 {
         : String out ( string_new )
         : ~ i k 1
         ~ < k ( nurl_str_len ver ) {
-            ( string_push_char out ( nurl_str_get ver k ) )
+            ( string_push_char out ( slice_byte ver_v k ) )
             = k + k 1
         }
         ^ out

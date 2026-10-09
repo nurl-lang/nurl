@@ -16,6 +16,7 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/hal/blockdev.nu`
 $ `stdlib/fs/fat.nu`
+$ `stdlib/core/slice.nu`
 
 @ fatfmt_min_sectors → i { ^ 64 }
 
@@ -108,6 +109,7 @@ $ `stdlib/fs/fat.nu`
 // decisions, and a formatter that mounted its result would hide a
 // mount failure behind a format success.
 @ fat_format s label → b {
+    : ( Slice u ) label_v ( slice_of_str label )
     : i total ( blk_sector_count )
     ? < total ( fatfmt_min_sectors ) { ^ F } {}
 
@@ -288,7 +290,7 @@ $ `stdlib/fs/fat.nu`
         : ( Vec u ) rootsec ( __zsec )
         : ~ i j 0
         ~ < j 11 {
-            : i c ? < j ( nurl_str_len label ) ( nurl_str_get label j ) 32
+            : i c ? < j ( nurl_str_len label ) ( slice_byte label_v j ) 32
             ( __put8 rootsec j ? && >= c 97 <= c 122 - c 32 c )
             = j + j 1
         }

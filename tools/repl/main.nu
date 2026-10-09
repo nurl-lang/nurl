@@ -35,6 +35,7 @@ $ `stdlib/core/posix.nu`
 $ `stdlib/std/term.nu`
 $ `stdlib/std/process.nu`
 $ `stdlib/std/fs.nu`
+$ `stdlib/core/slice.nu`
 
 // strcmp / strncmp are compiler-provided libc builtins (used throughout
 // stdlib/core/string.nu) — no FFI declaration needed.
@@ -56,14 +57,15 @@ $ `stdlib/std/fs.nu`
 @ __is_space i c → b { ^ | | == c 32 == c 9 | == c 13 == c 10 }
 
 @ __trim s raw → String {
+    : ( Slice u ) raw_v ( slice_of_str raw )
     : i n ( nurl_str_len raw )
     : ~ i a 0
-    ~ & < a n ( __is_space ( nurl_str_get raw a ) ) { = a + a 1 }
+    ~ & < a n ( __is_space ( slice_byte raw_v a ) ) { = a + a 1 }
     : ~ i b n
-    ~ & > b a ( __is_space ( nurl_str_get raw - b 1 ) ) { = b - b 1 }
+    ~ & > b a ( __is_space ( slice_byte raw_v - b 1 ) ) { = b - b 1 }
     : String out ( string_with_cap + - b a 1 )
     : ~ i k a
-    ~ < k b { ( string_push_char out ( nurl_str_get raw k ) ) = k + k 1 }
+    ~ < k b { ( string_push_char out ( slice_byte raw_v k ) ) = k + k 1 }
     ^ out
 }
 
@@ -75,12 +77,13 @@ $ `stdlib/std/fs.nu`
 
 // Net bracket depth, ignoring anything inside a backtick string.
 @ __repl_balance s code → i {
+    : ( Slice u ) code_v ( slice_of_str code )
     : i n ( nurl_str_len code )
     : ~ i depth 0
     : ~ i instr 0
     : ~ i k 0
     ~ < k n {
-        : i c ( nurl_str_get code k )
+        : i c ( slice_byte code_v k )
         ? == c 96 { = instr ? == instr 0 1 0 } {
             ? == instr 0 {
                 ? | == c 123 | == c 40 == c 91 { = depth + depth 1 } {}

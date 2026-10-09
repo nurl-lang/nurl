@@ -28,6 +28,7 @@ $ `stdlib/core/io.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/ext/json.nu`
+$ `stdlib/core/slice.nu`
 
 // ── Header parsing ────────────────────────────────────────────────
 //
@@ -36,14 +37,16 @@ $ `stdlib/ext/json.nu`
 // both and ignore other header names.
 
 @ __header_is_content_length s line → b {
+    : ( Slice u ) line_v ( slice_of_str line )
     : i n ( nurl_str_len line )
     ? < n 15 { ^ F } {}
     // case-insensitive match against "content-length:"
     : ~ i k 0
     : s want `content-length:`
+    : ( Slice u ) want_v ( slice_of_str want )
     ~ < k 15 {
-        : ~ i lc ( nurl_str_get line k )
-        : i wc ( nurl_str_get want k )
+        : ~ i lc ( slice_byte line_v k )
+        : i wc ( slice_byte want_v k )
         // upper → lower on the line byte for comparison
         ? & >= lc 65 <= lc 90 { = lc + lc 32 } {}
         ? != lc wc { ^ F } {}
@@ -55,16 +58,17 @@ $ `stdlib/ext/json.nu`
 // Strip leading whitespace then parse the rest as a decimal int.
 // Returns -1 on parse error so the caller knows to drop the frame.
 @ __header_value_int s line → i {
+    : ( Slice u ) line_v ( slice_of_str line )
     : i n ( nurl_str_len line )
     : ~ i k 15  // skip "Content-Length:"
     // skip ASCII whitespace
-    ~ & < k n | | == ( nurl_str_get line k ) 32 == ( nurl_str_get line k ) 9 == ( nurl_str_get line k ) 13 {
+    ~ & < k n | | == ( slice_byte line_v k ) 32 == ( slice_byte line_v k ) 9 == ( slice_byte line_v k ) 13 {
         = k + k 1
     }
     : ~ i v 0
     : ~ b saw_digit F
-    ~ & < k n & >= ( nurl_str_get line k ) 48 <= ( nurl_str_get line k ) 57 {
-        = v + * v 10 - ( nurl_str_get line k ) 48
+    ~ & < k n & >= ( slice_byte line_v k ) 48 <= ( slice_byte line_v k ) 57 {
+        = v + * v 10 - ( slice_byte line_v k ) 48
         = saw_digit T
         = k + k 1
     }

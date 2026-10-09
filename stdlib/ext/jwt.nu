@@ -54,6 +54,7 @@ $ `stdlib/std/time.nu`
 $ `stdlib/std/ecdsa_p256.nu`
 $ `stdlib/ext/json.nu`
 $ `stdlib/ext/crypto.nu`
+$ `stdlib/core/slice.nu`
 
 : | JwtErr {
     JwtMalformed  // not three '.'-separated segments / bad base64url
@@ -83,9 +84,10 @@ $ `stdlib/ext/crypto.nu`
 
 // Owned String slice [a, b) of `str`.
 @ __jwt_slice s str i a i b → String {
+    : ( Slice u ) str_v ( slice_of_str str )
     : String out ( string_with_cap ? > - b a 0 - b a 1 )
     : ~ i k a
-    ~ < k b { ( string_push_char out ( nurl_str_get str k ) ) = k + k 1 }
+    ~ < k b { ( string_push_char out ( slice_byte str_v k ) ) = k + k 1 }
     ^ out
 }
 

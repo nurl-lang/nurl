@@ -24,6 +24,7 @@ $ `stdlib/ext/http_response.nu`
 $ `stdlib/ext/http2_hpack.nu`
 $ `stdlib/ext/http2_server.nu`
 $ `stdlib/ext/http2_client.nu`
+$ `stdlib/core/slice.nu`
 
 @ print_bool s tag b v → v {
     ( nurl_print tag ) ( nurl_print `=` )
@@ -48,6 +49,7 @@ unsafe @ hdr_val ( Vec Header ) hs s name → s {
 
 // Compare an owned Vec[u] against a raw string's bytes.
 unsafe @ vec_eq_str ( Vec u ) got s want → b {
+    : ( Slice u ) want_v ( slice_of_str want )
     : i n ( vec_len [u] got )
     : i wn ( nurl_str_len want )
     ? != n wn { ^ F } {}
@@ -55,7 +57,7 @@ unsafe @ vec_eq_str ( Vec u ) got s want → b {
     : ~ i k 0
     : ~ b ok T
     ~ & ok < k n {
-        ? != & 255 # i . p k ( nurl_str_get want k ) { = ok F } {}
+        ? != & 255 # i . p k ( slice_byte want_v k ) { = ok F } {}
         = k + k 1
     }
     ^ ok

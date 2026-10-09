@@ -34,6 +34,7 @@ $ `stdlib/hal/blockdev.nu`
 $ `stdlib/fs/fat.nu`
 $ `stdlib/fs/fatfs.nu`
 $ `stdlib/fs/fatfmt.nu`
+$ `stdlib/core/slice.nu`
 
 & `c` @ getenv s name → s
 
@@ -59,12 +60,13 @@ unsafe @ __env_or s name s dflt → s {
 // zero is a time (1970) and absent is not.
 unsafe @ __wallclock → i {
     : s w ( getenv `wallclock` )
+    : ( Slice u ) w_v ( slice_of_str w )
     ? == # i w 0 { ^ 0 } {}
     : i n ( nurl_str_len w )
     ? == n 0 { ^ 0 } {}
     : ~ i k 0
     ~ < k n {
-        : i c ( nurl_str_get w k )
+        : i c ( slice_byte w_v k )
         ? || < c 48 > c 57 { ^ 0 } {}
         = k + k 1
     }

@@ -36,6 +36,7 @@ $ `stdlib/std/time.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
+$ `stdlib/core/slice.nu`
 
 : ~ i srv_first_timeout 0
 : ~ i srv_ping_len 0
@@ -59,11 +60,12 @@ $ `stdlib/core/vec.nu`
 
 @ port_of String addr → i {
     : s d ( string_data addr )
+    : ( Slice u ) d_v ( slice_of_str d )
     : i n ( nurl_str_len d )
     : ~ i k - n 1
     : ~ i colon_at - 0 1
     ~ >= k 0 {
-        ? == ( nurl_str_get d k ) 58 {
+        ? == ( slice_byte d_v k ) 58 {
             = colon_at k
             = k - 0 1
         } {
