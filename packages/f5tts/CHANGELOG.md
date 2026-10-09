@@ -3,6 +3,24 @@
 All notable changes to this package are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.3.2] — 2026-10-09
+
+Requires NURL 0.72.0, which draws the raw-memory boundary at every call:
+only an `unsafe` function may call one taking or handing back a raw
+pointer (`*T`), build a library handle (a `Slice`, a `Vec`, …) field by
+field, or call a C primitive that reads as far as its caller says. The
+published 0.3.1 does not compile under 0.72.0. The functions that do are
+declared `unsafe`.
+
+### Fixed
+
+- **Two reads of freed memory in the server.** The `Authorization`
+  header, and the `{id}` of `DELETE /voices/{id}` and
+  `GET /voices/{id}/sample`, were each read through a view of a copy
+  freed at the end of the match arm that received it: the bearer-token
+  check and every use of the id read freed memory. The token is compared
+  inside the arm, and the handler owns the id.
+
 ## [0.3.1] — 2026-10-07
 
 Requires NURL 0.71.0, whose ownership rules are on by default: the

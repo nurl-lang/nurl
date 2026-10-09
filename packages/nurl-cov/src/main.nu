@@ -36,7 +36,7 @@ $ `jsonout.nu`
 $ `runner.nu`
 $ `stdlib/core/slice.nu`
 
-: s NURLCOV_VERSION `0.2.1`
+: s NURLCOV_VERSION `0.2.2`
 
 @ __usage → v {
     ( nurl_print `nurl-cov — test-coverage mapper for NURL\n\n` )

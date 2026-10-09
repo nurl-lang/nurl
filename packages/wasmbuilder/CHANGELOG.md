@@ -2,6 +2,17 @@
 
 All notable changes to this package are documented here.
 
+## [0.3.4] — 2026-10-09
+
+Requires NURL 0.72.0, which draws the raw-memory boundary at every call:
+only an `unsafe` function may call one taking or handing back a raw
+pointer (`*T`), build a library handle (a `Slice`, a `Vec`, …) field by
+field, or call a C primitive that reads as far as its caller says. The
+published 0.3.3 does not compile under 0.72.0. Bytes of a string are
+read through a bounds-checked `Slice` of it (`slice_of_str`,
+`slice_byte`), where `nurl_str_at` trusted the length its caller passed.
+No change in behaviour.
+
 ## [0.3.3] — 2026-10-07
 
 Requires NURL 0.71.0, whose ownership rules are on by default: the

@@ -16,7 +16,7 @@ $ `stdlib/std/process.nu`
 $ `video.nu`
 
 // Kept in step with nurl.toml by the test suite, which compares the two.
-@ __vc_version → v { ( nurl_print `video 0.2.1\n` ) }
+@ __vc_version → v { ( nurl_print `video 0.2.2\n` ) }
 
 @ __vc_usage → i {
     ( nurl_print `video — extract frames from a video file\n\n` )

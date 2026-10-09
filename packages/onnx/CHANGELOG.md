@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.10.2] — 2026-10-09
+
+Requires NURL 0.72.0, which draws the raw-memory boundary at every call:
+only an `unsafe` function may call one taking or handing back a raw
+pointer (`*T`), build a library handle (a `Slice`, a `Vec`, …) field by
+field, or call a C primitive that reads as far as its caller says. The
+published 0.10.1 does not compile under 0.72.0. The functions that do
+are declared `unsafe`. An empty protobuf reader and an empty field are
+`slice_empty`, where they were a `Slice` built literally over a null
+pointer. No change in behaviour.
+
 ## [0.10.1] — 2026-10-07
 
 Requires NURL 0.71.0, whose ownership rules are on by default: the

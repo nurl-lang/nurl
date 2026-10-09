@@ -491,7 +491,7 @@ unsafe @ __psql_go CliCtx x → i {
 }
 
 @ main → i {
-    : Cli c ( cli_new `psql` `a pure-NURL PostgreSQL client (no libpq, no OpenSSL); postgres://user:pass@host:port/db?sslmode=… as the argument` `0.4.1` )
+    : Cli c ( cli_new `psql` `a pure-NURL PostgreSQL client (no libpq, no OpenSSL); postgres://user:pass@host:port/db?sslmode=… as the argument` `0.4.2` )
     ( cli_flag_str c `host` 104 `HOST` `server host` `localhost` `PGHOST` )
     ( cli_flag_int c `port` 112 `PORT` `server port` 5432 `PGPORT` )
     ( cli_flag_str c `user` 85 `USER` `user name` `postgres` `PGUSER` )

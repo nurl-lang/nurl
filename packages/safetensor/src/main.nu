@@ -134,7 +134,7 @@ unsafe @ __cmd_stats St st s name → i {
         ^ 0
     } {}
     ? ( args_present p `version` ) {
-        ( nurl_print `safetensor 0.4.1\n` )
+        ( nurl_print `safetensor 0.4.2\n` )
         ^ 0
     } {}
     ? < ( args_positional_count p ) 1 {

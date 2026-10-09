@@ -35,7 +35,7 @@ $ `store.nu`
 $ `stdlib/core/rcbox.nu`
 $ `stdlib/core/slice.nu`
 
-: s AG_VERSION `0.5.2`
+: s AG_VERSION `0.5.3`
 
 // Limits. A message is for coordination, not for shipping a file.
 : i AG_BODY_MAX 16384

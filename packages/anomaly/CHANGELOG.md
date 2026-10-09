@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.34.2] — 2026-10-09
+
+Requires NURL 0.72.0, which draws the raw-memory boundary at every call:
+only an `unsafe` function may call one taking or handing back a raw
+pointer (`*T`), build a library handle (a `Slice`, a `Vec`, …) field by
+field, or call a C primitive that reads as far as its caller says. The
+published 0.34.1 does not compile under 0.72.0. The functions that do
+are declared `unsafe`.
+
+### Fixed
+
+- **The multi-tenant issuer check read freed memory.** The issuer
+  template a provider's discovery document gives (`…/{tenantid}/…`) was
+  kept as a view of the discovery reader's String, which was freed when
+  the reader returned: every later token's `iss` was compared against
+  freed memory. The authorisation state owns the template now, beside
+  the configured strings.
+
+### Changed
+
+- `g_az_iss_tmpl` is an accessor, `( g_az_iss_tmpl )`, and
+  `anomaly_authz_set_iss_tmpl` sets the template; the global is gone.
+- Timestamps, file names, organisation ids and record fields are scanned
+  through a bounds-checked `Slice` of their bytes (`slice_of_str`,
+  `slice_byte`), where `nurl_str_at` trusted the length its caller
+  passed.
+
 ## [0.34.1] — 2026-10-07
 
 Requires NURL 0.71.0, whose ownership rules are on by default: the

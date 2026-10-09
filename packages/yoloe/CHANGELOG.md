@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.7.2] — 2026-10-09
+
+Requires NURL 0.72.0, which draws the raw-memory boundary at every call:
+only an `unsafe` function may call one taking or handing back a raw
+pointer (`*T`), build a library handle (a `Slice`, a `Vec`, …) field by
+field, or call a C primitive that reads as far as its caller says. The
+published 0.7.1 does not compile under 0.72.0. The functions that do are
+declared `unsafe`. The BPE vocabulary builder hands `__enc_put` the
+arena and the encoder table it changes instead of the whole tokenizer,
+so a symbol read out of the byte encoder stays valid across the call, as
+0.72.0's borrow rules require. Tokens are unchanged.
+
 ## [0.7.1] — 2026-10-07
 
 Requires NURL 0.71.0, whose ownership rules are on by default: the
