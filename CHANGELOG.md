@@ -9,8 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 The memory guarantee has **no exception**: 0.71.0's one known hole (a
-`Slice` of a `Vec`, probe h32) is closed, along with 80 more found around
-it (probes h33–h112), each at its root — every probe is now rejected or
+`Slice` of a `Vec`, probe h32) is closed, along with 88 more found around
+it (probes h33–h120), each at its root — every probe is now rejected or
 runs clean under ASan/UBSan/LSan, and `tools/fuzz/holes/check.sh` runs in
 CI. Compile time is 0.7 % below 0.71.0's main (self-compile instructions),
 run time is flat or better. Code that handed raw pointers or caller-given
@@ -82,11 +82,33 @@ beside each raw one (*Changed*).
   in raw memory: `json_parse_n`'s text, held by its scratch parser, made
   `json_parse` keep its text, and every temporary handed to it leaked
   (h109).
-- **Three dangling views in packages**, rejected by the view checks:
-  anomaly's multi-tenant issuer template and nurl-mcp's `--token` were
-  views of locals kept in globals, and f5tts read its bearer token and
-  `{id}` path capture through views of copies freed at the end of a match
-  arm — each a read of freed memory.
+- **Two dangling views in packages**, rejected by the view checks:
+  anomaly's multi-tenant issuer template was a view of the discovery
+  reader's String, freed when the reader returned — every later token
+  check read freed memory; nurl-mcp's `--token` was a view of `main`'s
+  String kept in a global, which outlives it (in practice `main` held it
+  as long as the server ran).
+- **A string binding that owns its buffer is an owner.** One bound to an
+  owning call, or a mutable one born from a literal or an owned string,
+  owns its buffer: every value assigned to it after is fresh or its own
+  copy. The view walk took every `s` for a view. A copy of an owning one
+  (`: s y x`) borrowed nothing, so it was read after `= x …` freed the
+  buffer (h113–h115), handed back while the owner was dropped on the way
+  out (h116), or reached through a result that may be the argument itself
+  (h117) or the whole rest of a split cursor (h118) — each a read of
+  freed memory. And a view assigned into an owning binding, which copies
+  it, was taken for a borrow of its source, rejecting correct code: a
+  match arm's payload, the String of a shorter block (f5tts's bearer
+  check and `{id}` capture were rewritten around this; they are back as
+  they were). Now a copy of an owning `s` is a view of its buffer, ending
+  when the binding is given a new value or ends; the binding handed back
+  by name goes to the caller; a binding that copies what it is given, or
+  takes an owned value, holds a fresh one.
+- **A mutable string born from a call that hands nothing over owns what
+  it is given.** Since such a callee stopped being asked per call, the
+  binding had no owner slot, and a tracked local assigned to it — copied,
+  as it must be — leaked once per assignment (h119, h120). It gets the
+  empty owner slot a binding born from a name gets.
 - **The raw foreign surface is `unsafe`.** A C primitive that reads or
   writes as far as its caller says (`memmem`, `memcmp`, `fwrite`,
   `nurl_fast_atof`, the TCP/UDP buffers), takes a `FILE*` or a format
@@ -151,7 +173,7 @@ beside each raw one (*Changed*).
 - `slice_of_str`, `slice_byte`, `slice_parse_int`, `slice_parse_float`,
   `string_adopt`, `write_string`, `b64_encode_string`, `utf8_decode_at`:
   the safe forms of the raw-length helpers above.
-- Hole probes h33–h112 (`tools/fuzz/holes/`) and their check in CI: each
+- Hole probes h33–h120 (`tools/fuzz/holes/`) and their check in CI: each
   must be rejected or run clean under the sanitizers.
 - **Five cryptographic benchmark rows** — `chacha20`, `poly1305`,
   `blake2b`, `sha512` and `x25519` — in NURL, C and Rust. The NURL side

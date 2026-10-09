@@ -1,0 +1,11 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+10 0
+6
+9 9
+4
+abx cdyy
+a.nu:1 f|b.nu:2 g
+5

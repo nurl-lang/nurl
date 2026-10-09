@@ -445,16 +445,8 @@ unsafe @ __f5s_ticker → v {
 @ __f5s_authed HttpRequest req → b {
     : i want ( nurl_str_len g_f5_token )
     ? == want 0 { ^ T } {}
-    // header_get hands back its own copy, which lives as long as its arm:
-    // the header is compared there (read through a view of it after the
-    // arm, the comparison read freed memory).
-    ?? ( header_get . req headers `authorization` ) {
-        T h → { ^ ( __f5s_bearer_ok ( string_data h ) want ) }
-        F → { ^ F }
-    }
-}
-
-@ __f5s_bearer_ok s got i want → b {
+    : ~ s got ``
+    ?? ( header_get . req headers `authorization` ) { T h → { = got ( string_data h ) } F → {} }
     : i n ( nurl_str_len got )
     ? > n 7 {} { ^ F }
     ? ( nurl_str_starts got `Bearer ` ) {} { ^ F }
@@ -977,18 +969,10 @@ unsafe @ __f5s_part_str ( Vec MultipartPart ) parts s name → String {
     }
 }
 
-// The `{id}` path capture, owned by the handler that reads it: params_get
-// hands back its own copy, and a view of it taken inside the match arm
-// was freed at the end of the arm — every later use of the id read freed
-// memory.
-@ __f5s_id Params ps → String {
-    ?? ( params_get ps `id` ) { T v → { ^ v } F → { ^ ( string_new ) } }
-}
-
 @ __f5s_voice_del HttpRequest req Params ps → HttpResponse {
     ? ( __f5s_authed req ) {} { ^ ( __f5s_jerr 401 `unauthorized` ) }
-    : String idv ( __f5s_id ps )
-    : s id ( string_data idv )
+    : ~ s id ``
+    ?? ( params_get ps `id` ) { T v → { = id ( string_data v ) } F → {} }
     ? ( f5_id_ok id ) {} { ^ ( __f5s_jerr 400 `a voice id must be a plain name` ) }
     ( __f5s_voice_forget id )
     ? ( f5_voice_delete g_f5_voices id ) {} { ^ ( __f5s_jerr 404 `no such voice` ) }
@@ -1002,8 +986,8 @@ unsafe @ __f5s_part_str ( Vec MultipartPart ) parts s name → String {
 // hear what the voice is before asking it to say anything.
 @ __f5s_voice_sample HttpRequest req Params ps → HttpResponse {
     ? ( __f5s_authed req ) {} { ^ ( __f5s_jerr 401 `unauthorized` ) }
-    : String idv ( __f5s_id ps )
-    : s id ( string_data idv )
+    : ~ s id ``
+    ?? ( params_get ps `id` ) { T v → { = id ( string_data v ) } F → {} }
     ? ( f5_id_ok id ) {} { ^ ( __f5s_jerr 400 `a voice id must be a plain name` ) }
     : String p ( f5_voice_path g_f5_voices id )
     ( string_push_str p `/reference.wav` )

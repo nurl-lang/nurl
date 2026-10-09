@@ -52,7 +52,9 @@ A binding owns a value when its initialiser produces a fresh one:
   library handle,
 - a named-struct literal `@ T { … }` whose fields are fresh values (each
   field is tracked on its own),
-- a value of a type with a `% Drop` impl.
+- a value of a type with a `% Drop` impl,
+- a mutable string binding born from a literal or an owned string: it
+  takes its own copy, and a copy of every value assigned to it after.
 
 At the end of the owner's scope the compiler emits the matching drop.
 Reassigning an owner drops the previous value first. Returning a value
@@ -417,6 +419,15 @@ code too, because it is decided from the program text, not from the
 capacity at run time. A mutation inside one `?` arm does not end a view
 in the other arm, and a function that mutates the container passed to it
 ends views exactly as an inline mutation does, wherever it is defined.
+
+A string binding (`s`) is a view or an owner. One that owns its buffer —
+bound to an allocating call, or a mutable one born from a literal or an
+owned string — is an owner like a `String`: a copy of it (`: s y x`, or an
+argument a callee may hand back as is) is a view of its buffer, and ends
+when the binding is given a new value (which frees the buffer) or ends.
+Handed back by name, the binding's buffer goes to the caller. A value
+assigned to an owning binding is copied unless it is fresh, so the binding
+never borrows what it is given.
 
 ### 2.11 Closures hold their captures
 

@@ -1,0 +1,9 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_owned_string_view.nu:16: error: 'y' borrows from 'x', which ended at line 15 — it was given a new value. A borrow (a vec_get result, a field read, a view) lives only as long as its source is unchanged, so 'y' is gone too. Read it before that line, or take a copy that lives on its own where it is bound: ( mem_dup y ).
+    ^ ( nurl_str_len y )
+compiler/tests/diag_owned_string_view.nu:22: error: this returns a view of 'x' (an address into its storage), and 'x' is released when the function returns, so the caller would read freed memory. Return a value that owns its data (a copy — slice_to_vec, string_from — or the owner itself), or take what the view points into as a parameter.
+    ^ y
+compiler/tests/diag_owned_string_view.nu:33: error: this returns a view of 'v' (an address into its storage), and 'v' is released when the function returns, so the caller would read freed memory. Return a value that owns its data (a copy — slice_to_vec, string_from — or the owner itself), or take what the view points into as a parameter.
+    ^ r
+error: compilation aborted — 3 borrow-checker violations (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

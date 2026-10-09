@@ -11,7 +11,10 @@
 // element (`T x → ( string_data x )`) points into the vector's element.
 // The controls compile: an owner declared in the outer scope, an owner
 // moved into a container that outlives the view, a use inside the owner's
-// block.
+// block, and a string binding that owns its value (one born from a
+// literal): assigned a view, it takes its own copy — no view of x, so
+// nothing of it dangles. The binding that dangles is one that owns
+// nothing, a view of something else to begin with.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
@@ -23,7 +26,8 @@ $ `stdlib/core/vec.nu`
 }
 
 @ assigned → i {
-    : ~ s p ``
+    : String keep ( string_from `outer` )
+    : ~ s p ( string_data keep )
     ? T { : String x ( string_from `abc` ) = p ( string_data x ) } {}
     ^ ( nurl_str_len p )
 }
@@ -61,10 +65,16 @@ $ `stdlib/core/vec.nu`
     ^ ( vec_len [s] args )
 }
 
+@ assigned_copy → i {
+    : ~ s p ``
+    ? T { : String x ( string_from `abc` ) = p ( string_data x ) } {}
+    ^ ( nurl_str_len p )
+}
+
 @ used_inside → i {
     : ~ i n 0
     ? T { : String x ( string_from `abc` ) : s p ( string_data x ) = n ( nurl_str_len p ) } {}
     ^ n
 }
 
-@ main → i { ^ + + + + + ( assigned ) ( pushed ) ( pushed_from_element ) ( owner_outside ) ( owner_moved_on ) ( used_inside ) }
+@ main → i { ^ + + + + + + ( assigned ) ( pushed ) ( pushed_from_element ) ( owner_outside ) ( owner_moved_on ) ( assigned_copy ) ( used_inside ) }

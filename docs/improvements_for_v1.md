@@ -65,7 +65,7 @@ accurate user-facing documentation. A local one-off pass is not sufficient.
   through aggregates and containers, and closures kept by a callee are
   rejected; hole probes h01–h31 are all rejected and safe programs carry a
   stated guarantee, docs/MEMORY.md §6. Then h32, a `Slice` of a `Vec`, and
-  the 80 probes found around it (h33–h112) — every one rejected or clean;
+  the 88 probes found around it (h33–h120) — every one rejected or clean;
   the guarantee has no exception. docs/HARDENING_PLAN.md.)*
   Code using no
   raw pointer or FFI can still read a maybe-moved value in both modes, and can
