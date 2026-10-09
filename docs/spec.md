@@ -615,6 +615,7 @@ call site:
 | lane arithmetic | `nurl_v128_add8`, `_add32`, `_sub32`, `_add64`, `_mul32u` |
 | shift / rotate | `nurl_v128_rotl32(v, n)`, `_shl64(v, n)`, `_shr64(v, n)` |
 | lane permute | `nurl_v128_rotlanes1/2/3(v)` |
+| lane interleave | `nurl_v128_unpacklo32(a, b)`, `_unpackhi32`, `_unpacklo64`, `_unpackhi64` — zip the low or high halves of two vectors at 32- or 64-bit granularity; four of them transpose a 4×4 block of 32-bit words |
 | byte compare | `nurl_v128_eqmask8(a, b) → u64`, `_ltmask8(a, b) → u64` — 16-bit bitmask |
 | case folding | `nurl_v128_lower8(v)` — ASCII `A`–`Z` only |
 

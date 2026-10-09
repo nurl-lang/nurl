@@ -494,7 +494,7 @@ unsafe @ nurl_llty s t → s {
     // one is already LLVM-shaped: only an unsigned spelling (it has a
     // `u`) or a vector (`v…`) is rewritten — everything else is a copy.
     : i __uat ( nurl_str_find t `u` )
-    ? & < __uat 0 != ( nurl_str_get t 0 ) 118 { ^ # s ( nurl_strdup t ) } {}
+    ? & < __uat 0 < ( nurl_str_find t `v` ) 0 { ^ # s ( nurl_strdup t ) } {}
     ? ( seq t `u8` ) { ^ # s ( nurl_strdup `i8` ) } {}
     ? ( seq t `u16` ) { ^ # s ( nurl_strdup `i16` ) } {}
     ? ( seq t `u32` ) { ^ # s ( nurl_strdup `i32` ) } {}
@@ -550,6 +550,15 @@ unsafe @ nurl_llty s t → s {
             : s tail ( nurl_str_slice t + p 1 - tl + p 1 )
             ^ ( nurl_llty ( nurl_str_cat3 head `i` tail ) ) }
         {}
+        // A vector inside a compound spelling — the `v128*` an `inout v128`
+        // passes, a `{ i1, v128 }` option — lowers like the bare one; left
+        // alone it reached the IR as the undefined type `v128`.
+        ? & == ( nurl_str_get t p ) 118 | ( __llty_word_at t p `v128` ) ( __llty_word_at t p `v256` ) {
+            : s head ? > p 0 ( nurl_str_slice t 0 p ) ``
+            : s tail ( nurl_str_slice t + p 4 - tl + p 4 )
+            : s vt ? ( __llty_word_at t p `v128` ) `<4 x i32>` `<4 x i64>`
+            ^ ( nurl_llty ( nurl_str_cat3 head vt tail ) )
+        } {}
         = p + p 1
     }
     ^ # s ( nurl_strdup t )
@@ -44623,6 +44632,33 @@ u` ) ( nurl_print q ) ( nurl_print `:
     ( emit `  %w3.r = shufflevector <4 x i32> %a, <4 x i32> undef, <4 x i32> <i32 3, i32 0, i32 1, i32 2>` )
     ( emit `  ret <4 x i32> %w3.r` )
     ( emit `}` )
+    // ── lane interleave ───────────────────────────────────────────
+    // Two vectors' lanes zipped together, low halves or high halves, at
+    // 32- or 64-bit granularity: punpck{l,h}{dq,qdq} on x86, zip1/zip2 on
+    // AArch64, a shuffle on wasm. Four of them transpose a 4×4 block of
+    // 32-bit words, which is how a kernel that keeps one item per lane
+    // (ChaCha20 over four blocks at once) hands each item's words back in
+    // order.
+    ( emit `define linkonce_odr <4 x i32> @nurl_v128_unpacklo32(<4 x i32> %a, <4 x i32> %b) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %z1.r = shufflevector <4 x i32> %a, <4 x i32> %b, <4 x i32> <i32 0, i32 4, i32 1, i32 5>` )
+    ( emit `  ret <4 x i32> %z1.r` )
+    ( emit `}` )
+    ( emit `define linkonce_odr <4 x i32> @nurl_v128_unpackhi32(<4 x i32> %a, <4 x i32> %b) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %z2.r = shufflevector <4 x i32> %a, <4 x i32> %b, <4 x i32> <i32 2, i32 6, i32 3, i32 7>` )
+    ( emit `  ret <4 x i32> %z2.r` )
+    ( emit `}` )
+    ( emit `define linkonce_odr <4 x i32> @nurl_v128_unpacklo64(<4 x i32> %a, <4 x i32> %b) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %z3.r = shufflevector <4 x i32> %a, <4 x i32> %b, <4 x i32> <i32 0, i32 1, i32 4, i32 5>` )
+    ( emit `  ret <4 x i32> %z3.r` )
+    ( emit `}` )
+    ( emit `define linkonce_odr <4 x i32> @nurl_v128_unpackhi64(<4 x i32> %a, <4 x i32> %b) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %z4.r = shufflevector <4 x i32> %a, <4 x i32> %b, <4 x i32> <i32 2, i32 3, i32 6, i32 7>` )
+    ( emit `  ret <4 x i32> %z4.r` )
+    ( emit `}` )
     // ── byte compare → bitmask ────────────────────────────────────
     // The whole point of a vector byte scan: sixteen comparisons in one
     // instruction, their results read out as a 16-bit integer whose bit
@@ -44947,6 +44983,10 @@ u` ) ( nurl_print q ) ( nurl_print `:
     ( nurl_sym_def syms `nurl_v128_rotlanes1` `v128` )
     ( nurl_sym_def syms `nurl_v128_rotlanes2` `v128` )
     ( nurl_sym_def syms `nurl_v128_rotlanes3` `v128` )
+    ( nurl_sym_def syms `nurl_v128_unpacklo32` `v128` )
+    ( nurl_sym_def syms `nurl_v128_unpackhi32` `v128` )
+    ( nurl_sym_def syms `nurl_v128_unpacklo64` `v128` )
+    ( nurl_sym_def syms `nurl_v128_unpackhi64` `v128` )
     ( nurl_sym_def syms `nurl_v128_eqmask8` `u64` )
     ( nurl_sym_def syms `nurl_v128_ltmask8` `u64` )
     ( nurl_sym_def syms `nurl_v128_lower8` `v128` )
