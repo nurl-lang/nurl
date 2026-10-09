@@ -87,15 +87,11 @@ $ `stdlib/std/bytes.nu`
 
 // ── Transform: one 128-byte block. Mutates state (8 × u64) in place.
 //
-// The block is the 128 bytes of `block` at `offset`. The eight working
-// variables and the 16-word message schedule are scalar locals: each of
-// the 80 rounds is one `inline` call that updates the two words a round
-// changes (`inout`), written out with the variables already rotated into
-// their roles and the round constant as a literal, so no round moves a
-// word or loads a constant. The schedule is FIPS 180-4's 16-word ring,
-// expanded in place one word ahead of the round that reads it. (`K` and
-// `w` — the constant table and an 80-word schedule — are what a rolled
-// loop needed; the callers still pass them.)
+// Limbs go through raw `*u64` / `*u` rather than the bounds-checked Vec
+// accessors, and the 80-word message schedule `w` is the caller's scratch
+// — allocated once per hash instead of once per block. The rounds run
+// eight to a pass with no word moved, as in hash_sha256.nu — same change,
+// same reasoning.
 
 @ __sha512_be64 * u p i o → u64 {
     ^ | | | | | | | << # u64 . p o # u64 56 << # u64 . p + o 1 # u64 48
@@ -116,33 +112,24 @@ inline @ __sha512_rnd u64 a u64 b u64 c inout u64 d u64 e u64 f u64 g inout u64 
     = h + t1 + s0 mj
 }
 
-// w[t] = σ1(w[t-2]) + w[t-7] + σ0(w[t-15]) + w[t-16], w[t-16] being the
-// ring slot w[t] overwrites.
-inline @ __sha512_sch inout u64 w u64 w2 u64 w7 u64 w15 → v {
-    : u64 s0 ^^ ^^ ( __sha512_rotr w15 1 ) ( __sha512_rotr w15 8 ) >> w15 # u64 7
-    : u64 s1 ^^ ^^ ( __sha512_rotr w2 19 ) ( __sha512_rotr w2 61 ) >> w2 # u64 6
-    = w + + + w s1 w7 s0
-}
-
 @ __sha512_transform ( Vec u64 ) state ( Vec u ) block i offset ( Vec u64 ) K ( Vec u64 ) w → v {
+    : *u64 wp ( vec_data [u64] w )
+    : *u64 kp ( vec_data [u64] K )
     : *u64 sp ( vec_data [u64] state )
-    : *u bp # *u + # i ( vec_data [u] block ) offset
-    : ~ u64 w0 ( __sha512_be64 bp 0 )
-    : ~ u64 w1 ( __sha512_be64 bp 8 )
-    : ~ u64 w2 ( __sha512_be64 bp 16 )
-    : ~ u64 w3 ( __sha512_be64 bp 24 )
-    : ~ u64 w4 ( __sha512_be64 bp 32 )
-    : ~ u64 w5 ( __sha512_be64 bp 40 )
-    : ~ u64 w6 ( __sha512_be64 bp 48 )
-    : ~ u64 w7 ( __sha512_be64 bp 56 )
-    : ~ u64 w8 ( __sha512_be64 bp 64 )
-    : ~ u64 w9 ( __sha512_be64 bp 72 )
-    : ~ u64 w10 ( __sha512_be64 bp 80 )
-    : ~ u64 w11 ( __sha512_be64 bp 88 )
-    : ~ u64 w12 ( __sha512_be64 bp 96 )
-    : ~ u64 w13 ( __sha512_be64 bp 104 )
-    : ~ u64 w14 ( __sha512_be64 bp 112 )
-    : ~ u64 w15 ( __sha512_be64 bp 120 )
+    : *u bp ( vec_data [u] block )
+    : ~ i wi 0
+    ~ < wi 16 {
+        = . wp wi ( __sha512_be64 bp + offset * wi 8 )
+        = wi + wi 1
+    }
+    ~ < wi 80 {
+        : u64 w15 . wp - wi 15
+        : u64 w2 . wp - wi 2
+        : u64 s0 ^^ ^^ ( __sha512_rotr w15 1 ) ( __sha512_rotr w15 8 ) >> w15 # u64 7
+        : u64 s1 ^^ ^^ ( __sha512_rotr w2 19 ) ( __sha512_rotr w2 61 ) >> w2 # u64 6
+        = . wp wi + + + . wp - wi 16 s0 . wp - wi 7 s1
+        = wi + wi 1
+    }
 
     : ~ u64 a . sp 0
     : ~ u64 b . sp 1
@@ -153,150 +140,20 @@ inline @ __sha512_sch inout u64 w u64 w2 u64 w7 u64 w15 → v {
     : ~ u64 g . sp 6
     : ~ u64 h . sp 7
 
-    ( __sha512_rnd a b c d e f g h # u64 4794697086780616226 w0 )
-    ( __sha512_rnd h a b c d e f g # u64 8158064640168781261 w1 )
-    ( __sha512_rnd g h a b c d e f # u64 -5349999486874862801 w2 )
-    ( __sha512_rnd f g h a b c d e # u64 -1606136188198331460 w3 )
-    ( __sha512_rnd e f g h a b c d # u64 4131703408338449720 w4 )
-    ( __sha512_rnd d e f g h a b c # u64 6480981068601479193 w5 )
-    ( __sha512_rnd c d e f g h a b # u64 -7908458776815382629 w6 )
-    ( __sha512_rnd b c d e f g h a # u64 -6116909921290321640 w7 )
-    ( __sha512_rnd a b c d e f g h # u64 -2880145864133508542 w8 )
-    ( __sha512_rnd h a b c d e f g # u64 1334009975649890238 w9 )
-    ( __sha512_rnd g h a b c d e f # u64 2608012711638119052 w10 )
-    ( __sha512_rnd f g h a b c d e # u64 6128411473006802146 w11 )
-    ( __sha512_rnd e f g h a b c d # u64 8268148722764581231 w12 )
-    ( __sha512_rnd d e f g h a b c # u64 -9160688886553864527 w13 )
-    ( __sha512_rnd c d e f g h a b # u64 -7215885187991268811 w14 )
-    ( __sha512_rnd b c d e f g h a # u64 -4495734319001033068 w15 )
-    ( __sha512_sch w0 w14 w9 w1 )
-    ( __sha512_rnd a b c d e f g h # u64 -1973867731355612462 w0 )
-    ( __sha512_sch w1 w15 w10 w2 )
-    ( __sha512_rnd h a b c d e f g # u64 -1171420211273849373 w1 )
-    ( __sha512_sch w2 w0 w11 w3 )
-    ( __sha512_rnd g h a b c d e f # u64 1135362057144423861 w2 )
-    ( __sha512_sch w3 w1 w12 w4 )
-    ( __sha512_rnd f g h a b c d e # u64 2597628984639134821 w3 )
-    ( __sha512_sch w4 w2 w13 w5 )
-    ( __sha512_rnd e f g h a b c d # u64 3308224258029322869 w4 )
-    ( __sha512_sch w5 w3 w14 w6 )
-    ( __sha512_rnd d e f g h a b c # u64 5365058923640841347 w5 )
-    ( __sha512_sch w6 w4 w15 w7 )
-    ( __sha512_rnd c d e f g h a b # u64 6679025012923562964 w6 )
-    ( __sha512_sch w7 w5 w0 w8 )
-    ( __sha512_rnd b c d e f g h a # u64 8573033837759648693 w7 )
-    ( __sha512_sch w8 w6 w1 w9 )
-    ( __sha512_rnd a b c d e f g h # u64 -7476448914759557205 w8 )
-    ( __sha512_sch w9 w7 w2 w10 )
-    ( __sha512_rnd h a b c d e f g # u64 -6327057829258317296 w9 )
-    ( __sha512_sch w10 w8 w3 w11 )
-    ( __sha512_rnd g h a b c d e f # u64 -5763719355590565569 w10 )
-    ( __sha512_sch w11 w9 w4 w12 )
-    ( __sha512_rnd f g h a b c d e # u64 -4658551843659510044 w11 )
-    ( __sha512_sch w12 w10 w5 w13 )
-    ( __sha512_rnd e f g h a b c d # u64 -4116276920077217854 w12 )
-    ( __sha512_sch w13 w11 w6 w14 )
-    ( __sha512_rnd d e f g h a b c # u64 -3051310485924567259 w13 )
-    ( __sha512_sch w14 w12 w7 w15 )
-    ( __sha512_rnd c d e f g h a b # u64 489312712824947311 w14 )
-    ( __sha512_sch w15 w13 w8 w0 )
-    ( __sha512_rnd b c d e f g h a # u64 1452737877330783856 w15 )
-    ( __sha512_sch w0 w14 w9 w1 )
-    ( __sha512_rnd a b c d e f g h # u64 2861767655752347644 w0 )
-    ( __sha512_sch w1 w15 w10 w2 )
-    ( __sha512_rnd h a b c d e f g # u64 3322285676063803686 w1 )
-    ( __sha512_sch w2 w0 w11 w3 )
-    ( __sha512_rnd g h a b c d e f # u64 5560940570517711597 w2 )
-    ( __sha512_sch w3 w1 w12 w4 )
-    ( __sha512_rnd f g h a b c d e # u64 5996557281743188959 w3 )
-    ( __sha512_sch w4 w2 w13 w5 )
-    ( __sha512_rnd e f g h a b c d # u64 7280758554555802590 w4 )
-    ( __sha512_sch w5 w3 w14 w6 )
-    ( __sha512_rnd d e f g h a b c # u64 8532644243296465576 w5 )
-    ( __sha512_sch w6 w4 w15 w7 )
-    ( __sha512_rnd c d e f g h a b # u64 -9096487096722542874 w6 )
-    ( __sha512_sch w7 w5 w0 w8 )
-    ( __sha512_rnd b c d e f g h a # u64 -7894198246740708037 w7 )
-    ( __sha512_sch w8 w6 w1 w9 )
-    ( __sha512_rnd a b c d e f g h # u64 -6719396339535248540 w8 )
-    ( __sha512_sch w9 w7 w2 w10 )
-    ( __sha512_rnd h a b c d e f g # u64 -6333637450476146687 w9 )
-    ( __sha512_sch w10 w8 w3 w11 )
-    ( __sha512_rnd g h a b c d e f # u64 -4446306890439682159 w10 )
-    ( __sha512_sch w11 w9 w4 w12 )
-    ( __sha512_rnd f g h a b c d e # u64 -4076793802049405392 w11 )
-    ( __sha512_sch w12 w10 w5 w13 )
-    ( __sha512_rnd e f g h a b c d # u64 -3345356375505022440 w12 )
-    ( __sha512_sch w13 w11 w6 w14 )
-    ( __sha512_rnd d e f g h a b c # u64 -2983346525034927856 w13 )
-    ( __sha512_sch w14 w12 w7 w15 )
-    ( __sha512_rnd c d e f g h a b # u64 -860691631967231958 w14 )
-    ( __sha512_sch w15 w13 w8 w0 )
-    ( __sha512_rnd b c d e f g h a # u64 1182934255886127544 w15 )
-    ( __sha512_sch w0 w14 w9 w1 )
-    ( __sha512_rnd a b c d e f g h # u64 1847814050463011016 w0 )
-    ( __sha512_sch w1 w15 w10 w2 )
-    ( __sha512_rnd h a b c d e f g # u64 2177327727835720531 w1 )
-    ( __sha512_sch w2 w0 w11 w3 )
-    ( __sha512_rnd g h a b c d e f # u64 2830643537854262169 w2 )
-    ( __sha512_sch w3 w1 w12 w4 )
-    ( __sha512_rnd f g h a b c d e # u64 3796741975233480872 w3 )
-    ( __sha512_sch w4 w2 w13 w5 )
-    ( __sha512_rnd e f g h a b c d # u64 4115178125766777443 w4 )
-    ( __sha512_sch w5 w3 w14 w6 )
-    ( __sha512_rnd d e f g h a b c # u64 5681478168544905931 w5 )
-    ( __sha512_sch w6 w4 w15 w7 )
-    ( __sha512_rnd c d e f g h a b # u64 6601373596472566643 w6 )
-    ( __sha512_sch w7 w5 w0 w8 )
-    ( __sha512_rnd b c d e f g h a # u64 7507060721942968483 w7 )
-    ( __sha512_sch w8 w6 w1 w9 )
-    ( __sha512_rnd a b c d e f g h # u64 8399075790359081724 w8 )
-    ( __sha512_sch w9 w7 w2 w10 )
-    ( __sha512_rnd h a b c d e f g # u64 8693463985226723168 w9 )
-    ( __sha512_sch w10 w8 w3 w11 )
-    ( __sha512_rnd g h a b c d e f # u64 -8878714635349349518 w10 )
-    ( __sha512_sch w11 w9 w4 w12 )
-    ( __sha512_rnd f g h a b c d e # u64 -8302665154208450068 w11 )
-    ( __sha512_sch w12 w10 w5 w13 )
-    ( __sha512_rnd e f g h a b c d # u64 -8016688836872298968 w12 )
-    ( __sha512_sch w13 w11 w6 w14 )
-    ( __sha512_rnd d e f g h a b c # u64 -6606660893046293015 w13 )
-    ( __sha512_sch w14 w12 w7 w15 )
-    ( __sha512_rnd c d e f g h a b # u64 -4685533653050689259 w14 )
-    ( __sha512_sch w15 w13 w8 w0 )
-    ( __sha512_rnd b c d e f g h a # u64 -4147400797238176981 w15 )
-    ( __sha512_sch w0 w14 w9 w1 )
-    ( __sha512_rnd a b c d e f g h # u64 -3880063495543823972 w0 )
-    ( __sha512_sch w1 w15 w10 w2 )
-    ( __sha512_rnd h a b c d e f g # u64 -3348786107499101689 w1 )
-    ( __sha512_sch w2 w0 w11 w3 )
-    ( __sha512_rnd g h a b c d e f # u64 -1523767162380948706 w2 )
-    ( __sha512_sch w3 w1 w12 w4 )
-    ( __sha512_rnd f g h a b c d e # u64 -757361751448694408 w3 )
-    ( __sha512_sch w4 w2 w13 w5 )
-    ( __sha512_rnd e f g h a b c d # u64 500013540394364858 w4 )
-    ( __sha512_sch w5 w3 w14 w6 )
-    ( __sha512_rnd d e f g h a b c # u64 748580250866718886 w5 )
-    ( __sha512_sch w6 w4 w15 w7 )
-    ( __sha512_rnd c d e f g h a b # u64 1242879168328830382 w6 )
-    ( __sha512_sch w7 w5 w0 w8 )
-    ( __sha512_rnd b c d e f g h a # u64 1977374033974150939 w7 )
-    ( __sha512_sch w8 w6 w1 w9 )
-    ( __sha512_rnd a b c d e f g h # u64 2944078676154940804 w8 )
-    ( __sha512_sch w9 w7 w2 w10 )
-    ( __sha512_rnd h a b c d e f g # u64 3659926193048069267 w9 )
-    ( __sha512_sch w10 w8 w3 w11 )
-    ( __sha512_rnd g h a b c d e f # u64 4368137639120453308 w10 )
-    ( __sha512_sch w11 w9 w4 w12 )
-    ( __sha512_rnd f g h a b c d e # u64 4836135668995329356 w11 )
-    ( __sha512_sch w12 w10 w5 w13 )
-    ( __sha512_rnd e f g h a b c d # u64 5532061633213252278 w12 )
-    ( __sha512_sch w13 w11 w6 w14 )
-    ( __sha512_rnd d e f g h a b c # u64 6448918945643986474 w13 )
-    ( __sha512_sch w14 w12 w7 w15 )
-    ( __sha512_rnd c d e f g h a b # u64 6902733635092675308 w14 )
-    ( __sha512_sch w15 w13 w8 w0 )
-    ( __sha512_rnd b c d e f g h a # u64 7801388544844847127 w15 )
+    // Eight rounds a pass: eight rounds rotate a..h back to their own
+    // names, so no round moves a word.
+    : ~ i ri 0
+    ~ < ri 80 {
+        ( __sha512_rnd a b c d e f g h . kp ri . wp ri )
+        ( __sha512_rnd h a b c d e f g . kp + ri 1 . wp + ri 1 )
+        ( __sha512_rnd g h a b c d e f . kp + ri 2 . wp + ri 2 )
+        ( __sha512_rnd f g h a b c d e . kp + ri 3 . wp + ri 3 )
+        ( __sha512_rnd e f g h a b c d . kp + ri 4 . wp + ri 4 )
+        ( __sha512_rnd d e f g h a b c . kp + ri 5 . wp + ri 5 )
+        ( __sha512_rnd c d e f g h a b . kp + ri 6 . wp + ri 6 )
+        ( __sha512_rnd b c d e f g h a . kp + ri 7 . wp + ri 7 )
+        = ri + ri 8
+    }
 
     = . sp 0 + . sp 0 a
     = . sp 1 + . sp 1 b
