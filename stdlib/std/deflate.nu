@@ -246,6 +246,32 @@ $ `stdlib/std/bytes.nu`
 : Huff {
     ( Vec i ) count  // count[len] = number of codes of that length (0..15)
     ( Vec i ) symbol  // symbols sorted by (length, value)
+    ( Vec i ) fast  // 2^9 entries by the next 9 input bits: sym·16 + length, 0 = a longer code
+}
+
+// Codes up to this many bits decode with one lookup in Huff.fast; a longer
+// one (rare — the encoder gives them to rare symbols) takes the canonical
+// bit-at-a-time walk. 9 covers every fixed-Huffman code.
+@ __INFL_FAST_BITS → i { ^ 9 }
+
+// Top the bit buffer up from the input, a byte at a time, while it has
+// room: at most 56 live bits, so bit 63 stays clear and the arithmetic
+// `>>` that consumes bits never drags a sign in. 48+ bits is a whole
+// length/distance pair (15 + 5 + 15 + 13).
+@ __infl_fill inout InflState st → v {
+    : ~ i val . st bitbuf
+    : ~ i cnt . st bitcnt
+    : ~ i pos . st pos
+    : i len . st len
+    : *u d . st data
+    ~ & <= cnt 48 < pos len {
+        = val | val << # i . d pos cnt
+        = pos + pos 1
+        = cnt + cnt 8
+    }
+    = . st bitbuf val
+    = . st bitcnt cnt
+    = . st pos pos
 }
 
 // Read `need` bits LSB-first. Sets st.err on input underflow.
@@ -265,8 +291,25 @@ $ `stdlib/std/bytes.nu`
     ^ & val - << 1 need 1
 }
 
-// Decode one symbol with Huffman table h (puff.c algorithm).
+// Decode one symbol with Huffman table h: one lookup in h.fast when the
+// next code is at most __INFL_FAST_BITS long and its bits are all in, else
+// the canonical walk below (puff.c's algorithm), which also reports a
+// truncated or invalid code exactly as it always did.
 @ __infl_decode inout InflState st Huff h → i {
+    ? != . st err 0 { ^ -1 } {}
+    ? < . st bitcnt 15 { ( __infl_fill st ) } {}
+    : *i fp ( vec_data [i] . h fast )
+    : i e . fp & . st bitbuf 511
+    : i el & e 15
+    ? & != el 0 <= el . st bitcnt {
+        = . st bitbuf >> . st bitbuf el
+        = . st bitcnt - . st bitcnt el
+        ^ >> e 4
+    } {}
+    ^ ( __infl_decode_slow st h )
+}
+
+@ __infl_decode_slow inout InflState st Huff h → i {
     : ~ i code 0
     : ~ i first 0
     : ~ i index 0
@@ -318,7 +361,40 @@ $ `stdlib/std/bytes.nu`
         } {}
         = s + s 1
     }
-    ^ @ Huff { count symbol }
+    // The fast table. Canonical codes are handed out in (length, symbol)
+    // order, which is `symbol`'s order; DEFLATE sends a code's bits
+    // most-significant first into an LSB-first stream, so a code of length
+    // L reversed is the low L bits of the buffer, and it owns every entry
+    // whose low L bits match — every 2^L-th from there. An oversubscribed
+    // length list writes past its own codes; __infl_huff_valid rejects
+    // such a table before any symbol is decoded with it.
+    : ( Vec i ) fast ( __df_zeros 512 )
+    : *i fp ( vec_data [i] fast )
+    : *i cp ( vec_data [i] count )
+    : *i sp ( vec_data [i] symbol )
+    : ~ i code 0
+    : ~ i idx 0
+    : ~ i bits 1
+    ~ <= bits ( __INFL_FAST_BITS ) {
+        : i cnt . cp bits
+        : ~ i j 0
+        ~ < j cnt {
+            : ~ i rev 0
+            : ~ i b 0
+            ~ < b bits { = rev | << rev 1 & >> code b 1 = b + b 1 }
+            ? < rev 512 {
+                : i e | << . sp idx 4 bits
+                : ~ i f rev
+                ~ < f 512 { = . fp f e = f + f << 1 bits }
+            } {}
+            = code + code 1
+            = idx + idx 1
+            = j + j 1
+        }
+        = code << code 1
+        = bits + bits 1
+    }
+    ^ @ Huff { count symbol fast }
 }
 
 // A complete tree fills every code slot. Literal/distance alphabets may
@@ -379,41 +455,124 @@ $ `stdlib/std/bytes.nu`
 }
 
 // Decode a Huffman-coded block body (fixed or dynamic) into st.out.
+//
+// The hot loop keeps the bit reader in locals — the state's fields would
+// otherwise be reloaded after every byte written through the output
+// pointer, which may alias them as far as the optimiser can tell — and
+// decodes a symbol, and its extra bits, straight from the buffer when they
+// are all in it and the code is in the fast table. Everything else (a long
+// code, the input running out, an invalid code) goes through the
+// state-based helpers above with the locals written back first and read
+// back after, so every error is the one, at the place, it always was.
 @ __infl_codes inout InflState st ( Vec u ) out Huff lencode Huff distcode
 ( Vec i ) lenbase ( Vec i ) lenext ( Vec i ) distbase ( Vec i ) distext → v {
+    : *u d . st data
+    : i len . st len
+    : *i lfast ( vec_data [i] . lencode fast )
+    : *i dfast ( vec_data [i] . distcode fast )
+    : *i lb ( vec_data [i] lenbase )
+    : *i lx ( vec_data [i] lenext )
+    : *i db ( vec_data [i] distbase )
+    : *i dx ( vec_data [i] distext )
+    : ~ i bb . st bitbuf
+    : ~ i bc . st bitcnt
+    : ~ i pos . st pos
     : ~ b done F
-    ~ & ! done == . st err 0 {
-        : i sym ( __infl_decode st lencode )
-        ? != . st err 0 { ^ v } {}
-        ? < sym 0 { = . st err 2 } {
-            ? == sym 256 { = done T } {
+    ~ ! done {
+        ~ & <= bc 48 < pos len { = bb | bb << # i . d pos bc = pos + pos 1 = bc + bc 8 }
+        : ~ i sym -1
+        : i e . lfast & bb 511
+        : i el & e 15
+        ? & != el 0 <= el bc {
+            = bb >> bb el
+            = bc - bc el
+            = sym >> e 4
+        } {
+            = . st bitbuf bb = . st bitcnt bc = . st pos pos
+            = sym ( __infl_decode_slow st lencode )
+            = bb . st bitbuf = bc . st bitcnt = pos . st pos
+        }
+        ? != . st err 0 { = done T } {
+            ? < sym 0 { = . st err 2 = done T } {
                 ? < sym 256 {
-                    ? ( __infl_room st out 1 ) { ( vec_push [u] out # u sym ) } {}
+                    ? ( __infl_room st out 1 ) { ( vec_push [u] out # u sym ) } { = done T }
                 } {
-                    // length/distance back-reference
-                    : i li - sym 257
-                    ? >= li 29 { = . st err 2 } {
-                        : i length + ( __df_get lenbase li ) ( __infl_bits st ( __df_get lenext li ) )
-                        : i dsym ( __infl_decode st distcode )
-                        ? != . st err 0 { ^ v } {}
-                        ? | < dsym 0 >= dsym 30 { = . st err 4 } {
-                            : i dist + ( __df_get distbase dsym ) ( __infl_bits st ( __df_get distext dsym ) )
-                            : i outlen ( vec_len [u] out )
-                            ? != . st err 0 { ^ v } {}
-                            ? | > dist outlen > dist . st window { = . st err 4 } {
-                                ? ! ( __infl_room st out length ) { ^ v } {}
-                                : ~ i k 0
-                                ~ < k length {
-                                    : i srcidx - ( vec_len [u] out ) dist
-                                    : *u op ( vec_data [u] out )
-                                    ( vec_push [u] out # u . op srcidx )
-                                    = k + k 1
+                    ? == sym 256 { = done T } {
+                        // length/distance back-reference
+                        : i li - sym 257
+                        ? >= li 29 { = . st err 2 = done T } {
+                            : i lext . lx li
+                            : ~ i length . lb li
+                            ? <= lext bc {
+                                = length + length & bb - << 1 lext 1
+                                = bb >> bb lext
+                                = bc - bc lext
+                            } {
+                                = . st bitbuf bb = . st bitcnt bc = . st pos pos
+                                = length + length ( __infl_bits st lext )
+                                = bb . st bitbuf = bc . st bitcnt = pos . st pos
+                            }
+                            ? != . st err 0 { = done T } {
+                                ~ & <= bc 48 < pos len { = bb | bb << # i . d pos bc = pos + pos 1 = bc + bc 8 }
+                                : ~ i dsym -1
+                                : i de . dfast & bb 511
+                                : i del & de 15
+                                ? & != del 0 <= del bc {
+                                    = bb >> bb del
+                                    = bc - bc del
+                                    = dsym >> de 4
+                                } {
+                                    = . st bitbuf bb = . st bitcnt bc = . st pos pos
+                                    = dsym ( __infl_decode_slow st distcode )
+                                    = bb . st bitbuf = bc . st bitcnt = pos . st pos
+                                }
+                                ? != . st err 0 { = done T } {
+                                    ? | < dsym 0 >= dsym 30 { = . st err 4 = done T } {
+                                        : i dext . dx dsym
+                                        : ~ i dist . db dsym
+                                        ? <= dext bc {
+                                            = dist + dist & bb - << 1 dext 1
+                                            = bb >> bb dext
+                                            = bc - bc dext
+                                        } {
+                                            = . st bitbuf bb = . st bitcnt bc = . st pos pos
+                                            = dist + dist ( __infl_bits st dext )
+                                            = bb . st bitbuf = bc . st bitcnt = pos . st pos
+                                        }
+                                        : i outlen ( vec_len [u] out )
+                                        ? != . st err 0 { = done T } {
+                                            ? | > dist outlen > dist . st window { = . st err 4 = done T } {
+                                                ? ! ( __infl_room st out length ) { = done T } {
+                                                    // Room first, then copy inside the
+                                                    // buffer: one memcpy when source and
+                                                    // destination do not overlap, else
+                                                    // byte by byte forward, so a run reads
+                                                    // the bytes it just wrote.
+                                                    ( vec_reserve [u] out length )
+                                                    : *u op ( vec_data [u] out )
+                                                    : i src - outlen dist
+                                                    ? >= dist length {
+                                                        ( nurl_memcpy # s + # i op outlen # s + # i op src length )
+                                                    } {
+                                                        : ~ i k 0
+                                                        ~ < k length { = . op + outlen k . op + src k = k + k 1 }
+                                                    }
+                                                    : b _n ( vec_set_len [u] out + outlen length )
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
-                } } }
+                }
+            }
+        }
     }
+    = . st bitbuf bb
+    = . st bitcnt bc
+    = . st pos pos
 }
 
 // Fixed Huffman tables (RFC 1951 §3.2.6).
@@ -526,7 +685,10 @@ $ `stdlib/std/bytes.nu`
             = last != bfinal 0
             ? != . st err 0 {} {
                 ? == btype 0 {
-                    // Stored: align to byte, read LEN/NLEN, copy.
+                    // Stored: align to byte, read LEN/NLEN, copy. The
+                    // buffer may hold whole bytes read ahead of the
+                    // partial one (__infl_fill): those go back to the input.
+                    = . st pos - . st pos >> . st bitcnt 3
                     = . st bitbuf 0
                     = . st bitcnt 0
                     ? > + . st pos 4 . st len { = . st err 5 } {
@@ -539,11 +701,7 @@ $ `stdlib/std/bytes.nu`
                         ? != ^^ blen complement 65535 { = . st err 3 } {}
                         ? > blen - . st len . st pos { = . st err 5 } {}
                         ? & == . st err 0 ( __infl_room st out blen ) {
-                            : ~ i k 0
-                            ~ < k blen {
-                                ( vec_push [u] out # u . d + . st pos k )
-                                = k + k 1
-                            }
+                            ( bytes_extend_raw out # s + # i d . st pos blen )
                             = . st pos + . st pos blen
                         } {}
                     }
@@ -584,7 +742,8 @@ $ `stdlib/std/bytes.nu`
     ? != . st err 0 {
         ^ @ !Inflated DeflateErr { F ( __df_err . st err ) }
     } {}
-    ^ @ !Inflated DeflateErr { T @ Inflated { out . st pos } }
+    // Whole bytes still in the bit buffer were read ahead, not consumed.
+    ^ @ !Inflated DeflateErr { T @ Inflated { out - . st pos >> . st bitcnt 3 } }
 }
 
 // Decode one stream from src[start..], leaving trailers to the caller.
