@@ -458,16 +458,48 @@ inline @ __chacha20_xor8_v256 i k0 i k1 i k2 i k3 i k4 i k5 i k6 i k7 i ctr i n0
     ( __cc_x32 src dst 480 ( nurl_v256_permhi128 x11 x15 ) )
 }
 
+// The wide passes over n bytes from dp to op, block counter ctr: eight
+// blocks a pass over v256 lanes in the x86-64-v3 clone, four over v128
+// lanes after that. Returns the bytes done — a multiple of 256, the rest
+// left to the caller's narrower kernels. A function of its own, called
+// only where v128 is native: a wasm module (whose v128 scalarises) carries
+// it but its JIT never compiles it, and the caller stays small enough for
+// a register allocator to keep its two-block loop in registers.
+simd @ __chacha20_xor_wide ( Vec u ) key i ctr0 i nn0 i nn1 i nn2 * u dp * u op i n → i {
+    : i k0 ( __ld32 key 0 )
+    : i k1 ( __ld32 key 4 )
+    : i k2 ( __ld32 key 8 )
+    : i k3 ( __ld32 key 12 )
+    : i k4 ( __ld32 key 16 )
+    : i k5 ( __ld32 key 20 )
+    : i k6 ( __ld32 key 24 )
+    : i k7 ( __ld32 key 28 )
+    : ~ i ctr ctr0
+    : ~ i off 0
+    ? & >= n 512 != 0 # i ( nurl_cpu_x86_v3 ) {
+        ~ <= + off 512 n {
+            ( __chacha20_xor8_v256 k0 k1 k2 k3 k4 k5 k6 k7 ctr nn0 nn1 nn2 # *u + # i dp off # *u + # i op off )
+            = ctr + ctr 8
+            = off + off 512
+        }
+    } {}
+    ~ <= + off 256 n {
+        ( __chacha20_xor4_v128 k0 k1 k2 k3 k4 k5 k6 k7 ctr nn0 nn1 nn2 # *u + # i dp off # *u + # i op off )
+        = ctr + ctr 4
+        = off + off 256
+    }
+    ^ off
+}
+
 // out[0..n) = data[doff..doff+n) XOR ChaCha20(key, counter, nonce).
 //
 // Dispatches to the vector kernels on a little-endian host — every
 // platform NURL targets in practice — and to the scalar reference
-// otherwise: eight blocks a pass over v256 lanes in the x86-64-v3 clone,
-// four over v128 lanes where vectors are native, then two, then one. The
-// vector paths XOR whole blocks straight from the input pointer to the
-// output pointer; only a final partial block goes through a 64-byte
-// keystream scratch.
-simd @ chacha20_xor_range ( Vec u ) key i counter ( Vec u ) nonce ( Vec u ) data i doff i n → ( Vec u ) {
+// otherwise: the wide passes where vectors are native (__chacha20_xor_wide),
+// then two blocks a pass, then one. The vector paths XOR whole blocks
+// straight from the input pointer to the output pointer; only a final
+// partial block goes through a 64-byte keystream scratch.
+@ chacha20_xor_range ( Vec u ) key i counter ( Vec u ) nonce ( Vec u ) data i doff i n → ( Vec u ) {
     ? == 0 ( __le_words )
     { ^ ( _chacha20_xor_range_scalar key counter nonce data doff n ) } {}
     : ( Vec u ) out ( __xor_out n 128 )
@@ -483,30 +515,12 @@ simd @ chacha20_xor_range ( Vec u ) key i counter ( Vec u ) nonce ( Vec u ) data
     : *u ks # *u + # i op ( __xor_scratch_at n )
     : ~ i ctr counter
     : ~ i off 0
-    // Four blocks a pass while at least 256 bytes remain, then two while
-    // 128 do; the tail falls through to the one-block kernel and then to a
-    // byte loop.
+    // The wide passes while at least 256 bytes remain, then two blocks a
+    // pass while 128 do; the tail falls through to the one-block kernel
+    // and then to a byte loop.
     ? & >= n 256 != 0 ( nurl_simd128_native ) {
-        : i k0 ( __ld32 key 0 )
-        : i k1 ( __ld32 key 4 )
-        : i k2 ( __ld32 key 8 )
-        : i k3 ( __ld32 key 12 )
-        : i k4 ( __ld32 key 16 )
-        : i k5 ( __ld32 key 20 )
-        : i k6 ( __ld32 key 24 )
-        : i k7 ( __ld32 key 28 )
-        ? & >= n 512 != 0 # i ( nurl_cpu_x86_v3 ) {
-            ~ <= + off 512 n {
-                ( __chacha20_xor8_v256 k0 k1 k2 k3 k4 k5 k6 k7 ctr nn0 nn1 nn2 # *u + # i dp off # *u + # i op off )
-                = ctr + ctr 8
-                = off + off 512
-            }
-        } {}
-        ~ <= + off 256 n {
-            ( __chacha20_xor4_v128 k0 k1 k2 k3 k4 k5 k6 k7 ctr nn0 nn1 nn2 # *u + # i dp off # *u + # i op off )
-            = ctr + ctr 4
-            = off + off 256
-        }
+        = off ( __chacha20_xor_wide key ctr nn0 nn1 nn2 dp op n )
+        = ctr + ctr >> off 6
     } {}
     ~ <= + off 128 n {
         ( __chacha20_block2_v128 s0 s1 s2
