@@ -51,6 +51,7 @@ $ `stdlib/ext/http3_client.nu`
 $ `stdlib/ext/cookies.nu`
 $ `stdlib/ext/compress.nu`
 $ `stdlib/core/rcbox.nu`
+$ `stdlib/core/slice.nu`
 
 // ── Errors ────────────────────────────────────────────────────────────
 //
@@ -73,12 +74,13 @@ $ `stdlib/core/rcbox.nu`
 // literal — the client's own copy so it needs nothing file-private from
 // http_request.nu.
 @ _hc_eq_ci s a s b → b {
+    : ( Slice u ) a_v ( slice_of_str a )
     : i la ( nurl_str_len a )
     ? != la ( nurl_str_len b ) { ^ F } {}
     : ~ i k 0
     : ~ b ok T
     ~ & ok < k la {
-        : ~ i ca ( nurl_str_get a k )
+        : ~ i ca ( slice_byte a_v k )
         : ~ i cb ( nurl_str_get b k )
         ? & >= ca 65 <= ca 90 { = ca + ca 32 } {}
         ? & >= cb 65 <= cb 90 { = cb + cb 32 } {}
@@ -549,6 +551,7 @@ unsafe @ __hc_do_h3 * HttpClientImpl c * HcOriginImpl o s method s path ( Vec He
 unsafe @ __hc_capture_alt_svc * HttpClientImpl c * HcOriginImpl o HttpResponse r → v {
     : String v ( __hc_header_value . r headers `alt-svc` )
     : s av ( string_data v )
+    : ( Slice u ) av_v ( slice_of_str av )
     : i n ( nurl_str_len av )
     ? == n 0 { ^ } {}
     ? ( _hc_eq_ci av `clear` ) { = . o alt_h3_port 0 ^ } {}
@@ -558,32 +561,32 @@ unsafe @ __hc_capture_alt_svc * HttpClientImpl c * HcOriginImpl o HttpResponse r
     : ~ i done 0
     ~ & == done 0 < p n {
         // one alternative: proto "=" quoted-authority *( ";" param )
-        ~ & < p n | == ( nurl_str_get av p ) 32 == ( nurl_str_get av p ) 44 { = p + p 1 }
+        ~ & < p n | == ( slice_byte av_v p ) 32 == ( slice_byte av_v p ) 44 { = p + p 1 }
         : i ps p
-        ~ & < p n != ( nurl_str_get av p ) 61 { = p + p 1 }
+        ~ & < p n != ( slice_byte av_v p ) 61 { = p + p 1 }
         : i pe p
         ? >= p n { = done 1 } {
             = p + p 1
-            : b is_h3 & == - pe ps 2 & == ( nurl_str_get av ps ) 104 == ( nurl_str_get av + ps 1 ) 51
+            : b is_h3 & == - pe ps 2 & == ( slice_byte av_v ps ) 104 == ( slice_byte av_v + ps 1 ) 51
             // the authority, in quotes: [host]:port
             : ~ i port 0
             : ~ i same_host T
-            ? & < p n == ( nurl_str_get av p ) 34 {
+            ? & < p n == ( slice_byte av_v p ) 34 {
                 = p + p 1
-                ? & < p n != ( nurl_str_get av p ) 58 { = same_host F } {}
-                ~ & < p n != ( nurl_str_get av p ) 58 { = p + p 1 }
+                ? & < p n != ( slice_byte av_v p ) 58 { = same_host F } {}
+                ~ & < p n != ( slice_byte av_v p ) 58 { = p + p 1 }
                 ? < p n { = p + p 1 } {}
-                ~ & < p n & >= ( nurl_str_get av p ) 48 <= ( nurl_str_get av p ) 57 { = port + * port 10 - ( nurl_str_get av p ) 48 = p + p 1 }
-                ~ & < p n != ( nurl_str_get av p ) 34 { = p + p 1 }
+                ~ & < p n & >= ( slice_byte av_v p ) 48 <= ( slice_byte av_v p ) 57 { = port + * port 10 - ( slice_byte av_v p ) 48 = p + p 1 }
+                ~ & < p n != ( slice_byte av_v p ) 34 { = p + p 1 }
                 ? < p n { = p + p 1 } {}
             } {}
             // parameters up to the next comma: ma=N is the one we read
             : ~ i this_ma 86400
-            ~ & < p n != ( nurl_str_get av p ) 44 {
-                ? & == ( nurl_str_get av p ) 109 & < + p 2 n & == ( nurl_str_get av + p 1 ) 97 == ( nurl_str_get av + p 2 ) 61 {
+            ~ & < p n != ( slice_byte av_v p ) 44 {
+                ? & == ( slice_byte av_v p ) 109 & < + p 2 n & == ( slice_byte av_v + p 1 ) 97 == ( slice_byte av_v + p 2 ) 61 {
                     = p + p 3
                     : ~ i mv 0
-                    ~ & < p n & >= ( nurl_str_get av p ) 48 <= ( nurl_str_get av p ) 57 { = mv + * mv 10 - ( nurl_str_get av p ) 48 = p + p 1 }
+                    ~ & < p n & >= ( slice_byte av_v p ) 48 <= ( slice_byte av_v p ) 57 { = mv + * mv 10 - ( slice_byte av_v p ) 48 = p + p 1 }
                     = this_ma mv
                 } { = p + p 1 }
             }

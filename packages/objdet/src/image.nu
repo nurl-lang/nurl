@@ -10,6 +10,7 @@
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
 $ `deps/image/src/image.nu`
+$ `stdlib/core/slice.nu`
 
 & `c` @ nurl_poke_f32 *u base i idx f val → v
 
@@ -45,12 +46,14 @@ $ `deps/image/src/image.nu`
 }
 
 @ __od_sfx s path s sfx → b {
+    : ( Slice u ) sfx_v ( slice_of_str sfx )
+    : ( Slice u ) path_v ( slice_of_str path )
     : i n ( nurl_str_len path )
     : i m ( nurl_str_len sfx )
     ? < n m { ^ F } {}
     : ~ i k 0
     ~ < k m {
-        ? == ( nurl_str_get path + - n m k ) ( nurl_str_get sfx k ) {} { ^ F }
+        ? == ( slice_byte path_v + - n m k ) ( slice_byte sfx_v k ) {} { ^ F }
         = k + k 1
     }
     ^ T

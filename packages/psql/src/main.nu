@@ -26,6 +26,7 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/ext/env.nu`
 $ `deps/cli/src/cli.nu`
 $ `pg.nu`
+$ `stdlib/core/slice.nu`
 
 & `c` @ isatty i32 fd → i32
 
@@ -40,11 +41,12 @@ $ `pg.nu`
 }
 
 @ __atoi s str → i {
+    : ( Slice u ) str_v ( slice_of_str str )
     : i n ( nurl_str_len str )
     : ~ i v 0
     : ~ i k 0
     ~ < k n {
-        : i c ( nurl_str_get str k )
+        : i c ( slice_byte str_v k )
         ? & >= c 48 <= c 57 { = v + * v 10 - c 48 } {}
         = k + k 1
     }
@@ -70,13 +72,14 @@ $ `pg.nu`
 // True when `txt` looks like a number (optional leading '-', digits, at
 // most one '.') — used to right-align numeric columns the way psql does.
 @ __is_num s txt → b {
+    : ( Slice u ) txt_v ( slice_of_str txt )
     : i n ( nurl_str_len txt )
     ? == n 0 { ^ F } {}
     : ~ i k 0
     : ~ i digits 0
     : ~ i dots 0
     ~ < k n {
-        : i ch ( nurl_str_get txt k )
+        : i ch ( slice_byte txt_v k )
         ? & == k 0 == ch 45 {} {
             ? & >= ch 48 <= ch 57 { = digits + digits 1 } {
                 ? == ch 46 { = dots + dots 1 } { ^ F }
@@ -207,12 +210,13 @@ $ `pg.nu`
 // Quote `txt` as a SQL string literal: wrap in single quotes, double any
 // embedded single quotes.
 @ __quote_lit s txt → String {
+    : ( Slice u ) txt_v ( slice_of_str txt )
     : i n ( nurl_str_len txt )
     : String out ( string_with_cap + n 4 )
     ( string_push_char out 39 )
     : ~ i k 0
     ~ < k n {
-        : i ch ( nurl_str_get txt k )
+        : i ch ( slice_byte txt_v k )
         ? == ch 39 { ( string_push_char out 39 ) } {}
         ( string_push_char out ch )
         = k + k 1
@@ -348,6 +352,7 @@ $ `pg.nu`
 }
 
 @ __parse_url s url ConnInfo ci → ConnInfo {
+    : ( Slice u ) url_v ( slice_of_str url )
     : ~ ConnInfo c ci
     : i n ( nurl_str_len url )
     : ~ i p 0
@@ -358,7 +363,7 @@ $ `pg.nu`
     : ~ i slash -1
     : ~ i k p
     ~ < k n {
-        : i ch ( nurl_str_get url k )
+        : i ch ( slice_byte url_v k )
         ? & == ch 64 == at -1 { = at k } {}
         ? & == ch 47 == slash -1 { = slash k } {}
         = k + k 1
@@ -380,7 +385,7 @@ $ `pg.nu`
     : ~ i hostend ? != slash -1 slash n
     : ~ i q -1
     = k hoststart
-    ~ < k n { ? & == ( nurl_str_get url k ) 63 == q -1 { = q k } {} = k + k 1 }
+    ~ < k n { ? & == ( slice_byte url_v k ) 63 == q -1 { = q k } {} = k + k 1 }
     ? & != q -1 | == slash -1 < q hostend { = hostend q } {}
     : String uall ( string_from url )
     : String hostport ( string_substr uall hoststart - hostend hoststart )

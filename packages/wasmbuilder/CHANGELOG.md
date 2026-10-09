@@ -20,6 +20,12 @@ All notable changes to this package are documented here.
   without them, 750M with). The IR rewrite replaces both calls with 0;
   the guarded branches fold away and `--gc-sections` drops the kernels.
 
+Loops that walked a string with `nurl_str_get` — which measures the
+string from its start on every call, so a scan is quadratic in the
+string's length, and nurlc 0.72 warns about the shape — read through a
+view measured once (`slice_of_str` + `slice_byte`). No change in
+behaviour.
+
 ## [0.3.4] — 2026-10-09
 
 Requires NURL 0.72.0, which draws the raw-memory boundary at every call:

@@ -22,6 +22,7 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/std/time.nu`
 $ `stdlib/ext/json.nu`
 $ `stdlib/ext/sqlite.nu`
+$ `stdlib/core/slice.nu`
 
 // One statement per exec call — sqlite_exec handles compound SQL, but
 // keeping the schema as discrete statements makes a failure traceable.
@@ -448,12 +449,13 @@ $ `stdlib/ext/sqlite.nu`
 // Strip SQL LIKE metacharacters from a raw query (mirrors the Worker:
 // the query matches literally, wrapped in %...%).
 @ __reg_like_pattern s q → String {
+    : ( Slice u ) q_v ( slice_of_str q )
     : String out ( string_with_cap + ( nurl_str_len q ) 2 )
     ( string_push_char out 37 )  // %
     : i n ( nurl_str_len q )
     : ~ i k 0
     ~ < k n {
-        : i c ( nurl_str_get q k )
+        : i c ( slice_byte q_v k )
         ? | | == c 37 == c 95 == c 92 {} {  // strip % _ \
             ( string_push_char out c )
         }

@@ -24,6 +24,7 @@ $ `stdlib/std/time.nu`
 $ `stdlib/core/rcbox.nu`
 $ `module.nu`
 $ `rjit.nu`
+$ `stdlib/core/slice.nu`
 
 // round-to-nearest-even (wasm f*.nearest) — libm rint honours the default mode.
 & `m` @ rint f x → f
@@ -2883,9 +2884,10 @@ unsafe @ __trap_backtrace * InterpImpl it * ModuleImpl m s top → v {
 }
 
 @ __msg_push_str ( Vec u ) msg s str → v {
+    : ( Slice u ) str_v ( slice_of_str str )
     : i n ( nurl_str_len str )
     : ~ i k 0
-    ~ < k n { ( vec_push [u] msg # u ( nurl_str_get str k ) ) = k + k 1 }
+    ~ < k n { ( vec_push [u] msg # u ( slice_byte str_v k ) ) = k + k 1 }
 }
 
 @ __msg_push_vec ( Vec u ) msg ( Vec u ) src → v {
@@ -6578,11 +6580,12 @@ unsafe @ __convert * InterpImpl it i op i ab → i {
 // i32 errno result. Pointer args index linear memory.
 
 @ __feq ( Vec u ) field s name → b {
+    : ( Slice u ) name_v ( slice_of_str name )
     : i n ( vec_len [u] field )
     ? != n ( nurl_str_len name ) { ^ F } {}
     : ~ b eq T : ~ i k 0
     ~ & eq < k n {
-        ? != ?? ( vec_get [u] field k ) { T x → # i x F → -1 } ( nurl_str_get name k ) { = eq F } {}
+        ? != ?? ( vec_get [u] field k ) { T x → # i x F → -1 } ( slice_byte name_v k ) { = eq F } {}
         = k + k 1
     }
     ^ eq
@@ -7020,12 +7023,13 @@ unsafe @ __wasi_fd_readdir * InterpImpl it → v {
 
 // hostdir + "/" + name as an owned String (host-side join for readdir probes).
 @ __join_path2 String dir s name → String {
+    : ( Slice u ) name_v ( slice_of_str name )
     : ( Vec u ) full ( bytes_from_str ( string_data dir ) )
     : i hn ( vec_len [u] full )
     ? & > hn 0 != ?? ( vec_get [u] full - hn 1 ) { T x → # i x F → 0 } 47 { ( vec_push [u] full # u 47 ) } {}
     : i nl ( nurl_str_len name )
     : ~ i k 0
-    ~ < k nl { ( vec_push [u] full # u ( nurl_str_get name k ) ) = k + k 1 }
+    ~ < k nl { ( vec_push [u] full # u ( slice_byte name_v k ) ) = k + k 1 }
     : String out ( bytes_to_str full )
     ^ out
 }
@@ -7703,13 +7707,14 @@ unsafe @ __net_cstr * InterpImpl it i off → s {
 // produces text (addresses, DNS answers), because the host cannot
 // allocate inside the guest's linear memory.
 unsafe @ __net_put_str * InterpImpl it i off i cap s src → i {
+    : ( Slice u ) src_v ( slice_of_str src )
     ? == # i src 0 { ^ 0 } {}
     : i n ( nurl_str_len src )
     : ~ i m n
     ? > m cap { = m cap } {}
     ? < m 0 { = m 0 } {}
     : ~ i k 0
-    ~ < k m { ( __mem_store it + off k 1 ( nurl_str_get src k ) ) = k + k 1 }
+    ~ < k m { ( __mem_store it + off k 1 ( slice_byte src_v k ) ) = k + k 1 }
     ^ m
 }
 

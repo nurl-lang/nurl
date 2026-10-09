@@ -32,6 +32,7 @@ $ `stdlib/std/bytes.nu`
 $ `stdlib/std/hashmap.nu`
 $ `stdlib/std/utf8.nu`
 $ `stdlib/core/rcbox.nu`
+$ `stdlib/core/slice.nu`
 
 : i TT_NORMAL 1
 : i TT_UNKNOWN 2
@@ -320,7 +321,7 @@ unsafe @ tok_unk Tok t__h → i {
 
 // Push token(s) for one unmerged symbol: vocab piece, else per-byte
 // <0xNN>, else UNK once.
-unsafe @ __tk_spm_emit * TokImpl t s esc i off i len ( Vec i ) out → v {
+unsafe @ __tk_spm_emit * TokImpl t s esc ( Slice u ) esc_v i off i len ( Vec i ) out → v {
     : String sym ( string_new )
     ( string_push_bytes sym # *u + # i esc off len )
     ?? ( __tk_get . t lookup ( string_data sym ) ) {
@@ -328,7 +329,7 @@ unsafe @ __tk_spm_emit * TokImpl t s esc i off i len ( Vec i ) out → v {
         F → {
             : ~ i j 0
             ~ < j len {
-                : i bv ( nurl_str_get esc + off j )
+                : i bv ( slice_byte esc_v + off j )
                 : i bid ( _tk_geti . t byte_id bv -1 )
                 ? >= bid 0 { ( vec_push [i] out bid ) } {
                     ? >= . t unk 0 { ( vec_push [i] out . t unk ) } {}
@@ -340,6 +341,7 @@ unsafe @ __tk_spm_emit * TokImpl t s esc i off i len ( Vec i ) out → v {
 }
 
 unsafe @ __tk_spm_encode * TokImpl t s text ( Vec i ) out → v {
+    : ( Slice u ) text_v ( slice_of_str text )
     // escape: optional leading space, then every ' ' → ▁ (E2 96 81)
     : String esc ( string_new )
     ? & . t add_space_prefix > ( nurl_str_len text ) 0 {
@@ -348,7 +350,7 @@ unsafe @ __tk_spm_encode * TokImpl t s text ( Vec i ) out → v {
     : ~ i p 0
     : i tn ( nurl_str_len text )
     ~ < p tn {
-        : i b2 ( nurl_str_get text p )
+        : i b2 ( slice_byte text_v p )
         ? == b2 32 { ( string_push_str esc `▁` ) } { ( string_push_char esc b2 ) }
         = p + p 1
     }
@@ -420,9 +422,10 @@ unsafe @ __tk_spm_encode * TokImpl t s text ( Vec i ) out → v {
         } {}
     }
 
+    : ( Slice u ) e_v ( slice_of_str e )
     : ~ i j 0
     ~ >= j 0 {
-        ( __tk_spm_emit t e ( _tk_geti starts j 0 ) ( _tk_geti lens j 0 ) out )
+        ( __tk_spm_emit t e e_v ( _tk_geti starts j 0 ) ( _tk_geti lens j 0 ) out )
         = j ( _tk_geti nxt j -1 )
     }
 }
@@ -447,12 +450,12 @@ unsafe @ __tk_spm_encode * TokImpl t s text ( Vec i ) out → v {
 
 // GPT-2 contraction after an apostrophe at text[p]: returns the length
 // INCLUDING the apostrophe, or 0.
-@ __tk_contraction s text i p i n → i {
+@ __tk_contraction ( Slice u ) text_v i p i n → i {
     ? >= + p 1 n { ^ 0 } {}
-    : i c1 ( nurl_str_get text + p 1 )
+    : i c1 ( slice_byte text_v + p 1 )
     ? | | == c1 115 == c1 116 | == c1 109 == c1 100 { ^ 2 } {}
     ? >= + p 2 n { ^ 0 } {}
-    : i c2 ( nurl_str_get text + p 2 )
+    : i c2 ( slice_byte text_v + p 2 )
     ? & == c1 114 == c2 101 { ^ 3 } {}
     ? & == c1 118 == c2 101 { ^ 3 } {}
     ? & == c1 108 == c2 108 { ^ 3 } {}
@@ -474,26 +477,26 @@ unsafe @ __tk_spm_encode * TokImpl t s text ( Vec i ) out → v {
 //                                        before a word yields k−1 here and
 //                                        leaves the last space to rule 2
 //   7  \s+                                anything left
-@ __tk_pretoken_len_qwen2 s text i p i n → i {
-    : i b0 ( nurl_str_get text p )
+@ __tk_pretoken_len_qwen2 ( Slice u ) text_v i p i n → i {
+    : i b0 ( slice_byte text_v p )
 
     // 1
     ? == b0 39 {
-        : i cl ( __tk_contraction_ci text p n )
+        : i cl ( __tk_contraction_ci text_v p n )
         ? > cl 0 { ^ cl } {}
     } {}
 
     // 2 — the lead char must not be a letter, a digit or a newline
     ? & ! ( __tk_is_letterish b0 ) & ! ( __tk_is_ascii_digit b0 ) & != b0 10 != b0 13 {
-        ? & < + p 1 n ( __tk_is_letterish ( nurl_str_get text + p 1 ) ) {
+        ? & < + p 1 n ( __tk_is_letterish ( slice_byte text_v + p 1 ) ) {
             : ~ i r + p 1
-            ~ & < r n ( __tk_is_letterish ( nurl_str_get text r ) ) { = r + r 1 }
+            ~ & < r n ( __tk_is_letterish ( slice_byte text_v r ) ) { = r + r 1 }
             ^ - r p
         } {}
     } {}
     ? ( __tk_is_letterish b0 ) {
         : ~ i r p
-        ~ & < r n ( __tk_is_letterish ( nurl_str_get text r ) ) { = r + r 1 }
+        ~ & < r n ( __tk_is_letterish ( slice_byte text_v r ) ) { = r + r 1 }
         ^ - r p
     } {}
 
@@ -504,7 +507,7 @@ unsafe @ __tk_spm_encode * TokImpl t s text ( Vec i ) out → v {
     : ~ i q p
     : ~ i lead 0
     ? & == b0 32 < + p 1 n {
-        : i b1 ( nurl_str_get text + p 1 )
+        : i b1 ( slice_byte text_v + p 1 )
         ? & ! ( __tk_is_ws b1 ) & ! ( __tk_is_letterish b1 ) ! ( __tk_is_ascii_digit b1 ) {
             = q + p 1
             = lead 1
@@ -514,11 +517,11 @@ unsafe @ __tk_spm_encode * TokImpl t s text ( Vec i ) out → v {
         : ~ i r q
         : ~ b more T
         ~ & more < r n {
-            : i cc ( nurl_str_get text r )
+            : i cc ( slice_byte text_v r )
             ? | | ( __tk_is_ws cc ) ( __tk_is_letterish cc ) ( __tk_is_ascii_digit cc ) { = more F } { = r + r 1 }
         }
         ? > r q {
-            ~ & < r n | == ( nurl_str_get text r ) 10 == ( nurl_str_get text r ) 13 { = r + r 1 }
+            ~ & < r n | == ( slice_byte text_v r ) 10 == ( slice_byte text_v r ) 13 { = r + r 1 }
             ^ - r p
         } {}
     } {}
@@ -526,12 +529,12 @@ unsafe @ __tk_spm_encode * TokImpl t s text ( Vec i ) out → v {
     // 5/6/7 — whitespace
     ? ( __tk_is_ws b0 ) {
         : ~ i r p
-        ~ & < r n ( __tk_is_ws ( nurl_str_get text r ) ) { = r + r 1 }
+        ~ & < r n ( __tk_is_ws ( slice_byte text_v r ) ) { = r + r 1 }
         // 5: through the LAST newline inside the run, if any
         : ~ i nl -1
         : ~ i k p
         ~ < k r {
-            : i cc ( nurl_str_get text k )
+            : i cc ( slice_byte text_v k )
             ? | == cc 10 == cc 13 { = nl k } {}
             = k + k 1
         }
@@ -548,12 +551,12 @@ unsafe @ __tk_spm_encode * TokImpl t s text ( Vec i ) out → v {
 
 // Case-insensitive contraction after the apostrophe at text[p]
 // ('s 't 're 've 'm 'll 'd, either case). Length includes the quote.
-@ __tk_contraction_ci s text i p i n → i {
+@ __tk_contraction_ci ( Slice u ) text_v i p i n → i {
     ? >= + p 1 n { ^ 0 } {}
-    : i c1 ( __tk_lower ( nurl_str_get text + p 1 ) )
+    : i c1 ( __tk_lower ( slice_byte text_v + p 1 ) )
     ? | | == c1 115 == c1 116 | == c1 109 == c1 100 { ^ 2 } {}
     ? >= + p 2 n { ^ 0 } {}
-    : i c2 ( __tk_lower ( nurl_str_get text + p 2 ) )
+    : i c2 ( __tk_lower ( slice_byte text_v + p 2 ) )
     ? & == c1 114 == c2 101 { ^ 3 } {}
     ? & == c1 118 == c2 101 { ^ 3 } {}
     ? & == c1 108 == c2 108 { ^ 3 } {}
@@ -565,10 +568,10 @@ unsafe @ __tk_spm_encode * TokImpl t s text ( Vec i ) out → v {
 }
 
 // One GPT-2 pre-token starting at p; returns its byte length (≥ 1).
-@ __tk_pretoken_len s text i p i n → i {
-    : i b0 ( nurl_str_get text p )
+@ __tk_pretoken_len ( Slice u ) text_v i p i n → i {
+    : i b0 ( slice_byte text_v p )
     ? == b0 39 {
-        : i cl ( __tk_contraction text p n )
+        : i cl ( __tk_contraction text_v p n )
         ? > cl 0 { ^ cl } {}
     } {}
     // ' ?<run>': a single leading space glues to a following letter /
@@ -576,21 +579,21 @@ unsafe @ __tk_spm_encode * TokImpl t s text ( Vec i ) out → v {
     : ~ i q p
     : ~ i lead 0
     ? & == b0 32 < + p 1 n {
-        : i b1 ( nurl_str_get text + p 1 )
+        : i b1 ( slice_byte text_v + p 1 )
         ? ! ( __tk_is_ws b1 ) {
             = q + p 1
             = lead 1
         } {}
     } {}
-    : i c ( nurl_str_get text q )
+    : i c ( slice_byte text_v q )
     ? ( __tk_is_letterish c ) {
         : ~ i r q
-        ~ & < r n ( __tk_is_letterish ( nurl_str_get text r ) ) { = r + r 1 }
+        ~ & < r n ( __tk_is_letterish ( slice_byte text_v r ) ) { = r + r 1 }
         ^ + lead - r q
     } {}
     ? ( __tk_is_ascii_digit c ) {
         : ~ i r q
-        ~ & < r n ( __tk_is_ascii_digit ( nurl_str_get text r ) ) { = r + r 1 }
+        ~ & < r n ( __tk_is_ascii_digit ( slice_byte text_v r ) ) { = r + r 1 }
         ^ + lead - r q
     } {}
     ? ( __tk_is_ws c ) {
@@ -603,7 +606,7 @@ unsafe @ __tk_spm_encode * TokImpl t s text ( Vec i ) out → v {
         // not, and nothing noticed until a vocabulary without a merge for the
         // double space came along.)
         : ~ i r q
-        ~ & < r n ( __tk_is_ws ( nurl_str_get text r ) ) { = r + r 1 }
+        ~ & < r n ( __tk_is_ws ( slice_byte text_v r ) ) { = r + r 1 }
         ? & < r n > - r q 1 { ^ - - r q 1 } {}
         ^ - r q
     } {}
@@ -611,19 +614,19 @@ unsafe @ __tk_spm_encode * TokImpl t s text ( Vec i ) out → v {
     : ~ i r q
     : ~ b more T
     ~ & more < r n {
-        : i cc ( nurl_str_get text r )
+        : i cc ( slice_byte text_v r )
         ? | | ( __tk_is_ws cc ) ( __tk_is_letterish cc ) ( __tk_is_ascii_digit cc ) { = more F } { = r + r 1 }
     }
     ^ + lead - r q
 }
 
 // BPE-merge one pre-token (raw bytes text[off..off+len)) and append ids.
-unsafe @ __tk_bpe_word * TokImpl t s text i off i len ( Vec i ) out → v {
+unsafe @ __tk_bpe_word * TokImpl t ( Slice u ) text_v i off i len ( Vec i ) out → v {
     // word = remapped single-byte symbols
     : ( Vec String ) word ( vec_new [String] )
     : ~ i j 0
     ~ < j len {
-        : i bv ( nurl_str_get text + off j )
+        : i bv ( slice_byte text_v + off j )
         ?? ( vec_get [String] . t byte_enc bv ) {
             T e → { ( vec_push [String] word ( string_clone e ) ) }
             F → {}
@@ -691,12 +694,16 @@ unsafe @ __tk_bpe_word * TokImpl t s text i off i len ( Vec i ) out → v {
     }
 }
 
+// The text is measured once and every pre-token scanner reads the view:
+// each of them used to measure it again from its start (strnlen per byte),
+// which made encoding a corpus without special tokens quadratic.
 unsafe @ __tk_bpe_encode * TokImpl t s text ( Vec i ) out → v {
-    : i n ( nurl_str_len text )
+    : ( Slice u ) text_v ( slice_of_str text )
+    : i n ( slice_len [u] text_v )
     : ~ i p 0
     ~ < p n {
-        : i len ? == . t pre PRE_QWEN2 ( __tk_pretoken_len_qwen2 text p n ) ( __tk_pretoken_len text p n )
-        ( __tk_bpe_word t text p ? < len 1 1 len out )
+        : i len ? == . t pre PRE_QWEN2 ( __tk_pretoken_len_qwen2 text_v p n ) ( __tk_pretoken_len text_v p n )
+        ( __tk_bpe_word t text_v p ? < len 1 1 len out )
         = p + p ? < len 1 1 len
     }
 }
@@ -791,6 +798,7 @@ unsafe @ __tk_piece * TokImpl t i id → ( Vec u ) {
     : i ty ( _tk_geti . t ttype id TT_NORMAL )
     ? == ty TT_CONTROL { ^ out } {}
     : s p ( _tk_piece_data t id )
+    : ( Slice u ) p_v ( slice_of_str p )
     ? == . t mode TOK_SPM {
         ? == ty TT_BYTE {
             : i bv ( __tk_parse_byte_piece p )
@@ -803,8 +811,8 @@ unsafe @ __tk_piece * TokImpl t i id → ( Vec u ) {
         : i n ( nurl_str_len p )
         : ~ i j 0
         ~ < j n {
-            : i b2 ( nurl_str_get p j )
-            ? & & == b2 226 < + j 2 n & == ( nurl_str_get p + j 1 ) 150 == ( nurl_str_get p + j 2 ) 129 {
+            : i b2 ( slice_byte p_v j )
+            ? & & == b2 226 < + j 2 n & == ( slice_byte p_v + j 1 ) 150 == ( slice_byte p_v + j 2 ) 129 {
                 ( vec_push [u] out # u 32 )
                 = j + j 3
             } {

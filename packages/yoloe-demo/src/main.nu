@@ -48,6 +48,7 @@ $ `deps/yoloe/src/mask.nu`
 $ `deps/http/src/http.nu`
 $ `deps/template/src/template.nu`
 $ `index_html_data.nu`
+$ `stdlib/core/slice.nu`
 
 // ── shared state (set once in main, read by the handlers) ───────────
 
@@ -183,13 +184,14 @@ unsafe @ __Demo_ptr Demo h → *DemoState { ^ ( rcbox_ptr [DemoState] # i . h ct
                     = listed T
                     // parse csv of ids
                     : s raw ( string_data . q val )
+                    : ( Slice u ) raw_v ( slice_of_str raw )
                     : i rl ( nurl_str_len raw )
                     : ~ i j 0
                     : ~ i acc 0
                     : ~ b have F
                     ~ <= j rl {
                         : ~ i c 0
-                        ? < j rl { = c ( nurl_str_get raw j ) } { = c 44 }
+                        ? < j rl { = c ( slice_byte raw_v j ) } { = c 44 }
                         ? & >= c 48 <= c 57 { = acc + * acc 10 - c 48 = have T } {
                             ? have {
                                 ? < acc nc { : b _s ( vec_set [i] flags acc 1 ) } {}

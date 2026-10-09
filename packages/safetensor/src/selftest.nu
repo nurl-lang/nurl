@@ -14,6 +14,7 @@ $ `stdlib/core/string.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/floatbits.nu`
 $ `src/safetensor.nu`
+$ `stdlib/core/slice.nu`
 
 : ~ i __st_pass 0
 : ~ i __st_fail 0
@@ -35,6 +36,7 @@ $ `src/safetensor.nu`
 // Build an in-memory safetensors image: `hdr` is the JSON header text, `data`
 // the tensor-data region appended after it.
 @ __st_image s hdr ( Vec u ) data → ( Vec u ) {
+    : ( Slice u ) hdr_v ( slice_of_str hdr )
     : ( Vec u ) img ( vec_new [u] )
     : i hl ( nurl_str_len hdr )
     // u64 LE header length
@@ -45,7 +47,7 @@ $ `src/safetensor.nu`
     }
     = k 0
     ~ < k hl {
-        ( vec_push [u] img # u ( nurl_str_get hdr k ) )
+        ( vec_push [u] img # u ( slice_byte hdr_v k ) )
         = k + k 1
     }
     = k 0

@@ -20,6 +20,7 @@ $ `stdlib/std/time.nu`
 $ `stdlib/std/term.nu`
 $ `stdlib/ext/env.nu`
 $ `bx.nu`
+$ `stdlib/core/slice.nu`
 
 // ── A directory entry, with the metadata a listing needs ──────────
 
@@ -607,13 +608,14 @@ unsafe @ ap_rmdir ( Vec String ) argv → i {
 // An octal mode (`755`, `0644`) or a symbolic one (`u+x`, `a-w`,
 // `go=rX`), applied to `base`. Returns -1 when the text is neither.
 @ bx_parse_mode s text i base → i {
+    : ( Slice u ) text_v ( slice_of_str text )
     : i n ( nurl_str_len text )
     ? == n 0 { ^ -1 } {}
-    ? & >= ( nurl_str_get text 0 ) 48 <= ( nurl_str_get text 0 ) 55 {
+    ? & >= ( slice_byte text_v 0 ) 48 <= ( slice_byte text_v 0 ) 55 {
         : ~ i v 0
         : ~ i k 0
         ~ < k n {
-            : i c ( nurl_str_get text k )
+            : i c ( slice_byte text_v k )
             ? ! & >= c 48 <= c 55 { ^ -1 } {}
             = v + * v 8 - c 48
             = k + k 1
@@ -627,7 +629,7 @@ unsafe @ ap_rmdir ( Vec String ) argv → i {
         : ~ b any_who F
         : ~ b scanning T
         ~ & scanning < i n {
-            : i c ( nurl_str_get text i )
+            : i c ( slice_byte text_v i )
             ? == c 117 { = who | who 4 = any_who T = i + i 1 } {
                 ? == c 103 { = who | who 2 = any_who T = i + i 1 } {
                     ? == c 111 { = who | who 1 = any_who T = i + i 1 } {
@@ -635,13 +637,13 @@ unsafe @ ap_rmdir ( Vec String ) argv → i {
         }
         ? ! any_who { = who 7 } {}
         ? >= i n { ^ -1 } {}
-        : i op ( nurl_str_get text i )
+        : i op ( slice_byte text_v i )
         ? ! | == op 43 | == op 45 == op 61 { ^ -1 } {}
         = i + i 1
         : ~ i bits 0
         : ~ b more T
         ~ & more < i n {
-            : i c ( nurl_str_get text i )
+            : i c ( slice_byte text_v i )
             ? == c 114 { = bits | bits 4 = i + i 1 } {
                 ? == c 119 { = bits | bits 2 = i + i 1 } {
                     ? == c 120 { = bits | bits 1 = i + i 1 } {
@@ -667,7 +669,7 @@ unsafe @ ap_rmdir ( Vec String ) argv → i {
             ? != 0 & who 1 { = clear | clear 7 } {}
             = cur | & cur ~ clear mask
         } {}
-        ? & < i n == ( nurl_str_get text i ) 44 { = i + i 1 } {}
+        ? & < i n == ( slice_byte text_v i ) 44 { = i + i 1 } {}
     }
     ^ cur
 }

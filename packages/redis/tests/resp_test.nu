@@ -8,6 +8,7 @@ $ `stdlib/core/io.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `src/resp.nu`
+$ `stdlib/core/slice.nu`
 
 : ~ i g_fail 0
 
@@ -19,10 +20,11 @@ $ `src/resp.nu`
 // Build a ( Vec u ) byte buffer from a raw string (NUL-safe for our ASCII
 // test vectors, which contain none).
 @ __buf s raw → ( Vec u ) {
+    : ( Slice u ) raw_v ( slice_of_str raw )
     : i n ( nurl_str_len raw )
     : ( Vec u ) v ( vec_new [u] )
     : ~ i k 0
-    ~ < k n { ( vec_push [u] v # u ( nurl_str_get raw k ) ) = k + k 1 }
+    ~ < k n { ( vec_push [u] v # u ( slice_byte raw_v k ) ) = k + k 1 }
     ^ v
 }
 
@@ -35,12 +37,13 @@ $ `src/resp.nu`
 
 // Compare a ( Vec u ) against an expected raw string.
 @ __bytes_eq ( Vec u ) v s raw → b {
+    : ( Slice u ) raw_v ( slice_of_str raw )
     : i n ( nurl_str_len raw )
     ? != ( vec_len [u] v ) n { ^ F } {}
     : ~ i k 0
     : ~ b ok T
     ~ < k n {
-        ? != ?? ( vec_get [u] v k ) { T x → # i x F _ → -1 } ( nurl_str_get raw k ) { = ok F } {}
+        ? != ?? ( vec_get [u] v k ) { T x → # i x F _ → -1 } ( slice_byte raw_v k ) { = ok F } {}
         = k + k 1
     }
     ^ ok

@@ -12,6 +12,12 @@ bounds-checked accessors (`slice_byte`, `string_get`), where
 `nurl_str_at` trusted the length its caller passed. No change in
 behaviour.
 
+Loops that walked a string with `nurl_str_get` — which measures the
+string from its start on every call, so a scan is quadratic in the
+string's length, and nurlc 0.72 warns about the shape — read through a
+view measured once (`slice_of_str` + `slice_byte`). No change in
+behaviour.
+
 ## [0.5.2] — 2026-10-07
 
 Requires NURL 0.71.0, whose ownership rules are on by default: the

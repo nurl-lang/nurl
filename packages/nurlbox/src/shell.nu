@@ -18,6 +18,7 @@ $ `stdlib/ext/regex.nu`
 $ `bx.nu`
 $ `sys.nu`
 $ `grep.nu`
+$ `stdlib/core/slice.nu`
 
 // ── test / [ ──────────────────────────────────────────────────────
 //
@@ -266,7 +267,9 @@ unsafe @ __test_unary s op s arg → b {
     } {}
     ? & ( bx_streq tok `index` ) > ( __expr_left t ) 2 {
         : s src ( __expr_tok t + g_expr_pos 1 )
+        : ( Slice u ) src_v ( slice_of_str src )
         : s set ( __expr_tok t + g_expr_pos 2 )
+        : ( Slice u ) set_v ( slice_of_str set )
         = g_expr_pos + g_expr_pos 3
         : i n ( nurl_str_len src )
         : i m ( nurl_str_len set )
@@ -274,7 +277,7 @@ unsafe @ __test_unary s op s arg → b {
         ~ < i n {
             : ~ i j 0
             ~ < j m {
-                ? == ( nurl_str_get src i ) ( nurl_str_get set j ) {
+                ? == ( slice_byte src_v i ) ( slice_byte set_v j ) {
                     ^ ( string_from ( nurl_str_int + i 1 ) )
                 } {}
                 = j + j 1

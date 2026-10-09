@@ -20,15 +20,17 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/ext/env.nu`
 $ `deps/cli/src/cli.nu`
 $ `redis.nu`
+$ `stdlib/core/slice.nu`
 
 & `c` @ isatty i32 fd → i32
 
 @ __atoi s str → i {
+    : ( Slice u ) str_v ( slice_of_str str )
     : i n ( nurl_str_len str )
     : ~ i v 0
     : ~ i k 0
     ~ < k n {
-        : i c ( nurl_str_get str k )
+        : i c ( slice_byte str_v k )
         ? & >= c 48 <= c 57 { = v + * v 10 - c 48 } {}
         = k + k 1
     }
@@ -84,12 +86,13 @@ $ `redis.nu`
 
 // Case-insensitive ASCII equality (for command-name dispatch).
 @ __rci_eq s a s b → b {
+    : ( Slice u ) a_v ( slice_of_str a )
     : i la ( nurl_str_len a )
     ? != la ( nurl_str_len b ) { ^ F } {}
     : ~ i k 0
     : ~ b ok T
     ~ < k la {
-        : ~ i ca ( nurl_str_get a k )
+        : ~ i ca ( slice_byte a_v k )
         : ~ i cb ( nurl_str_get b k )
         ? & >= ca 65 <= ca 90 { = ca + ca 32 } {}
         ? & >= cb 65 <= cb 90 { = cb + cb 32 } {}
@@ -153,6 +156,7 @@ $ `redis.nu`
 // ── command-line tokenizer (whitespace split, "double quotes") ─────
 
 @ __tokenize s line → ( Vec String ) {
+    : ( Slice u ) line_v ( slice_of_str line )
     : i n ( nurl_str_len line )
     : ( Vec String ) out ( vec_new [String] )
     : ~ String cur ( string_new )
@@ -160,7 +164,7 @@ $ `redis.nu`
     : ~ i inq 0
     : ~ i k 0
     ~ < k n {
-        : i ch ( nurl_str_get line k )
+        : i ch ( slice_byte line_v k )
         ? == inq 1 {
             ? == ch 34 { = inq 0 } { ( string_push_char cur ch ) = incur 1 }
         } {
@@ -191,6 +195,7 @@ $ `redis.nu`
 
 // redis://[user:pass@]host[:port][/db]  (rediss:// → TLS)
 @ __parse_url s url ConnInfo ci → ConnInfo {
+    : ( Slice u ) url_v ( slice_of_str url )
     : ~ ConnInfo c ci
     : i n ( nurl_str_len url )
     : ~ i p 0
@@ -200,7 +205,7 @@ $ `redis.nu`
     : ~ i slash -1
     : ~ i k p
     ~ < k n {
-        : i ch ( nurl_str_get url k )
+        : i ch ( slice_byte url_v k )
         ? & == ch 64 == at -1 { = at k } {}
         ? & == ch 47 == slash -1 { = slash k } {}
         = k + k 1

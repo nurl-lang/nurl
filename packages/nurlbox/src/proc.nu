@@ -23,6 +23,7 @@ $ `stdlib/std/time.nu`
 $ `bx.nu`
 $ `filter.nu`
 $ `binio.nu`
+$ `stdlib/core/slice.nu`
 
 : s PROC_ROOT `/proc`
 
@@ -62,13 +63,14 @@ unsafe @ __proc_read s path String out → b {
 
 // The `n`-th whitespace-separated field of `text`, 0-based.
 @ __field s text i want → String {
+    : ( Slice u ) text_v ( slice_of_str text )
     : i n ( nurl_str_len text )
     : ~ i i 0
     : ~ i idx 0
     ~ < i n {
-        ~ & < i n ( bx_is_blank ( nurl_str_get text i ) ) { = i + i 1 }
+        ~ & < i n ( bx_is_blank ( slice_byte text_v i ) ) { = i + i 1 }
         : i start i
-        ~ & < i n ! ( bx_is_blank ( nurl_str_get text i ) ) { = i + i 1 }
+        ~ & < i n ! ( bx_is_blank ( slice_byte text_v i ) ) { = i + i 1 }
         ? > i start {
             ? == idx want { ^ ( string_from ( nurl_str_slice text start - i start ) ) } {}
             = idx + idx 1
@@ -78,11 +80,12 @@ unsafe @ __proc_read s path String out → b {
 }
 
 @ __is_pid_name s name → b {
+    : ( Slice u ) name_v ( slice_of_str name )
     : i n ( nurl_str_len name )
     ? == n 0 { ^ F } {}
     : ~ i i 0
     ~ < i n {
-        ? ! ( bx_is_digit ( nurl_str_get name i ) ) { ^ F } {}
+        ? ! ( bx_is_digit ( slice_byte name_v i ) ) { ^ F } {}
         = i + i 1
     }
     ^ T

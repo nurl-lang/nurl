@@ -12,16 +12,18 @@ $ `stdlib/ext/json.nu`
 $ `stdlib/ext/tar.nu`
 $ `stdlib/ext/toml.nu`
 $ `stdlib/ext/nurldoc.nu`
+$ `stdlib/core/slice.nu`
 
 // Normalize a tarball member path for matching: strip a leading "./".
 @ __rx_member_norm s path → String {
+    : ( Slice u ) path_v ( slice_of_str path )
     : String out ( string_from path )
     ? ( string_starts_with out `./` ) {
         : String cut ( string_new )
         : i n ( nurl_str_len path )
         : ~ i k 2
         ~ < k n {
-            ( string_push_char cut ( nurl_str_get path k ) )
+            ( string_push_char cut ( slice_byte path_v k ) )
             = k + k 1
         }
         ^ cut
@@ -31,11 +33,12 @@ $ `stdlib/ext/nurldoc.nu`
 
 // Case-insensitive ASCII equality of two C strings.
 @ __rx_str_eq_ci s a s b → b {
+    : ( Slice u ) a_v ( slice_of_str a )
     : i n ( nurl_str_len a )
     ? != n ( nurl_str_len b ) { ^ F } {}
     : ~ i k 0
     ~ < k n {
-        : ~ i ca ( nurl_str_get a k )
+        : ~ i ca ( slice_byte a_v k )
         : ~ i cb ( nurl_str_get b k )
         ? & >= ca 65 <= ca 90 { = ca + ca 32 } {}
         ? & >= cb 65 <= cb 90 { = cb + cb 32 } {}
@@ -233,6 +236,7 @@ $ `stdlib/ext/nurldoc.nu`
 @ __rx_readme_first_para String md → String {
     : String out ( string_with_cap 128 )
     : s raw ( string_data md )
+    : ( Slice u ) raw_v ( slice_of_str raw )
     : i n ( string_len md )
     : ~ i k 0
     : ~ b started F
@@ -241,21 +245,21 @@ $ `stdlib/ext/nurldoc.nu`
         // line bounds
         : i ls k
         : ~ i le k
-        ~ & < le n != ( nurl_str_get raw le ) 10 { = le + le 1 }
+        ~ & < le n != ( slice_byte raw_v le ) 10 { = le + le 1 }
         // first non-ws byte
         : ~ i sp ls
-        ~ & < sp le | == ( nurl_str_get raw sp ) 32 == ( nurl_str_get raw sp ) 9 { = sp + sp 1 }
+        ~ & < sp le | == ( slice_byte raw_v sp ) 32 == ( slice_byte raw_v sp ) 9 { = sp + sp 1 }
         : b blank == sp le
-        : b heading & ! blank == ( nurl_str_get raw sp ) 35
+        : b heading & ! blank == ( slice_byte raw_v sp ) 35
         ? | blank heading {
             ? started { = done T } {}
         } {
             ? started { ( string_push_char out 32 ) } {}
             : ~ i j sp
             ~ < j le {
-                : i c ( nurl_str_get raw j )
+                : i c ( slice_byte raw_v j )
                 // drop bold markers `**`
-                ? & == c 42 & < + j 1 le == ( nurl_str_get raw + j 1 ) 42 { = j + j 2 } {
+                ? & == c 42 & < + j 1 le == ( slice_byte raw_v + j 1 ) 42 { = j + j 2 } {
                     ( string_push_char out c )
                     = j + j 1
                 }
@@ -287,13 +291,14 @@ $ `stdlib/ext/nurldoc.nu`
 
 // The basename after the last '/' of a member path.
 @ __rx_basename s path → String {
+    : ( Slice u ) path_v ( slice_of_str path )
     : i n ( nurl_str_len path )
     : ~ i start 0
     : ~ i k 0
-    ~ < k n { ? == ( nurl_str_get path k ) 47 { = start + k 1 } {} = k + k 1 }
+    ~ < k n { ? == ( slice_byte path_v k ) 47 { = start + k 1 } {} = k + k 1 }
     : String out ( string_with_cap - n start )
     = k start
-    ~ < k n { ( string_push_char out ( nurl_str_get path k ) ) = k + k 1 }
+    ~ < k n { ( string_push_char out ( slice_byte path_v k ) ) = k + k 1 }
     ^ out
 }
 

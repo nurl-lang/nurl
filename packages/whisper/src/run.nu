@@ -23,6 +23,7 @@ $ `deps/tokenizer/src/tokenizer.nu`
 $ `deps/tokenizer/src/hf.nu`
 $ `src/ggml.nu`
 $ `src/model.nu`
+$ `stdlib/core/slice.nu`
 
 // Is `model` a whisper.cpp ggml container? Decided by the file's own first
 // bytes ('lmgg' on disk), not the extension — a renamed file still works and
@@ -242,6 +243,7 @@ $ `src/model.nu`
 // the condensed timeline; `runs` places the condensed timeline in the
 // recording.
 @ __wh_decode_window Whisper w Tok t s lang i maxtok b with_ts f win_off ( Vec VadRun ) runs f nospeech ( Vec u ) out → b {
+    : ( Slice u ) lang_v ( slice_of_str lang )
     // Language codes are lowercase by definition (<|fi|>, <|en|> …) — a
     // phone keyboard capitalizes the first letter, and "Fi" failing with
     // no explanation is a bug report waiting to happen. Normalize here,
@@ -249,7 +251,7 @@ $ `src/model.nu`
     : String ltok ( string_from `<|` )
     : ~ i lci 0
     ~ < lci ( nurl_str_len lang ) {
-        : ~ i lc ( nurl_str_get lang lci )
+        : ~ i lc ( slice_byte lang_v lci )
         ? & >= lc 65 <= lc 90 { = lc + lc 32 } {}
         ( string_push_char ltok lc )
         = lci + lci 1

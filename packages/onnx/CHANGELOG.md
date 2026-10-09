@@ -11,6 +11,12 @@ are declared `unsafe`. An empty protobuf reader and an empty field are
 `slice_empty`, where they were a `Slice` built literally over a null
 pointer. No change in behaviour.
 
+Loops that walked a string with `nurl_str_get` — which measures the
+string from its start on every call, so a scan is quadratic in the
+string's length, and nurlc 0.72 warns about the shape — read through a
+view measured once (`slice_of_str` + `slice_byte`). No change in
+behaviour.
+
 ## [0.10.1] — 2026-10-07
 
 Requires NURL 0.71.0, whose ownership rules are on by default: the

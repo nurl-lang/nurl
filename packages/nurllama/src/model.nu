@@ -57,6 +57,7 @@ $ `deps/gpu/src/gpu.nu`
 $ `src/kernels.nu`
 $ `src/tokenizer.nu`
 $ `stdlib/core/rcbox.nu`
+$ `stdlib/core/slice.nu`
 
 : LlmImpl {
     Gpu g
@@ -476,10 +477,11 @@ unsafe @ __lm_scratch * LlmImpl m i nfloats → i {
 
 // Index of byte `ch` at or after `from`, or -1.
 @ __lm_find_from s str i from i ch → i {
+    : ( Slice u ) str_v ( slice_of_str str )
     : i n ( nurl_str_len str )
     : ~ i k from
     ~ < k n {
-        ? == ( nurl_str_get str k ) ch { ^ k } {}
+        ? == ( slice_byte str_v k ) ch { ^ k } {}
         = k + k 1
     }
     ^ -1

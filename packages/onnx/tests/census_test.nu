@@ -26,6 +26,7 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/fs.nu`
 $ `src/static_kernels.nu`
+$ `stdlib/core/slice.nu`
 
 : ~ i g_fail 0
 
@@ -41,6 +42,7 @@ unsafe @ __sub s t i at i len → String { ^ ( string_from_bytes # *u + # i t at
 
 // Every distinct `( gkd_<name>` call in `text`, appended to `found`.
 @ calls_in s text ( Vec String ) found → v {
+    : ( Slice u ) text_v ( slice_of_str text )
     : i n ( nurl_str_len text )
     : ~ i at 0
     ~ < at n {
@@ -49,7 +51,7 @@ unsafe @ __sub s t i at i len → String { ^ ( string_from_bytes # *u + # i t at
         ? < hit 0 { = at n } {
             : i s0 + + at hit 2
             : ~ i e s0
-            ~ & < e n ( __is_id ( nurl_str_get text e ) ) { = e + e 1 }
+            ~ & < e n ( __is_id ( slice_byte text_v e ) ) { = e + e 1 }
             : String name ( __sub text s0 - e s0 )
             : ~ b dup F
             : ~ i k 0

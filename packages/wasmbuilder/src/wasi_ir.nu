@@ -83,15 +83,16 @@ $ `stdlib/core/slice.nu`
 // The @name of a `declare ... @name(...)` line ("" when unparseable).
 @ __wb_declare_sym String jline → String {
     : s raw ( string_data jline )
+    : ( Slice u ) raw_v ( slice_of_str raw )
     : i n ( nurl_str_len raw )
     : ~ i at - 0 1
     : ~ i k 0
-    ~ & < k n < at 0 { ? == ( nurl_str_get raw k ) 64 { = at k } {} = k + k 1 }
+    ~ & < k n < at 0 { ? == ( slice_byte raw_v k ) 64 { = at k } {} = k + k 1 }
     : String out ( string_new )
     ? < at 0 { ^ out } {}
     : ~ i j + at 1
     ~ < j n {
-        : i c ( nurl_str_get raw j )
+        : i c ( slice_byte raw_v j )
         : b idc | | | & >= c 48 <= c 57 & >= c 65 <= c 90 & >= c 97 <= c 122 | == c 95 == c 46
         ? idc { ( string_push_char out c ) = j + j 1 } { = j n }
     }

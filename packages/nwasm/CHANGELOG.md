@@ -97,6 +97,12 @@
   is clean and the `nurlc.wasm` self-compile is byte-identical to the
   native compiler.
 
+Loops that walked a string with `nurl_str_get` — which measures the
+string from its start on every call, so a scan is quadratic in the
+string's length, and nurlc 0.72 warns about the shape — read through a
+view measured once (`slice_of_str` + `slice_byte`). No change in
+behaviour.
+
 ## [2.3.1] — 2026-10-09
 
 Requires NURL 0.72.0, which draws the raw-memory boundary at every call:

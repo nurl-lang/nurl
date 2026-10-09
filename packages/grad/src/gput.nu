@@ -51,6 +51,7 @@ $ `deps/gpu/src/gpu.nu`
 $ `deps/gpukit/src/gpukit.nu`
 $ `deps/gpukit/src/dev.nu`
 $ `stdlib/core/rcbox.nu`
+$ `stdlib/core/slice.nu`
 
 // ── the kernels ───────────────────────────────────────────────────────
 // One source, compiled once per kit (cached by entry name). All f64.
@@ -428,6 +429,7 @@ extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double*
 // Every simple textual replacement of `needle` with `rep` in `hay`. `needle`
 // must be non-empty; used only on the fixed kernel source above.
 unsafe @ _str_replace_all s hay s needle s rep → String {
+    : ( Slice u ) hay_v ( slice_of_str hay )
     : i nl ( nurl_str_len needle )
     ? > nl 0 {} { ^ ( string_from hay ) }
     : String out ( string_new )
@@ -438,11 +440,11 @@ unsafe @ _str_replace_all s hay s needle s rep → String {
         : i f ? < rel 0 -1 + i2 rel
         ? < f 0 {
             : ~ i k i2
-            ~ < k hl { ( string_push_char out ( nurl_str_get hay k ) ) = k + k 1 }
+            ~ < k hl { ( string_push_char out ( slice_byte hay_v k ) ) = k + k 1 }
             = i2 hl
         } {
             : ~ i k i2
-            ~ < k f { ( string_push_char out ( nurl_str_get hay k ) ) = k + k 1 }
+            ~ < k f { ( string_push_char out ( slice_byte hay_v k ) ) = k + k 1 }
             ( string_push_str out rep )
             = i2 + f nl
         }

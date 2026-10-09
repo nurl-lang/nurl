@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.5] — 2026-10-10
+
+Requires NURL 0.72.0 (`slice_of_str`). Loops that walked a string with
+`nurl_str_get` — which measures the string from its start on every call,
+so a scan is quadratic in the string's length, and nurlc 0.72 warns
+about the shape — read through a view measured once (`slice_of_str` +
+`slice_byte`). No change in behaviour.
+
 ## [0.1.4] — 2026-10-07
 
 Requires NURL 0.71.0, whose ownership rules are on by default: the

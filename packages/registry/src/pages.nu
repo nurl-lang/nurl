@@ -13,6 +13,7 @@ $ `deps/template/src/template.nu`
 $ `deps/md2html/src/markdown.nu`
 $ `src/store.nu`
 $ `src/extract.nu`
+$ `stdlib/core/slice.nu`
 
 // ── Chrome (shared head/foot partials) ────────────────────────────────
 
@@ -139,16 +140,17 @@ nurlpkg publish</pre>`
 // True when `url` must be left untouched by relative-link rewriting:
 // absolute path, fragment, or a scheme prefix ([a-z][a-z0-9+.-]*:).
 @ __reg_url_is_absolute s url → b {
+    : ( Slice u ) url_v ( slice_of_str url )
     : i n ( nurl_str_len url )
     ? == n 0 { ^ T } {}
-    : i c0 ( nurl_str_get url 0 )
+    : i c0 ( slice_byte url_v 0 )
     ? | == c0 47 == c0 35 { ^ T } {}  // '/' or '#'
     : ~ b alpha F
     ? | & >= c0 97 <= c0 122 & >= c0 65 <= c0 90 { = alpha T } {}
     ? ! alpha { ^ F } {}
     : ~ i k 1
     ~ < k n {
-        : i c ( nurl_str_get url k )
+        : i c ( slice_byte url_v k )
         ? == c 58 { ^ T } {}  // ':' before any non-scheme char → scheme
         : ~ b schemech F
         ? | & >= c 97 <= c 122 & >= c 65 <= c 90 { = schemech T } {}
@@ -163,15 +165,16 @@ nurlpkg publish</pre>`
 // "../<pkg>" or "../<pkg>/" (a monorepo sibling-package reference, common
 // in these READMEs) → the package name; "" otherwise.
 @ __reg_sibling_pkg s url → String {
+    : ( Slice u ) url_v ( slice_of_str url )
     : String out ( string_new )
     : i n ( nurl_str_len url )
     ? < n 4 { ^ out } {}
-    ? ! & & == ( nurl_str_get url 0 ) 46 == ( nurl_str_get url 1 ) 46 == ( nurl_str_get url 2 ) 47 { ^ out } {}
+    ? ! & & == ( slice_byte url_v 0 ) 46 == ( slice_byte url_v 1 ) 46 == ( slice_byte url_v 2 ) 47 { ^ out } {}
     : ~ i e n
-    ? == ( nurl_str_get url - n 1 ) 47 { = e - n 1 } {}
+    ? == ( slice_byte url_v - n 1 ) 47 { = e - n 1 } {}
     : ~ i k 3
     ~ < k e {
-        ( string_push_char out ( nurl_str_get url k ) )
+        ( string_push_char out ( slice_byte url_v k ) )
         = k + k 1
     }
     ? ! ( reg_name_valid ( string_data out ) ) {
@@ -207,20 +210,21 @@ nurlpkg publish</pre>`
 // onto /files/<name>/<version>/… (version-pinned, immutable-cacheable).
 // md2html emits double-quoted attributes; anything else passes through.
 @ reg_readme_rewrite_links s html s name s version → String {
+    : ( Slice u ) html_v ( slice_of_str html )
     : String out ( string_with_cap + ( nurl_str_len html ) 64 )
     : i n ( nurl_str_len html )
     : ~ i k 0
     ~ < k n {
-        : i c ( nurl_str_get html k )
+        : i c ( slice_byte html_v k )
         // match href=" or src=" (only ever emitted inside tags)
         : ~ i alen 0
         ? & <= + k 6 n == c 104 {  // h
-            ? & & & & == ( nurl_str_get html + k 1 ) 114 == ( nurl_str_get html + k 2 ) 101 == ( nurl_str_get html + k 3 ) 102 == ( nurl_str_get html + k 4 ) 61 == ( nurl_str_get html + k 5 ) 34 {
+            ? & & & & == ( slice_byte html_v + k 1 ) 114 == ( slice_byte html_v + k 2 ) 101 == ( slice_byte html_v + k 3 ) 102 == ( slice_byte html_v + k 4 ) 61 == ( slice_byte html_v + k 5 ) 34 {
                 = alen 6
             } {}
         } {}
         ? & <= + k 5 n == c 115 {  // s
-            ? & & & == ( nurl_str_get html + k 1 ) 114 == ( nurl_str_get html + k 2 ) 99 == ( nurl_str_get html + k 3 ) 61 == ( nurl_str_get html + k 4 ) 34 {
+            ? & & & == ( slice_byte html_v + k 1 ) 114 == ( slice_byte html_v + k 2 ) 99 == ( slice_byte html_v + k 3 ) 61 == ( slice_byte html_v + k 4 ) 34 {
                 = alen 5
             } {}
         } {}
@@ -228,13 +232,13 @@ nurlpkg publish</pre>`
             // copy the attr prefix, collect the value to the closing quote
             : ~ i j 0
             ~ < j alen {
-                ( string_push_char out ( nurl_str_get html + k j ) )
+                ( string_push_char out ( slice_byte html_v + k j ) )
                 = j + j 1
             }
             : ~ i e + k alen
             : String val ( string_new )
-            ~ & < e n != ( nurl_str_get html e ) 34 {
-                ( string_push_char val ( nurl_str_get html e ) )
+            ~ & < e n != ( slice_byte html_v e ) 34 {
+                ( string_push_char val ( slice_byte html_v e ) )
                 = e + e 1
             }
             : String repl ( __reg_resolve_url ( string_data val ) name version )

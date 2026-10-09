@@ -34,6 +34,7 @@ $ `stdlib/ext/http_auth.nu`
 $ `errors.nu`
 $ `claims.nu`
 $ `provider.nu`
+$ `stdlib/core/slice.nu`
 
 // Append `value` as the inside of an RFC 7235 quoted-string, keeping only
 // bytes that are legal there and capping the length.
@@ -44,11 +45,12 @@ $ `provider.nu`
 // A CR or LF echoed into a response header is response splitting; a `"`
 // ends the parameter early. Neither reaches the wire.
 @ _oidc_safe_param String out s value → v {
+    : ( Slice u ) value_v ( slice_of_str value )
     : i n ( nurl_str_len value )
     : i cap ? > n 200 200 n
     : ~ i k 0
     ~ < k cap {
-        : i c ( nurl_str_get value k )
+        : i c ( slice_byte value_v k )
         ? | < c 32 == c 127 {
             ( string_push_char out 32 )
         } {

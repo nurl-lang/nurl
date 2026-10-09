@@ -52,6 +52,7 @@ $ `stdlib/std/fs.nu`
 $ `stdlib/std/deflate.nu`
 $ `memtable.nu`
 $ `stdlib/core/rcbox.nu`
+$ `stdlib/core/slice.nu`
 
 : i SST_BLOCK 4096
 : i SST_HDR 17  // u32 klen + u32 vlen + u64 seq + u8 kind
@@ -440,11 +441,12 @@ unsafe @ sst_open s path → !SstReader String {
         ^ @ !SstReader String { F ( __sst_err path `short footer` ) }
     } {}
     : s magic ( __sst_magic )
+    : ( Slice u ) magic_v ( slice_of_str magic )
     : ~ b good T
     : ~ i mi 0
     ~ < mi 8 {
         : i c ?? ( vec_get [u] fb + 40 mi ) { T x → # i x F _ → 0 }
-        ? != c ( nurl_str_get magic mi ) { = good F } {}
+        ? != c ( slice_byte magic_v mi ) { = good F } {}
         = mi + mi 1
     }
     ? good {} {

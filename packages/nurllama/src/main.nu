@@ -85,6 +85,7 @@ $ `src/diffuse.nu`
 $ `src/config.nu`
 $ `src/start.nu`
 $ `stdlib/std/term.nu`
+$ `stdlib/core/slice.nu`
 
 @ __nl_err String e → i {
     ( nurl_eprintln ( string_data e ) )
@@ -169,13 +170,14 @@ unsafe @ __nl_ids_eq ( Vec i ) got * i exp i n → b {
 }
 
 @ __nl_bytes_is ( Vec u ) got s want → b {
+    : ( Slice u ) want_v ( slice_of_str want )
     ? != ( vec_len [u] got ) ( nurl_str_len want ) { ^ F } {}
     : ~ i k 0
     : ~ b ok T
     ~ < k ( vec_len [u] got ) {
         : ~ i gb -1
         ?? ( vec_get [u] got k ) { T x → { = gb # i x } F → {} }
-        ? == gb ( nurl_str_get want k ) {} { = ok F }
+        ? == gb ( slice_byte want_v k ) {} { = ok F }
         = k + k 1
     }
     ^ ok

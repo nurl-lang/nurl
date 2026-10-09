@@ -18,6 +18,7 @@ $ `stdlib/core/string.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/ext/env.nu`
 $ `stdlib/ext/json.nu`
+$ `stdlib/core/slice.nu`
 
 @ f5_home → String {
     ?? ( env_get `F5TTS_HOME` ) {
@@ -74,11 +75,12 @@ $ `stdlib/ext/json.nu`
 // A name that may be joined onto a directory the server owns: a plain
 // identifier, no separator, no dots, nothing a request could walk out of.
 @ f5_id_ok s id → b {
+    : ( Slice u ) id_v ( slice_of_str id )
     : i n ( nurl_str_len id )
     ? & > n 0 <= n 128 {} { ^ F }
     : ~ i k 0
     ~ < k n {
-        : i c ( nurl_str_get id k )
+        : i c ( slice_byte id_v k )
         ? | == c 47 == c 92 { ^ F } {}
         ? == c 46 { ^ F } {}
         ? < c 33 { ^ F } {}

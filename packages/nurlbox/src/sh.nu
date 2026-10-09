@@ -34,6 +34,7 @@ $ `stdlib/std/cmp.nu`
 $ `stdlib/ext/env.nu`
 $ `bx.nu`
 $ `filter.nu`
+$ `stdlib/core/slice.nu`
 
 // ── Words ─────────────────────────────────────────────────────────
 
@@ -50,10 +51,11 @@ $ `filter.nu`
 }
 
 @ __shw_push_str ShWord w s t i q → v {
+    : ( Slice u ) t_v ( slice_of_str t )
     : i n ( nurl_str_len t )
     : ~ i i 0
     ~ < i n {
-        ( __shw_push w ( nurl_str_get t i ) q )
+        ( __shw_push w ( slice_byte t_v i ) q )
         = i + i 1
     }
 }
@@ -96,6 +98,7 @@ $ `filter.nu`
 // words would turn `cat <<EOF` followed by `if false` into a parse
 // error about an `if` nobody wrote.
 @ __sh_lex s src ( Vec ShTok ) out ( Vec String ) bodies → b {
+    : ( Slice u ) src_v ( slice_of_str src )
     : i n ( nurl_str_len src )
     : ~ i i 0
     : ~ b ok T
@@ -107,12 +110,12 @@ $ `filter.nu`
     : ~ b want_strip F
     ~ < i n {
         // Blanks between words, and comments to end of line.
-        ~ & < i n ( __sh_is_blank_c ( nurl_str_get src i ) ) { = i + i 1 }
-        ? & < i n == ( nurl_str_get src i ) 35 {
-            ~ & < i n != ( nurl_str_get src i ) 10 { = i + i 1 }
+        ~ & < i n ( __sh_is_blank_c ( slice_byte src_v i ) ) { = i + i 1 }
+        ? & < i n == ( slice_byte src_v i ) 35 {
+            ~ & < i n != ( slice_byte src_v i ) 10 { = i + i 1 }
         } {}
         ? >= i n { = i n } {
-            : i c ( nurl_str_get src i )
+            : i c ( slice_byte src_v i )
             ? == c 10 {
                 ( vec_push [ShTok] out @ ShTok { SHT_NEWLINE ( __shw_new ) ( string_from `\n` ) } )
                 = i + i 1
@@ -126,10 +129,10 @@ $ `filter.nu`
                     : ~ b closed F
                     ~ & ! closed < i n {
                         : ~ i e i
-                        ~ & < e n != ( nurl_str_get src e ) 10 { = e + e 1 }
+                        ~ & < e n != ( slice_byte src_v e ) 10 { = e + e 1 }
                         : ~ i ls i
                         ? != strip 0 {
-                            ~ & < ls e == ( nurl_str_get src ls ) 9 { = ls + ls 1 }
+                            ~ & < ls e == ( slice_byte src_v ls ) 9 { = ls + ls 1 }
                         } {}
                         : s line ( nurl_str_slice src ls - e ls )
                         ? ( bx_streq line ( bx_at pending pi ) ) {
@@ -151,13 +154,13 @@ $ `filter.nu`
                 // Only adjacency distinguishes them — `echo 2 > f` is an
                 // argument and a redirect, `echo 2> f` is a redirect.
                 : ~ i digit_end i
-                ~ & < digit_end n ( bx_is_digit ( nurl_str_get src digit_end ) ) { = digit_end + digit_end 1 }
-                : b fd_prefix & > digit_end i & < digit_end n | == ( nurl_str_get src digit_end ) 60 == ( nurl_str_get src digit_end ) 62
+                ~ & < digit_end n ( bx_is_digit ( slice_byte src_v digit_end ) ) { = digit_end + digit_end 1 }
+                : b fd_prefix & > digit_end i & < digit_end n | == ( slice_byte src_v digit_end ) 60 == ( slice_byte src_v digit_end ) 62
                 ? fd_prefix {
                     : String op ( string_from ( nurl_str_slice src i - digit_end i ) )
                     = i digit_end
-                    : i oc ( nurl_str_get src i )
-                    : i oc2 ? < + i 1 n ( nurl_str_get src + i 1 ) 0
+                    : i oc ( slice_byte src_v i )
+                    : i oc2 ? < + i 1 n ( slice_byte src_v + i 1 ) 0
                     ( string_push_char op oc )
                     = i + i 1
                     ? | & == oc 62 == oc2 62 & == oc 60 == oc2 60 {
@@ -175,13 +178,13 @@ $ `filter.nu`
                         // Longest operator first: `>>` before `>`, `&&`
                         // before `&`, `;;` before `;`.
                         : ~ String op ( string_new )
-                        : i c2 ? < + i 1 n ( nurl_str_get src + i 1 ) 0
+                        : i c2 ? < + i 1 n ( slice_byte src_v + i 1 ) 0
                         ? | | & == c 62 == c2 62 & == c 60 == c2 60 | & == c 38 == c2 38 | & == c 124 == c2 124 & == c 59 == c2 59 {
                             ( string_push_char op c )
                             ( string_push_char op c2 )
                             = i + i 2
                             // `<<-` is a heredoc that strips leading tabs.
-                            ? & & == c 60 < i n == 45 ( nurl_str_get src i ) {
+                            ? & & == c 60 < i n == 45 ( slice_byte src_v i ) {
                                 ( string_push_char op 45 )
                                 = i + i 1
                             } {}
@@ -209,12 +212,12 @@ $ `filter.nu`
                         : ShWord w ( __shw_new )
                         : ~ b done F
                         ~ & ! done < i n {
-                            : i ch ( nurl_str_get src i )
+                            : i ch ( slice_byte src_v i )
                             ? | ( __sh_is_blank_c ch ) ( __sh_is_op_char ch ) { = done T } {
                                 ? == ch 39 {
                                     = i + i 1
-                                    ~ & < i n != ( nurl_str_get src i ) 39 {
-                                        ( __shw_push w ( nurl_str_get src i ) 1 )
+                                    ~ & < i n != ( slice_byte src_v i ) 39 {
+                                        ( __shw_push w ( slice_byte src_v i ) 1 )
                                         = i + i 1
                                     }
                                     ? >= i n {
@@ -225,10 +228,10 @@ $ `filter.nu`
                                 } {
                                     ? == ch 34 {
                                         = i + i 1
-                                        ~ & < i n != ( nurl_str_get src i ) 34 {
-                                            : i q ( nurl_str_get src i )
+                                        ~ & < i n != ( slice_byte src_v i ) 34 {
+                                            : i q ( slice_byte src_v i )
                                             ? & == q 92 < + i 1 n {
-                                                : i e ( nurl_str_get src + i 1 )
+                                                : i e ( slice_byte src_v + i 1 )
                                                 // Inside "…", a backslash
                                                 // only escapes these five.
                                                 ? | | | | == e 34 == e 92 == e 36 == e 96 == e 10 {
@@ -251,7 +254,7 @@ $ `filter.nu`
                                     } {
                                         ? == ch 92 {
                                             ? < + i 1 n {
-                                                : i e ( nurl_str_get src + i 1 )
+                                                : i e ( slice_byte src_v + i 1 )
                                                 // A backslash-newline is a
                                                 // line continuation and
                                                 // disappears entirely.
@@ -262,11 +265,11 @@ $ `filter.nu`
                                             // `$(` and backticks swallow a
                                             // nested run whole; the expander
                                             // parses it later.
-                                            ? & == ch 36 & < + i 1 n == 40 ( nurl_str_get src + i 1 ) {
+                                            ? & == ch 36 & < + i 1 n == 40 ( slice_byte src_v + i 1 ) {
                                                 : ~ i depth 0
                                                 : i start i
                                                 ~ & < i n | > depth 0 <= i + start 1 {
-                                                    : i q ( nurl_str_get src i )
+                                                    : i q ( slice_byte src_v i )
                                                     ? == q 40 { = depth + depth 1 } {}
                                                     ? == q 41 { = depth - depth 1 } {}
                                                     ( __shw_push w q 0 )
@@ -276,8 +279,8 @@ $ `filter.nu`
                                                 ? == ch 96 {
                                                     ( __shw_push w ch 0 )
                                                     = i + i 1
-                                                    ~ & < i n != ( nurl_str_get src i ) 96 {
-                                                        ( __shw_push w ( nurl_str_get src i ) 0 )
+                                                    ~ & < i n != ( slice_byte src_v i ) 96 {
+                                                        ( __shw_push w ( slice_byte src_v i ) 0 )
                                                         = i + i 1
                                                     }
                                                     ? < i n {
@@ -463,9 +466,10 @@ $ `filter.nu`
     : i k ( __sh_kind t g_sh_pos )
     ? != k SHT_OP { ^ F } {}
     : s raw ( __sh_op t g_sh_pos )
+    : ( Slice u ) raw_v ( slice_of_str raw )
     : ~ i explicit -1
     : ~ i skip 0
-    ~ & < skip ( nurl_str_len raw ) ( bx_is_digit ( nurl_str_get raw skip ) ) { = skip + skip 1 }
+    ~ & < skip ( nurl_str_len raw ) ( bx_is_digit ( slice_byte raw_v skip ) ) { = skip + skip 1 }
     ? > skip 0 { = explicit ( nurl_str_to_int ( nurl_str_slice raw 0 skip ) ) } {}
     : s op ? > skip 0 ( nurl_str_slice raw skip - ( nurl_str_len raw ) skip ) raw
     : ~ i kind -1
@@ -943,20 +947,22 @@ unsafe @ __sh_params_joined → String {
 : ~ i g_ari_pos 0
 
 @ __ari_skip s src → v {
+    : ( Slice u ) src_v ( slice_of_str src )
     : i n ( nurl_str_len src )
-    ~ & < g_ari_pos n ( bx_is_blank ( nurl_str_get src g_ari_pos ) ) { = g_ari_pos + g_ari_pos 1 }
+    ~ & < g_ari_pos n ( bx_is_blank ( slice_byte src_v g_ari_pos ) ) { = g_ari_pos + g_ari_pos 1 }
 }
 
 @ __ari_primary s src → i {
+    : ( Slice u ) src_v ( slice_of_str src )
     : i n ( nurl_str_len src )
     ( __ari_skip src )
     ? >= g_ari_pos n { ^ 0 } {}
-    : i c ( nurl_str_get src g_ari_pos )
+    : i c ( slice_byte src_v g_ari_pos )
     ? == c 40 {
         = g_ari_pos + g_ari_pos 1
         : i v ( __ari_or src )
         ( __ari_skip src )
-        ? & < g_ari_pos n == ( nurl_str_get src g_ari_pos ) 41 { = g_ari_pos + g_ari_pos 1 } {}
+        ? & < g_ari_pos n == ( slice_byte src_v g_ari_pos ) 41 { = g_ari_pos + g_ari_pos 1 } {}
         ^ v
     } {}
     ? == c 33 {
@@ -973,8 +979,8 @@ unsafe @ __sh_params_joined → String {
     } {}
     ? ( bx_is_digit c ) {
         : ~ i v 0
-        ~ & < g_ari_pos n ( bx_is_digit ( nurl_str_get src g_ari_pos ) ) {
-            = v + * v 10 - ( nurl_str_get src g_ari_pos ) 48
+        ~ & < g_ari_pos n ( bx_is_digit ( slice_byte src_v g_ari_pos ) ) {
+            = v + * v 10 - ( slice_byte src_v g_ari_pos ) 48
             = g_ari_pos + g_ari_pos 1
         }
         ^ v
@@ -983,7 +989,7 @@ unsafe @ __sh_params_joined → String {
     // that makes `i=$((i+1))` work without initialising `i`.
     ? ( __sh_is_name_char c T ) {
         : i start g_ari_pos
-        ~ & < g_ari_pos n ( __sh_is_name_char ( nurl_str_get src g_ari_pos ) F ) { = g_ari_pos + g_ari_pos 1 }
+        ~ & < g_ari_pos n ( __sh_is_name_char ( slice_byte src_v g_ari_pos ) F ) { = g_ari_pos + g_ari_pos 1 }
         : String v ( __sh_get ( nurl_str_slice src start - g_ari_pos start ) )
         : i r ( nurl_str_to_int ( string_data v ) )
         ^ r
@@ -993,11 +999,12 @@ unsafe @ __sh_params_joined → String {
 }
 
 @ __ari_mul s src → i {
+    : ( Slice u ) src_v ( slice_of_str src )
     : i n ( nurl_str_len src )
     : ~ i acc ( __ari_primary src )
     ( __ari_skip src )
-    ~ & < g_ari_pos n | | == ( nurl_str_get src g_ari_pos ) 42 == ( nurl_str_get src g_ari_pos ) 47 == ( nurl_str_get src g_ari_pos ) 37 {
-        : i op ( nurl_str_get src g_ari_pos )
+    ~ & < g_ari_pos n | | == ( slice_byte src_v g_ari_pos ) 42 == ( slice_byte src_v g_ari_pos ) 47 == ( slice_byte src_v g_ari_pos ) 37 {
+        : i op ( slice_byte src_v g_ari_pos )
         = g_ari_pos + g_ari_pos 1
         : i rhs ( __ari_primary src )
         ? == op 42 { = acc * acc rhs } {
@@ -1011,11 +1018,12 @@ unsafe @ __sh_params_joined → String {
 }
 
 @ __ari_add s src → i {
+    : ( Slice u ) src_v ( slice_of_str src )
     : i n ( nurl_str_len src )
     : ~ i acc ( __ari_mul src )
     ( __ari_skip src )
-    ~ & < g_ari_pos n | == ( nurl_str_get src g_ari_pos ) 43 == ( nurl_str_get src g_ari_pos ) 45 {
-        : i op ( nurl_str_get src g_ari_pos )
+    ~ & < g_ari_pos n | == ( slice_byte src_v g_ari_pos ) 43 == ( slice_byte src_v g_ari_pos ) 45 {
+        : i op ( slice_byte src_v g_ari_pos )
         = g_ari_pos + g_ari_pos 1
         : i rhs ( __ari_mul src )
         = acc ? == op 43 + acc rhs - acc rhs
@@ -1025,12 +1033,13 @@ unsafe @ __sh_params_joined → String {
 }
 
 @ __ari_cmp s src → i {
+    : ( Slice u ) src_v ( slice_of_str src )
     : i n ( nurl_str_len src )
     : ~ i acc ( __ari_add src )
     ( __ari_skip src )
-    ~ & < g_ari_pos n | | | == ( nurl_str_get src g_ari_pos ) 60 == ( nurl_str_get src g_ari_pos ) 62 & == ( nurl_str_get src g_ari_pos ) 61 == ( nurl_str_get src + g_ari_pos 1 ) 61 & == ( nurl_str_get src g_ari_pos ) 33 == ( nurl_str_get src + g_ari_pos 1 ) 61 {
-        : i c1 ( nurl_str_get src g_ari_pos )
-        : i c2 ? < + g_ari_pos 1 n ( nurl_str_get src + g_ari_pos 1 ) 0
+    ~ & < g_ari_pos n | | | == ( slice_byte src_v g_ari_pos ) 60 == ( slice_byte src_v g_ari_pos ) 62 & == ( slice_byte src_v g_ari_pos ) 61 == ( slice_byte src_v + g_ari_pos 1 ) 61 & == ( slice_byte src_v g_ari_pos ) 33 == ( slice_byte src_v + g_ari_pos 1 ) 61 {
+        : i c1 ( slice_byte src_v g_ari_pos )
+        : i c2 ? < + g_ari_pos 1 n ( slice_byte src_v + g_ari_pos 1 ) 0
         : ~ i op 0  // 0 <, 1 <=, 2 >, 3 >=, 4 ==, 5 !=
         ? == c1 60 { = op ? == c2 61 1 0 = g_ari_pos + g_ari_pos ? == c2 61 2 1 } {}
         ? == c1 62 { = op ? == c2 61 3 2 = g_ari_pos + g_ari_pos ? == c2 61 2 1 } {}
@@ -1051,10 +1060,11 @@ unsafe @ __sh_params_joined → String {
 }
 
 @ __ari_and s src → i {
+    : ( Slice u ) src_v ( slice_of_str src )
     : i n ( nurl_str_len src )
     : ~ i acc ( __ari_cmp src )
     ( __ari_skip src )
-    ~ & < + g_ari_pos 1 n & == ( nurl_str_get src g_ari_pos ) 38 == ( nurl_str_get src + g_ari_pos 1 ) 38 {
+    ~ & < + g_ari_pos 1 n & == ( slice_byte src_v g_ari_pos ) 38 == ( slice_byte src_v + g_ari_pos 1 ) 38 {
         = g_ari_pos + g_ari_pos 2
         : i rhs ( __ari_cmp src )
         = acc ? & != acc 0 != rhs 0 1 0
@@ -1064,10 +1074,11 @@ unsafe @ __sh_params_joined → String {
 }
 
 @ __ari_or s src → i {
+    : ( Slice u ) src_v ( slice_of_str src )
     : i n ( nurl_str_len src )
     : ~ i acc ( __ari_and src )
     ( __ari_skip src )
-    ~ & < + g_ari_pos 1 n & == ( nurl_str_get src g_ari_pos ) 124 == ( nurl_str_get src + g_ari_pos 1 ) 124 {
+    ~ & < + g_ari_pos 1 n & == ( slice_byte src_v g_ari_pos ) 124 == ( slice_byte src_v + g_ari_pos 1 ) 124 {
         = g_ari_pos + g_ari_pos 2
         : i rhs ( __ari_and src )
         = acc ? | != acc 0 != rhs 0 1 0
@@ -1200,6 +1211,7 @@ unsafe @ __sh_brace ShWord src i from i to ShWord acc i q → v {
 
 // `$?`, `$#`, `$$`, `$0`…`$9`, `$*`, and ordinary names.
 unsafe @ __sh_special s name → String {
+    : ( Slice u ) name_v ( slice_of_str name )
     : *ShStateImpl st ( __st )
     ? ( bx_streq name `?` ) { ^ ( string_from ( nurl_str_int . st status ) ) } {}
     ? ( bx_streq name `#` ) { ^ ( string_from ( nurl_str_int ( vec_len [String] . st params ) ) ) } {}
@@ -1211,7 +1223,7 @@ unsafe @ __sh_special s name → String {
         : ~ b digits T
         : ~ i k 0
         ~ < k n {
-            ? ! ( bx_is_digit ( nurl_str_get name k ) ) { = digits F } {}
+            ? ! ( bx_is_digit ( slice_byte name_v k ) ) { = digits F } {}
             = k + k 1
         }
         ? digits {

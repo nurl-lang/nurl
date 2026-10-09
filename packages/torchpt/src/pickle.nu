@@ -50,6 +50,7 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/floatbits.nu`
 $ `stdlib/core/rcbox.nu`
+$ `stdlib/core/slice.nu`
 
 // ── node kinds ──────────────────────────────────────────────────────
 : i PK_NONE 0
@@ -781,10 +782,11 @@ unsafe @ __pk_step * PkImpl k * u p i n i at → i {
         { ^ ( __pk_fail k `pickle: unrecognised persistent id shape` ) } {}
         // "torch.FloatStorage" → the class name after the last dot
         : s full ( __pk_str_of_global k cls )
+        : ( Slice u ) full_v ( slice_of_str full )
         : i fl ( nurl_str_len full )
         : ~ i dot -1
         : ~ i j 0
-        ~ < j fl { ? == ( nurl_str_get full j ) 46 { = dot j } {} = j + j 1 }
+        ~ < j fl { ? == ( slice_byte full_v j ) 46 { = dot j } {} = j + j 1 }
         : s cname ? >= dot 0 ( nurl_str_slice full + dot 1 - - fl dot 1 ) full
         : i sid / ( vec_len [i] . k stor ) 3
         ( vec_push [i] . k stor ( pk_storage_class cname ) )

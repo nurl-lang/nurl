@@ -24,6 +24,7 @@
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
+$ `stdlib/core/slice.nu`
 
 @ __html_escape_char String out i c → v {
     ? == c 38 { ( string_push_str out `&amp;` ) } {
@@ -38,10 +39,11 @@ $ `stdlib/core/vec.nu`
 }
 
 @ _html_escape_into s src String out → v {
+    : ( Slice u ) src_v ( slice_of_str src )
     : i n ( nurl_str_len src )
     : ~ i k 0
     ~ < k n {
-        ( __html_escape_char out ( nurl_str_get src k ) )
+        ( __html_escape_char out ( slice_byte src_v k ) )
         = k + k 1
     }
 }
@@ -57,9 +59,10 @@ $ `stdlib/core/vec.nu`
 // `**` (bold), `*` (em), `[txt](url)`, `<url>` autolinks. `to` is the
 // exclusive upper bound; `buf` is the underlying NUL-terminated buffer.
 @ __md_inline s buf i from i to String out → v {
+    : ( Slice u ) buf_v ( slice_of_str buf )
     : ~ i i from
     ~ < i to {
-        : i c ( nurl_str_get buf i )
+        : i c ( slice_byte buf_v i )
         : i c1 ( __md_byte buf to + i 1 )
 
         // Backslash-escape: consume next char verbatim.
@@ -78,13 +81,13 @@ $ `stdlib/core/vec.nu`
                 : ~ i end - 0 1
                 : ~ i j + i 1
                 ~ < j to {
-                    ? == ( nurl_str_get buf j ) 96 { = end j = j to } { = j + j 1 }
+                    ? == ( slice_byte buf_v j ) 96 { = end j = j to } { = j + j 1 }
                 }
                 ? >= end 0 {
                     ( string_push_str out `<code>` )
                     : ~ i k + i 1
                     ~ < k end {
-                        ( __html_escape_char out ( nurl_str_get buf k ) )
+                        ( __html_escape_char out ( slice_byte buf_v k ) )
                         = k + k 1
                     }
                     ( string_push_str out `</code>` )
@@ -100,7 +103,7 @@ $ `stdlib/core/vec.nu`
                     : ~ i end - 0 1
                     : ~ i j + i 2
                     ~ < j - to 1 {
-                        ? & == ( nurl_str_get buf j ) 42 == ( nurl_str_get buf + j 1 ) 42 {
+                        ? & == ( slice_byte buf_v j ) 42 == ( slice_byte buf_v + j 1 ) 42 {
                             = end j = j to
                         } { = j + j 1 }
                     }
@@ -120,13 +123,13 @@ $ `stdlib/core/vec.nu`
                         : ~ i end - 0 1
                         : ~ i j + i 1
                         ~ < j to {
-                            ? == ( nurl_str_get buf j ) 42 { = end j = j to } { = j + j 1 }
+                            ? == ( slice_byte buf_v j ) 42 { = end j = j to } { = j + j 1 }
                         }
                         ? >= end 0 {
                             ( string_push_str out `<em>` )
                             : ~ i k + i 1
                             ~ < k end {
-                                ( __html_escape_char out ( nurl_str_get buf k ) )
+                                ( __html_escape_char out ( slice_byte buf_v k ) )
                                 = k + k 1
                             }
                             ( string_push_str out `</em>` )
@@ -143,27 +146,27 @@ $ `stdlib/core/vec.nu`
                             : ~ i close - 0 1
                             : ~ i j + i 2
                             ~ < j to {
-                                ? == ( nurl_str_get buf j ) 93 {
+                                ? == ( slice_byte buf_v j ) 93 {
                                     ? == ( __md_byte buf to + j 1 ) 40 { = mid j = close mid = j to } { = j to }
                                 } { = j + j 1 }
                             }
                             ? >= mid 0 {
                                 : ~ i k + mid 2
                                 ~ < k to {
-                                    ? == ( nurl_str_get buf k ) 41 { = close k = k to } { = k + k 1 }
+                                    ? == ( slice_byte buf_v k ) 41 { = close k = k to } { = k + k 1 }
                                 }
                             } {}
                             ? & >= mid 0 > close mid {
                                 ( string_push_str out `<img alt="` )
                                 : ~ i a + i 2
                                 ~ < a mid {
-                                    ( __html_escape_char out ( nurl_str_get buf a ) )
+                                    ( __html_escape_char out ( slice_byte buf_v a ) )
                                     = a + a 1
                                 }
                                 ( string_push_str out `" src="` )
                                 : ~ i b + mid 2
                                 ~ < b close {
-                                    ( __html_escape_char out ( nurl_str_get buf b ) )
+                                    ( __html_escape_char out ( slice_byte buf_v b ) )
                                     = b + b 1
                                 }
                                 ( string_push_str out `">` )
@@ -180,21 +183,21 @@ $ `stdlib/core/vec.nu`
                                 : ~ i close - 0 1
                                 : ~ i j + i 1
                                 ~ < j to {
-                                    ? == ( nurl_str_get buf j ) 93 {
+                                    ? == ( slice_byte buf_v j ) 93 {
                                         ? == ( __md_byte buf to + j 1 ) 40 { = mid j = close mid = j to } { = j to }
                                     } { = j + j 1 }
                                 }
                                 ? >= mid 0 {
                                     : ~ i k + mid 2
                                     ~ < k to {
-                                        ? == ( nurl_str_get buf k ) 41 { = close k = k to } { = k + k 1 }
+                                        ? == ( slice_byte buf_v k ) 41 { = close k = k to } { = k + k 1 }
                                     }
                                 } {}
                                 ? & >= mid 0 > close mid {
                                     ( string_push_str out `<a href="` )
                                     : ~ i b + mid 2
                                     ~ < b close {
-                                        ( __html_escape_char out ( nurl_str_get buf b ) )
+                                        ( __html_escape_char out ( slice_byte buf_v b ) )
                                         = b + b 1
                                     }
                                     ( string_push_str out `">` )
@@ -219,19 +222,19 @@ $ `stdlib/core/vec.nu`
                                         : ~ i end - 0 1
                                         : ~ i j + i 1
                                         ~ < j to {
-                                            ? == ( nurl_str_get buf j ) 62 { = end j = j to } { = j + j 1 }
+                                            ? == ( slice_byte buf_v j ) 62 { = end j = j to } { = j + j 1 }
                                         }
                                         ? >= end 0 {
                                             ( string_push_str out `<a href="` )
                                             : ~ i k + i 1
                                             ~ < k end {
-                                                ( __html_escape_char out ( nurl_str_get buf k ) )
+                                                ( __html_escape_char out ( slice_byte buf_v k ) )
                                                 = k + k 1
                                             }
                                             ( string_push_str out `">` )
                                             : ~ i k2 + i 1
                                             ~ < k2 end {
-                                                ( __html_escape_char out ( nurl_str_get buf k2 ) )
+                                                ( __html_escape_char out ( slice_byte buf_v k2 ) )
                                                 = k2 + k2 1
                                             }
                                             ( string_push_str out `</a>` )
@@ -291,42 +294,44 @@ $ `stdlib/core/vec.nu`
 // ── GFM table support ────────────────────────────────────────────────
 
 // Index of the next '\n' at/after `pos`, or -1 if none.
-@ __md_nl_at s src i pos i n → i {
+@ __md_nl_at ( Slice u ) src_v i pos i n → i {
     : ~ i scan pos
-    ~ < scan n { ? == ( nurl_str_get src scan ) 10 { ^ scan } { = scan + scan 1 } }
+    ~ < scan n { ? == ( slice_byte src_v scan ) 10 { ^ scan } { = scan + scan 1 } }
     ^ - 0 1
 }
 
 // Start of the line after the one beginning at `pos`.
-@ __md_next_pos s src i pos i n → i {
-    : i nl ( __md_nl_at src pos n )
+@ __md_next_pos ( Slice u ) src_v i pos i n → i {
+    : i nl ( __md_nl_at src_v pos n )
     ^ ? >= nl 0 + nl 1 n
 }
 
 // The line beginning at `pos` as an owned String, sans trailing \r / \n.
-@ __md_read_line s src i pos i n → String {
-    : i nl ( __md_nl_at src pos n )
+@ __md_read_line ( Slice u ) src_v i pos i n → String {
+    : i nl ( __md_nl_at src_v pos n )
     : i hard_end ? >= nl 0 nl n
-    : i line_end ? & > hard_end pos == ( nurl_str_get src - hard_end 1 ) 13 - hard_end 1 hard_end
+    : i line_end ? & > hard_end pos == ( slice_byte src_v - hard_end 1 ) 13 - hard_end 1 hard_end
     : String line ( string_with_cap + - line_end pos 1 )
-    : ~ i k pos ~ < k line_end { ( string_push_char line ( nurl_str_get src k ) ) = k + k 1 }
+    : ~ i k pos ~ < k line_end { ( string_push_char line ( slice_byte src_v k ) ) = k + k 1 }
     ( _string_seal line )
     ^ line
 }
 
 @ __md_has_pipe s line i n → b {
+    : ( Slice u ) line_v ( slice_of_str line )
     : ~ i i 0
-    ~ < i n { ? == ( nurl_str_get line i ) 124 { ^ T } {} = i + i 1 }
+    ~ < i n { ? == ( slice_byte line_v i ) 124 { ^ T } {} = i + i 1 }
     ^ F
 }
 
 // A GFM delimiter row: only `| - : space tab`, with at least one `-`.
 @ __md_is_table_delim s line i n → b {
+    : ( Slice u ) line_v ( slice_of_str line )
     ? == n 0 { ^ F } {}
     : ~ b seen_dash F
     : ~ i i 0
     ~ < i n {
-        : i c ( nurl_str_get line i )
+        : i c ( slice_byte line_v i )
         ? | | | | == c 124 == c 45 == c 58 == c 32 == c 9 {
             ? == c 45 { = seen_dash T } {}
         } { ^ F }
@@ -339,23 +344,24 @@ $ `stdlib/core/vec.nu`
 // dropping the empty segments a leading/trailing `|` produces, and trims
 // each cell before inline-formatting it.
 @ __md_table_row s line i n String out s celltag → v {
+    : ( Slice u ) line_v ( slice_of_str line )
     // Content range [s0, e0): skip outer whitespace + one outer pipe each end.
     : ~ i s0 0
-    ~ & < s0 n | == ( nurl_str_get line s0 ) 32 == ( nurl_str_get line s0 ) 9 { = s0 + s0 1 }
-    ? & < s0 n == ( nurl_str_get line s0 ) 124 { = s0 + s0 1 } {}
+    ~ & < s0 n | == ( slice_byte line_v s0 ) 32 == ( slice_byte line_v s0 ) 9 { = s0 + s0 1 }
+    ? & < s0 n == ( slice_byte line_v s0 ) 124 { = s0 + s0 1 } {}
     : ~ i e0 n
-    ~ & > e0 s0 | == ( nurl_str_get line - e0 1 ) 32 == ( nurl_str_get line - e0 1 ) 9 { = e0 - e0 1 }
-    ? & > e0 s0 == ( nurl_str_get line - e0 1 ) 124 { = e0 - e0 1 } {}
+    ~ & > e0 s0 | == ( slice_byte line_v - e0 1 ) 32 == ( slice_byte line_v - e0 1 ) 9 { = e0 - e0 1 }
+    ? & > e0 s0 == ( slice_byte line_v - e0 1 ) 124 { = e0 - e0 1 } {}
     // Walk cells between pipes in [s0, e0].
     : ~ i cell_start s0
     : ~ i i s0
     ~ <= i e0 {
-        ? | == i e0 & < i e0 == ( nurl_str_get line i ) 124 {
+        ? | == i e0 & < i e0 == ( slice_byte line_v i ) 124 {
             // Trim [cell_start, i).
             : ~ i cs cell_start
-            ~ & < cs i | == ( nurl_str_get line cs ) 32 == ( nurl_str_get line cs ) 9 { = cs + cs 1 }
+            ~ & < cs i | == ( slice_byte line_v cs ) 32 == ( slice_byte line_v cs ) 9 { = cs + cs 1 }
             : ~ i ce i
-            ~ & > ce cs | == ( nurl_str_get line - ce 1 ) 32 == ( nurl_str_get line - ce 1 ) 9 { = ce - ce 1 }
+            ~ & > ce cs | == ( slice_byte line_v - ce 1 ) 32 == ( slice_byte line_v - ce 1 ) 9 { = ce - ce 1 }
             ( string_push_char out 60 ) ( string_push_str out celltag ) ( string_push_char out 62 )
             ( __md_inline line cs ce out )
             ( string_push_str out `</` ) ( string_push_str out celltag ) ( string_push_char out 62 )
@@ -366,6 +372,7 @@ $ `stdlib/core/vec.nu`
 }
 
 @ md_to_html s src → String {
+    : ( Slice u ) src_v ( slice_of_str src )
     : i n ( nurl_str_len src )
     : String out ( string_with_cap n )
     : ( Vec i ) state ( vec_new [i] ) ( vec_push [i] state 0 )
@@ -378,17 +385,17 @@ $ `stdlib/core/vec.nu`
         : ~ i nl_at - 0 1
         : ~ i scan pos
         ~ < scan n {
-            ? == ( nurl_str_get src scan ) 10 { = nl_at scan = scan n } { = scan + scan 1 }
+            ? == ( slice_byte src_v scan ) 10 { = nl_at scan = scan n } { = scan + scan 1 }
         }
         : i hard_end ? >= nl_at 0 nl_at n
         : ~ i next_pos ? >= nl_at 0 + nl_at 1 n
-        : i line_end ? & > hard_end pos == ( nurl_str_get src - hard_end 1 ) 13 - hard_end 1 hard_end
+        : i line_end ? & > hard_end pos == ( slice_byte src_v - hard_end 1 ) 13 - hard_end 1 hard_end
         : i line_len - line_end pos
 
         : String line ( string_with_cap + line_len 1 )
         : ~ i k pos
         ~ < k line_end {
-            ( string_push_char line ( nurl_str_get src k ) )
+            ( string_push_char line ( slice_byte src_v k ) )
             = k + k 1
         }
         ( _string_seal line )
@@ -422,7 +429,7 @@ $ `stdlib/core/vec.nu`
                     : ~ i hcount 0
                     : ~ i hi 0
                     ~ < hi line_len {
-                        ? & == ( nurl_str_get lp hi ) 35 < hi 6 { = hcount + hcount 1 = hi + hi 1 } { = hi line_len }
+                        ? & == ( __md_byte lp line_len hi ) 35 < hi 6 { = hcount + hcount 1 = hi + hi 1 } { = hi line_len }
                     }
                     ? & > hcount 0 == ( __md_byte lp line_len hcount ) 32 {
                         ( __md_close_block state out )
@@ -467,7 +474,7 @@ $ `stdlib/core/vec.nu`
                                         // the next line is a delimiter row.
                                         : ~ b is_table F
                                         ? ( __md_has_pipe lp line_len ) {
-                                            : String dline ( __md_read_line src next_pos n )
+                                            : String dline ( __md_read_line src_v next_pos n )
                                             = is_table ( __md_is_table_delim ( string_data dline ) ( string_len dline ) )
                                             ( string_free dline )
                                         } {}
@@ -478,16 +485,16 @@ $ `stdlib/core/vec.nu`
                                             ( string_push_str out `</tr>\n</thead>\n<tbody>\n` )
                                             // Skip past the delimiter row, then
                                             // consume contiguous `|`-bearing rows.
-                                            : ~ i tp ( __md_next_pos src next_pos n )
+                                            : ~ i tp ( __md_next_pos src_v next_pos n )
                                             : ~ b done F
                                             ~ & ! done < tp n {
-                                                : String row ( __md_read_line src tp n )
+                                                : String row ( __md_read_line src_v tp n )
                                                 : i rl ( string_len row )
                                                 ? & > rl 0 ( __md_has_pipe ( string_data row ) rl ) {
                                                     ( string_push_str out `<tr>` )
                                                     ( __md_table_row ( string_data row ) rl out `td` )
                                                     ( string_push_str out `</tr>\n` )
-                                                    = tp ( __md_next_pos src tp n )
+                                                    = tp ( __md_next_pos src_v tp n )
                                                 } { = done T }
                                                 ( string_free row )
                                             }
@@ -514,13 +521,14 @@ $ `stdlib/core/vec.nu`
 // Horizontal rule detector: line is 3+ of one char from {-, *, _},
 // optionally with intervening spaces, and nothing else.
 @ __md_is_hr s line i n → b {
+    : ( Slice u ) line_v ( slice_of_str line )
     ? < n 3 { ^ F } {}
-    : i first ( nurl_str_get line 0 )
+    : i first ( slice_byte line_v 0 )
     ? & != first 45 & != first 42 != first 95 { ^ F } {}
     : ~ i k 0
     : ~ i count 0
     ~ < k n {
-        : i c ( nurl_str_get line k )
+        : i c ( slice_byte line_v k )
         ? == c first { = count + count 1 } {
             ? | == c 32 == c 9 {} { ^ F } }
         = k + k 1
@@ -530,20 +538,22 @@ $ `stdlib/core/vec.nu`
 
 // Detect ordered-list item prefix: digits followed by '.' and ' '.
 @ __md_starts_ol s line i n → b {
+    : ( Slice u ) line_v ( slice_of_str line )
     : ~ i k 0
     : ~ i digits 0
     ~ < k n {
-        : i c ( nurl_str_get line k )
+        : i c ( slice_byte line_v k )
         ? & >= c 48 <= c 57 { = digits + digits 1 = k + k 1 } { = k n }
     }
     ? <= digits 0 { ^ F } {}
-    ? & < digits n == ( nurl_str_get line digits ) 46 {
-        ? & < + digits 1 n == ( nurl_str_get line + digits 1 ) 32 { ^ T } { ^ F }
+    ? & < digits n == ( slice_byte line_v digits ) 46 {
+        ? & < + digits 1 n == ( slice_byte line_v + digits 1 ) 32 { ^ T } { ^ F }
     } { ^ F }
 }
 
 @ __md_find_dot s line i n → i {
+    : ( Slice u ) line_v ( slice_of_str line )
     : ~ i k 0
-    ~ < k n { : i c ( nurl_str_get line k ) ? == c 46 { ^ k } {} = k + k 1 }
+    ~ < k n { : i c ( slice_byte line_v k ) ? == c 46 { ^ k } {} = k + k 1 }
     ^ - 0 1
 }

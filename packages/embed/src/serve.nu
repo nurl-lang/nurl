@@ -53,6 +53,7 @@ $ `stdlib/core/rcbox.nu`
 $ `stdlib/ext/json.nu`
 $ `deps/http/src/http.nu`
 $ `model.nu`
+$ `stdlib/core/slice.nu`
 
 : ~ i g_em 0  // the served Embed handle's ctl word, lent by embed_serve's caller (0 = not serving)
 : ~ s g_em_token ``
@@ -219,13 +220,15 @@ unsafe @ __em_ticker → v {
 // Constant-time-ish token compare (every byte of the CONFIGURED token is
 // examined; a length mismatch folds in).
 @ __em_tok_eq s got s want → b {
+    : ( Slice u ) got_v ( slice_of_str got )
+    : ( Slice u ) want_v ( slice_of_str want )
     : i lg ( nurl_str_len got )
     : i lw ( nurl_str_len want )
     : ~ i diff ^^ lg lw
     : ~ i k 0
     ~ < k lw {
-        : i cw ( nurl_str_get want k )
-        : i cg ? < k lg ( nurl_str_get got k ) 0
+        : i cw ( slice_byte want_v k )
+        : i cg ? < k lg ( slice_byte got_v k ) 0
         = diff | diff ^^ cw cg
         = k + k 1
     }

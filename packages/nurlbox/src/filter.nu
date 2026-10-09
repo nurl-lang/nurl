@@ -16,6 +16,7 @@ $ `stdlib/std/bufio.nu`
 $ `stdlib/std/sort.nu`
 $ `stdlib/std/cmp.nu`
 $ `bx.nu`
+$ `stdlib/core/slice.nu`
 
 // Collect every line of one input, terminators stripped.
 @ bx_read_lines s path ( Vec String ) out → b {
@@ -192,6 +193,7 @@ unsafe @ ap_nl ( Vec String ) argv → i {
 }
 
 @ __cut_parse s spec → CutList {
+    : ( Slice u ) spec_v ( slice_of_str spec )
     : ( Vec i ) lo ( vec_new [i] )
     : ( Vec i ) hi ( vec_new [i] )
     : ~ b ok T
@@ -200,18 +202,18 @@ unsafe @ ap_nl ( Vec String ) argv → i {
     ~ < i n {
         : ~ i a 0
         : ~ b any_a F
-        ~ & < i n ( bx_is_digit ( nurl_str_get spec i ) ) {
-            = a + * a 10 - ( nurl_str_get spec i ) 48
+        ~ & < i n ( bx_is_digit ( slice_byte spec_v i ) ) {
+            = a + * a 10 - ( slice_byte spec_v i ) 48
             = any_a T
             = i + i 1
         }
         : ~ i b a
-        ? & < i n == ( nurl_str_get spec i ) 45 {
+        ? & < i n == ( slice_byte spec_v i ) 45 {
             = i + i 1
             : ~ i c 0
             : ~ b any_c F
-            ~ & < i n ( bx_is_digit ( nurl_str_get spec i ) ) {
-                = c + * c 10 - ( nurl_str_get spec i ) 48
+            ~ & < i n ( bx_is_digit ( slice_byte spec_v i ) ) {
+                = c + * c 10 - ( slice_byte spec_v i ) 48
                 = any_c T
                 = i + i 1
             }
@@ -222,7 +224,7 @@ unsafe @ ap_nl ( Vec String ) argv → i {
         }
         ( vec_push [i] lo a )
         ( vec_push [i] hi b )
-        ? & < i n == ( nurl_str_get spec i ) 44 { = i + i 1 } {
+        ? & < i n == ( slice_byte spec_v i ) 44 { = i + i 1 } {
             ? < i n { = ok F = i n } {}
         }
     }
@@ -345,13 +347,14 @@ unsafe @ ap_cut ( Vec String ) argv → i {
 
 // Expand `a-z`, `[:alpha:]`, `\n` and friends into a byte list.
 @ __tr_expand s spec ( Vec u ) out → v {
+    : ( Slice u ) spec_v ( slice_of_str spec )
     : i n ( nurl_str_len spec )
     : ~ i i 0
     ~ < i n {
-        : ~ i c ( nurl_str_get spec i )
-        ? & & == c 91 < + i 1 n == ( nurl_str_get spec + i 1 ) 58 {
+        : ~ i c ( slice_byte spec_v i )
+        ? & & == c 91 < + i 1 n == ( slice_byte spec_v + i 1 ) 58 {
             : ~ i e + i 2
-            ~ & < e n != ( nurl_str_get spec e ) 58 { = e + e 1 }
+            ~ & < e n != ( slice_byte spec_v e ) 58 { = e + e 1 }
             : s name ( nurl_str_slice spec + i 2 - e + i 2 )
             : ~ i b 0
             ~ < b 256 {
@@ -376,7 +379,7 @@ unsafe @ ap_cut ( Vec String ) argv → i {
             = i ? < e n + e 2 n
         } {
             ? & == c 92 < + i 1 n {
-                : i e ( nurl_str_get spec + i 1 )
+                : i e ( slice_byte spec_v + i 1 )
                 = i + i 2
                 ? == e 110 { = c 10 } {
                     ? == e 116 { = c 9 } {
@@ -385,8 +388,8 @@ unsafe @ ap_cut ( Vec String ) argv → i {
                                 ? & >= e 48 <= e 55 {
                                     : ~ i val - e 48
                                     : ~ i got 1
-                                    ~ & < got 3 & < i n & >= ( nurl_str_get spec i ) 48 <= ( nurl_str_get spec i ) 55 {
-                                        = val + * val 8 - ( nurl_str_get spec i ) 48
+                                    ~ & < got 3 & < i n & >= ( slice_byte spec_v i ) 48 <= ( slice_byte spec_v i ) 55 {
+                                        = val + * val 8 - ( slice_byte spec_v i ) 48
                                         = i + i 1
                                         = got + got 1
                                     }
@@ -395,8 +398,8 @@ unsafe @ ap_cut ( Vec String ) argv → i {
             } { = i + i 1 }
             // A range `a-z`, but only when a real `-` sits between two
             // characters — a trailing `-` is a literal dash.
-            ? & & < + i 1 ( nurl_str_len spec ) == ( nurl_str_get spec i ) 45 < + i 1 n {
-                : i hi ( nurl_str_get spec + i 1 )
+            ? & & < + i 1 ( nurl_str_len spec ) == ( slice_byte spec_v i ) 45 < + i 1 n {
+                : i hi ( slice_byte spec_v + i 1 )
                 : ~ i b c
                 ~ <= b hi {
                     ( vec_push [u] out # u b )

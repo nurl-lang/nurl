@@ -14,6 +14,7 @@ $ `stdlib/std/sort.nu`
 $ `stdlib/std/cmp.nu`
 $ `stdlib/std/time.nu`
 $ `bx.nu`
+$ `stdlib/core/slice.nu`
 
 // ── stat ──────────────────────────────────────────────────────────
 
@@ -216,19 +217,20 @@ unsafe @ __stat_default String out FileStat st s path → v {
                     : String out ( string_new )
                     ? ( bx_has o `c` ) {
                         : s fmt ( bx_val o `c` )
+                        : ( Slice u ) fmt_v ( slice_of_str fmt )
                         : i fl ( nurl_str_len fmt )
                         : ~ i k 0
                         ~ < k fl {
-                            : i c ( nurl_str_get fmt k )
+                            : i c ( slice_byte fmt_v k )
                             ? & == c 37 < + k 1 fl {
-                                ? ( __stat_directive out st p ( nurl_str_get fmt + k 1 ) ) {} {
+                                ? ( __stat_directive out st p ( slice_byte fmt_v + k 1 ) ) {} {
                                     ( string_push_char out 37 )
-                                    ( string_push_char out ( nurl_str_get fmt + k 1 ) )
+                                    ( string_push_char out ( slice_byte fmt_v + k 1 ) )
                                 }
                                 = k + k 2
                             } {
                                 ? & == c 92 < + k 1 fl {
-                                    : i e2 ( nurl_str_get fmt + k 1 )
+                                    : i e2 ( slice_byte fmt_v + k 1 )
                                     ? == e2 110 { ( string_push_char out 10 ) } {
                                         ? == e2 116 { ( string_push_char out 9 ) } {
                                             ( string_push_char out 92 )
@@ -396,12 +398,13 @@ $ `fileops.nu`
 // A size operand: `[+-]N[cwbkMG]`. Returns the comparison in `cmp`
 // (-1 less, 0 exact, 1 greater) and the value in units of `unit`.
 @ __find_num s text → i {
+    : ( Slice u ) text_v ( slice_of_str text )
     : i n ( nurl_str_len text )
     : ~ i i 0
-    ? & > n 0 | == ( nurl_str_get text 0 ) 43 == ( nurl_str_get text 0 ) 45 { = i 1 } {}
+    ? & > n 0 | == ( slice_byte text_v 0 ) 43 == ( slice_byte text_v 0 ) 45 { = i 1 } {}
     : ~ i v 0
-    ~ & < i n ( bx_is_digit ( nurl_str_get text i ) ) {
-        = v + * v 10 - ( nurl_str_get text i ) 48
+    ~ & < i n ( bx_is_digit ( slice_byte text_v i ) ) {
+        = v + * v 10 - ( slice_byte text_v i ) 48
         = i + i 1
     }
     ^ v

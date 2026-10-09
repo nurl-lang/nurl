@@ -22,6 +22,7 @@ $ `serve.nu`
 $ `store.nu`
 $ `registry.nu`
 $ `verify.nu`
+$ `stdlib/core/slice.nu`
 
 // This package names no checkpoint and has no default one. A speech model is
 // a choice about a language, a voice and a licence, so --model and --vocoder
@@ -45,12 +46,13 @@ $ `verify.nu`
 
 // Every line of a file, the last one with or without a trailing newline.
 @ __f5_lines s data → ( Vec String ) {
+    : ( Slice u ) data_v ( slice_of_str data )
     : ( Vec String ) out ( vec_new [String] )
     : i n ( nurl_str_len data )
     : ~ i start 0
     : ~ i i 0
     ~ <= i n {
-        ? | == i n == ( nurl_str_get data i ) 10 {
+        ? | == i n == ( slice_byte data_v i ) 10 {
             ? | < i n > - i start 0 {
                 ( vec_push [String] out ( string_from ( nurl_str_slice data start - i start ) ) )
             } {}

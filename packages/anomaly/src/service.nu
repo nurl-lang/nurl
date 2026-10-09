@@ -102,12 +102,14 @@ $ `stdlib/core/slice.nu`
 }
 
 @ __an_ends_with s hay s suf → b {
+    : ( Slice u ) suf_v ( slice_of_str suf )
+    : ( Slice u ) hay_v ( slice_of_str hay )
     : i hn ( nurl_str_len hay )
     : i sn ( nurl_str_len suf )
     ? > sn hn { ^ F } {}
     : ~ i k 0
     ~ < k sn {
-        ? == ( nurl_str_get hay + - hn sn k ) ( nurl_str_get suf k ) {} { ^ F }
+        ? == ( slice_byte hay_v + - hn sn k ) ( slice_byte suf_v k ) {} { ^ F }
         = k + k 1
     }
     ^ T
@@ -141,11 +143,12 @@ $ `stdlib/core/slice.nu`
 // ── Small helpers ─────────────────────────────────────────────────────
 
 @ __an_name_ok s name → b {
+    : ( Slice u ) name_v ( slice_of_str name )
     : i n ( nurl_str_len name )
     ? <= n 0 { ^ F } {}
     : ~ i k 0
     ~ < k n {
-        : i c ( nurl_str_get name k )
+        : i c ( slice_byte name_v k )
         : ~ b good F
         ? & >= c 48 <= c 57 { = good T } {}
         ? & >= c 65 <= c 90 { = good T } {}
@@ -1356,20 +1359,21 @@ unsafe @ __an_h_data HttpRequest req Params p → HttpResponse {
 // is written as JSON writes it; null is empty; an object or an array is
 // its JSON text, quoted. An absent field is the caller's empty cell.
 @ __an_csv_quote String out s t → v {
+    : ( Slice u ) t_v ( slice_of_str t )
     : i n ( nurl_str_len t )
     : ~ b need F
     : ~ i k 0
     ~ < k n {
-        : i c ( nurl_str_get t k )
+        : i c ( slice_byte t_v k )
         ? | | | == c 44 == c 34 == c 10 == c 13 { = need T } {}
         = k + k 1
     }
-    ? > n 0 { ? | == ( nurl_str_get t 0 ) 32 == ( nurl_str_get t - n 1 ) 32 { = need T } {} } {}
+    ? > n 0 { ? | == ( slice_byte t_v 0 ) 32 == ( slice_byte t_v - n 1 ) 32 { = need T } {} } {}
     ? need {
         ( string_push_char out 34 )
         = k 0
         ~ < k n {
-            : i c ( nurl_str_get t k )
+            : i c ( slice_byte t_v k )
             ? == c 34 { ( string_push_char out 34 ) } {}
             ( string_push_char out c )
             = k + k 1

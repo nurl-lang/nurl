@@ -16,6 +16,12 @@ published 0.2.1 does not compile under 0.72.0.
   table at once. Metadata values are base64-encoded with
   `b64_encode_string`. Nothing changes on the wire.
 
+Loops that walked a string with `nurl_str_get` — which measures the
+string from its start on every call, so a scan is quadratic in the
+string's length, and nurlc 0.72 warns about the shape — read through a
+view measured once (`slice_of_str` + `slice_byte`). No change in
+behaviour.
+
 ## [0.2.1] — 2026-10-07
 
 Requires NURL 0.71.0, whose ownership rules are on by default: the

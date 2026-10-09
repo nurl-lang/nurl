@@ -40,6 +40,7 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/std/path.nu`
 $ `stdlib/ext/sqlite.nu`
+$ `stdlib/core/slice.nu`
 
 : AgStore {
     String path
@@ -931,13 +932,14 @@ $ `stdlib/ext/sqlite.nu`
 
 // `%text%` with LIKE's own characters escaped ('' stays '').
 @ _ag_like_pat s text → String {
+    : ( Slice u ) text_v ( slice_of_str text )
     : String p ( string_new )
     : i n ( nurl_str_len text )
     ? == n 0 { ^ p } {}
     ( string_push_char p 37 )
     : ~ i i 0
     ~ < i n {
-        : i c ( nurl_str_get text i )
+        : i c ( slice_byte text_v i )
         ? | | == c 37 == c 95 == c 92 { ( string_push_char p 92 ) } {}
         ( string_push_char p c )
         = i + i 1

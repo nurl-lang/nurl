@@ -24,6 +24,7 @@ $ `stdlib/std/path.nu`
 $ `stdlib/ext/http.nu`
 $ `stdlib/ext/env.nu`
 $ `stdlib/ext/json.nu`
+$ `stdlib/core/slice.nu`
 
 : HubRef {
     b is_url
@@ -51,20 +52,22 @@ $ `stdlib/ext/json.nu`
 
 // index of byte `c` in [from,len), or -1
 @ __hub_idx s src i from i c → i {
+    : ( Slice u ) src_v ( slice_of_str src )
     : i n ( nurl_str_len src )
     : ~ i k from
     ~ < k n {
-        ? == ( nurl_str_get src k ) c { ^ k } {}
+        ? == ( slice_byte src_v k ) c { ^ k } {}
         = k + k 1
     }
     ^ -1
 }
 
 @ __hub_slice s src i a i b → String {
+    : ( Slice u ) src_v ( slice_of_str src )
     : String out ( string_new )
     : ~ i k a
     ~ < k b {
-        ( string_push_char out ( nurl_str_get src k ) )
+        ( string_push_char out ( slice_byte src_v k ) )
         = k + k 1
     }
     ^ out
@@ -136,6 +139,8 @@ $ `stdlib/ext/json.nu`
 
 // index of `needle` in `hay` at or after `from`, or -1
 @ __hub_find_sub s hay i from s needle → i {
+    : ( Slice u ) needle_v ( slice_of_str needle )
+    : ( Slice u ) hay_v ( slice_of_str hay )
     : i hn ( nurl_str_len hay )
     : i nn ( nurl_str_len needle )
     ? == nn 0 { ^ from } {}
@@ -144,7 +149,7 @@ $ `stdlib/ext/json.nu`
         : ~ b hit T
         : ~ i j 0
         ~ & < j nn hit {
-            ? == ( nurl_str_get hay + k j ) ( nurl_str_get needle j ) {} { = hit F }
+            ? == ( slice_byte hay_v + k j ) ( slice_byte needle_v j ) {} { = hit F }
             = j + j 1
         }
         ? hit { ^ k } {}
@@ -155,6 +160,7 @@ $ `stdlib/ext/json.nu`
 
 // Extract the rel="next" URL from a Link header value, or "" .
 @ __hub_link_next s link → String {
+    : ( Slice u ) link_v ( slice_of_str link )
     : i found ( __hub_find_sub link 0 `rel="next"` )
     ? < found 0 { ^ ( string_new ) } {}
     // the URL for this rel is the last <...> at or before `found`
@@ -162,8 +168,8 @@ $ `stdlib/ext/json.nu`
     : ~ i gt -1
     : ~ i j 0
     ~ < j found {
-        ? == ( nurl_str_get link j ) 60 { = lt j } {}
-        ? == ( nurl_str_get link j ) 62 { = gt j } {}
+        ? == ( slice_byte link_v j ) 60 { = lt j } {}
+        ? == ( slice_byte link_v j ) 62 { = gt j } {}
         = j + j 1
     }
     ? & >= lt 0 & > gt lt < gt found {

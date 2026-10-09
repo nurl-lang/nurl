@@ -21,6 +21,7 @@ $ `stdlib/std/fs.nu`
 $ `stdlib/std/path.nu`
 $ `stdlib/std/hash.nu`
 $ `stdlib/ext/env.nu`
+$ `stdlib/core/slice.nu`
 
 // The C ABI's `int`s are i32: on x86-64 an i64 in their place happens to
 // work, but a wasm32 module that declares dlopen(…, i64) is INVALID — the
@@ -134,18 +135,19 @@ static void __nurl_ensure(int n) {
 // `src[start..end)` is "const float* A" / "int M" / "float alpha"; the type
 // is everything but the trailing identifier (the parameter name).
 @ __emit_param s src i start i end String out i idx → v {
+    : ( Slice u ) src_v ( slice_of_str src )
     : ~ i a start
-    ~ & < a end ( __cpu_ws ( nurl_str_get src a ) ) { = a + a 1 }
+    ~ & < a end ( __cpu_ws ( slice_byte src_v a ) ) { = a + a 1 }
     : ~ i b end
-    ~ & > b a ( __cpu_ws ( nurl_str_get src - b 1 ) ) { = b - b 1 }
+    ~ & > b a ( __cpu_ws ( slice_byte src_v - b 1 ) ) { = b - b 1 }
     ? <= b a { ^ {} } {}
     : ~ i e b
-    ~ & > e a ( __cpu_id ( nurl_str_get src - e 1 ) ) { = e - e 1 }
-    ~ & > e a ( __cpu_ws ( nurl_str_get src - e 1 ) ) { = e - e 1 }
+    ~ & > e a ( __cpu_id ( slice_byte src_v - e 1 ) ) { = e - e 1 }
+    ~ & > e a ( __cpu_ws ( slice_byte src_v - e 1 ) ) { = e - e 1 }
     ? > idx 0 { ( string_push_str out `, ` ) } {}
     ( string_push_str out `*(` )
     : ~ i k a
-    ~ < k e { ( string_push_char out ( nurl_str_get src k ) ) = k + k 1 }
+    ~ < k e { ( string_push_char out ( slice_byte src_v k ) ) = k + k 1 }
     // The params array cells are ALWAYS 8 bytes (gpu_launch pokes i64
     // addresses); reading them as `void*` walks a 4-byte stride on
     // wasm32 and every argument after the first comes out garbage.
@@ -159,6 +161,7 @@ static void __nurl_ensure(int n) {
 // Parse the kernel signature and build the comma-separated call argument list
 // (`*(T0*)p[0], *(T1*)p[1], …`) from the FIRST `(...)` in `src`.
 @ __parse_casts s src s name → String {
+    : ( Slice u ) src_v ( slice_of_str src )
     : i n ( nurl_str_len src )
     // Locate the ENTRY kernel's own parameter list — "void <name>(" —
     // not merely the first '(' in the source. A kernel is free to
@@ -176,7 +179,7 @@ static void __nurl_ensure(int n) {
     : ~ i op - 0 1
     ? >= hit 0 { = op + hit - nlen 1 } {
         : ~ i i 0
-        ~ & < i n < op 0 { ? == ( nurl_str_get src i ) 40 { = op i } {} = i + i 1 }
+        ~ & < i n < op 0 { ? == ( slice_byte src_v i ) 40 { = op i } {} = i + i 1 }
     }
     : String out ( string_new )
     ? < op 0 { ^ out } {}
@@ -185,7 +188,7 @@ static void __nurl_ensure(int n) {
     : ~ i start + op 1
     : ~ i argn 0
     ~ & > depth 0 < j n {
-        : i ch ( nurl_str_get src j )
+        : i ch ( slice_byte src_v j )
         : ~ b boundary F
         ? == ch 40 { = depth + depth 1 } {}
         ? == ch 41 { = depth - depth 1 ? == depth 0 { = boundary T } {} } {}

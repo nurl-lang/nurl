@@ -12,6 +12,7 @@ $ `stdlib/std/time.nu`
 $ `stdlib/std/rng.nu`
 $ `bx.nu`
 $ `filter.nu`
+$ `stdlib/core/slice.nu`
 
 // ── comm ──────────────────────────────────────────────────────────
 
@@ -282,6 +283,7 @@ unsafe @ ap_fold ( Vec String ) argv → i {
 // A tab-stop list: a single number means "every N columns", a list
 // means "at these columns, then every 8".
 @ __tab_next s spec i col → i {
+    : ( Slice u ) spec_v ( slice_of_str spec )
     : i n ( nurl_str_len spec )
     ? == n 0 { ^ + col - 8 ( __i_wrap col 8 ) } {}
     : ~ i i 0
@@ -290,8 +292,8 @@ unsafe @ ap_fold ( Vec String ) argv → i {
     ~ < i n {
         : ~ i v 0
         : ~ b any F
-        ~ & < i n ( bx_is_digit ( nurl_str_get spec i ) ) {
-            = v + * v 10 - ( nurl_str_get spec i ) 48
+        ~ & < i n ( bx_is_digit ( slice_byte spec_v i ) ) {
+            = v + * v 10 - ( slice_byte spec_v i ) 48
             = any T
             = i + i 1
         }
@@ -300,7 +302,7 @@ unsafe @ ap_fold ( Vec String ) argv → i {
             ? > v col { ^ v } {}
             = last v
         } {}
-        ~ & < i n ! ( bx_is_digit ( nurl_str_get spec i ) ) { = i + i 1 }
+        ~ & < i n ! ( bx_is_digit ( slice_byte spec_v i ) ) { = i + i 1 }
     }
     // Past the last stop: a single stop repeats, a list falls back to
     // one column at a time, which is what coreutils does.

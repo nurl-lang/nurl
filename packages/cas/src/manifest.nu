@@ -35,6 +35,7 @@ $ `stdlib/std/fs.nu`
 $ `stdlib/std/path.nu`
 $ `stdlib/std/sort.nu`
 $ `cas.nu`
+$ `stdlib/core/slice.nu`
 
 : CasManifest {
     ( Vec String ) hashes
@@ -148,13 +149,14 @@ $ `cas.nu`
 // True iff the bytes carry the manifest header (cheap kind probe).
 @ manifest_is ( Vec u ) data → b {
     : s h ( __mf_header )
+    : ( Slice u ) h_v ( slice_of_str h )
     : i hn ( nurl_str_len h )
     ? < ( vec_len [u] data ) + hn 1 { ^ F } {}
     : ~ b ok T
     : ~ i k 0
     ~ < k hn {
         : i c ?? ( vec_get [u] data k ) { T x → # i x F _ → 0 }
-        ? != c ( nurl_str_get h k ) { = ok F } {}
+        ? != c ( slice_byte h_v k ) { = ok F } {}
         = k + k 1
     }
     : i nl ?? ( vec_get [u] data hn ) { T x → # i x F _ → 0 }

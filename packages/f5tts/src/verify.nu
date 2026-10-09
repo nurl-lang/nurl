@@ -20,6 +20,7 @@ $ `stdlib/core/string.nu`
 $ `stdlib/ext/json.nu`
 $ `stdlib/ext/http.nu`
 $ `deps/audio/src/wav.nu`
+$ `stdlib/core/slice.nu`
 
 : ~ s g_f5v_host ``
 
@@ -148,12 +149,13 @@ $ `deps/audio/src/wav.nu`
 
 // The words of a normalised text.
 @ f5_words s text → ( Vec String ) {
+    : ( Slice u ) text_v ( slice_of_str text )
     : ( Vec String ) out ( vec_new [String] )
     : i n ( nurl_str_len text )
     : ~ String cur ( string_new )
     : ~ i i 0
     ~ < i n {
-        : i c ( nurl_str_get text i )
+        : i c ( slice_byte text_v i )
         ? < c 128 {
             ? ( __f5v_is_digit c ) {
                 // a run of digits, spoken: its own word, so that "2026" and
@@ -161,8 +163,8 @@ $ `deps/audio/src/wav.nu`
                 // compound rule
                 : ~ i v 0
                 : ~ i nd 0
-                ~ & < i n ( __f5v_is_digit ( nurl_str_get text i ) ) {
-                    ? < nd 9 { = v + * v 10 - ( nurl_str_get text i ) 48 } {}
+                ~ & < i n ( __f5v_is_digit ( slice_byte text_v i ) ) {
+                    ? < nd 9 { = v + * v 10 - ( slice_byte text_v i ) 48 } {}
                     = nd + nd 1
                     = i + i 1
                 }
@@ -183,14 +185,14 @@ $ `deps/audio/src/wav.nu`
             // a two-byte Latin-1 supplement letter: C3 80..9E lower-cases to
             // C3 A0..BE, and C3 97 (the multiplication sign) is not a letter
             ? & == c 195 < + i 1 n {
-                : i b ( nurl_str_get text + i 1 )
+                : i b ( slice_byte text_v + i 1 )
                 ( string_push_char cur 195 )
                 ( string_push_char cur ? & & >= b 128 <= b 158 != b 151 + b 32 b )
                 = i + i 2
             } {
                 // U+2010..U+2027 — dashes, quotes, the ellipsis — are
                 // punctuation, and a dash separates
-                ? & & == c 226 < + i 2 n == ( nurl_str_get text + i 1 ) 128 {
+                ? & & == c 226 < + i 2 n == ( slice_byte text_v + i 1 ) 128 {
                     ( __f5v_flush cur out )
                     = i + i 3
                 } {
@@ -221,16 +223,18 @@ $ `deps/audio/src/wav.nu`
 
 // Does words[from..to) of `v`, concatenated, spell `w`?
 @ __f5v_concat_eq ( Vec String ) v i from i to s w → b {
+    : ( Slice u ) w_v ( slice_of_str w )
     : i wn ( nurl_str_len w )
     : ~ i pos 0
     : ~ i k from
     ~ < k to {
         : s x ( __f5v_word v k )
+        : ( Slice u ) x_v ( slice_of_str x )
         : i xn ( nurl_str_len x )
         ? > + pos xn wn { ^ F } {}
         : ~ i j 0
         ~ < j xn {
-            ? != ( nurl_str_get x j ) ( nurl_str_get w + pos j ) { ^ F } {}
+            ? != ( slice_byte x_v j ) ( slice_byte w_v + pos j ) { ^ F } {}
             = j + j 1
         }
         = pos + pos xn
@@ -335,10 +339,11 @@ $ `deps/audio/src/wav.nu`
 // that is what this sends when no language is set — a language field it would
 // have to guess at is worse than the detector it already has.
 @ __f5v_push_str ( Vec u ) out s t → v {
+    : ( Slice u ) t_v ( slice_of_str t )
     : i n ( nurl_str_len t )
     : ~ i k 0
     ~ < k n {
-        ( vec_push [u] out # u ( nurl_str_get t k ) )
+        ( vec_push [u] out # u ( slice_byte t_v k ) )
         = k + k 1
     }
 }

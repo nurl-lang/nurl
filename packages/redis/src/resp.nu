@@ -22,6 +22,7 @@
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
+$ `stdlib/core/slice.nu`
 
 // RNode.kind: 0 nil · 1 integer · 2 string (simple or bulk) · 3 error · 4 array
 : RNode {
@@ -61,8 +62,9 @@ $ `stdlib/core/vec.nu`
 }
 
 @ __resp_push_s ( Vec u ) v s raw i n → v {
+    : ( Slice u ) raw_v ( slice_of_str raw )
     : ~ i k 0
-    ~ < k n { ( vec_push [u] v # u ( nurl_str_get raw k ) ) = k + k 1 }
+    ~ < k n { ( vec_push [u] v # u ( slice_byte raw_v k ) ) = k + k 1 }
 }
 
 // Append the decimal ASCII of `n` (handles negatives, for completeness).

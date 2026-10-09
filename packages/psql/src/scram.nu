@@ -20,6 +20,7 @@ $ `stdlib/std/bytes.nu`
 $ `stdlib/std/hash_sha256.nu`
 $ `stdlib/std/pbkdf2.nu`
 $ `stdlib/std/encode.nu`
+$ `stdlib/core/slice.nu`
 
 : ScramResult {
     b ok
@@ -29,10 +30,11 @@ $ `stdlib/std/encode.nu`
 
 // raw C-string → byte vector
 @ __sc_raw_bytes s raw → ( Vec u ) {
+    : ( Slice u ) raw_v ( slice_of_str raw )
     : ( Vec u ) v ( vec_new [u] )
     : i n ( nurl_str_len raw )
     : ~ i k 0
-    ~ < k n { ( vec_push [u] v # u ( nurl_str_get raw k ) ) = k + k 1 }
+    ~ < k n { ( vec_push [u] v # u ( slice_byte raw_v k ) ) = k + k 1 }
     ^ v
 }
 
@@ -56,12 +58,14 @@ $ `stdlib/std/encode.nu`
 
 // Does String `s` start with raw prefix `p`?
 @ __sc_starts String s s p → b {
+    : ( Slice u ) p_v ( slice_of_str p )
     : i pn ( nurl_str_len p )
     ? < ( string_len s ) pn { ^ F } {}
     : s sd ( string_data s )
+    : ( Slice u ) sd_v ( slice_of_str sd )
     : ~ i k 0
     ~ < k pn {
-        ? != ( nurl_str_get sd k ) ( nurl_str_get p k ) { ^ F } {}
+        ? != ( slice_byte sd_v k ) ( slice_byte p_v k ) { ^ F } {}
         = k + k 1
     }
     ^ T
@@ -70,11 +74,12 @@ $ `stdlib/std/encode.nu`
 // Parse a non-negative decimal from a String.
 @ __sc_atoi String s → i {
     : s d ( string_data s )
+    : ( Slice u ) d_v ( slice_of_str d )
     : i n ( string_len s )
     : ~ i v 0
     : ~ i k 0
     ~ < k n {
-        : i c ( nurl_str_get d k )
+        : i c ( slice_byte d_v k )
         ? & >= c 48 <= c 57 { = v + * v 10 - c 48 } {}
         = k + k 1
     }

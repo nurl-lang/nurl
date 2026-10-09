@@ -16,6 +16,12 @@ under 0.72.0.
   outlives the String it points into. Requests are authenticated as
   before.
 
+Loops that walked a string with `nurl_str_get` — which measures the
+string from its start on every call, so a scan is quadratic in the
+string's length, and nurlc 0.72 warns about the shape — read through a
+view measured once (`slice_of_str` + `slice_byte`). No change in
+behaviour.
+
 ## [0.13.1] — 2026-10-03
 
 No change to the MCP tools, their arguments or their results. Requires

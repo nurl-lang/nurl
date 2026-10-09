@@ -1,6 +1,7 @@
 // pki-server/src/ui.nu — Server-rendered Web Interface for PKI management.
 
 $ `stdlib/core/string.nu`
+$ `stdlib/core/slice.nu`
 
 // Escape a value for interpolation into HTML text or a quoted
 // attribute. Everything this module renders that did not come from a
@@ -12,11 +13,12 @@ $ `stdlib/core/string.nu`
 // both quote forms is what makes the same function safe in an
 // attribute context, not only between tags.
 @ ui_html_escape s raw → String {
+    : ( Slice u ) raw_v ( slice_of_str raw )
     : String out ( string_new )
     : i n ( nurl_str_len raw )
     : ~ i k 0
     ~ < k n {
-        : i c ( nurl_str_get raw k )
+        : i c ( slice_byte raw_v k )
         ? == c 38 { ( string_push_str out `&amp;` ) } {
             ? == c 60 { ( string_push_str out `&lt;` ) } {
                 ? == c 62 { ( string_push_str out `&gt;` ) } {

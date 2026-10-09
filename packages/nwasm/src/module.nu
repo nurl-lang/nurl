@@ -15,6 +15,7 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/core/rcbox.nu`
+$ `stdlib/core/slice.nu`
 
 // ── byte cursor + LEB128 ─────────────────────────────────────────
 
@@ -760,12 +761,13 @@ unsafe @ functype_eq * FuncType a * FuncType b → b {
 }
 
 @ __name_eq ( Vec u ) nm s want → b {
+    : ( Slice u ) want_v ( slice_of_str want )
     : i n ( vec_len [u] nm )
     ? != n ( nurl_str_len want ) { ^ F } {}
     : ~ b eq T : ~ i k 0
     ~ & eq < k n {
         : i a ?? ( vec_get [u] nm k ) { T x → # i x F → -1 }
-        ? != a ( nurl_str_get want k ) { = eq F } {}
+        ? != a ( slice_byte want_v k ) { = eq F } {}
         = k + k 1
     }
     ^ eq

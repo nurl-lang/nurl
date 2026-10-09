@@ -30,6 +30,7 @@ $ `stdlib/std/random.nu`
 $ `scram.nu`
 $ `stdlib/std/tls.nu`
 $ `stdlib/core/rcbox.nu`
+$ `stdlib/core/slice.nu`
 
 // SSLRequest magic (1234 << 16 | 5679) and the protocol-3.0 version word.
 : | PgErr {
@@ -185,9 +186,10 @@ unsafe @ pg_conn_tls PgConn c__h → i {
 }
 
 @ __push_raw ( Vec u ) v s raw → v {
+    : ( Slice u ) raw_v ( slice_of_str raw )
     : i n ( nurl_str_len raw )
     : ~ i k 0
-    ~ < k n { ( vec_push [u] v # u ( nurl_str_get raw k ) ) = k + k 1 }
+    ~ < k n { ( vec_push [u] v # u ( slice_byte raw_v k ) ) = k + k 1 }
 }
 
 @ __push_cstr ( Vec u ) v s raw → v {

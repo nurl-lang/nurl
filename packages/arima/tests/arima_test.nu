@@ -20,6 +20,7 @@ $ `stdlib/std/float.nu`
 $ `stdlib/std/time.nu`
 $ `stdlib/ext/json.nu`
 $ `src/arima.nu`
+$ `stdlib/core/slice.nu`
 
 : ~ i g_pass 0
 : ~ i g_fail 0
@@ -252,14 +253,15 @@ $ `src/arima.nu`
 
 // "ar.L2" → 2, "ma.S.L12" → 12
 @ ar_lag s key → i {
+    : ( Slice u ) key_v ( slice_of_str key )
     : i n ( nurl_str_len key )
     : ~ i k 0
     : ~ i at -1
-    ~ < k n { ? == ( nurl_str_get key k ) 76 { = at k } {} = k + k 1 }
+    ~ < k n { ? == ( slice_byte key_v k ) 76 { = at k } {} = k + k 1 }
     ? < at 0 { ^ 1 } {}
     : ~ i v 0
     = k + at 1
-    ~ < k n { = v + * v 10 - ( nurl_str_get key k ) 48 = k + k 1 }
+    ~ < k n { = v + * v 10 - ( slice_byte key_v k ) 48 = k + k 1 }
     ^ v
 }
 

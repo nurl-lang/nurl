@@ -26,6 +26,7 @@ $ `stdlib/core/rcbox.nu`
 $ `stdlib/core/errors.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/std/bufio.nu`
+$ `stdlib/core/slice.nu`
 
 // The name diagnostics carry. Set once by the dispatcher, so every
 // message reads `rm: cannot remove 'x'` and not `nurlbox: ...`.
@@ -96,12 +97,13 @@ unsafe @ bx_write_bytes ( Vec u ) buf → v {
 
 // Ordinal of `letter` among the option letters of `spec`, or -1.
 @ __bx_ord s spec i lc → i {
+    : ( Slice u ) spec_v ( slice_of_str spec )
     : i n ( nurl_str_len spec )
     : ~ i i 0
     : ~ i k 0
     : ~ i found -1
     ~ < i n {
-        : i c ( nurl_str_get spec i )
+        : i c ( slice_byte spec_v i )
         ? != c 58 {
             ? & < found 0 == c lc { = found k } {}
             = k + k 1
@@ -112,11 +114,12 @@ unsafe @ bx_write_bytes ( Vec u ) buf → v {
 }
 
 @ __bx_letters s spec → i {
+    : ( Slice u ) spec_v ( slice_of_str spec )
     : i n ( nurl_str_len spec )
     : ~ i i 0
     : ~ i k 0
     ~ < i n {
-        ? != ( nurl_str_get spec i ) 58 { = k + k 1 } {}
+        ? != ( slice_byte spec_v i ) 58 { = k + k 1 } {}
         = i + i 1
     }
     ^ k
@@ -124,15 +127,16 @@ unsafe @ bx_write_bytes ( Vec u ) buf → v {
 
 // Does the ordinal-`ord` option letter take a value?
 @ __bx_takes_val s spec i ord → b {
+    : ( Slice u ) spec_v ( slice_of_str spec )
     : i n ( nurl_str_len spec )
     : ~ i i 0
     : ~ i k 0
     : ~ b ans F
     ~ < i n {
-        : i c ( nurl_str_get spec i )
+        : i c ( slice_byte spec_v i )
         ? != c 58 {
             ? == k ord {
-                ? < + i 1 n { ? == ( nurl_str_get spec + i 1 ) 58 { = ans T } {} } {}
+                ? < + i 1 n { ? == ( slice_byte spec_v + i 1 ) 58 { = ans T } {} } {}
             } {}
             = k + k 1
         } {}
@@ -144,6 +148,8 @@ unsafe @ bx_write_bytes ( Vec u ) buf → v {
 // Resolve a long option name against the `name=letter,…` table.
 // Returns the letter's character code, or -1 when unknown.
 @ __bx_long_letter s longs s name → i {
+    : ( Slice u ) name_v ( slice_of_str name )
+    : ( Slice u ) longs_v ( slice_of_str longs )
     : i ln ( nurl_str_len longs )
     : i nn ( nurl_str_len name )
     : ~ i i 0
@@ -151,18 +157,18 @@ unsafe @ bx_write_bytes ( Vec u ) buf → v {
     ~ < i ln {
         // one entry: up to the next ','
         : ~ i e i
-        ~ & < e ln != ( nurl_str_get longs e ) 44 { = e + e 1 }
+        ~ & < e ln != ( slice_byte longs_v e ) 44 { = e + e 1 }
         // split it at '='
         : ~ i eq i
-        ~ & < eq e != ( nurl_str_get longs eq ) 61 { = eq + eq 1 }
+        ~ & < eq e != ( slice_byte longs_v eq ) 61 { = eq + eq 1 }
         ? & < ans 0 == - eq i nn {
             : ~ b same T
             : ~ i k 0
             ~ < k nn {
-                ? != ( nurl_str_get longs + i k ) ( nurl_str_get name k ) { = same F } {}
+                ? != ( slice_byte longs_v + i k ) ( slice_byte name_v k ) { = same F } {}
                 = k + k 1
             }
-            ? & same < + eq 1 e { = ans ( nurl_str_get longs + eq 1 ) } {}
+            ? & same < + eq 1 e { = ans ( slice_byte longs_v + eq 1 ) } {}
         } {}
         = i + e 1
     }
@@ -200,23 +206,24 @@ unsafe @ bx_write_bytes ( Vec u ) buf → v {
     : ~ i i start
     ~ < i n {
         : s tok ( bx_at argv i )
+        : ( Slice u ) tok_v ( slice_of_str tok )
         : i tl ( nurl_str_len tok )
         // `-2` and `-.5` are operands, not options, for a tool whose
         // spec has no digit letters — `seq 10 -2 2` counts down, it does
         // not ask for an option named `2`.
-        : b numeric & & > tl 1 == ( nurl_str_get tok 0 ) 45
-        & | ( bx_is_digit ( nurl_str_get tok 1 ) ) == ( nurl_str_get tok 1 ) 46
-        < ( __bx_ord spec ( nurl_str_get tok 1 ) ) 0
-        ? | endopts | numeric | < tl 2 != ( nurl_str_get tok 0 ) 45 {
+        : b numeric & & > tl 1 == ( slice_byte tok_v 0 ) 45
+        & | ( bx_is_digit ( slice_byte tok_v 1 ) ) == ( slice_byte tok_v 1 ) 46
+        < ( __bx_ord spec ( slice_byte tok_v 1 ) ) 0
+        ? | endopts | numeric | < tl 2 != ( slice_byte tok_v 0 ) 45 {
             ( vec_push [String] args ( string_from tok ) )
         } {
-            ? & == ( nurl_str_get tok 1 ) 45 == tl 2 {
+            ? & == ( slice_byte tok_v 1 ) 45 == tl 2 {
                 = endopts T
             } {
-                ? == ( nurl_str_get tok 1 ) 45 {
+                ? == ( slice_byte tok_v 1 ) 45 {
                     // --name  or  --name=value
                     : ~ i eq 2
-                    ~ & < eq tl != ( nurl_str_get tok eq ) 61 { = eq + eq 1 }
+                    ~ & < eq tl != ( slice_byte tok_v eq ) 61 { = eq + eq 1 }
                     : s nm ( nurl_str_slice tok 2 - eq 2 )
                     : i lc ( __bx_long_letter longs nm )
                     ? < lc 0 {
@@ -252,7 +259,7 @@ unsafe @ bx_write_bytes ( Vec u ) buf → v {
                     // a cluster of shorts: -la, -n5, -n 5
                     : ~ i k 1
                     ~ < k tl {
-                        : i c ( nurl_str_get tok k )
+                        : i c ( slice_byte tok_v k )
                         : i ord ( __bx_ord spec c )
                         ? < ord 0 {
                             ( nurl_eprint g_bx_name )
@@ -393,20 +400,21 @@ unsafe @ bx_write_bytes ( Vec u ) buf → v {
 // `k`/`K` (1024), `M`, `G`, and the decimal `kB`/`MB`/`GB`. Returns -1
 // when the text is not a count at all, so a caller can diagnose it.
 @ bx_count s text → i {
+    : ( Slice u ) text_v ( slice_of_str text )
     : i n ( nurl_str_len text )
     ? == n 0 { ^ -1 } {}
     : ~ i i 0
     : ~ i val 0
     : ~ b any F
-    ~ & < i n ( bx_is_digit ( nurl_str_get text i ) ) {
-        = val + * val 10 - ( nurl_str_get text i ) 48
+    ~ & < i n ( bx_is_digit ( slice_byte text_v i ) ) {
+        = val + * val 10 - ( slice_byte text_v i ) 48
         = any T
         = i + i 1
     }
     ? ! any { ^ -1 } {}
     ? == i n { ^ val } {}
-    : i c ( nurl_str_get text i )
-    : b kb & < + i 1 n == ( nurl_str_get text + i 1 ) 66
+    : i c ( slice_byte text_v i )
+    : b kb & < + i 1 n == ( slice_byte text_v + i 1 ) 66
     : i rest ? kb - n + i 2 - n + i 1
     ? != rest 0 { ^ -1 } {}
     ? == c 98 { ^ * val 512 } {}

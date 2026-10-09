@@ -28,6 +28,7 @@ $ `stdlib/std/fs.nu`
 $ `stdlib/std/utf8.nu`
 $ `stdlib/std/hashmap.nu`
 $ `clip_merges_data.nu`
+$ `stdlib/core/slice.nu`
 
 : i BPE_INF 1000000000
 
@@ -119,10 +120,11 @@ $ `clip_merges_data.nu`
 
 // First space index in `line`, or -1.
 @ __first_space s line → i {
+    : ( Slice u ) line_v ( slice_of_str line )
     : i n ( nurl_str_len line )
     : ~ i k 0
     ~ < k n {
-        ? == ( nurl_str_get line k ) 32 { ^ k } {}
+        ? == ( slice_byte line_v k ) 32 { ^ k } {}
         = k + k 1
     }
     ^ -1
@@ -216,9 +218,10 @@ $ `clip_merges_data.nu`
     : ~ i ci 0
     ~ < ci nchunks {
         : s data ( clip_merges_chunk ci )
+        : ( Slice u ) data_v ( slice_of_str data )
         : i n ( nurl_str_len data )
         : ~ i p 0
-        ~ < p n { ( vec_push [u] buf # u ( nurl_str_get data p ) ) = p + p 1 }
+        ~ < p n { ( vec_push [u] buf # u ( slice_byte data_v p ) ) = p + p 1 }
         = ci + ci 1
     }
     ( __load_merges tk buf )
@@ -351,9 +354,10 @@ $ `clip_merges_data.nu`
 
 // Byte substring of a raw char* (string_substr only takes a managed String).
 @ __sub s text i from i len → String {
+    : ( Slice u ) text_v ( slice_of_str text )
     : String out ( string_new )
     : ~ i k 0
-    ~ < k len { ( string_push_char out ( nurl_str_get text + from k ) ) = k + k 1 }
+    ~ < k len { ( string_push_char out ( slice_byte text_v + from k ) ) = k + k 1 }
     ^ out
 }
 
@@ -483,12 +487,13 @@ $ `clip_merges_data.nu`
     : ~ i wi 0
     ~ < wi nw {
         : s w ?? ( vec_get [String] words wi ) { T s → ( string_data s ) F _ → `` }
+        : ( Slice u ) w_v ( slice_of_str w )
         // byte-encode: map each UTF-8 byte through byte_enc
         : String benc ( string_new )
         : i bl ( nurl_str_len w )
         : ~ i bp 0
         ~ < bp bl {
-            : i bb ( nurl_str_get w bp )
+            : i bb ( slice_byte w_v bp )
             ?? ( vec_get [String] . tk byte_enc bb ) { T s → ( string_push_str benc ( string_data s ) ) F _ → {} }
             = bp + bp 1
         }

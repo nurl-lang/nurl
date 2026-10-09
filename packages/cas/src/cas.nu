@@ -34,6 +34,7 @@ $ `stdlib/std/fs.nu`
 $ `stdlib/std/path.nu`
 $ `stdlib/std/hash.nu`
 $ `stdlib/std/time.nu`
+$ `stdlib/core/slice.nu`
 
 : Cas {
     String root
@@ -48,11 +49,12 @@ $ `stdlib/std/time.nu`
 }
 
 @ __cas_is_hex s hex → b {
+    : ( Slice u ) hex_v ( slice_of_str hex )
     ? != ( nurl_str_len hex ) 64 { ^ F } {}
     : ~ b ok T
     : ~ i k 0
     ~ < k 64 {
-        : i ch ( nurl_str_get hex k )
+        : i ch ( slice_byte hex_v k )
         ? | & >= ch 48 <= ch 57 & >= ch 97 <= ch 102 {} { = ok F }
         = k + k 1
     }
@@ -75,15 +77,16 @@ $ `stdlib/std/time.nu`
 
 // <root>/objects/<hex[0:2]>/<hex[2:]>
 @ cas_object_path Cas c s hex → String {
+    : ( Slice u ) hex_v ( slice_of_str hex )
     : String p ( string_with_cap + ( string_len . c root ) 80 )
     ( string_push_str p ( string_data . c root ) )
     ( string_push_str p `/objects/` )
-    ( string_push_char p ( nurl_str_get hex 0 ) )
-    ( string_push_char p ( nurl_str_get hex 1 ) )
+    ( string_push_char p ( slice_byte hex_v 0 ) )
+    ( string_push_char p ( slice_byte hex_v 1 ) )
     ( string_push_char p 47 )
     : ~ i k 2
     ~ < k ( nurl_str_len hex ) {
-        ( string_push_char p ( nurl_str_get hex k ) )
+        ( string_push_char p ( slice_byte hex_v k ) )
         = k + k 1
     }
     ^ p

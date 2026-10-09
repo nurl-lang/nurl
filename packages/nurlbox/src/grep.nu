@@ -26,6 +26,7 @@ $ `stdlib/std/cmp.nu`
 $ `stdlib/ext/regex.nu`
 $ `bx.nu`
 $ `filter.nu`
+$ `stdlib/core/slice.nu`
 
 : i GREP_INVERT 1
 : i GREP_IGNORE 2
@@ -47,12 +48,13 @@ $ `filter.nu`
 // `)`, `|`, `+`, `?`, `{`, `}`. Inside a bracket expression nothing is
 // special, so the scan tracks that.
 @ _bre_to_ere s pat → String {
+    : ( Slice u ) pat_v ( slice_of_str pat )
     : String out ( string_new )
     : i n ( nurl_str_len pat )
     : ~ i i 0
     : ~ b in_class F
     ~ < i n {
-        : i c ( nurl_str_get pat i )
+        : i c ( slice_byte pat_v i )
         ? in_class {
             ( string_push_char out c )
             ? == c 93 { = in_class F } {}
@@ -63,17 +65,17 @@ $ `filter.nu`
                 = in_class T
                 = i + i 1
                 // A `]` immediately after `[` or `[^` is a literal.
-                ? & < i n == ( nurl_str_get pat i ) 94 {
+                ? & < i n == ( slice_byte pat_v i ) 94 {
                     ( string_push_char out 94 )
                     = i + i 1
                 } {}
-                ? & < i n == ( nurl_str_get pat i ) 93 {
+                ? & < i n == ( slice_byte pat_v i ) 93 {
                     ( string_push_char out 93 )
                     = i + i 1
                 } {}
             } {
                 ? & == c 92 < + i 1 n {
-                    : i e ( nurl_str_get pat + i 1 )
+                    : i e ( slice_byte pat_v + i 1 )
                     ? | | | | | == e 40 == e 41 == e 124 == e 43 == e 63 | == e 123 == e 125 {
                         // The operator forms lose their backslash.
                         ( string_push_char out e )
@@ -119,10 +121,11 @@ $ `filter.nu`
 
 // The same, appended to `out` — a per-line loop reuses one buffer.
 @ _grep_lower_into String out s text → v {
+    : ( Slice u ) text_v ( slice_of_str text )
     : i n ( nurl_str_len text )
     : ~ i i 0
     ~ < i n {
-        : i c ( nurl_str_get text i )
+        : i c ( slice_byte text_v i )
         ( string_push_char out ? & >= c 65 <= c 90 + c 32 c )
         = i + i 1
     }
@@ -154,6 +157,7 @@ $ `filter.nu`
 // not enough, because the leftmost match may fail the boundary test
 // while a later one passes.
 @ __grep_line_matches GrepPat p s line i flags inout i mstart inout i mlen → b {
+    : ( Slice u ) line_v ( slice_of_str line )
     : i n ( nurl_str_len line )
     : ~ i from 0
     : ~ b found F
@@ -170,10 +174,10 @@ $ `filter.nu`
             } {}
             ? != 0 & flags GREP_WORD {
                 ? > abs_start 0 {
-                    ? ( __grep_is_word ( nurl_str_get line - abs_start 1 ) ) { = ok F } {}
+                    ? ( __grep_is_word ( slice_byte line_v - abs_start 1 ) ) { = ok F } {}
                 } {}
                 ? < abs_end n {
-                    ? ( __grep_is_word ( nurl_str_get line abs_end ) ) { = ok F } {}
+                    ? ( __grep_is_word ( slice_byte line_v abs_end ) ) { = ok F } {}
                 } {}
             } {}
             ? ok {
@@ -190,6 +194,7 @@ $ `filter.nu`
 }
 
 @ __grep_emit String out s name s line i lineno i flags b with_name b only i mstart i mlen → v {
+    : ( Slice u ) line_v ( slice_of_str line )
     ? with_name {
         ( string_push_str out name )
         ( string_push_char out 58 )
@@ -201,7 +206,7 @@ $ `filter.nu`
     ? only {
         : ~ i k 0
         ~ < k mlen {
-            ( string_push_char out ( nurl_str_get line + mstart k ) )
+            ( string_push_char out ( slice_byte line_v + mstart k ) )
             = k + k 1
         }
     } {

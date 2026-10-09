@@ -22,6 +22,7 @@ $ `stdlib/std/bufio.nu`
 $ `stdlib/ext/regex.nu`
 $ `bx.nu`
 $ `grep.nu`
+$ `stdlib/core/slice.nu`
 
 : i SED_ADDR_NONE 0
 : i SED_ADDR_LINE 1
@@ -59,7 +60,8 @@ $ `grep.nu`
 @ __sed_at s src i n → i { ^ ? < g_sed_pos n ( nurl_str_get src g_sed_pos ) 0 }
 
 @ __sed_skip_ws s src i n → v {
-    ~ & < g_sed_pos n | | == ( nurl_str_get src g_sed_pos ) 32 == ( nurl_str_get src g_sed_pos ) 9 == ( nurl_str_get src g_sed_pos ) 59 {
+    : ( Slice u ) src_v ( slice_of_str src )
+    ~ & < g_sed_pos n | | == ( slice_byte src_v g_sed_pos ) 32 == ( slice_byte src_v g_sed_pos ) 9 == ( slice_byte src_v g_sed_pos ) 59 {
         = g_sed_pos + g_sed_pos 1
     }
 }
@@ -67,15 +69,16 @@ $ `grep.nu`
 // Read a delimited chunk starting just past the delimiter; `\<delim>`
 // escapes it, and the delimiter itself ends the chunk.
 @ __sed_chunk s src i n i delim String out → b {
+    : ( Slice u ) src_v ( slice_of_str src )
     ( string_clear out )
     ~ < g_sed_pos n {
-        : i c ( nurl_str_get src g_sed_pos )
+        : i c ( slice_byte src_v g_sed_pos )
         ? == c delim {
             = g_sed_pos + g_sed_pos 1
             ^ T
         } {}
         ? & == c 92 < + g_sed_pos 1 n {
-            : i e ( nurl_str_get src + g_sed_pos 1 )
+            : i e ( slice_byte src_v + g_sed_pos 1 )
             ? == e delim {
                 ( string_push_char out delim )
             } {
@@ -104,6 +107,7 @@ unsafe @ __sed_compile_re String pat b icase → Regex {
 
 // One address, if there is one at the cursor.
 @ __sed_addr s src i n inout i kind inout i line inout Regex re → v {
+    : ( Slice u ) src_v ( slice_of_str src )
     = kind SED_ADDR_NONE
     = line 0
     : i c ( __sed_at src n )
@@ -114,8 +118,8 @@ unsafe @ __sed_compile_re String pat b icase → Regex {
     } {}
     ? ( bx_is_digit c ) {
         : ~ i v 0
-        ~ & < g_sed_pos n ( bx_is_digit ( nurl_str_get src g_sed_pos ) ) {
-            = v + * v 10 - ( nurl_str_get src g_sed_pos ) 48
+        ~ & < g_sed_pos n ( bx_is_digit ( slice_byte src_v g_sed_pos ) ) {
+            = v + * v 10 - ( slice_byte src_v g_sed_pos ) 48
             = g_sed_pos + g_sed_pos 1
         }
         = kind SED_ADDR_LINE
@@ -128,7 +132,7 @@ unsafe @ __sed_compile_re String pat b icase → Regex {
         ? ! ( __sed_chunk src n 47 pat ) { = g_sed_bad T } {}
         // A trailing `I` asks for a case-insensitive address.
         : ~ b icase F
-        ? & < g_sed_pos n == ( nurl_str_get src g_sed_pos ) 73 {
+        ? & < g_sed_pos n == ( slice_byte src_v g_sed_pos ) 73 {
             = icase T
             = g_sed_pos + g_sed_pos 1
         } {}
@@ -141,20 +145,21 @@ unsafe @ __sed_compile_re String pat b icase → Regex {
 // Text for `a` / `i` / `c`: either `a\` + newline + text, or the GNU
 // one-liner `a text`.
 @ __sed_text s src i n String out → v {
+    : ( Slice u ) src_v ( slice_of_str src )
     ( string_clear out )
-    ? & < g_sed_pos n == ( nurl_str_get src g_sed_pos ) 92 { = g_sed_pos + g_sed_pos 1 } {}
-    ? & < g_sed_pos n == ( nurl_str_get src g_sed_pos ) 10 { = g_sed_pos + g_sed_pos 1 } {}
-    ~ & < g_sed_pos n | == ( nurl_str_get src g_sed_pos ) 32 == ( nurl_str_get src g_sed_pos ) 9 {
+    ? & < g_sed_pos n == ( slice_byte src_v g_sed_pos ) 92 { = g_sed_pos + g_sed_pos 1 } {}
+    ? & < g_sed_pos n == ( slice_byte src_v g_sed_pos ) 10 { = g_sed_pos + g_sed_pos 1 } {}
+    ~ & < g_sed_pos n | == ( slice_byte src_v g_sed_pos ) 32 == ( slice_byte src_v g_sed_pos ) 9 {
         = g_sed_pos + g_sed_pos 1
     }
     ~ < g_sed_pos n {
-        : i c ( nurl_str_get src g_sed_pos )
+        : i c ( slice_byte src_v g_sed_pos )
         ? == c 10 {
             = g_sed_pos + g_sed_pos 1
             ^
         } {}
         ? & == c 92 < + g_sed_pos 1 n {
-            ( string_push_char out ( nurl_str_get src + g_sed_pos 1 ) )
+            ( string_push_char out ( slice_byte src_v + g_sed_pos 1 ) )
             = g_sed_pos + g_sed_pos 2
         } {
             ( string_push_char out c )
@@ -164,12 +169,13 @@ unsafe @ __sed_compile_re String pat b icase → Regex {
 }
 
 @ __sed_word s src i n String out → v {
+    : ( Slice u ) src_v ( slice_of_str src )
     ( string_clear out )
-    ~ & < g_sed_pos n | == ( nurl_str_get src g_sed_pos ) 32 == ( nurl_str_get src g_sed_pos ) 9 {
+    ~ & < g_sed_pos n | == ( slice_byte src_v g_sed_pos ) 32 == ( slice_byte src_v g_sed_pos ) 9 {
         = g_sed_pos + g_sed_pos 1
     }
     ~ < g_sed_pos n {
-        : i c ( nurl_str_get src g_sed_pos )
+        : i c ( slice_byte src_v g_sed_pos )
         ? | | | == c 10 == c 59 == c 32 == c 125 { ^ } {}
         ( string_push_char out c )
         = g_sed_pos + g_sed_pos 1
@@ -177,15 +183,16 @@ unsafe @ __sed_compile_re String pat b icase → Regex {
 }
 
 unsafe @ __sed_parse s src ( Vec SedCmd ) out → v {
+    : ( Slice u ) src_v ( slice_of_str src )
     : i n ( nurl_str_len src )
     = g_sed_pos 0
     ~ < g_sed_pos n {
         ( __sed_skip_ws src n )
-        ~ & < g_sed_pos n == ( nurl_str_get src g_sed_pos ) 10 { = g_sed_pos + g_sed_pos 1 ( __sed_skip_ws src n ) }
+        ~ & < g_sed_pos n == ( slice_byte src_v g_sed_pos ) 10 { = g_sed_pos + g_sed_pos 1 ( __sed_skip_ws src n ) }
         ? >= g_sed_pos n { ^ } {}
         // A comment runs to end of line.
-        ? == ( nurl_str_get src g_sed_pos ) 35 {
-            ~ & < g_sed_pos n != ( nurl_str_get src g_sed_pos ) 10 { = g_sed_pos + g_sed_pos 1 }
+        ? == ( slice_byte src_v g_sed_pos ) 35 {
+            ~ & < g_sed_pos n != ( slice_byte src_v g_sed_pos ) 10 { = g_sed_pos + g_sed_pos 1 }
         } {
             : ~ i a1kind 0
             : ~ i a1line 0
@@ -199,13 +206,13 @@ unsafe @ __sed_parse s src ( Vec SedCmd ) out → v {
                 ( __sed_addr src n a2kind a2line a2re )
             } {}
             : ~ b negate F
-            ~ & < g_sed_pos n == ( nurl_str_get src g_sed_pos ) 33 {
+            ~ & < g_sed_pos n == ( slice_byte src_v g_sed_pos ) 33 {
                 = negate ! negate
                 = g_sed_pos + g_sed_pos 1
             }
             ( __sed_skip_ws src n )
             ? >= g_sed_pos n { ^ } {}
-            : i cmd ( nurl_str_get src g_sed_pos )
+            : i cmd ( slice_byte src_v g_sed_pos )
             = g_sed_pos + g_sed_pos 1
             : String arg1 ( string_new )
             : String arg2 ( string_new )
@@ -222,14 +229,14 @@ unsafe @ __sed_parse s src ( Vec SedCmd ) out → v {
                 // Flags run until the command separator.
                 : ~ b more T
                 ~ & more < g_sed_pos n {
-                    : i f ( nurl_str_get src g_sed_pos )
+                    : i f ( slice_byte src_v g_sed_pos )
                     ? == f 103 { = sflags | sflags SED_S_GLOBAL = g_sed_pos + g_sed_pos 1 } {
                         ? == f 112 { = sflags | sflags SED_S_PRINT = g_sed_pos + g_sed_pos 1 } {
                             ? | == f 105 == f 73 { = sflags | sflags SED_S_ICASE = g_sed_pos + g_sed_pos 1 } {
                                 ? ( bx_is_digit f ) {
                                     : ~ i v 0
-                                    ~ & < g_sed_pos n ( bx_is_digit ( nurl_str_get src g_sed_pos ) ) {
-                                        = v + * v 10 - ( nurl_str_get src g_sed_pos ) 48
+                                    ~ & < g_sed_pos n ( bx_is_digit ( slice_byte src_v g_sed_pos ) ) {
+                                        = v + * v 10 - ( slice_byte src_v g_sed_pos ) 48
                                         = g_sed_pos + g_sed_pos 1
                                     }
                                     = soccur ? > v 0 - v 1 0
@@ -415,7 +422,9 @@ unsafe @ __sed_subst SedCmd c String space → b {
 
 unsafe @ __sed_translit SedCmd c String space → v {
     : s from ( string_data . c arg1 )
+    : ( Slice u ) from_v ( slice_of_str from )
     : s to ( string_data . c arg2 )
+    : ( Slice u ) to_v ( slice_of_str to )
     : i fn ( nurl_str_len from )
     : i tn ( nurl_str_len to )
     : i n ( string_len space )
@@ -426,8 +435,8 @@ unsafe @ __sed_translit SedCmd c String space → v {
         : ~ i outc ch
         : ~ i j 0
         ~ < j fn {
-            ? == ( nurl_str_get from j ) ch {
-                = outc ? < j tn ( nurl_str_get to j ) ch
+            ? == ( slice_byte from_v j ) ch {
+                = outc ? < j tn ( slice_byte to_v j ) ch
                 = j fn
             } { = j + j 1 }
         }

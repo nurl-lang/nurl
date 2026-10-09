@@ -31,6 +31,7 @@ $ `stdlib/core/string.nu`
 $ `stdlib/std/hashmap.nu`
 $ `stdlib/core/rcbox.nu`
 $ `stdlib/std/fs.nu`
+$ `stdlib/core/slice.nu`
 
 : F5VocabImpl {
     ( Vec i ) ascii  // 128 slots: a one-byte character's id, -1 when absent
@@ -81,18 +82,19 @@ unsafe @ f5_vocab_load s path → !F5Vocab String {
             : ( Vec i ) koff ( vec_new [i] )
             : ( Vec i ) kid ( vec_new [i] )
             : s data ( string_data txt )
+            : ( Slice u ) data_v ( slice_of_str data )
             : i n ( nurl_str_len data )
             : ~ i id 0
             : ~ i start 0
             : ~ i i 0
             ~ <= i n {
-                ? | == i n == ( nurl_str_get data i ) 10 {
+                ? | == i n == ( slice_byte data_v i ) 10 {
                     // a token is the line's bytes; the final piece counts only
                     // when the file does not end with a newline
                     ? | < i n > - i start 0 {
                         : i len - i start
                         ? == len 1 {
-                            : i c ( nurl_str_get data start )
+                            : i c ( slice_byte data_v start )
                             ? < c 128 { ( vec_set [i] asc c id ) } {}
                         } {}
                         ? != len 1 {
@@ -101,7 +103,7 @@ unsafe @ f5_vocab_load s path → !F5Vocab String {
                             ( vec_push [i] koff ( vec_len [u] keys ) )
                             ( vec_push [i] kid ? == len 0 { 0 } { id } )
                             : ~ i j start
-                            ~ < j i { ( vec_push [u] keys # u ( nurl_str_get data j ) ) = j + j 1 }
+                            ~ < j i { ( vec_push [u] keys # u ( slice_byte data_v j ) ) = j + j 1 }
                             ( vec_push [u] keys # u 0 )
                         } {}
                         = id + id 1
@@ -182,10 +184,10 @@ unsafe @ __f5t_id_ascii * F5VocabImpl v i c → i {
     ^ id
 }
 
-unsafe @ __f5t_id_multi * F5VocabImpl v s text i off i len → i {
+unsafe @ __f5t_id_multi * F5VocabImpl v ( Slice u ) text_v i off i len → i {
     : String key ( string_new )
     : ~ i j 0
-    ~ < j len { ( string_push_char key ( nurl_str_get text + off j ) ) = j + j 1 }
+    ~ < j len { ( string_push_char key ( slice_byte text_v + off j ) ) = j + j 1 }
     ?? ( map_get [s i] . v map ( string_data key ) \ s x → i { ^ ( hash_string x ) } \ s a s b → b { ^ ( eq_string a b ) } ) {
         T id → { ^ id }
         F → { ^ 0 }
@@ -196,16 +198,16 @@ unsafe @ __f5t_id_multi * F5VocabImpl v s text i off i len → i {
 // (`custom_trans`): ';' → ',', and the curly quotes to their straight forms.
 // The rewrite happens first, so it also decides what the "previous character"
 // is for the space rule — a '”' that becomes '"' suppresses the next space.
-@ __f5t_translate s text i off i len → i {
+@ __f5t_translate ( Slice u ) text_v i off i len → i {
     ? == len 1 {
-        : i c ( nurl_str_get text off )
+        : i c ( slice_byte text_v off )
         ? == c 59 { ^ 44 } {}
         ^ c
     } {}
     ? == len 3 {
-        : i a ( nurl_str_get text off )
-        : i b ( nurl_str_get text + off 1 )
-        : i c ( nurl_str_get text + off 2 )
+        : i a ( slice_byte text_v off )
+        : i b ( slice_byte text_v + off 1 )
+        : i c ( slice_byte text_v + off 2 )
         ? & == a 226 == b 128 {
             ? | == c 156 == c 157 { ^ 34 } {}
             ? | == c 152 == c 153 { ^ 39 } {}
@@ -227,24 +229,24 @@ unsafe @ __f5t_id_multi * F5VocabImpl v s text i off i len → i {
 // The dot in that pattern is UNESCAPED, so it matches ANY character — which
 // is why "ab-34" and "y2.5" come out whole while "ab-cd" and "12.cd" split.
 // Returns the match's length at `pos`, or 0.
-@ __f5t_skip_match s text i pos i end → i {
+@ __f5t_skip_match ( Slice u ) text_v i pos i end → i {
     : ~ i j pos
-    ~ & < j end ( __f5t_is_alnum ( nurl_str_get text j ) ) { = j + j 1 }
+    ~ & < j end ( __f5t_is_alnum ( slice_byte text_v j ) ) { = j + j 1 }
     ? == j pos { ^ 0 } {}
     ? < + j 1 end {
-        ? ( __f5t_is_digit ( nurl_str_get text + j 1 ) ) {
+        ? ( __f5t_is_digit ( slice_byte text_v + j 1 ) ) {
             : ~ i d + j 1
-            ~ & < d end ( __f5t_is_digit ( nurl_str_get text d ) ) { = d + d 1 }
+            ~ & < d end ( __f5t_is_digit ( slice_byte text_v d ) ) { = d + d 1 }
             = j d
         } {}
     } {}
-    ? & < j end == ( nurl_str_get text j ) 37 { = j + j 1 } {}
+    ? & < j end == ( slice_byte text_v j ) 37 { = j + j 1 } {}
     ^ - j pos
 }
 
 // Emit one segment's characters, preceded by the space F5-TTS inserts in
 // front of a multi-character pure-ASCII segment. Returns the new `last`.
-unsafe @ __f5t_emit_seg * F5VocabImpl v s text i from i to ( Vec i ) out i last → i {
+unsafe @ __f5t_emit_seg * F5VocabImpl v ( Slice u ) text_v i from i to ( Vec i ) out i last → i {
     : ~ i lst last
     ? & > - to from 1 ( __f5t_needs_space lst ) {
         ( vec_push [i] out ( __f5t_id_ascii v 32 ) )
@@ -252,7 +254,7 @@ unsafe @ __f5t_emit_seg * F5VocabImpl v s text i from i to ( Vec i ) out i last 
     } {}
     : ~ i k from
     ~ < k to {
-        : i b ( nurl_str_get text k )
+        : i b ( slice_byte text_v k )
         ( vec_push [i] out ( __f5t_id_ascii v b ) )
         = lst b
         = k + k 1
@@ -263,34 +265,35 @@ unsafe @ __f5t_emit_seg * F5VocabImpl v s text i from i to ( Vec i ) out i last 
 // A stretch of a han block with no dictionary word in it: the skip class
 // takes the alphanumeric runs, and each gap between them is ONE segment
 // (finalseg yields the split's leftovers whole, not character by character).
-unsafe @ __f5t_scan_plain * F5VocabImpl v s text i from i to ( Vec i ) out i last → i {
+unsafe @ __f5t_scan_plain * F5VocabImpl v ( Slice u ) text_v i from i to ( Vec i ) out i last → i {
     : ~ i lst last
     : ~ i j from
     : ~ i gs -1
     ~ < j to {
-        : i m ( __f5t_skip_match text j to )
+        : i m ( __f5t_skip_match text_v j to )
         ? > m 0 {
             ? >= gs 0 {
-                = lst ( __f5t_emit_seg v text gs j out lst )
+                = lst ( __f5t_emit_seg v text_v gs j out lst )
                 = gs -1
             } {}
-            = lst ( __f5t_emit_seg v text j + j m out lst )
+            = lst ( __f5t_emit_seg v text_v j + j m out lst )
             = j + j m
         } {
             ? < gs 0 { = gs j } {}
             = j + j 1
         }
     }
-    ? >= gs 0 { = lst ( __f5t_emit_seg v text gs to out lst ) } {}
+    ? >= gs 0 { = lst ( __f5t_emit_seg v text_v gs to out lst ) } {}
     ^ lst
 }
 
-@ __f5t_lit_at s text i pos i end s w → i {
+@ __f5t_lit_at ( Slice u ) text_v i pos i end s w → i {
+    : ( Slice u ) w_v ( slice_of_str w )
     : i n ( nurl_str_len w )
     ? > + pos n end { ^ 0 } {}
     : ~ i k 0
     ~ < k n {
-        ? != ( nurl_str_get text + pos k ) ( nurl_str_get w k ) { ^ 0 } {}
+        ? != ( slice_byte text_v + pos k ) ( slice_byte w_v k ) { ^ 0 } {}
         = k + k 1
     }
     ^ n
@@ -300,51 +303,52 @@ unsafe @ __f5t_scan_plain * F5VocabImpl v s text i from i to ( Vec i ) out i las
 // AT&T, C++, c++, C#, c# — and a han block containing one is cut around it.
 // None of them can occur inside a word of any Latin-script language, so this
 // is the whole of the dictionary's influence here, not a sample of it.
-@ __f5t_dict_at s text i pos i end → i {
-    : i a ( __f5t_lit_at text pos end `AT&T` )
+@ __f5t_dict_at ( Slice u ) text_v i pos i end → i {
+    : i a ( __f5t_lit_at text_v pos end `AT&T` )
     ? > a 0 { ^ a } {}
-    : i b ( __f5t_lit_at text pos end `C++` )
+    : i b ( __f5t_lit_at text_v pos end `C++` )
     ? > b 0 { ^ b } {}
-    : i c ( __f5t_lit_at text pos end `c++` )
+    : i c ( __f5t_lit_at text_v pos end `c++` )
     ? > c 0 { ^ c } {}
-    : i d ( __f5t_lit_at text pos end `C#` )
+    : i d ( __f5t_lit_at text_v pos end `C#` )
     ? > d 0 { ^ d } {}
-    ^ ( __f5t_lit_at text pos end `c#` )
+    ^ ( __f5t_lit_at text_v pos end `c#` )
 }
 
-unsafe @ __f5t_scan_block * F5VocabImpl v s text i from i to ( Vec i ) out i last → i {
+unsafe @ __f5t_scan_block * F5VocabImpl v ( Slice u ) text_v i from i to ( Vec i ) out i last → i {
     : ~ i lst last
     : ~ i i from
     : ~ i start from
     ~ < i to {
-        : i w ( __f5t_dict_at text i to )
+        : i w ( __f5t_dict_at text_v i to )
         ? > w 0 {
-            ? < start i { = lst ( __f5t_scan_plain v text start i out lst ) } {}
-            = lst ( __f5t_emit_seg v text i + i w out lst )
+            ? < start i { = lst ( __f5t_scan_plain v text_v start i out lst ) } {}
+            = lst ( __f5t_emit_seg v text_v i + i w out lst )
             = i + i w
             = start i
         } { = i + i 1 }
     }
-    ? < start to { = lst ( __f5t_scan_plain v text start to out lst ) } {}
+    ? < start to { = lst ( __f5t_scan_plain v text_v start to out lst ) } {}
     ^ lst
 }
 
 // The character sequence, as vocabulary ids, appended to `out`.
 unsafe @ f5_text_ids F5Vocab v__h s text ( Vec i ) out → v {
+    : ( Slice u ) text_v ( slice_of_str text )
     : *F5VocabImpl v ( __F5Vocab_ptr v__h )
     : i n ( nurl_str_len text )
     : ~ i last -2
     : ~ i i 0
     ~ < i n {
-        : i c ( nurl_str_get text i )
+        : i c ( slice_byte text_v i )
         ? ( __f5t_is_hanb c ) {
             : ~ i j i
-            ~ & < j n ( __f5t_is_hanb ( nurl_str_get text j ) ) { = j + j 1 }
-            = last ( __f5t_scan_block v text i j out last )
+            ~ & < j n ( __f5t_is_hanb ( slice_byte text_v j ) ) { = j + j 1 }
+            = last ( __f5t_scan_block v text_v i j out last )
             = i j
         } {
             : i clen ( __f5t_clen c )
-            : i tr ( __f5t_translate text i clen )
+            : i tr ( __f5t_translate text_v i clen )
             ? >= tr 0 {
                 ( vec_push [i] out ( __f5t_id_ascii v tr ) )
                 = last tr
@@ -353,7 +357,7 @@ unsafe @ f5_text_ids F5Vocab v__h s text ( Vec i ) out → v {
                     ( vec_push [i] out ( __f5t_id_ascii v c ) )
                     = last c
                 } {
-                    ( vec_push [i] out ( __f5t_id_multi v text i clen ) )
+                    ( vec_push [i] out ( __f5t_id_multi v text_v i clen ) )
                     = last -1
                 }
             }
@@ -378,11 +382,11 @@ unsafe @ f5_text_ids F5Vocab v__h s text ( Vec i ) out → v {
 
 // The three-byte full-width marks ；：，。！？ — all of them start ef bc or ef bd
 // except 。 (e3 80 82). Compared as whole characters, not bytes.
-@ __f5t_is_cjk_break s text i off i clen → b {
+@ __f5t_is_cjk_break ( Slice u ) text_v i off i clen → b {
     ? != clen 3 { ^ F } {}
-    : i a ( nurl_str_get text off )
-    : i b ( nurl_str_get text + off 1 )
-    : i c ( nurl_str_get text + off 2 )
+    : i a ( slice_byte text_v off )
+    : i b ( slice_byte text_v + off 1 )
+    : i c ( slice_byte text_v + off 2 )
     ? & == a 227 & == b 128 == c 130 { ^ T } {}
     ? != a 239 { ^ F } {}
     ? != b 188 { ^ F } {}
@@ -394,23 +398,24 @@ unsafe @ f5_text_ids F5Vocab v__h s text ( Vec i ) out → v {
 
 // Split into sentences the way the regex does, then pack.
 @ f5_chunk_text s text i max_bytes → ( Vec String ) {
+    : ( Slice u ) text_v ( slice_of_str text )
     : ( Vec String ) sents ( vec_new [String] )
     : i n ( nurl_str_len text )
     : ~ i start 0
     : ~ i i 0
     ~ < i n {
-        : i c ( nurl_str_get text i )
+        : i c ( slice_byte text_v i )
         : i clen ( __f5t_clen c )
         ? & ( __f5t_is_break c ) < + i 1 n {
-            ? ( __f5t_is_ws ( nurl_str_get text + i 1 ) ) {
+            ? ( __f5t_is_ws ( slice_byte text_v + i 1 ) ) {
                 : ~ i e + i 1
-                ~ & < e n ( __f5t_is_ws ( nurl_str_get text e ) ) { = e + e 1 }
+                ~ & < e n ( __f5t_is_ws ( slice_byte text_v e ) ) { = e + e 1 }
                 ( vec_push [String] sents ( string_from ( nurl_str_slice text start - + i 1 start ) ) )
                 = start e
                 = i e
             } { = i + i clen }
         } {
-            ? ( __f5t_is_cjk_break text i clen ) {
+            ? ( __f5t_is_cjk_break text_v i clen ) {
                 ( vec_push [String] sents ( string_from ( nurl_str_slice text start - + i clen start ) ) )
                 = start + i clen
                 = i + i clen

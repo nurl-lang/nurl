@@ -13,6 +13,7 @@ $ `stdlib/std/fs.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/floatbits.nu`
 $ `torchpt.nu`
+$ `stdlib/core/slice.nu`
 
 @ usage → i {
     ( nurl_print `torchpt — read PyTorch .pt/.pth checkpoints\n\n` )
@@ -25,12 +26,14 @@ $ `torchpt.nu`
 }
 
 @ starts_with s hay s pre → b {
+    : ( Slice u ) pre_v ( slice_of_str pre )
+    : ( Slice u ) hay_v ( slice_of_str hay )
     : i hl ( nurl_str_len hay )
     : i pl ( nurl_str_len pre )
     ? > pl hl { ^ F } {}
     : ~ i j 0
     ~ < j pl {
-        ? != ( nurl_str_get hay j ) ( nurl_str_get pre j ) { ^ F } {}
+        ? != ( slice_byte hay_v j ) ( slice_byte pre_v j ) { ^ F } {}
         = j + j 1
     }
     ^ T
