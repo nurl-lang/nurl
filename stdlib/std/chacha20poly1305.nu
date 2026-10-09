@@ -276,6 +276,80 @@ $ `stdlib/core/vec.nu`
     ( nurl_v128_st # s + # i dst 112 ( nurl_v128_add32 d1 s3b ) )
 }
 
+& `c` @ nurl_simd128_native → i
+
+// Four blocks at once, one block per lane — the layout the fast ChaCha20s
+// all use. Vector x_w holds state word w of blocks ctr..ctr+3, so a
+// quarter-round is eight plain vector operations on four whole vectors
+// and the diagonal round needs no lane rotation at all: the kernels above
+// spend a third of their work turning diagonals into columns and back, and
+// stall on one block's chain where this one has four in flight. The words
+// come back to block order through 4×4 transposes (__cc_xor4) on the way
+// out.
+inline @ __cc_qr4 inout v128 a inout v128 b inout v128 c inout v128 d → v {
+    = a ( nurl_v128_add32 a b )
+    = d ( nurl_v128_rotl32 ( nurl_v128_xor d a ) 16 )
+    = c ( nurl_v128_add32 c d )
+    = b ( nurl_v128_rotl32 ( nurl_v128_xor b c ) 12 )
+    = a ( nurl_v128_add32 a b )
+    = d ( nurl_v128_rotl32 ( nurl_v128_xor d a ) 8 )
+    = c ( nurl_v128_add32 c d )
+    = b ( nurl_v128_rotl32 ( nurl_v128_xor b c ) 7 )
+}
+
+// Words w..w+3 of the four blocks (x0..x3: word w+k of block j in lane j),
+// transposed so each block's four words are one vector, XORed with the
+// input at block j's offset 64·j + 4·w and stored to the output.
+inline @ __cc_xor4 v128 x0 v128 x1 v128 x2 v128 x3 * u src * u dst i w → v {
+    : v128 t0 ( nurl_v128_unpacklo32 x0 x1 )
+    : v128 t1 ( nurl_v128_unpacklo32 x2 x3 )
+    : v128 t2 ( nurl_v128_unpackhi32 x0 x1 )
+    : v128 t3 ( nurl_v128_unpackhi32 x2 x3 )
+    : i o * w 4
+    ( nurl_v128_st # s + # i dst o ( nurl_v128_xor ( nurl_v128_ld # s + # i src o ) ( nurl_v128_unpacklo64 t0 t1 ) ) )
+    ( nurl_v128_st # s + # i dst + o 64 ( nurl_v128_xor ( nurl_v128_ld # s + # i src + o 64 ) ( nurl_v128_unpackhi64 t0 t1 ) ) )
+    ( nurl_v128_st # s + # i dst + o 128 ( nurl_v128_xor ( nurl_v128_ld # s + # i src + o 128 ) ( nurl_v128_unpacklo64 t2 t3 ) ) )
+    ( nurl_v128_st # s + # i dst + o 192 ( nurl_v128_xor ( nurl_v128_ld # s + # i src + o 192 ) ( nurl_v128_unpackhi64 t2 t3 ) ) )
+}
+
+// dst[0..256) = src[0..256) XOR the keystream of blocks ctr..ctr+3, the key
+// and nonce given as their little-endian words.
+inline @ __chacha20_xor4_v128 i k0 i k1 i k2 i k3 i k4 i k5 i k6 i k7 i ctr i n0 i n1 i n2 * u src * u dst → v {
+    : v128 ct ( nurl_v128_set32 ctr + ctr 1 + ctr 2 + ctr 3 )
+    : ~ v128 x0 ( nurl_v128_bcast32 1634760805 )
+    : ~ v128 x1 ( nurl_v128_bcast32 857760878 )
+    : ~ v128 x2 ( nurl_v128_bcast32 2036477234 )
+    : ~ v128 x3 ( nurl_v128_bcast32 1797285236 )
+    : ~ v128 x4 ( nurl_v128_bcast32 k0 )
+    : ~ v128 x5 ( nurl_v128_bcast32 k1 )
+    : ~ v128 x6 ( nurl_v128_bcast32 k2 )
+    : ~ v128 x7 ( nurl_v128_bcast32 k3 )
+    : ~ v128 x8 ( nurl_v128_bcast32 k4 )
+    : ~ v128 x9 ( nurl_v128_bcast32 k5 )
+    : ~ v128 x10 ( nurl_v128_bcast32 k6 )
+    : ~ v128 x11 ( nurl_v128_bcast32 k7 )
+    : ~ v128 x12 ct
+    : ~ v128 x13 ( nurl_v128_bcast32 n0 )
+    : ~ v128 x14 ( nurl_v128_bcast32 n1 )
+    : ~ v128 x15 ( nurl_v128_bcast32 n2 )
+    : ~ i r 0
+    ~ < r 10 {
+        ( __cc_qr4 x0 x4 x8 x12 )
+        ( __cc_qr4 x1 x5 x9 x13 )
+        ( __cc_qr4 x2 x6 x10 x14 )
+        ( __cc_qr4 x3 x7 x11 x15 )
+        ( __cc_qr4 x0 x5 x10 x15 )
+        ( __cc_qr4 x1 x6 x11 x12 )
+        ( __cc_qr4 x2 x7 x8 x13 )
+        ( __cc_qr4 x3 x4 x9 x14 )
+        = r + r 1
+    }
+    ( __cc_xor4 ( nurl_v128_add32 x0 ( nurl_v128_bcast32 1634760805 ) ) ( nurl_v128_add32 x1 ( nurl_v128_bcast32 857760878 ) ) ( nurl_v128_add32 x2 ( nurl_v128_bcast32 2036477234 ) ) ( nurl_v128_add32 x3 ( nurl_v128_bcast32 1797285236 ) ) src dst 0 )
+    ( __cc_xor4 ( nurl_v128_add32 x4 ( nurl_v128_bcast32 k0 ) ) ( nurl_v128_add32 x5 ( nurl_v128_bcast32 k1 ) ) ( nurl_v128_add32 x6 ( nurl_v128_bcast32 k2 ) ) ( nurl_v128_add32 x7 ( nurl_v128_bcast32 k3 ) ) src dst 4 )
+    ( __cc_xor4 ( nurl_v128_add32 x8 ( nurl_v128_bcast32 k4 ) ) ( nurl_v128_add32 x9 ( nurl_v128_bcast32 k5 ) ) ( nurl_v128_add32 x10 ( nurl_v128_bcast32 k6 ) ) ( nurl_v128_add32 x11 ( nurl_v128_bcast32 k7 ) ) src dst 8 )
+    ( __cc_xor4 ( nurl_v128_add32 x12 ct ) ( nurl_v128_add32 x13 ( nurl_v128_bcast32 n0 ) ) ( nurl_v128_add32 x14 ( nurl_v128_bcast32 n1 ) ) ( nurl_v128_add32 x15 ( nurl_v128_bcast32 n2 ) ) src dst 12 )
+}
+
 // out[0..n) = data[doff..doff+n) XOR ChaCha20(key, counter, nonce).
 //
 // Dispatches to the vector kernel on a little-endian host — every
@@ -283,7 +357,7 @@ $ `stdlib/core/vec.nu`
 // otherwise. The vector path XORs a whole block straight from the input
 // pointer to the output pointer through four 16-byte loads and stores;
 // only a final partial block goes through a 64-byte keystream scratch.
-@ chacha20_xor_range ( Vec u ) key i counter ( Vec u ) nonce ( Vec u ) data i doff i n → ( Vec u ) {
+simd @ chacha20_xor_range ( Vec u ) key i counter ( Vec u ) nonce ( Vec u ) data i doff i n → ( Vec u ) {
     ? == 0 ( __le_words )
     { ^ ( _chacha20_xor_range_scalar key counter nonce data doff n ) } {}
     : ( Vec u ) out ( __xor_out n 128 )
@@ -299,8 +373,24 @@ $ `stdlib/core/vec.nu`
     : *u ks # *u + # i op ( __xor_scratch_at n )
     : ~ i ctr counter
     : ~ i off 0
-    // Two blocks a pass while at least 128 bytes remain; the tail falls
-    // through to the one-block kernel and then to a byte loop.
+    // Four blocks a pass while at least 256 bytes remain, then two while
+    // 128 do; the tail falls through to the one-block kernel and then to a
+    // byte loop.
+    ? & >= n 256 != 0 ( nurl_simd128_native ) {
+        : i k0 ( __ld32 key 0 )
+        : i k1 ( __ld32 key 4 )
+        : i k2 ( __ld32 key 8 )
+        : i k3 ( __ld32 key 12 )
+        : i k4 ( __ld32 key 16 )
+        : i k5 ( __ld32 key 20 )
+        : i k6 ( __ld32 key 24 )
+        : i k7 ( __ld32 key 28 )
+        ~ <= + off 256 n {
+            ( __chacha20_xor4_v128 k0 k1 k2 k3 k4 k5 k6 k7 ctr nn0 nn1 nn2 # *u + # i dp off # *u + # i op off )
+            = ctr + ctr 4
+            = off + off 256
+        }
+    } {}
     ~ <= + off 128 n {
         ( __chacha20_block2_v128 s0 s1 s2
         ( nurl_v128_set32 ctr nn0 nn1 nn2 )

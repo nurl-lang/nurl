@@ -3538,6 +3538,20 @@ int nurl_cpu_x86_v3(void) {
     return nurl__cpu_v3;
 }
 
+/* 1 when a NURL v128 lowers to real 128-bit vector registers — SSE2 on
+ * x86-64, NEON on AArch64, simd128 on wasm — and 0 when it is scalarised,
+ * as on a wasm32 module built without simd128. A kernel that only pays
+ * off in registers (ChaCha20's four-blocks-a-lane layout keeps sixteen
+ * vectors live: sixty-four scalars once scalarised) asks before it runs.
+ * A link-time constant, so natively the question folds away. */
+long long nurl_simd128_native(void) {
+#if defined(__wasm__) && !defined(__wasm_simd128__)
+    return 0;
+#else
+    return 1;
+#endif
+}
+
 /* Indirect-call trampoline for the packages/gpu CPU backend. A CUDA-C kernel
  * compiled for the host (by cpu.nu, via the system C++ compiler) exposes a
  * fixed entry `void __cpu_launch(void** params, long long grid, long long
