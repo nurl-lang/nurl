@@ -5,6 +5,13 @@ OUTPUT
 chacha20_encrypt: PASS
 chacha20_decrypt: PASS
 poly1305: PASS
+poly1305 A.3#5: PASS
+poly1305 A.3#6: PASS
+poly1305 A.3#7: PASS
+poly1305 A.3#8: PASS
+poly1305 A.3#9: PASS
+poly1305 A.3#10: PASS
+poly1305 A.3#11: PASS
 aead_seal: PASS
 aead_open: PASS
 chacha20_range_unaligned: PASS

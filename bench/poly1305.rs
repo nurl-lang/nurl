@@ -1,17 +1,15 @@
 // benchmark-contract: poly1305;rfc8439;message=16384;macs=4096;key=chained;checksum=tag-le64
 //
-// poly1305 — the RFC 8439 one-time authenticator in the poly1305-donna-64
-// formulation the NURL standard library uses: three limbs at radix 2^44,
-// nine 64x64->128 products a block (here `u128`). A 16 KiB message is
-// MACed 4096 times, every tag XORed back into the key. See poly1305.c for
-// the full description; this is the same program line for line, and
-// poly1305.nu calls the standard library's `poly1305_mac` instead.
+// poly1305 — the RFC 8439 one-time authenticator in the radix-2^64
+// formulation the NURL standard library uses: the accumulator in two
+// 64-bit words and a few bits above, four 64x64->128 products a block
+// (here `u128`) and two small ones. A 16 KiB message is MACed 4096 times,
+// every tag XORed back into the key. See poly1305.c for the full
+// description; this is the same program line for line, and poly1305.nu
+// calls the standard library's `poly1305_mac` instead.
 
 // The workload multiplier: bench/bench.sh / wasmbench.sh --scale N rewrites this 1.
 const BENCH_SCALE: u64 = 1;
-
-const M44: u64 = 0xfff_ffff_ffff;
-const M42: u64 = 0x3ff_ffff_ffff;
 
 fn le64(p: &[u8], o: usize) -> u64 {
     let mut v: u64 = 0;
@@ -21,102 +19,74 @@ fn le64(p: &[u8], o: usize) -> u64 {
     v
 }
 
+// h = (h + m + pad * 2^128) * r, partially reduced mod 2^130 - 5 (h2 < 8)
+fn poly_block(h: &mut [u64; 3], t0: u64, t1: u64, pad: u64, r0: u64, r1: u64, s1: u64) {
+    let mut a = (h[0] as u128) + (t0 as u128);
+    let a0 = a as u64;
+    a = (h[1] as u128) + (t1 as u128) + ((a >> 64) as u128);
+    let a1 = a as u64;
+    let a2 = h[2] + ((a >> 64) as u64) + pad;
+
+    let d0 = (a0 as u128) * (r0 as u128) + (a1 as u128) * (s1 as u128);
+    let mut d1 = (a0 as u128) * (r1 as u128) + (a1 as u128) * (r0 as u128) + ((a2 * s1) as u128);
+    let d2 = a2 * r0;
+
+    d1 = d1 + ((d0 >> 64) as u128);
+    let g2 = d2 + ((d1 >> 64) as u64);
+    let c = (g2 & !3u64) + (g2 >> 2); // c * 2^130 = 5c
+    let mut e = ((d0 as u64) as u128) + (c as u128);
+    h[0] = e as u64;
+    e = ((d1 as u64) as u128) + ((e >> 64) as u128);
+    h[1] = e as u64;
+    h[2] = (g2 & 3) + ((e >> 64) as u64);
+}
+
 // tag[0..15] = Poly1305(key[0..31], msg[0..len-1]).
 fn poly1305_mac(tag: &mut [u8; 16], key: &[u8], msg: &[u8], len: usize) {
-    let kt0 = le64(key, 0);
-    let kt1 = le64(key, 8);
-    let r0 = kt0 & 0xffc0fffffff;
-    let r1 = ((kt0 >> 44) | (kt1 << 20)) & 0xfffffc0ffff;
-    let r2 = (kt1 >> 24) & 0x00ffffffc0f;
-    let s1 = r1 * 20;
-    let s2 = r2 * 20;
-    let mut h0: u64 = 0;
-    let mut h1: u64 = 0;
-    let mut h2: u64 = 0;
+    let r0 = le64(key, 0) & 0x0fff_fffc_0fff_ffff;
+    let r1 = le64(key, 8) & 0x0fff_fffc_0fff_fffc;
+    let s1 = r1 + (r1 >> 2);
+    let mut h = [0u64; 3];
 
     let mut off = 0usize;
-    while off < len {
+    let full = len & !15usize;
+    while off < full {
+        poly_block(&mut h, le64(msg, off), le64(msg, off + 8), 1, r0, r1, s1);
+        off = off + 16;
+    }
+    if off < len {
+        // tail: the bytes, the 0x01 marker after them, zeros; no 2^128 bit
         let rem = len - off;
         let mut t0: u64 = 0;
         let mut t1: u64 = 0;
-        let mut hibit: u64 = 1 << 40;
-        if rem >= 16 {
-            t0 = le64(msg, off);
-            t1 = le64(msg, off + 8);
-        } else {
-            // tail: the bytes, the 0x01 marker after them, zeros; no hibit
-            for j in 0..=rem {
-                let mut bv: u64 = 1;
-                if j < rem {
-                    bv = msg[off + j] as u64;
-                }
-                if j < 8 {
-                    t0 = t0 | (bv << (8 * j));
-                } else {
-                    t1 = t1 | (bv << (8 * (j - 8)));
-                }
+        for j in 0..=rem {
+            let mut bv: u64 = 1;
+            if j < rem {
+                bv = msg[off + j] as u64;
             }
-            hibit = 0;
+            if j < 8 {
+                t0 = t0 | (bv << (8 * j));
+            } else {
+                t1 = t1 | (bv << (8 * (j - 8)));
+            }
         }
-        h0 = h0 + (t0 & M44);
-        h1 = h1 + (((t0 >> 44) | (t1 << 20)) & M44);
-        h2 = h2 + ((t1 >> 24) & M42) + hibit;
-
-        let d0 = (h0 as u128) * (r0 as u128) + (h1 as u128) * (s2 as u128) + (h2 as u128) * (s1 as u128);
-        let mut d1 = (h0 as u128) * (r1 as u128) + (h1 as u128) * (r0 as u128) + (h2 as u128) * (s2 as u128);
-        let mut d2 = (h0 as u128) * (r2 as u128) + (h1 as u128) * (r1 as u128) + (h2 as u128) * (r0 as u128);
-
-        let mut c = (d0 >> 44) as u64;
-        h0 = (d0 as u64) & M44;
-        d1 = d1 + c as u128;
-        c = (d1 >> 44) as u64;
-        h1 = (d1 as u64) & M44;
-        d2 = d2 + c as u128;
-        c = (d2 >> 42) as u64;
-        h2 = (d2 as u64) & M42;
-        h0 = h0 + c * 5;
-        c = h0 >> 44;
-        h0 = h0 & M44;
-        h1 = h1 + c;
-
-        off = off + 16;
+        poly_block(&mut h, t0, t1, 0, r0, r1, s1);
     }
 
-    // fully carry h
-    let mut c = h1 >> 44;
-    h1 = h1 & M44;
-    h2 = h2 + c;
-    c = h2 >> 42;
-    h2 = h2 & M42;
-    h0 = h0 + c * 5;
-    c = h0 >> 44;
-    h0 = h0 & M44;
-    h1 = h1 + c;
-
-    // g = h + 5 - 2^130; keep h if g borrowed (h < p), else take g
-    let mut g0 = h0 + 5;
-    c = g0 >> 44;
-    g0 = g0 & M44;
-    let mut g1 = h1 + c;
-    c = g1 >> 44;
-    g1 = g1 & M44;
-    let mut g2 = (h2 + c).wrapping_sub(1 << 42);
-    let mask = (g2 >> 63).wrapping_sub(1);
-    g0 = g0 & mask;
-    g1 = g1 & mask;
-    g2 = g2 & mask;
-    let imask = !mask;
-    h0 = (h0 & imask) | g0;
-    h1 = (h1 & imask) | g1;
-    h2 = (h2 & imask) | g2;
+    // h + 5 reaches 2^130 exactly when h >= p; then its low 128 bits are h - p
+    let mut g = (h[0] as u128) + 5;
+    let g0 = g as u64;
+    g = (h[1] as u128) + ((g >> 64) as u128);
+    let g1 = g as u64;
+    let g2 = h[2] + ((g >> 64) as u64);
+    let mask = 0u64.wrapping_sub(g2 >> 2);
+    let mut f0 = (h[0] & !mask) | (g0 & mask);
+    let mut f1 = (h[1] & !mask) | (g1 & mask);
 
     // tag = (h + s) mod 2^128
-    let st0 = le64(key, 16);
-    let st1 = le64(key, 24);
-    let mut f0 = h0 | (h1 << 44);
-    let mut f1 = (h1 >> 20) | (h2 << 24);
-    f0 = f0.wrapping_add(st0);
-    f1 = f1.wrapping_add(st1).wrapping_add(if f0 < st0 { 1 } else { 0 });
+    let w = (f0 as u128) + (le64(key, 16) as u128);
+    f0 = w as u64;
+    f1 = f1.wrapping_add(le64(key, 24)).wrapping_add((w >> 64) as u64);
     for k in 0..8 {
         tag[k] = ((f0 >> (8 * k)) & 255) as u8;
         tag[k + 8] = ((f1 >> (8 * k)) & 255) as u8;
