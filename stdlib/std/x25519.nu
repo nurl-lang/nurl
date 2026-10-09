@@ -406,15 +406,21 @@ $ `stdlib/core/vec.nu`
     ( _gf_into io z10 )
 }
 
-// ── the ladder's field, in registers ──────────────────────────────
-// The variable-base ladder runs on scalar limbs: its field elements are
-// u64 locals, five to an element, and the field operations are `inline`
-// helpers taking the limbs they write `inout` — so after inlining every
-// limb is a register value the optimiser schedules freely. A `( Vec i )`
-// element lives behind a pointer the optimiser cannot see through: each
-// _M/_S/_A/_Z stored its five limbs and the next operation loaded them
-// back, and every _M/_S was a call saving and restoring six registers.
-// The arithmetic is _A/_Z/_M/_S's, limb for limb.
+// ── the ladder's field, on scalar limbs ───────────────────────────
+// The variable-base ladder keeps its field elements as u64 locals, five
+// to an element; a field operation takes its operands by value and writes
+// the limbs of its result `inout`. A `( Vec i )` element lives behind a
+// pointer the optimiser cannot see through: each _M/_S/_A/_Z stored its
+// five limbs and the next operation loaded them back. The arithmetic is
+// _A/_Z/_M/_S's, limb for limb.
+//
+// The multiply and the square stay functions of their own (only the
+// add, subtract and swap inline). Inlined too, with the ladder in an
+// x86-64-v3 clone for mulx, one scalar multiply ran 30 % faster still —
+// but the ladder became one function of some ten thousand i128-heavy IR
+// instructions, InstCombine and the SLP vectoriser took seconds over it,
+// and every program that does TLS compiled about three seconds slower.
+// Out of line, a TLS program builds about as fast as with the Vec form.
 
 // o ← a + b (_A)
 inline @ __fe_add inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 inout u64 o4 u64 a0 u64 a1 u64 a2 u64 a3 u64 a4 u64 b0 u64 b1 u64 b2 u64 b3 u64 b4 → v {
@@ -435,7 +441,7 @@ inline @ __fe_sub inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 inout u64 
 }
 
 // o ← a · b mod p (_M)
-inline @ __fe_mul inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 inout u64 o4 u64 a0 u64 a1 u64 a2 u64 a3 u64 a4 u64 b0 u64 b1 u64 b2 u64 b3 u64 b4 → v {
+@ __fe_mul inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 inout u64 o4 u64 a0 u64 a1 u64 a2 u64 a3 u64 a4 u64 b0 u64 b1 u64 b2 u64 b3 u64 b4 → v {
     : u64 f1 * a1 19
     : u64 f2 * a2 19
     : u64 f3 * a3 19
@@ -474,7 +480,7 @@ inline @ __fe_mul inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 inout u64 
 }
 
 // o ← a² mod p (_S)
-inline @ __fe_sq inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 inout u64 o4 u64 a0 u64 a1 u64 a2 u64 a3 u64 a4 → v {
+@ __fe_sq inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 inout u64 o4 u64 a0 u64 a1 u64 a2 u64 a3 u64 a4 → v {
     : u64 d0 * a0 2
     : u64 d1 * a1 2
     : u64 d2 * a2 38
@@ -552,7 +558,7 @@ inline @ __fe_cswap inout u64 p0 inout u64 p1 inout u64 p2 inout u64 p3 inout u6
 }
 
 // o ← o^(2^n): n back-to-back squarings (_sqn25519)
-inline @ __fe_sqn inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 inout u64 o4 i n → v {
+@ __fe_sqn inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 inout u64 o4 i n → v {
     : ~ u64 t0 0
     : ~ u64 t1 0
     : ~ u64 t2 0
@@ -563,7 +569,7 @@ inline @ __fe_sqn inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 inout u64 
 }
 
 // o ← z^(p−2) = 1/z — _inv25519's ref10 addition chain on scalar limbs
-inline @ __fe_inv inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 inout u64 o4 u64 z0 u64 z1 u64 z2 u64 z3 u64 z4 → v {
+@ __fe_inv inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 inout u64 o4 u64 z0 u64 z1 u64 z2 u64 z3 u64 z4 → v {
     : ~ u64 q0 0
     : ~ u64 q1 0
     : ~ u64 q2 0
@@ -650,10 +656,8 @@ inline @ __fe_inv inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 inout u64 
 // q ← scalar · point, both 32-byte little-endian. Scalar is clamped.
 // TweetNaCl's ladder step for step, on the scalar-limb field above:
 // a, c are x2, z2 and b, d are x3, z3; t is scratch for a product whose
-// destination is also one of its operands. `simd`: on an x86-64-v3 CPU
-// the clone forms its products with BMI2 `mulx`, which names its output
-// registers instead of claiming rax and rdx — 18 % faster here.
-simd @ __scalarmult ( Vec u ) scalar ( Vec u ) point → ( Vec u ) {
+// destination is also one of its operands.
+@ __scalarmult ( Vec u ) scalar ( Vec u ) point → ( Vec u ) {
     : ( Vec u ) z ( _zeros_u 32 )
     : ~ i k 0
     ~ < k 32 { ( _bset z k ( _x_bget scalar k ) ) = k + k 1 }

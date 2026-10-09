@@ -1,15 +1,10 @@
-// x25519_simd_agree.nu — the X25519 ladder must give the same answer in
-// both lowerings of its `simd` clone (compiler/tests/simd_baseline_agree.sh
-// builds this twice). The x86-64-v3 clone multiplies with BMI2 `mulx`, the
-// baseline with `mul`: the two are different instruction streams over the
-// same 128-bit column sums, and a carry lost in either shows here.
-//
-// RFC 7748's 1000-iteration chain (§5.2), then inputs the RFC's vectors
-// do not reach — u = 0, 1, p − 1, p, p + 1 and the order-8 point (each
-// lands on 0 after the cofactor clamp), non-canonical u ≥ p, u with the
-// top bit set — then a 200-step chain whose next point is mixed from the
-// last result. Every line was checked against the RFC 7748 pseudocode run
-// in Python big integers.
+// x25519_edge_vectors.nu — X25519 beyond RFC 7748's two vectors
+// (x25519_vectors.nu): the RFC's 1000-iteration chain (§5.2), the inputs
+// the RFC's vectors do not reach — u = 0, 1, p − 1, p, p + 1 and the
+// order-8 point (each lands on 0 after the cofactor clamp), non-canonical
+// u ≥ p, u with the top bit set — then a 200-step chain whose next point
+// is mixed from the last result. Every line was checked against the RFC
+// 7748 pseudocode run in Python big integers.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
