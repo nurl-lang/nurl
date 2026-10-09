@@ -34,19 +34,21 @@ Every class below is closed at its root, with the probes it found:
 | S — owning strings | a string binding that owns its buffer (tracked, or guarded) is an owner: a copy of it is a view of the buffer, ending when the binding changes or ends; one handed back by name goes to the caller; a binding that copies what it is given holds a fresh value (no false borrow); a mutable string born from a call or a field that hands nothing over gets an owner slot (no leak); an owned string field, and an owning binding given a field, copy what is not fresh and free what they replace | h113–h127 |
 | L — raw strings in values | in safe code a raw string held by a struct, an option, an enum, a slice or a container is a view (MEMORY.md §2.13): a fresh one stored there, or handed to a parameter that keeps it, is rejected (a call answering per call: at module end); a closure or literal handed back as written is checked for what its views point into | h128–h141 |
 
-Gates (pre-production-hardening tip): `tools/fuzz/holes/check.sh` 100
-probes, 88 rejected, 12 clean, **holes: 0** (in CI's build-test job);
-`./build.sh` fixed point and 1221 tests pass; ASan/UBSan/LSan corpus 0
+Gates (pre-production-hardening tip): `tools/fuzz/holes/check.sh` 129
+probes, 113 rejected, 16 clean, **holes: 0** (in CI's build-test job);
+`./build.sh` fixed point and 1226 tests pass; ASan/UBSan/LSan corpus 0
 failures; `tools/leakgate.sh` zero leaks. Every tracked `.nu` file outside
 the stdlib and the compiler (1884), compiled by each side's own toolchain:
-1397 compile on main and the same 1397 here — after three package sites the
-view checks rejected as real reads of freed memory were fixed (anomaly,
-f5tts, nurl-mcp; CHANGELOG).
+1397 compile on main and the same 1397 here — after two package sites the
+view checks rejected were fixed (anomaly's issuer template, a read of freed
+memory; nurl-mcp's `--token`, a global view of `main`'s String; CHANGELOG).
 Performance, against main back to back in one environment
-(instructions:u): self-compile 0.73 % fewer on the same input (12.47 G
-against 12.56 G); every runtime kernel of the bench set the same or fewer —
-blake2b −0.18 %, json_parse −0.24 %, x25519 −0.03 %, the rest within
-±0.01 %.
+(instructions:u): self-compile 0.73 % fewer on the same input (12.59 G
+against 12.68 G); every runtime kernel of the bench set the same or fewer —
+blake2b −0.18 %, x25519 −0.03 %, chacha20 / poly1305 / sha512 −0.01 %, the
+rest within ±0.01 % — except json_parse, +0.22 % (+331 of 154 K
+instructions: the null-safe string length and the checked growth of
+classes N and G).
 
 ## Baseline (main 92a83993, 2026-10-08, clean `build/`)
 

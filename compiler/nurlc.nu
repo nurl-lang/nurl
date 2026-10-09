@@ -6822,6 +6822,12 @@ unsafe @ nurl_cg_lbl i h s hint → s {
     : b st | ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `str` ) != tt TT_LPAREN
     : s mk0 ? st `` ( __last_call_pair syms )
     : s mk ? | st == 0 ( nurl_str_len mk0 ) `+ +` mk0
+    // One site per callee, argument and maker is enough to be told (the
+    // first): a call made once per use of a string helper would otherwise
+    // file one record per call.
+    : s dk ( nurl_str_cat4 ( nurl_str_cat3 `oskd#` callee `#` ) ( nurl_str_int index ) `#` mk )
+    ? != 0 ( nurl_sym_len g_pending_impl dk ) { ^ v } {}
+    ( nurl_sym_def g_pending_impl dk `1` )
     : i n ( nurl_str_to_int ( nurl_sym_get g_pending_impl `oskept_n` ) )
     ( nurl_sym_def g_pending_impl `oskept_n` ( nurl_str_int + n 1 ) )
     ( nurl_sym_def g_pending_impl ( nurl_str_cat `oskept#` ( nurl_str_int n ) )
@@ -23846,15 +23852,16 @@ unsafe @ bck_sx_skip s e → v {
     ? != 0 ( nurl_sym_len g_bck ( bck_bkey `nh_` ids ) ) { ^ ( nurl_str_cat deps `` ) } {}
     : i v ( bck_st_get st r )
     ? ( bck_dead_state v ) { ^ ( nurl_str_cat `` `` ) } {}
-    // An `s` that owns the buffer it points at (`o`): a copy of it is an
-    // address into that buffer — its own storage, as an argument's is.
-    // (Handed back by name, the buffer goes with it.)
-    : b own & != 0 ( nurl_sym_len g_bck ( bck_bkey `ow_` rs ) ) | arg ! g_sxe_handover
+    // An `s` that owns the buffer it points at (view mark `o`): a copy of
+    // it is an address into that buffer — its own storage, as an
+    // argument's is. (Handed back by name, the buffer goes with it.)
+    : s vwm ( nurl_sym_get g_bck ( bck_bkey `vw_` rs ) )
+    : b own & ( seq vwm `o` ) | arg ! g_sxe_handover
     ? == v BCK_BORROWED_SHARED {
         : s bsl ( nurl_sym_get g_bck ( bck_bkey `bs_` rs ) )
         // A view points where it points; a borrowed element or field
         // handle into ITS value's own storage, which its owners hold.
-        : s ind ? != 0 ( nurl_sym_len g_bck ( bck_bkey `vw_` rs ) ) ( nurl_sym_get g_bck ( bck_bkey `vi_` rs ) ) ( nurl_str_cat bsl `` )
+        : s ind ? != 0 ( nurl_str_len vwm ) ( nurl_sym_get g_bck ( bck_bkey `vi_` rs ) ) ( nurl_str_cat bsl `` )
         : s bv ( __word_union ( __src_mark bsl ind ) deps )
         // (A guarded `s` lent this time may own what it holds next.)
         ^ ? own ( __word_union bv ids ) bv
@@ -24045,10 +24052,10 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                 ? | ( seq ( bck_field rec 5 ) `s` ) ( seq ( bck_field rec 5 ) `c` ) { ( nurl_sym_set g_bck ( bck_bkey `nh_` ( bck_field rec 1 ) ) `1` ) } {}
                 // A view (an address into storage another binding owns) —
                 // one that owns nothing itself (`w`), or an `s` that may own
-                // the buffer it points at (`o`).
-                ( nurl_sym_set g_bck ( bck_bkey `vw_` ( bck_field rec 1 ) ) ? | | ( seq ( bck_field rec 5 ) `v` ) ( seq ( bck_field rec 5 ) `w` ) ( seq ( bck_field rec 5 ) `o` ) `1` `` )
+                // the buffer it points at (`o`: the view mark is `o`, read by
+                // bck_sx_name — one key per row, not a key per question).
+                ( nurl_sym_set g_bck ( bck_bkey `vw_` ( bck_field rec 1 ) ) ? ( seq ( bck_field rec 5 ) `o` ) `o` ? | ( seq ( bck_field rec 5 ) `v` ) ( seq ( bck_field rec 5 ) `w` ) `1` `` )
                 ( nurl_sym_set g_bck ( bck_bkey `wv_` ( bck_field rec 1 ) ) ? ( seq ( bck_field rec 5 ) `w` ) `1` `` )
-                ( nurl_sym_set g_bck ( bck_bkey `ow_` ( bck_field rec 1 ) ) ? ( seq ( bck_field rec 5 ) `o` ) `1` `` )
                 ? != 0 g_bck_has_borrow { ( nurl_sym_set g_bck ( bck_bkey `bs_` ( bck_field rec 1 ) ) `` ) } {}
                 = st ( bck_bind_row st ( bck_field_int rec 1 ) rec lsrcs lmk )
                 = p + p 1
@@ -24075,10 +24082,10 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                 ? | ( seq ( bck_field rec 5 ) `s` ) ( seq ( bck_field rec 5 ) `c` ) { ( nurl_sym_set g_bck ( bck_bkey `nh_` ( bck_field rec 1 ) ) `1` ) } {}
                 // A view (an address into storage another binding owns) —
                 // one that owns nothing itself (`w`), or an `s` that may own
-                // the buffer it points at (`o`).
-                ( nurl_sym_set g_bck ( bck_bkey `vw_` ( bck_field rec 1 ) ) ? | | ( seq ( bck_field rec 5 ) `v` ) ( seq ( bck_field rec 5 ) `w` ) ( seq ( bck_field rec 5 ) `o` ) `1` `` )
+                // the buffer it points at (`o`: the view mark is `o`, read by
+                // bck_sx_name — one key per row, not a key per question).
+                ( nurl_sym_set g_bck ( bck_bkey `vw_` ( bck_field rec 1 ) ) ? ( seq ( bck_field rec 5 ) `o` ) `o` ? | ( seq ( bck_field rec 5 ) `v` ) ( seq ( bck_field rec 5 ) `w` ) `1` `` )
                 ( nurl_sym_set g_bck ( bck_bkey `wv_` ( bck_field rec 1 ) ) ? ( seq ( bck_field rec 5 ) `w` ) `1` `` )
-                ( nurl_sym_set g_bck ( bck_bkey `ow_` ( bck_field rec 1 ) ) ? ( seq ( bck_field rec 5 ) `o` ) `1` `` )
                 ? != 0 g_bck_has_borrow { ( nurl_sym_set g_bck ( bck_bkey `bs_` ( bck_field rec 1 ) ) `` ) } {}
                 = st ( bck_bind_row st asid rec asrcs amk )
                 // A global outlives every binding of this function.
@@ -26709,7 +26716,13 @@ unsafe @ bck_loop_mask s pre s post → s {
         // of where the copy came from; an `s` that owns its buffer (tracked
         // or guarded) is marked so that a copy of it borrows it.
         = g_bck_rhs_sx ? lit_track ( nurl_str_cat `-` `` ) ( nurl_str_cat __rhs_sx `` )
-        = g_bck_bind_sown ? & & != 0 g_auto_drop_strings ( seq ( nurl_llty vt ) `i8*` ) | | lit_track ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `str` ) & != 0 ( nurl_str_len __lcg ) == 0 ( nurl_sym_len2 syms __lcg `__nullguard` ) 1 0
+        // (Asked of a string binding only: `&` and `|` evaluate both sides.)
+        = g_bck_bind_sown 0
+        ? & != 0 g_auto_drop_strings ( seq ( nurl_llty vt ) `i8*` ) {
+            ? | lit_track ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `str` ) { = g_bck_bind_sown 1 } {
+                ? != 0 ( nurl_str_len __lcg ) { = g_bck_bind_sown ? == 0 ( nurl_sym_len2 syms __lcg `__nullguard` ) 1 0 } {}
+            }
+        } {}
         ( bck_record_binding `let` name bck_line ( bck_walk_class vt ) vt )
         = g_bck_rhs_callee ``
         = g_bck_rhs_sx ``
@@ -27023,7 +27036,12 @@ unsafe @ bck_loop_mask s pre s post → s {
             = g_bck_rhs_callee ? | == bck_rhs_tt TT_LPAREN & == bck_rhs_tt TT_BACKSLASH ( seq ( nurl_sym_get syms `__last_backslash_try__` ) `1` ) ( nurl_sym_get syms `__last_call_name__` ) ``
             // (As on the inferred path: a copy is fresh, an owning `s` marked.)
             = g_bck_rhs_sx ? lit_track ( nurl_str_cat `-` `` ) ( nurl_str_cat __rhs_sx `` )
-            = g_bck_bind_sown ? & & != 0 g_auto_drop_strings ( seq ( nurl_llty ptype ) `i8*` ) | | lit_track ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `str` ) & != 0 ( nurl_str_len __lcg ) == 0 ( nurl_sym_len2 syms __lcg `__nullguard` ) 1 0
+            = g_bck_bind_sown 0
+            ? & != 0 g_auto_drop_strings ( seq ( nurl_llty ptype ) `i8*` ) {
+                ? | lit_track ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `str` ) { = g_bck_bind_sown 1 } {
+                    ? != 0 ( nurl_str_len __lcg ) { = g_bck_bind_sown ? == 0 ( nurl_sym_len2 syms __lcg `__nullguard` ) 1 0 } {}
+                }
+            } {}
             ( bck_record_binding `let` name bck_line ( bck_walk_class ( nurl_llty ptype ) ) ( nurl_llty ptype ) )
             = g_bck_rhs_callee ``
             = g_bck_rhs_sx ``
@@ -27386,20 +27404,28 @@ unsafe @ bck_loop_mask s pre s post → s {
         // lent; an untracked one is given a copy of a tracked local. A copy
         // is no view of where it came from, and an `s` that may own its
         // value is marked so that a copy of it borrows it.
-        : b __a_self & ( is_ident_tok bck_rhs_tt ) ( seq bck_rhs_val name )
-        : b __a_s & != 0 g_auto_drop_strings ( seq ( nurl_llty vt ) `i8*` )
-        : s __a_rp ? ( is_ident_tok bck_rhs_tt ) ( nurl_sym_get2 syms bck_rhs_val `__ptr` ) ``
-        : b __a_rtr & & ! __a_self != 0 ( nurl_str_len __a_rp ) ( nurl_sym_has_word syms `__owned_strings__` __a_rp )
-        : b __a_ocall ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `str` )
-        : b __a_g & & & __a_s ! lhs_is_owned_str ! __a_self != 0 ( nurl_sym_len2 syms name `__guardslot` )
-        : s __a_gag ( nurl_sym_get syms `__last_call_guard__` )
-        : b __a_gown & != 0 ( nurl_str_len __a_gag ) == 0 ( nurl_sym_len2 syms __a_gag `__nullguard` )
-        : b __asn_fresh | | & & lhs_is_owned_str ! __a_self
-        | | | | | | == bck_rhs_tt TT_STR ( is_ident_tok bck_rhs_tt ) == bck_rhs_tt TT_LPAREN == bck_rhs_tt TT_QUEST == bck_rhs_tt TT_QUESTQUEST == bck_rhs_tt TT_LBRACE == bck_rhs_tt TT_DOT
-        & __a_s __a_ocall
-        & & __a_s ! lhs_is_owned_str __a_rtr
+        // (Asked of a string binding only: `&` and `|` evaluate both sides,
+        // and the lists read here grow with the function.)
+        : ~ b __asn_fresh F
+        = g_bck_bind_sown 0
+        ? & != 0 g_auto_drop_strings ( seq ( nurl_llty vt ) `i8*` ) {
+            : b __a_self & ( is_ident_tok bck_rhs_tt ) ( seq bck_rhs_val name )
+            : b __a_rtr ? & ( is_ident_tok bck_rhs_tt ) ! __a_self ( nurl_sym_has_word syms `__owned_strings__` ( nurl_sym_get2 syms bck_rhs_val `__ptr` ) ) F
+            : b __a_ocall ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `str` )
+            ? lhs_is_owned_str {
+                = __asn_fresh & ! __a_self | | | | | | == bck_rhs_tt TT_STR ( is_ident_tok bck_rhs_tt ) == bck_rhs_tt TT_LPAREN == bck_rhs_tt TT_QUEST == bck_rhs_tt TT_QUESTQUEST == bck_rhs_tt TT_LBRACE == bck_rhs_tt TT_DOT
+                = g_bck_bind_sown 1
+            } {
+                = __asn_fresh | __a_ocall __a_rtr
+                ? & ! __a_self != 0 ( nurl_sym_len2 syms name `__guardslot` ) {
+                    : s __a_gag ( nurl_sym_get syms `__last_call_guard__` )
+                    : b __a_gown ? != 0 ( nurl_str_len __a_gag ) == 0 ( nurl_sym_len2 syms __a_gag `__nullguard` ) F
+                    = g_bck_bind_sown ? | | __a_ocall __a_rtr __a_gown 1 0
+                } {}
+            }
+            ? __a_ocall { = __asn_fresh T } {}
+        } {}
         = g_bck_rhs_sx ? __asn_fresh ( nurl_str_cat `-` `` ) ( nurl_str_cat __rhs_sx `` )
-        = g_bck_bind_sown ? | & lhs_is_owned_str __a_s & __a_g | | __a_ocall __a_rtr __a_gown 1 0
         ( bck_record_binding `assign` name bck_line ( bck_walk_class vt ) vt )
         = g_bck_rhs_callee ``
         = g_bck_rhs_sx ``
@@ -28789,7 +28815,7 @@ unsafe @ bck_loop_mask s pre s post → s {
                 // came, a view or a literal was freed with the struct and a
                 // replaced value leaked (tools/fuzz/holes h123–h126).
                 : ~ s __fs_sval ( nurl_str_cat rhsc `` )
-                : b __fs_sreg ( mem_struct_field_owned syms alloca_ptr ( nurl_str_int fidx ) `str` )
+                : b __fs_sreg ? ( seq ( nurl_llty ftype ) `i8*` ) ( mem_struct_field_owned syms alloca_ptr ( nurl_str_int fidx ) `str` ) F
                 // One it does not own is a view (docs/MEMORY.md §2.13): a
                 // fresh string stored there is owned by nothing (h134, h135).
                 ? & & & != 0 g_auto_drop_strings ( seq ( nurl_llty ftype ) `i8*` ) ! __fs_sreg ! ( bck_unsafe_ctx ) {

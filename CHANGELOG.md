@@ -13,7 +13,8 @@ The memory guarantee has **no exception**: 0.71.0's one known hole (a
 it (probes h33–h141), each at its root — every probe is now rejected or
 runs clean under ASan/UBSan/LSan, and `tools/fuzz/holes/check.sh` runs in
 CI. Compile time is 0.7 % below 0.71.0's main (self-compile instructions),
-run time is flat or better. Code that handed raw pointers or caller-given
+run time is flat or better on every bench kernel but json_parse (+0.2 %: the
+null-safe string length and the checked growth). Code that handed raw pointers or caller-given
 lengths around outside `unsafe` may need `unsafe`, or the safe API now
 beside each raw one (*Changed*).
 
