@@ -10,217 +10,157 @@
 //
 // `stdlib/std/hash.nu`'s `md5_bytes` calls this directly; the public
 // surface is unchanged.
+//
+// Shape: the four working words and the sixteen message words are scalar
+// locals, and each of the 64 steps is one `inline` call that updates its
+// word `inout` — written out with the words already rotated into place,
+// and with the step's message index, sine constant T_i (RFC 1321 §3.4) and
+// rotation as literals, so nothing is looked up at run time.
 
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 
-// ── Round constants T_i = floor(2^32 · |sin(i + 1)|), per RFC 1321
-//    §3.4. Built once per call into a Vec[u32]; 64-deep table.
-
-@ __md5_K → ( Vec u32 ) {
-    : ( Vec u32 ) k ( vec_with_cap [u32] 64 )
-    ( vec_push [u32] k # u32 3614090360 )
-    ( vec_push [u32] k # u32 3905402710 )
-    ( vec_push [u32] k # u32 606105819 )
-    ( vec_push [u32] k # u32 3250441966 )
-    ( vec_push [u32] k # u32 4118548399 )
-    ( vec_push [u32] k # u32 1200080426 )
-    ( vec_push [u32] k # u32 2821735955 )
-    ( vec_push [u32] k # u32 4249261313 )
-    ( vec_push [u32] k # u32 1770035416 )
-    ( vec_push [u32] k # u32 2336552879 )
-    ( vec_push [u32] k # u32 4294925233 )
-    ( vec_push [u32] k # u32 2304563134 )
-    ( vec_push [u32] k # u32 1804603682 )
-    ( vec_push [u32] k # u32 4254626195 )
-    ( vec_push [u32] k # u32 2792965006 )
-    ( vec_push [u32] k # u32 1236535329 )
-    ( vec_push [u32] k # u32 4129170786 )
-    ( vec_push [u32] k # u32 3225465664 )
-    ( vec_push [u32] k # u32 643717713 )
-    ( vec_push [u32] k # u32 3921069994 )
-    ( vec_push [u32] k # u32 3593408605 )
-    ( vec_push [u32] k # u32 38016083 )
-    ( vec_push [u32] k # u32 3634488961 )
-    ( vec_push [u32] k # u32 3889429448 )
-    ( vec_push [u32] k # u32 568446438 )
-    ( vec_push [u32] k # u32 3275163606 )
-    ( vec_push [u32] k # u32 4107603335 )
-    ( vec_push [u32] k # u32 1163531501 )
-    ( vec_push [u32] k # u32 2850285829 )
-    ( vec_push [u32] k # u32 4243563512 )
-    ( vec_push [u32] k # u32 1735328473 )
-    ( vec_push [u32] k # u32 2368359562 )
-    ( vec_push [u32] k # u32 4294588738 )
-    ( vec_push [u32] k # u32 2272392833 )
-    ( vec_push [u32] k # u32 1839030562 )
-    ( vec_push [u32] k # u32 4259657740 )
-    ( vec_push [u32] k # u32 2763975236 )
-    ( vec_push [u32] k # u32 1272893353 )
-    ( vec_push [u32] k # u32 4139469664 )
-    ( vec_push [u32] k # u32 3200236656 )
-    ( vec_push [u32] k # u32 681279174 )
-    ( vec_push [u32] k # u32 3936430074 )
-    ( vec_push [u32] k # u32 3572445317 )
-    ( vec_push [u32] k # u32 76029189 )
-    ( vec_push [u32] k # u32 3654602809 )
-    ( vec_push [u32] k # u32 3873151461 )
-    ( vec_push [u32] k # u32 530742520 )
-    ( vec_push [u32] k # u32 3299628645 )
-    ( vec_push [u32] k # u32 4096336452 )
-    ( vec_push [u32] k # u32 1126891415 )
-    ( vec_push [u32] k # u32 2878612391 )
-    ( vec_push [u32] k # u32 4237533241 )
-    ( vec_push [u32] k # u32 1700485571 )
-    ( vec_push [u32] k # u32 2399980690 )
-    ( vec_push [u32] k # u32 4293915773 )
-    ( vec_push [u32] k # u32 2240044497 )
-    ( vec_push [u32] k # u32 1873313359 )
-    ( vec_push [u32] k # u32 4264355552 )
-    ( vec_push [u32] k # u32 2734768916 )
-    ( vec_push [u32] k # u32 1309151649 )
-    ( vec_push [u32] k # u32 4149444226 )
-    ( vec_push [u32] k # u32 3174756917 )
-    ( vec_push [u32] k # u32 718787259 )
-    ( vec_push [u32] k # u32 3951481745 )
-    ^ k
-}
-
-// ── Per-round left-rotate counts, four 4-element repeating cycles
-//    per group of 16 rounds. Bytes fit in u so we use Vec[u].
-
-@ __md5_S → ( Vec u ) {
-    : ( Vec u ) s ( vec_with_cap [u] 64 )
-    : ~ i g 0
-    ~ < g 4 {
-        // groups: 0/16/32/48
-        : i base_off * g 16
-        : ~ i j 0
-        ~ < j 16 {
-            : i mod4 & j 3
-            : i sval ? == g 0
-            ? == mod4 0 7 ? == mod4 1 12 ? == mod4 2 17 22
-            ? == g 1
-            ? == mod4 0 5 ? == mod4 1 9 ? == mod4 2 14 20
-            ? == g 2
-            ? == mod4 0 4 ? == mod4 1 11 ? == mod4 2 16 23
-            ? == mod4 0 6 ? == mod4 1 10 ? == mod4 2 15 21
-            ( vec_push [u] s # u sval )
-            = j + j 1
-        }
-        = g + g 1
-    }
-    ^ s
-}
-
-// ── Helpers ────────────────────────────────────────────────────────
-
-// Bounds-checked vec_get unwrap; returns 0 when out of range (caller
-// guarantees in-bounds, so the F-arm is dead code).
-@ __md5_vu32 ( Vec u32 ) v i idx → u32 {
-    : ?u32 o ( vec_get [u32] v idx )
-    ?? o { T x → { ^ x } F → { ^ # u32 0 } }
-}
-
-@ __md5_vu8 ( Vec u ) v i idx → i {
-    : ?u o ( vec_get [u] v idx )
-    ?? o { T x → { ^ # i x } F → { ^ 0 } }
-}
-
-// Left-rotate u32 by c bits (0 ≤ c < 32). The shift count is
-// pre-cast to u32 so LLVM emits `shl i32 %x, %c` (both operands
-// matching width); the shifts are then `shl` (left) / `lshr`
-// (right, logical because operand is u32) and the `|` combines.
-@ __md5_rotl u32 x i c → u32 {
-    // One `rol` instruction via the compiler's funnel-shift primitive,
-    // rather than a shift pair, an `or` and the two intermediate
-    // values they need materialised — see __sha256_rotr for the full
-    // note. Every ISA NURL targets has the instruction.
+// Left-rotate u32 by c bits (0 < c < 32).
+inline @ __md5_rotl u32 x i c → u32 {
+    // One `rol` instruction via the compiler's funnel-shift primitive.
     ^ # u32 ( nurl_rotl32 # u64 x # u64 c )
 }
 
-// ── Transform: process one 64-byte block starting at `offset`.
-//    state is a 4-element Vec[u32]; mutated in place via vec_set.
+// One step, a = b + rotl(a + f(b, c, d) + x + t, s) — for each of the four
+// rounds' functions F, G, H, I.
+inline @ __md5_ff inout u32 a u32 b u32 c u32 d u32 x u32 t i s → v {
+    = a + b ( __md5_rotl + + + a | & b c & ~ b d x t s )
+}
 
-@ __md5_transform ( Vec u32 ) state ( Vec u ) block i offset ( Vec u32 ) K ( Vec u ) S → v {
-    // Decode 16 little-endian u32 words from the block.
-    : ( Vec u32 ) m ( vec_with_cap [u32] 16 )
-    : ~ i wi 0
-    ~ < wi 16 {
-        : ?u32 wo ( bytes_read_u32_le block + offset * wi 4 )
-        : u32 w ?? wo { T x → x F → # u32 0 }
-        ( vec_push [u32] m w )
-        = wi + wi 1
-    }
+inline @ __md5_gg inout u32 a u32 b u32 c u32 d u32 x u32 t i s → v {
+    = a + b ( __md5_rotl + + + a | & d b & ~ d c x t s )
+}
 
-    : ~ u32 a ( __md5_vu32 state 0 )
-    : ~ u32 b ( __md5_vu32 state 1 )
-    : ~ u32 c ( __md5_vu32 state 2 )
-    : ~ u32 d ( __md5_vu32 state 3 )
+inline @ __md5_hh inout u32 a u32 b u32 c u32 d u32 x u32 t i s → v {
+    = a + b ( __md5_rotl + + + a ^^ ^^ b c d x t s )
+}
 
-    : ~ i ri 0
-    ~ < ri 64 {
-        : ~ u32 f # u32 0
-        : ~ i g 0
-        ? < ri 16 {
-            = f | & b c & ~ b d
-            = g ri
-        } {
-            ? < ri 32 {
-                = f | & d b & ~ d c
-                = g & + * 5 ri 1 15
-            } {
-                ? < ri 48 {
-                    = f ^^ ^^ b c d
-                    = g & + * 3 ri 5 15
-                } {
-                    = f ^^ c | b ~ d
-                    = g & * 7 ri 15
-                }
-            }
-        }
-        : u32 ki ( __md5_vu32 K ri )
-        : u32 mg ( __md5_vu32 m g )
-        : u32 x + + + a f ki mg
-        : i si ( __md5_vu8 S ri )
-        : u32 tmp d
-        = d c
-        = c b
-        = b + b ( __md5_rotl x si )
-        = a tmp
-        = ri + ri 1
-    }
+inline @ __md5_ii inout u32 a u32 b u32 c u32 d u32 x u32 t i s → v {
+    = a + b ( __md5_rotl + + + a ^^ c | b ~ d x t s )
+}
 
-    : u32 s0 ( __md5_vu32 state 0 )
-    : u32 s1 ( __md5_vu32 state 1 )
-    : u32 s2 ( __md5_vu32 state 2 )
-    : u32 s3 ( __md5_vu32 state 3 )
-    : b _0 ( vec_set [u32] state 0 + s0 a )
-    : b _1 ( vec_set [u32] state 1 + s1 b )
-    : b _2 ( vec_set [u32] state 2 + s2 c )
-    : b _3 ( vec_set [u32] state 3 + s3 d )
+// The little-endian u32 at `blk[off .. off+4]`; every caller reads inside
+// a block it has already sized, so the out-of-range arm never runs.
+@ __md5_w ( Vec u ) blk i off → u32 {
+    ?? ( bytes_read_u32_le blk off ) { T x → ^ x F → ^ # u32 0 }
+}
 
+// ── Transform: one 64-byte block at `blk[off ..]` into h0..h3. ─────
+
+@ __md5_transform inout u32 h0 inout u32 h1 inout u32 h2 inout u32 h3 ( Vec u ) blk i off → v {
+    : u32 m0 ( __md5_w blk off )
+    : u32 m1 ( __md5_w blk + off 4 )
+    : u32 m2 ( __md5_w blk + off 8 )
+    : u32 m3 ( __md5_w blk + off 12 )
+    : u32 m4 ( __md5_w blk + off 16 )
+    : u32 m5 ( __md5_w blk + off 20 )
+    : u32 m6 ( __md5_w blk + off 24 )
+    : u32 m7 ( __md5_w blk + off 28 )
+    : u32 m8 ( __md5_w blk + off 32 )
+    : u32 m9 ( __md5_w blk + off 36 )
+    : u32 m10 ( __md5_w blk + off 40 )
+    : u32 m11 ( __md5_w blk + off 44 )
+    : u32 m12 ( __md5_w blk + off 48 )
+    : u32 m13 ( __md5_w blk + off 52 )
+    : u32 m14 ( __md5_w blk + off 56 )
+    : u32 m15 ( __md5_w blk + off 60 )
+
+    : ~ u32 a h0
+    : ~ u32 b h1
+    : ~ u32 c h2
+    : ~ u32 d h3
+
+    ( __md5_ff a b c d m0 # u32 3614090360 7 )
+    ( __md5_ff d a b c m1 # u32 3905402710 12 )
+    ( __md5_ff c d a b m2 # u32 606105819 17 )
+    ( __md5_ff b c d a m3 # u32 3250441966 22 )
+    ( __md5_ff a b c d m4 # u32 4118548399 7 )
+    ( __md5_ff d a b c m5 # u32 1200080426 12 )
+    ( __md5_ff c d a b m6 # u32 2821735955 17 )
+    ( __md5_ff b c d a m7 # u32 4249261313 22 )
+    ( __md5_ff a b c d m8 # u32 1770035416 7 )
+    ( __md5_ff d a b c m9 # u32 2336552879 12 )
+    ( __md5_ff c d a b m10 # u32 4294925233 17 )
+    ( __md5_ff b c d a m11 # u32 2304563134 22 )
+    ( __md5_ff a b c d m12 # u32 1804603682 7 )
+    ( __md5_ff d a b c m13 # u32 4254626195 12 )
+    ( __md5_ff c d a b m14 # u32 2792965006 17 )
+    ( __md5_ff b c d a m15 # u32 1236535329 22 )
+    ( __md5_gg a b c d m1 # u32 4129170786 5 )
+    ( __md5_gg d a b c m6 # u32 3225465664 9 )
+    ( __md5_gg c d a b m11 # u32 643717713 14 )
+    ( __md5_gg b c d a m0 # u32 3921069994 20 )
+    ( __md5_gg a b c d m5 # u32 3593408605 5 )
+    ( __md5_gg d a b c m10 # u32 38016083 9 )
+    ( __md5_gg c d a b m15 # u32 3634488961 14 )
+    ( __md5_gg b c d a m4 # u32 3889429448 20 )
+    ( __md5_gg a b c d m9 # u32 568446438 5 )
+    ( __md5_gg d a b c m14 # u32 3275163606 9 )
+    ( __md5_gg c d a b m3 # u32 4107603335 14 )
+    ( __md5_gg b c d a m8 # u32 1163531501 20 )
+    ( __md5_gg a b c d m13 # u32 2850285829 5 )
+    ( __md5_gg d a b c m2 # u32 4243563512 9 )
+    ( __md5_gg c d a b m7 # u32 1735328473 14 )
+    ( __md5_gg b c d a m12 # u32 2368359562 20 )
+    ( __md5_hh a b c d m5 # u32 4294588738 4 )
+    ( __md5_hh d a b c m8 # u32 2272392833 11 )
+    ( __md5_hh c d a b m11 # u32 1839030562 16 )
+    ( __md5_hh b c d a m14 # u32 4259657740 23 )
+    ( __md5_hh a b c d m1 # u32 2763975236 4 )
+    ( __md5_hh d a b c m4 # u32 1272893353 11 )
+    ( __md5_hh c d a b m7 # u32 4139469664 16 )
+    ( __md5_hh b c d a m10 # u32 3200236656 23 )
+    ( __md5_hh a b c d m13 # u32 681279174 4 )
+    ( __md5_hh d a b c m0 # u32 3936430074 11 )
+    ( __md5_hh c d a b m3 # u32 3572445317 16 )
+    ( __md5_hh b c d a m6 # u32 76029189 23 )
+    ( __md5_hh a b c d m9 # u32 3654602809 4 )
+    ( __md5_hh d a b c m12 # u32 3873151461 11 )
+    ( __md5_hh c d a b m15 # u32 530742520 16 )
+    ( __md5_hh b c d a m2 # u32 3299628645 23 )
+    ( __md5_ii a b c d m0 # u32 4096336452 6 )
+    ( __md5_ii d a b c m7 # u32 1126891415 10 )
+    ( __md5_ii c d a b m14 # u32 2878612391 15 )
+    ( __md5_ii b c d a m5 # u32 4237533241 21 )
+    ( __md5_ii a b c d m12 # u32 1700485571 6 )
+    ( __md5_ii d a b c m3 # u32 2399980690 10 )
+    ( __md5_ii c d a b m10 # u32 4293915773 15 )
+    ( __md5_ii b c d a m1 # u32 2240044497 21 )
+    ( __md5_ii a b c d m8 # u32 1873313359 6 )
+    ( __md5_ii d a b c m15 # u32 4264355552 10 )
+    ( __md5_ii c d a b m6 # u32 2734768916 15 )
+    ( __md5_ii b c d a m13 # u32 1309151649 21 )
+    ( __md5_ii a b c d m4 # u32 4149444226 6 )
+    ( __md5_ii d a b c m11 # u32 3174756917 10 )
+    ( __md5_ii c d a b m2 # u32 718787259 15 )
+    ( __md5_ii b c d a m9 # u32 3951481745 21 )
+
+    = h0 + h0 a
+    = h1 + h1 b
+    = h2 + h2 c
+    = h3 + h3 d
 }
 
 // ── Public entry — same shape as runtime-backed `md5_bytes`. ───────
 
 @ md5_pure ( Vec u ) data → ( Vec u ) {
-    : ( Vec u32 ) K ( __md5_K )
-    : ( Vec u ) S ( __md5_S )
-
     // State: A, B, C, D per RFC 1321 §3.3.
-    : ( Vec u32 ) state ( vec_with_cap [u32] 4 )
-    ( vec_push [u32] state # u32 1732584193 )  // 0x67452301
-    ( vec_push [u32] state # u32 4023233417 )  // 0xefcdab89
-    ( vec_push [u32] state # u32 2562383102 )  // 0x98badcfe
-    ( vec_push [u32] state # u32 271733878 )  // 0x10325476
+    : ~ u32 h0 # u32 1732584193  // 0x67452301
+    : ~ u32 h1 # u32 4023233417  // 0xefcdab89
+    : ~ u32 h2 # u32 2562383102  // 0x98badcfe
+    : ~ u32 h3 # u32 271733878  // 0x10325476
 
     : i n ( vec_len [u] data )
 
     // Process complete 64-byte blocks straight from the input.
     : ~ i off 0
     ~ <= + off 64 n {
-        ( __md5_transform state data off K S )
+        ( __md5_transform h0 h1 h2 h3 data off )
         = off + off 64
     }
 
@@ -229,8 +169,7 @@ $ `stdlib/std/bytes.nu`
     : ( Vec u ) tail ( vec_with_cap [u] 128 )
     : ~ i ti off
     ~ < ti n {
-        : i bv ( __md5_vu8 data ti )
-        ( vec_push [u] tail # u & bv 255 )
+        ( vec_push [u] tail ( vec_at [u] data ti ) )
         = ti + ti 1
     }
     // Append the mandatory 0x80 byte.
@@ -259,21 +198,15 @@ $ `stdlib/std/bytes.nu`
     : i tail_len ( vec_len [u] tail )
     : ~ i toff 0
     ~ < toff tail_len {
-        ( __md5_transform state tail toff K S )
+        ( __md5_transform h0 h1 h2 h3 tail toff )
         = toff + toff 64
     }
 
-    // Serialise state[0..4] as 16 little-endian bytes.
+    // Serialise h0..h3 as 16 little-endian bytes.
     : ( Vec u ) out ( vec_with_cap [u] 16 )
-    : ~ i si 0
-    ~ < si 4 {
-        : u32 sv ( __md5_vu32 state si )
-        ( vec_push [u] out # u & # i sv 255 )
-        ( vec_push [u] out # u & >> # i sv 8 255 )
-        ( vec_push [u] out # u & >> # i sv 16 255 )
-        ( vec_push [u] out # u & >> # i sv 24 255 )
-        = si + si 1
-    }
-
+    ( bytes_push_u32_le out h0 )
+    ( bytes_push_u32_le out h1 )
+    ( bytes_push_u32_le out h2 )
+    ( bytes_push_u32_le out h3 )
     ^ out
 }
