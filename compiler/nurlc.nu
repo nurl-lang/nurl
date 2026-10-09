@@ -45299,8 +45299,7 @@ u` ) ( nurl_print q ) ( nurl_print `:
     ( emit `@.nurl.peek.zero = linkonce_odr constant i64 0` )
     // What a null `s` reads as at a C string primitive (`"nurl.cstr"`).
     // Private, so a partitioned build (--split) copies it into every part
-    // that names it — a linkonce_odr one stays in part 0, where nothing
-    // may use it, and is dropped there.
+    // that names it.
     ( emit `@.nurl.cstr.empty = private constant [1 x i8] zeroinitializer` )
     ( emit `define linkonce_odr i64 @nurl_peek(i8* %p, i64 %i) alwaysinline {` )
     ( emit `entry:` )
@@ -51005,7 +51004,9 @@ unsafe @ dce_free → v {
 //     string global) goes into every part; the copies no part reads
 //     are deleted before they reach an object file.
 //   * A module-level global is DEFINED in part 0 and DECLARED
-//     `external` everywhere else.
+//     `external` everywhere else — unless its linkage is `linkonce` /
+//     `linkonce_odr`, which lets part 0 discard it: those are
+//     replicated, like the bodies below.
 //   * `linkonce_odr` definitions (nurl_peek / nurl_poke) are
 //     REPLICATED, not declared: ODR linkage is precisely the licence to
 //     do that, and `declare linkonce_odr` is not legal IR.
@@ -51085,6 +51086,21 @@ unsafe @ __sp_is_private i p i le → b {
     ? > + q 11 le { ^ F } {}
     : *u mp # *u # s g_dce_mod
     ^ ? != 0 ( nurl_str_starts # s + # i mp q ` = private ` ) T F
+}
+
+// Is the global defined on [p, le) `linkonce` / `linkonce_odr`? Such a
+// definition is discardable, so it cannot live in part 0 alone: a part
+// 0 whose own code does not use it drops it in its pre-link compile,
+// and then nothing defines it — not for the other parts, and not for
+// the code ThinLTO later imports back INTO part 0 (`.nurl.peek.zero`,
+// which only the inlined Vec accessors name, went undefined in
+// packages/agora that way). ODR linkage is the licence to replicate it
+// instead, exactly as the `linkonce_odr` bodies are.
+unsafe @ __sp_is_linkonce i p i le → b {
+    : i q ( __sp_ident_end p le )
+    ? > + q 11 le { ^ F } {}
+    : *u mp # *u # s g_dce_mod
+    ^ ? != 0 ( nurl_str_starts # s + # i mp q ` = linkonce` ) T F
 }
 
 // Byte just past the word at `t`.
@@ -51253,6 +51269,7 @@ unsafe @ __sp_declare i st i en → v {
         { ( __sp_write p nx ) } {}
         ^ v
     } {}
+    ? ( __sp_is_linkonce p le ) { ( __sp_write p nx ) ^ v } {}
     ? == k 0 { ( __sp_write p nx ) } { ( __sp_extern p le ) }
 }
 

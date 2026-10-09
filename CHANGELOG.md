@@ -20,6 +20,17 @@ beside each raw one (*Changed*).
 
 ### Fixed
 
+- **A split build no longer loses a `linkonce_odr` global.** The
+  partition defined every module-level global in part 0 and declared it
+  `external` elsewhere; a `linkonce_odr` one (`.nurl.peek.zero`, read by
+  every inlined Vec accessor, and the cycle collector's ops tables) is
+  discardable, so a part 0 whose own code did not use it dropped it
+  before the link and every reference to it was left undefined. It was
+  latent — every package split so far had a part 0 that read a Vec — and
+  surfaced when `packages/agora` was first split (see *Performance*).
+  Such globals are now replicated into every part, and
+  `compiler/tests/split_equivalence.sh` checks that no part declares one
+  `external`.
 - **Views are values.** A view — a `Slice`, a struct, Option or container
   holding one, a view a closure captured, one stored in a global or
   returned from a function — is tracked as a view of its source wherever

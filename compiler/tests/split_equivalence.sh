@@ -127,6 +127,24 @@ done
 ( build_one compiler/nurlc.nu "$WORK/nurlc.split" "$PARTS" && : > "$WORK/nurlc.split.built" ) &
 wait
 
+# A structural invariant of the parts that a behavioural comparison
+# cannot see, because breaking it only fails on SOME programs: a
+# `linkonce` / `linkonce_odr` global is replicated, never declared
+# `external` — a part allowed to discard it cannot be the one that
+# defines it for the others (`.nurl.peek.zero` went undefined at link
+# time in every part that read it).
+check_structure() {  # check_structure <name>
+    local base="$WORK/$1.split" nm bad=0
+    local parts=("$base".[0-9]*.ll)
+    for nm in $(grep -o '^@[^ ]* = linkonce' "$base.ll" | cut -d' ' -f1); do
+        if grep -qF "$nm = external" "${parts[@]}"; then
+            echo "FAIL $1 — $nm is linkonce but a part declares it external"
+            bad=1
+        fi
+    done
+    return "$bad"
+}
+
 for src in "${PROGRAMS[@]}"; do
     name="$(basename "$src" .nu)"
     if [[ ! -f "$WORK/$name.mono.built" ]]; then
@@ -151,6 +169,10 @@ for src in "${PROGRAMS[@]}"; do
     if [[ "$a" != "$b" || "$ra" != "$rb" ]]; then
         echo "FAIL $name — split binary behaves differently (rc $ra vs $rb)"
         diff <(printf '%s\n' "$a") <(printf '%s\n' "$b") | head -20
+        fails=$((fails + 1))
+        continue
+    fi
+    if ! check_structure "$name"; then
         fails=$((fails + 1))
         continue
     fi

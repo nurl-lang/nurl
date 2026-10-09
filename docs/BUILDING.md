@@ -245,8 +245,10 @@ The partition itself is a text-level pass over the finished IR, on the
 same footing as dead-function elimination above: a function goes to one
 part, everything a part does not define it declares, `private` globals
 follow the functions that name them, module-level globals are defined in
-part 0 and declared `external` in the rest. A reference that lands in
-the wrong part is an unparseable module or an undefined symbol — loud,
+part 0 and declared `external` in the rest — except a `linkonce_odr`
+one, which part 0 may discard when its own code does not use it, so it
+is replicated instead. A reference that lands in the wrong part is an
+unparseable module or an undefined symbol — loud,
 never a silently wrong binary — and `compiler/tests/split_equivalence.sh`
 rebuilds a structurally varied corpus both ways on every `./build.sh` to
 prove the programs match.
