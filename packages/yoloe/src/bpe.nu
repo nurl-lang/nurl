@@ -353,8 +353,7 @@ $ `stdlib/core/slice.nu`
 }
 
 // Byte substring of a raw char* (string_substr only takes a managed String).
-@ __sub s text i from i len → String {
-    : ( Slice u ) text_v ( slice_of_str text )
+@ __sub ( Slice u ) text_v i from i len → String {
     : String out ( string_new )
     : ~ i k 0
     ~ < k len { ( string_push_char out ( slice_byte text_v + from k ) ) = k + k 1 }
@@ -362,40 +361,43 @@ $ `stdlib/core/slice.nu`
 }
 
 // ── word splitting (CLIP regex) ──────────────────────────────────
-// Returns the regex tokens of `text` as byte substrings.
+// Returns the regex tokens of `text` as byte substrings. The text is
+// measured once; every helper reads the view (utf8_decode / nurl_str_get
+// on the string measured it again from its start on every call).
 @ __split_words s text → ( Vec String ) {
     : ( Vec String ) out ( vec_new [String] )
-    : i n ( nurl_str_len text )
+    : ( Slice u ) tv ( slice_of_str text )
+    : i n ( slice_len [u] tv )
     : ~ i pos 0
     ~ < pos n {
-        : Utf8Dec d ( utf8_decode text pos )
+        : Utf8Dec d ( utf8_decode_at tv pos )
         : i cp . d cp
         : i w . d width
         ? <= w 0 { = pos + pos 1 } {
             ? ( __is_space cp ) { = pos + pos w } {
                 ? == cp 39 {
                     // apostrophe: try an English contraction, else punctuation
-                    : i clen ( __contraction text pos )
+                    : i clen ( __contraction tv pos )
                     ? > clen 0 {
-                        ( vec_push [String] out ( __sub text pos clen ) )
+                        ( vec_push [String] out ( __sub tv pos clen ) )
                         = pos + pos clen
                     } {
-                        : i e ( __run_punct text pos )
-                        ( vec_push [String] out ( __sub text pos - e pos ) )
+                        : i e ( __run_punct tv pos )
+                        ( vec_push [String] out ( __sub tv pos - e pos ) )
                         = pos e
                     }
                 } {
                     ? ( __is_letter cp ) {
-                        : i e ( __run_letters text pos )
-                        ( vec_push [String] out ( __sub text pos - e pos ) )
+                        : i e ( __run_letters tv pos )
+                        ( vec_push [String] out ( __sub tv pos - e pos ) )
                         = pos e
                     } {
                         ? ( __is_digit cp ) {
-                            ( vec_push [String] out ( __sub text pos w ) )
+                            ( vec_push [String] out ( __sub tv pos w ) )
                             = pos + pos w
                         } {
-                            : i e ( __run_punct text pos )
-                            ( vec_push [String] out ( __sub text pos - e pos ) )
+                            : i e ( __run_punct tv pos )
+                            ( vec_push [String] out ( __sub tv pos - e pos ) )
                             = pos e
                         }
                     }
@@ -407,11 +409,11 @@ $ `stdlib/core/slice.nu`
 }
 
 // End offset of a maximal run of letters starting at `pos`.
-@ __run_letters s text i pos → i {
-    : i n ( nurl_str_len text )
+@ __run_letters ( Slice u ) tv i pos → i {
+    : i n ( slice_len [u] tv )
     : ~ i p pos
     ~ < p n {
-        : Utf8Dec d ( utf8_decode text p )
+        : Utf8Dec d ( utf8_decode_at tv p )
         ? <= . d width 0 { ^ p } {}
         ? ! ( __is_letter . d cp ) { ^ p } {}
         = p + p . d width
@@ -420,11 +422,11 @@ $ `stdlib/core/slice.nu`
 }
 
 // End offset of a maximal run of non-space, non-letter, non-digit codepoints.
-@ __run_punct s text i pos → i {
-    : i n ( nurl_str_len text )
+@ __run_punct ( Slice u ) tv i pos → i {
+    : i n ( slice_len [u] tv )
     : ~ i p pos
     ~ < p n {
-        : Utf8Dec d ( utf8_decode text p )
+        : Utf8Dec d ( utf8_decode_at tv p )
         ? <= . d width 0 { ^ p } {}
         : i cp . d cp
         ? | | ( __is_space cp ) ( __is_letter cp ) ( __is_digit cp ) { ^ p } {}
@@ -435,10 +437,10 @@ $ `stdlib/core/slice.nu`
 
 // Length (bytes) of an English contraction at `pos` ('s 't 're 've 'm 'll 'd),
 // or 0. `pos` is at the apostrophe.
-@ __contraction s text i pos → i {
-    : i n ( nurl_str_len text )
-    : i c1 ? < + pos 1 n ( nurl_str_get text + pos 1 ) -1
-    : i c2 ? < + pos 2 n ( nurl_str_get text + pos 2 ) -1
+@ __contraction ( Slice u ) tv i pos → i {
+    : i n ( slice_len [u] tv )
+    : i c1 ? < + pos 1 n ( slice_byte tv + pos 1 ) -1
+    : i c2 ? < + pos 2 n ( slice_byte tv + pos 2 ) -1
     // two-letter: 're 've 'll
     ? & == c1 114 == c2 101 { ^ 3 } {}  // 're
     ? & == c1 118 == c2 101 { ^ 3 } {}  // 've
@@ -454,12 +456,13 @@ $ `stdlib/core/slice.nu`
 // ── clean (basic_clean + whitespace_clean + lower, ASCII) ─────────
 @ __clean s text → String {
     : String out ( string_new )
-    : i n ( nurl_str_len text )
+    : ( Slice u ) tv ( slice_of_str text )
+    : i n ( slice_len [u] tv )
     : ~ i pos 0
     : ~ i pending 0  // a deferred single space between runs
     : ~ i started 0
     ~ < pos n {
-        : Utf8Dec d ( utf8_decode text pos )
+        : Utf8Dec d ( utf8_decode_at tv pos )
         : i cp . d cp
         : i w ? > . d width 0 . d width 1
         ? ( __is_space cp ) {

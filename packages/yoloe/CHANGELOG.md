@@ -12,11 +12,12 @@ arena and the encoder table it changes instead of the whole tokenizer,
 so a symbol read out of the byte encoder stays valid across the call, as
 0.72.0's borrow rules require. Tokens are unchanged.
 
-Loops that walked a string with `nurl_str_get` — which measures the
-string from its start on every call, so a scan is quadratic in the
-string's length, and nurlc 0.72 warns about the shape — read through a
-view measured once (`slice_of_str` + `slice_byte`). No change in
-behaviour.
+Loops that walked a string with `nurl_str_get` or decoded it with
+`utf8_decode` — both measure the string from its start on every call, so
+a scan is quadratic in the string's length, and nurlc 0.72 warns about
+the shape — read through a view measured once (`slice_of_str` +
+`slice_byte` / `utf8_decode_at`); the CLIP pre-tokenizer measures the
+text once and hands the view to its helpers. No change in behaviour.
 
 ## [0.7.1] — 2026-10-07
 

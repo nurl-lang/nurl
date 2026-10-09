@@ -340,6 +340,70 @@ unsafe @ __tk_spm_emit * TokImpl t s esc ( Slice u ) esc_v i off i len ( Vec i )
     }
 }
 
+// ── SPM bigram heap ─────────────────────────────────────────────────
+// Parallel columns (score, left, right, size) of a binary max-heap.
+
+// llama.cpp's order: the higher score first, the leftmost (lowest left
+// index) among equal scores.
+@ __tk_bg_before ( Vec f ) sc ( Vec i ) lf i a i b → b {
+    : f sa ( __tk_getf sc a )
+    : f sb ( __tk_getf sc b )
+    ? > sa sb { ^ T } {}
+    ? < sa sb { ^ F } {}
+    ^ < ( _tk_geti lf a 0 ) ( _tk_geti lf b 0 )
+}
+
+@ __tk_bg_swap ( Vec f ) sc ( Vec i ) lf ( Vec i ) rt ( Vec i ) sz i a i b → v {
+    : b _s1 ( vec_swap [f] sc a b )
+    : b _s2 ( vec_swap [i] lf a b )
+    : b _s3 ( vec_swap [i] rt a b )
+    : b _s4 ( vec_swap [i] sz a b )
+}
+
+@ __tk_bg_push ( Vec f ) sc ( Vec i ) lf ( Vec i ) rt ( Vec i ) sz f score i l i r i n → v {
+    ( vec_push [f] sc score )
+    ( vec_push [i] lf l )
+    ( vec_push [i] rt r )
+    ( vec_push [i] sz n )
+    : ~ i k - ( vec_len [f] sc ) 1
+    ~ > k 0 {
+        : i par / - k 1 2
+        ? ( __tk_bg_before sc lf k par ) { ( __tk_bg_swap sc lf rt sz k par ) = k par } { = k 0 }
+    }
+}
+
+// Drop the top entry: the last one takes its place and sinks.
+@ __tk_bg_pop ( Vec f ) sc ( Vec i ) lf ( Vec i ) rt ( Vec i ) sz → v {
+    : i last - ( vec_len [f] sc ) 1
+    ( __tk_bg_swap sc lf rt sz 0 last )
+    : ?f _p1 ( vec_pop [f] sc )
+    : ?i _p2 ( vec_pop [i] lf )
+    : ?i _p3 ( vec_pop [i] rt )
+    : ?i _p4 ( vec_pop [i] sz )
+    : ~ i k 0
+    ~ T {
+        : i c1 + * k 2 1
+        ? >= c1 last { ^ v } {}
+        : ~ i best c1
+        : i c2 + c1 1
+        ? < c2 last { ? ( __tk_bg_before sc lf c2 c1 ) { = best c2 } {} } {}
+        ? ( __tk_bg_before sc lf best k ) { ( __tk_bg_swap sc lf rt sz k best ) = k best } { ^ v }
+    }
+}
+
+// Push the pair (left, right) if the vocabulary knows their concatenation.
+unsafe @ __tk_spm_try * TokImpl t s e String pair ( Vec i ) starts ( Vec i ) lens ( Vec f ) sc ( Vec i ) lf ( Vec i ) rt ( Vec i ) sz i left i right → v {
+    ? | < left 0 < right 0 { ^ v } {}
+    : i o1 ( _tk_geti starts left 0 )
+    : i n + ( _tk_geti lens left 0 ) ( _tk_geti lens right 0 )
+    ( string_clear pair )
+    ( string_push_bytes pair # *u + # i e o1 n )
+    ?? ( __tk_get . t lookup ( string_data pair ) ) {
+        T id → { ( __tk_bg_push sc lf rt sz ( __tk_getf . t scores id ) left right n ) }
+        F → {}
+    }
+}
+
 unsafe @ __tk_spm_encode * TokImpl t s text ( Vec i ) out → v {
     : ( Slice u ) text_v ( slice_of_str text )
     // escape: optional leading space, then every ' ' → ▁ (E2 96 81)
@@ -356,6 +420,9 @@ unsafe @ __tk_spm_encode * TokImpl t s text ( Vec i ) out → v {
     }
     : s e ( string_data esc )
     : i en ( string_len esc )
+    // Measured once: utf8_decode would measure the whole text again for
+    // every character.
+    : ( Slice u ) e_v ( slice_of_str e )
 
     // split into UTF-8 characters: parallel start/len + doubly-linked
     // alive list (nxt/prv by symbol index, -1 = end)
@@ -366,7 +433,7 @@ unsafe @ __tk_spm_encode * TokImpl t s text ( Vec i ) out → v {
     = p 0
     : ~ i nsym 0
     ~ < p en {
-        : Utf8Dec d ( utf8_decode e p )
+        : Utf8Dec d ( utf8_decode_at e_v p )
         ? < . d width 1 { = p en } {
             ( vec_push [i] starts p )
             ( vec_push [i] lens . d width )
@@ -382,48 +449,42 @@ unsafe @ __tk_spm_encode * TokImpl t s text ( Vec i ) out → v {
     ( vec_set [i] nxt - nsym 1 -1 )
 
     // bigram merge: highest-score vocab pair wins, leftmost on ties —
-    // llama.cpp llm_tokenizer_spm order. Rescan per round: prompt-sized
-    // inputs make O(n²) irrelevant next to the model forward pass.
+    // llama.cpp llm_tokenizer_spm order, and its algorithm: every adjacent
+    // pair the vocabulary knows sits in a max-heap; the best is popped and
+    // merged, and only the two pairs the merge creates are looked up. A
+    // pair whose symbols changed since it was pushed (one merged away, or
+    // lengths that no longer add up) is skipped when popped. Rescanning
+    // every pair per merge was O(n²) lookups — 222 s for a 99 KB text.
     : String pair ( string_new )
-    : ~ b again T
-    ~ again {
-        = again F
-        : ~ i best -1
-        : ~ f best_score -1.0e30
-        : ~ i j 0
-        ~ >= j 0 {
-            : i nj ( _tk_geti nxt j -1 )
-            ? >= nj 0 {
-                : i o1 ( _tk_geti starts j 0 )
-                : i l1 ( _tk_geti lens j 0 )
-                : i l2 ( _tk_geti lens nj 0 )
-                ( string_clear pair )
-                ( string_push_bytes pair # *u + # i e o1 + l1 l2 )
-                ?? ( __tk_get . t lookup ( string_data pair ) ) {
-                    T id → {
-                        : f sc ( __tk_getf . t scores id )
-                        ? > sc best_score {
-                            = best j
-                            = best_score sc
-                        } {}
-                    }
-                    F → {}
-                }
-            } {}
-            = j nj
-        }
-        ? >= best 0 {
-            : i nb ( _tk_geti nxt best -1 )
-            ( vec_set [i] lens best + ( _tk_geti lens best 0 ) ( _tk_geti lens nb 0 ) )
-            : i nn ( _tk_geti nxt nb -1 )
-            ( vec_set [i] nxt best nn )
-            ? >= nn 0 { ( vec_set [i] prv nn best ) } {}
-            = again T
+    : ( Vec f ) hsc ( vec_new [f] )
+    : ( Vec i ) hlf ( vec_new [i] )
+    : ( Vec i ) hrt ( vec_new [i] )
+    : ( Vec i ) hsz ( vec_new [i] )
+    : ~ i j 0
+    ~ >= j 0 {
+        : i nj ( _tk_geti nxt j -1 )
+        ( __tk_spm_try t e pair starts lens hsc hlf hrt hsz j nj )
+        = j nj
+    }
+    ~ > ( vec_len [f] hsc ) 0 {
+        : i l ( _tk_geti hlf 0 0 )
+        : i r ( _tk_geti hrt 0 0 )
+        : i size ( _tk_geti hsz 0 0 )
+        ( __tk_bg_pop hsc hlf hrt hsz )
+        : i ll ( _tk_geti lens l 0 )
+        : i rl ( _tk_geti lens r 0 )
+        ? & & > ll 0 > rl 0 == + ll rl size {
+            ( vec_set [i] lens l + ll rl )
+            ( vec_set [i] lens r 0 )
+            : i nn ( _tk_geti nxt r -1 )
+            ( vec_set [i] nxt l nn )
+            ? >= nn 0 { ( vec_set [i] prv nn l ) } {}
+            ( __tk_spm_try t e pair starts lens hsc hlf hrt hsz ( _tk_geti prv l -1 ) l )
+            ( __tk_spm_try t e pair starts lens hsc hlf hrt hsz l nn )
         } {}
     }
 
-    : ( Slice u ) e_v ( slice_of_str e )
-    : ~ i j 0
+    = j 0
     ~ >= j 0 {
         ( __tk_spm_emit t e e_v ( _tk_geti starts j 0 ) ( _tk_geti lens j 0 ) out )
         = j ( _tk_geti nxt j -1 )
@@ -826,7 +887,7 @@ unsafe @ __tk_piece * TokImpl t i id → ( Vec u ) {
     : ~ i j 0
     : i n ( nurl_str_len p )
     ~ < j n {
-        : Utf8Dec d ( utf8_decode p j )
+        : Utf8Dec d ( utf8_decode_at p_v j )
         ? < . d width 1 { = j n } {
             // find the byte whose enc codepoint is d.cp — 256-entry scan
             // is fine at decode granularity
