@@ -152,7 +152,9 @@ check_structure() {  # check_structure <name>
     done
     holder="$(grep -l '^define [^@]*@[^(]*\.x86v3(' "${parts[@]}" 2>/dev/null)"
     if [[ -n "$holder" ]]; then
-        if [[ "$(wc -l <<<"$holder")" != 1 ]]; then
+        # Arithmetic, not a string compare: BSD wc (FreeBSD, macOS) pads
+        # the count with spaces.
+        if (( $(printf '%s\n' "$holder" | wc -l) != 1 )); then
             echo "FAIL $1 — simd clones are spread over several parts"
             return 1
         fi
