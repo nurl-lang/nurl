@@ -2,7 +2,7 @@
 
 NURL ships its own cryptography and TLS stack written entirely in NURL, on top
 of `libc` only — **no OpenSSL, no libcrypto, no libssl**. A default
-`./build.sh` binary links `libc` (plus `libm`); the toolchain self-test
+`./build.sh` binary links `libc` only; the toolchain self-test
 confirms `NEEDED = libc.so.6` for a program that uses the TLS client and
 server. This document describes what is implemented, how it is built, the
 side-channel posture, and the trust model — including what it deliberately

@@ -31,8 +31,9 @@ What is solid today:
   **variadic FFI** (the `printf` family callable directly). Since 0.40.0 the
   language also spells the shapes a fast numeric kernel is written in:
   **`v128`**, a first-class by-value SIMD vector type over ~31
-  `nurl_v128_*` primitives (§4.1b) that lowers to SSE2 / NEON / wasm
-  `simd128` with no CPUID probe and no fallback path, and **wide
+  `nurl_v128_*` primitives (§4.1b) that lowers to SSE2 / NEON, and to
+  wasm `simd128` where the module is built with it (a scalarised loop
+  otherwise), with no CPUID probe and no fallback path, and **wide
   arithmetic** — `nurl_umulhi` (the high half of a 64×64 multiply) plus
   `nurl_addc` / `nurl_subb` / `nurl_mac` for carry chains the backend
   recognises. 0.46.0 adds the two that need a *runtime* decision:
@@ -282,7 +283,7 @@ platform-specific shims.
 - **ext/web stack** — full HTTP/1.1 server (keep-alive, pipelining, static,
   auth, JWT bearer-auth with HS256/EdDSA/**ES256**, cookies, forms, multipart, router, middleware, access log + Prometheus
   metrics, DoS caps, graceful shutdown, per-request timeouts, panic recovery),
-  HTTP client (with cookie jar), **Post-Quantum TLS 1.3** (client & server: `X25519MLKEM768` hybrid & pure ML-KEM key exchange, ML-DSA certificate support, SNI + ALPN + mTLS + live cert reload), **HTTP/2**
+  HTTP client (with cookie jar), **Post-Quantum TLS 1.3** (client & server: `X25519MLKEM768` hybrid & pure ML-KEM key exchange, ML-DSA certificate support, client SNI + ALPN; per-hostname server certificates, mTLS and live cert reload are not yet supported on the pure-NURL server, [`docs/NETWORKING.md`](docs/NETWORKING.md)), **HTTP/2**
   (RFC 9113 + HPACK, **server and client** — served by every HttpServer /
   HttpApp listener, ALPN `h2` over TLS and prior knowledge on cleartext,
   h2spec-gated in CI), **HTTP/3 over a pure-NURL QUIC** (RFC 9000/9001/9002 +

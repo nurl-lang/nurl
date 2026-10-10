@@ -70,7 +70,7 @@ it, and six more now use its `slice_of_str`).
   reallocates or drops elements of a capture ends the views and borrows of
   it where it runs, directly or through a callee it is handed to
   (h69–h71, §2.11).
-- **Accessors borrow by summary, not by name.** What a call lends, writes
+- **Accessors borrow by summary.** What a call lends, writes
   and reallocates is read from its body (raw provenance), so `map_get`,
   `box_get`, `deque_get` and `btree_get` results borrow from their
   container as `vec_get`'s do, and replacing the value ends them
@@ -255,10 +255,10 @@ it, and six more now use its `slice_of_str`).
 - **A raw string in a value is a view** (docs/MEMORY.md §2.13). In safe
   code a raw string (`s`) held by a struct, an option, an enum, a slice
   or a container owns nothing, so a fresh one — a call's result that hands
-  its string over — can no longer be stored there (`@ T { ( nurl_str_cat …
-  ) }`, `@ ?s { T … }`, `[ s | … ]`, `= . r name ( … )`) nor handed to a
-  parameter that keeps it (`vec_push [s]`, `map_set`): each leaked (h128–
-  h140). Hold a `String` (a field, a payload, a `( Vec String )`), or bind
+  its string over — can no longer be stored there
+  (`@ T { ( nurl_str_cat … ) }`, `@ ?s { T … }`, `[ s | … ]`,
+  `= . r name ( … )`) nor handed to a parameter that keeps it
+  (`vec_push [s]`, `map_set`): each leaked (h128–h140). Hold a `String` (a field, a payload, a `( Vec String )`), or bind
   the string and store the binding — a view the walk keeps from outliving
   it. A parameter that takes a string over is declared `sink`. `unsafe`
   code and the standard library keep managing raw strings by hand. In the
@@ -283,7 +283,9 @@ it, and six more now use its `slice_of_str`).
   an out-struct or a C handle is `*u` (sqlite3 handles and statements,
   termios, `stat` and socket address buffers, the Rc collector's
   internals), a string is `s`: what is raw memory is `unsafe` to call by
-  its type.
+  its type. The C stdio pass-throughs in `stdlib/core/builtins.nu`
+  (`fopen`, `fwrite`, `fread`, …) still declare their `FILE*` and buffer
+  as `s`; they are marked `"nurl.raw"`, so they too are `unsafe` to call.
 - **The `select` machinery is typed.** The functions a `?? {}` select
   lowers to took integers and cast them back to pointers, so any program
   could call them with any integer. `select_waiter_new` now returns a
@@ -421,14 +423,14 @@ it, and six more now use its `slice_of_str`).
   file (16 000 lines 12.4 s → 0.02 s). The two 2.8 MB compiler sources
   cost the pre-commit hook two and a half minutes per compiler commit,
   and CI's `nurlfmt_check.sh` as much. It now reads through
-  `slice_of_str` + `slice_byte`; output is byte-identical on all 2227
-  tracked sources.
+  `slice_of_str` + `slice_byte`; output is byte-identical on every
+  tracked source.
 - **Every string scan in the toolchain that the new warning flags now
   measures its string once.** Every loop it flags in the standard
   library, the tools, nurlapi, the examples, the unikernel and the tests
   (262 calls) and in the compiler itself (124) reads a measured view
-  instead; all 2226 tracked sources keep their verdicts and errors, and
-  the compiler emits byte-identical IR for every one of them. Where the
+  instead; every tracked source keeps its verdict and errors, and the
+  compiler emits byte-identical IR for every one of them. Where the
   strings are long it shows: nurl-lsp opening `compiler/nurlc.nu` and
   answering a symbols and a references request 658 s → 2.8 s (its token
   scanners and reference matcher take the document measured once,
@@ -447,7 +449,8 @@ it, and six more now use its `slice_of_str`).
   0.05 s past the 0.66 s vocabulary load, the same ids, ties included.
 - **The standard library's hashes, ciphers and codecs, rewritten for
   speed** (bench/ crypto rows, i7-5930K, the same output everywhere):
-  BLAKE2b 5.1x (the bench row ~1.9x faster than its C peer), BLAKE3 10x,
+  BLAKE2b 5.1x (the bench row ~1.9x faster than its C peer here, 1.5x on
+  the runner behind bench/RESULTS.md), BLAKE3 10x,
   SHA-1 3.4x, MD5 2.6x, SHA-256 1.21x, SHA-512 1.17x; ChaCha20 2.4x
   (four blocks a pass over v128 lanes, eight over v256 lanes in the
   x86-64-v3 clone); Poly1305 1.67x (radix 2^64, four products a block —
@@ -21039,7 +21042,14 @@ releases are measured.
   compile-server (`api/`), browser playground (`nurlweb/`).
 * Dual license: MIT (LICENSE-MIT) or Apache-2.0 (LICENSE-APACHE).
 
-[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.66.0...HEAD
+[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.72.0...HEAD
+[0.72.0]: https://github.com/nurl-lang/nurl/compare/v0.71.0...v0.72.0
+[0.71.0]: https://github.com/nurl-lang/nurl/compare/v0.70.0...v0.71.0
+[0.70.0]: https://github.com/nurl-lang/nurl/compare/v0.69.1...v0.70.0
+[0.69.1]: https://github.com/nurl-lang/nurl/compare/v0.69.0...v0.69.1
+[0.69.0]: https://github.com/nurl-lang/nurl/compare/v0.68.0...v0.69.0
+[0.68.0]: https://github.com/nurl-lang/nurl/compare/v0.67.0...v0.68.0
+[0.67.0]: https://github.com/nurl-lang/nurl/compare/v0.66.0...v0.67.0
 [0.66.0]: https://github.com/nurl-lang/nurl/compare/v0.65.0...v0.66.0
 [0.65.0]: https://github.com/nurl-lang/nurl/compare/v0.64.0...v0.65.0
 [0.64.0]: https://github.com/nurl-lang/nurl/compare/v0.63.0...v0.64.0
