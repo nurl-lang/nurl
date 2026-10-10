@@ -86,6 +86,8 @@ PROGRAMS=(
     examples/showcase.nu
     examples/fizzbuzz.nu
     examples/wordcount.nu
+    compiler/tests/simd_dispatch.nu       # `simd` clones + an unmarked callee
+    compiler/tests/chacha20_simd_agree.nu # the stdlib's wide kernels
 )
 PARTS=${NURL_SPLIT_TEST_PARTS:-4}
 fails=0
@@ -127,6 +129,46 @@ done
 ( build_one compiler/nurlc.nu "$WORK/nurlc.split" "$PARTS" && : > "$WORK/nurlc.split.built" ) &
 wait
 
+# Structural invariants of the parts that a behavioural comparison
+# cannot see, because breaking them costs speed or only fails on SOME
+# programs:
+#
+#   * a `linkonce` / `linkonce_odr` global is replicated, never declared
+#     `external` — a part allowed to discard it cannot be the one that
+#     defines it for the others (`.nurl.peek.zero` went undefined at
+#     link time in every part that read it);
+#   * a `simd` function's wide clone lives in ONE part together with
+#     every function of the module it calls — cut away from them, the
+#     callees it exists to inline and vectorise stay calls (ML-DSA sign
+#     measured 60% more instructions).
+check_structure() {  # check_structure <name>
+    local base="$WORK/$1.split" nm holder callee bad=0
+    local parts=("$base".[0-9]*.ll)
+    for nm in $(grep -o '^@[^ ]* = linkonce' "$base.ll" | cut -d' ' -f1); do
+        if grep -qF "$nm = external" "${parts[@]}"; then
+            echo "FAIL $1 — $nm is linkonce but a part declares it external"
+            bad=1
+        fi
+    done
+    holder="$(grep -l '^define [^@]*@[^(]*\.x86v3(' "${parts[@]}" 2>/dev/null)"
+    if [[ -n "$holder" ]]; then
+        # Arithmetic, not a string compare: BSD wc (FreeBSD, macOS) pads
+        # the count with spaces.
+        if (( $(printf '%s\n' "$holder" | wc -l) != 1 )); then
+            echo "FAIL $1 — simd clones are spread over several parts"
+            return 1
+        fi
+        grep -o '^define [^@]*@[A-Za-z0-9_.$]*' "$base.ll" | sed 's/^[^@]*//' | LC_ALL=C sort -u > "$base.defs"
+        grep -o '^define [^@]*@[A-Za-z0-9_.$]*' "$holder" | sed 's/^[^@]*//' | LC_ALL=C sort -u > "$base.held"
+        for callee in $(awk '/^define [^@]*@[^(]*\.x86v3\(/ { f = 1 } f { print } f && /^}$/ { f = 0 }' "$holder" \
+                        | grep -o '@[A-Za-z0-9_.$]*' | LC_ALL=C sort -u | LC_ALL=C comm -12 - "$base.defs" | LC_ALL=C comm -23 - "$base.held"); do
+            echo "FAIL $1 — a wide clone calls $callee, defined in another part"
+            bad=1
+        done
+    fi
+    return "$bad"
+}
+
 for src in "${PROGRAMS[@]}"; do
     name="$(basename "$src" .nu)"
     if [[ ! -f "$WORK/$name.mono.built" ]]; then
@@ -151,6 +193,10 @@ for src in "${PROGRAMS[@]}"; do
     if [[ "$a" != "$b" || "$ra" != "$rb" ]]; then
         echo "FAIL $name — split binary behaves differently (rc $ra vs $rb)"
         diff <(printf '%s\n' "$a") <(printf '%s\n' "$b") | head -20
+        fails=$((fails + 1))
+        continue
+    fi
+    if ! check_structure "$name"; then
         fails=$((fails + 1))
         continue
     fi
