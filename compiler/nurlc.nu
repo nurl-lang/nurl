@@ -11768,8 +11768,9 @@ unsafe @ bck_list_len i which → i {
         : s jid ( str_first_word jids ) = jids ( str_skip_word jids )
         // A span a nested statement flushed meanwhile no longer says anything.
         ? & & < p0 p1 <= p1 pn >= p0 0 {
-            : i q0 ? == ( nurl_str_get pm p0 ) 32 + p0 1 p0
-            : ~ s mv ( nurl_str_slice pm q0 - p1 q0 )
+            : ~ s mv ( nurl_str_slice pm p0 - p1 p0 )
+            // (A span after the first starts at its separator.)
+            ? != 0 ( nurl_str_starts mv ` ` ) { = mv ( str_skip_word mv ) } {}
             ~ != 0 ( nurl_str_len mv ) {
                 : s nm ( str_first_word mv ) = mv ( str_skip_word ( str_skip_word mv ) )
                 : ~ s cols ( nurl_str_cat tab `` )
