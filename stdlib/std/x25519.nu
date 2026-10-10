@@ -32,12 +32,15 @@ $ `stdlib/core/vec.nu`
     ( vec_set [i] v k val )
 }
 
-// The ladder's inner routines index their limbs through `*i` instead of
-// the two accessors above. Every one of those loops is fixed-count over
-// a ten-limb gf, so the bounds check is provably redundant — but it is a
-// real call, and one X25519 scalar multiply makes 1280 field multiplies.
-// Constant time is unaffected: the trip counts are fixed and the data
-// takes no branch.
+// The gf routines below (_A / _Z / _M / _S, _gf_copy, _sel25519, …)
+// index their limbs through `*i` instead of the two accessors above.
+// Every one of those loops is fixed-count over a five-limb gf, so the
+// bounds check is provably redundant — but it is a real call, and one
+// fixed-base X25519 (the comb behind x25519_base, inversion included)
+// makes ~1200 field multiplies and squarings. The variable-base ladder
+// (__scalarmult) keeps its limbs in u64 locals (__fe_mul / __fe_sq)
+// instead. Constant time is unaffected: the trip counts are fixed and
+// the data takes no branch.
 
 @ _x_bget ( Vec u ) v i k → i {
     ?? ( vec_get [u] v k ) { T x → ^ # i x F _ → ^ 0 }

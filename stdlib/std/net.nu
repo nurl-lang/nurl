@@ -49,11 +49,22 @@
 //   NetWrite        5   send(2) failed (non-timeout, non-closed)
 //   NetClosed       6   peer reset / clean EOF on read
 //   NetTimeout      7   EAGAIN/EWOULDBLOCK after SO_*TIMEO
-//   NetOther        8   anything else / unsupported target (WASI)
-//   NetTlsCtxInit   9   SSL_CTX_new failed OR build lacks openssl
-//   NetTlsCertLoad  10  SSL_CTX_use_certificate_chain_file failed
-//   NetTlsKeyLoad   11  SSL_CTX_use_PrivateKey_file / check_private_key failed
-//   NetTlsHandshake 12  SSL_accept failed on a freshly-accepted conn
+//   NetOther        8   anything else / unsupported target (WASI); also
+//                       the TLS-listener features the pure server lacks
+//                       (tcp_tls_add_sni / tcp_tls_reload /
+//                       tcp_tls_require_client_cert)
+//   NetTlsCtxInit   9   not produced by the pure TLS stack — kept so the
+//                       tags still mirror the runtime; only its inert
+//                       nurl_tcp_*_tls* stubs set it, and no .nu calls them
+//   NetTlsCertLoad  10  TLS listener: cert PEM unreadable or has no
+//                       parsable CERTIFICATE block (_load_tls_creds)
+//   NetTlsKeyLoad   11  TLS listener: key PEM is not an EC P-256, RSA or
+//                       ML-DSA PKCS#8 key, or tcp_listen_tls_dual's second
+//                       identity is not ML-DSA
+//   NetTlsHandshake 12  pure TLS handshake failed — server side on accept
+//                       (tls_server.nu) or client side in tcp_connect_tls*
+//                       / tcp_starttls (tls.nu; a failed TCP connect there
+//                       is reported as this too)
 //
 // Platform notes:
 //
@@ -67,8 +78,10 @@
 //
 // MVP scope — explicitly left for later phases:
 //   - IPv6 (`AF_INET6`) — Phase 1.x extension.
-//   - Non-blocking / async I/O — Phase 5 brings threads instead.
-//   - TLS — Phase 9 (libssl wrap).
+//
+// TLS is not among them: it is pure NURL — stdlib/std/tls.nu (client) and
+// stdlib/std/tls_server.nu (TLS 1.3 server), run over these plain sockets
+// by tcp_connect_tls* / tcp_starttls / tcp_listen_tls* below.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
@@ -206,18 +219,18 @@ $ `stdlib/std/pkey.nu`
     ^ ( tcp_listen_with_backlog host port 128 )
 }
 
-// TLS listener — binds and starts listening exactly like tcp_listen,
-// then configures an SSL_CTX from the given PEM cert + private key
-// files. On accept the per-conn SSL handshake runs transparently;
-// the returned TcpConn is polymorphic — `tcp_read_chunk` /
-// `tcp_write_all` dispatch via libssl underneath, so HttpServer
-// (and any other code that consumed TcpConn) gets HTTPS without
-// changes. Cert and key are loaded once at listener creation. ALPN is
-// negotiated when the listener was made with tcp_listen_tls_with_alpn;
-// SNI cert selection, client-cert auth and live cert reload are not
-// implemented in the pure stack.
-// Load the leaf-cert DER + EC P-256 private scalar from PEM files for a
-// pure-TLS listener. The cert PEM's first block is taken as the leaf.
+// TLS listener — loads the PEM cert chain + private key files (EC P-256,
+// RSA or ML-DSA key), then binds and starts listening exactly like
+// tcp_listen. On accept the per-conn pure TLS 1.3 server handshake
+// (tls_server.nu) runs transparently; the returned TcpConn is
+// polymorphic — `tcp_read_chunk` / `tcp_write_all` dispatch to the pure
+// record layer, so HttpServer (and any other code that consumed
+// TcpConn) gets HTTPS without changes. Cert and key are loaded once at
+// listener creation. ALPN is negotiated when the listener was made with
+// tcp_listen_tls_with_alpn; SNI cert selection, client-cert auth and
+// live cert reload are not implemented in the pure stack
+// (tcp_tls_add_sni / tcp_tls_reload / tcp_tls_require_client_cert
+// return NetOther).
 // Frame every `-----BEGIN CERTIFICATE-----` block in `pem` as a TLS 1.3
 // CertificateEntry (tls_cert_entry) and concatenate them, leaf first —
 // the certificate_list the server sends. Supports a single leaf or a
@@ -556,14 +569,11 @@ $ `stdlib/std/pkey.nu`
     ^ @ !v NetErr { F # NetErr NetOther }
 }
 
-// Read the peer's certificate Distinguished Name (OpenSSL one-line
-// format, e.g. "/CN=client.example.com/O=Acme/C=US") off a completed
-// TLS conn. Empty when no cert was presented OR the conn is non-TLS.
-// Caller compares against an expected allow-list — this is the
-// primary identity hook for mTLS-authenticated requests.
-// Peer certificate subject. The pure TLS stack verifies the chain during
-// the handshake but does not expose the subject string, so this returns
-// "" (client-cert inspection is not supported on the pure path).
+// Peer certificate subject. Always "" on the pure TLS stack: it verifies
+// the chain during the handshake but does not expose the subject string,
+// and the pure server never requests a client cert, so there is no mTLS
+// identity to read. (Was the OpenSSL one-line DN, e.g.
+// "/CN=client.example.com/O=Acme/C=US"; removed with libssl.)
 @ tcp_peer_cert_subject TcpConn c → String {
     ^ ( string_new )
 }

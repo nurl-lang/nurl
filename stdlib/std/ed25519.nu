@@ -170,8 +170,9 @@ $ `stdlib/std/hash_sha512.nu`
 // when d == digit. The mask is arithmetic rather than a comparison —
 // `d ^ digit` is zero only on a match, and subtracting one from zero
 // borrows into the top bit, which nothing else can set for a 4-bit
-// value. Note the mask is a FULL 64-bit −1: gf limbs are signed, so a
-// negative limb has its high bits set and a 32-bit mask would clip it.
+// value. Note the mask is a FULL 64-bit −1: gf limbs are non-negative
+// but radix 2^51 (values up to ~2^54, see x25519.nu), well past 32 bits,
+// so a 32-bit mask would clip their high bits.
 @ __ed_tbl_get_d EdPt dst ( Vec i ) tbl i digit → v {
     : *i tb ( vec_data [i] tbl )
     : *i dx ( vec_data [i] . dst x )
