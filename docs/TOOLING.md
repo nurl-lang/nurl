@@ -232,9 +232,9 @@ Each local path override must identify a non-yanked published version in its
 declared registry (or the package's default registry), satisfy its version
 requirement, and match the authenticated archive's packaged root and `src/`
 modules at their relative paths. Missing versions, index/download failures,
-invalid archive identities or signatures, incompatible toolchains and source
-read failures refuse publication in both modes. Each comparison owns a private
-temporary directory, so concurrent checks cannot replace each other's sources.
+invalid archive identities or signatures and source read failures refuse
+publication in both modes. Each comparison owns a private temporary
+directory, so concurrent checks cannot replace each other's sources.
 
 `self-update` is the odd one out: it upgrades the **toolchain**, not a
 package, and `nurl upgrade` is its canonical spelling (that is what the

@@ -54,10 +54,12 @@ the whole stack. You need hardware, not software, to defend against those.
 
 ## TLS
 
-`tcp_connect_tls` verifies the full certificate chain and hostname by
-default. You skip verification with a separate, explicitly named function
-(`tls_connect_insecure`). It is not a flag on the normal path. An
-insecure connection cannot happen by accident. See
+`tls_connect` verifies the full certificate chain and hostname. You skip
+verification with a separate, explicitly named function
+(`tls_connect_insecure`). It is not a flag on `tls_connect`. The
+socket-layer `tcp_connect_tls` (and its `_alpn` and `_full` variants)
+takes the choice as an argument instead: a non-zero `verify` verifies, 0
+encrypts without verifying. See
 [Networking](./networking#tls) for the connection-level API.
 
 ## Next

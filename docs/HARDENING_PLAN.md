@@ -178,11 +178,13 @@ the inline statements would.
 
 Whether a call result is lent from an argument is a summary, never a
 name: a value read out of a parameter's storage (directly, or through a
-raw load in trusted code) is lent from that parameter. `vec_get`'s name
-special case goes; `map_get`, `box_get`, `deque_get`, `btree_get`, … get
-the same answer from their bodies. Which calls drop or hand out elements
-(`bck_is_elem_dropper`) is likewise derived from the summaries of the
-trusted bodies, not a list.
+raw load in trusted code) is lent from that parameter. `map_get`,
+`box_get`, `deque_get`, `btree_get`, … get that answer from their bodies.
+(Not done: `vec_get` keeps its name special case beside its summary, and
+the library's element droppers and growers are still name lists,
+`bck_is_elem_dropper` and `bck_elem_keeper`. A call on neither list is
+taken at its drop summary, or at its mutation summary when it is raw
+code.)
 
 ### G. Checked allocation arithmetic
 

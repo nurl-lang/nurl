@@ -166,11 +166,12 @@ parentheses is a compile error that names the missing parens.
 ## Casts and sizeof
 
 `#` does an explicit type coercion — widening/narrowing integers,
-reinterpreting signedness, or casting pointers:
+reinterpreting signedness, or casting pointers. A pointer cast makes a
+raw pointer, so it compiles only inside an `unsafe` function:
 
 ```nu
 # i ( some_f32_returning_call )   // widen to i64
-# *Point ( nurl_alloc 16 )        // reinterpret i8* as *Point
+# *Point ( nurl_alloc 16 )        // reinterpret i8* as *Point (unsafe only)
 ```
 
 `Z type` returns the byte size of a type as an `i64`. Note that `Z u` is
@@ -182,8 +183,8 @@ reinterpreting signedness, or casting pointers:
 NURL imports the same file only once. An alias scopes the imported names:
 
 ```nu
-$ `stdlib/core/mem.nu` m
-( m::alloc 16 )     // calls the imported file's alloc, renamed m__alloc
+$ `stdlib/core/char.nu` ch
+( ch::is_digit 55 )   // the imported file's is_digit, renamed ch__is_digit
 ```
 
 Without an alias, the imported file's top-level names join the current

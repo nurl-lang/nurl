@@ -316,8 +316,9 @@ Writing an already canonical file leaves its modification time unchanged.
 
 `tools/nurlfmt/format.nu` exposes `format_source String → String` for repeated
 use. It borrows the source and returns an owned result, dropped with the
-caller's binding. Each call frees the intermediate token slices
-and vector. EOF is a borrowed literal, so token cleanup never frees it.
+caller's binding. Each call's token stream is two allocations — the token
+vector and one byte buffer holding every token's NUL-terminated text, the EOF
+sentinel's included — released when the call returns.
 
 ## Non-goals (v1)
 

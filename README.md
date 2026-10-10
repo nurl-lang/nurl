@@ -15,13 +15,14 @@ NURL takes a few design positions that are uncommon together:
 - **Regular prefix-arity grammar** — every operator has a fixed arity, no infix, no precedence cliffs. The grammar fits on a single page and is LL(k≤4) — recursive-descent with up to 4 tokens of lookahead.
 - **Locally parseable** — a construct's shape (arity and nesting) is fixed by a short window of surrounding tokens, with no long-range parse dependencies. (A few operators — `.`, `&`, `|`, `#` — resolve their *lowering* by operand type; see [`docs/spec.md`](docs/spec.md) §4.9/§6.)
 - **Deterministic compiler** — the same source always produces identical output, with no platform-dependent codegen. The self-hosted compiler reaches a byte-identical fixed point on its own source. (Raw `*T` pointers and out-of-range shifts inherit LLVM semantics — spec §4.2, §6.1.)
-- **Single-owner memory, checked ownership rules** — auto-drop at scope exit; owned values move, reads borrow, and raw memory lives only in `unsafe` functions. Every program accepted without an `unsafe` function of its own is memory-safe and leak-free, data races included (one known exception in 0.71.0: a `Slice` of a `Vec`, [`docs/MEMORY.md`](docs/MEMORY.md) §6.2).
-- **Diagnostics that name the cure** — an error states what was expected, what was found, and the correct form with an example, because for a model the compiler is the only teacher in the loop. 170 of the compiler's 173 error sites carry an explanation — the messages do the work a gotchas document used to.
+- **Single-owner memory, checked ownership rules** — auto-drop at scope exit; owned values move, reads borrow, and raw memory lives only in `unsafe` functions. Every program accepted without an `unsafe` function of its own is memory-safe and leak-free, data races included, with no exception ([`docs/MEMORY.md`](docs/MEMORY.md) §6.2).
+- **Diagnostics that name the cure** — an error states what was expected, what was found, and the correct form with an example, because for a model the compiler is the only teacher in the loop. The messages do the work a gotchas document used to, and CI fails a change that adds a diagnostic no test makes the compiler print (`tools/check_diag_coverage.sh`).
 - **LLVM-based codegen, broad platform reach** — one pipeline targets Linux, macOS, Windows, wasm32-wasi, RISC-V, and ARM64 — and a NURL program can **boot as its own kernel**: bootable unikernel images (no host OS, no libc) on x86_64, AArch64 and RISC-V64. See [`unikernel/README.md`](unikernel/README.md).
 
-A reproducible benchmark suite lives in [`bench/`](bench/): 15 benchmarks
-implemented five times each — NURL, C, Rust, Node and Python — with every row
-gated on all five printing the same result before any of them is timed.
+A reproducible benchmark suite lives in [`bench/`](bench/): 20 benchmarks —
+fifteen implemented five times each (NURL, C, Rust, Node and Python) and five
+cryptographic kernels in NURL, C and Rust — with every row gated on all of
+its implementations printing the same result before any of them is timed.
 `bench/bench.sh` runs the lot and writes [`bench/RESULTS.md`](bench/RESULTS.md)
 (run times, compile times, correctness gate, process-start-up floor) plus a
 machine-readable `bench/results/latest.json`, which is what nurl-lang.org
@@ -163,10 +164,9 @@ use after move, a borrow or view read after its source ended, escaping
 closure captures, iterator invalidation and unsynchronised sharing between
 threads as hard compile errors, without ever changing generated code: every
 program accepted without an `unsafe` function of its own is memory-safe
-and leak-free (with one known exception in 0.71.0, a `Slice` of a `Vec`).
-The one remaining source-level trap, the n-ary `&`/`|` foot-gun, is a
-hard error by default; `--no-strict-arity` demotes it to a warning for
-trees that need to keep building.
+and leak-free, with no exception. The one remaining source-level trap, the
+n-ary `&`/`|` foot-gun, is a hard error by default; `--no-strict-arity`
+demotes it to a warning for trees that need to keep building.
 Full model, the guarantee and its trusted base: [`docs/MEMORY.md`](docs/MEMORY.md).
 
 The type system is strong, static, inferred, algebraic (sum types `|`,
@@ -182,7 +182,7 @@ one:
 
 | Gate | Where | What it proves |
 |---|---|---|
-| Linux x86_64 | `ubuntu-latest` | Fixed point + full corpus, `examples/` frontend gate, `nurlfmt` canonical-format gate, and ~20 targeted gates (CRC-32, XXH64, Zstandard against the `zstd` CLI, DWARF, HTTP per-request leak, HTTP/2 conformance with h2spec, HTTP/3 + QUIC conformance with h3spec, diagnostic coverage) |
+| Linux x86_64 | `ubuntu-latest` | Fixed point + full corpus, `examples/` frontend gate, `nurlfmt` canonical-format gate, and ~20 targeted gates (soundness hole probes, CRC-32, XXH64, Zstandard against the `zstd` CLI, DWARF, HTTP per-request leak, HTTP/2 conformance with h2spec, HTTP/3 + QUIC conformance with h3spec, diagnostic coverage) |
 | FreeBSD 14.2 | real VM | The same corpus on a second OS |
 | **Windows x86_64** | `windows-latest` | `build.bat` fixed point + the Windows golden corpus, then `nurl.bat` builds and runs a program with both the bundled zig and clang |
 | **macOS ARM64** | `macos-14` (Apple Silicon) | `./build.sh` stage1 ≡ stage2 fixed point + the full corpus against the **same goldens as Linux**, plus the `examples/` gate |

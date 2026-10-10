@@ -17,9 +17,10 @@
 //       True iff a and b have equal length AND equal bytes. The
 //       length check returns early — that is fine, length is public.
 //
-//   ( constant_time_eq_n s a s b i n )             → b
+//   ( constant_time_eq_n *u a *u b i n )           → b
 //       Compare exactly n bytes of both (caller guarantees both
-//       pointers have ≥ n readable bytes). For sub-slice compares
+//       pointers have ≥ n readable bytes — raw pointers, so only an
+//       `unsafe` function may call it). For sub-slice compares
 //       where the surrounding lengths are already known equal.
 //
 //   ( constant_time_eq_vec ( Vec u ) a ( Vec u ) b ) → b

@@ -67,7 +67,8 @@
 // Parser / serializer:
 //   ( json_parse raw )                → ! Json JsonError   raw as s; ends at NUL
 //   ( json_parse_n raw len )          → ! Json JsonError   exact byte range (the root
-//                                       entry — an embedded NUL is rejected, not truncated)
+//                                       entry — an embedded NUL is rejected, not truncated);
+//                                       raw as *u: `unsafe` code only (safe: json_parse_bytes)
 //   ( json_parse_bytes buf )          → ! Json JsonError   ( Vec u ), borrowed
 //   ( json_stringify j )              → String  compact (always valid JSON)
 //   ( json_pretty    j )              → String  2-space indented
@@ -893,9 +894,10 @@ $ `stdlib/core/vec.nu`
 
 // C-string entry: the document ends at the first NUL. A payload that
 // may legitimately carry stray NUL bytes (a network buffer, a file
-// read as bytes) must go through json_parse_n / json_parse_bytes —
-// through this entry a `123\0garbage` payload would TRUNCATE at the
-// NUL and parse clean (JSONTestSuite n_multidigit_number_then_00).
+// read as bytes) must go through json_parse_bytes (json_parse_n in
+// `unsafe` code) — through this entry a `123\0garbage` payload would
+// TRUNCATE at the NUL and parse clean
+// (JSONTestSuite n_multidigit_number_then_00).
 @ json_parse s src → !Json JsonError {
     ^ ( json_parse_n src ( nurl_str_len src ) )
 }

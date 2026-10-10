@@ -150,12 +150,15 @@ $ `stdlib/core/char.nu`
 // Return byte at index `idx` (0 if out of range). `& 255` masks the
 // sign-extension that `# i u` introduces — caller gets 0..255.
 //
-// COST: this re-runs strlen(str) on EVERY call for the bounds check, so
-// a loop that walks a string with it is O(n²) — seconds on a 100 KB
-// input, and nurlc warns about the shape. In a loop, measure once and
-// read the view — `: ( Slice u ) v ( slice_of_str str )`, then
-// `( slice_byte v i )` (stdlib/core/slice.nu: O(1), safe, 0 outside the
-// string like this). Reach for `nurl_str_get` only for a one-off read.
+// COST: the bounds check measures `str` from its start to `idx` on EVERY
+// call, so a loop that walks a string with it is O(n²) — seconds on a
+// 1 MB input. nurlc warns about the shape only when the string is a
+// binding made outside the loop and its name is not a type keyword such
+// as `s` or `b`; a field path or a call result is not flagged. In a
+// loop, measure once and read the view —
+// `: ( Slice u ) v ( slice_of_str str )`, then `( slice_byte v i )`
+// (stdlib/core/slice.nu: O(1), safe, 0 outside the string like this).
+// Reach for `nurl_str_get` only for a one-off read.
 @ nurl_str_get s str i idx → i {
     // The byte at `idx` is in range exactly when no NUL comes before it:
     // measure that far, not the whole string — a per-byte read in a loop

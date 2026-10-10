@@ -112,8 +112,8 @@ and `perfstat.sh` read.
 | `matmul` | Triple-nested loop, flat indexing, column-strided reads |
 | `json_parse` | Allocator pressure, string handling, recursive descent |
 | `nbody` | IEEE-754 doubles: sqrt and divide throughput, the FPU rather than the ALU |
-| `chacha20` | 32-bit add/rotate/xor rounds; NURL calls stdlib `chacha20_xor` (v128 lanes) |
-| `poly1305` | Serial 64x64→128 multiply/carry chain through the accumulator, radix 2^44 |
+| `chacha20` | 32-bit add/rotate/xor rounds; NURL calls stdlib `chacha20_xor` (v128 / v256 lanes) |
+| `poly1305` | Serial 64x64→128 multiply/carry chain through the accumulator, radix 2^64 |
 | `blake2b` | 64-bit add/xor/rotate G mixes with SIGMA-permuted message gathers |
 | `sha512` | 80-round 64-bit serial compression chain plus the message schedule |
 | `x25519` | Montgomery ladder over GF(2^255−19): radix-2^51 128-bit field multiplies |
@@ -133,12 +133,14 @@ and `x25519` (stdlib/std/x25519.nu) — because that code is what a NURL
 program doing TLS, Noise or age actually runs. C and Rust have none of the
 five in their standard libraries, so their files carry the algorithm
 written out by hand, line for line the same in both, and in the
-formulation the stdlib uses: poly1305-donna-64 (radix 2^44) and the
+formulation the stdlib uses: Poly1305 at radix 2^64 (four 64x64→128
+products a block, as OpenSSL's and BoringSSL's scalar code has it) and the
 TweetNaCl ladder over the donna-c64 field (radix 2^51) with native 128-bit
 products where NURL uses `nurl_umulhi`, the ref10 inversion chain. ChaCha20
-is the one deliberate difference: the stdlib runs it on `v128` lanes, C and
-Rust carry the scalar RFC rounds (the stdlib's own big-endian fallback),
-and that gap is what the row shows.
+is the one deliberate difference: the stdlib runs it on `v128` lanes
+(`v256` lanes in its x86-64-v3 clone), C and Rust carry the scalar RFC
+rounds (the stdlib's own big-endian fallback), and that gap is what the
+row shows.
 
 Every workload is chained — a digest feeds the next message, a tag the
 next key, an X25519 result the next scalar — so nothing can be hoisted,

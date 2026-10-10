@@ -10,7 +10,7 @@
 //   [package]
 //   name = "demo"               # required
 //   version = "0.1.0"           # required
-//   nurl-version = "0.65.0"     # optional minimum toolchain (SemVer)
+//   nurl-version = "0.65.0"     # optional minimum toolchain (SemVer); informational
 //   description = "..."         # optional
 //   license = "MIT"             # optional
 //   registry = "https://..."    # optional: default registry for bare deps
@@ -57,7 +57,7 @@ $ `stdlib/core/slice.nu`
 : Manifest {
     String name
     String version
-    String nurl_version  // minimum compiler/stdlib/runtime release; empty → unrestricted
+    String nurl_version  // minimum toolchain (informational, nothing gates on it); empty → none
     String description
     String license
     String registry  // default registry URL for bare deps; empty → tool default

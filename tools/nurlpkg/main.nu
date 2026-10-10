@@ -2480,9 +2480,9 @@ unsafe @ __cmd_registry_info s name → i {
 //
 // Which toolchain that is comes from __toolchain_stdlib_root — $NURL_STDLIB
 // when set, else ~/.nurl. Pointing $NURL_STDLIB at a checkout therefore aims
-// the gate at that tree's bin/nurlc and stdlib. The default, with NURL_STDLIB
-// unset, checks the installed release. Either target must actually compile
-// the package successfully.
+// the gate at that tree's build/nurlc (bin/nurlc when there is none) and
+// stdlib. The default, with NURL_STDLIB unset, checks the installed release.
+// Either target must actually compile the package successfully.
 //
 // Missing or unlaunchable compilers cannot establish compatibility. Refuse
 // publication in both cases. Invoke the compiler with argv, never shell text:

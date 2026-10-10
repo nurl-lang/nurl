@@ -231,7 +231,10 @@ with — nor can shadow — the other. Resolution at a call site, in order:
    convention — collision-diagnosed but not scoped). This path will stop
    resolving in a future release. Nothing in the stdlib or the first-party
    tree reaches it any more; it survives only because package versions
-   already published were compiled under it;
+   already published were compiled under it. A standard-library `__`
+   function still resolves this way, but a call to it from a function
+   that is not `unsafe` is then rejected (§3.3d): the library's internals
+   take control blocks and buffers as plain values and trust them;
 4. definitions in **several other files** — a compile error naming every
    owner, because there is no right answer.
 
@@ -317,14 +320,21 @@ entry point; leave its callees alone.
 
 Three consequences worth knowing:
 
-- **A marked module is not partitioned.** `--split` would separate the
-  wide clone from the callees it needs inlined, which is most of what the
-  prefix buys (measured: ML-DSA-65 sign 352 µs unsplit, 509 µs split).
-  nurlc declines to split such a module, trading build time for the run
-  speed the prefix was asked for.
+- **A marked function is kept whole in one part.** `--split` must not
+  separate the wide clone from the callees it needs inlined, which is
+  most of what the prefix buys (measured: ML-DSA-65 sign 352 µs unsplit,
+  509 µs with the module cut like any other). So the partition keeps the
+  marked functions — each one's dispatcher, both clones and every
+  function they reach — together in one part, whole, and splits the rest
+  of the module as usual: that part holds the code a one-module build
+  has in view when it compiles a clone, and a program that does TLS or
+  post-quantum crypto builds on every core like any other. A group
+  larger than an even share becomes a part of its own; one that is
+  nearly the whole module leaves the module unsplit.
 - **`--g` suppresses cloning.** A `!DISubprogram` may be attached to
   exactly one function, so the clones would produce invalid metadata.
-  A debug build gets one copy, as `--split` does.
+  A debug build gets one copy (and is never split: `--split` cannot be
+  combined with `--g`).
 - **`--no-cpu-dispatch` turns the prefix off**, emitting each marked
   function once. nurlc emits no `target triple`, so it cannot tell that a
   module is bound for AArch64 or wasm; anything building for a non-x86-64
@@ -335,9 +345,10 @@ Three consequences worth knowing:
 behavioural test can only ever run the clone the dispatcher selects, so
 on an AVX2 host the baseline lowering of every marked function is
 compiled and never executed — and every function the prefix marks today
-is post-quantum cryptography, where a divergence between the two is a
-wrong key on the machines that were never tested rather than a slow
-path. `compiler/tests/simd_baseline_agree.sh` builds the vector corpus a
+is cryptography (post-quantum, and ChaCha20's wide passes), where a
+divergence between the two is a wrong key or a wrong ciphertext on the
+machines that were never tested rather than a slow path.
+`compiler/tests/simd_baseline_agree.sh` builds the vector corpus a
 second time with `--no-cpu-dispatch` and requires the baseline lowering
 to produce the same goldens, and it reads the marked set out of
 `stdlib/` so a newly marked function with no driver fails by name.
@@ -395,14 +406,17 @@ A function or method declaration may carry a leading `unsafe` prefix
 - call a function that takes or hands back a raw pointer (`*T` in a
   parameter or in the result, outside a closure type: `vec_data`,
   `slice_data`, `nurl_str_at`, a program's own `→ *T`);
-- build a sealed representation field by field, or read or write its raw
-  fields — a struct that declares a raw-pointer field, or a library
-  handle (`Slice`, `Vec`, `Box`, …);
+- build a sealed representation field by field, write any of its fields
+  or read its raw fields — a struct that declares a raw-pointer field, or
+  a library handle (`Slice`, `Vec`, `Box`, …);
 - call a raw-memory primitive (`nurl_alloc`, `nurl_free`, `nurl_realloc`,
   `mem_forget`, `nurl_peek*` / `nurl_poke*`, `nurl_memcpy`, …) or a C
   primitive that reads or writes as far as its caller says, takes a
   `FILE*` or a format string (`memmem`, `fwrite`, `fopen`, `printf`, …:
   the builtins marked raw in `stdlib/core/builtins.nu`);
+- call a standard-library function whose name begins with `__` (the
+  library's own machinery, which trusts the control blocks and buffers
+  it is handed);
 - call a foreign (`&`) function declared outside the standard library.
 
 A string (`s`) in safe code is therefore NUL-terminated or null: nothing
@@ -430,8 +444,8 @@ way the standard library vouches for its own raw code. Calling an
 `unsafe` function needs no marking. The rest of the program is held to
 the ownership rules (docs/MEMORY.md §6), and **every program accepted
 without an `unsafe` function of its own is memory-safe and leak-free**
-(docs/MEMORY.md §6.2 — with no exception since the pre-production
-hardening closed 0.71.0's `Slice` hole).
+(docs/MEMORY.md §6.2 — the pre-production hardening closed 0.71.0's
+`Slice` hole; §9.13 names the one leak still not reported).
 `nurlc --unsafe-report` lists the `unsafe` functions a program
 contains outside the standard library — the whole surface a reviewer has
 to trust.
@@ -594,8 +608,19 @@ width* it adds and an operator cannot; the primitive names do.
 64-bit target NURL supports: SSE2 is part of the x86-64 ABI and NEON
 part of AArch64. A `v128` kernel therefore needs no CPUID probe, no
 target-feature attribute and no scalar fallback path — it is correct
-and fast everywhere, and it lowers to `simd128` on wasm and to a
-scalarised loop on a target with no vector unit at all.
+everywhere, and fast wherever it lands in vector registers. On wasm
+that takes a module built with `simd128` (`-msimd128`), which the
+toolchain's wasm pipeline (wasmbuilder, `/build_wasm`) does not enable
+by default; a wasm32 module without it, like a target with no vector
+unit at all, runs the kernel as a scalarised loop.
+
+A kernel that only pays off in registers asks first.
+`nurl_simd128_native()`, a C runtime function (declared with `&` where
+it is used), returns 0 on a wasm32 build without `simd128`, where the
+`v128` is scalarised, and 1 everywhere else; the wasm pipeline's IR
+rewrite folds the call to 0, so the kernel it guards drops out of the
+module. ChaCha20's four-blocks-a-lane kernel is that case: sixteen
+vectors live, sixty-four scalars once scalarised.
 
 One type carries every lane width. A register does not have a lane
 width, an *instruction* does; `<4 x i32>` is only the carrier, and each
@@ -723,11 +748,15 @@ scalarised sequence everywhere else.
 `*T` is a raw pointer to T. `*void` is rewritten to `i8*` in the IR
 (LLVM forbids `void*`).
 
-Reading or writing through a `*T`, and casting to a pointer type (except
-the null `# *T 0`), is allowed only inside an `unsafe` function (§3.3d),
-whose author vouches for those lifetimes. Holding or passing a `*T` is
-ordinary code; a view from `vec_data` / `string_data` is tracked against
-its container (docs/MEMORY.md §2.10).
+Reading or writing through a `*T`, casting to a pointer type (except
+the null `# *T 0`), and calling a function that takes or hands back a
+`*T` (`vec_data`, `slice_data`, `slice_from_raw`, a program's own
+`→ *T`, …) are allowed only inside an `unsafe` function (§3.3d), whose
+author vouches for those lifetimes. Safe code reaches a container's
+buffer through a view instead — `string_data`, or a `Slice` of a `Vec`
+or a string (`slice_from_vec`, `slice_of_str`) — and a view, like a
+`vec_data` pointer in `unsafe` code, is tracked against its container
+(docs/MEMORY.md §2.10).
 
 ### 4.3 Optional `?T`
 
@@ -1557,8 +1586,11 @@ A function parameter may carry a leading convention marker (§7.2):
   parameter type exactly; raw-pointer bounds remain the caller's responsibility.
 - `sink` — consume / move. The callee takes ownership; the caller may
   not use the argument binding afterwards. Compiler-managed enum owners
-  transfer their drop obligation. Transfer for raw owned strings, slices,
-  user Drop-trait values and tracked struct fields remains unsupported.
+  and user Drop-trait values transfer their drop obligation, and so do
+  raw owned strings: `sink s` is how a function that takes a string over
+  declares it, as `string_adopt` does, and nothing drops one in the
+  callee, which must take it over itself (§7.2). Transfer for owned
+  slices and tracked struct fields remains unsupported.
 
 #### Auto-inferred `sink` (v2.1, 2026-05-25)
 
@@ -1718,8 +1750,12 @@ conventions:
   binding is marked moved. The ABI is by value. Ownership transfers before
   the call; the callee drops a `String`, `Vec`, owning struct, handle
   enum, library handle or `Drop` value on exit unless it returns or
-  transfers it onward. (A raw owned `s` or slice cannot be passed to a
-  `sink` yet.)
+  transfers it onward. A raw owned `s` is handed over too, but nothing
+  drops it on exit: unless the callee takes it over (`string_adopt`
+  makes it a `String`; `unsafe` code may free it by hand), it leaks, and
+  the compiler does not report that
+  ([`docs/LIMITATIONS.md`](LIMITATIONS.md)). (An owned slice cannot be
+  passed to a `sink` yet.)
 
 `in` / `inout` / `sink` are contextual keywords — recognised only as a
 parameter's leading token. `inout` is additionally banned as a
@@ -1786,8 +1822,13 @@ right-hand side is a *fresh allocation produced on the spot*:
 - an allocating string call (`nurl_str_cat`, `_cat3` / `_cat4`,
   `_int`, `_float`, `_slice`, `nurl_read_file`),
 - a named-struct literal `@ T { ... }` whose fields are themselves
-  fresh allocations (each is tracked individually),
+  fresh allocations (each is tracked individually; a fresh raw string
+  field only in `unsafe` code — in safe code a raw string in a value is
+  a view, §9.12),
 - a value of a type with a user `Drop` trait impl,
+- a string literal or an owned string bound by a mutable string binding
+  (`: ~ s`): the binding takes its own copy, and every value assigned to
+  it after is fresh or its own copy,
 - a `String`, a `Vec T`, or a struct whose fields own one (§8.5).
 
 The compiler only registers a drop for a resource it saw allocated
@@ -1874,7 +1915,7 @@ with a count of violations after walking the whole program. The checker
 is **diagnostic-only** — emitted IR is byte-identical whether it runs or
 not.
 
-Eleven rules are enforced. The semantic level is summarised here; for
+Twelve rules are enforced. The semantic level is summarised here; for
 exact phrasing and the soundness contract see
 [`docs/MEMORY.md` §2 and §6](MEMORY.md).
 
@@ -1893,7 +1934,11 @@ An immutable `: T b a` copy of an owned-heap binding `a` is treated as
 a *move* — ownership passes to `b`. A `: ~` mutable copy is treated as
 a borrow / cursor, not a move (this is the conventional disambiguation
 between "owning copy" and "working alias"). `: T b a` / `= b a` move an
-owner and copy a borrow; `: ~ T b a` borrows.
+owner and copy a borrow; `: ~ T b a` borrows. A string binding (`s`)
+that owns its buffer is the exception: `: s b a` makes `b` a view of
+`a`'s buffer, which ends when `a` is given a new value or ends, while
+`: ~ s b a` and `= b a` give `b` its own copy
+([`docs/MEMORY.md` §1 and §2.10](MEMORY.md)).
 
 ### 9.3 Escape analysis
 
@@ -1924,6 +1969,20 @@ default — by
 the language's left-to-right evaluation order and Option B's
 call-scoped borrow lifetime, that read completes before the `inout`
 borrow goes live (§6.2).
+
+That holds for a read that yields a plain value. A view or a borrow of
+the container does not end with the read: it lives on into the call. So an
+argument the callee may change — `inout` or by value, one whose buffer
+its summaries say it may move or free, or whose elements they say it
+may drop or replace (raw code: anything it mutates) — cannot also reach
+the call through another argument the callee does not keep: not as the
+same owner passed twice (`( f xs xs )`), and not as a view or borrow of
+it, whether bound before the call or built in a nested sub-expression.
+Inside the callee the two are unrelated names, and the change through
+one leaves the other dangling:
+`( grow_then_read v ( slice_from_vec [i] v ) )`, whose callee grows `v`
+and then reads the slice, is rejected naming both arguments
+([`docs/MEMORY.md` §2.4](MEMORY.md)).
 
 ### 9.5 Iterator invalidation
 
@@ -1979,7 +2038,12 @@ freeing a captured handle and then calling the closure is rejected as
 the use-after-move of §9.1, and so is capturing a binding that is
 already moved. The invocation may be direct (`( f )`) or one call deep,
 through a parameter the callee only ever invokes; a closure captured by
-another closure carries its handles outward at any depth.
+another closure carries its handles outward at any depth. Running a
+closure is also what its body does to its captures: one that changes,
+reallocates or drops elements of a capture ends the views and borrows of
+that capture (§9.11) at the call — made directly, or by handing the
+closure to a function that may run it
+([`docs/MEMORY.md` §2.11](MEMORY.md)).
 
 Merely *loading* a closure value is not a use of its captures — that is
 how a closure's heap environment is reclaimed once it is dead, which
@@ -2003,20 +2067,40 @@ payload of a borrowed value, a call result the callee lends — is a
 *borrow* of its source. It may be read and passed on, never released,
 stored as an owner or sent, and it ends when the source is moved,
 released, reassigned or has the field replaced; reading it after that is
-rejected. A view from `string_data` / `vec_data` also ends at any
-mutation that may reallocate the buffer
+rejected. A view — from `string_data`, a `Slice` of a `Vec` or a string
+(`slice_from_vec`, `slice_sub`, `slice_of_str`), or, in `unsafe` code,
+`vec_data` — also ends at any mutation that may reallocate the buffer,
+and stays a view of its source wherever it goes: held in a struct, an
+Option or a container, captured by a closure, stored in a global or
+returned from a function
 ([`docs/MEMORY.md` §6.2 and §2.10](MEMORY.md)).
 
-### 9.12 What is NOT checked
+### 9.12 A raw string in a value is a view
+
+A raw string (`s`) held by a struct, an option, an enum, a slice or a
+container owns nothing (§3.3d). In safe code a *fresh* string — the
+result of a call that hands its string over (`nurl_str_cat`,
+`nurl_str_int`, …) — cannot be stored there, nor handed to a parameter
+that keeps it (`vec_push [s]`, `map_set`): hold a `String`, or bind the
+string first and store the binding, a view the checker keeps from
+outliving it (§9.11). A struct or a closure handed back holding a string
+binding that owns its buffer holds a view of it, and is rejected like
+any view that outlives its source. A parameter that takes a string over
+is declared `sink` ([`docs/MEMORY.md` §2.13](MEMORY.md)).
+
+### 9.13 What is NOT checked
 
 The body of an `unsafe` function (§3.3d): raw pointers, pointer casts,
 the raw-memory primitives and foreign calls are its author's to get
 right. Everything else is held to the rules above — every program
 accepted without an `unsafe` function of its own is memory-safe and
-leak-free ([`docs/MEMORY.md` §6.2](MEMORY.md)), with one known exception
-in 0.71.0: a `Slice` built from a `Vec` (`slice_from_vec`, `slice_sub`,
-`slice_from_raw`, protobuf's `ProtoReader`) is not yet tracked as a view
-of it.
+leak-free ([`docs/MEMORY.md` §6.2](MEMORY.md)), with one known
+exception: a raw owned string handed to a `sink s` parameter whose
+callee does not take it over leaks, and nothing reports it (§7.2). The
+pre-production hardening closed the exception 0.71.0 named: a `Slice`
+built from a `Vec` (`slice_from_vec`, `slice_sub`, protobuf's
+`ProtoReader`) is now tracked as a view of it and ends when the `Vec` is
+freed or may reallocate ([`docs/MEMORY.md` §2.10](MEMORY.md)).
 
 ## 10. Diagnostics
 

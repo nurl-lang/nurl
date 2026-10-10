@@ -147,7 +147,7 @@ Cursor, Windsurf, Zed and other MCP-capable IDEs accept the same URL
   every **section** of every document and hands back the best few with the
   keys to fetch them; `name=X outline=true` is one document's heading map;
   `name=X section='7.4'` is one section — a few KB rather than MEMORY.md's
-  44 KB, and the only way to read part of `spec.md`, which exceeds the
+  ~50 KB, and the only way to read part of `spec.md`, which exceeds the
   per-call cap. `name=` alone still returns the whole document, `offset=`
   pages it.
 - **Resources** mirroring the read-tools as `nurl://` URIs (`nurl://grammar`,

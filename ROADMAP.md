@@ -7,7 +7,7 @@ Anything marked done here has a regression test in
 [`compiler/tests/`](compiler/tests/) and is covered by the bootstrap fixed
 point.
 
-_Last reviewed: 2026-10-07 · Current release: **0.71.0** · Language: **Grammar
+_Last reviewed: 2026-10-10 · Current release: **0.72.0** · Language: **Grammar
 v2.8** ([`spec/grammar.ebnf`](spec/grammar.ebnf))._
 
 ---
@@ -30,15 +30,15 @@ What is solid today:
   and `f32`), tail-call optimization, and
   **variadic FFI** (the `printf` family callable directly). Since 0.40.0 the
   language also spells the shapes a fast numeric kernel is written in:
-  **`v128`**, a first-class by-value SIMD vector type over ~27
+  **`v128`**, a first-class by-value SIMD vector type over ~31
   `nurl_v128_*` primitives (§4.1b) that lowers to SSE2 / NEON / wasm
   `simd128` with no CPUID probe and no fallback path, and **wide
   arithmetic** — `nurl_umulhi` (the high half of a 64×64 multiply) plus
   `nurl_addc` / `nurl_subb` / `nurl_mac` for carry chains the backend
   recognises. 0.46.0 adds the two that need a *runtime* decision:
-  **`v256`** (sixteen 16-bit lanes) and the **`simd` declaration prefix**
-  (grammar v2.6, §3.3b) — nurlc emits one clone of the function per
-  instruction-set tier and dispatches on CPUID once per process, so a
+  **`v256`** (64-, 32- and 16-bit lanes) and the **`simd` declaration
+  prefix** (grammar v2.6, §3.3b) — nurlc emits one clone of the function
+  per instruction-set tier and dispatches on CPUID once per process, so a
   kernel written once runs AVX2 where it exists and baseline where it does
   not, with no `#ifdef` and no separate build. 0.49.0 adds the second
   declaration prefix, **`inline`** (grammar v2.7, §3.3c): LLVM's
@@ -59,9 +59,10 @@ What is solid today:
   interprocedural/return escape, loop-carried double-frees, a release
   after storing into an owner, and iterator invalidation as hard errors without changing generated code.
   Since 0.71.0 every program accepted without an `unsafe` function of its
-  own is **memory-safe and leak-free** (one known exception: a `Slice` of a
-  `Vec`, [`docs/MEMORY.md`](docs/MEMORY.md) §6.2); `Rc` cycles are
-  collected and thread-shared cycles are rejected at compile time.
+  own is **memory-safe and leak-free**, and since 0.72.0 with no exception
+  (0.71.0's one, a `Slice` of a `Vec`, is closed: views are values,
+  [`docs/MEMORY.md`](docs/MEMORY.md) §6.2); `Rc` cycles are collected
+  and thread-shared cycles are rejected at compile time.
   Since 0.44.0 **no rule depends on definition order**: every check that
   consults a per-function summary parks what it cannot answer and
   resolves it after the module, so where a helper is written can no
@@ -203,9 +204,9 @@ A high-level map of what exists. Dates and per-feature detail are in
   and closure tails included), and errors inside generic/trait re-parses
   point at the template's real file:line with the instantiation named.
 - Diagnostics are *measured*, not asserted, and since 0.64.0 measured **in
-  CI**: `check_diag_coverage.sh` reports which of the compiler's 311
-  `die`/`warn` sites a test has ever made it print (84%, with the never-fired
-  set baselined so a new silent diagnostic fails the build);
+  CI**: `check_diag_coverage.sh` reports which of the compiler's 364
+  `die`/`warn` sites a test has ever made it print (~85% provably, with the
+  18 never-fired ones baselined so a new silent diagnostic fails the build);
   `check_diag_anchor.sh` gates that every baselined diagnostic points at the
   mistake rather than at the token after it; `diag_mutate.py` injects one
   realistic error into a working program and reads the answer. Between them
@@ -297,9 +298,9 @@ platform-specific shims.
   HTTP/2 CONTINUATION-flood + stream-accounting, and clean cross-thread
   listener shutdown) with regression tests, and its serve path is
   peer-benchmarked against Rust hyper and Node
-  ([`bench/HTTP_RESULTS.md`](bench/HTTP_RESULTS.md): within about 1% of
-  hyper's throughput at every measured concurrency and ahead of it at c=1
-  and c=10, an HTTP request served in 2 syscalls).
+  ([`bench/HTTP_RESULTS.md`](bench/HTTP_RESULTS.md): within 2.5% of
+  hyper's plaintext throughput from c=10 up and well ahead of it at c=1,
+  an HTTP request served in 2 syscalls).
 - **ext/data services** — `sqlite` (production-hardened), `mqtt` 5.0 client,
   `smtp` (mail submission). Postgres and Redis clients live in the registry
   packages `psql` and `redis` (pure NURL — no libpq, no hiredis).
@@ -342,11 +343,11 @@ platform-specific shims.
   sockets, WASI + `--dir` file ops), with no external runtime — and with
   two JIT tiers on top over guard-page linear memory: a **register-allocating
   JIT** (tier 8, the default on x86-64) and the template JIT it falls back
-  to. Over `bench/wasmbench.sh`'s corpus it runs every one of the 45
+  to. Over `bench/wasmbench.sh`'s corpus it runs every one of the 60
   modules faster than the reference Cranelift JIT's wall clock (nwasm
-  2.1.0, 2026-10-07: geometric mean 0.59× for the NURL modules) — and the
+  2.4.0, 2026-10-09: geometric mean 0.58× for the NURL modules) — and the
   control columns say this is not a NURL-shaped fast path: the same corpus
-  emitted by **clang and rustc** runs at 0.60× and 0.59×. The compiler
+  emitted by **clang and rustc** runs at 0.62× and 0.56×. The compiler
   **self-hosts on wasm**: `nurlc` compiled to `wasm32-wasi` recompiles
   `nurlc.nu` to byte-identical IR, both under the external reference
   `wasmtime` and under this pure-NURL runtime — and identically under its
@@ -499,7 +500,8 @@ new language features.
   ownership rules reject, with no implied Rust-equivalence
   ([`docs/MEMORY.md`](docs/MEMORY.md), [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md)).
   *(Resolved in 0.71.0: safe programs are guaranteed memory-safe and
-  leak-free, MEMORY.md §6, with the `Slice` exception stated there.)*
+  leak-free, MEMORY.md §6; the one `Slice` exception was closed in 0.72.0,
+  below.)*
 - [x] **Write the soundness story** — decide and document whether
   interprocedural escape analysis and `*T` raw-pointer flows are on the
   roadmap or out of scope by design. *(Resolved: interprocedural escape and
@@ -511,13 +513,16 @@ new language features.
 - [x] **Close the `Slice` hole** — a `Slice` built from a `Vec`
   (`slice_from_vec`, `slice_sub`, `slice_from_raw`, protobuf's
   `ProtoReader`) was not tracked as a view of it, the one known exception to
-  the 0.71.0 guarantee (hole probe `tools/fuzz/holes/h32`). *(Resolved: views
-  are values in the borrow walk — tracked through structs, Options,
-  containers, closures, globals and function results — with 109 more probes
-  (h33–h141) closed on the way: sealed representations, exclusive calls,
-  closure effects, checked allocation sizes, the raw foreign surface, null
-  strings, and method calls asked of their impls, static and `dyn`. MEMORY.md §6.2 states the guarantee with no exception;
-  docs/HARDENING_PLAN.md.)*
+  the 0.71.0 guarantee (hole probe `tools/fuzz/holes/h32`). *(Resolved in
+  0.72.0: views are values in the borrow walk — tracked through structs,
+  Options, containers, closures, globals and function results — with 109
+  more probes (h33–h141) closed on the way: sealed representations,
+  exclusive calls, closure effects, accessors and field paths, checked
+  allocation sizes, temporaries, ownership summaries, the raw foreign
+  surface, null strings, method calls asked of their impls (static and
+  `dyn`), strings that own their buffer, and raw strings in values
+  (MEMORY.md §2.13). MEMORY.md §6.2 states the guarantee with no
+  exception; docs/HARDENING_PLAN.md.)*
 
 ### Evidence for the "LLM-native" thesis
 

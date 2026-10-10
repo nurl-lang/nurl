@@ -70,7 +70,7 @@ freestanding socket layer.
 
 A production-grade MQTT 5.0 client built on the TCP/TLS layer. The whole
 packet codec is pure NURL over `( Vec u )` — no dependencies beyond the
-runtime's libssl. The client connects over **TLS** (default broker port
+pure-NURL TLS stack. The client connects over **TLS** (default broker port
 8883); the `MqttConfig.tls_verify` field (default **on**) controls
 certificate verification.
 
@@ -120,21 +120,20 @@ What it covers:
 
 ## HTTPS / TLS
 
-The runtime offers a `libssl`-backed TLS integration (**optional**
-dependency — required only by the `tcp_connect_tls` / `tcp_listen_tls`
-family below; see the pure-NURL alternative in the next section). The HTTP
-server stack picks it up transparently — swap `tcp_listen` for
+The `tcp_connect_tls` / `tcp_listen_tls` family below runs on the
+pure-NURL TLS stack described in the next subsection — no `libssl`. The
+HTTP server stack picks it up transparently — swap `tcp_listen` for
 `tcp_listen_tls`.
 
 | Capability | Notes |
 |---|---|
 | **TLS server-side** — `tcp_listen_tls host port cert_path key_path → !TcpListener NetErr` | HttpServer integrates without code changes. |
 | **TLS client-side** — `tcp_connect_tls host port server_name verify` | Client handshake with SNI; `verify` enables peer-certificate chain + host-name verification against the system trust store — or against `$SSL_CERT_FILE` when that is set, which **replaces** the system bundle (OpenSSL semantics) and fails closed if unreadable, so a private CA or a self-signed lab server no longer means editing `/etc/ssl` or giving up on verification. The primitive behind the MQTT client and any outbound TLS. |
-| TLS 1.2 minimum | TLS 1.0 / 1.1 / SSL 3.0 disabled in the SSL_CTX. |
-| **SNI** (RFC 6066 §3) — `tcp_tls_add_sni listener hostname cert key` | Multi-tenant HTTPS — per-hostname cert/key pairs on one listener; handshake-time selection; no-match falls through to the default cert. |
+| Protocol versions — TLS 1.3; the client alone falls back to TLS 1.2 | The server is TLS 1.3 only. The client's 1.2 path offers only ECDHE + AEAD suites and aborts on the RFC 8446 §4.1.3 downgrade sentinel. TLS 1.0 / 1.1 / SSL 3.0 are not implemented. |
+| **SNI** (RFC 6066 §3) — `tcp_tls_add_sni listener hostname cert key` | **Not yet supported** on the pure-NURL TLS server: returns `NetOther`. A listener serves its one default cert (plus the optional ML-DSA cert of `tcp_listen_tls_dual`) whatever hostname the client asks for. |
 | **ALPN** (RFC 7301) — `tcp_listen_tls_with_alpn host port backlog cert key "h2 http/1.1"`; `tcp_alpn_protocol conn` | Server-side selection in the pure TLS 1.3 server: the first protocol in the listener's order that the client also offered, announced in EncryptedExtensions; a client offering ALPN with nothing in common is refused with a fatal `no_application_protocol` alert; no ALPN from the client negotiates nothing (`""`). Required by HTTP/2-over-TLS (RFC 9113 §3.3). |
-| **Mutual TLS (mTLS)** — `tcp_tls_require_client_cert listener ca_bundle strict?`; `tcp_peer_cert_subject conn` | Strict (handshake fails without a cert) and opportunistic modes. |
-| **Live cert reload** — `tcp_tls_reload listener hostname cert key` | Hot-swaps the SSL_CTX under a per-listener mutex; in-flight reads/writes on the old ctx survive until close. Standard Let's Encrypt-rotation use case. |
+| **Mutual TLS (mTLS)** — `tcp_tls_require_client_cert listener ca_bundle strict?`; `tcp_peer_cert_subject conn` | **Not yet supported** on the pure-NURL TLS server, which never asks for a client certificate. `tcp_tls_require_client_cert` returns `NetOther` — deliberately, so no caller believes mTLS is enforced when it is not — and `tcp_peer_cert_subject` returns an empty String. |
+| **Live cert reload** — `tcp_tls_reload listener hostname cert key` | **Not yet supported** on the pure-NURL TLS server: returns `NetOther` (the OpenSSL SSL_CTX hot-swap was removed with libssl). A listener reads its cert and key once, when it is opened; to rotate them, close it and open a new one. |
 
 ### Pure-NURL TLS (no OpenSSL)
 
@@ -162,8 +161,8 @@ HTTP/3 gets it as well. `tcp_tls_sig_scheme conn` reports the scheme a
 connection was signed with. The client offers `mldsa44/65/87` first and
 verifies ML-DSA chains (`std/tls_verify.nu`).
 
-A program that never calls `tcp_connect_tls` / `tcp_listen_tls` (a
-pure-NURL-TLS client, or plain TCP) links `libc` only. The
+`tcp_connect_tls` / `tcp_listen_tls` add no library: a TLS client or
+server links `libc` only, exactly like a plain-TCP program. The
 [`psql`](../packages/psql) package builds on the pure-NURL TLS client to
 reach PostgreSQL securely with no libpq and no OpenSSL.
 

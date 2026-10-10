@@ -166,9 +166,11 @@ reported as a fast cell.
   implementation (stdlib/std/chacha20poly1305.nu, hash_blake2b.nu,
   hash_sha512.nu, x25519.nu) — the row measures the stdlib a NURL program
   actually gets. C and Rust, whose standard libraries have none of the
-  five, carry the same formulation written out by hand: poly1305-donna-64
-  and the donna-c64 X25519 field with native 128-bit products, scalar
-  ChaCha20 (the stdlib runs it on `v128` lanes). Each source names its
+  five, carry the same formulation written out by hand: Poly1305 at
+  radix 2^64 and the donna-c64 X25519 field at radix 2^51, both with
+  native 128-bit products. ChaCha20 is the one deliberate difference: C
+  and Rust run the scalar RFC rounds, while the stdlib runs it on `v128`
+  lanes (`v256` lanes in its x86-64-v3 clone). Each source names its
   RFC/FIPS test vector; x25519 at x1 reproduces RFC 7748's 1000-iteration
   value.
 * Wall clock on a machine that was not quiesced drifts a few per cent

@@ -5,11 +5,14 @@
 // TLS_CHACHA20_POLY1305_SHA256 cipher suite), and is equally usable for
 // Noise / age / any AEAD need on a host with nothing installed.
 //
-// ChaCha20 words are kept in i64 limbs masked to 32 bits;
-// Poly1305 is a port of the well-trodden poly1305-donna radix-2^44
-// reference — three 44/44/42-bit limbs whose h·r terms are full
-// 64×64→128 products (nurl_umulhi supplies the high half), 9 multiplies
-// a block against the 25 a 2^26 form needs.
+// ChaCha20 runs on vector lanes on every little-endian host — eight
+// blocks a pass over `v256` on x86-64-v3, four over `v128` where vectors
+// are native, then two, then one — with a scalar reference path over u32
+// words for a big-endian target.
+// Poly1305 is radix 2^64: a two-word r and a three-word accumulator, so a
+// block is four full 64×64→128 products (nurl_mac_lo/_hi and nurl_umulhi
+// supply the halves) plus two small ones, against the nine of the
+// radix-2^44 donna-64 form it replaced.
 //
 // Public surface:
 //   ( chacha20_block key counter nonce )      → ( Vec u )  64-byte block
