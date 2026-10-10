@@ -529,10 +529,11 @@ new language features.
   compiler still accepts and that fault under the sanitizers, each a probe
   in `tools/fuzz/holes/open/` (README there): raw strings handed to
   `string_adopt` or a `sink s`, views leaving through a helper's return
-  value or into a container reached indirectly, one owner consumed twice
-  in a call, `mem_forget` / `mem_take` / `rcbox` callable from safe code,
-  destructors, closure calls with a fresh string, keyword calls to a
-  forward consumer, and trust by `/stdlib/` path. First attempts at the
+  value or into a container reached indirectly, `mem_forget` / `mem_take` /
+  `rcbox` callable from safe code, destructors, closure calls with a fresh
+  string, and trust by `/stdlib/` path. Three are closed (34 open): one
+  owner consumed twice or consumed and read in a call (h143, h144), and
+  keyword calls to a forward consumer (h142). First attempts at the
   first and the `mem_forget` / `rcbox` classes are on the branches
   `fix-sink-s-param-drop` and `fix-mem-forget-unsafe`; their reviews found
   them not yet sound. A probe that a fix makes rejected or clean moves to

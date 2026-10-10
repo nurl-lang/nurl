@@ -15,7 +15,7 @@ run clean. Run these by hand:
 
 ```sh
 cd tools/fuzz/holes
-./check.sh open/*.nu open/stdlib/*.nu   # reports each as HOLE; last line "holes: 37"
+./check.sh open/*.nu open/stdlib/*.nu   # reports each as HOLE; last line "holes: 34"
 ```
 
 A probe that prints REJECTED or ACCEPTED (ran clean) here has been closed —
@@ -28,15 +28,16 @@ graduate it (below).
 | `string_consume_*` (10) | A raw string `s` handed to a consuming parameter — `string_adopt` or a `sink s`. `string_adopt` takes over whatever it is handed (a literal, a view of a `String`, a borrowed or closure parameter, a result that is fresh on only some paths); a `sink s` the callee only reads, or leaves in the caller's container, is never released; a generic's `sink A` at `s` gives the caller's string up to nobody. | `string_consume_borrowed_param`, `string_consume_closure_param`, `string_consume_generic_sink_at_s`, `string_consume_left_in_param_container`, `string_consume_literal`, `string_consume_maybe_fresh_result`, `string_consume_method_and_trait_object`, `string_consume_panic_recover`, `string_consume_sink_param_only_read`, `string_consume_view_of_string` |
 | `view_through_return_*` (4) | A view of a local leaves through a helper's return value (`^ ( pick x )`, a returned closure or `Vec` holding it); the local is released and the caller reads freed memory. | `view_through_return_closure`, `view_through_return_helper`, `view_through_return_vec`, `view_through_return_vec_literal` |
 | `view_into_*` (3) | A view of a local stored into a container reached indirectly — a `Vec` parameter, a binding that aliases one, a field of an `inout` struct — outlives the local. | `view_into_aliased_param_vec`, `view_into_inout_struct_field`, `view_into_param_container` |
-| `consumed_*` (2) | One owner consumed twice, or consumed and read through a view, in the arguments of a single call. | `consumed_and_read_in_one_call`, `consumed_twice_in_one_call` |
 | `mem_forget_*` / `mem_take_*` (7) | `mem_forget` and `mem_take` are `unsafe`-only (spec §3.3d) but callable from safe code: `mem_forget` gives an owned value up unreleased (in any context — plain, generic, spawned closure, trait method, drop hook); `mem_take` claims a value a borrowed field or a `Vec` still holds. | `mem_forget_in_drop_hook`, `mem_forget_in_generic`, `mem_forget_in_spawned_closure`, `mem_forget_in_trait_method`, `mem_forget_owned_vec`, `mem_take_field_borrow`, `mem_take_vec_element` |
 | `rcbox_*` (3) | The `rcbox` primitives are callable from safe code: `rcbox_new` parks a value behind a plain `i`, `rcbox_release` frees any `i`, and a program's own rcbox handle can be built over an address of its choosing. | `rcbox_handle_literal_over_forged_block`, `rcbox_new_parks_value`, `rcbox_release_any_address` |
 | `dtor_*` (5) | Destructors (`% Drop` impls and library-handle drop hooks): a receiver handed to a `sink` disposer is dropped by nobody; an impl that reassigns a receiver field leaks the old value; an impl that panics is run again by the unwind; a closure inside an impl drops the receiver from its own body. | `dtor_closure_inside_drop_impl`, `dtor_disposer_leaks_fields`, `dtor_panics_runs_twice`, `dtor_reassigns_receiver_field`, `dtor_skipped_when_handed_to_disposer` |
 | closure call (1) | A fresh string passed straight to a call of a closure value is never released. | `closure_call_fresh_temp_string` |
-| keyword arguments (1) | A keyword-argument call to a function defined later misses that the callee consumes its argument; the caller releases it again. | `kwargs_forward_consuming_callee` |
 | trusted path (1) | Any source whose path contains `/stdlib/` is compiled as the trusted standard library, with every safe-code check off. The probe sits in `open/stdlib/` for that reason. | `stdlib/trusted_by_path_substring` |
 
-37 probes in all (36 in this directory, one in `stdlib/`).
+34 probes in all (33 in this directory, one in `stdlib/`). Closed since
+0.72.0 and graduated to the CI gate: `consumed_twice_in_one_call` (h143),
+`consumed_and_read_in_one_call` (h144), `kwargs_forward_consuming_callee`
+(h142).
 
 ## Earlier fix attempts
 

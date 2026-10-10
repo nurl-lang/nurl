@@ -235,6 +235,18 @@ The analysis follows the program's paths:
   is maybe-moved after the closure's first invocation;
 - a module-level global is not tracked, since any call may reassign it.
 
+Within one call the arguments run in order, and a move one of them makes
+counts for the others. No other argument may hand the callee the moved
+binding or a view of it — `( f m m )` with a `sink` and a borrowed
+parameter, `( f ( string_data s ) ( eat s ) )` — and none may read it at
+all after an earlier argument released it as it ran (`( g ( eat s )
+( string_len s ) )`). A plain scalar computed from it before the callee
+takes it is fine: `( take s + ( string_len s ) 1 )`.
+
+```
+error: 'm' is moved by argument 1 of 'f' and also used by argument 2
+```
+
 A value with nothing to release (a struct of scalars, an enum of unit
 variants) is copied, never moved.
 
@@ -600,10 +612,13 @@ much as the normal one (§7.2). Rc cycles are collected (§7.7).
 0.71.0 named one exception: a `Slice` built from a `Vec` was not tracked
 as a view of it (hole probe `tools/fuzz/holes/h32`). It is closed: views
 are now values (§2.10), tracked through every place one can be put.
+Since then three of the 0.72.0 review's holes are closed too: an owner
+moved by one argument of a call and read by another (§2.1), and a
+keyword-argument call to a forward function that consumes its argument.
 
 **Open holes (0.72.0).** The 0.72.0 release review found safe programs
 the compiler still accepts and that leak, free memory they do not own or
-read freed memory. Each is a probe in `tools/fuzz/holes/open/` (37, see
+read freed memory. Each is a probe in `tools/fuzz/holes/open/` (34, see
 its README), kept out of the CI gate until it is closed; until then the
 guarantee holds except for these:
 
@@ -614,13 +629,11 @@ guarantee holds except for these:
 - a view that leaves through a helper's return value (`^ ( pick x )`),
   or is stored into a container reached indirectly (a field of an
   `inout` struct, a `Vec` that aliases a parameter or sits inside one);
-- one owner consumed twice, or consumed and read, in a single call;
 - `mem_forget`, `mem_take` and the `rcbox` primitives, which safe code
   can still call although §3.3d makes them `unsafe`;
 - a destructor that panics, reassigns a field of its receiver or hands
   it to a `sink` disposer, and a closure defined inside a `% Drop` impl;
-- a closure value called with a fresh string, and a keyword-argument
-  call to a forward-declared function that consumes a handle;
+- a closure value called with a fresh string;
 - a source whose path contains `/stdlib/`, which is compiled as the
   trusted standard library with every safe-code check off.
 
