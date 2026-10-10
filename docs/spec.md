@@ -445,7 +445,8 @@ way the standard library vouches for its own raw code. Calling an
 the ownership rules (docs/MEMORY.md §6), and **every program accepted
 without an `unsafe` function of its own is memory-safe and leak-free**
 (docs/MEMORY.md §6.2 — the pre-production hardening closed 0.71.0's
-`Slice` hole; §9.13 names the one leak still not reported).
+`Slice` hole; the holes still open are listed there, each a probe in
+`tools/fuzz/holes/open/`, and §9.13 covers the `sink s` one).
 `nurlc --unsafe-report` lists the `unsafe` functions a program
 contains outside the standard library — the whole surface a reviewer has
 to trust.
@@ -2094,10 +2095,10 @@ The body of an `unsafe` function (§3.3d): raw pointers, pointer casts,
 the raw-memory primitives and foreign calls are its author's to get
 right. Everything else is held to the rules above — every program
 accepted without an `unsafe` function of its own is memory-safe and
-leak-free ([`docs/MEMORY.md` §6.2](MEMORY.md)), with one known
-exception: a raw owned string handed to a `sink s` parameter whose
-callee does not take it over leaks, and nothing reports it (§7.2). The
-pre-production hardening closed the exception 0.71.0 named: a `Slice`
+leak-free ([`docs/MEMORY.md` §6.2](MEMORY.md)), apart from the open
+holes listed there, each a probe in `tools/fuzz/holes/open/` (among
+them: a raw string handed to `string_adopt` or a `sink s` parameter,
+§7.2). The pre-production hardening closed the exception 0.71.0 named: a `Slice`
 built from a `Vec` (`slice_from_vec`, `slice_sub`, protobuf's
 `ProtoReader`) is now tracked as a view of it and ends when the `Vec` is
 freed or may reallocate ([`docs/MEMORY.md` §2.10](MEMORY.md)).

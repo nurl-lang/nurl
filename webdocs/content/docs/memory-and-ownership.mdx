@@ -144,8 +144,9 @@ The checker is a pass over an already-memory-safe base. Auto-drop never
 double-frees on its own. The checker is conservative. It rejects a program
 it cannot prove safe, and the error names a change that satisfies the
 rule. Together, the two layers guarantee that every program the compiler
-accepts, outside the bodies of `unsafe` functions, is memory-safe and,
-apart from the implementation limits `docs/MEMORY.md` lists, leak-free.
+accepts, outside the bodies of `unsafe` functions, is memory-safe and
+leak-free, apart from the open holes `docs/MEMORY.md` §6.2 lists (each a
+probe in `tools/fuzz/holes/open/`).
 Raw `*T` pointers, pointer casts, raw memory and foreign (FFI) calls are
 the escape hatch, and only an `unsafe` function can use them. The full
 soundness contract is in

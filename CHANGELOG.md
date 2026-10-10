@@ -6,16 +6,20 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.72.0] — 2026-10-10
 
-The memory guarantee has **no exception**: 0.71.0's one known hole (a
-`Slice` of a `Vec`, probe h32) is closed, along with 109 more found around
-it (probes h33–h141), each at its root — every probe is now rejected or
-runs clean under ASan/UBSan/LSan, and `tools/fuzz/holes/check.sh` runs in
-CI. With the new checks json_parse retires 0.2 % more instructions (the
-null-safe string length and the checked growth), every other bench kernel
-the same or fewer, and the compiler compiles itself in 0.7 % fewer. The
-standard library's hashes, ciphers, codecs and collections are rewritten
+0.71.0's one known hole in the memory guarantee (a `Slice` of a `Vec`,
+probe h32) is closed, along with 109 more found around it (probes
+h33–h141), each at its root — every probe is now rejected or runs clean
+under ASan/UBSan/LSan, and `tools/fuzz/holes/check.sh` runs in CI. The
+release review found 37 more that are still open — raw strings handed to
+`string_adopt` or a `sink s`, views that leave through a helper's return
+value, `mem_forget`, `mem_take` and the `rcbox` primitives callable from
+safe code, among others; each has a probe (*Known issues*). With the new
+checks json_parse retires 0.2 % more instructions (the null-safe string
+length and the checked growth), every other bench kernel the same or
+fewer, and the compiler compiles itself in 0.7 % fewer. The standard
+library's hashes, ciphers, codecs and collections are rewritten
 for speed: BLAKE2b 5.1x, BLAKE3 10x, ChaCha20 2.4x, Poly1305 1.67x,
 inflate 2.4x, `hashmap` inserts 1.7x, `sort_by` 2–25x (*Performance*); a
 program that does TLS compiles 4.6 % more instructions for it. nwasm
@@ -38,6 +42,57 @@ every package on Windows under 0.71.0, now work there, and neither checks
 `package.nurl-version` any more. The registry packages are republished for
 0.72.0 (53 of 58: the published versions of 47 no longer compile under
 it, and six more now use its `slice_of_str`).
+
+### Known issues
+
+Each is a safe program — no `unsafe` function of its own — that this
+compiler accepts and that leaks, frees memory it does not own or reads
+freed memory under ASan/LSan/UBSan. Each has a probe in
+`tools/fuzz/holes/open/` (`./check.sh open/*.nu open/stdlib/*.nu`
+reports all 37), kept out of the CI gate until it is fixed at its root.
+
+- **A raw string handed to a consuming parameter.** `string_adopt` takes
+  over whatever `s` it is handed: a literal, a view of a `String`, a
+  borrowed parameter, a call's result that is fresh on only some paths
+  or a closure's parameter is freed though the caller does not own it —
+  directly, or through a `sink s`, a method or a `%Trait` object, and
+  across a `recover`. A `sink s` the callee only reads, or leaves in a
+  parameter's container, is never released, and a generic's `sink A`
+  instantiated at `s` leaks (`string_consume_*`). Until then, take a
+  string over as a `sink String`, and hand `string_adopt` only a string
+  the caller owns.
+- **A view that leaves through a helper's return value.** `^ ( pick x )`,
+  where `pick` hands back its argument, or a closure or `Vec` a helper
+  builds around a local string, outlives the string it views; bound
+  first (`: s y ( pick x ) ^ y`) it is rejected (`view_through_return_*`).
+- **A view stored into a container reached indirectly** — a field of an
+  `inout` struct, a `Vec` that aliases a parameter or sits inside one —
+  outlives the local it views (`view_into_*`).
+- **One owner consumed twice, or consumed and read, in one call:**
+  `( f m m )` with two `sink` parameters, or
+  `( f ( string_data str ) ( eat str ) )`, which reads `str` after the
+  later argument consumed it (`consumed_*`).
+- **`mem_forget` and `mem_take` are callable from safe code**, although
+  the specification makes them `unsafe` (§3.3d): `mem_forget` leaks what
+  it forgets, and `mem_take` claims a borrowed field or element as owned
+  (`mem_forget_*`, `mem_take_*`).
+- **The `rcbox` primitives are callable from safe code:** `rcbox_new`
+  parks a value nothing releases, `rcbox_release` frees whatever address
+  it is given, and a program's own handle written in the old convention
+  releases a block it forged from a string (`rcbox_*`).
+- **Destructors.** A `% Drop` impl that panics runs again on the unwind;
+  one that reassigns a field of its receiver leaks the new value; one
+  that hands its receiver to a `sink` disposer leaks the fields; a value
+  handed straight to such a disposer skips the impl; and a closure
+  defined inside an impl runs the type's drop glue on its own first
+  parameter (`dtor_*`).
+- **A closure value called with a fresh string** leaks the string
+  (`closure_call_fresh_temp_string`), and a keyword-argument call to a
+  forward-declared function that consumes a handle frees it twice where
+  the positional call is handled (`kwargs_forward_consuming_callee`).
+- **Trust by path.** A source whose path contains `/stdlib/` is compiled
+  as the trusted standard library, with every safe-code check off
+  (`stdlib/trusted_by_path_substring`).
 
 ### Fixed
 
@@ -258,11 +313,13 @@ it, and six more now use its `slice_of_str`).
   its string over — can no longer be stored there
   (`@ T { ( nurl_str_cat … ) }`, `@ ?s { T … }`, `[ s | … ]`,
   `= . r name ( … )`) nor handed to a parameter that keeps it
-  (`vec_push [s]`, `map_set`): each leaked (h128–h140). Hold a `String` (a field, a payload, a `( Vec String )`), or bind
-  the string and store the binding — a view the walk keeps from outliving
-  it. A parameter that takes a string over is declared `sink`. `unsafe`
-  code and the standard library keep managing raw strings by hand. In the
-  repository only tests built structs that way; they are `unsafe` now.
+  (`vec_push [s]`, `map_set`): each leaked (h128–h140). Hold a `String`
+  (a field, a payload, a `( Vec String )`), or bind the string and store
+  the binding — a view the walk keeps from outliving it. A parameter that
+  takes a string over is a `sink String` (a `sink s` is not yet released
+  by its callee: *Known issues*). `unsafe` code and the standard library
+  keep managing raw strings by hand. In the repository only tests built
+  structs that way; they are `unsafe` now.
 - **Raw-length helpers take a raw pointer and are `unsafe` to call** —
   `nurl_str_at`, `nurl_memcmp_lex`, `nurl_memmem_range`,
   `nurl_parse_int_range`, `nurl_parse_float_range`, `string_from_take`,

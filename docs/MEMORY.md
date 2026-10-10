@@ -26,9 +26,9 @@ specified in spec §3.3d.
   released, reassigned or reallocated (§6.2).
 - **The guarantee (§6.2).** Every program the compiler accepts outside
   the bodies of `unsafe` functions is memory-safe and leak-free, data
-  races and the panic path included — with one known exception: a raw
-  string (`s`) handed to a `sink` parameter leaks unless the callee
-  adopts it (§1). A view is tracked wherever it goes (§2.10).
+  races and the panic path included — apart from the open holes §6.2
+  lists, each a probe in `tools/fuzz/holes/open/`. A view is tracked
+  wherever it goes (§2.10).
 - **Conservative, with a fix.** A program the rules cannot prove safe is
   rejected. Each diagnostic names the rule and a concrete change that
   satisfies it (§6.3).
@@ -601,11 +601,28 @@ much as the normal one (§7.2). Rc cycles are collected (§7.7).
 as a view of it (hole probe `tools/fuzz/holes/h32`). It is closed: views
 are now values (§2.10), tracked through every place one can be put.
 
-One exception is known: a raw string (`s`) handed to a `sink` parameter
-is not released by the callee unless it adopts it (`string_adopt`) or
-hands it to another `sink` that does. A callee that only reads, returns
-or stores the string leaks it, and the compiler does not report that
-(§1).
+**Open holes (0.72.0).** The 0.72.0 release review found safe programs
+the compiler still accepts and that leak, free memory they do not own or
+read freed memory. Each is a probe in `tools/fuzz/holes/open/` (37, see
+its README), kept out of the CI gate until it is closed; until then the
+guarantee holds except for these:
+
+- a raw string handed to `string_adopt` or a `sink s` parameter (§1):
+  `string_adopt` takes over whatever it is handed, owned or not, and a
+  `sink s` the callee only reads is never released — take a string over
+  as a `sink String`, and hand `string_adopt` only a string you own;
+- a view that leaves through a helper's return value (`^ ( pick x )`),
+  or is stored into a container reached indirectly (a field of an
+  `inout` struct, a `Vec` that aliases a parameter or sits inside one);
+- one owner consumed twice, or consumed and read, in a single call;
+- `mem_forget`, `mem_take` and the `rcbox` primitives, which safe code
+  can still call although §3.3d makes them `unsafe`;
+- a destructor that panics, reassigns a field of its receiver or hands
+  it to a `sink` disposer, and a closure defined inside a `% Drop` impl;
+- a closure value called with a fresh string, and a keyword-argument
+  call to a forward-declared function that consumes a handle;
+- a source whose path contains `/stdlib/`, which is compiled as the
+  trusted standard library with every safe-code check off.
 
 The rules that carry it:
 

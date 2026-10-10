@@ -60,9 +60,10 @@ What is solid today:
   interprocedural/return escape, loop-carried double-frees, a release
   after storing into an owner, and iterator invalidation as hard errors without changing generated code.
   Since 0.71.0 every program accepted without an `unsafe` function of its
-  own is **memory-safe and leak-free**, and since 0.72.0 with no exception
-  (0.71.0's one, a `Slice` of a `Vec`, is closed: views are values,
-  [`docs/MEMORY.md`](docs/MEMORY.md) §6.2); `Rc` cycles are collected
+  own is **memory-safe and leak-free**, apart from the open holes
+  [`docs/MEMORY.md`](docs/MEMORY.md) §6.2 lists (0.72.0 closed 0.71.0's
+  one, a `Slice` of a `Vec` — views are values — and its review found 37
+  more, `tools/fuzz/holes/open/`); `Rc` cycles are collected
   and thread-shared cycles are rejected at compile time.
   Since 0.44.0 **no rule depends on definition order**: every check that
   consults a per-function summary parks what it cannot answer and
@@ -190,7 +191,8 @@ A high-level map of what exists. Dates and per-feature detail are in
   never silently duplicated (a compile error says where to clone or move),
   and `--debug` builds at the default -O2. Since 0.71.0 the rules are a
   guarantee — every program accepted without an `unsafe` function of its
-  own is memory-safe and leak-free — `Rc` cycles are collected by a cycle
+  own is memory-safe and leak-free, apart from the open holes MEMORY.md
+  §6.2 lists — `Rc` cycles are collected by a cycle
   collector, `Weak` and `ArcWeak` exist, and a cycle of thread-shared
   handles is a compile error. Model, guarantee and trusted base:
   [`docs/MEMORY.md`](docs/MEMORY.md).
@@ -522,8 +524,19 @@ new language features.
   allocation sizes, temporaries, ownership summaries, the raw foreign
   surface, null strings, method calls asked of their impls (static and
   `dyn`), strings that own their buffer, and raw strings in values
-  (MEMORY.md §2.13). MEMORY.md §6.2 states the guarantee with no
-  exception; docs/HARDENING_PLAN.md.)*
+  (MEMORY.md §2.13); docs/HARDENING_PLAN.md.)*
+- [ ] **Close the holes the 0.72.0 review found** — 37 safe programs the
+  compiler still accepts and that fault under the sanitizers, each a probe
+  in `tools/fuzz/holes/open/` (README there): raw strings handed to
+  `string_adopt` or a `sink s`, views leaving through a helper's return
+  value or into a container reached indirectly, one owner consumed twice
+  in a call, `mem_forget` / `mem_take` / `rcbox` callable from safe code,
+  destructors, closure calls with a fresh string, keyword calls to a
+  forward consumer, and trust by `/stdlib/` path. First attempts at the
+  first and the `mem_forget` / `rcbox` classes are on the branches
+  `fix-sink-s-param-drop` and `fix-mem-forget-unsafe`; their reviews found
+  them not yet sound. A probe that a fix makes rejected or clean moves to
+  `tools/fuzz/holes/` and the CI gate.
 
 ### Evidence for the "LLM-native" thesis
 

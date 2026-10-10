@@ -12,6 +12,11 @@ allocation and capacity arithmetic").
 > probe, held by CI; MEMORY.md §6.2 states the guarantee with **no**
 > exception; every gate below is green; compile and run time are at or
 > below the baseline.
+>
+> *2026-10-10:* the 0.72.0 release review found 37 more safe programs that
+> the compiler accepts and that fault (`tools/fuzz/holes/open/`), so
+> MEMORY.md §6.2 lists open holes again; this plan's own probes (h32–h141)
+> stay closed.
 
 ## Status (2026-10-08): done
 

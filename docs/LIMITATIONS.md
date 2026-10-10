@@ -10,6 +10,13 @@ feature coverage and gaps (databases, TLS, MQTT, …) are *not* language
 limitations — they live with each module (the `stdlib/**` file headers and
 [`docs/NETWORKING.md`](NETWORKING.md)) and on the [`ROADMAP.md`](../ROADMAP.md).
 
+**Open soundness holes.** 0.72.0 lists the safe programs the compiler
+still accepts and that fault — raw strings handed to `string_adopt` or a
+`sink s`, views leaving through a helper's return value, `mem_forget` /
+`mem_take` / `rcbox` callable from safe code, and more — in
+[`MEMORY.md` §6.2](MEMORY.md), each a probe in
+[`tools/fuzz/holes/open/`](../tools/fuzz/holes/open/).
+
 The fixed grammar quirks (binary `&` / `|` arity, ternary cascading, `^`
 vs `^^`) are documented in the [Grammar](#grammar) section below; the
 closure-capture and `: ~` closure-borrow-escape rules live in

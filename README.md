@@ -15,7 +15,7 @@ NURL takes a few design positions that are uncommon together:
 - **Regular prefix-arity grammar** — every operator has a fixed arity, no infix, no precedence cliffs. The grammar fits on a single page and is LL(k≤4) — recursive-descent with up to 4 tokens of lookahead.
 - **Locally parseable** — a construct's shape (arity and nesting) is fixed by a short window of surrounding tokens, with no long-range parse dependencies. (A few operators — `.`, `&`, `|`, `#` — resolve their *lowering* by operand type; see [`docs/spec.md`](docs/spec.md) §4.9/§6.)
 - **Deterministic compiler** — the same source always produces identical output, with no platform-dependent codegen. The self-hosted compiler reaches a byte-identical fixed point on its own source. (Raw `*T` pointers and out-of-range shifts inherit LLVM semantics — spec §4.2, §6.1.)
-- **Single-owner memory, checked ownership rules** — auto-drop at scope exit; owned values move, reads borrow, and raw memory lives only in `unsafe` functions. Every program accepted without an `unsafe` function of its own is memory-safe and leak-free, data races included, with no exception ([`docs/MEMORY.md`](docs/MEMORY.md) §6.2).
+- **Single-owner memory, checked ownership rules** — auto-drop at scope exit; owned values move, reads borrow, and raw memory lives only in `unsafe` functions. Every program accepted without an `unsafe` function of its own is memory-safe and leak-free, data races included — apart from the open holes [`docs/MEMORY.md`](docs/MEMORY.md) §6.2 lists, each a probe in [`tools/fuzz/holes/open/`](tools/fuzz/holes/open/).
 - **Diagnostics that name the cure** — an error states what was expected, what was found, and the correct form with an example, because for a model the compiler is the only teacher in the loop. The messages do the work a gotchas document used to, and CI fails a change that adds a diagnostic no test makes the compiler print (`tools/check_diag_coverage.sh`).
 - **LLVM-based codegen, broad platform reach** — one pipeline targets Linux, macOS, Windows, wasm32-wasi, RISC-V, and ARM64 — and a NURL program can **boot as its own kernel**: bootable unikernel images (no host OS, no libc) on x86_64, AArch64 and RISC-V64. See [`unikernel/README.md`](unikernel/README.md).
 
@@ -164,7 +164,8 @@ use after move, a borrow or view read after its source ended, escaping
 closure captures, iterator invalidation and unsynchronised sharing between
 threads as hard compile errors, without ever changing generated code: every
 program accepted without an `unsafe` function of its own is memory-safe
-and leak-free, with no exception. The one remaining source-level trap, the
+and leak-free, apart from the open holes `docs/MEMORY.md` §6.2 lists. The
+one remaining source-level trap, the
 n-ary `&`/`|` foot-gun, is a hard error by default; `--no-strict-arity`
 demotes it to a warning for trees that need to keep building.
 Full model, the guarantee and its trusted base: [`docs/MEMORY.md`](docs/MEMORY.md).
