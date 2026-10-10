@@ -20,6 +20,17 @@ beside each raw one (*Changed*).
 
 ### Fixed
 
+- **A split build no longer loses a `linkonce_odr` global.** The
+  partition defined every module-level global in part 0 and declared it
+  `external` elsewhere; a `linkonce_odr` one (`.nurl.peek.zero`, read by
+  every inlined Vec accessor, and the cycle collector's ops tables) is
+  discardable, so a part 0 whose own code did not use it dropped it
+  before the link and every reference to it was left undefined. It was
+  latent — every package split so far had a part 0 that read a Vec — and
+  surfaced when `packages/agora` was first split (see *Performance*).
+  Such globals are now replicated into every part, and
+  `compiler/tests/split_equivalence.sh` checks that no part declares one
+  `external`.
 - **Views are values.** A view — a `Slice`, a struct, Option or container
   holding one, a view a closure captured, one stored in a global or
   returned from a function — is tracked as a view of its source wherever
@@ -251,6 +262,28 @@ beside each raw one (*Changed*).
 
 ### Performance
 
+- **Programs with `simd` functions build on every core: 3.7–4.7x faster
+  cold builds, 5.5–6.2x faster edit rebuilds.** `nurl.sh` lowers a large
+  program as up to one module per core, but a module holding any `simd`
+  function was never split — and every program that does TLS or
+  post-quantum crypto holds some, so the largest NURL programs were the
+  ones lowered on one core. The partition now keeps each `simd` function
+  — dispatcher, both clones, and everything they reach — in one part,
+  whole, and splits the rest as usual (the group is 6.7 % of agora). The
+  wide clone sees exactly the code it saw before: ML-DSA-65 sign + verify
+  retires −0.6 % instructions against the one-module build, where cutting
+  the group apart costs +60 %. 6-core Haswell-E: `packages/agora` 61.3 →
+  16.6 s cold, 59.4 → 10.9 s after a one-line edit; `packages/anomaly`
+  106.7 → 22.9 s cold, 102.6 → 16.6 s after an edit. Peak RSS of the
+  agora build 354 → 260 MB.
+- **`nurlfmt` is linear: `compiler/nurlc.nu` 148 s → 0.07 s.** Its
+  tokenizer read every byte with `nurl_str_get`, which measures the
+  string from its start on each call, so formatting was quadratic in the
+  file (16 000 lines 12.4 s → 0.02 s). The two 2.8 MB compiler sources
+  cost the pre-commit hook two and a half minutes per compiler commit,
+  and CI's `nurlfmt_check.sh` as much. It now reads through
+  `slice_of_str` + `slice_byte`; output is byte-identical on all 2227
+  tracked sources.
 - **No scan in the toolchain re-measures its string per byte any more.**
   With the warning above, every such loop in the standard library, the
   tools, nurlapi, the examples and the tests (262 calls) and in the
