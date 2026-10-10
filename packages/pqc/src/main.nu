@@ -39,6 +39,7 @@ $ `stdlib/std/mldsa.nu`
 $ `stdlib/std/hash_sha3.nu`
 $ `stdlib/std/tls.nu`
 $ `stdlib/ext/env.nu`
+$ `stdlib/core/slice.nu`
 
 @ __die s msg → v {
     ( nurl_eprint `pqc: ` ) ( nurl_eprint msg ) ( nurl_eprint `\n` )
@@ -555,6 +556,7 @@ unsafe @ __kat_one s label i level s d s z s ekd s dkd → b {
             // no port syntax without brackets) still passes through
             // whole rather than losing its last group.
             : s hp ( __pos ps k )
+            : ( Slice u ) hp_v ( slice_of_str hp )
             : i hl ( nurl_str_len hp )
             : ~ i port dport
             : ~ s host hp
@@ -564,14 +566,14 @@ unsafe @ __kat_one s label i level s d s z s ekd s dkd → b {
             : ~ i sc 0
             : ~ i q 0
             ~ < q hl {
-                ? == ( nurl_str_get hp q ) 58 { = ci q = sc + sc 1 } {}
+                ? == ( slice_byte hp_v q ) 58 { = ci q = sc + sc 1 } {}
                 = q + q 1
             }
             ? & & == sc 1 >= ci 0 > - hl + ci 1 0 {
                 : ~ b digits T
                 : ~ i j + ci 1
                 ~ & digits < j hl {
-                    : i ch ( nurl_str_get hp j )
+                    : i ch ( slice_byte hp_v j )
                     ? | < ch 48 > ch 57 { = digits F } {}
                     = j + j 1
                 }

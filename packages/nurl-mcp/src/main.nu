@@ -36,6 +36,7 @@ $ `stdlib/ext/http_server.nu`
 $ `stdlib/ext/mcp_http.nu`
 $ `stdlib/ext/mcp_server.nu`
 $ `deps/wasmbuilder/src/build.nu`
+$ `stdlib/core/slice.nu`
 
 // ── Policy (set once in main, read by the dispatcher) ───────────────
 //
@@ -275,10 +276,11 @@ $ `deps/wasmbuilder/src/build.nu`
 
 // Index of the last '/' in `p`, or 0.
 @ nm_last_slash s p → i {
+    : ( Slice u ) p_v ( slice_of_str p )
     : i n ( nurl_str_len p )
     : ~ i last 0
     : ~ i k 0
-    ~ < k n { ? == ( nurl_str_get p k ) 47 { = last k } {} = k + k 1 }
+    ~ < k n { ? == ( slice_byte p_v k ) 47 { = last k } {} = k + k 1 }
     ^ last
 }
 
@@ -645,11 +647,12 @@ version = "0.0.0"
 // ── Tool: nurl_read_stdlib ──────────────────────────────────────────
 
 @ nm_has_dotdot s p → b {
+    : ( Slice u ) p_v ( slice_of_str p )
     : i n ( nurl_str_len p )
     ? < n 2 { ^ F } {}
     : ~ i i 0
     ~ < i - n 1 {
-        ? & == ( nurl_str_get p i ) 46 == ( nurl_str_get p + i 1 ) 46 { ^ T } {}
+        ? & == ( slice_byte p_v i ) 46 == ( slice_byte p_v + i 1 ) 46 { ^ T } {}
         = i + i 1
     }
     ^ F

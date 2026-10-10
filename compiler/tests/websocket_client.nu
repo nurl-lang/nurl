@@ -24,6 +24,7 @@ $ `stdlib/std/thread.nu`
 $ `stdlib/ext/http_request.nu`
 $ `stdlib/ext/http_server.nu`
 $ `stdlib/ext/websocket.nu`
+$ `stdlib/core/slice.nu`
 
 @ print_bool s tag b v → v {
     ( nurl_print tag ) ( nurl_print `=` )
@@ -32,6 +33,7 @@ $ `stdlib/ext/websocket.nu`
 
 // Compare an owned Vec[u] against a lowercase hex string.
 unsafe @ vec_eq_hex ( Vec u ) got s want_hex → b {
+    : ( Slice u ) want_hex_v ( slice_of_str want_hex )
     : i n ( vec_len [u] got )
     : i wh ( nurl_str_len want_hex )
     ? != * n 2 wh { ^ F } {}
@@ -44,7 +46,7 @@ unsafe @ vec_eq_hex ( Vec u ) got s want_hex → b {
         : i lo & b 15
         : i hc ? < hi 10 + 48 hi + 87 hi
         : i lc ? < lo 10 + 48 lo + 87 lo
-        ? | != hc ( nurl_str_get want_hex * k 2 ) != lc ( nurl_str_get want_hex + * k 2 1 ) {
+        ? | != hc ( slice_byte want_hex_v * k 2 ) != lc ( slice_byte want_hex_v + * k 2 1 ) {
             = ok F
         } {}
         = k + k 1
@@ -282,6 +284,7 @@ unsafe @ run_live_test → i {
 
 // Compare an owned Vec[u] against a raw string's bytes.
 unsafe @ vec_eq_str ( Vec u ) got s want → b {
+    : ( Slice u ) want_v ( slice_of_str want )
     : i n ( vec_len [u] got )
     : i wn ( nurl_str_len want )
     ? != n wn { ^ F } {}
@@ -289,7 +292,7 @@ unsafe @ vec_eq_str ( Vec u ) got s want → b {
     : ~ i k 0
     : ~ b ok T
     ~ & ok < k n {
-        ? != & 255 # i . p k ( nurl_str_get want k ) { = ok F } {}
+        ? != & 255 # i . p k ( slice_byte want_v k ) { = ok F } {}
         = k + k 1
     }
     ^ ok

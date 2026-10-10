@@ -11,6 +11,22 @@ declared `unsafe`. Bytes of a string are read through a bounds-checked
 `Slice` of it (`slice_of_str`, `slice_byte`), where `nurl_str_at`
 trusted the length its caller passed. No change in behaviour.
 
+Byte-level BPE encoding is linear in the text. Both pre-tokenizers
+(GPT-2's and qwen2's) and the word merger read the text through a view
+measured once per encode, where each of them measured it again from its
+start on every byte (`nurl_str_get`): encoding 1.2 MB of text took 50.7
+s and now takes 0.37 s, with the same ids. SentencePiece emission reads
+the same view.
+
+SentencePiece encoding is O(n log n): the bigram merge keeps every
+candidate pair in a max-heap and looks up only the two pairs each merge
+creates (llama.cpp's llm_tokenizer_spm), where it rescanned every pair
+for every merge; and the text is split into characters through
+utf8_decode_at over a view measured once, where utf8_decode measured the
+whole text per character. A 99 KB text took 222 s and now 0.05 s past
+the vocabulary load; 1.2 MB, which would have taken hours, 0.9 s. The
+same ids, ties included (highest score, leftmost first).
+
 ## [0.4.1] — 2026-10-07
 
 Requires NURL 0.71.0, whose ownership rules are on by default: the

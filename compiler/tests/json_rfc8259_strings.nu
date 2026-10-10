@@ -33,6 +33,7 @@
 
 $ `stdlib/ext/json.nu`
 $ `stdlib/core/string.nu`
+$ `stdlib/core/slice.nu`
 
 // Parse `src`; print `label` followed by the re-serialised string's
 // content bytes in uppercase hex, or the rejection.
@@ -42,12 +43,13 @@ $ `stdlib/core/string.nu`
             ?? ( json_arr_get j 0 ) {
                 T e → {
                     : s d ( json_str_data e )
+                    : ( Slice u ) d_v ( slice_of_str d )
                     ( nurl_print label )
                     : String hex ( string_with_cap 32 )
                     : ~ i k 0
                     ~ < k ( nurl_str_len d ) {
                         ( string_push_char hex 32 )
-                        ( __hex2 hex ( nurl_str_get d k ) )
+                        ( __hex2 hex ( slice_byte d_v k ) )
                         = k + k 1
                     }
                     ( nurl_print ( string_data hex ) )

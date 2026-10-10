@@ -26,6 +26,7 @@ $ `stdlib/std/path.nu`
 $ `stdlib/std/time.nu`
 $ `stdlib/ext/json.nu`
 $ `stdlib/ext/sqlite.nu`
+$ `stdlib/core/slice.nu`
 
 @ hist_db_path String root → String {
     ^ ( path_join ( string_data root ) `history.db` )
@@ -162,12 +163,13 @@ $ `stdlib/ext/sqlite.nu`
 // Set the conversation title from `content` (first 60 chars) only when
 // it is still blank.
 @ __hist_title_if_empty Database db i conv s content i now → v {
+    : ( Slice u ) content_v ( slice_of_str content )
     : String title ( string_new )
     : i n ( nurl_str_len content )
     : i take ? < n 60 n 60
     : ~ i k 0
     ~ < k take {
-        : i c ( nurl_str_get content k )
+        : i c ( slice_byte content_v k )
         ( string_push_char title ? | == c 10 == c 13 32 c )
         = k + k 1
     }

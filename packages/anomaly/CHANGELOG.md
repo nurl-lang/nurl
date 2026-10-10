@@ -27,6 +27,12 @@ are declared `unsafe`.
   `slice_byte`), where `nurl_str_at` trusted the length its caller
   passed.
 
+Loops that walked a string with `nurl_str_get` — which measures the
+string from its start on every call, so a scan is quadratic in the
+string's length, and nurlc 0.72 warns about the shape — read through a
+view measured once (`slice_of_str` + `slice_byte`). No change in
+behaviour.
+
 ## [0.34.1] — 2026-10-07
 
 Requires NURL 0.71.0, whose ownership rules are on by default: the

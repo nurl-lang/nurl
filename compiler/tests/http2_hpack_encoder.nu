@@ -22,6 +22,7 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/ext/http.nu`
 $ `stdlib/ext/http2_hpack.nu`
+$ `stdlib/core/slice.nu`
 
 @ label s k s v → v {
     ( nurl_print k ) ( nurl_print `=` ) ( nurl_print v ) ( nurl_print `\n` )
@@ -34,12 +35,13 @@ unsafe @ hex_of ( Vec u ) v → String {
     : i n ( vec_len [u] v )
     : *u p ( vec_data [u] v )
     : s digits `0123456789abcdef`
+    : ( Slice u ) digits_v ( slice_of_str digits )
     : ~ i k 0
     ~ < k n {
         : i b & # i . p k 255
         ? > k 0 { ( string_push_char s 32 ) } {}
-        ( string_push_char s ( nurl_str_get digits >> b 4 ) )
-        ( string_push_char s ( nurl_str_get digits & b 15 ) )
+        ( string_push_char s ( slice_byte digits_v >> b 4 ) )
+        ( string_push_char s ( slice_byte digits_v & b 15 ) )
         = k + k 1
     }
     ^ s

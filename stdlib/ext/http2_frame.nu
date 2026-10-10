@@ -27,6 +27,7 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/net.nu`
+$ `stdlib/core/slice.nu`
 
 // ── Constants ─────────────────────────────────────────────────────────
 
@@ -274,10 +275,11 @@ $ `stdlib/std/net.nu`
             : i n ( vec_len [u] buf )
             : *u p ( vec_data [u] buf )
             : s want ( h2_conn_preface )
+            : ( Slice u ) want_v ( slice_of_str want )
             : ~ b ok T
             : ~ i k 0
             ~ & ok < k n {
-                ? != # i . p k ( nurl_str_get want k ) { = ok F } {}
+                ? != # i . p k ( slice_byte want_v k ) { = ok F } {}
                 = k + k 1
             }
             ? ok {
@@ -397,10 +399,11 @@ $ `stdlib/std/net.nu`
     ?? er { T _ → {} F e → { ^ @ !v H2FrameErr { F e } } }
     : *u p ( vec_data [u] rx )
     : s want ( h2_conn_preface )
+    : ( Slice u ) want_v ( slice_of_str want )
     : ~ b ok T
     : ~ i k 0
     ~ & ok < k ( h2_conn_preface_len ) {
-        ? != # i . p k ( nurl_str_get want k ) { = ok F } {}
+        ? != # i . p k ( slice_byte want_v k ) { = ok F } {}
         = k + k 1
     }
     ? ok {} { ^ @ !v H2FrameErr { F H2FrameBadPreface } }

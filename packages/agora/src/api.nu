@@ -135,10 +135,11 @@ unsafe @ ag_local_identity → s {
             : String b ( path_basename ( string_data d ) )
             : String low ( string_to_lower b )
             : s t ( string_data low )
+            : ( Slice u ) t_v ( slice_of_str t )
             : i n ( nurl_str_len t )
             : ~ i i 0
             ~ & < i n < ( string_len base ) AG_NAME_MAX {
-                : i c ( nurl_str_get t i )
+                : i c ( slice_byte t_v i )
                 : b ok | | & >= c 97 <= c 122 & >= c 48 <= c 57
                 | | == c 45 == c 46 == c 95
                 ( string_push_char base ? ok c 45 )
@@ -149,17 +150,18 @@ unsafe @ ag_local_identity → s {
     }
     : String out ( string_new )
     : s src ( string_data w )
+    : ( Slice u ) src_v ( slice_of_str src )
     : i n ( nurl_str_len src )
     : ~ i i 0
     ~ < i n {
         : b at_cwd & <= + i 4 n
-        & & == ( nurl_str_get src i ) 64 == ( nurl_str_get src + i 1 ) 99
-        & == ( nurl_str_get src + i 2 ) 119 == ( nurl_str_get src + i 3 ) 100
+        & & == ( slice_byte src_v i ) 64 == ( slice_byte src_v + i 1 ) 99
+        & == ( slice_byte src_v + i 2 ) 119 == ( slice_byte src_v + i 3 ) 100
         ? at_cwd {
             ( string_push_str out ( string_data base ) )
             = i + i 4
         } {
-            ( string_push_char out ( nurl_str_get src i ) )
+            ( string_push_char out ( slice_byte src_v i ) )
             = i + i 1
         }
     }
@@ -378,11 +380,12 @@ unsafe @ ag_local_refusal → s {
 
 // A name (agent, channel, note key): 1–48 of [a-z0-9._-], lowercase.
 @ ag_name_ok s name → b {
+    : ( Slice u ) name_v ( slice_of_str name )
     : i n ( nurl_str_len name )
     ? | == n 0 > n AG_NAME_MAX { ^ F } {}
     : ~ i i 0
     ~ < i n {
-        : i c ( nurl_str_get name i )
+        : i c ( slice_byte name_v i )
         : b ok | | & >= c 97 <= c 122 & >= c 48 <= c 57
         | | == c 45 == c 46 == c 95
         ? ok {} { ^ F }
@@ -398,12 +401,13 @@ unsafe @ ag_local_refusal → s {
     : String out ( string_new )
     : String low ( string_to_lower raw )
     : s t ( string_data low )
+    : ( Slice u ) t_v ( slice_of_str t )
     : i n ( nurl_str_len t )
     : ~ i i 0
     : ~ String cur ( string_new )
     : ~ i count 0
     ~ <= i n {
-        : i c ? < i n ( nurl_str_get t i ) 44
+        : i c ? < i n ( slice_byte t_v i ) 44
         ? | == c 44 == c 32 {
             ? > ( string_len cur ) 0 {
                 ? == count 0 { ( string_push_str out `,` ) } {}
@@ -420,12 +424,13 @@ unsafe @ ag_local_refusal → s {
 
 // `,a,b,` → Json ["a","b"]
 @ __ag_tags_json s tags → Json {
+    : ( Slice u ) tags_v ( slice_of_str tags )
     : Json arr ( json_arr_new )
     : i n ( nurl_str_len tags )
     : ~ i i 0
     : ~ String cur ( string_new )
     ~ < i n {
-        : i c ( nurl_str_get tags i )
+        : i c ( slice_byte tags_v i )
         ? == c 44 {
             ? > ( string_len cur ) 0 {
                 ( json_arr_push arr ( json_str_lit ( string_data cur ) ) )
@@ -439,12 +444,13 @@ unsafe @ ag_local_refusal → s {
 
 // `,a,b,` → "[a,b]" (nothing for none)
 @ __ag_tags_text String out s tags → v {
+    : ( Slice u ) tags_v ( slice_of_str tags )
     : i n ( nurl_str_len tags )
     ? < n 3 { ^ v } {}
     ( string_push_str out `[` )
     : ~ i i 1
     ~ < i - n 1 {
-        ( string_push_char out ( nurl_str_get tags i ) )
+        ( string_push_char out ( slice_byte tags_v i ) )
         = i + i 1
     }
     ( string_push_str out `]` )
@@ -1669,6 +1675,7 @@ unsafe @ __ag_op_wait AgStore st s me Json args i now → AgRes {
     : String t0 ( string_trim ( string_from raw ) )
     : String t ( string_to_lower t0 )
     : s src ( string_data t )
+    : ( Slice u ) src_v ( slice_of_str src )
     : i n ( nurl_str_len src )
     ? == n 0 { ^ @ ?String { T ( string_new ) } } {}
     ? ( ag_name_ok src ) { ^ @ ?String { T t } } {}
@@ -1679,23 +1686,23 @@ unsafe @ __ag_op_wait AgStore st s me Json args i now → AgRes {
     ? >= sep 0 { = start + sep 3 } {}
     : ~ i k start
     : ~ i at -1
-    ~ & < k n != ( nurl_str_get src k ) 47 {
-        ? == ( nurl_str_get src k ) 64 { = at k } {}
+    ~ & < k n != ( slice_byte src_v k ) 47 {
+        ? == ( slice_byte src_v k ) 64 { = at k } {}
         = k + k 1
     }
     ? >= at 0 { = start + at 1 } {}
     // scp-like `host:path` (no scheme): the first ':' ends the host.
     ? < sep 0 {
         : ~ i j start
-        ~ & < j n & != ( nurl_str_get src j ) 47 != ( nurl_str_get src j ) 58 { = j + j 1 }
-        = scp & < j n == ( nurl_str_get src j ) 58
+        ~ & < j n & != ( slice_byte src_v j ) 47 != ( slice_byte src_v j ) 58 { = j + j 1 }
+        = scp & < j n == ( slice_byte src_v j ) 58
     } {}
     : String out ( string_new )
     : ~ i i start
     : ~ b in_host T
     : ~ b in_port F
     ~ < i n {
-        : i c ( nurl_str_get src i )
+        : i c ( slice_byte src_v i )
         ? in_host {
             ? == c 47 { = in_host F = in_port F ( string_push_char out 47 ) } {
                 ? == c 58 {
@@ -1714,18 +1721,19 @@ unsafe @ __ag_op_wait AgStore st s me Json args i now → AgRes {
     ? & > m 4 != 0 ( nurl_str_eq ( string_data ( string_substr out - m 4 4 ) ) `.git` ) { = m - m 4 } {}
     : String key ( string_substr out 0 m )
     : s ks ( string_data key )
+    : ( Slice u ) ks_v ( slice_of_str ks )
     : i kn ( nurl_str_len ks )
     ? | | == kn 0 > kn AG_PROJECT_MAX ! ( string_contains key `/` ) { ^ @ ?String { F } } {}
-    ? | == ( nurl_str_get ks 0 ) 47 ( string_contains key `//` ) { ^ @ ?String { F } } {}
+    ? | == ( slice_byte ks_v 0 ) 47 ( string_contains key `//` ) { ^ @ ?String { F } } {}
     : ~ i q 0
     ~ < q kn {
-        : i c ( nurl_str_get ks q )
+        : i c ( slice_byte ks_v q )
         : b ok | | & >= c 97 <= c 122 & >= c 48 <= c 57 | | | == c 45 == c 46 == c 95 == c 47
         ? ok {} { ^ @ ?String { F } }
         // No '.' or '..' segment.
-        ? & == c 46 | == q 0 == ( nurl_str_get ks - q 1 ) 47 {
-            : b dot_end | == + q 1 kn == ( nurl_str_get ks + q 1 ) 47
-            : b dd_end & & < + q 1 kn == ( nurl_str_get ks + q 1 ) 46 | == + q 2 kn == ( nurl_str_get ks + q 2 ) 47
+        ? & == c 46 | == q 0 == ( slice_byte ks_v - q 1 ) 47 {
+            : b dot_end | == + q 1 kn == ( slice_byte ks_v + q 1 ) 47
+            : b dd_end & & < + q 1 kn == ( slice_byte ks_v + q 1 ) 46 | == + q 2 kn == ( slice_byte ks_v + q 2 ) 47
             ? | dot_end dd_end { ^ @ ?String { F } } {}
         } {}
         = q + q 1

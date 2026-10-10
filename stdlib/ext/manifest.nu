@@ -45,6 +45,7 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/ext/toml.nu`
 $ `stdlib/ext/semver.nu`
+$ `stdlib/core/slice.nu`
 
 : Dep {
     String name
@@ -336,10 +337,11 @@ $ `stdlib/ext/semver.nu`
 //     are ignored; otherwise SemVer precedence, real prereleases included
 //     (0.65.0-rc.1 is older than 0.65.0).
 @ __mf_all_digits s text i from i to → b {
+    : ( Slice u ) text_v ( slice_of_str text )
     ? >= from to { ^ F } {}
     : ~ i k from
     ~ < k to {
-        : i c ( nurl_str_get text k )
+        : i c ( slice_byte text_v k )
         ? | < c 48 > c 57 { ^ F } {}
         = k + k 1
     }
@@ -347,10 +349,11 @@ $ `stdlib/ext/semver.nu`
 }
 
 @ __mf_all_hex s text i from i to → b {
+    : ( Slice u ) text_v ( slice_of_str text )
     ? >= from to { ^ F } {}
     : ~ i k from
     ~ < k to {
-        : i c ( nurl_str_get text k )
+        : i c ( slice_byte text_v k )
         : b digit & >= c 48 <= c 57
         : b lower & >= c 97 <= c 102
         : b upper & >= c 65 <= c 70
@@ -363,21 +366,22 @@ $ `stdlib/ext/semver.nu`
 // Length of `text` with a trailing `git describe` suffix removed:
 // `-dirty`, then `-<commits>-g<hex sha>`.
 @ __toolchain_describe_core_len s text i n → i {
+    : ( Slice u ) text_v ( slice_of_str text )
     : ~ i end n
     ? >= end 6 {
-        : b dirty & & & & & == ( nurl_str_get text - end 6 ) 45
-        == ( nurl_str_get text - end 5 ) 100 == ( nurl_str_get text - end 4 ) 105
-        == ( nurl_str_get text - end 3 ) 114 == ( nurl_str_get text - end 2 ) 116
-        == ( nurl_str_get text - end 1 ) 121
+        : b dirty & & & & & == ( slice_byte text_v - end 6 ) 45
+        == ( slice_byte text_v - end 5 ) 100 == ( slice_byte text_v - end 4 ) 105
+        == ( slice_byte text_v - end 3 ) 114 == ( slice_byte text_v - end 2 ) 116
+        == ( slice_byte text_v - end 1 ) 121
         ? dirty { = end - end 6 } {}
     } {}
     // last '-' before end: start of the -g<sha> part
     : ~ i g - end 1
-    ~ & >= g 0 != ( nurl_str_get text g ) 45 { = g - g 1 }
-    ? & > g 0 & < + g 1 end == ( nurl_str_get text + g 1 ) 103 {
+    ~ & >= g 0 != ( slice_byte text_v g ) 45 { = g - g 1 }
+    ? & > g 0 & < + g 1 end == ( slice_byte text_v + g 1 ) 103 {
         ? ( __mf_all_hex text + g 2 end ) {
             : ~ i c - g 1
-            ~ & >= c 0 != ( nurl_str_get text c ) 45 { = c - c 1 }
+            ~ & >= c 0 != ( slice_byte text_v c ) 45 { = c - c 1 }
             ? & > c 0 ( __mf_all_digits text + c 1 g ) { = end c } {}
         } {}
     } {}

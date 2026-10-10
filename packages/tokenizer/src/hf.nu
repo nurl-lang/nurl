@@ -24,6 +24,7 @@ $ `stdlib/core/string.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/ext/json.nu`
 $ `tokenizer.nu`
+$ `stdlib/core/slice.nu`
 
 // NOTE: this file does NOT import src/tokenizer.nu. A package's sibling files do
 // not import each other — the CONSUMER imports them in dependency order, because
@@ -121,11 +122,12 @@ $ `tokenizer.nu`
     ?? ( read_file path ) {
         T txt → {
             : s d ( string_data txt )
+            : ( Slice u ) d_v ( slice_of_str d )
             : i n ( nurl_str_len d )
             : ~ i i0 0
             ~ < i0 n {
                 : ~ i j i0
-                ~ & < j n != ( nurl_str_get d j ) 10 { = j + j 1 }
+                ~ & < j n != ( slice_byte d_v j ) 10 { = j + j 1 }
                 : i len - j i0
                 ? > len 0 {
                     : s line ( nurl_str_slice d i0 len )
@@ -149,12 +151,13 @@ $ `tokenizer.nu`
 
 // exactly one space, and something on both sides of it
 @ __hf_two_fields s line → b {
+    : ( Slice u ) line_v ( slice_of_str line )
     : i n ( nurl_str_len line )
     : ~ i spaces 0
     : ~ i first -1
     : ~ i k 0
     ~ < k n {
-        ? == ( nurl_str_get line k ) 32 {
+        ? == ( slice_byte line_v k ) 32 {
             = spaces + spaces 1
             ? < first 0 { = first k } {}
         } {}

@@ -50,6 +50,7 @@ $ `stdlib/ext/toolchain.nu`
 $ `stdlib/core/io.nu`
 $ `stdlib/std/hash_sha256.nu`
 $ `stdlib/std/bytes.nu`
+$ `stdlib/core/slice.nu`
 
 // ── registry config ──────────────────────────────────────────────
 //
@@ -698,10 +699,11 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
 // `[` (any section header — handles both `[dep]` and `[[package]]`).
 @ __is_section_header String line → b {
     : s raw ( string_data line )
+    : ( Slice u ) raw_v ( slice_of_str raw )
     : i n ( string_len line )
     : ~ i k 0
     ~ < k n {
-        : i c ( nurl_str_get raw k )
+        : i c ( slice_byte raw_v k )
         ? | == c 32 == c 9 { = k + k 1 } { ^ == c 91 }
     }
     ^ F
@@ -718,6 +720,7 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
 // starts with `<name>` followed by whitespace and `=`). Matches
 // the v1 single-line inline-table or bare-string form.
 @ __dep_line_matches String line s name → b {
+    : ( Slice u ) name_v ( slice_of_str name )
     : String t ( string_trim_start line )
     : s s ( string_data t )
     : i tlen ( string_len t )
@@ -727,7 +730,7 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
     ? < tlen + nlen 1 { = decided T } {}
     : ~ i k 0
     ~ & ! decided < k nlen {
-        ? != ( nurl_str_get s k ) ( nurl_str_get name k ) { = decided T } {}
+        ? != ( nurl_str_get s k ) ( slice_byte name_v k ) { = decided T } {}
         = k + k 1
     }
     ? ! decided {
@@ -1124,6 +1127,7 @@ unsafe @ __update_candidate Manifest m Dep d → !String i {
 // version slot (a path-only inline table — nothing to rewrite).
 @ __dep_line_set_version String line s newreq → String {
     : s raw ( string_data line )
+    : ( Slice u ) raw_v ( slice_of_str raw )
     : i n ( string_len line )
     // Scan for the quoted value from `anchor`: after the `version` key
     // in an inline table, after `=` in the bare-string form.
@@ -1145,23 +1149,23 @@ unsafe @ __update_candidate Manifest m Dep d → !String i {
     : ~ i vstart -1
     : ~ i k anchor
     ~ & < k n < vstart 0 {
-        ? == ( nurl_str_get raw k ) 34 { = vstart + k 1 } {}
+        ? == ( slice_byte raw_v k ) 34 { = vstart + k 1 } {}
         = k + k 1
     }
     ? < vstart 0 { ^ ( string_new ) } {}
     : ~ i vend vstart
-    ~ & < vend n != ( nurl_str_get raw vend ) 34 { = vend + vend 1 }
+    ~ & < vend n != ( slice_byte raw_v vend ) 34 { = vend + vend 1 }
     ? >= vend n { ^ ( string_new ) } {}
     : String out ( string_with_cap + n 16 )
     = k 0
     ~ < k vstart {
-        ( string_push_char out ( nurl_str_get raw k ) )
+        ( string_push_char out ( slice_byte raw_v k ) )
         = k + k 1
     }
     ( string_push_str out newreq )
     = k vend
     ~ < k n {
-        ( string_push_char out ( nurl_str_get raw k ) )
+        ( string_push_char out ( slice_byte raw_v k ) )
         = k + k 1
     }
     ^ out
@@ -2235,6 +2239,7 @@ unsafe @ __cmd_registry_info s name → i {
     ?? ( read_file path ) {
         T txt → {
             : s src ( string_data txt )
+            : ( Slice u ) src_v ( slice_of_str src )
             : i n ( nurl_str_len src )
             : ~ i i 0
             ~ < i n {
@@ -2247,22 +2252,22 @@ unsafe @ __cmd_registry_info s name → i {
                 // documents its own import as a COMMENT ("//     $ `deps/…`"),
                 // which is not an import at all.
                 : ~ b line_start T
-                ? == ( nurl_str_get src i ) 36 {
+                ? == ( slice_byte src_v i ) 36 {
                     : ~ i bk - i 1
                     ~ & >= bk 0 line_start {
-                        : i cb ( nurl_str_get src bk )
+                        : i cb ( slice_byte src_v bk )
                         ? == cb 10 { = bk -1 } {
                             ? | == cb 32 == cb 9 { = bk - bk 1 } { = line_start F }
                         }
                     }
                 } {}
-                ? & line_start == ( nurl_str_get src i ) 36 {
+                ? & line_start == ( slice_byte src_v i ) 36 {
                     : ~ i q + i 1
-                    ~ & < q n == ( nurl_str_get src q ) 32 { = q + q 1 }
-                    ? & < q n == ( nurl_str_get src q ) 96 {
+                    ~ & < q n == ( slice_byte src_v q ) 32 { = q + q 1 }
+                    ? & < q n == ( slice_byte src_v q ) 96 {
                         : i d0 + q 1
-                        ? & < + d0 5 n & == ( nurl_str_get src d0 ) 100 & == ( nurl_str_get src + d0 1 ) 101
-                        & == ( nurl_str_get src + d0 2 ) 112 & == ( nurl_str_get src + d0 3 ) 115 == ( nurl_str_get src + d0 4 ) 47 {
+                        ? & < + d0 5 n & == ( slice_byte src_v d0 ) 100 & == ( slice_byte src_v + d0 1 ) 101
+                        & == ( slice_byte src_v + d0 2 ) 112 & == ( slice_byte src_v + d0 3 ) 115 == ( slice_byte src_v + d0 4 ) 47 {
                             = is_import T
                             = i d0
                         } {}
@@ -2271,8 +2276,8 @@ unsafe @ __cmd_registry_info s name → i {
                 ? is_import {
                     : ~ i j + i 5
                     : String nm ( string_new )
-                    ~ & < j n != ( nurl_str_get src j ) 47 {
-                        ( string_push_char nm ( nurl_str_get src j ) )
+                    ~ & < j n != ( slice_byte src_v j ) 47 {
+                        ( string_push_char nm ( slice_byte src_v j ) )
                         = j + j 1
                     }
                     ? & > ( string_len nm ) 0 < j n {
@@ -2340,29 +2345,30 @@ unsafe @ __cmd_registry_info s name → i {
     ?? ( read_file path ) {
         T txt → {
             : s src ( string_data txt )
+            : ( Slice u ) src_v ( slice_of_str src )
             : i n ( nurl_str_len src )
             : ~ i i 0
             ~ < i n {
                 // `$` at the start of a line, then a backtick, then "stdlib/"
                 : ~ b at_line T
-                ? == ( nurl_str_get src i ) 36 {
+                ? == ( slice_byte src_v i ) 36 {
                     : ~ i bk - i 1
                     ~ & >= bk 0 at_line {
-                        : i cb ( nurl_str_get src bk )
+                        : i cb ( slice_byte src_v bk )
                         ? == cb 10 { = bk -1 } {
                             ? | == cb 32 == cb 9 { = bk - bk 1 } { = at_line F }
                         }
                     }
                 } { = at_line F }
-                ? & at_line == ( nurl_str_get src i ) 36 {
+                ? & at_line == ( slice_byte src_v i ) 36 {
                     : ~ i q + i 1
-                    ~ & < q n == ( nurl_str_get src q ) 32 { = q + q 1 }
-                    ? & < q n == ( nurl_str_get src q ) 96 {
+                    ~ & < q n == ( slice_byte src_v q ) 32 { = q + q 1 }
+                    ? & < q n == ( slice_byte src_v q ) 96 {
                         : i d0 + q 1
                         : String nm ( string_new )
                         : ~ i j d0
-                        ~ & < j n != ( nurl_str_get src j ) 96 {
-                            ( string_push_char nm ( nurl_str_get src j ) )
+                        ~ & < j n != ( slice_byte src_v j ) 96 {
+                            ( string_push_char nm ( slice_byte src_v j ) )
                             = j + j 1
                         }
                         ? != 0 ( nurl_str_starts ( string_data nm ) `stdlib/` ) {
@@ -3203,12 +3209,13 @@ unsafe @ __check_pathdep_drift Manifest m s reg → i {
 // would happily let escape the share dir). Registry manifests are untrusted
 // input, so reject rather than trust.
 @ __asset_path_safe s a → b {
+    : ( Slice u ) a_v ( slice_of_str a )
     : i n ( nurl_str_len a )
     ? == n 0 { ^ F } {}
-    ? == ( nurl_str_get a 0 ) 47 { ^ F } {}
+    ? == ( slice_byte a_v 0 ) 47 { ^ F } {}
     : ~ i k 0
     ~ < k - n 1 {
-        ? & == ( nurl_str_get a k ) 46 == ( nurl_str_get a + k 1 ) 46 { ^ F } {}
+        ? & == ( slice_byte a_v k ) 46 == ( slice_byte a_v + k 1 ) 46 { ^ F } {}
         = k + k 1
     }
     ^ T
@@ -3716,15 +3723,16 @@ unsafe @ __check_pathdep_drift Manifest m s reg → i {
 // sidecars. No filename or driver path is interpreted as shell syntax.
 
 @ __test_basename s path → String {
+    : ( Slice u ) path_v ( slice_of_str path )
     : i n ( nurl_str_len path )
     : ~ i start 0
     : ~ i k 0
-    ~ < k n { ? == ( nurl_str_get path k ) 47 { = start + k 1 } {} = k + k 1 }  // '/'
+    ~ < k n { ? == ( slice_byte path_v k ) 47 { = start + k 1 } {} = k + k 1 }  // '/'
     : ~ i end n
-    ? & >= - n start 3 & == ( nurl_str_get path - n 3 ) 46 & == ( nurl_str_get path - n 2 ) 110 == ( nurl_str_get path - n 1 ) 117 { = end - n 3 } {}  // ".nu"
+    ? & >= - n start 3 & == ( slice_byte path_v - n 3 ) 46 & == ( slice_byte path_v - n 2 ) 110 == ( slice_byte path_v - n 1 ) 117 { = end - n 3 } {}  // ".nu"
     : String out ( string_with_cap + - end start 1 )
     = k start
-    ~ < k end { ( string_push_char out ( nurl_str_get path k ) ) = k + k 1 }
+    ~ < k end { ( string_push_char out ( slice_byte path_v k ) ) = k + k 1 }
     ^ out
 }
 

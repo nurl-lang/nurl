@@ -40,6 +40,7 @@ $ `stdlib/ext/http.nu`
 $ `stdlib/ext/compress.nu`
 $ `stdlib/ext/tar.nu`
 $ `stdlib/ext/nurldoc.nu`
+$ `stdlib/core/slice.nu`
 
 // The registry to search: $NURL_REGISTRY, else the public default.
 
@@ -48,8 +49,9 @@ $ `stdlib/ext/nurldoc.nu`
 // pitches are full of `—`) made the reply invalid UTF-8, and a JSON client
 // rejected the whole tool result.
 @ __mcp_utf8_cut s d i n → i {
+    : ( Slice u ) d_v ( slice_of_str d )
     : ~ i k n
-    ~ & > k 0 == 128 & ( nurl_str_get d k ) 192 { = k - k 1 }
+    ~ & > k 0 == 128 & ( slice_byte d_v k ) 192 { = k - k 1 }
     ^ k
 }
 
@@ -243,15 +245,16 @@ $ `stdlib/ext/nurldoc.nu`
                                 ( string_push_str out rel )
                                 // Blurb: the file's first `//` header line.
                                 : s sraw ( string_data src )
-                                ? & >= ( string_len src ) 2 & == ( nurl_str_get sraw 0 ) 47 == ( nurl_str_get sraw 1 ) 47 {
+                                : ( Slice u ) sraw_v ( slice_of_str sraw )
+                                ? & >= ( string_len src ) 2 & == ( slice_byte sraw_v 0 ) 47 == ( slice_byte sraw_v 1 ) 47 {
                                     : ~ i b 2
-                                    ~ & < b ( string_len src ) | == ( nurl_str_get sraw b ) 47 == ( nurl_str_get sraw b ) 32 { = b + b 1 }
+                                    ~ & < b ( string_len src ) | == ( slice_byte sraw_v b ) 47 == ( slice_byte sraw_v b ) 32 { = b + b 1 }
                                     ( string_push_str out ` — ` )
                                     : ~ i e b
-                                    ~ & & < e ( string_len src ) < - e b 100 != ( nurl_str_get sraw e ) 10 { = e + e 1 }
+                                    ~ & & < e ( string_len src ) < - e b 100 != ( slice_byte sraw_v e ) 10 { = e + e 1 }
                                     : ~ i j b
                                     ~ < j e {
-                                        ( string_push_char out ( nurl_str_get sraw j ) )
+                                        ( string_push_char out ( slice_byte sraw_v j ) )
                                         = j + j 1
                                     }
                                 } {}
@@ -640,11 +643,12 @@ $ `stdlib/ext/nurldoc.nu`
     ( string_push_int buf lineno )
     ( string_push_str buf `: ` )
     : s lraw ( string_data line )
+    : ( Slice u ) lraw_v ( slice_of_str lraw )
     : ~ i keep ( string_len line )
     ? > keep 200 { = keep ( __mcp_utf8_cut lraw 200 ) } {}
     : ~ i j 0
     ~ < j keep {
-        : i c ( nurl_str_get lraw j )
+        : i c ( slice_byte lraw_v j )
         ( string_push_char buf ? == c 9 32 c )
         = j + j 1
     }
@@ -1695,13 +1699,13 @@ $ `stdlib/ext/nurldoc.nu`
 // Count the leading '#' of an ATX heading line at `off`; 0 if the line
 // is not a heading. A '#' must be followed by a space to count, so a
 // `#define` inside a fenced code block is not mistaken for one.
-@ __ms_heading_level s raw i n i off → i {
+@ __ms_heading_level ( Slice u ) raw_v i n i off → i {
     : ~ i k off
-    ~ & < k n == ( nurl_str_get raw k ) 35 { = k + k 1 }
+    ~ & < k n == ( slice_byte raw_v k ) 35 { = k + k 1 }
     : i lvl - k off
     ? == lvl 0 { ^ 0 } {}
     ? >= k n { ^ 0 } {}
-    ? != ( nurl_str_get raw k ) 32 { ^ 0 } {}
+    ? != ( slice_byte raw_v k ) 32 { ^ 0 } {}
     ^ lvl
 }
 
@@ -1712,6 +1716,8 @@ $ `stdlib/ext/nurldoc.nu`
 @ __ms_doc_headings String src ( Vec i ) starts ( Vec i ) levels ( Vec String ) titles → v {
     : s raw ( string_data src )
     : i n ( string_len src )
+    // Measured once: the heading test runs per line of the document.
+    : ( Slice u ) raw_v ( slice_of_str raw )
     : ~ i k 0
     : ~ b fenced F
     ~ < k n {
@@ -1722,7 +1728,7 @@ $ `stdlib/ext/nurldoc.nu`
             = fenced ! fenced
         } {
             ? ! fenced {
-                : i lvl ( __ms_heading_level raw n k )
+                : i lvl ( __ms_heading_level raw_v n k )
                 ? > lvl 0 {
                     ( vec_push [i] starts k )
                     ( vec_push [i] levels lvl )

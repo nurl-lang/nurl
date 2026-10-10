@@ -58,6 +58,7 @@ $ `src/authz.nu`
 $ `src/wfs.nu`
 $ `src/httpsrc.nu`
 $ `src/imptime.nu`
+$ `stdlib/core/slice.nu`
 
 : i SRC_ID_LEN 12
 : i SRC_NAME_MAX 80
@@ -131,11 +132,12 @@ $ `src/imptime.nu`
 
 // A source id is what rand_hex_str makes: lowercase hex, SRC_ID_LEN long.
 @ source_id_ok s id → b {
+    : ( Slice u ) id_v ( slice_of_str id )
     : i n ( nurl_str_len id )
     ? != n SRC_ID_LEN { ^ F } {}
     : ~ i k 0
     ~ < k n {
-        : i c ( nurl_str_get id k )
+        : i c ( slice_byte id_v k )
         : b digit & >= c 48 <= c 57
         : b hex & >= c 97 <= c 102
         ? | digit hex {} { ^ F }
@@ -146,11 +148,12 @@ $ `src/imptime.nu`
 
 // A model name as the service spells it: letters, digits, underscore.
 @ __src_model_ok s name → b {
+    : ( Slice u ) name_v ( slice_of_str name )
     : i n ( nurl_str_len name )
     ? | <= n 0 > n 128 { ^ F } {}
     : ~ i k 0
     ~ < k n {
-        : i c ( nurl_str_get name k )
+        : i c ( slice_byte name_v k )
         : b digit & >= c 48 <= c 57
         : b lower & >= c 97 <= c 122
         : b upper & >= c 65 <= c 90
@@ -163,11 +166,12 @@ $ `src/imptime.nu`
 // Text with no control characters and a bounded length: a name, a query
 // id, a parameter value — things that go into a URL or a page.
 @ __src_text_ok s t i max → b {
+    : ( Slice u ) t_v ( slice_of_str t )
     : i n ( nurl_str_len t )
     ? > n max { ^ F } {}
     : ~ i k 0
     ~ < k n {
-        : i c & 255 ( nurl_str_get t k )
+        : i c & 255 ( slice_byte t_v k )
         ? < c 32 { ^ F } {}
         = k + k 1
     }
@@ -560,11 +564,12 @@ $ `src/imptime.nu`
 
 // A header name: RFC 7230 tokens, in practice letters, digits and dashes.
 @ __src_header_name_ok s name → b {
+    : ( Slice u ) name_v ( slice_of_str name )
     : i n ( nurl_str_len name )
     ? | == n 0 > n 64 { ^ F } {}
     : ~ i k 0
     ~ < k n {
-        : i c ( nurl_str_get name k )
+        : i c ( slice_byte name_v k )
         : b digit & >= c 48 <= c 57
         : b lower & >= c 97 <= c 122
         : b upper & >= c 65 <= c 90

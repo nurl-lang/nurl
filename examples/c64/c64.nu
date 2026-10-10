@@ -15,6 +15,7 @@
 $ `examples/c64/core.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/ext/env.nu`
+$ `stdlib/core/slice.nu`
 
 // ── Hex printing for addresses ──────────────────────────────────────
 @ hex_nib i n → i { ^ ? < n 10 + 48 n + 55 n }
@@ -182,10 +183,11 @@ unsafe @ run_d64 s kpath s bpath s cpath s dpath i frames → i {
 
 // Type a string into the KERNAL keyboard buffer (PETSCII), then run.
 @ type_line s txt i frames → v {
+    : ( Slice u ) txt_v ( slice_of_str txt )
     : i n ( nurl_str_len txt )
     : ~ i i 0
     ~ < i n {
-        ( kbuf_push ( nurl_str_get txt i ) )
+        ( kbuf_push ( slice_byte txt_v i ) )
         ( run_one_frame ) ( run_one_frame )  // drip-feed so the buffer never overflows
         = i + i 1
     }

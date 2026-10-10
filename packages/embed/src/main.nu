@@ -21,6 +21,7 @@ $ `deps/hub/src/store.nu`
 $ `deps/hub/src/hf.nu`
 $ `deps/hub/src/pull.nu`
 $ `deps/hub/src/hub.nu`
+$ `stdlib/core/slice.nu`
 
 // Resolve a model argument to a local path — an existing directory is used
 // as is, a Hugging Face ref is fetched. Returns "" (after reporting) on a
@@ -72,11 +73,12 @@ $ `deps/hub/src/hub.nu`
 
 // "HOST:PORT" → host into `hout`, returns port (or def on parse trouble)
 unsafe @ __cli_addr s addr String hout i def → i {
+    : ( Slice u ) addr_v ( slice_of_str addr )
     : i n ( nurl_str_len addr )
     : ~ i colon -1
     : ~ i k 0
     ~ < k n {
-        ? == ( nurl_str_get addr k ) 58 { = colon k } {}
+        ? == ( slice_byte addr_v k ) 58 { = colon k } {}
         = k + k 1
     }
     ? < colon 0 { ( string_push_str hout addr ) ^ def } {}

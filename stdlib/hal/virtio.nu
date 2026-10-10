@@ -30,6 +30,7 @@
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/hal/mmio.nu`
+$ `stdlib/core/slice.nu`
 
 // ── the register window (spec §4.2.2) ────────────────────────────
 
@@ -281,16 +282,17 @@ $ `stdlib/hal/mmio.nu`
 // character that is not a digit. Returns the value; `end` is where it
 // stopped, via the caller's own scan.
 @ __num s text i off i len → i {
+    : ( Slice u ) text_v ( slice_of_str text )
     : ~ i k off
     : ~ i base 10
-    ? && < + k 1 len && == ( nurl_str_get text k ) 48
-    || == ( nurl_str_get text + k 1 ) 120 == ( nurl_str_get text + k 1 ) 88 {
+    ? && < + k 1 len && == ( slice_byte text_v k ) 48
+    || == ( slice_byte text_v + k 1 ) 120 == ( slice_byte text_v + k 1 ) 88 {
         = base 16
         = k + k 2
     } {}
     : ~ i v 0
     ~ < k len {
-        : i d ( __digit ( nurl_str_get text k ) )
+        : i d ( __digit ( slice_byte text_v k ) )
         ? || < d 0 >= d base { = k len } {
             = v + * v base d
             = k + k 1
@@ -300,15 +302,16 @@ $ `stdlib/hal/mmio.nu`
 }
 
 @ __num_end s text i off i len → i {
+    : ( Slice u ) text_v ( slice_of_str text )
     : ~ i k off
-    ? && < + k 1 len && == ( nurl_str_get text k ) 48
-    || == ( nurl_str_get text + k 1 ) 120 == ( nurl_str_get text + k 1 ) 88 {
+    ? && < + k 1 len && == ( slice_byte text_v k ) 48
+    || == ( slice_byte text_v + k 1 ) 120 == ( slice_byte text_v + k 1 ) 88 {
         = k + k 2
     } {}
     : ~ i base ? > k off 16 10
     : ~ b more T
     ~ && more < k len {
-        : i d ( __digit ( nurl_str_get text k ) )
+        : i d ( __digit ( slice_byte text_v k ) )
         ? || < d 0 >= d base { = more F } { = k + k 1 }
     }
     ^ k

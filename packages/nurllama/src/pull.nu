@@ -24,9 +24,11 @@ $ `stdlib/std/hash_sha256.nu`
 $ `stdlib/std/progress.nu`
 $ `stdlib/ext/http.nu`
 $ `src/store.nu`
+$ `stdlib/core/slice.nu`
 
 // hf.co/ORG/REPO/path/to/file.gguf → https://huggingface.co/ORG/REPO/resolve/main/path/to/file.gguf
 @ nl_resolve_url s src → String {
+    : ( Slice u ) src_v ( slice_of_str src )
     ? | != ( nurl_str_starts src `http://` ) 0 != ( nurl_str_starts src `https://` ) 0 {
         ^ ( string_from src )
     } {}
@@ -37,7 +39,7 @@ $ `src/store.nu`
         : ~ i cut -1
         : ~ i k 6
         ~ & < k n < cut 0 {
-            ? == ( nurl_str_get src k ) 47 {
+            ? == ( slice_byte src_v k ) 47 {
                 = slashes + slashes 1
                 ? == slashes 2 { = cut k } {}
             } {}
@@ -47,13 +49,13 @@ $ `src/store.nu`
             : String out ( string_from `https://huggingface.co/` )
             : ~ i j 6
             ~ < j cut {
-                ( string_push_char out ( nurl_str_get src j ) )
+                ( string_push_char out ( slice_byte src_v j ) )
                 = j + j 1
             }
             ( string_push_str out `/resolve/main/` )
             = j + cut 1
             ~ < j n {
-                ( string_push_char out ( nurl_str_get src j ) )
+                ( string_push_char out ( slice_byte src_v j ) )
                 = j + j 1
             }
             ^ out
@@ -64,17 +66,18 @@ $ `src/store.nu`
 
 // last path segment, ".gguf" stripped — the default store name
 @ nl_default_name s src → String {
+    : ( Slice u ) src_v ( slice_of_str src )
     : i n ( nurl_str_len src )
     : ~ i start 0
     : ~ i k 0
     ~ < k n {
-        ? == ( nurl_str_get src k ) 47 { = start + k 1 } {}
+        ? == ( slice_byte src_v k ) 47 { = start + k 1 } {}
         = k + k 1
     }
     : String out ( string_new )
     = k start
     ~ < k n {
-        ( string_push_char out ( nurl_str_get src k ) )
+        ( string_push_char out ( slice_byte src_v k ) )
         = k + k 1
     }
     ? ( string_ends_with out `.gguf` ) {

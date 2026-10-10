@@ -42,6 +42,7 @@ $ `text.nu`
 $ `vocos.nu`
 $ `verify.nu`
 $ `stdlib/core/rcbox.nu`
+$ `stdlib/core/slice.nu`
 
 : i F5_SR 24000
 
@@ -461,14 +462,15 @@ i steps f cfg f sway f speed f fade_s i seed ( Vec f ) out → b {
 : i F5_LEAD_WORDS 1
 
 @ _f5r_lead_split s text → i {
+    : ( Slice u ) text_v ( slice_of_str text )
     : i n ( nurl_str_len text )
     : ~ i k 0
     ~ < k n {
-        : i c ( nurl_str_get text k )
+        : i c ( slice_byte text_v k )
         ? & | == c 46 | == c 33 == c 63 < + k 1 n {
-            ? ( __f5r_is_ws ( nurl_str_get text + k 1 ) ) {
+            ? ( __f5r_is_ws ( slice_byte text_v + k 1 ) ) {
                 : ~ i e + k 1
-                ~ & < e n ( __f5r_is_ws ( nurl_str_get text e ) ) { = e + e 1 }
+                ~ & < e n ( __f5r_is_ws ( slice_byte text_v e ) ) { = e + e 1 }
                 ? >= e n { ^ 0 } {}
                 : String head ( string_from ( nurl_str_slice text 0 + k 1 ) )
                 : i wc ( f5_word_count ( string_data head ) )
@@ -818,12 +820,13 @@ i steps f cfg f sway f speed f fade_s i seed i retries f max_wer ( Vec f ) out (
 : i F5_MIN_SPLIT_WORDS 5
 
 @ f5_strip_brackets s text → String {
+    : ( Slice u ) text_v ( slice_of_str text )
     : String out ( string_new )
     : i n ( nurl_str_len text )
     : ~ i depth 0
     : ~ i k 0
     ~ < k n {
-        : i c ( nurl_str_get text k )
+        : i c ( slice_byte text_v k )
         ? == c 91 { = depth + depth 1 } {
             ? == c 93 { ? > depth 0 { = depth - depth 1 } {} } {
                 ? == depth 0 { ( string_push_char out c ) } {}
@@ -838,16 +841,17 @@ i steps f cfg f sway f speed f fade_s i seed i retries f max_wer ( Vec f ) out (
 // words merged into its neighbour — a two-word sentence given a duration
 // estimate of its own is exactly the case the model fumbles.
 @ f5_split_sentences s text → ( Vec String ) {
+    : ( Slice u ) text_v ( slice_of_str text )
     : ( Vec String ) raw ( vec_new [String] )
     : i n ( nurl_str_len text )
     : ~ i start 0
     : ~ i k 0
     ~ < k n {
-        : i c ( nurl_str_get text k )
+        : i c ( slice_byte text_v k )
         ? | == c 46 | == c 33 == c 63 {
-            ? & < + k 1 n ( __f5r_is_ws ( nurl_str_get text + k 1 ) ) {
+            ? & < + k 1 n ( __f5r_is_ws ( slice_byte text_v + k 1 ) ) {
                 : ~ i e + k 1
-                ~ & < e n ( __f5r_is_ws ( nurl_str_get text e ) ) { = e + e 1 }
+                ~ & < e n ( __f5r_is_ws ( slice_byte text_v e ) ) { = e + e 1 }
                 : String piece ( string_from ( nurl_str_slice text start - + k 1 start ) )
                 : String tp ( string_trim piece )
                 ? > ( string_len tp ) 0 { ( vec_push [String] raw tp ) } {}
@@ -902,12 +906,13 @@ i steps f cfg f sway f speed f fade_s i seed i retries f max_wer ( Vec f ) out (
 }
 
 @ f5_word_count s text → i {
+    : ( Slice u ) text_v ( slice_of_str text )
     : i n ( nurl_str_len text )
     : ~ i count 0
     : ~ b inword F
     : ~ i k 0
     ~ < k n {
-        : b ws ( __f5r_is_ws ( nurl_str_get text k ) )
+        : b ws ( __f5r_is_ws ( slice_byte text_v k ) )
         ? ws { = inword F } { ? inword {} { = count + count 1 = inword T } }
         = k + k 1
     }

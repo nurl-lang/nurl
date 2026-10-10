@@ -100,11 +100,12 @@ $ `stdlib/core/char.nu`
 // floats are the one thing `atof` takes and this does not.
 // stdlib/std/float.nu's `float_parse` is the checking version.
 @ nurl_str_to_float s str → f {
+    : ( Slice u ) str_v ( slice_of_str str )
     : i n ( strlen str )
     : ~ i k 0
     : ~ b stop F
     ~ & < k n ! stop {
-        : i c ( nurl_str_get str k )
+        : i c ( slice_byte str_v k )
         ? || || == c 32 == c 9 || == c 10 == c 13 { = k + k 1 } { = stop T }
     }
     ^ ( nurl_fast_atof # s + # i str k - n k )
@@ -151,9 +152,10 @@ $ `stdlib/core/char.nu`
 //
 // COST: this re-runs strlen(str) on EVERY call for the bounds check, so
 // a loop that walks a string with it is O(n²) — seconds on a 100 KB
-// input. Use `nurl_str_at` below in any loop: hoist the length once and
-// pass it in. Reach for `nurl_str_get` only for a one-off read where no
-// length is at hand.
+// input, and nurlc warns about the shape. In a loop, measure once and
+// read the view — `: ( Slice u ) v ( slice_of_str str )`, then
+// `( slice_byte v i )` (stdlib/core/slice.nu: O(1), safe, 0 outside the
+// string like this). Reach for `nurl_str_get` only for a one-off read.
 @ nurl_str_get s str i idx → i {
     // The byte at `idx` is in range exactly when no NUL comes before it:
     // measure that far, not the whole string — a per-byte read in a loop
@@ -172,14 +174,16 @@ $ `stdlib/core/char.nu`
 // returns 0 when `idx` falls outside [0, len), which is what parsers
 // rely on when they read one or two bytes past the cursor.
 //
-// This is the accessor scan loops want. `nurl_str_get` re-runs strlen
-// per call, and in any loop that also writes (i.e. every parser) LLVM
-// cannot hoist that strlen out, so the loop is quadratic — measured
+// This is the raw form of the read scan loops want, for `unsafe` code
+// that already holds the pointer and its length. `nurl_str_get` re-runs
+// strlen per call, and in any loop that also writes (i.e. every parser)
+// LLVM cannot hoist that strlen out, so the loop is quadratic — measured
 // 120 µs vs 11 µs over a 4 KB input, and the gap grows with the input.
-// Hoist the length once, then index with this:
+// Safe code reads the same way through `slice_of_str` + `slice_byte`,
+// whose length cannot lie:
 //
-//   : i n ( nurl_str_len src )
-//   ~ < k n { : i c ( nurl_str_at src n k ) … }
+//   : ( Slice u ) v ( slice_of_str src )
+//   ~ < k ( slice_len [u] v ) { : i c ( slice_byte v k ) … }
 @ nurl_str_at * u str i len i idx → i {
     ? | < idx 0 >= idx len { ^ 0 } {}
     : *u p # *u str

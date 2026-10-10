@@ -41,6 +41,7 @@ $ `stdlib/std/float.nu`
 $ `stdlib/ext/env.nu`
 $ `stdlib/std/args.nu`
 $ `src/chart.nu`
+$ `stdlib/core/slice.nu`
 
 // ── Input parsing ─────────────────────────────────────────────────────
 
@@ -48,11 +49,12 @@ $ `src/chart.nu`
 @ __ws_tokens String s → ( Vec String ) {
     : ( Vec String ) out ( vec_new [String] )
     : s raw ( string_data s )
+    : ( Slice u ) raw_v ( slice_of_str raw )
     : i n ( nurl_str_len raw )
     : String cur ( string_new )
     : ~ i i 0
     ~ < i n {
-        : i c ( nurl_str_get raw i )
+        : i c ( slice_byte raw_v i )
         ? != 0 ( is_space c ) {
             ? > ( string_len cur ) 0 {
                 ( vec_push [String] out ( string_clone cur ) )

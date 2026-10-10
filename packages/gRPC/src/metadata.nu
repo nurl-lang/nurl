@@ -4,6 +4,7 @@ $ `wire.nu`
 $ `stdlib/std/encode.nu`
 $ `stdlib/ext/http.nu`
 $ `stdlib/ext/protobuf.nu`
+$ `stdlib/core/slice.nu`
 
 @ grpc_metadata_new → ( Vec Header ) { ^ ( vec_new [Header] ) }
 
@@ -310,14 +311,15 @@ unsafe @ grpc_metadata_decode ( Vec Header ) headers i limit → !( Vec Header )
         ^ @ !GrpcStatus GrpcError { F ( grpc_error GRPC_UNKNOWN `missing or duplicate grpc-status trailers` ) }
     } {}
     : s raw ( grpc_header_value headers `grpc-status` )
+    : ( Slice u ) raw_v ( slice_of_str raw )
     : i n ( nurl_str_len raw )
-    ? | | == n 0 > n 2 & > n 1 == ( nurl_str_get raw 0 ) 48 {
+    ? | | == n 0 > n 2 & > n 1 == ( slice_byte raw_v 0 ) 48 {
         ^ @ !GrpcStatus GrpcError { F ( grpc_error GRPC_UNKNOWN `invalid grpc-status` ) }
     } {}
     : ~ i code 0
     : ~ i k 0
     ~ < k n {
-        : i c ( nurl_str_get raw k )
+        : i c ( slice_byte raw_v k )
         ? | < c 48 > c 57 { ^ @ !GrpcStatus GrpcError { F ( grpc_error GRPC_UNKNOWN `invalid grpc-status` ) } } {}
         = code + * code 10 - c 48
         = k + k 1

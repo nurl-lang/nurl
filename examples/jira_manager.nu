@@ -31,6 +31,7 @@ $ `stdlib/std/encode.nu`
 $ `stdlib/ext/env.nu`
 $ `stdlib/ext/http_request.nu`
 $ `stdlib/std/fs.nu`
+$ `stdlib/core/slice.nu`
 
 // ── Errors ────────────────────────────────────────────────────────
 
@@ -547,13 +548,15 @@ unsafe @ __jira_trim_slash s raw → String {
 
 // Case-insensitive ASCII-vertailu kahdelle C-merkkijonolle.
 @ __jira_ieq s x s y → b {
+    : ( Slice u ) y_v ( slice_of_str y )
+    : ( Slice u ) x_v ( slice_of_str x )
     : i nx ( nurl_str_len x )
     : i ny ( nurl_str_len y )
     ? != nx ny { ^ F } {}
     : ~ i i 0
     ~ < i nx {
-        : i cx ( __jira_lower ( nurl_str_get x i ) )
-        : i cy ( __jira_lower ( nurl_str_get y i ) )
+        : i cx ( __jira_lower ( slice_byte x_v i ) )
+        : i cy ( __jira_lower ( slice_byte y_v i ) )
         ? != cx cy { ^ F } {}
         = i + i 1
     }

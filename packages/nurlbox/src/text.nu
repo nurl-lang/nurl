@@ -11,6 +11,7 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/std/bufio.nu`
 $ `bx.nu`
+$ `stdlib/core/slice.nu`
 
 // ── echo ──────────────────────────────────────────────────────────
 //
@@ -18,13 +19,14 @@ $ `bx.nu`
 // -n / -e / -E; `echo -x` prints `-x`, as every shell's echo does.
 
 @ __echo_is_opt s tok → b {
+    : ( Slice u ) tok_v ( slice_of_str tok )
     : i n ( nurl_str_len tok )
     ? < n 2 { ^ F } {}
-    ? != ( nurl_str_get tok 0 ) 45 { ^ F } {}
+    ? != ( slice_byte tok_v 0 ) 45 { ^ F } {}
     : ~ i k 1
     : ~ b all T
     ~ < k n {
-        : i c ( nurl_str_get tok k )
+        : i c ( slice_byte tok_v k )
         ? ! | == c 110 | == c 101 == c 69 { = all F } {}
         = k + k 1
     }
@@ -33,12 +35,13 @@ $ `bx.nu`
 
 // Expand the C escapes `echo -e` understands, in place into `out`.
 @ __echo_escapes String out s text → v {
+    : ( Slice u ) text_v ( slice_of_str text )
     : i n ( nurl_str_len text )
     : ~ i i 0
     ~ < i n {
-        : i c ( nurl_str_get text i )
+        : i c ( slice_byte text_v i )
         ? & == c 92 < + i 1 n {
-            : i e ( nurl_str_get text + i 1 )
+            : i e ( slice_byte text_v + i 1 )
             = i + i 2
             ? == e 110 { ( string_push_char out 10 ) } {
                 ? == e 116 { ( string_push_char out 9 ) } {
@@ -52,8 +55,8 @@ $ `bx.nu`
                                                 // \0NNN — up to three octal digits
                                                 : ~ i val 0
                                                 : ~ i k 0
-                                                ~ & < k 3 & < i n & >= ( nurl_str_get text i ) 48 <= ( nurl_str_get text i ) 55 {
-                                                    = val + * val 8 - ( nurl_str_get text i ) 48
+                                                ~ & < k 3 & < i n & >= ( slice_byte text_v i ) 48 <= ( slice_byte text_v i ) 55 {
+                                                    = val + * val 8 - ( slice_byte text_v i ) 48
                                                     = i + i 1
                                                     = k + k 1
                                                 }
@@ -77,11 +80,12 @@ $ `bx.nu`
     : ~ b scanning T
     ~ & scanning < i n {
         : s tok ( bx_at argv i )
+        : ( Slice u ) tok_v ( slice_of_str tok )
         ? ( __echo_is_opt tok ) {
             : i tn ( nurl_str_len tok )
             : ~ i k 1
             ~ < k tn {
-                : i c ( nurl_str_get tok k )
+                : i c ( slice_byte tok_v k )
                 ? == c 110 { = newline F } {}
                 ? == c 101 { = escapes T } {}
                 ? == c 69 { = escapes F } {}

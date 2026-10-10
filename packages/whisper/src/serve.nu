@@ -42,6 +42,7 @@ $ `stdlib/std/time.nu`
 $ `stdlib/std/floatbits.nu`
 $ `deps/http/src/http.nu`
 $ `src/run.nu`
+$ `stdlib/core/slice.nu`
 
 : ~ i g_srv_w 0  // the loaded Whisper's ctl word, OWNED by the server (0 = none loaded)
 : ~ i g_srv_t 0  // the Tok's box, lent by __wh_serve_run's caller
@@ -196,13 +197,15 @@ unsafe @ __srv_reaper → v {
 // with a cycle counter — it defends the realistic case, a token guessed
 // over the network.)
 @ __srv_tok_eq s got s want → b {
+    : ( Slice u ) got_v ( slice_of_str got )
+    : ( Slice u ) want_v ( slice_of_str want )
     : i lg ( nurl_str_len got )
     : i lw ( nurl_str_len want )
     : ~ i diff ^^ lg lw
     : ~ i k 0
     ~ < k lw {
-        : i cw ( nurl_str_get want k )
-        : i cg ? < k lg ( nurl_str_get got k ) 0
+        : i cw ( slice_byte want_v k )
+        : i cg ? < k lg ( slice_byte got_v k ) 0
         = diff | diff ^^ cw cg
         = k + k 1
     }
@@ -211,17 +214,18 @@ unsafe @ __srv_reaper → v {
 
 // `token=` out of a raw query string ("a=1&token=xyz").
 @ __srv_query_token s q → String {
+    : ( Slice u ) q_v ( slice_of_str q )
     : String out ( string_new )
     : i n ( nurl_str_len q )
     : ~ i k 0
     ~ < k n {
-        ? | == k 0 == ( nurl_str_get q - k 1 ) 38 {
-            ? & & & & & <= + k 6 n == ( nurl_str_get q k ) 116 == ( nurl_str_get q + k 1 ) 111
-            == ( nurl_str_get q + k 2 ) 107 == ( nurl_str_get q + k 3 ) 101 == ( nurl_str_get q + k 4 ) 110 {
-                ? == ( nurl_str_get q + k 5 ) 61 {
+        ? | == k 0 == ( slice_byte q_v - k 1 ) 38 {
+            ? & & & & & <= + k 6 n == ( slice_byte q_v k ) 116 == ( slice_byte q_v + k 1 ) 111
+            == ( slice_byte q_v + k 2 ) 107 == ( slice_byte q_v + k 3 ) 101 == ( slice_byte q_v + k 4 ) 110 {
+                ? == ( slice_byte q_v + k 5 ) 61 {
                     : ~ i j + k 6
-                    ~ & < j n != ( nurl_str_get q j ) 38 {
-                        ( string_push_char out ( nurl_str_get q j ) )
+                    ~ & < j n != ( slice_byte q_v j ) 38 {
+                        ( string_push_char out ( slice_byte q_v j ) )
                         = j + j 1
                     }
                     ^ out

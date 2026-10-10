@@ -15,6 +15,7 @@ $ `stdlib/std/term.nu`
 $ `stdlib/std/sysinfo.nu`
 $ `stdlib/ext/env.nu`
 $ `bx.nu`
+$ `stdlib/core/slice.nu`
 
 & `c` @ getuid → i32
 
@@ -239,11 +240,12 @@ unsafe @ __exec_argv ( Vec String ) args i from → i {
 // `out`; returns the index just past it. Shared by printf's format
 // string and by its %b conversion.
 @ __pf_one_escape String out s text i i i to → i {
+    : ( Slice u ) text_v ( slice_of_str text )
     ? >= + i 1 to {
         ( string_push_char out 92 )
         ^ + i 1
     } {}
-    : i e ( nurl_str_get text + i 1 )
+    : i e ( slice_byte text_v + i 1 )
     : ~ i k + i 2
     ? == e 110 { ( string_push_char out 10 ) } {
         ? == e 116 { ( string_push_char out 9 ) } {
@@ -257,8 +259,8 @@ unsafe @ __exec_argv ( Vec String ) args i from → i {
                                         ? == e 120 {
                                             : ~ i val 0
                                             : ~ i got 0
-                                            ~ & < got 2 & < k to ( bx_is_hex ( nurl_str_get text k ) ) {
-                                                = val + * val 16 ( bx_hex_val ( nurl_str_get text k ) )
+                                            ~ & < got 2 & < k to ( bx_is_hex ( slice_byte text_v k ) ) {
+                                                = val + * val 16 ( bx_hex_val ( slice_byte text_v k ) )
                                                 = k + k 1
                                                 = got + got 1
                                             }
@@ -270,8 +272,8 @@ unsafe @ __exec_argv ( Vec String ) args i from → i {
                                             ? & >= e 48 <= e 55 {
                                                 : ~ i val - e 48
                                                 : ~ i got 1
-                                                ~ & < got 3 & < k to & >= ( nurl_str_get text k ) 48 <= ( nurl_str_get text k ) 55 {
-                                                    = val + * val 8 - ( nurl_str_get text k ) 48
+                                                ~ & < got 3 & < k to & >= ( slice_byte text_v k ) 48 <= ( slice_byte text_v k ) 55 {
+                                                    = val + * val 8 - ( slice_byte text_v k ) 48
                                                     = k + k 1
                                                     = got + got 1
                                                 }
@@ -285,12 +287,13 @@ unsafe @ __exec_argv ( Vec String ) args i from → i {
 
 // Every escape in text[from, to).
 @ __pf_escape String out s text i from i to → i {
+    : ( Slice u ) text_v ( slice_of_str text )
     : ~ i i from
     ~ < i to {
-        ? == ( nurl_str_get text i ) 92 {
+        ? == ( slice_byte text_v i ) 92 {
             = i ( __pf_one_escape out text i to )
         } {
-            ( string_push_char out ( nurl_str_get text i ) )
+            ( string_push_char out ( slice_byte text_v i ) )
             = i + i 1
         }
     }
@@ -301,12 +304,13 @@ unsafe @ __exec_argv ( Vec String ) args i from → i {
 @ __pf_uint String out i val i base b upper → v {
     ? == val 0 { ( string_push_char out 48 ) ^ } {}
     : s digits ? upper `0123456789ABCDEF` `0123456789abcdef`
+    : ( Slice u ) digits_v ( slice_of_str digits )
     : String tmp ( string_with_cap 24 )
     : ~ i v val
     ~ != v 0 {
         : i q ( __pf_udiv v base )
         : i r - v * q base
-        ( string_push_char tmp ( nurl_str_get digits r ) )
+        ( string_push_char tmp ( slice_byte digits_v r ) )
         = v q
     }
     : ~ i k ( string_len tmp )
@@ -346,6 +350,7 @@ unsafe @ ap_printf ( Vec String ) argv → i {
         ^ 1
     } {}
     : s fmt ( bx_at argv 1 )
+    : ( Slice u ) fmt_v ( slice_of_str fmt )
     : i fl ( nurl_str_len fmt )
     : String out ( string_new )
     : ~ i ai 2
@@ -354,12 +359,12 @@ unsafe @ ap_printf ( Vec String ) argv → i {
         = again F
         : ~ i i 0
         ~ < i fl {
-            : i c ( nurl_str_get fmt i )
+            : i c ( slice_byte fmt_v i )
             ? == c 92 {
                 = i ( __pf_one_escape out fmt i fl )
             } {
                 ? == c 37 {
-                    ? & < + i 1 fl == ( nurl_str_get fmt + i 1 ) 37 {
+                    ? & < + i 1 fl == ( slice_byte fmt_v + i 1 ) 37 {
                         ( string_push_char out 37 )
                         = i + i 2
                     } {
@@ -370,7 +375,7 @@ unsafe @ ap_printf ( Vec String ) argv → i {
                         : ~ b space F
                         : ~ b more T
                         ~ & more < k fl {
-                            : i f ( nurl_str_get fmt k )
+                            : i f ( slice_byte fmt_v k )
                             ? == f 45 { = left T = k + k 1 } {
                                 ? == f 48 { = zero T = k + k 1 } {
                                     ? == f 43 { = plus T = k + k 1 } {
@@ -378,28 +383,28 @@ unsafe @ ap_printf ( Vec String ) argv → i {
                                             ? == f 35 { = k + k 1 } { = more F } } } } }
                         }
                         : ~ i width 0
-                        ~ & < k fl ( bx_is_digit ( nurl_str_get fmt k ) ) {
-                            = width + * width 10 - ( nurl_str_get fmt k ) 48
+                        ~ & < k fl ( bx_is_digit ( slice_byte fmt_v k ) ) {
+                            = width + * width 10 - ( slice_byte fmt_v k ) 48
                             = k + k 1
                         }
                         : ~ i prec -1
-                        ? & < k fl == ( nurl_str_get fmt k ) 46 {
+                        ? & < k fl == ( slice_byte fmt_v k ) 46 {
                             = k + k 1
                             = prec 0
-                            ~ & < k fl ( bx_is_digit ( nurl_str_get fmt k ) ) {
-                                = prec + * prec 10 - ( nurl_str_get fmt k ) 48
+                            ~ & < k fl ( bx_is_digit ( slice_byte fmt_v k ) ) {
+                                = prec + * prec 10 - ( slice_byte fmt_v k ) 48
                                 = k + k 1
                             }
                         } {}
                         // Skip the C length modifiers a script may carry.
-                        ~ & < k fl | | == ( nurl_str_get fmt k ) 108 == ( nurl_str_get fmt k ) 104 == ( nurl_str_get fmt k ) 113 {
+                        ~ & < k fl | | == ( slice_byte fmt_v k ) 108 == ( slice_byte fmt_v k ) 104 == ( slice_byte fmt_v k ) 113 {
                             = k + k 1
                         }
                         ? >= k fl {
                             ( string_push_char out 37 )
                             = i k
                         } {
-                            : i conv ( nurl_str_get fmt k )
+                            : i conv ( slice_byte fmt_v k )
                             : s arg ? < ai n ( bx_at argv ai ) ``
                             : b consumed T
                             : String body ( string_new )
@@ -478,12 +483,13 @@ unsafe @ ap_printf ( Vec String ) argv → i {
 // How many argument-consuming conversions the format has — zero means
 // reusing it would loop forever.
 @ __pf_conversions s fmt → i {
+    : ( Slice u ) fmt_v ( slice_of_str fmt )
     : i n ( nurl_str_len fmt )
     : ~ i i 0
     : ~ i k 0
     ~ < i n {
-        ? == ( nurl_str_get fmt i ) 37 {
-            ? & < + i 1 n == ( nurl_str_get fmt + i 1 ) 37 { = i + i 1 } { = k + k 1 }
+        ? == ( slice_byte fmt_v i ) 37 {
+            ? & < + i 1 n == ( slice_byte fmt_v + i 1 ) 37 { = i + i 1 } { = k + k 1 }
         } {}
         = i + i 1
     }
@@ -856,14 +862,15 @@ unsafe @ ap_id ( Vec String ) argv → i {
 // %Z, %z, %s and %N need the instant, not the calendar, so they are
 // substituted here and the rest handed to `time_format`.
 unsafe @ __date_prepass s fmt i epoch b utc → String {
+    : ( Slice u ) fmt_v ( slice_of_str fmt )
     : String out ( string_new )
     : i n ( nurl_str_len fmt )
     : i off ? utc 0 ( tz_offset epoch )
     : ~ i i 0
     ~ < i n {
-        : i c ( nurl_str_get fmt i )
+        : i c ( slice_byte fmt_v i )
         ? & == c 37 < + i 1 n {
-            : i d ( nurl_str_get fmt + i 1 )
+            : i d ( slice_byte fmt_v + i 1 )
             ? == d 90 {
                 ? utc { ( string_push_str out `UTC` ) } {
                     ?? ( tz_name epoch ) {

@@ -47,6 +47,7 @@ $ `stdlib/std/tls_verify.nu`
 // reads/writes to the pure TLS stack without an import cycle.
 $ `stdlib/std/async_ffi.nu`
 $ `stdlib/core/rcbox.nu`
+$ `stdlib/core/slice.nu`
 
 // Park the current fiber until `raw`'s socket is readable (want = 0)
 // or writable (want = 1), honouring the handle's configured timeout
@@ -1937,13 +1938,14 @@ $ `stdlib/core/rcbox.nu`
 // allocation-free form of tls_alpn_selected for the per-connection
 // dispatch question ("is this h2?").
 @ tls_alpn_is TlsConn c__h s proto → b {
+    : ( Slice u ) proto_v ( slice_of_str proto )
     : *TlsConnImpl c ( __TlsConn_ptr c__h )
     : i n ( vec_len [u] . c alpn_sel )
     ? != n ( nurl_str_len proto ) { ^ F } {}
     : *u p ( vec_data [u] . c alpn_sel )
     : ~ i k 0
     ~ < k n {
-        ? != # i . p k ( nurl_str_get proto k ) { ^ F } {}
+        ? != # i . p k ( slice_byte proto_v k ) { ^ F } {}
         = k + k 1
     }
     ^ T

@@ -43,6 +43,7 @@ $ `text.nu`
 $ `store.nu`
 $ `registry.nu`
 $ `ui.nu`
+$ `stdlib/core/slice.nu`
 
 : ~ i g_f5_model 0  // an F5Model's ctl word: the global is one of its owners
 
@@ -216,11 +217,12 @@ unsafe @ __f5s_vc_rms → ( Vec f ) { ^ # ( Vec f ) g_vc_rms }
 // joined onto a path the server owns, and a request does not get to walk out
 // of it.
 @ f5_voice_id_ok s id → b {
+    : ( Slice u ) id_v ( slice_of_str id )
     : i n ( nurl_str_len id )
     ? & > n 0 <= n 128 {} { ^ F }
     : ~ i k 0
     ~ < k n {
-        : i c ( nurl_str_get id k )
+        : i c ( slice_byte id_v k )
         ? | == c 47 == c 92 { ^ F } {}
         ? == c 46 { ^ F } {}
         ? < c 33 { ^ F } {}
@@ -451,11 +453,13 @@ unsafe @ __f5s_ticker → v {
     ? > n 7 {} { ^ F }
     ? ( nurl_str_starts got `Bearer ` ) {} { ^ F }
     : i have - n 7
+    : ( Slice u ) got_v ( slice_of_str got )
+    : ( Slice u ) tok_v ( slice_of_str g_f5_token )
     : ~ i diff ^^ have want
     : ~ i k 0
     ~ < k want {
-        : i a ? < k have ( nurl_str_get got + 7 k ) 0
-        = diff | diff ^^ a ( nurl_str_get g_f5_token k )
+        : i a ? < k have ( slice_byte got_v + 7 k ) 0
+        = diff | diff ^^ a ( slice_byte tok_v k )
         = k + k 1
     }
     ^ == diff 0

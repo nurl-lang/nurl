@@ -35,6 +35,7 @@ $ `src/auth.nu`
 $ `src/store.nu`
 $ `src/extract.nu`
 $ `src/pages.nu`
+$ `stdlib/core/slice.nu`
 
 // ── Configuration (set once, before serving) ──────────────────────────
 
@@ -818,9 +819,11 @@ $ `src/pages.nu`
 @ __reg_state_cookie HttpRequest req → String {
     : String ck ( __reg_header req `cookie` )
     : s raw ( string_data ck )
+    : ( Slice u ) raw_v ( slice_of_str raw )
     : i n ( nurl_str_len raw )
     : String out ( string_new )
     : s want `nurlreg_state=`
+    : ( Slice u ) want_v ( slice_of_str want )
     : i wlen 14
     : ~ i k 0
     : ~ b found F
@@ -828,18 +831,18 @@ $ `src/pages.nu`
         // token boundary: start of string or after "; "
         : ~ b at_start F
         ? == k 0 { = at_start T } {}
-        ? > k 0 { ? | == ( nurl_str_get raw - k 1 ) 59 == ( nurl_str_get raw - k 1 ) 32 { = at_start T } {} } {}
+        ? > k 0 { ? | == ( slice_byte raw_v - k 1 ) 59 == ( slice_byte raw_v - k 1 ) 32 { = at_start T } {} } {}
         ? & at_start <= + k wlen n {
             : ~ i w 0
             : ~ b m T
             ~ & < w wlen m {
-                ? != ( nurl_str_get raw + k w ) ( nurl_str_get want w ) { = m F } {}
+                ? != ( slice_byte raw_v + k w ) ( slice_byte want_v w ) { = m F } {}
                 = w + w 1
             }
             ? m {
                 : ~ i e + k wlen
-                ~ & < e n != ( nurl_str_get raw e ) 59 {
-                    ( string_push_char out ( nurl_str_get raw e ) )
+                ~ & < e n != ( slice_byte raw_v e ) 59 {
+                    ( string_push_char out ( slice_byte raw_v e ) )
                     = e + e 1
                 }
                 = found T

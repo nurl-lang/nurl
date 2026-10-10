@@ -18,6 +18,7 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/std/zstd.nu`
+$ `stdlib/core/slice.nu`
 
 & `libc` @ nurl_alloc_count → i
 
@@ -100,13 +101,14 @@ $ `stdlib/std/zstd.nu`
         T s → {
             // Field 2 is the resident page count.
             : s raw ( string_data s )
+            : ( Slice u ) raw_v ( slice_of_str raw )
             : i n ( nurl_str_len raw )
             : ~ i k 0
-            ~ & < k n != ( nurl_str_get raw k ) 32 { = k + k 1 }
+            ~ & < k n != ( slice_byte raw_v k ) 32 { = k + k 1 }
             = k + k 1
             : ~ i pages 0
-            ~ & < k n & >= ( nurl_str_get raw k ) 48 <= ( nurl_str_get raw k ) 57 {
-                = pages + * pages 10 - ( nurl_str_get raw k ) 48
+            ~ & < k n & >= ( slice_byte raw_v k ) 48 <= ( slice_byte raw_v k ) 57 {
+                = pages + * pages 10 - ( slice_byte raw_v k ) 48
                 = k + k 1
             }
             ^ * pages 4

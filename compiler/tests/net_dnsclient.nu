@@ -15,6 +15,7 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/net/dnsclient.nu`
+$ `stdlib/core/slice.nu`
 
 @ pb s label b v → v { ( nurl_print label ) ( nurl_print ? v `YES\n` `NO\n` ) }
 
@@ -32,16 +33,17 @@ $ `stdlib/net/dnsclient.nu`
 
 // Push "www.example.com"-style name as labels (no compression).
 @ __push_name ( Vec u ) v s name → v {
+    : ( Slice u ) name_v ( slice_of_str name )
     : i n ( nurl_str_len name )
     : ~ i start 0
     : ~ i k 0
     ~ <= k n {
         : ~ b cut == k n
-        ? ! cut { ? == ( nurl_str_get name k ) 46 { = cut T } {} } {}
+        ? ! cut { ? == ( slice_byte name_v k ) 46 { = cut T } {} } {}
         ? cut {
             ( vec_push [u] v # u - k start )
             : ~ i j start
-            ~ < j k { ( vec_push [u] v # u ( nurl_str_get name j ) ) = j + j 1 }
+            ~ < j k { ( vec_push [u] v # u ( slice_byte name_v j ) ) = j + j 1 }
             = start + k 1
         } {}
         = k + k 1

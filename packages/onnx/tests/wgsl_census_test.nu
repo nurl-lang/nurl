@@ -31,6 +31,7 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/fs.nu`
 $ `src/runtime.nu`
+$ `stdlib/core/slice.nu`
 
 : ~ i g_fail 0
 
@@ -88,14 +89,15 @@ unsafe @ __sub s t i at i len → String { ^ ( string_from_bytes # *u + # i t at
     : i nl ( nurl_str_find ( string_data tail ) `\n` )
     : String line ( __sub ( string_data tail ) 0 ? < nl 0 ( string_len tail ) nl )
     : s t ( string_data line )
+    : ( Slice u ) t_v ( slice_of_str t )
     : i n ( nurl_str_len t )
     // walk the quoted strings; a key is one followed by `:`
     : ~ i i 0
     ~ < i n {
-        ? == ( nurl_str_get t i ) 34 {
+        ? == ( slice_byte t_v i ) 34 {
             : ~ i e + i 1
-            ~ & < e n != ( nurl_str_get t e ) 34 { = e + e 1 }
-            ? & < + e 1 n == ( nurl_str_get t + e 1 ) 58 {
+            ~ & < e n != ( slice_byte t_v e ) 34 { = e + e 1 }
+            ? & < + e 1 n == ( slice_byte t_v + e 1 ) 58 {
                 ( vec_push [String] out ( __sub t + i 1 - - e i 1 ) )
             } {}
             = i + e 1
@@ -142,8 +144,9 @@ unsafe @ __sub s t i at i len → String { ^ ( string_from_bytes # *u + # i t at
             T part → {
                 : String p ( string_trim part )
                 : s ps ( string_data p )
+                : ( Slice u ) ps_v ( slice_of_str ps )
                 : ~ i e ( string_len p )
-                ~ & > e 0 ( __is_id ( nurl_str_get ps - e 1 ) ) { = e - e 1 }
+                ~ & > e 0 ( __is_id ( slice_byte ps_v - e 1 ) ) { = e - e 1 }
                 : String ty ( __sub ps 0 e )
                 ( vec_push [String] out ( string_trim ty ) )
             }

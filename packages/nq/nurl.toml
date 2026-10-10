@@ -1,6 +1,6 @@
 [package]
 name = "nq"
-version = "0.1.3"
-nurl-version = "0.69.0"
+version = "0.1.4"
+nurl-version = "0.72.0"
 description = "A tiny jq-lite JSON query tool: navigate, iterate, and pretty-print JSON from the command line."
 license = "MIT OR Apache-2.0"

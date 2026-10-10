@@ -21,6 +21,7 @@ $ `stdlib/core/string.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/std/floatbits.nu`
 $ `stdlib/std/float.nu`
+$ `stdlib/core/slice.nu`
 
 : i WAV_PCM 1
 : i WAV_FLOAT 3
@@ -288,9 +289,10 @@ $ `stdlib/std/float.nu`
 }
 
 @ __wpush_tag ( Vec u ) d s four → v {
+    : ( Slice u ) four_v ( slice_of_str four )
     : ~ i k 0
     ~ < k 4 {
-        ( vec_push [u] d # u ( nurl_str_get four k ) )
+        ( vec_push [u] d # u ( slice_byte four_v k ) )
         = k + k 1
     }
 }

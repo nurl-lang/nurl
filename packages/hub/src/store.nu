@@ -34,6 +34,7 @@ $ `stdlib/std/hash_sha256.nu`
 $ `stdlib/std/progress.nu`
 $ `stdlib/ext/env.nu`
 $ `stdlib/ext/json.nu`
+$ `stdlib/core/slice.nu`
 
 @ hub_store_root → String {
     : ?String ov ( env_get `NURL_MODELS` )
@@ -55,11 +56,12 @@ $ `stdlib/ext/json.nu`
 // Handle names live on the filesystem: keep [A-Za-z0-9._-], map the
 // rest (the slash of an org/repo name included) to '_'.
 @ _hub_safe_name s name → String {
+    : ( Slice u ) name_v ( slice_of_str name )
     : String out ( string_new )
     : i n ( nurl_str_len name )
     : ~ i k 0
     ~ < k n {
-        : i c ( nurl_str_get name k )
+        : i c ( slice_byte name_v k )
         : b okc | | | & >= c 48 <= c 57 & >= c 65 <= c 90 & >= c 97 <= c 122 | | == c 46 == c 95 == c 45
         ( string_push_char out ? okc c 95 )
         = k + k 1

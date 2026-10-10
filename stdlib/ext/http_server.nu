@@ -114,6 +114,7 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/ext/http_request.nu`
 $ `stdlib/ext/http_response.nu`
 $ `stdlib/ext/http2_conn.nu`
+$ `stdlib/core/slice.nu`
 
 // The DoS counters (stdlib/std/dos.nu keeps them in runtime-side memory
 // behind an `i`) in an rcbox: every copy of the server — each worker's,
@@ -1043,6 +1044,7 @@ $ `stdlib/ext/http2_conn.nu`
 // -1 = the peer closed or the read failed before either was certain.
 @ __sniff_h2_preface TcpConn conn ( Vec u ) carry → i {
     : s want ( h2_conn_preface )
+    : ( Slice u ) want_v ( slice_of_str want )
     : i plen ( h2_conn_preface_len )
     : ~ i verdict -2
     ~ == verdict -2 {
@@ -1052,7 +1054,7 @@ $ `stdlib/ext/http2_conn.nu`
         : ~ b same T
         : ~ i k 0
         ~ & same < k lim {
-            ? != # i . p k ( nurl_str_get want k ) { = same F } {}
+            ? != # i . p k ( slice_byte want_v k ) { = same F } {}
             = k + k 1
         }
         ? ! same { = verdict 0 } {

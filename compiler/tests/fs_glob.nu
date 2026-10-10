@@ -11,27 +11,31 @@ $ `stdlib/std/fs.nu`
 $ `stdlib/ext/env.nu`
 $ `stdlib/std/sort.nu`
 $ `stdlib/std/cmp.nu`
+$ `stdlib/core/slice.nu`
 
 // strip a leading `root/` prefix from `p` for stable output
 @ rel s root s p → String {
+    : ( Slice u ) p_v ( slice_of_str p )
     : i rn ( nurl_str_len root )
     : i pn ( nurl_str_len p )
     ? & > pn rn ( __starts_with p root ) {
         : ~ i st rn
-        ? & < st pn == ( nurl_str_get p st ) 47 { = st + st 1 } {}
+        ? & < st pn == ( slice_byte p_v st ) 47 { = st + st 1 } {}
         : String out ( string_with_cap + - pn st 1 )
         : ~ i k st
-        ~ < k pn { ( string_push_char out ( nurl_str_get p k ) ) = k + k 1 }
+        ~ < k pn { ( string_push_char out ( slice_byte p_v k ) ) = k + k 1 }
         ^ out
     } {}
     ^ ( string_from p )
 }
 
 @ __starts_with s p s pre → b {
+    : ( Slice u ) pre_v ( slice_of_str pre )
+    : ( Slice u ) p_v ( slice_of_str p )
     : i n ( nurl_str_len pre )
     ? > n ( nurl_str_len p ) { ^ F } {}
     : ~ i k 0
-    ~ < k n { ? != ( nurl_str_get p k ) ( nurl_str_get pre k ) { ^ F } {} = k + k 1 }
+    ~ < k n { ? != ( slice_byte p_v k ) ( slice_byte pre_v k ) { ^ F } {} = k + k 1 }
     ^ T
 }
 

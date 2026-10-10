@@ -7,6 +7,7 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/ext/env.nu`
 $ `src/unigram.nu`
+$ `stdlib/core/slice.nu`
 
 unsafe @ main → i {
     : ( Vec String ) av ( env_args_list )
@@ -18,11 +19,12 @@ unsafe @ main → i {
             ?? ( read_file ( string_data cp ) ) {
                 T corpus → {
                     : s d ( string_data corpus )
+                    : ( Slice u ) d_v ( slice_of_str d )
                     : i n ( string_len corpus )
                     : ~ i p 0
                     : ~ i ls 0
                     ~ <= p n {
-                        ? | == p n == ( nurl_str_get d p ) 10 {
+                        ? | == p n == ( slice_byte d_v p ) 10 {
                             : String line ( string_new )
                             ( string_push_bytes line # *u + # i d ls - p ls )
                             : ( Vec i ) ids ( vec_new [i] )

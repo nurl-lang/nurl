@@ -27,16 +27,18 @@ $ `stdlib/std/net.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
+$ `stdlib/core/slice.nu`
 
 // Extract the port number from a "host:port" or "[host]:port" String.
 // Returns -1 if no colon found.
 @ port_of String addr → i {
     : s d ( string_data addr )
+    : ( Slice u ) d_v ( slice_of_str d )
     : i n ( nurl_str_len d )
     : ~ i k - n 1
     : ~ i colon_at - 0 1
     ~ >= k 0 {
-        ? == ( nurl_str_get d k ) 58 {
+        ? == ( slice_byte d_v k ) 58 {
             = colon_at k
             = k - 0 1
         } {

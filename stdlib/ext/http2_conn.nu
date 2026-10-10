@@ -70,6 +70,7 @@ $ `stdlib/ext/http_request.nu`
 $ `stdlib/ext/http_response.nu`
 $ `stdlib/ext/http2_frame.nu`
 $ `stdlib/ext/http2_hpack.nu`
+$ `stdlib/core/slice.nu`
 
 // ── Errors ────────────────────────────────────────────────────────────
 
@@ -992,10 +993,11 @@ $ `stdlib/ext/http2_hpack.nu`
 // Convenience for string_from with a length cap (used for the path/query
 // split above; cleaner than string_slice in this context).
 @ string_from_n * u raw i len → String {
+    : ( Slice u ) raw_v ( slice_of_str raw )
     : ~ String s ( string_with_cap len )
     : ~ i k 0
     ~ < k len {
-        ( string_push_char s ( nurl_str_get raw k ) )
+        ( string_push_char s ( slice_byte raw_v k ) )
         = k + k 1
     }
     ^ s

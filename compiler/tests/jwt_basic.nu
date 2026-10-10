@@ -12,14 +12,16 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/ext/json.nu`
 $ `stdlib/std/ecdsa_p256.nu`
 $ `stdlib/ext/jwt.nu`
+$ `stdlib/core/slice.nu`
 
 @ hx s h → ( Vec u ) {
+    : ( Slice u ) h_v ( slice_of_str h )
     : i n ( nurl_str_len h )
     : ( Vec u ) out ( vec_with_cap [u] ? > n 1 / n 2 1 )
     : ~ i k 0
     ~ < + k 1 n {
-        : i hi ( nurl_str_get h k )
-        : i lo ( nurl_str_get h + k 1 )
+        : i hi ( slice_byte h_v k )
+        : i lo ( slice_byte h_v + k 1 )
         : i hv ? <= hi 57 - hi 48 - hi 87
         : i lv ? <= lo 57 - lo 48 - lo 87
         ( vec_push [u] out # u + * hv 16 lv )

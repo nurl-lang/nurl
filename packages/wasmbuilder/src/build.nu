@@ -44,6 +44,7 @@ $ `stdlib/ext/env.nu`
 $ `stdlib/ext/regex.nu`
 $ `wasi_ir.nu`
 $ `toolchain.nu`
+$ `stdlib/core/slice.nu`
 
 // Build options. `opt` is a BORROWED view (literal or string_data of a
 // caller-owned String) — WbOpts is passed by value, so it must not own
@@ -89,18 +90,19 @@ $ `toolchain.nu`
 // handful of tiny strings once per build) to keep the argv `s` views
 // alive through process_run.
 @ string_split_borrow s flags → ( Vec String ) {
+    : ( Slice u ) flags_v ( slice_of_str flags )
     : ( Vec String ) out ( vec_new [String] )
     : i n ( nurl_str_len flags )
     : ~ i a 0
     : ~ i k 0
     ~ <= k n {
         : ~ i c 32
-        ? < k n { = c ( nurl_str_get flags k ) } {}
+        ? < k n { = c ( slice_byte flags_v k ) } {}
         ? == c 32 {
             ? > k a {
                 : String w ( string_with_cap + - k a 1 )
                 : ~ i j a
-                ~ < j k { ( string_push_char w ( nurl_str_get flags j ) ) = j + j 1 }
+                ~ < j k { ( string_push_char w ( slice_byte flags_v j ) ) = j + j 1 }
                 ( vec_push [String] out w )
             } {}
             = a + k 1

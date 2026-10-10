@@ -1,7 +1,7 @@
 [package]
 name = "md2html"
-version = "0.1.3"
-nurl-version = "0.69.0"
+version = "0.1.4"
+nurl-version = "0.72.0"
 description = "Render Markdown to HTML — a small CLI and reusable renderer library."
 license = "MIT OR Apache-2.0"
 

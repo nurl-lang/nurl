@@ -49,6 +49,7 @@ $ `stdlib/ext/toml.nu`
 $ `stdlib/ext/sqlite.nu`
 $ `deps/oauth/src/oauth.nu`
 $ `manage.nu`
+$ `stdlib/core/slice.nu`
 
 // ── Configuration file ───────────────────────────────────────────────
 //
@@ -247,11 +248,12 @@ unsafe @ __ag_unlock → v { ( pthread_mutex_unlock # *u g_ag_auth_mu ) }
 }
 
 @ _ag_lower s raw → String {
+    : ( Slice u ) raw_v ( slice_of_str raw )
     : String out ( string_new )
     : i n ( nurl_str_len raw )
     : ~ i k 0
     ~ < k n {
-        : i c ( nurl_str_get raw k )
+        : i c ( slice_byte raw_v k )
         ? & >= c 65 <= c 90 { ( string_push_char out + c 32 ) } { ( string_push_char out c ) }
         = k + k 1
     }
@@ -275,6 +277,7 @@ unsafe @ ag_auth_webroot → s { ^ ( string_data . ( __ag_auth ) webroot ) }
 
 // Switch the signed-in mode on (or off). `audience` '' = api://<client id>.
 unsafe @ ag_auth_configure b on b multi s issuer s client_id s audience s owner s allowed s public_url → v {
+    : ( Slice u ) public_url_v ( slice_of_str public_url )
     : *AgAuth a ( __ag_auth )
     = . a oidc on
     = . a multi multi
@@ -290,7 +293,7 @@ unsafe @ ag_auth_configure b on b multi s issuer s client_id s audience s owner 
     ( __ag_set . a allowed ( string_data al ) )
     // No trailing '/': paths are appended to it.
     : ~ i pn ( nurl_str_len public_url )
-    ~ & > pn 0 == ( nurl_str_get public_url - pn 1 ) 47 { = pn - pn 1 }
+    ~ & > pn 0 == ( slice_byte public_url_v - pn 1 ) 47 { = pn - pn 1 }
     : String pu ( string_substr ( string_from public_url ) 0 pn )
     ( __ag_set . a public_url ( string_data pu ) )
     ( __ag_lock )
@@ -362,11 +365,12 @@ unsafe @ ag_auth_public_url → s { ^ ( string_data . ( __ag_auth ) public_url )
 // (a provider without `tid`, keyed on its issuer) becomes a digest, which
 // cannot contain a path separator, a dot-dot or a NUL by construction.
 @ ag_org_key s raw → String {
+    : ( Slice u ) raw_v ( slice_of_str raw )
     : i n ( nurl_str_len raw )
     : ~ b plain & > n 0 <= n 64
     : ~ i k 0
     ~ & plain < k n {
-        : i c ( nurl_str_get raw k )
+        : i c ( slice_byte raw_v k )
         ? | | | & >= c 48 <= c 57 & >= c 97 <= c 122 & >= c 65 <= c 90 == c 45 {} { = plain F }
         = k + k 1
     }
@@ -398,11 +402,12 @@ unsafe @ ag_auth_public_url → s { ^ ( string_data . ( __ag_auth ) public_url )
 // for '+', which the key cannot contain, so the name is the key, read
 // back by swapping again.
 @ ag_repo_path s org s repo → String {
+    : ( Slice u ) repo_v ( slice_of_str repo )
     : String f ( string_new )
     : i n ( nurl_str_len repo )
     : ~ i k 0
     ~ < k n {
-        : i c ( nurl_str_get repo k )
+        : i c ( slice_byte repo_v k )
         ( string_push_char f ? == c 47 43 c )
         = k + k 1
     }
@@ -762,10 +767,12 @@ unsafe @ __ag_provider_locked → ?OidcProvider {
 // The issuer template with `{tenantid}` replaced by `tid`; '' when there
 // is no template or no tenant — a refusal, never a wildcard.
 @ __ag_issuer_for s tmpl s tid → String {
+    : ( Slice u ) tmpl_v ( slice_of_str tmpl )
     : i tn ( nurl_str_len tmpl )
     : String out ( string_new )
     ? & > tn 0 > ( nurl_str_len tid ) 0 {} { ^ out }
     : s needle `{tenantid}`
+    : ( Slice u ) needle_v ( slice_of_str needle )
     : i nn ( nurl_str_len needle )
     : ~ b hit F
     : ~ i k 0
@@ -773,7 +780,7 @@ unsafe @ __ag_provider_locked → ?OidcProvider {
         : ~ b here & ! hit <= + k nn tn
         : ~ i j 0
         ~ & here < j nn {
-            ? == ( nurl_str_get tmpl + k j ) ( nurl_str_get needle j ) {} { = here F }
+            ? == ( slice_byte tmpl_v + k j ) ( slice_byte needle_v j ) {} { = here F }
             = j + j 1
         }
         ? here {
@@ -781,7 +788,7 @@ unsafe @ __ag_provider_locked → ?OidcProvider {
             = k + k nn
             = hit T
         } {
-            ( string_push_char out ( nurl_str_get tmpl k ) )
+            ( string_push_char out ( slice_byte tmpl_v k ) )
             = k + k 1
         }
     }

@@ -38,6 +38,7 @@ $ `stdlib/std/sort.nu`
 $ `stdlib/ext/env.nu`
 $ `stdlib/ext/json.nu`
 $ `stdlib/std/args.nu`
+$ `stdlib/core/slice.nu`
 
 // ── Output ────────────────────────────────────────────────────────────
 
@@ -63,13 +64,14 @@ $ `stdlib/std/args.nu`
 // `[N]` → `.N`, leading dots dropped, runs of `.` collapsed, trailing
 // `.` dropped. So `.items[0].name` → `items.0.name` and `.` → ``.
 @ __nq_norm s rawpath → String {
+    : ( Slice u ) rawpath_v ( slice_of_str rawpath )
     : i n ( nurl_str_len rawpath )
     : String out ( string_with_cap n )
     : ~ b any F  // emitted any real (non-dot) char yet?
     : ~ b pending F  // a separator is pending, flush it before next char
     : ~ i i 0
     ~ < i n {
-        : i c ( nurl_str_get rawpath i )
+        : i c ( slice_byte rawpath_v i )
         ? == c 93 {  // ']' — drop
         } {
             : ~ i cc c
@@ -89,14 +91,15 @@ $ `stdlib/std/args.nu`
 
 // Copy src[from, to) into a fresh String with surrounding spaces trimmed.
 @ __nq_substr_trim s src i from i to → String {
+    : ( Slice u ) src_v ( slice_of_str src )
     : ~ i a from
     : ~ i b to
-    ~ & < a b == 1 ( is_space ( nurl_str_get src a ) ) { = a + a 1 }
-    ~ & < a b == 1 ( is_space ( nurl_str_get src - b 1 ) ) { = b - b 1 }
+    ~ & < a b == 1 ( is_space ( slice_byte src_v a ) ) { = a + a 1 }
+    ~ & < a b == 1 ( is_space ( slice_byte src_v - b 1 ) ) { = b - b 1 }
     : String out ( string_with_cap - b a )
     : ~ i i a
     ~ < i b {
-        ( string_push_char out ( nurl_str_get src i ) )
+        ( string_push_char out ( slice_byte src_v i ) )
         = i + i 1
     }
     ^ out

@@ -11,12 +11,14 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/unixsock.nu`
 $ `stdlib/std/thread.nu`
+$ `stdlib/core/slice.nu`
 
 @ str_to_vec s in → ( Vec u ) {
+    : ( Slice u ) in_v ( slice_of_str in )
     : i n ( nurl_str_len in )
     : ( Vec u ) out ( vec_with_cap [u] ? > n 0 n 1 )
     : ~ i k 0
-    ~ < k n { ( vec_push [u] out # u ( nurl_str_get in k ) ) = k + k 1 }
+    ~ < k n { ( vec_push [u] out # u ( slice_byte in_v k ) ) = k + k 1 }
     ^ out
 }
 

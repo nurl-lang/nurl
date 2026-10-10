@@ -328,8 +328,9 @@ $ `stdlib/core/slice.nu`
 // The four magic bytes, the version "408*" and a build stamp. Both files
 // spell the magic reversed, which is how a reader tells the endianness.
 @ put_header ( Vec u ) v s magic i stamp → v {
+    : ( Slice u ) magic_v ( slice_of_str magic )
     : ~ i k 0
-    ~ < k 4 { ( vec_push [u] v # u ( nurl_str_get magic k ) ) = k + k 1 }
+    ~ < k 4 { ( vec_push [u] v # u ( slice_byte magic_v k ) ) = k + k 1 }
     ( vec_push [u] v # u 42 )
     ( vec_push [u] v # u 56 )
     ( vec_push [u] v # u 48 )

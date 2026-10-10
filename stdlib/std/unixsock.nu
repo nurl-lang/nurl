@@ -30,6 +30,7 @@
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/posix.nu`  // read / write / close / posix_const / errno
+$ `stdlib/core/slice.nu`
 
 & `c` @ socket i32 domain i32 type i32 proto → i32
 
@@ -99,6 +100,7 @@ $ `stdlib/core/posix.nu`  // read / write / close / posix_const / errno
 }
 
 @ __un_addr s path → s {
+    : ( Slice u ) path_v ( slice_of_str path )
     : i af ( posix_const `AF_UNIX` )
     : i foff ( posix_const `SOCKADDR_UN_FAMILY_OFF` )
     : i fsize ( posix_const `SOCKADDR_UN_FAMILY_SIZE` )
@@ -118,7 +120,7 @@ $ `stdlib/core/posix.nu`  // read / write / close / posix_const / errno
     // value costs one store and makes the struct valid on its own terms.
     ? > foff 0 { = . ap 0 # u & 255 + poff + cap 1 } {}
     : ~ i k 0
-    ~ < k cap { = . ap + poff k # u ( nurl_str_get path k ) = k + k 1 }
+    ~ < k cap { = . ap + poff k # u ( slice_byte path_v k ) = k + k 1 }
     ^ addr
 }
 

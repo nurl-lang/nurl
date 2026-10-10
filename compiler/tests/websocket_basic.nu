@@ -18,6 +18,7 @@ $ `stdlib/std/bytes.nu`
 $ `stdlib/ext/http.nu`
 $ `stdlib/ext/http_request.nu`
 $ `stdlib/ext/websocket.nu`
+$ `stdlib/core/slice.nu`
 
 @ print_label s tag s value → v {
     ( nurl_print tag )
@@ -35,6 +36,7 @@ $ `stdlib/ext/websocket.nu`
 }
 
 unsafe @ vec_bytes_eq_hex ( Vec u ) got s want_hex → b {
+    : ( Slice u ) want_hex_v ( slice_of_str want_hex )
     : i n ( vec_len [u] got )
     : i wh ( nurl_str_len want_hex )
     ? != * n 2 wh { ^ F } {}
@@ -47,8 +49,8 @@ unsafe @ vec_bytes_eq_hex ( Vec u ) got s want_hex → b {
         : i lo_nib & b 15
         : i hi_char ? < hi_nib 10 + 48 hi_nib + 87 hi_nib
         : i lo_char ? < lo_nib 10 + 48 lo_nib + 87 lo_nib
-        : i want_hi ( nurl_str_get want_hex * k 2 )
-        : i want_lo ( nurl_str_get want_hex + * k 2 1 )
+        : i want_hi ( slice_byte want_hex_v * k 2 )
+        : i want_lo ( slice_byte want_hex_v + * k 2 1 )
         ? | != hi_char want_hi != lo_char want_lo { = ok F } {}
         = k + k 1
     }

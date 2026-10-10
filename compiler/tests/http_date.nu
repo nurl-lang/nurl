@@ -7,6 +7,7 @@
 
 $ `stdlib/core/string.nu`
 $ `stdlib/std/time.nu`
+$ `stdlib/core/slice.nu`
 
 @ show s label s input → v {
     ( nurl_print label ) ( nurl_print `: ` )
@@ -68,9 +69,10 @@ $ `stdlib/std/time.nu`
 }
 
 @ __seq s a s b → b {
+    : ( Slice u ) a_v ( slice_of_str a )
     : i la ( nurl_str_len a )
     ? != la ( nurl_str_len b ) { ^ F } {}
     : ~ i k 0
-    ~ < k la { ? != ( nurl_str_get a k ) ( nurl_str_get b k ) { ^ F } {} = k + k 1 }
+    ~ < k la { ? != ( slice_byte a_v k ) ( nurl_str_get b k ) { ^ F } {} = k + k 1 }
     ^ T
 }

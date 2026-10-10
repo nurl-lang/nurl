@@ -26,6 +26,7 @@ $ `stdlib/std/x509_gen.nu`
 $ `stdlib/std/pkey.nu`
 $ `stdlib/std/csr.nu`
 $ `stdlib/core/rcbox.nu`
+$ `stdlib/core/slice.nu`
 
 & `c` @ nurl_rand_fill *u buf i n → i
 
@@ -185,13 +186,14 @@ unsafe @ _pki_rand_bytes i n → ( Vec u ) {
 // to index.txt and re-encoded as a DER INTEGER, and each of those is a
 // place a stray `<`, tab or newline does damage.
 @ pki_normalise_serial s raw → String {
+    : ( Slice u ) raw_v ( slice_of_str raw )
     : String out ( string_new )
     : i n ( nurl_str_len raw )
     ? | == n 0 != 0 % n 2 { ^ out } {}
     ? > n 80 { ^ out } {}
     : ~ i k 0
     ~ < k n {
-        : i c ( nurl_str_get raw k )
+        : i c ( slice_byte raw_v k )
         ? & >= c 48 <= c 57 { ( string_push_char out c ) } {
             ? & >= c 97 <= c 102 { ( string_push_char out c ) } {
                 ? & >= c 65 <= c 70 { ( string_push_char out + c 32 ) } {
@@ -211,12 +213,13 @@ unsafe @ _pki_rand_bytes i n → ( Vec u ) {
 // attacker-chosen, and `<dir>/<cn>/<cn>.crt` with `cn = "../.."` writes
 // outside the tree.
 @ pki_sanitize_id s raw → String {
+    : ( Slice u ) raw_v ( slice_of_str raw )
     : String s ( string_new )
     : i n ( nurl_str_len raw )
     ? > n 128 { ^ s } {}
     : ~ i k 0
     ~ < k n {
-        : i c ( nurl_str_get raw k )
+        : i c ( slice_byte raw_v k )
         : b ok | | | & >= c 48 <= c 57 & >= c 65 <= c 90 & >= c 97 <= c 122 | | == c 45 == c 95 == c 46
         ? ok { ( string_push_char s c ) } {}
         = k + k 1
@@ -334,11 +337,12 @@ unsafe @ _pki_rand_bytes i n → ( Vec u ) {
 // well-formed UTCTime, so a hand-edited index.txt cannot inject a
 // bogus revocationDate into the CRL.
 @ pki_utctime_parse s raw → i {
+    : ( Slice u ) raw_v ( slice_of_str raw )
     ? != ( nurl_str_len raw ) 13 { ^ - 0 1 } {}
-    ? != ( nurl_str_get raw 12 ) 90 { ^ - 0 1 } {}
+    ? != ( slice_byte raw_v 12 ) 90 { ^ - 0 1 } {}
     : ~ i k 0
     ~ < k 12 {
-        : i c ( nurl_str_get raw k )
+        : i c ( slice_byte raw_v k )
         ? | < c 48 > c 57 { ^ - 0 1 } {}
         = k + k 1
     }
@@ -346,7 +350,7 @@ unsafe @ _pki_rand_bytes i n → ( Vec u ) {
     : ( Vec i ) fields ( vec_new [i] )
     = k 0
     ~ < k 12 {
-        = f + * 10 - ( nurl_str_get raw k ) 48 - ( nurl_str_get raw + k 1 ) 48
+        = f + * 10 - ( slice_byte raw_v k ) 48 - ( slice_byte raw_v + k 1 ) 48
         ( vec_push [i] fields f )
         = k + k 2
     }

@@ -70,11 +70,16 @@ instead.
 ## Walk the string
 
 `count_stats` scans the text one character at a time with a `while` loop.
-It tracks whether the scan is now inside a word:
+It tracks whether the scan is now inside a word. The scan reads the text
+through a byte view from `stdlib/core/slice.nu`, so add that import at the
+top of the file:
 
 ```nu title="wc.nu"
+$ `stdlib/core/slice.nu`
+
 @ count_stats s text → Stats {
-    : i len ( nurl_str_len text )
+    : ( Slice u ) bytes ( slice_of_str text )
+    : i len ( slice_len [u] bytes )
     : ~ i lines 0
     : ~ i words 0
     : ~ i chars len
@@ -82,7 +87,7 @@ It tracks whether the scan is now inside a word:
 
     : ~ i idx 0
     ~ < idx len {
-        : i ch ( nurl_str_get text idx )
+        : i ch ( slice_byte bytes idx )
         // ch 10 is the newline character code (\n)
         ? == ch 10 {
             = lines + lines 1
@@ -101,7 +106,7 @@ It tracks whether the scan is now inside a word:
         = idx + idx 1
     }
 
-    ? & > len 0 != ( nurl_str_get text - len 1 ) 10 {
+    ? & > len 0 != ( slice_byte bytes - len 1 ) 10 {
         = lines + lines 1
     } {}
 
@@ -111,6 +116,11 @@ It tracks whether the scan is now inside a word:
 
 A few things worth noticing:
 
+- `slice_of_str` measures the string once; `slice_byte` then reads byte
+  `idx` in constant time, and reads 0 past the end. (`nurl_str_get text
+  idx` reads a byte too, but measures the string from its start on every
+  call — a loop over a file with it is quadratic in the file's size, and
+  `nurlc` warns about exactly that shape.)
 - `~ < idx len { ... }` is the while loop: prefix condition, then body.
   See [Control flow](./control-flow).
 - `10`, `32`, `9`, `13` are raw character codes (newline, space, tab,

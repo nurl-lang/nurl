@@ -215,6 +215,20 @@ beside each raw one (*Changed*).
 
 ### Added
 
+- **`nurlc` warns when a loop walks a string with `nurl_str_get`.**
+  `nurl_str_get` bounds-checks by measuring the string from its start
+  to the index on every call, so a loop reading a string bound outside
+  it — in its body or its condition — is quadratic in the string's
+  length. Its doc comment said so; the shape kept coming back anyway
+  (the stdlib's parsers, tokenizer 0.3.0, nurlfmt, md2html, nurl-lsp).
+  The warning names the binding and the O(1) form: measure once with
+  `slice_of_str`, read with `slice_byte` (0 outside the string, like
+  `nurl_str_get`). `utf8_decode`, which measures the whole string per
+  call, is flagged the same way and pointed at `utf8_decode_at`. A fixed
+  index (O(index), not a scan) and a string bound inside the loop are let
+  through. `compiler/tests/
+  should_warn_strget_loop.nu` pins both sides.
+
 - `slice_of_str`, `slice_byte`, `slice_parse_int`, `slice_parse_float`,
   `string_adopt`, `write_string`, `b64_encode_string`, `utf8_decode_at`:
   the safe forms of the raw-length helpers above.
@@ -270,6 +284,18 @@ beside each raw one (*Changed*).
   and CI's `nurlfmt_check.sh` as much. It now reads through
   `slice_of_str` + `slice_byte`; output is byte-identical on all 2227
   tracked sources.
+- **No scan in the toolchain re-measures its string per byte any more.**
+  With the warning above, every such loop in the standard library, the
+  tools, nurlapi, the examples and the tests (262 calls) and in the
+  compiler itself (124) reads a measured view instead; all 2226 tracked
+  sources keep their verdicts and errors, and the compiler emits
+  byte-identical IR for every one of them. Where the strings are long it shows:
+  nurl-lsp opening `compiler/nurlc.nu` and answering a symbols and a
+  references request 658 s → 2.8 s (its token scanners and reference
+  matcher take the document measured once, instead of measuring it per
+  call); nurlapi's `GET /CHANGELOG.md`, the 1.2 MB changelog rendered as
+  HTML, 36.5 s → 0.09 s — a single request held a worker for half a
+  minute. Same output byte for byte.
 - **The standard library's hashes, ciphers and codecs, rewritten for
   speed** (bench/ crypto rows, i7-5930K, the same output everywhere):
   BLAKE2b 5.1x (the bench row ~1.9x faster than its C peer), BLAKE3 10x,

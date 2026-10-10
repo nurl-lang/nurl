@@ -42,16 +42,18 @@ $ `stdlib/std/ed25519.nu`
 $ `stdlib/ext/json.nu`
 $ `errors.nu`
 $ `jwk.nu`
+$ `stdlib/core/slice.nu`
 
 // ── Segments ───────────────────────────────────────────────────────
 
 // Byte index of the n-th (0-based) '.' in `s`, or -1.
 @ __jws_dot_at s str i n → i {
+    : ( Slice u ) str_v ( slice_of_str str )
     : i len ( nurl_str_len str )
     : ~ i seen 0
     : ~ i k 0
     ~ < k len {
-        ? == ( nurl_str_get str k ) 46 {
+        ? == ( slice_byte str_v k ) 46 {
             ? == seen n { ^ k } {}
             = seen + seen 1
         } {}
@@ -61,10 +63,11 @@ $ `jwk.nu`
 }
 
 @ __jws_slice s str i a i b → String {
+    : ( Slice u ) str_v ( slice_of_str str )
     : String out ( string_with_cap + 1 - b a )
     : ~ i k a
     ~ < k b {
-        ( string_push_char out ( nurl_str_get str k ) )
+        ( string_push_char out ( slice_byte str_v k ) )
         = k + k 1
     }
     ^ out

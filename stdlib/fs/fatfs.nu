@@ -24,6 +24,7 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/hal/blockdev.nu`
 $ `stdlib/fs/fat.nu`
+$ `stdlib/core/slice.nu`
 
 @ fe_noent → i { ^ - 0 2 }
 
@@ -325,9 +326,10 @@ $ `stdlib/fs/fat.nu`
 // as a call argument is exactly the temporary this repository has
 // leaked before.
 @ fat_utf8_to_cps s name i start i len ( Vec i ) out → b {
+    : ( Slice u ) name_v ( slice_of_str name )
     : ~ i k 0
     ~ < k len {
-        : i c0 & ( nurl_str_get name + start k ) 255
+        : i c0 & ( slice_byte name_v + start k ) 255
         : ~ i cp 0
         : ~ i n 0
         ? < c0 128 { = cp c0 = n 1 } {
@@ -338,7 +340,7 @@ $ `stdlib/fs/fat.nu`
         ? > + k n len { ^ F } {}
         : ~ i j 1
         ~ < j n {
-            : i cc & ( nurl_str_get name + start + k j ) 255
+            : i cc & ( slice_byte name_v + start + k j ) 255
             ? != & cc 192 128 { ^ F } {}
             = cp | << cp 6 & cc 63
             = j + j 1
@@ -591,11 +593,12 @@ $ `stdlib/fs/fat.nu`
 // index just past it, with the component's code points appended to
 // `out`. Repeated and trailing slashes are skipped.
 @ __path_next s path i len i k ( Vec i ) out → i {
+    : ( Slice u ) path_v ( slice_of_str path )
     : ~ i i0 k
-    ~ && < i0 len == & ( nurl_str_get path i0 ) 255 47 { = i0 + i0 1 }
+    ~ && < i0 len == & ( slice_byte path_v i0 ) 255 47 { = i0 + i0 1 }
     ? >= i0 len { ^ - 0 1 } {}
     : ~ i i1 i0
-    ~ && < i1 len != & ( nurl_str_get path i1 ) 255 47 { = i1 + i1 1 }
+    ~ && < i1 len != & ( slice_byte path_v i1 ) 255 47 { = i1 + i1 1 }
     ? ! ( fat_utf8_to_cps path i0 - i1 i0 out ) { ^ - 0 2 } {}
     ^ i1
 }

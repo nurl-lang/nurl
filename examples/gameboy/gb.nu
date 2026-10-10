@@ -6,6 +6,7 @@
 $ `examples/gameboy/core.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/ext/env.nu`
+$ `stdlib/core/slice.nu`
 
 unsafe @ ppu_dump → v {
     : *u fb # *u g_fb
@@ -75,16 +76,18 @@ unsafe @ audio_dump s path i frames s outpath → i {
 
 // ── Run a test ROM headlessly, watching the serial output ────────
 @ contains_word String hay s needle → b {
+    : ( Slice u ) needle_v ( slice_of_str needle )
     : i hn ( string_len hay )
     : i nn ( nurl_str_len needle )
     ? > nn hn { ^ F } {}
     : s hd ( string_data hay )
+    : ( Slice u ) hd_v ( slice_of_str hd )
     : ~ i i 0
     ~ <= i - hn nn {
         : ~ i j 0
         : ~ b match T
         ~ & < j nn match {
-            ? != ( nurl_str_get hd + i j ) ( nurl_str_get needle j ) { = match F } {}
+            ? != ( slice_byte hd_v + i j ) ( slice_byte needle_v j ) { = match F } {}
             = j + j 1
         }
         ? match { ^ T } {}

@@ -23,6 +23,7 @@ $ `stdlib/std/bytes.nu`
 $ `stdlib/std/encode.nu`
 $ `stdlib/std/ed25519.nu`
 $ `stdlib/std/hash_blake2b.nu`
+$ `stdlib/core/slice.nu`
 
 // The second line of a minisign .pub / .minisig text (line index 1: the
 // base64 payload under the "untrusted comment:" header), right-trimmed of
@@ -46,10 +47,11 @@ $ `stdlib/std/hash_blake2b.nu`
 }
 
 @ __ms_substr s src i start i len → String {
+    : ( Slice u ) src_v ( slice_of_str src )
     : String out ( string_with_cap ? > len 0 len 1 )
     : ~ i k 0
     ~ < k len {
-        ( string_push_char out ( nurl_str_get src + start k ) )
+        ( string_push_char out ( slice_byte src_v + start k ) )
         = k + k 1
     }
     ^ out

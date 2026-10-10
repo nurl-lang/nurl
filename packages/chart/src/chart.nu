@@ -35,6 +35,7 @@
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/float.nu`
+$ `stdlib/core/slice.nu`
 
 // ── UTF-8 glyph helpers ───────────────────────────────────────────────
 //
@@ -149,10 +150,11 @@ unsafe @ chart_sparkline ( Vec f ) v → String {
     ?? ( vec_get [String] labels idx ) {
         T s → {
             : s raw ( string_data s )
+            : ( Slice u ) raw_v ( slice_of_str raw )
             : i sl ( string_len s )
             : i take ? > sl lw lw sl
             : ~ i k 0
-            ~ < k take { ( string_push_char out ( nurl_str_get raw k ) ) = k + k 1 }
+            ~ < k take { ( string_push_char out ( slice_byte raw_v k ) ) = k + k 1 }
             = printed take
         }
         F _ → {}

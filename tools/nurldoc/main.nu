@@ -15,20 +15,22 @@ $ `stdlib/std/sort.nu`
 $ `stdlib/std/cmp.nu`
 $ `stdlib/ext/env.nu`
 $ `stdlib/ext/nurldoc.nu`
+$ `stdlib/core/slice.nu`
 
 // Basename of a path with the `.nu` extension dropped (`a/b/vec.nu` →
 // `vec`). Used as the doc title and output filename stem.
 @ __stem s path → String {
+    : ( Slice u ) path_v ( slice_of_str path )
     : i n ( nurl_str_len path )
     : ~ i slash -1
     : ~ i k 0
-    ~ < k n { ? == ( nurl_str_get path k ) 47 { = slash k } {} = k + k 1 }
+    ~ < k n { ? == ( slice_byte path_v k ) 47 { = slash k } {} = k + k 1 }
     : i start + slash 1
     : ~ i end n
     ? & >= n 3 ( __ends_nu path n ) { = end - n 3 } {}
     : String out ( string_with_cap + - end start 1 )
     : ~ i j start
-    ~ < j end { ( string_push_char out ( nurl_str_get path j ) ) = j + j 1 }
+    ~ < j end { ( string_push_char out ( slice_byte path_v j ) ) = j + j 1 }
     ^ out
 }
 

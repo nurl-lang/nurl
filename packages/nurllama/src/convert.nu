@@ -41,6 +41,7 @@ $ `deps/gguf/src/gguf.nu`
 $ `deps/gguf/src/write.nu`
 $ `deps/gguf/src/quant.nu`
 $ `deps/safetensor/src/safetensor.nu`
+$ `stdlib/core/slice.nu`
 
 // ggml tensor type ids (gguf.nu names them; the writer wants the raw id)
 : i CV_F32 0
@@ -860,10 +861,11 @@ $ `deps/safetensor/src/safetensor.nu`
 
 // Index of the first ':' at or after `from`, or -1.
 @ __cv_colon s str i from → i {
+    : ( Slice u ) str_v ( slice_of_str str )
     : i n ( nurl_str_len str )
     : ~ i k from
     ~ < k n {
-        ? == ( nurl_str_get str k ) 58 { ^ k } {}
+        ? == ( slice_byte str_v k ) 58 { ^ k } {}
         = k + k 1
     }
     ^ -1

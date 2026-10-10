@@ -47,6 +47,7 @@ $ `stdlib/std/fs.nu`
 $ `deps/tokenizer/src/tokenizer.nu`
 $ `deps/tokenizer/src/hf.nu`
 $ `stdlib/core/rcbox.nu`
+$ `stdlib/core/slice.nu`
 
 // dtype codes shared with the safetensor reader's ST_* so __wh_up's dispatch
 // works on either source. ttype 0 = f32, 1 = f16; anything else is a
@@ -369,20 +370,22 @@ unsafe @ __gg_parse * GgImpl g → !v String {
     ? != 0 ( nurl_str_starts hf `model.encoder.layers.` ) {
         ( string_push_str out `encoder.blocks.` )
         : s rest ( nurl_str_slice hf 21 - ( nurl_str_len hf ) 21 )
+        : ( Slice u ) rest_v ( slice_of_str rest )
         : i dot ( nurl_str_find rest `.` )
         ? < dot 0 { ( string_push_str out rest ) ^ out } {}
         : ~ i li 0
-        ~ <= li dot { ( string_push_char out ( nurl_str_get rest li ) ) = li + li 1 }
+        ~ <= li dot { ( string_push_char out ( slice_byte rest_v li ) ) = li + li 1 }
         ( __gg_suffix_map out ( nurl_str_slice rest + dot 1 - ( nurl_str_len rest ) + dot 1 ) )
         ^ out
     } {}
     ? != 0 ( nurl_str_starts hf `model.decoder.layers.` ) {
         ( string_push_str out `decoder.blocks.` )
         : s rest ( nurl_str_slice hf 21 - ( nurl_str_len hf ) 21 )
+        : ( Slice u ) rest_v ( slice_of_str rest )
         : i dot ( nurl_str_find rest `.` )
         ? < dot 0 { ( string_push_str out rest ) ^ out } {}
         : ~ i li 0
-        ~ <= li dot { ( string_push_char out ( nurl_str_get rest li ) ) = li + li 1 }
+        ~ <= li dot { ( string_push_char out ( slice_byte rest_v li ) ) = li + li 1 }
         ( __gg_suffix_map out ( nurl_str_slice rest + dot 1 - ( nurl_str_len rest ) + dot 1 ) )
         ^ out
     } {}
@@ -435,12 +438,13 @@ unsafe @ gg_ptr Gg g__h i ti → *u {
 }
 
 @ __gg_nth_word s list i idx → String {
+    : ( Slice u ) list_v ( slice_of_str list )
     : String out ( string_new )
     : ~ i k 0
     : ~ i word 0
     : i n ( nurl_str_len list )
     ~ < k n {
-        : i c ( nurl_str_get list k )
+        : i c ( slice_byte list_v k )
         ? == c 32 { = word + word 1 } {
             ? == word idx { ( string_push_char out c ) } {}
         }

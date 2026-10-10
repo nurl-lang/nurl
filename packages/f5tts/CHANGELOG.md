@@ -12,6 +12,10 @@ field, or call a C primitive that reads as far as its caller says. The
 published 0.3.1 does not compile under 0.72.0. The functions that do are
 declared `unsafe`. No change in behaviour.
 
+The text front-end reads the text through a view measured once per
+`f5_text_ids` / `f5_chunk_text` call; the segmentation helpers measured
+the whole text again on every character (`nurl_str_get`). The same ids.
+
 ## [0.3.1] — 2026-10-07
 
 Requires NURL 0.71.0, whose ownership rules are on by default: the

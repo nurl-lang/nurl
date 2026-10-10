@@ -29,6 +29,7 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/std/fs.nu`
 $ `deps/hub/src/hub.nu`
+$ `stdlib/core/slice.nu`
 
 : F5Entry {
     String id
@@ -48,10 +49,11 @@ $ `deps/hub/src/hub.nu`
 // one, and `f5_id_ok` has already refused the separator to a local id, so the
 // two can never be confused.
 @ f5_is_reference s id → b {
+    : ( Slice u ) id_v ( slice_of_str id )
     : i n ( nurl_str_len id )
     : ~ i k 0
     ~ < k n {
-        : i c ( nurl_str_get id k )
+        : i c ( slice_byte id_v k )
         ? == c 47 { ^ T } {}
         = k + k 1
     }
@@ -61,17 +63,18 @@ $ `deps/hub/src/hub.nu`
 // vocab.txt beside the checkpoint, in whatever names the checkpoint —
 // a repository reference or a directory on this machine.
 @ f5_vocab_beside s ckpt_ref → String {
+    : ( Slice u ) ckpt_ref_v ( slice_of_str ckpt_ref )
     : i n ( nurl_str_len ckpt_ref )
     : ~ i cut -1
     : ~ i k 0
     ~ < k n {
-        ? == ( nurl_str_get ckpt_ref k ) 47 { = cut k } {}
+        ? == ( slice_byte ckpt_ref_v k ) 47 { = cut k } {}
         = k + k 1
     }
     : String out ( string_new )
     : ~ i j 0
     ~ <= j cut {
-        ( string_push_char out ( nurl_str_get ckpt_ref j ) )
+        ( string_push_char out ( slice_byte ckpt_ref_v j ) )
         = j + j 1
     }
     ( string_push_str out `vocab.txt` )

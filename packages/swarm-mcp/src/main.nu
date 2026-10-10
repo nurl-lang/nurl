@@ -46,6 +46,7 @@ $ `wasmkernel.nu`
 $ `buildwasm.nu`
 $ `cudakernel.nu`
 $ `stdlib/core/rcbox.nu`
+$ `stdlib/core/slice.nu`
 
 @ swarm_vnodes → i { ^ 64 }
 
@@ -256,10 +257,11 @@ unsafe @ swarm_pump Swarm sw__h i max → v {
     : ( Vec String ) out ( vec_new [String] )
     : i n ( string_len cs )
     : s d ( string_data cs )
+    : ( Slice u ) d_v ( slice_of_str d )
     : ~ i start 0
     : ~ i k 0
     ~ <= k n {
-        ? | == k n == ( nurl_str_get d k ) 44 {
+        ? | == k n == ( slice_byte d_v k ) 44 {
             ? > k start { ( vec_push [String] out ( string_substr cs start - k start ) ) } {}
             = start + k 1
         } {}
@@ -3534,11 +3536,12 @@ unsafe @ node_mcp ( Vec String ) relays s rhost i rport s mcp_host i mcp_port s 
 // Directory part of a path (bytes before the last '/'), empty when the
 // path has no directory component.
 @ __cert_dirname s path → String {
+    : ( Slice u ) path_v ( slice_of_str path )
     : i n # i ( nurl_str_len path )
     : ~ i last - 0 1
     : ~ i k 0
     ~ < k n {
-        ? == ( nurl_str_get path k ) 47 { = last k } {}
+        ? == ( slice_byte path_v k ) 47 { = last k } {}
         = k + k 1
     }
     ? < last 0 { ^ ( string_new ) } {}
