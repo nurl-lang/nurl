@@ -11,8 +11,9 @@
 //   Bulk, in-memory:
 //     CSVTable       — arena-backed table. One file buffer + (off, len)
 //                      cell pairs into it. RFC 4180 quoting by default.
-//                      Cells expose borrowed `s` views (zero-copy) or
-//                      owned String copies on request.
+//                      Cells expose borrowed `( Slice u )` views
+//                      (zero-copy, `csv_table_view`) or owned String
+//                      copies on request (`csv_table_get`).
 //
 // Both layers share `CSVDialect` (delimiter, line terminator, quote
 // byte). All readers and writers in this module honour RFC 4180

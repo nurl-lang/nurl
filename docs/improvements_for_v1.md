@@ -44,8 +44,10 @@ accurate user-facing documentation. A local one-off pass is not sufficient.
   - Explicitly name interfaces that remain unstable. Define the 1.x support
     window, deprecation period, removal process, and security-fix exceptions.
   - Add compatibility fixtures made with older v1 compilers/packages/locks and
-    gate accidental breaking changes. `nurl-version` also needs a maximum,
-    range, or edition mechanism if future majors are not forward compatible.
+    gate accidental breaking changes. `nurl-version` is informational since
+    0.72.0 (#1180: no install or publish compares it to the toolchain); if
+    future majors are not forward compatible, a range or edition mechanism
+    that tooling can enforce reliably is needed.
 
 - [ ] **P1 — Publish the security, support, and governance contract.** There is
   no `SECURITY.md`, maintainer/governance file, or CODEOWNERS policy, and the
@@ -65,8 +67,9 @@ accurate user-facing documentation. A local one-off pass is not sufficient.
   through aggregates and containers, and closures kept by a callee are
   rejected; hole probes h01–h31 are all rejected and safe programs carry a
   stated guarantee, docs/MEMORY.md §6. Then h32, a `Slice` of a `Vec`, and
-  the 109 probes found around it (h33–h141) — every one rejected or clean;
-  the guarantee has no exception. docs/HARDENING_PLAN.md.)*
+  the 109 probes found around it (h33–h141) — every one rejected or clean.
+  docs/HARDENING_PLAN.md. The 0.72.0 release review found 37 more, still
+  open: docs/MEMORY.md §6.2, `tools/fuzz/holes/open/`.)*
   Code using no
   raw pointer or FFI can still read a maybe-moved value in both modes, and can
   conditionally double-free under the default checker. Reads through a released
@@ -83,8 +86,12 @@ accurate user-facing documentation. A local one-off pass is not sufficient.
     `--strict-borrowck`, `--no-borrowck`, raw-pointer/FFI, closure, aggregate,
     loop, and interprocedural paths, plus ASan/LSan runs.
   - Keep the claim in `docs/MEMORY.md` exactly as strong as the checks: since
-    0.71.0 it is a guarantee for programs without `unsafe`, with the known
-    exceptions listed beside it.
+    0.71.0 it is a guarantee for programs without `unsafe`; 0.72.0 closed
+    the one exception 0.71.0 listed beside it, and its review found 37 more,
+    listed beside the claim (§6.2, `tools/fuzz/holes/open/`). Every probe in
+    `tools/fuzz/holes/` stays rejected or clean under the sanitizers
+    (`check.sh`, run in CI); a hole found later is listed beside the claim
+    until it is closed.
 
 - [ ] **P0 — Make drop and generic ownership complete and machine-checkable.**
   Current documented gaps include option parameters whose untouched payload can
@@ -778,9 +785,10 @@ open work above, and all of them must pass again for the release-candidate SHA.
   diagnostics and obviously delimiter-anchored goldens are prevented from
   entering unnoticed.
 - [x] Registry package fetch binds normalized origin, checksum, mandatory
-  minisign signature, manifest identity, and toolchain compatibility before
-  accepting an archive; tar parsing already rejects absolute/parent paths,
-  links/devices, and bad checksums.
+  minisign signature and manifest identity before accepting an archive
+  (`package.nurl-version` is informational since 0.72.0, not a gate); tar
+  parsing already rejects absolute/parent paths, links/devices, and bad
+  checksums.
 - [x] POSIX release installation stages extraction and checks that `bin/nurl`
   exists and is executable before beginning replacement, and preserves known
   user state; release artifact presence/checksum controls have a dedicated

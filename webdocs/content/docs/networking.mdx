@@ -39,26 +39,29 @@ implement HTTP/2.
 
 You can use TLS in two ways:
 
-- **`libssl`-backed**, via `tcp_listen_tls` / `tcp_connect_tls` — the
-  HTTP server stack picks this up transparently by swapping `tcp_listen`
-  for `tcp_listen_tls`. Covers SNI (multi-tenant certs on one listener),
-  ALPN (needed for HTTP/2), mutual TLS, and live certificate reload for
-  Let's-Encrypt-style rotation.
+- **At the socket layer**, via `tcp_listen_tls` / `tcp_connect_tls`, which
+  drive the pure-NURL stack below over a plain socket — the HTTP server
+  stack picks this up transparently by swapping `tcp_listen` for
+  `tcp_listen_tls`. ALPN (needed for HTTP/2) is negotiated on a listener
+  made with `tcp_listen_tls_with_alpn`, and offered by a client through
+  `tcp_connect_tls_alpn`. Per-hostname SNI certificates, mutual TLS and
+  live certificate reload are not supported yet: `tcp_tls_add_sni`,
+  `tcp_tls_require_client_cert` and `tcp_tls_reload` return an error.
 - **Pure-NURL TLS 1.3**, in `stdlib/std/tls.nu` / `tls_server.nu` — a
   from-scratch handshake, record layer, and certificate verification with
   no OpenSSL and no FFI beyond the plain TCP socket. It negotiates
   ChaCha20-Poly1305 or AES-128-GCM over X25519 or P-256. It verifies
-  against the system trust store by default. `tls_attach` upgrades an
-  already-connected socket, for STARTTLS-style protocols.
+  against the system trust store by default. `tls_attach_verify` upgrades
+  an already-connected socket, for STARTTLS-style protocols, and verifies
+  it the same way (plain `tls_attach` does not verify).
 
-A program that never calls the `_tls` functions, or only uses the
-pure-NURL client, links `libc` only.
+Either way, a program that uses TLS links `libc` only.
 
 ## MQTT
 
 [`stdlib/ext/mqtt.nu`](https://github.com/nurl-lang/nurl/blob/main/stdlib/ext/mqtt.nu)
 is a full MQTT 5.0 client over the TCP/TLS layer, with no dependency
-beyond the runtime's libssl:
+beyond the standard library (its TLS is the pure-NURL client stack):
 
 ```nu
 $ `stdlib/ext/mqtt.nu`

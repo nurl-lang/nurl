@@ -6,10 +6,11 @@ icon: MemoryStick
 
 import { Accordion, Accordions } from 'fumadocs-ui/components/accordion';
 
-NURL has no garbage collector and no reference counting. NURL uses
-**single-owner auto-drop** to manage heap memory. The compiler tracks which
-binding owns each heap allocation and inserts the matching free at the end
-of that binding's scope.
+NURL has no garbage collector, and ordinary values are not
+reference-counted: shared ownership is opt-in, through `Rc` and `Arc`.
+NURL uses **single-owner auto-drop** to manage heap memory. The compiler
+tracks which binding owns each heap allocation and inserts the matching
+free at the end of that binding's scope.
 
 ## Ownership
 
@@ -27,6 +28,11 @@ ownership to the caller. It does not free the allocation locally.
     ^ 0
 }   // s is freed here, automatically
 ```
+
+A raw string in a value is the exception. In safe code, a raw string
+(`s`) held by a struct, an option, an enum, a slice or a container is a
+view that owns nothing, so a fresh string cannot be stored there. Hold a
+`String` instead, or bind the string first and store the binding.
 
 Copying an already-owned binding into another binding does not register a
 second drop. The compiler only tracks drops for allocations it directly sees
@@ -74,9 +80,8 @@ you call it.
 A `sink` parameter owns what it is given: the callee drops it, keeps it
 or passes it on, and the caller's binding is moved. `String`, `Vec`,
 owning structs, library handles and `Drop` values can all be passed this
-way. An owned slice, or a struct whose raw `s` fields the compiler owns,
-cannot go to a `sink` yet; the compiler rejects it rather than risk two
-owners.
+way. An owned slice, or a struct whose literal gave it one, cannot go to
+a `sink` yet; the compiler rejects it rather than risk two owners.
 
 ## What you still free by hand
 
@@ -90,21 +95,29 @@ compile error.
 
 What stays manual is what the compiler does not own:
 
-- raw memory from `nurl_alloc` behind a `*T` pointer (release with
-  `nurl_free`), and a value handed over for good with `( mem_forget x )`;
-- `Channel`, `Mutex` and `Cond` (no reference count — free them when the
-  last user is done);
-- operating-system resources: files, sockets, processes.
+- raw memory from `nurl_alloc` behind a `*T` pointer, in an `unsafe`
+  function (release with `nurl_free`), and a value handed over for good
+  with `( mem_forget x )`;
+- operating-system resources that have no owning handle, such as sockets
+  (`tcp_close_conn`, `tcp_close_listener`, `udp_close`,
+  `unix_close_conn`) and an `FsWatch` (`fswatch_close`).
+
+`Channel`, `Mutex`, `Cond`, `File` and `ProcChild` are not on this list:
+each is a handle whose last copy releases it, and `chan_free`,
+`mutex_free`, `cond_free`, `file_close` and `proc_free` remain as an
+optional early release.
 
 ## The borrow checker
 
-A static analysis pass runs by default (`--no-borrowck` turns it off). It
-catches the mistakes the auto-drop layer alone cannot find. These mistakes
-include using a value after a move, aliasing a value that has a mutable
-borrow, and a closure capture that would outlive the stack frame it points
-into. Diagnostics produce hard compile errors. The checker never changes the
-generated code. A program compiles to the same output whether the checker
-runs or not.
+A static analysis pass runs by default. It catches the mistakes the
+auto-drop layer alone cannot find. These mistakes include using a value
+after a move, aliasing a value that has a mutable borrow, and a closure
+capture that would outlive the stack frame it points into. Diagnostics
+produce hard compile errors. The checker never changes the generated
+code. A program compiles to the same output whether the checker runs or
+not. `--no-borrowck` still turns the pass off, but it is deprecated and
+warns: a program compiled without the checker is not held to the
+ownership rules, so nothing guarantees it is memory-safe.
 
 What it checks, briefly:
 
@@ -116,7 +129,10 @@ What it checks, briefly:
 - **Escaping closures** — you cannot return, store, or send a closure to a
   thread if it captures a mutable struct by reference.
 - **Exclusive access at a call site** — a binding you pass `inout` cannot
-  also have an alias from another plain argument in the same call.
+  also have an alias from another plain argument in the same call. The
+  same holds for any container the callee may change, `inout` or not: it
+  cannot also reach the call through another argument, as the same
+  binding or as a view or borrow of it.
 - **Iterator invalidation** — you cannot mutate a foreach loop's collection
   from inside the loop body.
 - **Loop-carried moves** — the checker rejects consuming a binding inside a
@@ -125,10 +141,15 @@ What it checks, briefly:
 
 <Callout type="info" title="This is diagnostic, not Rust's ownership system">
 The checker is a pass over an already-memory-safe base. Auto-drop never
-double-frees on its own. The checker has no false positives by design. It
-flags only what it can prove is a bug. But it also does not catch
-everything. Raw `*T` pointers act as the FFI escape hatch. The checker does
-not track them at all. The full soundness contract is in
+double-frees on its own. The checker is conservative. It rejects a program
+it cannot prove safe, and the error names a change that satisfies the
+rule. Together, the two layers guarantee that every program the compiler
+accepts, outside the bodies of `unsafe` functions, is memory-safe and
+leak-free, apart from the open holes `docs/MEMORY.md` §6.2 lists (each a
+probe in `tools/fuzz/holes/open/`).
+Raw `*T` pointers, pointer casts, raw memory and foreign (FFI) calls are
+the escape hatch, and only an `unsafe` function can use them. The full
+soundness contract is in
 [`docs/MEMORY.md` §6](https://github.com/nurl-lang/nurl/blob/main/docs/MEMORY.md).
 </Callout>
 

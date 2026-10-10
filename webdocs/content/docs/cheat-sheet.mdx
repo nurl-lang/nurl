@@ -96,17 +96,18 @@ Binary operators take exactly 2 operands — chain with `& a & b c` for
 - A `:` binding owns a fresh allocation. The compiler frees it
   automatically at scope exit.
 - `inout` mutates the caller's value. `sink` takes ownership.
-- `String`, `Vec`, owning structs, containers and closure environments are
-  dropped automatically. Free by hand only raw `nurl_alloc` memory,
-  `Channel` / `Mutex` / `Cond`, and OS resources.
+- `String`, `Vec`, owning structs, containers, closure environments and
+  the `Channel` / `Mutex` / `Cond` / `File` handles are dropped
+  automatically. Free by hand only raw `nurl_alloc` memory (inside an
+  `unsafe` function) and OS resources such as sockets.
 - Use `Arc` (not `Rc`) for anything shared across threads.
 
 ## Common stdlib entry points
 
 ```nu
 $ `stdlib/core/string.nu`
-$ `stdlib/std/vec.nu` v          // aliased import
-( v::vec_new [i] )
+$ `stdlib/std/int.nu` n          // aliased import
+( n::int_gcd 12 18 )
 ```
 
 | Need | Module |

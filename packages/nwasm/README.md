@@ -412,12 +412,12 @@ the current report is [`bench/WASMRESULTS.md`](../../bench/WASMRESULTS.md),
 which compares this runtime against the reference Cranelift JIT over the same
 wasm modules. Two figures worth stating here:
 
-- on the CI runner (AMD EPYC 7763, 2026-10-07) nwasm 2.1.0 ran all 45 corpus
-  modules (15 benchmarks × NURL, C and Rust builds) faster than the reference
-  Cranelift JIT, wall clock including start-up (geometric mean 0.59× for the
-  NURL modules, 0.60× and 0.59× for the C and Rust ones), and 2.3.0 the 15
-  NURL modules again; the `nurlc.wasm` self-compile takes 3.7 s against
-  wasmtime's 3.95 s on an i7-5930K;
+- on the CI runner (AMD EPYC 9V74, 2026-10-09) nwasm 2.4.0 ran all 60 corpus
+  modules (20 benchmarks × NURL, C and Rust builds) faster than the reference
+  Cranelift JIT, wall clock including start-up (geometric mean 0.58× for the
+  NURL modules, 0.62× and 0.56× for the C and Rust ones); the `nurlc.wasm`
+  self-compile took 3.7 s against wasmtime's 3.95 s on an i7-5930K, measured
+  with 2.3.0 on the 47k-line compiler of the time;
 - read any single-machine corpus ratio as "this is what one machine did".
   `wasmbench.sh` measures one revision on one runner, and a runner swap moves
   every column by more than most individual changes do.
@@ -425,8 +425,9 @@ wasm modules. Two figures worth stating here:
 ## Self-hosting
 
 The NURL compiler runs on this runtime: `nurlc.wasm nurlc.nu` compiles the
-full 47k-line compiler — ownership rules on — **byte-identically to the
-native compiler**, in 4.7 s at 134 MB peak RSS (i7-5930K, 2026-10-07). The
+full ~52k-line compiler — ownership rules on — **byte-identically to the
+native compiler** (re-checked for 2.4.0). On the 47k-line compiler of the
+time that took 4.7 s at 134 MB peak RSS (i7-5930K, 2026-10-07). The
 runtime aborts loudly on OOM (`nurl: out of memory`) rather than handing back
 a NULL that address 0 makes writable on wasm32.
 

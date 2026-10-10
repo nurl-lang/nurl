@@ -6,17 +6,93 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.72.0] — 2026-10-10
 
-The memory guarantee has **no exception**: 0.71.0's one known hole (a
-`Slice` of a `Vec`, probe h32) is closed, along with 109 more found around
-it (probes h33–h141), each at its root — every probe is now rejected or
-runs clean under ASan/UBSan/LSan, and `tools/fuzz/holes/check.sh` runs in
-CI. Compile time is 0.7 % below 0.71.0's main (self-compile instructions),
-run time is flat or better on every bench kernel but json_parse (+0.2 %: the
-null-safe string length and the checked growth). Code that handed raw pointers or caller-given
-lengths around outside `unsafe` may need `unsafe`, or the safe API now
-beside each raw one (*Changed*).
+0.71.0's one known hole in the memory guarantee (a `Slice` of a `Vec`,
+probe h32) is closed, along with 109 more found around it (probes
+h33–h141), each at its root — every probe is now rejected or runs clean
+under ASan/UBSan/LSan, and `tools/fuzz/holes/check.sh` runs in CI. The
+release review found 37 more that are still open — raw strings handed to
+`string_adopt` or a `sink s`, views that leave through a helper's return
+value, `mem_forget`, `mem_take` and the `rcbox` primitives callable from
+safe code, among others; each has a probe (*Known issues*). With the new
+checks json_parse retires 0.2 % more instructions (the null-safe string
+length and the checked growth), every other bench kernel the same or
+fewer, and the compiler compiles itself in 0.7 % fewer. The standard
+library's hashes, ciphers, codecs and collections are rewritten
+for speed: BLAKE2b 5.1x, BLAKE3 10x, ChaCha20 2.4x, Poly1305 1.67x,
+inflate 2.4x, `hashmap` inserts 1.7x, `sort_by` 2–25x (*Performance*); a
+program that does TLS compiles 4.6 % more instructions for it. nwasm
+2.4.0 runs the bench's Poly1305 and X25519 modules 1.75–2.1x faster.
+Large programs that do TLS or post-quantum crypto build on every core
+(agora's and anomaly's cold builds 3.7–4.7x faster), and `nurlc` warns
+when a loop walks a string with `nurl_str_get` — the quadratic scan that
+held nurl-lsp for 658 s on the compiler's source (now 2.8 s) and nurlfmt
+for 148 s (now 0.07 s).
+
+Code that handed raw pointers or caller-given lengths around outside
+`unsafe` — a call of a function that takes or hands back a `*T`, of a raw
+C primitive or of a standard-library `__` function, a `Slice`, `Vec` or
+library handle built field by field or by a cast — may need `unsafe`, or
+the safe API now beside each raw one, and a fresh raw string (`s`) can no
+longer be stored in a struct, an option or a container: hold a `String`
+(*Changed*). `break` and `continue` in a blocking `select` arm now apply
+to the enclosing loop. `nurlpkg install` and `publish`, which refused
+every package on Windows under 0.71.0, now work there, and neither checks
+`package.nurl-version` any more. The registry packages are republished for
+0.72.0 (53 of 58: the published versions of 47 no longer compile under
+it, and six more now use its `slice_of_str`).
+
+### Known issues
+
+Each is a safe program — no `unsafe` function of its own — that this
+compiler accepts and that leaks, frees memory it does not own or reads
+freed memory under ASan/LSan/UBSan. Each has a probe in
+`tools/fuzz/holes/open/` (`./check.sh open/*.nu open/stdlib/*.nu`
+reports all 37), kept out of the CI gate until it is fixed at its root.
+
+- **A raw string handed to a consuming parameter.** `string_adopt` takes
+  over whatever `s` it is handed: a literal, a view of a `String`, a
+  borrowed parameter, a call's result that is fresh on only some paths
+  or a closure's parameter is freed though the caller does not own it —
+  directly, or through a `sink s`, a method or a `%Trait` object, and
+  across a `recover`. A `sink s` the callee only reads, or leaves in a
+  parameter's container, is never released, and a generic's `sink A`
+  instantiated at `s` leaks (`string_consume_*`). Until then, take a
+  string over as a `sink String`, and hand `string_adopt` only a string
+  the caller owns.
+- **A view that leaves through a helper's return value.** `^ ( pick x )`,
+  where `pick` hands back its argument, or a closure or `Vec` a helper
+  builds around a local string, outlives the string it views; bound
+  first (`: s y ( pick x ) ^ y`) it is rejected (`view_through_return_*`).
+- **A view stored into a container reached indirectly** — a field of an
+  `inout` struct, a `Vec` that aliases a parameter or sits inside one —
+  outlives the local it views (`view_into_*`).
+- **One owner consumed twice, or consumed and read, in one call:**
+  `( f m m )` with two `sink` parameters, or
+  `( f ( string_data str ) ( eat str ) )`, which reads `str` after the
+  later argument consumed it (`consumed_*`).
+- **`mem_forget` and `mem_take` are callable from safe code**, although
+  the specification makes them `unsafe` (§3.3d): `mem_forget` leaks what
+  it forgets, and `mem_take` claims a borrowed field or element as owned
+  (`mem_forget_*`, `mem_take_*`).
+- **The `rcbox` primitives are callable from safe code:** `rcbox_new`
+  parks a value nothing releases, `rcbox_release` frees whatever address
+  it is given, and a program's own handle written in the old convention
+  releases a block it forged from a string (`rcbox_*`).
+- **Destructors.** A `% Drop` impl that panics runs again on the unwind;
+  one that reassigns a field of its receiver leaks the new value; one
+  that hands its receiver to a `sink` disposer leaks the fields; a value
+  handed straight to such a disposer skips the impl; and a closure
+  defined inside an impl runs the type's drop glue on its own first
+  parameter (`dtor_*`).
+- **A closure value called with a fresh string** leaks the string
+  (`closure_call_fresh_temp_string`), and a keyword-argument call to a
+  forward-declared function that consumes a handle frees it twice where
+  the positional call is handled (`kwargs_forward_consuming_callee`).
+- **Trust by path.** A source whose path contains `/stdlib/` is compiled
+  as the trusted standard library, with every safe-code check off
+  (`stdlib/trusted_by_path_substring`).
 
 ### Fixed
 
@@ -39,9 +115,9 @@ beside each raw one (*Changed*).
   0.71.0's known exception, is rejected (h32–h50, h80, h81, h89–h95).
 - **Sealed representations.** A `Slice`, `Vec`, `String`, `Box`, a library
   handle, or any struct with a raw-pointer field can no longer be built
-  field by field, have a raw field written or read, or be made by a cast
-  outside `unsafe`; `slice_from_raw`, `vec_borrow_raw` and `vec_set_len`
-  are `unsafe` to call (h51–h62).
+  field by field, have a field written or a raw field read, or be made by
+  a cast outside `unsafe`; `slice_from_raw`, `vec_borrow_raw` and
+  `vec_set_len` are `unsafe` to call (h51–h62).
 - **Exclusive calls.** A container a call may change cannot also reach it
   as another argument — the same owner twice, or a view or borrow of it
   (h63–h68, docs/MEMORY.md §2.4).
@@ -49,7 +125,7 @@ beside each raw one (*Changed*).
   reallocates or drops elements of a capture ends the views and borrows of
   it where it runs, directly or through a callee it is handed to
   (h69–h71, §2.11).
-- **Accessors borrow by summary, not by name.** What a call lends, writes
+- **Accessors borrow by summary.** What a call lends, writes
   and reallocates is read from its body (raw provenance), so `map_get`,
   `box_get`, `deque_get` and `btree_get` results borrow from their
   container as `vec_get`'s do, and replacing the value ends them
@@ -60,9 +136,13 @@ beside each raw one (*Changed*).
   parameter or replaced is its binding's own storage — no double free, no
   leak (h82–h88).
 - **Allocation sizes are checked.** `n * size` and `n + 1` wrapped in
-  `vec_with_cap`, `vec_zeroed`, `string_with_cap` and every Vec / HashMap /
-  Set growth; a count whose byte size cannot be represented now panics
-  before anything is allocated (h77–h79).
+  `vec_with_cap`, `vec_zeroed`, `string_with_cap`, `string_repeat`,
+  `bitset_new`, `alloc` / `zalloc` and every Vec / HashMap / Set growth; a
+  count whose byte size cannot be represented now panics before anything
+  is allocated (h77–h79). The checks run only where memory is allocated,
+  not on reads or on a push that has room: a growth is tested once, not
+  once per doubling, and a division is taken only for a count or element
+  size of 2^31 or more.
 - **A part of a temporary is a copy.** `( vec_get [String] ( mk ) 0 )`
   took the element for the temporary Vec itself: the Vec was never
   dropped. The element is copied and the temporary dropped after the
@@ -84,7 +164,12 @@ beside each raw one (*Changed*).
   `sink` and `inout` parameters in a trait's signature no longer make
   every `dyn` call of the method an arity error, and a trait method with
   a closure parameter (`( @ v ) f`) parses — its header scan stopped at
-  the closure type's `@`.
+  the closure type's `@`. The thread rules reach a method's impl too, on
+  the concrete type and through a `%Trait` object (every impl's at once):
+  a closure an impl runs on another thread or fiber must be Send where
+  the method is called — one that captures an `Rc`, handed to a method
+  that spawns it, is an error — and a closure an impl stores in a
+  thread-shared handle is held to the cycle rule.
 - **A `sink` parameter handed back is the caller's.** `^ x` out of a
   `sink` parameter — a builder that takes its value and returns it
   changed — was read as a second name of the argument the caller had
@@ -144,56 +229,110 @@ beside each raw one (*Changed*).
   `nurl_fast_atof`, the TCP/UDP buffers), takes a `FILE*` or a format
   string (`fopen`, `fclose`, `printf`), allocates or frees, or is the
   runtime's own machinery is marked `"nurl.raw"` and callable only from
-  `unsafe` code; a call that hands back a raw pointer (`vec_data`,
-  `slice_data`, `arena_alloc`, `box_ptr`) is too, like one that takes one.
-  A raw pointer could become a string (`( nurl_println ( vec_data v ) )`)
-  and a CSV cell, which is not NUL-terminated, was handed out as one
-  (h97–h101, h103). A generic standard-library internal (`__vec_grow`)
-  slipped past the check that keeps `__` functions inside the library —
-  its instance name hid the declaration — and could be handed a string
-  for a Vec's control block (h104).
+  `unsafe` code. So is any function that takes or hands back a raw
+  pointer (a `*` in a parameter's or the result's type, outside a
+  closure type: `vec_data`, `slice_data`, `arena_alloc`, `box_ptr`, the
+  raw-length helpers, a program's own function with a `*T` parameter or
+  a `→ *T` result), and any standard-library internal (a `__` name):
+  0.71.0 accepted both in safe code, a stdlib `__` name with only a
+  warning. A raw pointer could become a string
+  (`( nurl_println ( vec_data v ) )`) and a CSV cell, which is not
+  NUL-terminated, was handed out as one (h97–h101, h103). A generic
+  internal is caught by its declared name, which its instance name
+  (`__vec_grow__fp1__u8`) hid: `__vec_grow` could be handed a string's
+  bytes for a Vec's control block (h104).
 - **A null string reads as the empty string.** `# s 0` and an unset
   `getenv` crashed `nurl_println`, `nurl_str_len`, `strlen`, `string_from`
   and every string primitive built on them; a C string parameter
   (`"nurl.cstr"`) now takes a null as `""` (h102).
-- **`select` arm bodies run after the wait loop**: a `break` or `^` in an
-  arm body left the select's own loop and skipped the disarm, freeing the
-  waiter while other channels still held it.
-
-- **`nurlpkg install` refused every package on Windows** with
-  `PkgToolchain: upgrade NURL to satisfy package.nurl-version`, on a
-  v0.71.0 toolchain that met every requirement (`nq`, `nwasm`, `anomaly`,
-  `zst`, …). nurlpkg looked for the installed compiler at
-  `<prefix>\bin\nurlc.exe`; the install puts it at `build\nurlc.exe` and
-  only a `.bat` shim in `bin\`, so it read an empty version, and an empty
-  version compared as too old.
-
-- A `v128` or `v256` inside a compound type — a struct field, an
-  `inout` parameter (`v128*`) — lowered to an unknown IR type; it now
-  lowers like the scalar it is.
+- **`select` arm bodies run after the wait loop**, with every channel
+  disarmed: a `break` or `continue` in an arm body of a blocking select
+  now means the enclosing loop, as it reads. Before, either one left only
+  the select's own wait loop (the author's loop went on) and skipped the
+  disarm, freeing the waiter while other channels still held it; a `^`
+  skipped the disarm and the free both. The waiter is now dropped
+  however the body leaves.
+- **`nurlpkg install` and `nurlpkg publish` refused every package on
+  Windows** (`nq`, `nwasm`, `anomaly`, `zst`, …), on a v0.71.0 toolchain
+  that met every requirement. nurlpkg looked for the installed
+  compiler only at `<prefix>\bin\nurlc.exe`; the install puts it at
+  `build\nurlc.exe` and only a `.bat` shim in `bin\`. Install read an
+  empty version, which compared as too old
+  (`PkgToolchain: upgrade NURL to satisfy package.nurl-version`), and no
+  longer asks for one (*Changed*). Publish, `--dry-run` included, had no
+  compiler for its typecheck of the packaged sources
+  (`nurlpkg: no installed compiler under <prefix>`); it now looks in
+  `build/nurlc[.exe]` first, then `bin/`.
+- **A `v128` or `v256` inside a compound type lowers.** An option
+  (`?v128`, also as a struct field) reached the IR as the undefined type
+  `v128`, which LLVM rejected, and a call passing a vector to an
+  `inout v128` or `inout v256` parameter was refused as a type mismatch
+  (`passed 'inout' as 'v128*' but the parameter is declared 'v128'`).
+  The vector now lowers to `<4 x i32>` / `<4 x i64>` wherever it stands,
+  as the bare type always did.
+- **wasmbuilder 0.3.5 builds no x86 code into a wasm module.** nurlc ran
+  without `--no-cpu-dispatch`, so every `simd` function (the Keccak x4
+  permutation, the ML-KEM and ML-DSA kernels) reached a wasm module
+  twice: its baseline body, and an x86-64-v3 clone compiled for wasm32
+  behind a dispatcher asking for a CPU wasm never is. wasmbuilder now
+  passes the flag, as `nurl.sh` does on every non-x86-64 machine. Its IR
+  rewrite, which nurlapi's wasm builds share, also folds
+  `nurl_simd128_native()` and `nurl_cpu_x86_v3()` to 0, the answer the
+  wasm runtime gives to both, so `--gc-sections` drops the vector
+  kernels they guard. bench/chacha20's module, whose new four- and
+  eight-block kernels never run in wasm, is 49 KB (48 KB in 0.71.0);
+  without these two changes it is 75 KB.
 
 ### Changed
 
+- **Code that touches raw memory outside `unsafe` no longer compiles**
+  where 0.71.0 accepted it (docs/spec.md §3.3d; the holes each rule closes
+  are under *Fixed*): a call of a function that takes or hands back a raw
+  pointer (`*T` in a parameter or the result: `vec_data`, `slice_data`,
+  `box_ptr`, `arena_alloc`, `slice_from_raw`, `vec_borrow_raw`, a
+  program's own), a trait method's included, statically or through a
+  `%Trait` object; `vec_set_len`; a C primitive marked `"nurl.raw"`
+  (`memmem`, `memcmp`, `fwrite`, `fopen`, `printf`, `realpath`,
+  `nurl_fast_atof`, `nurl_tcp_read` / `nurl_tcp_write`, …); a
+  standard-library function whose name begins with `__`; a literal of a
+  `String`, `Slice`, `Vec`, `Box`, library handle (a program's own too,
+  when its drop hook is `unsafe`) or struct with a raw-pointer field, a
+  write to any of its fields, or a read of a raw one; a cast that makes a
+  `String`, a `Vec`, a closure, a struct or option of one, or an enum
+  with payloads out of a value of another type. Each error says what to
+  use instead. Two ownership rules are new too: the impls behind a
+  `%Trait` call must agree on keeping each argument, and none may keep
+  the receiver, which the object only lends (declare the parameter
+  `sink` in the trait, or keep a copy); and an element that cannot be
+  copied may not be borrowed out of a temporary container
+  (`( vec_get [T] ( mk ) 0 )`) — bind the container first
+  (docs/LIMITATIONS.md).
 - **A raw string in a value is a view** (docs/MEMORY.md §2.13). In safe
   code a raw string (`s`) held by a struct, an option, an enum, a slice
   or a container owns nothing, so a fresh one — a call's result that hands
-  its string over — can no longer be stored there (`@ T { ( nurl_str_cat …
-  ) }`, `@ ?s { T … }`, `[ s | … ]`, `= . r name ( … )`) nor handed to a
-  parameter that keeps it (`vec_push [s]`, `map_set`): each leaked (h128–
-  h140). Hold a `String` (a field, a payload, a `( Vec String )`), or bind
-  the string and store the binding — a view the walk keeps from outliving
-  it. A parameter that takes a string over is declared `sink`. `unsafe`
-  code and the standard library keep managing raw strings by hand. In the
-  repository only tests built structs that way; they are `unsafe` now.
+  its string over — can no longer be stored there
+  (`@ T { ( nurl_str_cat … ) }`, `@ ?s { T … }`, `[ s | … ]`,
+  `= . r name ( … )`) nor handed to a parameter that keeps it
+  (`vec_push [s]`, `map_set`): each leaked (h128–h140). Hold a `String`
+  (a field, a payload, a `( Vec String )`), or bind the string and store
+  the binding — a view the walk keeps from outliving it. A parameter that
+  takes a string over is a `sink String` (a `sink s` is not yet released
+  by its callee: *Known issues*). `unsafe` code and the standard library
+  keep managing raw strings by hand. In the repository only tests built
+  structs that way; they are `unsafe` now.
 - **Raw-length helpers take a raw pointer and are `unsafe` to call** —
   `nurl_str_at`, `nurl_memcmp_lex`, `nurl_memmem_range`,
   `nurl_parse_int_range`, `nurl_parse_float_range`, `string_from_take`,
-  `string_from_n`, `json_parse_n`, `bytes_extend_raw`, `b64_encode_len`,
-  `b32_encode_len`, `proc_write`, `constant_time_eq_n`, `utf8_decode_n`:
-  each trusted its caller's length. The safe forms carry their own:
-  `slice_of_str` + `slice_byte` for a scan (O(1) per byte, like
-  `nurl_str_at`), `string_adopt`, `write_string`, `b64_encode_string`,
-  `utf8_decode_at`, `slice_parse_int` / `slice_parse_float`.
+  `string_from_n`, `nurl_str_slice_unsafe`, `json_parse_n`,
+  `bytes_extend_raw`, `b64_encode_len`, `b32_encode_len`, `proc_write`,
+  `constant_time_eq_n`, `utf8_decode_n`, the block-device and FAT
+  transfers (`blk_read_raw` / `blk_write_raw`, `nurl_blk_read` /
+  `nurl_blk_write`, `fatfs_read_raw` / `fatfs_write_raw`) and
+  `nurl_print_bytes`: each trusted its caller's length. The safe forms
+  carry their own: `slice_of_str` + `slice_byte` for a scan (O(1) per
+  byte, like `nurl_str_at`), `string_adopt`, `write_string`,
+  `b64_encode_string`, `utf8_decode_at`, `slice_parse_int` /
+  `slice_parse_float`.
 - **`csv_table_view` and `csv_table_view_by_name` return a `( Slice u )`**
   — the cell's bytes with their length (a cell is not NUL-terminated); the
   empty view when out of range.
@@ -201,17 +340,41 @@ beside each raw one (*Changed*).
   an out-struct or a C handle is `*u` (sqlite3 handles and statements,
   termios, `stat` and socket address buffers, the Rc collector's
   internals), a string is `s`: what is raw memory is `unsafe` to call by
-  its type.
+  its type. The C stdio pass-throughs in `stdlib/core/builtins.nu`
+  (`fopen`, `fwrite`, `fread`, …) still declare their `FILE*` and buffer
+  as `s`; they are marked `"nurl.raw"`, so they too are `unsafe` to call.
+- **The `select` machinery is typed.** The functions a `?? {}` select
+  lowers to took integers and cast them back to pointers, so any program
+  could call them with any integer. `select_waiter_new` now returns a
+  `SelWaiter` handle, released by its drop (`select_waiter_free` is
+  gone), and `select_waiter_prepare` / `select_waiter_wait` take it.
+  `chan_select_arm`, `chan_select_disarm` (each taking the `Channel` and
+  the `SelWaiter`) and `chan_select_poll` (the `Channel`) replace
+  `chan_raw_arm` / `chan_raw_disarm` / `chan_raw_poll`, which are
+  internal now (`__chan_raw_*`). `chan_raw_closed` is gone:
+  `chan_select_poll` answers 2 for a closed, drained channel.
 - **`package.nurl-version` no longer gates anything.** `nurlpkg install`
   (registry packages, the root project, local dependencies) and
   `nurlpkg publish` no longer compare it against the toolchain, and the
   `PkgToolchain` error is gone. A gate that reads the toolchain wrong
   refuses every package on a current toolchain; that costs more than the
   incompatibility it guards against, which still surfaces as a compile
-  error. The field is still parsed and validated. nurlpkg also finds the
-  installed compiler at `build/nurlc[.exe]` now, which `publish`'s
-  typecheck of packaged sources needed on Windows. Toolchains up to
-  v0.71.0 keep the old gate until they are upgraded.
+  error. The field is still parsed and validated. Toolchains up to
+  v0.71.0 keep the old gate until they are upgraded. In the library
+  (`stdlib/ext/pkg_fetch.nu`) that error was the `PkgToolchain` variant
+  of `PkgFetchErr`; a match arm that names it no longer compiles.
+  `pkg_install_one`, `pkg_install_locked` and their `*_for_toolchain`
+  forms keep their signatures and no longer refuse a package for its
+  `nurl-version` (the `toolchain` argument is ignored); an archive is
+  still checked for its checksum, its signature and the name and version
+  in its manifest. `manifest_supports_toolchain` (stdlib/ext/manifest.nu),
+  which nurlpkg no longer calls, answers F only for a toolchain version
+  that is known and strictly older: an empty or unparsable version
+  (`unknown`, a bare commit SHA) and the build scripts' `v0.0.0` fallback
+  pass, where they were refused; a `git describe` build
+  (`v0.71.0-3-gabc1234`, `v0.71.0-dirty`) compares as its tag, not as a
+  prerelease of it; and surrounding whitespace, such as a CRLF from a
+  Windows pipe, is ignored.
 
 ### Added
 
@@ -224,25 +387,49 @@ beside each raw one (*Changed*).
   The warning names the binding and the O(1) form: measure once with
   `slice_of_str`, read with `slice_byte` (0 outside the string, like
   `nurl_str_get`). `utf8_decode`, which measures the whole string per
-  call, is flagged the same way and pointed at `utf8_decode_at`. A fixed
-  index (O(index), not a scan) and a string bound inside the loop are let
-  through. `compiler/tests/
-  should_warn_strget_loop.nu` pins both sides.
-
+  call, is flagged the same way and pointed at `utf8_decode_at`. A
+  literal index (`( nurl_str_get src 0 )`: O(index), not a scan) and a
+  string bound inside the loop are let through;
+  `compiler/tests/should_warn_strget_loop.nu` pins both sides. The check
+  reads the string operand's name as written, so it does not yet see a
+  string reached through a field path (`. ps text`) or a call
+  (`( string_data t )`), or one bound to a one-letter name that is also
+  a type keyword (`s`, `b`, `i`, `u`, `f`, `v`). The tutorial's `wc`
+  example ("Walk the string"), which taught the quadratic loop, now reads
+  its text through `slice_of_str` + `slice_byte`, and the doc comments on
+  `nurl_str_get` and `nurl_str_at` point there (`nurl_str_at` is the raw
+  form, for `unsafe` code).
 - `slice_of_str`, `slice_byte`, `slice_parse_int`, `slice_parse_float`,
   `string_adopt`, `write_string`, `b64_encode_string`, `utf8_decode_at`:
-  the safe forms of the raw-length helpers above.
+  the safe forms of the raw-length helpers above. `slice_empty [A]`
+  (stdlib/core/slice.nu), the empty `( Slice A )`, is the safe form of a
+  `@ ( Slice A ) { # *A 0 0 }` literal, which now needs `unsafe`
+  (*Sealed representations*); the error for such a literal names it.
+- **Checked allocation sizes for a caller's count** (stdlib/core/vec.nu),
+  the helpers the library sizes its buffers with (*Fixed*):
+  `( alloc_size size n )` is `n * size` and `( alloc_count_add a b )` is
+  `a + b`, each panicking (`allocation too large: …`) on a negative count
+  or a result past what a size can hold; `( alloc_grow_cap cap need )`
+  doubles `cap` (4 when empty) until it holds `need`, or gives `need`
+  itself where doubling would overflow; and
+  `( alloc_grow_pow2 cap need first )` doubles `cap` (`first` when empty)
+  for a power-of-two table, panicking when `need` is past 2^62.
 - Hole probes h33–h141 (`tools/fuzz/holes/`) and their check in CI: each
   must be rejected or run clean under the sanitizers.
 - **Five cryptographic benchmark rows** — `chacha20`, `poly1305`,
   `blake2b`, `sha512` and `x25519` — in NURL, C and Rust. The NURL side
   is a driver around the standard library's own implementation
   (stdlib/std/chacha20poly1305.nu, hash_blake2b.nu, hash_sha512.nu,
-  x25519.nu), so the rows measure the stdlib a NURL program gets; C and
-  Rust carry the same formulation by hand (poly1305-donna-64, the
-  donna-c64 X25519 field with native 128-bit products, scalar ChaCha20).
-  Every source is checked against its RFC/FIPS vector, and all three
-  languages also pass the wasm suite's ten-cell gate.
+  x25519.nu), so the rows measure the stdlib a NURL program gets. C and
+  Rust carry the stdlib's formulation by hand: Poly1305 at radix 2^64
+  (four 64×64→128 products a block and two small ones), and the
+  TweetNaCl ladder over the donna-c64 X25519 field (radix 2^51) with
+  native 128-bit products. ChaCha20 is the one deliberate difference: C
+  and Rust run the scalar RFC rounds, while the stdlib runs four blocks
+  a pass over v128 lanes, eight over v256 lanes in its x86-64-v3 clone;
+  that gap is what the row measures. Every source is checked against its
+  RFC/FIPS vector, and all three languages also pass the wasm suite's
+  ten-cell gate.
 - `bench/manifest.tsv` takes an optional fourth column naming a row's
   languages; Node and Python report `n/a` on the NURL/C/Rust-only rows.
 - `bench/bench.sh --scale N` (default `$BENCH_SCALE`, else 1), the
@@ -253,17 +440,20 @@ beside each raw one (*Changed*).
 - `bench/bench.ps1 -Scale N`, and `bench/wasmbench.ps1`, a port of
   `wasmbench.sh` for Windows (exercised under pwsh on Linux; its
   Windows-only branches are not yet run on a Windows host).
-
 - `nurl_v128_unpacklo32` / `unpackhi32` / `unpacklo64` / `unpackhi64`,
   and `nurl_v256_add32` / `rotl32` / `bcast32` / `unpacklo32` /
   `unpackhi32` / `unpacklo64` / `unpackhi64` / `permlo128` / `permhi128`
-  (docs/spec.md); `nurl_simd128_native()` answers whether v128 is native
-  (0 on a wasm target LLVM scalarises it for).
+  (docs/spec.md). `nurl_simd128_native()` is a runtime function, not an
+  intrinsic — declare it ``& `c` @ nurl_simd128_native → i`` — that
+  returns 0 on a wasm32 module built without simd128, where LLVM
+  scalarises a `v128`, and 1 everywhere else; a kernel that only pays
+  off in vector registers asks it before running. wasmbuilder folds the
+  call to 0 (*Fixed*).
 
 ### Performance
 
 - **Programs with `simd` functions build on every core: 3.7–4.7x faster
-  cold builds, 5.5–6.2x faster edit rebuilds.** `nurl.sh` lowers a large
+  cold builds, 5.4–6.2x faster edit rebuilds.** `nurl.sh` lowers a large
   program as up to one module per core, but a module holding any `simd`
   function was never split — and every program that does TLS or
   post-quantum crypto holds some, so the largest NURL programs were the
@@ -275,30 +465,49 @@ beside each raw one (*Changed*).
   the group apart costs +60 %. 6-core Haswell-E: `packages/agora` 61.3 →
   16.6 s cold, 59.4 → 10.9 s after a one-line edit; `packages/anomaly`
   106.7 → 22.9 s cold, 102.6 → 16.6 s after an edit. Peak RSS of the
-  agora build 354 → 260 MB.
+  agora build 354 → 260 MB. The rest of such a program is now split like
+  any other large one, so a TLS or post-quantum program built by a plain
+  `nurl.sh` (and a tool `nurlpkg install` builds) is no longer one module
+  by default. The other wide kernels also stay within 0.7 % of the
+  one-module build (ML-KEM-768 +0.2 %, SLH-DSA-128f +0.7 %,
+  ChaCha20-Poly1305 +0.5 % instructions), but the code around them pays
+  the split build's usual trade (the split-built compiler retires 3.4 %
+  more instructions, docs/BUILDING.md); build with `NURL_SPLIT=0` for a
+  release, as for any split program.
 - **`nurlfmt` is linear: `compiler/nurlc.nu` 148 s → 0.07 s.** Its
   tokenizer read every byte with `nurl_str_get`, which measures the
   string from its start on each call, so formatting was quadratic in the
   file (16 000 lines 12.4 s → 0.02 s). The two 2.8 MB compiler sources
   cost the pre-commit hook two and a half minutes per compiler commit,
   and CI's `nurlfmt_check.sh` as much. It now reads through
-  `slice_of_str` + `slice_byte`; output is byte-identical on all 2227
-  tracked sources.
-- **No scan in the toolchain re-measures its string per byte any more.**
-  With the warning above, every such loop in the standard library, the
-  tools, nurlapi, the examples and the tests (262 calls) and in the
-  compiler itself (124) reads a measured view instead; all 2226 tracked
-  sources keep their verdicts and errors, and the compiler emits
-  byte-identical IR for every one of them. Where the strings are long it shows:
-  nurl-lsp opening `compiler/nurlc.nu` and answering a symbols and a
-  references request 658 s → 2.8 s (its token scanners and reference
-  matcher take the document measured once, instead of measuring it per
-  call); nurlapi's `GET /CHANGELOG.md`, the 1.2 MB changelog rendered as
-  HTML, 36.5 s → 0.09 s — a single request held a worker for half a
-  minute. Same output byte for byte.
+  `slice_of_str` + `slice_byte`; output is byte-identical on every
+  tracked source.
+- **Every string scan in the toolchain that the new warning flags now
+  measures its string once.** Every loop it flags in the standard
+  library, the tools, nurlapi, the examples, the unikernel and the tests
+  (262 calls) and in the compiler itself (124) reads a measured view
+  instead; every tracked source keeps its verdict and errors, and the
+  compiler emits byte-identical IR for every one of them. Where the
+  strings are long it shows: nurl-lsp opening `compiler/nurlc.nu` and
+  answering a symbols and a references request 658 s → 2.8 s (its token
+  scanners and reference matcher take the document measured once,
+  instead of measuring it per call); nurlapi's `GET /CHANGELOG.md`, the
+  1.2 MB changelog rendered as HTML, 36.5 s → 0.09 s — a single request
+  held a worker for half a minute. Same output byte for byte.
+- **Packages read their scans through a measured view too; md2html and
+  tokenizer's byte-level BPE are linear** (packages/md2html/CHANGELOG.md,
+  packages/tokenizer/CHANGELOG.md): 535 calls in 37 packages. md2html
+  0.1.4 renders the 1.2 MB changelog 36.5 s → 0.02 s and a 263 KB
+  table-heavy document 1.11 s → 0.00 s, byte-identical. tokenizer 0.4.2
+  encodes 1.2 MB with byte-level BPE (GPT-2 and qwen2 pre-tokenizers, the
+  word merger) 50.7 s → 0.37 s, and its SentencePiece merge keeps
+  candidate pairs in a max-heap like llama.cpp's `llm_tokenizer_spm`,
+  O(n log n) where it was O(n²): 99 KB with gemma-3's 262k pieces 222 s →
+  0.05 s past the 0.66 s vocabulary load, the same ids, ties included.
 - **The standard library's hashes, ciphers and codecs, rewritten for
   speed** (bench/ crypto rows, i7-5930K, the same output everywhere):
-  BLAKE2b 5.1x (the bench row ~1.9x faster than its C peer), BLAKE3 10x,
+  BLAKE2b 5.1x (the bench row ~1.9x faster than its C peer here, 1.5x on
+  the runner behind bench/RESULTS.md), BLAKE3 10x,
   SHA-1 3.4x, MD5 2.6x, SHA-256 1.21x, SHA-512 1.17x; ChaCha20 2.4x
   (four blocks a pass over v128 lanes, eight over v256 lanes in the
   x86-64-v3 clone); Poly1305 1.67x (radix 2^64, four products a block —
@@ -307,7 +516,7 @@ beside each raw one (*Changed*).
   words as scalar locals, `inline` helpers taking the words they update
   `inout`, rounds unrolled one rotation period per pass with permutations
   as argument order — not the whole function, whose compile time grows
-  faster than its speed (see the last item).
+  faster than its speed (*What it costs to compile*, below).
 - **Compression and checksums:** CRC-32 slicing-by-8 3.9x, Adler-32 with
   deferred modulo 8.3x, a table-driven inflate 2.4x (zlib's speed), and
   deflate's match search 1.7x with byte-identical output.
@@ -315,36 +524,59 @@ beside each raw one (*Changed*).
   a 7-bit hash fragment (insert 1.7x, lookup 1.3x, same iteration order);
   `sort_by` is a branchless Lomuto introsort with run detection and a
   sorted-prefix merge (2-25x; only a sorted run with 1 % scattered
-  outliers is 24 % slower); base64 decode works by quartets (3.4 → 0.9
-  ns/byte); `utf8_valid` skips ASCII eight bytes at a time.
+  outliers is 24 % slower); past 2·log2(n) levels of partitioning it
+  finishes with heapsort, so its worst case is O(n log n), where
+  0.71.0's quicksort could be driven quadratic by crafted input; it is
+  still not stable, and elements that compare equal may come out in a
+  different order than under 0.71.0; base64 decode works by quartets
+  (3.4 → 0.9 ns/byte); `utf8_valid` skips ASCII eight bytes at a time.
 - **A raw-pointer return publishes no ownership proof.** Every `→ *T`
   function ended by storing its proof to the thread-local channel through
   an `asm volatile` with a memory clobber, which forced every caller to
   reload what it had cached: blake3 −6.0 % instructions, the blake2b
   bench −3.8 %. A dyn thunk over such a function publishes 0.
 - **Single-threaded wasm modules recycle small allocations** through the
-  runtime's size-class cache (it was off wherever the non-atomic TLS path
-  was): bench/json_parse as wasm on nwasm −6 % cycles.
+  runtime's size-class cache, which was compiled out of every wasm32-wasi
+  build; the wasi-threads build keeps its locked allocator and no cache.
+  bench/json_parse as wasm on nwasm: 250M → 223M instructions (−10.8 %),
+  113M → 107M cycles (−5.3 %).
+- **nwasm 2.4.0: a 128-bit multiply is a multiply, and tier 8 stops
+  waiting on its own spills** (packages/nwasm/CHANGELOG.md). Core wasm
+  has no 64×64→128 multiply, so a C, Rust or NURL 128-bit product calls
+  compiler-rt's `__multi3`. A direct call to either of the two bodies
+  today's toolchains link (LLVM's compiler-rt, Rust's compiler-builtins),
+  recognised by its exact bytes and signature and never by name, runs as
+  a multiply in every tier: Poly1305 C / Rust / NURL modules
+  794 / 877 / 771 M → 416 / 419 / 441 M cycles, X25519
+  1375 / 1447 / 1325 M → 724 / 731 / 715 M. Tier 8 reads a spill it has
+  just stored from rax (ChaCha20 254 / 261 / 230 M → 203 / 206 / 178 M,
+  BLAKE2b 447 / 521 / 284 M → 394 / 478 / 243 M). A 64-bit counter's
+  `i64.eqz; i32.eqz; br_if` is one compare-and-branch, a delay-line copy
+  (SHA-2's h = g) no longer outranks the words a round computes for a
+  register, and a pointer parameter is zero-extended once, at entry:
+  together sha512.c 302 → 260 M, bloom_filter.c 5.37 → 4.96 G cycles.
+  All 60 bench/ modules print what they printed.
 - **What it costs to compile:** a program that does TLS compiles 4.6 %
   more instructions than before these changes, most of it ChaCha20's
   eight-block kernel in both clones. Fully unrolled SHA-2 and SHA-1, and
   an X25519 ladder with every field operation inlined, were measured and
   rejected for compile time (the X25519 one cost a TLS program three
   seconds).
-- **Compile time 0.7 % below 0.71.0's main** (self-compile 12.56 G →
-  12.47 G instructions, each compiler built by itself, same input) with
-  the larger borrow walk and every call now asked of the right callee:
-  the raw-provenance graph is integers, walk rows are cheaper, and…
+- **Compile time 0.7 % below 0.71.0's main** (self-compile 12.68 G →
+  12.59 G instructions, `instructions:u`, each compiler built by itself,
+  same input) with the larger borrow walk and every call now asked of the
+  right callee: the raw-provenance graph is integers, walk rows are
+  cheaper, and…
 - **…a function that never hands over its result is not asked per call.**
   Every `s`-returning call queried the runtime for an ownership proof
   (two opaque calls and a `free(NULL)`); a callee whose every path returns
   a borrow, a raw read or a literal now says so statically
   (`__ret_unowned`), and so does every call with a raw-pointer result,
   which nothing owns. Against main, every benchmark kernel retires the
-  same instructions or fewer: blake2b −0.18 %, json_parse −0.24 %, x25519
-  −0.03 %.
-- Growth paths test for overflow once per growth, not once per doubling,
-  and divide only for sizes past 2^31.
+  same instructions or fewer (blake2b −0.18 %, x25519 −0.03 %, chacha20 /
+  poly1305 / sha512 −0.01 %, the rest within ±0.01 %) except json_parse,
+  +0.22 % (+331 of 154 K instructions), which pays for the null-safe
+  string length and the checked allocation growth (*Fixed*).
 
 ## [0.71.0] — 2026-10-07
 
@@ -20867,7 +21099,14 @@ releases are measured.
   compile-server (`api/`), browser playground (`nurlweb/`).
 * Dual license: MIT (LICENSE-MIT) or Apache-2.0 (LICENSE-APACHE).
 
-[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.66.0...HEAD
+[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.72.0...HEAD
+[0.72.0]: https://github.com/nurl-lang/nurl/compare/v0.71.0...v0.72.0
+[0.71.0]: https://github.com/nurl-lang/nurl/compare/v0.70.0...v0.71.0
+[0.70.0]: https://github.com/nurl-lang/nurl/compare/v0.69.1...v0.70.0
+[0.69.1]: https://github.com/nurl-lang/nurl/compare/v0.69.0...v0.69.1
+[0.69.0]: https://github.com/nurl-lang/nurl/compare/v0.68.0...v0.69.0
+[0.68.0]: https://github.com/nurl-lang/nurl/compare/v0.67.0...v0.68.0
+[0.67.0]: https://github.com/nurl-lang/nurl/compare/v0.66.0...v0.67.0
 [0.66.0]: https://github.com/nurl-lang/nurl/compare/v0.65.0...v0.66.0
 [0.65.0]: https://github.com/nurl-lang/nurl/compare/v0.64.0...v0.65.0
 [0.64.0]: https://github.com/nurl-lang/nurl/compare/v0.63.0...v0.64.0

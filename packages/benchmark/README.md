@@ -41,11 +41,13 @@ rows in ~55 ms — matching a hand-tuned pre-1.0 reference that a comparison-bas
 `sort_by` closure was several times slower than. Two things made the difference,
 both worth knowing:
 
-- **Read cells off the view pointer, never with `nurl_str_get`.** A CSV cell
-  view is a bare pointer into one big arena buffer with no interior NUL, and
-  `nurl_str_get` bounds-checks with `strlen` — so a single read scans to the end
-  of the file. Doing that per byte turned a sub-second extract into *minutes*
-  (O(N²)). Byte access is `# i . p k` on the `*u` view.
+- **Read cells off the view, never by measuring to a NUL.** A CSV cell view
+  is a `( Slice u )` into one big arena buffer with no interior NUL, so a
+  `strlen` on its pointer scans to the end of the file. Doing that per byte
+  (`nurl_str_get` once bounds-checked with `strlen`) turned a sub-second
+  extract into *minutes* (O(N²)). Read the bytes through the view instead:
+  `slice_byte` in safe code; the suite's key extractors are `unsafe` helpers
+  that read `# i . p k` off the view's `slice_data`.
 - **Sort integers, not through a comparator closure.** Parse each row's keys
   *once* into a packed integer (the "parse keys once" lesson), and sort with an
   inline quicksort/insertion-sort — a closure call per comparison, ~20 M of

@@ -1281,8 +1281,9 @@ long long nurl_rand_fill(unsigned char *buf, long long n) {
 #define NURL_NET_ERR_CLOSED         6
 #define NURL_NET_ERR_TIMEOUT        7
 #define NURL_NET_ERR_OTHER          8
-/* TLS errors — meaningful only with NURL_HAVE_OPENSSL; otherwise
- * tcp_listen_tls returns TLS_CTX_INIT unconditionally. */
+/* TLS error codes. TLS is pure NURL (std/tls.nu, std/tls_server.nu),
+ * which reports CERT_LOAD / KEY_LOAD / HANDSHAKE itself; TLS_CTX_INIT
+ * comes only from the inert libssl-era stubs below, which no .nu calls. */
 #define NURL_NET_ERR_TLS_CTX_INIT   9
 #define NURL_NET_ERR_TLS_CERT_LOAD  10
 #define NURL_NET_ERR_TLS_KEY_LOAD   11

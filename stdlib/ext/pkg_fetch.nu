@@ -116,7 +116,9 @@ $ `stdlib/ext/manifest.nu`
     ^ ( pkg_install_one_for_toolchain registry name version checksum dest ( nurl_version ) )
 }
 
-// Explicit target version for tools selecting a separately installed compiler.
+// Kept for source compatibility: `toolchain` is accepted and ignored, so
+// this installs exactly as pkg_install_one does (`package.nurl-version`
+// is informational and never refuses an install; docs/TOOLING.md).
 @ pkg_install_one_for_toolchain s registry s name s version s checksum s dest s toolchain → !i PkgFetchErr {
     ?? ( registry_trust_load ) {
         F _ → { ^ @ !i PkgFetchErr { F PkgTrustConfig } }

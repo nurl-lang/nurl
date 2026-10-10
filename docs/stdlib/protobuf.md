@@ -93,11 +93,13 @@ a packed scalar sequence or another message.
 ## Ownership, errors and limits
 
 Readers are ordinary copyable values; there is no reader allocation or free.
-Readers and byte slices borrow backing storage. Keep the original Vec alive
-and unchanged until all its readers/slices are finished. Do not mutate reader
-fields directly; use constructors and read operations. Raw `Slice` inputs have
-the same valid-pointer-and-length contract as `core/slice.nu`. These lifetimes
-are a caller obligation, not a compiler-enforced borrow guarantee.
+Readers and byte slices are views of their backing storage (docs/MEMORY.md
+§2.10): freeing or growing the Vec while one of its readers or slices is still
+read is a compile error. Do not mutate reader fields directly; use
+constructors and read operations (a read from a cursor set out of range fails
+with `ProtoBadRange`). A `Slice` input is made from live storage
+(`slice_from_vec`, `slice_sub`, `slice_of_str`); only `unsafe` code may build
+one from a raw pointer (`slice_from_raw`).
 
 `proto_read_string` validates the complete UTF-8 payload before allocating an
 owned String, dropped when its binding goes out of scope (`string_free` is
@@ -123,7 +125,7 @@ resynchronization or recovery by skipping malformed data.
 | `ProtoDepth` | Message/group nesting exceeds the configured limit |
 | `ProtoGroupMismatch` | Unexpected or incorrectly numbered end-group |
 | `ProtoUtf8` | Invalid text at the reported byte |
-| `ProtoBadRange` | Invalid constructor limit or supplied slice range |
+| `ProtoBadRange` | Invalid constructor limit, supplied slice range or reader cursor |
 | `ProtoSize` | Root input or accumulated output exceeds its byte limit |
 
 The default maximum input/output size is 2147483647 bytes; the default nesting
@@ -161,11 +163,15 @@ order, omission of defaults and whether repeated fields are packed.
 
 `proto_write_bytes(out, number, payload_vec)` encodes bytes, an already encoded
 embedded message, or a packed buffer. `proto_write_slice` accepts a borrowed
-slice, and `proto_write_string` validates and encodes a String. Payloads may
-alias the destination's live bytes: the encoder preserves their offsets across
-buffer growth. Validation and total-size checks precede mutation, so a reported
-error leaves output bytes unchanged. `proto_write_tag(out, number, wire)` also
-supports constructing matching start/end group tags; callers must pair them.
+slice, and `proto_write_string` validates and encodes a String. In safe code a
+payload cannot be `out` or a view of it: a call that may grow `out` cannot
+also reach it through another argument (docs/MEMORY.md §2.4), so copy the
+payload first (`vec_clone`, `mem_dup`). In `unsafe` code a payload may alias
+the destination's live bytes; the encoder preserves their offsets across
+buffer growth. Validation and total-size checks precede mutation, so a
+reported error leaves output bytes unchanged.
+`proto_write_tag(out, number, wire)` also supports constructing matching
+start/end group tags; callers must pair them.
 
 ```nurl
 @ encode_samples → !( Vec u ) ProtoError {
@@ -198,13 +204,13 @@ iterative parser. Both run under sanitizers; the latter requires Python
 `protobuf==7.36.1`, a test dependency only. CI runs both normal and sanitized
 differential checks, with leak detection enabled.
 
-The current `packages/onnx/src/pb.nu` remains in place until the next toolchain
-release ships this module. Then migrate `model.nu` to `proto_reader`, checked
-tag/scalar operations and bounded children, and propagate ProtoError through
-model loading. Replace raw tensor extraction with a checked byte slice followed
-by the tensor's dtype/shape validation; preserve float bits when copying.
-Accept both packed and expanded tensor metadata. Keep unknown-field skipping
-and validate each message's wire types. Remove the old decoder only after ONNX
-model/inference regressions and malformed-model tests pass with the released
-toolchain. This migration deliberately requires no compatibility wrapper that
-converts decode failures into zeros.
+Since 0.9.0, `packages/onnx` reads models through this module; its own
+decoder is gone. `src/pb.nu` is a thin adapter: a `PReader` wraps
+`proto_reader`, checked tag/scalar reads, bounded message and packed children
+and `proto_skip` (groups included), and latches the first ProtoError, so
+`model.nu` keeps its flat field loops. `onnx_parse_checked` returns that
+error with its offset; `onnx_parse` keeps its old contract and yields an
+empty graph for a malformed model. Packed and expanded `dims`/`int64_data`
+are both accepted, and `raw_data` is a checked slice borrowed from the model
+buffer. The package's `tests/infer_test.nu` checks that a malformed model the
+old decoder looped on forever is rejected.

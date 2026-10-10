@@ -26,8 +26,9 @@ specified in spec §3.3d.
   released, reassigned or reallocated (§6.2).
 - **The guarantee (§6.2).** Every program the compiler accepts outside
   the bodies of `unsafe` functions is memory-safe and leak-free, data
-  races and the panic path included — with one known exception in
-  0.71.0: a `Slice` of a `Vec` is not yet tracked as a view (§6.2).
+  races and the panic path included — apart from the open holes §6.2
+  lists, each a probe in `tools/fuzz/holes/open/`. A view is tracked
+  wherever it goes (§2.10).
 - **Conservative, with a fix.** A program the rules cannot prove safe is
   rejected. Each diagnostic names the rule and a concrete change that
   satisfies it (§6.3).
@@ -176,9 +177,14 @@ keep a copy), and an impl may not keep its receiver, which the object
 only lends. A raw-pointer parameter (`*T`) hands nothing over: storing it
 is the raw code's business.
 
-One implementation limit remains: a raw owned string (`s`) and an owned
-slice cannot be passed to an explicit `sink` parameter. Wrap them in a
-`String` / `Vec`.
+Two implementation limits remain. An owned slice, or a struct whose
+literal gave it one, cannot be passed to an explicit `sink` parameter:
+wrap it in a `Vec`. A raw owned string (`s`) can be, and it leaves the
+caller's binding, but the callee does not release a `sink s` parameter
+itself: it takes the string over as a `String` (`string_adopt`), hands
+it to another `sink` that does, or, in an `unsafe` function, frees it.
+A callee that only reads, returns or stores the string leaks it, and
+the compiler does not yet report that (§6.2).
 
 ## 2. The ownership rules
 
@@ -493,9 +499,10 @@ a b )` — and store the binding: the value then holds a view of `x`, which
 the walk keeps from outliving it (§2.10). A string binding that owns its
 buffer is an owner like a `String`: a copy of it is a view of the buffer,
 and a closure or a struct handed back holding one is checked like any
-view. A parameter that takes a string over says so with `sink`. `unsafe`
-code and the standard library manage raw strings by hand, and there a
-field a struct literal gave a fresh string is the struct's to release.
+view. A parameter that takes a string over says so with `sink`, and
+adopts it (`string_adopt`, §1). `unsafe` code and the standard library
+manage raw strings by hand, and there a field a struct literal gave a
+fresh string is the struct's to release.
 
 ## 3. Outside the rules
 
@@ -590,9 +597,32 @@ free, no read through a dangling view, no out-of-bounds access, no data
 race, and nothing it allocated is left unreleased, on the panic path as
 much as the normal one (§7.2). Rc cycles are collected (§7.7).
 
-There is no exception. 0.71.0 named one: a `Slice` built from a `Vec`
-was not tracked as a view of it (hole probe `tools/fuzz/holes/h32`).
-Views are now values (§2.10), tracked through every place one can be put.
+0.71.0 named one exception: a `Slice` built from a `Vec` was not tracked
+as a view of it (hole probe `tools/fuzz/holes/h32`). It is closed: views
+are now values (§2.10), tracked through every place one can be put.
+
+**Open holes (0.72.0).** The 0.72.0 release review found safe programs
+the compiler still accepts and that leak, free memory they do not own or
+read freed memory. Each is a probe in `tools/fuzz/holes/open/` (37, see
+its README), kept out of the CI gate until it is closed; until then the
+guarantee holds except for these:
+
+- a raw string handed to `string_adopt` or a `sink s` parameter (§1):
+  `string_adopt` takes over whatever it is handed, owned or not, and a
+  `sink s` the callee only reads is never released — take a string over
+  as a `sink String`, and hand `string_adopt` only a string you own;
+- a view that leaves through a helper's return value (`^ ( pick x )`),
+  or is stored into a container reached indirectly (a field of an
+  `inout` struct, a `Vec` that aliases a parameter or sits inside one);
+- one owner consumed twice, or consumed and read, in a single call;
+- `mem_forget`, `mem_take` and the `rcbox` primitives, which safe code
+  can still call although §3.3d makes them `unsafe`;
+- a destructor that panics, reassigns a field of its receiver or hands
+  it to a `sink` disposer, and a closure defined inside a `% Drop` impl;
+- a closure value called with a fresh string, and a keyword-argument
+  call to a forward-declared function that consumes a handle;
+- a source whose path contains `/stdlib/`, which is compiled as the
+  trusted standard library with every safe-code check off.
 
 The rules that carry it:
 
@@ -662,8 +692,9 @@ The guarantee rests on a surface that is trusted rather than checked:
   surface a reviewer of that program has to trust.
 - **The standard library and the runtime.** Their raw code, the `Rc`
   cycle collector and the panic journal included, is the base every safe
-  program stands on. One of its safe-looking APIs is known not to hold
-  up: the `Slice` constructors (§6.2).
+  program stands on. A library function that trusts its caller's
+  pointer or length (`slice_from_raw`, `vec_borrow_raw`, `vec_set_len`,
+  `nurl_str_at`, …) is `unsafe` to call (§6.2).
 - **Marker assertions** (`% Send`, `% Sync`, `% NotSend`, `% NotSync`,
   `% Resource`) on types whose safety the compiler cannot see.
 - **The compiler itself.** A program accepted in violation of §6.2 is a
@@ -676,9 +707,14 @@ ideas that are genuinely analogous, but the mechanics differ:
 
 - Ownership is single-owner with scope-bound drop. There are **no
   lifetimes** in types, no lifetime parameters and no lifetime syntax.
-- A borrow cannot be stored in a struct or outlive the call or scope that
-  produced it. Where Rust would store a reference, NURL code stores an
-  owned copy, an `Rc` / `Arc`, or an index into an owning container.
+- A borrowed value stored into a struct, an Option or a container is
+  copied into it (§7.6). A view (`string_data`, a `Slice`, a raw string
+  in a value) may be stored there too, captured by a closure, kept in a
+  global or returned: it stays a view of its source wherever it goes and
+  ends with it (§2.10, §2.13). A struct Rust would give a lifetime
+  parameter, like protobuf's `ProtoReader` over a `( Slice u )`, needs
+  none. A value that must outlive its source is an owned copy, an `Rc` /
+  `Arc`, or an index into an owning container.
 - `in` / `inout` / `sink` are call conventions resolved per call, not
   reference types.
 - Leaks are part of the guarantee. Safe Rust permits leaks

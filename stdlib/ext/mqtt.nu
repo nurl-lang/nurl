@@ -4,10 +4,9 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //
 // A client for MQTT 5.0 brokers over plain TCP (1883) or TLS (8883).
-// MQTT runs over one TCP connection; the client dials OUT, so it uses
-// the runtime's client-side connect (`nurl_tcp_connect` /
-// `nurl_tcp_connect_tls`, runtime.c §18b/§18c, declared below via the
-// `&` FFI). The whole packet codec is pure NURL on `( Vec u )`.
+// MQTT runs over one TCP connection; the client dials OUT with
+// std/net.nu's `tcp_connect`, or `tcp_connect_tls` (the pure-NURL TLS
+// client) for 8883. The whole packet codec is pure NURL on `( Vec u )`.
 //
 // Connections are framed: every read goes through `__mqtt_read_packet`,
 // which buffers leftover bytes in `MqttClient.rxbuf` so a packet split

@@ -17,9 +17,10 @@
 //       True iff a and b have equal length AND equal bytes. The
 //       length check returns early — that is fine, length is public.
 //
-//   ( constant_time_eq_n s a s b i n )             → b
+//   ( constant_time_eq_n *u a *u b i n )           → b
 //       Compare exactly n bytes of both (caller guarantees both
-//       pointers have ≥ n readable bytes). For sub-slice compares
+//       pointers have ≥ n readable bytes — raw pointers, so only an
+//       `unsafe` function may call it). For sub-slice compares
 //       where the surrounding lengths are already known equal.
 //
 //   ( constant_time_eq_vec ( Vec u ) a ( Vec u ) b ) → b
@@ -31,9 +32,10 @@ $ `stdlib/core/vec.nu`
 
 @ constant_time_eq_n * u a * u b i n → b {
     // Read bytes through the `*u` + `. p k` indexed load, NOT
-    // nurl_str_get: that bounds-checks with strlen, so on binary
-    // material (a MAC or key with no trailing NUL — exactly what
-    // constant_time_eq_vec passes) it reads past the buffer end. The
+    // nurl_str_get: that bounds-checks by measuring up to the index, so
+    // on binary material (a MAC or key, exactly what
+    // constant_time_eq_vec passes) every byte after a zero byte reads as
+    // 0, and the measuring makes the time depend on the data. The
     // contract already requires n readable bytes in both operands, so
     // the raw indexed load is both correct and safe here.
     : *u pa # *u a

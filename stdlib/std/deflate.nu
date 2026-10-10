@@ -1,11 +1,13 @@
 // stdlib/std/deflate.nu — pure-NURL DEFLATE (RFC 1951) codec + the
 // CRC-32 / Adler-32 checksums used by gzip (RFC 1952) and zlib (RFC 1950).
 //
-// No libz. The decoder is a port of Mark Adler's puff.c reference
-// inflater (stored / fixed-Huffman / dynamic-Huffman blocks); the encoder
-// emits fixed-Huffman blocks with greedy LZ77 matching (a valid DEFLATE
-// stream any inflater reads — including zlib's). The gzip/zlib framing
-// wrappers live in stdlib/ext/compress.nu over this core.
+// No libz. The decoder follows Mark Adler's puff.c reference inflater
+// (stored / fixed-Huffman / dynamic-Huffman blocks), except that a code
+// of up to 9 bits decodes with one table lookup; puff.c's bit-at-a-time
+// canonical walk remains for longer codes. The encoder emits fixed-Huffman
+// blocks with greedy LZ77 matching (a valid DEFLATE stream any inflater
+// reads — including zlib's). The gzip/zlib framing wrappers live in
+// stdlib/ext/compress.nu over this core.
 //
 // Surface:
 //   ( inflate ( Vec u ) src )            → !( Vec u ) DeflateErr   raw DEFLATE → bytes

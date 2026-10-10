@@ -87,10 +87,13 @@ $ `stdlib/core/slice.nu`
 // orders of magnitude slower.
 //
 // Bytes are read straight off the `*u` view pointer (`# i . p k`), NEVER via
-// nurl_str_get: that bounds-checks with strlen(), and a CSV view points into
-// the middle of one big arena buffer with no interior NUL, so a single
-// nurl_str_get would scan to the end of the file — O(rows) per byte, O(N²)
-// over the table (measured: it turned a sub-second extract into minutes).
+// nurl_str_get: its bounds check measures the string with strnlen up to the
+// index (stdlib/core/string.nu), and a CSV view points into the middle of one
+// big arena buffer with no interior NUL, so that check bounds nothing here —
+// it only adds an O(k) scan to every byte read. (Back when nurl_str_get
+// measured with strlen(), a single call scanned to the end of the file —
+// O(rows) per byte, O(N²) over the table; measured: it turned a sub-second
+// extract into minutes.)
 
 // byte at offset k of a *u pointer, as an int
 unsafe @ __b * u p i k → i { ^ # i . p k }

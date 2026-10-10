@@ -673,7 +673,8 @@ $ `stdlib/std/time.nu`
 //   ( process_spawn2 s cmd s a0 s a1 )          → ! ProcChild ProcessErr
 //
 //   ( proc_pid          ProcChild p )           → i
-//   ( proc_write        ProcChild p s buf i n ) → i      bytes written, -1 err
+//   ( proc_write        ProcChild p *u buf i n ) → i     bytes written, -1 err;
+//                                                        `unsafe` callers only
 //   ( proc_write_str    ProcChild p s s_view )  → i
 //   ( proc_write_bytes  ProcChild p ( Vec u ) data ) → i  full-write loop
 //   ( proc_write_line   ProcChild p s line )    → i      appends '\n'

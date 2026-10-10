@@ -12,6 +12,11 @@ allocation and capacity arithmetic").
 > probe, held by CI; MEMORY.md §6.2 states the guarantee with **no**
 > exception; every gate below is green; compile and run time are at or
 > below the baseline.
+>
+> *2026-10-10:* the 0.72.0 release review found 37 more safe programs that
+> the compiler accepts and that fault (`tools/fuzz/holes/open/`), so
+> MEMORY.md §6.2 lists open holes again; this plan's own probes (h32–h141)
+> stay closed.
 
 ## Status (2026-10-08): done
 
@@ -178,11 +183,13 @@ the inline statements would.
 
 Whether a call result is lent from an argument is a summary, never a
 name: a value read out of a parameter's storage (directly, or through a
-raw load in trusted code) is lent from that parameter. `vec_get`'s name
-special case goes; `map_get`, `box_get`, `deque_get`, `btree_get`, … get
-the same answer from their bodies. Which calls drop or hand out elements
-(`bck_is_elem_dropper`) is likewise derived from the summaries of the
-trusted bodies, not a list.
+raw load in trusted code) is lent from that parameter. `map_get`,
+`box_get`, `deque_get`, `btree_get`, … get that answer from their bodies.
+(Not done: `vec_get` keeps its name special case beside its summary, and
+the library's element droppers and growers are still name lists,
+`bck_is_elem_dropper` and `bck_elem_keeper`. A call on neither list is
+taken at its drop summary, or at its mutation summary when it is raw
+code.)
 
 ### G. Checked allocation arithmetic
 

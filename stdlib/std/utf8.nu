@@ -9,8 +9,9 @@
 //
 // Bytes are read through a raw pointer with a `& 255` mask, so the high
 // bytes of a multi-byte sequence arrive unsigned — and each access is
-// O(1). `utf8_decode` runs strlen once per call; scan loops should hoist
-// the length and use `utf8_decode_n`.
+// O(1). `utf8_decode` runs strlen once per call; a scan loop should
+// measure the string once (`slice_of_str`) and decode with `utf8_decode_at`
+// (`utf8_decode_n` takes a raw pointer and is for `unsafe` code).
 //
 // Design: the decoder is total. On malformed input it yields the Unicode
 // replacement scalar U+FFFD with width 1 and ok=0, so a caller may either
@@ -37,10 +38,11 @@ $ `stdlib/core/slice.nu`
 // point boundary; if it lands inside a sequence the byte is reported as a
 // 1-byte error so the caller can resynchronise.
 //
-// This wrapper runs strlen once per call; a loop that walks a long
-// string should hoist the length and call `utf8_decode_n` instead — the
-// old shape (strlen per byte access, up to five per char) made every
-// utf8 scan quadratic in the string length.
+// This wrapper runs strlen once per call, so a loop that walks a long
+// string with it is quadratic in the string's length. Measure once —
+// `: ( Slice u ) v ( slice_of_str str )` — and decode with
+// `( utf8_decode_at v pos )`; `utf8_decode_n` is the raw form, for
+// `unsafe` code that already holds the pointer and its length.
 @ utf8_decode s str i pos → Utf8Dec {
     ^ ( utf8_decode_n str ( nurl_str_len str ) pos )
 }

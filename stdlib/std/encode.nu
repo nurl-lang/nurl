@@ -10,13 +10,16 @@
 //   ( hex_encode s )           → String              lowercase, 2 chars/byte
 //   ( hex_decode s )           → ! String ParseErr   accepts upper/lower
 //   ( b64_encode s )           → String              standard alphabet, padded
-//   ( b64_encode_len s i )     → String              binary-safe (NUL ok)
+//   ( b64_encode_len *u i )    → String              binary-safe; raw pointer:
+//                                                     `unsafe` callers only
+//   ( b64_encode_string String ) → String            binary-safe (NUL ok)
 //   ( b64_encode_vec (Vec u) ) → String              binary-safe
 //   ( b64_decode s )           → ! String ParseErr   standard, padding optional
 //   ( b64_url_encode s )       → String              URL-safe (- _), no padding
 //   ( b64_url_decode s )       → ! String ParseErr   URL-safe, padding optional
 //   ( b32_encode s )           → String              standard alphabet, padded
-//   ( b32_encode_len s i )     → String              binary-safe (NUL ok)
+//   ( b32_encode_len *u i )    → String              binary-safe; raw pointer:
+//                                                     `unsafe` callers only
 //   ( b32_encode_vec (Vec u) ) → String              binary-safe
 //   ( b32_decode s )           → ! String ParseErr   standard, padding optional,
 //                                                     case-insensitive (TOTP)

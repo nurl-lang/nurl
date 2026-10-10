@@ -560,10 +560,6 @@ Known deep follow-ups (no workarounds — these are tracked for a genuine fix):
   OS thread today (Tier 1), which keeps liveness independent of a long-running
   handler. A fuller fix is compiler-inserted loop back-edge preemption so even a
   tight in-fiber loop yields.
-- **Reactor recv-deadline.** A fiber blocked on `tcp_read_chunk` parks on the runtime's reactor (poll(2))
-  without a timer-wheel deadline, so a recv timeout is ignored under the fiber
-  reactor; single-process multi-node demos use process-per-node until fiber
-  reads are registered on the timer wheel.
 - **Large relay frames.** `_relay_max` caps a forwarded frame at 16 MiB (a DoS
   guard), and `__read_exact` now rides out a mid-frame recv timeout so a large
   body is no longer abandoned. But a *single* multi-MiB frame is still fragile
@@ -571,6 +567,6 @@ Known deep follow-ups (no workarounds — these are tracked for a genuine fix):
   (a not-fully-root-caused send/recv-scheduling interaction), so the reliable
   transfer unit is ~1 MiB — higher layers that move bulk data chunk it to that
   size rather than sending one giant frame. A genuine fix (reliable large-frame
-  transfer, or the reactor deadline above) would lift that.
+  transfer) would lift that.
 
 The mesh PSK is node-wide today (per-peer PSK is a follow-up).

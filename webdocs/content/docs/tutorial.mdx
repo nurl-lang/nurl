@@ -117,10 +117,10 @@ $ `stdlib/core/slice.nu`
 A few things worth noticing:
 
 - `slice_of_str` measures the string once; `slice_byte` then reads byte
-  `idx` in constant time, and reads 0 past the end. (`nurl_str_get text
-  idx` reads a byte too, but measures the string from its start on every
-  call — a loop over a file with it is quadratic in the file's size, and
-  `nurlc` warns about exactly that shape.)
+  `idx` in constant time, and reads 0 past the end.
+  (`nurl_str_get text idx` reads a byte too, but measures the string from
+  its start on every call — a loop over a file with it is quadratic in the
+  file's size, and `nurlc` warns about exactly that shape.)
 - `~ < idx len { ... }` is the while loop: prefix condition, then body.
   See [Control flow](./control-flow).
 - `10`, `32`, `9`, `13` are raw character codes (newline, space, tab,
@@ -174,7 +174,7 @@ both from `main`:
 Compile and run the program to make it read its own source code and count.
 ```bash
 ./build/nurlc wc.nu > /tmp/wc.ll
-clang /tmp/wc.ll stdlib/runtime.o -o /tmp/wc
+clang /tmp/wc.ll stdlib/runtime.native.o -lm -lpthread -o /tmp/wc
 /tmp/wc wc.nu 
 ```
 
@@ -182,7 +182,7 @@ Or, if you built from source, the one-step wrapper:
 
 ```bash
 ./nurl.sh wc.nu
-./wordcount wc.nu
+./wc wc.nu
 ```
 
 See [Compiling and running](./compiling-and-running) for what each stage
