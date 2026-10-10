@@ -6,6 +6,37 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Three of the 0.72.0 known memory holes are closed**, each at its root
+  and at no run-time cost — the generated code of all 1 642 programs in
+  the test corpus, bench, examples and packages is byte-identical to
+  0.72.0's — and at none at compile time either: the compiler compiles
+  itself in 0.19 % fewer instructions (callgrind; json_parse 0.14 %),
+  because the borrow checker's statement lists (`reads`, `pmoves` and
+  eight more) now grow in place instead of being copied whole for every
+  identifier read or move recorded, which pays for the new check:
+  - *One owner consumed twice, or consumed and read, in a single call*
+    (`( f m m )` with a `sink` and a borrowed parameter;
+    `( f ( string_data s ) ( eat s ) )`) is a compile error naming both
+    arguments. A call's moves were flushed into the borrow walk only after
+    the statement, so its own later arguments never saw them. Each argument
+    now records its span of the statement's reads and moves, and a call
+    any of whose arguments moved something checks the others: no other
+    argument may hand the callee the name or a view of it (only a plain
+    scalar computed from it), and none may read it after an earlier
+    argument released it as it ran (`( g ( string_len s ) ( eat s ) )` and
+    `( take s + ( string_len s ) 1 )` stay legal). Where each argument
+    starts is packed into integers (an O(1) read of the lists' cached
+    lengths), so a call allocates nothing for the check, and only a call
+    that moved something runs it. Probes h143, h144.
+  - *A keyword-argument call to a function defined later that hands its
+    argument on to a `sink`* no longer double-frees: the kwargs path now
+    runs the positional path's whole-module consumption rule (one shared
+    helper, `mem_arg_consumption`). Probe h142.
+
 ## [0.72.0] — 2026-10-10
 
 0.71.0's one known hole in the memory guarantee (a `Slice` of a `Vec`,

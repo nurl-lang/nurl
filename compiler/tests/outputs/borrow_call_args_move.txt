@@ -1,0 +1,13 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/borrow_call_args_move.nu:22:18: error: 'm' is moved by argument 1 of 'both' and also used by argument 2 — the arguments run in order, so that one reads what was already given away. Bind what the call needs first (clone it if both arguments need the value), or pass it in only one argument.
+    ^ ( both m m )
+                 ^
+compiler/tests/borrow_call_args_move.nu:29:51: error: 's' is moved by argument 2 of 'view_then_eat' and also used by argument 1 — its value may be that binding or a view into it, and the callee receives it after the move released it. Bind what the call needs first (clone it if both arguments need the value), or pass it in only one argument.
+    ^ ( view_then_eat ( string_data s ) ( eat s ) )
+                                                  ^
+compiler/tests/borrow_call_args_move.nu:35:40: error: 's' is moved by argument 1 of 'add' and also used by argument 2 — the arguments run in order, so that one reads what was already given away. Bind what the call needs first (clone it if both arguments need the value), or pass it in only one argument.
+    ^ ( add ( eat s ) ( string_len s ) )
+                                       ^
+error: aborting due to 3 previous errors
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.
