@@ -9,8 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 Every hole the 0.72.0 release review left open in the memory guarantee is
-closed: the 34 probes of `tools/fuzz/holes/open/` (now h145–h178) and eleven
-more found on the way (h179–h189) are rejected or run clean under
+closed: the 34 probes of `tools/fuzz/holes/open/` (now h145–h178) and fifteen
+more found on the way (h179–h193) are rejected or run clean under
 ASan/UBSan/LSan, and CI holds each of them — no hole is known
 (docs/MEMORY.md §6.2). None of the fixes asks a program to release
 anything by hand: a raw string a callee takes over is released by the
@@ -92,7 +92,7 @@ under 0.72.0, not more (*Packages*). A package's version is written once:
 
 ### Fixed
 
-- **The remaining known holes are closed** (probes h145–h189), each at
+- **The remaining known holes are closed** (probes h145–h193), each at
   its root:
   - *A raw string handed to a consumer* (h161–h170): a literal, a view, a
     borrowed or closure parameter, or a result fresh on only some paths —
@@ -124,6 +124,24 @@ under 0.72.0, not more (*Packages*). A package's version is written once:
   - *A `;` defer that used a field the return value had moved out*
     (`^ @ ?V { T . x f }`, h189): under a defer the returned literal takes
     a copy of the field and the struct keeps its own.
+  - *A drop hook with nothing of its own to do* (`@ H_drop sink H h → v
+    {}`, h190) dropped its receiver through the drop glue that had called
+    it: unbounded recursion (a stack overflow at `-O0`, a hang at `-O2`).
+    The hook is the receiver's destructor, so it is not dropped again.
+  - *A field taken out through a struct cursor* (h191, h192): a struct
+    copied from another binding (`: E b a`, or `: E m m0` over a `??`
+    payload) is a cursor, and the binding it copied still drops its own
+    slot. A returned literal, a binding read from the cursor, or a `sink`
+    argument that took a handle field of it left that slot full, and the
+    owner freed what the taker held (audio's MP3 encoder returned an empty
+    stream through it). The take now empties the field in each owner the
+    cursor is over, a parameter owner is consumed with it, and a literal
+    copies a field nobody gave up while the struct still holds that very
+    handle (a cursor over a parameter or a borrowed `vec_get` element).
+  - *A closure field of an owned struct, returned in a literal* (h193),
+    skipped the struct's drop and leaked its other fields: the closure's
+    type has blanks, and the field-read record split on them. The closure
+    moves out like a handle field.
 - **`# X w` builds a one-word wrapper around a one-word handle** (`: X {
   ( Arc XImpl ) a }` over Arc's `{ s ctl }`): the word goes in at the
   innermost slot. It produced an all-zero `X` — the cast's fallback for a

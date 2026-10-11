@@ -630,7 +630,7 @@ keyword-argument call to a forward function that consumes its argument.
 **No open holes.** The 0.72.0 release review found 37 safe programs the
 compiler accepted and that leaked, freed memory they did not own or read
 freed memory, and converting the packages' handles to `Arc` found ten
-more; all are closed, each a probe CI now holds (h142–h189):
+more; all are closed, each a probe CI now holds (h142–h193):
 
 - a raw string handed to `string_adopt` or a `sink s` parameter: only a
   declared `sink` takes a raw string over, its callee releases it, and a
@@ -662,7 +662,22 @@ more; all are closed, each a probe CI now holds (h142–h189):
   none of them is accepted (spec §4.1);
 - a `;` defer that used a field a returned literal had moved out of its
   struct (`^ @ ?V { T . x f }`): under a defer the literal takes a copy and
-  the struct keeps its own.
+  the struct keeps its own;
+- a drop hook with nothing of its own to do (`@ H_drop sink H h → v {}`,
+  the hook a handle over an `Arc` needs) dropped its receiver at the end
+  of the hook, through the drop glue that calls the hook: unbounded
+  recursion, a stack overflow at `-O0` and a hang at `-O2`. A drop hook is
+  its receiver's destructor; the fields go afterwards by drop glue;
+- a field taken out of a struct *cursor* — a binding copied from another
+  (`: E b a`, `: E m m0` over a `??` payload), which still drops its own
+  slot — by a returned literal, a binding read from it, or a `sink`
+  argument: the owner freed what the taker now held. The take empties the
+  field in each owner the cursor is over (a parameter owner is consumed
+  with it), and a literal copies a field nobody gave up while the struct
+  still holds that very handle;
+- a returned literal that took a closure field of a struct this function
+  owns skipped the struct's drop, leaking every other field it held: the
+  closure moves out as a handle field does.
 
 The rules that carry it:
 

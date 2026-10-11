@@ -218,7 +218,7 @@ $ `stdlib/core/slice.nu`
     ( check > ( nurl_str_len ( anomaly_authz_last_error ) ) 0
     `wiring: a refusal always carries a reason` )
 
-    = g_az_prov_addr 0
+    ( __az_forget_provider )
     ( anomaly_authz_configure_tenancy F `` )
     ( anomaly_authz_configure F T `` `` `` )
 }

@@ -223,7 +223,7 @@ unsafe @ anomaly_authz_configure_tenancy b multi s allowed → v {
     ( __az_set_str ( __az_strs ) 3 allowed )
     // A change of tenancy mode changes what the provider must be built
     // from, so the cached one is no longer the right one.
-    = g_az_prov_addr 0
+    ( __az_forget_provider )
     ( anomaly_authz_set_iss_tmpl `` )
 }
 
@@ -1580,9 +1580,18 @@ unsafe @ __az_provider → ?OidcProvider {
     ^ @ ?OidcProvider { T p }
 }
 
-// One share of `p` stays behind g_az_prov_addr for the rest of the process.
+// One share of `p` stays behind g_az_prov_addr until it is replaced or
+// forgotten; the share kept before is released.
 unsafe @ __az_keep_provider OidcProvider p → v {
+    ( __az_forget_provider )
     = g_az_prov_addr ( arc_into_word [OidcProviderImpl] ( arc_clone [OidcProviderImpl] . p a ) )
+}
+
+// The cached provider's share goes back: the word is an owner again,
+// dropped here.
+unsafe @ __az_forget_provider → v {
+    : OidcProvider old @ OidcProvider { ( arc_from_word [OidcProviderImpl] g_az_prov_addr ) }
+    = g_az_prov_addr 0
 }
 
 // The issuer a token from tenant `tid` must carry: the provider's own

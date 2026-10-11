@@ -13680,6 +13680,25 @@ unsafe @ bck_list_len i which → i {
                     ( nurl_print `  ` ) ( nurl_print zc ) ( nurl_print ` = and i1 ` ) ( nurl_print sk ) ( nurl_print `, ` ) ( nurl_print nso ) ( nurl_print `\n` )
                 } {}
                 ( mem_zero_field cg fr_ptr fr_sty fr_idx fr_fty zc )
+                // …and in each binding the struct was a cursor over (`: E b
+                // a`): that one still drops its own slot (h191). A parameter
+                // among them is consumed with it, as its own field would be.
+                : s fr_cown ( __cursor_owners syms fr_ptr fr_sty )
+                : s fr_ck ( mem_handle_key cg fr_fty av )
+                ? & != 0 ( nurl_str_len fr_cown ) != 0 ( nurl_str_len fr_ck ) {
+                    : s fr_took ( __cursor_owner_take syms cg fr_cown fr_sty fr_idx fr_fty fr_ck zc )
+                    : ~ s fr_cw ( nurl_str_cat fr_cown `` )
+                    ~ != 0 ( nurl_str_len fr_cw ) {
+                        : s fr_w ( str_first_word fr_cw ) = fr_cw ( str_skip_word fr_cw )
+                        : s fr_wpn ( nurl_sym_get2 syms fr_w `__pname` )
+                        : i fr_wpi ( nurl_sym_word_index syms `__fn_param_names__` fr_wpn )
+                        ? & != 0 ( nurl_str_len fr_wpn ) >= fr_wpi 0 {
+                            ? fr_decl { ( mem_record_kept_param syms fr_wpn ) }
+                            { ( __park_append syms `__fn_pending_keep_impl__` ( nurl_str_cat4 ( nurl_str_int fr_wpi ) ` ` call_name
+                                ( nurl_str_cat4 ` ` fname ` ` ( nurl_str_int arg_idx ) ) ) ) }
+                        } {}
+                    }
+                } {}
                 // …and in the Vec slot it was read from (`?? ( vec_get v k ) {
                 // T p → ( string_free . p key ) }`), which still holds it.
                 ? != 0 ( nurl_sym_len2 syms fr_ptr `__vget` ) { ( mem_vget_field_consume syms cg fr_ptr fr_sty fr_idx fr_fty zc ) } {}
@@ -31382,7 +31401,7 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
             : s __adp ( str_first_word __adf )
             : s __adt ( str_first_word ( str_skip_word ( str_skip_word ( str_skip_word __adf ) ) ) )
             = __ad_field_moves & & != 0 ( nurl_str_len __adp ) ( nurl_sym_has_word syms `__user_drops__` __adp )
-            & == 0 ( nurl_sym_len2 syms __adp `__pname` ) ( __is_handle_ty __adt )
+            & == 0 ( nurl_sym_len2 syms __adp `__pname` ) | ( __is_handle_ty __adt ) ( __is_closure_llty fty )
         } {}
         // (Nor a number read out of one — `^ @ Ser { y . kd kind }`: a copy,
         // and `kd` is dropped with all it holds; skipping it leaked its Vec.)
@@ -31428,7 +31447,8 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
             : s fs_ptr ( str_first_word fs ) = fs ( str_skip_word fs )
             : s fs_sty ( str_first_word fs ) = fs ( str_skip_word fs )
             : s fs_idx ( str_first_word fs ) = fs ( str_skip_word fs )
-            : s fs_fty ( str_first_word fs )
+            // (A closure's type holds blanks: the literal's own field type.)
+            : s fs_fty ? ( __is_closure_llty fty ) ( nurl_str_cat fty `` ) ( str_first_word fs )
             // Under a `;` defer, which runs after the return value is made
             // and may still use the field, the literal takes a copy and the
             // struct keeps its own (h189).
@@ -31438,10 +31458,54 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
                 = fld_lent ``
             } {}
             ? & & & ! __fs_defer ( nurl_sym_has_word syms `__user_drops__` fs_ptr )
-            == 0 ( nurl_sym_len2 syms fs_ptr `__pname` ) ( __is_handle_ty fs_fty )
+            == 0 ( nurl_sym_len2 syms fs_ptr `__pname` ) | ( __is_handle_ty fs_fty ) ( __is_closure_llty fs_fty )
             { ( mem_udrop_takeover_opt syms cg fs_ptr ( nurl_lex_line lex ) )
                 : s __tk ( mem_udrop_flag_get syms cg fs_ptr )
                 ( mem_zero_field cg fs_ptr fs_sty fs_idx fs_fty __tk )
+                // The struct was a cursor over another binding's value (`: E
+                // b a`, or `: E m m0` over a `??` payload): that binding still
+                // drops its own slot, so the field goes from there too —
+                // where it holds this very handle — or its drop frees what
+                // the literal now holds. When neither the cursor nor such an
+                // owner gave it up (a parameter's, a borrowed value's), the
+                // literal takes a copy (h191).
+                // (A struct that holds nothing of its own — a cursor over a
+                // borrowed element, `: E b e` with e a `vec_get` payload —
+                // gives up nothing either, and the literal copies while the
+                // struct still holds that very handle. One replaced since it
+                // was read — `: out . s body  = . s body …`, the slot then
+                // written back — is no longer the struct's: taken as before.)
+                : s __cown ( __cursor_owners syms fs_ptr fs_sty )
+                : s __fk ( mem_handle_key cg fty fval )
+                // (A payload of an option binding answers below, per call.)
+                : ~ b __fs_optpay F
+                : ~ s __fsoa ( nurl_sym_get2 syms fs_ptr `__alias` )
+                ~ != 0 ( nurl_str_len __fsoa ) {
+                    : s __fsow ( str_first_word __fsoa ) = __fsoa ( str_skip_word __fsoa )
+                    ? != 0 ( nurl_str_starts ( nurl_sym_get2 syms __fsow `__udty` ) `%__opt.` ) { = __fs_optpay T } {}
+                }
+                : s __ftook ? | == 0 ( nurl_str_len __cown ) == 0 ( nurl_str_len __fk ) ( nurl_str_cat `false` `` ) ( __cursor_owner_take syms cg __cown fs_sty fs_idx fs_fty __fk `1` )
+                ? & & & ! __fs_optpay ! ( seq __tk `1` ) ( __clone_supported fty syms ) | != 0 ( nurl_str_len __fk ) == fld_first_tt TT_DOT {
+                    : s __fown ( nurl_cg_reg cg )
+                    ( nurl_print `  ` ) ( nurl_print __fown ) ( nurl_print ` = or i1 ` ) ( nurl_print __tk ) ( nurl_print `, ` ) ( nurl_print __ftook ) ( nurl_print `\n` )
+                    : ~ s __fcp ( nurl_cg_reg cg )
+                    ( nurl_print `  ` ) ( nurl_print __fcp ) ( nurl_print ` = xor i1 ` ) ( nurl_print __fown ) ( nurl_print `, 1\n` )
+                    ? != 0 ( nurl_str_len __fk ) {
+                        : s __fhg ( nurl_cg_reg cg )
+                        ( nurl_print `  ` ) ( nurl_print __fhg ) ( nurl_print ` = getelementptr ` ) ( nurl_print fs_sty ) ( nurl_print `, ptr ` ) ( nurl_print fs_ptr ) ( nurl_print `, i32 0` ) ( nurl_print ( __ff_gep_path fs_idx ) ) ( nurl_print `\n` )
+                        : s __fhv ( nurl_cg_reg cg )
+                        ( nurl_print `  ` ) ( nurl_print __fhv ) ( nurl_print ` = load ` ) ( nurl_print ( nurl_llty fs_fty ) ) ( nurl_print `, ptr ` ) ( nurl_print __fhg ) ( nurl_print `\n` )
+                        : s __fhk ( mem_handle_key cg fs_fty __fhv )
+                        ? != 0 ( nurl_str_len __fhk ) {
+                            : s __fhs ( nurl_cg_reg cg )
+                            ( nurl_print `  ` ) ( nurl_print __fhs ) ( nurl_print ` = icmp eq i8* ` ) ( nurl_print __fk ) ( nurl_print `, ` ) ( nurl_print __fhk ) ( nurl_print `\n` )
+                            : s __fca ( nurl_cg_reg cg )
+                            ( nurl_print `  ` ) ( nurl_print __fca ) ( nurl_print ` = and i1 ` ) ( nurl_print __fcp ) ( nurl_print `, ` ) ( nurl_print __fhs ) ( nurl_print `\n` )
+                            = __fcp __fca
+                        } {}
+                    } {}
+                    = fval ( mem_emit_cloneif cg fty fval __fcp )
+                } {}
                 // A payload of an option binding holds its field exactly when
                 // the option did: a cursor over a borrowed element (`: ?E e (
                 // vec_get … ) ?? e { T ev → ^ @ ?V { T . ev value } }`) holds
@@ -41965,6 +42029,55 @@ unsafe @ __opt_err_mangle s e → s {
             = k pc
         }
     }
+}
+
+// The bindings `ptr` is a cursor over that hold a struct of its own type
+// (`: E b a`, `: E m m0` over a `??` payload): `a`, and what `a` was a
+// cursor over in turn. Each still drops — a parameter, its caller does —
+// the value `ptr` only copied.
+@ __cursor_owners i syms s ptr s sty → s {
+    : ~ s out ``
+    : ~ s al ( nurl_sym_get2 syms ptr `__alias` )
+    ~ != 0 ( nurl_str_len al ) {
+        : s w ( str_first_word al ) = al ( str_skip_word al )
+        ? & ! ( seq w ptr ) ( seq ( nurl_sym_get2 syms w `__udty` ) sty ) {
+            = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat w `` ) ( nurl_str_cat3 out ` ` w )
+        } {}
+    }
+    ^ out
+}
+
+// Field `idx` (type `fty`) of `sty` moves out through a cursor: each local
+// owner in `owners` that holds the very handle keyed `key` there — and
+// owns it, and `cond` holds — has the field emptied, so its drop skips
+// it (h191). The i1 answer: whether one gave it up.
+@ __cursor_owner_take i syms i cg s owners s sty s idx s fty s key s cond → s {
+    : ~ s took ( nurl_str_cat `false` `` )
+    : ~ s ow ( nurl_str_cat owners `` )
+    ~ != 0 ( nurl_str_len ow ) {
+        : s w ( str_first_word ow ) = ow ( str_skip_word ow )
+        ? == 0 ( nurl_sym_len2 syms w `__pname` ) {
+            : s g ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print g ) ( nurl_print ` = getelementptr ` ) ( nurl_print sty ) ( nurl_print `, ptr ` ) ( nurl_print w ) ( nurl_print `, i32 0` ) ( nurl_print ( __ff_gep_path idx ) ) ( nurl_print `\n` )
+            : s v ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print v ) ( nurl_print ` = load ` ) ( nurl_print ( nurl_llty fty ) ) ( nurl_print `, ptr ` ) ( nurl_print g ) ( nurl_print `\n` )
+            : s k ( mem_handle_key cg fty v )
+            ? != 0 ( nurl_str_len k ) {
+                : s same ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print same ) ( nurl_print ` = icmp eq i8* ` ) ( nurl_print key ) ( nurl_print `, ` ) ( nurl_print k ) ( nurl_print `\n` )
+                : s wf ( mem_udrop_flag_get syms cg w )
+                : s c1 ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print c1 ) ( nurl_print ` = and i1 ` ) ( nurl_print same ) ( nurl_print `, ` ) ( nurl_print wf ) ( nurl_print `\n` )
+                : s c ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print c ) ( nurl_print ` = and i1 ` ) ( nurl_print c1 ) ( nurl_print `, ` ) ( nurl_print ? ( seq cond `1` ) `true` cond ) ( nurl_print `\n` )
+                ( mem_zero_field cg w sty idx fty c )
+                : s t2 ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print t2 ) ( nurl_print ` = or i1 ` ) ( nurl_print took ) ( nurl_print `, ` ) ( nurl_print c ) ( nurl_print `\n` )
+                = took t2
+            } {}
+        } {}
+    }
+    ^ took
 }
 
 // The payload a wrap literal that gives only its tag leaves out: for an

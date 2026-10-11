@@ -13,7 +13,7 @@ literal as raw memory. The published 0.34.2 does not compile under it.
   ordinary safe functions — the Arc does the counting — and so are the
   constructors that build one from a whole value; every copy is still the
   same state, and its last owner releases it.
-- 2 fewer functions are `unsafe` than in 0.34.2.
+- One fewer function is `unsafe` than in 0.34.2.
 - Its `--version` (or the version it reports) is read from `nurl.toml`
   with `( pkg_version )` instead of being written by hand, so it can no
   longer drift from the manifest.
@@ -27,6 +27,9 @@ literal as raw memory. The published 0.34.2 does not compile under it.
 
 - The report of a per-version fine-tune left its `note` a zero `String`; a
   client that read it read through a null block. It is the empty string.
+- Changing the tenancy mode, or caching a newly discovered OpenID
+  provider, released nothing of the provider cached before: its share
+  leaked. The cached share is released when it is replaced or forgotten.
 
 ## [0.34.2] — 2026-10-09
 
