@@ -138228,6 +138228,103 @@ end_5:
 
 @g_trust_roots__nurlown = global i64 0
 
+define i8* @__nurl_fn.__trust_key__fp1(i8* %path) sanitize_address {
+entry:
+  %r0 = alloca i64
+  %r1 = alloca i8*
+  store i8* null, i8** %r1
+  %r5 = alloca i8*
+  store i8* null, i8** %r5
+  %r7 = alloca i8*
+  store i8* null, i8** %r7
+  %r11 = alloca i64
+  %r14 = alloca i8*
+  store i8* null, i8** %r14
+  %r24 = alloca i64
+  %__jf = alloca [2 x ptr]
+  store [2 x ptr] zeroinitializer, ptr %__jf
+  store ptr inttoptr (i64 1 to ptr), ptr %__jf
+  %__jf1 = getelementptr inbounds [2 x ptr], ptr %__jf, i64 0, i64 1
+;                                                                               
+  br i1 false, label %jspr3, label %jspr4
+jspr3:
+  call void @nurl_journal_push(i8* %path)
+  br label %jspr4
+jspr4:
+  %r6 = call i8* @__nurl_fn.__canon_import_key__fp1(i8* %path)
+  %r8 = load i8*, i8** %r7
+  call void @nurl_free(i8* %r8)
+  store i8* %r6, i8** %r7
+  store ptr %r7, ptr %__jf1
+  %r9 = load i8*, i8** %r7
+  %r10 = call i64 @__nurl_fn.nurl_str_len(i8* %r9)
+  store i64 %r10, i64* %r11
+  %r12 = load i8*, i8** %r7
+  %r13 = bitcast i8* %r12 to i8*
+  store i8* %r13, i8** %r14
+  %r15 = load i64, i64* %r11
+  %r16 = icmp sgt i64 %r15, 0
+  br i1 %r16, label %and_right_1, label %and_end_2
+and_right_1:
+  %r17 = load i8*, i8** %r14
+  %r18 = getelementptr i8, i8* %r17, i32 0
+  %r19 = load i8, i8* %r18
+  %r20 = zext i8 %r19 to i64
+  %r21 = and i64 %r20, 255
+  %r22 = icmp ne i64 %r21, 47
+  br label %and_end_2
+and_end_2:
+  %r23 = phi i1 [ 0, %jspr4 ], [ %r22, %and_right_1 ]
+  br i1 %r23, label %then_3, label %else_4
+then_3:
+  store i64 0, i64* %r24
+  br label %loop_check_6
+loop_check_6:
+  %r25 = load i64, i64* %r24
+  %r26 = load i64, i64* %r11
+  %r27 = icmp slt i64 %r25, %r26
+  br i1 %r27, label %loop_body_7, label %loop_exit_8
+loop_body_7:
+  %r28 = load i8*, i8** %r14
+  %r29 = load i64, i64* %r24
+  %r30 = getelementptr i8, i8* %r28, i64 %r29
+  %r31 = load i8, i8* %r30
+  %r32 = zext i8 %r31 to i64
+  %r33 = and i64 %r32, 255
+  %r34 = icmp eq i64 %r33, 92
+  br i1 %r34, label %then_9, label %else_10
+then_9:
+  %r35 = load i8*, i8** %r14
+  %r36 = load i64, i64* %r24
+  %r37 = trunc i64 47 to i8
+  %r38 = getelementptr i8, i8* %r35, i64 %r36
+  store i8 %r37, i8* %r38
+  %r39 = zext i8 %r37 to i64
+  br label %end_11
+else_10:
+  br label %end_11
+end_11:
+  %r40 = load i64, i64* %r24
+  %r41 = add i64 %r40, 1
+  store i64 %r41, i64* %r24
+  br label %loop_check_6
+loop_exit_8:
+  br label %end_5
+else_4:
+  br label %end_5
+end_5:
+  %r42 = load i8*, i8** %r7
+  %r43 = load i8*, i8** %r7
+  store i8* %r43, i8** %r1
+  store i64 1, i64* %r0
+  %r44 = load i8*, i8** %r1
+  call void @nurl_journal_forget(i8* %r44)
+  %r45 = load i64, i64* %r0
+  call void @nurl_ret_owned_set(i64 %r45)
+;                                               
+  ret i8* %r42
+}
+
 define i8* @__nurl_fn.__trust_root__fp1(i8* %dir) sanitize_address {
 entry:
   %r0 = alloca i64
@@ -138258,7 +138355,7 @@ else_2:
   call void @nurl_ret_owned_set(i64 %r13)
   ret i8* %r11
 end_3:
-  %r15 = call i8* @__nurl_fn.__canon_import_key__fp1(i8* %dir)
+  %r15 = call i8* @__nurl_fn.__trust_key__fp1(i8* %dir)
 ;                                       
   %r18 = getelementptr [2 x i8], [2 x i8]* @.str.6925, i64 0, i64 0
   %r20 = getelementptr [2 x i8], [2 x i8]* @.str.6926, i64 0, i64 0
@@ -138445,7 +138542,7 @@ then_10:
 else_11:
   br label %end_12
 end_12:
-  %r102 = call i8* @__nurl_fn.__canon_import_key__fp1(i8* %path)
+  %r102 = call i8* @__nurl_fn.__trust_key__fp1(i8* %path)
   %r104 = load i8*, i8** %r103
   call void @nurl_free(i8* %r104)
   store i8* %r102, i8** %r103
@@ -331976,7 +332073,7 @@ then_27:
   store i8* %r104, i8** %r105
   store ptr %r105, ptr %__jf3
   %r107 = load i8*, i8** %r105
-  call void @__nurl_argxfen(ptr @.__nurl_argtransfer.1188, ptr %r105, i8* %r107)
+  call void @__nurl_argxfen(ptr @.__nurl_argtransfer.1189, ptr %r105, i8* %r107)
   %r108 = call i8* @__nurl_fn.__ext_by_sig__fp1(i64 %n, i8* %r107)
   %r110 = load i8*, i8** %r109
   call void @nurl_free(i8* %r110)
@@ -332048,7 +332145,7 @@ else_28:
   store i8* %r135, i8** %r136
   store ptr %r136, ptr %__jf6
   %r138 = load i8*, i8** %r136
-  call void @__nurl_argxfen(ptr @.__nurl_argtransfer.1189, ptr %r136, i8* %r138)
+  call void @__nurl_argxfen(ptr @.__nurl_argtransfer.1190, ptr %r136, i8* %r138)
   %r139 = call i1 @__nurl_fn.__ext_calls_back__fp1(i8* %r138)
   br i1 %r139, label %then_36, label %else_37
 then_36:
@@ -338094,7 +338191,7 @@ then_36:
   store i8* %r131, i8** %r132
   store ptr %r132, ptr %__jf2
   %r134 = load i8*, i8** %r132
-  call void @__nurl_argxfen(ptr @.__nurl_argtransfer.1184, ptr %r132, i8* %r134)
+  call void @__nurl_argxfen(ptr @.__nurl_argtransfer.1185, ptr %r132, i8* %r134)
   %r135 = call i64 @__nurl_fn.__dce_mark_name__fp1(i8* %r134)
   %r136 = load i8*, i8** %r132
   call void @nurl_free(i8* %r136)
@@ -339734,7 +339831,7 @@ entry:
   store ptr %r41, ptr %__jf2
   %r43 = load i8*, i8** %r41
   %r44 = getelementptr [3 x i8], [3 x i8]* @.str.17322, i64 0, i64 0
-  call void @__nurl_argxfen(ptr @.__nurl_argtransfer.1194, ptr %r41, i8* %r43)
+  call void @__nurl_argxfen(ptr @.__nurl_argtransfer.1195, ptr %r41, i8* %r43)
   %r45 = call i8* @fopen(i8* %r43, i8* %r44)
   %r46 = bitcast i8* %r45 to i8*
   store i8* %r46, i8** %r47
@@ -340081,7 +340178,7 @@ loop_body_2:
   store i8* %r22, i8** %r12
   store ptr %r12, ptr %__jf1
   %r24 = load i8*, i8** %r19
-  call void @__nurl_argxfen(ptr @.__nurl_argtransfer.1195, ptr %r19, i8* %r24)
+  call void @__nurl_argxfen(ptr @.__nurl_argtransfer.1196, ptr %r19, i8* %r24)
   call void @__nurl_fn.__sp_pin_name__fp1(i8* %r24)
   %r25 = load i8*, i8** %r19
   %r26 = getelementptr [6 x i8], [6 x i8]* @.str.17325, i64 0, i64 0
@@ -342114,7 +342211,7 @@ end_141:
   br i1 %r314, label %then_142, label %else_143
 then_142:
   %r315 = load i8*, i8** %r4
-  call void @__nurl_argxfen(ptr @.__nurl_argtransfer.1196, ptr %r4, i8* %r315)
+  call void @__nurl_argxfen(ptr @.__nurl_argtransfer.1197, ptr %r4, i8* %r315)
   call void @__nurl_fn.lint_init(i8* %r315)
   br label %end_144
 else_143:
@@ -342127,7 +342224,7 @@ then_145:
   br label %end_147
 else_146:
   %r318 = load i8*, i8** %r4
-  call void @__nurl_argxfen(ptr @.__nurl_argtransfer.708, ptr %r4, i8* %r318)
+  call void @__nurl_argxfen(ptr @.__nurl_argtransfer.709, ptr %r4, i8* %r318)
   %r319 = call i8* @__nurl_fn.compiler_read_source(i8* %r318)
   br label %end_147
 end_147:
@@ -342321,7 +342418,7 @@ end_159:
   %r412 = call i64 @__nurl_fn.nurl_sym_new()
   store i64 %r412, i64* @g_ptrtab
   %r413 = load i8*, i8** %r4
-  call void @__nurl_argxfen(ptr @.__nurl_argtransfer.980, ptr %r4, i8* %r413)
+  call void @__nurl_argxfen(ptr @.__nurl_argtransfer.981, ptr %r4, i8* %r413)
   call void @__nurl_fn.vis_set_current_src_file(i8* %r413)
   store i64 1, i64* @g_diag_recover_active
   %r431 = getelementptr { i64, i8*, i8*, i64, i64 }, { i64, i8*, i8*, i64, i64 }* null, i32 1
@@ -342393,7 +342490,7 @@ then_172:
 else_173:
   %r466 = load i8*, i8** %r4
   %r467 = load i8*, i8** %r462
-  call void @__nurl_argxfen(ptr @.__nurl_argtransfer.1197, ptr %r4, i8* %r466)
+  call void @__nurl_argxfen(ptr @.__nurl_argtransfer.1198, ptr %r4, i8* %r466)
   call void @__nurl_fn.__ice_report__fp1(i8* %r466, i8* %r467)
   br label %end_174
 end_174:
@@ -342448,7 +342545,7 @@ end_188:
   br label %end_185
 else_184:
   %r483 = load i8*, i8** %r473
-  call void @__nurl_argxfen(ptr @.__nurl_argtransfer.1191, ptr %r473, i8* %r483)
+  call void @__nurl_argxfen(ptr @.__nurl_argtransfer.1192, ptr %r473, i8* %r483)
   call void @__nurl_fn.dce_emit_module(i8* %r483)
   br label %end_185
 end_185:
@@ -345054,6 +345151,7 @@ x:
 @.__nurl_argtransfer.1195 = private constant i1 false
 @.__nurl_argtransfer.1196 = private constant i1 false
 @.__nurl_argtransfer.1197 = private constant i1 false
+@.__nurl_argtransfer.1198 = private constant i1 false
 @.__nurl_guard.0 = private constant i1 true
 @.__nurl_guard.1 = private constant i1 true
 @.__nurl_guard.2 = private constant i1 true

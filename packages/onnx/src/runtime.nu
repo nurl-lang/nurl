@@ -56,7 +56,7 @@ $ `stdlib/core/rcbox.nu`
 
 unsafe @ Engine_share Engine h → Engine { ^ @ Engine { # s ( rcbox_share # i . h ctl ) } }
 
-@ Engine_drop sink Engine h → v {
+unsafe @ Engine_drop sink Engine h → v {
     ( mem_forget h )
     ( rcbox_release [EngineImpl] # i . h ctl )
 }

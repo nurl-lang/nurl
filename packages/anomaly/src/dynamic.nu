@@ -110,7 +110,7 @@ $ `stdlib/core/rcbox.nu`
 
 unsafe @ Model_share Model h → Model { ^ @ Model { # s ( rcbox_share # i . h ctl ) } }
 
-@ Model_drop sink Model h → v {
+unsafe @ Model_drop sink Model h → v {
     ( mem_forget h )
     ( rcbox_release [ModelImpl] # i . h ctl )
 }
@@ -548,7 +548,7 @@ unsafe @ __an_window_tail Model mo__h i need i end → ?( Vec f ) {
 
 unsafe @ Hist_share Hist h → Hist { ^ @ Hist { # s ( rcbox_share # i . h ctl ) } }
 
-@ Hist_drop sink Hist h → v {
+unsafe @ Hist_drop sink Hist h → v {
     ( mem_forget h )
     ( rcbox_release [HistImpl] # i . h ctl )
 }

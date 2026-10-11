@@ -95,7 +95,7 @@ $ `stdlib/core/slice.nu`
 
 unsafe @ Gg_share Gg h → Gg { ^ @ Gg { # s ( rcbox_share # i . h ctl ) } }
 
-@ Gg_drop sink Gg h → v {
+unsafe @ Gg_drop sink Gg h → v {
     ( mem_forget h )
     ( rcbox_release [GgImpl] # i . h ctl )
 }

@@ -1581,7 +1581,7 @@ unsafe @ __az_provider → ?OidcProvider {
 }
 
 // One share of `p` stays behind g_az_prov_addr for the rest of the process.
-@ __az_keep_provider OidcProvider p → v {
+unsafe @ __az_keep_provider OidcProvider p → v {
     : OidcProvider kept ( OidcProvider_share p )
     = g_az_prov_addr # i . kept ctl
     ( mem_forget kept )

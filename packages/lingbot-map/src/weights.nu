@@ -43,7 +43,7 @@ $ `deps/torchpt/src/torchpt.nu`
 
 unsafe @ Lw_share Lw h → Lw { ^ @ Lw { # s ( rcbox_share # i . h ctl ) } }
 
-@ Lw_drop sink Lw h → v { ( mem_forget h ) ( rcbox_release [LwImpl] # i . h ctl ) }
+unsafe @ Lw_drop sink Lw h → v { ( mem_forget h ) ( rcbox_release [LwImpl] # i . h ctl ) }
 
 unsafe @ __Lw_ptr Lw h → *LwImpl { ^ ( rcbox_ptr [LwImpl] # i . h ctl ) }
 // No checkpoint (an empty slot until lw_open fills it).

@@ -59,7 +59,7 @@ $ `stdlib/core/rcbox.nu`
 
 unsafe @ OauthConfig_share OauthConfig h → OauthConfig { ^ @ OauthConfig { # s ( rcbox_share # i . h ctl ) } }
 
-@ OauthConfig_drop sink OauthConfig h → v {
+unsafe @ OauthConfig_drop sink OauthConfig h → v {
     ( mem_forget h )
     ( rcbox_release [OauthConfigImpl] # i . h ctl )
 }

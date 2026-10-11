@@ -76,7 +76,7 @@ $ `stdlib/core/slice.nu`
 
 unsafe @ Demo_share Demo h → Demo { ^ @ Demo { # s ( rcbox_share # i . h ctl ) } }
 
-@ Demo_drop sink Demo h → v { ( mem_forget h ) ( rcbox_release [DemoState] # i . h ctl ) }
+unsafe @ Demo_drop sink Demo h → v { ( mem_forget h ) ( rcbox_release [DemoState] # i . h ctl ) }
 
 unsafe @ __Demo_ptr Demo h → *DemoState { ^ ( rcbox_ptr [DemoState] # i . h ctl ) }
 

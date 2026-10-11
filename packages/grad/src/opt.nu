@@ -57,7 +57,7 @@ $ `stdlib/core/rcbox.nu`
 
 unsafe @ Opt_share Opt h → Opt { ^ @ Opt { # s ( rcbox_share # i . h ctl ) } }
 
-@ Opt_drop sink Opt h → v {
+unsafe @ Opt_drop sink Opt h → v {
     ( mem_forget h )
     ( rcbox_release [OptImpl] # i . h ctl )
 }

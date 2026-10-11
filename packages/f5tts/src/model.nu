@@ -127,7 +127,7 @@ $ `stdlib/core/rcbox.nu`
 
 unsafe @ F5Model_share F5Model h → F5Model { ^ @ F5Model { # s ( rcbox_share # i . h ctl ) } }
 
-@ F5Model_drop sink F5Model h → v {
+unsafe @ F5Model_drop sink F5Model h → v {
     ( mem_forget h )
     ( rcbox_release [F5ModelImpl] # i . h ctl )
 }

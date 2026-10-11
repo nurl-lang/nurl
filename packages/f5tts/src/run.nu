@@ -71,7 +71,7 @@ $ `stdlib/core/slice.nu`
 
 unsafe @ F5Voice_share F5Voice h → F5Voice { ^ @ F5Voice { # s ( rcbox_share # i . h ctl ) } }
 
-@ F5Voice_drop sink F5Voice h → v {
+unsafe @ F5Voice_drop sink F5Voice h → v {
     ( mem_forget h )
     ( rcbox_release [F5VoiceImpl] # i . h ctl )
 }

@@ -117,7 +117,7 @@ $ `stdlib/core/rcbox.nu`
 
 unsafe @ GTape_share GTape h → GTape { ^ @ GTape { # s ( rcbox_share # i . h ctl ) } }
 
-@ GTape_drop sink GTape h → v {
+unsafe @ GTape_drop sink GTape h → v {
     ( mem_forget h )
     ( rcbox_release [GTapeImpl] # i . h ctl )
 }

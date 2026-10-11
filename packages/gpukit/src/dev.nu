@@ -57,7 +57,7 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
 
 unsafe @ GkMem_share GkMem h → GkMem { ^ @ GkMem { # s ( rcbox_share # i . h ctl ) } }
 
-@ GkMem_drop sink GkMem h → v {
+unsafe @ GkMem_drop sink GkMem h → v {
     ( mem_forget h )
     ( rcbox_release [GkMemImpl] # i . h ctl )
 }

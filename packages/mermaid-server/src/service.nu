@@ -42,7 +42,7 @@ $ `stdlib/core/rcbox.nu`
 
 // Install `ts` as the set every request renders with (it moves into the
 // global's rcbox; a set installed before is released).
-@ mmd_state_init sink MmdTemplateSet ts → v {
+unsafe @ mmd_state_init sink MmdTemplateSet ts → v {
     : i old g_mmd_ts
     = g_mmd_ts ( rcbox_new [MmdTemplateSet] ts )
     ( rcbox_release [MmdTemplateSet] old )

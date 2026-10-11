@@ -68,7 +68,7 @@ $ `stdlib/core/rcbox.nu`
 
 unsafe @ OidcProvider_share OidcProvider h → OidcProvider { ^ @ OidcProvider { # s ( rcbox_share # i . h ctl ) } }
 
-@ OidcProvider_drop sink OidcProvider h → v {
+unsafe @ OidcProvider_drop sink OidcProvider h → v {
     ( mem_forget h )
     ( rcbox_release [OidcProviderImpl] # i . h ctl )
 }

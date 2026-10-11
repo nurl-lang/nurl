@@ -292,7 +292,7 @@ unsafe @ __ag_http_args HttpRequest req s op → Json {
 : ~ i g_ag_mcp 0
 : ~ b g_ag_mcp_oidc F
 
-@ __ag_mcp_init → v {
+unsafe @ __ag_mcp_init → v {
     ? == g_ag_mcp 0 {
         = g_ag_mcp_oidc ( ag_auth_oidc )
         = g_ag_mcp ( rcbox_new [AgMcpWiring] @ AgMcpWiring { ( ag_mcp_server ) } )
@@ -300,7 +300,7 @@ unsafe @ __ag_http_args HttpRequest req s op → Json {
 }
 
 // At app build time only (no worker runs yet): the server for this mode.
-@ __ag_mcp_init_for_mode → v {
+unsafe @ __ag_mcp_init_for_mode → v {
     ? & != g_ag_mcp 0 != g_ag_mcp_oidc ( ag_auth_oidc ) {
         ( rcbox_release [AgMcpWiring] g_ag_mcp )
         = g_ag_mcp 0

@@ -70,7 +70,7 @@ $ `stdlib/core/rcbox.nu`
 
 unsafe @ GpPlan_share GpPlan h → GpPlan { ^ @ GpPlan { # s ( rcbox_share # i . h ctl ) } }
 
-@ GpPlan_drop sink GpPlan h → v {
+unsafe @ GpPlan_drop sink GpPlan h → v {
     ( mem_forget h )
     ( rcbox_release [GpPlanImpl] # i . h ctl )
 }
@@ -1563,7 +1563,7 @@ unsafe @ _gpf_emit_ser_bwd_seg * GProgImpl pg i lo i hi s kname String o → b {
 
 unsafe @ GpFuse_share GpFuse h → GpFuse { ^ @ GpFuse { # s ( rcbox_share # i . h ctl ) } }
 
-@ GpFuse_drop sink GpFuse h → v {
+unsafe @ GpFuse_drop sink GpFuse h → v {
     ( mem_forget h )
     ( rcbox_release [GpFuseImpl] # i . h ctl )
 }

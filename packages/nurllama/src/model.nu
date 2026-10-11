@@ -210,7 +210,7 @@ $ `stdlib/core/slice.nu`
 
 unsafe @ Llm_share Llm h → Llm { ^ @ Llm { # s ( rcbox_share # i . h ctl ) } }
 
-@ Llm_drop sink Llm h → v {
+unsafe @ Llm_drop sink Llm h → v {
     ( mem_forget h )
     ( rcbox_release [LlmImpl] # i . h ctl )
 }
@@ -1206,13 +1206,13 @@ unsafe @ llm_open_st s path s weights i want_ctx → !Llm String {
 // A model kept in a module global (a server's resident model) as one
 // word: llm_into_word makes the word one owner of the model, a view of it
 // is `# Llm w`, and llm_word_release gives that owner back.
-@ llm_into_word sink Llm m → i {
+unsafe @ llm_into_word sink Llm m → i {
     : i w # i . m ctl
     ( mem_forget m )
     ^ w
 }
 
-@ llm_word_release i w → v { ( rcbox_release [LlmImpl] w ) }
+unsafe @ llm_word_release i w → v { ( rcbox_release [LlmImpl] w ) }
 
 unsafe @ llm_tok Llm m__h → Tok {
     : *LlmImpl m ( __Llm_ptr m__h )

@@ -103,7 +103,7 @@ unsafe @ __srv_unlock → v {
 // Open the model at g_srv_dir into g_srv_w. Called under the lock. The
 // tokenizer is not rebuilt: it was made once, before the port opened, and
 // a vocabulary does not change between loads of the same file.
-@ __srv_load → b {
+unsafe @ __srv_load → b {
     : i t0 ( monotonic_ns )
     : ~ i wp 0
     ? ( _wh_is_ggml g_srv_dir ) {

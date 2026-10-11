@@ -32,7 +32,7 @@ $ `tensor.nu`
 // route is open (tensor_gpu_close lets it go).
 : ~ i g_t_kit 0
 
-@ __t_adopt GpuKit kit → v {
+unsafe @ __t_adopt GpuKit kit → v {
     : GpuKit keep ( GpuKit_share kit )
     = g_t_kit # i . keep ctl
     ( mem_forget keep )  // the global holds this owner now

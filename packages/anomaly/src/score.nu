@@ -98,7 +98,7 @@ $ `deps/gpukit/src/gpukit.nu`
 // context is current only on the thread that opened it, and a launch from
 // another thread fails without one. gk_bind_thread is idempotent and
 // costs a cuCtxSetCurrent.
-@ __ag_ensure → b {
+unsafe @ __ag_ensure → b {
     ? != g_ag_state 0 {
         ? == g_ag_state 1 { ^ ( gk_bind_thread ( __ag_kit ) ) } {}
         ^ F

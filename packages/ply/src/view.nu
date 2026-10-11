@@ -49,7 +49,7 @@ $ `stdlib/core/rcbox.nu`
 
 unsafe @ VwState_share VwState h → VwState { ^ @ VwState { # s ( rcbox_share # i . h ctl ) } }
 
-@ VwState_drop sink VwState h → v {
+unsafe @ VwState_drop sink VwState h → v {
     ( mem_forget h )
     ( rcbox_release [VwStateImpl] # i . h ctl )
 }

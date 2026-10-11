@@ -489,7 +489,7 @@ unsafe @ _str_replace_all s hay s needle s rep → String {
 
 unsafe @ GProg_share GProg h → GProg { ^ @ GProg { # s ( rcbox_share # i . h ctl ) } }
 
-@ GProg_drop sink GProg h → v {
+unsafe @ GProg_drop sink GProg h → v {
     ( mem_forget h )
     ( rcbox_release [GProgImpl] # i . h ctl )
 }
@@ -613,7 +613,7 @@ unsafe @ __gp_edt * GProgImpl pg → i { ? | == . pg dtype 1 == . pg dtype 2 { ^
 
 unsafe @ GpOpt_share GpOpt h → GpOpt { ^ @ GpOpt { # s ( rcbox_share # i . h ctl ) } }
 
-@ GpOpt_drop sink GpOpt h → v {
+unsafe @ GpOpt_drop sink GpOpt h → v {
     ( mem_forget h )
     ( rcbox_release [GpOptImpl] # i . h ctl )
 }

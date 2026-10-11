@@ -21724,9 +21724,29 @@ unsafe @ mem_own_add_user_drop i syms i cg s ptr s vt → v {
 : ~ i g_trust_memo 0  // source path → `1` / `0`: bck_trusted_file's answer
 : ~ s g_trust_roots ``  // the canonical stdlib roots, each ending in `/`, `\n`-separated
 
+// The key a path is trusted by: its canonical form, with Windows'
+// separator read as `/`. realpath there is _fullpath (runtime_core.c),
+// which answers `D:\a\stdlib\core\vec.nu`, and a Windows name cannot hold
+// a `\`, so the two separators are one. A POSIX canonical path starts with
+// `/` and is compared byte for byte: there `\` is an ordinary byte of a
+// name, and `stdlib\x.nu` is a file beside the tree, not inside it.
+unsafe @ __trust_key s path → s {
+    : s k ( __canon_import_key path )
+    : i n ( nurl_str_len k )
+    : *u p # *u k
+    ? & > n 0 != & # i . p 0 255 47 {
+        : ~ i i 0
+        ~ < i n {
+            ? == & # i . p i 255 92 { = . p i # u 47 } {}
+            = i + i 1
+        }
+    } {}
+    ^ k
+}
+
 @ __trust_root s dir → s {
     ? == ( nurl_file_exists ( nurl_str_cat dir `/core/vec.nu` ) ) 1 {} { ^ `` }
-    ^ ( nurl_str_cat3 ( __canon_import_key dir ) `/` `\n` )
+    ^ ( nurl_str_cat3 ( __trust_key dir ) `/` `\n` )
 }
 
 @ bck_trusted_file s path → b {
@@ -21740,7 +21760,7 @@ unsafe @ mem_own_add_user_drop i syms i cg s ptr s vt → v {
     } {}
     : s hit ( nurl_sym_get g_trust_memo path )
     ? != 0 ( nurl_str_len hit ) { ^ ( seq hit `1` ) } {}
-    : s key ( __canon_import_key path )
+    : s key ( __trust_key path )
     : ~ b r F
     : ~ s rest ( nurl_str_cat g_trust_roots `` )
     ~ & ! r != 0 ( nurl_str_len rest ) {

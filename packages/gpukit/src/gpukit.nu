@@ -109,7 +109,7 @@ $ `deps/gpu/src/gpu.nu`
 
 unsafe @ GpuKit_share GpuKit h → GpuKit { ^ @ GpuKit { # s ( rcbox_share # i . h ctl ) } }
 
-@ GpuKit_drop sink GpuKit h → v {
+unsafe @ GpuKit_drop sink GpuKit h → v {
     ( mem_forget h )
     ( rcbox_release [GpuKitImpl] # i . h ctl )
 }

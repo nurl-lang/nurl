@@ -58,7 +58,7 @@ $ `stdlib/core/rcbox.nu`
 
 unsafe @ Vocos_share Vocos h → Vocos { ^ @ Vocos { # s ( rcbox_share # i . h ctl ) } }
 
-@ Vocos_drop sink Vocos h → v {
+unsafe @ Vocos_drop sink Vocos h → v {
     ( mem_forget h )
     ( rcbox_release [VocosImpl] # i . h ctl )
 }

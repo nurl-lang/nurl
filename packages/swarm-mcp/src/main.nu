@@ -89,7 +89,7 @@ $ `stdlib/core/slice.nu`
 
 unsafe @ Swarm_share Swarm h → Swarm { ^ @ Swarm { # s ( rcbox_share # i . h ctl ) } }
 
-@ Swarm_drop sink Swarm h → v {
+unsafe @ Swarm_drop sink Swarm h → v {
     ( mem_forget h )
     ( rcbox_release [SwarmImpl] # i . h ctl )
 }
@@ -459,7 +459,7 @@ unsafe @ cluster_submit_wasm Swarm sw__h i lo i hi ( Vec u ) wasm i nchunks i ki
 
 unsafe @ ChunkJob_share ChunkJob h → ChunkJob { ^ @ ChunkJob { # s ( rcbox_share # i . h ctl ) } }
 
-@ ChunkJob_drop sink ChunkJob h → v {
+unsafe @ ChunkJob_drop sink ChunkJob h → v {
     ( mem_forget h )
     ( rcbox_release [ChunkJobImpl] # i . h ctl )
 }
@@ -2000,7 +2000,7 @@ unsafe @ __iterate_round Swarm sw__h ( Vec u ) wasm i S i A ( Vec i ) xparams i 
 
 unsafe @ IterRun_share IterRun h → IterRun { ^ @ IterRun { # s ( rcbox_share # i . h ctl ) } }
 
-@ IterRun_drop sink IterRun h → v {
+unsafe @ IterRun_drop sink IterRun h → v {
     ( mem_forget h )
     ( rcbox_release [IterRunImpl] # i . h ctl )
 }

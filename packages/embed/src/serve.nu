@@ -98,7 +98,7 @@ $ `stdlib/core/slice.nu`
 
 : EmJob { s ctl }
 
-@ EmJob_drop sink EmJob h → v {
+unsafe @ EmJob_drop sink EmJob h → v {
     ( mem_forget h )
     ( rcbox_release [EmJobImpl] # i . h ctl )
 }

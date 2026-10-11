@@ -70,7 +70,7 @@ $ `image.nu`
 
 unsafe @ XWin_share XWin h → XWin { ^ @ XWin { # s ( rcbox_share # i . h ctl ) } }
 
-@ XWin_drop sink XWin h → v { ( mem_forget h ) ( rcbox_release [XWinImpl] # i . h ctl ) }
+unsafe @ XWin_drop sink XWin h → v { ( mem_forget h ) ( rcbox_release [XWinImpl] # i . h ctl ) }
 
 unsafe @ __XWin_ptr XWin h → *XWinImpl { ^ ( rcbox_ptr [XWinImpl] # i . h ctl ) }
 

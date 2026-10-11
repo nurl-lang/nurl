@@ -22,7 +22,7 @@ instructions, and every other bench kernel the same or fewer
 
 Code that calls `mem_forget`, `mem_take`, `mem_put_back` or the `rcbox`
 primitives — a library handle's drop hook, mostly — must now be `unsafe`,
-and 30 packages are updated for it (*Changed*).
+and 42 packages are updated for it (*Changed*).
 
 ### Changed
 
@@ -35,7 +35,7 @@ and 30 packages are updated for it (*Changed*).
   its receiver up (`unsafe @ T_drop sink T h → v { … ( mem_forget h ) }`)
   is `unsafe` with them, and a program's own handle whose hook is `unsafe`
   is sealed: its literals and field writes are raw memory too
-  (docs/MEMORY.md §6.4). Thirty packages mark such hooks, constructors and
+  (docs/MEMORY.md §6.4). Forty-two packages mark such hooks, constructors and
   accessors `unsafe`.
 - **A raw string (`s`) parameter of safe code is a `sink` only when it is
   declared one**, never inferred. A function that hands its borrowed `s`

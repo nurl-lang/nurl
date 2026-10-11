@@ -107,7 +107,7 @@ $ `stdlib/core/rcbox.nu`
 
 unsafe @ FtModel_share FtModel h → FtModel { ^ @ FtModel { # s ( rcbox_share # i . h ctl ) } }
 
-@ FtModel_drop sink FtModel h → v {
+unsafe @ FtModel_drop sink FtModel h → v {
     ( mem_forget h )
     ( rcbox_release [FtModelImpl] # i . h ctl )
 }

@@ -129,7 +129,7 @@ unsafe @ __f5s_hold_vocab sink F5Vocab vb → v {
 
 : F5Job { s ctl }
 
-@ F5Job_drop sink F5Job h → v {
+unsafe @ F5Job_drop sink F5Job h → v {
     ( mem_forget h )
     ( rcbox_release [F5JobImpl] # i . h ctl )
 }

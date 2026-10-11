@@ -166,7 +166,7 @@ $ `stdlib/core/rcbox.nu`
 
 unsafe @ Whisper_share Whisper h → Whisper { ^ @ Whisper { # s ( rcbox_share # i . h ctl ) } }
 
-@ Whisper_drop sink Whisper h → v {
+unsafe @ Whisper_drop sink Whisper h → v {
     ( mem_forget h )
     ( rcbox_release [WhisperImpl] # i . h ctl )
 }

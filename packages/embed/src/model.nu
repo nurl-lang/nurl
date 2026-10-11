@@ -116,7 +116,7 @@ $ `stdlib/core/rcbox.nu`
 
 unsafe @ Embed_share Embed h → Embed { ^ @ Embed { # s ( rcbox_share # i . h ctl ) } }
 
-@ Embed_drop sink Embed h → v {
+unsafe @ Embed_drop sink Embed h → v {
     ( mem_forget h )
     ( rcbox_release [EmbedImpl] # i . h ctl )
 }
