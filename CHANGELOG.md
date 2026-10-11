@@ -9,8 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 Every hole the 0.72.0 release review left open in the memory guarantee is
-closed: the 34 probes of `tools/fuzz/holes/open/` (now h145–h178) and fifteen
-more found on the way (h179–h193) are rejected or run clean under
+closed: the 34 probes of `tools/fuzz/holes/open/` (now h145–h178) and sixteen
+more found on the way (h179–h194) are rejected or run clean under
 ASan/UBSan/LSan, and CI holds each of them — no hole is known
 (docs/MEMORY.md §6.2). None of the fixes asks a program to release
 anything by hand: a raw string a callee takes over is released by the
@@ -92,7 +92,7 @@ under 0.72.0, not more (*Packages*). A package's version is written once:
 
 ### Fixed
 
-- **The remaining known holes are closed** (probes h145–h193), each at
+- **The remaining known holes are closed** (probes h145–h194), each at
   its root:
   - *A raw string handed to a consumer* (h161–h170): a literal, a view, a
     borrowed or closure parameter, or a result fresh on only some paths —
@@ -142,6 +142,11 @@ under 0.72.0, not more (*Packages*). A package's version is written once:
     skipped the struct's drop and leaked its other fields: the closure's
     type has blanks, and the field-read record split on them. The closure
     moves out like a handle field.
+  - *A `?` join arm that copied a call's result* (h194): when the last
+    identifier loaded inside a call arm was an owned string — only the
+    call's argument — the arm was copied, and the result the call had
+    handed over through its per-call guard leaked once per evaluation.
+    It is freed right after the copy.
 - **`# X w` builds a one-word wrapper around a one-word handle** (`: X {
   ( Arc XImpl ) a }` over Arc's `{ s ctl }`): the word goes in at the
   innermost slot. It produced an all-zero `X` — the cast's fallback for a

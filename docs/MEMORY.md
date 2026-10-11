@@ -630,7 +630,7 @@ keyword-argument call to a forward function that consumes its argument.
 **No open holes.** The 0.72.0 release review found 37 safe programs the
 compiler accepted and that leaked, freed memory they did not own or read
 freed memory, and converting the packages' handles to `Arc` found ten
-more; all are closed, each a probe CI now holds (h142–h193):
+more; all are closed, each a probe CI now holds (h142–h194):
 
 - a raw string handed to `string_adopt` or a `sink s` parameter: only a
   declared `sink` takes a raw string over, its callee releases it, and a
@@ -677,7 +677,11 @@ more; all are closed, each a probe CI now holds (h142–h193):
   still holds that very handle;
 - a returned literal that took a closure field of a struct this function
   owns skipped the struct's drop, leaking every other field it held: the
-  closure moves out as a handle field does.
+  closure moves out as a handle field does;
+- a `?` join whose arm is a call answering ownership per call, copied
+  because the last identifier inside the call was an owned string: the
+  result the call handed over was never released. It is freed right after
+  the copy.
 
 The rules that carry it:
 

@@ -15501,6 +15501,18 @@ unsafe @ gen_cond i lex i syms i cg → s {
         ( nurl_print `)` ) ( emit_dbg_eol )
         = tv __td
         = t_dup T
+        // The arm was a call (its value the call's result, the ident only
+        // its last argument): the copy replaces that result, so what the
+        // call handed over through its guard goes now — kept, it leaked
+        // once per evaluation (h194).
+        : s __tg ( nurl_sym_get syms `__last_call_guard__` )
+        ? & == t_tt0 TT_LPAREN != 0 ( nurl_str_len __tg ) {
+            ( nurl_sym_def syms `__last_call_guard__` `` )
+            : s __tgv ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print __tgv ) ( nurl_print ` = load i8*, i8** ` ) ( nurl_print __tg ) ( nurl_print `\n` )
+            ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print __tgv ) ( nurl_print `)\n` )
+            ( nurl_print `  store i8* null, i8** ` ) ( nurl_print __tg ) ( nurl_print `\n` )
+        } {}
     } {}
     : s t_owner ( mem_arm_string_owner syms cg tt2 t_tt0 tv t_dup )
     : ~ s t_hown `false`
@@ -15648,6 +15660,18 @@ unsafe @ gen_cond i lex i syms i cg → s {
         ( nurl_print `)` ) ( emit_dbg_eol )
         = ev __ed
         = e_dup T
+        // The arm was a call (its value the call's result, the ident only
+        // its last argument): the copy replaces that result, so what the
+        // call handed over through its guard goes now — kept, it leaked
+        // once per evaluation (h194).
+        : s __eg ( nurl_sym_get syms `__last_call_guard__` )
+        ? & == e_tt0 TT_LPAREN != 0 ( nurl_str_len __eg ) {
+            ( nurl_sym_def syms `__last_call_guard__` `` )
+            : s __egv ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print __egv ) ( nurl_print ` = load i8*, i8** ` ) ( nurl_print __eg ) ( nurl_print `\n` )
+            ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print __egv ) ( nurl_print `)\n` )
+            ( nurl_print `  store i8* null, i8** ` ) ( nurl_print __eg ) ( nurl_print `\n` )
+        } {}
     } {}
     : s e_owner ( mem_arm_string_owner syms cg et2 e_tt0 ev e_dup )
     : ~ s e_hown `false`
