@@ -32539,7 +32539,7 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
     // An option or result literal that gives only its tag (`@ ?( Vec i ) {
     // T }`) leaves the payload it names zero bytes (h184).
     ? & & & agg_is_wrap < idx 2 ( bck_sound ) ! ( bck_unsafe_ctx ) {
-        : s __wtl ? agg_is_res ( __wrap_tl_part agg_ty ? res_is_ok 0 1 ) ? opt_is_none ( nurl_str_cat `` `` ) ( __wrap_tl_part agg_ty 0 )
+        : s __wtl ? agg_is_res ( __wrap_tl_part agg_ty ? res_is_ok 0 1 syms ) ? opt_is_none ( nurl_str_cat `` `` ) ( __wrap_tl_part agg_ty 0 syms )
         ? ( __zero_invalid __wtl syms ) {
             ( die_pos lex agg_line agg_col ( nurl_str_cat3 `this literal gives its tag only, which leaves the value it holds zero bytes — and zero bytes are not a '` ( __zty_show __wtl ) `': a String or a Vec needs its control block, a library handle its shared block, a closure its code, so code using it reads through null or calls it. Give the value ('@ ?T { T value }', '@ !T E { F error }').` ) )
         } {}
@@ -41970,23 +41970,11 @@ unsafe @ __opt_err_mangle s e → s {
 // The payload a wrap literal that gives only its tag leaves out: for an
 // option `{ i1, T }` with T its T, for a result `{ i1, T, E }` its T (tag
 // T) or its E (tag F); `` when there is none to read.
-@ __wrap_tl_part s ty i k → s {
+@ __wrap_tl_part s ty i k i syms → s {
     : i n ( nurl_str_len ty )
     ? | < n 9 != ( nurl_str_get ty - n 1 ) 125 { ^ ( nurl_str_cat `` `` ) } {}
-    : s body ( nurl_str_slice ty 6 - n 8 )
-    : i bn ( nurl_str_len body )
-    : ~ i depth 0
-    : ~ i i 0
-    : ~ i cut -1
-    ~ & < i - bn 1 < cut 0 {
-        : i c ( nurl_str_get body i )
-        ? | | == c 123 == c 40 == c 91 { = depth + depth 1 } {}
-        ? | | == c 125 == c 41 == c 93 { = depth - depth 1 } {}
-        ? & & == depth 0 == c 44 == ( nurl_str_get body + i 1 ) 32 { = cut i } {}
-        = i + i 1
-    }
-    ? < cut 0 { ^ ? == k 0 ( nurl_str_cat body `` ) ( nurl_str_cat `` `` ) } {}
-    ^ ? == k 0 ( nurl_str_slice body 0 cut ) ( nurl_str_slice body + cut 2 - - bn cut 2 )
+    ? & == k 1 != ( agg_field_count syms ty ) 3 { ^ ( nurl_str_cat `` `` ) } {}
+    ^ ( compound_field_type ty + k 1 )
 }
 
 // A value of `ty` built from the i64 word `w` when `ty` is one word wide —
