@@ -1,0 +1,5 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_pkg_version_outside_package.nu:7:20: error: '( pkg_version )' is the version of the package this file belongs to, read from the [package] table of the nearest nurl.toml above it — and no nurl.toml above 'compiler/tests/diag_pkg_version_outside_package.nu' names one. Build the file inside its package (a nurl.toml with version = "X.Y.Z" in [package]), or write the version as a literal.
+    ( nurl_println ( pkg_version ) )
+                   ^

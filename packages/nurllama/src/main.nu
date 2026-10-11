@@ -608,7 +608,7 @@ unsafe @ main → i {
         ^ 0
     } {}
     ? ( args_present p `version` ) {
-        ( nurl_print `nurllama 0.18.2\n` )
+        ( nurl_print `nurllama ` ) ( nurl_print ( pkg_version ) ) ( nurl_print `\n` )
         ^ 0
     } {}
     ? < ( args_positional_count p ) 1 {

@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.2.3] — 2026-10-11
+
+### Changed
+
+- `Lsm_drop`, `LsmIter_drop`, `MemTable_drop`, `SstWriter_drop`,
+  `SstReader_drop`, `SstCursor_drop` and `Wal_drop` are declared
+  `unsafe`: each calls `mem_forget`, `mem_take` or an `rcbox` primitive,
+  or builds or reads the raw `ctl` of a handle whose drop hook does;
+  NURL 0.73.0 allows these only in `unsafe` code, so the published 0.2.2
+  does not compile under it. Behaviour is unchanged, and this version
+  still compiles under 0.72.0.
+- The `lsmdb` command binds the opened database straight from
+  `lsm_open`'s result instead of building a null `Lsm` first: an `Lsm`
+  literal is raw memory now that its drop hook is `unsafe`.
+
 ## [0.2.2] — 2026-10-09
 
 Requires NURL 0.72.0, which draws the raw-memory boundary at every call:

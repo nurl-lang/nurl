@@ -131,10 +131,15 @@ for toml in packages/*/nurl.toml; do
         # see it, and a bump to 0.2.1 sailed through a gate written four
         # times over to stop exactly this. A constant named for the package
         # IS the package's version; nothing else can own that name.
+        # The name is spelled with the hyphen as `_` or dropped:
+        # nurl-cov's is `NURLCOV_VERSION`, printed after a `nurl-cov `
+        # literal on another line, and its 0.2.3 bump slipped past both
+        # keyings until this one.
         pkgconst=$(printf '%s' "$pkg" | tr 'a-z-' 'A-Z_')_VERSION
+        pkgconst2=$(printf '%s' "$pkg" | tr -d '-' | tr 'a-z' 'A-Z')_VERSION
         while IFS='|' read -r cname lit; do
             [ -n "$cname" ] || continue
-            if [ "$cname" != "$pkgconst" ]; then
+            if [ "$cname" != "$pkgconst" ] && [ "$cname" != "$pkgconst2" ]; then
                 grep -q "\`$pkg\`.*\b$cname\b" <<<"$pkgsrc" || continue
             fi
             checked=$((checked + 1))
@@ -150,9 +155,10 @@ done
 
 if [ "$fail" -ne 0 ]; then
     echo
-    echo "A package's --version is hand-written and must be bumped WITH the"
-    echo "manifest. Fix the literal, or the published binary will report a"
-    echo "version that does not exist."
+    echo "A hand-written version must be bumped WITH the manifest, or the"
+    echo "published binary reports a version that does not exist. Better:"
+    echo "replace the literal with ( pkg_version ), which the compiler reads"
+    echo "from nurl.toml (spec §6.5), so there is nothing to bump by hand."
     exit 1
 fi
 

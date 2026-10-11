@@ -1616,6 +1616,25 @@ all argument positions. Names and return types never imply consumption.
 }
 ```
 
+#### The package's version `( pkg_version )`
+
+`( pkg_version )` is the `version` of the package the source file belongs
+to — the one in the `[package]` table of the nearest `nurl.toml` above the
+file — as a string literal (`s`). The compiler reads it when it reads the
+file, so the program carries the version its manifest names and the number
+is written in one place:
+
+```
+: Cli c ( cli_new `tool` `what it does` ( pkg_version ) )
+: s TOOL_VERSION ( pkg_version )             // a top-level constant too
+```
+
+Each file answers for its own package: a dependency's source reads the
+dependency's manifest. A file with no `nurl.toml` above it, or one whose
+`[package]` names no `version`, is a compile error. Only the exact form
+`( pkg_version )` is read this way, so a function of that name that takes
+arguments is an ordinary call.
+
 ### 6.6 Member access `.`
 
 ```

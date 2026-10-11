@@ -1,5 +1,18 @@
 # Changelog
 
+## [2.4.1] — 2026-10-11
+
+### Changed
+
+- `Interp_drop` and `Module_drop` are declared `unsafe`: each calls
+  `mem_forget`, `mem_take` or an `rcbox` primitive, or builds or reads
+  the raw `ctl` of a handle whose drop hook does; NURL 0.73.0 allows
+  these only in `unsafe` code, so the published 2.4.0 does not compile
+  under it. Behaviour is unchanged.
+- Its `--version` is read from `nurl.toml` with `( pkg_version )`
+  instead of being written by hand, so it can no longer drift from the
+  manifest. This needs NURL 0.73.0.
+
 ## [2.4.0] — 2026-10-09
 
 ### Changed

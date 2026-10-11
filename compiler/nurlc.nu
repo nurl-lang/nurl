@@ -9744,6 +9744,126 @@ unsafe @ __lx_skip_ws i lex → v {
     ( nurl_poke p LX_LINE line )
 }
 
+// ── `( pkg_version )` ───────────────────────────────────────────
+//
+// `( pkg_version )` is the `version` of the package the source file
+// belongs to — the `[package]` table of the nearest `nurl.toml` above the
+// file — as a string literal. The lexer hands the three tokens on as that
+// one literal, so to everything after it the version IS a literal:
+// read-only data that nothing owns or frees. A package's `--version`, its
+// MCP `serverInfo`, its banner say what its manifest says by
+// construction, and a release changes one line. A file outside any
+// package has no version: that is a compile error, not a made-up number.
+: ~ i g_pkgver_memo 0  // manifest path → its version
+
+// Does the source at `at` spell `lit`, within [at, end)?
+unsafe @ __bytes_at * u src i at i end s lit → b {
+    : i n ( nurl_str_len lit )
+    ? > + at n end { ^ F } {}
+    : *u lp # *u lit
+    : ~ i k 0
+    ~ < k n {
+        ? != & # i . src + at k 255 & # i . lp k 255 { ^ F } {}
+        = k + k 1
+    }
+    ^ T
+}
+
+// Past `pkg_version )` (blanks allowed around the word, on one line) when
+// the source at `from` — just past a `(` — spells exactly that, else -1.
+unsafe @ __lx_pkg_version_end i lex i from → i {
+    : s p # s lex
+    : *u src # *u # s ( nurl_peek p LX_SRC )
+    : i len ( nurl_peek p LX_LEN )
+    : ~ i q from
+    ~ & < q len | == & # i . src q 255 32 == & # i . src q 255 9 { = q + q 1 }
+    ? ! ( __bytes_at src q len `pkg_version` ) { ^ -1 } {}
+    = q + q 11
+    ? & < q len ( __lx_is_ident_cont & # i . src q 255 ) { ^ -1 } {}
+    ~ & < q len | == & # i . src q 255 32 == & # i . src q 255 9 { = q + q 1 }
+    ? | >= q len != & # i . src q 255 41 { ^ -1 } {}
+    ^ + q 1
+}
+
+// The `version` in the `[package]` table of the manifest `toml`, or ``.
+unsafe @ __pkg_manifest_version s toml → s {
+    : s text ( nurl_read_file toml )
+    ? == # i text 0 { ^ ( nurl_str_cat `` `` ) } {}
+    : i n ( strlen text )
+    : *u tp # *u text
+    : ~ s out ( nurl_str_cat `` `` )
+    : ~ b inpkg F
+    : ~ b found F
+    : ~ i i 0
+    ~ & ! found < i n {
+        : ~ i e i
+        ~ & < e n != & # i . tp e 255 10 { = e + e 1 }
+        : ~ i a i
+        ~ & < a e ( __lx_is_space & # i . tp a 255 ) { = a + a 1 }
+        ? & < a e == & # i . tp a 255 91 {
+            = inpkg ( __bytes_at tp a e `[package]` )
+        } {
+            ? & inpkg ( __bytes_at tp a e `version` ) {
+                : ~ i q + a 7
+                ~ & < q e | == & # i . tp q 255 32 == & # i . tp q 255 9 { = q + q 1 }
+                ? & < q e == & # i . tp q 255 61 {
+                    = q + q 1
+                    ~ & < q e | == & # i . tp q 255 32 == & # i . tp q 255 9 { = q + q 1 }
+                    ? & < q e == & # i . tp q 255 34 {
+                        : i vs + q 1
+                        : ~ i ve vs
+                        ~ & < ve e != & # i . tp ve 255 34 { = ve + ve 1 }
+                        ? & < ve e > ve vs {
+                            = out ( nurl_str_slice text vs - ve vs )
+                            = found T
+                        } {}
+                    } {}
+                } {}
+            } {}
+        }
+        = i + e 1
+    }
+    ^ out
+}
+
+// Where the last path separator of `path` is (`/`, or `\` on Windows),
+// or -1.
+unsafe @ __last_path_sep s path → i {
+    : *u pp # *u path
+    : ~ i k - ( nurl_str_len path ) 1
+    ~ >= k 0 {
+        : i c & # i . pp k 255
+        ? | == c 47 == c 92 { ^ k } {}
+        = k - k 1
+    }
+    ^ -1
+}
+
+// The version of the package `path` belongs to: the nearest `nurl.toml`
+// above it that names one in `[package]`, or ``.
+unsafe @ __pkg_version_for s path → s {
+    ? == g_pkgver_memo 0 { = g_pkgver_memo ( nurl_sym_new ) } {}
+    : ~ s dir ( __canon_import_key path )
+    : ~ b more T
+    ~ more {
+        : i cut ( __last_path_sep dir )
+        ? < cut 0 { = more F } {
+            = dir ( nurl_str_slice dir 0 cut )
+            : s toml ( nurl_str_cat dir `/nurl.toml` )
+            ? != 0 ( nurl_sym_len g_pkgver_memo toml ) { ^ ( nurl_sym_get g_pkgver_memo toml ) } {}
+            ? == ( nurl_file_exists toml ) 1 {
+                : s v ( __pkg_manifest_version toml )
+                ? != 0 ( nurl_str_len v ) {
+                    ( nurl_sym_def g_pkgver_memo toml v )
+                    ^ v
+                } {}
+            } {}
+            ? == cut 0 { = more F } {}
+        }
+    }
+    ^ ( nurl_str_cat `` `` )
+}
+
 // ── Lex one token, write into slot at `base`.
 // Reads from current lexer pos; advances pos to point past the token.
 // Updates line if the token consumed a newline (only backtick strings
@@ -10176,7 +10296,20 @@ unsafe @ __lex_one i lex i base → v {
         ? & ! done == c 94 { ( __tok_write lex base TT_CARET ( nurl_strdup `^` ) 0 line start ) = done T } {}
         ? & ! done == c 63 { ( __tok_write lex base TT_QUEST ( nurl_strdup `?` ) 0 line start ) = done T } {}
         ? & ! done == c 126 { ( __tok_write lex base TT_TILDE ( nurl_strdup `~` ) 0 line start ) = done T } {}
-        ? & ! done == c 40 { ( __tok_write lex base TT_LPAREN ( nurl_strdup `(` ) 0 line start ) = done T } {}
+        ? & ! done == c 40 {
+            : i pv ( __lx_pkg_version_end lex pos )
+            ? >= pv 0 {
+                : s ver ( __pkg_version_for # s ( nurl_peek p LX_FILENAME ) )
+                ? == 0 ( nurl_str_len ver ) {
+                    // At the `(` itself: the current token is the one before.
+                    : i lstart ? == line 1 0 + 1 ( nurl_peek # s ( nurl_peek p LX_LINETAB ) - line 2 )
+                    ( die_pos lex line + - start lstart 1 ( nurl_str_cat3 `'( pkg_version )' is the version of the package this file belongs to, read from the [package] table of the nearest nurl.toml above it — and no nurl.toml above '` # s ( nurl_peek p LX_FILENAME ) `' names one. Build the file inside its package (a nurl.toml with version = "X.Y.Z" in [package]), or write the version as a literal.` ) )
+                } {}
+                = pos pv
+                ( __tok_write lex base TT_STR ( nurl_strdup ver ) 0 line start )
+            } { ( __tok_write lex base TT_LPAREN ( nurl_strdup `(` ) 0 line start ) }
+            = done T
+        } {}
         ? & ! done == c 41 { ( __tok_write lex base TT_RPAREN ( nurl_strdup `)` ) 0 line start ) = done T } {}
         ? & ! done == c 123 { ( __tok_write lex base TT_LBRACE ( nurl_strdup `{` ) 0 line start ) = done T } {}
         ? & ! done == c 125 { ( __tok_write lex base TT_RBRACE ( nurl_strdup `}` ) 0 line start ) = done T } {}

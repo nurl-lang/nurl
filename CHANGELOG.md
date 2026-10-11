@@ -22,7 +22,21 @@ instructions, and every other bench kernel the same or fewer
 
 Code that calls `mem_forget`, `mem_take`, `mem_put_back` or the `rcbox`
 primitives — a library handle's drop hook, mostly — must now be `unsafe`,
-and 42 packages are updated for it (*Changed*).
+and 42 packages are updated for it (*Changed*). A package's version is
+written once: `( pkg_version )` reads it from `nurl.toml` at compile time
+(*Added*).
+
+### Added
+
+- **`( pkg_version )`** is the `version` of the package the source file
+  belongs to, from the `[package]` table of the nearest `nurl.toml` above
+  the file, as a string literal (spec §6.5). The lexer hands the form on
+  as that literal, so it is read-only data like any other; a dependency's
+  source reads its own manifest, and a file outside any package is a
+  compile error. Seventeen packages print their `--version` or report
+  their MCP version with it instead of a hand-written number, which had to
+  be bumped with the manifest and was not always
+  (`tools/check_package_version_strings.sh` exists because it drifted).
 
 ### Changed
 
@@ -36,7 +50,9 @@ and 42 packages are updated for it (*Changed*).
   is `unsafe` with them, and a program's own handle whose hook is `unsafe`
   is sealed: its literals and field writes are raw memory too
   (docs/MEMORY.md §6.4). Forty-two packages mark such hooks, constructors and
-  accessors `unsafe`.
+  accessors `unsafe`, each with a patch release noting it in its changelog;
+  their published versions do not compile under this release. The 25 of
+  them that do not use `( pkg_version )` still compile under 0.72.0.
 - **A raw string (`s`) parameter of safe code is a `sink` only when it is
   declared one**, never inferred. A function that hands its borrowed `s`
   on to a consumer (`string_adopt`, another `sink s`) hands over a copy,

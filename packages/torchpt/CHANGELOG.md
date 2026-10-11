@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.2.3] — 2026-10-11
+
+### Changed
+
+- `Pk_drop`, `Pt_drop`, `pt_none` and `pt_is_open` are declared
+  `unsafe`: each calls `mem_forget`, `mem_take` or an `rcbox` primitive,
+  or builds or reads the raw `ctl` of a handle whose drop hook does;
+  NURL 0.73.0 allows these only in `unsafe` code, so the published 0.2.2
+  does not compile under it. Behaviour is unchanged, and this version
+  still compiles under 0.72.0.
+
 ## [0.2.2] — 2026-10-09
 
 Requires NURL 0.72.0, which draws the raw-memory boundary at every call:

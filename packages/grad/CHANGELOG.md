@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.11.3] — 2026-10-11
+
+### Changed
+
+- `GpPlan_drop`, `GpFuse_drop`, `GProg_drop`, `GpOpt_drop`, `GTape_drop`
+  and `Opt_drop` are declared `unsafe`: each calls `mem_forget`,
+  `mem_take` or an `rcbox` primitive, or builds or reads the raw `ctl`
+  of a handle whose drop hook does; NURL 0.73.0 allows these only in
+  `unsafe` code, so the published 0.11.2 does not compile under it.
+  Behaviour is unchanged.
+
 ## [0.11.2] — 2026-10-09
 
 Requires NURL 0.72.0, which draws the raw-memory boundary at every call:

@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.3.3] — 2026-10-11
+
+### Changed
+
+- `Demo_drop` is declared `unsafe`: it calls `mem_forget`, `mem_take` or
+  an `rcbox` primitive, or builds or reads the raw `ctl` of a handle
+  whose drop hook does; NURL 0.73.0 allows these only in `unsafe` code,
+  so the published 0.3.2 does not compile under it. Behaviour is
+  unchanged.
+
 ## [0.3.2] — 2026-10-10
 
 Requires NURL 0.72.0 (`slice_of_str`). Loops that walked a string with

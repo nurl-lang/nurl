@@ -145,6 +145,14 @@ every requirement; a gate that can fail that way is worse than none. A package
 that needs a newer toolchain than the one compiling it fails at compile time,
 with the compiler's own error.
 
+A package's own version is written once, in `nurl.toml`: its source spells
+it `( pkg_version )` (spec §6.5), which the compiler replaces with the
+`version` of the nearest `nurl.toml` above the file. A `--version`, an MCP
+`serverInfo` or a banner built from it follows every release with nothing
+else to edit. `tools/check_package_version_strings.sh` still checks the
+hand-written version literals a package keeps, in the spellings it knows,
+against its manifest.
+
 Registry dependencies carry a `(registry URL, package name)` identity through
 resolution, index caching, downloads, signature checks and `nurl.lock`.
 An explicit dependency `registry` selects that origin; transitive index
