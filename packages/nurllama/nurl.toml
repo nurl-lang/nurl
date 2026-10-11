@@ -6,14 +6,14 @@ description = "Run language models locally, in pure NURL — an ollama-shaped en
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-gguf = { path = "../gguf", version = "^0.4" }
-safetensor = { path = "../safetensor", version = "^0.4" }
+gguf = { path = "../gguf", version = "^0.5" }
+safetensor = { path = "../safetensor", version = "^0.5" }
 tokenizer = { path = "../tokenizer", version = "^0.4" }
-gpu = { path = "../gpu", version = "^0.14" }
+gpu = { path = "../gpu", version = "^0.15" }
 http = { path = "../http", version = "^0.7" }
 grad = { path = "../grad", version = "^0.11" }
 nn = { path = "../nn", version = "^0.2" }
-gpukit = { path = "../gpukit", version = "^0.9" }
+gpukit = { path = "../gpukit", version = "^0.10" }
 tensor = { path = "../tensor", version = "^0.6" }
 
 hub = { path = "../hub", version = "^0" }

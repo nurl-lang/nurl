@@ -216,7 +216,7 @@ $ `src/dynamic.nu`
     = k 0
     ~ < k tail { ( vec_push [f] dfs + tie * # f + k 1 0.001 ) = k + k 1 }
     : String nm ( string_from `forest` )
-    ^ @ CalVer { nm 0.1 ( vec_len [f] dfs ) 0 ( _mlp_fget dfs 0 ) tie dfs }
+    ^ @ CalVer { nm 0.1 ( vec_len [f] dfs ) 0 ( _mlp_fget dfs 0 ) tie dfs ( vec_new [f] ) }
 }
 
 @ test_ties → v {

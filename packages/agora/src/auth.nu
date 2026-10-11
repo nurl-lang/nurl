@@ -211,7 +211,7 @@ unsafe @ ag_config_load s path → AgConfig {
     String public_url
     String webroot  // the web page's directory ('' = none)
     String iss_tmpl  // guarded: the provider's `{tenantid}` issuer template
-    i prov  // guarded: address of one share of the OidcProvider; 0 = not discovered
+    ? OidcProvider prov  // guarded: one share of the provider; F = not discovered
     ( Vec AgAuthHit ) hits  // guarded
     ( Vec String ) ready  // guarded: files whose schema is in place
 }
@@ -226,7 +226,7 @@ unsafe @ __ag_auth → *AgAuth {
     ? == g_ag_auth 0 {
         = g_ag_auth ( rcbox_new [AgAuth] @ AgAuth {
             F F ( string_new ) ( string_new ) ( string_new ) ( string_new ) ( string_new ) ( string_new ) ( string_new )
-            ( string_new ) ( string_new ) 0 ( vec_new [AgAuthHit] ) ( vec_new [String] )
+            ( string_new ) ( string_new ) @ ?OidcProvider { F } ( vec_new [AgAuthHit] ) ( vec_new [String] )
         } )
         : Mutex m ( mutex_new )
         = g_ag_auth_mu # i ( mutex_raw m )
@@ -297,7 +297,10 @@ unsafe @ ag_auth_configure b on b multi s issuer s client_id s audience s owner 
     : String pu ( string_substr ( string_from public_url ) 0 pn )
     ( __ag_set . a public_url ( string_data pu ) )
     ( __ag_lock )
-    = . a prov 0
+    // a store through the pointer drops nothing: the old share leaves first
+    : ?OidcProvider oldp . a prov
+    ( mem_take oldp )
+    = . a prov @ ?OidcProvider { F }
     ( string_clear . a iss_tmpl )
     ( vec_clear [AgAuthHit] . a hits )
     ( __ag_unlock )
@@ -705,7 +708,7 @@ unsafe @ ag_auth_forget_all → v {
 // The provider; discovered on first use. Call with the lock held.
 unsafe @ __ag_provider_locked → ?OidcProvider {
     : *AgAuth a ( __ag_auth )
-    ? != . a prov 0 { ^ @ ?OidcProvider { T ( OidcProvider_share # OidcProvider . a prov ) } } {}
+    ?? . a prov { T pv → { ^ @ ?OidcProvider { T ( OidcProvider_share pv ) } } F → {} }
     ? . a multi {
         // Multi-tenant: the discovery document's issuer is a template
         // ("…/{tenantid}/v2.0"), which oidc_discover's issuer check can
@@ -732,16 +735,12 @@ unsafe @ __ag_provider_locked → ?OidcProvider {
         : OidcProvider p ( oidc_provider_new ( string_data . a issuer ) )
         ( oidc_provider_set_jwks_uri p ( string_data jwks ) )
         ( __ag_set . a iss_tmpl ( string_data tmpl ) )
-        : OidcProvider kept ( OidcProvider_share p )
-        = . a prov # i . kept ctl
-        ( mem_forget kept )
+        = . a prov @ ?OidcProvider { T ( OidcProvider_share p ) }
         ^ @ ?OidcProvider { T p }
     } {}
     ?? ( oidc_provider_discover ( string_data . a issuer ) ) {
         T p → {
-            : OidcProvider kept ( OidcProvider_share p )
-            = . a prov # i . kept ctl
-            ( mem_forget kept )
+            = . a prov @ ?OidcProvider { T ( OidcProvider_share p ) }
             ^ @ ?OidcProvider { T p }
         }
         F _ → { ^ @ ?OidcProvider { F } }

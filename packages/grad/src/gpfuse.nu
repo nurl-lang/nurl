@@ -42,7 +42,7 @@ $ `deps/tensor/src/tensor.nu`
 $ `deps/gpu/src/gpu.nu`
 $ `deps/gpukit/src/gpukit.nu`
 $ `deps/gpukit/src/dev.nu`
-$ `stdlib/core/rcbox.nu`
+$ `stdlib/std/arc.nu`
 
 : GpPlanImpl {
     b ok
@@ -64,19 +64,16 @@ $ `stdlib/core/rcbox.nu`
     ( Vec String ) sbnames  // serial bwd kernel (empty = per-node)
 }
 
-// A GpPlan is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// A GpPlan is a handle on its state in an Arc (stdlib/std/arc.nu):
 // every copy is the same state, and the last owner releases it.
-: GpPlan { s ctl }
+: GpPlan { ( Arc GpPlanImpl ) a }
 
-unsafe @ GpPlan_share GpPlan h → GpPlan { ^ @ GpPlan { # s ( rcbox_share # i . h ctl ) } }
+@ GpPlan_share GpPlan h → GpPlan { ^ @ GpPlan { ( arc_clone [GpPlanImpl] . h a ) } }
 
-unsafe @ GpPlan_drop sink GpPlan h → v {
-    ( mem_forget h )
-    ( rcbox_release [GpPlanImpl] # i . h ctl )
-}
+@ GpPlan_drop sink GpPlan h → v {}
 
 // The state, for this package's own code.
-unsafe @ _GpPlan_ptr GpPlan h → *GpPlanImpl { ^ ( rcbox_ptr [GpPlanImpl] # i . h ctl ) }
+unsafe @ _GpPlan_ptr GpPlan h → *GpPlanImpl { ^ ( arc_ptr [GpPlanImpl] . h a ) }
 
 // Did the analysis find something to fuse?
 unsafe @ gpfuse_plan_ok GpPlan pl__h → b {
@@ -299,8 +296,8 @@ unsafe @ _gpf_expr * GProgImpl pg i k String o → v {
 // table. ok=F (with everything freed safe) when nothing fuses.
 unsafe @ gpfuse_plan GProg pg__h → GpPlan {
     : *GProgImpl pg ( _GProg_ptr pg__h )
-    : i pl__box ( rcbox_zero [GpPlanImpl] )
-    : *GpPlanImpl pl ( rcbox_ptr [GpPlanImpl] pl__box )
+    : ( Arc GpPlanImpl ) pl__box ( arc_zero [GpPlanImpl] )
+    : *GpPlanImpl pl ( arc_ptr [GpPlanImpl] pl__box )
     = . pl ok F
     = . pl kid g_gpm_next
     = g_gpm_next + g_gpm_next 1
@@ -318,7 +315,7 @@ unsafe @ gpfuse_plan GProg pg__h → GpPlan {
     = . pl ssegs ( vec_new [i] )
     = . pl snames ( vec_new [String] )
     = . pl sbnames ( vec_new [String] )
-    ? . pg ok {} { ^ @ GpPlan { # s pl__box } }
+    ? . pg ok {} { ^ @ GpPlan { pl__box } }
     // B = the most common 2-D row count among non-leaf nodes (the batch)
     : i nn ( vec_len [GpNode] . pg nodes )
     : ~ i B 0
@@ -338,7 +335,7 @@ unsafe @ gpfuse_plan GProg pg__h → GpPlan {
         } {}
         = k + k 1
     }
-    ? > B 0 {} { ^ @ GpPlan { # s pl__box } }
+    ? > B 0 {} { ^ @ GpPlan { pl__box } }
     = . pl rows B
     // maximal consecutive fusable runs (length >= 2)
     = k 0
@@ -353,7 +350,7 @@ unsafe @ gpfuse_plan GProg pg__h → GpPlan {
             = k + hi 1
         } { = k + k 1 }
     }
-    ? > ( vec_len [i] . pl segs ) 0 {} { ^ @ GpPlan { # s pl__box } }
+    ? > ( vec_len [i] . pl segs ) 0 {} { ^ @ GpPlan { pl__box } }
     // emit every segment kernel
     : i nseg / ( vec_len [i] . pl segs ) 2
     = k 0
@@ -496,7 +493,7 @@ unsafe @ gpfuse_plan GProg pg__h → GpPlan {
         = . pl fcnt / ( vec_len [i] tf2 ) 2
     } {}
     ? up { = . pl ok T } {}
-    ^ @ GpPlan { # s pl__box }
+    ^ @ GpPlan { pl__box }
 }
 
 // Launches only (no sync policy) — shared by the direct path and the
@@ -1557,19 +1554,16 @@ unsafe @ _gpf_emit_ser_bwd_seg * GProgImpl pg i lo i hi s kname String o → b {
     GpPlan pl
 }
 
-// A GpFuse is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// A GpFuse is a handle on its state in an Arc (stdlib/std/arc.nu):
 // every copy is the same state, and the last owner releases it.
-: GpFuse { s ctl }
+: GpFuse { ( Arc GpFuseImpl ) a }
 
-unsafe @ GpFuse_share GpFuse h → GpFuse { ^ @ GpFuse { # s ( rcbox_share # i . h ctl ) } }
+@ GpFuse_share GpFuse h → GpFuse { ^ @ GpFuse { ( arc_clone [GpFuseImpl] . h a ) } }
 
-unsafe @ GpFuse_drop sink GpFuse h → v {
-    ( mem_forget h )
-    ( rcbox_release [GpFuseImpl] # i . h ctl )
-}
+@ GpFuse_drop sink GpFuse h → v {}
 
 // The state, for this package's own code.
-unsafe @ _GpFuse_ptr GpFuse h → *GpFuseImpl { ^ ( rcbox_ptr [GpFuseImpl] # i . h ctl ) }
+unsafe @ _GpFuse_ptr GpFuse h → *GpFuseImpl { ^ ( arc_ptr [GpFuseImpl] . h a ) }
 
 unsafe @ gpfuse_open GProg pg__h GpOpt go__h → GpFuse {
     : *GProgImpl pg ( _GProg_ptr pg__h )
@@ -1585,12 +1579,11 @@ unsafe @ gpfuse_open GProg pg__h GpOpt go__h → GpFuse {
             = plan live
         } {}
     } {}
-    ^ @ GpFuse { # s ( rcbox_new [GpFuseImpl] @ GpFuseImpl { active plan } ) }
+    ^ @ GpFuse { ( arc_new [GpFuseImpl] @ GpFuseImpl { active plan } ) }
 }
 
 unsafe @ _gpfuse_nullplan → GpPlan {
-    : i pl__box ( rcbox_zero [GpPlanImpl] )
-    : *GpPlanImpl pl ( rcbox_ptr [GpPlanImpl] pl__box )
+    : ~ GpPlanImpl pl @ GpPlanImpl {}
     = . pl ok F
     = . pl segs ( vec_new [i] )
     = . pl src ( string_new )
@@ -1606,7 +1599,7 @@ unsafe @ _gpfuse_nullplan → GpPlan {
     = . pl ssegs ( vec_new [i] )
     = . pl snames ( vec_new [String] )
     = . pl sbnames ( vec_new [String] )
-    ^ @ GpPlan { # s pl__box }
+    ^ @ GpPlan { ( arc_new [GpPlanImpl] pl ) }
 }
 
 unsafe @ gpfuse_active GpFuse s__h → b {

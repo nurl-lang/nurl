@@ -29,7 +29,7 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/floatbits.nu`
-$ `stdlib/core/rcbox.nu`
+$ `stdlib/std/arc.nu`
 
 // The count field is fixed-width so the header keeps its byte length
 // when the real number is patched in. 12 digits holds any cloud a
@@ -49,16 +49,13 @@ $ `stdlib/core/rcbox.nu`
 // Finish a writer nobody finished: flush, patch the count, close.
 % Drop PlyWImpl { @ drop PlyWImpl w → v { : b _ok ( __ply_close . w f . w ascii . w abuf . w bbuf . w cnt_off . w n ) } }
 
-: PlyW { s ctl }
+: PlyW { ( Arc PlyWImpl ) a }
 
-unsafe @ PlyW_share PlyW h → PlyW { ^ @ PlyW { # s ( rcbox_share # i . h ctl ) } }
+@ PlyW_share PlyW h → PlyW { ^ @ PlyW { ( arc_clone [PlyWImpl] . h a ) } }
 
-unsafe @ PlyW_drop sink PlyW h → v {
-    ( mem_forget h )
-    ( rcbox_release [PlyWImpl] # i . h ctl )
-}
+@ PlyW_drop sink PlyW h → v {}
 
-unsafe @ __PlyW_ptr PlyW h → *PlyWImpl { ^ ( rcbox_ptr [PlyWImpl] # i . h ctl ) }
+unsafe @ __PlyW_ptr PlyW h → *PlyWImpl { ^ ( arc_ptr [PlyWImpl] . h a ) }
 
 @ __ply_wr File f String s → b {
     : ( Vec u ) b ( bytes_from_str ( string_data s ) )
@@ -113,15 +110,14 @@ unsafe @ ply_create s path i ascii s comment → !PlyW String {
                 ( file_close f )
                 ^ @ !PlyW String { F ( string_from `ply: cannot write the header` ) }
             }
-            : i w__box ( rcbox_zero [PlyWImpl] )
-            : *PlyWImpl w ( rcbox_ptr [PlyWImpl] w__box )
+            : ~ PlyWImpl w @ PlyWImpl {}
             = . w f f
             = . w n 0
             = . w ascii ascii
             = . w cnt_off off
             = . w abuf ( string_new )
             = . w bbuf ( vec_new [u] )
-            ^ @ !PlyW String { T @ PlyW { # s w__box } }
+            ^ @ !PlyW String { T @ PlyW { ( arc_new [PlyWImpl] w ) } }
         }
     }
 }

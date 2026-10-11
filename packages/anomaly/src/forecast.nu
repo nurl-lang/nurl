@@ -45,7 +45,7 @@ $ `stdlib/std/sysinfo.nu`
 $ `stdlib/ext/json.nu`
 $ `src/prep.nu`
 $ `deps/arima/src/arima.nu`
-$ `stdlib/core/rcbox.nu`
+$ `stdlib/std/arc.nu`
 
 // Rows absorbed between two writes of forecast.json.
 : i ANOM_FC_SAVE_EVERY 32
@@ -119,22 +119,18 @@ $ `stdlib/core/rcbox.nu`
     ( Vec f ) scale  // per watched feature: its spread in the fit window (the verdict's floor is a share of it)
 }
 
-// A FcModel is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// A FcModel is a handle on its state in an Arc (stdlib/std/arc.nu):
 // every copy is the same state, and the last owner releases it.
-: FcModel { s ctl }
+: FcModel { ( Arc FcModelImpl ) a }
 
-unsafe @ FcModel_share FcModel h → FcModel { ^ @ FcModel { # s ( rcbox_share # i . h ctl ) } }
+@ FcModel_share FcModel h → FcModel { ^ @ FcModel { ( arc_clone [FcModelImpl] . h a ) } }
 
-unsafe @ FcModel_drop sink FcModel h → v {
-    ( mem_forget h )
-    ( rcbox_release [FcModelImpl] # i . h ctl )
-}
+@ FcModel_drop sink FcModel h → v {}
 
-unsafe @ _FcModel_ptr FcModel h → *FcModelImpl { ^ ( rcbox_ptr [FcModelImpl] # i . h ctl ) }
+unsafe @ _FcModel_ptr FcModel h → *FcModelImpl { ^ ( arc_ptr [FcModelImpl] . h a ) }
 
 unsafe @ fc_new → FcModel {
-    : i fc__box ( rcbox_zero [FcModelImpl] )
-    : *FcModelImpl fc ( rcbox_ptr [FcModelImpl] fc__box )
+    : ~ FcModelImpl fc @ FcModelImpl {}
     = . fc trained F
     = . fc feats ( vec_new [String] )
     = . fc cols ( vec_new [i] )
@@ -152,16 +148,16 @@ unsafe @ fc_new → FcModel {
     = . fc sel_naive ( vec_new [f] )
     = . fc skipped ( vec_new [String] )
     = . fc scale ( vec_new [f] )
-    ^ @ FcModel { # s fc__box }
+    ^ @ FcModel { ( arc_new [FcModelImpl] fc ) }
 }
 
 // The models are read in place in the loops below — `. pm j` through the
 // Vec's data is a view, nothing counted. A model handed OUT of the table
 // (model_forecast_model) is another owner of it.
-unsafe @ _fc_model_at FcModel fc__h i j → ArimaModel {
+unsafe @ _fc_model_at FcModel fc__h i j → ?ArimaModel {
     : *FcModelImpl fc ( _FcModel_ptr fc__h )
-    ?? ( vec_get [ArimaModel] . fc models j ) { T m → { ^ ( ArimaModel_share m ) } F _ → {} }
-    ^ @ ArimaModel { # s 0 }
+    ?? ( vec_get [ArimaModel] . fc models j ) { T m → { ^ @ ?ArimaModel { T ( ArimaModel_share m ) } } F _ → {} }
+    ^ @ ?ArimaModel { F }
 }
 
 @ _fc_geti ( Vec i ) v i k → i {
@@ -220,7 +216,7 @@ unsafe @ fc_clear FcModel fc__h → v {
 : FcJob {
     ( Vec f ) y
     i season  // the season in rows (0 = none)
-    ArimaModel out  // the null handle until fitted
+    ? ArimaModel out  // F until fitted
     String sel  // the form chosen
     f sel_mae
     f sel_naive
@@ -371,8 +367,8 @@ unsafe @ __fc_job_run * FcJob j → v {
     } {}
     ?? ( vec_get [FcCand] cands best ) {
         T cand → {
-            // the job starts with the null model and an empty name
-            = . j out ( __fc_fit_cand . j y cand )
+            // the job starts with no model and an empty name
+            = . j out @ ?ArimaModel { T ( __fc_fit_cand . j y cand ) }
             ( string_push_str . j sel ( string_data . cand name ) )
             = . j sel_mae best_mae
             = . j sel_naive best_naive
@@ -635,7 +631,7 @@ unsafe @ fc_train FcModel fc__h Meta mm__h ( Vec EncPoint ) encs i from i season
         ? fit {
             : ( Vec f ) y . fs y
             ( mem_take y )  // the series leaves fs for the job
-            ( vec_push [FcJob] jobs @ FcJob { y season @ ArimaModel { # s 0 } ( string_new ) 0.0 0.0 . fs spread } )
+            ( vec_push [FcJob] jobs @ FcJob { y season @ ?ArimaModel { F } ( string_new ) 0.0 0.0 . fs spread } )
             ( vec_push [i] jfeat j )
         } {}
         = j + j 1
@@ -648,47 +644,51 @@ unsafe @ fc_train FcModel fc__h Meta mm__h ( Vec EncPoint ) encs i from i season
     ~ < k nj {
         : FcJob jb . pjobs k
         : i cj ( _fc_geti jfeat k )
-        : ArimaModel m . jb out
-        : b fitted != # i . m ctl 0
         // a feature the chosen form reproduces to within a millionth of
         // its spread is a signal, not a reading: nothing to be surprised by
-        : b determ & fitted <= . jb sel_mae * ANOM_FC_DETERMINISTIC . jb spread
-        : ~ b keep F
+        : ~ b determ F
         // A fit whose innovation variance is not a finite positive number
         // has not converged, whatever the flag says: it would answer every
         // later reading with a standard error of infinity and score it as
         // a perfect hit. `> inf 0.0` is true, so the finiteness is the
         // part that has to be asked for.
-        ? & ! determ fitted {
-            ? & ( arima_converged m ) ( _an_finite ( arima_sigma2 m ) ) {
-                ? > ( arima_sigma2 m ) 0.0 { = keep T } {}
-            } {}
-        } {}
-        ? keep {} {
+        : ~ b keep F
+        ?? . jb out {
+            T m → {
+                = determ <= . jb sel_mae * ANOM_FC_DETERMINISTIC . jb spread
+                = keep & & & ! determ ( arima_converged m ) ( _an_finite ( arima_sigma2 m ) ) > ( arima_sigma2 m ) 0.0
+            }
+            F → {}
+        }
+        ? keep {
+            ?? . jb out {
+                T m → {
+                    // the whole ring, from its first row: the regressors' clock
+                    // runs from the fit window's first row, so rows before it
+                    // count down from zero
+                    ( arima_restart_at m - 0 from )
+                    : *f ph ( vec_data [f] hist )
+                    : ~ i t 0
+                    ~ < t ne { : ArimaUpdate _u ( arima_update m . ph + * t nc cj ) = t + t 1 }
+                    ?? ( vec_get [String] cand cj ) {
+                        T fn → { ( vec_push [String] . fc feats ( string_from ( string_data fn ) ) ) }
+                        F _ → {}
+                    }
+                    ( vec_push [i] . fc cols ( _fc_geti ccols cj ) )
+                    ( vec_push [ArimaModel] . fc models ( ArimaModel_share m ) )
+                    ( vec_push [String] . fc sel ( string_from ( string_data . jb sel ) ) )
+                    ( vec_push [f] . fc sel_mae . jb sel_mae )
+                    ( vec_push [f] . fc sel_naive . jb sel_naive )
+                    ( vec_push [f] . fc scale . jb spread )
+                }
+                F → {}
+            }
+        } {
             : String why ( string_new )
             ?? ( vec_get [String] cand cj ) { T fn → { ( string_push_str why ( string_data fn ) ) } F _ → {} }
             ( string_push_str why ? determ `: deterministic (the chosen form reproduces the fit window exactly: a calendar signal fed as data, or a reading that never moves)` `: no form fitted (the optimizer did not converge)` )
             ( vec_push [String] . fc skipped why )
         }
-        ? keep {
-            // the whole ring, from its first row: the regressors' clock
-            // runs from the fit window's first row, so rows before it
-            // count down from zero
-            ( arima_restart_at m - 0 from )
-            : *f ph ( vec_data [f] hist )
-            : ~ i t 0
-            ~ < t ne { : ArimaUpdate _u ( arima_update m . ph + * t nc cj ) = t + t 1 }
-            ?? ( vec_get [String] cand cj ) {
-                T fn → { ( vec_push [String] . fc feats ( string_from ( string_data fn ) ) ) }
-                F _ → {}
-            }
-            ( vec_push [i] . fc cols ( _fc_geti ccols cj ) )
-            ( vec_push [ArimaModel] . fc models ( ArimaModel_share m ) )
-            ( vec_push [String] . fc sel ( string_from ( string_data . jb sel ) ) )
-            ( vec_push [f] . fc sel_mae . jb sel_mae )
-            ( vec_push [f] . fc sel_naive . jb sel_naive )
-            ( vec_push [f] . fc scale . jb spread )
-        } {}
         = k + k 1
     }
     = . fc nw ( vec_len [ArimaModel] . fc models )

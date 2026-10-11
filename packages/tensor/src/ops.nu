@@ -33,9 +33,8 @@ $ `tensor.nu`
 : ~ i g_t_kit 0
 
 unsafe @ __t_adopt GpuKit kit → v {
-    : GpuKit keep ( GpuKit_share kit )
-    = g_t_kit # i . keep ctl
-    ( mem_forget keep )  // the global holds this owner now
+    // the global holds one owner of it from here
+    = g_t_kit ( arc_into_word [GpuKitImpl] ( arc_clone [GpuKitImpl] . kit a ) )
 }
 
 @ __t_gpu_ready → b {
@@ -79,7 +78,7 @@ unsafe @ __t_kit → GpuKit { ^ # GpuKit g_t_kit }
 // held). The next big matmul may re-probe (unlike tensor_gpu_off).
 unsafe @ tensor_gpu_close → v {
     // the global's owner, handed to the early release
-    ? != g_t_kit 0 { ( gk_close @ GpuKit { # s g_t_kit } ) } {}
+    ? != g_t_kit 0 { ( gk_close @ GpuKit { ( arc_from_word [GpuKitImpl] g_t_kit ) } ) } {}
     = g_t_gpu 0
     = g_t_kit 0
 }

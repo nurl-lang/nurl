@@ -1,19 +1,32 @@
 # Changelog
 
-## [0.34.3] — 2026-10-11
+## [0.35.0] — 2026-10-11
+
+Requires NURL 0.73.0, which allows `mem_forget`, `mem_take` and the
+`rcbox` primitives only in `unsafe` code and reads a null library-handle
+literal as raw memory. The published 0.34.2 does not compile under it.
 
 ### Changed
 
-- `__az_keep_provider`, `Model_drop`, `Hist_drop`, `FcModel_drop`,
-  `Meta_drop` and `__ag_ensure` are declared `unsafe`: each calls
-  `mem_forget`, `mem_take` or an `rcbox` primitive, or builds or reads
-  the raw `ctl` of a handle whose drop hook does; NURL 0.73.0 allows
-  these only in `unsafe` code, so the published 0.34.2 does not compile
-  under it. Behaviour is unchanged.
-- Its `--version` and MCP `serverInfo` version (`ANOMALY_VERSION`) is
-  read from `nurl.toml` with `( pkg_version )` instead of being written
-  by hand, so it can no longer drift from the manifest. This needs NURL
-  0.73.0.
+- `FcModel`, `Hist`, `Meta` and `Model` keep their state in an `Arc`
+  (stdlib/std/arc.nu) instead of an `rcbox`. The share and drop hooks are
+  ordinary safe functions — the Arc does the counting — and so are the
+  constructors that build one from a whole value; every copy is still the
+  same state, and its last owner releases it.
+- 2 fewer functions are `unsafe` than in 0.34.2.
+- Its `--version` (or the version it reports) is read from `nurl.toml`
+  with `( pkg_version )` instead of being written by hand, so it can no
+  longer drift from the manifest.
+- Requires gpu 0.15 and gpukit 0.10.
+- `model_forecast_model` returns `?ArimaModel` (F for a feature without a
+  model), where it handed back a null handle. A forecast job's model, the
+  scoring path's history and the provider and kit kept in globals are
+  options or owned words now, not null handles.
+
+### Fixed
+
+- The report of a per-version fine-tune left its `note` a zero `String`; a
+  client that read it read through a null block. It is the empty string.
 
 ## [0.34.2] — 2026-10-09
 

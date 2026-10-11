@@ -27,14 +27,14 @@ $ `deps/gpu/src/gpu.nu`
 $ `deps/safetensor/src/safetensor.nu`
 $ `src/ggml.nu`
 $ `src/kernels.nu`
-$ `stdlib/core/rcbox.nu`
+$ `stdlib/std/arc.nu`
 
 : WhisperImpl {
     Gpu g
     WhKernels ks
     b w_half  // matrix weights live on the device as raw f16 halves
-    St st  // the safetensors file (HF checkpoint) — st_none in ggml mode
-    Gg gg  // whisper.cpp's legacy ggml container — the null handle in HF mode
+    ? St st  // the safetensors file (HF checkpoint) — F in ggml mode
+    ? Gg gg  // whisper.cpp's legacy ggml container — F in HF mode
     // the load's upload queue: every tensor is allocated as it is met and
     // sent in ONE streamed batch (gpu_upload_batch) once the last one is
     // known; f16/bf16 tensors that must be widened wait in cvt_* for their
@@ -158,20 +158,17 @@ $ `stdlib/core/rcbox.nu`
     ( Vec GpuBuffer ) bufo  // their owners: released with the model
 }
 
-// A Whisper is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// A Whisper is a handle on its state in an Arc (stdlib/std/arc.nu):
 // every copy is the same model, and the last owner releases it — every
 // device allocation, the kernels, the context, the weight file. wh_close
 // is an optional early release.
-: Whisper { s ctl }
+: Whisper { ( Arc WhisperImpl ) a }
 
-unsafe @ Whisper_share Whisper h → Whisper { ^ @ Whisper { # s ( rcbox_share # i . h ctl ) } }
+@ Whisper_share Whisper h → Whisper { ^ @ Whisper { ( arc_clone [WhisperImpl] . h a ) } }
 
-unsafe @ Whisper_drop sink Whisper h → v {
-    ( mem_forget h )
-    ( rcbox_release [WhisperImpl] # i . h ctl )
-}
+@ Whisper_drop sink Whisper h → v {}
 
-unsafe @ __Whisper_ptr Whisper h → *WhisperImpl { ^ ( rcbox_ptr [WhisperImpl] # i . h ctl ) }
+unsafe @ __Whisper_ptr Whisper h → *WhisperImpl { ^ ( arc_ptr [WhisperImpl] . h a ) }
 
 // The model's shape and device, for callers that size inputs or bind threads.
 unsafe @ wh_gpu Whisper h → Gpu { : *WhisperImpl w ( __Whisper_ptr h ) ^ . w g }
@@ -185,8 +182,8 @@ unsafe @ wh_n_ctx_enc Whisper h → i { : *WhisperImpl w ( __Whisper_ptr h ) ^ .
 unsafe @ wh_n_enc_layer Whisper h → i { : *WhisperImpl w ( __Whisper_ptr h ) ^ . w n_enc_layer }
 
 unsafe @ wh_n_dec_layer Whisper h → i { : *WhisperImpl w ( __Whisper_ptr h ) ^ . w n_dec_layer }
-// the ggml container the model came from (the null handle in HF mode)
-unsafe @ wh_gg Whisper h → Gg { : *WhisperImpl w ( __Whisper_ptr h ) ^ . w gg }
+// the ggml container the model came from (F in HF mode)
+unsafe @ wh_gg Whisper h → ?Gg { : *WhisperImpl w ( __Whisper_ptr h ) ^ . w gg }
 
 @ __wh_err s msg → !v String {
     ^ @ !v String { F ( string_from msg ) }
@@ -229,8 +226,8 @@ unsafe @ wh_gg Whisper h → Gg { : *WhisperImpl w ( __Whisper_ptr h ) ^ . w gg 
     ^ ? ( nurl_str_eq name `decoder.token_embedding.weight` ) T F
 }
 
-unsafe @ __wh_probe_half_gg * WhisperImpl w → b {
-    : *GgImpl gg ( _Gg_ptr . w gg )
+unsafe @ __wh_probe_half_gg Gg g → b {
+    : *GgImpl gg ( _Gg_ptr g )
     : ~ i seen 0
     : ~ b all16 T
     : ~ i k 0
@@ -252,12 +249,13 @@ unsafe @ __wh_probe_half_gg * WhisperImpl w → b {
 }
 
 unsafe @ __wh_probe_half * WhisperImpl w → b {
-    ? ( gg_is_open . w gg ) { ^ ( __wh_probe_half_gg w ) } {}
+    ?? . w gg { T g → { ^ ( __wh_probe_half_gg g ) } F → {} }
+    : St sf ?? . w st { T s0 → s0 F → { ^ F } }
     : ~ i seen 0
     : ~ b all16 T
     : ~ i k 0
-    ~ < k ( vec_len [StTensor] ( st_tensors . w st ) ) {
-        ?? ( vec_get [StTensor] ( st_tensors . w st ) k ) {
+    ~ < k ( vec_len [StTensor] ( st_tensors sf ) ) {
+        ?? ( vec_get [StTensor] ( st_tensors sf ) k ) {
             T t → {
                 ? ( __wh_is_matrix ( string_data . t name ) ) {
                     = seen + seen 1
@@ -280,19 +278,22 @@ unsafe @ __wh_probe_half * WhisperImpl w → b {
 // their bytes are noise, and it keeps every other kernel untouched.
 unsafe @ __wh_up * WhisperImpl w s name → i {
     : b keep16 ( __wh_is_matrix name )
-    ? ( gg_is_open . w gg ) {
-        : Gg gg . w gg
-        : i gi ( gg_find gg name )
-        ? < gi 0 { ^ -1 } {}
-        : i gt ( gg_ttype gg gi )
-        : i ge ( gg_nelems gg gi )
-        ? == gt 0 { ^ ( __wh_queue w ( gg_ptr gg gi ) * ge 4 ) } {}
-        // f16: half mode keeps the halves; otherwise widen on device,
-        // exactly like the safetensors path
-        ? & keep16 . w w_half { ^ ( __wh_queue w ( gg_ptr gg gi ) * ge 2 ) } {}
-        ^ ( __wh_queue_widen w ( gg_ptr gg gi ) ge T )
-    } {}
-    : i ti ( st_find_tensor . w st name )
+    ?? . w gg {
+        T gg → {
+            : i gi ( gg_find gg name )
+            ? < gi 0 { ^ -1 } {}
+            : i gt ( gg_ttype gg gi )
+            : i ge ( gg_nelems gg gi )
+            ? == gt 0 { ^ ( __wh_queue w ( gg_ptr gg gi ) * ge 4 ) } {}
+            // f16: half mode keeps the halves; otherwise widen on device,
+            // exactly like the safetensors path
+            ? & keep16 . w w_half { ^ ( __wh_queue w ( gg_ptr gg gi ) * ge 2 ) } {}
+            ^ ( __wh_queue_widen w ( gg_ptr gg gi ) ge T )
+        }
+        F → {}
+    }
+    : St sf ?? . w st { T s0 → s0 F → { ^ -1 } }
+    : i ti ( st_find_tensor sf name )
     ? < ti 0 { ^ -1 } {}
     // A tensor that is ALREADY f32 — which is what a whisper checkpoint is —
     // needs no conversion at all: upload it straight out of the mapping.
@@ -302,25 +303,25 @@ unsafe @ __wh_up * WhisperImpl w s name → i {
     // distil-large-v3 that is 378 MILLION of each, and it cost 11.3 of the
     // 11.6 seconds a transcription took — while reading the whole 1.5 GB file
     // off disk takes 0.25 s. Don't copy what you can point at.
-    ?? ( vec_get [StTensor] ( st_tensors . w st ) ti ) {
+    ?? ( vec_get [StTensor] ( st_tensors sf ) ti ) {
         T t → {
-            ? == . t dtype ST_F32 { ^ ( __wh_queue w ( st_tensor_ptr . w st t ) . t nbytes ) } {}
+            ? == . t dtype ST_F32 { ^ ( __wh_queue w ( st_tensor_ptr sf t ) . t nbytes ) } {}
             // The checkpoint's own precision IS f16: for a matrix weight in
             // half mode there is nothing to widen — the halves are the model.
-            ? & & keep16 . w w_half == . t dtype ST_F16 { ^ ( __wh_queue w ( st_tensor_ptr . w st t ) . t nbytes ) } {}
+            ? & & keep16 . w w_half == . t dtype ST_F16 { ^ ( __wh_queue w ( st_tensor_ptr sf t ) . t nbytes ) } {}
             // f16 / bf16 — which is what a whisper checkpoint actually is — go up
             // as RAW HALVES and are widened by a kernel. Half the bytes over PCIe,
             // and the widening happens where there are thousands of threads for
             // it instead of one host loop doing 378 million iterations.
             ? | == . t dtype ST_F16 == . t dtype ST_BF16 {
-                ^ ( __wh_queue_widen w ( st_tensor_ptr . w st t ) . t nelems == . t dtype ST_F16 )
+                ^ ( __wh_queue_widen w ( st_tensor_ptr sf t ) . t nelems == . t dtype ST_F16 )
             } {}
         }
         F → {}
     }
     // anything else (an integer tensor) widens on the host — and goes up
     // now, its Vec does not outlive this call
-    ?? ( st_dequant . w st ti ) {
+    ?? ( st_dequant sf ti ) {
         T raw → {
             : i n ( vec_len [u] raw )
             : i d ( __wh_carve w n )
@@ -536,17 +537,13 @@ unsafe @ __wh_source_done * WhisperImpl w → v {
     // the staging pair is 128 MB of page-locked memory — a loader that is
     // done loading gives it back
     ( gpu_staging_free )
-    ? ( gg_is_open . w gg ) {
-        // the ggml handle stays (the tokenizer is built from its vocabulary
-        // after this returns); only the file goes
-        ( gg_release_data . w gg )
-    } {}
-    ? ( st_is_open . w st ) {
-        // the file leaves the model and is unmapped here
-        : St old . w st
-        ( mem_take old )
-        = . w st ( st_none )
-    } {}
+    // the ggml handle stays (the tokenizer is built from its vocabulary
+    // after this returns); only the file goes
+    ?? . w gg { T gg → { ( gg_release_data gg ) } F → {} }
+    // the safetensors file leaves the model and is unmapped here
+    : ?St old . w st
+    ( mem_take old )
+    = . w st @ ?St { F }
 }
 
 unsafe @ __wh_scratch * WhisperImpl w i nfloats → i {
@@ -619,7 +616,7 @@ unsafe @ wh_open s config_path s weights_path → !Whisper String {
 
     // zeroed, and a handle from the start: every early return drops the
     // half-built model whole. `gg` stays the null handle in HF mode.
-    : Whisper h @ Whisper { # s ( rcbox_zero [WhisperImpl] ) }
+    : Whisper h @ Whisper { ( arc_zero [WhisperImpl] ) }
     : *WhisperImpl w ( __Whisper_ptr h )
     = . w bufs ( vec_new [i] )
     = . w bufsz ( vec_new [i] )
@@ -640,7 +637,7 @@ unsafe @ wh_open s config_path s weights_path → !Whisper String {
 
     ?? ( st_open weights_path ) {
         T st → {
-            = . w st st
+            = . w st @ ?St { T st }
             = . w w_half ( __wh_probe_half w )
         }
         F e → { ^ @ !Whisper String { F e } }
@@ -656,17 +653,17 @@ unsafe @ wh_open s config_path s weights_path → !Whisper String {
 unsafe @ wh_open_ggml s path → !Whisper String {
     ?? ( gg_open path ) {
         T gg → {
-            : Whisper h @ Whisper { # s ( rcbox_zero [WhisperImpl] ) }
+            : Whisper h @ Whisper { ( arc_zero [WhisperImpl] ) }
             : *WhisperImpl w ( __Whisper_ptr h )
             : *GgImpl gp ( _Gg_ptr gg )
-            = . w st ( st_none )
+            = . w st @ ?St { F }
             = . w bufs ( vec_new [i] )
             = . w bufsz ( vec_new [i] )
             = . w bufo ( vec_new [GpuBuffer] )
             = . w logits_host ( gpu_host_none )
             ( __wh_queue_init w )
             = . w oom F
-            = . w gg gg
+            = . w gg @ ?Gg { T gg }
             = . w n_mels . gp n_mels
             = . w d_model . gp n_audio_state
             = . w n_head . gp n_audio_head

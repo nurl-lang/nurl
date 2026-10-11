@@ -30,6 +30,9 @@
 //   ( arc_strong   [T] r )         → i           current count (snapshot, racy)
 //   ( arc_free     [T] r )         → v           early release (a handle is dropped by its owner)
 //   ( arc_free_with [T] r drop )   → v           atomic dec; drop(T) before free
+//   ( arc_into_word [T] r )        → i           the handle as a word (raw: unsafe only)
+//   ( arc_from_word [T] w )        → ( Arc T )   …and back
+//   ( arc_word_share [T] w )       → ( Arc T )   another owner, the word keeps its own
 //
 // Layout (SAME as Rc but the count is touched only via atomics):
 //
@@ -84,6 +87,18 @@
 & `c` @ nurl_atomic_i64_load *u p → i
 
 & `c` @ nurl_atomic_i64_inc_if_live *u p → i
+
+// The counts as the rcbox handles keep theirs (runtime_core.c): an owner
+// that finds itself the only one — strong count 1 and no Weak — skips the
+// locked read-modify-write. _share hands back the count before; _release
+// is 1 for the last strong owner and 2 for the only owner of a block no
+// Weak names (the block is then its to free). nurl_rc_release on the weak
+// count: 1 for the last holder of the block.
+& `c` @ nurl_arc_share *u p → i
+
+& `c` @ nurl_arc_release *u p → i
+
+& `c` @ nurl_rc_release *u p → i
 
 // [ count ][ weak ][ value ]. `weak` counts the Weak handles plus one held
 // by the strong handles together: the last strong handle drops the value
@@ -162,7 +177,7 @@
 // two Arc handles to the same storage, each dropped by its owner.
 @ arc_clone [A] ( Arc A ) r → ( Arc A ) {
     : *u cp # *u . r ctl
-    ( nurl_atomic_i64_inc cp )
+    ( nurl_arc_share cp )
     // A handle of its own (not a view of `r`): the caller owns it.
     : s c . r ctl
     ^ @ ( Arc A ) { c }
@@ -178,12 +193,12 @@
     ( mem_forget r )
     : *u cp # *u . r ctl
     ? == 0 # i cp {} {
-        : i n ( nurl_atomic_i64_dec_fetch cp )
-        ? <= n 0 {
+        : i last ( nurl_arc_release cp )
+        ? != 0 last {
             : *( ArcImpl A ) impl # *( ArcImpl A ) . r ctl
             : A v . impl value
             ( mem_take v )
-            ( __arc_weak_release # s cp )
+            ? == last 2 { ( nurl_free # s cp ) } { ( __arc_weak_release # s cp ) }
         } {}
     }
 }
@@ -192,7 +207,7 @@
 // the block.
 @ __arc_weak_release s ctl → v {
     : *u wp # *u + # i ctl 8
-    ? <= ( nurl_atomic_i64_dec_fetch wp ) 0 { ( nurl_free ctl ) } {}
+    ? != 0 ( nurl_rc_release wp ) { ( nurl_free ctl ) } {}
 }
 
 // Another owner of the same value: the count goes up, nothing is copied.
@@ -211,15 +226,39 @@
     ( mem_forget r )
     : *u cp # *u . r ctl
     ? == 0 # i cp {} {
-        : i n ( nurl_atomic_i64_dec_fetch cp )
-        ? <= n 0 {
+        : i last ( nurl_arc_release cp )
+        ? != 0 last {
             : *( ArcImpl A ) impl # *( ArcImpl A ) . r ctl
             : A v . impl value
             ( mem_take v )
             ( drop v )
-            ( __arc_weak_release # s impl )
+            ? == last 2 { ( nurl_free # s impl ) } { ( __arc_weak_release # s impl ) }
         } {}
     }
+}
+
+// ── As one word ─────────────────────────────────────────────────────
+
+// A handle as a plain word, for state a module keeps in a global (a
+// global holds a scalar): arc_into_word gives the handle's ownership to the
+// word, arc_from_word takes it back, arc_word_share makes another owner
+// and leaves the word its own. The word carries no type, so these are raw
+// primitives (spec §3.3d): only an `unsafe` function may call them, and
+// only with a word arc_into_word made for the same A.
+@ arc_into_word [A] sink ( Arc A ) r → i {
+    ( mem_forget r )
+    ^ # i . r ctl
+}
+
+@ arc_from_word [A] i w → ( Arc A ) {
+    : s c # s w
+    ^ @ ( Arc A ) { c }
+}
+
+@ arc_word_share [A] i w → ( Arc A ) {
+    ( nurl_arc_share # *u w )
+    : s c # s w
+    ^ @ ( Arc A ) { c }
 }
 
 // ── Weak handles ────────────────────────────────────────────────────

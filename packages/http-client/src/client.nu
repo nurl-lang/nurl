@@ -50,7 +50,7 @@ $ `stdlib/ext/http2_client.nu`
 $ `stdlib/ext/http3_client.nu`
 $ `stdlib/ext/cookies.nu`
 $ `stdlib/ext/compress.nu`
-$ `stdlib/core/rcbox.nu`
+$ `stdlib/std/arc.nu`
 $ `stdlib/core/slice.nu`
 
 // ── Errors ────────────────────────────────────────────────────────────
@@ -132,20 +132,17 @@ $ `stdlib/core/slice.nu`
 }
 
 // The client's pool holds each origin as a handle on its record in an
-// rcbox (stdlib/core/rcbox.nu); the pool is its only owner, so the record
+// Arc (stdlib/std/arc.nu); the pool is its only owner, so the record
 // goes with the client. Its drop closes the connections it still holds —
 // h2 and h1 are sockets the record owns, the QUIC connection is told
 // goodbye — and the compiler then releases the fields (drop glue).
-: HcOrigin { s ctl }
+: HcOrigin { ( Arc HcOriginImpl ) a }
 
-unsafe @ HcOrigin_share HcOrigin h → HcOrigin { ^ @ HcOrigin { # s ( rcbox_share # i . h ctl ) } }
+@ HcOrigin_share HcOrigin h → HcOrigin { ^ @ HcOrigin { ( arc_clone [HcOriginImpl] . h a ) } }
 
-unsafe @ HcOrigin_drop sink HcOrigin h → v {
-    ( mem_forget h )
-    ( rcbox_release [HcOriginImpl] # i . h ctl )
-}
+@ HcOrigin_drop sink HcOrigin h → v {}
 
-unsafe @ __HcOrigin_ptr HcOrigin h → *HcOriginImpl { ^ ( rcbox_ptr [HcOriginImpl] # i . h ctl ) }
+unsafe @ __HcOrigin_ptr HcOrigin h → *HcOriginImpl { ^ ( arc_ptr [HcOriginImpl] . h a ) }
 
 % Drop HcOriginImpl {
     @ drop HcOriginImpl o → v {
@@ -158,7 +155,7 @@ unsafe @ __HcOrigin_ptr HcOrigin h → *HcOriginImpl { ^ ( rcbox_ptr [HcOriginIm
 // ── Client ────────────────────────────────────────────────────────────
 : HttpClientImpl {
     CookieJar jar
-    ( Vec HcOrigin ) origins  // one record per origin, in an rcbox: stable identity
+    ( Vec HcOrigin ) origins  // one record per origin, in an Arc: stable identity
     i verify  // verify TLS chains (1) or not (0)
     i follow  // follow redirects (1) or return the 3xx (0)
     i max_redirects
@@ -172,24 +169,20 @@ unsafe @ __HcOrigin_ptr HcOrigin h → *HcOriginImpl { ^ ( rcbox_ptr [HcOriginIm
     i last_pq  // 1 = post-quantum key exchange
 }
 
-// An HttpClient is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// An HttpClient is a handle on its state in an Arc (stdlib/std/arc.nu):
 // every copy is the same state, and the last owner releases it — the
 // pool (each origin's record closes its connections), the cookie jar
 // and the user agent.
-: HttpClient { s ctl }
+: HttpClient { ( Arc HttpClientImpl ) a }
 
-unsafe @ HttpClient_share HttpClient h → HttpClient { ^ @ HttpClient { # s ( rcbox_share # i . h ctl ) } }
+@ HttpClient_share HttpClient h → HttpClient { ^ @ HttpClient { ( arc_clone [HttpClientImpl] . h a ) } }
 
-unsafe @ HttpClient_drop sink HttpClient h → v {
-    ( mem_forget h )
-    ( rcbox_release [HttpClientImpl] # i . h ctl )
-}
+@ HttpClient_drop sink HttpClient h → v {}
 
-unsafe @ __HttpClient_ptr HttpClient h → *HttpClientImpl { ^ ( rcbox_ptr [HttpClientImpl] # i . h ctl ) }
+unsafe @ __HttpClient_ptr HttpClient h → *HttpClientImpl { ^ ( arc_ptr [HttpClientImpl] . h a ) }
 
 unsafe @ http_client_new → HttpClient {
-    : i c__box ( rcbox_zero [HttpClientImpl] )
-    : *HttpClientImpl c ( rcbox_ptr [HttpClientImpl] c__box )
+    : ~ HttpClientImpl c @ HttpClientImpl {}
     = . c jar ( cookie_jar_new )
     = . c origins ( vec_new [HcOrigin] )
     = . c verify 1
@@ -202,7 +195,7 @@ unsafe @ http_client_new → HttpClient {
     = . c h3_mode 0
     = . c last_proto 0
     = . c last_pq 0
-    ^ @ HttpClient { # s c__box }
+    ^ @ HttpClient { ( arc_new [HttpClientImpl] c ) }
 }
 
 // ── Configuration (chainable-by-mutation) ─────────────────────────────
@@ -310,13 +303,13 @@ unsafe @ __hc_origin * HttpClientImpl c s scheme s host i port → *HcOriginImpl
     : i ex ( __hc_find_origin c ( string_data key ) )
     ? != ex 0 { ^ # *HcOriginImpl ex } {}
     // A zeroed record: no connection, no Alt-Svc, nothing failed yet.
-    : i o__box ( rcbox_zero [HcOriginImpl] )
-    : *HcOriginImpl o ( rcbox_ptr [HcOriginImpl] o__box )
+    : ( Arc HcOriginImpl ) o__box ( arc_zero [HcOriginImpl] )
+    : *HcOriginImpl o ( arc_ptr [HcOriginImpl] o__box )
     = . o key key
     = . o host ( string_from host )
     = . o port port
     = . o is_https ( nurl_str_eq scheme `https` )
-    ( vec_push [HcOrigin] . c origins @ HcOrigin { # s o__box } )
+    ( vec_push [HcOrigin] . c origins @ HcOrigin { o__box } )
     ^ o
 }
 

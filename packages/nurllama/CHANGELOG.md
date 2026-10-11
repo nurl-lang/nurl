@@ -4,16 +4,28 @@ All notable changes to the `nurllama` package.
 
 ## [0.18.3] — 2026-10-11
 
+Requires NURL 0.73.0, which allows `mem_forget`, `mem_take` and the
+`rcbox` primitives only in `unsafe` code and reads a null library-handle
+literal as raw memory. The published 0.18.2 does not compile under it.
+
 ### Changed
 
-- `FtModel_drop`, `Llm_drop`, `llm_into_word` and `llm_word_release` are
-  declared `unsafe`: each calls `mem_forget`, `mem_take` or an `rcbox`
-  primitive, or builds or reads the raw `ctl` of a handle whose drop
-  hook does; NURL 0.73.0 allows these only in `unsafe` code, so the
-  published 0.18.2 does not compile under it. Behaviour is unchanged.
-- Its `--version` is read from `nurl.toml` with `( pkg_version )`
-  instead of being written by hand, so it can no longer drift from the
-  manifest. This needs NURL 0.73.0.
+- `FtModel` and `Llm` keep their state in an `Arc` (stdlib/std/arc.nu)
+  instead of an `rcbox`. The share and drop hooks are ordinary safe
+  functions — the Arc does the counting — and so are the constructors that
+  build one from a whole value; every copy is still the same state, and
+  its last owner releases it.
+- Its `--version` (or the version it reports) is read from `nurl.toml`
+  with `( pkg_version )` instead of being written by hand, so it can no
+  longer drift from the manifest.
+- Requires gguf 0.5, safetensor 0.5, gpu 0.15 and gpukit 0.10.
+- The safetensors second source is a `?St`; the GGUF is bound straight
+  from `gguf_open`. A model kept in a server global is one owner behind a
+  word made with `arc_into_word`.
+
+### Fixed
+
+- The package compiles again under NURL 0.72.0 and later.
 
 ## [0.18.2] — 2026-10-09
 

@@ -84,13 +84,12 @@ unsafe @ main → i {
     }
     ? == ( vec_len [u] raw ) * * 4 * np 1536 4 {} { ^ ( __dt_die `hooks.bin wrong size` ) }
 
-    : ~ Lw lw ( lw_none )
-    ?? ( lw_open model ) {
+    : Lw lw ?? ( lw_open model ) {
         F e → {
             ( puts ( string_data e ) )
             ^ 1
         }
-        T got → { = lw got }
+        T got → got
     }
     : GpuKit kit ( gk_open_best )
     ? ( gk_ok kit ) {} { ^ ( __dt_die `no compute device` ) }

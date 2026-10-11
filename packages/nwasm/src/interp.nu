@@ -21,7 +21,7 @@ $ `stdlib/std/floatbits.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/std/thread.nu`
 $ `stdlib/std/time.nu`
-$ `stdlib/core/rcbox.nu`
+$ `stdlib/std/arc.nu`
 $ `module.nu`
 $ `rjit.nu`
 $ `stdlib/core/slice.nu`
@@ -349,22 +349,19 @@ $ `stdlib/core/slice.nu`
     Module modh
 }
 
-// An Interp is a handle on its instance state in an rcbox
-// (stdlib/core/rcbox.nu): every copy is the same instance, and the last owner
+// An Interp is a handle on its instance state in an Arc
+// (stdlib/std/arc.nu): every copy is the same instance, and the last owner
 // releases it. A spawned thread's instance is not one of these: it is a raw
 // *InterpImpl made and released by the thread that runs it (see
 // __wasi_thread_spawn), because it shares its owner's memory, table and
 // argv by handle and must never drop them.
-: Interp { s ctl }
+: Interp { ( Arc InterpImpl ) a }
 
-unsafe @ Interp_share Interp h → Interp { ^ @ Interp { # s ( rcbox_share # i . h ctl ) } }
+@ Interp_share Interp h → Interp { ^ @ Interp { ( arc_clone [InterpImpl] . h a ) } }
 
-unsafe @ Interp_drop sink Interp h → v {
-    ( mem_forget h )
-    ( rcbox_release [InterpImpl] # i . h ctl )
-}
+@ Interp_drop sink Interp h → v {}
 
-unsafe @ __Interp_ptr Interp h → *InterpImpl { ^ ( rcbox_ptr [InterpImpl] # i . h ctl ) }
+unsafe @ __Interp_ptr Interp h → *InterpImpl { ^ ( arc_ptr [InterpImpl] . h a ) }
 
 // One activation record on the explicit call stack: the function, its locals,
 // its control stack, and the instruction cursor [pos, end) — pos/end are
@@ -423,8 +420,8 @@ unsafe inline @ __mem_base * InterpImpl it → i {
 // lives as long as any instance of it.
 unsafe @ interp_new Module m__h → Interp {
     : *ModuleImpl m ( _Module_ptr m__h )
-    : i it__box ( rcbox_zero [InterpImpl] )
-    : *InterpImpl it ( rcbox_ptr [InterpImpl] it__box )
+    : ( Arc InterpImpl ) it__box ( arc_zero [InterpImpl] )
+    : *InterpImpl it ( arc_ptr [InterpImpl] it__box )
     = . it mod # s m
     = . it modh ( Module_share m__h )
     = . it pfuncs ( vec_new [s] )
@@ -570,7 +567,7 @@ unsafe @ interp_new Module m__h → Interp {
             = di + di 1
         }
     } {}
-    ^ @ Interp { # s it__box }
+    ^ @ Interp { it__box }
 }
 
 // Allocate a fresh file-descriptor record of the given kind.

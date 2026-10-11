@@ -42,7 +42,7 @@ $ `errors.nu`
 $ `jwk.nu`
 $ `jws.nu`
 $ `claims.nu`
-$ `stdlib/core/rcbox.nu`
+$ `stdlib/std/arc.nu`
 
 : OidcProviderImpl {
     String issuer
@@ -62,24 +62,20 @@ $ `stdlib/core/rcbox.nu`
     HttpClient http
 }
 
-// An OidcProvider is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// An OidcProvider is a handle on its state in an Arc (stdlib/std/arc.nu):
 // every copy is the same state, and the last owner releases it.
-: OidcProvider { s ctl }
+: OidcProvider { ( Arc OidcProviderImpl ) a }
 
-unsafe @ OidcProvider_share OidcProvider h → OidcProvider { ^ @ OidcProvider { # s ( rcbox_share # i . h ctl ) } }
+@ OidcProvider_share OidcProvider h → OidcProvider { ^ @ OidcProvider { ( arc_clone [OidcProviderImpl] . h a ) } }
 
-unsafe @ OidcProvider_drop sink OidcProvider h → v {
-    ( mem_forget h )
-    ( rcbox_release [OidcProviderImpl] # i . h ctl )
-}
+@ OidcProvider_drop sink OidcProvider h → v {}
 
-unsafe @ _OidcProvider_ptr OidcProvider h → *OidcProviderImpl { ^ ( rcbox_ptr [OidcProviderImpl] # i . h ctl ) }
+unsafe @ _OidcProvider_ptr OidcProvider h → *OidcProviderImpl { ^ ( arc_ptr [OidcProviderImpl] . h a ) }
 
 // ── Lifecycle ──────────────────────────────────────────────────────
 
 unsafe @ oidc_provider_new s issuer → OidcProvider {
-    : i p__box ( rcbox_zero [OidcProviderImpl] )
-    : *OidcProviderImpl p ( rcbox_ptr [OidcProviderImpl] p__box )
+    : ~ OidcProviderImpl p @ OidcProviderImpl {}
     = . p issuer ( string_from issuer )
     = . p authorization_endpoint ( string_new )
     = . p token_endpoint ( string_new )
@@ -95,7 +91,7 @@ unsafe @ oidc_provider_new s issuer → OidcProvider {
     = . p discovered F
     = . p last_error ( string_new )
     = . p http ( http_client_new )
-    ^ @ OidcProvider { # s p__box }
+    ^ @ OidcProvider { ( arc_new [OidcProviderImpl] p ) }
 }
 
 // Let go of `p` now rather than at the end of its owner's scope.

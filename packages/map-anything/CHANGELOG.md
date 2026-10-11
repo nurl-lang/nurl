@@ -1,17 +1,30 @@
 # Changelog
 
-## [0.5.3] — 2026-10-11
+## [0.6.0] — 2026-10-11
+
+Requires NURL 0.73.0, which allows `mem_forget`, `mem_take` and the
+`rcbox` primitives only in `unsafe` code and reads a null library-handle
+literal as raw memory. The published 0.5.2 does not compile under it.
 
 ### Changed
 
-- `Lw_drop` is declared `unsafe`: it calls `mem_forget`, `mem_take` or
-  an `rcbox` primitive, or builds or reads the raw `ctl` of a handle
-  whose drop hook does; NURL 0.73.0 allows these only in `unsafe` code,
-  so the published 0.5.2 does not compile under it. Behaviour is
-  unchanged.
-- Its `--version` is read from `nurl.toml` with `( pkg_version )`
-  instead of being written by hand, so it can no longer drift from the
-  manifest. This needs NURL 0.73.0.
+- `Lw` keeps its state in an `Arc` (stdlib/std/arc.nu) instead of an
+  `rcbox`. The share and drop hooks are ordinary safe functions — the Arc
+  does the counting — and so are the constructors that build one from a
+  whole value; every copy is still the same state, and its last owner
+  releases it.
+- 2 fewer functions are `unsafe` than in 0.5.2.
+- Its `--version` (or the version it reports) is read from `nurl.toml`
+  with `( pkg_version )` instead of being written by hand, so it can no
+  longer drift from the manifest.
+- Requires safetensor 0.5, onnx 0.11 and gpukit 0.10.
+- The sky model's engine is a `?Engine` (F when it did not load), and the
+  PLY writer is bound straight from `ply_create`.
+
+### Removed
+
+- `lw_none`: an `Lw` is always an open checkpoint, and the commands bind
+  it straight from `lw_open`.
 
 ## [0.5.2] — 2026-10-09
 

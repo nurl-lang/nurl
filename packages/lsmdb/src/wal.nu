@@ -37,7 +37,7 @@ $ `stdlib/std/fs.nu`
 $ `stdlib/std/path.nu`
 $ `stdlib/std/deflate.nu`
 $ `memtable.nu`
-$ `stdlib/core/rcbox.nu`
+$ `stdlib/std/arc.nu`
 
 : WalImpl {
     File f
@@ -50,16 +50,13 @@ $ `stdlib/core/rcbox.nu`
 // owner closes it (the buffer and the CRC table go with the drop glue).
 % Drop WalImpl { @ drop WalImpl w → v { ( file_close . w f ) } }
 
-: Wal { s ctl }
+: Wal { ( Arc WalImpl ) a }
 
-unsafe @ Wal_share Wal h → Wal { ^ @ Wal { # s ( rcbox_share # i . h ctl ) } }
+@ Wal_share Wal h → Wal { ^ @ Wal { ( arc_clone [WalImpl] . h a ) } }
 
-unsafe @ Wal_drop sink Wal h → v {
-    ( mem_forget h )
-    ( rcbox_release [WalImpl] # i . h ctl )
-}
+@ Wal_drop sink Wal h → v {}
 
-unsafe @ __Wal_ptr Wal h → *WalImpl { ^ ( rcbox_ptr [WalImpl] # i . h ctl ) }
+unsafe @ __Wal_ptr Wal h → *WalImpl { ^ ( arc_ptr [WalImpl] . h a ) }
 
 : WalStat {
     i records
@@ -78,13 +75,12 @@ unsafe @ wal_open s path → !Wal String {
     : !File IoErr fr ( file_append path )
     ?? fr {
         T f → {
-            : i w__box ( rcbox_zero [WalImpl] )
-            : *WalImpl w ( rcbox_ptr [WalImpl] w__box )
+            : ~ WalImpl w @ WalImpl {}
             = . w f f
             = . w buf ( vec_with_cap [u] 256 )
             = . w bytes ?? ( file_size path ) { T n → n F _ → 0 }
             = . w crc ( crc32_ctx )
-            ^ @ !Wal String { T @ Wal { # s w__box } }
+            ^ @ !Wal String { T @ Wal { ( arc_new [WalImpl] w ) } }
         }
         F _ → { ^ @ !Wal String { F ( __wal_open_err path ) } }
     }

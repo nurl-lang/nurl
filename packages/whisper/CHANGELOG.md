@@ -1,14 +1,30 @@
 # Changelog
 
-## [2.0.3] — 2026-10-11
+## [3.0.0] — 2026-10-11
+
+Requires NURL 0.73.0, which allows `mem_forget`, `mem_take` and the
+`rcbox` primitives only in `unsafe` code and reads a null library-handle
+literal as raw memory. The published 2.0.2 does not compile under it.
 
 ### Changed
 
-- `Gg_drop`, `Whisper_drop` and `__srv_load` are declared `unsafe`: each
-  calls `mem_forget`, `mem_take` or an `rcbox` primitive, or builds or
-  reads the raw `ctl` of a handle whose drop hook does; NURL 0.73.0
-  allows these only in `unsafe` code, so the published 2.0.2 does not
-  compile under it. Behaviour is unchanged.
+- `Gg` and `Whisper` keep their state in an `Arc` (stdlib/std/arc.nu)
+  instead of an `rcbox`. The share and drop hooks are ordinary safe
+  functions — the Arc does the counting — and so are the constructors that
+  build one from a whole value; every copy is still the same state, and
+  its last owner releases it.
+- One fewer function is `unsafe` than in 2.0.2.
+- Requires safetensor 0.5 and gpu 0.15.
+- `wh_gg` returns `?Gg`: F for a model loaded from safetensors, where it
+  handed back a null handle. The model keeps its two containers as `?St`
+  and `?Gg`.
+- The server keeps the loaded model as one owner behind a word made with
+  `arc_into_word` (a small `unsafe` helper, `__srv_word`); `__srv_load` is
+  safe.
+
+### Removed
+
+- `gg_none` and `gg_is_open`.
 
 ## [2.0.2] — 2026-10-09
 

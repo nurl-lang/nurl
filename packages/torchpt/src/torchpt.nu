@@ -24,7 +24,7 @@
 //
 //   ( pt_open path )              → !Pt String
 //   ( pt_close p )                → v      early release (optional)
-//   ( pt_none ) / ( pt_is_open p ) → Pt / b  an empty slot, and the test for one
+//   an empty slot is a ?Pt
 //   ( pt_n_tensors p )            → i
 //   ( pt_name p idx )             → s      BORROWED
 //   ( pt_find p name )            → i      -1 when absent
@@ -55,7 +55,7 @@ $ `stdlib/std/bytes.nu`
 $ `stdlib/std/floatbits.nu`
 $ `stdlib/ext/zip.nu`
 $ `pickle.nu`
-$ `stdlib/core/rcbox.nu`
+$ `stdlib/std/arc.nu`
 
 // Up to 8 dimensions is more than any real checkpoint tensor uses; the
 // limit keeps the per-tensor record a fixed size.
@@ -89,24 +89,15 @@ $ `stdlib/core/rcbox.nu`
     }
 }
 
-// A Pt is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// A Pt is a handle on its state in an Arc (stdlib/std/arc.nu):
 // every copy is the same open checkpoint, and the last owner releases it.
-: Pt { s ctl }
+: Pt { ( Arc PtImpl ) a }
 
-unsafe @ Pt_share Pt h → Pt { ^ @ Pt { # s ( rcbox_share # i . h ctl ) } }
+@ Pt_share Pt h → Pt { ^ @ Pt { ( arc_clone [PtImpl] . h a ) } }
 
-unsafe @ Pt_drop sink Pt h → v {
-    ( mem_forget h )
-    ( rcbox_release [PtImpl] # i . h ctl )
-}
+@ Pt_drop sink Pt h → v {}
 
-unsafe @ __Pt_ptr Pt h → *PtImpl { ^ ( rcbox_ptr [PtImpl] # i . h ctl ) }
-
-// A Pt that holds no checkpoint — for a slot that may be empty (a model
-// whose checkpoint is some other format). pt_is_open tells them apart.
-unsafe @ pt_none → Pt { ^ @ Pt { # s 0 } }
-
-unsafe @ pt_is_open Pt p → b { ^ != 0 # i . p ctl }
+unsafe @ __Pt_ptr Pt h → *PtImpl { ^ ( arc_ptr [PtImpl] . h a ) }
 
 @ _pt_geti ( Vec i ) v i k → i { ?? ( vec_get [i] v k ) { T x → ^ x F → ^ 0 } }
 
@@ -458,7 +449,7 @@ unsafe @ __pt_parse * u m i sz sink ( Vec u ) keep → !Pt String {
                                 { T s → ( string_from ( string_data s ) ) F → ( string_from `torchpt: parse failed` ) }
                                 ^ @ !Pt String { F em }
                             } {}
-                            : Pt h @ Pt { # s ( rcbox_new [PtImpl] @ PtImpl { m sz F keep tensors dims } ) }
+                            : Pt h @ Pt { ( arc_new [PtImpl] @ PtImpl { m sz F keep tensors dims } ) }
                             ^ @ !Pt String { T h }
                         }
                     }

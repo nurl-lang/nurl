@@ -46,7 +46,7 @@ $ `stdlib/core/posix.nu`
 $ `stdlib/std/fs.nu`
 $ `deps/tokenizer/src/tokenizer.nu`
 $ `deps/tokenizer/src/hf.nu`
-$ `stdlib/core/rcbox.nu`
+$ `stdlib/std/arc.nu`
 $ `stdlib/core/slice.nu`
 
 // dtype codes shared with the safetensor reader's ST_* so __wh_up's dispatch
@@ -87,25 +87,17 @@ $ `stdlib/core/slice.nu`
         ? & . x from_mmap != # i . x map 0 { : i32 _u ( munmap . x map . x nbytes ) } {}
     } }
 
-// A Gg is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// A Gg is a handle on its state in an Arc (stdlib/std/arc.nu):
 // every copy is the same container, and the last owner releases it —
 // the mapping (or the read buffer) and the parsed tables. gg_close is
 // an optional early release.
-: Gg { s ctl }
+: Gg { ( Arc GgImpl ) a }
 
-unsafe @ Gg_share Gg h → Gg { ^ @ Gg { # s ( rcbox_share # i . h ctl ) } }
+@ Gg_share Gg h → Gg { ^ @ Gg { ( arc_clone [GgImpl] . h a ) } }
 
-unsafe @ Gg_drop sink Gg h → v {
-    ( mem_forget h )
-    ( rcbox_release [GgImpl] # i . h ctl )
-}
+@ Gg_drop sink Gg h → v {}
 
-unsafe @ _Gg_ptr Gg h → *GgImpl { ^ ( rcbox_ptr [GgImpl] # i . h ctl ) }
-
-// The handle that holds no container (a model loaded from safetensors).
-@ gg_none → Gg { ^ @ Gg { # s 0 } }
-
-@ gg_is_open Gg h → b { ^ != # i . h ctl 0 }
+unsafe @ _Gg_ptr Gg h → *GgImpl { ^ ( arc_ptr [GgImpl] . h a ) }
 
 // Give the file back — the mapping or the read buffer — and keep the
 // parsed metadata (vocabulary, tensor table). After this `gg_ptr` must not
@@ -142,7 +134,7 @@ unsafe @ __gg_i32 * u d i off → i {
 
 unsafe @ gg_open s path → !Gg String {
     // zeroed, and a handle from the start: an early return drops it whole
-    : Gg h @ Gg { # s ( rcbox_zero [GgImpl] ) }
+    : Gg h @ Gg { ( arc_zero [GgImpl] ) }
     : *GgImpl g ( _Gg_ptr h )
     = . g map # *u 0
     = . g nbytes 0

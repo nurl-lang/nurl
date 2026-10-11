@@ -45,7 +45,7 @@ $ `src/run.nu`
 $ `stdlib/core/slice.nu`
 
 : ~ i g_srv_w 0  // the loaded Whisper's ctl word, OWNED by the server (0 = none loaded)
-: ~ i g_srv_t 0  // the Tok's box, lent by __wh_serve_run's caller
+: ~ i g_srv_t 0  // the Tok's block, lent by __wh_serve_run's caller
 : ~ i g_srv_reqs 0
 : ~ s g_srv_lang ``
 : ~ b g_srv_vad F
@@ -100,18 +100,20 @@ unsafe @ __srv_unlock → v {
     } {}
 }
 
+// One owner of `w` as a word, for g_srv_w.
+unsafe @ __srv_word Whisper w → i { ^ ( arc_into_word [WhisperImpl] ( arc_clone [WhisperImpl] . w a ) ) }
+
 // Open the model at g_srv_dir into g_srv_w. Called under the lock. The
 // tokenizer is not rebuilt: it was made once, before the port opened, and
 // a vocabulary does not change between loads of the same file.
-unsafe @ __srv_load → b {
+@ __srv_load → b {
     : i t0 ( monotonic_ns )
     : ~ i wp 0
     ? ( _wh_is_ggml g_srv_dir ) {
         ?? ( wh_open_ggml g_srv_dir ) {
             T w → {
                 // the server owns the model through g_srv_w from here
-                = wp # i . w ctl
-                ( mem_forget w )
+                = wp ( __srv_word w )
             }
             F e → {
                 ( nurl_eprintln ( string_data e ) )
@@ -123,8 +125,7 @@ unsafe @ __srv_load → b {
         ?? ( wh_open ( string_data cfg ) ( string_data wts ) ) {
             T w → {
                 // the server owns the model through g_srv_w from here
-                = wp # i . w ctl
-                ( mem_forget w )
+                = wp ( __srv_word w )
             }
             F e → {
                 ( nurl_eprintln ( string_data e ) )
@@ -177,7 +178,7 @@ unsafe @ __srv_reaper → v {
         ? & & != g_srv_w 0 == g_srv_busy 0 >= ( elapsed_ms_since g_srv_idle_since ) g_srv_unload_ms {
             // the server's word becomes an owner again, released right here,
             // on the thread the context was just bound to
-            : Whisper w @ Whisper { # s g_srv_w }
+            : Whisper w @ Whisper { ( arc_from_word [WhisperImpl] g_srv_w ) }
             = g_srv_w 0
             : b _b ( gpu_bind_thread ( wh_gpu w ) )
             ( wh_close w )
@@ -697,9 +698,10 @@ unsafe @ __srv_ws_hook TcpConn c HttpRequest rq → b {
 // cert/key: PEM paths — both set = HTTPS (and wss: the TcpConn's TLS is
 // transparent to the WebSocket layer). Both empty = plain HTTP.
 unsafe @ __wh_serve_run sink Whisper w Tok t s dir s host i port s lang i maxtok b use_vad b with_ts s cert s key s token i unload_s → i {
-    = g_srv_w # i . w ctl
-    ( mem_forget w )  // the server owns it now (g_srv_w)
-    = g_srv_t # i . t ctl
+    // the server owns the model through g_srv_w from here
+    = g_srv_w ( arc_into_word [WhisperImpl] ( arc_clone [WhisperImpl] . w a ) )
+    ( wh_close w )
+    = g_srv_t # i . . t a ctl
     ? > ( nurl_str_len g_srv_dir ) 0 { ( nurl_free g_srv_dir ) } {}
     = g_srv_dir ( strdup dir )
     = g_srv_unload_ms * unload_s 1000
@@ -781,7 +783,7 @@ unsafe @ __wh_serve_run sink Whisper w Tok t s dir s host i port s lang i maxtok
     // have replaced the caller's `w` with nothing, or a reload with a new one
     ( __srv_lock )
     ? != g_srv_w 0 {
-        : Whisper wl @ Whisper { # s g_srv_w }  // the owner, dropped here
+        : Whisper wl @ Whisper { ( arc_from_word [WhisperImpl] g_srv_w ) }  // the owner, dropped here
         = g_srv_w 0
     } {}
     ( __srv_unlock )
@@ -802,17 +804,22 @@ unsafe @ __wh_serve_run sink Whisper w Tok t s dir s host i port s lang i maxtok
     ? ( _wh_is_ggml dir ) {
         ?? ( wh_open_ggml dir ) {
             T w → {
-                ?? ( gg_build_tok ( wh_gg w ) ) {
-                    T t → {
-                        // the run owns the model from here: it closes
-                        // whatever is loaded when it returns
-                        : i rc2 ( __wh_serve_run w t dir host port lang maxtok use_vad with_ts cert key token unload_s )
-                        ^ rc2
+                ?? ( wh_gg w ) {
+                    T gg → {
+                        ?? ( gg_build_tok gg ) {
+                            T t → {
+                                // the run owns the model from here: it closes
+                                // whatever is loaded when it returns
+                                : i rc2 ( __wh_serve_run w t dir host port lang maxtok use_vad with_ts cert key token unload_s )
+                                ^ rc2
+                            }
+                            F e → {
+                                ( nurl_eprintln ( string_data e ) )
+                                ^ 1
+                            }
+                        }
                     }
-                    F e → {
-                        ( nurl_eprintln ( string_data e ) )
-                        ^ 1
-                    }
+                    F → { ^ 1 }
                 }
             }
             F e → {

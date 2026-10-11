@@ -51,7 +51,7 @@ $ `stdlib/std/bytes.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/std/deflate.nu`
 $ `memtable.nu`
-$ `stdlib/core/rcbox.nu`
+$ `stdlib/std/arc.nu`
 $ `stdlib/core/slice.nu`
 
 : i SST_BLOCK 4096
@@ -135,23 +135,19 @@ unsafe @ __bloom_test ( Vec u ) bits i nbits i h → b {
 // A writer nobody finished (a failed flush) still closes its file.
 % Drop SstWriterImpl { @ drop SstWriterImpl w → v { ( file_close . w f ) } }
 
-: SstWriter { s ctl }
+: SstWriter { ( Arc SstWriterImpl ) a }
 
-unsafe @ SstWriter_share SstWriter h → SstWriter { ^ @ SstWriter { # s ( rcbox_share # i . h ctl ) } }
+@ SstWriter_share SstWriter h → SstWriter { ^ @ SstWriter { ( arc_clone [SstWriterImpl] . h a ) } }
 
-unsafe @ SstWriter_drop sink SstWriter h → v {
-    ( mem_forget h )
-    ( rcbox_release [SstWriterImpl] # i . h ctl )
-}
+@ SstWriter_drop sink SstWriter h → v {}
 
-unsafe @ __SstWriter_ptr SstWriter h → *SstWriterImpl { ^ ( rcbox_ptr [SstWriterImpl] # i . h ctl ) }
+unsafe @ __SstWriter_ptr SstWriter h → *SstWriterImpl { ^ ( arc_ptr [SstWriterImpl] . h a ) }
 
 unsafe @ sst_create s path → !SstWriter String {
     : !File IoErr fr ( file_create path )
     ?? fr {
         T f → {
-            : i w__box ( rcbox_zero [SstWriterImpl] )
-            : *SstWriterImpl w ( rcbox_ptr [SstWriterImpl] w__box )
+            : ~ SstWriterImpl w @ SstWriterImpl {}
             = . w f f
             = . w buf ( vec_with_cap [u] + SST_BLOCK 1024 )
             = . w index ( vec_new [u] )
@@ -165,7 +161,7 @@ unsafe @ sst_create s path → !SstWriter String {
             = . w lastklen 0
             = . w failed 0
             = . w crc ( crc32_ctx )
-            ^ @ !SstWriter String { T @ SstWriter { # s w__box } }
+            ^ @ !SstWriter String { T @ SstWriter { ( arc_new [SstWriterImpl] w ) } }
         }
         F _ → {
             : String msg ( string_from `lsmdb: cannot create table ` )
@@ -338,16 +334,13 @@ unsafe @ sst_finish SstWriter w__h → !i String {
 // glue).
 % Drop SstReaderImpl { @ drop SstReaderImpl r → v { ( file_close . r f ) } }
 
-: SstReader { s ctl }
+: SstReader { ( Arc SstReaderImpl ) a }
 
-unsafe @ SstReader_share SstReader h → SstReader { ^ @ SstReader { # s ( rcbox_share # i . h ctl ) } }
+@ SstReader_share SstReader h → SstReader { ^ @ SstReader { ( arc_clone [SstReaderImpl] . h a ) } }
 
-unsafe @ SstReader_drop sink SstReader h → v {
-    ( mem_forget h )
-    ( rcbox_release [SstReaderImpl] # i . h ctl )
-}
+@ SstReader_drop sink SstReader h → v {}
 
-unsafe @ __SstReader_ptr SstReader h → *SstReaderImpl { ^ ( rcbox_ptr [SstReaderImpl] # i . h ctl ) }
+unsafe @ __SstReader_ptr SstReader h → *SstReaderImpl { ^ ( arc_ptr [SstReaderImpl] . h a ) }
 
 : SstHit {
     i found
@@ -397,9 +390,8 @@ unsafe @ sst_open s path → !SstReader String {
 
     // The handle first: every early return below lets go of it, and its
     // drop closes the file.
-    : i r__box ( rcbox_zero [SstReaderImpl] )
-    : SstReader rh @ SstReader { # s r__box }
-    : *SstReaderImpl r ( rcbox_ptr [SstReaderImpl] r__box )
+    : SstReader rh @ SstReader { ( arc_zero [SstReaderImpl] ) }
+    : *SstReaderImpl r ( arc_ptr [SstReaderImpl] . rh a )
     = . r f f
     = . r path ( string_from path )
     = . r ikeys ( vec_new [u] )
@@ -670,22 +662,18 @@ unsafe @ sst_get SstReader r__h ( Vec u ) key i snap → !SstHit String {
     String err
 }
 
-: SstCursor { s ctl }
+: SstCursor { ( Arc SstCursorImpl ) a }
 
-unsafe @ SstCursor_share SstCursor h → SstCursor { ^ @ SstCursor { # s ( rcbox_share # i . h ctl ) } }
+@ SstCursor_share SstCursor h → SstCursor { ^ @ SstCursor { ( arc_clone [SstCursorImpl] . h a ) } }
 
-unsafe @ SstCursor_drop sink SstCursor h → v {
-    ( mem_forget h )
-    ( rcbox_release [SstCursorImpl] # i . h ctl )
-}
+@ SstCursor_drop sink SstCursor h → v {}
 
 // Package-shared (one underscore): the merge in lsmdb.nu opens each
 // cursor once per step and reads its head in place.
-unsafe @ _SstCursor_ptr SstCursor h → *SstCursorImpl { ^ ( rcbox_ptr [SstCursorImpl] # i . h ctl ) }
+unsafe @ _SstCursor_ptr SstCursor h → *SstCursorImpl { ^ ( arc_ptr [SstCursorImpl] . h a ) }
 
 unsafe @ sst_cursor SstReader r → SstCursor {
-    : i c__box ( rcbox_zero [SstCursorImpl] )
-    : *SstCursorImpl c ( rcbox_ptr [SstCursorImpl] c__box )
+    : ~ SstCursorImpl c @ SstCursorImpl {}
     = . c r ( SstReader_share r )
     = . c blk ( vec_new [u] )
     = . c bi 0
@@ -698,7 +686,7 @@ unsafe @ sst_cursor SstReader r → SstCursor {
     = . c koff 0
     = . c failed 0
     = . c err ( string_new )
-    ^ @ SstCursor { # s c__box }
+    ^ @ SstCursor { ( arc_new [SstCursorImpl] c ) }
 }
 
 // Let go of `c` now rather than at the end of its owner's scope.

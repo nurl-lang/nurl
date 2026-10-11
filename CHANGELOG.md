@@ -9,8 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 Every hole the 0.72.0 release review left open in the memory guarantee is
-closed: the 34 probes of `tools/fuzz/holes/open/` (now h145–h178) and one
-more found on the way (h179) are rejected or run clean under
+closed: the 34 probes of `tools/fuzz/holes/open/` (now h145–h178) and eleven
+more found on the way (h179–h189) are rejected or run clean under
 ASan/UBSan/LSan, and CI holds each of them — no hole is known
 (docs/MEMORY.md §6.2). None of the fixes asks a program to release
 anything by hand: a raw string a callee takes over is released by the
@@ -21,10 +21,13 @@ instructions, and every other bench kernel the same or fewer
 (*Performance*).
 
 Code that calls `mem_forget`, `mem_take`, `mem_put_back` or the `rcbox`
-primitives — a library handle's drop hook, mostly — must now be `unsafe`,
-and 42 packages are updated for it (*Changed*). A package's version is
-written once: `( pkg_version )` reads it from `nurl.toml` at compile time
-(*Added*).
+primitives must now be `unsafe` (*Changed*) — and no package's library
+handle needs them any more: the handles hold an `Arc` (an `Rc` where the
+state can reach its own handle), whose hooks are safe code, and a handle
+that may be absent is an option. The 42 packages this touches, and
+objdet, are released with it, and they have fewer `unsafe` functions than
+under 0.72.0, not more (*Packages*). A package's version is written once:
+`( pkg_version )` reads it from `nurl.toml` at compile time (*Added*).
 
 ### Added
 
@@ -37,6 +40,12 @@ written once: `( pkg_version )` reads it from `nurl.toml` at compile time
   their MCP version with it instead of a hand-written number, which had to
   be bumped with the manifest and was not always
   (`tools/check_package_version_strings.sh` exists because it drifted).
+- **An `Arc` as one word**: `arc_into_word`, `arc_from_word` and
+  `arc_word_share` (stdlib/std/arc.nu) give a module global — which holds
+  a scalar — an owner of an `Arc`, take it back, and make another owner
+  from it. The word has no type, so they are raw primitives, callable
+  only from `unsafe` code (spec §3.3d); they replace the hand-built
+  `# i . h ctl` / `mem_forget` pairs that kept a handle in a global.
 
 ### Changed
 
@@ -49,10 +58,21 @@ written once: `( pkg_version )` reads it from `nurl.toml` at compile time
   its receiver up (`unsafe @ T_drop sink T h → v { … ( mem_forget h ) }`)
   is `unsafe` with them, and a program's own handle whose hook is `unsafe`
   is sealed: its literals and field writes are raw memory too
-  (docs/MEMORY.md §6.4). Forty-two packages mark such hooks, constructors and
-  accessors `unsafe`, each with a patch release noting it in its changelog;
-  their published versions do not compile under this release. The 25 of
-  them that do not use `( pkg_version )` still compile under 0.72.0.
+  (docs/MEMORY.md §6.4). No package needs such a hook any more
+  (*Packages*); their published versions do not compile under this
+  release.
+- **No zero value of a type that has none** (spec §4.1). A zero
+  `String`, `Vec`, library handle or closure has no control block, shared
+  block or code, and the first use read or called through null. Outside
+  `unsafe` none is made any more: a struct literal gives such a field
+  (h180–h182) and an enum literal such a payload (h183); an option or
+  result literal gives the value its tag names (`@ ?( Vec i ) { T }`,
+  h184); a bare variant is a value only when its payloads are plain
+  numbers or flags (h185); `vec_zeroed`, `vec_resize_zeroed`, `box_zero`,
+  `rc_zero` and `arc_zero` take only a type a zero is a value of (h186);
+  and a number never becomes a `String`, a `Vec` or a handle — in a
+  binding, an assignment, a field or an argument (h187, h188). Numbers,
+  flags, options, raw strings and structs of them may still be left out.
 - **A raw string (`s`) parameter of safe code is a `sink` only when it is
   declared one**, never inferred. A function that hands its borrowed `s`
   on to a consumer (`string_adopt`, another `sink s`) hands over a copy,
@@ -72,7 +92,7 @@ written once: `( pkg_version )` reads it from `nurl.toml` at compile time
 
 ### Fixed
 
-- **The remaining known holes are closed** (probes h145–h179), each at
+- **The remaining known holes are closed** (probes h145–h189), each at
   its root:
   - *A raw string handed to a consumer* (h161–h170): a literal, a view, a
     borrowed or closure parameter, or a result fresh on only some paths —
@@ -100,6 +120,19 @@ written once: `( pkg_version )` reads it from `nurl.toml` at compile time
     has no destructor context.
   - *A closure value called with a fresh string* releases it after the
     call (h145).
+  - *A zero value of a type that has none* (h180–h188): the rule above.
+  - *A `;` defer that used a field the return value had moved out*
+    (`^ @ ?V { T . x f }`, h189): under a defer the returned literal takes
+    a copy of the field and the struct keeps its own.
+- **`# X w` builds a one-word wrapper around a one-word handle** (`: X {
+  ( Arc XImpl ) a }` over Arc's `{ s ctl }`): the word goes in at the
+  innermost slot. It produced an all-zero `X` — the cast's fallback for a
+  first field that is neither a pointer nor an integer — silently, in the
+  `unsafe` code that reads a handle kept in a global as a view.
+- **`T x →` / `F e →` arms on a `??` whose scrutinee is neither an option
+  nor a result** (a `String`, a struct) are rejected at the arm, naming the
+  scrutinee's type. The binding got an empty type, nurlc exited 0, and
+  clang reported "Cannot allocate unsized type" about generated IR.
 - **Three of the 0.72.0 known memory holes are closed**, each at its root
   and at no run-time cost — the generated code of all 1 642 programs in
   the test corpus, bench, examples and packages is byte-identical to
@@ -150,9 +183,51 @@ written once: `( pkg_version )` reads it from `nurl.toml` at compile time
   (2 530 M → 1 905 M), json_parse's by enough for 3.8 % of the program.
 - The compiler reads its symbol-table integers without a string round
   trip.
+- **`Arc` skips the locked read-modify-write for a sole owner**, as the
+  rcbox counts did: cloning and dropping an `Arc` that has one owner and
+  no `Weak` is a plain load and store (`nurl_arc_share`,
+  `nurl_arc_release`; the weak count is read first, with acquire, so an
+  upgrade a `Weak` made before letting go is seen). The packages' handles
+  lose nothing by moving from rcbox to Arc, and every other Arc gains.
+- **`^ . x f` moves the field out of a struct the function owns** instead
+  of copying it: `x` is dropped on the way out, so the field is emptied in
+  place and the drop skips it (not for a struct with a `% Drop` of its
+  own, which may read it, nor under a `;` defer). The MP3 and JPEG encoders hand their output
+  out this way, with no `mem_take`.
 
 Together, against 0.72.0 compiling the same source: 12 983 M → 12 460 M
 instructions (−4.0 %), 2.76 s → 2.57 s CPU (−7 %, median of nine runs).
+
+### Packages
+
+- **Every hand-written `rcbox` handle is an `Arc` handle** (`Cli` and
+  `HttpApp`, whose state holds closures that may capture the handle, an
+  `Rc`, whose cycles are collected): 79 handle types in 40 packages. Their
+  share and drop hooks are safe code, and so is every constructor that
+  builds a handle from a whole value. The `unsafe` left is the raw-pointer
+  accessor of each (`arc_ptr`), constructors that fill a zeroed state in
+  place, and a few one-line helpers that keep a handle in a module global
+  (`arc_into_word`).
+- **A handle that may be absent is an option.** The null handles —
+  `gguf_none`, `st_none`, `pt_none`, `gg_none`, `lw_none`, `rt_none`,
+  their `*_is_open`, gpu's and gpukit's null resource fields, a failed
+  CA load — are gone: the slot is a `?T`, and `F` costs nothing. These are
+  API changes, released as minor versions (gguf 0.5.0, safetensor 0.5.0,
+  torchpt 0.3.0, onnx 0.11.0, gpu 0.15.0, gpukit 0.10.0, pki-server 0.5.0,
+  anomaly 0.35.0, lingbot-map 0.11.0, map-anything 0.6.0, whisper 3.0.0)
+  with their dependents' requirements raised; the rest are patch
+  releases. Each changelog says what changed and why.
+- **Thirteen packages compile again.** gpukit and everything built on it
+  (onnx, tensor, grad's GPU files, embed, f5tts, yoloe, yoloe-demo,
+  lingbot-map, map-anything), anomaly, whisper and nurllama did not compile
+  under 0.72.0, whose sealed handles made their null literals raw memory.
+  All 464 package sources compile now (348 before).
+- Converting them found two latent faults, fixed in the same releases: an
+  authentication reset in agora leaked the OpenID provider it replaced,
+  and anomaly's per-version fine-tune report left its `note` a zero
+  `String`, which a client reading it read through null. The MP3 and JPEG
+  encoders, which left `Vec` fields of their state out of a literal and
+  filled them in before any read, build the state whole now.
 
 ## [0.72.0] — 2026-10-10
 

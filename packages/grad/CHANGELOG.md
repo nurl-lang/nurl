@@ -2,14 +2,19 @@
 
 ## [0.11.3] — 2026-10-11
 
+Requires NURL 0.73.0, which allows `mem_forget`, `mem_take` and the
+`rcbox` primitives only in `unsafe` code and reads a null library-handle
+literal as raw memory. The published 0.11.2 does not compile under it.
+
 ### Changed
 
-- `GpPlan_drop`, `GpFuse_drop`, `GProg_drop`, `GpOpt_drop`, `GTape_drop`
-  and `Opt_drop` are declared `unsafe`: each calls `mem_forget`,
-  `mem_take` or an `rcbox` primitive, or builds or reads the raw `ctl`
-  of a handle whose drop hook does; NURL 0.73.0 allows these only in
-  `unsafe` code, so the published 0.11.2 does not compile under it.
-  Behaviour is unchanged.
+- `GProg`, `GTape`, `GpFuse`, `GpOpt`, `GpPlan` and `Opt` keep their state
+  in an `Arc` (stdlib/std/arc.nu) instead of an `rcbox`. The share and
+  drop hooks are ordinary safe functions — the Arc does the counting — and
+  so are the constructors that build one from a whole value; every copy is
+  still the same state, and its last owner releases it.
+- 7 fewer functions are `unsafe` than in 0.11.2.
+- Requires gpu 0.15 and gpukit 0.10.
 
 ## [0.11.2] — 2026-10-09
 

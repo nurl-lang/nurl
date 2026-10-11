@@ -206,7 +206,7 @@ $ `stdlib/core/slice.nu`
     ( az_seed_allowed `aaaaaaaa-1111-2222-3333-444444444444` T0 )
     : OidcProvider fake ( oidc_provider_new `https://id.example/organizations/v2.0` )
     : b _j ( oidc_provider_set_jwks fake `{"keys":[]}` )
-    = g_az_prov_addr # i fake
+    ( __az_keep_provider fake )
     ( anomaly_authz_set_iss_tmpl `https://id.example/{tenantid}/v2.0` )
     : Principal p2 ( __az_token_principal ( string_data tok ) 1700000000 )
     ( check ! . p2 authed `wiring: an unsigned token is still refused` )

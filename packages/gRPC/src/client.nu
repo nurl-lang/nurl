@@ -8,7 +8,7 @@
 // functions are optional early releases.
 // Sending borrows protobuf bytes. Receiving transfers an owned GrpcMessage.
 $ `stdlib/ext/http2_client.nu`
-$ `stdlib/core/rcbox.nu`
+$ `stdlib/std/arc.nu`
 $ `metadata.nu`
 
 : GrpcClientImpl { H2Client transport String scheme String authority b owns_transport }
@@ -20,16 +20,13 @@ $ `metadata.nu`
     @ drop GrpcClientImpl c → v { ? . c owns_transport { ( h2_client_disconnect . c transport ) } {} }
 }
 
-: GrpcClient { s ctl }
+: GrpcClient { ( Arc GrpcClientImpl ) a }
 
-unsafe @ GrpcClient_share GrpcClient h → GrpcClient { ^ @ GrpcClient { # s ( rcbox_share # i . h ctl ) } }
+@ GrpcClient_share GrpcClient h → GrpcClient { ^ @ GrpcClient { ( arc_clone [GrpcClientImpl] . h a ) } }
 
-unsafe @ GrpcClient_drop sink GrpcClient h → v {
-    ( mem_forget h )
-    ( rcbox_release [GrpcClientImpl] # i . h ctl )
-}
+@ GrpcClient_drop sink GrpcClient h → v {}
 
-unsafe @ __GrpcClient_ptr GrpcClient h → *GrpcClientImpl { ^ ( rcbox_ptr [GrpcClientImpl] # i . h ctl ) }
+unsafe @ __GrpcClient_ptr GrpcClient h → *GrpcClientImpl { ^ ( arc_ptr [GrpcClientImpl] . h a ) }
 
 : GrpcCallOptions { i timeout_ns i max_send_message i max_recv_message i max_metadata i encoding }
 : GrpcCall {
@@ -53,13 +50,12 @@ unsafe @ __GrpcClient_ptr GrpcClient h → *GrpcClientImpl { ^ ( rcbox_ptr [Grpc
 
 // A client over a transport the caller keeps owning (and closes itself).
 unsafe @ grpc_client_from_h2 H2Client transport s scheme s authority → GrpcClient {
-    : i c__box ( rcbox_zero [GrpcClientImpl] )
-    : *GrpcClientImpl c ( rcbox_ptr [GrpcClientImpl] c__box )
+    : ~ GrpcClientImpl c @ GrpcClientImpl {}
     = . c transport ( H2Client_share transport )  // the caller keeps its own copy
     = . c scheme ( string_from scheme )
     = . c authority ( string_from authority )
     = . c owns_transport F
-    ^ @ GrpcClient { # s c__box }
+    ^ @ GrpcClient { ( arc_new [GrpcClientImpl] c ) }
 }
 
 @ __grpc_client_transport_error H2ClientErr error → GrpcError {
@@ -85,13 +81,12 @@ unsafe @ __grpc_client_connected sink H2Client transport s scheme s host i port 
         ( string_push_char authority 91 ) ( string_push_str authority host ) ( string_push_char authority 93 )
     } { ( string_push_str authority host ) }
     ( string_push_char authority 58 ) ( string_push_int authority port )
-    : i c__box ( rcbox_zero [GrpcClientImpl] )
-    : *GrpcClientImpl c ( rcbox_ptr [GrpcClientImpl] c__box )
+    : ~ GrpcClientImpl c @ GrpcClientImpl {}
     = . c transport transport
     = . c scheme ( string_from scheme )
     = . c authority authority
     = . c owns_transport T
-    ^ @ GrpcClient { # s c__box }
+    ^ @ GrpcClient { ( arc_new [GrpcClientImpl] c ) }
 }
 
 @ grpc_client_connect_h2c s host i port → !GrpcClient GrpcError {

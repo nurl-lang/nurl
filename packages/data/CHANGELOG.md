@@ -2,14 +2,20 @@
 
 ## [0.2.3] — 2026-10-11
 
+Requires NURL 0.73.0, which allows `mem_forget`, `mem_take` and the
+`rcbox` primitives only in `unsafe` code and reads a null library-handle
+literal as raw memory. The published 0.2.2 does not compile under it.
+
 ### Changed
 
-- `DataSet_drop`, `NdfStream_drop` and `DataLoader_drop` are declared
-  `unsafe`: each calls `mem_forget`, `mem_take` or an `rcbox` primitive,
-  or builds or reads the raw `ctl` of a handle whose drop hook does;
-  NURL 0.73.0 allows these only in `unsafe` code, so the published 0.2.2
-  does not compile under it. Behaviour is unchanged, and this version
-  still compiles under 0.72.0.
+- `DataLoader`, `DataSet` and `NdfStream` keep their state in an `Arc`
+  (stdlib/std/arc.nu) instead of an `rcbox`. The share and drop hooks are
+  ordinary safe functions — the Arc does the counting — and so are the
+  constructors that build one from a whole value; every copy is still the
+  same state, and its last owner releases it.
+- 3 fewer functions are `unsafe` than in 0.2.2.
+- A `DataLoader` reads a `?DataSet` or a `?NdfStream` — whichever it was
+  made from — where the other was a null handle.
 
 ## [0.2.2] — 2026-10-09
 

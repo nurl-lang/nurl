@@ -33,7 +33,7 @@
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
-$ `stdlib/core/rcbox.nu`
+$ `stdlib/std/arc.nu`
 $ `stdlib/std/floatbits.nu`
 $ `deps/safetensor/src/safetensor.nu`
 
@@ -44,21 +44,19 @@ $ `deps/safetensor/src/safetensor.nu`
 
 // An open checkpoint is a handle: every copy is the same mapping, and the
 // last owner releases it. lw_close is an optional early release.
-: Lw { s ctl }
+: Lw { ( Arc LwImpl ) a }
 
-unsafe @ Lw_share Lw h → Lw { ^ @ Lw { # s ( rcbox_share # i . h ctl ) } }
+@ Lw_share Lw h → Lw { ^ @ Lw { ( arc_clone [LwImpl] . h a ) } }
 
-unsafe @ Lw_drop sink Lw h → v { ( mem_forget h ) ( rcbox_release [LwImpl] # i . h ctl ) }
+@ Lw_drop sink Lw h → v {}
 
-unsafe @ __Lw_ptr Lw h → *LwImpl { ^ ( rcbox_ptr [LwImpl] # i . h ctl ) }
-// No checkpoint (an empty slot until lw_open fills it).
-@ lw_none → Lw { ^ @ Lw { # s 0 } }
+unsafe @ __Lw_ptr Lw h → *LwImpl { ^ ( arc_ptr [LwImpl] . h a ) }
 
-unsafe @ lw_open s path → !Lw String {
+@ lw_open s path → !Lw String {
     : !St String r ( st_open path )
     ?? r {
         F e → ^ @ !Lw String { F e }
-        T st → { ^ @ !Lw String { T @ Lw { # s ( rcbox_new [LwImpl] @ LwImpl { st ( vec_new [String] ) } ) } } }
+        T st → { ^ @ !Lw String { T @ Lw { ( arc_new [LwImpl] @ LwImpl { st ( vec_new [String] ) } ) } } }
     }
 }
 

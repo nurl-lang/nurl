@@ -20,8 +20,8 @@
 $ `stdlib/core/string.nu`
 
 @ main → i {
-    ?? ( string_from `x` ) {
-        T s → { ( string_free s ) }
+    ?? ( string_to_int ( string_from `7` ) ) {
+        T n → { ( nurl_print `t` ) }
         F e → ( nurl_print `a` ) ( nurl_print `b` )
     }
     ^ 0

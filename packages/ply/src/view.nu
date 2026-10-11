@@ -35,9 +35,9 @@ $ `stdlib/std/x509_gen.nu`
 $ `deps/http/src/http.nu`
 $ `viewer_html_data.nu`
 
-$ `stdlib/core/rcbox.nu`
+$ `stdlib/std/arc.nu`
 
-// What the handlers serve, set up once. A handle over an rcbox: each
+// What the handlers serve, set up once. A handle over an Arc: each
 // route's closure holds a share, and the app's last owner releases it.
 : VwStateImpl {
     String page
@@ -45,16 +45,13 @@ $ `stdlib/core/rcbox.nu`
     ( Vec u ) cloud
 }
 
-: VwState { s ctl }
+: VwState { ( Arc VwStateImpl ) a }
 
-unsafe @ VwState_share VwState h → VwState { ^ @ VwState { # s ( rcbox_share # i . h ctl ) } }
+@ VwState_share VwState h → VwState { ^ @ VwState { ( arc_clone [VwStateImpl] . h a ) } }
 
-unsafe @ VwState_drop sink VwState h → v {
-    ( mem_forget h )
-    ( rcbox_release [VwStateImpl] # i . h ctl )
-}
+@ VwState_drop sink VwState h → v {}
 
-unsafe @ __VwState_ptr VwState h → *VwStateImpl { ^ ( rcbox_ptr [VwStateImpl] # i . h ctl ) }
+unsafe @ __VwState_ptr VwState h → *VwStateImpl { ^ ( arc_ptr [VwStateImpl] . h a ) }
 
 // The page as compiled in. `--page FILE` reads from disk instead, which is
 // the only way to iterate on the viewer without rebuilding.
@@ -124,7 +121,7 @@ unsafe @ vw_serve s path s host i port s page_override i quiet i tls → i {
     }
 
     : i nbytes ( vec_len [u] blob )
-    : VwState st @ VwState { # s ( rcbox_new [VwStateImpl] @ VwStateImpl { ( vw_page page_override ) ( path_basename path ) blob } ) }
+    : VwState st @ VwState { ( arc_new [VwStateImpl] @ VwStateImpl { ( vw_page page_override ) ( path_basename path ) blob } ) }
 
     : HttpApp a ( http_app_new )
     ( http_app_get a `/` \ HttpRequest rq Params pp → HttpResponse { ^ ( h_vw_index st rq pp ) } )

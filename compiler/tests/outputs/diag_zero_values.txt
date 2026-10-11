@@ -1,0 +1,28 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_zero_values.nu:13:15: error: payload 1 of variant 'Poly' is left out of this literal, which makes it zero bytes — and zero bytes are not a '( Vec i )': a String or a Vec needs its control block, a library handle (an Arc, a HashMap, a handle of a module) its shared block, a closure its code, so code using it reads through null or calls it. Give the payload a value — or, if this function fills it in before anything reads it and you vouch for that, declare it 'unsafe @ name …'.
+    : Shape s @ Shape { Poly }
+              ^
+compiler/tests/diag_zero_values.nu:18:20: error: this literal gives its tag only, which leaves the value it holds zero bytes — and zero bytes are not a '( Vec i )': a String or a Vec needs its control block, a library handle its shared block, a closure its code, so code using it reads through null or calls it. Give the value ('@ ?T { T value }', '@ !T E { F error }').
+    : ?( Vec i ) o @ ?( Vec i ) { T }
+                   ^
+compiler/tests/diag_zero_values.nu:23:19: error: this literal gives its tag only, which leaves the value it holds zero bytes — and zero bytes are not a 'String': a String or a Vec needs its control block, a library handle its shared block, a closure its code, so code using it reads through null or calls it. Give the value ('@ ?T { T value }', '@ !T E { F error }').
+    : !i String r @ !i String { F }
+                  ^
+compiler/tests/diag_zero_values.nu:28:5: error: variant 'Poly' carries a payload, and a bare variant is its tag alone: the payload slots would hold whatever bits were there — not a pointer, a string, a handle or a closure. Build it with its payload ('@ Enum { Variant value … }'), or, if this function fills the payload in before anything reads it and you vouch for that, declare it 'unsafe @ name …'.
+compiler/tests/diag_zero_values.nu:33:5: error: variant 'Poly' carries a payload, and a bare variant is its tag alone: the payload slots would hold whatever bits were there — not a pointer, a string, a handle or a closure. Build it with its payload ('@ Enum { Variant value … }'), or, if this function fills the payload in before anything reads it and you vouch for that, declare it 'unsafe @ name …'.
+compiler/tests/diag_zero_values.nu:38:53: error: 'vec_zeroed' fills its value with zero bytes, and zero bytes are not a '( Vec i )': a String or a Vec needs its control block, a library handle its shared block, a closure its code, so code using it reads through null or calls it. Build the value with its constructor (vec_new, string_new, … — or rc_new / arc_new / box_new of a whole value), or, if this function fills every such field in before anything reads it and you vouch for that, declare it 'unsafe @ name …'.
+    : ( Vec ( Vec i ) ) vv ( vec_zeroed [( Vec i )] 2 )
+                                                    ^
+compiler/tests/diag_zero_values.nu:43:42: error: 'rc_zero' fills its value with zero bytes, and zero bytes are not a 'String': a String or a Vec needs its control block, a library handle its shared block, a closure its code, so code using it reads through null or calls it. Build the value with its constructor (vec_new, string_new, … — or rc_new / arc_new / box_new of a whole value), or, if this function fills every such field in before anything reads it and you vouch for that, declare it 'unsafe @ name …'.
+    : ( Rc String ) r ( rc_zero [String] )
+                                         ^
+compiler/tests/diag_zero_values.nu:48:5: error: a number cannot become a '( Vec i )': the number would be its control block's address, and a String, a Vec or a library handle is made by its constructor (string_new, vec_new, …), never from an integer. Initialise it with one, or, if this function genuinely manages that memory and you vouch for it, declare it 'unsafe @ name …'.
+compiler/tests/diag_zero_values.nu:53:25: error: field 1 of struct literal 'Bag' is a '( Vec i )', and a number cannot become one: it would be its control block's address. Give it a value from its constructor (string_new, vec_new, …).
+    : Bag b @ Bag { 1 0 }
+                        ^
+compiler/tests/diag_zero_values.nu:60:20: error: argument 1 to 'take_vec': a number passed where the parameter is a '( Vec i )' — no number converts into a struct, and for a String, a Vec or a library handle the number would be its control block's address. Pass a value of the declared type (its constructor: string_new, vec_new, …).
+    ^ ( take_vec 0 )
+                   ^
+error: aborting due to 10 previous errors
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

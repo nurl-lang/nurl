@@ -27,7 +27,7 @@
 //   ( st_dequant s idx )            → !( Vec u ) String   — f32 bytes
 //   ( st_dequant_range s idx first count ) → !( Vec u ) String
 //   ( st_close s )                  → v        early release (optional)
-//   ( st_none ) / ( st_is_open s )  → St / b   an empty slot, and the test for one
+//   an empty slot is a ?St
 //
 // An St is a handle: every copy is the same open file, and the last owner
 // unmaps it (or lets go of the buffer it was parsed from). Nothing here is
@@ -40,7 +40,7 @@ $ `stdlib/std/fs.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/floatbits.nu`
 $ `stdlib/ext/json.nu`
-$ `stdlib/core/rcbox.nu`
+$ `stdlib/std/arc.nu`
 
 // ── dtypes ──────────────────────────────────────────────────────────
 // Our own codes; the file spells them as strings.
@@ -133,24 +133,15 @@ $ `stdlib/core/rcbox.nu`
     }
 }
 
-// An St is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// An St is a handle on its state in an Arc (stdlib/std/arc.nu):
 // every copy is the same open file, and the last owner releases it.
-: St { s ctl }
+: St { ( Arc StImpl ) a }
 
-unsafe @ St_share St h → St { ^ @ St { # s ( rcbox_share # i . h ctl ) } }
+@ St_share St h → St { ^ @ St { ( arc_clone [StImpl] . h a ) } }
 
-unsafe @ St_drop sink St h → v {
-    ( mem_forget h )
-    ( rcbox_release [StImpl] # i . h ctl )
-}
+@ St_drop sink St h → v {}
 
-unsafe @ __St_ptr St h → *StImpl { ^ ( rcbox_ptr [StImpl] # i . h ctl ) }
-
-// An St that holds no file — for a slot that may be empty (a model whose
-// checkpoint is some other format). st_is_open tells the two apart.
-unsafe @ st_none → St { ^ @ St { # s 0 } }
-
-unsafe @ st_is_open St s → b { ^ != 0 # i . s ctl }
+unsafe @ __St_ptr St h → *StImpl { ^ ( arc_ptr [StImpl] . h a ) }
 
 @ __st_errs s msg → !St String {
     ^ @ !St String { F ( string_from msg ) }
@@ -247,7 +238,7 @@ unsafe @ __st_parse * u p i n sink ( Vec u ) keep → !St String {
     }
 
     // The handle first: a rejected header lets go of it (and of `keep`).
-    : St h @ St { # s ( rcbox_new [StImpl] @ StImpl { p n F keep ( vec_new [StTensor] ) data_off data_size } ) }
+    : St h @ St { ( arc_new [StImpl] @ StImpl { p n F keep ( vec_new [StTensor] ) data_off data_size } ) }
     : *StImpl s ( __St_ptr h )
 
     : ( Vec String ) keys ( json_obj_keys root )

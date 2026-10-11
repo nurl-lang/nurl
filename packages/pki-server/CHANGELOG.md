@@ -1,15 +1,25 @@
 # Changelog
 
-## [0.4.3] — 2026-10-11
+## [0.5.0] — 2026-10-11
+
+Requires NURL 0.73.0, which allows `mem_forget`, `mem_take` and the
+`rcbox` primitives only in `unsafe` code and reads a null library-handle
+literal as raw memory. The published 0.4.2 does not compile under it.
 
 ### Changed
 
-- `PkiCa_drop`, `__pki_ca_null`, `pki_ca_ok` and `pki_service_init` are
-  declared `unsafe`: each calls `mem_forget`, `mem_take` or an `rcbox`
-  primitive, or builds or reads the raw `ctl` of a handle whose drop
-  hook does; NURL 0.73.0 allows these only in `unsafe` code, so the
-  published 0.4.2 does not compile under it. Behaviour is unchanged, and
-  this version still compiles under 0.72.0.
+- `PkiCa` keeps its state in an `Arc` (stdlib/std/arc.nu) instead of an
+  `rcbox`. The share and drop hooks are ordinary safe functions — the Arc
+  does the counting — and so are the constructors that build one from a
+  whole value; every copy is still the same state, and its last owner
+  releases it.
+- One fewer function is `unsafe` than in 0.4.2.
+- `pki_load_or_create_ca` returns `?PkiCa`: F when the CA can be neither
+  loaded nor created, where it handed back a null handle. `pki_ca_ok` is
+  gone with the null handle.
+- The service keeps the loaded CA as one owner behind a word made with
+  `arc_into_word`, in a small `unsafe` helper (`__svc_keep_ca`);
+  `pki_service_init` is safe.
 
 ## [0.4.2] — 2026-10-09
 

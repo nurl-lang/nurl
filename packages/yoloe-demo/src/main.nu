@@ -72,13 +72,13 @@ $ `stdlib/core/slice.nu`
 // The server's state is a handle the route closures capture: every copy is
 // the same state, and the last owner (the app's routes, when the server
 // returns) releases the engine, the graphs and the buffers.
-: Demo { s ctl }
+: Demo { ( Arc DemoState ) a }
 
-unsafe @ Demo_share Demo h → Demo { ^ @ Demo { # s ( rcbox_share # i . h ctl ) } }
+@ Demo_share Demo h → Demo { ^ @ Demo { ( arc_clone [DemoState] . h a ) } }
 
-unsafe @ Demo_drop sink Demo h → v { ( mem_forget h ) ( rcbox_release [DemoState] # i . h ctl ) }
+@ Demo_drop sink Demo h → v {}
 
-unsafe @ __Demo_ptr Demo h → *DemoState { ^ ( rcbox_ptr [DemoState] # i . h ctl ) }
+unsafe @ __Demo_ptr Demo h → *DemoState { ^ ( arc_ptr [DemoState] . h a ) }
 
 // ── small helpers ────────────────────────────────────────────────────
 
@@ -665,7 +665,7 @@ unsafe @ main → i {
                             }
                         } {}
 
-                        : Demo d @ Demo { # s ( rcbox_new [DemoState] @ DemoState {
+                        : Demo d @ Demo { ( arc_new [DemoState] @ DemoState {
                                 e g names nc ( string_from ( rt_name e ) ) mp ( string_new )
                                 kmax tg tkz ( vec_zeroed [u] * * kmax 512 4 ) mbytes wasm_mode } ) }
                         : *DemoState st ( __Demo_ptr d )

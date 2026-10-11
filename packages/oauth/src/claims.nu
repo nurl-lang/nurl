@@ -31,7 +31,7 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/time.nu`
 $ `stdlib/ext/json.nu`
-$ `stdlib/core/rcbox.nu`
+$ `stdlib/std/arc.nu`
 
 // ── What can be wrong with a claim set ─────────────────────────────
 
@@ -192,22 +192,18 @@ unsafe @ __cl_list_has ( Vec String ) list s want → b {
     b allow_symmetric  // permit HS* (only with a configured shared secret)
 }
 
-// An OidcPolicy is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// An OidcPolicy is a handle on its state in an Arc (stdlib/std/arc.nu):
 // every copy is the same state, and the last owner releases it.
-: OidcPolicy { s ctl }
+: OidcPolicy { ( Arc OidcPolicyImpl ) a }
 
-unsafe @ OidcPolicy_share OidcPolicy h → OidcPolicy { ^ @ OidcPolicy { # s ( rcbox_share # i . h ctl ) } }
+@ OidcPolicy_share OidcPolicy h → OidcPolicy { ^ @ OidcPolicy { ( arc_clone [OidcPolicyImpl] . h a ) } }
 
-unsafe @ OidcPolicy_drop sink OidcPolicy h → v {
-    ( mem_forget h )
-    ( rcbox_release [OidcPolicyImpl] # i . h ctl )
-}
+@ OidcPolicy_drop sink OidcPolicy h → v {}
 
-unsafe @ _OidcPolicy_ptr OidcPolicy h → *OidcPolicyImpl { ^ ( rcbox_ptr [OidcPolicyImpl] # i . h ctl ) }
+unsafe @ _OidcPolicy_ptr OidcPolicy h → *OidcPolicyImpl { ^ ( arc_ptr [OidcPolicyImpl] . h a ) }
 
 unsafe @ oidc_policy_new s issuer s audience → OidcPolicy {
-    : i p__box ( rcbox_zero [OidcPolicyImpl] )
-    : *OidcPolicyImpl p ( rcbox_ptr [OidcPolicyImpl] p__box )
+    : ~ OidcPolicyImpl p @ OidcPolicyImpl {}
     = . p issuer ( string_from issuer )
     = . p audience ( string_from audience )
     = . p nonce ( string_new )
@@ -217,7 +213,7 @@ unsafe @ oidc_policy_new s issuer s audience → OidcPolicy {
     = . p require_sub T
     = . p require_exp T
     = . p allow_symmetric F
-    ^ @ OidcPolicy { # s p__box }
+    ^ @ OidcPolicy { ( arc_new [OidcPolicyImpl] p ) }
 }
 
 // Let go of `p` now rather than at the end of its owner's scope.

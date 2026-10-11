@@ -44,7 +44,7 @@ $ `deps/gpu/src/gpu.nu`
 $ `deps/gpukit/src/gpukit.nu`
 $ `deps/gpukit/src/dev.nu`
 $ `tokenizer.nu`
-$ `stdlib/core/rcbox.nu`
+$ `stdlib/std/arc.nu`
 
 // An optional per-layer 1-D tensor (norm weight / bias): `has` says
 // whether the model carries it (llama has no attn_q_norm), `v` holds its
@@ -98,21 +98,18 @@ $ `stdlib/core/rcbox.nu`
     b stream
     ( Vec i ) lz_node  // tape node id of each lazy base const
     ( Vec i ) lz_key  // its identity: layer * 16 + slot (__ft_base_name)
-    Gguf mgg  // a Gguf held open across a streamed merge (gguf_none = none)
+    ? Gguf mgg  // a Gguf held open across a streamed merge
 }
 
-// An FtModel is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// An FtModel is a handle on its state in an Arc (stdlib/std/arc.nu):
 // every copy is the same state, and the last owner releases it.
-: FtModel { s ctl }
+: FtModel { ( Arc FtModelImpl ) a }
 
-unsafe @ FtModel_share FtModel h → FtModel { ^ @ FtModel { # s ( rcbox_share # i . h ctl ) } }
+@ FtModel_share FtModel h → FtModel { ^ @ FtModel { ( arc_clone [FtModelImpl] . h a ) } }
 
-unsafe @ FtModel_drop sink FtModel h → v {
-    ( mem_forget h )
-    ( rcbox_release [FtModelImpl] # i . h ctl )
-}
+@ FtModel_drop sink FtModel h → v {}
 
-unsafe @ __FtModel_ptr FtModel h → *FtModelImpl { ^ ( rcbox_ptr [FtModelImpl] # i . h ctl ) }
+unsafe @ __FtModel_ptr FtModel h → *FtModelImpl { ^ ( arc_ptr [FtModelImpl] . h a ) }
 
 // Streaming base upload, OFF by default: the finetune tests compare the CPU
 // tape's loss against the device's, and a lazy const has no host values to
@@ -382,7 +379,7 @@ unsafe @ ft_open s path → !FtModel String {
         T gg → {
             : s arch ( gguf_kv_str_or gg `general.architecture` `` )
             // zeroed: an early return drops a half-built model cleanly
-            : FtModel h @ FtModel { # s ( rcbox_zero [FtModelImpl] ) }
+            : FtModel h @ FtModel { ( arc_zero [FtModelImpl] ) }
             : *FtModelImpl m ( __FtModel_ptr h )
             = . m ok T
             = . m stream ( __ft_stream_wanted )
@@ -461,7 +458,7 @@ unsafe @ ft_open s path → !FtModel String {
             = . m fn ( vec_new [FtV] )
             = . m qn ( vec_new [FtV] )
             = . m kn ( vec_new [FtV] )
-            = . m mgg ( gguf_none )
+            = . m mgg @ ?Gguf { F }
             = . m lz_node ( vec_new [i] )
             = . m lz_key ( vec_new [i] )
             = . m src_path ( string_from path )
@@ -1414,9 +1411,9 @@ unsafe @ ft_adapters_save s path FtModel m__h FtTrain t i r → !v String {
     }
     ? . m stream {
         // the merge's GGUF leaves the model (closed here)
-        : Gguf mgg . m mgg
+        : ?Gguf mgg . m mgg
         ( mem_take mgg )
-        = . m mgg ( gguf_none )
+        = . m mgg @ ?Gguf { F }
     } {}
     : !v String res ( stw_write so path )
     ^ res
@@ -1566,7 +1563,7 @@ unsafe @ ft_merge_st_mask s path FtModel m__h FtTrain t i r f alpha i mask → !
     // model of zeros. Hold the GGUF open and page one layer in at a time.
     ? . m stream {
         ?? ( gguf_open ( string_data . m src_path ) ) {
-            T gg → { = . m mgg gg }
+            T gg → { = . m mgg @ ?Gguf { T gg } }
             F e → { ^ @ !v String { F e } }
         }
     } {}
@@ -1600,7 +1597,7 @@ unsafe @ ft_merge_st_mask s path FtModel m__h FtTrain t i r f alpha i mask → !
         // for its seven slots and drop it again after the last one, so the
         // merge costs one layer of host RAM, not the whole model
         ? & . m stream == w 0 {
-            : b _li ( __ft_layer_in . m mgg m L )
+            ?? . m mgg { T mg → { : b _li ( __ft_layer_in mg m L ) } F → {} }
         } {}
         // the per-layer norms, once per layer (at slot 0; norm mask bit3)
         ? & == w 0 == % / mask 8 2 1 {

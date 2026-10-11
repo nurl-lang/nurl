@@ -1582,9 +1582,7 @@ unsafe @ __az_provider → ?OidcProvider {
 
 // One share of `p` stays behind g_az_prov_addr for the rest of the process.
 unsafe @ __az_keep_provider OidcProvider p → v {
-    : OidcProvider kept ( OidcProvider_share p )
-    = g_az_prov_addr # i . kept ctl
-    ( mem_forget kept )
+    = g_az_prov_addr ( arc_into_word [OidcProviderImpl] ( arc_clone [OidcProviderImpl] . p a ) )
 }
 
 // The issuer a token from tenant `tid` must carry: the provider's own

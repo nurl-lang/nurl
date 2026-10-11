@@ -96,13 +96,18 @@ unsafe @ __wh_transcribe s dir s wavpath s lang i maxtok b use_vad b with_ts f n
         ?? ( wh_open_ggml dir ) {
             T w → {
                 : ~ i rc2 1
-                ?? ( gg_build_tok ( wh_gg w ) ) {
-                    T t → {
-                        = rc2 ( __wh_transcribe_run w t wavpath lang maxtok use_vad with_ts nospeech )
+                ?? ( wh_gg w ) {
+                    T gg → {
+                        ?? ( gg_build_tok gg ) {
+                            T t → {
+                                = rc2 ( __wh_transcribe_run w t wavpath lang maxtok use_vad with_ts nospeech )
+                            }
+                            F e → {
+                                ( nurl_eprintln ( string_data e ) )
+                            }
+                        }
                     }
-                    F e → {
-                        ( nurl_eprintln ( string_data e ) )
-                    }
+                    F → {}
                 }
                 ^ rc2
             }

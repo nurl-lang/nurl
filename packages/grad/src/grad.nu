@@ -6,7 +6,7 @@
 // index order IS topological order — accumulating dL/dx into a gradient slot
 // per node. Fan-out (one value used twice) sums naturally.
 //
-// Ownership: the tape is an ARENA behind a handle (a GTape, an rcbox — every
+// Ownership: the tape is an ARENA behind a handle (a GTape, an Arc — every
 // copy is the same tape). It owns every value tensor and every gradient
 // tensor; `grad_param`/`grad_const` COPY the caller's tensor in,
 // `gvar_value`/`grad_of` hand out BORROWS (aliased Tensor views — never
@@ -39,7 +39,7 @@ $ `stdlib/core/string.nu`
 $ `stdlib/std/float.nu`
 $ `deps/tensor/src/tensor.nu`
 $ `deps/tensor/src/ops.nu`
-$ `stdlib/core/rcbox.nu`
+$ `stdlib/std/arc.nu`
 
 // ── op codes ──────────────────────────────────────────────────────────
 @ gop_param → i { ^ 0 }
@@ -111,25 +111,22 @@ $ `stdlib/core/rcbox.nu`
     ( Vec s ) aux  // *GAux per node, 0 for ops that need none (slice starts)
 }
 
-// A GTape is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// A GTape is a handle on its state in an Arc (stdlib/std/arc.nu):
 // every copy is the same state, and the last owner releases it.
-: GTape { s ctl }
+: GTape { ( Arc GTapeImpl ) a }
 
-unsafe @ GTape_share GTape h → GTape { ^ @ GTape { # s ( rcbox_share # i . h ctl ) } }
+@ GTape_share GTape h → GTape { ^ @ GTape { ( arc_clone [GTapeImpl] . h a ) } }
 
-unsafe @ GTape_drop sink GTape h → v {
-    ( mem_forget h )
-    ( rcbox_release [GTapeImpl] # i . h ctl )
-}
+@ GTape_drop sink GTape h → v {}
 
 // The state, for this package's own code.
-unsafe @ _GTape_ptr GTape h → *GTapeImpl { ^ ( rcbox_ptr [GTapeImpl] # i . h ctl ) }
+unsafe @ _GTape_ptr GTape h → *GTapeImpl { ^ ( arc_ptr [GTapeImpl] . h a ) }
 
 // The arena's raw cells — the *Tensor value / gradient per node and the
 // *GAux blocks — are the tape's own heap memory: its last owner releases
 // them here, and the node / pointer vecs after (drop glue).
 % Drop GTapeImpl {
-    @ drop GTapeImpl x → v {
+    unsafe @ drop GTapeImpl x → v {
         : i n ( vec_len [s] . x vals )
         : ~ i k 0
         ~ < k n {
@@ -149,14 +146,13 @@ unsafe @ _GTape_ptr GTape h → *GTapeImpl { ^ ( rcbox_ptr [GTapeImpl] # i . h c
 // ── construction / lifecycle ─────────────────────────────────────────
 
 unsafe @ tape_new → GTape {
-    : i tp__box ( rcbox_zero [GTapeImpl] )
-    : *GTapeImpl tp ( rcbox_ptr [GTapeImpl] tp__box )
+    : ~ GTapeImpl tp @ GTapeImpl {}
     = . tp ok 1
     = . tp nodes ( vec_new [GNode] )
     = . tp vals ( vec_new [s] )
     = . tp grads ( vec_new [s] )
     = . tp aux ( vec_new [s] )
-    ^ @ GTape { # s tp__box }
+    ^ @ GTape { ( arc_new [GTapeImpl] tp ) }
 }
 
 unsafe @ _g_tfree s pp → v {

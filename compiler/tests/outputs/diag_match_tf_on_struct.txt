@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_match_tf_on_struct.nu:15:9: error: 'T' arms match an option ('? T') or a result ('! T E'), and this '??' matches a 'String', which is neither. Match the call that returns the option/result, or use the value directly without a '??'.
+        T s → { ( nurl_print `t` ) }
+        ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

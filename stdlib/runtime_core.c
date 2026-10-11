@@ -4424,6 +4424,44 @@ long long nurl_rc_release(void *p) {
 #endif
 }
 
+/* The same for Arc's strong count (stdlib/std/arc.nu: [count][weak][…]),
+ * where a Weak handle can raise the count without being an owner
+ * (nurl_atomic_i64_inc_if_live). A weak count of 1 is the strong handles'
+ * own share: no Weak exists, and only an owner could make one. Read
+ * first, with acquire, it also orders after any upgrade an earlier Weak
+ * made before letting go — so a strong count of 1 read after it is the
+ * only owner, as for the rcbox counts above. */
+long long nurl_arc_share(void *p) {
+    if (!p) return 0;
+    long long *c = (long long *)p;
+#ifdef _WIN32
+    if (*(volatile long long *)(c + 1) == 1 && *(volatile long long *)c == 1) { *(volatile long long *)c = 2; return 1; }
+    return (long long)InterlockedExchangeAdd64((volatile LONG64*)c, 1);
+#else
+    if (__atomic_load_n(c + 1, __ATOMIC_ACQUIRE) == 1 && __atomic_load_n(c, __ATOMIC_RELAXED) == 1) {
+        __atomic_store_n(c, 2, __ATOMIC_RELAXED);
+        return 1;
+    }
+    return __atomic_fetch_add(c, 1, __ATOMIC_SEQ_CST);
+#endif
+}
+
+/* 0: other owners remain. 1: the caller was the last strong owner — the
+ * value goes, and the strong handles' weak share with it (nurl_rc_release
+ * on the weak count). 2: it was the only owner and no Weak exists — the
+ * value goes and the block is its to free outright. */
+long long nurl_arc_release(void *p) {
+    if (!p) return 0;
+    long long *c = (long long *)p;
+#ifdef _WIN32
+    if (*(volatile long long *)(c + 1) == 1 && *(volatile long long *)c == 1) { MemoryBarrier(); return 2; }
+    return (long long)InterlockedExchangeAdd64((volatile LONG64*)c, -1) == 1;
+#else
+    if (__atomic_load_n(c + 1, __ATOMIC_ACQUIRE) == 1 && __atomic_load_n(c, __ATOMIC_ACQUIRE) == 1) return 2;
+    return __atomic_sub_fetch(c, 1, __ATOMIC_SEQ_CST) <= 0;
+#endif
+}
+
 /* Publish-once slots for stdlib singletons (a TLS ticket master, a
  * session cache): the first caller to publish a non-zero value into
  * slot `id` wins and every caller gets the winner's value back, so a

@@ -2,16 +2,21 @@
 
 ## [0.5.4] — 2026-10-11
 
+Requires NURL 0.73.0, which allows `mem_forget`, `mem_take` and the
+`rcbox` primitives only in `unsafe` code and reads a null library-handle
+literal as raw memory. The published 0.5.3 does not compile under it.
+
 ### Changed
 
-- `__ag_mcp_init` and `__ag_mcp_init_for_mode` are declared `unsafe`:
-  each calls `mem_forget`, `mem_take` or an `rcbox` primitive, or builds
-  or reads the raw `ctl` of a handle whose drop hook does; NURL 0.73.0
-  allows these only in `unsafe` code, so the published 0.5.3 does not
-  compile under it. Behaviour is unchanged.
-- Its version string (`AG_VERSION`) is read from `nurl.toml` with `(
-  pkg_version )` instead of being written by hand, so it can no longer
-  drift from the manifest. This needs NURL 0.73.0.
+- Its `--version` (or the version it reports) is read from `nurl.toml`
+  with `( pkg_version )` instead of being written by hand, so it can no
+  longer drift from the manifest.
+
+### Fixed
+
+- Reconfiguring authentication released nothing of the OpenID provider
+  discovered before: the old share leaked. The provider is kept as a
+  `?OidcProvider` in the auth state and the old one is let go.
 
 ## [0.5.3] — 2026-10-09
 

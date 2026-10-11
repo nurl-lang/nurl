@@ -38,7 +38,7 @@ $ `deps/onnx/src/runtime.nu`
 
 : Sky {
     OGraph g
-    Engine e
+    ? Engine e
     b ok
 }
 
@@ -46,17 +46,18 @@ $ `deps/onnx/src/runtime.nu`
     : ~ OGraph g @ OGraph { ( vec_new [ONode] ) ( vec_new [OTensor] ) ( string_new ) ( string_new ) ( string_new ) }
     ?? ( read_file_bytes path ) {
         T mb → { = g ( onnx_parse mb ) }
-        F _ → { ^ @ Sky { g ( rt_none ) F } }
+        F _ → { ^ @ Sky { g @ ?Engine { F } F } }
     }
     : Engine e ( rt_open 0 )
-    ? ( rt_ok e ) {} { ^ @ Sky { g e F } }
-    ^ @ Sky { g e T }
+    ? ( rt_ok e ) {} { ^ @ Sky { g @ ?Engine { T e } F } }
+    ^ @ Sky { g @ ?Engine { T e } T }
 }
 
 // AND "not sky" into `mask` for one view. `chw` is the fitted frame's
 // [3, h, w] planar [0,1] host buffer (pp_data), `mask` h·w bytes.
 unsafe @ sky_mask Sky s * f chw i w i h * u mask → b {
     ? . s ok {} { ^ F }
+    : Engine eng ?? . s e { T x → x F → { ^ F } }
     // planar floats → interleaved u8, then the reference's 320×320
     : Image im ( image_new w h 3 )
     : *u ip ( vec_data [u] . im data )
@@ -99,9 +100,9 @@ unsafe @ sky_mask Sky s * f chw i w i h * u mask → b {
     : ( Vec i ) shape ( vec_with_cap [i] 4 )
     ( vec_push [i] shape 1 ) ( vec_push [i] shape 3 )
     ( vec_push [i] shape SKY_N ) ( vec_push [i] shape SKY_N )
-    : RTensor out ( rt_run_shaped . s e . s g inb shape )
+    : RTensor out ( rt_run_shaped eng . s g inb shape )
     ? == . out nelem n2 {} { ^ F }
-    : GpuHost score__h ( rt_download . s e out )
+    : GpuHost score__h ( rt_download eng out )
     : *u score ( gpu_host_ptr score__h )
 
     // min–max → u8 (truncating), as run_skyseg does

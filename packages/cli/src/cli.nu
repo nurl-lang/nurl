@@ -38,7 +38,7 @@ $ `stdlib/std/args.nu`
 $ `stdlib/std/term.nu`
 $ `stdlib/ext/env.nu`
 $ `prompt.nu`
-$ `stdlib/core/rcbox.nu`
+$ `stdlib/std/rc.nu`
 
 // Flag kinds.
 //   0 = string   1 = int   2 = bool (presence)   3 = float
@@ -84,19 +84,16 @@ $ `stdlib/core/rcbox.nu`
     ( Vec CliCmd ) cmds
 }
 
-// A Cli is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// A Cli is a handle on its state in an Arc (stdlib/std/arc.nu):
 // every copy is the same state (a CliCtx's back-ref is one), and the last
 // owner releases it — its strings, flags and commands are dropped with it.
-: Cli { s ctl }
+: Cli { ( Rc CliImpl ) a }
 
-unsafe @ Cli_share Cli h → Cli { ^ @ Cli { # s ( rcbox_share # i . h ctl ) } }
+@ Cli_share Cli h → Cli { ^ @ Cli { ( rc_clone [CliImpl] . h a ) } }
 
-unsafe @ Cli_drop sink Cli h → v {
-    ( mem_forget h )
-    ( rcbox_release [CliImpl] # i . h ctl )
-}
+@ Cli_drop sink Cli h → v {}
 
-unsafe @ __Cli_ptr Cli h → *CliImpl { ^ ( rcbox_ptr [CliImpl] # i . h ctl ) }
+unsafe @ __Cli_ptr Cli h → *CliImpl { ^ ( rc_ptr [CliImpl] . h a ) }
 
 // ── Colour (decided once per run: stdout is a TTY and $NO_COLOR unset) ──
 
@@ -140,8 +137,8 @@ unsafe @ __Cli_ptr Cli h → *CliImpl { ^ ( rcbox_ptr [CliImpl] # i . h ctl ) }
 
 // ── Construction / teardown ───────────────────────────────────────────
 
-unsafe @ cli_new s prog s about s version → Cli {
-    ^ @ Cli { # s ( rcbox_new [CliImpl] @ CliImpl {
+@ cli_new s prog s about s version → Cli {
+    ^ @ Cli { ( rc_new [CliImpl] @ CliImpl {
             ( string_from prog ) ( string_from about ) ( string_from version )
             ( vec_new [CliFlag] ) ( vec_new [CliCmd] )
         } ) }

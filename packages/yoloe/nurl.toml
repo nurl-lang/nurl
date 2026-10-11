@@ -6,11 +6,11 @@ description = "Promptable, open-vocabulary object detection AND instance segment
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-onnx = { path = "../onnx", version = "^0.10" }
+onnx = { path = "../onnx", version = "^0.11" }
 image = { path = "../image", version = "^0" }
 cli = { path = "../cli", version = "^0.4" }
 # Reached through onnx, but present in this package's build either way —
 # declared so the resolver never has to infer them.
 tensor = { path = "../tensor", version = "^0.6" }
-gpukit = { path = "../gpukit", version = "^0.9" }
-gpu = { path = "../gpu", version = "^0.14" }
+gpukit = { path = "../gpukit", version = "^0.10" }
+gpu = { path = "../gpu", version = "^0.15" }

@@ -49,13 +49,13 @@ $ `stdlib/core/string.nu`
 $ `stdlib/std/thread.nu`
 $ `stdlib/std/time.nu`
 $ `stdlib/std/url.nu`
-$ `stdlib/core/rcbox.nu`
+$ `stdlib/std/arc.nu`
 $ `stdlib/ext/json.nu`
 $ `deps/http/src/http.nu`
 $ `model.nu`
 $ `stdlib/core/slice.nu`
 
-: ~ i g_em 0  // the served Embed handle's ctl word, lent by embed_serve's caller (0 = not serving)
+: ~ i g_em 0  // the served Embed's block, lent by embed_serve's caller (0 = not serving)
 : ~ s g_em_token ``
 : ~ s g_em_name ``
 : ~ i g_em_reqs 0
@@ -96,12 +96,9 @@ $ `stdlib/core/slice.nu`
     b ok
 }
 
-: EmJob { s ctl }
+: EmJob { ( Arc EmJobImpl ) a }
 
-unsafe @ EmJob_drop sink EmJob h → v {
-    ( mem_forget h )
-    ( rcbox_release [EmJobImpl] # i . h ctl )
-}
+@ EmJob_drop sink EmJob h → v {}
 
 : ~ i g_q_head 0
 : ~ i g_q_tail 0
@@ -126,8 +123,8 @@ unsafe @ __em_submit sink ( Vec i ) ids sink ( Vec i ) offs i nout b normalize �
     : ( Vec f ) out ( vec_with_cap [f] nout )
     : ~ i z 0
     ~ < z nout { ( vec_push [f] out 0.0 ) = z + z 1 }
-    : EmJob jh @ EmJob { # s ( rcbox_new [EmJobImpl] @ EmJobImpl { 0 ids offs out normalize F F } ) }
-    : *EmJobImpl j ( rcbox_ptr [EmJobImpl] # i . jh ctl )
+    : EmJob jh @ EmJob { ( arc_new [EmJobImpl] @ EmJobImpl { 0 ids offs out normalize F F } ) }
+    : *EmJobImpl j ( arc_ptr [EmJobImpl] . jh a )
     ( mutex_lock . q m )
     ? == g_q_tail 0 {
         = g_q_head # i j
@@ -475,7 +472,7 @@ unsafe @ __em_health HttpRequest req → HttpResponse {
 
 // Serve `e` (borrowed for the server's lifetime). Blocks until stopped.
 unsafe @ embed_serve Embed e s name s host i port s token i unload_s → i {
-    = g_em # i . e ctl
+    = g_em # i . . e a ctl
     = g_em_unload_ms * unload_s 1000
     = g_em_idle_since ( monotonic_ns )
     = g_em_loads 1

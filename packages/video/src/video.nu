@@ -41,7 +41,7 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/std/path.nu`
 $ `stdlib/std/process.nu`
-$ `stdlib/core/rcbox.nu`
+$ `stdlib/std/arc.nu`
 $ `stdlib/core/slice.nu`
 
 // ── what is a video ─────────────────────────────────────────────────
@@ -111,16 +111,13 @@ $ `stdlib/core/slice.nu`
 
 // An opened AVI is a handle: every copy is the same open file, and the
 // last owner closes it. vid_avi_close is an optional early release.
-: VidAvi { s ctl }
+: VidAvi { ( Arc VidAviImpl ) a }
 
-unsafe @ VidAvi_share VidAvi h → VidAvi { ^ @ VidAvi { # s ( rcbox_share # i . h ctl ) } }
+@ VidAvi_share VidAvi h → VidAvi { ^ @ VidAvi { ( arc_clone [VidAviImpl] . h a ) } }
 
-unsafe @ VidAvi_drop sink VidAvi h → v {
-    ( mem_forget h )
-    ( rcbox_release [VidAviImpl] # i . h ctl )
-}
+@ VidAvi_drop sink VidAvi h → v {}
 
-unsafe @ __VidAvi_ptr VidAvi h → *VidAviImpl { ^ ( rcbox_ptr [VidAviImpl] # i . h ctl ) }
+unsafe @ __VidAvi_ptr VidAvi h → *VidAviImpl { ^ ( arc_ptr [VidAviImpl] . h a ) }
 
 // The stream's declared frame rate, fps_num / fps_den (dwRate / dwScale).
 unsafe @ vid_avi_fps_num VidAvi h → i { : *VidAviImpl v ( __VidAvi_ptr h ) ^ . v fps_num }
@@ -167,9 +164,8 @@ unsafe @ vid_avi_open s path → !VidAvi String {
     }
     // The handle first: every way out below lets go of it, and its drop
     // closes the file.
-    : i v__box ( rcbox_zero [VidAviImpl] )
-    : VidAvi av @ VidAvi { # s v__box }
-    : *VidAviImpl v ( rcbox_ptr [VidAviImpl] v__box )
+    : VidAvi av @ VidAvi { ( arc_zero [VidAviImpl] ) }
+    : *VidAviImpl v ( arc_ptr [VidAviImpl] . av a )
     = . v f f
     // RIFF....AVI<space>
     : ~ b hdr_ok F

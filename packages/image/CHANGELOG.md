@@ -2,13 +2,15 @@
 
 ## [0.7.5] — 2026-10-11
 
+Requires NURL 0.73.0, which allows `mem_forget`, `mem_take` and the
+`rcbox` primitives only in `unsafe` code and reads a null library-handle
+literal as raw memory. The published 0.7.4 does not compile under it.
+
 ### Changed
 
-- `jpeg_encode_sub` is declared `unsafe`: it calls `mem_forget`,
-  `mem_take` or an `rcbox` primitive, or builds or reads the raw `ctl`
-  of a handle whose drop hook does; NURL 0.73.0 allows these only in
-  `unsafe` code, so the published 0.7.4 does not compile under it.
-  Behaviour is unchanged, and this version still compiles under 0.72.0.
+- The JPEG encoder builds its state as one literal, and `jpeg_encode_sub`
+  hands the finished stream out by moving it — no `mem_take`, so it is
+  safe code again.
 
 ## [0.7.4] — 2026-10-09
 

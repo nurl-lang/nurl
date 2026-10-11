@@ -15,6 +15,11 @@
 // hand. The block pointer travels as an `i`: it is the handle's to own,
 // never a string anything else would release.
 //
+// These primitives are raw (spec §3.3d): outside the standard library only
+// an `unsafe` function may call them. A program's own handle wraps an
+// `Arc` instead (stdlib/std/arc.nu), whose share and drop hooks are safe
+// code (docs/MEMORY.md §7.6).
+//
 // API:
 //
 //   ( rcbox_new     [T] T x )  → i     a block with one owner holding x

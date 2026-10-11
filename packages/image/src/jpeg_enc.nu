@@ -127,19 +127,17 @@ $ `jpeg.nu`
 }
 
 @ __jpe_new i quality → JEnc {
-    : ~ JEnc e @ JEnc { ( vec_new [u] ) }
-    = . e bbuf 0
-    = . e bcnt 0
-    = . e A ( _idct_basis )
-    = . e zz ( _zigzag )
+    : ( Vec i ) zz ( _zigzag )
     : ( Vec i ) bl ( __jpe_qbase_luma )
     : ( Vec i ) bc ( __jpe_qbase_chroma )
-    = . e qy ( __jpe_scale_q bl quality . e zz )
-    = . e qc ( __jpe_scale_q bc quality . e zz )
-    = . e ydc_co ( _ivec 256 0 ) = . e ydc_si ( _ivec 256 0 )
-    = . e yac_co ( _ivec 256 0 ) = . e yac_si ( _ivec 256 0 )
-    = . e cdc_co ( _ivec 256 0 ) = . e cdc_si ( _ivec 256 0 )
-    = . e cac_co ( _ivec 256 0 ) = . e cac_si ( _ivec 256 0 )
+    : ( Vec i ) qy ( __jpe_scale_q bl quality zz )
+    : ( Vec i ) qc ( __jpe_scale_q bc quality zz )
+    : ~ JEnc e @ JEnc {
+        ( vec_new [u] ) 0 0 qy qc
+        ( _ivec 256 0 ) ( _ivec 256 0 ) ( _ivec 256 0 ) ( _ivec 256 0 )
+        ( _ivec 256 0 ) ( _ivec 256 0 ) ( _ivec 256 0 ) ( _ivec 256 0 )
+        ( _idct_basis ) zz
+    }
     : ( Vec i ) b1 ( __jpe_hbits_dc_l )
     : ( Vec i ) v1 ( __jpe_hvals_dc )
     ( __jpe_huff_build b1 v1 . e ydc_co . e ydc_si )
@@ -408,7 +406,7 @@ $ `jpeg.nu`
 // ── Public entry ──────────────────────────────────────────────────────
 
 // subsamp: 0 = 4:4:4, 1 = 4:2:2, 2 = 4:2:0 (ignored for greyscale).
-unsafe @ jpeg_encode_sub Image im i quality i subsamp → ( Vec u ) {
+@ jpeg_encode_sub Image im i quality i subsamp → ( Vec u ) {
     : i W . im width
     : i H . im height
     ? || <= W 0 <= H 0 { ^ ( vec_new [u] ) } {}
@@ -476,9 +474,8 @@ unsafe @ jpeg_encode_sub Image im i quality i subsamp → ( Vec u ) {
     ( __jpe_flush_bits e )
     ( __jpe_marker . e out 217 )  // EOI
 
-    : ( Vec u ) out . e out
-    ( mem_take out )  // the stream leaves the encoder, not copied
-    ^ out
+    // the stream moves out of the encoder, not copied
+    ^ . e out
 }
 
 // Quality-driven default: 4:2:0 below 90, 4:4:4 from 90 up (mirrors what

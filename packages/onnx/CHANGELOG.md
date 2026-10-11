@@ -1,14 +1,25 @@
 # Changelog
 
-## [0.10.3] — 2026-10-11
+## [0.11.0] — 2026-10-11
+
+Requires NURL 0.73.0, which allows `mem_forget`, `mem_take` and the
+`rcbox` primitives only in `unsafe` code and reads a null library-handle
+literal as raw memory. The published 0.10.2 does not compile under it.
 
 ### Changed
 
-- `Engine_drop` is declared `unsafe`: it calls `mem_forget`, `mem_take`
-  or an `rcbox` primitive, or builds or reads the raw `ctl` of a handle
-  whose drop hook does; NURL 0.73.0 allows these only in `unsafe` code,
-  so the published 0.10.2 does not compile under it. Behaviour is
-  unchanged.
+- `Engine` keeps its state in an `Arc` (stdlib/std/arc.nu) instead of an
+  `rcbox`. The share and drop hooks are ordinary safe functions — the Arc
+  does the counting — and so are the constructors that build one from a
+  whole value; every copy is still the same state, and its last owner
+  releases it.
+- 2 fewer functions are `unsafe` than in 0.10.2.
+- Requires gpu 0.15 and gpukit 0.10.
+
+### Removed
+
+- `rt_none`: an `Engine` is always an engine. A holder that may have none
+  keeps a `?Engine`. `rt_ok` no longer has a null handle to answer for.
 
 ## [0.10.2] — 2026-10-09
 

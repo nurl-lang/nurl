@@ -93,13 +93,12 @@ unsafe @ main → i {
         ^ ( __ic_die `cannot read feats.bin / regs.bin` )
     }
 
-    : ~ Lw lw ( lw_none )
-    ?? ( lw_open model ) {
+    : Lw lw ?? ( lw_open model ) {
         F e → {
             ( puts ( string_data e ) )
             ^ 1
         }
-        T got → { = lw got }
+        T got → got
     }
     : GpuKit kit ( gk_open_best )
     ? ( gk_ok kit ) {} { ^ ( __ic_die `no compute device` ) }

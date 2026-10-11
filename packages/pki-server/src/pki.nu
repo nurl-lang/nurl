@@ -25,7 +25,7 @@ $ `stdlib/std/x509.nu`
 $ `stdlib/std/x509_gen.nu`
 $ `stdlib/std/pkey.nu`
 $ `stdlib/std/csr.nu`
-$ `stdlib/core/rcbox.nu`
+$ `stdlib/std/arc.nu`
 $ `stdlib/core/slice.nu`
 
 & `c` @ nurl_rand_fill *u buf i n → i
@@ -92,29 +92,21 @@ $ `stdlib/core/slice.nu`
     String cn
 }
 
-// A PkiCa is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// A PkiCa is a handle on its state in an Arc (stdlib/std/arc.nu):
 // every copy is the same CA, and the last owner releases it. A load that
-// fails hands back a null handle (`pki_ca_ok` is F).
-: PkiCa { s ctl }
+// fails hands back F.
+: PkiCa { ( Arc PkiCaImpl ) a }
 
-unsafe @ PkiCa_share PkiCa h → PkiCa { ^ @ PkiCa { # s ( rcbox_share # i . h ctl ) } }
+@ PkiCa_share PkiCa h → PkiCa { ^ @ PkiCa { ( arc_clone [PkiCaImpl] . h a ) } }
 
-unsafe @ PkiCa_drop sink PkiCa h → v {
-    ( mem_forget h )
-    ( rcbox_release [PkiCaImpl] # i . h ctl )
-}
+@ PkiCa_drop sink PkiCa h → v {}
 
-unsafe @ __PkiCa_ptr PkiCa h → *PkiCaImpl { ^ ( rcbox_ptr [PkiCaImpl] # i . h ctl ) }
+unsafe @ __PkiCa_ptr PkiCa h → *PkiCaImpl { ^ ( arc_ptr [PkiCaImpl] . h a ) }
 
 // The key pair moves in; the PEMs and the name are copied.
-unsafe @ __pki_ca_make i alg sink ( Vec u ) scalar sink ( Vec u ) pubkey sink ( Vec u ) ml_sk sink ( Vec u ) ml_pk s cert_pem s key_pem s cn → PkiCa {
-    ^ @ PkiCa { # s ( rcbox_new [PkiCaImpl] @ PkiCaImpl { alg scalar pubkey ml_sk ml_pk ( string_from cert_pem ) ( string_from key_pem ) ( string_from cn ) } ) }
+@ __pki_ca_make i alg sink ( Vec u ) scalar sink ( Vec u ) pubkey sink ( Vec u ) ml_sk sink ( Vec u ) ml_pk s cert_pem s key_pem s cn → PkiCa {
+    ^ @ PkiCa { ( arc_new [PkiCaImpl] @ PkiCaImpl { alg scalar pubkey ml_sk ml_pk ( string_from cert_pem ) ( string_from key_pem ) ( string_from cn ) } ) }
 }
-
-unsafe @ __pki_ca_null → PkiCa { ^ @ PkiCa { # s 0 } }
-
-// F for the null handle a failed load returns.
-unsafe @ pki_ca_ok PkiCa ca → b { ^ != 0 # i . ca ctl }
 
 unsafe @ pki_ca_alg PkiCa ca → i { ^ . ( __PkiCa_ptr ca ) alg }
 
@@ -685,12 +677,12 @@ unsafe @ pki_generate_ca s cn i validity_days i alg → PkiCa {
 // handle when the pair does not parse, does not agree on the algorithm,
 // or when the private key does not match the certificate's public key —
 // a mismatch would otherwise produce certificates nothing can verify.
-@ _pki_ca_from_pem s cert_pem s key_pem s ca_cn → PkiCa {
+@ _pki_ca_from_pem s cert_pem s key_pem s ca_cn → ?PkiCa {
     : !( Vec u ) ParseErr der_r ( pem_to_der cert_pem )
     : ( Vec u ) der ?? der_r { T v → v F _ → ( vec_new [u] ) }
-    ? == ( vec_len [u] der ) 0 { ^ ( __pki_ca_null ) } {}
+    ? == ( vec_len [u] der ) 0 { ^ @ ?PkiCa { F } } {}
     : X509 x ( x509_parse der )
-    ? ! . x ok { ^ ( __pki_ca_null ) } {}
+    ? ! . x ok { ^ @ ?PkiCa { F } } {}
 
     ? == . x key_alg 4 {
         : i level . x ec_curve
@@ -699,33 +691,33 @@ unsafe @ pki_generate_ca s cn i validity_days i alg → PkiCa {
             T mk → {
                 : ~ b good & == . mk level level == ( vec_len [u] . mk sk ) ( mldsa_sk_len level )
                 ? good { = good == ( vec_len [u] . x ec_point ) ( mldsa_pk_len level ) } {}
-                ? ! good { ^ ( __pki_ca_null ) } {}
+                ? ! good { ^ @ ?PkiCa { F } } {}
                 : ( Vec u ) ml_pk ( bytes_slice . x ec_point 0 ( vec_len [u] . x ec_point ) )
                 // The stored certificate is self-signed: re-check it
                 // rather than trust that the two files belong together.
-                ? ! ( _pki_verify_sig level ml_pk . x tbs . x sig ) { ^ ( __pki_ca_null ) } {}
+                ? ! ( _pki_verify_sig level ml_pk . x tbs . x sig ) { ^ @ ?PkiCa { F } } {}
                 : ( Vec u ) ml_sk ( bytes_slice . mk sk 0 ( vec_len [u] . mk sk ) )
-                ^ ( __pki_ca_make level ( vec_new [u] ) ( vec_new [u] ) ml_sk ml_pk cert_pem key_pem ca_cn )
+                ^ @ ?PkiCa { T ( __pki_ca_make level ( vec_new [u] ) ( vec_new [u] ) ml_sk ml_pk cert_pem key_pem ca_cn ) }
             }
             F _ → {}
         }
-        ^ ( __pki_ca_null )
+        ^ @ ?PkiCa { F }
     } {}
 
-    ? != . x key_alg 2 { ^ ( __pki_ca_null ) } {}
+    ? != . x key_alg 2 { ^ @ ?PkiCa { F } } {}
     : !( Vec u ) ParseErr sk_r ( ec_p256_priv_from_pem key_pem )
     : ( Vec u ) scalar ?? sk_r { T v → v F _ → ( vec_new [u] ) }
-    ? != ( vec_len [u] scalar ) 32 { ^ ( __pki_ca_null ) } {}
+    ? != ( vec_len [u] scalar ) 32 { ^ @ ?PkiCa { F } } {}
     : ( Vec u ) derived ( p256_ecdh_keygen scalar )
-    ? ! ( bytes_eq derived . x ec_point ) { ^ ( __pki_ca_null ) } {}
-    ^ ( __pki_ca_make 0 scalar derived ( vec_new [u] ) ( vec_new [u] ) cert_pem key_pem ca_cn )
+    ? ! ( bytes_eq derived . x ec_point ) { ^ @ ?PkiCa { F } } {}
+    ^ @ ?PkiCa { T ( __pki_ca_make 0 scalar derived ( vec_new [u] ) ( vec_new [u] ) cert_pem key_pem ca_cn ) }
 }
 
 // Load the CA, or mint one when either half is missing. An existing CA
 // that fails to load returns a null handle instead of being silently
 // replaced: overwriting a live CA key would invalidate every certificate
 // ever issued under it, so that has to be an operator decision.
-@ pki_load_or_create_ca s ca_cert_path s ca_key_path s ca_cn i alg → PkiCa {
+@ pki_load_or_create_ca s ca_cert_path s ca_key_path s ca_cn i alg → ?PkiCa {
     ? & ( file_exists ca_cert_path ) ( file_exists ca_key_path ) {
         : !String IoErr cr ( read_file ca_cert_path )
         : !String IoErr kr ( read_file ca_key_path )
@@ -738,7 +730,7 @@ unsafe @ pki_generate_ca s cn i validity_days i alg → PkiCa {
             }
             F _ → {}
         }
-        ^ ( __pki_ca_null )
+        ^ @ ?PkiCa { F }
     } {}
 
     : PkiCa new_ca ( pki_generate_ca ca_cn 3650 alg )
@@ -755,10 +747,10 @@ unsafe @ pki_generate_ca s cn i validity_days i alg → PkiCa {
         }
         F _ → {}
     }
-    ? ! saved { ^ ( __pki_ca_null ) } {}
+    ? ! saved { ^ @ ?PkiCa { F } } {}
     // The private key must not be world- or group-readable.
     : !v IoErr _cm ( set_permissions ca_key_path 384 )
-    ^ new_ca
+    ^ @ ?PkiCa { T new_ca }
 }
 
 unsafe @ pki_issue_device_cert PkiCa ca__h s device_id i validity_days → PkiCert {

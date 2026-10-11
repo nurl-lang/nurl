@@ -21,7 +21,7 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/dist/ring.nu`
-$ `stdlib/core/rcbox.nu`
+$ `stdlib/std/arc.nu`
 
 @ census_hello_t → i { ^ 3 }
 
@@ -66,21 +66,18 @@ $ `stdlib/core/rcbox.nu`
 
 : RosterImpl { ( Vec Member ) members }
 
-// A Roster is a handle on its member list in an rcbox (stdlib/core/rcbox.nu):
+// A Roster is a handle on its member list in an Arc (stdlib/std/arc.nu):
 // every copy is the same roster, and the last owner releases it.
-: Roster { s ctl }
+: Roster { ( Arc RosterImpl ) a }
 
-unsafe @ Roster_share Roster h → Roster { ^ @ Roster { # s ( rcbox_share # i . h ctl ) } }
+@ Roster_share Roster h → Roster { ^ @ Roster { ( arc_clone [RosterImpl] . h a ) } }
 
-unsafe @ Roster_drop sink Roster h → v {
-    ( mem_forget h )
-    ( rcbox_release [RosterImpl] # i . h ctl )
-}
+@ Roster_drop sink Roster h → v {}
 
-unsafe @ __Roster_ptr Roster h → *RosterImpl { ^ ( rcbox_ptr [RosterImpl] # i . h ctl ) }
+unsafe @ __Roster_ptr Roster h → *RosterImpl { ^ ( arc_ptr [RosterImpl] . h a ) }
 
-unsafe @ roster_new → Roster {
-    ^ @ Roster { # s ( rcbox_new [RosterImpl] @ RosterImpl { ( vec_new [Member] ) } ) }
+@ roster_new → Roster {
+    ^ @ Roster { ( arc_new [RosterImpl] @ RosterImpl { ( vec_new [Member] ) } ) }
 }
 
 // Let go of `r` now rather than at the end of its owner's scope (optional).

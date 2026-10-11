@@ -413,7 +413,8 @@ A function or method declaration may carry a leading `unsafe` prefix
   `nurl_peek*` / `nurl_poke*`, `nurl_memcpy`, …), an ownership primitive
   that gives a value up or claims it by hand (`mem_forget`, `mem_take`,
   `mem_put_back`), an `rcbox` primitive (`rcbox_new`, `rcbox_zero`,
-  `rcbox_share`, `rcbox_release`, `rcbox_ptr`) or a C
+  `rcbox_share`, `rcbox_release`, `rcbox_ptr`), an `Arc` held as a
+  plain word (`arc_into_word`, `arc_from_word`, `arc_word_share`) or a C
   primitive that reads or writes as far as its caller says, takes a
   `FILE*` or a format string (`memmem`, `fwrite`, `fopen`, `printf`, …:
   the builtins marked raw in `stdlib/core/builtins.nu`);
@@ -559,7 +560,20 @@ function — the float/pointer/struct dual of the argument check; float
 value into a scalar field, or more field values than the struct declares
 — and **slice-literal elements** (`[ i | 1 2.5 ]` is rejected; widths
 coerce, float↔int and pointer↔scalar never do). Omitting trailing
-struct-literal fields stays legal (they zero-initialise), and integer
+struct-literal fields stays legal (they zero-initialise) when zero is a
+value of the field's type — a number, a flag, an option (`F`), a raw
+string or pointer (null), or a struct, array or enum of those. A
+`String`, a `Vec`, a library handle (`Rc`, `Arc`, `HashMap`, a module's
+own handle) or a closure has no zero value — it needs its control
+block, its shared block or its code — so outside `unsafe` such a field
+(or a struct holding one) must be given. The same holds for an enum
+literal's payloads, for the value an option or result literal's tag
+names (`@ ?( Vec i ) { T }` gives none), for a bare variant used as a
+value (its payloads must be plain numbers or flags), for the
+zero-filling constructors (`vec_zeroed`, `vec_resize_zeroed`,
+`box_zero`, `rc_zero`, `arc_zero`), and for a number used where a
+`String`, a `Vec` or a library handle is expected (`: ( Vec i ) v 0`, a
+`0` argument): none of them makes one outside `unsafe`. Integer
 width / signedness narrowing into sized or unsigned fields is a legal
 coercion. An integer never converts into a pointer type implicitly —
 not into a field, a binding, an assignment, or a return value; the

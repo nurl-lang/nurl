@@ -23,7 +23,7 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/std/fs.nu`
 $ `gcov.nu`
 $ `lines.nu`
-$ `stdlib/core/rcbox.nu`
+$ `stdlib/std/arc.nu`
 $ `stdlib/core/slice.nu`
 
 : CovFn {
@@ -51,18 +51,15 @@ $ `stdlib/core/slice.nu`
     i objects  // how many coverage objects were folded in
 }
 
-// A Cov is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// A Cov is a handle on its state in an Arc (stdlib/std/arc.nu):
 // every copy is the same state, and the last owner releases it.
-: Cov { s ctl }
+: Cov { ( Arc CovImpl ) a }
 
-unsafe @ Cov_share Cov h → Cov { ^ @ Cov { # s ( rcbox_share # i . h ctl ) } }
+@ Cov_share Cov h → Cov { ^ @ Cov { ( arc_clone [CovImpl] . h a ) } }
 
-unsafe @ Cov_drop sink Cov h → v {
-    ( mem_forget h )
-    ( rcbox_release [CovImpl] # i . h ctl )
-}
+@ Cov_drop sink Cov h → v {}
 
-unsafe @ __Cov_ptr Cov h → *CovImpl { ^ ( rcbox_ptr [CovImpl] # i . h ctl ) }
+unsafe @ __Cov_ptr Cov h → *CovImpl { ^ ( arc_ptr [CovImpl] . h a ) }
 
 // How many coverage objects were folded in.
 unsafe @ cov_objects Cov c__h → i {
@@ -80,11 +77,10 @@ unsafe @ cov_objects Cov c__h → i {
 }
 
 unsafe @ cov_new → Cov {
-    : i c__box ( rcbox_zero [CovImpl] )
-    : *CovImpl c ( rcbox_ptr [CovImpl] c__box )
+    : ~ CovImpl c @ CovImpl {}
     = . c files ( vec_new [CovFile] )
     = . c objects 0
-    ^ @ Cov { # s c__box }
+    ^ @ Cov { ( arc_new [CovImpl] c ) }
 }
 
 // The files (and everything they hold) are dropped with their Vec.

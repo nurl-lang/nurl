@@ -3773,7 +3773,8 @@ unsafe @ nurl_cg_lbl i h s hint → s {
                 ? | & & == ( int_width lt ) 64 ( is_ident_tok first_tt )
                 ( str_contains_word __rvl first_val )
                 & == ( int_width lt ) 64 ( seq __rjve __ren )
-                { : s __ewr ( nurl_cg_reg cg )
+                { ? & ( is_ident_tok first_tt ) ( str_contains_word __rvl first_val ) { ( __bare_variant_check lex syms first_val ) } {}
+                    : s __ewr ( nurl_cg_reg cg )
                     ( nurl_print `  ` ) ( nurl_print __ewr )
                     ( nurl_print ` = insertvalue ` ) ( nurl_print ( nurl_llty fn_rt ) )
                     ( nurl_print ` undef, i64 ` ) ( nurl_print val ) ( nurl_print `, 0\n` )
@@ -4183,8 +4184,10 @@ unsafe @ nurl_cg_lbl i h s hint → s {
         { ( nurl_sym_def g_pending_impl rvk ? == 0 ( nurl_str_len rvc ) ( nurl_str_cat rvn `` ) ( nurl_str_cat3 rvc ` ` rvn ) ) } {}
     } {}
     // `^ . x f` out of a struct this function owns: x is dropped on the
-    // way out, so the caller gets its own copy of the field (a field of a
-    // parameter or behind a pointer stays a lend).
+    // way out, so the caller gets the field — moved out (emptied in x, whose
+    // drop then skips it) when x is this function's own value and has no
+    // `% Drop` of its own that could read it, else its own copy (a field of
+    // a parameter or behind a pointer stays a lend).
     : ~ b ret_field_copy F
     ? == ret_first_tt TT_DOT {
         : s rfr ( nurl_sym_get syms `__last_field_read__` )
@@ -4192,7 +4195,26 @@ unsafe @ nurl_cg_lbl i h s hint → s {
         : s rft ( nurl_get_last_type )
         ? & & != 0 ( nurl_str_len rfp ) ( nurl_sym_has_word syms `__user_drops__` rfp )
         & == 0 ( nurl_sym_len2 syms rfp `__pname` ) ( __clone_supported rft syms )
-        { = val ( mem_emit_cloneif cg rft val `1` ) = ret_field_copy T } {
+        {
+            : s rf_sty ( str_first_word ( str_skip_word rfr ) )
+            : s rf_idx ( str_first_word ( str_skip_word ( str_skip_word rfr ) ) )
+            : s rf_fty ( str_first_word ( str_skip_word ( str_skip_word ( str_skip_word rfr ) ) ) )
+            // (Not under a `;` defer, which runs after this and may read it.)
+            ? & & & & & & & ( __is_handle_ty rf_fty ) ! ( __has_user_drop rf_sty )
+            == 0 ( nurl_sym_len2 syms rfp `__vget` ) == 0 ( nurl_sym_len2 syms rfp `__eaddr` )
+            == 0 ( nurl_sym_len2 syms rfp `__alias` ) == 0 ( nurl_sym_len2 syms rfp `__fsrc` )
+            == 0 g_bck_closure_depth == 0 g_defer_count {
+                // Only while x owns it (its drop flag): a struct read through
+                // a pointer holds the field another owner keeps, and that
+                // one is copied as before.
+                : s rf_own ( mem_udrop_flag_get syms cg rfp )
+                ( mem_zero_field cg rfp rf_sty rf_idx rf_fty rf_own )
+                : s rf_cp ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print rf_cp ) ( nurl_print ` = xor i1 ` ) ( nurl_print rf_own ) ( nurl_print `, 1\n` )
+                = val ( mem_emit_cloneif cg rft val rf_cp )
+            } { = val ( mem_emit_cloneif cg rft val `1` ) }
+            = ret_field_copy T
+        } {
             // …and out of a closure's parameter: its caller's.
             ? & ( __is_clo_param syms ret_first_root ) ( __clone_supported rft syms )
             { = val ( mem_emit_cloneif cg rft val `1` ) = ret_field_copy T } {}
@@ -11662,6 +11684,17 @@ unsafe @ __has_pct_token s ll s name → b {
 // coerces or the opaque-pointer call type papers over it) and the callee
 // would read reinterpreted bytes.
 @ __arg_param_checks i lex s fname i arg_idx s at s pllvm → v {
+    // A number where a struct is expected by value (`( use 0 )` with a `(
+    // Vec i )` parameter): the callee would read the integer as the
+    // struct's bytes — for a String, a Vec or a handle, as its control
+    // block's address (h188). An enum parameter takes a bare variant.
+    ? & & & & > ( int_width at ) 0 ( __is_named_agg pllvm ) ( bck_sound ) ! ( bck_unsafe_ctx )
+    == 0 ( nurl_sym_len2 g_root_syms ( nurl_str_slice pllvm 1 - ( nurl_str_len pllvm ) 1 ) `__variants` ) {
+        ( die lex ( nurl_str_cat3
+        ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
+        ( nurl_str_cat `': a number passed where the parameter is a '` ( __zty_show pllvm ) )
+        `' — no number converts into a struct, and for a String, a Vec or a library handle the number would be its control block's address. Pass a value of the declared type (its constructor: string_new, vec_new, …).` ) )
+    } {}
     // Detect pointer-ness from the LOWERED types so pointer aliases with
     // no literal `*` (e.g. `s` → i8*) are covered. That is what lets the
     // reverse case — a bare scalar passed to an `s`/pointer parameter —
@@ -12440,6 +12473,16 @@ unsafe @ bck_list_len i which → i {
     // check is --borrowck-gated.
     // Raw memory outside `unsafe` (sound rules, P1).
     ? ! __callee_shadowed { ( bck_check_raw_call lex syms call_name ) } {}
+    // The zero-filling constructors make values whose bits are all zero:
+    // outside `unsafe`, only of a type a zero is a value of (h186).
+    ? & & & ! __callee_shadowed ( bck_sound ) ! ( bck_unsafe_ctx ) ( str_contains_word `vec_zeroed vec_resize_zeroed box_zero rc_zero arc_zero` fname ) {
+        // (A named type argument is kept without its `%`: `Vec__i64`.)
+        : s __zct0 ( str_first_word call_targs )
+        : s __zct ? & != 0 ( nurl_str_len __zct0 ) ( __zero_invalid ( nurl_str_cat `%` __zct0 ) syms ) ( nurl_str_cat `%` __zct0 ) ( nurl_str_cat __zct0 `` )
+        ? ( __zero_invalid __zct syms ) {
+            ( die lex ( nurl_str_cat4 `'` fname `' fills its value with zero bytes, and zero bytes are not a '` ( nurl_str_cat ( __zty_show __zct ) `': a String or a Vec needs its control block, a library handle its shared block, a closure its code, so code using it reads through null or calls it. Build the value with its constructor (vec_new, string_new, … — or rc_new / arc_new / box_new of a whole value), or, if this function fills every such field in before anything reads it and you vouch for that, declare it 'unsafe @ name …'.` ) ) )
+        } {}
+    } {}
     : b is_escape_call & ! __callee_shadowed | | |
     ( seq fname `vec_push` )
     ( seq fname `vec_insert` )
@@ -15450,7 +15493,8 @@ unsafe @ gen_cond i lex i syms i cg → s {
     // `?`-join that already proved both ITS arms variants of one enum.
     : ~ s t_ven ``
     ? & ( is_ident_tok t_tt0 ) & ( seq t_v0 t_retid ) != 0 ( nurl_str_len t_retid )
-    { = t_ven ( nurl_str_cat ( nurl_sym_get2 syms t_retid `__enum_of` ) `` ) }
+    { = t_ven ( nurl_str_cat ( nurl_sym_get2 syms t_retid `__enum_of` ) `` )
+        ? != 0 ( nurl_str_len t_ven ) { ( __bare_variant_check lex syms t_retid ) } {} }
     { = t_ven ( nurl_str_cat ( nurl_sym_get syms `__last_join_variant_enum__` ) `` ) }
     // The phi's predecessor for this arm: its last block, or the private
     // exit block a parked-drop arm leaves through (mem_arm_exit_open).
@@ -15594,7 +15638,8 @@ unsafe @ gen_cond i lex i syms i cg → s {
     // Mirror of t_ven above.
     : ~ s e_ven ``
     ? & ( is_ident_tok e_tt0 ) & ( seq e_v0 e_retid ) != 0 ( nurl_str_len e_retid )
-    { = e_ven ( nurl_str_cat ( nurl_sym_get2 syms e_retid `__enum_of` ) `` ) }
+    { = e_ven ( nurl_str_cat ( nurl_sym_get2 syms e_retid `__enum_of` ) `` )
+        ? != 0 ( nurl_str_len e_ven ) { ( __bare_variant_check lex syms e_retid ) } {} }
     { = e_ven ( nurl_str_cat ( nurl_sym_get syms `__last_join_variant_enum__` ) `` ) }
     : ~ s elbl ( nurl_sym_get syms `__cur_lbl__` )
     : ~ b e_via_exit F
@@ -16687,6 +16732,17 @@ unsafe @ gen_match i lex i syms i cg → s {
                             `NURL spells them 'T' and 'F', not 'Ok'/'Err'/'Some'/'None': `
                             `'?? r { T v → <v is the value / Ok payload>  F e → <e is the error> }' `
                             `(an option's F arm binds nothing: 'F → …'). Add '_ → …' for a catch-all.` ) ) }
+                        {}
+                        // …and 'T'/'F' arms on what is neither (a String, a
+                        // struct) had no payload to bind: the binding got an
+                        // empty type and clang reported an unsized alloca.
+                        ? & & ! __mp_optres ! ( seq match_type `i1` )
+                        | ( seq pattern_name `T` ) ( seq pattern_name `F` )
+                        { ( die_pos lex pat_line pat_col ( nurl_str_cat4
+                            ( nurl_str_cat3 `'` pattern_name `' arms match an option ('? T') or a result ('! T E'), and this '??' matches a '` )
+                            ( __zty_show match_type )
+                            `', which is neither. Match the call that returns the option/result, `
+                            `or use the value directly without a '??'.` ) ) }
                         {}
                         // A named enum: the variant must be one of its own.
                         ? & & ! __mp_optres > ( nurl_str_len match_type ) 1
@@ -21931,7 +21987,7 @@ unsafe @ __trust_key s path → s {
 @ bck_raw_call s base → b {
     // (`vec_set_len` declares raw writes initialised: the elements it
     // exposes are whatever the memory held.)
-    ^ ( str_contains_word `nurl_alloc nurl_zalloc nurl_free nurl_realloc alloc zalloc mem_forget nurl_peek nurl_poke nurl_vctl_get nurl_vctl_set nurl_vctl_data nurl_memcpy nurl_memmove nurl_memset malloc calloc realloc free memcpy memmove memset nurl_closure_drop nurl_closure_clone rcbox_ptr rcbox_new rcbox_zero rcbox_share rcbox_release mem_take mem_put_back vec_set_len` base )
+    ^ ( str_contains_word `nurl_alloc nurl_zalloc nurl_free nurl_realloc alloc zalloc mem_forget nurl_peek nurl_poke nurl_vctl_get nurl_vctl_set nurl_vctl_data nurl_memcpy nurl_memmove nurl_memset malloc calloc realloc free memcpy memmove memset nurl_closure_drop nurl_closure_clone rcbox_ptr rcbox_new rcbox_zero rcbox_share rcbox_release arc_into_word arc_from_word arc_word_share mem_take mem_put_back vec_set_len` base )
 }
 
 // A function that takes a raw pointer (`*T` in a parameter's type, outside
@@ -30472,8 +30528,21 @@ unsafe @ __ty_holds_addr s ty i depth → b {
                                 ( nurl_print ` zeroinitializer, i64 ` ) ( nurl_print val ) ( nurl_print `, 0\n` )
                                 ( nurl_set_last_type dt )
                                 ^ res }
-                            {  // f0 is neither pointer, i64, nor unknown —
-                                // produce a zero-initialised whole struct.
+                            {  // f0 is neither pointer, i64, nor unknown. A
+                                // one-word wrapper around a one-word handle
+                                // (`: X { ( Arc XImpl ) a }` over Arc's
+                                // `{ s ctl }`) takes the word at its innermost
+                                // slot; anything else is a zero-initialised
+                                // whole struct.
+                                : s __w1 ( __word_into_ty f0_ty val syms cg )
+                                ? != 0 ( nurl_str_len __w1 ) {
+                                    ( nurl_print `  ` ) ( nurl_print res )
+                                    ( nurl_print ` = insertvalue ` ) ( nurl_print ( nurl_llty dt ) )
+                                    ( nurl_print ` zeroinitializer, ` ) ( nurl_print ( nurl_llty f0_ty ) )
+                                    ( nurl_print ` ` ) ( nurl_print __w1 ) ( nurl_print `, 0\n` )
+                                    ( nurl_set_last_type dt )
+                                    ^ res
+                                } {}
                                 ( nurl_set_last_type dt )
                                 ^ ( nurl_str_cat `zeroinitializer` `` ) }
                         }
@@ -30941,6 +31010,8 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
     // What the literal's fields can capture (thread-shared cycle rules).
     : ~ s agg_cs ``
     ( nurl_sym_def syms `__last_agg_cs__` `` )
+    : i agg_line ( nurl_lex_line lex )
+    : i agg_col ( nurl_lex_col lex )
     ( nurl_lex_advance lex )  // consume '@'
     // This literal's number as a source-expression producer, and its
     // fields' expressions.
@@ -31358,7 +31429,15 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
             : s fs_sty ( str_first_word fs ) = fs ( str_skip_word fs )
             : s fs_idx ( str_first_word fs ) = fs ( str_skip_word fs )
             : s fs_fty ( str_first_word fs )
-            ? & & ( nurl_sym_has_word syms `__user_drops__` fs_ptr )
+            // Under a `;` defer, which runs after the return value is made
+            // and may still use the field, the literal takes a copy and the
+            // struct keeps its own (h189).
+            : b __fs_defer & & != 0 g_defer_count ( __is_handle_ty fs_fty ) ( __clone_supported fs_fty syms )
+            ? & & __fs_defer ( nurl_sym_has_word syms `__user_drops__` fs_ptr ) == 0 ( nurl_sym_len2 syms fs_ptr `__pname` ) {
+                = fval ( mem_emit_cloneif cg fty fval `1` )
+                = fld_lent ``
+            } {}
+            ? & & & ! __fs_defer ( nurl_sym_has_word syms `__user_drops__` fs_ptr )
             == 0 ( nurl_sym_len2 syms fs_ptr `__pname` ) ( __is_handle_ty fs_fty )
             { ( mem_udrop_takeover_opt syms cg fs_ptr ( nurl_lex_line lex ) )
                 : s __tk ( mem_udrop_flag_get syms cg fs_ptr )
@@ -31515,7 +31594,12 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
                             : b __slsh & & != 0 ( nurl_str_len __slf0 )
                             == ( nurl_str_get __slf0 - ( nurl_str_len __slf0 ) 1 ) 42
                             == 0 ( nurl_str_len __slf1 )
-                            ? __slsh {} { = __slint_ps T }
+                            ? __slsh {
+                                // (…an address made of a number: h187.)
+                                ? & & ( bck_sound ) ! ( bck_unsafe_ctx ) ( __zero_invalid __sldft syms ) {
+                                    ( die lex ( nurl_str_cat3 ( nurl_str_cat4 `field ` ( nurl_str_int idx ) ` of struct literal '` cur_sname ) `' is a '` ( nurl_str_cat ( __zty_show __sldft ) `', and a number cannot become one: it would be its control block's address. Give it a value from its constructor (string_new, vec_new, …).` ) ) )
+                                } {}
+                            } { = __slint_ps T }
                         }
                         {}
                     }
@@ -32393,7 +32477,8 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
                 ? | & ( is_ident_tok fld_first_tt )
                 ( str_contains_word __efvl fld_first_val )
                 ( seq __efjv __eftn )
-                { : s __efw ( nurl_cg_reg cg )
+                { ? & ( is_ident_tok fld_first_tt ) ( str_contains_word __efvl fld_first_val ) { ( __bare_variant_check lex syms fld_first_val ) } {}
+                    : s __efw ( nurl_cg_reg cg )
                     ( nurl_print `  ` ) ( nurl_print __efw )
                     ( nurl_print ` = insertvalue ` ) ( nurl_print ( nurl_llty decl_fty ) )
                     ( nurl_print ` undef, i64 ` ) ( nurl_print actual_fval ) ( nurl_print `, 0\n` )
@@ -32433,6 +32518,44 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
         = idx + idx 1
     }
     ( expect lex TT_RBRACE )  // consume '}'
+    // The fields a struct literal leaves out are zero-initialised, and the
+    // zero of a String, a Vec, a library handle or a closure is not a value
+    // of it: safe code using one reads through a null block or calls a null
+    // code pointer. Outside `unsafe` such a field is given.
+    ? & & & != 0 ( nurl_str_len cur_sname ) == enum_paycount -1 ( bck_sound ) ! ( bck_unsafe_ctx ) {
+        : s __zfc ( nurl_sym_get2 syms cur_sname `__field_count` )
+        : i __zn ? == 0 ( nurl_str_len __zfc ) 0 ( nurl_str_to_int __zfc )
+        : ~ i __zk idx
+        ~ < __zk __zn {
+            : s __zft ( nurl_sym_get syms ( nurl_str_cat3 cur_sname `__idx_` ( nurl_str_cat ( nurl_str_int __zk ) `__type` ) ) )
+            ? ( __zero_invalid __zft syms ) {
+                : s __zfn ( nurl_sym_get syms ( nurl_str_cat3 cur_sname `__idx_` ( nurl_str_cat ( nurl_str_int __zk ) `__name` ) ) )
+                : s __zsh ( __zty_show __zft )
+                ( die_pos lex agg_line agg_col ( nurl_str_cat ( nurl_str_cat4 `field '` __zfn `' of '` cur_sname ) ( nurl_str_cat3 `' is left out of this literal, which makes it zero bytes — and zero bytes are not a '` __zsh `': a String or a Vec needs its control block, a library handle (an Arc, a HashMap, a handle of a module) its shared block, a closure its code, so code using it reads through null or calls it. Give the field a value (( string_new ), ( vec_new [T] ), its constructor) — or, if this function fills it in before anything reads it and you vouch for that, declare it 'unsafe @ name …'.` ) ) )
+                = __zk __zn
+            } { = __zk + __zk 1 }
+        }
+    } {}
+    // An option or result literal that gives only its tag (`@ ?( Vec i ) {
+    // T }`) leaves the payload it names zero bytes (h184).
+    ? & & & agg_is_wrap < idx 2 ( bck_sound ) ! ( bck_unsafe_ctx ) {
+        : s __wtl ? agg_is_res ( __wrap_tl_part agg_ty ? res_is_ok 0 1 ) ? opt_is_none ( nurl_str_cat `` `` ) ( __wrap_tl_part agg_ty 0 )
+        ? ( __zero_invalid __wtl syms ) {
+            ( die_pos lex agg_line agg_col ( nurl_str_cat3 `this literal gives its tag only, which leaves the value it holds zero bytes — and zero bytes are not a '` ( __zty_show __wtl ) `': a String or a Vec needs its control block, a library handle its shared block, a closure its code, so code using it reads through null or calls it. Give the value ('@ ?T { T value }', '@ !T E { F error }').` ) )
+        } {}
+    } {}
+    // …and the payloads an enum literal leaves out, the same way (h183).
+    ? & & & >= enum_paycount 0 < - idx 1 enum_paycount ( bck_sound ) ! ( bck_unsafe_ctx ) {
+        : ~ i __zp ? < - idx 1 0 0 - idx 1
+        ~ < __zp enum_paycount {
+            : s __zpt ( nurl_sym_get syms ( nurl_str_cat3 enum_vname `__payload__` ( nurl_str_int __zp ) ) )
+            ? ( __zero_invalid __zpt syms ) {
+                : s __zps ( __zty_show __zpt )
+                ( die_pos lex agg_line agg_col ( nurl_str_cat ( nurl_str_cat4 `payload ` ( nurl_str_int + __zp 1 ) ` of variant '` enum_vname ) ( nurl_str_cat3 `' is left out of this literal, which makes it zero bytes — and zero bytes are not a '` __zps `': a String or a Vec needs its control block, a library handle (an Arc, a HashMap, a handle of a module) its shared block, a closure its code, so code using it reads through null or calls it. Give the payload a value — or, if this function fills it in before anything reads it and you vouch for that, declare it 'unsafe @ name …'.` ) ) )
+                = __zp enum_paycount
+            } { = __zp + __zp 1 }
+        }
+    } {}
     // Enum-literal payload-arity check (snapshot taken above the loop;
     // idx counted the variant tag as field 0, so payloads = idx - 1).
     ? & >= enum_paycount 0 > - idx 1 enum_paycount
@@ -32531,7 +32654,8 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
                 ( nurl_sym_def syms `__last_join_variant_enum__` `` )
                 ? | & ( is_ident_tok __setok ) ( str_contains_word __sevl __sev0 )
                 ( seq __sejv __setn )
-                { : s __sew2 ( nurl_cg_reg cg )
+                { ? & ( is_ident_tok __setok ) ( str_contains_word __sevl __sev0 ) { ( __bare_variant_check lex syms __sev0 ) } {}
+                    : s __sew2 ( nurl_cg_reg cg )
                     ( nurl_print `  ` ) ( nurl_print __sew2 )
                     ( nurl_print ` = insertvalue ` ) ( nurl_print ( nurl_llty elem_ty ) )
                     ( nurl_print ` undef, i64 ` ) ( nurl_print v ) ( nurl_print `, 0\n` )
@@ -32826,6 +32950,9 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
             { ( die_stmt lex ( nurl_str_cat ( nurl_str_cat4
                 `value of numeric type '` ( llvm_to_nurl ( nurl_llty from_ty ) ) `' cannot initialise / assign a binding of enum type '` tname )
                 `' — an enum is a closed set of named variants, and no number converts into one implicitly (the value could name no variant at all). Assign a variant by name (': Color c Red'), or declare the binding numeric.` ) ) }
+            ? & != 0 ( nurl_str_len __srv ) ( str_contains_word vlist __srv ) { ( __bare_variant_check lex syms __srv ) } {
+                ? & & == 0 ( nurl_str_len __srv ) != 0 ( nurl_str_len __wvid ) ( str_contains_word vlist __wvid ) { ( __bare_variant_check lex syms __wvid ) } {}
+            }
             : s r ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print r )
             ( nurl_print ` = insertvalue ` ) ( nurl_print ( nurl_llty to_ty ) )
@@ -32847,6 +32974,11 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
             : b is_single_handle & & != 0 ( nurl_str_len f0_ty )
             == ( nurl_str_get f0_ty - ( nurl_str_len f0_ty ) 1 ) 42
             == 0 ( nurl_str_len f1_ty )
+            // …which outside `unsafe` is a number becoming an address: `: (
+            // Vec i ) v 0` made a Vec with no control block (h187).
+            ? & & & is_single_handle ( bck_sound ) ! ( bck_unsafe_ctx ) ( __zero_invalid to_ty syms ) {
+                ( die_stmt lex ( nurl_str_cat3 `a number cannot become a '` ( __zty_show to_ty ) `': the number would be its control block's address, and a String, a Vec or a library handle is made by its constructor (string_new, vec_new, …), never from an integer. Initialise it with one, or, if this function genuinely manages that memory and you vouch for it, declare it 'unsafe @ name …'.` ) )
+            } {}
             ? is_single_handle
             { : s p ( nurl_cg_reg cg )
                 ( nurl_print `  ` ) ( nurl_print p )
@@ -35486,6 +35618,14 @@ unsafe @ str_skip_word s str → s {
     ~ & < pos slen != 32 # i . p pos { = pos + pos 1 }
     ? < pos slen { = pos + pos 1 } {}
     ^ # s ( nurl_strdup_n # s + # i p pos - slen pos )
+}
+
+// `str` without its first `n` words.
+@ str_skip_words s str i n → s {
+    : ~ s r ( nurl_str_cat str `` )
+    : ~ i k 0
+    ~ & < k n != 0 ( nurl_str_len r ) { = r ( str_skip_word r ) = k + k 1 }
+    ^ r
 }
 
 // ── Cursor walk over a space-separated list ──────────────────────
@@ -41807,6 +41947,141 @@ unsafe @ __opt_err_mangle s e → s {
     ^ r
 }
 
+// A bare variant (`: Shape s Poly`) is its tag alone: the payload slots
+// of the enum value it becomes are undefined. Outside `unsafe` that is a
+// value only for a variant whose payloads are plain numbers or flags — any
+// bits are one of those; a pointer, a string, a handle or a closure made
+// of them is not (h185). `vname` names a variant of enum `ename`.
+@ __bare_variant_check i lex i syms s vname → v {
+    ? | ! ( bck_sound ) ( bck_unsafe_ctx ) { ^ v } {}
+    : s pcs ( nurl_sym_get2 syms vname `__paycount` )
+    : i pc ? != 0 ( nurl_str_len pcs ) ( nurl_str_to_int pcs ) 0
+    : ~ i k 0
+    ~ < k pc {
+        : s pt ( nurl_sym_get syms ( nurl_str_cat3 vname `__payload__` ( nurl_str_int k ) ) )
+        : b plain | | > ( int_width pt ) 0 ( seq pt `double` ) ( seq pt `float` )
+        ? plain { = k + k 1 } {
+            ( die_stmt lex ( nurl_str_cat3 `variant '` vname `' carries a payload, and a bare variant is its tag alone: the payload slots would hold whatever bits were there — not a pointer, a string, a handle or a closure. Build it with its payload ('@ Enum { Variant value … }'), or, if this function fills the payload in before anything reads it and you vouch for that, declare it 'unsafe @ name …'.` ) )
+            = k pc
+        }
+    }
+}
+
+// The payload a wrap literal that gives only its tag leaves out: for an
+// option `{ i1, T }` with T its T, for a result `{ i1, T, E }` its T (tag
+// T) or its E (tag F); `` when there is none to read.
+@ __wrap_tl_part s ty i k → s {
+    : i n ( nurl_str_len ty )
+    ? | < n 9 != ( nurl_str_get ty - n 1 ) 125 { ^ ( nurl_str_cat `` `` ) } {}
+    : s body ( nurl_str_slice ty 6 - n 8 )
+    : i bn ( nurl_str_len body )
+    : ~ i depth 0
+    : ~ i i 0
+    : ~ i cut -1
+    ~ & < i - bn 1 < cut 0 {
+        : i c ( nurl_str_get body i )
+        ? | | == c 123 == c 40 == c 91 { = depth + depth 1 } {}
+        ? | | == c 125 == c 41 == c 93 { = depth - depth 1 } {}
+        ? & & == depth 0 == c 44 == ( nurl_str_get body + i 1 ) 32 { = cut i } {}
+        = i + i 1
+    }
+    ? < cut 0 { ^ ? == k 0 ( nurl_str_cat body `` ) ( nurl_str_cat `` `` ) } {}
+    ^ ? == k 0 ( nurl_str_slice body 0 cut ) ( nurl_str_slice body + cut 2 - - bn cut 2 )
+}
+
+// A value of `ty` built from the i64 word `w` when `ty` is one word wide —
+// a pointer, an i64, or a struct whose only field is one (a handle that
+// wraps another: `: X { ( Arc XImpl ) a }`). `` when it is not, and then
+// nothing has been emitted.
+@ __word_into_ty s ty s w i syms i cg → s {
+    : i n ( nurl_str_len ty )
+    ? == 0 n { ^ ( nurl_str_cat `` `` ) } {}
+    ? == ( nurl_str_get ty - n 1 ) 42 {
+        : s r ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print r ) ( nurl_print ` = inttoptr i64 ` ) ( nurl_print w )
+        ( nurl_print ` to ` ) ( nurl_print ( nurl_llty ty ) ) ( nurl_print `\n` )
+        ^ r
+    } {}
+    ? & == ( int_width ty ) 64 != ( nurl_str_get ty 0 ) 37 { ^ ( nurl_str_cat w `` ) } {}
+    ? != ( nurl_str_get ty 0 ) 37 { ^ ( nurl_str_cat `` `` ) } {}
+    : s sn ( nurl_str_slice ty 1 - n 1 )
+    ? != 0 ( nurl_sym_len2 syms sn `__variants` ) { ^ ( nurl_str_cat `` `` ) } {}
+    ? ! ( seq ( nurl_sym_get2 syms sn `__field_count` ) `1` ) { ^ ( nurl_str_cat `` `` ) } {}
+    : s f0 ( nurl_sym_get syms ( nurl_str_cat3 sn `__idx_0` `__type` ) )
+    : s inner ( __word_into_ty f0 w syms cg )
+    ? == 0 ( nurl_str_len inner ) { ^ inner } {}
+    : s r ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print r ) ( nurl_print ` = insertvalue ` ) ( nurl_print ( nurl_llty ty ) )
+    ( nurl_print ` zeroinitializer, ` ) ( nurl_print ( nurl_llty f0 ) ) ( nurl_print ` ` ) ( nurl_print inner ) ( nurl_print `, 0\n` )
+    ^ r
+}
+
+// A type as a message spells it: `( Vec i )` for a Vec, `( @ … )` for a
+// closure, a wrap or a library handle as its source names it.
+@ __zty_show s ty → s {
+    ? ( __is_closure_llty ty ) { ^ ( nurl_str_cat `( @ … )` `` ) } {}
+    ? != 0 ( nurl_str_starts ty `%Vec__` ) { ^ ( nurl_str_cat3 `( Vec ` ( __wrap_show ( __vec_elem_llvm ty ) ) ` )` ) } {}
+    ^ ( __wrap_show ty )
+}
+
+// The all-zero value of `ty` is not a value of it: a String's or a Vec's
+// null control block, a library handle's (an Arc's, a HashMap's, a
+// module's own), a closure's null code pointer, a trait object's null
+// vtable — or a struct, an enum, an array or a result holding one. A raw
+// pointer's zero is null, a scalar's 0, an option's F: values.
+@ __zero_invalid s ty i syms → b {
+    : i n ( nurl_str_len ty )
+    ? == 0 n { ^ F } {}
+    ? == ( nurl_str_get ty - n 1 ) 42 { ^ F } {}
+    ? ( __is_closure_llty ty ) { ^ T } {}
+    ? != 0 ( nurl_str_starts ty `{ i1, ` ) {
+        : s body ( nurl_str_slice ty 6 - n 8 )
+        ? < ( nurl_str_find body `, ` ) 0 { ^ F } {}
+        // A result: tag 0 is an Err, its error read. One whose parts are
+        // not plain types is asked as a whole, conservatively.
+        : s e ( __wrap_part ty 1 )
+        ? != 0 ( nurl_str_len e ) { ^ ( __zero_invalid e syms ) } {}
+        ^ | ( __type_needs_drop ty syms ) >= ( nurl_str_find ty `)*, i8* }` ) 0
+    } {}
+    ? == ( nurl_str_get ty 0 ) 91 {
+        : i x ( nurl_str_find ty ` x ` )
+        ? < x 0 { ^ F } {}
+        ^ ( __zero_invalid ( nurl_str_slice ty + x 3 - - n x 4 ) syms )
+    } {}
+    ? != ( nurl_str_get ty 0 ) 37 { ^ F } {}
+    ? | | | ( seq ty `%String` ) != 0 ( nurl_str_starts ty `%Vec__` ) != 0 ( nurl_str_starts ty `%dyn.` ) ( __is_libh ty ) { ^ T } {}
+    : s key ( nurl_str_cat `zinv##` ty )
+    ? != 0 ( nurl_sym_len g_impl_name_syms key ) { ^ ( seq ( nurl_sym_get g_impl_name_syms key ) `1` ) } {}
+    ( nurl_sym_def g_impl_name_syms key `-` )
+    : s sname ( nurl_str_slice ty 1 - n 1 )
+    : ~ b r F
+    : s vlist ( nurl_sym_get2 syms sname `__variants` )
+    ? != 0 ( nurl_str_len vlist ) {
+        : ~ s scan ( nurl_str_cat vlist `` )
+        ~ & ! r != 0 ( nurl_str_len scan ) {
+            : s vname ( str_first_word scan )
+            = scan ( str_skip_word scan )
+            : s pcs ( nurl_sym_get2 syms vname `__paycount` )
+            : i pc ? != 0 ( nurl_str_len pcs ) ( nurl_str_to_int pcs ) 0
+            : ~ i i 0
+            ~ < i pc {
+                ? ( __zero_invalid ( nurl_sym_get syms ( nurl_str_cat3 vname `__payload__` ( nurl_str_int i ) ) ) syms ) { = r T } {}
+                = i + i 1
+            }
+        }
+    } {
+        : s fcs ( nurl_sym_get2 syms sname `__field_count` )
+        : i fc ? != 0 ( nurl_str_len fcs ) ( nurl_str_to_int fcs ) 0
+        : ~ i i 0
+        ~ & ! r < i fc {
+            ? ( __zero_invalid ( nurl_sym_get syms ( nurl_str_cat3 sname `__idx_` ( nurl_str_cat ( nurl_str_int i ) `__type` ) ) ) syms ) { = r T } {}
+            = i + i 1
+        }
+    }
+    ( nurl_sym_def g_impl_name_syms key ? r `1` `-` )
+    ^ r
+}
+
 // One payload type owns a resource if it is String / Vec / a boxed
 // struct / a wide (boxed) enum. (Narrow tag-only enum or scalar: no.)
 @ __payload_needs_drop s pt i syms → b {
@@ -42120,36 +42395,48 @@ unsafe @ __opt_err_mangle s e → s {
         ( gen_drop_for_type ty syms )
     }
     // `%__opt.<T>` and its drop: the payload when there is one, and a
-    // result's error when that owns something.
-    : ~ s orest ( nurl_sym_get g_impl_name_syms `__pending_opt_drops__` )
-    ~ != 0 ( nurl_str_len orest ) {
-        : s sv ( str_first_word orest ) = orest ( str_skip_word orest )
-        ( nurl_print sv ) ( nurl_print ` = type ` ) ( nurl_print ( nurl_sym_get2 g_impl_name_syms `optlay##` sv ) ) ( nurl_print `\n` )
-        ( emit_opt_drop_fn ( nurl_str_cat `drop__` ( __drop_mangle sv ) ) sv sv syms )
-    }
-    // …and an option / result held in a struct field or a Vec element
-    // (gen_drop_for_type): the same drop over the literal type.
-    : ~ s wrest ( nurl_sym_get g_impl_name_syms `__pending_wrap_drops__` )
-    ~ != 0 ( nurl_str_len wrest ) {
-        : s wm ( str_first_word wrest ) = wrest ( str_skip_word wrest )
-        : s wty ( nurl_sym_get2 g_impl_name_syms `wraplit##` wm )
-        ( emit_opt_drop_fn ( nurl_str_cat `drop__` ( __drop_mangle wty ) ) wty ( __wrap_twin wty ) syms )
-    }
-    // Drop glue of `% Drop` impls (mem_emit_drop_glue): the struct's
-    // compiler-owned fields, dropped after the impl ran.
-    : ~ s grest ( nurl_sym_get g_impl_name_syms `__pending_glue__` )
-    ~ != 0 ( nurl_str_len grest ) {
-        : s gty ( str_first_word grest ) = grest ( str_skip_word grest )
-        : s gm ( __drop_mangle gty )
-        : s gfc ( nurl_sym_get2 syms gm `__field_count` )
-        : i gn ? != 0 ( nurl_str_len gfc ) ( nurl_str_to_int gfc ) 0
-        : ~ i gi 0
-        ~ < gi gn {
-            ( gen_drop_for_type ( nurl_sym_get syms ( nurl_str_cat3 gm `__idx_` ( nurl_str_cat ( nurl_str_int gi ) `__type` ) ) ) syms )
-            = gi + gi 1
+    // result's error when that owns something; an option / result held in
+    // a struct field or a Vec element (gen_drop_for_type): the same drop
+    // over the literal type; and the drop glue of `% Drop` impls
+    // (mem_emit_drop_glue): the struct's compiler-owned fields, dropped
+    // after the impl ran. Each can ask for more of the others (a glue's
+    // `?St` field, an option's payload struct), so the three lists are
+    // walked until none grows.
+    : ~ i n_opt 0
+    : ~ i n_wrap 0
+    : ~ i n_glue 0
+    : ~ b more T
+    ~ more {
+        = more F
+        : ~ s orest ( str_skip_words ( nurl_sym_get g_impl_name_syms `__pending_opt_drops__` ) n_opt )
+        ~ != 0 ( nurl_str_len orest ) {
+            : s sv ( str_first_word orest ) = orest ( str_skip_word orest )
+            = n_opt + n_opt 1 = more T
+            ( nurl_print sv ) ( nurl_print ` = type ` ) ( nurl_print ( nurl_sym_get2 g_impl_name_syms `optlay##` sv ) ) ( nurl_print `\n` )
+            ( emit_opt_drop_fn ( nurl_str_cat `drop__` ( __drop_mangle sv ) ) sv sv syms )
         }
-        ( emit_drop_fields_fn ( nurl_str_cat `drop_glue__` gm ) gm syms )
-        ( emit_jglue_thunk ( nurl_llty gty ) gm )
+        : ~ s wrest ( str_skip_words ( nurl_sym_get g_impl_name_syms `__pending_wrap_drops__` ) n_wrap )
+        ~ != 0 ( nurl_str_len wrest ) {
+            : s wm ( str_first_word wrest ) = wrest ( str_skip_word wrest )
+            = n_wrap + n_wrap 1 = more T
+            : s wty ( nurl_sym_get2 g_impl_name_syms `wraplit##` wm )
+            ( emit_opt_drop_fn ( nurl_str_cat `drop__` ( __drop_mangle wty ) ) wty ( __wrap_twin wty ) syms )
+        }
+        : ~ s grest ( str_skip_words ( nurl_sym_get g_impl_name_syms `__pending_glue__` ) n_glue )
+        ~ != 0 ( nurl_str_len grest ) {
+            : s gty ( str_first_word grest ) = grest ( str_skip_word grest )
+            = n_glue + n_glue 1 = more T
+            : s gm ( __drop_mangle gty )
+            : s gfc ( nurl_sym_get2 syms gm `__field_count` )
+            : i gn ? != 0 ( nurl_str_len gfc ) ( nurl_str_to_int gfc ) 0
+            : ~ i gi 0
+            ~ < gi gn {
+                ( gen_drop_for_type ( nurl_sym_get syms ( nurl_str_cat3 gm `__idx_` ( nurl_str_cat ( nurl_str_int gi ) `__type` ) ) ) syms )
+                = gi + gi 1
+            }
+            ( emit_drop_fields_fn ( nurl_str_cat `drop_glue__` gm ) gm syms )
+            ( emit_jglue_thunk ( nurl_llty gty ) gm )
+        }
     }
     // A disposer parameter's gated glue (mem_emit_gated_drop).
     : ~ s girest ( nurl_sym_get g_impl_name_syms `__pending_glueifs__` )

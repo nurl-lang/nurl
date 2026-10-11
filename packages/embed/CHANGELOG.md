@@ -2,13 +2,26 @@
 
 ## [0.5.3] — 2026-10-11
 
+Requires NURL 0.73.0, which allows `mem_forget`, `mem_take` and the
+`rcbox` primitives only in `unsafe` code and reads a null library-handle
+literal as raw memory. The published 0.5.2 does not compile under it.
+
 ### Changed
 
-- `Embed_drop` and `EmJob_drop` are declared `unsafe`: each calls
-  `mem_forget`, `mem_take` or an `rcbox` primitive, or builds or reads
-  the raw `ctl` of a handle whose drop hook does; NURL 0.73.0 allows
-  these only in `unsafe` code, so the published 0.5.2 does not compile
-  under it. Behaviour is unchanged.
+- `EmJob` and `Embed` keep their state in an `Arc` (stdlib/std/arc.nu)
+  instead of an `rcbox`. The share and drop hooks are ordinary safe
+  functions — the Arc does the counting — and so are the constructors that
+  build one from a whole value; every copy is still the same state, and
+  its last owner releases it.
+- One fewer function is `unsafe` than in 0.5.2.
+- Requires safetensor 0.5, gpu 0.15 and gpukit 0.10.
+- Unloading the weights lets the kit go by putting `gk_none` in its place,
+  where it wrote a null handle.
+
+### Fixed
+
+- The package compiles again under NURL 0.72.0 and later (it failed with
+  gpukit's null literal).
 
 ## [0.5.2] — 2026-10-09
 

@@ -81,13 +81,12 @@ unsafe @ main → i {
     : i gw ( nurl_str_to_int ( nurl_argv 4 ) )
     : i np * gh gw
 
-    : ~ Lw lw ( lw_none )
-    ?? ( lw_open model ) {
+    : Lw lw ?? ( lw_open model ) {
         F e → {
             ( puts ( string_data e ) )
             ^ 1
         }
-        T got → { = lw got }
+        T got → got
     }
     : GpuKit kit ( gk_open_best )
     ? ( gk_ok kit ) {} { ^ ( __hc_die `no compute device` ) }

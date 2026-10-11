@@ -33,15 +33,14 @@ unsafe @ main → i {
     : String pathv ? > ( nurl_argc ) 1 ( env_arg 1 ) ( string_from ( __wc_default ) )
     : s path ( string_data pathv )
     : !Lw String r ( lw_open path )
-    : ~ Lw w ( lw_none )
-    ?? r {
+    : Lw w ?? r {
         F e → {
             : String m ( string_from `cannot open checkpoint: ` )
             ( string_push_str m ( string_data e ) )
             ( puts ( string_data m ) )
             ^ 1
         }
-        T got → { = w got }
+        T got → got
     }
 
     ( __wc_check == ( lw_n_tensors w ) 736 `736 tensors` )

@@ -2,16 +2,21 @@
 
 ## [2.4.1] — 2026-10-11
 
+Requires NURL 0.73.0, which allows `mem_forget`, `mem_take` and the
+`rcbox` primitives only in `unsafe` code and reads a null library-handle
+literal as raw memory. The published 2.4.0 does not compile under it.
+
 ### Changed
 
-- `Interp_drop` and `Module_drop` are declared `unsafe`: each calls
-  `mem_forget`, `mem_take` or an `rcbox` primitive, or builds or reads
-  the raw `ctl` of a handle whose drop hook does; NURL 0.73.0 allows
-  these only in `unsafe` code, so the published 2.4.0 does not compile
-  under it. Behaviour is unchanged.
-- Its `--version` is read from `nurl.toml` with `( pkg_version )`
-  instead of being written by hand, so it can no longer drift from the
-  manifest. This needs NURL 0.73.0.
+- `Interp` and `Module` keep their state in an `Arc` (stdlib/std/arc.nu)
+  instead of an `rcbox`. The share and drop hooks are ordinary safe
+  functions — the Arc does the counting — and so are the constructors that
+  build one from a whole value; every copy is still the same state, and
+  its last owner releases it.
+- 2 fewer functions are `unsafe` than in 2.4.0.
+- Its `--version` (or the version it reports) is read from `nurl.toml`
+  with `( pkg_version )` instead of being written by hand, so it can no
+  longer drift from the manifest.
 
 ## [2.4.0] — 2026-10-09
 

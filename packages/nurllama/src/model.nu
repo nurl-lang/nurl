@@ -56,7 +56,7 @@ $ `stdlib/std/time.nu`
 $ `deps/gpu/src/gpu.nu`
 $ `src/kernels.nu`
 $ `src/tokenizer.nu`
-$ `stdlib/core/rcbox.nu`
+$ `stdlib/std/arc.nu`
 $ `stdlib/core/slice.nu`
 
 : LlmImpl {
@@ -130,10 +130,10 @@ $ `stdlib/core/slice.nu`
     Gguf gg
     // A SECOND weight source: the same model, in the container Hugging Face
     // ships it in. The GGUF still supplies the hyperparameters and the
-    // tokenizer; the tensors come from here when it is open (st_is_open).
+    // tokenizer; the tensors come from here when there is one (T).
     // This is how the safetensor reader is proven: run the same model from
     // both containers and require the logits to agree.
-    St st
+    ? St st
     b st_norm_add1
     i st_embd
     i embd_idx
@@ -204,18 +204,15 @@ $ `stdlib/core/slice.nu`
     i prof_out_ns
 }
 
-// A Llm is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// A Llm is a handle on its state in an Arc (stdlib/std/arc.nu):
 // every copy is the same state, and the last owner releases it.
-: Llm { s ctl }
+: Llm { ( Arc LlmImpl ) a }
 
-unsafe @ Llm_share Llm h → Llm { ^ @ Llm { # s ( rcbox_share # i . h ctl ) } }
+@ Llm_share Llm h → Llm { ^ @ Llm { ( arc_clone [LlmImpl] . h a ) } }
 
-unsafe @ Llm_drop sink Llm h → v {
-    ( mem_forget h )
-    ( rcbox_release [LlmImpl] # i . h ctl )
-}
+@ Llm_drop sink Llm h → v {}
 
-unsafe @ __Llm_ptr Llm h → *LlmImpl { ^ ( rcbox_ptr [LlmImpl] # i . h ctl ) }
+unsafe @ __Llm_ptr Llm h → *LlmImpl { ^ ( arc_ptr [LlmImpl] . h a ) }
 
 @ __lm_err s msg → !Llm String {
     ^ @ !Llm String { F ( string_from msg ) }
@@ -296,13 +293,16 @@ unsafe @ __lm_prof_now * LlmImpl m → i {
 
 unsafe @ __lm_upload * LlmImpl m Gguf gg s name → i {
     // A second container, when one was given: same tensor, different file.
-    ? ( st_is_open . m st ) {
-        : i d ( __lm_upload_st m name )
-        ? >= d 0 { ^ d } {}
-        // fall through: a tensor the safetensors file does not carry (a tied
-        // `output.weight`) is still resolved from the GGUF, so the two paths
-        // agree on what "absent" means.
-    } {}
+    ?? . m st {
+        T sf → {
+            : i d ( __lm_upload_st m name )
+            ? >= d 0 { ^ d } {}
+            // fall through: a tensor the safetensors file does not carry (a tied
+            // `output.weight`) is still resolved from the GGUF, so the two paths
+            // agree on what "absent" means.
+        }
+        F → {}
+    }
     : i ti ( gguf_find_tensor gg name )
     ? < ti 0 { ^ -1 } {}
     : ~ i gt -1
@@ -563,14 +563,15 @@ unsafe @ __lm_st_rope_permute * LlmImpl m s name ( Vec u ) raw → v {
 // model produces confident nonsense, which is exactly how it was found the
 // first time.)
 unsafe @ __lm_upload_st * LlmImpl m s name → i {
+    : St sf ?? . m st { T s0 → s0 F → { ^ -1 } }
     : String hf ( __lm_hf_name name . m st_norm_add1 )
     ? == 0 ( string_len hf ) {
         ^ -1
     } {}
-    : i ti ( st_find_tensor . m st ( string_data hf ) )
+    : i ti ( st_find_tensor sf ( string_data hf ) )
     : b is_norm != 0 ( nurl_str_ends ( string_data hf ) `norm.weight` )
     ? < ti 0 { ^ -1 } {}
-    ?? ( st_dequant . m st ti ) {
+    ?? ( st_dequant sf ti ) {
         T raw → {
             ( __lm_st_rope_permute m name raw )
             ? & . m st_norm_add1 is_norm { ( __lm_add1 raw ) } {}
@@ -616,12 +617,15 @@ unsafe @ __lm_add1 ( Vec u ) raw → v {
 // a bias is a single row, so the dequant cost is nil.
 unsafe @ __lm_upload_opt * LlmImpl m Gguf gg i layer s suffix → i {
     : String nm ( __lm_tname layer suffix )
-    ? ( st_is_open . m st ) {
-        : i d ( __lm_upload_st m ( string_data nm ) )
-        ? >= d 0 {
-            ^ d
-        } {}
-    } {}
+    ?? . m st {
+        T sf → {
+            : i d ( __lm_upload_st m ( string_data nm ) )
+            ? >= d 0 {
+                ^ d
+            } {}
+        }
+        F → {}
+    }
     : i ti ( gguf_find_tensor gg ( string_data nm ) )
     ? < ti 0 {
         ^ -1
@@ -695,9 +699,8 @@ unsafe @ __lm_upload_layer * LlmImpl m Gguf gg i layer s suffix ( Vec i ) dst ( 
 
 unsafe @ llm_open_st s path s weights i want_ctx → !Llm String {
     ( __lm_lp_start )
-    : ~ Gguf gg ( gguf_none )
-    ?? ( gguf_open path ) {
-        T g0 → { = gg g0 }
+    : Gguf gg ?? ( gguf_open path ) {
+        T g0 → g0
         F e → { ^ @ !Llm String { F e } }
     }
     ( __lm_lp `gguf_open` )
@@ -719,7 +722,7 @@ unsafe @ llm_open_st s path s weights i want_ctx → !Llm String {
 
     // zeroed: every handle field starts as the null handle, so an early
     // return drops a half-built model cleanly
-    : Llm h @ Llm { # s ( rcbox_zero [LlmImpl] ) }
+    : Llm h @ Llm { ( arc_zero [LlmImpl] ) }
     : *LlmImpl m ( __Llm_ptr h )
     = __lm_alloc_failed F
     = . m prof_on F
@@ -729,8 +732,7 @@ unsafe @ llm_open_st s path s weights i want_ctx → !Llm String {
     = . m prof_dense_ns 0
     = . m prof_out_ns 0
     ?? ( env_get `NURLLAMA_PROF` ) { T v → { = . m prof_on T } F → {} }
-    = . m st ( st_none )
-    = . m gg ( gguf_none )
+    = . m st @ ?St { F }
     = . m st_embd -1
     = . m st_norm_add1 F
     = . m n_embd ( __lm_kv_i gg arch `embedding_length` 0 )
@@ -851,9 +853,9 @@ unsafe @ llm_open_st s path s weights i want_ctx → !Llm String {
     ? > ( nurl_str_len weights ) 0 {
         ?? ( st_open weights ) {
             T stp → {
-                = . m st stp
                 = . m st_norm_add1 is_gemma3
-                = . m st_embd ( st_find_tensor . m st `model.embed_tokens.weight` )
+                = . m st_embd ( st_find_tensor stp `model.embed_tokens.weight` )
+                = . m st @ ?St { T stp }
                 ? < . m st_embd 0 {
                     ^ ( __lm_err `nurllama: the safetensors file has no model.embed_tokens.weight` )
                 } {}
@@ -1206,13 +1208,9 @@ unsafe @ llm_open_st s path s weights i want_ctx → !Llm String {
 // A model kept in a module global (a server's resident model) as one
 // word: llm_into_word makes the word one owner of the model, a view of it
 // is `# Llm w`, and llm_word_release gives that owner back.
-unsafe @ llm_into_word sink Llm m → i {
-    : i w # i . m ctl
-    ( mem_forget m )
-    ^ w
-}
+unsafe @ llm_into_word sink Llm m → i { ^ ( arc_into_word [LlmImpl] ( arc_clone [LlmImpl] . m a ) ) }
 
-unsafe @ llm_word_release i w → v { ( rcbox_release [LlmImpl] w ) }
+unsafe @ llm_word_release i w → v { : Llm o @ Llm { ( arc_from_word [LlmImpl] w ) } }
 
 unsafe @ llm_tok Llm m__h → Tok {
     : *LlmImpl m ( __Llm_ptr m__h )
@@ -1432,19 +1430,22 @@ unsafe @ __lm_eval_core * LlmImpl m ( Vec i ) ids i first i count i pos0 i kvlen
         // decoded, out of whichever container the weights came from. A
         // safetensors row range is exact (no block quantisation), a GGUF one is
         // block-aligned — both land here as f32.
-        ? ( st_is_open . m st ) {
-            ?? ( st_dequant_range . m st . m st_embd * tok ne ne ) {
-                T row → {
-                    : i _u1 ( gpu_upload xb ( vec_data [u] row ) )
+        ?? . m st {
+            T sf → {
+                ?? ( st_dequant_range sf . m st_embd * tok ne ne ) {
+                    T row → {
+                        : i _u1 ( gpu_upload xb ( vec_data [u] row ) )
+                    }
+                    F _e → {}
                 }
-                F _e → {}
             }
-        } {
-            ?? ( gguf_dequant_range . m gg . m embd_idx * tok ne ne ) {
-                T row → {
-                    : i _u1 ( gpu_upload xb ( vec_data [u] row ) )
+            F → {
+                ?? ( gguf_dequant_range . m gg . m embd_idx * tok ne ne ) {
+                    T row → {
+                        : i _u1 ( gpu_upload xb ( vec_data [u] row ) )
+                    }
+                    F _e → {}
                 }
-                F _e → {}
             }
         }
         = bi + bi 1

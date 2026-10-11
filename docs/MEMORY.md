@@ -629,7 +629,8 @@ keyword-argument call to a forward function that consumes its argument.
 
 **No open holes.** The 0.72.0 release review found 37 safe programs the
 compiler accepted and that leaked, freed memory they did not own or read
-freed memory; all are closed, each a probe CI now holds (h142–h179):
+freed memory, and converting the packages' handles to `Arc` found ten
+more; all are closed, each a probe CI now holds (h142–h189):
 
 - a raw string handed to `string_adopt` or a `sink s` parameter: only a
   declared `sink` takes a raw string over, its callee releases it, and a
@@ -651,6 +652,17 @@ freed memory; all are closed, each a probe CI now holds (h142–h179):
 - a source whose path merely contains `/stdlib/`, which was compiled as
   the trusted standard library: only a file inside the real standard
   library tree (where `stdlib/` imports resolve) is trusted.
+- a zero value of a type that has none: a struct literal that left out a
+  `Vec`, a library handle or a closure field, an enum literal that left
+  out such a payload, an option or result literal that gave only its tag,
+  a bare variant whose payload is one, `vec_zeroed` / `rc_zero` / … of
+  one, or a number where one was expected (`: ( Vec i ) v 0`, a `0`
+  argument). Each made a value with no control block, shared block or
+  code, and the first use read or called through null; outside `unsafe`
+  none of them is accepted (spec §4.1);
+- a `;` defer that used a field a returned literal had moved out of its
+  struct (`^ @ ?V { T . x f }`): under a defer the literal takes a copy and
+  the struct keeps its own.
 
 The rules that carry it:
 
@@ -1042,6 +1054,23 @@ hook that only observes the value (logging, counting) needs nothing more,
 and one over a counted block gives its receiver up with `mem_forget` in an
 `unsafe` hook. A program's own handle whose hook is `unsafe` is sealed:
 its literals and field writes are raw memory too (§6.4).
+
+A program's own handle — one state that every copy shares — wraps an
+`Arc` (an `Rc` when the state can hold the handle again, so the cycle is
+collected), and both hooks are safe code:
+
+```
+: Cache { ( Arc CacheImpl ) a }
+@ Cache_share Cache h → Cache { ^ @ Cache { ( arc_clone [CacheImpl] . h a ) } }
+@ Cache_drop sink Cache h → v {}
+@ cache_new → Cache { ^ @ Cache { ( arc_new [CacheImpl] @ CacheImpl { … } ) } }
+```
+
+The empty hook makes `Cache` a handle; its `Arc` field is dropped once the
+hook returns, and the last owner releases the state. Only reaching into
+the state through a pointer (`arc_ptr`) is `unsafe`. Every package's
+handles are written this way; the counted blocks of `stdlib/core/rcbox.nu`
+are the standard library's own.
 
 **Raw memory reached from an `unsafe` structure.** A struct behind a
 `nurl_alloc` pointer is not dropped by the compiler. A parameter stored

@@ -35,7 +35,7 @@ $ `stdlib/std/fs.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/floatbits.nu`
 $ `safetensor.nu`
-$ `stdlib/core/rcbox.nu`
+$ `stdlib/std/arc.nu`
 
 @ __stw_gf ( Vec f ) v i k → f { ?? ( vec_get [f] v k ) { T x → x F → 0.0 } }
 
@@ -59,27 +59,23 @@ $ `stdlib/core/rcbox.nu`
     b first  // no comma before the first entry
 }
 
-// A StWriter is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// A StWriter is a handle on its state in an Arc (stdlib/std/arc.nu):
 // every copy is the same writer, and the last owner releases it.
-: StWriter { s ctl }
+: StWriter { ( Arc StWriterImpl ) a }
 
-unsafe @ StWriter_share StWriter h → StWriter { ^ @ StWriter { # s ( rcbox_share # i . h ctl ) } }
+@ StWriter_share StWriter h → StWriter { ^ @ StWriter { ( arc_clone [StWriterImpl] . h a ) } }
 
-unsafe @ StWriter_drop sink StWriter h → v {
-    ( mem_forget h )
-    ( rcbox_release [StWriterImpl] # i . h ctl )
-}
+@ StWriter_drop sink StWriter h → v {}
 
-unsafe @ __StWriter_ptr StWriter h → *StWriterImpl { ^ ( rcbox_ptr [StWriterImpl] # i . h ctl ) }
+unsafe @ __StWriter_ptr StWriter h → *StWriterImpl { ^ ( arc_ptr [StWriterImpl] . h a ) }
 
 unsafe @ stw_new → StWriter {
-    : i w__box ( rcbox_zero [StWriterImpl] )
-    : *StWriterImpl w ( rcbox_ptr [StWriterImpl] w__box )
+    : ~ StWriterImpl w @ StWriterImpl {}
     = . w hdr ( string_from `{` )
     = . w chunks ( vec_new [StwChunk] )
     = . w dlen 0
     = . w first T
-    ^ @ StWriter { # s w__box }
+    ^ @ StWriter { ( arc_new [StWriterImpl] w ) }
 }
 
 // Take ownership of `cb` as the next tensor's data region and write its

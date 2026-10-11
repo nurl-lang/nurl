@@ -50,7 +50,7 @@ $ `deps/tensor/src/ops.nu`
 $ `deps/gpu/src/gpu.nu`
 $ `deps/gpukit/src/gpukit.nu`
 $ `deps/gpukit/src/dev.nu`
-$ `stdlib/core/rcbox.nu`
+$ `stdlib/std/arc.nu`
 $ `stdlib/core/slice.nu`
 
 // ── the kernels ───────────────────────────────────────────────────────
@@ -483,19 +483,16 @@ unsafe @ _str_replace_all s hay s needle s rep → String {
     i dtype  // 0 GK_F64 (default) · 1 GK_F32 (device replay in float32)
 }
 
-// A GProg is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// A GProg is a handle on its state in an Arc (stdlib/std/arc.nu):
 // every copy is the same state, and the last owner releases it.
-: GProg { s ctl }
+: GProg { ( Arc GProgImpl ) a }
 
-unsafe @ GProg_share GProg h → GProg { ^ @ GProg { # s ( rcbox_share # i . h ctl ) } }
+@ GProg_share GProg h → GProg { ^ @ GProg { ( arc_clone [GProgImpl] . h a ) } }
 
-unsafe @ GProg_drop sink GProg h → v {
-    ( mem_forget h )
-    ( rcbox_release [GProgImpl] # i . h ctl )
-}
+@ GProg_drop sink GProg h → v {}
 
 // The state, for this package's own code.
-unsafe @ _GProg_ptr GProg h → *GProgImpl { ^ ( rcbox_ptr [GProgImpl] # i . h ctl ) }
+unsafe @ _GProg_ptr GProg h → *GProgImpl { ^ ( arc_ptr [GProgImpl] . h a ) }
 
 // The f32 source is constant but building it runs 10 full-source string
 // passes, so cache it — otherwise _gp_src (called on EVERY kernel launch,
@@ -607,19 +604,16 @@ unsafe @ __gp_edt * GProgImpl pg → i { ? | == . pg dtype 1 == . pg dtype 2 { ^
     GkBuf ctl  // [lrt, cs] the update kernels read (graph-capturable)
 }
 
-// A GpOpt is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// A GpOpt is a handle on its state in an Arc (stdlib/std/arc.nu):
 // every copy is the same state, and the last owner releases it.
-: GpOpt { s ctl }
+: GpOpt { ( Arc GpOptImpl ) a }
 
-unsafe @ GpOpt_share GpOpt h → GpOpt { ^ @ GpOpt { # s ( rcbox_share # i . h ctl ) } }
+@ GpOpt_share GpOpt h → GpOpt { ^ @ GpOpt { ( arc_clone [GpOptImpl] . h a ) } }
 
-unsafe @ GpOpt_drop sink GpOpt h → v {
-    ( mem_forget h )
-    ( rcbox_release [GpOptImpl] # i . h ctl )
-}
+@ GpOpt_drop sink GpOpt h → v {}
 
 // The state, for this package's own code.
-unsafe @ _GpOpt_ptr GpOpt h → *GpOptImpl { ^ ( rcbox_ptr [GpOptImpl] # i . h ctl ) }
+unsafe @ _GpOpt_ptr GpOpt h → *GpOptImpl { ^ ( arc_ptr [GpOptImpl] . h a ) }
 
 @ _gp_nobuf → GkBuf { ^ ( gk_buf_none 0 ) }
 
@@ -735,16 +729,16 @@ unsafe @ _gp_upload_tensor GpuKit kit * Tensor t i edt → GkBuf {
 // bounds the gap ~1e-5 rel; it is NOT bit-equal to the tape like f64 is).
 unsafe @ gput_capture_dt GpuKit kit GTape tp__h GVar loss i dtype → GProg {
     : *GTapeImpl tp ( _GTape_ptr tp__h )
-    : i pg__box ( rcbox_zero [GProgImpl] )
-    : *GProgImpl pg ( rcbox_ptr [GProgImpl] pg__box )
+    : ( Arc GProgImpl ) pg__box ( arc_zero [GProgImpl] )
+    : *GProgImpl pg ( arc_ptr [GProgImpl] pg__box )
     = . pg ok T
     = . pg dtype dtype
     = . pg kit ( GpuKit_share kit )  // the program holds the kit too
     = . pg nodes ( vec_new [GpNode] )
     = . pg loss . loss id
     = . pg gexec ( gpu_graph_none )
-    ? & ( tape_ok tp__h ) >= . loss id 0 {} { ( _gp_fail pg `tape is poisoned or loss invalid` ) ^ @ GProg { # s pg__box } }
-    ? ( gk_ok kit ) {} { ( _gp_fail pg `no device` ) ^ @ GProg { # s pg__box } }
+    ? & ( tape_ok tp__h ) >= . loss id 0 {} { ( _gp_fail pg `tape is poisoned or loss invalid` ) ^ @ GProg { pg__box } }
+    ? ( gk_ok kit ) {} { ( _gp_fail pg `no device` ) ^ @ GProg { pg__box } }
     : i nn ( tape_len tp__h )
     // reach = loss-ancestor set; need = requires-grad propagation (a param
     // in the ancestor cone). The backward sweep and the gradient BUFFERS
@@ -930,7 +924,7 @@ unsafe @ gput_capture_dt GpuKit kit GTape tp__h GVar loss i dtype → GProg {
         } )
         = k + k 1
     }
-    ^ @ GProg { # s pg__box }
+    ^ @ GProg { pg__box }
 }
 
 unsafe @ gput_ok GProg pg__h → b {
@@ -1567,8 +1561,7 @@ unsafe @ gput_param_sync_host GProg pg__h GTape tp__h → b {
 // ── the device optimizer ─────────────────────────────────────────────
 
 unsafe @ gpopt_new i kind f lr → GpOpt {
-    : i o__box ( rcbox_zero [GpOptImpl] )
-    : *GpOptImpl o ( rcbox_ptr [GpOptImpl] o__box )
+    : ~ GpOptImpl o @ GpOptImpl {}
     = . o ok T
     = . o kind kind
     = . o lr lr
@@ -1581,7 +1574,7 @@ unsafe @ gpopt_new i kind f lr → GpOpt {
     = . o ptab ( _gp_nobuf )
     = . o nrm ( _gp_nobuf )
     = . o ctl ( _gp_nobuf )
-    ^ @ GpOpt { # s o__box }
+    ^ @ GpOpt { ( arc_new [GpOptImpl] o ) }
 }
 
 @ gpopt_sgd_new f lr → GpOpt { ^ ( gpopt_new 0 lr ) }

@@ -42,7 +42,7 @@ $ `stdlib/std/udp.nu`
 $ `stdlib/std/thread.nu`
 $ `stdlib/std/tls_server.nu`
 $ `stdlib/ext/http3_server.nu`
-$ `stdlib/core/rcbox.nu`
+$ `stdlib/std/rc.nu`
 
 : HttpAppImpl {
     Router router
@@ -69,19 +69,16 @@ $ `stdlib/core/rcbox.nu`
     ( Vec HttpMiddleware ) mw
 }
 
-// An HttpApp is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// An HttpApp is a handle on its state in an Arc (stdlib/std/arc.nu):
 // every copy is the same state, and the last owner releases it — the
 // router, the strings and the middleware are dropped with it.
-: HttpApp { s ctl }
+: HttpApp { ( Rc HttpAppImpl ) a }
 
-unsafe @ HttpApp_share HttpApp h → HttpApp { ^ @ HttpApp { # s ( rcbox_share # i . h ctl ) } }
+@ HttpApp_share HttpApp h → HttpApp { ^ @ HttpApp { ( rc_clone [HttpAppImpl] . h a ) } }
 
-unsafe @ HttpApp_drop sink HttpApp h → v {
-    ( mem_forget h )
-    ( rcbox_release [HttpAppImpl] # i . h ctl )
-}
+@ HttpApp_drop sink HttpApp h → v {}
 
-unsafe @ __HttpApp_ptr HttpApp h → *HttpAppImpl { ^ ( rcbox_ptr [HttpAppImpl] # i . h ctl ) }
+unsafe @ __HttpApp_ptr HttpApp h → *HttpAppImpl { ^ ( rc_ptr [HttpAppImpl] . h a ) }
 
 // A user middleware, boxed so it can live in a Vec — a closure is not
 // spellable as a generic type argument.
@@ -92,8 +89,7 @@ unsafe @ __HttpApp_ptr HttpApp h → *HttpAppImpl { ^ ( rcbox_ptr [HttpAppImpl] 
 // ── Construction / teardown ───────────────────────────────────────────
 
 unsafe @ http_app_new → HttpApp {
-    : i a__box ( rcbox_zero [HttpAppImpl] )
-    : *HttpAppImpl a ( rcbox_ptr [HttpAppImpl] a__box )
+    : ~ HttpAppImpl a @ HttpAppImpl {}
     = . a router ( router_new )
     = . a mw ( vec_new [HttpMiddleware] )
     = . a idle_ms 5000
@@ -112,7 +108,7 @@ unsafe @ http_app_new → HttpApp {
     = . a http3 1
     = . a pq_cert ( string_new )
     = . a pq_key ( string_new )
-    ^ @ HttpApp { # s a__box }
+    ^ @ HttpApp { ( rc_new [HttpAppImpl] a ) }
 }
 
 // Let go of `a` now rather than at the end of its owner's scope.

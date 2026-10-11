@@ -26,7 +26,7 @@
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/std/floatbits.nu`
-$ `stdlib/core/rcbox.nu`
+$ `stdlib/std/arc.nu`
 $ `gpukit.nu`
 $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
 
@@ -44,7 +44,7 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
     i dptr
     i n
     i dtype
-    GkMem mem
+    ? GkMem mem
 }
 
 // The owner of one pooled block: its device pointer and the kit whose
@@ -53,16 +53,21 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
 
 % Drop GkMemImpl { unsafe @ drop GkMemImpl x → v { ( _gk_pool_give ( _GpuKit_ptr . x kit ) . x dptr ) } }
 
-: GkMem { s ctl }
+: GkMem { ( Arc GkMemImpl ) a }
 
-unsafe @ GkMem_share GkMem h → GkMem { ^ @ GkMem { # s ( rcbox_share # i . h ctl ) } }
+@ GkMem_share GkMem h → GkMem { ^ @ GkMem { ( arc_clone [GkMemImpl] . h a ) } }
 
-unsafe @ GkMem_drop sink GkMem h → v {
-    ( mem_forget h )
-    ( rcbox_release [GkMemImpl] # i . h ctl )
+@ GkMem_drop sink GkMem h → v {}
+
+@ __gk_nomem → ?GkMem { ^ @ ?GkMem { F } }
+
+// Another owner of the block `m` holds, if it holds one.
+@ __gk_mem_share ? GkMem m → ?GkMem {
+    ?? m {
+        T x → { ^ @ ?GkMem { T ( GkMem_share x ) } }
+        F → { ^ @ ?GkMem { F } }
+    }
 }
-
-@ __gk_nomem → GkMem { ^ @ GkMem { # s 0 } }
 
 // A buffer that is not there: what a failed allocation returns, and the
 // placeholder for an absent operand (a missing bias, mask, …).
@@ -71,14 +76,14 @@ unsafe @ GkMem_drop sink GkMem h → v {
 // `n` elements of `b` starting at element `off`, same dtype. The view
 // holds `b`'s block: it stays valid however long the view lives.
 @ gk_buf_view GkBuf b i off i n → GkBuf {
-    ^ @ GkBuf { + . b dptr * off ( __gk_esz . b dtype ) n . b dtype ( GkMem_share . b mem ) }
+    ^ @ GkBuf { + . b dptr * off ( __gk_esz . b dtype ) n . b dtype ( __gk_mem_share . b mem ) }
 }
 
 // `n` elements of type `dtype` at BYTE offset `boff` into `b` — a view
 // that reinterprets (an f32 block read as i64 indices, say). Holds `b`'s
 // block like gk_buf_view.
 @ gk_buf_view_as GkBuf b i boff i n i dtype → GkBuf {
-    ^ @ GkBuf { + . b dptr boff n dtype ( GkMem_share . b mem ) }
+    ^ @ GkBuf { + . b dptr boff n dtype ( __gk_mem_share . b mem ) }
 }
 
 // A buffer over device memory something else owns (another package's
@@ -141,7 +146,7 @@ unsafe @ gk_dbuf_new GpuKit kit__h i n i dtype → GkBuf {
         = dptr . gb dptr
         ( _gk_pool_add kit gb )
     } {}
-    ^ @ GkBuf { dptr n dtype @ GkMem { # s ( rcbox_new [GkMemImpl] @ GkMemImpl { dptr ( GpuKit_share kit__h ) } ) } }
+    ^ @ GkBuf { dptr n dtype @ ?GkMem { T @ GkMem { ( arc_new [GkMemImpl] @ GkMemImpl { dptr ( GpuKit_share kit__h ) } ) } } }
 }
 
 // Let go of `b` now rather than at the end of its owner's scope.

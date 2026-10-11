@@ -14,7 +14,7 @@ $ `deps/http/src/http.nu`
 $ `pki.nu`
 $ `auth.nu`
 $ `ui.nu`
-$ `stdlib/core/rcbox.nu`
+$ `stdlib/std/arc.nu`
 
 // ── Service state ─────────────────────────────────────────────────────
 
@@ -28,12 +28,18 @@ $ `stdlib/core/rcbox.nu`
 : ~ s g_management_key ``
 : ~ s g_ca_cn `Private PKI CA`
 : ~ i g_ca_alg 0
-: ~ i g_ca_handle 0  // the loaded CA's rcbox, one owner kept for the process (0 = none)
+: ~ i g_ca_handle 0  // the loaded CA as a word (arc_into_word), one owner kept for the process (0 = none)
+
+// g_ca_handle becomes an owner of `ca`; the CA it held before is let go.
+unsafe @ __svc_keep_ca PkiCa ca → v {
+    : PkiCa old @ PkiCa { ( arc_from_word [PkiCaImpl] g_ca_handle ) }
+    = g_ca_handle ( arc_into_word [PkiCaImpl] ( arc_clone [PkiCaImpl] . ca a ) )
+}
 
 // The loaded CA (another owner of the one behind g_ca_handle).
-unsafe @ __svc_ca → PkiCa { ^ @ PkiCa { # s ( rcbox_share g_ca_handle ) } }
+unsafe @ __svc_ca → PkiCa { ^ @ PkiCa { ( arc_word_share [PkiCaImpl] g_ca_handle ) } }
 
-unsafe @ pki_service_init s ca_cert s ca_key s crl_file s index_file s initial_dir s device_dir s init_key s mgmt_key s ca_cn i alg → b {
+@ pki_service_init s ca_cert s ca_key s crl_file s index_file s initial_dir s device_dir s init_key s mgmt_key s ca_cn i alg → b {
     = g_ca_cert_path ca_cert
     = g_ca_key_path ca_key
     = g_crl_file_path crl_file
@@ -49,13 +55,13 @@ unsafe @ pki_service_init s ca_cert s ca_key s crl_file s index_file s initial_d
     : !v IoErr _d2 ( dir_create_all device_dir )
 
     // Load or generate CA
-    : PkiCa ca ( pki_load_or_create_ca ca_cert ca_key ca_cn alg )
-    ? ( pki_ca_ok ca ) {} { ^ F }
+    : PkiCa ca ?? ( pki_load_or_create_ca ca_cert ca_key ca_cn alg ) {
+        T c → c
+        F → { ^ F }
+    }
     // One owner of the CA stays behind g_ca_handle for the process (a
     // CA loaded before this one is let go).
-    : i old g_ca_handle
-    = g_ca_handle ( rcbox_share # i . ca ctl )
-    ( rcbox_release [PkiCaImpl] old )
+    ( __svc_keep_ca ca )
     // An existing CA keeps its own algorithm; --algorithm only decides
     // what a *new* CA is minted with, so report back what is actually
     // in force rather than what was asked for.
