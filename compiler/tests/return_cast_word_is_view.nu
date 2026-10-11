@@ -22,7 +22,7 @@ unsafe @ live → i { ^ - ( nurl_alloc_count ) ( nurl_free_count ) }
 
 unsafe @ H_share H h → H { ^ @ H { # s ( rcbox_share # i . h ctl ) } }
 
-@ H_drop sink H h → v {
+unsafe @ H_drop sink H h → v {
     ( mem_forget h )
     ( rcbox_release [HImpl] # i . h ctl )
 }

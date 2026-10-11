@@ -82,7 +82,7 @@ $ `stdlib/core/slice.nu`
 
 unsafe @ Tok_share Tok h → Tok { ^ @ Tok { # s ( rcbox_share # i . h ctl ) } }
 
-@ Tok_drop sink Tok h → v {
+unsafe @ Tok_drop sink Tok h → v {
     ( mem_forget h )
     ( rcbox_release [TokImpl] # i . h ctl )
 }

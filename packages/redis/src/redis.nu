@@ -118,7 +118,7 @@ $ `stdlib/core/rcbox.nu`
 
 unsafe @ RedisConn_share RedisConn h → RedisConn { ^ @ RedisConn { # s ( rcbox_share # i . h ctl ) } }
 
-@ RedisConn_drop sink RedisConn h → v {
+unsafe @ RedisConn_drop sink RedisConn h → v {
     ( mem_forget h )
     ( rcbox_release [RedisConnImpl] # i . h ctl )
 }

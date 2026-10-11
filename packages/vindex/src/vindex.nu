@@ -57,7 +57,7 @@ $ `stdlib/core/rcbox.nu`
 
 unsafe @ VIndex_share VIndex h → VIndex { ^ @ VIndex { # s ( rcbox_share # i . h ctl ) } }
 
-@ VIndex_drop sink VIndex h → v {
+unsafe @ VIndex_drop sink VIndex h → v {
     ( mem_forget h )
     ( rcbox_release [VIndexImpl] # i . h ctl )
 }

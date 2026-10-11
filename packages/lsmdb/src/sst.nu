@@ -139,7 +139,7 @@ unsafe @ __bloom_test ( Vec u ) bits i nbits i h → b {
 
 unsafe @ SstWriter_share SstWriter h → SstWriter { ^ @ SstWriter { # s ( rcbox_share # i . h ctl ) } }
 
-@ SstWriter_drop sink SstWriter h → v {
+unsafe @ SstWriter_drop sink SstWriter h → v {
     ( mem_forget h )
     ( rcbox_release [SstWriterImpl] # i . h ctl )
 }
@@ -342,7 +342,7 @@ unsafe @ sst_finish SstWriter w__h → !i String {
 
 unsafe @ SstReader_share SstReader h → SstReader { ^ @ SstReader { # s ( rcbox_share # i . h ctl ) } }
 
-@ SstReader_drop sink SstReader h → v {
+unsafe @ SstReader_drop sink SstReader h → v {
     ( mem_forget h )
     ( rcbox_release [SstReaderImpl] # i . h ctl )
 }
@@ -674,7 +674,7 @@ unsafe @ sst_get SstReader r__h ( Vec u ) key i snap → !SstHit String {
 
 unsafe @ SstCursor_share SstCursor h → SstCursor { ^ @ SstCursor { # s ( rcbox_share # i . h ctl ) } }
 
-@ SstCursor_drop sink SstCursor h → v {
+unsafe @ SstCursor_drop sink SstCursor h → v {
     ( mem_forget h )
     ( rcbox_release [SstCursorImpl] # i . h ctl )
 }

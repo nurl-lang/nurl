@@ -78,7 +78,7 @@ $ `work.nu`
 
 unsafe @ Swarm_share Swarm h → Swarm { ^ @ Swarm { # s ( rcbox_share # i . h ctl ) } }
 
-@ Swarm_drop sink Swarm h → v {
+unsafe @ Swarm_drop sink Swarm h → v {
     ( mem_forget h )
     ( rcbox_release [SwarmImpl] # i . h ctl )
 }

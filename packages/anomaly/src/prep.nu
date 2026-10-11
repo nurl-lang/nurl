@@ -106,7 +106,7 @@ $ `stdlib/core/slice.nu`
 
 unsafe @ Meta_share Meta h → Meta { ^ @ Meta { # s ( rcbox_share # i . h ctl ) } }
 
-@ Meta_drop sink Meta h → v {
+unsafe @ Meta_drop sink Meta h → v {
     ( mem_forget h )
     ( rcbox_release [MetaImpl] # i . h ctl )
 }

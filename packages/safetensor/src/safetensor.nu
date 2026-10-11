@@ -139,7 +139,7 @@ $ `stdlib/core/rcbox.nu`
 
 unsafe @ St_share St h → St { ^ @ St { # s ( rcbox_share # i . h ctl ) } }
 
-@ St_drop sink St h → v {
+unsafe @ St_drop sink St h → v {
     ( mem_forget h )
     ( rcbox_release [StImpl] # i . h ctl )
 }
@@ -148,9 +148,9 @@ unsafe @ __St_ptr St h → *StImpl { ^ ( rcbox_ptr [StImpl] # i . h ctl ) }
 
 // An St that holds no file — for a slot that may be empty (a model whose
 // checkpoint is some other format). st_is_open tells the two apart.
-@ st_none → St { ^ @ St { # s 0 } }
+unsafe @ st_none → St { ^ @ St { # s 0 } }
 
-@ st_is_open St s → b { ^ != 0 # i . s ctl }
+unsafe @ st_is_open St s → b { ^ != 0 # i . s ctl }
 
 @ __st_errs s msg → !St String {
     ^ @ !St String { F ( string_from msg ) }

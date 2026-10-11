@@ -54,7 +54,7 @@ $ `stdlib/core/rcbox.nu`
 
 unsafe @ Wal_share Wal h → Wal { ^ @ Wal { # s ( rcbox_share # i . h ctl ) } }
 
-@ Wal_drop sink Wal h → v {
+unsafe @ Wal_drop sink Wal h → v {
     ( mem_forget h )
     ( rcbox_release [WalImpl] # i . h ctl )
 }

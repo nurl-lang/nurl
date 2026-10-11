@@ -51,7 +51,7 @@ unsafe @ live → i { ^ - ( nurl_alloc_count ) ( nurl_free_count ) }
 }
 
 // Takes the body out and puts an empty one in; the caller gets the body.
-@ take_body inout Holder h → ( Vec u ) {
+unsafe @ take_body inout Holder h → ( Vec u ) {
     : ( Vec u ) moved . h body
     ( mem_take moved )
     = . h body ( vec_new [u] )
@@ -60,7 +60,7 @@ unsafe @ live → i { ^ - ( nurl_alloc_count ) ( nurl_free_count ) }
 
 // Took the payload, then was handed another one inside a `recover` body
 // (http2_conn's panic fallback): the payload stays in h.
-@ take_then_replace inout Holder h → Payload {
+unsafe @ take_then_replace inout Holder h → Payload {
     : ~ Payload got . h pay
     : !v PanicInfo r ( recover \ → v { = got @ Payload { ( vec_new [u] ) 0 } } )
     ( mem_take got )

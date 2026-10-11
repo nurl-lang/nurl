@@ -156,7 +156,7 @@ $ `stdlib/core/rcbox.nu`
 
 unsafe @ EParser_share EParser h → EParser { ^ @ EParser { # s ( rcbox_share # i . h ctl ) } }
 
-@ EParser_drop sink EParser h → v {
+unsafe @ EParser_drop sink EParser h → v {
     ( mem_forget h )
     ( rcbox_release [EParserImpl] # i . h ctl )
 }

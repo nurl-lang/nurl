@@ -24,7 +24,7 @@ $ `metadata.nu`
 
 unsafe @ GrpcClient_share GrpcClient h → GrpcClient { ^ @ GrpcClient { # s ( rcbox_share # i . h ctl ) } }
 
-@ GrpcClient_drop sink GrpcClient h → v {
+unsafe @ GrpcClient_drop sink GrpcClient h → v {
     ( mem_forget h )
     ( rcbox_release [GrpcClientImpl] # i . h ctl )
 }

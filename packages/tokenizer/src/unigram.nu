@@ -78,7 +78,7 @@ $ `stdlib/core/slice.nu`
 
 unsafe @ Unigram_share Unigram h → Unigram { ^ @ Unigram { # s ( rcbox_share # i . h ctl ) } }
 
-@ Unigram_drop sink Unigram h → v {
+unsafe @ Unigram_drop sink Unigram h → v {
     ( mem_forget h )
     ( rcbox_release [UnigramImpl] # i . h ctl )
 }

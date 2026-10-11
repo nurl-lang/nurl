@@ -140,7 +140,7 @@ $ `stdlib/core/slice.nu`
 
 unsafe @ HcOrigin_share HcOrigin h → HcOrigin { ^ @ HcOrigin { # s ( rcbox_share # i . h ctl ) } }
 
-@ HcOrigin_drop sink HcOrigin h → v {
+unsafe @ HcOrigin_drop sink HcOrigin h → v {
     ( mem_forget h )
     ( rcbox_release [HcOriginImpl] # i . h ctl )
 }
@@ -180,7 +180,7 @@ unsafe @ __HcOrigin_ptr HcOrigin h → *HcOriginImpl { ^ ( rcbox_ptr [HcOriginIm
 
 unsafe @ HttpClient_share HttpClient h → HttpClient { ^ @ HttpClient { # s ( rcbox_share # i . h ctl ) } }
 
-@ HttpClient_drop sink HttpClient h → v {
+unsafe @ HttpClient_drop sink HttpClient h → v {
     ( mem_forget h )
     ( rcbox_release [HttpClientImpl] # i . h ctl )
 }

@@ -99,7 +99,7 @@ $ `stdlib/core/slice.nu`
 
 unsafe @ PkiCa_share PkiCa h → PkiCa { ^ @ PkiCa { # s ( rcbox_share # i . h ctl ) } }
 
-@ PkiCa_drop sink PkiCa h → v {
+unsafe @ PkiCa_drop sink PkiCa h → v {
     ( mem_forget h )
     ( rcbox_release [PkiCaImpl] # i . h ctl )
 }
@@ -111,10 +111,10 @@ unsafe @ __pki_ca_make i alg sink ( Vec u ) scalar sink ( Vec u ) pubkey sink ( 
     ^ @ PkiCa { # s ( rcbox_new [PkiCaImpl] @ PkiCaImpl { alg scalar pubkey ml_sk ml_pk ( string_from cert_pem ) ( string_from key_pem ) ( string_from cn ) } ) }
 }
 
-@ __pki_ca_null → PkiCa { ^ @ PkiCa { # s 0 } }
+unsafe @ __pki_ca_null → PkiCa { ^ @ PkiCa { # s 0 } }
 
 // F for the null handle a failed load returns.
-@ pki_ca_ok PkiCa ca → b { ^ != 0 # i . ca ctl }
+unsafe @ pki_ca_ok PkiCa ca → b { ^ != 0 # i . ca ctl }
 
 unsafe @ pki_ca_alg PkiCa ca → i { ^ . ( __PkiCa_ptr ca ) alg }
 

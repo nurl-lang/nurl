@@ -26,9 +26,9 @@ specified in spec §3.3d.
   released, reassigned or reallocated (§6.2).
 - **The guarantee (§6.2).** Every program the compiler accepts outside
   the bodies of `unsafe` functions is memory-safe and leak-free, data
-  races and the panic path included — apart from the open holes §6.2
-  lists, each a probe in `tools/fuzz/holes/open/`. A view is tracked
-  wherever it goes (§2.10).
+  races and the panic path included. No hole is known: each one found so
+  far is a probe in `tools/fuzz/holes/` that CI holds rejected or clean
+  under the sanitizers. A view is tracked wherever it goes (§2.10).
 - **Conservative, with a fix.** A program the rules cannot prove safe is
   rejected. Each diagnostic names the rule and a concrete change that
   satisfies it (§6.3).
@@ -177,14 +177,25 @@ keep a copy), and an impl may not keep its receiver, which the object
 only lends. A raw-pointer parameter (`*T`) hands nothing over: storing it
 is the raw code's business.
 
-Two implementation limits remain. An owned slice, or a struct whose
-literal gave it one, cannot be passed to an explicit `sink` parameter:
-wrap it in a `Vec`. A raw owned string (`s`) can be, and it leaves the
-caller's binding, but the callee does not release a `sink s` parameter
-itself: it takes the string over as a `String` (`string_adopt`), hands
-it to another `sink` that does, or, in an `unsafe` function, frees it.
-A callee that only reads, returns or stores the string leaks it, and
-the compiler does not yet report that (§6.2).
+**Raw strings.** A raw string (`s`) parameter of safe code is a `sink`
+only when it is declared one — never inferred: a function that hands its
+borrowed `s` parameter on to a consumer (`string_adopt`, another `sink
+s`) hands over a copy, and its caller keeps, and later frees, its own
+string. A declared `sink s` parameter is the callee's own string, exactly
+like a local bound to a fresh one: released on every way out unless it
+moves on (returned, handed to another `sink`, adopted as a `String`), and
+its views end with it. The caller of a `sink s` hands over a string it
+owns — its own binding's (which then leaves the binding) or a fresh
+temporary — and a copy of anything else: a literal, a view of a `String`,
+a borrowed parameter, a field, a result a callee lent, or a result owned
+on only some paths (decided per call, at run time). So no callee ever
+adopts or frees memory it was only shown, and nothing is released by
+hand. (`unsafe` code and the standard library manage a raw `sink s` by
+hand, and their consuming parameters are still inferred.)
+
+One implementation limit remains: an owned slice, or a struct whose
+literal gave it one, cannot be passed to an explicit `sink` parameter —
+wrap it in a `Vec`.
 
 ## 2. The ownership rules
 
@@ -616,26 +627,30 @@ Since then three of the 0.72.0 review's holes are closed too: an owner
 moved by one argument of a call and read by another (§2.1), and a
 keyword-argument call to a forward function that consumes its argument.
 
-**Open holes (0.72.0).** The 0.72.0 release review found safe programs
-the compiler still accepts and that leak, free memory they do not own or
-read freed memory. Each is a probe in `tools/fuzz/holes/open/` (34, see
-its README), kept out of the CI gate until it is closed; until then the
-guarantee holds except for these:
+**No open holes.** The 0.72.0 release review found 37 safe programs the
+compiler accepted and that leaked, freed memory they did not own or read
+freed memory; all are closed, each a probe CI now holds (h142–h179):
 
-- a raw string handed to `string_adopt` or a `sink s` parameter (§1):
-  `string_adopt` takes over whatever it is handed, owned or not, and a
-  `sink s` the callee only reads is never released — take a string over
-  as a `sink String`, and hand `string_adopt` only a string you own;
-- a view that leaves through a helper's return value (`^ ( pick x )`),
-  or is stored into a container reached indirectly (a field of an
-  `inout` struct, a `Vec` that aliases a parameter or sits inside one);
-- `mem_forget`, `mem_take` and the `rcbox` primitives, which safe code
-  can still call although §3.3d makes them `unsafe`;
-- a destructor that panics, reassigns a field of its receiver or hands
-  it to a `sink` disposer, and a closure defined inside a `% Drop` impl;
-- a closure value called with a fresh string;
-- a source whose path contains `/stdlib/`, which is compiled as the
-  trusted standard library with every safe-code check off.
+- a raw string handed to `string_adopt` or a `sink s` parameter: only a
+  declared `sink` takes a raw string over, its callee releases it, and a
+  caller hands over its own string or a copy (§1);
+- a view that left through a helper's return value (`^ ( pick x )`, a
+  closure or a `Vec` the helper built): a returned call result is the
+  caller's own string, or a copy, and a call's result holds views of what
+  the callee lends, stores or hands back inside it;
+- a view stored into storage the caller holds — a `Vec` parameter, an
+  alias of one, a field of an `inout` struct — or into a field of a
+  struct that outlives the binding viewed: rejected;
+- `mem_forget`, `mem_take`, `mem_put_back` and the `rcbox` primitives in
+  safe code: `unsafe` only, as §3.3d says;
+- a destructor that panicked (it ran twice), reassigned a field of its
+  receiver (the old value leaked) or handed its receiver to a disposer
+  (its fields leaked), and a closure defined inside a `% Drop` impl (it
+  ran the impl's epilogue): see §7.6;
+- a closure value called with a fresh string (the string leaked);
+- a source whose path merely contains `/stdlib/`, which was compiled as
+  the trusted standard library: only a file inside the real standard
+  library tree (where `stdlib/` imports resolve) is trusted.
 
 The rules that carry it:
 
@@ -946,9 +961,17 @@ goes:
 buffer, an OS resource). The fields the compiler manages (`String`,
 `Vec`, library handles, values with a `% Drop` of their own) are dropped
 after it returns, as a Rust `Drop`'s fields are. A field the impl
-released by hand is emptied and skipped. A raw `s` field of a `Drop` type
-belongs to the impl alone. A function a `Drop` impl hands its receiver to
-(a disposer) never drops that parameter itself.
+released by hand is emptied and skipped, and one it replaces releases the
+value it held. A raw `s` field of a `Drop` type belongs to the impl alone.
+A function a `Drop` impl hands its receiver to (a disposer) drops that
+parameter by its drop glue — the fields, never the impl again — whether
+the value reached it from the impl or straight from its owner. A closure
+defined inside an impl is its own function, with no receiver to drop.
+
+A destructor that panics is not run again by the unwind: a value leaves
+the panic journal before its destructor runs, and while the destructor
+runs its receiver's slot is journaled for the drop glue, so a panic inside
+it still releases the fields the receiver holds (§7.2).
 
 A `% Drop` type is dropped by its impl wherever it lives: a local, a
 `Vec` element, a struct field. A struct holding one is move-only and gets
@@ -1011,6 +1034,14 @@ non-generic struct with `S_drop sink S x` is one too: `Mutex`, `Cond`
 and `Semaphore` are each one reference-counted object, and every copy is
 the same lock. A program's own `% Drop` impl for an instance wins over
 the library's.
+
+A drop hook is its receiver's destructor, as a `% Drop` impl is: the
+receiver is never dropped again on the way out of the hook (that would
+run the hook again), and its fields are, once the hook returns — so a
+hook that only observes the value (logging, counting) needs nothing more,
+and one over a counted block gives its receiver up with `mem_forget` in an
+`unsafe` hook. A program's own handle whose hook is `unsafe` is sealed:
+its literals and field writes are raw memory too (§6.4).
 
 **Raw memory reached from an `unsafe` structure.** A struct behind a
 `nurl_alloc` pointer is not dropped by the compiler. A parameter stored

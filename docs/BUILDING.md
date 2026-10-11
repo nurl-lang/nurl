@@ -339,7 +339,7 @@ Controls:
 
 | | |
 |---|---|
-| `NURL_LTO=full` | one full-LTO module, nothing cached — with `NURL_SPLIT=0`, the maximal-inlining release build. |
+| `NURL_LTO=full` | one full-LTO module, nothing cached. Slower code than the default on Linux, not faster: `runtime.o` is ThinLTO bitcode, which a full-LTO link optimises apart from the program, so no runtime function inlines into it (`json_parse`: 6.9% more instructions). |
 | `NURL_CACHE=0` | ThinLTO still on, all three caches off. |
 | `NURL_CACHE_DIR=DIR` | move the caches (default `$XDG_CACHE_HOME/nurl`). |
 

@@ -53,7 +53,7 @@ $ `stdlib/core/rcbox.nu`
 
 unsafe @ TplSet_share TplSet h → TplSet { ^ @ TplSet { # s ( rcbox_share # i . h ctl ) } }
 
-@ TplSet_drop sink TplSet h → v {
+unsafe @ TplSet_drop sink TplSet h → v {
     ( mem_forget h )
     ( rcbox_release [TplSetImpl] # i . h ctl )
 }
@@ -147,7 +147,7 @@ unsafe @ tset_has TplSet t s name → b {
 // The render state's handle (private to this module).
 : TplR { s ctl }
 
-@ TplR_drop sink TplR h → v {
+unsafe @ TplR_drop sink TplR h → v {
     ( mem_forget h )
     ( rcbox_release [TplRImpl] # i . h ctl )
 }

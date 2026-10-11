@@ -60,7 +60,7 @@ $ `stdlib/core/rcbox.nu`
 
 unsafe @ MemTable_share MemTable h → MemTable { ^ @ MemTable { # s ( rcbox_share # i . h ctl ) } }
 
-@ MemTable_drop sink MemTable h → v {
+unsafe @ MemTable_drop sink MemTable h → v {
     ( mem_forget h )
     ( rcbox_release [MemTableImpl] # i . h ctl )
 }

@@ -60,7 +60,7 @@ $ `stdlib/core/rcbox.nu`
 
 unsafe @ DataSet_share DataSet h → DataSet { ^ @ DataSet { # s ( rcbox_share # i . h ctl ) } }
 
-@ DataSet_drop sink DataSet h → v {
+unsafe @ DataSet_drop sink DataSet h → v {
     ( mem_forget h )
     ( rcbox_release [DataSetImpl] # i . h ctl )
 }
@@ -116,7 +116,7 @@ unsafe @ data_l DataSet ds__h → i {
 
 unsafe @ NdfStream_share NdfStream h → NdfStream { ^ @ NdfStream { # s ( rcbox_share # i . h ctl ) } }
 
-@ NdfStream_drop sink NdfStream h → v {
+unsafe @ NdfStream_drop sink NdfStream h → v {
     ( mem_forget h )
     ( rcbox_release [NdfStreamImpl] # i . h ctl )
 }
@@ -276,7 +276,7 @@ unsafe @ __ndf_read_row * NdfStreamImpl st i idx ( Vec f ) x_out ( Vec f ) y_out
 
 unsafe @ DataLoader_share DataLoader h → DataLoader { ^ @ DataLoader { # s ( rcbox_share # i . h ctl ) } }
 
-@ DataLoader_drop sink DataLoader h → v {
+unsafe @ DataLoader_drop sink DataLoader h → v {
     ( mem_forget h )
     ( rcbox_release [DataLoaderImpl] # i . h ctl )
 }

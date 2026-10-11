@@ -77,7 +77,7 @@ $ `stdlib/core/rcbox.nu`
 
 unsafe @ GgufW_share GgufW h → GgufW { ^ @ GgufW { # s ( rcbox_share # i . h ctl ) } }
 
-@ GgufW_drop sink GgufW h → v {
+unsafe @ GgufW_drop sink GgufW h → v {
     ( mem_forget h )
     ( rcbox_release [GgufWImpl] # i . h ctl )
 }
@@ -424,7 +424,7 @@ unsafe @ gw_finish GgufW w__h → ( Vec u ) {
 
 unsafe @ GgufS_share GgufS h → GgufS { ^ @ GgufS { # s ( rcbox_share # i . h ctl ) } }
 
-@ GgufS_drop sink GgufS h → v {
+unsafe @ GgufS_drop sink GgufS h → v {
     ( mem_forget h )
     ( rcbox_release [GgufSImpl] # i . h ctl )
 }

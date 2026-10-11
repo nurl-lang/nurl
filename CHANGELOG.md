@@ -8,8 +8,82 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Every hole the 0.72.0 release review left open in the memory guarantee is
+closed: the 34 probes of `tools/fuzz/holes/open/` (now h145–h178) and one
+more found on the way (h179) are rejected or run clean under
+ASan/UBSan/LSan, and CI holds each of them — no hole is known
+(docs/MEMORY.md §6.2). None of the fixes asks a program to release
+anything by hand: a raw string a callee takes over is released by the
+callee, and a value a destructor gives up is still dropped by its glue.
+The compiler compiles itself in 4.0 % fewer instructions and ~7 % less
+CPU time than 0.72.0 on the same source, json_parse retires 3.8 % fewer
+instructions, and every other bench kernel the same or fewer
+(*Performance*).
+
+Code that calls `mem_forget`, `mem_take`, `mem_put_back` or the `rcbox`
+primitives — a library handle's drop hook, mostly — must now be `unsafe`,
+and 30 packages are updated for it (*Changed*).
+
+### Changed
+
+- **`mem_forget`, `mem_take`, `mem_put_back` and the `rcbox` primitives
+  (`rcbox_new`, `rcbox_zero`, `rcbox_share`, `rcbox_release`) are
+  `unsafe` to call**, as spec §3.3d always said. In safe code `mem_forget`
+  leaked what it forgot, `mem_take` claimed a borrowed field or element as
+  owned, `rcbox_new` parked a value nothing released and `rcbox_release`
+  freed whatever address it was given (h151–h160). A drop hook that gives
+  its receiver up (`unsafe @ T_drop sink T h → v { … ( mem_forget h ) }`)
+  is `unsafe` with them, and a program's own handle whose hook is `unsafe`
+  is sealed: its literals and field writes are raw memory too
+  (docs/MEMORY.md §6.4). Thirty packages mark such hooks, constructors and
+  accessors `unsafe`.
+- **A raw string (`s`) parameter of safe code is a `sink` only when it is
+  declared one**, never inferred. A function that hands its borrowed `s`
+  on to a consumer (`string_adopt`, another `sink s`) hands over a copy,
+  and its caller keeps, and later frees, its own string. A declared
+  `sink s` is the callee's own string, released on every way out unless
+  it moves on. A caller hands a `sink s` its own string (which leaves the
+  binding) or a copy of anything else — a literal, a view of a `String`, a
+  borrowed parameter, a field, a result a callee lent, or a result owned
+  on only some paths, decided per call at run time (docs/MEMORY.md §1).
+  `unsafe` code and the standard library manage a raw `sink s` by hand, as
+  before.
+- **Only the real standard library is trusted.** A source was compiled as
+  the trusted standard library — every safe-code check off — when its path
+  merely contained `/stdlib/`. Now only a file inside the tree `stdlib/`
+  imports resolve to is (the `stdlib` in the working directory, or
+  `$NURL_STDLIB/stdlib`, each recognised by its `core/vec.nu`; h178).
+
 ### Fixed
 
+- **The remaining known holes are closed** (probes h145–h179), each at
+  its root:
+  - *A raw string handed to a consumer* (h161–h170): a literal, a view, a
+    borrowed or closure parameter, or a result fresh on only some paths —
+    directly, through a method, a `%Trait` object or a `recover` — is
+    copied before `string_adopt` or a `sink s` takes it over (the rule
+    above); a `sink s` the callee only reads, or leaves in a parameter's
+    container, is released; a generic's `sink A` instantiated at `s` no
+    longer leaks.
+  - *A view leaving through a call's result* (h174–h177): `^ ( pick x )`,
+    or a closure or `Vec` a helper builds around a string it was lent. A
+    returned call result that may lend a released string is the caller's
+    own (the callee's string, or a copy), and a call's result holds views
+    of what the callee lends, stores or hands back inside it.
+  - *A view stored into what the caller holds* (h171–h173, h179): a `Vec`
+    parameter, an alias of one, a field of an `inout` struct or a field of
+    a struct that outlives the binding viewed may not keep a view of a
+    binding released here; a field store records the view.
+  - *Destructors* (h146–h150). A value leaves the panic journal before its
+    destructor runs, and its receiver's drop glue is journaled while it
+    runs, so a destructor that panics no longer runs again on the unwind
+    and still releases the fields. A field the destructor replaces
+    releases the value it held. A disposer drops its parameter by its drop
+    glue (the fields, never the impl again), whether the value came from
+    the impl or straight from its owner. A closure defined inside an impl
+    has no destructor context.
+  - *A closure value called with a fresh string* releases it after the
+    call (h145).
 - **Three of the 0.72.0 known memory holes are closed**, each at its root
   and at no run-time cost — the generated code of all 1 642 programs in
   the test corpus, bench, examples and packages is byte-identical to
@@ -36,6 +110,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     argument on to a `sink`* no longer double-frees: the kwargs path now
     runs the positional path's whole-module consumption rule (one shared
     helper, `mem_arg_consumption`). Probe h142.
+
+### Performance
+
+- **`nurl_free` inlines its NULL test.** Most releases are of NULL — a
+  slot whose value moved on — and each was a call into the runtime's one
+  shared test, whose branch no predictor can learn: ~8 % of a
+  self-compile's time. A module now carries `nurl_free` as a
+  `linkonce_odr alwaysinline` NULL test in front of the runtime's release
+  (`nurl_free_nonnull`), as it carries `nurl_peek`, so every program gets
+  it, with or without link-time optimisation. The compiler build.sh
+  installs had inlined no runtime function at all: a full `-flto` link
+  optimises the thin-bitcode runtime.o apart from the program. For the
+  same reason `NURL_LTO=full` is slower than nurl.sh's ThinLTO default,
+  not faster as its documentation said (json_parse: 6.9 % more
+  instructions); the comments in build.sh and nurl.sh now say so.
+- **The allocator's common paths call nothing.** `nurl_alloc`'s freelist
+  hit and `nurl_free`'s freelist push — the thread counted, the cache on,
+  glibc's chunk header vouched for — no longer go through the general
+  paths, which saved registers for calls they rarely make, and a release
+  inside a `recover` extent takes the same push after its journal walk.
+  The self-compile's allocator instructions fall by a quarter
+  (2 530 M → 1 905 M), json_parse's by enough for 3.8 % of the program.
+- The compiler reads its symbol-table integers without a string round
+  trip.
+
+Together, against 0.72.0 compiling the same source: 12 983 M → 12 460 M
+instructions (−4.0 %), 2.76 s → 2.57 s CPU (−7 %, median of nine runs).
 
 ## [0.72.0] — 2026-10-10
 

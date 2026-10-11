@@ -118,7 +118,7 @@ $ `stdlib/core/rcbox.nu`
 
 unsafe @ GcovObj_share GcovObj h → GcovObj { ^ @ GcovObj { # s ( rcbox_share # i . h ctl ) } }
 
-@ GcovObj_drop sink GcovObj h → v {
+unsafe @ GcovObj_drop sink GcovObj h → v {
     ( mem_forget h )
     ( rcbox_release [GcovObjImpl] # i . h ctl )
 }

@@ -876,10 +876,12 @@ fi
 # Scope: native Linux builds (GNU ld/gold load LLVMgold.so, and lld
 # accepts the same `-plugin-opt` spellings). The zig-cc cross paths and
 # Darwin's ld64 spell these flags differently and keep the plain
-# `-flto` behaviour for now. `NURL_LTO=full` opts a release build back
-# into single-module full LTO (marginally better cross-runtime-boundary
-# inlining on programs below the --split threshold); `NURL_CACHE=0`
-# disables the cache; `NURL_CACHE_DIR` moves it.
+# `-flto` behaviour for now. `NURL_LTO=full` opts back into a full-LTO
+# link — slower here, not faster: runtime.o is thin bitcode, which a
+# full-LTO link optimises apart from the program, so nothing of the
+# runtime inlines into it (bench/json_parse: 6.9% more instructions than
+# the thin default); `NURL_CACHE=0` disables the cache; `NURL_CACHE_DIR`
+# moves it.
 LTO_TUNE_FLAGS=""
 LTO_CACHED=""
 if [ -n "$LTO_FLAG" ] && [ "$USING_ZIG" != "1" ] && [ "$(uname -s)" = "Linux" ] \
@@ -948,11 +950,11 @@ fi
 # An LTO link is not optional: stdlib/runtime.o is compiled with
 # -flto=thin (build.sh) and therefore carries LLVM bitcode instead of
 # native code. The matching link-time flag here drives the LTO
-# pipeline, inlining every vec_data / nurl_peek / nurl_poke /
-# nurl_print across the runtime ↔ user-code boundary. Either flavour
-# does that (thin bitcode is valid input to both); which one is used
-# depends on the ThinLTO default above and whether the module was
-# split.
+# pipeline. Only the thin flavour inlines runtime functions (nurl_free,
+# nurl_alloc, nurl_print, …) across the runtime ↔ user-code boundary: a
+# full `-flto` link accepts the thin bitcode but optimises it apart from
+# the program. Which one is used depends on the ThinLTO default above
+# and whether the module was split.
 #
 # `-Wl,--as-needed` drops DT_NEEDED entries for any auto-linked library
 # the program does not actually reference a symbol from — so a program

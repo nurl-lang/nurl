@@ -408,7 +408,7 @@ $ `jpeg.nu`
 // ── Public entry ──────────────────────────────────────────────────────
 
 // subsamp: 0 = 4:4:4, 1 = 4:2:2, 2 = 4:2:0 (ignored for greyscale).
-@ jpeg_encode_sub Image im i quality i subsamp → ( Vec u ) {
+unsafe @ jpeg_encode_sub Image im i quality i subsamp → ( Vec u ) {
     : i W . im width
     : i H . im height
     ? || <= W 0 <= H 0 { ^ ( vec_new [u] ) } {}

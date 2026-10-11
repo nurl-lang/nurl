@@ -60,10 +60,10 @@ What is solid today:
   interprocedural/return escape, loop-carried double-frees, a release
   after storing into an owner, and iterator invalidation as hard errors without changing generated code.
   Since 0.71.0 every program accepted without an `unsafe` function of its
-  own is **memory-safe and leak-free**, apart from the open holes
-  [`docs/MEMORY.md`](docs/MEMORY.md) §6.2 lists (0.72.0 closed 0.71.0's
-  one, a `Slice` of a `Vec` — views are values — and its review found 37
-  more, `tools/fuzz/holes/open/`); `Rc` cycles are collected
+  own is **memory-safe and leak-free** ([`docs/MEMORY.md`](docs/MEMORY.md)
+  §6.2; 0.72.0 closed 0.71.0's one hole, a `Slice` of a `Vec` — views are
+  values — and the 37 its review found are closed since, each a probe in
+  `tools/fuzz/holes/` CI holds); `Rc` cycles are collected
   and thread-shared cycles are rejected at compile time.
   Since 0.44.0 **no rule depends on definition order**: every check that
   consults a per-function summary parks what it cannot answer and
@@ -243,8 +243,9 @@ A high-level map of what exists. Dates and per-feature detail are in
   the emitted IR, and the driver's toolchain probes, all under
   `~/.cache/nurl` — so an empty program links in 99 ms instead of 305
   and a warm rebuild costs less than the equivalent C compile
-  (`NURL_CACHE=0` opts out; `NURL_LTO=full` is still the
-  maximal-inlining release build). Both passes:
+  (`NURL_CACHE=0` opts out; `NURL_LTO=full` links one full-LTO module,
+  which on Linux inlines less than the default: the runtime is ThinLTO
+  bitcode). Both passes:
   [`docs/BUILDING.md`](docs/BUILDING.md).
 - Debugging: DWARF emission (`nurlc --g`) with `ptype`/`print` over structs.
 
@@ -525,19 +526,17 @@ new language features.
   surface, null strings, method calls asked of their impls (static and
   `dyn`), strings that own their buffer, and raw strings in values
   (MEMORY.md §2.13); docs/HARDENING_PLAN.md.)*
-- [ ] **Close the holes the 0.72.0 review found** — 37 safe programs the
-  compiler still accepts and that fault under the sanitizers, each a probe
-  in `tools/fuzz/holes/open/` (README there): raw strings handed to
-  `string_adopt` or a `sink s`, views leaving through a helper's return
-  value or into a container reached indirectly, `mem_forget` / `mem_take` /
-  `rcbox` callable from safe code, destructors, closure calls with a fresh
-  string, and trust by `/stdlib/` path. Three are closed (34 open): one
-  owner consumed twice or consumed and read in a call (h143, h144), and
-  keyword calls to a forward consumer (h142). First attempts at the
-  first and the `mem_forget` / `rcbox` classes are on the branches
-  `fix-sink-s-param-drop` and `fix-mem-forget-unsafe`; their reviews found
-  them not yet sound. A probe that a fix makes rejected or clean moves to
-  `tools/fuzz/holes/` and the CI gate.
+- [x] **Close the holes the 0.72.0 review found** — 37 safe programs the
+  compiler accepted and that faulted under the sanitizers: raw strings
+  handed to `string_adopt` or a `sink s`, views leaving through a helper's
+  return value or into a container reached indirectly, `mem_forget` /
+  `mem_take` / `rcbox` callable from safe code, destructors, closure calls
+  with a fresh string, and trust by `/stdlib/` path. All closed, each at
+  its root, and held by a probe in `tools/fuzz/holes/` (h142–h179; h179 a
+  view stored into a field of a struct that outlives it, found on the way).
+  In safe code only a declared `sink` takes a raw string over and its
+  callee releases it — a caller hands over its own string or a copy — so
+  nothing is released by hand.
 
 ### Evidence for the "LLM-native" thesis
 

@@ -809,7 +809,7 @@ $ `stdlib/core/slice.nu`
 
 unsafe @ ShState_share ShState h → ShState { ^ @ ShState { # s ( rcbox_share # i . h ctl ) } }
 
-@ ShState_drop sink ShState h → v {
+unsafe @ ShState_drop sink ShState h → v {
     ( mem_forget h )
     ( rcbox_release [ShStateImpl] # i . h ctl )
 }

@@ -135,7 +135,7 @@ $ `stdlib/core/slice.nu`
 
 unsafe @ GpuCtx_share GpuCtx h → GpuCtx { ^ @ GpuCtx { # s ( rcbox_share # i . h ctl ) } }
 
-@ GpuCtx_drop sink GpuCtx h → v {
+unsafe @ GpuCtx_drop sink GpuCtx h → v {
     ( mem_forget h )
     ( rcbox_release [GpuCtxImpl] # i . h ctl )
 }
@@ -164,7 +164,7 @@ unsafe @ GpuCtx_share GpuCtx h → GpuCtx { ^ @ GpuCtx { # s ( rcbox_share # i .
 
 unsafe @ GpuRes_share GpuRes h → GpuRes { ^ @ GpuRes { # s ( rcbox_share # i . h ctl ) } }
 
-@ GpuRes_drop sink GpuRes h → v {
+unsafe @ GpuRes_drop sink GpuRes h → v {
     ( mem_forget h )
     ( rcbox_release [GpuResImpl] # i . h ctl )
 }
@@ -195,7 +195,7 @@ unsafe @ __gpu_res Gpu g i kind i h → GpuRes {
     ^ @ GpuRes { # s ( rcbox_new [GpuResImpl] @ GpuResImpl { kind h __gpu_backend ( GpuCtx_share . g own ) } ) }
 }
 
-@ __gpu_nores → GpuRes { ^ @ GpuRes { # s 0 } }
+unsafe @ __gpu_nores → GpuRes { ^ @ GpuRes { # s 0 } }
 
 // ── device lifecycle ──────────────────────────────────────────────
 

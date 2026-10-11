@@ -190,6 +190,7 @@ static void nurl__xfree(void *p) {
 void *nurl_alloc(long long bytes);  /* §9a */
 void *nurl_closure_clone(void *env);  /* closure envs, see below */
 void  nurl_free(void *ptr);  /* §9a */
+void  nurl_free_nonnull(void *ptr);
 void  nurl_closure_drop(void *env);  /* closure envs, see nurl_closure_clone */
 char *nurl_strdup(const char *s);   /* §9a */
 static char *nurl__xstrdup(const char *s) {
@@ -2738,6 +2739,7 @@ static void nurl__sc_register(void) {
  * allocator (LD_PRELOAD), memory tagging or any other layout fails it and
  * keeps the library query. */
 #if defined(__GLIBC__) && (defined(__x86_64__) || defined(__aarch64__)) && !defined(__APPLE__)
+#  define NURL__SC_HDR_FAST 1
 static int nurl__sc_hdr = 0;
 static inline size_t nurl__sc_usable_fast(void *p) {
     if (__builtin_expect(nurl__sc_hdr, 1)) {
@@ -2832,11 +2834,44 @@ static inline int   nurl__sc_push(void *p)  { (void)p; return 0; }
 /* OOM aborts inside the checked wrappers at the top of this file (see
  * "OOM is fatal, loudly") — malloc/calloc here are already the checked
  * forms via the file-wide macros. */
+#if defined(NURL__SC_ENABLED) && defined(NURL__SC_HDR_FAST)
+/* The general allocation — the first of a thread, a size past the
+ * classes, the cache off — and a miss in the classes: out of line, so the
+ * hit below makes no call that would need its registers saved. */
+__attribute__((noinline))
+static void *nurl__alloc_general(long long bytes) {
+    nurl__actr_bump(&nurl__actr_slot()->alloc);
+    void *p = nurl__sc_pop((size_t)bytes);
+    return p ? p : malloc((size_t)bytes);
+}
+__attribute__((noinline))
+static void *nurl__alloc_miss(long long bytes) { return malloc((size_t)bytes); }
+NURL_TLS_FN void* nurl_alloc(long long bytes) {
+    struct nurl__actr *a = nurl__actr_self;
+    size_t n = (size_t)bytes;
+    int c = nurl__sc_floor_class(n);
+    if (__builtin_expect((a == NULL) | (c < 0) | (nurl__sc_on <= 0), 0)) return nurl__alloc_general(bytes);
+    nurl__actr_bump(&a->alloc);
+    void *p = nurl__sc_head[c];
+    if (p && ((size_t*)p)[1] >= n) {
+        nurl__sc_head[c] = *(void**)p;
+        nurl__sc_count[c]--;
+        return p;
+    }
+    if (c + 1 < NURL__SC_CLASSES && (p = nurl__sc_head[c + 1]) != NULL) {
+        nurl__sc_head[c + 1] = *(void**)p;
+        nurl__sc_count[c + 1]--;
+        return p;
+    }
+    return nurl__alloc_miss(bytes);
+}
+#else
 NURL_TLS_FN void* nurl_alloc(long long bytes) {
     nurl__actr_bump(&nurl__actr_slot()->alloc);
     void *p = nurl__sc_pop((size_t)bytes);
     return p ? p : malloc((size_t)bytes);
 }
+#endif
 NURL_TLS_FN void* nurl_zalloc(long long bytes) {
     nurl__actr_bump(&nurl__actr_slot()->alloc);
     void *p = nurl__sc_pop((size_t)bytes);
@@ -3363,16 +3398,68 @@ static int nurl__free_draining(void *ptr) {
     if (nurl__jrnl_cap) nurl__jrnl_forget_body(ptr);
     return nurl__drain_seen(ptr);
 }
-NURL_TLS_FN static void nurl__free_nonnull(void *ptr) {
-    if (nurl__jrnl_live) {
-        if (__builtin_expect(nurl__draining, 0)) { if (nurl__free_draining(ptr)) return; }
-        else nurl__jrnl_forget_body(ptr);
-    }
+/* The general free: the first of a thread, the cache off or not yet
+ * probed, a chunk header the probe did not vouch for. Out of line, so the
+ * common free below saves no register for it. */
+__attribute__((noinline))
+static void nurl__free_general(void *ptr) {
     nurl__actr_bump(&nurl__actr_slot()->freed);
     if (!nurl__sc_push(ptr)) free(ptr);
 }
+#if defined(NURL__SC_ENABLED) && defined(NURL__SC_HDR_FAST)
+/* The common free — the thread counted, the cache on, the chunk header
+ * readable — is a freelist push that calls nothing: its class from the
+ * size word before the block, and a block too big for the classes, or one
+ * past its class budget, handed straight to libc. 0 hands it to the
+ * general path. (The cache's invariants are sc_push's: this is that
+ * function with the usable-size query known to be the header read.) */
+static inline int nurl__free_fast(void *ptr) {
+    struct nurl__actr *a = nurl__actr_self;
+    if (__builtin_expect((a == NULL) | (nurl__sc_on <= 0) | (nurl__sc_hdr == 0)
+                         | (nurl__sc_registered == 0), 0)) return 0;
+    nurl__actr_bump(&a->freed);
+    /* volatile: the word lies before the object malloc returned. */
+    size_t h = *(volatile size_t *)((char *)ptr - sizeof(size_t));
+    size_t u = (h & ~(size_t)7) - sizeof(size_t);
+    int c = nurl__sc_floor_class(u);
+    if (((h & 2) != 0) | (c < 0) | (u < (1u << NURL__SC_MIN_SHIFT))
+        || nurl__sc_count[c] >= (1u << (NURL__SC_CLASS_BUDGET_SHIFT - (c + NURL__SC_MIN_SHIFT)))) {
+        free(ptr);
+        return 1;
+    }
+    *(void**)ptr = nurl__sc_head[c];
+    ((size_t*)ptr)[1] = u;
+    nurl__sc_head[c] = ptr;
+    nurl__sc_count[c]++;
+    return 1;
+}
+#else
+static inline int nurl__free_fast(void *ptr) { (void)ptr; return 0; }
+#endif
+/* A free with journal entries live (inside a recover extent): the
+ * journal's registration of `ptr` ends first. Out of line so the free with
+ * nothing journaled — every free of a program that never recovers — keeps
+ * the bucket walk, and the registers it needs, off its path. */
+NURL_TLS_FN static void nurl__free_journaled(void *ptr) {
+    if (__builtin_expect(nurl__draining, 0)) { if (nurl__free_draining(ptr)) return; }
+    else nurl__jrnl_forget_body(ptr);
+    if (!nurl__free_fast(ptr)) nurl__free_general(ptr);
+}
+NURL_TLS_FN static void nurl__free_nonnull(void *ptr) {
+    if (nurl__jrnl_live) { nurl__free_journaled(ptr); return; }
+    if (!nurl__free_fast(ptr)) nurl__free_general(ptr);
+}
 void nurl_free(void *ptr) {
     if (ptr && ptr != (void *)nurl__empty_str) nurl__free_nonnull(ptr);
+}
+/* nurl_free past its NULL test. A module carries nurl_free as an inline
+ * NULL test that calls this (emit_header in compiler/nurlc.nu), so the
+ * most common release — of NULL, a slot whose value moved on — is a
+ * branch predicted at its own call site instead of a call into one
+ * shared, unpredictable one: ~8% of a self-compile's time, with or
+ * without link-time optimisation. */
+void nurl_free_nonnull(void *ptr) {
+    if (ptr != (void *)nurl__empty_str) nurl__free_nonnull(ptr);
 }
 void  nurl_memcpy(void *dst, const void *src, long long bytes) {
     /* Zero bytes touch nothing — not even a null source (an empty or

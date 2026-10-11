@@ -2,7 +2,7 @@
 // of the value it read out of a container; an expression has no
 // binding to own it.
 
-@ main → i {
+unsafe @ main → i {
     ( mem_take ( string_from `x` ) )
     ^ 0
 }

@@ -65,7 +65,7 @@ $ `stdlib/core/rcbox.nu`
 
 unsafe @ StWriter_share StWriter h → StWriter { ^ @ StWriter { # s ( rcbox_share # i . h ctl ) } }
 
-@ StWriter_drop sink StWriter h → v {
+unsafe @ StWriter_drop sink StWriter h → v {
     ( mem_forget h )
     ( rcbox_release [StWriterImpl] # i . h ctl )
 }

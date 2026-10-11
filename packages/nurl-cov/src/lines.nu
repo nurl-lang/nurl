@@ -63,7 +63,7 @@ $ `stdlib/core/rcbox.nu`
 
 unsafe @ LineTab_share LineTab h → LineTab { ^ @ LineTab { # s ( rcbox_share # i . h ctl ) } }
 
-@ LineTab_drop sink LineTab h → v {
+unsafe @ LineTab_drop sink LineTab h → v {
     ( mem_forget h )
     ( rcbox_release [LineTabImpl] # i . h ctl )
 }

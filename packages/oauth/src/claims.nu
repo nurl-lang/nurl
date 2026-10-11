@@ -198,7 +198,7 @@ unsafe @ __cl_list_has ( Vec String ) list s want → b {
 
 unsafe @ OidcPolicy_share OidcPolicy h → OidcPolicy { ^ @ OidcPolicy { # s ( rcbox_share # i . h ctl ) } }
 
-@ OidcPolicy_drop sink OidcPolicy h → v {
+unsafe @ OidcPolicy_drop sink OidcPolicy h → v {
     ( mem_forget h )
     ( rcbox_release [OidcPolicyImpl] # i . h ctl )
 }

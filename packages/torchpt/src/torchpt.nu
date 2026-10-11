@@ -95,7 +95,7 @@ $ `stdlib/core/rcbox.nu`
 
 unsafe @ Pt_share Pt h → Pt { ^ @ Pt { # s ( rcbox_share # i . h ctl ) } }
 
-@ Pt_drop sink Pt h → v {
+unsafe @ Pt_drop sink Pt h → v {
     ( mem_forget h )
     ( rcbox_release [PtImpl] # i . h ctl )
 }
@@ -104,9 +104,9 @@ unsafe @ __Pt_ptr Pt h → *PtImpl { ^ ( rcbox_ptr [PtImpl] # i . h ctl ) }
 
 // A Pt that holds no checkpoint — for a slot that may be empty (a model
 // whose checkpoint is some other format). pt_is_open tells them apart.
-@ pt_none → Pt { ^ @ Pt { # s 0 } }
+unsafe @ pt_none → Pt { ^ @ Pt { # s 0 } }
 
-@ pt_is_open Pt p → b { ^ != 0 # i . p ctl }
+unsafe @ pt_is_open Pt p → b { ^ != 0 # i . p ctl }
 
 @ _pt_geti ( Vec i ) v i k → i { ?? ( vec_get [i] v k ) { T x → ^ x F → ^ 0 } }
 

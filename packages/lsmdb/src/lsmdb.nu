@@ -73,7 +73,7 @@ $ `stdlib/core/rcbox.nu`
 
 unsafe @ Lsm_share Lsm h → Lsm { ^ @ Lsm { # s ( rcbox_share # i . h ctl ) } }
 
-@ Lsm_drop sink Lsm h → v {
+unsafe @ Lsm_drop sink Lsm h → v {
     ( mem_forget h )
     ( rcbox_release [LsmImpl] # i . h ctl )
 }
@@ -422,7 +422,7 @@ unsafe @ __lsm_get_at * LsmImpl db ( Vec u ) key i snap → !LsmGet String {
 
 unsafe @ LsmIter_share LsmIter h → LsmIter { ^ @ LsmIter { # s ( rcbox_share # i . h ctl ) } }
 
-@ LsmIter_drop sink LsmIter h → v {
+unsafe @ LsmIter_drop sink LsmIter h → v {
     ( mem_forget h )
     ( rcbox_release [LsmIterImpl] # i . h ctl )
 }

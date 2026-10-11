@@ -31,7 +31,7 @@ $ `stdlib/core/rcbox.nu`
 // copy releases it (its write mutex and channel name with it).
 : PptMember { s ctl }
 
-@ PptMember_drop sink PptMember h → v {
+unsafe @ PptMember_drop sink PptMember h → v {
     ( mem_forget h )
     ( rcbox_release [PptMemberImpl] # i . h ctl )
 }

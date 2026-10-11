@@ -1198,7 +1198,7 @@ unsafe @ __mp3_format inout Mp3 m → v {
 // Samples in, an MP3 file out. `samples` are f32 in [-1, 1] and interleaved
 // when `channels` is 2; nothing is resampled and nothing is normalised, so
 // what goes in is what a decoder gets back.
-@ mp3_encode ( Vec f ) samples i rate i channels i bitrate → !( Vec u ) String {
+unsafe @ mp3_encode ( Vec f ) samples i rate i channels i bitrate → !( Vec u ) String {
     ?? ( __mp3_new rate channels bitrate ) {
         T m0 → {
             : ~ Mp3 m m0

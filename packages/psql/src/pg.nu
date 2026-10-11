@@ -95,7 +95,7 @@ $ `stdlib/core/slice.nu`
 
 unsafe @ PgConn_share PgConn h → PgConn { ^ @ PgConn { # s ( rcbox_share # i . h ctl ) } }
 
-@ PgConn_drop sink PgConn h → v {
+unsafe @ PgConn_drop sink PgConn h → v {
     ( mem_forget h )
     ( rcbox_release [PgConnImpl] # i . h ctl )
 }

@@ -359,7 +359,7 @@ $ `stdlib/core/slice.nu`
 
 unsafe @ Interp_share Interp h → Interp { ^ @ Interp { # s ( rcbox_share # i . h ctl ) } }
 
-@ Interp_drop sink Interp h → v {
+unsafe @ Interp_drop sink Interp h → v {
     ( mem_forget h )
     ( rcbox_release [InterpImpl] # i . h ctl )
 }

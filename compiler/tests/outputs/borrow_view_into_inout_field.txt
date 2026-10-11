@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/borrow_view_into_inout_field.nu:9: error: 'r' is storage the caller holds (a parameter, or what one points into), and this stores into it a view of 'x', which is released when this function returns (or its scope ends): the caller would read freed memory through 'r'. Store a value that owns its data — a String (string_from) in a ( Vec String ) or a String field — or take 'x' as a parameter so the caller owns what is viewed.
+@ setl inout Rec r → v { : s x ( nurl_str_cat `ef` `gh` ) = . r name x }
+compiler/tests/borrow_view_into_inout_field.nu:16: error: 'r' holds a view of 'y' (one stored into it, or captured by it), and 'y' ended at line 15 — it was given a new value. Using 'r' now would read freed memory. End 'y' only after 'r' is done, or have 'r' hold a copy that owns its data (string_from, slice_to_vec).
+    ( nurl_println . r name )
+error: compilation aborted — 2 borrow-checker violations (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

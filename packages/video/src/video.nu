@@ -115,7 +115,7 @@ $ `stdlib/core/slice.nu`
 
 unsafe @ VidAvi_share VidAvi h → VidAvi { ^ @ VidAvi { # s ( rcbox_share # i . h ctl ) } }
 
-@ VidAvi_drop sink VidAvi h → v {
+unsafe @ VidAvi_drop sink VidAvi h → v {
     ( mem_forget h )
     ( rcbox_release [VidAviImpl] # i . h ctl )
 }

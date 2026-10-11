@@ -45,7 +45,7 @@ $ `stdlib/core/rcbox.nu`
 
 unsafe @ Camera_share Camera h → Camera { ^ @ Camera { # s ( rcbox_share # i . h ctl ) } }
 
-@ Camera_drop sink Camera h → v { ( mem_forget h ) ( rcbox_release [CameraImpl] # i . h ctl ) }
+unsafe @ Camera_drop sink Camera h → v { ( mem_forget h ) ( rcbox_release [CameraImpl] # i . h ctl ) }
 
 unsafe @ __Camera_ptr Camera h → *CameraImpl { ^ ( rcbox_ptr [CameraImpl] # i . h ctl ) }
 

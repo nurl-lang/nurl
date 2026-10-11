@@ -76,7 +76,7 @@ $ `stdlib/core/rcbox.nu`
 
 unsafe @ HttpApp_share HttpApp h → HttpApp { ^ @ HttpApp { # s ( rcbox_share # i . h ctl ) } }
 
-@ HttpApp_drop sink HttpApp h → v {
+unsafe @ HttpApp_drop sink HttpApp h → v {
     ( mem_forget h )
     ( rcbox_release [HttpAppImpl] # i . h ctl )
 }

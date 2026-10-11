@@ -221,7 +221,7 @@ $ `stdlib/core/slice.nu`
 // Parse one reply from buf starting at `start`. On Incomplete (status 1)
 // the returned reply holds a (partial) arena; it is dropped with the
 // RespParse.
-@ resp_parse ( Vec u ) buf i start → RespParse {
+unsafe @ resp_parse ( Vec u ) buf i start → RespParse {
     : ~ RespBuilder b @ RespBuilder { ( vec_new [RNode] ) 0 start }
     : i root ( __resp_val b buf ( vec_len [u] buf ) )
     : ( Vec RNode ) nodes . b nodes

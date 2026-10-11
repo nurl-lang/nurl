@@ -155,7 +155,7 @@ unsafe @ wc_skip inout Wc c i n → v { = . c pos + . c pos n }
 
 unsafe @ Module_share Module h → Module { ^ @ Module { # s ( rcbox_share # i . h ctl ) } }
 
-@ Module_drop sink Module h → v {
+unsafe @ Module_drop sink Module h → v {
     ( mem_forget h )
     ( rcbox_release [ModuleImpl] # i . h ctl )
 }

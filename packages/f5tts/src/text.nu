@@ -46,7 +46,7 @@ $ `stdlib/core/slice.nu`
 
 unsafe @ F5Vocab_share F5Vocab h → F5Vocab { ^ @ F5Vocab { # s ( rcbox_share # i . h ctl ) } }
 
-@ F5Vocab_drop sink F5Vocab h → v {
+unsafe @ F5Vocab_drop sink F5Vocab h → v {
     ( mem_forget h )
     ( rcbox_release [F5VocabImpl] # i . h ctl )
 }

@@ -72,7 +72,7 @@ $ `stdlib/core/rcbox.nu`
 
 unsafe @ Roster_share Roster h → Roster { ^ @ Roster { # s ( rcbox_share # i . h ctl ) } }
 
-@ Roster_drop sink Roster h → v {
+unsafe @ Roster_drop sink Roster h → v {
     ( mem_forget h )
     ( rcbox_release [RosterImpl] # i . h ctl )
 }

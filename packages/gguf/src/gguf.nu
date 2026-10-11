@@ -193,7 +193,7 @@ $ `stdlib/core/rcbox.nu`
 
 unsafe @ Gguf_share Gguf h → Gguf { ^ @ Gguf { # s ( rcbox_share # i . h ctl ) } }
 
-@ Gguf_drop sink Gguf h → v {
+unsafe @ Gguf_drop sink Gguf h → v {
     ( mem_forget h )
     ( rcbox_release [GgufImpl] # i . h ctl )
 }
@@ -202,9 +202,9 @@ unsafe @ __Gguf_ptr Gguf h → *GgufImpl { ^ ( rcbox_ptr [GgufImpl] # i . h ctl 
 
 // A Gguf that holds no file — for a slot that may be empty (a model kept
 // open across a streamed merge, or none). gguf_is_open tells them apart.
-@ gguf_none → Gguf { ^ @ Gguf { # s 0 } }
+unsafe @ gguf_none → Gguf { ^ @ Gguf { # s 0 } }
 
-@ gguf_is_open Gguf g → b { ^ != 0 # i . g ctl }
+unsafe @ gguf_is_open Gguf g → b { ^ != 0 # i . g ctl }
 
 // ── bounded little-endian cursor over the raw mapping ───────────────
 // Every read checks the remaining byte budget first; the first

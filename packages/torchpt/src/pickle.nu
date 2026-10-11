@@ -163,7 +163,7 @@ $ `stdlib/core/slice.nu`
 
 unsafe @ Pk_share Pk h → Pk { ^ @ Pk { # s ( rcbox_share # i . h ctl ) } }
 
-@ Pk_drop sink Pk h → v {
+unsafe @ Pk_drop sink Pk h → v {
     ( mem_forget h )
     ( rcbox_release [PkImpl] # i . h ctl )
 }

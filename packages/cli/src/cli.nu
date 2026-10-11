@@ -91,7 +91,7 @@ $ `stdlib/core/rcbox.nu`
 
 unsafe @ Cli_share Cli h → Cli { ^ @ Cli { # s ( rcbox_share # i . h ctl ) } }
 
-@ Cli_drop sink Cli h → v {
+unsafe @ Cli_drop sink Cli h → v {
     ( mem_forget h )
     ( rcbox_release [CliImpl] # i . h ctl )
 }

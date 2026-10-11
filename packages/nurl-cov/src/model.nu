@@ -57,7 +57,7 @@ $ `stdlib/core/slice.nu`
 
 unsafe @ Cov_share Cov h → Cov { ^ @ Cov { # s ( rcbox_share # i . h ctl ) } }
 
-@ Cov_drop sink Cov h → v {
+unsafe @ Cov_drop sink Cov h → v {
     ( mem_forget h )
     ( rcbox_release [CovImpl] # i . h ctl )
 }

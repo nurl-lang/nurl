@@ -352,7 +352,7 @@ $ `write.nu`
 // Builds the reference sample: every KV type, and one tensor per
 // dequantisable ggml type with hand-picked edge values (f16 subnormal,
 // ±inf, NaN, negative quants).
-@ __st_build → GgufW {
+unsafe @ __st_build → GgufW {
     : ~ GgufW w @ GgufW { # s 0 }
     ?? ( gw_new 32 ) {
         T w2 → { = w w2 }
@@ -442,7 +442,7 @@ unsafe @ __st_vec_eq ( Vec f ) got * f exp i n → b {
 // the gws_* API, one payload deliberately delivered in ragged chunks.
 // Success = T; the caller byte-compares the result against the
 // in-memory writer's file — the two paths must agree to the byte.
-@ __st_stream_twin s outpath → b {
+unsafe @ __st_stream_twin s outpath → b {
     : ~ GgufS sw @ GgufS { # s 0 }
     ?? ( gws_create outpath 32 ) {
         T sp → { = sw sp }

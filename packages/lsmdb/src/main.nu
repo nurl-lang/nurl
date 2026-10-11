@@ -337,9 +337,8 @@ Commands:
     } {}
 
     : !Lsm String opened ( lsm_open ( string_data dirstr ) )
-    : ~ Lsm db @ Lsm { # s 0 }
-    ?? opened {
-        T h → { = db h }
+    : Lsm db ?? opened {
+        T h → h
         F e → {
             ( __die ( string_data e ) )
             ^ 1

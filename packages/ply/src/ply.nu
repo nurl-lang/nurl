@@ -53,7 +53,7 @@ $ `stdlib/core/rcbox.nu`
 
 unsafe @ PlyW_share PlyW h → PlyW { ^ @ PlyW { # s ( rcbox_share # i . h ctl ) } }
 
-@ PlyW_drop sink PlyW h → v {
+unsafe @ PlyW_drop sink PlyW h → v {
     ( mem_forget h )
     ( rcbox_release [PlyWImpl] # i . h ctl )
 }

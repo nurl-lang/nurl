@@ -14,9 +14,9 @@ allocation and capacity arithmetic").
 > below the baseline.
 >
 > *2026-10-10:* the 0.72.0 release review found 37 more safe programs that
-> the compiler accepts and that fault (`tools/fuzz/holes/open/`), so
-> MEMORY.md §6.2 lists open holes again; this plan's own probes (h32–h141)
-> stay closed.
+> the compiler accepted and that faulted; all are closed since (h142–h179),
+> and MEMORY.md §6.2 again states the guarantee with no exception; this
+> plan's own probes (h32–h141) stay closed.
 
 ## Status (2026-10-08): done
 

@@ -27,7 +27,7 @@ unsafe @ live → i { ^ - ( nurl_alloc_count ) ( nurl_free_count ) }
 
 @ __put inout E e i b → v { ( vec_push [u] . e out # u b ) }
 
-@ enc i k → ( Vec u ) {
+unsafe @ enc i k → ( Vec u ) {
     ?? ( mk k ) {
         T e0 → {
             : ~ E e e0

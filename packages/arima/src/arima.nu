@@ -1842,7 +1842,7 @@ unsafe @ __ar_bfgs * ArimaObj o ( Vec f ) raw → ArimaOpt {
 
 unsafe @ ArimaModel_share ArimaModel h → ArimaModel { ^ @ ArimaModel { # s ( rcbox_share # i . h ctl ) } }
 
-@ ArimaModel_drop sink ArimaModel h → v {
+unsafe @ ArimaModel_drop sink ArimaModel h → v {
     ( mem_forget h )
     ( rcbox_release [ArimaModelImpl] # i . h ctl )
 }

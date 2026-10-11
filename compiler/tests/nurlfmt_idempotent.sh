@@ -136,12 +136,29 @@ for rel in "${FILES[@]}"; do
         SKIPPED_IR=$((SKIPPED_IR + 1))
         continue
     fi
-    # The formatted copy keeps its original path under $TMPDIR: whether a
-    # file is the standard library (trusted to use raw memory outside
-    # `unsafe`) is decided by its path.
+    # The formatted copy keeps its original path under $TMPDIR/tree. A
+    # standard-library file is trusted to use raw memory outside `unsafe`
+    # only inside a stdlib tree (the `stdlib/` its imports resolve into),
+    # so a stdlib file is compiled from inside a copy of that tree, with
+    # the formatted text standing in for the original.
     FMT_SRC="$TMPDIR/tree/$rel"
-    mkdir -p "$(dirname "$FMT_SRC")" && cp "$PASS1" "$FMT_SRC"
-    if ! "$NURLC" "$FMT_SRC" >"$IR_FMT"  2>/dev/null; then
+    if [[ "$rel" == stdlib/* ]]; then
+        if [[ ! -d "$TMPDIR/tree/stdlib" ]]; then
+            (cd "$ROOT_DIR" && find stdlib -name '*.nu' -print0 |
+                while IFS= read -r -d '' f; do
+                    mkdir -p "$TMPDIR/tree/$(dirname "$f")" && cp "$f" "$TMPDIR/tree/$f"
+                done)
+        fi
+        cp "$PASS1" "$FMT_SRC"
+        FMT_OK=1
+        (cd "$TMPDIR/tree" && "$NURLC" "$rel" >"$IR_FMT" 2>/dev/null) || FMT_OK=0
+        cp "$ROOT_DIR/$rel" "$FMT_SRC"
+    else
+        mkdir -p "$(dirname "$FMT_SRC")" && cp "$PASS1" "$FMT_SRC"
+        FMT_OK=1
+        "$NURLC" "$FMT_SRC" >"$IR_FMT" 2>/dev/null || FMT_OK=0
+    fi
+    if [[ $FMT_OK -eq 0 ]]; then
         FAIL_IR+=("$rel  (formatted source failed to compile)")
         continue
     fi

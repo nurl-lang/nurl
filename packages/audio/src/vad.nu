@@ -317,7 +317,7 @@ $ `stdlib/core/rcbox.nu`
 
 unsafe @ VadStream_share VadStream h → VadStream { ^ @ VadStream { # s ( rcbox_share # i . h ctl ) } }
 
-@ VadStream_drop sink VadStream h → v {
+unsafe @ VadStream_drop sink VadStream h → v {
     ( mem_forget h )
     ( rcbox_release [VadStreamImpl] # i . h ctl )
 }
