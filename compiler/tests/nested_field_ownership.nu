@@ -28,7 +28,7 @@ $ `stdlib/core/string.nu`
 
 @ reset inout Outer o → v { = . . o b name ( string_from `replacement name, long enough` ) }
 
-@ main → i {
+unsafe @ main → i {
     // moved into a sink: whole field, a Vec field, and through a binding
     : ~ Outer a ( fresh_outer )
     ( nurl_println_int ( eat . . a b name ) )

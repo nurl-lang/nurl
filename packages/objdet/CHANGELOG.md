@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.4.3] — 2026-10-11
+
+Requires onnx 0.11, whose `rt_none` is gone (an `Engine` is always an
+engine), and so NURL 0.73.0. Nothing in objdet changed.
+
 ## [0.4.2] — 2026-10-09
 
 Requires NURL 0.72.0, which draws the raw-memory boundary at every call:

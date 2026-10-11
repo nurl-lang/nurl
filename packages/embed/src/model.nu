@@ -49,7 +49,7 @@ $ `deps/gpu/src/gpu.nu`
 $ `deps/gpukit/src/devops.nu`
 $ `deps/safetensor/src/safetensor.nu`
 $ `deps/tokenizer/src/unigram.nu`
-$ `stdlib/core/rcbox.nu`
+$ `stdlib/std/arc.nu`
 
 // pooling modes
 : i EM_POOL_CLS 0
@@ -110,18 +110,15 @@ $ `stdlib/core/rcbox.nu`
     ( Vec GpuCopy ) up_q  // every tensor's upload, sent as ONE batch
 }
 
-// An Embed is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// An Embed is a handle on its state in an Arc (stdlib/std/arc.nu):
 // every copy is the same engine, and the last owner releases it.
-: Embed { s ctl }
+: Embed { ( Arc EmbedImpl ) a }
 
-unsafe @ Embed_share Embed h → Embed { ^ @ Embed { # s ( rcbox_share # i . h ctl ) } }
+@ Embed_share Embed h → Embed { ^ @ Embed { ( arc_clone [EmbedImpl] . h a ) } }
 
-@ Embed_drop sink Embed h → v {
-    ( mem_forget h )
-    ( rcbox_release [EmbedImpl] # i . h ctl )
-}
+@ Embed_drop sink Embed h → v {}
 
-unsafe @ __Embed_ptr Embed h → *EmbedImpl { ^ ( rcbox_ptr [EmbedImpl] # i . h ctl ) }
+unsafe @ __Embed_ptr Embed h → *EmbedImpl { ^ ( arc_ptr [EmbedImpl] . h a ) }
 
 @ __em_err s msg → !Embed String {
     ^ @ !Embed String { F ( string_from msg ) }
@@ -239,7 +236,7 @@ unsafe @ __em_up_layer * EmbedImpl e St s2 i layer s suffix → GkBuf {
 unsafe @ embed_open_dev s dir i gpu → !Embed String {
     // zeroed: every handle field starts as the null handle, so an early
     // return drops a half-built engine cleanly
-    : Embed h @ Embed { # s ( rcbox_zero [EmbedImpl] ) }
+    : Embed h @ Embed { ( arc_zero [EmbedImpl] ) }
     : *EmbedImpl e ( __Embed_ptr h )
     = . e ok T
     = . e has_tok F
@@ -404,7 +401,7 @@ unsafe @ __em_unload * EmbedImpl e → v {
 unsafe @ __em_drop_kit * EmbedImpl e → v {
     : GpuKit old . e kit
     ( mem_take old )
-    = . e kit @ GpuKit { # s 0 }
+    = . e kit ( gk_none )
 }
 
 // Bring the weights back after embed_unload. F carries the loader's

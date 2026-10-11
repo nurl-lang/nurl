@@ -452,7 +452,7 @@ unsafe @ bx_write_bytes ( Vec u ) buf → v {
 
 : ~ i g_bx_dispatch 0
 
-@ bx_dispatch_set sink ( @ i s ( Vec String ) ) f → v {
+unsafe @ bx_dispatch_set sink ( @ i s ( Vec String ) ) f → v {
     : i old g_bx_dispatch
     = g_bx_dispatch ( rcbox_new [BxDispatch] @ BxDispatch { f } )
     ( rcbox_release [BxDispatch] old )

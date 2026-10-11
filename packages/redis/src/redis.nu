@@ -28,7 +28,7 @@ $ `stdlib/std/bytes.nu`
 $ `stdlib/std/net.nu`
 $ `stdlib/std/tls.nu`
 $ `resp.nu`
-$ `stdlib/core/rcbox.nu`
+$ `stdlib/std/arc.nu`
 
 : | RedisErr {
     RedisConnFail  // could not open the TCP socket
@@ -114,16 +114,13 @@ $ `stdlib/core/rcbox.nu`
     ? == tls 1 { ( tls_close tc ) } { ( nurl_tcp_close raw ) }
 }
 
-: RedisConn { s ctl }
+: RedisConn { ( Arc RedisConnImpl ) a }
 
-unsafe @ RedisConn_share RedisConn h → RedisConn { ^ @ RedisConn { # s ( rcbox_share # i . h ctl ) } }
+@ RedisConn_share RedisConn h → RedisConn { ^ @ RedisConn { ( arc_clone [RedisConnImpl] . h a ) } }
 
-@ RedisConn_drop sink RedisConn h → v {
-    ( mem_forget h )
-    ( rcbox_release [RedisConnImpl] # i . h ctl )
-}
+@ RedisConn_drop sink RedisConn h → v {}
 
-unsafe @ __RedisConn_ptr RedisConn h → *RedisConnImpl { ^ ( rcbox_ptr [RedisConnImpl] # i . h ctl ) }
+unsafe @ __RedisConn_ptr RedisConn h → *RedisConnImpl { ^ ( arc_ptr [RedisConnImpl] . h a ) }
 
 // ── transport ─────────────────────────────────────────────────────
 
@@ -334,9 +331,8 @@ unsafe @ __redis_open s host i port i tlsmode s server_name → !RedisConn Redis
 
     // The handle first: a failed TLS upgrade lets go of it, and its drop
     // closes the socket.
-    : i c__box ( rcbox_zero [RedisConnImpl] )
-    : RedisConn h @ RedisConn { # s c__box }
-    : *RedisConnImpl c ( rcbox_ptr [RedisConnImpl] c__box )
+    : RedisConn h @ RedisConn { ( arc_zero [RedisConnImpl] ) }
+    : *RedisConnImpl c ( arc_ptr [RedisConnImpl] . h a )
     = . c tls 0
     = . c raw rawfd
     = . c tcp @ TcpConn { # s rawfd 0 0 }

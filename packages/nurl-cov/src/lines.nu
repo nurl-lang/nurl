@@ -25,7 +25,7 @@
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `gcov.nu`
-$ `stdlib/core/rcbox.nu`
+$ `stdlib/std/arc.nu`
 
 // Occurrence table stride: one row each time a block names a line.
 : i LOC_W 3
@@ -57,18 +57,15 @@ $ `stdlib/core/rcbox.nu`
     ( Vec i ) tail  // per line: last occurrence + 1
 }
 
-// A LineTab is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// A LineTab is a handle on its state in an Arc (stdlib/std/arc.nu):
 // every copy is the same state, and the last owner releases it.
-: LineTab { s ctl }
+: LineTab { ( Arc LineTabImpl ) a }
 
-unsafe @ LineTab_share LineTab h → LineTab { ^ @ LineTab { # s ( rcbox_share # i . h ctl ) } }
+@ LineTab_share LineTab h → LineTab { ^ @ LineTab { ( arc_clone [LineTabImpl] . h a ) } }
 
-@ LineTab_drop sink LineTab h → v {
-    ( mem_forget h )
-    ( rcbox_release [LineTabImpl] # i . h ctl )
-}
+@ LineTab_drop sink LineTab h → v {}
 
-unsafe @ __LineTab_ptr LineTab h → *LineTabImpl { ^ ( rcbox_ptr [LineTabImpl] # i . h ctl ) }
+unsafe @ __LineTab_ptr LineTab h → *LineTabImpl { ^ ( arc_ptr [LineTabImpl] . h a ) }
 
 // The table's columns, lent: they live as long as the LineTab does.
 unsafe @ linetab_maxline LineTab t__h → i {
@@ -131,8 +128,8 @@ unsafe @ linetab_fnrow LineTab t__h → ( Vec i ) {
 @ linetab_free sink LineTab t → v {}
 
 unsafe @ lines_build GcovObj o i src → LineTab {
-    : i t__box ( rcbox_zero [LineTabImpl] )
-    : *LineTabImpl t ( rcbox_ptr [LineTabImpl] t__box )
+    : ( Arc LineTabImpl ) t__box ( arc_zero [LineTabImpl] )
+    : *LineTabImpl t ( arc_ptr [LineTabImpl] t__box )
     = . t src src
     = . t maxline 0
     = . t exists ( vec_new [i] )
@@ -155,7 +152,7 @@ unsafe @ lines_build GcovObj o i src → LineTab {
         = fi + fi 1
     }
     ( __ln_resolve o t )
-    ^ @ LineTab { # s t__box }
+    ^ @ LineTab { t__box }
 }
 
 // Walk one function's block-line rows in BLOCK order, which is the order

@@ -45,7 +45,7 @@ $ `work.nu`
 $ `wasmkernel.nu`
 $ `buildwasm.nu`
 $ `cudakernel.nu`
-$ `stdlib/core/rcbox.nu`
+$ `stdlib/std/arc.nu`
 $ `stdlib/core/slice.nu`
 
 @ swarm_vnodes → i { ^ 64 }
@@ -82,21 +82,18 @@ $ `stdlib/core/slice.nu`
     i epoch  // bumps on every ring-membership change (block-seed invalidation)
 }
 
-// A Swarm is a handle on the node bundle in an rcbox (stdlib/core/rcbox.nu):
+// A Swarm is a handle on the node bundle in an Arc (stdlib/std/arc.nu):
 // every copy is the same node, and the last owner releases it — the
 // transport, both rings, the roster and the job node with it.
-: Swarm { s ctl }
+: Swarm { ( Arc SwarmImpl ) a }
 
-unsafe @ Swarm_share Swarm h → Swarm { ^ @ Swarm { # s ( rcbox_share # i . h ctl ) } }
+@ Swarm_share Swarm h → Swarm { ^ @ Swarm { ( arc_clone [SwarmImpl] . h a ) } }
 
-@ Swarm_drop sink Swarm h → v {
-    ( mem_forget h )
-    ( rcbox_release [SwarmImpl] # i . h ctl )
-}
+@ Swarm_drop sink Swarm h → v {}
 
-unsafe @ __Swarm_ptr Swarm h → *SwarmImpl { ^ ( rcbox_ptr [SwarmImpl] # i . h ctl ) }
+unsafe @ __Swarm_ptr Swarm h → *SwarmImpl { ^ ( arc_ptr [SwarmImpl] . h a ) }
 
-unsafe @ swarm_new RelayClient rc i id i role i caps s token → Swarm {
+@ swarm_new RelayClient rc i id i role i caps s token → Swarm {
     : ( Vec u ) me ( pk_from_id id )
     : Transport tr ( transport_open # s 0 rc 1 )
     : Ring ring ( ring_new )
@@ -114,7 +111,7 @@ unsafe @ swarm_new RelayClient rc i id i role i caps s token → Swarm {
         ( roster_add roster ring me id ( swarm_vnodes ) caps ( now_ms ) )
         ? == & caps ( cap_gpu ) ( cap_gpu ) { ( ring_add_member gring me ( swarm_vnodes ) ) } {}
     } {}
-    ^ @ Swarm { # s ( rcbox_new [SwarmImpl] @ SwarmImpl { tr ring gring roster jn me id role caps ( token_group_id token ) ( token_key token ) 0 } ) }
+    ^ @ Swarm { ( arc_new [SwarmImpl] @ SwarmImpl { tr ring gring roster jn me id role caps ( token_group_id token ) ( token_key token ) 0 } ) }
 }
 
 // Let go of `sw` now rather than at the end of its owner's scope (optional).
@@ -452,23 +449,20 @@ unsafe @ cluster_submit_wasm Swarm sw__h i lo i hi ( Vec u ) wasm i nchunks i ki
     i state  // 0 pending · 1 ok · 2 exhausted (failed after max attempts)
 }
 
-// A ChunkJob is a handle on one chunk's retry plan in an rcbox
-// (stdlib/core/rcbox.nu): the task's list and a re-dispatch share it, and the
+// A ChunkJob is a handle on one chunk's retry plan in an Arc
+// (stdlib/std/arc.nu): the task's list and a re-dispatch share it, and the
 // last owner releases it with its payload and owner key.
-: ChunkJob { s ctl }
+: ChunkJob { ( Arc ChunkJobImpl ) a }
 
-unsafe @ ChunkJob_share ChunkJob h → ChunkJob { ^ @ ChunkJob { # s ( rcbox_share # i . h ctl ) } }
+@ ChunkJob_share ChunkJob h → ChunkJob { ^ @ ChunkJob { ( arc_clone [ChunkJobImpl] . h a ) } }
 
-@ ChunkJob_drop sink ChunkJob h → v {
-    ( mem_forget h )
-    ( rcbox_release [ChunkJobImpl] # i . h ctl )
-}
+@ ChunkJob_drop sink ChunkJob h → v {}
 
-unsafe @ __ChunkJob_ptr ChunkJob h → *ChunkJobImpl { ^ ( rcbox_ptr [ChunkJobImpl] # i . h ctl ) }
+unsafe @ __ChunkJob_ptr ChunkJob h → *ChunkJobImpl { ^ ( arc_ptr [ChunkJobImpl] . h a ) }
 
 // A plan for chunk `idx`, just dispatched as task `tid` to `owner`.
-unsafe @ __cj_new i kind ( Vec u ) payload i idx i tid ( Vec u ) owner i now → ChunkJob {
-    ^ @ ChunkJob { # s ( rcbox_new [ChunkJobImpl] @ ChunkJobImpl { kind payload idx 0 tid owner 1 now 0 } ) }
+@ __cj_new i kind ( Vec u ) payload i idx i tid ( Vec u ) owner i now → ChunkJob {
+    ^ @ ChunkJob { ( arc_new [ChunkJobImpl] @ ChunkJobImpl { kind payload idx 0 tid owner 1 now 0 } ) }
 }
 
 // Ring key for chunk `idx` under retry `salt`. Both idx and salt are folded
@@ -605,7 +599,7 @@ unsafe @ __cj_redispatch Swarm sw__h * ChunkJobImpl cj → v {
         = probes + probes 1
     }
     : i tid ( job_submit jn . cj kind newkey . cj payload )
-    // The plan lives in its rcbox, outside any binding: the owner key it
+    // The plan lives in its Arc, outside any binding: the owner key it
     // replaces is released here, by hand, before the new one is stored.
     ( vec_free [u] . cj owner )
     = . cj owner newowner
@@ -1993,19 +1987,16 @@ unsafe @ __iterate_round Swarm sw__h ( Vec u ) wasm i S i A ( Vec i ) xparams i 
     ( Vec f ) prev
 }
 
-// An IterRun is a handle on a run in an rcbox (stdlib/core/rcbox.nu): the
+// An IterRun is a handle on a run in an Arc (stdlib/std/arc.nu): the
 // tool call that started it and the async registry share it, and the last
 // owner releases it.
-: IterRun { s ctl }
+: IterRun { ( Arc IterRunImpl ) a }
 
-unsafe @ IterRun_share IterRun h → IterRun { ^ @ IterRun { # s ( rcbox_share # i . h ctl ) } }
+@ IterRun_share IterRun h → IterRun { ^ @ IterRun { ( arc_clone [IterRunImpl] . h a ) } }
 
-@ IterRun_drop sink IterRun h → v {
-    ( mem_forget h )
-    ( rcbox_release [IterRunImpl] # i . h ctl )
-}
+@ IterRun_drop sink IterRun h → v {}
 
-unsafe @ __IterRun_ptr IterRun h → *IterRunImpl { ^ ( rcbox_ptr [IterRunImpl] # i . h ctl ) }
+unsafe @ __IterRun_ptr IterRun h → *IterRunImpl { ^ ( arc_ptr [IterRunImpl] . h a ) }
 
 // The async runs, kept for the program's lifetime (a finished run stays
 // pollable); held behind a raw global like McpState.
@@ -2026,21 +2017,21 @@ unsafe @ __iter_runs → *IterRuns {
     ^ # *IterRuns g_iter_runs
 }
 
-// The run with `id`, another owner of it; a null handle (ctl 0) if none.
-unsafe @ __iter_find i id → IterRun {
+// The run with `id`, another owner of it; F if none.
+unsafe @ __iter_find i id → ?IterRun {
     : *IterRuns rs ( __iter_runs )
     : ~ i k 0
     ~ < k ( vec_len [IterRun] . rs v ) {
         ?? ( vec_get [IterRun] . rs v k ) {
             T h → {
                 : *IterRunImpl r ( __IterRun_ptr h )
-                ? == . r id id { ^ ( IterRun_share h ) } {}
+                ? == . r id id { ^ @ ?IterRun { T ( IterRun_share h ) } } {}
             }
             F → {}
         }
         = k + k 1
     }
-    ^ @ IterRun { # s 0 }
+    ^ @ ?IterRun { F }
 }
 
 // One full round (accumulate + step), updating the run in place — the exact
@@ -2111,7 +2102,7 @@ unsafe @ __iter_advance Swarm sw__h * IterRunImpl r i budget_ns → v {
         = . r status ? > . r failed 0 2 1
         // A finished async run stays in the registry for its polls: its
         // modules are released here, early and by hand (the run lives in an
-        // rcbox, outside any binding), so it keeps only its small state.
+        // Arc, outside any binding), so it keeps only its small state.
         ( vec_free [u] . r wasm )
         = . r wasm ( vec_new [u] )
         ( vec_free [u] . r uwasm )
@@ -2261,7 +2252,7 @@ unsafe @ tool_iterate Json args → Json {
     : i ngpu ( roster_count_caps . sw roster ( cap_gpu ) )
     ? == ngpu 0 { ^ ( mcp_tool_result_error `no GPU workers in the cluster — start some with 'swarm-mcp --worker --gpu'` ) } {}
     // ── the run object (shared by the sync path and async polls) ──
-    : IterRun rh @ IterRun { # s ( rcbox_new [IterRunImpl] @ IterRunImpl {
+    : IterRun rh @ IterRun { ( arc_new [IterRunImpl] @ IterRunImpl {
             0 0 have_update wasm uwasm S A N rlo rhi dsid lr eps rounds 0 0 0 0 0.0 F
             xparams state ( vec_new [f] ) ( vec_new [f] ) } ) }
     : *IterRunImpl r ( __IterRun_ptr rh )
@@ -2286,8 +2277,10 @@ unsafe @ tool_iterate Json args → Json {
 // Advance an async iterate run by a bounded time slice and report it.
 unsafe @ tool_iterate_status Json args → Json {
     : i id ?? ( json_obj_get args `task_id` ) { T x → ?? ( json_num_as_i x ) { T v → v F → 0 } F → 0 }
-    : IterRun rh ( __iter_find id )
-    ? != 0 # i . rh ctl {} { ^ ( mcp_tool_result_error `no such iterate run — start one with compute_iterate {"async":true,...}` ) }
+    : IterRun rh ?? ( __iter_find id ) {
+        T x → x
+        F → { ^ ( mcp_tool_result_error `no such iterate run — start one with compute_iterate {"async":true,...}` ) }
+    }
     : *IterRunImpl r ( __IterRun_ptr rh )
     ? == . r status 0 {
         : ~ i budget_ms ?? ( json_obj_get args `budget_ms` ) { T x → ?? ( json_num_as_i x ) { T v → v F → 8000 } F → 8000 }
@@ -3175,7 +3168,7 @@ unsafe @ __mcp_task_augment s name Json args → ?Json {
 // server/discover and the --version banner all read this. It had
 // drifted to a hand-written 0.20.0 once already.
 
-@ sm_version → s { ^ `0.30.2` }
+@ sm_version → s { ^ ( pkg_version ) }
 
 @ sm_instructions → s {
     ^ `Distributed compute over a swarm cluster: submit expression / NURL / CUDA-C kernels over integer ranges or uploaded datasets, sample or histogram on GPU workers, and iterate (SGD or a custom update rule). Call swarm_help first — topic "start" for the workflow, "limits" for the envelope.`

@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.4.3] — 2026-10-11
+
+Requires NURL 0.73.0, which allows `mem_forget`, `mem_take` and the
+`rcbox` primitives only in `unsafe` code and reads a null library-handle
+literal as raw memory. The published 0.4.2 does not compile under it.
+
+### Changed
+
+- `Cli` keeps its state in an `Rc` (stdlib/std/rc.nu) instead of an
+  `rcbox`: the hooks are ordinary safe functions, and the state, which
+  holds closures that may capture the handle, is collected when such a
+  cycle is left unreachable.
+- 2 fewer functions are `unsafe` than in 0.4.2.
+
+### Fixed
+
+- A command handler that captures its own `Cli` no longer keeps it alive
+  for the rest of the process: the `Rc` cycle collector releases the pair.
+
 ## [0.4.2] — 2026-10-09
 
 Requires NURL 0.72.0, which draws the raw-memory boundary at every call:

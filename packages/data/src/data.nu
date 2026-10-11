@@ -38,7 +38,7 @@ $ `stdlib/std/rng.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/floatbits.nu`
-$ `stdlib/core/rcbox.nu`
+$ `stdlib/std/arc.nu`
 
 @ __data_gf ( Vec f ) v i k → f { ?? ( vec_get [f] v k ) { T x → x F → 0.0 } }
 
@@ -56,27 +56,23 @@ $ `stdlib/core/rcbox.nu`
 
 // A DataSet is a handle: every copy (each loader over it holds one) is the
 // same data, and the last owner releases it.
-: DataSet { s ctl }
+: DataSet { ( Arc DataSetImpl ) a }
 
-unsafe @ DataSet_share DataSet h → DataSet { ^ @ DataSet { # s ( rcbox_share # i . h ctl ) } }
+@ DataSet_share DataSet h → DataSet { ^ @ DataSet { ( arc_clone [DataSetImpl] . h a ) } }
 
-@ DataSet_drop sink DataSet h → v {
-    ( mem_forget h )
-    ( rcbox_release [DataSetImpl] # i . h ctl )
-}
+@ DataSet_drop sink DataSet h → v {}
 
-unsafe @ __DataSet_ptr DataSet h → *DataSetImpl { ^ ( rcbox_ptr [DataSetImpl] # i . h ctl ) }
+unsafe @ __DataSet_ptr DataSet h → *DataSetImpl { ^ ( arc_ptr [DataSetImpl] . h a ) }
 
 // Take ownership of x (n·d) and y (n·l).
 unsafe @ data_new sink ( Vec f ) x sink ( Vec f ) y i n i d i l → DataSet {
-    : i ds__box ( rcbox_zero [DataSetImpl] )
-    : *DataSetImpl ds ( rcbox_ptr [DataSetImpl] ds__box )
+    : ~ DataSetImpl ds @ DataSetImpl {}
     = . ds x x
     = . ds y y
     = . ds n n
     = . ds d d
     = . ds l l
-    ^ @ DataSet { # s ds__box }
+    ^ @ DataSet { ( arc_new [DataSetImpl] ds ) }
 }
 
 // Let go of `ds` now rather than at the end of its owner's scope.
@@ -112,16 +108,13 @@ unsafe @ data_l DataSet ds__h → i {
 // The open file is the stream's one raw resource: its last owner closes it.
 % Drop NdfStreamImpl { @ drop NdfStreamImpl st → v { ( file_close . st f ) } }
 
-: NdfStream { s ctl }
+: NdfStream { ( Arc NdfStreamImpl ) a }
 
-unsafe @ NdfStream_share NdfStream h → NdfStream { ^ @ NdfStream { # s ( rcbox_share # i . h ctl ) } }
+@ NdfStream_share NdfStream h → NdfStream { ^ @ NdfStream { ( arc_clone [NdfStreamImpl] . h a ) } }
 
-@ NdfStream_drop sink NdfStream h → v {
-    ( mem_forget h )
-    ( rcbox_release [NdfStreamImpl] # i . h ctl )
-}
+@ NdfStream_drop sink NdfStream h → v {}
 
-unsafe @ __NdfStream_ptr NdfStream h → *NdfStreamImpl { ^ ( rcbox_ptr [NdfStreamImpl] # i . h ctl ) }
+unsafe @ __NdfStream_ptr NdfStream h → *NdfStreamImpl { ^ ( arc_ptr [NdfStreamImpl] . h a ) }
 
 unsafe @ data_save_ndf s path DataSet ds__h → !v String {
     : *DataSetImpl ds ( __DataSet_ptr ds__h )
@@ -153,9 +146,8 @@ unsafe @ ndf_open s path → !NdfStream String {
     ?? fr { T h → { = fh h } F _ → { ^ @ !NdfStream String { F ( string_from `data: cannot open .ndf` ) } } }
     // The handle first: an early return below lets go of it, and its drop
     // closes the file.
-    : i st__box ( rcbox_zero [NdfStreamImpl] )
-    : NdfStream sh @ NdfStream { # s st__box }
-    : *NdfStreamImpl st ( rcbox_ptr [NdfStreamImpl] st__box )
+    : NdfStream sh @ NdfStream { ( arc_zero [NdfStreamImpl] ) }
+    : *NdfStreamImpl st ( arc_ptr [NdfStreamImpl] . sh a )
     = . st f fh
     : !( Vec u ) IoErr hr ( file_read_at fh 0 __NDF_HDR )
     ?? hr {
@@ -255,8 +247,8 @@ unsafe @ __ndf_read_row * NdfStreamImpl st i idx ( Vec f ) x_out ( Vec f ) y_out
 // ── loader ─────────────────────────────────────────────────────────────
 
 : DataLoaderImpl {
-    DataSet ds  // in-memory source (a null handle when streaming)
-    NdfStream st  // streaming source (a null handle when in-memory)
+    ? DataSet ds  // in-memory source (F when streaming)
+    ? NdfStream st  // streaming source (F when in-memory)
     i n  // examples in this shard
     i d
     i l
@@ -272,25 +264,21 @@ unsafe @ __ndf_read_row * NdfStreamImpl st i idx ( Vec f ) x_out ( Vec f ) y_out
 // A DataLoader is a handle: every copy is the same loader (one cursor
 // through the epoch), and the last owner releases it — and with it its
 // share of the dataset or stream it reads.
-: DataLoader { s ctl }
+: DataLoader { ( Arc DataLoaderImpl ) a }
 
-unsafe @ DataLoader_share DataLoader h → DataLoader { ^ @ DataLoader { # s ( rcbox_share # i . h ctl ) } }
+@ DataLoader_share DataLoader h → DataLoader { ^ @ DataLoader { ( arc_clone [DataLoaderImpl] . h a ) } }
 
-@ DataLoader_drop sink DataLoader h → v {
-    ( mem_forget h )
-    ( rcbox_release [DataLoaderImpl] # i . h ctl )
-}
+@ DataLoader_drop sink DataLoader h → v {}
 
-unsafe @ __DataLoader_ptr DataLoader h → *DataLoaderImpl { ^ ( rcbox_ptr [DataLoaderImpl] # i . h ctl ) }
+unsafe @ __DataLoader_ptr DataLoader h → *DataLoaderImpl { ^ ( arc_ptr [DataLoaderImpl] . h a ) }
 
-unsafe @ __dl_make DataSet ds NdfStream st i n i d i l i batch b drop_last i seed i nshards i shard → DataLoader {
+unsafe @ __dl_make ? DataSet ds ? NdfStream st i n i d i l i batch b drop_last i seed i nshards i shard → DataLoader {
     : i base ( __data_shard_base n nshards shard )
     : i end ( __data_shard_base n nshards + shard 1 )
     : i cnt - end base
-    : i dl__box ( rcbox_zero [DataLoaderImpl] )
-    : *DataLoaderImpl dl ( rcbox_ptr [DataLoaderImpl] dl__box )
-    = . dl ds ( DataSet_share ds )
-    = . dl st ( NdfStream_share st )
+    : ~ DataLoaderImpl dl @ DataLoaderImpl {}
+    = . dl ds ds
+    = . dl st st
     = . dl n cnt
     = . dl d d
     = . dl l l
@@ -305,29 +293,29 @@ unsafe @ __dl_make DataSet ds NdfStream st i n i d i l i batch b drop_last i see
     ~ < k cnt { ( vec_push [i] idx + base k ) = k + k 1 }
     = . dl idx idx
     ? . dl shuffle { ( __data_shuffle . dl idx seed ) } {}
-    ^ @ DataLoader { # s dl__box }
+    ^ @ DataLoader { ( arc_new [DataLoaderImpl] dl ) }
 }
 
 // Full in-memory dataset (one shard). seed <= 0 disables shuffling.
 unsafe @ dl_new DataSet ds__h i batch b drop_last i seed → DataLoader {
     : *DataSetImpl ds ( __DataSet_ptr ds__h )
-    ^ ( __dl_make ds__h @ NdfStream { # s 0 } . ds n . ds d . ds l batch drop_last seed 1 0 )
+    ^ ( __dl_make @ ?DataSet { T ( DataSet_share ds__h ) } @ ?NdfStream { F } . ds n . ds d . ds l batch drop_last seed 1 0 )
 }
 
 unsafe @ dl_new_shard DataSet ds__h i batch b drop_last i seed i nshards i shard → DataLoader {
     : *DataSetImpl ds ( __DataSet_ptr ds__h )
-    ^ ( __dl_make ds__h @ NdfStream { # s 0 } . ds n . ds d . ds l batch drop_last seed nshards shard )
+    ^ ( __dl_make @ ?DataSet { T ( DataSet_share ds__h ) } @ ?NdfStream { F } . ds n . ds d . ds l batch drop_last seed nshards shard )
 }
 
 // Streaming dataset (one shard).
 unsafe @ dl_stream NdfStream st__h i batch b drop_last i seed → DataLoader {
     : *NdfStreamImpl st ( __NdfStream_ptr st__h )
-    ^ ( __dl_make @ DataSet { # s 0 } st__h . st n . st d . st l batch drop_last seed 1 0 )
+    ^ ( __dl_make @ ?DataSet { F } @ ?NdfStream { T ( NdfStream_share st__h ) } . st n . st d . st l batch drop_last seed 1 0 )
 }
 
 unsafe @ dl_stream_shard NdfStream st__h i batch b drop_last i seed i nshards i shard → DataLoader {
     : *NdfStreamImpl st ( __NdfStream_ptr st__h )
-    ^ ( __dl_make @ DataSet { # s 0 } st__h . st n . st d . st l batch drop_last seed nshards shard )
+    ^ ( __dl_make @ ?DataSet { F } @ ?NdfStream { T ( NdfStream_share st__h ) } . st n . st d . st l batch drop_last seed nshards shard )
 }
 
 // Reshuffle for the next epoch and rewind. The permutation is a pure
@@ -365,9 +353,10 @@ unsafe @ dl_next DataLoader dl__h ( Vec f ) bx ( Vec f ) by → i {
     : i d . dl d
     : i l . dl l
     // The source, opened once per batch (only the one that is set is read).
-    : b inmem != 0 # i . . dl ds ctl
-    : *DataSetImpl ds ( __DataSet_ptr . dl ds )
-    : *NdfStreamImpl st ( __NdfStream_ptr . dl st )
+    : b inmem ?? . dl ds { T _x → T F → F }
+    // a null pointer for the source that is not set: never read
+    : *DataSetImpl ds ?? . dl ds { T h → ( __DataSet_ptr h ) F → # *DataSetImpl 0 }
+    : *NdfStreamImpl st ?? . dl st { T h → ( __NdfStream_ptr h ) F → # *NdfStreamImpl 0 }
     : ~ i k 0
     ~ < k rows {
         : i ex ( __data_gi . dl idx + . dl pos k )

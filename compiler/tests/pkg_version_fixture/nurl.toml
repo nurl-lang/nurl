@@ -1,0 +1,9 @@
+# The package compiler/tests/pkg_version.nu imports from: its source reads
+# its own version with ( pkg_version ).
+[package]
+name = "pkg-version-fixture"
+version = "3.14.15"   # the one place the number is written
+description = "Test fixture for ( pkg_version )."
+
+[dependencies]
+other = { path = "../other", version = "^9.9.9" }

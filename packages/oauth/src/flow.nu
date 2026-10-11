@@ -39,7 +39,7 @@ $ `errors.nu`
 $ `claims.nu`
 $ `pkce.nu`
 $ `provider.nu`
-$ `stdlib/core/rcbox.nu`
+$ `stdlib/std/arc.nu`
 
 // ── Client configuration ───────────────────────────────────────────
 
@@ -53,22 +53,18 @@ $ `stdlib/core/rcbox.nu`
     b basic_auth  // client_secret_basic instead of client_secret_post
 }
 
-// An OauthConfig is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// An OauthConfig is a handle on its state in an Arc (stdlib/std/arc.nu):
 // every copy is the same state, and the last owner releases it.
-: OauthConfig { s ctl }
+: OauthConfig { ( Arc OauthConfigImpl ) a }
 
-unsafe @ OauthConfig_share OauthConfig h → OauthConfig { ^ @ OauthConfig { # s ( rcbox_share # i . h ctl ) } }
+@ OauthConfig_share OauthConfig h → OauthConfig { ^ @ OauthConfig { ( arc_clone [OauthConfigImpl] . h a ) } }
 
-@ OauthConfig_drop sink OauthConfig h → v {
-    ( mem_forget h )
-    ( rcbox_release [OauthConfigImpl] # i . h ctl )
-}
+@ OauthConfig_drop sink OauthConfig h → v {}
 
-unsafe @ __OauthConfig_ptr OauthConfig h → *OauthConfigImpl { ^ ( rcbox_ptr [OauthConfigImpl] # i . h ctl ) }
+unsafe @ __OauthConfig_ptr OauthConfig h → *OauthConfigImpl { ^ ( arc_ptr [OauthConfigImpl] . h a ) }
 
 unsafe @ oauth_config_new s client_id s redirect_uri s scope → OauthConfig {
-    : i c__box ( rcbox_zero [OauthConfigImpl] )
-    : *OauthConfigImpl c ( rcbox_ptr [OauthConfigImpl] c__box )
+    : ~ OauthConfigImpl c @ OauthConfigImpl {}
     = . c client_id ( string_from client_id )
     = . c client_secret ( string_new )
     = . c redirect_uri ( string_from redirect_uri )
@@ -76,7 +72,7 @@ unsafe @ oauth_config_new s client_id s redirect_uri s scope → OauthConfig {
     = . c audience ( string_new )
     = . c prompt ( string_new )
     = . c basic_auth F
-    ^ @ OauthConfig { # s c__box }
+    ^ @ OauthConfig { ( arc_new [OauthConfigImpl] c ) }
 }
 
 unsafe @ oauth_config_set_secret OauthConfig c__h s secret → v {

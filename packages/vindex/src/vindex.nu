@@ -30,7 +30,7 @@ $ `stdlib/std/float.nu`
 $ `stdlib/std/rng.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/floatbits.nu`
-$ `stdlib/core/rcbox.nu`
+$ `stdlib/std/arc.nu`
 
 : i VX_COSINE 0
 
@@ -53,21 +53,17 @@ $ `stdlib/core/rcbox.nu`
     ( Vec i ) members  // n vector ids grouped by cluster
 }
 
-: VIndex { s ctl }
+: VIndex { ( Arc VIndexImpl ) a }
 
-unsafe @ VIndex_share VIndex h → VIndex { ^ @ VIndex { # s ( rcbox_share # i . h ctl ) } }
+@ VIndex_share VIndex h → VIndex { ^ @ VIndex { ( arc_clone [VIndexImpl] . h a ) } }
 
-@ VIndex_drop sink VIndex h → v {
-    ( mem_forget h )
-    ( rcbox_release [VIndexImpl] # i . h ctl )
-}
+@ VIndex_drop sink VIndex h → v {}
 
-unsafe @ __VIndex_ptr VIndex h → *VIndexImpl { ^ ( rcbox_ptr [VIndexImpl] # i . h ctl ) }
+unsafe @ __VIndex_ptr VIndex h → *VIndexImpl { ^ ( arc_ptr [VIndexImpl] . h a ) }
 
 // The index built from its parts, as a handle.
 unsafe @ __vx_make sink ( Vec f ) data sink ( Vec f ) nrm i n i dim i metric i nlist sink ( Vec f ) cent sink ( Vec f ) cnrm sink ( Vec i ) loff sink ( Vec i ) members → VIndex {
-    : i idx__box ( rcbox_zero [VIndexImpl] )
-    : *VIndexImpl idx ( rcbox_ptr [VIndexImpl] idx__box )
+    : ~ VIndexImpl idx @ VIndexImpl {}
     = . idx data data
     = . idx norm nrm
     = . idx n n
@@ -78,7 +74,7 @@ unsafe @ __vx_make sink ( Vec f ) data sink ( Vec f ) nrm i n i dim i metric i n
     = . idx cnorm cnrm
     = . idx list_off loff
     = . idx members members
-    ^ @ VIndex { # s idx__box }
+    ^ @ VIndex { ( arc_new [VIndexImpl] idx ) }
 }
 
 // L2 norm of the dim-vector at data[off..].

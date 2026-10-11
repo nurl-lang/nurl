@@ -13,7 +13,7 @@
 // Tensors are N-D (shape vector); the dense path reads dims 0,1 as M,K and
 // the conv path reads NCHW from dims 1,2,3 (batch N is assumed 1).
 //
-// Memory: an Engine is a handle (an rcbox) — every copy is the same engine,
+// Memory: an Engine is a handle (an Arc) — every copy is the same engine,
 // and its last owner releases every device block it allocated and the
 // device; rt_reset lets a run's blocks go early. Nothing is freed by hand
 // (rt_close is an optional early release). The graph a run is given is
@@ -24,7 +24,7 @@ $ `stdlib/core/string.nu`
 $ `deps/gpu/src/gpu.nu`
 $ `deps/gpukit/src/devops.nu`
 $ `model.nu`
-$ `stdlib/core/rcbox.nu`
+$ `stdlib/std/arc.nu`
 
 // A device-resident tensor: name, CUdeviceptr (i64), shape, element count.
 : RTensor { String name i dptr ( Vec i ) shape i nelem }
@@ -49,22 +49,19 @@ $ `stdlib/core/rcbox.nu`
     ( Vec GpuBuffer ) owned
 }
 
-// An Engine is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// An Engine is a handle on its state in an Arc (stdlib/std/arc.nu):
 // every copy is the same engine, and the last owner releases it — every
 // device block it allocated, and the device.
-: Engine { s ctl }
+: Engine { ( Arc EngineImpl ) a }
 
-unsafe @ Engine_share Engine h → Engine { ^ @ Engine { # s ( rcbox_share # i . h ctl ) } }
+@ Engine_share Engine h → Engine { ^ @ Engine { ( arc_clone [EngineImpl] . h a ) } }
 
-@ Engine_drop sink Engine h → v {
-    ( mem_forget h )
-    ( rcbox_release [EngineImpl] # i . h ctl )
-}
+@ Engine_drop sink Engine h → v {}
 
-unsafe @ __Engine_ptr Engine h → *EngineImpl { ^ ( rcbox_ptr [EngineImpl] # i . h ctl ) }
+unsafe @ __Engine_ptr Engine h → *EngineImpl { ^ ( arc_ptr [EngineImpl] . h a ) }
 
 // The state, for this package's other files (tensor_bridge.nu).
-unsafe @ _rt_engine_ptr Engine h → *EngineImpl { ^ ( rcbox_ptr [EngineImpl] # i . h ctl ) }
+unsafe @ _rt_engine_ptr Engine h → *EngineImpl { ^ ( arc_ptr [EngineImpl] . h a ) }
 
 // GkBuf views over an RTensor's device allocation, for the gkd_* kernels.
 // Everything on the value map is f32 except the raw token input and ArgMax
@@ -141,10 +138,10 @@ unsafe @ __init_f32 * EngineImpl e s name i k → f {  // k-th value of a FLOAT 
 
 // Open a device. Kernels compile lazily on first use (gpukit caches them
 // in-process by name and on disk by source hash and architecture).
-unsafe @ rt_open i ordinal → Engine {
+@ rt_open i ordinal → Engine {
     : GpuKit kit ( gk_open ordinal )
     : b ok ( gk_ok kit )
-    ^ @ Engine { # s ( rcbox_new [EngineImpl] @ EngineImpl { ( gk_gpu kit ) kit ( vec_new [RTensor] )
+    ^ @ Engine { ( arc_new [EngineImpl] @ EngineImpl { ( gk_gpu kit ) kit ( vec_new [RTensor] )
             0 ( string_new ) ( string_new ) ( string_new ) ok ( vec_new [GpuBuffer] ) } ) }
 }
 
@@ -182,12 +179,7 @@ unsafe @ rt_reset Engine e__h → v {
     ( vec_clear [RTensor] . e vals )
 }
 
-// An engine that is not there (rt_ok F) — the placeholder for "not
-// opened (yet)".
-@ rt_none → Engine { ^ @ Engine { # s 0 } }
-
 unsafe @ rt_ok Engine e__h → b {
-    ? == 0 # i . e__h ctl { ^ F } {}
     : *EngineImpl e ( __Engine_ptr e__h )
     ^ . e ok
 }

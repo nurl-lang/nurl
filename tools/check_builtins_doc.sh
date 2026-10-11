@@ -11,7 +11,7 @@
 #  nurldoc renders it, nurl_api indexes it, nurl_grep sees it. It is
 #  hand-written (the doc prose is the point), so it can drift from
 #  the authoritative list: the `__emit_rt_decl syms `declare …``
-#  lines inside emit_header in compiler/nurlc.nu. This gate fails
+#  (and `__emit_rt_decl_as`) lines inside emit_header in compiler/nurlc.nu. This gate fails
 #  when the two disagree.
 #
 #  Direction 1: every preamble symbol must be documented in
@@ -42,7 +42,9 @@ cd "$ROOT"
 #   strtod                 — i8** out-param; use float.nu's checked parsers
 SKIP='^(llvm\.dbg\.declare|llvm\.trunc\.f32|llvm\.trunc\.f64|nurl_init|nurl_journal_push|nurl_journal_push_drop|nurl_journal_push_drop2|nurl_journal_forget|nurl_journal_forget_slot|nurl_journal_disown|nurl_jframe_drop|nurl_ret_owned_get|nurl_ret_owned_set|nurl_ret_hown_get|nurl_ret_hown_set|nurl_vec_slot_clear_if|nurl_closure_own|nurl_closure_slice_drop|nurl_vec_drop|nurl_cc_visit|nurl_closure_cc_trace|nurl_vec_clone|printf|strtod)$'
 
-preamble="$(grep -oE '__emit_rt_decl syms `declare [^`]+' compiler/nurlc.nu \
+# `__emit_rt_decl_as` is the same registration for a builtin the module
+# defines inline (nurl_free): the `declare` it is given is its contract.
+preamble="$(grep -oE '__emit_rt_decl(_as)? syms `declare [^`]+' compiler/nurlc.nu \
   | grep -oE '@[A-Za-z0-9_.]+' | sed 's/^@//' | sort -u)"
 
 documented="$(grep -oE '^& `c` @ [A-Za-z0-9_]+' stdlib/core/builtins.nu \

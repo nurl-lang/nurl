@@ -6,15 +6,15 @@
 // skipped. The byte cursor + LEB128 readers here are reused by the interpreter
 // (interp.nu) to walk instruction streams.
 //
-// Memory model: a `Module` is a handle on the decoded module in an rcbox
-// (stdlib/core/rcbox.nu) — every copy is the same module, and the last owner
+// Memory model: a `Module` is a handle on the decoded module in an Arc
+// (stdlib/std/arc.nu) — every copy is the same module, and the last owner
 // releases it (module_free is an early release, optional). A `Wc` cursor is a
 // plain value that owns nothing.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
-$ `stdlib/core/rcbox.nu`
+$ `stdlib/std/arc.nu`
 $ `stdlib/core/slice.nu`
 
 // ── byte cursor + LEB128 ─────────────────────────────────────────
@@ -149,18 +149,15 @@ unsafe @ wc_skip inout Wc c i n → v { = . c pos + . c pos n }
     ( Vec u ) err
 }
 
-// A Module is a handle on its decoded state in an rcbox (stdlib/core/rcbox.nu):
+// A Module is a handle on its decoded state in an Arc (stdlib/std/arc.nu):
 // every copy is the same module, and the last owner releases it.
-: Module { s ctl }
+: Module { ( Arc ModuleImpl ) a }
 
-unsafe @ Module_share Module h → Module { ^ @ Module { # s ( rcbox_share # i . h ctl ) } }
+@ Module_share Module h → Module { ^ @ Module { ( arc_clone [ModuleImpl] . h a ) } }
 
-@ Module_drop sink Module h → v {
-    ( mem_forget h )
-    ( rcbox_release [ModuleImpl] # i . h ctl )
-}
+@ Module_drop sink Module h → v {}
 
-unsafe @ _Module_ptr Module h → *ModuleImpl { ^ ( rcbox_ptr [ModuleImpl] # i . h ctl ) }
+unsafe @ _Module_ptr Module h → *ModuleImpl { ^ ( arc_ptr [ModuleImpl] . h a ) }
 
 unsafe @ __ft_free sink * FuncType ft → v { ( vec_free [i] . ft params ) ( vec_free [i] . ft results ) ( nurl_free # s ft ) }
 
@@ -622,8 +619,8 @@ unsafe @ module_func_name Module m__h i fidx → ( Vec u ) { ^ ( _module_func_na
 // Decode a whole module. On error, module_ok is F and module_err says why.
 // The module takes over `bytes` as its image (functions index into it).
 unsafe @ module_decode sink ( Vec u ) bytes → Module {
-    : i m__box ( rcbox_zero [ModuleImpl] )
-    : *ModuleImpl m ( rcbox_ptr [ModuleImpl] m__box )
+    : ( Arc ModuleImpl ) m__box ( arc_zero [ModuleImpl] )
+    : *ModuleImpl m ( arc_ptr [ModuleImpl] m__box )
     = . m types ( vec_new [s] )
     = . m functypes ( vec_new [i] )
     = . m funcs ( vec_new [s] )
@@ -649,9 +646,9 @@ unsafe @ module_decode sink ( Vec u ) bytes → Module {
     = . m err ( vec_new [u] )
     : ~ Wc c ( wc_new . m code )
     // header: 00 61 73 6d 01 00 00 00
-    ? < . c len 8 { ( __mod_err m `not a wasm module` ) ^ @ Module { # s m__box } } {}
+    ? < . c len 8 { ( __mod_err m `not a wasm module` ) ^ @ Module { m__box } } {}
     ? ! & == ( wc_u8 c ) 0 & == ( wc_u8 c ) 97 & == ( wc_u8 c ) 115 == ( wc_u8 c ) 109 {
-        ( __mod_err m `bad wasm magic` ) ^ @ Module { # s m__box }
+        ( __mod_err m `bad wasm magic` ) ^ @ Module { m__box }
     } {}
     ( wc_skip c 4 )  // version
     ~ & . m ok ! ( wc_eof c ) {
@@ -677,7 +674,7 @@ unsafe @ module_decode sink ( Vec u ) bytes → Module {
                                                 ? == id 11 { ( __decode_data_sec c m ) } {} } } } } } } } } } }
         = . c pos sec_end  // robust against partially-read / skipped sections
     }
-    ^ @ Module { # s m__box }
+    ^ @ Module { m__box }
 }
 
 // Find an exported GLOBAL's index by name (-1 if absent). wasi-threads

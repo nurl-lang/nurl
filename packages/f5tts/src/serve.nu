@@ -37,7 +37,7 @@ $ `deps/audio/src/mp3.nu`
 $ `deps/gpukit/src/gpukit.nu`
 $ `model.nu`
 $ `vocos.nu`
-$ `stdlib/core/rcbox.nu`
+$ `stdlib/std/arc.nu`
 $ `run.nu`
 $ `text.nu`
 $ `store.nu`
@@ -45,30 +45,27 @@ $ `registry.nu`
 $ `ui.nu`
 $ `stdlib/core/slice.nu`
 
-: ~ i g_f5_model 0  // an F5Model's ctl word: the global is one of its owners
+: ~ i g_f5_model 0  // an F5Model as a word (arc_into_word): the global is one of its owners
 
-: ~ i g_f5_voc 0  // a Vocos's ctl word, likewise
+: ~ i g_f5_voc 0  // a Vocos as a word, likewise
 
-: ~ i g_f5_vocab 0  // an F5Vocab's ctl word, likewise
+: ~ i g_f5_vocab 0  // an F5Vocab as a word, likewise
 // The three globals each hold one owner of what they name, taken over from
 // the caller's handle: storing a new one drops the old one's owner here.
 // Readers take a view (`# F5Model g_f5_model`), which owns nothing.
 unsafe @ __f5s_hold_model sink F5Model m → v {
-    : F5Model old @ F5Model { # s g_f5_model }
-    = g_f5_model # i . m ctl
-    ( mem_forget m )
+    : F5Model old @ F5Model { ( arc_from_word [F5ModelImpl] g_f5_model ) }
+    = g_f5_model ( arc_into_word [F5ModelImpl] ( arc_clone [F5ModelImpl] . m a ) )
 }
 
 unsafe @ __f5s_hold_voc sink Vocos vc → v {
-    : Vocos old @ Vocos { # s g_f5_voc }
-    = g_f5_voc # i . vc ctl
-    ( mem_forget vc )
+    : Vocos old @ Vocos { ( arc_from_word [VocosImpl] g_f5_voc ) }
+    = g_f5_voc ( arc_into_word [VocosImpl] ( arc_clone [VocosImpl] . vc a ) )
 }
 
 unsafe @ __f5s_hold_vocab sink F5Vocab vb → v {
-    : F5Vocab old @ F5Vocab { # s g_f5_vocab }
-    = g_f5_vocab # i . vb ctl
-    ( mem_forget vb )
+    : F5Vocab old @ F5Vocab { ( arc_from_word [F5VocabImpl] g_f5_vocab ) }
+    = g_f5_vocab ( arc_into_word [F5VocabImpl] ( arc_clone [F5VocabImpl] . vb a ) )
 }
 
 : ~ s g_f5_voices ``  // the voices directory
@@ -127,12 +124,9 @@ unsafe @ __f5s_hold_vocab sink F5Vocab vb → v {
     String err
 }
 
-: F5Job { s ctl }
+: F5Job { ( Arc F5JobImpl ) a }
 
-@ F5Job_drop sink F5Job h → v {
-    ( mem_forget h )
-    ( rcbox_release [F5JobImpl] # i . h ctl )
-}
+@ F5Job_drop sink F5Job h → v {}
 
 : ~ i g_q_head 0
 
@@ -158,13 +152,13 @@ unsafe @ __f5s_sync → *F5Sync { ^ # *F5Sync g_q_sync }
 
 : ~ i g_vc_ids 0  // ( Vec String ) as a raw handle
 
-: ~ i g_vc_ptrs 0  // ( Vec F5Voice ) as a raw handle — the cache owns them
+: ~ i g_vc_ptrs 0  // ( Vec ?F5Voice ) as a raw handle — the cache owns them
 
 : ~ i g_vc_rms 0  // ( Vec f ) — the loudness each was prepared at
 
 unsafe @ __f5s_vc_ids → ( Vec String ) { ^ # ( Vec String ) g_vc_ids }
 
-unsafe @ __f5s_vc_ptrs → ( Vec F5Voice ) { ^ # ( Vec F5Voice ) g_vc_ptrs }
+unsafe @ __f5s_vc_ptrs → ( Vec ? F5Voice ) { ^ # ( Vec ? F5Voice ) g_vc_ptrs }
 
 unsafe @ __f5s_vc_rms → ( Vec f ) { ^ # ( Vec f ) g_vc_rms }
 
@@ -172,7 +166,7 @@ unsafe @ __f5s_vc_rms → ( Vec f ) { ^ # ( Vec f ) g_vc_rms }
 // for a different target_rms gets the recording prepared again rather than
 // somebody else's normalisation — the mel the model conditions on is not the
 // same mel.
-@ __f5s_voice_get s id f target → i {
+@ __f5s_voice_get s id f target → ?F5Voice {
     : ( Vec String ) ids ( __f5s_vc_ids )
     : i n ( vec_len [String] ids )
     : ~ i k 0
@@ -183,10 +177,18 @@ unsafe @ __f5s_vc_rms → ( Vec f ) { ^ # ( Vec f ) g_vc_rms }
                     : ~ f had -1.0
                     ?? ( vec_get [f] ( __f5s_vc_rms ) k ) { T r → { = had r } F → {} }
                     ? < ( fabs - had target ) 1.0e-9 {
-                        ?? ( vec_get [F5Voice] ( __f5s_vc_ptrs ) k ) { T p → { ^ # i . p ctl } F → { ^ 0 } }
+                        ?? ( vec_get [? F5Voice] ( __f5s_vc_ptrs ) k ) {
+                            T p → {
+                                ?? p {
+                                    T x → { ^ @ ?F5Voice { T ( F5Voice_share x ) } }
+                                    F → { ^ @ ?F5Voice { F } }
+                                }
+                            }
+                            F → { ^ @ ?F5Voice { F } }
+                        }
                     } {
                         // prepared at a different loudness: drop it and rebuild
-                        ( vec_set [F5Voice] ( __f5s_vc_ptrs ) k @ F5Voice { # s 0 } )
+                        ( vec_set [? F5Voice] ( __f5s_vc_ptrs ) k @ ?F5Voice { F } )
                         ( vec_set [f] ( __f5s_vc_rms ) k -1.0 )
                     }
                 } {}
@@ -202,13 +204,12 @@ unsafe @ __f5s_vc_rms → ( Vec f ) { ^ # ( Vec f ) g_vc_rms }
     ?? ( f5_voice_open_dir ( string_data dir ) target ) {
         T v → {
             ( vec_push [String] ids ( string_from id ) )
-            : i w # i . v ctl
-            ( vec_push [F5Voice] ( __f5s_vc_ptrs ) v )
+            ( vec_push [? F5Voice] ( __f5s_vc_ptrs ) @ ?F5Voice { T ( F5Voice_share v ) } )
             ( vec_push [f] ( __f5s_vc_rms ) target )
-            ^ w
+            ^ @ ?F5Voice { T v }
         }
         F e → {
-            ^ 0
+            ^ @ ?F5Voice { F }
         }
     }
 }
@@ -259,7 +260,7 @@ unsafe @ __f5s_switch_to s id → b {
                     // against the new one (the old vocoder keeps the old kit
                     // alive until it is replaced)
                     : String vp ( string_from g_f5_vocoder )
-                    : GpuKit nkit ( f5_kit nm )
+                    : GpuKit nkit ( GpuKit_share ( f5_kit nm ) )
                     ( __f5s_hold_model nm )
                     ( __f5s_hold_vocab nv )
                     ?? ( voc_open ( string_data vp ) nkit ) {
@@ -364,12 +365,13 @@ unsafe @ __f5s_run_job * F5JobImpl j → v {
         ( __f5s_job_fail j `the weights could not be loaded` )
         ^ v
     }
-    : i vp ( __f5s_voice_get ( string_data . j voice ) . j target_rms )
-    ? != vp 0 {} {
-        ( __f5s_job_fail j `no such voice` )
-        ^ v
+    : F5Voice v ?? ( __f5s_voice_get ( string_data . j voice ) . j target_rms ) {
+        T x → x
+        F → {
+            ( __f5s_job_fail j `no such voice` )
+            ^ v
+        }
     }
-    : F5Voice v # F5Voice vp
     : b r ( f5_synth_line m vc v vb ( string_data . j text ) . j steps . j cfg . j sway
     . j speed . j fade . j seed . j retries . j max_wer . j splitfail . j out . j score )
     ? r {} { ( __f5s_job_fail j `synthesis failed` ) }
@@ -493,11 +495,11 @@ i retries f max_wer i splitfail f target_rms s model_id ( Vec f ) out ( Vec i ) 
         ( string_push_str err `voice id must be a plain directory name` )
         ^ F
     }
-    : F5Job jh @ F5Job { # s ( rcbox_new [F5JobImpl] @ F5JobImpl {
+    : F5Job jh @ F5Job { ( arc_new [F5JobImpl] @ F5JobImpl {
             0 ( string_from voice ) ( string_from text ) steps cfg sway speed fade seed
             retries max_wer splitfail target_rms ( string_from model_id )
             ( vec_new [f] ) ( f5_score_new ) F F ( string_new ) } ) }
-    : *F5JobImpl j ( rcbox_ptr [F5JobImpl] # i . jh ctl )
+    : *F5JobImpl j ( arc_ptr [F5JobImpl] . jh a )
     : b r ( __f5s_submit j )
     ? r {
         : i n ( vec_len [f] . j out )
@@ -776,7 +778,7 @@ s host i port s token i device i unload_s → i {
     = g_f5_unload_ms * unload_s 1000
     = g_f5_idle_since ( monotonic_ns )
     = g_vc_ids # i ( vec_new [String] )
-    = g_vc_ptrs # i ( vec_new [F5Voice] )
+    = g_vc_ptrs # i ( vec_new [? F5Voice] )
     = g_vc_rms # i ( vec_new [f] )
 
     ? == g_q_sync 0 {
@@ -963,7 +965,7 @@ unsafe @ __f5s_part_str ( Vec MultipartPart ) parts s name → String {
         ?? ( vec_get [String] ids k ) {
             T nm → {
                 ? != 0 ( nurl_str_eq ( string_data nm ) id ) {
-                    ( vec_set [F5Voice] ( __f5s_vc_ptrs ) k @ F5Voice { # s 0 } )
+                    ( vec_set [? F5Voice] ( __f5s_vc_ptrs ) k @ ?F5Voice { F } )
                     ( vec_set [f] ( __f5s_vc_rms ) k -1.0 )
                 } {}
             }

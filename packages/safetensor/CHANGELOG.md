@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.5.0] — 2026-10-11
+
+Requires NURL 0.73.0, which allows `mem_forget`, `mem_take` and the
+`rcbox` primitives only in `unsafe` code and reads a null library-handle
+literal as raw memory. The published 0.4.2 does not compile under it.
+
+### Changed
+
+- `St` and `StWriter` keep their state in an `Arc` (stdlib/std/arc.nu)
+  instead of an `rcbox`. The share and drop hooks are ordinary safe
+  functions — the Arc does the counting — and so are the constructors that
+  build one from a whole value; every copy is still the same state, and
+  its last owner releases it.
+- 2 fewer functions are `unsafe` than in 0.4.2.
+- Its `--version` (or the version it reports) is read from `nurl.toml`
+  with `( pkg_version )` instead of being written by hand, so it can no
+  longer drift from the manifest.
+
+### Removed
+
+- `st_none` and `st_is_open`: a slot that may hold no file is a `?St` (a
+  null handle literal is raw memory under NURL 0.73.0).
+
 ## [0.4.2] — 2026-10-09
 
 Requires NURL 0.72.0, which draws the raw-memory boundary at every call:

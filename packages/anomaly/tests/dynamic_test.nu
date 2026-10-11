@@ -118,7 +118,7 @@ unsafe @ test_stream Store st → v {
     ( check all_warming `stream: points 1-49 warming up (ready=false)` )
     ( check ready_from_50 `stream: ready from point 50 (first train)` )
     ( check == any_false_alarm F `stream: no false alarms on 51 normal points` )
-    : Meta mm__h ( model_metadata mo )
+    : Meta mm__h ( Meta_share ( model_metadata mo ) )
     : *MetaImpl mm ( _Meta_ptr mm__h )
     ( check == . mm last_trained 100 `stream: schedule retrained at 100` )
 
@@ -195,7 +195,7 @@ unsafe @ test_extreme Store st → v {
     : IngestOut after ( ingest_pt mo 20.0 5.0 63 )
     ( check . after ok `extreme: scoring after the retrain does not crash` )
     ( check ( _an_finite . after score ) `extreme: the score after the retrain is finite` )
-    : Meta mm__h ( model_metadata mo )
+    : Meta mm__h ( Meta_share ( model_metadata mo ) )
     : *MetaImpl mm ( _Meta_ptr mm__h )
     : ~ b std_ok T
     : i nsd ( vec_len [f] . mm sc_std )
@@ -335,7 +335,7 @@ unsafe @ test_mechanics Store st → v {
     : IngestOut o10 ( ingest_pt mo__h + 20.0 ( gauss3 ) + 5.0 ( gauss3 ) 10 )
     ( check . o10 ready `mech: point 10 trains and is ready` )
     ( check ( model_is_trained mo__h ) `mech: trained after warm-up` )
-    : Meta mm__h ( model_metadata mo__h )
+    : Meta mm__h ( Meta_share ( model_metadata mo__h ) )
     : *MetaImpl mm ( _Meta_ptr mm__h )
     ( check == . mm last_trained 10 `mech: last_trained = 10` )
 

@@ -23,7 +23,7 @@
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/float.nu`
 $ `stdlib/std/sort.nu`
-$ `stdlib/core/rcbox.nu`
+$ `stdlib/std/arc.nu`
 
 : VadSeg {
     i start  // first sample
@@ -311,22 +311,18 @@ $ `stdlib/core/rcbox.nu`
     i seg_end
 }
 
-// A VadStream is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// A VadStream is a handle on its state in an Arc (stdlib/std/arc.nu):
 // every copy is the same stream, and the last owner releases it.
-: VadStream { s ctl }
+: VadStream { ( Arc VadStreamImpl ) a }
 
-unsafe @ VadStream_share VadStream h → VadStream { ^ @ VadStream { # s ( rcbox_share # i . h ctl ) } }
+@ VadStream_share VadStream h → VadStream { ^ @ VadStream { ( arc_clone [VadStreamImpl] . h a ) } }
 
-@ VadStream_drop sink VadStream h → v {
-    ( mem_forget h )
-    ( rcbox_release [VadStreamImpl] # i . h ctl )
-}
+@ VadStream_drop sink VadStream h → v {}
 
-unsafe @ __VadStream_ptr VadStream h → *VadStreamImpl { ^ ( rcbox_ptr [VadStreamImpl] # i . h ctl ) }
+unsafe @ __VadStream_ptr VadStream h → *VadStreamImpl { ^ ( arc_ptr [VadStreamImpl] . h a ) }
 
 unsafe @ vad_stream_new i rate VadOpts o → VadStream {
-    : i st__box ( rcbox_zero [VadStreamImpl] )
-    : *VadStreamImpl st ( rcbox_ptr [VadStreamImpl] st__box )
+    : ~ VadStreamImpl st @ VadStreamImpl {}
     = . st buf ( vec_new [f] )
     = . st base 0
     = . st nframe 0
@@ -346,7 +342,7 @@ unsafe @ vad_stream_new i rate VadOpts o → VadStream {
     = . st floor_at -1
     = . st seg_start -1
     = . st seg_end -1
-    ^ @ VadStream { # s st__box }
+    ^ @ VadStream { ( arc_new [VadStreamImpl] st ) }
 }
 
 // Let go of `st` now rather than at the end of its owner's scope.

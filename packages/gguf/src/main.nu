@@ -352,11 +352,10 @@ $ `write.nu`
 // Builds the reference sample: every KV type, and one tensor per
 // dequantisable ggml type with hand-picked edge values (f16 subnormal,
 // ±inf, NaN, negative quants).
-@ __st_build → GgufW {
-    : ~ GgufW w @ GgufW { # s 0 }
-    ?? ( gw_new 32 ) {
-        T w2 → { = w w2 }
-        F _ → {}
+@ __st_build → !GgufW String {
+    : GgufW w ?? ( gw_new 32 ) {
+        T w2 → w2
+        F e → { ^ @ !GgufW String { F e } }
     }
     ( gw_kv_str w `general.architecture` `selftest` )
     ( gw_kv_str w `general.name` `gguf reference sample` )
@@ -406,7 +405,7 @@ $ `write.nu`
     // t_q8_0: d = 0.5, q = 0..30 then -56
     : ( Vec u ) bq8 ( __st_payload_q8_0 )
     : !v String _r6 ( gw_tensor w `t_q8_0` 8 1 32 1 1 1 bq8 )
-    ^ w
+    ^ @ !GgufW String { T w }
 }
 
 : STCnt {
@@ -443,12 +442,10 @@ unsafe @ __st_vec_eq ( Vec f ) got * f exp i n → b {
 // Success = T; the caller byte-compares the result against the
 // in-memory writer's file — the two paths must agree to the byte.
 @ __st_stream_twin s outpath → b {
-    : ~ GgufS sw @ GgufS { # s 0 }
-    ?? ( gws_create outpath 32 ) {
-        T sp → { = sw sp }
-        F _ → {}
+    : GgufS sw ?? ( gws_create outpath 32 ) {
+        T sp → sp
+        F _ → { ^ F }
     }
-    ? == 0 # i . sw ctl { ^ F } {}
     ( gws_kv_str sw `general.architecture` `selftest` )
     ( gws_kv_str sw `general.name` `gguf reference sample` )
     ( gws_kv_u32 sw `selftest.u32` 4000000000 )
@@ -573,64 +570,62 @@ unsafe @ __st_stream_quant inout STCnt cn s gwpath → v {
         F _ → {}
     }
     ? > ( string_len mpath ) 0 {
-        : ~ GgufS sw @ GgufS { # s 0 }
         ?? ( gws_create ( string_data mpath ) 32 ) {
-            T sp → { = sw sp }
+            T sw → {
+                : ( Vec u ) some ( vec_new [u] )
+                ( vec_push [u] some # u 1 )
+                : ~ b early_rejected F
+                ?? ( gws_data sw some ) {
+                    T _ → {}
+                    F e → {
+                        = early_rejected T
+                    }
+                }
+                ( __st_ck cn early_rejected `gws_data before begin_data rejected` )
+                : !v String _rt ( gws_tensor sw `t` 0 1 8 1 1 1 )
+                : ~ b dup_rejected F
+                ?? ( gws_tensor sw `t` 0 1 8 1 1 1 ) {
+                    T _ → {}
+                    F e → {
+                        = dup_rejected T
+                    }
+                }
+                ( __st_ck cn dup_rejected `duplicate stream tensor rejected` )
+                : !v String _rb ( gws_begin_data sw )
+                : ~ b late_declare_rejected F
+                ?? ( gws_tensor sw `t2` 0 1 8 1 1 1 ) {
+                    T _ → {}
+                    F e → {
+                        = late_declare_rejected T
+                    }
+                }
+                ( __st_ck cn late_declare_rejected `gws_tensor after begin_data rejected` )
+                : ~ b early_finish_rejected F
+                ?? ( gws_finish sw ) {
+                    T _ → {}
+                    F e → {
+                        = early_finish_rejected T
+                    }
+                }
+                ( __st_ck cn early_finish_rejected `gws_finish without payload rejected` )
+                // 33 bytes into a 32-byte tensor = overrun
+                : ( Vec u ) big ( vec_new [u] )
+                : ~ i k 0
+                ~ < k 33 {
+                    ( vec_push [u] big # u 0 )
+                    = k + k 1
+                }
+                : ~ b overrun_rejected F
+                ?? ( gws_data sw big ) {
+                    T _ → {}
+                    F e → {
+                        = overrun_rejected T
+                    }
+                }
+                ( __st_ck cn overrun_rejected `payload overrun rejected` )
+            }
             F _ → {}
         }
-        ? != 0 # i . sw ctl {
-            : ( Vec u ) some ( vec_new [u] )
-            ( vec_push [u] some # u 1 )
-            : ~ b early_rejected F
-            ?? ( gws_data sw some ) {
-                T _ → {}
-                F e → {
-                    = early_rejected T
-                }
-            }
-            ( __st_ck cn early_rejected `gws_data before begin_data rejected` )
-            : !v String _rt ( gws_tensor sw `t` 0 1 8 1 1 1 )
-            : ~ b dup_rejected F
-            ?? ( gws_tensor sw `t` 0 1 8 1 1 1 ) {
-                T _ → {}
-                F e → {
-                    = dup_rejected T
-                }
-            }
-            ( __st_ck cn dup_rejected `duplicate stream tensor rejected` )
-            : !v String _rb ( gws_begin_data sw )
-            : ~ b late_declare_rejected F
-            ?? ( gws_tensor sw `t2` 0 1 8 1 1 1 ) {
-                T _ → {}
-                F e → {
-                    = late_declare_rejected T
-                }
-            }
-            ( __st_ck cn late_declare_rejected `gws_tensor after begin_data rejected` )
-            : ~ b early_finish_rejected F
-            ?? ( gws_finish sw ) {
-                T _ → {}
-                F e → {
-                    = early_finish_rejected T
-                }
-            }
-            ( __st_ck cn early_finish_rejected `gws_finish without payload rejected` )
-            // 33 bytes into a 32-byte tensor = overrun
-            : ( Vec u ) big ( vec_new [u] )
-            : ~ i k 0
-            ~ < k 33 {
-                ( vec_push [u] big # u 0 )
-                = k + k 1
-            }
-            : ~ b overrun_rejected F
-            ?? ( gws_data sw big ) {
-                T _ → {}
-                F e → {
-                    = overrun_rejected T
-                }
-            }
-            ( __st_ck cn overrun_rejected `payload overrun rejected` )
-        } {}
         ( file_delete ( string_data mpath ) )
     } {}
 
@@ -701,40 +696,38 @@ unsafe @ __st_stream_quant inout STCnt cn s gwpath → v {
         T enc → {
             : ~ b ok == ( vec_len [u] enc ) 68
             // decode through the oracle: wrap in a writer+parser round trip
-            : ~ GgufW w @ GgufW { # s 0 }
             ?? ( gw_new 32 ) {
-                T w2 → { = w w2 }
-                F _ → {}
-            }
-            ? != 0 # i . w ctl {
-                ?? ( gw_tensor w `q` 8 1 64 1 1 1 enc ) { T _ → {} F _ → { = ok F } }
-                : ( Vec u ) img ( gw_finish w )
-                ?? ( gguf_parse_bytes img ) {
-                    T g → {
-                        ?? ( gguf_dequant_f64 g 0 ) {
-                            T got → {
-                                ? == ( vec_len [f] got ) 64 {} { = ok F }
-                                : ~ i k 0
-                                ~ < k 64 {
-                                    : f want ? < k 32 # f - * k 8 127 0.0
-                                    ?? ( vec_get [f] got k ) {
-                                        T x → { ? == x want {} { = ok F } }
-                                        F → { = ok F }
+                T w → {
+                    ?? ( gw_tensor w `q` 8 1 64 1 1 1 enc ) { T _ → {} F _ → { = ok F } }
+                    : ( Vec u ) img ( gw_finish w )
+                    ?? ( gguf_parse_bytes img ) {
+                        T g → {
+                            ?? ( gguf_dequant_f64 g 0 ) {
+                                T got → {
+                                    ? == ( vec_len [f] got ) 64 {} { = ok F }
+                                    : ~ i k 0
+                                    ~ < k 64 {
+                                        : f want ? < k 32 # f - * k 8 127 0.0
+                                        ?? ( vec_get [f] got k ) {
+                                            T x → { ? == x want {} { = ok F } }
+                                            F → { = ok F }
+                                        }
+                                        = k + k 1
                                     }
-                                    = k + k 1
+                                }
+                                F e → {
+                                    = ok F
                                 }
                             }
-                            F e → {
-                                = ok F
-                            }
+                            ( gguf_close g )
                         }
-                        ( gguf_close g )
-                    }
-                    F e → {
-                        = ok F
+                        F e → {
+                            = ok F
+                        }
                     }
                 }
-            } {}
+                F _ → {}
+            }
             ( __st_ck cn ok `gq_q8_0_encode exact round trip (d=1 block + zero block)` )
         }
         F e → {
@@ -793,7 +786,13 @@ unsafe @ __st_stream_quant inout STCnt cn s gwpath → v {
 
 unsafe @ __st_run → i {
     : ~ STCnt cn @ STCnt { 0 0 }
-    : GgufW w ( __st_build )
+    : GgufW w ?? ( __st_build ) {
+        T w0 → w0
+        F e → {
+            ( nurl_eprintln ( string_data e ) )
+            ^ 1
+        }
+    }
     : !String IoErr tf ( fs_tempfile `/tmp` `gguf-selftest.` )
     : ~ String path ( string_new )
     ?? tf {
@@ -1106,7 +1105,7 @@ unsafe @ __st_run → i {
         ^ 0
     } {}
     ? ( args_present p `version` ) {
-        ( nurl_print `gguf 0.4.2\n` )
+        ( nurl_print `gguf ` ) ( nurl_print ( pkg_version ) ) ( nurl_print `\n` )
         ^ 0
     } {}
     ? < ( args_positional_count p ) 1 {
@@ -1147,7 +1146,10 @@ unsafe @ __st_run → i {
         ? == ( string_len a1 ) 0 {
             ^ ( __gg_err ( string_from `gguf: gen needs an output path` ) )
         } {}
-        : GgufW w ( __st_build )
+        : GgufW w ?? ( __st_build ) {
+            T w0 → w0
+            F e → { ^ ( __gg_err e ) }
+        }
         : !v String wr ( gw_write w ( string_data a1 ) )
         : ~ i rc 0
         ?? wr {

@@ -504,7 +504,7 @@ unsafe @ test_hs256_offline → v {
             }
 
             ( section `every way a token can be wrong` )
-            : HttpClient hc ( oidc_provider_http p )
+            : HttpClient hc ( HttpClient_share ( oidc_provider_http p ) )
             : String mintbase ( string_from base )
             ( string_push_str mintbase `/mint/` )
 

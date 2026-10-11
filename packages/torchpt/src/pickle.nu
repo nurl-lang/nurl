@@ -49,7 +49,7 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/floatbits.nu`
-$ `stdlib/core/rcbox.nu`
+$ `stdlib/std/arc.nu`
 $ `stdlib/core/slice.nu`
 
 // ── node kinds ──────────────────────────────────────────────────────
@@ -157,22 +157,18 @@ $ `stdlib/core/slice.nu`
     ( Vec String ) errs
 }
 
-// A Pk is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// A Pk is a handle on its state in an Arc (stdlib/std/arc.nu):
 // every copy is the same tree, and the last owner releases it.
-: Pk { s ctl }
+: Pk { ( Arc PkImpl ) a }
 
-unsafe @ Pk_share Pk h → Pk { ^ @ Pk { # s ( rcbox_share # i . h ctl ) } }
+@ Pk_share Pk h → Pk { ^ @ Pk { ( arc_clone [PkImpl] . h a ) } }
 
-@ Pk_drop sink Pk h → v {
-    ( mem_forget h )
-    ( rcbox_release [PkImpl] # i . h ctl )
-}
+@ Pk_drop sink Pk h → v {}
 
-unsafe @ __Pk_ptr Pk h → *PkImpl { ^ ( rcbox_ptr [PkImpl] # i . h ctl ) }
+unsafe @ __Pk_ptr Pk h → *PkImpl { ^ ( arc_ptr [PkImpl] . h a ) }
 
 unsafe @ pk_new → Pk {
-    : i k__box ( rcbox_zero [PkImpl] )
-    : *PkImpl k ( rcbox_ptr [PkImpl] k__box )
+    : ~ PkImpl k @ PkImpl {}
     = . k kind ( vec_new [i] )
     = . k va ( vec_new [i] )
     = . k vb ( vec_new [i] )
@@ -187,7 +183,7 @@ unsafe @ pk_new → Pk {
     = . k root ( vec_new [i] )
     = . k errs ( vec_new [String] )
     ( vec_push [i] . k root -1 )
-    ^ @ Pk { # s k__box }
+    ^ @ Pk { ( arc_new [PkImpl] k ) }
 }
 
 // Let go of `k` now rather than at the end of its owner's scope.

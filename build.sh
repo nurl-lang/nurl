@@ -122,12 +122,16 @@ if (( NO_LTO_IN_SAN == 1 )); then
 else
     LTO_FLAG="-flto"
     # On Linux, runtime.o itself is THIN bitcode: a ThinLTO module carries
-    # a summary on top of ordinary bitcode, and GNU ld/gold's LLVMgold
-    # plugin consumes it in a full `-flto` link unchanged (measured:
-    # identical instruction counts on the bench suite), while a
-    # `-flto=thin` link can additionally cache its backend codegen — which
-    # is what lets nurl.sh skip re-lowering the runtime on every single
-    # build (see the ThinLTO cache section there).
+    # a summary on top of ordinary bitcode. GNU ld/gold's LLVMgold plugin
+    # accepts it in a full `-flto` link, but optimises it apart from the
+    # full-LTO module there — nothing of the runtime inlines into the
+    # program. nurl.sh pairs it with `-flto=thin`, which inlines across
+    # the boundary and can also cache its backend codegen: what lets
+    # nurl.sh skip re-lowering the runtime on every single build (see the
+    # ThinLTO cache section there). The stage links here stay full: the
+    # one runtime call whose inlining paid (nurl_free's NULL test) is
+    # defined in the module itself (emit_header), and merging the rest
+    # measured no faster for a 50% longer link.
     #
     # NOT on macOS: ld64's libLTO aborts on the thin/full mix ("LLVM
     # ERROR: Unexistent dir" out of the stage0 link), and nurl.sh's

@@ -120,7 +120,7 @@ unsafe @ test_patch Store st → v {
     = g_lcg 1
     : Model mo ( model_open_at st `patch` T0 )
     ( seed mo )
-    : Meta mm__h ( model_metadata mo )
+    : Meta mm__h ( Meta_share ( model_metadata mo ) )
     : *MetaImpl mm ( _Meta_ptr mm__h )
 
     : i before ( vec_len [VerCfg] . mm versions )
@@ -230,7 +230,7 @@ unsafe @ test_clamp Store st → v {
     = g_lcg 7
     : Model mo ( model_open_at st `clamp` T0 )
     ( seed mo )
-    : Meta mm__h ( model_metadata mo )
+    : Meta mm__h ( Meta_share ( model_metadata mo ) )
     : *MetaImpl mm ( _Meta_ptr mm__h )
 
     : String e ( patch_text mo
@@ -316,7 +316,7 @@ unsafe @ test_errors Store st → v {
     = g_lcg 5
     : Model mo ( model_open_at st `errs` T0 )
     ( seed mo )
-    : Meta mm0__h ( model_metadata mo )
+    : Meta mm0__h ( Meta_share ( model_metadata mo ) )
     : *MetaImpl mm0 ( _Meta_ptr mm0__h )
 
     : String e1 ( patch_text mo `{}` )
@@ -346,7 +346,7 @@ unsafe @ test_errors Store st → v {
     ( check ( string_contains e9 `versions.daily must be a JSON object` ) `error: a version value that is not an object is named` )
 
     // A refused patch changes nothing.
-    : Meta mm__h ( model_metadata mo )
+    : Meta mm__h ( Meta_share ( model_metadata mo ) )
     : *MetaImpl mm ( _Meta_ptr mm__h )
     ( check == . mm sched_below 10 `error: a refused patch leaves the schedule alone` )
 }
@@ -363,7 +363,7 @@ unsafe @ test_alias Store st → v {
     = g_lcg 31
     : Model mo ( model_open_at st `aliased` T0 )
     ( seed mo )
-    : Meta mm__h ( model_metadata mo )
+    : Meta mm__h ( Meta_share ( model_metadata mo ) )
     : *MetaImpl mm ( _Meta_ptr mm__h )
     ( check == ( string_len . mm alias ) 0 `alias: a fresh model has none` )
 
@@ -424,7 +424,7 @@ unsafe @ test_maxpoints Store st → v {
     = g_lcg 11
     : Model mo ( model_open_at st `maxpts` T0 )
     ( seed mo )
-    : Meta mm__h ( model_metadata mo )
+    : Meta mm__h ( Meta_share ( model_metadata mo ) )
     : *MetaImpl mm ( _Meta_ptr mm__h )
     ( check == ( model_n_points mo ) 60 `maxpts: the ring starts at 60 points` )
 

@@ -23,7 +23,7 @@ unsafe @ live → i { ^ - ( nurl_alloc_count ) ( nurl_free_count ) }
 
 unsafe @ Foo_share Foo h → Foo { ^ @ Foo { # s ( rcbox_share # i . h ctl ) } }
 
-@ Foo_drop sink Foo h → v {
+unsafe @ Foo_drop sink Foo h → v {
     ( mem_forget h )
     ( rcbox_release [FooImpl] # i . h ctl )
 }

@@ -24,7 +24,7 @@
 $ `stdlib/core/io.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
-$ `stdlib/core/rcbox.nu`
+$ `stdlib/std/arc.nu`
 $ `stdlib/core/posix.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/std/path.nu`
@@ -785,7 +785,7 @@ $ `stdlib/core/slice.nu`
 // One state per running shell, reached through a global: nearly every
 // function of the evaluator reads it, and the evaluator is mutually
 // recursive (a command substitution runs it again). ap_sh owns it — a
-// handle over an rcbox, released when ap_sh returns — and the global only
+// handle over an Arc, released when ap_sh returns — and the global only
 // points at the state of the innermost shell running in this process, so
 // an in-process `sh -c …` gets its own and hands the outer one back.
 
@@ -805,31 +805,28 @@ $ `stdlib/core/slice.nu`
     i depth  // command-substitution nesting, for a sanity bound
 }
 
-: ShState { s ctl }
+: ShState { ( Arc ShStateImpl ) a }
 
-unsafe @ ShState_share ShState h → ShState { ^ @ ShState { # s ( rcbox_share # i . h ctl ) } }
+@ ShState_share ShState h → ShState { ^ @ ShState { ( arc_clone [ShStateImpl] . h a ) } }
 
-@ ShState_drop sink ShState h → v {
-    ( mem_forget h )
-    ( rcbox_release [ShStateImpl] # i . h ctl )
-}
+@ ShState_drop sink ShState h → v {}
 
-: ~ i g_sh_state 0
+: ~ i g_sh_state 0  // the current state's block, lent by the ShState that made it
 
-unsafe @ __st → *ShStateImpl { ^ ( rcbox_ptr [ShStateImpl] g_sh_state ) }
+unsafe @ __st → *ShStateImpl { ^ ( arc_ptr [ShStateImpl] # ( Arc ShStateImpl ) g_sh_state ) }
 
 // A fresh state (counters zero), made the current one.
 unsafe @ __sh_state_new → ShState {
-    : i p__box ( rcbox_zero [ShStateImpl] )
-    : *ShStateImpl st ( rcbox_ptr [ShStateImpl] p__box )
+    : ( Arc ShStateImpl ) p__box ( arc_zero [ShStateImpl] )
+    : *ShStateImpl st ( arc_ptr [ShStateImpl] p__box )
     = . st names ( vec_new [String] )
     = . st values ( vec_new [String] )
     = . st fnames ( vec_new [String] )
     = . st fnodes ( vec_new [i] )
     = . st params ( vec_new [String] )
     = . st argv0 ( string_from `sh` )
-    = g_sh_state p__box
-    ^ @ ShState { # s p__box }
+    = g_sh_state # i . p__box ctl
+    ^ @ ShState { p__box }
 }
 
 unsafe @ __sh_var_index s name → i {

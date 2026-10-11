@@ -277,7 +277,7 @@ unsafe @ __api_ensure s name → String {
 unsafe @ __api_generate TcpConn c s model String prompt s field b stream
 i npredict f temp i topk f topp i seed → b {
     : Llm m # Llm g_api_llm
-    : Tok t ( llm_tok m )
+    : Tok t ( Tok_share ( llm_tok m ) )
     : ( Vec i ) ids ( tok_encode t ( string_data prompt ) T )
     : i nprompt ( vec_len [i] ids )
     ? > nprompt ( llm_n_ctx m ) {
@@ -551,7 +551,7 @@ i npredict f temp i topk f topp i seed → b {
 // return the decoded text (no streaming — the web UI wants one reply).
 // Diffusion models denoise a block; others sample autoregressively.
 @ __web_gen_reply Llm m ( Vec i ) ids i npredict f temp i seed → String {
-    : Tok t ( llm_tok m )
+    : Tok t ( Tok_share ( llm_tok m ) )
     : String out ( string_new )
     ? > ( vec_len [i] ids ) ( llm_n_ctx m ) { ^ out } {}
     ? ( llm_is_diffusion m ) {
@@ -609,7 +609,7 @@ unsafe @ __web_reply Json history s new_content → !String String {
         ^ @ !String String { F lerr }
     } {}
     : Llm m # Llm g_api_llm
-    : Tok t ( llm_tok m )
+    : Tok t ( Tok_share ( llm_tok m ) )
     // message list = stored history + the new user turn
     : ( Vec ChatMsg ) msgs ( vec_new [ChatMsg] )
     : ~ i k 0

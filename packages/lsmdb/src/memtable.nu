@@ -33,7 +33,7 @@
 //   ( mt_free m )                         → v      early release (optional)
 
 $ `stdlib/core/vec.nu`
-$ `stdlib/core/rcbox.nu`
+$ `stdlib/std/arc.nu`
 
 : i MT_MAXLVL 12
 : i MT_PUT 1
@@ -54,18 +54,15 @@ $ `stdlib/core/rcbox.nu`
     i rng
 }
 
-// A MemTable is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// A MemTable is a handle on its state in an Arc (stdlib/std/arc.nu):
 // every copy is the same state, and the last owner releases it.
-: MemTable { s ctl }
+: MemTable { ( Arc MemTableImpl ) a }
 
-unsafe @ MemTable_share MemTable h → MemTable { ^ @ MemTable { # s ( rcbox_share # i . h ctl ) } }
+@ MemTable_share MemTable h → MemTable { ^ @ MemTable { ( arc_clone [MemTableImpl] . h a ) } }
 
-@ MemTable_drop sink MemTable h → v {
-    ( mem_forget h )
-    ( rcbox_release [MemTableImpl] # i . h ctl )
-}
+@ MemTable_drop sink MemTable h → v {}
 
-unsafe @ __MemTable_ptr MemTable h → *MemTableImpl { ^ ( rcbox_ptr [MemTableImpl] # i . h ctl ) }
+unsafe @ __MemTable_ptr MemTable h → *MemTableImpl { ^ ( arc_ptr [MemTableImpl] . h a ) }
 
 // ── raw byte compare ────────────────────────────────────────────────
 //
@@ -94,8 +91,8 @@ unsafe @ lsm_bytes_cmp ( Vec u ) a ( Vec u ) b → i {
 // ── construction ────────────────────────────────────────────────────
 
 unsafe @ mt_new i seed → MemTable {
-    : i m__box ( rcbox_zero [MemTableImpl] )
-    : *MemTableImpl m ( rcbox_ptr [MemTableImpl] m__box )
+    : ( Arc MemTableImpl ) m__box ( arc_zero [MemTableImpl] )
+    : *MemTableImpl m ( arc_ptr [MemTableImpl] m__box )
     = . m arena ( vec_new [u] )
     = . m koff ( vec_new [i] )
     = . m klen ( vec_new [i] )
@@ -111,7 +108,7 @@ unsafe @ mt_new i seed → MemTable {
     // Node 0 is the head sentinel, so index 0 doubles as "nil" — a link
     // can never legitimately point back at the head.
     : i _head ( __mt_alloc_node m 0 0 0 0 0 MT_PUT MT_MAXLVL )
-    ^ @ MemTable { # s m__box }
+    ^ @ MemTable { m__box }
 }
 
 // Let go of `m` now rather than at the end of its owner's scope.

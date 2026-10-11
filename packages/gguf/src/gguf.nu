@@ -19,7 +19,7 @@
 //                                       (the Gguf keeps `data`)
 //   ( gguf_close g )                  → v   early release (optional)
 //   ( gguf_kvs g ) ( gguf_tensors g ) → the metadata / tensor tables (borrowed)
-//   ( gguf_none ) / ( gguf_is_open g )  → an empty slot, and the test for one
+//   an empty slot is a ?Gguf
 //   ( gguf_n_kv g ) ( gguf_n_tensors g )            → i
 //   ( gguf_find_kv g key )            → i   index, -1 when absent
 //   ( gguf_kv_int_or g key def )      → i   any int/bool-typed KV
@@ -45,7 +45,7 @@ $ `stdlib/core/posix.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/std/floatbits.nu`
-$ `stdlib/core/rcbox.nu`
+$ `stdlib/std/arc.nu`
 
 // ── GGUF metadata value types (spec) ────────────────────────────────
 : i GGUF_VT_U8 0
@@ -187,24 +187,15 @@ $ `stdlib/core/rcbox.nu`
     }
 }
 
-// A Gguf is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// A Gguf is a handle on its state in an Arc (stdlib/std/arc.nu):
 // every copy is the same open file, and the last owner releases it.
-: Gguf { s ctl }
+: Gguf { ( Arc GgufImpl ) a }
 
-unsafe @ Gguf_share Gguf h → Gguf { ^ @ Gguf { # s ( rcbox_share # i . h ctl ) } }
+@ Gguf_share Gguf h → Gguf { ^ @ Gguf { ( arc_clone [GgufImpl] . h a ) } }
 
-@ Gguf_drop sink Gguf h → v {
-    ( mem_forget h )
-    ( rcbox_release [GgufImpl] # i . h ctl )
-}
+@ Gguf_drop sink Gguf h → v {}
 
-unsafe @ __Gguf_ptr Gguf h → *GgufImpl { ^ ( rcbox_ptr [GgufImpl] # i . h ctl ) }
-
-// A Gguf that holds no file — for a slot that may be empty (a model kept
-// open across a streamed merge, or none). gguf_is_open tells them apart.
-@ gguf_none → Gguf { ^ @ Gguf { # s 0 } }
-
-@ gguf_is_open Gguf g → b { ^ != 0 # i . g ctl }
+unsafe @ __Gguf_ptr Gguf h → *GgufImpl { ^ ( arc_ptr [GgufImpl] . h a ) }
 
 // ── bounded little-endian cursor over the raw mapping ───────────────
 // Every read checks the remaining byte budget first; the first
@@ -636,7 +627,7 @@ unsafe @ __gguf_parse * u p i n sink ( Vec u ) keep → !Gguf String {
         ^ @ !Gguf String { F m }
     } {}
 
-    : Gguf h @ Gguf { # s ( rcbox_new [GgufImpl] @ GgufImpl { ver align kvs ts doff dsize p n F keep } ) }
+    : Gguf h @ Gguf { ( arc_new [GgufImpl] @ GgufImpl { ver align kvs ts doff dsize p n F keep } ) }
     ^ @ !Gguf String { T h }
 }
 

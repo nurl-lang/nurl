@@ -54,7 +54,7 @@ $ `stdlib/std/bytes.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/std/floatbits.nu`
 $ `gguf.nu`
-$ `stdlib/core/rcbox.nu`
+$ `stdlib/std/arc.nu`
 
 : GgufWImpl {
     i align
@@ -71,18 +71,15 @@ $ `stdlib/core/rcbox.nu`
     ( Vec u ) data
 }
 
-// A GgufW is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// A GgufW is a handle on its state in an Arc (stdlib/std/arc.nu):
 // every copy is the same writer, and the last owner releases it.
-: GgufW { s ctl }
+: GgufW { ( Arc GgufWImpl ) a }
 
-unsafe @ GgufW_share GgufW h → GgufW { ^ @ GgufW { # s ( rcbox_share # i . h ctl ) } }
+@ GgufW_share GgufW h → GgufW { ^ @ GgufW { ( arc_clone [GgufWImpl] . h a ) } }
 
-@ GgufW_drop sink GgufW h → v {
-    ( mem_forget h )
-    ( rcbox_release [GgufWImpl] # i . h ctl )
-}
+@ GgufW_drop sink GgufW h → v {}
 
-unsafe @ __GgufW_ptr GgufW h → *GgufWImpl { ^ ( rcbox_ptr [GgufWImpl] # i . h ctl ) }
+unsafe @ __GgufW_ptr GgufW h → *GgufWImpl { ^ ( arc_ptr [GgufWImpl] . h a ) }
 
 // length-prefixed GGUF string: u64 LE length + raw bytes (no NUL)
 @ __gw_pstr ( Vec u ) b s raw → v {
@@ -99,9 +96,8 @@ unsafe @ gw_new i align → !GgufW String {
     ? | | < align 1 > align 1048576 != & align - align 1 0 {
         ^ @ !GgufW String { F ( string_from `gguf: writer alignment must be a power of two, 1..1048576` ) }
     } {}
-    : i w__box ( rcbox_zero [GgufWImpl] )
-    : GgufW h @ GgufW { # s w__box }
-    : *GgufWImpl w ( rcbox_ptr [GgufWImpl] w__box )
+    : GgufW h @ GgufW { ( arc_zero [GgufWImpl] ) }
+    : *GgufWImpl w ( arc_ptr [GgufWImpl] . h a )
     = . w align align
     = . w n_kv 0
     = . w kvb ( vec_new [u] )
@@ -418,18 +414,15 @@ unsafe @ gw_finish GgufW w__h → ( Vec u ) {
     i data_size
 }
 
-// A GgufS is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// A GgufS is a handle on its state in an Arc (stdlib/std/arc.nu):
 // every copy is the same writer, and the last owner releases it.
-: GgufS { s ctl }
+: GgufS { ( Arc GgufSImpl ) a }
 
-unsafe @ GgufS_share GgufS h → GgufS { ^ @ GgufS { # s ( rcbox_share # i . h ctl ) } }
+@ GgufS_share GgufS h → GgufS { ^ @ GgufS { ( arc_clone [GgufSImpl] . h a ) } }
 
-@ GgufS_drop sink GgufS h → v {
-    ( mem_forget h )
-    ( rcbox_release [GgufSImpl] # i . h ctl )
-}
+@ GgufS_drop sink GgufS h → v {}
 
-unsafe @ __GgufS_ptr GgufS h → *GgufSImpl { ^ ( rcbox_ptr [GgufSImpl] # i . h ctl ) }
+unsafe @ __GgufS_ptr GgufS h → *GgufSImpl { ^ ( arc_ptr [GgufSImpl] . h a ) }
 
 @ __gws_err s msg → !v String {
     ^ @ !v String { F ( string_from msg ) }
@@ -441,9 +434,8 @@ unsafe @ gws_create s path i align → !GgufS String {
     } {}
     ?? ( file_create path ) {
         T fh → {
-            : i s__box ( rcbox_zero [GgufSImpl] )
-            : GgufS h @ GgufS { # s s__box }
-            : *GgufSImpl s ( rcbox_ptr [GgufSImpl] s__box )
+            : GgufS h @ GgufS { ( arc_zero [GgufSImpl] ) }
+            : *GgufSImpl s ( arc_ptr [GgufSImpl] . h a )
             = . s align align
             = . s n_kv 0
             = . s kvb ( vec_new [u] )

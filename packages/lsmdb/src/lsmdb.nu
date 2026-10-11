@@ -49,7 +49,7 @@ $ `stdlib/std/path.nu`
 $ `memtable.nu`
 $ `sst.nu`
 $ `wal.nu`
-$ `stdlib/core/rcbox.nu`
+$ `stdlib/std/arc.nu`
 
 : i LSM_MEMLIMIT 4194304  // 4 MiB of memtable before an auto-flush
 
@@ -69,16 +69,13 @@ $ `stdlib/core/rcbox.nu`
     i compactions
 }
 
-: Lsm { s ctl }
+: Lsm { ( Arc LsmImpl ) a }
 
-unsafe @ Lsm_share Lsm h → Lsm { ^ @ Lsm { # s ( rcbox_share # i . h ctl ) } }
+@ Lsm_share Lsm h → Lsm { ^ @ Lsm { ( arc_clone [LsmImpl] . h a ) } }
 
-@ Lsm_drop sink Lsm h → v {
-    ( mem_forget h )
-    ( rcbox_release [LsmImpl] # i . h ctl )
-}
+@ Lsm_drop sink Lsm h → v {}
 
-unsafe @ __Lsm_ptr Lsm h → *LsmImpl { ^ ( rcbox_ptr [LsmImpl] # i . h ctl ) }
+unsafe @ __Lsm_ptr Lsm h → *LsmImpl { ^ ( arc_ptr [LsmImpl] . h a ) }
 
 : LsmGet {
     i found
@@ -231,9 +228,8 @@ unsafe @ lsm_open s dir → !Lsm String {
     }
     // The handle first: every early return below lets go of it, and with
     // it of whatever was opened so far (an unset log is a null handle).
-    : i db__box ( rcbox_zero [LsmImpl] )
-    : Lsm h @ Lsm { # s db__box }
-    : *LsmImpl db ( rcbox_ptr [LsmImpl] db__box )
+    : Lsm h @ Lsm { ( arc_zero [LsmImpl] ) }
+    : *LsmImpl db ( arc_ptr [LsmImpl] . h a )
     = . db dir ( string_from dir )
     = . db walpath ( path_join dir `WAL` )
     = . db manpath ( path_join dir `MANIFEST` )
@@ -418,20 +414,16 @@ unsafe @ __lsm_get_at * LsmImpl db ( Vec u ) key i snap → !LsmGet String {
     String err
 }
 
-: LsmIter { s ctl }
+: LsmIter { ( Arc LsmIterImpl ) a }
 
-unsafe @ LsmIter_share LsmIter h → LsmIter { ^ @ LsmIter { # s ( rcbox_share # i . h ctl ) } }
+@ LsmIter_share LsmIter h → LsmIter { ^ @ LsmIter { ( arc_clone [LsmIterImpl] . h a ) } }
 
-@ LsmIter_drop sink LsmIter h → v {
-    ( mem_forget h )
-    ( rcbox_release [LsmIterImpl] # i . h ctl )
-}
+@ LsmIter_drop sink LsmIter h → v {}
 
-unsafe @ __LsmIter_ptr LsmIter h → *LsmIterImpl { ^ ( rcbox_ptr [LsmIterImpl] # i . h ctl ) }
+unsafe @ __LsmIter_ptr LsmIter h → *LsmIterImpl { ^ ( arc_ptr [LsmIterImpl] . h a ) }
 
 unsafe @ __it_new * LsmImpl db b usemem ( Vec u ) from i snap → LsmIter {
-    : i it__box ( rcbox_zero [LsmIterImpl] )
-    : *LsmIterImpl it ( rcbox_ptr [LsmIterImpl] it__box )
+    : ~ LsmIterImpl it @ LsmIterImpl {}
     = . it mem ( MemTable_share . db mem )
     = . it usemem ? usemem 1 0
     = . it curs ( vec_new [SstCursor] )
@@ -452,7 +444,7 @@ unsafe @ __it_new * LsmImpl db b usemem ( Vec u ) from i snap → LsmIter {
         }
         = k + k 1
     }
-    ^ @ LsmIter { # s it__box }
+    ^ @ LsmIter { ( arc_new [LsmIterImpl] it ) }
 }
 
 // Select the source whose head sorts first. Returns -2 when every source
@@ -641,8 +633,10 @@ unsafe @ __lsm_flush * LsmImpl db → !i String {
     : String name ( __lsm_table_name . db nextfile )
     : String full ( __lsm_path db ( string_data name ) )
     : !SstWriter String cw ( sst_create ( string_data full ) )
-    : ~ SstWriter w @ SstWriter { # s 0 }
-    ?? cw { T x → { = w x } F e → { ^ @ !i String { F e } } }
+    : SstWriter w ?? cw {
+        T x → x
+        F e → { ^ @ !i String { F e } }
+    }
 
     : ~ i node ( mt_first . db mem )
     : ~ b failed F
@@ -746,8 +740,10 @@ unsafe @ lsm_compact Lsm db__h → !i String {
     : String name ( __lsm_table_name . db nextfile )
     : String full ( __lsm_path db ( string_data name ) )
     : !SstWriter String cw ( sst_create ( string_data full ) )
-    : ~ SstWriter w @ SstWriter { # s 0 }
-    ?? cw { T x → { = w x } F e → { ^ @ !i String { F e } } }
+    : SstWriter w ?? cw {
+        T x → x
+        F e → { ^ @ !i String { F e } }
+    }
 
     : ~ i kept 0
     : ~ b failed F

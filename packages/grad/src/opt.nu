@@ -35,7 +35,7 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/std/float.nu`
 $ `grad.nu`
 $ `deps/tensor/src/tensor.nu`
-$ `stdlib/core/rcbox.nu`
+$ `stdlib/std/arc.nu`
 
 : OptImpl {
     i kind  // 0 sgd · 1 adam
@@ -51,22 +51,19 @@ $ `stdlib/core/rcbox.nu`
     ( Vec f ) v  // second moments (adam)
 }
 
-// An Opt is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// An Opt is a handle on its state in an Arc (stdlib/std/arc.nu):
 // every copy is the same state, and the last owner releases it.
-: Opt { s ctl }
+: Opt { ( Arc OptImpl ) a }
 
-unsafe @ Opt_share Opt h → Opt { ^ @ Opt { # s ( rcbox_share # i . h ctl ) } }
+@ Opt_share Opt h → Opt { ^ @ Opt { ( arc_clone [OptImpl] . h a ) } }
 
-@ Opt_drop sink Opt h → v {
-    ( mem_forget h )
-    ( rcbox_release [OptImpl] # i . h ctl )
-}
+@ Opt_drop sink Opt h → v {}
 
 // The state, for this package's own code.
-unsafe @ _Opt_ptr Opt h → *OptImpl { ^ ( rcbox_ptr [OptImpl] # i . h ctl ) }
+unsafe @ _Opt_ptr Opt h → *OptImpl { ^ ( arc_ptr [OptImpl] . h a ) }
 
-unsafe @ _opt_new i kind f lr → Opt {
-    ^ @ Opt { # s ( rcbox_new [OptImpl] @ OptImpl { kind lr 0.0 0 0 ( vec_new [i] ) ( vec_new [f] )
+@ _opt_new i kind f lr → Opt {
+    ^ @ Opt { ( arc_new [OptImpl] @ OptImpl { kind lr 0.0 0 0 ( vec_new [i] ) ( vec_new [f] )
             ( vec_new [i] ) ( vec_new [i] ) ( vec_new [f] ) ( vec_new [f] ) } ) }
 }
 

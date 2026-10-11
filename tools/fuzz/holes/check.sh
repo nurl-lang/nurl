@@ -18,7 +18,9 @@ DIR="$ROOT/tools/fuzz/holes"
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 holes=0
 cd "$DIR"
-files=("$@"); [ ${#files[@]} -eq 0 ] && files=(h*.nu)
+# (stdlib/: a probe that must sit in a directory named `stdlib` — h178,
+# a program's own code there is not the trusted standard library.)
+files=("$@"); [ ${#files[@]} -eq 0 ] && files=(h*.nu stdlib/h*.nu)
 for f in "${files[@]}"; do
     b="$TMP/$(basename "$f" .nu)"
     out=$(cd "$ROOT" && ./nurl.sh "$DIR/$f" "$b" 2>&1); rc=$?

@@ -10,7 +10,7 @@
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
-$ `stdlib/core/rcbox.nu`
+$ `stdlib/std/arc.nu`
 $ `image.nu`
 
 & `X11` @ XOpenDisplay *u name → *u
@@ -66,16 +66,16 @@ $ `image.nu`
 // A window is a handle: every copy is the same window, and its last owner
 // closes the display connection (xwin_close does that now — an optional
 // early release).
-: XWin { s ctl }
+: XWin { ( Arc XWinImpl ) a }
 
-unsafe @ XWin_share XWin h → XWin { ^ @ XWin { # s ( rcbox_share # i . h ctl ) } }
+@ XWin_share XWin h → XWin { ^ @ XWin { ( arc_clone [XWinImpl] . h a ) } }
 
-@ XWin_drop sink XWin h → v { ( mem_forget h ) ( rcbox_release [XWinImpl] # i . h ctl ) }
+@ XWin_drop sink XWin h → v {}
 
-unsafe @ __XWin_ptr XWin h → *XWinImpl { ^ ( rcbox_ptr [XWinImpl] # i . h ctl ) }
+unsafe @ __XWin_ptr XWin h → *XWinImpl { ^ ( arc_ptr [XWinImpl] . h a ) }
 
 // The window that never opened (ok=0): w×h is still the frame size.
-unsafe @ xwin_none i w i h → XWin { ^ @ XWin { # s ( rcbox_new [XWinImpl] @ XWinImpl { 0 0 0 0 ( vec_new [u] ) w h 0 } ) } }
+@ xwin_none i w i h → XWin { ^ @ XWin { ( arc_new [XWinImpl] @ XWinImpl { 0 0 0 0 ( vec_new [u] ) w h 0 } ) } }
 
 unsafe @ xwin_ok XWin h → b { : *XWinImpl x ( __XWin_ptr h ) ^ != . x ok 0 }
 
@@ -112,7 +112,7 @@ unsafe @ xwin_open i w i h s title → XWin {
     : ( Vec u ) data ( vec_zeroed [u] * * w h 4 )  // 32-bit BGRX per pixel
     : *u img ( XCreateImage dpy vis depth 2 0 ( vec_data [u] data ) w h 32 0 )  // ZPixmap=2, pad 32
     ( XFlush dpy )
-    ^ @ XWin { # s ( rcbox_new [XWinImpl] @ XWinImpl { # i dpy win # i gc # i img data w h 1 } ) }
+    ^ @ XWin { ( arc_new [XWinImpl] @ XWinImpl { # i dpy win # i gc # i img data w h 1 } ) }
 }
 
 // Blit one RGB Image into the window. The frame must match the window size.

@@ -24,7 +24,7 @@ $ `stdlib/core/string.nu`
 // a different ABI for the same linker symbol — and the compiler now
 // says so instead of emitting a call the module never declared.
 $ `stdlib/core/posix.nu`
-$ `stdlib/core/rcbox.nu`
+$ `stdlib/std/arc.nu`
 
 // `ioctl` as C declares it — `int ioctl(int, unsigned long, ...)`.
 // stdlib/std/term.nu declares the same symbol, and one linker symbol
@@ -41,15 +41,15 @@ $ `stdlib/core/rcbox.nu`
 
 % Drop CameraImpl { @ drop CameraImpl c → v { ( __cam_release c ) } }
 
-: Camera { s ctl }
+: Camera { ( Arc CameraImpl ) a }
 
-unsafe @ Camera_share Camera h → Camera { ^ @ Camera { # s ( rcbox_share # i . h ctl ) } }
+@ Camera_share Camera h → Camera { ^ @ Camera { ( arc_clone [CameraImpl] . h a ) } }
 
-@ Camera_drop sink Camera h → v { ( mem_forget h ) ( rcbox_release [CameraImpl] # i . h ctl ) }
+@ Camera_drop sink Camera h → v {}
 
-unsafe @ __Camera_ptr Camera h → *CameraImpl { ^ ( rcbox_ptr [CameraImpl] # i . h ctl ) }
+unsafe @ __Camera_ptr Camera h → *CameraImpl { ^ ( arc_ptr [CameraImpl] . h a ) }
 
-unsafe @ __cam_new CameraImpl c → Camera { ^ @ Camera { # s ( rcbox_new [CameraImpl] c ) } }
+@ __cam_new CameraImpl c → Camera { ^ @ Camera { ( arc_new [CameraImpl] c ) } }
 
 @ __O_RDWR → i { ^ 2 }
 

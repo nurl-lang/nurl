@@ -31,7 +31,7 @@ $ `stdlib/core/string.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/hashmap.nu`
 $ `stdlib/std/utf8.nu`
-$ `stdlib/core/rcbox.nu`
+$ `stdlib/std/arc.nu`
 $ `stdlib/core/slice.nu`
 
 : i TT_NORMAL 1
@@ -76,18 +76,15 @@ $ `stdlib/core/slice.nu`
     ( Vec i ) sp_first
 }
 
-// A Tok is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// A Tok is a handle on its state in an Arc (stdlib/std/arc.nu):
 // every copy is the same tokenizer, and the last owner releases it.
-: Tok { s ctl }
+: Tok { ( Arc TokImpl ) a }
 
-unsafe @ Tok_share Tok h → Tok { ^ @ Tok { # s ( rcbox_share # i . h ctl ) } }
+@ Tok_share Tok h → Tok { ^ @ Tok { ( arc_clone [TokImpl] . h a ) } }
 
-@ Tok_drop sink Tok h → v {
-    ( mem_forget h )
-    ( rcbox_release [TokImpl] # i . h ctl )
-}
+@ Tok_drop sink Tok h → v {}
 
-unsafe @ __Tok_ptr Tok h → *TokImpl { ^ ( rcbox_ptr [TokImpl] # i . h ctl ) }
+unsafe @ __Tok_ptr Tok h → *TokImpl { ^ ( arc_ptr [TokImpl] . h a ) }
 
 // ── string-keyed map helpers (yoloe/bpe.nu idiom) ───────────────────
 @ __tk_set ( HashMap s i ) m s key i val → v {
@@ -194,8 +191,8 @@ unsafe @ tok_build TokSpec spec sink ( Vec String ) pieces sink ( Vec f ) scores
     // vocabulary falls back to per-byte pieces — lossless, just not the
     // model's segmentation — so it is not silently wrong, merely unmerged.
 
-    : i t__box ( rcbox_zero [TokImpl] )
-    : *TokImpl t ( rcbox_ptr [TokImpl] t__box )
+    : ( Arc TokImpl ) t__box ( arc_zero [TokImpl] )
+    : *TokImpl t ( arc_ptr [TokImpl] t__box )
     = . t mode mode
     = . t pieces pieces
     = . t scores scores
@@ -291,7 +288,7 @@ unsafe @ tok_build TokSpec spec sink ( Vec String ) pieces sink ( Vec f ) scores
             = r + r 1
         }
     } {}
-    ^ @ !Tok String { T @ Tok { # s t__box } }
+    ^ @ !Tok String { T @ Tok { t__box } }
 }
 
 // Let go of `t` now rather than at the end of its owner's scope.

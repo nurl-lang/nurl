@@ -483,7 +483,7 @@ unsafe @ __nl_selftest → i {
     ?? ( llm_open_st path ( string_data __w ) 0 ) {
         F e → { ^ ( __nl_err e ) }
         T m → {
-            : Tok t ( llm_tok m )
+            : Tok t ( Tok_share ( llm_tok m ) )
             : String stmp ( args_value_or p `temp` `0.8` )
             : ~ f temp 0.8
             ?? ( string_to_float stmp ) { T v2 → { = temp v2 } F → {} }
@@ -608,7 +608,7 @@ unsafe @ main → i {
         ^ 0
     } {}
     ? ( args_present p `version` ) {
-        ( nurl_print `nurllama 0.18.2\n` )
+        ( nurl_print `nurllama ` ) ( nurl_print ( pkg_version ) ) ( nurl_print `\n` )
         ^ 0
     } {}
     ? < ( args_positional_count p ) 1 {
@@ -976,7 +976,7 @@ unsafe @ main → i {
         : String wpath ( args_value_or p `weights` `` )
         ?? ( llm_open_st mp ( string_data wpath ) want_ctx ) {
             T m → {
-                : Tok t ( llm_tok m )
+                : Tok t ( Tok_share ( llm_tok m ) )
                 : ( Vec i ) ids ( tok_encode t prompt T )
                 : i nprompt ( vec_len [i] ids )
                 ? > nprompt ( llm_n_ctx m ) {

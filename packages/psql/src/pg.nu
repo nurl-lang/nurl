@@ -29,7 +29,7 @@ $ `stdlib/std/hash_md5.nu`
 $ `stdlib/std/random.nu`
 $ `scram.nu`
 $ `stdlib/std/tls.nu`
-$ `stdlib/core/rcbox.nu`
+$ `stdlib/std/arc.nu`
 $ `stdlib/core/slice.nu`
 
 // SSLRequest magic (1234 << 16 | 5679) and the protocol-3.0 version word.
@@ -91,16 +91,13 @@ $ `stdlib/core/slice.nu`
     ? == tls 1 { ( tls_close tc ) } { ( nurl_tcp_close raw ) }
 }
 
-: PgConn { s ctl }
+: PgConn { ( Arc PgConnImpl ) a }
 
-unsafe @ PgConn_share PgConn h → PgConn { ^ @ PgConn { # s ( rcbox_share # i . h ctl ) } }
+@ PgConn_share PgConn h → PgConn { ^ @ PgConn { ( arc_clone [PgConnImpl] . h a ) } }
 
-@ PgConn_drop sink PgConn h → v {
-    ( mem_forget h )
-    ( rcbox_release [PgConnImpl] # i . h ctl )
-}
+@ PgConn_drop sink PgConn h → v {}
 
-unsafe @ __PgConn_ptr PgConn h → *PgConnImpl { ^ ( rcbox_ptr [PgConnImpl] # i . h ctl ) }
+unsafe @ __PgConn_ptr PgConn h → *PgConnImpl { ^ ( arc_ptr [PgConnImpl] . h a ) }
 
 // The connection's text fields, lent: they live as long as the PgConn.
 // lasterr is the last ErrorResponse (`[SQLSTATE] message`), empty if none.
@@ -463,9 +460,8 @@ unsafe @ pg_connect s host i port s user s password s database i sslmode → !Pg
 
     // The handle first: every early return below lets go of it, and its
     // drop closes the socket.
-    : i c__box ( rcbox_zero [PgConnImpl] )
-    : PgConn h @ PgConn { # s c__box }
-    : *PgConnImpl c ( rcbox_ptr [PgConnImpl] c__box )
+    : PgConn h @ PgConn { ( arc_zero [PgConnImpl] ) }
+    : *PgConnImpl c ( arc_ptr [PgConnImpl] . h a )
     = . c tls 0
     = . c raw rawfd
     = . c tcp @ TcpConn { # s rawfd 0 0 }

@@ -68,8 +68,8 @@ accurate user-facing documentation. A local one-off pass is not sufficient.
   rejected; hole probes h01–h31 are all rejected and safe programs carry a
   stated guarantee, docs/MEMORY.md §6. Then h32, a `Slice` of a `Vec`, and
   the 109 probes found around it (h33–h141) — every one rejected or clean.
-  docs/HARDENING_PLAN.md. The 0.72.0 release review found 37 more, still
-  open: docs/MEMORY.md §6.2, `tools/fuzz/holes/open/`.)*
+  docs/HARDENING_PLAN.md. The 0.72.0 release review found 37 more, all
+  closed since (h142–h179): docs/MEMORY.md §6.2.)*
   Code using no
   raw pointer or FFI can still read a maybe-moved value in both modes, and can
   conditionally double-free under the default checker. Reads through a released
@@ -87,8 +87,8 @@ accurate user-facing documentation. A local one-off pass is not sufficient.
     loop, and interprocedural paths, plus ASan/LSan runs.
   - Keep the claim in `docs/MEMORY.md` exactly as strong as the checks: since
     0.71.0 it is a guarantee for programs without `unsafe`; 0.72.0 closed
-    the one exception 0.71.0 listed beside it, and its review found 37 more,
-    listed beside the claim (§6.2, `tools/fuzz/holes/open/`). Every probe in
+    the one exception 0.71.0 listed beside it, and the 37 its review found
+    are closed since (§6.2). Every probe in
     `tools/fuzz/holes/` stays rejected or clean under the sanitizers
     (`check.sh`, run in CI); a hole found later is listed beside the claim
     until it is closed.

@@ -35,7 +35,7 @@ $ `stdlib/std/utf8.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/std/encode.nu`
 $ `stdlib/ext/json.nu`
-$ `stdlib/core/rcbox.nu`
+$ `stdlib/std/arc.nu`
 $ `stdlib/core/slice.nu`
 
 : UnigramImpl {
@@ -72,18 +72,15 @@ $ `stdlib/core/slice.nu`
     ( Vec i ) added_rstrip  // 1 = whitespace AFTER the token is consumed
 }
 
-// A Unigram is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// A Unigram is a handle on its state in an Arc (stdlib/std/arc.nu):
 // every copy is the same tokenizer, and the last owner releases it.
-: Unigram { s ctl }
+: Unigram { ( Arc UnigramImpl ) a }
 
-unsafe @ Unigram_share Unigram h → Unigram { ^ @ Unigram { # s ( rcbox_share # i . h ctl ) } }
+@ Unigram_share Unigram h → Unigram { ^ @ Unigram { ( arc_clone [UnigramImpl] . h a ) } }
 
-@ Unigram_drop sink Unigram h → v {
-    ( mem_forget h )
-    ( rcbox_release [UnigramImpl] # i . h ctl )
-}
+@ Unigram_drop sink Unigram h → v {}
 
-unsafe @ __Unigram_ptr Unigram h → *UnigramImpl { ^ ( rcbox_ptr [UnigramImpl] # i . h ctl ) }
+unsafe @ __Unigram_ptr Unigram h → *UnigramImpl { ^ ( arc_ptr [UnigramImpl] . h a ) }
 
 @ __uni_set ( HashMap s i ) m s key i val → v {
     : ?i _old ( map_set [s i] m key val \ s x → i { ^ ( hash_string x ) } \ s a s b → b { ^ ( eq_string a b ) } )
@@ -574,9 +571,8 @@ unsafe @ uni_load s path → !Unigram String {
                     : s mtype ?? ( json_get root `model.type` ) { T t → ( json_str_data t ) F → `` }
                     ? == 1 ( nurl_str_eq mtype `Unigram` ) {} { ^ ( __uni_err `unigram: model.type is not Unigram` ) }
                     // The handle first: a file without a vocabulary lets go of it.
-                    : i u__box ( rcbox_zero [UnigramImpl] )
-                    : Unigram h @ Unigram { # s u__box }
-                    : *UnigramImpl u ( rcbox_ptr [UnigramImpl] u__box )
+                    : Unigram h @ Unigram { ( arc_zero [UnigramImpl] ) }
+                    : *UnigramImpl u ( arc_ptr [UnigramImpl] . h a )
                     = . u pieces ( vec_new [String] )
                     = . u scores ( vec_new [f] )
                     = . u lookup ( map_new [s i] )

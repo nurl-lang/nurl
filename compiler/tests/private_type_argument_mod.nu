@@ -8,7 +8,7 @@ pub : H { s ctl }
 
 unsafe pub @ H_share H h → H { ^ @ H { # s ( rcbox_share # i . h ctl ) } }
 
-pub @ H_drop sink H h → v {
+unsafe pub @ H_drop sink H h → v {
     ( mem_forget h )
     ( rcbox_release [Impl] # i . h ctl )
 }

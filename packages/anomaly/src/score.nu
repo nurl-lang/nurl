@@ -118,11 +118,13 @@ $ `deps/gpukit/src/gpukit.nu`
         = g_ag_state -1
         ^ F
     }
-    = g_ag_kit # i kit
-    ( mem_forget kit )  // the global holds this owner now (anom_gpu_close lets it go)
+    // the global holds one owner of it from here (anom_gpu_close lets it go)
+    ( __ag_keep_kit kit )
     = g_ag_state 1
     ^ T
 }
+
+unsafe @ __ag_keep_kit GpuKit kit → v { = g_ag_kit ( arc_into_word [GpuKitImpl] ( arc_clone [GpuKitImpl] . kit a ) ) }
 
 // The live kit (only valid when g_ag_state == 1).
 unsafe @ __ag_kit → GpuKit { ^ # GpuKit g_ag_kit }
@@ -135,7 +137,7 @@ unsafe @ anom_gpu_kit → GpuKit { ^ # GpuKit g_ag_kit }
 // Release the device + kernel cache (tests call this so leak checkers see a
 // closed shop; a long-running service just keeps the singleton).
 unsafe @ anom_gpu_close → v {
-    ? == g_ag_state 1 { ( gk_close @ GpuKit { # s g_ag_kit } ) } {}  // the global's owner
+    ? == g_ag_state 1 { ( gk_close @ GpuKit { ( arc_from_word [GpuKitImpl] g_ag_kit ) } ) } {}  // the global's owner
     = g_ag_state 0
     = g_ag_kit 0
 }

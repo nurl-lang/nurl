@@ -123,7 +123,7 @@ unsafe @ test_sequence Store st → v {
     ( check > used 0 `sequence: trained` )
 
     // The trained timevector forest is 8 points wide (n_cols = 8·nfeat).
-    : Meta mm__h ( model_metadata mo__h )
+    : Meta mm__h ( Meta_share ( model_metadata mo__h ) )
     : *MetaImpl mm ( _Meta_ptr mm__h )
     : i nfeat ( vec_len [String] . mm feats )
     : ~ b wide F
@@ -192,7 +192,7 @@ unsafe @ test_config Store st → v {
     // Round-trip: set 8/2, serialise, parse back.
     : Model mo ( model_open_at st `tvcfg` T0 )
     : b _w ( model_set_version_window mo `timevector` 8 2 )
-    : Meta mm ( model_metadata mo )
+    : Meta mm ( Meta_share ( model_metadata mo ) )
     : Json mj ( meta_to_json mm )
     : String ms ( json_stringify mj )
     ?? ( meta_from_json_str ( string_data ms ) ) {

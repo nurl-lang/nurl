@@ -37,7 +37,7 @@
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/ext/json.nu`
-$ `stdlib/core/rcbox.nu`
+$ `stdlib/std/arc.nu`
 
 // ── Template set (named templates, include targets) ─────────────────
 
@@ -46,22 +46,19 @@ $ `stdlib/core/rcbox.nu`
     ( Vec String ) srcs
 }
 
-// A TplSet is a handle on its names and sources in an rcbox
-// (stdlib/core/rcbox.nu): every copy is the same set, and the last owner
+// A TplSet is a handle on its names and sources in an Arc
+// (stdlib/std/arc.nu): every copy is the same set, and the last owner
 // releases it.
-: TplSet { s ctl }
+: TplSet { ( Arc TplSetImpl ) a }
 
-unsafe @ TplSet_share TplSet h → TplSet { ^ @ TplSet { # s ( rcbox_share # i . h ctl ) } }
+@ TplSet_share TplSet h → TplSet { ^ @ TplSet { ( arc_clone [TplSetImpl] . h a ) } }
 
-@ TplSet_drop sink TplSet h → v {
-    ( mem_forget h )
-    ( rcbox_release [TplSetImpl] # i . h ctl )
-}
+@ TplSet_drop sink TplSet h → v {}
 
-unsafe @ __TplSet_ptr TplSet h → *TplSetImpl { ^ ( rcbox_ptr [TplSetImpl] # i . h ctl ) }
+unsafe @ __TplSet_ptr TplSet h → *TplSetImpl { ^ ( arc_ptr [TplSetImpl] . h a ) }
 
-unsafe @ tset_new → TplSet {
-    ^ @ TplSet { # s ( rcbox_new [TplSetImpl] @ TplSetImpl { ( vec_new [String] ) ( vec_new [String] ) } ) }
+@ tset_new → TplSet {
+    ^ @ TplSet { ( arc_new [TplSetImpl] @ TplSetImpl { ( vec_new [String] ) ( vec_new [String] ) } ) }
 }
 
 unsafe @ __tset_find * TplSetImpl t s name → i {
@@ -103,7 +100,7 @@ unsafe @ tset_has TplSet t s name → b {
 // Heap-allocated so the mutually recursive block renderer can mutate
 // `pos` and the scope stack without threading state through returns
 // (same shape as ext/json.nu's JsonParser). One TplR lives per render,
-// in an rcbox behind a handle the entry point holds: its strings and
+// in an Arc behind a handle the entry point holds: its strings and
 // vectors are dropped with the handle. `src` is the caller's text, a view.
 //
 // Value slots A and B hold the result of expression evaluation
@@ -145,18 +142,14 @@ unsafe @ tset_has TplSet t s name → b {
 }
 
 // The render state's handle (private to this module).
-: TplR { s ctl }
+: TplR { ( Arc TplRImpl ) a }
 
-@ TplR_drop sink TplR h → v {
-    ( mem_forget h )
-    ( rcbox_release [TplRImpl] # i . h ctl )
-}
+@ TplR_drop sink TplR h → v {}
 
-unsafe @ __TplR_ptr TplR h → *TplRImpl { ^ ( rcbox_ptr [TplRImpl] # i . h ctl ) }
+unsafe @ __TplR_ptr TplR h → *TplRImpl { ^ ( arc_ptr [TplRImpl] . h a ) }
 
 unsafe @ __tpl_new s tsrc i sp Json jctx → TplR {
-    : i r__box ( rcbox_zero [TplRImpl] )
-    : *TplRImpl r ( rcbox_ptr [TplRImpl] r__box )
+    : ~ TplRImpl r @ TplRImpl {}
     = . r src tsrc
     = . r len ( nurl_str_len tsrc )
     = . r pos 0
@@ -187,7 +180,7 @@ unsafe @ __tpl_new s tsrc i sp Json jctx → TplR {
     = . r vb_num 0.0
     = . r vb_str ( string_with_cap 32 )
     = . r vb_node ( vec_new [Json] )
-    ^ @ TplR { # s r__box }
+    ^ @ TplR { ( arc_new [TplRImpl] r ) }
 }
 
 // Record the first failure; later ones are ignored (the first is the cause).

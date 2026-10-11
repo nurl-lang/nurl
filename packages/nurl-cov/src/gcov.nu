@@ -35,7 +35,7 @@
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/fs.nu`
-$ `stdlib/core/rcbox.nu`
+$ `stdlib/std/arc.nu`
 
 // Record tags, as they appear in both files.
 : i GCOV_TAG_FUNCTION 0x01000000
@@ -112,18 +112,15 @@ $ `stdlib/core/rcbox.nu`
     ( Vec i ) succ_tail
 }
 
-// A GcovObj is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// A GcovObj is a handle on its state in an Arc (stdlib/std/arc.nu):
 // every copy is the same state, and the last owner releases it.
-: GcovObj { s ctl }
+: GcovObj { ( Arc GcovObjImpl ) a }
 
-unsafe @ GcovObj_share GcovObj h → GcovObj { ^ @ GcovObj { # s ( rcbox_share # i . h ctl ) } }
+@ GcovObj_share GcovObj h → GcovObj { ^ @ GcovObj { ( arc_clone [GcovObjImpl] . h a ) } }
 
-@ GcovObj_drop sink GcovObj h → v {
-    ( mem_forget h )
-    ( rcbox_release [GcovObjImpl] # i . h ctl )
-}
+@ GcovObj_drop sink GcovObj h → v {}
 
-unsafe @ __GcovObj_ptr GcovObj h → *GcovObjImpl { ^ ( rcbox_ptr [GcovObjImpl] # i . h ctl ) }
+unsafe @ __GcovObj_ptr GcovObj h → *GcovObjImpl { ^ ( arc_ptr [GcovObjImpl] . h a ) }
 
 : | GcovErr {
     GcovNoNotes  // the .gcno could not be read
@@ -918,8 +915,7 @@ unsafe @ gcov_solve GcovObj o__h → v {
 // ── Entry points ─────────────────────────────────────────────────
 
 unsafe @ gcov_new → GcovObj {
-    : i o__box ( rcbox_zero [GcovObjImpl] )
-    : *GcovObjImpl o ( rcbox_ptr [GcovObjImpl] o__box )
+    : ~ GcovObjImpl o @ GcovObjImpl {}
     = . o notes ( string_new )
     = . o data ( string_new )
     = . o stamp 0
@@ -938,7 +934,7 @@ unsafe @ gcov_new → GcovObj {
     = . o succ_head ( vec_new [i] )
     = . o succ_next ( vec_new [i] )
     = . o succ_tail ( vec_new [i] )
-    ^ @ GcovObj { # s o__box }
+    ^ @ GcovObj { ( arc_new [GcovObjImpl] o ) }
 }
 
 // Let go of `o` now rather than at the end of its owner's scope.

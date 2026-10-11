@@ -41,7 +41,7 @@ $ `sample.nu`
 $ `text.nu`
 $ `vocos.nu`
 $ `verify.nu`
-$ `stdlib/core/rcbox.nu`
+$ `stdlib/std/arc.nu`
 $ `stdlib/core/slice.nu`
 
 : i F5_SR 24000
@@ -65,18 +65,15 @@ $ `stdlib/core/slice.nu`
     String text
 }
 
-// An F5Voice is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// An F5Voice is a handle on its state in an Arc (stdlib/std/arc.nu):
 // every copy is the same voice, and the last owner releases it.
-: F5Voice { s ctl }
+: F5Voice { ( Arc F5VoiceImpl ) a }
 
-unsafe @ F5Voice_share F5Voice h → F5Voice { ^ @ F5Voice { # s ( rcbox_share # i . h ctl ) } }
+@ F5Voice_share F5Voice h → F5Voice { ^ @ F5Voice { ( arc_clone [F5VoiceImpl] . h a ) } }
 
-@ F5Voice_drop sink F5Voice h → v {
-    ( mem_forget h )
-    ( rcbox_release [F5VoiceImpl] # i . h ctl )
-}
+@ F5Voice_drop sink F5Voice h → v {}
 
-unsafe @ __F5Voice_ptr F5Voice h → *F5VoiceImpl { ^ ( rcbox_ptr [F5VoiceImpl] # i . h ctl ) }
+unsafe @ __F5Voice_ptr F5Voice h → *F5VoiceImpl { ^ ( arc_ptr [F5VoiceImpl] . h a ) }
 
 unsafe @ f5_voice_target F5Voice v__h → f {
     : *F5VoiceImpl v ( __F5Voice_ptr v__h )
@@ -101,7 +98,7 @@ unsafe @ f5_voice_target F5Voice v__h → f {
     ^ out
 }
 
-unsafe @ f5_voice_load s wav_path s ref_text f target_rms → !F5Voice String {
+@ f5_voice_load s wav_path s ref_text f target_rms → !F5Voice String {
     ?? ( wav_read wav_path ) {
         T w → {
             : ( Vec f ) raw ( wav_mono w )
@@ -131,7 +128,7 @@ unsafe @ f5_voice_load s wav_path s ref_text f target_rms → !F5Voice String {
             : f rms rms0
             : ( Vec f ) mel ( log_mel_vocos at24 1024 F5_HOP 100 F5_SR )
             : i frames / ( vec_len [f] mel ) 100
-            ^ @ !F5Voice String { T @ F5Voice { # s ( rcbox_new [F5VoiceImpl] @ F5VoiceImpl {
+            ^ @ !F5Voice String { T @ F5Voice { ( arc_new [F5VoiceImpl] @ F5VoiceImpl {
                         mel frames n rms target_rms ( f5_fix_ref_text ref_text ) } ) } }
         }
         F e → { ^ @ !F5Voice String { F e } }

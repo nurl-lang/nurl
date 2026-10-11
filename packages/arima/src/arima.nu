@@ -42,7 +42,7 @@
 //   ( arima_to_json m ) / ( arima_from_json s ) persistence, bit-exact
 //   ( arima_free m )                  early release (optional)
 //
-// Memory: an ArimaModel is a handle on the model's state (an rcbox) —
+// Memory: an ArimaModel is a handle on the model's state (an Arc) —
 // every copy is the same model, stepped by any of them — released with
 // its last owner. An ArimaForecast is an owning struct. Nothing is freed
 // by hand.
@@ -58,7 +58,7 @@ $ `stdlib/std/floatbits.nu`
 $ `stdlib/std/thread.nu`
 $ `stdlib/std/sysinfo.nu`
 $ `stdlib/ext/json.nu`
-$ `stdlib/core/rcbox.nu`
+$ `stdlib/std/arc.nu`
 
 : i ARIMA_CSS 0
 : i ARIMA_ML 1
@@ -1836,18 +1836,15 @@ unsafe @ __ar_bfgs * ArimaObj o ( Vec f ) raw → ArimaOpt {
     i xtr  // 1 when a linear trend (drift) is among the regressors
 }
 
-// An ArimaModel is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// An ArimaModel is a handle on its state in an Arc (stdlib/std/arc.nu):
 // every copy is the same state, and the last owner releases it.
-: ArimaModel { s ctl }
+: ArimaModel { ( Arc ArimaModelImpl ) a }
 
-unsafe @ ArimaModel_share ArimaModel h → ArimaModel { ^ @ ArimaModel { # s ( rcbox_share # i . h ctl ) } }
+@ ArimaModel_share ArimaModel h → ArimaModel { ^ @ ArimaModel { ( arc_clone [ArimaModelImpl] . h a ) } }
 
-@ ArimaModel_drop sink ArimaModel h → v {
-    ( mem_forget h )
-    ( rcbox_release [ArimaModelImpl] # i . h ctl )
-}
+@ ArimaModel_drop sink ArimaModel h → v {}
 // The state, for this package's own code.
-unsafe @ _ArimaModel_ptr ArimaModel h → *ArimaModelImpl { ^ ( rcbox_ptr [ArimaModelImpl] # i . h ctl ) }
+unsafe @ _ArimaModel_ptr ArimaModel h → *ArimaModelImpl { ^ ( arc_ptr [ArimaModelImpl] . h a ) }
 // Does the model carry regressors at all?
 unsafe @ __ar_has_x * ArimaModelImpl m → b {
     ^ > ( vec_len [f] . m xcoef ) 0
@@ -2253,8 +2250,8 @@ unsafe @ __ar_model_from_raw ( Vec f ) y ( Vec f ) w ArimaSpec sp i method i nco
     : i k ( __ar_ncoef sp )
     : ArimaCoef c ( _ar_coef_of_raw sp raw )
     : ArimaLik lk ? == method ARIMA_CSS ( __ar_loglik_css sp c w ncond ) ( __ar_loglik_ml sp c w )
-    : i m__box ( rcbox_zero [ArimaModelImpl] )
-    : *ArimaModelImpl m ( rcbox_ptr [ArimaModelImpl] m__box )
+    : ( Arc ArimaModelImpl ) m__box ( arc_zero [ArimaModelImpl] )
+    : *ArimaModelImpl m ( arc_ptr [ArimaModelImpl] m__box )
     = . m spec sp
     = . m coef c
     = . m sigma2 . lk sigma2
@@ -2285,7 +2282,7 @@ unsafe @ __ar_model_from_raw ( Vec f ) y ( Vec f ) w ArimaSpec sp i method i nco
     // weekly season the cost of the fit itself over again — and a
     // candidate the search will discard has no use for a state.
     ? with_state { ( __ar_run_full m y ) } {}
-    ^ @ ArimaModel { # s m__box }
+    ^ @ ArimaModel { m__box }
 }
 
 // The starting parameters for a fit: zeros, the mean at the sample mean.
@@ -2696,8 +2693,7 @@ unsafe @ arima_restart_at ArimaModel m__h i t0 → v {
 // state, so the copy can be stepped without moving the original.
 unsafe @ arima_clone ArimaModel m__h → ArimaModel {
     : *ArimaModelImpl m ( _ArimaModel_ptr m__h )
-    : i c__box ( rcbox_zero [ArimaModelImpl] )
-    : *ArimaModelImpl c ( rcbox_ptr [ArimaModelImpl] c__box )
+    : ~ ArimaModelImpl c @ ArimaModelImpl {}
     = . c spec . m spec
     = . c coef ( __ar_coef_clone . m coef )
     = . c sigma2 . m sigma2
@@ -2723,7 +2719,7 @@ unsafe @ arima_clone ArimaModel m__h → ArimaModel {
     = . c xcoef ( __ar_vec_copy . m xcoef )
     = . c xt . m xt
     = . c xtr . m xtr
-    ^ @ ArimaModel { # s c__box }
+    ^ @ ArimaModel { ( arc_new [ArimaModelImpl] c ) }
 }
 
 @ __ar_veci_copy ( Vec i ) src → ( Vec i ) {
@@ -3233,8 +3229,8 @@ unsafe @ arima_from_json s src → ?ArimaModel {
             : ( Vec f ) sphi ?? ( json_obj_get o `seasonal_phi` ) { T a → ( __ar_unbits a ) F _ → ( vec_new [f] ) }
             : ( Vec f ) sth ?? ( json_obj_get o `seasonal_theta` ) { T a → ( __ar_unbits a ) F _ → ( vec_new [f] ) }
             : ArimaCoef c @ ArimaCoef { phi th sphi sth ( __ar_unbit o `mu` ) }
-            : i m__box ( rcbox_zero [ArimaModelImpl] )
-            : *ArimaModelImpl m ( rcbox_ptr [ArimaModelImpl] m__box )
+            : ArimaSS fss ( __ar_full_ss sp c )
+            : ~ ArimaModelImpl m @ ArimaModelImpl {}
             = . m spec sp
             = . m coef c
             = . m sigma2 ( __ar_unbit o `sigma2` )
@@ -3249,7 +3245,6 @@ unsafe @ arima_from_json s src → ?ArimaModel {
             = . m converged ?? ( json_obj_get o `converged` ) { T cv → ( json_as_bool cv ) F _ → F }
             = . m iterations ( __ar_jint o `iterations` )
             = . m evals ( __ar_jint o `evaluations` )
-            : ArimaSS fss ( __ar_full_ss sp c )
             ?? ( json_obj_get o `state_a` ) {
                 T a → {
                     : ( Vec f ) av ( __ar_unbits a )
@@ -3309,7 +3304,7 @@ unsafe @ arima_from_json s src → ?ArimaModel {
                 }
                 F _ → {}
             }
-            ^ @ ?ArimaModel { T @ ArimaModel { # s m__box } }
+            ^ @ ?ArimaModel { T @ ArimaModel { ( arc_new [ArimaModelImpl] m ) } }
         }
         F _ → { ^ @ ?ArimaModel { F } }
     }

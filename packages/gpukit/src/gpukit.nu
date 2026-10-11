@@ -32,7 +32,7 @@
 // bit-for-bit the same through gk_run as through hand-written gpu_* calls, and
 // the gpu package's CUDA / CPU-backend / pure equivalence is preserved.
 //
-// Memory: a `GpuKit` is a handle on the kit's state (an rcbox): every copy of
+// Memory: a `GpuKit` is a handle on the kit's state (an Arc): every copy of
 // it — a struct field, a Vec element, a capture — is the same kit, and its
 // LAST owner releases the cached kernels, the device-memory pool and the
 // device. Every GkBuf the kit hands out (dev.nu) holds the kit too, so the
@@ -42,7 +42,7 @@
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/ext/env.nu`
-$ `stdlib/core/rcbox.nu`
+$ `stdlib/std/arc.nu`
 $ `deps/gpu/src/gpu.nu`
 
 // The device-memory pool's process-wide counters and switches (see the
@@ -103,18 +103,15 @@ $ `deps/gpu/src/gpu.nu`
     }
 }
 
-// A GpuKit is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// A GpuKit is a handle on its state in an Arc (stdlib/std/arc.nu):
 // every copy is the same kit, and the last owner releases it.
-: GpuKit { s ctl }
+: GpuKit { ( Arc GpuKitImpl ) a }
 
-unsafe @ GpuKit_share GpuKit h → GpuKit { ^ @ GpuKit { # s ( rcbox_share # i . h ctl ) } }
+@ GpuKit_share GpuKit h → GpuKit { ^ @ GpuKit { ( arc_clone [GpuKitImpl] . h a ) } }
 
-@ GpuKit_drop sink GpuKit h → v {
-    ( mem_forget h )
-    ( rcbox_release [GpuKitImpl] # i . h ctl )
-}
+@ GpuKit_drop sink GpuKit h → v {}
 
-unsafe @ _GpuKit_ptr GpuKit h → *GpuKitImpl { ^ ( rcbox_ptr [GpuKitImpl] # i . h ctl ) }
+unsafe @ _GpuKit_ptr GpuKit h → *GpuKitImpl { ^ ( arc_ptr [GpuKitImpl] . h a ) }
 
 unsafe @ __gk_col ( Vec i ) v i k → i { ^ . ( vec_data [i] v ) k }
 
@@ -123,10 +120,10 @@ unsafe @ __gk_col ( Vec i ) v i k → i { ^ . ( vec_data [i] v ) k }
 // Open device `ordinal` (CUDA when present, else the gpu package's CPU
 // backend). The kit is a long-lived handle (its kernel cache and pool
 // persist across calls). Check `gk_ok`; a failed open is still a kit.
-unsafe @ gk_open i ordinal → GpuKit {
+@ gk_open i ordinal → GpuKit {
     : Gpu g ( gpu_open ordinal )
     : b ok ( gpu_ok g )
-    ^ @ GpuKit { # s ( rcbox_new [GpuKitImpl] @ GpuKitImpl { g ok ( vec_new [GkKernelEntry] )
+    ^ @ GpuKit { ( arc_new [GpuKitImpl] @ GpuKitImpl { g ok ( vec_new [GkKernelEntry] )
             ( vec_new [GpuBuffer] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] )
             ( gpu_timer_none ) ( gpu_timer_none ) F ( vec_new [String] ) } ) }
 }
@@ -138,6 +135,14 @@ unsafe @ gk_open i ordinal → GpuKit {
 // 24 GB RTX 4090, say, where a model that fits on one fails to allocate on the
 // other. Prefer this everywhere the ordinal is not a user choice.
 @ gk_open_best → GpuKit { ^ ( gk_open ( gpu_best_device ) ) }
+
+// A kit that opens nothing and is not ok (gk_ok F): what a slot holds once
+// its kit has been let go.
+@ gk_none → GpuKit {
+    ^ @ GpuKit { ( arc_new [GpuKitImpl] @ GpuKitImpl { ( gpu_none ) F ( vec_new [GkKernelEntry] )
+            ( vec_new [GpuBuffer] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] )
+            ( gpu_timer_none ) ( gpu_timer_none ) F ( vec_new [String] ) } ) }
+}
 
 unsafe @ gk_ok GpuKit kit__h → b {
     : *GpuKitImpl kit ( _GpuKit_ptr kit__h )
@@ -187,8 +192,8 @@ unsafe @ gk_jit GpuKit kit__h → b {
 // from the same source builders that run on a device: nothing mirrored
 // by hand, nothing to rot. Buffers for the calls can be gk_buf_wrap
 // views over any nonzero address; nothing is dereferenced.
-unsafe @ gk_open_census → GpuKit {
-    ^ @ GpuKit { # s ( rcbox_new [GpuKitImpl] @ GpuKitImpl { ( gpu_none ) T ( vec_new [GkKernelEntry] )
+@ gk_open_census → GpuKit {
+    ^ @ GpuKit { ( arc_new [GpuKitImpl] @ GpuKitImpl { ( gpu_none ) T ( vec_new [GkKernelEntry] )
             ( vec_new [GpuBuffer] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] )
             ( gpu_timer_none ) ( gpu_timer_none ) T ( vec_new [String] ) } ) }
 }

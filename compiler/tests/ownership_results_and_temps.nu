@@ -74,7 +74,7 @@ $ `stdlib/std/heap.nu`
 
 @ cmp_str String a String b → i { ^ ( nurl_str_cmp ( string_data a ) ( string_data b ) ) }
 
-@ main → i {
+unsafe @ main → i {
     : ~ Holder h @ Holder { @ Item { 0 ( string_from `init` ) } }
     : !v i r1 ( refill h 3 )
     : !v i r2 ( refill h -1 )

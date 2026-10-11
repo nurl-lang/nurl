@@ -302,68 +302,28 @@ unsafe @ __mp3_build_idx34 → ( Vec i ) {
         ( string_push_str e ` Hz` )
         ^ @ !Mp3 String { F e }
     } {}
-    : ~ Mp3 m @ Mp3 { channels }
-    = . m rate rate
-    = . m sri sri
-    = . m version version
-    = . m gpf gpf
-    = . m bri bri
     // A frame carries the header, the side information, and then as many
     // whole bytes ("slots") as the bitrate buys. The rate rarely divides
     // evenly, so the leftover fraction accumulates and buys one extra slot
     // whenever it crosses — that is the padding bit in the header.
     : i sil ? == gpf 2 ? == channels 1 168 288 ? == channels 1 104 168
-    = . m sideinfo_len sil
     : f nsamp * # f gpf 576.0
     : f bits_per_sec * 1000.0 # f bitrate
     : f avg / * nsamp bits_per_sec * # f rate 8.0
     : i whole # i avg
-    = . m whole_slots whole
-    = . m frac_slots - avg # f whole
-    = . m slot_lag - 0.0 . m frac_slots
-    = . m padding 0
-    = . m mean_bits 0
-    = . m resv_size 0
-    = . m resv_drain 0
-    = . m enw ( _mp3_enwindow )
-    = . m fl ( __mp3_build_fl )
-    = . m cosl ( __mp3_build_cosl )
-    = . m ca ( __mp3_alias_c 0 )
-    = . m cs ( __mp3_alias_c 1 )
-    = . m sfb ( _mp3_sfb_index )
-    = . m hcode ( _mp3_hcode )
-    = . m hlen ( _mp3_hlen )
-    = . m hxlen ( _mp3_hxlen )
-    = . m hylen ( _mp3_hylen )
-    = . m hlinbits ( _mp3_hlinbits )
-    = . m hlinmax ( _mp3_hlinmax )
-    = . m hoff ( _mp3_hoff )
-    = . m sdv0 ( __mp3_subdv0 )
-    = . m sdv1 ( __mp3_subdv1 )
-    = . m idx34 ( __mp3_build_idx34 )
-    = . m xbuf ( _mp3_fzeros * channels MP3_HAN )
-    = . m xoff ( _mp3_zeros channels )
-    = . m sb ( _mp3_fzeros * * channels + gpf 1 576 )
-    = . m xr ( _mp3_fzeros * * channels gpf MP3_GRAN )
-    = . m ix ( _mp3_zeros * * channels gpf MP3_GRAN )
-    = . m si ( _mp3_zeros * * gpf channels MP3_SI_N )
-    = . m yw ( _mp3_fzeros 64 )
-    = . m mdin ( _mp3_fzeros 36 )
-    = . m c_bigv 0
-    = . m c_cnt1 0
-    = . m c_ts0 0
-    = . m c_ts1 0
-    = . m c_ts2 0
-    = . m c_r0 0
-    = . m c_r1 0
-    = . m c_c1t 0
-    = . m c_a1 0
-    = . m c_a2 0
-    = . m c_a3 0
-    = . m c_step 0
-    = . m out ( vec_new [u] )
-    = . m cache 0
-    = . m cbits 0
+    : f frac - avg # f whole
+    : Mp3 m @ Mp3 {
+        channels rate sri version gpf bri sil whole frac - 0.0 frac 0
+        0 0 0 ( _mp3_enwindow ) ( __mp3_build_fl ) ( __mp3_build_cosl )
+        ( __mp3_alias_c 0 ) ( __mp3_alias_c 1 ) ( _mp3_sfb_index ) ( _mp3_hcode )
+        ( _mp3_hlen ) ( _mp3_hxlen ) ( _mp3_hylen ) ( _mp3_hlinbits )
+        ( _mp3_hlinmax ) ( _mp3_hoff ) ( __mp3_subdv0 ) ( __mp3_subdv1 )
+        ( __mp3_build_idx34 ) ( _mp3_fzeros * channels MP3_HAN ) ( _mp3_zeros channels )
+        ( _mp3_fzeros * * channels + gpf 1 576 ) ( _mp3_fzeros * * channels gpf MP3_GRAN )
+        ( _mp3_zeros * * channels gpf MP3_GRAN ) ( _mp3_zeros * * gpf channels MP3_SI_N )
+        ( _mp3_fzeros 64 ) ( _mp3_fzeros 36 ) 0 0 0 0 0 0 0 0 0 0 0 0
+        ( vec_new [u] ) 0 0
+    }
     ^ @ !Mp3 String { T m }
 }
 
@@ -1230,9 +1190,8 @@ unsafe @ __mp3_format inout Mp3 m → v {
             ? > . m cbits 0 {
                 ( __mp3_putbits m 0 - 8 . m cbits )
             } {}
-            : ( Vec u ) out . m out
-            ( mem_take out )  // the stream leaves the encoder, not copied
-            ^ @ !( Vec u ) String { T out }
+            // the stream moves out of the encoder, not copied
+            ^ @ !( Vec u ) String { T . m out }
         }
         F e → { ^ @ !( Vec u ) String { F e } }
     }

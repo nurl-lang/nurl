@@ -566,7 +566,7 @@ unsafe @ test_autotune Store st → v {
     }
     : i tr ( model_force_train_at mo + 1000 * 120 60 )
     ( check > tr 0 `autotune: trained` )
-    : Meta mm__h ( model_metadata mo )
+    : Meta mm__h ( Meta_share ( model_metadata mo ) )
     : *MetaImpl mm ( _Meta_ptr mm__h )
     ( check == . mm tuned_at 0 `autotune: never tuned yet` )
     : f before ( meta_version_margin mm__h `short_term` -1.0 )

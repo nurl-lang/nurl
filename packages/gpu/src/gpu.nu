@@ -30,7 +30,7 @@ $ `stdlib/std/hash.nu`
 $ `stdlib/ext/env.nu`
 $ `stdlib/std/floatbits.nu`
 $ `stdlib/std/thread.nu`
-$ `stdlib/core/rcbox.nu`
+$ `stdlib/std/arc.nu`
 $ `cuda.nu`
 $ `cpu.nu`
 $ `stdlib/core/slice.nu`
@@ -122,7 +122,7 @@ $ `stdlib/core/slice.nu`
 }
 
 // ── ownership ─────────────────────────────────────────────────────
-// A context retain taken by gpu_open, in an rcbox (stdlib/core/rcbox.nu):
+// A context retain taken by gpu_open, in an Arc (stdlib/std/arc.nu):
 // its last owner — the Gpu and everything allocated, compiled or created
 // through it — gives back the pinned staging pair (it lives in this
 // context) and releases the retain, which is what gpu_close did by hand.
@@ -131,14 +131,11 @@ $ `stdlib/core/slice.nu`
 
 % Drop GpuCtxImpl { @ drop GpuCtxImpl x → v { ( __gpu_ctx_release . x dev . x backend ) } }
 
-: GpuCtx { s ctl }
+: GpuCtx { ( Arc GpuCtxImpl ) a }
 
-unsafe @ GpuCtx_share GpuCtx h → GpuCtx { ^ @ GpuCtx { # s ( rcbox_share # i . h ctl ) } }
+@ GpuCtx_share GpuCtx h → GpuCtx { ^ @ GpuCtx { ( arc_clone [GpuCtxImpl] . h a ) } }
 
-@ GpuCtx_drop sink GpuCtx h → v {
-    ( mem_forget h )
-    ( rcbox_release [GpuCtxImpl] # i . h ctl )
-}
+@ GpuCtx_drop sink GpuCtx h → v {}
 
 @ __gpu_ctx_release i dev i backend → v {
     ? == backend 0 {
@@ -156,18 +153,15 @@ unsafe @ GpuCtx_share GpuCtx h → GpuCtx { ^ @ GpuCtx { # s ( rcbox_share # i .
 : i GPU_RES_GRAPH 4  // an executable graph (cuGraphExecDestroy)
 : i GPU_RES_HOST 5  // host staging memory (nurl_free)
 
-: GpuResImpl { i kind i h i backend GpuCtx ctx }
+: GpuResImpl { i kind i h i backend ? GpuCtx ctx }
 
 % Drop GpuResImpl { @ drop GpuResImpl x → v { ( __gpu_res_release . x kind . x h . x backend ) } }
 
-: GpuRes { s ctl }
+: GpuRes { ( Arc GpuResImpl ) a }
 
-unsafe @ GpuRes_share GpuRes h → GpuRes { ^ @ GpuRes { # s ( rcbox_share # i . h ctl ) } }
+@ GpuRes_share GpuRes h → GpuRes { ^ @ GpuRes { ( arc_clone [GpuResImpl] . h a ) } }
 
-@ GpuRes_drop sink GpuRes h → v {
-    ( mem_forget h )
-    ( rcbox_release [GpuResImpl] # i . h ctl )
-}
+@ GpuRes_drop sink GpuRes h → v {}
 
 unsafe @ __gpu_res_release i kind i h i backend → v {
     ? == kind GPU_RES_HOST { ( nurl_free # *u h ) ^ } {}
@@ -184,18 +178,18 @@ unsafe @ __gpu_res_release i kind i h i backend → v {
 }
 
 // ── handle types ──────────────────────────────────────────────────
-: Gpu { i ordinal i dev i ctx GpuCtx own }  // an initialised device + context
-: GpuKernel { i module i func GpuRes own }  // a compiled, loaded __global__ fn
-: GpuBuffer { i dptr i bytes GpuRes own }  // a device-memory allocation
+: Gpu { i ordinal i dev i ctx ? GpuCtx own }  // an initialised device + context
+: GpuKernel { i module i func ? GpuRes own }  // a compiled, loaded __global__ fn
+: GpuBuffer { i dptr i bytes ? GpuRes own }  // a device-memory allocation
 
 // The owner of raw handle `h` made through `g` (none for a 0 handle: a
 // failed allocation, compile or create owns nothing).
-unsafe @ __gpu_res Gpu g i kind i h → GpuRes {
-    ? == h 0 { ^ @ GpuRes { # s 0 } } {}
-    ^ @ GpuRes { # s ( rcbox_new [GpuResImpl] @ GpuResImpl { kind h __gpu_backend ( GpuCtx_share . g own ) } ) }
+@ __gpu_res Gpu g i kind i h → ?GpuRes {
+    ? == h 0 { ^ @ ?GpuRes { F } } {}
+    ^ @ ?GpuRes { T @ GpuRes { ( arc_new [GpuResImpl] @ GpuResImpl { kind h __gpu_backend . g own } ) } }
 }
 
-@ __gpu_nores → GpuRes { ^ @ GpuRes { # s 0 } }
+@ __gpu_nores → ?GpuRes { ^ @ ?GpuRes { F } }
 
 // ── device lifecycle ──────────────────────────────────────────────
 
@@ -255,10 +249,9 @@ unsafe @ __gpu_res Gpu g i kind i h → GpuRes {
 // one still gets an owner block — the same bookkeeping on every backend,
 // so the sanitized (CPU) builds exercise exactly what CUDA runs; its
 // release has nothing to give back.
-unsafe @ __gpu_noctx i ordinal i dev i ctx → Gpu {
-    ? == ctx 0 { ^ @ Gpu { ordinal dev ctx @ GpuCtx { # s 0 } } } {}
-    : i box ( rcbox_new [GpuCtxImpl] @ GpuCtxImpl { dev - 0 dev ( string_new ) } )
-    ^ @ Gpu { ordinal dev ctx @ GpuCtx { # s box } }
+@ __gpu_noctx i ordinal i dev i ctx → Gpu {
+    ? == ctx 0 { ^ @ Gpu { ordinal dev ctx @ ?GpuCtx { F } } } {}
+    ^ @ Gpu { ordinal dev ctx @ ?GpuCtx { T @ GpuCtx { ( arc_new [GpuCtxImpl] @ GpuCtxImpl { dev - 0 dev ( string_new ) } ) } } }
 }
 
 unsafe @ gpu_open i ordinal → Gpu {
@@ -292,8 +285,7 @@ unsafe @ gpu_open i ordinal → Gpu {
     : s raw ( cuda_device_name dev )
     : String nm ( string_from raw )
     ( nurl_free raw )
-    : i box ( rcbox_new [GpuCtxImpl] @ GpuCtxImpl { dev 0 nm } )
-    ^ @ Gpu { ordinal dev ctx @ GpuCtx { # s box } }
+    ^ @ Gpu { ordinal dev ctx @ ?GpuCtx { T @ GpuCtx { ( arc_new [GpuCtxImpl] @ GpuCtxImpl { dev 0 nm } ) } } }
 }
 
 @ gpu_ok Gpu g → b { ^ != . g ctx 0 }
@@ -308,10 +300,10 @@ unsafe @ gpu_name Gpu g → s {
     ? == __gpu_backend 3 { ^ `WebGPU (WGSL compute)` } {}
     ? == __gpu_backend 2 { ^ `CPU (static kernels)` } {}
     ? == __gpu_backend 1 { ^ `CPU (host C++)` } {}
-    : i box # i . . g own ctl
-    ? == box 0 { ^ `CUDA device` } {}
-    : *GpuCtxImpl c ( rcbox_ptr [GpuCtxImpl] box )
-    ^ ( string_data . c name )
+    ?? . g own {
+        T c → { ^ ( string_data . ( arc_ptr [GpuCtxImpl] . c a ) name ) }
+        F → { ^ `CUDA device` }
+    }
 }
 
 // Device memory: free and total bytes as the driver reports them. On the
@@ -404,7 +396,7 @@ unsafe @ gpu_mem_total Gpu g → i {
 // has no events, and every call below is a no-op on a 0 timer, so a
 // caller need not branch on the backend. The event is destroyed with the
 // timer's last owner.
-: GpuTimer { i ev GpuRes own }
+: GpuTimer { i ev ? GpuRes own }
 
 @ gpu_timer_new Gpu g → GpuTimer {
     ? != __gpu_backend 0 { ^ ( gpu_timer_none ) } {}
@@ -440,7 +432,7 @@ unsafe @ gpu_mem_total Gpu g → i {
 // ONE gpu_graph_launch — same kernels, same argument values, same order,
 // bit-identical results. Callers must not sync between begin and end.
 // The executable graph is destroyed with its last owner.
-: GpuGraph { i exec GpuRes own }
+: GpuGraph { i exec ? GpuRes own }
 
 @ gpu_graph_begin Gpu g → b {
     ? != __gpu_backend 0 { ^ F } {}
@@ -704,12 +696,11 @@ unsafe @ gpu_compile Gpu g s src s name → GpuKernel {
 // these address it at 4-byte stride. `ptr` is the memory itself, for
 // gpu_upload / gpu_download and anything that wants the raw address —
 // valid while the GpuHost is.
-: GpuHost { * u ptr i bytes GpuRes own }
+: GpuHost { * u ptr i bytes ? GpuRes own }
 
 unsafe @ gpu_host_alloc i bytes → GpuHost {
     : *u p ( nurl_alloc bytes )
-    : i box ( rcbox_new [GpuResImpl] @ GpuResImpl { GPU_RES_HOST # i p __gpu_backend @ GpuCtx { # s 0 } } )
-    ^ @ GpuHost { p bytes @ GpuRes { # s box } }
+    ^ @ GpuHost { p bytes @ ?GpuRes { T @ GpuRes { ( arc_new [GpuResImpl] @ GpuResImpl { GPU_RES_HOST # i p __gpu_backend @ ?GpuCtx { F } } ) } } }
 }
 
 // No buffer — the placeholder for "not allocated yet".

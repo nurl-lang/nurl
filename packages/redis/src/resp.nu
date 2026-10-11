@@ -224,9 +224,8 @@ $ `stdlib/core/slice.nu`
 @ resp_parse ( Vec u ) buf i start → RespParse {
     : ~ RespBuilder b @ RespBuilder { ( vec_new [RNode] ) 0 start }
     : i root ( __resp_val b buf ( vec_len [u] buf ) )
-    : ( Vec RNode ) nodes . b nodes
-    ( mem_take nodes )  // the arena leaves the builder for the reply
-    ^ @ RespParse { . b status @ RedisReply { nodes root } . b cur }
+    // the arena moves out of the builder into the reply
+    ^ @ RespParse { . b status @ RedisReply { . b nodes root } . b cur }
 }
 
 // Let go of `r` now rather than at the end of its owner's scope.

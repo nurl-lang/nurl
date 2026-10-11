@@ -52,7 +52,7 @@ $ `stdlib/core/slice.nu`
 : s MA_DEFAULT_REF `facebook/map-anything-apache`
 
 // Kept in step with nurl.toml by tests/version_test.sh.
-@ __ma_version → v { ( nurl_print `map-anything 0.5.2\n` ) }
+@ __ma_version → v { ( nurl_print `map-anything ` ) ( nurl_print ( pkg_version ) ) ( nurl_print `\n` ) }
 
 @ __ma_usage → v {
     ( nurl_print `map-anything - metric 3-D reconstruction from images, in pure NURL\n` )
@@ -473,14 +473,13 @@ unsafe @ main → i {
     }
 
     // the model, the device
-    : ~ Lw lw ( lw_none )
-    ?? ( lw_open mpath ) {
+    : Lw lw ?? ( lw_open mpath ) {
         F e → {
             ( nurl_print `map-anything: ` )
             ( nurl_print ( string_data e ) ) ( nurl_print `\n` )
             ^ 1
         }
-        T got → { = lw got }
+        T got → got
     }
     : GpuKit kit ( gk_open_best )
     ? ( gk_ok kit ) {} {
@@ -536,7 +535,7 @@ unsafe @ main → i {
 
     // sky segmentation, when asked for: the LingBot demo's skyseg.onnx,
     // fetched through hub and run through the onnx package
-    : ~ Sky sky @ Sky { @ OGraph { ( vec_new [ONode] ) ( vec_new [OTensor] ) ( string_new ) ( string_new ) ( string_new ) } ( rt_none ) F }
+    : ~ Sky sky @ Sky { @ OGraph { ( vec_new [ONode] ) ( vec_new [OTensor] ) ( string_new ) ( string_new ) ( string_new ) } @ ?Engine { F } F }
     ? != . o masksky 0 {
         ?? ( hub_get `https://huggingface.co/JianyuanWang/skyseg/resolve/main/skyseg.onnx` ) {
             F e → {
@@ -554,13 +553,12 @@ unsafe @ main → i {
         }
     } {}
 
-    : ~ PlyW ply @ PlyW { # s 0 }
-    ?? ( ply_create . o out . o ascii `map-anything, pure NURL (github.com/facebookresearch/map-anything port)` ) {
+    : PlyW ply ?? ( ply_create . o out . o ascii `map-anything, pure NURL (github.com/facebookresearch/map-anything port)` ) {
         F e → {
             ( nurl_print ( string_data e ) ) ( nurl_print `\n` )
             ^ 1
         }
-        T p → { = ply p }
+        T p → p
     }
     : i hw * h w
     : GkBuf rays ( gk_dbuf_new kit * 3 hw GK_F32 )

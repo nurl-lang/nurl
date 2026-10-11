@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.3.2] — 2026-10-11
+
+Requires NURL 0.73.0, which allows `mem_forget`, `mem_take` and the
+`rcbox` primitives only in `unsafe` code and reads a null library-handle
+literal as raw memory. The published 0.3.1 does not compile under it.
+
+### Changed
+
+- `Roster` and `Swarm` keep their state in an `Arc` (stdlib/std/arc.nu)
+  instead of an `rcbox`. The share and drop hooks are ordinary safe
+  functions — the Arc does the counting — and so are the constructors that
+  build one from a whole value; every copy is still the same state, and
+  its last owner releases it.
+- 4 fewer functions are `unsafe` than in 0.3.1.
+
 ## [0.3.1] — 2026-10-07
 
 Requires NURL 0.71.0, whose ownership rules are on by default: the

@@ -73,7 +73,7 @@ unsafe @ probe_of Model mo ! Verdict String r → Probe {
     : ~ Probe out @ Probe { F F 0.0 ( string_new ) F }
     ?? r {
         T vd → {
-            : Meta mm__h ( model_metadata mo )
+            : Meta mm__h ( Meta_share ( model_metadata mo ) )
             : *MetaImpl mm ( _Meta_ptr mm__h )
             : i nv ( vec_len [VerVerdict] . vd versions )
             : ~ i k 0
@@ -142,7 +142,7 @@ unsafe @ main → i {
     // the version is off by default: a train leaves it untrained
     : i tr0 ( model_force_train_at mo__h + T0 * 480 60 )
     ( check > tr0 0 `forecast: the model trains` )
-    : Meta mm ( model_metadata mo__h )
+    : Meta mm ( Meta_share ( model_metadata mo__h ) )
     ( check >= ( meta_find_version mm ANOM_FC_NAME ) 0 `forecast: the version exists` )
     ( check ! ( meta_version_enabled mm ANOM_FC_NAME T ) `forecast: and is off by default` )
     ( check ! . ( _FcModel_ptr . mo fc ) trained `forecast: off means untrained` )
@@ -152,8 +152,8 @@ unsafe @ main → i {
     : b _w ( model_set_version_window mo__h ANOM_FC_NAME 24 0 )
     : String err ( model_train_forecast_at mo__h + T0 * 480 60 )
     ( check == ( string_len err ) 0 `forecast: explicit training succeeds` )
-    ( check ( meta_version_enabled mm ANOM_FC_NAME F ) `forecast: training switches the version on` )
-    : FcModel fc__h ( model_forecast mo__h )
+    ( check ( meta_version_enabled ( model_metadata mo__h ) ANOM_FC_NAME F ) `forecast: training switches the version on` )
+    : FcModel fc__h ( FcModel_share ( model_forecast mo__h ) )
     : *FcModelImpl fc ( _FcModel_ptr fc__h )
     ( check . fc trained `forecast: trained` )
     ( check == . fc nw 2 `forecast: one model per numeric feature (temp, press)` )
@@ -163,7 +163,13 @@ unsafe @ main → i {
     : ~ b named T
     ?? ( vec_get [String] . fc feats 0 ) { T f0 → { ? == ( nurl_str_eq ( string_data f0 ) `temp` ) 1 {} { = named F } } F _ → { = named F } }
     ( check named `forecast: the first watched feature is temp` )
-    : ArimaModel am0 ( model_forecast_model mo__h 0 )
+    : ArimaModel am0 ?? ( model_forecast_model mo__h 0 ) {
+        T x → x
+        F → {
+            ( check F `forecast: the first feature kept a model` )
+            ^ 1
+        }
+    }
     : ArimaSpec sp0 ( arima_spec_of am0 )
     // the holdout may prefer a plain ARIMA that follows the rhythm over twelve steps; what matters is that it does
     ( check | | | > . sp0 P 0 > . sp0 Q 0 > ( arima_xk am0 ) 0 < ( _fc_getf . fc sel_mae 0 ) * 0.5 ( _fc_getf . fc sel_naive 0 ) `forecast: the temperature's model follows the rhythm (a seasonal form, or a plain one at half the naive error)` )
@@ -255,7 +261,7 @@ unsafe @ main → i {
     // reopen: the states carry on from the file (saved at the train,
     // caught up from the ring on the next judgement)
     : Model mo2 ( model_open_at st `fc` + T0 * 512 60 )
-    : FcModel fcb__h ( model_forecast mo2 )
+    : FcModel fcb__h ( FcModel_share ( model_forecast mo2 ) )
     : *FcModelImpl fcb ( _FcModel_ptr fcb__h )
     ( check . fcb trained `forecast: reopened trained` )
     ( check == . fcb pos 512 `forecast: the file stands at the last save (the train, then every 32 rows absorbed)` )
@@ -429,7 +435,13 @@ unsafe @ main → i {
     ( string_push_int tl tm1 ) ( string_push_str tl ` ms` )
     ( check < tm1 20000 ( string_data tl ) )
     ( check == . ( _FcModel_ptr . mo4 fc ) season 1440 `minute: the season is the day` )
-    : ArimaModel am4 ( model_forecast_model mo4__h 0 )
+    : ArimaModel am4 ?? ( model_forecast_model mo4__h 0 ) {
+        T x → x
+        F → {
+            ( check F `minute: the first feature kept a model` )
+            ^ 1
+        }
+    }
     ( check > ( arima_xk am4 ) 0 `minute: modelled as Fourier terms` )
     ( check == . ( arima_spec_of am4 ) s 0 `minute: over a plain ARMA` )
     : Json bt4 ( model_forecast_backtest mo4__h 60 100 )

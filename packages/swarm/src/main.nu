@@ -25,7 +25,7 @@ $ `stdlib/net/relay.nu`
 $ `stdlib/net/transport.nu`
 $ `stdlib/dist/ring.nu`
 $ `stdlib/dist/job.nu`
-$ `stdlib/core/rcbox.nu`
+$ `stdlib/std/arc.nu`
 $ `census.nu`
 $ `work.nu`
 
@@ -71,21 +71,18 @@ $ `work.nu`
     ( Vec u ) group
 }
 
-// A Swarm is a handle on the node bundle in an rcbox (stdlib/core/rcbox.nu):
+// A Swarm is a handle on the node bundle in an Arc (stdlib/std/arc.nu):
 // every copy is the same node, and the last owner releases it — the
 // transport, ring, roster and job node with it.
-: Swarm { s ctl }
+: Swarm { ( Arc SwarmImpl ) a }
 
-unsafe @ Swarm_share Swarm h → Swarm { ^ @ Swarm { # s ( rcbox_share # i . h ctl ) } }
+@ Swarm_share Swarm h → Swarm { ^ @ Swarm { ( arc_clone [SwarmImpl] . h a ) } }
 
-@ Swarm_drop sink Swarm h → v {
-    ( mem_forget h )
-    ( rcbox_release [SwarmImpl] # i . h ctl )
-}
+@ Swarm_drop sink Swarm h → v {}
 
-unsafe @ __Swarm_ptr Swarm h → *SwarmImpl { ^ ( rcbox_ptr [SwarmImpl] # i . h ctl ) }
+unsafe @ __Swarm_ptr Swarm h → *SwarmImpl { ^ ( arc_ptr [SwarmImpl] . h a ) }
 
-unsafe @ swarm_new RelayClient rc i id i role → Swarm {
+@ swarm_new RelayClient rc i id i role → Swarm {
     : ( Vec u ) me ( pk_from_id id )
     : Transport tr ( transport_open # s 0 rc 1 )
     : Ring ring ( ring_new )
@@ -93,7 +90,7 @@ unsafe @ swarm_new RelayClient rc i id i role → Swarm {
     : JobNode jn ( job_node_new tr ring me id )
     // A worker is itself a ring member; the coordinator (client) never is.
     ? == role ( role_worker ) { ( roster_add roster ring me id ( swarm_vnodes ) ) } {}
-    ^ @ Swarm { # s ( rcbox_new [SwarmImpl] @ SwarmImpl { tr ring roster jn me id role ( swarm_group_id ) } ) }
+    ^ @ Swarm { ( arc_new [SwarmImpl] @ SwarmImpl { tr ring roster jn me id role ( swarm_group_id ) } ) }
 }
 
 // Let go of `sw` now rather than at the end of its owner's scope (optional).

@@ -2,7 +2,7 @@
 // BINDING holds; handed an expression there is no binding whose drop
 // it could cancel.
 
-@ main → i {
+unsafe @ main → i {
     ( mem_forget ( string_from `x` ) )
     ^ 0
 }

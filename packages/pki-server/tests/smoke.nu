@@ -48,9 +48,14 @@ $ `../src/ui.nu`
     ( string_push_str idx_path `/index.txt` )
 
     ( nurl_print `  [1/7] generating CA... ` )
-    : PkiCa ca ( pki_load_or_create_ca ( string_data ca_crt ) ( string_data ca_key ) `Test PKI CA` alg )
-    ( _check != # i ca 0 `CA generation returned null` )
-    ? == # i ca 0 { ( nurl_print `FAILED\n` ) ^ v } {}
+    : PkiCa ca ?? ( pki_load_or_create_ca ( string_data ca_crt ) ( string_data ca_key ) `Test PKI CA` alg ) {
+        T c → c
+        F → {
+            ( _check F `CA generation failed` )
+            ( nurl_print `FAILED\n` )
+            ^ v
+        }
+    }
     ( _check == ( pki_ca_alg ca ) alg `CA algorithm not the requested one` )
     ( nurl_print `OK\n` )
 
@@ -58,12 +63,13 @@ $ `../src/ui.nu`
     // what a server restart does, and for ML-DSA it exercises the
     // PKCS#8 loader added to std/pkey.nu.
     ( nurl_print `  [2/7] reloading CA from disk... ` )
-    : PkiCa ca2 ( pki_load_or_create_ca ( string_data ca_crt ) ( string_data ca_key ) `Test PKI CA` alg )
-    ( _check != # i ca2 0 `CA reload failed` )
-    ? != # i ca2 0 {
-        ( _check == ( pki_ca_alg ca2 ) alg `reloaded CA has a different algorithm` )
-        ( _check ( bytes_eq ( pki_ca_public ca ) ( pki_ca_public ca2 ) ) `reloaded CA public key differs` )
-    } {}
+    ?? ( pki_load_or_create_ca ( string_data ca_crt ) ( string_data ca_key ) `Test PKI CA` alg ) {
+        T ca2 → {
+            ( _check == ( pki_ca_alg ca2 ) alg `reloaded CA has a different algorithm` )
+            ( _check ( bytes_eq ( pki_ca_public ca ) ( pki_ca_public ca2 ) ) `reloaded CA public key differs` )
+        }
+        F → { ( _check F `CA reload failed` ) }
+    }
     ( nurl_print `OK\n` )
 
     ( nurl_print `  [3/7] issuing device cert... ` )

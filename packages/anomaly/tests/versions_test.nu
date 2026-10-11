@@ -144,7 +144,7 @@ unsafe @ test_routing Store st → v {
         = j + j 1
     }
     ( check ( model_is_trained mo ) `routing: trained` )
-    : Meta mm__h ( model_metadata mo )
+    : Meta mm__h ( Meta_share ( model_metadata mo ) )
     : *MetaImpl mm ( _Meta_ptr mm__h )
     ( check == . mm last_trained 30 `routing: final train at 30` )
 
@@ -403,7 +403,7 @@ unsafe @ flat_ingest Model mo f temp f press f rain i at → FlatProbe {
     : ~ FlatProbe out @ FlatProbe { F F 0.0 ( string_new ) }
     ?? r {
         T vd → {
-            : Meta mm__h ( model_metadata mo )
+            : Meta mm__h ( Meta_share ( model_metadata mo ) )
             : *MetaImpl mm ( _Meta_ptr mm__h )
             : i nv ( vec_len [VerVerdict] . vd versions )
             : ~ i k 0
@@ -452,7 +452,7 @@ unsafe @ test_flatline Store st → v {
     }
     : i tr ( model_force_train_at mo + T0 * 300 60 )
     ( check > tr 0 `flatline: trained` )
-    : Meta mm__h ( model_metadata mo )
+    : Meta mm__h ( Meta_share ( model_metadata mo ) )
     : *MetaImpl mm ( _Meta_ptr mm__h )
     ( check == ( vec_len [f] . mm flat_sd ) ( vec_len [String] . mm feats ) `flatline: one reference per feature` )
     ( check ( meta_version_enabled mm__h ANOM_FLAT_NAME F ) `flatline: the version exists and is on` )
@@ -539,7 +539,7 @@ unsafe @ mix_ingest Model mo f coarse f flow i at → MixProbe {
     : ~ MixProbe out @ MixProbe { F 0.0 ( string_new ) }
     ?? r {
         T vd → {
-            : Meta mm__h ( model_metadata mo )
+            : Meta mm__h ( Meta_share ( model_metadata mo ) )
             : *MetaImpl mm ( _Meta_ptr mm__h )
             : i nv ( vec_len [VerVerdict] . vd versions )
             : ~ i k 0
@@ -599,7 +599,7 @@ unsafe @ mix_ref Meta mm__h s col → f {
     }
     : i tr ( model_force_train_at mo + T0 * 700 60 )
     ( check > tr 0 `flatline/mixed: trained` )
-    : Meta mm ( model_metadata mo )
+    : Meta mm ( Meta_share ( model_metadata mo ) )
     : f rc ( mix_ref mm `coarse` )
     : f rf ( mix_ref mm `flow` )
     ( check & >= rc 30.0 <= rc 40.0 `flatline/mixed: the coarse column's reference run is its own 35-row habit` )
@@ -654,7 +654,7 @@ unsafe @ mix_ref Meta mm__h s col → f {
     }
     : i tr ( model_force_train_at mo + T0 * 900 60 )
     ( check > tr 0 `flatline/fit: trained on a ring that holds the freeze` )
-    : Meta mm ( model_metadata mo )
+    : Meta mm ( Meta_share ( model_metadata mo ) )
     : f rf ( mix_ref mm `flow` )
     : f rc ( mix_ref mm `coarse` )
     ( check <= rf 3.0 `flatline/fit: a freeze in the training rows does not become the reference` )

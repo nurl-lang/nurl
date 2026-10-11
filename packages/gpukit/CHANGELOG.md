@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.10.0] — 2026-10-11
+
+Requires NURL 0.73.0, which allows `mem_forget`, `mem_take` and the
+`rcbox` primitives only in `unsafe` code and reads a null library-handle
+literal as raw memory. The published 0.9.2 does not compile under it.
+
+### Added
+
+- `gk_none`: a kit that opens nothing and is not ok (`gk_ok` F), for a
+  slot whose kit has been let go.
+
+### Changed
+
+- `GkMem` and `GpuKit` keep their state in an `Arc` (stdlib/std/arc.nu)
+  instead of an `rcbox`. The share and drop hooks are ordinary safe
+  functions — the Arc does the counting — and so are the constructors that
+  build one from a whole value; every copy is still the same state, and
+  its last owner releases it.
+- 4 fewer functions are `unsafe` than in 0.9.2.
+- Requires gpu 0.15.
+- `GkBuf`'s `mem` field is `?GkMem`: F for a wrapped or absent buffer,
+  where it held a null handle. A view takes its own share of the block it
+  views.
+
+### Fixed
+
+- The package compiles again: 0.9.2 did not under NURL 0.72.0, which reads
+  the null `GkMem` literal it used as raw memory. So do its dependents.
+
 ## [0.9.2] — 2026-10-09
 
 Requires NURL 0.72.0, which draws the raw-memory boundary at every call:

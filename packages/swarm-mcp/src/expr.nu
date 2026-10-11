@@ -30,7 +30,7 @@
 // Tokens are kept in two parallel int vectors; the parser builds a flat
 // stride-4 node arena (tag,a,b,c) and returns the root index — the resp.nu
 // arena pattern, so nesting needs no per-node allocation. An EParser is a
-// handle (rcbox): `( eparser_new )`, then `expr_parse`, `eparser_ok`,
+// handle (Arc): `( eparser_new )`, then `expr_parse`, `eparser_ok`,
 // `expr_eval` / `expr_eval_f`; its last owner releases it. Float literals carry
 // the f64 bit pattern (via floatbits) in the value slot, so the all-int arena
 // holds them losslessly; the float evaluator reinterprets them back.
@@ -38,7 +38,7 @@
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/floatbits.nu`
-$ `stdlib/core/rcbox.nu`
+$ `stdlib/std/arc.nu`
 
 // ── token kinds ──────────────────────────────────────────────────
 // 0 END · 1 INT(val) · 2 X · 3 + · 4 - · 5 * · 6 / · 7 % · 8 < · 9 <= ·
@@ -150,24 +150,21 @@ $ `stdlib/core/rcbox.nu`
     b ok
 }
 
-// An EParser is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// An EParser is a handle on its state in an Arc (stdlib/std/arc.nu):
 // every copy is the same parser, and the last owner releases it.
-: EParser { s ctl }
+: EParser { ( Arc EParserImpl ) a }
 
-unsafe @ EParser_share EParser h → EParser { ^ @ EParser { # s ( rcbox_share # i . h ctl ) } }
+@ EParser_share EParser h → EParser { ^ @ EParser { ( arc_clone [EParserImpl] . h a ) } }
 
-@ EParser_drop sink EParser h → v {
-    ( mem_forget h )
-    ( rcbox_release [EParserImpl] # i . h ctl )
-}
+@ EParser_drop sink EParser h → v {}
 
 // The parser in place. One underscore: shared with work.nu, whose fold opens
 // the handle once per chunk and evaluates on the pointer.
-unsafe @ _EParser_ptr EParser h → *EParserImpl { ^ ( rcbox_ptr [EParserImpl] # i . h ctl ) }
+unsafe @ _EParser_ptr EParser h → *EParserImpl { ^ ( arc_ptr [EParserImpl] . h a ) }
 
 // A parser with nothing parsed yet (eparser_ok is F until expr_parse succeeds).
-unsafe @ eparser_new → EParser {
-    ^ @ EParser { # s ( rcbox_new [EParserImpl] @ EParserImpl { ( vec_new [i] ) ( vec_new [i] ) 0 ( vec_new [i] ) F } ) }
+@ eparser_new → EParser {
+    ^ @ EParser { ( arc_new [EParserImpl] @ EParserImpl { ( vec_new [i] ) ( vec_new [i] ) 0 ( vec_new [i] ) F } ) }
 }
 
 // Did the last expr_parse accept its source?

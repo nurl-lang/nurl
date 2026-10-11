@@ -10,12 +10,9 @@ feature coverage and gaps (databases, TLS, MQTT, …) are *not* language
 limitations — they live with each module (the `stdlib/**` file headers and
 [`docs/NETWORKING.md`](NETWORKING.md)) and on the [`ROADMAP.md`](../ROADMAP.md).
 
-**Open soundness holes.** 0.72.0 lists the safe programs the compiler
-still accepts and that fault — raw strings handed to `string_adopt` or a
-`sink s`, views leaving through a helper's return value, `mem_forget` /
-`mem_take` / `rcbox` callable from safe code, and more — in
-[`MEMORY.md` §6.2](MEMORY.md), each a probe in
-[`tools/fuzz/holes/open/`](../tools/fuzz/holes/open/).
+**No open soundness holes.** Every safe program the 0.72.0 release review
+found accepted and faulting is closed, and held by a probe in
+[`tools/fuzz/holes/`](../tools/fuzz/holes/) ([`MEMORY.md` §6.2](MEMORY.md)).
 
 The fixed grammar quirks (binary `&` / `|` arity, ternary cascading, `^`
 vs `^^`) are documented in the [Grammar](#grammar) section below; the
@@ -63,7 +60,7 @@ thread-safety expectation the rules do not state.
 | Struct parameters are passed by **value** by default (C/Go/Zig semantics) — `= . p field val` inside the callee writes a local copy; the caller's struct is unchanged | Mark the parameter `inout` (`@ bump inout Counter c → v`) — an exclusive mutable borrow, the callee mutates the caller's binding in place (see [`docs/MEMORY.md`](MEMORY.md)). Or return the modified struct (`= c ( inc_returning c )`); or use a `*T` parameter inside an `unsafe` function; or wrap state in a single-handle struct (`{ ( Vec i ) slots }`) |
 | Closures capture by value (snapshot at construction) by default. The `: ~` mutable-struct byref capture path (`stdlib/std/panic.nu` recover-with-typed-result) shares the caller's alloca — see [`docs/MEMORY.md` §2.3](MEMORY.md) for the lifetime rule | Use `: ~ MultiFieldStruct` for shared-mutation closures; for value semantics keep the binding immutable |
 | A parameter may not be named `r` followed only by digits (`r0`, `r12`, …) — a by-value parameter keeps its source name as its LLVM SSA register, and nurlc's temporaries are `%r0`, `%r1`, … in the same namespace | Rename it (`r0` → `r_0`, or something that says what it holds). Locals are unaffected — the code generator names those |
-| A `sink` parameter owns and drops what it is given — a `String`, `Vec`, owning struct, handle enum, library handle or `Drop` value (docs/MEMORY.md §7.6). An **owned slice**, or a struct whose literal gave it one, is still **rejected at the call site**: its auto-drop obligation is not transferred. A **raw owned `s`** (from `nurl_str_cat` and friends) is accepted and leaves the caller's binding, but the callee does **not** release a `sink s` parameter: unless it adopts it (`string_adopt`), hands it to another `sink` that does, or, in an `unsafe` function, frees it, the string leaks, even when the callee returns or stores it, and the compiler does not report it (docs/MEMORY.md §6.2) | Take a `sink String` parameter (the caller passes a `String`: `string_from`, or `string_adopt` of its own raw string), or start a `sink s` callee with `: String t ( string_adopt x )`. Pass an owned slice as an ordinary parameter and let the caller's scope drop it, or use a `Vec` |
+| A `sink` parameter owns and drops what it is given — a `String`, `Vec`, owning struct, handle enum, library handle, `Drop` value or a raw `s` (docs/MEMORY.md §1, §7.6). An **owned slice**, or a struct whose literal gave it one, is still **rejected at the call site**: its auto-drop obligation is not transferred | Pass an owned slice as an ordinary parameter and let the caller's scope drop it, or use a `Vec` |
 
 ## Ownership
 

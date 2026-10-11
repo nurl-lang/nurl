@@ -410,7 +410,11 @@ A function or method declaration may carry a leading `unsafe` prefix
   or read its raw fields — a struct that declares a raw-pointer field, or
   a library handle (`Slice`, `Vec`, `Box`, …);
 - call a raw-memory primitive (`nurl_alloc`, `nurl_free`, `nurl_realloc`,
-  `mem_forget`, `nurl_peek*` / `nurl_poke*`, `nurl_memcpy`, …) or a C
+  `nurl_peek*` / `nurl_poke*`, `nurl_memcpy`, …), an ownership primitive
+  that gives a value up or claims it by hand (`mem_forget`, `mem_take`,
+  `mem_put_back`), an `rcbox` primitive (`rcbox_new`, `rcbox_zero`,
+  `rcbox_share`, `rcbox_release`, `rcbox_ptr`), an `Arc` held as a
+  plain word (`arc_into_word`, `arc_from_word`, `arc_word_share`) or a C
   primitive that reads or writes as far as its caller says, takes a
   `FILE*` or a format string (`memmem`, `fwrite`, `fopen`, `printf`, …:
   the builtins marked raw in `stdlib/core/builtins.nu`);
@@ -444,9 +448,9 @@ way the standard library vouches for its own raw code. Calling an
 `unsafe` function needs no marking. The rest of the program is held to
 the ownership rules (docs/MEMORY.md §6), and **every program accepted
 without an `unsafe` function of its own is memory-safe and leak-free**
-(docs/MEMORY.md §6.2 — the pre-production hardening closed 0.71.0's
-`Slice` hole; the holes still open are listed there, each a probe in
-`tools/fuzz/holes/open/`, and §9.13 covers the `sink s` one).
+(docs/MEMORY.md §6.2 — every hole found so far, 0.71.0's `Slice` one
+and the 37 the 0.72.0 review found among them, is closed and held by a
+probe in `tools/fuzz/holes/`).
 `nurlc --unsafe-report` lists the `unsafe` functions a program
 contains outside the standard library — the whole surface a reviewer has
 to trust.
@@ -556,7 +560,20 @@ function — the float/pointer/struct dual of the argument check; float
 value into a scalar field, or more field values than the struct declares
 — and **slice-literal elements** (`[ i | 1 2.5 ]` is rejected; widths
 coerce, float↔int and pointer↔scalar never do). Omitting trailing
-struct-literal fields stays legal (they zero-initialise), and integer
+struct-literal fields stays legal (they zero-initialise) when zero is a
+value of the field's type — a number, a flag, an option (`F`), a raw
+string or pointer (null), or a struct, array or enum of those. A
+`String`, a `Vec`, a library handle (`Rc`, `Arc`, `HashMap`, a module's
+own handle) or a closure has no zero value — it needs its control
+block, its shared block or its code — so outside `unsafe` such a field
+(or a struct holding one) must be given. The same holds for an enum
+literal's payloads, for the value an option or result literal's tag
+names (`@ ?( Vec i ) { T }` gives none), for a bare variant used as a
+value (its payloads must be plain numbers or flags), for the
+zero-filling constructors (`vec_zeroed`, `vec_resize_zeroed`,
+`box_zero`, `rc_zero`, `arc_zero`), and for a number used where a
+`String`, a `Vec` or a library handle is expected (`: ( Vec i ) v 0`, a
+`0` argument): none of them makes one outside `unsafe`. Integer
 width / signedness narrowing into sized or unsigned fields is a legal
 coercion. An integer never converts into a pointer type implicitly —
 not into a field, a binding, an assignment, or a return value; the
@@ -1613,6 +1630,25 @@ all argument positions. Names and return types never imply consumption.
 }
 ```
 
+#### The package's version `( pkg_version )`
+
+`( pkg_version )` is the `version` of the package the source file belongs
+to — the one in the `[package]` table of the nearest `nurl.toml` above the
+file — as a string literal (`s`). The compiler reads it when it reads the
+file, so the program carries the version its manifest names and the number
+is written in one place:
+
+```
+: Cli c ( cli_new `tool` `what it does` ( pkg_version ) )
+: s TOOL_VERSION ( pkg_version )             // a top-level constant too
+```
+
+Each file answers for its own package: a dependency's source reads the
+dependency's manifest. A file with no `nurl.toml` above it, or one whose
+`[package]` names no `version`, is a compile error. Only the exact form
+`( pkg_version )` is read this way, so a function of that name that takes
+arguments is an ordinary call.
+
 ### 6.6 Member access `.`
 
 ```
@@ -1894,10 +1930,12 @@ whichever way it leaves:
   binds it;
 - `( mem_forget x )` (only inside an `unsafe` function, §3.3d) gives up
   `x`'s value for good — for a hand-written disposer;
-- `( mem_take x )` claims `x`'s value — for a container operation that
-  hands an element out (`vec_pop`), so the element is owned, not lent.
-- `( mem_put_back x )` stores `x` back into the slot it was read from
-  without copying it or taking it over — for an element setter.
+- `( mem_take x )` (only inside an `unsafe` function) claims `x`'s value
+  — for a container operation that hands an element out (`vec_pop`), so
+  the element is owned, not lent.
+- `( mem_put_back x )` (only inside an `unsafe` function) stores `x` back
+  into the slot it was read from without copying it or taking it over —
+  for an element setter.
 
 See [`docs/MEMORY.md` §7.6](MEMORY.md) for the complete rules and
 [`docs/LIMITATIONS.md`](LIMITATIONS.md) for the shapes that still
@@ -2095,10 +2133,9 @@ The body of an `unsafe` function (§3.3d): raw pointers, pointer casts,
 the raw-memory primitives and foreign calls are its author's to get
 right. Everything else is held to the rules above — every program
 accepted without an `unsafe` function of its own is memory-safe and
-leak-free ([`docs/MEMORY.md` §6.2](MEMORY.md)), apart from the open
-holes listed there, each a probe in `tools/fuzz/holes/open/` (among
-them: a raw string handed to `string_adopt` or a `sink s` parameter,
-§7.2). The pre-production hardening closed the exception 0.71.0 named: a `Slice`
+leak-free ([`docs/MEMORY.md` §6.2](MEMORY.md)); every hole found so far
+is closed and held by a probe in `tools/fuzz/holes/`. The pre-production
+hardening closed the exception 0.71.0 named: a `Slice`
 built from a `Vec` (`slice_from_vec`, `slice_sub`, protobuf's
 `ProtoReader`) is now tracked as a view of it and ends when the `Vec` is
 freed or may reallocate ([`docs/MEMORY.md` §2.10](MEMORY.md)).

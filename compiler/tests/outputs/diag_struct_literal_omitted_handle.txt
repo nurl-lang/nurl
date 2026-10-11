@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_struct_literal_omitted_handle.nu:8:13: error: field 'items' of 'Bag' is left out of this literal, which makes it zero bytes — and zero bytes are not a '( Vec i )': a String or a Vec needs its control block, a library handle (an Arc, a HashMap, a handle of a module) its shared block, a closure its code, so code using it reads through null or calls it. Give the field a value (( string_new ), ( vec_new [T] ), its constructor) — or, if this function fills it in before anything reads it and you vouch for that, declare it 'unsafe @ name …'.
+    : Bag b @ Bag { 5 }
+            ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

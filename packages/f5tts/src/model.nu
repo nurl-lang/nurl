@@ -34,7 +34,7 @@ $ `deps/safetensor/src/safetensor.nu`
 $ `deps/torchpt/src/pickle.nu`
 $ `deps/torchpt/src/torchpt.nu`
 $ `kernels.nu`
-$ `stdlib/core/rcbox.nu`
+$ `stdlib/std/arc.nu`
 
 : f F5_PI 3.14159265358979323846
 
@@ -68,8 +68,8 @@ $ `stdlib/core/rcbox.nu`
 
 : F5ModelImpl {
     GpuKit kit
-    St st  // a safetensors checkpoint, st_none when this is a .pt
-    Pt pt  // a PyTorch pickle checkpoint, pt_none when this is safetensors
+    ? St st  // a safetensors checkpoint, F when this is a .pt
+    ? Pt pt  // a PyTorch pickle checkpoint, F when this is safetensors
     String prefix  // what every tensor name in this file starts with
     // architecture
     i dim
@@ -121,18 +121,15 @@ $ `stdlib/core/rcbox.nu`
     b loaded  // the weights are on the device
 }
 
-// An F5Model is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// An F5Model is a handle on its state in an Arc (stdlib/std/arc.nu):
 // every copy is the same engine, and the last owner releases it.
-: F5Model { s ctl }
+: F5Model { ( Arc F5ModelImpl ) a }
 
-unsafe @ F5Model_share F5Model h → F5Model { ^ @ F5Model { # s ( rcbox_share # i . h ctl ) } }
+@ F5Model_share F5Model h → F5Model { ^ @ F5Model { ( arc_clone [F5ModelImpl] . h a ) } }
 
-@ F5Model_drop sink F5Model h → v {
-    ( mem_forget h )
-    ( rcbox_release [F5ModelImpl] # i . h ctl )
-}
+@ F5Model_drop sink F5Model h → v {}
 
-unsafe @ __F5Model_ptr F5Model h → *F5ModelImpl { ^ ( rcbox_ptr [F5ModelImpl] # i . h ctl ) }
+unsafe @ __F5Model_ptr F5Model h → *F5ModelImpl { ^ ( arc_ptr [F5ModelImpl] . h a ) }
 
 @ __f5m_err s msg → !F5Model String {
     ^ @ !F5Model String { F ( string_from msg ) }
@@ -171,13 +168,9 @@ unsafe @ __F5Model_ptr F5Model h → *F5ModelImpl { ^ ( rcbox_ptr [F5ModelImpl] 
 //   model_state_dict.transformer.               the same checkpoint's live weights
 //   transformer.                                a bare state dict
 //
-unsafe @ __f5m_st_tensors * F5ModelImpl m → ( Vec StTensor ) {
-    ^ ( st_tensors . m st )
-}
-
 unsafe @ __f5m_src_find * F5ModelImpl m s name → i {
-    ? ( st_is_open . m st ) { ^ ( st_find_tensor . m st name ) } {}
-    ? ( pt_is_open . m pt ) { ^ ( pt_find . m pt name ) } {}
+    ?? . m st { T sf → { ^ ( st_find_tensor sf name ) } F → {} }
+    ?? . m pt { T pf → { ^ ( pt_find pf name ) } F → {} }
     ^ -1
 }
 
@@ -190,53 +183,68 @@ unsafe @ __f5m_src_find_p * F5ModelImpl m s rest → i {
 }
 
 unsafe @ __f5m_src_nelems * F5ModelImpl m i idx → i {
-    ? ( st_is_open . m st ) {
-        ?? ( vec_get [StTensor] ( __f5m_st_tensors m ) idx ) {
-            T t → { ^ . t nelems }
-            F → { ^ 0 }
+    ?? . m st {
+        T sf → {
+            ?? ( vec_get [StTensor] ( st_tensors sf ) idx ) {
+                T t → { ^ . t nelems }
+                F → { ^ 0 }
+            }
         }
-    } {}
-    ? ( pt_is_open . m pt ) { ^ ( pt_nelems . m pt idx ) } {}
+        F → {}
+    }
+    ?? . m pt { T pf → { ^ ( pt_nelems pf idx ) } F → {} }
     ^ 0
 }
 
 unsafe @ __f5m_src_dim * F5ModelImpl m i idx i k → i {
-    ? ( st_is_open . m st ) {
-        ?? ( vec_get [StTensor] ( __f5m_st_tensors m ) idx ) {
-            T t → {
-                ? == k 0 { ^ . t d0 } {}
-                ? == k 1 { ^ . t d1 } {}
-                ? == k 2 { ^ . t d2 } {}
-                ^ . t d3
+    ?? . m st {
+        T sf → {
+            ?? ( vec_get [StTensor] ( st_tensors sf ) idx ) {
+                T t → {
+                    ? == k 0 { ^ . t d0 } {}
+                    ? == k 1 { ^ . t d1 } {}
+                    ? == k 2 { ^ . t d2 } {}
+                    ^ . t d3
+                }
+                F → { ^ 0 }
             }
-            F → { ^ 0 }
         }
-    } {}
-    ? ( pt_is_open . m pt ) { ^ ( pt_dim . m pt idx k ) } {}
+        F → {}
+    }
+    ?? . m pt { T pf → { ^ ( pt_dim pf idx k ) } F → {} }
     ^ 0
 }
 
 unsafe @ __f5m_src_f32 * F5ModelImpl m i idx → b {
-    ? ( st_is_open . m st ) {
-        ?? ( vec_get [StTensor] ( __f5m_st_tensors m ) idx ) {
-            T t → { ^ == . t dtype ST_F32 }
-            F → { ^ F }
+    ?? . m st {
+        T sf → {
+            ?? ( vec_get [StTensor] ( st_tensors sf ) idx ) {
+                T t → { ^ == . t dtype ST_F32 }
+                F → { ^ F }
+            }
         }
-    } {}
-    ? ( pt_is_open . m pt ) {
-        ^ & == ( pt_dtype . m pt idx ) PKS_F32 ( pt_is_contiguous . m pt idx )
-    } {}
+        F → {}
+    }
+    ?? . m pt {
+        T pf → {
+            ^ & == ( pt_dtype pf idx ) PKS_F32 ( pt_is_contiguous pf idx )
+        }
+        F → {}
+    }
     ^ F
 }
 
 unsafe @ __f5m_src_ptr * F5ModelImpl m i idx → *u {
-    ? ( st_is_open . m st ) {
-        ?? ( vec_get [StTensor] ( __f5m_st_tensors m ) idx ) {
-            T t → { ^ ( st_tensor_ptr . m st t ) }
-            F → { ^ # *u 0 }
+    ?? . m st {
+        T sf → {
+            ?? ( vec_get [StTensor] ( st_tensors sf ) idx ) {
+                T t → { ^ ( st_tensor_ptr sf t ) }
+                F → { ^ # *u 0 }
+            }
         }
-    } {}
-    ? ( pt_is_open . m pt ) { ^ ( pt_tensor_ptr . m pt idx ) } {}
+        F → {}
+    }
+    ?? . m pt { T pf → { ^ ( pt_tensor_ptr pf idx ) } F → {} }
     ^ # *u 0
 }
 
@@ -722,20 +730,20 @@ unsafe @ __f5m_arch_ok * F5ModelImpl m i depth → b {
 unsafe @ f5_open s ckpt s vocab_path i device → !F5Model String {
     // zeroed: every handle field starts as the null handle, so an early
     // return drops a half-built engine cleanly
-    : F5Model h @ F5Model { # s ( rcbox_zero [F5ModelImpl] ) }
+    : F5Model h @ F5Model { ( arc_zero [F5ModelImpl] ) }
     : *F5ModelImpl m ( __F5Model_ptr h )
-    = . m st ( st_none )
-    = . m pt ( pt_none )
+    = . m st @ ?St { F }
+    = . m pt @ ?Pt { F }
     = . m prefix ( string_new )
     : b is_pt | ( nurl_str_ends ckpt `.pt` ) | ( nurl_str_ends ckpt `.pth` ) ( nurl_str_ends ckpt `.bin` )
     ? is_pt {
         ?? ( pt_open ckpt ) {
-            T pt → { = . m pt pt }
+            T pt → { = . m pt @ ?Pt { T pt } }
             F e → { ^ @ !F5Model String { F e } }
         }
     } {
         ?? ( st_open ckpt ) {
-            T st → { = . m st st }
+            T st → { = . m st @ ?St { T st } }
             F e → { ^ @ !F5Model String { F e } }
         }
     }

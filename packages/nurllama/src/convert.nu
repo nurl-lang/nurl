@@ -191,7 +191,7 @@ $ `stdlib/core/slice.nu`
 @ __cv_src_nelems Cv c s name → i {
     : i h ( __cv_find c name )
     ? < h 0 { ^ 0 } {}
-    : St st ?? ( vec_get [St] . c sts / h 65536 ) { T a → a F → ( st_none ) }
+    : St st ?? ( vec_get [St] . c sts / h 65536 ) { T a → a F → { ^ 0 } }
     ?? ( vec_get [StTensor] ( st_tensors st ) % h 65536 ) {
         T t → { ^ . t nelems }
         F → { ^ 0 }
@@ -242,7 +242,10 @@ $ `stdlib/core/slice.nu`
         ( string_push_str m hfname )
         ^ @ !v String { F m }
     } {}
-    : St st ?? ( vec_get [St] . c sts / h 65536 ) { T a → a F → ( st_none ) }
+    : St st ?? ( vec_get [St] . c sts / h 65536 ) {
+        T a → a
+        F → { ^ @ !v String { F ( string_from `nurllama convert: tensor outside the checkpoint's files` ) } }
+    }
     : i ti % h 65536
     : ~ i ne 0
     ?? ( vec_get [StTensor] ( st_tensors st ) ti ) { T t → { = ne . t nelems } F → {} }
@@ -288,7 +291,10 @@ $ `stdlib/core/slice.nu`
             ( string_push_str m ( string_data nm ) )
             ^ @ !v String { F m }
         } {}
-        : St st ?? ( vec_get [St] . c sts / h 65536 ) { T a → a F → ( st_none ) }
+        : St st ?? ( vec_get [St] . c sts / h 65536 ) {
+            T a → a
+            F → { ^ @ !v String { F ( string_from `nurllama convert: tensor outside the checkpoint's files` ) } }
+        }
         : i ti % h 65536
         : ~ i ne 0
         ?? ( vec_get [StTensor] ( st_tensors st ) ti ) { T t → { = ne . t nelems } F → {} }
@@ -709,16 +715,13 @@ $ `stdlib/core/slice.nu`
     }
 
     // ── write ──
-    : ~ GgufS sw @ GgufS { # s 0 }
-    ?? ( gws_create outpath 32 ) {
-        T sw2 → { = sw sw2 }
+    : GgufS sw ?? ( gws_create outpath 32 ) {
+        T sw2 → sw2
         F e → {
             ( __cv_errmsg `cannot create output` ( string_data e ) )
+            ^ 1
         }
     }
-    ? == 0 # i . sw ctl {
-        ^ 1
-    } {}
 
     ( gws_kv_str sw `general.architecture` `llada2` )
     : String gname ( string_from `llada2 ` )

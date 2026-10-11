@@ -27,7 +27,7 @@ $ `deps/gpukit/src/devops.nu`
 $ `deps/torchpt/src/torchpt.nu`
 $ `deps/audio/src/istft.nu`
 $ `kernels.nu`
-$ `stdlib/core/rcbox.nu`
+$ `stdlib/std/arc.nu`
 
 : VocosImpl {
     GpuKit kit
@@ -52,18 +52,15 @@ $ `stdlib/core/rcbox.nu`
     GkBuf melb GkBuf h GkBuf t1 GkBuf t2 GkBuf big GkBuf spec
 }
 
-// A Vocos is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// A Vocos is a handle on its state in an Arc (stdlib/std/arc.nu):
 // every copy is the same vocoder, and the last owner releases it.
-: Vocos { s ctl }
+: Vocos { ( Arc VocosImpl ) a }
 
-unsafe @ Vocos_share Vocos h → Vocos { ^ @ Vocos { # s ( rcbox_share # i . h ctl ) } }
+@ Vocos_share Vocos h → Vocos { ^ @ Vocos { ( arc_clone [VocosImpl] . h a ) } }
 
-@ Vocos_drop sink Vocos h → v {
-    ( mem_forget h )
-    ( rcbox_release [VocosImpl] # i . h ctl )
-}
+@ Vocos_drop sink Vocos h → v {}
 
-unsafe @ __Vocos_ptr Vocos h → *VocosImpl { ^ ( rcbox_ptr [VocosImpl] # i . h ctl ) }
+unsafe @ __Vocos_ptr Vocos h → *VocosImpl { ^ ( arc_ptr [VocosImpl] . h a ) }
 
 @ __voc_err s msg → !Vocos String {
     ^ @ !Vocos String { F ( string_from msg ) }
@@ -226,7 +223,7 @@ unsafe @ __voc_upload_all * VocosImpl v → b {
 unsafe @ voc_open s path GpuKit kit → !Vocos String {
     ?? ( pt_open path ) {
         T pt → {
-            : Vocos h @ Vocos { # s ( rcbox_zero [VocosImpl] ) }
+            : Vocos h @ Vocos { ( arc_zero [VocosImpl] ) }
             : *VocosImpl v ( __Vocos_ptr h )
             = . v pt pt
             // one more owner of the caller's kit: the vocoder runs on it

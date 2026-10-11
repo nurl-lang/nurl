@@ -1,0 +1,12 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+close b-direct
+note replaced
+recovered: in hook
+end
+impl a-scope-exit
+closure 1
+close a-scope-exit
+note replaced

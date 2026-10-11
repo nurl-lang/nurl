@@ -29,7 +29,7 @@
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/std/hashmap.nu`
-$ `stdlib/core/rcbox.nu`
+$ `stdlib/std/arc.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/core/slice.nu`
 
@@ -40,18 +40,15 @@ $ `stdlib/core/slice.nu`
     i size  // the vocabulary's length, which is also text_num_embeds
 }
 
-// An F5Vocab is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// An F5Vocab is a handle on its state in an Arc (stdlib/std/arc.nu):
 // every copy is the same vocabulary, and the last owner releases it.
-: F5Vocab { s ctl }
+: F5Vocab { ( Arc F5VocabImpl ) a }
 
-unsafe @ F5Vocab_share F5Vocab h → F5Vocab { ^ @ F5Vocab { # s ( rcbox_share # i . h ctl ) } }
+@ F5Vocab_share F5Vocab h → F5Vocab { ^ @ F5Vocab { ( arc_clone [F5VocabImpl] . h a ) } }
 
-@ F5Vocab_drop sink F5Vocab h → v {
-    ( mem_forget h )
-    ( rcbox_release [F5VocabImpl] # i . h ctl )
-}
+@ F5Vocab_drop sink F5Vocab h → v {}
 
-unsafe @ __F5Vocab_ptr F5Vocab h → *F5VocabImpl { ^ ( rcbox_ptr [F5VocabImpl] # i . h ctl ) }
+unsafe @ __F5Vocab_ptr F5Vocab h → *F5VocabImpl { ^ ( arc_ptr [F5VocabImpl] . h a ) }
 
 // The same read, public: run.nu's silence walk needs it too.
 @ _f5t_geti ( Vec i ) v i k → i {
@@ -119,7 +116,7 @@ unsafe @ f5_vocab_load s path → !F5Vocab String {
                 ( __f5t_set map # s + base ( __f5t_geti koff k ) ( __f5t_geti kid k ) )
                 = k + k 1
             }
-            ^ @ !F5Vocab String { T @ F5Vocab { # s ( rcbox_new [F5VocabImpl] @ F5VocabImpl { asc map keys id } ) } }
+            ^ @ !F5Vocab String { T @ F5Vocab { ( arc_new [F5VocabImpl] @ F5VocabImpl { asc map keys id } ) } }
         }
         F _e → { ^ ( __f5t_err `f5tts: cannot read the vocabulary file` ) }
     }

@@ -22,7 +22,7 @@ unsafe @ live → i { ^ - ( nurl_alloc_count ) ( nurl_free_count ) }
 
 unsafe @ Pair_share Pair h → Pair { ^ @ Pair { # s ( rcbox_share # i . h ctl ) } }
 
-@ Pair_drop sink Pair h → v { ( mem_forget h ) ( rcbox_release [PairImpl] # i . h ctl ) }
+unsafe @ Pair_drop sink Pair h → v { ( mem_forget h ) ( rcbox_release [PairImpl] # i . h ctl ) }
 
 @ mk1 i x → ( Vec i ) { : ( Vec i ) v ( vec_new [i] ) ( vec_push [i] v x ) ^ v }
 

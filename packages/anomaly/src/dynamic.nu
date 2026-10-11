@@ -38,7 +38,7 @@ $ `src/score.nu`
 $ `src/autoenc.nu`
 $ `src/forecast.nu`
 $ `src/store.nu`
-$ `stdlib/core/rcbox.nu`
+$ `stdlib/std/arc.nu`
 
 // ── Types ─────────────────────────────────────────────────────────────
 
@@ -104,18 +104,15 @@ $ `stdlib/core/rcbox.nu`
     i max_points
 }
 
-// A Model is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// A Model is a handle on its state in an Arc (stdlib/std/arc.nu):
 // every copy is the same state, and the last owner releases it.
-: Model { s ctl }
+: Model { ( Arc ModelImpl ) a }
 
-unsafe @ Model_share Model h → Model { ^ @ Model { # s ( rcbox_share # i . h ctl ) } }
+@ Model_share Model h → Model { ^ @ Model { ( arc_clone [ModelImpl] . h a ) } }
 
-@ Model_drop sink Model h → v {
-    ( mem_forget h )
-    ( rcbox_release [ModelImpl] # i . h ctl )
-}
+@ Model_drop sink Model h → v {}
 
-unsafe @ _Model_ptr Model h → *ModelImpl { ^ ( rcbox_ptr [ModelImpl] # i . h ctl ) }
+unsafe @ _Model_ptr Model h → *ModelImpl { ^ ( arc_ptr [ModelImpl] . h a ) }
 
 // Who is acting, and how, for the audit log: the service sets the actor
 // from the request's principal, the CLI and the scheduler name
@@ -209,9 +206,9 @@ unsafe @ __an_sched_step Model mo__h → i {
 }
 
 unsafe @ model_open_at Store st s name i now → Model {
-    : i mo__box ( rcbox_zero [ModelImpl] )
-    : *ModelImpl mo ( rcbox_ptr [ModelImpl] mo__box )
-    : Model mo__h @ Model { # s mo__box }
+    : ( Arc ModelImpl ) mo__box ( arc_zero [ModelImpl] )
+    : *ModelImpl mo ( arc_ptr [ModelImpl] mo__box )
+    : Model mo__h @ Model { mo__box }
     = . mo store ( store_open_org ( string_data . st root ) ( store_org st ) )
     = . mo mname ( string_from name )
     = . mo forests ( vec_new [VerModel] )
@@ -342,7 +339,10 @@ unsafe @ model_open_at Store st s name i now → Model {
             ? > pos np2 { = pos np2 } {}
             ? < pos 0 {
                 : ~ i j 0
-                ~ < j . fc nw { ( arima_restart_at ( _fc_model_at . mo fc j ) - ( model_seq_base mo__h ) . fc origin_seq ) = j + j 1 }
+                ~ < j . fc nw {
+                    ?? ( _fc_model_at . mo fc j ) { T am → { ( arima_restart_at am - ( model_seq_base mo__h ) . fc origin_seq ) } F → {} }
+                    = j + j 1
+                }
                 = pos 0
             } {}
             = . fc pos pos
@@ -542,18 +542,15 @@ unsafe @ __an_window_tail Model mo__h i need i end → ?( Vec f ) {
     ( Vec i ) fc_ok  // 1 where the row has forecast z-scores
 }
 
-// A Hist is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// A Hist is a handle on its state in an Arc (stdlib/std/arc.nu):
 // every copy is the same state, and the last owner releases it.
-: Hist { s ctl }
+: Hist { ( Arc HistImpl ) a }
 
-unsafe @ Hist_share Hist h → Hist { ^ @ Hist { # s ( rcbox_share # i . h ctl ) } }
+@ Hist_share Hist h → Hist { ^ @ Hist { ( arc_clone [HistImpl] . h a ) } }
 
-@ Hist_drop sink Hist h → v {
-    ( mem_forget h )
-    ( rcbox_release [HistImpl] # i . h ctl )
-}
+@ Hist_drop sink Hist h → v {}
 
-unsafe @ _Hist_ptr Hist h → *HistImpl { ^ ( rcbox_ptr [HistImpl] # i . h ctl ) }
+unsafe @ _Hist_ptr Hist h → *HistImpl { ^ ( arc_ptr [HistImpl] . h a ) }
 
 // Widest timevector window over the trained forests (1 when there is none):
 // the rows a scan of [lo, hi) needs encoded start at lo − width + 1.
@@ -751,7 +748,7 @@ unsafe @ __an_hist_build Model mo__h i from i to → Hist {
         ( vec_push [( Vec i )] dfs_ok dok )
         = k + k 1
     }
-    ^ @ Hist { # s ( rcbox_new [HistImpl] @ HistImpl { lo n nfeat x ok ae_nfeat ae_x dfs dfs_ok fc_nw fc_z fc_ok } ) }
+    ^ @ Hist { ( arc_new [HistImpl] @ HistImpl { lo n nfeat x ok ae_nfeat ae_x dfs dfs_ok fc_nw fc_z fc_ok } ) }
 }
 
 // Row `at` of the ring as a standardised point, copied out of the history.
@@ -789,13 +786,16 @@ unsafe @ __an_hist_tail Hist h__h i need i end → ?( Vec f ) {
 
 // The timevector tail: out of the history when one covers it, else read
 // from the ring.
-@ __an_tail_for Model mo Hist h i need i end → ?( Vec f ) {
-    ? != # i . h ctl 0 {
-        ?? ( __an_hist_tail h need end ) {
-            T t → { ^ @ ?( Vec f ) { T t } }
-            F → {}
+@ __an_tail_for Model mo ? Hist h i need i end → ?( Vec f ) {
+    ?? h {
+        T hh → {
+            ?? ( __an_hist_tail hh need end ) {
+                T t → { ^ @ ?( Vec f ) { T t } }
+                F → {}
+            }
         }
-    } {}
+        F → {}
+    }
     ^ ( __an_window_tail mo need end )
 }
 
@@ -817,7 +817,7 @@ unsafe @ __an_score_enc_upto Model mo__h EncPoint p i end b absorb → Verdict {
     ? . fc trained {
         = fraw ( fc_project p . fc feats )
     } {}
-    ^ ( __an_score_core mo__h x araw fraw end @ Hist { # s 0 } absorb )
+    ^ ( __an_score_core mo__h x araw fraw end @ ?Hist { F } absorb )
 }
 
 // Score ring row `at` out of an encoded history that covers it.
@@ -829,7 +829,7 @@ unsafe @ __an_score_hist Model mo Hist h__h i at → Verdict {
     : *f ap ( vec_data [f] . h ae_x )
     : ~ i c 0
     ~ < c . h ae_nfeat { ( vec_push [f] araw . ap + * r . h ae_nfeat c ) = c + c 1 }
-    ^ ( __an_score_core mo x araw ( vec_new [f] ) at h__h F )
+    ^ ( __an_score_core mo x araw ( vec_new [f] ) at @ ?Hist { T ( Hist_share h__h ) } F )
 }
 
 // The verdict of a standardised point `x` (owned) sitting at
@@ -842,8 +842,9 @@ unsafe @ __an_score_hist Model mo Hist h__h i at → Verdict {
 // come out of it; without, they are computed here and read from the
 // ring, and `absorb` says the point is the ring's newest and the
 // forecast states take it in (the live ingest; detect_only leaves them).
-unsafe @ __an_score_core Model mo__h ( Vec f ) x ( Vec f ) araw ( Vec f ) fraw i end Hist h__h b absorb → Verdict {
-    : *HistImpl h ( _Hist_ptr h__h )
+unsafe @ __an_score_core Model mo__h ( Vec f ) x ( Vec f ) araw ( Vec f ) fraw i end ? Hist h__h b absorb → Verdict {
+    // the history's state, when there is one (read only under `hist`)
+    : *HistImpl h ?? h__h { T hh → ( _Hist_ptr hh ) F → # *HistImpl 0 }
     : *ModelImpl mo ( _Model_ptr mo__h )
     : ( Vec VerVerdict ) vvs ( vec_new [VerVerdict] )
     : b warm >= ( vec_len [String] . mo lines ) . mo min_points
@@ -853,7 +854,7 @@ unsafe @ __an_score_core Model mo__h ( Vec f ) x ( Vec f ) araw ( Vec f ) fraw i
 
     : *MetaImpl mm ( _Meta_ptr . mo meta )
     : i nfeat ( vec_len [String] . mm feats )
-    : b hist != # i . h__h ctl 0
+    : b hist ?? h__h { T _x → T F → F }
 
     : ~ i hits 0
     // `worst` is the aggregate score: the decision value of the version
@@ -1401,7 +1402,7 @@ unsafe @ model_forecast_json Model mo__h i h → Json {
             F _ → {}
         }
         ( json_obj_set fo `selected` ( json_str_lit ( fc_selected_of . mo fc j ) ) )
-        ( json_obj_set fo `model` ( arima_coef ( _fc_model_at . mo fc j ) ) )
+        ?? ( _fc_model_at . mo fc j ) { T am → { ( json_obj_set fo `model` ( arima_coef am ) ) } F → {} }
         ( json_arr_push fa fo )
         = j + j 1
     }
@@ -1618,7 +1619,7 @@ unsafe @ model_forecast_backtest Model mo__h i h i n → Json {
     ^ o
 }
 
-unsafe @ model_forecast_model Model mo__h i j → ArimaModel {
+unsafe @ model_forecast_model Model mo__h i j → ?ArimaModel {
     : *ModelImpl mo ( _Model_ptr mo__h )
     ^ ( _fc_model_at . mo fc j )
 }
@@ -2192,7 +2193,7 @@ unsafe @ _an_flat_need Meta mm__h → i {
 // reference is 0: a column that never moved in training is not expected
 // to). The larger of the two, over the features, is the verdict's
 // fraction. The collapse rule reads the newest W rows of the look-back.
-unsafe @ __an_flat_judge Model mo__h ( Vec f ) x i end Hist h → FlatOut {
+unsafe @ __an_flat_judge Model mo__h ( Vec f ) x i end ? Hist h → FlatOut {
     : *ModelImpl mo ( _Model_ptr mo__h )
     : *MetaImpl mm ( _Meta_ptr . mo meta )
     ? ( __an_flat_fitted mo__h ) {} { ^ @ FlatOut { F 0.0 -1 } }
@@ -3395,7 +3396,7 @@ unsafe @ model_version_from Model mo__h s vname → i {
         }
         = k + k 1
     }
-    ^ @ FineTuneReport { items rate lo 0 rows apply excluded }
+    ^ @ FineTuneReport { items rate lo 0 rows apply excluded 0 0.0 0 0 ( string_new ) }
 }
 
 // ── Labels ────────────────────────────────────────────────────────────
@@ -3894,7 +3895,7 @@ unsafe @ model_scan_at Model mo__h i from_ts i to_ts i limit b force → ScanOut
     // The rows the misses need, encoded once — on the first miss, so a scan
     // the cache answers in full parses nothing. A timevector window reaches
     // back width−1 rows before the first row in the window.
-    : ~ Hist h @ Hist { # s 0 }
+    : ~ ? Hist h @ ?Hist { F }
     : ~ i j lo
     ~ < j hi {
         // Cache index of ring row j: lifetime index minus the cache's base.
@@ -3930,10 +3931,16 @@ unsafe @ model_scan_at Model mo__h i from_ts i to_ts i limit b force → ScanOut
             ( vec_push [ScoredPt] pts @ ScoredPt { j ts sc sv anom pres flag } )
         } {
             = misses + misses 1
-            ? == # i . h ctl 0 { = h ( __an_hist_build mo__h + - lo ( __an_hist_width mo__h ) 1 hi ) } {}
-            : ScoredPt row ( __an_scan_row mo__h h vnames j )
-            ? . row sp_anomaly { = anoms + anoms 1 } {}
-            ( vec_push [ScoredPt] pts row )
+            : b need_h ?? h { T _x → F F → T }
+            ? need_h { = h @ ?Hist { T ( __an_hist_build mo__h + - lo ( __an_hist_width mo__h ) 1 hi ) } } {}
+            ?? h {
+                T hh → {
+                    : ScoredPt row ( __an_scan_row mo__h hh vnames j )
+                    ? . row sp_anomaly { = anoms + anoms 1 } {}
+                    ( vec_push [ScoredPt] pts row )
+                }
+                F → {}
+            }
             = dirty T
         }
         = j + j 1

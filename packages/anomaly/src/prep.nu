@@ -30,7 +30,7 @@ $ `stdlib/std/float.nu`
 $ `stdlib/std/sort.nu`
 $ `stdlib/std/time.nu`
 $ `stdlib/ext/json.nu`
-$ `stdlib/core/rcbox.nu`
+$ `stdlib/std/arc.nu`
 $ `stdlib/core/slice.nu`
 
 // ── Column kinds ──────────────────────────────────────────────────────
@@ -100,18 +100,15 @@ $ `stdlib/core/slice.nu`
     ( Vec VerCfg ) versions
 }
 
-// A Meta is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// A Meta is a handle on its state in an Arc (stdlib/std/arc.nu):
 // every copy is the same state, and the last owner releases it.
-: Meta { s ctl }
+: Meta { ( Arc MetaImpl ) a }
 
-unsafe @ Meta_share Meta h → Meta { ^ @ Meta { # s ( rcbox_share # i . h ctl ) } }
+@ Meta_share Meta h → Meta { ^ @ Meta { ( arc_clone [MetaImpl] . h a ) } }
 
-@ Meta_drop sink Meta h → v {
-    ( mem_forget h )
-    ( rcbox_release [MetaImpl] # i . h ctl )
-}
+@ Meta_drop sink Meta h → v {}
 
-unsafe @ _Meta_ptr Meta h → *MetaImpl { ^ ( rcbox_ptr [MetaImpl] # i . h ctl ) }
+unsafe @ _Meta_ptr Meta h → *MetaImpl { ^ ( arc_ptr [MetaImpl] . h a ) }
 
 // ── Calendar features ─────────────────────────────────────────────────
 //
@@ -350,8 +347,7 @@ unsafe @ meta_clone_versions Meta m__h → ( Vec VerCfg ) {
 // ── Meta lifecycle ────────────────────────────────────────────────────
 
 unsafe @ meta_new s name s created → Meta {
-    : i m__box ( rcbox_zero [MetaImpl] )
-    : *MetaImpl m ( rcbox_ptr [MetaImpl] m__box )
+    : ~ MetaImpl m @ MetaImpl {}
     = . m name ( string_from name )
     = . m created ( string_from created )
     = . m alias ( string_new )
@@ -379,7 +375,7 @@ unsafe @ meta_new s name s created → Meta {
     = . m flat_run ( vec_new [f] )
     = . m flat_sd ( vec_new [f] )
     = . m versions ( meta_default_versions )
-    ^ @ Meta { # s m__box }
+    ^ @ Meta { ( arc_new [MetaImpl] m ) }
 }
 
 // Index of column `name` in the metadata, or -1.

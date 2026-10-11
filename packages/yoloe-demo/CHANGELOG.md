@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.3.3] — 2026-10-11
+
+Requires NURL 0.73.0, which allows `mem_forget`, `mem_take` and the
+`rcbox` primitives only in `unsafe` code and reads a null library-handle
+literal as raw memory. The published 0.3.2 does not compile under it.
+
+### Changed
+
+- `Demo` keeps its state in an `Arc` (stdlib/std/arc.nu) instead of an
+  `rcbox`. The share and drop hooks are ordinary safe functions — the Arc
+  does the counting — and so are the constructors that build one from a
+  whole value; every copy is still the same state, and its last owner
+  releases it.
+- One fewer function is `unsafe` than in 0.3.2.
+- Requires onnx 0.11.
+
 ## [0.3.2] — 2026-10-10
 
 Requires NURL 0.72.0 (`slice_of_str`). Loops that walked a string with
