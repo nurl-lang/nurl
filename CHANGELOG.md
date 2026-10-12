@@ -149,10 +149,18 @@ fewer instructions and 9–10 % less time than before this work
   - `Channel` is a `( Shared ChImpl )`: the last owner drops the queue,
     the waiter lists and the lock with the block. A select waiter is a
     `Box`.
+  - A `BTree` node is a `BtNode` in a `Box` whose keys, values and
+    kids are `RawBlock`s; a kid slot holds the kid's box and the root's
+    is the tree record's field, so a node a merge or a root shrink gives
+    up is taken out of its slot and dropped. The node arrays are no
+    longer zeroed (no slot is read before it is written), which makes
+    insert + remove + drop 1.4 % fewer instructions on a 200 000-key run
+    and 0.2 % fewer over six build-and-drop rounds of 60 000 keys
+    (callgrind). A `RawBlock` that holds nothing no longer calls `free`.
   - Outside the primitives that implement ownership (Vec, String, Box,
-    RawBlock, the counted block behind `Shared`, Rc and Arc) only BTree
-    and the compiler's symbol table release memory themselves; the
-    containers above only move elements out of their buffers.
+    RawBlock, the counted block behind `Shared`, Rc and Arc) only the
+    compiler's symbol table releases memory itself; the containers above
+    only move elements out of their buffers.
   - `raw_block_zero` gives zeroed raw memory.
 - **`TcpConn` and `TcpListener` close themselves.** Each is a handle over
   a counted block: every copy is the same socket, and its last owner
@@ -251,6 +259,13 @@ fewer instructions and 9–10 % less time than before this work
 
 ### Fixed
 
+- **`btree_remove` no longer loses a value at a merge** (h210). Removing
+  a key that sat in an inner node whose two neighbouring kids were both
+  minimal took the value out of its slot — emptying it, since a take
+  from a place zeroes the place — and then merged the kids around the
+  emptied slot; the removal below returned the empty value and the real
+  one leaked. The value now leaves its slot only when a predecessor or
+  successor fills it; at a merge the entry moves down whole.
 - **A struct holding a `% Drop` value inside a container is dropped**
   (h209). `: Imp { ( Vec R ) xs }` with R a type with its own `% Drop`
   (or the R in a Box, an option, an enum payload, a Vec of Vecs) was

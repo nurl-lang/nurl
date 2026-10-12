@@ -781,6 +781,11 @@ an option, an enum payload — was never dropped. It could not be copied,
 so it was no handle, and the compiler wrote a field-by-field drop only
 for a struct whose own fields had the `% Drop`. Such a struct now gets
 that drop wherever the value sits inside it (`__holds_user_drop`).
+Rebuilding `BTree` found a seventh (h210), in the library rather than
+the compiler: `btree_remove` took a value out of an inner node before
+merging the kids around it, and the merge moved the emptied slot down.
+A take from a place empties the place, so a value must leave its slot
+only on the path that refills it.
 
 The rules that carry it:
 
