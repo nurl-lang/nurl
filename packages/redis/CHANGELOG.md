@@ -9,6 +9,9 @@ The published 0.3.3 does not compile under it.
 
 ### Changed
 
+- The zero `TlsConn` a plaintext connection keeps is built with the
+  cast `# TlsConn # s 0`: a standard-library handle now holds its state
+  in a `( Shared T )`.
 - A parsed reply leaves the parse result by the return that moves it;
   the `mem_take` before it is gone.
 

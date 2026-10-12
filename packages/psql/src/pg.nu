@@ -465,7 +465,7 @@ unsafe @ pg_connect s host i port s user s password s database i sslmode → !Pg
     = . c tls 0
     = . c raw rawfd
     = . c tcp @ TcpConn { # s rawfd 0 0 }
-    = . c tc @ TlsConn { # s 0 }
+    = . c tc # TlsConn # s 0
     = . c rxbuf ( vec_new [u] )
     = . c lasterr ( string_with_cap 0 )
     = . c be_pid 0

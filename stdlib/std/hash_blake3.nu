@@ -201,19 +201,16 @@ inline @ __b3_round inout u32 v0 inout u32 v1 inout u32 v2 inout u32 v3 inout u3
     i counter
 }
 
-: Blake3 { s ctl }
+: Blake3 { ( Shared Blake3Impl ) ctl }
 
-@ Blake3_share Blake3 h → Blake3 { ^ @ Blake3 { # s ( rcbox_share # i . h ctl ) } }
+@ Blake3_share Blake3 h → Blake3 { ^ @ Blake3 { ( shared_clone [Blake3Impl] . h ctl ) } }
 
-@ Blake3_drop sink Blake3 h → v {
-    ( mem_forget h )
-    ( rcbox_release [Blake3Impl] # i . h ctl )
-}
+@ Blake3_drop sink Blake3 h → v {}
 
-@ __Blake3_ptr Blake3 h → *Blake3Impl { ^ ( rcbox_ptr [Blake3Impl] # i . h ctl ) }
+@ __Blake3_ptr Blake3 h → *Blake3Impl { ^ ( shared_ptr [Blake3Impl] . h ctl ) }
 
 @ blake3_init → Blake3 {
-    ^ @ Blake3 { # s ( rcbox_new [Blake3Impl] @ Blake3Impl { ( vec_new [u32] ) 0 ( vec_new [u] ) 0 } ) }
+    ^ @ Blake3 { ( shared_new [Blake3Impl] @ Blake3Impl { ( vec_new [u32] ) 0 ( vec_new [u] ) 0 } ) }
 }
 
 // Let go of `h` now rather than at the end of its owner's scope.

@@ -62,16 +62,13 @@ $ `stdlib/core/rcbox.nu`
 
 // A Progress is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
 // every copy is the same state, and the last owner releases it.
-: Progress { s ctl }
+: Progress { ( Shared ProgressImpl ) ctl }
 
-@ Progress_share Progress h → Progress { ^ @ Progress { # s ( rcbox_share # i . h ctl ) } }
+@ Progress_share Progress h → Progress { ^ @ Progress { ( shared_clone [ProgressImpl] . h ctl ) } }
 
-@ Progress_drop sink Progress h → v {
-    ( mem_forget h )
-    ( rcbox_release [ProgressImpl] # i . h ctl )
-}
+@ Progress_drop sink Progress h → v {}
 
-@ __Progress_ptr Progress h → *ProgressImpl { ^ ( rcbox_ptr [ProgressImpl] # i . h ctl ) }
+@ __Progress_ptr Progress h → *ProgressImpl { ^ ( shared_ptr [ProgressImpl] . h ctl ) }
 
 // "1023 B" · "3.4 KB" · "42.5 MB" · "1.2 GB" — one decimal above bytes.
 @ progress_human i n → String {
@@ -105,8 +102,8 @@ $ `stdlib/core/rcbox.nu`
 }
 
 @ progress_new s label i total → Progress {
-    : i p__box ( rcbox_zero [ProgressImpl] )
-    : *ProgressImpl p ( rcbox_ptr [ProgressImpl] p__box )
+    : ( Shared ProgressImpl ) p__box ( shared_zero [ProgressImpl] )
+    : *ProgressImpl p ( shared_ptr [ProgressImpl] p__box )
     = . p label ( string_from label )
     = . p total total
     = . p cur 0
@@ -119,7 +116,7 @@ $ `stdlib/core/rcbox.nu`
     = . p w_cur 0
     = . p w_ns now
     = . p rate 0
-    ^ @ Progress { # s p__box }
+    ^ @ Progress { p__box }
 }
 
 @ __pg_write s raw → v {

@@ -44,16 +44,13 @@ $ `stdlib/core/rcbox.nu`
 // An H3Server is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
 // every copy (the thread running it, the one that stops it) is the same
 // server, and the last owner releases the listener and its connections.
-: H3Server { s ctl }
+: H3Server { ( Shared H3ServerImpl ) ctl }
 
-@ H3Server_share H3Server h → H3Server { ^ @ H3Server { # s ( rcbox_share # i . h ctl ) } }
+@ H3Server_share H3Server h → H3Server { ^ @ H3Server { ( shared_clone [H3ServerImpl] . h ctl ) } }
 
-@ H3Server_drop sink H3Server h → v {
-    ( mem_forget h )
-    ( rcbox_release [H3ServerImpl] # i . h ctl )
-}
+@ H3Server_drop sink H3Server h → v {}
 
-@ __H3Server_ptr H3Server h → *H3ServerImpl { ^ ( rcbox_ptr [H3ServerImpl] # i . h ctl ) }
+@ __H3Server_ptr H3Server h → *H3ServerImpl { ^ ( shared_ptr [H3ServerImpl] . h ctl ) }
 
 @ __h3s_map_set ( HashMap i H3Conn ) m i key H3Conn h → v {
     : ( @ i i ) hf \ i x → i { ^ ( hash_int x ) }
@@ -86,8 +83,8 @@ $ `stdlib/core/rcbox.nu`
 }
 
 @ http3_server_new UdpSocket sock QuicCreds creds ( Vec u ) alpn_prefs QuicTp tp ( @ HttpResponse HttpRequest ) handler i body_max → H3Server {
-    : i s__box ( rcbox_zero [H3ServerImpl] )
-    : *H3ServerImpl s ( rcbox_ptr [H3ServerImpl] s__box )
+    : ( Shared H3ServerImpl ) s__box ( shared_zero [H3ServerImpl] )
+    : *H3ServerImpl s ( shared_ptr [H3ServerImpl] s__box )
     = . s h3s ( map_new [i H3Conn] )
     = . s handler handler
     = . s body_max body_max
@@ -95,7 +92,7 @@ $ `stdlib/core/rcbox.nu`
     // owning it: the server owns the listener, which owns the closure.
     : ( @ v QuicConn i ) ev \ QuicConn qc i e → v { ( __h3s_event s qc e ) }
     = . s qs ( quic_server_new sock creds alpn_prefs tp ev )
-    ^ @ H3Server { # s s__box }
+    ^ @ H3Server { s__box }
 }
 
 @ http3_server_run H3Server s__h → v {
@@ -125,7 +122,7 @@ $ `stdlib/core/rcbox.nu`
     : ( Vec u ) k2 ( vec_new [u] )
     : ( Vec u ) k3 ( vec_new [u] )
     : i kt ( _load_tls_creds cert_path key_path chain k1 k2 k3 )
-    : ~ QuicCreds out @ QuicCreds { # s 0 }
+    : ~ QuicCreds out @ QuicCreds { ( shared_null [QuicCredsImpl] ) }
     : ( Vec u ) e ( vec_new [u] )
     // keytype 0: EC scalar in k1 · 1: RSA n in k1, d in k2, e in k3 ·
     // 2: ML-DSA secret key in k1, its length naming the parameter set

@@ -116,17 +116,6 @@ $ `stdlib/ext/http_response.nu`
 $ `stdlib/ext/http2_conn.nu`
 $ `stdlib/core/slice.nu`
 
-// The DoS counters (stdlib/std/dos.nu keeps them in runtime-side memory
-// behind an `i`) in an rcbox: every copy of the server — each worker's,
-// the one server_stop is handed — is the same gate, and the last owner
-// releases it. Releasing it in server_stop instead would pull it from
-// under a worker still finishing its connection.
-: HttpDosGateImpl { i raw }
-
-% Drop HttpDosGateImpl { @ drop HttpDosGateImpl x → v { ( dos_state_free . x raw ) } }
-
-: HttpDosGate { s ctl }
-
 // ── HttpServer struct + lifecycle ─────────────────────────────────────
 //
 // Six knobs at v2.1+:
@@ -160,7 +149,7 @@ $ `stdlib/core/slice.nu`
     // connections over the configured caps. Multiple workers in
     // server_run_pool share the same state via the shared HttpServer
     // value; the last copy of the server releases it.
-    HttpDosGate dos_state
+    ? DosState dos_state
 }
 
 // A server is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
@@ -168,32 +157,16 @@ $ `stdlib/core/slice.nu`
 // the one server_stop is handed from another thread — and the last owner
 // releases it. A thread or fiber that captures one takes a share of its
 // own, so the server outlives whichever side finishes first.
-: HttpServer { s ctl }
+: HttpServer { ( Shared HttpServerImpl ) ctl }
 
-@ HttpServer_share HttpServer h → HttpServer { ^ @ HttpServer { # s ( rcbox_share # i . h ctl ) } }
+@ HttpServer_share HttpServer h → HttpServer { ^ @ HttpServer { ( shared_clone [HttpServerImpl] . h ctl ) } }
 
-@ HttpServer_drop sink HttpServer h → v {
-    ( mem_forget h )
-    ( rcbox_release [HttpServerImpl] # i . h ctl )
-}
+@ HttpServer_drop sink HttpServer h → v {}
 
-@ __srv HttpServer h → *HttpServerImpl { ^ ( rcbox_ptr [HttpServerImpl] # i . h ctl ) }
+@ __srv HttpServer h → *HttpServerImpl { ^ ( shared_ptr [HttpServerImpl] . h ctl ) }
 
 @ __srv_new sink HttpServerImpl impl → HttpServer {
-    ^ @ HttpServer { # s ( rcbox_new [HttpServerImpl] impl ) }
-}
-
-@ HttpDosGate_share HttpDosGate h → HttpDosGate { ^ @ HttpDosGate { # s ( rcbox_share # i . h ctl ) } }
-
-@ HttpDosGate_drop sink HttpDosGate h → v {
-    ( mem_forget h )
-    ( rcbox_release [HttpDosGateImpl] # i . h ctl )
-}
-
-// The runtime state, 0 when DoS protection is off.
-@ __dos_gate_raw HttpDosGate h → i {
-    ? == 0 # i . h ctl { ^ 0 } {}
-    ^ . ( rcbox_ptr [HttpDosGateImpl] # i . h ctl ) raw
+    ^ @ HttpServer { ( shared_new [HttpServerImpl] impl ) }
 }
 
 // ── Connection upgrade hook (WebSocket etc.) ─────────────────────
@@ -207,12 +180,12 @@ $ `stdlib/core/slice.nu`
 // to the normal handler. Process-global (one server per process here);
 // default unset = behaviour-neutral.
 : __WsUpgrade { ( @ b TcpConn HttpRequest ) fn }
-: ~ i g_ws_upgrade 0
+: ~ __WsUpgrade g_ws_upgrade 0
+: ~ b g_ws_upgrade_set F
 
 @ server_set_upgrade ( @ b TcpConn HttpRequest ) f → v {
-    : *__WsUpgrade u # *__WsUpgrade ( nurl_alloc Z __WsUpgrade )
-    = . u fn f
-    = g_ws_upgrade # i u
+    = g_ws_upgrade @ __WsUpgrade { f }
+    = g_ws_upgrade_set T
 }
 
 // ── Streaming-response hook (SSE / NDJSON / chunked bodies) ──────
@@ -226,12 +199,12 @@ $ `stdlib/core/slice.nu`
 // "not mine" and the request falls through to the router untouched.
 // Process-global like the upgrade hook; default unset = neutral.
 : __StreamHook { ( @ b TcpConn HttpRequest ) fn }
-: ~ i g_stream_hook 0
+: ~ __StreamHook g_stream_hook 0
+: ~ b g_stream_hook_set F
 
 @ server_set_stream ( @ b TcpConn HttpRequest ) f → v {
-    : *__StreamHook u # *__StreamHook ( nurl_alloc Z __StreamHook )
-    = . u fn f
-    = g_stream_hook # i u
+    = g_stream_hook @ __StreamHook { f }
+    = g_stream_hook_set T
 }
 
 // DoS connection caps (server-wide + per-source-IP). All caps are
@@ -276,7 +249,7 @@ $ `stdlib/core/slice.nu`
         ( server_default_max_keepalive_requests )
         ( http_default_limits )
         ( server_default_request_total_timeout_ms )
-        @ HttpDosGate { # s 0 } } )
+        @ ?DosState { F } } )
 }
 
 @ server_new_with_timeout TcpListener listener ( @ HttpResponse HttpRequest ) handler i idle_timeout_ms → HttpServer {
@@ -284,21 +257,21 @@ $ `stdlib/core/slice.nu`
         ( server_default_max_keepalive_requests )
         ( http_default_limits )
         ( server_default_request_total_timeout_ms )
-        @ HttpDosGate { # s 0 } } )
+        @ ?DosState { F } } )
 }
 
 @ server_new_full TcpListener listener ( @ HttpResponse HttpRequest ) handler i idle_timeout_ms i max_keepalive_requests → HttpServer {
     ^ ( __srv_new @ HttpServerImpl { listener handler idle_timeout_ms max_keepalive_requests
         ( http_default_limits )
         ( server_default_request_total_timeout_ms )
-        @ HttpDosGate { # s 0 } } )
+        @ ?DosState { F } } )
 }
 
 // `server_new_complete` — every knob explicit. Use when overriding
 // parser limits and/or per-request total timeout. See the struct comment
 // for what each field controls.
 @ server_new_complete TcpListener listener ( @ HttpResponse HttpRequest ) handler i idle_timeout_ms i max_keepalive_requests HttpLimits limits i request_total_timeout_ms → HttpServer {
-    ^ ( __srv_new @ HttpServerImpl { listener handler idle_timeout_ms max_keepalive_requests limits request_total_timeout_ms @ HttpDosGate { # s 0 } } )
+    ^ ( __srv_new @ HttpServerImpl { listener handler idle_timeout_ms max_keepalive_requests limits request_total_timeout_ms @ ?DosState { F } } )
 }
 
 // DoS-aware constructor. Allocates a NurlDosState on the runtime side
@@ -307,22 +280,23 @@ $ `stdlib/core/slice.nu`
 // after construction by directly mutating the returned struct, or
 // extend this helper if a uniform full-knob variant is needed later.
 @ server_new_with_dos TcpListener listener ( @ HttpResponse HttpRequest ) handler DosLimits dos_limits → HttpServer {
-    : i st ( dos_state_new . dos_limits max_concurrent_conns
+    : DosState st ( dos_state_new . dos_limits max_concurrent_conns
     . dos_limits max_conns_per_ip )
     ^ ( __srv_new @ HttpServerImpl { listener handler
         ( server_default_idle_timeout_ms )
         ( server_default_max_keepalive_requests )
         ( http_default_limits )
         ( server_default_request_total_timeout_ms )
-        @ HttpDosGate { # s ( rcbox_new [HttpDosGateImpl] @ HttpDosGateImpl { st } ) } } )
+        @ ?DosState { T st } } )
 }
 
 // Snapshot the current active-connection count — useful for /metrics
 // observability endpoints. Returns 0 when DoS protection is disabled.
 @ server_active_conn_count HttpServer s → i {
-    : i raw ( __dos_gate_raw . ( __srv s ) dos_state )
-    ? == raw 0 { ^ 0 } {}
-    ^ ( dos_state_active raw )
+    ?? . ( __srv s ) dos_state {
+        T g → { ^ ( dos_state_active g ) }
+        F → { ^ 0 }
+    }
 }
 
 @ server_stop HttpServer s → v {
@@ -767,15 +741,28 @@ $ `stdlib/core/slice.nu`
 // fiber): the DoS admission gate, the per-conn idle timeout, the
 // keep-alive serve loop, and the close. Consumes `conn`.
 @ __serve_accepted HttpServer s TcpConn conn → v {
-    // DoS gate. If the server was constructed with
-    // server_new_with_dos, dos_state holds a runtime-side
-    // counter+IP-table. acquire returns 0 when the global or
-    // per-IP cap is exceeded; we close the conn immediately
-    // (no canned 503 — that costs more than rejecting at the
+    // DoS gate. If the server was constructed with server_new_with_dos,
+    // dos_state holds the shared counters + IP table. acquire returns 0
+    // when the global or per-IP cap is exceeded; we close the conn
+    // immediately (no canned 503 — that costs more than rejecting at the
     // TCP layer). On accept: extract peer IP (best-effort —
-    // tcp_peer_addr returns "ip:port"; we split on ':'). On
-    // release: pass the same IP back so the counter unwinds.
-    : i ds_raw ( __dos_gate_raw . ( __srv s ) dos_state )
+    // tcp_peer_addr returns "ip:port"; we split on ':'). On release: pass
+    // the same IP back so the counter unwinds.
+    ?? . ( __srv s ) dos_state {
+        T g → { ( __serve_gated s g conn ) }
+        F → { ( __serve_conn s conn ) }
+    }
+}
+
+// The idle timeout, the keep-alive serve loop, and the close.
+@ __serve_conn HttpServer s TcpConn conn → v {
+    : i ito . ( __srv s ) idle_timeout_ms
+    ? > ito 0 { ( tcp_set_timeout conn ito ) } {}
+    ( _serve_keepalive_loop s conn )
+    ( tcp_close_conn conn )
+}
+
+@ __serve_gated HttpServer s DosState g TcpConn conn → v {
     : ~ s peer_ip ``
     // Owns the "ip" prefix (the "ip:port" truncated at the colon) whose
     // buffer `peer_ip` aliases; dropped on every exit path below, after
@@ -784,33 +771,31 @@ $ `stdlib/core/slice.nu`
     // opening/closing connections in a loop turns into unbounded heap
     // growth.
     : String ip_only ( string_new )
-    ? != ds_raw 0 {
-        : s addr ( tcp_peer_addr conn )
-        : i an ( nurl_str_len addr )
-        : ~ i colon -1
-        : ~ i k 0
-        ~ & == colon -1 < k an {
-            ? == 58 ( nurl_str_at addr an k ) { = colon k } {}
-            = k + k 1
+    : s addr ( tcp_peer_addr conn )
+    : i an ( nurl_str_len addr )
+    : ~ i colon -1
+    : ~ i k 0
+    ~ & == colon -1 < k an {
+        ? == 58 ( nurl_str_at addr an k ) { = colon k } {}
+        = k + k 1
+    }
+    ? > colon 0 {
+        : ~ i j 0
+        ~ < j colon {
+            ( string_push_char ip_only ( nurl_str_at addr an j ) )
+            = j + j 1
         }
-        ? > colon 0 {
-            : ~ i j 0
-            ~ < j colon {
-                ( string_push_char ip_only ( nurl_str_at addr an j ) )
-                = j + j 1
-            }
-            = peer_ip ( string_data ip_only )
-        } { = peer_ip addr }
-        : i ok ( dos_state_try_acquire ds_raw peer_ip )
-        ? == ok 0 {
-            ( tcp_close_conn conn )
-            ^ v
-        } {}
+        = peer_ip ( string_data ip_only )
+    } { = peer_ip addr }
+    : i ok ( dos_state_try_acquire g peer_ip )
+    ? == ok 0 {
+        ( tcp_close_conn conn )
+        ^ v
     } {}
     : i ito . ( __srv s ) idle_timeout_ms
     ? > ito 0 { ( tcp_set_timeout conn ito ) } {}
     ( _serve_keepalive_loop s conn )
-    ? != ds_raw 0 { ( dos_state_release ds_raw peer_ip ) } {}
+    ( dos_state_release g peer_ip )
     ( tcp_close_conn conn )
 }
 
@@ -929,16 +914,14 @@ $ `stdlib/core/slice.nu`
                     // over the connection, run nothing else and let the loop end
                     // so the server closes the finished conn.
                     : ~ b __ws_handled F
-                    ? != g_ws_upgrade 0 {
-                        : *__WsUpgrade __wu # *__WsUpgrade g_ws_upgrade
-                        : ( @ b TcpConn HttpRequest ) __upf . __wu fn
+                    ? g_ws_upgrade_set {
+                        : ( @ b TcpConn HttpRequest ) __upf . g_ws_upgrade fn
                         ? ( __upf conn req ) { = __ws_handled T } {}
                     } {}
                     // Streaming hook: same takeover contract as the
                     // upgrade hook, for chunked/SSE/NDJSON responses.
-                    ? & ! __ws_handled != g_stream_hook 0 {
-                        : *__StreamHook __sh # *__StreamHook g_stream_hook
-                        : ( @ b TcpConn HttpRequest ) __shf . __sh fn
+                    ? & ! __ws_handled g_stream_hook_set {
+                        : ( @ b TcpConn HttpRequest ) __shf . g_stream_hook fn
                         ? ( __shf conn req ) { = __ws_handled T } {}
                     } {}
                     ? __ws_handled { = done T } {

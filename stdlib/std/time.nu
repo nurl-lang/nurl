@@ -66,13 +66,16 @@ $ `stdlib/std/async_ffi.nu`
 // On every supported 64-bit POSIX target it is 16 bytes (8 + 8); on
 // MinGW Win32 it is 12 bytes packed (`long` is 32 bits on LLP64) but
 // the struct's natural alignment is 8, so its sizeof rounds to 16.
-// Allocating 16 bytes via `nurl_zalloc` covers every layout: the
-// trailing pad on Win32/WASI stays zeroed so `nurl_peek` of slot 1
-// returns the 32-bit `tv_nsec` extended with zeros — the correct value.
+// A zeroed two-word `Timespec` on the caller's stack covers every
+// layout: the trailing pad on Win32/WASI stays zero, so `nsec` reads the
+// 32-bit `tv_nsec` extended with zeros — the correct value. The C
+// functions write through `inout`, so no buffer is allocated or freed.
 
-& `c` @ clock_gettime i32 clock_id *u tp → i32
+: Timespec { i sec i nsec }
 
-& `c` @ nanosleep *u req *u rem → i32
+& `c` @ clock_gettime i32 clock_id inout Timespec tp → i32
+
+& `c` @ nanosleep inout Timespec req inout Timespec rem → i32
 
 & `c` @ nurl_monotonic_ns → i
 
@@ -84,46 +87,39 @@ $ `stdlib/std/async_ffi.nu`
 & `c` @ nurl_runtime_is_cooperative → i
 
 @ now_ms → i {
-    : s ts ( nurl_zalloc 16 )
-    : i32 rc ( clock_gettime # i32 ( posix_const `CLOCK_REALTIME` ) # *u ts )
-    ? != rc 0 { ( nurl_free ts ) ^ 0 } {}
-    : i secs ( nurl_peek ts 0 )
-    : i nsec ( nurl_peek ts 1 )
-    ( nurl_free ts )
-    ^ + * secs 1000 / nsec 1000000
+    : ~ Timespec ts @ Timespec { 0 0 }
+    : i32 rc ( clock_gettime # i32 ( posix_const `CLOCK_REALTIME` ) ts )
+    ? != rc 0 { ^ 0 } {}
+    ^ + * . ts sec 1000 / . ts nsec 1000000
 }
 
 @ now_seconds → i {
-    : s ts ( nurl_zalloc 16 )
-    : i32 rc ( clock_gettime # i32 ( posix_const `CLOCK_REALTIME` ) # *u ts )
-    ? != rc 0 { ( nurl_free ts ) ^ 0 } {}
-    : i secs ( nurl_peek ts 0 )
-    ( nurl_free ts )
-    ^ secs
+    : ~ Timespec ts @ Timespec { 0 0 }
+    : i32 rc ( clock_gettime # i32 ( posix_const `CLOCK_REALTIME` ) ts )
+    ? != rc 0 { ^ 0 } {}
+    ^ . ts sec
 }
 
-// CLOCK_MONOTONIC in nanoseconds. Answered by the runtime directly:
-// going through `clock_gettime` here would cost a 16-byte heap timespec
-// per read (NURL has no stack byte buffers), which a transport that
-// timestamps every packet cannot afford. 0 if the clock is missing.
+// CLOCK_MONOTONIC in nanoseconds. Answered by the runtime directly, in
+// one call a transport that timestamps every packet can afford. 0 if the
+// clock is missing.
 @ monotonic_ns → i {
     ^ ( nurl_monotonic_ns )
 }
 
 // Blocking `nanosleep` loop — retries on EINTR with the remaining
-// time the kernel wrote into the second timespec. Negative / zero ms
-// is a no-op. Allocates two 16-byte timespec buffers (req + rem) so
-// EINTR retries preserve the unslept remainder.
+// time the kernel wrote into the second timespec. Negative / zero ms is
+// a no-op. The remainder becomes the next request, so EINTR retries
+// preserve the unslept time.
 @ __sleep_ms_blocking i ms → v {
     ? > ms 0 {
-        : s req ( nurl_zalloc 16 )
         : i secs / ms 1000
         : i ms_rem - ms * secs 1000
-        ( nurl_poke req 0 secs )
-        ( nurl_poke req 1 * ms_rem 1000000 )
+        : ~ Timespec req @ Timespec { secs * ms_rem 1000000 }
+        : ~ Timespec rem @ Timespec { 0 0 }
         : ~ b done F
         ~ ! done {
-            : i32 rc ( nanosleep # *u req # *u req )
+            : i32 rc ( nanosleep req rem )
             ? == rc 0 {
                 = done T
             } {
@@ -134,10 +130,11 @@ $ `stdlib/std/async_ffi.nu`
                     // spin-loop. The remaining sleep is lost; callers that
                     // care should not feed in bogus durations.
                     = done T
-                } {}
+                } {
+                    = req rem
+                }
             }
         }
-        ( nurl_free req )
     } {}
 }
 
@@ -618,16 +615,14 @@ $ `stdlib/std/async_ffi.nu`
 
 & `c` @ nurl_tz_offset i secs → i
 
-& `c` @ nurl_tz_name i secs → s
+& `c` @ nurl_tz_name i secs → sink s
 
 @ tz_offset i secs → i { ^ ( nurl_tz_offset secs ) }
 
 @ tz_name i secs → ?String {
     : s raw ( nurl_tz_name secs )
     ? == # i raw 0 { ^ @ ?String { F # String 0 } } {}
-    : String out ( string_from raw )
-    ( nurl_free raw )
-    ^ @ ?String { T out }
+    ^ @ ?String { T ( string_adopt raw ) }
 }
 
 // The local calendar at a Unix instant. The returned `Time` carries
@@ -791,14 +786,14 @@ $ `stdlib/std/async_ffi.nu`
 // One token = a maximal run of non-(space/comma) bytes. Writes the
 // token's [start,end) into a 2-slot scratch and returns the index just
 // past it; -1 when no token remains from `from`.
-@ __hd_token s p i n i from s out_start s out_end → i {
+@ __hd_token s p i n i from inout i out_start inout i out_end → i {
     : ~ i k from
     ~ & < k n | == ( nurl_str_at p n k ) 32 == ( nurl_str_at p n k ) 44 { = k + k 1 }
     ? >= k n { ^ -1 } {}
     : i st k
     ~ & < k n & != ( nurl_str_at p n k ) 32 != ( nurl_str_at p n k ) 44 { = k + k 1 }
-    ( nurl_poke # s out_start 0 st )
-    ( nurl_poke # s out_end 0 k )
+    = out_start st
+    = out_end k
     ^ k
 }
 
@@ -826,8 +821,8 @@ $ `stdlib/std/async_ffi.nu`
 @ __parse_date_flex s p b require_zone → !i ParseErr {
     : i n ( nurl_str_len p )
     ? == n 0 { ^ @ !i ParseErr { F @ ParseErr { Empty } } } {}
-    : s ts ( nurl_zalloc 8 )
-    : s te ( nurl_zalloc 8 )
+    : ~ i ts 0
+    : ~ i te 0
     : ~ i pos 0
     : ~ i day -1
     : ~ i mon -1
@@ -843,8 +838,8 @@ $ `stdlib/std/async_ffi.nu`
         : i nxt ( __hd_token p n pos ts te )
         ? < nxt 0 { = going F } {
             = pos nxt
-            : i st ( nurl_peek ts 0 )
-            : i en ( nurl_peek te 0 )
+            : i st ts
+            : i en te
             : i len - en st
             : i m3 ( __month3_at p st n )
             : i colon ( __hd_index_of p st en 58 )
@@ -913,8 +908,6 @@ $ `stdlib/std/async_ffi.nu`
             }
         }
     }
-    ( nurl_free # s ts )
-    ( nurl_free # s te )
     ? bad { ^ @ !i ParseErr { F @ ParseErr { BadFormat } } } {}
     ? | | | < day 0 < mon 0 < year 0 < hh 0 { ^ @ !i ParseErr { F @ ParseErr { BadFormat } } } {}
     ? & require_zone ! have_zone { ^ @ !i ParseErr { F @ ParseErr { BadFormat } } } {}

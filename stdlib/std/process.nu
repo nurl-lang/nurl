@@ -92,16 +92,13 @@ $ `stdlib/std/time.nu`
 
 % Drop OutputImpl { @ drop OutputImpl o → v { ( nurl_proc_free . o res ) } }
 
-: Output { s raw }
+: Output { ( Shared OutputImpl ) raw }
 
-@ Output_share Output h → Output { ^ @ Output { # s ( rcbox_share # i . h raw ) } }
+@ Output_share Output h → Output { ^ @ Output { ( shared_clone [OutputImpl] . h raw ) } }
 
-@ Output_drop sink Output h → v {
-    ( mem_forget h )
-    ( rcbox_release [OutputImpl] # i . h raw )
-}
+@ Output_drop sink Output h → v {}
 
-@ __output_res Output o → i { ^ . ( rcbox_ptr [OutputImpl] # i . o raw ) res }
+@ __output_res Output o → i { ^ . ( shared_ptr [OutputImpl] . o raw ) res }
 
 // Render a ProcessErr variant name as a raw `s`. Useful for log lines
 // without a full match cascade at every call site.
@@ -118,7 +115,7 @@ $ `stdlib/std/time.nu`
 @ __process_dispatch i raw → !Output ProcessErr {
     ? == raw 0 { ^ @ !Output ProcessErr { F # ProcessErr ProcessOther } } {}
     // The result block is owned from here: an error drops it with `o`.
-    : Output o @ Output { # s ( rcbox_new [OutputImpl] @ OutputImpl { raw } ) }
+    : Output o @ Output { ( shared_new [OutputImpl] @ OutputImpl { raw } ) }
     : i ek ( nurl_proc_err_kind raw )
     ? != ek 0 {
         ? == ek 1 { ^ @ !Output ProcessErr { F # ProcessErr ProcessNotFound } } {}
@@ -727,25 +724,22 @@ $ `stdlib/std/time.nu`
     }
 }
 
-: ProcChild { s raw }
+: ProcChild { ( Shared ProcChildImpl ) raw }
 
 // Its drop closes something the outside world sees (stdlib/core/marker.nu).
 % Resource ProcChild {}
 
-@ ProcChild_share ProcChild h → ProcChild { ^ @ ProcChild { # s ( rcbox_share # i . h raw ) } }
+@ ProcChild_share ProcChild h → ProcChild { ^ @ ProcChild { ( shared_clone [ProcChildImpl] . h raw ) } }
 
-@ ProcChild_drop sink ProcChild h → v {
-    ( mem_forget h )
-    ( rcbox_release [ProcChildImpl] # i . h raw )
-}
+@ ProcChild_drop sink ProcChild h → v {}
 
-@ __proc_raw ProcChild p → i { ^ . ( rcbox_ptr [ProcChildImpl] # i . p raw ) raw }
+@ __proc_raw ProcChild p → i { ^ . ( shared_ptr [ProcChildImpl] . p raw ) raw }
 
 @ __proc_spawn_dispatch i raw → !ProcChild ProcessErr {
     ? == raw 0 { ^ @ !ProcChild ProcessErr { F # ProcessErr ProcessOther } } {}
     // The child block is owned from here: an error drops it with `p` (a
     // failed spawn has no pid and no open pipe, so that only frees it).
-    : ProcChild p @ ProcChild { # s ( rcbox_new [ProcChildImpl] @ ProcChildImpl { raw } ) }
+    : ProcChild p @ ProcChild { ( shared_new [ProcChildImpl] @ ProcChildImpl { raw } ) }
     : i ek ( nurl_proc_spawn_err_kind raw )
     ? != ek 0 {
         ? == ek 1 { ^ @ !ProcChild ProcessErr { F # ProcessErr ProcessNotFound } } {}

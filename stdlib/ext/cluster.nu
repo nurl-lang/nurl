@@ -137,7 +137,7 @@ $ `stdlib/core/rcbox.nu`
     ( @ !Json ClusterErr Json ) handler
 }
 
-: RpcEntry { s ctl }
+: RpcEntry { ( Shared RpcImpl ) ctl }
 
 : Registry { ( Vec RpcEntry ) entries }
 
@@ -148,18 +148,15 @@ $ `stdlib/core/rcbox.nu`
 // An entry's block owns its name and the handler closure stored into it
 // (a stored closure is a clone — docs/MEMORY.md §7.4); the last owner of
 // the entry releases them with the block.
-@ RpcEntry_share RpcEntry h → RpcEntry { ^ @ RpcEntry { # s ( rcbox_share # i . h ctl ) } }
+@ RpcEntry_share RpcEntry h → RpcEntry { ^ @ RpcEntry { ( shared_clone [RpcImpl] . h ctl ) } }
 
-@ RpcEntry_drop sink RpcEntry h → v {
-    ( mem_forget h )
-    ( rcbox_release [RpcImpl] # i . h ctl )
-}
+@ RpcEntry_drop sink RpcEntry h → v {}
 
 // Let go of `r` now rather than at the end of its owner's scope.
 @ registry_free sink Registry r → v {}
 
 @ registry_register Registry r s name ( @ !Json ClusterErr Json ) handler → v {
-    : RpcEntry e @ RpcEntry { # s ( rcbox_new [RpcImpl] @ RpcImpl { ( string_from name ) handler } ) }
+    : RpcEntry e @ RpcEntry { ( shared_new [RpcImpl] @ RpcImpl { ( string_from name ) handler } ) }
     ( vec_push [RpcEntry] . r entries e )
 }
 
@@ -177,7 +174,7 @@ $ `stdlib/core/rcbox.nu`
         : ?RpcEntry ek ( vec_get [RpcEntry] . r entries k )
         ?? ek {
             T e → {
-                : *RpcImpl impl ( rcbox_ptr [RpcImpl] # i . e ctl )
+                : *RpcImpl impl ( shared_ptr [RpcImpl] . e ctl )
                 ? != 0 ( nurl_str_eq ( string_data . impl name ) name ) {
                     = found k
                     = done T
@@ -199,7 +196,7 @@ $ `stdlib/core/rcbox.nu`
     : ?RpcEntry ek ( vec_get [RpcEntry] . r entries idx )
     ^ ?? ek {
         T e → {
-            : *RpcImpl impl ( rcbox_ptr [RpcImpl] # i . e ctl )
+            : *RpcImpl impl ( shared_ptr [RpcImpl] . e ctl )
             . impl handler
         }
         F → miss
@@ -428,44 +425,41 @@ $ `stdlib/core/rcbox.nu`
     i opened_at_ns  // -1 when closed
 }
 
-: CircuitBreaker { s ctl }
+: CircuitBreaker { ( Shared CbImpl ) ctl }
 
 @ cb_new i threshold i cooldown_ms → CircuitBreaker {
-    : i impl_box ( rcbox_zero [CbImpl] )
-    : *CbImpl impl ( rcbox_ptr [CbImpl] impl_box )
+    : ( Shared CbImpl ) impl_box ( shared_zero [CbImpl] )
+    : *CbImpl impl ( shared_ptr [CbImpl] impl_box )
     = . impl threshold threshold
     = . impl cooldown_ms cooldown_ms
     = . impl fails 0
     = . impl opened_at_ns - 0 1
-    ^ @ CircuitBreaker { # s impl_box }
+    ^ @ CircuitBreaker { impl_box }
 }
 
-@ CircuitBreaker_share CircuitBreaker h → CircuitBreaker { ^ @ CircuitBreaker { # s ( rcbox_share # i . h ctl ) } }
+@ CircuitBreaker_share CircuitBreaker h → CircuitBreaker { ^ @ CircuitBreaker { ( shared_clone [CbImpl] . h ctl ) } }
 
-@ CircuitBreaker_drop sink CircuitBreaker h → v {
-    ( mem_forget h )
-    ( rcbox_release [CbImpl] # i . h ctl )
-}
+@ CircuitBreaker_drop sink CircuitBreaker h → v {}
 
 // Let go of `h` now rather than at the end of its owner's scope.
 @ cb_free sink CircuitBreaker h → v {}
 
 // True if a call may proceed: closed, or open-but-cooled-down (half-open).
 @ cb_allow CircuitBreaker cb → b {
-    : *CbImpl impl ( rcbox_ptr [CbImpl] # i . cb ctl )
+    : *CbImpl impl ( shared_ptr [CbImpl] . cb ctl )
     ? < . impl opened_at_ns 0 { ^ T } {}
     : i elapsed_ms / - ( monotonic_ns ) . impl opened_at_ns 1000000
     ^ >= elapsed_ms . impl cooldown_ms
 }
 
 @ cb_record_success CircuitBreaker cb → v {
-    : *CbImpl impl ( rcbox_ptr [CbImpl] # i . cb ctl )
+    : *CbImpl impl ( shared_ptr [CbImpl] . cb ctl )
     = . impl fails 0
     = . impl opened_at_ns - 0 1
 }
 
 @ cb_record_failure CircuitBreaker cb → v {
-    : *CbImpl impl ( rcbox_ptr [CbImpl] # i . cb ctl )
+    : *CbImpl impl ( shared_ptr [CbImpl] . cb ctl )
     = . impl fails + . impl fails 1
     ? >= . impl fails . impl threshold {
         = . impl opened_at_ns ( monotonic_ns )
@@ -474,12 +468,12 @@ $ `stdlib/core/rcbox.nu`
 
 // Introspection (tests / metrics): consecutive failure count + open flag.
 @ cb_fails CircuitBreaker cb → i {
-    : *CbImpl impl ( rcbox_ptr [CbImpl] # i . cb ctl )
+    : *CbImpl impl ( shared_ptr [CbImpl] . cb ctl )
     ^ . impl fails
 }
 
 @ cb_is_open CircuitBreaker cb → b {
-    : *CbImpl impl ( rcbox_ptr [CbImpl] # i . cb ctl )
+    : *CbImpl impl ( shared_ptr [CbImpl] . cb ctl )
     ^ >= . impl opened_at_ns 0
 }
 

@@ -267,20 +267,17 @@ $ `stdlib/core/rcbox.nu`
 
 // A DhcpClient is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
 // every copy is the same state, and the last owner releases it.
-: DhcpClient { s ctl }
+: DhcpClient { ( Shared DhcpClientImpl ) ctl }
 
-@ DhcpClient_share DhcpClient h → DhcpClient { ^ @ DhcpClient { # s ( rcbox_share # i . h ctl ) } }
+@ DhcpClient_share DhcpClient h → DhcpClient { ^ @ DhcpClient { ( shared_clone [DhcpClientImpl] . h ctl ) } }
 
-@ DhcpClient_drop sink DhcpClient h → v {
-    ( mem_forget h )
-    ( rcbox_release [DhcpClientImpl] # i . h ctl )
-}
+@ DhcpClient_drop sink DhcpClient h → v {}
 
-@ __DhcpClient_ptr DhcpClient h → *DhcpClientImpl { ^ ( rcbox_ptr [DhcpClientImpl] # i . h ctl ) }
+@ __DhcpClient_ptr DhcpClient h → *DhcpClientImpl { ^ ( shared_ptr [DhcpClientImpl] . h ctl ) }
 
 @ dhcp_client_new i mac i xid → DhcpClient {
-    : i c__box ( rcbox_zero [DhcpClientImpl] )
-    : *DhcpClientImpl c ( rcbox_ptr [DhcpClientImpl] c__box )
+    : ( Shared DhcpClientImpl ) c__box ( shared_zero [DhcpClientImpl] )
+    : *DhcpClientImpl c ( shared_ptr [DhcpClientImpl] c__box )
     = . c state ( dhcp_state_init )
     = . c mac mac
     = . c xid xid
@@ -295,7 +292,7 @@ $ `stdlib/core/rcbox.nu`
     = . c next_send_ms 0
     = . c backoff_ms ( dhcp_retry_base_ms )
     = . c sends 0
-    ^ @ DhcpClient { # s c__box }
+    ^ @ DhcpClient { c__box }
 }
 
 // Let go of `c` now rather than at the end of its owner's scope.

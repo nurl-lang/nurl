@@ -70,30 +70,27 @@ $ `stdlib/core/rcbox.nu`
 
 // A PeerRecord is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
 // every copy is the same record, and the last owner releases it.
-: PeerRecord { s ctl }
+: PeerRecord { ( Shared PeerRecordImpl ) ctl }
 
-@ PeerRecord_share PeerRecord h → PeerRecord { ^ @ PeerRecord { # s ( rcbox_share # i . h ctl ) } }
+@ PeerRecord_share PeerRecord h → PeerRecord { ^ @ PeerRecord { ( shared_clone [PeerRecordImpl] . h ctl ) } }
 
-@ PeerRecord_drop sink PeerRecord h → v {
-    ( mem_forget h )
-    ( rcbox_release [PeerRecordImpl] # i . h ctl )
-}
+@ PeerRecord_drop sink PeerRecord h → v {}
 
-@ __PeerRecord_ptr PeerRecord h → *PeerRecordImpl { ^ ( rcbox_ptr [PeerRecordImpl] # i . h ctl ) }
+@ __PeerRecord_ptr PeerRecord h → *PeerRecordImpl { ^ ( shared_ptr [PeerRecordImpl] . h ctl ) }
 
 // Let go of `e` now rather than at the end of its owner's scope.
 @ endpoint_free sink Endpoint e → v {}
 
 @ peer_record_new ( Vec u ) pubkey s relay_host i relay_port → PeerRecord {
-    : i r__box ( rcbox_zero [PeerRecordImpl] )
-    : *PeerRecordImpl r ( rcbox_ptr [PeerRecordImpl] r__box )
+    : ( Shared PeerRecordImpl ) r__box ( shared_zero [PeerRecordImpl] )
+    : *PeerRecordImpl r ( shared_ptr [PeerRecordImpl] r__box )
     : ( Vec u ) pk ( vec_with_cap [u] ( vec_len [u] pubkey ) )
     ( vec_extend [u] pk pubkey )
     = . r pubkey pk
     = . r endpoints ( vec_new [Endpoint] )
     = . r relay_host ( string_from relay_host )
     = . r relay_port relay_port
-    ^ @ PeerRecord { # s r__box }
+    ^ @ PeerRecord { r__box }
 }
 
 @ peer_record_add_endpoint PeerRecord r__h s host i port → v {
@@ -190,8 +187,8 @@ $ `stdlib/core/rcbox.nu`
 
 // Decode a record at `off` in `buf`.
 @ __rz_get_record ( Vec u ) buf inout i off → PeerRecord {
-    : i r__box ( rcbox_zero [PeerRecordImpl] )
-    : *PeerRecordImpl r ( rcbox_ptr [PeerRecordImpl] r__box )
+    : ( Shared PeerRecordImpl ) r__box ( shared_zero [PeerRecordImpl] )
+    : *PeerRecordImpl r ( shared_ptr [PeerRecordImpl] r__box )
     = . r pubkey ( __rz_take buf off 32 )
     = . r relay_host ( __rz_str buf off )
     = . r relay_port ( __rz_u16 buf off )
@@ -204,7 +201,7 @@ $ `stdlib/core/rcbox.nu`
         ( vec_push [Endpoint] . r endpoints @ Endpoint { host port } )
         = k + k 1
     }
-    ^ @ PeerRecord { # s r__box }
+    ^ @ PeerRecord { r__box }
 }
 
 // Decode a standalone record buffer (whole buffer is one record).
@@ -329,21 +326,18 @@ $ `stdlib/core/rcbox.nu`
 
 // An RzServer is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
 // every copy is the same server, and the last owner releases it.
-: RzServer { s ctl }
+: RzServer { ( Shared RzServerImpl ) ctl }
 
-@ RzServer_share RzServer h → RzServer { ^ @ RzServer { # s ( rcbox_share # i . h ctl ) } }
+@ RzServer_share RzServer h → RzServer { ^ @ RzServer { ( shared_clone [RzServerImpl] . h ctl ) } }
 
-@ RzServer_drop sink RzServer h → v {
-    ( mem_forget h )
-    ( rcbox_release [RzServerImpl] # i . h ctl )
-}
+@ RzServer_drop sink RzServer h → v {}
 
-@ __RzServer_ptr RzServer h → *RzServerImpl { ^ ( rcbox_ptr [RzServerImpl] # i . h ctl ) }
+@ __RzServer_ptr RzServer h → *RzServerImpl { ^ ( shared_ptr [RzServerImpl] . h ctl ) }
 
 @ rz_server_start s host i port → !RzServer NetErr {
     : !TcpListener NetErr lr ( tcp_listen host port )
     : !RzServer NetErr out ?? lr {
-        T l → @ !RzServer NetErr { T @ RzServer { # s ( rcbox_new [RzServerImpl] @ RzServerImpl { l ( vec_new [PeerRecord] ) ( mutex_new ) } ) } }
+        T l → @ !RzServer NetErr { T @ RzServer { ( shared_new [RzServerImpl] @ RzServerImpl { l ( vec_new [PeerRecord] ) ( mutex_new ) } ) } }
         F e → @ !RzServer NetErr { F e }
     }
     ^ out

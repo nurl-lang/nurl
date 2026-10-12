@@ -78,16 +78,13 @@ $ `stdlib/core/rcbox.nu`
 // A handle on the plan in an rcbox (stdlib/core/rcbox.nu): every copy is
 // the same plan, and the last owner releases it — the n/2 sub-plan with
 // it, as a field.
-: FftPlan { s ctl }
+: FftPlan { ( Shared FftPlanImpl ) ctl }
 
-@ FftPlan_share FftPlan h → FftPlan { ^ @ FftPlan { # s ( rcbox_share # i . h ctl ) } }
+@ FftPlan_share FftPlan h → FftPlan { ^ @ FftPlan { ( shared_clone [FftPlanImpl] . h ctl ) } }
 
-@ FftPlan_drop sink FftPlan h → v {
-    ( mem_forget h )
-    ( rcbox_release [FftPlanImpl] # i . h ctl )
-}
+@ FftPlan_drop sink FftPlan h → v {}
 
-@ __FftPlan_ptr FftPlan h → *FftPlanImpl { ^ ( rcbox_ptr [FftPlanImpl] # i . h ctl ) }
+@ __FftPlan_ptr FftPlan h → *FftPlanImpl { ^ ( shared_ptr [FftPlanImpl] . h ctl ) }
 
 @ fft_is_pow2 i n → b {
     ? < n 1 { ^ F } {}
@@ -297,9 +294,9 @@ $ `stdlib/core/rcbox.nu`
 // The sub-plan never needs one of its own — only fft_rfft folds — so the
 // recursion is exactly one level deep.
 @ __fft_plan_impl i n b want_half → FftPlan {
-    : i p__box ( rcbox_zero [FftPlanImpl] )
-    : *FftPlanImpl p ( rcbox_ptr [FftPlanImpl] p__box )
-    : FftPlan h @ FftPlan { # s p__box }
+    : ( Shared FftPlanImpl ) p__box ( shared_zero [FftPlanImpl] )
+    : *FftPlanImpl p ( shared_ptr [FftPlanImpl] p__box )
+    : FftPlan h @ FftPlan { p__box }
     = . p n n
     = . p pow2 ( fft_is_pow2 n )
     = . p m 0
@@ -313,7 +310,7 @@ $ `stdlib/core/rcbox.nu`
     = . p bim ( vec_new [f] )
     = . p tre ( vec_new [f] )
     = . p tim ( vec_new [f] )
-    = . p half @ FftPlan { # s 0 }
+    = . p half @ FftPlan { ( shared_null [FftPlanImpl] ) }
     = . p hre ( vec_new [f] )
     = . p him ( vec_new [f] )
     ? & want_half & == 0 % n 2 >= n 4 {

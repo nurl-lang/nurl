@@ -198,16 +198,13 @@ simd @ __kf1600x4 * u64 a * u64 b * u64 rc → v {
 
 // A Sha3x4 is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
 // every copy is the same state, and the last owner releases it.
-pub : Sha3x4 { s ctl }
+pub : Sha3x4 { ( Shared Sha3x4Impl ) ctl }
 
-pub @ Sha3x4_share Sha3x4 h → Sha3x4 { ^ @ Sha3x4 { # s ( rcbox_share # i . h ctl ) } }
+pub @ Sha3x4_share Sha3x4 h → Sha3x4 { ^ @ Sha3x4 { ( shared_clone [Sha3x4Impl] . h ctl ) } }
 
-pub @ Sha3x4_drop sink Sha3x4 h → v {
-    ( mem_forget h )
-    ( rcbox_release [Sha3x4Impl] # i . h ctl )
-}
+pub @ Sha3x4_drop sink Sha3x4 h → v {}
 
-@ __Sha3x4_ptr Sha3x4 h → *Sha3x4Impl { ^ ( rcbox_ptr [Sha3x4Impl] # i . h ctl ) }
+@ __Sha3x4_ptr Sha3x4 h → *Sha3x4Impl { ^ ( shared_ptr [Sha3x4Impl] . h ctl ) }
 
 pub @ sha3x4_new i rate i dom → Sha3x4 {
     : ( Vec u64 ) st ( vec_with_cap [u64] 100 )
@@ -219,7 +216,7 @@ pub @ sha3x4_new i rate i dom → Sha3x4 {
     : b _l2 ( vec_set_len [u64] scr 100 )
     // Built whole and moved into the box, as sha3_new does: every field
     // is written, so the block needs no zeroing first.
-    ^ @ Sha3x4 { # s ( rcbox_new [Sha3x4Impl] @ Sha3x4Impl { st scr ( keccak_round_constants ) rate 0 dom F } ) }
+    ^ @ Sha3x4 { ( shared_new [Sha3x4Impl] @ Sha3x4Impl { st scr ( keccak_round_constants ) rate 0 dom F } ) }
 }
 
 // Let go of `h` now rather than at the end of its owner's scope.

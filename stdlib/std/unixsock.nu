@@ -42,7 +42,10 @@ $ `stdlib/core/slice.nu`
 
 & `c` @ connect i32 fd *u addr i32 len → i32
 
-& `c` @ socketpair i32 domain i32 type i32 proto *u sv → i32
+// The two descriptors socketpair(2) writes (`int sv[2]`).
+: __FdPair { i32 a i32 b }
+
+& `c` @ socketpair i32 domain i32 type i32 proto inout __FdPair sv → i32
 
 & `c` @ unlink s path → i32
 
@@ -99,7 +102,8 @@ $ `stdlib/core/slice.nu`
     ^ ? > pathlen lim lim pathlen
 }
 
-@ __un_addr s path → s {
+// A `struct sockaddr_un` for `path`, as bytes the caller owns.
+@ __un_addr s path → ( Vec u ) {
     : ( Slice u ) path_v ( slice_of_str path )
     : i af ( posix_const `AF_UNIX` )
     : i foff ( posix_const `SOCKADDR_UN_FAMILY_OFF` )
@@ -107,8 +111,8 @@ $ `stdlib/core/slice.nu`
     : i poff ( posix_const `SOCKADDR_UN_PATH_OFF` )
     : i pmax ( posix_const `SOCKADDR_UN_PATH_MAX` )
     : i cap ( __un_path_cap path )
-    : s addr ( nurl_zalloc + poff + pmax 2 )
-    : *u ap # *u addr
+    : ( Vec u ) addr ( vec_zeroed [u] + poff + pmax 2 )
+    : *u ap # *u ( vec_data [u] addr )
     // sun_family, little-endian across however many bytes it occupies.
     : ~ i b 0
     ~ < b fsize {
@@ -142,9 +146,8 @@ $ `stdlib/core/slice.nu`
     ? < # i fd 0 { ^ @ !UnixListener UnixErr { F UnixSocket } } {}
     // clear any stale socket file (ignore result)
     : i32 _u ( unlink path )
-    : s addr ( __un_addr path )
-    : i32 br ( bind fd addr # i32 ( __un_socklen path ) )
-    ( nurl_free addr )
+    : ( Vec u ) addr ( __un_addr path )
+    : i32 br ( bind fd # *u ( vec_data [u] addr ) # i32 ( __un_socklen path ) )
     ? < # i br 0 {
         : i _c ( close # i fd )
         ^ @ !UnixListener UnixErr { F ( __un_errno # UnixErr UnixBind ) }
@@ -177,9 +180,8 @@ $ `stdlib/core/slice.nu`
 @ unix_connect s path → !UnixConn UnixErr {
     : i32 fd ( socket # i32 ( posix_const `AF_UNIX` ) # i32 ( posix_const `SOCK_STREAM` ) # i32 0 )
     ? < # i fd 0 { ^ @ !UnixConn UnixErr { F UnixSocket } } {}
-    : s addr ( __un_addr path )
-    : i32 cr ( connect fd addr # i32 ( __un_socklen path ) )
-    ( nurl_free addr )
+    : ( Vec u ) addr ( __un_addr path )
+    : i32 cr ( connect fd # *u ( vec_data [u] addr ) # i32 ( __un_socklen path ) )
     ? < # i cr 0 {
         : i _c ( close # i fd )
         ^ @ !UnixConn UnixErr { F UnixConnect }
@@ -188,17 +190,12 @@ $ `stdlib/core/slice.nu`
 }
 
 @ unix_socketpair → !UnixPair UnixErr {
-    : s sv ( nurl_zalloc 8 )
+    : ~ __FdPair sv @ __FdPair { # i32 0 # i32 0 }
     : i32 r ( socketpair # i32 ( posix_const `AF_UNIX` ) # i32 ( posix_const `SOCK_STREAM` ) # i32 0 sv )
     ? < # i r 0 {
-        ( nurl_free sv )
         ^ @ !UnixPair UnixErr { F UnixSocket }
     } {}
-    : *i32 sp # *i32 sv
-    : i fd0 # i . sp 0
-    : i fd1 # i . sp 1
-    ( nurl_free sv )
-    ^ @ !UnixPair UnixErr { T @ UnixPair { @ UnixConn { fd0 } @ UnixConn { fd1 } } }
+    ^ @ !UnixPair UnixErr { T @ UnixPair { @ UnixConn { # i . sv a } @ UnixConn { # i . sv b } } }
 }
 
 // ── read / write ────────────────────────────────────────────────────

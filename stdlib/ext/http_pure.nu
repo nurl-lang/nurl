@@ -46,6 +46,7 @@ $ `stdlib/std/url.nu`
 $ `stdlib/std/thread.nu`
 $ `stdlib/core/rcbox.nu`
 $ `stdlib/core/slice.nu`
+$ `stdlib/core/mem.nu`
 
 // nurl_tcp_connect/read/write/close are compiler builtins (declared by
 // nurlc); tls_* come from tls.nu; the rest (malloc/strdup/nurl_*) are
@@ -69,22 +70,19 @@ $ `stdlib/core/slice.nu`
 // An HttpConn is a handle on its transport in an rcbox
 // (stdlib/core/rcbox.nu): every copy — the caller's, the one a stream or
 // a pool keeps — is the same connection, and the last owner closes it.
-: HttpConn { s ctl }
+: HttpConn { ( Shared HttpConnImpl ) ctl }
 
 // Its drop closes something the outside world sees (stdlib/core/marker.nu).
 % Resource HttpConn {}
 
-@ HttpConn_share HttpConn h → HttpConn { ^ @ HttpConn { # s ( rcbox_share # i . h ctl ) } }
+@ HttpConn_share HttpConn h → HttpConn { ^ @ HttpConn { ( shared_clone [HttpConnImpl] . h ctl ) } }
 
-@ HttpConn_drop sink HttpConn h → v {
-    ( mem_forget h )
-    ( rcbox_release [HttpConnImpl] # i . h ctl )
-}
+@ HttpConn_drop sink HttpConn h → v {}
 
-@ __HttpConn_ptr HttpConn h → *HttpConnImpl { ^ ( rcbox_ptr [HttpConnImpl] # i . h ctl ) }
+@ __HttpConn_ptr HttpConn h → *HttpConnImpl { ^ ( shared_ptr [HttpConnImpl] . h ctl ) }
 
 @ __hp_conn_new i is_tls i fd sink TlsConn tc String skey → HttpConn {
-    ^ @ HttpConn { # s ( rcbox_new [HttpConnImpl] @ HttpConnImpl { is_tls fd tc skey } ) }
+    ^ @ HttpConn { ( shared_new [HttpConnImpl] @ HttpConnImpl { is_tls fd tc skey } ) }
 }
 
 // ── TLS session cache ───────────────────────────────────────────────
@@ -101,8 +99,8 @@ $ `stdlib/core/slice.nu`
 // Bounded (HP_SESS_MAX entries, oldest evicted) and never shared across
 // hosts. Guarded by a mutex — clients run from several threads and
 // fibers — and created on first use through the runtime's publish-once
-// slot (nurl_once_slot, id 2), so concurrent first users agree on one
-// cache without a lock to bootstrap.
+// slot (shared_publish_once, id 2), so concurrent first users agree on
+// one cache without a lock to bootstrap. The global caches its address.
 : HpSess {
     String key
     ( Vec u ) blob
@@ -115,18 +113,13 @@ $ `stdlib/core/slice.nu`
 
 : ~ i g_hp_sess 0
 
-& `c` @ nurl_once_slot i id i candidate → i
-
 @ __hp_sess_cache → *HpSessCache {
-    ? != g_hp_sess 0 { ^ ( rcbox_ptr [HpSessCache] g_hp_sess ) } {}
-    // The candidate lives in an rcbox (stdlib/core/rcbox.nu); a thread
-    // that loses the race to publish releases its own, the winner's is
-    // the process's for good.
-    : i box ( rcbox_new [HpSessCache] @ HpSessCache { ( mutex_new ) ( vec_new [HpSess] ) } )
-    : i won ( nurl_once_slot 2 box )
-    ? != won box { ( rcbox_release [HpSessCache] box ) } {}
-    = g_hp_sess won
-    ^ ( rcbox_ptr [HpSessCache] won )
+    ? != g_hp_sess 0 { ^ # *HpSessCache g_hp_sess } {}
+    // A thread that loses the race to publish releases its own candidate;
+    // the winner's is the process's for good.
+    : *HpSessCache p ( shared_publish_once [HpSessCache] 2 ( shared_new [HpSessCache] @ HpSessCache { ( mutex_new ) ( vec_new [HpSess] ) } ) )
+    = g_hp_sess # i p
+    ^ p
 }
 
 @ __hp_sess_key s host i port → String {
@@ -212,7 +205,7 @@ $ `stdlib/core/slice.nu`
     } {}
     : i fd ( nurl_tcp_connect host port )
     ? <= fd 0 { ^ @ !HttpConn i { F 1 } } {}
-    ^ @ !HttpConn i { T ( __hp_conn_new 0 fd @ TlsConn { # s 0 } skey ) }
+    ^ @ !HttpConn i { T ( __hp_conn_new 0 fd @ TlsConn { ( shared_null [TlsConnImpl] ) } skey ) }
 }
 
 // Wrap a TLS connection the caller established itself (for instance
@@ -307,7 +300,7 @@ $ `stdlib/core/slice.nu`
     = . c fd 0
     // the closed TLS connection leaves the transport (a store through the
     // pointer drops nothing, so it is taken out first)
-    = . c tc @ TlsConn { # s 0 }
+    = . c tc @ TlsConn { ( shared_null [TlsConnImpl] ) }
 }
 
 @ __hp_conn_shut i is_tls i fd TlsConn tc String skey → v {
@@ -350,16 +343,13 @@ $ `stdlib/core/slice.nu`
 
 // A HttpStreamState is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
 // every copy is the same state, and the last owner releases it.
-: HttpStreamState { s ctl }
+: HttpStreamState { ( Shared HttpStreamStateImpl ) ctl }
 
-@ HttpStreamState_share HttpStreamState h → HttpStreamState { ^ @ HttpStreamState { # s ( rcbox_share # i . h ctl ) } }
+@ HttpStreamState_share HttpStreamState h → HttpStreamState { ^ @ HttpStreamState { ( shared_clone [HttpStreamStateImpl] . h ctl ) } }
 
-@ HttpStreamState_drop sink HttpStreamState h → v {
-    ( mem_forget h )
-    ( rcbox_release [HttpStreamStateImpl] # i . h ctl )
-}
+@ HttpStreamState_drop sink HttpStreamState h → v {}
 
-@ __HttpStreamState_ptr HttpStreamState h → *HttpStreamStateImpl { ^ ( rcbox_ptr [HttpStreamStateImpl] # i . h ctl ) }
+@ __HttpStreamState_ptr HttpStreamState h → *HttpStreamStateImpl { ^ ( shared_ptr [HttpStreamStateImpl] . h ctl ) }
 
 // ── small byte / text helpers ───────────────────────────────────────
 
@@ -812,7 +802,7 @@ $ `stdlib/core/slice.nu`
 }
 
 @ __hp_state_new sink HttpConn c → HttpStreamState {
-    ^ @ HttpStreamState { # s ( rcbox_new [HttpStreamStateImpl] @ HttpStreamStateImpl {
+    ^ @ HttpStreamState { ( shared_new [HttpStreamStateImpl] @ HttpStreamStateImpl {
             c ( vec_new [u] ) 0 ( vec_new [u] ) ( vec_new [String] ) ( vec_new [String] )
             0 0 0 0 0 0 0 0 0 0 0 0 0 0
         } ) }
@@ -820,7 +810,7 @@ $ `stdlib/core/slice.nu`
 
 // A stream that never reached a server: finished, carrying `err`.
 @ __hp_failed_state i err → HttpStreamState {
-    : HttpStreamState h ( __hp_state_new @ HttpConn { # s 0 } )
+    : HttpStreamState h ( __hp_state_new @ HttpConn { ( shared_null [HttpConnImpl] ) } )
     : *HttpStreamStateImpl st ( __HttpStreamState_ptr h )
     = . st err_kind err
     = . st finished 1
@@ -830,11 +820,8 @@ $ `stdlib/core/slice.nu`
 // The transport, taken out of the state, which is finished from here and
 // holds none.
 @ __hp_take_conn * HttpStreamStateImpl st → HttpConn {
-    : HttpConn c . st conn
-    ( mem_take c )  // the state gives it up: replaced right below
-    = . st conn @ HttpConn { # s 0 }
     = . st finished 1
-    ^ c
+    ^ ( mem_replace [HttpConn] . st conn @ HttpConn { ( shared_null [HttpConnImpl] ) } )
 }
 
 // Cap the decoded body; a response that grows past it ends with error 7
@@ -902,7 +889,7 @@ i follow i maxredir i verify s ua i timeout_ms → HttpStreamState {
     : ~ * u cur_body body_ptr
     : ~ i cur_len body_len
     : ~ i redirects 0
-    : ~ HttpStreamState result @ HttpStreamState { # s 0 }
+    : ~ HttpStreamState result @ HttpStreamState { ( shared_null [HttpStreamStateImpl] ) }
     : ~ b looping T
 
     ~ looping {
@@ -1188,10 +1175,7 @@ i follow i maxredir i verify s ua i timeout_ms → i {
 // response object after pumping to completion.
 @ hp_stream_body_take HttpStreamState st__h → ( Vec u ) {
     : *HttpStreamStateImpl st ( __HttpStreamState_ptr st__h )
-    : ( Vec u ) out . st body
-    ( mem_take out )  // the stream gives it up: replaced right below
-    = . st body ( vec_new [u] )
-    ^ out
+    ^ ( mem_replace [( Vec u )] . st body ( vec_new [u] ) )
 }
 
 // The decoded body bytes not yet handed out — the stream's own buffer,
@@ -1238,10 +1222,7 @@ i follow i maxredir i verify s ua i timeout_ms → i {
     ~ & == ( vec_len [u] . st body ) 0 == . st finished 0 { ( __hp_pump st ) }
     : i bl ( vec_len [u] . st body )
     ? == bl 0 { ^ @ ?( Vec u ) { F # ( Vec u ) 0 } } {}
-    : ( Vec u ) out . st body
-    ( mem_take out )  // the stream gives it up: replaced right below
-    = . st body ( vec_new [u] )
-    ^ @ ?( Vec u ) { T out }
+    ^ @ ?( Vec u ) { T ( mem_replace [( Vec u )] . st body ( vec_new [u] ) ) }
 }
 
 @ hp_stream_next_str HttpStreamState st__h → ?String {

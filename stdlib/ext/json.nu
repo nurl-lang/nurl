@@ -262,8 +262,8 @@ $ `stdlib/core/vec.nu`
 // ── Parser state ─────────────────────────────────────────────────────
 //
 // Heap-allocated so that recursive descent calls can mutate `pos`
-// without threading state through return tuples. Owned by json_parse;
-// freed before returning.
+// without threading state through return tuples. It lives in
+// json_parse_n's frame; the parser reaches it through its place.
 //
 // `depth` is bumped/decremented around array/object recursion to enforce
 // a hard cap (`JSON_MAX_DEPTH`) and prevent stack overflow from hostile
@@ -276,15 +276,6 @@ $ `stdlib/core/vec.nu`
     i len
     i pos
     i depth
-}
-
-@ __jp_new s txt i len → *JsonParser {
-    : *JsonParser p # *JsonParser ( nurl_alloc Z JsonParser )
-    = . p src txt
-    = . p len len
-    = . p pos 0
-    = . p depth 0
-    ^ p
 }
 
 @ __jp_eof * JsonParser p → b {
@@ -916,21 +907,23 @@ $ `stdlib/core/vec.nu`
         }
         ^ @ !Json JsonError { F e }
     } {}
-    : *JsonParser p ( __jp_new src len )
+    : ~ JsonParser jp @ JsonParser { # s src len 0 0 }
+    ^ ( __jp_parse_root jp )
+}
+
+@ __jp_parse_root inout JsonParser jp → !Json JsonError {
+    : *JsonParser p ( mem_addr jp )
     : !Json JsonError r ( __jp_parse_value p )
     ?? r {
         T j → {
             ( __jp_skip_ws p )
             ? ! ( __jp_eof p ) {
                 : JsonError e ( __jp_err p @ ParseErr { TrailingGarbage } )
-                ( nurl_free # s p )
                 ^ @ !Json JsonError { F e }
             } {}
-            ( nurl_free # s p )
             ^ @ !Json JsonError { T j }
         }
         F e → {
-            ( nurl_free # s p )
             ^ @ !Json JsonError { F # JsonError e }
         }
     }

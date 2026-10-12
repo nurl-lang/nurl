@@ -148,8 +148,11 @@ import_decl = '$' STR IDENT? ;
    Example:  & `libc` @ printf s fmt ... → i32             — variadic
    A parameter marked `inout` is a pointer to a T the C function writes
    through; the argument is a mutable binding, passed by address.
-   Example:  & `libcuda` @ cuMemGetInfo_v2 inout i avail inout i total → i32 *)
-ffi_decl   = '&' STR '@' IDENT ffi_param* ( '...' )? '→' type ;
+   Example:  & `libcuda` @ cuMemGetInfo_v2 inout i avail inout i total → i32
+   A result marked `sink` (a raw string only) is a string the C function
+   allocated and hands over: the caller's binding owns it.
+   Example:  & `c` @ strdup s src → sink s *)
+ffi_decl   = '&' STR '@' IDENT ffi_param* ( '...' )? '→' 'sink'? type ;
 ffi_param  = 'inout'? type IDENT? ;
 
 

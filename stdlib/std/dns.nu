@@ -38,11 +38,11 @@ $ `stdlib/std/net.nu`
 
 // ── Runtime FFI bridge (§18c) ──────────────────────────────────────
 
-& `c` @ nurl_dns_resolve s host → s
+& `c` @ nurl_dns_resolve s host → sink s
 
-& `c` @ nurl_dns_resolve_port s host i port → s
+& `c` @ nurl_dns_resolve_port s host i port → sink s
 
-& `c` @ nurl_dns_reverse s ip → s
+& `c` @ nurl_dns_reverse s ip → sink s
 
 // ── Helpers ────────────────────────────────────────────────────────
 
@@ -90,7 +90,6 @@ $ `stdlib/std/net.nu`
 @ dns_resolve s host → !( Vec String ) NetErr {
     : s raw ( nurl_dns_resolve host )
     : ( Vec String ) out ( __dns_split_lines raw )
-    ( nurl_free raw )
     ? == ( vec_len [String] out ) 0 {
         ^ @ !( Vec String ) NetErr { F # NetErr NetOther }
     } {}
@@ -100,7 +99,6 @@ $ `stdlib/std/net.nu`
 @ dns_resolve_port s host i port → !( Vec String ) NetErr {
     : s raw ( nurl_dns_resolve_port host port )
     : ( Vec String ) out ( __dns_split_lines raw )
-    ( nurl_free raw )
     ? == ( vec_len [String] out ) 0 {
         ^ @ !( Vec String ) NetErr { F # NetErr NetOther }
     } {}
@@ -111,12 +109,6 @@ $ `stdlib/std/net.nu`
 
 @ dns_reverse s ip → ?String {
     : s raw ( nurl_dns_reverse ip )
-    : i n ( nurl_str_len raw )
-    ? <= n 0 {
-        ( nurl_free raw )
-        ^ @ ?String { F }
-    } {}
-    : String h ( string_from raw )
-    ( nurl_free raw )
-    ^ @ ?String { T h }
+    ? <= ( nurl_str_len raw ) 0 { ^ @ ?String { F } } {}
+    ^ @ ?String { T ( string_adopt raw ) }
 }

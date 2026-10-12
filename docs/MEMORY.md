@@ -1143,6 +1143,12 @@ are dropped, moved and copied by the same rules:
 | `( mem_dup x )` | an owned copy: deep for an owning value, the value itself otherwise |
 | `( mem_forget x )` | gives up `x`'s value without releasing it; `unsafe` only |
 | `( mem_replace [T] place x )` | `x` goes into `place` (a mutable binding, a field of one, or a field through a pointer) and what `place` held comes back, owned; nothing is dropped or copied (stdlib/core/mem.nu, `unsafe`) |
+| `( vec_retain [A] v keep )` | the elements `keep` answers T for stay, in order; the rest are dropped, in place (stdlib/core/vec.nu) |
+| `( vec_put_back [A] v i x )` | `x`, read out of slot `i` and updated, goes back: the check-in of a table that lends its records by value; a function handing its parameter on to it writes it back too, for its own callers |
+
+**Foreign results a caller owns.** A C function returning a string it
+allocated declares its result `→ sink s` (spec §7.2): the binding the
+result lands in owns it, so nothing frees it by hand.
 
 **Raw memory that releases itself.** A `RawBlock`
 (`( raw_block n )`, stdlib/core/mem.nu) is `n` bytes from the C
@@ -1174,6 +1180,14 @@ hook that only observes the value (logging, counting) needs nothing more,
 and one over a counted block gives its receiver up with `mem_forget` in an
 `unsafe` hook. A program's own handle whose hook is `unsafe` is sealed:
 its literals and field writes are raw memory too (§6.4).
+
+The standard library's own handles hold their state in a
+`( Shared T )` (stdlib/core/rcbox.nu): a counted block whose generic hooks
+release it, so no handle hook releases anything itself
+(`@ Regex_drop sink Regex r → v {}`), and the share hook's
+`shared_clone [T]` names the state for the cycle rules (§7.7). Making
+one is raw (the standard library's, or `unsafe` code's); a zero handle is
+`# Regex # s 0`.
 
 A program's own handle — one state that every copy shares — wraps an
 `Arc` (an `Rc` when the state can hold the handle again, so the cycle is
@@ -1308,7 +1322,11 @@ Their cycles are rejected at compile time instead:
   an `Arc`, `arc_get` returns a copy, and `arc_set` / `arc_ptr` are
   compile errors. The payload is built first and shared whole, a tree
   from its leaves up. `ArcWeak` (`arc_downgrade` / `arc_weak_upgrade`)
-  points back without owning.
+  points back without owning. A closure inside a library handle's state
+  (a job handler, a route) is not followed by this walk: it reached that
+  state through a call handed the handle, which the store rule below
+  checked, so a cycle through it would pass through the handle and was
+  refused there.
 - **A store into an existing thread-shared handle may not lead back to
   it.** A call that keeps a value and is handed an existing thread-shared
   handle (`chan_send ch v`, `job_register node … f`,

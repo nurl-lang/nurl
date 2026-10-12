@@ -97,7 +97,7 @@ $ `stdlib/core/slice.nu`
 unsafe @ __sed_compile_re String pat b icase → Regex {
     : String work ? icase ( _grep_lower ( string_data pat ) ) ( string_clone pat )
     : String ere ? g_sed_ere ( string_clone work ) ( _bre_to_ere ( string_data work ) )
-    : ~ Regex out @ Regex { # s 0 }
+    : ~ Regex out # Regex # s 0
     ?? ( regex_compile ( string_data ere ) ) {
         T r → { = out r }
         F _ → { = g_sed_bad T }
@@ -196,10 +196,10 @@ unsafe @ __sed_parse s src ( Vec SedCmd ) out → v {
         } {
             : ~ i a1kind 0
             : ~ i a1line 0
-            : ~ Regex a1re @ Regex { # s 0 }
+            : ~ Regex a1re # Regex # s 0
             : ~ i a2kind 0
             : ~ i a2line 0
-            : ~ Regex a2re @ Regex { # s 0 }
+            : ~ Regex a2re # Regex # s 0
             ( __sed_addr src n a1kind a1line a1re )
             ? & != a1kind SED_ADDR_NONE == ( __sed_at src n ) 44 {
                 = g_sed_pos + g_sed_pos 1
@@ -216,7 +216,7 @@ unsafe @ __sed_parse s src ( Vec SedCmd ) out → v {
             = g_sed_pos + g_sed_pos 1
             : String arg1 ( string_new )
             : String arg2 ( string_new )
-            : ~ Regex re @ Regex { # s 0 }
+            : ~ Regex re # Regex # s 0
             : ~ b has_re F
             : ~ i sflags 0
             : ~ i soccur 0

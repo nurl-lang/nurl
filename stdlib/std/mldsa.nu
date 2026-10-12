@@ -974,16 +974,13 @@ MldsaParams p ( Vec u ) out → v {
 
 // A MldsaKeys is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
 // every copy is the same state, and the last owner releases it.
-: MldsaKeys { s ctl }
+: MldsaKeys { ( Shared MldsaKeysImpl ) ctl }
 
-@ MldsaKeys_share MldsaKeys h → MldsaKeys { ^ @ MldsaKeys { # s ( rcbox_share # i . h ctl ) } }
+@ MldsaKeys_share MldsaKeys h → MldsaKeys { ^ @ MldsaKeys { ( shared_clone [MldsaKeysImpl] . h ctl ) } }
 
-@ MldsaKeys_drop sink MldsaKeys h → v {
-    ( mem_forget h )
-    ( rcbox_release [MldsaKeysImpl] # i . h ctl )
-}
+@ MldsaKeys_drop sink MldsaKeys h → v {}
 
-@ __MldsaKeys_ptr MldsaKeys h → *MldsaKeysImpl { ^ ( rcbox_ptr [MldsaKeysImpl] # i . h ctl ) }
+@ __MldsaKeys_ptr MldsaKeys h → *MldsaKeysImpl { ^ ( shared_ptr [MldsaKeysImpl] . h ctl ) }
 
 @ mldsa_pk MldsaKeys h__h → ( Vec u ) {
     : *MldsaKeysImpl h ( __MldsaKeys_ptr h__h )
@@ -1070,7 +1067,7 @@ simd @ mldsa_keygen_derand i level ( Vec u ) xi → MldsaKeys {
     : ( Vec u ) sk ( vec_with_cap [u] ( mldsa_sk_len level ) )
     ( __pack_sk rho kk tr s1p s2p t0p p sk )
 
-    : MldsaKeys h @ MldsaKeys { # s ( rcbox_new [MldsaKeysImpl] @ MldsaKeysImpl { pk sk } ) }
+    : MldsaKeys h @ MldsaKeys { ( shared_new [MldsaKeysImpl] @ MldsaKeysImpl { pk sk } ) }
 
     ( vec_free [u] tr )
     ( vec_free [i32] t0 ) ( vec_free [i32] t1 )

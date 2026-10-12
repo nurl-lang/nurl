@@ -49,6 +49,7 @@ $ `stdlib/net/tcp.nu`
 $ `stdlib/net/pktbuf.nu`
 $ `stdlib/net/stack.nu`
 $ `stdlib/core/rcbox.nu`
+$ `stdlib/core/box.nu`
 
 // ── rx outcomes ──────────────────────────────────────────────────
 //
@@ -129,8 +130,8 @@ $ `stdlib/core/rcbox.nu`
 
 : TcpStackImpl {
     NetStack net
-    ( Vec i ) conns  // *TConn, as integers — NURL has no Vec of pointers
-    ( Vec i ) listeners  // *TListener, likewise
+    ( Vec ( Box TConn ) ) conns  // a block each, so a slot's address stays put
+    ( Vec ( Box TListener ) ) listeners
     i iss  // initial send sequence, advanced per connection
     i ephemeral  // next ephemeral local port
     i rst_sent
@@ -139,68 +140,35 @@ $ `stdlib/core/rcbox.nu`
 
 // A TcpStack is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
 // every copy is the same state, and the last owner releases it.
-: TcpStack { s ctl }
+: TcpStack { ( Shared TcpStackImpl ) ctl }
 
-@ TcpStack_share TcpStack h → TcpStack { ^ @ TcpStack { # s ( rcbox_share # i . h ctl ) } }
+@ TcpStack_share TcpStack h → TcpStack { ^ @ TcpStack { ( shared_clone [TcpStackImpl] . h ctl ) } }
 
-@ TcpStack_drop sink TcpStack h → v {
-    ( mem_forget h )
-    ( rcbox_release [TcpStackImpl] # i . h ctl )
-}
+@ TcpStack_drop sink TcpStack h → v {}
 
-@ __TcpStack_ptr TcpStack h → *TcpStackImpl { ^ ( rcbox_ptr [TcpStackImpl] # i . h ctl ) }
-
-// The connection and listener blocks are raw memory (the table keeps
-// them as integers): releasing them, and the Tcb each connection holds,
-// is the table's own drop. Its NetStack and vectors are dropped after.
-% Drop TcpStackImpl {
-    @ drop TcpStackImpl ts → v {
-        : i n ( vec_len [i] . ts conns )
-        : ~ i k 0
-        ~ < k n {
-            : *TConn c # *TConn ?? ( vec_get [i] . ts conns k ) { T p → p F → 0 }
-            ? != # i c 0 {
-                // A released slot holds a null Tcb; letting go of one is
-                // a no-op, so every slot is released the same way.
-                ( tcb_free . c tcb )
-                ( nurl_free # s c )
-            } {}
-            = k + k 1
-        }
-        : i m ( vec_len [i] . ts listeners )
-        : ~ i j 0
-        ~ < j m {
-            : *TListener l # *TListener ?? ( vec_get [i] . ts listeners j ) { T p → p F → 0 }
-            ? != # i l 0 {
-                ( vec_free [i] . l pending )
-                ( nurl_free # s l )
-            } {}
-            = j + j 1
-        }
-    }
-}
+@ __TcpStack_ptr TcpStack h → *TcpStackImpl { ^ ( shared_ptr [TcpStackImpl] . h ctl ) }
 
 @ __tconn_ptr * TcpStackImpl ts i idx → *TConn {
-    ^ # *TConn ?? ( vec_get [i] . ts conns idx ) { T p → p F → 0 }
+    ^ ( box_ptr [TConn] ( vec_at [( Box TConn )] . ts conns idx ) )
 }
 
 @ __tlisten_ptr * TcpStackImpl ts i idx → *TListener {
-    ^ # *TListener ?? ( vec_get [i] . ts listeners idx ) { T p → p F → 0 }
+    ^ ( box_ptr [TListener] ( vec_at [( Box TListener )] . ts listeners idx ) )
 }
 
 @ tstack_new NetStack net i iss_seed → TcpStack {
-    : i ts__box ( rcbox_zero [TcpStackImpl] )
-    : *TcpStackImpl ts ( rcbox_ptr [TcpStackImpl] ts__box )
+    : ( Shared TcpStackImpl ) ts__box ( shared_zero [TcpStackImpl] )
+    : *TcpStackImpl ts ( shared_ptr [TcpStackImpl] ts__box )
     // Another owner of the stack, not a view of the caller's: this table
     // sends through it for as long as the table lives.
     = . ts net ( NetStack_share net )
-    = . ts conns ( vec_new [i] )
-    = . ts listeners ( vec_new [i] )
+    = . ts conns ( vec_new [( Box TConn )] )
+    = . ts listeners ( vec_new [( Box TListener )] )
     = . ts iss iss_seed
     = . ts ephemeral 49152
     = . ts rst_sent 0
     = . ts no_conn 0
-    ^ @ TcpStack { # s ts__box }
+    ^ @ TcpStack { ts__box }
 }
 
 // Let go of `ts` now rather than at the end of its owner's scope.
@@ -229,7 +197,7 @@ $ `stdlib/core/rcbox.nu`
 // looked up and rejected by generation, rather than pointing at
 // whatever was allocated next.
 @ __conn_alloc * TcpStackImpl ts → i {
-    : i n ( vec_len [i] . ts conns )
+    : i n ( vec_len [( Box TConn )] . ts conns )
     : ~ i k 0
     ~ < k n {
         : *TConn c ( __tconn_ptr ts k )
@@ -243,13 +211,8 @@ $ `stdlib/core/rcbox.nu`
         } {}
         = k + k 1
     }
-    : *TConn c # *TConn ( nurl_alloc Z TConn )
-    = . c used T
-    = . c gen 1
-    = . c tcb ( tcb_new )
-    = . c listener -1
-    = . c passive F
-    ( vec_push [i] . ts conns # i c )
+    : ( Box TConn ) cb ( box_new [TConn] @ TConn { ( tcb_new ) 0 0 0 0 1 T F -1 } )
+    ( vec_push [( Box TConn )] . ts conns cb )
     ^ n
 }
 
@@ -258,7 +221,7 @@ $ `stdlib/core/rcbox.nu`
     ? == # i c 0 { ^ } {}
     ? ! . c used { ^ } {}
     // The slot gives its Tcb up (dropped here) and keeps a null one.
-    = . c tcb @ Tcb { # s 0 }
+    = . c tcb @ Tcb { ( shared_null [TcbImpl] ) }
     = . c used F
 }
 
@@ -268,7 +231,7 @@ $ `stdlib/core/rcbox.nu`
 // take that slot.
 @ tstack_conn_live TcpStack ts__h i idx i gen → b {
     : *TcpStackImpl ts ( __TcpStack_ptr ts__h )
-    ? || < idx 0 >= idx ( vec_len [i] . ts conns ) { ^ F } {}
+    ? || < idx 0 >= idx ( vec_len [( Box TConn )] . ts conns ) { ^ F } {}
     : *TConn c ( __tconn_ptr ts idx )
     ? == # i c 0 { ^ F } {}
     ^ && . c used == . c gen gen
@@ -284,7 +247,7 @@ $ `stdlib/core/rcbox.nu`
 @ tstack_conn_tcb TcpStack ts__h i idx → Tcb {
     : *TcpStackImpl ts ( __TcpStack_ptr ts__h )
     : *TConn c ( __tconn_ptr ts idx )
-    ? == # i c 0 { ^ @ Tcb { # s 0 } } {}
+    ? == # i c 0 { ^ @ Tcb { ( shared_null [TcbImpl] ) } } {}
     ^ . c tcb
 }
 
@@ -321,7 +284,7 @@ $ `stdlib/core/rcbox.nu`
 
 @ tstack_listen TcpStack ts__h i local_ip i port i backlog → i {
     : *TcpStackImpl ts ( __TcpStack_ptr ts__h )
-    : i n ( vec_len [i] . ts listeners )
+    : i n ( vec_len [( Box TListener )] . ts listeners )
     : ~ i slot -1
     : ~ i k 0
     ~ < k n {
@@ -329,10 +292,7 @@ $ `stdlib/core/rcbox.nu`
         ? ! . l used { = slot k = k n } { = k + k 1 }
     }
     ? < slot 0 {
-        : *TListener l # *TListener ( nurl_alloc Z TListener )
-        = . l pending ( vec_new [i] )
-        = . l gen 0
-        ( vec_push [i] . ts listeners # i l )
+        ( vec_push [( Box TListener )] . ts listeners ( box_new [TListener] @ TListener { 0 0 0 ( vec_new [i] ) F 0 } ) )
         = slot n
     } {}
     : *TListener l ( __tlisten_ptr ts slot )
@@ -405,7 +365,7 @@ $ `stdlib/core/rcbox.nu`
 // ── receive ──────────────────────────────────────────────────────
 
 @ __find_conn * TcpStackImpl ts i local_ip i local_port i remote_ip i remote_port → i {
-    : i n ( vec_len [i] . ts conns )
+    : i n ( vec_len [( Box TConn )] . ts conns )
     : ~ i k 0
     ~ < k n {
         : *TConn c ( __tconn_ptr ts k )
@@ -418,7 +378,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 @ __find_listener * TcpStackImpl ts i local_ip i port → i {
-    : i n ( vec_len [i] . ts listeners )
+    : i n ( vec_len [( Box TListener )] . ts listeners )
     : ~ i k 0
     ~ < k n {
         : *TListener l ( __tlisten_ptr ts k )
@@ -624,7 +584,7 @@ $ `stdlib/core/rcbox.nu`
 @ tstack_tick TcpStack ts__h i now PktBuf out → i {
     : *TcpStackImpl ts ( __TcpStack_ptr ts__h )
     ( stack_tick . ts net now out )
-    : i n ( vec_len [i] . ts conns )
+    : i n ( vec_len [( Box TConn )] . ts conns )
     : ~ i emitted 0
     : ~ i k 0
     ~ < k n {
@@ -646,7 +606,7 @@ $ `stdlib/core/rcbox.nu`
 // one that burns its only vCPU.
 @ tstack_next_timeout TcpStack ts__h i now → i {
     : *TcpStackImpl ts ( __TcpStack_ptr ts__h )
-    : i n ( vec_len [i] . ts conns )
+    : i n ( vec_len [( Box TConn )] . ts conns )
     : ~ i best -1
     : ~ i k 0
     ~ < k n {

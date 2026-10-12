@@ -90,6 +90,8 @@ $ `stdlib/std/fs.nu`
 $ `stdlib/std/tls.nu`
 $ `stdlib/std/tls_server.nu`
 $ `stdlib/std/pkey.nu`
+$ `stdlib/std/arc.nu`
+$ `stdlib/std/thread.nu`
 
 : | NetErr {
     NetBind
@@ -118,14 +120,66 @@ $ `stdlib/std/pkey.nu`
 // parameter set), all big-endian. pqcertp / pqkp are an OPTIONAL second
 // identity — an ML-DSA chain and key served beside the classical one to
 // clients that list its scheme (`tcp_listen_tls_dual`), 0/0 otherwise.
-// All are held as raw malloc'd (ptr, len) pairs — NOT Vec fields —
-// because a value struct returned with owned-Vec fields is auto-dropped
-// at the constructing function's exit (a borrowck escape gap), which
-// would free the buffers out from under the listener.
-: TcpListener { s raw i is_tls i keytype i certp i certlen i kp1 i kl1 i kp2 i kl2 i kp3 i kl3 i alpnp i alpnlen i pqcertp i pqcertlen i pqkp i pqkl }
-// alpnp/alpnlen: the TLS listener's ALPN preference list in wire form
-// ([len:1][name] entries, server order — see tls_alpn_pack), 0/0 when the
-// listener does not negotiate ALPN.
+// `alpn` is the TLS listener's ALPN preference list in wire form
+// ([len:1][name] entries, server order — see tls_alpn_pack), empty when
+// the listener does not negotiate ALPN. The listener is a plain value
+// every accepting worker copies, so the material lives in a table of the
+// module's (g_tls_lcreds below) and `creds` names its slot (0 on a
+// plaintext listener).
+: TlsCreds {
+    ( Vec u ) cert
+    ( Vec u ) k1
+    ( Vec u ) k2
+    ( Vec u ) k3
+    ( Vec u ) alpn
+    ( Vec u ) pqcert
+    ( Vec u ) pqk
+}
+
+: TcpListener { s raw i is_tls i keytype i creds }
+
+// Every TLS listener's material, by slot (a listener's `creds` is its
+// slot + 1). A handshake takes a share of its own under the lock, and
+// tcp_close_listener empties the slot: the material goes with the last
+// share, so a handshake still running when the listener closes keeps
+// what it reads. The table and its lock are made by the first TLS
+// listen, while the process is still single-threaded (as the ticket key
+// is), and every other use follows one.
+: TlsSlot { ? ( Arc TlsCreds ) creds }
+
+: ~ ( Vec TlsSlot ) g_tls_lcreds 0
+: ~ Mutex g_tls_lcreds_mu 0
+: ~ b g_tls_lcreds_made F
+
+@ __tls_lcreds_add sink ( Arc TlsCreds ) c → i {
+    ? ! g_tls_lcreds_made {
+        = g_tls_lcreds ( vec_new [TlsSlot] )
+        = g_tls_lcreds_mu ( mutex_new )
+        = g_tls_lcreds_made T
+    } {}
+    ( mutex_lock g_tls_lcreds_mu )
+    ( vec_push [TlsSlot] g_tls_lcreds @ TlsSlot { @ ?( Arc TlsCreds ) { T c } } )
+    : i slot ( vec_len [TlsSlot] g_tls_lcreds )
+    ( mutex_unlock g_tls_lcreds_mu )
+    ^ slot
+}
+
+@ __tls_lcreds_get i slot → ?( Arc TlsCreds ) {
+    ( mutex_lock g_tls_lcreds_mu )
+    : TlsSlot e ( vec_at [TlsSlot] g_tls_lcreds - slot 1 )
+    : ?( Arc TlsCreds ) out ?? . e creds {
+        T a → @ ?( Arc TlsCreds ) { T ( arc_clone [TlsCreds] a ) }
+        F → @ ?( Arc TlsCreds ) { F }
+    }
+    ( mutex_unlock g_tls_lcreds_mu )
+    ^ out
+}
+
+@ __tls_lcreds_close i slot → v {
+    ( mutex_lock g_tls_lcreds_mu )
+    ( vec_put [TlsSlot] g_tls_lcreds - slot 1 @ TlsSlot { @ ?( Arc TlsCreds ) { F } } )
+    ( mutex_unlock g_tls_lcreds_mu )
+}
 // kind: 0 = plaintext (raw is the runtime socket handle), 1 = pure TLS
 // client, 2 = pure TLS server. For kinds 1/2 `tlsh` is one owner of the
 // TlsConn as a word (`_tls_word`; tcp_close_conn gives it back) and
@@ -191,27 +245,8 @@ $ `stdlib/std/pkey.nu`
         ^ @ !TcpListener NetErr { F ( _net_err_of ek ) }
     } {}
     : s rp # s raw
-    : TcpListener l @ TcpListener { rp 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 }
+    : TcpListener l @ TcpListener { rp 0 0 0 }
     ^ @ !TcpListener NetErr { T l }
-}
-
-// malloc a copy of `v`'s bytes; returns the pointer as i64 (0 if empty).
-@ __net_dup ( Vec u ) v → i {
-    : i n ( vec_len [u] v )
-    ? <= n 0 { ^ 0 } {}
-    : s buf # s ( malloc n )
-    ( nurl_memcpy # *u buf ( vec_data [u] v ) n )
-    ^ # i buf
-}
-
-// Build a fresh Vec view over a raw (ptr, len) cert/key blob.
-// A borrowed view of a listener-owned buffer (certificate chain, key):
-// the listener keeps these for its whole life, and the handshake only
-// reads them, so there is nothing to copy — this used to memcpy the chain
-// and the key on EVERY accept. `vec_free` on the view releases the handle
-// only (core/vec.nu, vec_borrow_raw).
-@ __net_vecview i ptr i len → ( Vec u ) {
-    ^ ( vec_borrow_raw [u] # *u ptr len )
 }
 
 // Convenience: same as tcp_listen_with_backlog with backlog = 128.
@@ -347,24 +382,12 @@ $ `stdlib/std/pkey.nu`
     // single-threaded, so every worker that later accepts on this
     // listener seals and opens tickets under the same key.
     ( _tls_ticket_key_ensure )
-    // Copy cert list / key material into raw heap buffers, then drop the Vecs.
-    : i certp ( __net_dup cert )
-    : i certlen ( vec_len [u] cert )
-    : i kp1 ( __net_dup k1 )
-    : i kl1 ( vec_len [u] k1 )
-    : i kp2 ( __net_dup k2 )
-    : i kl2 ( vec_len [u] k2 )
-    : i kp3 ( __net_dup k3 )
-    : i kl3 ( vec_len [u] k3 )
+    // The cert list and key material move into the listener's shared
+    // credentials.
     : ( Vec u ) alpn ( tls_alpn_pack alpn_protocols )
-    : i alpnp ( __net_dup alpn )
-    : i alpnlen ( vec_len [u] alpn )
-    : i pqcertp ( __net_dup pqcert )
-    : i pqcertlen ( vec_len [u] pqcert )
-    : i pqkp ( __net_dup pqk )
-    : i pqkl ( vec_len [u] pqk )
+    : ( Arc TlsCreds ) creds ( arc_new [TlsCreds] @ TlsCreds { cert k1 k2 k3 alpn pqcert pqk } )
     : s rp # s raw
-    ^ @ !TcpListener NetErr { T @ TcpListener { rp 1 keytype certp certlen kp1 kl1 kp2 kl2 kp3 kl3 alpnp alpnlen pqcertp pqcertlen pqkp pqkl } }
+    ^ @ !TcpListener NetErr { T @ TcpListener { rp 1 keytype ( __tls_lcreds_add creds ) } }
 }
 
 @ tcp_listen_tls s host i port s cert_path s key_path → !TcpListener NetErr {
@@ -580,15 +603,7 @@ $ `stdlib/std/pkey.nu`
 
 @ tcp_close_listener TcpListener l → v {
     ( nurl_tcp_close # i . l raw )
-    ? != . l is_tls 0 {
-        ? != . l certp 0 { ( nurl_free # s . l certp ) } {}
-        ? != . l kp1 0 { ( nurl_free # s . l kp1 ) } {}
-        ? != . l kp2 0 { ( nurl_free # s . l kp2 ) } {}
-        ? != . l kp3 0 { ( nurl_free # s . l kp3 ) } {}
-        ? != . l alpnp 0 { ( nurl_free # s . l alpnp ) } {}
-        ? != . l pqcertp 0 { ( nurl_free # s . l pqcertp ) } {}
-        ? != . l pqkp 0 { ( nurl_free # s . l pqkp ) } {}
-    } {}
+    ? != . l creds 0 { ( __tls_lcreds_close . l creds ) } {}
 }
 
 // Soft-shutdown: close the underlying socket but KEEP the handle's
@@ -617,58 +632,45 @@ $ `stdlib/std/pkey.nu`
 // by the read/write/close dispatch. The whole thing is gated on
 // g_st_n: a process that never calls tcp_starttls does ZERO lookups.
 //
-// Storage is a malloc'd i64 array of (fd, ptr) pairs (2 words each),
-// grown by doubling. nurl_peek/poke are word-indexed (8-byte cells).
-: ~ i g_st_base 0
-: ~ i g_st_cap 0
+// Storage is an owned `( Vec i )` of (fd, ptr) pairs, two words each.
+: ~ ( Vec i ) g_st 0
+: ~ b g_st_made F
 : ~ i g_st_n 0
 
-@ __starttls_grow → v {
-    : i newcap ? == g_st_cap 0 8 * g_st_cap 2
-    : s nb # s ( malloc * newcap 16 )
-    ? != g_st_base 0 {
-        ( nurl_memcpy # *u nb # *u g_st_base * g_st_n 16 )
-        ( nurl_free # s g_st_base )
-    } {}
-    = g_st_base # i nb
-    = g_st_cap newcap
-}
-
 @ __starttls_register i fd i ptr → v {
-    ? >= g_st_n g_st_cap { ( __starttls_grow ) } {}
-    : s b # s g_st_base
-    ( nurl_poke b * g_st_n 2 fd )
-    ( nurl_poke b + * g_st_n 2 1 ptr )
+    ? ! g_st_made { = g_st ( vec_new [i] ) = g_st_made T } {}
+    ( vec_push [i] g_st fd )
+    ( vec_push [i] g_st ptr )
     = g_st_n + g_st_n 1
 }
 
 @ __starttls_lookup i fd → i {
     ? == g_st_n 0 { ^ 0 } {}
-    : s b # s g_st_base
+    : *i b ( vec_data [i] g_st )
     : ~ i k 0
     ~ < k g_st_n {
-        ? == ( nurl_peek b * k 2 ) fd { ^ ( nurl_peek b + * k 2 1 ) } {}
+        ? == . b * k 2 fd { ^ . b + * k 2 1 } {}
         = k + k 1
     }
     ^ 0
 }
 
 @ __starttls_unregister i fd → v {
-    ? != g_st_n 0 {
-        : s b # s g_st_base
-        : ~ i k 0
-        : ~ i found 0
-        ~ & == found 0 < k g_st_n {
-            ? == ( nurl_peek b * k 2 ) fd {
-                : i last - g_st_n 1
-                ( nurl_poke b * k 2 ( nurl_peek b * last 2 ) )
-                ( nurl_poke b + * k 2 1 ( nurl_peek b + * last 2 1 ) )
-                = g_st_n last
-                = found 1
-            } {}
-            = k + k 1
-        }
-    } {}
+    ? == g_st_n 0 { ^ } {}
+    : *i b ( vec_data [i] g_st )
+    : ~ i k 0
+    : ~ i found 0
+    ~ & == found 0 < k g_st_n {
+        ? == . b * k 2 fd {
+            : i last - g_st_n 1
+            = . b * k 2 . b * last 2
+            = . b + * k 2 1 . b + * last 2 1
+            : b _t ( vec_truncate [i] g_st * last 2 )
+            = g_st_n last
+            = found 1
+        } {}
+        = k + k 1
+    }
 }
 
 // Resolve a TcpConn's TlsConn (as its word), or 0 if the conn is plaintext.
@@ -702,18 +704,29 @@ $ `stdlib/std/pkey.nu`
 // conn handle, using the listener's parked cert/key material. Consumes
 // `craw` (the TlsConn owns the socket on success; closed on failure).
 @ __tls_accept_handshake TcpListener l i craw → !TcpConn NetErr {
-    : ( Vec u ) cert ( __net_vecview . l certp . l certlen )
-    : ( Vec u ) k1 ( __net_vecview . l kp1 . l kl1 )
-    : ( Vec u ) alpn ( __net_vecview . l alpnp . l alpnlen )
+    // A share of its own for the handshake's whole run.
+    ?? ( __tls_lcreds_get . l creds ) {
+        T a → { ^ ( __tls_accept_with l ( arc_ptr [TlsCreds] a ) craw ) }
+        F → {
+            ( nurl_tcp_close craw )
+            ^ @ !TcpConn NetErr { F # NetErr NetTlsHandshake }
+        }
+    }
+}
+
+@ __tls_accept_with TcpListener l * TlsCreds c i craw → !TcpConn NetErr {
+    : ( Vec u ) cert . c cert
+    : ( Vec u ) k1 . c k1
+    : ( Vec u ) alpn . c alpn
     // keytype 0 = EC P-256 (k1 = scalar), 1 = RSA (k1 = n, k2 = d, k3 =
     // e), 2 = ML-DSA (k1 = secret key). With a second identity parked
     // on the listener the handshake chooses between the two per
     // ClientHello (tls_accept_dual_alpn); without one the classical /
     // ML-DSA single-identity entry points are the same code.
-    : ( Vec u ) k2 ( __net_vecview . l kp2 . l kl2 )
-    : ( Vec u ) k3 ( __net_vecview . l kp3 . l kl3 )
-    : ( Vec u ) pqc ( __net_vecview . l pqcertp . l pqcertlen )
-    : ( Vec u ) pqk ( __net_vecview . l pqkp . l pqkl )
+    : ( Vec u ) k2 . c k2
+    : ( Vec u ) k3 . c k3
+    : ( Vec u ) pqc . c pqcert
+    : ( Vec u ) pqk . c pqk
     : ( Vec u ) none ( vec_new [u] )
     : !TlsConn TlsErr r ? == . l keytype 2
     ( tls_accept_mldsa_alpn craw cert ( mldsa_level_of_sk_len ( vec_len [u] k1 ) ) k1 alpn )
@@ -808,7 +821,7 @@ $ `stdlib/std/pkey.nu`
     ^ ( nurl_tcp_peer_addr ( __conn_fd c ) )
 }
 
-& `c` @ nurl_tcp_local_addr i handle → s
+& `c` @ nurl_tcp_local_addr i handle → sink s
 
 // OWNED String "ip:port" of the address a listener is actually bound to,
 // read fresh from getsockname. This is the counterpart of listening on
@@ -819,10 +832,7 @@ $ `stdlib/std/pkey.nu`
 // BORROWED view cached on the handle: there is no cached local address,
 // so this one is computed and owned. Same shape as `udp_local_addr`.
 @ tcp_local_addr TcpListener l → String {
-    : s raw_s ( nurl_tcp_local_addr # i . l raw )
-    : String out ( string_from raw_s )
-    ( nurl_free raw_s )
-    ^ out
+    ^ ( string_adopt ( nurl_tcp_local_addr # i . l raw ) )
 }
 
 @ tcp_set_timeout TcpConn c i ms → v {

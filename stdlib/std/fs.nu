@@ -251,19 +251,19 @@ $ `stdlib/core/rcbox.nu`
 // value: Windows has no st_blocks and no user database, and the
 // unikernel has neither plus no nanosecond timestamps.
 
-& `c` @ nurl_stat_into s path *u out → i
+& `c` @ nurl_stat_into s path inout FileStat out → i
 
-& `c` @ nurl_lstat_into s path *u out → i
+& `c` @ nurl_lstat_into s path inout FileStat out → i
 
-& `c` @ nurl_fstat_into i fd *u out → i
+& `c` @ nurl_fstat_into i fd inout FileStat out → i
 
 & `c` @ nurl_stat_kind i mode → i
 
 & `c` @ nurl_utimes_set s path i atime i ansec i mtime i mnsec i follow → i
 
-& `c` @ nurl_user_name i uid → s
+& `c` @ nurl_user_name i uid → sink s
 
-& `c` @ nurl_group_name i gid → s
+& `c` @ nurl_group_name i gid → sink s
 
 : FileStat {
     i mode  // raw st_mode: permission bits AND type bits
@@ -295,38 +295,20 @@ $ `stdlib/core/rcbox.nu`
 : i FS_KIND_FIFO 6
 : i FS_KIND_SOCKET 7
 
-@ __fs_stat_decode s buf → FileStat {
-    ^ @ FileStat {
-        ( nurl_peek buf 0 )
-        ( nurl_peek buf 1 )
-        ( nurl_peek buf 2 )
-        ( nurl_peek buf 3 )
-        ( nurl_peek buf 4 )
-        ( nurl_peek buf 5 )
-        ( nurl_peek buf 6 )
-        ( nurl_peek buf 7 )
-        ( nurl_peek buf 8 )
-        ( nurl_peek buf 9 )
-        ( nurl_peek buf 10 )
-        ( nurl_peek buf 11 )
-        ( nurl_peek buf 12 )
-        ( nurl_peek buf 13 )
-        ( nurl_peek buf 14 )
-        ( nurl_peek buf 15 )
-    }
+// A zeroed FileStat for the runtime to fill through `inout` (its 16
+// words in the order the runtime writes them).
+@ __fs_stat_zero → FileStat {
+    ^ @ FileStat { 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 }
 }
 
 @ __fs_stat_at s path i follow → !FileStat IoErr {
     ? == # i path 0 { ^ @ !FileStat IoErr { F @ IoErr { NotFound } } } {}
-    : s buf ( nurl_zalloc 128 )
-    : i rc ? != follow 0 ( nurl_stat_into path buf ) ( nurl_lstat_into path buf )
+    : ~ FileStat st ( __fs_stat_zero )
+    : i rc ? != follow 0 ( nurl_stat_into path st ) ( nurl_lstat_into path st )
     ? != rc 0 {
         : IoErr e ( _io_err_of_kind ( errno_kind ) )
-        ( nurl_free buf )
         ^ @ !FileStat IoErr { F e }
     } {}
-    : FileStat st ( __fs_stat_decode buf )
-    ( nurl_free buf )
     ^ @ !FileStat IoErr { T st }
 }
 
@@ -340,15 +322,12 @@ $ `stdlib/core/rcbox.nu`
 @ fs_lstat s path → !FileStat IoErr { ^ ( __fs_stat_at path 0 ) }
 
 @ fs_fstat i fd → !FileStat IoErr {
-    : s buf ( nurl_zalloc 128 )
-    : i rc ( nurl_fstat_into fd buf )
+    : ~ FileStat st ( __fs_stat_zero )
+    : i rc ( nurl_fstat_into fd st )
     ? != rc 0 {
         : IoErr e ( _io_err_of_kind ( errno_kind ) )
-        ( nurl_free buf )
         ^ @ !FileStat IoErr { F e }
     } {}
-    : FileStat st ( __fs_stat_decode buf )
-    ( nurl_free buf )
     ^ @ !FileStat IoErr { T st }
 }
 
@@ -363,7 +342,7 @@ $ `stdlib/core/rcbox.nu`
 // an unanswerable question are different, and a caller that treats the
 // second as the first refuses to write for no reason.
 
-& `c` @ nurl_statfs_into s path *u out → i
+& `c` @ nurl_statfs_into s path inout FsStat out → i
 
 : FsStat {
     i bsize  // preferred I/O size
@@ -380,18 +359,11 @@ $ `stdlib/core/rcbox.nu`
 
 @ fs_statfs s path → !FsStat IoErr {
     ? == # i path 0 { ^ @ !FsStat IoErr { F @ IoErr { NotFound } } } {}
-    : s buf ( nurl_zalloc 96 )
-    ? != 0 ( nurl_statfs_into path buf ) {
+    : ~ FsStat st @ FsStat { 0 0 0 0 0 0 0 0 0 0 }
+    ? != 0 ( nurl_statfs_into path st ) {
         : IoErr e ( _io_err_of_kind ( errno_kind ) )
-        ( nurl_free buf )
         ^ @ !FsStat IoErr { F e }
     } {}
-    : FsStat st @ FsStat {
-        ( nurl_peek buf 0 ) ( nurl_peek buf 1 ) ( nurl_peek buf 2 ) ( nurl_peek buf 3 )
-        ( nurl_peek buf 4 ) ( nurl_peek buf 5 ) ( nurl_peek buf 6 ) ( nurl_peek buf 7 )
-        ( nurl_peek buf 8 ) ( nurl_peek buf 9 )
-    }
-    ( nurl_free buf )
     ^ @ !FsStat IoErr { T st }
 }
 
@@ -459,17 +431,13 @@ $ `stdlib/core/rcbox.nu`
 @ fs_user_name i uid → ?String {
     : s raw ( nurl_user_name uid )
     ? == # i raw 0 { ^ @ ?String { F # String 0 } } {}
-    : String out ( string_from raw )
-    ( nurl_free raw )
-    ^ @ ?String { T out }
+    ^ @ ?String { T ( string_adopt raw ) }
 }
 
 @ fs_group_name i gid → ?String {
     : s raw ( nurl_group_name gid )
     ? == # i raw 0 { ^ @ ?String { F # String 0 } } {}
-    : String out ( string_from raw )
-    ( nurl_free raw )
-    ^ @ ?String { T out }
+    ^ @ ?String { T ( string_adopt raw ) }
 }
 
 // POSIX symlink(2) — `target` is what the link points TO (stored
@@ -505,16 +473,13 @@ $ `stdlib/core/rcbox.nu`
 // ceiling) are truncated.
 @ fs_readlink s path → !String IoErr {
     : i cap 4096
-    : s buf ( nurl_zalloc + cap 1 )
-    : i n ( readlink path buf cap )
+    : ( Vec u ) buf ( vec_zeroed [u] + cap 1 )
+    : i n ( readlink path # *u ( vec_data [u] buf ) cap )
     ? < n 0 {
-        ( nurl_free buf )
         : IoErr e ( _io_err_of_kind ( errno_kind ) )
         ^ @ !String IoErr { F e }
     } {}
-    : String out ( string_from buf )
-    ( nurl_free buf )
-    ^ @ !String IoErr { T out }
+    ^ @ !String IoErr { T ( string_from_bytes # *u ( vec_data [u] buf ) n ) }
 }
 
 // Remove an empty directory. Returns NotFound when missing, Other when
@@ -602,8 +567,7 @@ $ `stdlib/core/rcbox.nu`
         ? == p 0 {
             = going F
         } {
-            ( vec_push [String] out ( string_from raw ) )
-            ( nurl_free raw )
+            ( vec_push [String] out ( string_adopt raw ) )
         }
     }
     ( nurl_dir_list_close h )
@@ -923,7 +887,7 @@ $ `stdlib/core/rcbox.nu`
 // File is a handle on a libc FILE* in an rcbox (stdlib/core/rcbox.nu):
 // every copy is the same open file, and the last owner closes it —
 // file_close closes it now (a later operation on any copy is an error,
-// a later close a no-op). file_open opens "rb". `@ File { # s 0 }` is the
+// a later close a no-op). file_open opens "rb". `@ File { ( shared_null [FileImpl] ) }` is the
 // null File (no file).
 
 : FileImpl { * v fp }  // the FILE*, 0 once closed
@@ -934,29 +898,26 @@ $ `stdlib/core/rcbox.nu`
     }
 }
 
-: File { s ctl }
+: File { ( Shared FileImpl ) ctl }
 
 // Its drop closes something the outside world sees (stdlib/core/marker.nu).
 % Resource File {}
 
-@ File_share File h → File { ^ @ File { # s ( rcbox_share # i . h ctl ) } }
+@ File_share File h → File { ^ @ File { ( shared_clone [FileImpl] . h ctl ) } }
 
-@ File_drop sink File h → v {
-    ( mem_forget h )
-    ( rcbox_release [FileImpl] # i . h ctl )
-}
+@ File_drop sink File h → v {}
 
 // The FILE* behind `f`, lent (0 for a null or closed File).
 @ file_raw File f → s {
     ? == 0 # i . f ctl { ^ # s 0 } {}
-    ^ # s . ( rcbox_ptr [FileImpl] # i . f ctl ) fp
+    ^ # s . ( shared_ptr [FileImpl] . f ctl ) fp
 }
 
 // Take over an open FILE* (0 gives the null File): the File's last owner
 // closes it.
 @ file_from_raw s fp → File {
-    ? == 0 # i fp { ^ @ File { # s 0 } } {}
-    ^ @ File { # s ( rcbox_new [FileImpl] @ FileImpl { # *v fp } ) }
+    ? == 0 # i fp { ^ @ File { ( shared_null [FileImpl] ) } } {}
+    ^ @ File { ( shared_new [FileImpl] @ FileImpl { # *v fp } ) }
 }
 
 @ file_open s path → !File IoErr {
@@ -997,7 +958,7 @@ $ `stdlib/core/rcbox.nu`
 // `f` sees it closed.
 @ file_close File f → v {
     ? == 0 # i . f ctl { ^ } {}
-    : *FileImpl p ( rcbox_ptr [FileImpl] # i . f ctl )
+    : *FileImpl p ( shared_ptr [FileImpl] . f ctl )
     ? != 0 # i . p fp {
         ( nurl_file_close . p fp )
         = . p fp # *v 0

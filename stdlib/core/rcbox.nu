@@ -72,3 +72,71 @@
         } {}
     }
 }
+
+// ── Shared: the handle over an rcbox ───────────────────────────────
+//
+// A module's handle holds one, so its hooks hold no release of their own:
+//
+//   : Regex { ( Shared RegexImpl ) ctl }
+//   @ Regex_share Regex r → Regex { ^ @ Regex { ( shared_clone [RegexImpl] . r ctl ) } }
+//   @ Regex_drop sink Regex r → v {}
+//
+// The field goes with the handle (Shared_drop: one owner fewer, and the
+// last drops the value and frees the block). The compiler reads the share
+// hook's `shared_clone [T]` to learn the state a handle holds, for the
+// thread-shared cycle rules (docs/MEMORY.md §7.7). Making one, reaching
+// into one and a null one are raw (spec §3.3d): the standard library's
+// own, or an `unsafe` function's.
+//
+//   ( shared_new   [T] x )   → ( Shared T )   one owner, holding x
+//   ( shared_zero  [T] )     → ( Shared T )   …holding a zeroed T, filled in place
+//   ( shared_null  [T] )     → ( Shared T )   no block (a handle not made yet)
+//   ( shared_ptr   [T] h )   → *T             the value in place (borrowed)
+//   ( shared_addr  [T] h )   → i              the block's address (0: null)
+//   ( shared_clone [T] h )   → ( Shared T )   one more owner of the same block
+
+: Shared [T] { s ctl }
+
+@ shared_new [T] T x → ( Shared T ) { ^ @ ( Shared T ) { # s ( rcbox_new [T] x ) } }
+
+@ shared_zero [T] → ( Shared T ) { ^ @ ( Shared T ) { # s ( rcbox_zero [T] ) } }
+
+@ shared_null [T] → ( Shared T ) { ^ @ ( Shared T ) { # s 0 } }
+
+@ shared_ptr [T] ( Shared T ) h → *T { ^ ( rcbox_ptr [T] # i . h ctl ) }
+
+@ shared_addr [T] ( Shared T ) h → i { ^ # i . h ctl }
+
+@ shared_clone [T] ( Shared T ) h → ( Shared T ) { ^ @ ( Shared T ) { # s ( rcbox_share # i . h ctl ) } }
+
+@ Shared_share [T] ( Shared T ) h → ( Shared T ) { ^ ( shared_clone [T] h ) }
+
+@ Shared_drop [T] sink ( Shared T ) h → v {
+    ( mem_forget h )
+    ( rcbox_release [T] # i . h ctl )
+}
+
+// One owner as a word, for a plain value that carries a handle without
+// being one (std/net.nu's TcpConn keeps its TLS connection so): the word
+// owns, and shared_from_word takes the owner back.
+@ shared_into_word [T] sink ( Shared T ) h → i {
+    : i w # i . h ctl
+    ( mem_forget h )
+    ^ w
+}
+
+@ shared_from_word [T] i w → ( Shared T ) { ^ @ ( Shared T ) { # s w } }
+
+& `c` @ nurl_once_slot i id i candidate → i
+
+// A value the whole program shares, built lazily by whichever thread gets
+// there first: `h` is offered for the runtime's publish-once slot `slot`
+// (the slot registry is in stdlib/std/tls_server.nu). The first one
+// published there stays for the program's life; a later one is released
+// here. Every caller gets the published value, in place.
+@ shared_publish_once [T] i slot sink ( Shared T ) h → *T {
+    : i mine # i . h ctl
+    : i won ( nurl_once_slot slot mine )
+    ? == won mine { ( mem_forget h ) } {}
+    ^ ( rcbox_ptr [T] won )
+}

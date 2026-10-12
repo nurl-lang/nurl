@@ -1716,6 +1716,14 @@ is a closure-shaped struct and the destination type is a pointer — the
 common shape for feeding C-runtime callback APIs (`thread_spawn`,
 signal handlers) the raw fn-ptr / env-ptr pair.
 
+A struct converts to an integer or a pointer through its first field, and
+a pointer converts back to a struct whose first field is a pointer (a
+handle: `# ( Vec u ) p`). Where that first field is itself a struct
+wrapping one pointer (`{ s ctl }`, as a library handle's
+`( Shared T )` is), the cast follows it to that pointer: `# i h` and
+`# Regex # s 0` work on such a handle as on a one-pointer one. Any other
+aggregate first field has no scalar to take and is an error.
+
 Float-to-integer casts truncate toward zero and use the target's signedness.
 The truncated value must fit the target: `-128.9` converts to `i8(-128)` and
 `-0.9` to `u8(0)`, but `128.0` does not fit `i8`. Out-of-range values, NaN and
@@ -1831,6 +1839,21 @@ allocated for the result.
 : ~ i avail 0
 : ~ i total 0
 : i32 rc ( cuMemGetInfo_v2 avail total )
+```
+
+The parameter may be a struct too (`inout Timespec ts`): the C function
+fills the caller's local in place.
+
+A foreign function that returns a string it allocated, for the caller to
+release, declares its result `sink s`: the binding the result lands in
+owns it — it is released at scope exit, or handed on (`string_adopt`,
+another `sink` parameter), like any owned string — so nothing frees it by
+hand. Only a raw string `s` can be a `sink` result.
+
+```
+& `c` @ strdup s src → sink s
+: s copy ( strdup `text` )      // released at scope exit
+: String owned ( string_adopt ( strdup `more` ) )
 ```
 
 ### 7.3 Return ownership

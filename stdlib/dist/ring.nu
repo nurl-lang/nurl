@@ -79,22 +79,19 @@ $ `stdlib/core/rcbox.nu`
 // A Ring is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
 // every copy is the same state, and the last owner releases it — the
 // points are values in a Vec, dropped with it.
-: Ring { s ctl }
+: Ring { ( Shared RingImpl ) ctl }
 
-@ Ring_share Ring h → Ring { ^ @ Ring { # s ( rcbox_share # i . h ctl ) } }
+@ Ring_share Ring h → Ring { ^ @ Ring { ( shared_clone [RingImpl] . h ctl ) } }
 
-@ Ring_drop sink Ring h → v {
-    ( mem_forget h )
-    ( rcbox_release [RingImpl] # i . h ctl )
-}
+@ Ring_drop sink Ring h → v {}
 
-@ __Ring_ptr Ring h → *RingImpl { ^ ( rcbox_ptr [RingImpl] # i . h ctl ) }
+@ __Ring_ptr Ring h → *RingImpl { ^ ( shared_ptr [RingImpl] . h ctl ) }
 
 @ ring_new → Ring {
-    : i r__box ( rcbox_zero [RingImpl] )
-    : *RingImpl r ( rcbox_ptr [RingImpl] r__box )
+    : ( Shared RingImpl ) r__box ( shared_zero [RingImpl] )
+    : *RingImpl r ( shared_ptr [RingImpl] r__box )
     = . r points ( vec_new [RingPoint] )
-    ^ @ Ring { # s r__box }
+    ^ @ Ring { r__box }
 }
 
 // Let go of `r` now rather than at the end of its owner's scope.

@@ -116,17 +116,14 @@ $ `stdlib/core/rcbox.nu`
 
 % Drop ResponseImpl { @ drop ResponseImpl r → v { ( nurl_http_response_free . r res ) } }
 
-: Response { s raw }
+: Response { ( Shared ResponseImpl ) raw }
 
-@ Response_share Response h → Response { ^ @ Response { # s ( rcbox_share # i . h raw ) } }
+@ Response_share Response h → Response { ^ @ Response { ( shared_clone [ResponseImpl] . h raw ) } }
 
-@ Response_drop sink Response h → v {
-    ( mem_forget h )
-    ( rcbox_release [ResponseImpl] # i . h raw )
-}
+@ Response_drop sink Response h → v {}
 
 // The runtime's response block.
-@ __response_res Response r → i { ^ . ( rcbox_ptr [ResponseImpl] # i . r raw ) res }
+@ __response_res Response r → i { ^ . ( shared_ptr [ResponseImpl] . r raw ) res }
 
 // HttpOptions bundles the per-request transport overrides that used to
 // be hardcoded inside the libcurl orchestrator. Pass one to
@@ -206,7 +203,7 @@ $ `stdlib/core/rcbox.nu`
 @ __http_dispatch i raw → !Response HttpErr {
     ? == raw 0 { ^ @ !Response HttpErr { F # HttpErr HttpOther } } {}
     // Owned from here: a failed transfer's block goes with `r`.
-    : Response r @ Response { # s ( rcbox_new [ResponseImpl] @ ResponseImpl { raw } ) }
+    : Response r @ Response { ( shared_new [ResponseImpl] @ ResponseImpl { raw } ) }
     : *u rawp # *u raw
     : i ek ( nurl_peek rawp 1 )
     ? != ek 0 {

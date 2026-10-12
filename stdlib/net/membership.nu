@@ -92,20 +92,17 @@ $ `stdlib/core/rcbox.nu`
 
 // A PkMemberTable is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
 // every copy is the same state, and the last owner releases it.
-: PkMemberTable { s ctl }
+: PkMemberTable { ( Shared PkMemberTableImpl ) ctl }
 
-@ PkMemberTable_share PkMemberTable h → PkMemberTable { ^ @ PkMemberTable { # s ( rcbox_share # i . h ctl ) } }
+@ PkMemberTable_share PkMemberTable h → PkMemberTable { ^ @ PkMemberTable { ( shared_clone [PkMemberTableImpl] . h ctl ) } }
 
-@ PkMemberTable_drop sink PkMemberTable h → v {
-    ( mem_forget h )
-    ( rcbox_release [PkMemberTableImpl] # i . h ctl )
-}
+@ PkMemberTable_drop sink PkMemberTable h → v {}
 
-@ __PkMemberTable_ptr PkMemberTable h → *PkMemberTableImpl { ^ ( rcbox_ptr [PkMemberTableImpl] # i . h ctl ) }
+@ __PkMemberTable_ptr PkMemberTable h → *PkMemberTableImpl { ^ ( shared_ptr [PkMemberTableImpl] . h ctl ) }
 
 @ pktable_new ( Vec u ) self_pk i suspect_min_ns i suspect_max_ns i suspect_k i lhm_max → PkMemberTable {
-    : i t__box ( rcbox_zero [PkMemberTableImpl] )
-    : *PkMemberTableImpl t ( rcbox_ptr [PkMemberTableImpl] t__box )
+    : ( Shared PkMemberTableImpl ) t__box ( shared_zero [PkMemberTableImpl] )
+    : *PkMemberTableImpl t ( shared_ptr [PkMemberTableImpl] t__box )
     = . t self_pk ( __pk_cpy self_pk )
     = . t self_incarnation 0
     = . t members ( vec_new [PkMember] )
@@ -114,7 +111,7 @@ $ `stdlib/core/rcbox.nu`
     = . t suspect_max_ns suspect_max_ns
     = . t suspect_k suspect_k
     = . t rr 0
-    ^ @ PkMemberTable { # s t__box }
+    ^ @ PkMemberTable { t__box }
 }
 
 // Let go of `t` now rather than at the end of its owner's scope.

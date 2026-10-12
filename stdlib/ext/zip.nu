@@ -52,6 +52,7 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/ext/compress.nu`  // pure deflate/inflate + crc32 (via std/deflate.nu)
 $ `stdlib/core/rcbox.nu`
+$ `stdlib/core/mem.nu`
 
 : | ZipErr {
     ZipBadArchive  // no/garbled end-of-central-directory or headers
@@ -139,21 +140,18 @@ $ `stdlib/core/rcbox.nu`
 
 : ZipImpl { i count ( Vec u ) body ( Vec u ) central }
 
-: Zip { s ctl }
+: Zip { ( Shared ZipImpl ) ctl }
 
-@ Zip_share Zip h → Zip { ^ @ Zip { # s ( rcbox_share # i . h ctl ) } }
+@ Zip_share Zip h → Zip { ^ @ Zip { ( shared_clone [ZipImpl] . h ctl ) } }
 
-@ Zip_drop sink Zip h → v {
-    ( mem_forget h )
-    ( rcbox_release [ZipImpl] # i . h ctl )
-}
+@ Zip_drop sink Zip h → v {}
 
-@ __Zip_ptr Zip h → *ZipImpl { ^ ( rcbox_ptr [ZipImpl] # i . h ctl ) }
+@ __Zip_ptr Zip h → *ZipImpl { ^ ( shared_ptr [ZipImpl] . h ctl ) }
 
 : i ZIP_DOSDATE 33  // 1980-01-01 → (0<<9)|(1<<5)|1
 
 @ zip_new → Zip {
-    ^ @ Zip { # s ( rcbox_new [ZipImpl] @ ZipImpl { 0 ( vec_new [u] ) ( vec_new [u] ) } ) }
+    ^ @ Zip { ( shared_new [ZipImpl] @ ZipImpl { 0 ( vec_new [u] ) ( vec_new [u] ) } ) }
 }
 
 // Shared add: method 8 with `comp` bytes, or method 0 when comp is None.
@@ -232,9 +230,7 @@ $ `stdlib/core/rcbox.nu`
 // body leaves the builder (moved, not copied); the builder is spent.
 @ zip_finish Zip z__h → ( Vec u ) {
     : *ZipImpl z ( __Zip_ptr z__h )
-    : ( Vec u ) out . z body
-    ( mem_take out )  // the archive leaves the builder
-    = . z body ( vec_new [u] )
+    : ( Vec u ) out ( mem_replace [( Vec u )] . z body ( vec_new [u] ) )  // the archive leaves the builder
     : i cd_off ( vec_len [u] out )
     : i cd_len ( vec_len [u] . z central )
     : i count . z count
@@ -266,16 +262,13 @@ $ `stdlib/core/rcbox.nu`
     i len
 }
 
-: ZipArchive { s ctl }
+: ZipArchive { ( Shared ZipArchiveImpl ) ctl }
 
-@ ZipArchive_share ZipArchive h → ZipArchive { ^ @ ZipArchive { # s ( rcbox_share # i . h ctl ) } }
+@ ZipArchive_share ZipArchive h → ZipArchive { ^ @ ZipArchive { ( shared_clone [ZipArchiveImpl] . h ctl ) } }
 
-@ ZipArchive_drop sink ZipArchive h → v {
-    ( mem_forget h )
-    ( rcbox_release [ZipArchiveImpl] # i . h ctl )
-}
+@ ZipArchive_drop sink ZipArchive h → v {}
 
-@ __ZipArchive_ptr ZipArchive h → *ZipArchiveImpl { ^ ( rcbox_ptr [ZipArchiveImpl] # i . h ctl ) }
+@ __ZipArchive_ptr ZipArchive h → *ZipArchiveImpl { ^ ( shared_ptr [ZipArchiveImpl] . h ctl ) }
 
 @ zip_count ZipArchive a__h → i {
     : *ZipArchiveImpl a ( __ZipArchive_ptr a__h )
@@ -429,8 +422,7 @@ $ `stdlib/core/rcbox.nu`
     ? bad {
         ^ @ !ZipArchive ZipErr { F ZipBadArchive }
     } {}
-    : i box ( rcbox_new [ZipArchiveImpl] @ ZipArchiveImpl { count ents p n } )
-    ^ @ !ZipArchive ZipErr { T @ ZipArchive { # s box } }
+    ^ @ !ZipArchive ZipErr { T @ ZipArchive { ( shared_new [ZipArchiveImpl] @ ZipArchiveImpl { count ents p n } ) } }
 }
 
 @ zip_name_at ZipArchive a i idx → ?String {

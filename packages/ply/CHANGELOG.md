@@ -9,6 +9,9 @@ The published 0.3.3 does not compile under it.
 
 ### Changed
 
+- The zero `File` handle a writer keeps until one is opened is built
+  with the cast `# File # s 0`: a standard-library handle now holds its
+  state in a `( Shared T )`.
 - A replaced field is dropped by the store; the `mem_take` before it is
   gone.
 

@@ -95,13 +95,15 @@ $ `stdlib/core/rcbox.nu`
     ( Vec u ) scratch
 }
 
+: ~ ( Shared FatVol ) g_vol_h 0
 : ~ i g_vol 0
 
 @ fat_mounted → b { ^ != g_vol 0 }
 
-// The mounted volume: an rcbox (stdlib/core/rcbox.nu) the global holds
-// from fat_mount to fat_unmount; its cache vectors go with it.
-@ fat_vol → *FatVol { ^ ( rcbox_ptr [FatVol] g_vol ) }
+// The mounted volume: the global owns it from fat_mount to fat_unmount
+// (`g_vol` is its block's address, 0 while nothing is mounted); its cache
+// vectors go with it.
+@ fat_vol → *FatVol { ^ ( shared_ptr [FatVol] g_vol_h ) }
 
 @ fat_type → i { ? == g_vol 0 { ^ 0 } {} ^ . ( fat_vol ) ftype }
 
@@ -368,8 +370,8 @@ $ `stdlib/core/rcbox.nu`
     : i need_bytes ? == ftype 32 * + nclus 2 4 ? == ftype 16 * + nclus 2 2 / + * + nclus 2 3 1 2
     ? < * fat_secs ( blk_sector_size ) need_bytes { ^ F } {}
 
-    : i vbox ( rcbox_zero [FatVol] )
-    : *FatVol v ( rcbox_ptr [FatVol] vbox )
+    : ( Shared FatVol ) vbox ( shared_zero [FatVol] )
+    : *FatVol v ( shared_ptr [FatVol] vbox )
     = . v spc spc
     = . v rsvd rsvd
     = . v nfats nfats
@@ -393,7 +395,8 @@ $ `stdlib/core/rcbox.nu`
     = . v rw writable
     = . v dirty F
     ( __cache_init v )
-    = g_vol vbox
+    = g_vol_h vbox
+    = g_vol ( shared_addr [FatVol] g_vol_h )
     ^ T
 }
 
@@ -408,10 +411,9 @@ $ `stdlib/core/rcbox.nu`
     : b _i ( fat_write_fsinfo )
     : b _f ( fat_cache_flush )
     : b _d ( blk_flush )
-    // The mount ends: the global's volume (and its cache) is released.
-    : i vbox g_vol
+    // The mount ends: the global's volume (and its cache) goes.
     = g_vol 0
-    ( rcbox_release [FatVol] vbox )
+    = g_vol_h ( shared_null [FatVol] )
 }
 
 // ── the allocation table ────────────────────────────────────────────

@@ -9,6 +9,9 @@ The published 0.2.3 does not compile under it.
 
 ### Changed
 
+- The zero `File` handles the WAL and the tables keep until one is
+  opened are built with the cast `# File # s 0`: a standard-library handle
+  now holds its state in a `( Shared T )`.
 - The file a table or log replaces is dropped by the store; the
   `mem_take` before each such store is gone.
 

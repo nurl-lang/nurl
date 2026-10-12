@@ -144,23 +144,20 @@ $ `stdlib/core/rcbox.nu`
 
 // An ArpCache is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
 // every copy is the same state, and the last owner releases it.
-: ArpCache { s ctl }
+: ArpCache { ( Shared ArpCacheImpl ) ctl }
 
-@ ArpCache_share ArpCache h → ArpCache { ^ @ ArpCache { # s ( rcbox_share # i . h ctl ) } }
+@ ArpCache_share ArpCache h → ArpCache { ^ @ ArpCache { ( shared_clone [ArpCacheImpl] . h ctl ) } }
 
-@ ArpCache_drop sink ArpCache h → v {
-    ( mem_forget h )
-    ( rcbox_release [ArpCacheImpl] # i . h ctl )
-}
+@ ArpCache_drop sink ArpCache h → v {}
 
-@ __ArpCache_ptr ArpCache h → *ArpCacheImpl { ^ ( rcbox_ptr [ArpCacheImpl] # i . h ctl ) }
+@ __ArpCache_ptr ArpCache h → *ArpCacheImpl { ^ ( shared_ptr [ArpCacheImpl] . h ctl ) }
 
 @ arp_cache_new i max → ArpCache {
-    : i c__box ( rcbox_zero [ArpCacheImpl] )
-    : *ArpCacheImpl c ( rcbox_ptr [ArpCacheImpl] c__box )
+    : ( Shared ArpCacheImpl ) c__box ( shared_zero [ArpCacheImpl] )
+    : *ArpCacheImpl c ( shared_ptr [ArpCacheImpl] c__box )
     = . c entries ( vec_new [ArpEntry] )
     = . c max ? > max 0 max 64
-    ^ @ ArpCache { # s c__box }
+    ^ @ ArpCache { c__box }
 }
 
 // Let go of `c` now rather than at the end of its owner's scope.

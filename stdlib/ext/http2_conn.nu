@@ -71,6 +71,7 @@ $ `stdlib/ext/http_response.nu`
 $ `stdlib/ext/http2_frame.nu`
 $ `stdlib/ext/http2_hpack.nu`
 $ `stdlib/core/slice.nu`
+$ `stdlib/core/mem.nu`
 
 // ── Errors ────────────────────────────────────────────────────────────
 
@@ -414,11 +415,9 @@ $ `stdlib/core/slice.nu`
 }
 
 @ __h2_set_stream H2Connection c i idx H2Stream s → v {
-    : *H2Stream sp ( vec_data [H2Stream] . c streams )
     // `s` is the slot's own value, read by the getter and updated: it
     // goes back as is (the table still owns it).
-    ( mem_put_back s )
-    = . sp idx s
+    ( vec_put_back [H2Stream] . c streams idx s )
 }
 
 // Drop every CLOSED stream from the connection's stream table, freeing
@@ -450,27 +449,11 @@ $ `stdlib/core/slice.nu`
 // holds for its final h2_conn_free — shares that same control block.
 // Freeing it and swapping in a fresh Vec would leave those other copies
 // pointing at freed memory (use-after-free at connection teardown). So we
-// keep the same control block: free each closed stream's buffers, slide
-// the survivors down, and shrink the length via vec_set_len. The
-// abandoned tail slots are outside [0,len) and are never traversed again
-// (their buffers now live in the lower survivor slots — no double free).
+// keep the same control block: vec_retain drops each closed stream and
+// slides the survivors down in place.
 @ _h2_prune_closed H2Connection c → H2Connection {
     : ~ H2Connection cur c
-    : i n ( vec_len [H2Stream] . cur streams )
-    : *H2Stream sp ( vec_data [H2Stream] . cur streams )
-    : ~ i w 0
-    : ~ i r 0
-    ~ < r n {
-        : H2Stream s . sp r
-        ? == . s state ( h2_state_closed ) {
-            ( mem_take s )  // the table gives it up: dropped here
-        } {
-            ? != w r { = . sp w s } {}
-            = w + w 1
-        }
-        = r + r 1
-    }
-    : b _sl ( vec_set_len [H2Stream] . cur streams w )
+    ( vec_retain [H2Stream] . cur streams \ H2Stream s → b { ^ != . s state ( h2_state_closed ) } )
     ^ cur
 }
 
@@ -687,10 +670,8 @@ $ `stdlib/core/slice.nu`
 // Store a stream's freshly decoded header list: the old list is taken out
 // of the slot and dropped here, the new one moves in.
 @ __h2_put_decoded H2Connection c i sidx sink ( Vec Header ) hdrs → v {
-    : H2Stream s ( __h2_get_stream . c streams sidx )
-    : ( Vec Header ) old . s decoded_headers
-    ( mem_take old )
-    = . s decoded_headers hdrs
+    : ~ H2Stream s ( __h2_get_stream . c streams sidx )
+    : ( Vec Header ) _old ( mem_replace [( Vec Header )] . s decoded_headers hdrs )
     = . s headers_decoded T
     ( __h2_set_stream c sidx s )
 }
@@ -983,10 +964,7 @@ $ `stdlib/core/slice.nu`
     = . req version ( string_from `HTTP/2` )
     // Transfer the body to the request. A cleared duplicate would retain a
     // whole request allocation for the lifetime of a flow-blocked response.
-    : ( Vec u ) moved . s body
-    ( mem_take moved )  // leaves the stream: replaced right below
-    = . s body ( vec_new [u] )
-    = . req body moved
+    = . req body ( mem_replace [( Vec u )] . s body ( vec_new [u] ) )
     ^ req
 }
 
@@ -1132,7 +1110,7 @@ $ `stdlib/core/slice.nu`
 // state belongs to the connection, so dropping any block corrupts later RPCs.
 @ __h2_finish_headers inout H2Connection c i sid → !H2Event H2ConnErr {
     : i idx ( __h2_find_stream_index c sid )
-    : H2Stream s ( __h2_get_stream . c streams idx )
+    : ~ H2Stream s ( __h2_get_stream . c streams idx )
     : !HpackDecoded HpackErr dr ( hpack_decode_block . s header_block . c dec_dyn )
     ?? dr {
         F _ → { ^ @ !H2Event H2ConnErr { F H2ConnCompression } }
@@ -1163,9 +1141,8 @@ $ `stdlib/core/slice.nu`
                 ^ @ !H2Event H2ConnErr { T @ H2Event {
                         ( h2_event_trailers ) sid . dd headers ( vec_new [u] ) T 0 } }
             } {}
-            : ( Vec Header ) old . s decoded_headers
-            ( mem_take old )  // the slot's old list: dropped here
-            = . s decoded_headers . dd headers
+            // The slot's old list comes out, dropped here.
+            : ( Vec Header ) _old ( mem_replace [( Vec Header )] . s decoded_headers . dd headers )
             = . s headers_decoded T
             ( __h2_set_stream c idx s )
             // The slot as it now is: `s` was a copy of it, and writing the
@@ -1830,7 +1807,6 @@ $ `stdlib/core/slice.nu`
     ~ progress {
         = progress F
         : ~ i k 0
-        : ~ i w 0
         : i n ( vec_len [H2PendingResponse] pending )
         : *H2PendingResponse p ( vec_data [H2PendingResponse] pending )
         ~ < k n {
@@ -1878,18 +1854,14 @@ $ `stdlib/core/slice.nu`
             }
             = k + k 1
         }
-        = k 0
-        ~ < k n {
-            : H2PendingResponse live . p k
-            ? > . live stream_id 0 { = . p w live = w + w 1 } {
-                ( mem_take live )  // a dead slot gives its response up: dropped here
-            }
-            = k + k 1
-        }
-        ( vec_set_len [H2PendingResponse] pending w )
+        ( vec_retain [H2PendingResponse] pending \ H2PendingResponse r → b { ^ > . r stream_id 0 } )
     }
     ^ @ !v H2ConnErr { T 0 }
 }
+
+// What a handler run under `recover` answered: its response, once it
+// returned one (a struct the closure writes through, by reference).
+: H2Answer { ? HttpResponse resp b done }
 
 @ __h2_queue_response inout H2Connection c i sid ( Vec H2PendingResponse ) pending
 ( @ HttpResponse HttpRequest ) handler → !v H2ConnErr {
@@ -1898,22 +1870,21 @@ $ `stdlib/core/slice.nu`
     : ~ H2Stream s ( __h2_get_stream . c streams idx )
     : HttpRequest req ( __h2_stream_to_request s )
     ( __h2_set_stream c idx s )
-    : ~ HttpResponse response . c panic_resp
+    : ~ H2Answer ans @ H2Answer { @ ?HttpResponse { F } F }
     : ( @ HttpResponse HttpRequest ) f handler
-    : !v PanicInfo recovered ( recover \ → v { = response ( f req ) } )
+    : !v PanicInfo recovered ( recover \ → v { = . ans resp @ ?HttpResponse { T ( f req ) } = . ans done T } )
     ?? recovered {
         T _ → {}
         F info → {
             ( nurl_eprintln ( nurl_str_cat `[panic] HTTP/2 handler: ` ( string_data . info msg ) ) )
         }
     }
-    : HttpResponse fallback . c panic_resp
-    ? == # i ( vec_data [u] . response body ) # i ( vec_data [u] . fallback body ) {
-        = . c panic_resp ( response_text 500 `internal server error\n` )
-    } {}
-    // Either the handler's response or the prebuilt panic response (just
-    // replaced in `c`): owned here, handed to `pending` below.
-    ( mem_take response )
+    // The handler's response, or — when it panicked — the prebuilt panic
+    // response, taken out of `c` (a fresh one is built for the next).
+    : HttpResponse response ?? ( mem_replace [? HttpResponse] . ans resp @ ?HttpResponse { F } ) {
+        T hr → hr
+        F → ( mem_replace [HttpResponse] . c panic_resp ( response_text 500 `internal server error\n` ) )
+    }
     ? > ( vec_len [u] . response body ) - ( h2_default_max_buffered_bytes ) ( __h2_buffered_bytes c pending ) {
         ^ ( h2_stream_reset c sid ( h2_err_enhance_your_calm ) )
     } {}

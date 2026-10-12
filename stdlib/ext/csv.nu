@@ -95,16 +95,13 @@ $ `stdlib/core/rcbox.nu`
 
 // A CSVReader is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
 // every copy is the same state, and the last owner releases it.
-: CSVReader { s ctl }
+: CSVReader { ( Shared CSVReaderImpl ) ctl }
 
-@ CSVReader_share CSVReader h → CSVReader { ^ @ CSVReader { # s ( rcbox_share # i . h ctl ) } }
+@ CSVReader_share CSVReader h → CSVReader { ^ @ CSVReader { ( shared_clone [CSVReaderImpl] . h ctl ) } }
 
-@ CSVReader_drop sink CSVReader h → v {
-    ( mem_forget h )
-    ( rcbox_release [CSVReaderImpl] # i . h ctl )
-}
+@ CSVReader_drop sink CSVReader h → v {}
 
-@ __CSVReader_ptr CSVReader h → *CSVReaderImpl { ^ ( rcbox_ptr [CSVReaderImpl] # i . h ctl ) }
+@ __CSVReader_ptr CSVReader h → *CSVReaderImpl { ^ ( shared_ptr [CSVReaderImpl] . h ctl ) }
 
 @ csv_reader_new String content → CSVReader {
     ^ ( csv_reader_new_dialect content ( csv_dialect_default ) )
@@ -112,7 +109,7 @@ $ `stdlib/core/rcbox.nu`
 
 // The reader scans its own copy of `content`.
 @ csv_reader_new_dialect String content CSVDialect dia → CSVReader {
-    ^ @ CSVReader { # s ( rcbox_new [CSVReaderImpl] @ CSVReaderImpl { ( string_from ( string_data content ) ) 0 dia } ) }
+    ^ @ CSVReader { ( shared_new [CSVReaderImpl] @ CSVReaderImpl { ( string_from ( string_data content ) ) 0 dia } ) }
 }
 
 // Let go of `r` now rather than at the end of its owner's scope.
@@ -234,23 +231,20 @@ $ `stdlib/core/rcbox.nu`
 // A CSVDictReader is a handle on its state in an rcbox: every copy is the
 // same reader, and the last owner releases it (its header and its share
 // of the row reader go with it).
-: CSVDictReader { s ctl }
+: CSVDictReader { ( Shared CSVDictReaderImpl ) ctl }
 
-@ CSVDictReader_share CSVDictReader h → CSVDictReader { ^ @ CSVDictReader { # s ( rcbox_share # i . h ctl ) } }
+@ CSVDictReader_share CSVDictReader h → CSVDictReader { ^ @ CSVDictReader { ( shared_clone [CSVDictReaderImpl] . h ctl ) } }
 
-@ CSVDictReader_drop sink CSVDictReader h → v {
-    ( mem_forget h )
-    ( rcbox_release [CSVDictReaderImpl] # i . h ctl )
-}
+@ CSVDictReader_drop sink CSVDictReader h → v {}
 
-@ __CSVDictReader_ptr CSVDictReader h → *CSVDictReaderImpl { ^ ( rcbox_ptr [CSVDictReaderImpl] # i . h ctl ) }
+@ __CSVDictReader_ptr CSVDictReader h → *CSVDictReaderImpl { ^ ( shared_ptr [CSVDictReaderImpl] . h ctl ) }
 
 // The dict reader keeps its own share of `r`: it reads on from where `r`
 // stands, and the caller's handle stays valid.
 @ csv_dict_reader_new CSVReader r → CSVDictReader {
     : ?( Vec String ) h_opt ( csv_reader_next r )
     : ( Vec String ) h ( opt_unwrap_or [( Vec String )] h_opt ( vec_new [String] ) )
-    ^ @ CSVDictReader { # s ( rcbox_new [CSVDictReaderImpl] @ CSVDictReaderImpl { h ( CSVReader_share r ) } ) }
+    ^ @ CSVDictReader { ( shared_new [CSVDictReaderImpl] @ CSVDictReaderImpl { h ( CSVReader_share r ) } ) }
 }
 
 @ csv_dict_reader_next CSVDictReader dr__h → ?( HashMap s String ) {
@@ -308,16 +302,13 @@ $ `stdlib/core/rcbox.nu`
 
 // A CSVWriter is a handle on its state in an rcbox: every copy is the same
 // writer, and the last owner closes and releases it.
-: CSVWriter { s ctl }
+: CSVWriter { ( Shared CSVWriterImpl ) ctl }
 
-@ CSVWriter_share CSVWriter h → CSVWriter { ^ @ CSVWriter { # s ( rcbox_share # i . h ctl ) } }
+@ CSVWriter_share CSVWriter h → CSVWriter { ^ @ CSVWriter { ( shared_clone [CSVWriterImpl] . h ctl ) } }
 
-@ CSVWriter_drop sink CSVWriter h → v {
-    ( mem_forget h )
-    ( rcbox_release [CSVWriterImpl] # i . h ctl )
-}
+@ CSVWriter_drop sink CSVWriter h → v {}
 
-@ __CSVWriter_ptr CSVWriter h → *CSVWriterImpl { ^ ( rcbox_ptr [CSVWriterImpl] # i . h ctl ) }
+@ __CSVWriter_ptr CSVWriter h → *CSVWriterImpl { ^ ( shared_ptr [CSVWriterImpl] . h ctl ) }
 
 @ csv_writer_new s path → CSVWriter {
     ^ ( csv_writer_new_with path ( csv_dialect_default ) )
@@ -325,7 +316,7 @@ $ `stdlib/core/rcbox.nu`
 
 @ csv_writer_new_with s path CSVDialect dia → CSVWriter {
     : *v f ( nurl_file_open path `w` )
-    ^ @ CSVWriter { # s ( rcbox_new [CSVWriterImpl] @ CSVWriterImpl { f . dia delimiter . dia crlf_terminator . dia quote_char } ) }
+    ^ @ CSVWriter { ( shared_new [CSVWriterImpl] @ CSVWriterImpl { f . dia delimiter . dia crlf_terminator . dia quote_char } ) }
 }
 
 @ __csv_write_field * v file s data i delim i quote → v {
@@ -394,21 +385,18 @@ $ `stdlib/core/rcbox.nu`
 // A CSVDictWriter is a handle on its state in an rcbox: every copy is the
 // same writer, and the last owner releases it (with its share of the
 // row writer).
-: CSVDictWriter { s ctl }
+: CSVDictWriter { ( Shared CSVDictWriterImpl ) ctl }
 
-@ CSVDictWriter_share CSVDictWriter h → CSVDictWriter { ^ @ CSVDictWriter { # s ( rcbox_share # i . h ctl ) } }
+@ CSVDictWriter_share CSVDictWriter h → CSVDictWriter { ^ @ CSVDictWriter { ( shared_clone [CSVDictWriterImpl] . h ctl ) } }
 
-@ CSVDictWriter_drop sink CSVDictWriter h → v {
-    ( mem_forget h )
-    ( rcbox_release [CSVDictWriterImpl] # i . h ctl )
-}
+@ CSVDictWriter_drop sink CSVDictWriter h → v {}
 
-@ __CSVDictWriter_ptr CSVDictWriter h → *CSVDictWriterImpl { ^ ( rcbox_ptr [CSVDictWriterImpl] # i . h ctl ) }
+@ __CSVDictWriter_ptr CSVDictWriter h → *CSVDictWriterImpl { ^ ( shared_ptr [CSVDictWriterImpl] . h ctl ) }
 
 // The dict writer keeps its own copy of `fieldnames` and its own share of
 // `w`.
 @ csv_dict_writer_new CSVWriter w ( Vec String ) fieldnames → CSVDictWriter {
-    ^ @ CSVDictWriter { # s ( rcbox_new [CSVDictWriterImpl] @ CSVDictWriterImpl { ( vec_clone [String] fieldnames ) ( CSVWriter_share w ) } ) }
+    ^ @ CSVDictWriter { ( shared_new [CSVDictWriterImpl] @ CSVDictWriterImpl { ( vec_clone [String] fieldnames ) ( CSVWriter_share w ) } ) }
 }
 
 @ csv_dict_writer_writeheader CSVDictWriter dw__h → v {
@@ -470,19 +458,16 @@ $ `stdlib/core/rcbox.nu`
 
 // A CSVTable is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
 // every copy is the same state, and the last owner releases it.
-: CSVTable { s ctl }
+: CSVTable { ( Shared CSVTableImpl ) ctl }
 
-@ CSVTable_share CSVTable h → CSVTable { ^ @ CSVTable { # s ( rcbox_share # i . h ctl ) } }
+@ CSVTable_share CSVTable h → CSVTable { ^ @ CSVTable { ( shared_clone [CSVTableImpl] . h ctl ) } }
 
-@ CSVTable_drop sink CSVTable h → v {
-    ( mem_forget h )
-    ( rcbox_release [CSVTableImpl] # i . h ctl )
-}
+@ CSVTable_drop sink CSVTable h → v {}
 
-@ __CSVTable_ptr CSVTable h → *CSVTableImpl { ^ ( rcbox_ptr [CSVTableImpl] # i . h ctl ) }
+@ __CSVTable_ptr CSVTable h → *CSVTableImpl { ^ ( shared_ptr [CSVTableImpl] . h ctl ) }
 
 @ csv_table_new → CSVTable {
-    ^ @ CSVTable { # s ( rcbox_new [CSVTableImpl] @ CSVTableImpl {
+    ^ @ CSVTable { ( shared_new [CSVTableImpl] @ CSVTableImpl {
             ( string_new ) ( vec_new [String] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] )
             ( vec_new [u] ) ( vec_new [f] ) - 0 1
         } ) }
@@ -974,7 +959,7 @@ $ `stdlib/core/rcbox.nu`
 // The table is built around `content` as a literal, so the buffer moves
 // into it; the cells are then parsed in place.
 @ __csv_table_build sink String content i typed_float_col CSVDialect dia → CSVTable {
-    : CSVTable h @ CSVTable { # s ( rcbox_new [CSVTableImpl] @ CSVTableImpl {
+    : CSVTable h @ CSVTable { ( shared_new [CSVTableImpl] @ CSVTableImpl {
             content ( vec_new [String] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] )
             ( vec_new [u] ) ( vec_new [f] ) typed_float_col
         } ) }
@@ -1001,7 +986,7 @@ $ `stdlib/core/rcbox.nu`
 @ csv_table_load_typed_f s path i typed_float_col → CSVTable {
     : !String IoErr res ( read_file path )
     ?? res {
-        F e → { ^ @ CSVTable { # s 0 } }
+        F e → { ^ @ CSVTable { ( shared_null [CSVTableImpl] ) } }
         T content → { ^ ( csv_table_from_string_typed_f content typed_float_col ) }
     }
 }
@@ -1016,7 +1001,7 @@ $ `stdlib/core/rcbox.nu`
 @ csv_table_load s path → CSVTable {
     : !String IoErr res ( read_file path )
     ?? res {
-        F e → { ^ @ CSVTable { # s 0 } }
+        F e → { ^ @ CSVTable { ( shared_null [CSVTableImpl] ) } }
         T content → { ^ ( csv_table_from_string content ) }
     }
 }
@@ -1024,7 +1009,7 @@ $ `stdlib/core/rcbox.nu`
 @ csv_table_load_dialect s path CSVDialect dia → CSVTable {
     : !String IoErr res ( read_file path )
     ?? res {
-        F e → { ^ @ CSVTable { # s 0 } }
+        F e → { ^ @ CSVTable { ( shared_null [CSVTableImpl] ) } }
         T content → { ^ ( csv_table_from_string_dialect content dia ) }
     }
 }

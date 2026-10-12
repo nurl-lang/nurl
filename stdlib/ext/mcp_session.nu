@@ -55,10 +55,11 @@
 //   ( mcp_sse_frame_id id event data )              → String  borrows data
 //   ( mcp_sampling_message role text )              → Json
 //   ( mcp_sampling_params msgs system max_tokens )  → Json   CONSUMES msgs
-//   ( mcp_sampling_request id msgs system max_tokens ) → Json full envelope
+//   ( mcp_sampling_request id msgs system max_tokens ) → Json full envelope; CONSUMES msgs
 
 $ `stdlib/ext/mcp.nu`
 $ `stdlib/ext/json.nu`
+$ `stdlib/core/mem.nu`
 $ `stdlib/std/random.nu`
 $ `stdlib/std/time.nu`
 $ `stdlib/core/string.nu`
@@ -90,9 +91,7 @@ $ `stdlib/core/vec.nu`
 // its slot. `se` is the slot's own value: it goes back as is, the store
 // still owns it — neither copied nor dropped (docs/MEMORY.md §7.6).
 @ __mcp_session_put McpSessionStore store i idx McpSession se → v {
-    : *McpSession sp ( vec_data [McpSession] . store sessions )
-    ( mem_put_back se )
-    = . sp idx se
+    ( vec_put_back [McpSession] . store sessions idx se )
 }
 
 @ __mcp_session_find McpSessionStore store s sid → i {
@@ -216,28 +215,13 @@ $ `stdlib/core/vec.nu`
     }
 }
 
-// Move every queued message into a fresh owned Vec and clear the queue.
+// Move every queued message into a fresh owned Vec and clear the queue:
+// the queue itself comes out of the session, an empty one left behind.
 @ mcp_session_drain_notify McpSessionStore store s sid → ( Vec Json ) {
-    : ( Vec Json ) out ( vec_new [Json] )
     : i idx ( __mcp_session_find store sid )
-    ? < idx 0 { ^ out } {}
-    : ?McpSession so ( vec_get [McpSession] . store sessions idx )
-    ?? so {
-        T se → {
-            : i n ( vec_len [Json] . se notify )
-            : ~ i k 0
-            ~ < k n {
-                : ?Json e ( vec_get [Json] . se notify k )
-                // Each message moves out of the queue into `out`…
-                ?? e { T j → { ( mem_take j ) ( vec_push [Json] out j ) } F → {} }
-                = k + k 1
-            }
-            // …so the queue only forgets them.
-            ( vec_set_len [Json] . se notify 0 )
-        }
-        F → {}
-    }
-    ^ out
+    ? < idx 0 { ^ ( vec_new [Json] ) } {}
+    : *McpSession sp # *McpSession + # i ( vec_data [McpSession] . store sessions ) * idx Z McpSession
+    ^ ( mem_replace [( Vec Json )] . sp notify ( vec_new [Json] ) )
 }
 
 // ── SSE event ids + replay backlog ────────────────────────────────────
@@ -467,7 +451,7 @@ $ `stdlib/core/vec.nu`
     }
 }
 
-@ mcp_session_request_sampling McpSessionStore store s sid ( Vec Json ) messages s system i max_tokens → i {
+@ mcp_session_request_sampling McpSessionStore store s sid sink ( Vec Json ) messages s system i max_tokens → i {
     : Json params ( mcp_sampling_params messages system max_tokens )
     ^ ( mcp_session_begin_rpc store sid `sampling/createMessage` params )
 }
@@ -601,19 +585,10 @@ $ `stdlib/core/vec.nu`
 
 // Build a `sampling/createMessage` params object. CONSUMES `messages`
 // (each element is moved into the params array).
-@ mcp_sampling_params ( Vec Json ) messages s system i max_tokens → Json {
-    : Json arr ( json_arr_new )
-    : i n ( vec_len [Json] messages )
-    : ~ i k 0
-    ~ < k n {
-        : ?Json e ( vec_get [Json] messages k )
-        // Each message moves from `messages` into the array…
-        ?? e { T j → { ( mem_take j ) ( json_arr_push arr j ) } F → {} }
-        = k + k 1
-    }
-    // …so only the buffer is left to free.
+@ mcp_sampling_params sink ( Vec Json ) messages s system i max_tokens → Json {
     : Json params ( json_obj_new )
-    ( json_obj_set params `messages` arr )
+    // The messages, buffer and all, become the array.
+    ( json_obj_set params `messages` @ Json { JArr messages } )
     ? > ( nurl_str_len system ) 0 {
         ( json_obj_set params `systemPrompt` ( json_str_lit system ) )
     } {}
@@ -623,7 +598,7 @@ $ `stdlib/core/vec.nu`
 
 // Full standalone `sampling/createMessage` request envelope with an
 // explicit id (for callers not going through a session store).
-@ mcp_sampling_request i id ( Vec Json ) messages s system i max_tokens → Json {
+@ mcp_sampling_request i id sink ( Vec Json ) messages s system i max_tokens → Json {
     : Json params ( mcp_sampling_params messages system max_tokens )
     ^ ( __mcp_rpc_envelope id `sampling/createMessage` params )
 }

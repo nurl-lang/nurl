@@ -35,27 +35,24 @@ $ `stdlib/core/rcbox.nu`
 
 // A QuicRxBuf is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
 // every copy is the same state, and the last owner releases it.
-: QuicRxBuf { s ctl }
+: QuicRxBuf { ( Shared QuicRxBufImpl ) ctl }
 
-@ QuicRxBuf_share QuicRxBuf h → QuicRxBuf { ^ @ QuicRxBuf { # s ( rcbox_share # i . h ctl ) } }
+@ QuicRxBuf_share QuicRxBuf h → QuicRxBuf { ^ @ QuicRxBuf { ( shared_clone [QuicRxBufImpl] . h ctl ) } }
 
-@ QuicRxBuf_drop sink QuicRxBuf h → v {
-    ( mem_forget h )
-    ( rcbox_release [QuicRxBufImpl] # i . h ctl )
-}
+@ QuicRxBuf_drop sink QuicRxBuf h → v {}
 
-@ __QuicRxBuf_ptr QuicRxBuf h → *QuicRxBufImpl { ^ ( rcbox_ptr [QuicRxBufImpl] # i . h ctl ) }
+@ __QuicRxBuf_ptr QuicRxBuf h → *QuicRxBufImpl { ^ ( shared_ptr [QuicRxBufImpl] . h ctl ) }
 
 @ quic_rxbuf_new i cap → QuicRxBuf {
-    : i r__box ( rcbox_zero [QuicRxBufImpl] )
-    : *QuicRxBufImpl r ( rcbox_ptr [QuicRxBufImpl] r__box )
+    : ( Shared QuicRxBufImpl ) r__box ( shared_zero [QuicRxBufImpl] )
+    : *QuicRxBufImpl r ( shared_ptr [QuicRxBufImpl] r__box )
     = . r buf ( vec_new [u] )
     = . r base 0
     = . r ranges ( vec_new [i] )
     = . r consumed 0
     = . r cap cap
     = . r highest 0
-    ^ @ QuicRxBuf { # s r__box }
+    ^ @ QuicRxBuf { r__box }
 }
 
 // Let go of `r` now rather than at the end of its owner's scope.

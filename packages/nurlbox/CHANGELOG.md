@@ -9,6 +9,9 @@ The published 0.3.3 does not compile under it.
 
 ### Changed
 
+- The zero `Regex` handles `sed` and `grep` keep until a pattern is
+  compiled are built with the cast `# Regex # s 0`: a standard-library
+  handle now holds its state in a `( Shared T )`.
 - The dispatch table is a module global that owns it, where it was raw
   memory kept as an address.
 

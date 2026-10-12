@@ -43,7 +43,9 @@ $ `stdlib/ext/env.nu`  // $COLUMNS / $LINES fallback for term_width
 
 & `c` @ cfmakeraw *u buf → v
 
-: TermState { i fd s saved }
+// `saved` is the termios the terminal had before raw mode, kept as the
+// bytes C wrote (the struct is opaque here) and released with the state.
+: TermState { i fd ( Vec u ) saved }
 
 @ term_is_tty i fd → b {
     ^ == # i ( isatty # i32 fd ) 1
@@ -57,26 +59,21 @@ $ `stdlib/ext/env.nu`  // $COLUMNS / $LINES fallback for term_width
     ? ( term_is_tty fd ) {} { ^ @ ?TermState { F } }
     : i sz ( nurl_native_sizeof `struct termios` )
     ? <= sz 0 { ^ @ ?TermState { F } } {}
-    : s saved ( nurl_zalloc sz )
-    ? == # i ( tcgetattr # i32 fd saved ) 0 {} {
-        ( nurl_free saved )
+    : ( Vec u ) saved ( vec_zeroed [u] sz )
+    ? == # i ( tcgetattr # i32 fd # *u ( vec_data [u] saved ) ) 0 {} {
         ^ @ ?TermState { F }
     }
-    : s raw ( nurl_zalloc sz )
-    ( nurl_memcpy # *u raw # *u saved sz )
-    ( cfmakeraw raw )
-    : i32 rc ( tcsetattr # i32 fd # i32 ( posix_const `TCSAFLUSH` ) raw )
-    ( nurl_free raw )
+    : ( Vec u ) raw ( vec_clone [u] saved )
+    ( cfmakeraw # *u ( vec_data [u] raw ) )
+    : i32 rc ( tcsetattr # i32 fd # i32 ( posix_const `TCSAFLUSH` ) # *u ( vec_data [u] raw ) )
     ? == # i rc 0 {} {
-        ( nurl_free saved )
         ^ @ ?TermState { F }
     }
     ^ @ ?TermState { T @ TermState { fd saved } }
 }
 
 @ term_raw_disable TermState st → v {
-    : i32 _rc ( tcsetattr # i32 . st fd # i32 ( posix_const `TCSAFLUSH` ) . st saved )
-    ( nurl_free . st saved )
+    : i32 _rc ( tcsetattr # i32 . st fd # i32 ( posix_const `TCSAFLUSH` ) # *u ( vec_data [u] . st saved ) )
 }
 
 // ── ANSI builders (ESC = 0x1b cannot ride in a backtick literal) ────
@@ -158,11 +155,14 @@ $ `stdlib/ext/env.nu`  // $COLUMNS / $LINES fallback for term_width
 
 // Read one byte from stdin; -1 on EOF/error.
 @ __term_getb → i {
-    : s buf ( nurl_zalloc 1 )
-    : i n ( read 0 # *u buf 1 )
-    : i c ? > n 0 ( nurl_peek buf 0 ) -1
-    ( nurl_free buf )
-    ^ & c 255
+    : ~ u b 0
+    : i n ( __term_read_byte b )
+    ^ ? > n 0 # i b -1
+}
+
+// read(2) of one byte into the caller's `b` (its place, for the call).
+@ __term_read_byte inout u b → i {
+    ^ ( read 0 # *u ( mem_addr b ) 1 )
 }
 
 // Repaint: CR + erase line + prompt + buffer, then walk the cursor
@@ -299,18 +299,21 @@ $ `stdlib/ext/env.nu`  // $COLUMNS / $LINES fallback for term_width
 // Apple arm64 and silently fine everywhere else.
 & `c` @ ioctl i32 fd i req ... → i32
 
+@ __term_ioctl_word i fd i req inout i w → i32 {
+    ^ ( ioctl # i32 fd req # *u ( mem_addr w ) )
+}
+
 @ __term_winsz i fd i idx → i {
     : i req ( posix_const `TIOCGWINSZ` )
     ? < req 0 { ^ -1 } {}
-    : *u ws # *u ( nurl_alloc 8 )
-    : i32 rc ( ioctl # i32 fd req ws )
+    // struct winsize: four little-endian u16s (rows, cols, xpixel,
+    // ypixel), written into the caller's word.
+    : ~ i ws 0
+    : i32 rc ( __term_ioctl_word fd req ws )
     : ~ i out -1
     ? == # i rc 0 {
-        : i lo # i . ws * idx 2
-        : i hi # i . ws + * idx 2 1
-        = out | lo << hi 8
+        = out & >> ws * idx 16 0xffff
     } {}
-    ( nurl_free # s ws )
     ^ ? > out 0 out -1
 }
 

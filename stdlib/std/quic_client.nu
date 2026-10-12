@@ -49,7 +49,7 @@ $ `stdlib/core/rcbox.nu`
 
 // A QuicClient is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
 // every copy is the same client, and the last owner releases it.
-: QuicClient { s ctl }
+: QuicClient { ( Shared QuicClientImpl ) ctl }
 
 // Its drop closes something the outside world sees (stdlib/core/marker.nu).
 % Resource QuicClient {}
@@ -62,14 +62,11 @@ $ `stdlib/core/rcbox.nu`
     }
 }
 
-@ QuicClient_share QuicClient h → QuicClient { ^ @ QuicClient { # s ( rcbox_share # i . h ctl ) } }
+@ QuicClient_share QuicClient h → QuicClient { ^ @ QuicClient { ( shared_clone [QuicClientImpl] . h ctl ) } }
 
-@ QuicClient_drop sink QuicClient h → v {
-    ( mem_forget h )
-    ( rcbox_release [QuicClientImpl] # i . h ctl )
-}
+@ QuicClient_drop sink QuicClient h → v {}
 
-@ __QuicClient_ptr QuicClient h → *QuicClientImpl { ^ ( rcbox_ptr [QuicClientImpl] # i . h ctl ) }
+@ __QuicClient_ptr QuicClient h → *QuicClientImpl { ^ ( shared_ptr [QuicClientImpl] . h ctl ) }
 
 @ __qcl_now → i { ^ / ( monotonic_ns ) 1000000 }
 
@@ -93,15 +90,15 @@ $ `stdlib/core/rcbox.nu`
 @ quic_client_connect s host i port s server_name s alpn QuicTp tp i verify i timeout_ms → QuicClient {
     : !( Vec u ) NetErr ar ( udp_addr_resolve host port )
     : ( Vec u ) peer ?? ar { T a → a F _ → ( vec_new [u] ) }
-    ? == ( vec_len [u] peer ) 0 { ^ @ QuicClient { # s 0 } } {}
+    ? == ( vec_len [u] peer ) 0 { ^ @ QuicClient { ( shared_null [QuicClientImpl] ) } } {}
     // a socket of the peer's family: bind the wildcard of that family
     : !UdpSocket NetErr sr ( udp_bind ? == ( udp_addr_family peer ) 6 `::` `0.0.0.0` 0 )
     : ~ i ok 0
     : ~ UdpSocket sock @ UdpSocket { `` }
     ?? sr { T s → { = sock s = ok 1 } F _ → {} }
-    ? == ok 0 { ^ @ QuicClient { # s 0 } } {}
-    : i cl__box ( rcbox_zero [QuicClientImpl] )
-    : ~ * QuicClientImpl cl ( rcbox_ptr [QuicClientImpl] cl__box )
+    ? == ok 0 { ^ @ QuicClient { ( shared_null [QuicClientImpl] ) } } {}
+    : ( Shared QuicClientImpl ) cl__box ( shared_zero [QuicClientImpl] )
+    : ~ * QuicClientImpl cl ( shared_ptr [QuicClientImpl] cl__box )
     = . cl sock sock
     = . cl has_sock 1
     = . cl peer peer
@@ -113,7 +110,7 @@ $ `stdlib/core/rcbox.nu`
     ~ & < ( quic_conn_state . cl conn ) 1 < ( __qcl_now ) deadline {
         ( __qcl_step . cl 0 - deadline ( __qcl_now ) )
     }
-    ^ @ QuicClient { # s cl__box }
+    ^ @ QuicClient { cl__box }
 }
 
 @ quic_client_connected QuicClient cl__h → b {

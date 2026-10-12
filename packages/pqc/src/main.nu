@@ -319,7 +319,7 @@ $ `stdlib/core/slice.nu`
 unsafe @ __cmd_probe s host i port → i {
     ( __pad host )
     : ~ b trusted T
-    : ~ TlsConn conn @ TlsConn { # s 0 }
+    : ~ TlsConn conn # TlsConn # s 0
     ?? ( tls_connect host port host ) {
         T c → { = conn c }
         F e → {

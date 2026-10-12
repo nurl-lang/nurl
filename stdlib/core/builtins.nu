@@ -169,11 +169,12 @@
 & `c` @ nurl_read_file s path → s
 
 // Directory listing, one entry per call: open returns a handle (0 on
-// failure), next returns the entry name or "" when done, close frees.
-// Prefer std/fs.nu's dir_list (Vec of names, Result-typed).
+// failure), next returns the entry name — a copy the caller owns — or
+// null when done, close frees. Prefer std/fs.nu's dir_list (Vec of
+// names, Result-typed).
 & `c` @ nurl_dir_list_open s path → i
 
-& `c` @ nurl_dir_list_next i handle → s
+& `c` @ nurl_dir_list_next i handle → sink s
 
 & `c` @ nurl_dir_list_close i handle → v
 

@@ -48,6 +48,7 @@ $ `stdlib/ext/http_response.nu`
 $ `stdlib/ext/http3_frame.nu`
 $ `stdlib/ext/http3_qpack.nu`
 $ `stdlib/core/rcbox.nu`
+$ `stdlib/core/mem.nu`
 
 : H3CStream {
     i id
@@ -82,16 +83,13 @@ $ `stdlib/core/rcbox.nu`
 // An H3Client is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
 // every copy is the same client, and the last owner releases it — the
 // streams and the QUIC client (and with it the socket) go with the fields.
-: H3Client { s ctl }
+: H3Client { ( Shared H3ClientImpl ) ctl }
 
-@ H3Client_share H3Client h → H3Client { ^ @ H3Client { # s ( rcbox_share # i . h ctl ) } }
+@ H3Client_share H3Client h → H3Client { ^ @ H3Client { ( shared_clone [H3ClientImpl] . h ctl ) } }
 
-@ H3Client_drop sink H3Client h → v {
-    ( mem_forget h )
-    ( rcbox_release [H3ClientImpl] # i . h ctl )
-}
+@ H3Client_drop sink H3Client h → v {}
 
-@ __H3Client_ptr H3Client h → *H3ClientImpl { ^ ( rcbox_ptr [H3ClientImpl] # i . h ctl ) }
+@ __H3Client_ptr H3Client h → *H3ClientImpl { ^ ( shared_ptr [H3ClientImpl] . h ctl ) }
 
 @ h3c_default_max_field_section → i { ^ 65536 }
 
@@ -108,17 +106,14 @@ $ `stdlib/core/rcbox.nu`
 // holds one owner of each; the code below works on the H3CStream in place
 // (its address stays put while the list changes), and the stream goes
 // when it leaves the list or the client goes.
-: H3CStreamBox { s ctl }
+: H3CStreamBox { ( Shared H3CStream ) ctl }
 
-@ H3CStreamBox_share H3CStreamBox h → H3CStreamBox { ^ @ H3CStreamBox { # s ( rcbox_share # i . h ctl ) } }
+@ H3CStreamBox_share H3CStreamBox h → H3CStreamBox { ^ @ H3CStreamBox { ( shared_clone [H3CStream] . h ctl ) } }
 
-@ H3CStreamBox_drop sink H3CStreamBox h → v {
-    ( mem_forget h )
-    ( rcbox_release [H3CStream] # i . h ctl )
-}
+@ H3CStreamBox_drop sink H3CStreamBox h → v {}
 
 @ __h3c_stream_new i id i kind → H3CStreamBox {
-    ^ @ H3CStreamBox { # s ( rcbox_new [H3CStream] @ H3CStream {
+    ^ @ H3CStreamBox { ( shared_new [H3CStream] @ H3CStream {
             id kind ( vec_new [u] ) 0 0 ( vec_new [Header] ) ( vec_new [u] ) 0 0
         } ) }
 }
@@ -140,7 +135,7 @@ $ `stdlib/core/rcbox.nu`
 
 // The k-th stream of the list, in place.
 @ __h3c_si * H3ClientImpl h i k → *H3CStream {
-    ?? ( vec_get [H3CStreamBox] . h streams k ) { T b → ^ ( rcbox_ptr [H3CStream] # i . b ctl ) F → ^ # *H3CStream 0 }
+    ?? ( vec_get [H3CStreamBox] . h streams k ) { T b → ^ ( shared_ptr [H3CStream] . b ctl ) F → ^ # *H3CStream 0 }
 }
 
 @ __h3c_stream_get * H3ClientImpl h i id → *H3CStream {
@@ -187,9 +182,9 @@ $ `stdlib/core/rcbox.nu`
 @ h3_client_connect s host i port s server_name i verify i timeout_ms → H3Client {
     : QuicTp tp ( __h3c_tp )
     : QuicClient qc ( quic_client_connect host port server_name `h3` tp verify timeout_ms )
-    ? == 0 # i . qc ctl { ^ @ H3Client { # s 0 } } {}
-    : i h__box ( rcbox_zero [H3ClientImpl] )
-    : *H3ClientImpl h ( rcbox_ptr [H3ClientImpl] h__box )
+    ? == 0 # i . qc ctl { ^ @ H3Client { ( shared_null [H3ClientImpl] ) } } {}
+    : ( Shared H3ClientImpl ) h__box ( shared_zero [H3ClientImpl] )
+    : *H3ClientImpl h ( shared_ptr [H3ClientImpl] h__box )
     = . h c ( QuicConn_share ( quic_client_conn qc ) )
     = . h qc qc
     = . h streams ( vec_new [H3CStreamBox] )
@@ -230,7 +225,7 @@ $ `stdlib/core/rcbox.nu`
         } {}
         ( quic_client_pump . h qc )
     } {}
-    ^ @ H3Client { # s h__box }
+    ^ @ H3Client { h__box }
 }
 
 @ h3_client_connected H3Client h__h → b {
@@ -519,7 +514,7 @@ $ `stdlib/core/rcbox.nu`
         // the transport limit is 0, so the connection has failed already
         ? ! uni { ^ } {}
         : H3CStreamBox nb ( __h3c_stream_new id -1 )
-        = s ( rcbox_ptr [H3CStream] # i . nb ctl )
+        = s ( shared_ptr [H3CStream] . nb ctl )
         ( vec_push [H3CStreamBox] . h streams nb )
     } {}
     ? != . s done 0 { ^ } {}
@@ -557,7 +552,7 @@ $ `stdlib/core/rcbox.nu`
     : i sid ( quic_conn_open_bidi c )
     ? < sid 0 { ^ @ !HttpResponse i { F 1 } } {}
     : H3CStreamBox nb ( __h3c_stream_new sid 0 )
-    : *H3CStream s ( rcbox_ptr [H3CStream] # i . nb ctl )
+    : *H3CStream s ( shared_ptr [H3CStream] . nb ctl )
     ( vec_push [H3CStreamBox] . h streams nb )
     : ( Vec u ) block ( __h3c_request_block method scheme authority path headers )
     : ( Vec u ) wire ( vec_new [u] )
@@ -597,12 +592,8 @@ $ `stdlib/core/rcbox.nu`
     : HttpResponse r ( response_new . s status )
     // The stream's headers and body move into the response (the stream
     // gets empty ones, dropped with it below).
-    : ( Vec Header ) hs . s headers
-    ( mem_take hs )
-    = . s headers ( vec_new [Header] )
-    : ( Vec u ) bd . s body
-    ( mem_take bd )
-    = . s body ( vec_new [u] )
+    : ( Vec Header ) hs ( mem_replace [( Vec Header )] . s headers ( vec_new [Header] ) )
+    : ( Vec u ) bd ( mem_replace [( Vec u )] . s body ( vec_new [u] ) )
     = . r headers hs
     = . r body bd
     ( quic_conn_stream_done c sid )

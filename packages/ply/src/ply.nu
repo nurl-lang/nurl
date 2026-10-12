@@ -228,6 +228,6 @@ unsafe @ ply_finish PlyW w__h → b {
     : *PlyWImpl w ( __PlyW_ptr w__h )
     : b ok ( __ply_close . w f . w ascii . w abuf . w bbuf . w cnt_off . w n )
     // The closed file's handle leaves the writer (dropped here).
-    = . w f @ File { # s 0 }
+    = . w f # File # s 0
     ^ ok
 }

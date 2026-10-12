@@ -56,6 +56,7 @@ $ `stdlib/std/async.nu`
 $ `stdlib/std/channel.nu`
 $ `stdlib/std/thread.nu`
 $ `stdlib/core/rcbox.nu`
+$ `stdlib/core/box.nu`
 
 // runtime client dial (the listen/accept/read/write/close ops are nurlc
 // builtins reached via std/net.nu; only the dial needs an extern decl).
@@ -284,61 +285,26 @@ $ `stdlib/core/rcbox.nu`
 
 : RelayServerImpl {
     TcpListener lst
-    ( Vec s ) clients  // *RelayEntry
-    ( Vec s ) groups  // *GroupEntry
+    ( Vec ( Box RelayEntry ) ) clients
+    ( Vec ( Box GroupEntry ) ) groups
     i verbose  // 1 = log peer connect/disconnect to stdout
     Mutex tlock  // guards clients, groups and every entry's live flag
 }
 
 // A RelayServer is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
 // every copy is the same server, and the last owner releases it.
-: RelayServer { s ctl }
+: RelayServer { ( Shared RelayServerImpl ) ctl }
 
-@ RelayServer_share RelayServer h → RelayServer { ^ @ RelayServer { # s ( rcbox_share # i . h ctl ) } }
+@ RelayServer_share RelayServer h → RelayServer { ^ @ RelayServer { ( shared_clone [RelayServerImpl] . h ctl ) } }
 
-@ RelayServer_drop sink RelayServer h → v {
-    ( mem_forget h )
-    ( rcbox_release [RelayServerImpl] # i . h ctl )
-}
+@ RelayServer_drop sink RelayServer h → v {}
 
-@ __RelayServer_ptr RelayServer h → *RelayServerImpl { ^ ( rcbox_ptr [RelayServerImpl] # i . h ctl ) }
-
-// Client entries and groups are raw blocks the Vecs only point at (a group's
-// member list points at client entries and owns none of them): releasing
-// them is the server's own drop, run by its last owner (the Vecs go after).
-% Drop RelayServerImpl {
-    @ drop RelayServerImpl rs → v {
-        : i n ( vec_len [s] . rs clients )
-        : ~ i k 0
-        ~ < k n {
-            : s pp ?? ( vec_get [s] . rs clients k ) { T x → x F → # s 0 }
-            ? != # i pp 0 {
-                : *RelayEntry e # *RelayEntry pp
-                ( vec_free [u] . e pubkey )
-                ( chan_free [( Vec u )] . e outq )
-                ( nurl_free # s e )
-            } {}
-            = k + k 1
-        }
-        : i gn ( vec_len [s] . rs groups )
-        : ~ i gi 0
-        ~ < gi gn {
-            : s gp ?? ( vec_get [s] . rs groups gi ) { T x → x F → # s 0 }
-            ? != # i gp 0 {
-                : *GroupEntry g # *GroupEntry gp
-                ( vec_free [u] . g gid )
-                ( vec_free [s] . g members )
-                ( nurl_free # s g )
-            } {}
-            = gi + gi 1
-        }
-    }
-}
+@ __RelayServer_ptr RelayServer h → *RelayServerImpl { ^ ( shared_ptr [RelayServerImpl] . h ctl ) }
 
 @ relay_server_start s host i port → !RelayServer NetErr {
     : !TcpListener NetErr lr ( tcp_listen host port )
     : !RelayServer NetErr out ?? lr {
-        T l → @ !RelayServer NetErr { T @ RelayServer { # s ( rcbox_new [RelayServerImpl] @ RelayServerImpl { l ( vec_new [s] ) ( vec_new [s] ) 0 ( mutex_new ) } ) } }
+        T l → @ !RelayServer NetErr { T @ RelayServer { ( shared_new [RelayServerImpl] @ RelayServerImpl { l ( vec_new [( Box RelayEntry )] ) ( vec_new [( Box GroupEntry )] ) 0 ( mutex_new ) } ) } }
         F e → @ !RelayServer NetErr { F e }
     }
     ^ out
@@ -361,22 +327,23 @@ $ `stdlib/core/rcbox.nu`
 
 // A new entry for connection `c`. Caller holds the table lock.
 @ __relay_register_conn * RelayServerImpl rs TcpConn c ( Vec u ) pk → s {
-    : *RelayEntry e # *RelayEntry ( nurl_alloc Z RelayEntry )
+    : ( Box RelayEntry ) e__b ( box_zero [RelayEntry] )
+    : *RelayEntry e # *RelayEntry ( box_ptr [RelayEntry] e__b )
     = . e pubkey ( __rcpy pk )
     = . e conn c
     = . e live 1
     = . e outq ( chan_new [( Vec u )] )
-    ( vec_push [s] . rs clients # s e )
+    ( vec_push [( Box RelayEntry )] . rs clients e__b )
     ^ # s e
 }
 
 // The live entry registered under `pk`, or 0. Caller holds the table lock.
 @ __relay_find * RelayServerImpl rs ( Vec u ) pk → s {
-    : i n ( vec_len [s] . rs clients )
+    : i n ( vec_len [( Box RelayEntry )] . rs clients )
     : ~ s found # s 0
     : ~ i k 0
     ~ & == # i found 0 < k n {
-        : s pp ?? ( vec_get [s] . rs clients k ) { T x → x F → # s 0 }
+        : s pp # s ( box_ptr [RelayEntry] ( vec_at [( Box RelayEntry )] . rs clients k ) )
         ? != # i pp 0 {
             : *RelayEntry e # *RelayEntry pp
             ? & == . e live 1 ( __rveq . e pubkey pk ) { = found pp } {}
@@ -427,11 +394,11 @@ $ `stdlib/core/rcbox.nu`
 // table lock.
 
 @ __relay_group_find * RelayServerImpl rs ( Vec u ) gid → s {
-    : i n ( vec_len [s] . rs groups )
+    : i n ( vec_len [( Box GroupEntry )] . rs groups )
     : ~ s found # s 0
     : ~ i k 0
     ~ & == # i found 0 < k n {
-        : s pp ?? ( vec_get [s] . rs groups k ) { T x → x F → # s 0 }
+        : s pp # s ( box_ptr [GroupEntry] ( vec_at [( Box GroupEntry )] . rs groups k ) )
         ? != # i pp 0 {
             : *GroupEntry g # *GroupEntry pp
             ? ( __rveq . g gid gid ) { = found pp } {}
@@ -444,10 +411,11 @@ $ `stdlib/core/rcbox.nu`
 @ __relay_group_ensure * RelayServerImpl rs ( Vec u ) gid → s {
     : s ex ( __relay_group_find rs gid )
     ? != # i ex 0 { ^ ex } {}
-    : *GroupEntry g # *GroupEntry ( nurl_alloc Z GroupEntry )
+    : ( Box GroupEntry ) g__b ( box_zero [GroupEntry] )
+    : *GroupEntry g # *GroupEntry ( box_ptr [GroupEntry] g__b )
     = . g gid ( __rcpy gid )
     = . g members ( vec_new [s] )
-    ( vec_push [s] . rs groups # s g )
+    ( vec_push [( Box GroupEntry )] . rs groups g__b )
     ^ # s g
 }
 
@@ -491,10 +459,10 @@ $ `stdlib/core/rcbox.nu`
 }
 
 @ __relay_drop_from_groups * RelayServerImpl rs s entry_ptr → v {
-    : i gn ( vec_len [s] . rs groups )
+    : i gn ( vec_len [( Box GroupEntry )] . rs groups )
     : ~ i gi 0
     ~ < gi gn {
-        : s gp ?? ( vec_get [s] . rs groups gi ) { T x → x F → # s 0 }
+        : s gp # s ( box_ptr [GroupEntry] ( vec_at [( Box GroupEntry )] . rs groups gi ) )
         ? != # i gp 0 { : *GroupEntry g # *GroupEntry gp ( __grp_remove_member g entry_ptr ) } {}
         = gi + gi 1
     }

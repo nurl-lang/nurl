@@ -75,20 +75,17 @@ $ `stdlib/core/rcbox.nu`
 
 // A QuicTp is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
 // every copy is the same state, and the last owner releases it.
-: QuicTp { s ctl }
+: QuicTp { ( Shared QuicTpImpl ) ctl }
 
-@ QuicTp_share QuicTp h → QuicTp { ^ @ QuicTp { # s ( rcbox_share # i . h ctl ) } }
+@ QuicTp_share QuicTp h → QuicTp { ^ @ QuicTp { ( shared_clone [QuicTpImpl] . h ctl ) } }
 
-@ QuicTp_drop sink QuicTp h → v {
-    ( mem_forget h )
-    ( rcbox_release [QuicTpImpl] # i . h ctl )
-}
+@ QuicTp_drop sink QuicTp h → v {}
 
-@ __QuicTp_ptr QuicTp h → *QuicTpImpl { ^ ( rcbox_ptr [QuicTpImpl] # i . h ctl ) }
+@ __QuicTp_ptr QuicTp h → *QuicTpImpl { ^ ( shared_ptr [QuicTpImpl] . h ctl ) }
 
 @ quic_tp_new → QuicTp {
-    : i t__box ( rcbox_zero [QuicTpImpl] )
-    : *QuicTpImpl t ( rcbox_ptr [QuicTpImpl] t__box )
+    : ( Shared QuicTpImpl ) t__box ( shared_zero [QuicTpImpl] )
+    : *QuicTpImpl t ( shared_ptr [QuicTpImpl] t__box )
     = . t max_idle_timeout 0
     = . t max_udp_payload_size 65527
     = . t initial_max_data 0
@@ -110,7 +107,7 @@ $ `stdlib/core/rcbox.nu`
     = . t has_stateless_reset_token 0
     = . t stateless_reset_token ( vec_new [u] )
     = . t max_datagram_frame_size 0
-    ^ @ QuicTp { # s t__box }
+    ^ @ QuicTp { t__box }
 }
 
 // Let go of `t` now rather than at the end of its owner's scope.
@@ -321,7 +318,7 @@ $ `stdlib/core/rcbox.nu`
 
 // No parameters: the decoder's refusal. The half-decoded QuicTp is
 // released by its binding.
-@ __qtp_fail → QuicTp { ^ @ QuicTp { # s 0 } }
+@ __qtp_fail → QuicTp { ^ @ QuicTp { ( shared_null [QuicTpImpl] ) } }
 
 // A varint value that must fill exactly `len` bytes at `off`.
 @ __qtp_int ( Vec u ) buf i off i len → i {

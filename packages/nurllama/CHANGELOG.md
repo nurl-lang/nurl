@@ -11,6 +11,9 @@ The published 0.18.3 does not compile under it.
 
 ### Changed
 
+- The zero `File` handle the puller keeps until one is opened is built
+  with the cast `# File # s 0`: a standard-library handle now holds its
+  state in a `( Shared T )`.
 - The resident model is a module global that owns it (an option: none
   is loaded until the first request), where it was an `Arc` kept as a
   word; the `--weights` path is an owned string, where it borrowed the

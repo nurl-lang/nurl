@@ -5,6 +5,18 @@ All notable changes to `pqc` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.6] — 2026-10-12
+
+Requires NURL 0.73.0, in which a standard-library handle holds its
+state in a `( Shared T )` (stdlib/core/rcbox.nu): a zero handle is the
+cast `# File # s 0`, no longer the literal `@ File { # s 0 }`. The
+published 0.2.5 does not compile under it.
+
+### Changed
+
+- The zero `TlsConn` handle this package keeps until one
+  is made is built with the cast. No change in behaviour.
+
 ## [0.2.5] — 2026-10-09
 
 Requires NURL 0.72.0, which draws the raw-memory boundary at every call:

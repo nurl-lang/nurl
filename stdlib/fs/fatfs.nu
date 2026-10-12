@@ -128,42 +128,31 @@ $ `stdlib/core/slice.nu`
     i cur_idx
 }
 
-: FatTab { ( Vec i ) f }
+// The table: fatfs_max_open slots made once, owned by the module for the
+// program's life. It never grows, so a slot's address stays put.
+: ~ ( Vec FatFile ) g_ftab 0
+: ~ b g_ftab_made F
 
-: ~ i g_ftab 0
-
-@ __tab → *FatTab {
-    ? != g_ftab 0 { ^ # *FatTab g_ftab } {}
-    : *FatTab t # *FatTab ( nurl_alloc Z FatTab )
-    = . t f ( vec_new [i] )
-    : ~ i k 0
-    ~ < k ( fatfs_max_open ) { ( vec_push [i] . t f 0 ) = k + k 1 }
-    = g_ftab # i t
-    ^ t
+// Slot `h` (in range), in place.
+@ __slot i h → *FatFile {
+    ? ! g_ftab_made {
+        = g_ftab ( vec_zeroed [FatFile] ( fatfs_max_open ) )
+        = g_ftab_made T
+    } {}
+    ^ # *FatFile + # i ( vec_data [FatFile] g_ftab ) * h Z FatFile
 }
 
 @ __file i h → *FatFile {
     ? || < h 0 >= h ( fatfs_max_open ) { ^ # *FatFile 0 } {}
-    : *FatTab t ( __tab )
-    : i p ?? ( vec_get [i] . t f h ) { T x → x F → 0 }
-    ? == p 0 { ^ # *FatFile 0 } {}
-    : *FatFile f # *FatFile p
+    : *FatFile f ( __slot h )
     ? ! . f used { ^ # *FatFile 0 } {}
     ^ f
 }
 
 @ __file_slot → i {
-    : *FatTab t ( __tab )
     : ~ i k 0
     ~ < k ( fatfs_max_open ) {
-        : i p ?? ( vec_get [i] . t f k ) { T x → x F → 0 }
-        ? == p 0 {
-            : *FatFile nf # *FatFile ( nurl_alloc Z FatFile )
-            = . nf used F
-            : b _s ( vec_set [i] . t f k # i nf )
-            ^ k
-        } {}
-        : *FatFile f # *FatFile p
+        : *FatFile f ( __slot k )
         ? ! . f used { ^ k } {}
         = k + k 1
     }
@@ -1150,7 +1139,7 @@ $ `stdlib/core/slice.nu`
 
     : i h ( __file_slot )
     ? < h 0 { ^ ( fe_mfile ) } {}
-    : *FatFile f # *FatFile ?? ( vec_get [i] . ( __tab ) f h ) { T x → x F → 0 }
+    : *FatFile f ( __slot h )
     = . f used T
     = . f first . e first_clus
     = . f size . e size
@@ -1183,7 +1172,7 @@ $ `stdlib/core/slice.nu`
 @ __open_dir_clus * FatVol v i clus → i {
     : i h ( __file_slot )
     ? < h 0 { ^ ( fe_mfile ) } {}
-    : *FatFile f # *FatFile ?? ( vec_get [i] . ( __tab ) f h ) { T x → x F → 0 }
+    : *FatFile f ( __slot h )
     = . f used T
     = . f first clus
     = . f size 0
@@ -1397,15 +1386,11 @@ $ `stdlib/core/slice.nu`
 @ fatfs_sync → i {
     ? ! ( fat_mounted ) { ^ ( fe_io ) } {}
     : *FatVol v ( fat_vol )
-    : *FatTab t ( __tab )
     : ~ i k 0
     : ~ i rc 0
     ~ < k ( fatfs_max_open ) {
-        : i p ?? ( vec_get [i] . t f k ) { T x → x F → 0 }
-        ? != p 0 {
-            : *FatFile f # *FatFile p
-            ? . f used { ? ! ( __flush_meta v f ) { = rc ( fe_io ) } {} } {}
-        } {}
+        : *FatFile f ( __slot k )
+        ? . f used { ? ! ( __flush_meta v f ) { = rc ( fe_io ) } {} } {}
         = k + k 1
     }
     ? ! ( fat_write_fsinfo ) { = rc ( fe_io ) } {}

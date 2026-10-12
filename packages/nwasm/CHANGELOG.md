@@ -9,6 +9,10 @@ The published 2.4.1 does not compile under it.
 
 ### Changed
 
+- The host imports that return a string the runtime allocated
+  (`nurl_tcp_local_addr`, `nurl_udp_local_addr`, the DNS resolvers)
+  declare their result `→ sink s`, and the helper that copies one into
+  the guest takes it over (`sink s`): nothing is freed by hand.
 - A decoded module keeps its section records (types, functions,
   exports, data and element segments, imports, names) in `Box`es in its
   tables, where each was raw memory its `Drop` impl released by hand. The

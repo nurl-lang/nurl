@@ -67,16 +67,13 @@ $ `stdlib/core/rcbox.nu`
 
 // A QuicFrame is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
 // every copy is the same state, and the last owner releases it.
-: QuicFrame { s ctl }
+: QuicFrame { ( Shared QuicFrameImpl ) ctl }
 
-@ QuicFrame_share QuicFrame h → QuicFrame { ^ @ QuicFrame { # s ( rcbox_share # i . h ctl ) } }
+@ QuicFrame_share QuicFrame h → QuicFrame { ^ @ QuicFrame { ( shared_clone [QuicFrameImpl] . h ctl ) } }
 
-@ QuicFrame_drop sink QuicFrame h → v {
-    ( mem_forget h )
-    ( rcbox_release [QuicFrameImpl] # i . h ctl )
-}
+@ QuicFrame_drop sink QuicFrame h → v {}
 
-@ __QuicFrame_ptr QuicFrame h → *QuicFrameImpl { ^ ( rcbox_ptr [QuicFrameImpl] # i . h ctl ) }
+@ __QuicFrame_ptr QuicFrame h → *QuicFrameImpl { ^ ( shared_ptr [QuicFrameImpl] . h ctl ) }
 
 @ quic_ft_padding → i { ^ 0 }
 
@@ -129,8 +126,8 @@ $ `stdlib/core/rcbox.nu`
 @ quic_frame_is_stream i ftype → b { ^ & >= ftype 8 <= ftype 15 }
 
 @ __qf_new i ftype → QuicFrame {
-    : i f__box ( rcbox_zero [QuicFrameImpl] )
-    : *QuicFrameImpl f ( rcbox_ptr [QuicFrameImpl] f__box )
+    : ( Shared QuicFrameImpl ) f__box ( shared_zero [QuicFrameImpl] )
+    : *QuicFrameImpl f ( shared_ptr [QuicFrameImpl] f__box )
     = . f ftype ftype
     = . f a 0
     = . f b 0
@@ -139,7 +136,7 @@ $ `stdlib/core/rcbox.nu`
     = . f bytes ( vec_new [u] )
     = . f ints ( vec_new [i] )
     = . f next 0
-    ^ @ QuicFrame { # s f__box }
+    ^ @ QuicFrame { f__box }
 }
 
 // Let go of `f` now rather than at the end of its owner's scope.
@@ -189,7 +186,7 @@ $ `stdlib/core/rcbox.nu`
 
 // No frame: a malformed one (FRAME_ENCODING_ERROR for the caller). The
 // half-parsed frame is released by its binding.
-@ __qf_fail → QuicFrame { ^ @ QuicFrame { # s 0 } }
+@ __qf_fail → QuicFrame { ^ @ QuicFrame { ( shared_null [QuicFrameImpl] ) } }
 
 // Read a varint at `. f next`, advancing; -1 when truncated.
 @ __qf_vi inout QuicFrameImpl f ( Vec u ) buf → i {

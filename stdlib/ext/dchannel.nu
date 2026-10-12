@@ -95,14 +95,11 @@ $ `stdlib/core/rcbox.nu`
     i closed
 }
 
-: DQ { s ctl }
+: DQ { ( Shared DQueue ) ctl }
 
-@ DQ_share DQ h → DQ { ^ @ DQ { # s ( rcbox_share # i . h ctl ) } }
+@ DQ_share DQ h → DQ { ^ @ DQ { ( shared_clone [DQueue] . h ctl ) } }
 
-@ DQ_drop sink DQ h → v {
-    ( mem_forget h )
-    ( rcbox_release [DQueue] # i . h ctl )
-}
+@ DQ_drop sink DQ h → v {}
 
 : DStoreEntry {
     String name
@@ -118,23 +115,20 @@ $ `stdlib/core/rcbox.nu`
 // A handle on the store in an rcbox: every copy — the caller's, the ones
 // the registered handlers capture — is the same set of queues, and the
 // last owner releases them.
-: DStore { s ctl }
+: DStore { ( Shared DStoreImpl ) ctl }
 
-@ DStore_share DStore h → DStore { ^ @ DStore { # s ( rcbox_share # i . h ctl ) } }
+@ DStore_share DStore h → DStore { ^ @ DStore { ( shared_clone [DStoreImpl] . h ctl ) } }
 
-@ DStore_drop sink DStore h → v {
-    ( mem_forget h )
-    ( rcbox_release [DStoreImpl] # i . h ctl )
-}
+@ DStore_drop sink DStore h → v {}
 
-@ __ds DStore h → *DStoreImpl { ^ ( rcbox_ptr [DStoreImpl] # i . h ctl ) }
+@ __ds DStore h → *DStoreImpl { ^ ( shared_ptr [DStoreImpl] . h ctl ) }
 
 @ dstore_new i default_cap → DStore {
-    ^ @ DStore { # s ( rcbox_new [DStoreImpl] @ DStoreImpl { ( mutex_new ) ( vec_new [DStoreEntry] ) default_cap } ) }
+    ^ @ DStore { ( shared_new [DStoreImpl] @ DStoreImpl { ( mutex_new ) ( vec_new [DStoreEntry] ) default_cap } ) }
 }
 
 @ __dq_new i cap → DQ {
-    ^ @ DQ { # s ( rcbox_new [DQueue] @ DQueue { ( mutex_new ) ( vec_new [Json] ) cap 0 } ) }
+    ^ @ DQ { ( shared_new [DQueue] @ DQueue { ( mutex_new ) ( vec_new [Json] ) cap 0 } ) }
 }
 
 // Find an entry index by name. Caller must hold the store mutex.
@@ -165,10 +159,10 @@ $ `stdlib/core/rcbox.nu`
     : i idx ( __dstore_find s name )
     ? >= idx 0 {
         : ?DStoreEntry ek ( vec_get [DStoreEntry] . ( __ds s ) entries idx )
-        ?? ek { T e → { ^ ( rcbox_ptr [DQueue] # i . . e q ctl ) } F → {} }
+        ?? ek { T e → { ^ ( shared_ptr [DQueue] . . e q ctl ) } F → {} }
     } {}
     : DQ h ( __dq_new . ( __ds s ) default_cap )
-    : *DQueue q ( rcbox_ptr [DQueue] # i . h ctl )
+    : *DQueue q ( shared_ptr [DQueue] . h ctl )
     ( vec_push [DStoreEntry] . ( __ds s ) entries @ DStoreEntry { ( string_from name ) h } )
     ^ q
 }
@@ -333,22 +327,18 @@ $ `stdlib/core/rcbox.nu`
 // every copy is the same channel, and the last owner releases it — the
 // node, the name and the codec closures (copies the channel keeps) go
 // with it.
-: DChannel [A] { s ctl }
+: DChannel [A] { ( Shared ( DChannelImpl A ) ) ctl }
 
-@ DChannel_share [A] ( DChannel A ) h → ( DChannel A ) { ^ @ ( DChannel A ) { # s ( rcbox_share # i . h ctl ) } }
+@ DChannel_share [A] ( DChannel A ) h → ( DChannel A ) { ^ @ ( DChannel A ) { ( shared_clone [( DChannelImpl A )] . h ctl ) } }
 
-@ DChannel_drop [A] sink ( DChannel A ) h → v {
-    ( mem_forget h )
-    ( rcbox_release [( DChannelImpl A )] # i . h ctl )
-}
+@ DChannel_drop [A] sink ( DChannel A ) h → v {}
 
-@ __dchan_ptr [A] ( DChannel A ) h → *( DChannelImpl A ) { ^ ( rcbox_ptr [( DChannelImpl A )] # i . h ctl ) }
+@ __dchan_ptr [A] ( DChannel A ) h → *( DChannelImpl A ) { ^ ( shared_ptr [( DChannelImpl A )] . h ctl ) }
 
 @ dchan_open [A] Node node s name RetryPolicy pol i poll_ms
 ( @ Json A ) enc ( @ A Json ) dec ( @ v A ) drop → ( DChannel A ) {
     : i pm ? > poll_ms 0 poll_ms 20
-    : i box ( rcbox_new [( DChannelImpl A )] @ ( DChannelImpl A ) { node ( string_from name ) pol pm enc dec drop } )
-    ^ @ ( DChannel A ) { # s box }
+    ^ @ ( DChannel A ) { ( shared_new [( DChannelImpl A )] @ ( DChannelImpl A ) { node ( string_from name ) pol pm enc dec drop } ) }
 }
 
 // Identity codecs for A = Json (the wire's native type).

@@ -43,6 +43,7 @@ $ `stdlib/std/bytes.nu`
 $ `stdlib/dist/ring.nu`
 $ `stdlib/net/transport.nu`
 $ `stdlib/core/rcbox.nu`
+$ `stdlib/core/box.nu`
 
 @ job_submit_t → i { ^ 1 }
 
@@ -171,64 +172,33 @@ $ `stdlib/core/rcbox.nu`
     ( Vec u ) self_pk
     i replica  // this node's stable replica id → unique task ids
     i next_task
-    ( Vec s ) handlers  // *JobHandler
-    ( Vec s ) results  // *JobResult (idempotent by task_id)
+    ( Vec ( Box JobHandler ) ) handlers
+    ( Vec ( Box JobResult ) ) results
     ( Vec JobKindRing ) kind_rings  // per-kind routing domains
 }
 
 // A JobNode is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
 // every copy is the same state, and the last owner releases it.
-: JobNode { s ctl }
+: JobNode { ( Shared JobNodeImpl ) ctl }
 
-@ JobNode_share JobNode h → JobNode { ^ @ JobNode { # s ( rcbox_share # i . h ctl ) } }
+@ JobNode_share JobNode h → JobNode { ^ @ JobNode { ( shared_clone [JobNodeImpl] . h ctl ) } }
 
-@ JobNode_drop sink JobNode h → v {
-    ( mem_forget h )
-    ( rcbox_release [JobNodeImpl] # i . h ctl )
-}
+@ JobNode_drop sink JobNode h → v {}
 
-@ __JobNode_ptr JobNode h → *JobNodeImpl { ^ ( rcbox_ptr [JobNodeImpl] # i . h ctl ) }
-
-// Handlers and results are raw blocks the Vecs only point at (a handler
-// block owns the closure stored into it): releasing them is the node's own
-// drop, run by its last owner (the transport, the rings, self_pk and the
-// Vecs go after it).
-% Drop JobNodeImpl {
-    @ drop JobNodeImpl n → v {
-        : i hn ( vec_len [s] . n handlers )
-        : ~ i k 0
-        ~ < k hn {
-            : s pp ?? ( vec_get [s] . n handlers k ) { T x → x F → # s 0 }
-            ? != # i pp 0 {
-                : *JobHandler jh # *JobHandler pp
-                : ( @ ( Vec u ) ( Vec u ) ) hf . jh fn
-                ( nurl_closure_drop # *u hf 1 )
-                ( nurl_free # s jh )
-            } {}
-            = k + k 1
-        }
-        : i rn ( vec_len [s] . n results )
-        : ~ i j 0
-        ~ < j rn {
-            : s pp ?? ( vec_get [s] . n results j ) { T x → x F → # s 0 }
-            ? != # i pp 0 { : *JobResult jr # *JobResult pp ( vec_free [u] . jr result ) ( nurl_free # s jr ) } {}
-            = j + j 1
-        }
-    }
-}
+@ __JobNode_ptr JobNode h → *JobNodeImpl { ^ ( shared_ptr [JobNodeImpl] . h ctl ) }
 
 @ job_node_new Transport transport Ring ring ( Vec u ) self_pk i replica → JobNode {
-    : i n__box ( rcbox_zero [JobNodeImpl] )
-    : *JobNodeImpl n ( rcbox_ptr [JobNodeImpl] n__box )
+    : ( Shared JobNodeImpl ) n__box ( shared_zero [JobNodeImpl] )
+    : *JobNodeImpl n ( shared_ptr [JobNodeImpl] n__box )
     = . n transport ( Transport_share transport )
     = . n ring ( Ring_share ring )
     = . n self_pk ( __job_cpy self_pk )
     = . n replica replica
     = . n next_task 0
-    = . n handlers ( vec_new [s] )
-    = . n results ( vec_new [s] )
+    = . n handlers ( vec_new [( Box JobHandler )] )
+    = . n results ( vec_new [( Box JobResult )] )
     = . n kind_rings ( vec_new [JobKindRing] )
-    ^ @ JobNode { # s n__box }
+    ^ @ JobNode { n__box }
 }
 
 // Let go of `n` now rather than at the end of its owner's scope.
@@ -243,10 +213,11 @@ $ `stdlib/core/rcbox.nu`
 // Register a handler for a task kind: payload bytes → result bytes.
 @ job_register JobNode n__h i kind ( @ ( Vec u ) ( Vec u ) ) fn → v {
     : *JobNodeImpl n ( __JobNode_ptr n__h )
-    : *JobHandler jh # *JobHandler ( nurl_alloc Z JobHandler )
+    : ( Box JobHandler ) jh__b ( box_zero [JobHandler] )
+    : *JobHandler jh # *JobHandler ( box_ptr [JobHandler] jh__b )
     = . jh kind kind
     = . jh fn fn
-    ( vec_push [s] . n handlers # s jh )
+    ( vec_push [( Box JobHandler )] . n handlers jh__b )
 }
 
 // Scope a task kind to a routing ring (a capability domain): submit, ownership
@@ -291,11 +262,11 @@ $ `stdlib/core/rcbox.nu`
 }
 
 @ __job_handler * JobNodeImpl n i kind → s {
-    : i hn ( vec_len [s] . n handlers )
+    : i hn ( vec_len [( Box JobHandler )] . n handlers )
     : ~ s found # s 0
     : ~ i k 0
     ~ & == # i found 0 < k hn {
-        : s pp ?? ( vec_get [s] . n handlers k ) { T x → x F → # s 0 }
+        : s pp # s ( box_ptr [JobHandler] ( vec_at [( Box JobHandler )] . n handlers k ) )
         ? != # i pp 0 { : *JobHandler jh # *JobHandler pp ? == . jh kind kind { = found pp } {} } {}
         = k + k 1
     }
@@ -314,27 +285,28 @@ $ `stdlib/core/rcbox.nu`
 
 // Record a result by task_id, idempotently (a re-delivered RESULT is a no-op).
 @ __job_record * JobNodeImpl n i task_id ( Vec u ) result → v {
-    : i rn ( vec_len [s] . n results )
+    : i rn ( vec_len [( Box JobResult )] . n results )
     : ~ b have F : ~ i k 0
     ~ & ! have < k rn {
-        : s pp ?? ( vec_get [s] . n results k ) { T x → x F → # s 0 }
+        : s pp # s ( box_ptr [JobResult] ( vec_at [( Box JobResult )] . n results k ) )
         ? != # i pp 0 { : *JobResult jr # *JobResult pp ? == . jr task_id task_id { = have T } {} } {}
         = k + k 1
     }
     ? have { ^ v } {}
-    : *JobResult jr # *JobResult ( nurl_alloc Z JobResult )
+    : ( Box JobResult ) jr__b ( box_zero [JobResult] )
+    : *JobResult jr # *JobResult ( box_ptr [JobResult] jr__b )
     = . jr task_id task_id
     = . jr result ( __job_cpy result )
-    ( vec_push [s] . n results # s jr )
+    ( vec_push [( Box JobResult )] . n results jr__b )
 }
 
 // Has a result for this task_id been recorded?
 @ job_has JobNode n__h i task_id → b {
     : *JobNodeImpl n ( __JobNode_ptr n__h )
-    : i rn ( vec_len [s] . n results )
+    : i rn ( vec_len [( Box JobResult )] . n results )
     : ~ b have F : ~ i k 0
     ~ & ! have < k rn {
-        : s pp ?? ( vec_get [s] . n results k ) { T x → x F → # s 0 }
+        : s pp # s ( box_ptr [JobResult] ( vec_at [( Box JobResult )] . n results k ) )
         ? != # i pp 0 { : *JobResult jr # *JobResult pp ? == . jr task_id task_id { = have T } {} } {}
         = k + k 1
     }
@@ -344,12 +316,12 @@ $ `stdlib/core/rcbox.nu`
 // The recorded result for a task_id (copied), or None.
 @ job_await JobNode n__h i task_id → ?( Vec u ) {
     : *JobNodeImpl n ( __JobNode_ptr n__h )
-    : i rn ( vec_len [s] . n results )
+    : i rn ( vec_len [( Box JobResult )] . n results )
     : ~ ? ( Vec u ) out @ ?( Vec u ) { F # ( Vec u ) 0 }
     : ~ b got F
     : ~ i k 0
     ~ & ! got < k rn {
-        : s pp ?? ( vec_get [s] . n results k ) { T x → x F → # s 0 }
+        : s pp # s ( box_ptr [JobResult] ( vec_at [( Box JobResult )] . n results k ) )
         ? != # i pp 0 {
             : *JobResult jr # *JobResult pp
             ? == . jr task_id task_id { = out @ ?( Vec u ) { T ( __job_cpy . jr result ) } = got T } {}

@@ -92,9 +92,10 @@ $ `stdlib/core/rcbox.nu`
 // invalidates outstanding tickets — a full handshake, not a failure.
 : ~ i g_tls_ticket_master 0
 
-// Runtime publish-once slots (stdlib/runtime_core.c nurl_once_slot):
-// the first non-zero value published into a slot wins; every caller
-// gets the winner back. Slot ids in use across the stdlib:
+// Runtime publish-once slots (stdlib/runtime_core.c nurl_once_slot,
+// offered through vec_publish_once in stdlib/core/vec.nu): the first
+// non-zero value published into a slot wins; every caller gets the winner
+// back. Slot ids in use across the stdlib:
 //   1  TLS server ticket master (this module)
 //   2  HTTP client session cache (ext/http_pure.nu)
 //   3  SHA-256 round constants (std/hash_sha256.nu)
@@ -102,7 +103,6 @@ $ `stdlib/core/rcbox.nu`
 //   5, 6  P-256 comb tables T1, T2 (std/ecdsa_p256.nu)
 //   7  CRC-32 slicing-by-8 tables (std/deflate.nu)
 //   8, 9  base64 decode tables, standard and URL alphabets (std/encode.nu)
-& `c` @ nurl_once_slot i id i candidate → i
 
 @ _tls_ticket_key_ensure → v {
     ? != g_tls_ticket_master 0 { ^ } {}
@@ -112,9 +112,7 @@ $ `stdlib/core/rcbox.nu`
     // dropped and it adopts the winner's. The winner lives for the rest
     // of the program, through the global — a cache of the slot: every
     // thread that fills it writes the same value.
-    : i won ( nurl_once_slot 1 # i . k ctl )
-    ? == won # i . k ctl { ( mem_forget k ) } {}
-    = g_tls_ticket_master won
+    = g_tls_ticket_master ( vec_publish_once [u] 1 k )
 }
 
 // The sealing key for one 6-hour epoch (see above).
@@ -654,20 +652,17 @@ $ `stdlib/core/rcbox.nu`
 
 // A SrvHs is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
 // every copy is the same state, and the last owner releases it.
-: SrvHs { s ctl }
+: SrvHs { ( Shared SrvHsImpl ) ctl }
 
-@ SrvHs_share SrvHs h → SrvHs { ^ @ SrvHs { # s ( rcbox_share # i . h ctl ) } }
+@ SrvHs_share SrvHs h → SrvHs { ^ @ SrvHs { ( shared_clone [SrvHsImpl] . h ctl ) } }
 
-@ SrvHs_drop sink SrvHs h → v {
-    ( mem_forget h )
-    ( rcbox_release [SrvHsImpl] # i . h ctl )
-}
+@ SrvHs_drop sink SrvHs h → v {}
 
-@ __SrvHs_ptr SrvHs h → *SrvHsImpl { ^ ( rcbox_ptr [SrvHsImpl] # i . h ctl ) }
+@ __SrvHs_ptr SrvHs h → *SrvHsImpl { ^ ( shared_ptr [SrvHsImpl] . h ctl ) }
 
 @ _srv_hs_new ( Vec u ) cert_chain i keytype ( Vec u ) ec_priv ( Vec u ) rsa_n ( Vec u ) rsa_e ( Vec u ) rsa_d i ml_level ( Vec u ) alpn_prefs → SrvHs {
-    : i h__box ( rcbox_zero [SrvHsImpl] )
-    : *SrvHsImpl h ( rcbox_ptr [SrvHsImpl] h__box )
+    : ( Shared SrvHsImpl ) h__box ( shared_zero [SrvHsImpl] )
+    : *SrvHsImpl h ( shared_ptr [SrvHsImpl] h__box )
     = . h cert_chain ( bytes_slice cert_chain 0 ( vec_len [u] cert_chain ) )
     = . h keytype keytype
     = . h ec_priv ( bytes_slice ec_priv 0 ( vec_len [u] ec_priv ) )
@@ -705,7 +700,7 @@ $ `stdlib/core/rcbox.nu`
     = . h pq_chain ( vec_new [u] )
     = . h pq_sk ( vec_new [u] )
     = . h pq_level 0
-    ^ @ SrvHs { # s h__box }
+    ^ @ SrvHs { h__box }
 }
 
 // Give the handshake a second, post-quantum identity: `pq_chain` is a

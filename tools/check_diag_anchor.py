@@ -112,15 +112,17 @@ def check(tests_dir, repo_root):
                 a["text"] = text.strip()
                 a["why"] = f'anchored on "{text.strip()}"'
                 bad.append(a)
-            elif a["col"] > len(text):
+            elif a["col"] > len(text.encode("utf-8")):
                 # The caret is printed past the end of the line it echoes,
                 # so it points at nothing at all. Same cause as the `}`
                 # case — the check ran after the token was consumed — but
                 # it survives when the statement is not the last one, so
                 # the closing-delimiter rule alone does not see it.
+                # The compiler's columns count bytes (nurl_lex_col), so a
+                # line with a `→` on it is measured in bytes too.
                 a["text"] = text.strip()
                 a["why"] = (f'column {a["col"]} is past the end of a '
-                            f'{len(text)}-character line')
+                            f'{len(text.encode("utf-8"))}-byte line')
                 bad.append(a)
     return bad
 

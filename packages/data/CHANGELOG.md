@@ -9,6 +9,9 @@ The published 0.2.3 does not compile under it.
 
 ### Changed
 
+- The zero `File` handle the reader keeps until one is opened is built
+  with the cast `# File # s 0`: a standard-library handle now holds its
+  state in a `( Shared T )`.
 - The tests build their buffers as `Vec`s instead of raw allocations.
 
 ## [0.2.3] — 2026-10-11

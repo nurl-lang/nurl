@@ -39,10 +39,15 @@ place by leaving another in it (*Added*, *Changed*). None of the 164
 package functions that allocated, released or claimed (`mem_take`)
 memory themselves does any more — the 322 calls are gone — and neither
 do the examples or the bench kernels: the 30 packages are released
-without it (*Packages*). Making module
+without it (*Packages*). The standard library's own such calls fell from
+651 to 217, every one of them now inside an owner's implementation (a
+container, a counted handle block, a thread primitive, a buffer shared
+with the C runtime): its 87 handle types hold their state in a generic
+`( Shared T )` whose hooks do the releasing, and a foreign function that
+returns a string it allocated says so (`→ sink s`). Making module
 state and raw-pointer records manage themselves found nine more holes,
-closed (h195–h203, *Fixed*). The compiler compiles itself in 17 % fewer
-instructions and 10 % less time than before this work (*Performance*).
+closed (h195–h203, *Fixed*). The compiler compiles itself in 16 % fewer
+instructions and 9–10 % less time than before this work (*Performance*).
 
 ### Added
 
@@ -80,6 +85,28 @@ instructions and 10 % less time than before this work (*Performance*).
   moved into. The pointer is malloc's own result, so the optimiser keeps
   the alias facts a `Vec`'s data pointer, read back from its control
   block, loses.
+- **Foreign results the caller owns** (spec §7.2, grammar `ffi_decl`):
+  ``& `c` @ strdup s src → sink s`` — the C function hands over a string
+  it allocated, and the binding the result lands in owns it (released at
+  scope exit, or handed on to `string_adopt` / a `sink`). The standard
+  library's wrappers over such runtime calls (`tz_name`, `fs_user_name`,
+  `dir_list`, `path_canonical`, the DNS and socket-address getters,
+  `sys_uname_field`) free nothing by hand. An `inout` foreign parameter
+  may be a struct, which the C function fills in the caller's frame
+  (`now_ms`, `fs_stat`, `fs_statfs` and `nanosleep` allocate nothing).
+- **`( Shared T )`** (stdlib/core/rcbox.nu): the standard library's
+  handle over a counted block. A handle holds one
+  (`: Regex { ( Shared RegexImpl ) ctl }`) and its hooks release nothing
+  themselves — `Shared_drop` does — so the 87 hand-written
+  `mem_forget` + `rcbox_release` hook bodies are gone; the compiler reads
+  the share hook's `shared_clone [T]` for the thread-shared cycle rules.
+  Making, reaching into and publishing one are raw.
+- **`vec_retain`, `vec_put_back`, `vec_publish_once`**
+  (stdlib/core/vec.nu): drop the elements a predicate rejects in place;
+  write an element read out of its slot back (a table that lends its
+  records by value checks them in with it, and a function passing its
+  parameter on to it writes it back too, for its own callers); offer a
+  table for the runtime's publish-once slot.
 - **`( mem_addr p )` of an `inout` parameter** is the caller's place,
   valid for the call (`mem_replace` is built on it); and an `inout`
   argument may be a field through an immutable pointer binding or a
@@ -103,6 +130,28 @@ instructions and 10 % less time than before this work (*Performance*).
 
 ### Changed
 
+- **A standard-library handle is `{ ( Shared T ) ctl }`**, where it was
+  `{ s ctl }`. Code that only calls the API is unchanged; a zero handle
+  is the cast `# File # s 0` (a pointer cast follows a handle's one-pointer
+  wrapper, spec §6.7), no longer the literal `@ File { # s 0 }`.
+- **Standard-library state that was raw memory owns itself**: the TLS
+  listener's certificate and keys (a table of `Arc`s, so a handshake
+  still running when the listener closes keeps its own), the STARTTLS
+  registry, the DoS counters (`dos_state_new` returns a `DosState`
+  handle), the terminal state (`TermState.saved` is a `( Vec u )`), the
+  buffered reader's buffer, the inotify watcher (a handle, closed by its
+  last owner), the HTTP/2 stream tables (`vec_retain`, `vec_put_back`,
+  `mem_replace`), the job, lease, identity, relay, transport, TCP-stack,
+  socket and FAT tables (`( Vec ( Box T ) )` and owned globals), the
+  sqlite connection and statement state (`Box`es, the error message a
+  `String`, the authorizer a closure the handle keeps), the JSON
+  parser's state (in the caller's frame) and the HTTP server's upgrade
+  and streaming hooks (owned globals; setting one again no longer leaks
+  the last). An OR-set's tags are `( Vec OrTag )`;
+  `mcp_sampling_params`, `mcp_sampling_request` and
+  `mcp_session_request_sampling` consume their `messages` (`sink`), as
+  documented.
+- **`mem_replace` takes `x` as `sink`**: the value moves into the place.
 - **A field written through a pointer is replaced** (docs/MEMORY.md
   §7.4). `= . p f v`, `p` a `*S`, drops what `f` held, as every other `=`
   drops what it overwrites: an `unsafe` setter over a handle's state is
@@ -191,6 +240,32 @@ instructions and 10 % less time than before this work (*Performance*).
     (`= r ( rest_of r )`) had no owner slot: no fresh string assigned to it
     was released. It gets the empty owner slot a cursor declared from an
     identifier or a call already had.
+- **A call handing a local to an `inout` parameter is never a `tail`
+  call.** `^ ( f c )` with `c` a local passed `inout` was marked `tail`,
+  and LLVM's marker promises the callee reads no alloca of the caller:
+  the optimiser dropped the stores that initialised `c`, and the callee
+  read stack garbage — a view's pointer among it
+  (compiler/tests/inout_local_tail_call.nu printed 0 and 0 for 50 and
+  82).
+- **A handle's state that was raw memory hid closures from the
+  thread-shared cycle rules.** A job node's handlers lived in raw blocks,
+  so neither rule saw them. Now that they are owned records the store
+  rule checks them; the frozen-`Arc` rule, which treats a closure as
+  leading anywhere, does not follow a closure inside a library handle's
+  state — the store rule has already refused any that could lead back
+  (docs/MEMORY.md §7.7) — so an `Arc` holding a job node may still be
+  updated in place (compiler/tests/arc_payload_vetted_closures.nu).
+- **A function that hands its parameter on to a put-back position puts
+  it back too.** `vec_put_back` writes its value into a slot the caller
+  had taken it out of, so the caller's binding must not drop it; a helper
+  passing its own parameter there (`__h2c_set_stream`) did not carry that
+  mark, its caller dropped the value the table now held, and the next
+  read of the stream was a use after free under the sanitizer
+  (http2_client_streaming). Every call now propagates the mark to the
+  calling function's own parameter (`mem_putback_pass`).
+- **`check_diag_anchor.sh` measures a line in bytes**, as the compiler's
+  columns do (`nurl_lex_col`). A caret after a `→` was reported past the
+  end of its line.
 - **The remaining known holes are closed** (probes h145–h194), each at
   its root:
   - *A raw string handed to a consumer* (h161–h170): a literal, a view, a
@@ -349,7 +424,12 @@ the same source for both): 10 693 M → 9 165 M (−14.3 %), 3.57 s →
 3.33 s (−7 %). Both compilers generate the same code
 for the bench kernels, apart from the two new slots of a closure
 environment's descriptor (http_server's request parser drops the fields
-it replaces, where it claimed each first).
+it replaces, where it claimed each first). With the rest of this
+release's compiler and standard library on top, against the compiler
+before this work (the first half of this release), each compiling its
+own source: 12 860 M → 10 783 M instructions (−16.2 %), fastest of nine
+runs pinned to one core 3.77 s → 3.42 s (−9 %); json_parse retires the
+same instructions (77.92 M) with its parser state in the caller's frame.
 
 ### Packages
 
@@ -397,6 +477,11 @@ it replaces, where it claimed each first).
   lingbot-map, map-anything), anomaly, whisper and nurllama did not compile
   under 0.72.0, whose sealed handles made their null literals raw memory.
   All 464 package sources compile now (348 before).
+- **A zero standard-library handle is a cast** (`# File # s 0`) in the
+  packages that keep one until it is made: data, http 0.7.4, hub 0.2.2,
+  lsmdb, nurlbox, nurllama, ply, pqc 0.2.6, psql 0.4.4, redis and video
+  0.2.4 (the others' releases above carry it). nwasm's host imports that
+  return a runtime-allocated string declare it `→ sink s`.
 - **The examples and the bench kernels free nothing by hand.** A raw
   buffer worked through a pointer is a `RawBlock` (13 bench kernels and 9
   examples; every kernel prints the same checksum), an expression tree's

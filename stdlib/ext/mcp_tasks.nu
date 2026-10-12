@@ -137,6 +137,7 @@ $ `stdlib/std/time.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/rcbox.nu`
+$ `stdlib/core/mem.nu`
 
 // ── Constants ───────────────────────────────────────────────────────
 
@@ -292,34 +293,28 @@ $ `stdlib/core/rcbox.nu`
 
 // One task in an rcbox (stdlib/core/rcbox.nu), as the store's list keeps
 // it; its last owner drops the McpTask and every String / Json in it.
-: McpTaskBox { s ctl }
+: McpTaskBox { ( Shared McpTask ) ctl }
 
-@ McpTaskBox_share McpTaskBox h → McpTaskBox { ^ @ McpTaskBox { # s ( rcbox_share # i . h ctl ) } }
+@ McpTaskBox_share McpTaskBox h → McpTaskBox { ^ @ McpTaskBox { ( shared_clone [McpTask] . h ctl ) } }
 
-@ McpTaskBox_drop sink McpTaskBox h → v {
-    ( mem_forget h )
-    ( rcbox_release [McpTask] # i . h ctl )
-}
+@ McpTaskBox_drop sink McpTaskBox h → v {}
 
 : McpTaskStoreImpl { ( Vec McpTaskBox ) tasks }
 
 // A handle on the store in an rcbox: every copy — the caller's, the one a
 // server keeps (mcp_server_set_task_store) — is the same task list, and
 // the last owner releases it.
-: McpTaskStore { s ctl }
+: McpTaskStore { ( Shared McpTaskStoreImpl ) ctl }
 
-@ McpTaskStore_share McpTaskStore h → McpTaskStore { ^ @ McpTaskStore { # s ( rcbox_share # i . h ctl ) } }
+@ McpTaskStore_share McpTaskStore h → McpTaskStore { ^ @ McpTaskStore { ( shared_clone [McpTaskStoreImpl] . h ctl ) } }
 
-@ McpTaskStore_drop sink McpTaskStore h → v {
-    ( mem_forget h )
-    ( rcbox_release [McpTaskStoreImpl] # i . h ctl )
-}
+@ McpTaskStore_drop sink McpTaskStore h → v {}
 
 // The store's task list (its own, lent).
-@ __mts_tasks McpTaskStore h → ( Vec McpTaskBox ) { ^ . ( rcbox_ptr [McpTaskStoreImpl] # i . h ctl ) tasks }
+@ __mts_tasks McpTaskStore h → ( Vec McpTaskBox ) { ^ . ( shared_ptr [McpTaskStoreImpl] . h ctl ) tasks }
 
 @ mcp_task_store_new → McpTaskStore {
-    ^ @ McpTaskStore { # s ( rcbox_new [McpTaskStoreImpl] @ McpTaskStoreImpl { ( vec_new [McpTaskBox] ) } ) }
+    ^ @ McpTaskStore { ( shared_new [McpTaskStoreImpl] @ McpTaskStoreImpl { ( vec_new [McpTaskBox] ) } ) }
 }
 
 // Hard cap on retained tasks. Every task holds its arguments and its
@@ -335,7 +330,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 @ __mcp_task_at McpTaskStore store i k → s {
-    ^ ?? ( vec_get [McpTaskBox] ( __mts_tasks store ) k ) { T b → # s ( rcbox_ptr [McpTask] # i . b ctl ) F → # s 0 }
+    ^ ?? ( vec_get [McpTaskBox] ( __mts_tasks store ) k ) { T b → # s ( shared_ptr [McpTask] . b ctl ) F → # s 0 }
 }
 
 // Drop the k-th task from the list (and with it the task).
@@ -367,12 +362,12 @@ $ `stdlib/core/rcbox.nu`
     : i now ( now_ms )
     // 16 CSPRNG bytes → 32 hex chars. The spec treats a task id as a
     // bearer token for server-side state, so it must not be guessable.
-    : McpTaskBox b @ McpTaskBox { # s ( rcbox_new [McpTask] @ McpTask {
+    : McpTaskBox b @ McpTaskBox { ( shared_new [McpTask] @ McpTask {
             ( rand_hex_str 16 ) mcp_task_working ( string_new ) now now ttl_ms poll_ms
             ( string_from method ) ( string_from tool ) args
             ( json_null ) ( json_null ) ( json_obj_new ) ( json_obj_new ) 0 0
         } ) }
-    : s tp # s ( rcbox_ptr [McpTask] # i . b ctl )
+    : s tp # s ( shared_ptr [McpTask] . b ctl )
     ( vec_push [McpTaskBox] ( __mts_tasks store ) b )
     ^ tp
 }
@@ -582,10 +577,9 @@ $ `stdlib/core/rcbox.nu`
     : ( Vec String ) keys ( json_obj_keys . t input_responses )
     : i n ( vec_len [String] keys )
     ? == n 0 { ^ @ ?Json { F @ Json { JNull } } } {}
-    : Json out . t input_responses
-    ( mem_take out )  // the responses leave the task: the caller owns them
-    = . t input_responses ( json_obj_new )
-    ^ @ ?Json { T out }
+    // The responses leave the task (an empty object left behind): the
+    // caller owns them.
+    ^ @ ?Json { T ( mem_replace [Json] . t input_responses ( json_obj_new ) ) }
 }
 
 // ── Wire shapes ─────────────────────────────────────────────────────

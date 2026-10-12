@@ -136,7 +136,7 @@ $ `stdlib/core/slice.nu`
 
 & `c` @ nurl_tcp_unref i handle → v
 
-& `c` @ nurl_tcp_local_addr i handle → s
+& `c` @ nurl_tcp_local_addr i handle → sink s
 
 & `c` @ nurl_udp_bind s host i port → i
 
@@ -156,7 +156,7 @@ $ `stdlib/core/slice.nu`
 
 & `c` @ nurl_udp_peer_addr i handle → s
 
-& `c` @ nurl_udp_local_addr i handle → s
+& `c` @ nurl_udp_local_addr i handle → sink s
 
 & `c` @ nurl_udp_set_timeout i handle i ms → v
 
@@ -176,11 +176,11 @@ $ `stdlib/core/slice.nu`
 
 & `c` @ nurl_udp_set_multicast_loop i handle i on → i
 
-& `c` @ nurl_dns_resolve s host → s
+& `c` @ nurl_dns_resolve s host → sink s
 
-& `c` @ nurl_dns_resolve_port s host i port → s
+& `c` @ nurl_dns_resolve_port s host i port → sink s
 
-& `c` @ nurl_dns_reverse s ip → s
+& `c` @ nurl_dns_reverse s ip → sink s
 
 // ── CUDA driver + NVRTC (the GPU host-import bridge) ──────────────
 // A wasm module built from a GPU-using NURL package (packages/gpu →
@@ -7654,7 +7654,7 @@ unsafe @ __net_put_str * InterpImpl it i off i cap s src → i {
 
 // Same, for an OWNED host string: copied out, then released (a String
 // takes it over).
-unsafe @ __net_put_owned * InterpImpl it i off i cap s src → i {
+unsafe @ __net_put_owned * InterpImpl it i off i cap sink s src → i {
     ? == # i src 0 { ^ 0 } {}
     : String own ( string_adopt src )
     ^ ( __net_put_str it off cap ( string_data own ) )

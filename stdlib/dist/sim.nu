@@ -36,16 +36,13 @@ $ `stdlib/core/rcbox.nu`
 
 // A SimMsg is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
 // every copy is the same message, and the last owner releases it.
-: SimMsg { s ctl }
+: SimMsg { ( Shared SimMsgImpl ) ctl }
 
-@ SimMsg_share SimMsg h → SimMsg { ^ @ SimMsg { # s ( rcbox_share # i . h ctl ) } }
+@ SimMsg_share SimMsg h → SimMsg { ^ @ SimMsg { ( shared_clone [SimMsgImpl] . h ctl ) } }
 
-@ SimMsg_drop sink SimMsg h → v {
-    ( mem_forget h )
-    ( rcbox_release [SimMsgImpl] # i . h ctl )
-}
+@ SimMsg_drop sink SimMsg h → v {}
 
-@ __SimMsg_ptr SimMsg h → *SimMsgImpl { ^ ( rcbox_ptr [SimMsgImpl] # i . h ctl ) }
+@ __SimMsg_ptr SimMsg h → *SimMsgImpl { ^ ( shared_ptr [SimMsgImpl] . h ctl ) }
 
 // Let go of `m` now rather than at the end of its owner's scope.
 @ sim_msg_free sink SimMsg m → v {}
@@ -86,20 +83,17 @@ $ `stdlib/core/rcbox.nu`
 
 // A SimNet is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
 // every copy is the same state, and the last owner releases it.
-: SimNet { s ctl }
+: SimNet { ( Shared SimNetImpl ) ctl }
 
-@ SimNet_share SimNet h → SimNet { ^ @ SimNet { # s ( rcbox_share # i . h ctl ) } }
+@ SimNet_share SimNet h → SimNet { ^ @ SimNet { ( shared_clone [SimNetImpl] . h ctl ) } }
 
-@ SimNet_drop sink SimNet h → v {
-    ( mem_forget h )
-    ( rcbox_release [SimNetImpl] # i . h ctl )
-}
+@ SimNet_drop sink SimNet h → v {}
 
-@ __SimNet_ptr SimNet h → *SimNetImpl { ^ ( rcbox_ptr [SimNetImpl] # i . h ctl ) }
+@ __SimNet_ptr SimNet h → *SimNetImpl { ^ ( shared_ptr [SimNetImpl] . h ctl ) }
 
 @ sim_net_new i n i seed i drop_pct i latency i jitter → SimNet {
-    : i net__box ( rcbox_zero [SimNetImpl] )
-    : *SimNetImpl net ( rcbox_ptr [SimNetImpl] net__box )
+    : ( Shared SimNetImpl ) net__box ( shared_zero [SimNetImpl] )
+    : *SimNetImpl net ( shared_ptr [SimNetImpl] net__box )
     = . net inflight ( vec_new [SimMsg] )
     = . net n n
     = . net seed seed
@@ -113,7 +107,7 @@ $ `stdlib/core/rcbox.nu`
     : ~ i k 0
     ~ < k tot { ( vec_push [i] reach 1 ) = k + k 1 }
     = . net reach reach
-    ^ @ SimNet { # s net__box }
+    ^ @ SimNet { net__box }
 }
 
 // Let go of `net` now rather than at the end of its owner's scope.
@@ -169,13 +163,13 @@ $ `stdlib/core/rcbox.nu`
     ? ! ( __sim_reachable net src dst ) { = . net dropped + . net dropped 1 ^ v } {}
     ? & > . net drop_pct 0 ( __sim_chance net . net drop_pct ) { = . net dropped + . net dropped 1 ^ v } {}
     : i extra ? > . net jitter 0 % ( __sim_rand net ) . net jitter 0
-    : i m__box ( rcbox_zero [SimMsgImpl] )
-    : *SimMsgImpl m ( rcbox_ptr [SimMsgImpl] m__box )
+    : ( Shared SimMsgImpl ) m__box ( shared_zero [SimMsgImpl] )
+    : *SimMsgImpl m ( shared_ptr [SimMsgImpl] m__box )
     = . m src src
     = . m dst dst
     = . m at + + now . net latency extra
     = . m bytes ( __sim_cpy bytes )
-    ( vec_push [SimMsg] . net inflight @ SimMsg { # s m__box } )
+    ( vec_push [SimMsg] . net inflight @ SimMsg { m__box } )
 }
 
 // Take every message whose delivery time has arrived (at <= now), in

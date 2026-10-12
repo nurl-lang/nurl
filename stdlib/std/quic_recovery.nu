@@ -76,16 +76,13 @@ $ `stdlib/core/rcbox.nu`
 
 // A QuicRecovery is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
 // every copy is the same state, and the last owner releases it.
-: QuicRecovery { s ctl }
+: QuicRecovery { ( Shared QuicRecoveryImpl ) ctl }
 
-@ QuicRecovery_share QuicRecovery h → QuicRecovery { ^ @ QuicRecovery { # s ( rcbox_share # i . h ctl ) } }
+@ QuicRecovery_share QuicRecovery h → QuicRecovery { ^ @ QuicRecovery { ( shared_clone [QuicRecoveryImpl] . h ctl ) } }
 
-@ QuicRecovery_drop sink QuicRecovery h → v {
-    ( mem_forget h )
-    ( rcbox_release [QuicRecoveryImpl] # i . h ctl )
-}
+@ QuicRecovery_drop sink QuicRecovery h → v {}
 
-@ __QuicRecovery_ptr QuicRecovery h → *QuicRecoveryImpl { ^ ( rcbox_ptr [QuicRecoveryImpl] # i . h ctl ) }
+@ __QuicRecovery_ptr QuicRecovery h → *QuicRecoveryImpl { ^ ( shared_ptr [QuicRecoveryImpl] . h ctl ) }
 
 @ quic_rec_kpacket_threshold → i { ^ 3 }
 
@@ -94,8 +91,8 @@ $ `stdlib/core/rcbox.nu`
 @ quic_rec_kinitial_rtt → i { ^ 333 }
 
 @ quic_rec_new i max_datagram → QuicRecovery {
-    : i r__box ( rcbox_zero [QuicRecoveryImpl] )
-    : *QuicRecoveryImpl r ( rcbox_ptr [QuicRecoveryImpl] r__box )
+    : ( Shared QuicRecoveryImpl ) r__box ( shared_zero [QuicRecoveryImpl] )
+    : *QuicRecoveryImpl r ( shared_ptr [QuicRecoveryImpl] r__box )
     = . r sent0 ( vec_new [QuicSentPkt] )
     = . r sent1 ( vec_new [QuicSentPkt] )
     = . r sent2 ( vec_new [QuicSentPkt] )
@@ -133,7 +130,7 @@ $ `stdlib/core/rcbox.nu`
     = . r ssthresh 4611686018427387903
     = . r recovery_start 0
     = . r max_datagram max_datagram
-    ^ @ QuicRecovery { # s r__box }
+    ^ @ QuicRecovery { r__box }
 }
 
 // Let go of `r` now rather than at the end of its owner's scope.

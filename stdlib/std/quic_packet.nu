@@ -69,20 +69,17 @@ $ `stdlib/core/rcbox.nu`
 
 // A QuicKeys is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
 // every copy is the same keys, and the last owner releases them.
-: QuicKeys { s ctl }
+: QuicKeys { ( Shared QuicKeysImpl ) ctl }
 
-@ QuicKeys_share QuicKeys h → QuicKeys { ^ @ QuicKeys { # s ( rcbox_share # i . h ctl ) } }
+@ QuicKeys_share QuicKeys h → QuicKeys { ^ @ QuicKeys { ( shared_clone [QuicKeysImpl] . h ctl ) } }
 
-@ QuicKeys_drop sink QuicKeys h → v {
-    ( mem_forget h )
-    ( rcbox_release [QuicKeysImpl] # i . h ctl )
-}
+@ QuicKeys_drop sink QuicKeys h → v {}
 
-@ __QuicKeys_ptr QuicKeys h → *QuicKeysImpl { ^ ( rcbox_ptr [QuicKeysImpl] # i . h ctl ) }
+@ __QuicKeys_ptr QuicKeys h → *QuicKeysImpl { ^ ( shared_ptr [QuicKeysImpl] . h ctl ) }
 
 @ quic_keys_derive i cipher ( Vec u ) secret → QuicKeys {
-    : i k__box ( rcbox_zero [QuicKeysImpl] )
-    : *QuicKeysImpl k ( rcbox_ptr [QuicKeysImpl] k__box )
+    : ( Shared QuicKeysImpl ) k__box ( shared_zero [QuicKeysImpl] )
+    : *QuicKeysImpl k ( shared_ptr [QuicKeysImpl] k__box )
     : i klen ? == cipher 1 16 32
     : ( Vec u ) empty ( vec_new [u] )
     = . k cipher cipher
@@ -94,10 +91,10 @@ $ `stdlib/core/rcbox.nu`
         = . k aead ( aes_gcm_key_new . k key )
         = . k hpk ( aes_gcm_key_new . k hp )
     } {
-        = . k aead @ AesGcmKey { # s 0 }
-        = . k hpk @ AesGcmKey { # s 0 }
+        = . k aead @ AesGcmKey { ( shared_null [AesGcmKeyImpl] ) }
+        = . k hpk @ AesGcmKey { ( shared_null [AesGcmKeyImpl] ) }
     }
-    ^ @ QuicKeys { # s k__box }
+    ^ @ QuicKeys { k__box }
 }
 
 // Let go of `k` now rather than at the end of its owner's scope.

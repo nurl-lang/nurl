@@ -18,6 +18,7 @@ $ `stdlib/ext/semver.nu`
 $ `stdlib/std/hashmap.nu`
 $ `stdlib/std/sort.nu`
 $ `stdlib/std/cmp.nu`
+$ `stdlib/core/mem.nu`
 
 : ResolveFetchFailure { RegistryFetchErr cause String registry String name }
 
@@ -177,11 +178,9 @@ $ `stdlib/std/cmp.nu`
         }
         T index → {
             ? ! ( string_eq . index name . node name ) { ^ @ !i ResolveErr { F ResolveBadIndex } } {}
-            // The placeholder index leaves the node (dropped here).
-            : RegIndex placeholder . node index
-            ( mem_take placeholder )
-            // The index moves into the node; read it from there.
-            = . node index index
+            // The index moves into the node; the placeholder leaves it
+            // (dropped here). Read the index from the node.
+            : RegIndex _placeholder ( mem_replace [RegIndex] . node index index )
             = . node loaded 1
             : i n ( vec_len [IdxVersion] . . node index versions )
             : ~ i k 0

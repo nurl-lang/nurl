@@ -176,7 +176,7 @@ unsafe @ sst_create s path → !SstWriter String {
 unsafe @ __sstw_close * SstWriterImpl w → v {
     ( file_close . w f )
     // The closed file's handle leaves the writer (dropped here).
-    = . w f @ File { # s 0 }
+    = . w f # File # s 0
 }
 
 // Close the current block: append its CRC trailer, write it, and record
@@ -382,7 +382,7 @@ unsafe @ __sst_read_verified * SstReaderImpl r i off i plen → !( Vec u ) Strin
 
 unsafe @ sst_open s path → !SstReader String {
     : !File IoErr fr ( file_open path )
-    : ~ File f @ File { # s 0 }
+    : ~ File f # File # s 0
     ?? fr { T h → { = f h } F _ → {
             ^ @ !SstReader String { F ( __sst_err path `cannot open table` ) } } }
 

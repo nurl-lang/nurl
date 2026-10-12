@@ -30,7 +30,7 @@ $ `stdlib/core/vec.nu`
 // field through a pointer (`( mem_replace [String] . r out ( string_new ) )`
 // takes the output a state record holds out of it, an empty one left in
 // its place).
-unsafe @ mem_replace [T] inout T place T x → T {
+unsafe @ mem_replace [T] inout T place sink T x → T {
     : *T p ( mem_addr place )
     : T old . p 0
     ( mem_take old )  // the value leaves the place

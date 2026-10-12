@@ -138,20 +138,17 @@ $ `stdlib/core/rcbox.nu`
 
 // A NetStack is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
 // every copy is the same state, and the last owner releases it.
-: NetStack { s ctl }
+: NetStack { ( Shared NetStackImpl ) ctl }
 
-@ NetStack_share NetStack h → NetStack { ^ @ NetStack { # s ( rcbox_share # i . h ctl ) } }
+@ NetStack_share NetStack h → NetStack { ^ @ NetStack { ( shared_clone [NetStackImpl] . h ctl ) } }
 
-@ NetStack_drop sink NetStack h → v {
-    ( mem_forget h )
-    ( rcbox_release [NetStackImpl] # i . h ctl )
-}
+@ NetStack_drop sink NetStack h → v {}
 
-@ __NetStack_ptr NetStack h → *NetStackImpl { ^ ( rcbox_ptr [NetStackImpl] # i . h ctl ) }
+@ __NetStack_ptr NetStack h → *NetStackImpl { ^ ( shared_ptr [NetStackImpl] . h ctl ) }
 
 @ stack_new i mac i ip i netmask i gateway → NetStack {
-    : i st__box ( rcbox_zero [NetStackImpl] )
-    : *NetStackImpl st ( rcbox_ptr [NetStackImpl] st__box )
+    : ( Shared NetStackImpl ) st__box ( shared_zero [NetStackImpl] )
+    : *NetStackImpl st ( shared_ptr [NetStackImpl] st__box )
     = . st our_mac mac
     = . st our_ip ip
     = . st netmask netmask
@@ -163,7 +160,7 @@ $ `stdlib/core/rcbox.nu`
     = . st drops ( vec_with_cap [i] ( n_drop_reasons ) )
     : ~ i k 0
     ~ < k ( n_drop_reasons ) { ( vec_push [i] . st drops 0 ) = k + k 1 }
-    ^ @ NetStack { # s st__box }
+    ^ @ NetStack { st__box }
 }
 
 // Let go of `st` now rather than at the end of its owner's scope.

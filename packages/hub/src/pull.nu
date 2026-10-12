@@ -130,7 +130,7 @@ unsafe @ hub_fetch_blob String root s url s staging s expected → !String Strin
             : ~ String ferr ( string_new )
 
             : ~ i fh_ok 0
-            : ~ File f @ File { # s 0 }
+            : ~ File f # File # s 0
             ? resume {
                 : !i String rr ( __hub_rehash_part h ( string_data part ) )
                 ?? rr {

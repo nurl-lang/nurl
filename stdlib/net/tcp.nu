@@ -173,20 +173,17 @@ $ `stdlib/core/rcbox.nu`
 
 // A Tcb is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
 // every copy is the same state, and the last owner releases it.
-: Tcb { s ctl }
+: Tcb { ( Shared TcbImpl ) ctl }
 
-@ Tcb_share Tcb h → Tcb { ^ @ Tcb { # s ( rcbox_share # i . h ctl ) } }
+@ Tcb_share Tcb h → Tcb { ^ @ Tcb { ( shared_clone [TcbImpl] . h ctl ) } }
 
-@ Tcb_drop sink Tcb h → v {
-    ( mem_forget h )
-    ( rcbox_release [TcbImpl] # i . h ctl )
-}
+@ Tcb_drop sink Tcb h → v {}
 
-@ __Tcb_ptr Tcb h → *TcbImpl { ^ ( rcbox_ptr [TcbImpl] # i . h ctl ) }
+@ __Tcb_ptr Tcb h → *TcbImpl { ^ ( shared_ptr [TcbImpl] . h ctl ) }
 
 @ tcb_new → Tcb {
-    : i c__box ( rcbox_zero [TcbImpl] )
-    : *TcbImpl c ( rcbox_ptr [TcbImpl] c__box )
+    : ( Shared TcbImpl ) c__box ( shared_zero [TcbImpl] )
+    : *TcbImpl c ( shared_ptr [TcbImpl] c__box )
     = . c state ( tcp_closed )
     = . c local_ip 0
     = . c local_port 0
@@ -221,7 +218,7 @@ $ `stdlib/core/rcbox.nu`
     = . c fin_rcvd F
     = . c reset F
     = . c close_requested F
-    ^ @ Tcb { # s c__box }
+    ^ @ Tcb { c__box }
 }
 
 // Let go of `c` now rather than at the end of its owner's scope.

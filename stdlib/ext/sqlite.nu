@@ -51,10 +51,10 @@
 //   ( sqlite_foreign_keys Database db b on )     → ! i SqliteErr
 //   ( sqlite_synchronous Database db s mode )    → ! i SqliteErr  "OFF"/"NORMAL"/"FULL"/"EXTRA"
 //
-// Handle layout (i64 slots, nurl_zalloc'd):
+// Handle state (a Box each, released with the handle):
 //
-//   Database  { 0: sqlite3*       1: err_kind   2: errmsg (heap)    3: authorizer env (heap) }
-//   Statement { 0: sqlite3_stmt*  1: err_kind   2: text_buf (heap)  3: _ }
+//   Database  → DbState   { sqlite3*, err_kind, errmsg, the authorizer }
+//   Statement → StmtState { sqlite3_stmt*, err_kind }
 //
 // Memory model — single-owner with auto-drop:
 //
@@ -78,16 +78,16 @@
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/marker.nu`
+$ `stdlib/core/box.nu`
 
 // ── libsqlite3 FFI ────────────────────────────────────────────────
 //
-// All `sqlite3 *` and `sqlite3_stmt *` pointers travel as `s` (opaque
-// i64). Caller-owned out-pointer slots are 8-byte buffers we
-// nurl_alloc immediately before the call and free immediately after.
+// `sqlite3 *` and `sqlite3_stmt *` travel as `*u`. The out-pointers
+// sqlite3_open* / sqlite3_prepare_v2 write are `inout` locals.
 
-& `sqlite3` @ sqlite3_open s filename *u out_db → i
+& `sqlite3` @ sqlite3_open s filename inout *u out_db → i
 
-& `sqlite3` @ sqlite3_open_v2 s filename *u out_db i flags s vfs → i
+& `sqlite3` @ sqlite3_open_v2 s filename inout *u out_db i flags s vfs → i
 
 & `sqlite3` @ sqlite3_close *u db → i
 
@@ -95,7 +95,7 @@ $ `stdlib/core/marker.nu`
 
 & `sqlite3` @ sqlite3_exec *u db s sql *u cb *u data *u out_err → i
 
-& `sqlite3` @ sqlite3_prepare_v2 *u db s sql i n *u out_stmt *u tail → i
+& `sqlite3` @ sqlite3_prepare_v2 *u db s sql i n inout *u out_stmt *u tail → i
 
 & `sqlite3` @ sqlite3_step *u stmt → i
 
@@ -240,12 +240,19 @@ $ `stdlib/core/marker.nu`
     SqliteOther  // anything else, including unmapped codes
 }
 
-: Database { s raw }
+// A connection's state: the sqlite3*, the last result code, a copy of the
+// last error message, and the authorizer libsqlite calls (the handle's own
+// copy, so its env outlives every call).
+: DbState { * u db i rc String errmsg ? ( @ i i s s s s ) auth }
+
+: StmtState { * u stmt i rc }
+
+: Database { ( Box DbState ) st }
 
 // Its drop closes something the outside world sees (stdlib/core/marker.nu).
 % Resource Database {}
 
-: Statement { s raw }
+: Statement { ( Box StmtState ) st }
 
 // Its drop closes something the outside world sees (stdlib/core/marker.nu).
 % Resource Statement {}
@@ -295,55 +302,16 @@ $ `stdlib/core/marker.nu`
 
 // ── Internal handle helpers ────────────────────────────────────────
 
-@ __db_alloc → s { ^ ( nurl_zalloc 32 ) }
+// The state in place (null for a handle that holds none).
+@ __db_state Database d → *DbState { ^ ( box_ptr [DbState] . d st ) }
 
-@ __stmt_alloc → s { ^ ( nurl_zalloc 32 ) }
+@ __stmt_state Statement t → *StmtState { ^ ( box_ptr [StmtState] . t st ) }
 
-@ __db_set_errmsg s h_db → v {
-    : s db # s ( nurl_peek h_db 0 )
-    : s old # s ( nurl_peek h_db 2 )
-    ? != # i old 0 { ( nurl_free old ) ( nurl_poke h_db 2 0 ) } {}
-    ? == # i db 0 {} {
-        : s msg ( sqlite3_errmsg db )
-        ? != # i msg 0 {
-            : i n ( nurl_str_len msg )
-            : s copy ( nurl_alloc + n 1 )
-            : *u dst # *u copy
-            : *u src # *u msg
-            ( nurl_memcpy dst src n )
-            = . dst n # u 0
-            ( nurl_poke h_db 2 # i copy )
-        } {}
-    }
-}
-
-// Tear down a Database heap handle, given the raw i8* slot pointer.
-// Idempotent at the resource level: the sqlite3* slot is zeroed after
-// sqlite3_close so a re-entry never double-closes the OS handle. Frees
-// the 32-byte handle block exactly once — the caller must not reuse the
-// pointer afterwards (single-owner contract, like any `*_free`).
-@ __sqlite_db_destroy s h → v {
-    ? == # i h 0 {} {
-        : s db_ptr # s ( nurl_peek h 0 )
-        ? != # i db_ptr 0 { ( sqlite3_close db_ptr ) ( nurl_poke h 0 0 ) } {}
-        : s msg # s ( nurl_peek h 2 )
-        ? != # i msg 0 { ( nurl_free msg ) ( nurl_poke h 2 0 ) } {}
-        // The authorizer's env copy, released only after sqlite3_close —
-        // libsqlite may call the authorizer until then.
-        ( __sqlite_auth_release h )
-        ( nurl_free h )
-    }
-}
-
-// Tear down a Statement heap handle, given the raw i8* slot pointer.
-@ __sqlite_stmt_destroy s h → v {
-    ? == # i h 0 {} {
-        : s stmt # s ( nurl_peek h 0 )
-        ? != # i stmt 0 { ( sqlite3_finalize stmt ) ( nurl_poke h 0 0 ) } {}
-        : s text_buf # s ( nurl_peek h 2 )
-        ? != # i text_buf 0 { ( nurl_free text_buf ) ( nurl_poke h 2 0 ) } {}
-        ( nurl_free h )
-    }
+// Keep a copy of the connection's current error message.
+@ __db_set_errmsg * DbState h → v {
+    ? == # i . h db 0 { = . h errmsg ( string_new ) ^ } {}
+    : s msg ( sqlite3_errmsg . h db )
+    = . h errmsg ? == # i msg 0 ( string_new ) ( string_from msg )
 }
 
 // ── Database lifecycle ─────────────────────────────────────────────
@@ -353,24 +321,16 @@ $ `stdlib/core/marker.nu`
 // READONLY for untrusted / shared databases, add NOFOLLOW to refuse
 // symlinked paths, etc.
 @ sqlite_open_v2 s path i flags → !Database SqliteErr {
-    : s h ( __db_alloc )
-    : s out_buf ( nurl_zalloc 8 )
-    : i rc ( sqlite3_open_v2 path # *u out_buf flags # s 0 )
-    : s db # s ( nurl_peek out_buf 0 )
-    ( nurl_free out_buf )
-    ( nurl_poke h 0 # i db )
-    ? != rc SQLITE_OK {
-        ( nurl_poke h 1 rc )
-        // Free the handle directly (no Database value, so no auto-drop
-        // fires here) and surface the mapped error.
-        ( __sqlite_db_destroy # s h )
-        ^ @ !Database SqliteErr { F ( __sqlite_err_of rc ) }
-    } {}
+    : ~ * u out # *u 0
+    : i rc ( sqlite3_open_v2 path out flags # s 0 )
+    // A failed open may still hand back a connection: the handle closes
+    // it when it goes, on the error path too.
+    : Database d @ Database { ( box_new [DbState] @ DbState { out rc ( string_new ) @ ?( @ i i s s s s ) { F } } ) }
+    ? != rc SQLITE_OK { ^ @ !Database SqliteErr { F ( __sqlite_err_of rc ) } } {}
     // Surface extended result codes (e.g. CONSTRAINT_UNIQUE vs
     // CONSTRAINT_FOREIGNKEY) on every error from this connection.
-    ( sqlite3_extended_result_codes db 1 )
-    : s rp # s h
-    ^ @ !Database SqliteErr { T @ Database { rp } }
+    ( sqlite3_extended_result_codes out 1 )
+    ^ @ !Database SqliteErr { T d }
 }
 
 // Default open: read/write, create if missing — the historical
@@ -379,47 +339,44 @@ $ `stdlib/core/marker.nu`
     ^ ( sqlite_open_v2 path | SQLITE_OPEN_READWRITE SQLITE_OPEN_CREATE )
 }
 
+// Close the connection now (optional: the handle does it when it goes).
+// Idempotent: the sqlite3* is cleared after sqlite3_close.
 @ sqlite_close Database db → v {
-    : s rp . db raw
-    ( __sqlite_db_destroy # s rp )
+    : *DbState h ( __db_state db )
+    ? == # i h 0 { ^ } {}
+    ? != # i . h db 0 { : i _rc ( sqlite3_close . h db ) = . h db # *u 0 } {}
+    // The authorizer goes only now: libsqlite may call it until the close.
+    = . h auth @ ?( @ i i s s s s ) { F }
 }
 
 // Set the busy handler timeout (milliseconds). A non-zero value makes
 // SQLITE_BUSY block-and-retry for up to `ms` instead of failing
 // immediately — essential under multi-process / multi-thread access.
 @ sqlite_busy_timeout Database db i ms → !v SqliteErr {
-    : s rp . db raw
-    : i raw # i rp
-    ? == raw 0 { ^ @ !v SqliteErr { F # SqliteErr SqliteOther } } {}
-    : s h # s raw
-    : s db_ptr # s ( nurl_peek h 0 )
+    : *DbState h ( __db_state db )
+    ? == # i h 0 { ^ @ !v SqliteErr { F # SqliteErr SqliteOther } } {}
+    : *u db_ptr . h db
     ? == # i db_ptr 0 { ^ @ !v SqliteErr { F # SqliteErr SqliteUnsupported } } {}
     : i rc ( sqlite3_busy_timeout db_ptr ms )
-    ( nurl_poke h 1 rc )
+    = . h rc rc
     ? != rc SQLITE_OK { ^ @ !v SqliteErr { F ( __sqlite_err_of rc ) } } {}
     ^ @ !v SqliteErr { T 0 }
 }
 
 @ sqlite_errmsg Database db → String {
-    : s rp . db raw
-    : i raw # i rp
-    ? == raw 0 { ^ ( string_from `` ) } {}
-    : s h # s raw
-    : s msg # s ( nurl_peek h 2 )
-    ? == # i msg 0 { ^ ( string_from `` ) } {}
-    ^ ( string_from msg )
+    : *DbState h ( __db_state db )
+    ? == # i h 0 { ^ ( string_new ) } {}
+    ^ ( string_clone . h errmsg )
 }
 
 // ── DDL / non-SELECT statements ───────────────────────────────────
 
 @ sqlite_exec Database db s sql → !i SqliteErr {
-    : s rp . db raw
-    : i raw # i rp
-    ? == raw 0 { ^ @ !i SqliteErr { F # SqliteErr SqliteOther } } {}
-    : s h # s raw
-    : s db_ptr # s ( nurl_peek h 0 )
+    : *DbState h ( __db_state db )
+    ? == # i h 0 { ^ @ !i SqliteErr { F # SqliteErr SqliteOther } } {}
+    : *u db_ptr . h db
     ? == # i db_ptr 0 {
-        ( nurl_poke h 1 NURL_SQLITE_UNSUPPORTED )
+        = . h rc NURL_SQLITE_UNSUPPORTED
         ^ @ !i SqliteErr { F # SqliteErr SqliteUnsupported }
     } {}
     // No out-message: on failure the connection's own message (what
@@ -428,57 +385,49 @@ $ `stdlib/core/marker.nu`
     : i rc ( sqlite3_exec db_ptr sql # *u 0 # *u 0 # *u 0 )
     ? != rc SQLITE_OK {
         ( __db_set_errmsg h )
-        ( nurl_poke h 1 rc )
+        = . h rc rc
         ^ @ !i SqliteErr { F ( __sqlite_err_of rc ) }
     } {}
-    ( nurl_poke h 1 SQLITE_OK )
+    = . h rc SQLITE_OK
     ^ @ !i SqliteErr { T ( sqlite3_changes db_ptr ) }
 }
 
 // ── Prepared statements ───────────────────────────────────────────
 
 @ sqlite_prepare Database db s sql → !Statement SqliteErr {
-    : s rp . db raw
-    : i raw # i rp
-    ? == raw 0 { ^ @ !Statement SqliteErr { F # SqliteErr SqliteOther } } {}
-    : s h # s raw
-    : s db_ptr # s ( nurl_peek h 0 )
+    : *DbState h ( __db_state db )
+    ? == # i h 0 { ^ @ !Statement SqliteErr { F # SqliteErr SqliteOther } } {}
+    : *u db_ptr . h db
     ? == # i db_ptr 0 {
         ^ @ !Statement SqliteErr { F # SqliteErr SqliteUnsupported }
     } {}
-    : s sh ( __stmt_alloc )
-    : s out_buf ( nurl_zalloc 8 )
-    : i rc ( sqlite3_prepare_v2 db_ptr sql -1 # *u out_buf # *u 0 )
-    : s stmt # s ( nurl_peek out_buf 0 )
-    ( nurl_free out_buf )
-    ( nurl_poke sh 0 # i stmt )
+    : ~ * u out # *u 0
+    : i rc ( sqlite3_prepare_v2 db_ptr sql -1 out # *u 0 )
+    // A failed prepare may still hand back a statement: the handle
+    // finalizes it when it goes.
+    : Statement t @ Statement { ( box_new [StmtState] @ StmtState { out rc } ) }
     ? != rc SQLITE_OK {
-        ( nurl_poke sh 1 rc )
-        ( nurl_poke h 1 rc )
+        = . h rc rc
         ( __db_set_errmsg h )
-        // Free the statement handle directly (no Statement value here,
-        // so auto-drop does not fire).
-        ( __sqlite_stmt_destroy # s sh )
         ^ @ !Statement SqliteErr { F ( __sqlite_err_of rc ) }
     } {}
-    : s srp # s sh
-    ^ @ !Statement SqliteErr { T @ Statement { srp } }
+    ^ @ !Statement SqliteErr { T t }
 }
 
+// Finalize the statement now (optional: the handle does it when it goes).
 @ sqlite_finalize Statement s → v {
-    : s rp . s raw
-    ( __sqlite_stmt_destroy # s rp )
+    : *StmtState h ( __stmt_state s )
+    ? == # i h 0 { ^ } {}
+    ? != # i . h stmt 0 { : i _rc ( sqlite3_finalize . h stmt ) = . h stmt # *u 0 } {}
 }
 
 @ sqlite_reset Statement s → !v SqliteErr {
-    : s rp . s raw
-    : i raw # i rp
-    : s h # s raw
-    : s stmt # s ( nurl_peek h 0 )
+    : *StmtState h ( __stmt_state s )
+    : *u stmt . h stmt
     ? == # i stmt 0 { ^ @ !v SqliteErr { F # SqliteErr SqliteUnsupported } } {}
     : i rc ( sqlite3_reset stmt )
     ? == rc SQLITE_OK { ( sqlite3_clear_bindings stmt ) } {}
-    ( nurl_poke h 1 rc )
+    = . h rc rc
     ? != rc SQLITE_OK { ^ @ !v SqliteErr { F ( __sqlite_err_of rc ) } } {}
     ^ @ !v SqliteErr { T 0 }
 }
@@ -486,13 +435,11 @@ $ `stdlib/core/marker.nu`
 // ── Binding ───────────────────────────────────────────────────────
 
 @ sqlite_bind_int Statement s i idx i val → !v SqliteErr {
-    : s rp . s raw
-    : i raw # i rp
-    : s h # s raw
-    : s stmt # s ( nurl_peek h 0 )
+    : *StmtState h ( __stmt_state s )
+    : *u stmt . h stmt
     ? == # i stmt 0 { ^ @ !v SqliteErr { F # SqliteErr SqliteUnsupported } } {}
     : i rc ( sqlite3_bind_int64 stmt idx val )
-    ( nurl_poke h 1 rc )
+    = . h rc rc
     ? != rc SQLITE_OK { ^ @ !v SqliteErr { F ( __sqlite_err_of rc ) } } {}
     ^ @ !v SqliteErr { T 0 }
 }
@@ -503,28 +450,24 @@ $ `stdlib/core/marker.nu`
 // makes libsqlite copy the bytes immediately, so `val` need not outlive
 // this call.
 @ sqlite_bind_text Statement s i idx String val → !v SqliteErr {
-    : s rp . s raw
-    : i raw # i rp
-    : s h # s raw
-    : s stmt # s ( nurl_peek h 0 )
+    : *StmtState h ( __stmt_state s )
+    : *u stmt . h stmt
     ? == # i stmt 0 { ^ @ !v SqliteErr { F # SqliteErr SqliteUnsupported } } {}
     : i n ( string_len val )
     : s data ( string_data val )
     : i rc ( sqlite3_bind_text stmt idx data n ( __sqlite_transient ) )
-    ( nurl_poke h 1 rc )
+    = . h rc rc
     ? != rc SQLITE_OK { ^ @ !v SqliteErr { F ( __sqlite_err_of rc ) } } {}
     ^ @ !v SqliteErr { T 0 }
 }
 
 // Bind an f64 (REAL) parameter.
 @ sqlite_bind_double Statement s i idx f val → !v SqliteErr {
-    : s rp . s raw
-    : i raw # i rp
-    : s h # s raw
-    : s stmt # s ( nurl_peek h 0 )
+    : *StmtState h ( __stmt_state s )
+    : *u stmt . h stmt
     ? == # i stmt 0 { ^ @ !v SqliteErr { F # SqliteErr SqliteUnsupported } } {}
     : i rc ( sqlite3_bind_double stmt idx val )
-    ( nurl_poke h 1 rc )
+    = . h rc rc
     ? != rc SQLITE_OK { ^ @ !v SqliteErr { F ( __sqlite_err_of rc ) } } {}
     ^ @ !v SqliteErr { T 0 }
 }
@@ -533,27 +476,23 @@ $ `stdlib/core/marker.nu`
 // bytes are copied immediately (SQLITE_TRANSIENT). The only fully
 // binary-safe write path.
 @ sqlite_bind_blob Statement s i idx ( Vec u ) data → !v SqliteErr {
-    : s rp . s raw
-    : i raw # i rp
-    : s h # s raw
-    : s stmt # s ( nurl_peek h 0 )
+    : *StmtState h ( __stmt_state s )
+    : *u stmt . h stmt
     ? == # i stmt 0 { ^ @ !v SqliteErr { F # SqliteErr SqliteUnsupported } } {}
     : i n ( vec_len [u] data )
     : *u p ( vec_data [u] data )
     : i rc ( sqlite3_bind_blob stmt idx # s p n ( __sqlite_transient ) )
-    ( nurl_poke h 1 rc )
+    = . h rc rc
     ? != rc SQLITE_OK { ^ @ !v SqliteErr { F ( __sqlite_err_of rc ) } } {}
     ^ @ !v SqliteErr { T 0 }
 }
 
 @ sqlite_bind_null Statement s i idx → !v SqliteErr {
-    : s rp . s raw
-    : i raw # i rp
-    : s h # s raw
-    : s stmt # s ( nurl_peek h 0 )
+    : *StmtState h ( __stmt_state s )
+    : *u stmt . h stmt
     ? == # i stmt 0 { ^ @ !v SqliteErr { F # SqliteErr SqliteUnsupported } } {}
     : i rc ( sqlite3_bind_null stmt idx )
-    ( nurl_poke h 1 rc )
+    = . h rc rc
     ? != rc SQLITE_OK { ^ @ !v SqliteErr { F ( __sqlite_err_of rc ) } } {}
     ^ @ !v SqliteErr { T 0 }
 }
@@ -561,47 +500,39 @@ $ `stdlib/core/marker.nu`
 // ── Stepping + column reads ──────────────────────────────────────
 
 @ sqlite_step Statement s → !b SqliteErr {
-    : s rp . s raw
-    : i raw # i rp
-    : s h # s raw
-    : s stmt # s ( nurl_peek h 0 )
+    : *StmtState h ( __stmt_state s )
+    : *u stmt . h stmt
     ? == # i stmt 0 { ^ @ !b SqliteErr { F # SqliteErr SqliteUnsupported } } {}
     : i rc ( sqlite3_step stmt )
     ? == rc SQLITE_ROW {
-        ( nurl_poke h 1 SQLITE_OK )
+        = . h rc SQLITE_OK
         ^ @ !b SqliteErr { T T }
     } {}
     ? == rc SQLITE_DONE {
-        ( nurl_poke h 1 SQLITE_OK )
+        = . h rc SQLITE_OK
         ^ @ !b SqliteErr { T F }
     } {}
-    ( nurl_poke h 1 rc )
+    = . h rc rc
     ^ @ !b SqliteErr { F ( __sqlite_err_of rc ) }
 }
 
 @ sqlite_column_count Statement s → i {
-    : s rp . s raw
-    : i raw # i rp
-    : s h # s raw
-    : s stmt # s ( nurl_peek h 0 )
+    : *StmtState h ( __stmt_state s )
+    : *u stmt . h stmt
     ? == # i stmt 0 { ^ 0 } {}
     ^ ( sqlite3_column_count stmt )
 }
 
 @ sqlite_column_type Statement s i idx → i {
-    : s rp . s raw
-    : i raw # i rp
-    : s h # s raw
-    : s stmt # s ( nurl_peek h 0 )
+    : *StmtState h ( __stmt_state s )
+    : *u stmt . h stmt
     ? == # i stmt 0 { ^ 5 } {}
     ^ ( sqlite3_column_type stmt idx )
 }
 
 @ sqlite_column_int Statement s i idx → i {
-    : s rp . s raw
-    : i raw # i rp
-    : s h # s raw
-    : s stmt # s ( nurl_peek h 0 )
+    : *StmtState h ( __stmt_state s )
+    : *u stmt . h stmt
     ? == # i stmt 0 { ^ 0 } {}
     ^ ( sqlite3_column_int64 stmt idx )
 }
@@ -611,10 +542,8 @@ $ `stdlib/core/marker.nu`
 // documents) so embedded NUL bytes are preserved — no strlen
 // truncation at the first NUL.
 @ sqlite_column_text Statement s i idx → String {
-    : s rp . s raw
-    : i raw # i rp
-    : s h # s raw
-    : s stmt # s ( nurl_peek h 0 )
+    : *StmtState h ( __stmt_state s )
+    : *u stmt . h stmt
     ? == # i stmt 0 { ^ ( string_from `` ) } {}
     : s borrowed ( sqlite3_column_text stmt idx )
     ? == # i borrowed 0 { ^ ( string_from `` ) } {}
@@ -626,10 +555,8 @@ $ `stdlib/core/marker.nu`
 // Read a BLOB column as an OWNED `Vec u`. Exact byte length via
 // sqlite3_column_bytes; binary-safe.
 @ sqlite_column_blob Statement s i idx → ( Vec u ) {
-    : s rp . s raw
-    : i raw # i rp
-    : s h # s raw
-    : s stmt # s ( nurl_peek h 0 )
+    : *StmtState h ( __stmt_state s )
+    : *u stmt . h stmt
     ? == # i stmt 0 { ^ ( vec_new [u] ) } {}
     : s borrowed ( sqlite3_column_blob stmt idx )
     ? == # i borrowed 0 { ^ ( vec_new [u] ) } {}
@@ -645,10 +572,8 @@ $ `stdlib/core/marker.nu`
 
 // Read an f64 (REAL) column. Returns 0.0 on a closed statement.
 @ sqlite_column_double Statement s i idx → f {
-    : s rp . s raw
-    : i raw # i rp
-    : s h # s raw
-    : s stmt # s ( nurl_peek h 0 )
+    : *StmtState h ( __stmt_state s )
+    : *u stmt . h stmt
     ? == # i stmt 0 { ^ # f 0 } {}
     ^ ( sqlite3_column_double stmt idx )
 }
@@ -701,11 +626,9 @@ $ `stdlib/core/marker.nu`
 // ── Introspection (§12) ───────────────────────────────────────────
 
 @ sqlite_last_insert_rowid Database db → i {
-    : s rp . db raw
-    : i raw # i rp
-    ? == raw 0 { ^ 0 } {}
-    : s h # s raw
-    : s db_ptr # s ( nurl_peek h 0 )
+    : *DbState h ( __db_state db )
+    ? == # i h 0 { ^ 0 } {}
+    : *u db_ptr . h db
     ? == # i db_ptr 0 { ^ 0 } {}
     ^ ( sqlite3_last_insert_rowid db_ptr )
 }
@@ -715,11 +638,9 @@ $ `stdlib/core/marker.nu`
 // is the equivalent for statements run through prepare/step (where the
 // count was previously unreachable).
 @ sqlite_changes Database db → i {
-    : s rp . db raw
-    : i raw # i rp
-    ? == raw 0 { ^ 0 } {}
-    : s h # s raw
-    : s db_ptr # s ( nurl_peek h 0 )
+    : *DbState h ( __db_state db )
+    ? == # i h 0 { ^ 0 } {}
+    : *u db_ptr . h db
     ? == # i db_ptr 0 { ^ 0 } {}
     ^ ( sqlite3_changes db_ptr )
 }
@@ -729,11 +650,9 @@ $ `stdlib/core/marker.nu`
 // SQLITE_DBCONFIG_DEFENSIVE: refuse SQL that can corrupt the DB (writes
 // to shadow tables, schema poking). Recommended for untrusted SQL.
 @ sqlite_set_defensive Database db b on → !v SqliteErr {
-    : s rp . db raw
-    : i raw # i rp
-    ? == raw 0 { ^ @ !v SqliteErr { F # SqliteErr SqliteOther } } {}
-    : s h # s raw
-    : s db_ptr # s ( nurl_peek h 0 )
+    : *DbState h ( __db_state db )
+    ? == # i h 0 { ^ @ !v SqliteErr { F # SqliteErr SqliteOther } } {}
+    : *u db_ptr . h db
     ? == # i db_ptr 0 { ^ @ !v SqliteErr { F # SqliteErr SqliteUnsupported } } {}
     : i rc ( sqlite3_db_config db_ptr SQLITE_DBCONFIG_DEFENSIVE ? on 1 0 # *u 0 )
     ? != rc SQLITE_OK { ^ @ !v SqliteErr { F ( __sqlite_err_of rc ) } } {}
@@ -744,11 +663,9 @@ $ `stdlib/core/marker.nu`
 // function + C API. Disable it (on = F) to block extension-loading RCE
 // from a hostile DB / SQL string.
 @ sqlite_enable_load_extension Database db b on → !v SqliteErr {
-    : s rp . db raw
-    : i raw # i rp
-    ? == raw 0 { ^ @ !v SqliteErr { F # SqliteErr SqliteOther } } {}
-    : s h # s raw
-    : s db_ptr # s ( nurl_peek h 0 )
+    : *DbState h ( __db_state db )
+    ? == # i h 0 { ^ @ !v SqliteErr { F # SqliteErr SqliteOther } } {}
+    : *u db_ptr . h db
     ? == # i db_ptr 0 { ^ @ !v SqliteErr { F # SqliteErr SqliteUnsupported } } {}
     : i rc ( sqlite3_db_config db_ptr SQLITE_DBCONFIG_ENABLE_LOAD_EXTENSION ? on 1 0 # *u 0 )
     ? != rc SQLITE_OK { ^ @ !v SqliteErr { F ( __sqlite_err_of rc ) } } {}
@@ -768,11 +685,9 @@ $ `stdlib/core/marker.nu`
 // untrusted SQL. Returns the PRIOR value of the limit (sqlite3_limit
 // semantics); a negative `newVal` queries without changing.
 @ sqlite_limit Database db i id i newVal → i {
-    : s rp . db raw
-    : i raw # i rp
-    ? == raw 0 { ^ -1 } {}
-    : s h # s raw
-    : s db_ptr # s ( nurl_peek h 0 )
+    : *DbState h ( __db_state db )
+    ? == # i h 0 { ^ -1 } {}
+    : *u db_ptr . h db
     ? == # i db_ptr 0 { ^ -1 } {}
     ^ ( sqlite3_limit db_ptr id newVal )
 }
@@ -789,39 +704,33 @@ $ `stdlib/core/marker.nu`
 // `sqlite_clear_authorizer`, on a replacing `sqlite_set_authorizer`, or
 // when the database closes, so the caller's closure can go out of scope.
 @ sqlite_set_authorizer Database db ( @ i i s s s s ) auth → !v SqliteErr {
-    : s rp . db raw
-    : i raw # i rp
-    ? == raw 0 { ^ @ !v SqliteErr { F # SqliteErr SqliteOther } } {}
-    : s h # s raw
-    : s db_ptr # s ( nurl_peek h 0 )
+    : *DbState h ( __db_state db )
+    ? == # i h 0 { ^ @ !v SqliteErr { F # SqliteErr SqliteOther } } {}
+    : *u db_ptr . h db
     ? == # i db_ptr 0 { ^ @ !v SqliteErr { F # SqliteErr SqliteUnsupported } } {}
-    : *u fnp # *u auth 0
-    : *u env ( nurl_closure_clone # *u auth 1 )
-    : i rc ( sqlite3_set_authorizer db_ptr fnp env )
-    ( nurl_poke h 1 rc )
-    ? != rc SQLITE_OK { ( nurl_closure_drop env ) ^ @ !v SqliteErr { F ( __sqlite_err_of rc ) } } {}
-    ( __sqlite_auth_release h )
-    ( nurl_poke h 3 # i env )
+    // The handle's own copy; libsqlite is handed its function and env.
+    : ?( @ i i s s s s ) fresh @ ?( @ i i s s s s ) { T auth }
+    : i rc ?? fresh {
+        T a → ( sqlite3_set_authorizer db_ptr # *u a 0 # *u a 1 )
+        F → SQLITE_OK
+    }
+    = . h rc rc
+    ? != rc SQLITE_OK { ^ @ !v SqliteErr { F ( __sqlite_err_of rc ) } } {}
+    // Installed: the copy replaces the one the handle kept, which goes
+    // now that libsqlite no longer calls it.
+    = . h auth fresh
     ^ @ !v SqliteErr { T 0 }
-}
-
-// Drop the authorizer env copy a Database handle holds (slot 3), if any.
-@ __sqlite_auth_release s h → v {
-    : *u env # *u ( nurl_peek h 3 )
-    ? != # i env 0 { ( nurl_closure_drop env ) ( nurl_poke h 3 0 ) } {}
 }
 
 // Remove a previously-installed authorizer.
 @ sqlite_clear_authorizer Database db → !v SqliteErr {
-    : s rp . db raw
-    : i raw # i rp
-    ? == raw 0 { ^ @ !v SqliteErr { F # SqliteErr SqliteOther } } {}
-    : s h # s raw
-    : s db_ptr # s ( nurl_peek h 0 )
+    : *DbState h ( __db_state db )
+    ? == # i h 0 { ^ @ !v SqliteErr { F # SqliteErr SqliteOther } } {}
+    : *u db_ptr . h db
     ? == # i db_ptr 0 { ^ @ !v SqliteErr { F # SqliteErr SqliteUnsupported } } {}
     : i rc ( sqlite3_set_authorizer db_ptr # *u 0 # *u 0 )
     ? != rc SQLITE_OK { ^ @ !v SqliteErr { F ( __sqlite_err_of rc ) } } {}
-    ( __sqlite_auth_release h )
+    = . h auth @ ?( @ i i s s s s ) { F }
     ^ @ !v SqliteErr { T 0 }
 }
 

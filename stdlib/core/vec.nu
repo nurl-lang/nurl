@@ -70,6 +70,10 @@
 //                                                runtime (TCP, file IO,
 //                                                Vec[u]-backed crypto).
 //   ( vec_swap [A] v i j )         → b          swaps two slots
+//   ( vec_retain [A] v keep )      → v          keep : (@ b A) — drop the
+//                                                rest, in place
+//   ( vec_put_back [A] v i x )     → v          x, read out of slot i and
+//                                                updated, goes back
 //   ( vec_reverse [A] v )          → v          in-place reverse
 //   ( vec_reserve [A] v n )        → v          ensure cap ≥ len + n
 //   ( vec_resize_zeroed [A] v n )  → b          set len to exactly n;
@@ -1005,4 +1009,54 @@ inline @ alloc_grow_pow2 i cap i need i first → i {
         = i + i 1
     }
     ^ T
+}
+
+// ── In place ────────────────────────────────────────────────────────
+
+// Keep the elements `keep` answers T for, in order; the others are
+// dropped. In place: the same buffer and control block, so every copy of
+// the handle sees the result, and nothing is allocated.
+@ vec_retain [A] ( Vec A ) v ( @ b A ) keep → v {
+    : i n ( vec_len [A] v )
+    : *A data ( vec_data [A] v )
+    : ~ i w 0
+    : ~ i r 0
+    ~ < r n {
+        : A x . data r
+        ? ( keep x ) {
+            ? != w r { = . data w x } {}
+            = w + w 1
+        } {
+            ( mem_take x )  // the slot gives it up: dropped here
+        }
+        = r + r 1
+    }
+    : b _l ( vec_set_len [A] v w )
+}
+
+// Write `x` — the element of slot `idx`, read out (vec_at) and updated —
+// back into that slot. It IS the slot's value, so nothing is dropped and
+// nothing is copied: the check-in of a table that lends its records out
+// by value.
+@ vec_put_back [A] ( Vec A ) v i idx A x → v {
+    : *A data ( vec_data [A] v )
+    ( mem_put_back x )
+    = . data idx x
+}
+
+// ── Publish-once ────────────────────────────────────────────────────
+
+& `c` @ nurl_once_slot i id i candidate → i
+
+// A table the whole program shares, built lazily by whichever thread gets
+// there first: `v` is offered for the runtime's publish-once slot `slot`
+// (stdlib/runtime_core.c; the slot registry is in stdlib/std/tls_server.nu).
+// The first Vec published there stays for the program's life; a later one
+// is dropped here. The published Vec comes back as its word, for a global
+// to cache and to lend out as `# ( Vec A ) w`.
+@ vec_publish_once [A] i slot sink ( Vec A ) v → i {
+    : i mine # i . v ctl
+    : i won ( nurl_once_slot slot mine )
+    ? == won mine { ( mem_forget v ) } {}
+    ^ won
 }
