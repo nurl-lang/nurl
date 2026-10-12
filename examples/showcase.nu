@@ -6,7 +6,10 @@
 // ============================================================
 
 // ── FFI: pull in a few C runtime symbols ─────────────────────
-// Note: puts, malloc, free are auto-declared by the compiler runtime
+// Note: puts is auto-declared by the compiler runtime
+
+$ `stdlib/core/box.nu`
+$ `stdlib/core/vec.nu`
 
 // ── Constants & globals ──────────────────────────────────────
 : i MAX_DEPTH 32
@@ -49,23 +52,13 @@
 }
 
 // ── Heap-allocate an Ast node (tiny helper) ──────────────────
-unsafe @ box_ast Ast node → *Ast {
-    : *Ast p # *Ast ( malloc Z Ast )
-    = . p 0 node  // *p = node  (field 0 of the boxed struct)
+// Each node is a Box in the arena `nodes`, which owns it: the trees (which
+// share subtrees) go with the arena, and nothing is freed by hand.
+unsafe @ box_ast inout ( Vec ( Box Ast ) ) nodes Ast node → *Ast {
+    : ( Box Ast ) b ( box_new [Ast] node )
+    : *Ast p # *Ast ( box_ptr [Ast] b )
+    ( vec_push [( Box Ast )] nodes b )
     ^ p
-}
-
-// ── Free a boxed Ast tree, children first ────────────────────
-unsafe @ free_ast * Ast e → v {
-    ?? . e 0 {
-        Num n → {}
-        Neg inner → ( free_ast inner )
-        Bin op l r → {
-            ( free_ast l )
-            ( free_ast r )
-        }
-    }
-    ( free # s e )
 }
 
 // ── Evaluator returning an Option (division-by-zero → None) ──
@@ -94,17 +87,17 @@ unsafe @ eval * Ast e → ?i {
     }
 }
 
-// ── Higher-order: map a closure over a slice, returning new slice
-@ map_i [T] [T src ( @ i T ) f → [i {
+// ── Higher-order: map a closure over a slice, returning a new Vec
+@ map_i [T] [T src ( @ i T ) f → ( Vec i ) {
     : i n . src length
-    : *i buf # *i ( malloc * n 8 )
+    : ( Vec i ) out ( vec_with_cap [i] n )
     : ~ i idx 0
     ~ < idx n {
         : T item . src idx
-        = . buf idx ( f item )
+        ( vec_push [i] out ( f item ) )
         = idx + idx 1
     }
-    ^ @ [i { buf n }
+    ^ out
 }
 
 // ── Recursive factorial (classic) ────────────────────────────
@@ -123,15 +116,15 @@ unsafe @ run_demo → v {
     ; { ( puts `bye from run_demo\n` ) }
 
     // Build:  (3 + 4) * -(10 / 2)    → 7 * -5 = -35
-    : *Ast three ( box_ast @ Ast { Num 3 } )
-    : *Ast four ( box_ast @ Ast { Num 4 } )
-    : *Ast ten ( box_ast @ Ast { Num 10 } )
-    : *Ast two ( box_ast @ Ast { Num 2 } )
-    : *Ast sum ( box_ast @ Ast { Bin 0 three four } )
-    : *Ast div ( box_ast @ Ast { Bin 3 ten two } )
-    : *Ast neg ( box_ast @ Ast { Neg div } )
-    : *Ast root ( box_ast @ Ast { Bin 2 sum neg } )
-    ; { ( free_ast root ) }  // freed on exit, like any deferred cleanup
+    : ~ ( Vec ( Box Ast ) ) nodes ( vec_new [( Box Ast )] )
+    : *Ast three ( box_ast nodes @ Ast { Num 3 } )
+    : *Ast four ( box_ast nodes @ Ast { Num 4 } )
+    : *Ast ten ( box_ast nodes @ Ast { Num 10 } )
+    : *Ast two ( box_ast nodes @ Ast { Num 2 } )
+    : *Ast sum ( box_ast nodes @ Ast { Bin 0 three four } )
+    : *Ast div ( box_ast nodes @ Ast { Bin 3 ten two } )
+    : *Ast neg ( box_ast nodes @ Ast { Neg div } )
+    : *Ast root ( box_ast nodes @ Ast { Bin 2 sum neg } )
 
     : ?i result ( eval root )
 
@@ -155,15 +148,12 @@ unsafe @ run_demo → v {
     ( puts . p key )
 
     // Division by zero → None propagates via \
-    : *Ast zero ( box_ast @ Ast { Num 0 } )
-    : *Ast bad ( box_ast @ Ast { Bin 3 three zero } )
+    : *Ast zero ( box_ast nodes @ Ast { Num 0 } )
+    : *Ast bad ( box_ast nodes @ Ast { Bin 3 three zero } )
     : ?i r2 ( eval bad )
     ?? r2 {
         _ → ( puts `(got None as expected)\n` )
     }
-    // `bad` shares `three` with `root`, so free only its own two nodes.
-    ( free # s bad )
-    ( free # s zero )
 
     ( puts ( show eval_count ) )
 }

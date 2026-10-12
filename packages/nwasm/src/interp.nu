@@ -307,6 +307,13 @@ $ `stdlib/core/slice.nu`
     i jit_arena  // current chunk (0 = none yet)
     i jit_arena_used  // bytes handed out in it
     i jit_arena_cap  // its size
+    // The storage behind the raw words above, owned here: the slab, the
+    // anchor block, every call context ever made (the freelist only links
+    // them) and the call-out bridge's closure environment (jit_co_env).
+    ( Vec u ) jit_slab_mem
+    ( Vec u ) jit_spcell_mem
+    ( Vec ( Vec i ) ) jit_ctx_mem
+    JitCoEnv jit_co
     // Direct call sites waiting for their callee (tier 8 calls rel32; a site
     // aims at its own stub until the callee's entry exists): per defined
     // function the head of a list of sites, linked through jit_lnext, each
@@ -331,6 +338,7 @@ $ `stdlib/core/slice.nu`
     ( Vec u ) capout  // captured module stdout (raw bytes, NULs preserved)
     ( Vec u ) caperr  // captured module stderr
     ( Vec s ) pfuncs  // *PFunc per defined function, predecoded lazily (#s 0 until first call)
+    ( Vec ( Box PFunc ) ) pf_owned  // the records `pfuncs` points at: this instance owns them
     // Threads (wasi-threads). A spawned thread runs its OWN Interp — own
     // value stack, frames, globals and therefore its own `__stack_pointer`,
     // exactly as the proposal's "one instance per thread" says — over the
@@ -349,12 +357,21 @@ $ `stdlib/core/slice.nu`
     Module modh
 }
 
+// The call-out bridge's closure environment, decomposed for the emitted
+// code (which calls fn(env)) and released with the instance. Not a closure
+// field: a closure may capture an Interp, and an Arc's payload must not be
+// able to reach its own Arc (docs/MEMORY.md §7.7) — this one captures the
+// raw *InterpImpl only.
+: JitCoEnv { s env }
+
+% Drop JitCoEnv { unsafe @ drop JitCoEnv c → v { ( nurl_closure_drop # *u . c env ) } }
+
 // An Interp is a handle on its instance state in an Arc
 // (stdlib/std/arc.nu): every copy is the same instance, and the last owner
-// releases it. A spawned thread's instance is not one of these: it is a raw
-// *InterpImpl made and released by the thread that runs it (see
-// __wasi_thread_spawn), because it shares its owner's memory, table and
-// argv by handle and must never drop them.
+// releases it. A spawned thread's instance is an Arc too, held by the
+// thread that runs it (__wasi_thread_spawn); it owns only its own stacks,
+// globals and caches — the memory, table, segments and argv it shares are
+// its owner's, reached through `__host`.
 : Interp { ( Arc InterpImpl ) a }
 
 @ Interp_share Interp h → Interp { ^ @ Interp { ( arc_clone [InterpImpl] . h a ) } }
@@ -396,7 +413,18 @@ unsafe @ __Interp_ptr Interp h → *InterpImpl { ^ ( arc_ptr [InterpImpl] . h a 
 // and re-deriving them per call means walking funcs → typeidx → types and
 // two `vec_len`s inside `module_func_type` — pure repeat work on a value
 // that is fixed for the life of the module.
-: PFunc { ( Vec i ) code ( Vec i ) aux i count i nlocals i nslots i nparams i nresults i code_start i sbase ( Vec i ) kv s pool ( Vec i ) bytes s jit i jitlen ( Vec i ) refl }
+: PFunc { ( Vec i ) code ( Vec i ) aux i count i nlocals i nslots i nparams i nresults i code_start i sbase ( Vec i ) kv s pool ( Vec i ) bytes s jit i jitlen ( Vec i ) refl ( Vec ( Box Frame ) ) frames }
+
+// A function's compiled code goes with its record: its own mapping (jitlen
+// > 0), or a stretch of the code arena (< 0), which the arena releases.
+% Drop PFunc {
+    unsafe @ drop PFunc pf → v {
+        ? != . pf jitlen 0 {
+            ( nurl_guard_code_del # *u . pf jit )  // no-op when never registered
+            ? > . pf jitlen 0 { ( nurl_code_free # *u . pf jit . pf jitlen ) } {}
+        } {}
+    }
+}
 
 @ __page → i { ^ 65536 }
 
@@ -413,7 +441,7 @@ unsafe @ __Interp_ptr Interp h → *InterpImpl { ^ ( arc_ptr [InterpImpl] . h a 
 
 // The linear memory's base address, whichever representation is live.
 unsafe inline @ __mem_base * InterpImpl it → i {
-    ? != 0 . it mem_raw { ^ . it mem_raw } { ^ # i ( vec_data [u] . it mem ) }
+    ? != 0 . it mem_raw { ^ . it mem_raw } { ^ # i ( vec_data [u] . ( __host it ) mem ) }
 }
 
 // Instantiate `m`. The instance holds a share of the module, so the module
@@ -425,6 +453,8 @@ unsafe @ interp_new Module m__h → Interp {
     = . it mod # s m
     = . it modh ( Module_share m__h )
     = . it pfuncs ( vec_new [s] )
+    = . it pf_owned ( vec_new [( Box PFunc )] )
+    = . it jit_ctx_mem ( vec_new [( Vec i )] )
     = . it vs ( vec_new [i] )
     // Linear memory is ONE zero-filled block of the declared minimum.
     // `vec_zeroed` hands the whole size to calloc, so the pages arrive
@@ -576,11 +606,9 @@ unsafe @ interp_new Module m__h → Interp {
     ^ ( box_new [WFd] @ WFd { kind ( vec_new [u] ) 0 ( vec_new [u] ) ( vec_new [u] ) F F F } )
 }
 
-// The JIT's lazily made raw state: the free list of call contexts, the
-// slab, the anchor block and the call-out bridge's copy of its env.
-unsafe @ __jit_state_free i ctxs i slab i spcell i coenv i arena → v {
-    : ~ i cb ctxs
-    ~ != 0 cb { : *i c # *i cb : i nx . c 0 ( nurl_free # s cb ) = cb nx }
+// The JIT's code arena: chunks of executable memory, each mapped from the
+// system (a reservation or a code mapping), unmapped with the instance.
+unsafe @ __jit_arena_unmap i arena → v {
     : ~ i ch arena
     ~ != 0 ch {
         : *i h # *i ch
@@ -589,21 +617,12 @@ unsafe @ __jit_state_free i ctxs i slab i spcell i coenv i arena → v {
         ? < sz 0 { ( nurl_vmem_release # *u ch - 0 sz ) } { ( nurl_code_free # *u ch sz ) }
         = ch nx
     }
-    ? != 0 slab { ( nurl_free # s slab ) } {}
-    ? != 0 spcell { ( nurl_free # s spcell ) } {}
-    ? != 0 coenv { ( nurl_closure_drop # *u coenv ) } {}
 }
 
-unsafe @ __free_pfuncs ( Vec s ) pfs → v {
-    : i n ( vec_len [s] pfs )
-    : ~ i k 0
-    ~ < k n { ?? ( vec_get [s] pfs k ) { T pp → ( __pf_free pp ) F → {} } = k + k 1 }
-}
-
-// The raw parts of an instance — the *PFunc records behind its table, the
-// guard reservation, the JIT state, the guest's open sockets —
-// released by its last owner (Interp_drop); its Vecs and its module handle
-// are dropped after this returns. Threads first: the guest's own join only
+// What an instance holds outside its fields — the guard reservation, the
+// JIT's code arena, the guest's open sockets — goes with its last owner
+// (Interp_drop); its fields (the predecoded records first, which may point
+// into the arena) are dropped after this returns. Threads first: the guest's own join only
 // proves the thread's BODY finished, and the host thread is still inside
 // the interpreter for a moment after that, reading this memory and table.
 % Drop InterpImpl {
@@ -619,35 +638,13 @@ unsafe @ __free_pfuncs ( Vec s ) pfs → v {
             ( nurl_guard_mem_del # *u . it mem_raw )
             ( nurl_vmem_release # *u . it mem_raw ( __vmem_span ) )
         } {}
-        ( __free_pfuncs . it pfuncs )
-        ( __jit_state_free . it jit_ctx_free . it jit_slab . it jit_spcell . it jit_co_env . it jit_arena )
+        ( vec_clear [( Box PFunc )] . it pf_owned )
+        ( __jit_arena_unmap . it jit_arena )
     }
 }
 
 // Let go of `it` now rather than at the end of its owner's scope.
 @ interp_free sink Interp it → v {}
-
-// A spawned thread's instance, released by the thread that ran it. It owns
-// only what __interp_thread_new made for it: the memory, table, argv/envp and
-// every host table belong to the instance that instantiated, and are released
-// exactly once, there.
-unsafe @ __interp_thread_free * InterpImpl it → v {
-    ( __thread_unregister it )
-    ( vec_free [i] . it vs )
-    ( vec_free [i] . it thread_kids )
-    ( vec_free [Thread] . it thread_joins )
-    ( vec_free [i] . it globals )
-    ( vec_free [i] . it nethandles )
-    ( vec_free [i] . it netkinds )
-    ( vec_free [( Box WFd )] . it fds )
-    ( vec_free [u] . it trapmsg )
-    ( __jit_state_free . it jit_ctx_free . it jit_slab . it jit_spcell . it jit_co_env . it jit_arena )
-    ( vec_free [u] . it capout )
-    ( vec_free [u] . it caperr )
-    ( __free_pfuncs . it pfuncs )
-    ( vec_free [s] . it pfuncs )
-    ( nurl_free # s it )
-}
 
 // Capture the module's stdout/stderr into buffers instead of writing
 // them to the host's own streams. This is the embedder's switch: a
@@ -755,33 +752,29 @@ unsafe @ interp_set_preopen Interp it__h s host_path s guest_name → v {
 // that instantiated it. File descriptors, socket handles and captured
 // output are per-INSTANCE in wasm terms but per-PROCESS in the guest's:
 // a file opened by one thread has to be the same fd in another.
-unsafe @ __host * InterpImpl it → *InterpImpl {
+unsafe inline @ __host * InterpImpl it → *InterpImpl {
     ? == # i . it owner 0 { ^ it } {}
     ^ # *InterpImpl . it owner
 }
 
 // A fresh Interp for a spawned thread: its own stacks and globals over
-// the owner's memory, table and module. The shared Vecs are copied by
-// HANDLE — safe because a threaded module's memory is allocated at its
-// maximum up front and never moves — and `__interp_thread_free` releases
-// only what the thread itself owns.
-unsafe @ __interp_thread_new * InterpImpl parent → *InterpImpl {
+// the owner's memory, table and module. What they share — the memory, the
+// table, the segments' dropped flags, argv and envp, every host table —
+// stays in the owner, reached through `__host` (a threaded module's memory
+// is allocated at its maximum up front and never moves), so the thread's
+// instance owns, and drops with its last owner, only what is its own.
+unsafe @ __interp_thread_new * InterpImpl parent → ( Arc InterpImpl ) {
     : *InterpImpl ho ( __host parent )
     : *ModuleImpl m # *ModuleImpl . ho mod
-    // Zeroed: the fields not set below (mem_raw, the JIT state, the module
-    // handle) must read as "none" — mem_raw is the memory base's selector and
-    // __interp_thread_free releases whatever JIT state is non-zero.
-    : *InterpImpl it # *InterpImpl ( nurl_zalloc Z InterpImpl )
+    // Zeroed: the fields not set below (mem_raw, the JIT state, the shared
+    // tables) read as "none" — mem_raw is the memory base's selector.
+    : ( Arc InterpImpl ) cb ( arc_zero [InterpImpl] )
+    : *InterpImpl it ( arc_ptr [InterpImpl] cb )
     = . it mod . ho mod
+    = . it modh ( Module_share . ho modh )
     = . it vs ( vec_new [i] )
-    = . it mem . ho mem
     = . it mem_pages . ho mem_pages
     = . it mem_bytes . ho mem_bytes
-    = . it table . ho table
-    = . it data_dropped . ho data_dropped
-    = . it elem_dropped . ho elem_dropped
-    = . it argv . ho argv
-    = . it envp . ho envp
     = . it fds ( vec_new [( Box WFd )] )  // unused in a thread: __host redirects
     = . it halt 0
     = . it exit_code 0
@@ -813,6 +806,8 @@ unsafe @ __interp_thread_new * InterpImpl parent → *InterpImpl {
     // Predecoded bodies are per-Interp (the cache is filled lazily and
     // mutated in place), so a thread decodes what it actually runs.
     = . it pfuncs ( vec_new [s] )
+    = . it pf_owned ( vec_new [( Box PFunc )] )
+    = . it jit_ctx_mem ( vec_new [( Vec i )] )
     : i nf ( vec_len [( Box WFunc )] . m funcs )
     : ~ i fi 0
     ~ < fi nf { ( vec_push [s] . it pfuncs # s 0 ) = fi + fi 1 }
@@ -826,7 +821,7 @@ unsafe @ __interp_thread_new * InterpImpl parent → *InterpImpl {
     = . it mem_bytes . ho mem_bytes
     ( vec_push [i] . ho thread_kids # i it )
     ( __atom_unlock )
-    ^ it
+    ^ cb
 }
 
 // Publish a new memory size to every Interp in the group. Called with the
@@ -1343,15 +1338,12 @@ unsafe @ __frame_new * InterpImpl it * ModuleImpl m i fidx i ret_dst → s {
         : ~ i pk . pfc nparams
         ~ > pk 0 { = pk - pk 1 ( vec_set [i] regs pk ( __pop it ) ) }
     } {}
-    : *Frame fr # *Frame ( nurl_alloc Z Frame )
-    = . fr fidx fidx
-    = . fr regs regs
-    = . fr pos 0
-    = . fr end * . pfc count 6
-    = . fr code_start . pfc code_start
-    = . fr pins pins
-    = . fr ret_dst ret_dst
-    ^ # s fr
+    // A new frame belongs to its function's record, which keeps every
+    // frame it ever made: the pool links the parked ones.
+    : ( Box Frame ) fb ( box_new [Frame] @ Frame { fidx regs 0 * . pfc count 6 . pfc code_start pins ret_dst # s 0 0 } )
+    : s fr # s ( box_ptr [Frame] fb )
+    ( vec_push [( Box Frame )] . pfc frames fb )
+    ^ fr
 }
 
 // Write the current frame's saved position through the MUTABLE frame
@@ -1360,13 +1352,6 @@ unsafe @ __frame_new * InterpImpl it * ModuleImpl m i fidx i ret_dst → s {
 unsafe inline @ __fr_setpos s tp i v → v {
     : *Frame fr # *Frame tp
     = . fr pos v
-}
-
-unsafe @ __frame_free sink s pp → v {
-    ? == # i pp 0 { ^ v } {}
-    : *Frame fr # *Frame pp
-    ( vec_free [i] . fr regs )
-    ( nurl_free # s fr )
 }
 
 // Return a frame to its function's pool instead of freeing it. The pool is
@@ -1378,29 +1363,6 @@ unsafe @ __frame_recycle s pp → v {
     : *PFunc pf # *PFunc . fr pins
     = . fr prev . pf pool
     = . pf pool pp
-}
-
-unsafe @ __pf_free sink s pp → v {
-    ? == # i pp 0 { ^ v } {}
-    : *PFunc pf # *PFunc pp
-    : ~ s fp . pf pool
-    ~ != # i fp 0 {
-        : *Frame fr # *Frame fp
-        : s nx . fr prev
-        ( vec_free [i] . fr regs )
-        ( nurl_free fp )
-        = fp nx
-    }
-    ( vec_free [i] . pf code )
-    ( vec_free [i] . pf aux )
-    ( vec_free [i] . pf kv )
-    ( vec_free [i] . pf bytes )
-    ( vec_free [i] . pf refl )
-    ? != . pf jitlen 0 {
-        ( nurl_guard_code_del # *u . pf jit )  // no-op when never registered
-        ? > . pf jitlen 0 { ( nurl_code_free # *u . pf jit . pf jitlen ) } {}  // < 0: in the arena, freed with it
-    } {}
-    ( nurl_free # s pf )
 }
 
 // ── the register-form micro-ops (record slot [0]) ────────────────
@@ -2381,8 +2343,11 @@ unsafe @ __m3_emit * PFunc pf i a i kind i byte → v {
     }
 }
 
-unsafe @ __predecode * ModuleImpl m * WFunc f → s {
-    : *PFunc pf # *PFunc ( nurl_alloc Z PFunc )
+unsafe @ __predecode * ModuleImpl m * WFunc f → ( Box PFunc ) {
+    // The record is filled in place through `pf`; the box is the owner the
+    // caller keeps (it.pf_owned).
+    : ( Box PFunc ) pfb ( box_new [PFunc] @ PFunc { ( vec_new [i] ) ( vec_new [i] ) 0 0 0 0 0 0 0 ( vec_new [i] ) # s 0 ( vec_new [i] ) # s 0 0 ( vec_new [i] ) ( vec_new [( Box Frame )] ) } )
+    : *PFunc pf # *PFunc ( box_ptr [PFunc] pfb )
     = . pf code ( vec_new [i] )
     = . pf aux ( vec_new [i] )
     = . pf bytes ( vec_new [i] )
@@ -2769,7 +2734,7 @@ unsafe @ __predecode * ModuleImpl m * WFunc f → s {
         = . pf pool # s 0
         = . pf jit # s 0
         = . pf jitlen 0
-        ^ # s pf
+        ^ pfb
     } {}
     = . pf count / ( vec_len [i] . pf code ) 6
     = . pf nslots + SB + maxh 4
@@ -2779,7 +2744,7 @@ unsafe @ __predecode * ModuleImpl m * WFunc f → s {
     = . pf pool # s 0
     = . pf jit # s 0
     = . pf jitlen 0
-    ^ # s pf
+    ^ pfb
 }
 // Get-or-build the PFunc for defined function `fidx`.
 unsafe @ __pfunc_for * InterpImpl it * ModuleImpl m i fidx → s {
@@ -2793,7 +2758,9 @@ unsafe @ __pfunc_for * InterpImpl it * ModuleImpl m i fidx → s {
     : s fp ?? ( vec_get [( Box WFunc )] . m funcs di ) { T x → # s ( box_ptr [WFunc] x ) F → # s 0 }
     ? == # i fp 0 { ^ # s 0 } {}
     : *WFunc f # *WFunc fp
-    : s built ( __predecode m f )
+    : ( Box PFunc ) owned ( __predecode m f )
+    : s built # s ( box_ptr [PFunc] owned )
+    ( vec_push [( Box PFunc )] . it pf_owned owned )
     ( vec_set [s] . it pfuncs di built )
     ^ built
 }
@@ -3943,7 +3910,11 @@ unsafe @ __jit_ctx_get * InterpImpl it → *i {
         = . it jit_ctx_free . b 0
         ^ b
     } {}
-    ^ # *i ( nurl_zalloc 72 )
+    // A new one: kept by the instance (jit_ctx_mem) for its whole life.
+    : ( Vec i ) blk ( vec_zeroed [i] 9 )
+    : *i b ( vec_data [i] blk )
+    ( vec_push [( Vec i )] . it jit_ctx_mem blk )
+    ^ b
 }
 
 unsafe @ __jit_ctx_put * InterpImpl it * i b → v {
@@ -4361,7 +4332,8 @@ unsafe @ __jit_sigcanon * ModuleImpl m s ftp → i {
 unsafe @ __jit_state_init * InterpImpl it * ModuleImpl m → v {
     ? != 0 . it jit_slab { ^ v } {}
     : i bytes 16777216
-    = . it jit_slab # i ( nurl_zalloc bytes )
+    = . it jit_slab_mem ( vec_zeroed [u] bytes )
+    = . it jit_slab # i ( vec_data [u] . it jit_slab_mem )
     = . it jit_slab_end + . it jit_slab bytes
     // anchor block, held in r8 by the emitted code: [sp, slab end,
     // direct-entry table (one per defined function), canonical signature
@@ -4370,7 +4342,8 @@ unsafe @ __jit_state_init * InterpImpl it * ModuleImpl m → v {
     // still be short. Tier 8's inline call_indirect reads the last two.
     : i nf ( vec_len [( Box WFunc )] . m funcs )
     : i nall + nf . m num_import_funcs
-    = . it jit_spcell # i ( nurl_zalloc + + 16 * nf 8 * + nall 1 8 )
+    = . it jit_spcell_mem ( vec_zeroed [u] + + 16 * nf 8 * + nall 1 8 )
+    = . it jit_spcell # i ( vec_data [u] . it jit_spcell_mem )
     : *i spc # *i . it jit_spcell
     = . spc 0 . it jit_slab
     = . spc 1 . it jit_slab_end
@@ -4379,17 +4352,18 @@ unsafe @ __jit_state_init * InterpImpl it * ModuleImpl m → v {
         = . spc + + 2 nf fk ( __jit_sigcanon m ( _module_func_type m fk ) )
         = fk + fk 1
     }
-    = . spc + + 2 nf nall # i . . it table ctl
+    = . spc + + 2 nf nall # i . . ( __host it ) table ctl
     : ~ i lk 0
     ~ < lk nf { ( vec_push [i] . it jit_lhead -1 ) ( vec_push [i] . it jit_fast 0 ) = lk + lk 1 }
     // The inline call-out bridge: decompose a capturing closure into
     // (fn, env) the way recover/thread_spawn do — the emitted code calls
-    // fn(env) directly. The interpreter keeps its own copy of the env
-    // (the closure itself is dropped at the end of this scope) and drops
-    // it in interp_free (docs/MEMORY.md §7.4).
+    // fn(env) directly. The instance keeps its own copy of the env
+    // (jit_co, released with the instance; the closure itself is dropped
+    // at the end of this scope, docs/MEMORY.md §7.4).
     : ( @ v ) co \ → v { ( __jit_inline_co it ) }
     : *u cofn # *u co 0
     : *u coenv ( nurl_closure_clone # *u co 1 )
+    = . it jit_co @ JitCoEnv { # s coenv }
     = . it jit_co_fn # i cofn
     = . it jit_co_env # i coenv
 }
@@ -5549,6 +5523,7 @@ unsafe @ __jit_try * InterpImpl it * ModuleImpl m * PFunc pf i fidx9 → v {
 // Handle one pending call-out (the request is in cd; `st` says which
 // kind). Returns 0 to continue, 1 when a trap/halt was recorded.
 unsafe @ __jit_callout * InterpImpl it * ModuleImpl m i st * i cd → i {
+    : *InterpImpl tho ( __host it )
     : ~ i callee . cd 4
     : i argbase . cd 5
     : *i jrb # *i . cd 0
@@ -5570,8 +5545,8 @@ unsafe @ __jit_callout * InterpImpl it * ModuleImpl m i st * i cd → i {
     } {}
     ? == st 17 {  // call_indirect: resolve through the table, trapping like the interpreter
         : i ei & callee 4294967295
-        ? | < ei 0 >= ei ( vec_len [i] . it table ) { ( __trap it `call_indirect: index out of range` ) ^ 1 } {}
-        = callee ?? ( vec_get [i] . it table ei ) { T x → x F → -1 }
+        ? | < ei 0 >= ei ( vec_len [i] . tho table ) { ( __trap it `call_indirect: index out of range` ) ^ 1 } {}
+        = callee ?? ( vec_get [i] . tho table ei ) { T x → x F → -1 }
         ? < callee 0 { ( __trap it `call_indirect: null table element` ) ^ 1 } {}
         : s want ?? ( vec_get [( Box FuncType )] . m types & . cd 7 4294967295 ) { T x → # s ( box_ptr [FuncType] x ) F → # s 0 }
         : s have ( _module_func_type m callee )
@@ -5702,6 +5677,9 @@ unsafe @ __jit_callee * InterpImpl it * ModuleImpl m i callee * i caller_rbase i
 unsafe @ __exec_func * InterpImpl it i fidx → v {
     ? != 0 . it halt { ^ v } {}
     : *ModuleImpl m # *ModuleImpl . it mod
+    // The table is the instantiating thread's (a spawned thread's own
+    // instance shares it).
+    : *InterpImpl tho ( __host it )
     // Imported functions occupy the low indices → dispatch to the host (WASI).
     ? < fidx . m num_import_funcs { ( __call_import it m fidx ) ^ v } {}
     // The activation stack is the frames themselves: `prev` links each to
@@ -6016,13 +5994,13 @@ unsafe @ __exec_func * InterpImpl it i fidx → v {
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         ? == op 163 { = . rbase ra ( __mem_grow it ( __u32 . rbase rb ) ) } {  // __R_MEMGROW
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             ? == op 164 {  // __R_TABGET
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 : i ei ( __u32 . rbase rb )
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                ? >= ei ( vec_len [i] . it table ) { ( __trap it `out of bounds table access` ) ( __fr_setpos tp r0 ) = pc pend } {
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    = . rbase ra ?? ( vec_get [i] . it table ei ) { T x → x F → -1 } }
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                ? >= ei ( vec_len [i] . tho table ) { ( __trap it `out of bounds table access` ) ( __fr_setpos tp r0 ) = pc pend } {
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    = . rbase ra ?? ( vec_get [i] . tho table ei ) { T x → x F → -1 } }
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             } {
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 ? == op 165 {  // __R_TABSET
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     : i ei ( __u32 . rbase ra )
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    ? >= ei ( vec_len [i] . it table ) { ( __trap it `out of bounds table access` ) ( __fr_setpos tp r0 ) = pc pend } {
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        ( vec_set [i] . it table ei . rbase rb ) }
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    ? >= ei ( vec_len [i] . tho table ) { ( __trap it `out of bounds table access` ) ( __fr_setpos tp r0 ) = pc pend } {
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        ( vec_set [i] . tho table ei . rbase rb ) }
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 } {
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     ? == op 166 { = . rbase ra ? == . rbase rb -1 1 0 } {  // __R_ISNULL
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         ? == op 167 {  // __R_BRM
@@ -6061,8 +6039,8 @@ unsafe @ __exec_func * InterpImpl it i fidx → v {
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 } {
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     ? == op 170 {  // __R_CALLIND
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         : i ei & . rbase rc 4294967295
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        ? | < ei 0 >= ei ( vec_len [i] . it table ) { ( __trap it `call_indirect: index out of range` ) ( __fr_setpos tp r0 ) = pc pend } {
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            : i cfi ?? ( vec_get [i] . it table ei ) { T x → x F → -1 }
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        ? | < ei 0 >= ei ( vec_len [i] . tho table ) { ( __trap it `call_indirect: index out of range` ) ( __fr_setpos tp r0 ) = pc pend } {
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            : i cfi ?? ( vec_get [i] . tho table ei ) { T x → x F → -1 }
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             ? < cfi 0 { ( __trap it `call_indirect: null table element` ) ( __fr_setpos tp r0 ) = pc pend } {
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 : s want ?? ( vec_get [( Box FuncType )] . m types ra ) { T x → # s ( box_ptr [FuncType] x ) F → # s 0 }
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 : s have ( _module_func_type m cfi )
@@ -6224,7 +6202,7 @@ unsafe @ __exec_func * InterpImpl it i fidx → v {
     ~ != # i cw 0 {
         : *Frame cf # *Frame cw
         : s nx . cf prev
-        ( __frame_free cw )
+        ( __frame_recycle cw )
         = cw nx
     }
     = . it fuel ? < fuel0 0 -1 ? < fuel 0 0 fuel
@@ -7038,11 +7016,11 @@ unsafe @ __wasi_fd_seek * InterpImpl it → v {
 unsafe @ __wasi_args_sizes_get * InterpImpl it → v {
     : i bufsz_p ( __pop it )
     : i argc_p ( __pop it )
-    : i argc ( vec_len [( Box Arg )] . it argv )
+    : i argc ( vec_len [( Box Arg )] . ( __host it ) argv )
     : ~ i bufsz 0
     : ~ i k 0
     ~ < k argc {
-        : *Arg a # *Arg ?? ( vec_get [( Box Arg )] . it argv k ) { T x → # s ( box_ptr [Arg] x ) F → # s 0 }
+        : *Arg a # *Arg ?? ( vec_get [( Box Arg )] . ( __host it ) argv k ) { T x → # s ( box_ptr [Arg] x ) F → # s 0 }
         = bufsz + bufsz + ( vec_len [u] . a bytes ) 1
         = k + k 1
     }
@@ -7054,11 +7032,11 @@ unsafe @ __wasi_args_sizes_get * InterpImpl it → v {
 unsafe @ __wasi_args_get * InterpImpl it → v {
     : i buf_p ( __pop it )
     : i argv_p ( __pop it )
-    : i argc ( vec_len [( Box Arg )] . it argv )
+    : i argc ( vec_len [( Box Arg )] . ( __host it ) argv )
     : ~ i cur buf_p
     : ~ i k 0
     ~ < k argc {
-        : *Arg a # *Arg ?? ( vec_get [( Box Arg )] . it argv k ) { T x → # s ( box_ptr [Arg] x ) F → # s 0 }
+        : *Arg a # *Arg ?? ( vec_get [( Box Arg )] . ( __host it ) argv k ) { T x → # s ( box_ptr [Arg] x ) F → # s 0 }
         ( __m_put_u32 it + argv_p * k 4 cur )
         : i blen ( vec_len [u] . a bytes )
         : ~ i j 0
@@ -7193,11 +7171,11 @@ unsafe @ __wasi_fd_tell * InterpImpl it → v {
 unsafe @ __wasi_environ_sizes_get * InterpImpl it → v {
     : i bufsz_p ( __pop it )
     : i cnt_p ( __pop it )
-    : i n ( vec_len [( Box Arg )] . it envp )
+    : i n ( vec_len [( Box Arg )] . ( __host it ) envp )
     : ~ i bufsz 0
     : ~ i k 0
     ~ < k n {
-        : *Arg a # *Arg ?? ( vec_get [( Box Arg )] . it envp k ) { T x → # s ( box_ptr [Arg] x ) F → # s 0 }
+        : *Arg a # *Arg ?? ( vec_get [( Box Arg )] . ( __host it ) envp k ) { T x → # s ( box_ptr [Arg] x ) F → # s 0 }
         = bufsz + bufsz + ( vec_len [u] . a bytes ) 1
         = k + k 1
     }
@@ -7209,11 +7187,11 @@ unsafe @ __wasi_environ_sizes_get * InterpImpl it → v {
 unsafe @ __wasi_environ_get * InterpImpl it → v {
     : i buf_p ( __pop it )
     : i envv_p ( __pop it )
-    : i n ( vec_len [( Box Arg )] . it envp )
+    : i n ( vec_len [( Box Arg )] . ( __host it ) envp )
     : ~ i cur buf_p
     : ~ i k 0
     ~ < k n {
-        : *Arg a # *Arg ?? ( vec_get [( Box Arg )] . it envp k ) { T x → # s ( box_ptr [Arg] x ) F → # s 0 }
+        : *Arg a # *Arg ?? ( vec_get [( Box Arg )] . ( __host it ) envp k ) { T x → # s ( box_ptr [Arg] x ) F → # s 0 }
         ( __m_put_u32 it + envv_p * k 4 cur )
         : i blen ( vec_len [u] . a bytes )
         : ~ i j 0
@@ -7952,7 +7930,9 @@ unsafe @ __wasi_thread_spawn * InterpImpl it → v {
     // The runtime runs the thread on its own copy of this closure's env, so
     // nothing here has to outlive the spawn.
     : ( @ v ) body \ → v {
-        : *InterpImpl child ( __interp_thread_new ho )
+        // The thread's instance, dropped when the body ends.
+        : ( Arc InterpImpl ) cinst ( __interp_thread_new ho )
+        : *InterpImpl child ( arc_ptr [InterpImpl] cinst )
         ( vec_set [i] . child globals spg stack_top )
         ( vec_push [i] . child vs tid )
         ( vec_push [i] . child vs start_arg )
@@ -7964,7 +7944,7 @@ unsafe @ __wasi_thread_spawn * InterpImpl it → v {
             ( nurl_eprintln ( string_data ( bytes_to_str . child trapmsg ) ) )
         } {}
         ( __interp_flush child )
-        ( __interp_thread_free child )
+        ( __thread_unregister child )
     }
     ?? ( thread_spawn body ) {
         T t → {
@@ -8250,6 +8230,8 @@ unsafe @ __exec_atomic * InterpImpl it i sub i off → v {
 }
 
 unsafe @ __exec_fc * InterpImpl it i sub i bop → v {
+    // Table and segments are the instantiating thread's (shared).
+    : *InterpImpl tho ( __host it )
     ? == sub 8 {  // memory.init dataidx: copy from a passive data segment
         : i didx bop
         : i n ( __u32 ( __pop it ) )
@@ -8257,7 +8239,7 @@ unsafe @ __exec_fc * InterpImpl it i sub i bop → v {
         : i dst ( __u32 ( __pop it ) )
         : *ModuleImpl m # *ModuleImpl . it mod
         : s dp ( __data_at m didx )
-        : i dropped ?? ( vec_get [i] . it data_dropped didx ) { T x → x F → 1 }
+        : i dropped ?? ( vec_get [i] . tho data_dropped didx ) { T x → x F → 1 }
         ? | == # i dp 0 & == dropped 1 > n 0 { ( __trap it `memory.init: dropped or bad data segment` ) ^ v } {}
         : *DataSeg ds # *DataSeg dp
         ? | > + src n ( vec_len [u] . ds bytes ) > + dst n . it mem_bytes {
@@ -8272,7 +8254,7 @@ unsafe @ __exec_fc * InterpImpl it i sub i bop → v {
     } {}
     ? == sub 9 {  // data.drop
         : i didx bop
-        ? < didx ( vec_len [i] . it data_dropped ) { ( vec_set [i] . it data_dropped didx 1 ) } {}
+        ? < didx ( vec_len [i] . tho data_dropped ) { ( vec_set [i] . tho data_dropped didx 1 ) } {}
         ^ v
     } {}
     ? == sub 10 {  // memory.copy — bounds checked up front (no partial writes)
@@ -8299,35 +8281,35 @@ unsafe @ __exec_fc * InterpImpl it i sub i bop → v {
         : i dst ( __u32 ( __pop it ) )
         : *ModuleImpl m # *ModuleImpl . it mod
         : s ep ( __elem_at m eidx )
-        : i dropped ?? ( vec_get [i] . it elem_dropped eidx ) { T x → x F → 1 }
+        : i dropped ?? ( vec_get [i] . tho elem_dropped eidx ) { T x → x F → 1 }
         ? | == # i ep 0 & == dropped 1 > n 0 { ( __trap it `table.init: dropped or bad element segment` ) ^ v } {}
         : *ElemSeg es # *ElemSeg ep
-        ? | > + src n ( vec_len [i] . es funcs ) > + dst n ( vec_len [i] . it table ) {
+        ? | > + src n ( vec_len [i] . es funcs ) > + dst n ( vec_len [i] . tho table ) {
             ( __trap it `out of bounds table access` ) ^ v } {}
         : ~ i k 0
         ~ < k n {
-            ( vec_set [i] . it table + dst k ?? ( vec_get [i] . es funcs + src k ) { T x → x F → -1 } )
+            ( vec_set [i] . tho table + dst k ?? ( vec_get [i] . es funcs + src k ) { T x → x F → -1 } )
             = k + k 1
         }
         ^ v
     } {}
     ? == sub 13 {  // elem.drop
         : i eidx bop
-        ? < eidx ( vec_len [i] . it elem_dropped ) { ( vec_set [i] . it elem_dropped eidx 1 ) } {}
+        ? < eidx ( vec_len [i] . tho elem_dropped ) { ( vec_set [i] . tho elem_dropped eidx 1 ) } {}
         ^ v
     } {}
     ? == sub 14 {  // table.copy — overlap-safe within the one table
         : i n ( __u32 ( __pop it ) )
         : i src ( __u32 ( __pop it ) )
         : i dst ( __u32 ( __pop it ) )
-        : i tn ( vec_len [i] . it table )
+        : i tn ( vec_len [i] . tho table )
         ? | > + src n tn > + dst n tn { ( __trap it `out of bounds table access` ) ^ v } {}
         ? > dst src {
             : ~ i k - n 1
-            ~ >= k 0 { ( vec_set [i] . it table + dst k ?? ( vec_get [i] . it table + src k ) { T x → x F → -1 } ) = k - k 1 }
+            ~ >= k 0 { ( vec_set [i] . tho table + dst k ?? ( vec_get [i] . tho table + src k ) { T x → x F → -1 } ) = k - k 1 }
         } {
             : ~ i k 0
-            ~ < k n { ( vec_set [i] . it table + dst k ?? ( vec_get [i] . it table + src k ) { T x → x F → -1 } ) = k + k 1 }
+            ~ < k n { ( vec_set [i] . tho table + dst k ?? ( vec_get [i] . tho table + src k ) { T x → x F → -1 } ) = k + k 1 }
         }
         ^ v
     } {}
@@ -8335,23 +8317,23 @@ unsafe @ __exec_fc * InterpImpl it i sub i bop → v {
         : i n ( __u32 ( __pop it ) )
         : i init ( __pop it )
         : *ModuleImpl m # *ModuleImpl . it mod
-        : i old ( vec_len [i] . it table )
+        : i old ( vec_len [i] . tho table )
         : ~ i limit 10000000
         ? > . m table_max 0 { = limit . m table_max } {}
         ? > + old n limit { ( __push it -1 ) ^ v } {}
         : ~ i k 0
-        ~ < k n { ( vec_push [i] . it table init ) = k + k 1 }
+        ~ < k n { ( vec_push [i] . tho table init ) = k + k 1 }
         ( __push it old )
         ^ v
     } {}
-    ? == sub 16 { ( __push it ( vec_len [i] . it table ) ) ^ v } {}  // table.size
+    ? == sub 16 { ( __push it ( vec_len [i] . tho table ) ) ^ v } {}  // table.size
     ? == sub 17 {  // table.fill
         : i n ( __u32 ( __pop it ) )
         : i val ( __pop it )
         : i dst ( __u32 ( __pop it ) )
-        ? > + dst n ( vec_len [i] . it table ) { ( __trap it `out of bounds table access` ) ^ v } {}
+        ? > + dst n ( vec_len [i] . tho table ) { ( __trap it `out of bounds table access` ) ^ v } {}
         : ~ i k 0
-        ~ < k n { ( vec_set [i] . it table + dst k val ) = k + k 1 }
+        ~ < k n { ( vec_set [i] . tho table + dst k val ) = k + k 1 }
         ^ v
     } {}
     // saturating float→int truncation (0..7): NaN → 0, clamp out-of-range

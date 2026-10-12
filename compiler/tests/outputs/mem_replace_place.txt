@@ -1,0 +1,11 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+first value
+second value
+a field value
+its replacement
+inside the box
+left in place
+42

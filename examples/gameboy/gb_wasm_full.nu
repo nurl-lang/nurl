@@ -5,10 +5,26 @@
 // native CLI (gb.nu) and the WebAssembly browser build (gb_wasm.nu),
 // which add their own ROM source, output, and run loop.
 
+$ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
 
 // ── Machine state (single instance — module globals) ──────────────
 : ~ s g_mem 0  // 64 KiB flat address space (*u, held as s)
+
+// Every buffer the machine allocates — RAM, ROM, frame buffers, audio —
+// owned here for the program's life; the globals below hold their
+// addresses for the hot paths (nothing is freed by hand).
+: ~ ( Vec ( Vec u ) ) g_bufs 0
+: ~ b g_bufs_made F
+
+unsafe @ zbuf i n → s {
+    ? ! g_bufs_made { = g_bufs ( vec_new [( Vec u )] ) = g_bufs_made T } {}
+    : ( Vec u ) b ( vec_zeroed [u] n )
+    : s p # s ( vec_data [u] b )
+    ( vec_push [( Vec u )] g_bufs b )
+    ^ p
+}
+
 : ~ i ra 0
 : ~ i rf 0
 : ~ i rb 0
@@ -527,7 +543,7 @@ unsafe @ tick_timer i cyc → v {
 unsafe @ apu_alloc → v {
     ? == g_audio 0 {
         = g_audio_cap 8192
-        = g_audio ( nurl_zalloc * g_audio_cap 8 )
+        = g_audio ( zbuf * g_audio_cap 8 )
     } {}
 }
 
@@ -1304,17 +1320,17 @@ unsafe @ tick_ppu i cyc → v {
 // buffer, allocate external RAM, and pick the mapper from the cart-type
 // byte. Resets the PPU scratch + serial too.
 unsafe @ cart_load * u rp i n → v {
-    = g_mem ( nurl_zalloc 65536 )
-    = g_fb ( nurl_zalloc 23040 )
-    = g_bgidx ( nurl_zalloc 160 )
-    = g_spr ( nurl_zalloc 16 )
+    = g_mem ( zbuf 65536 )
+    = g_fb ( zbuf 23040 )
+    = g_bgidx ( zbuf 160 )
+    = g_spr ( zbuf 16 )
     : i romcap ? > n 0x8000 ( next_pow2 n ) 0x8000
     = g_romsize romcap
-    = g_rom ( nurl_zalloc romcap )
+    = g_rom ( zbuf romcap )
     : *u rom # *u g_rom
     : ~ i i 0
     ~ < i n { = . rom i . rp i = i + i 1 }
-    = g_eram ( nurl_zalloc 0x20000 )
+    = g_eram ( zbuf 0x20000 )
     = g_mbc ( mbc_of & # i . rp 0x147 255 )
     = g_rombank 1
     = g_rambank 0

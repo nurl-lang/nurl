@@ -8,7 +8,8 @@
 // rejected by the Bloom filter) with a rare, branchy slow path.
 //
 // NURL has no fixed-size stack array, so ctrl / keys / vals / bloom /
-// compact and the LCG state live in `malloc`ed `*u64` blocks. The peers'
+// compact and the LCG state live in `*u64` blocks (`RawBlock`s: malloc'd,
+// released when they go). The peers'
 // `grouped_probe` returns `int` + out-param (C) / `Option<u64>` (Rust);
 // this file follows the C shape — `→ i` plus a one-slot `*u64` out.
 //
@@ -16,6 +17,8 @@
 // decimal, masked to 63 bits — and nothing else. `bench/bench.sh` gates
 // on all five language implementations printing the same line before it
 // reports a single timing number for the row.
+
+$ `stdlib/core/mem.nu`
 
 unsafe @ lcg_step * u64 st → u64 {
     : ~ u64 s . st 0
@@ -143,15 +146,23 @@ unsafe @ main → i {
     : i bloom_words 64
     : i compact_chunk 64
 
-    : *u64 st # *u64 ( malloc 8 )
+    : RawBlock st__blk ( raw_block 8 )
+    : *u64 st # *u64 ( raw_block_ptr st__blk )
     = . st 0 # u64 123456789
-    : *u64 ctrl # *u64 ( malloc * cap 8 )
-    : *u64 keys # *u64 ( malloc * cap 8 )
-    : *u64 vals # *u64 ( malloc * cap 8 )
-    : *u64 reducer_bloom # *u64 ( malloc * bloom_words 8 )
-    : *u64 compact # *u64 ( malloc * compact_chunk 8 )
-    : *u64 built_keys # *u64 ( malloc * 160 8 )
-    : *u64 out # *u64 ( malloc 8 )
+    : RawBlock ctrl__blk ( raw_block * cap 8 )
+    : *u64 ctrl # *u64 ( raw_block_ptr ctrl__blk )
+    : RawBlock keys__blk ( raw_block * cap 8 )
+    : *u64 keys # *u64 ( raw_block_ptr keys__blk )
+    : RawBlock vals__blk ( raw_block * cap 8 )
+    : *u64 vals # *u64 ( raw_block_ptr vals__blk )
+    : RawBlock reducer_bloom__blk ( raw_block * bloom_words 8 )
+    : *u64 reducer_bloom # *u64 ( raw_block_ptr reducer_bloom__blk )
+    : RawBlock compact__blk ( raw_block * compact_chunk 8 )
+    : *u64 compact # *u64 ( raw_block_ptr compact__blk )
+    : RawBlock built_keys__blk ( raw_block * 160 8 )
+    : *u64 built_keys # *u64 ( raw_block_ptr built_keys__blk )
+    : RawBlock out__blk ( raw_block 8 )
+    : *u64 out # *u64 ( raw_block_ptr out__blk )
     ( zero_block ctrl cap )
     ( zero_block keys cap )
     ( zero_block vals cap )
@@ -217,15 +228,6 @@ unsafe @ main → i {
         = sum ^^ sum . compact tail
         = tail + tail 1
     }
-
-    ( free out )
-    ( free built_keys )
-    ( free compact )
-    ( free reducer_bloom )
-    ( free vals )
-    ( free keys )
-    ( free ctrl )
-    ( free st )
     ( nurl_println_int # i & sum 0x7fffffffffffffff )
     ^ 0
 }

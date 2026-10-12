@@ -498,7 +498,8 @@ unsafe @ model_drop → v { = g_model @ ?Model { F } }
 
 `( mem_addr g )` (`unsafe`) is a `*T` to the mutable global `g` of type
 `T` — a struct global's fields reached through a pointer, or an address a
-foreign function or an atomic operation writes through.
+foreign function or an atomic operation writes through. Given an `inout`
+parameter it is the caller's place, valid for the call.
 
 ## 4. Types
 
@@ -1620,7 +1621,9 @@ A function parameter may carry a leading convention marker (§7.2):
   address. The callee mutates the caller's storage in place. Ordinary
   and generic declarations may follow their callers.
   Pointer indices must be integers and are evaluated once. Named fields through
-  struct pointers are addressable as well. The pointee must match the declared
+  struct pointers are addressable as well, through an immutable pointer
+  binding or a pointer parameter too: the pointer stays, the memory it
+  points to is written. The pointee must match the declared
   parameter type exactly; raw-pointer bounds remain the caller's responsibility.
 - `sink` — consume / move. The callee takes ownership; the caller may
   not use the argument binding afterwards. Compiler-managed enum owners
@@ -1968,6 +1971,10 @@ whichever way it leaves:
 - `( mem_put_back x )` (only inside an `unsafe` function) stores `x` back
   into the slot it was read from without copying it or taking it over —
   for an element setter.
+- `( mem_replace [T] place x )` (stdlib/core/mem.nu, `unsafe`) puts `x`
+  into the `inout` place and returns what the place held, owned — for
+  taking a value out of a field (through a pointer too) and leaving
+  another in its place.
 
 See [`docs/MEMORY.md` §7.6](MEMORY.md) for the complete rules and
 [`docs/LIMITATIONS.md`](LIMITATIONS.md) for the shapes that still

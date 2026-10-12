@@ -6,8 +6,9 @@
 // query: the load address of step n+1 depends on the comparison at step
 // n, which is the pointer-chasing shape.
 //
-// The table is `malloc`ed and filled with `values[i] = 2 * i` — the same
-// contents the C and Rust peers spell out as a literal array.
+// The table (a `RawBlock`: malloc'd, released when it goes) is filled
+// with `values[i] = 2 * i` — the same contents the C and Rust peers spell
+// out as a literal array.
 //
 // The `low < 64 && values[low] == target` guard is written as two nested
 // `?`s: NURL's `&` on booleans does not short-circuit, so a single `&`
@@ -19,12 +20,15 @@
 // on all five language implementations printing the same line before it
 // reports a single timing number for the row.
 
+$ `stdlib/core/mem.nu`
+
 unsafe @ main → i {
     // The workload multiplier: bench/wasmbench.sh --scale N rewrites this 1.
     : u64 BENCH_SCALE 1
     : i n 64
     : u64 iterations * 5000000 BENCH_SCALE
-    : *u64 values # *u64 ( malloc * n 8 )
+    : RawBlock values__blk ( raw_block * n 8 )
+    : *u64 values # *u64 ( raw_block_ptr values__blk )
     : ~ i z 0
     ~ < z n {
         = . values z # u64 * 2 z
@@ -56,7 +60,6 @@ unsafe @ main → i {
     }
 
     : u64 checksum ^^ state hits
-    ( free values )
     ( nurl_println_int # i & checksum 0x7fffffffffffffff )
     ^ 0
 }

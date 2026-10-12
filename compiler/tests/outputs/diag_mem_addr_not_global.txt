@@ -1,6 +1,6 @@
 COMPILE FAIL
 ERRORS
-compiler/tests/diag_mem_addr_not_global.nu:5:23: error: mem_addr takes a mutable global: '( mem_addr g )' with ': ~ T g …' at the top level — its storage is the program's for the whole run, so its address stays valid.
+compiler/tests/diag_mem_addr_not_global.nu:5:23: error: mem_addr takes a mutable global: '( mem_addr g )' with ': ~ T g …' at the top level — its storage is the program's for the whole run, so its address stays valid — or an 'inout' parameter, whose place is the caller's for the call.
     : *i p ( mem_addr local )
                       ^
 error: aborting due to 1 previous error

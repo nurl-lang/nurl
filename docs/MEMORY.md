@@ -147,7 +147,8 @@ A value that is there or not is an option global (`: ~ ?Model g_model 0`,
 zero is `F`): `= g_model @ ?Model { F }` lets the old one go.
 `( mem_addr g )` (`unsafe`) is a `*T` to any mutable global: a struct
 global's fields for an `unsafe` helper, or an address a foreign call or
-an atomic operation writes through. A raw-string global (`: ~ s g ```)
+an atomic operation writes through. It also takes an `inout` parameter,
+whose place is the caller's for the call (`mem_replace` is built on it). A raw-string global (`: ~ s g ```)
 owns its text, as a mutable string binding does: a fresh string assigned
 to it — from a call that hands it over on every path, or on this call
 only (its guard slot says so, h202) — is released by the next assignment.
@@ -163,7 +164,9 @@ A parameter has one of three conventions:
 | `sink` | `sink T x` | the callee takes ownership; the caller's binding is consumed |
 
 **`inout`.** The argument must be a mutable (`: ~`) binding or a field of
-one (`. obj field`), and the callee's writes land in the caller's storage.
+one (`. obj field`), or a field through a pointer (`. p field` with `p` a
+`*S` binding or parameter: the pointer is not reassigned, the memory it
+points to is written), and the callee's writes land in the caller's storage.
 A value assigned through an `inout` parameter replaces the caller's and
 drops what it overwrites — a `String`, a `Vec`, a struct, and an option or
 a result that owns something alike (h199). What is assigned becomes the
@@ -1139,6 +1142,15 @@ are dropped, moved and copied by the same rules:
 | `( mem_put_back x )` | the next store of `x` through a pointer writes back a value read from that slot; the container keeps owning it |
 | `( mem_dup x )` | an owned copy: deep for an owning value, the value itself otherwise |
 | `( mem_forget x )` | gives up `x`'s value without releasing it; `unsafe` only |
+| `( mem_replace [T] place x )` | `x` goes into `place` (a mutable binding, a field of one, or a field through a pointer) and what `place` held comes back, owned; nothing is dropped or copied (stdlib/core/mem.nu, `unsafe`) |
+
+**Raw memory that releases itself.** A `RawBlock`
+(`( raw_block n )`, stdlib/core/mem.nu) is `n` bytes from the C
+allocator, released when the block is dropped; code works through a
+typed pointer into it (`# *f ( raw_block_ptr xb )`) and frees nothing by
+hand. Moved into a struct, it goes with the struct. The pointer is
+malloc's own result, so a loop over several blocks keeps the alias facts
+a `Vec`'s data pointer, read back from its control block, does not carry.
 
 **Containers drop their elements.** `vec_free` and `vec_clear` drop the
 elements, and `vec_append` moves them from one `Vec` to another

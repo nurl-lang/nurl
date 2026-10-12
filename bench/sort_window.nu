@@ -8,8 +8,9 @@
 // dependency through the state.
 //
 // NURL has no fixed-size stack array, so the source allocates the window
-// as a `malloc`ed `*u64` block where the C and Rust peers use
-// `uint64_t window[8]` / `[u64; 8]` on the stack. This does NOT survive
+// as a `*u64` block (a `RawBlock`: malloc'd, freed by its drop) where
+// the C and Rust peers use `uint64_t window[8]` / `[u64; 8]` on the
+// stack. This does NOT survive
 // to the optimized artifacts: LLVM's -O2 heap-to-stack elides the
 // malloc/free pair, inlines the sort, and SROAs the window into
 // registers (native) / locals (wasm), so all five implementations run
@@ -22,6 +23,8 @@
 // decimal, masked to 63 bits — and nothing else. `bench/bench.sh` gates
 // on all five language implementations printing the same line before it
 // reports a single timing number for the row.
+
+$ `stdlib/core/mem.nu`
 
 // Textbook bubble sort over 8 slots: 8 passes, each shrinking the
 // unsorted prefix by one. Kept deliberately naive so every language
@@ -48,7 +51,8 @@ unsafe @ main → i {
     : u64 BENCH_SCALE 1
     : u64 iterations * 2000000 BENCH_SCALE
     : u64 mask 0xffffffff
-    : *u64 window # *u64 ( malloc * 8 8 )
+    : RawBlock window__blk ( raw_block * 8 8 )
+    : *u64 window # *u64 ( raw_block_ptr window__blk )
     : ~ i z 0
     ~ < z 8 {
         = . window z # u64 z
@@ -74,8 +78,6 @@ unsafe @ main → i {
         = state ^^ ^^ state . window 0 . window 7
         = k + k 1
     }
-
-    ( free window )
     ( nurl_println_int # i & state 0x7fffffffffffffff )
     ^ 0
 }

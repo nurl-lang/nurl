@@ -34,6 +34,7 @@
 // error positions inside an included template are reported against the
 // including template's source.
 
+$ `stdlib/core/mem.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/ext/json.nu`
@@ -928,11 +929,9 @@ unsafe @ __tpl_render_ptr i sp s tsrc Json jctx → !String String {
         ( __tpl_fail r . r pos `'{% end %}' or '{% else %}' without an open block` )
     } {}
     ? . r failed { ^ @ !String String { F ( __tpl_errmsg r ) } } {}
-    // The output leaves the state (which goes with `h`) for the caller.
-    : String rendered . r out
-    ( mem_take rendered )
-    = . r out # String 0
-    ^ @ !String String { T rendered }
+    // The output leaves the state (which goes with `h`) for the caller,
+    // an empty one left in its place.
+    ^ @ !String String { T ( mem_replace [String] . r out ( string_new ) ) }
 }
 
 // Render template source against a Json context. The error payload is

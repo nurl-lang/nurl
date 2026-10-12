@@ -14,6 +14,8 @@
 //     canvas_should_close— non-zero when the user closes the window
 //     canvas_close       — teardown
 
+$ `stdlib/core/mem.nu`
+
 & `canvas` @ canvas_open i w i h → *i
 
 & `canvas` @ canvas_present → v
@@ -64,9 +66,12 @@ unsafe @ main → i {
     //     pixel = lut_r[i1] | lut_g[i2] | lut_b[i3]
     // i.e. three loads, three ORs, one store — no multiplies on the
     // hot path, no trig, no division. ~150 KiB total table size.
-    : *i lut_r # *i ( malloc * LUT_SIZE 8 )
-    : *i lut_g # *i ( malloc * LUT_SIZE 8 )
-    : *i lut_b # *i ( malloc * LUT_SIZE 8 )
+    : RawBlock lut_r__blk ( raw_block * LUT_SIZE 8 )
+    : *i lut_r # *i ( raw_block_ptr lut_r__blk )
+    : RawBlock lut_g__blk ( raw_block * LUT_SIZE 8 )
+    : *i lut_g # *i ( raw_block_ptr lut_g__blk )
+    : RawBlock lut_b__blk ( raw_block * LUT_SIZE 8 )
+    : *i lut_b # *i ( raw_block_ptr lut_b__blk )
     : ~ i k 0
     ~ < k LUT_SIZE {
         : i v + 128 / * ( isin k ) 120 1000
@@ -127,8 +132,5 @@ unsafe @ main → i {
     }
 
     ( canvas_close )
-    ( free # s lut_r )
-    ( free # s lut_g )
-    ( free # s lut_b )
     ^ 0
 }

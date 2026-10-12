@@ -8223,11 +8223,24 @@ unsafe @ origin_guard_retained i root → b {
     ( bck_note_read obj )
     : s objptr ( nurl_sym_get2 syms obj `__ptr` )
     : s objty ( nurl_sym_get syms obj )
-    ? == 0 ( nurl_str_len objptr )
+    // A pointer parameter is its own value (`%p`): no slot to load it from.
+    : b pparam & & == 0 ( nurl_str_len objptr ) != 0 ( nurl_sym_len2 syms obj `__param` ) ( is_ptr_ty objty )
+    ? & == 0 ( nurl_str_len objptr ) ! pparam
     { ( die lex ( nurl_str_cat3
         `inout field argument: '` obj `' is not a struct binding in scope. An 'inout' argument must be a plain binding in scope, or one of its fields — the call site names the value plainly, '( f v )' or '( f . s field )'; the 'inout' marker appears only in the DECLARATION. The callee writes through it, so a temporary or an expression has nowhere to write back to.` ) ) }
     {}
-    ? == 0 ( nurl_sym_len2 syms obj `__mutable` )
+    // A named field through a struct pointer: the callee writes the
+    // pointee, not the binding, so the pointer need not be mutable. An
+    // element (`. p i`) still asks for a mutable pointer binding.
+    : ~ b ptr_field F
+    ? & ( is_ptr_ty objty ) ( is_ident_tok ( nurl_lex_type lex ) ) {
+        : s pe ( nurl_str_slice objty 0 - ( nurl_str_len objty ) 1 )
+        ? == ( nurl_str_get pe 0 ) 37 {
+            : s pn ( nurl_str_slice pe 1 - ( nurl_str_len pe ) 1 )
+            = ptr_field != 0 ( nurl_sym_len2 syms pn ( nurl_str_cat3 `__` ( nurl_lex_val lex ) `__idx` ) )
+        } {}
+    } {}
+    ? & == 0 ( nurl_sym_len2 syms obj `__mutable` ) ! ptr_field
     { ( die lex ( nurl_str_cat3
         `inout field argument: binding '` obj
         `' must be mutable ': ~' — the callee mutates its field in place` ) ) }
@@ -8242,11 +8255,14 @@ unsafe @ origin_guard_retained i root → b {
         ? | ( seq element `void` ) >= ( nurl_str_find element `(` ) 0 {
             ( die lex `inout element requires a typed data pointer` )
         } {}
-        : s pointer ( nurl_cg_reg cg )
-        ( nurl_print `  ` ) ( nurl_print pointer )
-        ( nurl_print ` = load ` ) ( nurl_print ( nurl_llty objty ) )
-        ( nurl_print `, ` ) ( nurl_print ( nurl_llty objty ) )
-        ( nurl_print `* ` ) ( nurl_print objptr ) ( nurl_print `\n` )
+        : ~ s pointer ( nurl_str_cat `%` obj )
+        ? ! pparam {
+            = pointer ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print pointer )
+            ( nurl_print ` = load ` ) ( nurl_print ( nurl_llty objty ) )
+            ( nurl_print `, ` ) ( nurl_print ( nurl_llty objty ) )
+            ( nurl_print `* ` ) ( nurl_print objptr ) ( nurl_print `\n` )
+        } {}
         : ~ s field_index ``
         : ~ s field_type ``
         ? & == ( nurl_str_get element 0 ) 37 ( is_ident_tok ( nurl_lex_type lex ) ) {
@@ -11175,16 +11191,20 @@ unsafe @ nurl_lex_peek4_type i h → i {
 // `( mem_addr g )` — the address of a mutable global, as a `*T`: the
 // module's state reached through a pointer, as a handle's state is through
 // arc_ptr (a field written through it is replaced, docs/MEMORY.md §7.6), or
-// a counter the atomics work on. `unsafe` only.
+// a counter the atomics work on. Of an `inout` parameter, it is the
+// caller's place the parameter stands for — valid for the call (how
+// stdlib's mem_replace swaps a value in and out of it). `unsafe` only.
 @ gen_mem_addr i lex i syms i cg → s {
     : s name ( nurl_lex_val lex )
-    ? | ! ( is_ident_tok ( nurl_lex_type lex ) ) | == 0 ( nurl_sym_len2 syms name `__global` ) == 0 ( nurl_sym_len2 syms name `__mutable` )
-    { ( die lex `mem_addr takes a mutable global: '( mem_addr g )' with ': ~ T g …' at the top level — its storage is the program's for the whole run, so its address stays valid.` ) }
+    : b inout & ( is_ident_tok ( nurl_lex_type lex ) ) ( seq ( nurl_sym_get2 syms name `__inout` ) `1` )
+    ? & ! inout | ! ( is_ident_tok ( nurl_lex_type lex ) ) | == 0 ( nurl_sym_len2 syms name `__global` ) == 0 ( nurl_sym_len2 syms name `__mutable` )
+    { ( die lex `mem_addr takes a mutable global: '( mem_addr g )' with ': ~ T g …' at the top level — its storage is the program's for the whole run, so its address stays valid — or an 'inout' parameter, whose place is the caller's for the call.` ) }
     {}
     ( nurl_lex_advance lex )
     ( expect lex TT_RPAREN )
     : s ty ( nurl_sym_get syms name )
     ( nurl_set_last_type ( nurl_str_cat ty `*` ) )
+    ? inout { ^ ( nurl_str_cat ( nurl_sym_get2 syms name `__ptr` ) `` ) } {}
     ^ ( nurl_str_cat `@` name )
 }
 

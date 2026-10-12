@@ -33,13 +33,13 @@ Nothing a program keeps has to be released by hand any more, in safe code
 or in `unsafe`. A field written through a pointer replaces what it held, a
 module global owns its `String`, `Vec`, struct, option or handle, a C
 function that writes its result through a pointer takes an `inout`
-parameter, and a `( Box T )` keeps a record's address put (*Added*,
-*Changed*). Of the 164 package functions that allocated, released or
-claimed (`mem_take`) memory themselves, 14 still do — nwasm's frame pool
-and JIT records, the two guest programs that stress the wasm heap,
-gRPC's write-back of a call record into its table and template's claim
-of its rendered output — and the 28 packages that did the rest are
-released without it (*Packages*). Making module
+parameter, a `( Box T )` keeps a record's address put, a `RawBlock` is
+raw memory that releases itself, and `mem_replace` takes a value out of a
+place by leaving another in it (*Added*, *Changed*). None of the 164
+package functions that allocated, released or claimed (`mem_take`)
+memory themselves does any more — the 322 calls are gone — and neither
+do the examples or the bench kernels: the 30 packages are released
+without it (*Packages*). Making module
 state and raw-pointer records manage themselves found nine more holes,
 closed (h195–h203, *Fixed*). The compiler compiles itself in 17 % fewer
 instructions and 10 % less time than before this work (*Performance*).
@@ -66,6 +66,25 @@ instructions and 10 % less time than before this work (*Performance*).
   writes its result through a pointer needs no allocated cell.
 - **`box_null`** (stdlib/core/box.nu): a `( Box T )` that holds nothing
   yet, for a slot filled later; dropping it releases nothing.
+- **`( mem_replace [T] place x )`** (stdlib/core/mem.nu, `unsafe`): `x`
+  goes into the place and what the place held comes back, owned —
+  nothing dropped, nothing copied (Rust's `std::mem::replace`). The place
+  is an `inout` argument: a mutable binding, a field of one, or a field
+  through a pointer. It replaces the read-then-`mem_take` pair that
+  claimed a value out of a record, and the `mem_put_back` that wrote one
+  back.
+- **`RawBlock`** (stdlib/core/mem.nu): `( raw_block n )` is `n` bytes from
+  the C allocator, released when the block is dropped, and
+  `( raw_block_ptr b )` a pointer into it — raw memory worked through a
+  typed pointer with nothing freed by hand. It goes with the struct it is
+  moved into. The pointer is malloc's own result, so the optimiser keeps
+  the alias facts a `Vec`'s data pointer, read back from its control
+  block, loses.
+- **`( mem_addr p )` of an `inout` parameter** is the caller's place,
+  valid for the call (`mem_replace` is built on it); and an `inout`
+  argument may be a field through an immutable pointer binding or a
+  pointer parameter (`( f . p out )`, `p` a `*S`): the pointer stays, the
+  memory it points to is written.
 - **`( pkg_version )`** is the `version` of the package the source file
   belongs to, from the `[package]` table of the nearest `nurl.toml` above
   the file, as a string literal (spec §6.5). The lexer hands the form on
@@ -334,19 +353,24 @@ it replaces, where it claimed each first).
 
 ### Packages
 
-- **28 packages manage no memory by hand where they did**: agora 0.5.5,
+- **No package manages memory by hand any more**: agora 0.5.5,
   anomaly 0.35.1, arima 0.5.4, data 0.2.4, embed 0.5.4, f5tts 0.3.4,
-  gpu 0.16.0, gpukit 0.10.1, grad 0.12.0, http-client 0.3.4, image 0.7.6,
-  lingbot-map 0.11.1, lsmdb 0.2.4, map-anything 0.6.1, mermaid-server
-  0.3.4, mlp 0.3.11, nn 0.2.2, nurlbox 0.3.4, nurllama 0.19.0, nwasm
-  2.4.2, onnx 0.11.1, pki-server 0.5.1, ply 0.3.4, redis 0.3.4, swarm-mcp
-  0.30.4, tensor 0.6.4, whisper 3.0.1 and yoloe 0.7.4 —
-  215 hand-written allocations and releases fewer. Module state is an
-  owned global (where it was a hand-allocated block or a handle kept as a
-  word), a record whose address must stay put is a `( Box T )`, a buffer
-  a C function fills is a `( Vec u )`, a C result written through a
-  pointer is an `inout` parameter, and the `mem_take` before each field
-  store through a pointer is gone. gpu 0.16.0 (the CUDA wrappers return
+  gpu 0.16.0, gpukit 0.10.1, grad 0.12.0, gRPC 0.2.4, http-client 0.3.4,
+  image 0.7.6, lingbot-map 0.11.1, lsmdb 0.2.4, map-anything 0.6.1,
+  mermaid-server 0.3.4, mlp 0.3.11, nn 0.2.2, nurlbox 0.3.4, nurllama
+  0.19.0, nwasm 2.4.2, onnx 0.11.1, pki-server 0.5.1, ply 0.3.4, redis
+  0.3.4, swarm-mcp 0.30.4, template 0.2.4, tensor 0.6.4, whisper 3.0.1
+  and yoloe 0.7.4 — the 322 calls that allocated, released or claimed
+  memory (232 of them `nurl_alloc`, `nurl_zalloc` and `nurl_free`) are
+  gone. Module state is an owned global (where it was a hand-allocated
+  block or a handle kept as a word), a record whose address must stay
+  put is a `( Box T )` (nwasm's frames, predecoded functions, JIT and
+  thread records too), a buffer a C function fills is a `( Vec u )`, a C
+  result written through a pointer is an `inout` parameter, the
+  `mem_take` before each field store through a pointer is gone, and a
+  value taken out of a record is `mem_replace`d (gRPC's call table,
+  template's rendered output). The CUDA harness swarm-mcp generates
+  keeps its scratch cells in a `Vec` the generated program owns. gpu 0.16.0 (the CUDA wrappers return
   `Vec`s and `String`s, `cpu_malloc` / `cpu_free` are gone) and grad
   0.12.0 (`grad_of` lends its result from the tape) change their API, and
   their dependents' requirements are raised. Each changelog says what
@@ -373,6 +397,13 @@ it replaces, where it claimed each first).
   lingbot-map, map-anything), anomaly, whisper and nurllama did not compile
   under 0.72.0, whose sealed handles made their null literals raw memory.
   All 464 package sources compile now (348 before).
+- **The examples and the bench kernels free nothing by hand.** A raw
+  buffer worked through a pointer is a `RawBlock` (13 bench kernels and 9
+  examples; every kernel prints the same checksum), an expression tree's
+  nodes are `Box`es (calculator, chaotic-showcase, showcase, enigma; in
+  an arena where trees share subtrees), the stress test's stack holds its block (chaotic-aggressor),
+  test_05_closures_and_capture's buffer is a `Vec`, and the C64 and Game
+  Boy emulators keep their memory in `Vec`s an owned global holds.
 - Converting them found two latent faults, fixed in the same releases: an
   authentication reset in agora leaked the OpenID provider it replaced,
   and anomaly's per-version fine-tune report left its `note` a zero

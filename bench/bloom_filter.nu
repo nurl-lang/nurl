@@ -7,14 +7,17 @@
 // query over a 2 KB working set that fits in L1.
 //
 // NURL has no fixed-size stack array: the filter and the LCG state live
-// in `malloc`ed blocks, where the C and Rust peers use
-// `uint64_t filter[256]` / `[u64; 256]` on the stack. `lcg_step` takes
-// the state by pointer, mirroring the peers' `uint64_t*` / `&mut u64`.
+// in `RawBlock`s (malloc'd, released when they go), where the C and
+// Rust peers use `uint64_t filter[256]` / `[u64; 256]` on the stack.
+// `lcg_step` takes the state by pointer, mirroring the peers'
+// `uint64_t*` / `&mut u64`.
 //
 // Contract: the process prints exactly one line — the checksum in
 // decimal, masked to 63 bits — and nothing else. `bench/bench.sh` gates
 // on all five language implementations printing the same line before it
 // reports a single timing number for the row.
+
+$ `stdlib/core/mem.nu`
 
 // One step of the 32-bit LCG, state held by pointer so a single stream
 // feeds both halves of every 64-bit hash.
@@ -52,9 +55,11 @@ unsafe @ split_block_maybe_contains * u64 filter u64 hash → u64 {
 unsafe @ main → i {
     // The workload multiplier: bench/wasmbench.sh --scale N rewrites this 1.
     : u64 BENCH_SCALE 1
-    : *u64 st # *u64 ( malloc 8 )
+    : RawBlock st__blk ( raw_block 8 )
+    : *u64 st # *u64 ( raw_block_ptr st__blk )
     = . st 0 # u64 123456789
-    : *u64 filter # *u64 ( malloc * 256 8 )
+    : RawBlock filter__blk ( raw_block * 256 8 )
+    : *u64 filter # *u64 ( raw_block_ptr filter__blk )
     : ~ i z 0
     ~ < z 256 {
         = . filter z # u64 0
@@ -77,9 +82,6 @@ unsafe @ main → i {
         = hits + hits ( split_block_maybe_contains filter | << high 32 low )
         = k + k 1
     }
-
-    ( free filter )
-    ( free st )
     ( nurl_println_int # i & hits 0x7fffffffffffffff )
     ^ 0
 }

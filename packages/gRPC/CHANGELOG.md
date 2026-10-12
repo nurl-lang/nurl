@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.2.4] — 2026-10-12
+
+Requires NURL 0.73.0, in which a field written through a raw pointer
+drops what it held.
+
+### Changed
+
+- The server updates a call in its table slot, through the slot, where
+  it copied the record out, changed the copy and wrote it back by hand
+  (`mem_put_back`). A queue, trailers or decoder input that a write
+  replaces is dropped by the write; nothing is released by hand. The
+  test fixture's call table works the same way.
+
 ## [0.2.3] — 2026-10-11
 
 Requires NURL 0.73.0, which allows `mem_forget`, `mem_take` and the

@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.2.4] — 2026-10-12
+
+Requires NURL 0.73.0, whose stdlib/core/mem.nu has `mem_replace`.
+
+### Changed
+
+- The rendered output leaves the render state with `mem_replace` (an
+  empty string left in its place), where it was claimed by hand with
+  `mem_take`.
+
 ## [0.2.3] — 2026-10-11
 
 Requires NURL 0.73.0, which allows `mem_forget`, `mem_take` and the

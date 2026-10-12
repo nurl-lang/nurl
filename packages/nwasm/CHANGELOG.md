@@ -20,6 +20,23 @@ The published 2.4.1 does not compile under it.
   guest is released by the `String` that adopts it.
 - Fields replaced through a pointer drop what they held; the frees
   before each such store are gone.
+- Nothing in the interpreter is allocated or released by hand any more:
+  - a predecoded function record is a `Box` the instance owns
+    (`pf_owned`; `pfuncs` keeps the raw lookup the hot path reads), and
+    its compiled code goes with it (a `Drop` on the record);
+  - a call frame is a `Box` its function's record keeps — the pool links
+    the parked ones, and a frame left over by a trap goes back to the
+    pool instead of being freed;
+  - the JIT's slab, anchor block and call contexts are `Vec`s of the
+    instance, and the call-out bridge's closure environment a small
+    record that releases it;
+  - a spawned thread's instance is an `Arc` the thread holds. It no longer
+    copies its owner's memory, table, segment flags, argv and envp by
+    handle (a copy it had to be careful never to drop): it reads them
+    from the owner through `__host`, and owns only what is its own.
+- The two guest programs that stress the shared heap (`heapstress`,
+  `threadprobe`) count in a module global instead of a hand-allocated
+  cell.
 
 ## [2.4.1] — 2026-10-11
 

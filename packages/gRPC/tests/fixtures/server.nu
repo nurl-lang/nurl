@@ -38,7 +38,8 @@ unsafe @ handle inout GrpcServer server ( Vec TestCall ) calls GrpcServerEvent e
     } {}
     : i index ( find_call calls id )
     ? < index 0 { ^ @ !v GrpcError { T 0 } } {}
-    : ~ TestCall call . ( vec_data [TestCall] calls ) index
+    // The call is updated in its slot (removing it below is the last use).
+    : *TestCall call # *TestCall + # i ( vec_data [TestCall] calls ) * index Z TestCall
     : s method ( string_data . call method )
     ? == . event kind ( grpc_server_event_message ) {
         = . call count + . call count 1
@@ -51,10 +52,6 @@ unsafe @ handle inout GrpcServer server ( Vec TestCall ) calls GrpcServerEvent e
                 ~ < k repeats { \ ( grpc_server_send server id . event message ) = k + k 1 }
             } {}
         }
-        // `call` is the slot's own value, updated: it goes back as is.
-        : *TestCall slots ( vec_data [TestCall] calls )
-        ( mem_put_back call )
-        = . slots index call
     } {}
     ? == . event kind ( grpc_server_event_half_close ) {
         ? != ( nurl_str_eq method `/test.Echo/Slow` ) 0 { ^ @ !v GrpcError { T 0 } } {}

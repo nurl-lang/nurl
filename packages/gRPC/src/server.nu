@@ -158,12 +158,46 @@ unsafe @ __grpc_server_get ( Vec GrpcServerCall ) calls i idx → GrpcServerCall
     ^ . ( vec_data [GrpcServerCall] calls ) idx
 }
 
-unsafe @ __grpc_server_put GrpcServer server i idx GrpcServerCall call → v {
+// The call in slot `idx`, in place: a field written through it replaces
+// what the slot held (the table owns the call throughout). Valid until the
+// table grows or is compacted (__grpc_server_open, __grpc_server_prune).
+unsafe @ __grpc_server_slot GrpcServer server i idx → *GrpcServerCall {
     : *GrpcServerCall p ( vec_data [GrpcServerCall] . server calls )
-    // `call` is the slot's own value, read by the getter and updated: it
-    // goes back as is (the table still owns it).
-    ( mem_put_back call )
-    = . p idx call
+    ^ # *GrpcServerCall + # i p * idx Z GrpcServerCall
+}
+
+// Response headers went out with `encoding`.
+unsafe @ __grpc_call_headers_sent GrpcServer server i idx i encoding → v {
+    : *GrpcServerCall c ( __grpc_server_slot server idx )
+    = . c headers_sent T
+    = . c output_encoding encoding
+}
+
+// `frame` joins the call's send queue (what was sent already is cut off
+// the front first).
+unsafe @ __grpc_call_queue GrpcServer server i idx ( Vec u ) frame → v {
+    : *GrpcServerCall c ( __grpc_server_slot server idx )
+    ? > . c outgoing_pos 0 {
+        : i queued - ( vec_len [u] . c outgoing ) . c outgoing_pos
+        : ( Vec u ) compact ( vec_new [u] )
+        ( vec_extend_range [u] compact . c outgoing . c outgoing_pos queued )
+        = . c outgoing compact
+        = . c outgoing_pos 0
+    } {}
+    ( vec_extend [u] . c outgoing frame )
+}
+
+// The call's status trailers are queued: they replace any set before.
+unsafe @ __grpc_call_finish GrpcServer server i idx sink ( Vec Header ) trailers → v {
+    : *GrpcServerCall c ( __grpc_server_slot server idx )
+    = . c trailers trailers
+    = . c finish_requested T
+}
+
+// A decoder whose call has finished keeps no input.
+@ __grpc_decoder_drain inout GrpcDecoder d → v {
+    = . d pending ( vec_new [u] )
+    = . d pos 0
 }
 
 unsafe @ __grpc_server_prune GrpcServer server → v {
@@ -244,9 +278,7 @@ unsafe @ __grpc_server_headers ( Vec Header ) metadata i encoding i max_metadata
     : !v H2ConnErr written ( h2_stream_headers . server transport sid headers F )
     ( tcp_set_write_deadline . . server transport tcp previous )
     ?? written { T _ → {} F e → { = . server closed T ^ @ !v GrpcError { F ( __grpc_server_transport_error e ) } } }
-    = . call headers_sent T
-    = . call output_encoding encoding
-    ( __grpc_server_put server idx call )
+    ( __grpc_call_headers_sent server idx encoding )
     ^ @ !v GrpcError { T 0 }
 }
 
@@ -264,7 +296,7 @@ unsafe @ grpc_server_flush inout GrpcServer server → !v GrpcError {
         = progress F
         : ~ i k 0
         ~ < k ( vec_len [GrpcServerCall] . server calls ) {
-            : GrpcServerCall call ( __grpc_server_get . server calls k )
+            : *GrpcServerCall call ( __grpc_server_slot server k )
             ? & ! . call cancelled ! . call output_finished {
                 : i previous ( __grpc_server_write_begin . . server transport tcp . . server limits idle_timeout_ns . call deadline_ns )
                 : i length ( vec_len [u] . call outgoing )
@@ -282,10 +314,7 @@ unsafe @ grpc_server_flush inout GrpcServer server → !v GrpcError {
                     }
                 } {}
                 ? == . call outgoing_pos length {
-                    ? > length 0 {
-                        ( vec_free [u] . call outgoing )
-                        = . call outgoing ( vec_new [u] )
-                    } {}
+                    ? > length 0 { = . call outgoing ( vec_new [u] ) } {}
                     = . call outgoing_pos 0
                     ? . call finish_requested {
                         : !v H2ConnErr finished ( h2_stream_trailers . server transport . call stream_id . call trailers )
@@ -298,7 +327,6 @@ unsafe @ grpc_server_flush inout GrpcServer server → !v GrpcError {
                         = progress T
                     } {}
                 } {}
-                ( __grpc_server_put server k call )
                 ( tcp_set_write_deadline . . server transport tcp previous )
             } {}
             = k + k 1
@@ -322,15 +350,7 @@ unsafe @ grpc_server_flush inout GrpcServer server → !v GrpcError {
     > n - . . server limits max_connection_buffer ( __grpc_server_buffered server ) {
         ^ @ !v GrpcError { F ( grpc_error GRPC_RESOURCE_EXHAUSTED `response queue exceeds limit` ) }
     } {}
-    ? > . call outgoing_pos 0 {
-        : ( Vec u ) compact ( vec_new [u] )
-        ( vec_extend_range [u] compact . call outgoing . call outgoing_pos queued )
-        ( vec_free [u] . call outgoing )
-        = . call outgoing compact
-        = . call outgoing_pos 0
-    } {}
-    ( vec_extend [u] . call outgoing frame )
-    ( __grpc_server_put server idx call )
+    ( __grpc_call_queue server idx frame )
     ^ ( grpc_server_flush server )
 }
 
@@ -343,11 +363,7 @@ unsafe @ grpc_server_flush inout GrpcServer server → !v GrpcError {
         : !v GrpcError hr ( __grpc_server_default_headers server sid )
         ?? hr { T _ → {} F e → { ^ @ !v GrpcError { F e } } }
     } {}
-    : GrpcServerCall call ( __grpc_server_get . server calls idx )
-    ( grpc_metadata_free . call trailers )
-    = . call trailers trailers
-    = . call finish_requested T
-    ( __grpc_server_put server idx call )
+    ( __grpc_call_finish server idx trailers )
     ^ ( grpc_server_flush server )
 }
 
@@ -397,13 +413,11 @@ unsafe @ __grpc_server_reject inout GrpcServer server i sid i code s message i h
     ( tcp_set_write_deadline . . server transport tcp previous )
     ?? result { T _ → {} F e → { = . server closed T ^ @ !v GrpcError { F ( __grpc_server_transport_error e ) } } }
     ? >= idx 0 {
-        : GrpcServerCall call ( __grpc_server_get . server calls idx )
-        ( vec_free [u] . call outgoing )
+        : *GrpcServerCall call ( __grpc_server_slot server idx )
         = . call outgoing ( vec_new [u] )
         = . call outgoing_pos 0
         = . call output_finished T
         = . call cancelled T
-        ( __grpc_server_put server idx call )
     } {}
     ^ @ !v GrpcError { T 0 }
 }
@@ -493,24 +507,18 @@ unsafe @ __grpc_server_reject inout GrpcServer server i sid i code s message i h
 
 // Poll pending decoded messages before reading more wire bytes. This makes
 // message boundaries independent of HTTP/2 frame boundaries and bounds memory.
-@ __grpc_server_pending inout GrpcServer server → !GrpcServerEvent GrpcError {
+unsafe @ __grpc_server_pending inout GrpcServer server → !GrpcServerEvent GrpcError {
     : i count ( vec_len [GrpcServerCall] . server calls )
     : ~ i visited 0
     ~ < visited count {
         : i idx % + . server cursor visited count
-        : ~ GrpcServerCall call ( __grpc_server_get . server calls idx )
-        // A reject writes the table; the stream id outlives it.
+        // The call is updated in its slot (a reject writes the table too,
+        // and nothing here grows it).
+        : *GrpcServerCall call ( __grpc_server_slot server idx )
         : i sid . call stream_id
         ? . call output_finished {
-            ? > ( vec_len [u] . . call decoder pending ) 0 {
-                ( vec_free [u] . . call decoder pending )
-                = . . call decoder pending ( vec_new [u] )
-            } {}
-            = . . call decoder pos 0
+            ( __grpc_decoder_drain . call decoder )
             ? . call input_ended { = . call end_notified T } {}
-            ( __grpc_server_put server idx call )
-            // The put wrote the table: read the slot as it now is.
-            = call ( __grpc_server_get . server calls idx )
         } {}
         ? & ! . call cancelled > . call deadline_ns 0 {
             ? & ! . call output_finished >= ( monotonic_ns ) . call deadline_ns {
@@ -520,8 +528,6 @@ unsafe @ __grpc_server_reject inout GrpcServer server i sid i code s message i h
         } {}
         ? & ! . call cancelled ! . call end_notified {
             : !GrpcMessage GrpcError decoded ( grpc_decoder_next . call decoder )
-            ( __grpc_server_put server idx call )
-            = call ( __grpc_server_get . server calls idx )
             ?? decoded {
                 F e → {
                     : i code . e code
@@ -549,8 +555,6 @@ unsafe @ __grpc_server_reject inout GrpcServer server i sid i code s message i h
                     }
                     T _ → {
                         = . call end_notified T
-                        ( __grpc_server_put server idx call )
-                        = call ( __grpc_server_get . server calls idx )
                         = . server cursor + idx 1
                         ^ @ !GrpcServerEvent GrpcError { T @ GrpcServerEvent {
                                 ( grpc_server_event_half_close ) sid ( string_clone . call method )
@@ -564,7 +568,7 @@ unsafe @ __grpc_server_reject inout GrpcServer server i sid i code s message i h
     ^ @ !GrpcServerEvent GrpcError { T ( __grpc_server_event ( grpc_server_event_control ) 0 GRPC_OK ) }
 }
 
-@ __grpc_server_receive inout GrpcServer server H2Event event → !GrpcServerEvent GrpcError {
+unsafe @ __grpc_server_receive inout GrpcServer server H2Event event → !GrpcServerEvent GrpcError {
     : i kind . event kind
     : i sid . event stream_id
     ? == kind ( h2_event_headers ) { ^ ( __grpc_server_open server event ) } {}
@@ -574,16 +578,15 @@ unsafe @ __grpc_server_reject inout GrpcServer server i sid i code s message i h
     } {}
     : i idx ( __grpc_server_index server sid )
     ? >= idx 0 {
-        : ~ GrpcServerCall call ( __grpc_server_get . server calls idx )
+        // Updated in its slot; nothing here grows the table.
+        : *GrpcServerCall call ( __grpc_server_slot server idx )
         ? == kind ( h2_event_reset ) {
             = . call cancelled T
-            ( __grpc_server_put server idx call )
             ^ @ !GrpcServerEvent GrpcError { T ( __grpc_server_event ( grpc_server_event_cancelled ) sid ( grpc_reset_status . event error_code ) ) }
         } {}
         ? == kind ( h2_event_data ) {
             ? . call output_finished {
                 ? . event end_stream { = . call input_ended T } {}
-                ( __grpc_server_put server idx call )
                 ^ ( __grpc_server_pending server )
             } {}
             : i n ( vec_len [u] . event data )
@@ -592,8 +595,6 @@ unsafe @ __grpc_server_reject inout GrpcServer server i sid i code s message i h
                 ^ @ !GrpcServerEvent GrpcError { T ( __grpc_server_event ( grpc_server_event_cancelled ) sid GRPC_RESOURCE_EXHAUSTED ) }
             } {}
             : !v GrpcError fed ( grpc_decoder_feed . call decoder . event data )
-            ( __grpc_server_put server idx call )
-            = call ( __grpc_server_get . server calls idx )
             ?? fed {
                 T _ → {}
                 F e → {
@@ -607,12 +608,8 @@ unsafe @ __grpc_server_reject inout GrpcServer server i sid i code s message i h
         ? == kind ( h2_event_trailers ) {
             ?? ( grpc_metadata_decode . event headers . . server limits max_metadata ) {
                 T metadata → {
-                    // The old trailers are freed here, so the slot must take
-                    // the new ones now, whether or not the stream ends.
-                    ( grpc_metadata_free . call request_trailers )
+                    // The new trailers replace (and drop) the old ones.
                     = . call request_trailers metadata
-                    ( __grpc_server_put server idx call )
-                    = call ( __grpc_server_get . server calls idx )
                 }
                 F e → {
                     : i code . e code
@@ -622,10 +619,7 @@ unsafe @ __grpc_server_reject inout GrpcServer server i sid i code s message i h
                 }
             }
         } {}
-        ? . event end_stream {
-            = . call input_ended T
-            ( __grpc_server_put server idx call )
-        } {}
+        ? . event end_stream { = . call input_ended T } {}
     } {}
     ^ ( __grpc_server_pending server )
 }

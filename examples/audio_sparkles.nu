@@ -17,6 +17,8 @@
 // native SDL2 back-end is *not* wired up for audio today, so running
 // this via `nurl.sh` will link-fail with unresolved host imports.
 
+$ `stdlib/core/mem.nu`
+
 & `libc` @ rand → i
 
 & `canvas` @ canvas_open i w i h → *i
@@ -74,12 +76,18 @@
 unsafe @ main → i {
     // Particle pools: parallel i64 arrays. Positions are in framebuffer
     // coords. vx/vy are pixels/frame × 100 (fixed-point Q8-ish).
-    : *i px # *i ( malloc * MAX_PART 8 )
-    : *i py # *i ( malloc * MAX_PART 8 )
-    : *i pvx # *i ( malloc * MAX_PART 8 )
-    : *i pvy # *i ( malloc * MAX_PART 8 )
-    : *i pcol # *i ( malloc * MAX_PART 8 )
-    : *i plife # *i ( malloc * MAX_PART 8 )
+    : RawBlock px__blk ( raw_block * MAX_PART 8 )
+    : *i px # *i ( raw_block_ptr px__blk )
+    : RawBlock py__blk ( raw_block * MAX_PART 8 )
+    : *i py # *i ( raw_block_ptr py__blk )
+    : RawBlock pvx__blk ( raw_block * MAX_PART 8 )
+    : *i pvx # *i ( raw_block_ptr pvx__blk )
+    : RawBlock pvy__blk ( raw_block * MAX_PART 8 )
+    : *i pvy # *i ( raw_block_ptr pvy__blk )
+    : RawBlock pcol__blk ( raw_block * MAX_PART 8 )
+    : *i pcol # *i ( raw_block_ptr pcol__blk )
+    : RawBlock plife__blk ( raw_block * MAX_PART 8 )
+    : *i plife # *i ( raw_block_ptr plife__blk )
 
     // Zero life-counter for every slot (0 = free).
     : ~ i zi 0

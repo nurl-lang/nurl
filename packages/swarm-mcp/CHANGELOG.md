@@ -18,6 +18,19 @@ The published 0.30.3 does not compile under it.
   frees before each such store are gone, and the coordinator's node is
   released by the store that replaces it on a reconnect.
 
+### Fixed
+
+- The CUDA chunk-kernel program the coordinator generates
+  (`cuda_wrap`) compiles again: its driver allocated its result cells and
+  host buffers with `nurl_alloc` in a safe function, which the compiler
+  rejects (raw memory is `unsafe` only), so every `compute_*_cuda` tool
+  answered "CUDA kernel program did not compile". The driver is an `unsafe` function now, every result
+  the CUDA driver or NVRTC writes through a pointer is an `inout`
+  parameter of the generated declarations, and every host buffer (the
+  PTX, the compile log, the parameter, input and output blocks, the
+  kernel's argument block) is a `Vec` — nothing in the generated program
+  is allocated or released by hand. The offline test checks that.
+
 ## [0.30.3] — 2026-10-11
 
 Requires NURL 0.73.0, which allows `mem_forget`, `mem_take` and the

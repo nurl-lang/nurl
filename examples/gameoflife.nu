@@ -1,5 +1,7 @@
 // gameoflife.nu — Conway's Life, classic two-color, big and clear
 
+$ `stdlib/core/mem.nu`
+
 & libc @ rand → i
 
 & canvas @ canvas_open i w i h → *i
@@ -23,9 +25,10 @@ unsafe @ main → i {
     : i ncells * GW GH
     : i frame_ms / 1000 FPS
 
-    : *i grid_a # *i ( malloc * ncells 8 )
-    : *i grid_b # *i ( malloc * ncells 8 )
-
+    : RawBlock grid_a__blk ( raw_block * ncells 8 )
+    : *i grid_a # *i ( raw_block_ptr grid_a__blk )
+    : RawBlock grid_b__blk ( raw_block * ncells 8 )
+    : *i grid_b # *i ( raw_block_ptr grid_b__blk )
     : ~ i ix 0
     ~ < ix ncells {
         = . grid_a ix 0
@@ -132,7 +135,5 @@ unsafe @ main → i {
     }
 
     ( canvas_close )
-    ( free # s grid_a )
-    ( free # s grid_b )
     ^ 0
 }

@@ -15,12 +15,15 @@
 // on all five language implementations printing the same line before it
 // reports a single timing number for the row.
 
+$ `stdlib/core/mem.nu`
+
 unsafe @ main → i {
     // The workload multiplier: bench/wasmbench.sh --scale N rewrites this 1.
     : u64 BENCH_SCALE 1
     : i bin_count 64
     : u64 iterations * 20000000 BENCH_SCALE
-    : *u64 bins # *u64 ( malloc * bin_count 8 )
+    : RawBlock bins__blk ( raw_block * bin_count 8 )
+    : *u64 bins # *u64 ( raw_block_ptr bins__blk )
     : ~ i z 0
     ~ < z bin_count {
         = . bins z # u64 0
@@ -43,8 +46,6 @@ unsafe @ main → i {
         = checksum ^^ checksum * . bins slot # u64 + slot 1
         = slot + slot 1
     }
-
-    ( free bins )
     ( nurl_println_int # i & checksum 0x7fffffffffffffff )
     ^ 0
 }

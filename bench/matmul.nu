@@ -1,13 +1,18 @@
 // matmul — multiply two 256x256 integer matrices, print the trace of
 // the product. Deterministic fill: A[i][j] = (i*N+j) % 7,
 // B[i][j] = (i+j) % 5. Stresses nested loops + flat-array indexing.
+$ `stdlib/core/mem.nu`
+
 unsafe @ main → i {
     // The workload multiplier: bench/wasmbench.sh --scale N rewrites this 1.
     : u64 BENCH_SCALE 1
     : i N 256
-    : *i a # *i ( malloc * * N N 8 )
-    : *i b # *i ( malloc * * N N 8 )
-    : *i c # *i ( malloc * * N N 8 )
+    : RawBlock a__blk ( raw_block * * N N 8 )
+    : *i a # *i ( raw_block_ptr a__blk )
+    : RawBlock b__blk ( raw_block * * N N 8 )
+    : *i b # *i ( raw_block_ptr b__blk )
+    : RawBlock c__blk ( raw_block * * N N 8 )
+    : *i c # *i ( raw_block_ptr c__blk )
     // BENCH_SCALE products, the inputs shifted by the repetition so no two
     // are the same computation; the traces add up.
     : ~ i tr 0
@@ -50,8 +55,5 @@ unsafe @ main → i {
         = rep + rep 1
     }
     ( nurl_println_int tr )
-    ( free a )
-    ( free b )
-    ( free c )
     ^ 0
 }
