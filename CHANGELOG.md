@@ -259,6 +259,9 @@ fewer instructions and 9–10 % less time than before this work
   the `% Drop`. The struct was never dropped: the Vec and every R in it
   leaked, and R's drop never ran. Found by rebuilding `Arena` on a Vec of
   self-releasing chunks.
+  The structural fuzzer (`tools/fuzz/genprog.py`) now builds these
+  shapes and counts their drops; on the previous compiler it reports
+  them.
 - **Nine more holes are closed** (h195–h203), found by making module
   state and raw-pointer records manage themselves:
   - *A closure stored into a struct field or a slice* (h195) kept only a
