@@ -68,6 +68,19 @@ $ `stdlib/core/rcbox.nu`
 // two chances to get one wrong — the kind of divergence that shows up
 // as a single failing test vector at round 17 and nowhere else. The
 // caller owns the returned Vec.
+// The ι constants every Keccak-f[1600] round XORs in, built once for the
+// program: publish-once slot 10 (stdlib/std/tls_server.nu keeps the slot
+// registry). A sponge used to build its own Vec of them — two allocations
+// and 24 stores per hash, which a hash-per-call scheme (SLH-DSA's F)
+// paid on every call. The winner lives for the rest of the program,
+// through the global; callers get its data, lent.
+: ~ i g_keccak_rc 0
+
+pub @ keccak_rc_shared → *u64 {
+    ? == g_keccak_rc 0 { = g_keccak_rc ( vec_publish_once [u64] 10 ( keccak_round_constants ) ) } {}
+    ^ ( vec_data [u64] @ ( Vec u64 ) { # s g_keccak_rc } )
+}
+
 pub @ keccak_round_constants → ( Vec u64 ) {
     : ( Vec u64 ) v ( vec_with_cap [u64] 24 )
     : b _l ( vec_set_len [u64] v 24 )
@@ -197,7 +210,7 @@ pub @ keccak_round_constants → ( Vec u64 ) {
 : Sha3Impl {
     ( Vec u64 ) st  // 25 lanes
     ( Vec u64 ) scr  // 25-lane ping-pong buffer for the permutation
-    ( Vec u64 ) rc  // ι constants
+    * u64 rc  // ι constants (keccak_rc_shared, lent)
     i rate  // bytes absorbed/squeezed per permutation
     i pos  // byte offset into the current block
     i dom  // domain-separation byte: 6 for SHA-3, 31 for SHAKE
@@ -228,7 +241,7 @@ pub @ sha3_new i rate i dom → Sha3 {
     // Built whole and moved into the box: every field is written, so the
     // block needs no zeroing first (rcbox_zero's memset showed up in a
     // sponge-per-call profile).
-    ^ @ Sha3 { ( shared_new [Sha3Impl] @ Sha3Impl { st scr ( keccak_round_constants ) rate 0 dom F } ) }
+    ^ @ Sha3 { ( shared_new [Sha3Impl] @ Sha3Impl { st scr ( keccak_rc_shared ) rate 0 dom F } ) }
 }
 
 // Let go of `h` now rather than at the end of its owner's scope.
@@ -259,7 +272,7 @@ pub @ sha3_free sink Sha3 h → v {}
     // Hoisted out of the loop: both are loop-invariant, and re-deriving
     // them per block cost a dependent load chain once every `rate` bytes.
     : *u64 scr ( vec_data [u64] . h scr )
-    : *u64 rc ( vec_data [u64] . h rc )
+    : *u64 rc . h rc
     ~ < off n {
         ? & == & pos 7 0 & <= + pos 8 rate <= + off 8 n {
             // Whole lanes, counted once instead of re-tested per lane.
@@ -324,7 +337,7 @@ pub @ sha3_absorb Sha3 h__h ( Vec u ) data → v {
     = . sp >> pos 3 ^^ . sp >> pos 3 << # u64 . h dom # u64 * 8 & pos 7
     : i last - rate 1
     = . sp >> last 3 ^^ . sp >> last 3 << # u64 128 # u64 * 8 & last 7
-    ( __keccakf1600 sp ( vec_data [u64] . h scr ) ( vec_data [u64] . h rc ) )
+    ( __keccakf1600 sp ( vec_data [u64] . h scr ) . h rc )
     = . h pos 0
     = . h squeezing T
 }
@@ -346,7 +359,7 @@ pub @ sha3_squeeze Sha3 h__h i n → ( Vec u ) {
     : ~ i pos . h pos
     ~ < off n {
         ? >= pos rate {
-            ( __keccakf1600 sp ( vec_data [u64] . h scr ) ( vec_data [u64] . h rc ) )
+            ( __keccakf1600 sp ( vec_data [u64] . h scr ) . h rc )
             = pos 0
         } {}
         ? & == & pos 7 0 & <= + pos 8 rate <= + off 8 n {

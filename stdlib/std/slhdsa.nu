@@ -258,7 +258,7 @@ $ `stdlib/core/rcbox.nu`
 : SlhCtx {
     ( Vec u64 ) st  // 100 interleaved lanes — shake256x4_block state
     ( Vec u64 ) scr  // its ping-pong partner
-    ( Vec u64 ) rc
+    * u64 rc  // ι constants (keccak_rc_shared, lent)
     ( Vec u ) in0  // four staging buffers, one rate block each
     ( Vec u ) in1
     ( Vec u ) in2
@@ -275,7 +275,7 @@ $ `stdlib/core/rcbox.nu`
 // A context is a value the public call keeps in a local and lends down
 // the chain (`inout`); its buffers go with that local.
 @ __slhx4_new → SlhCtx {
-    ^ @ SlhCtx { ( __sx_buf_u64 100 ) ( __sx_buf_u64 100 ) ( keccak_round_constants )
+    ^ @ SlhCtx { ( __sx_buf_u64 100 ) ( __sx_buf_u64 100 ) ( keccak_rc_shared )
         ( __sx_buf 136 ) ( __sx_buf 136 ) ( __sx_buf 136 ) ( __sx_buf 136 ) ( __sx_buf 128 ) }
 }
 
@@ -310,7 +310,7 @@ $ `stdlib/core/rcbox.nu`
 @ __sx_run inout SlhCtx c i inlen i n → v {
     : *u vp ( vec_data [u] . c val )
     ( shake256x4_block ( vec_data [u64] . c st ) ( vec_data [u64] . c scr )
-    ( vec_data [u64] . c rc )
+    . c rc
     ( __sx_in c 0 ) ( __sx_in c 1 ) ( __sx_in c 2 ) ( __sx_in c 3 )
     inlen
     vp # *u + # i vp 32 # *u + # i vp 64 # *u + # i vp 96 n )

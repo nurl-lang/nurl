@@ -470,6 +470,13 @@ fewer instructions and 9–10 % less time than before this work
 
 ### Performance
 
+- **Keccak's round constants are built once.** Every SHA-3 / SHAKE
+  sponge (and every four-way one, and SLH-DSA's context) built its own Vec
+  of the 24 ι constants: two allocations and 24 stores per hash. They are
+  published once for the program (`keccak_rc_shared`, once-slot 10) and
+  lent. SLH-DSA, which hashes with a fresh sponge per F call, gains most:
+  the pq bench retires 0.49 % fewer instructions than before this work
+  with a fixed entropy stream (3 147.8 M → 3 132.4 M).
 - **P-384 field arithmetic keeps its words in registers.** The Montgomery
   multiply (`__m6_mul`) read and wrote its 8-word accumulator through the
   scratch's `acc` Vec on every round, because nothing told the optimiser
