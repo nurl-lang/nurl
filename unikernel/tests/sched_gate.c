@@ -47,15 +47,15 @@ int  nurl_pthread_join_ptr(void *t);
 void nurl_pthread_detach_ptr(void *t);
 
 /* The bare runtime runs every spawn on its own copy of the closure env
- * (nurl_closure_clone) and drops that copy when the body returns
+ * (nurl_closure_own_copy) and drops that copy when the body returns
  * (nurl_closure_drop). Both live in runtime_core.c — a file this gate
  * deliberately does not link, because the scheduler is what is under
  * test and the allocator is not. The envs spawned here are plain C
  * pointers to the gate's own state, not NURL closure environments, so
  * the "copy" is the pointer itself and dropping it releases nothing.
  */
-void *nurl_closure_clone(void *env);
-void *nurl_closure_clone(void *env) { return env; }
+void *nurl_closure_own_copy(void *env);
+void *nurl_closure_own_copy(void *env) { return env; }
 void  nurl_closure_drop(void *env);
 void  nurl_closure_drop(void *env) { (void)env; }
 

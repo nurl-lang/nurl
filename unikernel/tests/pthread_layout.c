@@ -31,10 +31,10 @@ extern const unsigned long nurl__bare_sizeof_coro;
  * spawn's closure env through runtime_core.c, which this gate does not
  * link. Nothing here spawns anything, so the definitions only satisfy
  * the link and abort if that ever stops being true. */
-void *nurl_closure_clone(void *env);
-void *nurl_closure_clone(void *env) {
+void *nurl_closure_own_copy(void *env);
+void *nurl_closure_own_copy(void *env) {
     (void)env;
-    fprintf(stderr, "pthread_layout: nurl_closure_clone reached — this gate "
+    fprintf(stderr, "pthread_layout: nurl_closure_own_copy reached — this gate "
                     "links no allocator\n");
     abort();
 }
