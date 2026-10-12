@@ -297,7 +297,9 @@ $ `stdlib/core/mem.nu`
 // Bound the whole preface handshake, including a peer that trickles bytes.
 @ h2_conn_new_until TcpConn tcp i deadline_ns → !H2Connection H2ConnErr {
     : i previous ( __h2_write_begin tcp deadline_ns )
-    : !H2Connection H2ConnErr result ( __h2_conn_new_until tcp deadline_ns )
+    // The connection keeps a share of the socket; this frame still
+    // restores the deadline on its own.
+    : !H2Connection H2ConnErr result ( __h2_conn_new_until ( TcpConn_share tcp ) deadline_ns )
     ( tcp_set_write_deadline tcp previous )
     ^ result
 }
@@ -1443,7 +1445,7 @@ $ `stdlib/core/mem.nu`
     ~ < ( vec_len [u] rx ) count {
         : i remain - deadline_ns ( monotonic_ns )
         ? <= remain 0 { ^ @ !v H2FrameErr { F H2FrameReadTimeout } } {}
-        : i old_timeout ( nurl_tcp_timeout_ms # i . tcp raw )
+        : i old_timeout ( nurl_tcp_timeout_ms ( tcp_conn_raw tcp ) )
         : ~ i wait_ms + / remain 1000000 ? > % remain 1000000 0 1 0
         ? & > old_timeout 0 < old_timeout wait_ms { = wait_ms old_timeout } {}
         ( tcp_set_timeout tcp wait_ms )
@@ -1541,7 +1543,7 @@ $ `stdlib/core/mem.nu`
 @ h2_conn_next_until inout H2Connection c i deadline_ns → !H2Event H2ConnErr {
     : ~ i deadline deadline_ns
     ? <= deadline 0 {
-        : i timeout_ms ( nurl_tcp_timeout_ms # i . . c tcp raw )
+        : i timeout_ms ( nurl_tcp_timeout_ms ( tcp_conn_raw . c tcp ) )
         ? > timeout_ms 0 { = deadline + ( monotonic_ns ) * timeout_ms 1000000 } {}
     } {}
     : i previous ( __h2_write_begin . c tcp deadline )

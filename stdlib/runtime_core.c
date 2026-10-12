@@ -189,6 +189,7 @@ static void nurl__xfree(void *p) {
  * in the FFI half do — keeps working. */
 void *nurl_alloc(long long bytes);  /* §9a */
 void *nurl_closure_clone(void *env);  /* closure envs, see below */
+void *nurl_closure_own_copy(void *env);  /* …owning what it only viewed */
 void  nurl_free(void *ptr);  /* §9a */
 void  nurl_free_nonnull(void *ptr);
 void  nurl_closure_drop(void *env);  /* closure envs, see nurl_closure_clone */

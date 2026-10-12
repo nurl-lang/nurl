@@ -1544,6 +1544,19 @@ unsafe @ agg_field_count i syms s ot → i {
 // / `f<i>` hold each parked function's statement rows, parameter names
 // and source file. Allocated in main().
 : ~ i g_deferred_bck 0
+// While an aggregate literal is built (g_lm_depth > 0): every bare
+// identifier a call in it hands to its callee, as `callee idx name` lines
+// (bck_check_lit_moves pairs them with the names the literal's fields
+// move in), and the pairs whose verdict needs the callee's final summary,
+// checked at module end (resolve_lit_handoffs): a symtab of `c<i>` callee,
+// `x<i>` argument index, `m<i>` the diagnostic, rendered when recorded.
+// g_lm_inner: the names a literal nested in another one moved in bare, so
+// the outer literal sees `@ Two { t @ Holder { t } }` move `t` twice.
+: ~ s g_lm_calls ``
+: ~ s g_lm_inner ``
+: ~ i g_lm_depth 0
+: ~ i g_lm_pend 0
+: ~ i g_lm_pend_n 0
 
 // Names of functions whose body has been compiled — the "is the inline
 // summary trustworthy for this callee?" test. Set by
@@ -12286,6 +12299,201 @@ unsafe @ bck_list_len i which → i {
     ^ rows
 }
 
+// Word `k` of a space-separated list (`-` past its end).
+@ __lm_word s list i k → s {
+    : ~ s rest ( nurl_str_cat list `` )
+    : ~ i i 0
+    ~ & < i k != 0 ( nurl_str_len rest ) { = rest ( str_skip_word rest ) = i + i 1 }
+    ? == 0 ( nurl_str_len rest ) { ^ ( nurl_str_cat `-` `` ) } {}
+    ^ ( str_first_word rest )
+}
+
+// `list` without the word `w`.
+@ __lm_drop_word s list s w → s {
+    : ~ s out ``
+    : ~ s rest ( nurl_str_cat list `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s x ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? ! ( seq x w ) { = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat x `` ) ( nurl_str_cat3 out ` ` x ) } {}
+    }
+    ^ out
+}
+
+// The names literals nested in field k moved in bare: its span of
+// g_lm_inner (`itab` holds where each of the `n` fields' spans starts).
+@ __lm_inner_of s itab i k i n → s {
+    : i a ( nurl_str_to_int ( __lm_word itab k ) )
+    : i b ? < + k 1 n ( nurl_str_to_int ( __lm_word itab + k 1 ) ) ( nurl_str_len g_lm_inner )
+    ? | | < a 0 > b ( nurl_str_len g_lm_inner ) >= a b { ^ `` } {}
+    ^ ( nurl_str_slice g_lm_inner a - b a )
+}
+
+// Does any field move a name in bare (a word other than `-`)?
+@ __lm_any_moved s list → b {
+    : ~ s rest ( nurl_str_cat list `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s x ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? ! ( seq x `-` ) { ^ T } {}
+    }
+    ^ F
+}
+
+// The names in a span of the `pmoves` list (entries are `name x` pairs).
+@ __lm_moved_names s pm i p0 i p1 → s {
+    ? | >= p0 p1 > p1 ( nurl_str_len pm ) { ^ ( nurl_str_cat `` `` ) } {}
+    : ~ s mv ( nurl_str_slice pm p0 - p1 p0 )
+    ? != 0 ( nurl_str_starts mv ` ` ) { = mv ( str_skip_word mv ) } {}
+    : ~ s out ``
+    ~ != 0 ( nurl_str_len mv ) {
+        : s x ( str_first_word mv )
+        = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat x `` ) ( nurl_str_cat3 out ` ` x )
+        = mv ( str_skip_word ( str_skip_word mv ) )
+    }
+    ^ out
+}
+
+// For each `callee idx name` line of `calls` naming `nm`: a callee whose
+// parameter takes the value over (consumes or keeps it) makes a second
+// owner of what the literal moved in. Its summary may not be final yet
+// (a callee defined further down): the verdict is parked, with the
+// diagnostic rendered here, for resolve_lit_handoffs.
+unsafe @ __lm_pair_handoffs i lex i line i col s calls s nm s head → v {
+    : ~ s rest ( nurl_str_cat calls `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : i nl ( nurl_str_find rest `\n` )
+        : s ln ? < nl 0 ( nurl_str_cat rest `` ) ( nurl_str_slice rest 0 nl )
+        = rest ? < nl 0 `` ( nurl_str_slice rest + nl 1 - - ( nurl_str_len rest ) nl 1 )
+        : s cal ( str_first_word ln )
+        : s r1 ( str_skip_word ln )
+        : s ix ( str_first_word r1 )
+        : s nmw ( str_first_word ( str_skip_word r1 ) )
+        ? ( seq nmw nm ) {
+            : s msg ( nurl_str_cat3 head ( nurl_str_cat3 `'` cal `', which takes it over` )
+            ` as well — the literal and that callee would both release it. Give one of them a copy (clone it, or share a handle), or put the value in only once.` )
+            ? == g_lm_pend 0 { = g_lm_pend ( nurl_sym_new ) } {}
+            : s k ( nurl_str_int g_lm_pend_n )
+            ( nurl_sym_def g_lm_pend ( nurl_str_cat `c` k ) cal )
+            ( nurl_sym_def g_lm_pend ( nurl_str_cat `x` k ) ix )
+            ( nurl_sym_def g_lm_pend ( nurl_str_cat `m` k )
+            ( nurl_str_cat4 ( nurl_str_cat4 ( nurl_lex_filename lex ) `:` ( nurl_str_int line ) `:` )
+            ( nurl_str_cat3 ( nurl_str_int col ) `: error: ` msg )
+            ( nurl_str_cat3 `\n` ( nurl_lex_line_text_at lex line ) `\n` )
+            ( nurl_diag_caret col ) ) )
+            = g_lm_pend_n + g_lm_pend_n 1
+        } {}
+    }
+}
+
+// The literal-field handoffs parked by __lm_pair_handoffs, decided now
+// that every callee's summary is final. Called from main() beside
+// resolve_deferred_borrowck.
+unsafe @ resolve_lit_handoffs → v {
+    ? | == g_lm_pend 0 == 0 g_borrowck { ^ } {}
+    : ~ i i 0
+    ~ < i g_lm_pend_n {
+        : s k ( nurl_str_int i )
+        : s cal ( nurl_sym_get g_lm_pend ( nurl_str_cat `c` k ) )
+        : s ix ( nurl_sym_get g_lm_pend ( nurl_str_cat `x` k ) )
+        ? | ( nurl_sym_has_word g_fn_sink cal ix ) ( nurl_sym_has_word g_fn_keeps cal ix ) {
+            ( nurl_eprintln ( nurl_sym_get g_lm_pend ( nurl_str_cat `m` k ) ) )
+            ( __diag_abort )
+        } {}
+        = i + i 1
+    }
+}
+
+// The fields of one aggregate literal run in order, and the moves they
+// make reach the borrow walk only after the statement (bck_stash_move),
+// so within the literal nothing saw them: `@ Two { t ( wrap t ) }` put `t`
+// into a field and handed it to a callee that keeps it too — two owners
+// of one value, the second released under the first — and `@ P { (
+// string_data s ) ( eat s ) }` kept a view of what a later field released.
+// `tab` holds each field's `r0 p0` (where its span of the statement's
+// `reads` / `pmoves` lists starts; it ends where the next field's
+// starts), `scmask` a bit per field whose value is a plain scalar, and
+// `moved` the name each field moves in bare (`-` for any other value),
+// `lent` a `1` per field holding an owning value lent from what it read
+// (`( wrap t )`, `wrap` handing its parameter back inside a struct). A
+// view of a field's value kept beside it (`@ B { v ( vec_data [u] v ) }`)
+// is fine: the literal owns the buffer it points into.
+// `itab` holds where each field's span of g_lm_inner starts: the names a
+// literal nested in that field moved in bare, which the field moves too.
+unsafe @ bck_check_lit_moves i lex i line i col s what s tab i scmask s moved s lent s ctab s itab → v {
+    : s reads ( nurl_sym_get g_bck `reads` )
+    : s pm ( nurl_sym_get g_bck `pmoves` )
+    : i rn ( nurl_str_len reads )
+    : i pn ( nurl_str_len pm )
+    : ~ i n 0
+    : ~ s cnt ( nurl_str_cat tab `` )
+    ~ != 0 ( nurl_str_len cnt ) { = cnt ( str_skip_word ( str_skip_word cnt ) ) = n + n 1 }
+    : ~ i j 0
+    ~ < j n {
+        : s mvb ( __lm_word moved j )
+        : i pj0 ( nurl_str_to_int ( __lm_word tab + * j 2 1 ) )
+        : i pj1 ? < + j 1 n ( nurl_str_to_int ( __lm_word tab + * + j 1 2 1 ) ) pn
+        // What field j released as it ran — not the name it moves in bare.
+        : ~ s relj ( __lm_moved_names pm pj0 pj1 )
+        ? ! ( seq mvb `-` ) { = relj ( __lm_drop_word relj mvb ) } {}
+        // Every name field j moves in: bare, or through a nested literal.
+        : ~ s mset ( __lm_inner_of itab j n )
+        ? ! ( seq mvb `-` ) { = mset ( nurl_str_cat3 mvb ` ` mset ) } {}
+        : ~ i k 0
+        ~ < k n {
+            ? != k j {
+                : i rk0 ( nurl_str_to_int ( __lm_word tab * k 2 ) )
+                : i rk1 ? < + k 1 n ( nurl_str_to_int ( __lm_word tab * + k 1 2 ) ) rn
+                : i pk0 ( nurl_str_to_int ( __lm_word tab + * k 2 1 ) )
+                : i pk1 ? < + k 1 n ( nurl_str_to_int ( __lm_word tab + * + k 1 2 1 ) ) pn
+                : b sck & < k 62 != 0 & scmask << 1 k
+                // Moved in by field j: no other field takes it as well,
+                // nor holds an owning value lent from it.
+                : ~ s ms ( nurl_str_cat mset `` )
+                ~ != 0 ( nurl_str_len ms ) {
+                    : s mvj ( str_first_word ms ) = ms ( str_skip_word ms )
+                    ? | | ( seq ( __lm_word moved k ) mvj ) ( str_contains_word ( __lm_moved_names pm pk0 pk1 ) mvj ) ( str_contains_word ( __lm_inner_of itab k n ) mvj ) {
+                        ( die_pos lex line col ( nurl_str_cat
+                        ( nurl_str_cat4 `'` mvj `' is moved into field ` ( nurl_str_cat4 ( nurl_str_int + j 1 ) ` of '` what `'` ) )
+                        ( nurl_str_cat3 ` and handed on by field ` ( nurl_str_int + k 1 )
+                        ` as well — the literal and that other owner would both release it. Give one of them a copy (clone it, or share a handle), or put the value in only once.` ) ) )
+                    } {}
+                    // …nor hands it to a callee that consumes or keeps it:
+                    // decided where the callee's summary is final.
+                    : i ck0 ( nurl_str_to_int ( __lm_word ctab k ) )
+                    : i ck1 ? < + k 1 n ( nurl_str_to_int ( __lm_word ctab + k 1 ) ) ( nurl_str_len g_lm_calls )
+                    ? & < ck0 ck1 <= ck1 ( nurl_str_len g_lm_calls ) {
+                        ( __lm_pair_handoffs lex line col ( nurl_str_slice g_lm_calls ck0 - ck1 ck0 ) mvj
+                        ( nurl_str_cat ( nurl_str_cat4 `'` mvj `' is moved into field ` ( nurl_str_cat4 ( nurl_str_int + j 1 ) ` of '` what `'` ) )
+                        ( nurl_str_cat3 ` and handed by field ` ( nurl_str_int + k 1 ) ` to ` ) ) )
+                    } {}
+                    ? & & & ( seq ( __lm_word lent k ) `1` ) < rk0 rk1 <= rk1 rn ( str_contains_word ( nurl_str_slice reads rk0 - rk1 rk0 ) mvj ) {
+                        ( die_pos lex line col ( nurl_str_cat
+                        ( nurl_str_cat4 `'` mvj `' is moved into field ` ( nurl_str_cat4 ( nurl_str_int + j 1 ) ` of '` what `'` ) )
+                        ( nurl_str_cat3 ` while field ` ( nurl_str_int + k 1 )
+                        ` holds a value lent from it, kept as is — the result would own it twice. Copy that value (string_clone, vec_clone, or share a handle) before the literal, or leave the moved one out.` ) ) )
+                    } {}
+                }
+                // Released as field j ran: no field reads it after, nor
+                // keeps more than a scalar of it from before.
+                ? & & < rk0 rk1 <= rk1 rn | ! sck > k j {
+                    : ~ s rr ( nurl_str_cat relj `` )
+                    ~ != 0 ( nurl_str_len rr ) {
+                        : s nm ( str_first_word rr ) = rr ( str_skip_word rr )
+                        ? ( str_contains_word ( nurl_str_slice reads rk0 - rk1 rk0 ) nm ) {
+                            ( die_pos lex line col ( nurl_str_cat
+                            ( nurl_str_cat4 `'` nm `' is released by field ` ( nurl_str_cat4 ( nurl_str_int + j 1 ) ` of '` what `'` ) )
+                            ( nurl_str_cat3 ` and also used by field ` ( nurl_str_int + k 1 )
+                            ? > k j ` — the fields run in order, so that one reads what was already given away. Bind what both need first (clone it if both keep the value).`
+                            ` — it keeps that binding or a view into it, which the later field releases. Bind what both need first (clone it if both keep the value).` ) ) )
+                        } {}
+                    }
+                } {}
+            } {}
+            = k + k 1
+        }
+        = j + j 1
+    }
+}
+
 // The arguments of one call run in order, and the moves they make are
 // flushed into the borrow walk only after the statement (bck_stash_move),
 // so within a call nothing saw them: `( f m m )` handing `m` to a `sink`
@@ -13828,6 +14036,9 @@ unsafe @ bck_list_len i which → i {
         // calls. Record every parameter implication; codegen order is irrelevant.
         : b summary_callee & ! __callee_shadowed ( __summarised_callee syms fname call_name )
         ? ( is_ident_tok bck_arg_tt ) { ( mem_arg_consumption syms cg call_name fname arg_idx bck_arg_tt bck_arg_val at callee_sink summary_callee ) } {}
+        ? & & != 0 g_lm_depth ( is_ident_tok bck_arg_tt ) ! __callee_shadowed {
+            = g_lm_calls ( nurl_str_cat4 g_lm_calls call_name ( nurl_str_cat4 ` ` ( nurl_str_int arg_idx ) ` ` bck_arg_val ) `\n` )
+        } {}
         // A `vec_get` payload handed to a consumer — the legacy "free each
         // element, then free the Vec" loop — leaves the container likewise: its
         // slot is emptied through the Vec's control block and the index, looked up
@@ -25416,7 +25627,23 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                 // execvp), and calling that a move both strands the buffer and
                 // nulls a binding the caller still reads. The same consumption
                 // fact controls emitted IR (mem_emit_arg_flags).
-                : s psink ( nurl_sym_get g_fn_sink pcal )
+                : ~ s psink ( nurl_sym_get g_fn_sink pcal )
+                // A parameter handed to a callee that keeps it moves as one
+                // handed to a `sink` does: the call clears its drop flag on
+                // either (`@.__nurl_sink.N`, emit_sink_flags), and a read
+                // after it read what the keeper released — `( mid h )`,
+                // `mid` binding `( mk h )` and dropping it, then `. h s`.
+                ? & == kc 9 ( seq ( nurl_sym_get g_bck ( bck_bkey `pp_` pvn ) ) `1` ) {
+                    // Kept in the callee's result (`: W w ( wrap h )`) it is
+                    // moved into that owner, as a local is: released with it.
+                    // (A callee that puts it in the container argument —
+                    // `vec_push`, an escape — makes that its owner: a
+                    // `store` row's case.)
+                    : s pkeep ( nurl_sym_get g_fn_keeps pcal )
+                    ? & & ( str_contains_word pkeep paix ) ! ( str_contains_word psink paix ) ! ( str_contains_word ( nurl_sym_get g_fn_escapes pcal ) paix ) {
+                        = psink ( nurl_str_cat3 psink ` ` paix )
+                    } {}
+                } {}
                 // What the result may be or hold of its arguments: its own
                 // handle handed back, a part of it, an element read out of
                 // its storage — every lend the callee's final summaries name
@@ -31858,7 +32085,24 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
     // record those parameters as returned, so a caller passing a stack
     // reference there is flagged just like `^ cb`.
     : ~ s agg_param_idents ``
+    // Per field: where its reads and moves start, what it moves in bare,
+    // and whether its value is a plain scalar (bck_check_lit_moves).
+    : i __lm_p0 ? != 0 g_borrowck ( bck_list_len 1 ) 0
+    : ~ s __lm_tab ``
+    : ~ s __lm_mv ``
+    : ~ s __lm_lt ``
+    : ~ s __lm_ct ``
+    : ~ s __lm_it ``
+    : ~ i __lm_sc 0
+    : ~ i __lm_n 0
+    = g_lm_depth + g_lm_depth 1
     ~ != ( nurl_lex_type lex ) TT_RBRACE {
+        ? != 0 g_borrowck {
+            = __lm_tab ( nurl_str_cat4 __lm_tab ( nurl_str_int ( bck_list_len 0 ) ) ` ` ( nurl_str_cat ( nurl_str_int ( bck_list_len 1 ) ) ` ` ) )
+            = __lm_ct ( nurl_str_cat3 __lm_ct ( nurl_str_int ( nurl_str_len g_lm_calls ) ) ` ` )
+            = __lm_it ( nurl_str_cat3 __lm_it ( nurl_str_int ( nurl_str_len g_lm_inner ) ) ` ` )
+        } {}
+        = __lm_n + __lm_n 1
         ? != 0 g_auto_drop_strings
         { ( nurl_sym_def syms `__last_call_ret_owned__` `` )
             ( nurl_sym_def syms `__last_agg_owned_fields__` `` )
@@ -31912,6 +32156,8 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
         ( __clone_supported ( nurl_sym_get syms fld_first_val ) syms )
         ! ( str_contains_word ( nurl_sym_get g_fn_sink ( nurl_sym_get syms `__fn_self_name__` ) ) ( nurl_str_int __fpc_i ) )
         ? fld_param_copy { = fld_lent ( nurl_str_cat `1` `` ) } {}
+        : s __lm_w ? & & ( is_ident_tok fld_first_tt ) ! fld_param_copy ( __type_needs_drop ( nurl_sym_get syms fld_first_val ) syms ) fld_first_val `-`
+        = __lm_mv ? == 0 ( nurl_str_len __lm_mv ) ( nurl_str_cat __lm_w `` ) ( nurl_str_cat3 __lm_mv ` ` __lm_w )
         // A parameter handed back wrapped (`^ @ ?T { T p }`, `^ @ !T E { T p }`)
         // comes back exactly as `^ p` does: the caller's own value, lent
         // unless this function keeps p on another path (retlend). Taking it
@@ -32226,6 +32472,12 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
                 ( nurl_print `  ` ) ( nurl_print __down ) ( nurl_print ` = xor i1 ` ) ( nurl_print fld_lent ) ( nurl_print `, 1\n` )
                 ( nurl_sym_set_deep syms `__agg_take_own__` __down )
             } { = fval ( mem_emit_cloneif cg fty fval fld_lent ) } }
+        // Whether this field holds an owning value lent from what it read
+        // and kept as is — a moving literal's statically lent field, which
+        // is not copied (above); every other lent field is (cloneif)
+        // (bck_check_lit_moves).
+        : s __lm_l ? & & agg_moves_fields ( seq fld_lent `1` ) ( __type_needs_drop fty syms ) `1` `-`
+        = __lm_lt ? == 0 ( nurl_str_len __lm_lt ) ( nurl_str_cat __lm_l `` ) ( nurl_str_cat3 __lm_lt ` ` __lm_l )
         // A literal built as a call's argument owns the fields it made or
         // copied (a fresh call's value, a copy of a borrowed one); one that
         // IS a binding's value moves in only if the callee keeps the
@@ -33240,9 +33492,25 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
         ( nurl_print ` ` ) ( nurl_print actual_fval )
         ( nurl_print `, ` ) ( nurl_print ( nurl_str_int ins_idx ) ) ( nurl_print `\n` )
         = result r
+        ? & < - __lm_n 1 62 ( __mx_scalar_ty actual_fty ) { = __lm_sc | __lm_sc << 1 - __lm_n 1 } {}
         = idx + idx 1
     }
     ( expect lex TT_RBRACE )  // consume '}'
+    = g_lm_depth - g_lm_depth 1
+    // One value moved into two owners, or released by one field and kept
+    // by another, within this literal.
+    ? & & & != 0 g_borrowck > __lm_n 1 ! ( bck_unsafe_ctx ) | | > ( bck_list_len 1 ) __lm_p0 ( __lm_any_moved __lm_mv ) != 0 ( nurl_str_len g_lm_inner ) {
+        ( bck_check_lit_moves lex agg_line agg_col ( nurl_str_cat `@ ` ? != 0 ( nurl_str_len cur_sname ) cur_sname ( nurl_llty agg_ty ) ) __lm_tab __lm_sc __lm_mv __lm_lt __lm_ct __lm_it )
+    } {}
+    // A literal nested in another hands what it moved in bare up to it.
+    ? & != 0 g_lm_depth ( __lm_any_moved __lm_mv ) {
+        : ~ s __lm_rest ( nurl_str_cat __lm_mv `` )
+        ~ != 0 ( nurl_str_len __lm_rest ) {
+            : s __lm_x ( str_first_word __lm_rest ) = __lm_rest ( str_skip_word __lm_rest )
+            ? ! ( seq __lm_x `-` ) { = g_lm_inner ( nurl_str_cat3 g_lm_inner __lm_x ` ` ) } {}
+        }
+    } {}
+    ? == g_lm_depth 0 { = g_lm_calls `` = g_lm_inner `` } {}
     // The fields a struct literal leaves out are zero-initialised, and the
     // zero of a String, a Vec, a library handle or a closure is not a value
     // of it: safe code using one reads through a null block or calls a null
@@ -54228,6 +54496,7 @@ unsafe @ split_emit_module i n i mlen → v {
         ( mem_emit_guard_flags )
         ( resolve_pending_escapes )
         ( resolve_deferred_borrowck )
+        ( resolve_lit_handoffs )
         ( lazy_check_complete )
         ( dbg_flush )
         // Unused-symbol lint (--lint): every call site (incl. generic

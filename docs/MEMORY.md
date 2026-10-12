@@ -751,6 +751,29 @@ nine more, closed the same way (h195–h203):
   released: it gets the empty one a cursor declared from an identifier
   or a call already had.
 
+Making the TCP handles close themselves found four more (h204, h205,
+h207, h208), and probing h205's rule a fifth (h206):
+
+- a closure a fiber or a thread runs, capturing a `??` arm's payload (or
+  a parameter its caller frees), only viewed it, and the fiber read what
+  the arm's end had released: every spawn runs on a copy of the
+  environment that owns what the environment only viewed
+  (`nurl_closure_own_copy`, §7.4);
+- an aggregate literal moving a binding into one field while another
+  field handed the same binding to a callee that consumes or keeps it
+  (`^ @ Two { t ( wrap t ) }`) made two owners of one value: a literal's
+  fields are checked against each other as a call's arguments are, a
+  callee whose summary is not final being decided at module end;
+- a literal nested in another's field (`^ @ Two { t @ Holder { t } }`)
+  moved the binding a second time unseen: a nested literal hands the
+  names it moved in bare up to the literal around it, which checks them
+  as moves of that field;
+- a parameter handed to a callee that keeps it — and releases it, or
+  keeps it in a result the caller then releases — was still readable
+  after the call, though the call had cleared its drop flag: a parameter
+  moves into a callee that keeps it, as a local does, unless the callee
+  puts it in its container argument (an escape: `vec_push`, §7.6).
+
 The rules that carry it:
 
 - **An owned value moves.** Storing it into an aggregate, an Option or a

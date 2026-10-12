@@ -1020,7 +1020,7 @@ $ `stdlib/ext/websocket.nu`
 
             : ( Vec u ) pkt ( vec_with_cap [u] 96 )
             ( _mqtt_encode_connect pkt cfg )
-            : !v NetErr wr ( tcp_write_all nc pkt )
+            : !v NetErr wr ( tcp_write_all . cl conn pkt )
             ?? wr { T → {} F we → { ^ @ !v MqttErr { F ( __mqtt_of_net we ) } } }
 
             : !( Vec u ) MqttErr rd ( __mqtt_read_packet cl )

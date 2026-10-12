@@ -26,7 +26,7 @@ $ `stdlib/std/net.nu`
 
 // A client over a conn that is never read or written.
 unsafe @ dummy_client i keepalive_ms → MqttClient {
-    : TcpConn conn @ TcpConn { `` 0 0 }
+    : TcpConn conn ( tcp_conn_view 0 )
     ^ @ MqttClient { conn ( vec_new [u] ) ( __mqtt_ctl_new 0 ) keepalive_ms
         ( vec_new [i] ) F }
 }

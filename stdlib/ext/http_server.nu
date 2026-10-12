@@ -754,22 +754,23 @@ $ `stdlib/core/slice.nu`
     }
 }
 
-// The idle timeout, the keep-alive serve loop, and the close.
+// The idle timeout and the keep-alive serve loop, which takes the
+// connection over and closes it with its last owner.
 @ __serve_conn HttpServer s TcpConn conn → v {
     : i ito . ( __srv s ) idle_timeout_ms
     ? > ito 0 { ( tcp_set_timeout conn ito ) } {}
     ( _serve_keepalive_loop s conn )
-    ( tcp_close_conn conn )
 }
 
 @ __serve_gated HttpServer s DosState g TcpConn conn → v {
     : ~ s peer_ip ``
-    // Owns the "ip" prefix (the "ip:port" truncated at the colon) whose
-    // buffer `peer_ip` aliases; dropped on every exit path below, after
-    // the serve loop and the dos_state_release that reads peer_ip. The
-    // DoS path used to leak one String per connection, which an attacker
-    // opening/closing connections in a loop turns into unbounded heap
-    // growth.
+    // Owns the "ip" prefix (the "ip:port" truncated at the colon, or the
+    // whole address) whose buffer `peer_ip` aliases; dropped on every exit
+    // path below, after the serve loop and the dos_state_release that
+    // reads peer_ip — the address the connection caches is gone once the
+    // serve loop has closed it. The DoS path used to leak one String per
+    // connection, which an attacker opening/closing connections in a loop
+    // turns into unbounded heap growth.
     : String ip_only ( string_new )
     : s addr ( tcp_peer_addr conn )
     : i an ( nurl_str_len addr )
@@ -785,8 +786,8 @@ $ `stdlib/core/slice.nu`
             ( string_push_char ip_only ( nurl_str_at addr an j ) )
             = j + j 1
         }
-        = peer_ip ( string_data ip_only )
-    } { = peer_ip addr }
+    } { ( string_push_str ip_only addr ) }
+    = peer_ip ( string_data ip_only )
     : i ok ( dos_state_try_acquire g peer_ip )
     ? == ok 0 {
         ( tcp_close_conn conn )
@@ -796,7 +797,6 @@ $ `stdlib/core/slice.nu`
     ? > ito 0 { ( tcp_set_timeout conn ito ) } {}
     ( _serve_keepalive_loop s conn )
     ( dos_state_release g peer_ip )
-    ( tcp_close_conn conn )
 }
 
 @ server_run_once HttpServer s → !v NetErr {

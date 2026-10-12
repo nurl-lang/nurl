@@ -333,7 +333,7 @@ unsafe @ __redis_open s host i port i tlsmode s server_name → !RedisConn Redis
     : *RedisConnImpl c ( arc_ptr [RedisConnImpl] . h a )
     = . c tls 0
     = . c raw rawfd
-    = . c tcp @ TcpConn { # s rawfd 0 0 }
+    = . c tcp ( tcp_conn_view rawfd )
     = . c tc # TlsConn # s 0
     = . c rxbuf ( vec_new [u] )
     = . c lasterr ( string_new )

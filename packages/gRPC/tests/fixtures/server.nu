@@ -111,7 +111,7 @@ unsafe @ handle inout GrpcServer server ( Vec TestCall ) calls GrpcServerEvent e
             ( nurl_print ( string_data address ) ) ( nurl_print `\n` ) ( flush )
             : ~ i result 0
             ?? ( tcp_accept listener ) {
-                T tcp → { = result ( serve tcp encoding ) ( tcp_close_conn tcp ) }
+                T tcp → { = result ( serve tcp encoding ) }  // `serve` closes it with its connection
                 F _ → { = result 3 }
             }
             ( tcp_close_listener listener )

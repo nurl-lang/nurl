@@ -7,6 +7,7 @@ drops what it held.
 
 ### Changed
 
+- The test server fixture no longer closes the connection it handed to `serve`: the connection closes itself with its last owner (NURL 0.73.0).
 - The server updates a call in its table slot, through the slot, where
   it copied the record out, changed the copy and wrote it back by hand
   (`mem_put_back`). A queue, trailers or decoder input that a write

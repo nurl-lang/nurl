@@ -394,7 +394,7 @@ $ `stdlib/core/mem.nu`
             0 0  // goaway received / last id
             10485760 10485760 100  // send queue, receive buffer, retained streams
             0 0 0 0  // continuation sid / END_STREAM / count, connection error
-            dec_box ( vec_new [H2CStream] ) ( vec_new [u] ) ( vec_new [u] ) ( h2_frame_writer conn 1048576 )
+            dec_box ( vec_new [H2CStream] ) ( vec_new [u] ) ( vec_new [u] ) ( h2_frame_writer ( TcpConn_share conn ) 1048576 )
         } ) }
     : *H2ClientImpl c ( __H2Client_ptr h )
     // RFC 9113 §3.4 requires the first peer frame to be non-ACK SETTINGS.
@@ -436,17 +436,9 @@ $ `stdlib/core/mem.nu`
         ( nurl_tcp_close craw )
         ^ @ !H2Client H2ClientErr { F # H2ClientErr H2CConnect }
     } {}
-    : s rp # s craw
-    : TcpConn conn @ TcpConn { rp 0 0 }
+    : TcpConn conn ( tcp_conn_adopt craw )
     ( tcp_set_timeout conn 30000 )
-    : !H2Client H2ClientErr hr ( __h2_client_handshake conn )
-    ?? hr {
-        T cl → { ^ @ !H2Client H2ClientErr { T cl } }
-        F e → {
-            ( tcp_close_conn conn )
-            ^ @ !H2Client H2ClientErr { F e }
-        }
-    }
+    ^ ( __h2_client_handshake conn )  // a failed one drops (closes) the conn
 }
 
 @ h2_client_connect_tls s host i port b verify → !H2Client H2ClientErr {
@@ -464,14 +456,7 @@ $ `stdlib/core/mem.nu`
         ^ @ !H2Client H2ClientErr { F # H2ClientErr H2CAlpn }
     } {}
     ( tcp_set_timeout conn 30000 )
-    : !H2Client H2ClientErr hr ( __h2_client_handshake conn )
-    ?? hr {
-        T cl → { ^ @ !H2Client H2ClientErr { T cl } }
-        F e → {
-            ( tcp_close_conn conn )
-            ^ @ !H2Client H2ClientErr { F e }
-        }
-    }
+    ^ ( __h2_client_handshake conn )  // a failed one drops (closes) the conn
 }
 
 // Let go of `c` now rather than at the end of its owner's scope (optional).

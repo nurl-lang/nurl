@@ -9,6 +9,7 @@ The published 0.3.3 does not compile under it.
 
 ### Changed
 
+- A failed HTTP/2 attach no longer closes the connection by hand after handing it to the client: the client owns it then, and its drop closes it.
 - A connection a pooled record gives up is moved out by the store that
   empties the field; the `mem_take` before it is gone.
 

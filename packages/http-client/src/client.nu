@@ -362,7 +362,7 @@ unsafe @ __hc_ensure_conn * HttpClientImpl c * HcOriginImpl o → i {
                     : TcpConn conn ( tcp_conn_from_tls tc )
                     : !H2Client H2ClientErr hr ( h2_client_attach conn )
                     ?? hr {
-                        F _ → { ( tcp_close_conn conn ) ^ 6 }
+                        F _ → { ^ 6 }  // the failed client closed the conn
                         T cl → {
                             = . o has_h2 1
                             = . o h2 cl

@@ -1659,7 +1659,7 @@ $ `stdlib/ext/compress.nu`
     ? == craw 0 { ^ @ ?TcpConn { F # TcpConn 0 } } {}
     : i ek ( nurl_tcp_err_kind craw )
     ? != ek 0 { ( nurl_tcp_close craw ) ^ @ ?TcpConn { F # TcpConn 0 } } {}
-    ^ @ ?TcpConn { T @ TcpConn { # s craw 0 0 } }
+    ^ @ ?TcpConn { T ( tcp_conn_adopt craw ) }
 }
 
 @ ws_connect_with s url ? String subprotocol → !WsClient WsErr {
@@ -2284,7 +2284,7 @@ $ `stdlib/ext/compress.nu`
             ? ?? copt { T _ → 0 F _ → 1 } {
                 ^ @ !WsDeflateConn WsErr { F WsConnectFailed }
             } {}
-            : TcpConn conn ?? copt { T c → c F _ → @ TcpConn { # s 0 0 0 } }
+            : TcpConn conn ?? copt { T c → c F _ → ( tcp_conn_view 0 ) }
             : !WsDeflateConfig WsErr hsr ( ws_client_handshake_deflate conn ( string_data . u host ) ( string_data . u path ) subprotocol cfg )
             ?? hsr {
                 F e → {
@@ -2299,10 +2299,7 @@ $ `stdlib/ext/compress.nu`
                             T dctx → {
                                 ^ @ !WsDeflateConn WsErr { T @ WsDeflateConn { client T dctx } }
                             }
-                            F e → {
-                                ( tcp_close_conn conn )
-                                ^ @ !WsDeflateConn WsErr { F e }
-                            }
+                            F e → { ^ @ !WsDeflateConn WsErr { F e } }  // `client` closes the conn
                         }
                     } {
                         // Server declined: carry a null context. Its streams

@@ -629,7 +629,7 @@ $ `stdlib/core/box.nu`
         ( nurl_tcp_close raw )
         ^ @ !RelayClient NetErr { F ( _net_err_of ek ) }
     } {}
-    : TcpConn c @ TcpConn { # s raw 0 0 }
+    : TcpConn c ( tcp_conn_adopt raw )
     ^ @ !RelayClient NetErr { T @ RelayClient { c } }
 }
 

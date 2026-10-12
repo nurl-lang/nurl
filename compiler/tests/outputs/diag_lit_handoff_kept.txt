@@ -1,0 +1,5 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_lit_handoff_kept.nu:11:7: error: 't' is moved into field 1 of '@ Two' and handed by field 2 to 'wrap', which takes it over as well — the literal and that callee would both release it. Give one of them a copy (clone it, or share a handle), or put the value in only once.
+    ^ @ Two { t ( wrap t ) }
+      ^

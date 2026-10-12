@@ -40,14 +40,17 @@ package functions that allocated, released or claimed (`mem_take`)
 memory themselves does any more — the 322 calls are gone — and neither
 do the examples or the bench kernels: the 30 packages are released
 without it (*Packages*). The standard library's own such calls fell from
-651 to 217, every one of them now inside an owner's implementation (a
-container, a counted handle block, a thread primitive, a buffer shared
-with the C runtime): its 87 handle types hold their state in a generic
-`( Shared T )` whose hooks do the releasing, and a foreign function that
-returns a string it allocated says so (`→ sink s`). Making module
-state and raw-pointer records manage themselves found nine more holes,
-closed (h195–h203, *Fixed*). The compiler compiles itself in 16 % fewer
-instructions and 9–10 % less time than before this work (*Performance*).
+651 to 194, every one of them now inside an owner's implementation (a
+container, a counted block, Cell and RawBlock, a pthread primitive): its
+87 handle types hold their state in a generic `( Shared T )` whose hooks
+do the releasing, and a foreign function that returns a string it
+allocated says so (`→ sink s`). Making module state and raw-pointer
+records manage themselves found nine more holes, making the TCP handles
+close themselves four more, and probing the new rules one, all closed
+(h195–h208, *Fixed*). A `TcpConn` or `TcpListener` closes its socket
+with its last owner (*Changed*). The compiler compiles itself in 16 %
+fewer instructions and 9–10 % less time than before this work
+(*Performance*).
 
 ### Added
 
@@ -130,6 +133,24 @@ instructions and 9–10 % less time than before this work (*Performance*).
 
 ### Changed
 
+- **`TcpConn` and `TcpListener` close themselves.** Each is a handle over
+  a counted block: every copy is the same socket, and its last owner
+  closes it, so a forgotten `tcp_close_*` no longer leaks a descriptor.
+  `tcp_close_conn` / `tcp_close_listener` still close early, for every
+  copy. A conn is no longer built field by field: `tcp_conn_adopt raw`
+  owns a runtime socket, `tcp_conn_view raw` views one something else
+  closes (psql and redis keep theirs so), `tcp_conn_raw` /
+  `tcp_listener_raw` read the handle. A conn handed to an owner
+  (`http2_serve`, a client) moves there: closing it by hand afterwards
+  is now a use after move, and the owner closes it.
+- **Finished HTTP requests and process runs are owned records.**
+  `hp_perform` hands back an `HpResult` (status, headers, body) and
+  `process_run` a `ProcResult`; a spawned child's pid, pipes and
+  buffers are a `ProcChildImpl` record. They replace C-layout blocks
+  built with `nurl_zalloc` / `malloc` / `strdup` and read by slot; the
+  C backends' blocks (Win32, WASI) are copied out on arrival. `Bitset`
+  keeps its words in a `Shared` Vec, `Semaphore` is a `Shared` record,
+  and `heap_pop` pops instead of claiming the root.
 - **A standard-library handle is `{ ( Shared T ) ctl }`**, where it was
   `{ s ctl }`. Code that only calls the API is unchanged; a zero handle
   is the cast `# File # s 0` (a pointer cast follows a handle's one-pointer
@@ -263,6 +284,47 @@ instructions and 9–10 % less time than before this work (*Performance*).
   read of the stream was a use after free under the sanitizer
   (http2_client_streaming). Every call now propagates the mark to the
   calling function's own parameter (`mem_putback_pass`).
+- **Five more holes are closed**: h204, h205, h207 and h208, found by
+  making the TCP handles own their sockets, and h206, found by probing
+  h205's rule:
+  - *A closure a fiber or a thread runs, capturing a `??` arm's payload*
+    (or a parameter its caller frees), only viewed it — the arm binding
+    has no drop slot to hand over — and the fiber read what the arm's
+    end had released. Every spawn now runs on a copy of the environment
+    that owns what the environment only viewed (`nurl_closure_own_copy`:
+    a String copied, a handle shared): `nurl_fiber_spawn*`,
+    `nurl_pthread_create_owned`, the signal-handler slot.
+  - *An aggregate literal moving a binding into one field while another
+    field hands it to a callee that consumes or keeps it* (`^ @ Two { t
+    ( wrap t ) }`) made two owners of one value. A literal's fields are
+    checked against each other as a call's arguments are
+    (`bck_check_lit_moves`): a name moved in bare is not moved in twice,
+    handed to a consuming or keeping callee, or kept lent beside its move,
+    and no field reads what another released. A callee whose summary is
+    not final yet is decided at module end (`resolve_lit_handoffs`).
+  - *A literal nested in another field* (`^ @ Two { t @ Holder { t } }`)
+    moved the same binding a second time unseen: the nested literal now
+    hands the names it moved in bare up to the outer one, which checks
+    them as moves of that field.
+  - *A parameter handed to a callee that keeps it* (h207: `( mid h )`,
+    `mid` binding `( mk h )` and dropping it; h208: `: K k ( mk h )`,
+    then `( kfree k )`) was read afterwards. The call cleared the
+    parameter's drop flag, but the borrow walk asked only whether the
+    callee *sinks* the argument; a local in the same place was already
+    "moved into an owner". A parameter now moves into a callee that keeps
+    it, unless the callee puts it in its container argument (an escape:
+    `vec_push`). It found `__serve_conn` closing a connection its
+    keep-alive loop had already closed, and `h2_conn_new_until` and the
+    HTTP/2 client reading a socket they had handed on; those now pass a
+    share (`TcpConn_share`).
+  - The inverse-oracle fuzzer (`tools/fuzz/genreject.py`) gains both
+    literal cores, and its two view-invalidation cores expect the
+    diagnostic the checker gives since the ownership rules became the
+    default.
+- **`udp_bind ""` binds the IPv4 wildcard when the kernel has no IPv6.**
+  The resolver offers `::` even there; `socket(AF_INET6)` then fails
+  with EAFNOSUPPORT and the bind failed. async_udp and udp_basic pass in
+  such a container.
 - **`check_diag_anchor.sh` measures a line in bytes**, as the compiler's
   columns do (`nurl_lex_col`). A caret after a `→` was reported past the
   end of its line.

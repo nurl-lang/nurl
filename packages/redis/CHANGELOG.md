@@ -9,6 +9,7 @@ The published 0.3.3 does not compile under it.
 
 ### Changed
 
+- The `TcpConn` over the connection's socket is a view (`tcp_conn_view`): NURL 0.73.0's `TcpConn` closes its socket when its last owner goes, and this one belongs to the connection record, whose drop closes it.
 - The zero `TlsConn` a plaintext connection keeps is built with the
   cast `# TlsConn # s 0`: a standard-library handle now holds its state
   in a `( Shared T )`.
