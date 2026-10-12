@@ -60,4 +60,11 @@ unsafe inline @ raw_block i n → RawBlock {
     ^ @ RawBlock { ( malloc ? > n 0 n 1 ) n }
 }
 
+& `c` @ calloc i count i size → s
+
+// …zeroed, as calloc gives them.
+unsafe inline @ raw_block_zero i n → RawBlock {
+    ^ @ RawBlock { ( calloc 1 ? > n 0 n 1 ) n }
+}
+
 unsafe inline @ raw_block_ptr RawBlock b → *u { ^ # *u . b ptr }

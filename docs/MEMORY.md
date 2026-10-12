@@ -774,6 +774,14 @@ h207, h208), and probing h205's rule a fifth (h206):
   moves into a callee that keeps it, as a local does, unless the callee
   puts it in its container argument (an escape: `vec_push`, §7.6).
 
+Rebuilding the standard library's own owners on self-releasing parts
+found a sixth (h209): a struct holding a value with a `% Drop` of the
+program's own inside a container — `: Imp { ( Vec R ) xs }`, or a Box,
+an option, an enum payload — was never dropped. It could not be copied,
+so it was no handle, and the compiler wrote a field-by-field drop only
+for a struct whose own fields had the `% Drop`. Such a struct now gets
+that drop wherever the value sits inside it (`__holds_user_drop`).
+
 The rules that carry it:
 
 - **An owned value moves.** Storing it into an aggregate, an Option or a

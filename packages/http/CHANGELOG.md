@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.7.5] — 2026-10-12
+
+Requires the NURL in which `Thread` holds its state in a `( Shared T )`:
+the empty handle is `( thread_null )`, no longer `@ Thread { # s 0 }`.
+
+### Changed
+
+- The HTTP/3 server thread slot starts as `( thread_null )`.
+
 ## [0.7.4] — 2026-10-12
 
 Requires NURL 0.73.0, in which a standard-library handle holds its

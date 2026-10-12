@@ -75,6 +75,7 @@
 
 $ `stdlib/core/cell.nu`
 $ `stdlib/core/marker.nu`
+$ `stdlib/core/mem.nu`
 $ `stdlib/core/rcbox.nu`
 
 // FFI: direct libpthread surface. On Linux/macOS these are libc; on
@@ -141,29 +142,38 @@ $ `stdlib/core/rcbox.nu`
 
 // A Thread is a handle on one spawned thread that every copy of it
 // shares; whoever holds the last copy settles the thread if nobody did
-// (Thread_drop detaches it) and frees the block. `p` is laid out
-//
-//     [ i64 owners ][ i64 settled ][ pthread_t ]
-//
-// with the pthread_t sized at runtime (`nurl_native_sizeof`), so the
-// handle is one word and a spawn one allocation whatever the platform's
-// pthread_t is. `settled` counts the joins and detaches asked for: the
-// one that moves it from 0 owns the thread's single join-or-detach, so
-// two copies can never join (or join and detach) the same pthread_t.
-: Thread { s p }
+// (ThreadImpl's drop detaches it). The pthread_t is a RawBlock sized at
+// runtime (`nurl_native_sizeof`), which releases itself. `settled`
+// counts the joins and detaches asked for: the one that moves it from 0
+// owns the thread's single join-or-detach, so two copies can never join
+// (or join and detach) the same pthread_t.
+: ThreadImpl { i settled RawBlock tid }
+
+% Drop ThreadImpl {
+    unsafe @ drop ThreadImpl t → v {
+        ? == 0 . t settled { ( nurl_pthread_detach_ptr ( raw_block_ptr . t tid ) ) } {}
+    }
+}
+
+: Thread { ( Shared ThreadImpl ) ctl }
 
 // A Mutex (a Cond) is a handle on one pthread object that every copy of
 // it shares: storing a borrowed one into a struct, a Vec or a thread's
 // closure takes another reference (`Mutex_share`), and whoever holds the
-// last one destroys the object when it goes (`Mutex_drop`) — nothing to
-// release by hand. `p` is a block laid out
-//
-//     [ i64 owners ][ pthread_mutex_t / pthread_cond_t ]
-//
-// with the native object sized at runtime (`nurl_native_sizeof`), so the
-// handle is one word whatever the platform's pthread layout is.
-: Mutex { s p }
-: Cond { s p }
+// last one destroys the object when it goes (the impl's drop) — nothing
+// to release by hand. The native object is a RawBlock sized at runtime
+// (`nurl_native_sizeof`), so the handle is one word whatever the
+// platform's pthread layout is; `obj` caches its address.
+: MutexImpl { RawBlock blk }
+
+% Drop MutexImpl { unsafe @ drop MutexImpl m → v { ( pthread_mutex_destroy ( raw_block_ptr . m blk ) ) } }
+
+: CondImpl { RawBlock blk }
+
+% Drop CondImpl { unsafe @ drop CondImpl c → v { ( pthread_cond_destroy ( raw_block_ptr . c blk ) ) } }
+
+: Mutex { ( Shared MutexImpl ) ctl }
+: Cond { ( Shared CondImpl ) ctl }
 
 // Send / Sync markers (stdlib/core/marker.nu). These three are the
 // reason the marker traits exist at all: structurally a Mutex is
@@ -211,24 +221,28 @@ $ `stdlib/core/rcbox.nu`
 
 // ── Thread lifecycle ──────────────────────────────────────────────
 
-// A fresh `[ owners ][ settled ][ pthread_t ]` block with one owner,
-// the thread started on it: fn(env) on its own copy of the env (the
-// runtime clones it and drops the copy when the body returns —
-// docs/MEMORY.md §7.4), so the spawner's closure stays the spawner's
-// to drop. 0 when the block or the thread could not be had.
-@ __thread_start * u fnp * u env → i {
+// A thread started on a fresh one-owner handle: fn(env) on its own copy
+// of the env (the runtime clones it and drops the copy when the body
+// returns — docs/MEMORY.md §7.4), so the spawner's closure stays the
+// spawner's to drop. F when the thread could not be had (its handle is
+// then marked settled, so dropping it detaches nothing).
+@ __thread_start * u fnp * u env inout Thread out → b {
     : ~ i sz ( nurl_native_sizeof `pthread_t` )
     ? < sz 8 { = sz 8 } {}
-    : s p ( nurl_zalloc + 16 sz )
-    ? == 0 # i p { ^ 0 } {}
-    : *i rc # *i p
-    = . rc 0 1
-    ? != 0 ( nurl_pthread_create_owned # *u + # i p 16 fnp env ) {
-        ( nurl_free p )
-        ^ 0
+    : RawBlock tid ( raw_block_zero sz )
+    : *u tp ( raw_block_ptr tid )
+    = out @ Thread { ( shared_new [ThreadImpl] @ ThreadImpl { 0 tid } ) }
+    ? != 0 ( nurl_pthread_create_owned tp fnp env ) {
+        = . ( __thi out ) settled 1
+        ^ F
     } {}
-    ^ # i p
+    ^ T
 }
+
+@ __thi Thread t → *ThreadImpl { ^ ( shared_ptr [ThreadImpl] . t ctl ) }
+
+// The pthread_t of `t`.
+@ __thread_tid Thread t → *u { ^ ( raw_block_ptr . ( __thi t ) tid ) }
 
 @ thread_spawn ( @ v ) f → !Thread ThreadErr {
     // Decompose the closure into (fn_ptr, env_ptr) — pthread_create
@@ -237,11 +251,11 @@ $ `stdlib/core/rcbox.nu`
     // would be parsed as a call with `#` as the function name.
     : *u fnp # *u f 0
     : *u env # *u f 1
-    : i p ( __thread_start fnp env )
-    ? == 0 p {
+    : ~ Thread t ( thread_null )
+    ? ( __thread_start fnp env t ) {} {
         ^ @ !Thread ThreadErr { F # ThreadErr ThreadCreate }
-    } {}
-    ^ @ !Thread ThreadErr { T @ Thread { # s p } }
+    }
+    ^ @ !Thread ThreadErr { T t }
 }
 
 // The same as `thread_spawn`: every thread now runs on its own copy of
@@ -251,56 +265,46 @@ $ `stdlib/core/rcbox.nu`
 @ thread_spawn_owned ( @ v ) f → !Thread ThreadErr {
     : *u fnp # *u f 0
     : *u env # *u f 1
-    : i p ( __thread_start fnp env )
-    ? == 0 p {
+    : ~ Thread t ( thread_null )
+    ? ( __thread_start fnp env t ) {} {
         ^ @ !Thread ThreadErr { F # ThreadErr ThreadCreate }
-    } {}
-    ^ @ !Thread ThreadErr { T @ Thread { # s p } }
+    }
+    ^ @ !Thread ThreadErr { T t }
 }
 
-// Claim `p`'s one join-or-detach: T for the first caller only.
-@ __thread_claim i p → b {
-    ? == 0 p { ^ F } {}
-    ^ == 0 ( nurl_atomic_i64_inc # *u + p 8 )
+// A handle on no thread (a slot filled later): join and detach do
+// nothing on it, and dropping it releases nothing.
+@ thread_null → Thread { ^ @ Thread { ( shared_null [ThreadImpl] ) } }
+
+// Claim `t`'s one join-or-detach: T for the first caller only.
+@ __thread_claim Thread t → b {
+    ? == 0 ( shared_addr [ThreadImpl] . t ctl ) { ^ F } {}
+    ^ == 0 ( nurl_atomic_i64_inc # *u ( __thi t ) )
 }
 
 // Wait for the thread to finish. 0 once it has; -1 when the join failed
 // or the thread was already joined or detached (through this copy of the
 // handle or another), so a second join never touches the pthread_t again.
 @ thread_join Thread t → i {
-    : i p # i . t p
-    ? ( __thread_claim p ) {} { ^ -1 }
-    ? == 0 ( nurl_pthread_join_ptr # *u + p 16 ) { ^ 0 } {}
+    ? ( __thread_claim t ) {} { ^ -1 }
+    ? == 0 ( nurl_pthread_join_ptr ( __thread_tid t ) ) { ^ 0 } {}
     // Not joined (a thread joining itself): give the claim back, so the
     // last owner still detaches it.
-    : *i st # *i + p 8
-    = . st 0 0
+    = . ( __thi t ) settled 0
     ^ -1
 }
 
 // Let the thread run on its own; it is reclaimed when it ends. A no-op
 // once the thread was joined or detached.
 @ thread_detach Thread t → v {
-    : i p # i . t p
-    ? ( __thread_claim p ) { ( nurl_pthread_detach_ptr # *u + p 16 ) } {}
+    ? ( __thread_claim t ) { ( nurl_pthread_detach_ptr ( __thread_tid t ) ) } {}
 }
 
-@ Thread_share Thread t → Thread {
-    ( __sync_block_share . t p )
-    ^ @ Thread { . t p }
-}
+@ Thread_share Thread t → Thread { ^ @ Thread { ( shared_clone [ThreadImpl] . t ctl ) } }
 
 // The last owner detaches a thread nobody joined or detached — it keeps
-// running and is reclaimed when it ends — and frees the block.
-@ Thread_drop sink Thread t → v {
-    ( mem_forget t )
-    : s p . t p
-    ? ( __sync_block_release p ) {
-        : *i st # *i + # i p 8
-        ? == 0 . st 0 { ( nurl_pthread_detach_ptr # *u + # i p 16 ) } {}
-        ( nurl_free p )
-    } {}
-}
+// running and is reclaimed when it ends (ThreadImpl's drop).
+@ Thread_drop sink Thread t → v {}
 
 // ── Shared pthread objects ────────────────────────────────────────
 
@@ -308,68 +312,36 @@ $ `stdlib/core/rcbox.nu`
 
 & `c` @ nurl_atomic_i64_dec_fetch *u p → i
 
-// Owner counts: a count of 1 skips the locked RMW (stdlib/core/rcbox.nu).
-& `c` @ nurl_rc_share *u p → i
-
-& `c` @ nurl_rc_release *u p → i
-
-// A zeroed `[ owners ][ native ]` block with one owner.
-@ __sync_block_new s native → i {
+// A zeroed block the size of the native object `native`.
+@ __sync_block s native → RawBlock {
     : ~ i sz ( nurl_native_sizeof native )
     ? < sz 8 { = sz 8 } {}
-    : s p ( nurl_zalloc + 8 sz )
-    : *i rc # *i p
-    = . rc 0 1
-    ^ # i p
+    ^ ( raw_block_zero sz )
 }
 
-// Another owner of `p`'s block.
-@ __sync_block_share s p → v {
-    ? != 0 # i p { : i _old ( nurl_rc_share # *u p ) } {}
-}
+@ __mutex_obj Mutex m → *u { ^ ( raw_block_ptr . ( shared_ptr [MutexImpl] . m ctl ) blk ) }
 
-// Drop one owner of `p`'s block: T when that was the last one (the
-// caller then destroys the object and frees the block).
-@ __sync_block_release s p → b {
-    ? == 0 # i p { ^ F } {}
-    ^ != 0 ( nurl_rc_release # *u p )
-}
+@ __cond_obj Cond c → *u { ^ ( raw_block_ptr . ( shared_ptr [CondImpl] . c ctl ) blk ) }
 
 // ── Mutex ─────────────────────────────────────────────────────────
 
 @ mutex_new → Mutex {
-    : i p ( __sync_block_new `pthread_mutex_t` )
-    ( pthread_mutex_init # *u + p 8 # *u 0 )
-    ^ @ Mutex { # s p }
+    : RawBlock b ( __sync_block `pthread_mutex_t` )
+    ( pthread_mutex_init ( raw_block_ptr b ) # *u 0 )
+    ^ @ Mutex { ( shared_new [MutexImpl] @ MutexImpl { b } ) }
 }
 
 // The pthread_mutex_t itself, for the runtime calls that take one
 // (`nurl_fiber_park_with_mutex`).
-@ mutex_raw Mutex m → *u {
-    ^ # *u + # i . m p 8
-}
+@ mutex_raw Mutex m → *u { ^ ( __mutex_obj m ) }
 
-@ mutex_lock Mutex m → v {
-    ( pthread_mutex_lock # *u + # i . m p 8 )
-}
+@ mutex_lock Mutex m → v { ( pthread_mutex_lock ( __mutex_obj m ) ) }
 
-@ mutex_unlock Mutex m → v {
-    ( pthread_mutex_unlock # *u + # i . m p 8 )
-}
+@ mutex_unlock Mutex m → v { ( pthread_mutex_unlock ( __mutex_obj m ) ) }
 
-@ Mutex_share Mutex m → Mutex {
-    ( __sync_block_share . m p )
-    ^ @ Mutex { . m p }
-}
+@ Mutex_share Mutex m → Mutex { ^ @ Mutex { ( shared_clone [MutexImpl] . m ctl ) } }
 
-@ Mutex_drop sink Mutex m → v {
-    ( mem_forget m )
-    : s p . m p
-    ? ( __sync_block_release p ) {
-        ( pthread_mutex_destroy # *u + # i p 8 )
-        ( nurl_free p )
-    } {}
-}
+@ Mutex_drop sink Mutex m → v {}
 
 // Let go of `m` now rather than at the end of its owner's scope.
 @ mutex_free sink Mutex m → v {}
@@ -387,36 +359,20 @@ $ `stdlib/core/rcbox.nu`
 // ── Condition variable ────────────────────────────────────────────
 
 @ cond_new → Cond {
-    : i p ( __sync_block_new `pthread_cond_t` )
-    ( pthread_cond_init # *u + p 8 # *u 0 )
-    ^ @ Cond { # s p }
+    : RawBlock b ( __sync_block `pthread_cond_t` )
+    ( pthread_cond_init ( raw_block_ptr b ) # *u 0 )
+    ^ @ Cond { ( shared_new [CondImpl] @ CondImpl { b } ) }
 }
 
-@ cond_wait Cond c Mutex m → v {
-    ( pthread_cond_wait # *u + # i . c p 8 # *u + # i . m p 8 )
-}
+@ cond_wait Cond c Mutex m → v { ( pthread_cond_wait ( __cond_obj c ) ( __mutex_obj m ) ) }
 
-@ cond_signal Cond c → v {
-    ( pthread_cond_signal # *u + # i . c p 8 )
-}
+@ cond_signal Cond c → v { ( pthread_cond_signal ( __cond_obj c ) ) }
 
-@ cond_broadcast Cond c → v {
-    ( pthread_cond_broadcast # *u + # i . c p 8 )
-}
+@ cond_broadcast Cond c → v { ( pthread_cond_broadcast ( __cond_obj c ) ) }
 
-@ Cond_share Cond c → Cond {
-    ( __sync_block_share . c p )
-    ^ @ Cond { . c p }
-}
+@ Cond_share Cond c → Cond { ^ @ Cond { ( shared_clone [CondImpl] . c ctl ) } }
 
-@ Cond_drop sink Cond c → v {
-    ( mem_forget c )
-    : s p . c p
-    ? ( __sync_block_release p ) {
-        ( pthread_cond_destroy # *u + # i p 8 )
-        ( nurl_free p )
-    } {}
-}
+@ Cond_drop sink Cond c → v {}
 
 // Let go of `c` now rather than at the end of its owner's scope.
 @ cond_free sink Cond c → v {}

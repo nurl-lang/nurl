@@ -89,7 +89,7 @@ unsafe @ ran → i { ^ ( nurl_atomic_i64_load # *u g_cell ) }
 
 // No thread at all: a placeholder handle.
 unsafe @ none → i {
-    : Thread t @ Thread { # s 0 }
+    : Thread t ( thread_null )
     ( thread_detach t )
     ^ ( thread_join t )
 }

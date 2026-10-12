@@ -133,6 +133,17 @@ fewer instructions and 9–10 % less time than before this work
 
 ### Changed
 
+- **More of the standard library's owners release nothing by hand.**
+  - `Cell` is a `( Shared RawBlock )`: the bytes release themselves with
+    the last owner.
+  - `Thread`, `Mutex` and `Cond` hold a `( Shared T )` over an impl whose
+    pthread object sits in a `RawBlock`. The impl's drop only detaches
+    or destroys the object; the memory goes with its fields. `thread_null`
+    builds the empty handle that `@ Thread { # s 0 }` spelled before.
+  - `Deque` keeps a boxed control record whose buffer is a `RawBlock`.
+  - `Arena` keeps its chunks in a Vec of `RawBlock`s; `arena_reset`
+    truncates it.
+  - `raw_block_zero` gives zeroed raw memory.
 - **`TcpConn` and `TcpListener` close themselves.** Each is a handle over
   a counted block: every copy is the same socket, and its last owner
   closes it, so a forgotten `tcp_close_*` no longer leaks a descriptor.
@@ -230,6 +241,14 @@ fewer instructions and 9–10 % less time than before this work
 
 ### Fixed
 
+- **A struct holding a `% Drop` value inside a container is dropped**
+  (h209). `: Imp { ( Vec R ) xs }` with R a type with its own `% Drop`
+  (or the R in a Box, an option, an enum payload, a Vec of Vecs) was
+  neither a handle, since it cannot be copied, nor given the
+  field-by-field drop, which went only to a struct whose own fields had
+  the `% Drop`. The struct was never dropped: the Vec and every R in it
+  leaked, and R's drop never ran. Found by rebuilding `Arena` on a Vec of
+  self-releasing chunks.
 - **Nine more holes are closed** (h195–h203), found by making module
   state and raw-pointer records manage themselves:
   - *A closure stored into a struct field or a slice* (h195) kept only a

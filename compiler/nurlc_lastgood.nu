@@ -42932,7 +42932,51 @@ unsafe @ __opt_err_mangle s e → s {
         : s ft ( nurl_sym_get g_root_syms ( nurl_str_cat3 sname `__idx_` ( nurl_str_cat ( nurl_str_int i ) `__type` ) ) )
         ? | ( __has_user_drop ft ) != 0 ( nurl_sym_len2 g_impl_name_syms `synthdrop##` ft ) { ^ T } {}
         ? ( __needs_synth_drop ft ) { ^ T } {}
+        // …or holds one inside a Vec, a Box, an option or an enum payload:
+        // that container cannot be copied either, so the struct holding it
+        // is no handle — it is dropped field by field (h209: `: Imp { ( Vec
+        // R ) xs }`, R with a `% Drop`, was never dropped at all, the Vec
+        // and every R in it leaked).
+        ? ( __holds_user_drop ft 0 ) { ^ T } {}
         = i + i 1
+    }
+    ^ F
+}
+
+// Does a value of `ty` hold, anywhere inside it — through a Vec's or a
+// Box's elements, an option's or an enum's payloads, a struct's fields —
+// a value with a `% Drop` of the program's own?
+@ __holds_user_drop s ty i depth → b {
+    ? | > depth 8 == 0 ( nurl_str_len ty ) { ^ F } {}
+    ? == ( nurl_str_get ty - ( nurl_str_len ty ) 1 ) 42 { ^ F } {}
+    ? | ( __has_user_drop ty ) != 0 ( nurl_sym_len2 g_impl_name_syms `synthdrop##` ty ) { ^ T } {}
+    ? | != 0 ( nurl_str_starts ty `%Vec__` ) != 0 ( nurl_str_starts ty `%Box__` ) {
+        ^ ( __holds_user_drop ( __vec_elem_llvm ty ) + depth 1 )
+    } {}
+    ? != 0 ( nurl_str_starts ty `{ i1, ` ) { ^ ( __holds_user_drop ( __opt_payload ty ) + depth 1 ) } {}
+    ? | == 0 g_root_syms != ( nurl_str_get ty 0 ) 37 { ^ F } {}
+    : s sname ( nurl_str_slice ty 1 - ( nurl_str_len ty ) 1 )
+    : s vlist ( nurl_sym_get2 g_root_syms sname `__variants` )
+    ? != 0 ( nurl_str_len vlist ) {
+        : ~ s scan ( nurl_str_cat vlist `` )
+        ~ != 0 ( nurl_str_len scan ) {
+            : s vname ( str_first_word scan ) = scan ( str_skip_word scan )
+            : s pcs ( nurl_sym_get2 g_root_syms vname `__paycount` )
+            : i pc ? != 0 ( nurl_str_len pcs ) ( nurl_str_to_int pcs ) 0
+            : ~ i k 0
+            ~ < k pc {
+                ? ( __holds_user_drop ( nurl_sym_get g_root_syms ( nurl_str_cat3 vname `__payload__` ( nurl_str_int k ) ) ) + depth 1 ) { ^ T } {}
+                = k + k 1
+            }
+        }
+        ^ F
+    } {}
+    : s fcs ( nurl_sym_get2 g_root_syms sname `__field_count` )
+    : i fc ? != 0 ( nurl_str_len fcs ) ( nurl_str_to_int fcs ) 0
+    : ~ i j 0
+    ~ < j fc {
+        ? ( __holds_user_drop ( nurl_sym_get g_root_syms ( nurl_str_cat3 sname `__idx_` ( nurl_str_cat ( nurl_str_int j ) `__type` ) ) ) + depth 1 ) { ^ T } {}
+        = j + j 1
     }
     ^ F
 }
