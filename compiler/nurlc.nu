@@ -53171,6 +53171,146 @@ unsafe @ __ir_write_function i st i en i part → v {
     ( __ir_fold_range p en part )
 }
 
+// ── Type definitions first ──────────────────────────────────────────
+//
+// A named struct is printed where the generator first needed its layout,
+// and a generic instance only when its first function is instantiated,
+// so a `%T = type` line can come after a function that already passes a
+// `%T` — or after another type whose closure field takes one
+// (`{ %Json (i8*, %Json)*, i8* }`). LLVM up to 18 resolves such forward
+// references; LLVM 23 reads a parameter type that has no body yet as an
+// opaque struct and rejects it ("invalid type for function argument").
+// The writer therefore moves every type definition to the top of the
+// module, right after the banner, each one after the types its body
+// names. A recursive type (`%Node = type { %Node* }`) still names itself,
+// through a pointer, which needs no body.
+: ~ i g_tf_st 0  // i64[n]: offset of type line k
+: ~ i g_tf_en 0  // i64[n]: offset just past its newline
+: ~ i g_tf_body 0  // i64[n]: offset of its body (past ` = type `)
+: ~ i g_tf_state 0  // i64[n]: 0 not yet written, 1 being written, 2 written
+: ~ i g_tf_map 0  // symtab: type name → k
+: ~ i g_tf_out 0  // the reordered module being built
+: ~ i g_tf_olen 0
+
+// Write type line `k` into the new module, after the types it names.
+unsafe @ __tf_emit i mp i k → v {
+    ? != 0 ( nurl_peek # s g_tf_state k ) { ^ v } {}
+    ( nurl_poke # s g_tf_state k 1 )
+    : *u m # *u # s mp
+    : i en ( nurl_peek # s g_tf_en k )
+    : ~ i p ( nurl_peek # s g_tf_body k )
+    ~ < p en {
+        ? != & # i . m p 255 37 { = p + p 1 } {  // '%'
+            : ~ i q + p 1
+            ~ & < q en ( __dce_ident_byte & # i . m q 255 ) { = q + q 1 }
+            ? > q + p 1 {
+                : u sv . m q
+                = . m q # u 0
+                : i dep ( nurl_sym_int g_tf_map # s + mp + p 1 )
+                = . m q sv
+                ? >= dep 0 { ( __tf_emit mp dep ) } {}
+            } {}
+            = p q
+        }
+    }
+    : i st ( nurl_peek # s g_tf_st k )
+    ( memcpy # s + g_tf_out g_tf_olen # s + mp st - en st )
+    = g_tf_olen + g_tf_olen - en st
+    ( nurl_poke # s g_tf_state k 2 )
+}
+
+// The module with every type definition moved to the top, or 0 when it
+// has none out of place to move. The caller releases a non-zero result.
+// Record the line [st, en) as type definition `k` when it is one; the
+// next k either way.
+unsafe @ __tf_record i mp i st i en i k → i {
+    : i eq ( nurl_memmem_range # s + mp st - en st ` = type ` 8 )
+    ? < eq 0 { ^ k } {}
+    ( nurl_poke # s g_tf_st k st )
+    ( nurl_poke # s g_tf_en k en )
+    ( nurl_poke # s g_tf_body k + + st eq 8 )
+    : *u m # *u # s mp
+    : i ne + st eq
+    : u sv . m ne
+    = . m ne # u 0
+    ( nurl_sym_def g_tf_map # s + mp + st 1 ( nurl_str_int k ) )
+    = . m ne sv
+    ^ + k 1
+}
+
+// The end of the line starting at `st` (just past its newline).
+unsafe @ __tf_eol i mp i mlen i st → i {
+    : i nl ( nurl_memmem_range # s + mp st - mlen st `\n` 1 )
+    ^ ? < nl 0 mlen + + st nl 1
+}
+
+unsafe @ __types_first s mod i mlen → s {
+    : i mp # i mod
+    : *u m # *u mod
+    // A type definition is a line that starts with `%` — an instruction
+    // inside a body is indented, a global starts with `@`, and a newline
+    // inside a string constant is escaped.
+    : b at0 & > mlen 0 == & # i . m 0 255 37
+    : ~ i n ? at0 1 0
+    : ~ i pos 0
+    ~ < pos mlen {
+        : i rel ( nurl_memmem_range # s + mp pos - mlen pos `\n%` 2 )
+        ? < rel 0 { = pos mlen } { = n + n 1 = pos + + pos rel 2 }
+    }
+    ? == n 0 { ^ # s 0 } {}
+    = g_tf_st # i # s ( nurl_zalloc * n 8 )
+    = g_tf_en # i # s ( nurl_zalloc * n 8 )
+    = g_tf_body # i # s ( nurl_zalloc * n 8 )
+    = g_tf_state # i # s ( nurl_zalloc * n 8 )
+    = g_tf_map ( nurl_sym_new )
+    : ~ i k 0
+    ? at0 { = k ( __tf_record mp 0 ( __tf_eol mp mlen 0 ) k ) } {}
+    = pos 0
+    ~ < pos mlen {
+        : i rel ( nurl_memmem_range # s + mp pos - mlen pos `\n%` 2 )
+        ? < rel 0 { = pos mlen } {
+            : i st + + pos rel 1
+            : i en ( __tf_eol mp mlen st )
+            = k ( __tf_record mp st en k )
+            = pos - en 1
+        }
+    }
+    : ~ s out # s 0
+    ? > k 0 {
+        = g_tf_out # i # s ( nurl_alloc + mlen 1 )
+        // A banner comment stays first.
+        : i head ? & > mlen 0 == & # i . m 0 255 59 ( __tf_eol mp mlen 0 ) 0
+        ( memcpy # s g_tf_out mod head )
+        = g_tf_olen head
+        : ~ i ti 0
+        ~ < ti k { ( __tf_emit mp ti ) = ti + ti 1 }
+        // Then everything else, in its order, without the type lines.
+        : ~ i from head
+        = ti 0
+        ~ < ti k {
+            : i st ( nurl_peek # s g_tf_st ti )
+            ? > st from {
+                ( memcpy # s + g_tf_out g_tf_olen # s + mp from - st from )
+                = g_tf_olen + g_tf_olen - st from
+            } {}
+            = from ( nurl_peek # s g_tf_en ti )
+            = ti + ti 1
+        }
+        ( memcpy # s + g_tf_out g_tf_olen # s + mp from - mlen from )
+        = g_tf_olen + g_tf_olen - mlen from
+        : *u ob # *u # s g_tf_out
+        = . ob g_tf_olen # u 0
+        = out # s g_tf_out
+    } {}
+    ( nurl_free # s g_tf_st )
+    ( nurl_free # s g_tf_en )
+    ( nurl_free # s g_tf_body )
+    ( nurl_free # s g_tf_state )
+    ( nurl_sym_free g_tf_map )
+    = g_tf_st 0 = g_tf_en 0 = g_tf_body 0 = g_tf_state 0 = g_tf_map 0 = g_tf_out 0
+    ^ out
+}
+
 // Emit the collected module: everything that is not a function body,
 // plus the functions `main` can reach, in the order they were emitted.
 // How many parts this module actually gets. `--split=N` is a CEILING,
@@ -53193,10 +53333,20 @@ unsafe @ __ir_write_function i st i en i part → v {
     ^ n
 }
 
-unsafe @ dce_emit_module s mod → v {
+unsafe @ dce_emit_module s mod0 → v {
+    : i mlen ( strlen mod0 )
+    // Every type definition goes first (see __types_first).
+    : s moved ( __types_first mod0 mlen )
+    ? == # i moved 0 { ( __dce_emit_module mod0 mlen ) } {
+        ( __dce_emit_module moved mlen )
+        ( nurl_free moved )
+        = g_dce_mod 0
+    }
+}
+
+unsafe @ __dce_emit_module s mod i mlen → v {
     : i g_dce_keep_n ( nurl_str_len g_dce_keep )
     : *u g_dce_keep_p # *u g_dce_keep
-    : i mlen ( strlen mod )
     = g_dce_mod # i mod
     = g_split_n 0
     // Neither pass wants the index — hand the module straight to stdout.

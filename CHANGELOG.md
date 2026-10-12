@@ -266,6 +266,17 @@ instructions and 9–10 % less time than before this work (*Performance*).
 - **`check_diag_anchor.sh` measures a line in bytes**, as the compiler's
   columns do (`nurl_lex_col`). A caret after a `→` was reported past the
   end of its line.
+- **Every type definition comes before the code that uses it.** A
+  generic instance's `%T = type` line was printed where its first function
+  was instantiated, so it could follow a function that already passed a
+  `%T` by value, or another type whose closure field took one (`{ %Json
+  (i8*, %Json)*, i8* }`). LLVM 18 resolves such a forward reference; LLVM
+  23 (the macOS job's Homebrew clang) reads the parameter as an opaque
+  struct and rejected eleven programs with "invalid type for function
+  argument". The module writer now moves every type definition to the
+  top, each after the types its body names (`__types_first`), and
+  `tools/check_ir_type_order.py` holds that on every module the corpus
+  emits, under any clang.
 - **The remaining known holes are closed** (probes h145–h194), each at
   its root:
   - *A raw string handed to a consumer* (h161–h170): a literal, a view, a
