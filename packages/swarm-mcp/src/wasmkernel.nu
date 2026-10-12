@@ -276,7 +276,6 @@ $ `stdlib/core/slice.nu`
     : i skip - * . c lo esz * . c b0 * ( blob_block_vals ) 8
     : i take * - . c hi . c lo esz
     ? & bok & >= skip 0 <= + skip take ( vec_len [u] whole ) {
-        ( vec_free [u] . c data )
         = . c data ( bytes_slice whole skip + skip take )
     } { = bok F }
     ^ bok

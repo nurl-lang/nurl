@@ -176,8 +176,6 @@ unsafe @ sst_create s path → !SstWriter String {
 unsafe @ __sstw_close * SstWriterImpl w → v {
     ( file_close . w f )
     // The closed file's handle leaves the writer (dropped here).
-    : File old_f . w f
-    ( mem_take old_f )
     = . w f @ File { # s 0 }
 }
 

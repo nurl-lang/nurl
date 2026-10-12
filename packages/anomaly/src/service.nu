@@ -2391,8 +2391,6 @@ unsafe @ __an_h_fork HttpRequest req Params p → HttpResponse {
     : *ModelImpl mo ( _Model_ptr mo__h )
     : *MetaImpl mm ( _Meta_ptr . mo meta )
     = . mm count_clock count_clock
-    : ( Vec VerCfg ) old_versions . mm versions
-    ( mem_take old_versions )  // a store through the pointer drops nothing
     = . mm versions src_versions
     // margins the source's owner set stay set: the fork is tuned as it was
     = . mm tuned_at src_tuned
@@ -3776,17 +3774,21 @@ unsafe @ __an_h_import HttpRequest req Params p → HttpResponse {
 // which WAITS — analyze, for its job — can let go of the service while it
 // does; every other handler holds the lock for its whole run, so the store,
 // the GPU singleton and the authorization layer see one request at a
-// time, exactly as under the single-threaded server. 0 = no pool (tests
+// time, exactly as under the single-threaded server. Off = no pool (tests
 // drive the router directly), and the release/acquire pair is a no-op.
-// The global holds the server's Mutex handle as a word; cast back, it is
-// lent to the caller, and the server's own binding releases it.
-: ~ i g_an_lock 0
+// The global owns the lock; a later server's replaces it.
+: ~ Mutex g_an_lock 0
+: ~ b g_an_lock_on F
 
-unsafe @ __an_lock → Mutex { ^ # Mutex g_an_lock }
+unsafe @ __an_lock_acquire → v { ? g_an_lock_on { ( mutex_lock g_an_lock ) } {} }
 
-@ __an_lock_acquire → v { ? != g_an_lock 0 { ( mutex_lock ( __an_lock ) ) } {} }
+unsafe @ __an_lock_release → v { ? g_an_lock_on { ( mutex_unlock g_an_lock ) } {} }
 
-@ __an_lock_release → v { ? != g_an_lock 0 { ( mutex_unlock ( __an_lock ) ) } {} }
+// Before the workers start (no request can hold the old lock).
+unsafe @ __an_lock_open → v {
+    = g_an_lock ( mutex_new )
+    = g_an_lock_on T
+}
 
 // A path capture (owned; empty String = missing).
 @ __an_param_str Params p s key → String {
@@ -5242,8 +5244,7 @@ unsafe @ __an_lock → Mutex { ^ # Mutex g_an_lock }
     // A small pool of workers behind one lock (see g_an_lock): handlers
     // still run one at a time, but a handler that waits on a job can step
     // aside while it does, and the others are served meanwhile.
-    : Mutex lock ( mutex_new )
-    = g_an_lock # i lock
+    ( __an_lock_open )
     ( http_app_workers app 4 )
     : ( @ ( @ HttpResponse HttpRequest ) ( @ HttpResponse HttpRequest ) ) serial
     \ ( @ HttpResponse HttpRequest ) inner → ( @ HttpResponse HttpRequest ) {
@@ -5267,6 +5268,6 @@ unsafe @ __an_lock → Mutex { ^ # Mutex g_an_lock }
         ( nurl_eprintln `anomaly: data-source scheduler OFF (sources run only by hand)` )
     }
     : i rc ( http_app_listen app host port )
-    = g_an_lock 0
+    = g_an_lock_on F
     ^ rc
 }

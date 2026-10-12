@@ -22,7 +22,6 @@
 $ `stdlib/core/io.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
-$ `stdlib/core/rcbox.nu`
 $ `stdlib/core/errors.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/std/bufio.nu`
@@ -444,26 +443,24 @@ unsafe @ bx_write_bytes ( Vec u ) buf → v {
 // compiles every module ALONE and would not resolve it. So main.nu hands the
 // table over as a value at startup and sh.nu calls what it was given.
 //
-// A closure is a fat value and cannot sit in an `i` global, so an rcbox
-// holds it and the pointer to that fits. The global owns it for the life of
-// the process; installing another hook replaces it.
+// The global owns the closure for the life of the process; installing
+// another hook replaces it (and releases the one before).
 
 : BxDispatch { ( @ i s ( Vec String ) ) run }
 
-: ~ i g_bx_dispatch 0
+: ~ BxDispatch g_bx_dispatch 0
+: ~ b g_bx_dispatch_set F
 
 unsafe @ bx_dispatch_set sink ( @ i s ( Vec String ) ) f → v {
-    : i old g_bx_dispatch
-    = g_bx_dispatch ( rcbox_new [BxDispatch] @ BxDispatch { f } )
-    ( rcbox_release [BxDispatch] old )
+    = g_bx_dispatch @ BxDispatch { f }
+    = g_bx_dispatch_set T
 }
 
 // -1 when nobody installed one, which is every caller that is not the
 // multiplexer — a library used on its own has no applet table.
 unsafe @ bx_dispatch s name ( Vec String ) argv → i {
-    ? == g_bx_dispatch 0 { ^ -1 } {}
-    : *BxDispatch d ( rcbox_ptr [BxDispatch] g_bx_dispatch )
-    : ( @ i s ( Vec String ) ) f . d run
+    ? ! g_bx_dispatch_set { ^ -1 } {}
+    : ( @ i s ( Vec String ) ) f . g_bx_dispatch run
     ^ ( f name argv )
 }
 

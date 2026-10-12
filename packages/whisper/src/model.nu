@@ -541,8 +541,6 @@ unsafe @ __wh_source_done * WhisperImpl w → v {
     // after this returns); only the file goes
     ?? . w gg { T gg → { ( gg_release_data gg ) } F → {} }
     // the safetensors file leaves the model and is unmapped here
-    : ?St old . w st
-    ( mem_take old )
     = . w st @ ?St { F }
 }
 

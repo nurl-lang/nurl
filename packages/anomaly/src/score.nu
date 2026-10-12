@@ -52,11 +52,11 @@ $ `deps/gpukit/src/gpukit.nu`
 // One GpuKit (device + kernel cache) per process, probed lazily on the first
 // bulk call. The gpukit facade owns the device, the compiled `anomaly_paths`
 // kernel (cached), and all the buffer marshalling. state: 0 = unprobed,
-// 1 = ready, -1 = unavailable/disabled. The kit pointer is held as an int
-// (0 = none), the same way the raw device handle used to be.
+// 1 = ready, -1 = unavailable/disabled. The global owns the open kit
+// (F = none) and drops it when anom_gpu_close lets it go.
 
 : ~ i g_ag_state 0
-: ~ i g_ag_kit 0
+: ~ ? GpuKit g_ag_kit 0
 
 // The path-walk kernel. One thread per row; per tree, descend by the same
 // comparison the pure walker uses and accumulate depth + c(leaf) — nothing
@@ -124,22 +124,26 @@ $ `deps/gpukit/src/gpukit.nu`
     ^ T
 }
 
-unsafe @ __ag_keep_kit GpuKit kit → v { = g_ag_kit ( arc_into_word [GpuKitImpl] ( arc_clone [GpuKitImpl] . kit a ) ) }
+unsafe @ __ag_keep_kit GpuKit kit → v { = g_ag_kit @ ?GpuKit { T ( GpuKit_share kit ) } }
 
-// The live kit (only valid when g_ag_state == 1).
-unsafe @ __ag_kit → GpuKit { ^ # GpuKit g_ag_kit }
+// One more owner of the live kit (only valid when g_ag_state == 1).
+unsafe @ __ag_kit → GpuKit {
+    ?? g_ag_kit {
+        T k → { ^ ( GpuKit_share k ) }
+        F → { ( nurl_panic `anomaly: no GPU kit is open` ) }
+    }
+}
 
 // Public view of the kit for sibling modules (aegpu.nu shares the device —
 // __-prefixed functions are file-scoped). Only valid after anom_gpu_engine
 // reported `cuda` or `cpu`.
-unsafe @ anom_gpu_kit → GpuKit { ^ # GpuKit g_ag_kit }
+unsafe @ anom_gpu_kit → GpuKit { ^ ( __ag_kit ) }
 
 // Release the device + kernel cache (tests call this so leak checkers see a
 // closed shop; a long-running service just keeps the singleton).
 unsafe @ anom_gpu_close → v {
-    ? == g_ag_state 1 { ( gk_close @ GpuKit { ( arc_from_word [GpuKitImpl] g_ag_kit ) } ) } {}  // the global's owner
+    = g_ag_kit @ ?GpuKit { F }  // the global's owner, released here
     = g_ag_state 0
-    = g_ag_kit 0
 }
 
 // Which engine bulk scoring would use right now: `cuda`, `cpu` (the gpu

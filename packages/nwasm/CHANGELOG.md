@@ -1,5 +1,26 @@
 # Changelog
 
+## [2.4.2] — 2026-10-12
+
+Requires NURL 0.73.0, in which a field written through a raw pointer
+drops what it held, a mutable module global may own a `String`, a `Vec`
+or a handle, and a foreign function may take an `inout` parameter.
+The published 2.4.1 does not compile under it.
+
+### Changed
+
+- A decoded module keeps its section records (types, functions,
+  exports, data and element segments, imports, names) in `Box`es in its
+  tables, where each was raw memory its `Drop` impl released by hand. The
+  `Drop` impl is gone.
+- An instance's file descriptors and its program arguments and
+  environment are boxed records too; a closed descriptor is an empty box.
+- The predecoder's open blocks, the CUDA argument blocks and the
+  atomics lock are owned buffers, and a host string handed back to the
+  guest is released by the `String` that adopts it.
+- Fields replaced through a pointer drop what they held; the frees
+  before each such store are gone.
+
 ## [2.4.1] — 2026-10-11
 
 Requires NURL 0.73.0, which allows `mem_forget`, `mem_take` and the

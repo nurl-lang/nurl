@@ -531,8 +531,6 @@ unsafe @ __f5m_scratch_zero * F5ModelImpl m → v {
     = . m n 0
     = . m batch 0
     = . m ready F
-    : F5Scratch old . m sc
-    ( mem_take old )
     = . m sc ( __f5m_scratch_none )
     ( __f5m_drop_mods m )
     = . m nsteps 0
@@ -541,67 +539,29 @@ unsafe @ __f5m_scratch_zero * F5ModelImpl m → v {
 
 // The modulation schedule leaves the engine (dropped when this returns).
 unsafe @ __f5m_drop_mods * F5ModelImpl m → v {
-    : GkBuf ma . m mod_all
-    ( mem_take ma )
     = . m mod_all ( __f5m_nobuf )
-    : GkBuf mb . m mod2_all
-    ( mem_take mb )
     = . m mod2_all ( __f5m_nobuf )
 }
 
 // The single-tensor weights leave the engine (dropped when this returns);
 // the per-layer lists are emptied by vec_clear, which drops their elements.
 unsafe @ __f5m_drop_top * F5ModelImpl m → v {
-    : GkBuf w_tm0_w . m tm0_w
-    ( mem_take w_tm0_w )
     = . m tm0_w ( __f5m_nobuf )
-    : GkBuf w_tm0_b . m tm0_b
-    ( mem_take w_tm0_b )
     = . m tm0_b ( __f5m_nobuf )
-    : GkBuf w_tm2_w . m tm2_w
-    ( mem_take w_tm2_w )
     = . m tm2_w ( __f5m_nobuf )
-    : GkBuf w_tm2_b . m tm2_b
-    ( mem_take w_tm2_b )
     = . m tm2_b ( __f5m_nobuf )
-    : GkBuf w_temb_w . m temb_w
-    ( mem_take w_temb_w )
     = . m temb_w ( __f5m_nobuf )
-    : GkBuf w_ie_w . m ie_w
-    ( mem_take w_ie_w )
     = . m ie_w ( __f5m_nobuf )
-    : GkBuf w_ie_b . m ie_b
-    ( mem_take w_ie_b )
     = . m ie_b ( __f5m_nobuf )
-    : GkBuf w_cp0_w . m cp0_w
-    ( mem_take w_cp0_w )
     = . m cp0_w ( __f5m_nobuf )
-    : GkBuf w_cp0_b . m cp0_b
-    ( mem_take w_cp0_b )
     = . m cp0_b ( __f5m_nobuf )
-    : GkBuf w_cp2_w . m cp2_w
-    ( mem_take w_cp2_w )
     = . m cp2_w ( __f5m_nobuf )
-    : GkBuf w_cp2_b . m cp2_b
-    ( mem_take w_cp2_b )
     = . m cp2_b ( __f5m_nobuf )
-    : GkBuf w_no_w . m no_w
-    ( mem_take w_no_w )
     = . m no_w ( __f5m_nobuf )
-    : GkBuf w_no_b . m no_b
-    ( mem_take w_no_b )
     = . m no_b ( __f5m_nobuf )
-    : GkBuf w_po_w . m po_w
-    ( mem_take w_po_w )
     = . m po_w ( __f5m_nobuf )
-    : GkBuf w_po_b . m po_b
-    ( mem_take w_po_b )
     = . m po_b ( __f5m_nobuf )
-    : GkBuf w_an_all . m an_all
-    ( mem_take w_an_all )
     = . m an_all ( __f5m_nobuf )
-    : GkBuf w_anb_all . m anb_all
-    ( mem_take w_anb_all )
     = . m anb_all ( __f5m_nobuf )
 }
 
@@ -761,8 +721,6 @@ unsafe @ f5_open s ckpt s vocab_path i device → !F5Model String {
     }
     // the placeholder leaves through a take: a store through the pointer
     // does not drop what it overwrites
-    : String old_pfx . m prefix
-    ( mem_take old_pfx )
     = . m prefix pfx
     ? ( __f5m_read_arch m ) {} {
         ^ ( __f5m_err `f5tts: the checkpoint's shapes do not describe a DiT` )

@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.6.4] — 2026-10-12
+
+Requires NURL 0.73.0, in which a field written through a raw pointer
+drops what it held, a mutable module global may own a `String`, a `Vec`
+or a handle, and a foreign function may take an `inout` parameter.
+The published 0.6.3 does not compile under it.
+
+### Changed
+
+- The adopted GPU kit is a module global that owns it (an option: none
+  until the route opens), where it was an `Arc` kept as a word.
+- The device test buffers are `Vec`s.
+
 ## [0.6.3] — 2026-10-11
 
 Requires NURL 0.73.0, which allows `mem_forget`, `mem_take` and the

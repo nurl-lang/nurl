@@ -167,23 +167,11 @@ unsafe @ __voc_lists * VocosImpl v → v {
 // is dropped when this returns — before the caller allocates the next size.
 unsafe @ __voc_scratch_zero * VocosImpl v → v {
     = . v frames 0
-    : GkBuf o_melb . v melb
-    ( mem_take o_melb )
     = . v melb ( __voc_nobuf )
-    : GkBuf o_h . v h
-    ( mem_take o_h )
     = . v h ( __voc_nobuf )
-    : GkBuf o_t1 . v t1
-    ( mem_take o_t1 )
     = . v t1 ( __voc_nobuf )
-    : GkBuf o_t2 . v t2
-    ( mem_take o_t2 )
     = . v t2 ( __voc_nobuf )
-    : GkBuf o_big . v big
-    ( mem_take o_big )
     = . v big ( __voc_nobuf )
-    : GkBuf o_spec . v spec
-    ( mem_take o_spec )
     = . v spec ( __voc_nobuf )
 }
 
@@ -361,29 +349,13 @@ unsafe @ voc_unload Vocos v__h → v {
 // The single-tensor weights leave the vocoder (dropped when this returns);
 // the per-layer lists are emptied by vec_clear, which drops their elements.
 unsafe @ __voc_drop_top * VocosImpl v → v {
-    : GkBuf o_emb_w . v emb_w
-    ( mem_take o_emb_w )
     = . v emb_w ( __voc_nobuf )
-    : GkBuf o_emb_b . v emb_b
-    ( mem_take o_emb_b )
     = . v emb_b ( __voc_nobuf )
-    : GkBuf o_n_w . v n_w
-    ( mem_take o_n_w )
     = . v n_w ( __voc_nobuf )
-    : GkBuf o_n_b . v n_b
-    ( mem_take o_n_b )
     = . v n_b ( __voc_nobuf )
-    : GkBuf o_fn_w . v fn_w
-    ( mem_take o_fn_w )
     = . v fn_w ( __voc_nobuf )
-    : GkBuf o_fn_b . v fn_b
-    ( mem_take o_fn_b )
     = . v fn_b ( __voc_nobuf )
-    : GkBuf o_out_w . v out_w
-    ( mem_take o_out_w )
     = . v out_w ( __voc_nobuf )
-    : GkBuf o_out_b . v out_b
-    ( mem_take o_out_b )
     = . v out_b ( __voc_nobuf )
 }
 

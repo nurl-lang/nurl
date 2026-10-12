@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.3.4] — 2026-10-12
+
+Requires NURL 0.73.0, in which a field written through a raw pointer
+drops what it held, a mutable module global may own a `String`, a `Vec`
+or a handle, and a foreign function may take an `inout` parameter.
+The published 0.3.3 does not compile under it.
+
+### Changed
+
+- The template set is a module global that owns it, where it was raw
+  memory kept as an address.
+
 ## [0.3.3] — 2026-10-11
 
 Requires NURL 0.73.0, which allows `mem_forget`, `mem_take` and the

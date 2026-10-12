@@ -45,28 +45,18 @@ $ `registry.nu`
 $ `ui.nu`
 $ `stdlib/core/slice.nu`
 
-: ~ i g_f5_model 0  // an F5Model as a word (arc_into_word): the global is one of its owners
+: ~ F5Model g_f5_model 0  // one of the model's owners (zero until the first load)
 
-: ~ i g_f5_voc 0  // a Vocos as a word, likewise
+: ~ Vocos g_f5_voc 0  // likewise
 
-: ~ i g_f5_vocab 0  // an F5Vocab as a word, likewise
+: ~ F5Vocab g_f5_vocab 0  // likewise
 // The three globals each hold one owner of what they name, taken over from
-// the caller's handle: storing a new one drops the old one's owner here.
-// Readers take a view (`# F5Model g_f5_model`), which owns nothing.
-unsafe @ __f5s_hold_model sink F5Model m → v {
-    : F5Model old @ F5Model { ( arc_from_word [F5ModelImpl] g_f5_model ) }
-    = g_f5_model ( arc_into_word [F5ModelImpl] ( arc_clone [F5ModelImpl] . m a ) )
-}
+// the caller's handle: storing a new one drops the one it replaces.
+unsafe @ __f5s_hold_model sink F5Model m → v { = g_f5_model m }
 
-unsafe @ __f5s_hold_voc sink Vocos vc → v {
-    : Vocos old @ Vocos { ( arc_from_word [VocosImpl] g_f5_voc ) }
-    = g_f5_voc ( arc_into_word [VocosImpl] ( arc_clone [VocosImpl] . vc a ) )
-}
+unsafe @ __f5s_hold_voc sink Vocos vc → v { = g_f5_voc vc }
 
-unsafe @ __f5s_hold_vocab sink F5Vocab vb → v {
-    : F5Vocab old @ F5Vocab { ( arc_from_word [F5VocabImpl] g_f5_vocab ) }
-    = g_f5_vocab ( arc_into_word [F5VocabImpl] ( arc_clone [F5VocabImpl] . vb a ) )
-}
+unsafe @ __f5s_hold_vocab sink F5Vocab vb → v { = g_f5_vocab vb }
 
 : ~ s g_f5_voices ``  // the voices directory
 
@@ -78,7 +68,7 @@ unsafe @ __f5s_hold_vocab sink F5Vocab vb → v {
 
 : ~ s g_f5_models_dir ``
 
-: ~ i g_f5_cur_id 0  // String — the model the thread currently holds
+: ~ s g_f5_cur_id ``  // the model the thread currently holds (owned: an assignment releases the last)
 
 : ~ i g_f5_switches 0
 
@@ -96,8 +86,8 @@ unsafe @ __f5s_hold_vocab sink F5Vocab vb → v {
 //
 // One job per waiting request, linked through the jobs themselves — a
 // module global holds one word, so the queue is two pointers, and its
-// lock and two conditions sit in an F5Sync block the server allocates
-// once and keeps for the process (the model thread and the ticker
+// lock and two conditions sit in an F5Sync module global the server
+// fills once and keeps for the process (the model thread and the ticker
 // outlive any one scope, as the handlers do). The submitting fiber owns
 // the job (an F5Job handle) until it has seen `done`; the queue and the
 // model thread only borrow its address and fill it in.
@@ -140,9 +130,10 @@ unsafe @ __f5s_hold_vocab sink F5Vocab vb → v {
     Cond done  // a job was finished
 }
 
-: ~ i g_q_sync 0  // *F5Sync as an address (0 = never served)
+: ~ F5Sync g_q_sync 0  // zero until the server first runs
+: ~ b g_q_sync_made F
 
-unsafe @ __f5s_sync → *F5Sync { ^ # *F5Sync g_q_sync }
+unsafe @ __f5s_sync → *F5Sync { ^ ( mem_addr g_q_sync ) }
 
 // ── the voice cache ─────────────────────────────────────────────────
 //
@@ -150,24 +141,25 @@ unsafe @ __f5s_sync → *F5Sync { ^ # *F5Sync g_q_sync }
 // It is host data and survives an unload, so it is cached for the process's
 // life. The model thread is the only reader and the only writer.
 
-: ~ i g_vc_ids 0  // ( Vec String ) as a raw handle
+// The cache owns the voices; a `: ~` module global of it drops what an
+// assignment replaces.
+: F5VoiceCache {
+    ( Vec String ) ids
+    ( Vec ? F5Voice ) ptrs
+    ( Vec f ) rms  // the loudness each was prepared at
+}
 
-: ~ i g_vc_ptrs 0  // ( Vec ?F5Voice ) as a raw handle — the cache owns them
+: ~ F5VoiceCache g_vc 0
 
-: ~ i g_vc_rms 0  // ( Vec f ) — the loudness each was prepared at
-
-unsafe @ __f5s_vc_ids → ( Vec String ) { ^ # ( Vec String ) g_vc_ids }
-
-unsafe @ __f5s_vc_ptrs → ( Vec ? F5Voice ) { ^ # ( Vec ? F5Voice ) g_vc_ptrs }
-
-unsafe @ __f5s_vc_rms → ( Vec f ) { ^ # ( Vec f ) g_vc_rms }
+unsafe @ __f5s_vc → *F5VoiceCache { ^ ( mem_addr g_vc ) }
 
 // A voice is cached with the loudness it was normalised TO. A request asking
 // for a different target_rms gets the recording prepared again rather than
 // somebody else's normalisation — the mel the model conditions on is not the
 // same mel.
-@ __f5s_voice_get s id f target → ?F5Voice {
-    : ( Vec String ) ids ( __f5s_vc_ids )
+unsafe @ __f5s_voice_get s id f target → ?F5Voice {
+    : *F5VoiceCache vc ( __f5s_vc )
+    : ( Vec String ) ids . vc ids
     : i n ( vec_len [String] ids )
     : ~ i k 0
     ~ < k n {
@@ -175,9 +167,9 @@ unsafe @ __f5s_vc_rms → ( Vec f ) { ^ # ( Vec f ) g_vc_rms }
             T nm → {
                 ? != 0 ( nurl_str_eq ( string_data nm ) id ) {
                     : ~ f had -1.0
-                    ?? ( vec_get [f] ( __f5s_vc_rms ) k ) { T r → { = had r } F → {} }
+                    ?? ( vec_get [f] . vc rms k ) { T r → { = had r } F → {} }
                     ? < ( fabs - had target ) 1.0e-9 {
-                        ?? ( vec_get [? F5Voice] ( __f5s_vc_ptrs ) k ) {
+                        ?? ( vec_get [? F5Voice] . vc ptrs k ) {
                             T p → {
                                 ?? p {
                                     T x → { ^ @ ?F5Voice { T ( F5Voice_share x ) } }
@@ -188,8 +180,8 @@ unsafe @ __f5s_vc_rms → ( Vec f ) { ^ # ( Vec f ) g_vc_rms }
                         }
                     } {
                         // prepared at a different loudness: drop it and rebuild
-                        ( vec_set [? F5Voice] ( __f5s_vc_ptrs ) k @ ?F5Voice { F } )
-                        ( vec_set [f] ( __f5s_vc_rms ) k -1.0 )
+                        ( vec_set [? F5Voice] . vc ptrs k @ ?F5Voice { F } )
+                        ( vec_set [f] . vc rms k -1.0 )
                     }
                 } {}
             }
@@ -204,8 +196,8 @@ unsafe @ __f5s_vc_rms → ( Vec f ) { ^ # ( Vec f ) g_vc_rms }
     ?? ( f5_voice_open_dir ( string_data dir ) target ) {
         T v → {
             ( vec_push [String] ids ( string_from id ) )
-            ( vec_push [? F5Voice] ( __f5s_vc_ptrs ) @ ?F5Voice { T ( F5Voice_share v ) } )
-            ( vec_push [f] ( __f5s_vc_rms ) target )
+            ( vec_push [? F5Voice] . vc ptrs @ ?F5Voice { T ( F5Voice_share v ) } )
+            ( vec_push [f] . vc rms target )
             ^ @ ?F5Voice { T v }
         }
         F e → {
@@ -240,11 +232,11 @@ unsafe @ __f5s_vc_rms → ( Vec f ) { ^ # ( Vec f ) g_vc_rms }
 // once would be faster to switch between and would also mean several
 // gigabytes of a card standing idle, which is the opposite of what
 // --unload-after is for.
-unsafe @ __f5s_cur_id → String { ^ # String g_f5_cur_id }
+@ __f5s_cur_id → s { ^ g_f5_cur_id }
 
 unsafe @ __f5s_switch_to s id → b {
     ? == 0 ( nurl_str_len id ) { ^ T } {}
-    ? != 0 ( nurl_str_eq ( string_data ( __f5s_cur_id ) ) id ) { ^ T } {}
+    ? != 0 ( nurl_str_eq ( __f5s_cur_id ) id ) { ^ T } {}
     : String ck ( string_new )
     : String vo ( string_new )
     ? ( f5_registry_resolve g_f5_models_dir id ck vo ) {} {
@@ -273,10 +265,7 @@ unsafe @ __f5s_switch_to s id → b {
                         }
                     }
                     ? ok {
-                        // the old id leaves the global (dropped at the arm's end)
-                        : String old_id # String g_f5_cur_id
-                        ( mem_take old_id )
-                        = g_f5_cur_id # i ( string_from id )
+                        = g_f5_cur_id ( nurl_str_cat id `` )  // releases the old id
                         = g_f5_switches + g_f5_switches 1
                         ( __f5s_dropvoices )
                         : String msg ( string_from `f5tts: switched to model ` )
@@ -310,7 +299,7 @@ unsafe @ __f5s_switch_to s id → b {
 // ── the model thread ────────────────────────────────────────────────
 
 unsafe @ __f5s_submit * F5JobImpl j → b {
-    ? != g_q_sync 0 {} { ^ F }
+    ? g_q_sync_made {} { ^ F }
     : *F5Sync q ( __f5s_sync )
     ( mutex_lock . q m )
     ? == g_q_tail 0 {
@@ -328,8 +317,8 @@ unsafe @ __f5s_submit * F5JobImpl j → b {
 }
 
 unsafe @ __f5s_reload → b {
-    : F5Model m # F5Model g_f5_model
-    : Vocos vc # Vocos g_f5_voc
+    : F5Model m g_f5_model
+    : Vocos vc g_f5_voc
     ? ( f5_loaded m ) { ^ T } {}
     : i t0 ( monotonic_ns )
     : b ok & ( f5_reload m ) ( voc_reload vc )
@@ -347,8 +336,6 @@ unsafe @ __f5s_reload → b {
 // A store through the job's pointer does not drop what it overwrites: the
 // empty message leaves through a take first.
 unsafe @ __f5s_job_fail * F5JobImpl j s msg → v {
-    : String old . j err
-    ( mem_take old )
     = . j err ( string_from msg )
     = . j ok F
 }
@@ -358,9 +345,9 @@ unsafe @ __f5s_run_job * F5JobImpl j → v {
         ( __f5s_job_fail j `no such model (GET /models lists what this machine can speak with)` )
         ^ v
     }
-    : F5Model m # F5Model g_f5_model
-    : Vocos vc # Vocos g_f5_voc
-    : F5Vocab vb # F5Vocab g_f5_vocab
+    : F5Model m g_f5_model
+    : Vocos vc g_f5_voc
+    : F5Vocab vb g_f5_vocab
     ? ( __f5s_reload ) {} {
         ( __f5s_job_fail j `the weights could not be loaded` )
         ^ v
@@ -383,7 +370,7 @@ unsafe @ __f5s_model_loop → v {
     // not that thread: the kit was opened while the process was still one
     // thread. Without this every launch from here fails, quietly, and a
     // request comes back as "synthesis failed" with nothing in the log.
-    ? ( gk_bind_thread ( f5_kit # F5Model g_f5_model ) ) {} {
+    ? ( gk_bind_thread ( f5_kit g_f5_model ) ) {} {
         ( nurl_eprintln `f5tts: the model thread cannot bind the device context` )
         ^
     }
@@ -394,10 +381,10 @@ unsafe @ __f5s_model_loop → v {
         ~ & == g_q_head 0 ! g_q_stop {
             ( cond_wait . q req . q m )
             // a ticker wake with nothing queued: is it time to let go?
-            ? & & == g_q_head 0 > g_f5_unload_ms 0 ( f5_loaded # F5Model g_f5_model ) {
+            ? & & == g_q_head 0 > g_f5_unload_ms 0 ( f5_loaded g_f5_model ) {
                 ? >= ( elapsed_ms_since g_f5_idle_since ) g_f5_unload_ms {
-                    ( f5_unload # F5Model g_f5_model )
-                    ( voc_unload # Vocos g_f5_voc )
+                    ( f5_unload g_f5_model )
+                    ( voc_unload g_f5_voc )
                     = g_f5_unloads + g_f5_unloads 1
                     : String s ( string_from `f5tts: idle for ` )
                     ( string_push_int s / g_f5_unload_ms 1000 )
@@ -732,7 +719,7 @@ unsafe @ __f5s_post_json HttpRequest req b single → HttpResponse {
 
 unsafe @ __f5s_health HttpRequest req → HttpResponse {
     : Json o ( json_obj_new )
-    : b loaded ( f5_loaded # F5Model g_f5_model )
+    : b loaded ( f5_loaded g_f5_model )
     : b _a ( json_obj_set o `status` ( json_str_lit ? loaded `ok` `idle` ) )
     : b _b ( json_obj_set o `loaded` ( json_bool loaded ) )
     : b _c ( json_obj_set o `requests` ( json_int g_f5_reqs ) )
@@ -751,7 +738,7 @@ s host i port s token i device i unload_s → i {
     ( f5_ensure_dirs )
     = g_f5_models_dir models_dir
     = g_f5_vocoder vocoder
-    = g_f5_cur_id # i ( string_from model_id )
+    = g_f5_cur_id ( nurl_str_cat model_id `` )
     ?? ( f5_vocab_load vocab_path ) {
         T vb → { ( __f5s_hold_vocab vb ) }
         F e → {
@@ -766,7 +753,7 @@ s host i port s token i device i unload_s → i {
             ^ 1
         }
     }
-    ?? ( voc_open vocoder ( f5_kit # F5Model g_f5_model ) ) {
+    ?? ( voc_open vocoder ( f5_kit g_f5_model ) ) {
         T vc → { ( __f5s_hold_voc vc ) }
         F e → {
             ( nurl_eprintln ( string_data e ) )
@@ -777,16 +764,15 @@ s host i port s token i device i unload_s → i {
     = g_f5_token token
     = g_f5_unload_ms * unload_s 1000
     = g_f5_idle_since ( monotonic_ns )
-    = g_vc_ids # i ( vec_new [String] )
-    = g_vc_ptrs # i ( vec_new [? F5Voice] )
-    = g_vc_rms # i ( vec_new [f] )
+    = . g_vc ids ( vec_new [String] )
+    = . g_vc ptrs ( vec_new [? F5Voice] )
+    = . g_vc rms ( vec_new [f] )
 
-    ? == g_q_sync 0 {
-        : *F5Sync qs # *F5Sync ( nurl_alloc Z F5Sync )
-        = . qs m ( mutex_new )
-        = . qs req ( cond_new )
-        = . qs done ( cond_new )
-        = g_q_sync # i qs
+    ? ! g_q_sync_made {
+        = . g_q_sync m ( mutex_new )
+        = . g_q_sync req ( cond_new )
+        = . g_q_sync done ( cond_new )
+        = g_q_sync_made T
     } {}
     : *F5Sync q ( __f5s_sync )
     : ( @ v ) modelfn \ → v { ( __f5s_model_loop ) }
@@ -861,7 +847,7 @@ s host i port s token i device i unload_s → i {
                 : b _c ( json_obj_set o `path` ( json_str_lit ( string_data . e ckpt ) ) )
                 : b _d ( json_obj_set o `on_this_machine` ( json_bool . e cached ) )
                 : b _e ( json_obj_set o `current`
-                ( json_bool != 0 ( nurl_str_eq ( string_data . e id ) ( string_data ( __f5s_cur_id ) ) ) ) )
+                ( json_bool != 0 ( nurl_str_eq ( string_data . e id ) ( __f5s_cur_id ) ) ) )
                 : b _f ( json_arr_push arr o )
             }
             F → {}
@@ -872,11 +858,8 @@ s host i port s token i device i unload_s → i {
     // on this machine, and a list that leaves out what is currently loaded is
     // a list nobody can trust.
     //
-    // `__f5s_cur_id` hands back a view of the GLOBAL's String, not a copy —
-    // releasing it here would release the service's own current-model id, and
-    // every later read of it is a use-after-free that lands in libc with no
-    // NURL frame to blame. It is borrowed here, as `s`.
-    : s cur ( string_data ( __f5s_cur_id ) )
+    // `__f5s_cur_id` is a view of the global's string, read here as `s`.
+    : s cur ( __f5s_cur_id )
     ? & > ( nurl_str_len cur ) 0 ! ( f5_registry_has reg cur ) {
         : Json o ( json_obj_new )
         : b _a ( json_obj_set o `model_id` ( json_str_lit cur ) )
@@ -958,15 +941,16 @@ unsafe @ __f5s_part_str ( Vec MultipartPart ) parts s name → String {
 
 // Drop a voice from the cache: a re-recorded voice with the same id must not
 // keep answering from the mel of the take it replaced.
-@ __f5s_voice_forget s id → v {
-    : ( Vec String ) ids ( __f5s_vc_ids )
+unsafe @ __f5s_voice_forget s id → v {
+    : *F5VoiceCache vc ( __f5s_vc )
+    : ( Vec String ) ids . vc ids
     : ~ i k 0
     ~ < k ( vec_len [String] ids ) {
         ?? ( vec_get [String] ids k ) {
             T nm → {
                 ? != 0 ( nurl_str_eq ( string_data nm ) id ) {
-                    ( vec_set [? F5Voice] ( __f5s_vc_ptrs ) k @ ?F5Voice { F } )
-                    ( vec_set [f] ( __f5s_vc_rms ) k -1.0 )
+                    ( vec_set [? F5Voice] . vc ptrs k @ ?F5Voice { F } )
+                    ( vec_set [f] . vc rms k -1.0 )
                 } {}
             }
             F → {}

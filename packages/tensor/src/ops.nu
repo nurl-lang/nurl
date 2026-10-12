@@ -30,11 +30,11 @@ $ `tensor.nu`
 : ~ i g_t_gpu 0  // 0 unprobed, 1 ready, -1 unavailable/disabled
 // The adopted kit: one owner of it, kept in a global for as long as the
 // route is open (tensor_gpu_close lets it go).
-: ~ i g_t_kit 0
+: ~ ? GpuKit g_t_kit 0
 
 unsafe @ __t_adopt GpuKit kit → v {
     // the global holds one owner of it from here
-    = g_t_kit ( arc_into_word [GpuKitImpl] ( arc_clone [GpuKitImpl] . kit a ) )
+    = g_t_kit @ ?GpuKit { T ( GpuKit_share kit ) }
 }
 
 @ __t_gpu_ready → b {
@@ -54,8 +54,14 @@ unsafe @ __t_adopt GpuKit kit → v {
     ^ F
 }
 
-// Lent: the global keeps its owner.
-unsafe @ __t_kit → GpuKit { ^ # GpuKit g_t_kit }
+// One more owner of the open kit, for one call (the route is open:
+// __t_gpu_ready).
+unsafe @ __t_kit → GpuKit {
+    ?? g_t_kit {
+        T k → { ^ ( GpuKit_share k ) }
+        F → { ( nurl_panic `tensor: the GPU route is open without a kit` ) }
+    }
+}
 
 // Opt IN with a caller-opened kit (any backend — the caller chose it).
 // tensor holds the kit (one more owner of it) until tensor_gpu_close /
@@ -77,10 +83,9 @@ unsafe @ __t_kit → GpuKit { ^ # GpuKit g_t_kit }
 // Let the tensor GPU singleton go (the process-lifetime owner the global
 // held). The next big matmul may re-probe (unlike tensor_gpu_off).
 unsafe @ tensor_gpu_close → v {
-    // the global's owner, handed to the early release
-    ? != g_t_kit 0 { ( gk_close @ GpuKit { ( arc_from_word [GpuKitImpl] g_t_kit ) } ) } {}
+    // the global's owner, released here
+    = g_t_kit @ ?GpuKit { F }
     = g_t_gpu 0
-    = g_t_kit 0
 }
 
 @ __round_vec ( Vec f ) v i dtype → v {

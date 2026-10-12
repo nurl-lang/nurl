@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.3.11] — 2026-10-12
+
+Requires NURL 0.73.0, in which a field written through a raw pointer
+drops what it held, a mutable module global may own a `String`, a `Vec`
+or a handle, and a foreign function may take an `inout` parameter.
+The published 0.3.10 does not compile under it.
+
+### Changed
+
+- The gradient-fit test reads one gradient at a time (grad's `grad_of`
+  lends from the tape).
+- Requires grad 0.12.
+
+
 ## [0.3.10] — 2026-10-09
 
 Requires NURL 0.72.0, which draws the raw-memory boundary at every call:

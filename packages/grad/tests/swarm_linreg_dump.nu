@@ -42,9 +42,11 @@ unsafe @ tape_grads f a f b f xf f v * u ga * u gb → v {
     : GVar e ( g_sub tp ( g_add tp ( g_mul tp pa xl ) pb ) vl )
     : GVar loss ( g_mul tp e e )
     : b _bk ( backward tp loss )
+    // (A gradient is lent from the tape: read one before asking for the
+    // next.)
     : Tensor g1 ( grad_of tp pa )
-    : Tensor g2 ( grad_of tp pb )
     ( nurl_poke ga 0 ( f64_to_bits ( _tf . g1 data 0 ) ) )
+    : Tensor g2 ( grad_of tp pb )
     ( nurl_poke gb 0 ( f64_to_bits ( _tf . g2 data 0 ) ) )
 }
 
@@ -75,8 +77,10 @@ unsafe @ main → i {
     : i ROUNDS ( cROUNDS )
     : ~ f a 0.0
     : ~ f b2 0.0
-    : *u ga ( nurl_alloc 8 )
-    : *u gb ( nurl_alloc 8 )
+    : ( Vec u ) ga__b ( vec_zeroed [u] 8 )
+    : *u ga ( vec_data [u] ga__b )
+    : ( Vec u ) gb__b ( vec_zeroed [u] 8 )
+    : *u gb ( vec_data [u] gb__b )
     : ~ i r 0
     ~ < r ROUNDS {
         : ~ f sa 0.0
@@ -94,7 +98,6 @@ unsafe @ main → i {
         = b2 - b2 / * LR sb # f N
         = r + r 1
     }
-    ( nurl_free ga ) ( nurl_free gb )
     ( nurl_print `===REF===\n` )
     ( nurl_print ( nurl_str_float a ) ) ( nurl_print `\n` )
     ( nurl_print ( nurl_str_float b2 ) ) ( nurl_print `\n` )

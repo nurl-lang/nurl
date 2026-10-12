@@ -13,6 +13,7 @@
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
+$ `stdlib/core/box.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/arc.nu`
 $ `stdlib/core/slice.nu`
@@ -124,27 +125,27 @@ unsafe @ wc_skip inout Wc c i n → v { = . c pos + . c pos n }
 : WImport { ( Vec u ) module ( Vec u ) field i typeidx }
 
 : ModuleImpl {
-    ( Vec s ) types  // *FuncType
+    ( Vec ( Box FuncType ) ) types
     ( Vec i ) functypes  // type index per defined function
-    ( Vec s ) funcs  // *WFunc
-    ( Vec s ) exports  // *WExport
+    ( Vec ( Box WFunc ) ) funcs
+    ( Vec ( Box WExport ) ) exports
     ( Vec u ) code  // the whole module byte image (functions index into it)
     i has_mem
     i mem_min  // initial pages (64 KiB each)
     i mem_max  // 0 if unbounded
     i mem_shared  // 1 = threads-proposal shared memory (max is mandatory)
-    ( Vec s ) datas  // *DataSeg
+    ( Vec ( Box DataSeg ) ) datas
     ( Vec i ) global_init  // initial value per global
     ( Vec i ) global_mut  // 1 if mutable
     i has_table
     ( Vec i ) table  // initial table image: function indices (−1 = null)
     i table_max  // declared table maximum (0 = none)
-    ( Vec s ) elems  // *ElemSeg — element segments, in order
-    ( Vec s ) imports  // *WImport (imported functions, in index order)
+    ( Vec ( Box ElemSeg ) ) elems  // element segments, in order
+    ( Vec ( Box WImport ) ) imports  // imported functions, in index order
     i num_import_funcs  // imported funcs occupy func indices 0..n-1
     i start_func  // start-section function index (-1 = none)
     ( Vec i ) name_idx  // function indices with a "name"-section entry…
-    ( Vec s ) name_str  // …and their names (*( Vec u )), parallel (sparse)
+    ( Vec ( Box NameBuf ) ) name_str  // …and their names, parallel (sparse)
     b ok
     ( Vec u ) err
 }
@@ -159,36 +160,9 @@ unsafe @ wc_skip inout Wc c i n → v { = . c pos + . c pos n }
 
 unsafe @ _Module_ptr Module h → *ModuleImpl { ^ ( arc_ptr [ModuleImpl] . h a ) }
 
-unsafe @ __ft_free sink * FuncType ft → v { ( vec_free [i] . ft params ) ( vec_free [i] . ft results ) ( nurl_free # s ft ) }
-
-// The section records are raw blocks behind the `( Vec s )` tables; the last
-// owner of the Module releases them here, and the tables themselves (with
-// every other Vec of the module) are dropped after this returns.
-% Drop ModuleImpl {
-    unsafe @ drop ModuleImpl m → v {
-        : i tn ( vec_len [s] . m types )
-        : ~ i k 0
-        ~ < k tn { ?? ( vec_get [s] . m types k ) { T pp → ? != # i pp 0 { ( __ft_free # *FuncType pp ) } {} F → {} } = k + k 1 }
-        : i fn ( vec_len [s] . m funcs )
-        : ~ i j 0
-        ~ < j fn { ?? ( vec_get [s] . m funcs j ) { T pp → ? != # i pp 0 { : *WFunc f # *WFunc pp ( vec_free [i] . f locals ) ( nurl_free # s f ) } {} F → {} } = j + j 1 }
-        : i en ( vec_len [s] . m exports )
-        : ~ i e 0
-        ~ < e en { ?? ( vec_get [s] . m exports e ) { T pp → ? != # i pp 0 { : *WExport x # *WExport pp ( vec_free [u] . x name ) ( nurl_free # s x ) } {} F → {} } = e + e 1 }
-        : i dn ( vec_len [s] . m datas )
-        : ~ i d 0
-        ~ < d dn { ?? ( vec_get [s] . m datas d ) { T pp → ? != # i pp 0 { : *DataSeg ds # *DataSeg pp ( vec_free [u] . ds bytes ) ( nurl_free # s ds ) } {} F → {} } = d + d 1 }
-        : i eln ( vec_len [s] . m elems )
-        : ~ i el 0
-        ~ < el eln { ?? ( vec_get [s] . m elems el ) { T pp → ? != # i pp 0 { : *ElemSeg es # *ElemSeg pp ( vec_free [i] . es funcs ) ( nurl_free # s es ) } {} F → {} } = el + el 1 }
-        : i in ( vec_len [s] . m imports )
-        : ~ i ii 0
-        ~ < ii in { ?? ( vec_get [s] . m imports ii ) { T pp → ? != # i pp 0 { : *WImport w # *WImport pp ( vec_free [u] . w module ) ( vec_free [u] . w field ) ( nurl_free # s w ) } {} F → {} } = ii + ii 1 }
-        : i nn ( vec_len [s] . m name_str )
-        : ~ i ni 0
-        ~ < ni nn { ?? ( vec_get [s] . m name_str ni ) { T pp → ? != # i pp 0 { : *NameBuf nb # *NameBuf pp ( vec_free [u] . nb bytes ) ( nurl_free # s nb ) } {} F → {} } = ni + ni 1 }
-    }
-}
+// The section records are boxed in their tables (a *FuncType, a *WFunc …
+// into one stays put while the table grows); the last owner of the Module
+// drops them with the tables.
 
 // Let go of `m` now rather than at the end of its owner's scope.
 @ module_free sink Module m → v {}
@@ -263,7 +237,7 @@ unsafe @ __const_expr inout Wc c * ModuleImpl m → i {
 
 // ── section decoders ─────────────────────────────────────────────
 
-unsafe @ __read_functype inout Wc c * ModuleImpl m → *FuncType {
+unsafe @ __read_functype inout Wc c * ModuleImpl m → ( Box FuncType ) {
     ( wc_u8 c )  // 0x60 form byte (assumed)
     : i np ( __chk_count c m ( wc_uleb c ) `bad param count` )
     : ( Vec i ) params ( vec_new [i] )
@@ -273,16 +247,13 @@ unsafe @ __read_functype inout Wc c * ModuleImpl m → *FuncType {
     : ( Vec i ) results ( vec_new [i] )
     : ~ i b 0
     ~ < b nr { ( vec_push [i] results ( wc_u8 c ) ) = b + b 1 }
-    : *FuncType ft # *FuncType ( nurl_alloc Z FuncType )
-    = . ft params params
-    = . ft results results
-    ^ ft
+    ^ ( box_new [FuncType] @ FuncType { params results } )
 }
 
 unsafe @ __decode_type_sec inout Wc c * ModuleImpl m → v {
     : i n ( __chk_count c m ( wc_uleb c ) `bad type count` )
     : ~ i k 0
-    ~ < k n { ( vec_push [s] . m types # s ( __read_functype c m ) ) = k + k 1 }
+    ~ < k n { ( vec_push [( Box FuncType )] . m types ( __read_functype c m ) ) = k + k 1 }
 }
 
 unsafe @ __decode_func_sec inout Wc c * ModuleImpl m → v {
@@ -301,11 +272,7 @@ unsafe @ __decode_export_sec inout Wc c * ModuleImpl m → v {
         ~ < a nl { ( vec_push [u] nm ( wc_u8 c ) ) = a + a 1 }
         : i kind ( wc_u8 c )
         : i idx ( wc_uleb c )
-        : *WExport x # *WExport ( nurl_alloc Z WExport )
-        = . x name nm
-        = . x kind kind
-        = . x index idx
-        ( vec_push [s] . m exports # s x )
+        ( vec_push [( Box WExport )] . m exports ( box_new [WExport] @ WExport { nm kind idx } ) )
         = k + k 1
     }
 }
@@ -363,11 +330,8 @@ unsafe @ __decode_data_sec inout Wc c * ModuleImpl m → v {
                 ( __mod_err m `data segment does not fit in linear memory` )
             } {}
         }
-        : *DataSeg ds # *DataSeg ( nurl_alloc Z DataSeg )
-        = . ds offset offset
-        = . ds bytes bytes
-        = . ds passive ? == flag 1 1 0
-        ( vec_push [s] . m datas ds )
+        : i passive ? == flag 1 1 0
+        ( vec_push [( Box DataSeg )] . m datas ( box_new [DataSeg] @ DataSeg { offset bytes passive } ) )
         = k + k 1
     }
 }
@@ -391,11 +355,7 @@ unsafe @ __decode_import_sec inout Wc c * ModuleImpl m → v {
         : i kind ( wc_u8 c )
         ? == kind 0 {
             : i ti ( wc_uleb c )
-            : *WImport w # *WImport ( nurl_alloc Z WImport )
-            = . w module mnm
-            = . w field fld
-            = . w typeidx ti
-            ( vec_push [s] . m imports # s w )
+            ( vec_push [( Box WImport )] . m imports ( box_new [WImport] @ WImport { mnm fld ti } ) )
             = . m num_import_funcs + . m num_import_funcs 1
         } {
             ( vec_free [u] mnm )
@@ -511,11 +471,9 @@ unsafe @ __decode_elem_sec inout Wc c * ModuleImpl m → v {
                 }
             }
         } {}
-        : *ElemSeg es # *ElemSeg ( nurl_alloc Z ElemSeg )
-        = . es funcs funcs
         // active (and declared, flag 3/7) segments are dropped at instantiation
-        = . es passive ? | == flag 1 == flag 5 1 0
-        ( vec_push [s] . m elems # s es )
+        : i passive ? | == flag 1 == flag 5 1 0
+        ( vec_push [( Box ElemSeg )] . m elems ( box_new [ElemSeg] @ ElemSeg { funcs passive } ) )
         = k + k 1
     }
 }
@@ -547,12 +505,8 @@ unsafe @ __decode_code_sec inout Wc c * ModuleImpl m → v {
             = d + d 1
         }
         : i code_start . c pos
-        : *WFunc f # *WFunc ( nurl_alloc Z WFunc )
-        = . f typeidx ?? ( vec_get [i] . m functypes k ) { T x → x F → 0 }
-        = . f locals locals
-        = . f code_start code_start
-        = . f code_end body_end
-        ( vec_push [s] . m funcs # s f )
+        : i typeidx ?? ( vec_get [i] . m functypes k ) { T x → x F → 0 }
+        ( vec_push [( Box WFunc )] . m funcs ( box_new [WFunc] @ WFunc { typeidx locals code_start body_end } ) )
         = . c pos body_end  // skip to next body
         = k + k 1
     }
@@ -581,10 +535,8 @@ unsafe @ __decode_custom_sec inout Wc c * ModuleImpl m i sec_end → v {
                     : ( Vec u ) nm ( vec_with_cap [u] ln )
                     : ~ i a 0
                     ~ < a ln { ( vec_push [u] nm ( wc_u8 c ) ) = a + a 1 }
-                    : *NameBuf nb # *NameBuf ( nurl_alloc Z NameBuf )
-                    = . nb bytes nm
                     ( vec_push [i] . m name_idx fi )
-                    ( vec_push [s] . m name_str # s nb )
+                    ( vec_push [( Box NameBuf )] . m name_str ( box_new [NameBuf] @ NameBuf { nm } ) )
                     = k + k 1
                 }
             } {}
@@ -599,7 +551,7 @@ unsafe @ _module_func_name * ModuleImpl m i fidx → ( Vec u ) {
     : ~ i k 0
     ~ < k n {
         ? == ?? ( vec_get [i] . m name_idx k ) { T x → x F → -1 } fidx {
-            : s pp ?? ( vec_get [s] . m name_str k ) { T x → x F → # s 0 }
+            : s pp ?? ( vec_get [( Box NameBuf )] . m name_str k ) { T x → # s ( box_ptr [NameBuf] x ) F → # s 0 }
             ? != # i pp 0 {
                 : *NameBuf nb # *NameBuf pp
                 : ( Vec u ) out ( vec_with_cap [u] ( vec_len [u] . nb bytes ) )
@@ -621,27 +573,27 @@ unsafe @ module_func_name Module m__h i fidx → ( Vec u ) { ^ ( _module_func_na
 unsafe @ module_decode sink ( Vec u ) bytes → Module {
     : ( Arc ModuleImpl ) m__box ( arc_zero [ModuleImpl] )
     : *ModuleImpl m ( arc_ptr [ModuleImpl] m__box )
-    = . m types ( vec_new [s] )
+    = . m types ( vec_new [( Box FuncType )] )
     = . m functypes ( vec_new [i] )
-    = . m funcs ( vec_new [s] )
-    = . m exports ( vec_new [s] )
+    = . m funcs ( vec_new [( Box WFunc )] )
+    = . m exports ( vec_new [( Box WExport )] )
     = . m code bytes
     = . m has_mem 0
     = . m mem_min 0
     = . m mem_max 0
     = . m mem_shared 0
-    = . m datas ( vec_new [s] )
+    = . m datas ( vec_new [( Box DataSeg )] )
     = . m global_init ( vec_new [i] )
     = . m global_mut ( vec_new [i] )
     = . m has_table 0
     = . m table ( vec_new [i] )
     = . m table_max 0
-    = . m elems ( vec_new [s] )
-    = . m imports ( vec_new [s] )
+    = . m elems ( vec_new [( Box ElemSeg )] )
+    = . m imports ( vec_new [( Box WImport )] )
     = . m num_import_funcs 0
     = . m start_func -1
     = . m name_idx ( vec_new [i] )
-    = . m name_str ( vec_new [s] )
+    = . m name_str ( vec_new [( Box NameBuf )] )
     = . m ok T
     = . m err ( vec_new [u] )
     : ~ Wc c ( wc_new . m code )
@@ -681,11 +633,11 @@ unsafe @ module_decode sink ( Vec u ) bytes → Module {
 // needs one: `__stack_pointer` is what gives a spawned thread its own
 // stack, and only the host can set it before the thread's first call.
 unsafe @ _module_export_global * ModuleImpl m s name → i {
-    : i n ( vec_len [s] . m exports )
+    : i n ( vec_len [( Box WExport )] . m exports )
     : ~ i found -1
     : ~ i k 0
     ~ & == found -1 < k n {
-        : s pp ?? ( vec_get [s] . m exports k ) { T x → x F → # s 0 }
+        : s pp ?? ( vec_get [( Box WExport )] . m exports k ) { T x → # s ( box_ptr [WExport] x ) F → # s 0 }
         ? != # i pp 0 {
             : *WExport x # *WExport pp
             ? & == . x kind 3 ( __name_eq . x name name ) { = found . x index } {}
@@ -699,11 +651,11 @@ unsafe @ module_export_global Module m__h s name → i { ^ ( _module_export_glob
 
 // Find an exported function index by name (-1 if absent).
 unsafe @ _module_export_func * ModuleImpl m s name → i {
-    : i n ( vec_len [s] . m exports )
+    : i n ( vec_len [( Box WExport )] . m exports )
     : ~ i found -1
     : ~ i k 0
     ~ & == found -1 < k n {
-        : s pp ?? ( vec_get [s] . m exports k ) { T x → x F → # s 0 }
+        : s pp ?? ( vec_get [( Box WExport )] . m exports k ) { T x → # s ( box_ptr [WExport] x ) F → # s 0 }
         ? != # i pp 0 {
             : *WExport x # *WExport pp
             ? & == . x kind 0 ( __name_eq . x name name ) { = found . x index } {}
@@ -721,17 +673,17 @@ unsafe @ _module_func_type * ModuleImpl m i fidx → s {
     ? < fidx 0 { ^ # s 0 } {}
     : ~ i ti -1
     ? < fidx . m num_import_funcs {
-        : s wp ?? ( vec_get [s] . m imports fidx ) { T x → x F → # s 0 }
+        : s wp ?? ( vec_get [( Box WImport )] . m imports fidx ) { T x → # s ( box_ptr [WImport] x ) F → # s 0 }
         ? == # i wp 0 { ^ # s 0 } {}
         : *WImport w # *WImport wp
         = ti . w typeidx
     } {
-        : s fp ?? ( vec_get [s] . m funcs - fidx . m num_import_funcs ) { T x → x F → # s 0 }
+        : s fp ?? ( vec_get [( Box WFunc )] . m funcs - fidx . m num_import_funcs ) { T x → # s ( box_ptr [WFunc] x ) F → # s 0 }
         ? == # i fp 0 { ^ # s 0 } {}
         : *WFunc f # *WFunc fp
         = ti . f typeidx
     }
-    ^ ?? ( vec_get [s] . m types ti ) { T x → x F → # s 0 }
+    ^ ?? ( vec_get [( Box FuncType )] . m types ti ) { T x → # s ( box_ptr [FuncType] x ) F → # s 0 }
 }
 
 unsafe @ module_func_type Module m__h i fidx → s { ^ ( _module_func_type ( _Module_ptr m__h ) fidx ) }

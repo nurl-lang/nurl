@@ -86,8 +86,10 @@ unsafe @ main → i {
     ( nurl_print `— finite differences through the block —\n` )
     : Blk bl ( blk_new 42 F )
     : GTape tp ( tape_new )
-    : *u pav ( nurl_alloc * 7 8 )
-    : *u pbv ( nurl_alloc * 7 8 )
+    : ( Vec u ) pav__b ( vec_zeroed [u] * 7 8 )
+    : *u pav ( vec_data [u] pav__b )
+    : ( Vec u ) pbv__b ( vec_zeroed [u] * 7 8 )
+    : *u pbv ( vec_data [u] pbv__b )
     : GVar loss ( build_block tp bl pav pbv )
     : b bok ( backward tp loss )
     ( check bok `CPU backward over the block runs` )
@@ -105,9 +107,10 @@ unsafe @ main → i {
         : f fdb ( fd_probe bl T offb )
         : GVar pga @ GVar { ( nurl_peek pav pi ) }
         : GVar pgb @ GVar { ( nurl_peek pbv pi ) }
+        // (one gradient read at a time: grad_of may add to the tape)
         : Tensor ga ( grad_of tp pga )
-        : Tensor gb ( grad_of tp pgb )
         : f ea ( relerr ( _tf . ga data 1 ) fda )
+        : Tensor gb ( grad_of tp pgb )
         : f eb ( relerr ( _tf . gb data ? < 2 * ( cR ) ( aout pi ) 2 0 ) fdb )
         ? > ea worst { = worst ea } {}
         ? > eb worst { = worst eb } {}
@@ -122,8 +125,10 @@ unsafe @ main → i {
     ( nurl_print `— B=0 init identity —\n` )
     : Blk bz ( blk_new 42 T )
     : GTape tpz ( tape_new )
-    : *u pavz ( nurl_alloc * 7 8 )
-    : *u pbvz ( nurl_alloc * 7 8 )
+    : ( Vec u ) pavz__b ( vec_zeroed [u] * 7 8 )
+    : *u pavz ( vec_data [u] pavz__b )
+    : ( Vec u ) pbvz__b ( vec_zeroed [u] * 7 8 )
+    : *u pbvz ( vec_data [u] pbvz__b )
     : GVar lz ( build_block tpz bz pavz pbvz )
     : b bz2 ( backward tpz lz )
     ( check bz2 `B=0 backward runs` )
@@ -215,8 +220,10 @@ unsafe @ main → i {
         // — 4. a short LoRA training run on the device —
         ( nurl_print `— device LoRA training (B=0 init, 60 Adam steps) —\n` )
         : GTape tpt ( tape_new )
-        : *u pat ( nurl_alloc * 7 8 )
-        : *u pbt ( nurl_alloc * 7 8 )
+        : ( Vec u ) pat__b ( vec_zeroed [u] * 7 8 )
+        : *u pat ( vec_data [u] pat__b )
+        : ( Vec u ) pbt__b ( vec_zeroed [u] * 7 8 )
+        : *u pbt ( vec_data [u] pbt__b )
         : GVar lt ( build_block tpt bz pat pbt )
         : GProg pgt ( gput_capture kit tpt lt )
         : GpOpt go ( gpopt_adam_new 0.01 )
@@ -245,14 +252,11 @@ unsafe @ main → i {
         ( nurl_print ( nurl_str_float l1 ) )
         ( nurl_print `\n` )
         ( check < l1 * 0.5 l0 `LoRA training halves the CE loss` )
-        ( nurl_free pat ) ( nurl_free pbt )
     } {
         ( nurl_print `  (no backend — device checks skipped)\n` )
     }
     ( gk_close kit )
 
-    ( nurl_free pav ) ( nurl_free pbv )
-    ( nurl_free pavz ) ( nurl_free pbvz )
     ( nurl_print `lora_block_test: ` )
     ( nurl_print_int g_pass )
     ( nurl_print ` passed, ` )

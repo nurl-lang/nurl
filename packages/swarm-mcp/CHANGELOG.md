@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.30.4] — 2026-10-12
+
+Requires NURL 0.73.0, in which a field written through a raw pointer
+drops what it held, a mutable module global may own a `String`, a `Vec`
+or a handle, and a foreign function may take an `inout` parameter.
+The published 0.30.3 does not compile under it.
+
+### Changed
+
+- The coordinator's registry is a module global that owns it, and its
+  task and dataset records are `Box`es in their tables (a `*Task` into
+  one stays put while the table grows), where all of it was raw memory
+  never released. The async iterate runs and the relay list (a copy of
+  the caller's) are owned globals too.
+- A task's or a run's replaced fields are dropped by the store; the
+  frees before each such store are gone, and the coordinator's node is
+  released by the store that replaces it on a reconnect.
+
 ## [0.30.3] — 2026-10-11
 
 Requires NURL 0.73.0, which allows `mem_forget`, `mem_take` and the

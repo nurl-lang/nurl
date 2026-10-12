@@ -36,8 +36,10 @@ unsafe @ main → i {
     ( dumpv `mask` . bl mask ) ( dumpv `onehot` . bl onehot )
     ( dumpv `la` . bl la ) ( dumpv `lb` . bl lb )
     : GTape tp ( tape_new )
-    : *u pav ( nurl_alloc * 7 8 )
-    : *u pbv ( nurl_alloc * 7 8 )
+    : ( Vec u ) pav__b ( vec_zeroed [u] * 7 8 )
+    : *u pav ( vec_data [u] pav__b )
+    : ( Vec u ) pbv__b ( vec_zeroed [u] * 7 8 )
+    : *u pbv ( vec_data [u] pbv__b )
     : GVar loss ( build_block tp bl pav pbv )
     : b bok ( backward tp loss )
     ? bok {} { ( nurl_print `BACKWARD FAILED\n` ) ^ 1 }
@@ -48,16 +50,17 @@ unsafe @ main → i {
     ~ < k 7 {
         : GVar pa @ GVar { ( nurl_peek pav k ) }
         : GVar pb @ GVar { ( nurl_peek pbv k ) }
+        // (A gradient is lent from the tape: read one before asking for
+        // the next.)
         : Tensor ga ( grad_of tp pa )
-        : Tensor gb ( grad_of tp pb )
         : String na ( string_from `gA` )
         ( string_push_str na ( nurl_str_int k ) )
         ( dumpv ( string_data na ) . ga data )
+        : Tensor gb ( grad_of tp pb )
         : String nb ( string_from `gB` )
         ( string_push_str nb ( nurl_str_int k ) )
         ( dumpv ( string_data nb ) . gb data )
         = k + k 1
     }
-    ( nurl_free pav ) ( nurl_free pbv )
     ^ 0
 }

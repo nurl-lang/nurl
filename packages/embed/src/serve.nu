@@ -46,6 +46,7 @@
 
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
+$ `stdlib/core/option.nu`
 $ `stdlib/std/thread.nu`
 $ `stdlib/std/time.nu`
 $ `stdlib/std/url.nu`
@@ -55,7 +56,16 @@ $ `deps/http/src/http.nu`
 $ `model.nu`
 $ `stdlib/core/slice.nu`
 
-: ~ i g_em 0  // the served Embed's block, lent by embed_serve's caller (0 = not serving)
+: ~ ? Embed g_em 0  // one owner of the served model, while serving (F = not serving)
+
+// One more owner of the served model (only while serving).
+unsafe @ __em_model → Embed {
+    ?? g_em {
+        T e → { ^ ( Embed_share e ) }
+        F → { ( nurl_panic `embed: no model is being served` ) }
+    }
+}
+
 : ~ s g_em_token ``
 : ~ s g_em_name ``
 : ~ i g_em_reqs 0
@@ -81,8 +91,8 @@ $ `stdlib/core/slice.nu`
 //
 // One job per waiting request, linked through the jobs themselves — a
 // module global holds one word, so the queue is two pointers, and its
-// lock and two conditions sit in an EmSync block the server allocates
-// once and keeps for the process (the model thread and the ticker
+// lock and two conditions sit in an EmSync module global the server
+// fills once and keeps for the process (the model thread and the ticker
 // outlive any one scope, as the handlers do). The submitting fiber owns
 // the job (an EmJob handle) and keeps it until it has seen `done`; the
 // queue and the model thread only borrow its address meanwhile.
@@ -109,16 +119,17 @@ $ `stdlib/core/slice.nu`
     Cond done  // a job was finished
 }
 
-: ~ i g_q_sync 0  // *EmSync as an address (0 = never served)
+: ~ EmSync g_q_sync 0  // zero until the server first runs
+: ~ b g_q_sync_made F
 
-unsafe @ __em_sync → *EmSync { ^ # *EmSync g_q_sync }
+unsafe @ __em_sync → *EmSync { ^ ( mem_addr g_q_sync ) }
 
 // Run one request's forward — the WHOLE batch, one job — on the model
 // thread and wait for it. The job takes `ids` and `offs`; what comes
 // back is the `nout` floats of the batch's embeddings, or an empty Vec
 // when the forward failed.
 unsafe @ __em_submit sink ( Vec i ) ids sink ( Vec i ) offs i nout b normalize → ( Vec f ) {
-    ? != g_q_sync 0 {} { ^ ( vec_new [f] ) }
+    ? g_q_sync_made {} { ^ ( vec_new [f] ) }
     : *EmSync q ( __em_sync )
     : ( Vec f ) out ( vec_with_cap [f] nout )
     : ~ i z 0
@@ -140,14 +151,13 @@ unsafe @ __em_submit sink ( Vec i ) ids sink ( Vec i ) offs i nout b normalize �
     ? . j ok {} { ^ ( vec_new [f] ) }
     // the embeddings leave the job (which drops the rest with jh)
     : ( Vec f ) res . j out
-    ( mem_take res )
-    = . j out ( vec_new [f] )
+    = . j out ( vec_new [f] )  // res keeps what the field held
     ^ res
 }
 
 // The model thread: take jobs, run them, wake the waiter.
 unsafe @ __em_model_loop → v {
-    : Embed e # Embed g_em
+    : Embed e ( __em_model )
     : *EmSync q ( __em_sync )
     : ~ b run T
     ~ run {
@@ -286,7 +296,7 @@ unsafe @ __em_ticker → v {
 // sees every text of the batch at once and runs them as a few padded
 // batched forwards (embed_encode_batch), not one forward per text.
 unsafe @ __em_run ( Vec String ) texts b normalize → HttpResponse {
-    : Embed e # Embed g_em
+    : Embed e ( __em_model )
     : i nt ( vec_len [String] texts )
     : i dim ( embed_dim e )
     : ~ b ok T
@@ -440,7 +450,7 @@ unsafe @ __em_post HttpRequest req → HttpResponse {
 }
 
 unsafe @ __em_health HttpRequest req → HttpResponse {
-    : Embed e # Embed g_em
+    : Embed e ( __em_model )
     : Json o ( json_obj_new )
     // `healthy` either way: an engine whose weights are unloaded under
     // --unload-after answers the next request, it just pays the reload
@@ -472,22 +482,19 @@ unsafe @ __em_health HttpRequest req → HttpResponse {
 
 // Serve `e` (borrowed for the server's lifetime). Blocks until stopped.
 unsafe @ embed_serve Embed e s name s host i port s token i unload_s → i {
-    = g_em # i . . e a ctl
+    = g_em @ ?Embed { T ( Embed_share e ) }
     = g_em_unload_ms * unload_s 1000
     = g_em_idle_since ( monotonic_ns )
     = g_em_loads 1
     = g_em_unloads 0
     = g_em_load_ms 0
-    ? > ( nurl_str_len g_em_token ) 0 { ( nurl_free g_em_token ) } {}
-    = g_em_token ( strdup token )
-    ? > ( nurl_str_len g_em_name ) 0 { ( nurl_free g_em_name ) } {}
-    = g_em_name ( strdup name )
-    ? == g_q_sync 0 {
-        : *EmSync qs # *EmSync ( nurl_alloc Z EmSync )
-        = . qs m ( mutex_new )
-        = . qs req ( cond_new )
-        = . qs done ( cond_new )
-        = g_q_sync # i qs
+    = g_em_token ( nurl_str_cat token `` )
+    = g_em_name ( nurl_str_cat name `` )
+    ? ! g_q_sync_made {
+        = . g_q_sync m ( mutex_new )
+        = . g_q_sync req ( cond_new )
+        = . g_q_sync done ( cond_new )
+        = g_q_sync_made T
     } {}
     : *EmSync q ( __em_sync )
     : ( @ v ) modelfn \ → v { ( __em_model_loop ) }
@@ -548,6 +555,6 @@ unsafe @ embed_serve Embed e s name s host i port s token i unload_s → i {
     ( cond_broadcast . q req )
     ( mutex_unlock . q m )
     ?? model_th { T th → { : i _j ( thread_join th ) } F _te → {} }
-    = g_em 0
+    = g_em @ ?Embed { F }
     ^ rc
 }

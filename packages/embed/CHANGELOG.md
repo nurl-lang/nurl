@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.5.4] — 2026-10-12
+
+Requires NURL 0.73.0, in which a field written through a raw pointer
+drops what it held, a mutable module global may own a `String`, a `Vec`
+or a handle, and a foreign function may take an `inout` parameter.
+The published 0.5.3 does not compile under it.
+
+### Changed
+
+- The served model is a module global that holds one owner of it while
+  serving (and lets it go when serving ends), where it was a borrowed
+  word; the queue's lock and conditions are a module global too. Nothing
+  of them is allocated or released by hand.
+- The GPU kit a model replaces is dropped by the store.
+- Requires gpu 0.16.
+
+
 ## [0.5.3] — 2026-10-11
 
 Requires NURL 0.73.0, which allows `mem_forget`, `mem_take` and the

@@ -54,27 +54,25 @@ $ `src/store.nu`
     McpServer server
 }
 
-: ~ i g_mcp_wiring 0
+: ~ McpWiring g_mcp_wiring 0
+: ~ b g_mcp_wiring_made F
 
 unsafe @ __mcp_wiring → *McpWiring {
-    ? != g_mcp_wiring 0 { ^ # *McpWiring g_mcp_wiring } {}
-    : *McpWiring w # *McpWiring ( nurl_malloc Z McpWiring )
-    = . w router ( router_new )
-    = . w public_url ( string_new )
-    = . w has_server F
-    = g_mcp_wiring # i w
-    ^ w
+    ? ! g_mcp_wiring_made {
+        = . g_mcp_wiring router ( router_new )
+        = . g_mcp_wiring public_url ( string_new )
+        = g_mcp_wiring_made T
+    } {}
+    ^ ( mem_addr g_mcp_wiring )
 }
 
 // Called by anomaly_service_router once every route is registered. The
 // copy shares each route (a Route is a shared handle), so routes added to
-// `r` afterwards are not seen. The wiring lives in memory kept by hand, so
-// the router it held — the empty one, or an earlier service router's copy
-// and with it that router's routes — is taken out and dropped here.
+// `r` afterwards are not seen. The router the wiring held — the empty one,
+// or an earlier service router's copy and with it that router's routes — is
+// dropped by the store.
 unsafe @ an_mcp_attach_router Router r → v {
     : *McpWiring w ( __mcp_wiring )
-    : Router old_router . w router
-    ( mem_take old_router )  // a store through the pointer drops nothing
     = . w router @ Router { . r routes }
 }
 

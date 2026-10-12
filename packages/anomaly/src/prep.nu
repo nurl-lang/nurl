@@ -633,8 +633,6 @@ unsafe @ meta_numeric_feat_mask Meta m__h → ( Vec i ) {
 // time). From now on scoring projects onto exactly this vector.
 unsafe @ meta_refresh_feats Meta m__h → v {
     : *MetaImpl m ( _Meta_ptr m__h )
-    : ( Vec String ) old_feats . m feats
-    ( mem_take old_feats )  // a store through the pointer drops nothing
     = . m feats ( meta_derived_feats m__h )
 }
 
@@ -1191,10 +1189,6 @@ unsafe @ scaler_apply_matrix Scaler sc ( Vec f ) data i n_rows i n_cols → v {
 // variance is stored as std = 1, matching its inv_std = 1).
 unsafe @ meta_set_scaler Meta m__h Scaler sc → v {
     : *MetaImpl m ( _Meta_ptr m__h )
-    : ( Vec f ) old_sc_mean . m sc_mean
-    ( mem_take old_sc_mean )  // a store through the pointer drops nothing
-    : ( Vec f ) old_sc_std . m sc_std
-    ( mem_take old_sc_std )  // a store through the pointer drops nothing
     : i n ( vec_len [f] . sc mean )
     : ( Vec f ) ms ( vec_with_cap [f] n )
     : ( Vec f ) ss ( vec_with_cap [f] n )
@@ -1570,8 +1564,6 @@ unsafe @ meta_from_json Json j → ?Meta {
             : ?( Vec String ) fs ( __an_strs_of_jarr fa )
             ?? fs {
                 T got → {
-                    : ( Vec String ) old_feats . m feats
-                    ( mem_take old_feats )  // a store through the pointer drops nothing
                     = . m feats got
                 }
                 F junk → { = ok F }
@@ -1587,7 +1579,7 @@ unsafe @ meta_from_json Json j → ?Meta {
                 T ma → {
                     : ?( Vec f ) mm ( __an_floats_of_jarr ma )
                     ?? mm {
-                        T got → { : ( Vec f ) old_sc_mean . m sc_mean ( mem_take old_sc_mean ) = . m sc_mean got }
+                        T got → { = . m sc_mean got }
                         F junk → { = ok F }
                     }
                 }
@@ -1597,7 +1589,7 @@ unsafe @ meta_from_json Json j → ?Meta {
                 T sa → {
                     : ?( Vec f ) ssv ( __an_floats_of_jarr sa )
                     ?? ssv {
-                        T got → { : ( Vec f ) old_sc_std . m sc_std ( mem_take old_sc_std ) = . m sc_std got }
+                        T got → { = . m sc_std got }
                         F junk → { = ok F }
                     }
                 }
@@ -1615,7 +1607,7 @@ unsafe @ meta_from_json Json j → ?Meta {
             ?? ( json_obj_get fl `ref_run` ) {
                 T ra → {
                     ?? ( __an_floats_of_jarr ra ) {
-                        T got → { : ( Vec f ) old_flat_run . m flat_run ( mem_take old_flat_run ) = . m flat_run got }
+                        T got → { = . m flat_run got }
                         F junk → { = ok F }
                     }
                 }
@@ -1624,7 +1616,7 @@ unsafe @ meta_from_json Json j → ?Meta {
             ?? ( json_obj_get fl `ref_sd` ) {
                 T sa → {
                     ?? ( __an_floats_of_jarr sa ) {
-                        T got → { : ( Vec f ) old_flat_sd . m flat_sd ( mem_take old_flat_sd ) = . m flat_sd got }
+                        T got → { = . m flat_sd got }
                         F junk → { = ok F }
                     }
                 }
@@ -2055,8 +2047,6 @@ unsafe @ meta_apply_versions_json Meta m__h Json vers b replace → i {
             }
             = k + k 1
         }
-        : ( Vec VerCfg ) old_versions . m versions
-        ( mem_take old_versions )  // a store through the pointer drops nothing
         = . m versions kept
     } {}
     ^ ( vec_len [VerCfg] . m versions )

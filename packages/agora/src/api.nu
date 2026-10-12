@@ -32,7 +32,6 @@ $ `stdlib/ext/env.nu`
 $ `stdlib/ext/json.nu`
 $ `stdlib/ext/mcp.nu`
 $ `store.nu`
-$ `stdlib/core/rcbox.nu`
 $ `stdlib/core/slice.nu`
 
 : s AG_VERSION ( pkg_version )
@@ -66,8 +65,8 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
 //
 // Shared by every worker thread and read-only after start: the store's
 // path (each operation opens its own connection) and the local identity
-// a stdio server acts as. In an rcbox behind a global so all workers see
-// it; the global is its one owner for the rest of the process.
+// a stdio server acts as. In a global that owns it, so all workers see it,
+// for the rest of the process.
 
 : AgState {
     AgStore store
@@ -75,18 +74,16 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
     String local_origin  // the directory it was resolved from (@cwd); '' otherwise
 }
 
-: ~ i g_ag_state 0
+: ~ AgState g_ag_state 0
 
 // Open the store at `db_path` and install the state (a state installed
-// before is released).
+// before is released by the assignment).
 unsafe @ ag_state_init s db_path → b {
-    : i old g_ag_state
-    = g_ag_state ( rcbox_new [AgState] @ AgState { ( ag_store_open db_path ) ( string_new ) ( string_new ) } )
-    ( rcbox_release [AgState] old )
-    ^ . . ( __ag_state ) store ok
+    = g_ag_state @ AgState { ( ag_store_open db_path ) ( string_new ) ( string_new ) }
+    ^ . . g_ag_state store ok
 }
 
-unsafe @ __ag_state → *AgState { ^ ( rcbox_ptr [AgState] g_ag_state ) }
+unsafe @ __ag_state → *AgState { ^ ( mem_addr g_ag_state ) }
 
 unsafe @ ag_state_set_local s name → v {
     : *AgState p ( __ag_state )
@@ -234,26 +231,13 @@ unsafe @ ag_local_identity → s {
     ^ @ AgCaller { T ( string_from name ) }
 }
 
-// Why the last local resolution refused (empty when it did not): one
-// String in an rcbox behind a global, made on first use and kept for the
-// process; it is rewritten in place.
-: AgRefusal {
-    String why
-}
+// Why the last local resolution refused (empty when it did not): a String
+// the global owns, replaced by each refusal.
+: ~ s g_ag_refusal ``
 
-: ~ i g_ag_refusal 0
+@ ag_set_local_refusal s why → v { = g_ag_refusal ( nurl_str_cat why `` ) }
 
-unsafe @ ag_set_local_refusal s why → v {
-    ? == g_ag_refusal 0 { = g_ag_refusal ( rcbox_new [AgRefusal] @ AgRefusal { ( string_new ) } ) } {}
-    : *AgRefusal p ( rcbox_ptr [AgRefusal] g_ag_refusal )
-    ( string_clear . p why )
-    ( string_push_str . p why why )
-}
-
-unsafe @ ag_local_refusal → s {
-    ? == g_ag_refusal 0 { ^ `` } {}
-    ^ ( string_data . ( rcbox_ptr [AgRefusal] g_ag_refusal ) why )
-}
+@ ag_local_refusal → s { ^ g_ag_refusal }
 
 // The caller behind an MCP dispatch context (`mcp_call_context`): the
 // HTTP transport puts {"agent": id} there once it has verified the
@@ -1079,16 +1063,11 @@ unsafe @ __ag_msg_line String out AgMsg m i now i maxb → v {
 // as brief would (`busy` says so). 0 = no cap (stdio: one agent, one
 // process). The counter is a process-lifetime cell.
 : ~ i g_ag_wait_cap 0
-: ~ i g_ag_wait_cell 0
+: ~ i g_ag_wait_n 0  // waits in progress (atomic)
 
-unsafe @ ag_wait_cap_set i workers → v {
+@ ag_wait_cap_set i workers → v {
     : i reserve ? > / workers 4 2 / workers 4 2
     = g_ag_wait_cap ? > - workers reserve 1 - workers reserve 1
-    ? == g_ag_wait_cell 0 {
-        : *u c ( nurl_alloc 8 )
-        ( nurl_poke c 0 0 )
-        = g_ag_wait_cell # i c
-    } {}
 }
 
 // Block until the caller has something unread (every task event is a
@@ -1100,8 +1079,8 @@ unsafe @ __ag_op_wait AgStore st s me Json args i now → AgRes {
     : i timeout ( __ag_clamp ( _ag_arg_int args `timeout_s` AG_WAIT_DEFAULT ) 1 AG_WAIT_MAX )
     : ~ b busy F
     ? != 0 g_ag_wait_cap {
-        ? >= ( nurl_atomic_i64_inc # *u g_ag_wait_cell ) g_ag_wait_cap {
-            : i _d ( nurl_atomic_i64_dec_fetch # *u g_ag_wait_cell )
+        ? >= ( nurl_atomic_i64_inc # *u ( mem_addr g_ag_wait_n ) ) g_ag_wait_cap {
+            : i _d ( nurl_atomic_i64_dec_fetch # *u ( mem_addr g_ag_wait_n ) )
             = busy T
         } {}
     } {}
@@ -1113,7 +1092,7 @@ unsafe @ __ag_op_wait AgStore st s me Json args i now → AgRes {
         = steps + steps 1
         ? == steps AG_WAIT_TOUCH_STEPS { ( ag_agent_touch st me ( now_seconds ) ) = steps 0 } {}
     }
-    ? & != 0 g_ag_wait_cap ! busy { : i _d ( nurl_atomic_i64_dec_fetch # *u g_ag_wait_cell ) } {}
+    ? & != 0 g_ag_wait_cap ! busy { : i _d ( nurl_atomic_i64_dec_fetch # *u ( mem_addr g_ag_wait_n ) ) } {}
     : i then ( now_seconds )
     ? ( __ag_arg_bool args `deliver` T ) {
         : AgRes r ( __ag_op_brief st me args then )

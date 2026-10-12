@@ -12,9 +12,9 @@
 // once, each on its own OS thread. The only state shared between them is
 // the loaded template set, which is built once before the listener opens
 // and is read-only from then on — no lock is needed, and none is taken on
-// the hot path. It lives in an rcbox behind a global rather than in a
-// captured closure environment so that every worker sees the same set; the
-// global is its one owner for the rest of the process.
+// the hot path. It lives in a global that owns it rather than in a
+// captured closure environment so that every worker sees the same set, for
+// the rest of the process.
 
 $ `deps/http/src/http.nu`
 $ `stdlib/ext/mcp.nu`
@@ -28,7 +28,6 @@ $ `parse.nu`
 $ `theme.nu`
 $ `layout.nu`
 $ `render.nu`
-$ `stdlib/core/rcbox.nu`
 
 // The one version string. It was two: main.nu carried MMD_VERSION for
 // the CLI banner while the MCP handshake had its own literal, and by
@@ -38,19 +37,15 @@ $ `stdlib/core/rcbox.nu`
 // stale; swarm-mcp's had frozen five releases back.
 : s MMD_VERSION ( pkg_version )
 
-: ~ i g_mmd_ts 0
+: ~ MmdTemplateSet g_mmd_ts 0
 
 // Install `ts` as the set every request renders with (it moves into the
-// global's rcbox; a set installed before is released).
-unsafe @ mmd_state_init sink MmdTemplateSet ts → v {
-    : i old g_mmd_ts
-    = g_mmd_ts ( rcbox_new [MmdTemplateSet] ts )
-    ( rcbox_release [MmdTemplateSet] old )
-}
+// global; a set installed before is released).
+unsafe @ mmd_state_init sink MmdTemplateSet ts → v { = g_mmd_ts ts }
 
 // The installed set, lent: valid while it stays installed.
 unsafe @ mmd_state → MmdTemplateSet {
-    : *MmdTemplateSet p ( rcbox_ptr [MmdTemplateSet] g_mmd_ts )
+    : *MmdTemplateSet p ( mem_addr g_mmd_ts )
     ^ @ MmdTemplateSet { . p kind . p root . p items . p default_name }
 }
 

@@ -37,7 +37,6 @@
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
-$ `stdlib/core/rcbox.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/std/path.nu`
@@ -216,31 +215,31 @@ unsafe @ ag_config_load s path → AgConfig {
     ( Vec String ) ready  // guarded: files whose schema is in place
 }
 
-: ~ i g_ag_auth 0
-: ~ i g_ag_auth_mu 0
+: ~ AgAuth g_ag_auth 0
+: ~ b g_ag_auth_made F
+: ~ Mutex g_ag_auth_mu 0
 
 : i AG_AUTH_CACHE_S 60
 : i AG_AUTH_CACHE_MAX 512
 
 unsafe @ __ag_auth → *AgAuth {
-    ? == g_ag_auth 0 {
-        = g_ag_auth ( rcbox_new [AgAuth] @ AgAuth {
+    ? ! g_ag_auth_made {
+        = g_ag_auth @ AgAuth {
             F F ( string_new ) ( string_new ) ( string_new ) ( string_new ) ( string_new ) ( string_new ) ( string_new )
             ( string_new ) ( string_new ) @ ?OidcProvider { F } ( vec_new [AgAuthHit] ) ( vec_new [String] )
-        } )
-        : Mutex m ( mutex_new )
-        = g_ag_auth_mu # i ( mutex_raw m )
-        ( mem_forget m )
+        }
+        = g_ag_auth_mu ( mutex_new )
+        = g_ag_auth_made T
     } {}
-    ^ ( rcbox_ptr [AgAuth] g_ag_auth )
+    ^ ( mem_addr g_ag_auth )
 }
 
 unsafe @ __ag_lock → v {
     : *AgAuth _a ( __ag_auth )
-    ( pthread_mutex_lock # *u g_ag_auth_mu )
+    ( mutex_lock g_ag_auth_mu )
 }
 
-unsafe @ __ag_unlock → v { ( pthread_mutex_unlock # *u g_ag_auth_mu ) }
+unsafe @ __ag_unlock → v { ( mutex_unlock g_ag_auth_mu ) }
 
 @ __ag_set String dst s v → v {
     ( string_clear dst )
@@ -298,8 +297,6 @@ unsafe @ ag_auth_configure b on b multi s issuer s client_id s audience s owner 
     ( __ag_set . a public_url ( string_data pu ) )
     ( __ag_lock )
     // a store through the pointer drops nothing: the old share leaves first
-    : ?OidcProvider oldp . a prov
-    ( mem_take oldp )
     = . a prov @ ?OidcProvider { F }
     ( string_clear . a iss_tmpl )
     ( vec_clear [AgAuthHit] . a hits )

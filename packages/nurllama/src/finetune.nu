@@ -1411,8 +1411,6 @@ unsafe @ ft_adapters_save s path FtModel m__h FtTrain t i r → !v String {
     }
     ? . m stream {
         // the merge's GGUF leaves the model (closed here)
-        : ?Gguf mgg . m mgg
-        ( mem_take mgg )
         = . m mgg @ ?Gguf { F }
     } {}
     : !v String res ( stw_write so path )
@@ -1577,8 +1575,7 @@ unsafe @ ft_merge_st_mask s path FtModel m__h FtTrain t i r f alpha i mask → !
     // arm, before the first layer is merged.
     ? == % mask 2 1 {
         : ( Vec f ) embd . m embd
-        ( mem_take embd )
-        = . m embd ( vec_new [f] )
+        = . m embd ( vec_new [f] )  // embd keeps what the field held
         ( __ft_st_add so `model.embed_tokens.weight` embd . m n_vocab . m n_embd )
     } {}
     ? == % / mask 8 2 1 {

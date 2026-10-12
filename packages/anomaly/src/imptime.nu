@@ -531,8 +531,6 @@ $ `stdlib/core/slice.nu`
 unsafe @ __it_col_add * ImpCol c Json v → v {
     = . c filled + . c filled 1
     ? == ( string_len . c sample ) 0 {
-        : String old_sample . c sample
-        ( mem_take old_sample )  // a store through the pointer drops nothing
         ? ( json_is_str v ) { = . c sample ( string_from ( json_str_data v ) ) } { = . c sample ( json_stringify v ) }
     } {}
     ? ( json_is_num v ) {

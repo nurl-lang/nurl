@@ -128,16 +128,12 @@ unsafe @ _Model_ptr Model h → *ModelImpl { ^ ( arc_ptr [ModelImpl] . h a ) }
 // no rate given.
 : f ANOM_FT_RATE 0.01
 
-// The actor is copied into a buffer allocated once for the process (the
-// caller's string lives only as long as its request; a long name is
-// cut). The action is always a literal and is kept as given.
-unsafe @ anomaly_set_actor s who → v {
-    ? == ( nurl_str_eq g_an_actor `library` ) 1 { = g_an_actor ( nurl_zalloc + ANOM_ACTOR_MAX 1 ) } {}
-    : ~ i n ( nurl_str_len who )
-    ? > n ANOM_ACTOR_MAX { = n ANOM_ACTOR_MAX } {}
-    ( nurl_memcpy g_an_actor who n )
-    : *u bp # *u g_an_actor
-    = . bp n # u 0
+// The actor is the global's own copy (the caller's string lives only as
+// long as its request; a long name is cut). The action is always a
+// literal and is kept as given.
+@ anomaly_set_actor s who → v {
+    : i n ( nurl_str_len who )
+    = g_an_actor ( nurl_str_slice who 0 ? > n ANOM_ACTOR_MAX ANOM_ACTOR_MAX n )
 }
 
 @ _an_set_action s what → v {
@@ -1806,8 +1802,6 @@ unsafe @ model_force_train_at Model mo__h i now → i {
     // Shared scaler over the whole ring; standardise in place.
     : Scaler snew ( scaler_fit big ne nfeat )
     ( meta_set_scaler . mo meta snew )
-    : Scaler old_sc . mo sc
-    ( mem_take old_sc )  // a store through the pointer drops nothing
     = . mo sc snew
     ( scaler_apply_matrix snew big ne nfeat )
 
@@ -2138,10 +2132,6 @@ unsafe @ __an_flat_fit Model mo__h ( Vec f ) big i n i nfeat → v {
         }
         = j + j 1
     }
-    : ( Vec f ) old_flat_run . mm flat_run
-    ( mem_take old_flat_run )  // a store through the pointer drops nothing
-    : ( Vec f ) old_flat_sd . mm flat_sd
-    ( mem_take old_flat_sd )  // a store through the pointer drops nothing
     = . mm flat_run runs
     = . mm flat_sd sds
 }
@@ -2342,8 +2332,6 @@ unsafe @ model_train_autoencoder_at Model mo__h ( Vec i ) hidden f contamination
     : ~ AeModel nae . out ae
     ? . nae trained {
         = . nae trained_at now
-        : AeModel old_ae . mo ae
-        ( mem_take old_ae )  // a store through the pointer drops nothing
         = . mo ae nae
         = . mo ae_stale F
         ( __an_ensure_ae_cfg mo__h )
@@ -2629,10 +2617,6 @@ unsafe @ model_import_at Model mo__h ( Vec Json ) recs i now → ImportReport {
         = mtimes kt
     } {}
 
-    : ( Vec String ) old_lines . mo lines
-    ( mem_take old_lines )  // a store through the pointer drops nothing
-    : ( Vec i ) old_times . mo times
-    ( mem_take old_times )
     = . mo lines mlines
     = . mo times mtimes
     = . mm n_seen + . mm n_seen accepted
@@ -4131,15 +4115,11 @@ unsafe @ model_reset Model mo__h → v {
         }
         = vi + vi 1
     }
-    : Meta old_meta . mo meta
-    ( mem_take old_meta )  // a store through the model pointer drops nothing
     = . mo meta fresh__h
 
     ( __an_clear_forests mo__h )
     ( vec_clear [String] . mo lines )
     ( vec_clear [i] . mo times )
-    : Scaler old_sc . mo sc
-    ( mem_take old_sc )  // a store through the pointer drops nothing
     = . mo sc ( meta_scaler fresh__h )
     ( fc_clear . mo fc )
     ( store_delete_fc . mo store ( string_data . mo mname ) )
@@ -4244,8 +4224,6 @@ unsafe @ __an_drop_forest Model mo__h s vname → v {
         }
         = k + k 1
     }
-    : ( Vec VerModel ) old_forests . mo forests
-    ( mem_take old_forests )  // a store through the pointer drops nothing
     = . mo forests kept
     ( store_delete_forest . mo store ( string_data . mo mname ) vname )
 }

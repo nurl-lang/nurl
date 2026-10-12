@@ -71,7 +71,8 @@ unsafe @ main → i {
                     // argv[4], when present, is the first of four
                     // CONSECUTIVE tap points — for measuring how far a
                     // divergence has travelled by an early layer.
-                    : *i taps # *i ( nurl_zalloc 32 )
+                    : ( Vec i ) tapv ( vec_zeroed [i] 4 )
+                    : *i taps ( vec_data [i] tapv )
                     ( ag_default_taps taps )
                     ? > ( nurl_argc ) 4 {
                         : i t0 ( nurl_str_to_int ( nurl_argv 4 ) )

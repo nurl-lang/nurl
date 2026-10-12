@@ -3,6 +3,24 @@
 All notable changes to this package are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.3.4] — 2026-10-12
+
+Requires NURL 0.73.0, in which a field written through a raw pointer
+drops what it held, a mutable module global may own a `String`, a `Vec`
+or a handle, and a foreign function may take an `inout` parameter.
+The published 0.3.3 does not compile under it.
+
+### Changed
+
+- The loaded model, vocoder and vocabulary are module globals that each
+  own one owner of what they name, where each was an `Arc` kept as a
+  word; the voice cache and the queue's lock and conditions are module
+  globals too. Nothing of them is allocated or released by hand.
+- The model's and the vocoder's device buffers are dropped by the store
+  that replaces them; the `mem_take` before each is gone.
+- Requires gpu 0.16.
+
+
 ## [0.3.3] — 2026-10-11
 
 Requires NURL 0.73.0, which allows `mem_forget`, `mem_take` and the

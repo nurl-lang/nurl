@@ -25,16 +25,16 @@ $ `src/tensor_bridge.nu`
     ( nurl_print name ) ( nurl_print `\n` )
 }
 
-unsafe @ load_f32b s path * u pcell → *u {
+// The file's f32 values, as the bytes the device reads (4 a value).
+unsafe @ load_f32b s path → ( Vec u ) {
     ?? ( read_file_bytes path ) {
         T bytes → {
             : i n / ( vec_len [u] bytes ) 4
-            : *u host ( nurl_alloc * n 4 )
-            ( vec_f32_into bytes host n )
-            ( nurl_poke pcell 0 n )
+            : ( Vec u ) host ( vec_zeroed [u] * n 4 )
+            ( vec_f32_into bytes ( vec_data [u] host ) n )
             ^ host
         }
-        F _ → { ( nurl_poke pcell 0 0 ) ^ # *u 0 }
+        F _ → { ^ ( vec_new [u] ) }
     }
 }
 
@@ -50,11 +50,12 @@ unsafe @ main → i {
         F _ → { ( nurl_print `cannot read tests/data/tiny.onnx\n` ) ^ 1 }
     }
 
-    : *u nc ( nurl_alloc 8 )
-    : *u input ( load_f32b `tests/data/tiny.in.f32` nc )
-    : i in_n ( nurl_peek nc 0 )
-    : *u refout ( load_f32b `tests/data/tiny.out.f32` nc )
-    : i out_n ( nurl_peek nc 0 )
+    : ( Vec u ) input__b ( load_f32b `tests/data/tiny.in.f32` )
+    : *u input ( vec_data [u] input__b )
+    : i in_n / ( vec_len [u] input__b ) 4
+    : ( Vec u ) refout__b ( load_f32b `tests/data/tiny.out.f32` )
+    : *u refout ( vec_data [u] refout__b )
+    : i out_n / ( vec_len [u] refout__b ) 4
     ? & == in_n 4 == out_n 3 {} { ( nurl_print `bad test data\n` ) ^ 1 }
 
     : GpuKit kit ( gk_open 0 )
@@ -125,8 +126,6 @@ unsafe @ main → i {
     }
     ( check < mx2 0.0001 `device softmax matches host softmax (after rt_reset)` )
 
-    ( nurl_free input ) ( nurl_free refout )
-    ( nurl_free nc )
     ( gk_close kit )
 
     ? == g_fail 0 { ( nurl_print `\nALL PASS\n` ) ^ 0 }

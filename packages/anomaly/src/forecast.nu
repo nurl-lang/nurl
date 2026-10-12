@@ -629,9 +629,8 @@ unsafe @ fc_train FcModel fc__h Meta mm__h ( Vec EncPoint ) encs i from i season
             ( vec_push [String] . fc skipped why )
         }
         ? fit {
-            : ( Vec f ) y . fs y
-            ( mem_take y )  // the series leaves fs for the job
-            ( vec_push [FcJob] jobs @ FcJob { y season @ ?ArimaModel { F } ( string_new ) 0.0 0.0 . fs spread } )
+            // the series leaves fs for the job
+            ( vec_push [FcJob] jobs @ FcJob { . fs y season @ ?ArimaModel { F } ( string_new ) 0.0 0.0 . fs spread } )
             ( vec_push [i] jfeat j )
         } {}
         = j + j 1

@@ -391,10 +391,6 @@ unsafe @ cpu_function * u handle → i { ^ # i ( dlsym handle `__cpu_launch` ) }
 // Buffers are f32/i32/i64 arrays (4-byte-aligned, sizes a multiple of 4), so
 // copy word-by-word — avoids declaring libc memcpy (the compiler emits its
 // own memcpy for aggregate copies, and a duplicate FFI declaration collides).
-unsafe @ cpu_malloc i bytes → i { ^ # i ( nurl_alloc bytes ) }
-
-unsafe @ cpu_free sink i ptr → v { ( nurl_free # *u ptr ) }
-
 unsafe @ __copy_words * u dst * u src i bytes → v {
     : i words / bytes 4
     : ~ i k 0

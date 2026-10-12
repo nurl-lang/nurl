@@ -151,9 +151,9 @@ $ `stdlib/core/slice.nu`
 : i GPU_RES_MODULE 2  // a loaded module (cuModuleUnload)
 : i GPU_RES_EVENT 3  // a CUDA event (cuEventDestroy)
 : i GPU_RES_GRAPH 4  // an executable graph (cuGraphExecDestroy)
-: i GPU_RES_HOST 5  // host staging memory (nurl_free)
+: i GPU_RES_HOST 5  // host staging memory (the resource's own Vec)
 
-: GpuResImpl { i kind i h i backend ? GpuCtx ctx }
+: GpuResImpl { i kind i h i backend ? GpuCtx ctx ( Vec u ) host }  // host: a GPU_RES_HOST buffer's memory
 
 % Drop GpuResImpl { @ drop GpuResImpl x → v { ( __gpu_res_release . x kind . x h . x backend ) } }
 
@@ -164,10 +164,10 @@ $ `stdlib/core/slice.nu`
 @ GpuRes_drop sink GpuRes h → v {}
 
 unsafe @ __gpu_res_release i kind i h i backend → v {
-    ? == kind GPU_RES_HOST { ( nurl_free # *u h ) ^ } {}
+    ? == kind GPU_RES_HOST { ^ } {}  // the memory is the resource's own Vec
     ? == kind GPU_RES_MEM {
         ? == backend 3 { ( wgpu_free h ) ^ } {}
-        ? != backend 0 { ( cpu_free h ) ^ } {}
+        ? != backend 0 { ^ } {}  // the CPU backend's: the resource's own Vec
         : i _r ( cuda_free h )
         ^
     } {}
@@ -186,7 +186,7 @@ unsafe @ __gpu_res_release i kind i h i backend → v {
 // failed allocation, compile or create owns nothing).
 @ __gpu_res Gpu g i kind i h → ?GpuRes {
     ? == h 0 { ^ @ ?GpuRes { F } } {}
-    ^ @ ?GpuRes { T @ GpuRes { ( arc_new [GpuResImpl] @ GpuResImpl { kind h __gpu_backend . g own } ) } }
+    ^ @ ?GpuRes { T @ GpuRes { ( arc_new [GpuResImpl] @ GpuResImpl { kind h __gpu_backend . g own ( vec_new [u] ) } ) } }
 }
 
 @ __gpu_nores → ?GpuRes { ^ @ ?GpuRes { F } }
@@ -282,9 +282,7 @@ unsafe @ gpu_open i ordinal → Gpu {
     ? == ctx 0 { = __gpu_backend 1 ^ ( __gpu_noctx ordinal - 0 2 1 ) } {}
     = __gpu_backend 0
     // the name is read once, here, and lives with the context
-    : s raw ( cuda_device_name dev )
-    : String nm ( string_from raw )
-    ( nurl_free raw )
+    : String nm ( cuda_device_name dev )
     ^ @ Gpu { ordinal dev ctx @ ?GpuCtx { T @ GpuCtx { ( arc_new [GpuCtxImpl] @ GpuCtxImpl { dev 0 nm } ) } } }
 }
 
@@ -344,22 +342,20 @@ unsafe @ gpu_name Gpu g → s {
 
 unsafe @ gpu_mem_free Gpu g → i {
     ? == __gpu_backend 0 {
-        : s fp ( nurl_zalloc 16 )
-        : ~ i r 0
-        ? == # i ( cuMemGetInfo_v2 # *u fp # *u + # i fp 8 ) 0 { = r ( nurl_peek fp 0 ) } {}
-        ( nurl_free fp )
-        ^ r
+        : ~ i avail 0
+        : ~ i total 0
+        ? != # i ( cuMemGetInfo_v2 avail total ) 0 { ^ 0 } {}
+        ^ avail
     } {}
     ^ ( __gpu_meminfo_line `MemAvailable:` )
 }
 
 unsafe @ gpu_mem_total Gpu g → i {
     ? == __gpu_backend 0 {
-        : s fp ( nurl_zalloc 16 )
-        : ~ i r 0
-        ? == # i ( cuMemGetInfo_v2 # *u fp # *u + # i fp 8 ) 0 { = r ( nurl_peek fp 1 ) } {}
-        ( nurl_free fp )
-        ^ r
+        : ~ i avail 0
+        : ~ i total 0
+        ? != # i ( cuMemGetInfo_v2 avail total ) 0 { ^ 0 } {}
+        ^ total
     } {}
     ^ ( __gpu_meminfo_line `MemTotal:` )
 }
@@ -618,26 +614,16 @@ unsafe @ gpu_compile Gpu g s src s name → GpuKernel {
         // compile straight to a device-specific cubin (no JIT at load);
         // any failure falls through to the PTX path below, which is the
         // one that reports compile errors
-        : *u cszs ( nurl_alloc 8 )
-        ( nurl_poke cszs 0 0 )
-        : *u cb ( cuda_compile_cubin src name ( cuda_device_cc . g dev ) cszs )
-        ? != # i cb 0 {
-            : i cn ( nurl_peek cszs 0 )
+        : ( Vec u ) cb ( cuda_compile_cubin src name ( cuda_device_cc . g dev ) )
+        ? > ( vec_len [u] cb ) 0 {
             ? ( __gpu_cache_off ) {} {
-                : ( Vec u ) cbv ( vec_with_cap [u] cn )
-                ( bytes_extend_raw cbv # s cb cn )
                 : String ctag2 ( __gpu_cuda_tag g )
                 : String ccp2 ( __gpu_cache_path src ( string_data ctag2 ) `.cubin` )
-                ( string_free ctag2 )
-                ( __gpu_cache_store ( string_data ccp2 ) cbv )
-                ( string_free ccp2 )
-                ( vec_free [u] cbv )
+                ( __gpu_cache_store ( string_data ccp2 ) cb )
             }
-            = mod ( cuda_module_load cb )
-            ( nurl_free cb )
+            = mod ( cuda_module_load ( vec_data [u] cb ) )
             ? != mod 0 { = cached T } {}
         } {}
-        ( nurl_free cszs )
     }
     ? | cached ( __gpu_cache_off ) {} {
         : String tag ( __gpu_cuda_tag g )
@@ -656,23 +642,16 @@ unsafe @ gpu_compile Gpu g s src s name → GpuKernel {
         ( string_free cp )
     }
     ? cached {} {
-        : *u ptx ( cuda_compile src name )
-        ? == # i ptx 0 { ^ ( gpu_kernel_none ) } {}
+        : ( Vec u ) ptx ( cuda_compile src name )
+        ? == ( vec_len [u] ptx ) 0 { ^ ( gpu_kernel_none ) } {}
         ? ( __gpu_cache_off ) {} {
             // store the PTX text INCLUDING its NUL, so a cache hit can
             // hand the bytes straight to cuModuleLoadData
-            : i plen + ( nurl_str_len # s ptx ) 1
-            : ( Vec u ) pb ( vec_with_cap [u] plen )
-            ( bytes_extend_raw pb # s ptx plen )
             : String tag2 ( __gpu_cuda_tag g )
             : String cp2 ( __gpu_cache_path src ( string_data tag2 ) `.ptx` )
-            ( string_free tag2 )
-            ( __gpu_cache_store ( string_data cp2 ) pb )
-            ( string_free cp2 )
-            ( vec_free [u] pb )
+            ( __gpu_cache_store ( string_data cp2 ) ptx )
         }
-        = mod ( cuda_module_load ptx )
-        ( nurl_free ptx )  // the module keeps its own copy of the PTX
+        = mod ( cuda_module_load ( vec_data [u] ptx ) )  // the module keeps its own copy of the PTX
     }
     ? == mod 0 { ^ ( gpu_kernel_none ) } {}
     : i fn ( cuda_function mod name )
@@ -699,8 +678,10 @@ unsafe @ gpu_compile Gpu g s src s name → GpuKernel {
 : GpuHost { * u ptr i bytes ? GpuRes own }
 
 unsafe @ gpu_host_alloc i bytes → GpuHost {
-    : *u p ( nurl_alloc bytes )
-    ^ @ GpuHost { p bytes @ ?GpuRes { T @ GpuRes { ( arc_new [GpuResImpl] @ GpuResImpl { GPU_RES_HOST # i p __gpu_backend @ ?GpuCtx { F } } ) } } }
+    : ( Vec u ) buf ( vec_with_cap [u] bytes )
+    : b _n ( vec_set_len [u] buf bytes )
+    : *u p ( vec_data [u] buf )
+    ^ @ GpuHost { p bytes @ ?GpuRes { T @ GpuRes { ( arc_new [GpuResImpl] @ GpuResImpl { GPU_RES_HOST # i p __gpu_backend @ ?GpuCtx { F } buf } ) } } }
 }
 
 // No buffer — the placeholder for "not allocated yet".
@@ -726,7 +707,15 @@ unsafe @ gpu_host_get_i32 GpuHost h i idx → i { ^ # i ( nurl_peek_i32 . h ptr 
 // Device memory, freed with the buffer's last owner. dptr 0 = the
 // allocation failed (an empty buffer owns nothing).
 unsafe @ gpu_alloc Gpu g i bytes → GpuBuffer {
-    : i dptr ? == __gpu_backend 3 ( wgpu_alloc bytes ) ? != __gpu_backend 0 ( cpu_malloc bytes ) ( cuda_malloc bytes )
+    // The CPU backend's device memory is host memory: a Vec the resource
+    // owns, released with it.
+    ? & != __gpu_backend 3 != __gpu_backend 0 {
+        : ( Vec u ) buf ( vec_with_cap [u] bytes )
+        : b _n ( vec_set_len [u] buf bytes )
+        : i hp # i ( vec_data [u] buf )
+        ^ @ GpuBuffer { hp bytes @ ?GpuRes { T @ GpuRes { ( arc_new [GpuResImpl] @ GpuResImpl { GPU_RES_MEM hp __gpu_backend . g own buf } ) } } }
+    } {}
+    : i dptr ? == __gpu_backend 3 ( wgpu_alloc bytes ) ( cuda_malloc bytes )
     ^ @ GpuBuffer { dptr bytes ( __gpu_res g GPU_RES_MEM dptr ) }
 }
 
@@ -1134,17 +1123,16 @@ unsafe @ gpu_arg_f32 f v → i { ^ ( nurl_f32_to_bits # f32 v ) }  // 32-bit flo
 // on demand; a launch is synchronous with respect to reading the argument
 // values (cuLaunchKernel copies them, cpu_launch reads them inline), so a
 // single buffer per process is safe.
-: ~ i g_params_buf 0
-: ~ i g_params_cap 0
+: ~ ( Vec i ) g_params 0
+: ~ b g_params_made F
 
 unsafe @ __gpu_params i n → *u {
-    ? > n g_params_cap {
-        ? != g_params_buf 0 { ( nurl_free # s g_params_buf ) } {}
-        : i want ? < n 16 16 n
-        = g_params_buf # i ( nurl_alloc * want 8 )
-        = g_params_cap want
+    ? ! g_params_made {
+        = g_params ( vec_with_cap [i] 16 )
+        = g_params_made T
     } {}
-    ^ # *u g_params_buf
+    ~ < ( vec_len [i] g_params ) n { ( vec_push [i] g_params 0 ) }
+    ^ # *u ( vec_data [i] g_params )
 }
 
 unsafe @ gpu_launch GpuKernel k i grid i block ( Vec i ) args → i {

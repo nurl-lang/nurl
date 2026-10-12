@@ -172,9 +172,7 @@ unsafe @ __r_read_reply * RedisConnImpl c → !RedisReply RedisErr {
             : ( Vec u ) rest ( bytes_slice . c rxbuf consumed have )
             ( vec_free [u] . c rxbuf )
             = . c rxbuf rest
-            : RedisReply rep . p reply
-            ( mem_take rep )  // the reply leaves the parse result
-            ^ @ !RedisReply RedisErr { T rep }
+            ^ @ !RedisReply RedisErr { T . p reply }  // the reply leaves the parse result
         } {}
         ? == . p status 2 { ^ @ !RedisReply RedisErr { F # RedisErr RedisProtocol } } {}
         // incomplete: the partial arena goes with `p`; pull more bytes

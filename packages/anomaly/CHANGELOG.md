@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.35.1] — 2026-10-12
+
+Requires NURL 0.73.0, in which a field written through a raw pointer
+drops what it held, a mutable module global may own a `String`, a `Vec`
+or a handle, and a foreign function may take an `inout` parameter.
+The published 0.35.0 does not compile under it.
+
+### Changed
+
+- The authorization strings and the OpenID provider, the MCP wiring, the
+  organisation files state, the service lock, the GPU kit (still released
+  early by `anom_gpu_close`) and the set of sources mid-run are module
+  globals that own what they hold, where each was raw memory or a handle
+  kept as a word. Nothing of them is allocated or released by hand.
+- `anomaly_set_actor` is safe code.
+- Fields replaced through a pointer drop what they held; the `mem_take`
+  before each such store is gone.
+- Requires gpu 0.16.
+
+### Fixed
+
+- Reconfiguring the OpenID provider leaked the one it replaced.
+- The set of running sources was handed to its readers as an owned
+  `Vec` while the module still held its address: the readers' scope end
+  released it under the module.
+
 ## [0.35.0] — 2026-10-11
 
 Requires NURL 0.73.0, which allows `mem_forget`, `mem_take` and the

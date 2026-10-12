@@ -1,5 +1,23 @@
 # Changelog
 
+## [3.0.1] — 2026-10-12
+
+Requires NURL 0.73.0, in which a field written through a raw pointer
+drops what it held, a mutable module global may own a `String`, a `Vec`
+or a handle, and a foreign function may take an `inout` parameter.
+The published 3.0.0 does not compile under it.
+
+### Changed
+
+- The loaded model is a module global that owns it (an option: the idle
+  reaper lets it go), where it was an `Arc` kept as a word; the server
+  keeps one owner of the tokenizer, where it borrowed the caller's; the
+  lock is a module global too.
+- The model's replaced buffers are dropped by the store; the `mem_take`
+  before each is gone.
+- Requires gpu 0.16.
+
+
 ## [3.0.0] — 2026-10-11
 
 Requires NURL 0.73.0, which allows `mem_forget`, `mem_take` and the

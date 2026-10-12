@@ -36,33 +36,26 @@ $ `src/runtime.nu`
     ^ ?? ( vec_get [String] av k ) { T x → ( nurl_str_to_int ( string_data x ) ) F _ → dflt }
 }
 
-unsafe @ synth i n → *u {
-    : *u h ( nurl_alloc * n 4 )
+unsafe @ synth i n → ( Vec u ) {
+    : ( Vec u ) hb ( vec_zeroed [u] * n 4 )
+    : *u h ( vec_data [u] hb )
     : ~ i k 0
     ~ < k n {
         : f v / # f % * k 37 256 255.0
         ( nurl_poke_f32 h k v )
         = k + k 1
     }
-    ^ h
+    ^ hb
 }
 
-// Read a whole file into a fresh malloc'd buffer (caller frees).
-unsafe @ load_bytes s path * u pcell → *u {
+// A whole file's bytes (at least one, so its address is a real one).
+@ load_bytes s path → ( Vec u ) {
     ?? ( read_file_bytes path ) {
         T bytes → {
-            : i n ( vec_len [u] bytes )
-            : *u host ( nurl_alloc ? > n 0 { n } { 1 } )
-            : *u src ( vec_data [u] bytes )
-            : ~ i k 0
-            ~ < k / n 4 {
-                ( nurl_poke_i32 host k ( nurl_peek_i32 src k ) )
-                = k + k 1
-            }
-            ( nurl_poke pcell 0 n )
-            ^ host
+            ? == ( vec_len [u] bytes ) 0 { ( vec_push [u] bytes # u 0 ) } {}
+            ^ bytes
         }
-        F _ → { ( nurl_poke pcell 0 0 ) ^ # *u 0 }
+        F _ → { ^ ( vec_zeroed [u] 1 ) }
     }
 }
 
@@ -111,7 +104,8 @@ unsafe @ main → i {
         : i d2 ( argi 5 640 )
         : i d3 ( argi 6 640 )
         : i n * * * d0 d1 d2 d3
-        : *u input ( synth n )
+        : ( Vec u ) input__b ( synth n )
+        : *u input ( vec_data [u] input__b )
         : RTensor out ( rt_run_shaped e g input ( shape4g d0 d1 d2 d3 ) )
         = rc ( dump_out e out ( string_data ( args 7 ) ) )
         : String o1 ( args 8 )
@@ -119,17 +113,14 @@ unsafe @ main → i {
             : RTensor out1 ( rt_output1 e )
             = rc + rc ( dump_out e out1 ( string_data o1 ) )
         } {}
-        ( nurl_free input )
     } {
         ? ( nurl_str_eq ( string_data mode ) `tok` ) {
-            : *u pc ( nurl_alloc 8 )
-            : *u tok ( load_bytes ( string_data ( args 3 ) ) pc )
-            ( nurl_free pc )
+            : ( Vec u ) tok__b ( load_bytes ( string_data ( args 3 ) ) )
+            : *u tok ( vec_data [u] tok__b )
             : i nrow ( argi 4 3 )
             : i ncol ( argi 5 77 )
             : RTensor out ( rt_run_tokens e g tok nrow ncol )
             = rc ( dump_out e out ( string_data ( args 6 ) ) )
-            ( nurl_free tok )
         } {
             ? ( nurl_str_eq ( string_data mode ) `two` ) {
                 : i d0 ( argi 3 1 )
@@ -137,10 +128,10 @@ unsafe @ main → i {
                 : i d2 ( argi 5 640 )
                 : i d3 ( argi 6 640 )
                 : i n * * * d0 d1 d2 d3
-                : *u img ( synth n )
-                : *u pc ( nurl_alloc 8 )
-                : *u tpe ( load_bytes ( string_data ( args 7 ) ) pc )
-                ( nurl_free pc )
+                : ( Vec u ) img__b ( synth n )
+                : *u img ( vec_data [u] img__b )
+                : ( Vec u ) tpe__b ( load_bytes ( string_data ( args 7 ) ) )
+                : *u tpe ( vec_data [u] tpe__b )
                 : i kk ( argi 8 32 )
                 : RTensor out ( rt_run_two e g `images` img ( shape4g d0 d1 d2 d3 ) `tpe` tpe ( shape3g 1 kk 512 ) )
                 = rc ( dump_out e out ( string_data ( args 9 ) ) )
@@ -149,22 +140,18 @@ unsafe @ main → i {
                     : RTensor out1 ( rt_output1 e )
                     = rc + rc ( dump_out e out1 ( string_data o1 ) )
                 } {}
-                ( nurl_free img )
-                ( nurl_free tpe )
             } {
                 ? ( nurl_str_eq ( string_data mode ) `imgf` ) {
                     // imgf <model> <in.f32.bin> <d0..d3> <out.bin> — a real
                     // input from a file, for oracle comparisons.
-                    : *u pc ( nurl_alloc 8 )
-                    : *u input ( load_bytes ( string_data ( args 3 ) ) pc )
-                    ( nurl_free pc )
+                    : ( Vec u ) input__b ( load_bytes ( string_data ( args 3 ) ) )
+                    : *u input ( vec_data [u] input__b )
                     : i d0 ( argi 4 1 )
                     : i d1 ( argi 5 3 )
                     : i d2 ( argi 6 320 )
                     : i d3 ( argi 7 320 )
                     : RTensor out ( rt_run_shaped e g input ( shape4g d0 d1 d2 d3 ) )
                     = rc ( dump_out e out ( string_data ( args 8 ) ) )
-                    ( nurl_free input )
                 } { ( nurl_print `usage: gate_dump img|imgf|tok|two ...\n` ) = rc 2 }
             }
         }

@@ -33,25 +33,23 @@ $ `stdlib/core/slice.nu`
 
 // What the module keeps for the life of the process: the store root (the
 // models' directory — the organisation folders live under <root>/orgs,
-// beside the organisation databases) and the link-signing secret. Both
-// are OWNED copies in one heap block a global points at, so a caller may
-// free the root it passed, and the block stays reachable — a global that
-// held only a data pointer would leave the String header unreachable,
-// which is a leak in every accounting.
+// beside the organisation databases) and the link-signing secret: owned
+// copies in a global that owns them, so a caller may let go of the root it
+// passed.
 : OfState {
     String root
     String secret
 }
 
-: ~ i g_of_state 0
+: ~ OfState g_of_state 0
+: ~ b g_of_state_made F
 
 unsafe @ __of_state → *OfState {
-    ? != g_of_state 0 { ^ # *OfState g_of_state } {}
-    : *OfState st # *OfState ( nurl_malloc Z OfState )
-    = . st root ( string_from `.` )
-    = . st secret ( string_new )
-    = g_of_state # i st
-    ^ st
+    ? ! g_of_state_made {
+        = g_of_state @ OfState { ( string_from `.` ) ( string_new ) }
+        = g_of_state_made T
+    } {}
+    ^ ( mem_addr g_of_state )
 }
 
 unsafe @ orgfiles_set_root s root → v {
@@ -291,8 +289,6 @@ unsafe @ __of_secret → s {
         ?? wr { T _ → {} F _ → {} }
     } {}
     // Kept for the life of the process, in the module's own block.
-    : String old_secret . st secret
-    ( mem_take old_secret )  // a store through the pointer drops nothing
     = . st secret sec
     ^ ( string_data . st secret )
 }

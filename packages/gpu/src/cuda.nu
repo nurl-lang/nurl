@@ -17,26 +17,28 @@
 
 $ `stdlib/core/io.nu`
 $ `stdlib/core/string.nu`
+$ `stdlib/core/vec.nu`
+$ `stdlib/std/floatbits.nu`
 
 // ── CUDA Driver API ───────────────────────────────────────────────
 & `cuda` @ cuInit i32 flags → i32
 
-& `cuda` @ cuDeviceGetCount *u count → i32
+& `cuda` @ cuDeviceGetCount inout i32 count → i32
 
-& `cuda` @ cuDeviceGet *u device i32 ordinal → i32
+& `cuda` @ cuDeviceGet inout i32 device i32 ordinal → i32
 
 & `cuda` @ cuDeviceGetName *u name i32 len i32 dev → i32
 
 // cuDeviceGetAttribute: attribute 75 = COMPUTE_CAPABILITY_MAJOR,
 // 76 = MINOR, 15 = TOTAL_CONSTANT_MEMORY … we need the first two to
 // key compiled kernels by architecture and to rank devices.
-& `cuda` @ cuDeviceGetAttribute *u out i32 attrib i32 dev → i32
+& `cuda` @ cuDeviceGetAttribute inout i32 out i32 attrib i32 dev → i32
 
-& `cuda` @ cuDeviceTotalMem_v2 *u bytes i32 dev → i32
+& `cuda` @ cuDeviceTotalMem_v2 inout i bytes i32 dev → i32
 
-& `cuda` @ cuCtxCreate_v2 *u pctx i32 flags i32 dev → i32
+& `cuda` @ cuCtxCreate_v2 inout i pctx i32 flags i32 dev → i32
 
-& `cuda` @ cuDevicePrimaryCtxRetain *u pctx i32 dev → i32
+& `cuda` @ cuDevicePrimaryCtxRetain inout i pctx i32 dev → i32
 
 & `cuda` @ cuDevicePrimaryCtxRelease_v2 i32 dev → i32
 
@@ -46,15 +48,15 @@ $ `stdlib/core/string.nu`
 
 & `cuda` @ cuCtxSynchronize → i32
 
-& `cuda` @ cuModuleLoadData *u module *u image → i32
+& `cuda` @ cuModuleLoadData inout i module *u image → i32
 
 & `cuda` @ cuModuleUnload i module → i32
 
-& `cuda` @ cuModuleGetFunction *u hfunc i hmod s name → i32
+& `cuda` @ cuModuleGetFunction inout i hfunc i hmod s name → i32
 
-& `cuda` @ cuMemAlloc_v2 *u dptr i bytesize → i32
+& `cuda` @ cuMemAlloc_v2 inout i dptr i bytesize → i32
 
-& `cuda` @ cuMemGetInfo_v2 *u free *u total → i32
+& `cuda` @ cuMemGetInfo_v2 inout i free inout i total → i32
 
 & `cuda` @ cuMemFree_v2 i dptr → i32
 
@@ -64,7 +66,7 @@ $ `stdlib/core/string.nu`
 
 & `cuda` @ cuMemcpyDtoD_v2 i dst i src i n → i32
 
-& `cuda` @ cuMemHostAlloc *u pp i bytes i32 flags → i32
+& `cuda` @ cuMemHostAlloc inout i pp i bytes i32 flags → i32
 
 & `cuda` @ cuMemFreeHost *u p → i32
 
@@ -76,13 +78,13 @@ $ `stdlib/core/string.nu`
 
 & `cuda` @ cuStreamSynchronize i stream → i32
 
-& `cuda` @ cuStreamCreate *u out i32 flags → i32
+& `cuda` @ cuStreamCreate inout i out i32 flags → i32
 
 & `cuda` @ cuStreamBeginCapture_v2 i stream i32 mode → i32
 
-& `cuda` @ cuStreamEndCapture i stream *u graph_out → i32
+& `cuda` @ cuStreamEndCapture i stream inout i graph_out → i32
 
-& `cuda` @ cuGraphInstantiateWithFlags *u exec_out i graph i flags → i32
+& `cuda` @ cuGraphInstantiateWithFlags inout i exec_out i graph i flags → i32
 
 & `cuda` @ cuGraphLaunch i exec i stream → i32
 
@@ -92,19 +94,19 @@ $ `stdlib/core/string.nu`
 
 & `cuda` @ cuLaunchKernel i f i32 gx i32 gy i32 gz i32 bx i32 by i32 bz i32 sh i stream *u params i extra → i32
 
-& `cuda` @ cuGetErrorName i32 err *u pstr → i32
+& `cuda` @ cuGetErrorName i32 err inout i pstr → i32
 
 // Events — the only honest way to time a kernel. A host clock around a
 // launch measures the launch, not the work; an event pair recorded on the
 // launch stream measures the GPU. cuEventElapsedTime writes a **float**
 // (4 bytes) into its out slot, not a double.
-& `cuda` @ cuEventCreate *u phe i32 flags → i32
+& `cuda` @ cuEventCreate inout i phe i32 flags → i32
 
 & `cuda` @ cuEventRecord i hev i stream → i32
 
 & `cuda` @ cuEventSynchronize i hev → i32
 
-& `cuda` @ cuEventElapsedTime *u pms i hstart i hend → i32
+& `cuda` @ cuEventElapsedTime inout f32 pms i hstart i hend → i32
 
 & `cuda` @ cuEventDestroy_v2 i hev → i32
 
@@ -113,23 +115,23 @@ $ `stdlib/core/string.nu`
 // the handle slot) → *u out-slot offset. The rest take the nvrtcProgram
 // handle BY VALUE → i (i64), portable across native/wasm (see the driver
 // handles above); their remaining *u are genuine out/data offsets.
-& `nvrtc` @ nvrtcCreateProgram *u prog s src s name i32 nh *u headers *u incs → i32
+& `nvrtc` @ nvrtcCreateProgram inout i prog s src s name i32 nh *u headers *u incs → i32
 
-& `nvrtc` @ nvrtcCompileProgram i prog i32 nopt *u opts → i32
+& `nvrtc` @ nvrtcCompileProgram i prog i32 nopt inout i opts → i32
 
-& `nvrtc` @ nvrtcGetPTXSize i prog *u sz → i32
+& `nvrtc` @ nvrtcGetPTXSize i prog inout i sz → i32
 
 & `nvrtc` @ nvrtcGetPTX i prog *u ptx → i32
 
-& `nvrtc` @ nvrtcGetCUBINSize i prog *u sz → i32
+& `nvrtc` @ nvrtcGetCUBINSize i prog inout i sz → i32
 
 & `nvrtc` @ nvrtcGetCUBIN i prog *u cubin → i32
 
-& `nvrtc` @ nvrtcGetProgramLogSize i prog *u sz → i32
+& `nvrtc` @ nvrtcGetProgramLogSize i prog inout i sz → i32
 
 & `nvrtc` @ nvrtcGetProgramLog i prog *u log → i32
 
-& `nvrtc` @ nvrtcDestroyProgram *u prog → i32
+& `nvrtc` @ nvrtcDestroyProgram inout i prog → i32
 
 // ── typed 4-byte buffer accessors (runtime.c, always linked) ──────
 // f32 / i32 arrays are the native GPU element layout; the stock 8-byte
@@ -144,16 +146,6 @@ $ `stdlib/core/string.nu`
 & `c` @ nurl_peek_i32 *u base i idx → i32
 
 & `c` @ nurl_poke_i32 *u base i idx i32 val → v
-
-// ── out-param helper ──────────────────────────────────────────────
-// Allocate a zeroed 8-byte slot for a `*` out-parameter. Zeroing matters
-// for 4-byte int out-params (cuDeviceGetCount writes only the low 4
-// bytes; malloc's upper-4 garbage would corrupt a full 8-byte read).
-unsafe @ __outslot → *u {
-    : *u p ( nurl_alloc 8 )
-    ( nurl_poke p 0 0 )
-    ^ p
-}
 
 // ── driver wrappers (return raw i64 handles / addresses) ──────────
 
@@ -178,50 +170,39 @@ unsafe @ cuda_init → i {
 }
 
 unsafe @ cuda_device_count → i {
-    : *u s ( __outslot )
-    ( cuDeviceGetCount s )
-    : i n ( nurl_peek s 0 )
-    ( nurl_free s )
-    ^ n
+    : ~ i32 n # i32 0
+    ( cuDeviceGetCount n )
+    ^ # i n
 }
 
 // Device ordinal → CUdevice (itself a small int handle). -1 on failure.
 unsafe @ cuda_device i ordinal → i {
-    : *u s ( __outslot )
-    ? != # i ( cuDeviceGet s # i32 ordinal ) 0 { ( nurl_free s ) ^ - 0 1 } {}
-    : i dev ( nurl_peek s 0 )
-    ( nurl_free s )
-    ^ dev
+    : ~ i32 dev # i32 0
+    ? != # i ( cuDeviceGet dev # i32 ordinal ) 0 { ^ - 0 1 } {}
+    ^ # i dev
 }
 
-// CUdevice → device name string in a fresh buffer. The CALLER owns the
-// returned buffer (free with nurl_free after use) — it cannot be a borrow,
-// there is nothing to borrow from.
-unsafe @ cuda_device_name i dev → s {
-    : *u buf ( nurl_alloc 256 )
-    ( nurl_poke buf 0 0 )
-    ( cuDeviceGetName buf 256 # i32 dev )
-    ^ # s buf
+// CUdevice → its name.
+unsafe @ cuda_device_name i dev → String {
+    : ( Vec u ) buf ( vec_zeroed [u] 256 )
+    ( cuDeviceGetName ( vec_data [u] buf ) 255 # i32 dev )
+    ^ ( string_from # s ( vec_data [u] buf ) )
 }
 
 // Compute capability of a CUdevice as major*10 + minor (e.g. 89 for an
 // RTX 4090's sm_89). 0 when the query fails.
 unsafe @ cuda_device_cc i dev → i {
-    : *u s ( __outslot )
-    : ~ i major 0
-    ? == # i ( cuDeviceGetAttribute s # i32 75 # i32 dev ) 0 { = major ( nurl_peek s 0 ) } {}
-    : ~ i minor 0
-    ? == # i ( cuDeviceGetAttribute s # i32 76 # i32 dev ) 0 { = minor ( nurl_peek s 0 ) } {}
-    ( nurl_free s )
-    ^ + * major 10 minor
+    : ~ i32 major # i32 0
+    : ~ i32 minor # i32 0
+    ? != # i ( cuDeviceGetAttribute major # i32 75 # i32 dev ) 0 { = major # i32 0 } {}
+    ? != # i ( cuDeviceGetAttribute minor # i32 76 # i32 dev ) 0 { = minor # i32 0 } {}
+    ^ + * # i major 10 # i minor
 }
 
 // Total device memory in bytes (0 on failure).
 unsafe @ cuda_device_mem i dev → i {
-    : *u s ( __outslot )
-    ? != # i ( cuDeviceTotalMem_v2 s # i32 dev ) 0 { ( nurl_free s ) ^ 0 } {}
-    : i n ( nurl_peek s 0 )
-    ( nurl_free s )
+    : ~ i n 0
+    ? != # i ( cuDeviceTotalMem_v2 n # i32 dev ) 0 { ^ 0 } {}
     ^ n
 }
 
@@ -242,10 +223,8 @@ unsafe @ cuda_ctx_bind i ctx → b {
 // between packages (gpukit buffers into an onnx graph, …). cuCtxCreate
 // would give each opener a private context and pointers could not cross.
 unsafe @ cuda_ctx_create i dev → i {
-    : *u s ( __outslot )
-    ? != # i ( cuDevicePrimaryCtxRetain s # i32 dev ) 0 { ( nurl_free s ) ^ 0 } {}
-    : i ctx ( nurl_peek s 0 )
-    ( nurl_free s )
+    : ~ i ctx 0
+    ? != # i ( cuDevicePrimaryCtxRetain ctx # i32 dev ) 0 { ^ 0 } {}
     ? != # i ( cuCtxSetCurrent ctx ) 0 { ( cuDevicePrimaryCtxRelease_v2 # i32 dev ) ^ 0 } {}
     ^ ctx
 }
@@ -258,41 +237,33 @@ unsafe @ cuda_ctx_destroy i ctx → i { ^ # i ( cuCtxDestroy_v2 ctx ) }
 
 unsafe @ cuda_sync → i { ^ # i ( cuCtxSynchronize ) }
 
-// ── NVRTC: compile CUDA-C source → PTX text buffer ────────────────
-// Returns a NUL-terminated PTX buffer (caller passes to cuda_module_load),
-// or 0 on a compile error after printing the NVRTC log to stderr.
-unsafe @ cuda_compile s src s name → *u {
-    : *u ps ( __outslot )
-    ? != # i ( nvrtcCreateProgram ps src name 0 0 0 ) 0 {
+// ── NVRTC: compile CUDA-C source → PTX text ───────────────────────
+// The PTX, NUL-terminated (hand `vec_data` of it to cuda_module_load), or
+// an empty Vec on a compile error after printing the NVRTC log to stderr.
+unsafe @ cuda_compile s src s name → ( Vec u ) {
+    : ~ i prog 0
+    ? != # i ( nvrtcCreateProgram prog src name 0 # *u 0 # *u 0 ) 0 {
         ( nurl_eprint `[gpu/cuda] nvrtcCreateProgram failed\n` )
-        ( nurl_free ps )
-        ^ # *u 0
+        ^ ( vec_new [u] )
     } {}
-    : i prog ( nurl_peek ps 0 )
-    : i cr # i ( nvrtcCompileProgram prog 0 0 )
+    : ~ i noopt 0
+    : i cr # i ( nvrtcCompileProgram prog 0 noopt )
     ? != cr 0 {
-        : *u ls ( __outslot )
-        ( nvrtcGetProgramLogSize prog ls )
-        : i lsz ( nurl_peek ls 0 )
-        : *u log ( nurl_alloc + lsz 1 )
-        ( nvrtcGetProgramLog prog log )
+        : ~ i lsz 0
+        ( nvrtcGetProgramLogSize prog lsz )
+        : ( Vec u ) log ( vec_zeroed [u] + lsz 1 )
+        ( nvrtcGetProgramLog prog ( vec_data [u] log ) )
         ( nurl_eprint `[gpu/cuda] kernel compile failed:\n` )
-        ( nurl_eprint # s log )
+        ( nurl_eprint # s ( vec_data [u] log ) )
         ( nurl_eprint `\n` )
-        ( nurl_free log )
-        ( nurl_free ls )
-        ( nvrtcDestroyProgram ps )
-        ( nurl_free ps )
-        ^ # *u 0
+        ( nvrtcDestroyProgram prog )
+        ^ ( vec_new [u] )
     } {}
-    : *u szs ( __outslot )
-    ( nvrtcGetPTXSize prog szs )
-    : i psz ( nurl_peek szs 0 )
-    ( nurl_free szs )
-    : *u ptx ( nurl_alloc + psz 1 )
-    ( nvrtcGetPTX prog ptx )
-    ( nvrtcDestroyProgram ps )
-    ( nurl_free ps )
+    : ~ i psz 0
+    ( nvrtcGetPTXSize prog psz )
+    : ( Vec u ) ptx ( vec_zeroed [u] + psz 1 )
+    ( nvrtcGetPTX prog ( vec_data [u] ptx ) )
+    ( nvrtcDestroyProgram prog )
     ^ ptx
 }
 
@@ -301,79 +272,52 @@ unsafe @ cuda_compile s src s name → *u {
 // is seconds of pure start-up latency, every run. Returns 0 on ANY
 // failure (old NVRTC without nvrtcGetCUBIN, unknown arch, compile
 // error) and the caller falls back to the PTX path, which reports
-// errors properly. `szout` (8 bytes) receives the cubin length — cubin
-// is binary, there is no NUL to measure it by.
-unsafe @ cuda_compile_cubin s src s name i cc * u szout → *u {
-    : *u ps ( __outslot )
-    ? != # i ( nvrtcCreateProgram ps src name 0 0 0 ) 0 {
-        ( nurl_free ps )
-        ^ # *u 0
-    } {}
-    : i prog ( nurl_peek ps 0 )
+// errors properly. The Vec's length is the cubin's — cubin is binary,
+// there is no NUL to measure it by — and empty on failure.
+unsafe @ cuda_compile_cubin s src s name i cc → ( Vec u ) {
+    : ~ i prog 0
+    ? != # i ( nvrtcCreateProgram prog src name 0 # *u 0 # *u 0 ) 0 { ^ ( vec_new [u] ) } {}
     : String arch ( string_from `-arch=sm_` )
     ( string_push_int arch cc )
-    : *u opts ( nurl_alloc 8 )
-    ( nurl_poke opts 0 # i ( string_data arch ) )
-    : i cr # i ( nvrtcCompileProgram prog 1 opts )
-    ( nurl_free opts )
-    ( string_free arch )
+    : ~ i opt # i ( string_data arch )
+    : i cr # i ( nvrtcCompileProgram prog 1 opt )
     ? != cr 0 {
-        ( nvrtcDestroyProgram ps )
-        ( nurl_free ps )
-        ^ # *u 0
+        ( nvrtcDestroyProgram prog )
+        ^ ( vec_new [u] )
     } {}
-    : *u szs ( __outslot )
-    ? != # i ( nvrtcGetCUBINSize prog szs ) 0 {
-        ( nurl_free szs )
-        ( nvrtcDestroyProgram ps )
-        ( nurl_free ps )
-        ^ # *u 0
+    : ~ i csz 0
+    ? | != # i ( nvrtcGetCUBINSize prog csz ) 0 <= csz 0 {
+        ( nvrtcDestroyProgram prog )
+        ^ ( vec_new [u] )
     } {}
-    : i csz ( nurl_peek szs 0 )
-    ( nurl_free szs )
-    ? <= csz 0 {
-        ( nvrtcDestroyProgram ps )
-        ( nurl_free ps )
-        ^ # *u 0
+    : ( Vec u ) cb ( vec_zeroed [u] csz )
+    ? != # i ( nvrtcGetCUBIN prog ( vec_data [u] cb ) ) 0 {
+        ( nvrtcDestroyProgram prog )
+        ^ ( vec_new [u] )
     } {}
-    : *u cb ( nurl_alloc csz )
-    ? != # i ( nvrtcGetCUBIN prog cb ) 0 {
-        ( nurl_free cb )
-        ( nvrtcDestroyProgram ps )
-        ( nurl_free ps )
-        ^ # *u 0
-    } {}
-    ( nurl_poke szout 0 csz )
-    ( nvrtcDestroyProgram ps )
-    ( nurl_free ps )
+    ( nvrtcDestroyProgram prog )
     ^ cb
 }
 
 // ── module / function ─────────────────────────────────────────────
 unsafe @ cuda_module_load * u ptx → i {
-    : *u s ( __outslot )
-    ? != # i ( cuModuleLoadData s ptx ) 0 { ( nurl_free s ) ^ 0 } {}
-    : i module ( nurl_peek s 0 )
-    ( nurl_free s )
+    : ~ i module 0
+    ? != # i ( cuModuleLoadData module ptx ) 0 { ^ 0 } {}
     ^ module
 }
 
 unsafe @ cuda_module_unload i module → i { ^ # i ( cuModuleUnload module ) }
 
 unsafe @ cuda_function i module s name → i {
-    : *u s ( __outslot )
-    ? != # i ( cuModuleGetFunction s module name ) 0 { ( nurl_free s ) ^ 0 } {}
-    : i fn ( nurl_peek s 0 )
-    ( nurl_free s )
+    : ~ i fn 0
+    ? != # i ( cuModuleGetFunction fn module name ) 0 { ^ 0 } {}
     ^ fn
 }
 
 // ── device memory ─────────────────────────────────────────────────
 unsafe @ cuda_malloc i bytes → i {
-    : *u s ( __outslot )
-    ? != # i ( cuMemAlloc_v2 s bytes ) 0 { ( nurl_free s ) ^ 0 } {}
-    : i dptr ( nurl_peek s 0 )
-    ( nurl_free s )
+    : ~ i dptr 0
+    ? != # i ( cuMemAlloc_v2 dptr bytes ) 0 { ^ 0 } {}
     ^ dptr
 }
 
@@ -389,10 +333,8 @@ unsafe @ cuda_dtod i dst i src i bytes → i { ^ # i ( cuMemcpyDtoD_v2 dst src b
 // straight PCIe transfer with no driver-internal staging copy, and an
 // ASYNC HtoD from it actually overlaps with host work. 0 on failure.
 unsafe @ cuda_host_alloc i bytes → *u {
-    : *u s ( __outslot )
-    ? != # i ( cuMemHostAlloc s bytes 0 ) 0 { ( nurl_free s ) ^ # *u 0 } {}
-    : i p ( nurl_peek s 0 )
-    ( nurl_free s )
+    : ~ i p 0
+    ? != # i ( cuMemHostAlloc p bytes 0 ) 0 { ^ # *u 0 } {}
     ^ # *u p
 }
 
@@ -423,13 +365,10 @@ unsafe @ cuda_launch i func i grid i block * u params → i {
 }
 
 // CUresult code → driver error-name string (e.g. "CUDA_ERROR_INVALID_VALUE").
-// The returned pointer is the driver's own static string — only the
-// out-slot is ours to release.
+// The returned pointer is the driver's own static string.
 unsafe @ cuda_error_name i code → s {
-    : *u s ( __outslot )
-    ? != # i ( cuGetErrorName # i32 code s ) 0 { ( nurl_free s ) ^ `CUDA_ERROR_UNKNOWN` } {}
-    : i namep ( nurl_peek s 0 )
-    ( nurl_free s )
+    : ~ i namep 0
+    ? | != # i ( cuGetErrorName # i32 code namep ) 0 == namep 0 { ^ `CUDA_ERROR_UNKNOWN` } {}
     ^ # s namep
 }
 
@@ -439,10 +378,8 @@ unsafe @ cuda_error_name i code → s {
 // begin/end pair brackets exactly the work between them.
 
 unsafe @ cuda_event_create → i {
-    : *u s ( __outslot )
-    ? != # i ( cuEventCreate s 0 ) 0 { ( nurl_free s ) ^ 0 } {}
-    : i ev ( nurl_peek s 0 )
-    ( nurl_free s )
+    : ~ i ev 0
+    ? != # i ( cuEventCreate ev 0 ) 0 { ^ 0 } {}
     ^ ev
 }
 
@@ -451,14 +388,11 @@ unsafe @ cuda_event_record i ev → i { ^ # i ( cuEventRecord ev g_cuda_stream )
 unsafe @ cuda_event_sync i ev → i { ^ # i ( cuEventSynchronize ev ) }
 
 // Milliseconds between two recorded events, as the raw 32-bit float
-// pattern the driver writes — the caller widens it (bits_to_f32). A
-// float-typed out parameter is why this cannot just nurl_peek a double.
+// pattern the driver writes — the caller widens it (bits_to_f32).
 unsafe @ cuda_event_elapsed_bits i start i end → i {
-    : *u s ( __outslot )
-    ? != # i ( cuEventElapsedTime s start end ) 0 { ( nurl_free s ) ^ 0 } {}
-    : i bits ( nurl_peek s 0 )
-    ( nurl_free s )
-    ^ & bits 4294967295
+    : ~ f32 ms # f32 0.0
+    ? != # i ( cuEventElapsedTime ms start end ) 0 { ^ 0 } {}
+    ^ & ( f32_to_bits ms ) 4294967295
 }
 
 unsafe @ cuda_event_free sink i ev → v { ? != ev 0 { : i32 _r ( cuEventDestroy_v2 ev ) } {} }
@@ -474,14 +408,13 @@ unsafe @ cuda_event_free sink i ev → v { ? != ev 0 { : i32 _r ( cuEventDestroy
 
 unsafe @ __cuda_gstream → i {
     ? != g_cuda_gstream 0 { ^ g_cuda_gstream } {}
-    : *u out ( nurl_alloc 8 )
+    : ~ i st 0
     // CU_STREAM_NON_BLOCKING: a blocking stream forms implicit dependencies
     // with the legacy default stream, and ANY legacy-stream touch during a
     // blocking-stream capture fails with CUDA_ERROR_STREAM_CAPTURE_IMPLICIT
     // (906). Non-blocking has no such coupling.
-    : i rc # i ( cuStreamCreate out # i32 1 )
-    ? == rc 0 { = g_cuda_gstream ( nurl_peek out 0 ) } {}
-    ( nurl_free out )
+    : i rc # i ( cuStreamCreate st # i32 1 )
+    ? == rc 0 { = g_cuda_gstream st } {}
     ^ g_cuda_gstream
 }
 
@@ -502,15 +435,11 @@ unsafe @ cuda_graph_end → i {
     : i st g_cuda_stream
     = g_cuda_stream 0
     ? != st 0 {} { ^ 0 }
-    : *u gout ( nurl_alloc 8 )
-    : i rc # i ( cuStreamEndCapture st gout )
-    : i graph ( nurl_peek gout 0 )
-    ( nurl_free gout )
+    : ~ i graph 0
+    : i rc # i ( cuStreamEndCapture st graph )
     ? & == rc 0 != graph 0 {} { ^ 0 }
-    : *u eout ( nurl_alloc 8 )
-    : i rc2 # i ( cuGraphInstantiateWithFlags eout graph 0 )
-    : i exec ( nurl_peek eout 0 )
-    ( nurl_free eout )
+    : ~ i exec 0
+    : i rc2 # i ( cuGraphInstantiateWithFlags exec graph 0 )
     : i _d # i ( cuGraphDestroy graph )
     ? & == rc2 0 != exec 0 { ^ exec } {}
     ^ 0

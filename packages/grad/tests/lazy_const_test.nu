@@ -104,12 +104,13 @@ unsafe @ run_once b lazy i dtype * u out → b {
 }
 
 unsafe @ main → i {
-    : *u ea ( nurl_alloc 24 )
-    : *u la ( nurl_alloc 24 )
+    : ( Vec u ) ea__b ( vec_zeroed [u] 24 )
+    : *u ea ( vec_data [u] ea__b )
+    : ( Vec u ) la__b ( vec_zeroed [u] 24 )
+    : *u la ( vec_data [u] la__b )
     : b oke ( run_once F 0 ea )
     ? oke {} {
         ( nurl_print `lazy_const_test: SKIP (no device)\n` )
-        ( nurl_free ea ) ( nurl_free la )
         ^ 0
     }
     : b okl ( run_once T 0 la )
@@ -119,15 +120,16 @@ unsafe @ main → i {
     ( check == ( nurl_peek ea 2 ) ( nurl_peek la 2 ) `f64 grad[5] bit-identical` )
 
     // and again on the f32 replay, where the buffer is narrowed on upload
-    : *u ea32 ( nurl_alloc 24 )
-    : *u la32 ( nurl_alloc 24 )
+    : ( Vec u ) ea32__b ( vec_zeroed [u] 24 )
+    : *u ea32 ( vec_data [u] ea32__b )
+    : ( Vec u ) la32__b ( vec_zeroed [u] 24 )
+    : *u la32 ( vec_data [u] la32__b )
     : b oke32 ( run_once F 1 ea32 )
     : b okl32 ( run_once T 1 la32 )
     ( check & oke32 okl32 `f32 replay runs both ways` )
     ( check == ( nurl_peek ea32 0 ) ( nurl_peek la32 0 ) `f32 loss bit-identical` )
     ( check == ( nurl_peek ea32 1 ) ( nurl_peek la32 1 ) `f32 grad[0] bit-identical` )
 
-    ( nurl_free ea ) ( nurl_free la ) ( nurl_free ea32 ) ( nurl_free la32 )
     ( nurl_print `lazy_const_test: ` ) ( nurl_print_int g_pass )
     ( nurl_print ` passed, ` ) ( nurl_print_int g_fail )
     ( nurl_print ` failed\n` )
