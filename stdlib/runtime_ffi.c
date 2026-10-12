@@ -2888,6 +2888,42 @@ long long nurl_udp_bind(const char *host, long long port) {
     }
     freeaddrinfo(res);
 
+    /* A resolver can hand out the IPv6 wildcard on a host whose kernel
+     * has no IPv6 at all (a container with it disabled: socket() fails
+     * with EAFNOSUPPORT). The wildcard then means the IPv4 one. */
+    if (fd == NURL_INVALID_SOCK && (!host || !*host) &&
+        hints.ai_family == AF_INET6) {
+        struct addrinfo h4;
+        memset(&h4, 0, sizeof(h4));
+        h4.ai_family   = AF_INET;
+        h4.ai_socktype = SOCK_DGRAM;
+        h4.ai_protocol = IPPROTO_UDP;
+        h4.ai_flags    = AI_PASSIVE | AI_NUMERICSERV;
+        res = NULL;
+        if (getaddrinfo(NULL, portstr, &h4, &res) == 0 && res) {
+            for (ai = res; ai; ai = ai->ai_next) {
+                fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+                if (fd == NURL_INVALID_SOCK && nurl__fd_reclaim()) fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+                if (fd == NURL_INVALID_SOCK) continue;
+                int on = 1;
+                setsockopt(fd, SOL_SOCKET, SO_REUSEADDR,
+                           (const char*)&on, (int)sizeof(on));
+                if (bind(fd, ai->ai_addr, (int)ai->ai_addrlen) == 0) {
+                    chosen_family = ai->ai_family;
+                    break;
+                }
+#ifdef _WIN32
+                last_err = nurl__net_map_wsa(WSAGetLastError(), NURL_NET_ERR_BIND);
+#else
+                last_err = nurl__net_map_errno(errno, NURL_NET_ERR_BIND);
+#endif
+                nurl_close_sock(fd);
+                fd = NURL_INVALID_SOCK;
+            }
+            freeaddrinfo(res);
+        }
+    }
+
     if (fd == NURL_INVALID_SOCK) {
         h->err_kind = last_err;
         return (long long)(uintptr_t)h;

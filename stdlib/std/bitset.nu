@@ -4,10 +4,12 @@
 // [0, nbits) are rejected (set/clear/flip) or read as 0 (test), so the
 // unused high bits of the last limb stay clear and `bitset_count` /
 // `bitset_all` can treat every stored word at face value. Storage is a
-// flat `nurl_zalloc` buffer of `ceil(nbits/64)` words, peeked/poked by
-// word index, behind an owner count: a Bitset is a library handle — every
-// copy is the same bits, and the last owner releases them (docs/MEMORY.md
-// §7.6). `bitset_clone` makes an independent copy.
+// zeroed `( Vec i )` of `ceil(nbits/64)` words in a counted block
+// (`Shared`, stdlib/core/rcbox.nu), peeked/poked by word index through
+// its data pointer (the Vec never grows, so the pointer stays put): a
+// Bitset is a library handle — every copy is the same bits, and the last
+// owner drops them (docs/MEMORY.md §7.6). `bitset_clone` makes an
+// independent copy.
 //
 //   ( bitset_new      i nbits )          → Bitset
 //   ( bitset_nbits    Bitset bs )        → i
@@ -34,20 +36,17 @@
 // both exact and carry-free per bit.
 
 $ `stdlib/core/vec.nu`
+$ `stdlib/core/rcbox.nu`
 
-: Bitset { s words i nbits i nwords }
+: Bitset { ( Shared ( Vec i ) ) blk * i words i nbits i nwords }
 
 @ bitset_new i nbits → Bitset {
     : i nb ? > nbits 0 nbits 0
     : i nw / ( alloc_count_add nb 63 ) 64
-    // `[ owners ][ word 0 ] …`; `words` points at word 0.
-    : ~ i w 0
-    ? > nw 0 {
-        : s blk ( nurl_zalloc ( alloc_size 8 + nw 1 ) )
-        ( nurl_poke blk 0 1 )
-        = w + # i blk 8
-    } {}
-    ^ @ Bitset { # s w nb nw }
+    ? == nw 0 { ^ @ Bitset { ( shared_null [( Vec i )] ) # *i 0 nb 0 } } {}
+    : ( Vec i ) v ( vec_zeroed [i] nw )
+    : *i w ( vec_data [i] v )
+    ^ @ Bitset { ( shared_new [( Vec i )] v ) w nb nw }
 }
 
 @ bitset_nbits Bitset bs → i { ^ . bs nbits }
@@ -60,7 +59,7 @@ $ `stdlib/core/vec.nu`
 
 @ bitset_set Bitset bs i bit → v {
     ? ( __bit_inrange bs bit ) {
-        : s w . bs words
+        : s w # s . bs words
         : i limb / bit 64
         : i mask << 1 % bit 64
         ( nurl_poke w limb | ( nurl_peek w limb ) mask )
@@ -69,7 +68,7 @@ $ `stdlib/core/vec.nu`
 
 @ bitset_clear Bitset bs i bit → v {
     ? ( __bit_inrange bs bit ) {
-        : s w . bs words
+        : s w # s . bs words
         : i limb / bit 64
         : i mask << 1 % bit 64
         ( nurl_poke w limb & ( nurl_peek w limb ) - -1 mask )  // &= ~mask
@@ -78,7 +77,7 @@ $ `stdlib/core/vec.nu`
 
 @ bitset_flip Bitset bs i bit → v {
     ? ( __bit_inrange bs bit ) {
-        : s w . bs words
+        : s w # s . bs words
         : i limb / bit 64
         : i mask << 1 % bit 64
         : i cur ( nurl_peek w limb )
@@ -88,14 +87,14 @@ $ `stdlib/core/vec.nu`
 
 @ bitset_test Bitset bs i bit → b {
     ? ( __bit_inrange bs bit ) {} { ^ F }
-    : s w . bs words
+    : s w # s . bs words
     : i limb / bit 64
     : i mask << 1 % bit 64
     ^ != & ( nurl_peek w limb ) mask 0
 }
 
 @ bitset_clear_all Bitset bs → v {
-    : s w . bs words
+    : s w # s . bs words
     : ~ i k 0
     ~ < k . bs nwords { ( nurl_poke w k 0 ) = k + k 1 }
 }
@@ -103,7 +102,7 @@ $ `stdlib/core/vec.nu`
 // Set every in-range bit; the unused high bits of the last limb are
 // left clear so the count / all invariants hold.
 @ bitset_set_all Bitset bs → v {
-    : s w . bs words
+    : s w # s . bs words
     : i nw . bs nwords
     : i rem % . bs nbits 64
     : ~ i k 0
@@ -125,7 +124,7 @@ $ `stdlib/core/vec.nu`
 }
 
 @ bitset_count Bitset bs → i {
-    : s w . bs words
+    : s w # s . bs words
     : ~ i total 0
     : ~ i k 0
     ~ < k . bs nwords { = total + total ( __popcount64 ( nurl_peek w k ) ) = k + k 1 }
@@ -133,7 +132,7 @@ $ `stdlib/core/vec.nu`
 }
 
 @ bitset_any Bitset bs → b {
-    : s w . bs words
+    : s w # s . bs words
     : ~ i k 0
     ~ < k . bs nwords {
         ? != ( nurl_peek w k ) 0 { ^ T } {}
@@ -145,7 +144,7 @@ $ `stdlib/core/vec.nu`
 @ bitset_none Bitset bs → b { ^ ? ( bitset_any bs ) F T }
 
 @ bitset_all Bitset bs → b {
-    : s w . bs words
+    : s w # s . bs words
     : i nw . bs nwords
     ? == . bs nbits 0 { ^ T } {}
     : i rem % . bs nbits 64
@@ -165,8 +164,8 @@ $ `stdlib/core/vec.nu`
 @ __bitset_min i a i b → i { ^ ? < a b a b }
 
 @ bitset_and_with Bitset a Bitset b → v {
-    : s wa . a words
-    : s wb . b words
+    : s wa # s . a words
+    : s wb # s . b words
     : i n ( __bitset_min . a nwords . b nwords )
     : ~ i k 0
     ~ < k n { ( nurl_poke wa k & ( nurl_peek wa k ) ( nurl_peek wb k ) ) = k + k 1 }
@@ -175,16 +174,16 @@ $ `stdlib/core/vec.nu`
 }
 
 @ bitset_or_with Bitset a Bitset b → v {
-    : s wa . a words
-    : s wb . b words
+    : s wa # s . a words
+    : s wb # s . b words
     : i n ( __bitset_min . a nwords . b nwords )
     : ~ i k 0
     ~ < k n { ( nurl_poke wa k | ( nurl_peek wa k ) ( nurl_peek wb k ) ) = k + k 1 }
 }
 
 @ bitset_xor_with Bitset a Bitset b → v {
-    : s wa . a words
-    : s wb . b words
+    : s wa # s . a words
+    : s wb # s . b words
     : i n ( __bitset_min . a nwords . b nwords )
     : ~ i k 0
     ~ < k n {
@@ -197,8 +196,8 @@ $ `stdlib/core/vec.nu`
 
 @ bitset_clone Bitset bs → Bitset {
     : Bitset out ( bitset_new . bs nbits )
-    : s src . bs words
-    : s dst . out words
+    : s src # s . bs words
+    : s dst # s . out words
     : ~ i k 0
     ~ < k . bs nwords { ( nurl_poke dst k ( nurl_peek src k ) ) = k + k 1 }
     ^ out
@@ -213,24 +212,11 @@ $ `stdlib/core/vec.nu`
     }
 }
 
-// Owner count: a count of 1 skips the locked RMW (stdlib/core/rcbox.nu).
-& `c` @ nurl_rc_share *u p → i
-
-& `c` @ nurl_rc_release *u p → i
-
 @ Bitset_share Bitset bs → Bitset {
-    : i w # i . bs words
-    ? != 0 w { : i _old ( nurl_rc_share # *u - w 8 ) } {}
-    ^ @ Bitset { . bs words . bs nbits . bs nwords }
+    ^ @ Bitset { ( shared_clone [( Vec i )] . bs blk ) . bs words . bs nbits . bs nwords }
 }
 
-@ Bitset_drop sink Bitset bs → v {
-    ( mem_forget bs )
-    : i w # i . bs words
-    ? != 0 w {
-        ? != 0 ( nurl_rc_release # *u - w 8 ) { ( nurl_free # s - w 8 ) } {}
-    } {}
-}
+@ Bitset_drop sink Bitset bs → v {}
 
 // Let go of `bs` now rather than at the end of its owner's scope.
 @ bitset_free sink Bitset bs → v {}

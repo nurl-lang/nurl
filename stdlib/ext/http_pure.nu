@@ -1089,17 +1089,24 @@ i follow i maxredir i verify s ua i timeout_ms → HttpStreamState {
 
 // ── buffered perform ────────────────────────────────────────────────
 
-// Run a full request and assemble a C-ABI NurlHttpResponse (the 48-byte
-// layout from stdlib/runtime.c §14, freeable by nurl_http_response_free):
-//   slot 0 status, 1 err_kind, 2 header_count, 3 headers*, 4 body*, 5 body_len.
-// Returns the i64 heap pointer (0 only on the response-struct alloc fail).
-@ hp_perform s url s method * u body_ptr i body_len s headers_blob
-i follow i maxredir i verify s ua i timeout_ms → i {
-    : i resp # i ( nurl_zalloc 48 )
-    ? == resp 0 { ^ 0 } {}
-    : *u rp # *u resp
+// A finished buffered request: the status, the transport's error (0 when
+// there was none), the response headers and the body. The body keeps one
+// NUL after its last byte, not counted in body_len, so a text body reads
+// as a C string in place.
+: HpResult {
+    i status
+    i err_kind
+    ( Vec String ) hnames
+    ( Vec String ) hvalues
+    ( Vec u ) body
+    i body_len
+}
 
-    // The stream's last owner (h, at return) closes the transport.
+// Run a full request to completion and hand back what it produced. The
+// stream's last owner (h, at return) closes the transport; the headers and
+// the body move out of it.
+@ hp_perform s url s method * u body_ptr i body_len s headers_blob
+i follow i maxredir i verify s ua i timeout_ms → HpResult {
     : HttpStreamState h ( hp_stream_open method url body_ptr body_len headers_blob follow maxredir verify ua timeout_ms )
     : *HttpStreamStateImpl st ( __HttpStreamState_ptr h )
 
@@ -1107,44 +1114,17 @@ i follow i maxredir i verify s ua i timeout_ms → i {
     ~ == . st finished 0 { ( __hp_pump st ) }
 
     ? != . st err_kind 0 {
-        ( nurl_poke rp 1 . st err_kind )
-        ( nurl_poke rp 4 # i ( strdup `` ) )
-        ^ resp
+        : ( Vec u ) none ( vec_with_cap [u] 1 )
+        ( vec_push [u] none # u 0 )
+        ^ @ HpResult { 0 . st err_kind ( vec_new [String] ) ( vec_new [String] ) none 0 }
     } {}
 
-    ( nurl_poke rp 0 . st status )
-
-    // Body: copy into a malloc'd, NUL-terminated buffer (free()-able).
-    : i blen ( vec_len [u] . st body )
-    ? > blen 0 {
-        // zalloc (calloc) gives a zeroed, free()-able buffer; the trailing
-        // byte stays 0 so the char* view is NUL-terminated for text bodies.
-        : s buf # s ( nurl_zalloc + blen 1 )
-        : *u bd ( vec_data [u] . st body )
-        ( nurl_memcpy # *u buf bd blen )
-        ( nurl_poke rp 4 # i buf )
-        ( nurl_poke rp 5 blen )
-    } {
-        ( nurl_poke rp 4 # i ( strdup `` ) )
-    }
-
-    // Headers: malloc a count*16 array of {strdup name, strdup value}.
-    : i hc ( vec_len [String] . st hnames )
-    ? > hc 0 {
-        : s arr # s ( malloc * hc 16 )
-        : *u ap # *u arr
-        : ~ i k 0
-        ~ < k hc {
-            : String nm ( __hp_vec_string_at . st hnames k )
-            : String vv ( __hp_vec_string_at . st hvalues k )
-            ( nurl_poke ap * k 2 # i ( strdup ( string_data nm ) ) )
-            ( nurl_poke ap + * k 2 1 # i ( strdup ( string_data vv ) ) )
-            = k + k 1
-        }
-        ( nurl_poke rp 3 # i arr )
-        ( nurl_poke rp 2 hc )
-    } {}
-    ^ resp
+    : ( Vec u ) body ( mem_replace [( Vec u )] . st body ( vec_new [u] ) )
+    : i blen ( vec_len [u] body )
+    ( vec_push [u] body # u 0 )
+    : ( Vec String ) hn ( mem_replace [( Vec String )] . st hnames ( vec_new [String] ) )
+    : ( Vec String ) hv ( mem_replace [( Vec String )] . st hvalues ( vec_new [String] ) )
+    ^ @ HpResult { . st status 0 hn hv body blen }
 }
 
 // ── streaming accessors (driven by http.nu's http_stream_* wrappers) ──

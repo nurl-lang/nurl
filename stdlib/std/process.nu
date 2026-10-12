@@ -82,23 +82,60 @@ $ `stdlib/std/time.nu`
 
 : | ProcessErr { ProcessNotFound ProcessExecFailed ProcessIo ProcessOther }
 
-// Output is an opaque single-field handle around the runtime's
-// NurlProcResult. Accessors below project into typed views.
-//
-// The runtime's result block (exit code, captured stdout / stderr), in an
-// rcbox: every copy of an Output is the same result, and the last owner
-// releases it (nurl_proc_free) — nothing to free by hand.
-: OutputImpl { i res }
+// A finished run: the exit code, the runtime's err_kind (0 when the
+// child ran), and the captured stdout / stderr, each followed by one NUL
+// (not counted in its length) so a text capture reads as a C string in
+// place.
+: ProcResult {
+    i exit_code
+    i err_kind
+    ( Vec u ) out
+    i out_len
+    ( Vec u ) err
+    i err_len
+}
 
-% Drop OutputImpl { @ drop OutputImpl o → v { ( nurl_proc_free . o res ) } }
+// Output holds a finished run in a counted block: every copy of an Output
+// is the same result, and the last owner drops it — nothing to free by
+// hand. Accessors below project into typed views.
+: Output { ( Shared ProcResult ) raw }
 
-: Output { ( Shared OutputImpl ) raw }
-
-@ Output_share Output h → Output { ^ @ Output { ( shared_clone [OutputImpl] . h raw ) } }
+@ Output_share Output h → Output { ^ @ Output { ( shared_clone [ProcResult] . h raw ) } }
 
 @ Output_drop sink Output h → v {}
 
-@ __output_res Output o → i { ^ . ( shared_ptr [OutputImpl] . o raw ) res }
+@ __output_res Output o → *ProcResult { ^ ( shared_ptr [ProcResult] . o raw ) }
+
+// `n` bytes at `p`, then a NUL: a capture as a ProcResult keeps it.
+@ __proc_capture s p i n → ( Vec u ) {
+    : ( Vec u ) v ( vec_with_cap [u] + n 1 )
+    ? & > n 0 != # i p 0 {
+        : *u bp # *u p
+        : ~ i k 0
+        ~ < k n { ( vec_push [u] v . bp k ) = k + k 1 }
+    } {}
+    ( vec_push [u] v # u 0 )
+    ^ v
+}
+
+// A run that failed before it produced anything.
+@ __proc_result_err i ek → ProcResult {
+    ^ @ ProcResult { 0 ek ( __proc_capture `` 0 ) 0 ( __proc_capture `` 0 ) 0 }
+}
+
+// The runtime's C result block (Win32, WASI, the shell form there),
+// released by the drop of its holder once it has been copied out.
+: __CProcResult { i res }
+
+% Drop __CProcResult { @ drop __CProcResult c → v { ( nurl_proc_free . c res ) } }
+
+@ __proc_result_from_c i raw → ProcResult {
+    ? == raw 0 { ^ ( __proc_result_err 4 ) } {}
+    : __CProcResult blk @ __CProcResult { raw }
+    : i ol ( nurl_proc_stdout_len raw )
+    : i el ( nurl_proc_stderr_len raw )
+    ^ @ ProcResult { ( nurl_proc_exit_code raw ) ( nurl_proc_err_kind raw ) ( __proc_capture ( nurl_proc_stdout raw ) ol ) ol ( __proc_capture ( nurl_proc_stderr raw ) el ) el }
+}
 
 // Render a ProcessErr variant name as a raw `s`. Useful for log lines
 // without a full match cascade at every call site.
@@ -112,46 +149,23 @@ $ `stdlib/std/time.nu`
 }
 
 // Internal: classify the runtime err_kind into a ProcessErr variant.
-@ __process_dispatch i raw → !Output ProcessErr {
-    ? == raw 0 { ^ @ !Output ProcessErr { F # ProcessErr ProcessOther } } {}
-    // The result block is owned from here: an error drops it with `o`.
-    : Output o @ Output { ( shared_new [OutputImpl] @ OutputImpl { raw } ) }
-    : i ek ( nurl_proc_err_kind raw )
+@ __process_dispatch sink ProcResult r → !Output ProcessErr {
+    : i ek . r err_kind
     ? != ek 0 {
         ? == ek 1 { ^ @ !Output ProcessErr { F # ProcessErr ProcessNotFound } } {}
         ? == ek 2 { ^ @ !Output ProcessErr { F # ProcessErr ProcessExecFailed } } {}
         ? == ek 3 { ^ @ !Output ProcessErr { F # ProcessErr ProcessIo } } {}
         ^ @ !Output ProcessErr { F # ProcessErr ProcessOther }
     } {}
-    ^ @ !Output ProcessErr { T o }
+    ^ @ !Output ProcessErr { T @ Output { ( shared_new [ProcResult] r ) } }
 }
 
 // ── PURIFY Phase 8 batch 2 — pure-NURL POSIX backend ────────────────
-// Allocates a NurlProcResult-shaped 48-byte heap struct that the
-// existing C accessors (`nurl_proc_exit_code` / `_stdout` / `_stderr`
-// / `_stdout_len` / `_stderr_len` / `_err_kind` / `_free`) project
-// into. Layout (matches stdlib/runtime.c §16 NurlProcResult exactly):
-//   slot 0: exit_code   (i64)
-//   slot 1: err_kind    (i64)
-//   slot 2: stdout_buf  (heap, NUL-terminated, malloc'd via nurl_alloc)
-//   slot 3: stdout_len  (i64)
-//   slot 4: stderr_buf  (heap, NUL-terminated, malloc'd via nurl_alloc)
-//   slot 5: stderr_len  (i64)
-//
-// On Win32 / WASI the FFI symbols below (fork / pipe / execvp / poll /
-// waitpid / fcntl) aren't available; `process_run` gates the whole
-// pure-NURL path on `posix_const "O_NONBLOCK" != -1` and falls
-// through to the runtime's C `nurl_proc_run` there.
-
-// Allocate a fresh 1-byte buffer holding a single NUL — the
-// strdup("") equivalent that nurl_proc_free / the accessors expect
-// for empty captures.
-@ __proc_empty_buf → s {
-    : s p ( nurl_alloc 1 )
-    : *u up # *u p
-    = . up 0 # u 0
-    ^ p
-}
+// Builds the ProcResult itself: the captures grow in Vecs and move into
+// it. On Win32 / WASI the FFI symbols below (fork / pipe / execvp / poll
+// / waitpid / fcntl) aren't available; `process_run` gates the whole
+// pure-NURL path on `posix_const "O_NONBLOCK" != -1` and falls through
+// to the runtime's C `nurl_proc_run` there.
 
 // Read a little-endian i32 at byte offset `off` in `*u p`. Returns
 // the value as a non-negative i for low values (we only use this on
@@ -215,70 +229,14 @@ $ `stdlib/std/time.nu`
     ^ argv
 }
 
-// Heap-grown byte buffer for capturing child stdout / stderr. The
-// final pointer is stored verbatim into a NurlProcResult slot and
-// freed by the C-side nurl_proc_free, so it must come from nurl_alloc
-// (== malloc).
-@ __pb_grow s data i cap i need → s {
-    ? <= need cap { ^ data } {}
-    : ~ i newcap cap
-    ~ < newcap need { = newcap * newcap 2 }
-    ^ ( nurl_realloc data newcap )
-}
-
-// Append n bytes from src into the (data, len, cap) buffer. Returns
-// the (possibly grown) data pointer; caller updates len + cap from
-// the new state. We use a 3-slot scratch struct stored at `state` to
-// avoid multi-return: state[0] = data ptr (i), [1] = len, [2] = cap.
-@ __pb_append s state s src i n → v {
-    ? <= n 0 {} {
-        : s data # s ( nurl_peek state 0 )
-        : i len ( nurl_peek state 1 )
-        : i cap ( nurl_peek state 2 )
-        : i want + + len n 1
-        : s new_data ( __pb_grow data cap want )
-        : i new_cap ? > want cap want cap
-        : *u dst_base # *u new_data
-        : *u dst_at # *u + # i dst_base len
-        : *u src_p # *u src
-        ( nurl_memcpy dst_at src_p n )
-        : i new_len + len n
-        ( nurl_poke state 0 # i new_data )
-        ( nurl_poke state 1 new_len )
-        ( nurl_poke state 2 new_cap )
-    }
-}
-
-// Finalize: ensure NUL-terminator past `len`, return the heap pointer
-// (caller transfers ownership to NurlProcResult). State is consumed.
-@ __pb_finalize s state → s {
-    : s data # s ( nurl_peek state 0 )
-    : i len ( nurl_peek state 1 )
-    : i cap ( nurl_peek state 2 )
-    : s ensured ( __pb_grow data cap + len 1 )
-    : *u up # *u ensured
-    = . up len # u 0
-    ^ ensured
-}
-
-// The (data, len, cap) state words, in a Vec the caller holds (the data
-// buffer itself is handed to the result struct). Initial cap = 256 bytes.
-@ __pb_state_new → ( Vec i ) {
-    : ( Vec i ) stv ( vec_zeroed [i] 3 )
-    : s st # s ( vec_data [i] stv )
-    ( nurl_poke st 0 # i ( nurl_alloc 256 ) )
-    ( nurl_poke st 2 256 )
-    ^ stv
-}
-
-// Drain a non-blocking fd into the pb state. Returns -1 on EOF or hard
-// error (caller closes the fd), 0 on EAGAIN (more data later). The
-// `tmp_buf` is a caller-owned 4 KiB scratch buffer.
-@ __pb_drain_fd i fd s state s tmp_buf → i {
+// Drain a non-blocking fd onto `buf`. Returns -1 on EOF or hard error
+// (caller closes the fd), 0 on EAGAIN (more data later). `iov`'s first
+// 4 KiB are the read chunk.
+@ __pb_drain_fd i fd ( Vec u ) buf ( Vec u ) iov → i {
     ~ T {
-        : i rd ( read fd # *u tmp_buf 4096 )
+        : i rd ( read fd ( vec_data [u] iov ) 4096 )
         ? > rd 0 {
-            ( __pb_append state tmp_buf rd )
+            ( vec_extend_range [u] buf iov 0 rd )
         } {
             ? == rd 0 { ^ -1 } {}
             : i e ( nurl_errno_get )
@@ -331,37 +289,31 @@ $ `stdlib/std/time.nu`
 }
 
 // Decode waitpid status (raw int) into a (exit_code, err_kind) pair.
-// Writes the pair into the result struct directly.
-@ __decode_status s r i raw_status i io_err i child_errno → v {
+@ __decode_status i raw_status i io_err i child_errno inout i code inout i ek → v {
     ? != child_errno 0 {
-        ( nurl_poke r 0 -1 )
-        ( nurl_poke r 1 ( __map_exec_errno child_errno ) )
+        = code -1
+        = ek ( __map_exec_errno child_errno )
     } { ? != io_err 0 {
-            ( nurl_poke r 0 -1 )
-            ( nurl_poke r 1 3 )  // Io
+            = code -1
+            = ek 3  // Io
         } { ? == ( nurl_wait_is_exited raw_status ) 1 {
-                ( nurl_poke r 0 ( nurl_wait_exit_status raw_status ) )
-                ( nurl_poke r 1 0 )  // ok
+                = code ( nurl_wait_exit_status raw_status )
+                = ek 0  // ok
             } { ? == ( nurl_wait_is_signaled raw_status ) 1 {
-                    ( nurl_poke r 0 + 128 ( nurl_wait_term_sig raw_status ) )
-                    ( nurl_poke r 1 0 )  // ok
+                    = code + 128 ( nurl_wait_term_sig raw_status )
+                    = ek 0  // ok
                 } {
-                    ( nurl_poke r 0 -1 )
-                    ( nurl_poke r 1 4 )  // Other
+                    = code -1
+                    = ek 4  // Other
                 } } } }
 }
 
 // Main entry — translated step-by-step from runtime.c §16
 // `nurl_proc_run` POSIX backend.
 @ __process_run_posix s cmd ( Vec s ) args s stdin_str → !Output ProcessErr {
-    : s r ( nurl_zalloc 48 )
-
     : i cmd_len ( nurl_str_len cmd )
     ? <= cmd_len 0 {
-        ( nurl_poke r 1 1 )  // NotFound
-        ( nurl_poke r 2 # i ( __proc_empty_buf ) )
-        ( nurl_poke r 4 # i ( __proc_empty_buf ) )
-        ^ ( __process_dispatch # i r )
+        ^ ( __process_dispatch ( __proc_result_err 1 ) )  // NotFound
     } {}
 
     // Four 2-int pipe buffers, 8 bytes each in one zeroed Vec. fd values
@@ -390,10 +342,7 @@ $ `stdlib/std/time.nu`
         ? >= p4 0 {
             ( close ( __pipe_fd err_p 0 ) ) ( close ( __pipe_fd err_p 1 ) )
         } {}
-        ( nurl_poke r 1 3 )  // Io
-        ( nurl_poke r 2 # i ( __proc_empty_buf ) )
-        ( nurl_poke r 4 # i ( __proc_empty_buf ) )
-        ^ ( __process_dispatch # i r )
+        ^ ( __process_dispatch ( __proc_result_err 3 ) )  // Io
     } {}
 
     // CLOEXEC on err_p[1] so a successful exec triggers EOF on read.
@@ -412,10 +361,7 @@ $ `stdlib/std/time.nu`
         ( close ( __pipe_fd sout_p 0 ) ) ( close ( __pipe_fd sout_p 1 ) )
         ( close ( __pipe_fd serr_p 0 ) ) ( close ( __pipe_fd serr_p 1 ) )
         ( close ( __pipe_fd err_p 0 ) ) ( close ( __pipe_fd err_p 1 ) )
-        ( nurl_poke r 1 3 )  // Io
-        ( nurl_poke r 2 # i ( __proc_empty_buf ) )
-        ( nurl_poke r 4 # i ( __proc_empty_buf ) )
-        ^ ( __process_dispatch # i r )
+        ^ ( __process_dispatch ( __proc_result_err 3 ) )  // Io
     } {}
 
     ? == pid 0 {
@@ -473,14 +419,11 @@ $ `stdlib/std/time.nu`
     ( signal ( posix_const `SIGPIPE` ) old_pipe )
 
     // Drain stdout + stderr in a poll loop until both report EOF.
-    : ( Vec i ) out_sv ( __pb_state_new )
-    : ( Vec i ) err_sv ( __pb_state_new )
-    : s out_state # s ( vec_data [i] out_sv )
-    : s err_state # s ( vec_data [i] err_sv )
+    : ( Vec u ) outb ( vec_with_cap [u] 256 )
+    : ( Vec u ) errb ( vec_with_cap [u] 256 )
     // A 4 KiB read buffer and two pollfd entries, in one Vec.
     : ( Vec u ) iov ( vec_zeroed [u] 4112 )
-    : s tmp_buf # s ( vec_data [u] iov )
-    : s pollfds # s + # i tmp_buf 4096
+    : s pollfds # s + # i ( vec_data [u] iov ) 4096
     : ~ i out_open 1
     : ~ i err_open 1
     : ~ i io_err 0
@@ -510,8 +453,7 @@ $ `stdlib/std/time.nu`
                 : i rev ( posix_pollfd_revents # *u pollfds off )
                 ? != rev 0 {
                     : i fd ( __le32_read # *u pollfds off )
-                    : s ds ? == fd sout_rfd out_state err_state
-                    : i drain_rc ( __pb_drain_fd fd ds tmp_buf )
+                    : i drain_rc ? == fd sout_rfd ( __pb_drain_fd fd outb iov ) ( __pb_drain_fd fd errb iov )
                     : i hup_or_err & rev | ( posix_const `POLLHUP` ) ( posix_const `POLLERR` )
                     ? || == drain_rc -1 != hup_or_err 0 {
                         ? == fd sout_rfd { = out_open 0 } { = err_open 0 }
@@ -542,20 +484,16 @@ $ `stdlib/std/time.nu`
     }
     : i raw_status ( __le32_read status_p 0 )
 
-    ( __decode_status r raw_status io_err child_errno )
+    : ~ i code 0
+    : ~ i ek 0
+    ( __decode_status raw_status io_err child_errno code ek )
 
-    // Finalize buffers and hand over to the result struct.
-    : i out_len ( nurl_peek out_state 1 )
-    : i err_len ( nurl_peek err_state 1 )
-    : s out_buf ( __pb_finalize out_state )
-    : s err_buf ( __pb_finalize err_state )
-
-    ( nurl_poke r 2 # i out_buf )
-    ( nurl_poke r 3 out_len )
-    ( nurl_poke r 4 # i err_buf )
-    ( nurl_poke r 5 err_len )
-
-    ^ ( __process_dispatch # i r )
+    // The captures move into the result, each with its NUL.
+    : i out_len ( vec_len [u] outb )
+    : i err_len ( vec_len [u] errb )
+    ( vec_push [u] outb # u 0 )
+    ( vec_push [u] errb # u 0 )
+    ^ ( __process_dispatch @ ProcResult { code ek outb out_len errb err_len } )
 }
 
 // Core entry point. `args` carries argv[1..]; argv[0] is `cmd` itself.
@@ -571,8 +509,7 @@ $ `stdlib/std/time.nu`
     : *s argv ( vec_data [s] args )
     : i argc ( vec_len [s] args )
     : s argv_buf # s argv
-    : i raw ( nurl_proc_run cmd argv_buf argc stdin_str )
-    ^ ( __process_dispatch raw )
+    ^ ( __process_dispatch ( __proc_result_from_c ( nurl_proc_run cmd argv_buf argc stdin_str ) ) )
 }
 
 // ── Convenience arities ────────────────────────────────────────────
@@ -614,7 +551,7 @@ $ `stdlib/std/time.nu`
 
 @ process_run_shell s sh_cmd → !Output ProcessErr {
     ? == ( posix_const `O_NONBLOCK` ) -1 {
-        ^ ( __process_dispatch ( nurl_proc_run_shell sh_cmd ) )
+        ^ ( __process_dispatch ( __proc_result_from_c ( nurl_proc_run_shell sh_cmd ) ) )
     } {}
     : ( Vec s ) args ( vec_with_cap [s] 2 )
     ( vec_push [s] args `-c` )
@@ -623,32 +560,17 @@ $ `stdlib/std/time.nu`
     ^ res
 }
 
-// ── Accessors (borrowed views into the runtime-owned buffers) ───────
+// ── Accessors (borrowed views into the Output's own buffers) ───────
 
-@ output_exit_code Output o → i {
-    : i raw ( __output_res o )
-    ^ ( nurl_proc_exit_code raw )
-}
+@ output_exit_code Output o → i { ^ . ( __output_res o ) exit_code }
 
-@ output_stdout Output o → s {
-    : i raw ( __output_res o )
-    ^ ( nurl_proc_stdout raw )
-}
+@ output_stdout Output o → s { ^ # s ( vec_data [u] . ( __output_res o ) out ) }
 
-@ output_stderr Output o → s {
-    : i raw ( __output_res o )
-    ^ ( nurl_proc_stderr raw )
-}
+@ output_stderr Output o → s { ^ # s ( vec_data [u] . ( __output_res o ) err ) }
 
-@ output_stdout_len Output o → i {
-    : i raw ( __output_res o )
-    ^ ( nurl_proc_stdout_len raw )
-}
+@ output_stdout_len Output o → i { ^ . ( __output_res o ) out_len }
 
-@ output_stderr_len Output o → i {
-    : i raw ( __output_res o )
-    ^ ( nurl_proc_stderr_len raw )
-}
+@ output_stderr_len Output o → i { ^ . ( __output_res o ) err_len }
 
 @ output_success Output o → b {
     ^ == 0 ( output_exit_code o )
@@ -708,18 +630,34 @@ $ `stdlib/std/time.nu`
 //     return ProcessOther (use `proc_read_line` there).
 //   * Args Vec is BORROWED — element pointers must outlive the spawn call.
 
-// The runtime's child block (NurlProcChild below: pid, pipes, read
-// buffers), in an rcbox. Its drop is what `proc_free` used to do by hand.
-: ProcChildImpl { i raw }
+// A child: its pid, pipe ends and read buffers. The pure-NURL POSIX
+// backend keeps all of it here; on Win32 / WASI `craw` is the runtime's C
+// block (NurlProcChild, stdlib/runtime.c §16b) and the rest goes unused.
+: ProcChildImpl {
+    i craw
+    i err_kind  // 0 / NURL_PROC_ERR_*
+    i last_io_err  // errno snapshot
+    i exit_code  // -1 until wait succeeds
+    i eof
+    i waited
+    i pid
+    i fd_in  // -1 once closed
+    i fd_out  // -1 once closed
+    ( Vec u ) scratch  // bytes read, not yet handed out
+    ( Vec u ) line  // the most recent line, then a NUL
+    ( Vec u ) io  // poll entry (8 bytes) + read chunk (4 KiB), made on the first read
+}
 
 // The child's shutdown, run by its last owner: close the pipes, stop and
-// reap a child nobody waited for, free the block.
+// reap a child nobody waited for. The buffers go with the fields.
 % Drop ProcChildImpl {
     @ drop ProcChildImpl x → v {
         ? != ( posix_const `O_NONBLOCK` ) -1 {
-            ( __proc_free_posix . x raw )
+            ? >= . x fd_in 0 { ( close . x fd_in ) } {}
+            ? >= . x fd_out 0 { ( close . x fd_out ) } {}
+            ( __proc_reap_posix . x pid . x waited )
         } {
-            ( nurl_proc_spawn_free . x raw )
+            ? != . x craw 0 { ( nurl_proc_spawn_free . x craw ) } {}
         }
     }
 }
@@ -733,14 +671,21 @@ $ `stdlib/std/time.nu`
 
 @ ProcChild_drop sink ProcChild h → v {}
 
-@ __proc_raw ProcChild p → i { ^ . ( shared_ptr [ProcChildImpl] . p raw ) raw }
+@ __proc_st ProcChild p → *ProcChildImpl { ^ ( shared_ptr [ProcChildImpl] . p raw ) }
 
-@ __proc_spawn_dispatch i raw → !ProcChild ProcessErr {
-    ? == raw 0 { ^ @ !ProcChild ProcessErr { F # ProcessErr ProcessOther } } {}
-    // The child block is owned from here: an error drops it with `p` (a
-    // failed spawn has no pid and no open pipe, so that only frees it).
-    : ProcChild p @ ProcChild { ( shared_new [ProcChildImpl] @ ProcChildImpl { raw } ) }
-    : i ek ( nurl_proc_spawn_err_kind raw )
+@ __proc_raw ProcChild p → i { ^ . ( __proc_st p ) craw }
+
+// A child with nothing started yet: `ek` / `errno` say why (0 when it is
+// about to be filled in).
+@ __pc_new i craw i ek i errno → ProcChildImpl {
+    ^ @ ProcChildImpl { craw ek errno -1 0 0 0 -1 -1 ( vec_new [u] ) ( vec_new [u] ) ( vec_new [u] ) }
+}
+
+@ __proc_spawn_dispatch sink ProcChildImpl c → !ProcChild ProcessErr {
+    : i ek . c err_kind
+    // Owned from here: an error drops it with `p` (a failed spawn has no
+    // pid and no open pipe, so that only releases it).
+    : ProcChild p @ ProcChild { ( shared_new [ProcChildImpl] c ) }
     ? != ek 0 {
         ? == ek 1 { ^ @ !ProcChild ProcessErr { F # ProcessErr ProcessNotFound } } {}
         ? == ek 2 { ^ @ !ProcChild ProcessErr { F # ProcessErr ProcessExecFailed } } {}
@@ -750,121 +695,64 @@ $ `stdlib/std/time.nu`
     ^ @ !ProcChild ProcessErr { T p }
 }
 
+// A child the C runtime started (Win32 / WASI): its block, and its
+// err_kind (Other when there is no block at all).
+@ __pc_from_c i raw → ProcChildImpl {
+    ? == raw 0 { ^ ( __pc_new 0 4 0 ) } {}
+    ^ ( __pc_new raw ( nurl_proc_spawn_err_kind raw ) 0 )
+}
+
 // ── PURIFY Phase 8 batch 3 — pure-NURL POSIX spawn backend ─────────
-//
-// NurlProcChild heap struct layout (16 slots × 8 bytes = 128 bytes,
-// nurl_zalloc'd; same struct C-side accessors below project into):
-//
-//   0  err_kind         (0 / NURL_PROC_ERR_*)
-//   1  last_io_err      (errno snapshot)
-//   2  exit_code        (-1 until wait succeeds)
-//   3  eof              (0 / 1)
-//   4  waited           (0 / 1)
-//   5  pid_or_0         (logical pid; same as pid on POSIX)
-//   6  pid              (POSIX pid_t widened to i64)
-//   7  fd_in            (-1 once closed)
-//   8  fd_out           (-1 once closed)
-//   9  scratch          (heap byte buffer, NULL until first read)
-//   10 scratch_len      (bytes currently held)
-//   11 scratch_cap      (allocation size)
-//   12 line_buf         (heap byte buffer for the most-recent line)
-//   13 line_len         (length, no trailing NUL)
-//   14 line_cap         (allocation size incl. terminator)
-//   15 io scratch       (poll entry + read chunk, NULL until first read)
 
 // The read paths' poll(2) entry (8 bytes) and read(2) chunk (4 KiB): one
-// block per child (slot 15), made on the first read and released with the
-// child (__proc_free_posix).
-@ __pc_io s c → s {
-    : s io # s ( nurl_peek c 15 )
-    ? != # i io 0 { ^ io } {}
-    : s fresh ( nurl_alloc 4104 )
-    ( nurl_poke c 15 # i fresh )
-    ^ fresh
+// buffer per child, made on the first read.
+@ __pc_io * ProcChildImpl c → s {
+    ? == ( vec_len [u] . c io ) 0 { = . c io ( vec_zeroed [u] 4104 ) } {}
+    ^ # s ( vec_data [u] . c io )
 }
 
-@ __pc_alloc → s {
-    : s c ( nurl_zalloc 128 )
-    ( nurl_poke c 2 -1 )  // exit_code = -1
-    ( nurl_poke c 7 -1 )  // fd_in = -1
-    ( nurl_poke c 8 -1 )  // fd_out = -1
-    ^ c
+// line := the `n` bytes at `p`, then a NUL (its buffer reused).
+@ __pc_set_line * ProcChildImpl c * u p i n → v {
+    ( vec_clear [u] . c line )
+    : ~ i k 0
+    ~ < k n { ( vec_push [u] . c line . p k ) = k + k 1 }
+    ( vec_push [u] . c line # u 0 )
 }
 
-// scratch_reserve / line_reserve / drain_line — translated from C
-// §16b's static helpers verbatim. A buffer's first growth is a
-// nurl_alloc, not realloc(NULL, n), as a Vec's is: the child's drop
-// releases both with nurl_free, so they are nurl_alloc blocks (counted,
-// and recycled by the runtime's small-allocation cache).
-
-@ __pc_scratch_reserve s c i want → v {
-    : i cap ( nurl_peek c 11 )
-    ? >= cap want {} {
-        : ~ i newcap ? > cap 0 cap 1024
-        ~ < newcap want { = newcap * newcap 2 }
-        : s old # s ( nurl_peek c 9 )
-        ? == 0 # i old {
-            ( nurl_poke c 9 # i ( nurl_alloc newcap ) )
-        } {
-            ( nurl_poke c 9 # i ( nurl_realloc old newcap ) )
-        }
-        ( nurl_poke c 11 newcap )
-    }
+// The line just read, as a view valid until the next read ("" if none).
+@ __pc_line_view * ProcChildImpl c → s {
+    ? == ( vec_len [u] . c line ) 0 { ^ `` } {}
+    ^ # s ( vec_data [u] . c line )
 }
 
-@ __pc_line_reserve s c i want → v {
-    : i cap ( nurl_peek c 14 )
-    ? >= cap + want 1 {} {
-        : ~ i newcap ? > cap 0 cap 256
-        ~ < newcap + want 1 { = newcap * newcap 2 }
-        : s old # s ( nurl_peek c 12 )
-        ? == 0 # i old {
-            ( nurl_poke c 12 # i ( nurl_alloc newcap ) )
-        } {
-            ( nurl_poke c 12 # i ( nurl_realloc old newcap ) )
-        }
-        ( nurl_poke c 14 newcap )
-    }
+// Drop the first `k` bytes of scratch (the tail moves down; the two
+// ranges overlap, so memmove).
+@ __pc_consume * ProcChildImpl c i k → v {
+    : i rem - ( vec_len [u] . c scratch ) k
+    ? > rem 0 {
+        : *u base ( vec_data [u] . c scratch )
+        : *u tail # *u + # i base k
+        ( nurl_memmove base tail rem )
+    } {}
+    : b _t ( vec_truncate [u] . c scratch ? > rem 0 rem 0 )
 }
 
-// Try to extract the first '\n'-terminated line from scratch into
-// line_buf. Returns 1 on success. The trailing '\n' is consumed but
-// not copied; an optional '\r' before it is also stripped.
-@ __pc_drain_line s c → i {
-    : s scratch # s ( nurl_peek c 9 )
-    : i scratch_len ( nurl_peek c 10 )
-    ? == # i scratch 0 { ^ 0 } {}
-    : *u sp # *u scratch
+// Try to extract the first '\n'-terminated line from scratch into the
+// line buffer. Returns 1 on success. The trailing '\n' is consumed but not
+// copied; an optional '\r' before it is also stripped.
+@ __pc_drain_line * ProcChildImpl c → i {
+    : i n ( vec_len [u] . c scratch )
+    ? == n 0 { ^ 0 } {}
+    : *u sp ( vec_data [u] . c scratch )
     : ~ i i 0
-    ~ < i scratch_len {
-        : i b & 255 # i . sp i
-        ? == b 10 {  // '\n'
+    ~ < i n {
+        ? == & 255 # i . sp i 10 {  // '\n'
             : ~ i take i
             ? > take 0 {
-                : i prev & 255 # i . sp - take 1
-                ? == prev 13 { = take - take 1 } {}  // '\r'
+                ? == & 255 # i . sp - take 1 13 { = take - take 1 } {}  // '\r'
             } {}
-            ( __pc_line_reserve c take )
-            : s line # s ( nurl_peek c 12 )
-            ? > take 0 {
-                : *u dst # *u line
-                ( nurl_memcpy dst sp take )
-            } {}
-            : *u lp # *u line
-            = . lp take # u 0
-            ( nurl_poke c 13 take )
-            : i consume + i 1
-            : i rem - scratch_len consume
-            ? > rem 0 {
-                // dst (scratch base) and src (scratch + consume) alias
-                // — shift the tail back over the consumed prefix with
-                // memmove, not memcpy. memcpy is UB on overlap and
-                // ASan flags it correctly under -fsanitize=address.
-                : *u dst2 # *u scratch
-                : *u src2 # *u + # i sp consume
-                ( nurl_memmove dst2 src2 rem )
-            } {}
-            ( nurl_poke c 10 rem )
+            ( __pc_set_line c sp take )
+            ( __pc_consume c + i 1 )
             ^ 1
         } {}
         = i + i 1
@@ -872,13 +760,21 @@ $ `stdlib/std/time.nu`
     ^ 0
 }
 
-@ __process_spawn_posix s cmd ( Vec s ) args → !ProcChild ProcessErr {
-    : s c ( __pc_alloc )
+// What is left in scratch at EOF, without a trailing '\n', becomes the line.
+@ __pc_flush_tail * ProcChildImpl c → s {
+    : i sc_len ( vec_len [u] . c scratch )
+    ? > sc_len 0 {
+        ( __pc_set_line c ( vec_data [u] . c scratch ) sc_len )
+        ( vec_clear [u] . c scratch )
+        ^ ( __pc_line_view c )
+    } {}
+    ^ ``
+}
 
+@ __process_spawn_posix s cmd ( Vec s ) args → !ProcChild ProcessErr {
     : i cmd_len ( nurl_str_len cmd )
     ? <= cmd_len 0 {
-        ( nurl_poke c 0 1 )  // NotFound
-        ^ ( __proc_spawn_dispatch # i c )
+        ^ ( __proc_spawn_dispatch ( __pc_new 0 1 0 ) )  // NotFound
     } {}
 
     // Three 2-int pipe buffers, 8 bytes each in one zeroed Vec.
@@ -900,9 +796,7 @@ $ `stdlib/std/time.nu`
         ? >= p3 0 {
             ( close ( __pipe_fd err_p 0 ) ) ( close ( __pipe_fd err_p 1 ) )
         } {}
-        ( nurl_poke c 0 3 )  // Io
-        ( nurl_poke c 1 ( nurl_errno_get ) )
-        ^ ( __proc_spawn_dispatch # i c )
+        ^ ( __proc_spawn_dispatch ( __pc_new 0 3 ( nurl_errno_get ) ) )  // Io
     } {}
 
     ( __set_cloexec ( __pipe_fd err_p 1 ) )
@@ -917,9 +811,7 @@ $ `stdlib/std/time.nu`
         ( close ( __pipe_fd sin_p 0 ) ) ( close ( __pipe_fd sin_p 1 ) )
         ( close ( __pipe_fd sout_p 0 ) ) ( close ( __pipe_fd sout_p 1 ) )
         ( close ( __pipe_fd err_p 0 ) ) ( close ( __pipe_fd err_p 1 ) )
-        ( nurl_poke c 0 3 )  // Io
-        ( nurl_poke c 1 ( nurl_errno_get ) )
-        ^ ( __proc_spawn_dispatch # i c )
+        ^ ( __proc_spawn_dispatch ( __pc_new 0 3 ( nurl_errno_get ) ) )  // Io
     } {}
 
     ? == pid 0 {
@@ -949,24 +841,21 @@ $ `stdlib/std/time.nu`
         : ( Vec i ) status_v ( vec_zeroed [i] 1 )
         : *u status_p # *u ( vec_data [i] status_v )
         ( waitpid pid status_p 0 )
-        ( nurl_poke c 0 ( __map_exec_errno child_errno ) )
-        ( nurl_poke c 1 child_errno )
-        ^ ( __proc_spawn_dispatch # i c )
+        ^ ( __proc_spawn_dispatch ( __pc_new 0 ( __map_exec_errno child_errno ) child_errno ) )
     } {}
 
     // Non-blocking on stdout so timeout-driven read_line doesn't wedge.
     ( __set_nonblock sout_rfd )
 
-    ( nurl_poke c 5 pid )  // pid_or_0
-    ( nurl_poke c 6 pid )  // pid
-    ( nurl_poke c 7 sin_wfd )  // fd_in
-    ( nurl_poke c 8 sout_rfd )  // fd_out
-    ^ ( __proc_spawn_dispatch # i c )
+    : ProcChildImpl c ( __pc_new 0 0 0 )
+    = . c pid pid
+    = . c fd_in sin_wfd
+    = . c fd_out sout_rfd
+    ^ ( __proc_spawn_dispatch c )
 }
 
-@ __proc_write_posix i raw s buf i n → i {
-    : s c # s raw
-    : i fd_in ( nurl_peek c 7 )
+@ __proc_write_posix * ProcChildImpl c s buf i n → i {
+    : i fd_in . c fd_in
     ? < fd_in 0 { ^ 0 } {}
     ? <= n 0 { ^ 0 } {}
     : *u old_pipe ( signal ( posix_const `SIGPIPE` ) # *u ( posix_const `SIG_IGN` ) )
@@ -978,7 +867,7 @@ $ `stdlib/std/time.nu`
             ? < w 0 {
                 : i e ( nurl_errno_get )
                 ? == e ( posix_const `EINTR` ) {} {
-                    ( nurl_poke c 1 e )
+                    = . c last_io_err e
                     ( signal ( posix_const `SIGPIPE` ) old_pipe )
                     ^ -1
                 }
@@ -989,39 +878,28 @@ $ `stdlib/std/time.nu`
     ^ total
 }
 
-@ __proc_close_stdin_posix i raw → v {
-    : s c # s raw
-    : i fd_in ( nurl_peek c 7 )
-    ? >= fd_in 0 {
-        ( close fd_in )
-        ( nurl_poke c 7 -1 )
+@ __proc_close_stdin_posix * ProcChildImpl c → v {
+    ? >= . c fd_in 0 {
+        ( close . c fd_in )
+        = . c fd_in -1
     } {}
 }
 
-// One pollfd entry's worth of bytes for read_line's poll(2) call.
-@ __proc_read_line_posix i raw i timeout_ms → s {
-    : s c # s raw
-    // Reset previous line.
-    ( nurl_poke c 13 0 )
-    : s prev_line # s ( nurl_peek c 12 )
-    ? != # i prev_line 0 {
-        : *u lp # *u prev_line
-        = . lp 0 # u 0
-    } {}
+// Read one line (see proc_read_line); a view of the line buffer.
+@ __proc_read_line_posix * ProcChildImpl c i timeout_ms → s {
+    // Reset the previous line.
+    ( vec_clear [u] . c line )
 
-    ? == 1 ( __pc_drain_line c ) {
-        : s line # s ( nurl_peek c 12 )
-        ^ ? != # i line 0 line ``
-    } {}
+    ? == 1 ( __pc_drain_line c ) { ^ ( __pc_line_view c ) } {}
 
-    : i fd_out ( nurl_peek c 8 )
+    : i fd_out . c fd_out
     ? < fd_out 0 {
-        ( nurl_poke c 3 1 )  // eof
+        = . c eof 1
         ^ ``
     } {}
 
     : s pollfds ( __pc_io c )
-    : s chunk # s + # i pollfds 8
+    : *u chunk # *u + # i pollfds 8
     : i pollin ( posix_const `POLLIN` )
     : i pollhup ( posix_const `POLLHUP` )
     : i pollerr ( posix_const `POLLERR` )
@@ -1042,38 +920,31 @@ $ `stdlib/std/time.nu`
             ^ ``  // timeout
         } {}
         ? < pr 0 {
-            ( nurl_poke c 0 3 )  // Io
-            ( nurl_poke c 1 ( nurl_errno_get ) )
+            = . c err_kind 3  // Io
+            = . c last_io_err ( nurl_errno_get )
             ^ ``
         } {}
         : i rev ( posix_pollfd_revents # *u pollfds 0 )
-        : i has_in & rev pollin
-        ? != has_in 0 {
+        ? != & rev pollin 0 {
             // Drain everything currently buffered.
             : ~ i drain_done 0
             ~ == drain_done 0 {
-                : i rd ( read fd_out # *u chunk 4096 )
+                : i rd ( read fd_out chunk 4096 )
                 ? > rd 0 {
-                    : i scratch_len ( nurl_peek c 10 )
-                    ( __pc_scratch_reserve c + scratch_len rd )
-                    : s scratch_new # s ( nurl_peek c 9 )
-                    : *u dst # *u + # i # *u scratch_new scratch_len
-                    : *u src # *u chunk
-                    ( nurl_memcpy dst src rd )
-                    ( nurl_poke c 10 + scratch_len rd )
+                    ( vec_extend_range [u] . c scratch . c io 8 rd )
                 } {
                     ? == rd 0 {
                         ( close fd_out )
-                        ( nurl_poke c 8 -1 )
-                        ( nurl_poke c 3 1 )  // eof
+                        = . c fd_out -1
+                        = . c eof 1
                         = drain_done 1
                     } {
                         : i re ( nurl_errno_get )
                         ? == re ( posix_const `EINTR` ) {} {
                             ? == re ( posix_const `EAGAIN` ) { = drain_done 1 } {
                                 ? == re ( posix_const `EWOULDBLOCK` ) { = drain_done 1 } {
-                                    ( nurl_poke c 0 3 )
-                                    ( nurl_poke c 1 re )
+                                    = . c err_kind 3
+                                    = . c last_io_err re
                                     ^ ``
                                 }
                             }
@@ -1081,54 +952,16 @@ $ `stdlib/std/time.nu`
                     }
                 }
             }
-            : i hit_eof ( nurl_peek c 3 )
-            ? == 1 ( __pc_drain_line c ) {
-                : s line # s ( nurl_peek c 12 )
-                ^ ? != # i line 0 line ``
-            } {}
+            ? == 1 ( __pc_drain_line c ) { ^ ( __pc_line_view c ) } {}
             // EOF without trailing '\n': flush tail.
-            ? != hit_eof 0 {
-                : i sc_len ( nurl_peek c 10 )
-                ? > sc_len 0 {
-                    ( __pc_line_reserve c sc_len )
-                    : s line # s ( nurl_peek c 12 )
-                    : s scratch # s ( nurl_peek c 9 )
-                    : *u dst # *u line
-                    : *u src # *u scratch
-                    ( nurl_memcpy dst src sc_len )
-                    : *u lp # *u line
-                    = . lp sc_len # u 0
-                    ( nurl_poke c 13 sc_len )
-                    ( nurl_poke c 10 0 )
-                    ^ line
-                } {}
-                ^ ``
-            } {}
+            ? != . c eof 0 { ^ ( __pc_flush_tail c ) } {}
         } {}
-        : i hup_or_err & rev | pollhup pollerr
-        ? != hup_or_err 0 {
+        ? != & rev | pollhup pollerr 0 {
             ( close fd_out )
-            ( nurl_poke c 8 -1 )
-            ( nurl_poke c 3 1 )  // eof
-            ? == 1 ( __pc_drain_line c ) {
-                : s line # s ( nurl_peek c 12 )
-                ^ ? != # i line 0 line ``
-            } {}
-            : i sc_len ( nurl_peek c 10 )
-            ? > sc_len 0 {
-                ( __pc_line_reserve c sc_len )
-                : s line # s ( nurl_peek c 12 )
-                : s scratch # s ( nurl_peek c 9 )
-                : *u dst # *u line
-                : *u src # *u scratch
-                ( nurl_memcpy dst src sc_len )
-                : *u lp # *u line
-                = . lp sc_len # u 0
-                ( nurl_poke c 13 sc_len )
-                ( nurl_poke c 10 0 )
-                ^ line
-            } {}
-            ^ ``
+            = . c fd_out -1
+            = . c eof 1
+            ? == 1 ( __pc_drain_line c ) { ^ ( __pc_line_view c ) } {}
+            ^ ( __pc_flush_tail c )
         } {}
         // Loop — still no '\n' yet.
     }
@@ -1139,33 +972,22 @@ $ `stdlib/std/time.nu`
 // left in the read_line scratch buffer first, then poll(2)s (infinite
 // timeout — the fd is O_NONBLOCK, poll gates the read) and does one
 // read(2) of at most `max` bytes. Empty Vec ⇒ EOF.
-@ __proc_read_chunk_posix i raw i max → !( Vec u ) ProcessErr {
-    : s c # s raw
+@ __proc_read_chunk_posix * ProcChildImpl c i max → !( Vec u ) ProcessErr {
     ? <= max 0 { ^ @ !( Vec u ) ProcessErr { T ( vec_new [u] ) } } {}
 
     // 1. Drain bytes buffered by an earlier proc_read_line call.
-    : i sc_len ( nurl_peek c 10 )
+    : i sc_len ( vec_len [u] . c scratch )
     ? > sc_len 0 {
         : i take ? > sc_len max max sc_len
         : ( Vec u ) buf ( vec_with_cap [u] take )
-        : s scratch # s ( nurl_peek c 9 )
-        : *u src # *u scratch
-        : *u dst ( vec_data [u] buf )
-        ( nurl_memcpy dst src take )
-        : b _ok ( vec_set_len [u] buf take )
-        : i rem - sc_len take
-        ? > rem 0 {
-            // Shift the tail over the consumed prefix (aliasing — memmove).
-            : *u tail # *u + # i src take
-            ( nurl_memmove src tail rem )
-        } {}
-        ( nurl_poke c 10 rem )
+        ( vec_extend_range [u] buf . c scratch 0 take )
+        ( __pc_consume c take )
         ^ @ !( Vec u ) ProcessErr { T buf }
     } {}
 
-    : i fd_out ( nurl_peek c 8 )
+    : i fd_out . c fd_out
     ? < fd_out 0 {
-        ( nurl_poke c 3 1 )  // eof
+        = . c eof 1
         ^ @ !( Vec u ) ProcessErr { T ( vec_new [u] ) }
     } {}
 
@@ -1184,8 +1006,8 @@ $ `stdlib/std/time.nu`
             }
         }
         ? < pr 0 {
-            ( nurl_poke c 0 3 )  // Io
-            ( nurl_poke c 1 ( nurl_errno_get ) )
+            = . c err_kind 3  // Io
+            = . c last_io_err ( nurl_errno_get )
             ^ @ !( Vec u ) ProcessErr { F # ProcessErr ProcessIo }
         } {}
         // 3. One read(2) — POLLIN and POLLHUP both resolve here.
@@ -1198,15 +1020,15 @@ $ `stdlib/std/time.nu`
         } {}
         ? == rd 0 {
             ( close fd_out )
-            ( nurl_poke c 8 -1 )
-            ( nurl_poke c 3 1 )  // eof
+            = . c fd_out -1
+            = . c eof 1
             ^ @ !( Vec u ) ProcessErr { T buf }  // empty ⇒ EOF
         } {}
         : i re ( nurl_errno_get )
         ? == re ( posix_const `EINTR` ) {} {
             ? || == re ( posix_const `EAGAIN` ) == re ( posix_const `EWOULDBLOCK` ) {} {
-                ( nurl_poke c 0 3 )  // Io
-                ( nurl_poke c 1 re )
+                = . c err_kind 3  // Io
+                = . c last_io_err re
                 ^ @ !( Vec u ) ProcessErr { F # ProcessErr ProcessIo }
             }
         }
@@ -1215,11 +1037,9 @@ $ `stdlib/std/time.nu`
     ^ @ !( Vec u ) ProcessErr { T ( vec_new [u] ) }
 }
 
-@ __proc_wait_posix i raw → i {
-    : s c # s raw
-    : i waited ( nurl_peek c 4 )
-    ? != waited 0 { ^ ( nurl_peek c 2 ) } {}
-    : i pid ( nurl_peek c 6 )
+@ __proc_wait_posix * ProcChildImpl c → i {
+    ? != . c waited 0 { ^ . c exit_code } {}
+    : i pid . c pid
     ? <= pid 0 { ^ -1 } {}
     : ( Vec i ) status_v ( vec_zeroed [i] 1 )
     : *u status_p # *u ( vec_data [i] status_v )
@@ -1231,7 +1051,7 @@ $ `stdlib/std/time.nu`
             : i e ( nurl_errno_get )
             ? != e ( posix_const `EINTR` ) {
                 = wait_done 1
-                ( nurl_poke c 1 e )
+                = . c last_io_err e
                 ^ -1
             } {}
         }
@@ -1245,19 +1065,18 @@ $ `stdlib/std/time.nu`
             = ec + 128 ( nurl_wait_term_sig raw_status )
         } {}
     }
-    ( nurl_poke c 2 ec )
-    ( nurl_poke c 4 1 )  // waited
+    = . c exit_code ec
+    = . c waited 1
     ^ ec
 }
 
-@ __proc_kill_posix i raw i sig → i {
-    : s c # s raw
-    : i pid ( nurl_peek c 6 )
+@ __proc_kill_posix * ProcChildImpl c i sig → i {
+    : i pid . c pid
     ? <= pid 0 { ^ -1 } {}
-    : i s ? > sig 0 sig ( posix_const `SIGTERM` )
-    : i rc ( kill pid s )
+    : i sg ? > sig 0 sig ( posix_const `SIGTERM` )
+    : i rc ( kill pid sg )
     ? < rc 0 {
-        ( nurl_poke c 1 ( nurl_errno_get ) )
+        = . c last_io_err ( nurl_errno_get )
         ^ -1
     } {}
     ^ 0
@@ -1265,10 +1084,7 @@ $ `stdlib/std/time.nu`
 
 // best-effort reap helper — SIGTERM, poll waitpid(WNOHANG) for up to
 // 500ms, then SIGKILL + blocking wait if still alive.
-@ __proc_reap_posix i raw → v {
-    : s c # s raw
-    : i pid ( nurl_peek c 6 )
-    : i waited ( nurl_peek c 4 )
+@ __proc_reap_posix i pid i waited → v {
     ? || <= pid 0 != waited 0 {} {
         ( kill pid ( posix_const `SIGTERM` ) )
         : ( Vec i ) status_v ( vec_zeroed [i] 1 )
@@ -1293,25 +1109,6 @@ $ `stdlib/std/time.nu`
             ( kill pid ( posix_const `SIGKILL` ) )
             ( waitpid pid status_p 0 )
         } {}
-        ( nurl_poke c 4 1 )  // waited
-    }
-}
-
-@ __proc_free_posix i raw → v {
-    : s c # s raw
-    ? == raw 0 {} {
-        : i fd_in ( nurl_peek c 7 )
-        ? >= fd_in 0 { ( close fd_in ) } {}
-        : i fd_out ( nurl_peek c 8 )
-        ? >= fd_out 0 { ( close fd_out ) } {}
-        ( __proc_reap_posix raw )
-        : s scratch # s ( nurl_peek c 9 )
-        ? != # i scratch 0 { ( nurl_free scratch ) } {}
-        : s line # s ( nurl_peek c 12 )
-        ? != # i line 0 { ( nurl_free line ) } {}
-        : s io # s ( nurl_peek c 15 )
-        ? != # i io 0 { ( nurl_free io ) } {}
-        ( nurl_free c )
     }
 }
 
@@ -1322,8 +1119,7 @@ $ `stdlib/std/time.nu`
     : *s argv ( vec_data [s] args )
     : i argc ( vec_len [s] args )
     : s argv_buf # s argv
-    : i raw ( nurl_proc_spawn cmd argv_buf argc )
-    ^ ( __proc_spawn_dispatch raw )
+    ^ ( __proc_spawn_dispatch ( __pc_from_c ( nurl_proc_spawn cmd argv_buf argc ) ) )
 }
 
 @ process_spawn0 s cmd → !ProcChild ProcessErr {
@@ -1348,16 +1144,15 @@ $ `stdlib/std/time.nu`
 }
 
 @ proc_pid ProcChild p → i {
-    : i raw ( __proc_raw p )
-    ^ ( nurl_proc_spawn_pid raw )
+    ? != ( posix_const `O_NONBLOCK` ) -1 { ^ . ( __proc_st p ) pid } {}
+    ^ ( nurl_proc_spawn_pid ( __proc_raw p ) )
 }
 
 @ proc_write ProcChild p * u buf i n → i {
-    : i raw ( __proc_raw p )
     ? != ( posix_const `O_NONBLOCK` ) -1 {
-        ^ ( __proc_write_posix raw buf n )
+        ^ ( __proc_write_posix ( __proc_st p ) # s buf n )
     } {}
-    ^ ( nurl_proc_spawn_write raw buf n )
+    ^ ( nurl_proc_spawn_write ( __proc_raw p ) # s buf n )
 }
 
 @ proc_write_str ProcChild p s s_view → i {
@@ -1374,22 +1169,21 @@ $ `stdlib/std/time.nu`
 }
 
 @ proc_close_stdin ProcChild p → v {
-    : i raw ( __proc_raw p )
     ? != ( posix_const `O_NONBLOCK` ) -1 {
-        ( __proc_close_stdin_posix raw )
+        ( __proc_close_stdin_posix ( __proc_st p ) )
     } {
-        ( nurl_proc_spawn_close_stdin raw )
+        ( nurl_proc_spawn_close_stdin ( __proc_raw p ) )
     }
 }
 
 @ proc_eof ProcChild p → b {
-    : i raw ( __proc_raw p )
-    ^ != 0 ( nurl_proc_spawn_eof raw )
+    ? != ( posix_const `O_NONBLOCK` ) -1 { ^ != 0 . ( __proc_st p ) eof } {}
+    ^ != 0 ( nurl_proc_spawn_eof ( __proc_raw p ) )
 }
 
 @ proc_last_io_err ProcChild p → i {
-    : i raw ( __proc_raw p )
-    ^ ( nurl_proc_spawn_last_io_err raw )
+    ? != ( posix_const `O_NONBLOCK` ) -1 { ^ . ( __proc_st p ) last_io_err } {}
+    ^ ( nurl_proc_spawn_last_io_err ( __proc_raw p ) )
 }
 
 // Read one '\n'-delimited line from the child's stdout. Returns:
@@ -1397,13 +1191,16 @@ $ `stdlib/std/time.nu`
 //   * None on timeout (proc_eof = false) OR EOF (proc_eof = true).
 // `timeout_ms <= 0` blocks until a full line arrives or EOF/error.
 @ proc_read_line ProcChild p i timeout_ms → ?String {
+    ? != ( posix_const `O_NONBLOCK` ) -1 {
+        : *ProcChildImpl c ( __proc_st p )
+        : s view ( __proc_read_line_posix c timeout_ms )
+        ? <= ( vec_len [u] . c line ) 1 { ^ @ ?String { F # String 0 } } {}
+        ^ @ ?String { T ( string_from view ) }
+    } {}
     : i raw ( __proc_raw p )
-    : s view ? != ( posix_const `O_NONBLOCK` ) -1
-    ( __proc_read_line_posix raw timeout_ms )
-    ( nurl_proc_spawn_read_line raw timeout_ms )
-    : i n ( nurl_proc_spawn_read_line_len raw )
-    ? == n 0 { ^ @ ?String { F # String 0 } } {}
-    ^ @ ?String { T ( string_from view ) }
+    : s cview ( nurl_proc_spawn_read_line raw timeout_ms )
+    ? == 0 ( nurl_proc_spawn_read_line_len raw ) { ^ @ ?String { F # String 0 } } {}
+    ^ @ ?String { T ( string_from cview ) }
 }
 
 // Blocking raw-byte read from the child's stdout — the incremental
@@ -1415,9 +1212,8 @@ $ `stdlib/std/time.nu`
 // Bytes buffered by an earlier proc_read_line are served first.
 // POSIX only; Win32/WASI return ProcessOther (use proc_read_line).
 @ proc_read_chunk ProcChild p i max → !( Vec u ) ProcessErr {
-    : i raw ( __proc_raw p )
     ? != ( posix_const `O_NONBLOCK` ) -1 {
-        ^ ( __proc_read_chunk_posix raw max )
+        ^ ( __proc_read_chunk_posix ( __proc_st p ) max )
     } {}
     ^ @ !( Vec u ) ProcessErr { F # ProcessErr ProcessOther }
 }
@@ -1433,19 +1229,17 @@ $ `stdlib/std/time.nu`
 }
 
 @ proc_wait ProcChild p → i {
-    : i raw ( __proc_raw p )
     ? != ( posix_const `O_NONBLOCK` ) -1 {
-        ^ ( __proc_wait_posix raw )
+        ^ ( __proc_wait_posix ( __proc_st p ) )
     } {}
-    ^ ( nurl_proc_spawn_wait raw )
+    ^ ( nurl_proc_spawn_wait ( __proc_raw p ) )
 }
 
 @ proc_kill ProcChild p i sig → i {
-    : i raw ( __proc_raw p )
     ? != ( posix_const `O_NONBLOCK` ) -1 {
-        ^ ( __proc_kill_posix raw sig )
+        ^ ( __proc_kill_posix ( __proc_st p ) sig )
     } {}
-    ^ ( nurl_proc_spawn_kill raw sig )
+    ^ ( nurl_proc_spawn_kill ( __proc_raw p ) sig )
 }
 
 // Let go of `p` now rather than at the end of its owner's scope; the

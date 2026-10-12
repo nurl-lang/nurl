@@ -97,9 +97,20 @@
 
 : Shared [T] { s ctl }
 
-@ shared_new [T] T x → ( Shared T ) { ^ @ ( Shared T ) { # s ( rcbox_new [T] x ) } }
+// Built here rather than through rcbox_new: a generic cannot be `inline`,
+// and the extra call copied the whole value once more on its way in.
+@ shared_new [T] T x → ( Shared T ) {
+    : *( RcBox T ) b # *( RcBox T ) ( nurl_alloc Z ( RcBox T ) )
+    = . b owners 1
+    = . b value x
+    ^ @ ( Shared T ) { # s b }
+}
 
-@ shared_zero [T] → ( Shared T ) { ^ @ ( Shared T ) { # s ( rcbox_zero [T] ) } }
+@ shared_zero [T] → ( Shared T ) {
+    : *( RcBox T ) b # *( RcBox T ) ( nurl_zalloc Z ( RcBox T ) )
+    = . b owners 1
+    ^ @ ( Shared T ) { # s b }
+}
 
 @ shared_null [T] → ( Shared T ) { ^ @ ( Shared T ) { # s 0 } }
 

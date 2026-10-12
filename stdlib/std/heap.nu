@@ -92,16 +92,14 @@ $ `stdlib/core/vec.nu`
 @ heap_pop [A] ( Heap A ) h ( @ i A A ) cmp → ?A {
     : i n ( vec_len [A] . h data )
     ? == n 0 { ^ @ ?A { F # A 0 } } {}
-    : *A d ( vec_data [A] . h data )
-    : A root . d 0
-    ( mem_take root )  // the element leaves the heap
-    // Move the last element to the root, forget the (now duplicated) tail
-    // slot, then sift the new root down over the shrunken length.
-    = . d 0 . d - n 1
-    ( vec_set_len [A] . h data - n 1 )
+    // The root trades places with the last element and leaves with it
+    // (vec_pop hands it over, owned); the new root sifts down over the
+    // shrunken length.
+    : b _sw ( vec_swap [A] . h data 0 - n 1 )
+    : ?A root ( vec_pop [A] . h data )
     : i m - n 1
-    ? > m 1 { ( __heap_sift_down [A] d 0 m cmp ) } {}
-    ^ @ ?A { T root }
+    ? > m 1 { ( __heap_sift_down [A] ( vec_data [A] . h data ) 0 m cmp ) } {}
+    ^ root
 }
 
 // Early release: exactly what dropping `h` does (its elements go with it).
