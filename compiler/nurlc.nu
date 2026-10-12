@@ -13290,6 +13290,10 @@ unsafe @ bck_check_lit_moves i lex i line i col s what s tab i scmask s moved s 
         {}
         ? & & ( __thr_is_detach fname ) == arg_idx 0 == bck_arg_tt TT_BACKSLASH { = g_clo_detach 1 } {}
         : i __sx_n0 g_sx_n
+        // (What this function's parameters were read as values before the
+        // argument: a parameter only handed on to an invoke-only parameter
+        // stays invoke-only itself, below.)
+        : s __io_vr0 ( nurl_str_cat ( nurl_sym_get syms `__fn_param_valueread__` ) `` )
         : ~ s arg_sx ``
         : ~ s av ( nurl_str_cat `` `` )
         : ~ s at ( nurl_str_cat `` `` )
@@ -13624,6 +13628,16 @@ unsafe @ bck_check_lit_moves i lex i line i col s what s tab i scmask s moved s 
         ? & ( is_ident_tok bck_arg_tt )
         ( nurl_sym_has_word g_fn_invoke_only call_name ( nurl_str_int arg_idx ) )
         { ( bck_note_closure_caps syms bck_arg_val ( nurl_lex_line lex ) ) }
+        {}
+        // A parameter handed on to a parameter its (compiled) callee only
+        // invokes is not loaded as a value: the wrapper only invokes it too
+        // (`@ serve … handler → … { ^ ( __serve … handler F ) }`), so its
+        // caller may reclaim an inline closure's env and need not count the
+        // closure as kept (§7.4, the thread-shared cycle rule).
+        ? & & ( is_ident_tok bck_arg_tt )
+        ( nurl_sym_has_word g_fn_invoke_only call_name ( nurl_str_int arg_idx ) )
+        >= ( nurl_sym_word_index syms `__fn_param_names__` bck_arg_val ) 0
+        { ( nurl_sym_def syms `__fn_param_valueread__` __io_vr0 ) }
         {}
         // A closure-returning call as the argument hands over the owner it
         // published (mem_retclo_take) — the same reclamation a literal gets.

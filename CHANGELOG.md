@@ -317,6 +317,11 @@ fewer instructions and 9–10 % less time than before this work
     keep-alive loop had already closed, and `h2_conn_new_until` and the
     HTTP/2 client reading a socket they had handed on; those now pass a
     share (`TcpConn_share`).
+  - A parameter a wrapper only hands on to a parameter its callee only
+    invokes (`ws_serve_messages_deflate` → `__ws_serve_messages_deflate`)
+    is invoke-only in the wrapper too. A closure capturing a `TcpConn`
+    handed to such a wrapper beside that connection was taken for a
+    closure stored into it (the thread-shared cycle rule).
   - The inverse-oracle fuzzer (`tools/fuzz/genreject.py`) gains both
     literal cores, and its two view-invalidation cores expect the
     diagnostic the checker gives since the ownership rules became the
