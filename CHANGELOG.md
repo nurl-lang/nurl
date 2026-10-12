@@ -293,7 +293,8 @@ fewer instructions and 9–10 % less time than before this work
     end had released. Every spawn now runs on a copy of the environment
     that owns what the environment only viewed (`nurl_closure_own_copy`:
     a String copied, a handle shared): `nurl_fiber_spawn*`,
-    `nurl_pthread_create_owned`, the signal-handler slot.
+    `nurl_pthread_create_owned`, the signal-handler slot, and the
+    freestanding runtime's spawns (`unikernel/runtime_bare.c`).
   - *An aggregate literal moving a binding into one field while another
     field hands it to a callee that consumes or keeps it* (`^ @ Two { t
     ( wrap t ) }`) made two owners of one value. A literal's fields are
