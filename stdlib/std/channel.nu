@@ -86,10 +86,28 @@ $ `stdlib/core/vec.nu`
 
 $ `stdlib/std/async_ffi.nu`
 
+$ `stdlib/core/rcbox.nu`
+$ `stdlib/core/box.nu`
+
 // ── Internal heap-allocated state ──────────────────────────────────
 
+// What a channel holds, behind the handle's count (a Shared block): its
+// last owner drops the lot — the queue with whatever is still in it, the
+// waiter lists, the lock — and releases the block.
+: ChImpl [A] {
+    Mutex m
+    Cond c
+    ( Vec A ) q  // FIFO: push back, pop front
+    i closed  // 0 = open, 1 = closed
+    ( Vec i ) recv_fibers  // parked fiber handles awaiting recv (FIFO)
+    ( Vec i ) select_waiters  // raw SelectWaiter* of threads in a `?? {}` select
+}
+
+// The counted block as the operations reach it: the owner count the
+// Shared block keeps in front of the value, then the value's fields
+// (stdlib/core/rcbox.nu's RcBox layout).
 : ChannelImpl [A] {
-    i owners  // copies of the handle alive (Channel_share / Channel_drop)
+    i owners  // copies of the handle alive (the Shared count)
     Mutex m
     Cond c
     ( Vec A ) q  // FIFO: push back, pop front
@@ -101,7 +119,7 @@ $ `stdlib/std/async_ffi.nu`
 // A handle every copy of which is the same channel: the producer's and
 // the consumer's copies (a thread closure's capture, a struct field)
 // share it, and the last one to go releases it and anything still queued.
-: Channel [A] { s ctl }
+: Channel [A] { ( Shared ( ChImpl A ) ) ctl }
 
 // Type-erased view of ChannelImpl[A]. Every field of ChannelImpl[A] is
 // exactly one machine word — Mutex / Cond / Vec are single-pointer
@@ -138,15 +156,7 @@ $ `stdlib/std/async_ffi.nu`
 // ── Constructor ────────────────────────────────────────────────────
 
 @ chan_new [A] → ( Channel A ) {
-    : *( ChannelImpl A ) impl # *( ChannelImpl A ) ( nurl_alloc Z ( ChannelImpl A ) )
-    = . impl owners 1
-    = . impl m ( mutex_new )
-    = . impl c ( cond_new )
-    = . impl q ( vec_new [A] )
-    = . impl closed 0
-    = . impl recv_fibers ( vec_new [i] )
-    = . impl select_waiters ( vec_new [i] )
-    ^ @ ( Channel A ) { # s impl }
+    ^ @ ( Channel A ) { ( shared_new [( ChImpl A )] @ ( ChImpl A ) { ( mutex_new ) ( cond_new ) ( vec_new [A] ) 0 ( vec_new [i] ) ( vec_new [i] ) } ) }
 }
 
 // ── Send / receive ─────────────────────────────────────────────────
@@ -157,7 +167,7 @@ $ `stdlib/std/async_ffi.nu`
 // Wakes one parked receiver — a fiber (via unpark) or a pthread
 // (via cond_signal) — depending on which arrived first.
 @ chan_send [A] ( Channel A ) ch A v → b {
-    : *( ChannelImpl A ) impl # *( ChannelImpl A ) . ch ctl
+    : *( ChannelImpl A ) impl # *( ChannelImpl A ) . . ch ctl ctl
     ( mutex_lock . impl m )
     ? != 0 . impl closed {
         ( mutex_unlock . impl m )
@@ -193,7 +203,7 @@ $ `stdlib/std/async_ffi.nu`
 // (worker thread keeps running other fibers). From an OS thread:
 // `cond_wait`s the calling pthread as before.
 @ chan_recv [A] ( Channel A ) ch → ?A {
-    : *( ChannelImpl A ) impl # *( ChannelImpl A ) . ch ctl
+    : *( ChannelImpl A ) impl # *( ChannelImpl A ) . . ch ctl ctl
     ( mutex_lock . impl m )
     ~ & == ( vec_len [A] . impl q ) 0 == . impl closed 0 {
         : i fcur ( nurl_fiber_current )
@@ -229,7 +239,7 @@ $ `stdlib/std/async_ffi.nu`
 // empty (regardless of closed state). Useful for poll-style consumers
 // that interleave channel reads with other work.
 @ chan_try_recv [A] ( Channel A ) ch → ?A {
-    : *( ChannelImpl A ) impl # *( ChannelImpl A ) . ch ctl
+    : *( ChannelImpl A ) impl # *( ChannelImpl A ) . . ch ctl ctl
     ( mutex_lock . impl m )
     ? == ( vec_len [A] . impl q ) 0 {
         ( mutex_unlock . impl m )
@@ -243,7 +253,7 @@ $ `stdlib/std/async_ffi.nu`
 // ── Close + introspection ──────────────────────────────────────────
 
 @ chan_close [A] ( Channel A ) ch → v {
-    : *( ChannelImpl A ) impl # *( ChannelImpl A ) . ch ctl
+    : *( ChannelImpl A ) impl # *( ChannelImpl A ) . . ch ctl ctl
     ( mutex_lock . impl m )
     = . impl closed 1
     // A closed channel is permanently "ready" for select (recv returns
@@ -263,7 +273,7 @@ $ `stdlib/std/async_ffi.nu`
 }
 
 @ chan_len [A] ( Channel A ) ch → i {
-    : *( ChannelImpl A ) impl # *( ChannelImpl A ) . ch ctl
+    : *( ChannelImpl A ) impl # *( ChannelImpl A ) . . ch ctl ctl
     ( mutex_lock . impl m )
     : i n ( vec_len [A] . impl q )
     ( mutex_unlock . impl m )
@@ -271,7 +281,7 @@ $ `stdlib/std/async_ffi.nu`
 }
 
 @ chan_is_closed [A] ( Channel A ) ch → b {
-    : *( ChannelImpl A ) impl # *( ChannelImpl A ) . ch ctl
+    : *( ChannelImpl A ) impl # *( ChannelImpl A ) . . ch ctl ctl
     ( mutex_lock . impl m )
     : b cl != 0 . impl closed
     ( mutex_unlock . impl m )
@@ -281,31 +291,12 @@ $ `stdlib/std/async_ffi.nu`
 // ── Cleanup ────────────────────────────────────────────────────────
 
 @ Channel_share [A] ( Channel A ) ch → ( Channel A ) {
-    : i _old ( nurl_rc_share # *u . ch ctl )
-    ^ @ ( Channel A ) { . ch ctl }
+    ^ @ ( Channel A ) { ( shared_clone [( ChImpl A )] . ch ctl ) }
 }
 
-// The last owner releases the channel and whatever is still queued in it.
-@ Channel_drop [A] sink ( Channel A ) ch → v {
-    ( mem_forget ch )
-    : s p . ch ctl
-    ? == 0 # i p {} {
-        ? != 0 ( nurl_rc_release # *u p ) {
-            : *( ChannelImpl A ) impl # *( ChannelImpl A ) p
-            : ( Vec A ) q . impl q
-            ( mem_take q )
-            : ( Vec i ) rf . impl recv_fibers
-            ( mem_take rf )
-            : ( Vec i ) sw . impl select_waiters
-            ( mem_take sw )
-            : Mutex m . impl m
-            ( mem_take m )
-            : Cond c . impl c
-            ( mem_take c )
-            ( nurl_free p )
-        } {}
-    }
-}
+// The last owner releases the channel and whatever is still queued in it
+// (the Shared field's drop).
+@ Channel_drop [A] sink ( Channel A ) ch → v {}
 
 // Let go of `ch` now rather than at the end of its owner's scope.
 @ chan_free [A] sink ( Channel A ) ch → v {}
@@ -337,31 +328,19 @@ $ `stdlib/std/async_ffi.nu`
 // selecting thread arms it on every channel it waits on, and a sender or
 // closer fires it (__select_waiter_fire). Its block is released by its
 // drop, which the lowering reaches only after every channel let go of it.
-: SelWaiter { s ctl }
+: SelWaiter { ( Box SelectWaiter ) ctl }
 
 @ select_waiter_new → SelWaiter {
-    : *SelectWaiter w # *SelectWaiter ( nurl_alloc Z SelectWaiter )
-    = . w m ( mutex_new )
-    = . w c ( cond_new )
-    = . w fired 0
-    ^ @ SelWaiter { # s w }
+    ^ @ SelWaiter { ( box_new [SelectWaiter] @ SelectWaiter { ( mutex_new ) ( cond_new ) 0 } ) }
 }
 
-@ SelWaiter_drop sink SelWaiter h → v {
-    // This IS the drop: `h` is not dropped again on the way out.
-    ( mem_forget h )
-    : *SelectWaiter w # *SelectWaiter . h ctl
-    : Cond c . w c
-    ( mem_take c )
-    : Mutex m . w m
-    ( mem_take m )
-    ( nurl_free # s w )
-}
+// The block goes with the handle's field (its lock and condvar with it).
+@ SelWaiter_drop sink SelWaiter h → v {}
 
 // Reset the fired flag before a scan iteration arms its channels. Done
 // under the waiter mutex so a fire racing the reset is ordered.
 @ select_waiter_prepare SelWaiter h → v {
-    : *SelectWaiter w # *SelectWaiter . h ctl
+    : *SelectWaiter w ( box_ptr [SelectWaiter] . h ctl )
     ( mutex_lock . w m )
     = . w fired 0
     ( mutex_unlock . w m )
@@ -371,7 +350,7 @@ $ `stdlib/std/async_ffi.nu`
 // loop on `fired`, so a fire that arrives between arming and waiting is
 // not lost (fired is already 1 → no sleep).
 @ select_waiter_wait SelWaiter h → v {
-    : *SelectWaiter w # *SelectWaiter . h ctl
+    : *SelectWaiter w ( box_ptr [SelectWaiter] . h ctl )
     ( mutex_lock . w m )
     ~ == . w fired 0 {
         ( cond_wait . w c . w m )
@@ -380,12 +359,12 @@ $ `stdlib/std/async_ffi.nu`
 }
 
 // Register / unregister the selecting thread's waiter on a channel.
-@ chan_select_arm [A] ( Channel A ) ch SelWaiter h → v { ( __chan_raw_arm # i . ch ctl # i . h ctl ) }
+@ chan_select_arm [A] ( Channel A ) ch SelWaiter h → v { ( __chan_raw_arm ( shared_addr [( ChImpl A )] . ch ctl ) # i ( box_ptr [SelectWaiter] . h ctl ) ) }
 
-@ chan_select_disarm [A] ( Channel A ) ch SelWaiter h → v { ( __chan_raw_disarm # i . ch ctl # i . h ctl ) }
+@ chan_select_disarm [A] ( Channel A ) ch SelWaiter h → v { ( __chan_raw_disarm ( shared_addr [( ChImpl A )] . ch ctl ) # i ( box_ptr [SelectWaiter] . h ctl ) ) }
 
 // Readiness: 0 not ready, 1 a value is queued, 2 closed and drained.
-@ chan_select_poll [A] ( Channel A ) ch → i { ^ ( __chan_raw_poll # i . ch ctl ) }
+@ chan_select_poll [A] ( Channel A ) ch → i { ^ ( __chan_raw_poll ( shared_addr [( ChImpl A )] . ch ctl ) ) }
 
 // Called by a sender / closer (while holding the channel mutex) for
 // each registered selecting thread.

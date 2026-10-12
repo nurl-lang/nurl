@@ -67,8 +67,19 @@
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/pair.nu`
 $ `stdlib/core/string.nu`
+$ `stdlib/core/mem.nu`
+$ `stdlib/core/box.nu`
 
-: HashMap [K V] { s ctl }
+: MapCtl {
+    RawBlock keys
+    RawBlock vals
+    RawBlock states
+    i len
+    i cap
+    i tomb
+}
+
+: HashMap [K V] { ( Box MapCtl ) ctl }
 
 // ── Stock hash + eq for common key types ────────────────────────────
 
@@ -119,18 +130,6 @@ $ `stdlib/core/string.nu`
 
 // ── Internal helpers ────────────────────────────────────────────────
 
-@ __map_keys_raw s ctl → s { ^ # s ( nurl_peek ctl 0 ) }
-
-@ __map_vals_raw s ctl → s { ^ # s ( nurl_peek ctl 1 ) }
-
-@ __map_states_raw s ctl → s { ^ # s ( nurl_peek ctl 2 ) }
-
-@ __map_len_raw s ctl → i { ^ ( nurl_peek ctl 3 ) }
-
-@ __map_cap_raw s ctl → i { ^ ( nurl_peek ctl 4 ) }
-
-@ __map_tomb_raw s ctl → i { ^ ( nurl_peek ctl 5 ) }
-
 // The state byte of an occupied slot: 128 | seven bits of the key's hash
 // (its mixed high bits — the slot index already spends the low ones). A
 // probe compares keys only where the byte matches, so a collision chain is
@@ -139,17 +138,15 @@ $ `stdlib/core/string.nu`
 
 @ __map_occupied i st → b { ^ >= st 128 }
 
-// __map_alloc_buffers: allocate keys/vals/states arrays for `cap` slots
-// and store the raw i8* pointers into ctl[0..2]. States are zalloc'd so
-// every slot starts empty (state == 0). Also writes cap into word 4.
-@ __map_alloc_buffers [K V] s ctl i cap → v {
-    : s keys ( nurl_zalloc ( alloc_size Z K cap ) )
-    : s vals ( nurl_zalloc ( alloc_size Z V cap ) )
-    : s states ( nurl_zalloc ( alloc_size 1 cap ) )
-    ( nurl_poke ctl 0 # i keys )
-    ( nurl_poke ctl 1 # i vals )
-    ( nurl_poke ctl 2 # i states )
-    ( nurl_poke ctl 4 cap )
+// __map_alloc_buffers: fresh zeroed keys/vals/states buffers for `cap`
+// slots (every slot starts empty, state == 0) and the capacity. The old
+// buffers are released as they are replaced; whatever they held must
+// have moved out first.
+@ __map_alloc_buffers [K V] * MapCtl c i cap → v {
+    = . c keys ( raw_block_zero ( alloc_size Z K cap ) )
+    = . c vals ( raw_block_zero ( alloc_size Z V cap ) )
+    = . c states ( raw_block_zero cap )
+    = . c cap cap
 }
 
 // __map_probe_for: linear-probe scan starting at hash & mask.
@@ -160,13 +157,13 @@ $ `stdlib/core/string.nu`
 //   The map_set caller resizes proactively before probing, so this loop
 //   always finds either a match, an empty slot, or a tombstone within
 //   cap iterations; the "table full" case never occurs in practice.
-@ __map_probe_for [K V] s ctl K key i h ( @ b K K ) eq_fn → i {
-    : i cap ( __map_cap_raw ctl )
+@ __map_probe_for [K V] * MapCtl c K key i h ( @ b K K ) eq_fn → i {
+    : i cap . c cap
     : i mask - cap 1
     : i start & h mask
     : i frag ( __map_frag h )
-    : *K keys # *K ( nurl_peek ctl 0 )
-    : *u states # *u ( nurl_peek ctl 2 )
+    : *K keys # *K ( raw_block_ptr . c keys )
+    : *u states # *u ( raw_block_ptr . c states )
     : ~ i first_free -1
     : ~ i probe 0
     : ~ i result -1
@@ -199,25 +196,25 @@ $ `stdlib/core/string.nu`
 }
 
 // __map_grow: rehash into a buffer with `target_cap` (rounded up to a
-// power of two ≥ 8 ≥ target). Tombstones are dropped during rehash.
-@ __map_grow [K V] s ctl i target_cap ( @ i K ) hash_fn → v {
-    : i old_cap ( __map_cap_raw ctl )
+// power of two ≥ 8 ≥ target). Tombstones are dropped during rehash. The
+// entries move bitwise into the new buffers; the old ones are released
+// after, holding nothing they own any more.
+@ __map_grow [K V] * MapCtl c i target_cap ( @ i K ) hash_fn → v {
+    : i old_cap . c cap
     : i new_cap ( alloc_grow_pow2 old_cap target_cap 8 )
-    // Snapshot old buffers (raw i8* + typed views).
-    : s old_keys_raw ( __map_keys_raw ctl )
-    : s old_vals_raw ( __map_vals_raw ctl )
-    : s old_states_raw ( __map_states_raw ctl )
-    : *K old_keys # *K old_keys_raw
-    : *V old_vals # *V old_vals_raw
-    : *u old_states # *u old_states_raw
-    // Allocate fresh buffers; reset len + tombstones.
-    ( __map_alloc_buffers [K V] ctl new_cap )
-    ( nurl_poke ctl 3 0 )
-    ( nurl_poke ctl 5 0 )
+    : RawBlock okb ( mem_replace [RawBlock] . c keys ( raw_block_zero ( alloc_size Z K new_cap ) ) )
+    : RawBlock ovb ( mem_replace [RawBlock] . c vals ( raw_block_zero ( alloc_size Z V new_cap ) ) )
+    : RawBlock osb ( mem_replace [RawBlock] . c states ( raw_block_zero new_cap ) )
+    = . c cap new_cap
+    = . c len 0
+    = . c tomb 0
+    : *K old_keys # *K ( raw_block_ptr okb )
+    : *V old_vals # *V ( raw_block_ptr ovb )
+    : *u old_states # *u ( raw_block_ptr osb )
     : i mask - new_cap 1
-    : *K new_keys # *K ( nurl_peek ctl 0 )
-    : *V new_vals # *V ( nurl_peek ctl 1 )
-    : *u new_states # *u ( nurl_peek ctl 2 )
+    : *K new_keys # *K ( raw_block_ptr . c keys )
+    : *V new_vals # *V ( raw_block_ptr . c vals )
+    : *u new_states # *u ( raw_block_ptr . c states )
     : ~ i new_len 0
     : ~ i i 0
     ~ < i old_cap {
@@ -234,87 +231,85 @@ $ `stdlib/core/string.nu`
         } {}
         = i + i 1
     }
-    ( nurl_poke ctl 3 new_len )
-    // Free old buffers if any existed.
-    ? != 0 # i old_keys_raw { ( nurl_free old_keys_raw ) } {}
-    ? != 0 # i old_vals_raw { ( nurl_free old_vals_raw ) } {}
-    ? != 0 # i old_states_raw { ( nurl_free old_states_raw ) } {}
+    = . c len new_len
+}
+
+@ __map_ctl_new → ( Box MapCtl ) {
+    ^ ( box_new [MapCtl] @ MapCtl { ( raw_block 0 ) ( raw_block 0 ) ( raw_block 0 ) 0 0 0 } )
 }
 
 // ── Constructors ────────────────────────────────────────────────────
 
 @ map_new [K V] → ( HashMap K V ) {
-    : s ctl ( nurl_zalloc 48 )
-    ^ @ ( HashMap K V ) { ctl }
+    ^ @ ( HashMap K V ) { ( __map_ctl_new ) }
 }
 
 @ map_with_cap [K V] i n ( @ i K ) hash_fn → ( HashMap K V ) {
-    : s ctl ( nurl_zalloc 48 )
-    : i want ? > n 0 n 0
-    ? > want 0 { ( __map_grow [K V] ctl want hash_fn ) } {}
-    ^ @ ( HashMap K V ) { ctl }
+    : ( HashMap K V ) m @ ( HashMap K V ) { ( __map_ctl_new ) }
+    ? > n 0 { ( __map_grow [K V] ( box_ptr [MapCtl] . m ctl ) n hash_fn ) } {}
+    ^ m
 }
 
 // ── Inspectors ──────────────────────────────────────────────────────
 
 @ map_len [K V] ( HashMap K V ) m → i {
-    ^ ( __map_len_raw . m ctl )
+    ^ . ( box_ptr [MapCtl] . m ctl ) len
 }
 
 @ map_cap [K V] ( HashMap K V ) m → i {
-    ^ ( __map_cap_raw . m ctl )
+    ^ . ( box_ptr [MapCtl] . m ctl ) cap
 }
 
 @ map_is_empty [K V] ( HashMap K V ) m → b {
-    ^ == ( __map_len_raw . m ctl ) 0
+    ^ == . ( box_ptr [MapCtl] . m ctl ) len 0
 }
 
 // ── Lookup ──────────────────────────────────────────────────────────
 
 @ map_get [K V] ( HashMap K V ) m K key ( @ i K ) hash_fn ( @ b K K ) eq_fn → ?V {
-    : s ctl . m ctl
-    ? == ( __map_cap_raw ctl ) 0
+    : *MapCtl c ( box_ptr [MapCtl] . m ctl )
+    ? == . c cap 0
     { ^ @ ?V { F # V 0 } }
     {}
-    : i slot ( __map_probe_for [K V] ctl key ( hash_fn key ) eq_fn )
+    : i slot ( __map_probe_for [K V] c key ( hash_fn key ) eq_fn )
     ? < slot 0
     { ^ @ ?V { F # V 0 } }
     {}
-    : *V vals # *V ( nurl_peek ctl 1 )
+    : *V vals # *V ( raw_block_ptr . c vals )
     ^ @ ?V { T . vals slot }
 }
 
 @ map_contains [K V] ( HashMap K V ) m K key ( @ i K ) hash_fn ( @ b K K ) eq_fn → b {
-    : s ctl . m ctl
-    ? == ( __map_cap_raw ctl ) 0
+    : *MapCtl c ( box_ptr [MapCtl] . m ctl )
+    ? == . c cap 0
     { ^ F }
     {}
-    : i slot ( __map_probe_for [K V] ctl key ( hash_fn key ) eq_fn )
+    : i slot ( __map_probe_for [K V] c key ( hash_fn key ) eq_fn )
     ^ >= slot 0
 }
 
 // ── Mutation ────────────────────────────────────────────────────────
 
 @ map_set [K V] ( HashMap K V ) m K key V val ( @ i K ) hash_fn ( @ b K K ) eq_fn → ?V {
-    : s ctl . m ctl
+    : *MapCtl c ( box_ptr [MapCtl] . m ctl )
     // Lazy first allocation.
-    ? == ( __map_cap_raw ctl ) 0
-    { ( __map_grow [K V] ctl 8 hash_fn ) }
+    ? == . c cap 0
+    { ( __map_grow [K V] c 8 hash_fn ) }
     {}
     // Resize if (len + tomb + 1) * 4 ≥ cap * 3 (≈75% load factor).
-    : i len0 ( __map_len_raw ctl )
-    : i tomb0 ( __map_tomb_raw ctl )
-    : i cap0 ( __map_cap_raw ctl )
+    : i len0 . c len
+    : i tomb0 . c tomb
+    : i cap0 . c cap
     ? >= * + + len0 tomb0 1 4 * cap0 3
-    { ( __map_grow [K V] ctl * cap0 2 hash_fn ) }
+    { ( __map_grow [K V] c * cap0 2 hash_fn ) }
     {}
 
     // Probe in (possibly resized) table.
     : i h ( hash_fn key )
-    : i slot ( __map_probe_for [K V] ctl key h eq_fn )
-    : *K keys # *K ( nurl_peek ctl 0 )
-    : *V vals # *V ( nurl_peek ctl 1 )
-    : *u states # *u ( nurl_peek ctl 2 )
+    : i slot ( __map_probe_for [K V] c key h eq_fn )
+    : *K keys # *K ( raw_block_ptr . c keys )
+    : *V vals # *V ( raw_block_ptr . c vals )
+    : *u states # *u ( raw_block_ptr . c states )
     ? >= slot 0
     { : V prev . vals slot
         // The old value leaves the map: the caller owns it.
@@ -327,26 +322,26 @@ $ `stdlib/core/string.nu`
         = . keys ins key
         = . vals ins val
         = . states ins # u ( __map_frag h )
-        ( nurl_poke ctl 3 + ( __map_len_raw ctl ) 1 )
+        = . c len + . c len 1
         ? == st_old 1
-        { ( nurl_poke ctl 5 - ( __map_tomb_raw ctl ) 1 ) }
+        { = . c tomb - . c tomb 1 }
         {}
         ^ @ ?V { F # V 0 }
     }
 }
 
 @ map_remove [K V] ( HashMap K V ) m K key ( @ i K ) hash_fn ( @ b K K ) eq_fn → ?V {
-    : s ctl . m ctl
-    ? == ( __map_cap_raw ctl ) 0
+    : *MapCtl c ( box_ptr [MapCtl] . m ctl )
+    ? == . c cap 0
     { ^ @ ?V { F # V 0 } }
     {}
-    : i slot ( __map_probe_for [K V] ctl key ( hash_fn key ) eq_fn )
+    : i slot ( __map_probe_for [K V] c key ( hash_fn key ) eq_fn )
     ? < slot 0
     { ^ @ ?V { F # V 0 } }
     {}
-    : *V vals # *V ( nurl_peek ctl 1 )
-    : *u states # *u ( nurl_peek ctl 2 )
-    : *K keys # *K ( nurl_peek ctl 0 )
+    : *V vals # *V ( raw_block_ptr . c vals )
+    : *u states # *u ( raw_block_ptr . c states )
+    : *K keys # *K ( raw_block_ptr . c keys )
     // The stored key leaves with its entry (dropped here); the value is
     // handed to the caller.
     : K gone . keys slot
@@ -354,8 +349,8 @@ $ `stdlib/core/string.nu`
     : V prev . vals slot
     ( mem_take prev )
     = . states slot # u 1
-    ( nurl_poke ctl 3 - ( __map_len_raw ctl ) 1 )
-    ( nurl_poke ctl 5 + ( __map_tomb_raw ctl ) 1 )
+    = . c len - . c len 1
+    = . c tomb + . c tomb 1
     ^ @ ?V { T prev }
 }
 
@@ -363,17 +358,16 @@ $ `stdlib/core/string.nu`
 
 // What dropping a map does (its owner does it at scope exit — docs/
 // MEMORY.md §7.6): every entry's key and value are dropped (no work, and
-// no loop, for ones that own nothing), then the buffers and the handle.
+// no loop, for ones that own nothing); the record and its buffers go with
+// the handle's field.
 @ HashMap_drop [K V] sink ( HashMap K V ) m → v {
-    // This IS the drop: `m` is not dropped again on the way out.
-    ( mem_forget m )
-    : s ctl . m ctl
-    ? == 0 # i ctl { ^ } {}
-    : i cap ( __map_cap_raw ctl )
+    ? ( box_is_null [MapCtl] . m ctl ) { ^ } {}
+    : *MapCtl c ( box_ptr [MapCtl] . m ctl )
+    : i cap . c cap
     ? > cap 0 {
-        : *K keys # *K ( nurl_peek ctl 0 )
-        : *V vals # *V ( nurl_peek ctl 1 )
-        : *u states # *u ( nurl_peek ctl 2 )
+        : *K keys # *K ( raw_block_ptr . c keys )
+        : *V vals # *V ( raw_block_ptr . c vals )
+        : *u states # *u ( raw_block_ptr . c states )
         : ~ i i 0
         ~ < i cap {
             ? ( __map_occupied # i . states i ) {
@@ -385,13 +379,6 @@ $ `stdlib/core/string.nu`
             = i + i 1
         }
     } {}
-    : s keys ( __map_keys_raw ctl )
-    : s vals ( __map_vals_raw ctl )
-    : s states ( __map_states_raw ctl )
-    ? != 0 # i keys { ( nurl_free keys ) } {}
-    ? != 0 # i vals { ( nurl_free vals ) } {}
-    ? != 0 # i states { ( nurl_free states ) } {}
-    ( nurl_free ctl )
 }
 
 // What the reference-count cycle collector sees in a map (docs/MEMORY.md
@@ -404,17 +391,18 @@ $ `stdlib/core/string.nu`
 // — a String deep, an integer as is), at the same slot layout: no rehash.
 // What a borrowed map stored into an owner becomes (docs/MEMORY.md §7.6).
 @ HashMap_clone [K V] ( HashMap K V ) m → ( HashMap K V ) {
-    : s sctl . m ctl
-    : s dctl ( nurl_zalloc 48 )
-    : i cap ? == 0 # i sctl 0 ( __map_cap_raw sctl )
+    : *MapCtl sc ( box_ptr [MapCtl] . m ctl )
+    : ( HashMap K V ) out @ ( HashMap K V ) { ( __map_ctl_new ) }
+    : *MapCtl dc ( box_ptr [MapCtl] . out ctl )
+    : i cap . sc cap
     ? > cap 0 {
-        ( __map_alloc_buffers [K V] dctl cap )
-        : *K skeys # *K ( nurl_peek sctl 0 )
-        : *V svals # *V ( nurl_peek sctl 1 )
-        : *u sstates # *u ( nurl_peek sctl 2 )
-        : *K dkeys # *K ( nurl_peek dctl 0 )
-        : *V dvals # *V ( nurl_peek dctl 1 )
-        : *u dstates # *u ( nurl_peek dctl 2 )
+        ( __map_alloc_buffers [K V] dc cap )
+        : *K skeys # *K ( raw_block_ptr . sc keys )
+        : *V svals # *V ( raw_block_ptr . sc vals )
+        : *u sstates # *u ( raw_block_ptr . sc states )
+        : *K dkeys # *K ( raw_block_ptr . dc keys )
+        : *V dvals # *V ( raw_block_ptr . dc vals )
+        : *u dstates # *u ( raw_block_ptr . dc states )
         : ~ i i 0
         ~ < i cap {
             = . dstates i . sstates i
@@ -426,10 +414,10 @@ $ `stdlib/core/string.nu`
             } {}
             = i + i 1
         }
-        ( nurl_poke dctl 3 ( __map_len_raw sctl ) )
-        ( nurl_poke dctl 5 ( __map_tomb_raw sctl ) )
+        = . dc len . sc len
+        = . dc tomb . sc tomb
     } {}
-    ^ @ ( HashMap K V ) { dctl }
+    ^ out
 }
 
 // Early release: exactly what dropping `m` does (HashMap_drop).
@@ -438,12 +426,12 @@ $ `stdlib/core/string.nu`
 // ── Higher-order ────────────────────────────────────────────────────
 
 @ map_each [K V] ( HashMap K V ) m ( @ v K V ) f → v {
-    : s ctl . m ctl
-    : i cap ( __map_cap_raw ctl )
+    : *MapCtl c ( box_ptr [MapCtl] . m ctl )
+    : i cap . c cap
     ? > cap 0 {
-        : *K keys # *K ( nurl_peek ctl 0 )
-        : *V vals # *V ( nurl_peek ctl 1 )
-        : *u states # *u ( nurl_peek ctl 2 )
+        : *K keys # *K ( raw_block_ptr . c keys )
+        : *V vals # *V ( raw_block_ptr . c vals )
+        : *u states # *u ( raw_block_ptr . c states )
         : ~ i i 0
         ~ < i cap {
             ? ( __map_occupied # i . states i )
@@ -455,13 +443,13 @@ $ `stdlib/core/string.nu`
 }
 
 @ map_fold [K V B] ( HashMap K V ) m B init ( @ B B K V ) f → B {
-    : s ctl . m ctl
-    : i cap ( __map_cap_raw ctl )
+    : *MapCtl c ( box_ptr [MapCtl] . m ctl )
+    : i cap . c cap
     : ~ B acc init
     ? > cap 0 {
-        : *K keys # *K ( nurl_peek ctl 0 )
-        : *V vals # *V ( nurl_peek ctl 1 )
-        : *u states # *u ( nurl_peek ctl 2 )
+        : *K keys # *K ( raw_block_ptr . c keys )
+        : *V vals # *V ( raw_block_ptr . c vals )
+        : *u states # *u ( raw_block_ptr . c states )
         : ~ i i 0
         ~ < i cap {
             ? ( __map_occupied # i . states i )
@@ -477,13 +465,13 @@ $ `stdlib/core/string.nu`
 // (depends on probe layout). Trivial K only — for owned-key maps the
 // result aliases the map; clone keys yourself via map_each.
 @ map_keys [K V] ( HashMap K V ) m → ( Vec K ) {
-    : s ctl . m ctl
-    : i cap ( __map_cap_raw ctl )
-    : i len ( __map_len_raw ctl )
+    : *MapCtl c ( box_ptr [MapCtl] . m ctl )
+    : i cap . c cap
+    : i len . c len
     : ( Vec K ) out ( vec_with_cap [K] len )
     ? > cap 0 {
-        : *K keys # *K ( nurl_peek ctl 0 )
-        : *u states # *u ( nurl_peek ctl 2 )
+        : *K keys # *K ( raw_block_ptr . c keys )
+        : *u states # *u ( raw_block_ptr . c states )
         : ~ i i 0
         ~ < i cap {
             ? ( __map_occupied # i . states i )
@@ -498,7 +486,8 @@ $ `stdlib/core/string.nu`
 // Lazy iterator over occupied (key, value) pairs. The iterator BORROWS
 // the map — do not mutate the map while iterating, and do NOT free the
 // map until iteration is finished. cmd=1 only releases the iterator's
-// own state; the caller still owns the map.
+// own state (the closure releases it anyway); the caller still owns the
+// map.
 //
 // Element type is ( Pair K V ). The Pair fields are bitwise-copies of
 // the slot contents, so the same trivial-only caveat as map_keys /
@@ -506,22 +495,19 @@ $ `stdlib/core/string.nu`
 // Pair fields alias the map's storage. Use map_each + a manual Vec
 // build with explicit clones if you need owned copies.
 //
-// State layout: [walk_idx] (8 bytes; current slot index 0..cap).
+// State: the slot index the walk has reached, in a Box the closure owns
+// (released with it).
 @ map_iter [K V] ( HashMap K V ) m → ( @ ?( Pair K V ) i ) {
-    : s st ( nurl_zalloc 8 )
-    ( nurl_poke st 0 0 )
-    : s ctl . m ctl
-    : i cap ( __map_cap_raw ctl )
+    : ( Box i ) st ( box_new [i] 0 )
+    : *MapCtl c ( box_ptr [MapCtl] . m ctl )
+    : i cap . c cap
     ^ \ i cmd → ?( Pair K V ) {
-        ? == cmd 1 {
-            ( nurl_free st )
-            ^ @ ?( Pair K V ) { F # ( Pair K V ) 0 }
-        } {}
+        ? == cmd 1 { ^ @ ?( Pair K V ) { F # ( Pair K V ) 0 } } {}
         ? == cap 0 { ^ @ ?( Pair K V ) { F # ( Pair K V ) 0 } } {}
-        : *K keys # *K ( nurl_peek ctl 0 )
-        : *V vals # *V ( nurl_peek ctl 1 )
-        : *u states # *u ( nurl_peek ctl 2 )
-        : ~ i idx ( nurl_peek st 0 )
+        : *K keys # *K ( raw_block_ptr . c keys )
+        : *V vals # *V ( raw_block_ptr . c vals )
+        : *u states # *u ( raw_block_ptr . c states )
+        : ~ i idx ( box_get [i] st )
         : ~ b found F
         : ~ ? ( Pair K V ) out @ ?( Pair K V ) { F # ( Pair K V ) 0 }
         ~ & ! found < idx cap {
@@ -533,20 +519,20 @@ $ `stdlib/core/string.nu`
             } {}
             = idx + idx 1
         }
-        ( nurl_poke st 0 idx )
+        ( box_set [i] st idx )
         ^ out
     }
 }
 
 // Bitwise-copy occupied values into a fresh Vec[V]. Same caveat as map_keys.
 @ map_values [K V] ( HashMap K V ) m → ( Vec V ) {
-    : s ctl . m ctl
-    : i cap ( __map_cap_raw ctl )
-    : i len ( __map_len_raw ctl )
+    : *MapCtl c ( box_ptr [MapCtl] . m ctl )
+    : i cap . c cap
+    : i len . c len
     : ( Vec V ) out ( vec_with_cap [V] len )
     ? > cap 0 {
-        : *V vals # *V ( nurl_peek ctl 1 )
-        : *u states # *u ( nurl_peek ctl 2 )
+        : *V vals # *V ( raw_block_ptr . c vals )
+        : *u states # *u ( raw_block_ptr . c states )
         : ~ i i 0
         ~ < i cap {
             ? ( __map_occupied # i . states i )
@@ -574,18 +560,18 @@ $ `stdlib/core/string.nu`
 // `\ String s → String { ^ ( string_clone s ) }`, etc.). The source map
 // is left untouched; the caller owns both maps.
 @ map_clone_with [K V] ( HashMap K V ) m ( @ K K ) clone_k ( @ V V ) clone_v → ( HashMap K V ) {
-    : s sctl . m ctl
+    : *MapCtl sc ( box_ptr [MapCtl] . m ctl )
     : ( HashMap K V ) out ( map_new [K V] )
-    : s dctl . out ctl
-    : i cap ( __map_cap_raw sctl )
+    : *MapCtl dc ( box_ptr [MapCtl] . out ctl )
+    : i cap . sc cap
     ? > cap 0 {
-        ( __map_alloc_buffers [K V] dctl cap )
-        : *K skeys # *K ( nurl_peek sctl 0 )
-        : *V svals # *V ( nurl_peek sctl 1 )
-        : *u sstates # *u ( nurl_peek sctl 2 )
-        : *K dkeys # *K ( nurl_peek dctl 0 )
-        : *V dvals # *V ( nurl_peek dctl 1 )
-        : *u dstates # *u ( nurl_peek dctl 2 )
+        ( __map_alloc_buffers [K V] dc cap )
+        : *K skeys # *K ( raw_block_ptr . sc keys )
+        : *V svals # *V ( raw_block_ptr . sc vals )
+        : *u sstates # *u ( raw_block_ptr . sc states )
+        : *K dkeys # *K ( raw_block_ptr . dc keys )
+        : *V dvals # *V ( raw_block_ptr . dc vals )
+        : *u dstates # *u ( raw_block_ptr . dc states )
         : ~ i i 0
         ~ < i cap {
             = . dstates i . sstates i
@@ -597,8 +583,8 @@ $ `stdlib/core/string.nu`
             } {}
             = i + i 1
         }
-        ( nurl_poke dctl 3 ( __map_len_raw sctl ) )
-        ( nurl_poke dctl 5 ( __map_tomb_raw sctl ) )
+        = . dc len . sc len
+        = . dc tomb . sc tomb
     } {}
     ^ out
 }

@@ -143,6 +143,16 @@ fewer instructions and 9–10 % less time than before this work
   - `Deque` keeps a boxed control record whose buffer is a `RawBlock`.
   - `Arena` keeps its chunks in a Vec of `RawBlock`s; `arena_reset`
     truncates it.
+  - `Set` and `HashMap` keep a boxed control record whose key, value and
+    state buffers are `RawBlock`s; a rehash moves the entries out of the
+    old buffers before they go.
+  - `Channel` is a `( Shared ChImpl )`: the last owner drops the queue,
+    the waiter lists and the lock with the block. A select waiter is a
+    `Box`.
+  - Outside the primitives that implement ownership (Vec, String, Box,
+    RawBlock, the counted block behind `Shared`, Rc and Arc) only BTree
+    and the compiler's symbol table release memory themselves; the
+    containers above only move elements out of their buffers.
   - `raw_block_zero` gives zeroed raw memory.
 - **`TcpConn` and `TcpListener` close themselves.** Each is a handle over
   a counted block: every copy is the same socket, and its last owner
