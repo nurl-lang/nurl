@@ -1,5 +1,7 @@
 // sand.nu — Interaktiivinen Falling Sand -simulaatio
 
+$ `stdlib/core/mem.nu`
+
 & `libc` @ rand → i
 
 & `canvas` @ canvas_open i w i h → *i
@@ -27,7 +29,8 @@ unsafe @ main → i {
     : i total_px * W H
 
     // Simulaatioverkko: 0 = tyhjä, 1 = hiekka
-    : *i grid # *i ( malloc * total_px 8 )
+    : RawBlock grid__blk ( raw_block * total_px 8 )
+    : *i grid # *i ( raw_block_ptr grid__blk )
 
     // Alustetaan verkko tyhjäksi
     : ~ i i 0
@@ -136,6 +139,5 @@ unsafe @ main → i {
     }
 
     ( canvas_close )
-    ( free # s grid )
     ^ 0
 }

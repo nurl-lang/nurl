@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.5.4] — 2026-10-12
+
+Requires NURL 0.73.0, in which a field written through a raw pointer
+drops what it held, a mutable module global may own a `String`, a `Vec`
+or a handle, and a foreign function may take an `inout` parameter.
+The published 0.5.3 does not compile under it.
+
+### Changed
+
+- The evaluation jobs of a batch are values in a `Vec` the batch owns
+  (each job reads the caller's series and point as views and writes its
+  slot of the answers), the worker lanes are closures over the batch's
+  address, and a prepare job's state-space form is a `Box` in its job.
+  The fit's per-model contexts and optimizer states are `Box`es in the
+  fit's tables, and the objective's parameter block is a `Box` too. All of
+  it was raw memory allocated and released by hand; none of it is now.
+- Requires gpu 0.16.
+
 ## [0.5.3] — 2026-10-11
 
 Requires NURL 0.73.0, which allows `mem_forget`, `mem_take` and the

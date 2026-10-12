@@ -85,7 +85,7 @@ $ `stdlib/core/rcbox.nu`
     i ngroups  // capture groups, numbered by opening paren
 }
 
-: Regex { s ctl }
+: Regex { ( Shared RegexImpl ) ctl }
 
 // Parser state — a local of regex_compile the parser advances in place
 // (`inout`); its tables move into the compiled pattern.
@@ -594,16 +594,12 @@ $ `stdlib/core/rcbox.nu`
     ( __rx_patch_exit p ( __frag_exit frag ) match_state )
     : i start_idx ( __frag_entry frag )
     // The parser's tables move into the pattern.
-    : i box ( rcbox_new [RegexImpl] @ RegexImpl { . p states . p classes . p class_starts start_idx . p ngroups } )
-    ^ @ !Regex ParseErr { T @ Regex { # s box } }
+    ^ @ !Regex ParseErr { T @ Regex { ( shared_new [RegexImpl] @ RegexImpl { . p states . p classes . p class_starts start_idx . p ngroups } ) } }
 }
 
-@ Regex_share Regex r → Regex { ^ @ Regex { # s ( rcbox_share # i . r ctl ) } }
+@ Regex_share Regex r → Regex { ^ @ Regex { ( shared_clone [RegexImpl] . r ctl ) } }
 
-@ Regex_drop sink Regex r → v {
-    ( mem_forget r )
-    ( rcbox_release [RegexImpl] # i . r ctl )
-}
+@ Regex_drop sink Regex r → v {}
 
 // Let go of `r` now rather than at the end of its owner's scope.
 @ regex_free sink Regex r → v {}
@@ -710,14 +706,14 @@ $ `stdlib/core/rcbox.nu`
 }
 
 @ __rx_nstates Regex r → i {
-    : *RegexImpl impl ( rcbox_ptr [RegexImpl] # i . r ctl )
+    : *RegexImpl impl ( shared_ptr [RegexImpl] . r ctl )
     ^ / ( vec_len [i] . impl states ) 4
 }
 
 // Capture groups in the pattern. Group `k` occupies slots 2k and 2k+1;
 // slots 0 and 1 are the whole match, filled in by the caller.
 @ regex_ngroups Regex r → i {
-    : *RegexImpl impl ( rcbox_ptr [RegexImpl] # i . r ctl )
+    : *RegexImpl impl ( shared_ptr [RegexImpl] . r ctl )
     ^ . impl ngroups
 }
 
@@ -755,7 +751,7 @@ $ `stdlib/core/rcbox.nu`
 // the winning thread's capture slots (absolute offsets, -1 for a group
 // that did not take part).
 @ __rx_run_at Regex r s text i text_len i text_pos RxScratch sc → i {
-    : *RegexImpl impl ( rcbox_ptr [RegexImpl] # i . r ctl )
+    : *RegexImpl impl ( shared_ptr [RegexImpl] . r ctl )
     : ( Vec i ) states . impl states
     : ( Vec i ) classes . impl classes
     : ( Vec i ) class_starts . impl class_starts

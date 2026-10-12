@@ -6,20 +6,23 @@
 // dependency chain of loads and adds.
 //
 // NURL has no fixed-size stack array: the 16-slot batch lives in a
-// `malloc`ed `*u64` block, where the C and Rust peers use
-// `uint64_t values[16]` / `[u64; 16]` on the stack.
+// `*u64` block (a `RawBlock`: malloc'd, released when it goes), where the
+// C and Rust peers use `uint64_t values[16]` / `[u64; 16]` on the stack.
 //
 // Contract: the process prints exactly one line — the checksum in
 // decimal, masked to 63 bits — and nothing else. `bench/bench.sh` gates
 // on all five language implementations printing the same line before it
 // reports a single timing number for the row.
 
+$ `stdlib/core/mem.nu`
+
 unsafe @ main → i {
     // The workload multiplier: bench/wasmbench.sh --scale N rewrites this 1.
     : u64 BENCH_SCALE 1
     : i width 16
     : u64 batches * 1000000 BENCH_SCALE
-    : *u64 values # *u64 ( malloc * width 8 )
+    : RawBlock values__blk ( raw_block * width 8 )
+    : *u64 values # *u64 ( raw_block_ptr values__blk )
     : ~ i z 0
     ~ < z width {
         = . values z # u64 0
@@ -49,7 +52,6 @@ unsafe @ main → i {
     }
 
     : u64 result ^^ state checksum
-    ( free values )
     ( nurl_println_int # i & result 0x7fffffffffffffff )
     ^ 0
 }

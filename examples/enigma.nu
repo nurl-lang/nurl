@@ -6,7 +6,7 @@
 // - Prefix hell and literal-match fallthrough
 // - Borrowed foreach slices
 
-& `libc` @ malloc i → *v
+$ `stdlib/core/box.nu`
 
 : O { i _ i __ }
 : P { O ___ [i ____ }
@@ -32,11 +32,7 @@
     }
 }
 
-unsafe @ sys::b N n → *N {
-    : *N p # *N ( malloc Z N )
-    = . p 0 n
-    ^ p
-}
+unsafe @ sys::b N n → ( Box N ) { ^ ( box_new [N] n ) }
 
 unsafe @ sys::e * N n i a → !i i {
     ^ ?? . n 0 {
@@ -76,9 +72,12 @@ unsafe @ main → i {
     : i tx ( x p 3 )
 
     // Allocate recursive enum nodes on the heap
-    : *N n1 ( sys::b @ N { A 7 3 } )
-    : *N n2 ( sys::b @ N { B n1 } )
-    : *N n3 ( sys::b @ N { C 9 } )
+    : ( Box N ) b1 ( sys::b @ N { A 7 3 } )
+    : *N n1 # *N ( box_ptr [N] b1 )
+    : ( Box N ) b2 ( sys::b @ N { B n1 } )
+    : *N n2 # *N ( box_ptr [N] b2 )
+    : ( Box N ) b3 ( sys::b @ N { C 9 } )
+    : *N n3 # *N ( box_ptr [N] b3 )
 
     : !i i r1 ( sys::e n2 2 )
     : !i i r2 ( sys::e n3 5 )
@@ -109,10 +108,7 @@ unsafe @ main → i {
     ( nurl_print ( nurl_str_int k ) )
     ( nurl_print `\n` )
 
-    // Heap nodes are raw malloc memory: free them by hand
-    ( free # s n3 )
-    ( free # s n2 )
-    ( free # s n1 )
+    // The heap nodes are boxes: they go when main returns
 
     ^ 0
 }

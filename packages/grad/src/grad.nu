@@ -40,6 +40,7 @@ $ `stdlib/std/float.nu`
 $ `deps/tensor/src/tensor.nu`
 $ `deps/tensor/src/ops.nu`
 $ `stdlib/std/arc.nu`
+$ `stdlib/core/box.nu`
 
 // ── op codes ──────────────────────────────────────────────────────────
 @ gop_param → i { ^ 0 }
@@ -106,9 +107,9 @@ $ `stdlib/std/arc.nu`
 : GTapeImpl {
     i ok  // 1 healthy · 0 poisoned (shape mismatch etc.)
     ( Vec GNode ) nodes
-    ( Vec s ) vals  // *Tensor per node (tape-owned)
-    ( Vec s ) grads  // *Tensor per node, 0 until backward touches it
-    ( Vec s ) aux  // *GAux per node, 0 for ops that need none (slice starts)
+    ( Vec ( Box Tensor ) ) vals  // the value per node (a box: its address is stable)
+    ( Vec ( Box Tensor ) ) grads  // the gradient per node, an empty box until backward touches it
+    ( Vec ( Box GAux ) ) aux  // per node, an empty box for ops that need none (slice starts)
 }
 
 // A GTape is a handle on its state in an Arc (stdlib/std/arc.nu):
@@ -122,22 +123,6 @@ $ `stdlib/std/arc.nu`
 // The state, for this package's own code.
 unsafe @ _GTape_ptr GTape h → *GTapeImpl { ^ ( arc_ptr [GTapeImpl] . h a ) }
 
-// The arena's raw cells — the *Tensor value / gradient per node and the
-// *GAux blocks — are the tape's own heap memory: its last owner releases
-// them here, and the node / pointer vecs after (drop glue).
-% Drop GTapeImpl {
-    unsafe @ drop GTapeImpl x → v {
-        : i n ( vec_len [s] . x vals )
-        : ~ i k 0
-        ~ < k n {
-            ( _g_tfree ?? ( vec_get [s] . x vals k ) { T y → y F → # s 0 } )
-            ( _g_tfree ?? ( vec_get [s] . x grads k ) { T y → y F → # s 0 } )
-            ( _g_auxfree ?? ( vec_get [s] . x aux k ) { T y → y F → # s 0 } )
-            = k + k 1
-        }
-    }
-}
-
 // Per-node auxiliary payload (only g_slice uses one today).
 : GAux {
     ( Vec i ) starts
@@ -149,32 +134,15 @@ unsafe @ tape_new → GTape {
     : ~ GTapeImpl tp @ GTapeImpl {}
     = . tp ok 1
     = . tp nodes ( vec_new [GNode] )
-    = . tp vals ( vec_new [s] )
-    = . tp grads ( vec_new [s] )
-    = . tp aux ( vec_new [s] )
+    = . tp vals ( vec_new [( Box Tensor )] )
+    = . tp grads ( vec_new [( Box Tensor )] )
+    = . tp aux ( vec_new [( Box GAux )] )
     ^ @ GTape { ( arc_new [GTapeImpl] tp ) }
-}
-
-unsafe @ _g_tfree s pp → v {
-    ? != # i pp 0 {
-        : *Tensor t # *Tensor pp
-        ( vec_free [i] . t shape )
-        ( vec_free [f] . t data )
-        ( nurl_free pp )
-    } {}
-}
-
-unsafe @ _g_auxfree s pp → v {
-    ? != # i pp 0 {
-        : *GAux a # *GAux pp
-        ( vec_free [i] . a starts )
-        ( nurl_free pp )
-    } {}
 }
 
 // Let go of `tp` now rather than at the end of its owner's scope. The
 // tape's last owner releases every value and gradient tensor and every
-// aux block it holds (the Drop below).
+// aux block it holds (boxes in Vecs: dropped with them).
 @ tape_free sink GTape tp → v {}
 
 unsafe @ tape_ok GTape tp__h → b {
@@ -200,8 +168,7 @@ unsafe @ tape_drop_consts GTape tp__h → v {
     ~ < k n {
         : GNode nd ?? ( vec_get [GNode] . tp nodes k ) { T x → x F → @ GNode { -1 -1 -1 0.0 } }
         ? == . nd op ( gop_const ) {
-            ( _g_tfree ?? ( vec_get [s] . tp vals k ) { T x → x F → # s 0 } )
-            ( vec_set [s] . tp vals k # s 0 )
+            ( vec_put [( Box Tensor )] . tp vals k ( box_null [Tensor] ) )
         } {}
         = k + k 1
     }
@@ -218,27 +185,22 @@ unsafe @ tape_mark GTape tp__h → i {
     ^ ( vec_len [GNode] . tp nodes )
 }
 
-// Drop every node at id >= mark (freeing its tensors) and ZERO the gradients
+// Drop every node at id >= mark (and its tensors) and ZERO the gradients
 // of what remains — a fresh episode over the surviving parameters. The vecs
 // keep their capacity, so a minibatch loop does not re-malloc the arena.
 unsafe @ tape_reset_to GTape tp__h i mark → v {
     : *GTapeImpl tp ( _GTape_ptr tp__h )
     : i n ( vec_len [GNode] . tp nodes )
-    : ~ i k mark
-    ~ < k n {
-        ( _g_tfree ?? ( vec_get [s] . tp vals k ) { T x → x F → # s 0 } )
-        ( _g_tfree ?? ( vec_get [s] . tp grads k ) { T x → x F → # s 0 } )
-        ( _g_auxfree ?? ( vec_get [s] . tp aux k ) { T x → x F → # s 0 } )
-        = k + k 1
-    }
-    : b _t1 ( vec_set_len [GNode] . tp nodes mark )
-    : b _t2 ( vec_set_len [s] . tp vals mark )
-    : b _t3 ( vec_set_len [s] . tp grads mark )
-    : b _t4 ( vec_set_len [s] . tp aux mark )
+    ? < mark n {
+        : b _t1 ( vec_truncate [GNode] . tp nodes mark )
+        : b _t2 ( vec_truncate [( Box Tensor )] . tp vals mark )
+        : b _t3 ( vec_truncate [( Box Tensor )] . tp grads mark )
+        : b _t4 ( vec_truncate [( Box GAux )] . tp aux mark )
+    } {}
     // zero the surviving grads in place (keep their buffers)
-    = k 0
+    : ~ i k 0
     ~ < k mark {
-        : s gp ?? ( vec_get [s] . tp grads k ) { T x → x F → # s 0 }
+        : s gp ( _g_grad_ptr tp k )
         ? != # i gp 0 {
             : *Tensor g # *Tensor gp
             : i gn ( vec_len [f] . g data )
@@ -252,22 +214,23 @@ unsafe @ tape_reset_to GTape tp__h i mark → v {
 
 // ── internals ─────────────────────────────────────────────────────────
 
-// Move a Tensor VALUE into a fresh heap cell the tape owns. The value's Vec
-// handles alias into the cell — the caller must NOT free the value after.
-unsafe @ _g_heap Tensor t → s {
-    : *Tensor p # *Tensor ( nurl_alloc Z Tensor )
-    = . p dtype . t dtype
-    = . p shape . t shape
-    = . p data . t data
-    ^ # s p
+// The Tensor in node `id`'s box of `cells` (null when out of range or the
+// box is empty): the address stays put while the tape grows.
+unsafe @ _g_cell ( Vec ( Box Tensor ) ) cells i id → s {
+    ?? ( vec_get [( Box Tensor )] cells id ) {
+        T b → { ^ # s ( box_ptr [Tensor] b ) }
+        F → { ^ # s 0 }
+    }
 }
 
-unsafe @ _g_val * GTapeImpl tp i id → s {
-    ^ ?? ( vec_get [s] . tp vals id ) { T x → x F → # s 0 }
-}
+unsafe @ _g_val * GTapeImpl tp i id → s { ^ ( _g_cell . tp vals id ) }
 
-unsafe @ _g_grad_ptr * GTapeImpl tp i id → s {
-    ^ ?? ( vec_get [s] . tp grads id ) { T x → x F → # s 0 }
+unsafe @ _g_grad_ptr * GTapeImpl tp i id → s { ^ ( _g_cell . tp grads id ) }
+
+unsafe @ _g_aux_ptr * GTapeImpl tp i id → s {
+    ? | < id 0 >= id ( vec_len [( Box GAux )] . tp aux ) { ^ # s 0 } {}
+    : *( Box GAux ) d ( vec_data [( Box GAux )] . tp aux )
+    ^ # s ( box_ptr [GAux] . d id )
 }
 
 unsafe @ _g_poison * GTapeImpl tp s why → GVar {
@@ -290,9 +253,9 @@ unsafe @ grad_poison GTape tp__h s why → GVar {
 unsafe @ _g_push * GTapeImpl tp i op i a i b f sc Tensor val → GVar {
     : i id ( vec_len [GNode] . tp nodes )
     ( vec_push [GNode] . tp nodes @ GNode { op a b sc } )
-    ( vec_push [s] . tp vals ( _g_heap val ) )
-    ( vec_push [s] . tp grads # s 0 )
-    ( vec_push [s] . tp aux # s 0 )
+    ( vec_push [( Box Tensor )] . tp vals ( box_new [Tensor] val ) )
+    ( vec_push [( Box Tensor )] . tp grads ( box_null [Tensor] ) )
+    ( vec_push [( Box GAux )] . tp aux ( box_null [GAux] ) )
     ^ @ GVar { id }
 }
 
@@ -620,9 +583,7 @@ unsafe @ g_slice GTape tp__h GVar a ( Vec i ) starts ( Vec i ) stops → GVar {
     ?? ( tensor_slice ( _g_view ( _g_val tp . a id ) ) starts stops ) {
         T out → {
             : GVar v ( _g_push tp ( gop_slice ) . a id -1 0.0 out )
-            : *GAux ax # *GAux ( nurl_alloc Z GAux )
-            = . ax starts ( vec_clone [i] starts )
-            ( vec_set [s] . tp aux . v id # s ax )
+            ( vec_put [( Box GAux )] . tp aux . v id ( box_new [GAux] @ GAux { ( vec_clone [i] starts ) } ) )
             ^ v
         }
         F → { ^ ( _g_poison tp `slice window out of range` ) }
@@ -680,11 +641,8 @@ unsafe @ _g_ensure_grad * GTapeImpl tp i id → v {
     : ~ i k 0
     ~ < k n { ( vec_push [f] z 0.0 ) = k + k 1 }
     : ( Vec i ) shp ( vec_clone [i] . vp shape )
-    : *Tensor g # *Tensor ( nurl_alloc Z Tensor )
-    = . g dtype . vp dtype
-    = . g shape shp
-    = . g data z
-    ( vec_set [s] . tp grads id # s g )
+    // the slot is an empty box (_g_grad_ptr said so)
+    : b _s ( vec_set [( Box Tensor )] . tp grads id ( box_new [Tensor] @ Tensor { . vp dtype shp z } ) )
 }
 
 // dL/d(node) of `loss` seeds to ones; every earlier node receives the sum of
@@ -1044,7 +1002,7 @@ unsafe @ backward GTape tp__h GVar loss → b {
             ? == op ( gop_slice ) {
                 // scatter g back into the input window at aux.starts
                 : *Tensor ga # *Tensor ( _g_grad_ptr tp ia )
-                : s axp ?? ( vec_get [s] . tp aux k ) { T x → x F → # s 0 }
+                : s axp ( _g_aux_ptr tp k )
                 : *GAux ax # *GAux axp
                 : i ndim ( vec_len [i] . yv shape )
                 : ( Vec i ) ost ( _t_strides . yv shape )

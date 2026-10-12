@@ -115,10 +115,14 @@ unsafe @ main → i {
 
     : Mlp mh . fh model
     : Mlp mg . fg model
-    : *u mb1 ( nurl_alloc 8 )
-    : *u tb1 ( nurl_alloc 8 )
-    : *u mb2 ( nurl_alloc 8 )
-    : *u tb2 ( nurl_alloc 8 )
+    : ( Vec u ) mb1__b ( vec_zeroed [u] 8 )
+    : *u mb1 ( vec_data [u] mb1__b )
+    : ( Vec u ) tb1__b ( vec_zeroed [u] 8 )
+    : *u tb1 ( vec_data [u] tb1__b )
+    : ( Vec u ) mb2__b ( vec_zeroed [u] 8 )
+    : *u mb2 ( vec_data [u] mb2__b )
+    : ( Vec u ) tb2__b ( vec_zeroed [u] 8 )
+    : *u tb2 ( vec_data [u] tb2__b )
     : ( Vec i ) flh ( eval_model mh X N O NO D mb1 tb1 )
     : ( Vec i ) flg ( eval_model mg X N O NO D mb2 tb2 )
     : f mseh ( bits_to_f64 ( nurl_peek mb1 0 ) )
@@ -152,7 +156,6 @@ unsafe @ main → i {
     : ~ f ratio / mseg mseh
     ? < ratio 1.0 { = ratio / mseh mseg } {}
     ( check < ratio 5.0 `train MSEs within 5× of each other` )
-    ( nurl_free mb1 ) ( nurl_free tb1 ) ( nurl_free mb2 ) ( nurl_free tb2 )
 
     ( nurl_print `gradfit_test: ` )
     ( nurl_print_int g_pass )

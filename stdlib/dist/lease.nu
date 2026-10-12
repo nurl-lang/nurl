@@ -30,6 +30,7 @@
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/rcbox.nu`
+$ `stdlib/core/box.nu`
 
 @ __ls_veq ( Vec u ) a ( Vec u ) b → b {
     : i n ( vec_len [u] a )
@@ -57,52 +58,35 @@ $ `stdlib/core/rcbox.nu`
 }
 
 : LeaseTableImpl {
-    ( Vec s ) entries  // *LeaseEntry
+    ( Vec ( Box LeaseEntry ) ) entries
 }
 
 // A LeaseTable is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
 // every copy is the same state, and the last owner releases it.
-: LeaseTable { s ctl }
+: LeaseTable { ( Shared LeaseTableImpl ) ctl }
 
-@ LeaseTable_share LeaseTable h → LeaseTable { ^ @ LeaseTable { # s ( rcbox_share # i . h ctl ) } }
+@ LeaseTable_share LeaseTable h → LeaseTable { ^ @ LeaseTable { ( shared_clone [LeaseTableImpl] . h ctl ) } }
 
-@ LeaseTable_drop sink LeaseTable h → v {
-    ( mem_forget h )
-    ( rcbox_release [LeaseTableImpl] # i . h ctl )
-}
+@ LeaseTable_drop sink LeaseTable h → v {}
 
-@ __LeaseTable_ptr LeaseTable h → *LeaseTableImpl { ^ ( rcbox_ptr [LeaseTableImpl] # i . h ctl ) }
-
-// The entries are raw blocks the Vec only points at: releasing them is the
-// table's own drop, run by its last owner (the Vec goes after it).
-% Drop LeaseTableImpl {
-    @ drop LeaseTableImpl t → v {
-        : i n ( vec_len [s] . t entries )
-        : ~ i k 0
-        ~ < k n {
-            : s pp ?? ( vec_get [s] . t entries k ) { T x → x F → # s 0 }
-            ? != # i pp 0 { : *LeaseEntry e # *LeaseEntry pp ( vec_free [u] . e key ) ( vec_free [i] . e applied ) ( nurl_free # s e ) } {}
-            = k + k 1
-        }
-    }
-}
+@ __LeaseTable_ptr LeaseTable h → *LeaseTableImpl { ^ ( shared_ptr [LeaseTableImpl] . h ctl ) }
 
 @ lease_new → LeaseTable {
-    : i t__box ( rcbox_zero [LeaseTableImpl] )
-    : *LeaseTableImpl t ( rcbox_ptr [LeaseTableImpl] t__box )
-    = . t entries ( vec_new [s] )
-    ^ @ LeaseTable { # s t__box }
+    : ( Shared LeaseTableImpl ) t__box ( shared_zero [LeaseTableImpl] )
+    : *LeaseTableImpl t ( shared_ptr [LeaseTableImpl] t__box )
+    = . t entries ( vec_new [( Box LeaseEntry )] )
+    ^ @ LeaseTable { t__box }
 }
 
 // Let go of `t` now rather than at the end of its owner's scope.
 @ lease_free sink LeaseTable t → v {}
 
 @ __lease_find * LeaseTableImpl t ( Vec u ) key → s {
-    : i n ( vec_len [s] . t entries )
+    : i n ( vec_len [( Box LeaseEntry )] . t entries )
     : ~ s found # s 0
     : ~ i k 0
     ~ & == # i found 0 < k n {
-        : s pp ?? ( vec_get [s] . t entries k ) { T x → x F → # s 0 }
+        : s pp # s ( box_ptr [LeaseEntry] ( vec_at [( Box LeaseEntry )] . t entries k ) )
         ? != # i pp 0 { : *LeaseEntry e # *LeaseEntry pp ? ( __ls_veq . e key key ) { = found pp } {} } {}
         = k + k 1
     }
@@ -136,12 +120,13 @@ $ `stdlib/core/rcbox.nu`
     : *LeaseTableImpl t ( __LeaseTable_ptr t__h )
     : s pp ( __lease_find t key )
     ? == # i pp 0 {
-        : *LeaseEntry e # *LeaseEntry ( nurl_alloc Z LeaseEntry )
+        : ( Box LeaseEntry ) e__b ( box_zero [LeaseEntry] )
+        : *LeaseEntry e # *LeaseEntry ( box_ptr [LeaseEntry] e__b )
         = . e key ( __ls_cpy key )
         = . e token epoch
         = . e applied ( vec_new [i] )
         ( vec_push [i] . e applied idem )
-        ( vec_push [s] . t entries # s e )
+        ( vec_push [( Box LeaseEntry )] . t entries e__b )
         ^ T
     } {}
     : *LeaseEntry e # *LeaseEntry pp

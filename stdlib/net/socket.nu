@@ -60,6 +60,8 @@ $ `stdlib/net/tcp.nu`
 $ `stdlib/net/stack.nu`
 $ `stdlib/net/tcpstack.nu`
 $ `stdlib/core/rcbox.nu`
+$ `stdlib/core/box.nu`
+$ `stdlib/core/mem.nu`
 
 // ── error codes ──────────────────────────────────────────────────
 //
@@ -124,16 +126,13 @@ $ `stdlib/core/rcbox.nu`
 // The mailbox lives in an rcbox (stdlib/core/rcbox.nu) behind this handle:
 // a UDP socket's Sock holds one (a null one otherwise), and dropping the
 // handle releases the mailbox with its PktBuf and Vec.
-: UdpMailbox { s ctl }
+: UdpMailbox { ( Shared UdpBox ) ctl }
 
-@ UdpMailbox_share UdpMailbox h → UdpMailbox { ^ @ UdpMailbox { # s ( rcbox_share # i . h ctl ) } }
+@ UdpMailbox_share UdpMailbox h → UdpMailbox { ^ @ UdpMailbox { ( shared_clone [UdpBox] . h ctl ) } }
 
-@ UdpMailbox_drop sink UdpMailbox h → v {
-    ( mem_forget h )
-    ( rcbox_release [UdpBox] # i . h ctl )
-}
+@ UdpMailbox_drop sink UdpMailbox h → v {}
 
-@ __udp_mailbox_ptr UdpMailbox h → *UdpBox { ^ ( rcbox_ptr [UdpBox] # i . h ctl ) }
+@ __udp_mailbox_ptr UdpMailbox h → *UdpBox { ^ ( shared_ptr [UdpBox] . h ctl ) }
 
 : Sock {
     i kind
@@ -159,7 +158,7 @@ $ `stdlib/core/rcbox.nu`
 : SockTabImpl {
     TcpStack ts
     PktBuf out  // frames waiting for the device
-    ( Vec i ) fds  // *Sock, as integers — NURL has no Vec of pointers
+    ( Vec ( Box Sock ) ) fds  // a block each, so a slot's address stays put
     i ephemeral  // next ephemeral port for an unbound listener
     i our_ip
     i max_fds  // the ceiling; 0 means "no ceiling"
@@ -167,37 +166,13 @@ $ `stdlib/core/rcbox.nu`
 
 // A SockTab is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
 // every copy is the same state, and the last owner releases it.
-: SockTab { s ctl }
+: SockTab { ( Shared SockTabImpl ) ctl }
 
-@ SockTab_share SockTab h → SockTab { ^ @ SockTab { # s ( rcbox_share # i . h ctl ) } }
+@ SockTab_share SockTab h → SockTab { ^ @ SockTab { ( shared_clone [SockTabImpl] . h ctl ) } }
 
-@ SockTab_drop sink SockTab h → v {
-    ( mem_forget h )
-    ( rcbox_release [SockTabImpl] # i . h ctl )
-}
+@ SockTab_drop sink SockTab h → v {}
 
-@ __SockTab_ptr SockTab h → *SockTabImpl { ^ ( rcbox_ptr [SockTabImpl] # i . h ctl ) }
-
-// The Sock blocks are raw memory the table keeps as integers: releasing
-// them — and the mailbox handle a UDP one holds — is the table's own
-// drop. Its TcpStack, output buffer and fd vector are dropped after.
-% Drop SockTabImpl {
-    @ drop SockTabImpl st → v {
-        : i n ( vec_len [i] . st fds )
-        : ~ i k 0
-        ~ < k n {
-            : *Sock s # *Sock ?? ( vec_get [i] . st fds k ) { T p → p F → 0 }
-            ? != # i s 0 {
-                // A UDP socket still open at teardown owns its mailbox
-                // (any other Sock holds a null handle, released as nothing).
-                : UdpMailbox mb . s udp
-                ( mem_take mb )
-                ( nurl_free # s s )
-            } {}
-            = k + k 1
-        }
-    }
-}
+@ __SockTab_ptr SockTab h → *SockTabImpl { ^ ( shared_ptr [SockTabImpl] . h ctl ) }
 
 // How many sockets may be open at once. A hosted program has this
 // whether it asks for one or not — the kernel answers EMFILE and the
@@ -219,17 +194,17 @@ $ `stdlib/core/rcbox.nu`
 @ __fd_base → i { ^ 3 }
 
 @ sock_new TcpStack ts i our_ip → SockTab {
-    : i st__box ( rcbox_zero [SockTabImpl] )
-    : *SockTabImpl st ( rcbox_ptr [SockTabImpl] st__box )
+    : ( Shared SockTabImpl ) st__box ( shared_zero [SockTabImpl] )
+    : *SockTabImpl st ( shared_ptr [SockTabImpl] st__box )
     // Another owner of the table, not a view of the caller's: every fd
     // operation goes through it for as long as this table lives.
     = . st ts ( TcpStack_share ts )
     = . st out ( pktbuf_new )
-    = . st fds ( vec_new [i] )
+    = . st fds ( vec_new [( Box Sock )] )
     = . st ephemeral 32768
     = . st our_ip our_ip
     = . st max_fds ( sock_default_max_fds )
-    ^ @ SockTab { # s st__box }
+    ^ @ SockTab { st__box }
 }
 
 // Let go of `st` now rather than at the end of its owner's scope.
@@ -242,25 +217,23 @@ $ `stdlib/core/rcbox.nu`
 }
 
 @ __sock_at * SockTabImpl st i slot → *Sock {
-    ^ # *Sock ?? ( vec_get [i] . st fds slot ) { T p → p F → 0 }
+    ^ ( box_ptr [Sock] ( vec_at [( Box Sock )] . st fds slot ) )
 }
 
 // The Sock behind an fd, or a null pointer. Bounds and the used flag
 // are checked here so no caller has to.
 @ __sock * SockTabImpl st i fd → *Sock {
     : i slot - fd ( __fd_base )
-    ? || < slot 0 >= slot ( vec_len [i] . st fds ) { ^ # *Sock 0 } {}
+    ? || < slot 0 >= slot ( vec_len [( Box Sock )] . st fds ) { ^ # *Sock 0 } {}
     : *Sock s ( __sock_at st slot )
     ? == # i s 0 { ^ # *Sock 0 } {}
     ? ! . s used { ^ # *Sock 0 } {}
     ^ s
 }
 
-// Every field, in one place. `nurl_alloc Z Sock` is sizeof-and-malloc,
-// NOT calloc, and the runtime recycles small blocks through a freelist
-// — so a fresh Sock arrives full of the last one's bytes, and a `b`
-// field left unwritten is not merely undefined, it is reliably true
-// about a third of the time. A fresh slot and a recycled slot need
+// Every field, in one place. A recycled slot arrives full of the last
+// socket's state, and a `b` field left unwritten there is not merely
+// stale, it is reliably wrong. A fresh slot and a recycled slot need
 // exactly the same initialisation, so they share it: the version of
 // this file that wrote the fields out twice had one path setting `shut`
 // and the other not, and the symptom was a freshly accepted connection
@@ -281,7 +254,7 @@ $ `stdlib/core/rcbox.nu`
     = . s eof F
     = . s shut F
     = . s used T
-    = . s udp @ UdpMailbox { # s 0 }
+    = . s udp @ UdpMailbox { ( shared_null [UdpBox] ) }
     = . s connected F
     = . s opts 0
 }
@@ -312,7 +285,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 @ __alloc_fd_unbounded * SockTabImpl st → i {
-    : i n ( vec_len [i] . st fds )
+    : i n ( vec_len [( Box Sock )] . st fds )
     : ~ i k 0
     ~ < k n {
         : *Sock s ( __sock_at st k )
@@ -322,9 +295,9 @@ $ `stdlib/core/rcbox.nu`
         } {}
         = k + k 1
     }
-    : *Sock s # *Sock ( nurl_alloc Z Sock )
-    ( __sock_reset s )
-    ( vec_push [i] . st fds # i s )
+    : ( Box Sock ) sb ( box_zero [Sock] )
+    ( __sock_reset # *Sock ( box_ptr [Sock] sb ) )
+    ( vec_push [( Box Sock )] . st fds sb )
     ^ + n ( __fd_base )
 }
 
@@ -492,13 +465,8 @@ $ `stdlib/core/rcbox.nu`
 @ sock_take_out SockTab st__h → PktBuf { ^ ( __sock_take_out ( __SockTab_ptr st__h ) ) }
 
 @ __sock_take_out * SockTabImpl st → PktBuf {
-    : PktBuf p . st out
-    // The table gives the buffer up — the slot gets a fresh one next —
-    // so `p` owns it from here (a field read through a pointer is
-    // otherwise a view of the table's own).
-    ( mem_take p )
-    = . st out ( pktbuf_new )
-    ^ p
+    // The table gives the buffer up and the slot gets a fresh one.
+    ^ ( mem_replace [PktBuf] . st out ( pktbuf_new ) )
 }
 
 // One received frame in. Returns tcpstack's TRx result code so a
@@ -521,7 +489,7 @@ $ `stdlib/core/rcbox.nu`
 // it silently is at least honest about that, where inventing a reply
 // would not be.
 @ __udp_deliver * SockTabImpl st ( Vec u ) frame TRx r → v {
-    : i n ( vec_len [i] . st fds )
+    : i n ( vec_len [( Box Sock )] . st fds )
     : ~ i k 0
     ~ < k n {
         : *Sock s ( __sock_at st k )
@@ -613,7 +581,7 @@ $ `stdlib/core/rcbox.nu`
 // have separate ones, and a check that pooled them would refuse a DNS
 // client on 53 because something was listening on TCP 53.
 @ __port_taken_kind * SockTabImpl st i kind i port → b {
-    : i n ( vec_len [i] . st fds )
+    : i n ( vec_len [( Box Sock )] . st fds )
     : ~ i k 0
     ~ < k n {
         : *Sock s ( __sock_at st k )
@@ -757,12 +725,12 @@ $ `stdlib/core/rcbox.nu`
     ? ! ( __sock_can_open st ) { ^ ( __sock_err_fd st ( sock_err_other ) ) } {}
     : i fd ( __alloc_fd st )
     : *Sock s ( __sock st fd )
-    : i box ( rcbox_new [UdpBox] @ UdpBox { ( pktbuf_new ) ( vec_new [i] ) 0 0 0 } )
+    : ( Shared UdpBox ) box ( shared_new [UdpBox] @ UdpBox { ( pktbuf_new ) ( vec_new [i] ) 0 0 0 } )
     = . s kind ( sock_kind_udp )
     = . s idx -1
     = . s local_ip ip
     = . s local_port p
-    = . s udp @ UdpMailbox { # s box }
+    = . s udp @ UdpMailbox { box }
     ^ fd
 }
 
@@ -1140,9 +1108,7 @@ $ `stdlib/core/rcbox.nu`
     ? > . s refs 0 { ^ } {}
     ? == . s kind ( sock_kind_udp ) {
         // The socket gives its mailbox up (dropped here).
-        : UdpMailbox gone . s udp
-        ( mem_take gone )
-        = . s udp @ UdpMailbox { # s 0 }
+        = . s udp @ UdpMailbox { ( shared_null [UdpBox] ) }
     } {}
     ? == . s kind ( sock_kind_listener ) {
         ( tstack_listener_close . st ts . s idx )
@@ -1177,7 +1143,7 @@ $ `stdlib/core/rcbox.nu`
 @ sock_open_count SockTab st__h → i { ^ ( __sock_open_count ( __SockTab_ptr st__h ) ) }
 
 @ __sock_open_count * SockTabImpl st → i {
-    : i n ( vec_len [i] . st fds )
+    : i n ( vec_len [( Box Sock )] . st fds )
     : ~ i live 0
     : ~ i k 0
     ~ < k n {

@@ -149,12 +149,6 @@ unsafe @ __init_f32 * EngineImpl e s name i k → f {  // k-th value of a FLOAT 
 // initializers viewed (see EngineImpl). The graph stays the caller's.
 unsafe @ _rt_set_graph * EngineImpl e OGraph g → v {
     = . e inits_ref # i . g inits
-    : String old_in . e input_name
-    ( mem_take old_in )  // the previous run's copies go
-    : String old_out . e output_name
-    ( mem_take old_out )
-    : String old_out1 . e output1_name
-    ( mem_take old_out1 )
     = . e input_name ( string_from ( string_data . g input_name ) )
     = . e output_name ( string_from ( string_data . g output_name ) )
     = . e output1_name ( string_from ( string_data . g output1_name ) )

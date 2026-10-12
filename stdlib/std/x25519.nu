@@ -888,8 +888,6 @@ inline @ __fe_cswap inout u64 p0 inout u64 p1 inout u64 p2 inout u64 p3 inout u6
 // copy is dropped (slot registry: stdlib/std/tls_server.nu).
 : ~ i g_xe_ntbl 0
 
-& `c` @ nurl_once_slot i id i candidate → i
-
 @ __xe_ntbl_build → v {
     : ( Vec i ) src ( __xe_comb_table )
     : ( Vec i ) d2 ( __xe_d2 )
@@ -932,10 +930,8 @@ inline @ __fe_cswap inout u64 p0 inout u64 p1 inout u64 p2 inout u64 p3 inout u6
         }
         = e + e 1
     }
-    : i won ( nurl_once_slot 4 # i . ntbl ctl )
     // The winner lives for the rest of the program, through the global.
-    ? == won # i . ntbl ctl { ( mem_forget ntbl ) } {}
-    = g_xe_ntbl won
+    = g_xe_ntbl ( vec_publish_once [i] 4 ntbl )
 }
 
 @ __xe_ntbl → ( Vec i ) {

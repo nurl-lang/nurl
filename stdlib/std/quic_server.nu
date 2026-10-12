@@ -56,22 +56,19 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // A QuicServer is a handle on its state in an rcbox (stdlib/core/rcbox.nu).
-: QuicServer { s ctl }
+: QuicServer { ( Shared QuicServerImpl ) ctl }
 
-@ QuicServer_share QuicServer h → QuicServer { ^ @ QuicServer { # s ( rcbox_share # i . h ctl ) } }
+@ QuicServer_share QuicServer h → QuicServer { ^ @ QuicServer { ( shared_clone [QuicServerImpl] . h ctl ) } }
 
-@ QuicServer_drop sink QuicServer h → v {
-    ( mem_forget h )
-    ( rcbox_release [QuicServerImpl] # i . h ctl )
-}
+@ QuicServer_drop sink QuicServer h → v {}
 
-@ __QuicServer_ptr QuicServer h → *QuicServerImpl { ^ ( rcbox_ptr [QuicServerImpl] # i . h ctl ) }
+@ __QuicServer_ptr QuicServer h → *QuicServerImpl { ^ ( shared_ptr [QuicServerImpl] . h ctl ) }
 
 // `creds` and `tp` are shared with every connection; `on_event` is the
 // server's own copy.
 @ quic_server_new UdpSocket sock QuicCreds creds ( Vec u ) alpn_prefs QuicTp tp ( @ v QuicConn i ) on_event → QuicServer {
-    : i s__box ( rcbox_zero [QuicServerImpl] )
-    : *QuicServerImpl s ( rcbox_ptr [QuicServerImpl] s__box )
+    : ( Shared QuicServerImpl ) s__box ( shared_zero [QuicServerImpl] )
+    : *QuicServerImpl s ( shared_ptr [QuicServerImpl] s__box )
     = . s sock sock
     = . s creds ( QuicCreds_share creds )
     = . s alpn_prefs ( bytes_slice alpn_prefs 0 ( vec_len [u] alpn_prefs ) )
@@ -82,7 +79,7 @@ $ `stdlib/core/rcbox.nu`
     = . s running 0
     = . s accepted 0
     = . s rejected 0
-    ^ @ QuicServer { # s s__box }
+    ^ @ QuicServer { s__box }
 }
 
 // Let go of `s` now rather than at the end of its owner's scope.
@@ -114,7 +111,7 @@ $ `stdlib/core/rcbox.nu`
 @ __qs_map_get ( HashMap i QuicConn ) m i key → QuicConn {
     : ( @ i i ) hf \ i x → i { ^ ( hash_int x ) }
     : ( @ b i i ) ef \ i a i b → b { ^ ( eq_int a b ) }
-    ^ ?? ( map_get [i QuicConn] m key hf ef ) { T c → ( QuicConn_share c ) F → @ QuicConn { # s 0 } }
+    ^ ?? ( map_get [i QuicConn] m key hf ef ) { T c → ( QuicConn_share c ) F → @ QuicConn { ( shared_null [QuicConnImpl] ) } }
 }
 
 @ __qs_map_has ( HashMap i QuicConn ) m i key → b {
@@ -197,7 +194,7 @@ $ `stdlib/core/rcbox.nu`
     : QuicHdr h ( quic_hdr_parse dgram 0 ( quic_conn_scid_len ) )
     ? < . h ptype 0 { ^ } {}
     : ( Vec u ) dcid ( quic_hdr_dcid h dgram )
-    : ~ QuicConn c @ QuicConn { # s 0 }
+    : ~ QuicConn c @ QuicConn { ( shared_null [QuicConnImpl] ) }
     ? >= ( vec_len [u] dcid ) 8 { = c ( __qs_map_get . s by_cid ( __qs_key dcid 0 ) ) } {}
     ? == 0 # i . c ctl {
         ? & != . h ptype 4 != . h version 1 {

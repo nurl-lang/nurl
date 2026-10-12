@@ -21,6 +21,7 @@
 // The sort is not stable.
 
 $ `stdlib/core/vec.nu`
+$ `stdlib/core/mem.nu`
 
 // ── Internal helpers ───────────────────────────────────────────────
 
@@ -257,9 +258,12 @@ $ `stdlib/core/vec.nu`
 // the one appended to a sorted Vec before it is sorted again.
 @ __sort_merge_tail [A] * A data i run i n ( @ i A A ) cmp → v {
     : i t - n run
-    : s buf ( nurl_alloc ( alloc_size Z A t ) )
-    : *A bp # *A buf
-    ( nurl_memcpy buf # s + # i data * run Z A * t Z A )
+    // The right part moves through this block bit for bit (each element
+    // is in exactly one place at a time), so the block releases only its
+    // memory.
+    : RawBlock blk ( raw_block ( alloc_size Z A t ) )
+    : *A bp # *A ( raw_block_ptr blk )
+    ( nurl_memcpy # s bp # s + # i data * run Z A * t Z A )
     : ~ i i - run 1
     : ~ i j - t 1
     : ~ i k - n 1
@@ -273,7 +277,6 @@ $ `stdlib/core/vec.nu`
         }
         = k - k 1
     }
-    ( nurl_free buf )
 }
 
 @ sort_by [A] ( Vec A ) v ( @ i A A ) cmp → v {

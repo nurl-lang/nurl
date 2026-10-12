@@ -1,5 +1,47 @@
 # Changelog
 
+## [2.4.2] — 2026-10-12
+
+Requires NURL 0.73.0, in which a field written through a raw pointer
+drops what it held, a mutable module global may own a `String`, a `Vec`
+or a handle, and a foreign function may take an `inout` parameter.
+The published 2.4.1 does not compile under it.
+
+### Changed
+
+- The host imports that return a string the runtime allocated
+  (`nurl_tcp_local_addr`, `nurl_udp_local_addr`, the DNS resolvers)
+  declare their result `→ sink s`, and the helper that copies one into
+  the guest takes it over (`sink s`): nothing is freed by hand.
+- A decoded module keeps its section records (types, functions,
+  exports, data and element segments, imports, names) in `Box`es in its
+  tables, where each was raw memory its `Drop` impl released by hand. The
+  `Drop` impl is gone.
+- An instance's file descriptors and its program arguments and
+  environment are boxed records too; a closed descriptor is an empty box.
+- The predecoder's open blocks, the CUDA argument blocks and the
+  atomics lock are owned buffers, and a host string handed back to the
+  guest is released by the `String` that adopts it.
+- Fields replaced through a pointer drop what they held; the frees
+  before each such store are gone.
+- Nothing in the interpreter is allocated or released by hand any more:
+  - a predecoded function record is a `Box` the instance owns
+    (`pf_owned`; `pfuncs` keeps the raw lookup the hot path reads), and
+    its compiled code goes with it (a `Drop` on the record);
+  - a call frame is a `Box` its function's record keeps — the pool links
+    the parked ones, and a frame left over by a trap goes back to the
+    pool instead of being freed;
+  - the JIT's slab, anchor block and call contexts are `Vec`s of the
+    instance, and the call-out bridge's closure environment a small
+    record that releases it;
+  - a spawned thread's instance is an `Arc` the thread holds. It no longer
+    copies its owner's memory, table, segment flags, argv and envp by
+    handle (a copy it had to be careful never to drop): it reads them
+    from the owner through `__host`, and owns only what is its own.
+- The two guest programs that stress the shared heap (`heapstress`,
+  `threadprobe`) count in a module global instead of a hand-allocated
+  cell.
+
 ## [2.4.1] — 2026-10-11
 
 Requires NURL 0.73.0, which allows `mem_forget`, `mem_take` and the

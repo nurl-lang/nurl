@@ -147,17 +147,14 @@ $ `stdlib/core/rcbox.nu`
     ( @ HttpResponse HttpRequest Params ) handler
 }
 
-: Route { s ctl }
+: Route { ( Shared RouteImpl ) ctl }
 
 // A route's block (in an rcbox) owns its method, pattern and the handler
 // closure registered via router_any (a stored closure is a clone —
 // docs/MEMORY.md §7.4); the last owner of the Route releases them.
-@ Route_share Route h → Route { ^ @ Route { # s ( rcbox_share # i . h ctl ) } }
+@ Route_share Route h → Route { ^ @ Route { ( shared_clone [RouteImpl] . h ctl ) } }
 
-@ Route_drop sink Route h → v {
-    ( mem_forget h )
-    ( rcbox_release [RouteImpl] # i . h ctl )
-}
+@ Route_drop sink Route h → v {}
 
 // ── Router ────────────────────────────────────────────────────────────
 
@@ -181,7 +178,7 @@ $ `stdlib/core/rcbox.nu`
 // copied (a stored closure is a clone). All three live inside the route's
 // rcbox; the `Route` handle stored in the vec is a single pointer.
 @ router_any Router r s method s pattern ( @ HttpResponse HttpRequest Params ) handler → v {
-    : Route route @ Route { # s ( rcbox_new [RouteImpl] @ RouteImpl { ( string_from method ) ( string_from pattern ) handler } ) }
+    : Route route @ Route { ( shared_new [RouteImpl] @ RouteImpl { ( string_from method ) ( string_from pattern ) handler } ) }
     ( vec_push [Route] . r routes route )
 }
 
@@ -374,7 +371,7 @@ $ `stdlib/core/rcbox.nu`
     : ~ i k 0
     ~ < k n {
         : Route route . data k
-        : *RouteImpl impl ( rcbox_ptr [RouteImpl] # i . route ctl )
+        : *RouteImpl impl ( shared_ptr [RouteImpl] . route ctl )
         : s rmethod ( string_data . impl method )
         : b method_ok
         | | != 0 ( nurl_str_eq rmethod `*` )
@@ -421,7 +418,7 @@ $ `stdlib/core/rcbox.nu`
     : ~ i k 0
     ~ < k n {
         : Route route . data k
-        : *RouteImpl impl ( rcbox_ptr [RouteImpl] # i . route ctl )
+        : *RouteImpl impl ( shared_ptr [RouteImpl] . route ctl )
         : s pattern ( string_data . impl pattern )
         // Skip root-level catch-alls ("/*path", "/*anything") — they
         // match every URL by design and would otherwise advertise GET

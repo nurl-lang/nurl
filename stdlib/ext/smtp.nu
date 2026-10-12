@@ -233,7 +233,7 @@ $ `stdlib/std/time.nu`  // smtp_date_now
         ( nurl_tcp_close craw )
         ^ @ !SmtpClient SmtpErr { F # SmtpErr SmtpConnect }
     } {}
-    ^ ( __smtp_greet @ TcpConn { # s craw 0 0 } )
+    ^ ( __smtp_greet ( tcp_conn_adopt craw ) )
 }
 
 @ smtp_connect_tls s host i port b verify → !SmtpClient SmtpErr {

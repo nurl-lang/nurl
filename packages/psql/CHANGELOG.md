@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.4.4] — 2026-10-12
+
+Requires NURL 0.73.0, in which a standard-library handle holds its
+state in a `( Shared T )` (stdlib/core/rcbox.nu): a zero handle is the
+cast `# File # s 0`, no longer the literal `@ File { # s 0 }`. The
+published 0.4.3 does not compile under it.
+
+### Changed
+
+- The `TcpConn` over the connection's socket is a view (`tcp_conn_view`): NURL 0.73.0's `TcpConn` closes its socket when its last owner goes, and this one belongs to the connection record, whose drop closes it.
+- The zero `TlsConn` handle this package keeps until one
+  is made is built with the cast. No change in behaviour.
+
 ## [0.4.3] — 2026-10-11
 
 Requires NURL 0.73.0, which allows `mem_forget`, `mem_take` and the

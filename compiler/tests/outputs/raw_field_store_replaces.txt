@@ -1,0 +1,12 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+the second name, long enough for the heap
+the third name, long enough for the heap
+2
+5
+45
+42
+filled by a helper, long enough for the heap
+1

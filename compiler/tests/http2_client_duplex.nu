@@ -75,7 +75,7 @@ unsafe @ buffered_frame ( Vec u ) bytes → b {
     ( vec_push [H2Setting] settings @ H2Setting { 4 4194304 } )
     ?? ( h2_send_settings tcp settings ) { T _ → {} F _ → { = ok F } }
     ( vec_free [H2Setting] settings )
-    : H2FrameWriter writer ( h2_frame_writer tcp 1048576 )
+    : H2FrameWriter writer ( h2_frame_writer ( TcpConn_share tcp ) 1048576 )
     = ok & ok ( queue writer 8 0 0 ( word 4128769 ) )
     : ( Vec u ) rx ( vec_new [u] )
     : ~ i received 0

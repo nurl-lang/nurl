@@ -106,18 +106,15 @@ $ `stdlib/dist/ring.nu`
 @ lww_merge_bytes LwwReg r ( Vec u ) buf → LwwReg { ^ ( lww_merge r ( lww_decode buf ) ) }
 
 // ── OrSet ────────────────────────────────────────────────────────
-@ __ortags_put ( Vec u ) b ( Vec s ) tags → v {
-    : i n ( vec_len [s] tags )
+@ __ortags_put ( Vec u ) b ( Vec OrTag ) tags → v {
+    : i n ( vec_len [OrTag] tags )
     ( bytes_push_u16_be b # u16 n )
     : ~ i k 0
     ~ < k n {
-        : s pp ?? ( vec_get [s] tags k ) { T x → x F → # s 0 }
-        ? != # i pp 0 {
-            : *OrTag t # *OrTag pp
-            ( bytes_push_u64_be b # u64 . t elem )
-            ( bytes_push_u64_be b # u64 . t replica )
-            ( bytes_push_u64_be b # u64 . t seq )
-        } {}
+        : OrTag t ( vec_at [OrTag] tags k )
+        ( bytes_push_u64_be b # u64 . t elem )
+        ( bytes_push_u64_be b # u64 . t replica )
+        ( bytes_push_u64_be b # u64 . t seq )
         = k + k 1
     }
 }
@@ -129,7 +126,7 @@ $ `stdlib/dist/ring.nu`
     ^ b
 }
 
-@ __ortags_get ( Vec u ) buf inout i off ( Vec s ) into → v {
+@ __ortags_get ( Vec u ) buf inout i off ( Vec OrTag ) into → v {
     : i n ( __rc_u16 buf off )
     : ~ i k 0
     ~ < k n {
@@ -139,11 +136,7 @@ $ `stdlib/dist/ring.nu`
         : i ev ( __rc_u64 buf off )
         : i rv ( __rc_u64 buf off )
         : i sv ( __rc_u64 buf off )
-        : *OrTag t # *OrTag ( nurl_alloc Z OrTag )
-        = . t elem ev
-        = . t replica rv
-        = . t seq sv
-        ( vec_push [s] into # s t )
+        ( vec_push [OrTag] into @ OrTag { ev rv sv } )
         = k + k 1
     }
 }

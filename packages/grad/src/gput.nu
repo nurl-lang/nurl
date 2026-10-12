@@ -498,18 +498,13 @@ unsafe @ _GProg_ptr GProg h → *GProgImpl { ^ ( arc_ptr [GProgImpl] . h a ) }
 // passes, so cache it — otherwise _gp_src (called on EVERY kernel launch,
 // though only the NAME feeds gpukit's cache) would regenerate ~15 KB of
 // string ops thousands of times per training and dominate the run.
-: ~ i g_gp_src_f32 0
-: ~ i g_gp_src_f32_ctl 0  // the String itself, kept for the program's lifetime
+: ~ s g_gp_src_f32 ``  // the global owns it (released when the program ends)
 
-unsafe @ __gp_src_f32c → s {
-    ? != g_gp_src_f32 0 { ^ # s g_gp_src_f32 } {}
+@ __gp_src_f32c → s {
+    ? != 0 ( nurl_str_len g_gp_src_f32 ) { ^ g_gp_src_f32 } {}
     : String o ( __gp_src_f32 )
-    = g_gp_src_f32 # i ( string_data o )
-    // Kept for the program's lifetime: the globals hold the String (its
-    // block, so it stays reachable) and its text (for the launch path).
-    = g_gp_src_f32_ctl # i . o ctl
-    ( mem_forget o )
-    ^ # s g_gp_src_f32
+    = g_gp_src_f32 ( nurl_str_cat ( string_data o ) `` )
+    ^ g_gp_src_f32
 }
 
 // MIXED precision (dtype 2): f32 STORAGE, f64 ACCUMULATION. Every buffer
@@ -529,18 +524,13 @@ unsafe @ __gp_src_f32c → s {
     ^ x
 }
 
-: ~ i g_gp_src_mixed 0
-: ~ i g_gp_src_mixed_ctl 0  // the String itself, kept for the program's lifetime
+: ~ s g_gp_src_mixed ``  // the global owns it (released when the program ends)
 
-unsafe @ __gp_src_mixedc → s {
-    ? != g_gp_src_mixed 0 { ^ # s g_gp_src_mixed } {}
+@ __gp_src_mixedc → s {
+    ? != 0 ( nurl_str_len g_gp_src_mixed ) { ^ g_gp_src_mixed } {}
     : String o ( __gp_src_mixed )
-    = g_gp_src_mixed # i ( string_data o )
-    // Kept for the program's lifetime: the globals hold the String (its
-    // block, so it stays reachable) and its text (for the launch path).
-    = g_gp_src_mixed_ctl # i . o ctl
-    ( mem_forget o )
-    ^ # s g_gp_src_mixed
+    = g_gp_src_mixed ( nurl_str_cat ( string_data o ) `` )
+    ^ g_gp_src_mixed
 }
 
 // Kernel source for a program's dtype.
@@ -629,7 +619,7 @@ unsafe @ _GpOpt_ptr GpOpt h → *GpOptImpl { ^ ( arc_ptr [GpOptImpl] . h a ) }
 // The acc-reduce block for one input: [nd ost dec fdim fdec], plus tfree.
 // dec = row-major strides of the input's dims aligned into out dims (1 on
 // broadcast dims); fdim/fdec describe the odometer over the broadcast dims.
-unsafe @ _gp_accred_block ( Vec i ) meta ( Vec i ) oshape ( Vec i ) ost ( Vec i ) eff * u tfree → v {
+unsafe @ _gp_accred_block ( Vec i ) meta ( Vec i ) oshape ( Vec i ) ost ( Vec i ) eff inout i tfree → v {
     : i nd ( vec_len [i] oshape )
     ( vec_push [i] meta nd )
     ( _gp_push_vec meta ost )
@@ -655,7 +645,7 @@ unsafe @ _gp_accred_block ( Vec i ) meta ( Vec i ) oshape ( Vec i ) ost ( Vec i 
     : ~ i tf 1
     = d 0
     ~ < d nd { = tf * tf ( _ti fdim d ) = d + d 1 }
-    ( nurl_poke tfree 0 tf )
+    = tfree tf
 }
 
 // An ew block [nd ost xe ye].
@@ -833,17 +823,16 @@ unsafe @ gput_capture_dt GpuKit kit GTape tp__h GVar loss i dtype → GProg {
             : i offB3 ( vec_len [i] mv )
             ( _gp_ew_block mv ost ost ost )
             : i offBA ( vec_len [i] mv )
-            : *u tfa ( nurl_alloc 8 )
-            : *u tfb ( nurl_alloc 8 )
+            : ~ i tfa 0
+            : ~ i tfb 0
             ( _gp_accred_block mv . tv shape ost ae tfa )
             : i offBB ( vec_len [i] mv )
             ( _gp_accred_block mv . tv shape ost be tfb )
             ( vec_push [i] dims offB1 ) ( vec_push [i] dims offB2 )
             ( vec_push [i] dims offB3 ) ( vec_push [i] dims offBA )
             ( vec_push [i] dims offBB )
-            ( vec_push [i] dims ( nurl_peek tfa 0 ) )
-            ( vec_push [i] dims ( nurl_peek tfb 0 ) )
-            ( nurl_free tfa ) ( nurl_free tfb )
+            ( vec_push [i] dims tfa )
+            ( vec_push [i] dims tfb )
             = meta ( gk_dbuf_new kit ( vec_len [i] mv ) GK_I64 )
             ? & ( gk_buf_ok meta ) ( gk_dbuf_upload_i kit meta mv ) {} { ( _gp_fail pg `meta upload failed` ) }
             // mul/div backward materializes an out-shaped contribution
@@ -901,7 +890,7 @@ unsafe @ gput_capture_dt GpuKit kit GTape tp__h GVar loss i dtype → GProg {
         } {}
         ? == op ( gop_slice ) {
             : *Tensor ta # *Tensor ( _g_val tp . nd a )
-            : s axp ?? ( vec_get [s] . tp aux k ) { T x → x F → # s 0 }
+            : s axp ( _g_aux_ptr tp k )
             : *GAux ax # *GAux axp
             : ( Vec i ) ost ( _t_strides . tv shape )
             : ( Vec i ) ist ( _t_strides . ta shape )

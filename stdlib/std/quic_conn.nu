@@ -56,6 +56,7 @@ $ `stdlib/std/quic_rxbuf.nu`
 $ `stdlib/std/quic_tls.nu`
 $ `stdlib/std/quic_recovery.nu`
 $ `stdlib/core/rcbox.nu`
+$ `stdlib/core/mem.nu`
 
 // ── error codes (RFC 9000 §20.1) ─────────────────────────────────
 @ quic_err_no_error → i { ^ 0 }
@@ -101,20 +102,17 @@ $ `stdlib/core/rcbox.nu`
 
 // A QuicCreds is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
 // every copy is the same state, and the last owner releases it.
-: QuicCreds { s ctl }
+: QuicCreds { ( Shared QuicCredsImpl ) ctl }
 
-@ QuicCreds_share QuicCreds h → QuicCreds { ^ @ QuicCreds { # s ( rcbox_share # i . h ctl ) } }
+@ QuicCreds_share QuicCreds h → QuicCreds { ^ @ QuicCreds { ( shared_clone [QuicCredsImpl] . h ctl ) } }
 
-@ QuicCreds_drop sink QuicCreds h → v {
-    ( mem_forget h )
-    ( rcbox_release [QuicCredsImpl] # i . h ctl )
-}
+@ QuicCreds_drop sink QuicCreds h → v {}
 
-@ __QuicCreds_ptr QuicCreds h → *QuicCredsImpl { ^ ( rcbox_ptr [QuicCredsImpl] # i . h ctl ) }
+@ __QuicCreds_ptr QuicCreds h → *QuicCredsImpl { ^ ( shared_ptr [QuicCredsImpl] . h ctl ) }
 
 @ quic_creds_new ( Vec u ) cert_chain i keytype ( Vec u ) ec_priv ( Vec u ) rsa_n ( Vec u ) rsa_e ( Vec u ) rsa_d i ml_level → QuicCreds {
-    : i k__box ( rcbox_zero [QuicCredsImpl] )
-    : *QuicCredsImpl k ( rcbox_ptr [QuicCredsImpl] k__box )
+    : ( Shared QuicCredsImpl ) k__box ( shared_zero [QuicCredsImpl] )
+    : *QuicCredsImpl k ( shared_ptr [QuicCredsImpl] k__box )
     = . k cert_chain ( bytes_slice cert_chain 0 ( vec_len [u] cert_chain ) )
     = . k keytype keytype
     = . k ec_priv ( bytes_slice ec_priv 0 ( vec_len [u] ec_priv ) )
@@ -125,7 +123,7 @@ $ `stdlib/core/rcbox.nu`
     = . k pq_chain ( vec_new [u] )
     = . k pq_level 0
     = . k pq_sk ( vec_new [u] )
-    ^ @ QuicCreds { # s k__box }
+    ^ @ QuicCreds { k__box }
 }
 
 // Park an ML-DSA identity beside the classical one (copies).
@@ -171,16 +169,13 @@ $ `stdlib/core/rcbox.nu`
 // A stream is a handle on its state in an rcbox (stdlib/core/rcbox.nu),
 // kept in the connection's `streams`; its receive buffer and send queue
 // go with it.
-: QuicStream { s ctl }
+: QuicStream { ( Shared QuicStreamImpl ) ctl }
 
-@ QuicStream_share QuicStream h → QuicStream { ^ @ QuicStream { # s ( rcbox_share # i . h ctl ) } }
+@ QuicStream_share QuicStream h → QuicStream { ^ @ QuicStream { ( shared_clone [QuicStreamImpl] . h ctl ) } }
 
-@ QuicStream_drop sink QuicStream h → v {
-    ( mem_forget h )
-    ( rcbox_release [QuicStreamImpl] # i . h ctl )
-}
+@ QuicStream_drop sink QuicStream h → v {}
 
-@ __QuicStream_ptr QuicStream h → *QuicStreamImpl { ^ ( rcbox_ptr [QuicStreamImpl] # i . h ctl ) }
+@ __QuicStream_ptr QuicStream h → *QuicStreamImpl { ^ ( shared_ptr [QuicStreamImpl] . h ctl ) }
 
 // `local`: this endpoint opened the stream.
 @ __qc_stream_new i id i rx_window i tx_max b local → QuicStream {
@@ -188,8 +183,8 @@ $ `stdlib/core/rcbox.nu`
     // unidirectional stream has no send side.
     : b has_rx ! & local ! ( __qc_stream_is_bidi id )
     : b has_tx | local ( __qc_stream_is_bidi id )
-    : QuicRxBuf rx ? has_rx ( quic_rxbuf_new rx_window ) @ QuicRxBuf { # s 0 }
-    ^ @ QuicStream { # s ( rcbox_new [QuicStreamImpl] @ QuicStreamImpl {
+    : QuicRxBuf rx ? has_rx ( quic_rxbuf_new rx_window ) @ QuicRxBuf { ( shared_null [QuicRxBufImpl] ) }
+    ^ @ QuicStream { ( shared_new [QuicStreamImpl] @ QuicStreamImpl {
             id rx rx_window rx_window -1 -1 ? has_rx 0 1 0
             ( vec_new [u] ) 0 0 0 tx_max -1 0 -1 ? has_tx 0 1 0 } ) }
 }
@@ -302,16 +297,13 @@ $ `stdlib/core/rcbox.nu`
 // A QuicConn is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
 // every copy is the same connection (the listener's table, the HTTP/3
 // layer on top), and the last owner releases it.
-: QuicConn { s ctl }
+: QuicConn { ( Shared QuicConnImpl ) ctl }
 
-@ QuicConn_share QuicConn h → QuicConn { ^ @ QuicConn { # s ( rcbox_share # i . h ctl ) } }
+@ QuicConn_share QuicConn h → QuicConn { ^ @ QuicConn { ( shared_clone [QuicConnImpl] . h ctl ) } }
 
-@ QuicConn_drop sink QuicConn h → v {
-    ( mem_forget h )
-    ( rcbox_release [QuicConnImpl] # i . h ctl )
-}
+@ QuicConn_drop sink QuicConn h → v {}
 
-@ __QuicConn_ptr QuicConn h → *QuicConnImpl { ^ ( rcbox_ptr [QuicConnImpl] # i . h ctl ) }
+@ __QuicConn_ptr QuicConn h → *QuicConnImpl { ^ ( shared_ptr [QuicConnImpl] . h ctl ) }
 
 @ quic_conn_default_idle_ms → i { ^ 30000 }
 
@@ -337,8 +329,8 @@ $ `stdlib/core/rcbox.nu`
 // Everything both roles share: `tp` is the caller's template (limits);
 // the connection IDs, keys and the TLS machine are the role's to add.
 @ __qc_new_common ( Vec u ) scid ( Vec u ) peer QuicTp tp i now → QuicConn {
-    : i c__box ( rcbox_zero [QuicConnImpl] )
-    : *QuicConnImpl c ( rcbox_ptr [QuicConnImpl] c__box )
+    : ( Shared QuicConnImpl ) c__box ( shared_zero [QuicConnImpl] )
+    : *QuicConnImpl c ( shared_ptr [QuicConnImpl] c__box )
     = . c state 0
     = . c now now
     = . c scid ( bytes_slice scid 0 ( vec_len [u] scid ) )
@@ -373,16 +365,16 @@ $ `stdlib/core/rcbox.nu`
     ( quic_tp_set_active_connection_id_limit mine 4 )
     ( quic_tp_set_initial_scid mine scid )
     = . c local_tp mine
-    = . c tls @ QuicTlsSrv { # s 0 }
+    = . c tls @ QuicTlsSrv { ( shared_null [QuicTlsSrvImpl] ) }
     = . c tls_state 0
-    = . c k_rx0 @ QuicKeys { # s 0 }
-    = . c k_tx0 @ QuicKeys { # s 0 }
-    = . c k_rx1 @ QuicKeys { # s 0 }
-    = . c k_tx1 @ QuicKeys { # s 0 }
-    = . c k_rx2 @ QuicKeys { # s 0 }
-    = . c k_tx2 @ QuicKeys { # s 0 }
-    = . c k_rx2_prev @ QuicKeys { # s 0 }
-    = . c k_rx2_next @ QuicKeys { # s 0 }
+    = . c k_rx0 @ QuicKeys { ( shared_null [QuicKeysImpl] ) }
+    = . c k_tx0 @ QuicKeys { ( shared_null [QuicKeysImpl] ) }
+    = . c k_rx1 @ QuicKeys { ( shared_null [QuicKeysImpl] ) }
+    = . c k_tx1 @ QuicKeys { ( shared_null [QuicKeysImpl] ) }
+    = . c k_rx2 @ QuicKeys { ( shared_null [QuicKeysImpl] ) }
+    = . c k_tx2 @ QuicKeys { ( shared_null [QuicKeysImpl] ) }
+    = . c k_rx2_prev @ QuicKeys { ( shared_null [QuicKeysImpl] ) }
+    = . c k_rx2_next @ QuicKeys { ( shared_null [QuicKeysImpl] ) }
     = . c key_phase 0
     = . c key_update_pn -1
     = . c keys0_dropped 0
@@ -412,7 +404,7 @@ $ `stdlib/core/rcbox.nu`
     = . c retx1 ( vec_new [u] )
     = . c retx2 ( vec_new [u] )
     = . c ctl2 ( vec_new [u] )
-    = . c peer_tp @ QuicTp { # s 0 }
+    = . c peer_tp @ QuicTp { ( shared_null [QuicTpImpl] ) }
     = . c max_data_local ( quic_tp_initial_max_data tp )
     = . c data_recv 0
     = . c data_consumed 0
@@ -445,7 +437,7 @@ $ `stdlib/core/rcbox.nu`
     = . c stream_rx_window ( quic_tp_initial_max_stream_data_bidi_remote tp )
     = . c alpn_ok 0
     = . c is_client 0
-    = . c tlsc @ QuicTlsCli { # s 0 }
+    = . c tlsc @ QuicTlsCli { ( shared_null [QuicTlsCliImpl] ) }
     = . c token ( vec_new [u] )
     = . c new_token ( vec_new [u] )
     = . c retry_seen 0
@@ -454,7 +446,7 @@ $ `stdlib/core/rcbox.nu`
     = . c server_name ( vec_new [u] )
     = . c verify 0
     = . c peer_closed 0
-    ^ @ QuicConn { # s c__box }
+    ^ @ QuicConn { c__box }
 }
 
 // The transport parameters this server sends: `tp` is the caller's
@@ -693,9 +685,7 @@ $ `stdlib/core/rcbox.nu`
 @ quic_conn_take_readable QuicConn c__h → ( Vec i ) {
     : ~ * QuicConnImpl c ( __QuicConn_ptr c__h )
     // The queue moves out (the connection starts an empty one).
-    : ( Vec i ) out . c readable
-    ( mem_take out )
-    = . c readable ( vec_new [i] )
+    : ( Vec i ) out ( mem_replace [( Vec i )] . c readable ( vec_new [i] ) )
     : ~ i k 0
     ~ < k ( vec_len [i] out ) {
         : *QuicStreamImpl s ( __qc_stream_get . c 0 ( __qc_ri out k ) )
@@ -1078,16 +1068,16 @@ $ `stdlib/core/rcbox.nu`
     ? == space 0 {
         ? != . c keys0_dropped 0 { ^ } {}
         = . c keys0_dropped 1
-        = . c k_rx0 @ QuicKeys { # s 0 }
-        = . c k_tx0 @ QuicKeys { # s 0 }
+        = . c k_rx0 @ QuicKeys { ( shared_null [QuicKeysImpl] ) }
+        = . c k_tx0 @ QuicKeys { ( shared_null [QuicKeysImpl] ) }
         ( vec_clear [u] . c crypto_out0 ) ( vec_clear [u] . c retx0 )
         ( quic_rec_discard_space . c rec 0 )
         ^
     } {}
     ? != . c keys1_dropped 0 { ^ } {}
     = . c keys1_dropped 1
-    = . c k_rx1 @ QuicKeys { # s 0 }
-    = . c k_tx1 @ QuicKeys { # s 0 }
+    = . c k_rx1 @ QuicKeys { ( shared_null [QuicKeysImpl] ) }
+    = . c k_tx1 @ QuicKeys { ( shared_null [QuicKeysImpl] ) }
     ( vec_clear [u] . c crypto_out1 ) ( vec_clear [u] . c retx1 )
     ( quic_rec_discard_space . c rec 1 )
 }
@@ -1472,7 +1462,7 @@ $ `stdlib/core/rcbox.nu`
         // key update (§6): the peer's new keys are good; rotate ours too
         = . c k_rx2_prev . c k_rx2
         = . c k_rx2 . c k_rx2_next
-        = . c k_rx2_next @ QuicKeys { # s 0 }
+        = . c k_rx2_next @ QuicKeys { ( shared_null [QuicKeysImpl] ) }
         : QuicKeys ntx ( quic_keys_update . c k_tx2 )
         = . c k_tx2 ntx
         = . c key_phase ? == . c key_phase 0 1 0

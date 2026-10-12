@@ -98,9 +98,7 @@ unsafe @ wal_reopen Wal w__h s path → !v String {
     : *WalImpl w ( __Wal_ptr w__h )
     ( file_close . w f )
     // The closed file's handle leaves the log (dropped here).
-    : File old_f . w f
-    ( mem_take old_f )
-    = . w f @ File { # s 0 }
+    = . w f # File # s 0
     ?? ( file_append path ) {
         T f → {
             = . w f f

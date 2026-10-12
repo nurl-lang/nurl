@@ -280,8 +280,8 @@ unsafe @ __ag_http_args HttpRequest req s op → Json {
 }
 
 // The one McpServer the HTTP face serves: built by ag_build_app before
-// any worker runs (or on first use), in an rcbox behind a global that owns
-// it for the rest of the process. `__ag_mcp_srv` lends it to a request.
+// any worker runs (or on first use), in a global that owns it for the
+// rest of the process. `__ag_mcp_srv` lends it to a request.
 // Its tools depend on the mode (signed in, every tool takes repo and
 // as), so ag_build_app rebuilds it for an app of the other mode — what a
 // process that builds both (the tests) needs; a server builds one.
@@ -289,28 +289,28 @@ unsafe @ __ag_http_args HttpRequest req s op → Json {
     McpServer server
 }
 
-: ~ i g_ag_mcp 0
+: ~ AgMcpWiring g_ag_mcp 0
+: ~ b g_ag_mcp_made F
 : ~ b g_ag_mcp_oidc F
 
 unsafe @ __ag_mcp_init → v {
-    ? == g_ag_mcp 0 {
+    ? ! g_ag_mcp_made {
         = g_ag_mcp_oidc ( ag_auth_oidc )
-        = g_ag_mcp ( rcbox_new [AgMcpWiring] @ AgMcpWiring { ( ag_mcp_server ) } )
+        = g_ag_mcp @ AgMcpWiring { ( ag_mcp_server ) }
+        = g_ag_mcp_made T
     } {}
 }
 
-// At app build time only (no worker runs yet): the server for this mode.
+// At app build time only (no worker runs yet): the server for this mode
+// (the one built for the other mode is released by the assignment).
 unsafe @ __ag_mcp_init_for_mode → v {
-    ? & != g_ag_mcp 0 != g_ag_mcp_oidc ( ag_auth_oidc ) {
-        ( rcbox_release [AgMcpWiring] g_ag_mcp )
-        = g_ag_mcp 0
-    } {}
+    ? & g_ag_mcp_made != g_ag_mcp_oidc ( ag_auth_oidc ) { = g_ag_mcp_made F } {}
     ( __ag_mcp_init )
 }
 
 unsafe @ __ag_mcp_srv → McpServer {
     ( __ag_mcp_init )
-    ^ . ( rcbox_ptr [AgMcpWiring] g_ag_mcp ) server
+    ^ . g_ag_mcp server
 }
 
 // /mcp — Streamable HTTP, the caller resolved per request and handed

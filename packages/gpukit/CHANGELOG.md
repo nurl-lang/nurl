@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.10.1] — 2026-10-12
+
+Requires NURL 0.73.0. No change of its own beyond its dependencies.
+
+### Changed
+
+- Requires gpu 0.16.
+
 ## [0.10.0] — 2026-10-11
 
 Requires NURL 0.73.0, which allows `mem_forget`, `mem_take` and the

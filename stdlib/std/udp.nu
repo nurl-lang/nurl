@@ -107,7 +107,7 @@ $ `stdlib/std/async_ffi.nu`
 
 & `c` @ nurl_udp_peer_addr i handle → s
 
-& `c` @ nurl_udp_local_addr i handle → s
+& `c` @ nurl_udp_local_addr i handle → sink s
 
 & `c` @ nurl_udp_err_kind i handle → i
 
@@ -137,7 +137,7 @@ $ `stdlib/std/async_ffi.nu`
 
 & `c` @ nurl_udp_addr_resolve s host i port *u addr_out → i
 
-& `c` @ nurl_udp_addr_format *u addr → s
+& `c` @ nurl_udp_addr_format *u addr → sink s
 
 & `c` @ nurl_udp_setsockopt_int i handle i level i opt i val → i
 
@@ -213,10 +213,7 @@ $ `stdlib/std/async_ffi.nu`
 @ udp_local_addr UdpSocket sk → String {
     : s rp . sk raw
     : i raw # i rp
-    : s raw_s ( nurl_udp_local_addr raw )
-    : String out ( string_from raw_s )
-    ( nurl_free raw_s )
-    ^ out
+    ^ ( string_adopt ( nurl_udp_local_addr raw ) )
 }
 
 @ udp_family UdpSocket sk → i {
@@ -592,10 +589,7 @@ $ `stdlib/std/async_ffi.nu`
 
 // OWNED "ip:port" (IPv4) / "[ip]:port" (IPv6); "" for an empty address.
 @ udp_addr_format ( Vec u ) a → String {
-    : s raw_s ( nurl_udp_addr_format ( __udp_addr_ptr a ) )
-    : String out ( string_from raw_s )
-    ( nurl_free raw_s )
-    ^ out
+    ^ ( string_adopt ( nurl_udp_addr_format ( __udp_addr_ptr a ) ) )
 }
 
 @ udp_addr_family ( Vec u ) a → i {

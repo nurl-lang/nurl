@@ -206,9 +206,7 @@ $ `stdlib/core/posix.nu`  // nurl_native_constant / SIG* lookups
 // `signal_clear_shutdown` to forget the registration entirely.
 
 @ signal_install_shutdown TcpListener listener → v {
-    : s raw . listener raw
-    : i h # i raw
-    ( nurl_signal_install_shutdown h )
+    ( nurl_signal_install_shutdown ( tcp_listener_raw listener ) )
 }
 
 @ signal_clear_shutdown → v {

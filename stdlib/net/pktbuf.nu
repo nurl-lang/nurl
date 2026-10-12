@@ -35,23 +35,20 @@ $ `stdlib/core/rcbox.nu`
 
 // A PktBuf is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
 // every copy is the same state, and the last owner releases it.
-: PktBuf { s ctl }
+: PktBuf { ( Shared PktBufImpl ) ctl }
 
-@ PktBuf_share PktBuf h → PktBuf { ^ @ PktBuf { # s ( rcbox_share # i . h ctl ) } }
+@ PktBuf_share PktBuf h → PktBuf { ^ @ PktBuf { ( shared_clone [PktBufImpl] . h ctl ) } }
 
-@ PktBuf_drop sink PktBuf h → v {
-    ( mem_forget h )
-    ( rcbox_release [PktBufImpl] # i . h ctl )
-}
+@ PktBuf_drop sink PktBuf h → v {}
 
-@ __PktBuf_ptr PktBuf h → *PktBufImpl { ^ ( rcbox_ptr [PktBufImpl] # i . h ctl ) }
+@ __PktBuf_ptr PktBuf h → *PktBufImpl { ^ ( shared_ptr [PktBufImpl] . h ctl ) }
 
 @ pktbuf_new → PktBuf {
-    : i p__box ( rcbox_zero [PktBufImpl] )
-    : *PktBufImpl p ( rcbox_ptr [PktBufImpl] p__box )
+    : ( Shared PktBufImpl ) p__box ( shared_zero [PktBufImpl] )
+    : *PktBufImpl p ( shared_ptr [PktBufImpl] p__box )
     = . p bytes ( vec_new [u] )
     = . p ends ( vec_new [i] )
-    ^ @ PktBuf { # s p__box }
+    ^ @ PktBuf { p__box }
 }
 
 // Let go of `p` now rather than at the end of its owner's scope.

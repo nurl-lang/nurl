@@ -13,8 +13,10 @@
 //   ( tcp_write_all       TcpConn c ( Vec u ) bytes )       → ! v NetErr
 //   ( tcp_write_all2      TcpConn c ( Vec u ) head ( Vec u ) body ) → ! v NetErr
 //   ( tcp_write_str       TcpConn c s text )                → ! v NetErr
-//   ( tcp_close_listener  TcpListener l )                   → v
-//   ( tcp_close_conn      TcpConn c )                       → v
+//   ( tcp_close_listener  TcpListener l )                   → v    early close (optional)
+//   ( tcp_close_conn      TcpConn c )                       → v    early close (optional)
+//   ( tcp_conn_adopt      i raw )                           → TcpConn  owns the runtime socket
+//   ( tcp_conn_view       i raw )                           → TcpConn  never closes it
 //   ( tcp_peer_addr       TcpConn c )                       → s    BORROWED view
 //   ( tcp_local_addr      TcpListener l )                   → String OWNED
 //   ( tcp_set_timeout     TcpConn c i ms )                  → v
@@ -22,11 +24,12 @@
 //
 // Memory model:
 //
-//   * Both TcpListener and TcpConn are opaque single-field handles
-//     wrapping a heap NurlTcp pointer (the runtime owns the FD + a
-//     sideband err_kind). The handle is moved into the wrapper struct
-//     and OUT again on accept; the caller must `tcp_close_*` exactly
-//     once per Result-Ok path.
+//   * TcpListener and TcpConn are handles over a counted block holding
+//     the runtime's NurlTcp pointer (the runtime owns the FD + a
+//     sideband err_kind): every copy is the same socket, and its last
+//     owner closes it — nothing to close by hand. `tcp_close_*` closes
+//     it early, for every copy. A conn made with `tcp_conn_view` is a
+//     view of a socket something else closes, and closes nothing.
 //   * `tcp_read_chunk` returns an OWNED Vec[u]. Caller frees with
 //     `( vec_free [u] v )`. EOF is reported as the NetClosed variant
 //     so empty payloads (max <= 0) don't get conflated with a clean
@@ -90,6 +93,8 @@ $ `stdlib/std/fs.nu`
 $ `stdlib/std/tls.nu`
 $ `stdlib/std/tls_server.nu`
 $ `stdlib/std/pkey.nu`
+$ `stdlib/std/arc.nu`
+$ `stdlib/std/thread.nu`
 
 : | NetErr {
     NetBind
@@ -118,19 +123,149 @@ $ `stdlib/std/pkey.nu`
 // parameter set), all big-endian. pqcertp / pqkp are an OPTIONAL second
 // identity — an ML-DSA chain and key served beside the classical one to
 // clients that list its scheme (`tcp_listen_tls_dual`), 0/0 otherwise.
-// All are held as raw malloc'd (ptr, len) pairs — NOT Vec fields —
-// because a value struct returned with owned-Vec fields is auto-dropped
-// at the constructing function's exit (a borrowck escape gap), which
-// would free the buffers out from under the listener.
-: TcpListener { s raw i is_tls i keytype i certp i certlen i kp1 i kl1 i kp2 i kl2 i kp3 i kl3 i alpnp i alpnlen i pqcertp i pqcertlen i pqkp i pqkl }
-// alpnp/alpnlen: the TLS listener's ALPN preference list in wire form
-// ([len:1][name] entries, server order — see tls_alpn_pack), 0/0 when the
-// listener does not negotiate ALPN.
+// `alpn` is the TLS listener's ALPN preference list in wire form
+// ([len:1][name] entries, server order — see tls_alpn_pack), empty when
+// the listener does not negotiate ALPN. The listener is a plain value
+// every accepting worker copies, so the material lives in a table of the
+// module's (g_tls_lcreds below) and `creds` names its slot (0 on a
+// plaintext listener).
+: TlsCreds {
+    ( Vec u ) cert
+    ( Vec u ) k1
+    ( Vec u ) k2
+    ( Vec u ) k3
+    ( Vec u ) alpn
+    ( Vec u ) pqcert
+    ( Vec u ) pqk
+}
+
+// The listener's state: the runtime socket handle, and for a TLS
+// listener its key type and credentials slot. `owns`: this handle closes
+// it — its last owner, or an early tcp_close_listener.
+: TcpListenerImpl { i raw i is_tls i keytype i creds b owns }
+
+% Drop TcpListenerImpl {
+    @ drop TcpListenerImpl l → v {
+        ? . l owns {
+            ( nurl_tcp_close . l raw )
+            ? != . l creds 0 { ( __tls_lcreds_close . l creds ) } {}
+        } {}
+    }
+}
+
+// A listener is a handle: every copy (each accepting worker's) is the
+// same socket, and the last owner closes it — nothing to close by hand.
+: TcpListener { ( Shared TcpListenerImpl ) ctl }
+
+// Its drop closes something the outside world sees (stdlib/core/marker.nu).
+% Resource TcpListener {}
+
+@ TcpListener_share TcpListener h → TcpListener { ^ @ TcpListener { ( shared_clone [TcpListenerImpl] . h ctl ) } }
+
+@ TcpListener_drop sink TcpListener h → v {}
+
+@ __tli TcpListener l → *TcpListenerImpl { ^ ( shared_ptr [TcpListenerImpl] . l ctl ) }
+
+@ __tcp_listener_make i raw i is_tls i keytype i creds → TcpListener {
+    ^ @ TcpListener { ( shared_new [TcpListenerImpl] @ TcpListenerImpl { raw is_tls keytype creds T } ) }
+}
+
+// The runtime handle behind a listener.
+@ tcp_listener_raw TcpListener l → i { ^ . ( __tli l ) raw }
+
+// Every TLS listener's material, by slot (a listener's `creds` is its
+// slot + 1). A handshake takes a share of its own under the lock, and
+// tcp_close_listener empties the slot: the material goes with the last
+// share, so a handshake still running when the listener closes keeps
+// what it reads. The table and its lock are made by the first TLS
+// listen, while the process is still single-threaded (as the ticket key
+// is), and every other use follows one.
+: TlsSlot { ? ( Arc TlsCreds ) creds }
+
+: ~ ( Vec TlsSlot ) g_tls_lcreds 0
+: ~ Mutex g_tls_lcreds_mu 0
+: ~ b g_tls_lcreds_made F
+
+@ __tls_lcreds_add sink ( Arc TlsCreds ) c → i {
+    ? ! g_tls_lcreds_made {
+        = g_tls_lcreds ( vec_new [TlsSlot] )
+        = g_tls_lcreds_mu ( mutex_new )
+        = g_tls_lcreds_made T
+    } {}
+    ( mutex_lock g_tls_lcreds_mu )
+    ( vec_push [TlsSlot] g_tls_lcreds @ TlsSlot { @ ?( Arc TlsCreds ) { T c } } )
+    : i slot ( vec_len [TlsSlot] g_tls_lcreds )
+    ( mutex_unlock g_tls_lcreds_mu )
+    ^ slot
+}
+
+@ __tls_lcreds_get i slot → ?( Arc TlsCreds ) {
+    ( mutex_lock g_tls_lcreds_mu )
+    : TlsSlot e ( vec_at [TlsSlot] g_tls_lcreds - slot 1 )
+    : ?( Arc TlsCreds ) out ?? . e creds {
+        T a → @ ?( Arc TlsCreds ) { T ( arc_clone [TlsCreds] a ) }
+        F → @ ?( Arc TlsCreds ) { F }
+    }
+    ( mutex_unlock g_tls_lcreds_mu )
+    ^ out
+}
+
+@ __tls_lcreds_close i slot → v {
+    ( mutex_lock g_tls_lcreds_mu )
+    ( vec_put [TlsSlot] g_tls_lcreds - slot 1 @ TlsSlot { @ ?( Arc TlsCreds ) { F } } )
+    ( mutex_unlock g_tls_lcreds_mu )
+}
 // kind: 0 = plaintext (raw is the runtime socket handle), 1 = pure TLS
 // client, 2 = pure TLS server. For kinds 1/2 `tlsh` is one owner of the
 // TlsConn as a word (`_tls_word`; tcp_close_conn gives it back) and
 // reads/writes dispatch to the pure stack.
-: TcpConn { s raw i kind i tlsh }
+: TcpConnImpl { i raw i kind i tlsh b owns }
+
+% Drop TcpConnImpl {
+    @ drop TcpConnImpl c → v {
+        ? . c owns { ( __tcp_conn_close_parts . c raw . c kind . c tlsh ) } {}
+    }
+}
+
+// A connection is a handle: every copy is the same connection, and the
+// last owner closes it — nothing to close by hand (tcp_close_conn closes
+// it early). A view (tcp_conn_view) of a socket something else owns
+// never closes it.
+: TcpConn { ( Shared TcpConnImpl ) ctl }
+
+// Its drop closes something the outside world sees (stdlib/core/marker.nu).
+% Resource TcpConn {}
+
+@ TcpConn_share TcpConn h → TcpConn { ^ @ TcpConn { ( shared_clone [TcpConnImpl] . h ctl ) } }
+
+@ TcpConn_drop sink TcpConn h → v {}
+
+@ __tci TcpConn c → *TcpConnImpl { ^ ( shared_ptr [TcpConnImpl] . c ctl ) }
+
+@ __tcp_conn_make i raw i kind i tlsh b owns → TcpConn {
+    ^ @ TcpConn { ( shared_new [TcpConnImpl] @ TcpConnImpl { raw kind tlsh owns } ) }
+}
+
+// A connection on runtime socket handle `raw`, which the TcpConn now owns:
+// its last owner (or tcp_close_conn) closes it.
+@ tcp_conn_adopt i raw → TcpConn { ^ ( __tcp_conn_make raw 0 0 T ) }
+
+// A TcpConn over a socket something else owns and closes (a protocol
+// client that keeps the runtime handle in its own record): reads and
+// writes go to it, and neither its drop nor tcp_close_conn closes it.
+@ tcp_conn_view i raw → TcpConn { ^ ( __tcp_conn_make raw 0 0 F ) }
+
+// The runtime handle field of a connection (0 for a TLS conn, whose
+// socket lives in its TlsConn, and once it is closed).
+@ tcp_conn_raw TcpConn c → i { ^ . ( __tci c ) raw }
+
+// Hand the socket over (to the TLS layer): its runtime handle, which this
+// conn — and every copy of it — no longer closes.
+@ __tcp_conn_release TcpConn c → i {
+    : *TcpConnImpl p ( __tci c )
+    = . p owns F
+    ^ . p raw
+}
 
 // Render a NetErr variant name as a raw `s` for log lines.
 @ net_err_name NetErr e → s {
@@ -190,28 +325,7 @@ $ `stdlib/std/pkey.nu`
         ( nurl_tcp_close raw )
         ^ @ !TcpListener NetErr { F ( _net_err_of ek ) }
     } {}
-    : s rp # s raw
-    : TcpListener l @ TcpListener { rp 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 }
-    ^ @ !TcpListener NetErr { T l }
-}
-
-// malloc a copy of `v`'s bytes; returns the pointer as i64 (0 if empty).
-@ __net_dup ( Vec u ) v → i {
-    : i n ( vec_len [u] v )
-    ? <= n 0 { ^ 0 } {}
-    : s buf # s ( malloc n )
-    ( nurl_memcpy # *u buf ( vec_data [u] v ) n )
-    ^ # i buf
-}
-
-// Build a fresh Vec view over a raw (ptr, len) cert/key blob.
-// A borrowed view of a listener-owned buffer (certificate chain, key):
-// the listener keeps these for its whole life, and the handshake only
-// reads them, so there is nothing to copy — this used to memcpy the chain
-// and the key on EVERY accept. `vec_free` on the view releases the handle
-// only (core/vec.nu, vec_borrow_raw).
-@ __net_vecview i ptr i len → ( Vec u ) {
-    ^ ( vec_borrow_raw [u] # *u ptr len )
+    ^ @ !TcpListener NetErr { T ( __tcp_listener_make raw 0 0 0 ) }
 }
 
 // Convenience: same as tcp_listen_with_backlog with backlog = 128.
@@ -347,24 +461,11 @@ $ `stdlib/std/pkey.nu`
     // single-threaded, so every worker that later accepts on this
     // listener seals and opens tickets under the same key.
     ( _tls_ticket_key_ensure )
-    // Copy cert list / key material into raw heap buffers, then drop the Vecs.
-    : i certp ( __net_dup cert )
-    : i certlen ( vec_len [u] cert )
-    : i kp1 ( __net_dup k1 )
-    : i kl1 ( vec_len [u] k1 )
-    : i kp2 ( __net_dup k2 )
-    : i kl2 ( vec_len [u] k2 )
-    : i kp3 ( __net_dup k3 )
-    : i kl3 ( vec_len [u] k3 )
+    // The cert list and key material move into the listener's shared
+    // credentials.
     : ( Vec u ) alpn ( tls_alpn_pack alpn_protocols )
-    : i alpnp ( __net_dup alpn )
-    : i alpnlen ( vec_len [u] alpn )
-    : i pqcertp ( __net_dup pqcert )
-    : i pqcertlen ( vec_len [u] pqcert )
-    : i pqkp ( __net_dup pqk )
-    : i pqkl ( vec_len [u] pqk )
-    : s rp # s raw
-    ^ @ !TcpListener NetErr { T @ TcpListener { rp 1 keytype certp certlen kp1 kl1 kp2 kl2 kp3 kl3 alpnp alpnlen pqcertp pqcertlen pqkp pqkl } }
+    : ( Arc TlsCreds ) creds ( arc_new [TlsCreds] @ TlsCreds { cert k1 k2 k3 alpn pqcert pqk } )
+    ^ @ !TcpListener NetErr { T ( __tcp_listener_make raw 1 keytype ( __tls_lcreds_add creds ) ) }
 }
 
 @ tcp_listen_tls s host i port s cert_path s key_path → !TcpListener NetErr {
@@ -478,8 +579,7 @@ $ `stdlib/std/pkey.nu`
         ( nurl_tcp_close craw )
         ^ @ !TcpConn NetErr { F ( _net_err_of ek ) }
     } {}
-    : s crp # s craw
-    ^ @ !TcpConn NetErr { T @ TcpConn { crp 0 0 } }
+    ^ @ !TcpConn NetErr { T ( tcp_conn_adopt craw ) }
 }
 
 // Open a verified (or, with verify = 0, encrypted-only) pure-TLS client
@@ -491,7 +591,7 @@ $ `stdlib/std/pkey.nu`
     : !TlsConn TlsErr r ? != verify 0 ( tls_attach_verify raw server_name ) ( tls_attach raw server_name )
     ?? r {
         F _ → ^ @ !TcpConn NetErr { F # NetErr NetTlsHandshake }
-        T tc → ^ @ !TcpConn NetErr { T @ TcpConn { # s 0 1 ( _tls_word tc ) } }
+        T tc → ^ @ !TcpConn NetErr { T ( __tcp_conn_make 0 1 ( _tls_word tc ) T ) }
     }
 }
 
@@ -507,7 +607,7 @@ $ `stdlib/std/pkey.nu`
     : !TlsConn TlsErr r ? != verify 0 ( tls_attach_alpn_verify raw server_name alpn ) ( tls_attach_alpn raw server_name alpn )
     ?? r {
         F _ → ^ @ !TcpConn NetErr { F # NetErr NetTlsHandshake }
-        T tc → ^ @ !TcpConn NetErr { T @ TcpConn { # s 0 1 ( _tls_word tc ) } }
+        T tc → ^ @ !TcpConn NetErr { T ( __tcp_conn_make 0 1 ( _tls_word tc ) T ) }
     }
 }
 
@@ -522,7 +622,7 @@ $ `stdlib/std/pkey.nu`
     : !TlsConn TlsErr r ( tls_attach_full raw server_name alpn sess verify )
     ?? r {
         F _ → ^ @ !TcpConn NetErr { F # NetErr NetTlsHandshake }
-        T tc → ^ @ !TcpConn NetErr { T @ TcpConn { # s 0 1 ( _tls_word tc ) } }
+        T tc → ^ @ !TcpConn NetErr { T ( __tcp_conn_make 0 1 ( _tls_word tc ) T ) }
     }
 }
 
@@ -531,7 +631,7 @@ $ `stdlib/std/pkey.nu`
 // protocol stack to hand the socket to) as a client TcpConn (kind 1).
 // The TcpConn holds an owner of it from here: tcp_close_conn closes it.
 @ tcp_conn_from_tls TlsConn tc → TcpConn {
-    ^ @ TcpConn { # s 0 1 ( _tls_word tc ) }
+    ^ ( __tcp_conn_make 0 1 ( _tls_word tc ) T )
 }
 
 // The resumption session of a TLS client conn (tls_session_export): offer
@@ -578,17 +678,18 @@ $ `stdlib/std/pkey.nu`
     ^ ( string_new )
 }
 
+// Close the listener now rather than with its last owner. Every copy
+// sees it closed. The runtime handle stays named: a worker that retained
+// it (tcp_listener_retain) still releases it, and its accept reports the
+// close.
 @ tcp_close_listener TcpListener l → v {
-    ( nurl_tcp_close # i . l raw )
-    ? != . l is_tls 0 {
-        ? != . l certp 0 { ( nurl_free # s . l certp ) } {}
-        ? != . l kp1 0 { ( nurl_free # s . l kp1 ) } {}
-        ? != . l kp2 0 { ( nurl_free # s . l kp2 ) } {}
-        ? != . l kp3 0 { ( nurl_free # s . l kp3 ) } {}
-        ? != . l alpnp 0 { ( nurl_free # s . l alpnp ) } {}
-        ? != . l pqcertp 0 { ( nurl_free # s . l pqcertp ) } {}
-        ? != . l pqkp 0 { ( nurl_free # s . l pqkp ) } {}
+    : *TcpListenerImpl p ( __tli l )
+    ? . p owns {
+        ( nurl_tcp_close . p raw )
+        ? != . p creds 0 { ( __tls_lcreds_close . p creds ) } {}
     } {}
+    = . p owns F
+    = . p creds 0
 }
 
 // Soft-shutdown: close the underlying socket but KEEP the handle's
@@ -600,7 +701,7 @@ $ `stdlib/std/pkey.nu`
 // at exit on Windows). Pair this with a final `tcp_close_listener`
 // after every worker has joined to release the runtime struct.
 @ tcp_shutdown_listener TcpListener l → v {
-    : s rp . l raw
+    : s rp # s . ( __tli l ) raw
     : i raw # i rp
     ( nurl_tcp_shutdown raw )
 }
@@ -617,66 +718,53 @@ $ `stdlib/std/pkey.nu`
 // by the read/write/close dispatch. The whole thing is gated on
 // g_st_n: a process that never calls tcp_starttls does ZERO lookups.
 //
-// Storage is a malloc'd i64 array of (fd, ptr) pairs (2 words each),
-// grown by doubling. nurl_peek/poke are word-indexed (8-byte cells).
-: ~ i g_st_base 0
-: ~ i g_st_cap 0
+// Storage is an owned `( Vec i )` of (fd, ptr) pairs, two words each.
+: ~ ( Vec i ) g_st 0
+: ~ b g_st_made F
 : ~ i g_st_n 0
 
-@ __starttls_grow → v {
-    : i newcap ? == g_st_cap 0 8 * g_st_cap 2
-    : s nb # s ( malloc * newcap 16 )
-    ? != g_st_base 0 {
-        ( nurl_memcpy # *u nb # *u g_st_base * g_st_n 16 )
-        ( nurl_free # s g_st_base )
-    } {}
-    = g_st_base # i nb
-    = g_st_cap newcap
-}
-
 @ __starttls_register i fd i ptr → v {
-    ? >= g_st_n g_st_cap { ( __starttls_grow ) } {}
-    : s b # s g_st_base
-    ( nurl_poke b * g_st_n 2 fd )
-    ( nurl_poke b + * g_st_n 2 1 ptr )
+    ? ! g_st_made { = g_st ( vec_new [i] ) = g_st_made T } {}
+    ( vec_push [i] g_st fd )
+    ( vec_push [i] g_st ptr )
     = g_st_n + g_st_n 1
 }
 
 @ __starttls_lookup i fd → i {
     ? == g_st_n 0 { ^ 0 } {}
-    : s b # s g_st_base
+    : *i b ( vec_data [i] g_st )
     : ~ i k 0
     ~ < k g_st_n {
-        ? == ( nurl_peek b * k 2 ) fd { ^ ( nurl_peek b + * k 2 1 ) } {}
+        ? == . b * k 2 fd { ^ . b + * k 2 1 } {}
         = k + k 1
     }
     ^ 0
 }
 
 @ __starttls_unregister i fd → v {
-    ? != g_st_n 0 {
-        : s b # s g_st_base
-        : ~ i k 0
-        : ~ i found 0
-        ~ & == found 0 < k g_st_n {
-            ? == ( nurl_peek b * k 2 ) fd {
-                : i last - g_st_n 1
-                ( nurl_poke b * k 2 ( nurl_peek b * last 2 ) )
-                ( nurl_poke b + * k 2 1 ( nurl_peek b + * last 2 1 ) )
-                = g_st_n last
-                = found 1
-            } {}
-            = k + k 1
-        }
-    } {}
+    ? == g_st_n 0 { ^ } {}
+    : *i b ( vec_data [i] g_st )
+    : ~ i k 0
+    : ~ i found 0
+    ~ & == found 0 < k g_st_n {
+        ? == . b * k 2 fd {
+            : i last - g_st_n 1
+            = . b * k 2 . b * last 2
+            = . b + * k 2 1 . b + * last 2 1
+            : b _t ( vec_truncate [i] g_st * last 2 )
+            = g_st_n last
+            = found 1
+        } {}
+        = k + k 1
+    }
 }
 
 // Resolve a TcpConn's TlsConn (as its word), or 0 if the conn is plaintext.
 // kinds 1/2 carry it inline in `tlsh`; a STARTTLS-upgraded kind-0 conn
 // is found via the fd registry.
 @ __conn_tlsptr TcpConn c → i {
-    ? != . c tlsh 0 { ^ . c tlsh } {}
-    ? == . c kind 0 { ^ ( __starttls_lookup # i . c raw ) } {}
+    ? != . ( __tci c ) tlsh 0 { ^ . ( __tci c ) tlsh } {}
+    ? == . ( __tci c ) kind 0 { ^ ( __starttls_lookup . ( __tci c ) raw ) } {}
     ^ 0
 }
 
@@ -685,7 +773,7 @@ $ `stdlib/std/pkey.nu`
 @ __conn_fd TcpConn c → i {
     : i tp ( __conn_tlsptr c )
     ? != tp 0 { ^ ( tls_socket # TlsConn tp ) } {}
-    ^ # i . c raw
+    ^ . ( __tci c ) raw
 }
 
 // The runtime socket handle behind ANY TcpConn — plaintext, pure-TLS
@@ -702,26 +790,37 @@ $ `stdlib/std/pkey.nu`
 // conn handle, using the listener's parked cert/key material. Consumes
 // `craw` (the TlsConn owns the socket on success; closed on failure).
 @ __tls_accept_handshake TcpListener l i craw → !TcpConn NetErr {
-    : ( Vec u ) cert ( __net_vecview . l certp . l certlen )
-    : ( Vec u ) k1 ( __net_vecview . l kp1 . l kl1 )
-    : ( Vec u ) alpn ( __net_vecview . l alpnp . l alpnlen )
+    // A share of its own for the handshake's whole run.
+    ?? ( __tls_lcreds_get . ( __tli l ) creds ) {
+        T a → { ^ ( __tls_accept_with l ( arc_ptr [TlsCreds] a ) craw ) }
+        F → {
+            ( nurl_tcp_close craw )
+            ^ @ !TcpConn NetErr { F # NetErr NetTlsHandshake }
+        }
+    }
+}
+
+@ __tls_accept_with TcpListener l * TlsCreds c i craw → !TcpConn NetErr {
+    : ( Vec u ) cert . c cert
+    : ( Vec u ) k1 . c k1
+    : ( Vec u ) alpn . c alpn
     // keytype 0 = EC P-256 (k1 = scalar), 1 = RSA (k1 = n, k2 = d, k3 =
     // e), 2 = ML-DSA (k1 = secret key). With a second identity parked
     // on the listener the handshake chooses between the two per
     // ClientHello (tls_accept_dual_alpn); without one the classical /
     // ML-DSA single-identity entry points are the same code.
-    : ( Vec u ) k2 ( __net_vecview . l kp2 . l kl2 )
-    : ( Vec u ) k3 ( __net_vecview . l kp3 . l kl3 )
-    : ( Vec u ) pqc ( __net_vecview . l pqcertp . l pqcertlen )
-    : ( Vec u ) pqk ( __net_vecview . l pqkp . l pqkl )
+    : ( Vec u ) k2 . c k2
+    : ( Vec u ) k3 . c k3
+    : ( Vec u ) pqc . c pqcert
+    : ( Vec u ) pqk . c pqk
     : ( Vec u ) none ( vec_new [u] )
-    : !TlsConn TlsErr r ? == . l keytype 2
+    : !TlsConn TlsErr r ? == . ( __tli l ) keytype 2
     ( tls_accept_mldsa_alpn craw cert ( mldsa_level_of_sk_len ( vec_len [u] k1 ) ) k1 alpn )
-    ( tls_accept_dual_alpn craw cert . l keytype ? == . l keytype 1 none k1 ? == . l keytype 1 k1 none k3 k2
+    ( tls_accept_dual_alpn craw cert . ( __tli l ) keytype ? == . ( __tli l ) keytype 1 none k1 ? == . ( __tli l ) keytype 1 k1 none k3 k2
     pqc ( mldsa_level_of_sk_len ( vec_len [u] pqk ) ) pqk alpn )
     ?? r {
         F _ → ^ @ !TcpConn NetErr { F # NetErr NetTlsHandshake }
-        T tc → ^ @ !TcpConn NetErr { T @ TcpConn { # s 0 2 ( _tls_word tc ) } }
+        T tc → ^ @ !TcpConn NetErr { T ( __tcp_conn_make 0 2 ( _tls_word tc ) T ) }
     }
 }
 
@@ -734,7 +833,7 @@ $ `stdlib/std/pkey.nu`
 @ tcp_accept_transport TcpListener l → !TcpConn NetErr {
     : i fcur ( nurl_fiber_current )
     ? != fcur 0 { ^ ( tcp_accept_async l ) } {}
-    : i lraw # i . l raw
+    : i lraw . ( __tli l ) raw
     : i craw ( nurl_tcp_accept lraw )
     ? == craw 0 { ^ @ !TcpConn NetErr { F # NetErr NetOther } } {}
     : i ek ( nurl_tcp_err_kind craw )
@@ -742,7 +841,7 @@ $ `stdlib/std/pkey.nu`
         ( nurl_tcp_close craw )
         ^ @ !TcpConn NetErr { F ( _net_err_of ek ) }
     } {}
-    : TcpConn c @ TcpConn { # s craw 0 0 }
+    : TcpConn c ( tcp_conn_adopt craw )
     ^ @ !TcpConn NetErr { T c }
 }
 
@@ -753,8 +852,8 @@ $ `stdlib/std/pkey.nu`
 // unchanged. The handshake's record I/O is context-aware, so on a fiber
 // a slow client parks this fiber instead of blocking the worker.
 @ tcp_conn_complete_tls TcpListener l TcpConn c → !TcpConn NetErr {
-    ? == . l is_tls 0 { ^ @ !TcpConn NetErr { T c } } {}
-    ^ ( __tls_accept_handshake l # i . c raw )
+    ? == . ( __tli l ) is_tls 0 { ^ @ !TcpConn NetErr { T c } } {}
+    ^ ( __tls_accept_handshake l ( __tcp_conn_release c ) )
 }
 
 @ tcp_accept TcpListener l → !TcpConn NetErr {
@@ -763,24 +862,36 @@ $ `stdlib/std/pkey.nu`
     // TLS listener the handshake then runs right here in the calling
     // context (fiber-aware record I/O parks; a plain thread blocks).
     : !TcpConn NetErr acc ( tcp_accept_transport l )
-    ? == . l is_tls 0 { ^ acc } {}
+    ? == . ( __tli l ) is_tls 0 { ^ acc } {}
     ?? acc {
-        T rawc → ^ ( __tls_accept_handshake l # i . rawc raw )
+        T rawc → ^ ( __tls_accept_handshake l ( __tcp_conn_release rawc ) )
         F e → ^ @ !TcpConn NetErr { F e }
     }
 }
 
-@ tcp_close_conn TcpConn c → v {
-    : i tp ( __conn_tlsptr c )
+// Close `raw` / its TLS connection (kind, tlsh as in TcpConnImpl).
+@ __tcp_conn_close_parts i raw i kind i tlsh → v {
+    : i tp ? != tlsh 0 tlsh ? == kind 0 ( __starttls_lookup raw ) 0
     ? != tp 0 {
-        ( __starttls_unregister # i . c raw )
+        ( __starttls_unregister raw )
         // kind 2 = pure-NURL TLS server conn: its close_notify must be
         // encrypted under the server write keys (tls_server_close);
         // tls_close's alert uses the client direction.
-        ? == . c kind 2 { ( tls_server_close # TlsConn tp ) } { ( tls_close # TlsConn tp ) }
+        ? == kind 2 { ( tls_server_close # TlsConn tp ) } { ( tls_close # TlsConn tp ) }
         // …and the conn's owner of it goes back: the last one frees it.
         ( _tls_word_release tp )
-    } { ( nurl_tcp_close # i . c raw ) }
+    } { ( nurl_tcp_close raw ) }
+}
+
+// Close the connection now rather than with its last owner. Every copy
+// sees it closed; a view closes nothing.
+@ tcp_close_conn TcpConn c → v {
+    : *TcpConnImpl p ( __tci c )
+    ? . p owns { ( __tcp_conn_close_parts . p raw . p kind . p tlsh ) } {}
+    = . p owns F
+    = . p raw 0
+    = . p kind 0
+    = . p tlsh 0
 }
 
 // In-place STARTTLS upgrade: run a pure TLS 1.3 handshake over an
@@ -793,7 +904,7 @@ $ `stdlib/std/pkey.nu`
 @ tcp_starttls TcpConn c s server_name b verify → !v NetErr {
     : i tp ( __conn_tlsptr c )
     ? != tp 0 { ^ @ !v NetErr { T 0 } } {}
-    : i fd # i . c raw
+    : i fd . ( __tci c ) raw
     : !TlsConn TlsErr r ? verify ( tls_attach_verify fd server_name ) ( tls_attach fd server_name )
     ?? r {
         F _ → ^ @ !v NetErr { F # NetErr NetTlsHandshake }
@@ -808,7 +919,7 @@ $ `stdlib/std/pkey.nu`
     ^ ( nurl_tcp_peer_addr ( __conn_fd c ) )
 }
 
-& `c` @ nurl_tcp_local_addr i handle → s
+& `c` @ nurl_tcp_local_addr i handle → sink s
 
 // OWNED String "ip:port" of the address a listener is actually bound to,
 // read fresh from getsockname. This is the counterpart of listening on
@@ -819,10 +930,7 @@ $ `stdlib/std/pkey.nu`
 // BORROWED view cached on the handle: there is no cached local address,
 // so this one is computed and owned. Same shape as `udp_local_addr`.
 @ tcp_local_addr TcpListener l → String {
-    : s raw_s ( nurl_tcp_local_addr # i . l raw )
-    : String out ( string_from raw_s )
-    ( nurl_free raw_s )
-    ^ out
+    ^ ( string_adopt ( nurl_tcp_local_addr . ( __tli l ) raw ) )
 }
 
 @ tcp_set_timeout TcpConn c i ms → v {
@@ -858,7 +966,7 @@ $ `stdlib/std/pkey.nu`
 // (tls_read returns []) is surfaced as NetClosed to match the plain path.
 @ __tls_read_net TcpConn c i max → !( Vec u ) NetErr {
     : TlsConn tc # TlsConn ( __conn_tlsptr c )
-    : !( Vec u ) TlsErr r ? == . c kind 2 ( tls_server_read tc max ) ( tls_read tc max )
+    : !( Vec u ) TlsErr r ? == . ( __tci c ) kind 2 ( tls_server_read tc max ) ( tls_read tc max )
     ?? r {
         F e → {
             : NetErr ne ?? e { TlsClosed → # NetErr NetClosed _ → # NetErr NetRead }
@@ -875,7 +983,7 @@ $ `stdlib/std/pkey.nu`
 
 @ __tls_write_net TcpConn c ( Vec u ) bytes → !v NetErr {
     : TlsConn tc # TlsConn ( __conn_tlsptr c )
-    : !v TlsErr r ? == . c kind 2 ( tls_server_write tc bytes ) ( tls_write tc bytes )
+    : !v TlsErr r ? == . ( __tci c ) kind 2 ( tls_server_write tc bytes ) ( tls_write tc bytes )
     ?? r { T _ → ^ @ !v NetErr { T 0 } F _ → ^ @ !v NetErr { F ? == ( nurl_tcp_err_kind ( __conn_fd c ) ) 7 # NetErr NetTimeout # NetErr NetWrite } }
 }
 
@@ -884,7 +992,7 @@ $ `stdlib/std/pkey.nu`
 // plaintext is never joined into one buffer first.
 @ __tls_write_net2 TcpConn c ( Vec u ) head ( Vec u ) body → !v NetErr {
     : TlsConn tc # TlsConn ( __conn_tlsptr c )
-    : !v TlsErr r ? == . c kind 2 ( tls_server_write2 tc head body ) ( tls_write2 tc head body )
+    : !v TlsErr r ? == . ( __tci c ) kind 2 ( tls_server_write2 tc head body ) ( tls_write2 tc head body )
     ?? r { T _ → ^ @ !v NetErr { T 0 } F _ → ^ @ !v NetErr { F ? == ( nurl_tcp_err_kind ( __conn_fd c ) ) 7 # NetErr NetTimeout # NetErr NetWrite } }
 }
 
@@ -894,7 +1002,7 @@ $ `stdlib/std/pkey.nu`
     // Context-aware dispatch — see tcp_accept's note.
     : i fcur ( nurl_fiber_current )
     ? != fcur 0 { ^ ( tcp_read_chunk_async c max ) } {}
-    : s rp . c raw
+    : s rp # s . ( __tci c ) raw
     : i raw # i rp
     ? <= max 0 {
         : ( Vec u ) v ( vec_new [u] )
@@ -941,7 +1049,7 @@ $ `stdlib/std/pkey.nu`
             F e → ^ @ !i NetErr { F e }
         }
     } {}
-    : s rp . c raw
+    : s rp # s . ( __tci c ) raw
     : i raw # i rp
     ( vec_reserve [u] buf max )
     : i len ( vec_len [u] buf )
@@ -985,7 +1093,7 @@ $ `stdlib/std/pkey.nu`
     : i tls ( __conn_tlsptr c )
     ? == tls 0 { ^ @ !( Vec u ) NetErr { T ( bytes_slice bytes 0 ( vec_len [u] bytes ) ) } } {}
     : TlsConn state # TlsConn tls
-    : !( Vec u ) TlsErr result ? == . c kind 2
+    : !( Vec u ) TlsErr result ? == . ( __tci c ) kind 2
     ( tls_server_prepare_write state bytes ) ( tls_prepare_write state bytes )
     ?? result {
         T wire → ^ @ !( Vec u ) NetErr { T wire }
@@ -1004,7 +1112,7 @@ $ `stdlib/std/pkey.nu`
         ^ @ !v NetErr { T 0 }
     } {}
     : TlsConn state # TlsConn tls
-    : !v TlsErr result ? == . c kind 2
+    : !v TlsErr result ? == . ( __tci c ) kind 2
     ( tls_server_prepare_write2_to state out head body ) ( tls_prepare_write2_to state out head body )
     ?? result {
         T _ → ^ @ !v NetErr { T 0 }
@@ -1022,7 +1130,7 @@ $ `stdlib/std/pkey.nu`
     ? != . state closed 0 { ^ 0 } {}
     ? & == . state update_pending 0 == . state fatal_alert 0 { ^ 0 } {}
     : i before ( vec_len [u] out )
-    ( _tls_control_to . state 0 out ? == . c kind 2 0 1 )
+    ( _tls_control_to . state 0 out ? == . ( __tci c ) kind 2 0 1 )
     ^ - ( vec_len [u] out ) before
 }
 
@@ -1065,7 +1173,7 @@ $ `stdlib/std/pkey.nu`
         : *TlsConnImpl state ( _tls_ptr conn )
         : i previous . state read_nowait
         = . state read_nowait 1
-        : !( Vec u ) TlsErr result ? == . c kind 2 ( tls_server_read conn max ) ( tls_read conn max )
+        : !( Vec u ) TlsErr result ? == . ( __tci c ) kind 2 ( tls_server_read conn max ) ( tls_read conn max )
         = . state read_nowait previous
         ?? result {
             T decoded → {
@@ -1182,7 +1290,7 @@ $ `stdlib/std/pkey.nu`
     // Context-aware dispatch — see tcp_accept's note.
     : i fcur ( nurl_fiber_current )
     ? != fcur 0 { ^ ( tcp_write_all_async c bytes ) } {}
-    : s rp . c raw
+    : s rp # s . ( __tci c ) raw
     : i raw # i rp
     : *u p ( vec_data [u] bytes )
     ^ ( __tcp_write_pair_sync raw # s p ( vec_len [u] bytes ) # s 0 0 )
@@ -1197,7 +1305,7 @@ $ `stdlib/std/pkey.nu`
 // Both inputs are BORROWED, as for tcp_write_all.
 @ tcp_write_all2 TcpConn c ( Vec u ) head ( Vec u ) body → !v NetErr {
     ? != ( __conn_tlsptr c ) 0 { ^ ( __tls_write_net2 c head body ) } {}
-    : s rp . c raw
+    : s rp # s . ( __tci c ) raw
     : i raw # i rp
     : *u hp ( vec_data [u] head )
     : i hn ( vec_len [u] head )
@@ -1217,7 +1325,7 @@ $ `stdlib/std/pkey.nu`
         : !v NetErr r ( __tls_write_net c b )
         ^ r
     } {}
-    : s rp . c raw
+    : s rp # s . ( __tci c ) raw
     : i raw # i rp
     // Same short-write rule as tcp_write_all — see __tcp_write_pair_sync.
     // Status lines and headers are small enough that one write almost
@@ -1258,12 +1366,12 @@ $ `stdlib/std/async_ffi.nu`
 // parked fiber (use-after-free). Each retain MUST be paired with one
 // release.
 @ tcp_listener_retain TcpListener l → v {
-    : s rp . l raw
+    : s rp # s . ( __tli l ) raw
     ( nurl_tcp_ref # i rp )
 }
 
 @ tcp_listener_release TcpListener l → v {
-    : s rp . l raw
+    : s rp # s . ( __tli l ) raw
     ( nurl_tcp_unref # i rp )
 }
 
@@ -1271,13 +1379,13 @@ $ `stdlib/std/async_ffi.nu`
 // wrappers on first call. Exposed in case callers want to manage the
 // mode explicitly (e.g. a custom proactor loop).
 @ tcp_set_nonblock_listener TcpListener l i on → v {
-    : s rp . l raw
+    : s rp # s . ( __tli l ) raw
     : i raw # i rp
     ( nurl_tcp_set_nonblock raw on )
 }
 
 @ tcp_set_nonblock_conn TcpConn c i on → v {
-    : s rp . c raw
+    : s rp # s . ( __tci c ) raw
     : i raw # i rp
     ( nurl_tcp_set_nonblock raw on )
 }
@@ -1296,7 +1404,7 @@ $ `stdlib/std/async_ffi.nu`
 // wait_readable returns -1 immediately and we fall back to the
 // existing sync `tcp_accept` (which blocks on the kernel).
 @ tcp_accept_async TcpListener l → !TcpConn NetErr {
-    : s lrp . l raw
+    : s lrp # s . ( __tli l ) raw
     : i lraw # i lrp
     ( nurl_tcp_set_nonblock lraw 1 )
     : i fd ( nurl_tcp_get_fd lraw )
@@ -1305,9 +1413,7 @@ $ `stdlib/std/async_ffi.nu`
         ? == craw 0 { ^ @ !TcpConn NetErr { F # NetErr NetOther } } {}
         : i ek ( nurl_tcp_err_kind craw )
         ? == ek 0 {
-            : s crp # s craw
-            : TcpConn c @ TcpConn { crp 0 0 }
-            ^ @ !TcpConn NetErr { T c }
+            ^ @ !TcpConn NetErr { T ( tcp_conn_adopt craw ) }
         } {
             ( nurl_tcp_close craw )
             ? == ek 7 {  // NetTimeout / EAGAIN
@@ -1332,7 +1438,7 @@ $ `stdlib/std/async_ffi.nu`
 // Non-blocking single recv. Same shape as tcp_read_chunk; loops on
 // EAGAIN via the reactor.
 @ tcp_read_chunk_async TcpConn c i max → !( Vec u ) NetErr {
-    : s rp . c raw
+    : s rp # s . ( __tci c ) raw
     : i raw # i rp
     ( nurl_tcp_set_nonblock raw 1 )
     : i fd ( nurl_tcp_get_fd raw )
@@ -1380,7 +1486,7 @@ $ `stdlib/std/async_ffi.nu`
 // is delivered, parking on wait_writable when the kernel returns
 // EAGAIN.
 @ tcp_write_all_async TcpConn c ( Vec u ) bytes → !v NetErr {
-    : s rp . c raw
+    : s rp # s . ( __tci c ) raw
     : i raw # i rp
     : *u p ( vec_data [u] bytes )
     ^ ( __tcp_write_pair_async raw # s p ( vec_len [u] bytes ) # s 0 0 )

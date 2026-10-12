@@ -877,27 +877,21 @@ simd @ __kpke_decrypt MlkemParams prm ( Vec u ) dk ( Vec u ) ct → ( Vec u ) {
 
 // Both are handles on their state in an rcbox (stdlib/core/rcbox.nu):
 // every copy is the same state, and the last owner releases it.
-: MlkemKeys { s ctl }
+: MlkemKeys { ( Shared MlkemKeysImpl ) ctl }
 
-: MlkemEncap { s ctl }
+: MlkemEncap { ( Shared MlkemEncapImpl ) ctl }
 
-@ MlkemKeys_share MlkemKeys h → MlkemKeys { ^ @ MlkemKeys { # s ( rcbox_share # i . h ctl ) } }
+@ MlkemKeys_share MlkemKeys h → MlkemKeys { ^ @ MlkemKeys { ( shared_clone [MlkemKeysImpl] . h ctl ) } }
 
-@ MlkemKeys_drop sink MlkemKeys h → v {
-    ( mem_forget h )
-    ( rcbox_release [MlkemKeysImpl] # i . h ctl )
-}
+@ MlkemKeys_drop sink MlkemKeys h → v {}
 
-@ __MlkemKeys_ptr MlkemKeys h → *MlkemKeysImpl { ^ ( rcbox_ptr [MlkemKeysImpl] # i . h ctl ) }
+@ __MlkemKeys_ptr MlkemKeys h → *MlkemKeysImpl { ^ ( shared_ptr [MlkemKeysImpl] . h ctl ) }
 
-@ MlkemEncap_share MlkemEncap h → MlkemEncap { ^ @ MlkemEncap { # s ( rcbox_share # i . h ctl ) } }
+@ MlkemEncap_share MlkemEncap h → MlkemEncap { ^ @ MlkemEncap { ( shared_clone [MlkemEncapImpl] . h ctl ) } }
 
-@ MlkemEncap_drop sink MlkemEncap h → v {
-    ( mem_forget h )
-    ( rcbox_release [MlkemEncapImpl] # i . h ctl )
-}
+@ MlkemEncap_drop sink MlkemEncap h → v {}
 
-@ __MlkemEncap_ptr MlkemEncap h → *MlkemEncapImpl { ^ ( rcbox_ptr [MlkemEncapImpl] # i . h ctl ) }
+@ __MlkemEncap_ptr MlkemEncap h → *MlkemEncapImpl { ^ ( shared_ptr [MlkemEncapImpl] . h ctl ) }
 
 @ mlkem_ek MlkemKeys h__h → ( Vec u ) {
     : *MlkemKeysImpl h ( __MlkemKeys_ptr h__h )
@@ -936,7 +930,7 @@ simd @ __kpke_decrypt MlkemParams prm ( Vec u ) dk ( Vec u ) ct → ( Vec u ) {
     : ( Vec u ) hek ( sha3_256_pure ek )
     ( bytes_extend_bytes dk hek )
     ( bytes_extend_bytes dk z )
-    ^ @ MlkemKeys { # s ( rcbox_new [MlkemKeysImpl] @ MlkemKeysImpl { ek dk } ) }
+    ^ @ MlkemKeys { ( shared_new [MlkemKeysImpl] @ MlkemKeysImpl { ek dk } ) }
 }
 
 @ mlkem_keygen i level → MlkemKeys {
@@ -960,7 +954,7 @@ simd @ __kpke_decrypt MlkemParams prm ( Vec u ) dk ( Vec u ) ct → ( Vec u ) {
 
     : ( Vec u ) ct ( vec_with_cap [u] ( mlkem_ct_len level ) )
     ( __kpke_encrypt prm ek m r ct )
-    ^ @ MlkemEncap { # s ( rcbox_new [MlkemEncapImpl] @ MlkemEncapImpl { ct kk } ) }
+    ^ @ MlkemEncap { ( shared_new [MlkemEncapImpl] @ MlkemEncapImpl { ct kk } ) }
 }
 
 @ mlkem_encaps i level ( Vec u ) ek → MlkemEncap {

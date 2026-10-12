@@ -145,9 +145,15 @@ import_decl = '$' STR IDENT? ;
    check rather than passing it.
    Example:  & `libc` @ puts s msg → i
    Example:  & `libm` @ sqrt f    → f                     — no param name
-   Example:  & `libc` @ printf s fmt ... → i32             — variadic *)
-ffi_decl   = '&' STR '@' IDENT ffi_param* ( '...' )? '→' type ;
-ffi_param  = type IDENT? ;
+   Example:  & `libc` @ printf s fmt ... → i32             — variadic
+   A parameter marked `inout` is a pointer to a T the C function writes
+   through; the argument is a mutable binding, passed by address.
+   Example:  & `libcuda` @ cuMemGetInfo_v2 inout i avail inout i total → i32
+   A result marked `sink` (a raw string only) is a string the C function
+   allocated and hands over: the caller's binding owns it.
+   Example:  & `c` @ strdup s src → sink s *)
+ffi_decl   = '&' STR '@' IDENT ffi_param* ( '...' )? '→' 'sink'? type ;
+ffi_param  = 'inout'? type IDENT? ;
 
 
 (* [T], [K V] — type variable list for generic declarations.
@@ -265,7 +271,14 @@ enum_variant = IDENT type* ;
    trait/impl decl sigil). Folded to a single value by const_eval_int.
    Example:  : i SECS_PER_DAY * * 60 60 24            — 86400
    Example:  : i INT_MIN - -9223372036854775807 1     — two's-complement min
-   Example:  : i PAGE << 1 12                         — 4096 *)
+   Example:  : i PAGE << 1 12                         — 4096
+
+   A MUTABLE global may have a type that owns something — String, a
+   Vec, a struct of them, an option, a closure, a library handle — with
+   the value `0`: it starts as the zero value and owns what it is
+   assigned (docs/spec.md §3.4); only `unsafe` code reaches it.
+   Example:  : ~ ( Vec String ) g_names 0
+   Example:  : ~ ?Model g_model 0 *)
 const_decl  = ':' '~'? type IDENT const_value ;
 const_value = literal | const_int_expr ;
 const_int_expr = INT

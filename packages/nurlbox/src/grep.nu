@@ -373,7 +373,7 @@ unsafe @ ap_grep ( Vec String ) argv → i {
                 : s raw ( bx_at rawpats pi )
                 : String src ? != 0 & flags GREP_IGNORE ( _grep_lower raw ) ( string_from raw )
                 ? != 0 & flags GREP_FIXED {
-                    ( vec_push [GrepPat] pats @ GrepPat { @ Regex { # s 0 } src T } )
+                    ( vec_push [GrepPat] pats @ GrepPat { # Regex # s 0 src T } )
                 } {
                     : String ere ? extended ( string_clone src ) ( _bre_to_ere ( string_data src ) )
                     ?? ( regex_compile ( string_data ere ) ) {

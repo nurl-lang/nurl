@@ -93,7 +93,7 @@ unsafe @ run_live → i {
             ? != cek 0 {
                 ( nurl_print `  FAIL connect\n` ) = fails + fails 1
             } {
-                : TcpConn conn @ TcpConn { # s craw }
+                : TcpConn conn ( tcp_conn_adopt craw )
                 {
                     // Chunked POST: "hello" + " world" = 11 bytes, then a GET.
                     : ( Vec u ) wbuf ( vec_new [u] )

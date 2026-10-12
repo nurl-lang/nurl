@@ -1,13 +1,16 @@
 // sieve — Sieve of Eratosthenes, count primes ≤ 10_000_000.
 // Allocates a 10 MB byte buffer (mark[0..N] with 0 = prime, 1 = composite),
 // scans for primes ≤ √N marking multiples, then counts the zeros.
+$ `stdlib/core/mem.nu`
+
 & `c` @ memset s buf i v i sz → s
 
 unsafe @ main → i {
     // The workload multiplier: bench/wasmbench.sh --scale N rewrites this 1.
     : u64 BENCH_SCALE 1
     : i n 10000000
-    : s buf ( malloc n )
+    : RawBlock buf__blk ( raw_block n )
+    : s buf # s ( raw_block_ptr buf__blk )
     : *u p # *u buf
     // BENCH_SCALE full sieves over the same buffer; the counts add up
     : ~ i count 0
@@ -36,6 +39,5 @@ unsafe @ main → i {
         = rep + rep 1
     }
     ( nurl_println_int count )
-    ( free buf )
     ^ 0
 }

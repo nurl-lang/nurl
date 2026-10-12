@@ -81,7 +81,8 @@ unsafe @ epoch_ids DataLoader dl ( Vec i ) ids * u okal → v {
 unsafe @ main → i {
     : i N 10
     : DataSet ds ( mkds N )
-    : *u okal ( nurl_alloc 8 )
+    : ( Vec u ) okal__b ( vec_zeroed [u] 8 )
+    : *u okal ( vec_data [u] okal__b )
     ( nurl_poke okal 0 1 )
 
     // ── determinism + coverage (batch 3, no drop_last) ──
@@ -159,7 +160,6 @@ unsafe @ main → i {
         F e → { ( nurl_print ( string_data e ) ) ( nurl_print `\n` ) = g_fail + g_fail 1 }
     }
 
-    ( nurl_free okal )
     ( nurl_print `data_test: ` ) ( nurl_print_int g_pass )
     ( nurl_print ` passed, ` ) ( nurl_print_int g_fail ) ( nurl_print ` failed\n` )
     ^ ? > g_fail 0 1 0

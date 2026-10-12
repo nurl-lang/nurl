@@ -2,6 +2,31 @@
 
 All notable changes to the `nurllama` package.
 
+## [0.19.0] — 2026-10-12
+
+Requires NURL 0.73.0, in which a field written through a raw pointer
+drops what it held, a mutable module global may own a `String`, a `Vec`
+or a handle, and a foreign function may take an `inout` parameter.
+The published 0.18.3 does not compile under it.
+
+### Changed
+
+- The zero `File` handle the puller keeps until one is opened is built
+  with the cast `# File # s 0`: a standard-library handle now holds its
+  state in a `( Shared T )`.
+- The resident model is a module global that owns it (an option: none
+  is loaded until the first request), where it was an `Arc` kept as a
+  word; the `--weights` path is an owned string, where it borrowed the
+  command line's.
+- The finetune loop's replaced buffers are dropped by the store; the
+  `mem_take` before each is gone.
+- Requires gpu 0.16 and grad 0.12.
+
+### Removed
+
+- `llm_into_word` and `llm_word_release`: a module global holds an
+  `Llm` as it is.
+
 ## [0.18.3] — 2026-10-11
 
 Requires NURL 0.73.0, which allows `mem_forget`, `mem_take` and the

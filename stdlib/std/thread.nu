@@ -75,6 +75,7 @@
 
 $ `stdlib/core/cell.nu`
 $ `stdlib/core/marker.nu`
+$ `stdlib/core/rcbox.nu`
 
 // FFI: direct libpthread surface. On Linux/macOS these are libc; on
 // mingw-w64 Windows they come from libwinpthread (link with -lpthread).
@@ -190,15 +191,15 @@ $ `stdlib/core/marker.nu`
 
 // Counting semaphore built on Mutex + Cond: a handle like them. Every
 // copy — a worker closure's capture, a struct field — shares one count,
-// mutex and condvar, and the last owner releases them.
+// mutex and condvar in a counted block (stdlib/core/rcbox.nu), and the
+// last owner drops them.
 : SemaphoreImpl {
-    i owners
     i count
     Mutex m
     Cond c
 }
 
-: Semaphore { s p }
+: Semaphore { ( Shared SemaphoreImpl ) ctl }
 
 // Sharing a Semaphore across threads is the entire point of one — the
 // permit count lives behind the Mutex above, so both questions are
@@ -434,17 +435,13 @@ $ `stdlib/core/marker.nu`
 //   ( sem_acquire gate )  ( do_heavy_work )  ( sem_release gate )
 
 @ sem_new i n → Semaphore {
-    : *SemaphoreImpl impl # *SemaphoreImpl ( nurl_alloc Z SemaphoreImpl )
-    = . impl owners 1
-    = . impl count ? > n 0 n 0
-    = . impl m ( mutex_new )
-    = . impl c ( cond_new )
-    ^ @ Semaphore { # s impl }
+    : i count ? > n 0 n 0
+    ^ @ Semaphore { ( shared_new [SemaphoreImpl] @ SemaphoreImpl { count ( mutex_new ) ( cond_new ) } ) }
 }
 
 // Block until a permit is available, then take one.
 @ sem_acquire Semaphore s → v {
-    : *SemaphoreImpl impl # *SemaphoreImpl . s p
+    : *SemaphoreImpl impl ( shared_ptr [SemaphoreImpl] . s ctl )
     ( mutex_lock . impl m )
     ~ <= . impl count 0 {
         ( cond_wait . impl c . impl m )
@@ -456,7 +453,7 @@ $ `stdlib/core/marker.nu`
 // Take a permit if one is free right now; never blocks. Returns T iff a
 // permit was acquired (caller must sem_release on T).
 @ sem_try_acquire Semaphore s → b {
-    : *SemaphoreImpl impl # *SemaphoreImpl . s p
+    : *SemaphoreImpl impl ( shared_ptr [SemaphoreImpl] . s ctl )
     ( mutex_lock . impl m )
     : ~ b ok F
     ? > . impl count 0 {
@@ -469,7 +466,7 @@ $ `stdlib/core/marker.nu`
 
 // Return a permit and wake one waiter.
 @ sem_release Semaphore s → v {
-    : *SemaphoreImpl impl # *SemaphoreImpl . s p
+    : *SemaphoreImpl impl ( shared_ptr [SemaphoreImpl] . s ctl )
     ( mutex_lock . impl m )
     = . impl count + . impl count 1
     ( cond_signal . impl c )
@@ -480,30 +477,16 @@ $ `stdlib/core/marker.nu`
 // caller) — for diagnostics, not for acquire decisions (use
 // sem_try_acquire, which is atomic).
 @ sem_avail Semaphore s → i {
-    : *SemaphoreImpl impl # *SemaphoreImpl . s p
+    : *SemaphoreImpl impl ( shared_ptr [SemaphoreImpl] . s ctl )
     ( mutex_lock . impl m )
     : i v . impl count
     ( mutex_unlock . impl m )
     ^ v
 }
 
-@ Semaphore_share Semaphore s → Semaphore {
-    ( __sync_block_share . s p )
-    ^ @ Semaphore { . s p }
-}
+@ Semaphore_share Semaphore s → Semaphore { ^ @ Semaphore { ( shared_clone [SemaphoreImpl] . s ctl ) } }
 
-@ Semaphore_drop sink Semaphore s → v {
-    ( mem_forget s )
-    : s p . s p
-    ? ( __sync_block_release p ) {
-        : *SemaphoreImpl impl # *SemaphoreImpl p
-        : Mutex m . impl m
-        ( mem_take m )
-        : Cond c . impl c
-        ( mem_take c )
-        ( nurl_free p )
-    } {}
-}
+@ Semaphore_drop sink Semaphore s → v {}
 
 // Let go of `s` now rather than at the end of its owner's scope.
 @ sem_free sink Semaphore s → v {}

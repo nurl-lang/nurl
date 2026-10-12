@@ -88,14 +88,11 @@ $ `stdlib/core/rcbox.nu`
     i restarts
 }
 
-: ChildSpec { s ctl }
+: ChildSpec { ( Shared ChildImpl ) ctl }
 
-@ ChildSpec_share ChildSpec c → ChildSpec { ^ @ ChildSpec { # s ( rcbox_share # i . c ctl ) } }
+@ ChildSpec_share ChildSpec c → ChildSpec { ^ @ ChildSpec { ( shared_clone [ChildImpl] . c ctl ) } }
 
-@ ChildSpec_drop sink ChildSpec c → v {
-    ( mem_forget c )
-    ( rcbox_release [ChildImpl] # i . c ctl )
-}
+@ ChildSpec_drop sink ChildSpec c → v {}
 
 : SupImpl {
     ( Vec ChildSpec ) children
@@ -106,41 +103,40 @@ $ `stdlib/core/rcbox.nu`
     i strategy  // SupStrategy code (0/1/2); used by supervisor_start
 }
 
-: Supervisor { s ctl }
+: Supervisor { ( Shared SupImpl ) ctl }
 
 @ supervisor_new i max_restarts i window_ms → Supervisor {
-    : i sup_box ( rcbox_zero [SupImpl] )
-    : *SupImpl sup ( rcbox_ptr [SupImpl] sup_box )
+    : ( Shared SupImpl ) sup_box ( shared_zero [SupImpl] )
+    : *SupImpl sup ( shared_ptr [SupImpl] sup_box )
     = . sup children ( vec_new [ChildSpec] )
     = . sup max_restarts max_restarts
     = . sup window_ms window_ms
     = . sup base_backoff_ms 0
     = . sup max_backoff_ms 1000
     = . sup strategy 0
-    ^ @ Supervisor { # s sup_box }
+    ^ @ Supervisor { sup_box }
 }
 
 @ supervisor_set_strategy Supervisor s SupStrategy st → v {
-    : *SupImpl sup ( rcbox_ptr [SupImpl] # i . s ctl )
+    : *SupImpl sup ( shared_ptr [SupImpl] . s ctl )
     = . sup strategy ( __strategy_code st )
 }
 
 // Tune the per-restart backoff (default 0 = restart immediately).
 @ supervisor_set_backoff Supervisor s i base_ms i max_ms → v {
-    : *SupImpl sup ( rcbox_ptr [SupImpl] # i . s ctl )
+    : *SupImpl sup ( shared_ptr [SupImpl] . s ctl )
     = . sup base_backoff_ms base_ms
     = . sup max_backoff_ms max_ms
 }
 
 @ supervisor_add Supervisor s s name RestartPolicy policy ( @ v ) start → v {
-    : *SupImpl sup ( rcbox_ptr [SupImpl] # i . s ctl )
-    : i box ( rcbox_new [ChildImpl] @ ChildImpl { ( string_from name ) start policy 0 } )
-    ( vec_push [ChildSpec] . sup children @ ChildSpec { # s box } )
+    : *SupImpl sup ( shared_ptr [SupImpl] . s ctl )
+    ( vec_push [ChildSpec] . sup children @ ChildSpec { ( shared_new [ChildImpl] @ ChildImpl { ( string_from name ) start policy 0 } ) } )
 }
 
 @ __child_at * SupImpl sup i idx → *ChildImpl {
     ^ ?? ( vec_get [ChildSpec] . sup children idx ) {
-        T c → ( rcbox_ptr [ChildImpl] # i . c ctl )
+        T c → ( shared_ptr [ChildImpl] . c ctl )
         F → # *ChildImpl 0
     }
 }
@@ -201,7 +197,7 @@ $ `stdlib/core/rcbox.nu`
 // Run one child's supervision loop synchronously (no fiber). Useful for
 // tests and single-child supervisors.
 @ supervise_one Supervisor s i idx → v {
-    : *SupImpl sup ( rcbox_ptr [SupImpl] # i . s ctl )
+    : *SupImpl sup ( shared_ptr [SupImpl] . s ctl )
     : *ChildImpl child ( __child_at sup idx )
     ( __supervise_loop sup child )
 }
@@ -268,7 +264,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 @ supervisor_start Supervisor s → b {
-    : *SupImpl sup ( rcbox_ptr [SupImpl] # i . s ctl )
+    : *SupImpl sup ( shared_ptr [SupImpl] . s ctl )
     : i n ( vec_len [ChildSpec] . sup children )
 
     : ~ ( Vec i ) runset ( vec_new [i] )
@@ -305,7 +301,7 @@ $ `stdlib/core/rcbox.nu`
 // Spawn a supervising fiber per child. Requires runtime_init / runtime_run
 // by the caller.
 @ supervisor_run Supervisor s → v {
-    : *SupImpl sup ( rcbox_ptr [SupImpl] # i . s ctl )
+    : *SupImpl sup ( shared_ptr [SupImpl] . s ctl )
     : i n ( vec_len [ChildSpec] . sup children )
     : ~ i k 0
     ~ < k n {
@@ -316,17 +312,14 @@ $ `stdlib/core/rcbox.nu`
 }
 
 @ child_restarts Supervisor s i idx → i {
-    : *SupImpl sup ( rcbox_ptr [SupImpl] # i . s ctl )
+    : *SupImpl sup ( shared_ptr [SupImpl] . s ctl )
     : *ChildImpl child ( __child_at sup idx )
     ^ . child restarts
 }
 
-@ Supervisor_share Supervisor h → Supervisor { ^ @ Supervisor { # s ( rcbox_share # i . h ctl ) } }
+@ Supervisor_share Supervisor h → Supervisor { ^ @ Supervisor { ( shared_clone [SupImpl] . h ctl ) } }
 
-@ Supervisor_drop sink Supervisor h → v {
-    ( mem_forget h )
-    ( rcbox_release [SupImpl] # i . h ctl )
-}
+@ Supervisor_drop sink Supervisor h → v {}
 
 // Let go of `h` now rather than at the end of its owner's scope. The
 // children's closures are released with the last owner.

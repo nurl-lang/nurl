@@ -197,7 +197,7 @@ unsafe @ arima_eval_gpu GpuKit kit ( Vec ArimaEvalItem ) items ( Vec ArimaCtx ) 
     // Every item's state-space form, prepared on the pool: the transform,
     // the expansion and the start of the stationary covariance are the
     // host's part.
-    : ( Vec i ) pjobs ( vec_new [i] )
+    : ( Vec ArimaJob ) pjobs ( vec_new [ArimaJob] )
     : ~ i big 0
     : ~ i k 0
     ~ < k m {
@@ -206,7 +206,7 @@ unsafe @ arima_eval_gpu GpuKit kit ( Vec ArimaEvalItem ) items ( Vec ArimaCtx ) 
                 ?? ( vec_get [ArimaCtx] ctxs . it ctx ) {
                     T cx → {
                         : i kind ? == . cx method ARIMA_ML ? == . it kind 1 3 2 ? == . it kind 1 5 4
-                        ( vec_push [i] pjobs ( _ar_job_new . cx sp . cx w . cx method . cx ncond . it raw out k kind ) )
+                        ( vec_push [ArimaJob] pjobs ( _ar_job . cx sp . cx w . cx method . cx ncond . it raw out k kind ) )
                         : ArimaSpec csp . cx sp
                         : i pf + . csp p * . csp s . csp P
                         : i qf + . csp q * . csp s . csp Q
@@ -243,8 +243,8 @@ unsafe @ arima_eval_gpu GpuKit kit ( Vec ArimaEvalItem ) items ( Vec ArimaCtx ) 
             T it → {
                 ?? ( vec_get [ArimaCtx] ctxs . it ctx ) {
                     T cx → {
-                        : *ArimaJob pj # *ArimaJob ( _ar_geti pjobs k )
-                        : *ArimaPrep pr # *ArimaPrep . pj extra
+                        : *ArimaJob pj ( _ar_job_at # i ( vec_data [ArimaJob] pjobs ) k )
+                        : *ArimaPrep pr # *ArimaPrep ( box_ptr [ArimaPrep] . pj prep )
                         : i n ( vec_len [f] . cx w )
                         : i wo ( _ar_geti woff . it ctx )
                         ? == . cx method ARIMA_ML {
@@ -285,7 +285,8 @@ unsafe @ arima_eval_gpu GpuKit kit ( Vec ArimaEvalItem ) items ( Vec ArimaCtx ) 
                                 = cs_total + cs_total n
                             } { = . pout k 1000000000000.0 }
                         }
-                        ( _ar_prep_free pr )
+                        // read: let it go now rather than with the batch
+                        = . pj prep ( box_null [ArimaPrep] )
                     }
                     F _ → {}
                 }
@@ -294,7 +295,6 @@ unsafe @ arima_eval_gpu GpuKit kit ( Vec ArimaEvalItem ) items ( Vec ArimaCtx ) 
         }
         = k + k 1
     }
-    ( _ar_jobs_free pjobs )
     : i nml ( vec_len [i] ml_idx )
     ? > nml 0 {
         : *i pm4 ( vec_data [i] meta )

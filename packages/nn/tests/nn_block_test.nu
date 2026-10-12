@@ -25,8 +25,10 @@ $ `deps/tensor/src/tensor.nu`
 unsafe @ main → i {
     : Blk bl ( blk_new 42 F )
     : GTape tp ( tape_new )
-    : *u pav ( nurl_alloc * 7 8 )
-    : *u pbv ( nurl_alloc * 7 8 )
+    : ( Vec u ) pav__b ( vec_zeroed [u] * 7 8 )
+    : *u pav ( vec_data [u] pav__b )
+    : ( Vec u ) pbv__b ( vec_zeroed [u] * 7 8 )
+    : *u pbv ( vec_data [u] pbv__b )
     : GVar loss ( build_block tp bl pav pbv )
     ( check ( tape_ok tp ) `block builds (tape healthy)` )
     : f l ( g_scalar tp loss )
@@ -38,8 +40,8 @@ unsafe @ main → i {
     ~ < k 7 {
         : GVar pa @ GVar { ( nurl_peek pav k ) }
         : GVar pb @ GVar { ( nurl_peek pbv k ) }
+        // (one gradient read at a time: grad_of may add to the tape)
         : Tensor ga ( grad_of tp pa )
-        : Tensor gb ( grad_of tp pb )
         : ~ b nza F
         : ~ i j 0
         ~ < j ( vec_len [f] . ga data ) {
@@ -52,6 +54,7 @@ unsafe @ main → i {
         // B side: zero-initialised, but after one backward the A-side path
         // makes dL/dB nonzero too
         : ~ b nzb F
+        : Tensor gb ( grad_of tp pb )
         = j 0
         ~ < j ( vec_len [f] . gb data ) {
             : f gv ( _tf . gb data j )
@@ -63,7 +66,6 @@ unsafe @ main → i {
         = k + k 1
     }
     ( check allok `all 14 adapter gradients finite and non-zero` )
-    ( nurl_free pav ) ( nurl_free pbv )
     ( nurl_print `nn_block_test: ` ) ( nurl_print_int g_pass )
     ( nurl_print ` passed, ` ) ( nurl_print_int g_fail ) ( nurl_print ` failed\n` )
     ^ ? > g_fail 0 1 0

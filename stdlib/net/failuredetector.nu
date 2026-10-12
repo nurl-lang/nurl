@@ -71,20 +71,17 @@ $ `stdlib/core/rcbox.nu`
 
 // An FdState is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
 // every copy is the same state, and the last owner releases it.
-: FdState { s ctl }
+: FdState { ( Shared FdStateImpl ) ctl }
 
-@ FdState_share FdState h → FdState { ^ @ FdState { # s ( rcbox_share # i . h ctl ) } }
+@ FdState_share FdState h → FdState { ^ @ FdState { ( shared_clone [FdStateImpl] . h ctl ) } }
 
-@ FdState_drop sink FdState h → v {
-    ( mem_forget h )
-    ( rcbox_release [FdStateImpl] # i . h ctl )
-}
+@ FdState_drop sink FdState h → v {}
 
-@ __FdState_ptr FdState h → *FdStateImpl { ^ ( rcbox_ptr [FdStateImpl] # i . h ctl ) }
+@ __FdState_ptr FdState h → *FdStateImpl { ^ ( shared_ptr [FdStateImpl] . h ctl ) }
 
 @ fd_new PkMemberTable table i period_ns i direct_timeout_ns i total_timeout_ns i k_indirect → FdState {
-    : i fd__box ( rcbox_zero [FdStateImpl] )
-    : *FdStateImpl fd ( rcbox_ptr [FdStateImpl] fd__box )
+    : ( Shared FdStateImpl ) fd__box ( shared_zero [FdStateImpl] )
+    : *FdStateImpl fd ( shared_ptr [FdStateImpl] fd__box )
     = . fd table ( PkMemberTable_share table )
     = . fd period_ns period_ns
     = . fd direct_timeout_ns direct_timeout_ns
@@ -97,7 +94,7 @@ $ `stdlib/core/rcbox.nu`
     = . fd probe_start_ns 0
     = . fd probe_indirect 0
     = . fd last_probe_ns - 0 period_ns  // eligible to probe immediately
-    ^ @ FdState { # s fd__box }
+    ^ @ FdState { fd__box }
 }
 
 // Let go of `fd` now rather than at the end of its owner's scope.

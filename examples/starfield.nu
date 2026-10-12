@@ -1,6 +1,8 @@
 // starfield.nu — 3D Warp Speed Starfield with Motion Blur
 // NURL Canvas demo.
 
+$ `stdlib/core/mem.nu`
+
 & `libc` @ rand → i
 
 & `canvas` @ canvas_open i w i h → *i
@@ -21,9 +23,12 @@
 
 unsafe @ main → i {
     // Varataan taulukot tähtien 3D-koordinaateille
-    : *i stars_x # *i ( malloc * NUM_STARS 8 )
-    : *i stars_y # *i ( malloc * NUM_STARS 8 )
-    : *i stars_z # *i ( malloc * NUM_STARS 8 )
+    : RawBlock stars_x__blk ( raw_block * NUM_STARS 8 )
+    : *i stars_x # *i ( raw_block_ptr stars_x__blk )
+    : RawBlock stars_y__blk ( raw_block * NUM_STARS 8 )
+    : *i stars_y # *i ( raw_block_ptr stars_y__blk )
+    : RawBlock stars_z__blk ( raw_block * NUM_STARS 8 )
+    : *i stars_z # *i ( raw_block_ptr stars_z__blk )
 
     // Alustetaan tähdet satunnaisiin paikkoihin
     : ~ i init_idx 0
@@ -107,8 +112,5 @@ unsafe @ main → i {
     }
 
     ( canvas_close )
-    ( free # s stars_x )
-    ( free # s stars_y )
-    ( free # s stars_z )
     ^ 0
 }

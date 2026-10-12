@@ -2888,6 +2888,42 @@ long long nurl_udp_bind(const char *host, long long port) {
     }
     freeaddrinfo(res);
 
+    /* A resolver can hand out the IPv6 wildcard on a host whose kernel
+     * has no IPv6 at all (a container with it disabled: socket() fails
+     * with EAFNOSUPPORT). The wildcard then means the IPv4 one. */
+    if (fd == NURL_INVALID_SOCK && (!host || !*host) &&
+        hints.ai_family == AF_INET6) {
+        struct addrinfo h4;
+        memset(&h4, 0, sizeof(h4));
+        h4.ai_family   = AF_INET;
+        h4.ai_socktype = SOCK_DGRAM;
+        h4.ai_protocol = IPPROTO_UDP;
+        h4.ai_flags    = AI_PASSIVE | AI_NUMERICSERV;
+        res = NULL;
+        if (getaddrinfo(NULL, portstr, &h4, &res) == 0 && res) {
+            for (ai = res; ai; ai = ai->ai_next) {
+                fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+                if (fd == NURL_INVALID_SOCK && nurl__fd_reclaim()) fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+                if (fd == NURL_INVALID_SOCK) continue;
+                int on = 1;
+                setsockopt(fd, SOL_SOCKET, SO_REUSEADDR,
+                           (const char*)&on, (int)sizeof(on));
+                if (bind(fd, ai->ai_addr, (int)ai->ai_addrlen) == 0) {
+                    chosen_family = ai->ai_family;
+                    break;
+                }
+#ifdef _WIN32
+                last_err = nurl__net_map_wsa(WSAGetLastError(), NURL_NET_ERR_BIND);
+#else
+                last_err = nurl__net_map_errno(errno, NURL_NET_ERR_BIND);
+#endif
+                nurl_close_sock(fd);
+                fd = NURL_INVALID_SOCK;
+            }
+            freeaddrinfo(res);
+        }
+    }
+
     if (fd == NURL_INVALID_SOCK) {
         h->err_kind = last_err;
         return (long long)(uintptr_t)h;
@@ -4538,10 +4574,13 @@ static long long nurl__wf_spawn(void *fn, void *env, int own_env, int joinable) 
 
 /* Every spawn keeps its OWN copy of the closure env (docs/MEMORY.md §7.4):
  * the spawner's env stays the spawner's, whatever happens to it after the
- * call, and the fiber drops its copy when the body returns. */
-long long nurl_fiber_spawn(void *fn, void *env)          { return nurl__wf_spawn(fn, nurl_closure_clone(env), 1, 0); }
-long long nurl_fiber_spawn_owned(void *fn, void *env)    { return nurl__wf_spawn(fn, nurl_closure_clone(env), 1, 0); }
-long long nurl_fiber_spawn_joinable(void *fn, void *env) { return nurl__wf_spawn(fn, nurl_closure_clone(env), 1, 1); }
+ * call, and the fiber drops its copy when the body returns. The copy owns
+ * what the env only viewed (nurl_closure_own_copy): a `??` arm's payload
+ * or a borrowed parameter the spawner's frame releases before the fiber
+ * reads it. */
+long long nurl_fiber_spawn(void *fn, void *env)          { return nurl__wf_spawn(fn, nurl_closure_own_copy(env), 1, 0); }
+long long nurl_fiber_spawn_owned(void *fn, void *env)    { return nurl__wf_spawn(fn, nurl_closure_own_copy(env), 1, 0); }
+long long nurl_fiber_spawn_joinable(void *fn, void *env) { return nurl__wf_spawn(fn, nurl_closure_own_copy(env), 1, 1); }
 
 void nurl_fiber_join(long long fiber) {
     NurlWasmFiber *f = (NurlWasmFiber*)(uintptr_t)fiber;
@@ -4641,7 +4680,7 @@ int nurl_pthread_create_owned(void *t, void *fn, void *env) {
     NurlThrOwned *b = (NurlThrOwned *)malloc(sizeof *b);
     if (!b) return 11;  /* EAGAIN */
     b->fn  = (void (*)(void *))fn;
-    b->env = nurl_closure_clone(env);
+    b->env = nurl_closure_own_copy(env);
     int rc = pthread_create(t, NULL, (void *(*)(void *))nurl__thr_owned_tramp, b);
     if (rc != 0) { nurl_closure_drop(b->env); free(b); }
     return rc;
@@ -4851,7 +4890,7 @@ long long nurl_signal_register(long long signum, void *fn, void *env) {
      * §7.4) and drops the handler it replaces. */
     void *old = g_signal_slots[signum].env;
     g_signal_slots[signum].fn  = fn;
-    g_signal_slots[signum].env = nurl_closure_clone(env);
+    g_signal_slots[signum].env = nurl_closure_own_copy(env);
     nurl_closure_drop(old);
     return (long long)nurl__signal_arm((int)signum);
 }
@@ -5625,7 +5664,7 @@ __attribute__((noinline))
 long long nurl_fiber_spawn(void *fn, void *env) {
     if (!fn) return 0;
     if (!nurl__sched.initialized) nurl_runtime_init(0);
-    NurlFiber *f = nurl__fiber_alloc(fn, nurl_closure_clone(env), 0);
+    NurlFiber *f = nurl__fiber_alloc(fn, nurl_closure_own_copy(env), 0);
     if (!f) nurl__fiber_spawn_failed();
     f->own_env = 1;
     nurl__enqueue_new(f);
@@ -5647,7 +5686,7 @@ __attribute__((noinline))
 long long nurl_fiber_spawn_joinable(void *fn, void *env) {
     if (!fn) return 0;
     if (!nurl__sched.initialized) nurl_runtime_init(0);
-    NurlFiber *f = nurl__fiber_alloc(fn, nurl_closure_clone(env), 1);
+    NurlFiber *f = nurl__fiber_alloc(fn, nurl_closure_own_copy(env), 1);
     if (!f) nurl__fiber_spawn_failed();
     f->own_env = 1;
     nurl__enqueue_new(f);

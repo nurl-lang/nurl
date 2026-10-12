@@ -317,15 +317,11 @@ unsafe @ __hc_origin * HttpClientImpl c s scheme s host i port → *HcOriginImpl
 unsafe @ __hc_origin_drop_conn * HcOriginImpl o → v {
     ? != . o has_h2 0 {
         ( h2_client_disconnect . o h2 )
-        : H2Client gone2 . o h2
-        ( mem_take gone2 )  // the record lets the client go: dropped here
         = . o h2 # H2Client 0
         = . o has_h2 0
     } {}
     ? != . o has_h1 0 {
         ( hp_conn_close . o h1 )
-        : HttpConn gone1 . o h1
-        ( mem_take gone1 )  // the record lets the connection go: dropped here
         = . o h1 # HttpConn 0
         = . o has_h1 0
     } {}
@@ -366,7 +362,7 @@ unsafe @ __hc_ensure_conn * HttpClientImpl c * HcOriginImpl o → i {
                     : TcpConn conn ( tcp_conn_from_tls tc )
                     : !H2Client H2ClientErr hr ( h2_client_attach conn )
                     ?? hr {
-                        F _ → { ( tcp_close_conn conn ) ^ 6 }
+                        F _ → { ^ 6 }  // the failed client closed the conn
                         T cl → {
                             = . o has_h2 1
                             = . o h2 cl
@@ -604,8 +600,7 @@ unsafe @ __hc_do_h1 * HttpClientImpl c * HcOriginImpl o s method s path ( Vec He
     // The stream owns it from here (hp_stream_close closes it), so the
     // record's field is emptied: its drop must not see it again.
     : HttpConn conn . o h1
-    ( mem_take conn )  // the record gives it up: emptied right below
-    = . o h1 # HttpConn 0
+    = . o h1 # HttpConn 0  // the record gives it up: conn keeps it
     = . o has_h1 0
     : HttpStreamState st ( hp_stream_open_on conn method ( string_data . o host ) . o port . o is_https path ( vec_data [u] body ) ( vec_len [u] body ) ( string_data blob ) ( string_data . c ua ) )
     ( string_free blob )

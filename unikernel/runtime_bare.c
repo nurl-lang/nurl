@@ -192,10 +192,12 @@ struct NbCoro {
 };
 
 /* An owned closure environment is a copy the spawn made with
- * nurl_closure_clone; nurl_closure_drop releases it with everything it
- * captured (runtime_core.c, docs/MEMORY.md §7.4). Declared rather than
- * included because this file has no libc to include it from. */
-extern void *nurl_closure_clone(void *env);
+ * nurl_closure_own_copy — one that owns what the spawner's env only
+ * viewed (a String copied, a handle shared: h204) — and
+ * nurl_closure_drop releases it with everything it captured
+ * (runtime_core.c, docs/MEMORY.md §7.4). Declared rather than included
+ * because this file has no libc to include it from. */
+extern void *nurl_closure_own_copy(void *env);
 extern void  nurl_closure_drop(void *env);
 
 /* Defined in §8 — named here because §7's scheduler step performs the
@@ -776,7 +778,7 @@ int pthread_create(void *tp, void *attr, void *start, void *arg) {
  * contract as runtime_ffi.c's nurl_pthread_create_owned. */
 int nurl_pthread_create_owned(void *tp, void *fn, void *env) {
     if (!tp || !fn) return 22;
-    void *own = nurl_closure_clone(env);
+    void *own = nurl_closure_own_copy(env);
     NbCoro *c = nb_coro_new(fn, own, 1);
     if (!c) { nurl_closure_drop(own); return 11; }   /* EAGAIN */
     c->owns_env = 1;
@@ -928,7 +930,7 @@ static void nb_spawn_failed(void) {
 long long nurl_fiber_spawn(void *fn, void *env) {
     if (!fn) return 0;
     if (!nb_initialized) nurl_runtime_init(0);
-    NbCoro *c = nb_coro_new(fn, nurl_closure_clone(env), 0);
+    NbCoro *c = nb_coro_new(fn, nurl_closure_own_copy(env), 0);
     if (!c) nb_spawn_failed();
     c->owns_env = 1;
     nb_live++;
@@ -945,7 +947,7 @@ long long nurl_fiber_spawn(void *fn, void *env) {
 long long nurl_fiber_spawn_owned(void *fn, void *env) {
     if (!fn) return 0;
     if (!nb_initialized) nurl_runtime_init(0);
-    NbCoro *c = nb_coro_new(fn, nurl_closure_clone(env), 0);
+    NbCoro *c = nb_coro_new(fn, nurl_closure_own_copy(env), 0);
     if (!c) nb_spawn_failed();
     c->owns_env = 1;
     nb_live++;
@@ -956,7 +958,7 @@ long long nurl_fiber_spawn_owned(void *fn, void *env) {
 long long nurl_fiber_spawn_joinable(void *fn, void *env) {
     if (!fn) return 0;
     if (!nb_initialized) nurl_runtime_init(0);
-    NbCoro *c = nb_coro_new(fn, nurl_closure_clone(env), 1);
+    NbCoro *c = nb_coro_new(fn, nurl_closure_own_copy(env), 1);
     if (!c) nb_spawn_failed();
     c->owns_env = 1;
     nb_live++;

@@ -1,6 +1,6 @@
-& `libc` @ rand → i
+$ `stdlib/core/mem.nu`
 
-& `libc` @ malloc i size → *i
+& `libc` @ rand → i
 
 & `canvas` @ canvas_open i w i h → *i
 
@@ -67,12 +67,18 @@ unsafe @ fade_frame * i fb i total_px → v {
 // --------------------------------------------------------------------
 unsafe @ main → i {
     // Allocate particle pools (parallel i64 arrays).
-    : *i px # *i ( malloc * MAX_PART 8 )
-    : *i py # *i ( malloc * MAX_PART 8 )
-    : *i pvx # *i ( malloc * MAX_PART 8 )
-    : *i pvy # *i ( malloc * MAX_PART 8 )
-    : *i pcol # *i ( malloc * MAX_PART 8 )
-    : *i plife # *i ( malloc * MAX_PART 8 )
+    : RawBlock px__blk ( raw_block * MAX_PART 8 )
+    : *i px # *i ( raw_block_ptr px__blk )
+    : RawBlock py__blk ( raw_block * MAX_PART 8 )
+    : *i py # *i ( raw_block_ptr py__blk )
+    : RawBlock pvx__blk ( raw_block * MAX_PART 8 )
+    : *i pvx # *i ( raw_block_ptr pvx__blk )
+    : RawBlock pvy__blk ( raw_block * MAX_PART 8 )
+    : *i pvy # *i ( raw_block_ptr pvy__blk )
+    : RawBlock pcol__blk ( raw_block * MAX_PART 8 )
+    : *i pcol # *i ( raw_block_ptr pcol__blk )
+    : RawBlock plife__blk ( raw_block * MAX_PART 8 )
+    : *i plife # *i ( raw_block_ptr plife__blk )
 
     // Initialise life‑counters (0 = free slot).
     : ~ i zi 0

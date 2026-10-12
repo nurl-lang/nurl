@@ -157,7 +157,7 @@ unsafe @ vid_avi_open s path → !VidAvi String {
         T n → { = fsize n }
         F _e → { ^ @ !VidAvi String { F ( string_from `cannot stat the video` ) } }
     }
-    : ~ File f @ File { # s 0 }
+    : ~ File f # File # s 0
     ?? ( file_open path ) {
         F _e → { ^ @ !VidAvi String { F ( string_from `cannot open the video` ) } }
         T fh → { = f fh }

@@ -23,17 +23,18 @@
 // The pipeline: parse a formula string into an Expr tree (C), symbolically
 // differentiate + simplify it (B), then evaluate both over Vec3 math (A).
 //
-// RAW MEMORY HERE IS A DELIBERATE EXCEPTION, NOT HOW NURL CODE IS WRITTEN.
-// Ordinary NURL never frees anything by hand: String, Vec, HashMap, Rc and
-// every struct or enum built from them drop themselves when their owner
-// goes out of scope. Raw `alloc` / `*T` memory — and with it `nurl_free` —
-// is reserved for the rare places that need it (FFI buffers, a custom
-// allocator, a stress test like this file). The `nurl_free` calls below
-// exist only because this file stresses that raw path on purpose.
+// RAW POINTERS HERE ARE A DELIBERATE EXCEPTION, NOT HOW NURL CODE IS WRITTEN.
+// Ordinary NURL holds String, Vec, HashMap, Rc and structs of them, which
+// drop themselves when their owner goes out of scope. This file stresses
+// the raw `*T` path on purpose — the expression DAG is linked by `*Expr`
+// pointers — and even so nothing is freed by hand: every node lives in a
+// `Box` the node arena (an owned module global) keeps, and the parser
+// state is a `Box` main holds.
 // ============================================================
 
-$ `stdlib/core/string.nu`
 $ `stdlib/core/mem.nu`
+$ `stdlib/core/string.nu`
+$ `stdlib/core/box.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/float.nu`
 
@@ -84,9 +85,17 @@ $ `stdlib/std/float.nu`
     Cos * Expr
 }
 
+// Every node of every tree, owned here and released when the program
+// ends: the trees share subtrees (they are DAGs), so no tree owns its
+// nodes.
+: ~ ( Vec ( Box Expr ) ) g_nodes 0
+: ~ b g_nodes_made F
+
 unsafe @ ebox Expr e → *Expr {
-    : *Expr p ( alloc [Expr] 1 )
-    = . p 0 e
+    ? ! g_nodes_made { = g_nodes ( vec_new [( Box Expr )] ) = g_nodes_made T } {}
+    : ( Box Expr ) b ( box_new [Expr] e )
+    : *Expr p # *Expr ( box_ptr [Expr] b )
+    ( vec_push [( Box Expr )] g_nodes b )
     ^ p
 }
 
@@ -145,12 +154,7 @@ unsafe @ e_simplify * Expr p → *Expr {
             : Expr eb . sb 0
             ?? ea {
                 Num x → ?? eb {
-                    Num y → {
-                        // Both folded operands are fresh nodes: release them.
-                        ( nurl_free # s sa )
-                        ( nurl_free # s sb )
-                        ( e_num + x y )
-                    }
+                    Num y → ( e_num + x y )
                     _ → ( e_add sa sb )
                 }
                 _ → ( e_add sa sb )
@@ -163,12 +167,7 @@ unsafe @ e_simplify * Expr p → *Expr {
             : Expr eb . sb 0
             ?? ea {
                 Num x → ?? eb {
-                    Num y → {
-                        // Both folded operands are fresh nodes: release them.
-                        ( nurl_free # s sa )
-                        ( nurl_free # s sb )
-                        ( e_num * x y )
-                    }
+                    Num y → ( e_num * x y )
                     _ → ( e_mul sa sb )
                 }
                 _ → ( e_mul sa sb )
@@ -178,34 +177,12 @@ unsafe @ e_simplify * Expr p → *Expr {
     }
 }
 
-// The trees are DAGs, not strict trees: e_diff reuses its input's
-// subtrees and e_simplify's leaf copies keep their children. To free them,
-// collect every node reachable from all roots exactly once.
-unsafe @ e_collect * Expr p ( Vec i ) seen → v {
-    : i addr # i p
-    ? ( vec_contains [i] seen addr \ i x i y → b { == x y } ) { ^ } {}
-    ( vec_push [i] seen addr )
-    : Expr e . p 0
-    ?? e {
-        Add a b → { ( e_collect a seen ) ( e_collect b seen ) }
-        Mul a b → { ( e_collect a seen ) ( e_collect b seen ) }
-        Neg a → ( e_collect a seen )
-        Sin a → ( e_collect a seen )
-        Cos a → ( e_collect a seen )
-        _ → {}
-    }
-}
-
 // ── Axis C: parser combinators (closures returning closures) ────────
 
 : PState { s text i len i pos }
 
-unsafe @ ps_new s input → *PState {
-    : *PState ps ( alloc [PState] 1 )
-    = . ps text input
-    = . ps len ( nurl_str_len input )
-    = . ps pos 0
-    ^ ps
+unsafe @ ps_new s input → ( Box PState ) {
+    ^ ( box_new [PState] @ PState { input ( nurl_str_len input ) 0 } )
 }
 
 unsafe @ p_peek * PState ps i ch → b {
@@ -330,9 +307,9 @@ unsafe @ main → i {
 
     // ── Axis C: parse a formula ───────────────────────────────
     : s formula `x*x + 3.0*x + s(x)`
-    : *PState ps ( ps_new formula )
+    : ( Box PState ) psb ( ps_new formula )
+    : *PState ps # *PState ( box_ptr [PState] psb )
     : ?*Expr parsed ( p_expr ps )
-    ( nurl_free # s ps )
     ?? parsed {
         F → { ( nurl_print `parse failed\n` ) ^ 1 }
         T tree → {
@@ -342,17 +319,6 @@ unsafe @ main → i {
             ( nurl_print `f(2)=` ) ( pf ( e_eval tree 2.0 ) ) ( nurl_print `\n` )
             ( nurl_print `f'(2)=` ) ( pf ( e_eval dtree 2.0 ) ) ( nurl_print `\n` )
             ( nurl_print `f(0)=` ) ( pf ( e_eval tree 0.0 ) ) ( nurl_print `\n` )
-
-            : ( Vec i ) nodes ( vec_new [i] )
-            ( e_collect tree nodes )
-            ( e_collect deriv nodes )
-            ( e_collect dtree nodes )
-            : *i addrs ( vec_data [i] nodes )
-            : ~ i k 0
-            ~ < k ( vec_len [i] nodes ) {
-                ( nurl_free # s . addrs k )
-                = k + k 1
-            }
         }
     }
     ^ 0

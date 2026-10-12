@@ -30,13 +30,12 @@
 //   (7) Compile-time CONST FOLDING, LIFO `defer`, nested member-path
 //       assignment, variable-index pointer stores, and nested ternaries.
 //
-// RAW MEMORY HERE IS A DELIBERATE EXCEPTION, NOT HOW NURL CODE IS WRITTEN.
-// Ordinary NURL never frees anything by hand: String, Vec, HashMap, Rc and
-// every struct or enum built from them drop themselves when their owner
-// goes out of scope. Raw `alloc` / `*T` memory — and with it `nurl_free` —
-// is reserved for the rare places that need it (FFI buffers, a custom
-// allocator, a stress test like this file). The `nurl_free` calls below
-// exist only because this file stresses that raw path on purpose.
+// RAW POINTERS HERE ARE A DELIBERATE EXCEPTION, NOT HOW NURL CODE IS WRITTEN.
+// Ordinary NURL holds String, Vec, HashMap, Rc and structs of them, which
+// drop themselves when their owner goes out of scope. This file stresses
+// the raw `*T` path on purpose — the stack's elements are stored through a
+// `*T` — and even so nothing is freed by hand: the memory is a `RawBlock`
+// the stack holds, released with it.
 // ============================================================
 
 $ `stdlib/core/mem.nu`
@@ -47,21 +46,17 @@ $ `stdlib/std/float.nu`
 : i STACK_CAP << 1 6
 
 // ── (1) A generic typed stack ───────────────────────────────────────
-// The element store is `*T`; `stack_new` forwards the type variable T
-// straight into `alloc [T]`. Every mutator takes the stack by `inout`
+// The element store is `*T` into a raw block sized `cap * Z T`, which the
+// stack owns (`mem`, released with the stack); `stack_new` forwards the
+// type variable T into that size. Every mutator takes the stack by `inout`
 // (exclusive mutable borrow) so writes hit the caller's binding in place.
 
-: Stack [T] { * T data i len i cap }
+: Stack [T] { RawBlock mem * T data i len i cap }
 
 unsafe @ stack_new [T] i cap → ( Stack T ) {
-    ^ @ ( Stack T ) { # *T ( alloc [T] cap ) 0 cap }
-}
-
-// The store is raw `alloc` memory (axis 1 exercises exactly that), so it is
-// released by hand — the raw-memory exception described at the top. A
-// normal program would hold a `( Vec T )` here and free nothing.
-unsafe @ stack_free [T] ( Stack T ) st → v {
-    ( nurl_free # s . st data )
+    : RawBlock mem ( raw_block * cap Z T )
+    : *T data # *T ( raw_block_ptr mem )
+    ^ @ ( Stack T ) { mem data 0 cap }
 }
 
 unsafe @ stack_push [T] inout ( Stack T ) s T v → v {
@@ -183,7 +178,6 @@ unsafe @ stack_peek [T] inout ( Stack T ) s → T {
 
     // (1) inout stack, forwarded into vm_run which forwards it again.
     : ~ ( Stack f ) st ( stack_new [f] STACK_CAP )
-    ; { ( stack_free [f] st ) }
     : f result ( vm_run st prog ops )
 
     ( nurl_print `vm result = ` ) ( show result )  // (2) trait dispatch on f

@@ -57,17 +57,14 @@ $ `stdlib/core/rcbox.nu`
 // list holds one owner of each; the code below works on the H3Stream in
 // place (its address stays put while the list grows or shrinks), and the
 // stream goes when it leaves the list or the connection goes.
-: H3StreamBox { s ctl }
+: H3StreamBox { ( Shared H3Stream ) ctl }
 
-@ H3StreamBox_share H3StreamBox h → H3StreamBox { ^ @ H3StreamBox { # s ( rcbox_share # i . h ctl ) } }
+@ H3StreamBox_share H3StreamBox h → H3StreamBox { ^ @ H3StreamBox { ( shared_clone [H3Stream] . h ctl ) } }
 
-@ H3StreamBox_drop sink H3StreamBox h → v {
-    ( mem_forget h )
-    ( rcbox_release [H3Stream] # i . h ctl )
-}
+@ H3StreamBox_drop sink H3StreamBox h → v {}
 
 @ __h3_stream_new i id i kind → H3StreamBox {
-    ^ @ H3StreamBox { # s ( rcbox_new [H3Stream] @ H3Stream {
+    ^ @ H3StreamBox { ( shared_new [H3Stream] @ H3Stream {
             id kind ( vec_new [u] ) 0 ( vec_new [Header] ) ( vec_new [u] ) 0
         } ) }
 }
@@ -102,22 +99,19 @@ $ `stdlib/core/rcbox.nu`
 // An H3Conn is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
 // every copy is the same state, and the last owner releases it — the
 // streams and the QuicConn it shares go with the fields.
-: H3Conn { s ctl }
+: H3Conn { ( Shared H3ConnImpl ) ctl }
 
-@ H3Conn_share H3Conn h → H3Conn { ^ @ H3Conn { # s ( rcbox_share # i . h ctl ) } }
+@ H3Conn_share H3Conn h → H3Conn { ^ @ H3Conn { ( shared_clone [H3ConnImpl] . h ctl ) } }
 
-@ H3Conn_drop sink H3Conn h → v {
-    ( mem_forget h )
-    ( rcbox_release [H3ConnImpl] # i . h ctl )
-}
+@ H3Conn_drop sink H3Conn h → v {}
 
-@ __H3Conn_ptr H3Conn h → *H3ConnImpl { ^ ( rcbox_ptr [H3ConnImpl] # i . h ctl ) }
+@ __H3Conn_ptr H3Conn h → *H3ConnImpl { ^ ( shared_ptr [H3ConnImpl] . h ctl ) }
 
 @ h3_default_max_field_section → i { ^ 65536 }
 
 @ h3_conn_new QuicConn qc i body_max → H3Conn {
-    : i h__box ( rcbox_zero [H3ConnImpl] )
-    : *H3ConnImpl h ( rcbox_ptr [H3ConnImpl] h__box )
+    : ( Shared H3ConnImpl ) h__box ( shared_zero [H3ConnImpl] )
+    : *H3ConnImpl h ( shared_ptr [H3ConnImpl] h__box )
     = . h qc ( QuicConn_share qc )
     = . h streams ( vec_new [H3StreamBox] )
     = . h peer_control -1
@@ -149,7 +143,7 @@ $ `stdlib/core/rcbox.nu`
         ( quic_varint_push d ( h3_st_qpack_decoder ) )
         : i _n ( quic_conn_stream_send qc . h dec_out d F )
     } {}
-    ^ @ H3Conn { # s h__box }
+    ^ @ H3Conn { h__box }
 }
 
 // Let go of `h` now rather than at the end of its owner's scope.
@@ -161,7 +155,7 @@ $ `stdlib/core/rcbox.nu`
 
 // The k-th stream of the list, in place.
 @ __h3_si * H3ConnImpl h i k → *H3Stream {
-    ?? ( vec_get [H3StreamBox] . h streams k ) { T b → ^ ( rcbox_ptr [H3Stream] # i . b ctl ) F → ^ # *H3Stream 0 }
+    ?? ( vec_get [H3StreamBox] . h streams k ) { T b → ^ ( shared_ptr [H3Stream] . b ctl ) F → ^ # *H3Stream 0 }
 }
 
 @ __h3_stream_get * H3ConnImpl h i id → *H3Stream {
@@ -441,8 +435,6 @@ $ `stdlib/core/rcbox.nu`
                         ( __h3_stream_error h s bad )
                         ^ F
                     } {}
-                    : ( Vec Header ) old . s headers
-                    ( mem_take old )  // a store through the stream pointer drops nothing
                     = . s headers hs
                     = . s state 1
                 } {
@@ -565,7 +557,7 @@ $ `stdlib/core/rcbox.nu`
     ? == # i s 0 {
         ? & ( _qc_stream_is_server id ) T { ^ } {}
         : H3StreamBox nb ( __h3_stream_new id ? uni ( h3_kind_unknown ) ( h3_kind_request ) )
-        = s ( rcbox_ptr [H3Stream] # i . nb ctl )
+        = s ( shared_ptr [H3Stream] . nb ctl )
         ( vec_push [H3StreamBox] . h streams nb )
     } {}
     ? != . s done 0 { ^ } {}

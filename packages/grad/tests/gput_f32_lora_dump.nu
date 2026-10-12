@@ -51,8 +51,10 @@ unsafe @ main → i {
     ( dumpv `mask` . bl mask ) ( dumpv `onehot` . bl onehot )
     ( dumpv `la` . bl la ) ( dumpv `lb` . bl lb )
     : GTape tp ( tape_new )
-    : *u pav ( nurl_alloc * 7 8 )
-    : *u pbv ( nurl_alloc * 7 8 )
+    : ( Vec u ) pav__b ( vec_zeroed [u] * 7 8 )
+    : *u pav ( vec_data [u] pav__b )
+    : ( Vec u ) pbv__b ( vec_zeroed [u] * 7 8 )
+    : *u pbv ( vec_data [u] pbv__b )
     : GVar loss ( build_block tp bl pav pbv )
     // capture + run the whole block in FLOAT32 on the device
     : GProg pg ( gput_capture_dt kit tp loss 1 )
@@ -89,7 +91,6 @@ unsafe @ main → i {
         ( dumpv ( string_data bn ) gb )
         = k + k 1
     }
-    ( nurl_free pav ) ( nurl_free pbv )
     ( gk_close kit )
     ^ 0
 }

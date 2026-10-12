@@ -441,7 +441,7 @@ unsafe @ __pg_ssl_request i raw → i {
     : ( Vec u ) req ( vec_new [u] )
     ( __push32 req 8 )
     ( __push32 req 80877103 )
-    : TcpConn t @ TcpConn { # s raw 0 0 }
+    : TcpConn t ( tcp_conn_view raw )
     ?? ( tcp_write_all t req ) { T _ → {} F _ → { ^ -1 } }
     : ( Vec u ) one ( vec_with_cap [u] 1 )
     : i got ( nurl_tcp_read raw # s ( vec_data [u] one ) 1 )
@@ -464,8 +464,8 @@ unsafe @ pg_connect s host i port s user s password s database i sslmode → !Pg
     : *PgConnImpl c ( arc_ptr [PgConnImpl] . h a )
     = . c tls 0
     = . c raw rawfd
-    = . c tcp @ TcpConn { # s rawfd 0 0 }
-    = . c tc @ TlsConn { # s 0 }
+    = . c tcp ( tcp_conn_view rawfd )
+    = . c tc # TlsConn # s 0
     = . c rxbuf ( vec_new [u] )
     = . c lasterr ( string_with_cap 0 )
     = . c be_pid 0

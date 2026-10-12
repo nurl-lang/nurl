@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_lit_nested_moved_twice.nu:10:7: error: 't' is moved into field 1 of '@ Two' and handed on by field 2 as well — the literal and that other owner would both release it. Give one of them a copy (clone it, or share a handle), or put the value in only once.
+    ^ @ Two { t @ Holder { t } }
+      ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

@@ -36,6 +36,7 @@
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/rcbox.nu`
+$ `stdlib/core/box.nu`
 
 @ __id_veq ( Vec u ) a ( Vec u ) b → b {
     : i n ( vec_len [u] a )
@@ -63,43 +64,26 @@ $ `stdlib/core/rcbox.nu`
 }
 
 : IdRegistryImpl {
-    ( Vec s ) entries  // *IdEntry
+    ( Vec ( Box IdEntry ) ) entries
     i next_id  // monotonic high-water mark — never decreases
 }
 
 // An IdRegistry is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
 // every copy is the same state, and the last owner releases it.
-: IdRegistry { s ctl }
+: IdRegistry { ( Shared IdRegistryImpl ) ctl }
 
-@ IdRegistry_share IdRegistry h → IdRegistry { ^ @ IdRegistry { # s ( rcbox_share # i . h ctl ) } }
+@ IdRegistry_share IdRegistry h → IdRegistry { ^ @ IdRegistry { ( shared_clone [IdRegistryImpl] . h ctl ) } }
 
-@ IdRegistry_drop sink IdRegistry h → v {
-    ( mem_forget h )
-    ( rcbox_release [IdRegistryImpl] # i . h ctl )
-}
+@ IdRegistry_drop sink IdRegistry h → v {}
 
-@ __IdRegistry_ptr IdRegistry h → *IdRegistryImpl { ^ ( rcbox_ptr [IdRegistryImpl] # i . h ctl ) }
-
-// The entries are raw blocks the Vec only points at: releasing them is the
-// registry's own drop, run by its last owner (the Vec goes after it).
-% Drop IdRegistryImpl {
-    @ drop IdRegistryImpl r → v {
-        : i n ( vec_len [s] . r entries )
-        : ~ i k 0
-        ~ < k n {
-            : s pp ?? ( vec_get [s] . r entries k ) { T x → x F → # s 0 }
-            ? != # i pp 0 { : *IdEntry e # *IdEntry pp ( vec_free [u] . e pubkey ) ( nurl_free # s e ) } {}
-            = k + k 1
-        }
-    }
-}
+@ __IdRegistry_ptr IdRegistry h → *IdRegistryImpl { ^ ( shared_ptr [IdRegistryImpl] . h ctl ) }
 
 @ identity_new → IdRegistry {
-    : i r__box ( rcbox_zero [IdRegistryImpl] )
-    : *IdRegistryImpl r ( rcbox_ptr [IdRegistryImpl] r__box )
-    = . r entries ( vec_new [s] )
+    : ( Shared IdRegistryImpl ) r__box ( shared_zero [IdRegistryImpl] )
+    : *IdRegistryImpl r ( shared_ptr [IdRegistryImpl] r__box )
+    = . r entries ( vec_new [( Box IdEntry )] )
     = . r next_id 0
-    ^ @ IdRegistry { # s r__box }
+    ^ @ IdRegistry { r__box }
 }
 
 // Let go of `r` now rather than at the end of its owner's scope.
@@ -107,7 +91,7 @@ $ `stdlib/core/rcbox.nu`
 
 @ identity_count IdRegistry r__h → i {
     : *IdRegistryImpl r ( __IdRegistry_ptr r__h )
-    ^ ( vec_len [s] . r entries )
+    ^ ( vec_len [( Box IdEntry )] . r entries )
 }
 
 // A globally STABLE replica id derived purely from the pubkey (FNV-1a/64). No
@@ -131,11 +115,11 @@ $ `stdlib/core/rcbox.nu`
 }
 
 @ __id_find * IdRegistryImpl r ( Vec u ) pubkey → s {
-    : i n ( vec_len [s] . r entries )
+    : i n ( vec_len [( Box IdEntry )] . r entries )
     : ~ s found # s 0
     : ~ i k 0
     ~ & == # i found 0 < k n {
-        : s pp ?? ( vec_get [s] . r entries k ) { T x → x F → # s 0 }
+        : s pp # s ( box_ptr [IdEntry] ( vec_at [( Box IdEntry )] . r entries k ) )
         ? != # i pp 0 {
             : *IdEntry e # *IdEntry pp
             ? ( __id_veq . e pubkey pubkey ) { = found pp } {}
@@ -157,12 +141,13 @@ $ `stdlib/core/rcbox.nu`
         = . e live 1
         ^ . e id
     } {}
-    : *IdEntry e # *IdEntry ( nurl_alloc Z IdEntry )
+    : ( Box IdEntry ) e__b ( box_zero [IdEntry] )
+    : *IdEntry e # *IdEntry ( box_ptr [IdEntry] e__b )
     = . e pubkey ( __id_cpy pubkey )
     = . e id . r next_id
     = . e live 1
     = . r next_id + . r next_id 1
-    ( vec_push [s] . r entries # s e )
+    ( vec_push [( Box IdEntry )] . r entries e__b )
     ^ . e id
 }
 
@@ -176,12 +161,12 @@ $ `stdlib/core/rcbox.nu`
 // retired (tombstoned) ids too, so stale gossip remains interpretable.
 @ identity_pubkey IdRegistry r__h i id → ?( Vec u ) {
     : *IdRegistryImpl r ( __IdRegistry_ptr r__h )
-    : i n ( vec_len [s] . r entries )
+    : i n ( vec_len [( Box IdEntry )] . r entries )
     : ~ ? ( Vec u ) out @ ?( Vec u ) { F # ( Vec u ) 0 }
     : ~ b got F
     : ~ i k 0
     ~ & ! got < k n {
-        : s pp ?? ( vec_get [s] . r entries k ) { T x → x F → # s 0 }
+        : s pp # s ( box_ptr [IdEntry] ( vec_at [( Box IdEntry )] . r entries k ) )
         ? != # i pp 0 {
             : *IdEntry e # *IdEntry pp
             ? == . e id id { = out @ ?( Vec u ) { T ( __id_cpy . e pubkey ) } = got T } {}
@@ -203,10 +188,10 @@ $ `stdlib/core/rcbox.nu`
 // Is the id currently live (not retired)? Unknown ids report not-live.
 @ identity_is_live IdRegistry r__h i id → b {
     : *IdRegistryImpl r ( __IdRegistry_ptr r__h )
-    : i n ( vec_len [s] . r entries )
+    : i n ( vec_len [( Box IdEntry )] . r entries )
     : ~ b live F : ~ i k 0
     ~ & ! live < k n {
-        : s pp ?? ( vec_get [s] . r entries k ) { T x → x F → # s 0 }
+        : s pp # s ( box_ptr [IdEntry] ( vec_at [( Box IdEntry )] . r entries k ) )
         ? != # i pp 0 { : *IdEntry e # *IdEntry pp ? & == . e id id == . e live 1 { = live T } {} } {}
         = k + k 1
     }

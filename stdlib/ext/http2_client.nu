@@ -32,6 +32,7 @@ $ `stdlib/ext/http_response.nu`
 $ `stdlib/ext/http2_frame.nu`
 $ `stdlib/ext/http2_hpack.nu`
 $ `stdlib/core/rcbox.nu`
+$ `stdlib/core/mem.nu`
 
 // Plaintext connect primitive (nurl_tcp_connect is not in the compiler's
 // runtime symbol table, so declare it here). TLS-with-ALPN now goes
@@ -170,16 +171,13 @@ $ `stdlib/core/rcbox.nu`
 // every copy — the caller's, a pool's, a gRPC client's — is the same
 // connection, and the last owner releases it (the TcpConn stays the
 // caller's to close: h2_client_disconnect).
-: H2Client { s ctl }
+: H2Client { ( Shared H2ClientImpl ) ctl }
 
-@ H2Client_share H2Client h → H2Client { ^ @ H2Client { # s ( rcbox_share # i . h ctl ) } }
+@ H2Client_share H2Client h → H2Client { ^ @ H2Client { ( shared_clone [H2ClientImpl] . h ctl ) } }
 
-@ H2Client_drop sink H2Client h → v {
-    ( mem_forget h )
-    ( rcbox_release [H2ClientImpl] # i . h ctl )
-}
+@ H2Client_drop sink H2Client h → v {}
 
-@ __H2Client_ptr H2Client h → *H2ClientImpl { ^ ( rcbox_ptr [H2ClientImpl] # i . h ctl ) }
+@ __H2Client_ptr H2Client h → *H2ClientImpl { ^ ( shared_ptr [H2ClientImpl] . h ctl ) }
 
 @ __h2c_peer_mfs * H2ClientImpl c → i { ^ . c peer_mfs }
 
@@ -276,11 +274,9 @@ $ `stdlib/core/rcbox.nu`
 }
 
 @ __h2c_set_stream * H2ClientImpl c i idx H2CStream s → v {
-    : *H2CStream sp ( vec_data [H2CStream] . c streams )
     // `s` is the slot's own value, read by the getter and updated: it
     // goes back as is (the table still owns it).
-    ( mem_put_back s )
-    = . sp idx s
+    ( vec_put_back [H2CStream] . c streams idx s )
 }
 
 @ __h2c_any_pending * H2ClientImpl c → b {
@@ -390,7 +386,7 @@ $ `stdlib/core/rcbox.nu`
     // stream registry.
     : ( Vec HpackDynTable ) dec_box ( vec_new [HpackDynTable] )
     ( vec_push [HpackDynTable] dec_box ( hpack_dyn_new 4096 ) )
-    : H2Client h @ H2Client { # s ( rcbox_new [H2ClientImpl] @ H2ClientImpl {
+    : H2Client h @ H2Client { ( shared_new [H2ClientImpl] @ H2ClientImpl {
             conn
             1  // next stream id
             65535 65535  // connection send / receive windows
@@ -398,7 +394,7 @@ $ `stdlib/core/rcbox.nu`
             0 0  // goaway received / last id
             10485760 10485760 100  // send queue, receive buffer, retained streams
             0 0 0 0  // continuation sid / END_STREAM / count, connection error
-            dec_box ( vec_new [H2CStream] ) ( vec_new [u] ) ( vec_new [u] ) ( h2_frame_writer conn 1048576 )
+            dec_box ( vec_new [H2CStream] ) ( vec_new [u] ) ( vec_new [u] ) ( h2_frame_writer ( TcpConn_share conn ) 1048576 )
         } ) }
     : *H2ClientImpl c ( __H2Client_ptr h )
     // RFC 9113 §3.4 requires the first peer frame to be non-ACK SETTINGS.
@@ -440,17 +436,9 @@ $ `stdlib/core/rcbox.nu`
         ( nurl_tcp_close craw )
         ^ @ !H2Client H2ClientErr { F # H2ClientErr H2CConnect }
     } {}
-    : s rp # s craw
-    : TcpConn conn @ TcpConn { rp 0 0 }
+    : TcpConn conn ( tcp_conn_adopt craw )
     ( tcp_set_timeout conn 30000 )
-    : !H2Client H2ClientErr hr ( __h2_client_handshake conn )
-    ?? hr {
-        T cl → { ^ @ !H2Client H2ClientErr { T cl } }
-        F e → {
-            ( tcp_close_conn conn )
-            ^ @ !H2Client H2ClientErr { F e }
-        }
-    }
+    ^ ( __h2_client_handshake conn )  // a failed one drops (closes) the conn
 }
 
 @ h2_client_connect_tls s host i port b verify → !H2Client H2ClientErr {
@@ -468,14 +456,7 @@ $ `stdlib/core/rcbox.nu`
         ^ @ !H2Client H2ClientErr { F # H2ClientErr H2CAlpn }
     } {}
     ( tcp_set_timeout conn 30000 )
-    : !H2Client H2ClientErr hr ( __h2_client_handshake conn )
-    ?? hr {
-        T cl → { ^ @ !H2Client H2ClientErr { T cl } }
-        F e → {
-            ( tcp_close_conn conn )
-            ^ @ !H2Client H2ClientErr { F e }
-        }
-    }
+    ^ ( __h2_client_handshake conn )  // a failed one drops (closes) the conn
 }
 
 // Let go of `c` now rather than at the end of its owner's scope (optional).
@@ -796,14 +777,12 @@ $ `stdlib/core/rcbox.nu`
 @ __h2c_cancel * H2ClientImpl c i sid i code → !v H2ClientErr {
     : i idx ( __h2c_find_stream c sid )
     ? < idx 0 { ^ @ !v H2ClientErr { F # H2ClientErr H2COther } } {}
-    : H2CStream s ( __h2c_get_stream c idx )
+    : ~ H2CStream s ( __h2c_get_stream c idx )
     ? & . s complete . s req_done { ^ @ !v H2ClientErr { T 0 } } {}
     = . s complete T
     = . s req_done T
     = . s rst_code code
-    : ( Vec u ) unsent . s pending_body
-    ( mem_take unsent )  // the slot's queued body: dropped here
-    = . s pending_body ( vec_new [u] )
+    : ( Vec u ) _unsent ( mem_replace [( Vec u )] . s pending_body ( vec_new [u] ) )  // the old body: dropped here
     = . s send_pos 0
     ( __h2c_set_stream c idx s )
     : !v H2FrameErr wr ( __h2c_send_reset c sid code )
@@ -909,9 +888,7 @@ $ `stdlib/core/rcbox.nu`
                 }
             }
             ? == . s send_pos plen {
-                : ( Vec u ) sent . s pending_body
-                ( mem_take sent )  // the slot's sent bytes: dropped here
-                = . s pending_body ( vec_new [u] )
+                : ( Vec u ) _sent ( mem_replace [( Vec u )] . s pending_body ( vec_new [u] ) )  // the old body: dropped here
                 = . s send_pos 0
             } {}
             ( __h2c_set_stream c idx s )
@@ -1021,8 +998,7 @@ $ `stdlib/core/rcbox.nu`
     // as is (the box still owns it).
     : ~ HpackDynTable tbl . dp 0
     : !HpackDecoded HpackErr hd ( hpack_decode_block block tbl )
-    ( mem_put_back tbl )
-    = . dp 0 tbl
+    ( vec_put_back [HpackDynTable] . c dec_box 0 tbl )
     ?? hd {
         T dec → {
             ? < idx 0 {
@@ -1245,13 +1221,11 @@ $ `stdlib/core/rcbox.nu`
         3 → {
             : i idx ( __h2c_find_stream c sid )
             ? >= idx 0 {
-                : H2CStream s ( __h2c_get_stream c idx )
+                : ~ H2CStream s ( __h2c_get_stream c idx )
                 = . s rst_code ( __h2c_read_u32 . frame payload 0 )
                 = . s complete T
                 = . s req_done T
-                : ( Vec u ) unsent . s pending_body
-                ( mem_take unsent )  // the slot's queued body: dropped here
-                = . s pending_body ( vec_new [u] )
+                : ( Vec u ) _unsent ( mem_replace [( Vec u )] . s pending_body ( vec_new [u] ) )  // the old body: dropped here
                 = . s send_pos 0
                 ( __h2c_set_stream c idx s )
             } {}
@@ -1279,14 +1253,12 @@ $ `stdlib/core/rcbox.nu`
             = . c goaway_last_id last
             : ~ i k 0
             ~ < k ( vec_len [H2CStream] . c streams ) {
-                : H2CStream s ( __h2c_get_stream c k )
+                : ~ H2CStream s ( __h2c_get_stream c k )
                 ? & ! . s complete > . s id last {
                     = . s complete T
                     = . s req_done T
                     = . s rst_code ( h2_err_refused_stream )
-                    : ( Vec u ) unsent . s pending_body
-                    ( mem_take unsent )  // the slot's queued body: dropped here
-                    = . s pending_body ( vec_new [u] )
+                    : ( Vec u ) _unsent ( mem_replace [( Vec u )] . s pending_body ( vec_new [u] ) )  // the old body: dropped here
                     = . s send_pos 0
                     ( __h2c_set_stream c k s )
                 } {}

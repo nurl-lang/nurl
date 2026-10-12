@@ -41,25 +41,22 @@ $ `stdlib/core/rcbox.nu`
 
 // A PNCounter is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
 // every copy is the same state, and the last owner releases it.
-: PNCounter { s ctl }
+: PNCounter { ( Shared PNCounterImpl ) ctl }
 
-@ PNCounter_share PNCounter h → PNCounter { ^ @ PNCounter { # s ( rcbox_share # i . h ctl ) } }
+@ PNCounter_share PNCounter h → PNCounter { ^ @ PNCounter { ( shared_clone [PNCounterImpl] . h ctl ) } }
 
-@ PNCounter_drop sink PNCounter h → v {
-    ( mem_forget h )
-    ( rcbox_release [PNCounterImpl] # i . h ctl )
-}
+@ PNCounter_drop sink PNCounter h → v {}
 
-@ __PNCounter_ptr PNCounter h → *PNCounterImpl { ^ ( rcbox_ptr [PNCounterImpl] # i . h ctl ) }
+@ __PNCounter_ptr PNCounter h → *PNCounterImpl { ^ ( shared_ptr [PNCounterImpl] . h ctl ) }
 
 @ pncounter_new → PNCounter {
-    : i c__box ( rcbox_zero [PNCounterImpl] )
-    : *PNCounterImpl c ( rcbox_ptr [PNCounterImpl] c__box )
+    : ( Shared PNCounterImpl ) c__box ( shared_zero [PNCounterImpl] )
+    : *PNCounterImpl c ( shared_ptr [PNCounterImpl] c__box )
     = . c inc_id ( vec_new [i] )
     = . c inc_amt ( vec_new [i] )
     = . c dec_id ( vec_new [i] )
     = . c dec_amt ( vec_new [i] )
-    ^ @ PNCounter { # s c__box }
+    ^ @ PNCounter { c__box }
 }
 
 // Let go of `c` now rather than at the end of its owner's scope.
@@ -179,67 +176,40 @@ $ `stdlib/core/rcbox.nu`
 }
 
 : OrSetImpl {
-    ( Vec s ) adds  // *OrTag
-    ( Vec s ) tombs  // *OrTag
+    ( Vec OrTag ) adds
+    ( Vec OrTag ) tombs
     i next_seq  // this replica's local tag counter
 }
 
-// An OrSet is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
-// every copy is the same state, and the last owner releases it.
-: OrSet { s ctl }
+// An OrSet is a handle on its state (stdlib/core/rcbox.nu): every copy is
+// the same state, and the last owner releases it (the tags with it).
+: OrSet { ( Shared OrSetImpl ) ctl }
 
-@ OrSet_share OrSet h → OrSet { ^ @ OrSet { # s ( rcbox_share # i . h ctl ) } }
+@ OrSet_share OrSet h → OrSet { ^ @ OrSet { ( shared_clone [OrSetImpl] . h ctl ) } }
 
-@ OrSet_drop sink OrSet h → v {
-    ( mem_forget h )
-    ( rcbox_release [OrSetImpl] # i . h ctl )
-}
+@ OrSet_drop sink OrSet h → v {}
 
-@ __OrSet_ptr OrSet h → *OrSetImpl { ^ ( rcbox_ptr [OrSetImpl] # i . h ctl ) }
+@ __OrSet_ptr OrSet h → *OrSetImpl { ^ ( shared_ptr [OrSetImpl] . h ctl ) }
 
 @ orset_new → OrSet {
-    : i s__box ( rcbox_zero [OrSetImpl] )
-    : *OrSetImpl s ( rcbox_ptr [OrSetImpl] s__box )
-    = . s adds ( vec_new [s] )
-    = . s tombs ( vec_new [s] )
-    = . s next_seq 0
-    ^ @ OrSet { # s s__box }
-}
-
-@ __orset_free_tags ( Vec s ) v → v {
-    : i n ( vec_len [s] v ) : ~ i k 0
-    ~ < k n { : s pp ?? ( vec_get [s] v k ) { T x → x F → # s 0 } ? != # i pp 0 { ( nurl_free pp ) } {} = k + k 1 }
-}
-
-// The tags are raw blocks the two Vecs only point at: releasing them is
-// the set's own drop, run by its last owner (the Vecs go after it).
-% Drop OrSetImpl {
-    @ drop OrSetImpl x → v {
-        ( __orset_free_tags . x adds )
-        ( __orset_free_tags . x tombs )
-    }
+    ^ @ OrSet { ( shared_new [OrSetImpl] @ OrSetImpl { ( vec_new [OrTag] ) ( vec_new [OrTag] ) 0 } ) }
 }
 
 // Let go of `s` now rather than at the end of its owner's scope.
 @ orset_free sink OrSet s → v {}
 
-@ __tag_in ( Vec s ) v i elem i replica i seq → b {
-    : i n ( vec_len [s] v ) : ~ b found F : ~ i k 0
+@ __tag_in ( Vec OrTag ) v i elem i replica i seq → b {
+    : i n ( vec_len [OrTag] v ) : ~ b found F : ~ i k 0
     ~ & ! found < k n {
-        : s pp ?? ( vec_get [s] v k ) { T x → x F → # s 0 }
-        ? != # i pp 0 {
-            : *OrTag t # *OrTag pp
-            ? & & == . t elem elem == . t replica replica == . t seq seq { = found T } {}
-        } {}
+        : OrTag t ( vec_at [OrTag] v k )
+        ? & & == . t elem elem == . t replica replica == . t seq seq { = found T } {}
         = k + k 1
     }
     ^ found
 }
 
-@ __tag_push ( Vec s ) v i elem i replica i seq → v {
-    : *OrTag t # *OrTag ( nurl_alloc Z OrTag )
-    = . t elem elem = . t replica replica = . t seq seq
-    ( vec_push [s] v # s t )
+@ __tag_push ( Vec OrTag ) v i elem i replica i seq → v {
+    ( vec_push [OrTag] v @ OrTag { elem replica seq } )
 }
 
 // Add an element under this replica's id (gets a fresh unique tag).
@@ -252,14 +222,11 @@ $ `stdlib/core/rcbox.nu`
 // Remove an element: tombstone every currently-observed add-tag for it.
 @ orset_remove OrSet s__h i elem → v {
     : *OrSetImpl s ( __OrSet_ptr s__h )
-    : i n ( vec_len [s] . s adds ) : ~ i k 0
+    : i n ( vec_len [OrTag] . s adds ) : ~ i k 0
     ~ < k n {
-        : s pp ?? ( vec_get [s] . s adds k ) { T x → x F → # s 0 }
-        ? != # i pp 0 {
-            : *OrTag t # *OrTag pp
-            ? & == . t elem elem ! ( __tag_in . s tombs . t elem . t replica . t seq ) {
-                ( __tag_push . s tombs . t elem . t replica . t seq )
-            } {}
+        : OrTag t ( vec_at [OrTag] . s adds k )
+        ? & == . t elem elem ! ( __tag_in . s tombs . t elem . t replica . t seq ) {
+            ( __tag_push . s tombs . t elem . t replica . t seq )
         } {}
         = k + k 1
     }
@@ -268,37 +235,31 @@ $ `stdlib/core/rcbox.nu`
 // Present iff some add-tag for the element is not tombstoned.
 @ orset_contains OrSet s__h i elem → b {
     : *OrSetImpl s ( __OrSet_ptr s__h )
-    : i n ( vec_len [s] . s adds ) : ~ b found F : ~ i k 0
+    : i n ( vec_len [OrTag] . s adds ) : ~ b found F : ~ i k 0
     ~ & ! found < k n {
-        : s pp ?? ( vec_get [s] . s adds k ) { T x → x F → # s 0 }
-        ? != # i pp 0 {
-            : *OrTag t # *OrTag pp
-            ? & == . t elem elem ! ( __tag_in . s tombs . t elem . t replica . t seq ) { = found T } {}
-        } {}
+        : OrTag t ( vec_at [OrTag] . s adds k )
+        ? & == . t elem elem ! ( __tag_in . s tombs . t elem . t replica . t seq ) { = found T } {}
         = k + k 1
     }
     ^ found
 }
 
-@ __merge_tags ( Vec s ) dst ( Vec s ) src → v {
-    : i n ( vec_len [s] src ) : ~ i k 0
+@ __merge_tags ( Vec OrTag ) dst ( Vec OrTag ) src → v {
+    : i n ( vec_len [OrTag] src ) : ~ i k 0
     ~ < k n {
-        : s pp ?? ( vec_get [s] src k ) { T x → x F → # s 0 }
-        ? != # i pp 0 {
-            : *OrTag t # *OrTag pp
-            ? ! ( __tag_in dst . t elem . t replica . t seq ) { ( __tag_push dst . t elem . t replica . t seq ) } {}
-        } {}
+        : OrTag t ( vec_at [OrTag] src k )
+        ? ! ( __tag_in dst . t elem . t replica . t seq ) { ( __tag_push dst . t elem . t replica . t seq ) } {}
         = k + k 1
     }
 }
-// The add-tags and tombstones (*OrTag each), lent — what
-// dist/replicator.nu's codec reads and fills. The set owns the tags.
-@ orset_adds OrSet s__h → ( Vec s ) {
+// The add-tags and tombstones, lent — what dist/replicator.nu's codec
+// reads and fills. The set owns the tags.
+@ orset_adds OrSet s__h → ( Vec OrTag ) {
     : *OrSetImpl s ( __OrSet_ptr s__h )
     ^ . s adds
 }
 
-@ orset_tombs OrSet s__h → ( Vec s ) {
+@ orset_tombs OrSet s__h → ( Vec OrTag ) {
     : *OrSetImpl s ( __OrSet_ptr s__h )
     ^ . s tombs
 }

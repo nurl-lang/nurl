@@ -26,6 +26,8 @@
 //   global counter after: 3
 // ============================================================
 
+$ `stdlib/core/vec.nu`
+
 : ~ i call_count 0
 
 // ── (1) Parametri-vapaa closure tallennettu muuttujaan ───────
@@ -42,16 +44,16 @@
 }
 
 // ── (3) Higher-order: ota closure ja sovella se sliceen ──────
-unsafe @ map_i [i src ( @ i i ) f → [i {
+@ map_i [i src ( @ i i ) f → ( Vec i ) {
     : i n . src length
-    : *i buf # *i ( malloc * n 8 )
+    : ( Vec i ) out ( vec_with_cap [i] n )
     : ~ i i 0
     ~ < i n {
         : i v . src i
-        = . buf i ( f v )
+        ( vec_push [i] out ( f v ) )
         = i + i 1
     }
-    ^ @ [i { buf n }
+    ^ out
 }
 
 // ── (4) Closure joka mutatoi globaalia ───────────────────────
@@ -117,12 +119,12 @@ unsafe @ map_i [i src ( @ i i ) f → [i {
     // (6) Higher-order: map_i closurella
     : [i nums [i | 1 2 3 4 5]
     : ( @ i i ) bump \ i n → i { + n 10 }
-    : [i mapped ( map_i nums bump )
+    : ( Vec i ) mapped ( map_i nums bump )
     ( puts `mapped: ` )
-    : i mn . mapped length
+    : i mn ( vec_len [i] mapped )
     : ~ i mi 0
     ~ < mi mn {
-        ( puts ( nurl_str_int . mapped mi ) )
+        ( puts ( nurl_str_int ( vec_at [i] mapped mi ) ) )
         ( puts ` ` )
         = mi + mi 1
     }

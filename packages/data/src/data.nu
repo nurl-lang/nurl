@@ -142,7 +142,7 @@ unsafe @ data_save_ndf s path DataSet ds__h → !v String {
 
 unsafe @ ndf_open s path → !NdfStream String {
     : !File IoErr fr ( file_open path )
-    : ~ File fh @ File { # s 0 }
+    : ~ File fh # File # s 0
     ?? fr { T h → { = fh h } F _ → { ^ @ !NdfStream String { F ( string_from `data: cannot open .ndf` ) } } }
     // The handle first: an early return below lets go of it, and its drop
     // closes the file.

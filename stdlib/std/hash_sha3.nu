@@ -206,16 +206,13 @@ pub @ keccak_round_constants → ( Vec u64 ) {
 
 // A Sha3 is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
 // every copy is the same state, and the last owner releases it.
-pub : Sha3 { s ctl }
+pub : Sha3 { ( Shared Sha3Impl ) ctl }
 
-pub @ Sha3_share Sha3 h → Sha3 { ^ @ Sha3 { # s ( rcbox_share # i . h ctl ) } }
+pub @ Sha3_share Sha3 h → Sha3 { ^ @ Sha3 { ( shared_clone [Sha3Impl] . h ctl ) } }
 
-pub @ Sha3_drop sink Sha3 h → v {
-    ( mem_forget h )
-    ( rcbox_release [Sha3Impl] # i . h ctl )
-}
+pub @ Sha3_drop sink Sha3 h → v {}
 
-@ __Sha3_ptr Sha3 h → *Sha3Impl { ^ ( rcbox_ptr [Sha3Impl] # i . h ctl ) }
+@ __Sha3_ptr Sha3 h → *Sha3Impl { ^ ( shared_ptr [Sha3Impl] . h ctl ) }
 
 // A sponge with an explicit rate and domain byte. `rate` is the block
 // size in bytes (200 - 2·capacity/8); `dom` is 6 for the SHA-3 digests
@@ -231,7 +228,7 @@ pub @ sha3_new i rate i dom → Sha3 {
     // Built whole and moved into the box: every field is written, so the
     // block needs no zeroing first (rcbox_zero's memset showed up in a
     // sponge-per-call profile).
-    ^ @ Sha3 { # s ( rcbox_new [Sha3Impl] @ Sha3Impl { st scr ( keccak_round_constants ) rate 0 dom F } ) }
+    ^ @ Sha3 { ( shared_new [Sha3Impl] @ Sha3Impl { st scr ( keccak_round_constants ) rate 0 dom F } ) }
 }
 
 // Let go of `h` now rather than at the end of its owner's scope.

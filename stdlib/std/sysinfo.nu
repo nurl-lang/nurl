@@ -20,7 +20,7 @@
 
 $ `stdlib/core/string.nu`
 
-& `c` @ nurl_uname_field i which → s
+& `c` @ nurl_uname_field i which → sink s
 
 & `c` @ nurl_cpu_count → i
 
@@ -37,9 +37,7 @@ $ `stdlib/core/string.nu`
 @ sys_uname_field i which → ?String {
     : s raw ( nurl_uname_field which )
     ? == # i raw 0 { ^ @ ?String { F # String 0 } } {}
-    : String out ( string_from raw )
-    ( nurl_free raw )
-    ^ @ ?String { T out }
+    ^ @ ?String { T ( string_adopt raw ) }
 }
 
 // The host's name — utsname's nodename, which is what `hostname` prints

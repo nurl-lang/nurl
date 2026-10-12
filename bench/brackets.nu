@@ -1,11 +1,13 @@
 // brackets — scan an embedded bracket string with a stack; print the
 // maximum nesting depth if it is fully balanced, else 0.
+$ `stdlib/core/mem.nu`
 $ `stdlib/core/string.nu`
 
 unsafe @ main → i {
     : s text `(([{}]))[]{}`
     : i n ( nurl_str_len text )
-    : *i stack # *i ( malloc * n 8 )
+    : RawBlock stack__blk ( raw_block * n 8 )
+    : *i stack # *i ( raw_block_ptr stack__blk )
     : ~ i sp 0
     : ~ i depth 0
     : ~ i maxd 0
@@ -37,6 +39,5 @@ unsafe @ main → i {
     : ~ i result 0
     ? & == sp 0 == bad 0 { = result maxd } {}
     ( nurl_println_int result )
-    ( free stack )
     ^ 0
 }

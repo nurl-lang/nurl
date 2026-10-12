@@ -1,19 +1,9 @@
 // stdlib/ext/http.nu — HTTP client (GET / POST / PUT / DELETE / PATCH
 //                       + arbitrary outbound headers)
 //
-// Wraps the libcurl bridge in stdlib/runtime.c (§14). Synchronous only —
-// one call blocks until the response arrives or the request times out
-// (30 s by default; not user-tunable in this MVP).
-//
-// Build:
-//   * Link the runtime against -lcurl when libcurl-dev is present.
-//     build.sh, nurl.sh and run_tests.sh all detect libcurl via
-//     pkg-config and pass `-DNURL_HAVE_LIBCURL` + `-lcurl`.
-//   * On native Windows clang the runtime falls back to WinHTTP
-//     (-lwinhttp), so http_get / http_post work out of the box on
-//     Windows builds without bundling libcurl.
-//   * wasm32-wasi targets compile but no HTTP backend is wired in;
-//     every call returns HttpErr::HttpOther there.
+// Drives the pure-NURL HTTP/1.1 client in stdlib/ext/http_pure.nu (TLS
+// via stdlib/std/tls.nu for https). Synchronous only — one call blocks
+// until the response arrives or the request times out.
 //
 // API (this revision):
 //
@@ -68,8 +58,8 @@
 // Memory model — single-owner, LLM-friendly:
 //
 //   * Each call returns a fresh OWNED Response, released (with the body
-//     bytes and every header name/value pair the C runtime copied) when
-//     its last owner goes — nothing to free by hand. (HttpErr arms
+//     bytes and every header name/value pair) when its last owner goes —
+//     nothing to free by hand. (HttpErr arms
 //     produced by these wrappers never carry a Response.)
 //   * `http_status`, `http_body_str`, `http_header_*` return
 //     BORROWED views (raw `s` pointers) into the response. Do not
@@ -107,26 +97,18 @@ $ `stdlib/core/rcbox.nu`
 
 : Header { String name String value }
 
-// Response wraps the runtime-owned RawResponse pointer, kept in an rcbox:
-// every copy of a Response is the same response, and the last owner
-// releases it (nurl_http_response_free) — nothing to free by hand.
-// All accessors go through the FFI helpers in runtime §14 so the
-// representation can change without touching call sites.
-: ResponseImpl { i res }
+// Response holds a finished request (an HpResult: status, headers, body,
+// stdlib/ext/http_pure.nu) in a counted block: every copy of a Response is
+// the same response, and the last owner drops it — nothing to free by
+// hand. The accessors read its fields, so call sites never see the layout.
+: Response { ( Shared HpResult ) raw }
 
-% Drop ResponseImpl { @ drop ResponseImpl r → v { ( nurl_http_response_free . r res ) } }
+@ Response_share Response h → Response { ^ @ Response { ( shared_clone [HpResult] . h raw ) } }
 
-: Response { s raw }
+@ Response_drop sink Response h → v {}
 
-@ Response_share Response h → Response { ^ @ Response { # s ( rcbox_share # i . h raw ) } }
-
-@ Response_drop sink Response h → v {
-    ( mem_forget h )
-    ( rcbox_release [ResponseImpl] # i . h raw )
-}
-
-// The runtime's response block.
-@ __response_res Response r → i { ^ . ( rcbox_ptr [ResponseImpl] # i . r raw ) res }
+// The finished request, in place.
+@ __response_res Response r → *HpResult { ^ ( shared_ptr [HpResult] . r raw ) }
 
 // HttpOptions bundles the per-request transport overrides that used to
 // be hardcoded inside the libcurl orchestrator. Pass one to
@@ -187,28 +169,11 @@ $ `stdlib/core/rcbox.nu`
     ^ b
 }
 
-// Internal: dispatch the perform result onto a NURL ! Response HttpErr.
-// `raw` is the i64 returned by `hp_perform` (stdlib/ext/http_pure.nu) —
-// 0 means the response struct could not be allocated; non-zero is a heap
-// pointer whose `err_kind` slot (slot 1) tells us whether the transport
-// succeeded.
-//
-// Slot layout of the NurlHttpResponse heap struct (stdlib/runtime.c §14,
-// native 64-bit), freeable by nurl_http_response_free:
-//
-//   slot 0  status         i64
-//   slot 1  err_kind       i64
-//   slot 2  header_count   i64
-//   slot 3  headers        *u — NurlHttpHeader[]; each entry is two i64
-//                              slots (name, value), 16 bytes on native
-//   slot 4  body           *u — owned NUL-terminated body bytes
-//   slot 5  body_len       i64
-@ __http_dispatch i raw → !Response HttpErr {
-    ? == raw 0 { ^ @ !Response HttpErr { F # HttpErr HttpOther } } {}
-    // Owned from here: a failed transfer's block goes with `r`.
-    : Response r @ Response { # s ( rcbox_new [ResponseImpl] @ ResponseImpl { raw } ) }
-    : *u rawp # *u raw
-    : i ek ( nurl_peek rawp 1 )
+// Internal: a finished request as a NURL ! Response HttpErr — the
+// response when the transport succeeded (whatever its status), else the
+// HttpErr its err_kind names (stdlib/runtime.c §14 NURL_HTTP_ERR_*).
+@ __http_dispatch sink HpResult res → !Response HttpErr {
+    : i ek . res err_kind
     ? != ek 0 {
         ? == ek 1 { ^ @ !Response HttpErr { F # HttpErr HttpConnect } } {}
         ? == ek 2 { ^ @ !Response HttpErr { F # HttpErr HttpTimeout } } {}
@@ -218,7 +183,7 @@ $ `stdlib/core/rcbox.nu`
         ? == ek 7 { ^ @ !Response HttpErr { F # HttpErr HttpTooLarge } } {}
         ^ @ !Response HttpErr { F # HttpErr HttpOther }
     } {}
-    ^ @ !Response HttpErr { T r }
+    ^ @ !Response HttpErr { T @ Response { ( shared_new [HpResult] res ) } }
 }
 
 // Core entry point: every other wrapper funnels through here.
@@ -238,8 +203,7 @@ $ `stdlib/core/rcbox.nu`
 @ http_request_to s method s url s body s headers_blob i timeout_ms i connect_timeout_ms
 → !Response HttpErr {
     // s-body path: recover length via strlen (text/JSON callers).
-    : i raw ( hp_perform url method # *u body ( nurl_str_len body ) headers_blob 1 -1 1 `nurl-http/0.1` timeout_ms )
-    ^ ( __http_dispatch raw )
+    ^ ( __http_dispatch ( hp_perform url method # *u body ( nurl_str_len body ) headers_blob 1 -1 1 `nurl-http/0.1` timeout_ms ) )
 }
 
 // Full-control entry point: every transport knob comes from `opt`
@@ -250,8 +214,7 @@ $ `stdlib/core/rcbox.nu`
 → !Response HttpErr {
     : s ua_in . opt user_agent
     : s ua ? & != # i ua_in 0 != ( nurl_str_len ua_in ) 0 ua_in `nurl-http/0.1`
-    : i raw ( hp_perform url method # *u body ( nurl_str_len body ) headers_blob . opt follow_redirects . opt max_redirects . opt verify_tls ua . opt timeout_ms )
-    ^ ( __http_dispatch raw )
+    ^ ( __http_dispatch ( hp_perform url method # *u body ( nurl_str_len body ) headers_blob . opt follow_redirects . opt max_redirects . opt verify_tls ua . opt timeout_ms ) )
 }
 
 // Convenience: GET / POST with an explicit HttpOptions.
@@ -336,8 +299,7 @@ $ `stdlib/core/rcbox.nu`
 // embedded NUL bytes survive end to end.
 @ http_request_bytes_to s method s url ( Vec u ) body s headers_blob
 i timeout_ms i connect_timeout_ms → !Response HttpErr {
-    : i raw ( hp_perform url method ( vec_data [u] body ) ( vec_len [u] body ) headers_blob 1 -1 1 `nurl-http/0.1` timeout_ms )
-    ^ ( __http_dispatch raw )
+    ^ ( __http_dispatch ( hp_perform url method ( vec_data [u] body ) ( vec_len [u] body ) headers_blob 1 -1 1 `nurl-http/0.1` timeout_ms ) )
 }
 
 @ http_request_bytes s method s url ( Vec u ) body s headers_blob → !Response HttpErr {
@@ -356,88 +318,46 @@ i timeout_ms i connect_timeout_ms → !Response HttpErr {
     ^ res
 }
 
-// ── Accessors (borrowed views) — pure NURL over the NurlHttpResponse
-//                                 heap struct's i64-slot layout (see
-//                                 __http_dispatch above for the map).
-//
-// Strings returned here point into the response struct's owned storage
-// and are valid while the Response is. The cast pattern is
-// `^ # s ( nurl_peek ... )` so the auto-detector sees an i64 binding at
-// fn exit and does NOT tag the @-fn's return as owned (avoiding a
-// spurious auto-drop of borrowed bytes).
+// ── Accessors (borrowed views) — strings returned here point into the
+// response's own storage and are valid while the Response is.
 
-@ http_status Response r → i {
-    : s rp # s ( __response_res r )
-    : *u rawp # *u rp
-    ^ ( nurl_peek rawp 0 )
-}
+@ http_status Response r → i { ^ . ( __response_res r ) status }
 
-@ http_body_str Response r → s {
-    : s rp # s ( __response_res r )
-    : *u rawp # *u rp
-    : i bp ( nurl_peek rawp 4 )
-    ^ ? == bp 0 `` # s bp
-}
+@ http_body_str Response r → s { ^ # s ( vec_data [u] . ( __response_res r ) body ) }
 
-@ http_body_len Response r → i {
-    : s rp # s ( __response_res r )
-    : *u rawp # *u rp
-    ^ ( nurl_peek rawp 5 )
-}
+@ http_body_len Response r → i { ^ . ( __response_res r ) body_len }
 
 // Owned, length-accurate binary copy of the response body. Unlike
 // http_body_str (which stops at the first NUL via strlen on the carrier),
 // this preserves embedded NUL bytes — required for binary downloads
-// (package tarballs, images, compressed payloads). Caller frees with
-// `( vec_free [u] … )`.
+// (package tarballs, images, compressed payloads).
 @ http_body_bytes Response r → ( Vec u ) {
-    : s rp # s ( __response_res r )
-    : *u rawp # *u rp
-    : i bp ( nurl_peek rawp 4 )
-    : i blen ( nurl_peek rawp 5 )
+    : *HpResult p ( __response_res r )
+    : i blen . p body_len
     : ( Vec u ) out ( vec_with_cap [u] ? > blen 0 blen 1 )
-    ? & != bp 0 > blen 0 {
-        : *u src # *u bp
-        : ~ i k 0
-        ~ < k blen {
-            ( vec_push [u] out . src k )
-            = k + k 1
-        }
-    } {}
+    : *u src ( vec_data [u] . p body )
+    : ~ i k 0
+    ~ < k blen {
+        ( vec_push [u] out . src k )
+        = k + k 1
+    }
     ^ out
 }
 
-@ http_header_count Response r → i {
-    : s rp # s ( __response_res r )
-    : *u rawp # *u rp
-    ^ ( nurl_peek rawp 2 )
-}
+@ http_header_count Response r → i { ^ ( vec_len [String] . ( __response_res r ) hnames ) }
 
 @ http_header_name Response r i idx → s {
-    : s rp # s ( __response_res r )
-    : *u rawp # *u rp
-    : i hc ( nurl_peek rawp 2 )
-    ? || < idx 0 >= idx hc { ^ `` } {}
-    : i ap ( nurl_peek rawp 3 )
-    ? == ap 0 { ^ `` } {}
-    : *u arr # *u ap
-    : i name_slot * idx 2
-    : i np ( nurl_peek arr name_slot )
-    ^ ? == np 0 `` # s np
+    ?? ( vec_get [String] . ( __response_res r ) hnames idx ) {
+        T s → ^ ( string_data s )
+        F _ → ^ ``
+    }
 }
 
 @ http_header_value Response r i idx → s {
-    : s rp # s ( __response_res r )
-    : *u rawp # *u rp
-    : i hc ( nurl_peek rawp 2 )
-    ? || < idx 0 >= idx hc { ^ `` } {}
-    : i ap ( nurl_peek rawp 3 )
-    ? == ap 0 { ^ `` } {}
-    : *u arr # *u ap
-    : i name_slot * idx 2
-    : i value_slot + name_slot 1
-    : i vp ( nurl_peek arr value_slot )
-    ^ ? == vp 0 `` # s vp
+    ?? ( vec_get [String] . ( __response_res r ) hvalues idx ) {
+        T s → ^ ( string_data s )
+        F _ → ^ ``
+    }
 }
 
 // Let go of `r` now rather than at the end of its owner's scope.

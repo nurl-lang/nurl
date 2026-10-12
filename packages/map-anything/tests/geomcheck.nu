@@ -19,27 +19,30 @@ $ `src/geom.nu`
     ^ 1
 }
 
-unsafe @ __gc_read s dir s name i n → *f {
+// The `n` f32s of `dir/name` as f64s; empty when the file is missing or
+// the wrong size.
+unsafe @ __gc_read s dir s name i n → ( Vec f ) {
     : String p ( string_from dir )
     ( string_push_str p name )
-    : ~ * f out # *f 0
     ?? ( read_file_bytes ( string_data p ) ) {
         F → {}
         T raw → {
             ? == ( vec_len [u] raw ) * n 4 {
-                = out # *f ( nurl_zalloc * 8 n )
+                : ( Vec f ) out ( vec_zeroed [f] n )
+                : *f op ( vec_data [f] out )
                 : *u rp ( vec_data [u] raw )
                 : ~ i j 0
                 ~ < j n {
                     : i o * j 4
                     : i bits | # i . rp o | << # i . rp + o 1 8 | << # i . rp + o 2 16 << # i . rp + o 3 24
-                    = . out j # f ( bits_to_f32 bits )
+                    = . op j # f ( bits_to_f32 bits )
                     = j + j 1
                 }
+                ^ out
             } {}
         }
     }
-    ^ out
+    ^ ( vec_new [f] )
 }
 
 unsafe @ main → i {
@@ -49,13 +52,17 @@ unsafe @ main → i {
     : i w ( nurl_str_to_int ( nurl_argv 3 ) )
     : i n * h w
 
-    : *f dirs ( __gc_read dir `/dirs.bin` * 3 n )
-    : *f depth ( __gc_read dir `/depth.bin` n )
-    : *f pose ( __gc_read dir `/pose.bin` 7 )
-    : *f logits ( __gc_read dir `/logits.bin` n )
-    ? & & & != # i dirs 0 != # i depth 0 != # i pose 0 != # i logits 0 {} {
+    : ( Vec f ) dirs_v ( __gc_read dir `/dirs.bin` * 3 n )
+    : ( Vec f ) depth_v ( __gc_read dir `/depth.bin` n )
+    : ( Vec f ) pose_v ( __gc_read dir `/pose.bin` 7 )
+    : ( Vec f ) logits_v ( __gc_read dir `/logits.bin` n )
+    ? & & & > ( vec_len [f] dirs_v ) 0 > ( vec_len [f] depth_v ) 0 > ( vec_len [f] pose_v ) 0 > ( vec_len [f] logits_v ) 0 {} {
         ^ ( __gc_die `cannot read inputs` )
     }
+    : *f dirs ( vec_data [f] dirs_v )
+    : *f depth ( vec_data [f] depth_v )
+    : *f pose ( vec_data [f] pose_v )
+    : *f logits ( vec_data [f] logits_v )
 
     // unit-sphere normalise, as the DPT adaptor does (clip 1e-8)
     : ~ i j 0

@@ -10,11 +10,13 @@
 // (bit pattern 00011110₂ = 30 over the 8 possible LCR triples.)
 //
 // NURL features on display:
-//   - Heap allocation: `malloc` + pointer cast `# *i`
+//   - Heap memory that releases itself: a `RawBlock` + pointer cast `# *i`
 //   - Pointer subscripting `. ptr idx`
 //   - Bitwise `&` / `|` on i64 (dispatched by operand type)
 //   - Inline ternary `? cond then else` inside expressions
 //   - Nested prefix arithmetic without parens
+
+$ `stdlib/core/mem.nu`
 
 // a XOR b  =  (a | b) - (a & b)   when a,b ∈ {0,1}
 @ xor i a i b → i { ^ - | a b & a b }
@@ -54,8 +56,10 @@ unsafe @ main → i {
     : i width 79
     : i gens 40
 
-    : *i cur # *i ( malloc * width 8 )
-    : *i nxt # *i ( malloc * width 8 )
+    : RawBlock cur__blk ( raw_block * width 8 )
+    : *i cur # *i ( raw_block_ptr cur__blk )
+    : RawBlock nxt__blk ( raw_block * width 8 )
+    : *i nxt # *i ( raw_block_ptr nxt__blk )
 
     // Zero both buffers, then plant a single live cell in the centre.
     : ~ i i 0
@@ -77,7 +81,5 @@ unsafe @ main → i {
     }
 
     ( nurl_print `\nFrom a single seed cell: pure chaos — yet 100% deterministic.\n` )
-    ( free # s cur )
-    ( free # s nxt )
     ^ 0
 }

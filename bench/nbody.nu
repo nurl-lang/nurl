@@ -22,6 +22,8 @@
 // sqrt are all correctly rounded by IEEE-754, so that line must agree
 // to the bit across all five.
 
+$ `stdlib/core/mem.nu`
+
 & `m` @ sqrt f x → f
 
 unsafe @ main → i {
@@ -33,14 +35,20 @@ unsafe @ main → i {
     : f SOLAR_MASS * * 4.0 PI PI
     : f DPY 365.24
 
-    : *f x # *f ( malloc 40 )
-    : *f y # *f ( malloc 40 )
-    : *f z # *f ( malloc 40 )
-    : *f vx # *f ( malloc 40 )
-    : *f vy # *f ( malloc 40 )
-    : *f vz # *f ( malloc 40 )
-    : *f mass # *f ( malloc 40 )
-
+    : RawBlock x__blk ( raw_block 40 )
+    : *f x # *f ( raw_block_ptr x__blk )
+    : RawBlock y__blk ( raw_block 40 )
+    : *f y # *f ( raw_block_ptr y__blk )
+    : RawBlock z__blk ( raw_block 40 )
+    : *f z # *f ( raw_block_ptr z__blk )
+    : RawBlock vx__blk ( raw_block 40 )
+    : *f vx # *f ( raw_block_ptr vx__blk )
+    : RawBlock vy__blk ( raw_block 40 )
+    : *f vy # *f ( raw_block_ptr vy__blk )
+    : RawBlock vz__blk ( raw_block 40 )
+    : *f vz # *f ( raw_block_ptr vz__blk )
+    : RawBlock mass__blk ( raw_block 40 )
+    : *f mass # *f ( raw_block_ptr mass__blk )
     // sun
     = . x 0 0.0
     = . y 0 0.0
@@ -159,19 +167,11 @@ unsafe @ main → i {
     // Reinterpret the double's bits as i64 — a store through `*f` read
     // back through `*i` — and mask off the sign bit, so the peers
     // without an unsigned 64-bit type print the same decimal.
-    : *f fp # *f ( malloc 8 )
+    : RawBlock fp__blk ( raw_block 8 )
+    : *f fp # *f ( raw_block_ptr fp__blk )
     = . fp 0 e
     : *i ip # *i fp
     : i bits . ip 0
     ( nurl_println_int & bits 9223372036854775807 )
-
-    ( free x )
-    ( free y )
-    ( free z )
-    ( free vx )
-    ( free vy )
-    ( free vz )
-    ( free mass )
-    ( free fp )
     ^ 0
 }

@@ -179,36 +179,33 @@ $ `stdlib/core/slice.nu`
 
 // A TlsConn is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
 // every copy is the same connection, and the last owner releases it.
-: TlsConn { s ctl }
+: TlsConn { ( Shared TlsConnImpl ) ctl }
 
 // Its drop closes something the outside world sees (stdlib/core/marker.nu).
 % Resource TlsConn {}
 
-@ TlsConn_share TlsConn h → TlsConn { ^ @ TlsConn { # s ( rcbox_share # i . h ctl ) } }
+@ TlsConn_share TlsConn h → TlsConn { ^ @ TlsConn { ( shared_clone [TlsConnImpl] . h ctl ) } }
 
-@ TlsConn_drop sink TlsConn h → v {
-    ( mem_forget h )
-    ( rcbox_release [TlsConnImpl] # i . h ctl )
-}
+@ TlsConn_drop sink TlsConn h → v {}
 
-@ __TlsConn_ptr TlsConn h → *TlsConnImpl { ^ ( rcbox_ptr [TlsConnImpl] # i . h ctl ) }
+@ __TlsConn_ptr TlsConn h → *TlsConnImpl { ^ ( shared_ptr [TlsConnImpl] . h ctl ) }
 
 // The state in place, for the stdlib's own transport layer (std/net.nu).
-@ _tls_ptr TlsConn h → *TlsConnImpl { ^ ( rcbox_ptr [TlsConnImpl] # i . h ctl ) }
+@ _tls_ptr TlsConn h → *TlsConnImpl { ^ ( shared_ptr [TlsConnImpl] . h ctl ) }
 
 // The connection as a word, for a holder that is not a handle itself
 // (std/net.nu's TcpConn keeps one): one more owner, which
 // `_tls_word_release` gives back.
-@ _tls_word TlsConn h → i { ^ ( rcbox_share # i . h ctl ) }
+@ _tls_word TlsConn h → i { ^ ( shared_into_word [TlsConnImpl] ( shared_clone [TlsConnImpl] . h ctl ) ) }
 
-@ _tls_word_release i w → v { ( rcbox_release [TlsConnImpl] w ) }
+@ _tls_word_release i w → v { : ( Shared TlsConnImpl ) _back ( shared_from_word [TlsConnImpl] w ) }
 
 // A connection over socket `raw`. The connection owns the socket from
 // here: tls_close closes it, or else the last owner does. A `raw` of 0 is
 // no socket (a connection state built for a test).
 @ _tls_conn_new i raw → TlsConn {
-    : i c__box ( rcbox_zero [TlsConnImpl] )
-    : *TlsConnImpl c ( rcbox_ptr [TlsConnImpl] c__box )
+    : ( Shared TlsConnImpl ) c__box ( shared_zero [TlsConnImpl] )
+    : *TlsConnImpl c ( shared_ptr [TlsConnImpl] c__box )
     = . c fd raw
     = . c read_nowait 0
     = . c s_secret ( vec_new [u] )
@@ -246,7 +243,7 @@ $ `stdlib/core/slice.nu`
     = . c tk_lifetime 0
     = . c tk_received_ms 0
     = . c owns_fd ? > raw 0 1 0
-    ^ @ TlsConn { # s c__box }
+    ^ @ TlsConn { c__box }
 }
 
 // ── small helpers ─────────────────────────────────────────────────
@@ -1329,20 +1326,17 @@ $ `stdlib/core/slice.nu`
 
 // A CliHs is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
 // every copy is the same state, and the last owner releases it.
-: CliHs { s ctl }
+: CliHs { ( Shared CliHsImpl ) ctl }
 
-@ CliHs_share CliHs h → CliHs { ^ @ CliHs { # s ( rcbox_share # i . h ctl ) } }
+@ CliHs_share CliHs h → CliHs { ^ @ CliHs { ( shared_clone [CliHsImpl] . h ctl ) } }
 
-@ CliHs_drop sink CliHs h → v {
-    ( mem_forget h )
-    ( rcbox_release [CliHsImpl] # i . h ctl )
-}
+@ CliHs_drop sink CliHs h → v {}
 
-@ __CliHs_ptr CliHs h → *CliHsImpl { ^ ( rcbox_ptr [CliHsImpl] # i . h ctl ) }
+@ __CliHs_ptr CliHs h → *CliHsImpl { ^ ( shared_ptr [CliHsImpl] . h ctl ) }
 
 @ _cli_hs_new s server_name s alpn ( Vec u ) sess → CliHs {
-    : i h__box ( rcbox_zero [CliHsImpl] )
-    : ~ * CliHsImpl h ( rcbox_ptr [CliHsImpl] h__box )
+    : ( Shared CliHsImpl ) h__box ( shared_zero [CliHsImpl] )
+    : ~ * CliHsImpl h ( shared_ptr [CliHsImpl] h__box )
     = . h sni ( bytes_from_str server_name )
     = . h alpn ( tls_alpn_pack alpn )
     = . h ext_out ( vec_new [u] )
@@ -1394,7 +1388,7 @@ $ `stdlib/core/slice.nu`
         = . h offer 1
         = . h res_early ( _psk_early . h tk_psk )
     } { = . h res_early ( vec_new [u] ) }
-    ^ @ CliHs { # s h__box }
+    ^ @ CliHs { h__box }
 }
 
 @ _cli_hs_set_ext CliHs h__h ( Vec u ) ext_out i want → v {

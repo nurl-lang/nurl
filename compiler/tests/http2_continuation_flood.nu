@@ -72,7 +72,6 @@ unsafe @ run → i {
                     T conn → {
                         : !v H2ConnErr sr ( http2_serve conn \ HttpRequest req → HttpResponse { ^ ( flood_handler req ) } )
                         ?? sr { T _ → {} F _ → {} }
-                        ( tcp_close_conn conn )
                     }
                     F _ → {}
                 }
@@ -85,7 +84,7 @@ unsafe @ run → i {
             ? != cek 0 {
                 ( nurl_print `  FAIL connect\n` ) = fails + fails 1
             } {
-                : TcpConn conn @ TcpConn { # s craw }
+                : TcpConn conn ( tcp_conn_adopt craw )
                 ( tcp_set_timeout conn 3000 )
                 : !v H2FrameErr pf ( h2_write_preface conn )
                 ?? pf { T _ → {} F _ → {} }

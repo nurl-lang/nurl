@@ -1,5 +1,7 @@
 // doomfire.nu — Classic Doom Fire Effect
 
+$ `stdlib/core/mem.nu`
+
 & `libc` @ rand → i
 
 & `canvas` @ canvas_open i w i h → *i
@@ -19,7 +21,8 @@
 unsafe @ main → i {
     : i total_px * W H
     // Lämpöpuskuri (0 = musta, 36 = valkoinen/kuumin)
-    : *i fire # *i ( malloc * total_px 8 )
+    : RawBlock fire__blk ( raw_block * total_px 8 )
+    : *i fire # *i ( raw_block_ptr fire__blk )
 
     // Alustetaan taulukko nollilla
     : ~ i i 0
@@ -29,7 +32,8 @@ unsafe @ main → i {
     }
 
     // Luodaan 37 värin paletti (mustasta punaiseen, keltaiseen ja valkoiseen)
-    : *i pal # *i ( malloc * 37 8 )
+    : RawBlock pal__blk ( raw_block * 37 8 )
+    : *i pal # *i ( raw_block_ptr pal__blk )
     : ~ i p 0
     ~ < p 37 {
         : ~ i r 0 : ~ i g 0 : ~ i b 0
@@ -115,7 +119,5 @@ unsafe @ main → i {
     }
 
     ( canvas_close )
-    ( free # s fire )
-    ( free # s pal )
     ^ 0
 }

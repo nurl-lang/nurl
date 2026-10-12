@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.5.5] — 2026-10-12
+
+Requires NURL 0.73.0, in which a field written through a raw pointer
+drops what it held, a mutable module global may own a `String`, a `Vec`
+or a handle, and a foreign function may take an `inout` parameter.
+The published 0.5.4 does not compile under it.
+
+### Changed
+
+- The service state, the authentication state with its lock, the MCP
+  wiring and the last refusal text are module globals that own what they
+  hold, where each was raw memory kept as an address. Nothing of them is
+  allocated or released by hand, and replacing one drops the old value.
+- Fields replaced through a pointer drop what they held; the `mem_take`
+  before each such store is gone.
+
 ## [0.5.4] — 2026-10-11
 
 Requires NURL 0.73.0, which allows `mem_forget`, `mem_take` and the

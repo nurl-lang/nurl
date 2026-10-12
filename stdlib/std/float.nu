@@ -217,6 +217,15 @@ $ `stdlib/core/errors.nu`
 // floats (`0x1p3`) and `nan(payload)` are not — libc accepts both and
 // nothing in NURL emits either.
 
+// What `nurl_fast_atof_ex` writes back: the bytes it consumed, and the
+// out-of-range flag. It lives in the caller's frame and the runtime
+// writes it through the parameter's place, so nothing is allocated.
+: __AtofOut { i used i range }
+
+@ __atof_into s p i len inout __AtofOut o → f {
+    ^ ( nurl_fast_atof_ex p len # *u ( mem_addr o ) )
+}
+
 @ float_parse s str → !f ParseErr {
     : i n ( nurl_str_len str )
     ? == n 0 { ^ @ !f ParseErr { F @ ParseErr { Empty } } } {}
@@ -230,15 +239,10 @@ $ `stdlib/core/errors.nu`
     }
     ? >= pre n { ^ @ !f ParseErr { F @ ParseErr { Empty } } } {}
 
-    // Two i64 slots: bytes consumed, and the out-of-range flag.
-    : s ob ( nurl_alloc 16 )
-    ? == # i ob 0 { ^ @ !f ParseErr { F @ ParseErr { BadFormat } } } {}
-    ( nurl_poke ob 0 0 )
-    ( nurl_poke ob 1 0 )
-    : f v ( nurl_fast_atof_ex # s + # i str pre - n pre # *u ob )
-    : i used ( nurl_peek ob 0 )
-    : i rng ( nurl_peek ob 1 )
-    ( nurl_free ob )
+    : ~ __AtofOut ob @ __AtofOut { 0 0 }
+    : f v ( __atof_into # s + # i str pre - n pre ob )
+    : i used . ob used
+    : i rng . ob range
 
     ? == used 0 { ^ @ !f ParseErr { F @ ParseErr { BadFormat } } } {}
     ? != rng 0 { ^ @ !f ParseErr { F @ ParseErr { BadFormat } } } {}

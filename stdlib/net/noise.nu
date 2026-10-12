@@ -178,16 +178,13 @@ $ `stdlib/core/rcbox.nu`
 
 // A Handshake is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
 // every copy is the same handshake, and the last owner releases it.
-: Handshake { s ctl }
+: Handshake { ( Shared HandshakeImpl ) ctl }
 
-@ Handshake_share Handshake h → Handshake { ^ @ Handshake { # s ( rcbox_share # i . h ctl ) } }
+@ Handshake_share Handshake h → Handshake { ^ @ Handshake { ( shared_clone [HandshakeImpl] . h ctl ) } }
 
-@ Handshake_drop sink Handshake h → v {
-    ( mem_forget h )
-    ( rcbox_release [HandshakeImpl] # i . h ctl )
-}
+@ Handshake_drop sink Handshake h → v {}
 
-@ __Handshake_ptr Handshake h → *HandshakeImpl { ^ ( rcbox_ptr [HandshakeImpl] # i . h ctl ) }
+@ __Handshake_ptr Handshake h → *HandshakeImpl { ^ ( shared_ptr [HandshakeImpl] . h ctl ) }
 
 // Initialise. `rs` is the remote static public key (required for the
 // initiator; pass the responder's own static public for the responder so
@@ -199,7 +196,7 @@ $ `stdlib/core/rcbox.nu`
     // responder passed its own static public as `rs` here, so both hash
     // the same 32 bytes.
     ( __sym_mix_hash sym rs )
-    ^ @ Handshake { # s ( rcbox_new [HandshakeImpl] @ HandshakeImpl {
+    ^ @ Handshake { ( shared_new [HandshakeImpl] @ HandshakeImpl {
             sym
             ( __slice . static_kp sk 0 32 ) ( __slice . static_kp pk 0 32 )
             ( vec_new [u] ) ( vec_new [u] )

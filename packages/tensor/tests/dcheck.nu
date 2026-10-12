@@ -175,7 +175,8 @@ unsafe @ ck_f sink ? DTensor o * u cnt → v {
 
 unsafe @ run_guards GpuKit kit → v {
     : i want 5
-    : *u cnt ( nurl_alloc 8 )
+    : ( Vec u ) cnt__b ( vec_zeroed [u] 8 )
+    : *u cnt ( vec_data [u] cnt__b )
     ( nurl_poke cnt 0 0 )
     : DTensor a ( mkdev kit TE_F32 6 1.0 0.0 ( dsh2 2 3 ) )
     : DTensor b ( mkdev kit TE_F32 8 1.0 0.0 ( dsh2 2 4 ) )
@@ -200,7 +201,6 @@ unsafe @ run_guards GpuKit kit → v {
     ( nurl_print `,` )
     ( nurl_print ( nurl_str_int want ) )
     ( nurl_print `\n` )
-    ( nurl_free cnt )
 }
 
 @ main → i {

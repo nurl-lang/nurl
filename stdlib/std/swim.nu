@@ -237,20 +237,17 @@ $ `stdlib/core/rcbox.nu`
 
 // A MemberTable is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
 // every copy is the same table, and the last owner releases it.
-: MemberTable { s ctl }
+: MemberTable { ( Shared MemberTableImpl ) ctl }
 
-@ MemberTable_share MemberTable h → MemberTable { ^ @ MemberTable { # s ( rcbox_share # i . h ctl ) } }
+@ MemberTable_share MemberTable h → MemberTable { ^ @ MemberTable { ( shared_clone [MemberTableImpl] . h ctl ) } }
 
-@ MemberTable_drop sink MemberTable h → v {
-    ( mem_forget h )
-    ( rcbox_release [MemberTableImpl] # i . h ctl )
-}
+@ MemberTable_drop sink MemberTable h → v {}
 
-@ __MemberTable_ptr MemberTable h → *MemberTableImpl { ^ ( rcbox_ptr [MemberTableImpl] # i . h ctl ) }
+@ __MemberTable_ptr MemberTable h → *MemberTableImpl { ^ ( shared_ptr [MemberTableImpl] . h ctl ) }
 
 @ mtable_new s self_host i self_port i suspect_timeout_ms → MemberTable {
-    : i t__box ( rcbox_zero [MemberTableImpl] )
-    : *MemberTableImpl t ( rcbox_ptr [MemberTableImpl] t__box )
+    : ( Shared MemberTableImpl ) t__box ( shared_zero [MemberTableImpl] )
+    : *MemberTableImpl t ( shared_ptr [MemberTableImpl] t__box )
     = . t m ( mutex_new )
     = . t members ( vec_new [Member] )
     = . t self_host ( string_from self_host )
@@ -258,7 +255,7 @@ $ `stdlib/core/rcbox.nu`
     = . t self_incarnation 0
     = . t rng ( rng_seed ( monotonic_ns ) )
     = . t suspect_timeout_ms suspect_timeout_ms
-    ^ @ MemberTable { # s t__box }
+    ^ @ MemberTable { t__box }
 }
 
 // Let go of `t` now rather than at the end of its owner's scope.
@@ -562,16 +559,13 @@ $ `stdlib/core/rcbox.nu`
 
 // A SwimNode is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
 // every copy is the same node, and the last owner releases it.
-: SwimNode { s ctl }
+: SwimNode { ( Shared SwimNodeImpl ) ctl }
 
-@ SwimNode_share SwimNode h → SwimNode { ^ @ SwimNode { # s ( rcbox_share # i . h ctl ) } }
+@ SwimNode_share SwimNode h → SwimNode { ^ @ SwimNode { ( shared_clone [SwimNodeImpl] . h ctl ) } }
 
-@ SwimNode_drop sink SwimNode h → v {
-    ( mem_forget h )
-    ( rcbox_release [SwimNodeImpl] # i . h ctl )
-}
+@ SwimNode_drop sink SwimNode h → v {}
 
-@ __SwimNode_ptr SwimNode h → *SwimNodeImpl { ^ ( rcbox_ptr [SwimNodeImpl] # i . h ctl ) }
+@ __SwimNode_ptr SwimNode h → *SwimNodeImpl { ^ ( shared_ptr [SwimNodeImpl] . h ctl ) }
 
 // The node bound its socket itself: its last owner closes it (the table,
 // the locks and the lists are the compiler's, dropped after this).
@@ -584,8 +578,8 @@ $ `stdlib/core/rcbox.nu`
     ^ ?? sr {
         T sock → {
             ( udp_set_timeout sock 500 )
-            : i n__box ( rcbox_zero [SwimNodeImpl] )
-            : *SwimNodeImpl n ( rcbox_ptr [SwimNodeImpl] n__box )
+            : ( Shared SwimNodeImpl ) n__box ( shared_zero [SwimNodeImpl] )
+            : *SwimNodeImpl n ( shared_ptr [SwimNodeImpl] n__box )
             = . n table ( mtable_new host port suspect_timeout_ms )
             = . n sock sock
             = . n host ( string_from host )
@@ -599,7 +593,7 @@ $ `stdlib/core/rcbox.nu`
             = . n fwd_m ( mutex_new )
             = . n fwd ( vec_new [FwdEntry] )
             = . n running 1
-            @ !SwimNode NetErr { T @ SwimNode { # s n__box } }
+            @ !SwimNode NetErr { T @ SwimNode { n__box } }
         }
         F e → @ !SwimNode NetErr { F # NetErr e }
     }

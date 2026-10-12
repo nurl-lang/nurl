@@ -38,10 +38,10 @@ $ `stdlib/std/time.nu`
             ( nurl_print `\n` )
         }
         T listener → {
-            // Capture the listener by VALUE so the shutdown thread can
+            // The shutdown thread's own share of the listener: it can
             // soft-close the kernel FD while the runtime struct stays
             // alive for worker threads to safely return from accept.
-            : TcpListener lst @ TcpListener { . listener raw }
+            : TcpListener lst ( TcpListener_share listener )
             : ( @ HttpResponse HttpRequest ) handler \ HttpRequest req → HttpResponse {
                 ^ ( response_text 200 `ok\n` )
             }

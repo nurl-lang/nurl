@@ -58,7 +58,7 @@ $ `stdlib/core/rcbox.nu`
     u64 s3
 }
 
-: Rng { s ctl }
+: Rng { ( Shared RngImpl ) ctl }
 
 // ── Bit primitives ───────────────────────────────────────────────────
 
@@ -88,8 +88,8 @@ $ `stdlib/core/rcbox.nu`
 // (it would stay zero forever); SplitMix64 never emits it for any seed,
 // so no special-case is needed.
 @ rng_seed i seed → Rng {
-    : i st_box ( rcbox_zero [RngImpl] )
-    : *RngImpl st ( rcbox_ptr [RngImpl] st_box )
+    : ( Shared RngImpl ) st_box ( shared_zero [RngImpl] )
+    : *RngImpl st ( shared_ptr [RngImpl] st_box )
     : ~ u64 sm # u64 seed
     = sm + sm 0x9e3779b97f4a7c15
     = . st s0 ( __splitmix_mix sm )
@@ -99,7 +99,7 @@ $ `stdlib/core/rcbox.nu`
     = . st s2 ( __splitmix_mix sm )
     = sm + sm 0x9e3779b97f4a7c15
     = . st s3 ( __splitmix_mix sm )
-    ^ @ Rng { # s st_box }
+    ^ @ Rng { st_box }
 }
 
 // ── Core step ────────────────────────────────────────────────────────
@@ -113,7 +113,7 @@ $ `stdlib/core/rcbox.nu`
 // would shadow the field name in `. st s0`, turning the field access
 // into a *pointer index* `st[s0]`. Distinct names keep `.` field-typed.
 @ rng_next Rng g → i {
-    : *RngImpl st ( rcbox_ptr [RngImpl] # i . g ctl )
+    : *RngImpl st ( shared_ptr [RngImpl] . g ctl )
     : u64 w0 . st s0
     : u64 w1 . st s1
     : u64 w2 . st s2
@@ -198,12 +198,9 @@ $ `stdlib/core/rcbox.nu`
 
 // A Rng is a library handle over its state in an rcbox: every copy is
 // the same stream, and the last owner releases it.
-@ Rng_share Rng g → Rng { ^ @ Rng { # s ( rcbox_share # i . g ctl ) } }
+@ Rng_share Rng g → Rng { ^ @ Rng { ( shared_clone [RngImpl] . g ctl ) } }
 
-@ Rng_drop sink Rng g → v {
-    ( mem_forget g )
-    ( rcbox_release [RngImpl] # i . g ctl )
-}
+@ Rng_drop sink Rng g → v {}
 
 // Let go of `g` now rather than at the end of its owner's scope.
 @ rng_free sink Rng g → v {}

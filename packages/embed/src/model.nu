@@ -399,8 +399,6 @@ unsafe @ __em_unload * EmbedImpl e → v {
 // layers already gone it is the last owner of the pool, the kernels and
 // the CUDA context, so they go back now, not when the engine does.
 unsafe @ __em_drop_kit * EmbedImpl e → v {
-    : GpuKit old . e kit
-    ( mem_take old )
     = . e kit ( gk_none )
 }
 

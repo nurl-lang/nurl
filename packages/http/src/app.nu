@@ -448,9 +448,9 @@ unsafe @ __httpapp_serve * HttpAppImpl a TcpListener listener s scheme s host i 
     } {}
     // ── HTTP/3 beside a TLS listener ──
     : ~ b h3_on F
-    : ~ H3Server h3 @ H3Server { # s 0 }
-    : ~ QuicCreds h3_creds @ QuicCreds { # s 0 }
-    : ~ QuicTp h3_tp @ QuicTp { # s 0 }
+    : ~ H3Server h3 # H3Server # s 0
+    : ~ QuicCreds h3_creds # QuicCreds # s 0
+    : ~ QuicTp h3_tp # QuicTp # s 0
     : ~ UdpSocket h3_sock @ UdpSocket { # s 0 }
     : ~ ( @ v ) h3_thread_body \ → v {}
     : ~ b h3_thread_ok F
@@ -464,7 +464,7 @@ unsafe @ __httpapp_serve * HttpAppImpl a TcpListener listener s scheme s host i 
         // primary pair rather than served half-configured.
         ? & != 0 # i . h3_creds ctl > ( string_len . a pq_cert ) 0 {
             ? ( http3_creds_add_pq h3_creds ( string_data . a pq_cert ) ( string_data . a pq_key ) ) {} {
-                = h3_creds @ QuicCreds { # s 0 }
+                = h3_creds # QuicCreds # s 0
             }
         } {}
         ? == 0 # i . h3_creds ctl { ( nurl_eprintln `http: HTTP/3 off — certificate or key could not be loaded for QUIC` ) } {

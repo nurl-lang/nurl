@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.3.4] — 2026-10-12
+
+Requires NURL 0.73.0, in which a field written through a raw pointer
+drops what it held, a mutable module global may own a `String`, a `Vec`
+or a handle, and a foreign function may take an `inout` parameter.
+The published 0.3.3 does not compile under it.
+
+### Changed
+
+- The `TcpConn` over the connection's socket is a view (`tcp_conn_view`): NURL 0.73.0's `TcpConn` closes its socket when its last owner goes, and this one belongs to the connection record, whose drop closes it.
+- The zero `TlsConn` a plaintext connection keeps is built with the
+  cast `# TlsConn # s 0`: a standard-library handle now holds its state
+  in a `( Shared T )`.
+- A parsed reply leaves the parse result by the return that moves it;
+  the `mem_take` before it is gone.
+
 ## [0.3.3] — 2026-10-11
 
 Requires NURL 0.73.0, which allows `mem_forget`, `mem_take` and the

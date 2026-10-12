@@ -172,9 +172,7 @@ unsafe @ __r_read_reply * RedisConnImpl c → !RedisReply RedisErr {
             : ( Vec u ) rest ( bytes_slice . c rxbuf consumed have )
             ( vec_free [u] . c rxbuf )
             = . c rxbuf rest
-            : RedisReply rep . p reply
-            ( mem_take rep )  // the reply leaves the parse result
-            ^ @ !RedisReply RedisErr { T rep }
+            ^ @ !RedisReply RedisErr { T . p reply }  // the reply leaves the parse result
         } {}
         ? == . p status 2 { ^ @ !RedisReply RedisErr { F # RedisErr RedisProtocol } } {}
         // incomplete: the partial arena goes with `p`; pull more bytes
@@ -335,8 +333,8 @@ unsafe @ __redis_open s host i port i tlsmode s server_name → !RedisConn Redis
     : *RedisConnImpl c ( arc_ptr [RedisConnImpl] . h a )
     = . c tls 0
     = . c raw rawfd
-    = . c tcp @ TcpConn { # s rawfd 0 0 }
-    = . c tc @ TlsConn { # s 0 }
+    = . c tcp ( tcp_conn_view rawfd )
+    = . c tc # TlsConn # s 0
     = . c rxbuf ( vec_new [u] )
     = . c lasterr ( string_new )
     = . c host_name ( string_from host )

@@ -1205,13 +1205,6 @@ unsafe @ llm_open_st s path s weights i want_ctx → !Llm String {
 // Early release (optional): the model's last owner gives everything back.
 @ llm_close sink Llm m → v {}
 
-// A model kept in a module global (a server's resident model) as one
-// word: llm_into_word makes the word one owner of the model, a view of it
-// is `# Llm w`, and llm_word_release gives that owner back.
-unsafe @ llm_into_word sink Llm m → i { ^ ( arc_into_word [LlmImpl] ( arc_clone [LlmImpl] . m a ) ) }
-
-unsafe @ llm_word_release i w → v { : Llm o @ Llm { ( arc_from_word [LlmImpl] w ) } }
-
 unsafe @ llm_tok Llm m__h → Tok {
     : *LlmImpl m ( __Llm_ptr m__h )
     ^ . m tok

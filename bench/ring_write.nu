@@ -5,21 +5,24 @@
 // per iteration, so the store pipeline and the address computation are
 // what separate the languages.
 //
-// NURL has no fixed-size stack array: the ring lives in a `malloc`ed
-// `*u64` block, where the C and Rust peers use `uint64_t buf[64]` /
-// `[u64; 64]` on the stack.
+// NURL has no fixed-size stack array: the ring lives in a `*u64` block
+// (a `RawBlock`: malloc'd, released when it goes), where the C and Rust
+// peers use `uint64_t buf[64]` / `[u64; 64]` on the stack.
 //
 // Contract: the process prints exactly one line — the checksum in
 // decimal, masked to 63 bits — and nothing else. `bench/bench.sh` gates
 // on all five language implementations printing the same line before it
 // reports a single timing number for the row.
 
+$ `stdlib/core/mem.nu`
+
 unsafe @ main → i {
     // The workload multiplier: bench/wasmbench.sh --scale N rewrites this 1.
     : u64 BENCH_SCALE 1
     : i words 64
     : u64 iterations * 20000000 BENCH_SCALE
-    : *u64 buf # *u64 ( malloc * words 8 )
+    : RawBlock buf__blk ( raw_block * words 8 )
+    : *u64 buf # *u64 ( raw_block_ptr buf__blk )
     : ~ i z 0
     ~ < z words {
         = . buf z # u64 0
@@ -36,7 +39,6 @@ unsafe @ main → i {
     }
 
     : u64 result ^^ | << state 32 state . buf 0
-    ( free buf )
     ( nurl_println_int # i & result 0x7fffffffffffffff )
     ^ 0
 }

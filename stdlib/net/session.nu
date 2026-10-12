@@ -29,16 +29,13 @@ $ `stdlib/core/rcbox.nu`
 
 // A NoiseSession is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
 // every copy is the same session, and the last owner releases it.
-: NoiseSession { s ctl }
+: NoiseSession { ( Shared NoiseSessionImpl ) ctl }
 
-@ NoiseSession_share NoiseSession h → NoiseSession { ^ @ NoiseSession { # s ( rcbox_share # i . h ctl ) } }
+@ NoiseSession_share NoiseSession h → NoiseSession { ^ @ NoiseSession { ( shared_clone [NoiseSessionImpl] . h ctl ) } }
 
-@ NoiseSession_drop sink NoiseSession h → v {
-    ( mem_forget h )
-    ( rcbox_release [NoiseSessionImpl] # i . h ctl )
-}
+@ NoiseSession_drop sink NoiseSession h → v {}
 
-@ __NoiseSession_ptr NoiseSession h → *NoiseSessionImpl { ^ ( rcbox_ptr [NoiseSessionImpl] # i . h ctl ) }
+@ __NoiseSession_ptr NoiseSession h → *NoiseSessionImpl { ^ ( shared_ptr [NoiseSessionImpl] . h ctl ) }
 
 @ __vcopy ( Vec u ) v → ( Vec u ) {
     : ( Vec u ) o ( vec_with_cap [u] ( vec_len [u] v ) )
@@ -47,14 +44,14 @@ $ `stdlib/core/rcbox.nu`
 }
 
 @ session_new NoiseKeys k → NoiseSession {
-    : i s__box ( rcbox_zero [NoiseSessionImpl] )
-    : *NoiseSessionImpl s ( rcbox_ptr [NoiseSessionImpl] s__box )
+    : ( Shared NoiseSessionImpl ) s__box ( shared_zero [NoiseSessionImpl] )
+    : *NoiseSessionImpl s ( shared_ptr [NoiseSessionImpl] s__box )
     = . s send_key ( __vcopy . k send )
     = . s recv_key ( __vcopy . k recv )
     = . s send_n 0
     = . s recv_max - 0 1
     = . s recv_mask 0
-    ^ @ NoiseSession { # s s__box }
+    ^ @ NoiseSession { s__box }
 }
 
 // Let go of `s` now rather than at the end of its owner's scope.

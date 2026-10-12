@@ -72,20 +72,17 @@ $ `stdlib/core/rcbox.nu`
 
 // A QuicTlsSrv is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
 // every copy is the same state, and the last owner releases it.
-: QuicTlsSrv { s ctl }
+: QuicTlsSrv { ( Shared QuicTlsSrvImpl ) ctl }
 
-@ QuicTlsSrv_share QuicTlsSrv h → QuicTlsSrv { ^ @ QuicTlsSrv { # s ( rcbox_share # i . h ctl ) } }
+@ QuicTlsSrv_share QuicTlsSrv h → QuicTlsSrv { ^ @ QuicTlsSrv { ( shared_clone [QuicTlsSrvImpl] . h ctl ) } }
 
-@ QuicTlsSrv_drop sink QuicTlsSrv h → v {
-    ( mem_forget h )
-    ( rcbox_release [QuicTlsSrvImpl] # i . h ctl )
-}
+@ QuicTlsSrv_drop sink QuicTlsSrv h → v {}
 
-@ __QuicTlsSrv_ptr QuicTlsSrv h → *QuicTlsSrvImpl { ^ ( rcbox_ptr [QuicTlsSrvImpl] # i . h ctl ) }
+@ __QuicTlsSrv_ptr QuicTlsSrv h → *QuicTlsSrvImpl { ^ ( shared_ptr [QuicTlsSrvImpl] . h ctl ) }
 
 @ quic_tls_srv_new ( Vec u ) cert_chain i keytype ( Vec u ) ec_priv ( Vec u ) rsa_n ( Vec u ) rsa_e ( Vec u ) rsa_d i ml_level ( Vec u ) alpn_prefs ( Vec u ) tp → QuicTlsSrv {
-    : i s__box ( rcbox_zero [QuicTlsSrvImpl] )
-    : *QuicTlsSrvImpl s ( rcbox_ptr [QuicTlsSrvImpl] s__box )
+    : ( Shared QuicTlsSrvImpl ) s__box ( shared_zero [QuicTlsSrvImpl] )
+    : *QuicTlsSrvImpl s ( shared_ptr [QuicTlsSrvImpl] s__box )
     = . s hs ( _srv_hs_new cert_chain keytype ec_priv rsa_n rsa_e rsa_d ml_level alpn_prefs )
     // EncryptedExtensions carries quic_transport_parameters (0x0039).
     : ( Vec u ) ext ( vec_with_cap [u] + 4 ( vec_len [u] tp ) )
@@ -100,7 +97,7 @@ $ `stdlib/core/rcbox.nu`
     = . s out0 ( vec_new [u] )
     = . s out1 ( vec_new [u] )
     = . s out2 ( vec_new [u] )
-    ^ @ QuicTlsSrv { # s s__box }
+    ^ @ QuicTlsSrv { s__box }
 }
 
 // A second, ML-DSA identity for this handshake — chosen over the
@@ -280,20 +277,17 @@ $ `stdlib/core/rcbox.nu`
 
 // A QuicTlsCli is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
 // every copy is the same state, and the last owner releases it.
-: QuicTlsCli { s ctl }
+: QuicTlsCli { ( Shared QuicTlsCliImpl ) ctl }
 
-@ QuicTlsCli_share QuicTlsCli h → QuicTlsCli { ^ @ QuicTlsCli { # s ( rcbox_share # i . h ctl ) } }
+@ QuicTlsCli_share QuicTlsCli h → QuicTlsCli { ^ @ QuicTlsCli { ( shared_clone [QuicTlsCliImpl] . h ctl ) } }
 
-@ QuicTlsCli_drop sink QuicTlsCli h → v {
-    ( mem_forget h )
-    ( rcbox_release [QuicTlsCliImpl] # i . h ctl )
-}
+@ QuicTlsCli_drop sink QuicTlsCli h → v {}
 
-@ __QuicTlsCli_ptr QuicTlsCli h → *QuicTlsCliImpl { ^ ( rcbox_ptr [QuicTlsCliImpl] # i . h ctl ) }
+@ __QuicTlsCli_ptr QuicTlsCli h → *QuicTlsCliImpl { ^ ( shared_ptr [QuicTlsCliImpl] . h ctl ) }
 
 @ quic_tls_cli_new s server_name s alpn ( Vec u ) tp → QuicTlsCli {
-    : i s__box ( rcbox_zero [QuicTlsCliImpl] )
-    : *QuicTlsCliImpl s ( rcbox_ptr [QuicTlsCliImpl] s__box )
+    : ( Shared QuicTlsCliImpl ) s__box ( shared_zero [QuicTlsCliImpl] )
+    : *QuicTlsCliImpl s ( shared_ptr [QuicTlsCliImpl] s__box )
     : ( Vec u ) nosess ( vec_new [u] )
     = . s hs ( _cli_hs_new server_name alpn nosess )
     // ClientHello carries quic_transport_parameters (0x0039); the
@@ -314,7 +308,7 @@ $ `stdlib/core/rcbox.nu`
     = . s out0 ( bytes_slice ( _cli_hs_out_ch . s hs ) 0 ( vec_len [u] ( _cli_hs_out_ch . s hs ) ) )
     = . s out1 ( vec_new [u] )
     = . s out2 ( vec_new [u] )
-    ^ @ QuicTlsCli { # s s__box }
+    ^ @ QuicTlsCli { s__box }
 }
 
 // Let go of `s` now rather than at the end of its owner's scope.

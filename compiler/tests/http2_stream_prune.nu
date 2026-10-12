@@ -30,7 +30,7 @@ $ `stdlib/ext/http2_conn.nu`
 // Build an H2Connection with an empty stream table and a dummy socket
 // handle (prune never touches `tcp`). Mirrors h2_conn_new's field order.
 @ mkconn → H2Connection {
-    : TcpConn tc @ TcpConn { # s 0 }
+    : TcpConn tc ( tcp_conn_view 0 )
     ^ @ H2Connection {
         tc
         4096 0 256 65535 16384 0
@@ -50,7 +50,7 @@ $ `stdlib/ext/http2_conn.nu`
         ( h2_default_max_body_bytes )
         ( response_text 500 `internal server error\n` )
         F F
-        ( h2_frame_writer tc 1048576 )
+        ( h2_frame_writer ( tcp_conn_view 0 ) 1048576 )
     }
 }
 

@@ -37,6 +37,7 @@ $ `stdlib/ext/crypto.nu`
 $ `stdlib/net/securedgram.nu`
 $ `stdlib/net/relay.nu`
 $ `stdlib/core/rcbox.nu`
+$ `stdlib/core/box.nu`
 
 // ── path modes ───────────────────────────────────────────────────
 @ mode_none → i { ^ 0 }
@@ -111,41 +112,18 @@ $ `stdlib/core/rcbox.nu`
     s node  // a SecureNode (as its word) for the direct leg, or 0 if direct disabled
     RelayClient relay  // relay client (valid only when has_relay == 1)
     i has_relay
-    ( Vec s ) peers  // *PeerPath
+    ( Vec ( Box PeerPath ) ) peers
 }
 
 // A Transport is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
 // every copy is the same state, and the last owner releases it.
-: Transport { s ctl }
+: Transport { ( Shared TransportImpl ) ctl }
 
-@ Transport_share Transport h → Transport { ^ @ Transport { # s ( rcbox_share # i . h ctl ) } }
+@ Transport_share Transport h → Transport { ^ @ Transport { ( shared_clone [TransportImpl] . h ctl ) } }
 
-@ Transport_drop sink Transport h → v {
-    ( mem_forget h )
-    ( rcbox_release [TransportImpl] # i . h ctl )
-}
+@ Transport_drop sink Transport h → v {}
 
-@ __Transport_ptr Transport h → *TransportImpl { ^ ( rcbox_ptr [TransportImpl] # i . h ctl ) }
-
-// The peer paths are raw blocks the Vec only points at: releasing them is
-// the transport's own drop, run by its last owner (the Vec goes after it).
-// The legs are the caller's: the secure node and the relay connection are
-// closed by whoever opened them.
-% Drop TransportImpl {
-    @ drop TransportImpl t → v {
-        : i n ( vec_len [s] . t peers )
-        : ~ i k 0
-        ~ < k n {
-            : s pp ?? ( vec_get [s] . t peers k ) { T x → x F → # s 0 }
-            ? != # i pp 0 {
-                : *PeerPath p # *PeerPath pp
-                ( vec_free [u] . p pubkey )
-                ( nurl_free # s p )
-            } {}
-            = k + k 1
-        }
-    }
-}
+@ __Transport_ptr Transport h → *TransportImpl { ^ ( shared_ptr [TransportImpl] . h ctl ) }
 
 : TransportMsg {
     ( Vec u ) src
@@ -157,21 +135,21 @@ $ `stdlib/core/rcbox.nu`
 
 // Open over both legs. `node` may be 0 (relay-only peer with no UDP path).
 @ transport_open s node RelayClient relay i has_relay → Transport {
-    : i t__box ( rcbox_zero [TransportImpl] )
-    : *TransportImpl t ( rcbox_ptr [TransportImpl] t__box )
+    : ( Shared TransportImpl ) t__box ( shared_zero [TransportImpl] )
+    : *TransportImpl t ( shared_ptr [TransportImpl] t__box )
     = . t node node
     = . t relay relay
     = . t has_relay has_relay
-    = . t peers ( vec_new [s] )
-    ^ @ Transport { # s t__box }
+    = . t peers ( vec_new [( Box PeerPath )] )
+    ^ @ Transport { t__box }
 }
 
 @ __tp_find * TransportImpl t ( Vec u ) pk → s {
-    : i n ( vec_len [s] . t peers )
+    : i n ( vec_len [( Box PeerPath )] . t peers )
     : ~ s found # s 0
     : ~ i k 0
     ~ & == # i found 0 < k n {
-        : s pp ?? ( vec_get [s] . t peers k ) { T x → x F → # s 0 }
+        : s pp # s ( box_ptr [PeerPath] ( vec_at [( Box PeerPath )] . t peers k ) )
         ? != # i pp 0 {
             : *PeerPath p # *PeerPath pp
             ? ( __tveq . p pubkey pk ) { = found pp } {}
@@ -183,18 +161,19 @@ $ `stdlib/core/rcbox.nu`
 
 // No transport: for a node whose messages ride another bus (dist/sim's
 // simulator, an offline test) and which never sends through this one.
-@ transport_none → Transport { ^ @ Transport { # s 0 } }
+@ transport_none → Transport { ^ @ Transport { ( shared_null [TransportImpl] ) } }
 
 // Register a peer; it starts on the relay leg (or none if no relay).
 @ transport_add_peer Transport t__h ( Vec u ) pubkey → v {
     : *TransportImpl t ( __Transport_ptr t__h )
     ? != # i ( __tp_find t pubkey ) 0 { ^ v } {}
-    : *PeerPath p # *PeerPath ( nurl_alloc Z PeerPath )
+    : ( Box PeerPath ) p__b ( box_zero [PeerPath] )
+    : *PeerPath p # *PeerPath ( box_ptr [PeerPath] p__b )
     = . p pubkey ( __tcpy pubkey )
     = . p mode ? == . t has_relay 1 1 0
     = . p direct_known 0
     = . p idle 0
-    ( vec_push [s] . t peers # s p )
+    ( vec_push [( Box PeerPath )] . t peers p__b )
 }
 
 // Begin a direct path to a peer at a known endpoint (e.g. a candidate from

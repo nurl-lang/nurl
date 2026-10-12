@@ -109,16 +109,13 @@ $ `stdlib/core/rcbox.nu`
 
 // A PeerState is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
 // every copy is the same peer, and the last owner releases it.
-: PeerState { s ctl }
+: PeerState { ( Shared PeerStateImpl ) ctl }
 
-@ PeerState_share PeerState h → PeerState { ^ @ PeerState { # s ( rcbox_share # i . h ctl ) } }
+@ PeerState_share PeerState h → PeerState { ^ @ PeerState { ( shared_clone [PeerStateImpl] . h ctl ) } }
 
-@ PeerState_drop sink PeerState h → v {
-    ( mem_forget h )
-    ( rcbox_release [PeerStateImpl] # i . h ctl )
-}
+@ PeerState_drop sink PeerState h → v {}
 
-@ __PeerState_ptr PeerState h → *PeerStateImpl { ^ ( rcbox_ptr [PeerStateImpl] # i . h ctl ) }
+@ __PeerState_ptr PeerState h → *PeerStateImpl { ^ ( shared_ptr [PeerStateImpl] . h ctl ) }
 
 // One message mid-reassembly. Every chunk but the last is exactly
 // securedgram_chunk_bytes long, so chunk `idx` has its place at
@@ -165,13 +162,13 @@ $ `stdlib/core/rcbox.nu`
 @ __peer_establish inout PeerStateImpl p sink NoiseSession sess b done_hs → v {
     = . p session sess
     = . p established 1
-    ? done_hs { = . p hs @ Handshake { # s 0 } } {}
+    ? done_hs { = . p hs @ Handshake { ( shared_null [HandshakeImpl] ) } } {}
 }
 
 // A peer at `host:port` with no handshake or session yet.
 @ __peer_new ( Vec u ) pubkey s host i port i local_index → PeerState {
-    : i p__box ( rcbox_zero [PeerStateImpl] )
-    : *PeerStateImpl p ( rcbox_ptr [PeerStateImpl] p__box )
+    : ( Shared PeerStateImpl ) p__box ( shared_zero [PeerStateImpl] )
+    : *PeerStateImpl p ( shared_ptr [PeerStateImpl] p__box )
     = . p pubkey ( __cpy pubkey )
     = . p ehost ( string_from host )
     = . p eport port
@@ -180,7 +177,7 @@ $ `stdlib/core/rcbox.nu`
     = . p established 0
     = . p tx_msg_id 0
     = . p partials ( vec_new [Partial] )
-    ^ @ PeerState { # s p__box }
+    ^ @ PeerState { p__box }
 }
 
 : SecureNodeImpl {
@@ -195,16 +192,13 @@ $ `stdlib/core/rcbox.nu`
 
 // A SecureNode is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
 // every copy is the same state, and the last owner releases it.
-: SecureNode { s ctl }
+: SecureNode { ( Shared SecureNodeImpl ) ctl }
 
-@ SecureNode_share SecureNode h → SecureNode { ^ @ SecureNode { # s ( rcbox_share # i . h ctl ) } }
+@ SecureNode_share SecureNode h → SecureNode { ^ @ SecureNode { ( shared_clone [SecureNodeImpl] . h ctl ) } }
 
-@ SecureNode_drop sink SecureNode h → v {
-    ( mem_forget h )
-    ( rcbox_release [SecureNodeImpl] # i . h ctl )
-}
+@ SecureNode_drop sink SecureNode h → v {}
 
-@ __SecureNode_ptr SecureNode h → *SecureNodeImpl { ^ ( rcbox_ptr [SecureNodeImpl] # i . h ctl ) }
+@ __SecureNode_ptr SecureNode h → *SecureNodeImpl { ^ ( shared_ptr [SecureNodeImpl] . h ctl ) }
 
 // The socket is the one raw part: a node nobody closed is closed by its
 // last owner (the keys and the peers go with the fields after it).
@@ -219,7 +213,7 @@ $ `stdlib/core/rcbox.nu`
     ^ ?? sr {
         T sock → {
             ( udp_set_timeout sock 500 )
-            @ !SecureNode NetErr { T @ SecureNode { # s ( rcbox_new [SecureNodeImpl] @ SecureNodeImpl {
+            @ !SecureNode NetErr { T @ SecureNode { ( shared_new [SecureNodeImpl] @ SecureNodeImpl {
                         sock 1 ( __cpy . static sk ) ( __cpy . static pk ) ( __cpy psk ) ( vec_new [PeerState] ) 1 } ) } }
         }
         F e → @ !SecureNode NetErr { F # NetErr e }

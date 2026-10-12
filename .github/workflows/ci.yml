@@ -185,6 +185,14 @@ jobs:
         # the relevant diff so we don't need extra grep here.
         run: ./build.sh
 
+      - name: Named types defined before they are parameters (LLVM 23)
+        # LLVM 18 resolves a forward reference to a named struct anywhere
+        # in a module; LLVM 23 (the macOS job's Homebrew clang) rejects one
+        # used as a parameter type before its `%T = type` line ("invalid
+        # type for function argument"). Checks every module the corpus
+        # just emitted, so this runner's older clang still catches it.
+        run: python3 tools/check_ir_type_order.py "$(ls -td build/tests/run.* | head -1)"/*.ll
+
       - name: Soundness hole probes (every one rejected, or clean under ASan/LSan)
         # tools/fuzz/holes: each probe is a way safe code once broke the
         # memory guarantee (docs/MEMORY.md §6.6). The compiler must reject

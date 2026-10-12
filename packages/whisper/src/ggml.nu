@@ -110,8 +110,6 @@ unsafe @ gg_release_data Gg g__h → v {
     = . g from_mmap F
     = . g map # *u 0
     // the read fallback's buffer leaves the container (dropped here)
-    : ( Vec u ) old . g data
-    ( mem_take old )
     = . g data ( vec_new [u] )
 }
 

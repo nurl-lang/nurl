@@ -32,7 +32,7 @@ unsafe @ spawn1 s cmd s a0 → ProcChild {
             ( nurl_exit 2 )
         }
     }
-    ^ @ ProcChild { # s 0 }
+    ^ # ProcChild # s 0
 }
 
 @ line_len ProcChild p → i {

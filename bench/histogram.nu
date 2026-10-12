@@ -1,11 +1,13 @@
 // histogram — count each digit 0-9 in an embedded string and print the
 // single highest count. Array-indexed tally over a char scan.
+$ `stdlib/core/mem.nu`
 $ `stdlib/core/string.nu`
 
 unsafe @ main → i {
     : s text `314159265358979`
     : i n ( nurl_str_len text )
-    : *i hist # *i ( malloc * 10 8 )
+    : RawBlock hist__blk ( raw_block * 10 8 )
+    : *i hist # *i ( raw_block_ptr hist__blk )
     : ~ i j 0
     ~ < j 10 {
         = . hist j 0
@@ -28,6 +30,5 @@ unsafe @ main → i {
         = k + k 1
     }
     ( nurl_println_int maxc )
-    ( free hist )
     ^ 0
 }

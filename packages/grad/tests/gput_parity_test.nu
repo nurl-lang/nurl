@@ -164,7 +164,8 @@ unsafe @ exact_tier GpuKit kit → v {
     ( check fw `exact tier: device forward runs` )
     ( check bw `exact tier: device backward runs` )
 
-    : *u worst ( nurl_alloc 8 )
+    : ( Vec u ) worst__b ( vec_zeroed [u] 8 )
+    : *u worst ( vec_data [u] worst__b )
     ( nurl_poke worst 0 ( f64_to_bits 0.0 ) )
     : ~ b vals T
     : ~ b grds T
@@ -183,7 +184,6 @@ unsafe @ exact_tier GpuKit kit → v {
         ( nurl_print ( nurl_str_float ( bits_to_f64 ( nurl_peek worst 0 ) ) ) )
         ( nurl_print `\n` )
     }
-    ( nurl_free worst )
 }
 
 // ── B: the transcendental tier ───────────────────────────────────────
@@ -214,7 +214,8 @@ unsafe @ trans_tier GpuKit kit b cpu_backend → v {
     } {}
     ( check & fw bw `trans tier: device replay runs` )
 
-    : *u worst ( nurl_alloc 8 )
+    : ( Vec u ) worst__b ( vec_zeroed [u] 8 )
+    : *u worst ( vec_data [u] worst__b )
     ( nurl_poke worst 0 ( f64_to_bits 0.0 ) )
     : ~ b allbit T
     : i nn ( tape_len tp )
@@ -234,7 +235,6 @@ unsafe @ trans_tier GpuKit kit b cpu_backend → v {
         ( nurl_print `\n` )
         ( check < w 0.000000000001 `trans tier: within 1e-12 relative on cuda` )
     }
-    ( nurl_free worst )
 }
 
 // ── C: training equivalence (mini-AE, Adam + L2 + clip) ──────────────

@@ -14,6 +14,7 @@
 // KERNAL/BASIC/CHARGEN/IO) and the VIC-II / SID / CIA chips layer on top
 // in later milestones without disturbing this CPU.
 
+$ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
 
 // ── CPU registers ───────────────────────────────────────────────────
@@ -31,6 +32,21 @@ $ `stdlib/core/string.nu`
 
 // ── Memory ──────────────────────────────────────────────────────────
 : ~ s g_mem 0  // 64 KiB flat RAM (*u, held as s)
+
+// Every buffer the machine allocates — RAM, ROM, frame buffers, audio —
+// owned here for the program's life; the globals below hold their
+// addresses for the hot paths (nothing is freed by hand).
+: ~ ( Vec ( Vec u ) ) g_bufs 0
+: ~ b g_bufs_made F
+
+unsafe @ zbuf i n → s {
+    ? ! g_bufs_made { = g_bufs ( vec_new [( Vec u )] ) = g_bufs_made T } {}
+    : ( Vec u ) b ( vec_zeroed [u] n )
+    : s p # s ( vec_data [u] b )
+    ( vec_push [( Vec u )] g_bufs b )
+    ^ p
+}
+
 : ~ s g_kernal 0  // 8 KiB KERNAL ROM   ($E000-$FFFF)
 : ~ s g_basic 0  // 8 KiB BASIC ROM    ($A000-$BFFF)
 : ~ s g_chargen 0  // 4 KiB character ROM ($D000-$DFFF when CHAREN=0)
@@ -315,7 +331,7 @@ unsafe @ mem_load * u src i n i base → v {
 }
 
 // Allocate the 64 KiB address space (call once before loading an image).
-unsafe @ mem_alloc → v { = g_mem ( nurl_zalloc 65536 ) }
+unsafe @ mem_alloc → v { = g_mem ( zbuf 65536 ) }
 
 // ── Single instruction step ─────────────────────────────────────────
 // Fetch + decode + execute one instruction; returns the T-cycles used.
@@ -1045,27 +1061,27 @@ unsafe @ blit_into s dst i n * u src → v {
 }
 
 unsafe @ c64_alloc → v {
-    = g_mem ( nurl_zalloc 65536 )
-    = g_kernal ( nurl_zalloc 8192 )
-    = g_basic ( nurl_zalloc 8192 )
-    = g_chargen ( nurl_zalloc 4096 )
-    = g_color ( nurl_zalloc 1024 )
-    = g_vicreg ( nurl_zalloc 64 )
-    = g_sidreg ( nurl_zalloc 32 )
-    = g_cia2reg ( nurl_zalloc 16 )
-    = g_kb ( nurl_zalloc 8 )
-    = g_fb ( nurl_zalloc 104448 )  // 384 * 272
-    = g_fg ( nurl_zalloc 104448 )
-    = g_sprcov ( nurl_zalloc 104448 )
-    = g_lineborder ( nurl_zalloc 312 )
-    = g_linebg ( nurl_zalloc 312 )
-    = g_audio ( nurl_zalloc * g_audio_cap 8 )
-    = g_v_acc ( nurl_zalloc 24 ) = g_v_lfsr ( nurl_zalloc 24 )
-    = g_v_env ( nurl_zalloc 24 ) = g_v_st ( nurl_zalloc 24 )
-    = g_v_rc ( nurl_zalloc 24 ) = g_v_ec ( nurl_zalloc 24 ) = g_v_gate ( nurl_zalloc 24 )
-    = g_v_wrap ( nurl_zalloc 24 )
-    = g_disk ( nurl_zalloc 196608 ) = g_disk_size 0
-    = g_filebuf ( nurl_zalloc 65536 )
+    = g_mem ( zbuf 65536 )
+    = g_kernal ( zbuf 8192 )
+    = g_basic ( zbuf 8192 )
+    = g_chargen ( zbuf 4096 )
+    = g_color ( zbuf 1024 )
+    = g_vicreg ( zbuf 64 )
+    = g_sidreg ( zbuf 32 )
+    = g_cia2reg ( zbuf 16 )
+    = g_kb ( zbuf 8 )
+    = g_fb ( zbuf 104448 )  // 384 * 272
+    = g_fg ( zbuf 104448 )
+    = g_sprcov ( zbuf 104448 )
+    = g_lineborder ( zbuf 312 )
+    = g_linebg ( zbuf 312 )
+    = g_audio ( zbuf * g_audio_cap 8 )
+    = g_v_acc ( zbuf 24 ) = g_v_lfsr ( zbuf 24 )
+    = g_v_env ( zbuf 24 ) = g_v_st ( zbuf 24 )
+    = g_v_rc ( zbuf 24 ) = g_v_ec ( zbuf 24 ) = g_v_gate ( zbuf 24 )
+    = g_v_wrap ( zbuf 24 )
+    = g_disk ( zbuf 196608 ) = g_disk_size 0
+    = g_filebuf ( zbuf 65536 )
 }
 
 unsafe @ load_kernal * u src i n → v { ( blit_into g_kernal ? > n 8192 8192 n src ) }

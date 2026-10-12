@@ -267,8 +267,6 @@ $ `stdlib/core/errors.nu`
 : ~ i g_b64_tab_std 0
 : ~ i g_b64_tab_url 0
 
-& `c` @ nurl_once_slot i id i candidate → i
-
 @ __b64_tab b url → *u {
     : i cur ? url g_b64_tab_url g_b64_tab_std
     ? != cur 0 { ^ # *u ( nurl_peek # s cur 0 ) } {}
@@ -279,9 +277,8 @@ $ `stdlib/core/errors.nu`
         ( vec_push [u] t # u ? < v 0 255 v )
         = c + c 1
     }
-    : i won ( nurl_once_slot ? url 9 8 # i . t ctl )
     // The winner lives for the rest of the program, through the global.
-    ? == won # i . t ctl { ( mem_forget t ) } {}
+    : i won ( vec_publish_once [u] ? url 9 8 t )
     ? url { = g_b64_tab_url won } { = g_b64_tab_std won }
     ^ # *u ( nurl_peek # s won 0 )
 }

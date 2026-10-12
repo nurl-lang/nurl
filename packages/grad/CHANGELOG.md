@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.12.0] — 2026-10-12
+
+Requires NURL 0.73.0, in which a field written through a raw pointer
+drops what it held, a mutable module global may own a `String`, a `Vec`
+or a handle, and a foreign function may take an `inout` parameter.
+The published 0.11.3 does not compile under it.
+
+### Changed
+
+- The tape keeps every value, gradient and auxiliary record in a `Box`
+  (its address stays put while the tape grows), where each was raw memory
+  its `Drop` impl released by hand. The `Drop` impl is gone.
+- The fused-kernel source caches are owned string globals.
+- `grad_of` lends its result from the tape, and the borrow checker now
+  knows it: a gradient read must end before the next `grad_of` on the
+  same tape, which may add to it (the tests and the reference dump
+  programs read one gradient at a time).
+- Requires gpu 0.16.
+
+
 ## [0.11.3] — 2026-10-11
 
 Requires NURL 0.73.0, which allows `mem_forget`, `mem_take` and the

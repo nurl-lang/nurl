@@ -8,6 +8,8 @@
 // Audio format: packed-stereo i64 samples — low 16 bits = left, high 16
 // bits = right (both signed 16-bit) — pushed at 48 kHz.
 
+$ `stdlib/core/mem.nu`
+
 & `canvas` @ canvas_open i w i h → *i
 
 & `canvas` @ canvas_present → v
@@ -33,9 +35,10 @@ unsafe @ main → i {
     : i W 320
     : i H 140
     : *i fb ( canvas_open W H )
-    : s sbuf ( nurl_zalloc * 2048 8 )  // packed samples handed to audio
-    : *i scope # *i ( malloc * 2048 8 )  // raw signed samples for the scope
-
+    : RawBlock sbuf__blk ( raw_block * 2048 8 )  // packed samples handed to audio
+    : s sbuf # s ( raw_block_ptr sbuf__blk )
+    : RawBlock scope__blk ( raw_block * 2048 8 )  // raw signed samples for the scope
+    : *i scope # *i ( raw_block_ptr scope__blk )
     : i rate 48000
     : i spf 800  // samples per frame (≈ 48000 / 60)
     : i amp 5000  // square-wave amplitude (modest)

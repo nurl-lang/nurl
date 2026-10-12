@@ -2,6 +2,7 @@
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
+$ `stdlib/core/option.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/std/time.nu`
@@ -28,16 +29,21 @@ $ `stdlib/std/arc.nu`
 : ~ s g_management_key ``
 : ~ s g_ca_cn `Private PKI CA`
 : ~ i g_ca_alg 0
-: ~ i g_ca_handle 0  // the loaded CA as a word (arc_into_word), one owner kept for the process (0 = none)
+: ~ ? PkiCa g_ca_handle 0  // the loaded CA, one owner kept for the process (F = none)
 
 // g_ca_handle becomes an owner of `ca`; the CA it held before is let go.
-unsafe @ __svc_keep_ca PkiCa ca → v {
-    : PkiCa old @ PkiCa { ( arc_from_word [PkiCaImpl] g_ca_handle ) }
-    = g_ca_handle ( arc_into_word [PkiCaImpl] ( arc_clone [PkiCaImpl] . ca a ) )
-}
+unsafe @ __svc_keep_ca PkiCa ca → v { = g_ca_handle @ ?PkiCa { T ( PkiCa_share ca ) } }
+
+// Is a CA loaded?
+unsafe @ __svc_have_ca → b { ^ ( opt_is_some [PkiCa] g_ca_handle ) }
 
 // The loaded CA (another owner of the one behind g_ca_handle).
-unsafe @ __svc_ca → PkiCa { ^ @ PkiCa { ( arc_word_share [PkiCaImpl] g_ca_handle ) } }
+unsafe @ __svc_ca → PkiCa {
+    ?? g_ca_handle {
+        T c → { ^ ( PkiCa_share c ) }
+        F → { ( nurl_panic `pki: no CA is loaded` ) }
+    }
+}
 
 @ pki_service_init s ca_cert s ca_key s crl_file s index_file s initial_dir s device_dir s init_key s mgmt_key s ca_cn i alg → b {
     = g_ca_cert_path ca_cert
@@ -184,7 +190,7 @@ unsafe @ __svc_ca → PkiCa { ^ @ PkiCa { ( arc_word_share [PkiCaImpl] g_ca_hand
 
 // GET /ca-cert
 @ handle_ca_cert HttpRequest req Params p → HttpResponse {
-    ? != g_ca_handle 0 {
+    ? ( __svc_have_ca ) {
         : PkiCa ca ( __svc_ca )
         : Json obj ( json_obj_new )
         ( json_obj_set obj `ca_certificate` ( json_str_lit ( pki_ca_cert_pem ca ) ) )
@@ -202,7 +208,7 @@ unsafe @ __svc_ca → PkiCa { ^ @ PkiCa { ( arc_word_share [PkiCaImpl] g_ca_hand
         ^ ( _resp_err_json 401 `Invalid or missing API key` )
     } {}
 
-    ? != g_ca_handle 0 {
+    ? ( __svc_have_ca ) {
         : PkiCa ca ( __svc_ca )
         : String crl_pem ( pki_load_crl g_crl_file_path ca g_index_file_path )
         : HttpResponse r ( response_new 200 )
@@ -249,7 +255,7 @@ unsafe @ __svc_ca → PkiCa { ^ @ PkiCa { ( arc_word_share [PkiCaImpl] g_ca_hand
 
             : !v IoErr _cd ( dir_create_all ( string_data dev_dir ) )
 
-            ? != g_ca_handle 0 {
+            ? ( __svc_have_ca ) {
                 : PkiCa ca ( __svc_ca )
                 : PkiCert cert ( pki_issue_device_cert ca ( string_data clean_dev_id ) 365 )
 
@@ -357,7 +363,7 @@ unsafe @ __svc_ca → PkiCa { ^ @ PkiCa { ( arc_word_share [PkiCaImpl] g_ca_hand
                 ^ ( _resp_err_json 401 `Invalid initial certificate` )
             } {}
 
-            ? != g_ca_handle 0 {
+            ? ( __svc_have_ca ) {
                 : PkiCa ca ( __svc_ca )
                 : PkiCert cert ( pki_issue_device_cert ca ( string_data clean_dev_id ) 365 )
 
@@ -453,7 +459,7 @@ unsafe @ __svc_ca → PkiCa { ^ @ PkiCa { ( arc_word_share [PkiCaImpl] g_ca_hand
         ^ ( _cert_error is_json 401 `Initial certificate does not match stored certificate` )
     } {}
 
-    ? != g_ca_handle 0 {
+    ? ( __svc_have_ca ) {
         : PkiCa ca ( __svc_ca )
         : b cert_valid ( pki_verify_cert ca ( string_data initial_cert ) ( string_data clean_dev_id ) )
 
@@ -535,7 +541,7 @@ unsafe @ __svc_ca → PkiCa { ^ @ PkiCa { ( arc_word_share [PkiCaImpl] g_ca_hand
         ^ ( _resp_err_json 400 `Missing CSR PEM in request body` )
     } {}
 
-    ? != g_ca_handle 0 {
+    ? ( __svc_have_ca ) {
         : PkiCa ca ( __svc_ca )
         : !PkiCert String res ( pki_issue_cert_from_csr ca ( string_data csr_input ) validity_days )
         ?? res {
@@ -613,7 +619,7 @@ unsafe @ __svc_ca → PkiCa { ^ @ PkiCa { ( arc_word_share [PkiCaImpl] g_ca_hand
     : ~ String final_cn ( string_new )
 
     ? > ( string_len cert_input ) 0 {
-        ? == g_ca_handle 0 {
+        ? ! ( __svc_have_ca ) {
             ^ ( _revoke_error is_json 500 `CA not available` )
         } {}
         : PkiCa vca ( __svc_ca )
@@ -643,7 +649,7 @@ unsafe @ __svc_ca → PkiCa { ^ @ PkiCa { ( arc_word_share [PkiCaImpl] g_ca_hand
         ^ ( _revoke_error is_json 400 `Serial must be an even-length hex string of at most 40 bytes` )
     } {}
 
-    ? != g_ca_handle 0 {
+    ? ( __svc_have_ca ) {
         : PkiCa ca ( __svc_ca )
 
         ? > ( string_len final_cn ) 0 {

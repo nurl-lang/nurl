@@ -1,5 +1,36 @@
 # Changelog
 
+## [0.30.4] — 2026-10-12
+
+Requires NURL 0.73.0, in which a field written through a raw pointer
+drops what it held, a mutable module global may own a `String`, a `Vec`
+or a handle, and a foreign function may take an `inout` parameter.
+The published 0.30.3 does not compile under it.
+
+### Changed
+
+- The coordinator's registry is a module global that owns it, and its
+  task and dataset records are `Box`es in their tables (a `*Task` into
+  one stays put while the table grows), where all of it was raw memory
+  never released. The async iterate runs and the relay list (a copy of
+  the caller's) are owned globals too.
+- A task's or a run's replaced fields are dropped by the store; the
+  frees before each such store are gone, and the coordinator's node is
+  released by the store that replaces it on a reconnect.
+
+### Fixed
+
+- The CUDA chunk-kernel program the coordinator generates
+  (`cuda_wrap`) compiles again: its driver allocated its result cells and
+  host buffers with `nurl_alloc` in a safe function, which the compiler
+  rejects (raw memory is `unsafe` only), so every `compute_*_cuda` tool
+  answered "CUDA kernel program did not compile". The driver is an `unsafe` function now, every result
+  the CUDA driver or NVRTC writes through a pointer is an `inout`
+  parameter of the generated declarations, and every host buffer (the
+  PTX, the compile log, the parameter, input and output blocks, the
+  kernel's argument block) is a `Vec` — nothing in the generated program
+  is allocated or released by hand. The offline test checks that.
+
 ## [0.30.3] — 2026-10-11
 
 Requires NURL 0.73.0, which allows `mem_forget`, `mem_take` and the

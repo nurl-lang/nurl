@@ -74,8 +74,6 @@ $ `stdlib/std/bytes.nu`
 // registry is in stdlib/std/tls_server.nu).
 : ~ i g_crc32_tab8 0
 
-& `c` @ nurl_once_slot i id i candidate → i
-
 @ __crc32_tab8_build → ( Vec u32 ) {
     : ( Vec i ) t0 ( __crc32_table )
     : *i t0p ( vec_data [i] t0 )
@@ -94,11 +92,8 @@ $ `stdlib/std/bytes.nu`
 
 @ __crc32_tab8 → ( Vec u32 ) {
     ? == g_crc32_tab8 0 {
-        : ( Vec u32 ) t ( __crc32_tab8_build )
-        : i won ( nurl_once_slot 7 # i . t ctl )
         // The winner lives for the rest of the program, through the global.
-        ? == won # i . t ctl { ( mem_forget t ) } {}
-        = g_crc32_tab8 won
+        = g_crc32_tab8 ( vec_publish_once [u32] 7 ( __crc32_tab8_build ) )
     } {}
     ^ @ ( Vec u32 ) { # s g_crc32_tab8 }
 }

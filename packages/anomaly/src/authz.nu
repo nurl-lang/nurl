@@ -86,12 +86,8 @@ $ `stdlib/core/slice.nu`
 : ~ i g_az_mode 0  // AZ_MODE_SIMPLE; a global initialiser must be a literal
 : ~ b g_az_open_ingest F
 
-// The configured strings, owned. A global can hold a `s` (a borrowed char*)
-// but not a String, so the Strings behind these live in one heap block whose
-// address is the global; reconfiguring rewrites them in place. The obvious
-// alternative — hand the globals `( string_data owned )` and keep the owned
-// String alive forever — is a leak that a long-running service would never
-// notice and a test that reconfigures would report every time.
+// The configured strings: the module's own, in a global that owns them
+// (filled on first use); reconfiguring rewrites them in place.
 : AzStrings {
     String s_issuer
     String s_client_id
@@ -102,20 +98,15 @@ $ `stdlib/core/slice.nu`
     String s_iss_tmpl  // multi-tenant: the provider's issuer template
 }
 
-: ~ i g_az_strs 0
+: ~ AzStrings g_az_strs 0
+: ~ b g_az_strs_made F
 
 unsafe @ __az_strs → *AzStrings {
-    ? != g_az_strs 0 { ^ # *AzStrings g_az_strs } {}
-    : *AzStrings a # *AzStrings ( nurl_malloc Z AzStrings )
-    = . a s_issuer ( string_new )
-    = . a s_client_id ( string_new )
-    = . a s_audience ( string_new )
-    = . a s_allowed ( string_new )
-    = . a s_last_err ( string_new )
-    = . a s_owner ( string_new )
-    = . a s_iss_tmpl ( string_new )
-    = g_az_strs # i a
-    ^ a
+    ? ! g_az_strs_made {
+        = g_az_strs @ AzStrings { ( string_new ) ( string_new ) ( string_new ) ( string_new ) ( string_new ) ( string_new ) ( string_new ) }
+        = g_az_strs_made T
+    } {}
+    ^ ( mem_addr g_az_strs )
 }
 
 unsafe @ __az_set_str * AzStrings a i which s v → v {
@@ -167,10 +158,10 @@ unsafe @ __az_set_last_err s v → v { ( __az_set_str ( __az_strs ) 4 v ) }
 // single-threaded (http_app_listen with no worker pool), which is the
 // condition OidcProvider documents for going unlocked.
 //
-// Held as the address of one share of the provider handle, kept for the
-// process (a global cannot carry a handle); 0 means "not discovered yet".
-// Discovery happens once and the provider then lives for the process.
-: ~ i g_az_prov_addr 0
+// One share of the provider handle, kept by the global; F means "not
+// discovered yet". Discovery happens once and the provider then lives for
+// the process.
+: ~ ? OidcProvider g_az_prov 0
 
 // ── Multi-tenant ──────────────────────────────────────────────────────
 //
@@ -1518,9 +1509,7 @@ unsafe @ anomaly_authz_configure_tenancy b multi s allowed → v {
 // The provider, discovered on first use. None when discovery fails, which
 // makes every token unverifiable — a closed door, not an open one.
 unsafe @ __az_provider → ?OidcProvider {
-    ? != g_az_prov_addr 0 {
-        ^ @ ?OidcProvider { T ( OidcProvider_share # OidcProvider g_az_prov_addr ) }
-    } {}
+    ?? g_az_prov { T kept → { ^ @ ?OidcProvider { T ( OidcProvider_share kept ) } } F → {} }
     ? g_az_multi { ^ ( __az_provider_multi ) } {}
     ?? ( oidc_provider_discover ( g_az_issuer ) ) {
         T p → {
@@ -1580,18 +1569,15 @@ unsafe @ __az_provider → ?OidcProvider {
     ^ @ ?OidcProvider { T p }
 }
 
-// One share of `p` stays behind g_az_prov_addr until it is replaced or
-// forgotten; the share kept before is released.
+// One share of `p` stays in g_az_prov until it is replaced or forgotten;
+// the share kept before is released by the assignment.
 unsafe @ __az_keep_provider OidcProvider p → v {
-    ( __az_forget_provider )
-    = g_az_prov_addr ( arc_into_word [OidcProviderImpl] ( arc_clone [OidcProviderImpl] . p a ) )
+    = g_az_prov @ ?OidcProvider { T ( OidcProvider_share p ) }
 }
 
-// The cached provider's share goes back: the word is an owner again,
-// dropped here.
+// The cached provider's share goes.
 unsafe @ __az_forget_provider → v {
-    : OidcProvider old @ OidcProvider { ( arc_from_word [OidcProviderImpl] g_az_prov_addr ) }
-    = g_az_prov_addr 0
+    = g_az_prov @ ?OidcProvider { F }
 }
 
 // The issuer a token from tenant `tid` must carry: the provider's own

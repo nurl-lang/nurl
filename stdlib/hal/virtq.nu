@@ -107,22 +107,19 @@ $ `stdlib/core/rcbox.nu`
 
 // A Virtq is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
 // every copy is the same state, and the last owner releases it.
-: Virtq { s ctl }
+: Virtq { ( Shared VirtqImpl ) ctl }
 
-@ Virtq_share Virtq h → Virtq { ^ @ Virtq { # s ( rcbox_share # i . h ctl ) } }
+@ Virtq_share Virtq h → Virtq { ^ @ Virtq { ( shared_clone [VirtqImpl] . h ctl ) } }
 
-@ Virtq_drop sink Virtq h → v {
-    ( mem_forget h )
-    ( rcbox_release [VirtqImpl] # i . h ctl )
-}
+@ Virtq_drop sink Virtq h → v {}
 
-@ __Virtq_ptr Virtq h → *VirtqImpl { ^ ( rcbox_ptr [VirtqImpl] # i . h ctl ) }
+@ __Virtq_ptr Virtq h → *VirtqImpl { ^ ( shared_ptr [VirtqImpl] . h ctl ) }
 
 // `qsize` must be a power of two, 1..32768 (spec §2.6). Returns a
 // queue whose descriptors are all on the free list.
 @ virtq_new i qsize → Virtq {
-    : i q__box ( rcbox_zero [VirtqImpl] )
-    : *VirtqImpl q ( rcbox_ptr [VirtqImpl] q__box )
+    : ( Shared VirtqImpl ) q__box ( shared_zero [VirtqImpl] )
+    : *VirtqImpl q ( shared_ptr [VirtqImpl] q__box )
     = . q qsize qsize
     = . q mem ( vec_with_cap [u] ( vq_layout_size qsize ) )
     : ~ i k 0
@@ -137,7 +134,7 @@ $ `stdlib/core/rcbox.nu`
         ( __vq_set_next q d ? == d - qsize 1 ( vq_null ) + d 1 )
         = d + d 1
     }
-    ^ @ Virtq { # s q__box }
+    ^ @ Virtq { q__box }
 }
 
 // Let go of `q` now rather than at the end of its owner's scope.

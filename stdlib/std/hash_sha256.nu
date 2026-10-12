@@ -34,15 +34,10 @@ $ `stdlib/std/bytes.nu`
 // is dropped (stdlib/std/tls_server.nu keeps the slot registry).
 : ~ i g_sha256_k 0
 
-& `c` @ nurl_once_slot i id i candidate → i
-
 @ __sha256_k_shared → ( Vec u32 ) {
     ? == g_sha256_k 0 {
-        : ( Vec u32 ) k ( __sha256_K )
-        : i won ( nurl_once_slot 3 # i . k ctl )
         // The winner lives for the rest of the program, through the global.
-        ? == won # i . k ctl { ( mem_forget k ) } {}
-        = g_sha256_k won
+        = g_sha256_k ( vec_publish_once [u32] 3 ( __sha256_K ) )
     } {}
     ^ @ ( Vec u32 ) { # s g_sha256_k }
 }
@@ -195,16 +190,13 @@ inline @ __sha256_rnd u32 a u32 b u32 c inout u32 d u32 e u32 f u32 g inout u32 
     i total  // bytes absorbed so far
 }
 
-: Sha256 { s ctl }
+: Sha256 { ( Shared Sha256Impl ) ctl }
 
-@ Sha256_share Sha256 h → Sha256 { ^ @ Sha256 { # s ( rcbox_share # i . h ctl ) } }
+@ Sha256_share Sha256 h → Sha256 { ^ @ Sha256 { ( shared_clone [Sha256Impl] . h ctl ) } }
 
-@ Sha256_drop sink Sha256 h → v {
-    ( mem_forget h )
-    ( rcbox_release [Sha256Impl] # i . h ctl )
-}
+@ Sha256_drop sink Sha256 h → v {}
 
-@ __Sha256_ptr Sha256 h → *Sha256Impl { ^ ( rcbox_ptr [Sha256Impl] # i . h ctl ) }
+@ __Sha256_ptr Sha256 h → *Sha256Impl { ^ ( shared_ptr [Sha256Impl] . h ctl ) }
 
 @ sha256_init → Sha256 {
     : ( Vec u32 ) w ( vec_with_cap [u32] 144 )
@@ -220,7 +212,7 @@ inline @ __sha256_rnd u32 a u32 b u32 c inout u32 d u32 e u32 f u32 g inout u32 
     = . sp 7 # u32 1541459225
     // Built whole and moved into the box: every field is written, so the
     // block needs no zeroing first.
-    ^ @ Sha256 { # s ( rcbox_new [Sha256Impl] @ Sha256Impl { w ( vec_data [u32] ( __sha256_k_shared ) ) 0 0 } ) }
+    ^ @ Sha256 { ( shared_new [Sha256Impl] @ Sha256Impl { w ( vec_data [u32] ( __sha256_k_shared ) ) 0 0 } ) }
 }
 
 // Let go of `h` now rather than at the end of its owner's scope.

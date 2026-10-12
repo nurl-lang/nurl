@@ -53,6 +53,7 @@
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
+$ `stdlib/core/box.nu`
 $ `stdlib/std/float.nu`
 $ `stdlib/std/floatbits.nu`
 $ `stdlib/std/thread.nu`
@@ -1318,88 +1319,73 @@ unsafe @ __ar_objective * ArimaObj o ( Vec f ) raw → f {
 // coefficients for the Hessian), its slot in the answers.
 : ArimaJob {
     ArimaSpec sp
-    ( Vec f ) w
+    i w  // the series, a view: its Vec's control word (the batch's caller keeps it)
     i method
     i ncond
-    ( Vec f ) raw
-    ( Vec f ) out
+    i raw  // the point, a view likewise
+    i out  // the answers, a view likewise: this job writes slot idx
     i idx
     i kind  // 0 raw objective, 1 natural objective, 2/3 prepare (raw/natural, ML), 4/5 prepare (raw/natural, CSS)
-    i extra  // a prepare job's *ArimaPrep
-}
-
-// A worker: every job whose index ≡ lane (mod stride).
-: ArimaLane {
-    ( Vec i ) jobs
-    i lane
-    i stride
+    ( Box ArimaPrep ) prep  // a prepare job's result
 }
 
 unsafe @ __ar_job_run * ArimaJob j → v {
+    : ( Vec f ) w # ( Vec f ) . j w
+    : ( Vec f ) raw # ( Vec f ) . j raw
     ? >= . j kind 2 {
         : b natural | == . j kind 3 == . j kind 5
         : b cov < . j kind 4
-        = . j extra # i ( _ar_prep_at . j sp . j raw natural cov )
+        = . j prep ( _ar_prep_at . j sp raw natural cov )
         ^
     } {}
+    : ( Vec f ) out # ( Vec f ) . j out
     ? == . j kind 1 {
-        ( vec_set [f] . j out . j idx ( __ar_eval_natural . j sp . j w . j method . j ncond . j raw ) )
+        ( vec_set [f] out . j idx ( __ar_eval_natural . j sp w . j method . j ncond raw ) )
     } {
-        ( vec_set [f] . j out . j idx ( __ar_eval . j sp . j w . j method . j ncond . j raw ) )
+        ( vec_set [f] out . j idx ( __ar_eval . j sp w . j method . j ncond raw ) )
     }
 }
 
-unsafe @ __ar_lane_run * ArimaLane ln → v {
-    : i n ( vec_len [i] . ln jobs )
-    : ~ i k . ln lane
+// Job `k` of a batch whose jobs start at `jp`.
+unsafe @ _ar_job_at i jp i k → *ArimaJob { ^ # *ArimaJob + jp * k Z ArimaJob }
+
+// A worker: every job of the `n` at `jp` whose index ≡ lane (mod stride).
+unsafe @ __ar_lane_run i jp i n i lane i stride → v {
+    : ~ i k lane
     ~ < k n {
-        : *ArimaJob j # *ArimaJob ( _ar_geti . ln jobs k )
-        ( __ar_job_run j )
-        = k + k . ln stride
+        ( __ar_job_run ( _ar_job_at jp k ) )
+        = k + k stride
     }
 }
 
 // Run every job: on a pool of __ar_threads workers striding the list
-// when `par`, else in place. Frees the jobs.
-unsafe @ _ar_jobs_run ( Vec i ) jobs b par → v {
-    : i n ( vec_len [i] jobs )
+// when `par`, else in place. The batch's Vec owns the jobs (and what the
+// prepare jobs made); the workers write into them through the address,
+// which stays put while they run.
+unsafe @ _ar_jobs_run ( Vec ArimaJob ) jobs b par → v {
+    : i n ( vec_len [ArimaJob] jobs )
+    : i jp # i ( vec_data [ArimaJob] jobs )
     : ~ i nt ? par ( __ar_threads ) 1
     ? > nt n { = nt n } {}
     ? > nt 1 {
         : ( Vec Thread ) ts ( vec_new [Thread] )
-        : ( Vec i ) lanes ( vec_new [i] )
         : ~ i l 0
         ~ < l nt {
-            : *ArimaLane ln # *ArimaLane ( nurl_malloc Z ArimaLane )
-            = . ln jobs jobs
-            = . ln lane l
-            = . ln stride nt
-            ( vec_push [i] lanes # i ln )
-            // The runtime frees the closure's env once the body returns
-            // (thread_spawn_owned); a spawn that fails runs the lane here
-            // and frees the env by hand — it was handed over either way.
-            : ( @ v ) body \ → v { ( __ar_lane_run ln ) }
+            : i lane l
+            : i stride nt
+            // A spawn that fails runs the lane here.
+            : ( @ v ) body \ → v { ( __ar_lane_run jp n lane stride ) }
             ?? ( thread_spawn_owned body ) {
                 T t → { ( vec_push [Thread] ts t ) }
-                F _ → { ( __ar_lane_run ln ) }
+                F _ → { ( __ar_lane_run jp n lane stride ) }
             }
             = l + l 1
         }
         = l 0
         ~ < l ( vec_len [Thread] ts ) { ?? ( vec_get [Thread] ts l ) { T t → { : i _j ( thread_join t ) } F _ → {} } = l + l 1 }
-        = l 0
-        ~ < l ( vec_len [i] lanes ) { ( nurl_free # s ( _ar_geti lanes l ) ) = l + l 1 }
     } {
-        : ~ i k 0
-        ~ < k n { ( __ar_job_run # *ArimaJob ( _ar_geti jobs k ) ) = k + k 1 }
+        ( __ar_lane_run jp n 0 1 )
     }
-}
-
-// Free the jobs of a batch (their results have been read).
-unsafe @ _ar_jobs_free sink ( Vec i ) jobs → v {
-    : i n ( vec_len [i] jobs )
-    : ~ i k 0
-    ~ < k n { ( nurl_free # s ( _ar_geti jobs k ) ) = k + k 1 }
 }
 
 // A state-space form at a parameter point, prepared for a device: the
@@ -1417,58 +1403,35 @@ unsafe @ _ar_jobs_free sink ( Vec i ) jobs → v {
     f mu
 }
 
-unsafe @ _ar_prep_free sink * ArimaPrep p → v {
-    ( vec_free [f] . p phi ) ( vec_free [f] . p theta ) ( vec_free [f] . p p0 )
-    ( vec_free [f] . p ar ) ( vec_free [f] . p ma )
-    ( nurl_free # s p )
-}
-
 // Prepare at `raw` (transformed parameters when natural = F, natural
 // coefficients when T); with_cov adds the stationary covariance.
-unsafe @ _ar_prep_at ArimaSpec sp ( Vec f ) raw b natural b with_cov → *ArimaPrep {
+unsafe @ _ar_prep_at ArimaSpec sp ( Vec f ) raw b natural b with_cov → ( Box ArimaPrep ) {
     : ArimaCoef cf ? natural ( _ar_coef_of_natural sp raw ) ( _ar_coef_of_raw sp raw )
-    : *ArimaPrep p # *ArimaPrep ( nurl_malloc Z ArimaPrep )
-    = . p ar ( _ar_expand_ar . cf phi . cf sphi . sp s )
-    = . p ma ( _ar_expand_ma . cf theta . cf stheta . sp s )
-    = . p mu . cf mu
-    = . p ok T
-    = . p r 0
-    = . p phi ( vec_new [f] )
-    = . p theta ( vec_new [f] )
-    = . p p0 ( vec_new [f] )
+    : ( Vec f ) ar ( _ar_expand_ar . cf phi . cf sphi . sp s )
+    : ( Vec f ) ma ( _ar_expand_ma . cf theta . cf stheta . sp s )
+    : f mu . cf mu
     ? with_cov {
-        : ArimaArma am ( _ar_arma_new . p ar . p ma )
-        ( vec_free [f] . p phi ) ( vec_free [f] . p theta ) ( vec_free [f] . p p0 )
-        = . p r . am r
-        = . p phi . am phi
-        = . p theta . am theta
-        = . p p0 ( vec_zeroed [f] . am r )
-        = . p ok ( _ar_init_col . am r . am phi . am theta . p p0 )
+        : ArimaArma am ( _ar_arma_new ar ma )
+        : ( Vec f ) p0 ( vec_zeroed [f] . am r )
+        : b ok ( _ar_init_col . am r . am phi . am theta p0 )
+        ^ ( box_new [ArimaPrep] @ ArimaPrep { ok . am r ( __ar_vec_copy . am phi ) ( __ar_vec_copy . am theta ) p0 ar ma mu } )
     } {}
-    ( _ar_coef_free cf )
-    ^ p
+    ^ ( box_new [ArimaPrep] @ ArimaPrep { T 0 ( vec_new [f] ) ( vec_new [f] ) ( vec_new [f] ) ar ma mu } )
 }
 
-unsafe @ _ar_job_new ArimaSpec sp ( Vec f ) w i method i ncond ( Vec f ) raw ( Vec f ) out i idx i kind → i {
-    : *ArimaJob j # *ArimaJob ( nurl_malloc Z ArimaJob )
-    = . j sp sp
-    = . j w w
-    = . j method method
-    = . j ncond ncond
-    = . j raw raw
-    = . j out out
-    = . j idx idx
-    = . j kind kind
-    = . j extra 0
-    ^ # i j
+// One job of a batch: what it reads (views of the caller's Vecs) and
+// where its answer goes.
+unsafe @ _ar_job ArimaSpec sp ( Vec f ) w i method i ncond ( Vec f ) raw ( Vec f ) out i idx i kind → ArimaJob {
+    ^ @ ArimaJob { sp # i w method ncond # i raw # i out idx kind ( box_null [ArimaPrep] ) }
 }
 
-unsafe @ __ar_work * ArimaObj o → i {
-    : ArimaSpec sp . o sp
-    : i n ( vec_len [f] . o w )
+unsafe @ __ar_work * ArimaObj o → i { ^ ( __ar_work_of . o sp ( vec_len [f] . o w ) . o method ) }
+
+// The same for a spec, a series length and a method.
+@ __ar_work_of ArimaSpec sp i n i method → i {
     : i pf + . sp p * . sp s . sp P
     : i qf + . sp q * . sp s . sp Q
-    ? == . o method ARIMA_CSS { ^ * n + + pf qf 1 } {}
+    ? == method ARIMA_CSS { ^ * n + + pf qf 1 } {}
     : ~ i r pf
     ? > + qf 1 r { = r + qf 1 } {}
     // the Chandrasekhar step is O(r), the start O(r²) plus a (p'+1)-wide solve
@@ -1482,17 +1445,16 @@ unsafe @ __ar_eval_batch * ArimaObj o ( Vec ( Vec f ) ) raws ( Vec f ) out → v
     : i m ( vec_len [( Vec f )] raws )
     = . o evals + . o evals m
     : b par & > ( __ar_work o ) ARIMA_PAR_WORK > m 1
-    : ( Vec i ) jobs ( vec_new [i] )
+    : ( Vec ArimaJob ) jobs ( vec_new [ArimaJob] )
     : ~ i i 0
     ~ < i m {
         ?? ( vec_get [( Vec f )] raws i ) {
-            T rw → { ( vec_push [i] jobs ( _ar_job_new . o sp . o w . o method . o ncond rw out i 0 ) ) }
+            T rw → { ( vec_push [ArimaJob] jobs ( _ar_job . o sp . o w . o method . o ncond rw out i 0 ) ) }
             F _ → {}
         }
         = i + i 1
     }
     ( _ar_jobs_run jobs par )
-    ( _ar_jobs_free jobs )
 }
 
 // ── The optimizer as a state machine ──────────────────────────────────
@@ -1532,9 +1494,10 @@ unsafe @ __ar_eval_batch * ArimaObj o ( Vec ( Vec f ) ) raws ( Vec f ) out → v
     b done
 }
 
-unsafe @ __ar_bfgs_new ( Vec f ) raw0 → *ArimaBfgs {
+unsafe @ __ar_bfgs_new ( Vec f ) raw0 → ( Box ArimaBfgs ) {
     : i k ( vec_len [f] raw0 )
-    : *ArimaBfgs st # *ArimaBfgs ( nurl_malloc Z ArimaBfgs )
+    : ( Box ArimaBfgs ) b ( box_new [ArimaBfgs] @ ArimaBfgs {} )
+    : *ArimaBfgs st # *ArimaBfgs ( box_ptr [ArimaBfgs] b )
     = . st k k
     = . st raw ( __ar_vec_copy raw0 )
     = . st g ( vec_zeroed [f] k )
@@ -1557,14 +1520,7 @@ unsafe @ __ar_bfgs_new ( Vec f ) raw0 → *ArimaBfgs {
     = . st phase ARIMA_PH_START
     = . st converged F
     = . st done ? == k 0 T F
-    ^ st
-}
-
-unsafe @ __ar_bfgs_free sink * ArimaBfgs st → v {
-    ( vec_free [f] . st raw ) ( vec_free [f] . st g ) ( vec_free [f] . st d ) ( vec_free [f] . st s )
-    ( vec_free [f] . st yv ) ( vec_free [f] . st hy ) ( vec_free [f] . st trial ) ( vec_free [f] . st H )
-    ( vec_free [f] . st hs )
-    ( nurl_free # s st )
+    ^ b
 }
 
 // The 2k stencil points around raw, with the step of each coordinate
@@ -1790,21 +1746,17 @@ unsafe @ __ar_bfgs_absorb * ArimaBfgs st ( Vec f ) vals → b {
 unsafe @ __ar_bfgs * ArimaObj o ( Vec f ) raw → ArimaOpt {
     : i k ( vec_len [f] raw )
     ? == k 0 { ^ @ ArimaOpt { T ( __ar_objective o raw ) 0 } } {}
-    : *ArimaBfgs st ( __ar_bfgs_new raw )
+    : ( Box ArimaBfgs ) stb ( __ar_bfgs_new raw )
+    : *ArimaBfgs st # *ArimaBfgs ( box_ptr [ArimaBfgs] stb )
     : ~ b done F
     ~ ! done {
         : ( Vec ( Vec f ) ) reqs ( __ar_bfgs_requests st )
         : ( Vec f ) vals ( vec_zeroed [f] ( vec_len [( Vec f )] reqs ) )
         ( __ar_eval_batch o reqs vals )
         = done ( __ar_bfgs_absorb st vals )
-        // vals rode in the batch's jobs (hand-managed blocks that release
-        // nothing they point at), which took it over: it goes here
-        ( vec_free [f] vals )
     }
     ( __ar_copy_into raw . st raw )
-    : ArimaOpt out @ ArimaOpt { . st converged . st f0 . st iter }
-    ( __ar_bfgs_free st )
-    ^ out
+    ^ @ ArimaOpt { . st converged . st f0 . st iter }
 }
 
 // ── The model ─────────────────────────────────────────────────────────
@@ -2012,25 +1964,15 @@ unsafe @ __ar_stderr * ArimaModelImpl m ( Vec f ) w → ( Vec f ) {
     : ( Vec ( Vec f ) ) pts ( __ar_hessian_points m )
     : i np ( vec_len [( Vec f )] pts )
     : ( Vec f ) vals ( vec_zeroed [f] np )
-    : ( Vec i ) jobs ( vec_new [i] )
+    : ( Vec ArimaJob ) jobs ( vec_new [ArimaJob] )
     : ~ i q 0
     ~ < q np {
-        ?? ( vec_get [( Vec f )] pts q ) { T pt → { ( vec_push [i] jobs ( _ar_job_new sp w . m method 0 pt vals q 1 ) ) } F _ → {} }
+        ?? ( vec_get [( Vec f )] pts q ) { T pt → { ( vec_push [ArimaJob] jobs ( _ar_job sp w . m method 0 pt vals q 1 ) ) } F _ → {} }
         = q + q 1
     }
-    : *ArimaObj wo # *ArimaObj ( nurl_malloc Z ArimaObj )
-    = . wo sp sp
-    = . wo w w
-    = . wo method . m method
-    = . wo ncond 0
-    = . wo evals 0
-    : b par > * ( __ar_work wo ) np ARIMA_PAR_WORK
-    ( nurl_free # s wo )
+    : b par > * ( __ar_work_of sp ( vec_len [f] w ) . m method ) np ARIMA_PAR_WORK
     ( _ar_jobs_run jobs par )
-    ( _ar_jobs_free jobs )
-    : ( Vec f ) se ( __ar_hessian_fold m vals )
-    ( vec_free [f] vals )  // handed to the jobs above, which release nothing
-    ^ se
+    ^ ( __ar_hessian_fold m vals )
 }
 
 // The finite-difference step of coordinate x.
@@ -2224,12 +2166,9 @@ unsafe @ __ar_fit_cond ( Vec f ) y ArimaSpec sp0 i method i ncond b with_se → 
     : ArimaSpec sp ( arima_spec_with_mean sp0 . sp0 mean )
     : ( Vec f ) w ( arima_difference y . sp d . sp D . sp s )
     : ( Vec f ) raw ( __ar_raw_start w sp )
-    : *ArimaObj o # *ArimaObj ( nurl_malloc Z ArimaObj )
-    = . o sp sp
-    = . o w w
-    = . o method ARIMA_CSS
-    = . o ncond ncond
-    = . o evals 0
+    // the objective's parameter block (it keeps w for the fit)
+    : ( Box ArimaObj ) ob ( box_new [ArimaObj] @ ArimaObj { sp w ARIMA_CSS ncond 0 } )
+    : *ArimaObj o # *ArimaObj ( box_ptr [ArimaObj] ob )
     : ~ ArimaOpt opt ( __ar_bfgs o raw )
     : ~ i iters . opt iterations
     ? == method ARIMA_ML {
@@ -2238,10 +2177,7 @@ unsafe @ __ar_fit_cond ( Vec f ) y ArimaSpec sp0 i method i ncond b with_se → 
         = opt opt2
         = iters + iters . opt2 iterations
     } {}
-    : ArimaModel m ( __ar_model_from_raw y w sp method ncond raw . opt converged iters . o evals with_se with_se )
-    ( vec_free [f] w )  // stored in the hand-managed objective block `o`
-    ( nurl_free # s o )
-    ^ m
+    ^ ( __ar_model_from_raw y . o w sp method ncond raw . opt converged iters . o evals with_se with_se )
 }
 
 // The model at an optimum: coefficients, statistics, standard errors,
@@ -2339,15 +2275,8 @@ unsafe @ arima_eval_cpu ( Vec ArimaEvalItem ) items ( Vec ArimaCtx ) ctxs ( Vec 
             T it → {
                 ?? ( vec_get [ArimaCtx] ctxs . it ctx ) {
                     T cx → {
-                        : *ArimaObj o # *ArimaObj ( nurl_malloc Z ArimaObj )
-                        = . o sp . cx sp
-                        = . o w . cx w
-                        = . o method . cx method
-                        = . o ncond . cx ncond
-                        = . o evals 0
-                        : i wk ( __ar_work o )
+                        : i wk ( __ar_work_of . cx sp ( vec_len [f] . cx w ) . cx method )
                         ? > wk big { = big wk } {}
-                        ( nurl_free # s o )
                     }
                     F _ → {}
                 }
@@ -2359,13 +2288,13 @@ unsafe @ arima_eval_cpu ( Vec ArimaEvalItem ) items ( Vec ArimaCtx ) ctxs ( Vec 
     // Many small evaluations are worth threads together even when one
     // alone is not: the whole batch's work is what a thread amortises.
     : b par & > * big m ARIMA_PAR_WORK > m 1
-    : ( Vec i ) jobs ( vec_new [i] )
+    : ( Vec ArimaJob ) jobs ( vec_new [ArimaJob] )
     = i 0
     ~ < i m {
         ?? ( vec_get [ArimaEvalItem] items i ) {
             T it → {
                 ?? ( vec_get [ArimaCtx] ctxs . it ctx ) {
-                    T cx → { ( vec_push [i] jobs ( _ar_job_new . cx sp . cx w . cx method . cx ncond . it raw out i . it kind ) ) }
+                    T cx → { ( vec_push [ArimaJob] jobs ( _ar_job . cx sp . cx w . cx method . cx ncond . it raw out i . it kind ) ) }
                     F _ → {}
                 }
             }
@@ -2374,11 +2303,10 @@ unsafe @ arima_eval_cpu ( Vec ArimaEvalItem ) items ( Vec ArimaCtx ) ctxs ( Vec 
         = i + i 1
     }
     ( _ar_jobs_run jobs par )
-    ( _ar_jobs_free jobs )
 }
 
 : ArimaFitState {
-    * ArimaBfgs st
+    ( Box ArimaBfgs ) st
     i stage  // 0 = CSS running, 1 = ML running, 2 = finished
     i iters
     i evals
@@ -2392,30 +2320,17 @@ unsafe @ arima_eval_cpu ( Vec ArimaEvalItem ) items ( Vec ArimaCtx ) ctxs ( Vec 
 unsafe @ arima_fit_many_with ( Vec ( Vec f ) ) series ArimaSpec sp0 i method ( @ v ( Vec ArimaEvalItem ) ( Vec ArimaCtx ) ( Vec f ) ) evaluator → ( Vec ArimaModel ) {
     : ArimaSpec sp ( arima_spec_with_mean sp0 . sp0 mean )
     : i K ( vec_len [( Vec f )] series )
-    // Per-model state lives on the heap, addressed through these.
-    : ( Vec i ) ctxp ( vec_new [i] )
-    : ( Vec i ) fsp ( vec_new [i] )
+    // Per-model state, boxed (its address stays put while these grow).
+    : ( Vec ( Box ArimaCtx ) ) ctxp ( vec_new [( Box ArimaCtx )] )
+    : ( Vec ( Box ArimaFitState ) ) fsp ( vec_new [( Box ArimaFitState )] )
     : ~ i i 0
     ~ < i K {
         ?? ( vec_get [( Vec f )] series i ) {
             T y → {
                 : ( Vec f ) w ( arima_difference y . sp d . sp D . sp s )
-                : *ArimaCtx cx # *ArimaCtx ( nurl_malloc Z ArimaCtx )
-                = . cx sp sp
-                = . cx w w
-                = . cx method ARIMA_CSS
-                = . cx ncond 0
-                ( vec_push [i] ctxp # i cx )
                 : ( Vec f ) raw ( __ar_raw_start w sp )
-                : *ArimaFitState f # *ArimaFitState ( nurl_malloc Z ArimaFitState )
-                = . f st ( __ar_bfgs_new raw )
-                = . f stage 0
-                = . f iters 0
-                = . f evals 0
-                = . f converged F
-                = . f req_at 0
-                = . f req_n 0
-                ( vec_push [i] fsp # i f )
+                ( vec_push [( Box ArimaCtx )] ctxp ( box_new [ArimaCtx] @ ArimaCtx { sp w ARIMA_CSS 0 } ) )
+                ( vec_push [( Box ArimaFitState )] fsp ( box_new [ArimaFitState] @ ArimaFitState { ( __ar_bfgs_new raw ) 0 0 0 F 0 0 } ) )
             }
             F _ → {}
         }
@@ -2427,11 +2342,11 @@ unsafe @ arima_fit_many_with ( Vec ( Vec f ) ) series ArimaSpec sp0 i method ( @
         : ( Vec ArimaEvalItem ) items ( vec_new [ArimaEvalItem] )
         = i 0
         ~ < i K {
-            : *ArimaFitState f # *ArimaFitState ( _ar_geti fsp i )
+            : *ArimaFitState f ( _ar_fs_at fsp i )
             = . f req_at ( vec_len [ArimaEvalItem] items )
             = . f req_n 0
             ? < . f stage 2 {
-                : ( Vec ( Vec f ) ) reqs ( __ar_bfgs_requests . f st )
+                : ( Vec ( Vec f ) ) reqs ( __ar_bfgs_requests # *ArimaBfgs ( box_ptr [ArimaBfgs] . f st ) )
                 : i nr ( vec_len [( Vec f )] reqs )
                 : ~ i q 0
                 ~ < q nr {
@@ -2450,7 +2365,7 @@ unsafe @ arima_fit_many_with ( Vec ( Vec f ) ) series ArimaSpec sp0 i method ( @
             : ( Vec ArimaCtx ) ctxs ( vec_new [ArimaCtx] )
             = i 0
             ~ < i K {
-                : *ArimaCtx cx # *ArimaCtx ( _ar_geti ctxp i )
+                : *ArimaCtx cx ( _ar_ctx_at ctxp i )
                 ( vec_push [ArimaCtx] ctxs @ ArimaCtx { . cx sp . cx w . cx method . cx ncond } )
                 = i + i 1
             }
@@ -2458,23 +2373,21 @@ unsafe @ arima_fit_many_with ( Vec ( Vec f ) ) series ArimaSpec sp0 i method ( @
             : *f pv ( vec_data [f] vals )
             = i 0
             ~ < i K {
-                : *ArimaFitState f # *ArimaFitState ( _ar_geti fsp i )
+                : *ArimaFitState f ( _ar_fs_at fsp i )
                 ? & < . f stage 2 > . f req_n 0 {
                     : ( Vec f ) mine ( vec_zeroed [f] . f req_n )
                     : *f pm ( vec_data [f] mine )
                     : ~ i q 0
                     ~ < q . f req_n { = . pm q . pv + . f req_at q = q + q 1 }
-                    : *ArimaBfgs st . f st
+                    : *ArimaBfgs st # *ArimaBfgs ( box_ptr [ArimaBfgs] . f st )
                     ? ( __ar_bfgs_absorb st mine ) {
                         = . f iters + . f iters . st iter
                         = . f converged . st converged
                         ? & == . f stage 0 == method ARIMA_ML {
-                            // CSS done: ML from there
-                            : *ArimaBfgs st2 ( __ar_bfgs_new . st raw )
-                            ( __ar_bfgs_free st )
-                            = . f st st2
+                            // CSS done: ML from there (the store lets the CSS state go)
+                            = . f st ( __ar_bfgs_new . st raw )
                             = . f stage 1
-                            : *ArimaCtx cx # *ArimaCtx ( _ar_geti ctxp i )
+                            : *ArimaCtx cx ( _ar_ctx_at ctxp i )
                             = . cx method ARIMA_ML
                         } { = . f stage 2 }
                     } {}
@@ -2486,17 +2399,15 @@ unsafe @ arima_fit_many_with ( Vec ( Vec f ) ) series ArimaSpec sp0 i method ( @
     : ( Vec ArimaModel ) out ( vec_new [ArimaModel] )
     = i 0
     ~ < i K {
-        : *ArimaFitState f # *ArimaFitState ( _ar_geti fsp i )
-        : *ArimaCtx cx # *ArimaCtx ( _ar_geti ctxp i )
+        : *ArimaFitState f ( _ar_fs_at fsp i )
+        : *ArimaCtx cx ( _ar_ctx_at ctxp i )
         ?? ( vec_get [( Vec f )] series i ) {
             T y → {
-                : *ArimaBfgs st . f st
+                : *ArimaBfgs st # *ArimaBfgs ( box_ptr [ArimaBfgs] . f st )
                 ( vec_push [ArimaModel] out ( __ar_model_from_raw y . cx w sp method 0 . st raw . f converged . f iters . f evals F T ) )
-                ( __ar_bfgs_free st )
             }
             F _ → {}
         }
-        ( nurl_free # s f )
         = i + i 1
     }
     // The standard errors: every model's Hessian stencil in one round.
@@ -2506,7 +2417,7 @@ unsafe @ arima_fit_many_with ( Vec ( Vec f ) ) series ArimaSpec sp0 i method ( @
     : ( Vec ArimaCtx ) hctx ( vec_new [ArimaCtx] )
     = i 0
     ~ < i K {
-        : *ArimaCtx cx # *ArimaCtx ( _ar_geti ctxp i )
+        : *ArimaCtx cx ( _ar_ctx_at ctxp i )
         = . cx method method
         ( vec_push [ArimaCtx] hctx @ ArimaCtx { . cx sp . cx w . cx method . cx ncond } )
         ( vec_push [i] hat ( vec_len [ArimaEvalItem] hitems ) )
@@ -2545,12 +2456,17 @@ unsafe @ arima_fit_many_with ( Vec ( Vec f ) ) series ArimaSpec sp0 i method ( @
             }
             F _ → {}
         }
-        : *ArimaCtx cx # *ArimaCtx ( _ar_geti ctxp i )
-        ( vec_free [f] . cx w )
-        ( nurl_free # s cx )
         = i + i 1
     }
     ^ out
+}
+
+unsafe @ _ar_ctx_at ( Vec ( Box ArimaCtx ) ) v i k → *ArimaCtx {
+    ^ # *ArimaCtx ( box_ptr [ArimaCtx] ( vec_at [( Box ArimaCtx )] v k ) )
+}
+
+unsafe @ _ar_fs_at ( Vec ( Box ArimaFitState ) ) v i k → *ArimaFitState {
+    ^ # *ArimaFitState ( box_ptr [ArimaFitState] ( vec_at [( Box ArimaFitState )] v k ) )
 }
 
 @ _ar_geti ( Vec i ) v i k → i {

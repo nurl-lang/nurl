@@ -332,13 +332,18 @@ $ `deps/tensor/src/tensor.nu`
     : GVar c2 ( grad_const tp2 t2 )
     : GVar l2 ( g_sum tp2 ( g_mul tp2 p2 c2 ) )
     : b b2 ( backward tp2 l2 )
-    : Tensor gp2 ( grad_of tp2 p2 )
+    // (one gradient read at a time: grad_of may add to the tape)
     : Tensor gc2 ( grad_of tp2 c2 )
     : ~ b const_zero T
-    : ~ b param_x T
     = k 0
     ~ < k N {
         ? != ( _tf . gc2 data k ) 0.0 { = const_zero F } {}
+        = k + k 1
+    }
+    : Tensor gp2 ( grad_of tp2 p2 )
+    : ~ b param_x T
+    = k 0
+    ~ < k N {
         ? != ( f64_to_bits ( _tf . gp2 data k ) ) ( f64_to_bits ( _tf xa k ) ) { = param_x F } {}
         = k + k 1
     }

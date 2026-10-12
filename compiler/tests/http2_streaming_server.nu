@@ -6,13 +6,13 @@ $ `stdlib/std/bytes.nu`
 
 @ connection → H2Connection {
     ^ @ H2Connection {
-        @ TcpConn { # s 0 }
+        ( tcp_conn_view 0 )
         4096 0 256 65535 16384 65536
         4096 1 0 65535 16384 0
         ( hpack_dyn_new 4096 ) ( hpack_dyn_new 4096 ) -1
         ( vec_new [H2Stream] ) 65535 65535 0 T 0 0 0 0
         ( vec_new [u] ) ( h2_default_max_body_bytes )
-        ( response_text 500 `error` ) T F ( h2_frame_writer @ TcpConn { # s 0 } 1048576 )
+        ( response_text 500 `error` ) T F ( h2_frame_writer ( tcp_conn_view 0 ) 1048576 )
     }
 }
 

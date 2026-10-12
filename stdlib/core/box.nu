@@ -92,6 +92,13 @@ $ `stdlib/core/mem.nu`
     ^ @ ( Box T ) { # s p }
 }
 
+// A box that holds nothing yet (box_is_null): a placeholder in a slot that
+// fills later — dropping it releases nothing. Only box_is_null and the
+// drop may be asked of it.
+@ box_null [T] → ( Box T ) {
+    ^ @ ( Box T ) { # s 0 }
+}
+
 // ── Inspectors ──────────────────────────────────────────────────────
 
 @ box_is_null [T] ( Box T ) b → b {

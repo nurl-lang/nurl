@@ -125,9 +125,7 @@
 // the new value.
 @ rc_set [A] ( Rc A ) r A x → v {
     : *( RcImpl A ) impl # *( RcImpl A ) . r ctl
-    : A old . impl value
-    ( mem_take old )
-    = . impl value x
+    = . impl value x  // drops the old value
 }
 
 // Overwrite and hand back the old value (the caller's from now on).

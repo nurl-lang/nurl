@@ -5,10 +5,11 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/thread.nu`
 
-unsafe @ main → i {
+// The threads' shared count (written under the mutex).
+: ~ i g_total 0
+
+@ main → i {
     : Mutex m ( mutex_new )
-    : *i total ( nurl_alloc 8 )
-    ( nurl_poke # s total 0 0 )
     : ( @ v ) body \ → v {
         : ~ i sum 0
         : ~ i r 0
@@ -29,7 +30,7 @@ unsafe @ main → i {
             = r + r 1
         }
         ( mutex_lock m )
-        ( nurl_poke # s total 0 + ( nurl_peek # s total 0 ) sum )
+        = g_total + g_total sum
         ( mutex_unlock m )
     }
     : ( Vec Thread ) ths ( vec_new [Thread] )
@@ -39,7 +40,6 @@ unsafe @ main → i {
     : ~ i j 0
     ~ < j n { ?? ( vec_get [Thread] ths j ) { T t → ( thread_join t ) F → {} } = j + j 1 }
     ( nurl_print `threads=` ) ( nurl_print ( nurl_str_int n ) )
-    ( nurl_print ` total=` ) ( nurl_println ( nurl_str_int ( nurl_peek # s total 0 ) ) )
-    ( nurl_free # s total )
+    ( nurl_print ` total=` ) ( nurl_println ( nurl_str_int g_total ) )
     ^ 0
 }

@@ -165,7 +165,7 @@ def core_view_after_grow(n):
         f": ~ i k{n} 0",
         f"~ < k{n} 64 {{ ( string_push_str t{n} `xxxxxxxxxxxxxxxx` ) = k{n} + k{n} 1 }}",
         f"( nurl_print v{n} )",
-    ], "is stale")
+    ], "which ended at line")
 
 
 def core_field_view_after_replace(n):
@@ -176,7 +176,7 @@ def core_field_view_after_replace(n):
         f": s view{n} ( string_data . h{n} v )",
         f"= . h{n} v ( string_from `second` )",
         f"( nurl_print view{n} )",
-    ], "is stale")
+    ], "which ended at line")
 
 
 def core_payload_of_lent_option(n):
@@ -203,6 +203,29 @@ def core_kept_closure_capture(n):
     ], "may hold a closure")
 
 
+def core_lit_nested_moved_twice(n):
+    """One String moved into a literal's field and a literal nested in another (h206)."""
+    _decl([f": Hd{n} {{ String h }}",
+           f": Tw{n} {{ String a Hd{n} b }}"])
+    return ([
+        f": String t{n} ( string_from `twice owned {n}, a heap string` )",
+        f": Tw{n} w{n} @ Tw{n} {{ t{n} @ Hd{n} {{ t{n} }} }}",
+        f"( nurl_print ( string_data . w{n} a ) )",
+    ], "and handed on by field")
+
+
+def core_lit_handoff_kept(n):
+    """One String moved into a literal's field and handed by another to a callee that keeps it (h205)."""
+    _decl([f": Hk{n} {{ String h }}",
+           f": Tk{n} {{ String a Hk{n} b }}",
+           f"@ wrap{n} String x → Hk{n} {{ ^ @ Hk{n} {{ x }} }}"])
+    return ([
+        f": String t{n} ( string_from `kept twice {n}, a heap string` )",
+        f": Tk{n} w{n} @ Tk{n} {{ t{n} ( wrap{n} t{n} ) }}",
+        f"( nurl_print ( string_data . w{n} a ) )",
+    ], "which takes it over")
+
+
 CORES = [
     core_alias_double_free,
     core_same_binding_double_free,
@@ -217,6 +240,8 @@ CORES = [
     core_field_view_after_replace,
     core_payload_of_lent_option,
     core_kept_closure_capture,
+    core_lit_nested_moved_twice,
+    core_lit_handoff_kept,
 ]
 
 # Cores that already contain a loop of their own. Nesting one inside a

@@ -31,9 +31,9 @@ $ `stdlib/ext/http2_server.nu`
     ( tcp_set_timeout conn 1000 )
     : ( @ HttpResponse HttpRequest ) h
     \ HttpRequest req → HttpResponse { ^ ( h2c_handler req ) }
+    // http2_serve takes the connection over: it closes with its last owner.
     : !v H2ConnErr sr ( http2_serve conn h )
     ?? sr { T _ → {} F _ → {} }
-    ( tcp_close_conn conn )
 }
 
 @ accept_loop TcpListener listener → v {

@@ -421,7 +421,9 @@ A function or method declaration may carry a leading `unsafe` prefix
 - call a standard-library function whose name begins with `__` (the
   library's own machinery, which trusts the control blocks and buffers
   it is handed);
-- call a foreign (`&`) function declared outside the standard library.
+- call a foreign (`&`) function declared outside the standard library;
+- read or write a mutable global that owns something (§3.4), or take a
+  global's address with `mem_addr`.
 
 A string (`s`) in safe code is therefore NUL-terminated or null: nothing
 safe can turn a raw pointer into one. A null string reads as the empty
@@ -479,6 +481,25 @@ value at compile time (`const_eval_int`):
 
 A mutable global (`: ~ type Name value`) may be reassigned at runtime
 with `= Name expr` (§5.2).
+
+A mutable global may also have a type that owns something — a `String`, a
+`Vec`, a struct of them, an option `?T`, a closure, a library handle — with
+the initialiser `0`. It starts as that type's zero value (which drops as
+nothing) and owns what it holds: an assignment to it or to one of its
+fields drops what it replaces, and a read borrows (docs/MEMORY.md §1,
+Module globals). Every thread can reach it, so only an `unsafe` function
+(§3.3d) reads or writes it.
+
+```
+: ~ ( Vec String ) g_names 0
+: ~ ?Model g_model 0          // F until a model is loaded
+unsafe @ model_drop → v { = g_model @ ?Model { F } }
+```
+
+`( mem_addr g )` (`unsafe`) is a `*T` to the mutable global `g` of type
+`T` — a struct global's fields reached through a pointer, or an address a
+foreign function or an atomic operation writes through. Given an `inout`
+parameter it is the caller's place, valid for the call.
 
 ## 4. Types
 
@@ -1600,7 +1621,9 @@ A function parameter may carry a leading convention marker (§7.2):
   address. The callee mutates the caller's storage in place. Ordinary
   and generic declarations may follow their callers.
   Pointer indices must be integers and are evaluated once. Named fields through
-  struct pointers are addressable as well. The pointee must match the declared
+  struct pointers are addressable as well, through an immutable pointer
+  binding or a pointer parameter too: the pointer stays, the memory it
+  points to is written. The pointee must match the declared
   parameter type exactly; raw-pointer bounds remain the caller's responsibility.
 - `sink` — consume / move. The callee takes ownership; the caller may
   not use the argument binding afterwards. Compiler-managed enum owners
@@ -1692,6 +1715,14 @@ The trailing INT (0 or 1) is consumed only when the source expression
 is a closure-shaped struct and the destination type is a pointer — the
 common shape for feeding C-runtime callback APIs (`thread_spawn`,
 signal handlers) the raw fn-ptr / env-ptr pair.
+
+A struct converts to an integer or a pointer through its first field, and
+a pointer converts back to a struct whose first field is a pointer (a
+handle: `# ( Vec u ) p`). Where that first field is itself a struct
+wrapping one pointer (`{ s ctl }`, as a library handle's
+`( Shared T )` is), the cast follows it to that pointer: `# i h` and
+`# Regex # s 0` work on such a handle as on a one-pointer one. Any other
+aggregate first field has no scalar to take and is an error.
 
 Float-to-integer casts truncate toward zero and use the target's signedness.
 The truncated value must fit the target: `-128.9` converts to `i8(-128)` and
@@ -1797,6 +1828,33 @@ conventions:
 `in` / `inout` / `sink` are contextual keywords — recognised only as a
 parameter's leading token. `inout` is additionally banned as a
 parameter name.
+
+A foreign (`&`) declaration may mark a parameter `inout` too: the C
+function takes a pointer to a `T` it writes a result through, and the
+argument is a mutable binding whose address is passed — nothing is
+allocated for the result.
+
+```
+& `libcuda` @ cuMemGetInfo_v2 inout i avail inout i total → i32
+: ~ i avail 0
+: ~ i total 0
+: i32 rc ( cuMemGetInfo_v2 avail total )
+```
+
+The parameter may be a struct too (`inout Timespec ts`): the C function
+fills the caller's local in place.
+
+A foreign function that returns a string it allocated, for the caller to
+release, declares its result `sink s`: the binding the result lands in
+owns it — it is released at scope exit, or handed on (`string_adopt`,
+another `sink` parameter), like any owned string — so nothing frees it by
+hand. Only a raw string `s` can be a `sink` result.
+
+```
+& `c` @ strdup s src → sink s
+: s copy ( strdup `text` )      // released at scope exit
+: String owned ( string_adopt ( strdup `more` ) )
+```
 
 ### 7.3 Return ownership
 
@@ -1936,6 +1994,10 @@ whichever way it leaves:
 - `( mem_put_back x )` (only inside an `unsafe` function) stores `x` back
   into the slot it was read from without copying it or taking it over —
   for an element setter.
+- `( mem_replace [T] place x )` (stdlib/core/mem.nu, `unsafe`) puts `x`
+  into the `inout` place and returns what the place held, owned — for
+  taking a value out of a field (through a pointer too) and leaving
+  another in its place.
 
 See [`docs/MEMORY.md` §7.6](MEMORY.md) for the complete rules and
 [`docs/LIMITATIONS.md`](LIMITATIONS.md) for the shapes that still

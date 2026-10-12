@@ -541,8 +541,7 @@ unsafe @ __jpg_prog_ac2 inout Jpeg j i ci ( Vec i ) cf i bidx → v {
 // a borrow of it.
 unsafe @ __jpg_prog_scan inout Jpeg j → v {
     : ( Vec ( Vec i ) ) coefs . j coefs
-    ( mem_take coefs )
-    = . j coefs ( vec_new [( Vec i )] )
+    = . j coefs ( vec_new [( Vec i )] )  // coefs keeps what the field held
     ( __jpg_prog_scan_planes j coefs )
     = . j coefs coefs
 }

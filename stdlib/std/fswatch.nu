@@ -30,6 +30,8 @@
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/posix.nu`  // read / close
+$ `stdlib/core/vec.nu`
+$ `stdlib/std/arc.nu`
 
 & `c` @ inotify_init1 i32 flags → i32
 
@@ -75,9 +77,27 @@ $ `stdlib/core/posix.nu`  // read / close
 //         miscompiles across reassignment; cast per use)
 //   lim — bytes valid in buf
 //   pos — read cursor into buf
-: FsWatchImpl { i fd i buf i lim i pos }
+// The inotify descriptor, the event buffer and the read cursor. A watcher
+// is a handle: every copy is the same watcher, and the last owner closes
+// the descriptor (if fswatch_close has not) and releases the buffer.
+: FsWatchImpl { i fd ( Vec u ) buf i lim i pos }
 
-: FsWatch { s ctl }
+% Drop FsWatchImpl {
+    @ drop FsWatchImpl st → v {
+        ? >= . st fd 0 { : i _c ( close . st fd ) } {}
+    }
+}
+
+: FsWatch { ( Arc FsWatchImpl ) a }
+
+// Its drop closes something the outside world sees.
+% Resource FsWatch {}
+
+@ FsWatch_share FsWatch w → FsWatch { ^ @ FsWatch { ( arc_clone [FsWatchImpl] . w a ) } }
+
+@ FsWatch_drop sink FsWatch w → v {}
+
+@ __fsw FsWatch w → *FsWatchImpl { ^ ( arc_ptr [FsWatchImpl] . w a ) }
 
 : FsWatchEvent { i wd i mask String name }
 
@@ -99,16 +119,12 @@ $ `stdlib/core/posix.nu`  // read / close
 @ fswatch_new → !FsWatch FsWatchErr {
     : i32 fd0 ( inotify_init1 # i32 0 )
     ? < # i fd0 0 { ^ @ !FsWatch FsWatchErr { F FwInit } } {}
-    : *FsWatchImpl st # *FsWatchImpl ( nurl_alloc Z FsWatchImpl )
-    = . st fd # i fd0
-    = . st buf # i ( nurl_alloc FSW_BUF_CAP )
-    = . st lim 0
-    = . st pos 0
-    ^ @ !FsWatch FsWatchErr { T @ FsWatch { # s st } }
+    : FsWatch w @ FsWatch { ( arc_new [FsWatchImpl] @ FsWatchImpl { # i fd0 ( vec_zeroed [u] FSW_BUF_CAP ) 0 0 } ) }
+    ^ @ !FsWatch FsWatchErr { T w }
 }
 
 @ fswatch_add FsWatch w s path i mask → !i FsWatchErr {
-    : *FsWatchImpl st # *FsWatchImpl . w ctl
+    : *FsWatchImpl st ( __fsw w )
     ? < . st fd 0 { ^ @ !i FsWatchErr { F FwClosed } } {}
     : i32 wd ( inotify_add_watch # i32 . st fd path # u32 mask )
     ? < # i wd 0 { ^ @ !i FsWatchErr { F FwWatch } } {}
@@ -116,7 +132,7 @@ $ `stdlib/core/posix.nu`  // read / close
 }
 
 @ fswatch_rm FsWatch w i wd → !i FsWatchErr {
-    : *FsWatchImpl st # *FsWatchImpl . w ctl
+    : *FsWatchImpl st ( __fsw w )
     ? < . st fd 0 { ^ @ !i FsWatchErr { F FwClosed } } {}
     : i32 r ( inotify_rm_watch # i32 . st fd # i32 wd )
     ? < # i r 0 { ^ @ !i FsWatchErr { F FwWatch } } {}
@@ -127,17 +143,17 @@ $ `stdlib/core/posix.nu`  // read / close
 // struct inotify_event: { i32 wd; u32 mask; u32 cookie; u32 len;
 // char name[len] } — 16-byte header, name NUL-padded to `len`.
 @ fswatch_next FsWatch w → !FsWatchEvent FsWatchErr {
-    : *FsWatchImpl st # *FsWatchImpl . w ctl
+    : *FsWatchImpl st ( __fsw w )
     ? < . st fd 0 { ^ @ !FsWatchEvent FsWatchErr { F FwClosed } } {}
     ~ >= . st pos . st lim {
-        : i n ( read . st fd # *u . st buf FSW_BUF_CAP )
+        : i n ( read . st fd ( vec_data [u] . st buf ) FSW_BUF_CAP )
         ? == n 0 { ^ @ !FsWatchEvent FsWatchErr { F FwClosed } } {}
         ? < n 0 { ^ @ !FsWatchEvent FsWatchErr { F FwRead } } {}
         = . st pos 0
         = . st lim n
     }
     ? > + . st pos 16 . st lim { ^ @ !FsWatchEvent FsWatchErr { F FwRead } } {}
-    : *u p # *u + . st buf . st pos
+    : *u p # *u + # i ( vec_data [u] . st buf ) . st pos
     : i wd ( __fsw_u32 p 0 )
     : i mask ( __fsw_u32 p 4 )
     : i namelen ( __fsw_u32 p 12 )
@@ -155,9 +171,7 @@ $ `stdlib/core/posix.nu`  // read / close
 }
 
 @ fswatch_close FsWatch w → v {
-    : *FsWatchImpl st # *FsWatchImpl . w ctl
+    : *FsWatchImpl st ( __fsw w )
     ? >= . st fd 0 { : i _c ( close . st fd ) } {}
     = . st fd -1
-    ( nurl_free # *u . st buf )
-    ( nurl_free # *u . w ctl )
 }

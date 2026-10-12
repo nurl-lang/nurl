@@ -72,7 +72,8 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/errors.nu`
 $ `stdlib/core/posix.nu`  // errno_kind
 $ `stdlib/std/fs.nu`  // nurl_file_open / nurl_file_close
-$ `stdlib/core/rcbox.nu`
+$ `stdlib/core/vec.nu`
+$ `stdlib/std/arc.nu`
 
 // ── libc bridges (pure-NURL FFI) ────────────────────────────────────
 // fread is declared globally in nurlc's preamble (Phase 7, 2026-05-23);
@@ -91,45 +92,39 @@ $ `stdlib/core/rcbox.nu`
 // the current buffer; never shrinks.
 : i BUFIO_CAP 65536
 
-// BufReader is a one-word handle on a 64-byte control block in an rcbox
-// (stdlib/core/rcbox.nu), so it round-trips through `! T E`; every copy is
-// the same reader, and the last owner releases the buffer and closes a
-// file the reader opened (BufReaderImpl's drop).
+// BufReader is a one-word handle on its state in an Arc, so it
+// round-trips through `! T E`; every copy is the same reader, and the last
+// owner releases the buffer and closes a file the reader opened
+// (BufReaderImpl's drop).
 //
-// Control block (8 × i64, via nurl_peek/poke):
-//   word 0: file handle (FILE* as i64; 0 ⇒ no stream / degrade to EOF)
-//   word 1: buffer pointer (i64)
-//   word 2: buffer capacity (bytes)
-//   word 3: start — index of first unconsumed byte
-//   word 4: end   — index past last valid byte
-//   word 5: eof   — 1 once the underlying stream is exhausted
-//   word 6: owns  — 1 if `bufreader_close` should fclose the handle
-//   word 7: scratch — start offset of the line last returned
-: BufReaderImpl { i h i buf i cap i start i end i eof i owns i scratch }
+//   h       — file handle (FILE* as i64; 0 ⇒ no stream / degrade to EOF)
+//   buf     — the read buffer; its length is the capacity in use
+//   start   — index of first unconsumed byte
+//   end     — index past last valid byte
+//   eof     — 1 once the underlying stream is exhausted
+//   owns    — 1 if the reader closes the handle (it opened it)
+//   scratch — start offset of the line last returned
+: BufReaderImpl { i h ( Vec u ) buf i start i end i eof i owns i scratch }
 
-// The buffer and (when the reader opened it) the stream are raw: releasing
-// them is the reader's own drop, run by its last owner.
+// The stream is the outside world's: closing a file the reader opened is
+// its own drop, run by its last owner (the buffer goes with it).
 % Drop BufReaderImpl {
     @ drop BufReaderImpl r → v {
-        ? != 0 . r buf { ( nurl_free # s . r buf ) } {}
         ? && != 0 . r owns != 0 . r h { ( nurl_file_close # *v . r h ) } {}
     }
 }
 
-: BufReader { s ctl }
+: BufReader { ( Arc BufReaderImpl ) a }
 
 // Its drop closes something the outside world sees (stdlib/core/marker.nu).
 % Resource BufReader {}
 
-@ BufReader_share BufReader h → BufReader { ^ @ BufReader { # s ( rcbox_share # i . h ctl ) } }
+@ BufReader_share BufReader h → BufReader { ^ @ BufReader { ( arc_clone [BufReaderImpl] . h a ) } }
 
-@ BufReader_drop sink BufReader h → v {
-    ( mem_forget h )
-    ( rcbox_release [BufReaderImpl] # i . h ctl )
-}
+@ BufReader_drop sink BufReader h → v {}
 
-// The control block in place (the BufReaderImpl's words).
-@ __br_ctl BufReader h → s { ^ # s ( rcbox_ptr [BufReaderImpl] # i . h ctl ) }
+// The reader's state in place.
+@ __br BufReader h → *BufReaderImpl { ^ ( arc_ptr [BufReaderImpl] . h a ) }
 
 // ── Internal ────────────────────────────────────────────────────────
 
@@ -146,94 +141,82 @@ $ `stdlib/core/rcbox.nu`
 }
 
 @ __bufreader_make * v h i owns → BufReader {
-    : i box ( rcbox_zero [BufReaderImpl] )
-    : s ctl # s ( rcbox_ptr [BufReaderImpl] box )
-    : s buf ( nurl_alloc BUFIO_CAP )
-    ( nurl_poke ctl 0 # i h )
-    ( nurl_poke ctl 1 # i buf )
-    ( nurl_poke ctl 2 BUFIO_CAP )
-    ( nurl_poke ctl 6 owns )
-    ^ @ BufReader { # s box }
+    ^ @ BufReader { ( arc_new [BufReaderImpl] @ BufReaderImpl { # i h ( vec_zeroed [u] BUFIO_CAP ) 0 0 0 owns 0 } ) }
 }
 
 // Make room and pull one more chunk from the stream into [end, cap).
 // Compacts live bytes to the front first, then grows the buffer if it
 // is completely full. Sets the EOF flag when the stream yields nothing.
-@ __bufreader_fill s ctl → v {
-    : i handle ( nurl_peek ctl 0 )
-    ? == handle 0 { ( nurl_poke ctl 5 1 ) } {
-        : ~ i cap ( nurl_peek ctl 2 )
-        : i start ( nurl_peek ctl 3 )
-        : ~ i end ( nurl_peek ctl 4 )
-        // Carry the buffer address as an i64 and cast per use — a
-        // mutable ': ~ *u' binding miscompiles across realloc (a
-        // compiler-diagnosed trap); this function reassigns it on grow.
-        : ~ i bufa ( nurl_peek ctl 1 )
+@ __bufreader_fill * BufReaderImpl r → v {
+    ? == . r h 0 { = . r eof 1 } {
+        : ~ i cap ( vec_len [u] . r buf )
+        : i start . r start
+        : ~ i end . r end
         // Compact: shift [start, end) down to offset 0.
         ? > start 0 {
             : i live - end start
+            : *u b ( vec_data [u] . r buf )
             ? > live 0 {
-                ( memmove # *u bufa # *u + bufa start live )
+                : *u _m ( memmove b # *u + # i b start live )
             } {}
             = end live
-            ( nurl_poke ctl 3 0 )
-            ( nurl_poke ctl 4 end )
+            = . r start 0
+            = . r end end
         } {}
         // Grow when the buffer is full and compaction freed nothing.
         ? >= end cap {
             = cap * cap 2
-            = bufa # i ( nurl_realloc # s bufa cap )
-            ( nurl_poke ctl 1 bufa )
-            ( nurl_poke ctl 2 cap )
+            : b _g ( vec_resize_zeroed [u] . r buf cap )
         } {}
+        // The data pointer is read after any grow.
+        : *u b ( vec_data [u] . r buf )
         : i want - cap end
-        : i got ( fread # s + bufa end 1 want # s handle )
-        ? > got 0 { ( nurl_poke ctl 4 + end got ) } { ( nurl_poke ctl 5 1 ) }
+        : i got ( fread # s + # i b end 1 want # s . r h )
+        ? > got 0 { = . r end + end got } { = . r eof 1 }
     }
 }
 
 // Absolute buffer index of the next '\n' in [start, end), or -1.
-@ __bufreader_find_nl s ctl → i {
-    : i start ( nurl_peek ctl 3 )
-    : i end ( nurl_peek ctl 4 )
-    : i n - end start
+@ __bufreader_find_nl * BufReaderImpl r → i {
+    : i start . r start
+    : i n - . r end start
     ? <= n 0 { ^ -1 } {}
-    : *u buf # *u ( nurl_peek ctl 1 )
+    : *u buf ( vec_data [u] . r buf )
     : s found ( memchr # *u + # i buf start 10 n )
     ? == 0 # i found { ^ -1 } {}
     ^ - # i found # i buf
 }
 
 // Consume the next line. Returns its length excluding the terminator
-// (>= 0), or -1 at end of input. On success word 7 holds the line's
+// (>= 0), or -1 at end of input. On success `scratch` holds the line's
 // start offset in the current buffer — valid only until the next call.
-@ __bufreader_next_line s ctl → i {
+@ __bufreader_next_line * BufReaderImpl r → i {
     : ~ i result -2
     ~ == result -2 {
-        : i nl ( __bufreader_find_nl ctl )
+        : i nl ( __bufreader_find_nl r )
         ? >= nl 0 {
-            : i start ( nurl_peek ctl 3 )
+            : i start . r start
             : ~ i len - nl start
-            : *u buf # *u ( nurl_peek ctl 1 )
+            : *u buf ( vec_data [u] . r buf )
             ? > len 0 {
                 ? == # i . buf - nl 1 13 { = len - len 1 } {}
             } {}
-            ( nurl_poke ctl 7 start )
-            ( nurl_poke ctl 3 + nl 1 )
+            = . r scratch start
+            = . r start + nl 1
             = result len
         } {
-            ? == 0 ( nurl_peek ctl 5 ) {
-                ( __bufreader_fill ctl )
+            ? == 0 . r eof {
+                ( __bufreader_fill r )
             } {
                 // EOF: emit the trailing unterminated line, if any.
-                : i start ( nurl_peek ctl 3 )
-                : i end ( nurl_peek ctl 4 )
+                : i start . r start
+                : i end . r end
                 ? > - end start 0 {
                     : ~ i len - end start
-                    : *u buf # *u ( nurl_peek ctl 1 )
+                    : *u buf ( vec_data [u] . r buf )
                     ? == # i . buf - end 1 13 { = len - len 1 } {}
-                    ( nurl_poke ctl 7 start )
-                    ( nurl_poke ctl 3 end )
+                    = . r scratch start
+                    = . r start end
                     = result len
                 } { = result -1 }
             }
@@ -257,19 +240,21 @@ $ `stdlib/core/rcbox.nu`
 @ bufreader_stdin → BufReader {
     : *v h ( fdopen 0 `rb` )
     : BufReader br ( __bufreader_make h 1 )
-    ? == 0 # i h { ( nurl_poke ( __br_ctl br ) 5 1 ) } {}
+    ? == 0 # i h {
+        : *BufReaderImpl r ( __br br )
+        = . r eof 1
+    } {}
     ^ br
 }
 
 // ── Reading ─────────────────────────────────────────────────────────
 
 @ bufreader_read_line BufReader br → ?String {
-    : s ctl ( __br_ctl br )
-    : i len ( __bufreader_next_line ctl )
+    : *BufReaderImpl r ( __br br )
+    : i len ( __bufreader_next_line r )
     ? < len 0 { ^ @ ?String { F # String 0 } } {}
-    : *u buf # *u ( nurl_peek ctl 1 )
-    : i off ( nurl_peek ctl 7 )
-    ^ @ ?String { T ( string_from_bytes # *u + # i buf off len ) }
+    : *u buf ( vec_data [u] . r buf )
+    ^ @ ?String { T ( string_from_bytes # *u + # i buf . r scratch len ) }
 }
 
 // Replace `dst`'s contents with the next line (terminator stripped) and
@@ -277,13 +262,12 @@ $ `stdlib/core/rcbox.nu`
 // across the read loop — its buffer grows once and is then never
 // reallocated, so the hot loop performs no per-line allocation.
 @ bufreader_read_line_into BufReader br String dst → b {
-    : s ctl ( __br_ctl br )
-    : i len ( __bufreader_next_line ctl )
+    : *BufReaderImpl r ( __br br )
+    : i len ( __bufreader_next_line r )
     ( string_clear dst )
     ? < len 0 { ^ F } {}
-    : *u buf # *u ( nurl_peek ctl 1 )
-    : i off ( nurl_peek ctl 7 )
-    ( string_push_bytes dst # *u + # i buf off len )
+    : *u buf ( vec_data [u] . r buf )
+    ( string_push_bytes dst # *u + # i buf . r scratch len )
     ^ T
 }
 
@@ -298,15 +282,15 @@ $ `stdlib/core/rcbox.nu`
 // right default for copying. Same zero-allocation loop shape — reuse one
 // `dst`.
 @ bufreader_read_line_raw BufReader br String dst → b {
-    : s ctl ( __br_ctl br )
-    : i len ( __bufreader_next_line ctl )
+    : *BufReaderImpl r ( __br br )
+    : i len ( __bufreader_next_line r )
     ( string_clear dst )
     ? < len 0 { ^ F } {}
-    : *u buf # *u ( nurl_peek ctl 1 )
-    : i off ( nurl_peek ctl 7 )
-    // word 3 is the next unconsumed byte, so the span [off, start) is
+    : *u buf ( vec_data [u] . r buf )
+    : i off . r scratch
+    // `start` is the next unconsumed byte, so the span [off, start) is
     // the line plus whatever terminated it.
-    : i raw - ( nurl_peek ctl 3 ) off
+    : i raw - . r start off
     ( string_push_bytes dst # *u + # i buf off raw )
     ^ T
 }
@@ -314,26 +298,21 @@ $ `stdlib/core/rcbox.nu`
 // ── Inspect / cleanup ───────────────────────────────────────────────
 
 @ bufreader_eof BufReader br → b {
-    : s ctl ( __br_ctl br )
-    ? == 0 ( nurl_peek ctl 5 ) { ^ F } {}
-    ^ >= ( nurl_peek ctl 3 ) ( nurl_peek ctl 4 )
+    : *BufReaderImpl r ( __br br )
+    ? == 0 . r eof { ^ F } {}
+    ^ >= . r start . r end
 }
 
 // Release the buffer and close the file now (optional: the last owner
 // does it). Every copy of `br` sees an exhausted reader afterwards.
 @ bufreader_close BufReader br → v {
-    ? == 0 # i . br ctl { ^ } {}
-    : s ctl ( __br_ctl br )
-    : i buf ( nurl_peek ctl 1 )
-    ? != 0 buf { ( nurl_free # s buf ) } {}
-    ? != 0 ( nurl_peek ctl 6 ) {
-        : i h ( nurl_peek ctl 0 )
-        ? != 0 h { ( nurl_file_close # *v h ) } {}
-    } {}
-    ( nurl_poke ctl 0 0 )
-    ( nurl_poke ctl 1 0 )
-    ( nurl_poke ctl 2 0 )
-    ( nurl_poke ctl 3 0 )
-    ( nurl_poke ctl 4 0 )
-    ( nurl_poke ctl 5 1 )
+    : ( Arc BufReaderImpl ) a . br a
+    ? == 0 # i . a ctl { ^ } {}
+    : *BufReaderImpl r ( __br br )
+    = . r buf ( vec_new [u] )
+    ? && != 0 . r owns != 0 . r h { ( nurl_file_close # *v . r h ) } {}
+    = . r h 0
+    = . r start 0
+    = . r end 0
+    = . r eof 1
 }

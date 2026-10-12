@@ -918,16 +918,13 @@ $ `stdlib/core/rcbox.nu`
 
 // A SlhKeys is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
 // every copy is the same state, and the last owner releases it.
-: SlhKeys { s ctl }
+: SlhKeys { ( Shared SlhKeysImpl ) ctl }
 
-@ SlhKeys_share SlhKeys h → SlhKeys { ^ @ SlhKeys { # s ( rcbox_share # i . h ctl ) } }
+@ SlhKeys_share SlhKeys h → SlhKeys { ^ @ SlhKeys { ( shared_clone [SlhKeysImpl] . h ctl ) } }
 
-@ SlhKeys_drop sink SlhKeys h → v {
-    ( mem_forget h )
-    ( rcbox_release [SlhKeysImpl] # i . h ctl )
-}
+@ SlhKeys_drop sink SlhKeys h → v {}
 
-@ __SlhKeys_ptr SlhKeys h → *SlhKeysImpl { ^ ( rcbox_ptr [SlhKeysImpl] # i . h ctl ) }
+@ __SlhKeys_ptr SlhKeys h → *SlhKeysImpl { ^ ( shared_ptr [SlhKeysImpl] . h ctl ) }
 
 @ slhdsa_pk SlhKeys h__h → ( Vec u ) {
     : *SlhKeysImpl h ( __SlhKeys_ptr h__h )
@@ -954,7 +951,7 @@ $ `stdlib/core/rcbox.nu`
     ( bytes_extend_bytes sk skprf )
     ( bytes_extend_bytes sk pkseed )
     ( bytes_extend_bytes sk root )
-    ^ @ SlhKeys { # s ( rcbox_new [SlhKeysImpl] @ SlhKeysImpl { pk sk } ) }
+    ^ @ SlhKeys { ( shared_new [SlhKeysImpl] @ SlhKeysImpl { pk sk } ) }
 }
 
 @ slhdsa_keygen i set → SlhKeys {

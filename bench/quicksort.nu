@@ -1,6 +1,8 @@
 // quicksort — sort 5000 LCG-generated ints in place, print a
 // position-weighted checksum (sum of (k+1)*a[k]) that only comes out
 // right if the array is actually sorted. Recursion + array mutation.
+$ `stdlib/core/mem.nu`
+
 unsafe @ swap *i a i p i q → v {
     : i t . a p
     = . a p . a q
@@ -24,7 +26,8 @@ unsafe @ qsort *i a i lo i hi → v {
 
 unsafe @ main → i {
     : i N 5000
-    : *i a # *i ( malloc * N 8 )
+    : RawBlock a__blk ( raw_block * N 8 )
+    : *i a # *i ( raw_block_ptr a__blk )
     : ~ i x 1
     : ~ i i 0
     ~ < i N {
@@ -40,6 +43,5 @@ unsafe @ main → i {
         = k + k 1
     }
     ( nurl_println_int sum )
-    ( free a )
     ^ 0
 }

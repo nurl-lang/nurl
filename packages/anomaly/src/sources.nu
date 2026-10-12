@@ -999,14 +999,15 @@ $ `stdlib/core/slice.nu`
 
 // Sources mid-run, as "<org>/<id>", so a manual run and the scheduler
 // never fetch the same source at once. Touched only under the service
-// lock.
-: ~ i g_src_running 0
+// lock (which is what the `unsafe` on its two users vouches for).
+: ~ ( Vec String ) g_src_running 0
+: ~ b g_src_running_made F
 
-unsafe @ __src_running → ( Vec String ) {
-    ? != g_src_running 0 { ^ # ( Vec String ) g_src_running } {}
-    : ( Vec String ) v ( vec_new [String] )
-    = g_src_running # i v
-    ^ v
+unsafe @ __src_running_init → v {
+    ? g_src_running_made {} {
+        = g_src_running ( vec_new [String] )
+        = g_src_running_made T
+    }
 }
 
 @ __src_run_key s org s id → String {
@@ -1016,9 +1017,10 @@ unsafe @ __src_running → ( Vec String ) {
     ^ k
 }
 
-@ source_is_running s org s id → b {
+unsafe @ source_is_running s org s id → b {
     : String key ( __src_run_key org id )
-    : ( Vec String ) v ( __src_running )
+    ( __src_running_init )
+    : ( Vec String ) v g_src_running
     : i n ( vec_len [String] v )
     : ~ i k 0
     : ~ b found F
@@ -1032,8 +1034,9 @@ unsafe @ __src_running → ( Vec String ) {
     ^ found
 }
 
-@ __src_mark_running s org s id b on → v {
-    : ( Vec String ) v ( __src_running )
+unsafe @ __src_mark_running s org s id b on → v {
+    ( __src_running_init )
+    : ( Vec String ) v g_src_running
     ? on {
         ( vec_push [String] v ( __src_run_key org id ) )
     } {

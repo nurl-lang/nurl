@@ -23,6 +23,7 @@
 // than a lock.
 
 $ `stdlib/core/string.nu`
+$ `stdlib/core/option.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/fs.nu`
@@ -41,73 +42,58 @@ $ `src/history.nu`
 $ `src/webui.nu`
 $ `stdlib/ext/uuid.nu`
 
-// The resident model + the store root, reachable from the handlers.
-// Globals may only carry scalar/`s` literals, so the two strings are
-// plain owned C-strings (strdup'd in, nurl_free'd out) rather than
-// String structs.
-: ~ i g_api_llm 0
+// The resident model + the store root, reachable from the handlers. A
+// mutable `s` global owns the string it is given (docs/MEMORY.md §1): an
+// assignment releases the one it replaces, and the last is released when
+// the program ends — so each setter is the assignment of an owned copy.
+: ~ ? Llm g_api_llm 0  // the resident model (F = none)
 : ~ i g_api_style 0
 : ~ s g_api_name ``
 : ~ s g_api_root ``
 
 // Config for the wizard-started server (`nurllama start`): the default
 // model the web UI chats with, the bearer token (empty = open access),
-// and the SQLite history path. All scalar/`s` (globals hold no structs).
+// and the SQLite history path.
 : ~ i g_api_auth 0
 : ~ s g_api_token ``
 : ~ s g_api_model ``
 : ~ s g_api_histpath ``
 
-unsafe @ __api_set_token s tok → v {
-    ? != 0 ( nurl_str_len g_api_token ) { ( nurl_free g_api_token ) } {}
-    = g_api_token ( strdup tok )
-}
+@ __api_set_token s tok → v { = g_api_token ( nurl_str_cat tok `` ) }
 
-unsafe @ __api_set_model s m → v {
-    ? != 0 ( nurl_str_len g_api_model ) { ( nurl_free g_api_model ) } {}
-    = g_api_model ( strdup m )
-}
+@ __api_set_model s m → v { = g_api_model ( nurl_str_cat m `` ) }
 
-unsafe @ __api_set_histpath s p → v {
-    ? != 0 ( nurl_str_len g_api_histpath ) { ( nurl_free g_api_histpath ) } {}
-    = g_api_histpath ( strdup p )
-}
+@ __api_set_histpath s p → v { = g_api_histpath ( nurl_str_cat p `` ) }
 
-unsafe @ __api_set_name s name → v {
-    ? != 0 ( nurl_str_len g_api_name ) { ( nurl_free g_api_name ) } {}
-    = g_api_name ( strdup name )
-}
+@ __api_set_name s name → v { = g_api_name ( nurl_str_cat name `` ) }
 
-unsafe @ api_set_root String root → v {
-    ? != 0 ( nurl_str_len g_api_root ) { ( nurl_free g_api_root ) } {}
-    = g_api_root ( strdup ( string_data root ) )
-}
+@ api_set_root String root → v { = g_api_root ( nurl_str_cat ( string_data root ) `` ) }
 
 unsafe @ __api_unload → v {
-    ? != g_api_llm 0 {
-        ( llm_word_release g_api_llm )
-        = g_api_llm 0
-    } {}
-    ? != 0 ( nurl_str_len g_api_name ) {
-        ( nurl_free g_api_name )
-        = g_api_name ``
-    } {}
+    = g_api_llm @ ?Llm { F }
+    = g_api_name ( nurl_str_cat `` `` )
 }
 
 // serve --weights: when set, every model this server opens takes its
 // tensors from this safetensors file instead of the GGUF's own (the GGUF
 // still supplies the hyperparameters and the tokenizer) — the API twin of
-// `run --weights`, for serving a finetuned/merged checkpoint. The pointed
-// string is the CLI's; it outlives the server loop.
-: ~ i g_api_weights 0
+// `run --weights`, for serving a finetuned/merged checkpoint. Empty = none.
+: ~ s g_api_weights ``
 
-@ api_set_weights s w → v {
-    = g_api_weights ? > ( nurl_str_len w ) 0 # i w 0
+@ api_set_weights s w → v { = g_api_weights ( nurl_str_cat w `` ) }
+
+// One more owner of the resident model (a handler runs after __api_ensure
+// loaded it).
+unsafe @ __api_llm → Llm {
+    ?? g_api_llm {
+        T m → { ^ ( Llm_share m ) }
+        F → { ( nurl_panic `nurllama: no model is resident` ) }
+    }
 }
 
 // Load `name` unless it is already resident. Empty error = success.
 unsafe @ __api_ensure s name → String {
-    ? & != g_api_llm 0 != 0 ( nurl_str_eq g_api_name name ) { ^ ( string_new ) } {}
+    ? & ( opt_is_some [Llm] g_api_llm ) != 0 ( nurl_str_eq g_api_name name ) { ^ ( string_new ) } {}
     ( __api_unload )
     : String rootS ( string_from g_api_root )
     : ?String rp ( nl_resolve rootS name )
@@ -121,12 +107,12 @@ unsafe @ __api_ensure s name → String {
                 }
                 F _e → {}
             }
-            : !Llm String lr ? != g_api_weights 0
-            ( llm_open_st ( string_data path ) # s g_api_weights 0 )
+            : !Llm String lr ? > ( nurl_str_len g_api_weights ) 0
+            ( llm_open_st ( string_data path ) g_api_weights 0 )
             ( llm_open ( string_data path ) 0 )
             ?? lr {
                 T m → {
-                    = g_api_llm ( llm_into_word ( Llm_share m ) )
+                    = g_api_llm @ ?Llm { T ( Llm_share m ) }
                     = g_api_style style
                     ( __api_set_name name )
                     ^ ( string_new )
@@ -276,7 +262,7 @@ unsafe @ __api_ensure s name → String {
 // and answers with a single object (stream=false).
 unsafe @ __api_generate TcpConn c s model String prompt s field b stream
 i npredict f temp i topk f topp i seed → b {
-    : Llm m # Llm g_api_llm
+    : Llm m ( __api_llm )
     : Tok t ( Tok_share ( llm_tok m ) )
     : ( Vec i ) ids ( tok_encode t ( string_data prompt ) T )
     : i nprompt ( vec_len [i] ids )
@@ -608,7 +594,7 @@ unsafe @ __web_reply Json history s new_content → !String String {
     ? > ( string_len lerr ) 0 {
         ^ @ !String String { F lerr }
     } {}
-    : Llm m # Llm g_api_llm
+    : Llm m ( __api_llm )
     : Tok t ( Tok_share ( llm_tok m ) )
     // message list = stored history + the new user turn
     : ( Vec ChatMsg ) msgs ( vec_new [ChatMsg] )

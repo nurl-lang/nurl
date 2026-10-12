@@ -743,23 +743,20 @@ $ `stdlib/core/rcbox.nu`
 // A handle on the key state in an rcbox (stdlib/core/rcbox.nu): every
 // copy is the same key, and the last owner releases it. `ctl` 0 is the
 // null key a bad key length gets.
-: AesGcmKey { s ctl }
+: AesGcmKey { ( Shared AesGcmKeyImpl ) ctl }
 
-@ AesGcmKey_share AesGcmKey h → AesGcmKey { ^ @ AesGcmKey { # s ( rcbox_share # i . h ctl ) } }
+@ AesGcmKey_share AesGcmKey h → AesGcmKey { ^ @ AesGcmKey { ( shared_clone [AesGcmKeyImpl] . h ctl ) } }
 
-@ AesGcmKey_drop sink AesGcmKey h → v {
-    ( mem_forget h )
-    ( rcbox_release [AesGcmKeyImpl] # i . h ctl )
-}
+@ AesGcmKey_drop sink AesGcmKey h → v {}
 
-@ __AesGcmKey_ptr AesGcmKey h → *AesGcmKeyImpl { ^ ( rcbox_ptr [AesGcmKeyImpl] # i . h ctl ) }
+@ __AesGcmKey_ptr AesGcmKey h → *AesGcmKeyImpl { ^ ( shared_ptr [AesGcmKeyImpl] . h ctl ) }
 
 // F for the null key `aes_gcm_key_new` returns on a bad key length.
 @ aes_gcm_key_ok AesGcmKey h → b { ^ != 0 # i . h ctl }
 
 @ aes_gcm_key_new ( Vec u ) key → AesGcmKey {
     : i klen ( vec_len [u] key )
-    ? & != klen 16 != klen 32 { ^ @ AesGcmKey { # s 0 } } {}
+    ? & != klen 16 != klen 32 { ^ @ AesGcmKey { ( shared_null [AesGcmKeyImpl] ) } } {}
     : i nr ( __aes_nr key )
     : ( Vec u ) rk ( __aes_expand key )
     // One scratch block: the cipher's 8 words, then the all-zero input
@@ -773,7 +770,7 @@ $ `stdlib/core/rcbox.nu`
     : *u skp ( vec_data [u] skey )
     ( __aes_ct64_enc4 zb hb # s skp nr q )
     ( nurl_memcpy # s + # i skp ( __hsub_at nr ) # s hb 16 )
-    ^ @ AesGcmKey { # s ( rcbox_new [AesGcmKeyImpl] @ AesGcmKeyImpl { skey nr } ) }
+    ^ @ AesGcmKey { ( shared_new [AesGcmKeyImpl] @ AesGcmKeyImpl { skey nr } ) }
 }
 
 // Let go of `k` now rather than at the end of its owner's scope.

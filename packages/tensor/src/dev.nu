@@ -308,11 +308,11 @@ unsafe @ dtensor_gather GpuKit kit DTensor a i axis ( Vec i ) idx â†’ ?DTensor {
     ? > nidx 0 {} { ^ @ ?DTensor { F } }
     : i axin ( _ti . a shape axis )
     ? ( __dt_idx_ok idx axin ) {} { ^ @ ?DTensor { F } }
-    : *u cells ( nurl_alloc 16 )
+    : ( Vec u ) cells__b ( vec_zeroed [u] 16 )
+    : *u cells ( vec_data [u] cells__b )
     ( __dt_axview . a shape axis cells # *u + # i cells 8 )
     : i outer ( nurl_peek cells 0 )
     : i inner ( nurl_peek cells 1 )
-    ( nurl_free cells )
     : ( Vec i ) oshape ( _shape_copy . a shape )
     ( vec_set [i] oshape axis nidx )
     : DTensor o ( __dt_new kit a oshape * * outer nidx inner )
@@ -342,11 +342,11 @@ unsafe @ dtensor_scatter GpuKit kit DTensor a i axis ( Vec i ) idx DTensor upd â
         ? == ( _ti . upd shape k ) want {} { ^ @ ?DTensor { F } }
         = k + k 1
     }
-    : *u cells ( nurl_alloc 16 )
+    : ( Vec u ) cells__b ( vec_zeroed [u] 16 )
+    : *u cells ( vec_data [u] cells__b )
     ( __dt_axview . a shape axis cells # *u + # i cells 8 )
     : i outer ( nurl_peek cells 0 )
     : i inner ( nurl_peek cells 1 )
-    ( nurl_free cells )
     : DTensor o ( __dt_new kit a ( _shape_copy . a shape ) ( dtensor_size a ) )
     : GkBuf ixb ( gk_dbuf_new kit nidx GK_I64 )
     : ~ b r ( gk_dbuf_upload_i kit ixb idx )
