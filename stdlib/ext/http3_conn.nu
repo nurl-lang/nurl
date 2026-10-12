@@ -441,8 +441,6 @@ $ `stdlib/core/rcbox.nu`
                         ( __h3_stream_error h s bad )
                         ^ F
                     } {}
-                    : ( Vec Header ) old . s headers
-                    ( mem_take old )  // a store through the stream pointer drops nothing
                     = . s headers hs
                     = . s state 1
                 } {

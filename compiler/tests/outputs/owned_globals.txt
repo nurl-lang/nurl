@@ -1,0 +1,9 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+4
+the second name, long enough for the heap
+a new name for the state, long enough for the heap
+4
+41

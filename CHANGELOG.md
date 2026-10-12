@@ -29,8 +29,43 @@ objdet, are released with it, and they have fewer `unsafe` functions than
 under 0.72.0, not more (*Packages*). A package's version is written once:
 `( pkg_version )` reads it from `nurl.toml` at compile time (*Added*).
 
+Nothing a program keeps has to be released by hand any more, in safe code
+or in `unsafe`. A field written through a pointer replaces what it held, a
+module global owns its `String`, `Vec`, struct, option or handle, a C
+function that writes its result through a pointer takes an `inout`
+parameter, and a `( Box T )` keeps a record's address put (*Added*,
+*Changed*). Of the 164 package functions that allocated, released or
+claimed (`mem_take`) memory themselves, 14 still do — nwasm's frame pool
+and JIT records, the two guest programs that stress the wasm heap,
+gRPC's write-back of a call record into its table and template's claim
+of its rendered output — and the 28 packages that did the rest are
+released without it (*Packages*). Making module
+state and raw-pointer records manage themselves found nine more holes,
+closed (h195–h203, *Fixed*). The compiler compiles itself in 17 % fewer
+instructions and 10 % less time than before this work (*Performance*).
+
 ### Added
 
+- **Module globals that own their value** (spec §3.4, docs/MEMORY.md
+  "Module globals"). `: ~ T g 0` for a `T` that owns something — a
+  `String`, a `Vec`, a struct of them, an option, a closure, a library
+  handle — starts as the zero value, an assignment to it or to one of its
+  fields drops what it replaces, and the program's exit releases it. Every
+  thread can reach a global, so only an `unsafe` function reads or writes
+  one that owns something, and the rest of the program calls safe
+  accessors around it. An option global (`: ~ ?Model g 0`) is `F` until
+  set, and `= g @ ?Model { F }` lets the old value go. They replace the
+  hand-allocated blocks kept as addresses, and the handles kept as words
+  (`arc_into_word`), that held module state.
+- **`( mem_addr g )`** (`unsafe`): a `*T` to a mutable global's storage —
+  a struct global's fields for a helper, or an address a foreign call or
+  an atomic operation writes through.
+- **`inout` parameters on foreign functions** (spec §7.2, grammar
+  `ffi_param`): ``& `cuda` @ cuMemGetInfo_v2 inout i free inout i total →
+  i32`` passes the address of a mutable binding, so a C function that
+  writes its result through a pointer needs no allocated cell.
+- **`box_null`** (stdlib/core/box.nu): a `( Box T )` that holds nothing
+  yet, for a slot filled later; dropping it releases nothing.
 - **`( pkg_version )`** is the `version` of the package the source file
   belongs to, from the `[package]` table of the nearest `nurl.toml` above
   the file, as a string literal (spec §6.5). The lexer hands the form on
@@ -49,6 +84,20 @@ under 0.72.0, not more (*Packages*). A package's version is written once:
 
 ### Changed
 
+- **A field written through a pointer is replaced** (docs/MEMORY.md
+  §7.4). `= . p f v`, `p` a `*S`, drops what `f` held, as every other `=`
+  drops what it overwrites: an `unsafe` setter over a handle's state is
+  the store alone, and the `: T old . p f ( mem_take old )` pair that
+  preceded each such store — 92 in the standard library and the packages
+  — is gone. The memory has to hold a value of the field's type, and the
+  compiler sees to the ways it might not: through a pointer bound to an
+  allocation in the same function a store fills rather than replaces; an
+  allocation cast to a pointer to a struct that owns something is zeroed;
+  a value claimed out of a place (`mem_take`, or `. p f` handed to a
+  consumer) leaves a zero behind; and a value written back into the slot
+  it was read from replaces nothing. An element written through a pointer
+  (`= . p i v`) is still raw — past a container's length nothing lives.
+  Code that kept the `mem_take` pair stays correct.
 - **`mem_forget`, `mem_take`, `mem_put_back` and the `rcbox` primitives
   (`rcbox_new`, `rcbox_zero`, `rcbox_share`, `rcbox_release`) are
   `unsafe` to call**, as spec §3.3d always said. In safe code `mem_forget`
@@ -92,6 +141,37 @@ under 0.72.0, not more (*Packages*). A package's version is written once:
 
 ### Fixed
 
+- **Nine more holes are closed** (h195–h203), found by making module
+  state and raw-pointer records manage themselves:
+  - *A closure stored into a struct field or a slice* (h195) kept only a
+    view of a `String` its maker's frame owned and read it after the
+    frame ended. The stored environment owns its captures: a closure
+    environment's descriptor gains a second, owning one (`{ size, drop,
+    clone, trace, own, adopt }`), and `nurl_closure_adopt` /
+    `nurl_closure_own_copy` copy in what the environment only viewed
+    (docs/MEMORY.md §7.5).
+  - *A binding read out of a field* (`: String b . s name`, h196, h197)
+    read freed memory once the field was assigned, here or through an
+    `inout` parameter: the replaced value is handed to that binding,
+    which drops it at its scope's end, instead of being dropped under it.
+  - *An option or a result replaced in place* — a field (h198), a whole
+    `inout ?T` parameter or an owned option global (h199) — leaked what it
+    held: the store drops it, as it does a `String` or a `Vec`.
+  - *A local option moved into an `inout` place* (h200) was still dropped
+    by the local, and *a borrowed parameter assigned over one* (h201) was
+    stored as is: two owners of one value either way. The local moves
+    over; the borrowed parameter is copied in.
+  - *A raw-string global assigned a call's result whose ownership is
+    decided per call* (`= g ( f n )`, or ``= g ? c ( f n ) `-` ``, h202)
+    recorded the fresh string as not its own, and each reassignment
+    leaked the one before. The global takes over the owner the call's
+    guard slot proves, and a value lent back from the global's own buffer
+    (`= g ( keep_or_extend g n )`) is kept rather than freed.
+  - *A mutable string binding declared from a `?` join of views or
+    literals* (`: ~ s r ? c a b`, h203) and advanced like a cursor
+    (`= r ( rest_of r )`) had no owner slot: no fresh string assigned to it
+    was released. It gets the empty owner slot a cursor declared from an
+    identifier or a call already had.
 - **The remaining known holes are closed** (probes h145–h194), each at
   its root:
   - *A raw string handed to a consumer* (h161–h170): a literal, a view, a
@@ -221,8 +301,56 @@ under 0.72.0, not more (*Packages*). A package's version is written once:
 Together, against 0.72.0 compiling the same source: 12 983 M → 12 460 M
 instructions (−4.0 %), 2.76 s → 2.57 s CPU (−7 %, median of nine runs).
 
+- **The compiler's symbol tables hand out interned strings.** A lookup
+  copied the value it found and the caller released the copy — the larger
+  part of each of the millions of lookups a compile makes. Every key and
+  plain value is now stored once, in an arena that lasts the compile
+  (indexed by open addressing, one word a slot, the hash kept beside the
+  bytes), and a lookup hands that copy out as a view that never goes
+  away; a value a table grows in place keeps a buffer of its own and is
+  interned when read. Peak memory is unchanged for an ordinary program
+  (the registry service: 79 MB) and 10 % higher for the self-compile
+  (89 → 98 MB).
+- **Per-declaration error recovery journals nothing**
+  (`nurl_recover_lean`). The compiler recovers from an error in one
+  declaration to report the next; under `nurl_recover` every owned binding
+  and temporary of the compile was registered with the panic journal and
+  every release walked it, for a run that almost never panics. The lean
+  extent skips both: a failing compile reports and exits. Under
+  AddressSanitizer it reclaims exactly as `nurl_recover` does.
+- **The dead-slot elision pass is linear.** It rescanned the rest of the
+  function for every journaled slot; one pass over the function's lines
+  now records every label, store and use it needs.
+
+These three, against the compiler before them, each compiling its own
+source: 12 889 M → 10 730 M instructions (−16.8 %, callgrind; first-level
+cache misses −14 %), 3.88 s → 3.50 s (−10 %, median of fifteen runs
+pinned to one core); compiling the registry service (packages/registry,
+the same source for both): 10 693 M → 9 165 M (−14.3 %), 3.57 s →
+3.33 s (−7 %). Both compilers generate the same code
+for the bench kernels, apart from the two new slots of a closure
+environment's descriptor (http_server's request parser drops the fields
+it replaces, where it claimed each first).
+
 ### Packages
 
+- **28 packages manage no memory by hand where they did**: agora 0.5.5,
+  anomaly 0.35.1, arima 0.5.4, data 0.2.4, embed 0.5.4, f5tts 0.3.4,
+  gpu 0.16.0, gpukit 0.10.1, grad 0.12.0, http-client 0.3.4, image 0.7.6,
+  lingbot-map 0.11.1, lsmdb 0.2.4, map-anything 0.6.1, mermaid-server
+  0.3.4, mlp 0.3.11, nn 0.2.2, nurlbox 0.3.4, nurllama 0.19.0, nwasm
+  2.4.2, onnx 0.11.1, pki-server 0.5.1, ply 0.3.4, redis 0.3.4, swarm-mcp
+  0.30.4, tensor 0.6.4, whisper 3.0.1 and yoloe 0.7.4 —
+  215 hand-written allocations and releases fewer. Module state is an
+  owned global (where it was a hand-allocated block or a handle kept as a
+  word), a record whose address must stay put is a `( Box T )`, a buffer
+  a C function fills is a `( Vec u )`, a C result written through a
+  pointer is an `inout` parameter, and the `mem_take` before each field
+  store through a pointer is gone. gpu 0.16.0 (the CUDA wrappers return
+  `Vec`s and `String`s, `cpu_malloc` / `cpu_free` are gone) and grad
+  0.12.0 (`grad_of` lends its result from the tape) change their API, and
+  their dependents' requirements are raised. Each changelog says what
+  changed.
 - **Every hand-written `rcbox` handle is an `Arc` handle** (`Cli` and
   `HttpApp`, whose state holds closures that may capture the handle, an
   `Rc`, whose cycles are collected): 79 handle types in 40 packages. Their

@@ -1140,8 +1140,6 @@ $ `stdlib/core/rcbox.nu`
     ? > . s refs 0 { ^ } {}
     ? == . s kind ( sock_kind_udp ) {
         // The socket gives its mailbox up (dropped here).
-        : UdpMailbox gone . s udp
-        ( mem_take gone )
         = . s udp @ UdpMailbox { # s 0 }
     } {}
     ? == . s kind ( sock_kind_listener ) {

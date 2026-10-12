@@ -421,7 +421,9 @@ A function or method declaration may carry a leading `unsafe` prefix
 - call a standard-library function whose name begins with `__` (the
   library's own machinery, which trusts the control blocks and buffers
   it is handed);
-- call a foreign (`&`) function declared outside the standard library.
+- call a foreign (`&`) function declared outside the standard library;
+- read or write a mutable global that owns something (§3.4), or take a
+  global's address with `mem_addr`.
 
 A string (`s`) in safe code is therefore NUL-terminated or null: nothing
 safe can turn a raw pointer into one. A null string reads as the empty
@@ -479,6 +481,24 @@ value at compile time (`const_eval_int`):
 
 A mutable global (`: ~ type Name value`) may be reassigned at runtime
 with `= Name expr` (§5.2).
+
+A mutable global may also have a type that owns something — a `String`, a
+`Vec`, a struct of them, an option `?T`, a closure, a library handle — with
+the initialiser `0`. It starts as that type's zero value (which drops as
+nothing) and owns what it holds: an assignment to it or to one of its
+fields drops what it replaces, and a read borrows (docs/MEMORY.md §1,
+Module globals). Every thread can reach it, so only an `unsafe` function
+(§3.3d) reads or writes it.
+
+```
+: ~ ( Vec String ) g_names 0
+: ~ ?Model g_model 0          // F until a model is loaded
+unsafe @ model_drop → v { = g_model @ ?Model { F } }
+```
+
+`( mem_addr g )` (`unsafe`) is a `*T` to the mutable global `g` of type
+`T` — a struct global's fields reached through a pointer, or an address a
+foreign function or an atomic operation writes through.
 
 ## 4. Types
 
@@ -1797,6 +1817,18 @@ conventions:
 `in` / `inout` / `sink` are contextual keywords — recognised only as a
 parameter's leading token. `inout` is additionally banned as a
 parameter name.
+
+A foreign (`&`) declaration may mark a parameter `inout` too: the C
+function takes a pointer to a `T` it writes a result through, and the
+argument is a mutable binding whose address is passed — nothing is
+allocated for the result.
+
+```
+& `libcuda` @ cuMemGetInfo_v2 inout i avail inout i total → i32
+: ~ i avail 0
+: ~ i total 0
+: i32 rc ( cuMemGetInfo_v2 avail total )
+```
 
 ### 7.3 Return ownership
 

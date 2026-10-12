@@ -307,8 +307,6 @@ $ `stdlib/core/slice.nu`
     = . c fd 0
     // the closed TLS connection leaves the transport (a store through the
     // pointer drops nothing, so it is taken out first)
-    : TlsConn gone . c tc
-    ( mem_take gone )
     = . c tc @ TlsConn { # s 0 }
 }
 

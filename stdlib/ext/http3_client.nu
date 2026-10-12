@@ -386,8 +386,6 @@ $ `stdlib/core/rcbox.nu`
                     ? < st 200 {
                         // the interim fields go; a store through the
                         // stream pointer drops nothing, so take them first
-                        : ( Vec Header ) interim . s headers
-                        ( mem_take interim )
                         = . s headers ( vec_new [Header] )
                     } {
                         = . s status st

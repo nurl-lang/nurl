@@ -466,14 +466,10 @@ $ `stdlib/core/rcbox.nu`
 // A field the record replaces is taken out of it first and dropped here:
 // a store through the task pointer does not release what it overwrites.
 @ __mcp_task_set_message * McpTask t s msg → v {
-    : String old . t status_message
-    ( mem_take old )
     = . t status_message ( string_from msg )
 }
 
 @ __mcp_task_set_input_requests * McpTask t sink Json requests → v {
-    : Json old . t input_requests
-    ( mem_take old )
     = . t input_requests requests
 }
 
@@ -498,8 +494,6 @@ $ `stdlib/core/rcbox.nu`
 @ mcp_task_complete s tp sink Json result → v {
     : *McpTask t # *McpTask tp
     = . t status mcp_task_completed
-    : Json old . t result
-    ( mem_take old )
     = . t result result
     // A completed task has nothing outstanding.
     ( __mcp_task_set_input_requests t ( json_obj_new ) )
@@ -510,8 +504,6 @@ $ `stdlib/core/rcbox.nu`
 @ mcp_task_fail_error s tp sink Json error → v {
     : *McpTask t # *McpTask tp
     = . t status mcp_task_failed
-    : Json old . t error
-    ( mem_take old )
     = . t error error
     ( __mcp_task_set_input_requests t ( json_obj_new ) )
     ( __mcp_task_touch t )

@@ -1,0 +1,10 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_owned_global_safe.nu:8:38: error: the global 'g_name' owns what it holds (a String, a Vec, a handle, a struct of them), and every thread can reach it: a read here could see a value another thread is replacing and dropping. Reach it from an 'unsafe' function ('unsafe @ name …'), which vouches that the program does not race on it, and give the rest of the program a safe accessor.
+@ peek → i { ^ ( string_len g_name ) }
+                                     ^
+compiler/tests/diag_owned_global_safe.nu:10:29: error: the global 'g_name' owns what it holds (a String, a Vec, a handle, a struct of them), and every thread can reach it: a read here could see a value another thread is replacing and dropping. Reach it from an 'unsafe' function ('unsafe @ name …'), which vouches that the program does not race on it, and give the rest of the program a safe accessor.
+@ poke s n → v { = g_name ( string_from n ) }
+                            ^
+error: aborting due to 2 previous errors
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

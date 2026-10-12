@@ -1146,10 +1146,6 @@ $ `stdlib/core/rcbox.nu`
 // Replace the row index: the old vectors leave the table (dropped here),
 // the new ones move in.
 @ __csv_set_rows * CSVTableImpl t sink ( Vec i ) starts sink ( Vec i ) lens → v {
-    : ( Vec i ) old_starts . t row_starts
-    ( mem_take old_starts )
-    : ( Vec i ) old_lens . t row_lens
-    ( mem_take old_lens )
     = . t row_starts starts
     = . t row_lens lens
 }
@@ -1501,8 +1497,6 @@ $ `stdlib/core/rcbox.nu`
         // typed_floats whether or not we ran the narrow path
         // (mismatched cache size means a prior filter already
         // broke alignment; cleared run means it's now consumed).
-        : ( Vec f ) stale . t typed_floats
-        ( mem_take stale )  // the cache leaves the table (dropped here)
         = . t typed_floats ( vec_new [f] )
         = . t typed_float_col - 0 1
     } {}

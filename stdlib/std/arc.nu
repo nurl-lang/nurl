@@ -158,10 +158,7 @@
 @ arc_set [A] ( Arc A ) r A x → v {
     ( mem_ts_frozen_only [( Arc A )] arc_set )
     : *( ArcImpl A ) impl # *( ArcImpl A ) . r ctl
-    // The old value is dropped.
-    : A old . impl value
-    ( mem_take old )
-    = . impl value x
+    = . impl value x  // drops the old value
 }
 
 @ arc_ptr [A] ( Arc A ) r → *A {

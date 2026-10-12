@@ -115,6 +115,43 @@ When such a call sits at the tail of its scope it is redundant, and
 `--lint` reports it as `[redundant-free]`. An earlier release (more code
 follows it) is legitimate; it lowers peak memory.
 
+### Module globals
+
+A mutable global whose type owns something — a `String`, a `Vec`, a
+struct of them, an option, a closure, a library handle — owns its value
+the way an `inout` parameter's caller does:
+
+- it starts as the zero value, which drops as nothing;
+- an assignment to it, or to one of its fields, drops what it replaces,
+  and an owned value assigned to it moves in;
+- a read borrows: `: T v g` is a view, `( f g )` lends it.
+
+Every thread can reach a global, so only an `unsafe` function reads or
+writes one that owns something: it vouches that no other thread replaces
+the value while it is in use (a lock held, one thread only). The rest of
+the program calls safe accessors around it. A zero `Vec` or handle holds
+nothing to use yet, so a global that is filled on first use keeps a flag
+beside it:
+
+```nurl
+: ~ ( Vec String ) g_names 0
+: ~ b g_names_made F
+
+unsafe @ name_add s n → v {
+    ? ! g_names_made { = g_names ( vec_new [String] ) = g_names_made T } {}
+    ( vec_push [String] g_names ( string_from n ) )
+}
+```
+
+A value that is there or not is an option global (`: ~ ?Model g_model 0`,
+zero is `F`): `= g_model @ ?Model { F }` lets the old one go.
+`( mem_addr g )` (`unsafe`) is a `*T` to any mutable global: a struct
+global's fields for an `unsafe` helper, or an address a foreign call or
+an atomic operation writes through. A raw-string global (`: ~ s g ```)
+owns its text, as a mutable string binding does: a fresh string assigned
+to it — from a call that hands it over on every path, or on this call
+only (its guard slot says so, h202) — is released by the next assignment.
+
 ### Parameter passing conventions
 
 A parameter has one of three conventions:
@@ -128,9 +165,13 @@ A parameter has one of three conventions:
 **`inout`.** The argument must be a mutable (`: ~`) binding or a field of
 one (`. obj field`), and the callee's writes land in the caller's storage.
 A value assigned through an `inout` parameter replaces the caller's and
-drops what it overwrites. A field the callee hands to a consumer, or takes
-with `mem_take`, is emptied in the caller's struct, so nothing is released
-twice. Reassigning an `inout` raw string (`s`) is an error, because the
+drops what it overwrites — a `String`, a `Vec`, a struct, and an option or
+a result that owns something alike (h199). What is assigned becomes the
+caller's: a local the callee owns moves over (its own drop no longer runs,
+h200), and a parameter the callee only borrows is copied in, since its
+caller still owns it (h201). A field the callee hands to a consumer, or
+takes with `mem_take`, is emptied in the caller's struct, so nothing is
+released twice. Reassigning an `inout` raw string (`s`) is an error, because the
 callee cannot know whether the caller's old string is owned.
 
 ```nurl
@@ -683,6 +724,30 @@ more; all are closed, each a probe CI now holds (h142–h194):
   result the call handed over was never released. It is freed right after
   the copy.
 
+Making module state and raw-pointer records manage themselves (field
+stores through a pointer that replace, module globals that own) found
+nine more, closed the same way (h195–h203):
+
+- a closure stored into a struct field or a slice kept only a view of a
+  `String` its maker's frame owned, and read it after the frame ended:
+  the stored environment now owns its captures (§7.5);
+- a binding read out of a field (`: String b . s name`) read freed memory
+  once the field was assigned, here or through an `inout` parameter: the
+  replaced value is handed to that binding instead of dropped;
+- an option or a result field, and a whole `inout` option, assigned over
+  without dropping what it held (§1);
+- a local option moved into an `inout` place, and a borrowed parameter
+  assigned over one, each leaving two owners of one value (§1);
+- a raw-string global assigned the result of a call that answers
+  ownership per call — or a `?` join of one — recorded the fresh string
+  as not its own, and each reassignment leaked the one before: the global
+  takes over the owner the call's guard slot proves (§1);
+- a mutable string binding declared from a `?` join of views or literals
+  (`: ~ s r ? c a b`) and then advanced like a cursor (`= r ( rest_of
+  r )`) had no owner slot, so no fresh string assigned to it was ever
+  released: it gets the empty one a cursor declared from an identifier
+  or a call already had.
+
 The rules that carry it:
 
 - **An owned value moves.** Storing it into an aggregate, an Option or a
@@ -895,6 +960,18 @@ only in `unsafe` code, which releases them with `nurl_free`. Nothing else
 is managed by hand: `string_free`, `vec_free` and the other release calls
 on compiler-managed values and handles are optional early releases.
 
+Code that reaches for raw memory rarely needs to:
+
+- **State kept for the program's life** is a module global (§1).
+- **A record whose address must stay put** while its container grows is a
+  `( Box T )` in the container (`box_ptr` is its address).
+- **A buffer a C function fills** is a `( Vec u )` (`vec_data`, then
+  `vec_set_len`).
+- **A C function that writes a result through a pointer** declares the
+  parameter `inout` (`& \`lib\` @ cuMemGetInfo_v2 inout i free inout i
+  total → i32`): the call passes the address of a mutable binding, and
+  nothing is allocated for the result.
+
 An empty owned string allocates nothing. Every empty copy (`nurl_strdup`
 of the empty literal, an empty `nurl_strdup_n`, slice or concatenation)
 is the runtime's one shared empty string, which never goes away:
@@ -945,13 +1022,25 @@ Two rules make this sound without reference counting:
   drops it.
 
 Every environment starts with a pointer to a compiler-emitted descriptor
-`{ size, drop, clone }`. `nurl_closure_drop` (null-safe) is what every
+`{ size, drop, clone, … }` (below). `nurl_closure_drop` (null-safe) is what every
 owner calls. Releasing an environment by hand is a compile error.
 `unsafe` code that hands an environment to C and needs it past the call
 keeps a `nurl_closure_clone` and releases that with `nurl_closure_drop`.
 
 A closure run by a thread or fiber moves the bindings it captures into its
 environment (§6.2); share handles are captured as a share of their own.
+
+**A closure stored into a struct or a slice owns what it captured.** A
+closure made in a function views the `String`s, `Vec`s and handles it
+captures: the function still owns them and drops them at its end. Stored
+into a struct field (a literal's or by `=`, through a pointer too) or a
+slice of closures, the closure may outlive that function, so the stored
+environment copies in what it only viewed: `nurl_closure_adopt` (a
+literal's environment, in place) and `nurl_closure_own_copy` (a binding's,
+in a copy) switch it to a second descriptor, `own`, whose `drop` and
+`clone` cover those captures too (h195). The descriptor is
+`{ size, drop, clone, trace, own, adopt }`; `own` and `adopt` are null for
+an environment that already owns everything it captured.
 
 **Closure parameters are always borrowed.** A call through a closure value
 cannot see what the body does with its arguments, so the contract is
@@ -1096,6 +1185,41 @@ are the standard library's own.
 there only is a view, never dropped by the callee. A field of an owned
 local stored there is copied. A parameter's field stored there is taken
 over from the caller.
+
+**A field written through a pointer is replaced.** `= . p f v`, `p` a
+`*S`, drops what `f` held, as every other `=` drops what it overwrites:
+an `unsafe` setter over a handle's state is the store alone.
+
+```nurl
+unsafe @ meta_set_feats Meta h ( Vec String ) feats → v {
+    : *MetaImpl m ( _Meta_ptr h )
+    = . m feats feats              // the old list is dropped here
+}
+```
+
+The memory must hold a value of the field's type, and the compiler sees
+to the three ways it might not:
+
+- **Fresh memory is filled, not replaced.** Through a pointer bound to an
+  allocation in the same function (`nurl_alloc`, `nurl_malloc`,
+  `nurl_zalloc`, `malloc`, `calloc`, `alloc`, `zalloc`, through a cast
+  too) a field store drops nothing.
+- **Memory handed out for a struct that owns something is zeroed** when
+  the allocation is cast to a pointer to it (`# *S ( nurl_alloc Z S )`),
+  and a zero value drops as nothing: a helper that fills the struct
+  through a parameter replaces zeros. (`nurl_zalloc` / `arc_zero` memory
+  is zero already.)
+- **A value claimed out of a place leaves a zero behind.** `: T x . p f`
+  then `( mem_take x )` empties `p f`, as handing `. p f` to a consumer
+  (`( vec_free [u] . p buf )`) does: a later store there replaces nothing
+  `x` owns.
+
+A value written back into the slot it was read from (`mem_put_back`, or
+`: item . p k … = . p k item`) replaces nothing either: the slot still
+holds it. An **element** written through a pointer (`= . p i v`) is a slot
+of memory a container manages, past whose length nothing lives: what it
+held is not dropped — `vec_push` writes there, and `vec_set` claims the
+old element (`mem_take`) before writing the new one.
 
 **SIMD.** A function taking or returning a SIMD vector by value is always
 inlined, so callers and callees agree on how the vector is passed.

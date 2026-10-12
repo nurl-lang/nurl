@@ -258,8 +258,6 @@ $ `stdlib/core/rcbox.nu`
     ? == # i c 0 { ^ } {}
     ? ! . c used { ^ } {}
     // The slot gives its Tcb up (dropped here) and keeps a null one.
-    : Tcb gone . c tcb
-    ( mem_take gone )
     = . c tcb @ Tcb { # s 0 }
     = . c used F
 }

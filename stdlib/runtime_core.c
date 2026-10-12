@@ -2952,11 +2952,17 @@ NURL_TLS_WRAP void nurl_ret_hown_set(long long own) { NURL_TLS_ST(nurl__ret_hown
  * a borrowed closure stored into an owning place (a struct field, another
  * closure's captures, a spawned fiber) is copied with nurl_closure_clone.
  * A closure that captures nothing has a null env; both calls accept it. */
-typedef struct {
+typedef struct NurlCenvVt {
     long long size;
     void (*drop)(void *env);
     void (*clone)(void *env);
     void (*trace)(void *env, void *vis);   /* the owned handles, for the cycle collector */
+    /* An env that only views some of its captures (a String, a Vec, a handle
+     * the enclosing frame still owns and drops): `own` describes the same
+     * env owning every one of them, and `adopt` copies the viewed ones in.
+     * Both null when the env owns all it captures. */
+    const struct NurlCenvVt *own;
+    void (*adopt)(void *env);
 } NurlCenvVt;
 
 void nurl_closure_drop(void *env) {
@@ -2972,6 +2978,26 @@ void *nurl_closure_clone(void *env) {
     void *copy = nurl_alloc(vt->size);
     memcpy(copy, env, (size_t)vt->size);
     if (vt->clone) vt->clone(copy);
+    return copy;
+}
+
+/* A closure stored into an owning place — a struct field, a slice, a
+ * value that may outlive the frame it was made in — owns its captures
+ * (docs/MEMORY.md §7.5): the env copies in what it only viewed and becomes
+ * the owning descriptor's. In place for an env nothing else holds (a
+ * literal stored straight there); nurl_closure_own_copy for one a binding
+ * keeps. */
+void nurl_closure_adopt(void *env) {
+    if (!env) return;
+    NurlCenvVt *vt = *(NurlCenvVt **)env;
+    if (!vt || !vt->own) return;
+    if (vt->adopt) vt->adopt(env);
+    *(const NurlCenvVt **)env = vt->own;
+}
+
+void *nurl_closure_own_copy(void *env) {
+    void *copy = nurl_closure_clone(env);
+    nurl_closure_adopt(copy);
     return copy;
 }
 
@@ -4854,6 +4880,52 @@ NURL_TLS_FN long long nurl_recover(void *fn_ptr, void *env_ptr) {
     return 1;
 }
 
+/* `nurl_recover` for a process that reports a panic and ends soon after —
+ * the compiler, whose per-declaration error recovery is one of these: the
+ * extent journals nothing, so a panic inside it skips its frames without
+ * dropping what they owned, and the journal's bookkeeping (a registration
+ * per owned binding and temporary, a hash walk per free) is spared on every
+ * allocation of a run that never panics. Under AddressSanitizer — whose leak
+ * check sees the failing run too — it reclaims exactly as nurl_recover
+ * does. (An enclosing nurl_recover extent still journals and drains as
+ * before: this frame starts no journal of its own.) */
+#if defined(NURL__SC_ASAN)
+NURL_TLS_FN long long nurl_recover_lean(void *fn_ptr, void *env_ptr) {
+    return nurl_recover(fn_ptr, env_ptr);
+}
+#else
+__attribute__((noinline))
+static void nurl__recover_lean_leave(NurlPanicFrame *frame) {
+    nurl__panic_top = frame->prev;
+    nurl__jrnl_truncate(frame->jmark);
+}
+__attribute__((noinline))
+static void nurl__recover_lean_enter(NurlPanicFrame *frame) {
+    frame->jmark = nurl__jrnl_mark();
+    frame->prev  = nurl__panic_top;
+    nurl__panic_top = frame;
+}
+__attribute__((noinline))
+static void nurl__recover_lean_caught(NurlPanicFrame *frame) {
+    nurl__recover_lean_leave(frame);
+    nurl_free(nurl__panic_last_msg);
+    nurl__panic_last_msg = frame->msg ? frame->msg : strdup("(no panic message)");
+}
+NURL_TLS_FN long long nurl_recover_lean(void *fn_ptr, void *env_ptr) {
+    if (!fn_ptr) return 0;
+    NurlPanicFrame frame;
+    frame.msg = NULL;
+    nurl__recover_lean_enter(&frame);
+    if (setjmp(frame.jb) == 0) {
+        ((void (*)(void *))fn_ptr)(env_ptr);
+        nurl__recover_lean_leave(&frame);
+        return 0;
+    }
+    nurl__recover_lean_caught(&frame);
+    return 1;
+}
+#endif
+
 /* Captured panic message from the most recent recover-with-panic on
  * this thread. BORROWED — overwritten by the next panic. */
 NURL_TLS_FN const char *nurl_panic_last_msg(void) {
@@ -4911,6 +4983,10 @@ NURL_TLS_FN long long nurl_recover(void *fn_ptr, void *env_ptr) {
     if (!fn_ptr) return 0;
     ((void (*)(void *))fn_ptr)(env_ptr);
     return 0;
+}
+
+NURL_TLS_FN long long nurl_recover_lean(void *fn_ptr, void *env_ptr) {
+    return nurl_recover(fn_ptr, env_ptr);
 }
 
 NURL_TLS_FN const char *nurl_panic_last_msg(void) { return ""; }
