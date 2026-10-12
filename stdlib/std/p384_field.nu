@@ -91,12 +91,12 @@ $ `stdlib/std/bytes.nu`
 // ── the Montgomery scratch ────────────────────────────────────────
 // One engine, two instantiations: the modulus, its −md⁻¹ mod 2^64, and
 // R² mod md ride in the scratch, plus every temporary the layers above
-// need. Ownership mirrors std/p256_field: the field ops own acc/diff,
-// the point layer owns g0..g5, the inversion chain owns gp — no `_d`
+// need. Ownership mirrors std/p256_field: the field ops own diff (the
+// multiply, add and subtract keep their words in locals), the point layer owns g0..g5, the inversion chain owns gp — no `_d`
 // worker calls another that wants the same register.
 : P384Scr {
     ( Vec i ) md i n0 ( Vec i ) r2
-    ( Vec i ) acc ( Vec i ) diff
+    ( Vec i ) diff
     ( Vec i ) g0 ( Vec i ) g1 ( Vec i ) g2
     ( Vec i ) g3 ( Vec i ) g4 ( Vec i ) g5
     ( Vec i ) gp
@@ -105,7 +105,7 @@ $ `stdlib/std/bytes.nu`
 @ __p384_scr_make ( Vec i ) md i n0 ( Vec i ) rsq → P384Scr {
     ^ @ P384Scr {
         md n0 rsq
-        ( _magn6 8 ) ( _mag6 )
+        ( _mag6 )
         ( _mag6 ) ( _mag6 ) ( _mag6 )
         ( _mag6 ) ( _mag6 ) ( _mag6 )
         ( _mag6 )
@@ -181,111 +181,221 @@ $ `stdlib/std/bytes.nu`
 // ── the engine ────────────────────────────────────────────────────
 
 // dst = a·b·R⁻¹ mod md — Montgomery CIOS, 6 limbs, radix 2^64. The
-// accumulator lives in scr.acc (8 words: 6 + 2 CIOS overflow words),
-// the conditional-subtract staging in scr.diff, so `dst` may alias a
-// and/or b — nothing is written to it until the final masked merge.
+// operands, the modulus and the 8-word accumulator (6 + 2 CIOS overflow
+// words) are plain locals and the six rounds are written out, so the whole
+// product stays in registers: an accumulator in memory (scr.acc) had to be
+// stored and reloaded on every round, since nothing told the optimiser
+// `dst`, `a` and `b` do not overlap it (std/p256_field.nu's _p256_mul_d
+// made the same move). `dst` may alias a and/or b — both are read into locals
+// before anything is written to it, in the final masked merge.
 @ __m6_mul P384Scr scr ( Vec i ) dst ( Vec i ) a ( Vec i ) b → v {
     : *i ap ( vec_data [i] a )
     : *i bp ( vec_data [i] b )
     : *i mp ( vec_data [i] . scr md )
-    : *i tp ( vec_data [i] . scr acc )
     : u64 n0 # u64 . scr n0
-    : ~ i z 0
-    ~ < z 8 { = . tp z 0 = z + z 1 }
-    : ~ i rnd 0
-    ~ < rnd 6 {
-        // t += a · b[rnd]
-        : u64 bi # u64 . bp rnd
-        : ~ u64 cr 0
-        : ~ i j 0
-        ~ < j 6 {
-            : u64 aj # u64 . ap j
-            : u64 tj # u64 . tp j
-            : u64 lo ( nurl_mac_lo aj bi tj cr )
-            = cr ( nurl_mac_hi aj bi tj cr )
-            = . tp j # i lo
-            = j + j 1
-        }
-        : u64 t6 # u64 . tp 6
-        = . tp 6 # i ( nurl_addc_lo t6 cr 0 )
-        = . tp 7 # i + # u64 . tp 7 ( nurl_addc_hi t6 cr 0 )
-        // one Montgomery reduction: m = t0·n0; t = (t + m·md) / 2^64.
-        // The low word of t0 + m·md[0] is 0 by construction — that IS
-        // the reduction — so only its carry survives, and the divide by
-        // 2^64 is fused into the j−1 store.
-        : u64 m * # u64 . tp 0 n0
-        = cr ( nurl_mac_hi m # u64 . mp 0 # u64 . tp 0 0 )
-        : ~ i k 1
-        ~ < k 6 {
-            : u64 mk # u64 . mp k
-            : u64 tk # u64 . tp k
-            : u64 lo ( nurl_mac_lo m mk tk cr )
-            = cr ( nurl_mac_hi m mk tk cr )
-            = . tp - k 1 # i lo
-            = k + k 1
-        }
-        : u64 t6b # u64 . tp 6
-        = . tp 5 # i ( nurl_addc_lo t6b cr 0 )
-        = . tp 6 # i + # u64 . tp 7 ( nurl_addc_hi t6b cr 0 )
-        = . tp 7 0
-        = rnd + rnd 1
-    }
-    // t[0..5] + top word t[6]: value < 2·md — one conditional subtract.
-    : *i dp ( vec_data [i] . scr diff )
+    : u64 a0 # u64 . ap 0
+    : u64 a1 # u64 . ap 1
+    : u64 a2 # u64 . ap 2
+    : u64 a3 # u64 . ap 3
+    : u64 a4 # u64 . ap 4
+    : u64 a5 # u64 . ap 5
+    : u64 m0 # u64 . mp 0
+    : u64 m1 # u64 . mp 1
+    : u64 m2 # u64 . mp 2
+    : u64 m3 # u64 . mp 3
+    : u64 m4 # u64 . mp 4
+    : u64 m5 # u64 . mp 5
+    : ~ u64 t0 0 : ~ u64 t1 0 : ~ u64 t2 0 : ~ u64 t3 0
+    : ~ u64 t4 0 : ~ u64 t5 0 : ~ u64 t6 0 : ~ u64 t7 0
+    // ── round 0: t += a·b0, then one Montgomery reduction ──
+    : u64 b0 # u64 . bp 0
+    : ~ u64 c0 0
+    : u64 p00 ( nurl_mac_lo a0 b0 t0 c0 ) = c0 ( nurl_mac_hi a0 b0 t0 c0 ) = t0 p00
+    : u64 p01 ( nurl_mac_lo a1 b0 t1 c0 ) = c0 ( nurl_mac_hi a1 b0 t1 c0 ) = t1 p01
+    : u64 p02 ( nurl_mac_lo a2 b0 t2 c0 ) = c0 ( nurl_mac_hi a2 b0 t2 c0 ) = t2 p02
+    : u64 p03 ( nurl_mac_lo a3 b0 t3 c0 ) = c0 ( nurl_mac_hi a3 b0 t3 c0 ) = t3 p03
+    : u64 p04 ( nurl_mac_lo a4 b0 t4 c0 ) = c0 ( nurl_mac_hi a4 b0 t4 c0 ) = t4 p04
+    : u64 p05 ( nurl_mac_lo a5 b0 t5 c0 ) = c0 ( nurl_mac_hi a5 b0 t5 c0 ) = t5 p05
+    : u64 s06 ( nurl_addc_lo t6 c0 0 )
+    = t7 + t7 ( nurl_addc_hi t6 c0 0 )
+    = t6 s06
+    : u64 q0 * t0 n0
+    = c0 ( nurl_mac_hi q0 m0 t0 0 )
+    : u64 r01 ( nurl_mac_lo q0 m1 t1 c0 ) = c0 ( nurl_mac_hi q0 m1 t1 c0 ) = t0 r01
+    : u64 r02 ( nurl_mac_lo q0 m2 t2 c0 ) = c0 ( nurl_mac_hi q0 m2 t2 c0 ) = t1 r02
+    : u64 r03 ( nurl_mac_lo q0 m3 t3 c0 ) = c0 ( nurl_mac_hi q0 m3 t3 c0 ) = t2 r03
+    : u64 r04 ( nurl_mac_lo q0 m4 t4 c0 ) = c0 ( nurl_mac_hi q0 m4 t4 c0 ) = t3 r04
+    : u64 r05 ( nurl_mac_lo q0 m5 t5 c0 ) = c0 ( nurl_mac_hi q0 m5 t5 c0 ) = t4 r05
+    : u64 s05 ( nurl_addc_lo t6 c0 0 )
+    = t6 + t7 ( nurl_addc_hi t6 c0 0 )
+    = t5 s05
+    = t7 0
+    // ── round 1: t += a·b1, then one Montgomery reduction ──
+    : u64 b1 # u64 . bp 1
+    : ~ u64 c1 0
+    : u64 p10 ( nurl_mac_lo a0 b1 t0 c1 ) = c1 ( nurl_mac_hi a0 b1 t0 c1 ) = t0 p10
+    : u64 p11 ( nurl_mac_lo a1 b1 t1 c1 ) = c1 ( nurl_mac_hi a1 b1 t1 c1 ) = t1 p11
+    : u64 p12 ( nurl_mac_lo a2 b1 t2 c1 ) = c1 ( nurl_mac_hi a2 b1 t2 c1 ) = t2 p12
+    : u64 p13 ( nurl_mac_lo a3 b1 t3 c1 ) = c1 ( nurl_mac_hi a3 b1 t3 c1 ) = t3 p13
+    : u64 p14 ( nurl_mac_lo a4 b1 t4 c1 ) = c1 ( nurl_mac_hi a4 b1 t4 c1 ) = t4 p14
+    : u64 p15 ( nurl_mac_lo a5 b1 t5 c1 ) = c1 ( nurl_mac_hi a5 b1 t5 c1 ) = t5 p15
+    : u64 s16 ( nurl_addc_lo t6 c1 0 )
+    = t7 + t7 ( nurl_addc_hi t6 c1 0 )
+    = t6 s16
+    : u64 q1 * t0 n0
+    = c1 ( nurl_mac_hi q1 m0 t0 0 )
+    : u64 r11 ( nurl_mac_lo q1 m1 t1 c1 ) = c1 ( nurl_mac_hi q1 m1 t1 c1 ) = t0 r11
+    : u64 r12 ( nurl_mac_lo q1 m2 t2 c1 ) = c1 ( nurl_mac_hi q1 m2 t2 c1 ) = t1 r12
+    : u64 r13 ( nurl_mac_lo q1 m3 t3 c1 ) = c1 ( nurl_mac_hi q1 m3 t3 c1 ) = t2 r13
+    : u64 r14 ( nurl_mac_lo q1 m4 t4 c1 ) = c1 ( nurl_mac_hi q1 m4 t4 c1 ) = t3 r14
+    : u64 r15 ( nurl_mac_lo q1 m5 t5 c1 ) = c1 ( nurl_mac_hi q1 m5 t5 c1 ) = t4 r15
+    : u64 s15 ( nurl_addc_lo t6 c1 0 )
+    = t6 + t7 ( nurl_addc_hi t6 c1 0 )
+    = t5 s15
+    = t7 0
+    // ── round 2: t += a·b2, then one Montgomery reduction ──
+    : u64 b2 # u64 . bp 2
+    : ~ u64 c2 0
+    : u64 p20 ( nurl_mac_lo a0 b2 t0 c2 ) = c2 ( nurl_mac_hi a0 b2 t0 c2 ) = t0 p20
+    : u64 p21 ( nurl_mac_lo a1 b2 t1 c2 ) = c2 ( nurl_mac_hi a1 b2 t1 c2 ) = t1 p21
+    : u64 p22 ( nurl_mac_lo a2 b2 t2 c2 ) = c2 ( nurl_mac_hi a2 b2 t2 c2 ) = t2 p22
+    : u64 p23 ( nurl_mac_lo a3 b2 t3 c2 ) = c2 ( nurl_mac_hi a3 b2 t3 c2 ) = t3 p23
+    : u64 p24 ( nurl_mac_lo a4 b2 t4 c2 ) = c2 ( nurl_mac_hi a4 b2 t4 c2 ) = t4 p24
+    : u64 p25 ( nurl_mac_lo a5 b2 t5 c2 ) = c2 ( nurl_mac_hi a5 b2 t5 c2 ) = t5 p25
+    : u64 s26 ( nurl_addc_lo t6 c2 0 )
+    = t7 + t7 ( nurl_addc_hi t6 c2 0 )
+    = t6 s26
+    : u64 q2 * t0 n0
+    = c2 ( nurl_mac_hi q2 m0 t0 0 )
+    : u64 r21 ( nurl_mac_lo q2 m1 t1 c2 ) = c2 ( nurl_mac_hi q2 m1 t1 c2 ) = t0 r21
+    : u64 r22 ( nurl_mac_lo q2 m2 t2 c2 ) = c2 ( nurl_mac_hi q2 m2 t2 c2 ) = t1 r22
+    : u64 r23 ( nurl_mac_lo q2 m3 t3 c2 ) = c2 ( nurl_mac_hi q2 m3 t3 c2 ) = t2 r23
+    : u64 r24 ( nurl_mac_lo q2 m4 t4 c2 ) = c2 ( nurl_mac_hi q2 m4 t4 c2 ) = t3 r24
+    : u64 r25 ( nurl_mac_lo q2 m5 t5 c2 ) = c2 ( nurl_mac_hi q2 m5 t5 c2 ) = t4 r25
+    : u64 s25 ( nurl_addc_lo t6 c2 0 )
+    = t6 + t7 ( nurl_addc_hi t6 c2 0 )
+    = t5 s25
+    = t7 0
+    // ── round 3: t += a·b3, then one Montgomery reduction ──
+    : u64 b3 # u64 . bp 3
+    : ~ u64 c3 0
+    : u64 p30 ( nurl_mac_lo a0 b3 t0 c3 ) = c3 ( nurl_mac_hi a0 b3 t0 c3 ) = t0 p30
+    : u64 p31 ( nurl_mac_lo a1 b3 t1 c3 ) = c3 ( nurl_mac_hi a1 b3 t1 c3 ) = t1 p31
+    : u64 p32 ( nurl_mac_lo a2 b3 t2 c3 ) = c3 ( nurl_mac_hi a2 b3 t2 c3 ) = t2 p32
+    : u64 p33 ( nurl_mac_lo a3 b3 t3 c3 ) = c3 ( nurl_mac_hi a3 b3 t3 c3 ) = t3 p33
+    : u64 p34 ( nurl_mac_lo a4 b3 t4 c3 ) = c3 ( nurl_mac_hi a4 b3 t4 c3 ) = t4 p34
+    : u64 p35 ( nurl_mac_lo a5 b3 t5 c3 ) = c3 ( nurl_mac_hi a5 b3 t5 c3 ) = t5 p35
+    : u64 s36 ( nurl_addc_lo t6 c3 0 )
+    = t7 + t7 ( nurl_addc_hi t6 c3 0 )
+    = t6 s36
+    : u64 q3 * t0 n0
+    = c3 ( nurl_mac_hi q3 m0 t0 0 )
+    : u64 r31 ( nurl_mac_lo q3 m1 t1 c3 ) = c3 ( nurl_mac_hi q3 m1 t1 c3 ) = t0 r31
+    : u64 r32 ( nurl_mac_lo q3 m2 t2 c3 ) = c3 ( nurl_mac_hi q3 m2 t2 c3 ) = t1 r32
+    : u64 r33 ( nurl_mac_lo q3 m3 t3 c3 ) = c3 ( nurl_mac_hi q3 m3 t3 c3 ) = t2 r33
+    : u64 r34 ( nurl_mac_lo q3 m4 t4 c3 ) = c3 ( nurl_mac_hi q3 m4 t4 c3 ) = t3 r34
+    : u64 r35 ( nurl_mac_lo q3 m5 t5 c3 ) = c3 ( nurl_mac_hi q3 m5 t5 c3 ) = t4 r35
+    : u64 s35 ( nurl_addc_lo t6 c3 0 )
+    = t6 + t7 ( nurl_addc_hi t6 c3 0 )
+    = t5 s35
+    = t7 0
+    // ── round 4: t += a·b4, then one Montgomery reduction ──
+    : u64 b4 # u64 . bp 4
+    : ~ u64 c4 0
+    : u64 p40 ( nurl_mac_lo a0 b4 t0 c4 ) = c4 ( nurl_mac_hi a0 b4 t0 c4 ) = t0 p40
+    : u64 p41 ( nurl_mac_lo a1 b4 t1 c4 ) = c4 ( nurl_mac_hi a1 b4 t1 c4 ) = t1 p41
+    : u64 p42 ( nurl_mac_lo a2 b4 t2 c4 ) = c4 ( nurl_mac_hi a2 b4 t2 c4 ) = t2 p42
+    : u64 p43 ( nurl_mac_lo a3 b4 t3 c4 ) = c4 ( nurl_mac_hi a3 b4 t3 c4 ) = t3 p43
+    : u64 p44 ( nurl_mac_lo a4 b4 t4 c4 ) = c4 ( nurl_mac_hi a4 b4 t4 c4 ) = t4 p44
+    : u64 p45 ( nurl_mac_lo a5 b4 t5 c4 ) = c4 ( nurl_mac_hi a5 b4 t5 c4 ) = t5 p45
+    : u64 s46 ( nurl_addc_lo t6 c4 0 )
+    = t7 + t7 ( nurl_addc_hi t6 c4 0 )
+    = t6 s46
+    : u64 q4 * t0 n0
+    = c4 ( nurl_mac_hi q4 m0 t0 0 )
+    : u64 r41 ( nurl_mac_lo q4 m1 t1 c4 ) = c4 ( nurl_mac_hi q4 m1 t1 c4 ) = t0 r41
+    : u64 r42 ( nurl_mac_lo q4 m2 t2 c4 ) = c4 ( nurl_mac_hi q4 m2 t2 c4 ) = t1 r42
+    : u64 r43 ( nurl_mac_lo q4 m3 t3 c4 ) = c4 ( nurl_mac_hi q4 m3 t3 c4 ) = t2 r43
+    : u64 r44 ( nurl_mac_lo q4 m4 t4 c4 ) = c4 ( nurl_mac_hi q4 m4 t4 c4 ) = t3 r44
+    : u64 r45 ( nurl_mac_lo q4 m5 t5 c4 ) = c4 ( nurl_mac_hi q4 m5 t5 c4 ) = t4 r45
+    : u64 s45 ( nurl_addc_lo t6 c4 0 )
+    = t6 + t7 ( nurl_addc_hi t6 c4 0 )
+    = t5 s45
+    = t7 0
+    // ── round 5: t += a·b5, then one Montgomery reduction ──
+    : u64 b5 # u64 . bp 5
+    : ~ u64 c5 0
+    : u64 p50 ( nurl_mac_lo a0 b5 t0 c5 ) = c5 ( nurl_mac_hi a0 b5 t0 c5 ) = t0 p50
+    : u64 p51 ( nurl_mac_lo a1 b5 t1 c5 ) = c5 ( nurl_mac_hi a1 b5 t1 c5 ) = t1 p51
+    : u64 p52 ( nurl_mac_lo a2 b5 t2 c5 ) = c5 ( nurl_mac_hi a2 b5 t2 c5 ) = t2 p52
+    : u64 p53 ( nurl_mac_lo a3 b5 t3 c5 ) = c5 ( nurl_mac_hi a3 b5 t3 c5 ) = t3 p53
+    : u64 p54 ( nurl_mac_lo a4 b5 t4 c5 ) = c5 ( nurl_mac_hi a4 b5 t4 c5 ) = t4 p54
+    : u64 p55 ( nurl_mac_lo a5 b5 t5 c5 ) = c5 ( nurl_mac_hi a5 b5 t5 c5 ) = t5 p55
+    : u64 s56 ( nurl_addc_lo t6 c5 0 )
+    = t7 + t7 ( nurl_addc_hi t6 c5 0 )
+    = t6 s56
+    : u64 q5 * t0 n0
+    = c5 ( nurl_mac_hi q5 m0 t0 0 )
+    : u64 r51 ( nurl_mac_lo q5 m1 t1 c5 ) = c5 ( nurl_mac_hi q5 m1 t1 c5 ) = t0 r51
+    : u64 r52 ( nurl_mac_lo q5 m2 t2 c5 ) = c5 ( nurl_mac_hi q5 m2 t2 c5 ) = t1 r52
+    : u64 r53 ( nurl_mac_lo q5 m3 t3 c5 ) = c5 ( nurl_mac_hi q5 m3 t3 c5 ) = t2 r53
+    : u64 r54 ( nurl_mac_lo q5 m4 t4 c5 ) = c5 ( nurl_mac_hi q5 m4 t4 c5 ) = t3 r54
+    : u64 r55 ( nurl_mac_lo q5 m5 t5 c5 ) = c5 ( nurl_mac_hi q5 m5 t5 c5 ) = t4 r55
+    : u64 s55 ( nurl_addc_lo t6 c5 0 )
+    = t6 + t7 ( nurl_addc_hi t6 c5 0 )
+    = t5 s55
+    = t7 0
+    // t[0..5] + top word t6: value < 2·md — one conditional subtract.
     : ~ u64 bb 0
-    : ~ i j2 0
-    ~ < j2 6 {
-        : u64 tj # u64 . tp j2
-        : u64 mj # u64 . mp j2
-        = . dp j2 # i ( nurl_subb_lo tj mj bb )
-        = bb ( nurl_subb_hi tj mj bb )
-        = j2 + j2 1
-    }
-    : i topb - # i # u64 . tp 6 # i bb
+    : u64 d0 ( nurl_subb_lo t0 m0 bb ) = bb ( nurl_subb_hi t0 m0 bb )
+    : u64 d1 ( nurl_subb_lo t1 m1 bb ) = bb ( nurl_subb_hi t1 m1 bb )
+    : u64 d2 ( nurl_subb_lo t2 m2 bb ) = bb ( nurl_subb_hi t2 m2 bb )
+    : u64 d3 ( nurl_subb_lo t3 m3 bb ) = bb ( nurl_subb_hi t3 m3 bb )
+    : u64 d4 ( nurl_subb_lo t4 m4 bb ) = bb ( nurl_subb_hi t4 m4 bb )
+    : u64 d5 ( nurl_subb_lo t5 m5 bb ) = bb ( nurl_subb_hi t5 m5 bb )
+    : i topb - # i t6 # i bb
     : u64 mask ? < topb 0 0 18446744073709551615
     : u64 imask ^^ mask 18446744073709551615
     : *i op ( vec_data [i] dst )
-    : ~ i j3 0
-    ~ < j3 6 {
-        = . op j3 # i | & mask # u64 . dp j3 & imask # u64 . tp j3
-        = j3 + j3 1
-    }
+    = . op 0 # i | & mask d0 & imask t0
+    = . op 1 # i | & mask d1 & imask t1
+    = . op 2 # i | & mask d2 & imask t2
+    = . op 3 # i | & mask d3 & imask t3
+    = . op 4 # i | & mask d4 & imask t4
+    = . op 5 # i | & mask d5 & imask t5
 }
 
 // dst = (a + b) mod md. a, b < md ⇒ one conditional subtract. Alias-safe.
 @ __m6_add P384Scr scr ( Vec i ) dst ( Vec i ) a ( Vec i ) b → v {
+    // Limbs in locals, as __m6_mul: the sum and its reduced twin stay in
+    // registers until the masked merge writes dst (which may alias a or b).
     : *i ap ( vec_data [i] a )
     : *i bp ( vec_data [i] b )
     : *i mp ( vec_data [i] . scr md )
-    : *i tp ( vec_data [i] . scr acc )
     : ~ u64 cc 0
-    : ~ i j 0
-    ~ < j 6 {
-        : u64 aj # u64 . ap j
-        : u64 bj # u64 . bp j
-        = . tp j # i ( nurl_addc_lo aj bj cc )
-        = cc ( nurl_addc_hi aj bj cc )
-        = j + j 1
-    }
-    : *i dp ( vec_data [i] . scr diff )
+    : u64 t0 ( nurl_addc_lo # u64 . ap 0 # u64 . bp 0 cc ) = cc ( nurl_addc_hi # u64 . ap 0 # u64 . bp 0 cc )
+    : u64 t1 ( nurl_addc_lo # u64 . ap 1 # u64 . bp 1 cc ) = cc ( nurl_addc_hi # u64 . ap 1 # u64 . bp 1 cc )
+    : u64 t2 ( nurl_addc_lo # u64 . ap 2 # u64 . bp 2 cc ) = cc ( nurl_addc_hi # u64 . ap 2 # u64 . bp 2 cc )
+    : u64 t3 ( nurl_addc_lo # u64 . ap 3 # u64 . bp 3 cc ) = cc ( nurl_addc_hi # u64 . ap 3 # u64 . bp 3 cc )
+    : u64 t4 ( nurl_addc_lo # u64 . ap 4 # u64 . bp 4 cc ) = cc ( nurl_addc_hi # u64 . ap 4 # u64 . bp 4 cc )
+    : u64 t5 ( nurl_addc_lo # u64 . ap 5 # u64 . bp 5 cc ) = cc ( nurl_addc_hi # u64 . ap 5 # u64 . bp 5 cc )
     : ~ u64 bb 0
-    : ~ i j2 0
-    ~ < j2 6 {
-        : u64 tj # u64 . tp j2
-        : u64 mj # u64 . mp j2
-        = . dp j2 # i ( nurl_subb_lo tj mj bb )
-        = bb ( nurl_subb_hi tj mj bb )
-        = j2 + j2 1
-    }
+    : u64 d0 ( nurl_subb_lo t0 # u64 . mp 0 bb ) = bb ( nurl_subb_hi t0 # u64 . mp 0 bb )
+    : u64 d1 ( nurl_subb_lo t1 # u64 . mp 1 bb ) = bb ( nurl_subb_hi t1 # u64 . mp 1 bb )
+    : u64 d2 ( nurl_subb_lo t2 # u64 . mp 2 bb ) = bb ( nurl_subb_hi t2 # u64 . mp 2 bb )
+    : u64 d3 ( nurl_subb_lo t3 # u64 . mp 3 bb ) = bb ( nurl_subb_hi t3 # u64 . mp 3 bb )
+    : u64 d4 ( nurl_subb_lo t4 # u64 . mp 4 bb ) = bb ( nurl_subb_hi t4 # u64 . mp 4 bb )
+    : u64 d5 ( nurl_subb_lo t5 # u64 . mp 5 bb ) = bb ( nurl_subb_hi t5 # u64 . mp 5 bb )
     : i topb - # i cc # i bb
     : u64 mask ? < topb 0 0 18446744073709551615
     : u64 imask ^^ mask 18446744073709551615
     : *i op ( vec_data [i] dst )
-    : ~ i j3 0
-    ~ < j3 6 {
-        = . op j3 # i | & mask # u64 . dp j3 & imask # u64 . tp j3
-        = j3 + j3 1
-    }
+    = . op 0 # i | & mask d0 & imask t0
+    = . op 1 # i | & mask d1 & imask t1
+    = . op 2 # i | & mask d2 & imask t2
+    = . op 3 # i | & mask d3 & imask t3
+    = . op 4 # i | & mask d4 & imask t4
+    = . op 5 # i | & mask d5 & imask t5
 }
 
 // dst = (a − b) mod md: subtract, and if it borrowed add md back. Alias-safe.
@@ -293,27 +403,28 @@ $ `stdlib/std/bytes.nu`
     : *i ap ( vec_data [i] a )
     : *i bp ( vec_data [i] b )
     : *i mp ( vec_data [i] . scr md )
-    : *i dp ( vec_data [i] . scr diff )
     : ~ u64 bb 0
-    : ~ i j 0
-    ~ < j 6 {
-        : u64 aj # u64 . ap j
-        : u64 bj # u64 . bp j
-        = . dp j # i ( nurl_subb_lo aj bj bb )
-        = bb ( nurl_subb_hi aj bj bb )
-        = j + j 1
-    }
+    : u64 d0 ( nurl_subb_lo # u64 . ap 0 # u64 . bp 0 bb ) = bb ( nurl_subb_hi # u64 . ap 0 # u64 . bp 0 bb )
+    : u64 d1 ( nurl_subb_lo # u64 . ap 1 # u64 . bp 1 bb ) = bb ( nurl_subb_hi # u64 . ap 1 # u64 . bp 1 bb )
+    : u64 d2 ( nurl_subb_lo # u64 . ap 2 # u64 . bp 2 bb ) = bb ( nurl_subb_hi # u64 . ap 2 # u64 . bp 2 bb )
+    : u64 d3 ( nurl_subb_lo # u64 . ap 3 # u64 . bp 3 bb ) = bb ( nurl_subb_hi # u64 . ap 3 # u64 . bp 3 bb )
+    : u64 d4 ( nurl_subb_lo # u64 . ap 4 # u64 . bp 4 bb ) = bb ( nurl_subb_hi # u64 . ap 4 # u64 . bp 4 bb )
+    : u64 d5 ( nurl_subb_lo # u64 . ap 5 # u64 . bp 5 bb ) = bb ( nurl_subb_hi # u64 . ap 5 # u64 . bp 5 bb )
     : u64 mask ? == # i bb 0 0 18446744073709551615
     : *i op ( vec_data [i] dst )
     : ~ u64 cc 0
-    : ~ i j2 0
-    ~ < j2 6 {
-        : u64 dj # u64 . dp j2
-        : u64 pj & mask # u64 . mp j2
-        = . op j2 # i ( nurl_addc_lo dj pj cc )
-        = cc ( nurl_addc_hi dj pj cc )
-        = j2 + j2 1
-    }
+    : u64 e0 ( nurl_addc_lo d0 & mask # u64 . mp 0 cc ) = cc ( nurl_addc_hi d0 & mask # u64 . mp 0 cc )
+    : u64 e1 ( nurl_addc_lo d1 & mask # u64 . mp 1 cc ) = cc ( nurl_addc_hi d1 & mask # u64 . mp 1 cc )
+    : u64 e2 ( nurl_addc_lo d2 & mask # u64 . mp 2 cc ) = cc ( nurl_addc_hi d2 & mask # u64 . mp 2 cc )
+    : u64 e3 ( nurl_addc_lo d3 & mask # u64 . mp 3 cc ) = cc ( nurl_addc_hi d3 & mask # u64 . mp 3 cc )
+    : u64 e4 ( nurl_addc_lo d4 & mask # u64 . mp 4 cc ) = cc ( nurl_addc_hi d4 & mask # u64 . mp 4 cc )
+    : u64 e5 ( nurl_addc_lo d5 & mask # u64 . mp 5 cc ) = cc ( nurl_addc_hi d5 & mask # u64 . mp 5 cc )
+    = . op 0 # i e0
+    = . op 1 # i e1
+    = . op 2 # i e2
+    = . op 3 # i e3
+    = . op 4 # i e4
+    = . op 5 # i e5
 }
 
 // One conditional subtract of md, in place: brings any v < 2·md (e.g. a

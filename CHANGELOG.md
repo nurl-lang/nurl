@@ -438,6 +438,14 @@ fewer instructions and 9–10 % less time than before this work
 
 ### Performance
 
+- **P-384 field arithmetic keeps its words in registers.** The Montgomery
+  multiply (`__m6_mul`) read and wrote its 8-word accumulator through the
+  scratch's `acc` Vec on every round, because nothing told the optimiser
+  that `dst`, `a` and `b` do not overlap it. Its rounds are now written
+  out over locals, as `_p256_mul_d`'s already were, and so are the add
+  and the subtract. crypto_hotpath retires 13.7 % fewer instructions
+  (1 116 M → 964 M at 50 iterations), and `ecdsa_p384_verify` is the
+  share of that. The scratch loses its `acc` field.
 - **`nurl_free` inlines its NULL test.** Most releases are of NULL — a
   slot whose value moved on — and each was a call into the runtime's one
   shared test, whose branch no predictor can learn: ~8 % of a
