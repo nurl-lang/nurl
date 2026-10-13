@@ -157,10 +157,13 @@ fewer instructions and 9–10 % less time than before this work
     insert + remove + drop 1.6 % fewer instructions on a 200 000-key run
     and 0.2 % fewer over six build-and-drop rounds of 60 000 keys
     (callgrind).
+  - `SymTab` (`stdlib/core/symtab.nu`) is an owning handle over the
+    string table: `symtab_new` / `symtab_def` / `symtab_get`, released
+    when it goes. The raw `i` handle stays the compiler's.
   - Outside the primitives that implement ownership (Vec, String, Box,
-    RawBlock, the counted block behind `Shared`, Rc and Arc) only the
-    compiler's symbol table releases memory itself; the containers above
-    only move elements out of their buffers.
+    RawBlock, the counted block behind `Shared`, Rc, Arc and now SymTab)
+    nothing in the standard library releases memory itself; the
+    containers above only move elements out of their buffers.
   - `raw_block_zero` gives zeroed raw memory.
 - **`TcpConn` and `TcpListener` close themselves.** Each is a handle over
   a counted block: every copy is the same socket, and its last owner
