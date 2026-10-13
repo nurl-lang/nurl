@@ -786,6 +786,12 @@ the compiler: `btree_remove` took a value out of an inner node before
 merging the kids around it, and the merge moved the emptied slot down.
 A take from a place empties the place, so a value must leave its slot
 only on the path that refills it.
+An eighth (h211) was in the runtime: a share that read an owner count
+of 1 stored 2 instead of taking the locked add, on the premise that only
+the one owner could be sharing. A clone is asked of a borrow, and every
+thread holding an `Arc` borrows the handle in its payload at once, so the
+threads' shares were lost and the value freed under the payload. A share
+now always takes the locked add; only a release keeps the shortcut.
 
 The rules that carry it:
 

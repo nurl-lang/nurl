@@ -262,6 +262,18 @@ fewer instructions and 9–10 % less time than before this work
 
 ### Fixed
 
+- **Cloning one handle from several threads at once keeps the count**
+  (h211). A share that read an owner count of 1 skipped the locked add
+  and stored 2, on the premise that only the one owner could be sharing.
+  A clone is asked of a borrow, though: threads that each hold a clone of
+  an `Arc` clone the handle in its payload — another `Arc`, a `Mutex`, a
+  `Channel` — through the same borrow at the same time. Each read 1 and
+  stored 2, the shares were lost, and the releases freed the value while
+  the payload still held it (`free(): invalid pointer`, or ASan's
+  double-free, in every run of eight threads). `nurl_rc_share` and
+  `nurl_arc_share` always take the locked add now; a release, which only
+  an owner makes, keeps the shortcut. Found by `arc_threads` failing on
+  Windows.
 - **`btree_remove` no longer loses a value at a merge** (h210). Removing
   a key that sat in an inner node whose two neighbouring kids were both
   minimal took the value out of its slot — emptying it, since a take
