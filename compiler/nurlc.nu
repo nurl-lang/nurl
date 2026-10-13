@@ -1606,6 +1606,9 @@ unsafe @ agg_field_count i syms s ot → i {
 // a name, a call or a field read the body falls off with (gen_block_ret):
 // it returns as `^` returns it (gen_ret, which consumes the flag).
 : ~ b g_ret_implicit F
+// The block about to be compiled is a closure body whose final value is
+// handed back (gen_closure_expr → gen_block_expr): it returns as `^` does.
+: ~ b g_clo_body_ret F
 // `g_fn_reallocs[fname]`: the parameters whose BUFFER the function may move
 // or release (a reallocation, a free) — what ends a view of them (§2.10),
 // as distinct from changing what the buffer holds (g_fn_mutates). Built
@@ -4088,6 +4091,7 @@ unsafe @ nurl_cg_lbl i h s hint → s {
         = g_fn_ret_count - g_fn_ret_count 1
         ^ val
     } {}
+    ( __nc_ret_check lex syms ( nurl_get_last_type ) ret_first_tt ret_first_val bck_line )
     // What a view handed back came from (the walk checks it points into
     // nothing this function releases on its way out).
     : i __ret_cls ( bck_walk_class ( nurl_get_last_type ) )
@@ -4104,6 +4108,9 @@ unsafe @ nurl_cg_lbl i h s hint → s {
     // holds views of, by the callee's summaries — bck_sx_ev.)
     : b __ret_exp & & & != 0 g_srcx_on >= __ret_cls 3 ! __ret_dep | | == ret_first_tt TT_BACKSLASH == ret_first_tt TT_AT == ret_first_tt TT_LPAREN
     ? __ret_exp { = __ret_sx ( __sx_operand syms ret_first_tt ret_first_val ( nurl_get_last_type ) ( __sx_froot syms ret_first_tt ( nurl_get_last_type ) ) __rsxn0 ) } {}
+    ? & & & != 0 g_bck_closure_depth == __ret_cls 2 != 0 ( nurl_str_len __ret_sx ) ! ( mem_clo_ret_copies ( nurl_get_last_type ) ) {
+        ( __clo_view_ret_check lex syms __ret_sx )
+    } {}
     : b __rv_raw ( seq ( nurl_llty ( nurl_get_last_type ) ) `i8*` )
     // Whether this path hands the caller a value it owns — published when
     // this function answers per call (mem_publish_hown); `true` unless a
@@ -4534,6 +4541,28 @@ unsafe @ nurl_cg_lbl i h s hint → s {
         ( seq ( nurl_sym_get syms `__last_ident_env_moved__` ) `1` )
         ret_first_val ) }
     {}
+    // A closure's caller owns its result (h217): what the rules above left
+    // lent is copied — a capture by pointer (the enclosing frame keeps it),
+    // a field of a capture, a field of a call's result the call only lent.
+    ? & != 0 g_bck_closure_depth ( __clone_supported ( nurl_get_last_type ) syms ) {
+        : s __clt ( nurl_get_last_type )
+        ? & & ( is_ident_tok ret_first_tt ) ! ret_field_copy ( __is_clo_capture syms ret_first_val ) {
+            ? ( seq ( nurl_sym_get2 syms ret_first_val `__captured_byref` ) `1` ) { = val ( mem_emit_cloneif cg __clt val `1` ) } {}
+        } {}
+        ? & == ret_first_tt TT_DOT ! ret_field_copy {
+            : s __clr ( nurl_sym_get syms `__last_member_root__` )
+            ? == 0 ( nurl_str_len __clr ) {
+                : s __clo ( mem_call_retown syms cg )
+                ? & != 0 ( nurl_str_len __clo ) ! ( seq __clo `true` ) {
+                    : s __cln ( nurl_cg_reg cg )
+                    ( nurl_print `  ` ) ( nurl_print __cln ) ( nurl_print ` = xor i1 ` ) ( nurl_print __clo ) ( nurl_print `, 1\n` )
+                    = val ( mem_emit_cloneif cg __clt val __cln )
+                } {}
+            } {
+                ? ( __is_clo_capture syms __clr ) { = val ( mem_emit_cloneif cg __clt val `1` ) } {}
+            }
+        } {}
+    } {}
     // Address-preserving expressions can return a parameter even when their
     // lowered type is an integer. Record the expression's own provenance,
     // not the last identifier visited while parsing it.
@@ -8237,6 +8266,30 @@ unsafe @ origin_guard_retained i root → b {
 @ __ret_never_owned i syms s cn → b {
     ? != 0 ( nurl_sym_len2 syms cn `__ret_unowned` ) { ^ T } {}
     ^ ( __fn_raw_ret syms cn )
+}
+
+// A call through a closure value takes its result as its own (h217). A raw
+// string the body only lent — a view of what it captured or was handed, a
+// capture, a literal — comes back a copy, so it is the caller's whatever
+// the body did and points into nothing the caller may change (h220). (Safe
+// code only: there an `i8*` is a string, never a raw buffer.)
+@ mem_clo_ret_copies s rlt → b {
+    ^ & & != 0 g_auto_drop_strings ( seq ( nurl_llty rlt ) `i8*` ) ! ( bck_unsafe_ctx )
+}
+
+@ mem_clo_ret_own_str i cg s res → s {
+    : s fl ( nurl_cg_reg cg )
+    : s c ( nurl_cg_reg cg )
+    : s g ( nurl_cg_reg cg )
+    : s out ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print fl ) ( nurl_print ` = call i64 @nurl_ret_owned_get()\n` )
+    ( nurl_print `  ` ) ( nurl_print c ) ( nurl_print ` = icmp ne i64 ` ) ( nurl_print fl ) ( nurl_print `, 0\n` )
+    ( nurl_print `  ` ) ( nurl_print g ) ( nurl_print ` = select i1 ` ) ( nurl_print c )
+    ( nurl_print `, i8* ` ) ( nurl_print res ) ( nurl_print `, i8* null\n` )
+    = g_use_ownstr 1
+    ( nurl_print `  ` ) ( nurl_print out ) ( nurl_print ` = call i8* @__nurl_ownstr(i8* ` ) ( nurl_print g )
+    ( nurl_print `, i8* ` ) ( nurl_print res ) ( nurl_print `)\n` )
+    ^ out
 }
 
 // Closure and dyn calls obey the same result protocol without a static name.
@@ -12236,6 +12289,21 @@ unsafe @ __ty_is_callable s ty → b {
     = g_sx_at me
 }
 
+// The source expression of a call through the closure value `name`, its
+// arguments' `|`-separated in `args`. What it hands back is its caller's
+// own: a copy of a handle (h217) or of a raw string (h220,
+// mem_clo_ret_copies), and never a value the body cannot copy and does not
+// own (h219) — so it borrows nothing. Any other view (a Slice, a struct
+// of views) can point into any argument — never into what the closure
+// captured (__clo_view_ret_check) — so it holds each argument, as a
+// closure literal holds its captures (`\(…)`, bck_sx_ev).
+@ __clo_call_sx i syms s name s args → s {
+    : s rt ( extract_fn_ptr_return_type ( nurl_sym_get syms name ) )
+    ? | < ( bck_walk_class rt ) 2 ( mem_clo_ret_copies rt ) { ^ ( nurl_str_cat `-` `` ) } {}
+    ? == 0 ( nurl_str_len args ) { ^ ( nurl_str_cat `-` `` ) } {}
+    ^ ( nurl_str_cat3 `\\(` args `)` )
+}
+
 // Either `a` or `b`: nothing on one side is the other; not modelled on
 // either side is not modelled.
 @ __sx_join s a s b → s {
@@ -14968,7 +15036,7 @@ unsafe @ bck_check_lit_moves i lex i line i col s what s tab i scmask s moved s 
     // closure's result is not modelled).
     ? != 0 __sx_me {
         : b __sx_sum ( __summarised_callee syms fname call_name )
-        ( __sx_publish __sx_me ? __callee_shadowed `*` ? & __sx_sum __sx_need ( nurl_str_cat4 call_name `(` call_sx `)` ) `-` )
+        ( __sx_publish __sx_me ? __callee_shadowed ( __clo_call_sx syms fname call_sx ) ? & __sx_sum __sx_need ( nurl_str_cat4 call_name `(` call_sx `)` ) `-` )
         // Two arguments that may share storage: whether the callee may move
         // or free one's buffer, or drop its elements, while the other points
         // into it is decided at the walk (an exclusive call: `callx`).
@@ -15294,9 +15362,15 @@ unsafe @ bck_check_lit_moves i lex i line i col s what s tab i scmask s moved s 
             ( __callargs_agree lex call_name argstr ( __fnty_param_lltys call_type_ll T ) )
             = final_result ( call_closure_function loaded_closure call_type argstr cg )
             ? ( __is_closure_ty ( nurl_get_last_type ) ) { ( mem_retclo_take syms cg final_result ( nurl_get_last_type ) ) } {}
-            ( nurl_sym_def syms `__last_call_ret_owned__` `` )
-            ( nurl_sym_def syms `__last_call_guard__`
-            ( mem_capture_return_guard cg final_result ( nurl_get_last_type ) ) )
+            ? ( mem_clo_ret_copies ( nurl_get_last_type ) ) {
+                = final_result ( mem_clo_ret_own_str cg final_result )
+                ( nurl_sym_def syms `__last_call_ret_owned__` `str` )
+                ( nurl_sym_def syms `__last_call_guard__` `` )
+            } {
+                ( nurl_sym_def syms `__last_call_ret_owned__` `` )
+                ( nurl_sym_def syms `__last_call_guard__`
+                ( mem_capture_return_guard cg final_result ( nurl_get_last_type ) ) )
+            }
         }
         {
             // Simple function pointer - call directly
@@ -15324,9 +15398,15 @@ unsafe @ bck_check_lit_moves i lex i line i col s what s tab i scmask s moved s 
                 ( __callargs_agree lex call_name argstr ( __fnty_param_lltys call_type_ll T ) )
                 = final_result ( call_closure_function var_llvm_val call_type argstr cg )
                 ? ( __is_closure_ty ( nurl_get_last_type ) ) { ( mem_retclo_take syms cg final_result ( nurl_get_last_type ) ) } {}
-                ( nurl_sym_def syms `__last_call_ret_owned__` `` )
-                ( nurl_sym_def syms `__last_call_guard__`
-                ( mem_capture_return_guard cg final_result ( nurl_get_last_type ) ) )
+                ? ( mem_clo_ret_copies ( nurl_get_last_type ) ) {
+                    = final_result ( mem_clo_ret_own_str cg final_result )
+                    ( nurl_sym_def syms `__last_call_ret_owned__` `str` )
+                    ( nurl_sym_def syms `__last_call_guard__` `` )
+                } {
+                    ( nurl_sym_def syms `__last_call_ret_owned__` `` )
+                    ( nurl_sym_def syms `__last_call_guard__`
+                    ( mem_capture_return_guard cg final_result ( nurl_get_last_type ) ) )
+                }
             }
             {  // Simple function pointer parameter - call directly
                 ( __closure_arity_check lex call_name call_type_ll F arg_idx )
@@ -19270,6 +19350,9 @@ unsafe @ __blk_leave b val → v {
     // block that hands its value on.)
     : b blk_val ? blk_is_arm g_arm_val | ! blk_is_stmt != 0 g_blk_val_depth
     = g_arm_val F
+    // A closure body handing back its final value (gen_closure_expr).
+    : b __blk_ret_val g_clo_body_ret
+    = g_clo_body_ret F
     : i __sx_bme ( __sx_enter )
     ( __blk_enter blk_val )
     ( nurl_lex_advance lex )
@@ -19299,6 +19382,7 @@ unsafe @ __blk_leave b val → v {
         = __tail_root ? == __tail_tt TT_DOT ( nurl_lex_peek_type lex ) 0
         = __tail_sxn0 g_sx_n
         = __nstmt + __nstmt 1
+        ? __blk_ret_val { = g_ret_implicit ( __is_fall_value_stmt lex __tail_tt ) } {}
         = last ( gen_stmt lex syms cg )
         ? != ( nurl_lex_type lex ) TT_RBRACE { ( mem_clo_drop_discarded syms cg last __tail_tt ) }
         { ? & blk_is_arm & == ( nurl_lex_peek_type lex ) TT_LBRACE == ( nurl_lex_peek2_type lex ) TT_RBRACE
@@ -28765,6 +28849,7 @@ unsafe @ bck_loop_mask s pre s post → s {
                 ? != 0 ( nurl_str_len __lcg ) { = g_bck_bind_sown ? == 0 ( nurl_sym_len2 syms __lcg `__nullguard` ) 1 0 } {}
             }
         } {}
+        ? & != 0 g_bck_closure_depth >= ( bck_walk_class vt ) 2 { ( __clo_view_note syms name g_bck_rhs_sx T ) } {}
         ( bck_record_binding `let` name bck_line ( bck_walk_class vt ) vt )
         = g_bck_rhs_callee ``
         = g_bck_rhs_sx ``
@@ -29072,6 +29157,7 @@ unsafe @ bck_loop_mask s pre s post → s {
                     ? != 0 ( nurl_str_len __lcg ) { = g_bck_bind_sown ? == 0 ( nurl_sym_len2 syms __lcg `__nullguard` ) 1 0 } {}
                 }
             } {}
+            ? & != 0 g_bck_closure_depth >= ( bck_walk_class ( nurl_llty ptype ) ) 2 { ( __clo_view_note syms name g_bck_rhs_sx T ) } {}
             ( bck_record_binding `let` name bck_line ( bck_walk_class ( nurl_llty ptype ) ) ( nurl_llty ptype ) )
             = g_bck_rhs_callee ``
             = g_bck_rhs_sx ``
@@ -29453,6 +29539,7 @@ unsafe @ bck_loop_mask s pre s post → s {
             ? __a_ocall { = __asn_fresh T } {}
         } {}
         = g_bck_rhs_sx ? __asn_fresh ( nurl_str_cat `-` `` ) ( nurl_str_cat __rhs_sx `` )
+        ? & != 0 g_bck_closure_depth >= ( bck_walk_class vt ) 2 { ( __clo_view_note syms name g_bck_rhs_sx F ) } {}
         ( bck_record_binding `assign` name bck_line ( bck_walk_class vt ) vt )
         = g_bck_rhs_callee ``
         = g_bck_rhs_sx ``
@@ -36396,7 +36483,10 @@ unsafe @ __thr_peel s lty → s {
     ? != g_borrowck 0 { ( nurl_sym_set g_bck `deferred` `` ) } {}
     // The closure body is not an arm, whatever it sits inside.
     ( nurl_sym_set g_fn_escapes `__arm_body__` `` )
+    // (Its final value returns as `^` returns it: gen_block_expr.)
+    = g_clo_body_ret & ! ( seq ret_type `void` ) == ( nurl_lex_type lex ) TT_LBRACE
     : ~ s body_val ( gen_stmt lex body_syms cg )
+    = g_clo_body_ret F
     : s __cl_tail_lt ( nurl_get_last_type )
     // Exits the body's tail `?`/`??` handed up: its value is the
     // closure's result, used iff the closure returns one. Emitted into
@@ -36415,6 +36505,10 @@ unsafe @ __thr_peel s lty → s {
         ( seq ( nurl_sym_get body_syms `__last_ident_env_moved__` ) `1` )
         __cl_tval ) }
     {}
+    // …and one that cannot be copied has to be the body's own (h219).
+    ? __cl_fall_used { ( __nc_ret_check lex body_syms __cl_tail_lt
+        ( nurl_str_to_int ( nurl_sym_get body_syms `__tail_first_tt__` ) )
+        ( nurl_sym_get body_syms `__tail_first_val__` ) ( nurl_lex_line lex ) ) } {}
     // A tail that hands back what the body only lent — a parameter, a
     // capture, a field, a binding that owns nothing, a call or a join that
     // lent — is copied, as `^` copies it (gen_ret): a call through a closure
@@ -46066,6 +46160,145 @@ u` ) ( nurl_print q ) ( nurl_print `:
     ( __merge_impls syms `__fn_pending_rp_impl__` fname `r` )
 }
 
+// Is `name` one of the closure body's captures (its env's value, or the
+// enclosing frame's binding) — not a binding of the same spelling the body
+// declared?
+@ __is_clo_capture i syms s name → b {
+    ? == g_bck_closure_depth 0 { ^ F } {}
+    : s p ( nurl_sym_get2 syms name `__ptr` )
+    ? == 0 ( nurl_str_len p ) { ^ F } {}
+    ^ ( str_contains_word ( nurl_sym_get syms `__clo_cap_ptrs__` ) p )
+}
+
+// Does source expression `sx`, in a closure body, name one of the
+// closure's captures — or a binding of the body that may view one
+// (`__cvt`, __clo_view_note) — or something not modelled (`*`)? A callee
+// (a word before `(`) is no binding; a field path counts by its root.
+@ __sx_names_capture i syms s sx → b {
+    : i n ( nurl_str_len sx )
+    : ~ i i 0
+    : ~ i st 0
+    ~ <= i n {
+        : i c ? < i n ( nurl_str_get sx i ) 0
+        ? | | | | | | | == c 0 == c 40 == c 41 == c 123 == c 125 == c 59 == c 124 == c 46 {
+            ? > i st {
+                : s w ( nurl_str_slice sx st - i st )
+                : b callee & < i n == c 40
+                ? ! callee {
+                    ? ( seq w `*` ) { ^ T } {}
+                    ? | ( __is_clo_capture syms w ) ( seq ( nurl_sym_get2 syms w `__cvt` ) `1` ) { ^ T } {}
+                } {}
+            } {}
+            // (A field path's later parts are field names: skipped.)
+            ? == c 46 {
+                ~ & < + i 1 n ! ( __sx_delim ( nurl_str_get sx + i 1 ) ) { = i + i 1 }
+            } {}
+            = st + i 1
+        } {}
+        = i + i 1
+    }
+    ^ F
+}
+
+// A view bound in a closure body (`: ( Slice i ) s ( slice_from_vec v )`,
+// `= s …`): whether it may point into what the closure captured, for the
+// check where the body hands a view back (__clo_view_ret_check). An
+// assignment only adds to what a binding may view.
+@ __clo_view_note i syms s name s sx b reset → v {
+    : b hit ( __sx_names_capture syms sx )
+    ? hit { ( nurl_sym_def syms ( nurl_str_cat name `__cvt` ) `1` ) } {
+        ? reset { ( nurl_sym_def syms ( nurl_str_cat name `__cvt` ) `` ) } {}
+    }
+}
+
+// A closure hands its result to a caller that cannot see what the closure
+// captured: a view it hands back may point into its arguments (the call's
+// source expression names them), never into a capture — the capture can
+// change or go under the view while the caller holds it, unseen (h220).
+@ __clo_view_ret_check i lex i syms s sx → v {
+    ? ( __sx_names_capture syms sx ) {
+        ( die_pos lex g_stmt_line g_stmt_col `a closure hands back a view (an address into storage) of what it captured: its caller cannot see what the view points into, so nothing stops that storage from changing or going under it. Hand back a value that owns its data (a copy — slice_to_vec, string_from), or pass what the view points into as an argument: a view of an argument is followed at the call.` )
+    } {}
+}
+
+// A value handed back that cannot be copied (a `% Drop` value with no
+// clone, an option of one) has to be the function's own to give: nothing
+// can make the caller a copy of it. A closure's caller takes its result as
+// its own (h217), so a closure cannot hand back its parameter, its capture
+// or a field of either (h219); and no function can hand back a field of a
+// struct it drops on the way out, or of a module global (h221) — the
+// struct's drop would release it under the caller. A call is judged at
+// module end, on its callee's final summary (resolve_clo_nc_rets).
+@ __nc_ret_check i lex i syms s ty i tt s val i line → v {
+    ? ! | ( __nc_drop_ty ty ) != 0 ( nurl_str_len ( __nc_wrap_payload ty ) ) { ^ v } {}
+    : b clo != 0 g_bck_closure_depth
+    : s tshow ( llvm_to_nurl ty )
+    ? & clo ( is_ident_tok tt ) {
+        : s what ? ( __is_clo_param syms val ) `a parameter of this closure, which its caller keeps` ? ( __is_clo_capture syms val ) `captured by this closure, which keeps it for its next call` ``
+        ? != 0 ( nurl_str_len what ) {
+            ( die_pos lex g_stmt_line g_stmt_col ( nurl_str_cat4 ( nurl_str_cat3 `a closure hands its result to its caller as the caller's own, but '` val `' is ` )
+            what ( nurl_str_cat3 `, and a '` tshow `' cannot be copied — the value would be released twice. ` )
+            `Hand back a value the body makes (a literal, or a call that hands its result over), or let the closure take the value as a parameter and return what it builds from it.` ) )
+        } {}
+        ^ v
+    } {}
+    ? == tt TT_DOT {
+        : s root ( nurl_sym_get syms `__last_member_root__` )
+        // (A field of a call's result leaves with the result; one read
+        // through a pointer is its owner's, lent, which raw code vouches
+        // for.)
+        ? == 0 ( nurl_str_len root ) { ^ v } {}
+        ? | ( bck_unsafe_ctx ) ( is_ptr_ty ( nurl_sym_get syms root ) ) { ^ v } {}
+        : b param >= ( nurl_sym_word_index syms `__fn_param_names__` root ) 0
+        // A function's parameter is its caller's: the field is lent back.
+        ? & ! clo & param ! ( __is_clo_param syms root ) { ^ v } {}
+        : s whose ? ( __is_clo_param syms root ) `a parameter of this closure, which its caller keeps`
+        ? ( __is_clo_capture syms root ) `captured by this closure, which keeps it for its next call`
+        ? param `a parameter of this closure's function`
+        ? != 0 ( nurl_sym_len2 syms root `__global` ) `a module global, which keeps it`
+        `dropped, fields and all, on the way out`
+        ( die_pos lex g_stmt_line g_stmt_col ( nurl_str_cat4 ( nurl_str_cat3 `this hands back a field of '` root `', which is ` )
+        whose ( nurl_str_cat3 `; a '` tshow `' cannot be copied out of it — the field would be released with it under the caller. ` )
+        `Keep the value in a binding of its own and hand that back, or hand back the whole of it.` ) )
+    } {}
+    // A call that may lend what it hands back: decided at module end.
+    ? & clo == tt TT_LPAREN {
+        : ~ s cn ( nurl_sym_get syms `__last_call_name__` )
+        : ~ s gn ``
+        ? != 0 ( nurl_sym_len syms `__last_call_forward__` ) {
+            : s fw ( nurl_sym_get syms `__last_call_forward__` )
+            = cn ( str_first_word fw ) = gn ( str_first_word ( str_skip_word fw ) )
+        } {}
+        ? & != 0 ( nurl_str_len cn ) == 0 ( nurl_sym_len2 syms cn `__ptr` ) {
+            : i n ( nurl_str_to_int ( nurl_sym_get g_pending_impl `clonc_n` ) )
+            ( nurl_sym_def g_pending_impl `clonc_n` ( nurl_str_int + n 1 ) )
+            ( nurl_sym_def g_pending_impl ( nurl_str_cat `clonc#` ( nurl_str_int n ) )
+            ( nurl_str_cat4 ( nurl_str_cat3 cn ` ` ? == 0 ( nurl_str_len gn ) cn gn ) ` ` ( nurl_str_cat3 ( nurl_str_int line ) ` ` tshow ) ( nurl_str_cat ` ` ( nurl_lex_filename lex ) ) ) )
+        } {}
+    } {}
+}
+
+// The calls closures hand back whose result cannot be copied (__nc_ret_check):
+// one whose callee may lend it hands its caller a value someone else owns.
+@ resolve_clo_nc_rets i syms → v {
+    : i n ( nurl_str_to_int ( nurl_sym_get g_pending_impl `clonc_n` ) )
+    : ~ i j 0
+    ~ < j n {
+        : ~ s r ( nurl_str_cat ( nurl_sym_get g_pending_impl ( nurl_str_cat `clonc#` ( nurl_str_int j ) ) ) `` )
+        : s cn ( str_first_word r ) = r ( str_skip_word r )
+        : s gn ( str_first_word r ) = r ( str_skip_word r )
+        : s line ( str_first_word r ) = r ( str_skip_word r )
+        : s tshow ( str_first_word r ) = r ( str_skip_word r )
+        ? | ( __callee_lent syms cn gn ) | ( __hown_dyn syms cn 0 ) ( __hown_dyn syms gn 0 ) {
+            ( bck_emit_error r ( nurl_str_to_int line ) ( nurl_str_cat3
+            ( nurl_str_cat3 `a closure hands its result to its caller as the caller's own, but '` ( bck_fn_show cn ) `' may lend what it hands back, ` )
+            ( nurl_str_cat3 `and a '` tshow `' cannot be copied — the value would be released by its owner and by the closure's caller. ` )
+            `Hand back a value the body makes, or one a call hands over.` ) )
+        } {}
+        = j + j 1
+    }
+}
+
 // The slot a capture lives in inside the closure body: its env's copy (by
 // value) or the enclosing frame's binding (by pointer). A binding of the
 // same spelling declared in the body has a slot of its own.
@@ -55181,6 +55414,7 @@ unsafe @ split_emit_module i n i mlen → v {
         ( emit_sink_flags )
         ( mem_emit_arg_flags syms )
         ( resolve_nocopy_lends syms )
+        ( resolve_clo_nc_rets syms )
         ( resolve_owned_strings_kept syms )
         ( lint_free_resolve )
         ( mem_emit_env_flags )

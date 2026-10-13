@@ -70,7 +70,12 @@ final value written without `^` was not judged as `^` judges it, so a
 closure falling off with what it lent (h217) and a function falling off
 with a lend — even `@ idv ( Vec i ) v → ( Vec i ) { v }` (h218) — made
 their callers release what they did not own. Both spellings now mean the
-same, and the metamorphic matrix holds them side by side (*Fixed*).
+same, and the metamorphic matrix holds them side by side (*Fixed*). What
+a closure hands back is its caller's own, so three more followed: one
+that cannot be copied and that the closure does not own is rejected
+(h219), a raw string it lent comes back a copy and any other view of
+what it captured is rejected (h220), and no function hands back a field
+it cannot copy out of a struct it drops (h221) (*Fixed*, *Changed*).
 
 ### Added
 
@@ -331,6 +336,32 @@ same, and the metamorphic matrix holds them side by side (*Fixed*).
   lexed twice. One fewer rule set; and the fall-off tail now gets `^`'s
   tail calls too.
 
+- **A closure cannot hand back what it does not own and cannot copy**
+  (h219). A `% Drop` value with no clone — its parameter, its capture, a
+  field of either, or what a lending call lent (`( vec_at rs 0 )`) — was
+  handed to a caller that takes a closure's result as its own: released
+  by its owner and by the caller (ASan heap-use-after-free on main). The
+  value is rejected where it is handed back; a call, at module end on the
+  callee's final summary (`resolve_clo_nc_rets`).
+
+- **A view a closure hands back is followed** (h220). A call through a
+  closure value had the source expression `*` (not modelled), and a raw
+  string the body lent was taken as owned: `( string_data x )` of a
+  parameter or capture, or a Slice of the Vec it was handed, dangled once
+  the source grew (ASan heap-use-after-free on main). A raw string the
+  closure lent now comes back a copy at the call (`mem_clo_ret_own_str`);
+  any other view holds every argument (`\(args)`), so the walk ends it as
+  it ends a function's; and a view of what the closure captured — which
+  its caller cannot see — is rejected in the body, followed through the
+  body's own bindings (`__cvt`).
+
+- **No function hands back a field it cannot copy out of a struct it
+  drops** (h221). `: Hold h @ Hold { … } ^ . h r`, with `r` a `% Drop`
+  value with no clone, returned the field while `h`'s drop released it on
+  the way out (ASan heap-use-after-free on main). Such a field of a local,
+  a module global or a closure's capture is rejected; a parameter's field
+  stays a lend, and one read through a pointer is raw code's to vouch for.
+
 - **A closure's final value is its caller's own** (h217). A call through
   a closure value takes the result as its own, and a body written with
   `^` copied what it only lent — but one that fell off its end with it
@@ -342,7 +373,11 @@ same, and the metamorphic matrix holds them side by side (*Fixed*).
   by its callee's answer for this invocation, a binding by its drop flag
   (it then leaves with the return; a capture by pointer stays the
   enclosing frame's), a field read always — except out of a call that
-  handed the whole over, where it leaves with it.
+  handed the whole over, where it leaves with it. The body's final value
+  is now compiled by `gen_ret` as functions' is (`g_clo_body_ret`), and
+  `gen_ret` itself copies the closure results its own rules left lent: a
+  capture by pointer, a field of a capture, a field of a call that lent
+  it — `^` had the same gaps.
 
 - **A value handed out of a block through the block's own binding
   borrows what that binding held** (h216). `: v { : t ( vec_at outer 0 )

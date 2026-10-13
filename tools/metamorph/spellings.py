@@ -99,6 +99,11 @@ def prog(body, prelude=PRELUDE_VEC, extra=""):
     return f"{prelude}{extra}\n@ main → i {{\n{body}\n    ^ 0\n}}\n"
 
 
+# A value that cannot be copied: a `% Drop` struct with no clone (h219, h221).
+RES_TYPE = (": Res { ( Vec i ) buf }\n"
+            "% Drop Res {\n    @ drop Res r → v { ( vec_free [i] . r buf ) }\n}\n")
+
+
 # ── The classes ─────────────────────────────────────────────────────────
 
 CLASSES = [
@@ -1394,6 +1399,64 @@ CLASSES = [
         },
     },
     {
+        "name": "unowned-result-handed-over",
+        "severity": "memory-unsafety",
+        "doc": "A closure's caller takes its result as its own (h217), so "
+               "a value the body does not own and cannot copy — its "
+               "parameter, its capture, a field of either, what a lending "
+               "call lent — cannot be handed back (h219); nor a view of "
+               "what it captured, which its caller cannot follow (h220); "
+               "nor can any function hand back such a field of a struct it "
+               "drops (h221). `^` and the body's final value are one "
+               "spelling.",
+        "expect": REJECT_DEFAULT,
+        "expect_msg": ["a closure hands its result to its caller as the caller's own",
+                       "a closure hands back a view",
+                       "cannot be copied out of it"],
+        "spellings": {
+            "capture-falloff": prog(
+                "    : Res r @ Res { ( vec_new [i] ) }\n"
+                "    : ( @ Res ) f \\ → Res { r }\n"
+                "    : Res a ( f )", extra=RES_TYPE),
+            "capture-caret": prog(
+                "    : Res r @ Res { ( vec_new [i] ) }\n"
+                "    : ( @ Res ) f \\ → Res { ^ r }\n"
+                "    : Res a ( f )", extra=RES_TYPE),
+            "param-falloff": prog(
+                "    : Res r @ Res { ( vec_new [i] ) }\n"
+                "    : ( @ Res Res ) f \\ Res p → Res { p }\n"
+                "    : Res a ( f r )", extra=RES_TYPE),
+            "capture-field-falloff": prog(
+                "    : Hold h @ Hold { @ Res { ( vec_new [i] ) } 1 }\n"
+                "    : ( @ Res ) f \\ → Res { . h r }\n"
+                "    : Res a ( f )",
+                extra=RES_TYPE + ": Hold { Res r i n }\n"),
+            "lending-call-falloff": prog(
+                "    : ( Vec Res ) rs ( vec_new [Res] )\n"
+                "    ( vec_push [Res] rs @ Res { ( vec_new [i] ) } )\n"
+                "    : ( @ Res ) f \\ → Res { ( vec_at [Res] rs 0 ) }\n"
+                "    : Res a ( f )", extra=RES_TYPE),
+            "view-of-capture": prog(
+                "    : ( Vec i ) v ( vec_new [i] )\n"
+                "    : ( @ ( Slice i ) ) f \\ → ( Slice i ) { ( slice_from_vec [i] v ) }\n"
+                "    : ( Slice i ) sl ( f )",
+                prelude=PRELUDE_VEC + "$ `stdlib/core/slice.nu`\n"),
+            "view-of-capture-via-binding": prog(
+                "    : ( Vec i ) v ( vec_new [i] )\n"
+                "    : ( @ ( Slice i ) ) f \\ → ( Slice i ) { : ( Slice i ) t ( slice_from_vec [i] v ) ^ t }\n"
+                "    : ( Slice i ) sl ( f )",
+                prelude=PRELUDE_VEC + "$ `stdlib/core/slice.nu`\n"),
+            "dropped-field-caret": prog(
+                "    : Res a ( mk )",
+                extra=RES_TYPE + ": Hold { Res r i n }\n"
+                      "@ mk → Res {\n    : Hold h @ Hold { @ Res { ( vec_new [i] ) } 1 }\n    ^ . h r\n}\n"),
+            "dropped-field-falloff": prog(
+                "    : Res a ( mk )",
+                extra=RES_TYPE + ": Hold { Res r i n }\n"
+                      "@ mk → Res {\n    : Hold h @ Hold { @ Res { ( vec_new [i] ) } 1 }\n    . h r\n}\n"),
+        },
+    },
+    {
         "name": "controls",
         "doc": "Correct programs. A class of its own because a checker "
                "that rejects these is worse than one that misses a bug — "
@@ -1407,6 +1470,24 @@ CLASSES = [
                "would encode that documented noise as a regression.",
         "expect": ACCEPT,
         "spellings": {
+            # What a closure may hand back: a value it makes, even one that
+            # cannot be copied; a view of its argument (h219, h220). A
+            # function lends its parameter's field that cannot be copied.
+            "closure-makes-uncopyable": prog(
+                "    : ( @ Res ) mk \\ → Res { @ Res { ( vec_new [i] ) } }\n"
+                "    : Res a ( mk )\n"
+                "    : Res b ( mk )", extra=RES_TYPE),
+            "closure-view-of-argument": prog(
+                "    : ( Vec i ) w ( vec_new [i] )\n"
+                "    ( vec_push [i] w 7 )\n"
+                "    : ( @ ( Slice i ) ( Vec i ) ) f \\ ( Vec i ) x → ( Slice i ) { ( slice_from_vec [i] x ) }\n"
+                "    : ( Slice i ) sl ( f w )\n"
+                "    : i n ( slice_len [i] sl )",
+                prelude=PRELUDE_VEC + "$ `stdlib/core/slice.nu`\n"),
+            "fn-lends-param-field-uncopyable": prog(
+                "    : Hold h @ Hold { @ Res { ( vec_new [i] ) } 1 }\n"
+                "    : i n ( vec_len [i] . ( held h ) buf )",
+                extra=RES_TYPE + ": Hold { Res r i n }\n@ held Hold h → Res { . h r }\n"),
             # An Arc's payload is built first and shared whole, and a copy
             # taken out of it is the taker's own to change.
             "arc-built-then-shared": prog(

@@ -826,7 +826,16 @@ nothing is lexed twice), and a closure's final value is copied unless
 the body owns it — the callee's answer for a call, the drop flag for a
 binding it keeps, and always for a field read except out of a call that
 handed the whole over. `tools/metamorph/spellings.py` holds the
-spellings side by side (`returned-lend`).
+spellings side by side (`returned-lend`). Following that through found
+three more. A closure handing back a value that cannot be copied (a `%
+Drop` value with no clone) that it does not own — its parameter, its
+capture, a field of either, what a lending call lent — released it twice
+(h219): rejected. A raw string a closure lent, and any other view it
+handed back, was not followed at the call (h220): the string now comes
+back a copy, a view of an argument is followed as a function's is, and a
+view of what the closure captured — which its caller cannot see — is
+rejected. And a function handing back a field it cannot copy out of a
+struct it drops returned it released (h221): rejected.
 
 The rules that carry it:
 
@@ -1155,7 +1164,11 @@ fixed:
   call right after it;
 - what the body stores or returns is a copy, and every closure result is
   owned by its caller — whether the body returns it with `^` or falls off
-  its end with it (h217);
+  its end with it (h217); a raw string it lent comes back a copy (h220);
+- a result that cannot be copied has to be the body's own: its parameter,
+  its capture, a field of either or what a call lent is rejected (h219);
+- a view it hands back (a Slice, a struct of views) may point into its
+  arguments, which the call follows, never into what it captured (h220);
 - releasing a parameter inside the body is a compile error.
 
 Accordingly, every `*_free_with` (`vec_free_with`, `box_free_with`,
