@@ -609,6 +609,17 @@ nothing (h216) (*Fixed*).
 
 ### Performance
 
+- **The compiler hoists IR type definitions without a two-byte search
+  of the whole module.** `__types_first` looked for `\n%` with `memmem`
+  across every module it emitted, megabytes at a time. It now finds each
+  line ending at `memchr` speed and checks the byte after it. Together
+  with removing the per-argument string work of the old Arc check, the
+  self-compile retires 2.3 % fewer instructions than main on the same
+  input (11.224e9 vs 11.488e9, identical IR). The new checks — the
+  borrow walk's frozen-payload rows, block and `??` source expressions,
+  the forward lend fixed point (h212–h216) — are included in that
+  figure. The bench kernels compile to the same code.
+
 - **Keccak's round constants are built once.** Every SHA-3 / SHAKE
   sponge (and every four-way one, and SLH-DSA's context) built its own Vec
   of the 24 ι constants: two allocations and 24 stores per hash. They are

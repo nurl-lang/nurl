@@ -134,20 +134,10 @@ $ `stdlib/core/char.nu`
     ^ ? == c 0 1 0
 }
 
-// The first `c` in `n` bytes at `buf`, or null (libc; nolibc has it).
-& `c` @ memchr s buf i c i n → s
-
 @ nurl_memmem_range * u hay i hlen * u needle i nlen → i {
     ? | < hlen 0 < nlen 0 { ^ -1 } {}
     ? == nlen 0 { ^ 0 } {}
     ? > nlen hlen { ^ -1 } {}
-    // One byte: memchr, several times faster than memmem's general
-    // search (a line ending, a delimiter — the common needle).
-    ? == nlen 1 {
-        : s q # s ( memchr # s hay & # i . needle 0 255 hlen )
-        ? == # i q 0 { ^ -1 } {}
-        ^ - # i q # i hay
-    } {}
     : s p # s ( memmem hay hlen needle nlen )
     ? == # i p 0 { ^ -1 } {}
     ^ - # i p # i hay
