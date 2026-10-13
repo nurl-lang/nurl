@@ -14418,10 +14418,10 @@ unsafe @ bck_check_lit_moves i lex i line i col s what s tab i scmask s moved s 
             ? & & & arg_call_lends == bck_arg_tt TT_LPAREN ! ( __clone_supported at syms ) ( __nc_drop_ty at ) {
                 ( __nc_copy_die ( nurl_sym_get syms `__fn_self_name__` ) at )
             } {}
-            // A binding that only borrows (an enum's payload, a field read
-            // into a name): a copy goes over; one that cannot be copied
-            // is rejected (h231).
-            ? & ( is_ident_tok bck_arg_tt ) ( seq arg_lent `1` ) {
+            // An enum's payload, which the arm only borrows: a copy goes
+            // over; one that cannot be copied is rejected (h231). (Other
+            // borrowing bindings are cursors a `sink` takes over.)
+            ? & & ( is_ident_tok bck_arg_tt ) ( seq arg_lent `1` ) ( seq ( nurl_sym_get2 syms bck_arg_val `__enum_pl` ) `1` ) {
                 ? ( __clone_supported at syms ) { = av ( mem_emit_cloneif cg at av arg_lent ) } {
                     ? ( __nc_drop_ty at ) { ( __nc_copy_die ( nurl_sym_get syms `__fn_self_name__` ) at ) } {}
                 }
@@ -17845,6 +17845,8 @@ unsafe @ gen_match i lex i syms i cg → s {
                 // widen zero-extends a `u`-family payload.
                 ( nurl_sym_def syms pv0 pt0_eff )
                 ( nurl_sym_def syms ( nurl_str_cat pv0 `__ptr` ) vp0 )
+                // (An enum's payload: lent by the enum, h231.)
+                ( nurl_sym_def syms ( nurl_str_cat pv0 `__enum_pl` ) ? pt0_is_opt_bool `` `1` )
                 ( mem_note_plend syms pv0 match_first_tt match_var_name __m_ser )
                 // A payload of a `vec_get` result reads that Vec slot.
                 ? & pt0_is_opt_bool != 0 ( nurl_sym_len2 syms match_var_name `__vget` )
