@@ -844,7 +844,10 @@ drops it, and a second use of the closure is a use after the move
 (h222). A closure that only reads such a capture holds a copy of its
 bits while the binding owns what they point at, so it is a view of the
 binding (its source expression `\(r)`) and the walk ends it with the
-binding — handed out of the frame, it is rejected (h224). And a `sink`
+binding — handed out of the frame, it is rejected (h224). A closure that
+stays in its frame and may move such a capture out carries the binding's
+drop flag: the body clears it where it moves the value, and the frame
+drops what was not taken — a closure never run leaks nothing (h236). And a `sink`
 parameter is a binding of the function's own frame: a view of it handed
 back is rejected as a view of a local is (h225).
 

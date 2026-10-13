@@ -1388,6 +1388,12 @@ unsafe @ agg_field_count i syms s ot → i {
 // …and, for a closure that releases some captures itself, which (their
 // env field is not dropped again).
 : ~ s g_env_released ``
+// The captures of the closure being built that cannot be copied, owned by
+// a binding of the enclosing frame, in a closure that stays in that frame:
+// the env carries the binding's drop flag, so the body takes the value
+// over only when it moves it out, and a closure never run leaves it to
+// the frame (__byref_flag_vars, h236).
+: ~ s g_nc_flag_caps ``
 // …and, for one that a thread or a fiber will run, the captures it takes
 // over from bindings the function no longer uses (gen_closure_expr).
 : ~ s g_env_moved ``
@@ -35112,6 +35118,27 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
     ^ T
 }
 
+// The captures that cannot be copied which carry their binding's drop flag
+// (g_nc_flag_caps): owned by a binding of this frame, captured by value,
+// in a closure that is not returned or detached here.
+@ __nc_flag_caps s captured_vars i syms b leaves → s {
+    : ~ s out ( nurl_str_cat `` `` )
+    ? | leaves == 0 g_auto_drop_strings { ^ out } {}
+    : ~ s vars ( nurl_str_cat captured_vars `` )
+    ~ != 0 ( nurl_str_len vars ) {
+        : s v ( str_first_word vars ) = vars ( str_skip_word vars )
+        : s t ( nurl_sym_get syms v )
+        ? & & ! ( __is_capture_byref v syms ) ! ( __is_handle_ty t ) ( __nc_drop_ty t ) {
+            : s p ( nurl_sym_get2 syms v `__ptr` )
+            ? & & & != 0 ( nurl_str_len p ) != 0 ( nurl_sym_len2 syms p `__live` ) != 0 ( nurl_sym_len2 syms p `__udty` )
+            == 0 ( nurl_sym_len2 syms p `__outer_owned` ) {
+                = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat v `` ) ( nurl_str_cat3 out ` ` v )
+            } {}
+        } {}
+    }
+    ^ out
+}
+
 // The by-pointer captures (`__is_capture_byref`) whose binding owns its
 // value under a drop flag: the env carries a pointer to that flag too, so
 // a value the closure assigns over the binding (`recover \ → v { = resp (
@@ -35123,7 +35150,7 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
     : ~ s vars ( nurl_str_cat captured_vars `` )
     ~ != 0 ( nurl_str_len vars ) {
         : s v ( str_first_word vars ) = vars ( str_skip_word vars )
-        ? ( __is_capture_byref v syms ) {
+        ? | ( __is_capture_byref v syms ) ( str_contains_word g_nc_flag_caps v ) {
             // (By the registration's own marks, visible from a closure
             // body's scope, which starts its own list of drops.)
             : s p ( nurl_sym_get2 syms v `__ptr` )
@@ -35421,7 +35448,7 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
         // enclosing binding no longer drops it (h222). The env drops
         // nothing of it — the body that runs consumes it; one never run
         // leaks it, as a released handle does.
-        ? & & & ( str_contains_word g_env_released var ) ! cap_byref ! ( __is_handle_ty var_type ) ( __nc_drop_ty var_type ) {
+        ? & & & & ( str_contains_word g_env_released var ) ! cap_byref ! ( __is_handle_ty var_type ) ( __nc_drop_ty var_type ) ! ( str_contains_word g_nc_flag_caps var ) {
             : s ncup ( mem_udrop_ptr_of syms var )
             ? != 0 ( nurl_str_len ncup ) { ( mem_udrop_flag_set syms cg ncup `0` ) } {}
         } {}
@@ -36003,6 +36030,7 @@ unsafe @ __thr_peel s lty → s {
     // binding (its name) that may be (__clo_detach_moves). Read before
     // the body can build a closure of its own.
     : b clo_detach_lit != 0 g_clo_detach
+    : s __ncf_saved ( nurl_str_cat g_nc_flag_caps `` )
     = g_clo_detach 0
     : s clo_bind_name ( nurl_str_cat g_clo_bind_name `` )
     = g_clo_bind_name ``
@@ -36064,6 +36092,7 @@ unsafe @ __thr_peel s lty → s {
     // syms is the OUTER scope; param_names is a space-separated list of closure params.
     // Only outer locals (those with __ptr in syms) are captured, not globals/functions.
     : s captured_vars ( simple_capture_analysis lex syms param_names )
+    = g_nc_flag_caps ( __nc_flag_caps captured_vars syms ? | clo_returned clo_detach_lit T F )
     : i captured_count ( count_words captured_vars )
     // What it can capture, for the thread-shared cycle rules (published
     // when the literal is done: the body may build closures of its own).
@@ -37055,13 +37084,14 @@ unsafe @ __thr_peel s lty → s {
         ~ != 0 ( nurl_str_len __ncv ) {
             : s __nw ( str_first_word __ncv ) = __ncv ( str_skip_word __ncv )
             : s __nt ( nurl_sym_get syms __nw )
-            ? & & & ! ( str_contains_word clo_released __nw ) ! ( __is_capture_byref __nw syms ) ! ( __is_handle_ty __nt ) ( __nc_drop_ty __nt ) {
+            ? & & & | ! ( str_contains_word clo_released __nw ) ( str_contains_word g_nc_flag_caps __nw ) ! ( __is_capture_byref __nw syms ) ! ( __is_handle_ty __nt ) ( __nc_drop_ty __nt ) {
                 = __cap_sx ( __sx_join __cap_sx ( nurl_str_cat3 `\\(` __nw `)` ) )
             } {}
         }
     } {}
     ( __sx_publish __sx_me ? == 0 ( nurl_str_len __cap_sx ) `-` __cap_sx )
 
+    = g_nc_flag_caps __ncf_saved
     result2
 }
 

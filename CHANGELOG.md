@@ -381,6 +381,14 @@ generic that copies its `T` cannot be instantiated with one (h235)
   a module global or a closure's capture is rejected; a parameter's field
   stays a lend, and one read through a pointer is raw code's to vouch for.
 
+- **A closure never run leaves its capture to the frame** (h236). A
+  closure whose body moves out a capture it cannot copy took it over when
+  it was made, so one never run — or run without reaching the move —
+  leaked it (LSan). A closure that stays in its frame now carries the
+  binding's drop flag (as a by-pointer capture does): the body clears it
+  where it moves the value out, and the frame drops what the closure did
+  not take. A closure returned or handed to a thread keeps the old rule.
+
 - **A temporary argument that cannot be copied has an owner** (h234). `(
   look ( mk ) )` or `: Res r ( id ( mk ) )`, `mk` handing over a `% Drop`
   value with no clone, left the temporary with no owner (LSan on main).
