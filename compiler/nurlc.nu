@@ -1599,6 +1599,9 @@ unsafe @ agg_field_count i syms s ot → i {
 : ~ s g_blk_lets ``
 : ~ i g_blk_depth 0
 : ~ i g_blk_val_depth 0
+// Whether the arm about to be generated hands its value on (gen_cond /
+// gen_match set it before each arm; the arm's block reads it on entry).
+: ~ b g_arm_val F
 // `g_fn_reallocs[fname]`: the parameters whose BUFFER the function may move
 // or release (a reallocation, a free) — what ends a view of them (§2.10),
 // as distinct from changing what the buffer holds (g_fn_mutates). Built
@@ -15930,6 +15933,7 @@ unsafe @ gen_cond i lex i syms i cg → s {
     // carry to the join (mem_exits_inherit, after the body).
     : s t_pend0 ( nurl_sym_get g_fn_escapes `__pend_exits__` )
     ( mem_arm_body_mark lex )
+    = g_arm_val | ! c_is_stmt != 0 g_blk_val_depth
     : i t_sxn0 g_sx_n
     : i t_mp0 g_member_path_on
     = g_member_path_on ? & != 0 __sx_me == t_tt0 TT_DOT 1 g_member_path_on
@@ -16115,6 +16119,7 @@ unsafe @ gen_cond i lex i syms i cg → s {
     : s e_v0 ( nurl_str_cat ( nurl_lex_val lex ) `` )
     : s e_pend0 ( nurl_sym_get g_fn_escapes `__pend_exits__` )
     ( mem_arm_body_mark lex )
+    = g_arm_val | ! c_is_stmt != 0 g_blk_val_depth
     : i e_sxn0 g_sx_n
     : i e_mp0 g_member_path_on
     = g_member_path_on ? & != 0 __sx_me == e_tt0 TT_DOT 1 g_member_path_on
@@ -16849,7 +16854,8 @@ unsafe @ gen_match i lex i syms i cg → s {
     // vec_at top 0 ) 0 )` — lends what that one lends: its source
     // expression rides on the `match` row, h214.)
     = g_bck_match_sx ? & & != 0 g_srcx_on == match_first_tt TT_LPAREN == g_sx_at + __msxn0 1 ( nurl_str_cat g_sx `` ) ( nurl_str_cat `` `` )
-    : s __m_scrut_sx ? != 0 __sx_mme ( __sx_operand_c syms match_first_tt match_var_name ( bck_bind_class match_type ) `` __msxn0 ) ( nurl_str_cat `` `` )
+    : b m_val | ! m_is_stmt != 0 g_blk_val_depth
+    : s __m_scrut_sx ? & m_val != 0 __sx_mme ( __sx_operand_c syms match_first_tt match_var_name ( bck_bind_class match_type ) `` __msxn0 ) ( nurl_str_cat `` `` )
     ? ! ( __sx_nested g_bck_match_sx ) { = g_bck_match_sx `` } {}
     // What a payload binding may point into (a raw pointer taken from it
     // dies with that owner — __ptr_root_owner): the matched binding, or
@@ -17944,9 +17950,10 @@ unsafe @ gen_match i lex i syms i cg → s {
             // to carry to the join (mem_exits_inherit, after the body).
             : s arm_pend0 ( nurl_sym_get g_fn_escapes `__pend_exits__` )
             ( mem_arm_body_mark lex )
+            = g_arm_val | ! m_is_stmt != 0 g_blk_val_depth
             : i arm_sxn0 g_sx_n
             : ~ s arm_result ( gen_stmt lex syms cg )
-            ? != 0 __sx_mme {
+            ? & m_val != 0 __sx_mme {
                 // (A payload handed back as is is part of the matched value.)
                 : s __atv ( nurl_sym_get syms `__tail_first_val__` )
                 : b __atp & & == g_did_ret 0 ( is_ident_tok ( nurl_str_to_int ( nurl_sym_get syms `__tail_first_tt__` ) ) ) & != 0 ( nurl_str_len __atv ) ( str_contains_word ( nurl_str_cat4 pv0 ` ` pv1 ( nurl_str_cat3 ` ` pv2 ( nurl_str_cat ` ` pv_over ) ) ) __atv )
@@ -19094,19 +19101,26 @@ unsafe @ gen_match i lex i syms i cg → s {
 }
 
 // The depth of the innermost value block that declared `name`, -1 none.
-@ __blk_owner s name → i {
-    : ~ i best -1
-    : ~ s rest ( nurl_str_cat g_blk_lets `` )
+// (The log is scanned in place: a word is `D:name<op>sx`.)
+unsafe @ __blk_owner s name → i {
+    : i n ( nurl_str_len g_blk_lets )
+    ? == 0 n { ^ -1 } {}
+    : *u lp # *u g_blk_lets
+    : *u np # *u name
     : i nl ( nurl_str_len name )
-    ~ != 0 ( nurl_str_len rest ) {
-        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
-        : i c ( nurl_str_find w `:` )
-        ? & & > c 0 > ( nurl_str_len w ) + + c nl 1 == ( nurl_str_get w + + c nl 1 ) 61 {
-            ? ( seq ( nurl_str_slice w + c 1 nl ) name ) {
-                : i d ( nurl_str_to_int ( nurl_str_slice w 0 c ) )
-                ? > d best { = best d } {}
-            } {}
-        } {}
+    : ~ i best -1
+    : ~ i k 0
+    ~ < k n {
+        // A word: its depth up to `:`.
+        : ~ i d 0
+        ~ & < k n != # i . lp k 58 { = d + * d 10 - # i . lp k 48 = k + k 1 }
+        = k + k 1
+        // …its name, then `=` for a declaration.
+        : ~ i j 0
+        ~ & & < + k j n < j nl == # i . lp + k j # i . np j { = j + j 1 }
+        ? & & & == j nl < + k j n == # i . lp + k j 61 > d best { = best d } {}
+        ~ & < k n != # i . lp k 32 { = k + k 1 }
+        = k + k 1
     }
     ^ best
 }
@@ -19114,21 +19128,28 @@ unsafe @ gen_match i lex i syms i cg → s {
 // What block-local `name`, declared at `depth`, holds now: its `let`'s
 // source expression, replaced by an assignment in that block, joined with
 // one in a block nested in it. `` when it was not declared there.
-@ __blk_val s name i depth → s {
+unsafe @ __blk_val s name i depth → s {
     : s pre ( nurl_str_cat3 ( nurl_str_int depth ) `:` name )
     : i pl ( nurl_str_len pre )
+    : i n ( nurl_str_len g_blk_lets )
+    : *u lp # *u g_blk_lets
+    : *u pp # *u pre
     : ~ s acc ``
     : ~ b seen F
-    : ~ s rest ( nurl_str_cat g_blk_lets `` )
-    ~ != 0 ( nurl_str_len rest ) {
-        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
-        ? & > ( nurl_str_len w ) pl ( seq ( nurl_str_slice w 0 pl ) pre ) {
-            : i op ( nurl_str_get w pl )
-            : s v ( nurl_str_slice w + pl 1 - - ( nurl_str_len w ) pl 1 )
+    : ~ i k 0
+    ~ < k n {
+        : ~ i e k
+        ~ & < e n != # i . lp e 32 { = e + e 1 }
+        : ~ i j 0
+        ~ & & < j pl < + k j e == # i . lp + k j # i . pp j { = j + j 1 }
+        ? & == j pl < + k pl e {
+            : i op # i . lp + k pl
+            : s v ( nurl_str_slice g_blk_lets + + k pl 1 - - - e k pl 1 )
             ? == op 61 { = acc ( nurl_str_cat v `` ) = seen T } {}
             ? & == op 126 seen { = acc ( nurl_str_cat v `` ) } {}
             ? & == op 43 seen { = acc ( __sx_join acc v ) } {}
         } {}
+        = k + e 1
     }
     ? ! seen { ^ ( nurl_str_cat `` `` ) } {}
     ^ ( nurl_str_cat acc `` )
@@ -19195,17 +19216,25 @@ unsafe @ __sx_close s sx i mind → s {
     ? val { = g_blk_val_depth + g_blk_val_depth 1 } {}
 }
 
-@ __blk_leave b val → v {
+unsafe @ __blk_leave b val → v {
     ? != 0 ( nurl_str_len g_blk_lets ) {
         : s pre ( nurl_str_cat ( nurl_str_int g_blk_depth ) `:` )
         : i pl ( nurl_str_len pre )
+        : i n ( nurl_str_len g_blk_lets )
+        : *u lp # *u g_blk_lets
+        : *u pp # *u pre
         : ~ s keep ``
-        : ~ s rest ( nurl_str_cat g_blk_lets `` )
-        ~ != 0 ( nurl_str_len rest ) {
-            : s w ( str_first_word rest ) = rest ( str_skip_word rest )
-            ? ! & >= ( nurl_str_len w ) pl ( seq ( nurl_str_slice w 0 pl ) pre ) {
+        : ~ i k 0
+        ~ < k n {
+            : ~ i e k
+            ~ & < e n != # i . lp e 32 { = e + e 1 }
+            : ~ i j 0
+            ~ & & < j pl < + k j e == # i . lp + k j # i . pp j { = j + j 1 }
+            ? != j pl {
+                : s w ( nurl_str_slice g_blk_lets k - e k )
                 = keep ? == 0 ( nurl_str_len keep ) ( nurl_str_cat w `` ) ( nurl_str_cat3 keep ` ` w )
             } {}
+            = k + e 1
         }
         = g_blk_lets ( nurl_str_cat keep `` )
     } {}
@@ -19221,9 +19250,14 @@ unsafe @ __sx_close s sx i mind → s {
     : b blk_is_arm ( seq __blk_mark `1` )
     ( nurl_sym_set g_fn_escapes `__arm_body__` `` )
     : b blk_is_stmt ( mem_join_heads_stmt lex )
-    // (Its value's source expression: its tail's — __blk_tail_sx.)
+    // (Its value's source expression: its tail's — __blk_tail_sx — when
+    // the value goes anywhere: an arm of a `?` / `??` that is not a
+    // statement, a bare block in value position, or anything inside a
+    // block that hands its value on.)
+    : b blk_val ? blk_is_arm g_arm_val | ! blk_is_stmt != 0 g_blk_val_depth
+    = g_arm_val F
     : i __sx_bme ( __sx_enter )
-    ( __blk_enter T )
+    ( __blk_enter blk_val )
     ( nurl_lex_advance lex )
     ( bck_block_enter bck_line )
     : ~ s last ( nurl_str_cat `undef` `` )
@@ -19259,8 +19293,8 @@ unsafe @ __sx_close s sx i mind → s {
         {}
         = any T
     }
-    ? != 0 __sx_bme { ( __sx_publish __sx_bme ( __blk_tail_sx syms any __nstmt __tail_tt __tail_tv __tail_sxn0 ) ) } {}
-    ( __blk_leave T )
+    ? & blk_val != 0 __sx_bme { ( __sx_publish __sx_bme ( __blk_tail_sx syms any __nstmt __tail_tt __tail_tv __tail_sxn0 ) ) } {}
+    ( __blk_leave blk_val )
     // Closing-edge/implicit-return instructions must not inherit the
     // last sibling arm's source line: that overcounts its GCOV hits.
     ? & != g_dbg_enabled 0 != g_dbg_current_subprogram 0 {
