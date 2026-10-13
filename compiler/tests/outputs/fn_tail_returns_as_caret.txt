@@ -4,7 +4,7 @@ EXIT 0
 OUTPUT
 2
 3
-2
+3
 2
 2
 abc

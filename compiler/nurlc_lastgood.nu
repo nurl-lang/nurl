@@ -19438,14 +19438,15 @@ unsafe @ __blk_leave b val → v {
     ( __close_dead_block __dead_any )
 }
 
-// Is the statement starting here — a name, a call or a field read — the
-// value its block falls off with: is the next token after it the block's
-// `}`? A name asks the lexer's lookahead; a call or a field read is read
-// off the source text (balanced parentheses, backtick strings and `//`
-// comments skipped as the lexer skips them), so nothing is lexed twice.
+// Is the statement starting here — a name, a call, a field read or a
+// literal `@ T { … }` — the value its block falls off with: is the next
+// token after it the block's `}`? A name asks the lexer's lookahead; the
+// rest is read off the source text (balanced brackets, backtick strings
+// and `//` comments skipped as the lexer skips them), so nothing is lexed
+// twice.
 unsafe @ __is_fall_value_stmt i lex i tt → b {
     ? ( is_ident_tok tt ) { ^ == ( nurl_lex_peek_type lex ) TT_RBRACE } {}
-    ? & != tt TT_LPAREN != tt TT_DOT { ^ F } {}
+    ? & & != tt TT_LPAREN != tt TT_DOT != tt TT_AT { ^ F } {}
     : s p # s lex
     : *u src # *u # s ( nurl_peek p LX_SRC )
     : i len ( nurl_peek p LX_LEN )
@@ -19476,34 +19477,53 @@ unsafe @ __src_ident_end * u src i len i pos → i {
     ^ q
 }
 
+// Past the bracket group opening at `pos` (`(` or `{`): balanced, with
+// backtick strings (no escape spells a backtick: __lex_one) and `//`
+// comments skipped; -1 if it never closes.
+unsafe @ __src_group_end * u src i len i pos i open i close → i {
+    : ~ i q + pos 1
+    : ~ i depth 1
+    ~ < q len {
+        : i d & # i . src q 255
+        ? == d 96 {
+            = q + q 1
+            ~ & < q len != & # i . src q 255 96 { = q + q 1 }
+            = q + q 1
+        } {
+            ? & & == d 47 < + q 1 len == & # i . src + q 1 255 47 {
+                ~ & < q len != & # i . src q 255 10 { = q + q 1 }
+            } {
+                ? == d open { = depth + depth 1 } {}
+                ? == d close {
+                    = depth - depth 1
+                    ? == depth 0 { ^ + q 1 } {}
+                } {}
+                = q + q 1
+            }
+        }
+    }
+    ^ -1
+}
+
 // Where the operand starting at `pos` ends — a name, a parenthesised
-// group, or a field read `. root field` of one — or -1 for anything else.
+// group, a field read `. root field` of one, or a literal `@ T { … }` —
+// or -1 for anything else.
 unsafe @ __src_operand_end * u src i len i pos → i {
     ? >= pos len { ^ -1 } {}
     : i c & # i . src pos 255
-    ? == c 40 {
+    ? == c 40 { ^ ( __src_group_end src len pos 40 41 ) } {}
+    // A literal: its type (parenthesised parts skipped whole), then its
+    // braces.
+    ? == c 64 {
         : ~ i q + pos 1
-        : ~ i depth 1
         ~ < q len {
             : i d & # i . src q 255
-            ? == d 96 {
-                // A backtick string runs to the next backtick (no escape
-                // spells one: __lex_one).
-                = q + q 1
-                ~ & < q len != & # i . src q 255 96 { = q + q 1 }
-                = q + q 1
-            } {
-                ? & & == d 47 < + q 1 len == & # i . src + q 1 255 47 {
-                    ~ & < q len != & # i . src q 255 10 { = q + q 1 }
-                } {
-                    ? == d 40 { = depth + depth 1 } {}
-                    ? == d 41 {
-                        = depth - depth 1
-                        ? == depth 0 { ^ + q 1 } {}
-                    } {}
-                    = q + q 1
-                }
-            }
+            ? == d 123 { ^ ( __src_group_end src len q 123 125 ) } {}
+            ? | | | == d 96 == d 125 == d 59 == d 92 { ^ -1 } {}
+            ? == d 40 {
+                = q ( __src_group_end src len q 40 41 )
+                ? < q 0 { ^ -1 } {}
+            } { = q + q 1 }
         }
         ^ -1
     } {}

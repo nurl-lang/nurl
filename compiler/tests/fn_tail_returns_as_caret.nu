@@ -1,7 +1,8 @@
-// A function body's final value — a name, a call or a field read — returns
-// as `^` returns it (h218): a parameter, an element or a field of one, a
-// binding that aliases one, all handed back as lends the caller does not
-// release; a field of a struct the body made comes back the caller's own.
+// A function body's final value — a name, a call, a field read or a
+// literal — returns as `^` returns it (h218): a parameter, an element or a field of one, a
+// binding that aliases one, a literal holding a field of one, all handed
+// back as lends the caller does not release; a field of a struct the body
+// made comes back the caller's own.
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
 
@@ -26,6 +27,8 @@ $ `stdlib/core/string.nu`
 
 @ name0 ( Vec String ) xs → String { ( vec_at [String] xs 0 ) }
 
+@ wrap Bx p → Bx { @ Bx { . p items 2 } }
+
 @ main → i {
     : ( Vec i ) seed ( vec_new [i] )
     ( vec_push [i] seed 5 )
@@ -47,6 +50,8 @@ $ `stdlib/core/string.nu`
     ( vec_push [i] ( first_items bxs ) 1 )
     : ( Vec i ) m ( made )
     ( vec_push [i] m 1 )
+    : Bx wr ( wrap bb )
+    ( vec_push [i] . wr items 1 )
     : ( Vec String ) names ( vec_new [String] )
     ( vec_push [String] names ( string_from `abc` ) )
     ( nurl_println_int ( vec_len [i] seed ) )

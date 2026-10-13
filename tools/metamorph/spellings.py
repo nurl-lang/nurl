@@ -1888,6 +1888,24 @@ RUNTIME_CLASSES = [
                 "    ( nurl_print ( nurl_str_int ( vec_len [i] . b items ) ) )",
                 extra=": Bx { ( Vec i ) items i n }\n"
                       "@ items_of Bx b → ( Vec i ) { . b items }\n"),
+            "fn-caret-literal": prog(
+                "    : ( Vec i ) seed ( vec_new [i] )\n"
+                "    ( vec_push [i] seed 5 )\n"
+                "    : Bx b @ Bx { seed 1 }\n"
+                "    : Bx w ( wrap b )\n"
+                "    ( vec_push [i] . w items 1 )\n"
+                "    ( nurl_print ( nurl_str_int ( vec_len [i] . b items ) ) )",
+                extra=": Bx { ( Vec i ) items i n }\n"
+                      "@ wrap Bx p → Bx { ^ @ Bx { . p items 2 } }\n"),
+            "fn-falloff-literal": prog(
+                "    : ( Vec i ) seed ( vec_new [i] )\n"
+                "    ( vec_push [i] seed 5 )\n"
+                "    : Bx b @ Bx { seed 1 }\n"
+                "    : Bx w ( wrap b )\n"
+                "    ( vec_push [i] . w items 1 )\n"
+                "    ( nurl_print ( nurl_str_int ( vec_len [i] . b items ) ) )",
+                extra=": Bx { ( Vec i ) items i n }\n"
+                      "@ wrap Bx p → Bx { @ Bx { . p items 2 } }\n"),
             "fn-falloff-join": prog(
                 LEND_SETUP + "    ( vec_push [i] ( pick outer T ) 1 )" + LEND_READ,
                 extra="@ pick ( Vec ( Vec i ) ) xs b c → ( Vec i ) { ? c { ( vec_at [( Vec i )] xs 0 ) } { ( vec_new [i] ) } }\n"),

@@ -317,11 +317,12 @@ same, and the metamorphic matrix holds them side by side (*Fixed*).
   does a field of a call's result.
 
 - **A function's final value returns as `^` returns it** (h218). A body
-  that falls off with a name, a call or a field read — `@ idv ( Vec i ) v
-  → ( Vec i ) { v }`, `{ ( vec_at xs 0 ) }`, `{ . b items }`, `{ : e (
-  vec_at xs 0 ) e }` — was summarised as handing over a value of its own
+  that falls off with a name, a call, a field read or a literal — `@ idv
+  ( Vec i ) v → ( Vec i ) { v }`, `{ ( vec_at xs 0 ) }`, `{ . b items }`,
+  `{ : e ( vec_at xs 0 ) e }` — was summarised as handing over a value of its own
   where the same body with `^` lent, so every caller released its
-  argument's contents (ASan heap-use-after-free on main for each). The
+  argument's contents (ASan heap-use-after-free on main for each); a
+  literal holding a parameter's field copied it where `^` lent it. The
   fall-off path had grown its own, narrower copy of `gen_ret`'s rules;
   now such a final statement is compiled by `gen_ret` itself
   (`gen_block_ret` → `g_ret_implicit`). Whether a statement is the last
@@ -647,13 +648,12 @@ same, and the metamorphic matrix holds them side by side (*Fixed*).
   across every module it emitted, megabytes at a time. It now finds each
   line ending at `memchr` speed and checks the byte after it. Together
   with removing the per-argument string work of the old Arc check, the
-  self-compile retires 2.2 % fewer instructions than main on the same
-  input (11.280e9 vs 11.529e9). The new checks — the borrow walk's
+  self-compile retires 2.1 % fewer instructions than main on the same
+  input (11.284e9 vs 11.529e9). The new checks — the borrow walk's
   frozen-payload rows, block and `??` source expressions, the forward
   lend fixed point (h212–h216), and the final value read as a `^`
-  (h217, h218: +0.13 % on its own) — are included in that figure. The
-  output differs from main's only where a function now falls off with a
-  call: it is a tail call, as `^ ( f … )` always was.
+  (h217, h218) — are included in that figure. The bench kernels compile
+  to the same code as on main.
 
 - **Keccak's round constants are built once.** Every SHA-3 / SHAKE
   sponge (and every four-way one, and SLH-DSA's context) built its own Vec

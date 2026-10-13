@@ -820,8 +820,8 @@ falling off with a lend — `@ idv ( Vec i ) v → ( Vec i ) { v }`, `{ (
 vec_at xs 0 ) }`, `{ . b items }` — was summarised as handing over a
 value of its own, and every caller released its argument's contents
 (h218). Written with `^`, both were sound. Now a function body whose
-final statement is a name, a call or a field read compiles it as the
-`^` it means (the statement's end is read off the source text, so
+final statement is a name, a call, a field read or a literal compiles
+it as the `^` it means (the statement's end is read off the source text, so
 nothing is lexed twice), and a closure's final value is copied unless
 the body owns it — the callee's answer for a call, the drop flag for a
 binding it keeps, and always for a field read except out of a call that
