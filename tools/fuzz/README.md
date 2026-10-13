@@ -20,7 +20,9 @@ of real bugs lives in [`FINDINGS.json`](FINDINGS.json).
    **traits** with a required method, a default method and a bounded
    generic, closures (creation-time scalar capture), while/foreach loops
    **with `break` and `continue`**, `;` defer (reachability-armed, LIFO),
-   `% Drop` destructors across scope shapes, string/Vec/slice ownership
+   `% Drop` destructors across scope shapes **and inside a container a
+   struct holds (a Vec, a Vec of Vecs, a Box, an option, an enum payload —
+   h209)**, string/Vec/slice ownership
    traffic **including containers whose element is a struct**, helper calls
    and self-recursion. The same script is the statement-level oracle.
    `FUZZ_SAN_EVERY=N` additionally builds every Nth seed with

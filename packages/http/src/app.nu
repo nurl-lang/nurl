@@ -454,7 +454,7 @@ unsafe @ __httpapp_serve * HttpAppImpl a TcpListener listener s scheme s host i 
     : ~ UdpSocket h3_sock @ UdpSocket { # s 0 }
     : ~ ( @ v ) h3_thread_body \ → v {}
     : ~ b h3_thread_ok F
-    : ~ Thread h3_thread @ Thread { # s 0 }
+    : ~ Thread h3_thread ( thread_null )
     : ~ ( @ HttpResponse HttpRequest ) altw base
     ? & & != . a http3 0 > ( nurl_str_len cert ) 0 != 0 ( nurl_str_eq scheme `https` ) {
         = h3_creds ( http3_creds_load cert key )

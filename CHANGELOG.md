@@ -133,6 +133,38 @@ fewer instructions and 9–10 % less time than before this work
 
 ### Changed
 
+- **More of the standard library's owners release nothing by hand.**
+  - `Cell` is a `( Shared RawBlock )`: the bytes release themselves with
+    the last owner.
+  - `Thread`, `Mutex` and `Cond` hold a `( Shared T )` over an impl whose
+    pthread object sits in a `RawBlock`. The impl's drop only detaches
+    or destroys the object; the memory goes with its fields. `thread_null`
+    builds the empty handle that `@ Thread { # s 0 }` spelled before.
+  - `Deque` keeps a boxed control record whose buffer is a `RawBlock`.
+  - `Arena` keeps its chunks in a Vec of `RawBlock`s; `arena_reset`
+    truncates it.
+  - `Set` and `HashMap` keep a boxed control record whose key, value and
+    state buffers are `RawBlock`s; a rehash moves the entries out of the
+    old buffers before they go.
+  - `Channel` is a `( Shared ChImpl )`: the last owner drops the queue,
+    the waiter lists and the lock with the block. A select waiter is a
+    `Box`.
+  - A `BTree` node is a `BtNode` in a `Box` whose keys, values and
+    kids are `RawBlock`s; a kid slot holds the kid's box and the root's
+    is the tree record's field, so a node a merge or a root shrink gives
+    up is taken out of its slot and dropped. The node arrays are no
+    longer zeroed (no slot is read before it is written), which makes
+    insert + remove + drop 1.6 % fewer instructions on a 200 000-key run
+    and 0.2 % fewer over six build-and-drop rounds of 60 000 keys
+    (callgrind).
+  - `SymTab` (`stdlib/core/symtab.nu`) is an owning handle over the
+    string table: `symtab_new` / `symtab_def` / `symtab_get`, released
+    when it goes. The raw `i` handle stays the compiler's.
+  - Outside the primitives that implement ownership (Vec, String, Box,
+    RawBlock, the counted block behind `Shared`, Rc, Arc and now SymTab)
+    nothing in the standard library releases memory itself; the
+    containers above only move elements out of their buffers.
+  - `raw_block_zero` gives zeroed raw memory.
 - **`TcpConn` and `TcpListener` close themselves.** Each is a handle over
   a counted block: every copy is the same socket, and its last owner
   closes it, so a forgotten `tcp_close_*` no longer leaks a descriptor.
@@ -230,6 +262,36 @@ fewer instructions and 9–10 % less time than before this work
 
 ### Fixed
 
+- **Cloning one handle from several threads at once keeps the count**
+  (h211). A share that read an owner count of 1 skipped the locked add
+  and stored 2, on the premise that only the one owner could be sharing.
+  A clone is asked of a borrow, though: threads that each hold a clone of
+  an `Arc` clone the handle in its payload — another `Arc`, a `Mutex`, a
+  `Channel` — through the same borrow at the same time. Each read 1 and
+  stored 2, the shares were lost, and the releases freed the value while
+  the payload still held it (`free(): invalid pointer`, or ASan's
+  double-free, in every run of eight threads). `nurl_rc_share` and
+  `nurl_arc_share` always take the locked add now; a release, which only
+  an owner makes, keeps the shortcut. Found by `arc_threads` failing on
+  Windows.
+- **`btree_remove` no longer loses a value at a merge** (h210). Removing
+  a key that sat in an inner node whose two neighbouring kids were both
+  minimal took the value out of its slot — emptying it, since a take
+  from a place zeroes the place — and then merged the kids around the
+  emptied slot; the removal below returned the empty value and the real
+  one leaked. The value now leaves its slot only when a predecessor or
+  successor fills it; at a merge the entry moves down whole.
+- **A struct holding a `% Drop` value inside a container is dropped**
+  (h209). `: Imp { ( Vec R ) xs }` with R a type with its own `% Drop`
+  (or the R in a Box, an option, an enum payload, a Vec of Vecs) was
+  neither a handle, since it cannot be copied, nor given the
+  field-by-field drop, which went only to a struct whose own fields had
+  the `% Drop`. The struct was never dropped: the Vec and every R in it
+  leaked, and R's drop never ran. Found by rebuilding `Arena` on a Vec of
+  self-releasing chunks.
+  The structural fuzzer (`tools/fuzz/genprog.py`) now builds these
+  shapes and counts their drops; on the previous compiler it reports
+  them.
 - **Nine more holes are closed** (h195–h203), found by making module
   state and raw-pointer records manage themselves:
   - *A closure stored into a struct field or a slice* (h195) kept only a
@@ -438,6 +500,21 @@ fewer instructions and 9–10 % less time than before this work
 
 ### Performance
 
+- **Keccak's round constants are built once.** Every SHA-3 / SHAKE
+  sponge (and every four-way one, and SLH-DSA's context) built its own Vec
+  of the 24 ι constants: two allocations and 24 stores per hash. They are
+  published once for the program (`keccak_rc_shared`, once-slot 10) and
+  lent. SLH-DSA, which hashes with a fresh sponge per F call, gains most:
+  the pq bench retires 0.49 % fewer instructions than before this work
+  with a fixed entropy stream (3 147.8 M → 3 132.4 M).
+- **P-384 field arithmetic keeps its words in registers.** The Montgomery
+  multiply (`__m6_mul`) read and wrote its 8-word accumulator through the
+  scratch's `acc` Vec on every round, because nothing told the optimiser
+  that `dst`, `a` and `b` do not overlap it. Its rounds are now written
+  out over locals, as `_p256_mul_d`'s already were, and so are the add
+  and the subtract. crypto_hotpath retires 13.7 % fewer instructions
+  (1 116 M → 964 M at 50 iterations), and `ecdsa_p384_verify` is the
+  share of that. The scratch loses its `acc` field.
 - **`nurl_free` inlines its NULL test.** Most releases are of NULL — a
   slot whose value moved on — and each was a call into the runtime's one
   shared test, whose branch no predictor can learn: ~8 % of a

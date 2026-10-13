@@ -10,6 +10,13 @@
 //   ( nurl_sym_free h )       → v      release the table and every key
 //                                       and value it holds
 //
+// The `i` handle is the raw table the compiler shares. A program holds a
+// SymTab instead, which releases its table when it goes, like a Vec:
+//
+//   ( symtab_new )            → SymTab
+//   ( symtab_def t k v )      → v
+//   ( symtab_get t k )        → s      as nurl_sym_get
+//
 // The handle is a `nurl_zalloc`'d 72-byte (9-slot) header:
 //   slot 0: count   slot 1: (unused)
 //   slot 2: cap     slot 3: names[]  slot 4: types[]  slot 5: lens[]
@@ -188,3 +195,15 @@
     : *i lens # *i # s ( nurl_peek t 5 )
     ^ # s ( nurl_strdup_n . types idx . lens idx )
 }
+
+// ── the owning handle ───────────────────────────────────────────────
+
+: SymTab { i h }
+
+% Drop SymTab { @ drop SymTab t → v { ( nurl_sym_free . t h ) } }
+
+@ symtab_new → SymTab { ^ @ SymTab { ( nurl_sym_new ) } }
+
+@ symtab_def SymTab t s name s type → v { ( nurl_sym_def . t h name type ) }
+
+@ symtab_get SymTab t s name → s { ^ ( nurl_sym_get . t h name ) }

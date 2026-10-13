@@ -189,7 +189,7 @@ simd @ __kf1600x4 * u64 a * u64 b * u64 rc → v {
 : Sha3x4Impl {
     ( Vec u64 ) st  // 25 lanes x 4 ways, way W of lane L at L*4 + W
     ( Vec u64 ) scr  // 100-lane ping-pong buffer
-    ( Vec u64 ) rc  // the 24 iota constants, shared by all four
+    * u64 rc  // the 24 iota constants (keccak_rc_shared, lent)
     i rate  // bytes per permutation, per way
     i pos  // byte offset into the current block — the SAME for all four
     i dom  // domain byte: 6 for SHA-3, 31 for SHAKE
@@ -216,7 +216,7 @@ pub @ sha3x4_new i rate i dom → Sha3x4 {
     : b _l2 ( vec_set_len [u64] scr 100 )
     // Built whole and moved into the box, as sha3_new does: every field
     // is written, so the block needs no zeroing first.
-    ^ @ Sha3x4 { ( shared_new [Sha3x4Impl] @ Sha3x4Impl { st scr ( keccak_round_constants ) rate 0 dom F } ) }
+    ^ @ Sha3x4 { ( shared_new [Sha3x4Impl] @ Sha3x4Impl { st scr ( keccak_rc_shared ) rate 0 dom F } ) }
 }
 
 // Let go of `h` now rather than at the end of its owner's scope.
@@ -332,7 +332,7 @@ pub @ shake256x4_block * u64 st * u64 scr * u64 rc * u p0 * u p1 * u p2 * u p3 i
 
 @ __k4_permute * Sha3x4Impl h → v {
     ( __kf1600x4 ( vec_data [u64] . h st ) ( vec_data [u64] . h scr )
-    ( vec_data [u64] . h rc ) )
+    . h rc )
 }
 
 // Absorb one same-length piece into each of the four sponges.

@@ -118,6 +118,19 @@
 // `die` stays fail-fast exit(1). Capped at NURLC_MAX_ERRORS so a cascade
 // can't scroll forever; the emitted IR after the first error is garbage,
 // but the non-zero exit makes every caller discard it.
+// ── Owning handles ───────────────────────────────────────────────
+// A symbol table one function makes for itself: the binding owns it and
+// releases it when it goes, at every exit, instead of by name at the end.
+: Tab { i h }
+
+% Drop Tab { unsafe @ drop Tab t → v { ( nurl_sym_free . t h ) } }
+
+// A raw buffer one function allocates for itself: the binding owns it (the
+// pointer beside it is a view) and releases it at every exit.
+: Buf { i p }
+
+% Drop Buf { unsafe @ drop Buf b → v { ( nurl_free # s . b p ) } }
+
 : ~ i g_err_count 0
 : ~ i g_diag_recover_active 0
 : i NURLC_MAX_ERRORS 20
@@ -8076,15 +8089,15 @@ unsafe @ extract_fn_ptr_return_type s fn_ptr_type → s {
 // invented for local owners, and the graph's solver state is left intact.
 unsafe @ origin_guard_retained i root → b {
     ? == root 0 { ^ T } {}
-    : i seen ( nurl_sym_new )
+    : Tab seen @ Tab { ( nurl_sym_new ) }
     : ~ s pending ( nurl_str_int root )
     : ~ b retained F
     ~ != 0 ( nurl_str_len pending ) {
         : s word ( str_first_word pending )
         = pending ( str_skip_word pending )
         : i node ( nurl_str_to_int word )
-        ? == 0 ( nurl_sym_len seen word ) {
-            ( nurl_sym_def seen word `1` )
+        ? == 0 ( nurl_sym_len . seen h word ) {
+            ( nurl_sym_def . seen h word `1` )
             ? | != 0 ( nurl_peek # s node 8 )
             != 0 ( nurl_sym_len2 g_pending_impl `guard-barrier##` word ) {
                 = retained T
@@ -8103,7 +8116,6 @@ unsafe @ origin_guard_retained i root → b {
             }
         } {}
     }
-    ( nurl_sym_free seen )
     ^ retained
 }
 
@@ -9747,8 +9759,10 @@ unsafe @ __suggest_ident i syms s name → s {
     ? < n 2 { ^ ( nurl_strdup `` ) } {}
     : i cap ? <= n 4 1 2
     : i cnt ( __sym_count syms )
-    : *u row0 # *u ( nurl_alloc 160 )
-    : *u row1 # *u ( nurl_alloc 160 )
+    : Buf row0_own @ Buf { # i ( nurl_alloc 160 ) }
+    : *u row0 # *u . row0_own p
+    : Buf row1_own @ Buf { # i ( nurl_alloc 160 ) }
+    : *u row1 # *u . row1_own p
     : ~ i best_k -1
     : ~ i best_len 0
     : ~ i bestd + cap 1
@@ -9775,8 +9789,6 @@ unsafe @ __suggest_ident i syms s name → s {
         } {}
         = k + k 1
     }
-    ( nurl_free # s row0 )
-    ( nurl_free # s row1 )
     ? >= best_k 0
     { ^ ( nurl_str_slice ( __sym_entry_name syms best_k ) 0 best_len ) }
     {}
@@ -24830,7 +24842,8 @@ unsafe @ bck_explode → i {
 unsafe @ bck_index_closes i n → v {
     ? != 0 g_bck_close { ( nurl_free # s g_bck_close ) } {}
     = g_bck_close # i ( nurl_zalloc * + n 1 8 )
-    : s stk ( nurl_zalloc * + * n 3 1 8 )
+    : Buf stk_own @ Buf { # i ( nurl_zalloc * + * n 3 1 8 ) }
+    : s stk # s . stk_own p
     : ~ i t0 0
     : ~ i t1 0
     : ~ i t2 0
@@ -24845,7 +24858,6 @@ unsafe @ bck_index_closes i n → v {
         ? & ( seq k `endblock` ) > t2 0 { = t2 - t2 1 ( nurl_poke # s g_bck_close ( nurl_peek stk + * n 2 t2 ) + j 1 ) } {}
         = j + j 1
     }
-    ( nurl_free stk )
 }
 
 // Index of the close marker matching the open marker at `idx`. The
@@ -38321,7 +38333,8 @@ unsafe @ resolve_raw_provenance → v {
         ( __rpg_fset f 8 ( __rpg_mask f ( nurl_sym_get g_fn_reallocs nm ) ) )
         = f + f 1
     }
-    : s seen # s ( nurl_zalloc + g_rpg_nfn 1 )
+    : Buf seen_own @ Buf { # i ( nurl_zalloc + g_rpg_nfn 1 ) }
+    : s seen # s . seen_own p
     : *u sn # *u seen
     : ~ i rq 0
     ~ < rq g_rpg_nrec {
@@ -38337,10 +38350,10 @@ unsafe @ resolve_raw_provenance → v {
         } {}
         = rq + rq 1
     }
-    ( nurl_free seen )
     // Each function's records, in order (a counting sort by function):
     // row 11 is where its run starts in g_rpg_list.
-    : s cnt # s ( nurl_zalloc * + g_rpg_nfn 1 8 )
+    : Buf cnt_own @ Buf { # i ( nurl_zalloc * + g_rpg_nfn 1 8 ) }
+    : s cnt # s . cnt_own p
     : ~ i r 0
     ~ < r g_rpg_nrec {
         : i rf ( __rpg_rget r 1 )
@@ -38354,7 +38367,8 @@ unsafe @ resolve_raw_provenance → v {
         = f + f 1
     }
     = g_rpg_list # i ( nurl_alloc * + g_rpg_nrec 1 8 )
-    : s fill # s ( nurl_alloc * + g_rpg_nfn 1 8 )
+    : Buf fill_own @ Buf { # i ( nurl_alloc * + g_rpg_nfn 1 8 ) }
+    : s fill # s . fill_own p
     = f 0
     ~ <= f g_rpg_nfn { ( nurl_poke fill f ( nurl_peek cnt f ) ) = f + f 1 }
     = r 0
@@ -38367,7 +38381,8 @@ unsafe @ resolve_raw_provenance → v {
     // Who derives through whom: callers of c (a `3` record calling c), as
     // a second counting sort — whom to solve again when what c hands back
     // grows.
-    : s ccnt # s ( nurl_zalloc * + g_rpg_nfn 1 8 )
+    : Buf ccnt_own @ Buf { # i ( nurl_zalloc * + g_rpg_nfn 1 8 ) }
+    : s ccnt # s . ccnt_own p
     : ~ i ncall 0
     = r 0
     ~ < r g_rpg_nrec {
@@ -38380,7 +38395,8 @@ unsafe @ resolve_raw_provenance → v {
     }
     = f 0
     ~ < f g_rpg_nfn { ( nurl_poke ccnt + f 1 + ( nurl_peek ccnt + f 1 ) ( nurl_peek ccnt f ) ) = f + f 1 }
-    : s callers # s ( nurl_alloc * + ncall 1 8 )
+    : Buf callers_own @ Buf { # i ( nurl_alloc * + ncall 1 8 ) }
+    : s callers # s . callers_own p
     = f 0
     ~ <= f g_rpg_nfn { ( nurl_poke fill f ( nurl_peek ccnt f ) ) = f + f 1 }
     = r 0
@@ -38395,7 +38411,8 @@ unsafe @ resolve_raw_provenance → v {
     // Reach and lends, to a fixpoint across functions: a FIFO work list of
     // the functions with records.
     : ~ i qcap + g_rpg_nfn 1
-    : ~ s queue # s ( nurl_alloc * qcap 8 )
+    : Buf queue_own @ Buf { # i ( nurl_alloc * qcap 8 ) }
+    : ~ s queue # s . queue_own p
     : ~ i qh 0
     : ~ i qn 0
     = f 0
@@ -38424,10 +38441,6 @@ unsafe @ resolve_raw_provenance → v {
             }
         } {}
     }
-    ( nurl_free queue )
-    ( nurl_free callers )
-    ( nurl_free ccnt )
-    ( nurl_free fill )
     // Raw writes and frees → the summaries; argument edges → mutation edges.
     = r 0
     ~ < r g_rpg_nrec {
@@ -38461,7 +38474,6 @@ unsafe @ resolve_raw_provenance → v {
         } {}
         = r + r 1
     }
-    ( nurl_free cnt )
     ( nurl_free # s g_rpg_list )
     = g_rpg_list 0
     // The lends and pointer results found, into the summaries everything
@@ -39935,7 +39947,7 @@ unsafe @ __ha_is_ret s line → b {
     = g_lazy_live ( nurl_sym_new )
     // A worklist indexed in a table of its own; each name's identifiers are
     // walked with a cursor (no copy of the rest per word).
-    : i q ( nurl_sym_new )
+    : Tab q @ Tab { ( nurl_sym_new ) }
     : ~ i qn 0
     : ~ i qi 0
     // (…and the library functions the compiler's own desugarings call by
@@ -39945,7 +39957,7 @@ unsafe @ __ha_is_ret s line → b {
     : ~ b first T
     ~ | first < qi qn {
         ? first { = first F } {
-            : s nm ( nurl_sym_get q ( nurl_str_int qi ) )
+            : s nm ( nurl_sym_get . q h ( nurl_str_int qi ) )
             = qi + qi 1
             = cur ( nurl_sym_get g_lazy_edges nm )
         }
@@ -39957,14 +39969,13 @@ unsafe @ __ha_is_ret s line → b {
                 : s w ( __span_dup cur cp ce )
                 ? == 0 ( nurl_sym_len g_lazy_live w ) {
                     ( nurl_sym_def g_lazy_live w `1` )
-                    ( nurl_sym_def q ( nurl_str_int qn ) w )
+                    ( nurl_sym_def . q h ( nurl_str_int qn ) w )
                     = qn + qn 1
                 } {}
             } {}
             = cp + ce 1
         }
     }
-    ( nurl_sym_free q )
     // The graph has answered. The parse walks each import's signatures
     // again; with no graph to grow, that walk steps over bodies (from
     // g_body_ends) instead of re-collecting identifiers nothing reads.
@@ -42932,7 +42943,51 @@ unsafe @ __opt_err_mangle s e → s {
         : s ft ( nurl_sym_get g_root_syms ( nurl_str_cat3 sname `__idx_` ( nurl_str_cat ( nurl_str_int i ) `__type` ) ) )
         ? | ( __has_user_drop ft ) != 0 ( nurl_sym_len2 g_impl_name_syms `synthdrop##` ft ) { ^ T } {}
         ? ( __needs_synth_drop ft ) { ^ T } {}
+        // …or holds one inside a Vec, a Box, an option or an enum payload:
+        // that container cannot be copied either, so the struct holding it
+        // is no handle — it is dropped field by field (h209: `: Imp { ( Vec
+        // R ) xs }`, R with a `% Drop`, was never dropped at all, the Vec
+        // and every R in it leaked).
+        ? ( __holds_user_drop ft 0 ) { ^ T } {}
         = i + i 1
+    }
+    ^ F
+}
+
+// Does a value of `ty` hold, anywhere inside it — through a Vec's or a
+// Box's elements, an option's or an enum's payloads, a struct's fields —
+// a value with a `% Drop` of the program's own?
+@ __holds_user_drop s ty i depth → b {
+    ? | > depth 8 == 0 ( nurl_str_len ty ) { ^ F } {}
+    ? == ( nurl_str_get ty - ( nurl_str_len ty ) 1 ) 42 { ^ F } {}
+    ? | ( __has_user_drop ty ) != 0 ( nurl_sym_len2 g_impl_name_syms `synthdrop##` ty ) { ^ T } {}
+    ? | != 0 ( nurl_str_starts ty `%Vec__` ) != 0 ( nurl_str_starts ty `%Box__` ) {
+        ^ ( __holds_user_drop ( __vec_elem_llvm ty ) + depth 1 )
+    } {}
+    ? != 0 ( nurl_str_starts ty `{ i1, ` ) { ^ ( __holds_user_drop ( __opt_payload ty ) + depth 1 ) } {}
+    ? | == 0 g_root_syms != ( nurl_str_get ty 0 ) 37 { ^ F } {}
+    : s sname ( nurl_str_slice ty 1 - ( nurl_str_len ty ) 1 )
+    : s vlist ( nurl_sym_get2 g_root_syms sname `__variants` )
+    ? != 0 ( nurl_str_len vlist ) {
+        : ~ s scan ( nurl_str_cat vlist `` )
+        ~ != 0 ( nurl_str_len scan ) {
+            : s vname ( str_first_word scan ) = scan ( str_skip_word scan )
+            : s pcs ( nurl_sym_get2 g_root_syms vname `__paycount` )
+            : i pc ? != 0 ( nurl_str_len pcs ) ( nurl_str_to_int pcs ) 0
+            : ~ i k 0
+            ~ < k pc {
+                ? ( __holds_user_drop ( nurl_sym_get g_root_syms ( nurl_str_cat3 vname `__payload__` ( nurl_str_int k ) ) ) + depth 1 ) { ^ T } {}
+                = k + k 1
+            }
+        }
+        ^ F
+    } {}
+    : s fcs ( nurl_sym_get2 g_root_syms sname `__field_count` )
+    : i fc ? != 0 ( nurl_str_len fcs ) ( nurl_str_to_int fcs ) 0
+    : ~ i j 0
+    ~ < j fc {
+        ? ( __holds_user_drop ( nurl_sym_get g_root_syms ( nurl_str_cat3 sname `__idx_` ( nurl_str_cat ( nurl_str_int j ) `__type` ) ) ) + depth 1 ) { ^ T } {}
+        = j + j 1
     }
     ^ F
 }
@@ -48274,7 +48329,8 @@ unsafe @ __lex_normalize s path → s {
     : s out # s ( nurl_alloc + n 2 )
     : *u op # *u out
     // Where each kept component starts in `out`, so ".." can pop one.
-    : s stk # s ( nurl_alloc * + / n 2 2 8 )
+    : Buf stk_own @ Buf { # i ( nurl_alloc * + / n 2 2 8 ) }
+    : s stk # s . stk_own p
     : *i sp # *i stk
     : ~ i sn 0
     : ~ i w 0
@@ -48317,7 +48373,6 @@ unsafe @ __lex_normalize s path → s {
     // and would collide with itself as a key.
     ? == w 0 { = . op 0 # u 46 = w 1 } {}
     = . op w # u 0
-    ( nurl_free stk )
     ^ out
 }
 
@@ -51977,9 +52032,11 @@ unsafe @ __mp_eol i p i en → i {
 unsafe @ __mp_compute i n → v {
     = g_mp # i # s ( nurl_zalloc * n 8 )
     : ~ i ecap 4096
-    : ~ s edges ( nurl_alloc * ecap 8 )
+    : Buf edges_own @ Buf { # i ( nurl_alloc * ecap 8 ) }
+    : ~ s edges # s . edges_own p
     : ~ i ne 0
-    : s eb ( nurl_zalloc * + n 1 8 )
+    : Buf eb_own @ Buf { # i ( nurl_zalloc * + n 1 8 ) }
+    : s eb # s . eb_own p
     : ~ i fi 0
     ~ < fi n {
         ( nurl_poke eb fi ne )
@@ -51996,7 +52053,8 @@ unsafe @ __mp_compute i n → v {
                         ? >= c 0 {
                             ? >= ne ecap {
                                 = ecap * ecap 2
-                                = edges ( nurl_realloc edges * ecap 8 )
+                                = . edges_own p # i ( nurl_realloc edges * ecap 8 )
+                                = edges # s . edges_own p
                             } {}
                             ( nurl_poke edges ne c )
                             = ne + ne 1
@@ -52028,8 +52086,6 @@ unsafe @ __mp_compute i n → v {
             = fi + fi 1
         }
     }
-    ( nurl_free edges )
-    ( nurl_free eb )
 }
 
 // Does the push of register [rs, re) at the line ending `le` reach its
@@ -52372,7 +52428,7 @@ unsafe @ __ext_trace i cs i ce i vs i ve i depth → b {
 // traced to the function it runs. False when some wrapper is reached
 // through a pointer or passed a closure built elsewhere.
 unsafe @ __ext_precise_roots i n → b {
-    : i wset ( nurl_sym_new )
+    : Tab wset @ Tab { ( nurl_sym_new ) }
     : ~ i fi 0
     : ~ b ok T
     ~ < fi n {
@@ -52382,7 +52438,7 @@ unsafe @ __ext_precise_roots i n → b {
             ? | >= ( nurl_memmem_range # s + g_dce_mod st - en st `@nurl_recover(` 14 ) 0
             & != 0 g_sanitize_address >= ( nurl_memmem_range # s + g_dce_mod st - en st `@nurl_recover_lean(` 19 ) 0 {
                 ? != 0 ( nurl_peek # s g_at fi ) { = ok F } {}
-                ( nurl_sym_def wset ( nurl_str_int fi ) `1` )
+                ( nurl_sym_def . wset h ( nurl_str_int fi ) `1` )
                 // What the wrapper itself hands on runs inside.
                 ( __ext_refs ( __mp_eol st en ) en F )
             } {}
@@ -52401,7 +52457,7 @@ unsafe @ __ext_precise_roots i n → b {
                     : i cp + + p rel 6
                     : i le ( __mp_eol cp en )
                     : i c ( __mp_callee cp le )
-                    ? & >= c 0 != 0 ( nurl_sym_len wset ( nurl_str_int c ) ) {
+                    ? & >= c 0 != 0 ( nurl_sym_len . wset h ( nurl_str_int c ) ) {
                         : i op ( nurl_memmem_range # s + g_dce_mod cp - le cp `(` 1 )
                         // The first `(` after the callee name.
                         : ~ i o + cp op
@@ -52436,7 +52492,6 @@ unsafe @ __ext_precise_roots i n → b {
         } {}
         = fi + fi 1
     }
-    ( nurl_sym_free wset )
     ^ ok
 }
 
@@ -52592,12 +52647,16 @@ unsafe @ __jrnl_slot_elide i fi → v {
     : ~ i nl 0
     : ~ i p st
     ~ < p en { = p + ( __mp_eol p en ) 1 = nl + nl 1 }
-    : *i lst # *i ( nurl_alloc * + nl 1 8 )  // line starts
-    : *i kind # *i ( nurl_zalloc * + nl 1 8 )  // 1 a registration, 2 a forget, 3 a branch
-    : *i span # *i ( nurl_zalloc * + nl 2 8 )  // a call that may panic, here or below
-    : *i smin # *i ( nurl_alloc * + nl 2 8 )  // the highest label a branch here or below reaches
-    : i labels ( nurl_sym_new )  // label → its line
-    : i fgs ( nurl_sym_new )  // slot → its forgets' lines
+    : Buf lst_own @ Buf { # i ( nurl_alloc * + nl 1 8 ) }  // line starts
+    : *i lst # *i . lst_own p
+    : Buf kind_own @ Buf { # i ( nurl_zalloc * + nl 1 8 ) }  // 1 a registration, 2 a forget, 3 a branch
+    : *i kind # *i . kind_own p
+    : Buf span_own @ Buf { # i ( nurl_zalloc * + nl 2 8 ) }  // a call that may panic, here or below
+    : *i span # *i . span_own p
+    : Buf smin_own @ Buf { # i ( nurl_alloc * + nl 2 8 ) }  // the highest label a branch here or below reaches
+    : *i smin # *i . smin_own p
+    : Tab labels @ Tab { ( nurl_sym_new ) }  // label → its line
+    : Tab fgs @ Tab { ( nurl_sym_new ) }  // slot → its forgets' lines
     = p st
     : ~ i k 0
     ~ < p en {
@@ -52616,14 +52675,14 @@ unsafe @ __jrnl_slot_elide i fi → v {
                 : i ss + p 42
                 : ~ i se ss
                 ~ & < se e != ( __fold_byte se ) 41 { = se + se 1 }
-                ( __sl_key_append fgs ss se ( nurl_str_int k ) )
+                ( __sl_key_append . fgs h ss se ( nurl_str_int k ) )
             } {
                 ? | ( __fold_at p `  br ` 5 ) ( __fold_at p `  switch ` 9 ) { = kd 3 } {
                     // `name:` opening a block
                     ? ( __dce_ident_byte ( __fold_byte p ) ) {
                         : ~ i q p
                         ~ & < q e ( __dce_ident_byte ( __fold_byte q ) ) { = q + q 1 }
-                        ? & < q e == ( __fold_byte q ) 58 { ( __sl_key_def labels p q ( nurl_str_int k ) ) } {}
+                        ? & < q e == ( __fold_byte q ) 58 { ( __sl_key_def . labels h p q ( nurl_str_int k ) ) } {}
                     } {}
                 }
             }
@@ -52650,7 +52709,7 @@ unsafe @ __jrnl_slot_elide i fi → v {
                     : i ns + + q lr 7
                     : ~ i ne ns
                     ~ & < ne le ( __dce_ident_byte ( __fold_byte ne ) ) { = ne + ne 1 }
-                    : i at ( __sl_key_int labels ns ne )
+                    : i at ( __sl_key_int . labels h ns ne )
                     ? & >= at 0 < at up { = up at } {}
                     = q ne
                 }
@@ -52674,7 +52733,7 @@ unsafe @ __jrnl_slot_elide i fi → v {
                 : *u mp # *u # s g_dce_mod
                 : u sv . mp se
                 = . mp se # u 0
-                : s fl ( nurl_sym_get fgs # s + g_dce_mod ss )
+                : s fl ( nurl_sym_get . fgs h # s + g_dce_mod ss )
                 = . mp se sv
                 : ~ b any F
                 : ~ s ws ( nurl_str_cat fl `` )
@@ -52700,12 +52759,6 @@ unsafe @ __jrnl_slot_elide i fi → v {
         } {}
         = k + k 1
     }
-    ( nurl_sym_free labels )
-    ( nurl_sym_free fgs )
-    ( nurl_free # s lst )
-    ( nurl_free # s kind )
-    ( nurl_free # s span )
-    ( nurl_free # s smin )
 }
 
 // Blank (as a comment) every elidable journal push of the live functions.
@@ -53618,10 +53671,10 @@ unsafe @ __types_first s mod i mlen → s {
 unsafe @ dce_emit_module s mod0 → v {
     : i mlen ( strlen mod0 )
     // Every type definition goes first (see __types_first).
-    : s moved ( __types_first mod0 mlen )
+    : Buf moved_own @ Buf { # i ( __types_first mod0 mlen ) }
+    : s moved # s . moved_own p
     ? == # i moved 0 { ( __dce_emit_module mod0 mlen ) } {
         ( __dce_emit_module moved mlen )
-        ( nurl_free moved )
         = g_dce_mod 0
     }
 }
@@ -54768,68 +54821,15 @@ unsafe @ main → i {
             ( dbg_fix_module_locations __out )
         } {}
     }
-    // Exit-time release of the global symbol tables. Their handles
-    // live in `: ~ i` globals as integer casts, which a leak scanner's
-    // reachability pass cannot see through — without these frees every
-    // table reports as leaked, hiding real leaks in the noise. Order is
-    // unconstrained: tables never point into one another (their strings
-    // are interned, and the interner goes last).
-    ( nurl_sym_free g_source_snapshots )
-    = g_source_snapshots 0
-    ( nurl_sym_free syms )
-    ( nurl_sym_free g_str_syms )
-    ( nurl_sym_free g_generic_syms )
-    ( nurl_sym_free g_generic_struct_syms )
-    ( nurl_sym_free g_struct_inst_syms )
-    ( nurl_sym_free g_impl_ret_syms )
-    ( nurl_sym_free g_impl_name_syms )
-    ( nurl_sym_free g_impl_trait_syms )
-    ( nurl_sym_free g_impl_pos_syms )
-    ( nurl_sym_free g_fn_pos_syms )
-    ( nurl_sym_free g_priv_file_ids )
-    ( nurl_sym_free g_priv_owner_ids )
-    ( nurl_sym_free g_priv_owner_files )
-    ( nurl_sym_free g_priv_warned )
-    ( nurl_sym_free g_trait_syms )
-    ( nurl_sym_free g_trait_pending )
-    ( nurl_sym_free g_res_type_syms )
-    ( nurl_sym_free g_closure_defs )
-    ( nurl_sym_free g_closure_types )
-    ( nurl_sym_free g_fn_inout )
-    ( nurl_sym_free g_fn_sink )
-    ( nurl_sym_free g_fn_unverified )
-    ( nurl_sym_free g_type_layouts )
-    ( nurl_sym_free g_fn_escapes )
-    ( nurl_sym_free g_fn_invoke_only )
+    // Exit-time release. The compilation owns every symbol table it made
+    // (nurl_sym_new links each into g_live_symtables), so the sweep below
+    // releases the global tables, `syms` and any a diagnostic abandoned —
+    // no table is released here by name. Their handles live in `: ~ i`
+    // globals as integer casts, which a leak scanner's reachability pass
+    // cannot see through, so the sweep is what keeps them out of its
+    // report. Tables never point into one another (their strings are
+    // interned, and the interner goes last), so the order is free.
     ( origin_free )
-    ( nurl_sym_free g_origin_functions )
-    ( nurl_sym_free g_origin_returns )
-    ( nurl_sym_free g_fn_ret_param )
-    ( nurl_sym_free g_fn_ret_alias )
-    ( nurl_sym_free g_fn_keeps )
-    ( nurl_sym_free g_fn_stores )
-    ( nurl_sym_free g_fn_ret_view )
-    ( nurl_sym_free g_fn_noreturn )
-    ( nurl_sym_free g_loop_break_used )
-    ( nurl_sym_free g_fn_arc_mut )
-    ( nurl_sym_free g_fn_mutates )
-    ( nurl_sym_free g_pending_escape )
-    ( nurl_sym_free g_pending_impl )
-    ( nurl_sym_free g_deferred_bck )
-    ( nurl_sym_free g_fn_compiled )
-    ( nurl_sym_free g_fn_link_sources )
-    ( nurl_sym_free g_fn_link_exports )
-    ( nurl_sym_free g_bck )
-    ( nurl_sym_free g_ptrtab )
-    ( nurl_sym_free g_vis_syms )
-    // Conditionally-allocated tables (--lint / --g): nurl_sym_free is a
-    // no-op on a 0 handle.
-    ( nurl_sym_free g_lint_syms )
-    ( nurl_sym_free g_lint_reads )
-    ( nurl_sym_free g_lint_used )
-    ( nurl_sym_free g_dbg_file_syms )
-    ( nurl_sym_free g_dbg_type_syms )
-    ( nurl_sym_free g_dbg_blob_syms )
     // The codegen counter block (nurl_cg_new's 16 bytes) was never
     // released. -O2 + LTO happened to elide the allocation, so the leak
     // only showed once an unrelated change moved the IR enough for the
@@ -54837,6 +54837,8 @@ unsafe @ main → i {
     ( nurl_free # s cg )
     ~ != g_live_lexers 0 { ( nurl_lex_free g_live_lexers ) }
     ~ != g_live_symtables 0 { ( nurl_sym_free g_live_symtables ) }
+    // (created lazily: a later compile in this process starts it afresh)
+    = g_source_snapshots 0
     // Last: the strings every table's keys and values were.
     ( nurl_intern_free )
     ^ compile_error

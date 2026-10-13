@@ -82,59 +82,46 @@
 //   "int" "long" "size_t" "off_t" "time_t"
 & `c` @ nurl_native_sizeof s name → i
 
+$ `stdlib/core/mem.nu`
+$ `stdlib/core/rcbox.nu`
+
+// The bytes are a RawBlock behind a count: every copy of a Cell is one
+// owner of the same block, and the last owner's drop releases it — the
+// Cell itself releases nothing (`ptr` is the block's address, cached for
+// the accessors).
 : Cell {
+    ( Shared RawBlock ) blk
     s ptr
     i bytes
 }
 
 // ── Constructors ────────────────────────────────────────────────────
 
-// The owner count: one more (the old count back), one fewer (1 when the
-// caller was the last owner). A count of 1 skips the locked RMW.
-& `c` @ nurl_rc_share *u p → i
-
-& `c` @ nurl_rc_release *u p → i
-
-// `n` bytes behind a one-owner count; the bytes' address.
-@ __cell_block i n b zero → i {
-    : s blk ? zero ( nurl_zalloc + n 8 ) ( nurl_alloc + n 8 )
-    ( nurl_poke blk 0 1 )
-    ^ + # i blk 8
+// `n` bytes, zeroed when `zero`, behind a one-owner count.
+unsafe @ __cell_make i n b zero → Cell {
+    ? <= n 0 { ^ @ Cell { ( shared_null [RawBlock] ) # s 0 0 } } {}
+    : RawBlock rb ? zero ( raw_block_zero n ) ( raw_block n )
+    : s p # s ( raw_block_ptr rb )
+    ^ @ Cell { ( shared_new [RawBlock] rb ) p n }
 }
 
-@ cell_new i n → Cell {
-    ? <= n 0 { ^ @ Cell { # s 0 0 } } {}
-    ^ @ Cell { # s ( __cell_block n F ) n }
-}
+@ cell_new i n → Cell { ^ ( __cell_make n F ) }
 
-@ cell_zero i n → Cell {
-    ? <= n 0 { ^ @ Cell { # s 0 0 } } {}
-    ^ @ Cell { # s ( __cell_block n T ) n }
-}
+@ cell_zero i n → Cell { ^ ( __cell_make n T ) }
 
 // Look up the platform sizeof for `name`, allocate that many zero
 // bytes. Returns a Cell with bytes=0 and ptr=NULL when the name is
 // unknown to the runtime — callers should treat that as a hard
 // platform-portability bug, not a runtime error to recover from.
 @ cell_for_native s name → Cell {
-    : i sz ( nurl_native_sizeof name )
-    ? <= sz 0 { ^ @ Cell { # s 0 0 } } {}
-    ^ @ Cell { # s ( __cell_block sz T ) sz }
+    ^ ( __cell_make ( nurl_native_sizeof name ) T )
 }
 
 @ Cell_share Cell c → Cell {
-    : i p # i . c ptr
-    ? != 0 p { : i _old ( nurl_rc_share # *u - p 8 ) } {}
-    ^ @ Cell { . c ptr . c bytes }
+    ^ @ Cell { ( shared_clone [RawBlock] . c blk ) . c ptr . c bytes }
 }
 
-@ Cell_drop sink Cell c → v {
-    ( mem_forget c )
-    : i p # i . c ptr
-    ? != 0 p {
-        ? != 0 ( nurl_rc_release # *u - p 8 ) { ( nurl_free # s - p 8 ) } {}
-    } {}
-}
+@ Cell_drop sink Cell c → v {}
 
 // ── Inspectors ──────────────────────────────────────────────────────
 
@@ -194,16 +181,16 @@
 // never what you want for live FFI state.
 @ cell_clone Cell c → Cell {
     : i n . c bytes
-    ? <= n 0 { ^ @ Cell { # s 0 0 } } {}
+    ? <= n 0 { ^ ( __cell_make 0 F ) } {}
     : *u src # *u . c ptr
-    : s p # s ( __cell_block n F )
-    : *u dst # *u p
+    : Cell out ( __cell_make n F )
+    : *u dst # *u . out ptr
     : ~ i i 0
     ~ < i n {
         = . dst i . src i
         = i + i 1
     }
-    ^ @ Cell { p n }
+    ^ out
 }
 
 // ── Lifecycle ───────────────────────────────────────────────────────

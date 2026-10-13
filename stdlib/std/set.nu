@@ -46,27 +46,25 @@
 // file to get them; set.nu itself does not depend on it.
 
 $ `stdlib/core/vec.nu`
+$ `stdlib/core/mem.nu`
+$ `stdlib/core/box.nu`
 
-: Set [E] { s ctl }
+// The handle owns a boxed control record: the key and state buffers
+// (RawBlocks, which release themselves), the live count, the capacity and
+// the tombstone count. Dropping the set drops its live keys; the record
+// and the buffers go with the handle's field.
+: SetCtl { RawBlock keys RawBlock states i len i cap i tomb }
+
+: Set [E] { ( Box SetCtl ) ctl }
 
 // ── Internal helpers ────────────────────────────────────────────────
 
-@ __set_keys_raw s ctl → s { ^ # s ( nurl_peek ctl 0 ) }
-
-@ __set_states_raw s ctl → s { ^ # s ( nurl_peek ctl 1 ) }
-
-@ __set_len_raw s ctl → i { ^ ( nurl_peek ctl 2 ) }
-
-@ __set_cap_raw s ctl → i { ^ ( nurl_peek ctl 3 ) }
-
-@ __set_tomb_raw s ctl → i { ^ ( nurl_peek ctl 4 ) }
-
-@ __set_alloc_buffers [E] s ctl i cap → v {
-    : s keys ( nurl_zalloc ( alloc_size Z E cap ) )
-    : s states ( nurl_zalloc ( alloc_size 8 cap ) )
-    ( nurl_poke ctl 0 # i keys )
-    ( nurl_poke ctl 1 # i states )
-    ( nurl_poke ctl 3 cap )
+// Fresh zeroed buffers for `cap` slots (the old ones are released as
+// they are replaced; whatever they held must have moved out first).
+@ __set_alloc_buffers [E] * SetCtl c i cap → v {
+    = . c keys ( raw_block_zero ( alloc_size Z E cap ) )
+    = . c states ( raw_block_zero ( alloc_size 8 cap ) )
+    = . c cap cap
 }
 
 // __set_probe_for: linear-probe scan starting at hash & mask.
@@ -74,13 +72,13 @@ $ `stdlib/core/vec.nu`
 //   On miss  → returns -(insert_idx + 1)  (always < 0)
 //   Caller decodes via insert_idx = -slot - 1.
 //   Pre-condition: cap > 0 (callers resize proactively before probing).
-@ __set_probe_for [E] s ctl E key ( @ i E ) hash_fn ( @ b E E ) eq_fn → i {
-    : i cap ( __set_cap_raw ctl )
+@ __set_probe_for [E] * SetCtl c E key ( @ i E ) hash_fn ( @ b E E ) eq_fn → i {
+    : i cap . c cap
     : i mask - cap 1
     : i h ( hash_fn key )
     : i start & h mask
-    : *E keys # *E ( nurl_peek ctl 0 )
-    : *i states # *i ( nurl_peek ctl 1 )
+    : *E keys # *E ( raw_block_ptr . c keys )
+    : *i states # *i ( raw_block_ptr . c states )
     : ~ i first_free -1
     : ~ i probe 0
     : ~ i result -1
@@ -113,20 +111,21 @@ $ `stdlib/core/vec.nu`
 }
 
 // __set_grow: rehash into a buffer with `target_cap` (rounded up to a
-// power of two ≥ 8 ≥ target). Tombstones drop during rehash.
-@ __set_grow [E] s ctl i target_cap ( @ i E ) hash_fn → v {
-    : i old_cap ( __set_cap_raw ctl )
+// power of two ≥ 8 ≥ target). Tombstones drop during rehash. The keys
+// move bitwise into the new buffer; the old ones are released after.
+@ __set_grow [E] * SetCtl c i target_cap ( @ i E ) hash_fn → v {
+    : i old_cap . c cap
     : i new_cap ( alloc_grow_pow2 old_cap target_cap 8 )
-    : s old_keys_raw ( __set_keys_raw ctl )
-    : s old_states_raw ( __set_states_raw ctl )
-    : *E old_keys # *E old_keys_raw
-    : *i old_states # *i old_states_raw
-    ( __set_alloc_buffers [E] ctl new_cap )
-    ( nurl_poke ctl 2 0 )
-    ( nurl_poke ctl 4 0 )
+    : RawBlock okb ( mem_replace [RawBlock] . c keys ( raw_block_zero ( alloc_size Z E new_cap ) ) )
+    : RawBlock osb ( mem_replace [RawBlock] . c states ( raw_block_zero ( alloc_size 8 new_cap ) ) )
+    = . c cap new_cap
+    = . c len 0
+    = . c tomb 0
+    : *E old_keys # *E ( raw_block_ptr okb )
+    : *i old_states # *i ( raw_block_ptr osb )
     : i mask - new_cap 1
-    : *E new_keys # *E ( nurl_peek ctl 0 )
-    : *i new_states # *i ( nurl_peek ctl 1 )
+    : *E new_keys # *E ( raw_block_ptr . c keys )
+    : *i new_states # *i ( raw_block_ptr . c states )
     : ~ i new_len 0
     : ~ i i 0
     ~ < i old_cap {
@@ -141,103 +140,92 @@ $ `stdlib/core/vec.nu`
         } {}
         = i + i 1
     }
-    ( nurl_poke ctl 2 new_len )
-    ? != 0 # i old_keys_raw { ( nurl_free old_keys_raw ) } {}
-    ? != 0 # i old_states_raw { ( nurl_free old_states_raw ) } {}
+    = . c len new_len
+}
+
+@ __set_ctl_new → ( Box SetCtl ) {
+    ^ ( box_new [SetCtl] @ SetCtl { ( raw_block 0 ) ( raw_block 0 ) 0 0 0 } )
 }
 
 // ── Constructors ────────────────────────────────────────────────────
 
 @ set_new [E] → ( Set E ) {
-    : s ctl ( nurl_zalloc 40 )
-    ^ @ ( Set E ) { ctl }
+    ^ @ ( Set E ) { ( __set_ctl_new ) }
 }
 
 @ set_with_cap [E] i n ( @ i E ) hash_fn → ( Set E ) {
-    : s ctl ( nurl_zalloc 40 )
-    : i want ? > n 0 n 0
-    ? > want 0 { ( __set_grow [E] ctl want hash_fn ) } {}
-    ^ @ ( Set E ) { ctl }
+    : ( Set E ) st @ ( Set E ) { ( __set_ctl_new ) }
+    ? > n 0 { ( __set_grow [E] ( box_ptr [SetCtl] . st ctl ) n hash_fn ) } {}
+    ^ st
 }
 
 // ── Inspectors ──────────────────────────────────────────────────────
 
 @ set_len [E] ( Set E ) st → i {
-    ^ ( __set_len_raw . st ctl )
+    ^ . ( box_ptr [SetCtl] . st ctl ) len
 }
 
 @ set_cap [E] ( Set E ) st → i {
-    ^ ( __set_cap_raw . st ctl )
+    ^ . ( box_ptr [SetCtl] . st ctl ) cap
 }
 
 @ set_is_empty [E] ( Set E ) st → b {
-    ^ == ( __set_len_raw . st ctl ) 0
+    ^ == . ( box_ptr [SetCtl] . st ctl ) len 0
 }
 
 // ── Mutation ────────────────────────────────────────────────────────
 
 // Returns T if newly inserted, F if `x` was already present.
 @ set_add [E] ( Set E ) st E key ( @ i E ) hash_fn ( @ b E E ) eq_fn → b {
-    : s ctl . st ctl
-    ? == ( __set_cap_raw ctl ) 0
-    { ( __set_grow [E] ctl 8 hash_fn ) }
-    {}
-    : i len0 ( __set_len_raw ctl )
-    : i tomb0 ( __set_tomb_raw ctl )
-    : i cap0 ( __set_cap_raw ctl )
-    ? >= * + + len0 tomb0 1 4 * cap0 3
-    { ( __set_grow [E] ctl * cap0 2 hash_fn ) }
-    {}
-
-    : i slot ( __set_probe_for [E] ctl key hash_fn eq_fn )
-    : *E keys # *E ( nurl_peek ctl 0 )
-    : *i states # *i ( nurl_peek ctl 1 )
+    : *SetCtl c ( box_ptr [SetCtl] . st ctl )
+    ? == . c cap 0 { ( __set_grow [E] c 8 hash_fn ) } {}
+    ? >= * + + . c len . c tomb 1 4 * . c cap 3 { ( __set_grow [E] c * . c cap 2 hash_fn ) } {}
+    : i slot ( __set_probe_for [E] c key hash_fn eq_fn )
+    : *E keys # *E ( raw_block_ptr . c keys )
+    : *i states # *i ( raw_block_ptr . c states )
     ? >= slot 0
     { ^ F }
     { : i ins - -1 slot
         : i st_old . states ins
         = . keys ins key
         = . states ins 1
-        ( nurl_poke ctl 2 + ( __set_len_raw ctl ) 1 )
-        ? == st_old 2
-        { ( nurl_poke ctl 4 - ( __set_tomb_raw ctl ) 1 ) }
-        {}
+        = . c len + . c len 1
+        ? == st_old 2 { = . c tomb - . c tomb 1 } {}
         ^ T
     }
 }
 
 // Returns T if removed, F if `x` was absent.
 @ set_remove [E] ( Set E ) st E key ( @ i E ) hash_fn ( @ b E E ) eq_fn → b {
-    : s ctl . st ctl
-    ? == ( __set_cap_raw ctl ) 0 { ^ F } {}
-    : i slot ( __set_probe_for [E] ctl key hash_fn eq_fn )
+    : *SetCtl c ( box_ptr [SetCtl] . st ctl )
+    ? == . c cap 0 { ^ F } {}
+    : i slot ( __set_probe_for [E] c key hash_fn eq_fn )
     ? < slot 0 { ^ F } {}
-    : *E keys # *E ( nurl_peek ctl 0 )
+    : *E keys # *E ( raw_block_ptr . c keys )
     // The stored element leaves with its slot.
     : E gone . keys slot
     ( mem_take gone )
-    : *i states # *i ( nurl_peek ctl 1 )
+    : *i states # *i ( raw_block_ptr . c states )
     = . states slot 2
-    ( nurl_poke ctl 2 - ( __set_len_raw ctl ) 1 )
-    ( nurl_poke ctl 4 + ( __set_tomb_raw ctl ) 1 )
+    = . c len - . c len 1
+    = . c tomb + . c tomb 1
     ^ T
 }
 
 @ set_contains [E] ( Set E ) st E key ( @ i E ) hash_fn ( @ b E E ) eq_fn → b {
-    : s ctl . st ctl
-    ? == ( __set_cap_raw ctl ) 0 { ^ F } {}
-    : i slot ( __set_probe_for [E] ctl key hash_fn eq_fn )
-    ^ >= slot 0
+    : *SetCtl c ( box_ptr [SetCtl] . st ctl )
+    ? == . c cap 0 { ^ F } {}
+    ^ >= ( __set_probe_for [E] c key hash_fn eq_fn ) 0
 }
 
 // ── Higher-order ────────────────────────────────────────────────────
 
 @ set_each [E] ( Set E ) st ( @ v E ) f → v {
-    : s ctl . st ctl
-    : i cap ( __set_cap_raw ctl )
+    : *SetCtl c ( box_ptr [SetCtl] . st ctl )
+    : i cap . c cap
     ? > cap 0 {
-        : *E keys # *E ( nurl_peek ctl 0 )
-        : *i states # *i ( nurl_peek ctl 1 )
+        : *E keys # *E ( raw_block_ptr . c keys )
+        : *i states # *i ( raw_block_ptr . c states )
         : ~ i i 0
         ~ < i cap {
             ? == . states i 1 { ( f . keys i ) } {}
@@ -247,12 +235,12 @@ $ `stdlib/core/vec.nu`
 }
 
 @ set_fold [E B] ( Set E ) st B init ( @ B B E ) f → B {
-    : s ctl . st ctl
-    : i cap ( __set_cap_raw ctl )
+    : *SetCtl c ( box_ptr [SetCtl] . st ctl )
+    : i cap . c cap
     : ~ B acc init
     ? > cap 0 {
-        : *E keys # *E ( nurl_peek ctl 0 )
-        : *i states # *i ( nurl_peek ctl 1 )
+        : *E keys # *E ( raw_block_ptr . c keys )
+        : *i states # *i ( raw_block_ptr . c states )
         : ~ i i 0
         ~ < i cap {
             ? == . states i 1 { = acc ( f acc . keys i ) } {}
@@ -264,27 +252,17 @@ $ `stdlib/core/vec.nu`
 
 // ── Cleanup ─────────────────────────────────────────────────────────
 
-// The buffers and the handle, nothing else.
-@ __set_release s ctl → v {
-    : s keys ( __set_keys_raw ctl )
-    : s states ( __set_states_raw ctl )
-    ? != 0 # i keys { ( nurl_free keys ) } {}
-    ? != 0 # i states { ( nurl_free states ) } {}
-    ( nurl_free ctl )
-}
-
 // What dropping a set does (its owner does it at scope exit — docs/
-// MEMORY.md §7.6): every element is dropped (no work, and no loop, for
-// elements that own nothing), then the buffers and the handle.
+// MEMORY.md §7.6): every live element is dropped (no work, and no loop,
+// for elements that own nothing); the record and its buffers go with the
+// handle's field.
 @ Set_drop [E] sink ( Set E ) st → v {
-    // This IS the drop: `st` is not dropped again on the way out.
-    ( mem_forget st )
-    : s ctl . st ctl
-    ? == 0 # i ctl { ^ } {}
-    : i cap ( __set_cap_raw ctl )
+    ? ( box_is_null [SetCtl] . st ctl ) { ^ } {}
+    : *SetCtl c ( box_ptr [SetCtl] . st ctl )
+    : i cap . c cap
     ? > cap 0 {
-        : *E keys # *E ( nurl_peek ctl 0 )
-        : *i states # *i ( nurl_peek ctl 1 )
+        : *E keys # *E ( raw_block_ptr . c keys )
+        : *i states # *i ( raw_block_ptr . c states )
         : ~ i i 0
         ~ < i cap {
             ? == . states i 1 {
@@ -294,7 +272,6 @@ $ `stdlib/core/vec.nu`
             = i + i 1
         }
     } {}
-    ( __set_release ctl )
 }
 
 // What the reference-count cycle collector sees in a set (docs/MEMORY.md
@@ -305,15 +282,16 @@ $ `stdlib/core/vec.nu`
 
 // A copy that owns its own elements, at the same slot layout (no rehash).
 @ Set_clone [E] ( Set E ) st → ( Set E ) {
-    : s sctl . st ctl
-    : s dctl ( nurl_zalloc 40 )
-    : i cap ? == 0 # i sctl 0 ( __set_cap_raw sctl )
+    : *SetCtl sc ( box_ptr [SetCtl] . st ctl )
+    : ( Set E ) out @ ( Set E ) { ( __set_ctl_new ) }
+    : i cap . sc cap
     ? > cap 0 {
-        ( __set_alloc_buffers [E] dctl cap )
-        : *E skeys # *E ( nurl_peek sctl 0 )
-        : *i sstates # *i ( nurl_peek sctl 1 )
-        : *E dkeys # *E ( nurl_peek dctl 0 )
-        : *i dstates # *i ( nurl_peek dctl 1 )
+        : *SetCtl dc ( box_ptr [SetCtl] . out ctl )
+        ( __set_alloc_buffers [E] dc cap )
+        : *E skeys # *E ( raw_block_ptr . sc keys )
+        : *i sstates # *i ( raw_block_ptr . sc states )
+        : *E dkeys # *E ( raw_block_ptr . dc keys )
+        : *i dstates # *i ( raw_block_ptr . dc states )
         : ~ i i 0
         ~ < i cap {
             = . dstates i . sstates i
@@ -323,10 +301,10 @@ $ `stdlib/core/vec.nu`
             } {}
             = i + i 1
         }
-        ( nurl_poke dctl 2 ( __set_len_raw sctl ) )
-        ( nurl_poke dctl 4 ( __set_tomb_raw sctl ) )
+        = . dc len . sc len
+        = . dc tomb . sc tomb
     } {}
-    ^ @ ( Set E ) { dctl }
+    ^ out
 }
 
 // Early release: exactly what dropping `st` does (Set_drop).

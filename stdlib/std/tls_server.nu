@@ -103,6 +103,7 @@ $ `stdlib/core/rcbox.nu`
 //   5, 6  P-256 comb tables T1, T2 (std/ecdsa_p256.nu)
 //   7  CRC-32 slicing-by-8 tables (std/deflate.nu)
 //   8, 9  base64 decode tables, standard and URL alphabets (std/encode.nu)
+//   10  Keccak-f[1600] round constants (std/hash_sha3.nu)
 
 @ _tls_ticket_key_ensure → v {
     ? != g_tls_ticket_master 0 { ^ } {}

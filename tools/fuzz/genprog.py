@@ -492,6 +492,54 @@ class Prog:
         if truth:
             self.drops += n
 
+    def stmt_drop_container(self):
+        # %Drop values held inside a container inside a struct — a Vec, a
+        # Vec of Vecs, a Box, an option, an enum payload — in a closed
+        # scope: every one is dropped once when the struct goes (h209: such
+        # a struct was never dropped at all).
+        self.drop_used = True
+        if not getattr(self, "dc_decls", False):
+            self.dc_decls = True
+            self.decls += [
+                ": DCv { ( Vec DH ) xs }",
+                ": DCvv { ( Vec ( Vec DH ) ) xs }",
+                ": DCb { ( Box DH ) b }",
+                ": DCo { ?DH o }",
+                ": | DCe { DCeN DCeP DH }",
+                ": DCen { DCe e }",
+            ]
+        crender, truth = self.cond()
+        shape = self.rng.choice(["vec", "vecvec", "box", "opt", "enum"])
+        x = self.fresh("dc")
+        self.emit(f"    ? {crender} {{")
+        if shape == "vec":
+            n = self.rng.randint(0, 4)
+            self.emit(f"        : DCv {x} @ DCv {{ ( vec_new [DH] ) }}")
+            for j in range(n):
+                self.emit(f"        ( vec_push [DH] . {x} xs @ DH {{ {j} }} )")
+        elif shape == "vecvec":
+            n = self.rng.randint(0, 3)
+            inner = self.fresh("dci")
+            self.emit(f"        : ( Vec DH ) {inner} ( vec_new [DH] )")
+            for j in range(n):
+                self.emit(f"        ( vec_push [DH] {inner} @ DH {{ {j} }} )")
+            self.emit(f"        : DCvv {x} @ DCvv {{ ( vec_new [( Vec DH )] ) }}")
+            self.emit(f"        ( vec_push [( Vec DH )] . {x} xs {inner} )")
+        elif shape == "box":
+            n = 1
+            self.emit(f"        : DCb {x} @ DCb {{ ( box_new [DH] @ DH {{ 7 }} ) }}")
+        elif shape == "opt":
+            n = self.rng.randint(0, 1)
+            self.emit(f"        : DCo {x} @ DCo {{ @ ?DH {{ T @ DH {{ 3 }} }} }}" if n else
+                      f"        : DCo {x} @ DCo {{ @ ?DH {{ F }} }}")
+        else:
+            n = self.rng.randint(0, 1)
+            self.emit(f"        : DCen {x} @ DCen {{ @ DCe {{ DCeP @ DH {{ 5 }} }} }}" if n else
+                      f"        : DCen {x} @ DCen {{ @ DCe {{ DCeN }} }}")
+        self.emit("    } {}")
+        if truth:
+            self.drops += n
+
     def stmt_string(self):
         sn = self.fresh("str")
         self.emit(f"    : String {sn} ( string_new )")
@@ -924,7 +972,7 @@ def to_i64(bits, ty):
 FEATURES = [
     ("int_let", 3), ("phex_expr", 2), ("struct", 2), ("enum_match", 3),
     ("while", 2), ("foreach", 2), ("closure", 2), ("defer", 2),
-    ("drop_scope", 2), ("string", 2), ("vec", 1), ("helper_call", 2),
+    ("drop_scope", 2), ("drop_container", 2), ("string", 2), ("vec", 1), ("helper_call", 2),
     ("recursion", 1), ("ternary", 2),
     # The second wave: the surface the first wave never reached.
     ("generic", 3), ("option", 2), ("result", 2), ("trait", 2),
@@ -979,6 +1027,7 @@ def emit_program(p):
     out.append(gen.PRELUDE.split("\n", 1)[1])  # reuse imports + phex helpers
     out.append("$ `stdlib/core/vec.nu`")
     out.append("$ `stdlib/core/option.nu`")
+    out.append("$ `stdlib/core/box.nu`")
     out.append("")
     if p.selfcheck:
         out.append(SELFCHECK_PRELUDE)

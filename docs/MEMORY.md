@@ -774,6 +774,25 @@ h207, h208), and probing h205's rule a fifth (h206):
   moves into a callee that keeps it, as a local does, unless the callee
   puts it in its container argument (an escape: `vec_push`, §7.6).
 
+Rebuilding the standard library's own owners on self-releasing parts
+found a sixth (h209): a struct holding a value with a `% Drop` of the
+program's own inside a container — `: Imp { ( Vec R ) xs }`, or a Box,
+an option, an enum payload — was never dropped. It could not be copied,
+so it was no handle, and the compiler wrote a field-by-field drop only
+for a struct whose own fields had the `% Drop`. Such a struct now gets
+that drop wherever the value sits inside it (`__holds_user_drop`).
+Rebuilding `BTree` found a seventh (h210), in the library rather than
+the compiler: `btree_remove` took a value out of an inner node before
+merging the kids around it, and the merge moved the emptied slot down.
+A take from a place empties the place, so a value must leave its slot
+only on the path that refills it.
+An eighth (h211) was in the runtime: a share that read an owner count
+of 1 stored 2 instead of taking the locked add, on the premise that only
+the one owner could be sharing. A clone is asked of a borrow, and every
+thread holding an `Arc` borrows the handle in its payload at once, so the
+threads' shares were lost and the value freed under the payload. A share
+now always takes the locked add; only a release keeps the shortcut.
+
 The rules that carry it:
 
 - **An owned value moves.** Storing it into an aggregate, an Option or a

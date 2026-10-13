@@ -4420,21 +4420,25 @@ long long nurl_atomic_i64_dec_fetch(void *p) {
 }
 
 /* Owner counts of library handles (stdlib/core/rcbox.nu, Cell): a count
- * of 1 read by an owner means it is the ONLY owner — nobody else holds a
- * reference that could share or release concurrently — so it may skip the
- * locked read-modify-write. _share returns p's count before the share;
- * _release returns 1 when the caller was the last owner and must free.
- * A count read as 1 was written by this thread or published to it with
- * the reference itself (acquire), so freeing then is ordered after every
- * other owner's last access, as with the atomic decrement. */
+ * of 1 read by an owner that RELEASES means it is the ONLY owner — nobody
+ * else holds a reference that could share or release concurrently — so the
+ * release may skip the locked read-modify-write. _share returns p's count
+ * before the share; _release returns 1 when the caller was the last owner
+ * and must free. A count read as 1 was written by this thread or published
+ * to it with the reference itself (acquire), so freeing then is ordered
+ * after every other owner's last access, as with the atomic decrement.
+ *
+ * A share takes no such shortcut: it is asked of a borrow as often as of
+ * an owner (a handle cloned out of a shared Arc's payload, a Mutex a struct
+ * every thread reads holds), and several threads can borrow the one owner's
+ * handle at once. Each would read 1 and store 2, and the count would lose
+ * all but one of their shares (h211). */
 long long nurl_rc_share(void *p) {
     if (!p) return 0;
     long long *c = (long long *)p;
 #ifdef _WIN32
-    if (*(volatile long long *)c == 1) { *(volatile long long *)c = 2; return 1; }
     return (long long)InterlockedExchangeAdd64((volatile LONG64*)c, 1);
 #else
-    if (__atomic_load_n(c, __ATOMIC_RELAXED) == 1) { __atomic_store_n(c, 2, __ATOMIC_RELAXED); return 1; }
     return __atomic_fetch_add(c, 1, __ATOMIC_SEQ_CST);
 #endif
 }
@@ -4461,14 +4465,11 @@ long long nurl_rc_release(void *p) {
 long long nurl_arc_share(void *p) {
     if (!p) return 0;
     long long *c = (long long *)p;
+    /* (always the locked add: a share can be asked of a borrow — see
+     * nurl_rc_share) */
 #ifdef _WIN32
-    if (*(volatile long long *)(c + 1) == 1 && *(volatile long long *)c == 1) { *(volatile long long *)c = 2; return 1; }
     return (long long)InterlockedExchangeAdd64((volatile LONG64*)c, 1);
 #else
-    if (__atomic_load_n(c + 1, __ATOMIC_ACQUIRE) == 1 && __atomic_load_n(c, __ATOMIC_RELAXED) == 1) {
-        __atomic_store_n(c, 2, __ATOMIC_RELAXED);
-        return 1;
-    }
     return __atomic_fetch_add(c, 1, __ATOMIC_SEQ_CST);
 #endif
 }
