@@ -582,9 +582,6 @@ boundary:
 - **Marker assertions.** `% Send`, `% Sync`, `% NotSend`, `% NotSync` and
   `% Resource` are assertions about a type the compiler cannot verify
   (§6.5, §7.7).
-- **Whether a lock is held.** Mutation of shared state outside a `Mutex`
-  is rejected, but whether a `mutex_lock` is held at a given point is
-  counted, not proved per path (§6.5).
 - **Logical leaks.** A cache or map that a program keeps growing and never
   shrinks holds memory that is still reachable. That is program
   behaviour, not a leak the memory model can see.
@@ -604,8 +601,9 @@ A panic is not outside the model: what a panic abandons is reclaimed
 - **Use the safe element access.** `vec_at`, `vec_put` and `vec_get` are
   bounds-checked and compile to the same loop as raw pointer access.
   `vec_data` + `unsafe` is not faster.
-- **Share mutable state through a handle.** Between threads use `Channel`,
-  `Mutex` or `Arc` (§6.5). Within a thread, to share a closure beyond the
+- **Share mutable state through a handle.** Between threads, send it
+  through a `Channel` or keep it in a `Locked` (§6.5); an `Arc` shares a
+  value nobody changes. Within a thread, to share a closure beyond the
   data it mutates, move that data into a heap-backed handle and capture
   the handle by value.
 - **Graphs.** A graph that is built once can be an `Rc` / `Arc` structure.
@@ -630,7 +628,7 @@ A panic is not outside the model: what a panic abandons is reclaimed
 | Releasing a value a closure still holds | §2.11 |
 | Borrow used after its owner moved, ended, or was reassigned | §6.2 |
 | Non-shareable value crossing a thread boundary | §6.5 |
-| Shared mutation outside a lock | §6.5 |
+| Changing an `Arc`'s payload, which clones read without a lock | §6.5 |
 | Cycle of thread-shared handles | §7.7 |
 | Out-of-bounds element access | bounds-checked (`vec_at` panics, `vec_get` returns None) |
 | Raw pointers, casts, raw memory, foreign calls | only inside `unsafe` (spec §3.3d) |
@@ -826,9 +824,10 @@ The rules that carry it:
   longer than its source.
 - **Threads and fibers.** A closure run on another thread or fiber moves
   its captures. Handles whose copy is a share of one object (`Channel`,
-  `Mutex`, `Arc`, `HttpServer`) are captured as a share of their own, so
-  both sides keep using them and either may end first. Shared mutable
-  state goes through one of those handles (§6.5).
+  `Mutex`, `Arc`, `Locked`, `HttpServer`) are captured as a share of their
+  own, so both sides keep using them and either may end first. State
+  threads share and change is a `Locked`; an `Arc`'s payload is frozen
+  once made (§6.5).
 - **Raw memory only in `unsafe`** (spec §3.3d): a raw pointer taken by a
   call or handed back by one, a primitive that reads or writes as far as
   its caller says (`memmem`, `fwrite`, `nurl_str_at`), a C `FILE*`. A
@@ -925,19 +924,33 @@ handle). A negative marker outranks a positive one on the same type.
 
 **Shared mutation.** A closure run on another thread moves its captures,
 so the spawner cannot keep using a plain `Vec` a worker was handed. Only
-share handles (`Channel`, `Mutex`, `Arc`) are used on both sides. A
-thread that mutates the contents of an `Arc` it did not create, without
-holding a lock, is rejected: `Arc` makes the reference count atomic, not
-the data. Put the data behind a `Mutex`. Whether the lock is held is
-counted over `mutex_lock` / `mutex_unlock` calls, not proved per path
-(§3). The payload is followed wherever it goes: a binding `arc_get`
-bound, an `arc_get` written in place, a field of either, and an `Arc`
-handed to a helper. A call that hands one to a parameter its callee
-mutates — a container mutator, a `String`'s or a map's, any function
-whose summary says so — makes the closure a mutator of that payload, at
-any depth; summaries that close only after every body is compiled (writes
-through raw pointers) are waited for, and the verdict is reached on the
-final ones (h212).
+share handles (`Channel`, `Mutex`, `Arc`, `Locked`) are used on both
+sides.
+
+*An `Arc`'s payload is frozen once made.* `Arc` makes the reference
+count atomic, not the data: every thread holding a clone reads the
+payload with ordinary loads. So safe code never changes it, on any
+thread — the one that made it included (h213) — and whatever lock it
+holds: a `Mutex` the type does not tie to the data proves nothing about
+the threads that read it without taking that lock. The payload is
+followed wherever it goes: a binding `arc_get` bound, an `arc_get`
+written in place, a field of either. A call that hands one to a
+parameter its callee mutates — a container mutator, a `String`'s or a
+map's, a helper of the program's, at any depth — is the error, reported
+at that call; summaries that close only after every body is compiled
+(writes through raw pointers) are waited for, and the verdict is reached
+on the final ones (h212). `arc_set`, which replaces the payload, is for
+`unsafe` code only. A payload whose type synchronises itself (asserted
+`% Sync`: `Mutex`, `Channel`, `Locked`) is changed through its own
+operations.
+
+*State threads share and change is a `Locked [T]`* (stdlib/std/thread.nu):
+a shared handle of its own over a mutex and the value, reached only
+through `locked_with` (runs a closure on the value with the lock held),
+`locked_get` (a copy) and `locked_set`. The lock that guards the data is
+the one its type names, so no lock is counted and none can be forgotten.
+State one thread changes is an `Rc`; a value built first is shared whole
+with `arc_new`.
 
 ### 6.6 How the guarantee is checked
 
@@ -1369,7 +1382,8 @@ Their cycles are rejected at compile time instead:
 - **An `Arc` whose payload can lead back to it is frozen once made.**
   `( mem_ts_cyclic [( Arc T )] )` walks the thread-shared graph. For such
   an `Arc`, `arc_get` returns a copy, and `arc_set` / `arc_ptr` are
-  compile errors. The payload is built first and shared whole, a tree
+  compile errors even in `unsafe` code (every `Arc`'s payload is frozen
+  in safe code, §6.5). The payload is built first and shared whole, a tree
   from its leaves up. `ArcWeak` (`arc_downgrade` / `arc_weak_upgrade`)
   points back without owning. A closure inside a library handle's state
   (a job handler, a route) is not followed by this walk: it reached that

@@ -52,7 +52,23 @@ with its last owner (*Changed*). The compiler compiles itself in 16 %
 fewer instructions and 9–10 % less time than before this work
 (*Performance*).
 
+An `Arc`'s payload is frozen once made: safe code no longer changes what
+every clone reads without a lock, on any thread and under any lock, and
+shared state that changes lives in the new `Locked [T]`, whose own lock
+its operations hold (*Changed*, *Added*). That closes the last two ways
+found to race a payload — a mutation the check did not follow (h212) and
+the making thread changing it under a worker (h213) — and replaces the
+compiler's lock counting with a rule that needs none (*Fixed*).
+
 ### Added
+
+- **`Locked [T]`: shared state threads change** (stdlib/std/thread.nu).
+  A shared handle over a mutex and the value, reached only through
+  `locked_with` (runs a closure on the value with the lock held),
+  `locked_get` (a copy) and `locked_set`. The lock that guards the data
+  is the one its type names, so it is never forgotten, never the wrong
+  one, and the compiler counts no lock. It is `% Sync`: an `( Arc ( Locked
+  T ) )` or a `Locked` captured by every worker is the one value.
 
 - **Module globals that own their value** (spec §3.4, docs/MEMORY.md
   "Module globals"). `: ~ T g 0` for a `T` that owns something — a
@@ -132,6 +148,19 @@ fewer instructions and 9–10 % less time than before this work
   `# i . h ctl` / `mem_forget` pairs that kept a handle in a global.
 
 ### Changed
+
+- **An `Arc`'s payload is frozen once made** (docs/MEMORY.md §6.5;
+  breaking). `Arc` makes the count atomic, not the data: every clone reads
+  the payload without a lock. Safe code may no longer change it — on any
+  thread, the one that made it included, and whatever lock it holds: a
+  call that hands an `arc_get` result, or a field of one, to anything
+  that changes it is an error at that call, and `arc_set` is for `unsafe`
+  code only. Build the value first and `arc_new` it whole; put state
+  threads share and change in a `Locked` (*Added*); keep state one thread
+  changes in an `Rc`. A payload that synchronises itself (`% Sync`:
+  `Mutex`, `Channel`, `Locked`) is used through its own operations as
+  before. No package changed its payload; three tests did, and
+  `http2_client_duplex` keeps its outcome flag in a `( Locked i )`.
 
 - **More of the standard library's owners release nothing by hand.**
   - `Cell` is a `( Shared RawBlock )`: the bytes release themselves with
@@ -262,6 +291,21 @@ fewer instructions and 9–10 % less time than before this work
 
 ### Fixed
 
+- **The thread that made an `Arc` can no longer change its payload while
+  a worker reads it** (h213). The race check asked only what a detached
+  closure did to the payload, so the spawning thread's own `vec_set` /
+  `vec_push` through `arc_get` passed as "one thread changing its own
+  data" — while the worker it had started read the same buffer: ASan's
+  heap-use-after-free in every run, the worker reading a `String` the
+  maker had just replaced. A held lock did not help either: the check
+  took any `mutex_lock` as proof, whichever lock it was. The payload is
+  now frozen once made (*Changed*), which needs no lock bookkeeping at
+  all — the compiler's lock counter, its spawn records and its per-closure
+  summaries are gone — and shared state that changes lives in a `Locked`
+  (*Added*). `arc_set` was `unsafe`-bodied but callable from safe code
+  (an `unsafe` function's callers need no marking, spec §3.3d); the call
+  is now refused outside `unsafe`, like the raw-memory primitives.
+
 - **A thread that mutates an `Arc`'s payload is rejected however the
   payload reaches the mutation** (h212). The check knew one shape: a
   binding `arc_get` bound, then a container mutator on it. Two threads
@@ -275,9 +319,8 @@ fewer instructions and 9–10 % less time than before this work
   an `Arc` handle — and a call handing one to a mutated parameter is
   parked; after the module a fixed point over the final summaries decides
   which functions mutate the payload of which `Arc` parameter, and a
-  detached closure that does, at any depth and outside a lock, is
-  rejected at the detach. Reading a payload from many threads, mutating
-  it under `mutex_lock`, and mutating it from one thread stay accepted.
+  call that does, at any depth, is rejected (h213 then moved the error
+  from the detach to that call).
 
 - **Cloning one handle from several threads at once keeps the count**
   (h211). A share that read an owner count of 1 skipped the locked add

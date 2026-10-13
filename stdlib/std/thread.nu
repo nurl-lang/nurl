@@ -33,6 +33,10 @@
 //   ( mutex_unlock   Mutex m )             → v
 //   ( mutex_free     Mutex m )             → v   (early release; optional)
 //   ( mutex_with     Mutex m ( @ v ) body) → v   (lock + run + unlock)
+//   ( locked_new     [T] x )               → ( Locked T )  a value with its own lock
+//   ( locked_with    [T] l ( @ v T ) f )   → v   run f on the value, holding the lock
+//   ( locked_get     [T] l )               → T   a copy, taken under the lock
+//   ( locked_set     [T] l x )             → v   replace the value under the lock
 //   ( cond_new )                           → Cond
 //   ( cond_wait      Cond c Mutex m )      → v   (must hold m)
 //   ( cond_signal    Cond c )              → v
@@ -354,6 +358,63 @@ $ `stdlib/core/rcbox.nu`
     ( mutex_lock m )
     ( body )
     ( mutex_unlock m )
+}
+
+// ── Locked ──────────────────────────────────────────────────────────
+
+// A value with its own lock (docs/MEMORY.md §6.5). An Arc's payload is
+// frozen once made, so the state threads share and change is a Locked
+// one: the value is reached only through the functions below, each of
+// which holds the lock for the whole call — which lock guards which data
+// is decided by the type, not by where `mutex_lock` calls fall. A Locked
+// is itself a shared handle (every copy is the same value, the last one
+// releases it), so it is captured or sent to the threads that use it;
+// T must be Send, since it is reached from whichever thread holds the
+// lock.
+: LockedImpl [T] {
+    Mutex mu
+    T val
+}
+
+: Locked [T] { ( Shared ( LockedImpl T ) ) ctl }
+
+% Sync Locked {}
+
+@ locked_new [T] sink T x → ( Locked T ) {
+    ^ @ ( Locked T ) { ( shared_new [( LockedImpl T )] @ ( LockedImpl T ) { ( mutex_new ) x } ) }
+}
+
+@ Locked_share [T] ( Locked T ) l → ( Locked T ) {
+    ^ @ ( Locked T ) { ( shared_clone [( LockedImpl T )] . l ctl ) }
+}
+
+@ Locked_drop [T] sink ( Locked T ) l → v {}
+
+// Run `f` on the value while holding the lock. `f` gets a view: what it
+// does to a container changes the value; a copy it keeps is its own (a
+// scalar is replaced with locked_set).
+@ locked_with [T] ( Locked T ) l ( @ v T ) f → v {
+    : *( LockedImpl T ) p ( shared_ptr [( LockedImpl T )] . l ctl )
+    ( mutex_lock . p mu )
+    ( f . p val )
+    ( mutex_unlock . p mu )
+}
+
+// A copy of the value, taken under the lock.
+@ locked_get [T] ( Locked T ) l → T {
+    : *( LockedImpl T ) p ( shared_ptr [( LockedImpl T )] . l ctl )
+    ( mutex_lock . p mu )
+    : T c ( mem_dup . p val )
+    ( mutex_unlock . p mu )
+    ^ c
+}
+
+// Replace the value under the lock (the old one is dropped).
+@ locked_set [T] ( Locked T ) l sink T x → v {
+    : *( LockedImpl T ) p ( shared_ptr [( LockedImpl T )] . l ctl )
+    ( mutex_lock . p mu )
+    = . p val x
+    ( mutex_unlock . p mu )
 }
 
 // ── Condition variable ────────────────────────────────────────────

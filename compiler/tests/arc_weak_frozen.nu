@@ -1,12 +1,14 @@
 // arc_weak_frozen.nu — Arc's cycles are ruled out, not collected
 // (docs/MEMORY.md §7.7). An Arc whose payload can hold a handle back to it
-// is frozen once made: arc_get hands out a copy, so nothing done to the
-// copy reaches the shared value, and a tree is built from its leaves up.
+// is frozen like any other — arc_get even hands out a copy, so nothing
+// done to it reaches the shared value — and a tree is built from its leaves
+// up.
 // ArcWeak points back without owning.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/arc.nu`
+$ `stdlib/std/thread.nu`
 
 & `libc` @ nurl_alloc_count → i
 
@@ -39,13 +41,15 @@ unsafe @ live → i { ^ - ( nurl_alloc_count ) ( nurl_free_count ) }
     ^ + * up1 10 up2
 }
 
-// A payload of plain values is shared as before: arc_get lends it.
+// A payload of plain values is lent, read-only — every Arc's payload is
+// frozen once made (docs/MEMORY.md §6.5); state that changes is a Locked.
 @ plain → i {
-    : ( Arc ( Vec i ) ) a ( arc_new [( Vec i )] ( vec_new [i] ) )
-    : ( Vec i ) v ( arc_get [( Vec i )] a )
-    ( vec_push [i] v 7 )
-    : ( Vec i ) v2 ( arc_get [( Vec i )] a )
-    ^ ( vec_len [i] v2 )
+    : ( Vec i ) d ( vec_new [i] )
+    ( vec_push [i] d 7 )
+    : ( Arc ( Vec i ) ) a ( arc_new [( Vec i )] d )
+    : ( Locked ( Vec i ) ) l ( locked_new [( Vec i )] ( vec_new [i] ) )
+    ( locked_with [( Vec i )] l \ ( Vec i ) v → v { ( vec_push [i] v 8 ) } )
+    ^ ( vec_len [i] ( locked_get [( Vec i )] l ) )
 }
 
 @ main → i {

@@ -12,8 +12,8 @@
 //   * Multiple threads each `arc_free` independently; whichever
 //     calls last releases the storage.
 //   * You want shared semantics with thread safety guaranteed by
-//     the count alone (Arc), or combined with an inner `Mutex`
-//     (Arc[Mutex] pattern, for shared mutation).
+//     the count alone (Arc), or shared state threads change, held in
+//     a `Locked` (the Arc[Locked] pattern, stdlib/std/thread.nu).
 //
 // Do NOT use when:
 //   * Single-threaded — `Rc[T]` saves the atomic-op overhead.
@@ -23,8 +23,8 @@
 //
 //   ( arc_new      [T] x )         → ( Arc T )   count = 1
 //   ( arc_zero     [T] )           → ( Arc T )   count = 1, value zero-init
-//   ( arc_get      [T] r )         → T           load value (race-prone, see TRAP)
-//   ( arc_set      [T] r x )       → v           overwrite value (NOT atomic on T)
+//   ( arc_get      [T] r )         → T           the payload, read-only (see below)
+//   ( arc_set      [T] r x )       → v           overwrite value (unsafe only)
 //   ( arc_ptr      [T] r )         → *T          borrowed raw pointer
 //   ( arc_clone    [T] r )         → ( Arc T )   atomic count++
 //   ( arc_strong   [T] r )         → i           current count (snapshot, racy)
@@ -38,38 +38,36 @@
 //
 //   ArcImpl[T] = { i count, T value }
 //
-// TRAP — value reads ARE NOT atomic:
+// An Arc's payload is frozen once made (docs/MEMORY.md §6.5):
 //
-//   Only the COUNT is touched atomically. `arc_get` / `arc_set`
-//   read/write the value field with ordinary loads/stores. If T is
-//   larger than the platform's pointer (i.e. anything but a single
-//   integer / pointer / bool), concurrent reads and writes are a
-//   data race. The Arc protects ownership/lifetime, NOT field
-//   integrity.
+//   Only the COUNT is touched atomically; the payload is read with
+//   ordinary loads by every thread holding a clone. So safe code never
+//   changes it after `arc_new`: a mutation of what `arc_get` lends — a
+//   container mutator, a field, a helper or a String's or a map's own
+//   mutator handed it — is a compile error, wherever it is and whatever
+//   lock is held (a lock the compiler cannot tie to the data proves
+//   nothing). Build the value first and `arc_new` it whole. State
+//   threads share and change goes in a `Locked` (stdlib/std/thread.nu):
+//   a shared handle of its own, reached only through `locked_with` /
+//   `locked_get` / `locked_set`, which hold its lock for the call:
+//
+//     : ( Locked ( Vec i ) ) shared ( locked_new [( Vec i )] v )
+//     // in each worker:
+//     ( locked_with [( Vec i )] shared \ ( Vec i ) xs → v { ( vec_push [i] xs 1 ) } )
+//
+//   A payload whose type synchronises itself (asserted `% Sync`: a
+//   Mutex, a Channel, a Locked) is changed through its own operations.
+//   State one thread changes belongs in an `Rc`. `arc_set` replaces the
+//   payload in place, so it is `unsafe`: raw code vouches that no other
+//   thread can see it.
 //
 //   Because an Arc exists to be SHARED, its payload is the one place
 //   the compiler asks the harder of the two thread-safety questions:
 //   T must be `Sync`, not merely `Send` (stdlib/core/marker.nu). That
 //   is why `( Arc ( Rc i ) )` and `( Arc Cell )` are rejected at the
 //   thread boundary while a bare `Cell` capture — moved, not shared —
-//   is fine. What the check does NOT do is stop two threads mutating
-//   a `( Arc ( Vec i ) )`'s contents: `Vec` is Sync, correctly, since
-//   sharing one read-only is ordinary code. That race is caught
-//   separately, at the mutation, by the shared-mutation check
-//   (docs/MEMORY.md §6.5) — which recommends exactly the pattern
-//   below.
-//
-//   For shared MUTATION across threads, wrap T in a
-//   Mutex (the Arc[Mutex[T]] pattern):
-//
-//     : ( Arc Mutex ) shared ( arc_new ( mutex_new ) )
-//     // every thread holds an arc_clone of `shared`; locks the
-//     // mutex before touching the data the mutex protects.
-//
-//   Or for read-mostly: have each thread hold an arc_clone of an
-//   immutable T; rebuild a NEW Arc on update and swap atomically
-//   via a separate pointer slot (the canonical Arc-swap pattern).
-//
+//   is fine.
+
 // TRAP — owned-T copy semantics:
 //
 //   Same as `box_get` / `rc_get`. Bitwise copy aliases inner
@@ -155,7 +153,7 @@
     ^ . impl value
 }
 
-@ arc_set [A] ( Arc A ) r A x → v {
+unsafe @ arc_set [A] ( Arc A ) r A x → v {
     ( mem_ts_frozen_only [( Arc A )] arc_set )
     : *( ArcImpl A ) impl # *( ArcImpl A ) . r ctl
     = . impl value x  // drops the old value

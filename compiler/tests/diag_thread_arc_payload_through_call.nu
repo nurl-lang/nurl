@@ -11,9 +11,10 @@
 //   ( string_push_char view c )             — a String (or a map) mutator
 //
 // The last writes through raw pointers, so its mutation summary is known
-// only once every body is compiled: the verdict is reached then, and the
-// error names the detach. Measured before the fix, a String pushed from two
-// threads: lost updates in every run and `realloc(): invalid old size`.
+// only once every body is compiled: the verdict is reached then, at the
+// call that hands the payload over. Measured before the fix, a String
+// pushed from two threads: lost updates in every run and `realloc():
+// invalid old size`.
 
 $ `stdlib/std/arc.nu`
 $ `stdlib/std/thread.nu`

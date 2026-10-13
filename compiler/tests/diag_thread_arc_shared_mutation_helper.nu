@@ -3,13 +3,9 @@
 //
 // Moving the `vec_push` into a helper must not move it out of the
 // check, or the diagnostic teaches "wrap it in a function" as the cure
-// for a data race. The compiler carries a per-function summary
-// (`g_fn_arc_mut`): a body that mutates the contents of an `arc_get`
-// result is recorded, and a thread closure that CALLS such a function
-// is rejected exactly as one that mutates inline.
-//
-// The summary is inferred in codegen order, like the sink and escape
-// summaries, so a helper defined above its caller is seen.
+// for a data race. An Arc's payload is frozen once made (docs/MEMORY.md
+// §6.5), so the helper's own change to what arc_get lent it is the error
+// — wherever the helper is called from, on whatever thread.
 
 $ `stdlib/std/arc.nu`
 $ `stdlib/std/thread.nu`
