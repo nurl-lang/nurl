@@ -14401,7 +14401,7 @@ unsafe @ bck_check_lit_moves i lex i line i col s what s tab i scmask s moved s 
         // is rejected — and so is a field that cannot be copied of a struct
         // that still drops it (`( eat . h r )`, `h` a local).
         ? & summary_callee ( str_contains_word callee_sink ( nurl_str_int arg_idx ) ) {
-            ? & == bck_arg_tt TT_LPAREN != 0 ( nurl_str_len arg_lent ) {
+            ? & & & == bck_arg_tt TT_LPAREN != 0 ( nurl_str_len arg_lent ) ! ( seq arg_lent `0` ) ! ( seq arg_lent `false` ) {
                 ? ( __clone_supported at syms ) { = av ( mem_emit_cloneif cg at av arg_lent ) } {}
             } {}
             ? & & & arg_call_lends == bck_arg_tt TT_LPAREN ! ( __clone_supported at syms ) ( __nc_drop_ty at ) {
