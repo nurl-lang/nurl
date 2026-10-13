@@ -11326,6 +11326,14 @@ unsafe @ nurl_lex_peek4_type i h → i {
     : s v ( gen_expr lex syms cg )
     : s ty ( nurl_get_last_type )
     ( expect lex TT_RPAREN )
+    // A value that cannot be copied (a `% Drop` with no clone): no copy can
+    // be made — a generic copying its `T` (box_clone, rc payloads) is
+    // instantiated with one (h235).
+    ? & ( __type_needs_drop ty syms ) ! ( __clone_supported ty syms ) {
+        ? ( __nc_drop_ty ty ) {
+            ( die lex ( nurl_str_cat3 `'mem_dup' would copy a '` ( llvm_to_nurl ty ) `', and it cannot be copied: it has a '% Drop' of its own and no clone, so the copy and the original would both release it. A generic that copies its T (box_clone, a container's clone) cannot be used with this type; move the value instead, or give the type a clone.` ) )
+        } {}
+    } {}
     ? & ( __type_needs_drop ty syms ) ( __clone_supported ty syms ) {
         : s r ( mem_emit_clone_on cg ty v `1` )
         // The copy is fresh: nothing of what the copied expression lent or
@@ -13545,7 +13553,7 @@ unsafe @ bck_check_lit_moves i lex i line i col s what s tab i scmask s moved s 
             = arg_lent ( mem_lent_cond syms cg at bck_arg_tt bck_arg_val )
             // (A call that may lend its result — by name, as a view, or on
             // some paths — for a value no copy can stand in for, h228.)
-            = arg_call_lends & == bck_arg_tt TT_LPAREN
+            = arg_call_lends & & == bck_arg_tt TT_LPAREN ! ( seq ( nurl_sym_get syms `__last_call_lendback__` ) `1` )
             | | != 0 ( nurl_sym_len syms `__last_value_borrow__` ) != 0 ( nurl_sym_len syms `__last_call_ret_view__` )
             | ( mem_fn_lends syms ( nurl_sym_get syms `__last_call_name__` ) 0 )
             != 0 ( nurl_sym_len2 syms ( nurl_sym_get syms `__last_call_name__` ) `__ret_borrow_x` )
@@ -21204,7 +21212,10 @@ unsafe @ mem_path_to_indices s path → s {
     : s __top ( __opt_payload at )
     : s __toe ( __opt_err_payload at )
     : b __topt | != 0 ( nurl_str_len __top ) != 0 ( nurl_str_len __toe )
-    ? & & & & != 0 g_auto_drop_strings == arg_tt TT_LPAREN | ( __is_handle_ty at ) __topt
+    // (…and one that cannot be copied, a `% Drop` value or a struct
+    // holding one: it leaked, h234. Not a trait object: its box has a
+    // rule of its own, above.)
+    ? & & & & != 0 g_auto_drop_strings == arg_tt TT_LPAREN | | ( __is_handle_ty at ) __topt & ( __nc_drop_ty at ) == 0 ( nurl_str_starts at `%dyn.` )
     == 0 ( nurl_sym_len syms `__last_value_borrow__` ) == 0 ( nurl_sym_len syms `__last_call_ret_view__` ) {
         : s __tro ( mem_call_retown syms cg )
         ? != 0 ( nurl_str_len __tro ) {
@@ -21452,6 +21463,9 @@ unsafe @ __src_has_raw_ptr s text → b {
 // the result) or part of one (`part`, copied here — the temporary is dropped
 // after the call). The result is the caller's then. Returns the result.
 @ mem_own_lendback i syms i cg s cn s res s rlt s one s part s idxs → s {
+    // (Whether this call's result may be a temporary the caller made for
+    // it, handed back: then it is the caller's own — h230 asks.)
+    ( nurl_sym_def syms `__last_call_lendback__` ? | != 0 ( nurl_str_len one ) != 0 ( nurl_str_len part ) `1` `` )
     ? | & == 0 ( nurl_str_len one ) == 0 ( nurl_str_len part ) == 0 ( nurl_sym_len syms `__last_call_own__` ) { ^ res } {}
     : s own0 ( nurl_sym_get syms `__last_call_own__` )
     : ~ s any ``
@@ -46460,6 +46474,8 @@ unsafe @ __sx_names_capture i syms s sx → b {
         = cn ( str_first_word fw ) = gn ( str_first_word ( str_skip_word fw ) )
     } {}
     ? | == 0 ( nurl_str_len cn ) != 0 ( nurl_sym_len2 syms cn `__ptr` ) { ^ v } {}
+    // (A call handing back a temporary this caller made for it: its own.)
+    ? ( seq ( nurl_sym_get syms `__last_call_lendback__` ) `1` ) { ^ v } {}
     : i n ( nurl_str_to_int ( nurl_sym_get g_pending_impl `sinknc_n` ) )
     ( nurl_sym_def g_pending_impl `sinknc_n` ( nurl_str_int + n 1 ) )
     ( nurl_sym_def g_pending_impl ( nurl_str_cat `sinknc#` ( nurl_str_int n ) )

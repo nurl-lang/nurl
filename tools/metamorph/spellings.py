@@ -1546,7 +1546,7 @@ CLASSES = [
                "still drops it (h229). (A String lent to a `sink` is "
                "handed a copy, h228: see the controls.)",
         "expect": REJECT_DEFAULT,
-        "expect_msg": ["lends what it hands back", "out of a field", "would have to be copied here"],
+        "expect_msg": ["lends what it hands back", "out of a field", "would have to be copied here", "would copy a"],
         "spellings": {
             "lent-into-literal": prog(
                 "    : ( Vec Res ) v ( vec_new [Res] )\n"
@@ -1580,6 +1580,10 @@ CLASSES = [
                 "    : Shape s @ Shape { Has @ Res { ( vec_new [i] ) } }\n"
                 "    : Res q ?? s { Has r → { r } Bare → { @ Res { ( vec_new [i] ) } } }",
                 extra=RES_TYPE + ": | Shape { Has Res Bare }\n"),
+            "generic-copy-uncopyable": prog(
+                "    : ( Box Res ) b ( box_new [Res] @ Res { ( vec_new [i] ) } )\n"
+                "    : ( Box Res ) c ( box_clone [Res] b )",
+                prelude=PRELUDE_VEC + "$ `stdlib/core/box.nu`\n", extra=RES_TYPE),
             "param-field-to-sink": prog(
                 "    : Hold h @ Hold { @ Res { ( vec_new [i] ) } 1 }\n"
                 "    ( take h )",
@@ -1678,6 +1682,15 @@ CLASSES = [
                 extra=RES_TYPE + ": Hold { Res r i n }\n: | Shape { Has Res Bare }\n"
                       "@ mkr → Res { ^ @ Res { ( vec_new [i] ) } }\n@ mkh → Hold { ^ @ Hold { ( mkr ) 7 } }\n"
                       "@ mks → Shape { ^ @ Shape { Has ( mkr ) } }\n"),
+            # Temporaries that cannot be copied handed to calls: dropped
+            # after them, or moved into the result (h234).
+            "uncopyable-temp-args": prog(
+                "    : i n ( look ( mkr ) )\n"
+                "    : Res a ( id ( mkr ) )\n"
+                "    : ( Rc Res ) c ( rc_new [Res] ( id ( mkr ) ) )",
+                prelude=PRELUDE_VEC + "$ `stdlib/std/rc.nu`\n",
+                extra=RES_TYPE + "@ mkr → Res { ^ @ Res { ( vec_new [i] ) } }\n"
+                      "@ look Res r → i { ^ ( vec_len [i] . r buf ) }\n@ id Res r → Res { ^ r }\n"),
             "fn-lends-param-field-uncopyable": prog(
                 "    : Hold h @ Hold { @ Res { ( vec_new [i] ) } 1 }\n"
                 "    : i n ( vec_len [i] . ( held h ) buf )",

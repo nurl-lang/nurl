@@ -91,7 +91,10 @@ that still drops it — is rejected where it would be stored or released
 match's arms — a String goes to a `sink` as a copy, one that cannot be
 copied is rejected (h231) — and a temporary that cannot be copied, or a
 matched enum a call handed over, is dropped where nothing else owns it
-(h232, h233) (*Fixed*).
+(h232, h233) (*Fixed*). A temporary that cannot be copied handed straight
+to a call is dropped after it or moves into the result (h234), and a
+generic that copies its `T` cannot be instantiated with one (h235)
+(*Fixed*, *Changed*).
 
 ### Added
 
@@ -377,6 +380,18 @@ matched enum a call handed over, is dropped where nothing else owns it
   the way out (ASan heap-use-after-free on main). Such a field of a local,
   a module global or a closure's capture is rejected; a parameter's field
   stays a lend, and one read through a pointer is raw code's to vouch for.
+
+- **A temporary argument that cannot be copied has an owner** (h234). `(
+  look ( mk ) )` or `: Res r ( id ( mk ) )`, `mk` handing over a `% Drop`
+  value with no clone, left the temporary with no owner (LSan on main).
+  It is dropped after the call unless the callee keeps it, and moves into
+  the result when the callee hands it back — the lend check of h230 takes
+  such a result for the caller's own.
+
+- **A generic does not copy what cannot be copied** (h235). `( box_clone
+  [Res] b )` copied the payload's bits through `mem_dup`: two boxes, one
+  buffer (ASan heap-use-after-free on main). `mem_dup` of a value that
+  cannot be copied is rejected at the instantiation.
 
 - **An enum lends its payload to the arms** (h231). `?? m { Text t → {
   ( consume t ) } … }`, `consume` taking a `sink String`, released the

@@ -867,7 +867,10 @@ to a `sink` as a copy, never released by the arm. An enum a call handed
 over and nothing binds is given an owner for the rest of the scope
 (h233), and any other temporary — discarded, or read for a field that
 owns nothing — is dropped where it is left, when the call handed it over
-(h232).
+(h232). One handed straight to another call is dropped after that call,
+or becomes the result when the callee hands it back (h234). `mem_dup` —
+and so every generic that copies its `T`, `box_clone` among them — is
+rejected for a value that cannot be copied (h235).
 
 The rules that carry it:
 
