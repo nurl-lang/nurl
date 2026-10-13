@@ -830,10 +830,11 @@ jobs:
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
-    # main measured 21-23 minutes against the old 25 (the instrumented
-    # corpus alone 14 of them); a corpus that grows by a dozen tests
-    # crossed it and the job was cancelled mid-run, not failed.
-    timeout-minutes: 35
+    # The whole-corpus run is sanitizers-corpus below, sharded: in one
+    # job with these controls it took ~21 min (the corpus 12-14 of
+    # them) and set the workflow's wall time. This job is the --san
+    # build plus the targeted controls, ~8 min.
+    timeout-minutes: 25
     container:
       image: nurllang/ci:ubuntu24-20260821
       credentials:
@@ -964,6 +965,32 @@ jobs:
         # control passed.
         run: ./tools/metamorph/spellings.py --class panic-reclaim
 
+  sanitizers-corpus:
+    name: ASan + UBSan + LSan corpus (shard ${{ matrix.shard }}/2)
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    # Each shard is the --san build (~3 min) plus half the corpus.
+    timeout-minutes: 25
+    strategy:
+      # One shard's sanitizer report must not cancel the other's: both
+      # halves are worth reading on the same push.
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    container:
+      image: nurllang/ci:ubuntu24-20260821
+      credentials:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: ./build.sh --san (instrumented bootstrap)
+        run: ./build.sh --san --no-tests
+
       - name: ASan + UBSan + LSan corpus
         # The whole corpus, leak check on (run_san_tests.sh's default):
         # a leak fails like a use-after-free does. This replaced a curated
@@ -977,6 +1004,11 @@ jobs:
         # input that compiles a `select`, net_* hold the sans-IO stack to
         # the unikernel's no-process-exit standard, async_* catch a fiber
         # that leaks its stack mapping — they are simply part of the run.
+        #
+        # Sharded round-robin over the sorted test names
+        # (NURL_SAN_SHARD); the shards together are the whole corpus.
+        env:
+          NURL_SAN_SHARD: ${{ matrix.shard }}/2
         run: ./compiler/tests/run_san_tests.sh
 
   webdocs-build:

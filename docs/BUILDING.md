@@ -550,7 +550,7 @@ instead; one that touches both runs everything.
 | stdlib symbol-collision gate | no two stdlib helpers mangle to the same symbol (`tools/check_stdlib_symbols.sh`) |
 | `nurlfmt --check` | the whole tree is in canonical format (no drift) |
 | HTTP per-request leak gate | `tools/leakcheck/run.sh` — the HTTP server serves a request burst leak-free under LSan |
-| AddressSanitizer + UndefinedBehaviorSanitizer + LeakSanitizer | `build.sh --san` + the whole corpus under ASan/UBSan/LSan |
+| AddressSanitizer + UndefinedBehaviorSanitizer + LeakSanitizer | `build.sh --san` + the whole corpus under ASan/UBSan/LSan (CI: targeted controls in one job, the corpus in two parallel shards via `NURL_SAN_SHARD=i/n`) |
 | FreeBSD (VM) | full build + bootstrap + corpus on a real FreeBSD 14.2 guest (`vmactions/freebsd-vm`) — a hard gate that keeps libc/`sh` portability honest |
 | unikernel: the corpus with no libc | the corpus built with no libc at all, plus the nolibc/runtime_bare unit gates — and the x86_64 PVH image under cloud-hypervisor as a second loader |
 | unikernel: the guest under QEMU | the guest **booted** under QEMU on x86_64, AArch64 *and* RISC-V64 — devices, network demos, TLS, DNS, disk |
