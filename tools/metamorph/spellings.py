@@ -1735,6 +1735,14 @@ CLASSES = [
 # is reported separately.
 
 RECOVER_PRELUDE = "$ `stdlib/std/panic.nu`\n$ `stdlib/core/string.nu`\n"
+# (returned-lend: `outer` holds one vector; the spelling hands element 0
+# back and the caller pushes into it, then reads element 0 again.)
+LEND_SETUP = ("    : ( Vec ( Vec i ) ) outer ( vec_new [( Vec i )] )\n"
+              "    : ( Vec i ) seed ( vec_new [i] )\n"
+              "    ( vec_push [i] seed 5 )\n"
+              "    ( vec_push [( Vec i )] outer seed )\n")
+LEND_READ = ("\n    ( nurl_print ( nurl_str_int "
+             "( vec_len [i] ( vec_at [( Vec i )] outer 0 ) ) ) )")
 GUARD = ("@ guard ( @ v ) cl → v {\n"
          "    : !v PanicInfo r ( recover cl )\n"
          "    ?? r { T _ → {}  F p → ( panic_info_free p ) }\n}\n")
@@ -1842,6 +1850,86 @@ RUNTIME_CLASSES = [
                 "    ?? r { T _ → {}  F p → ( panic_info_free p ) }\n"
                 "    ( nurl_print . out body ) ( nurl_print `\\n` )\n"
                 "    ( nurl_free # s . out body )\n    ^ 0\n}\n"),
+        },
+    },
+    {
+        # The same lend handed back N ways (h217, h218). A function may
+        # lend what it was given; a call through a closure value owns
+        # its result. Either way the caller's push must land where the
+        # spelling says and nothing may be released twice — and `^ x`
+        # versus a body that falls off with `x` is no difference at all.
+        # Every spelling here was a heap-use-after-free on main except
+        # the `^` ones, which is exactly the disagreement this axis is
+        # for.
+        "name": "returned-lend",
+        "severity": "memory-unsafety",
+        "doc": "An element of the caller's vector handed back by a "
+               "function or a closure, spelled with `^` or as the value "
+               "the body falls off with; the caller pushes into it and "
+               "reads the vector again.",
+        "spellings": {
+            "fn-caret-call": prog(
+                LEND_SETUP + "    ( vec_push [i] ( first outer ) 1 )" + LEND_READ,
+                extra="@ first ( Vec ( Vec i ) ) xs → ( Vec i ) { ^ ( vec_at [( Vec i )] xs 0 ) }\n"),
+            "fn-falloff-call": prog(
+                LEND_SETUP + "    ( vec_push [i] ( first outer ) 1 )" + LEND_READ,
+                extra="@ first ( Vec ( Vec i ) ) xs → ( Vec i ) { ( vec_at [( Vec i )] xs 0 ) }\n"),
+            "fn-falloff-alias": prog(
+                LEND_SETUP + "    ( vec_push [i] ( first outer ) 1 )" + LEND_READ,
+                extra="@ first ( Vec ( Vec i ) ) xs → ( Vec i ) { : ( Vec i ) e ( vec_at [( Vec i )] xs 0 ) e }\n"),
+            "fn-falloff-param": prog(
+                LEND_SETUP + "    ( vec_push [i] ( idv ( vec_at [( Vec i )] outer 0 ) ) 1 )" + LEND_READ,
+                extra="@ idv ( Vec i ) v → ( Vec i ) { v }\n"),
+            "fn-falloff-field": prog(
+                "    : ( Vec i ) seed ( vec_new [i] )\n"
+                "    ( vec_push [i] seed 5 )\n"
+                "    : Bx b @ Bx { seed 1 }\n"
+                "    ( vec_push [i] ( items_of b ) 1 )\n"
+                "    ( nurl_print ( nurl_str_int ( vec_len [i] . b items ) ) )",
+                extra=": Bx { ( Vec i ) items i n }\n"
+                      "@ items_of Bx b → ( Vec i ) { . b items }\n"),
+            "fn-falloff-join": prog(
+                LEND_SETUP + "    ( vec_push [i] ( pick outer T ) 1 )" + LEND_READ,
+                extra="@ pick ( Vec ( Vec i ) ) xs b c → ( Vec i ) { ? c { ( vec_at [( Vec i )] xs 0 ) } { ( vec_new [i] ) } }\n"),
+            "closure-caret-call": prog(
+                LEND_SETUP +
+                "    : ( @ ( Vec i ) ) f \\ → ( Vec i ) { ^ ( vec_at [( Vec i )] outer 0 ) }\n"
+                "    ( vec_push [i] ( f ) 1 )" + LEND_READ),
+            "closure-falloff-call": prog(
+                LEND_SETUP +
+                "    : ( @ ( Vec i ) ) f \\ → ( Vec i ) { ( vec_at [( Vec i )] outer 0 ) }\n"
+                "    ( vec_push [i] ( f ) 1 )" + LEND_READ),
+            "closure-falloff-alias": prog(
+                LEND_SETUP +
+                "    : ( @ ( Vec i ) ) f \\ → ( Vec i ) { : ( Vec i ) e ( vec_at [( Vec i )] outer 0 ) e }\n"
+                "    ( vec_push [i] ( f ) 1 )" + LEND_READ),
+            "closure-falloff-capture": prog(
+                "    : ( Vec i ) seed ( vec_new [i] )\n"
+                "    ( vec_push [i] seed 5 )\n"
+                "    : ( @ ( Vec i ) ) f \\ → ( Vec i ) { seed }\n"
+                "    ( vec_push [i] ( f ) 1 )\n"
+                "    ( vec_push [i] ( f ) 1 )\n"
+                "    ( nurl_print ( nurl_str_int ( vec_len [i] seed ) ) )"),
+            "closure-caret-capture": prog(
+                "    : ( Vec i ) seed ( vec_new [i] )\n"
+                "    ( vec_push [i] seed 5 )\n"
+                "    : ( @ ( Vec i ) ) f \\ → ( Vec i ) { ^ seed }\n"
+                "    ( vec_push [i] ( f ) 1 )\n"
+                "    ( vec_push [i] ( f ) 1 )\n"
+                "    ( nurl_print ( nurl_str_int ( vec_len [i] seed ) ) )"),
+            "closure-falloff-capture-field": prog(
+                "    : ( Vec i ) seed ( vec_new [i] )\n"
+                "    ( vec_push [i] seed 5 )\n"
+                "    : Bx b @ Bx { seed 1 }\n"
+                "    : ( @ ( Vec i ) ) f \\ → ( Vec i ) { . b items }\n"
+                "    ( vec_push [i] ( f ) 1 )\n"
+                "    ( nurl_print ( nurl_str_int ( vec_len [i] . b items ) ) )",
+                extra=": Bx { ( Vec i ) items i n }\n"),
+            "generic-closure-falloff": prog(
+                LEND_SETUP +
+                "    : ( Vec i ) r ( apply [( Vec i )] \\ → ( Vec i ) { ( vec_at [( Vec i )] outer 0 ) } )\n"
+                "    ( vec_push [i] r 1 )" + LEND_READ,
+                extra="@ apply [T] ( @ T ) f → T { ^ ( f ) }\n"),
         },
     },
 ]

@@ -809,6 +809,24 @@ handed out of a block through a binding the block declared — `: v { : t
 where the value is used, and the block's own had ended (h216). A
 value-position block now notes what each binding it declares holds, and
 its value names that instead.
+Probing the one source the walk still left unmodelled — the result of
+a call through a closure value — found that a body's *final value*, the
+one it falls off with when no `^` is written, was not judged as `^`
+judges it. A closure falling off with what it only lent — `( vec_at
+outer 0 )`, a capture by name, a field of one, a binding that owns
+nothing — handed that to a caller that takes a closure's result as its
+own, and the caller released `outer`'s element (h217). A function
+falling off with a lend — `@ idv ( Vec i ) v → ( Vec i ) { v }`, `{ (
+vec_at xs 0 ) }`, `{ . b items }` — was summarised as handing over a
+value of its own, and every caller released its argument's contents
+(h218). Written with `^`, both were sound. Now a function body whose
+final statement is a name, a call or a field read compiles it as the
+`^` it means (the statement's end is read off the source text, so
+nothing is lexed twice), and a closure's final value is copied unless
+the body owns it — the callee's answer for a call, the drop flag for a
+binding it keeps, and always for a field read except out of a call that
+handed the whole over. `tools/metamorph/spellings.py` holds the
+spellings side by side (`returned-lend`).
 
 The rules that carry it:
 
@@ -1136,7 +1154,8 @@ fixed:
 - the caller keeps what it passes and drops a temporary it made for the
   call right after it;
 - what the body stores or returns is a copy, and every closure result is
-  owned by its caller;
+  owned by its caller — whether the body returns it with `^` or falls off
+  its end with it (h217);
 - releasing a parameter inside the body is a compile error.
 
 Accordingly, every `*_free_with` (`vec_free_with`, `box_free_with`,

@@ -1602,6 +1602,10 @@ unsafe @ agg_field_count i syms s ot → i {
 // Whether the arm about to be generated hands its value on (gen_cond /
 // gen_match set it before each arm; the arm's block reads it on entry).
 : ~ b g_arm_val F
+// The statement about to be compiled is a function body's final value —
+// a name, a call or a field read the body falls off with (gen_block_ret):
+// it returns as `^` returns it (gen_ret, which consumes the flag).
+: ~ b g_ret_implicit F
 // `g_fn_reallocs[fname]`: the parameters whose BUFFER the function may move
 // or release (a reallocation, a free) — what ends a view of them (§2.10),
 // as distinct from changing what the buffer holds (g_fn_mutates). Built
@@ -3933,6 +3937,9 @@ unsafe @ nurl_cg_lbl i h s hint → s {
 }
 
 @ gen_ret i lex i syms i cg → s {
+    // A fall-off value has no `^` token to step over (gen_block_ret).
+    : b __ret_imp g_ret_implicit
+    = g_ret_implicit F
     // Noreturn inference input: this body does return somewhere.
     = g_fn_ret_count + g_fn_ret_count 1
     ( nurl_sym_set_deep syms `__agg_lends__` `` )
@@ -3959,7 +3966,7 @@ unsafe @ nurl_cg_lbl i h s hint → s {
     {}
     // Borrow checker: source line of the `^` token.
     : i bck_line ( nurl_lex_line lex )
-    ( nurl_lex_advance lex )
+    ? ! __ret_imp { ( nurl_lex_advance lex ) } {}
     // Bare `^` — a return with no value expression (the next token ends
     // the statement/block). Legal ONLY in a `→ v` function, where it is
     // an early return that emits `ret void`. In a value-returning
@@ -4074,6 +4081,13 @@ unsafe @ nurl_cg_lbl i h s hint → s {
     = g_member_path_on ? & != 0 g_srcx_on == ret_first_tt TT_DOT 1 g_member_path_on
     : ~ s val ( gen_operand lex syms cg )
     = g_member_path_on __rsxmp
+    // A fall-off value that turned out to be none — a call that never
+    // returns (`( die … )`), or one returning `v` — is the fall-off's to
+    // judge (__tail_noreturn_close, ret_ty_agree's fall-off wording).
+    ? & __ret_imp ( seq ( nurl_get_last_type ) `void` ) {
+        = g_fn_ret_count - g_fn_ret_count 1
+        ^ val
+    } {}
     // What a view handed back came from (the walk checks it points into
     // nothing this function releases on its way out).
     : i __ret_cls ( bck_walk_class ( nurl_get_last_type ) )
@@ -19272,6 +19286,8 @@ unsafe @ __blk_leave b val → v {
     : ~ i __tail_tt 0
     : ~ s __tail_tv ``
     : ~ s __tail_callee ``
+    // (…and, for a field read, what it reads from: `. ( make ) f`.)
+    : ~ i __tail_root 0
     : ~ b __dead_any F
     ~ != ( nurl_lex_type lex ) TT_RBRACE {
         ? != 0 g_did_ret { = __dead_any T } {}
@@ -19280,6 +19296,7 @@ unsafe @ __blk_leave b val → v {
         = __tail_tt ( nurl_lex_type lex )
         = __tail_tv ( nurl_lex_val lex )
         = __tail_callee ? == __tail_tt TT_LPAREN ( nurl_lex_peek_val lex ) ``
+        = __tail_root ? == __tail_tt TT_DOT ( nurl_lex_peek_type lex ) 0
         = __tail_sxn0 g_sx_n
         = __nstmt + __nstmt 1
         = last ( gen_stmt lex syms cg )
@@ -19317,6 +19334,7 @@ unsafe @ __blk_leave b val → v {
         ( nurl_sym_def syms `__tail_first_tt__` ( nurl_str_int __tail_tt ) )
         ( nurl_sym_def syms `__tail_first_val__` __tail_tv )
         ( nurl_sym_def syms `__tail_callee__` __tail_callee )
+        ? == __tail_tt TT_DOT { ( nurl_sym_def syms `__tail_root_tt__` ( nurl_str_int __tail_root ) ) } {}
         ( __tail_noreturn_close syms __tail_callee ) }
     {}
     ( __close_dead_block __dead_any )
@@ -19420,6 +19438,87 @@ unsafe @ __blk_leave b val → v {
     ( __close_dead_block __dead_any )
 }
 
+// Is the statement starting here — a name, a call or a field read — the
+// value its block falls off with: is the next token after it the block's
+// `}`? A name asks the lexer's lookahead; a call or a field read is read
+// off the source text (balanced parentheses, backtick strings and `//`
+// comments skipped as the lexer skips them), so nothing is lexed twice.
+unsafe @ __is_fall_value_stmt i lex i tt → b {
+    ? ( is_ident_tok tt ) { ^ == ( nurl_lex_peek_type lex ) TT_RBRACE } {}
+    ? & != tt TT_LPAREN != tt TT_DOT { ^ F } {}
+    : s p # s lex
+    : *u src # *u # s ( nurl_peek p LX_SRC )
+    : i len ( nurl_peek p LX_LEN )
+    : i e ( __src_operand_end src len ( nurl_lex_cur_start lex ) )
+    ? < e 0 { ^ F } {}
+    : i w ( __src_skip_ws src len e )
+    ^ & < w len == & # i . src w 255 125
+}
+
+// Past whitespace and `//` comments from `pos`.
+unsafe @ __src_skip_ws * u src i len i pos → i {
+    : ~ i q pos
+    ~ < q len {
+        : i c & # i . src q 255
+        ? ( __lx_is_space c ) { = q + q 1 } {
+            ? & & == c 47 < + q 1 len == & # i . src + q 1 255 47 {
+                ~ & < q len != & # i . src q 255 10 { = q + q 1 }
+            } { ^ q }
+        }
+    }
+    ^ q
+}
+
+// Past an identifier starting at `pos`.
+unsafe @ __src_ident_end * u src i len i pos → i {
+    : ~ i q pos
+    ~ & < q len ( __lx_is_ident_cont & # i . src q 255 ) { = q + q 1 }
+    ^ q
+}
+
+// Where the operand starting at `pos` ends — a name, a parenthesised
+// group, or a field read `. root field` of one — or -1 for anything else.
+unsafe @ __src_operand_end * u src i len i pos → i {
+    ? >= pos len { ^ -1 } {}
+    : i c & # i . src pos 255
+    ? == c 40 {
+        : ~ i q + pos 1
+        : ~ i depth 1
+        ~ < q len {
+            : i d & # i . src q 255
+            ? == d 96 {
+                // A backtick string runs to the next backtick (no escape
+                // spells one: __lex_one).
+                = q + q 1
+                ~ & < q len != & # i . src q 255 96 { = q + q 1 }
+                = q + q 1
+            } {
+                ? & & == d 47 < + q 1 len == & # i . src + q 1 255 47 {
+                    ~ & < q len != & # i . src q 255 10 { = q + q 1 }
+                } {
+                    ? == d 40 { = depth + depth 1 } {}
+                    ? == d 41 {
+                        = depth - depth 1
+                        ? == depth 0 { ^ + q 1 } {}
+                    } {}
+                    = q + q 1
+                }
+            }
+        }
+        ^ -1
+    } {}
+    ? == c 46 {
+        : i r ( __src_operand_end src len ( __src_skip_ws src len + pos 1 ) )
+        ? < r 0 { ^ -1 } {}
+        : i f ( __src_skip_ws src len r )
+        ? >= f len { ^ -1 } {}
+        ? ! ( __lx_is_ident_cont & # i . src f 255 ) { ^ -1 } {}
+        ^ ( __src_ident_end src len f )
+    } {}
+    ? ( __lx_is_alpha_us c ) { ^ ( __src_ident_end src len pos ) } {}
+    -1
+}
+
 // gen_block_ret: like gen_block_stmts but returns the last stmt value.
 @ gen_block_ret i lex i syms i cg → s {
     : i bck_line ( nurl_lex_line lex )
@@ -19431,6 +19530,7 @@ unsafe @ __blk_leave b val → v {
     // condition that was evaluated just before this arm.
     ( bck_block_enter bck_line )
     : ~ s last ( nurl_str_cat `undef` `` )
+    : b __blk_ret_val ! ( seq ( nurl_sym_get syms `__fn_ret_ty__` ) `void` )
     // Tail evidence for the fall-off return battery — same protocol as
     // gen_block_expr (locals per iteration, publish after the loop so
     // inner blocks cannot clobber the outer block's snapshot).
@@ -19447,6 +19547,10 @@ unsafe @ __blk_leave b val → v {
         = __tail_tv ( nurl_lex_val lex )
         = __tail_callee ? == __tail_tt TT_LPAREN ( nurl_lex_peek_val lex ) ``
         = __tail_any T
+        // The value the body falls off with, written without `^`, returns
+        // as `^` returns it: the same ownership rules decide whether the
+        // caller owns it or it is a lend (h218).
+        ? __blk_ret_val { = g_ret_implicit ( __is_fall_value_stmt lex __tail_tt ) } {}
         = last ( gen_stmt lex syms cg )
         ? != ( nurl_lex_type lex ) TT_RBRACE { ( mem_clo_drop_discarded syms cg last __tail_tt ) } {}
         ? & & != 0 g_blk_tail_lit_line
@@ -28000,7 +28104,11 @@ unsafe @ bck_loop_mask s pre s post → s {
         ( nurl_lex_line lex ) ( nurl_lex_col lex )
         g_dbg_current_subprogram ) }
     {}
-    : i tt ( nurl_lex_type lex )
+    // A body's fall-off value (gen_block_ret) is a `^` statement in all
+    // but its spelling: taken here, before anything else can see the flag.
+    : b __gs_imp g_ret_implicit
+    = g_ret_implicit F
+    : i tt ? __gs_imp TT_CARET ( nurl_lex_type lex )
     : i bck_line ( nurl_lex_line lex )
     : i __lf_col ( nurl_lex_col lex )
     : s __lf_callee ? & != 0 g_lint == tt TT_LPAREN ( nurl_lex_peek_val lex ) ``
@@ -28056,9 +28164,10 @@ unsafe @ bck_loop_mask s pre s post → s {
                 `' as a statement has no effect — calls in NURL are written '( name args )', not 'name args'. Did you forget the parens?` ) ) }
             {} }
         {}
-        : s bck_ev ( gen_expr lex syms cg )
-        ? == tt TT_LPAREN { ( bck_record `expr` `` bck_line ) } {}
-        bck_ev
+        ? __gs_imp { = g_ret_implicit T ( gen_ret lex syms cg ) } {
+            : s bck_ev ( gen_expr lex syms cg )
+            ? == tt TT_LPAREN { ( bck_record `expr` `` bck_line ) } {}
+            bck_ev }
     }
     // A `:` declaration is a STATEMENT — it must not type the enclosing
     // block/arm as value-producing. gen_let_or_struct leaves the RHS's
@@ -35828,6 +35937,7 @@ unsafe @ __thr_peel s lty → s {
     // this function (`phi i1 [ 1, %divok_11 ]` from whatever the outer frame
     // last emitted), which clang rejects as `use of undefined value`.
     ( nurl_sym_def body_syms `__cur_lbl__` `entry` )
+    ( nurl_sym_def body_syms `__clo_cap_ptrs__` `` )
     // Shadow outer __owned_slices__ with empty list for the closure body
     ( nurl_sym_def body_syms `__owned_slices__` `` )
     ( nurl_sym_def body_syms `__slice_decls__` `` )
@@ -36087,7 +36197,8 @@ unsafe @ __thr_peel s lty → s {
                 // the extent, so the panic-unwind journal must forget that
                 // value's leaves or the drain would free what the caller
                 // now owns (docs/MEMORY.md §7).
-                ( nurl_sym_def body_syms ( nurl_str_cat cap_name `__captured_byref` ) `1` ) }
+                ( nurl_sym_def body_syms ( nurl_str_cat cap_name `__captured_byref` ) `1` )
+                ( __clo_cap_home body_syms cap_val ) }
             {  // Existing path: alloca + store so the body sees a local.
                 : s cap_ptr ( nurl_cg_reg cg )
                 ( nurl_print `  ` ) ( nurl_print cap_ptr )
@@ -36106,6 +36217,7 @@ unsafe @ __thr_peel s lty → s {
                 // is distinct from `__captured_byref` (a shared caller-frame
                 // alloca, whose writes DO persist but which cannot escape).
                 ( nurl_sym_def body_syms ( nurl_str_cat cap_name `__captured_byval` ) `1` )
+                ( __clo_cap_home body_syms cap_ptr )
                 // The snapshot borrows the env's value; one assigned over it
                 // is this invocation's own and is dropped when it returns
                 // (it leaked).
@@ -36283,18 +36395,62 @@ unsafe @ __thr_peel s lty → s {
         ( seq ( nurl_sym_get body_syms `__last_ident_env_moved__` ) `1` )
         __cl_tval ) }
     {}
-    // A tail that hands back what the body only lent — a parameter, a field
-    // of one, or a join over them — is copied, as `^` copies it (gen_ret):
-    // a call through a closure value owns its result.
+    // A tail that hands back what the body only lent — a parameter, a
+    // capture, a field, a binding that owns nothing, a call or a join that
+    // lent — is copied, as `^` copies it (gen_ret): a call through a closure
+    // value owns its result.
     ? & __cl_fall_used ( __clone_supported ret_type body_syms ) {
         : i __cl_ttt ( nurl_str_to_int ( nurl_sym_get body_syms `__tail_first_tt__` ) )
         : s __cl_ttv ( nurl_sym_get body_syms `__tail_first_val__` )
+        : b __cl_same ( seq __cl_tail_lt ret_type )
         : ~ b __cl_lent F
         ? & ( is_ident_tok __cl_ttt ) ( __is_clo_param body_syms __cl_ttv ) { = __cl_lent T } {}
-        : s __cl_tfr ( nurl_sym_get body_syms `__last_field_read__` )
-        : s __cl_tfp ( str_first_word __cl_tfr )
-        ? & == __cl_ttt TT_DOT ( __is_clo_param_ptr body_syms __cl_tfp ) { = __cl_lent T } {}
+        // A field read is never the body's to hand over: a capture's is the
+        // env's, a parameter's its caller's, and a struct the body made is
+        // dropped, fields and all, on the way out (h217). (Out of a call's
+        // result, the field leaves with it when the call handed the whole
+        // over, and is copied when it lent it.)
+        ? & == __cl_ttt TT_DOT __cl_same {
+            ? == ( nurl_str_to_int ( nurl_sym_get body_syms `__tail_root_tt__` ) ) TT_LPAREN {
+                : s __cl_fro ( mem_call_retown body_syms cg )
+                ? & != 0 ( nurl_str_len __cl_fro ) ! ( seq __cl_fro `true` ) {
+                    : s __cl_frn ( nurl_cg_reg cg )
+                    ( nurl_print `  ` ) ( nurl_print __cl_frn ) ( nurl_print ` = xor i1 ` ) ( nurl_print __cl_fro ) ( nurl_print `, 1\n` )
+                    = body_val ( mem_emit_cloneif cg ret_type body_val __cl_frn )
+                } {}
+            } { = __cl_lent T }
+        } {}
+        // A binding handed back by name: one whose drop flag the body keeps
+        // owns what it holds exactly when the flag says so — it then leaves
+        // with the return (the exit skips it) — and any other that is a
+        // capture holds the env's value, or the enclosing frame's (h217).
+        // (A by-pointer capture stays the enclosing frame's whatever its
+        // flag says: that frame drops it.)
+        : ~ s __cl_tup ``
+        ? & & ( is_ident_tok __cl_ttt ) ! __cl_lent __cl_same {
+            : b __cl_cap ( str_contains_word ( nurl_sym_get body_syms `__clo_cap_ptrs__` ) ( nurl_sym_get2 body_syms __cl_ttv `__ptr` ) )
+            ? & __cl_cap ( seq ( nurl_sym_get2 body_syms __cl_ttv `__captured_byref` ) `1` ) {} {
+                = __cl_tup ( mem_udrop_ptr_of body_syms __cl_ttv ) }
+            ? & __cl_cap == 0 ( nurl_str_len __cl_tup ) { = __cl_lent T } {}
+        } {}
         ? __cl_lent { = body_val ( mem_emit_cloneif cg ret_type body_val `1` ) } {
+            ? != 0 ( nurl_str_len __cl_tup ) {
+                : s __cl_tf ( mem_udrop_flag_get body_syms cg __cl_tup )
+                : s __cl_tn ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print __cl_tn ) ( nurl_print ` = xor i1 ` ) ( nurl_print __cl_tf ) ( nurl_print `, 1\n` )
+                = body_val ( mem_emit_cloneif cg ret_type body_val __cl_tn )
+            } {}
+            // …and a call that lent what it handed back (`( vec_at xs 0 )`,
+            // xs a capture or a parameter): copied whenever the callee's
+            // answer for this invocation says it kept it (h217).
+            ? == __cl_ttt TT_LPAREN {
+                : s __cl_cro ( mem_call_retown body_syms cg )
+                ? & != 0 ( nurl_str_len __cl_cro ) ! ( seq __cl_cro `true` ) {
+                    : s __cl_cn ( nurl_cg_reg cg )
+                    ( nurl_print `  ` ) ( nurl_print __cl_cn ) ( nurl_print ` = xor i1 ` ) ( nurl_print __cl_cro ) ( nurl_print `, 1\n` )
+                    = body_val ( mem_emit_cloneif cg ret_type body_val __cl_cn )
+                } {}
+            } {}
             ? | == __cl_ttt TT_QUEST == __cl_ttt TT_QUESTQUEST {
                 : s __cl_jo ( nurl_sym_get body_syms `__last_join_own__` )
                 ? == 0 ( nurl_str_len __cl_jo ) { = body_val ( mem_emit_cloneif cg ret_type body_val `1` ) } {
@@ -45890,22 +46046,19 @@ u` ) ( nurl_print q ) ( nurl_print `:
     ( __merge_impls syms `__fn_pending_rp_impl__` fname `r` )
 }
 
+// The slot a capture lives in inside the closure body: its env's copy (by
+// value) or the enclosing frame's binding (by pointer). A binding of the
+// same spelling declared in the body has a slot of its own.
+@ __clo_cap_home i body_syms s ptr → v {
+    : s hs ( nurl_sym_get body_syms `__clo_cap_ptrs__` )
+    ( nurl_sym_def body_syms `__clo_cap_ptrs__` ? == 0 ( nurl_str_len hs ) ( nurl_str_cat ptr `` ) ( nurl_str_cat3 hs ` ` ptr ) )
+}
+
 // Is `name` a parameter of the closure body being compiled (and not a
 // capture or a binding of the same spelling)? Its caller keeps it.
 @ __is_clo_param i syms s name → b {
     ? == g_bck_closure_depth 0 { ^ F } {}
     ^ ( seq ( nurl_sym_get2 syms name `__cloparam` ) `1` )
-}
-
-// Is alloca `ptr` the home of one of the closure body's parameters?
-@ __is_clo_param_ptr i syms s ptr → b {
-    ? | == g_bck_closure_depth 0 == 0 ( nurl_str_len ptr ) { ^ F } {}
-    : ~ s names ( nurl_sym_get syms `__fn_param_names__` )
-    ~ != 0 ( nurl_str_len names ) {
-        : s w ( str_first_word names ) = names ( str_skip_word names )
-        ? & ( __is_clo_param syms w ) ( seq ( nurl_sym_get2 syms w `__ptr` ) ptr ) { ^ T } {}
-    }
-    ^ F
 }
 
 // Lentness of a value about to be stored, from how it was spelled: `` —

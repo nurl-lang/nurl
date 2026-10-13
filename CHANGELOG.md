@@ -64,7 +64,13 @@ itself, both use-after-free from safe code on the previous release: a
 binding of a nested lending call borrowed nothing (h214), a helper
 handing back what a generic accessor lent said it lent nothing (h215),
 and a block's value handed out through the block's own binding borrowed
-nothing (h216) (*Fixed*).
+nothing (h216) (*Fixed*). Following the one source it still left
+unmodelled, a call through a closure value, found two more: a body's
+final value written without `^` was not judged as `^` judges it, so a
+closure falling off with what it lent (h217) and a function falling off
+with a lend — even `@ idv ( Vec i ) v → ( Vec i ) { v }` (h218) — made
+their callers release what they did not own. Both spellings now mean the
+same, and the metamorphic matrix holds them side by side (*Fixed*).
 
 ### Added
 
@@ -309,6 +315,33 @@ nothing (h216) (*Fixed*).
   source expressions of their own (a block's tail; a match's arms, an
   arm handing back its payload standing for the matched value), and so
   does a field of a call's result.
+
+- **A function's final value returns as `^` returns it** (h218). A body
+  that falls off with a name, a call or a field read — `@ idv ( Vec i ) v
+  → ( Vec i ) { v }`, `{ ( vec_at xs 0 ) }`, `{ . b items }`, `{ : e (
+  vec_at xs 0 ) e }` — was summarised as handing over a value of its own
+  where the same body with `^` lent, so every caller released its
+  argument's contents (ASan heap-use-after-free on main for each). The
+  fall-off path had grown its own, narrower copy of `gen_ret`'s rules;
+  now such a final statement is compiled by `gen_ret` itself
+  (`gen_block_ret` → `g_ret_implicit`). Whether a statement is the last
+  is read off the source text — balanced parentheses, backtick strings
+  and `//` comments skipped as the lexer skips them — so nothing is
+  lexed twice. One fewer rule set; and the fall-off tail now gets `^`'s
+  tail calls too.
+
+- **A closure's final value is its caller's own** (h217). A call through
+  a closure value takes the result as its own, and a body written with
+  `^` copied what it only lent — but one that fell off its end with it
+  did not: `\ → ( Vec i ) { ( vec_at outer 0 ) }`, a capture handed back
+  by name, a field of a capture or of a struct the body made, a binding
+  that owns nothing (an alias, a join), each released `outer`'s element
+  or the closure's own capture in the caller (ASan heap-use-after-free on
+  main). The final value is now copied unless the body owns it: a call
+  by its callee's answer for this invocation, a binding by its drop flag
+  (it then leaves with the return; a capture by pointer stays the
+  enclosing frame's), a field read always — except out of a call that
+  handed the whole over, where it leaves with it.
 
 - **A value handed out of a block through the block's own binding
   borrows what that binding held** (h216). `: v { : t ( vec_at outer 0 )
@@ -614,11 +647,13 @@ nothing (h216) (*Fixed*).
   across every module it emitted, megabytes at a time. It now finds each
   line ending at `memchr` speed and checks the byte after it. Together
   with removing the per-argument string work of the old Arc check, the
-  self-compile retires 2.3 % fewer instructions than main on the same
-  input (11.224e9 vs 11.488e9, identical IR). The new checks — the
-  borrow walk's frozen-payload rows, block and `??` source expressions,
-  the forward lend fixed point (h212–h216) — are included in that
-  figure. The bench kernels compile to the same code.
+  self-compile retires 2.2 % fewer instructions than main on the same
+  input (11.280e9 vs 11.529e9). The new checks — the borrow walk's
+  frozen-payload rows, block and `??` source expressions, the forward
+  lend fixed point (h212–h216), and the final value read as a `^`
+  (h217, h218: +0.13 % on its own) — are included in that figure. The
+  output differs from main's only where a function now falls off with a
+  call: it is a tail call, as `^ ( f … )` always was.
 
 - **Keccak's round constants are built once.** Every SHA-3 / SHAKE
   sponge (and every four-way one, and SLH-DSA's context) built its own Vec
