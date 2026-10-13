@@ -803,7 +803,12 @@ generic, instantiated at the end of the module — had no summary yet when
 the helper's was written: a caller's temporary was dropped under the
 result, and a caller could release `xs` while still reading it (h215).
 The positions handed to such a callee are noted, and which parameters
-the helper lends is settled on the final summaries.
+the helper lends is settled on the final summaries. A third was a value
+handed out of a block through a binding the block declared — `: v { : t
+( vec_at outer 0 ) t }` — which borrowed nothing: the walk resolves names
+where the value is used, and the block's own had ended (h216). A
+value-position block now notes what each binding it declares holds, and
+its value names that instead.
 
 The rules that carry it:
 

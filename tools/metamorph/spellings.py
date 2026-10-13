@@ -252,11 +252,14 @@ CLASSES = [
     {
         "name": "arc-shared-mutation",
         "severity": "memory-unsafety",
-        "doc": "A thread closure mutates the CONTENTS of an Arc it did "
-               "not create, with no lock held. Arc makes the refcount "
-               "atomic and nothing else.",
+        "doc": "Safe code changes the CONTENTS of an Arc — on any thread, "
+               "the one that made it included, and under any lock. Arc "
+               "makes the refcount atomic and nothing else: every clone "
+               "reads the payload without a lock (docs/MEMORY.md §6.5, "
+               "h212/h213). The view is followed on the borrow walk, so "
+               "each spelling hands it to the mutator a different way.",
         "expect": REJECT_DEFAULT,
-        "expect_msg": ["thread_spawn closure"],
+        "expect_msg": ["an Arc's payload is frozen once made"],
         "spellings": {
             "inline-push": prog(
                 "    : ( Vec i ) d ( vec_new [i] )\n"
@@ -314,6 +317,66 @@ CLASSES = [
                 "    ?? r { T t → { ( thread_join t ) } F e → {} }\n"
                 "    ( mutex_free m )",
                 prelude=PRELUDE_ARC),
+            # Once the controls of a lock-counting rule: a mutation by the
+            # thread that made the Arc, and one under a Mutex the type does
+            # not tie to the data — both race the clones' unlocked reads.
+            "maker-thread-push": prog(
+                "    : ( Vec i ) d ( vec_new [i] )\n"
+                "    : ( Arc ( Vec i ) ) a ( arc_new [( Vec i )] d )\n"
+                "    : ( Vec i ) v ( arc_get [( Vec i )] a )\n"
+                "    ( vec_push [i] v 1 )",
+                prelude=PRELUDE_ARC),
+            "mutex-held-push": prog(
+                "    : ( Vec i ) d ( vec_new [i] )\n"
+                "    : ( Arc ( Vec i ) ) a ( arc_new [( Vec i )] d )\n"
+                "    : Mutex m ( mutex_new )\n"
+                "    : ( @ v ) w \\ → v {\n"
+                "        ( mutex_lock m )\n"
+                "        : ( Vec i ) v ( arc_get [( Vec i )] a )\n"
+                "        ( vec_push [i] v 1 )\n"
+                "        ( mutex_unlock m )\n"
+                "    }\n"
+                "    : !Thread ThreadErr r ( thread_spawn w )\n"
+                "    ?? r { T t → { ( thread_join t ) } F e → {} }\n"
+                "    ( mutex_free m )",
+                prelude=PRELUDE_ARC),
+            # The view reaching the mutator through the flow the borrow
+            # walk follows.
+            "through-cond-arm": prog(
+                "    : ( Arc ( Vec i ) ) a ( arc_new [( Vec i )] ( vec_new [i] ) )\n"
+                "    : b c == 1 1\n"
+                "    : ( Vec i ) v ? c ( arc_get [( Vec i )] a ) ( vec_new [i] )\n"
+                "    ( vec_push [i] v 1 )",
+                prelude=PRELUDE_ARC),
+            "through-match-payload": prog(
+                "    : ( Vec ( Vec i ) ) vv ( vec_new [( Vec i )] )\n"
+                "    ( vec_push [( Vec i )] vv ( vec_new [i] ) )\n"
+                "    : ( Arc ( Vec ( Vec i ) ) ) aa ( arc_new [( Vec ( Vec i ) )] vv )\n"
+                "    ?? ( vec_get [( Vec i )] ( arc_get [( Vec ( Vec i ) )] aa ) 0 ) { T e → { ( vec_push [i] e 1 ) } F _ → {} }",
+                prelude=PRELUDE_ARC),
+            "through-element": prog(
+                "    : ( Vec ( Vec i ) ) vv ( vec_new [( Vec i )] )\n"
+                "    ( vec_push [( Vec i )] vv ( vec_new [i] ) )\n"
+                "    : ( Arc ( Vec ( Vec i ) ) ) aa ( arc_new [( Vec ( Vec i ) )] vv )\n"
+                "    : ( Vec i ) e ( vec_at [( Vec i )] ( arc_get [( Vec ( Vec i ) )] aa ) 0 )\n"
+                "    ( vec_push [i] e 1 )",
+                prelude=PRELUDE_ARC),
+            "through-copied-name": prog(
+                "    : ( Arc ( Vec i ) ) a ( arc_new [( Vec i )] ( vec_new [i] ) )\n"
+                "    : ( Vec i ) v ( arc_get [( Vec i )] a )\n"
+                "    : ( Vec i ) w v\n"
+                "    ( vec_push [i] w 1 )",
+                prelude=PRELUDE_ARC),
+            "through-block-local": prog(
+                "    : ( Arc ( Vec i ) ) a ( arc_new [( Vec i )] ( vec_new [i] ) )\n"
+                "    : ( Vec i ) v { : ( Vec i ) t ( arc_get [( Vec i )] a ) t }\n"
+                "    ( vec_push [i] v 1 )",
+                prelude=PRELUDE_ARC),
+            "through-helper-return": prog(
+                "    : ( Arc ( Vec i ) ) a ( arc_new [( Vec i )] ( vec_new [i] ) )\n"
+                "    ( vec_push [i] ( id_vec ( arc_get [( Vec i )] a ) ) 1 )",
+                prelude=PRELUDE_ARC,
+                extra="@ id_vec ( Vec i ) v → ( Vec i ) { ^ v }\n"),
         },
     },
     {
@@ -1344,11 +1407,18 @@ CLASSES = [
                "would encode that documented noise as a regression.",
         "expect": ACCEPT,
         "spellings": {
-            "single-thread-arc-mutation": prog(
+            # An Arc's payload is built first and shared whole, and a copy
+            # taken out of it is the taker's own to change.
+            "arc-built-then-shared": prog(
                 "    : ( Vec i ) d ( vec_new [i] )\n"
+                "    ( vec_push [i] d 1 )\n"
                 "    : ( Arc ( Vec i ) ) a ( arc_new [( Vec i )] d )\n"
-                "    : ( Vec i ) v ( arc_get [( Vec i )] a )\n"
-                "    ( vec_push [i] v 1 )",
+                "    : i n ( vec_len [i] ( arc_get [( Vec i )] a ) )",
+                prelude=PRELUDE_ARC),
+            "copy-out-of-arc-mutated": prog(
+                "    : ( Arc ( Vec i ) ) a ( arc_new [( Vec i )] ( vec_new [i] ) )\n"
+                "    : ( Vec i ) mine ( vec_clone [i] ( arc_get [( Vec i )] a ) )\n"
+                "    ( vec_push [i] mine 1 )",
                 prelude=PRELUDE_ARC),
             "thread-reads-only": prog(
                 "    : ( Vec i ) d ( vec_new [i] )\n"
@@ -1369,19 +1439,16 @@ CLASSES = [
                 "    : !Thread ThreadErr r ( thread_spawn w )\n"
                 "    ?? r { T t → { ( thread_join t ) } F e → {} }",
                 prelude=PRELUDE_ARC),
-            "mutex-guarded-mutation": prog(
-                "    : ( Vec i ) d ( vec_new [i] )\n"
-                "    : ( Arc ( Vec i ) ) a ( arc_new [( Vec i )] d )\n"
-                "    : Mutex m ( mutex_new )\n"
+            # Shared state that changes is a Locked: its own lock is held
+            # for the change, on the worker and on the maker alike.
+            "locked-guarded-mutation": prog(
+                "    : ( Locked ( Vec i ) ) l ( locked_new [( Vec i )] ( vec_new [i] ) )\n"
                 "    : ( @ v ) w \\ → v {\n"
-                "        ( mutex_lock m )\n"
-                "        : ( Vec i ) v ( arc_get [( Vec i )] a )\n"
-                "        ( vec_push [i] v 1 )\n"
-                "        ( mutex_unlock m )\n"
+                "        ( locked_with [( Vec i )] l \\ ( Vec i ) xs → v { ( vec_push [i] xs 1 ) } )\n"
                 "    }\n"
                 "    : !Thread ThreadErr r ( thread_spawn w )\n"
-                "    ?? r { T t → { ( thread_join t ) } F e → {} }\n"
-                "    ( mutex_free m )",
+                "    ( locked_set [( Vec i )] l ( vec_new [i] ) )\n"
+                "    ?? r { T t → { ( thread_join t ) } F e → {} }",
                 prelude=PRELUDE_ARC),
             # Send/Sync controls. A derivation that rejects the
             # thread-nonsend / thread-nonsync classes is worthless if it

@@ -61,9 +61,10 @@ the making thread changing it under a worker (h213) — and replaces the
 compiler's lock counting with a rule that needs none. The rule runs on
 the borrow walk, and building it there found two holes in the walk
 itself, both use-after-free from safe code on the previous release: a
-binding of a nested lending call borrowed nothing (h214), and a helper
-handing back what a generic accessor lent said it lent nothing (h215)
-(*Fixed*).
+binding of a nested lending call borrowed nothing (h214), a helper
+handing back what a generic accessor lent said it lent nothing (h215),
+and a block's value handed out through the block's own binding borrowed
+nothing (h216) (*Fixed*).
 
 ### Added
 
@@ -308,6 +309,18 @@ handing back what a generic accessor lent said it lent nothing (h215)
   source expressions of their own (a block's tail; a match's arms, an
   arm handing back its payload standing for the matched value), and so
   does a field of a call's result.
+
+- **A value handed out of a block through the block's own binding
+  borrows what that binding held** (h216). `: v { : t ( vec_at outer 0 )
+  t }` — or the same in a `?` / `??` arm, through an assignment in a
+  nested block, or through a chain of the block's names — borrowed
+  nothing: the walk resolves names where the value is used, and the
+  block's names had ended with it, so releasing `outer` left `v`
+  dangling (ASan heap-use-after-free on the probe; it also hid a view of
+  an `Arc`'s payload from the frozen-payload rule). A value-position
+  block notes what each binding it declares holds — its `let`, an
+  assignment in it, one in a block nested in it — and its value's source
+  expression names those instead (`g_blk_lets`, `__sx_close`).
 
 - **A helper that hands back what a later-compiled accessor lends says
   so** (h215). `@ first_of ( Vec ( Vec i ) ) xs → ( Vec i ) { ^ ( vec_at
