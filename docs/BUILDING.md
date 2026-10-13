@@ -552,7 +552,9 @@ instead; one that touches both runs everything.
 | HTTP per-request leak gate | `tools/leakcheck/run.sh` — the HTTP server serves a request burst leak-free under LSan |
 | AddressSanitizer + UndefinedBehaviorSanitizer + LeakSanitizer | `build.sh --san` + the whole corpus under ASan/UBSan/LSan |
 | FreeBSD (VM) | full build + bootstrap + corpus on a real FreeBSD 14.2 guest (`vmactions/freebsd-vm`) — a hard gate that keeps libc/`sh` portability honest |
-| unikernel (no libc, then no OS) | the corpus built with no libc at all, then the guest **booted** under QEMU on x86_64, AArch64 *and* RISC-V64 — and the x86_64 PVH image under cloud-hypervisor as a second loader |
+| unikernel: the corpus with no libc | the corpus built with no libc at all, plus the nolibc/runtime_bare unit gates — and the x86_64 PVH image under cloud-hypervisor as a second loader |
+| unikernel: the guest under QEMU | the guest **booted** under QEMU on x86_64, AArch64 *and* RISC-V64 — devices, network demos, TLS, DNS, disk |
+| unikernel: nurlc.wasm and the swarm appliance | `wasmc_gate.sh` (the compiler as wasm, in the guest, byte-identical IR) and `swarm_gate.sh` (the swarm-mcp appliance) |
 | Windows x86_64 (`windows-latest`) | `build.bat` — bootstrap fixed point + the Windows golden corpus (`compiler/tests/outputs-windows/`), then `nurl.bat` builds and runs a program with the bundled zig *and* with clang |
 | macOS ARM64 (`macos-14`, Apple Silicon) | `./build.sh` — stage1 ≡ stage2 fixed point + the full corpus against the **same goldens as Linux**, plus the `examples/` frontend gate |
 
@@ -561,7 +563,9 @@ A local `./build.sh` reproduces the first two gates; `./build.sh --san` then
 `./compiler/tests/nurlfmt_check.sh` reproduces the format gate. The
 unikernel gate is `unikernel/run_nolibc_tests.sh` followed by
 `unikernel/run_qemu_tests.sh` (and the `_arm64` / `_riscv64` variants —
-each needs the matching `qemu-system-*`); the two host-platform gates
+each needs the matching `qemu-system-*`); CI runs those as three parallel
+jobs, with `NURL_QEMU_SKIP_APPLIANCE=1` leaving `wasmc_gate.sh` and
+`swarm_gate.sh` to a job of their own. The two host-platform gates
 need those hosts.
 
 The Linux jobs run inside a pre-baked container

@@ -70,25 +70,35 @@ while IFS= read -r line; do
 done < <(sed -n '/^\[dependencies\]/,/^\[/p' "$PKG/nurl.toml" | grep 'path[[:space:]]*=')
 
 # ── build both halves ───────────────────────────────────────────
-build_err=$(mktemp)
-if ! "$ROOT/unikernel/build_unikernel.sh" "$ROOT/packages/swarm-mcp/src/main.nu" \
-        -o "$OUTDIR/swarm_appliance.elf" >"$build_err" 2>&1; then
+# Concurrently: they are independent (the guest writes main.* and the
+# host swarm_gate_host.* under $OUTDIR) and each is mostly one serial
+# compile of the whole package, so in sequence they were most of this
+# gate's wall time. Each is waited on and reported by itself.
+guest_err=$(mktemp)
+host_err=$(mktemp)
+HOSTBIN="$OUTDIR/swarm_gate_host"
+"$ROOT/unikernel/build_unikernel.sh" "$ROOT/packages/swarm-mcp/src/main.nu" \
+    -o "$OUTDIR/swarm_appliance.elf" >"$guest_err" 2>&1 &
+guest_build=$!
+( cd "$PKG" && "$ROOT/nurl.sh" src/main.nu "$HOSTBIN" >"$host_err" 2>&1 ) &
+host_build=$!
+wait "$guest_build"; guest_rc=$?
+wait "$host_build"; host_rc=$?
+build_failed=0
+if [ "$guest_rc" -ne 0 ]; then
     # A gate that cannot say WHY a build failed costs a CI round trip
     # per guess — this one cost exactly that.
     say "FAIL: guest image did not build"
-    tail -6 "$build_err" | sed 's/^/swarm_gate:   /'
-    rm -f "$build_err"
-    exit 1
+    tail -6 "$guest_err" | sed 's/^/swarm_gate:   /'
+    build_failed=1
 fi
-
-HOSTBIN="$OUTDIR/swarm_gate_host"
-if ! ( cd "$PKG" && "$ROOT/nurl.sh" src/main.nu "$HOSTBIN" >"$build_err" 2>&1 ); then
+if [ "$host_rc" -ne 0 ]; then
     say "FAIL: host-side swarm-mcp did not build"
-    tail -6 "$build_err" | sed 's/^/swarm_gate:   /'
-    rm -f "$build_err"
-    exit 1
+    tail -6 "$host_err" | sed 's/^/swarm_gate:   /'
+    build_failed=1
 fi
-rm -f "$build_err"
+rm -f "$guest_err" "$host_err"
+[ "$build_failed" -eq 0 ] || exit 1
 
 # ── the host node: relay + MCP, no worker (the guest is the fleet) ──
 node_log=$(mktemp)
