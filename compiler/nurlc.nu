@@ -22662,15 +22662,15 @@ unsafe @ __sx_nested s sx → b {
         // (An owner bound to a call whose lent argument is itself a call —
         // `( vec_at ( vec_at top 0 ) 0 )` — borrows what that one lends:
         // its source expression says, h214.)
-        : b __rc_nest & & & | ( seq kind `let` ) ( seq kind `assign` ) == 0 g_bck_bind_scalar ! __rc_vw ? __rc_call ( __sx_nested g_bck_rhs_sx ) ( __sx_lends_any g_bck_rhs_sx )
+        : b __rc_nest & & & & == 0 g_bck_bind_scalar ! __rc_vw != 0 ( nurl_str_len g_bck_rhs_sx ) | ( seq kind `let` ) ( seq kind `assign` ) ? __rc_call ( __sx_nested g_bck_rhs_sx ) ( __sx_lends_any g_bck_rhs_sx )
         ? | | __rc_call __rc_vw __rc_nest {
-            = rec ( nurl_str_cat4 rec ? != 0 g_bck_bind_scalar `` `\t` `\t` g_bck_rhs_callee )
+            = rec ( nurl_str_cat4 rec ? != 0 g_bck_bind_scalar `` ? __rc_nest `\tn` `\t` `\t` g_bck_rhs_callee )
             ? __rc_vw { = rec ( nurl_str_cat4 rec `\t` g_bck_view_reads ? != 0 ( nurl_str_len g_bck_rhs_sx ) ( nurl_str_cat `\t` g_bck_rhs_sx ) `` ) } {
                 ? __rc_nest { = rec ( nurl_str_cat3 rec `\t\t` g_bck_rhs_sx ) } {}
             }
         } {}
         // A match's: field 8, the call it matches (h214).
-        ? & ( seq kind `match` ) != 0 ( nurl_str_len g_bck_match_sx ) { = rec ( nurl_str_cat3 rec `\t\t\t\t` g_bck_match_sx ) = g_bck_match_sx `` } {}
+        ? & != 0 ( nurl_str_len g_bck_match_sx ) ( seq kind `match` ) { = rec ( nurl_str_cat3 rec `\t\t\t\t` g_bck_match_sx ) = g_bck_match_sx `` } {}
         // A return's: field 8 (field 5 `d`: an owner by name).
         ? & ( seq kind `ret` ) != 0 ( nurl_str_len g_bck_ret_sx ) { = rec ( nurl_str_cat3 rec ? == g_bck_ret_dep 1 `\td\t\t\t` ? == g_bck_ret_dep 2 `\te\t\t\t` `\t\t\t\t` g_bck_ret_sx ) } {}
         ( nurl_sym_append g_bck `stmts`
@@ -24933,7 +24933,7 @@ unsafe @ __bck_row_mark s rec → i {
     ? < off 0 { ^ 0 } {}
     : *u rp # *u rec
     : i c # i . rp off
-    ? | | | | == c 118 == c 119 == c 111 == c 100 == c 99 { ^ c } {}
+    ? | | | | | == c 118 == c 119 == c 111 == c 100 == c 99 == c 110 { ^ c } {}
     ^ 0
 }
 
@@ -25007,11 +25007,13 @@ unsafe @ bck_sx_ids s sx → s {
     // `c`; a return's or a `vpass` row's field 8 on theirs.)
     : b __vrow & __bind ( __bck_view_row rec )
     : s lf7 ? __vrow ( bck_ids ( bck_field rec 7 ) ) ``
-    : s lf8 ? | | | | | | __vrow ( seq kind `ret` ) ( seq kind `vpass` ) ( seq kind `callx` ) ( seq kind `arcx` ) ( seq kind `match` ) & __bind >= ( __bck_field_off rec 8 ) 0 ( bck_sx_ids ( bck_field rec 8 ) ) ``
+    : i __k0 ( nurl_str_get kind 0 )
+    : b __nrow & __bind == ( __bck_row_mark rec ) 110
+    : s lf8 ? | | | | | | __vrow __nrow & == __k0 114 ( seq kind `ret` ) & == __k0 118 ( seq kind `vpass` ) & == __k0 99 ( seq kind `callx` ) & == __k0 97 ( seq kind `arcx` ) & == __k0 109 ( seq kind `match` ) ( bck_sx_ids ( bck_field rec 8 ) ) ``
     : s w ( bck_field rec 1 )
     // A value handed to a call that may keep or send it (field 1 the
     // container it may be kept in, `-` for none).
-    ? | | ( seq kind `vpass` ) ( seq kind `callx` ) ( seq kind `arcx` ) {
+    ? | | & == __k0 118 ( seq kind `vpass` ) & == __k0 99 ( seq kind `callx` ) & == __k0 97 ( seq kind `arcx` ) {
         : s vw ? ( seq w `-` ) ( nurl_str_cat w `` ) ( nurl_str_int ( bck_intern ( bck_xl_resolve w ) ) )
         ^ ( nurl_str_cat4 ( nurl_str_cat4 kind `\t` vw `\t` ) ( nurl_str_cat4 rds `\t` ( bck_field rec 3 ) `\t` ) ( bck_field rec 4 ) ( nurl_str_cat4 `\t` ( bck_field rec 5 ) ( nurl_str_cat3 `\t` ( bck_field rec 6 ) `\t\t` ) lf8 ) )
     } {}
@@ -25038,7 +25040,7 @@ unsafe @ bck_sx_ids s sx → s {
         ? ( seq ( bck_field rec 5 ) `c` ) { ^ ( nurl_str_cat five `\tc` ) } {}
     } {}
     // A match's source expression (the call it matches).
-    ? & ( seq kind `match` ) != 0 ( nurl_str_len lf8 ) { ^ ( nurl_str_cat3 five `\t\t\t\t` lf8 ) } {}
+    ? & & == __k0 109 != 0 ( nurl_str_len lf8 ) ( seq kind `match` ) { ^ ( nurl_str_cat3 five `\t\t\t\t` lf8 ) } {}
     // A return's source expression (a view handed back).
     ? & ( seq kind `ret` ) != 0 ( nurl_str_len lf8 ) { ^ ( nurl_str_cat4 five `\t` ( bck_field rec 5 ) ( nurl_str_cat `\t\t\t` lf8 ) ) } {}
     ? __pend
@@ -25775,12 +25777,13 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                 // and sharing a buffer with nothing.
                 // (A view's sources, from its source expression: read before
                 // the name takes its new value.)
-                : i lmk ( __bck_row_mark rec )
+                // (An owner bound to a nested lending call, `n`: what the
+                // inner calls lend reaches it too, h214.)
+                : i lmk0 ( __bck_row_mark rec )
+                : i lmk ? == lmk0 110 0 lmk0
                 : s lsx ? != 0 lmk ( bck_field rec 8 ) ``
                 : s lsrcs ? != 0 ( nurl_str_len lsx ) ( bck_sx_sources st lsx ( bck_field_int rec 1 ) ) ( nurl_str_cat `*` `` )
-                // (An owner bound to a nested lending call: what the inner
-                // calls lend reaches it too, h214.)
-                : s lnest ? & == 0 lmk >= ( __bck_field_off rec 8 ) 0 ( bck_sx_sources st ( bck_field rec 8 ) ( bck_field_int rec 1 ) ) ``
+                : s lnest ? == lmk0 110 ( bck_sx_sources st ( bck_field rec 8 ) ( bck_field_int rec 1 ) ) ``
                 ( bck_partner_unlink ( bck_field_int rec 1 ) )
                 = st ( bck_st_set st ( bck_field_int rec 1 ) BCK_OWNED )
                 ? != 0 g_bck_ab_any { ( nurl_sym_set g_bck ( bck_bkey `ab_` ( bck_field rec 1 ) ) `` ) } {}
@@ -25793,7 +25796,7 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                 ( nurl_sym_set g_bck ( bck_bkey `wv_` ( bck_field rec 1 ) ) ? ( seq ( bck_field rec 5 ) `w` ) `1` `` )
                 ? != 0 g_bck_has_borrow { ( nurl_sym_set g_bck ( bck_bkey `bs_` ( bck_field rec 1 ) ) `` ) } {}
                 = st ( bck_bind_row st ( bck_field_int rec 1 ) rec lsrcs lmk )
-                = st ( bck_nest_borrow st ( bck_field_int rec 1 ) lnest )
+                ? == lmk0 110 { = st ( bck_nest_borrow st ( bck_field_int rec 1 ) lnest ) } {}
                 = p + p 1
                 = done T
             } {}
@@ -25801,10 +25804,11 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                 // `= x ...` gives x a fresh value — Owned, reviving x. Its old
                 // value, if x owned it, is dropped with whatever was stored in it.
                 : i asid ( bck_field_int rec 1 )
-                : i amk ( __bck_row_mark rec )
+                : i amk0 ( __bck_row_mark rec )
+                : i amk ? == amk0 110 0 amk0
                 : s asx ? != 0 amk ( bck_field rec 8 ) ``
                 : s asrcs ? != 0 ( nurl_str_len asx ) ( bck_sx_sources st asx asid ) ( nurl_str_cat `*` `` )
-                : s anest ? & == 0 amk >= ( __bck_field_off rec 8 ) 0 ( bck_sx_sources st ( bck_field rec 8 ) asid ) ``
+                : s anest ? == amk0 110 ( bck_sx_sources st ( bck_field rec 8 ) asid ) ``
                 ? & == BCK_OWNED ( bck_st_get st asid ) ( bck_has_stored_in asid )
                 { = st ( bck_kill_stored_in st asid ( bck_field_int rec 3 ) T ) } {}
                 // The old value is dropped — when this name still owns it: a
@@ -25826,7 +25830,7 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                 ( nurl_sym_set g_bck ( bck_bkey `wv_` ( bck_field rec 1 ) ) ? ( seq ( bck_field rec 5 ) `w` ) `1` `` )
                 ? != 0 g_bck_has_borrow { ( nurl_sym_set g_bck ( bck_bkey `bs_` ( bck_field rec 1 ) ) `` ) } {}
                 = st ( bck_bind_row st asid rec asrcs amk )
-                = st ( bck_nest_borrow st asid anest )
+                ? == amk0 110 { = st ( bck_nest_borrow st asid anest ) } {}
                 // A global outlives every binding of this function.
                 ? & != 0 amk ( bck_id_is_global asid ) { ( bck_global_view_check st asid ( bck_field_int rec 3 ) ) } {}
                 = p + p 1
@@ -26718,8 +26722,11 @@ unsafe @ bck_sx_split s args → s {
     ? == 0 ( nurl_sym_len g_bck `plend` ) { ^ st } {}
     : s pl ( nurl_sym_get g_bck `plend` )
     ( nurl_sym_set g_bck `plend` `` )
-    : s plarc ? == 0 g_arcp_any ( nurl_str_cat `` `` ) ( nurl_str_cat ( nurl_sym_get g_bck `plarc` ) `` )
-    ? != 0 ( nurl_str_len plarc ) { ( nurl_sym_set g_bck `plarc` `` ) } {}
+    : ~ s plarc ``
+    ? != 0 g_arcp_any {
+        = plarc ( nurl_str_cat ( nurl_sym_get g_bck `plarc` ) `` )
+        ? != 0 ( nurl_str_len plarc ) { ( nurl_sym_set g_bck `plarc` `` ) } {}
+    } {}
     ? ! ( seq line ( nurl_sym_get g_bck `plend_line` ) ) { ^ st } {}
     // An argument the call consumed went INTO the result (a value passed
     // through): the result owns it, it borrows nothing from it. One that
@@ -37885,7 +37892,11 @@ unsafe @ origin_free → v {
     // …and the parameters it may carry from a callee compiled after this
     // function (`: e ( vec_at xs 0 )`), with their positions: handed back,
     // they are asked of that callee's final summary (h215).
-    ( nurl_sym_def syms ( nurl_str_cat name `__fwdcarry` ) ( __fwd_carry_of syms rhs_tt rhs_val ) )
+    // (Only when there is something to note, or an outer name's to hide.)
+    ? | | == rhs_tt TT_LPAREN ( is_ident_tok rhs_tt ) != 0 ( nurl_sym_len2 syms name `__fwdcarry` ) {
+        : s fwc ( __fwd_carry_of syms rhs_tt rhs_val )
+        ? | != 0 ( nurl_str_len fwc ) != 0 ( nurl_sym_len2 syms name `__fwdcarry` ) { ( nurl_sym_def syms ( nurl_str_cat name `__fwdcarry` ) fwc ) } {}
+    } {}
 }
 
 // What `__fwdcarry` a binding's initialiser gives it: a call to a callee
