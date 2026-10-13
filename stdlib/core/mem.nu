@@ -54,7 +54,7 @@ unsafe @ mem_replace [T] inout T place sink T x → T {
 // block or writes its fields.
 : RawBlock { s ptr i size }
 
-% Drop RawBlock { unsafe @ drop RawBlock b → v { ? != 0 # i . b ptr { ( free . b ptr ) } {} } }
+% Drop RawBlock { unsafe @ drop RawBlock b → v { ( free . b ptr ) } }
 
 unsafe inline @ raw_block i n → RawBlock {
     ^ @ RawBlock { ( malloc ? > n 0 n 1 ) n }

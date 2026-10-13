@@ -154,9 +154,9 @@ fewer instructions and 9–10 % less time than before this work
     is the tree record's field, so a node a merge or a root shrink gives
     up is taken out of its slot and dropped. The node arrays are no
     longer zeroed (no slot is read before it is written), which makes
-    insert + remove + drop 1.4 % fewer instructions on a 200 000-key run
+    insert + remove + drop 1.6 % fewer instructions on a 200 000-key run
     and 0.2 % fewer over six build-and-drop rounds of 60 000 keys
-    (callgrind). A `RawBlock` that holds nothing no longer calls `free`.
+    (callgrind).
   - Outside the primitives that implement ownership (Vec, String, Box,
     RawBlock, the counted block behind `Shared`, Rc and Arc) only the
     compiler's symbol table releases memory itself; the containers above
