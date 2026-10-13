@@ -46174,12 +46174,13 @@ u` ) ( nurl_print q ) ( nurl_print `:
 // closure's captures — or a binding of the body that may view one
 // (`__cvt`, __clo_view_note) — or something not modelled (`*`)? A callee
 // (a word before `(`) is no binding; a field path counts by its root.
-@ __sx_names_capture i syms s sx → b {
+unsafe @ __sx_names_capture i syms s sx → b {
     : i n ( nurl_str_len sx )
+    : *u sp # *u sx
     : ~ i i 0
     : ~ i st 0
     ~ <= i n {
-        : i c ? < i n ( nurl_str_get sx i ) 0
+        : i c ? < i n # i . sp i 0
         ? | | | | | | | == c 0 == c 40 == c 41 == c 123 == c 125 == c 59 == c 124 == c 46 {
             ? > i st {
                 : s w ( nurl_str_slice sx st - i st )
@@ -46191,7 +46192,7 @@ u` ) ( nurl_print q ) ( nurl_print `:
             } {}
             // (A field path's later parts are field names: skipped.)
             ? == c 46 {
-                ~ & < + i 1 n ! ( __sx_delim ( nurl_str_get sx + i 1 ) ) { = i + i 1 }
+                ~ & < + i 1 n ! ( __sx_delim # i . sp + i 1 ) { = i + i 1 }
             } {}
             = st + i 1
         } {}
