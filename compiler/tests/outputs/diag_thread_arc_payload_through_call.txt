@@ -1,0 +1,5 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_thread_arc_payload_through_call.nu:25: error: thread_spawn closure hands 'string_push_char' the contents of Arc 'b' (line 27) — 'Arc' makes the REFCOUNT atomic, not the payload. Two threads mutating one Arc's contents race on its length and buffer: lost updates, or a use-after-free of a buffer the other thread reallocated. Put the shared value behind a 'Mutex' and mutate it only while holding the lock, or give each thread its own copy and merge the results after 'thread_join'.
+    : !Thread ThreadErr t ( thread_spawn \ → v {
+error: compilation aborted — 1 borrow-checker violation (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)
