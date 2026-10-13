@@ -1576,6 +1576,20 @@ unsafe @ agg_field_count i syms s ot → i {
 // order like the sink / escape / arc summaries.
 : ~ i g_fn_mutates 0
 : ~ s g_fn_mutates_witness ``
+// Whether any callee takes an Arc (`arcp##`, §6.5), and whether the
+// function being compiled has handled one (gen_call's `arcx` rows).
+: ~ i g_arcp_any 0
+: ~ i g_fn_arcseen 0
+// At the borrow walk: whether the value of the source expression being
+// evaluated is a view of an Arc's payload — -1 not, else the id of the
+// Arc it was lent from (-2 one with no name): raised where a callee lends
+// through an Arc parameter, or a borrow of a payload is read (bck_sx_ev),
+// and reset at every row (bck_walk_seq).
+: ~ i g_sxe_arc -1
+// Whether any borrow of this function's walk is one of a payload (`ab_`).
+: ~ i g_bck_ab_any 0
+// The source expression of the call a `match` row matches (gen_match).
+: ~ s g_bck_match_sx ``
 // `g_fn_reallocs[fname]`: the parameters whose BUFFER the function may move
 // or release (a reallocation, a free) — what ends a view of them (§2.10),
 // as distinct from changing what the buffer holds (g_fn_mutates). Built
@@ -4175,6 +4189,23 @@ unsafe @ nurl_cg_lbl i h s hint → s {
         : s rvn ( nurl_sym_get syms `__last_call_name__` )
         ? ! ( str_contains_word rvc rvn )
         { ( nurl_sym_def g_pending_impl rvk ? == 0 ( nurl_str_len rvc ) ( nurl_str_cat rvn `` ) ( nurl_str_cat3 rvc ` ` rvn ) ) } {}
+        // …and when g compiles after this function (a generic accessor
+        // instantiated at module end — `^ ( vec_at xs 0 )`), WHICH
+        // parameters this function lends back follows from g's final
+        // summary: each one handed to g is noted with its position
+        // (resolve_retfwd_lends, h215).
+        ? & != 0 ( nurl_sym_len syms `__last_call_forward__` ) != 0 ( nurl_sym_len syms `__last_call_param_args__` ) {
+            : s rfn ( nurl_sym_get syms `__fn_self_name__` )
+            : s rfc ( str_first_word ( nurl_sym_get syms `__last_call_forward__` ) )
+            : s rfnames ( nurl_sym_get syms `__fn_param_names__` )
+            : ~ s rfp ( nurl_sym_get syms `__last_call_param_args__` )
+            ~ != 0 ( nurl_str_len rfp ) {
+                : s rfai ( str_first_word rfp ) = rfp ( str_skip_word rfp )
+                : s rfpn ( str_first_word rfp ) = rfp ( str_skip_word rfp )
+                : i rfpi ( str_word_index rfnames rfpn )
+                ? >= rfpi 0 { ( __retfwd_note rfn ( nurl_str_cat4 rfc `:` rfai ( nurl_str_cat `:` ( nurl_str_int rfpi ) ) ) ) } {}
+            }
+        } {}
     } {}
     // `^ . x f` out of a struct this function owns: x is dropped on the
     // way out, so the caller gets the field — moved out (emptied in x, whose
@@ -4481,6 +4512,15 @@ unsafe @ nurl_cg_lbl i h s hint → s {
     // lowered type is an integer. Record the expression's own provenance,
     // not the last identifier visited while parsing it.
     ( bck_record_expr_return syms ret_first_tt ret_first_val )
+    // …and a binding that may carry a parameter from a callee compiled
+    // after this function (`: e ( vec_at xs 0 ) … ^ e`, h215).
+    ? ( is_ident_tok ret_first_tt ) {
+        : ~ s fwr ( nurl_sym_get2 syms ret_first_val `__fwdcarry` )
+        ? != 0 ( nurl_str_len fwr ) {
+            : s fwfn ( nurl_sym_get syms `__fn_self_name__` )
+            ~ != 0 ( nurl_str_len fwr ) { : s fw1 ( str_first_word fwr ) = fwr ( str_skip_word fwr ) ( __retfwd_note fwfn fw1 ) }
+        } {}
+    } {}
     // (Ownership summaries, recorded with or without the checker: the code
     // a program compiles to must not depend on --no-borrowck.)
     ? != 0 ( nurl_str_len ret_first_root )
@@ -7635,6 +7675,51 @@ unsafe @ extract_fn_ptr_return_type s fn_ptr_type → s {
     ? & ( seq lent arg ) ( mem_fn_lends_params syms fname T 0 ) { ^ 1 } {}
     // Copying what was lent is right whatever else the callee may lend.
     ^ 2
+}
+
+// A parameter of `fname` handed, at a position, to a callee compiled after
+// it whose result `fname` hands back (`callee:position:parameter`, h215).
+@ __retfwd_note s fname s rec → v {
+    : s key ( nurl_str_cat `retfwd##` fname )
+    ? ( nurl_sym_has_word g_pending_impl key rec ) { ^ v } {}
+    ? == 0 ( nurl_sym_len g_pending_impl key ) { ( nurl_sym_append_word g_pending_impl `retfwd_fns` fname ) } {}
+    ( nurl_sym_append_word g_pending_impl key rec )
+}
+
+// Which parameters a function lends back through a callee compiled after
+// it (`^ ( vec_at xs 0 )`: xs, in part): asked of each callee's final
+// summary once every body is compiled — a fixed point, a callee may be
+// such a function itself. Before it, the function said it lent nothing:
+// a caller's temporary was dropped under the result, and a caller's
+// owner could end while the result was still read (h215).
+@ resolve_retfwd_lends i syms → v {
+    : s fns ( nurl_sym_get g_pending_impl `retfwd_fns` )
+    ? == 0 ( nurl_str_len fns ) { ^ v } {}
+    : ~ b changed T
+    : ~ i rounds 0
+    ~ & changed < rounds 16 {
+        = changed F
+        = rounds + rounds 1
+        : ~ s fr ( nurl_str_cat fns `` )
+        ~ != 0 ( nurl_str_len fr ) {
+            : s fn ( str_first_word fr ) = fr ( str_skip_word fr )
+            : s pk ( nurl_str_cat `retpart##` fn )
+            : ~ s er ( nurl_sym_get g_pending_impl ( nurl_str_cat `retfwd##` fn ) )
+            ~ != 0 ( nurl_str_len er ) {
+                : s e ( str_first_word er ) = er ( str_skip_word er )
+                : i c1 ( nurl_str_find e `:` )
+                : s cn ( nurl_str_slice e 0 c1 )
+                : s tail ( nurl_str_slice e + c1 1 - - ( nurl_str_len e ) c1 1 )
+                : i c2 ( nurl_str_find tail `:` )
+                : s ai ( nurl_str_slice tail 0 c2 )
+                : s pi ( nurl_str_slice tail + c2 1 - - ( nurl_str_len tail ) c2 1 )
+                ? & ( str_contains_word ( mem_fn_lent_params syms cn ) ai ) ! ( nurl_sym_has_word g_pending_impl pk pi ) {
+                    ( nurl_sym_append_word g_pending_impl pk pi )
+                    = changed T
+                } {}
+            }
+        }
+    }
 }
 
 // `@.__nurl_lend<kind>.N` for argument `index` of `callee`: whether the
@@ -12158,9 +12243,11 @@ unsafe @ __ty_is_callable s ty → b {
         // struct of them) by what its binding reaches.
         ? != 0 ( nurl_str_len froot ) { ^ ( nurl_str_cat froot `` ) } {}
         : s root ( nurl_sym_get syms `__last_member_root__` )
-        ^ ? == 0 ( nurl_str_len root ) ( nurl_str_cat `*` `` ) ( nurl_str_cat root `` )
+        // (A field of a call's result: what that call's result lends.)
+        ? == 0 ( nurl_str_len root ) { ^ ? == g_sx_at + n0 1 ( nurl_str_cat g_sx `` ) ( nurl_str_cat `*` `` ) } {}
+        ^ ( nurl_str_cat root `` )
     } {}
-    ? | | | == tt TT_LPAREN == tt TT_QUEST == tt TT_AT == tt TT_BACKSLASH {
+    ? | | | | | == tt TT_LPAREN == tt TT_QUEST == tt TT_AT == tt TT_BACKSLASH == tt TT_LBRACE == tt TT_QUESTQUEST {
         ^ ? == g_sx_at + n0 1 ( nurl_str_cat g_sx `` ) ( nurl_str_cat `*` `` )
     } {}
     // A literal is static or fresh; a cast outside raw code makes no
@@ -13029,12 +13116,9 @@ unsafe @ bck_check_lit_moves i lex i line i col s what s tab i scmask s moved s 
     // argument was not one) — the returned-handle propagation below
     // maps the callee's ret-alias indices back to caller bindings.
     : ~ s arg_idents ``
-    // The same roster naming, for each argument that is a view of an
-    // Arc's payload, the Arc it views (`-` for any other): a binding that
-    // arc_get bound, a field path rooted at one, or an arc_get call (or a
-    // projection of one) written in place (§6.5).
-    : ~ s arg_arcviews ``
-    : ~ s __arg0_lty ``
+    // The arguments that synchronise themselves (`% Sync`: a Mutex, a
+    // Channel, a Locked), noted once an Arc has been seen (§6.5).
+    : ~ s __arc_sync ``
     : ~ s arg_roots ``
     : ~ b arg_has_froot F
     : ~ s __clo_args ``
@@ -13095,9 +13179,6 @@ unsafe @ bck_check_lit_moves i lex i line i col s what s tab i scmask s moved s 
         // the binding the loaded ident names.
         : i bck_arg_tt ( nurl_lex_type lex )
         : s bck_arg_val ( nurl_lex_val lex )
-        // An arc_get written in this argument leaves its Arc here; any
-        // other call it ends in clears it (read after the argument).
-        ( nurl_sym_def syms `__last_call_arc_view__` `` )
         // Where this argument's reads start in the statement's read list:
         // in raw code they say which parameters it reaches (the mutation
         // summaries below).
@@ -13442,6 +13523,20 @@ unsafe @ bck_check_lit_moves i lex i line i col s what s tab i scmask s moved s 
             : b __sx_cand | | == __sx_c0 4 & > arg_idx 0 != 0 ( nurl_str_len __sx_arg0 ) ( __thr_is_detach fname_bare )
             ? & ! is_inout_arg | __sx_need & __sx_cand >= __sx_c0 2 { = arg_sx ? == __sx_c0 1 ( nurl_str_cat `-` `` ) ( __sx_operand_c syms bck_arg_tt bck_arg_val __sx_c0 ( __sx_froot syms bck_arg_tt at ) __sx_n0 ) } {}
             ? __sx_need { = call_sx ? == arg_idx 0 ( nurl_str_cat arg_sx `` ) ( nurl_str_cat3 call_sx `|` arg_sx ) } {}
+            // An Arc's payload is frozen once made (§6.5). What a callee
+            // lends through an Arc parameter is a view of the payload —
+            // arc_get's result, or a helper's over it — which the walk
+            // follows wherever it goes (bck_sx_ev, bck_arc_frozen_check).
+            // (An Arc whose payload can reach it back hands out a copy.)
+            ? ( __lty_base_is at `Arc` ) {
+                = g_fn_arcseen 1
+                ? ! ( __ts_cyclic ( nurl_llty at ) syms ) { ( __arcp_note call_name arg_idx ) } {}
+            } {}
+            ? & != 0 g_fn_arcseen != __sx_c0 1 {
+                ? ( __thr_marked `Sync##` ( nurl_llty at ) ( __lty_base_name ( nurl_llty at ) ) ) {
+                    = __arc_sync ? == 0 ( nurl_str_len __arc_sync ) ( nurl_str_int arg_idx ) ( nurl_str_cat3 __arc_sync `,` ( nurl_str_int arg_idx ) )
+                } {}
+            } {}
             // (The binding the first argument is, or a field of — an owner,
             // what can keep a value — is where a keeping callee keeps the
             // others.) A value that may hold views, handed to a function
@@ -13896,12 +13991,6 @@ unsafe @ bck_check_lit_moves i lex i line i col s what s tab i scmask s moved s 
         = arg_idents ? == 0 ( nurl_str_len arg_idents )
         ( nurl_str_cat bck_arg_nm `` )
         ( nurl_str_cat3 arg_idents ` ` bck_arg_nm )
-        : s __av_src0 ( __arg_arc_view syms bck_arg_tt bck_arg_val bck_arg_root )
-        // A payload that synchronises itself (a type asserted `% Sync`: a
-        // Mutex, a Channel) is changed under its own lock — no race.
-        : s __av_src ? & ! ( seq __av_src0 `-` ) ( __thr_marked `Sync##` ( nurl_llty at ) ( __lty_base_name ( nurl_llty at ) ) ) ( nurl_str_cat `-` `` ) ( nurl_str_cat __av_src0 `` )
-        = arg_arcviews ? == 0 arg_idx ( nurl_str_cat __av_src `` ) ( nurl_str_cat3 arg_arcviews ` ` __av_src )
-        ? == arg_idx 0 { = __arg0_lty ( nurl_str_cat ( nurl_llty at ) `` ) } {}
         : s __acs ( __clo_cs_expr syms bck_arg_tt bck_arg_val at )
         // (Built only once an argument carries something: the lists stay
         // empty for the calls — nearly all — that pass nothing of interest;
@@ -14860,6 +14949,18 @@ unsafe @ bck_check_lit_moves i lex i line i col s what s tab i scmask s moved s 
         ? & & & >= __sx_naddr 2 >= __sx_nown 1 __sx_sum ! __callee_shadowed {
             ( bck_stash_vpass `-` ( nurl_lex_line lex ) call_name -1 ( nurl_str_cat4 call_name `(` call_sx `)` ) )
         } {}
+        // Shared mutation (docs/MEMORY.md §6.5; h212, h213). An Arc's
+        // payload is frozen once made: every thread holding a clone reads
+        // it without a lock, so one thread changing it races them all, and
+        // a lock no type ties to the data proves nothing. Once this function
+        // has handled an Arc, each call that may be handed a view of a
+        // payload is walked (`arcx`): an argument whose value the borrow
+        // walk traces to one — through bindings, borrows of borrows, `?` and
+        // `??` arms, element accessors and helpers that lend — is parked
+        // against the callee's final summary (resolve_arc_mut).
+        ? & & & != 0 g_fn_arcseen >= __sx_naddr 1 ! __callee_shadowed ! ( bck_unsafe_ctx ) {
+            ( bck_stash_arcx __call_line call_name __arc_sync ( nurl_str_cat4 call_name `(` call_sx `)` ) )
+        } {}
     } {}
     // …and, when an argument was a field path, the same two with its
     // binding in its place (bck_call_lend_srcs, a match's payload lends).
@@ -14917,14 +15018,8 @@ unsafe @ bck_check_lit_moves i lex i line i col s what s tab i scmask s moved s 
     ( nurl_sym_def syms `__last_phi_cause__`
     ( nurl_str_cat3 `it was passed to '` fname
     `', which may hand its handle back as the result` ) )
-    // Thread-safety, shared-mutation half (docs/MEMORY.md §6.5).
-    //
-    // (a) `arc_get` hands back the payload. For a manually-managed handle
-    //     that is a COPY OF THE HANDLE, aliasing the one buffer inside the
-    //     Arc — so mark the receiving binding as an Arc view. Consume-once,
-    //     read by the `:` that binds the result.
-    // The first argument's source name, computed ONCE and only when one
-    // of the two rules below can use it. `bck_nth_word` returns a fresh
+    // The first argument's source name, computed ONCE and only when the
+    // rule below can use it. `bck_nth_word` returns a fresh
     // string, and gen_call runs for every call in the program: calling
     // it inline — worse, inline in a `?` against a bare literal, the
     // mixed-ownership join that has no consumer — leaked one string per
@@ -14935,10 +15030,6 @@ unsafe @ bck_check_lit_moves i lex i line i col s what s tab i scmask s moved s 
     // join mixes an owning call with a fresh literal and is not
     // uniformly owned, so nothing consumed either arm.
     : s __sm_a0 ( bck_nth_word arg_idents 0 )
-    // (An Arc whose payload can hold a handle back to it hands out a copy —
-    // arc.nu — which is no view.)
-    ( nurl_sym_def syms `__last_call_arc_view__`
-    ? & ( __lty_base_is fname `arc_get` ) ! ( __ts_cyclic __arg0_lty syms ) __sm_a0 `` )
     // Container-mutation summary (§2.5): this function mutates the
     // container it was handed — record which parameter, so a caller
     // iterating that container is warned one call away. A global, not a
@@ -14956,22 +15047,6 @@ unsafe @ bck_check_lit_moves i lex i line i col s what s tab i scmask s moved s 
                 ( nurl_str_cat3 g_fn_mutates_witness ` ` __mu_w ) } }
         {} }
     {}
-    // Shared mutation (docs/MEMORY.md §6.5; h212, h213). An Arc's payload
-    // is frozen once made: every thread holding a clone reads it without a
-    // lock, so one thread changing it races them all, and a lock no type
-    // ties to the data proves nothing. In safe code, a view of a payload —
-    // a binding arc_get bound, a field path rooted at one, an arc_get call
-    // in place — handed to the receiver of a container mutator or to a
-    // parameter the callee's summary mutates is an error here; a callee
-    // whose summary closes only after every body (writes through raw
-    // pointers: a String's or a map's own mutators) is asked then
-    // (resolve_arc_mut). A payload that synchronises itself (asserted
-    // `% Sync`: Mutex, Channel, Locked) changes through its own operations.
-    ? ! ( bck_unsafe_ctx ) {
-        : s __am_what ( __arc_mut_args fname call_name arg_arcviews )
-        ? != 0 ( nurl_str_len __am_what ) { ( die lex ( __arc_frozen_msg __am_what ) ) } {}
-        ( __arc_park_call call_name fname arg_arcviews __call_line ( nurl_lex_filename lex ) )
-    } {}
     // Dynamic dispatch: a `%dyn.Trait` (or `%dyn.Trait*` inout) receiver whose
     // method `fname` is in the trait's flattened method set. Load the vtable
     // slot and call it indirectly through the uniform ABI `<ret>(i8* self, …)`.
@@ -16731,6 +16806,11 @@ unsafe @ gen_match i lex i syms i cg → s {
     // The `??`'s own column, so a diagnostic about the match as a whole
     // points at the match and not at whatever token ended it.
     : i bck_mcol ( nurl_lex_col lex )
+    // (Its value's source expression: its arms' joined — an arm handing
+    // back its own payload, the matched value's.)
+    : i __sx_mme ( __sx_enter )
+    : ~ s m_sx ``
+    : ~ b m_sx_any F
     // Does this `??` head a statement? Decided before the arms move the
     // statement anchor; the parked-drop verdict at the join reads it.
     : b m_is_stmt ( mem_join_heads_stmt lex )
@@ -16753,8 +16833,15 @@ unsafe @ gen_match i lex i syms i cg → s {
     ( nurl_sym_def syms `__last_call_res_e_llvm__` `` )
     ( nurl_sym_def syms `__last_call_opt_nurl_t__` `` )
     : i match_first_tt ( nurl_lex_type lex )
+    : i __msxn0 g_sx_n
     : s match_val ( gen_operand lex syms cg )
     : s match_type ( nurl_get_last_type )
+    // (A matched call whose lent argument is itself a call — `( vec_get (
+    // vec_at top 0 ) 0 )` — lends what that one lends: its source
+    // expression rides on the `match` row, h214.)
+    = g_bck_match_sx ? & & != 0 g_srcx_on == match_first_tt TT_LPAREN == g_sx_at + __msxn0 1 ( nurl_str_cat g_sx `` ) ( nurl_str_cat `` `` )
+    : s __m_scrut_sx ? != 0 __sx_mme ( __sx_operand_c syms match_first_tt match_var_name ( bck_bind_class match_type ) `` __msxn0 ) ( nurl_str_cat `` `` )
+    ? ! ( __sx_nested g_bck_match_sx ) { = g_bck_match_sx `` } {}
     // What a payload binding may point into (a raw pointer taken from it
     // dies with that owner — __ptr_root_owner): the matched binding, or
     // what the matched call lends from.
@@ -17848,7 +17935,17 @@ unsafe @ gen_match i lex i syms i cg → s {
             // to carry to the join (mem_exits_inherit, after the body).
             : s arm_pend0 ( nurl_sym_get g_fn_escapes `__pend_exits__` )
             ( mem_arm_body_mark lex )
+            : i arm_sxn0 g_sx_n
             : ~ s arm_result ( gen_stmt lex syms cg )
+            ? != 0 __sx_mme {
+                // (A payload handed back as is is part of the matched value.)
+                : s __atv ( nurl_sym_get syms `__tail_first_val__` )
+                : b __atp & & == g_did_ret 0 ( is_ident_tok ( nurl_str_to_int ( nurl_sym_get syms `__tail_first_tt__` ) ) ) & != 0 ( nurl_str_len __atv ) ( str_contains_word ( nurl_str_cat4 pv0 ` ` pv1 ( nurl_str_cat3 ` ` pv2 ( nurl_str_cat ` ` pv_over ) ) ) __atv )
+                : s arm_sx ? != 0 g_did_ret ( nurl_str_cat `-` `` ) ? __atp ( nurl_str_cat __m_scrut_sx `` ) ? == g_sx_at + arm_sxn0 1 ( nurl_str_cat g_sx `` ) ( nurl_str_cat `*` `` )
+                = m_sx ? m_sx_any ( __sx_join m_sx arm_sx ) ( nurl_str_cat arm_sx `` )
+                = m_sx_any T
+                ( __sx_publish __sx_mme m_sx )
+            } {}
             ( bck_record `endmatch-arm-edge` `` bck_mline )
             ? == g_did_ret 0 {
                 ( bck_save_expr_carriers syms `__last_match_params__` arm_tt0 arm_v0 )
@@ -18975,6 +19072,17 @@ unsafe @ gen_match i lex i syms i cg → s {
     {}
 }
 
+// A block's value's source expression: its tail's (gen_block_expr). A
+// name only when the tail is the block's one statement — a name the block
+// declared ends with it, and the walk resolves names outside it.
+@ __blk_tail_sx i syms b any i n i tt s val i n0 → s {
+    ? ! any { ^ ( nurl_str_cat `-` `` ) } {}
+    : i cls ( bck_bind_class ( nurl_get_last_type ) )
+    ? == cls 1 { ^ ( nurl_str_cat `-` `` ) } {}
+    ? & != n 1 | ( is_ident_tok tt ) == tt TT_DOT { ^ ( nurl_str_cat `*` `` ) } {}
+    ^ ( __sx_operand_c syms tt val cls `` n0 )
+}
+
 @ gen_block_expr i lex i syms i cg → s {
     : i bck_line ( nurl_lex_line lex )
     // A `?`/`??` arm body (mem_arm_body_mark) leaves the exits its tail
@@ -18983,10 +19091,14 @@ unsafe @ gen_match i lex i syms i cg → s {
     : b blk_is_arm ( seq __blk_mark `1` )
     ( nurl_sym_set g_fn_escapes `__arm_body__` `` )
     : b blk_is_stmt ( mem_join_heads_stmt lex )
+    // (Its value's source expression: its tail's — __blk_tail_sx.)
+    : i __sx_bme ( __sx_enter )
     ( nurl_lex_advance lex )
     ( bck_block_enter bck_line )
     : ~ s last ( nurl_str_cat `undef` `` )
     : ~ b any F
+    : ~ i __tail_sxn0 0
+    : ~ i __nstmt 0
     // Tail evidence for the fall-off return battery (ret_ty_agree): the
     // first token of the block's FINAL statement. Captured per iteration
     // into locals and published only after the loop, so an inner block's
@@ -19003,6 +19115,8 @@ unsafe @ gen_match i lex i syms i cg → s {
         = __tail_tt ( nurl_lex_type lex )
         = __tail_tv ( nurl_lex_val lex )
         = __tail_callee ? == __tail_tt TT_LPAREN ( nurl_lex_peek_val lex ) ``
+        = __tail_sxn0 g_sx_n
+        = __nstmt + __nstmt 1
         = last ( gen_stmt lex syms cg )
         ? != ( nurl_lex_type lex ) TT_RBRACE { ( mem_clo_drop_discarded syms cg last __tail_tt ) }
         { ? & blk_is_arm & == ( nurl_lex_peek_type lex ) TT_LBRACE == ( nurl_lex_peek2_type lex ) TT_RBRACE
@@ -19014,6 +19128,7 @@ unsafe @ gen_match i lex i syms i cg → s {
         {}
         = any T
     }
+    ? != 0 __sx_bme { ( __sx_publish __sx_bme ( __blk_tail_sx syms any __nstmt __tail_tt __tail_tv __tail_sxn0 ) ) } {}
     // Closing-edge/implicit-return instructions must not inherit the
     // last sibling arm's source line: that overcounts its GCOV hits.
     ? & != g_dbg_enabled 0 != g_dbg_current_subprogram 0 {
@@ -22343,6 +22458,19 @@ unsafe @ mem_own_add_user_drop i syms i cg s ptr s vt → v {
 // of a view's row, g_srcx_on): its sources, exactly (bck_sx_sources).
 : ~ s g_bck_rhs_sx ``
 
+// A source expression with a call inside a call's arguments (two `(`).
+unsafe @ __sx_nested s sx → b {
+    : i n ( nurl_str_len sx )
+    : *u sp # *u sx
+    : ~ i k 0
+    : ~ i c 0
+    ~ < k n {
+        ? == # i . sp k 40 { = c + c 1 ? >= c 2 { ^ T } {} } {}
+        = k + k 1
+    }
+    ^ F
+}
+
 @ bck_record s kind s wname i line → v {
     ? & != g_borrowck 0 == g_bck_rec_off 0 {
         : s reads ( nurl_sym_get g_bck `reads` )
@@ -22355,10 +22483,18 @@ unsafe @ mem_own_add_user_drop i syms i cg s ptr s vt → v {
         // right-hand side read, 8 its source expression.
         : b __rc_call & | ( seq kind `let` ) ( seq kind `assign` ) != 0 ( nurl_str_len g_bck_rhs_callee )
         : b __rc_vw & & >= g_bck_bind_scalar 2 | ( seq kind `let` ) ( seq kind `assign` ) | != 0 ( nurl_str_len g_bck_view_reads ) != 0 ( nurl_str_len g_bck_rhs_sx )
+        // (An owner bound to a call whose lent argument is itself a call —
+        // `( vec_at ( vec_at top 0 ) 0 )` — borrows what that one lends:
+        // its source expression says, h214.)
+        : b __rc_nest & & __rc_call == 0 g_bck_bind_scalar ( __sx_nested g_bck_rhs_sx )
         ? | __rc_call __rc_vw {
             = rec ( nurl_str_cat4 rec ? != 0 g_bck_bind_scalar `` `\t` `\t` g_bck_rhs_callee )
-            ? __rc_vw { = rec ( nurl_str_cat4 rec `\t` g_bck_view_reads ? != 0 ( nurl_str_len g_bck_rhs_sx ) ( nurl_str_cat `\t` g_bck_rhs_sx ) `` ) } {}
+            ? __rc_vw { = rec ( nurl_str_cat4 rec `\t` g_bck_view_reads ? != 0 ( nurl_str_len g_bck_rhs_sx ) ( nurl_str_cat `\t` g_bck_rhs_sx ) `` ) } {
+                ? __rc_nest { = rec ( nurl_str_cat3 rec `\t\t` g_bck_rhs_sx ) } {}
+            }
         } {}
+        // A match's: field 8, the call it matches (h214).
+        ? & ( seq kind `match` ) != 0 ( nurl_str_len g_bck_match_sx ) { = rec ( nurl_str_cat3 rec `\t\t\t\t` g_bck_match_sx ) = g_bck_match_sx `` } {}
         // A return's: field 8 (field 5 `d`: an owner by name).
         ? & ( seq kind `ret` ) != 0 ( nurl_str_len g_bck_ret_sx ) { = rec ( nurl_str_cat3 rec ? == g_bck_ret_dep 1 `\td\t\t\t` ? == g_bck_ret_dep 2 `\te\t\t\t` `\t\t\t\t` g_bck_ret_sx ) } {}
         ( nurl_sym_append g_bck `stmts`
@@ -23038,43 +23174,21 @@ unsafe @ __rpg_rget i r i k → i { ^ ( nurl_peek # s g_rpg_rec + * r 6 k ) }
 // True when `fname` is a stdlib container operation that mutates its
 // receiver's backing buffer (reallocates, frees, or rewrites
 // elements) — the receiver is always the first value argument.
-// The Arc whose payload an argument views (§6.5), or `-`: a binding
-// arc_get bound, a field path rooted at one, or an arc_get call (or a
-// projection of one) written in place — read from the marker the
-// argument's last call left (gen_call clears it before each argument).
-unsafe @ __arg_arc_view i syms i tt s val s root → s {
-    ? ( is_ident_tok tt ) {
-        : s v ( nurl_sym_get2 syms val `__arc_view` )
-        ? != 0 ( nurl_str_len v ) { ^ v } {}
-        ^ ( nurl_str_cat `-` `` )
-    } {}
-    ? & == tt TT_DOT != 0 ( nurl_str_len root ) {
-        : s v ( nurl_sym_get2 syms root `__arc_view` )
-        ? != 0 ( nurl_str_len v ) { ^ v } {}
-    } {}
-    : s m ( nurl_sym_get syms `__last_call_arc_view__` )
-    ? != 0 ( nurl_str_len m ) { ^ m } {}
-    ^ ( nurl_str_cat `-` `` )
+// A callee that takes an Arc at `idx` (§6.5): what it lends through that
+// parameter is a view of the payload (bck_sx_ev). Noted at each call.
+@ __arcp_note s call_name i idx → v {
+    : s key ( nurl_str_cat `arcp##` call_name )
+    : s ks ( nurl_str_int idx )
+    ? ! ( nurl_sym_has_word g_pending_impl key ks ) { ( nurl_sym_append_word g_pending_impl key ks ) = g_arcp_any 1 } {}
 }
 
-// What a call does to an Arc's payload through its arguments (h212): ``
-// when nothing, else the reason — an Arc view handed to the receiver of a
-// container mutator, or to a parameter the callee's summary mutates.
-unsafe @ __arc_mut_args s fname s call_name s views → s {
-    : s muts ( nurl_sym_get g_fn_mutates call_name )
-    : ~ s rest ( nurl_str_cat views `` )
-    : ~ i k 0
-    ~ != 0 ( nurl_str_len rest ) {
-        : s w ( str_first_word rest )
-        = rest ( str_skip_word rest )
-        ? ! ( seq w `-` ) {
-            ? | & == k 0 ( bck_is_container_mutator fname ) ( str_contains_word muts ( nurl_str_int k ) ) {
-                ^ ( nurl_str_cat4 `hands '` fname `' the contents of Arc '` ( nurl_str_cat w `'` ) )
-            } {}
-        } {}
-        = k + k 1
-    }
-    ^ ``
+// The Arc a payload view was lent from (§6.5): the root of the first of
+// the sources `srcs` (bck_sx_ev's: ids, `^id`), or -2 when it has none.
+@ __sxe_arc_id s srcs → i {
+    : s w ( str_first_word srcs )
+    ? == 0 ( nurl_str_len w ) { ^ -2 } {}
+    : s ws ? == ( nurl_str_get w 0 ) 94 ( nurl_str_slice w 1 - ( nurl_str_len w ) 1 ) ( nurl_str_cat w `` )
+    ^ ( bck_path_root ( nurl_str_to_int ws ) )
 }
 
 // The diagnostic for a change to an Arc's payload (docs/MEMORY.md §6.5).
@@ -23083,32 +23197,66 @@ unsafe @ __arc_mut_args s fname s call_name s views → s {
     ` to change, but an Arc's payload is frozen once made: every thread holding a clone reads it without a lock, so changing it races them, whatever lock this code holds. Build the value before arc_new and arc_new it whole; keep state one thread changes in an Rc; put state threads share and change in a Locked (stdlib/std/thread.nu) and change it with locked_with / locked_set, which hold its lock.` )
 }
 
-// Park each argument viewing an Arc's payload (h212) for resolve_arc_mut,
-// which asks the callee's final summary: `callee fname index arc line file`.
-unsafe @ __arc_park_call s call_name s fname s views i line s file → v {
-    : ~ s rv ( nurl_str_cat views `` )
-    : ~ i k 0
-    ~ != 0 ( nurl_str_len rv ) {
-        : s wv ( str_first_word rv ) = rv ( str_skip_word rv )
-        ? ! ( seq wv `-` ) {
-            : i n ( nurl_str_to_int ( nurl_sym_get g_pending_impl `armut_n` ) )
-            ( nurl_sym_def g_pending_impl `armut_n` ( nurl_str_int + n 1 ) )
-            ( nurl_sym_def g_pending_impl ( nurl_str_cat `armut#` ( nurl_str_int n ) )
-            ( nurl_str_cat4 ( nurl_str_cat4 call_name ` ` fname ` ` )
-            ( nurl_str_cat4 ( nurl_str_int k ) ` ` wv ` ` )
-            ( nurl_str_int line ) ( nurl_str_cat ` ` file ) ) )
+// A call that may be handed a view of an Arc's payload (§6.5): walked as
+// an `arcx` row (bck_arc_frozen_check) — `sync` the arguments that
+// synchronise themselves, `sx` its source expression.
+@ bck_stash_arcx i line s callee s sync s sx → v {
+    ? & != g_borrowck 0 == g_bck_rec_off 0 {
+        : s m ? == 0 ( nurl_str_len sync ) ( nurl_str_cat `a-` `` ) ( nurl_str_cat `a` sync )
+        : s add ( nurl_str_cat4 `- ` ( nurl_str_int line ) ( nurl_str_cat4 ` ` callee ` ` m ) ( nurl_str_cat ` ` sx ) )
+        ( nurl_sym_append_word g_bck `pvpass` add )
+        = g_bck_pvpass_n + g_bck_pvpass_n 1
+    } {}
+}
+
+// …at the walk: each argument the borrow walk traces to an Arc's payload
+// (bck_sx_ev raises g_sxe_arc: lent through an Arc parameter, or a borrow
+// of a payload read — through bindings, borrows of borrows, `?` and `??`
+// arms, element accessors and helpers that lend) is parked against the
+// callee's final summary (resolve_arc_mut). Once per call and argument:
+// a loop walks its body more than once.
+@ bck_arc_frozen_check s st s sx s sync i line → v {
+    : i lp ( nurl_str_find sx `(` )
+    ? < lp 0 { ^ } {}
+    : s cal ( nurl_str_slice sx 0 lp )
+    : s sy ( nurl_str_cat3 `,` ( nurl_str_slice sync 1 - ( nurl_str_len sync ) 1 ) `,` )
+    : s args ( bck_sx_split ( nurl_str_slice sx + lp 1 - - ( nurl_str_len sx ) lp 2 ) )
+    : s file ( nurl_sym_get g_bck `file` )
+    : ~ s rest ( nurl_str_cat args `` )
+    : ~ i j 0
+    ~ != 0 ( nurl_str_len rest ) {
+        : i nl ( nurl_str_find rest `\n` )
+        : s aj ? < nl 0 ( nurl_str_cat rest `` ) ( nurl_str_slice rest 0 nl )
+        = rest ? < nl 0 `` ( nurl_str_slice rest + nl 1 - - ( nurl_str_len rest ) nl 1 )
+        : s js ( nurl_str_int j )
+        ? & ! ( seq aj `-` ) < ( nurl_str_find sy ( nurl_str_cat3 `,` js `,` ) ) 0 {
+            = g_sxe_arc -1
+            : s srcs ( bck_sx_arg_sources st aj )
+            ? != g_sxe_arc -1 {
+                : s an ? >= g_sxe_arc 0 ( bck_name_show ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int g_sxe_arc ) ) ) ( nurl_str_cat `-` `` )
+                : s key ( nurl_str_cat4 `armutk##` file ( nurl_str_cat3 `:` ( nurl_str_int line ) `:` ) ( nurl_str_cat3 cal `:` js ) )
+                ? == 0 ( nurl_sym_len g_pending_impl key ) {
+                    ( nurl_sym_def g_pending_impl key `1` )
+                    : i n ( nurl_str_to_int ( nurl_sym_get g_pending_impl `armut_n` ) )
+                    ( nurl_sym_def g_pending_impl `armut_n` ( nurl_str_int + n 1 ) )
+                    ( nurl_sym_def g_pending_impl ( nurl_str_cat `armut#` ( nurl_str_int n ) )
+                    ( nurl_str_cat4 ( nurl_str_cat4 cal ` ` ( bck_generic_base cal ) ` ` )
+                    ( nurl_str_cat4 js ` ` an ` ` )
+                    ( nurl_str_int line ) ( nurl_str_cat ` ` file ) ) )
+                } {}
+            } {}
+            = g_sxe_arc -1
         } {}
-        = k + k 1
+        = j + j 1
     }
 }
 
-// A change to an Arc's payload that only the module's final summaries
-// show (docs/MEMORY.md §6.5, h212): gen_call rejects the views it hands a
-// mutator or a helper whose summary it already has; a String's or a map's
+// A change to an Arc's payload (docs/MEMORY.md §6.5; h212, h213): each
+// view of a payload the borrow walk parked (bck_arc_frozen_check) is
+// asked against the callee's final summary — a String's or a map's
 // mutators write through raw pointers, and those summaries close only
-// after every body (resolve_mutation_summaries). Each parked view handed
-// to a parameter the callee turns out to mutate is reported where it was
-// handed.
+// after every body (resolve_mutation_summaries). One handed to a
+// parameter the callee changes is reported where it was handed.
 unsafe @ resolve_arc_mut → v {
     : i n ( nurl_str_to_int ( nurl_sym_get g_pending_impl `armut_n` ) )
     : ~ i j 0
@@ -23120,8 +23268,9 @@ unsafe @ resolve_arc_mut → v {
         : s arc ( str_first_word r ) = r ( str_skip_word r )
         : s ln ( str_first_word r ) = r ( str_skip_word r )
         : s file ( str_first_word r )
-        ? | ( str_contains_word ( nurl_sym_get g_fn_mutates cn ) k ) ( str_contains_word ( nurl_sym_get g_fn_mutates fn ) k ) {
-            ( bck_emit_error file ( nurl_str_to_int ln ) ( __arc_frozen_msg ( nurl_str_cat4 `hands '` fn `' the contents of Arc '` ( nurl_str_cat arc `'` ) ) ) )
+        ? | | ( str_contains_word ( nurl_sym_get g_fn_mutates cn ) k ) ( str_contains_word ( nurl_sym_get g_fn_mutates fn ) k ) & ( seq k `0` ) ( bck_is_container_mutator fn ) {
+            : s whose ? ( seq arc `-` ) ( nurl_str_cat `the contents of an Arc` `` ) ( nurl_str_cat3 `the contents of Arc '` arc `'` )
+            ( bck_emit_error file ( nurl_str_to_int ln ) ( __arc_frozen_msg ( nurl_str_cat4 `hands '` fn `' ` whose ) ) )
         } {}
         = j + j 1
     }
@@ -23536,7 +23685,7 @@ unsafe @ bck_swap_char s str i from i to → s {
         : s vpcal ( str_first_word vprest ) = vprest ( str_skip_word vprest )
         : s vpix ( str_first_word vprest ) = vprest ( str_skip_word vprest )
         : s vpsx ( str_first_word vprest ) = vprest ( str_skip_word vprest )
-        ( bck_record2 ? ( seq vpix `-1` ) `callx` `vpass` vpc ( nurl_str_to_int vpl ) vpcal ( nurl_str_cat3 vpix `\t\t` vpsx ) )
+        ( bck_record2 ? ( seq vpix `-1` ) `callx` ? == 97 ( nurl_str_get vpix 0 ) `arcx` `vpass` vpc ( nurl_str_to_int vpl ) vpcal ( nurl_str_cat3 vpix `\t\t` vpsx ) )
     }
     ( nurl_sym_set g_bck `reads` saved )
 }
@@ -24313,7 +24462,7 @@ unsafe @ bck_kc i idx → i {
     : i c ( nurl_str_get k 0 )
     ? == c 101 { ^ ? ( seq k `expr` ) 1 ? ( seq k `endblock` ) 24 ? ( seq k `endcond` ) 26 ? ( seq k `endmatch` ) 28 ? ( seq k `endmatch-arm-edge` ) 30 0 } {}
     ? == c 108 { ^ ? ( seq k `let` ) 2 0 } {}
-    ? == c 97 { ^ ? ( seq k `assign` ) 3 0 } {}
+    ? == c 97 { ^ ? ( seq k `assign` ) 3 ? ( seq k `arcx` ) 33 0 } {}
     ? == c 109 { ^ ? ( seq k `move` ) 4 ? ( seq k `maybemove` ) 5 ? ( seq k `maybealias` ) 6 ? ( seq k `match` ) 27 ? ( seq k `match-arm-edge` ) 29 0 } {}
     ? == c 98 { ^ ? ( seq k `borrow` ) 7 ? ( seq k `brk` ) 21 ? ( seq k `block` ) 23 0 } {}
     ? == c 102 { ^ ? ( seq k `fieldset` ) 8 0 } {}
@@ -24682,11 +24831,11 @@ unsafe @ bck_sx_ids s sx → s {
     // `c`; a return's or a `vpass` row's field 8 on theirs.)
     : b __vrow & __bind ( __bck_view_row rec )
     : s lf7 ? __vrow ( bck_ids ( bck_field rec 7 ) ) ``
-    : s lf8 ? | | | __vrow ( seq kind `ret` ) ( seq kind `vpass` ) ( seq kind `callx` ) ( bck_sx_ids ( bck_field rec 8 ) ) ``
+    : s lf8 ? | | | | | | __vrow ( seq kind `ret` ) ( seq kind `vpass` ) ( seq kind `callx` ) ( seq kind `arcx` ) ( seq kind `match` ) & __bind >= ( __bck_field_off rec 8 ) 0 ( bck_sx_ids ( bck_field rec 8 ) ) ``
     : s w ( bck_field rec 1 )
     // A value handed to a call that may keep or send it (field 1 the
     // container it may be kept in, `-` for none).
-    ? | ( seq kind `vpass` ) ( seq kind `callx` ) {
+    ? | | ( seq kind `vpass` ) ( seq kind `callx` ) ( seq kind `arcx` ) {
         : s vw ? ( seq w `-` ) ( nurl_str_cat w `` ) ( nurl_str_int ( bck_intern ( bck_xl_resolve w ) ) )
         ^ ( nurl_str_cat4 ( nurl_str_cat4 kind `\t` vw `\t` ) ( nurl_str_cat4 rds `\t` ( bck_field rec 3 ) `\t` ) ( bck_field rec 4 ) ( nurl_str_cat4 `\t` ( bck_field rec 5 ) ( nurl_str_cat3 `\t` ( bck_field rec 6 ) `\t\t` ) lf8 ) )
     } {}
@@ -24712,6 +24861,8 @@ unsafe @ bck_sx_ids s sx → s {
         ? ( seq ( bck_field rec 5 ) `d` ) { ^ ( nurl_str_cat five `\td` ) } {}
         ? ( seq ( bck_field rec 5 ) `c` ) { ^ ( nurl_str_cat five `\tc` ) } {}
     } {}
+    // A match's source expression (the call it matches).
+    ? & ( seq kind `match` ) != 0 ( nurl_str_len lf8 ) { ^ ( nurl_str_cat3 five `\t\t\t\t` lf8 ) } {}
     // A return's source expression (a view handed back).
     ? & ( seq kind `ret` ) != 0 ( nurl_str_len lf8 ) { ^ ( nurl_str_cat4 five `\t` ( bck_field rec 5 ) ( nurl_str_cat `\t\t\t` lf8 ) ) } {}
     ? __pend
@@ -25223,6 +25374,12 @@ unsafe @ bck_sx_skip s e → v {
     : s ids ( nurl_str_int id )
     : i r ( bck_path_root id )
     : s rs ( nurl_str_int r )
+    // (A view of an Arc's payload — a borrow of one, or a name it was
+    // handed to — is one, §6.5.)
+    ? & != 0 g_bck_ab_any == g_sxe_arc -1 {
+        : s ab ( nurl_sym_get g_bck ( bck_bkey `ab_` rs ) )
+        ? != 0 ( nurl_str_len ab ) { = g_sxe_arc ( nurl_str_to_int ab ) } {}
+    } {}
     // (…and what the views it holds point into: bck_dep_set.)
     : s deps ( __src_mark ( nurl_sym_get g_bck ( bck_bkey `vds_` rs ) ) ( nurl_sym_get g_bck ( bck_bkey `vdi_` rs ) ) )
     ? != 0 ( nurl_sym_len g_bck ( bck_bkey `nh_` ids ) ) { ^ ( nurl_str_cat deps `` ) } {}
@@ -25285,7 +25442,13 @@ unsafe @ bck_sx_ev s st s e b arg → s {
             // (`\\(…)`: a closure's captures — it holds each one.)
             // (An argument the result may BE — handed back as is — carries
             // what it is: its own sources, not its storage.)
-            ? | | ( seq w `\\` ) ( mem_fn_lends_arg w js ) ( mem_fn_retptr_arg w js ) { = out ( __word_union out ( bck_sx_ev st e ! ( str_contains_word ( nurl_sym_get g_pending_impl ( nurl_str_cat `retpass##` w ) ) js ) ) ) } {
+            ? | | ( seq w `\\` ) ( mem_fn_lends_arg w js ) ( mem_fn_retptr_arg w js ) {
+                : s __lj ( bck_sx_ev st e ! ( str_contains_word ( nurl_sym_get g_pending_impl ( nurl_str_cat `retpass##` w ) ) js ) )
+                // (What a callee lends through an Arc parameter is a view
+                // of the payload, §6.5.)
+                ? & & != 0 g_arcp_any == g_sxe_arc -1 ( nurl_sym_has_word g_pending_impl ( nurl_str_cat `arcp##` w ) js ) { = g_sxe_arc ( __sxe_arc_id __lj ) } {}
+                = out ( __word_union out __lj )
+            } {
                 // An argument the callee stores (escapes): a view it is, or
                 // the views it holds, may be in what the callee hands back —
                 // a container or a closure it builds (`wrapv a` returning a
@@ -25341,6 +25504,7 @@ unsafe @ bck_sx_ev s st s e b arg → s {
         : s rec ( bck_rec p )
         : i kc ( bck_kc p )
         : ~ b done F
+        = g_sxe_arc -1
         : s ist ? != 0 g_bck_has_borrow ( nurl_str_cat st `` ) ``
         // Phase 1: a read of a Moved binding is a use-after-move.
         // Checked before this row's own writes so a consuming call
@@ -25438,8 +25602,12 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                 : i lmk ( __bck_row_mark rec )
                 : s lsx ? != 0 lmk ( bck_field rec 8 ) ``
                 : s lsrcs ? != 0 ( nurl_str_len lsx ) ( bck_sx_sources st lsx ( bck_field_int rec 1 ) ) ( nurl_str_cat `*` `` )
+                // (An owner bound to a nested lending call: what the inner
+                // calls lend reaches it too, h214.)
+                : s lnest ? & == 0 lmk >= ( __bck_field_off rec 8 ) 0 ( bck_sx_sources st ( bck_field rec 8 ) ( bck_field_int rec 1 ) ) ``
                 ( bck_partner_unlink ( bck_field_int rec 1 ) )
                 = st ( bck_st_set st ( bck_field_int rec 1 ) BCK_OWNED )
+                ? != 0 g_bck_ab_any { ( nurl_sym_set g_bck ( bck_bkey `ab_` ( bck_field rec 1 ) ) `` ) } {}
                 ? | ( seq ( bck_field rec 5 ) `s` ) ( seq ( bck_field rec 5 ) `c` ) { ( nurl_sym_set g_bck ( bck_bkey `nh_` ( bck_field rec 1 ) ) `1` ) } {}
                 // A view (an address into storage another binding owns) —
                 // one that owns nothing itself (`w`), or an `s` that may own
@@ -25449,6 +25617,7 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                 ( nurl_sym_set g_bck ( bck_bkey `wv_` ( bck_field rec 1 ) ) ? ( seq ( bck_field rec 5 ) `w` ) `1` `` )
                 ? != 0 g_bck_has_borrow { ( nurl_sym_set g_bck ( bck_bkey `bs_` ( bck_field rec 1 ) ) `` ) } {}
                 = st ( bck_bind_row st ( bck_field_int rec 1 ) rec lsrcs lmk )
+                = st ( bck_nest_borrow st ( bck_field_int rec 1 ) lnest )
                 = p + p 1
                 = done T
             } {}
@@ -25459,6 +25628,7 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                 : i amk ( __bck_row_mark rec )
                 : s asx ? != 0 amk ( bck_field rec 8 ) ``
                 : s asrcs ? != 0 ( nurl_str_len asx ) ( bck_sx_sources st asx asid ) ( nurl_str_cat `*` `` )
+                : s anest ? & == 0 amk >= ( __bck_field_off rec 8 ) 0 ( bck_sx_sources st ( bck_field rec 8 ) asid ) ``
                 ? & == BCK_OWNED ( bck_st_get st asid ) ( bck_has_stored_in asid )
                 { = st ( bck_kill_stored_in st asid ( bck_field_int rec 3 ) T ) } {}
                 // The old value is dropped — when this name still owns it: a
@@ -25470,6 +25640,7 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                 { = st ( bck_partners_freed st asid BCK_OWNED ( bck_field_int rec 3 ) ) } {}
                 ( bck_partner_unlink asid )
                 = st ( bck_st_set st asid BCK_OWNED )
+                ? != 0 g_bck_ab_any { ( nurl_sym_set g_bck ( bck_bkey `ab_` ( nurl_str_int asid ) ) `` ) } {}
                 ? | ( seq ( bck_field rec 5 ) `s` ) ( seq ( bck_field rec 5 ) `c` ) { ( nurl_sym_set g_bck ( bck_bkey `nh_` ( bck_field rec 1 ) ) `1` ) } {}
                 // A view (an address into storage another binding owns) —
                 // one that owns nothing itself (`w`), or an `s` that may own
@@ -25479,6 +25650,7 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                 ( nurl_sym_set g_bck ( bck_bkey `wv_` ( bck_field rec 1 ) ) ? ( seq ( bck_field rec 5 ) `w` ) `1` `` )
                 ? != 0 g_bck_has_borrow { ( nurl_sym_set g_bck ( bck_bkey `bs_` ( bck_field rec 1 ) ) `` ) } {}
                 = st ( bck_bind_row st asid rec asrcs amk )
+                = st ( bck_nest_borrow st asid anest )
                 // A global outlives every binding of this function.
                 ? & != 0 amk ( bck_id_is_global asid ) { ( bck_global_view_check st asid ( bck_field_int rec 3 ) ) } {}
                 = p + p 1
@@ -25583,6 +25755,11 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                 : s xsn ( bck_field rec 1 )
                 : s xd5 ( bck_field rec 5 )
                 : s xdn ( nurl_str_slice xd5 1 - ( nurl_str_len xd5 ) 1 )
+                // (…a view of an Arc's payload among it, §6.5.)
+                ? != 0 g_bck_ab_any {
+                    : s xab ( nurl_sym_get g_bck ( bck_bkey `ab_` ( nurl_str_int ( bck_path_root ( nurl_str_to_int xsn ) ) ) ) )
+                    ? != 0 ( nurl_str_len xab ) { ( nurl_sym_set g_bck ( bck_bkey `ab_` xdn ) xab ) } {}
+                } {}
                 : ~ s xrest ? == g_bck_sx_gen g_bck_gen ( nurl_sym_get g_bck ( bck_sx_key xsn ) ) ``
                 ~ != 0 ( nurl_str_len xrest ) {
                     : s ys ( str_first_word xrest ) = xrest ( str_skip_word xrest )
@@ -25723,6 +25900,9 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                             : s pe ( nurl_str_cat3 pvn `:` pcal )
                             ( nurl_sym_set g_bck `plend` ? == 0 ( nurl_str_len pl ) ( nurl_str_cat pe `` ) ( nurl_str_cat3 pl ` ` pe ) )
                             ( nurl_sym_set g_bck `plend_line` ( bck_field rec 3 ) )
+                            // (Lent through an Arc parameter: a view of the
+                            // payload, §6.5.)
+                            ? & != 0 g_arcp_any ( nurl_sym_has_word g_pending_impl ( nurl_str_cat `arcp##` pcal ) paix ) { ( nurl_sym_append_word g_bck `plarc` pe ) } {}
                         } {
                             = st ( bck_st_set st pvid
                             ( bck_alias_step ( bck_st_get st pvid ) ) )
@@ -25745,6 +25925,13 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                 // A call two of whose arguments may share storage
                 // (bck_call_alias_check).
                 ( bck_call_alias_check st ( bck_field rec 8 ) ( bck_field_int rec 3 ) )
+                = p + p 1
+                = done T
+            } {}
+            ? & ! done == kc 33 {
+                // A call that may be handed a view of an Arc's payload
+                // (bck_arc_frozen_check).
+                ( bck_arc_frozen_check st ( bck_field rec 8 ) ( bck_field rec 6 ) ( bck_field_int rec 3 ) )
                 = p + p 1
                 = done T
             } {}
@@ -25792,6 +25979,7 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                 : s fcal ( bck_field rec 5 )
                 ? ( mem_fn_lends_arg fcal ( bck_field rec 6 ) ) {
                     ( bck_plend_add ( bck_field rec 1 ) fcal `` ( bck_field rec 3 ) )
+                    ? & != 0 g_arcp_any ( nurl_sym_has_word g_pending_impl ( nurl_str_cat `arcp##` fcal ) ( bck_field rec 6 ) ) { ( nurl_sym_append_word g_bck `plarc` ( nurl_str_cat3 ( bck_field rec 1 ) `:` fcal ) ) } {}
                 } { ? ( mem_fn_retptr_arg fcal ( bck_field rec 6 ) ) { ( bck_plend_add ( bck_field rec 1 ) fcal `:p` ( bck_field rec 3 ) ) } {} }
                 = p + p 1
                 = done T
@@ -25864,6 +26052,15 @@ unsafe @ bck_sx_ev s st s e b arg → s {
     ? != 0 ( nurl_sym_len g_bck ( bck_bkey `nh_` bids ) ) { ^ st } {}
     = g_bck_has_borrow 1
     : ~ s set ``
+    // (A borrow of a borrow of an Arc's payload is one too, §6.5.)
+    ? & != 0 g_bck_ab_any == g_sxe_arc -1 {
+        : ~ s ar ( nurl_str_cat srcs `` )
+        ~ & != 0 ( nurl_str_len ar ) == g_sxe_arc -1 {
+            : s aw ( str_first_word ar ) = ar ( str_skip_word ar )
+            : s ab ( nurl_sym_get g_bck ( bck_bkey `ab_` ( nurl_str_int ( bck_path_root ( nurl_str_to_int aw ) ) ) ) )
+            ? != 0 ( nurl_str_len ab ) { = g_sxe_arc ( nurl_str_to_int ab ) } {}
+        }
+    } {}
     // Flattened to owners: a borrow of a borrow borrows from what that one
     // borrows from. Re-pointing a borrow binding (a cursor walking a tree)
     // frees nothing, so it must not end the borrows taken through it.
@@ -25880,6 +26077,12 @@ unsafe @ bck_sx_ev s st s e b arg → s {
         } {}
     }
     ( nurl_sym_set g_bck ( bck_bkey `bs_` bids ) set )
+    // A borrow of an Arc's payload stays one, through borrows of it
+    // (bck_sx_name, §6.5). (A new value clears it: the let / assign row.)
+    ? != g_sxe_arc -1 {
+        ( nurl_sym_set g_bck ( bck_bkey `ab_` bids ) ( nurl_str_int g_sxe_arc ) )
+        = g_bck_ab_any 1
+    } {}
     ? == 0 ( nurl_str_len set ) { ^ st } {}
     ^ ( bck_st_set st bid BCK_BORROWED_SHARED )
 }
@@ -26271,6 +26474,17 @@ unsafe @ bck_sx_split s args → s {
     ^ ( bck_view_bind st wid rec srcs mk )
 }
 
+// …and an owner bound to a nested lending call (h214) borrows what the
+// calls inside its lent arguments lend (`srcs`, its source expression's):
+// `( vec_at ( vec_at top 0 ) 0 )` an element of `top`'s element.
+@ bck_nest_borrow s st i wid s srcs → s {
+    ? | | == 0 ( nurl_str_len srcs ) ( seq srcs `*` ) ( bck_dead_state ( bck_st_get st wid ) ) { ^ st } {}
+    : s plain ( __src_plain srcs )
+    ? == 0 ( nurl_str_len plain ) { ^ st } {}
+    : s prior ? == BCK_BORROWED_SHARED ( bck_st_get st wid ) ( nurl_sym_get g_bck ( bck_bkey `bs_` ( nurl_str_int wid ) ) ) ``
+    ^ ( bck_borrow_begin st wid ? == 0 ( nurl_str_len prior ) plain ( nurl_str_cat3 prior ` ` plain ) )
+}
+
 // The borrows a `let` / `assign` row's binding `wid` takes: a view's
 // sources (`srcs`, from its source expression), exactly — the lends of
 // the line's calls go with them; otherwise what a call on the line lent
@@ -26328,6 +26542,8 @@ unsafe @ bck_sx_split s args → s {
     ? == 0 ( nurl_sym_len g_bck `plend` ) { ^ st } {}
     : s pl ( nurl_sym_get g_bck `plend` )
     ( nurl_sym_set g_bck `plend` `` )
+    : s plarc ? == 0 g_arcp_any ( nurl_str_cat `` `` ) ( nurl_str_cat ( nurl_sym_get g_bck `plarc` ) `` )
+    ? != 0 ( nurl_str_len plarc ) { ( nurl_sym_set g_bck `plarc` `` ) } {}
     ? ! ( seq line ( nurl_sym_get g_bck `plend_line` ) ) { ^ st } {}
     // An argument the call consumed went INTO the result (a value passed
     // through): the result owns it, it borrows nothing from it. One that
@@ -26352,6 +26568,15 @@ unsafe @ bck_sx_split s args → s {
         // borrows what that borrow does.
         : i wr ( bck_path_root ( nurl_str_to_int w ) )
         : i v ( bck_st_get st wr )
+        // (Lent through an Arc parameter, or a borrow of a payload lending
+        // on: the binding is a view of the payload, §6.5.)
+        ? & != 0 ( nurl_str_len plarc ) == g_sxe_arc -1 {
+            ? ( str_contains_word plarc ( nurl_str_cat3 w `:` wc ) ) { = g_sxe_arc wr } {}
+        } {}
+        ? & != 0 g_bck_ab_any == g_sxe_arc -1 {
+            : s ab ( nurl_sym_get g_bck ( bck_bkey `ab_` ( nurl_str_int wr ) ) )
+            ? != 0 ( nurl_str_len ab ) { = g_sxe_arc ( nurl_str_to_int ab ) } {}
+        } {}
         ? ! ( bck_dead_state v ) {
             : s add ? == v BCK_BORROWED_SHARED ( nurl_sym_get g_bck ( bck_bkey `bs_` ( nurl_str_int wr ) ) ) ( nurl_str_cat w `` )
             = srcs ? == 0 ( nurl_str_len srcs ) ( nurl_str_cat add `` ) ( nurl_str_cat3 srcs ` ` add )
@@ -26977,6 +27202,13 @@ unsafe @ bck_sx_split s args → s {
                                 = lsrc ? == 0 ( nurl_str_len lsrc ) lid ( nurl_str_cat3 lsrc ` ` lid )
                             } {}
                         }
+                        // …and a call nested in its lent arguments, what that
+                        // one lends (the match row's source expression, h214).
+                        : s msx ( bck_field ( bck_rec mi ) 8 )
+                        ? != 0 ( nurl_str_len msx ) {
+                            : s msr ( bck_sx_sources state msx -1 )
+                            ? ! ( seq msr `*` ) { = lsrc ( __word_union lsrc ( __src_plain msr ) ) } {}
+                        } {}
                     } {
                         // (The match row's reads are walk ids already.)
                         : s sr ( bck_field ( bck_rec mi ) 2 )
@@ -27315,6 +27547,8 @@ unsafe @ bck_loop_mask s pre s post → s {
     ? != 0 # i ( getenv `NURL_BCK_DUMP` ) { ( nurl_eprintln ( nurl_str_cat `── rows: ` ( nurl_sym_get g_bck `stmts` ) ) ) } {}
     ( nurl_sym_set g_bck `warnset` `` )
     ( nurl_sym_set g_bck `pml` `` )
+    = g_bck_ab_any 0
+    ? != 0 g_arcp_any { ( nurl_sym_set g_bck `plarc` `` ) } {}
     // New function, new dense id space: bumping the generation
     // invalidates every intern entry left by earlier functions.
     ? != 0 g_bck_has_paths { ( bck_paths_release ) } {}
@@ -28222,15 +28456,6 @@ unsafe @ bck_loop_mask s pre s post → s {
         = g_bck_rhs_callee ``
         = g_bck_rhs_sx ``
         ? | != 0 g_rprov_on != 0 g_rpg_on { ( __rprov_bind syms name vt __rp_reads bck_rhs_tt F ) } {}
-        // Thread-safety (§6.5): this binding is a view INTO an Arc when the
-        // initialiser was `arc_get`. For a manually-managed handle payload the
-        // view aliases the Arc's one buffer, so mutating through it mutates
-        // shared state — which gen_call turns into a flag, and thread_spawn
-        // into an error, once the closure holding it crosses a thread.
-        : s __av ( nurl_sym_get syms `__last_call_arc_view__` )
-        ? != 0 ( nurl_str_len __av )
-        { ( nurl_sym_def syms ( nurl_str_cat name `__arc_view` ) __av ) }
-        {}
         ? != 0 g_clo_lend_set { ( mem_note_clo_lend syms name vt bck_rhs_tt ) } {}
         ? != 0 g_rawlit_pending { ( mem_note_rawlit syms name ) } {}
         ( bck_let_alias syms is_mutable bck_rhs_tt bck_rhs_val vt bck_line name )
@@ -28537,15 +28762,6 @@ unsafe @ bck_loop_mask s pre s post → s {
             = g_bck_rhs_callee ``
             = g_bck_rhs_sx ``
             ? | != 0 g_rprov_on != 0 g_rpg_on { ( __rprov_bind syms name ( nurl_llty ptype ) __rp_reads bck_rhs_tt F ) } {}
-            // Thread-safety (§6.5): this binding is a view INTO an Arc when the
-            // initialiser was `arc_get`. For a manually-managed handle payload the
-            // view aliases the Arc's one buffer, so mutating through it mutates
-            // shared state — which gen_call turns into a flag, and thread_spawn
-            // into an error, once the closure holding it crosses a thread.
-            : s __av ( nurl_sym_get syms `__last_call_arc_view__` )
-            ? != 0 ( nurl_str_len __av )
-            { ( nurl_sym_def syms ( nurl_str_cat name `__arc_view` ) __av ) }
-            {}
             ? != 0 g_clo_lend_set { ( mem_note_clo_lend syms name vt bck_rhs_tt ) } {}
             ? != 0 g_rawlit_pending { ( mem_note_rawlit syms name ) } {}
             ( bck_let_alias syms is_mutable bck_rhs_tt bck_rhs_val vt bck_line name )
@@ -37487,6 +37703,32 @@ unsafe @ origin_free → v {
         ( nurl_sym_def g_pending_impl ( nurl_str_cat key `__origin` ) ( nurl_str_int node ) )
     } {}
     ( nurl_sym_def syms ( nurl_str_cat name `__paramsrc` ) src )
+    // …and the parameters it may carry from a callee compiled after this
+    // function (`: e ( vec_at xs 0 )`), with their positions: handed back,
+    // they are asked of that callee's final summary (h215).
+    ( nurl_sym_def syms ( nurl_str_cat name `__fwdcarry` ) ( __fwd_carry_of syms rhs_tt rhs_val ) )
+}
+
+// What `__fwdcarry` a binding's initialiser gives it: a call to a callee
+// compiled after this function, each parameter handed to it as
+// `callee:position:parameter`; a binding, its own.
+@ __fwd_carry_of i syms i rhs_tt s rhs_val → s {
+    ? ( is_ident_tok rhs_tt ) { ^ ( nurl_sym_get2 syms rhs_val `__fwdcarry` ) } {}
+    ? | != rhs_tt TT_LPAREN == 0 ( nurl_sym_len syms `__last_call_forward__` ) { ^ ( nurl_str_cat `` `` ) } {}
+    : s fwc ( str_first_word ( nurl_sym_get syms `__last_call_forward__` ) )
+    : s names ( nurl_sym_get syms `__fn_param_names__` )
+    : ~ s rp ( nurl_sym_get syms `__last_call_param_args__` )
+    : ~ s out ``
+    ~ != 0 ( nurl_str_len rp ) {
+        : s ai ( str_first_word rp ) = rp ( str_skip_word rp )
+        : s pn ( str_first_word rp ) = rp ( str_skip_word rp )
+        : i pi ( str_word_index names pn )
+        ? >= pi 0 {
+            : s rec ( nurl_str_cat4 fwc `:` ai ( nurl_str_cat `:` ( nurl_str_int pi ) ) )
+            = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat rec `` ) ( nurl_str_cat3 out ` ` rec )
+        } {}
+    }
+    ^ out
 }
 
 // These facts drive ownership as well as diagnostics, so they remain active
@@ -37525,6 +37767,11 @@ unsafe @ bck_record_expr_return i syms i tt s value → v {
 }
 
 @ bck_assign_expr_carriers i syms s name i tt s value → v {
+    // (h215: what it may carry from a later callee adds up, as its
+    // parameters do — a join keeps both paths.)
+    : s fwb ( nurl_sym_get2 syms name `__fwdcarry` )
+    : s fwn ( __fwd_carry_of syms tt value )
+    ? != 0 ( nurl_str_len fwn ) { ( nurl_sym_set_deep syms ( nurl_str_cat name `__fwdcarry` ) ( nurl_str_cat3 fwb ` ` fwn ) ) } {}
     : s before ( nurl_sym_get2 syms name `__paramsrc` )
     : s src ( bck_let_carrier_src syms tt value )
     : s both ( nurl_str_cat3 before ` ` src )
@@ -40507,6 +40754,7 @@ unsafe @ __lazy_scan → v {
     // this body mutates — and which buffers it may move or release.
     = g_fn_mutates_witness ``
     = g_fn_reallocs_witness ``
+    = g_fn_arcseen 0
     = g_fn_ret_count 0
     ( nurl_sym_def syms `__origin_return__` ( nurl_str_int ( origin_function fname ) ) )
     ( nurl_sym_def syms `__origin_sink__` ( nurl_str_int ( origin_summary g_fn_sink fname ) ) )
@@ -54542,6 +54790,7 @@ unsafe @ split_emit_module i n i mlen → v {
         ( resolve_raw_provenance )
         ( resolve_mutation_summaries )
         ( resolve_drop_summaries )
+        ( resolve_retfwd_lends syms )
         // Every function (incl. just-flushed generic instantiations) has now
         // compiled, so the escape summaries are final: replay the deferred
         // interprocedural-escape checks parked for forward / generic calls
@@ -54550,7 +54799,6 @@ unsafe @ split_emit_module i n i mlen → v {
         ( __dyn_virtual_check )
         ( resolve_cc_checks syms )
         ( resolve_send_checks syms )
-        ( resolve_arc_mut )
         ( emit_sink_flags )
         ( mem_emit_arg_flags syms )
         ( resolve_nocopy_lends syms )
@@ -54562,6 +54810,8 @@ unsafe @ split_emit_module i n i mlen → v {
         ( mem_emit_guard_flags )
         ( resolve_pending_escapes )
         ( resolve_deferred_borrowck )
+        // (After every walk: the payload views are parked by the walks.)
+        ( resolve_arc_mut )
         ( resolve_lit_handoffs )
         ( lazy_check_complete )
         ( dbg_flush )

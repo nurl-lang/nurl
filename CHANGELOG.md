@@ -58,7 +58,12 @@ shared state that changes lives in the new `Locked [T]`, whose own lock
 its operations hold (*Changed*, *Added*). That closes the last two ways
 found to race a payload — a mutation the check did not follow (h212) and
 the making thread changing it under a worker (h213) — and replaces the
-compiler's lock counting with a rule that needs none (*Fixed*).
+compiler's lock counting with a rule that needs none. The rule runs on
+the borrow walk, and building it there found two holes in the walk
+itself, both use-after-free from safe code on the previous release: a
+binding of a nested lending call borrowed nothing (h214), and a helper
+handing back what a generic accessor lent said it lent nothing (h215)
+(*Fixed*).
 
 ### Added
 
@@ -291,6 +296,32 @@ compiler's lock counting with a rule that needs none (*Fixed*).
 
 ### Fixed
 
+- **A binding of a nested lending call borrows what the inner call lends**
+  (h214). `: e ( vec_at ( vec_at top 0 ) 0 )`, `( vec_get ( vec_at top 0
+  ) 0 )` bound or matched, and the same over `arc_get` or a helper that
+  hands back its argument: the binding borrowed only what the outer call
+  was handed directly — a temporary — so it borrowed nothing, and
+  releasing `top` left it dangling (ASan heap-use-after-free on the
+  probe). A `let` / assignment of such a call, and a `match` of one,
+  carry the call's source expression, and the binding borrows every
+  source a lent argument reaches. Block and `??` expressions now have
+  source expressions of their own (a block's tail; a match's arms, an
+  arm handing back its payload standing for the matched value), and so
+  does a field of a call's result.
+
+- **A helper that hands back what a later-compiled accessor lends says
+  so** (h215). `@ first_of ( Vec ( Vec i ) ) xs → ( Vec i ) { ^ ( vec_at
+  xs 0 ) }` — or `: e ( vec_at xs 0 ) ^ e` — was summarised as lending
+  nothing: `vec_at` is a generic instantiated at the end of the module,
+  so its summary did not exist when `first_of`'s was written. A caller's
+  temporary was dropped under the result (`( first_of ( mk ) )`: ASan
+  heap-use-after-free at run time), and a caller could release `xs`
+  while the result was still read. Each parameter handed to such a callee
+  is noted with its position, and once every summary is final a fixed
+  point decides which parameters the helper lends back
+  (`resolve_retfwd_lends`): the caller copies out of a temporary, and the
+  walk keeps the source alive.
+
 - **The thread that made an `Arc` can no longer change its payload while
   a worker reads it** (h213). The race check asked only what a detached
   closure did to the payload, so the spawning thread's own `vec_set` /
@@ -302,7 +333,12 @@ compiler's lock counting with a rule that needs none (*Fixed*).
   now frozen once made (*Changed*), which needs no lock bookkeeping at
   all — the compiler's lock counter, its spawn records and its per-closure
   summaries are gone — and shared state that changes lives in a `Locked`
-  (*Added*). `arc_set` was `unsafe`-bodied but callable from safe code
+  (*Added*). The rule is decided on the borrow walk, not on the spelling:
+  what a call lends through an `Arc` parameter is a view of the payload,
+  followed into bindings, names it is copied to, borrows of it, fields,
+  elements an accessor lends, `?` / `??` arms and match payloads — each
+  of which a check that tracked `arc_get` bindings by name had let
+  through. `arc_set` was `unsafe`-bodied but callable from safe code
   (an `unsafe` function's callers need no marking, spec §3.3d); the call
   is now refused outside `unsafe`, like the raw-memory primitives.
 

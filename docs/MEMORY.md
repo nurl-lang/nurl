@@ -790,6 +790,20 @@ the one owner could be sharing. A clone is asked of a borrow, and every
 thread holding an `Arc` borrows the handle in its payload at once, so the
 threads' shares were lost and the value freed under the payload. A share
 now always takes the locked add; only a release keeps the shortcut.
+Following an `Arc`'s payload through the borrow walk (§6.5) found two
+more in the walk itself. A binding bound to a call whose lent argument
+was itself a lending call — `( vec_at ( vec_at top 0 ) 0 )`, `( vec_get
+( arc_get a ) 0 )`, a `??` over one — borrowed only what the outer call
+was handed directly, which was a temporary, so it borrowed nothing and
+outlived `top` (h214). Such a binding, and a match's payloads, now
+borrow what the inner calls lend: the row carries the call's source
+expression. And a helper that handed back an element its accessor lent
+(`^ ( vec_at xs 0 )`) said it lent nothing, because the accessor — a
+generic, instantiated at the end of the module — had no summary yet when
+the helper's was written: a caller's temporary was dropped under the
+result, and a caller could release `xs` while still reading it (h215).
+The positions handed to such a callee are noted, and which parameters
+the helper lends is settled on the final summaries.
 
 The rules that carry it:
 
@@ -932,15 +946,18 @@ count atomic, not the data: every thread holding a clone reads the
 payload with ordinary loads. So safe code never changes it, on any
 thread — the one that made it included (h213) — and whatever lock it
 holds: a `Mutex` the type does not tie to the data proves nothing about
-the threads that read it without taking that lock. The payload is
-followed wherever it goes: a binding `arc_get` bound, an `arc_get`
-written in place, a field of either. A call that hands one to a
-parameter its callee mutates — a container mutator, a `String`'s or a
-map's, a helper of the program's, at any depth — is the error, reported
-at that call; summaries that close only after every body is compiled
-(writes through raw pointers) are waited for, and the verdict is reached
-on the final ones (h212). `arc_set`, which replaces the payload, is for
-`unsafe` code only. A payload whose type synchronises itself (asserted
+the threads that read it without taking that lock. What a call lends
+through an `Arc` parameter is a view of the payload — `arc_get`'s
+result, or a helper's over it — and the borrow walk follows it wherever
+the rules follow a borrow: into a binding, a borrow of it, a name it is
+copied to, a field, an element an accessor lends out of it, either arm of
+a `?` or `??`, a match payload. A call that hands one to a parameter its
+callee changes — a container mutator, a `String`'s or a map's, a helper
+of the program's, at any depth — is the error, reported at that call;
+summaries that close only after every body is compiled (writes through
+raw pointers) are waited for, and the verdict is reached on the final
+ones (h212). `arc_set`, which replaces the payload, is for `unsafe` code
+only. A payload whose type synchronises itself (asserted
 `% Sync`: `Mutex`, `Channel`, `Locked`) is changed through its own
 operations.
 
