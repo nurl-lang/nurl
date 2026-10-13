@@ -1515,6 +1515,28 @@ CLASSES = [
         },
     },
     {
+        "name": "uncopyable-option-ownership",
+        "severity": "memory-unsafety",
+        "doc": "An option of a value that cannot be copied (a `% Drop` "
+               "value with no clone): a match on a borrowed one does not "
+               "release its owner's payload (h226), and a payload the arm "
+               "only borrows — of an option a struct field keeps — is not "
+               "handed to an owner (h227). The runtime half is checked by "
+               "the controls below (h223): each such option is dropped.",
+        "expect": REJECT_DEFAULT,
+        "expect_msg": ["would have to be copied here"],
+        "spellings": {
+            "field-payload-out": prog(
+                "    : Holder h @ Holder { @ ?Res { T @ Res { ( vec_new [i] ) } } 1 }\n"
+                "    : Res q ?? . h o { T r → { r } F _ → { @ Res { ( vec_new [i] ) } } }",
+                extra=RES_TYPE + ": Holder { ?Res o i n }\n"),
+            "field-payload-out-block": prog(
+                "    : Holder h @ Holder { @ ?Res { T @ Res { ( vec_new [i] ) } } 1 }\n"
+                "    : Res q ?? . h o { T r → { : i z 0 r } F _ → { @ Res { ( vec_new [i] ) } } }",
+                extra=RES_TYPE + ": Holder { ?Res o i n }\n"),
+        },
+    },
+    {
         "name": "controls",
         "doc": "Correct programs. A class of its own because a checker "
                "that rejects these is worse than one that misses a bug — "
@@ -1560,6 +1582,23 @@ CLASSES = [
                 "    : ( @ i ) g ( mk r )\n"
                 "    : i n ( g )",
                 extra=RES_TYPE + "@ mk Res r → ( @ i ) {\n    ^ \\ → i { ( vec_len [i] . r buf ) }\n}\n"),
+            # An option of a value that cannot be copied: bound, replaced,
+            # matched (read, consumed, moved out), lent to a function that
+            # matches it (h223, h226) — each payload dropped once.
+            "uncopyable-option-bound": prog(
+                "    : ?Res p @ ?Res { T @ Res { ( vec_new [i] ) } }\n"
+                "    : ~ ?Res q @ ?Res { T @ Res { ( vec_new [i] ) } }\n"
+                "    = q @ ?Res { F }", extra=RES_TYPE),
+            "uncopyable-option-matched": prog(
+                "    : ?Res p @ ?Res { T @ Res { ( vec_new [i] ) } }\n"
+                "    : Res m ?? p { T r → { r } F _ → { @ Res { ( vec_new [i] ) } } }", extra=RES_TYPE),
+            "uncopyable-option-lent-matched": prog(
+                "    : ?Res p @ ?Res { T @ Res { ( vec_new [i] ) } }\n"
+                "    : i a ( peek p )\n"
+                "    : i b ( peek p )",
+                extra=RES_TYPE + "@ peek ?Res o → i { ?? o { T r → { ^ ( vec_len [i] . r buf ) } F _ → { ^ 0 } } }\n"),
+            "uncopyable-result-bound": prog(
+                "    : !Res i p @ !Res i { T @ Res { ( vec_new [i] ) } }", extra=RES_TYPE),
             "fn-lends-param-field-uncopyable": prog(
                 "    : Hold h @ Hold { @ Res { ( vec_new [i] ) } 1 }\n"
                 "    : i n ( vec_len [i] . ( held h ) buf )",

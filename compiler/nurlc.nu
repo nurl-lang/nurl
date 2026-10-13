@@ -17812,6 +17812,22 @@ unsafe @ gen_match i lex i syms i cg → s {
                         ? & pt0_is_opt_bool != 0 ( nurl_str_len scrut_own ) {
                             ( mem_udrop_flag_set syms cg vp0 scrut_own )
                             ( nurl_sym_def syms ( nurl_str_cat vp0 `__sborrow` ) `dyn` )
+                        } {}
+                        // …and of an option that cannot be copied, held by a
+                        // binding (which drops it, h223) or a parameter: a
+                        // cursor over it, as for a String payload below — a
+                        // payload moved out takes the option's ownership.
+                        ? & & pt0_is_opt_bool == 0 ( nurl_str_len scrut_own ) ( __nc_drop_ty pt0_eff ) {
+                            : s __ncmop ( mem_udrop_ptr_of syms match_var_name )
+                            ? != 0 ( nurl_str_len __ncmop ) {
+                                ( mem_udrop_flag_set syms cg vp0 `0` )
+                                ( mem_udrop_link_alias syms vp0 __ncmop )
+                            } {
+                                ? >= ( nurl_sym_word_index syms `__fn_param_names__` match_var_name ) 0 {
+                                    ( mem_udrop_flag_set syms cg vp0 `0` )
+                                    ( nurl_sym_def syms ( nurl_str_cat vp0 `__optparam` ) match_var_name )
+                                } {}
+                            }
                         } {} }
                     {}
                     // A String / Vec payload of a fresh option or result.
@@ -43286,6 +43302,10 @@ unsafe @ __ffi_param_count s pt → i {
     ? >= ( nurl_str_find p ` ` ) 0 { ^ ( nurl_str_cat `` `` ) } {}
     ? ( __is_value_handle p )
     { ^ p } {}
+    // An option (or result) of a value that cannot be copied (a `% Drop`
+    // value with no clone): registered through the same twin, so a binding of it drops
+    // its payload (h223) — it was never dropped.
+    ? ( __nc_drop_ty p ) { ^ p } {}
     ^ ( nurl_str_cat `` `` )
 }
 
@@ -46079,15 +46099,13 @@ u` ) ( nurl_print q ) ( nurl_print `:
     ( nurl_str_cat3 `a borrowed '` ( llvm_to_nurl ty ) `' would have to be copied here, and it cannot be copied — pass or return the value its owner gives up (a 'sink' parameter, or the owner itself), not a borrow of it` ) )
 }
 
-// Does a match's option stay with someone else — a field of a parameter or
-// behind a pointer (`fld`: the field read its scrutinee made), or a binding
-// that only borrowed it?
+// Does a match's option stay with someone else — a field (of a parameter,
+// a local, behind a pointer: `fld`, the field read its scrutinee made), or
+// a binding that only borrowed it?
 @ __match_scrut_lent i syms i tt s var s fld → b {
-    ? == tt TT_DOT {
-        : s rfp ( str_first_word fld )
-        ? == 0 ( nurl_str_len rfp ) { ^ T } {}
-        ^ != 0 ( nurl_sym_len2 syms rfp `__pname` )
-    } {}
+    // (A field of any binding: its struct keeps the option and drops it
+    // with itself — a field of a local too, h223.)
+    ? == tt TT_DOT { ^ T } {}
     ? ( is_ident_tok tt ) {
         : s msp ( mem_udrop_ptr_of syms var )
         ? == 0 ( nurl_str_len msp ) { ^ F } {}
@@ -46534,8 +46552,10 @@ unsafe @ __sx_names_capture i syms s sx → b {
 // arm (a payload) moves out; a fresh call or literal is owned; anything
 // else — an outer binding, a field — is lent.
 @ mem_arm_hown i syms i cg s ty i tt0 s v0 s retid i jdepth → s {
-    // An option / result of one counts as its registration twin.
-    ? ! ( __is_handle_ty ( __udrop_regty ty ) ) { ^ ( nurl_str_cat `false` `` ) } {}
+    // An option / result of one counts as its registration twin; a value
+    // that cannot be copied is handed over the same way (a payload cursor
+    // over an option binding takes the option along, h223).
+    ? ! | ( __is_handle_ty ( __udrop_regty ty ) ) ( __nc_drop_ty ty ) { ^ ( nurl_str_cat `false` `` ) } {}
     // `T v → { v }`: a block arm hands over what its tail statement does.
     : ~ i ht tt0
     : ~ s hv ( nurl_str_cat v0 `` )
@@ -46545,6 +46565,11 @@ unsafe @ __sx_names_capture i syms s sx → b {
     } {}
     ? & ( is_ident_tok ht ) ( seq hv retid ) {
         : s up ( mem_udrop_ptr_of syms retid )
+        // A payload the arm only borrowed (an option a struct field keeps)
+        // that cannot be copied: the join cannot hand it to an owner.
+        ? & & != 0 ( nurl_str_len up ) ( __nc_drop_ty ty ) ( seq ( nurl_sym_get2 syms up `__sborrow` ) `1` ) {
+            ( __nc_copy_die ( nurl_sym_get syms `__fn_self_name__` ) ty )
+        } {}
         // (…or a `sink` parameter: this function's own, it moves out too —
         // `^ ?? o { T v → v F → dflt }` dropped `dflt` under the caller.)
         ? & != 0 ( nurl_str_len up ) | > ( nurl_str_to_int ( nurl_sym_get2 syms up `__depth` ) ) jdepth ( __param_owned_slot syms up ) {

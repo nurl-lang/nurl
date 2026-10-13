@@ -80,7 +80,10 @@ a closure captures it holds by the same rules: a value it cannot copy
 that its body moves out is the env's from then on (h222), a closure that
 only reads one is a view of its binding and does not outlive it (h224),
 and a `sink` parameter is the function's own to the view walk (h225)
-(*Fixed*, *Changed*).
+(*Fixed*, *Changed*). An option or result of a value that cannot be
+copied is now dropped when bound (h223), a match on a borrowed one no
+longer releases its owner's payload (h226), and a payload the arm only
+borrows is not handed to an owner (h227) (*Fixed*).
 
 ### Added
 
@@ -366,6 +369,27 @@ and a `sink` parameter is the function's own to the view walk (h225)
   the way out (ASan heap-use-after-free on main). Such a field of a local,
   a module global or a closure's capture is rejected; a parameter's field
   stays a lend, and one read through a pointer is raw code's to vouch for.
+
+- **An option of a value that cannot be copied is dropped** (h223). A
+  `?Res` or `! Res E` (`Res` a `% Drop` value with no clone) bound to a
+  name, returned, discarded, replaced or handed to a `sink` was never
+  dropped: its payload leaked (LSan on main). It is now registered
+  through the same twin as an option of a String (`__opt_payload`), and
+  a match arm's payload is a cursor over the binding, so a payload moved
+  out — into a `sink`, out of the match — takes the option along.
+
+- **A match on a borrowed option keeps its owner's payload** (h226).
+  `?? o { T r → … }` on a `?Res` parameter the function only borrows
+  made `r` the arm's own and released it: the caller's next use read
+  freed memory (ASan heap-use-after-free on main). The payload of an
+  option parameter is the caller's, as a String payload's is.
+
+- **A payload the arm only borrows stays where it is** (h227). A match
+  on an option a struct field keeps handed its payload to the binding
+  the match initialised (`: Res q ?? . h o { T r → { r } … }`): the
+  binding and the struct both released it (ASan heap-use-after-free on
+  main). A field scrutinee is always lent now — a local's too — and a
+  lent payload that cannot be copied is not handed to an owner.
 
 - **A closure that moves out what it captured takes it over** (h222). A
   body moving a value it cannot copy (a `% Drop` value with no clone)

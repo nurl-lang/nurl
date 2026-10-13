@@ -848,6 +848,13 @@ binding — handed out of the frame, it is rejected (h224). And a `sink`
 parameter is a binding of the function's own frame: a view of it handed
 back is rejected as a view of a local is (h225).
 
+An option or result of a value that cannot be copied (`?Res`, `! Res E`)
+is registered like an option of a String: its binding drops the payload
+(h223), and a match arm's payload is a cursor over the binding — or over
+the parameter, whose caller keeps it (h226). A field scrutinee lends its
+payload to the arm, and a lent payload that cannot be copied cannot be
+handed to an owner (h227).
+
 The rules that carry it:
 
 - **An owned value moves.** Storing it into an aggregate, an Option or a
