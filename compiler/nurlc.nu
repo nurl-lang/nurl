@@ -54015,6 +54015,22 @@ unsafe @ __tf_eol i mp i mlen i st → i {
     ^ ? < nl 0 mlen + + st nl 1
 }
 
+// The next `\n%` at or after `pos` (relative to it), or -1: a line
+// ending found at memchr speed, then its next byte — the module is
+// megabytes, and a two-byte memmem walks it byte by byte.
+unsafe @ __tf_next i mp i mlen i pos → i {
+    : *u m # *u # s mp
+    : ~ i p pos
+    ~ < p mlen {
+        : i nl ( nurl_memmem_range # s + mp p - mlen p `\n` 1 )
+        ? < nl 0 { ^ -1 } {}
+        : i at + p nl
+        ? & < + at 1 mlen == & # i . m + at 1 255 37 { ^ - at pos } {}
+        = p + at 1
+    }
+    ^ -1
+}
+
 unsafe @ __types_first s mod i mlen → s {
     : i mp # i mod
     : *u m # *u mod
@@ -54025,7 +54041,7 @@ unsafe @ __types_first s mod i mlen → s {
     : ~ i n ? at0 1 0
     : ~ i pos 0
     ~ < pos mlen {
-        : i rel ( nurl_memmem_range # s + mp pos - mlen pos `\n%` 2 )
+        : i rel ( __tf_next mp mlen pos )
         ? < rel 0 { = pos mlen } { = n + n 1 = pos + + pos rel 2 }
     }
     ? == n 0 { ^ # s 0 } {}
@@ -54038,7 +54054,7 @@ unsafe @ __types_first s mod i mlen → s {
     ? at0 { = k ( __tf_record mp 0 ( __tf_eol mp mlen 0 ) k ) } {}
     = pos 0
     ~ < pos mlen {
-        : i rel ( nurl_memmem_range # s + mp pos - mlen pos `\n%` 2 )
+        : i rel ( __tf_next mp mlen pos )
         ? < rel 0 { = pos mlen } {
             : i st + + pos rel 1
             : i en ( __tf_eol mp mlen st )
