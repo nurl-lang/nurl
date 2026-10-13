@@ -684,10 +684,11 @@ it cannot copy out of a struct it drops (h221) (*Fixed*, *Changed*).
   line ending at `memchr` speed and checks the byte after it. Together
   with removing the per-argument string work of the old Arc check, the
   self-compile retires 2.1 % fewer instructions than main on the same
-  input (11.284e9 vs 11.529e9). The new checks — the borrow walk's
+  input (11.342e9 vs 11.583e9). The new checks — the borrow walk's
   frozen-payload rows, block and `??` source expressions, the forward
-  lend fixed point (h212–h216), and the final value read as a `^`
-  (h217, h218) — are included in that figure. The bench kernels compile
+  lend fixed point (h212–h216), the final value read as a `^` (h217,
+  h218) and what a closure may hand back (h219–h221) — are included in
+  that figure. The bench kernels compile
   to the same code as on main.
 
 - **Keccak's round constants are built once.** Every SHA-3 / SHAKE
