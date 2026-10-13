@@ -1457,6 +1457,64 @@ CLASSES = [
         },
     },
     {
+        "name": "closure-holds-uncopyable-capture",
+        "severity": "memory-unsafety",
+        "doc": "A capture that cannot be copied (a `% Drop` value with no "
+               "clone): a body that moves it out takes it over, so the "
+               "closure runs at most once (h222); a closure that only reads "
+               "it is a view of the binding and does not leave its frame "
+               "(h224); and a view of a `sink` parameter, which the "
+               "function drops, is not handed back (h225).",
+        "expect": REJECT_DEFAULT,
+        "expect_msg": ["frees it when it runs",
+                       "this returns a view of"],
+        "spellings": {
+            "into-literal-twice": prog(
+                "    : Res r @ Res { ( vec_new [i] ) }\n"
+                "    : ( @ Hold ) f \\ → Hold { @ Hold { r 1 } }\n"
+                "    : Hold a ( f )\n"
+                "    : Hold b ( f )",
+                extra=RES_TYPE + ": Hold { Res r i n }\n"),
+            "into-literal-caret-twice": prog(
+                "    : Res r @ Res { ( vec_new [i] ) }\n"
+                "    : ( @ Hold ) f \\ → Hold { ^ @ Hold { r 1 } }\n"
+                "    : Hold a ( f )\n"
+                "    : Hold b ( f )",
+                extra=RES_TYPE + ": Hold { Res r i n }\n"),
+            "into-vec-twice": prog(
+                "    : Res r @ Res { ( vec_new [i] ) }\n"
+                "    : ( @ ( Vec Res ) ) f \\ → ( Vec Res ) { : ( Vec Res ) o ( vec_new [Res] ) ( vec_push [Res] o r ) ^ o }\n"
+                "    : ( Vec Res ) a ( f )\n"
+                "    : ( Vec Res ) b ( f )", extra=RES_TYPE),
+            "read-after-move": prog(
+                "    : Res r @ Res { ( vec_new [i] ) }\n"
+                "    : ( @ Hold ) f \\ → Hold { @ Hold { r 1 } }\n"
+                "    : Hold a ( f )\n"
+                "    : i n ( vec_len [i] . r buf )",
+                extra=RES_TYPE + ": Hold { Res r i n }\n"),
+            "reader-returned": prog(
+                "    : ( @ i ) g ( mk )",
+                extra=RES_TYPE + "@ mk → ( @ i ) {\n    : Res r @ Res { ( vec_new [i] ) }\n"
+                      "    : ( @ i ) f \\ → i { ( vec_len [i] . r buf ) }\n    ^ f\n}\n"),
+            "reader-returned-falloff": prog(
+                "    : ( @ i ) g ( mk )",
+                extra=RES_TYPE + "@ mk → ( @ i ) {\n    : Res r @ Res { ( vec_new [i] ) }\n"
+                      "    : ( @ i ) f \\ → i { ( vec_len [i] . r buf ) }\n    f\n}\n"),
+            "reader-in-returned-struct": prog(
+                "    : Box2 b ( mk )",
+                extra=RES_TYPE + ": Box2 { ( @ i ) get }\n@ mk → Box2 {\n    : Res r @ Res { ( vec_new [i] ) }\n"
+                      "    : ( @ i ) f \\ → i { ( vec_len [i] . r buf ) }\n    ^ @ Box2 { f }\n}\n"),
+            "reader-over-sink-param": prog(
+                "    : ( @ i ) g ( mk @ Res { ( vec_new [i] ) } )",
+                extra=RES_TYPE + "@ mk sink Res r → ( @ i ) {\n    ^ \\ → i { ( vec_len [i] . r buf ) }\n}\n"),
+            "slice-of-sink-vec": prog(
+                "    : ( Vec i ) a ( vec_new [i] )\n"
+                "    : ( Slice i ) s ( view_of a )",
+                prelude=PRELUDE_VEC + "$ `stdlib/core/slice.nu`\n",
+                extra="@ view_of sink ( Vec i ) v → ( Slice i ) {\n    ^ ( slice_from_vec [i] v )\n}\n"),
+        },
+    },
+    {
         "name": "controls",
         "doc": "Correct programs. A class of its own because a checker "
                "that rejects these is worse than one that misses a bug — "
@@ -1484,6 +1542,24 @@ CLASSES = [
                 "    : ( Slice i ) sl ( f w )\n"
                 "    : i n ( slice_len [i] sl )",
                 prelude=PRELUDE_VEC + "$ `stdlib/core/slice.nu`\n"),
+            # A closure moving out a capture it cannot copy, run once; one
+            # reading it in its frame; a view of a lent parameter handed
+            # back (h222, h224, h225).
+            "closure-moves-capture-once": prog(
+                "    : Res r @ Res { ( vec_new [i] ) }\n"
+                "    : ( @ Hold ) f \\ → Hold { @ Hold { r 1 } }\n"
+                "    : Hold a ( f )",
+                extra=RES_TYPE + ": Hold { Res r i n }\n"),
+            "closure-reads-capture-in-frame": prog(
+                "    : Res r @ Res { ( vec_new [i] ) }\n"
+                "    : ( @ i ) f \\ → i { ( vec_len [i] . r buf ) }\n"
+                "    : i a ( f )\n"
+                "    : i b ( f )", extra=RES_TYPE),
+            "closure-over-lent-param-returned": prog(
+                "    : Res r @ Res { ( vec_new [i] ) }\n"
+                "    : ( @ i ) g ( mk r )\n"
+                "    : i n ( g )",
+                extra=RES_TYPE + "@ mk Res r → ( @ i ) {\n    ^ \\ → i { ( vec_len [i] . r buf ) }\n}\n"),
             "fn-lends-param-field-uncopyable": prog(
                 "    : Hold h @ Hold { @ Res { ( vec_new [i] ) } 1 }\n"
                 "    : i n ( vec_len [i] . ( held h ) buf )",

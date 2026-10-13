@@ -13909,6 +13909,13 @@ unsafe @ bck_check_lit_moves i lex i line i col s what s tab i scmask s moved s 
         : b builtin_escape_slot & is_escape_call ! & vec_family_call == arg_idx 0
         : b arg_pos_escapes | builtin_escape_slot
         ( str_contains_word callee_escapes ( nurl_str_int arg_idx ) )
+        // A closure handing its capture to a callee that keeps it moves it
+        // out of its env when it cannot be copied (one that can is stored
+        // as a copy): the closure runs at most once, as when it releases
+        // the capture itself (the consumed-capture rule, gen_closure_expr).
+        ? & & arg_pos_escapes ( is_ident_tok bck_arg_tt ) & ( __is_clo_capture syms bck_arg_val ) ( __nc_drop_ty at ) {
+            ( __clo_take_capture syms bck_arg_val )
+        } {}
         // §2.1b Freeing what the compiler already frees.
         //
         // `nurl_free` is excluded from the destructor move rule above
@@ -27988,6 +27995,10 @@ unsafe @ bck_loop_mask s pre s post → s {
             // string is: a copy of it is a view of that buffer.)
             ( nurl_sym_set g_bck ( bck_bkey `vw_` ( nurl_str_int ( bck_intern pn ) ) ) `o` )
         } {}
+        // (…or any other value it drops: a String, a Vec, a `% Drop` value.)
+        ? ( str_contains_word g_bck_own_params ( nurl_str_cat `!` pn ) ) {
+            ( nurl_sym_set g_bck ( bck_bkey `po_` ( nurl_str_int ( bck_intern pn ) ) ) `1` )
+        } {}
     }
     // Walk from the seeded state. n == 0 (no records) walks nothing.
     : s final ( bck_walk_seq 0 n seed )
@@ -32997,6 +33008,12 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
         ? & fld_is_clo ! agg_moves_fields { ( bck_note_clo_caps_stored syms fld_first_tt fld_first_val ( nurl_lex_line lex ) ) } {}
         // A borrowed String / Vec stored into the aggregate: its copy.
         ? ! ( is_ident_tok fld_first_tt ) { = fld_lent ( mem_lent_cond syms cg fty fld_first_tt fld_first_val ) } {}
+        // A closure storing its capture into a literal moves it out of its
+        // env when it cannot be copied: the closure runs at most once (the
+        // consumed-capture rule, gen_closure_expr).
+        ? & & ( is_ident_tok fld_first_tt ) ( __is_clo_capture syms fld_first_val ) ( __nc_drop_ty fty ) {
+            ( __clo_take_capture syms fld_first_val )
+        } {}
         // A returned literal takes a field of a struct this function owns
         // (`: String cn . names cn … ^ @ Csr { … cn … }`, or `. names cn`
         // itself): the field moves out, zeroed at the source.
@@ -35272,6 +35289,15 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
         ? & & ( str_contains_word g_env_shared var ) ! cap_byref ( __is_handle_ty var_type ) {
             = loaded ( mem_emit_cloneif cg var_type loaded `1` )
         } {}
+        // A value that cannot be copied (a `% Drop` with no clone), which
+        // the body moves out when it runs: the env takes it over, and the
+        // enclosing binding no longer drops it (h222). The env drops
+        // nothing of it — the body that runs consumes it; one never run
+        // leaks it, as a released handle does.
+        ? & & & ( str_contains_word g_env_released var ) ! cap_byref ! ( __is_handle_ty var_type ) ( __nc_drop_ty var_type ) {
+            : s ncup ( mem_udrop_ptr_of syms var )
+            ? != 0 ( nurl_str_len ncup ) { ( mem_udrop_flag_set syms cg ncup `0` ) } {}
+        } {}
         ? & & & & | != 0 g_env_owns_handles ( str_contains_word g_env_moved var ) ! ( str_contains_word g_env_shared var ) ! cap_byref ( __is_handle_ty var_type ) ! ( __capture_lends var syms ) {
             : s up ( mem_udrop_ptr_of syms var )
             ? != 0 ( nurl_str_len up ) {
@@ -36808,11 +36834,13 @@ unsafe @ __thr_peel s lty → s {
     ? > captured_count 0
     {
         = g_env_owns_handles ? clo_returned 1 ? != 0 ( nurl_str_len clo_released ) 2 0
+        = g_env_released clo_released
         = g_env_moved clo_moved
         = g_env_shared clo_shared
         = env_ptr ( gen_env_allocation env_struct_name captured_vars
         ( nurl_str_cat `@__cenv_vt.` closure_fn_name ) syms cg )
         = g_env_owns_handles 0
+        = g_env_released ``
         = g_env_moved ``
         = g_env_shared ``
     }
@@ -36890,6 +36918,21 @@ unsafe @ __thr_peel s lty → s {
     ( nurl_sym_def syms `__last_closure_frees__` __cl_frees )
     // …and what it does to its captures when it runs.
     ( nurl_sym_def syms `__last_closure_effects__` __cl_effs )
+    // A value that cannot be copied (a `% Drop` with no clone), captured by
+    // value and not moved out by the body: the env holds a copy of its bits
+    // and the binding still owns what they point at, so the closure is a
+    // view of the binding (h224). It ends with it — returned, or stored
+    // somewhere that is, it dangled.
+    ? & != 0 __sx_me != g_borrowck 0 {
+        : ~ s __ncv ( nurl_str_cat captured_vars `` )
+        ~ != 0 ( nurl_str_len __ncv ) {
+            : s __nw ( str_first_word __ncv ) = __ncv ( str_skip_word __ncv )
+            : s __nt ( nurl_sym_get syms __nw )
+            ? & & & ! ( str_contains_word clo_released __nw ) ! ( __is_capture_byref __nw syms ) ! ( __is_handle_ty __nt ) ( __nc_drop_ty __nt ) {
+                = __cap_sx ( __sx_join __cap_sx ( nurl_str_cat3 `\\(` __nw `)` ) )
+            } {}
+        }
+    } {}
     ( __sx_publish __sx_me ? == 0 ( nurl_str_len __cap_sx ) `-` __cap_sx )
 
     result2
@@ -42157,6 +42200,15 @@ unsafe @ __alloca_struct_params i syms i cg → v {
             // walk, not storage its caller holds — bck_local_source.)
             ( nurl_sym_def syms `__fn_ownstr_params__` ( nurl_str_cat3 ( nurl_sym_get syms `__fn_ownstr_params__` ) ` ` name ) )
         } {}
+        // Any other value a `sink` hands over that this function drops — a
+        // String, a Vec, a `% Drop` value, a closure — is released on the way
+        // out as well: a view of it handed back dangles (h225). (`!name`:
+        // the walk's owned parameter that is no raw string.)
+        : s __pty ( nurl_sym_get syms name )
+        ? & & & ! __raw ( str_contains_word sinks ( nurl_str_int index ) ) == 0 ( nurl_sym_len2 syms name `__inout` )
+        | | ( __type_needs_drop __pty syms ) ( __nc_drop_ty __pty ) ( __is_closure_ty __pty ) {
+            ( nurl_sym_def syms `__fn_ownstr_params__` ( nurl_str_cat4 ( nurl_sym_get syms `__fn_ownstr_params__` ) ` ` `!` name ) )
+        } {}
         = index + index 1
     }
     ? != 0 ( nurl_str_len strp ) {
@@ -46298,6 +46350,18 @@ unsafe @ __sx_names_capture i syms s sx → b {
         } {}
         = j + j 1
     }
+}
+
+// A closure body moves its capture `name` out (into a literal, a container,
+// a callee that keeps it): the env takes it over from the enclosing binding
+// (gen_env_allocation), and every use of the closure may consume it — a
+// second call is a use after the move (bck_note_closure_caps).
+@ __clo_take_capture i syms s name → v {
+    : s cc ( nurl_sym_get syms `__clo_consumed__` )
+    ? ! ( str_contains_word cc name ) { ( nurl_sym_set_deep syms `__clo_consumed__` ( nurl_str_cat3 cc ` ` name ) ) } {}
+    ? & != g_borrowck 0 ! ( str_contains_word g_closure_consumed name ) {
+        = g_closure_consumed ? == 0 ( nurl_str_len g_closure_consumed ) ( nurl_str_cat name `` ) ( nurl_str_cat3 g_closure_consumed ` ` name )
+    } {}
 }
 
 // The slot a capture lives in inside the closure body: its env's copy (by

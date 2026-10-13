@@ -837,6 +837,17 @@ view of what the closure captured — which its caller cannot see — is
 rejected. And a function handing back a field it cannot copy out of a
 struct it drops returned it released (h221): rejected.
 
+What a closure holds follows the same rules. A body that moves a value it
+cannot copy out of its capture — into a literal, a container, a callee
+that keeps it — takes that capture over: the enclosing binding no longer
+drops it, and a second use of the closure is a use after the move
+(h222). A closure that only reads such a capture holds a copy of its
+bits while the binding owns what they point at, so it is a view of the
+binding (its source expression `\(r)`) and the walk ends it with the
+binding — handed out of the frame, it is rejected (h224). And a `sink`
+parameter is a binding of the function's own frame: a view of it handed
+back is rejected as a view of a local is (h225).
+
 The rules that carry it:
 
 - **An owned value moves.** Storing it into an aggregate, an Option or a
@@ -1169,6 +1180,10 @@ fixed:
   its capture, a field of either or what a call lent is rejected (h219);
 - a view it hands back (a Slice, a struct of views) may point into its
   arguments, which the call follows, never into what it captured (h220);
+- a capture it cannot copy and moves out (into a literal, a container, a
+  callee that keeps it) is the env's from then on, so the closure runs
+  at most once (h222); one it only reads keeps the closure a view of the
+  binding, which does not leave the binding's frame (h224);
 - releasing a parameter inside the body is a compile error.
 
 Accordingly, every `*_free_with` (`vec_free_with`, `box_free_with`,

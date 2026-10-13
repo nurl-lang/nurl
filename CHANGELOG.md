@@ -75,7 +75,12 @@ a closure hands back is its caller's own, so three more followed: one
 that cannot be copied and that the closure does not own is rejected
 (h219), a raw string it lent comes back a copy and any other view of
 what it captured is rejected (h220), and no function hands back a field
-it cannot copy out of a struct it drops (h221) (*Fixed*, *Changed*).
+it cannot copy out of a struct it drops (h221) (*Fixed*, *Changed*). What
+a closure captures it holds by the same rules: a value it cannot copy
+that its body moves out is the env's from then on (h222), a closure that
+only reads one is a view of its binding and does not outlive it (h224),
+and a `sink` parameter is the function's own to the view walk (h225)
+(*Fixed*, *Changed*).
 
 ### Added
 
@@ -361,6 +366,35 @@ it cannot copy out of a struct it drops (h221) (*Fixed*, *Changed*).
   the way out (ASan heap-use-after-free on main). Such a field of a local,
   a module global or a closure's capture is rejected; a parameter's field
   stays a lend, and one read through a pointer is raw code's to vouch for.
+
+- **A closure that moves out what it captured takes it over** (h222). A
+  body moving a value it cannot copy (a `% Drop` value with no clone)
+  out of its capture — into a literal, a container or a callee that
+  keeps it — left the enclosing binding owning it too: released by the
+  value the closure built and again at the end of the binding's scope
+  (ASan heap-use-after-free on main). Only a `sink` call or a release
+  counted as taking the capture, and only a String or a Vec moved into
+  the env. Such a move now takes the capture over (`__clo_take_capture`):
+  the enclosing binding no longer drops it, and a second use of the
+  closure is a use after the move. (A closure that does this and is
+  never run leaks the value, as one that releases a String does.)
+
+- **A closure over a value it cannot copy is a view of it** (h224). A
+  capture by value of a `% Drop` value with no clone copies its bits
+  into the env while the binding keeps owning what they point at; a
+  closure handed back — `^ f`, or inside a struct literal — outlived the
+  binding and its caller read freed memory (ASan heap-use-after-free on
+  main). The closure literal's source expression now holds such a
+  capture (`\(r)`), so the borrow walk ends it with the binding: handing
+  it out of the frame is rejected, using it in the frame is not.
+
+- **A `sink` parameter is the function's own to the view walk** (h225).
+  A view of a `sink` parameter handed back — a Slice of the Vec it was
+  given, a closure over a `% Drop` value it was given — passed as a view
+  of storage the caller holds, but the caller gave that value up and the
+  function dropped it on the way out (ASan heap-use-after-free on main).
+  Only a raw-string `sink` counted. Every `sink` parameter the function
+  drops is now a binding of its frame to the walk.
 
 - **A closure's final value is its caller's own** (h217). A call through
   a closure value takes the result as its own, and a body written with

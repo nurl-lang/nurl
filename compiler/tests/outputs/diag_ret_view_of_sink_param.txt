@@ -1,0 +1,5 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_ret_view_of_sink_param.nu:7: error: this returns a view of 'v' (an address into its storage), and 'v' is released when the function returns, so the caller would read freed memory. Return a value that owns its data (a copy — slice_to_vec, string_from — or the owner itself), or take what the view points into as a parameter.
+    ^ ( slice_from_vec [i] v )
+error: compilation aborted — 1 borrow-checker violation (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

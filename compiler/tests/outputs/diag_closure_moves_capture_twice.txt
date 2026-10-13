@@ -1,0 +1,5 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_closure_moves_capture_twice.nu:18: error: use of possibly-moved value 'r' — the closure 'f' frees it when it runs, and it was used at line 17; on that path this reads a freed buffer. Consume it on every path, or rebind it (= r …) on the path that consumed it
+    : Hold b ( f )
+error: compilation aborted — 1 borrow-checker violation (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)
