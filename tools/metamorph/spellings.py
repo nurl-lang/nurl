@@ -1546,7 +1546,7 @@ CLASSES = [
                "still drops it (h229). (A String lent to a `sink` is "
                "handed a copy, h228: see the controls.)",
         "expect": REJECT_DEFAULT,
-        "expect_msg": ["lends what it hands back", "out of a field"],
+        "expect_msg": ["lends what it hands back", "out of a field", "would have to be copied here"],
         "spellings": {
             "lent-into-literal": prog(
                 "    : ( Vec Res ) v ( vec_new [Res] )\n"
@@ -1572,6 +1572,14 @@ CLASSES = [
                 "    : Hold h @ Hold { @ Res { ( vec_new [i] ) } 1 }\n"
                 "    ( eat . h r )",
                 extra=RES_TYPE + ": Hold { Res r i n }\n@ eat sink Res r → v { }\n"),
+            "enum-payload-to-sink": prog(
+                "    : Shape s @ Shape { Has @ Res { ( vec_new [i] ) } }\n"
+                "    ?? s { Has r → { ( eat r ) } Bare → {} }",
+                extra=RES_TYPE + ": | Shape { Has Res Bare }\n@ eat sink Res r → v { }\n"),
+            "enum-payload-out": prog(
+                "    : Shape s @ Shape { Has @ Res { ( vec_new [i] ) } }\n"
+                "    : Res q ?? s { Has r → { r } Bare → { @ Res { ( vec_new [i] ) } } }",
+                extra=RES_TYPE + ": | Shape { Has Res Bare }\n"),
             "param-field-to-sink": prog(
                 "    : Hold h @ Hold { @ Res { ( vec_new [i] ) } 1 }\n"
                 "    ( take h )",
@@ -1655,6 +1663,21 @@ CLASSES = [
                 "    ( vec_push [Res] rs @ Res { ( vec_new [i] ) } )\n"
                 "    ?? ( vec_pop [Res] rs ) { T r → { ( eat r ) } F _ → {} }",
                 extra=RES_TYPE + "@ eat sink Res r → v { }\n"),
+            # An enum's payload read in place or handed to a `sink` as a
+            # copy; temporaries and matched temporaries dropped (h231-h233).
+            "enum-string-payload-to-sink": prog(
+                "    : Msg m @ Msg { Text ( string_from `a string long enough to live on the heap` ) }\n"
+                "    ?? m { Text t → { ( consume t ) } Quiet → {} }\n"
+                "    ?? m { Text t → { ( consume t ) } Quiet → {} }",
+                prelude=PRELUDE_VEC + "$ `stdlib/core/string.nu`\n",
+                extra=": | Msg { Text String Quiet }\n@ consume sink String s → v { }\n"),
+            "uncopyable-temporaries": prog(
+                "    ( mkr )\n"
+                "    : i k . ( mkh ) n\n"
+                "    ?? ( mks ) { Has r → { : i z ( vec_len [i] . r buf ) } Bare → {} }",
+                extra=RES_TYPE + ": Hold { Res r i n }\n: | Shape { Has Res Bare }\n"
+                      "@ mkr → Res { ^ @ Res { ( vec_new [i] ) } }\n@ mkh → Hold { ^ @ Hold { ( mkr ) 7 } }\n"
+                      "@ mks → Shape { ^ @ Shape { Has ( mkr ) } }\n"),
             "fn-lends-param-field-uncopyable": prog(
                 "    : Hold h @ Hold { @ Res { ( vec_new [i] ) } 1 }\n"
                 "    : i n ( vec_len [i] . ( held h ) buf )",

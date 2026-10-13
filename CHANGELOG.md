@@ -87,7 +87,11 @@ borrows is not handed to an owner (h227) (*Fixed*). What a lending call
 hands back is no `sink`'s to release: a String comes over as a copy
 (h228), and a value that cannot be copied — lent, or a field of a struct
 that still drops it — is rejected where it would be stored or released
-(h229, h230) (*Fixed*, *Changed*).
+(h229, h230) (*Fixed*, *Changed*). An enum lends its payload to a
+match's arms — a String goes to a `sink` as a copy, one that cannot be
+copied is rejected (h231) — and a temporary that cannot be copied, or a
+matched enum a call handed over, is dropped where nothing else owns it
+(h232, h233) (*Fixed*).
 
 ### Added
 
@@ -373,6 +377,25 @@ that still drops it — is rejected where it would be stored or released
   the way out (ASan heap-use-after-free on main). Such a field of a local,
   a module global or a closure's capture is rejected; a parameter's field
   stays a lend, and one read through a pointer is raw code's to vouch for.
+
+- **An enum lends its payload to the arms** (h231). `?? m { Text t → {
+  ( consume t ) } … }`, `consume` taking a `sink String`, released the
+  payload the enum still held; a `% Drop` payload was made the arm's own
+  and released twice even when only read (ASan heap-use-after-free on
+  main). The payload of an enum a binding or parameter holds is lent; a
+  lent binding handed to a `sink` goes as a copy, or is rejected when it
+  cannot be copied.
+
+- **A temporary that cannot be copied is dropped** (h232). `( mk )`
+  thrown away, or `. ( mkh ) n` read for one field, never dropped a `%
+  Drop` value or a struct holding one (LSan on main). Such a temporary is
+  dropped where it is discarded, and a call's struct read for a field that
+  owns nothing is dropped there — exactly when the call handed it over.
+
+- **A match on an enum a call handed over drops it** (h233). `?? ( mk ) {
+  … }` left the enum with no owner: its cell and payload leaked (LSan on
+  main). It gets an owner of its own for the rest of the scope, and its
+  payload is lent to the arms.
 
 - **A `sink` is not handed what a call only lends** (h228). `( consume (
   vec_at v 0 ) )` with `consume` taking a `sink String` released the

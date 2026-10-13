@@ -7390,6 +7390,17 @@ unsafe @ extract_fn_ptr_return_type s fn_ptr_type → s {
             ( nurl_print `, ` ) ( nurl_print ( nurl_llty dty ) ) ( nurl_print ` ` ) ( nurl_print val ) ( nurl_print `)` ) ( emit_dbg_eol )
         } {}
     } {}
+    // …and one that cannot be copied (a `% Drop` value, a struct or enum
+    // holding one): dropped exactly when the call handed it over (h231).
+    ? & & & | __dcall __jt != 0 ( nurl_str_len val ) != 0 g_auto_drop_strings & ! ( __is_handle_ty dty ) ( __nc_drop_ty dty ) {
+        : s nro ? __jt __jown ( mem_call_retown syms cg )
+        ? != 0 ( nurl_str_len nro ) {
+            ( __handle_drop_ensure dty )
+            ( __dropifv_request dty )
+            ( nurl_print `  call void @__dropifv_` ) ( nurl_print ( __drop_mangle dty ) ) ( nurl_print `(i1 ` ) ( nurl_print nro )
+            ( nurl_print `, ` ) ( nurl_print ( nurl_llty dty ) ) ( nurl_print ` ` ) ( nurl_print val ) ( nurl_print `)` ) ( emit_dbg_eol )
+        } {}
+    } {}
     // A discarded `?T` / `!T E` a call handed over (`( vec_remove v 0 )`)
     // owns its payload as a binding of it would (__opt_payload): dropped
     // when the tag says it is there.
@@ -14407,6 +14418,14 @@ unsafe @ bck_check_lit_moves i lex i line i col s what s tab i scmask s moved s 
             ? & & & arg_call_lends == bck_arg_tt TT_LPAREN ! ( __clone_supported at syms ) ( __nc_drop_ty at ) {
                 ( __nc_copy_die ( nurl_sym_get syms `__fn_self_name__` ) at )
             } {}
+            // A binding that only borrows (an enum's payload, a field read
+            // into a name): a copy goes over; one that cannot be copied
+            // is rejected (h231).
+            ? & ( is_ident_tok bck_arg_tt ) ( seq arg_lent `1` ) {
+                ? ( __clone_supported at syms ) { = av ( mem_emit_cloneif cg at av arg_lent ) } {
+                    ? ( __nc_drop_ty at ) { ( __nc_copy_die ( nurl_sym_get syms `__fn_self_name__` ) at ) } {}
+                }
+            } {}
             ? & & == bck_arg_tt TT_DOT ( __nc_drop_ty at ) == 0 ( nurl_str_len arg_faddr ) {
                 ( die lex ( nurl_str_cat3 ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
                 ( nurl_str_cat3 `' moves a '` ( llvm_to_nurl at ) `' out of a field, and it cannot be copied — the struct it is a field of still drops it, so it would be released twice. ` )
@@ -17011,6 +17030,25 @@ unsafe @ gen_match i lex i syms i cg → s {
     ? & & == match_first_tt TT_LPAREN ( __arm_call_bit_ok syms )
     == 0 ( nurl_sym_len syms `__last_call_ret_view__` )
     { = scrut_own ( mem_call_retown syms cg ) } {}
+    // An enum a call handed over and nothing binds (`?? ( mk ) { … }`): an
+    // owner of its own for the rest of the scope, which drops it — it
+    // leaked, payload and cell — and lends its payload to the arms (h233).
+    : ~ b m_tmp_enum F
+    ? & & & == match_first_tt TT_LPAREN != 0 g_auto_drop_strings == 0 ( nurl_str_starts match_type `{ i1, ` )
+    | ( __is_autodrop_enum match_type syms ) ( __is_handle_enum match_type ) {
+        : s mte_own ( mem_call_retown syms cg )
+        ? != 0 ( nurl_str_len mte_own ) {
+            : s mte_p ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print mte_p ) ( nurl_print ` = alloca ` ) ( nurl_print ( nurl_llty match_type ) ) ( nurl_print `\n` )
+            ( nurl_print `  store ` ) ( nurl_print ( nurl_llty match_type ) ) ( nurl_print ` ` ) ( nurl_print match_val )
+            ( nurl_print `, ptr ` ) ( nurl_print mte_p ) ( nurl_print `\n` )
+            ( __handle_drop_ensure match_type )
+            = g_udrop_noinit 1
+            ( mem_own_add_user_drop syms cg mte_p match_type )
+            ( mem_udrop_flag_set syms cg mte_p mte_own )
+            = m_tmp_enum T
+        } {}
+    } {}
     // Borrow provenance: snapshot whether the SCRUTINEE was a borrow. A
     // match that yields a value out of a borrowed scrutinee conservatively
     // yields a borrow (the arms commonly return a payload view); restored
@@ -17848,6 +17886,14 @@ unsafe @ gen_match i lex i syms i cg → s {
                         // binding (which drops it, h223) or a parameter: a
                         // cursor over it, as for a String payload below — a
                         // payload moved out takes the option's ownership.
+                        // An enum's payload that cannot be copied, the enum
+                        // held by a binding or a parameter: lent to the arm —
+                        // the enum keeps it in its own cell (h231).
+                        ? & & ! pt0_is_opt_bool ( __nc_drop_ty pt0_eff ) | m_tmp_enum & != 0 ( nurl_str_len match_var_name )
+                        | != 0 ( nurl_str_len ( mem_udrop_ptr_of syms match_var_name ) ) >= ( nurl_sym_word_index syms `__fn_param_names__` match_var_name ) 0 {
+                            ( mem_udrop_flag_set syms cg vp0 `0` )
+                            ( nurl_sym_def syms ( nurl_str_cat vp0 `__sborrow` ) `1` )
+                        } {}
                         ? & & pt0_is_opt_bool == 0 ( nurl_str_len scrut_own ) ( __nc_drop_ty pt0_eff ) {
                             : s __ncmop ( mem_udrop_ptr_of syms match_var_name )
                             ? != 0 ( nurl_str_len __ncmop ) {
@@ -32612,6 +32658,19 @@ unsafe @ __ty_holds_addr s ty i depth → b {
                     ( nurl_print ` = extractvalue ` ) ( nurl_print ( nurl_llty ot ) )
                     ( nurl_print ` ` ) ( nurl_print ov )
                     ( nurl_print `, ` ) ( nurl_print ( nurl_str_int fidx ) ) ( nurl_print `\n` )
+                    // A field that owns nothing read out of a call's result
+                    // (`. ( mk ) n`): the rest of that temporary is dropped
+                    // here, when the call handed it over (h232) — it leaked.
+                    ? & & & & == __mb_tt TT_LPAREN != 0 g_auto_drop_strings ( __type_needs_drop ot syms )
+                    ! ( __type_needs_drop ftype syms ) ! ( __is_closure_ty ftype ) {
+                        : s tro ( mem_call_retown syms cg )
+                        ? != 0 ( nurl_str_len tro ) {
+                            ( __handle_drop_ensure ot )
+                            ( __dropifv_request ot )
+                            ( nurl_print `  call void @__dropifv_` ) ( nurl_print ( __drop_mangle ot ) ) ( nurl_print `(i1 ` ) ( nurl_print tro )
+                            ( nurl_print `, ` ) ( nurl_print ( nurl_llty ot ) ) ( nurl_print ` ` ) ( nurl_print ov ) ( nurl_print `)` ) ( emit_dbg_eol )
+                        } {}
+                    } {}
                     // ftype is the field's raw declared type — an
                     // enclosing widening cast reads zext-vs-sext off it.
                     ( nurl_set_last_type ftype )

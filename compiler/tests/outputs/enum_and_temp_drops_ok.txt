@@ -1,0 +1,15 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+0
+0
+text
+text
+drop
+drop
+7
+0
+text
+drop
+drop

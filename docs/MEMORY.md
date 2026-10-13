@@ -862,6 +862,13 @@ callee's keeping or `sink` parameter, a literal's field — decided on the
 lending call's final summary at module end (h230); nor can such a field
 leave a struct that still drops it (h229).
 
+An enum lends its payload to a match's arms (h231): read in place, handed
+to a `sink` as a copy, never released by the arm. An enum a call handed
+over and nothing binds is given an owner for the rest of the scope
+(h233), and any other temporary — discarded, or read for a field that
+owns nothing — is dropped where it is left, when the call handed it over
+(h232).
+
 The rules that carry it:
 
 - **An owned value moves.** Storing it into an aggregate, an Option or a
