@@ -65,6 +65,7 @@
 #  Environment toggles:
 #     NURL_SAN_JOBS=N     worker count (default nproc)
 #     LSAN_DETECT_LEAKS=0 disable leak detection (default on)
+#     NURL_SAN_SHARD=i/n  run only the i-th of n round-robin shards
 #     TIMEOUT=N           per-test timeout in seconds
 #     NURL_HTTP_TESTS=1 / NURL_NET_TESTS=1   (see test_skips.sh)
 # ============================================================
@@ -323,6 +324,26 @@ if [[ $# -gt 0 ]]; then
     names=("${filtered[@]}")
 fi
 IFS=$'\n' names=($(printf '%s\n' "${names[@]}" | LC_ALL=C sort)); unset IFS
+
+# Optional sharding, so CI can spread the corpus over several runners:
+# NURL_SAN_SHARD=i/n (1 ≤ i ≤ n) keeps every n-th test of the sorted
+# list, starting at the i-th. Round-robin over the sorted names keeps
+# the shards close in size and cost, and the n shards together are
+# exactly the unsharded set — no test can fall between two of them.
+if [[ -n "${NURL_SAN_SHARD:-}" ]]; then
+    if [[ ! "$NURL_SAN_SHARD" =~ ^([0-9]+)/([0-9]+)$ ]] \
+        || (( BASH_REMATCH[2] < 1 || BASH_REMATCH[1] < 1 || BASH_REMATCH[1] > BASH_REMATCH[2] )); then
+        echo "ERROR: NURL_SAN_SHARD must be i/n with 1 <= i <= n (got '$NURL_SAN_SHARD')" >&2; exit 2
+    fi
+    shard_i=${BASH_REMATCH[1]}; shard_n=${BASH_REMATCH[2]}
+    declare -a sharded=()
+    for idx in "${!names[@]}"; do
+        (( idx % shard_n == shard_i - 1 )) && sharded+=("${names[$idx]}")
+    done
+    (( ${#sharded[@]} > 0 )) || { echo "ERROR: shard $NURL_SAN_SHARD selects no tests" >&2; exit 2; }
+    echo "Shard $shard_i/$shard_n: ${#sharded[@]} of ${#names[@]} tests"
+    names=("${sharded[@]}")
+fi
 
 validate_test_selection "${names[@]}" || exit 2
 printf '%s\n' "${names[@]}" > "$WORKDIR/.selected"

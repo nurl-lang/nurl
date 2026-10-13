@@ -596,12 +596,12 @@ jobs:
           retention-days: 7
           if-no-files-found: error
 
-  unikernel:
-    name: unikernel (no libc, and then no operating system)
+  unikernel-nolibc:
+    name: "unikernel: the corpus with no libc"
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
     container:
       image: nurllang/ci:ubuntu24-20260821
       credentials:
@@ -620,6 +620,13 @@ jobs:
     # Neither was watched by CI until now, and both are exactly the
     # shape this repo has been bitten by twice — a gate that exists on
     # a developer's machine is a gate that drifts.
+    #
+    # The unikernel gates are three jobs, not one: they are independent,
+    # and in sequence they were the longest job in this workflow (~24 min,
+    # most of it single-threaded QEMU/TCG on a four-core runner). Each
+    # job builds the compiler itself (~1 min) instead of passing it
+    # along as an artifact — cheaper than an upload/download round trip
+    # and nothing to keep in sync.
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -658,6 +665,24 @@ jobs:
       - name: nolibc + runtime_bare unit gates
         run: ./unikernel/tests/run_unit_tests.sh
 
+  unikernel-qemu:
+    name: "unikernel: the guest under QEMU (x86-64, RISC-V, AArch64)"
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    container:
+      image: nurllang/ci:ubuntu24-20260821
+      credentials:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build the compiler
+        run: ./build.sh --no-tests
+
       - name: The guest, under QEMU
         # TCG, because a runner may or may not have /dev/kvm and the
         # boot path must be covered either way. Slower, identical
@@ -669,10 +694,14 @@ jobs:
         # coordinator compiles a kernel) and wasmc_gate.sh (nurlc.nu
         # becomes nurlc.wasm). Without it both SKIP loudly and the
         # in-process wasm engine goes ungated.
+        #
+        # wasmc_gate.sh and swarm_gate.sh run in unikernel-appliance
+        # instead (NURL_QEMU_SKIP_APPLIANCE); this job keeps the boot
+        # path, the devices and the network demos.
         env:
           NURL_ZIG: /opt/zig/zig
+          NURL_QEMU_SKIP_APPLIANCE: "1"
         run: ./unikernel/run_qemu_tests.sh
-
 
       - name: runtime.c compiles for every playground cross target
         # The playground image warms stdlib/runtime.<target>.o for six
@@ -714,6 +743,41 @@ jobs:
         env:
           NURL_ZIG: /opt/zig/zig
         run: ./unikernel/run_qemu_arm64_tests.sh
+
+  unikernel-appliance:
+    name: "unikernel: nurlc.wasm and the swarm appliance in the guest"
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    container:
+      image: nurllang/ci:ubuntu24-20260821
+      credentials:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build the compiler
+        run: ./build.sh --no-tests
+
+      - name: The compiler itself, as wasm, in the guest
+        # nurlc.wasm compiles corpus programs inside the machine; the IR
+        # must be byte-identical to the native compiler's. Needs zig for
+        # the wasm link (wasmbuilder) and SKIPS loudly without it.
+        env:
+          NURL_ZIG: /opt/zig/zig
+        run: ./unikernel/tests/wasmc_gate.sh
+
+      - name: The swarm-mcp appliance (B10)
+        # The hosted package boots as the guest, joins the census through
+        # the relay leg and answers an expression task and a compiled-wasm
+        # task. swarm_gate.sh builds the guest image and the host node
+        # concurrently.
+        env:
+          NURL_ZIG: /opt/zig/zig
+        run: ./unikernel/tests/swarm_gate.sh
 
   freebsd:
     name: FreeBSD (build + bootstrap fixed point + tests, in a VM)
@@ -766,10 +830,11 @@ jobs:
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
-    # main measured 21-23 minutes against the old 25 (the instrumented
-    # corpus alone 14 of them); a corpus that grows by a dozen tests
-    # crossed it and the job was cancelled mid-run, not failed.
-    timeout-minutes: 35
+    # The whole-corpus run is sanitizers-corpus below, sharded: in one
+    # job with these controls it took ~21 min (the corpus 12-14 of
+    # them) and set the workflow's wall time. This job is the --san
+    # build plus the targeted controls, ~8 min.
+    timeout-minutes: 25
     container:
       image: nurllang/ci:ubuntu24-20260821
       credentials:
@@ -900,6 +965,32 @@ jobs:
         # control passed.
         run: ./tools/metamorph/spellings.py --class panic-reclaim
 
+  sanitizers-corpus:
+    name: ASan + UBSan + LSan corpus (shard ${{ matrix.shard }}/2)
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    # Each shard is the --san build (~3 min) plus half the corpus.
+    timeout-minutes: 25
+    strategy:
+      # One shard's sanitizer report must not cancel the other's: both
+      # halves are worth reading on the same push.
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    container:
+      image: nurllang/ci:ubuntu24-20260821
+      credentials:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: ./build.sh --san (instrumented bootstrap)
+        run: ./build.sh --san --no-tests
+
       - name: ASan + UBSan + LSan corpus
         # The whole corpus, leak check on (run_san_tests.sh's default):
         # a leak fails like a use-after-free does. This replaced a curated
@@ -913,6 +1004,11 @@ jobs:
         # input that compiles a `select`, net_* hold the sans-IO stack to
         # the unikernel's no-process-exit standard, async_* catch a fiber
         # that leaks its stack mapping — they are simply part of the run.
+        #
+        # Sharded round-robin over the sorted test names
+        # (NURL_SAN_SHARD); the shards together are the whole corpus.
+        env:
+          NURL_SAN_SHARD: ${{ matrix.shard }}/2
         run: ./compiler/tests/run_san_tests.sh
 
   webdocs-build:

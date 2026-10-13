@@ -22,6 +22,10 @@
 #                 are real page-table entries, and — async_sleep — the
 #                 TSC, which is the one clock this machine has
 #
+#  NURL_QEMU_SKIP_APPLIANCE=1 leaves out the two slowest gates,
+#  wasmc_gate.sh and swarm_gate.sh, so CI can run them as a job of
+#  their own beside this one (each script runs standalone).
+#
 #  Requires qemu-system-x86_64; skips (exit 0) with a message when it
 #  is absent, because a developer without QEMU should still be able to
 #  run the rest of the gates.
@@ -31,6 +35,7 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TESTS="$ROOT/compiler/tests"
 QEMU="${QEMU:-qemu-system-x86_64}"
+SKIP_APPLIANCE="${NURL_QEMU_SKIP_APPLIANCE:-0}"
 
 command -v "$QEMU" >/dev/null 2>&1 || {
     echo "run_qemu_tests.sh: $QEMU not found — skipping the guest gate"
@@ -436,7 +441,7 @@ fi
 # nurlc.wasm compiles corpus programs INSIDE the machine and its IR is
 # compared byte for byte with the native compiler's. wasmc_gate.sh
 # prints its own detail lines and skips loudly without zig.
-if [ $# -eq 0 ]; then
+if [ $# -eq 0 ] && [ "$SKIP_APPLIANCE" != 1 ]; then
     demos=$((demos + 1))
     if "$ROOT/unikernel/tests/wasmc_gate.sh"; then
         echo "PASS wasmc (nurlc.wasm in the guest, byte-identical to native)"
@@ -451,7 +456,7 @@ fi
 # a compiled-wasm task (run in-process on the pure-NURL nwasm — a
 # guest has no processes). swarm_gate.sh prints its own detail lines,
 # including the measured cold-start-to-first-answer figure.
-if [ $# -eq 0 ] && command -v curl >/dev/null 2>&1; then
+if [ $# -eq 0 ] && [ "$SKIP_APPLIANCE" != 1 ] && command -v curl >/dev/null 2>&1; then
     demos=$((demos + 1))
     if "$ROOT/unikernel/tests/swarm_gate.sh"; then
         echo "PASS swarm appliance (B10: census + expr + wasm in the guest)"
