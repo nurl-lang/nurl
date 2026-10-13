@@ -930,7 +930,14 @@ thread that mutates the contents of an `Arc` it did not create, without
 holding a lock, is rejected: `Arc` makes the reference count atomic, not
 the data. Put the data behind a `Mutex`. Whether the lock is held is
 counted over `mutex_lock` / `mutex_unlock` calls, not proved per path
-(§3).
+(§3). The payload is followed wherever it goes: a binding `arc_get`
+bound, an `arc_get` written in place, a field of either, and an `Arc`
+handed to a helper. A call that hands one to a parameter its callee
+mutates — a container mutator, a `String`'s or a map's, any function
+whose summary says so — makes the closure a mutator of that payload, at
+any depth; summaries that close only after every body is compiled (writes
+through raw pointers) are waited for, and the verdict is reached on the
+final ones (h212).
 
 ### 6.6 How the guarantee is checked
 

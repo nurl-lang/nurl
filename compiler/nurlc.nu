@@ -1211,6 +1211,12 @@ unsafe @ agg_field_count i syms s ot → i {
 // 2000/2996/3166 observed). The thread_spawn call site turns this into
 // a compile error, exactly as it already does for a captured Rc.
 : ~ s g_last_closure_sharedmut ``
+// Arc-payload mutation that only the module's final summaries decide
+// (resolve_arc_mut, h212): the closures whose bodies are being compiled
+// (their ids, innermost last) and the id of the one just built.
+: ~ i g_clo_seq 0
+: ~ s g_clo_stack ``
+: ~ s g_last_closure_id ``
 
 // Function-level witness for the same property. NOT a symbol-table key:
 // the mutation is usually inside a loop or `?` body, and `nurl_sym_def`
@@ -13074,6 +13080,14 @@ unsafe @ bck_check_lit_moves i lex i line i col s what s tab i scmask s moved s 
     // argument was not one) — the returned-handle propagation below
     // maps the callee's ret-alias indices back to caller bindings.
     : ~ s arg_idents ``
+    // The same roster naming, for each argument that is a view of an
+    // Arc's payload, the Arc it views (`-` for any other): a binding that
+    // arc_get bound, a field path rooted at one, or an arc_get call (or a
+    // projection of one) written in place (§6.5).
+    : ~ s arg_arcviews ``
+    // …and, for each argument that is an Arc handle, its binding (`*` for
+    // one written in place), `-` for any other.
+    : ~ s arg_archandles ``
     : ~ s arg_roots ``
     : ~ b arg_has_froot F
     : ~ s __clo_args ``
@@ -13134,6 +13148,9 @@ unsafe @ bck_check_lit_moves i lex i line i col s what s tab i scmask s moved s 
         // the binding the loaded ident names.
         : i bck_arg_tt ( nurl_lex_type lex )
         : s bck_arg_val ( nurl_lex_val lex )
+        // An arc_get written in this argument leaves its Arc here; any
+        // other call it ends in clears it (read after the argument).
+        ( nurl_sym_def syms `__last_call_arc_view__` `` )
         // Where this argument's reads start in the statement's read list:
         // in raw code they say which parameters it reaches (the mutation
         // summaries below).
@@ -13954,6 +13971,13 @@ unsafe @ bck_check_lit_moves i lex i line i col s what s tab i scmask s moved s 
         = arg_idents ? == 0 ( nurl_str_len arg_idents )
         ( nurl_str_cat bck_arg_nm `` )
         ( nurl_str_cat3 arg_idents ` ` bck_arg_nm )
+        : s __av_src0 ( __arg_arc_view syms bck_arg_tt bck_arg_val bck_arg_root )
+        // A payload that synchronises itself (a type asserted `% Sync`: a
+        // Mutex, a Channel) is changed under its own lock — no race.
+        : s __av_src ? & ! ( seq __av_src0 `-` ) ( __thr_marked `Sync##` ( nurl_llty at ) ( __lty_base_name ( nurl_llty at ) ) ) ( nurl_str_cat `-` `` ) ( nurl_str_cat __av_src0 `` )
+        = arg_arcviews ? == 0 arg_idx ( nurl_str_cat __av_src `` ) ( nurl_str_cat3 arg_arcviews ` ` __av_src )
+        : s __ah_nm ? ( __lty_base_is ( nurl_llty at ) `Arc` ) ( nurl_str_cat ? ( is_ident_tok bck_arg_tt ) bck_arg_val `*` `` ) ( nurl_str_cat `-` `` )
+        = arg_archandles ? == 0 arg_idx ( nurl_str_cat __ah_nm `` ) ( nurl_str_cat3 arg_archandles ` ` __ah_nm )
         : s __acs ( __clo_cs_expr syms bck_arg_tt bck_arg_val at )
         // (Built only once an argument carries something: the lists stay
         // empty for the calls — nearly all — that pass nothing of interest;
@@ -13968,6 +13992,18 @@ unsafe @ bck_check_lit_moves i lex i line i col s what s tab i scmask s moved s 
             }
             = cc_arg_cs ( nurl_str_cat cc_arg_cs __acs )
             = cc_arg_tys ( nurl_str_cat cc_arg_tys at )
+        } {}
+        // …and what it does to an Arc's payload, decided there too
+        // (resolve_arc_mut, h212): which closure crosses, and where.
+        ? & ( __thr_is_detach fname ) == arg_idx 0 {
+            : s __sp_cid ? == bck_arg_tt TT_BACKSLASH ( nurl_str_cat g_last_closure_id `` )
+            ? ( is_ident_tok bck_arg_tt ) ( nurl_sym_get2 syms bck_arg_val `__closure_id` ) ( nurl_str_cat `` `` )
+            ? != 0 ( nurl_str_len __sp_cid ) {
+                : i __spn ( nurl_str_to_int ( nurl_sym_get g_pending_impl `arspawn_n` ) )
+                ( nurl_sym_def g_pending_impl `arspawn_n` ( nurl_str_int + __spn 1 ) )
+                ( nurl_sym_def g_pending_impl ( nurl_str_cat `arspawn#` ( nurl_str_int __spn ) )
+                ( nurl_str_cat4 ( nurl_str_cat3 __sp_cid ` ` ( nurl_str_int bck_arg_line ) ) ` ` ( nurl_lex_filename lex ) ( nurl_str_cat ` ` fname ) ) )
+            } {}
         } {}
         // The closure a detach runs on another thread or fiber: what it can
         // capture is decided at module end (resolve_send_checks) — a
@@ -15032,6 +15068,25 @@ unsafe @ bck_check_lit_moves i lex i line i col s what s tab i scmask s moved s 
             // check.
             = g_fn_arc_mut_witness `1` }
         {} }
+    {}
+    // (b') The same question asked of every argument, however it was
+    //     written: a view of an Arc's payload — a binding arc_get bound, a
+    //     field path rooted at one, an arc_get call in place — handed to
+    //     the receiver of a container mutator, or to a parameter the
+    //     callee's summary says it mutates (a String's or a map's
+    //     mutators included, and any helper). Named views only, at the
+    //     receiver only, let `( vec_push ( arc_get a ) x )`, `. view field`
+    //     and `( grow view )` through (h212).
+    ? == g_lock_depth 0 {
+        ( __arc_park_call syms call_name fname arg_arcviews arg_archandles __call_line ( nurl_lex_filename lex ) )
+    } {}
+    : s __am_what ( __arc_mut_args fname call_name arg_arcviews )
+    ? & == g_lock_depth 0 != 0 ( nurl_str_len __am_what )
+    {  // (the named-view message above, when it fired, says it better)
+        ? & != g_bck_closure_depth 0 == 0 ( nurl_str_len g_last_closure_sharedmut )
+        { = g_last_closure_sharedmut ( nurl_str_cat __am_what `` ) }
+        {}
+        = g_fn_arc_mut_witness `1` }
     {}
     // (c) Calling a function whose summary says it mutates Arc contents,
     //     from inside a closure, is the same race one frame down.
@@ -23107,6 +23162,166 @@ unsafe @ __rpg_rget i r i k → i { ^ ( nurl_peek # s g_rpg_rec + * r 6 k ) }
 // True when `fname` is a stdlib container operation that mutates its
 // receiver's backing buffer (reallocates, frees, or rewrites
 // elements) — the receiver is always the first value argument.
+// The Arc whose payload an argument views (§6.5), or `-`: a binding
+// arc_get bound, a field path rooted at one, or an arc_get call (or a
+// projection of one) written in place — read from the marker the
+// argument's last call left (gen_call clears it before each argument).
+unsafe @ __arg_arc_view i syms i tt s val s root → s {
+    ? ( is_ident_tok tt ) {
+        : s v ( nurl_sym_get2 syms val `__arc_view` )
+        ? != 0 ( nurl_str_len v ) { ^ v } {}
+        ^ ( nurl_str_cat `-` `` )
+    } {}
+    ? & == tt TT_DOT != 0 ( nurl_str_len root ) {
+        : s v ( nurl_sym_get2 syms root `__arc_view` )
+        ? != 0 ( nurl_str_len v ) { ^ v } {}
+    } {}
+    : s m ( nurl_sym_get syms `__last_call_arc_view__` )
+    ? != 0 ( nurl_str_len m ) { ^ m } {}
+    ^ ( nurl_str_cat `-` `` )
+}
+
+// What a call does to an Arc's payload through its arguments (h212): ``
+// when nothing, else the reason — an Arc view handed to the receiver of a
+// container mutator, or to a parameter the callee's summary mutates.
+unsafe @ __arc_mut_args s fname s call_name s views → s {
+    : s muts ( nurl_sym_get g_fn_mutates call_name )
+    : ~ s rest ( nurl_str_cat views `` )
+    : ~ i k 0
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        ? ! ( seq w `-` ) {
+            ? | & == k 0 ( bck_is_container_mutator fname ) ( str_contains_word muts ( nurl_str_int k ) ) {
+                ^ ( nurl_str_cat4 `hands '` fname `' the contents of Arc '` ( nurl_str_cat w `'` ) )
+            } {}
+        } {}
+        = k + k 1
+    }
+    ^ ``
+}
+
+// Park what a call hands an Arc's payload (h212), for resolve_arc_mut:
+//   kind callee fname index arc src owner closures line file
+// `v` an argument viewing an Arc's payload, `h` an Arc handle. `src` is the
+// owner's parameter the Arc is (outside a closure body), `-` otherwise;
+// `closures` the closures whose bodies this call is in.
+unsafe @ __arc_park_call i syms s call_name s fname s views s handles i line s file → v {
+    : s owner ( nurl_sym_get syms `__fn_self_name__` )
+    : s clos ? == 0 ( nurl_str_len g_clo_stack ) ( nurl_str_cat `-` `` ) ( nurl_str_cat g_clo_stack `` )
+    : ~ s rv ( nurl_str_cat views `` )
+    : ~ s rh ( nurl_str_cat handles `` )
+    : ~ i k 0
+    ~ != 0 ( nurl_str_len rv ) {
+        : s wv ( str_first_word rv ) = rv ( str_skip_word rv )
+        : s wh ( str_first_word rh ) = rh ( str_skip_word rh )
+        : s kind ? ! ( seq wv `-` ) ( nurl_str_cat `v` `` ) ? & ! ( seq wh `-` ) == 0 ( nurl_str_starts fname `arc_` ) ( nurl_str_cat `h` `` ) ( nurl_str_cat `` `` )
+        ? != 0 ( nurl_str_len kind ) {
+            : s arc ? ( seq kind `v` ) ( nurl_str_cat wv `` ) ( nurl_str_cat wh `` )
+            : i pi ? == g_bck_closure_depth 0 ( nurl_sym_word_index syms `__fn_param_names__` arc ) -1
+            : s src ? >= pi 0 ( nurl_str_int pi ) ( nurl_str_cat `-` `` )
+            : i n ( nurl_str_to_int ( nurl_sym_get g_pending_impl `armut_n` ) )
+            ( nurl_sym_def g_pending_impl `armut_n` ( nurl_str_int + n 1 ) )
+            ( nurl_sym_def g_pending_impl ( nurl_str_cat `armut#` ( nurl_str_int n ) )
+            ( nurl_str_cat4 ( nurl_str_cat4 kind ` ` call_name ` ` )
+            ( nurl_str_cat4 fname ` ` ( nurl_str_int k ) ` ` )
+            ( nurl_str_cat4 arc ` ` src ` ` )
+            ( nurl_str_cat4 owner ` ` clos ( nurl_str_cat4 ` ` ( nurl_str_int line ) ` ` file ) ) ) )
+        } {}
+        = k + k 1
+    }
+}
+
+// Whether a parked call record (above) mutates an Arc's payload, by the
+// final summaries: a view handed to a mutated parameter (or the receiver
+// of a container mutator), or an Arc handed to a parameter whose payload
+// the callee mutates (`amt`, the fixed point below).
+unsafe @ __arc_rec_true s rec i amt → b {
+    : ~ s r ( nurl_str_cat rec `` )
+    : s kind ( str_first_word r ) = r ( str_skip_word r )
+    : s cn ( str_first_word r ) = r ( str_skip_word r )
+    : s fn ( str_first_word r ) = r ( str_skip_word r )
+    : s k ( str_first_word r )
+    ? ( seq kind `v` ) {
+        ? & ( seq k `0` ) ( bck_is_container_mutator fn ) { ^ T } {}
+        ? ( str_contains_word ( nurl_sym_get g_fn_mutates cn ) k ) { ^ T } {}
+        ^ ( str_contains_word ( nurl_sym_get g_fn_mutates fn ) k )
+    } {}
+    ? ( str_contains_word ( nurl_sym_get amt cn ) k ) { ^ T } {}
+    ^ ( str_contains_word ( nurl_sym_get amt fn ) k )
+}
+
+// Shared mutation across a thread, decided on the module's final
+// summaries (docs/MEMORY.md §6.5, h212). gen_call rejects the shapes it
+// can see — an Arc view handed to a container mutator or a helper whose
+// summary is already known — but a String's or a map's mutators write
+// through raw pointers, and those summaries close only after every body
+// (resolve_mutation_summaries). A call handing an Arc's payload to one of
+// them, in a closure that is then detached, raced unseen. Here: which
+// functions mutate the payload of which Arc parameter (a fixed point over
+// the parked calls), then every detached closure that, at any depth, hands
+// a payload to a mutating parameter outside a lock.
+unsafe @ resolve_arc_mut → v {
+    : i n ( nurl_str_to_int ( nurl_sym_get g_pending_impl `armut_n` ) )
+    : i ns ( nurl_str_to_int ( nurl_sym_get g_pending_impl `arspawn_n` ) )
+    ? | == n 0 == ns 0 { ^ v } {}
+    : Tab amt @ Tab { ( nurl_sym_new ) }
+    : ~ b changed T
+    ~ changed {
+        = changed F
+        : ~ i j 0
+        ~ < j n {
+            : s rec ( nurl_sym_get g_pending_impl ( nurl_str_cat `armut#` ( nurl_str_int j ) ) )
+            : ~ s r ( str_skip_word ( str_skip_word ( str_skip_word ( str_skip_word ( str_skip_word rec ) ) ) ) )
+            : s src ( str_first_word r ) = r ( str_skip_word r )
+            : s owner ( str_first_word r )
+            ? & ! ( seq src `-` ) ! ( str_contains_word ( nurl_sym_get . amt h owner ) src ) {
+                ? ( __arc_rec_true rec . amt h ) {
+                    : s cur ( nurl_sym_get . amt h owner )
+                    ( nurl_sym_set_deep . amt h owner ? == 0 ( nurl_str_len cur ) ( nurl_str_cat src `` ) ( nurl_str_cat3 cur ` ` src ) )
+                    = changed T
+                } {}
+            } {}
+            = j + j 1
+        }
+    }
+    // The closures that mutate a payload, each with its first witness.
+    : Tab vio @ Tab { ( nurl_sym_new ) }
+    : ~ i j 0
+    ~ < j n {
+        : s rec ( nurl_sym_get g_pending_impl ( nurl_str_cat `armut#` ( nurl_str_int j ) ) )
+        : ~ s r ( str_skip_word ( str_skip_word rec ) )
+        : s fn ( str_first_word r ) = r ( str_skip_word r ) = r ( str_skip_word r )
+        : s arc ( str_first_word r ) = r ( str_skip_word r ) = r ( str_skip_word r ) = r ( str_skip_word r )
+        : s clos ( str_first_word r ) = r ( str_skip_word r )
+        : s ln ( str_first_word r )
+        ? & ! ( seq clos `-` ) ( __arc_rec_true rec . amt h ) {
+            : ~ s ids ( bck_swap_char clos 44 32 )
+            ~ != 0 ( nurl_str_len ids ) {
+                : s id ( str_first_word ids ) = ids ( str_skip_word ids )
+                ? == 0 ( nurl_sym_len . vio h id ) {
+                    ( nurl_sym_set_deep . vio h id ( nurl_str_cat4 `hands '` fn `' the contents of Arc '` ( nurl_str_cat4 arc `' (line ` ln `)` ) ) )
+                } {}
+            }
+        } {}
+        = j + j 1
+    }
+    = j 0
+    ~ < j ns {
+        : ~ s r ( nurl_sym_get g_pending_impl ( nurl_str_cat `arspawn#` ( nurl_str_int j ) ) )
+        : s cid ( str_first_word r ) = r ( str_skip_word r )
+        : s ln ( str_first_word r ) = r ( str_skip_word r )
+        : s file ( str_first_word r ) = r ( str_skip_word r )
+        : s dn ( str_first_word r )
+        : s why ( nurl_sym_get . vio h cid )
+        ? != 0 ( nurl_str_len why ) {
+            ( bck_emit_error file ( nurl_str_to_int ln ) ( nurl_str_cat4 dn ` closure ` why
+            ` — 'Arc' makes the REFCOUNT atomic, not the payload. Two threads mutating one Arc's contents race on its length and buffer: lost updates, or a use-after-free of a buffer the other thread reallocated. Put the shared value behind a 'Mutex' and mutate it only while holding the lock, or give each thread its own copy and merge the results after 'thread_join'.` ) )
+        } {}
+        = j + j 1
+    }
+}
+
 @ bck_is_container_mutator s fname → b {
     ( str_contains_word
     `vec_push vec_insert vec_remove vec_pop vec_clear vec_set vec_set_len vec_reserve vec_shrink_to_fit vec_extend vec_free vec_free_with vec_swap vec_reverse`
@@ -28492,6 +28707,9 @@ unsafe @ bck_loop_mask s pre s post → s {
             // detached onto a thread, and that is known at thread_spawn.
             ? & != 0 ( nurl_str_len rhs_closure_env ) != 0 ( nurl_str_len g_last_closure_sharedmut )
             { ( nurl_sym_def syms ( nurl_str_cat name `__closure_sharedmut` ) g_last_closure_sharedmut ) }
+            {}
+            ? & != 0 ( nurl_str_len rhs_closure_env ) != 0 ( nurl_str_len g_last_closure_id )
+            { ( nurl_sym_def syms ( nurl_str_cat name `__closure_id` ) g_last_closure_id ) }
             {}
             // A `String` binding cannot be initialised from a raw
             // string literal / i8* — a String OWNS a heap control
@@ -35853,7 +36071,13 @@ unsafe @ __thr_peel s lty → s {
     ? != g_borrowck 0 { ( nurl_sym_set g_bck `deferred` `` ) } {}
     // The closure body is not an arm, whatever it sits inside.
     ( nurl_sym_set g_fn_escapes `__arm_body__` `` )
+    = g_clo_seq + g_clo_seq 1
+    : s __cl_id ( nurl_str_int g_clo_seq )
+    : s __cl_stack_saved ( nurl_str_cat g_clo_stack `` )
+    = g_clo_stack ? == 0 ( nurl_str_len g_clo_stack ) ( nurl_str_cat __cl_id `` ) ( nurl_str_cat3 g_clo_stack `,` __cl_id )
     : ~ s body_val ( gen_stmt lex body_syms cg )
+    = g_clo_stack ( nurl_str_cat __cl_stack_saved `` )
+    = g_last_closure_id ( nurl_str_cat __cl_id `` )
     : s __cl_tail_lt ( nurl_get_last_type )
     // Exits the body's tail `?`/`??` handed up: its value is the
     // closure's result, used iff the closure returns one. Emitted into
@@ -54552,6 +54776,7 @@ unsafe @ split_emit_module i n i mlen → v {
         ( __dyn_virtual_check )
         ( resolve_cc_checks syms )
         ( resolve_send_checks syms )
+        ( resolve_arc_mut )
         ( emit_sink_flags )
         ( mem_emit_arg_flags syms )
         ( resolve_nocopy_lends syms )

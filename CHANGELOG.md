@@ -262,6 +262,23 @@ fewer instructions and 9–10 % less time than before this work
 
 ### Fixed
 
+- **A thread that mutates an `Arc`'s payload is rejected however the
+  payload reaches the mutation** (h212). The check knew one shape: a
+  binding `arc_get` bound, then a container mutator on it. Two threads
+  mutated one payload unlocked — lost updates, `realloc(): invalid old
+  size`, ASan's double free — when the view was written in place
+  (`( vec_push ( arc_get a ) x )`), was a field of a view, was handed to a
+  helper that mutates its parameter, or was a `String` or a map handed to
+  its own mutators, whose summaries (writes through raw pointers) close
+  only after every body is compiled. Each argument's provenance is now
+  followed — a view bound or written in place, a field path rooted at one,
+  an `Arc` handle — and a call handing one to a mutated parameter is
+  parked; after the module a fixed point over the final summaries decides
+  which functions mutate the payload of which `Arc` parameter, and a
+  detached closure that does, at any depth and outside a lock, is
+  rejected at the detach. Reading a payload from many threads, mutating
+  it under `mutex_lock`, and mutating it from one thread stay accepted.
+
 - **Cloning one handle from several threads at once keeps the count**
   (h211). A share that read an owner count of 1 skipped the locked add
   and stored 2, on the premise that only the one owner could be sharing.
