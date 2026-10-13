@@ -13449,6 +13449,7 @@ unsafe @ bck_check_lit_moves i lex i line i col s what s tab i scmask s moved s 
         : ~ s av ( nurl_str_cat `` `` )
         : ~ s at ( nurl_str_cat `` `` )
         : ~ s arg_lent ``
+        : ~ b arg_call_lends F
         : ~ s arg_lit_own ``
         : ~ s arg_fread ``
         : ~ b arg_had_fread F
@@ -13531,6 +13532,12 @@ unsafe @ bck_check_lit_moves i lex i line i col s what s tab i scmask s moved s 
             { ( nurl_sym_def g_pending_impl ( nurl_str_cat4 `stfree##` ( nurl_sym_get syms `__fn_self_name__` ) `##`
                 ( nurl_sym_get syms `__last_ident_name__` ) ) `1` ) } {}
             = arg_lent ( mem_lent_cond syms cg at bck_arg_tt bck_arg_val )
+            // (A call that may lend its result — by name, as a view, or on
+            // some paths — for a value no copy can stand in for, h228.)
+            = arg_call_lends & == bck_arg_tt TT_LPAREN
+            | | != 0 ( nurl_sym_len syms `__last_value_borrow__` ) != 0 ( nurl_sym_len syms `__last_call_ret_view__` )
+            | ( mem_fn_lends syms ( nurl_sym_get syms `__last_call_name__` ) 0 )
+            != 0 ( nurl_sym_len2 syms ( nurl_sym_get syms `__last_call_name__` ) `__ret_borrow_x` )
             ? == bck_arg_tt TT_DOT { = arg_fread ( nurl_sym_get syms `__last_field_read__` ) } {}
             // A field read through a pointer (`. . data k name`): where it lives.
             = arg_faddr ? == bck_arg_tt TT_DOT ( nurl_sym_get syms `__last_field_addr__` ) ``
@@ -14387,6 +14394,30 @@ unsafe @ bck_check_lit_moves i lex i line i col s what s tab i scmask s moved s 
         ( str_contains_word callee_sink ( nurl_str_int arg_idx ) ) ( __clone_supported at syms )
         ( __lent_by_call syms bck_arg_tt bck_arg_val ) {
             = av ( mem_emit_cloneif cg at av arg_lent )
+        } {}
+        // A call's result it only lends (`( vec_at v 0 )`) handed to a
+        // `sink`: the callee would release what the lender still holds
+        // (h228). One that can be copied is handed a copy; one that cannot
+        // is rejected — and so is a field that cannot be copied of a struct
+        // that still drops it (`( eat . h r )`, `h` a local).
+        ? & summary_callee ( str_contains_word callee_sink ( nurl_str_int arg_idx ) ) {
+            ? & == bck_arg_tt TT_LPAREN != 0 ( nurl_str_len arg_lent ) {
+                ? ( __clone_supported at syms ) { = av ( mem_emit_cloneif cg at av arg_lent ) } {}
+            } {}
+            ? & & & arg_call_lends == bck_arg_tt TT_LPAREN ! ( __clone_supported at syms ) ( __nc_drop_ty at ) {
+                ( __nc_copy_die ( nurl_sym_get syms `__fn_self_name__` ) at )
+            } {}
+            ? & & == bck_arg_tt TT_DOT ( __nc_drop_ty at ) == 0 ( nurl_str_len arg_faddr ) {
+                ( die lex ( nurl_str_cat3 ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
+                ( nurl_str_cat3 `' moves a '` ( llvm_to_nurl at ) `' out of a field, and it cannot be copied — the struct it is a field of still drops it, so it would be released twice. ` )
+                `Move the whole struct, take the value out by replacing the field (keep it in a binding of its own), or lend it (drop 'sink').` ) )
+            } {}
+        } {}
+        // A call's result that cannot be copied handed to a parameter: if
+        // that call lends it and the callee keeps or releases the
+        // parameter, rejected at module end (resolve_nc_lent_stores).
+        ? & & summary_callee == bck_arg_tt TT_LPAREN & ! ( __clone_supported at syms ) ( __nc_drop_ty at ) {
+            ( __park_nc_lent_store syms lex at call_name arg_idx fname )
         } {}
         // A borrowed String / Vec handed to a parameter its callee keeps
         // (vec_push's element): the callee gets a copy (docs/MEMORY.md
@@ -33024,6 +33055,11 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
         ? & fld_is_clo ! agg_moves_fields { ( bck_note_clo_caps_stored syms fld_first_tt fld_first_val ( nurl_lex_line lex ) ) } {}
         // A borrowed String / Vec stored into the aggregate: its copy.
         ? ! ( is_ident_tok fld_first_tt ) { = fld_lent ( mem_lent_cond syms cg fty fld_first_tt fld_first_val ) } {}
+        // A call's result that cannot be copied, stored into the literal: a
+        // lend of it is rejected at module end (h228).
+        ? & == fld_first_tt TT_LPAREN ( __nc_drop_ty fty ) {
+            ( __park_nc_lent_store syms lex fty `@` 0 `` )
+        } {}
         // A closure storing its capture into a literal moves it out of its
         // env when it cannot be copied: the closure runs at most once (the
         // consumed-capture rule, gen_closure_expr).
@@ -46351,6 +46387,50 @@ unsafe @ __sx_names_capture i syms s sx → b {
 
 // The calls closures hand back whose result cannot be copied (__nc_ret_check):
 // one whose callee may lend it hands its caller a value someone else owns.
+// The value just generated, a call's result that cannot be copied, is
+// stored by `target` (a callee's parameter `idx`, or `@`: a literal's
+// field). Whether that call lent it is decided at module end, on its final
+// summary (resolve_nc_lent_stores, h228).
+@ __park_nc_lent_store i syms i lex s ty s target i idx s show → v {
+    : ~ s cn ( nurl_sym_get syms `__last_call_name__` )
+    : ~ s gn ( nurl_str_cat cn `` )
+    ? != 0 ( nurl_sym_len syms `__last_call_forward__` ) {
+        : s fw ( nurl_sym_get syms `__last_call_forward__` )
+        = cn ( str_first_word fw ) = gn ( str_first_word ( str_skip_word fw ) )
+    } {}
+    ? | == 0 ( nurl_str_len cn ) != 0 ( nurl_sym_len2 syms cn `__ptr` ) { ^ v } {}
+    : i n ( nurl_str_to_int ( nurl_sym_get g_pending_impl `sinknc_n` ) )
+    ( nurl_sym_def g_pending_impl `sinknc_n` ( nurl_str_int + n 1 ) )
+    ( nurl_sym_def g_pending_impl ( nurl_str_cat `sinknc#` ( nurl_str_int n ) )
+    ( nurl_str_cat4 ( nurl_str_cat3 cn ` ` gn ) ` ` ( nurl_str_cat3 ( nurl_str_int ( nurl_lex_line lex ) ) ` ` ( llvm_to_nurl ty ) )
+    ( nurl_str_cat4 ( nurl_str_cat3 ` ` target ` ` ) ( nurl_str_int idx ) ( nurl_str_cat3 ` ` show ` ` ) ( nurl_lex_filename lex ) ) ) )
+}
+
+@ resolve_nc_lent_stores i syms → v {
+    : i n ( nurl_str_to_int ( nurl_sym_get g_pending_impl `sinknc_n` ) )
+    : ~ i j 0
+    ~ < j n {
+        : ~ s r ( nurl_str_cat ( nurl_sym_get g_pending_impl ( nurl_str_cat `sinknc#` ( nurl_str_int j ) ) ) `` )
+        : s cn ( str_first_word r ) = r ( str_skip_word r )
+        : s gn ( str_first_word r ) = r ( str_skip_word r )
+        : s line ( str_first_word r ) = r ( str_skip_word r )
+        : s tshow ( str_first_word r ) = r ( str_skip_word r )
+        : s tg ( str_first_word r ) = r ( str_skip_word r )
+        : s ix ( str_first_word r ) = r ( str_skip_word r )
+        : s show ( str_first_word r ) = r ( str_skip_word r )
+        : b lit ( seq tg `@` )
+        : b stores | | | lit ( nurl_sym_has_word g_fn_sink tg ix ) ( nurl_sym_has_word g_fn_keeps tg ix ) ( nurl_sym_has_word g_fn_escapes tg ix )
+        ? & stores | ( __callee_lent syms cn gn ) != 0 ( nurl_sym_len2 syms cn `__ret_borrow_x` ) {
+            : s where ? lit `a literal, which owns its fields` ( nurl_str_cat3 `'` show `', which keeps or releases it` )
+            ( bck_emit_error r ( nurl_str_to_int line ) ( nurl_str_cat4
+            ( nurl_str_cat3 `'` ( bck_fn_show cn ) `' lends what it hands back, and this hands it to ` ) where
+            ( nurl_str_cat3 ` while its owner still holds it; a '` tshow `' cannot be copied, so no copy can stand in. ` )
+            `Pass a value the caller owns — one a call hands over, or the owner itself (take it out of the container: vec_remove, vec_pop).` ) )
+        } {}
+        = j + j 1
+    }
+}
+
 @ resolve_clo_nc_rets i syms → v {
     : i n ( nurl_str_to_int ( nurl_sym_get g_pending_impl `clonc_n` ) )
     : ~ i j 0
@@ -55505,6 +55585,7 @@ unsafe @ split_emit_module i n i mlen → v {
         ( mem_emit_arg_flags syms )
         ( resolve_nocopy_lends syms )
         ( resolve_clo_nc_rets syms )
+        ( resolve_nc_lent_stores syms )
         ( resolve_owned_strings_kept syms )
         ( lint_free_resolve )
         ( mem_emit_env_flags )

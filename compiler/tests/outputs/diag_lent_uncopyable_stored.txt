@@ -1,0 +1,5 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_lent_uncopyable_stored.nu:16: error: 'vec_at' lends what it hands back, and this hands it to a literal, which owns its fields while its owner still holds it; a 'Res' cannot be copied, so no copy can stand in. Pass a value the caller owns — one a call hands over, or the owner itself (take it out of the container: vec_remove, vec_pop).
+    : Hold h @ Hold { ( vec_at [Res] v 0 ) 1 }
+error: compilation aborted — 1 borrow-checker violation (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

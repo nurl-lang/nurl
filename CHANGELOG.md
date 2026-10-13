@@ -83,7 +83,11 @@ and a `sink` parameter is the function's own to the view walk (h225)
 (*Fixed*, *Changed*). An option or result of a value that cannot be
 copied is now dropped when bound (h223), a match on a borrowed one no
 longer releases its owner's payload (h226), and a payload the arm only
-borrows is not handed to an owner (h227) (*Fixed*).
+borrows is not handed to an owner (h227) (*Fixed*). What a lending call
+hands back is no `sink`'s to release: a String comes over as a copy
+(h228), and a value that cannot be copied — lent, or a field of a struct
+that still drops it — is rejected where it would be stored or released
+(h229, h230) (*Fixed*, *Changed*).
 
 ### Added
 
@@ -369,6 +373,24 @@ borrows is not handed to an owner (h227) (*Fixed*).
   the way out (ASan heap-use-after-free on main). Such a field of a local,
   a module global or a closure's capture is rejected; a parameter's field
   stays a lend, and one read through a pointer is raw code's to vouch for.
+
+- **A `sink` is not handed what a call only lends** (h228). `( consume (
+  vec_at v 0 ) )` with `consume` taking a `sink String` released the
+  element the Vec still held (ASan heap-use-after-free on main): a
+  declared `sink` counted as an explicit release. A lent call result that
+  can be copied now goes to a `sink` as a copy.
+
+- **A field that cannot be copied does not leave a struct that drops it**
+  (h229). `( eat . h r )`, `r` a `% Drop` value with no clone, handed the
+  field to a `sink` while `h` kept it (ASan heap-use-after-free on main);
+  a String field is emptied where it lives, this one cannot be. Rejected.
+
+- **A lent value that cannot be copied is not stored** (h230). `(
+  vec_at v 0 )` of a `( Vec Res )` pushed into another Vec, put in a
+  struct literal or handed to a `sink` had two owners (ASan
+  heap-use-after-free on main). Whether the call lends is decided at
+  module end on its final summary — a generic instance is compiled late —
+  and such a store is rejected (`resolve_nc_lent_stores`).
 
 - **An option of a value that cannot be copied is dropped** (h223). A
   `?Res` or `! Res E` (`Res` a `% Drop` value with no clone) bound to a

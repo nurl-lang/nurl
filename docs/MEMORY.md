@@ -855,6 +855,13 @@ the parameter, whose caller keeps it (h226). A field scrutinee lends its
 payload to the arm, and a lent payload that cannot be copied cannot be
 handed to an owner (h227).
 
+What a call only lends (`vec_at`, an accessor) is not a `sink`'s to
+release: one that can be copied is handed over as a copy (h228). One that
+cannot be copied cannot be stored where it is kept or released — a
+callee's keeping or `sink` parameter, a literal's field — decided on the
+lending call's final summary at module end (h230); nor can such a field
+leave a struct that still drops it (h229).
+
 The rules that carry it:
 
 - **An owned value moves.** Storing it into an aggregate, an Option or a

@@ -1537,6 +1537,48 @@ CLASSES = [
         },
     },
     {
+        "name": "lent-value-stored",
+        "severity": "memory-unsafety",
+        "doc": "What a call only lends is not stored or released by "
+               "another owner: a value that cannot be copied lent by a "
+               "call and handed to a keeping or `sink` parameter or a "
+               "literal (h230), or such a field moved out of a struct that "
+               "still drops it (h229). (A String lent to a `sink` is "
+               "handed a copy, h228: see the controls.)",
+        "expect": REJECT_DEFAULT,
+        "expect_msg": ["lends what it hands back", "out of a field"],
+        "spellings": {
+            "lent-into-literal": prog(
+                "    : ( Vec Res ) v ( vec_new [Res] )\n"
+                "    ( vec_push [Res] v @ Res { ( vec_new [i] ) } )\n"
+                "    : Hold h @ Hold { ( vec_at [Res] v 0 ) 1 }",
+                extra=RES_TYPE + ": Hold { Res r i n }\n"),
+            "lent-pushed": prog(
+                "    : ( Vec Res ) v ( vec_new [Res] )\n"
+                "    ( vec_push [Res] v @ Res { ( vec_new [i] ) } )\n"
+                "    : ( Vec Res ) w ( vec_new [Res] )\n"
+                "    ( vec_push [Res] w ( vec_at [Res] v 0 ) )", extra=RES_TYPE),
+            "lent-to-sink": prog(
+                "    : ( Vec Res ) v ( vec_new [Res] )\n"
+                "    ( vec_push [Res] v @ Res { ( vec_new [i] ) } )\n"
+                "    ( eat ( vec_at [Res] v 0 ) )",
+                extra=RES_TYPE + "@ eat sink Res r → v { }\n"),
+            "lent-via-fn-to-sink": prog(
+                "    : ( Vec Res ) v ( vec_new [Res] )\n"
+                "    ( vec_push [Res] v @ Res { ( vec_new [i] ) } )\n"
+                "    ( eat ( first v ) )",
+                extra=RES_TYPE + "@ eat sink Res r → v { }\n@ first ( Vec Res ) v → Res { ^ ( vec_at [Res] v 0 ) }\n"),
+            "field-to-sink": prog(
+                "    : Hold h @ Hold { @ Res { ( vec_new [i] ) } 1 }\n"
+                "    ( eat . h r )",
+                extra=RES_TYPE + ": Hold { Res r i n }\n@ eat sink Res r → v { }\n"),
+            "param-field-to-sink": prog(
+                "    : Hold h @ Hold { @ Res { ( vec_new [i] ) } 1 }\n"
+                "    ( take h )",
+                extra=RES_TYPE + ": Hold { Res r i n }\n@ eat sink Res r → v { }\n@ take Hold h → v { ( eat . h r ) }\n"),
+        },
+    },
+    {
         "name": "controls",
         "doc": "Correct programs. A class of its own because a checker "
                "that rejects these is worse than one that misses a bug — "
@@ -1599,6 +1641,20 @@ CLASSES = [
                 extra=RES_TYPE + "@ peek ?Res o → i { ?? o { T r → { ^ ( vec_len [i] . r buf ) } F _ → { ^ 0 } } }\n"),
             "uncopyable-result-bound": prog(
                 "    : !Res i p @ !Res i { T @ Res { ( vec_new [i] ) } }", extra=RES_TYPE),
+            # A String a call lends, handed to a `sink`: a copy goes over
+            # (h228); a `% Drop` element popped first, then handed on.
+            "lent-string-to-sink": prog(
+                "    : ( Vec String ) v ( vec_new [String] )\n"
+                "    ( vec_push [String] v ( string_from `abc` ) )\n"
+                "    ( consume ( vec_at [String] v 0 ) )\n"
+                "    : i n ( string_len ( vec_at [String] v 0 ) )",
+                prelude=PRELUDE_VEC + "$ `stdlib/core/string.nu`\n",
+                extra="@ consume sink String s → v { }\n"),
+            "popped-element-to-sink": prog(
+                "    : ( Vec Res ) rs ( vec_new [Res] )\n"
+                "    ( vec_push [Res] rs @ Res { ( vec_new [i] ) } )\n"
+                "    ?? ( vec_pop [Res] rs ) { T r → { ( eat r ) } F _ → {} }",
+                extra=RES_TYPE + "@ eat sink Res r → v { }\n"),
             "fn-lends-param-field-uncopyable": prog(
                 "    : Hold h @ Hold { @ Res { ( vec_new [i] ) } 1 }\n"
                 "    : i n ( vec_len [i] . ( held h ) buf )",
