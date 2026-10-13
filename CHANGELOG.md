@@ -801,13 +801,13 @@ generic that copies its `T` cannot be instantiated with one (h235)
   across every module it emitted, megabytes at a time. It now finds each
   line ending at `memchr` speed and checks the byte after it. Together
   with removing the per-argument string work of the old Arc check, the
-  self-compile retires 1.9 % fewer instructions than main on the same
-  input (11.455e9 vs 11.677e9). The new checks — the borrow walk's
+  self-compile retires 1.5 % fewer instructions than main on the same
+  input (11.508e9 vs 11.684e9). The new checks — the borrow walk's
   frozen-payload rows, block and `??` source expressions, the forward
   lend fixed point (h212–h216), the final value read as a `^` (h217,
   h218), what a closure may hand back (h219–h221) and what captures,
-  options, enums, sinks and temporaries own (h222–h233, about 1 % of the
-  self-compile on their own) — are included in that figure. The bench kernels compile
+  options, enums, sinks, temporaries and generics own (h222–h235, about
+  1.5 % of the self-compile on their own) — are included in that figure. The bench kernels compile
   to the same code as on main.
 
 - **Keccak's round constants are built once.** Every SHA-3 / SHAKE
