@@ -54812,68 +54812,15 @@ unsafe @ main → i {
             ( dbg_fix_module_locations __out )
         } {}
     }
-    // Exit-time release of the global symbol tables. Their handles
-    // live in `: ~ i` globals as integer casts, which a leak scanner's
-    // reachability pass cannot see through — without these frees every
-    // table reports as leaked, hiding real leaks in the noise. Order is
-    // unconstrained: tables never point into one another (their strings
-    // are interned, and the interner goes last).
-    ( nurl_sym_free g_source_snapshots )
-    = g_source_snapshots 0
-    ( nurl_sym_free syms )
-    ( nurl_sym_free g_str_syms )
-    ( nurl_sym_free g_generic_syms )
-    ( nurl_sym_free g_generic_struct_syms )
-    ( nurl_sym_free g_struct_inst_syms )
-    ( nurl_sym_free g_impl_ret_syms )
-    ( nurl_sym_free g_impl_name_syms )
-    ( nurl_sym_free g_impl_trait_syms )
-    ( nurl_sym_free g_impl_pos_syms )
-    ( nurl_sym_free g_fn_pos_syms )
-    ( nurl_sym_free g_priv_file_ids )
-    ( nurl_sym_free g_priv_owner_ids )
-    ( nurl_sym_free g_priv_owner_files )
-    ( nurl_sym_free g_priv_warned )
-    ( nurl_sym_free g_trait_syms )
-    ( nurl_sym_free g_trait_pending )
-    ( nurl_sym_free g_res_type_syms )
-    ( nurl_sym_free g_closure_defs )
-    ( nurl_sym_free g_closure_types )
-    ( nurl_sym_free g_fn_inout )
-    ( nurl_sym_free g_fn_sink )
-    ( nurl_sym_free g_fn_unverified )
-    ( nurl_sym_free g_type_layouts )
-    ( nurl_sym_free g_fn_escapes )
-    ( nurl_sym_free g_fn_invoke_only )
+    // Exit-time release. The compilation owns every symbol table it made
+    // (nurl_sym_new links each into g_live_symtables), so the sweep below
+    // releases the global tables, `syms` and any a diagnostic abandoned —
+    // no table is released here by name. Their handles live in `: ~ i`
+    // globals as integer casts, which a leak scanner's reachability pass
+    // cannot see through, so the sweep is what keeps them out of its
+    // report. Tables never point into one another (their strings are
+    // interned, and the interner goes last), so the order is free.
     ( origin_free )
-    ( nurl_sym_free g_origin_functions )
-    ( nurl_sym_free g_origin_returns )
-    ( nurl_sym_free g_fn_ret_param )
-    ( nurl_sym_free g_fn_ret_alias )
-    ( nurl_sym_free g_fn_keeps )
-    ( nurl_sym_free g_fn_stores )
-    ( nurl_sym_free g_fn_ret_view )
-    ( nurl_sym_free g_fn_noreturn )
-    ( nurl_sym_free g_loop_break_used )
-    ( nurl_sym_free g_fn_arc_mut )
-    ( nurl_sym_free g_fn_mutates )
-    ( nurl_sym_free g_pending_escape )
-    ( nurl_sym_free g_pending_impl )
-    ( nurl_sym_free g_deferred_bck )
-    ( nurl_sym_free g_fn_compiled )
-    ( nurl_sym_free g_fn_link_sources )
-    ( nurl_sym_free g_fn_link_exports )
-    ( nurl_sym_free g_bck )
-    ( nurl_sym_free g_ptrtab )
-    ( nurl_sym_free g_vis_syms )
-    // Conditionally-allocated tables (--lint / --g): nurl_sym_free is a
-    // no-op on a 0 handle.
-    ( nurl_sym_free g_lint_syms )
-    ( nurl_sym_free g_lint_reads )
-    ( nurl_sym_free g_lint_used )
-    ( nurl_sym_free g_dbg_file_syms )
-    ( nurl_sym_free g_dbg_type_syms )
-    ( nurl_sym_free g_dbg_blob_syms )
     // The codegen counter block (nurl_cg_new's 16 bytes) was never
     // released. -O2 + LTO happened to elide the allocation, so the leak
     // only showed once an unrelated change moved the IR enough for the
@@ -54881,6 +54828,8 @@ unsafe @ main → i {
     ( nurl_free # s cg )
     ~ != g_live_lexers 0 { ( nurl_lex_free g_live_lexers ) }
     ~ != g_live_symtables 0 { ( nurl_sym_free g_live_symtables ) }
+    // (created lazily: a later compile in this process starts it afresh)
+    = g_source_snapshots 0
     // Last: the strings every table's keys and values were.
     ( nurl_intern_free )
     ^ compile_error
