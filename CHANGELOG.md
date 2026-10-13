@@ -786,12 +786,13 @@ matched enum a call handed over, is dropped where nothing else owns it
   across every module it emitted, megabytes at a time. It now finds each
   line ending at `memchr` speed and checks the byte after it. Together
   with removing the per-argument string work of the old Arc check, the
-  self-compile retires 2.1 % fewer instructions than main on the same
-  input (11.342e9 vs 11.583e9). The new checks — the borrow walk's
+  self-compile retires 1.9 % fewer instructions than main on the same
+  input (11.455e9 vs 11.677e9). The new checks — the borrow walk's
   frozen-payload rows, block and `??` source expressions, the forward
   lend fixed point (h212–h216), the final value read as a `^` (h217,
-  h218) and what a closure may hand back (h219–h221) — are included in
-  that figure. The bench kernels compile
+  h218), what a closure may hand back (h219–h221) and what captures,
+  options, enums, sinks and temporaries own (h222–h233, about 1 % of the
+  self-compile on their own) — are included in that figure. The bench kernels compile
   to the same code as on main.
 
 - **Keccak's round constants are built once.** Every SHA-3 / SHAKE
