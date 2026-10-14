@@ -1,5 +1,5 @@
 COMPILE FAIL
 ERRORS
-compiler/tests/diag_raw_on_impl_method.nu:5:11: error: 'raw' is not allowed on an impl method: a trait method can be called through a 'dyn' value, where no caller can be checked. Keep the method's contract inside it ('unsafe @ m …' that checks what it needs), or have it call a 'raw @' function of its own from an 'unsafe' method.
+compiler/tests/diag_raw_on_impl_method.nu:7:11: error: 'raw' is not allowed on an impl method: a trait method can be called through a 'dyn' value, where no caller can be checked. Keep the method's contract inside it ('unsafe @ m …' that checks what it needs), or have it call a 'raw @' function of its own from an 'unsafe' method.
 % Get S { raw @ get S s → i { ^ . s v } }
           ^
