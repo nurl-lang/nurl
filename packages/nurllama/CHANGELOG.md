@@ -2,6 +2,41 @@
 
 All notable changes to the `nurllama` package.
 
+## [0.20.0] — 2026-10-14
+
+### Changed
+
+- 8 `unsafe` functions left (68 in 0.19.2): the kernel compile, the
+  device uploads, the evaluation core that launches kernels over device
+  addresses, and building an engine from zeroed memory.
+- A `Llm` is its engine in a `Locked` beside its immutable record
+  (tokenizer, vocabulary size, context, mask id, diffusion flag) in an
+  `Arc`: an evaluation takes the engine for the call and gives it back,
+  where it was an `Arc` changed through `arc_ptr` from any thread holding
+  a copy — two requests evaluating at once raced on the KV cache and the
+  scratch buffers. `llm_tok`, `llm_n_vocab`, `llm_n_ctx`, `llm_mask_id`
+  and `llm_is_diffusion` never wait for an evaluation.
+- `FtModel` is its training state in a `Locked`, likewise; the public
+  calls take it and hand an `inout` view to their bodies, so a call that
+  calls another (`ft_train_ck` → `ft_graph` → `ft_embed`) does not take
+  it twice.
+- The server's resident model is a `Locked` global set at start.
+- Sampling reads a row of logits with one take of the engine
+  (`llm_logits` / `llm_logits_row`, new) instead of one per logit;
+  `exp` is the standard library's.
+- `nurllama run`/`dgen` write generated text with `fd_write_all`; the
+  pull's staging file starts as `file_none`; checkpoint F64 tensors are
+  read through a checked byte view.
+- Outputs are byte-identical to 0.19.2: logits, greedy and sampled
+  generation (llama and llada2, f32 and Q8_0), and a LoRA finetune's
+  adapters, checkpoint, resume, streamed run and merged model.
+
+### Fixed
+
+- tests/start_test.sh matched the wizard's `→` with `.`, which is one
+  byte under a C locale: the checkpoint-listing check failed outside a
+  UTF-8 locale.
+
 ## [0.19.2] — 2026-10-14
 
 ### Fixed

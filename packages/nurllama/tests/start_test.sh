@@ -97,7 +97,7 @@ printf '%s\n1\nn\n' "$WORK/ckpt" | timeout 8 "$NL" start > "$WORK/wizard2.out" 2
 WPID2=$!
 sleep 4
 kill "$WPID2" 2>/dev/null
-grep -q 'HF checkpoint . convert to GGUF' "$WORK/wizard2.out" \
+grep -q 'HF checkpoint → convert to GGUF' "$WORK/wizard2.out" \
     && ok "the wizard lists an HF checkpoint directory for conversion" \
     || bad "checkpoint listing"
 grep -q 'loose.safetensors' "$WORK/wizard2.out" \

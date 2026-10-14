@@ -131,7 +131,7 @@ $ `stdlib/core/slice.nu`
     }
 }
 
-unsafe @ nl_pull String root s src s name_override → !v String {
+@ nl_pull String root s src s name_override → !v String {
     : !v String ir ( nl_store_init root )
     ?? ir {
         T _ → {}
@@ -197,7 +197,7 @@ unsafe @ nl_pull String root s src s name_override → !v String {
 
             // open the staging file: append on a true 206, else truncate
             : ~ i fh_ok 0
-            : ~ File f # File # s 0
+            : ~ File f ( file_none )
             ? resume {
                 : !i String rr ( __nl_rehash_part h ( string_data part ) )
                 ?? rr {

@@ -215,6 +215,9 @@ two threads using one kit raced on the cache and the pool through
 `arc_ptr`. `lingbot-map` (66 → 2, its RoPE launches) runs its host
 reference code over slices and its checkpoint through a checked byte
 view; its parsed options held views of strings the parser had freed.
+`nurllama` (68 → 8) keeps its engine and its finetune state in `Locked`s
+— two requests evaluating one model raced on its KV cache — and samples
+from a row of logits read in one take.
 `whisper` (57 → 16, the raw device work) keeps its engine in a `Locked`
 beside its dimensions and its server state in Locked globals set at
 start; its ggml loader reads the mapping through checked slices. It now

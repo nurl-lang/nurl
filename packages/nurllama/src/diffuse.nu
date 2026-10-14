@@ -31,10 +31,9 @@
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/rng.nu`
+$ `stdlib/std/float.nu`  // exp
 $ `deps/gpu/src/gpu.nu`
 $ `src/model.nu`
-
-& `libm` @ exp f x → f
 
 @ _dz_geti ( Vec i ) v i k → i {
     ?? ( vec_get [i] v k ) { T x → { ^ x } F → { ^ 0 } }
@@ -48,14 +47,15 @@ $ `src/model.nu`
 // from softmax(logits/temp). Appends the chosen id to `ids` and its
 // probability under the SAME distribution to `confs` (the reference
 // scores greedy confidence on the unscaled softmax).
-unsafe @ __dz_sample_row Llm m i row f temp Rng rng ( Vec i ) ids ( Vec f ) confs → v {
+@ __dz_sample_row Llm m i row f temp Rng rng ( Vec i ) ids ( Vec f ) confs → v {
     : i n ( llm_n_vocab m )
+    : ( Vec f ) lg ( llm_logits_row m row )
     : f t ? > temp 0.0 temp 1.0
     : ~ f mx -1.0e30
     : ~ i best 0
     : ~ i k 0
     ~ < k n {
-        : f v ( llm_logit_at m row k )
+        : f v ( vec_at [f] lg k )
         ? > v mx {
             = mx v
             = best k
@@ -65,7 +65,7 @@ unsafe @ __dz_sample_row Llm m i row f temp Rng rng ( Vec i ) ids ( Vec f ) conf
     : ~ f sum 0.0
     = k 0
     ~ < k n {
-        = sum + sum ( exp / - ( llm_logit_at m row k ) mx t )
+        = sum + sum ( exp / - ( vec_at [f] lg k ) mx t )
         = k + k 1
     }
     : ~ i chosen best
@@ -76,7 +76,7 @@ unsafe @ __dz_sample_row Llm m i row f temp Rng rng ( Vec i ) ids ( Vec f ) conf
         = k 0
         = chosen - n 1
         ~ & going < k n {
-            = acc + acc ( exp / - ( llm_logit_at m row k ) mx t )
+            = acc + acc ( exp / - ( vec_at [f] lg k ) mx t )
             ? >= acc u {
                 = chosen k
                 = going F
@@ -85,7 +85,7 @@ unsafe @ __dz_sample_row Llm m i row f temp Rng rng ( Vec i ) ids ( Vec f ) conf
         }
     } {}
     ( vec_push [i] ids chosen )
-    ( vec_push [f] confs / ( exp / - ( llm_logit_at m row chosen ) mx t ) sum )
+    ( vec_push [f] confs / ( exp / - ( vec_at [f] lg chosen ) mx t ) sum )
 }
 
 @ dz_generate Llm m ( Vec i ) prompt i gen_len0 i block_len0 f threshold f edit_thr i max_post f temp Rng rng → ( Vec i ) {

@@ -8,16 +8,18 @@
 
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/rng.nu`
+$ `stdlib/std/float.nu`  // exp
 $ `deps/gpu/src/gpu.nu`
 $ `src/model.nu`
 
 @ sample_greedy Llm m → i {
     : i n ( llm_n_vocab m )
+    : ( Vec f ) lg ( llm_logits m )
     : ~ i best 0
-    : ~ f bv ( llm_logit m 0 )
+    : ~ f bv ( vec_at [f] lg 0 )
     : ~ i k 1
     ~ < k n {
-        : f v ( llm_logit m k )
+        : f v ( vec_at [f] lg k )
         ? > v bv {
             = best k
             = bv v
@@ -27,19 +29,17 @@ $ `src/model.nu`
     ^ best
 }
 
-// host-side softmax needs exp — bind libm directly, the stdlib idiom
-& `libm` @ exp f x → f
-
-unsafe @ sample_next Llm m Rng rng f temp i topk f topp → i {
+@ sample_next Llm m Rng rng f temp i topk f topp → i {
     ? <= temp 0.0 { ^ ( sample_greedy m ) } {}
     : i n ( llm_n_vocab m )
+    : ( Vec f ) lg ( llm_logits m )
 
     // copy logits, apply temperature, track max for stable softmax
     : ( Vec f ) p ( vec_with_cap [f] n )
     : ~ f mx -1.0e30
     : ~ i k 0
     ~ < k n {
-        : f v / ( llm_logit m k ) temp
+        : f v / ( vec_at [f] lg k ) temp
         ( vec_push [f] p v )
         ? > v mx { = mx v } {}
         = k + k 1
