@@ -8,6 +8,7 @@ Requires NURL 0.73.0 (`slice_at`, `slice_put`, `rc_take`, `locked_take`).
 
 - Loops that read or wrote through `vec_data` pointers index slices (`slice_at` / `slice_put`, as fast as the pointers), and functions with nothing raw in them are no longer marked `unsafe`.
 - 1 fewer functions are `unsafe` than in 0.5.4 (44 left).
+- Requires gpu 0.17 (its batched upload is `raw`; the loader here was already `unsafe`).
 
 ## [0.5.4] — 2026-10-12
 
@@ -24,7 +25,6 @@ The published 0.5.3 does not compile under it.
   of them is allocated or released by hand.
 - The GPU kit a model replaces is dropped by the store.
 - Requires gpu 0.16.
-
 
 ## [0.5.3] — 2026-10-11
 

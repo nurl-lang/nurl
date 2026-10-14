@@ -1129,6 +1129,34 @@ unsafe @ rt_run_shaped Engine e__h OGraph g * u input_host sink ( Vec i ) shape 
     ^ ( _rt_run_nodes e g )
 }
 
+// Elements in `shape` when every dim is >= 0 and the count fits in
+// `bytes` at `width` bytes each; -1 otherwise (checked as it multiplies,
+// so no product can wrap).
+@ __rt_fits ( Vec i ) shape i width i bytes → i {
+    : i cap / bytes width
+    : ~ i p 1
+    : ~ i k 0
+    ~ < k ( vec_len [i] shape ) {
+        : i d ( __dim_at shape k )
+        ? < d 0 { ^ -1 } {}
+        ? & > d 0 > p / cap d { ^ -1 } {}
+        = p * p d
+        = k + k 1
+    }
+    ^ p
+}
+
+unsafe @ __rt_none → RTensor { ^ @ RTensor { ( string_new ) 0 ( vec_new [i] ) 0 0 0 } }
+
+// The safe form of rt_run_shaped: the input is a GpuHost (gpu_host_alloc,
+// filled with gpu_host_set_f32) that must hold the shape's worth of f32.
+// One that is too small, or a negative dim, runs nothing and returns an
+// empty tensor (nelem 0).
+unsafe @ rt_run_host Engine e__h OGraph g GpuHost input sink ( Vec i ) shape → RTensor {
+    ? < ( __rt_fits shape 4 ( gpu_host_bytes input ) ) 0 { ^ ( __rt_none ) } {}
+    ^ ( rt_run_shaped e__h g ( gpu_host_ptr input ) shape )
+}
+
 // Token run: the single input is an INT64 token matrix [nrow, ncol] already
 // laid out in `tokhost` (8-byte LE). Uploaded as-is for the embedding Gather.
 unsafe @ rt_run_tokens Engine e__h OGraph g * u tokhost i nrow i ncol → RTensor {
@@ -1141,6 +1169,20 @@ unsafe @ rt_run_tokens Engine e__h OGraph g * u tokhost i nrow i ncol → RTenso
     : i bp ( rt_own e ib )
     ( rt_put e ( string_data . g input_name ) bp ( __shape2 nrow ncol ) )
     ^ ( _rt_run_nodes e g )
+}
+
+// The safe form of rt_run_tokens: `tok` holds the [nrow, ncol] INT64
+// matrix (8-byte LE); one too small runs nothing (an empty tensor).
+unsafe @ rt_run_tokens_host Engine e__h OGraph g GpuHost tok i nrow i ncol → RTensor {
+    ? < ( __rt_fits ( __shape2 nrow ncol ) 8 ( gpu_host_bytes tok ) ) 0 { ^ ( __rt_none ) } {}
+    ^ ( rt_run_tokens e__h g ( gpu_host_ptr tok ) nrow ncol )
+}
+
+// The safe form of rt_run_two: each input a GpuHost holding its shape's
+// worth of f32; either one too small runs nothing (an empty tensor).
+unsafe @ rt_run_two_host Engine e__h OGraph g s n1 GpuHost h1 sink ( Vec i ) s1 s n2 GpuHost h2 sink ( Vec i ) s2 → RTensor {
+    ? | < ( __rt_fits s1 4 ( gpu_host_bytes h1 ) ) 0 < ( __rt_fits s2 4 ( gpu_host_bytes h2 ) ) 0 { ^ ( __rt_none ) } {}
+    ^ ( rt_run_two e__h g n1 ( gpu_host_ptr h1 ) s1 n2 ( gpu_host_ptr h2 ) s2 )
 }
 
 // Two-input run (e.g. image + text embeddings for a promptable model).

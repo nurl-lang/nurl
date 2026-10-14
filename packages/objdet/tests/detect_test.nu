@@ -11,10 +11,6 @@ $ `stdlib/core/vec.nu`
 $ `src/image.nu`
 $ `src/detect.nu`
 
-& `c` @ nurl_poke_f32 *u base i idx f val → v
-
-& `c` @ nurl_peek_f32 *u base i idx → f
-
 : ~ i g_fail 0
 
 @ check b cond s name → v {
@@ -40,36 +36,34 @@ $ `src/detect.nu`
     ( check & == ( img_w big ) 8 == ( img_h big ) 8 `resize dims` )
 }
 
-unsafe @ test_nchw → v {
+@ test_nchw → v {
     ( nurl_print `[nchw]\n` )
     : Image im ( img_blank 2 2 )
     ( img_set im 0 0 0 10 ) ( img_set im 1 0 0 20 )
     ( img_set im 0 0 1 30 )
-    : ( Vec u ) tv ( img_to_nchw im )
-    : *u t ( vec_data [u] tv )
+    : GpuHost t ( img_to_nchw im )
     // CHW: channel 0 plane is first 4 floats; (x=1,y=0) -> index 1 = 20.
-    : f r10 ( nurl_peek_f32 t 1 )
+    : f r10 ( gpu_host_get_f32 t 1 )
     ( check & > r10 19.5 < r10 20.5 `nchw R(1,0)=20` )
     // channel 1 plane starts at index 4; (0,0) -> index 4 = 30.
-    : f g00 ( nurl_peek_f32 t 4 )
+    : f g00 ( gpu_host_get_f32 t 4 )
     ( check & > g00 29.5 < g00 30.5 `nchw G(0,0)=30` )
 }
 
 // Build a 13x13x125 grid with one strong "dog" box planted at cell (6,6),
 // anchor 0, and verify decode finds it.
-unsafe @ test_decode → v {
+@ test_decode → v {
     ( nurl_print `[decode]\n` )
-    : ( Vec u ) grid_v ( vec_zeroed [u] * 21125 4 )
-    : *u grid ( vec_data [u] grid_v )
+    : GpuHost grid ( gpu_host_alloc * 21125 4 )
     : ~ i z 0
-    ~ < z 21125 { ( nurl_poke_f32 grid z # f - 0.0 10.0 ) = z + z 1 }  // all logits very negative
+    ~ < z 21125 { ( gpu_host_set_f32 grid z - 0.0 10.0 ) = z + z 1 }  // all logits very negative
     : i cy 6
     : i cx 6
     : i o 0  // anchor 0, channels 0..24
     // objectness logit high; class 11 (dog) logit high
-    ( nurl_poke_f32 grid + * + o 4 169 + * cy 13 cx # f 4.0 )  // to -> sigmoid ~0.98
-    ( nurl_poke_f32 grid + * + o 5 169 + * cy 13 cx # f -10.0 )  // keep others low
-    ( nurl_poke_f32 grid + * + + o 5 11 169 + * cy 13 cx # f 8.0 )  // class 11 = dog
+    ( gpu_host_set_f32 grid + * + o 4 169 + * cy 13 cx 4.0 )  // to -> sigmoid ~0.98
+    ( gpu_host_set_f32 grid + * + o 5 169 + * cy 13 cx -10.0 )  // keep others low
+    ( gpu_host_set_f32 grid + * + + o 5 11 169 + * cy 13 cx 8.0 )  // class 11 = dog
     : ( Vec Detection ) dets ( yolo_decode grid 0.3 )
     ( check > ( vec_len [Detection] dets ) 0 `decode finds the planted box` )
     ?? ( vec_get [Detection] dets 0 ) {

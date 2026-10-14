@@ -62,7 +62,7 @@ $ `decode.nu`
 @ shape3 i a i b i c → ( Vec i ) { : ( Vec i ) v ( vec_new [i] )
     ( vec_push [i] v a ) ( vec_push [i] v b ) ( vec_push [i] v c ) ^ v }
 
-unsafe @ main → i {
+@ main → i {
     : ( Vec String ) av ( env_args_list )
     ? < ( vec_len [String] av ) 5 { ( p `usage: yoloe-prompt <model.onnx> <tpe.f32> <classes.txt> <img> [out]\n` ) ^ 2 } {}
     : String mp ?? ( vec_get [String] av 1 ) { T x → x F _ → ( string_new ) }
@@ -90,15 +90,14 @@ unsafe @ main → i {
         T im → {
             ( p `image ` ) ( pn ( img_w im ) ) ( p `x` ) ( pn ( img_h im ) ) ( p `\n` )
             : Letterbox lb ( letterbox im 640 )
-            : ( Vec u ) host ( img_to_nchw_norm . lb img )
+            : GpuHost host ( img_to_nchw_norm . lb img )
 
             : Engine e ( rt_open 0 )
             ? ! ( rt_ok e ) { ( p `GPU init / kernel compile failed\n` ) ^ 1 } {}
             ( p `device: ` ) ( p ( rt_name e ) ) ( p `\n` )
 
-            : RTensor out ( rt_run_two e g `images` ( vec_data [u] host ) ( shape4 1 3 640 640 ) `tpe` ( vec_data [u] tpe ) ( shape3 1 nc 512 ) )
-            : GpuHost o__h ( rt_download e out )
-            : *u o ( gpu_host_ptr o__h )
+            : RTensor out ( rt_run_two_host e g `images` host ( shape4 1 3 640 640 ) `tpe` ( gpu_host_of_vec tpe ) ( shape3 1 nc 512 ) )
+            : GpuHost o ( rt_download e out )
 
             : ( Vec Detection ) raw ( yolo_decode o 8400 nc 0.25 )
             : ( Vec Detection ) dets ( yolo_nms raw 0.5 )

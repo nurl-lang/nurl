@@ -29,23 +29,9 @@ $ `stdlib/std/arc.nu`
 : ~ s g_management_key ``
 : ~ s g_ca_cn `Private PKI CA`
 : ~ i g_ca_alg 0
-: ~ ? PkiCa g_ca_handle 0  // the loaded CA, one owner kept for the process (F = none)
-
-// g_ca_handle becomes an owner of `ca`; the CA it held before is let go.
-unsafe @ __svc_keep_ca PkiCa ca → v { = g_ca_handle @ ?PkiCa { T ( PkiCa_share ca ) } }
-
-// Is a CA loaded?
-unsafe @ __svc_have_ca → b { ^ ( opt_is_some [PkiCa] g_ca_handle ) }
-
-// The loaded CA (another owner of the one behind g_ca_handle).
-unsafe @ __svc_ca → PkiCa {
-    ?? g_ca_handle {
-        T c → { ^ ( PkiCa_share c ) }
-        F → { ( nurl_panic `pki: no CA is loaded` ) }
-    }
-}
-
-@ pki_service_init s ca_cert s ca_key s crl_file s index_file s initial_dir s device_dir s init_key s mgmt_key s ca_cn i alg → b {
+// The loaded (or newly minted) CA, F when it cannot be had. The app the
+// caller builds with it (pki_build_app) keeps it for the routes.
+@ pki_service_init s ca_cert s ca_key s crl_file s index_file s initial_dir s device_dir s init_key s mgmt_key s ca_cn i alg → ?PkiCa {
     = g_ca_cert_path ca_cert
     = g_ca_key_path ca_key
     = g_crl_file_path crl_file
@@ -63,11 +49,8 @@ unsafe @ __svc_ca → PkiCa {
     // Load or generate CA
     : PkiCa ca ?? ( pki_load_or_create_ca ca_cert ca_key ca_cn alg ) {
         T c → c
-        F → { ^ F }
+        F → { ^ @ ?PkiCa { F } }
     }
-    // One owner of the CA stays behind g_ca_handle for the process (a
-    // CA loaded before this one is let go).
-    ( __svc_keep_ca ca )
     // An existing CA keeps its own algorithm; --algorithm only decides
     // what a *new* CA is minted with, so report back what is actually
     // in force rather than what was asked for.
@@ -75,7 +58,7 @@ unsafe @ __svc_ca → PkiCa {
 
     // Ensure CRL exists
     : String _crl ( pki_load_crl crl_file ca index_file )
-    ^ T
+    ^ @ ?PkiCa { T ca }
 }
 
 @ pki_service_alg → i { ^ g_ca_alg }
@@ -189,41 +172,33 @@ unsafe @ __svc_ca → PkiCa {
 }
 
 // GET /ca-cert
-@ handle_ca_cert HttpRequest req Params p → HttpResponse {
-    ? ( __svc_have_ca ) {
-        : PkiCa ca ( __svc_ca )
-        : Json obj ( json_obj_new )
-        ( json_obj_set obj `ca_certificate` ( json_str_lit ( pki_ca_cert_pem ca ) ) )
-        ( json_obj_set obj `algorithm` ( json_str_lit ( pki_alg_name ( pki_ca_alg ca ) ) ) )
-        : String j ( json_stringify obj )
-        ^ ( _resp_json 200 j )
-    } {
-        ^ ( _resp_err_json 500 `Failed to read CA certificate` )
-    }
+@ handle_ca_cert PkiCa ca HttpRequest req Params p → HttpResponse {
+    : Json obj ( json_obj_new )
+    ( json_obj_set obj `ca_certificate` ( json_str_lit ( pki_ca_cert_pem ca ) ) )
+    ( json_obj_set obj `algorithm` ( json_str_lit ( pki_alg_name ( pki_ca_alg ca ) ) ) )
+    : String j ( json_stringify obj )
+    ^ ( _resp_json 200 j )
+
 }
 
 // GET /crl
-@ handle_crl HttpRequest req Params p → HttpResponse {
+@ handle_crl PkiCa ca HttpRequest req Params p → HttpResponse {
     ? ! ( auth_check_api_key req g_management_key ) {
         ^ ( _resp_err_json 401 `Invalid or missing API key` )
     } {}
 
-    ? ( __svc_have_ca ) {
-        : PkiCa ca ( __svc_ca )
-        : String crl_pem ( pki_load_crl g_crl_file_path ca g_index_file_path )
-        : HttpResponse r ( response_new 200 )
-        ( response_set_header r `Content-Type` `application/pkix-crl` )
-        ( response_set_header r `Content-Disposition` `attachment; filename=ca.crl` )
-        ( response_set_header r `X-Content-Type-Options` `nosniff` )
-        ( response_set_body_str r ( string_data crl_pem ) )
-        ^ r
-    } {
-        ^ ( _resp_err_json 500 `Failed to load CRL` )
-    }
+    : String crl_pem ( pki_load_crl g_crl_file_path ca g_index_file_path )
+    : HttpResponse r ( response_new 200 )
+    ( response_set_header r `Content-Type` `application/pkix-crl` )
+    ( response_set_header r `Content-Disposition` `attachment; filename=ca.crl` )
+    ( response_set_header r `X-Content-Type-Options` `nosniff` )
+    ( response_set_body_str r ( string_data crl_pem ) )
+    ^ r
+
 }
 
 // POST /init
-@ handle_init HttpRequest req Params p → HttpResponse {
+@ handle_init PkiCa ca HttpRequest req Params p → HttpResponse {
     : String body_str ( bytes_to_str . req body )
     : !Json JsonError jr ( json_parse ( string_data body_str ) )
 
@@ -255,26 +230,22 @@ unsafe @ __svc_ca → PkiCa {
 
             : !v IoErr _cd ( dir_create_all ( string_data dev_dir ) )
 
-            ? ( __svc_have_ca ) {
-                : PkiCa ca ( __svc_ca )
-                : PkiCert cert ( pki_issue_device_cert ca ( string_data clean_dev_id ) 365 )
+            : PkiCert cert ( pki_issue_device_cert ca ( string_data clean_dev_id ) 365 )
 
-                : String crt_path ( _device_path g_initial_certs_dir ( string_data clean_dev_id ) `.crt` )
-                : String key_path ( _device_path g_initial_certs_dir ( string_data clean_dev_id ) `.key` )
-                : !v IoErr _w1 ( write_file ( string_data crt_path ) ( string_data . cert cert_pem ) )
-                : !v IoErr _w2 ( write_file ( string_data key_path ) ( string_data . cert key_pem ) )
-                : !v IoErr _cm ( set_permissions ( string_data key_path ) 384 )
+            : String crt_path ( _device_path g_initial_certs_dir ( string_data clean_dev_id ) `.crt` )
+            : String key_path ( _device_path g_initial_certs_dir ( string_data clean_dev_id ) `.key` )
+            : !v IoErr _w1 ( write_file ( string_data crt_path ) ( string_data . cert cert_pem ) )
+            : !v IoErr _w2 ( write_file ( string_data key_path ) ( string_data . cert key_pem ) )
+            : !v IoErr _cm ( set_permissions ( string_data key_path ) 384 )
 
-                : Json res ( json_obj_new )
-                ( json_obj_set res `certificate` ( json_str_lit ( string_data . cert cert_pem ) ) )
-                ( json_obj_set res `private_key` ( json_str_lit ( string_data . cert key_pem ) ) )
-                ( json_obj_set res `serial` ( json_str_lit ( string_data . cert serial_hex ) ) )
-                : String jout ( json_stringify res )
+            : Json res ( json_obj_new )
+            ( json_obj_set res `certificate` ( json_str_lit ( string_data . cert cert_pem ) ) )
+            ( json_obj_set res `private_key` ( json_str_lit ( string_data . cert key_pem ) ) )
+            ( json_obj_set res `serial` ( json_str_lit ( string_data . cert serial_hex ) ) )
+            : String jout ( json_stringify res )
 
-                ^ ( _resp_json 200 jout )
-            } {
-                ^ ( _resp_err_json 500 `CA not available` )
-            }
+            ^ ( _resp_json 200 jout )
+
         }
         F _ → {
             ^ ( _resp_err_json 400 `Malformed JSON body` )
@@ -326,7 +297,7 @@ unsafe @ __svc_ca → PkiCa {
 }
 
 // POST /renew_initial_cert
-@ handle_renew_initial_cert HttpRequest req Params p → HttpResponse {
+@ handle_renew_initial_cert PkiCa ca HttpRequest req Params p → HttpResponse {
     : String body_str ( bytes_to_str . req body )
     : !Json JsonError jr ( json_parse ( string_data body_str ) )
 
@@ -363,24 +334,20 @@ unsafe @ __svc_ca → PkiCa {
                 ^ ( _resp_err_json 401 `Invalid initial certificate` )
             } {}
 
-            ? ( __svc_have_ca ) {
-                : PkiCa ca ( __svc_ca )
-                : PkiCert cert ( pki_issue_device_cert ca ( string_data clean_dev_id ) 365 )
+            : PkiCert cert ( pki_issue_device_cert ca ( string_data clean_dev_id ) 365 )
 
-                : String key_path ( _device_path g_initial_certs_dir ( string_data clean_dev_id ) `.key` )
-                : !v IoErr _w1 ( write_file ( string_data crt_path ) ( string_data . cert cert_pem ) )
-                : !v IoErr _w2 ( write_file ( string_data key_path ) ( string_data . cert key_pem ) )
-                : !v IoErr _cm ( set_permissions ( string_data key_path ) 384 )
+            : String key_path ( _device_path g_initial_certs_dir ( string_data clean_dev_id ) `.key` )
+            : !v IoErr _w1 ( write_file ( string_data crt_path ) ( string_data . cert cert_pem ) )
+            : !v IoErr _w2 ( write_file ( string_data key_path ) ( string_data . cert key_pem ) )
+            : !v IoErr _cm ( set_permissions ( string_data key_path ) 384 )
 
-                : Json res ( json_obj_new )
-                ( json_obj_set res `certificate` ( json_str_lit ( string_data . cert cert_pem ) ) )
-                ( json_obj_set res `private_key` ( json_str_lit ( string_data . cert key_pem ) ) )
-                : String jout ( json_stringify res )
+            : Json res ( json_obj_new )
+            ( json_obj_set res `certificate` ( json_str_lit ( string_data . cert cert_pem ) ) )
+            ( json_obj_set res `private_key` ( json_str_lit ( string_data . cert key_pem ) ) )
+            : String jout ( json_stringify res )
 
-                ^ ( _resp_json 200 jout )
-            } {
-                ^ ( _resp_err_json 500 `CA not available` )
-            }
+            ^ ( _resp_json 200 jout )
+
         }
         F _ → {
             ^ ( _resp_err_json 400 `Malformed JSON body` )
@@ -399,7 +366,7 @@ unsafe @ __svc_ca → PkiCa {
 }
 
 // POST /request-cert
-@ handle_request_cert_post HttpRequest req Params p → HttpResponse {
+@ handle_request_cert_post PkiCa ca HttpRequest req Params p → HttpResponse {
     : b is_json ( _wants_json req )
 
     : ~ String dev_id ( string_new )
@@ -459,52 +426,48 @@ unsafe @ __svc_ca → PkiCa {
         ^ ( _cert_error is_json 401 `Initial certificate does not match stored certificate` )
     } {}
 
-    ? ( __svc_have_ca ) {
-        : PkiCa ca ( __svc_ca )
-        : b cert_valid ( pki_verify_cert ca ( string_data initial_cert ) ( string_data clean_dev_id ) )
+    : b cert_valid ( pki_verify_cert ca ( string_data initial_cert ) ( string_data clean_dev_id ) )
 
-        ? ! cert_valid {
-            ^ ( _cert_error is_json 401 `Invalid initial certificate` )
-        } {}
+    ? ! cert_valid {
+        ^ ( _cert_error is_json 401 `Invalid initial certificate` )
+    } {}
 
-        : PkiCert op_cert ( pki_issue_device_cert ca ( string_data clean_dev_id ) validity_days )
+    : PkiCert op_cert ( pki_issue_device_cert ca ( string_data clean_dev_id ) validity_days )
 
-        : String dev_out_dir ( string_from g_device_certs_dir )
-        ( string_push_char dev_out_dir 47 )
-        ( string_push_str dev_out_dir ( string_data clean_dev_id ) )
-        : !v IoErr _md ( dir_create_all ( string_data dev_out_dir ) )
+    : String dev_out_dir ( string_from g_device_certs_dir )
+    ( string_push_char dev_out_dir 47 )
+    ( string_push_str dev_out_dir ( string_data clean_dev_id ) )
+    : !v IoErr _md ( dir_create_all ( string_data dev_out_dir ) )
 
-        : String crt_file ( _device_path g_device_certs_dir ( string_data clean_dev_id ) `.crt` )
-        : String key_file ( _device_path g_device_certs_dir ( string_data clean_dev_id ) `.key` )
-        : !v IoErr _w1 ( write_file ( string_data crt_file ) ( string_data . op_cert cert_pem ) )
-        : !v IoErr _w2 ( write_file ( string_data key_file ) ( string_data . op_cert key_pem ) )
-        : !v IoErr _cm ( set_permissions ( string_data key_file ) 384 )
+    : String crt_file ( _device_path g_device_certs_dir ( string_data clean_dev_id ) `.crt` )
+    : String key_file ( _device_path g_device_certs_dir ( string_data clean_dev_id ) `.key` )
+    : !v IoErr _w1 ( write_file ( string_data crt_file ) ( string_data . op_cert cert_pem ) )
+    : !v IoErr _w2 ( write_file ( string_data key_file ) ( string_data . op_cert key_pem ) )
+    : !v IoErr _cm ( set_permissions ( string_data key_file ) 384 )
 
-        ? is_json {
-            : Json res ( json_obj_new )
-            ( json_obj_set res `device_id` ( json_str_lit ( string_data clean_dev_id ) ) )
-            ( json_obj_set res `certificate` ( json_str_lit ( string_data . op_cert cert_pem ) ) )
-            ( json_obj_set res `private_key` ( json_str_lit ( string_data . op_cert key_pem ) ) )
-            ( json_obj_set res `ca_certificate` ( json_str_lit ( pki_ca_cert_pem ca ) ) )
-            ( json_obj_set res `serial` ( json_str_lit ( string_data . op_cert serial_hex ) ) )
-            ( json_obj_set res `algorithm` ( json_str_lit ( pki_alg_name ( pki_ca_alg ca ) ) ) )
-            ( json_obj_set res `expires` ( json_str_lit ( string_data . op_cert expires_iso ) ) )
+    ? is_json {
+        : Json res ( json_obj_new )
+        ( json_obj_set res `device_id` ( json_str_lit ( string_data clean_dev_id ) ) )
+        ( json_obj_set res `certificate` ( json_str_lit ( string_data . op_cert cert_pem ) ) )
+        ( json_obj_set res `private_key` ( json_str_lit ( string_data . op_cert key_pem ) ) )
+        ( json_obj_set res `ca_certificate` ( json_str_lit ( pki_ca_cert_pem ca ) ) )
+        ( json_obj_set res `serial` ( json_str_lit ( string_data . op_cert serial_hex ) ) )
+        ( json_obj_set res `algorithm` ( json_str_lit ( pki_alg_name ( pki_ca_alg ca ) ) ) )
+        ( json_obj_set res `expires` ( json_str_lit ( string_data . op_cert expires_iso ) ) )
 
-            : String jout ( json_stringify res )
+        : String jout ( json_stringify res )
 
-            ^ ( _resp_json 200 jout )
-        } {
-            : String html ( ui_render_cert_result ( string_data clean_dev_id ) ( string_data . op_cert cert_pem ) ( string_data . op_cert key_pem ) ( pki_ca_cert_pem ca ) ( string_data . op_cert expires_iso ) )
-            ^ ( _resp_html 200 html )
-        }
+        ^ ( _resp_json 200 jout )
     } {
-        ^ ( _resp_err_json 500 `CA not available` )
+        : String html ( ui_render_cert_result ( string_data clean_dev_id ) ( string_data . op_cert cert_pem ) ( string_data . op_cert key_pem ) ( pki_ca_cert_pem ca ) ( string_data . op_cert expires_iso ) )
+        ^ ( _resp_html 200 html )
     }
+
 }
 
 // POST /request-csr — Issue certificate from a client-provided PKCS#10 CSR.
 // Client private key never crosses the wire (Zero Trust PKI).
-@ handle_request_csr_post HttpRequest req Params p → HttpResponse {
+@ handle_request_csr_post PkiCa ca HttpRequest req Params p → HttpResponse {
     ? ! ( auth_check_api_key req g_management_key ) {
         ^ ( _resp_err_json 401 `Unauthorized: valid management API key required` )
     } {}
@@ -541,30 +504,26 @@ unsafe @ __svc_ca → PkiCa {
         ^ ( _resp_err_json 400 `Missing CSR PEM in request body` )
     } {}
 
-    ? ( __svc_have_ca ) {
-        : PkiCa ca ( __svc_ca )
-        : !PkiCert String res ( pki_issue_cert_from_csr ca ( string_data csr_input ) validity_days )
-        ?? res {
-            T cert → {
-                : Json out ( json_obj_new )
-                ( json_obj_set out `status` ( json_str_lit `success` ) )
-                ( json_obj_set out `certificate` ( json_str_lit ( string_data . cert cert_pem ) ) )
-                ( json_obj_set out `ca_certificate` ( json_str_lit ( pki_ca_cert_pem ca ) ) )
-                ( json_obj_set out `serial` ( json_str_lit ( string_data . cert serial_hex ) ) )
-                ( json_obj_set out `algorithm` ( json_str_lit ( pki_alg_name ( pki_ca_alg ca ) ) ) )
-                ( json_obj_set out `expires` ( json_str_lit ( string_data . cert expires_iso ) ) )
+    : !PkiCert String res ( pki_issue_cert_from_csr ca ( string_data csr_input ) validity_days )
+    ?? res {
+        T cert → {
+            : Json out ( json_obj_new )
+            ( json_obj_set out `status` ( json_str_lit `success` ) )
+            ( json_obj_set out `certificate` ( json_str_lit ( string_data . cert cert_pem ) ) )
+            ( json_obj_set out `ca_certificate` ( json_str_lit ( pki_ca_cert_pem ca ) ) )
+            ( json_obj_set out `serial` ( json_str_lit ( string_data . cert serial_hex ) ) )
+            ( json_obj_set out `algorithm` ( json_str_lit ( pki_alg_name ( pki_ca_alg ca ) ) ) )
+            ( json_obj_set out `expires` ( json_str_lit ( string_data . cert expires_iso ) ) )
 
-                : String jout ( json_stringify out )
-                ^ ( _resp_json 200 jout )
-            }
-            F err → {
-                : HttpResponse r ( _resp_err_json 400 ( string_data err ) )
-                ^ r
-            }
+            : String jout ( json_stringify out )
+            ^ ( _resp_json 200 jout )
         }
-    } {
-        ^ ( _resp_err_json 500 `CA not initialized` )
+        F err → {
+            : HttpResponse r ( _resp_err_json 400 ( string_data err ) )
+            ^ r
+        }
     }
+
 }
 
 // GET /revoke
@@ -578,7 +537,7 @@ unsafe @ __svc_ca → PkiCa {
 }
 
 // POST /revoke
-@ handle_revoke_post HttpRequest req Params p → HttpResponse {
+@ handle_revoke_post PkiCa ca HttpRequest req Params p → HttpResponse {
     : b is_json ( _wants_json req )
 
     : ~ String serial_input ( string_new )
@@ -619,10 +578,7 @@ unsafe @ __svc_ca → PkiCa {
     : ~ String final_cn ( string_new )
 
     ? > ( string_len cert_input ) 0 {
-        ? ! ( __svc_have_ca ) {
-            ^ ( _revoke_error is_json 500 `CA not available` )
-        } {}
-        : PkiCa vca ( __svc_ca )
+        : PkiCa vca ( PkiCa_share ca )
         // Revoking by PEM used to trust whatever the body claimed: the
         // CN was lifted straight out of an unverified certificate and
         // then used to name a file. Only a certificate this CA actually
@@ -649,37 +605,32 @@ unsafe @ __svc_ca → PkiCa {
         ^ ( _revoke_error is_json 400 `Serial must be an even-length hex string of at most 40 bytes` )
     } {}
 
-    ? ( __svc_have_ca ) {
-        : PkiCa ca ( __svc_ca )
+    ? > ( string_len final_cn ) 0 {
+        : b _inv ( pki_invalidate_initial_cert g_initial_certs_dir ( string_data final_cn ) )
+    } {}
 
-        ? > ( string_len final_cn ) 0 {
-            : b _inv ( pki_invalidate_initial_cert g_initial_certs_dir ( string_data final_cn ) )
-        } {}
+    : String updated_crl ( pki_record_revocation g_index_file_path g_crl_file_path ca ( string_data final_serial ) ( string_data final_cn ) )
 
-        : String updated_crl ( pki_record_revocation g_index_file_path g_crl_file_path ca ( string_data final_serial ) ( string_data final_cn ) )
+    : String now_iso ( pki_iso_timestamp ( now_seconds ) )
+    : String msg ( string_from `Certificate with serial ` )
+    ( string_push_str msg ( string_data final_serial ) )
+    ( string_push_str msg ` has been revoked` )
 
-        : String now_iso ( pki_iso_timestamp ( now_seconds ) )
-        : String msg ( string_from `Certificate with serial ` )
-        ( string_push_str msg ( string_data final_serial ) )
-        ( string_push_str msg ` has been revoked` )
+    ? is_json {
+        : Json res ( json_obj_new )
+        ( json_obj_set res `status` ( json_str_lit `success` ) )
+        ( json_obj_set res `message` ( json_str_lit ( string_data msg ) ) )
+        ( json_obj_set res `serial` ( json_str_lit ( string_data final_serial ) ) )
+        ( json_obj_set res `revocation_time` ( json_str_lit ( string_data now_iso ) ) )
+        ( json_obj_set res `crl` ( json_str_lit ( string_data updated_crl ) ) )
 
-        ? is_json {
-            : Json res ( json_obj_new )
-            ( json_obj_set res `status` ( json_str_lit `success` ) )
-            ( json_obj_set res `message` ( json_str_lit ( string_data msg ) ) )
-            ( json_obj_set res `serial` ( json_str_lit ( string_data final_serial ) ) )
-            ( json_obj_set res `revocation_time` ( json_str_lit ( string_data now_iso ) ) )
-            ( json_obj_set res `crl` ( json_str_lit ( string_data updated_crl ) ) )
-
-            : String jout ( json_stringify res )
-            ^ ( _resp_json 200 jout )
-        } {
-            : String html ( ui_render_revoke_result ( string_data msg ) ( string_data final_serial ) ( string_data now_iso ) ( string_data updated_crl ) )
-            ^ ( _resp_html 200 html )
-        }
+        : String jout ( json_stringify res )
+        ^ ( _resp_json 200 jout )
     } {
-        ^ ( _resp_err_json 500 `CA not available` )
+        : String html ( ui_render_revoke_result ( string_data msg ) ( string_data final_serial ) ( string_data now_iso ) ( string_data updated_crl ) )
+        ^ ( _resp_html 200 html )
     }
+
 }
 
 // Signature-only check: was this certificate signed by our CA key? No
@@ -745,24 +696,24 @@ unsafe @ __svc_ca → PkiCa {
 
 // ── App Setup ─────────────────────────────────────────────────────────
 
-@ pki_build_app → HttpApp {
+@ pki_build_app PkiCa ca → HttpApp {
     : HttpApp a ( http_app_new )
     ( http_app_workers a 8 )
     ( http_app_logging a )
 
     ( http_app_get a `/health` \ HttpRequest req Params p → HttpResponse { ^ ( handle_health req p ) } )
-    ( http_app_get a `/ca-cert` \ HttpRequest req Params p → HttpResponse { ^ ( handle_ca_cert req p ) } )
-    ( http_app_get a `/crl` \ HttpRequest req Params p → HttpResponse { ^ ( handle_crl req p ) } )
+    ( http_app_get a `/ca-cert` \ HttpRequest req Params p → HttpResponse { ^ ( handle_ca_cert ca req p ) } )
+    ( http_app_get a `/crl` \ HttpRequest req Params p → HttpResponse { ^ ( handle_crl ca req p ) } )
 
-    ( http_app_post a `/init` \ HttpRequest req Params p → HttpResponse { ^ ( handle_init req p ) } )
-    ( http_app_post a `/renew_initial_cert` \ HttpRequest req Params p → HttpResponse { ^ ( handle_renew_initial_cert req p ) } )
+    ( http_app_post a `/init` \ HttpRequest req Params p → HttpResponse { ^ ( handle_init ca req p ) } )
+    ( http_app_post a `/renew_initial_cert` \ HttpRequest req Params p → HttpResponse { ^ ( handle_renew_initial_cert ca req p ) } )
 
     ( http_app_get a `/request-cert` \ HttpRequest req Params p → HttpResponse { ^ ( handle_request_cert_get req p ) } )
-    ( http_app_post a `/request-cert` \ HttpRequest req Params p → HttpResponse { ^ ( handle_request_cert_post req p ) } )
-    ( http_app_post a `/request-csr` \ HttpRequest req Params p → HttpResponse { ^ ( handle_request_csr_post req p ) } )
+    ( http_app_post a `/request-cert` \ HttpRequest req Params p → HttpResponse { ^ ( handle_request_cert_post ca req p ) } )
+    ( http_app_post a `/request-csr` \ HttpRequest req Params p → HttpResponse { ^ ( handle_request_csr_post ca req p ) } )
 
     ( http_app_get a `/revoke` \ HttpRequest req Params p → HttpResponse { ^ ( handle_revoke_get req p ) } )
-    ( http_app_post a `/revoke` \ HttpRequest req Params p → HttpResponse { ^ ( handle_revoke_post req p ) } )
+    ( http_app_post a `/revoke` \ HttpRequest req Params p → HttpResponse { ^ ( handle_revoke_post ca req p ) } )
 
     ( http_app_get a `/` \ HttpRequest req Params p → HttpResponse { ^ ( handle_index req p ) } )
     ( http_app_get a `/api` \ HttpRequest req Params p → HttpResponse { ^ ( handle_api_docs req p ) } )

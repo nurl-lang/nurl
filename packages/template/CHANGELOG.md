@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.2.5] — 2026-10-14
+
+Requires NURL 0.73.0 (`locked_take`, `string_bytes`, `slice_bytes_eq`).
+
+### Changed
+
+- No `unsafe` left (35 before). A render's state is a local the block
+  renderer changes in place (`inout`), with the source it renders handed
+  down as a byte view; the set is a `Locked` snapshot (an `Arc` of
+  names and sources, the sources each in an `Arc` of their own, so
+  `tset_add` copies references, not text). Renders run ~1.5% fewer
+  instructions than before.
+
+### Fixed
+
+- `tset_add` changed the set in place through `arc_ptr` while a render
+  on another thread read it, and an `{% include %}` pointed the render
+  at a source string that a concurrent `tset_add` of the same name
+  freed. A render now reads the snapshot it started with; an add makes
+  the next one.
+
 ## [0.2.4] — 2026-10-12
 
 Requires NURL 0.73.0, whose stdlib/core/mem.nu has `mem_replace`.

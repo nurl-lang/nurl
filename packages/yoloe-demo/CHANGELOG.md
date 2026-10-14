@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.3.4] — 2026-10-14
+
+Requires gpu 0.17, onnx 0.11.2 and yoloe 0.7.5.
+
+### Changed
+
+- No `unsafe` outside the wasm module's host-import wrappers (14 → 5).
+  The server's state is split by what a request does to it: what main
+  sets up once (`DemoConf`) is read through `arc_get` with no lock, and
+  the engine plus the prompt vocabulary (`Vocab`) — which `/prompt`
+  grows and every run changes — sit in a `Locked`, checked out for one
+  request at a time. Before, handlers changed the `Arc`'s payload
+  through `arc_ptr`.
+- The text-embedding slab is a `GpuHost`; prompts are encoded with
+  `rt_run_tokens_host` and frames run with `rt_run_host` /
+  `rt_run_two_host`.
+
 ## [0.3.3] — 2026-10-11
 
 Requires NURL 0.73.0, which allows `mem_forget`, `mem_take` and the

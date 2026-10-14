@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.7.5] — 2026-10-14
+
+Requires gpu 0.17 and onnx 0.11.2.
+
+### Changed
+
+- Decode, masks and image packing are safe code (34 → 24 `unsafe`; what
+  is left is the V4L2 camera, the X11 window and the terminal size, all
+  FFI). Model outputs are `GpuHost`s read through `Slice f32` views,
+  `img_to_nchw_norm` returns a `GpuHost`, `mask_coeffs` / `mask_logits`
+  return `Vec f` (each logit still rounded to f32), and the prompt
+  tool and the forward tests run through `rt_run_host` /
+  `rt_run_two_host` / `rt_run_tokens_host`. Every output is
+  bit-identical; `mask_logits` sums a prototype plane at a time (the
+  same order per pixel) and is 10–20% faster, image packing 15–30% faster
+  (best-of-60 timings against the pointer code).
+
+### Fixed
+
+- A class list longer than the model's made `yolo_decode` and
+  `mask_coeffs` read past the output, and the forward tests compared
+  past a short output; they now decode nothing / report the mismatch.
+
 ## [0.7.4] — 2026-10-12
 
 Requires NURL 0.73.0. No change of its own beyond its dependencies.

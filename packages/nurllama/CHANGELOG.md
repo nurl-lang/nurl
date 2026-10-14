@@ -10,6 +10,7 @@ Requires NURL 0.73.0 (`slice_at`, `slice_put`, `rc_take`, `locked_take`).
 
 - Loops that read or wrote through `vec_data` pointers index slices (`slice_at` / `slice_put`, as fast as the pointers), and functions with nothing raw in them are no longer marked `unsafe`.
 - 2 fewer functions are `unsafe` than in 0.19.0 (67 left).
+- Requires gpu 0.17. The `lk_*` launchers take device addresses as plain integers and launch kernels that index them by the sizes they are given; they were safe to call with any numbers — now they are `raw` (their callers already vouched), and `lk_build`, which compiles this package's own kernel sources, is `unsafe`.
 
 ## [0.19.0] — 2026-10-12
 

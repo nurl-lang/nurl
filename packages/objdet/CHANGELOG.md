@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.4.4] — 2026-10-14
+
+Requires gpu 0.17 and onnx 0.11.2.
+
+### Changed
+
+- No `unsafe` outside the wasm module's host-import wrappers (7 → 4):
+  the NCHW input is a `GpuHost` built through a `Slice f32` view and run
+  with `rt_run_host`, and the grid is decoded through a view of the
+  download.
+
+### Fixed
+
+- `yolo_decode` read 21,125 floats from whatever buffer it was handed;
+  a model with another output size read past it. It now decodes nothing
+  from a grid of the wrong size.
+
 ## [0.4.3] — 2026-10-11
 
 Requires onnx 0.11, whose `rt_none` is gone (an `Engine` is always an

@@ -8,6 +8,7 @@ Requires NURL 0.73.0 (grammar v2.9 `raw`, `slice_window`, `file_is_open`).
 
 - `RTensor` is a `raw` struct and carries the engine and run it came from: `rt_download` and `dtensor_from_output` refuse a tensor of another engine or of an earlier run, whose device memory `rt_reset` (or the next run) released — they read it before. Needs gpukit 0.10.2.
 - 6 more functions are `unsafe`/`raw` than in 0.11.1 (83 now): where they launch kernels of their own, the trust is now written down.
+- Requires gpu 0.17. New safe entry points over `GpuHost` buffers: `rt_run_host`, `rt_run_two_host` and `rt_run_tokens_host` check that each input holds its shape's worth (an input too small runs nothing and returns an empty tensor) and need no `unsafe` caller; `rt_run_shaped` / `rt_run_two` / `rt_run_tokens` keep taking raw pointers.
 
 ## [0.11.1] — 2026-10-12
 
@@ -22,7 +23,6 @@ The published 0.11.0 does not compile under it.
   store; the `mem_take` before each is gone.
 - The tests build their buffers as `Vec`s instead of raw allocations.
 - Requires gpu 0.16.
-
 
 ## [0.11.0] — 2026-10-11
 

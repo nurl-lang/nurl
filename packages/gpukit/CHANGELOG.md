@@ -10,6 +10,7 @@ Requires NURL 0.73.0 (grammar v2.9 `raw`, `slice_window`, `file_is_open`).
 - Every operation checks what its kernel indexes before it launches: sizes through overflow-checked products (`_gk_p2/3/4` — a product that wrapped to a buffer's length no longer passes), `gk_buf_view` / `gk_buf_view_as` inside their buffer (none otherwise), `gk_matmul_f` / the elementwise and dot kernels against their Vecs' lengths, softmax rows at least one column wide.
 - `gk_map_f` / `gkd_map` accept only an expression over `x`, numbers and math functions, `gkd_ew` / `gkd_ew_bc` only `+ - * /`, and identifiers as kernel names (`gk_expr_ok`, `gk_op_ok`, `gk_name_ok`): text spliced into a kernel can no longer reach memory.
 - 19 more functions are `unsafe`/`raw` than in 0.10.1 (68 now): where they launch kernels of their own, the trust is now written down.
+- Requires gpu 0.17, whose kernel compile and launch, buffer views and device-to-device copy are `raw` — the places gpukit calls them already establish what they need.
 
 ## [0.10.1] — 2026-10-12
 

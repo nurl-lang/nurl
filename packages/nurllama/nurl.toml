@@ -9,7 +9,7 @@ license = "MIT OR Apache-2.0"
 gguf = { path = "../gguf", version = "^0.5" }
 safetensor = { path = "../safetensor", version = "^0.5" }
 tokenizer = { path = "../tokenizer", version = "^0.4" }
-gpu = { path = "../gpu", version = "^0.16" }
+gpu = { path = "../gpu", version = "^0.17" }
 http = { path = "../http", version = "^0.7" }
 grad = { path = "../grad", version = "^0.12" }
 nn = { path = "../nn", version = "^0.2" }

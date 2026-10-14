@@ -79,8 +79,10 @@ $ `deps/yoloe/src/mask.nu`
 
 // Per-anchor best ENABLED class (bit k of `mask` = class k enabled) —
 // same semantics as the server's yd_decode.
-unsafe @ wd_decode * u o i na i nc f thresh i mask → ( Vec Detection ) {
+@ wd_decode GpuHost o__h i na i nc f thresh i mask → ( Vec Detection ) {
     : ( Vec Detection ) dets ( vec_new [Detection] )
+    ? | | < na 0 < nc 0 > + 4 nc / / ( gpu_host_bytes o__h ) 4 ? > na 0 na 1 { ^ dets } {}
+    : ( Slice f32 ) o ( gpu_host_f32 o__h )
     : ~ i a 0
     ~ < a na {
         : ~ f best 0.0
@@ -88,16 +90,16 @@ unsafe @ wd_decode * u o i na i nc f thresh i mask → ( Vec Detection ) {
         : ~ i c 0
         ~ < c nc {
             ? != 0 & >> mask c 1 {
-                : f sc ( nurl_peek_f32 o + * + 4 c na a )
+                : f sc # f ( slice_at [f32] o + * + 4 c na a )
                 ? > sc best { = best sc = bi c } {}
             } {}
             = c + c 1
         }
         ? & >= bi 0 > best thresh {
-            : f cx ( nurl_peek_f32 o + * 0 na a )
-            : f cy ( nurl_peek_f32 o + * 1 na a )
-            : f w ( nurl_peek_f32 o + * 2 na a )
-            : f h ( nurl_peek_f32 o + * 3 na a )
+            : f cx # f ( slice_at [f32] o + * 0 na a )
+            : f cy # f ( slice_at [f32] o + * 1 na a )
+            : f w # f ( slice_at [f32] o + * 2 na a )
+            : f h # f ( slice_at [f32] o + * 3 na a )
             ( vec_push [Detection] dets @ Detection { bi best cx cy w h a } )
         } {}
         = a + a 1
@@ -105,48 +107,59 @@ unsafe @ wd_decode * u o i na i nc f thresh i mask → ( Vec Detection ) {
     ^ dets
 }
 
-// Load blob `kind` into a fresh Vec u (embedder memcpys, we own it).
+// The host imports read and write through raw addresses; these wrappers
+// hand them a buffer of exactly the size the protocol above names.
+
+// Blob `kind` as a fresh Vec u (the embedder memcpys it in).
 unsafe @ wd_load_blob i kind → ( Vec u ) {
     : i n ( host_blob_size kind )
-    : ( Vec u ) v ( vec_with_cap [u] ? > n 0 { n } { 1 } )
-    ? > n 0 {
-        : i rc ( host_blob_read kind ( vec_data [u] v ) )
-        ? == rc 0 { : b _s ( vec_set_len [u] v n ) } {}
-    } {}
+    ? <= n 0 { ^ ( vec_new [u] ) } {}
+    : ( Vec u ) v ( vec_zeroed [u] n )
+    ? != ( host_blob_read kind ( vec_data [u] v ) ) 0 { ^ ( vec_new [u] ) } {}
     ^ v
 }
 
-unsafe @ main → i {
-    ? != 0 ( host_use_webgpu ) { ( gpu_force_webgpu ) } { ( gpu_force_static ) }
+unsafe @ wd_frame ( Vec u ) rgb GpuHost ctl → i {
+    ? | != ( vec_len [u] rgb ) * * WD_W WD_H 3 != ( gpu_host_bytes ctl ) * 544 4 { ^ 1 } {}
+    ^ ( host_frame ( vec_data [u] rgb ) ( gpu_host_ptr ctl ) )
+}
+
+unsafe @ wd_result GpuHost dets i nd i ms → v {
+    ? > * nd 24 ( gpu_host_bytes dets ) { ^ } {}
+    ( host_result ( gpu_host_ptr dets ) nd ms )
+}
+
+// Two integers in, none out: no memory.
+unsafe @ wd_status i code i extra → v { ( host_status code extra ) }
+
+unsafe @ wd_use_webgpu → b { ^ != 0 ( host_use_webgpu ) }
+
+@ main → i {
+    ? ( wd_use_webgpu ) { ( gpu_force_webgpu ) } { ( gpu_force_static ) }
 
     // model
     : ( Vec u ) mb ( wd_load_blob 0 )
-    ? == ( vec_len [u] mb ) 0 { ( host_status - 0 1 10 ) ^ 1 } {}
+    ? == ( vec_len [u] mb ) 0 { ( wd_status - 0 1 10 ) ^ 1 } {}
     : OGraph g ( onnx_parse mb )
-    ( host_status 1 ( vec_len [u] mb ) )
+    ( wd_status 1 ( vec_len [u] mb ) )
 
     // seed tpe (nc × 512 f32) → zero-padded K×512 slab
-    : ( Vec u ) tpeb ( wd_load_blob 1 )
-    : ~ i nc / ( vec_len [u] tpeb ) 2048
-    ? | == nc 0 > nc WD_K { ( host_status - 0 1 11 ) ^ 1 } {}
-    : ( Vec u ) tpev ( vec_zeroed [u] * * WD_K 512 4 )
-    : *u tpe ( vec_data [u] tpev )
-    : *u tsrc ( vec_data [u] tpeb )
+    : GpuHost tsrc ( gpu_host_of_vec ( wd_load_blob 1 ) )
+    : ~ i nc / ( gpu_host_bytes tsrc ) 2048
+    ? | == nc 0 > nc WD_K { ( wd_status - 0 1 11 ) ^ 1 } {}
+    : GpuHost tpe ( gpu_host_alloc * * WD_K 512 4 )
     : ~ i ci 0
-    ~ < ci * nc 512 { ( nurl_poke_f32 tpe ci ( nurl_peek_f32 tsrc ci ) ) = ci + ci 1 }
+    ~ < ci * nc 512 { ( gpu_host_set_i32 tpe ci ( gpu_host_get_i32 tsrc ci ) ) = ci + ci 1 }
 
     // engine (static kernels — rt_open fails cleanly if none are linked)
     : Engine e ( rt_open 0 )
-    ? ! ( rt_ok e ) { ( host_status - 0 1 12 ) ^ 1 } {}
-    ( host_status 2 nc )
+    ? ! ( rt_ok e ) { ( wd_status - 0 1 12 ) ^ 1 } {}
+    ( wd_status 2 nc )
 
     // shared frame + control + result buffers
-    : ( Vec u ) rgb ( vec_with_cap [u] * * WD_W WD_H 3 )
-    : b _r1 ( vec_set_len [u] rgb * * WD_W WD_H 3 )
-    : ( Vec u ) ctlv ( vec_zeroed [u] * 544 4 )
-    : ( Vec u ) detsv ( vec_zeroed [u] * * WD_MAXDET 6 4 )
-    : *u ctl ( vec_data [u] ctlv )
-    : *u dets_out ( vec_data [u] detsv )
+    : ( Vec u ) rgb ( vec_zeroed [u] * * WD_W WD_H 3 )
+    : GpuHost ctl ( gpu_host_alloc * 544 4 )
+    : GpuHost dets_out ( gpu_host_alloc * * WD_MAXDET 6 4 )
 
     : i na 8400
     : i MH ( mask_dim )
@@ -154,14 +167,14 @@ unsafe @ main → i {
 
     : ~ b run T
     ~ run {
-        : i cmd ( host_frame ( vec_data [u] rgb ) ctl )
+        : i cmd ( wd_frame rgb ctl )
         ? == cmd 2 {
             // add prompt: embedding f32[512] at ctl slot 16.. into tpe slot
-            : i slot # i ( nurl_peek_i32 ctl 4 )
+            : i slot ( gpu_host_get_i32 ctl 4 )
             ? & >= slot 0 < slot WD_K {
                 : ~ i q 0
                 ~ < q 512 {
-                    ( nurl_poke_f32 tpe + * slot 512 q ( nurl_peek_f32 ctl + 16 q ) )
+                    ( gpu_host_set_i32 tpe + * slot 512 q ( gpu_host_get_i32 ctl + 16 q ) )
                     = q + q 1
                 }
                 ? >= slot nc { = nc + slot 1 } {}
@@ -169,26 +182,23 @@ unsafe @ main → i {
         } {
             ? == cmd 0 {
                 : i t0 ( monotonic_ns )
-                : f conf / # f # i ( nurl_peek_i32 ctl 0 ) 1000.0
-                : i want_masks # i ( nurl_peek_i32 ctl 1 )
-                : i emask # i ( nurl_peek_i32 ctl 2 )
+                : f conf / # f ( gpu_host_get_i32 ctl 0 ) 1000.0
+                : i want_masks ( gpu_host_get_i32 ctl 1 )
+                : i emask ( gpu_host_get_i32 ctl 2 )
 
                 : Image im ( image_of WD_W WD_H 3 rgb )
                 : Letterbox lb ( letterbox im 640 )
-                : ( Vec u ) hostv ( img_to_nchw_norm . lb img )
-                : *u host ( vec_data [u] hostv )
+                : GpuHost host ( img_to_nchw_norm . lb img )
                 : ( Vec i ) s3 ( vec_new [i] )
                 ( vec_push [i] s3 1 ) ( vec_push [i] s3 WD_K ) ( vec_push [i] s3 512 )
-                : RTensor out ( rt_run_two e g `images` host ( wd_shape4 1 3 640 640 ) `tpe` tpe s3 )
-                : GpuHost o__h ( rt_download e out )
-                : *u o ( gpu_host_ptr o__h )
+                : RTensor out ( rt_run_two_host e g `images` host ( wd_shape4 1 3 640 640 ) `tpe` tpe s3 )
+                : GpuHost o ( rt_download e out )
 
                 : ~ b masks != want_masks 0
-                : ~ i proto_i 0
-                : ~ GpuHost proto_i__h ( gpu_host_none )
+                : ~ GpuHost proto ( gpu_host_none )
                 ? masks {
                     : RTensor proto_t ( rt_output1 e )
-                    ? == . proto_t nelem 0 { = masks F } { = proto_i__h ( rt_download e proto_t ) = proto_i # i ( gpu_host_ptr proto_i__h ) }
+                    ? == . proto_t nelem 0 { = masks F } { = proto ( rt_download e proto_t ) }
                 } {}
 
                 : ( Vec Detection ) raw ( wd_decode o na WD_K conf emask )
@@ -207,17 +217,17 @@ unsafe @ main → i {
                             : i x0 - ocx / ow 2
                             : i y0 - ocy / oh 2
                             ? masks {
-                                : ( Vec u ) coeff ( mask_coeffs o na WD_K . d ai )
-                                : ( Vec u ) L ( mask_logits # *u proto_i ( vec_data [u] coeff ) MH MW )
-                                ( mask_overlay im ( vec_data [u] L ) lb 640 x0 y0 ow oh ( wd_pal 0 k ) ( wd_pal 1 k ) ( wd_pal 2 k ) 118 )
+                                : ( Vec f ) coeff ( mask_coeffs o na WD_K . d ai )
+                                : ( Vec f ) L ( mask_logits proto coeff MH MW )
+                                ( mask_overlay im L lb 640 x0 y0 ow oh ( wd_pal 0 k ) ( wd_pal 1 k ) ( wd_pal 2 k ) 118 )
                             } {}
                             : i base * k 6
-                            ( nurl_poke_f32 dets_out + base 0 # f . d cls )
-                            ( nurl_poke_f32 dets_out + base 1 . d score )
-                            ( nurl_poke_f32 dets_out + base 2 # f x0 )
-                            ( nurl_poke_f32 dets_out + base 3 # f y0 )
-                            ( nurl_poke_f32 dets_out + base 4 # f ow )
-                            ( nurl_poke_f32 dets_out + base 5 # f oh )
+                            ( gpu_host_set_f32 dets_out + base 0 # f . d cls )
+                            ( gpu_host_set_f32 dets_out + base 1 . d score )
+                            ( gpu_host_set_f32 dets_out + base 2 # f x0 )
+                            ( gpu_host_set_f32 dets_out + base 3 # f y0 )
+                            ( gpu_host_set_f32 dets_out + base 4 # f ow )
+                            ( gpu_host_set_f32 dets_out + base 5 # f oh )
                         }
                         F _ → {}
                     }
@@ -225,7 +235,7 @@ unsafe @ main → i {
                 }
 
                 : i ms / - ( monotonic_ns ) t0 1000000
-                ( host_result dets_out nd ms )
+                ( wd_result dets_out nd ms )
             } {
                 = run F
             } }

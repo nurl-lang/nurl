@@ -12,8 +12,7 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
 $ `deps/image/src/image.nu`
 $ `stdlib/core/slice.nu`
-
-& `c` @ nurl_poke_f32 *u base i idx f val → v
+$ `deps/gpu/src/gpu.nu`
 
 // Letterbox result: the square image plus the transform back to original
 // pixels (orig = (lb - pad) / scale).
@@ -108,28 +107,40 @@ $ `stdlib/core/slice.nu`
     ^ @ Letterbox { out scale padx pady }
 }
 
-// Pack to NCHW float tensor normalised to [0,1]: 3*H*W f32 as bytes —
-// hand `( vec_data [u] t )` to the runtime; the Vec releases itself.
-unsafe @ img_to_nchw_norm Image im → ( Vec u ) {
+// Pack to NCHW float tensor normalised to [0,1]: a host buffer of 3*H*W
+// f32, the input rt_run_host takes.
+@ img_to_nchw_norm Image im → GpuHost {
     : i W . im width
     : i H . im height
-    : i nb * * * 3 H W 4
-    : ( Vec u ) out ( vec_with_cap [u] nb )
-    : *u host ( vec_data [u] out )
+    : i C . im channels
+    // the channels an image has, read a row at a time; a channel it lacks
+    // (or a short raster) packs as image_get reads it, 0
+    : b whole & >= C 3 >= ( vec_len [u] . im data ) * * W H C
+    : GpuHost out ( gpu_host_alloc * * * 3 H W 4 )
+    : ( Slice f32 ) ov ( gpu_host_f32 out )
+    : ( Slice u ) px ( slice_from_vec [u] . im data )
     : ~ i c 0
     ~ < c 3 {
         : ~ i y 0
         ~ < y H {
+            : ( Slice f32 ) orow ( slice_window [f32] ov + * c * H W * y W W )
             : ~ i x 0
-            ~ < x W {
-                ( nurl_poke_f32 host + * c * H W + * y W x / # f ( image_get im x y c ) 255.0 )
-                = x + x 1
+            ? whole {
+                : ( Slice u ) row ( slice_window [u] px * * y W C * W C )
+                ~ < x W {
+                    ( slice_put [f32] orow x # f32 / # f # i ( slice_at [u] row + * x C c ) 255.0 )
+                    = x + x 1
+                }
+            } {
+                ~ < x W {
+                    ( slice_put [f32] orow x # f32 / # f ( image_get im x y c ) 255.0 )
+                    = x + x 1
+                }
             }
             = y + y 1
         }
         = c + c 1
     }
-    : b _l ( vec_set_len [u] out nb )  // every byte written above
     ^ out
 }
 

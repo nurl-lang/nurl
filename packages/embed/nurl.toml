@@ -9,7 +9,7 @@ license = "MIT OR Apache-2.0"
 tokenizer = { path = "../tokenizer", version = "^0.4" }
 safetensor = { path = "../safetensor", version = "^0.5" }
 gpukit = { path = "../gpukit", version = "^0.10" }
-gpu = { path = "../gpu", version = "^0.16" }
+gpu = { path = "../gpu", version = "^0.17" }
 http = { path = "../http", version = "^0.7" }
 
 hub = { path = "../hub", version = "^0" }

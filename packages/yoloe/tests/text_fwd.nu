@@ -10,14 +10,12 @@ $ `deps/onnx/src/pb.nu`
 $ `deps/onnx/src/model.nu`
 $ `deps/onnx/src/runtime.nu`
 
-& `c` @ nurl_peek_f32 *u base i idx → f
-
 // A raw little-endian f32 file as its bytes (empty when unreadable).
 @ load_f32 s path → ( Vec u ) {
     ?? ( read_file_bytes path ) { T b → ^ b F _ → ^ ( vec_new [u] ) }
 }
 
-unsafe @ main → i {
+@ main → i {
     : ( Vec String ) av ( env_args_list )
     : String mp ?? ( vec_get [String] av 1 ) { T x → x F _ → ( string_new ) }
     : String tp ?? ( vec_get [String] av 2 ) { T x → x F _ → ( string_new ) }
@@ -30,34 +28,32 @@ unsafe @ main → i {
     ( nurl_print `nodes ` ) ( nurl_print ( nurl_str_int ( vec_len [ONode] . g nodes ) ) )
     ( nurl_print ` input=` ) ( nurl_print ( string_data . g input_name ) ) ( nurl_print `\n` )
 
-    // tokens.i64 is already int64 LE — upload its bytes directly (the Vec
-    // is bound here, so the bytes outlive the run that reads them)
-    : ( Vec u ) toks ?? ( read_file_bytes ( string_data tp ) ) { T tb → tb F _ → { ( nurl_print `tokens fail\n` ) ^ 1 } }
-    : *u tokhost ( vec_data [u] toks )
+    // tokens.i64 is already int64 LE — the host buffer adopts its bytes
+    // and the run uploads them as they are
+    : GpuHost toks ( gpu_host_of_vec ?? ( read_file_bytes ( string_data tp ) ) { T tb → tb F _ → { ( nurl_print `tokens fail\n` ) ^ 1 } } )
 
     : Engine e ( rt_open 0 )
     ? ! ( rt_ok e ) { ( nurl_print `gpu/kernels failed\n` ) ^ 1 } {}
     ( nurl_print `device ` ) ( nurl_print ( rt_name e ) ) ( nurl_print `\n` )
 
-    : RTensor out ( rt_run_tokens e g tokhost nrow ncol )
+    : RTensor out ( rt_run_tokens_host e g toks nrow ncol )
 
-    : GpuHost host__h ( rt_download e out )
-    : *u host ( gpu_host_ptr host__h )
+    : GpuHost host ( rt_download e out )
     ( nurl_print `output floats ` ) ( nurl_print ( nurl_str_int . out nelem ) ) ( nurl_print `\n` )
 
-    : ( Vec u ) gref_v ( load_f32 ( string_data fp ) )
-    : *u gref ( vec_data [u] gref_v )
-    : i gn / ( vec_len [u] gref_v ) 4
+    : GpuHost gref ( gpu_host_of_vec ( load_f32 ( string_data fp ) ) )
+    : i gn / ( gpu_host_bytes gref ) 4
+    ? > gn / ( gpu_host_bytes host ) 4 { ( nurl_print `output smaller than the reference\n` ) ^ 1 } {}
     : ~ i bad 0
     : ~ i nan 0
     : ~ f maxerr 0.0
     : ~ i j 0
     ~ < j gn {
-        : f hv ( nurl_peek_f32 host j )
+        : f hv ( gpu_host_get_f32 host j )
         // A NaN comparison is silently false for every `>`/`<`, so count NaN
         // explicitly — otherwise an all-NaN output passes as a perfect match.
         ? ! == hv hv { = nan + nan 1 = bad + bad 1 } {
-            : ~ f d - hv ( nurl_peek_f32 gref j )
+            : ~ f d - hv ( gpu_host_get_f32 gref j )
             ? < d 0.0 { = d - 0.0 d } {}
             ? > d maxerr { = maxerr d } {}
             ? > d 0.01 { = bad + bad 1 } {}

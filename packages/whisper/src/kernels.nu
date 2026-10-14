@@ -845,7 +845,8 @@ $ `deps/gpu/src/gpu.nu`
     }`
 }
 
-@ wk_build Gpu g → WhKernels {
+// unsafe: compiles this file's own kernel sources.
+unsafe @ wk_build Gpu g → WhKernels {
     : GpuKernel k1 ( gpu_compile g ( __wk_matvec ) `matvec` )
     : b want_warp == ( gpu_backend ) 0
     : GpuKernel k1w ? want_warp ( gpu_compile g ( __wk_matvec_w ) `matvec_w` ) ( gpu_kernel_none )
@@ -889,7 +890,10 @@ $ `deps/gpu/src/gpu.nu`
 // of use — exactly, denormals included — so the arithmetic is f32 either way
 // and the result is bit-identical; what changes is that the weight bytes on
 // the device (and through the memory bus of a memory-bound matvec) are half.
-@ wk_matvec WhKernels ks i wd i xd i bd i yd i rows i cols i batch i wt → v {
+// The launchers take device addresses as plain integers and launch a
+// kernel that indexes them by the sizes they are given, so each is `raw`:
+// the caller vouches that every address is a live buffer that big.
+raw @ wk_matvec WhKernels ks i wd i xd i bd i yd i rows i cols i batch i wt → v {
     : ( Vec i ) a ( vec_new [i] )
     ( vec_push [i] a ( gpu_arg_i64 wd ) )
     ( vec_push [i] a ( gpu_arg_i64 xd ) )
@@ -923,7 +927,7 @@ $ `deps/gpu/src/gpu.nu`
     }
 }
 
-@ wk_layernorm WhKernels ks i xd i wd i bd i yd i n f eps i batch → v {
+raw @ wk_layernorm WhKernels ks i xd i wd i bd i yd i n f eps i batch → v {
     : ( Vec i ) a ( vec_new [i] )
     ( vec_push [i] a ( gpu_arg_i64 xd ) )
     ( vec_push [i] a ( gpu_arg_i64 wd ) )
@@ -939,14 +943,14 @@ $ `deps/gpu/src/gpu.nu`
     }
 }
 
-@ wk_gelu WhKernels ks i xd i n → v {
+raw @ wk_gelu WhKernels ks i xd i n → v {
     : ( Vec i ) a ( vec_new [i] )
     ( vec_push [i] a ( gpu_arg_i64 xd ) )
     ( vec_push [i] a ( gpu_arg_i32 n ) )
     : i _r ( gpu_launch . ks gelu ( gpu_grid n 256 ) 256 a )
 }
 
-@ wk_conv1d WhKernels ks i xd i wd i bd i yd i t_in i c_in i c_out i stride i pad → v {
+raw @ wk_conv1d WhKernels ks i xd i wd i bd i yd i t_in i c_in i c_out i stride i pad → v {
     : ( Vec i ) a ( vec_new [i] )
     ( vec_push [i] a ( gpu_arg_i64 xd ) )
     ( vec_push [i] a ( gpu_arg_i64 wd ) )
@@ -964,7 +968,7 @@ $ `deps/gpu/src/gpu.nu`
 // Attention. `causal` 0 = every query sees every key (the encoder, and the
 // decoder's cross-attention); 1 = a query sees only keys at or before it (the
 // decoder's self-attention).
-@ wk_attn WhKernels ks i qd i kd i vd i scd i outd i nh i hd i nq i nkey f qscale i causal → v {
+raw @ wk_attn WhKernels ks i qd i kd i vd i scd i outd i nh i hd i nq i nkey f qscale i causal → v {
     // The encoder: many queries, no mask, head_dim 64 — one fused kernel, no
     // score matrix. The decoder (one query at a time, causal) has nothing to
     // amortise and takes the two-kernel path.
@@ -1037,7 +1041,7 @@ $ `deps/gpu/src/gpu.nu`
     : i _r2 ( gpu_launch . ks attn_out ( gpu_grid * * nh nq hd 256 ) 256 a2 )
 }
 
-@ wk_addv WhKernels ks i ad i bd i n → v {
+raw @ wk_addv WhKernels ks i ad i bd i n → v {
     : ( Vec i ) a ( vec_new [i] )
     ( vec_push [i] a ( gpu_arg_i64 ad ) )
     ( vec_push [i] a ( gpu_arg_i64 bd ) )
@@ -1045,7 +1049,7 @@ $ `deps/gpu/src/gpu.nu`
     : i _r ( gpu_launch . ks addv ( gpu_grid n 256 ) 256 a )
 }
 
-@ wk_addrow WhKernels ks i ad i vd i n i batch → v {
+raw @ wk_addrow WhKernels ks i ad i vd i n i batch → v {
     : ( Vec i ) a ( vec_new [i] )
     ( vec_push [i] a ( gpu_arg_i64 ad ) )
     ( vec_push [i] a ( gpu_arg_i64 vd ) )
@@ -1054,7 +1058,7 @@ $ `deps/gpu/src/gpu.nu`
     : i _r ( gpu_launch . ks addrow ( gpu_grid * n batch 256 ) 256 a )
 }
 
-@ wk_scale WhKernels ks i xd f s i n → v {
+raw @ wk_scale WhKernels ks i xd f s i n → v {
     : ( Vec i ) a ( vec_new [i] )
     ( vec_push [i] a ( gpu_arg_i64 xd ) )
     ( vec_push [i] a ( gpu_arg_f32 s ) )
@@ -1062,7 +1066,7 @@ $ `deps/gpu/src/gpu.nu`
     : i _r ( gpu_launch . ks scale ( gpu_grid n 256 ) 256 a )
 }
 
-@ wk_getrow WhKernels ks i table i yd i row i n i wt → v {
+raw @ wk_getrow WhKernels ks i table i yd i row i n i wt → v {
     : ( Vec i ) a ( vec_new [i] )
     ( vec_push [i] a ( gpu_arg_i64 table ) )
     ( vec_push [i] a ( gpu_arg_i64 yd ) )
@@ -1072,7 +1076,7 @@ $ `deps/gpu/src/gpu.nu`
     : i _r ( gpu_launch . ks getrow ( gpu_grid n 256 ) 256 a )
 }
 
-@ wk_setrow WhKernels ks i cache i vd i row i n → v {
+raw @ wk_setrow WhKernels ks i cache i vd i row i n → v {
     : ( Vec i ) a ( vec_new [i] )
     ( vec_push [i] a ( gpu_arg_i64 cache ) )
     ( vec_push [i] a ( gpu_arg_i64 vd ) )
@@ -1083,7 +1087,7 @@ $ `deps/gpu/src/gpu.nu`
 
 // `half` = 1 for f16, 0 for bf16.
 // The index of the largest logit, written as one int to `outd`.
-@ wk_argmax WhKernels ks i xd i n i outd → v {
+raw @ wk_argmax WhKernels ks i xd i n i outd → v {
     : ( Vec i ) a ( vec_new [i] )
     ( vec_push [i] a ( gpu_arg_i64 xd ) )
     ( vec_push [i] a ( gpu_arg_i32 n ) )
@@ -1091,7 +1095,7 @@ $ `deps/gpu/src/gpu.nu`
     : i _r ( gpu_launch . ks argmaxk 1 256 a )
 }
 
-@ wk_cvt WhKernels ks i srcd i dstd i n b half → v {
+raw @ wk_cvt WhKernels ks i srcd i dstd i n b half → v {
     : ( Vec i ) a ( vec_new [i] )
     ( vec_push [i] a ( gpu_arg_i64 srcd ) )
     ( vec_push [i] a ( gpu_arg_i64 dstd ) )

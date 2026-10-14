@@ -53,7 +53,7 @@ $ `../src/bpe.nu`
     ~ < k 8 { ( vec_push [u] out # u & >> v * k 8 255 ) = k + k 1 }
 }
 
-unsafe @ main → i {
+@ main → i {
     : ( Vec String ) av ( env_args_list )
     ? < ( vec_len [String] av ) 5 { ( p `usage: gen_tpe <clip_merges.txt> <text_encoder.onnx> <names.txt> <out_base>\n` ) ^ 2 } {}
     : String mp ?? ( vec_get [String] av 1 ) { T x → x F _ → ( string_new ) }
@@ -87,16 +87,18 @@ unsafe @ main → i {
         ~ < t2 77 { ( push_i64_le tb ( _ig row t2 ) ) = t2 + t2 1 }
         ( vec_free [i] row )
 
-        : RTensor out ( rt_run_tokens e g # *u ( vec_data [u] tb ) 1 77 )
-        : GpuHost feat__h ( rt_download e out )
-        : *u feat ( gpu_host_ptr feat__h )
+        : RTensor out ( rt_run_tokens_host e g ( gpu_host_of_vec tb ) 1 77 )
+        : GpuHost feat ( rt_download e out )
         : i fn . out nelem
-        // the download buffer is raw f32 little-endian: copy its bytes verbatim,
-        // 8 bytes (one i64 word) at a time (512 floats = 256 words).
-        : i nwords / * fn 4 8
+        // the download buffer is raw f32 little-endian: copy its bytes
+        // verbatim, one 4-byte cell at a time
         : ~ i k 0
-        ~ < k nwords { ( push_i64_le tpe ( nurl_peek feat k ) ) = k + k 1 }
-        ( vec_free [u] tb )
+        ~ < k fn {
+            : i w ( gpu_host_get_i32 feat k )
+            : ~ i bk 0
+            ~ < bk 4 { ( vec_push [u] tpe # u & >> w * bk 8 255 ) = bk + bk 1 }
+            = k + k 1
+        }
         ( p `  ` ) ( p nm ) ( p ` -> ` ) ( pn fn ) ( p ` floats\n` )
         = i + i 1
     }

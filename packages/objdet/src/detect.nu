@@ -9,8 +9,8 @@
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/std/float.nu`
-
-& `c` @ nurl_peek_f32 *u base i idx → f
+$ `deps/gpu/src/gpu.nu`
+$ `stdlib/core/slice.nu`
 
 // A detection in normalised (0..1) centre/size coordinates.
 : Detection { i cls f score f cx f cy f w f h }
@@ -55,11 +55,14 @@ $ `stdlib/std/float.nu`
 }
 
 // grid value at (channel, cy, cx) for a 13×13 grid.
-unsafe @ __gv * u grid i ch i cy i cx → f { ^ ( nurl_peek_f32 grid + * ch 169 + * cy 13 cx ) }
+@ __gv ( Slice f32 ) grid i ch i cy i cx → f { ^ # f ( slice_at [f32] grid + * ch 169 + * cy 13 cx ) }
 
-// Decode the grid into detections above `thresh`.
-unsafe @ yolo_decode * u grid f thresh → ( Vec Detection ) {
+// Decode the grid (125×13×13 f32, rt_download's result) into detections
+// above `thresh`. A grid of any other size is not this head's: none.
+@ yolo_decode GpuHost grid__h f thresh → ( Vec Detection ) {
     : ( Vec Detection ) out ( vec_new [Detection] )
+    ? != ( gpu_host_bytes grid__h ) * 21125 4 { ^ out } {}
+    : ( Slice f32 ) grid ( gpu_host_f32 grid__h )
     : ~ i cy 0
     ~ < cy 13 {
         : ~ i cx 0

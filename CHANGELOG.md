@@ -90,6 +90,31 @@ kernels of their own (f5tts, grad, onnx, lingbot-map) are `unsafe` where
 they establish what the kernel needs, and f5tts's launchers over raw
 device addresses are `raw`.
 
+The `gpu` package (0.17.0) underneath them had the same gap, six ways:
+safe code built a `GpuBuffer` from any number (a literal or
+`gpu_buffer_view`), copied device-to-device from any address
+(`gpu_dtod`), made an owner that freed an address it never allocated,
+compiled and launched arbitrary kernel source, and indexed a `GpuHost`
+past its end with the unchecked `gpu_host_get_f32` / `…set…`. The handle
+structs are `raw`, those functions are `raw`, and the host accessors
+panic past the end; `packages/gpu/tests/holes_test.sh` holds all six.
+nurllama's and whisper's kernel launchers took device addresses as plain
+integers from safe code and are `raw` too. The safe way in is a view:
+`gpu_host_f32` lends a `GpuHost` as a bounds-checked `Slice f32` that
+lives no longer than it, and onnx's `rt_run_host` / `rt_run_two_host` /
+`rt_run_tokens_host` take `GpuHost` inputs they check against the shape.
+With them `objdet` (7 → 4), `yoloe` (34 → 24) and `yoloe-demo` (14 → 5)
+keep `unsafe` only for their FFI — bit-identical, and the mask and
+image-packing loops run 10–30% faster through windows than through the
+pointers. `template` (35 → 0) and `pki-server` (19 → 0) keep their state
+as a frozen `Arc` read with `arc_get` and, where it changes, a `Locked`
+snapshot or an `inout` local; `template`'s `tset_add` used to change a set
+in place while a render on another worker read it, and an `{% include %}`
+pointed the render at a source a concurrent add could free. Storing an
+`f32` through a slice window ended the borrows of
+the other windows (its instances are named for LLVM's `float`, which the
+scalar rule did not list); it no longer does.
+
 Packages: `oauth`, `iforest`, `vindex`, `data`, `cli`, `psql`, `redis`,
 `zst`, `video`, `ply`, `swarm` and `mlp` have no `unsafe` function left
 (`video` / `ply` / `swarm` keep their state in a `Locked` or a frozen

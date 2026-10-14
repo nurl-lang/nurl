@@ -8,6 +8,7 @@ Requires NURL 0.73.0 (grammar v2.9 `raw`, `slice_window`, `file_is_open`).
 
 - The f32 staging helpers vouch for the cast kernels they launch (gpukit 0.10.2's `gk_run_dev` is `raw`).
 - 1 more functions are `unsafe`/`raw` than in 0.12.0 (158 now): where they launch kernels of their own, the trust is now written down.
+- Requires gpu 0.17 (its handle structs are sealed and its address-taking functions `raw`); nothing here changed.
 
 ## [0.12.0] — 2026-10-12
 
@@ -27,7 +28,6 @@ The published 0.11.3 does not compile under it.
   same tape, which may add to it (the tests and the reference dump
   programs read one gradient at a time).
 - Requires gpu 0.16.
-
 
 ## [0.11.3] — 2026-10-11
 

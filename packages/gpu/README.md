@@ -110,20 +110,33 @@ backend (ROCm/HIP, OpenCL, a CPU fallback) slots in behind the same names.
 | `gpu_device_count → i` | number of CUDA devices |
 | `gpu_open i ordinal → Gpu` | init driver, bind device, retain the PRIMARY context (shared process-wide) |
 | `gpu_ok Gpu → b` / `gpu_name Gpu → s` | status / device name |
-| `gpu_compile Gpu s src s name → GpuKernel` | NVRTC compile + load `extern "C" __global__` entry |
+| `gpu_compile Gpu s src s name → GpuKernel` | NVRTC compile + load `extern "C" __global__` entry (`raw`) |
 | `gpu_alloc Gpu i bytes → GpuBuffer` | device allocation |
-| `gpu_host_alloc i bytes → GpuHost` | host staging buffer (+ `gpu_host_{set,get}_{f32,i32}`, `gpu_host_ptr` for the raw address) |
-| `gpu_upload GpuBuffer *u host → i` | host → device (`( gpu_host_ptr h )` for a GpuHost) |
-| `gpu_upload_batch ( Vec GpuCopy ) items → i` | many host spans → many device buffers in ONE streamed pass through the pinned staging pair (a model's thousand tensors: PCIe-bound, not driver-bound); `GpuCopy { i dptr i host i bytes }`, `host` is the pointer as `# i` |
+| `gpu_host_alloc i bytes → GpuHost` | zero-filled host staging buffer (+ bounds-checked `gpu_host_{set,get}_{f32,i32}`; `gpu_host_ptr` for the raw address, `raw`) |
+| `gpu_host_f32 GpuHost → (Slice f32)` / `gpu_host_u8 → (Slice u)` | the buffer as a checked view that lives no longer than it — the fast safe path |
+| `gpu_host_of_vec sink (Vec u) → GpuHost` | adopt a byte Vec as a host buffer, no copy |
+| `gpu_upload_host GpuBuffer GpuHost → i` / `gpu_download_host GpuHost GpuBuffer → i` | whole-buffer copies, safe: a host side of the wrong size is refused (-1) |
+| `gpu_upload_vec GpuBuffer (Vec u) → i` / `gpu_download_vec GpuBuffer → (Vec u)` | the same for a byte Vec |
+| `gpu_upload GpuBuffer *u host → i` | host → device from a raw address (the caller vouches it holds the buffer's size) |
+| `gpu_upload_batch ( Vec GpuCopy ) items → i` | many host spans → many device buffers in ONE streamed pass through the pinned staging pair (a model's thousand tensors: PCIe-bound, not driver-bound); `GpuCopy { i dptr i host i bytes }`, `host` is the pointer as `# i` (`raw`) |
 | `gpu_download *u host GpuBuffer → i` | device → host |
 | `gpu_arg_buffer/_i32/_i64/_f32 → i` | encode one kernel argument |
-| `gpu_launch GpuKernel i grid i block (Vec i) args → i` | 1-D launch |
+| `gpu_launch GpuKernel i grid i block (Vec i) args → i` | 1-D launch (`raw`) |
 | `gpu_grid i n i block → i` | ceil-div grid size |
 | `gpu_sync Gpu → i` | block until work completes |
 | `gpu_bind_thread Gpu → b` | make the device current on THIS thread (CUDA contexts are thread-local; no-op T elsewhere) |
-| `gpu_buffer_view i dptr i bytes → GpuBuffer` | an unowned view of device memory something else keeps alive |
+| `gpu_buffer_view i dptr i bytes → GpuBuffer` | an unowned view of device memory something else keeps alive (`raw`) |
 | `gpu_timer_new` / `gpu_graph_end` → `GpuTimer` / `GpuGraph` | CUDA events / executable graphs |
 | `gpu_free` / `gpu_kernel_free` / `gpu_host_free` / `gpu_timer_free` / `gpu_graph_free` / `gpu_close` | early release (optional) |
+
+What is `raw` (grammar §3.3e) trusts its caller for what the compiler
+cannot check — that kernel source is sound, that an address is live
+device memory of the size a kernel indexes — so only an `unsafe`
+function may call it: the one that compiled the kernel, allocated the
+buffers and checked the sizes. The handle structs are `raw` too: a
+`GpuBuffer` comes from `gpu_alloc`, never from a number. Everything else
+is safe to call, and `tests/holes_test.sh` holds the ways safe code
+used to reach memory it did not own.
 
 Nothing is released by hand. Every handle (`Gpu`, `GpuBuffer`,
 `GpuKernel`, `GpuHost`, `GpuTimer`, `GpuGraph`) is a small value struct
@@ -139,7 +152,8 @@ also holds its context, so a buffer may outlive the `Gpu` it came from.
 ```
 $ `gpu.nu`
 
-@ main → i {
+// unsafe: compiles one fixed kernel and launches it on buffers of n floats
+unsafe @ main → i {
     : Gpu g ( gpu_open 0 )
     : GpuKernel k ( gpu_compile g
         `extern "C" __global__ void vadd(const float* a, const float* b, float* c, int n){
@@ -148,16 +162,16 @@ $ `gpu.nu`
 
     : i n 1024
     : i bytes * n 4
-    : GpuHost ha ( gpu_host_alloc bytes )  // fill ha, hb with gpu_host_set_f32 ...
+    : GpuHost ha ( gpu_host_alloc bytes )  // fill ha, hb through gpu_host_f32 ...
     : GpuBuffer da ( gpu_alloc g bytes )
-    ( gpu_upload da ( gpu_host_ptr ha ) )  // ... db, dc likewise
+    ( gpu_upload_host da ha )  // ... db, dc likewise
 
     : ( Vec i ) args ( vec_new [i] )
     ( vec_push [i] args ( gpu_arg_buffer da ) )   // a, b, c, then:
     ( vec_push [i] args ( gpu_arg_i32 n ) )
     ( gpu_launch k ( gpu_grid n 256 ) 256 args )
     ( gpu_sync g )
-    ( gpu_download ( gpu_host_ptr hc ) dc )
+    ( gpu_download_host hc dc )
     ^ 0                                    // everything above goes with its owner
 }
 ```

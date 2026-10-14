@@ -612,6 +612,10 @@ A panic is not outside the model: what a panic abandons is reclaimed
   may be read and written together when its elements own nothing.
   `vec_data` + `unsafe` is not faster than either — `mlp`'s training loop,
   rewritten over windows, runs 26% faster than its raw-pointer form.
+  A buffer a library owns is lent the same way: `gpu_host_f32` views a
+  GPU staging buffer as a `Slice f32` that lives no longer than it, and
+  yoloe's mask and image-packing loops over windows of it run 10–30%
+  faster than the `nurl_peek_f32` / `nurl_poke_f32` loops they replace.
 - **Put a contract where it is kept.** A function that only its caller
   can make sound (an address it is handed, a size it trusts, kernel code
   it runs) is `raw @` (spec §3.3e): the caller that allocated, checked or

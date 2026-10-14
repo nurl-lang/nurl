@@ -8,6 +8,8 @@
 
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
+$ `deps/gpu/src/gpu.nu`
+$ `stdlib/core/slice.nu`
 
 // A detection in letterboxed-pixel centre/size coordinates. `ai` is the
 // anchor index it came from — needed to read the 32 mask coefficients
@@ -15,14 +17,15 @@ $ `stdlib/core/string.nu`
 : Detection { i cls f score f cx f cy f w f h i ai }
 
 // value at (channel, anchor) for a [1, C, na] tensor flattened row-major.
-unsafe @ __at * u o i na i ch i a → f { ^ ( nurl_peek_f32 o + * ch na a ) }
-
-& `c` @ nurl_peek_f32 *u base i idx → f
+@ __at ( Slice f32 ) o i na i ch i a → f { ^ # f ( slice_at [f32] o + * ch na a ) }
 
 // Decode the best detections above `thresh`. nc = number of classes, na =
-// anchors, no = total channels (4 + nc + masks).
-unsafe @ yolo_decode * u out i na i nc f thresh → ( Vec Detection ) {
+// anchors, no = total channels (4 + nc + masks). An output too small for
+// that many (a class list longer than the model's) decodes to none.
+@ yolo_decode GpuHost out__h i na i nc f thresh → ( Vec Detection ) {
     : ( Vec Detection ) dets ( vec_new [Detection] )
+    ? | | < na 0 < nc 0 > + 4 nc / / ( gpu_host_bytes out__h ) 4 ? > na 0 na 1 { ^ dets } {}
+    : ( Slice f32 ) out ( gpu_host_f32 out__h )
     : ~ i a 0
     ~ < a na {
         : ~ f best 0.0

@@ -27275,7 +27275,7 @@ unsafe @ bck_sx_split s args → s {
     : i k ( nurl_str_find callee `__` )
     ? < k 0 { ^ F } {}
     : s ta ( nurl_str_slice callee + k 2 - - ( nurl_str_len callee ) k 2 )
-    ^ ( str_contains_word `i64 i32 i16 i8 u64 u32 u16 u8 f64 f32 i1` ta )
+    ^ ( str_contains_word `i64 i32 i16 i8 u64 u32 u16 u8 f64 f32 float i1` ta )
 }
 
 @ bck_callee_drops_elems s callee s aix → b {

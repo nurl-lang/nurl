@@ -26,6 +26,7 @@ $ `stdlib/std/x509_gen.nu`
 $ `stdlib/std/pkey.nu`
 $ `stdlib/std/csr.nu`
 $ `stdlib/std/arc.nu`
+$ `stdlib/std/random.nu`
 $ `stdlib/core/slice.nu`
 
 & `c` @ nurl_rand_fill *u buf i n → i
@@ -101,40 +102,32 @@ $ `stdlib/core/slice.nu`
 
 @ PkiCa_drop sink PkiCa h → v {}
 
-unsafe @ __PkiCa_ptr PkiCa h → *PkiCaImpl { ^ ( arc_ptr [PkiCaImpl] . h a ) }
-
 // The key pair moves in; the PEMs and the name are copied.
 @ __pki_ca_make i alg sink ( Vec u ) scalar sink ( Vec u ) pubkey sink ( Vec u ) ml_sk sink ( Vec u ) ml_pk s cert_pem s key_pem s cn → PkiCa {
     ^ @ PkiCa { ( arc_new [PkiCaImpl] @ PkiCaImpl { alg scalar pubkey ml_sk ml_pk ( string_from cert_pem ) ( string_from key_pem ) ( string_from cn ) } ) }
 }
 
-unsafe @ pki_ca_alg PkiCa ca → i { ^ . ( __PkiCa_ptr ca ) alg }
+@ pki_ca_alg PkiCa ca → i { ^ . ( arc_get [PkiCaImpl] . ca a ) alg }
 
-unsafe @ pki_ca_cert_pem PkiCa ca → s { ^ ( string_data . ( __PkiCa_ptr ca ) cert_pem ) }
+@ pki_ca_cert_pem PkiCa ca → s { : PkiCaImpl c ( arc_get [PkiCaImpl] . ca a ) ^ ( string_data . c cert_pem ) }
 
-unsafe @ pki_ca_key_pem PkiCa ca → s { ^ ( string_data . ( __PkiCa_ptr ca ) key_pem ) }
+@ pki_ca_key_pem PkiCa ca → s { : PkiCaImpl c ( arc_get [PkiCaImpl] . ca a ) ^ ( string_data . c key_pem ) }
 
-unsafe @ pki_ca_cn PkiCa ca → s { ^ ( string_data . ( __PkiCa_ptr ca ) cn ) }
+@ pki_ca_cn PkiCa ca → s { : PkiCaImpl c ( arc_get [PkiCaImpl] . ca a ) ^ ( string_data . c cn ) }
 
 // The public key as it appears in the SubjectPublicKeyInfo BIT STRING —
 // what the key identifier is computed over, and what verification needs.
-unsafe @ pki_ca_public PkiCa ca → ( Vec u ) { ^ ( __pki_ca_pub ( __PkiCa_ptr ca ) ) }
+@ pki_ca_public PkiCa ca → ( Vec u ) { ^ ( __pki_ca_pub ( arc_get [PkiCaImpl] . ca a ) ) }
 
-unsafe @ __pki_ca_pub * PkiCaImpl ca → ( Vec u ) {
-    ? == . ca alg 0 { ^ . ca pubkey } {}
-    ^ . ca ml_pk
+// A copy: the CA keeps its own.
+@ __pki_ca_pub PkiCaImpl ca → ( Vec u ) {
+    ? == . ca alg 0 { ^ ( vec_clone [u] . ca pubkey ) } {}
+    ^ ( vec_clone [u] . ca ml_pk )
 }
 
 // ── Entropy & Randomness ──────────────────────────────────────────────
 
-unsafe @ _pki_rand_bytes i n → ( Vec u ) {
-    : ( Vec u ) v ( vec_with_cap [u] ? > n 0 n 1 )
-    : ~ i k 0
-    ~ < k n { ( vec_push [u] v # u 0 ) = k + k 1 }
-    : i r ( nurl_rand_fill # *u ( vec_data [u] v ) n )
-    ? & > n 0 == r 0 { ( nurl_panic `pki: CSPRNG (nurl_rand_fill) failed` ) } {}
-    ^ v
-}
+@ _pki_rand_bytes i n → ( Vec u ) { ^ ( rand_bytes n ) }
 
 @ _pki_scalar_ok ( Vec u ) d → b {
     : !( Vec u ) ParseErr nr ( bytes_from_hex `ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551` )
@@ -551,7 +544,7 @@ unsafe @ _pki_rand_bytes i n → ( Vec u ) {
 // STRING: a DER ECDSA-Sig-Value for P-256, the raw FIPS 204 signature
 // for ML-DSA (which specifies no wrapper, and hashes internally — so
 // there is no digest step on that path).
-unsafe @ __pki_sign * PkiCaImpl ca ( Vec u ) tbs → ( Vec u ) {
+@ __pki_sign PkiCaImpl ca ( Vec u ) tbs → ( Vec u ) {
     ? == . ca alg 0 {
         : ( Vec u ) h ( sha256_pure tbs )
         : ( Vec u ) rs ( ecdsa_p256_sign . ca scalar h )
@@ -587,7 +580,7 @@ unsafe @ __pki_sign * PkiCaImpl ca ( Vec u ) tbs → ( Vec u ) {
 // Assemble a TBSCertificate. `sub_pub` is the subject's raw public key
 // (65-byte EC point or ML-DSA pk); the CA supplies the issuer name, the
 // issuer key identifier and the signature algorithm.
-unsafe @ __pki_tbs * PkiCaImpl ca s issuer_cn s subject_cn ( Vec u ) sub_pub ( Vec u ) serial i not_before i not_after b is_ca → ( Vec u ) {
+@ __pki_tbs PkiCaImpl ca s issuer_cn s subject_cn ( Vec u ) sub_pub ( Vec u ) serial i not_before i not_after b is_ca → ( Vec u ) {
     : ~ ( Vec u ) tbs_body ( _pki_tlv 160 ( _pki_int1 2 ) )  // [0]{ INTEGER 2 } = v3
     : ( Vec u ) ser ( _pki_int ( bytes_slice serial 0 ( vec_len [u] serial ) ) )
     ( bytes_extend_bytes tbs_body ser )
@@ -611,7 +604,7 @@ unsafe @ __pki_tbs * PkiCaImpl ca s issuer_cn s subject_cn ( Vec u ) sub_pub ( V
 }
 
 // Certificate ::= SEQ { tbsCertificate, signatureAlgorithm, signature }
-unsafe @ __pki_wrap_cert * PkiCaImpl ca ( Vec u ) tbs → ( Vec u ) {
+@ __pki_wrap_cert PkiCaImpl ca ( Vec u ) tbs → ( Vec u ) {
     : ( Vec u ) sig ( __pki_sign ca tbs )
     : ~ ( Vec u ) cert_body tbs
     : ( Vec u ) alg2 ( _pki_alg_id . ca alg )
@@ -642,7 +635,7 @@ unsafe @ __pki_wrap_cert * PkiCaImpl ca ( Vec u ) tbs → ( Vec u ) {
     ^ ( _pki_pem `EC PRIVATE KEY` ( _pki_tlv 48 key_body ) )
 }
 
-unsafe @ pki_generate_ca s cn i validity_days i alg → PkiCa {
+@ pki_generate_ca s cn i validity_days i alg → PkiCa {
     : ~ ( Vec u ) scalar ( vec_new [u] )
     : ~ ( Vec u ) pubkey ( vec_new [u] )
     : ~ ( Vec u ) ml_sk ( vec_new [u] )
@@ -656,10 +649,9 @@ unsafe @ pki_generate_ca s cn i validity_days i alg → PkiCa {
         = ml_pk ( bytes_slice ( mldsa_pk ks ) 0 ( mldsa_pk_len alg ) )
         = ml_sk ( bytes_slice ( mldsa_sk ks ) 0 ( mldsa_sk_len alg ) )
     }
-    // The certificate is signed by the CA it describes: build the CA
-    // first, then fill its two PEMs in place.
-    : PkiCa h ( __pki_ca_make alg scalar pubkey ml_sk ml_pk `` `` cn )
-    : *PkiCaImpl ca ( __PkiCa_ptr h )
+    // The certificate is signed by the CA it describes: build the CA's
+    // state first, fill its two PEMs, then share it.
+    : ~ PkiCaImpl ca @ PkiCaImpl { alg scalar pubkey ml_sk ml_pk ( string_new ) ( string_new ) ( string_from cn ) }
 
     : ( Vec u ) pubk ( __pki_ca_pub ca )
     : ( Vec u ) serial ( _pki_rand_bytes 12 )
@@ -668,9 +660,9 @@ unsafe @ pki_generate_ca s cn i validity_days i alg → PkiCa {
     : ( Vec u ) cert_der ( __pki_wrap_cert ca tbs )
     : String cert_pem ( _pki_pem `CERTIFICATE` cert_der )
     : String key_pem ( _pki_priv_pem alg ? == alg 0 . ca scalar . ca ml_sk pubk )
-    ( string_push_str . ca cert_pem ( string_data cert_pem ) )
-    ( string_push_str . ca key_pem ( string_data key_pem ) )
-    ^ h
+    = . ca cert_pem cert_pem
+    = . ca key_pem key_pem
+    ^ @ PkiCa { ( arc_new [PkiCaImpl] ca ) }
 }
 
 // Rebuild a CA handle from a stored cert + key pair. Returns a null
@@ -753,8 +745,8 @@ unsafe @ pki_generate_ca s cn i validity_days i alg → PkiCa {
     ^ @ ?PkiCa { T new_ca }
 }
 
-unsafe @ pki_issue_device_cert PkiCa ca__h s device_id i validity_days → PkiCert {
-    : *PkiCaImpl ca ( __PkiCa_ptr ca__h )
+@ pki_issue_device_cert PkiCa ca__h s device_id i validity_days → PkiCert {
+    : PkiCaImpl ca ( arc_get [PkiCaImpl] . ca__h a )
     : ~ ( Vec u ) dev_sk ( vec_new [u] )
     : ~ ( Vec u ) dev_pub ( vec_new [u] )
     ? == . ca alg 0 {
@@ -828,8 +820,8 @@ unsafe @ pki_issue_device_cert PkiCa ca__h s device_id i validity_days → PkiCe
 // Issue an X.509 certificate from a verified PKCS#10 CSR. The subject
 // key comes from the CSR untouched — the requester's algorithm need not
 // match the CA's — while the signature is always the CA's.
-unsafe @ pki_issue_cert_from_csr PkiCa ca__h s csr_pem i validity_days → !PkiCert String {
-    : *PkiCaImpl ca ( __PkiCa_ptr ca__h )
+@ pki_issue_cert_from_csr PkiCa ca__h s csr_pem i validity_days → !PkiCert String {
+    : PkiCaImpl ca ( arc_get [PkiCaImpl] . ca__h a )
     : !( Vec u ) ParseErr dr ( pem_to_der csr_pem )
     : ( Vec u ) der ?? dr { T v → v F _ → ( vec_new [u] ) }
     ? == ( vec_len [u] der ) 0 {
@@ -898,8 +890,8 @@ unsafe @ pki_issue_cert_from_csr PkiCa ca__h s csr_pem i validity_days → !PkiC
 // Full check of a leaf against this CA: parses, enforces the validity
 // window, matches the expected CN against the SANs and verifies the
 // issuer signature with the CA's algorithm.
-unsafe @ pki_verify_cert PkiCa ca__h s cert_pem s expected_cn → b {
-    : *PkiCaImpl ca ( __PkiCa_ptr ca__h )
+@ pki_verify_cert PkiCa ca__h s cert_pem s expected_cn → b {
+    : PkiCaImpl ca ( arc_get [PkiCaImpl] . ca__h a )
     : !( Vec u ) ParseErr dr ( pem_to_der cert_pem )
     : ( Vec u ) der ?? dr { T v → v F _ → ( vec_new [u] ) }
     ? == ( vec_len [u] der ) 0 { ^ F } {}
@@ -974,8 +966,8 @@ unsafe @ pki_verify_cert PkiCa ca__h s cert_pem s expected_cn → b {
 
 // ── CRL (Certificate Revocation List) ─────────────────────────────────
 
-unsafe @ pki_generate_crl PkiCa ca__h ( Vec String ) revoked_serials ( Vec i ) revoked_times → String {
-    : *PkiCaImpl ca ( __PkiCa_ptr ca__h )
+@ pki_generate_crl PkiCa ca__h ( Vec String ) revoked_serials ( Vec i ) revoked_times → String {
+    : PkiCaImpl ca ( arc_get [PkiCaImpl] . ca__h a )
     : i now ( now_seconds )
     : i next_update + now * 30 86400  // 30 days CRL validity
 
