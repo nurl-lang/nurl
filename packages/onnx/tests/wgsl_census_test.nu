@@ -215,8 +215,9 @@ unsafe @ __sub s t i at i len → String { ^ ( string_from_bytes # *u + # i t at
     : ~ i untyped 0
     = k 0
     ~ < k nk {
-        : s name ( gk_census_name kit k )
-        : String want ( census_sig name ( gk_census_src kit k ) )
+        : String name__s ( gk_census_name kit k )
+        : s name ( string_data name__s )
+        : String want ( census_sig name ( string_data ( gk_census_src kit k ) ) )
         ? == ( string_len want ) 0 { ( fail2 `census source has no parameter list: ` name ) } {}
         : ~ i found -1
         : ~ i j 0
@@ -274,7 +275,7 @@ unsafe @ __sub s t i at i len → String { ^ ( string_from_bytes # *u + # i t at
                 ? ( nurl_str_eq en GPU_WGSL_SENTINEL ) {} {
                     : ~ b seen F
                     : ~ i q 0
-                    ~ < q nk { ? ( nurl_str_eq ( gk_census_name kit q ) en ) { = seen T } {} = q + q 1 }
+                    ~ < q nk { ? ( nurl_str_eq ( string_data ( gk_census_name kit q ) ) en ) { = seen T } {} = q + q 1 }
                     ? seen {} { ( fail2 `WGSL kernel the executor no longer launches: ` en ) = stale + stale 1 }
                 }
             }

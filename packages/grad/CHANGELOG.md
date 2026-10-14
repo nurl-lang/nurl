@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.12.2] — 2026-10-14
+
+### Changed
+
+- Requires gpukit 0.11 (its kit state behind a lock; census accessors return a `String`).
+
 ## [0.12.1] — 2026-10-14
 
 Requires NURL 0.73.0 (grammar v2.9 `raw`, `slice_window`, `file_is_open`).

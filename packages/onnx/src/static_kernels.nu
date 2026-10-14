@@ -127,8 +127,10 @@ static void __nurl_sl_gk32_conv2d(long long* p, long long grid, long long block)
     : i n ( gk_kernel_count kit )
     : ~ i k 0
     ~ < k n {
-        : s name ( gk_census_name kit k )
-        : s src ( gk_census_src kit k )
+        : String name__s ( gk_census_name kit k )
+        : s name ( string_data name__s )
+        : String src__s ( gk_census_src kit k )
+        : s src ( string_data src__s )
         // the static launcher runs a block's threads one after another:
         // a kernel that waits on its block (a barrier, shared memory)
         // cannot run there and must not be silently miscompiled
@@ -164,7 +166,7 @@ static void __nurl_sl_gk32_conv2d(long long* p, long long grid, long long block)
             T o → {
                 : ~ b seen F
                 : ~ i q 0
-                ~ < q n { ? ( nurl_str_eq ( gk_census_name kit q ) . o name ) { = seen T } {} = q + q 1 }
+                ~ < q n { ? ( nurl_str_eq ( string_data ( gk_census_name kit q ) ) . o name ) { = seen T } {} = q + q 1 }
                 ? seen {} { = bad + bad ( __fail `override for a kernel the executor no longer launches: ` . o name ) }
             }
             F _ → {}

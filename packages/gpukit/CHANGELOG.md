@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.11.0] — 2026-10-14
+
+Requires NURL 0.73.0 with globals set at start and h264–h268 closed.
+
+### Changed
+
+- A `GpuKit` is its immutable part (the device, whether it opened, whether
+  it is a census kit) in an `Arc`, beside its state (kernel cache,
+  profiler counts, device-memory pool) in a `Locked`. The state was
+  changed through `arc_ptr` from any thread holding a copy of the kit —
+  two threads compiling or allocating at once raced on the cache and the
+  pool. Each call takes the state for what it does and gives it back; a
+  launch holds it only across the launch, not the device sync.
+- `gk_census_name` / `gk_census_src` return a `String` of their own (they
+  lent the kit's, which a lock cannot lend).
+- 34 `unsafe` functions left (64 in 0.10.3): the kernel launches that
+  check their buffers before they vouch for them, the raw-pointer
+  bindings, the compile, and building a `GkBuf`. `gk_ok`, `gk_gpu`,
+  `gk_backend`, `gk_dbuf_new`, `gk_sync`, `gk_prof*`, `gk_pool_*`,
+  `gk_compile` and the other accessors are safe.
+- The pool and the profiler index their columns through checked Vec
+  access instead of `vec_data` pointers.
+
 ## [0.10.3] — 2026-10-14
 
 ### Added

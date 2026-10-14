@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.35.3] — 2026-10-14
+
+### Fixed
+
+- `imp_span_of_text` (a source's span text, "90s", "15m", …) handed its
+  text pointer where its digit helpers take a byte view: the helpers read
+  the address as the view and whatever followed it as its length, and
+  indexed that far past a short string. The compiler accepted the
+  ill-typed call; it rejects it now (h268), and the helpers get the view.
+
+### Changed
+
+- Requires gpukit 0.11.
+
 ## [0.35.2] — 2026-10-14
 
 Requires NURL 0.73.0 (`slice_at`, `slice_put`, `rc_take`, `locked_take`).

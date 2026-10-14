@@ -51,7 +51,16 @@ unsafe @ __mf_of_vec sink ( Vec u ) v → MappedFile {
 
 // Map the whole of `path` read-only (or read it, where the platform does
 // not map files).
-unsafe @ file_map s path → !MappedFile IoErr {
+unsafe @ file_map s path → !MappedFile IoErr { ^ ( __file_map path F ) }
+
+// The same for a loader that reads the whole file once, front to back (a
+// model's weights onto a device): every page is mapped in one pass
+// (MAP_POPULATE, Linux), so copy threads do not each take a page fault at
+// a time, and the kernel reads ahead for the one sequential sweep
+// (MADV_SEQUENTIAL). Where a hint is unknown the mapping is file_map's.
+unsafe @ file_map_stream s path → !MappedFile IoErr { ^ ( __file_map path T ) }
+
+unsafe @ __file_map s path b stream → !MappedFile IoErr {
     ? == # i path 0 { ^ @ !MappedFile IoErr { F @ IoErr { Other } } } {}
     ? != ( posix_const `MAP_PRIVATE` ) -1 {
         : i32 fd ( open path # i32 ( posix_const `O_RDONLY` ) # i32 0 )
@@ -62,9 +71,14 @@ unsafe @ file_map s path → !MappedFile IoErr {
             : i32 _c ( close fd )
             ^ @ !MappedFile IoErr { T ( __mf_of_vec ( vec_new [u] ) ) }
         } {}
-        : *u m ( mmap # *u 0 sz # i32 ( posix_const `PROT_READ` ) # i32 ( posix_const `MAP_PRIVATE` ) fd 0 )
+        : ~ i flags ( posix_const `MAP_PRIVATE` )
+        : i pop ( posix_const `MAP_POPULATE` )
+        ? & stream != pop -1 { = flags | flags pop } {}
+        : *u m ( mmap # *u 0 sz # i32 ( posix_const `PROT_READ` ) # i32 flags fd 0 )
         : i32 _c ( close fd )
         ? == # i m -1 { ^ @ !MappedFile IoErr { F @ IoErr { ReadFailed } } } {}
+        : i adv ( posix_const `MADV_SEQUENTIAL` )
+        ? & stream != adv -1 { : i32 _a ( madvise m sz # i32 adv ) } {}
         ^ @ !MappedFile IoErr { T @ MappedFile { ( arc_new [MappedFileImpl] @ MappedFileImpl { m sz T ( vec_new [u] ) } ) } }
     } {}
     ?? ( read_file_bytes path ) {

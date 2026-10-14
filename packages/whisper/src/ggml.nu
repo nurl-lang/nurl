@@ -47,23 +47,17 @@ $ `stdlib/std/fs.nu`
 $ `deps/tokenizer/src/tokenizer.nu`
 $ `deps/tokenizer/src/hf.nu`
 $ `stdlib/std/arc.nu`
+$ `stdlib/std/thread.nu`
+$ `stdlib/std/mmap.nu`
 $ `stdlib/core/slice.nu`
 
 // dtype codes shared with the safetensor reader's ST_* so __wh_up's dispatch
 // works on either source. ttype 0 = f32, 1 = f16; anything else is a
 // quantised block format this package does not run yet.
 
-: GgImpl {
-    // The whole file, as bytes: an mmap where the platform has one (the
-    // page cache IS the copy, and a model that is already cached maps in
-    // microseconds), the read fallback's Vec elsewhere. `gg_release_data`
-    // gives it back once the weights are on the device — nothing reads
-    // the file after that, and 3 GB of a large model is not a thing to
-    // keep around for the vocabulary's sake.
-    * u map
-    i nbytes
-    b from_mmap
-    ( Vec u ) data  // the read fallback's storage — empty when mapped
+// What the container says: the hyperparameters, the vocabulary and the
+// tensor table — parsed once, never changed after.
+: GgMeta {
     i n_vocab
     i n_audio_ctx
     i n_audio_state
@@ -81,47 +75,35 @@ $ `stdlib/core/slice.nu`
     ( Vec i ) toffs  // absolute byte offset of the tensor's data
 }
 
-// The mapping is raw: the last owner unmaps it (gg_release_data may have
-// done so already). The Vecs are dropped by the compiler after this.
-% Drop GgImpl { unsafe @ drop GgImpl x → v {
-        ? & . x from_mmap != # i . x map 0 { : i32 _u ( munmap . x map . x nbytes ) } {}
-    } }
+// A Gg is a handle: every copy is the same container. The metadata is
+// shared and frozen (an Arc); the file — an mmap where the platform has
+// one (the page cache IS the copy, and a model that is already cached maps
+// in with no I/O), the bytes read whole elsewhere — is a MappedFile the
+// loader gives back once the weights are on the device: nothing reads the
+// file after that, and 3 GB of a large model is not a thing to keep
+// around for the vocabulary's sake. gg_close is an optional early release.
+: Gg {
+    ( Arc GgMeta ) meta
+    ( Locked ? MappedFile ) file  // F once gg_release_data gave it back
+}
 
-// A Gg is a handle on its state in an Arc (stdlib/std/arc.nu):
-// every copy is the same container, and the last owner releases it —
-// the mapping (or the read buffer) and the parsed tables. gg_close is
-// an optional early release.
-: Gg { ( Arc GgImpl ) a }
-
-@ Gg_share Gg h → Gg { ^ @ Gg { ( arc_clone [GgImpl] . h a ) } }
+@ Gg_share Gg h → Gg { ^ @ Gg { ( arc_clone [GgMeta] . h meta ) ( Locked_share [? MappedFile] . h file ) } }
 
 @ Gg_drop sink Gg h → v {}
 
-unsafe @ _Gg_ptr Gg h → *GgImpl { ^ ( arc_ptr [GgImpl] . h a ) }
+// The parsed container, lent.
+@ gg_meta Gg h → GgMeta { ^ ( arc_get [GgMeta] . h meta ) }
 
 // Give the file back — the mapping or the read buffer — and keep the
-// parsed metadata (vocabulary, tensor table). After this `gg_ptr` must not
-// be called; the loader calls it exactly once, right after the last upload.
-unsafe @ gg_release_data Gg g__h → v {
-    : *GgImpl g ( _Gg_ptr g__h )
-    ? . g from_mmap {
-        ? != # i . g map 0 { : i32 _u ( munmap . g map . g nbytes ) } {}
-    } {}
-    = . g from_mmap F
-    = . g map # *u 0
-    // the read fallback's buffer leaves the container (dropped here)
-    = . g data ( vec_new [u] )
-}
+// parsed metadata (vocabulary, tensor table). gg_ptr answers null after.
+@ gg_release_data Gg g → v { ( locked_set [? MappedFile] . g file @ ?MappedFile { F } ) }
 
 // Early release (optional): the last owner gives everything back.
 @ gg_close sink Gg g → v {}
 
-unsafe @ __gg_i32 * u d i off → i {
-    : i b0 & # i . d off 255
-    : i b1 & # i . d + off 1 255
-    : i b2 & # i . d + off 2 255
-    : i b3 & # i . d + off 3 255
-    : ~ i v | | | b0 << b1 8 << b2 16 << b3 24
+// A little-endian i32 at `off`, sign and all.
+@ __gg_i32 ( Slice u ) d i off → i {
+    : ~ i v ( slice_u32_le d off )
     ? >= v 2147483648 { = v - v 4294967296 } {}
     ^ v
 }
@@ -130,85 +112,36 @@ unsafe @ __gg_i32 * u d i off → i {
     ^ @ !v String { F ( string_from msg ) }
 }
 
-unsafe @ gg_open s path → !Gg String {
-    // zeroed, and a handle from the start: an early return drops it whole
-    : Gg h @ Gg { ( arc_zero [GgImpl] ) }
-    : *GgImpl g ( _Gg_ptr h )
-    = . g map # *u 0
-    = . g nbytes 0
-    = . g from_mmap F
-    = . g data ( vec_new [u] )
-    = . g vocab ( vec_new [String] )
-    = . g tnames ( vec_new [String] )
-    = . g ttypes ( vec_new [i] )
-    = . g tnelems ( vec_new [i] )
-    = . g toffs ( vec_new [i] )
-    ? ( __gg_map g path ) {} {
-        : String m ( string_from `ggml: cannot read ` )
-        ( string_push_str m path )
-        ^ @ !Gg String { F m }
-    }
-    ?? ( __gg_parse g ) {
-        T _ → { ^ @ !Gg String { T h } }
-        F e → { ^ @ !Gg String { F e } }
-    }
-}
-
-// Bring the file into the address space. mmap where the platform has it —
-// the same shape as the safetensor reader: no copy, the page cache is the
-// storage, and `MADV_SEQUENTIAL` tells the kernel the one pass the loader
-// makes over it (a cold file streams in at the disk's readahead rate rather
-// than a page fault at a time). Elsewhere (Windows, WASI) the file is read
-// into a Vec and `map` points at its bytes.
-unsafe @ __gg_map * GgImpl g s path → b {
-    ? != ( posix_const `MAP_PRIVATE` ) -1 {
-        : i32 fd ( open path # i32 ( posix_const `O_RDONLY` ) # i32 0 )
-        ? < # i fd 0 { ^ F } {}
-        : i sz ( lseek fd 0 # i32 2 )
-        ? < sz 0 { : i32 _c ( close fd ) ^ F } {}
-        // an empty file maps nothing; the parser says "too short" like it
-        // always did
-        ? == sz 0 { : i32 _c0 ( close fd ) ^ T } {}
-        // MAP_POPULATE (Linux): the kernel maps every page in one pass, so the
-        // upload's copy threads do not each take 780,000 page faults across
-        // a 3 GB model. Where the constant is unknown the mapping faults in
-        // lazily, which is only slower.
-        : ~ i flags ( posix_const `MAP_PRIVATE` )
-        : i pop ( posix_const `MAP_POPULATE` )
-        ? != pop -1 { = flags | flags pop } {}
-        : *u m ( mmap # *u 0 sz # i32 ( posix_const `PROT_READ` ) # i32 flags fd 0 )
-        : i32 _c1 ( close fd )
-        ? == # i m -1 { ^ F } {}
-        : i adv ( posix_const `MADV_SEQUENTIAL` )
-        ? != adv -1 { : i32 _a ( madvise m sz # i32 adv ) } {}
-        = . g map m
-        = . g nbytes sz
-        = . g from_mmap T
-        ^ T
-    } {}
-    ?? ( read_file_bytes path ) {
-        T raw → {
-            = . g data raw
-            = . g map ( vec_data [u] . g data )
-            = . g nbytes ( vec_len [u] . g data )
-            ^ T
+// Open a container: mapped for the one sweep the loader makes over it
+// (file_map_stream: every page mapped in one pass, read ahead in order).
+@ gg_open s path → !Gg String {
+    ?? ( file_map_stream path ) {
+        F _ → {
+            : String m ( string_from `ggml: cannot read ` )
+            ( string_push_str m path )
+            ^ @ !Gg String { F m }
         }
-        F _ → { ^ F }
+        T mf → {
+            : ~ GgMeta g @ GgMeta { 0 0 0 0 0 0 0 0 0 0 ( vec_new [String] ) ( vec_new [String] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) }
+            ?? ( __gg_parse g ( mapped_bytes mf ) ) {
+                T _ → { ^ @ !Gg String { T @ Gg { ( arc_new [GgMeta] g ) ( locked_new [? MappedFile] @ ?MappedFile { T mf } ) } } }
+                F e → { ^ @ !Gg String { F e } }
+            }
+        }
     }
 }
 
 // The container's own parse over the mapped bytes: header, the mel filters
 // (skipped), the vocabulary, the tensor table. Every length is checked
 // against the mapping before it is trusted.
-unsafe @ __gg_parse * GgImpl g → !v String {
-    : i n . g nbytes
+@ __gg_parse inout GgMeta g ( Slice u ) dd → !v String {
+    : i n ( slice_len [u] dd )
     ? < n 56 {
         ^ ( __gg_err `ggml: file too short for a header` )
     } {}
-    : *u dd . g map
     // magic 0x67676d6c on disk is the bytes 'l' 'm' 'g' 'g' —
     // checked as bytes, so nobody has to trust a decimal spelling
-    ? | | | != & # i . dd 0 255 108 != & # i . dd 1 255 109 != & # i . dd 2 255 103 != & # i . dd 3 255 103 {
+    ? | | | != ( slice_byte dd 0 ) 108 != ( slice_byte dd 1 ) 109 != ( slice_byte dd 2 ) 103 != ( slice_byte dd 3 ) 103 {
         ^ ( __gg_err `ggml: bad magic (not a ggml file)` )
     } {}
     = . g n_vocab ( __gg_i32 dd 4 )
@@ -252,7 +185,7 @@ unsafe @ __gg_parse * GgImpl g → !v String {
                 : String w2 ( string_with_cap + wl 1 )
                 : ~ i j 0
                 ~ < j wl {
-                    ( string_push_char w2 & # i . dd + off j 255 )
+                    ( string_push_char w2 ( slice_byte dd + off j ) )
                     = j + j 1
                 }
                 ( vec_push [String] . g vocab w2 )
@@ -285,7 +218,7 @@ unsafe @ __gg_parse * GgImpl g → !v String {
                     : String nm ( string_with_cap + nl 1 )
                     : ~ i nj 0
                     ~ < nj nl {
-                        ( string_push_char nm & # i . dd + off nj 255 )
+                        ( string_push_char nm ( slice_byte dd + off nj ) )
                         = nj + nj 1
                     }
                     = off + off nl
@@ -384,8 +317,8 @@ unsafe @ __gg_parse * GgImpl g → !v String {
 }
 
 // Find a tensor by its HF name. -1 when absent.
-unsafe @ gg_find Gg g__h s hf → i {
-    : *GgImpl g ( _Gg_ptr g__h )
+@ gg_find Gg h s hf → i {
+    : GgMeta g ( gg_meta h )
     : String gn ( gg_map_name hf )
     : ~ i found -1
     : ~ i k 0
@@ -401,21 +334,26 @@ unsafe @ gg_find Gg g__h s hf → i {
     ^ found
 }
 
-unsafe @ gg_ttype Gg g__h i ti → i {
-    : *GgImpl g ( _Gg_ptr g__h )
+@ gg_ttype Gg h i ti → i {
+    : GgMeta g ( gg_meta h )
     ?? ( vec_get [i] . g ttypes ti ) { T x → { ^ x } F → { ^ -1 } }
 }
 
-unsafe @ gg_nelems Gg g__h i ti → i {
-    : *GgImpl g ( _Gg_ptr g__h )
+@ gg_nelems Gg h i ti → i {
+    : GgMeta g ( gg_meta h )
     ?? ( vec_get [i] . g tnelems ti ) { T x → { ^ x } F → { ^ 0 } }
 }
 
-unsafe @ gg_ptr Gg g__h i ti → *u {
-    : *GgImpl g ( _Gg_ptr g__h )
-    : ~ i o2 0
-    ?? ( vec_get [i] . g toffs ti ) { T x → { = o2 x } F → {} }
-    ^ # *u + # i . g map o2
+// The address of tensor `ti`'s bytes in the file; null once the file was
+// given back. raw: the caller keeps the file (any copy of `h`, before
+// gg_release_data) while it reads there.
+raw @ gg_ptr Gg h i ti → *u {
+    : i o2 ?? ( vec_get [i] . ( gg_meta h ) toffs ti ) { T x → x F → 0 }
+    : ?MappedFile f ( locked_take [? MappedFile] . h file )
+    : ~ * u p # *u 0
+    ?? f { T m → { = p # *u + # i ( mapped_ptr m ) o2 } F → {} }
+    ( locked_restore [? MappedFile] . h file f )
+    ^ p
 }
 
 // ── the tokenizer, synthesized ──────────────────────────────────────
@@ -446,8 +384,8 @@ unsafe @ gg_ptr Gg g__h i ti → *u {
 // Build the tokenizer: base words byte-encoded, specials synthesized at
 // whisper.cpp's positional ids. Returns via tok_build so decode, control
 // matching and the timestamp rules all behave exactly as with tokenizer.json.
-unsafe @ gg_build_tok Gg g__h → !Tok String {
-    : *GgImpl g ( _Gg_ptr g__h )
+@ gg_build_tok Gg h → !Tok String {
+    : GgMeta g ( gg_meta h )
     : i nv . g n_vocab
     : i nfile ( vec_len [String] . g vocab )
     : b multi >= nv 51865

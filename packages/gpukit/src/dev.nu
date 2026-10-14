@@ -52,7 +52,7 @@ raw : GkBuf {
 // pool it came from (held, so the kit — and its device — outlive it).
 raw : GkMemImpl { i dptr GpuKit kit }
 
-% Drop GkMemImpl { unsafe @ drop GkMemImpl x → v { ( _gk_pool_give ( _GpuKit_ptr . x kit ) . x dptr ) } }
+% Drop GkMemImpl { @ drop GkMemImpl x → v { ( _gk_pool_give . x kit . x dptr ) } }
 
 : GkMem { ( Arc GkMemImpl ) a }
 
@@ -151,26 +151,42 @@ raw @ gk_buf_wrap i dptr i n i dtype → GkBuf { ^ @ GkBuf { dptr n dtype ( __gk
 
 // ── Lifecycle ─────────────────────────────────────────────────────────
 
-unsafe @ gk_dbuf_new GpuKit kit__h i n i dtype → GkBuf {
-    : *GpuKitImpl kit ( _GpuKit_ptr kit__h )
-    ? & . kit ok > n 0 {} { ^ ( gk_buf_none dtype ) }
+@ gk_dbuf_new GpuKit h i n i dtype → GkBuf {
+    ? & ( _gk_ok h ) > n 0 {} { ^ ( gk_buf_none dtype ) }
+    : GkInfo kit ( arc_get [GkInfo] . h info )
     ( _gk_pool_default kit )
     : i bytes * n ( __gk_esz dtype )
-    // a block this size that an earlier owner let go of
-    : ~ i dptr ( _gk_pool_take kit bytes )
-    ? == dptr 0 {
-        : ~ GpuBuffer gb ( gpu_alloc . kit gpu bytes )
-        // out of memory: the pool is holding blocks nothing is using — give
-        // them back and ask once more before reporting failure
-        ? == . gb dptr 0 {
-            ( _gk_pool_release kit )
-            = gb ( gpu_alloc . kit gpu bytes )
-        } {}
-        ? == . gb dptr 0 { ^ ( gk_buf_none dtype ) } {}
-        = dptr . gb dptr
-        ( _gk_pool_add kit gb )
+    : ~ GkState st ( locked_take [GkState] . h st )
+    : i dptr ( __gk_alloc_in st kit bytes )
+    ( locked_restore [GkState] . h st st )
+    ? == dptr 0 { ^ ( gk_buf_none dtype ) } {}
+    ^ ( __gk_owned_buf h dptr n dtype )
+}
+
+// The GkBuf over the pool block at `dptr`, `n` elements of `dtype`, that
+// gk_dbuf_new just took for it: its owner gives the block back to `h`'s
+// pool.
+unsafe @ __gk_owned_buf GpuKit h i dptr i n i dtype → GkBuf {
+    ^ @ GkBuf { dptr n dtype @ ?GkMem { T @ GkMem { ( arc_new [GkMemImpl] @ GkMemImpl { dptr ( GpuKit_share h ) } ) } } }
+}
+
+// A block of `bytes` for a new buffer — a block this size an earlier
+// owner let go of, or a fresh one — in use in the pool; 0 when the device
+// has no room even after the pool gave its idle blocks back.
+@ __gk_alloc_in inout GkState st GkInfo kit i bytes → i {
+    : i dptr ( _gk_pool_take st bytes )
+    ? != dptr 0 { ^ dptr } {}
+    : ~ GpuBuffer gb ( gpu_alloc . kit gpu bytes )
+    // out of memory: the pool is holding blocks nothing is using — give
+    // them back and ask once more before reporting failure
+    ? == . gb dptr 0 {
+        ( _gk_pool_release st )
+        = gb ( gpu_alloc . kit gpu bytes )
     } {}
-    ^ @ GkBuf { dptr n dtype @ ?GkMem { T @ GkMem { ( arc_new [GkMemImpl] @ GkMemImpl { dptr ( GpuKit_share kit__h ) } ) } } }
+    : i d . gb dptr
+    ? == d 0 { ^ 0 } {}
+    ( _gk_pool_add st gb )
+    ^ d
 }
 
 // Let go of `b` now rather than at the end of its owner's scope.
@@ -303,10 +319,9 @@ unsafe @ gk_dbuf_download_i GpuKit kit GkBuf b ( Vec i ) dst → b {
 
 @ gk_autosync b on → v { = g_gk_autosync on }
 
-unsafe @ gk_sync GpuKit kit__h → b {
-    : *GpuKitImpl kit ( _GpuKit_ptr kit__h )
-    ? . kit census { ^ T } {}
-    ^ == ( gpu_sync . kit gpu ) 0
+@ gk_sync GpuKit kit → b {
+    ? ( _gk_census kit ) { ^ T } {}
+    ^ == ( gpu_sync . ( arc_get [GkInfo] . kit info ) gpu ) 0
 }
 
 // ── Per-kernel profiling ──────────────────────────────────────────────
@@ -323,14 +338,16 @@ unsafe @ gk_sync GpuKit kit__h → b {
 // the program.
 : ~ b g_gk_prof F
 
-unsafe @ gk_prof GpuKit kit__h b on → v {
-    : *GpuKitImpl kit ( _GpuKit_ptr kit__h )
-    ? & on . kit ok {
+@ gk_prof GpuKit h b on → v {
+    ? & on ( _gk_ok h ) {
+        : GkInfo inf ( arc_get [GkInfo] . h info )
+        : ~ GkState kit ( locked_take [GkState] . h st )
         ? ( gpu_timer_ok . kit ev0 ) {} {
-            = . kit ev0 ( gpu_timer_new . kit gpu )
-            = . kit ev1 ( gpu_timer_new . kit gpu )
+            = . kit ev0 ( gpu_timer_new . inf gpu )
+            = . kit ev1 ( gpu_timer_new . inf gpu )
         }
         = g_gk_prof ( gpu_timer_ok . kit ev0 )
+        ( locked_restore [GkState] . h st kit )
     } { = g_gk_prof F }
 }
 
@@ -338,57 +355,54 @@ unsafe @ gk_prof GpuKit kit__h b on → v {
 
 // Drop every accumulated count — e.g. after a warm-up frame, so the
 // numbers describe the steady state and not the compiles.
-unsafe @ gk_prof_reset GpuKit kit__h → v {
-    : *GpuKitImpl kit ( _GpuKit_ptr kit__h )
-    : i base # i ( vec_data [GkKernelEntry] . kit cache )
-    : i n ( vec_len [GkKernelEntry] . kit cache )
+@ gk_prof_reset GpuKit h → v {
+    : ~ GkState kit ( locked_take [GkState] . h st )
+    : i n ( vec_len [i] . kit kcalls )
     : ~ i k 0
     ~ < k n {
-        // counters only, in place — the name and the kernel stay put
-        : *GkKernelEntry e # *GkKernelEntry + base * k Z GkKernelEntry
-        = . e calls 0
-        = . e ns 0
+        // counters only — the name and the kernel stay put
+        ( vec_put [i] . kit kcalls k 0 )
+        ( vec_put [i] . kit kns k 0 )
         = k + k 1
     }
+    ( locked_restore [GkState] . h st kit )
 }
 
-unsafe @ __gk_prof_add * GpuKitImpl kit i slot i ns → v {
-    ? & >= slot 0 < slot ( vec_len [GkKernelEntry] . kit cache ) {
-        : *GkKernelEntry e # *GkKernelEntry + # i ( vec_data [GkKernelEntry] . kit cache ) * slot Z GkKernelEntry
-        = . e calls + . e calls 1
-        = . e ns + . e ns ns
+@ __gk_prof_add inout GkState kit i slot i ns → v {
+    ? & >= slot 0 < slot ( vec_len [i] . kit kcalls ) {
+        ( vec_put [i] . kit kcalls slot + ( vec_at [i] . kit kcalls slot ) 1 )
+        ( vec_put [i] . kit kns slot + ( vec_at [i] . kit kns slot ) ns )
     } {}
 }
 
-// Total device time accumulated so far, in nanoseconds.
-unsafe @ gk_prof_total GpuKit kit__h → i {
-    : *GpuKitImpl kit ( _GpuKit_ptr kit__h )
-    : i n ( vec_len [GkKernelEntry] . kit cache )
+@ __gk_prof_sum GkState kit → i {
     : ~ i total 0
     : ~ i k 0
-    ~ < k n {
-        ?? ( vec_get [GkKernelEntry] . kit cache k ) {
-            T e → { = total + total . e ns }
-            F _ → {}
-        }
+    ~ < k ( vec_len [i] . kit kns ) {
+        = total + total ( vec_at [i] . kit kns k )
         = k + k 1
     }
     ^ total
 }
 
+// Total device time accumulated so far, in nanoseconds.
+@ gk_prof_total GpuKit h → i {
+    : GkState kit ( locked_take [GkState] . h st )
+    : i t ( __gk_prof_sum kit )
+    ( locked_restore [GkState] . h st kit )
+    ^ t
+}
+
 // Kernels by device time, slowest first, with the share of the total.
-unsafe @ gk_prof_report GpuKit kit__h → v {
-    : *GpuKitImpl kit ( _GpuKit_ptr kit__h )
+@ gk_prof_report GpuKit h → v {
+    : GkState kit ( locked_take [GkState] . h st )
+    ( __gk_prof_report_in kit )
+    ( locked_restore [GkState] . h st kit )
+}
+
+@ __gk_prof_report_in GkState kit → v {
     : i n ( vec_len [GkKernelEntry] . kit cache )
-    : ~ i total 0
-    : ~ i k 0
-    ~ < k n {
-        ?? ( vec_get [GkKernelEntry] . kit cache k ) {
-            T e → { = total + total . e ns }
-            F _ → {}
-        }
-        = k + k 1
-    }
+    : i total ( __gk_prof_sum kit )
     ( nurl_print `gpukit profile: ` )
     ( nurl_print ( nurl_str_int / total 1000000 ) )
     ( nurl_print ` ms of device time over ` )
@@ -410,26 +424,26 @@ unsafe @ gk_prof_report GpuKit kit__h → v {
                 = q + q 1
             }
             ? seen {} {
-                ?? ( vec_get [GkKernelEntry] . kit cache j ) {
-                    T e → { ? > . e ns bestns { = bestns . e ns = best j } {} }
-                    F _ → {}
-                }
+                : i nsj ( vec_at [i] . kit kns j )
+                ? > nsj bestns { = bestns nsj = best j } {}
             }
             = j + j 1
         }
         ? < best 0 { = shown n } {
             ( vec_push [i] done best )
+            : i calls ( vec_at [i] . kit kcalls best )
+            : i ns ( vec_at [i] . kit kns best )
             ?? ( vec_get [GkKernelEntry] . kit cache best ) {
                 T e → {
-                    ? > . e calls 0 {
+                    ? > calls 0 {
                         ( nurl_print `  ` )
-                        ( nurl_print ( nurl_str_int / * . e ns 100 total ) )
+                        ( nurl_print ( nurl_str_int / * ns 100 total ) )
                         ( nurl_print `%  ` )
-                        ( nurl_print ( nurl_str_int / . e ns 1000 ) )
+                        ( nurl_print ( nurl_str_int / ns 1000 ) )
                         ( nurl_print ` us  ` )
-                        ( nurl_print ( nurl_str_int . e calls ) )
+                        ( nurl_print ( nurl_str_int calls ) )
                         ( nurl_print ` calls  ` )
-                        ( nurl_print ( nurl_str_int / . e ns ? > . e calls 0 . e calls 1 ) )
+                        ( nurl_print ( nurl_str_int / ns calls ) )
                         ( nurl_print ` ns/call  ` )
                         ( nurl_print ( string_data . e name ) )
                         ( nurl_print `\n` )
@@ -442,19 +456,30 @@ unsafe @ gk_prof_report GpuKit kit__h → v {
     }
 }
 
-raw @ gk_run_dev GpuKit kit__h s src s name i grid i block ( Vec i ) args → b {
-    : *GpuKitImpl kit ( _GpuKit_ptr kit__h )
-    ? . kit ok {} { ^ F }
-    : i slot ( _gk_kernel_slot kit src name )
+raw @ gk_run_dev GpuKit h s src s name i grid i block ( Vec i ) args → b {
+    ? ( _gk_ok h ) {} { ^ F }
+    : GkInfo inf ( arc_get [GkInfo] . h info )
+    : ~ GkState kit ( locked_take [GkState] . h st )
+    : b ok ( __gk_launch_in kit inf src name grid block args )
+    ( locked_restore [GkState] . h st kit )
+    ? ok {} { ^ F }
+    ? . inf census { ^ T } {}
+    ? g_gk_autosync { ^ == ( gpu_sync . inf gpu ) 0 } {}
+    ^ T
+}
+
+// Compile (cached) and launch, the state held: F when the compile or the
+// launch failed. A census kit records the kernel and launches nothing.
+raw @ __gk_launch_in inout GkState kit GkInfo inf s src s name i grid i block ( Vec i ) args → b {
+    : i slot ( _gk_kernel_slot kit inf src name )
     ? >= slot 0 {} { ^ F }
-    ? . kit census { ^ T } {}
-    ? g_gk_prof { ( gpu_timer_mark . kit gpu . kit ev0 ) } {}
+    ? . inf census { ^ T } {}
+    ? g_gk_prof { ( gpu_timer_mark . inf gpu . kit ev0 ) } {}
     ? == ( _gk_slot_launch kit slot grid block args ) 0 {} { ^ F }
     ? g_gk_prof {
-        ( gpu_timer_mark . kit gpu . kit ev1 )
-        ( __gk_prof_add kit slot ( gpu_timer_ns . kit gpu . kit ev0 . kit ev1 ) )
+        ( gpu_timer_mark . inf gpu . kit ev1 )
+        ( __gk_prof_add kit slot ( gpu_timer_ns . inf gpu . kit ev0 . kit ev1 ) )
     } {}
-    ? g_gk_autosync { ^ == ( gpu_sync . kit gpu ) 0 } {}
     ^ T
 }
 

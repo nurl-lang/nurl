@@ -390,6 +390,18 @@ $ `stdlib/core/rcbox.nu`
     ^ @ ( Locked T ) { ( shared_new [( LockedImpl T )] @ ( LockedImpl T ) { ( mutex_new ) x F ( cond_new ) } ) }
 }
 
+// A Locked over the all-zero value of T. Outside `unsafe` only for a T
+// a zero is a value of (the arc_zero rule); an `unsafe` caller that fills
+// every other field in — under locked_take — before anything reads it
+// vouches for that (a large engine record built field by field).
+@ locked_zero [T] → ( Locked T ) {
+    : ( Shared ( LockedImpl T ) ) sh ( shared_zero [( LockedImpl T )] )
+    : *( LockedImpl T ) p ( shared_ptr [( LockedImpl T )] sh )
+    = . p mu ( mutex_new )
+    = . p cv ( cond_new )
+    ^ @ ( Locked T ) { sh }
+}
+
 @ Locked_share [T] ( Locked T ) l → ( Locked T ) {
     ^ @ ( Locked T ) { ( shared_clone [( LockedImpl T )] . l ctl ) }
 }

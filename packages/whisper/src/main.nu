@@ -66,7 +66,7 @@ $ `src/serve.nu`
 
 // The shared tail once the model and tokenizer are open: read the audio,
 // resample, run, print. Owns neither w nor t.
-unsafe @ __wh_transcribe_run Whisper w Tok t s wavpath s lang i maxtok b use_vad b with_ts f nospeech → i {
+@ __wh_transcribe_run Whisper w Tok t s wavpath s lang i maxtok b use_vad b with_ts f nospeech → i {
     : ~ i rc 0
     ?? ( wav_read wavpath ) {
         T aw → {
@@ -74,7 +74,7 @@ unsafe @ __wh_transcribe_run Whisper w Tok t s wavpath s lang i maxtok b use_vad
             : ( Vec u ) text ( vec_new [u] )
             ? ( wh_run w t at16 lang maxtok use_vad with_ts nospeech text ) {
                 : i n ( vec_len [u] text )
-                ? > n 0 { : i _w ( write 1 # *u ( vec_data [u] text ) n ) } {}
+                ? > n 0 { : i _w ( fd_write_all 1 text ) } {}
                 ( nurl_print `\n` )
             } {
                 ( nurl_eprintln `whisper: the vocabulary has no control tokens (is this a whisper model?)` )
@@ -89,7 +89,7 @@ unsafe @ __wh_transcribe_run Whisper w Tok t s wavpath s lang i maxtok b use_vad
     ^ rc
 }
 
-unsafe @ __wh_transcribe s dir s wavpath s lang i maxtok b use_vad b with_ts f nospeech → i {
+@ __wh_transcribe s dir s wavpath s lang i maxtok b use_vad b with_ts f nospeech → i {
     // whisper.cpp's ggml container: hyperparameters, tokenizer and weights in
     // ONE file — no config.json or tokenizer.json beside it
     ? ( _wh_is_ggml dir ) {
@@ -138,7 +138,7 @@ unsafe @ __wh_transcribe s dir s wavpath s lang i maxtok b use_vad b with_ts f n
                             : ( Vec u ) text ( vec_new [u] )
                             ? ( wh_run w t at16 lang maxtok use_vad with_ts nospeech text ) {
                                 : i n ( vec_len [u] text )
-                                ? > n 0 { : i _w ( write 1 # *u ( vec_data [u] text ) n ) } {}
+                                ? > n 0 { : i _w ( fd_write_all 1 text ) } {}
                                 ( nurl_print `\n` )
                             } {
                                 ( nurl_eprintln `whisper: the vocabulary has no control tokens (is this a whisper tokenizer.json?)` )

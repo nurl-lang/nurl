@@ -1,5 +1,45 @@
 # Changelog
 
+## [3.1.0] — 2026-10-14
+
+Requires NURL 0.73.0 with globals set at start, `locked_zero`,
+`fd_write_all`, `file_map_stream` and h264–h267 closed.
+
+### Fixed
+
+- A checkpoint whose tensors do not have the sizes its config gives was
+  read past the end of its device buffers: the FFN width was taken to be
+  4·d_model whatever the weights said, and nothing compared a tensor's
+  element count with the shape the kernels index it by (on the CPU
+  backend the encoder came out NaN on some runs). Every tensor is checked
+  at load against the config — the error names the first that disagrees
+  — and the config's own dimensions must be positive with d_model a
+  multiple of the head counts.
+
+### Added
+
+- `encoder_ffn_dim` / `decoder_ffn_dim` from config.json (4·d_model when
+  absent, as in every released whisper).
+
+### Changed
+
+- 16 `unsafe` functions left (57 in 3.0.2): the raw device work — the
+  kernel launchers' callers, the upload queue, compiling the kernels,
+  and building the engine from zeroed memory.
+- A `Whisper` is the engine in a `Locked` beside its immutable
+  dimensions: `wh_n_mels`, `wh_d_model` and the other accessors never
+  wait for a transcription. The public calls take the engine out of the
+  lock for the call (`locked_take`) and put it back; nothing reaches it
+  through a raw pointer.
+- The server's state — the model, the counters, the idle clock — is one
+  `Locked` global set at start, and the tokenizer another; the hand-held
+  mutex and the `unsafe` accessors are gone.
+- The ggml loader reads its header and tensor table through bounds-checked
+  slices of the mapping.
+- Weights are mapped with `file_map_stream` (every page mapped in one
+  pass, read-ahead for the one sequential sweep).
+- `whisper transcribe` writes its output with `fd_write_all`.
+
 ## [3.0.2] — 2026-10-14
 
 Requires NURL 0.73.0 (`slice_at`, `slice_put`, `rc_take`, `locked_take`).

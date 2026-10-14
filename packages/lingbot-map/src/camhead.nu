@@ -73,18 +73,17 @@ $ `src/rope.nu`
     GkBuf cos3 GkBuf sin3
 }
 
-unsafe @ __ch_const GpuKit kit i n f v → GkBuf {
+@ __ch_const GpuKit kit i n f v → GkBuf {
     : GkBuf b ( gk_dbuf_new kit n GK_F32 )
-    : ( Vec f ) h ( vec_with_cap [f] n )
-    : b _sl ( vec_set_len [f] h n )
-    : *f hp ( vec_data [f] h )
+    : ( Vec f ) h ( vec_zeroed [f] n )
+    : ( Slice f ) hp ( slice_from_vec [f] h )
     : ~ i j 0
-    ~ < j n { = . hp j v = j + j 1 }
+    ~ < j n { ( slice_put [f] hp j v ) = j + j 1 }
     : b _u ( gk_dbuf_upload kit b h )
     ^ b
 }
 
-unsafe @ ch_load Lw w GpuKit kit → CamHead {
+@ ch_load Lw w GpuKit kit → CamHead {
     : ( Vec LmBlk ) tr ( vec_new [LmBlk] )
     : ~ i i0 0
     ~ < i0 CH_DEPTH {
@@ -94,21 +93,19 @@ unsafe @ ch_load Lw w GpuKit kit → CamHead {
     }
     : i width / + + CH_T CH_H CH_W 2
     : i tn * CH_MAXPOS width
-    : ( Vec u ) hc__v ( vec_zeroed [u] * 8 tn )
-    : *f hc # *f ( vec_data [u] hc__v )
-    : ( Vec u ) hs__v ( vec_zeroed [u] * 8 tn )
-    : *f hs # *f ( vec_data [u] hs__v )
+    : ( Vec f ) hc__v ( vec_zeroed [f] tn )
+    : ( Slice f ) hc ( slice_from_vec [f] hc__v )
+    : ( Vec f ) hs__v ( vec_zeroed [f] tn )
+    : ( Slice f ) hs ( slice_from_vec [f] hs__v )
     ( rope3d_tables_fhw CH_T CH_H CH_W CH_MAXPOS hc hs )
     : GkBuf c3 ( gk_dbuf_new kit tn GK_F32 )
     : GkBuf s3 ( gk_dbuf_new kit tn GK_F32 )
-    : ( Vec f ) tc ( vec_with_cap [f] tn )
-    : ( Vec f ) ts ( vec_with_cap [f] tn )
-    : b _l1 ( vec_set_len [f] tc tn )
-    : b _l2 ( vec_set_len [f] ts tn )
-    : *f tcp ( vec_data [f] tc )
-    : *f tsp ( vec_data [f] ts )
+    : ( Vec f ) tc ( vec_zeroed [f] tn )
+    : ( Vec f ) ts ( vec_zeroed [f] tn )
+    : ( Slice f ) tcp ( slice_from_vec [f] tc )
+    : ( Slice f ) tsp ( slice_from_vec [f] ts )
     : ~ i j 0
-    ~ < j tn { = . tcp j . hc j = . tsp j . hs j = j + j 1 }
+    ~ < j tn { ( slice_put [f] tcp j ( slice_at [f] hc j ) ) ( slice_put [f] tsp j ( slice_at [f] hs j ) ) = j + j 1 }
     : b _u1 ( gk_dbuf_upload kit c3 tc )
     : b _u2 ( gk_dbuf_upload kit s3 ts )
     ^ @ CamHead {

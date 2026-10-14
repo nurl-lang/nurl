@@ -21,26 +21,26 @@ $ `src/preproc.nu`
 
 : i STRIDE 9973
 
-unsafe @ imnet_norm * f p i h i w → v {
-    : ( Vec u ) mean__v ( vec_zeroed [u] 24 )
-    : *f mean # *f ( vec_data [u] mean__v )
-    : ( Vec u ) std__v ( vec_zeroed [u] 24 )
-    : *f std # *f ( vec_data [u] std__v )
-    = . mean 0 0.485 = . mean 1 0.456 = . mean 2 0.406
-    = . std 0 0.229 = . std 1 0.224 = . std 2 0.225
+@ imnet_norm ( Slice f ) p i h i w → v {
+    : ( Vec f ) mean__v ( vec_zeroed [f] 3 )
+    : ( Slice f ) mean ( slice_from_vec [f] mean__v )
+    : ( Vec f ) std__v ( vec_zeroed [f] 3 )
+    : ( Slice f ) std ( slice_from_vec [f] std__v )
+    ( slice_put [f] mean 0 0.485 ) ( slice_put [f] mean 1 0.456 ) ( slice_put [f] mean 2 0.406 )
+    ( slice_put [f] std 0 0.229 ) ( slice_put [f] std 1 0.224 ) ( slice_put [f] std 2 0.225 )
     : ~ i c 0
     ~ < c 3 {
         : ~ i j 0
         ~ < j * h w {
             : i o + * c * h w j
-            = . p o / - . p o . mean c . std c
+            ( slice_put [f] p o / - ( slice_at [f] p o ) ( slice_at [f] mean c ) ( slice_at [f] std c ) )
             = j + j 1
         }
         = c + c 1
     }
 }
 
-unsafe @ main → i {
+@ main → i {
     : i argc ( nurl_argc )
     ? < argc 3 { ( nurl_print `usage: streamcheck <ckpt.pt> <frame>...\n` ) ^ 2 } {}
     : i nframes - argc 2
@@ -58,14 +58,14 @@ unsafe @ main → i {
         F e → { ( nurl_print ( string_data e ) ) ( nurl_print `\n` ) ^ 1 }
         T lw → {
             : Agg a ( ag_load lw kit )
-            ? ( lw_ok lw ) {} { ( nurl_print ( lw_error lw ) ) ( nurl_print `\n` ) ^ 1 }
+            ? ( lw_ok lw ) {} { ( nurl_print ( string_data ( lw_error lw ) ) ) ( nurl_print `\n` ) ^ 1 }
             // the first frame fixes the geometry every later one shares
             : ~ i p 0
             : ~ i dn 0
             : ~ i gh 0
             : ~ i gw 0
-            : ( Vec u ) taps__v ( vec_zeroed [u] 32 )
-            : *i taps # *i ( vec_data [u] taps__v )
+            : ( Vec i ) taps__v ( vec_zeroed [i] 4 )
+            : ( Slice i ) taps ( slice_from_vec [i] taps__v )
             ( ag_default_taps taps )
             : ~ i fi 0
             ~ < fi nframes {
@@ -95,10 +95,9 @@ unsafe @ main → i {
                         : b ok ( ag_forward_one kit a ws dtok tok ( pp_data f )
                         h w gh gw fi 1 kvs kvw -1 taps out )
                         ? ok {} { ( nurl_print `frame FAILED\n` ) ^ 1 }
-                        : ( Vec f ) hv ( vec_with_cap [f] * 4 * p 2048 )
-                        : b _sl ( vec_set_len [f] hv * 4 * p 2048 )
+                        : ( Vec f ) hv ( vec_zeroed [f] * 4 * p 2048 )
                         ? ( gk_dbuf_download kit out hv ) {} { ( nurl_print `download FAILED\n` ) ^ 1 }
-                        : *f hp ( vec_data [f] hv )
+                        : ( Slice f ) hp ( slice_from_vec [f] hv )
                         : ~ i k 0
                         ~ < k 4 {
                             ( nurl_print `stream` ) ( nurl_print ( nurl_str_int fi ) )
@@ -109,7 +108,7 @@ unsafe @ main → i {
                             : ~ i j 0
                             ~ < j * p 2048 {
                                 ( nurl_print ` ` )
-                                ( nurl_print ( nurl_str_float . hp + base j ) )
+                                ( nurl_print ( nurl_str_float ( slice_at [f] hp + base j ) ) )
                                 = j + j STRIDE
                             }
                             ( nurl_print `\n` )

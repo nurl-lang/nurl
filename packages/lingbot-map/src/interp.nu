@@ -59,7 +59,7 @@ $ `stdlib/std/float.nu`
 // Coefficient window for one output position along one axis.
 // Fills `wts` with the weights and returns the packed
 // (xmin + 65536·count) so a caller gets both without a second call.
-unsafe @ __ip_window i insize i outsize i idx * f wts → i {
+@ __ip_window i insize i outsize i idx ( Slice f ) wts → i {
     : f scale / # f insize # f outsize
     : f support ? >= scale 1.0 * 2.0 scale 2.0
     : f invscale ? >= scale 1.0 / 1.0 scale 1.0
@@ -73,13 +73,13 @@ unsafe @ __ip_window i insize i outsize i idx * f wts → i {
     : ~ i j 0
     ~ < j cnt {
         : f w ( __ip_cubic * invscale - + # f + j xmin 0.5 center )
-        = . wts j w
+        ( slice_put [f] wts j w )
         = total + total w
         = j + j 1
     }
     ? != total 0.0 {
         = j 0
-        ~ < j cnt { = . wts j / . wts j total = j + j 1 }
+        ~ < j cnt { ( slice_put [f] wts j / ( slice_at [f] wts j ) total ) = j + j 1 }
     } {}
     ^ + xmin * cnt 65536
 }
@@ -95,17 +95,17 @@ unsafe @ __ip_window i insize i outsize i idx * f wts → i {
 //
 // Separable, horizontal first, exactly as torch does it — resampling both
 // axes at once would give different sums.
-unsafe @ interp_bicubic_aa * f src i sw i sh i planes i dw i dh * f dst → v {
+@ interp_bicubic_aa ( Slice f ) src i sw i sh i planes i dw i dh ( Slice f ) dst → v {
     ? | | | | <= sw 0 <= sh 0 <= dw 0 <= dh 0 <= planes 0 { ^ v } {}
     : i kx ( __ip_ksize sw dw )
     : i ky ( __ip_ksize sh dh )
-    : ( Vec u ) wx__v ( vec_zeroed [u] * 8 kx )
-    : *f wx # *f ( vec_data [u] wx__v )
-    : ( Vec u ) wy__v ( vec_zeroed [u] * 8 ky )
-    : *f wy # *f ( vec_data [u] wy__v )
+    : ( Vec f ) wx__v ( vec_zeroed [f] kx )
+    : ( Slice f ) wx ( slice_from_vec [f] wx__v )
+    : ( Vec f ) wy__v ( vec_zeroed [f] ky )
+    : ( Slice f ) wy ( slice_from_vec [f] wy__v )
     // horizontal: sw → dw, rows unchanged
-    : ( Vec u ) mid__v ( vec_zeroed [u] * 8 * planes * dw sh )
-    : *f mid # *f ( vec_data [u] mid__v )
+    : ( Vec f ) mid__v ( vec_zeroed [f] * planes * dw sh )
+    : ( Slice f ) mid ( slice_from_vec [f] mid__v )
     : ~ i ox 0
     ~ < ox dw {
         : i packed ( __ip_window sw dw ox wx )
@@ -120,10 +120,10 @@ unsafe @ interp_bicubic_aa * f src i sw i sh i planes i dw i dh * f dst → v {
                 : ~ f acc 0.0
                 : ~ i j 0
                 ~ < j cnt {
-                    = acc + acc * . src + + sbase * y sw + xmin j . wx j
+                    = acc + acc * ( slice_at [f] src + + sbase * y sw + xmin j ) ( slice_at [f] wx j )
                     = j + j 1
                 }
-                = . mid + mbase + * y dw ox acc
+                ( slice_put [f] mid + mbase + * y dw ox acc )
                 = y + y 1
             }
             = p + p 1
@@ -145,10 +145,10 @@ unsafe @ interp_bicubic_aa * f src i sw i sh i planes i dw i dh * f dst → v {
                 : ~ f acc 0.0
                 : ~ i j 0
                 ~ < j cnt {
-                    = acc + acc * . mid + mbase + * + ymin j dw x . wy j
+                    = acc + acc * ( slice_at [f] mid + mbase + * + ymin j dw x ) ( slice_at [f] wy j )
                     = j + j 1
                 }
-                = . dst + dbase + * oy dw x acc
+                ( slice_put [f] dst + dbase + * oy dw x acc )
                 = x + x 1
             }
             = p + p 1

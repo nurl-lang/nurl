@@ -93,12 +93,11 @@ $ `src/patchembed.nu`
 }
 
 // A tensor read into a host vector, sized from the checkpoint.
-unsafe @ _dn_host Lw w s name → ( Vec f ) {
+@ _dn_host Lw w s name → ( Vec f ) {
     : i n ( lw_nelems w name )
     : i cap ? > n 0 n 1
-    : ( Vec f ) v ( vec_with_cap [f] cap )
-    : b _sl ( vec_set_len [f] v cap )
-    ? > n 0 { : b _rd ( lw_read w name ( vec_data [f] v ) n ) } {}
+    : ( Vec f ) v ( vec_zeroed [f] cap )
+    ? > n 0 { : b _rd ( lw_read w name ( slice_from_vec [f] v ) n ) } {}
     ^ v
 }
 
@@ -115,7 +114,7 @@ unsafe @ _dn_host Lw w s name → ( Vec f ) {
 // The resampled grid, from the cache when the geometry has not changed.
 // The returned Vec is BORROWED — it is the Dino's, and the caller must
 // not free it.
-unsafe @ dn_pos_cached Dino d i gh i gw → ( Vec f ) {
+@ dn_pos_cached Dino d i gh i gw → ( Vec f ) {
     : b hit & == 2 ( vec_len [i] . d poskey )
     & == gh ?? ( vec_get [i] . d poskey 0 ) { T v → v F → -1 }
     == gw ?? ( vec_get [i] . d poskey 1 ) { T v → v F → -1 }
@@ -126,51 +125,50 @@ unsafe @ dn_pos_cached Dino d i gh i gw → ( Vec f ) {
     // through it is visible to the caller's Dino, but assigning a new
     // handle to a field of a by-value struct is not.
     : i n ( vec_len [f] fresh )
-    : b _t ( vec_set_len [f] . d poscache 0 )
+    ( vec_clear [f] . d poscache )
     : ~ i j 0
     ~ < j n {
         ( vec_push [f] . d poscache ?? ( vec_get [f] fresh j ) { T v → v F → 0.0 } )
         = j + j 1
     }
-    : b _k ( vec_set_len [i] . d poskey 0 )
+    ( vec_clear [i] . d poskey )
     ( vec_push [i] . d poskey gh )
     ( vec_push [i] . d poskey gw )
     ^ . d poscache
 }
 
-unsafe @ dn_pos_for Dino d i gh i gw → ( Vec f ) {
+@ dn_pos_for Dino d i gh i gw → ( Vec f ) {
     : i n + 1 * gh gw
-    : ( Vec f ) out ( vec_with_cap [f] * n DN_DIM )
-    : b _sl ( vec_set_len [f] out * n DN_DIM )
-    : *f src ( vec_data [f] . d pos )
-    : *f dst ( vec_data [f] out )
+    : ( Vec f ) out ( vec_zeroed [f] * n DN_DIM )
+    : ( Slice f ) src ( slice_from_vec [f] . d pos )
+    : ( Slice f ) dst ( slice_from_vec [f] out )
     // cls row
     : ~ i c 0
-    ~ < c DN_DIM { = . dst c . src c = c + c 1 }
+    ~ < c DN_DIM { ( slice_put [f] dst c ( slice_at [f] src c ) ) = c + c 1 }
     ? & == gh DN_GRID == gw DN_GRID {
         // no resample needed — copy the grid straight across
         : ~ i j 0
-        ~ < j * * gh gw DN_DIM { = . dst + DN_DIM j . src + DN_DIM j = j + j 1 }
+        ~ < j * * gh gw DN_DIM { ( slice_put [f] dst + DN_DIM j ( slice_at [f] src + DN_DIM j ) ) = j + j 1 }
         ^ out
     } {}
     // interpolate needs planar [C, H, W]; the checkpoint has [H*W, C]
     : i src_hw * DN_GRID DN_GRID
     : i dst_hw * gh gw
-    : ( Vec u ) pin__v ( vec_zeroed [u] * 8 * DN_DIM src_hw )
-    : *f pin # *f ( vec_data [u] pin__v )
-    : ( Vec u ) pout__v ( vec_zeroed [u] * 8 * DN_DIM dst_hw )
-    : *f pout # *f ( vec_data [u] pout__v )
+    : ( Vec f ) pin__v ( vec_zeroed [f] * DN_DIM src_hw )
+    : ( Slice f ) pin ( slice_from_vec [f] pin__v )
+    : ( Vec f ) pout__v ( vec_zeroed [f] * DN_DIM dst_hw )
+    : ( Slice f ) pout ( slice_from_vec [f] pout__v )
     : ~ i k 0
     ~ < k DN_DIM {
         : ~ i p 0
-        ~ < p src_hw { = . pin + * k src_hw p . src + DN_DIM + * p DN_DIM k = p + p 1 }
+        ~ < p src_hw { ( slice_put [f] pin + * k src_hw p ( slice_at [f] src + DN_DIM + * p DN_DIM k ) ) = p + p 1 }
         = k + k 1
     }
     ( interp_bicubic_aa pin DN_GRID DN_GRID DN_DIM gw gh pout )
     = k 0
     ~ < k DN_DIM {
         : ~ i p 0
-        ~ < p dst_hw { = . dst + DN_DIM + * p DN_DIM k . pout + * k dst_hw p = p + p 1 }
+        ~ < p dst_hw { ( slice_put [f] dst + DN_DIM + * p DN_DIM k ( slice_at [f] pout + * k dst_hw p ) ) = p + p 1 }
         = k + k 1
     }
     ^ out
@@ -189,16 +187,15 @@ unsafe @ dn_pos_for Dino d i gh i gw → ( Vec f ) {
 // `tok` must hold dn_tokens(gh, gw) × 1024 f32 and comes back holding
 // the FULL token array; the patch tokens the aggregator wants are the
 // last gh·gw rows, i.e. `lm_view tok (5·1024) (gh·gw·1024)`.
-unsafe @ dn_forward GpuKit kit Dino d LmWs ws * f img i h i w i gh i gw GkBuf tok → b {
+@ dn_forward GpuKit kit Dino d LmWs ws ( Slice f ) img i h i w i gh i gw GkBuf tok → b {
     : i np * gh gw
     : i n ( dn_tokens gh gw )
     : i k * 3 * DN_PATCH DN_PATCH
     ? != . tok n * n DN_DIM { ^ F } {}
 
     // im2col on the host, then one upload
-    : ( Vec f ) cols ( vec_with_cap [f] * np k )
-    : b _c1 ( vec_set_len [f] cols * np k )
-    ( pe_im2col img 3 h w DN_PATCH ( vec_data [f] cols ) )
+    : ( Vec f ) cols ( vec_zeroed [f] * np k )
+    ( pe_im2col img 3 h w DN_PATCH ( slice_from_vec [f] cols ) )
     : GkBuf dcols ( gk_dbuf_new kit * np k GK_F32 )
     : b okc ( gk_dbuf_upload kit dcols cols )
     ? okc {} { ^ F }
@@ -213,18 +210,17 @@ unsafe @ dn_forward GpuKit kit Dino d LmWs ws * f img i h i w i gh i gw GkBuf to
     // registers — they are spliced in after the addition, which is why
     // the head is assembled here rather than folded into one buffer.
     : ( Vec f ) pos ( dn_pos_cached d gh gw )
-    : ( Vec f ) head ( vec_with_cap [f] * 5 DN_DIM )
-    : b _c2 ( vec_set_len [f] head * 5 DN_DIM )
-    : *f hp ( vec_data [f] head )
-    : *f pp ( vec_data [f] pos )
-    : *f cp ( vec_data [f] . d cls )
-    : *f rp ( vec_data [f] . d reg )
+    : ( Vec f ) head ( vec_zeroed [f] * 5 DN_DIM )
+    : ( Slice f ) hp ( slice_from_vec [f] head )
+    : ( Slice f ) pp ( slice_from_vec [f] pos )
+    : ( Slice f ) cp ( slice_from_vec [f] . d cls )
+    : ( Slice f ) rp ( slice_from_vec [f] . d reg )
     : ~ i c 0
-    ~ < c DN_DIM { = . hp c + . cp c . pp c = c + c 1 }
+    ~ < c DN_DIM { ( slice_put [f] hp c + ( slice_at [f] cp c ) ( slice_at [f] pp c ) ) = c + c 1 }
     : ~ i r 0
     ~ < r DN_REG {
         = c 0
-        ~ < c DN_DIM { = . hp + * + r 1 DN_DIM c . rp + * r DN_DIM c = c + c 1 }
+        ~ < c DN_DIM { ( slice_put [f] hp + * + r 1 DN_DIM c ( slice_at [f] rp + * r DN_DIM c ) ) = c + c 1 }
         = r + r 1
     }
     : GkBuf hview ( lm_view tok 0 * 5 DN_DIM )
@@ -232,11 +228,10 @@ unsafe @ dn_forward GpuKit kit Dino d LmWs ws * f img i h i w i gh i gw GkBuf to
     ? okh {} { ^ F }
 
     // patch position rows, added to what the projection produced
-    : ( Vec f ) pgrid ( vec_with_cap [f] * np DN_DIM )
-    : b _c3 ( vec_set_len [f] pgrid * np DN_DIM )
-    : *f gp ( vec_data [f] pgrid )
+    : ( Vec f ) pgrid ( vec_zeroed [f] * np DN_DIM )
+    : ( Slice f ) gp ( slice_from_vec [f] pgrid )
     : ~ i j 0
-    ~ < j * np DN_DIM { = . gp j . pp + DN_DIM j = j + j 1 }
+    ~ < j * np DN_DIM { ( slice_put [f] gp j ( slice_at [f] pp + DN_DIM j ) ) = j + j 1 }
     // `pos` is the Dino's cached grid, not ours to free
 
     : GkBuf dpos ( gk_dbuf_new kit * np DN_DIM GK_F32 )

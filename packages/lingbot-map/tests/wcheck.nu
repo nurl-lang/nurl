@@ -24,7 +24,7 @@ $ `src/weights.nu`
     ( nurl_print `\n` )
 }
 
-unsafe @ main → i {
+@ main → i {
     ? < ( nurl_argc ) 2 { ( nurl_print `usage: wcheck <checkpoint.pt>\n` ) ^ 2 } {}
     : !Lw String o ( lw_open ( nurl_argv 1 ) )
     ?? o {
@@ -67,19 +67,19 @@ unsafe @ main → i {
             : b _d ( lw_require w `aggregator.frame_blocks.0.mlp.fc1.weight` 4096 1024 -1 -1 )
             : b _e ( lw_require w `aggregator.camera_token` 1 2 1 1024 )
             ( nurl_print `shape_contract ` )
-            ( nurl_print ? ( lw_ok w ) `OK` ( lw_error w ) )
+            ( nurl_print ? ( lw_ok w ) `OK` ( string_data ( lw_error w ) ) )
             ( nurl_print `\n` )
 
             // a real read, into a buffer sized from the tensor itself
             : i ln ( lw_nelems w `aggregator.frame_blocks.0.ls1.gamma` )
-            : ( Vec u ) buf__v ( vec_zeroed [u] * 8 ? > ln 0 ln 1 )
-            : *f buf # *f ( vec_data [u] buf__v )
+            : ( Vec f ) buf__v ( vec_zeroed [f] ? > ln 0 ln 1 )
+            : ( Slice f ) buf ( slice_from_vec [f] buf__v )
             : b rok ( lw_read w `aggregator.frame_blocks.0.ls1.gamma` buf ln )
             ( nurl_print `read_ls1 ` ) ( nurl_print ? rok `OK` `FAIL` )
             ( nurl_print ` n=` ) ( nurl_print ( nurl_str_int ln ) )
             ? rok {
-                ( nurl_print ` v0=` ) ( nurl_print ( nurl_str_float . buf 0 ) )
-                ( nurl_print ` v1023=` ) ( nurl_print ( nurl_str_float . buf - ln 1 ) )
+                ( nurl_print ` v0=` ) ( nurl_print ( nurl_str_float ( slice_at [f] buf 0 ) ) )
+                ( nurl_print ` v1023=` ) ( nurl_print ( nurl_str_float ( slice_at [f] buf - ln 1 ) ) )
             } {}
             ( nurl_print `\n` )
             ^ 0

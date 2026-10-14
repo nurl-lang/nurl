@@ -219,7 +219,7 @@ $ `src/load.nu`
     ^ ( gk_buf_none GK_F32 )
 }
 
-unsafe @ dp_pos_embed GpuKit kit ( Vec DpPe ) cache GkBuf x i ch i h i w f aspect → b {
+@ dp_pos_embed GpuKit kit ( Vec DpPe ) cache GkBuf x i ch i h i w f aspect → b {
     : GkBuf hit ( __dp_pe_find cache ch h w aspect )
     ? ( gk_buf_ok hit ) { ^ ( gkd_add kit x x hit ) } {}
     : f diag ( float_sqrt + * aspect aspect 1.0 )
@@ -227,9 +227,8 @@ unsafe @ dp_pos_embed GpuKit kit ( Vec DpPe ) cache GkBuf x i ch i h i w f aspec
     : f spany / 1.0 diag
     : i half / ch 2
     : i quarter / half 2
-    : ( Vec f ) hv ( vec_with_cap [f] * ch * h w )
-    : b _sl ( vec_set_len [f] hv * ch * h w )
-    : *f p ( vec_data [f] hv )
+    : ( Vec f ) hv ( vec_zeroed [f] * ch * h w )
+    : ( Slice f ) p ( slice_from_vec [f] hv )
     // The grid is linspace(-e, +e, n) where e = span·(n−1)/n, i.e. the
     // sample CENTRES of an n-wide axis rather than 0..1 — which is why a
     // 1-pixel axis collapses to the single point −e.
@@ -237,11 +236,11 @@ unsafe @ dp_pos_embed GpuKit kit ( Vec DpPe ) cache GkBuf x i ch i h i w f aspec
     : f ey * spany / # f - h 1 # f h
     // the frequencies depend only on k, so they are computed once —
     // inside the pixel loop this was a float_pow per pixel per frequency
-    : ( Vec u ) omg__v ( vec_zeroed [u] * 8 ? > quarter 0 quarter 1 )
-    : *f omg # *f ( vec_data [u] omg__v )
+    : ( Vec f ) omg__v ( vec_zeroed [f] ? > quarter 0 quarter 1 )
+    : ( Slice f ) omg ( slice_from_vec [f] omg__v )
     : ~ i ki 0
     ~ < ki quarter {
-        = . omg ki / 1.0 ( float_pow DP_OMEGA0 / # f ki # f quarter )
+        ( slice_put [f] omg ki / 1.0 ( float_pow DP_OMEGA0 / # f ki # f quarter ) )
         = ki + ki 1
     }
     : ~ i y 0
@@ -252,16 +251,16 @@ unsafe @ dp_pos_embed GpuKit kit ( Vec DpPe ) cache GkBuf x i ch i h i w f aspec
             : f u ? > w 1 + - 0.0 ex * * 2.0 ex / # f px # f - w 1 - 0.0 ex
             : ~ i k 0
             ~ < k quarter {
-                : f om . omg k
+                : f om ( slice_at [f] omg k )
                 : f au * u om
                 : f av * v om
                 : i base + * y w px
                 : i plane * h w
                 // channel layout: [sin(u) | cos(u) | sin(v) | cos(v)]
-                = . p + * k plane base * DP_POS_RATIO ( float_sin au )
-                = . p + * + k quarter plane base * DP_POS_RATIO ( float_cos au )
-                = . p + * + k half plane base * DP_POS_RATIO ( float_sin av )
-                = . p + * + k + half quarter plane base * DP_POS_RATIO ( float_cos av )
+                ( slice_put [f] p + * k plane base * DP_POS_RATIO ( float_sin au ) )
+                ( slice_put [f] p + * + k quarter plane base * DP_POS_RATIO ( float_cos au ) )
+                ( slice_put [f] p + * + k half plane base * DP_POS_RATIO ( float_sin av ) )
+                ( slice_put [f] p + * + k + half quarter plane base * DP_POS_RATIO ( float_cos av ) )
                 = k + k 1
             }
             = px + px 1
@@ -329,19 +328,18 @@ i gh i gw → b {
 // re-running with one more print each time is not an option.
 : i DP_STRIDE 9973
 
-unsafe @ __dp_dump GpuKit kit s label GkBuf b i ch i h i w → v {
+@ __dp_dump GpuKit kit s label GkBuf b i ch i h i w → v {
     : i n * ch * h w
-    : ( Vec f ) hv ( vec_with_cap [f] n )
-    : b _sl ( vec_set_len [f] hv n )
+    : ( Vec f ) hv ( vec_zeroed [f] n )
     ? ( gk_dbuf_download kit b hv ) {} { ^ v }
     ( nurl_print label )
     ( nurl_print ` 1x` ) ( nurl_print ( nurl_str_int ch ) )
     ( nurl_print `x` ) ( nurl_print ( nurl_str_int h ) )
     ( nurl_print `x` ) ( nurl_print ( nurl_str_int w ) )
     ( nurl_print ` |` )
-    : *f p ( vec_data [f] hv )
+    : ( Slice f ) p ( slice_from_vec [f] hv )
     : ~ i j 0
-    ~ < j n { ( nurl_print ` ` ) ( nurl_print ( nurl_str_float . p j ) ) = j + j DP_STRIDE }
+    ~ < j n { ( nurl_print ` ` ) ( nurl_print ( nurl_str_float ( slice_at [f] p j ) ) ) = j + j DP_STRIDE }
     // A strided sample of a 53k-element tensor is six numbers, and six
     // numbers can agree while the tensor does not. These two cover every
     // element, so a partial error cannot hide between the samples.
@@ -349,8 +347,8 @@ unsafe @ __dp_dump GpuKit kit s label GkBuf b i ch i h i w → v {
     : ~ f amax 0.0
     : ~ i k 0
     ~ < k n {
-        = sum + sum . p k
-        : f a ( float_abs . p k )
+        = sum + sum ( slice_at [f] p k )
+        : f a ( float_abs ( slice_at [f] p k ) )
         ? > a amax { = amax a } {}
         = k + k 1
     }
@@ -373,33 +371,33 @@ unsafe @ __dp_dump GpuKit kit s label GkBuf b i ch i h i w → v {
 // runs once per frame against ~100 s of transformer, and a wrong
 // hand-computed scratch size fails closed in a way that is tedious to
 // chase.
-unsafe @ dp_forward GpuKit kit Dpt d GkBuf taps i gh i gw i h i w i trace
+@ dp_forward GpuKit kit Dpt d GkBuf taps i gh i gw i h i w i trace
 GkBuf depth GkBuf conf → b {
     : i np * gh gw
     : i p + DP_SPECIAL np
     : f aspect / # f w # f h
 
     // per-tap channel counts and output sizes
-    : ( Vec u ) chs__v ( vec_zeroed [u] 32 )
-    : *i chs # *i ( vec_data [u] chs__v )
-    = . chs 0 256 = . chs 1 512 = . chs 2 1024 = . chs 3 1024
-    : ( Vec u ) ohs__v ( vec_zeroed [u] 32 )
-    : *i ohs # *i ( vec_data [u] ohs__v )
-    : ( Vec u ) ows__v ( vec_zeroed [u] 32 )
-    : *i ows # *i ( vec_data [u] ows__v )
-    = . ohs 0 * gh 4 = . ows 0 * gw 4
-    = . ohs 1 * gh 2 = . ows 1 * gw 2
-    = . ohs 2 gh = . ows 2 gw
-    = . ohs 3 / + gh 1 2 = . ows 3 / + gw 1 2
+    : ( Vec i ) chs__v ( vec_zeroed [i] 4 )
+    : ( Slice i ) chs ( slice_from_vec [i] chs__v )
+    ( slice_put [i] chs 0 256 ) ( slice_put [i] chs 1 512 ) ( slice_put [i] chs 2 1024 ) ( slice_put [i] chs 3 1024 )
+    : ( Vec i ) ohs__v ( vec_zeroed [i] 4 )
+    : ( Slice i ) ohs ( slice_from_vec [i] ohs__v )
+    : ( Vec i ) ows__v ( vec_zeroed [i] 4 )
+    : ( Slice i ) ows ( slice_from_vec [i] ows__v )
+    ( slice_put [i] ohs 0 * gh 4 ) ( slice_put [i] ows 0 * gw 4 )
+    ( slice_put [i] ohs 1 * gh 2 ) ( slice_put [i] ows 1 * gw 2 )
+    ( slice_put [i] ohs 2 gh ) ( slice_put [i] ows 2 gw )
+    ( slice_put [i] ohs 3 / + gh 1 2 ) ( slice_put [i] ows 3 / + gw 1 2 )
 
     : GkBuf tmp ( gk_dbuf_new kit * np DP_IN GK_F32 )
     : ( Vec GkBuf ) rns ( vec_new [GkBuf] )
     : ~ b ok T
     : ~ i t 0
     ~ & ok < t 4 {
-        : i cout . chs t
-        : i oh . ohs t
-        : i ow . ows t
+        : i cout ( slice_at [i] chs t )
+        : i oh ( slice_at [i] ohs t )
+        : i ow ( slice_at [i] ows t )
         : GkBuf src ( lm_view taps * t * p DP_IN * p DP_IN )
         : GkBuf fmap ( gk_dbuf_new kit * DP_IN np GK_F32 )
         ? ( __dp_tokens_to_map kit d src tmp fmap gh gw ) {} { = ok F }
@@ -466,8 +464,8 @@ GkBuf depth GkBuf conf → b {
     // 2, 1 — each upsampling to the next finer tap's size, and the last
     // simply doubling.
     : ~ i cur 3
-    : i h3 . ohs 3
-    : i w3 . ows 3
+    : i h3 ( slice_at [i] ohs 3 )
+    : i w3 ( slice_at [i] ows 3 )
     : GkBuf path ( gk_dbuf_new kit * DP_FEAT * h3 w3 GK_F32 )
     ?? ( vec_get [GkBuf] rns 3 ) {
         T b → { ? ( gkd_map kit `copy` `x` path b ) {} { = ok F } }
@@ -480,8 +478,8 @@ GkBuf depth GkBuf conf → b {
     ~ & ok < step 4 {
         : i fi - 3 step
         : i fine - 2 step
-        : i oh ? < step 3 . ohs fine * ch 2
-        : i ow ? < step 3 . ows fine * cw 2
+        : i oh ? < step 3 ( slice_at [i] ohs fine ) * ch 2
+        : i ow ? < step 3 ( slice_at [i] ows fine ) * cw 2
         : GkBuf t1 ( gk_dbuf_new kit * DP_FEAT * ch cw GK_F32 )
         : GkBuf t2 ( gk_dbuf_new kit * DP_FEAT * ch cw GK_F32 )
         : GkBuf up ( gk_dbuf_new kit * DP_FEAT * oh ow GK_F32 )

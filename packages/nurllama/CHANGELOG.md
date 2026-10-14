@@ -2,6 +2,21 @@
 
 All notable changes to the `nurllama` package.
 
+## [0.19.2] — 2026-10-14
+
+### Fixed
+
+- A Gemma checkpoint's norm weights (stored as w − 1) were widened by
+  `__lm_add1` through safetensor's `_st_u32`, which takes a byte view
+  since safetensor 0.6 — it was still handed the buffer's raw address, and
+  read it as a view of garbage length. The compiler accepted the
+  ill-typed call; it rejects it now (h268). `__lm_add1` works on a view
+  of the buffer and is no longer `unsafe`.
+
+### Changed
+
+- Requires gpukit 0.11 (its kit state behind a lock; census accessors return a `String`).
+
 ## [0.19.1] — 2026-10-14
 
 Requires NURL 0.73.0 (`slice_at`, `slice_put`, `rc_take`, `locked_take`).

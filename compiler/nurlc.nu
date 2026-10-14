@@ -11333,9 +11333,15 @@ unsafe @ nurl_lex_peek4_type i h → i {
     : ~ s __tfa ( nurl_sym_get2 syms name `__faddr` )
     ? != 0 ( nurl_str_len __tfa ) {
         : s __tfg ( str_first_word __tfa ) = __tfa ( str_skip_word __tfa )
-        : s __tft ( str_first_word __tfa ) = __tfa ( str_skip_word __tfa )
-        ? & ( seq __tfa ( nurl_str_int g_bck_closure_depth ) ) | | ( __type_needs_drop __tft syms ) ( __is_closure_llty __tft ) != 0 ( nurl_str_len ( __nc_opt_payload __tft ) ) {
-            : s __tfl ( nurl_llty __tft )
+        // `<type> <depth>`: the type may hold spaces of its own — an option
+        // or a result is `{ i1, %K }` (h267: a `?K` taken out of a Locked
+        // was left in its slot, and the restore dropped it under the taker).
+        : ~ i __tfk - ( nurl_str_len __tfa ) 1
+        ~ & >= __tfk 0 != ( nurl_str_get __tfa __tfk ) 32 { = __tfk - __tfk 1 }
+        : s __tft ? > __tfk 0 ( nurl_str_slice __tfa 0 __tfk ) ``
+        = __tfa ? >= __tfk 0 ( nurl_str_slice __tfa + __tfk 1 - - ( nurl_str_len __tfa ) __tfk 1 ) __tfa
+        : s __tfl ( nurl_llty __tft )
+        ? & ( seq __tfa ( nurl_str_int g_bck_closure_depth ) ) | | | ( __type_needs_drop __tft syms ) ( __type_needs_drop __tfl syms ) ( __is_closure_llty __tfl ) != 0 ( nurl_str_len ( __nc_opt_payload __tfl ) ) {
             ( nurl_print `  store ` ) ( nurl_print __tfl ) ( nurl_print ` zeroinitializer, ptr ` ) ( nurl_print __tfg ) ( nurl_print `\n` )
         } {}
     } {}
@@ -12226,6 +12232,16 @@ unsafe @ __has_pct_token s ll s name → b {
             ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
             ( nurl_str_cat4 `': value of type '` at `' passed where parameter expects '` pllvm )
             `' — wrong named type passed by value. Structs and enums are both NOMINAL: two of them are different types even when their fields or tags line up, and no conversion is implied. The call would reinterpret this value as the declared type's fields.` ) ) }
+        {}
+        // A pointer where a struct is passed by value, or a struct where a
+        // pointer is declared (`*f` into a `( Slice f )`, h268): the callee
+        // reads the address as the struct's first field and the rest from
+        // whatever follows in the registers.
+        ? & ! ( __arg_str_cstr_mismatch at pllvm ) | & ( is_ptr_ty at ) ( __is_named_agg pllvm ) & ( __is_named_agg at ) ( is_ptr_ty pllvm )
+        { ( die lex ( nurl_str_cat3
+            ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
+            ( nurl_str_cat4 `': value of type '` at `' passed where parameter expects '` pllvm )
+            `' — a pointer is not a struct value, nor a struct a pointer: the callee would read the address as the struct's fields (or the struct's first field as the address). Pass a value of the declared type — a slice of a Vec is ( slice_from_vec [T] v ), a window of one ( slice_window [T] s from n ).` ) ) }
         {}
         ? ( __arg_named_ptr_mismatch at pllvm )
         { ( die lex ( nurl_str_cat3
@@ -13197,7 +13213,7 @@ unsafe @ bck_check_lit_moves i lex i line i col s what s tab i scmask s moved s 
     ? ! __callee_shadowed { ( bck_check_raw_call lex syms call_name ) } {}
     // The zero-filling constructors make values whose bits are all zero:
     // outside `unsafe`, only of a type a zero is a value of (h186).
-    ? & & & ! __callee_shadowed ( bck_sound ) ! ( bck_unsafe_ctx ) ( str_contains_word `vec_zeroed vec_resize_zeroed box_zero rc_zero arc_zero` fname ) {
+    ? & & & ! __callee_shadowed ( bck_sound ) ! ( bck_unsafe_ctx ) ( str_contains_word `vec_zeroed vec_resize_zeroed box_zero rc_zero arc_zero locked_zero` fname ) {
         // (A named type argument is kept without its `%`: `Vec__i64`.)
         : s __zct0 ( str_first_word call_targs )
         : s __zct ? & != 0 ( nurl_str_len __zct0 ) ( __zero_invalid ( nurl_str_cat `%` __zct0 ) syms ) ( nurl_str_cat `%` __zct0 ) ( nurl_str_cat __zct0 `` )
@@ -53174,6 +53190,12 @@ unsafe @ priv_resolve i lex i syms s fname → s {
     { ( die lex `'raw' is a prefix on function and struct declarations only — 'raw @ name …' says that a caller must vouch for what the function requires, so only an 'unsafe' function may call it; 'raw : Name { … }' seals a struct whose fields carry an invariant. It has no meaning on an import, trait or FFI declaration (a foreign function takes 'unsafe & …')` ) }
     {}
     ? & raw_prefix == tt TT_COLON { = g_pending_unsafe 0 = g_pending_rawrep 1 } {}
+    // On a function the prefix is the function's own (g_unsafe_fns holds
+    // it); only a foreign declaration (`unsafe & …`) reads the flag. A
+    // function lazy compilation skips never reached gen_fn_decl's clear,
+    // and its `unsafe` marked the next foreign function raw (fs.nu's
+    // `unlink`, after `unsafe @ __fd_write_all`).
+    ? == tt TT_AT { = g_pending_unsafe 0 } {}
     // `simd` is meaningful only on a function. Anywhere else it is a
     // silent no-op that would leak onto the next `@` the parser reached
     // — the same cross-file bug `pub` had, so it gets the same fix:

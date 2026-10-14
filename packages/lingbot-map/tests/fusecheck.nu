@@ -18,26 +18,24 @@ $ `src/dpthead.nu`
 
 : i FC_CH 8  // stands in for DP_FEAT; the code is channel-generic
 
-unsafe @ gen GpuKit kit i n f phase → GkBuf {
+@ gen GpuKit kit i n f phase → GkBuf {
     : GkBuf b ( gk_dbuf_new kit n GK_F32 )
-    : ( Vec f ) h ( vec_with_cap [f] n )
-    : b _sl ( vec_set_len [f] h n )
-    : *f p ( vec_data [f] h )
+    : ( Vec f ) h ( vec_zeroed [f] n )
+    : ( Slice f ) p ( slice_from_vec [f] h )
     : ~ i j 0
-    ~ < j n { = . p j * 0.5 ( float_sin + phase * 0.037 # f j ) = j + j 1 }
+    ~ < j n { ( slice_put [f] p j * 0.5 ( float_sin + phase * 0.037 # f j ) ) = j + j 1 }
     : b _u ( gk_dbuf_upload kit b h )
     ^ b
 }
 
-unsafe @ dump GpuKit kit s label GkBuf b i n → v {
-    : ( Vec f ) h ( vec_with_cap [f] n )
-    : b _sl ( vec_set_len [f] h n )
+@ dump GpuKit kit s label GkBuf b i n → v {
+    : ( Vec f ) h ( vec_zeroed [f] n )
     ? ( gk_dbuf_download kit b h ) {} { ( nurl_print `dl FAILED\n` ) ^ v }
     ( nurl_print label ) ( nurl_print ` 1x` ) ( nurl_print ( nurl_str_int n ) )
     ( nurl_print ` |` )
-    : *f p ( vec_data [f] h )
+    : ( Slice f ) p ( slice_from_vec [f] h )
     : ~ i j 0
-    ~ < j n { ( nurl_print ` ` ) ( nurl_print ( nurl_str_float . p j ) ) = j + j 1 }
+    ~ < j n { ( nurl_print ` ` ) ( nurl_print ( nurl_str_float ( slice_at [f] p j ) ) ) = j + j 1 }
     ( nurl_print `\n` )
 }
 

@@ -28,9 +28,9 @@ $ `src/devblock.nu`
 @ __lmw_none → GkBuf { ^ ( gk_buf_none GK_F32 ) }
 
 // One tensor onto the device. The staging vector is written through its
-// own data pointer — pt_read_f64 fills a raw span — so the elements are
+// own slice — pt_read_f64_into fills it in place — so the elements are
 // copied once, not twice.
-unsafe @ lmw_upload Lw w GpuKit kit s name → GkBuf {
+@ lmw_upload Lw w GpuKit kit s name → GkBuf {
     : i n ( lw_nelems w name )
     ? <= n 0 {
         : b _r ( lw_require w name -1 -1 -1 -1 )
@@ -38,14 +38,13 @@ unsafe @ lmw_upload Lw w GpuKit kit s name → GkBuf {
     } {}
     // the checkpoint is float32 and the device buffer is float32, so
     // the fast path is a straight copy out of the mapping
-    : *u raw ( lw_f32_ptr w name n )
-    ? != # i raw 0 {
+    : ( Slice u ) raw ( lw_f32_bytes w name n )
+    ? > ( slice_len [u] raw ) 0 {
         : GkBuf rb ( gk_dbuf_new kit n GK_F32 )
-        ? ( gk_dbuf_upload_raw kit rb raw ) { ^ rb } {}
+        ? ( gk_dbuf_upload_bytes kit rb raw ) { ^ rb } {}
     } {}
-    : ( Vec f ) host ( vec_with_cap [f] n )
-    : b _sl ( vec_set_len [f] host n )
-    ? ! ( lw_read w name ( vec_data [f] host ) n ) {
+    : ( Vec f ) host ( vec_zeroed [f] n )
+    ? ! ( lw_read w name ( slice_from_vec [f] host ) n ) {
         ^ ( __lmw_none )
     } {}
     : GkBuf b ( gk_dbuf_new kit n GK_F32 )
@@ -61,7 +60,7 @@ unsafe @ lmw_upload Lw w GpuKit kit s name → GkBuf {
 // CALL time to reach it is a measured LOSS — a full memory round trip
 // over a cold weight used once. Transposing HERE costs one pass, once
 // per process, and every frame afterwards takes the tiled path.
-unsafe @ lmw_upload_t Lw w GpuKit kit s name i rows i cols → GkBuf {
+@ lmw_upload_t Lw w GpuKit kit s name i rows i cols → GkBuf {
     : i n ( lw_nelems w name )
     ? | <= n 0 != n * rows cols {
         : b _r ( lw_require w name rows cols -1 -1 )
@@ -72,10 +71,10 @@ unsafe @ lmw_upload_t Lw w GpuKit kit s name i rows i cols → GkBuf {
     // column-strided write per element, and narrows them again on
     // upload; this is one memcpy and one permute kernel. It is what
     // takes the 4.6 GB checkpoint from ~25 s to load to under ten.
-    : *u raw ( lw_f32_ptr w name n )
-    ? != # i raw 0 {
+    : ( Slice u ) raw ( lw_f32_bytes w name n )
+    ? > ( slice_len [u] raw ) 0 {
         : GkBuf src ( gk_dbuf_new kit n GK_F32 )
-        ? ( gk_dbuf_upload_raw kit src raw ) {
+        ? ( gk_dbuf_upload_bytes kit src raw ) {
             : GkBuf dst ( gk_dbuf_new kit n GK_F32 )
             : ( Vec i ) dims ( vec_new [i] )
             ( vec_push [i] dims rows ) ( vec_push [i] dims cols )
@@ -85,20 +84,18 @@ unsafe @ lmw_upload_t Lw w GpuKit kit s name i rows i cols → GkBuf {
             ? okp { ^ dst } {}
         } {}
     } {}
-    : ( Vec f ) host ( vec_with_cap [f] n )
-    : b _sl ( vec_set_len [f] host n )
-    ? ! ( lw_read w name ( vec_data [f] host ) n ) {
+    : ( Vec f ) host ( vec_zeroed [f] n )
+    ? ! ( lw_read w name ( slice_from_vec [f] host ) n ) {
         ^ ( __lmw_none )
     } {}
-    : ( Vec f ) tp ( vec_with_cap [f] n )
-    : b _tl ( vec_set_len [f] tp n )
-    : *f src ( vec_data [f] host )
-    : *f dst ( vec_data [f] tp )
+    : ( Vec f ) tp ( vec_zeroed [f] n )
+    : ( Slice f ) src ( slice_from_vec [f] host )
+    : ( Slice f ) dst ( slice_from_vec [f] tp )
     : ~ i r 0
     ~ < r rows {
         : ~ i c 0
         ~ < c cols {
-            = . dst + * c rows r . src + * r cols c
+            ( slice_put [f] dst + * c rows r ( slice_at [f] src + * r cols c ) )
             = c + c 1
         }
         = r + r 1

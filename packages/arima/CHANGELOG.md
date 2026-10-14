@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.6.1] — 2026-10-14
+
+### Changed
+
+- Requires gpukit 0.11 (its kit state behind a lock; census accessors return a `String`).
+
 ## [0.6.0] — 2026-10-14
 
 Requires NURL 0.73.0 with `stdlib/std/par.nu` (`par_map_index`).

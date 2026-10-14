@@ -209,6 +209,17 @@ with gpukit's new `gk_dbuf_upload_bytes`; `gk_dbuf_upload_raw` is `raw`.
 `embed` (43 → 2: carving device memory and the batched upload) keeps its
 engine in a `Locked` beside its tokenizer, configuration and status, and
 its server queue is a `Channel`.
+`gpukit` (64 → 34) keeps a kit's state — kernel cache, profiler,
+device-memory pool — in a `Locked` beside its immutable device record:
+two threads using one kit raced on the cache and the pool through
+`arc_ptr`. `lingbot-map` (66 → 2, its RoPE launches) runs its host
+reference code over slices and its checkpoint through a checked byte
+view; its parsed options held views of strings the parser had freed.
+`whisper` (57 → 16, the raw device work) keeps its engine in a `Locked`
+beside its dimensions and its server state in Locked globals set at
+start; its ggml loader reads the mapping through checked slices. It now
+checks every tensor's size against the config at load: a checkpoint
+whose FFN was not 4·d_model was read past the end of its buffers.
 `tokenizer` (1 → 0) owns its map keys; its pre-tokenizers now classify
 characters by Unicode category, as HF's regexes do — every non-ASCII byte
 counted as a letter, and `(§`, `½` or a no-break space split unlike the
@@ -340,6 +351,15 @@ generic that copies its `T` cannot be instantiated with one (h235)
   program-wide state no longer needs an `unsafe` accessor over a raw
   global and a hand-held mutex. A `( Vec T )` set at start is rejected
   (h263: two threads pushing through it raced).
+
+- **`locked_zero`, `fd_write_all`, `file_map_stream`, `file_none`.** `locked_zero [T]`
+  is a `Locked` over the all-zero `T`, under the `arc_zero` rule (outside
+  `unsafe` only for a `T` a zero is a value of): a large record built
+  field by field under `locked_take`. `fd_write_all fd v` writes a whole
+  `Vec u` to a file descriptor, continuing short writes. `file_map_stream`
+  maps a file for one sequential read (`MAP_POPULATE`, `MADV_SEQUENTIAL`).
+  `file_none` is the null `File`, a placeholder for one opened later
+  (programs forged it from a null pointer).
 
 - **`map_get_with` and stdlib/std/unicat.nu.** A `HashMap` that owns its
   `String` keys is looked up by a borrowed `s` with nothing allocated
@@ -576,6 +596,33 @@ generic that copies its `T` cannot be instantiated with one (h235)
   `$NURL_STDLIB/stdlib`, each recognised by its `core/vec.nu`; h178).
 
 ### Fixed
+
+- **A pointer is not passed where a struct is, nor a struct where a
+  pointer is** (h268). A `*f` handed to a `( Slice f )` parameter — or,
+  in safe code, an `s` string to a `( Slice u )` one — compiled to an
+  ill-typed call: the callee read the address as the slice's data and
+  whatever followed in the registers as its length. Every other pairing
+  was checked (a `*T` for its own `T`, a String for an `s`, two named
+  types); this one was not. anomaly's `imp_span_of_text` passed its text
+  where its digit helpers take a byte view, and indexed past a short
+  string; nurllama widened a Gemma checkpoint's norm weights through
+  safetensor's `_st_u32` with the buffer's raw address where it takes a
+  view.
+
+- **An `unsafe` function nothing calls no longer marks the next foreign
+  function raw.** The flag behind `unsafe & …` was cleared only when a
+  function was compiled, and lazy compilation skips an unreached one, so
+  its prefix leaked onto the next foreign declaration: a program that
+  called stdlib's `unlink` and not the `unsafe @ __fd_write_all` before
+  it was told `unlink` takes a runtime handle (ply's viewer).
+
+- **An option taken out of a `Locked` leaves its slot empty** (h267).
+  `mem_take` read where the value came from as `<addr> <type> <depth>`
+  split on spaces, and an option's or a result's type (`{ i1, %K }`) has
+  spaces of its own, so `locked_take [?K]` left its copy in the slot and
+  `locked_restore`, which drops what the slot holds, dropped the value it
+  was handed back — the next take read freed memory (whisper's server:
+  the tokenizer, on the second request).
 
 - **A field that owns something, read out of a call's result, takes the
   rest of that result with it** (h266). `^ . ( mk ) backend`, `: String

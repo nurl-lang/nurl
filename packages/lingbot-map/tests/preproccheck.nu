@@ -17,7 +17,7 @@ $ `src/preproc.nu`
 // would be 800k numbers per frame.
 : i STRIDE 997
 
-unsafe @ dump_one s path → v {
+@ dump_one s path → v {
     : !Frame String r ( pp_load path SIZE PATCH )
     ?? r {
         F e → {
@@ -30,11 +30,11 @@ unsafe @ dump_one s path → v {
             ( nurl_print `frame ` ) ( nurl_print path )
             ( nurl_print ` ` ) ( nurl_print ( nurl_str_int w ) )
             ( nurl_print `x` ) ( nurl_print ( nurl_str_int h ) )
-            : *f d ( pp_data fr )
+            : ( Slice f ) d ( pp_data fr )
             : ~ i j 0
             ~ < j n {
                 ( nurl_print ` ` )
-                ( nurl_print ( nurl_str_float . d j ) )
+                ( nurl_print ( nurl_str_float ( slice_at [f] d j ) ) )
                 = j + j STRIDE
             }
             ( nurl_print `\n` )

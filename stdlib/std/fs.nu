@@ -619,6 +619,23 @@ $ `stdlib/core/rcbox.nu`
     }
 }
 
+// All of `v` to the open file descriptor `fd` (1 = standard output) — a
+// short write is continued — with nothing added: how many bytes went, or
+// -1 when a write failed.
+@ fd_write_all i fd ( Vec u ) v → i { ^ ( __fd_write_all fd v ) }
+
+unsafe @ __fd_write_all i fd ( Vec u ) v → i {
+    : i n ( vec_len [u] v )
+    : *u p ( vec_data [u] v )
+    : ~ i off 0
+    ~ < off n {
+        : i k ( write # i32 fd # *u + # i p off - n off )
+        ? <= k 0 { ^ -1 } {}
+        = off + off k
+    }
+    ^ off
+}
+
 @ write_file_bytes s path ( Vec u ) v → !v IoErr {
     ^ ( __write_bytes path v `wb` )
 }
@@ -916,6 +933,10 @@ $ `stdlib/core/rcbox.nu`
 // Whether `f` still has its stream: F for a null File and after
 // file_close (on any copy).
 @ file_is_open File f → b { ^ != 0 # i ( file_raw f ) }
+
+// The null File: no stream (file_is_open F; every operation on it is an
+// error, closing it a no-op). A placeholder for a File opened later.
+@ file_none → File { ^ @ File { ( shared_null [FileImpl] ) } }
 
 // Take over an open FILE* (0 gives the null File): the File's last owner
 // closes it.

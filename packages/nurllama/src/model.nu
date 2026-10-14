@@ -596,18 +596,13 @@ unsafe @ __lm_upload_st * LlmImpl m s name → i {
 }
 
 // x ← x + 1 over a buffer of f32 bytes, in place (see __lm_upload_st).
-unsafe @ __lm_add1 ( Vec u ) raw → v {
-    : i n / ( vec_len [u] raw ) 4
-    : *u p ( vec_data [u] raw )
+@ __lm_add1 ( Vec u ) raw → v {
+    : ( Slice u ) p ( slice_from_vec [u] raw )
+    : i n / ( slice_len [u] p ) 4
     : ~ i k 0
     ~ < k n {
-        : f v # f ( bits_to_f32 ( _st_u32 p * k 4 ) )
-        : i bits # i ( f32_to_bits # f32 + v 1.0 )
-        : i o * k 4
-        = . p o # u & bits 255
-        = . p + o 1 # u & >> bits 8 255
-        = . p + o 2 # u & >> bits 16 255
-        = . p + o 3 # u & >> bits 24 255
+        : f v # f ( bits_to_f32 ( slice_u32_le p * k 4 ) )
+        ( slice_put_u32_le p * k 4 # i ( f32_to_bits # f32 + v 1.0 ) )
         = k + k 1
     }
 }

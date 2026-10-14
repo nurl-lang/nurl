@@ -9,21 +9,21 @@ $ `src/rope.nu`
 
 : i PSI 6  // special tokens per frame: camera + 4 registers + scale
 
-unsafe @ case i heads i ppf i pph i ppw i fstart → v {
+@ case i heads i ppf i pph i ppw i fstart → v {
     : i per + PSI * pph ppw
     : i n * ppf per
     : i dim 64
-    : ( Vec u ) x__v ( vec_zeroed [u] * 8 * heads * n dim )
-    : *f x # *f ( vec_data [u] x__v )
-    : ( Vec u ) fr__v ( vec_zeroed [u] * 8 n )
-    : *i fr # *i ( vec_data [u] fr__v )
-    : ( Vec u ) rw__v ( vec_zeroed [u] * 8 n )
-    : *i rw # *i ( vec_data [u] rw__v )
-    : ( Vec u ) cl__v ( vec_zeroed [u] * 8 n )
-    : *i cl # *i ( vec_data [u] cl__v )
+    : ( Vec f ) x__v ( vec_zeroed [f] * heads * n dim )
+    : ( Slice f ) x ( slice_from_vec [f] x__v )
+    : ( Vec i ) fr__v ( vec_zeroed [i] n )
+    : ( Slice i ) fr ( slice_from_vec [i] fr__v )
+    : ( Vec i ) rw__v ( vec_zeroed [i] n )
+    : ( Slice i ) rw ( slice_from_vec [i] rw__v )
+    : ( Vec i ) cl__v ( vec_zeroed [i] n )
+    : ( Slice i ) cl ( slice_from_vec [i] cl__v )
     : ~ i t 0
     ~ < t * heads * n dim {
-        = . x t ( float_sin + 0.13 * 0.017 # f t )
+        ( slice_put [f] x t ( float_sin + 0.13 * 0.017 # f t ) )
         = t + t 1
     }
     // token layout: per frame, the special tokens on the diagonal
@@ -33,9 +33,9 @@ unsafe @ case i heads i ppf i pph i ppw i fstart → v {
         : i fbase * f per
         : ~ i j 0
         ~ < j PSI {
-            = . fr + fbase j + fstart f
-            = . rw + fbase j j
-            = . cl + fbase j j
+            ( slice_put [i] fr + fbase j + fstart f )
+            ( slice_put [i] rw + fbase j j )
+            ( slice_put [i] cl + fbase j j )
             = j + j 1
         }
         : ~ i y 0
@@ -43,9 +43,9 @@ unsafe @ case i heads i ppf i pph i ppw i fstart → v {
             : ~ i xx 0
             ~ < xx ppw {
                 : i idx + fbase + PSI + * y ppw xx
-                = . fr idx + fstart f
-                = . rw idx + PSI y
-                = . cl idx + PSI xx
+                ( slice_put [i] fr idx + fstart f )
+                ( slice_put [i] rw idx + PSI y )
+                ( slice_put [i] cl idx + PSI xx )
                 = xx + xx 1
             }
             = y + y 1
@@ -53,10 +53,10 @@ unsafe @ case i heads i ppf i pph i ppw i fstart → v {
         = f + f 1
     }
     : i maxpos 1024
-    : ( Vec u ) ct__v ( vec_zeroed [u] * 8 * maxpos ( rope3d_width ) )
-    : *f ct # *f ( vec_data [u] ct__v )
-    : ( Vec u ) st__v ( vec_zeroed [u] * 8 * maxpos ( rope3d_width ) )
-    : *f st # *f ( vec_data [u] st__v )
+    : ( Vec f ) ct__v ( vec_zeroed [f] * maxpos ( rope3d_width ) )
+    : ( Slice f ) ct ( slice_from_vec [f] ct__v )
+    : ( Vec f ) st__v ( vec_zeroed [f] * maxpos ( rope3d_width ) )
+    : ( Slice f ) st ( slice_from_vec [f] st__v )
     ( rope3d_tables maxpos ct st )
     ( rope3d_apply x heads n dim fr rw cl ct st )
     ( nurl_print `w` ) ( nurl_print ( nurl_str_int heads ) )
@@ -66,7 +66,7 @@ unsafe @ case i heads i ppf i pph i ppw i fstart → v {
     ( nurl_print `_` ) ( nurl_print ( nurl_str_int fstart ) )
     : ~ i j 0
     ~ < j * heads * n dim {
-        ( nurl_print ` ` ) ( nurl_print ( nurl_str_float . x j ) )
+        ( nurl_print ` ` ) ( nurl_print ( nurl_str_float ( slice_at [f] x j ) ) )
         = j + j 1
     }
     ( nurl_print `\n` )

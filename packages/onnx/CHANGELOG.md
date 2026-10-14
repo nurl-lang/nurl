@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.11.3] — 2026-10-14
+
+### Changed
+
+- Requires gpukit 0.11: the census (`static_kernels`) reads the recorded kernel names and sources as `String`s of their own.
+
 ## [0.11.2] — 2026-10-14
 
 Requires NURL 0.73.0 (grammar v2.9 `raw`, `slice_window`, `file_is_open`).

@@ -20,33 +20,33 @@ $ `src/camhead.nu`
 $ `src/preproc.nu`
 $ `src/geom.nu`
 
-unsafe @ imnet_norm * f p i h i w → v {
-    : ( Vec u ) mean__v ( vec_zeroed [u] 24 )
-    : *f mean # *f ( vec_data [u] mean__v )
-    : ( Vec u ) std__v ( vec_zeroed [u] 24 )
-    : *f std # *f ( vec_data [u] std__v )
-    = . mean 0 0.485 = . mean 1 0.456 = . mean 2 0.406
-    = . std 0 0.229 = . std 1 0.224 = . std 2 0.225
+@ imnet_norm ( Slice f ) p i h i w → v {
+    : ( Vec f ) mean__v ( vec_zeroed [f] 3 )
+    : ( Slice f ) mean ( slice_from_vec [f] mean__v )
+    : ( Vec f ) std__v ( vec_zeroed [f] 3 )
+    : ( Slice f ) std ( slice_from_vec [f] std__v )
+    ( slice_put [f] mean 0 0.485 ) ( slice_put [f] mean 1 0.456 ) ( slice_put [f] mean 2 0.406 )
+    ( slice_put [f] std 0 0.229 ) ( slice_put [f] std 1 0.224 ) ( slice_put [f] std 2 0.225 )
     : ~ i c 0
     ~ < c 3 {
         : ~ i j 0
         ~ < j * h w {
             : i o + * c * h w j
-            = . p o / - . p o . mean c . std c
+            ( slice_put [f] p o / - ( slice_at [f] p o ) ( slice_at [f] mean c ) ( slice_at [f] std c ) )
             = j + j 1
         }
         = c + c 1
     }
 }
 
-unsafe @ prow s label * f p i n → v {
+@ prow s label ( Slice f ) p i n → v {
     ( nurl_print label )
     : ~ i j 0
-    ~ < j n { ( nurl_print ` ` ) ( nurl_print ( nurl_str_float . p j ) ) = j + j 1 }
+    ~ < j n { ( nurl_print ` ` ) ( nurl_print ( nurl_str_float ( slice_at [f] p j ) ) ) = j + j 1 }
     ( nurl_print `\n` )
 }
 
-unsafe @ main → i {
+@ main → i {
     ? < ( nurl_argc ) 3 { ( nurl_print `usage: posecheck <ckpt.pt> <frame>\n` ) ^ 2 } {}
     : GpuKit kit ( gk_open_best )
     ? ( gk_ok kit ) {} { ( nurl_print `no gpukit backend\n` ) ^ 1 }
@@ -65,7 +65,7 @@ unsafe @ main → i {
                 T lw → {
                     : Agg a ( ag_load lw kit )
                     : CamHead ch ( ch_load lw kit )
-                    ? ( lw_ok lw ) {} { ( nurl_print ( lw_error lw ) ) ( nurl_print `\n` ) ^ 1 }
+                    ? ( lw_ok lw ) {} { ( nurl_print ( string_data ( lw_error lw ) ) ) ( nurl_print `\n` ) ^ 1 }
                     : i p ( ag_ntokens gh gw )
                     : i dn ( dn_tokens gh gw )
                     : i big ? > p dn p dn
@@ -73,8 +73,8 @@ unsafe @ main → i {
                     : GkBuf dtok ( gk_dbuf_new kit * dn 1024 GK_F32 )
                     : GkBuf tok ( gk_dbuf_new kit * p 1024 GK_F32 )
                     : GkBuf out ( gk_dbuf_new kit * 4 * p 2048 GK_F32 )
-                    : ( Vec u ) taps__v ( vec_zeroed [u] 32 )
-                    : *i taps # *i ( vec_data [u] taps__v )
+                    : ( Vec i ) taps__v ( vec_zeroed [i] 4 )
+                    : ( Slice i ) taps ( slice_from_vec [i] taps__v )
                     ( ag_default_taps taps )
                     ? ( ag_forward_one kit a ws dtok tok ( pp_data f ) h w gh gw 0 1 AG_KV_SCALE AG_KV_WINDOW -1 taps out ) {}
                     { ( nurl_print `aggregator FAILED\n` ) ^ 1 }
@@ -84,16 +84,15 @@ unsafe @ main → i {
                     : GkBuf pose ( gk_dbuf_new kit 9 GK_F32 )
                     ? ( ch_forward kit ch cws camtok 0 pose ) {}
                     { ( nurl_print `camera head FAILED\n` ) ^ 1 }
-                    : ( Vec f ) hv ( vec_with_cap [f] 9 )
-                    : b _sl ( vec_set_len [f] hv 9 )
+                    : ( Vec f ) hv ( vec_zeroed [f] 9 )
                     ? ( gk_dbuf_download kit pose hv ) {} { ( nurl_print `download FAILED\n` ) ^ 1 }
-                    : *f pp ( vec_data [f] hv )
+                    : ( Slice f ) pp ( slice_from_vec [f] hv )
                     ( prow `pose_iter_3 1x1x9 |` pp 9 )
                     // and what it decodes to
-                    : ( Vec u ) ext__v ( vec_zeroed [u] 128 )
-                    : *f ext # *f ( vec_data [u] ext__v )
-                    : ( Vec u ) kk__v ( vec_zeroed [u] 128 )
-                    : *f kk # *f ( vec_data [u] kk__v )
+                    : ( Vec f ) ext__v ( vec_zeroed [f] 16 )
+                    : ( Slice f ) ext ( slice_from_vec [f] ext__v )
+                    : ( Vec f ) kk__v ( vec_zeroed [f] 16 )
+                    : ( Slice f ) kk ( slice_from_vec [f] kk__v )
                     ( pose_enc_to_extri pp ext )
                     ( pose_enc_to_intri pp h w kk )
                     ( prow `extrinsics` ext 12 )

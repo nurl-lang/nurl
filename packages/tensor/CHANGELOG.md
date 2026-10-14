@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.6.6] — 2026-10-14
+
+### Changed
+
+- Requires gpukit 0.11 (its kit state behind a lock; census accessors return a `String`).
+
 ## [0.6.5] — 2026-10-14
 
 Requires NURL 0.73.0 with globals set at start (`: ( Locked T ) g ( make )`).

@@ -348,9 +348,9 @@ $ `stdlib/core/slice.nu`
     : ( Slice u ) p_b ( slice_of_str p )
     : i n ( slice_len [u] p_b )
     : ~ i nd 0
-    ~ & < nd n ( __it_is_digit p nd ) { = nd + nd 1 }
+    ~ & < nd n ( __it_is_digit p_b nd ) { = nd + nd 1 }
     ? == nd 0 { ^ 0 } {}
-    : __ItNum num ( __it_digits p 0 nd )
+    : __ItNum num ( __it_digits p_b 0 nd )
     : ~ i unit 1
     ? == nd n {} {
         ? == + nd 1 n {} { ^ 0 }
