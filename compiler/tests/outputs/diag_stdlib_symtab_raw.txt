@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_stdlib_symtab_raw.nu:7:26: error: 'nurl_sym_new' takes the standard library's raw symbol table as a plain integer — the table's address, which any number can pose as and any thread can hold — so only an 'unsafe' function may call it. Use a SymTab (symtab_new, symtab_def, symtab_get): it owns its table, cannot be made up, and releases the table when it goes.
+    : i t ( nurl_sym_new )
+                         ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

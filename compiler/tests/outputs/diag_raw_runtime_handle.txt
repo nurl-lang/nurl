@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_raw_runtime_handle.nu:7:33: error: 'tcp_conn_view' takes a runtime handle — the address of the runtime's own record for a socket, a process or a stream — as a plain integer, and reads or frees what is there: a number that is not a live handle is memory the program does not own. Only an 'unsafe' function may call it. Use the handle type the standard library wraps it in (TcpConn, UdpSocket, ProcChild, …), whose operations are safe.
+    : TcpConn c ( tcp_conn_view 3 )
+                                ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

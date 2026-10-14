@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.8] — 2026-10-14
+
+### Changed
+
+- Requires onnx 0.12, whose run entry points take the input as a checked
+  byte view and whose tensors own their device buffers. No change here.
+
 ## [0.7.7] — 2026-10-14
 
 ### Changed

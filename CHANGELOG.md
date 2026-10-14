@@ -229,6 +229,17 @@ and 201 corrupted graphs included. A call to an undefined generic inside
 another generic's body is now reported as such, at the call: it was typed
 `i64` and reported as a type mismatch against what it initialised
 (`rc.nu` called `mem_replace` without importing `stdlib/core/mem.nu`).
+`onnx` (76 → 2, the census's dummy device buffers) keeps its engine in a
+`Locked` and gives every tensor its own pooled device buffer: an aliasing
+Reshape holds a view of the block it aliases, a tensor outlives the run
+that made it, and a host-int operand fails its kernel where 0.11 launched
+on its `-1` sentinel address and crashed. Its run entry points take the
+input as a checked byte view; gpukit adds the matching
+`gk_dbuf_download_bytes` and a checked device copy, `gk_dbuf_copy`.
+Outputs are byte-identical and as fast. A struct passed where the
+parameter is a number is rejected (h269): the call was emitted with the
+struct's type, and the callee read its control block's address as the
+number — onnx's parse_dump checksummed a weight block's control block.
 `nurllama` (68 → 8) keeps its engine and its finetune state in `Locked`s
 — two requests evaluating one model raced on its KV cache — and samples
 from a row of logits read in one take.

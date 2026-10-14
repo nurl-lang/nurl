@@ -20,11 +20,7 @@ $ `src/pb.nu`
 $ `src/model.nu`
 $ `src/runtime.nu`
 
-& `c` @ nurl_poke_f32 *u base i idx f val → v
-
-& `c` @ nurl_peek_i32 *u base i idx → i32
-
-& `c` @ nurl_poke_i32 *u base i idx i32 val → v
+$ `stdlib/std/floatbits.nu`
 
 @ args i k → String {
     : ( Vec String ) av ( env_args_list )
@@ -36,13 +32,13 @@ $ `src/runtime.nu`
     ^ ?? ( vec_get [String] av k ) { T x → ( nurl_str_to_int ( string_data x ) ) F _ → dflt }
 }
 
-unsafe @ synth i n → ( Vec u ) {
+@ synth i n → ( Vec u ) {
     : ( Vec u ) hb ( vec_zeroed [u] * n 4 )
-    : *u h ( vec_data [u] hb )
+    : ( Slice u ) h ( slice_from_vec [u] hb )
     : ~ i k 0
     ~ < k n {
         : f v / # f % * k 37 256 255.0
-        ( nurl_poke_f32 h k v )
+        ( slice_put_u32_le h * k 4 ( f32_to_bits # f32 v ) )
         = k + k 1
     }
     ^ hb
@@ -59,15 +55,11 @@ unsafe @ synth i n → ( Vec u ) {
     }
 }
 
-unsafe @ dump_out Engine e RTensor t s path → i {
+@ dump_out Engine e RTensor t s path → i {
     ? > . t nelem 0 {} { ( nurl_print `EMPTY output\n` ) ^ 1 }
     : GpuHost host ( rt_download e t )
     : i nb * . t nelem 4
-    : ( Vec u ) out ( vec_with_cap [u] nb )
-    : *u dst ( vec_data [u] out )
-    : ~ i k 0
-    ~ < k . t nelem { ( nurl_poke_i32 dst k ( nurl_peek_i32 ( gpu_host_ptr host ) k ) ) = k + k 1 }
-    : b _lok ( vec_set_len [u] out nb )
+    : ( Vec u ) out ( slice_to_vec [u] ( slice_window [u] ( gpu_host_u8 host ) 0 nb ) )
     : ~ i rc 0
     ?? ( write_file_bytes path out ) { T _ → {} F _ → { = rc 1 } }
     ( nurl_print path ) ( nurl_print ` ` )
@@ -87,7 +79,7 @@ unsafe @ dump_out Engine e RTensor t s path → i {
     ^ v
 }
 
-unsafe @ main → i {
+@ main → i {
     : String mode ( args 1 )
     : String mp ( args 2 )
     : ~ OGraph g ( onnx_empty_graph )
@@ -105,7 +97,7 @@ unsafe @ main → i {
         : i d3 ( argi 6 640 )
         : i n * * * d0 d1 d2 d3
         : ( Vec u ) input__b ( synth n )
-        : *u input ( vec_data [u] input__b )
+        : ( Slice u ) input ( slice_from_vec [u] input__b )
         : RTensor out ( rt_run_shaped e g input ( shape4g d0 d1 d2 d3 ) )
         = rc ( dump_out e out ( string_data ( args 7 ) ) )
         : String o1 ( args 8 )
@@ -116,7 +108,7 @@ unsafe @ main → i {
     } {
         ? ( nurl_str_eq ( string_data mode ) `tok` ) {
             : ( Vec u ) tok__b ( load_bytes ( string_data ( args 3 ) ) )
-            : *u tok ( vec_data [u] tok__b )
+            : ( Slice u ) tok ( slice_from_vec [u] tok__b )
             : i nrow ( argi 4 3 )
             : i ncol ( argi 5 77 )
             : RTensor out ( rt_run_tokens e g tok nrow ncol )
@@ -129,9 +121,9 @@ unsafe @ main → i {
                 : i d3 ( argi 6 640 )
                 : i n * * * d0 d1 d2 d3
                 : ( Vec u ) img__b ( synth n )
-                : *u img ( vec_data [u] img__b )
+                : ( Slice u ) img ( slice_from_vec [u] img__b )
                 : ( Vec u ) tpe__b ( load_bytes ( string_data ( args 7 ) ) )
-                : *u tpe ( vec_data [u] tpe__b )
+                : ( Slice u ) tpe ( slice_from_vec [u] tpe__b )
                 : i kk ( argi 8 32 )
                 : RTensor out ( rt_run_two e g `images` img ( shape4g d0 d1 d2 d3 ) `tpe` tpe ( shape3g 1 kk 512 ) )
                 = rc ( dump_out e out ( string_data ( args 9 ) ) )
@@ -145,7 +137,7 @@ unsafe @ main → i {
                     // imgf <model> <in.f32.bin> <d0..d3> <out.bin> — a real
                     // input from a file, for oracle comparisons.
                     : ( Vec u ) input__b ( load_bytes ( string_data ( args 3 ) ) )
-                    : *u input ( vec_data [u] input__b )
+                    : ( Slice u ) input ( slice_from_vec [u] input__b )
                     : i d0 ( argi 4 1 )
                     : i d1 ( argi 5 3 )
                     : i d2 ( argi 6 320 )

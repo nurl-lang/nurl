@@ -1,5 +1,45 @@
 # Changelog
 
+## [0.12.0] — 2026-10-14
+
+### Changed
+
+- No `unsafe` code is left but the kernel census's two dummy device
+  buffers (76 functions in 0.11.3).
+- An `RTensor` owns its device buffer (a gpukit `GkBuf`, pooled): every
+  intermediate is allocated with `gk_dbuf_new` and handed back to the
+  kit's pool by its last owner, and an aliasing Reshape, Unsqueeze or
+  Split holds a view of the block it aliases. An `RTensor` therefore stays
+  readable after `rt_reset` or the next run; `rt_download` of an old one
+  reads what that run computed. Its `dptr`, `eng` and `run` fields are
+  gone (`buf`, and `hosti` for a host-int tensor, replace them), and it is
+  no longer `raw`.
+- The engine keeps its state in a `Locked` beside its kit: one run at a
+  time per engine, from any number of threads. The graph a run is given is
+  borrowed for the run; the initializers are read out of it instead of
+  through its `inits` Vec held as a raw handle word.
+- `rt_run_shaped`, `rt_run_tokens`, `rt_run_two` and `rt_run` take the
+  input bytes as a `( Slice u )` and check them against the shape: a short
+  input runs nothing and returns an empty tensor. The `*_host` forms stay.
+- An index read of a tensor that is not int64 is no buffer (the kernel
+  refuses it); it used to read f32 memory as i64, past the end of the
+  block. A Mul/Add/Sub/Div or other kernel over a host-int tensor fails
+  the same way: the old executor launched it on the `-1` sentinel address
+  and crashed.
+- The model parser copies weight blocks out of the checked protobuf view
+  in one pass instead of poking them in four bytes at a time (about 3.5
+  million instructions fewer on a 1 MB model).
+- `slice_f32_into`, `slice_i64_into`, `vec_f32_into`, `vec_i64_into` and
+  `otensor_host_ptr` are gone (raw-pointer writers and readers);
+  `slice_u32_le` / `slice_u64_le` and `slice_to_vec` do their work.
+- Requires gpukit 0.11 with `gk_dbuf_download_bytes` and `gk_dbuf_copy`.
+
+Byte-identical outputs to 0.11.3 on the test models and on an exported
+CNN (Conv, dilated Conv, ConvTranspose, BatchNorm, MaxPool, Resize,
+Concat, LeakyRelu, Sigmoid, Softmax; 6e-8 from torch); same speed (347
+against 346 ms median). Graphs that crashed 0.11.3 (a segfault on a
+host-int operand) now report the kernel they could not run.
+
 ## [0.11.3] — 2026-10-14
 
 ### Changed

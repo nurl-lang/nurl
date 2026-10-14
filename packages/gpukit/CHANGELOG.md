@@ -23,6 +23,15 @@ Requires NURL 0.73.0 with globals set at start and h264–h268 closed.
 - The pool and the profiler index their columns through checked Vec
   access instead of `vec_data` pointers.
 
+### Added
+
+- `gk_dbuf_download_bytes kit b dst` — device to a checked view of host
+  bytes, F unless the view has room for the buffer (the download
+  counterpart of `gk_dbuf_upload_bytes`), and `gk_dbuf_copy kit dst src`,
+  a device-to-device copy that is F unless both buffers are there, share a
+  dtype and `dst` is large enough. Both safe; what `onnx` downloaded and
+  copied through raw device addresses with.
+
 ## [0.10.3] — 2026-10-14
 
 ### Added

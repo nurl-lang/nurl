@@ -30,8 +30,6 @@ $ `deps/onnx/src/pb.nu`
 $ `deps/onnx/src/model.nu`
 $ `deps/onnx/src/runtime.nu`
 
-& `c` @ nurl_peek_f32 *u base i idx → f
-
 : i SKY_N 320
 
 : Sky {
@@ -53,7 +51,7 @@ $ `deps/onnx/src/runtime.nu`
 
 // AND "not sky" into `mask` for one view. `chw` is the fitted frame's
 // [3, h, w] planar [0,1] host buffer (pp_data), `mask` h·w bytes.
-unsafe @ sky_mask Sky s ( Slice f ) chw i w i h ( Slice u ) mask → b {
+@ sky_mask Sky s ( Slice f ) chw i w i h ( Slice u ) mask → b {
     ? . s ok {} { ^ F }
     : Engine eng ?? . s e { T x → x F → { ^ F } }
     // planar floats → interleaved u8, then the reference's 320×320
@@ -98,17 +96,17 @@ unsafe @ sky_mask Sky s ( Slice f ) chw i w i h ( Slice u ) mask → b {
     : ( Vec i ) shape ( vec_with_cap [i] 4 )
     ( vec_push [i] shape 1 ) ( vec_push [i] shape 3 )
     ( vec_push [i] shape SKY_N ) ( vec_push [i] shape SKY_N )
-    : RTensor out ( rt_run_shaped eng . s g ( slice_data [u] inb ) shape )
+    : RTensor out ( rt_run_shaped eng . s g inb shape )
     ? == . out nelem n2 {} { ^ F }
     : GpuHost score__h ( rt_download eng out )
-    : *u score ( gpu_host_ptr score__h )
+    : ( Slice f32 ) score ( gpu_host_f32 score__h )
 
     // min–max → u8 (truncating), as run_skyseg does
-    : ~ f mn ( nurl_peek_f32 score 0 )
+    : ~ f mn # f ( slice_at [f32] score 0 )
     : ~ f mx mn
     = j 1
     ~ < j n2 {
-        : f v ( nurl_peek_f32 score j )
+        : f v # f ( slice_at [f32] score j )
         ? < v mn { = mn v } {}
         ? > v mx { = mx v } {}
         = j + j 1
@@ -119,7 +117,7 @@ unsafe @ sky_mask Sky s ( Slice f ) chw i w i h ( Slice u ) mask → b {
     : ( Slice u ) mp ( slice_from_vec [u] . m8 data )
     = j 0
     ~ < j n2 {
-        : f v * / - ( nurl_peek_f32 score j ) mn denom 255.0
+        : f v * / - # f ( slice_at [f32] score j ) mn denom 255.0
         ( slice_put [u] mp j # u # i v )
         = j + j 1
     }

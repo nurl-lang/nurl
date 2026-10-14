@@ -12207,6 +12207,17 @@ unsafe @ __has_pct_token s ll s name → b {
         ( nurl_str_cat `': a number passed where the parameter is a '` ( __zty_show pllvm ) )
         `' — no number converts into a struct, and for a String, a Vec or a library handle the number would be its control block's address. Pass a value of the declared type (its constructor: string_new, vec_new, …).` ) )
     } {}
+    // The reverse: a struct where a number is declared (`( f v )` with a `(
+    // Vec u )` v and `i x`): the call was emitted with the struct's own type
+    // and the callee read its control block's address as the number
+    // (onnx's parse_dump checksummed a Vec's control block that way).
+    ? & & | | > ( int_width pllvm ) 0 ( seq pllvm `double` ) ( seq pllvm `float` ) ( __is_named_agg at )
+    == 0 ( nurl_sym_len2 g_root_syms ( nurl_str_slice at 1 - ( nurl_str_len at ) 1 ) `__variants` ) {
+        ( die lex ( nurl_str_cat3
+        ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
+        ( nurl_str_cat4 `': a '` ( __zty_show at ) `' passed where the parameter is a number ('` pllvm )
+        `') — no struct converts into a number, and for a String, a Vec or a library handle the callee would read its control block's address. Pass the number the parameter means (a length, a field, an element).` ) )
+    } {}
     // Detect pointer-ness from the LOWERED types so pointer aliases with
     // no literal `*` (e.g. `s` → i8*) are covered. That is what lets the
     // reverse case — a bare scalar passed to an `s`/pointer parameter —

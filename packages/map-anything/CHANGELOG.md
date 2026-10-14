@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.7.2] — 2026-10-14
+
+### Changed
+
+- No `unsafe` code is left (1 in 0.7.1): the sky mask hands the onnx
+  runtime its input as a byte view (onnx 0.12) and reads the score map as
+  a checked `( Slice f32 )` of the download instead of peeking a raw
+  pointer.
+
 ## [0.7.1] — 2026-10-14
 
 ### Changed

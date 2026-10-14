@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.5] — 2026-10-14
+
+### Changed
+
+- Requires onnx 0.12, whose run entry points take the input as a checked
+  byte view and whose tensors own their device buffers. No change here.
+
 ## [0.3.4] — 2026-10-14
 
 Requires gpu 0.17, onnx 0.11.2 and yoloe 0.7.5.

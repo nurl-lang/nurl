@@ -46,7 +46,11 @@ $ `stdlib/core/slice.nu`
 }
 
 // bytes [at, at+len) of `t` as a String
-unsafe @ __sub s t i at i len → String { ^ ( string_from_bytes # *u + # i t at len ) }
+@ __sub s t i at i len → String {
+    : String out ( string_new )
+    ( string_push_window out ( slice_of_str t ) at len )
+    ^ out
+}
 
 @ __is_id i c → b { ^ | | | & >= c 97 <= c 122 & >= c 65 <= c 90 & >= c 48 <= c 57 == c 95 }
 

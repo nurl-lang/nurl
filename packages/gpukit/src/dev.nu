@@ -277,6 +277,32 @@ unsafe @ __gk_upload_view GkBuf b ( Slice u ) src → b {
     ^ == ( gpu_upload ( gpu_buffer_view . b dptr * . b n ( __gk_esz . b dtype ) ) ( slice_data [u] src ) ) 0
 }
 
+// Device → a checked view of host bytes: F unless `dst` has room for the
+// buffer's b.n elements. The download counterpart of gk_dbuf_upload_bytes.
+@ gk_dbuf_download_bytes GpuKit kit GkBuf b ( Slice u ) dst → b {
+    ? ( gk_buf_ok b ) {} { ^ F }
+    ? < ( slice_len [u] dst ) * . b n ( __gk_esz . b dtype ) { ^ F } {}
+    ^ ( __gk_download_view b dst )
+}
+
+// (`dst` has room for the buffer's bytes: checked by the caller above.)
+unsafe @ __gk_download_view GkBuf b ( Slice u ) dst → b {
+    ^ == ( gpu_download ( slice_data [u] dst ) ( gpu_buffer_view . b dptr * . b n ( __gk_esz . b dtype ) ) ) 0
+}
+
+// Device → device: all of `src` into the front of `dst`. F unless both are
+// there, share a dtype and `dst` holds at least src.n elements.
+@ gk_dbuf_copy GpuKit kit GkBuf dst GkBuf src → b {
+    ? & ( gk_buf_ok dst ) ( gk_buf_ok src ) {} { ^ F }
+    ? | != . dst dtype . src dtype < . dst n . src n { ^ F } {}
+    ^ ( __gk_copy_in dst src )
+}
+
+// (Both live, one dtype, `dst` large enough: checked by the caller above.)
+unsafe @ __gk_copy_in GkBuf dst GkBuf src → b {
+    ^ == ( gpu_dtod ( gpu_buffer_view . dst dptr * . src n ( __gk_esz . src dtype ) ) . src dptr ) 0
+}
+
 // Exact i64 host view (GK_I64 buffers only — index tensors must never make
 // a round trip through f64). Same length contracts as the f64 view.
 unsafe @ gk_dbuf_upload_i GpuKit kit GkBuf b ( Vec i ) src → b {

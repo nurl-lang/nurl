@@ -19,8 +19,6 @@ $ `stdlib/ext/env.nu`
 $ `stdlib/ext/protobuf.nu`
 $ `src/model.nu`
 
-& `c` @ nurl_peek_i32 *u base i idx → i32
-
 @ p s x → v { ( nurl_print x ) }
 
 @ pi i x → v { ( nurl_print ( nurl_str_int x ) ) }
@@ -29,9 +27,11 @@ $ `src/model.nu`
 
 // Position-sensitive checksum over a weight block: every element is mixed
 // with its own index, so a reordering is as visible as a changed value.
-unsafe @ __checksum i host i dtype i nelem → v {
-    ? == host 0 { ( p `none` ) ^ {} } {}
-    : *u b # *u host
+@ __checksum ( Vec u ) host i dtype i nelem → v {
+    ? == ( vec_len [u] host ) 0 { ( p `none` ) ^ {} } {}
+    : ( Slice u ) b ( slice_from_vec [u] host )
+    : i esz ? == dtype 7 8 4
+    ? > * nelem esz ( slice_len [u] b ) { ( p `short` ) ^ {} } {}
     : ~ i hx 0
     : ~ i hs 0
     : ~ i first 0
@@ -39,7 +39,7 @@ unsafe @ __checksum i host i dtype i nelem → v {
     : ~ i k 0
     ~ < k nelem {
         : ~ i value 0
-        ? == dtype 7 { = value ( nurl_peek b k ) } { = value # i ( nurl_peek_i32 b k ) }
+        ? == dtype 7 { = value ( slice_u64_le b * k 8 ) } { = value # i # i32 ( slice_u32_le b * k 4 ) }
         ? == k 0 { = first value } {}
         = last value
         = hx ^^ hx ^^ value k

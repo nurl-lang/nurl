@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_raw_prefix_on_import.nu:4:5: error: 'raw' is a prefix on function and struct declarations only — 'raw @ name …' says that a caller must vouch for what the function requires, so only an 'unsafe' function may call it; 'raw : Name { … }' seals a struct whose fields carry an invariant. It has no meaning on an import, trait or FFI declaration (a foreign function takes 'unsafe & …')
+raw $ `stdlib/core/io.nu`
+    ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.
