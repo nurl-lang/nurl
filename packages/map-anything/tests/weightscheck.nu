@@ -3,7 +3,7 @@
 // Opens the cached facebook/map-anything-apache model.safetensors and
 // checks the facts the port is built on: tensor count, the encoder /
 // info_sharing layer counts read off the file, a handful of shapes, and
-// that lw_read agrees with lw_f32_ptr on real bytes.
+// that lw_read agrees with lw_f32_bytes on real bytes.
 //
 //   nurlc tests/weightscheck.nu -o /tmp/wc && /tmp/wc [path]
 
@@ -28,7 +28,7 @@ $ `src/weights.nu`
     ? ok {} { = __wc_fails + __wc_fails 1 }
 }
 
-unsafe @ main → i {
+@ main → i {
     // argv[1] as a String (nurl_argv hands out a raw copy nobody released)
     : String pathv ? > ( nurl_argc ) 1 ( env_arg 1 ) ( string_from ( __wc_default ) )
     : s path ( string_data pathv )
@@ -61,22 +61,20 @@ unsafe @ main → i {
     ( __wc_check ( lw_require w `dense_head.1.conv2.2.weight` 6 128 1 1 ) `dense head emits 6 channels` )
     ( __wc_check ( lw_ok w ) `no accumulated shape errors` )
 
-    // lw_read (through the f32 dequant path) must agree with the raw
-    // mapping bytes lw_f32_ptr exposes.
+    // lw_read (through the f32 dequant path) must agree with the
+    // mapping bytes lw_f32_bytes exposes.
     : i n ( lw_nelems w `scale_token` )
     ( __wc_check == n WC_DIM `scale_token has 1536 elements` )
-    : ( Vec u ) host__v ( vec_zeroed [u] * n 8 )
-    : *f host # *f ( vec_data [u] host__v )
+    : ( Vec f ) host__v ( vec_zeroed [f] n )
+    : ( Slice f ) host ( slice_from_vec [f] host__v )
     ( __wc_check ( lw_read w `scale_token` host n ) `lw_read scale_token` )
-    : *u raw ( lw_f32_ptr w `scale_token` n )
-    ( __wc_check != # i raw 0 `lw_f32_ptr sees contiguous f32` )
+    : ( Slice u ) raw ( lw_f32_bytes w `scale_token` n )
+    ( __wc_check == ( slice_len [u] raw ) * n 4 `lw_f32_bytes sees contiguous f32` )
     : ~ b same T
     : ~ i k 0
     ~ < k n {
-        : i o * k 4
-        : i bits | # i . raw o | << # i . raw + o 1 8 | << # i . raw + o 2 16 << # i . raw + o 3 24
-        : f want # f ( bits_to_f32 bits )
-        ? == want . host k {} { = same F }
+        : f want # f ( bits_to_f32 ( slice_u32_le raw * k 4 ) )
+        ? == want ( slice_at [f] host k ) {} { = same F }
         = k + k 1
     }
     ( __wc_check same `lw_read == mapping bytes for all 1536 elements` )
@@ -91,7 +89,7 @@ unsafe @ main → i {
         T w2 → {
             : b _m ( lw_require w2 `no.such.tensor` -1 -1 -1 -1 )
             ( __wc_check ! ( lw_ok w2 ) `missing tensor recorded` )
-            ( __wc_check != 0 ( nurl_str_eq ( lw_error w2 ) `map-anything: checkpoint has no tensor 'no.such.tensor'` ) `error names the tensor` )
+            ( __wc_check != 0 ( nurl_str_eq ( string_data ( lw_error w2 ) ) `map-anything: checkpoint has no tensor 'no.such.tensor'` ) `error names the tensor` )
             ( lw_close w2 )
         }
     }

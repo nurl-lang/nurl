@@ -34,22 +34,22 @@ $ `stdlib/std/float.nu`
 $ `stdlib/std/sort.nu`
 
 // (x, y, z, w) → row-major 3×3, the reference's quaternion_to_rotation_matrix.
-unsafe @ gm_quat_to_mat f x f y f z f w * f r → v {
+@ gm_quat_to_mat f x f y f z f w ( Slice f ) r → v {
     : f n ( float_sqrt + + + * x x * y y * z z * w w )
     : f nn ? > n 0.0 n 1.0
     : f qx / x nn
     : f qy / y nn
     : f qz / z nn
     : f qw / w nn
-    = . r 0 - 1.0 * 2.0 + * qy qy * qz qz
-    = . r 1 * 2.0 - * qx qy * qw qz
-    = . r 2 * 2.0 + * qx qz * qw qy
-    = . r 3 * 2.0 + * qx qy * qw qz
-    = . r 4 - 1.0 * 2.0 + * qx qx * qz qz
-    = . r 5 * 2.0 - * qy qz * qw qx
-    = . r 6 * 2.0 - * qx qz * qw qy
-    = . r 7 * 2.0 + * qy qz * qw qx
-    = . r 8 - 1.0 * 2.0 + * qx qx * qy qy
+    ( slice_put [f] r 0 - 1.0 * 2.0 + * qy qy * qz qz )
+    ( slice_put [f] r 1 * 2.0 - * qx qy * qw qz )
+    ( slice_put [f] r 2 * 2.0 + * qx qz * qw qy )
+    ( slice_put [f] r 3 * 2.0 + * qx qy * qw qz )
+    ( slice_put [f] r 4 - 1.0 * 2.0 + * qx qx * qz qz )
+    ( slice_put [f] r 5 * 2.0 - * qy qz * qw qx )
+    ( slice_put [f] r 6 * 2.0 - * qx qz * qw qy )
+    ( slice_put [f] r 7 * 2.0 + * qy qz * qw qx )
+    ( slice_put [f] r 8 - 1.0 * 2.0 + * qx qx * qy qy )
 }
 
 // World points for one view. `dirs` is [3, n] planar (the DPT head's
@@ -57,31 +57,31 @@ unsafe @ gm_quat_to_mat f x f y f z f w * f r → v {
 // [tx ty tz qx qy qz qw], `out` is [n, 3] interleaved — the layout the
 // PLY writer wants. Also emits the z-depth (camera-frame z · scale)
 // into `depthz`, which the edge mask needs.
-unsafe @ gm_world_points * f dirs * f depth * f pose f scale i n * f out * f depthz → v {
-    : ( Vec u ) r__v ( vec_zeroed [u] 72 )
-    : *f r # *f ( vec_data [u] r__v )
-    ( gm_quat_to_mat . pose 3 . pose 4 . pose 5 . pose 6 r )
-    : f tx . pose 0
-    : f ty . pose 1
-    : f tz . pose 2
+@ gm_world_points ( Slice f ) dirs ( Slice f ) depth ( Slice f ) pose f scale i n ( Slice f ) out ( Slice f ) depthz → v {
+    : ( Vec f ) r__v ( vec_zeroed [f] 9 )
+    : ( Slice f ) r ( slice_from_vec [f] r__v )
+    ( gm_quat_to_mat ( slice_at [f] pose 3 ) ( slice_at [f] pose 4 ) ( slice_at [f] pose 5 ) ( slice_at [f] pose 6 ) r )
+    : f tx ( slice_at [f] pose 0 )
+    : f ty ( slice_at [f] pose 1 )
+    : f tz ( slice_at [f] pose 2 )
     : ~ i j 0
     ~ < j n {
-        : f cx * . dirs j . depth j
-        : f cy * . dirs + n j . depth j
-        : f cz * . dirs + * 2 n j . depth j
-        = . out * j 3 * scale + + + * . r 0 cx * . r 1 cy * . r 2 cz tx
-        = . out + * j 3 1 * scale + + + * . r 3 cx * . r 4 cy * . r 5 cz ty
-        = . out + * j 3 2 * scale + + + * . r 6 cx * . r 7 cy * . r 8 cz tz
-        = . depthz j * scale cz
+        : f cx * ( slice_at [f] dirs j ) ( slice_at [f] depth j )
+        : f cy * ( slice_at [f] dirs + n j ) ( slice_at [f] depth j )
+        : f cz * ( slice_at [f] dirs + * 2 n j ) ( slice_at [f] depth j )
+        ( slice_put [f] out * j 3 * scale + + + * ( slice_at [f] r 0 ) cx * ( slice_at [f] r 1 ) cy * ( slice_at [f] r 2 ) cz tx )
+        ( slice_put [f] out + * j 3 1 * scale + + + * ( slice_at [f] r 3 ) cx * ( slice_at [f] r 4 ) cy * ( slice_at [f] r 5 ) cz ty )
+        ( slice_put [f] out + * j 3 2 * scale + + + * ( slice_at [f] r 6 ) cx * ( slice_at [f] r 7 ) cy * ( slice_at [f] r 8 ) cz tz )
+        ( slice_put [f] depthz j * scale cz )
         = j + j 1
     }
 }
 
 // sigmoid(x) > 0.5  ⇔  x > 0
-unsafe @ gm_nonambig * f logits i n * u mask → v {
+@ gm_nonambig ( Slice f ) logits i n ( Slice u ) mask → v {
     : ~ i j 0
     ~ < j n {
-        = . mask j ? > . logits j 0.0 # u 1 # u 0
+        ( slice_put [u] mask j ? > ( slice_at [f] logits j ) 0.0 # u 1 # u 0 )
         = j + j 1
     }
 }
@@ -89,11 +89,11 @@ unsafe @ gm_nonambig * f logits i n * u mask → v {
 // AND a "confidence above the pct-th percentile" test into `mask`.
 // torch.quantile with linear interpolation, over ALL pixels (the
 // reference quantiles the un-masked confidence map).
-unsafe @ gm_conf_percentile * f conf i n f pct * u mask → v {
+@ gm_conf_percentile ( Slice f ) conf i n f pct ( Slice u ) mask → v {
     ? <= n 0 { ^ v } {}
     : ( Vec f ) sorted ( vec_with_cap [f] n )
     : ~ i j 0
-    ~ < j n { ( vec_push [f] sorted . conf j ) = j + j 1 }
+    ~ < j n { ( vec_push [f] sorted ( slice_at [f] conf j ) ) = j + j 1 }
     ( sort_by [f] sorted \ f a f b → i { ^ ? < a b -1 ? > a b 1 0 } )
     : f pos * / pct 100.0 # f - n 1
     : i lo # i ( float_floor pos )
@@ -104,7 +104,7 @@ unsafe @ gm_conf_percentile * f conf i n f pct * u mask → v {
     : f thr + vlo * frac - vhi vlo
     = j 0
     ~ < j n {
-        ? > . conf j thr {} { = . mask j # u 0 }
+        ? > ( slice_at [f] conf j ) thr {} { ( slice_put [u] mask j # u 0 ) }
         = j + j 1
     }
 }
@@ -119,7 +119,7 @@ unsafe @ gm_conf_percentile * f conf i n f pct * u mask → v {
 }
 
 // 3×3 max of `v` masked by `m` (invalid → −inf), −inf outside.
-unsafe @ __gm_pool3 * f v * u m i h i w i y i x → f {
+@ __gm_pool3 ( Slice f ) v ( Slice u ) m i h i w i y i x → f {
     : ~ f best - 0.0 __GM_INF
     : ~ i dy -1
     ~ <= dy 1 {
@@ -129,8 +129,8 @@ unsafe @ __gm_pool3 * f v * u m i h i w i y i x → f {
             : i xx + x dx
             ? & & & >= yy 0 < yy h >= xx 0 < xx w {
                 : i idx + * yy w xx
-                ? != # i . m idx 0 {
-                    ? > . v idx best { = best . v idx } {}
+                ? != # i ( slice_at [u] m idx ) 0 {
+                    ? > ( slice_at [f] v idx ) best { = best ( slice_at [f] v idx ) } {}
                 } {}
             } {}
             = dx + dx 1
@@ -144,12 +144,12 @@ unsafe @ __gm_pool3 * f v * u m i h i w i y i x → f {
 // normals-edge tests both fire. `pts` is [n, 3] world points (already
 // masked-invalid entries are excluded via `mask`), `depthz` [n], and
 // `mask` is updated in place.
-unsafe @ gm_edge_mask * f pts * f depthz i h i w * u mask → v {
+@ gm_edge_mask ( Slice f ) pts ( Slice f ) depthz i h i w ( Slice u ) mask → v {
     : i n * h w
     // ── depth edge: maxpool(d) + maxpool(−d), relative tol 0.03 ──
     : f rtol 0.03
     : ( Vec u ) dedge__v ( vec_zeroed [u] n )
-    : *u dedge # *u ( vec_data [u] dedge__v )
+    : ( Slice u ) dedge ( slice_from_vec [u] dedge__v )
     : ~ i y 0
     ~ < y h {
         : ~ i x 0
@@ -166,8 +166,8 @@ unsafe @ gm_edge_mask * f pts * f depthz i h i w * u mask → v {
                     : i xx + x dx
                     ? & & & >= yy 0 < yy h >= xx 0 < xx w {
                         : i i2 + * yy w xx
-                        ? != # i . mask i2 0 {
-                            ? < . depthz i2 mn { = mn . depthz i2 } {}
+                        ? != # i ( slice_at [u] mask i2 ) 0 {
+                            ? < ( slice_at [f] depthz i2 ) mn { = mn ( slice_at [f] depthz i2 ) } {}
                         } {}
                     } {}
                     = dx + dx 1
@@ -175,8 +175,8 @@ unsafe @ gm_edge_mask * f pts * f depthz i h i w * u mask → v {
                 = dy + dy 1
             }
             : f diff - mx mn
-            ? & & > mx - 0.0 __GM_INF < mn __GM_INF > / diff . depthz idx rtol {
-                = . dedge idx # u 1
+            ? & & > mx - 0.0 __GM_INF < mn __GM_INF > / diff ( slice_at [f] depthz idx ) rtol {
+                ( slice_put [u] dedge idx # u 1 )
             } {}
             = x + x 1
         }
@@ -185,16 +185,16 @@ unsafe @ gm_edge_mask * f pts * f depthz i h i w * u mask → v {
 
     // ── normals from the point map (4 cross products per pixel) ──
     : f tol 0.0872664625997164787  // 5° in radians
-    : ( Vec u ) nrm__v ( vec_zeroed [u] * 24 n )
-    : *f nrm # *f ( vec_data [u] nrm__v )
+    : ( Vec f ) nrm__v ( vec_zeroed [f] * 3 n )
+    : ( Slice f ) nrm ( slice_from_vec [f] nrm__v )
     : ( Vec u ) nmask__v ( vec_zeroed [u] n )
-    : *u nmask # *u ( vec_data [u] nmask__v )
+    : ( Slice u ) nmask ( slice_from_vec [u] nmask__v )
     = y 0
     ~ < y h {
         : ~ i x 0
         ~ < x w {
             : i idx + * y w x
-            ? != # i . mask idx 0 {
+            ? != # i ( slice_at [u] mask idx ) 0 {
                 : ~ f ax 0.0
                 : ~ f ay 0.0
                 : ~ f az 0.0
@@ -213,17 +213,17 @@ unsafe @ gm_edge_mask * f pts * f depthz i h i w * u mask → v {
                     : i x2 + x d2x
                     : b in1 & & & >= y1 0 < y1 h >= x1 0 < x1 w
                     : b in2 & & & >= y2 0 < y2 h >= x2 0 < x2 w
-                    : b ok1 ? in1 != # i . mask + * y1 w x1 0 F
-                    : b ok2 ? in2 != # i . mask + * y2 w x2 0 F
+                    : b ok1 ? in1 != # i ( slice_at [u] mask + * y1 w x1 ) 0 F
+                    : b ok2 ? in2 != # i ( slice_at [u] mask + * y2 w x2 ) 0 F
                     ? & ok1 ok2 {
                         : i i1 + * y1 w x1
                         : i i2 + * y2 w x2
-                        : f ux - . pts * i1 3 . pts * idx 3
-                        : f uy - . pts + * i1 3 1 . pts + * idx 3 1
-                        : f uz - . pts + * i1 3 2 . pts + * idx 3 2
-                        : f vx - . pts * i2 3 . pts * idx 3
-                        : f vy - . pts + * i2 3 1 . pts + * idx 3 1
-                        : f vz - . pts + * i2 3 2 . pts + * idx 3 2
+                        : f ux - ( slice_at [f] pts * i1 3 ) ( slice_at [f] pts * idx 3 )
+                        : f uy - ( slice_at [f] pts + * i1 3 1 ) ( slice_at [f] pts + * idx 3 1 )
+                        : f uz - ( slice_at [f] pts + * i1 3 2 ) ( slice_at [f] pts + * idx 3 2 )
+                        : f vx - ( slice_at [f] pts * i2 3 ) ( slice_at [f] pts * idx 3 )
+                        : f vy - ( slice_at [f] pts + * i2 3 1 ) ( slice_at [f] pts + * idx 3 1 )
+                        : f vz - ( slice_at [f] pts + * i2 3 2 ) ( slice_at [f] pts + * idx 3 2 )
                         : f cx - * uy vz * uz vy
                         : f cy - * uz vx * ux vz
                         : f cz - * ux vy * uy vx
@@ -237,10 +237,10 @@ unsafe @ gm_edge_mask * f pts * f depthz i h i w * u mask → v {
                 }
                 ? any {
                     : f nn + ( float_sqrt + + * ax ax * ay ay * az az ) 0.000000000001
-                    = . nrm * idx 3 / ax nn
-                    = . nrm + * idx 3 1 / ay nn
-                    = . nrm + * idx 3 2 / az nn
-                    = . nmask idx # u 1
+                    ( slice_put [f] nrm * idx 3 / ax nn )
+                    ( slice_put [f] nrm + * idx 3 1 / ay nn )
+                    ( slice_put [f] nrm + * idx 3 2 / az nn )
+                    ( slice_put [u] nmask idx # u 1 )
                 } {}
             } {}
             = x + x 1
@@ -250,8 +250,8 @@ unsafe @ gm_edge_mask * f pts * f depthz i h i w * u mask → v {
 
     // ── normals edge: max angle to any valid 3×3 neighbour, then a
     // second 3×3 max-pool, > 5° ──
-    : ( Vec u ) ang__v ( vec_zeroed [u] * 8 n )
-    : *f ang # *f ( vec_data [u] ang__v )
+    : ( Vec f ) ang__v ( vec_zeroed [f] n )
+    : ( Slice f ) ang ( slice_from_vec [f] ang__v )
     = y 0
     ~ < y h {
         : ~ i x 0
@@ -270,10 +270,10 @@ unsafe @ gm_edge_mask * f pts * f depthz i h i w * u mask → v {
                     ? < xx 0 { = xx 0 } {}
                     ? >= xx w { = xx - w 1 } {}
                     : i i2 + * yy w xx
-                    ? != # i . nmask i2 0 {
-                        : ~ f d + + * . nrm * idx 3 . nrm * i2 3
-                        * . nrm + * idx 3 1 . nrm + * i2 3 1
-                        * . nrm + * idx 3 2 . nrm + * i2 3 2
+                    ? != # i ( slice_at [u] nmask i2 ) 0 {
+                        : ~ f d + + * ( slice_at [f] nrm * idx 3 ) ( slice_at [f] nrm * i2 3 )
+                        * ( slice_at [f] nrm + * idx 3 1 ) ( slice_at [f] nrm + * i2 3 1 )
+                        * ( slice_at [f] nrm + * idx 3 2 ) ( slice_at [f] nrm + * i2 3 2 )
                         ? > d 1.0 { = d 1.0 } {}
                         ? < d -1.0 { = d -1.0 } {}
                         : f a ( __gm_acos d )
@@ -283,14 +283,14 @@ unsafe @ gm_edge_mask * f pts * f depthz i h i w * u mask → v {
                 }
                 = dy + dy 1
             }
-            = . ang idx amax
+            ( slice_put [f] ang idx amax )
             = x + x 1
         }
         = y + y 1
     }
     // second max-pool (out-of-bounds ignored, as the nan-padding does)
     : ( Vec u ) nedge__v ( vec_zeroed [u] n )
-    : *u nedge # *u ( vec_data [u] nedge__v )
+    : ( Slice u ) nedge ( slice_from_vec [u] nedge__v )
     = y 0
     ~ < y h {
         : ~ i x 0
@@ -304,14 +304,14 @@ unsafe @ gm_edge_mask * f pts * f depthz i h i w * u mask → v {
                     : i yy + y dy
                     : i xx + x dx
                     ? & & & >= yy 0 < yy h >= xx 0 < xx w {
-                        : f a . ang + * yy w xx
+                        : f a ( slice_at [f] ang + * yy w xx )
                         ? > a amax { = amax a } {}
                     } {}
                     = dx + dx 1
                 }
                 = dy + dy 1
             }
-            ? > amax tol { = . nedge idx # u 1 } {}
+            ? > amax tol { ( slice_put [u] nedge idx # u 1 ) } {}
             = x + x 1
         }
         = y + y 1
@@ -320,7 +320,7 @@ unsafe @ gm_edge_mask * f pts * f depthz i h i w * u mask → v {
     // keep = !(depth_edge & normals_edge)
     : ~ i j 0
     ~ < j n {
-        ? & != # i . dedge j 0 != # i . nedge j 0 { = . mask j # u 0 } {}
+        ? & != # i ( slice_at [u] dedge j ) 0 != # i ( slice_at [u] nedge j ) 0 { ( slice_put [u] mask j # u 0 ) } {}
         = j + j 1
     }
 }
@@ -340,12 +340,12 @@ unsafe @ gm_edge_mask * f pts * f depthz i h i w * u mask → v {
 //   ( gm_sim3_apply pts n out13 ) → v    in place
 
 // Largest-eigenvalue eigenvector of a symmetric 4×4 by cyclic Jacobi.
-unsafe @ __gm_jacobi4 * f a * f evec → v {
+@ __gm_jacobi4 ( Slice f ) a ( Slice f ) evec → v {
     // V ← I
-    : ( Vec u ) v__v ( vec_zeroed [u] 128 )
-    : *f v # *f ( vec_data [u] v__v )
+    : ( Vec f ) v__v ( vec_zeroed [f] 16 )
+    : ( Slice f ) v ( slice_from_vec [f] v__v )
     : ~ i k 0
-    ~ < k 4 { = . v + * k 4 k 1.0 = k + k 1 }
+    ~ < k 4 { ( slice_put [f] v + * k 4 k 1.0 ) = k + k 1 }
     : ~ i sweep 0
     ~ < sweep 32 {
         : ~ f off 0.0
@@ -353,7 +353,7 @@ unsafe @ __gm_jacobi4 * f a * f evec → v {
         ~ < p 4 {
             : ~ i q + p 1
             ~ < q 4 {
-                = off + off ( float_abs . a + * p 4 q )
+                = off + off ( float_abs ( slice_at [f] a + * p 4 q ) )
                 = q + q 1
             }
             = p + p 1
@@ -363,10 +363,10 @@ unsafe @ __gm_jacobi4 * f a * f evec → v {
             ~ < p 4 {
                 : ~ i q + p 1
                 ~ < q 4 {
-                    : f apq . a + * p 4 q
+                    : f apq ( slice_at [f] a + * p 4 q )
                     ? > ( float_abs apq ) 0.0000000000001 {
-                        : f app . a + * p 4 p
-                        : f aqq . a + * q 4 q
+                        : f app ( slice_at [f] a + * p 4 p )
+                        : f aqq ( slice_at [f] a + * q 4 q )
                         : f theta / - aqq app * 2.0 apq
                         : ~ f t / 1.0 + ( float_abs theta ) ( float_sqrt + * theta theta 1.0 )
                         ? < theta 0.0 { = t - 0.0 t } {}
@@ -375,26 +375,26 @@ unsafe @ __gm_jacobi4 * f a * f evec → v {
                         // rotate rows/cols p,q of a
                         : ~ i r 0
                         ~ < r 4 {
-                            : f arp . a + * r 4 p
-                            : f arq . a + * r 4 q
-                            = . a + * r 4 p - * c arp * s arq
-                            = . a + * r 4 q + * s arp * c arq
+                            : f arp ( slice_at [f] a + * r 4 p )
+                            : f arq ( slice_at [f] a + * r 4 q )
+                            ( slice_put [f] a + * r 4 p - * c arp * s arq )
+                            ( slice_put [f] a + * r 4 q + * s arp * c arq )
                             = r + r 1
                         }
                         = r 0
                         ~ < r 4 {
-                            : f apr . a + * p 4 r
-                            : f aqr . a + * q 4 r
-                            = . a + * p 4 r - * c apr * s aqr
-                            = . a + * q 4 r + * s apr * c aqr
+                            : f apr ( slice_at [f] a + * p 4 r )
+                            : f aqr ( slice_at [f] a + * q 4 r )
+                            ( slice_put [f] a + * p 4 r - * c apr * s aqr )
+                            ( slice_put [f] a + * q 4 r + * s apr * c aqr )
                             = r + r 1
                         }
                         = r 0
                         ~ < r 4 {
-                            : f vrp . v + * r 4 p
-                            : f vrq . v + * r 4 q
-                            = . v + * r 4 p - * c vrp * s vrq
-                            = . v + * r 4 q + * s vrp * c vrq
+                            : f vrp ( slice_at [f] v + * r 4 p )
+                            : f vrq ( slice_at [f] v + * r 4 q )
+                            ( slice_put [f] v + * r 4 p - * c vrp * s vrq )
+                            ( slice_put [f] v + * r 4 q + * s vrp * c vrq )
                             = r + r 1
                         }
                     } {}
@@ -407,19 +407,19 @@ unsafe @ __gm_jacobi4 * f a * f evec → v {
     }
     // pick the column with the largest diagonal eigenvalue
     : ~ i best 0
-    : ~ f bv . a 0
+    : ~ f bv ( slice_at [f] a 0 )
     = k 1
     ~ < k 4 {
-        ? > . a + * k 4 k bv { = bv . a + * k 4 k = best k } {}
+        ? > ( slice_at [f] a + * k 4 k ) bv { = bv ( slice_at [f] a + * k 4 k ) = best k } {}
         = k + k 1
     }
     = k 0
-    ~ < k 4 { = . evec k . v + * k 4 best = k + k 1 }
+    ~ < k 4 { ( slice_put [f] evec k ( slice_at [f] v + * k 4 best ) ) = k + k 1 }
 }
 
 // Fit local→global: xs, ys are [n, 3] interleaved. Fails (F) below 3
 // pairs or on a degenerate spread.
-unsafe @ gm_sim3_fit * f xs * f ys i n * f out → b {
+@ gm_sim3_fit ( Slice f ) xs ( Slice f ) ys i n ( Slice f ) out → b {
     ? < n 3 { ^ F } {}
     : f fn # f n
     : ~ f mx0 0.0
@@ -430,96 +430,96 @@ unsafe @ gm_sim3_fit * f xs * f ys i n * f out → b {
     : ~ f my2 0.0
     : ~ i j 0
     ~ < j n {
-        = mx0 + mx0 . xs * j 3
-        = mx1 + mx1 . xs + * j 3 1
-        = mx2 + mx2 . xs + * j 3 2
-        = my0 + my0 . ys * j 3
-        = my1 + my1 . ys + * j 3 1
-        = my2 + my2 . ys + * j 3 2
+        = mx0 + mx0 ( slice_at [f] xs * j 3 )
+        = mx1 + mx1 ( slice_at [f] xs + * j 3 1 )
+        = mx2 + mx2 ( slice_at [f] xs + * j 3 2 )
+        = my0 + my0 ( slice_at [f] ys * j 3 )
+        = my1 + my1 ( slice_at [f] ys + * j 3 1 )
+        = my2 + my2 ( slice_at [f] ys + * j 3 2 )
         = j + j 1
     }
     = mx0 / mx0 fn = mx1 / mx1 fn = mx2 / mx2 fn
     = my0 / my0 fn = my1 / my1 fn = my2 / my2 fn
     // correlation M = Σ yc xcᵀ (3×3) and var_x
-    : ( Vec u ) m__v ( vec_zeroed [u] 72 )
-    : *f m # *f ( vec_data [u] m__v )
+    : ( Vec f ) m__v ( vec_zeroed [f] 9 )
+    : ( Slice f ) m ( slice_from_vec [f] m__v )
     : ~ f varx 0.0
     = j 0
     ~ < j n {
-        : f x0 - . xs * j 3 mx0
-        : f x1 - . xs + * j 3 1 mx1
-        : f x2 - . xs + * j 3 2 mx2
-        : f y0 - . ys * j 3 my0
-        : f y1 - . ys + * j 3 1 my1
-        : f y2 - . ys + * j 3 2 my2
+        : f x0 - ( slice_at [f] xs * j 3 ) mx0
+        : f x1 - ( slice_at [f] xs + * j 3 1 ) mx1
+        : f x2 - ( slice_at [f] xs + * j 3 2 ) mx2
+        : f y0 - ( slice_at [f] ys * j 3 ) my0
+        : f y1 - ( slice_at [f] ys + * j 3 1 ) my1
+        : f y2 - ( slice_at [f] ys + * j 3 2 ) my2
         = varx + varx + + * x0 x0 * x1 x1 * x2 x2
-        = . m 0 + . m 0 * y0 x0
-        = . m 1 + . m 1 * y0 x1
-        = . m 2 + . m 2 * y0 x2
-        = . m 3 + . m 3 * y1 x0
-        = . m 4 + . m 4 * y1 x1
-        = . m 5 + . m 5 * y1 x2
-        = . m 6 + . m 6 * y2 x0
-        = . m 7 + . m 7 * y2 x1
-        = . m 8 + . m 8 * y2 x2
+        ( slice_put [f] m 0 + ( slice_at [f] m 0 ) * y0 x0 )
+        ( slice_put [f] m 1 + ( slice_at [f] m 1 ) * y0 x1 )
+        ( slice_put [f] m 2 + ( slice_at [f] m 2 ) * y0 x2 )
+        ( slice_put [f] m 3 + ( slice_at [f] m 3 ) * y1 x0 )
+        ( slice_put [f] m 4 + ( slice_at [f] m 4 ) * y1 x1 )
+        ( slice_put [f] m 5 + ( slice_at [f] m 5 ) * y1 x2 )
+        ( slice_put [f] m 6 + ( slice_at [f] m 6 ) * y2 x0 )
+        ( slice_put [f] m 7 + ( slice_at [f] m 7 ) * y2 x1 )
+        ( slice_put [f] m 8 + ( slice_at [f] m 8 ) * y2 x2 )
         = j + j 1
     }
     ? < varx 0.000000000001 { ^ F } {}
     // Horn's N (4×4 symmetric), from M with x as "left" set:
     // q rotates x onto y: R(q)·xc ≈ yc
-    : f sxx . m 0
-    : f sxy . m 3
-    : f sxz . m 6
-    : f syx . m 1
-    : f syy . m 4
-    : f syz . m 7
-    : f szx . m 2
-    : f szy . m 5
-    : f szz . m 8
+    : f sxx ( slice_at [f] m 0 )
+    : f sxy ( slice_at [f] m 3 )
+    : f sxz ( slice_at [f] m 6 )
+    : f syx ( slice_at [f] m 1 )
+    : f syy ( slice_at [f] m 4 )
+    : f syz ( slice_at [f] m 7 )
+    : f szx ( slice_at [f] m 2 )
+    : f szy ( slice_at [f] m 5 )
+    : f szz ( slice_at [f] m 8 )
     // NOTE the index convention: m holds Σ yc xcᵀ, so m[r][c] = Σ y_r x_c;
     // Horn's S_ab = Σ x_a y_b = m[b][a] — the reads above already swap.
-    : ( Vec u ) nmat__v ( vec_zeroed [u] 128 )
-    : *f nmat # *f ( vec_data [u] nmat__v )
-    = . nmat 0 + + sxx syy szz
-    = . nmat 1 - syz szy
-    = . nmat 2 - szx sxz
-    = . nmat 3 - sxy syx
-    = . nmat 4 . nmat 1
-    = . nmat 5 - - sxx syy szz
-    = . nmat 6 + sxy syx
-    = . nmat 7 + szx sxz
-    = . nmat 8 . nmat 2
-    = . nmat 9 . nmat 6
-    = . nmat 10 - - syy sxx szz
-    = . nmat 11 + syz szy
-    = . nmat 12 . nmat 3
-    = . nmat 13 . nmat 7
-    = . nmat 14 . nmat 11
-    = . nmat 15 - - szz sxx syy
-    : ( Vec u ) q__v ( vec_zeroed [u] 32 )
-    : *f q # *f ( vec_data [u] q__v )
+    : ( Vec f ) nmat__v ( vec_zeroed [f] 16 )
+    : ( Slice f ) nmat ( slice_from_vec [f] nmat__v )
+    ( slice_put [f] nmat 0 + + sxx syy szz )
+    ( slice_put [f] nmat 1 - syz szy )
+    ( slice_put [f] nmat 2 - szx sxz )
+    ( slice_put [f] nmat 3 - sxy syx )
+    ( slice_put [f] nmat 4 ( slice_at [f] nmat 1 ) )
+    ( slice_put [f] nmat 5 - - sxx syy szz )
+    ( slice_put [f] nmat 6 + sxy syx )
+    ( slice_put [f] nmat 7 + szx sxz )
+    ( slice_put [f] nmat 8 ( slice_at [f] nmat 2 ) )
+    ( slice_put [f] nmat 9 ( slice_at [f] nmat 6 ) )
+    ( slice_put [f] nmat 10 - - syy sxx szz )
+    ( slice_put [f] nmat 11 + syz szy )
+    ( slice_put [f] nmat 12 ( slice_at [f] nmat 3 ) )
+    ( slice_put [f] nmat 13 ( slice_at [f] nmat 7 ) )
+    ( slice_put [f] nmat 14 ( slice_at [f] nmat 11 ) )
+    ( slice_put [f] nmat 15 - - szz sxx syy )
+    : ( Vec f ) q__v ( vec_zeroed [f] 4 )
+    : ( Slice f ) q ( slice_from_vec [f] q__v )
     ( __gm_jacobi4 nmat q )
-    : f qw . q 0
-    : f qx . q 1
-    : f qy . q 2
-    : f qz . q 3
+    : f qw ( slice_at [f] q 0 )
+    : f qx ( slice_at [f] q 1 )
+    : f qy ( slice_at [f] q 2 )
+    : f qz ( slice_at [f] q 3 )
     // R from the unit quaternion (w, x, y, z)
-    : ( Vec u ) r__v ( vec_zeroed [u] 72 )
-    : *f r # *f ( vec_data [u] r__v )
+    : ( Vec f ) r__v ( vec_zeroed [f] 9 )
+    : ( Slice f ) r ( slice_from_vec [f] r__v )
     ( gm_quat_to_mat qx qy qz qw r )
     // s = Σ yc·(R xc) / var_x — recompute with R in hand
     : ~ f num 0.0
     = j 0
     ~ < j n {
-        : f x0 - . xs * j 3 mx0
-        : f x1 - . xs + * j 3 1 mx1
-        : f x2 - . xs + * j 3 2 mx2
-        : f y0 - . ys * j 3 my0
-        : f y1 - . ys + * j 3 1 my1
-        : f y2 - . ys + * j 3 2 my2
-        : f rx0 + + * . r 0 x0 * . r 1 x1 * . r 2 x2
-        : f rx1 + + * . r 3 x0 * . r 4 x1 * . r 5 x2
-        : f rx2 + + * . r 6 x0 * . r 7 x1 * . r 8 x2
+        : f x0 - ( slice_at [f] xs * j 3 ) mx0
+        : f x1 - ( slice_at [f] xs + * j 3 1 ) mx1
+        : f x2 - ( slice_at [f] xs + * j 3 2 ) mx2
+        : f y0 - ( slice_at [f] ys * j 3 ) my0
+        : f y1 - ( slice_at [f] ys + * j 3 1 ) my1
+        : f y2 - ( slice_at [f] ys + * j 3 2 ) my2
+        : f rx0 + + * ( slice_at [f] r 0 ) x0 * ( slice_at [f] r 1 ) x1 * ( slice_at [f] r 2 ) x2
+        : f rx1 + + * ( slice_at [f] r 3 ) x0 * ( slice_at [f] r 4 ) x1 * ( slice_at [f] r 5 ) x2
+        : f rx2 + + * ( slice_at [f] r 6 ) x0 * ( slice_at [f] r 7 ) x1 * ( slice_at [f] r 8 ) x2
         = num + num + + * y0 rx0 * y1 rx1 * y2 rx2
         = j + j 1
     }
@@ -527,26 +527,26 @@ unsafe @ gm_sim3_fit * f xs * f ys i n * f out → b {
     ? <= s 0.0 {
         ^ F
     } {}
-    = . out 0 s
+    ( slice_put [f] out 0 s )
     = j 0
-    ~ < j 9 { = . out + 1 j . r j = j + j 1 }
-    = . out 10 - my0 * s + + * . r 0 mx0 * . r 1 mx1 * . r 2 mx2
-    = . out 11 - my1 * s + + * . r 3 mx0 * . r 4 mx1 * . r 5 mx2
-    = . out 12 - my2 * s + + * . r 6 mx0 * . r 7 mx1 * . r 8 mx2
+    ~ < j 9 { ( slice_put [f] out + 1 j ( slice_at [f] r j ) ) = j + j 1 }
+    ( slice_put [f] out 10 - my0 * s + + * ( slice_at [f] r 0 ) mx0 * ( slice_at [f] r 1 ) mx1 * ( slice_at [f] r 2 ) mx2 )
+    ( slice_put [f] out 11 - my1 * s + + * ( slice_at [f] r 3 ) mx0 * ( slice_at [f] r 4 ) mx1 * ( slice_at [f] r 5 ) mx2 )
+    ( slice_put [f] out 12 - my2 * s + + * ( slice_at [f] r 6 ) mx0 * ( slice_at [f] r 7 ) mx1 * ( slice_at [f] r 8 ) mx2 )
     ^ T
 }
 
 // p ← s·R·p + t, in place over [n, 3] interleaved points.
-unsafe @ gm_sim3_apply * f pts i n * f xf → v {
-    : f s . xf 0
+@ gm_sim3_apply ( Slice f ) pts i n ( Slice f ) xf → v {
+    : f s ( slice_at [f] xf 0 )
     : ~ i j 0
     ~ < j n {
-        : f x . pts * j 3
-        : f y . pts + * j 3 1
-        : f z . pts + * j 3 2
-        = . pts * j 3 + * s + + * . xf 1 x * . xf 2 y * . xf 3 z . xf 10
-        = . pts + * j 3 1 + * s + + * . xf 4 x * . xf 5 y * . xf 6 z . xf 11
-        = . pts + * j 3 2 + * s + + * . xf 7 x * . xf 8 y * . xf 9 z . xf 12
+        : f x ( slice_at [f] pts * j 3 )
+        : f y ( slice_at [f] pts + * j 3 1 )
+        : f z ( slice_at [f] pts + * j 3 2 )
+        ( slice_put [f] pts * j 3 + * s + + * ( slice_at [f] xf 1 ) x * ( slice_at [f] xf 2 ) y * ( slice_at [f] xf 3 ) z ( slice_at [f] xf 10 ) )
+        ( slice_put [f] pts + * j 3 1 + * s + + * ( slice_at [f] xf 4 ) x * ( slice_at [f] xf 5 ) y * ( slice_at [f] xf 6 ) z ( slice_at [f] xf 11 ) )
+        ( slice_put [f] pts + * j 3 2 + * s + + * ( slice_at [f] xf 7 ) x * ( slice_at [f] xf 8 ) y * ( slice_at [f] xf 9 ) z ( slice_at [f] xf 12 ) )
         = j + j 1
     }
 }

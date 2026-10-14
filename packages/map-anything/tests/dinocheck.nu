@@ -45,14 +45,14 @@ unsafe @ main → i {
     }
     : i nin * 3 * h w
     ? != ( vec_len [u] raw ) * nin 4 { ^ ( __dc_die `input.bin is the wrong size` ) } {}
-    : ( Vec u ) img__v ( vec_zeroed [u] * 8 nin )
-    : *f img # *f ( vec_data [u] img__v )
-    : *u rp ( vec_data [u] raw )
+    : ( Vec f ) img__v ( vec_zeroed [f] nin )
+    : ( Slice f ) img ( slice_from_vec [f] img__v )
+    : ( Slice u ) rp ( slice_from_vec [u] raw )
     : ~ i j 0
     ~ < j nin {
         : i o * j 4
-        : i bits | # i . rp o | << # i . rp + o 1 8 | << # i . rp + o 2 16 << # i . rp + o 3 24
-        = . img j # f ( bits_to_f32 bits )
+        : i bits | # i ( slice_at [u] rp o ) | << # i ( slice_at [u] rp + o 1 ) 8 | << # i ( slice_at [u] rp + o 2 ) 16 << # i ( slice_at [u] rp + o 3 ) 24
+        ( slice_put [f] img j # f ( bits_to_f32 bits ) )
         = j + j 1
     }
 
@@ -67,7 +67,7 @@ unsafe @ main → i {
     : GpuKit kit ( gk_open_best )
     ? ( gk_ok kit ) {} { ^ ( __dc_die `no compute device` ) }
     : Dino d ( dn_load lw kit )
-    ? ( lw_ok lw ) {} { ^ ( __dc_die ( lw_error lw ) ) }
+    ? ( lw_ok lw ) {} { ^ ( __dc_die ( string_data ( lw_error lw ) ) ) }
 
     : i n ( dn_tokens gh gw )
     : MaWs ws ( ma_ws_new kit n DN_DIM DN_HEADS DN_SWH )
@@ -75,21 +75,19 @@ unsafe @ main → i {
     ? ( dn_forward kit d ws img h w gh gw tok ) {} { ^ ( __dc_die `dn_forward failed` ) }
 
     // download and write nurl_tok.bin as f32
-    : ( Vec f ) host ( vec_with_cap [f] * n DN_DIM )
-    : b _hl ( vec_set_len [f] host * n DN_DIM )
+    : ( Vec f ) host ( vec_zeroed [f] * n DN_DIM )
     ? ( gk_dbuf_download kit tok host ) {} { ^ ( __dc_die `download failed` ) }
-    : ( Vec u ) out ( vec_with_cap [u] * * n DN_DIM 4 )
-    : b _ol ( vec_set_len [u] out * * n DN_DIM 4 )
-    : *u op ( vec_data [u] out )
-    : *f hp ( vec_data [f] host )
+    : ( Vec u ) out ( vec_zeroed [u] * * n DN_DIM 4 )
+    : ( Slice u ) op ( slice_from_vec [u] out )
+    : ( Slice f ) hp ( slice_from_vec [f] host )
     = j 0
     ~ < j * n DN_DIM {
-        : i bits # i ( f32_to_bits # f32 . hp j )
+        : i bits # i ( f32_to_bits # f32 ( slice_at [f] hp j ) )
         : i o * j 4
-        = . op o # u & bits 255
-        = . op + o 1 # u & >> bits 8 255
-        = . op + o 2 # u & >> bits 16 255
-        = . op + o 3 # u & >> bits 24 255
+        ( slice_put [u] op o # u & bits 255 )
+        ( slice_put [u] op + o 1 # u & >> bits 8 255 )
+        ( slice_put [u] op + o 2 # u & >> bits 16 255 )
+        ( slice_put [u] op + o 3 # u & >> bits 24 255 )
         = j + j 1
     }
     : String opth ( string_from dir )

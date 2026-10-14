@@ -4296,7 +4296,23 @@ unsafe @ nurl_cg_lbl i h s hint → s {
     // `% Drop` of its own that could read it, else its own copy (a field of
     // a parameter or behind a pointer stays a lend).
     : ~ b ret_field_copy F
-    ? == ret_first_tt TT_DOT {
+    // A field taken out of a call's result (`^ . ( mk ) name`, h266): the
+    // caller's own where the call handed the result over, lent where it
+    // lent it (`^ . ( vec_at [Bx] bxs 0 ) items`) — answered per call, as
+    // `^ ( g x )` is.
+    ? & == ret_first_tt TT_DOT != 0 ( nurl_sym_len syms `__last_tmp_field_own__` ) {
+        : s __tfo ( nurl_sym_get syms `__last_tmp_field_own__` )
+        ? ! ( seq __tfo `true` ) {
+            : s __tfp ( __retown_pair ( nurl_sym_get syms `__last_tmp_field_rk__` ) )
+            ? != 0 ( nurl_str_len __tfp ) { ( mem_hown_dyn_if syms __tfp ) } { ( mem_hown_mark_dyn syms ) }
+            : s __tfc ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print __tfc ) ( nurl_print ` = xor i1 ` ) ( nurl_print __tfo ) ( nurl_print `, 1\n` )
+            = val ( mem_emit_cloneif cg ( nurl_get_last_type ) val ( mem_hown_static syms cg __tfc ) )
+        } {}
+        = hbit __tfo
+        = ret_field_copy T
+    } {}
+    ? & == ret_first_tt TT_DOT ! ret_field_copy {
         : s rfr ( nurl_sym_get syms `__last_field_read__` )
         : s rfp ( str_first_word rfr )
         : s rft ( nurl_get_last_type )
@@ -21321,9 +21337,12 @@ unsafe @ mem_path_to_indices s path → s {
     // (…and one that cannot be copied, a `% Drop` value or a struct
     // holding one: it leaked, h234. Not a trait object: its box has a
     // rule of its own, above.)
-    ? & & & & != 0 g_auto_drop_strings == arg_tt TT_LPAREN | | ( __is_handle_ty at ) __topt & ( __nc_drop_ty at ) == 0 ( nurl_str_starts at `%dyn.` )
+    // (…or a field taken out of a call's result, `( len . ( mk ) name )`:
+    // a value of its own, h266.)
+    : b __tfo & & == arg_tt TT_DOT != 0 ( nurl_sym_len syms `__last_tmp_field_own__` ) ( __is_handle_ty at )
+    ? | __tfo & & & & != 0 g_auto_drop_strings == arg_tt TT_LPAREN | | ( __is_handle_ty at ) __topt & ( __nc_drop_ty at ) == 0 ( nurl_str_starts at `%dyn.` )
     == 0 ( nurl_sym_len syms `__last_value_borrow__` ) == 0 ( nurl_sym_len syms `__last_call_ret_view__` ) {
-        : s __tro ( mem_call_retown syms cg )
+        : s __tro ? __tfo ( nurl_sym_get syms `__last_tmp_field_own__` ) ( mem_call_retown syms cg )
         ? != 0 ( nurl_str_len __tro ) {
             : s __tnk ( mem_arg_not_kept cg call_name fname arg_idx shadowed )
             : ~ s __tc ( nurl_cg_reg cg )
@@ -21816,6 +21835,11 @@ unsafe @ __src_has_raw_ptr s text → b {
             ( __sb syms ptr `` )
             ^ v } {}
     } {}
+    // A field taken out of a call's result (`: String b . ( mk ) name`):
+    // a value of its own (h266).
+    ? & == rhs_tt TT_DOT != 0 ( nurl_sym_len syms `__last_tmp_field_own__` ) {
+        : s __tfo ( nurl_sym_get syms `__last_tmp_field_own__` )
+        ( mem_udrop_flag_set syms cg ptr __tfo ) ( __sb syms ptr ? ( seq __tfo `true` ) `` `dyn` ) ^ v } {}
     ? | == rhs_tt TT_DOT == rhs_tt TT_HASH {
         ( mem_udrop_flag_set syms cg ptr `0` )
         // Read out of a struct this function owns and drops: `local`.
@@ -32599,6 +32623,7 @@ unsafe @ __ty_holds_addr s ty i depth → b {
     // storage: its index is a path (`a,f`), extended from the object's read.
     : s __mb_inner_fr ? == __mb_tt TT_DOT ( nurl_sym_get syms `__last_field_read__` ) ``
     ( nurl_sym_def syms `__last_field_read__` `` )
+    ( nurl_sym_def syms `__last_tmp_field_own__` `` )
     // Where the object itself was loaded from, when it was read through a
     // pointer (`. . p k name`): the field's address follows, so a consumer
     // of the field can empty it in place (`__last_field_addr__`).
@@ -32921,10 +32946,39 @@ unsafe @ __ty_holds_addr s ty i depth → b {
                             ( nurl_print `, ` ) ( nurl_print ( nurl_llty ot ) ) ( nurl_print ` ` ) ( nurl_print ov ) ( nurl_print `)` ) ( emit_dbg_eol )
                         } {}
                     } {}
+                    // …and a field that owns something (`^ . ( mk ) name`):
+                    // the field leaves with the read, and the rest of the
+                    // temporary — its value with that field emptied — is
+                    // dropped here. It leaked (h266). (Not under a `% Drop`
+                    // of the struct's own, which would see the field gone.)
+                    // The read is then a value of its own where the call
+                    // handed its result over — `__last_tmp_field_own__`, its
+                    // flag — which a binding, a return, an argument or a
+                    // literal takes over.
+                    : ~ s __tf_res ( nurl_str_cat res `` )
+                    ? & & & & & == __mb_tt TT_LPAREN != 0 g_auto_drop_strings ( __type_needs_drop ot syms )
+                    ( __is_handle_ty ftype ) ! ( __has_user_drop ot ) ( __clone_supported ftype syms ) {
+                        // (Exactly when the call handed its result over — its
+                        // flag: a lent one, `. ( arc_get a ) file`, stays a
+                        // view of its owner.)
+                        : s tro2 ( mem_call_retown syms cg )
+                        ? != 0 ( nurl_str_len tro2 ) {
+                            ( nurl_sym_def syms `__last_tmp_field_own__` tro2 )
+                            ( nurl_sym_def syms `__last_tmp_field_rk__` ( nurl_sym_get syms `__last_retown_const__` ) )
+                            : s rest ( nurl_cg_reg cg )
+                            ( nurl_print `  ` ) ( nurl_print rest ) ( nurl_print ` = insertvalue ` ) ( nurl_print ( nurl_llty ot ) )
+                            ( nurl_print ` ` ) ( nurl_print ov ) ( nurl_print `, ` ) ( nurl_print ( nurl_llty ftype ) )
+                            ( nurl_print ` zeroinitializer, ` ) ( nurl_print ( nurl_str_int fidx ) ) ( nurl_print `\n` )
+                            ( __handle_drop_ensure ot )
+                            ( __dropifv_request ot )
+                            ( nurl_print `  call void @__dropifv_` ) ( nurl_print ( __drop_mangle ot ) ) ( nurl_print `(i1 ` ) ( nurl_print tro2 )
+                            ( nurl_print `, ` ) ( nurl_print ( nurl_llty ot ) ) ( nurl_print ` ` ) ( nurl_print rest ) ( nurl_print `)` ) ( emit_dbg_eol )
+                        } {}
+                    } {}
                     // ftype is the field's raw declared type — an
                     // enclosing widening cast reads zext-vs-sext off it.
                     ( nurl_set_last_type ftype )
-                    ^ res
+                    ^ __tf_res
                 }
             }
             { ( die lex ( nurl_str_cat3
@@ -33364,6 +33418,15 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
         ? & fld_is_clo ! agg_moves_fields { ( bck_note_clo_caps_stored syms fld_first_tt fld_first_val ( nurl_lex_line lex ) ) } {}
         // A borrowed String / Vec stored into the aggregate: its copy.
         ? ! ( is_ident_tok fld_first_tt ) { = fld_lent ( mem_lent_cond syms cg fty fld_first_tt fld_first_val ) } {}
+        // (…but a field taken out of a call's result is a value of its own,
+        // h266: it moves in.)
+        ? & == fld_first_tt TT_DOT != 0 ( nurl_sym_len syms `__last_tmp_field_own__` ) {
+            : s __tfo ( nurl_sym_get syms `__last_tmp_field_own__` )
+            ? ( seq __tfo `true` ) { = fld_lent `` } {
+                = fld_lent ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print fld_lent ) ( nurl_print ` = xor i1 ` ) ( nurl_print __tfo ) ( nurl_print `, 1\n` )
+            }
+        } {}
         // A call's result that cannot be copied, stored into the literal: a
         // lend of it is rejected at module end (h228).
         ? & == fld_first_tt TT_LPAREN ( __nc_drop_ty fty ) {

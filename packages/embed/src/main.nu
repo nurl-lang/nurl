@@ -72,7 +72,7 @@ $ `stdlib/core/slice.nu`
 }
 
 // "HOST:PORT" → host into `hout`, returns port (or def on parse trouble)
-unsafe @ __cli_addr s addr String hout i def → i {
+@ __cli_addr s addr String hout i def → i {
     : ( Slice u ) addr_v ( slice_of_str addr )
     : i n ( nurl_str_len addr )
     : ~ i colon -1
@@ -82,7 +82,7 @@ unsafe @ __cli_addr s addr String hout i def → i {
         = k + k 1
     }
     ? < colon 0 { ( string_push_str hout addr ) ^ def } {}
-    ( string_push_bytes hout # *u # i addr colon )
+    ( string_push_window hout addr_v 0 colon )
     : i p ( nurl_str_to_int ( nurl_str_slice addr + colon 1 - n + colon 1 ) )
     ^ ? > p 0 { p } { def }
 }

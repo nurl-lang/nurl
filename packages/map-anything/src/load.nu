@@ -30,20 +30,19 @@ $ `src/devblock.nu`
 @ __maw_none → GkBuf { ^ ( gk_buf_none GK_F32 ) }
 
 // One tensor onto the device, layout unchanged.
-unsafe @ maw_upload Lw w GpuKit kit s name → GkBuf {
+@ maw_upload Lw w GpuKit kit s name → GkBuf {
     : i n ( lw_nelems w name )
     ? <= n 0 {
         : b _r ( lw_require w name -1 -1 -1 -1 )
         ^ ( __maw_none )
     } {}
-    : *u raw ( lw_f32_ptr w name n )
-    ? != # i raw 0 {
+    : ( Slice u ) raw ( lw_f32_bytes w name n )
+    ? > ( slice_len [u] raw ) 0 {
         : GkBuf rb ( gk_dbuf_new kit n GK_F32 )
-        ? ( gk_dbuf_upload_raw kit rb raw ) { ^ rb } {}
+        ? ( gk_dbuf_upload_bytes kit rb raw ) { ^ rb } {}
     } {}
-    : ( Vec f ) host ( vec_with_cap [f] n )
-    : b _sl ( vec_set_len [f] host n )
-    ? ! ( lw_read w name ( vec_data [f] host ) n ) {
+    : ( Vec f ) host ( vec_zeroed [f] n )
+    ? ! ( lw_read w name ( slice_from_vec [f] host ) n ) {
         ^ ( __maw_none )
     } {}
     : GkBuf b ( gk_dbuf_new kit n GK_F32 )
@@ -53,16 +52,16 @@ unsafe @ maw_upload Lw w GpuKit kit s name → GkBuf {
 
 // Upload a [rows, cols] tensor TRANSPOSED, as [cols, rows] — straight
 // out of the mapping, permuted on the device.
-unsafe @ maw_upload_t Lw w GpuKit kit s name i rows i cols → GkBuf {
+@ maw_upload_t Lw w GpuKit kit s name i rows i cols → GkBuf {
     : i n ( lw_nelems w name )
     ? | <= n 0 != n * rows cols {
         : b _r ( lw_require w name rows cols -1 -1 )
         ^ ( __maw_none )
     } {}
-    : *u raw ( lw_f32_ptr w name n )
-    ? != # i raw 0 {
+    : ( Slice u ) raw ( lw_f32_bytes w name n )
+    ? > ( slice_len [u] raw ) 0 {
         : GkBuf src ( gk_dbuf_new kit n GK_F32 )
-        ? ( gk_dbuf_upload_raw kit src raw ) {
+        ? ( gk_dbuf_upload_bytes kit src raw ) {
             : GkBuf dst ( gk_dbuf_new kit n GK_F32 )
             : ( Vec i ) dims ( vec_new [i] )
             ( vec_push [i] dims rows ) ( vec_push [i] dims cols )
@@ -73,20 +72,19 @@ unsafe @ maw_upload_t Lw w GpuKit kit s name i rows i cols → GkBuf {
         } {}
     } {}
     // Host fallback: widen, transpose, upload.
-    : ( Vec f ) host ( vec_with_cap [f] n )
-    : b _sl ( vec_set_len [f] host n )
-    ? ! ( lw_read w name ( vec_data [f] host ) n ) {
+    : ( Vec f ) host ( vec_zeroed [f] n )
+    ? ! ( lw_read w name ( slice_from_vec [f] host ) n ) {
         ^ ( __maw_none )
     } {}
-    : ( Vec f ) tp ( vec_with_cap [f] n )
-    : b _tl ( vec_set_len [f] tp n )
-    : *f src ( vec_data [f] host )
-    : *f dst ( vec_data [f] tp )
+    : ( Vec f ) tp ( vec_zeroed [f] n )
+    : ( Slice f ) src ( slice_from_vec [f] host )
+    : ( Slice f ) dst ( slice_from_vec [f] tp )
     : ~ i r 0
     ~ < r rows {
+        : ( Slice f ) srow ( slice_window [f] src * r cols cols )
         : ~ i c 0
         ~ < c cols {
-            = . dst + * c rows r . src + * r cols c
+            ( slice_put [f] dst + * c rows r ( slice_at [f] srow c ) )
             = c + c 1
         }
         = r + r 1

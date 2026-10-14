@@ -27,6 +27,7 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/std/floatbits.nu`
 $ `stdlib/std/arc.nu`
+$ `stdlib/core/slice.nu`
 $ `gpukit.nu`
 $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
 
@@ -238,9 +239,26 @@ unsafe @ gk_dbuf_download GpuKit kit GkBuf b ( Vec f ) dst → b {
 // walks every element through f64 twice (widen on read, narrow on
 // upload) and allocates two host buffers the size of the tensor to do
 // it. On a 4.6 GB model that is most of the load.
-unsafe @ gk_dbuf_upload_raw GpuKit kit GkBuf b * u src → b {
+//
+// raw: nothing here can check that `src` addresses those bytes; a caller
+// that has them as a checked view uploads with gk_dbuf_upload_bytes.
+raw @ gk_dbuf_upload_raw GpuKit kit GkBuf b * u src → b {
     ? & ( gk_buf_ok b ) != # i src 0 {} { ^ F }
     ^ == ( gpu_upload ( gpu_buffer_view . b dptr * . b n ( __gk_esz . b dtype ) ) src ) 0
+}
+
+// The same from a checked view of the bytes (a tensor's bytes in a mapped
+// file, safetensor's st_tensor_bytes): F unless it holds the buffer's
+// b.n elements. Safe, and as fast — one memcpy to the device.
+@ gk_dbuf_upload_bytes GpuKit kit GkBuf b ( Slice u ) src → b {
+    ? ( gk_buf_ok b ) {} { ^ F }
+    ? < ( slice_len [u] src ) * . b n ( __gk_esz . b dtype ) { ^ F } {}
+    ^ ( __gk_upload_view b src )
+}
+
+// (`src` holds the buffer's bytes: checked by the caller above.)
+unsafe @ __gk_upload_view GkBuf b ( Slice u ) src → b {
+    ^ == ( gpu_upload ( gpu_buffer_view . b dptr * . b n ( __gk_esz . b dtype ) ) ( slice_data [u] src ) ) 0
 }
 
 // Exact i64 host view (GK_I64 buffers only — index tensors must never make

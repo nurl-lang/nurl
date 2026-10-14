@@ -214,30 +214,30 @@ GkBuf up GkBuf t1 GkBuf t2 GkBuf dst i ch i h i w → b {
 }
 
 // The whole head, for one view.
-unsafe @ dp_forward GpuKit kit Dpt d GkBuf h0 GkBuf h1 GkBuf h2 GkBuf h3
+@ dp_forward GpuKit kit Dpt d GkBuf h0 GkBuf h1 GkBuf h2 GkBuf h3
 i voff i gh i gw i h i w GkBuf rays GkBuf depth GkBuf conf GkBuf mask → b {
     : i np * gh gw
 
     // per-hook channel counts and post-resize sizes
-    : ( Vec u ) chs__v ( vec_zeroed [u] 32 )
-    : *i chs # *i ( vec_data [u] chs__v )
-    = . chs 0 96 = . chs 1 192 = . chs 2 384 = . chs 3 768
-    : ( Vec u ) ohs__v ( vec_zeroed [u] 32 )
-    : *i ohs # *i ( vec_data [u] ohs__v )
-    : ( Vec u ) ows__v ( vec_zeroed [u] 32 )
-    : *i ows # *i ( vec_data [u] ows__v )
-    = . ohs 0 * gh 4 = . ows 0 * gw 4
-    = . ohs 1 * gh 2 = . ows 1 * gw 2
-    = . ohs 2 gh = . ows 2 gw
-    = . ohs 3 / + gh 1 2 = . ows 3 / + gw 1 2
+    : ( Vec i ) chs__v ( vec_zeroed [i] 4 )
+    : ( Slice i ) chs ( slice_from_vec [i] chs__v )
+    ( slice_put [i] chs 0 96 ) ( slice_put [i] chs 1 192 ) ( slice_put [i] chs 2 384 ) ( slice_put [i] chs 3 768 )
+    : ( Vec i ) ohs__v ( vec_zeroed [i] 4 )
+    : ( Slice i ) ohs ( slice_from_vec [i] ohs__v )
+    : ( Vec i ) ows__v ( vec_zeroed [i] 4 )
+    : ( Slice i ) ows ( slice_from_vec [i] ows__v )
+    ( slice_put [i] ohs 0 * gh 4 ) ( slice_put [i] ows 0 * gw 4 )
+    ( slice_put [i] ohs 1 * gh 2 ) ( slice_put [i] ows 1 * gw 2 )
+    ( slice_put [i] ohs 2 gh ) ( slice_put [i] ows 2 gw )
+    ( slice_put [i] ohs 3 / + gh 1 2 ) ( slice_put [i] ows 3 / + gw 1 2 )
 
     : ( Vec GkBuf ) rns ( vec_new [GkBuf] )
     : ~ b ok T
     : ~ i t 0
     ~ & ok < t 4 {
-        : i cout . chs t
-        : i oh . ohs t
-        : i ow . ows t
+        : i cout ( slice_at [i] chs t )
+        : i oh ( slice_at [i] ohs t )
+        : i ow ( slice_at [i] ows t )
         : GkBuf seq ? == t 0 h0 ? == t 1 h1 ? == t 2 h2 h3
         : GkBuf fmap ( gk_dbuf_new kit * DP_IN np GK_F32 )
         ? ( __dp_tokens_to_map kit seq voff fmap np ) {} { = ok F }
@@ -285,8 +285,8 @@ i voff i gh i gw i h i w GkBuf rays GkBuf depth GkBuf conf GkBuf mask → b {
 
     // fuse coarse → fine: refinenet4 on hook 3, cropped to hook 2's
     // size, then 3, 2, 1 — each an exact ×2 from there on.
-    : i h3 . ohs 3
-    : i w3 . ows 3
+    : i h3 ( slice_at [i] ohs 3 )
+    : i w3 ( slice_at [i] ows 3 )
     : ~ GkBuf cbuf ( gk_dbuf_new kit * DP_FEAT * h3 w3 GK_F32 )
     ?? ( vec_get [GkBuf] rns 3 ) {
         T b → { ? ( gkd_map kit `copy` `x` cbuf b ) {} { = ok F } }

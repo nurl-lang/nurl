@@ -21,10 +21,10 @@
 //   ( lw_index w name )                  → i    -1 when absent
 //   ( lw_dim w name axis )               → i
 //   ( lw_nelems w name )                 → i
-//   ( lw_read w name dst n )             → b    f64 into a caller buffer
-//   ( lw_f32_ptr w name n )              → *u   zero-copy when already f32
+//   ( lw_read w name dst n )             → b    f64 into a caller view
+//   ( lw_f32_bytes w name n )            → ( Slice u )   zero-copy when already f32
 //   ( lw_require w name d0 d1 d2 d3 )    → b    shape check; −1 = any
-//   ( lw_error w )                       → s    first failure, "" if none
+//   ( lw_error w )                       → String   first failure, "" if none
 //
 // `lw_require` accumulates: call it for every tensor a module needs,
 // then read `lw_error` once. That way a mismatched checkpoint reports
@@ -34,50 +34,47 @@
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/arc.nu`
+$ `stdlib/std/thread.nu`
+$ `stdlib/core/slice.nu`
 $ `stdlib/std/floatbits.nu`
 $ `deps/safetensor/src/safetensor.nu`
 
-: LwImpl {
-    St st  // the mapping: its last owner unmaps it
-    ( Vec String ) errs
+// An open checkpoint is a handle: every copy is the same mapping (the
+// St, whose last owner unmaps it) and the same record of failures, which
+// any copy may add to. lw_close is an optional early release.
+: Lw {
+    St st
+    ( Locked ( Vec String ) ) errs  // the first failure, once there is one
 }
 
-// An open checkpoint is a handle: every copy is the same mapping, and the
-// last owner releases it. lw_close is an optional early release.
-: Lw { ( Arc LwImpl ) a }
-
-@ Lw_share Lw h → Lw { ^ @ Lw { ( arc_clone [LwImpl] . h a ) } }
+@ Lw_share Lw h → Lw { ^ @ Lw { ( St_share . h st ) ( Locked_share [( Vec String )] . h errs ) } }
 
 @ Lw_drop sink Lw h → v {}
-
-unsafe @ __Lw_ptr Lw h → *LwImpl { ^ ( arc_ptr [LwImpl] . h a ) }
 
 @ lw_open s path → !Lw String {
     : !St String r ( st_open path )
     ?? r {
         F e → ^ @ !Lw String { F e }
-        T st → { ^ @ !Lw String { T @ Lw { ( arc_new [LwImpl] @ LwImpl { st ( vec_new [String] ) } ) } } }
+        T st → { ^ @ !Lw String { T @ Lw { st ( locked_new [( Vec String )] ( vec_new [String] ) ) } } }
     }
 }
 
 // Release the checkpoint now (optional — its last owner does it anyway).
 @ lw_close sink Lw w → v {}
 
-unsafe @ lw_n_tensors Lw w__h → i { : *LwImpl w ( __Lw_ptr w__h ) ^ ( st_n_tensors . w st ) }
+@ lw_n_tensors Lw w → i { ^ ( st_n_tensors . w st ) }
 
-unsafe @ lw_index Lw w__h s name → i { : *LwImpl w ( __Lw_ptr w__h ) ^ ( st_find_tensor . w st name ) }
+@ lw_index Lw w s name → i { ^ ( st_find_tensor . w st name ) }
 
-unsafe @ lw_has Lw w__h s name → b { : *LwImpl w ( __Lw_ptr w__h ) ^ >= ( st_find_tensor . w st name ) 0 }
+@ lw_has Lw w s name → b { ^ >= ( st_find_tensor . w st name ) 0 }
 
-unsafe @ lw_ndim Lw w__h s name → i {
-    : *LwImpl w ( __Lw_ptr w__h )
+@ lw_ndim Lw w s name → i {
     : i i0 ( st_find_tensor . w st name )
     ? < i0 0 { ^ 0 } {}
     ?? ( vec_get [StTensor] ( st_tensors . w st ) i0 ) { T t → ^ . t nd F → ^ 0 }
 }
 
-unsafe @ lw_dim Lw w__h s name i axis → i {
-    : *LwImpl w ( __Lw_ptr w__h )
+@ lw_dim Lw w s name i axis → i {
     : i i0 ( st_find_tensor . w st name )
     ? < i0 0 { ^ 0 } {}
     ?? ( vec_get [StTensor] ( st_tensors . w st ) i0 ) {
@@ -86,52 +83,59 @@ unsafe @ lw_dim Lw w__h s name i axis → i {
     }
 }
 
-unsafe @ lw_nelems Lw w__h s name → i {
-    : *LwImpl w ( __Lw_ptr w__h )
+@ lw_nelems Lw w s name → i {
     : i i0 ( st_find_tensor . w st name )
     ? < i0 0 { ^ 0 } {}
     ?? ( vec_get [StTensor] ( st_tensors . w st ) i0 ) { T t → ^ . t nelems F → ^ 0 }
 }
 
 // Keep the first failure only; a later one is dropped with the call.
-unsafe @ __lw_fail * LwImpl w sink String m → v {
-    ? == 0 ( vec_len [String] . w errs ) { ( vec_push [String] . w errs m ) } {}
+@ __lw_fail Lw w sink String m → v {
+    : ( Vec String ) e ( locked_take [( Vec String )] . w errs )
+    ? == 0 ( vec_len [String] e ) { ( vec_push [String] e m ) } {}
+    ( locked_restore [( Vec String )] . w errs e )
 }
 
-unsafe @ lw_error Lw w__h → s {
-    : *LwImpl w ( __Lw_ptr w__h )
-    ?? ( vec_get [String] . w errs 0 ) { T s → ^ ( string_data s ) F → ^ `` }
+// The first failure ('' if none), a copy of its own.
+@ lw_error Lw w → String {
+    : ( Vec String ) e ( locked_take [( Vec String )] . w errs )
+    : ~ String out ( string_new )
+    ?? ( vec_get [String] e 0 ) { T s → { = out ( string_from ( string_data s ) ) } F → {} }
+    ( locked_restore [( Vec String )] . w errs e )
+    ^ out
 }
 
-unsafe @ lw_ok Lw w__h → b { : *LwImpl w ( __Lw_ptr w__h ) ^ == 0 ( vec_len [String] . w errs ) }
+@ lw_ok Lw w → b {
+    : ( Vec String ) e ( locked_take [( Vec String )] . w errs )
+    : b ok == 0 ( vec_len [String] e )
+    ( locked_restore [( Vec String )] . w errs e )
+    ^ ok
+}
 
 // The tensor's own bytes inside the mapping, when they are already
 // contiguous float32 — which is the layout a GK_F32 device buffer wants,
-// so it can be uploaded with no conversion at all. safetensors tensors
-// are contiguous by construction, so only the dtype and length are
-// checked. Returns 0 when the tensor is absent, a different dtype or a
-// different length, and the caller falls back to the converting read.
-unsafe @ lw_f32_ptr Lw w__h s name i n → *u {
-    : *LwImpl w ( __Lw_ptr w__h )
+// so it can be uploaded with no conversion at all (gk_dbuf_upload_bytes).
+// safetensors tensors are contiguous by construction, so only the dtype
+// and length are checked: empty when the tensor is absent, a different
+// dtype or a different length, and the caller falls back to the
+// converting read. The view lives no longer than `w`.
+@ lw_f32_bytes Lw w s name i n → ( Slice u ) {
     : i i0 ( st_find_tensor . w st name )
-    ? < i0 0 { ^ # *u 0 } {}
-    ?? ( vec_get [StTensor] ( st_tensors . w st ) i0 ) {
-        T t → {
-            ? == . t dtype ST_F32 {} { ^ # *u 0 }
-            ? == . t nelems n {} { ^ # *u 0 }
-            ^ ( st_tensor_ptr . w st t )
+    ? >= i0 0 {
+        ?? ( vec_get [StTensor] ( st_tensors . w st ) i0 ) {
+            T t → { ? & == . t dtype ST_F32 == . t nelems n { ^ ( st_tensor_bytes . w st t ) } {} }
+            F → {}
         }
-        F → ^ # *u 0
-    }
+    } {}
+    ^ ( slice_of_str `` )
 }
 
-// Read a whole tensor into a caller-owned f64 buffer of at least
-// `n` elements. Records a failure and returns F if the tensor is absent,
+// Read a whole tensor into a caller-owned f64 view of at least `n`
+// elements. Records a failure and returns F if the tensor is absent,
 // the wrong size, or unreadable. Every dtype widens through f32 (the
 // container's dequant path), which is exact for this checkpoint — the
 // file is F32 throughout.
-unsafe @ lw_read Lw w__h s name * f dst i n → b {
-    : *LwImpl w ( __Lw_ptr w__h )
+@ lw_read Lw w s name ( Slice f ) dst i n → b {
     : i i0 ( st_find_tensor . w st name )
     ? < i0 0 {
         : String m ( string_from `map-anything: checkpoint has no tensor '` )
@@ -166,12 +170,11 @@ unsafe @ lw_read Lw w__h s name * f dst i n → b {
             ^ F
         }
         T bytes → {
-            : *u p ( vec_data [u] bytes )
+            : ( Slice u ) bv ( slice_from_vec [u] bytes )
+            : ( Slice f ) dv ( slice_prefix [f] dst n )
             : ~ i k 0
             ~ < k n {
-                : i o * k 4
-                : i bits | # i . p o | << # i . p + o 1 8 | << # i . p + o 2 16 << # i . p + o 3 24
-                = . dst k # f ( bits_to_f32 bits )
+                ( slice_put [f] dv k # f ( bits_to_f32 # i ( slice_u32_le bv * k 4 ) ) )
                 = k + k 1
             }
             ^ T
@@ -182,8 +185,7 @@ unsafe @ lw_read Lw w__h s name * f dst i n → b {
 // Assert a tensor's presence and shape. Pass −1 for an axis that may be
 // anything, and for axes beyond the tensor's rank. Records the first
 // failure; returns whether THIS check passed.
-unsafe @ lw_require Lw w__h s name i d0 i d1 i d2 i d3 → b {
-    : *LwImpl w ( __Lw_ptr w__h )
+@ lw_require Lw w s name i d0 i d1 i d2 i d3 → b {
     : i i0 ( st_find_tensor . w st name )
     ? < i0 0 {
         : String m ( string_from `map-anything: checkpoint has no tensor '` )

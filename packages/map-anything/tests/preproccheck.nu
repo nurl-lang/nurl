@@ -18,7 +18,7 @@ $ `src/preproc.nu`
 
 : i __PC_N 5
 
-unsafe @ main → i {
+@ main → i {
     ? < ( nurl_argc ) 2 {
         ( puts `usage: preproccheck <dir>` )
         ^ 2
@@ -73,7 +73,7 @@ unsafe @ main → i {
                         ( string_push_int line tw )
                         ( string_push_str line `x` )
                         ( string_push_int line th )
-                        : *f dp ( pp_data fr )
+                        : ( Slice f ) dp ( slice_from_vec [f] ( pp_data fr ) )
                         : i plane * tw th
                         : ~ i y 0
                         ~ < y th {
@@ -81,7 +81,7 @@ unsafe @ main → i {
                             ~ < x tw {
                                 : ~ i c 0
                                 ~ < c 3 {
-                                    : i v # i + * . dp + * c plane + * y tw x 255.0 0.5
+                                    : i v # i + * ( slice_at [f] dp + * c plane + * y tw x ) 255.0 0.5
                                     ( string_push_char line 32 )
                                     ( string_push_int line v )
                                     = c + c 1

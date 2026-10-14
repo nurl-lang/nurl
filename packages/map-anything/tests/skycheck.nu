@@ -51,16 +51,16 @@ unsafe @ main → i {
     ? . sky ok {} { ^ ( __sc_die `cannot load skyseg.onnx` ) }
     : i hw * tw th
     : ( Vec u ) mask__v ( vec_zeroed [u] hw )
-    : *u mask # *u ( vec_data [u] mask__v )
+    : ( Slice u ) mask ( slice_from_vec [u] mask__v )
     : ~ i j 0
-    ~ < j hw { = . mask j # u 1 = j + j 1 }
-    ? ( sky_mask sky ( pp_data fr ) tw th mask ) {} { ^ ( __sc_die `sky_mask failed` ) }
+    ~ < j hw { ( slice_put [u] mask j # u 1 ) = j + j 1 }
+    ? ( sky_mask sky ( slice_from_vec [f] ( pp_data fr ) ) tw th mask ) {} { ^ ( __sc_die `sky_mask failed` ) }
     : ( Vec u ) out ( vec_with_cap [u] hw )
     : ~ i kept 0
     = j 0
     ~ < j hw {
-        ( vec_push [u] out . mask j )
-        ? != # i . mask j 0 { = kept + kept 1 } {}
+        ( vec_push [u] out ( slice_at [u] mask j ) )
+        ? != # i ( slice_at [u] mask j ) 0 { = kept + kept 1 } {}
         = j + j 1
     }
     ?? ( write_file_bytes outp out ) {

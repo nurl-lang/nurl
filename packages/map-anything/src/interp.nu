@@ -48,15 +48,15 @@ $ `stdlib/std/float.nu`
 
 // One axis's tap start and weights for output index o. Returns the
 // clamped base index; writes the four weights into w[0..3].
-unsafe @ __it_axis i o f rscale i insize * f w → i {
+@ __it_axis i o f rscale i insize ( Slice f ) w → i {
     : f src - * rscale + # f o 0.5 0.5
     : f fl ( float_floor src )
     : i i0 # i fl
     : f t - src fl
-    = . w 0 ( __it_cc2 + t 1.0 )
-    = . w 1 ( __it_cc1 t )
-    = . w 2 ( __it_cc1 - 1.0 t )
-    = . w 3 ( __it_cc2 - 2.0 t )
+    ( slice_put [f] w 0 ( __it_cc2 + t 1.0 ) )
+    ( slice_put [f] w 1 ( __it_cc1 t ) )
+    ( slice_put [f] w 2 ( __it_cc1 - 1.0 t ) )
+    ( slice_put [f] w 3 ( __it_cc2 - 2.0 t ) )
     ^ i0
 }
 
@@ -66,12 +66,12 @@ unsafe @ __it_axis i o f rscale i insize * f w → i {
     ^ v
 }
 
-unsafe @ interp_bicubic_torch * f pin i ih i iw i c i oh i ow f rsy f rsx * f pout → v {
+@ interp_bicubic_torch ( Slice f ) pin i ih i iw i c i oh i ow f rsy f rsx ( Slice f ) pout → v {
     ? | | | <= ih 0 <= iw 0 <= oh 0 <= ow 0 { ^ v } {}
-    : ( Vec u ) wy__v ( vec_zeroed [u] 32 )
-    : *f wy # *f ( vec_data [u] wy__v )
-    : ( Vec u ) wx__v ( vec_zeroed [u] 32 )
-    : *f wx # *f ( vec_data [u] wx__v )
+    : ( Vec f ) wy__v ( vec_zeroed [f] 4 )
+    : ( Slice f ) wy ( slice_from_vec [f] wy__v )
+    : ( Vec f ) wx__v ( vec_zeroed [f] 4 )
+    : ( Slice f ) wx ( slice_from_vec [f] wx__v )
     : ~ i oy 0
     ~ < oy oh {
         : i y0 ( __it_axis oy rsy ih wy )
@@ -90,13 +90,13 @@ unsafe @ interp_bicubic_torch * f pin i ih i iw i c i oh i ow f rsy f rsx * f po
                     : ~ i dx 0
                     ~ < dx 4 {
                         : i sx ( __it_clamp + x0 - dx 1 - iw 1 )
-                        = racc + racc * . pin + rowb sx . wx dx
+                        = racc + racc * ( slice_at [f] pin + rowb sx ) ( slice_at [f] wx dx )
                         = dx + dx 1
                     }
-                    = acc + acc * racc . wy dy
+                    = acc + acc * racc ( slice_at [f] wy dy )
                     = dy + dy 1
                 }
-                = . pout + * k * oh ow + * oy ow ox acc
+                ( slice_put [f] pout + * k * oh ow + * oy ow ox acc )
                 = k + k 1
             }
             = ox + ox 1

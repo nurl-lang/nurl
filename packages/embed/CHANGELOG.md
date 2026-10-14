@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.6.0] — 2026-10-14
+
+Requires NURL 0.73.0 with globals set at start and h264–h266 closed.
+
+### Changed
+
+- 2 `unsafe` functions left (43 in 0.5.5): carving a weight out of the
+  device arena (`gk_buf_wrap`) and sending the queued uploads
+  (`gpu_upload_batch`, then `gpu_staging_free`).
+- An `Embed` is the tokenizer, the configuration and a status record,
+  each shared, beside the engine in a `Locked`: a forward, a load or an
+  unload hold the engine, while tokenizing, `embed_dim`, `embed_loaded`
+  and the health report never wait for one. The engine was an Arc
+  changed through raw pointers from any thread.
+- `embed_backend` / `embed_device_name` return a `String` of their own.
+- The server's model queue is a `Channel` with an answer channel per
+  request, and its state a Locked global set at start — no hand-linked
+  job list behind a hand-held mutex. The unload timer ticks through the
+  same queue.
+
+### Verified
+
+- On a synthetic two-layer XLM-R model (random weights, a trained Unigram
+  vocabulary) the embeddings are bit-identical to 0.5.5's and within
+  7e-8 of a NumPy forward; the server answers concurrent batches, unloads
+  when idle and reloads, ASan-clean.
+
 ## [0.5.5] — 2026-10-14
 
 Requires NURL 0.73.0 (`slice_at`, `slice_put`, `rc_take`, `locked_take`).

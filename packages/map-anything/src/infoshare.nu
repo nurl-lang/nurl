@@ -64,7 +64,7 @@ $ `src/load.nu`
     ( Vec f ) scaletok  // [1536] host — placed once per run
 }
 
-unsafe @ is_load Lw w GpuKit kit → InfoShare {
+@ is_load Lw w GpuKit kit → InfoShare {
     : ( Vec MaBlk ) bs ( vec_new [MaBlk] )
     : ~ i i0 0
     ~ < i0 IS_DEPTH {
@@ -72,9 +72,8 @@ unsafe @ is_load Lw w GpuKit kit → InfoShare {
         ( vec_push [MaBlk] bs ( maw_block w kit ( string_data p ) IS_EPS IS_DIM IS_SWH ) )
         = i0 + i0 1
     }
-    : ( Vec f ) st ( vec_with_cap [f] IS_DIM )
-    : b _sl ( vec_set_len [f] st IS_DIM )
-    : b _sr ( lw_read w `scale_token` ( vec_data [f] st ) IS_DIM )
+    : ( Vec f ) st ( vec_zeroed [f] IS_DIM )
+    : b _sr ( lw_read w `scale_token` ( slice_from_vec [f] st ) IS_DIM )
     ^ @ InfoShare {
         bs
         ( maw_upload w kit `info_sharing.norm.weight` )

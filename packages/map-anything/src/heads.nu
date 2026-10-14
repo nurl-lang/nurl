@@ -101,7 +101,7 @@ $ `src/load.nu`
 // floats: [tx ty tz | qw? qx? ...] — exactly fc_t then fc_rot, the
 // quaternion normalised; which convention the four are in is the
 // GEOMETRY's business (src/geom.nu), not this head's.
-unsafe @ ph_forward GpuKit kit PoseH p GkBuf fin i voff i np * f out → b {
+@ ph_forward GpuKit kit PoseH p GkBuf fin i voff i np ( Slice f ) out → b {
     : GkBuf patches ( ma_view fin * voff PH_DIM * np PH_DIM )
     : GkBuf a ( gk_dbuf_new kit * np PH_HID GK_F32 )
     : GkBuf t1 ( gk_dbuf_new kit * np PH_HID GK_F32 )
@@ -122,11 +122,10 @@ unsafe @ ph_forward GpuKit kit PoseH p GkBuf fin i voff i np * f out → b {
     }
     // mean over tokens: ones(1/np) · a
     : GkBuf onesb ( gk_dbuf_new kit np GK_F32 )
-    : ( Vec f ) ones ( vec_with_cap [f] np )
-    : b _ol ( vec_set_len [f] ones np )
-    : *f op ( vec_data [f] ones )
+    : ( Vec f ) ones ( vec_zeroed [f] np )
+    : ( Slice f ) op ( slice_from_vec [f] ones )
     : ~ i j 0
-    ~ < j np { = . op j / 1.0 # f np = j + j 1 }
+    ~ < j np { ( slice_put [f] op j / 1.0 # f np ) = j + j 1 }
     ? & ok ( gk_dbuf_upload kit onesb ones ) {} { = ok F }
     : GkBuf pooled ( gk_dbuf_new kit PH_HID GK_F32 )
     : GkBuf nob ( gk_buf_none GK_F32 )
@@ -142,24 +141,23 @@ unsafe @ ph_forward GpuKit kit PoseH p GkBuf fin i voff i np * f out → b {
     : GkBuf rr ( ma_view t1 4 4 )
     ? & ok ( __ph_gemm kit tt pooled . p fct 1 3 PH_HID ) {} { = ok F }
     ? & ok ( __ph_gemm kit rr pooled . p fcr 1 4 PH_HID ) {} { = ok F }
-    : ( Vec f ) hv ( vec_with_cap [f] 8 )
-    : b _hl ( vec_set_len [f] hv 8 )
+    : ( Vec f ) hv ( vec_zeroed [f] 8 )
     ? & ok ( gk_dbuf_download kit ( ma_view t1 0 8 ) hv ) {} { = ok F }
     ? ok {} { ^ F }
-    : *f hp ( vec_data [f] hv )
-    = . out 0 . hp 0
-    = . out 1 . hp 1
-    = . out 2 . hp 2
-    : f q0 . hp 4
-    : f q1 . hp 5
-    : f q2 . hp 6
-    : f q3 . hp 7
+    : ( Slice f ) hp ( slice_from_vec [f] hv )
+    ( slice_put [f] out 0 ( slice_at [f] hp 0 ) )
+    ( slice_put [f] out 1 ( slice_at [f] hp 1 ) )
+    ( slice_put [f] out 2 ( slice_at [f] hp 2 ) )
+    : f q0 ( slice_at [f] hp 4 )
+    : f q1 ( slice_at [f] hp 5 )
+    : f q2 ( slice_at [f] hp 6 )
+    : f q3 ( slice_at [f] hp 7 )
     : ~ f n ( float_sqrt + + + * q0 q0 * q1 q1 * q2 q2 * q3 q3 )
     ? < n 0.00000001 { = n 0.00000001 } {}
-    = . out 3 / q0 n
-    = . out 4 / q1 n
-    = . out 5 / q2 n
-    = . out 6 / q3 n
+    ( slice_put [f] out 3 / q0 n )
+    ( slice_put [f] out 4 / q1 n )
+    ( slice_put [f] out 5 / q2 n )
+    ( slice_put [f] out 6 / q3 n )
     ^ T
 }
 
@@ -184,7 +182,7 @@ unsafe @ ph_forward GpuKit kit PoseH p GkBuf fin i voff i np * f out → b {
 
 // The metric scale from the final scale-token feature (row `row` of the
 // final sequence). Returns exp(x) clipped to ≥ 1e-8, or -1 on error.
-unsafe @ sh_forward GpuKit kit ScaleH s GkBuf fin i row → f {
+@ sh_forward GpuKit kit ScaleH s GkBuf fin i row → f {
     : GkBuf tokrow ( ma_view fin * row PH_DIM PH_DIM )
     : GkBuf h1 ( gk_dbuf_new kit SH_HID GK_F32 )
     : GkBuf h2 ( gk_dbuf_new kit SH_HID GK_F32 )
@@ -195,8 +193,7 @@ unsafe @ sh_forward GpuKit kit ScaleH s GkBuf fin i row → f {
     ? & ok ( __ph_gemm kit h1 h2 . s m1 1 SH_HID SH_HID ) {} { = ok F }
     ? & ok ( gkd_relu kit h1 h1 ) {} { = ok F }
     ? & ok ( __ph_gemm kit ( ma_view h2 0 1 ) h1 . s outp 1 1 SH_HID ) {} { = ok F }
-    : ( Vec f ) hv ( vec_with_cap [f] 1 )
-    : b _hl ( vec_set_len [f] hv 1 )
+    : ( Vec f ) hv ( vec_zeroed [f] 1 )
     ? & ok ( gk_dbuf_download kit ( ma_view h2 0 1 ) hv ) {} { = ok F }
     ? ok {} { ^ -1.0 }
     : f x ?? ( vec_get [f] hv 0 ) { T v → v F → 0.0 }

@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.10.3] — 2026-10-14
+
+### Added
+
+- `gk_dbuf_upload_bytes kit b bytes`: upload from a checked `( Slice u )`
+  (a tensor's bytes in a mapped file) — F unless it holds the buffer's
+  elements; one memcpy to the device, as fast as the raw path.
+
+### Changed
+
+- `gk_dbuf_upload_raw` is `raw`: it reads `n` elements from an address it
+  cannot check, so only an `unsafe` caller may vouch for one. (Every
+  caller already was one: safe code has no `*u` to hand it.)
+
 ## [0.10.2] — 2026-10-14
 
 Requires NURL 0.73.0 (grammar v2.9 `raw`, `slice_window`, `file_is_open`).

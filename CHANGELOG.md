@@ -203,6 +203,12 @@ kernel launch) evaluates through it; its matrix rows are windows and its
 the loops: the same fits take 23% fewer instructions, bit-identical.
 An `ArimaModel` is a `Locked` handle — two threads stepping one model
 through its `Arc` raced.
+`map-anything` (42 → 1: the ONNX sky-mask hand-off) works on checked
+slices throughout, and uploads weights from a checked view of the mapping
+with gpukit's new `gk_dbuf_upload_bytes`; `gk_dbuf_upload_raw` is `raw`.
+`embed` (43 → 2: carving device memory and the batched upload) keeps its
+engine in a `Locked` beside its tokenizer, configuration and status, and
+its server queue is a `Channel`.
 `tokenizer` (1 → 0) owns its map keys; its pre-tokenizers now classify
 characters by Unicode category, as HF's regexes do — every non-ASCII byte
 counted as a letter, and `(§`, `½` or a no-break space split unlike the
@@ -570,6 +576,16 @@ generic that copies its `T` cannot be instantiated with one (h235)
   `$NURL_STDLIB/stdlib`, each recognised by its `core/vec.nu`; h178).
 
 ### Fixed
+
+- **A field that owns something, read out of a call's result, takes the
+  rest of that result with it** (h266). `^ . ( mk ) backend`, `: String
+  b . ( mk ) backend`, `( len . ( mk ) name )` and `@ W { . ( mk ) device
+  }` left the temporary's other fields undropped, and the read itself was
+  taken for a view, so nothing dropped it either (embed's health report
+  leaked through `^ . ( locked_get … ) backend`). The rest — the value
+  with that field emptied — is dropped where it is read, and the field is
+  its reader's exactly when the call handed its result over (a lent one,
+  `. ( arc_get a ) file`, stays a view).
 
 - **A struct that cannot be copied moves out of a struct literal's
   source, and drops when handed to a call as a temporary** (h264, h265).

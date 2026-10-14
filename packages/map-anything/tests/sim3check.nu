@@ -18,7 +18,7 @@ $ `src/geom.nu`
     ? ok {} { = __s3_fails + __s3_fails 1 }
 }
 
-unsafe @ __s3_case f s f ax f ay f az f angle f tx f ty f tz f noise s label → v {
+@ __s3_case f s f ax f ay f az f angle f tx f ty f tz f noise s label → v {
     : i n 500
     // unit axis + quaternion for the ground-truth rotation
     : f al ( float_sqrt + + * ax ax * ay ay * az az )
@@ -27,30 +27,30 @@ unsafe @ __s3_case f s f ax f ay f az f angle f tx f ty f tz f noise s label →
     : f uz / az al
     : f half * angle 0.5
     : f sw ( float_sin half )
-    : ( Vec u ) r__v ( vec_zeroed [u] 72 )
-    : *f r # *f ( vec_data [u] r__v )
+    : ( Vec f ) r__v ( vec_zeroed [f] 9 )
+    : ( Slice f ) r ( slice_from_vec [f] r__v )
     ( gm_quat_to_mat * ux sw * uy sw * uz sw ( float_cos half ) r )
-    : ( Vec u ) xs__v ( vec_zeroed [u] * 24 n )
-    : *f xs # *f ( vec_data [u] xs__v )
-    : ( Vec u ) ys__v ( vec_zeroed [u] * 24 n )
-    : *f ys # *f ( vec_data [u] ys__v )
+    : ( Vec f ) xs__v ( vec_zeroed [f] * 3 n )
+    : ( Slice f ) xs ( slice_from_vec [f] xs__v )
+    : ( Vec f ) ys__v ( vec_zeroed [f] * 3 n )
+    : ( Slice f ) ys ( slice_from_vec [f] ys__v )
     : ~ i j 0
     ~ < j n {
         // a deterministic pseudo-random cloud with real 3-D spread
         : f x0 - / # f % * j 37 251 251.0 0.5
         : f x1 - / # f % * j 73 251 251.0 0.5
         : f x2 - / # f % * j 113 251 251.0 0.5
-        = . xs * j 3 x0
-        = . xs + * j 3 1 x1
-        = . xs + * j 3 2 x2
+        ( slice_put [f] xs * j 3 x0 )
+        ( slice_put [f] xs + * j 3 1 x1 )
+        ( slice_put [f] xs + * j 3 2 x2 )
         : f nz * noise - / # f % * j 151 251 251.0 0.5
-        = . ys * j 3 + + * s + + * . r 0 x0 * . r 1 x1 * . r 2 x2 tx nz
-        = . ys + * j 3 1 + + * s + + * . r 3 x0 * . r 4 x1 * . r 5 x2 ty nz
-        = . ys + * j 3 2 + + * s + + * . r 6 x0 * . r 7 x1 * . r 8 x2 tz nz
+        ( slice_put [f] ys * j 3 + + * s + + * ( slice_at [f] r 0 ) x0 * ( slice_at [f] r 1 ) x1 * ( slice_at [f] r 2 ) x2 tx nz )
+        ( slice_put [f] ys + * j 3 1 + + * s + + * ( slice_at [f] r 3 ) x0 * ( slice_at [f] r 4 ) x1 * ( slice_at [f] r 5 ) x2 ty nz )
+        ( slice_put [f] ys + * j 3 2 + + * s + + * ( slice_at [f] r 6 ) x0 * ( slice_at [f] r 7 ) x1 * ( slice_at [f] r 8 ) x2 tz nz )
         = j + j 1
     }
-    : ( Vec u ) xf__v ( vec_zeroed [u] 104 )
-    : *f xf # *f ( vec_data [u] xf__v )
+    : ( Vec f ) xf__v ( vec_zeroed [f] 13 )
+    : ( Slice f ) xf ( slice_from_vec [f] xf__v )
     : b fitok ( gm_sim3_fit xs ys n xf )
     ( __s3_check fitok label )
     ? fitok {
@@ -61,7 +61,7 @@ unsafe @ __s3_case f s f ax f ay f az f angle f tx f ty f tz f noise s label →
         ~ < j n {
             : ~ i c 0
             ~ < c 3 {
-                : f d ( float_abs - . xs + * j 3 c . ys + * j 3 c )
+                : f d ( float_abs - ( slice_at [f] xs + * j 3 c ) ( slice_at [f] ys + * j 3 c ) )
                 ? > d worst { = worst d } {}
                 = c + c 1
             }
