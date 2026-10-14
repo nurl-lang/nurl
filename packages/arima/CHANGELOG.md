@@ -1,13 +1,30 @@
 # Changelog
 
-## [0.5.5] — 2026-10-14
+## [0.6.0] — 2026-10-14
 
-Requires NURL 0.73.0 (`slice_at`, `slice_put`, `rc_take`, `locked_take`).
+Requires NURL 0.73.0 with `stdlib/std/par.nu` (`par_map_index`).
 
 ### Changed
 
-- Loops that read or wrote through `vec_data` pointers index slices (`slice_at` / `slice_put`, as fast as the pointers), and functions with nothing raw in them are no longer marked `unsafe`.
-- 20 fewer functions are `unsafe` than in 0.5.4 (81 left).
+- No function is `unsafe` but the GPU evaluator, which launches this
+  package's own kernel (101 were in 0.5.4). The Kalman filter, the
+  likelihoods, the polynomial algebra and the BFGS machine index slices;
+  a matrix row is a window of its own and a loop over `a[i+1]` reads a
+  window that starts at 1, so the loop bound proves every index. The
+  same fits are 23% fewer instructions than 0.5.4 (the ARMA filter 39%),
+  with bit-identical estimates.
+- The objective evaluations of a batch run through `par_map_index`
+  (stdlib/std/par.nu): the jobs carry the series in an `Arc` and their
+  own copy of the point, and the answers come back by index — the worker
+  threads were handed raw addresses of the batch's slots. `ArimaCtx.w`
+  is an `( Arc ( Vec f ) )`.
+- An `ArimaModel` is a `Locked` handle (it was an `Arc` changed in place
+  by `arima_update`, so two threads stepping one model raced); every
+  call checks the state out and back in. `arima_se`, `arima_phi` and the
+  other vector accessors return a copy rather than a view of the state.
+- The BFGS state is a value the fit owns, the multi-series fit keeps its
+  per-series state in a Vec it checks out by index, and the model is
+  built as one value instead of field by field into zeroed memory.
 - Requires gpu 0.17 (its handle structs are sealed and its address-taking functions `raw`); nothing here changed.
 
 ## [0.5.4] — 2026-10-12

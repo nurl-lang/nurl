@@ -14,7 +14,7 @@ gpukit = { path = "../gpukit", version = "^0.10" }
 mlp = { path = "../mlp", version = "^0.3.8" }
 oauth = { path = "../oauth", version = "^0.2" }
 http-client = { path = "../http-client", version = "^0.3" }
-arima = { path = "../arima", version = "^0.5" }
+arima = { path = "../arima", version = "^0.6" }
 
 # Runtime data staged into $NURL_HOME/share/anomaly/ on `nurlpkg install`.
 # The `serve` dashboard resolves its web root as <exe-dir>/../share/anomaly/static,

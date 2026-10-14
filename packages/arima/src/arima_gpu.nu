@@ -183,17 +183,14 @@ unsafe @ arima_eval_gpu GpuKit kit ( Vec ArimaEvalItem ) items ( Vec ArimaCtx ) 
         ?? ( vec_get [ArimaCtx] ctxs c ) {
             T cx → {
                 ( vec_push [i] woff ( vec_len [f] series ) )
-                : i n ( vec_len [f] . cx w )
-                : *f pw ( vec_data [f] . cx w )
-                : ~ i t 0
-                ~ < t n { ( vec_push [f] series . pw t ) = t + t 1 }
+                ( vec_extend [f] series ( arc_get [( Vec f )] . cx w ) )
             }
             F _ → {}
         }
         = c + c 1
     }
     : i m ( vec_len [ArimaEvalItem] items )
-    : *f pout ( vec_data [f] out )
+    : ( Slice f ) pout ( slice_from_vec [f] out )
     // Every item's state-space form, prepared on the pool: the transform,
     // the expansion and the start of the stationary covariance are the
     // host's part.
@@ -206,7 +203,7 @@ unsafe @ arima_eval_gpu GpuKit kit ( Vec ArimaEvalItem ) items ( Vec ArimaCtx ) 
                 ?? ( vec_get [ArimaCtx] ctxs . it ctx ) {
                     T cx → {
                         : i kind ? == . cx method ARIMA_ML ? == . it kind 1 3 2 ? == . it kind 1 5 4
-                        ( vec_push [ArimaJob] pjobs ( _ar_job . cx sp . cx w . cx method . cx ncond . it raw out k kind ) )
+                        ( vec_push [ArimaJob] pjobs ( _ar_job . cx sp . cx w . cx method . cx ncond . it raw kind ) )
                         : ArimaSpec csp . cx sp
                         : i pf + . csp p * . csp s . csp P
                         : i qf + . csp q * . csp s . csp Q
@@ -222,7 +219,7 @@ unsafe @ arima_eval_gpu GpuKit kit ( Vec ArimaEvalItem ) items ( Vec ArimaCtx ) 
         }
         = k + k 1
     }
-    ( _ar_jobs_run pjobs > * big m 2000000 )
+    : ( Vec ArimaPrep ) preps ( _ar_jobs_prep pjobs > * big m 2000000 )
     // ML items
     : ( Vec i ) ml_idx ( vec_new [i] )
     : ( Vec i ) meta ( vec_new [i] )
@@ -243,9 +240,8 @@ unsafe @ arima_eval_gpu GpuKit kit ( Vec ArimaEvalItem ) items ( Vec ArimaCtx ) 
             T it → {
                 ?? ( vec_get [ArimaCtx] ctxs . it ctx ) {
                     T cx → {
-                        : *ArimaJob pj ( _ar_job_at # i ( vec_data [ArimaJob] pjobs ) k )
-                        : *ArimaPrep pr # *ArimaPrep ( box_ptr [ArimaPrep] . pj prep )
-                        : i n ( vec_len [f] . cx w )
+                        : ArimaPrep pr ( vec_at [ArimaPrep] preps k )
+                        : i n ( vec_len [f] ( arc_get [( Vec f )] . cx w ) )
                         : i wo ( _ar_geti woff . it ctx )
                         ? == . cx method ARIMA_ML {
                             ? . pr ok {
@@ -254,19 +250,13 @@ unsafe @ arima_eval_gpu GpuKit kit ( Vec ArimaEvalItem ) items ( Vec ArimaCtx ) 
                                 ( vec_push [i] meta wo ) ( vec_push [i] meta n ) ( vec_push [i] meta r )
                                 ( vec_push [i] meta f_total ) ( vec_push [i] meta 0 )
                                 ( vec_push [i] meta ( vec_len [f] polys ) ) ( vec_push [i] meta ( vec_len [f] p0s ) ) ( vec_push [i] meta 0 )
-                                : *f pphi ( vec_data [f] . pr phi )
-                                : *f pth ( vec_data [f] . pr theta )
-                                : *f ppm ( vec_data [f] . pr p0 )
-                                : ~ i q 0
-                                ~ < q r { ( vec_push [f] polys . pphi q ) = q + q 1 }
-                                = q 0
-                                ~ < q r { ( vec_push [f] polys . pth q ) = q + q 1 }
-                                = q 0
-                                ~ < q r { ( vec_push [f] p0s . ppm q ) = q + q 1 }
+                                ( vec_extend_range [f] polys . pr phi 0 r )
+                                ( vec_extend_range [f] polys . pr theta 0 r )
+                                ( vec_extend_range [f] p0s . pr p0 0 r )
                                 ( vec_push [f] mus . pr mu )
                                 = f_total + f_total n
                                 ? > r rmax { = rmax r } {}
-                            } { = . pout k 1000000000000.0 }
+                            } { ( slice_put [f] pout k 1000000000000.0 ) }
                         } {
                             : i pf ( vec_len [f] . pr ar )
                             : i qf ( vec_len [f] . pr ma )
@@ -275,18 +265,12 @@ unsafe @ arima_eval_gpu GpuKit kit ( Vec ArimaEvalItem ) items ( Vec ArimaCtx ) 
                                 ( vec_push [i] cmeta wo ) ( vec_push [i] cmeta n ) ( vec_push [i] cmeta pf )
                                 ( vec_push [i] cmeta . cx ncond ) ( vec_push [i] cmeta cs_total )
                                 ( vec_push [i] cmeta ( vec_len [f] cpolys ) ) ( vec_push [i] cmeta 0 ) ( vec_push [i] cmeta qf )
-                                : *f par ( vec_data [f] . pr ar )
-                                : *f pma ( vec_data [f] . pr ma )
-                                : ~ i q 0
-                                ~ < q pf { ( vec_push [f] cpolys . par q ) = q + q 1 }
-                                = q 0
-                                ~ < q qf { ( vec_push [f] cpolys . pma q ) = q + q 1 }
+                                ( vec_extend_range [f] cpolys . pr ar 0 pf )
+                                ( vec_extend_range [f] cpolys . pr ma 0 qf )
                                 ( vec_push [f] cmus . pr mu )
                                 = cs_total + cs_total n
-                            } { = . pout k 1000000000000.0 }
+                            } { ( slice_put [f] pout k 1000000000000.0 ) }
                         }
-                        // read: let it go now rather than with the batch
-                        = . pj prep ( box_null [ArimaPrep] )
                     }
                     F _ → {}
                 }
@@ -297,9 +281,9 @@ unsafe @ arima_eval_gpu GpuKit kit ( Vec ArimaEvalItem ) items ( Vec ArimaCtx ) 
     }
     : i nml ( vec_len [i] ml_idx )
     ? > nml 0 {
-        : *i pm4 ( vec_data [i] meta )
+        : ( Slice i ) pm4 ( slice_from_vec [i] meta )
         : ~ i q4 0
-        ~ < q4 nml { = . pm4 + * q4 8 4 rmax = q4 + q4 1 }
+        ~ < q4 nml { ( slice_put [i] pm4 + * q4 8 4 rmax ) = q4 + q4 1 }
         : ( Vec f ) scratch ( vec_zeroed [f] * * 4 rmax nml )
         : ( Vec f ) ssq ( vec_zeroed [f] nml )
         : ( Vec f ) fout ( vec_zeroed [f] f_total )
@@ -318,24 +302,24 @@ unsafe @ arima_eval_gpu GpuKit kit ( Vec ArimaEvalItem ) items ( Vec ArimaCtx ) 
         : i t_r0 ( now_ms )
         : b ran ( gk_run kit ( _ag_kernel_src ) `arima_ml` ( gk_grid nml 64 ) 64 call )
         = g_ag_t_run + g_ag_t_run - ( now_ms ) t_r0
-        : *f pssq ( vec_data [f] ssq )
-        : *f pf ( vec_data [f] fout )
-        : *i pmeta ( vec_data [i] meta )
-        : *i pok ( vec_data [i] okv )
+        : ( Slice f ) pssq ( slice_from_vec [f] ssq )
+        : ( Slice f ) pf ( slice_from_vec [f] fout )
+        : ( Slice i ) pmeta ( slice_from_vec [i] meta )
+        : ( Slice i ) pok ( slice_from_vec [i] okv )
         : ~ i q 0
         ~ < q nml {
             : i k2 ( _ar_geti ml_idx q )
-            : i n . pmeta + * q 8 1
-            : i foff . pmeta + * q 8 3
+            : i n ( slice_at [i] pmeta + * q 8 1 )
+            : i foff ( slice_at [i] pmeta + * q 8 3 )
             : ~ f val 1000000000000.0
-            ? & ran != . pok q 0 {
+            ? & ran != ( slice_at [i] pok q ) 0 {
                 : ~ f sumlog 0.0
                 : ~ i t 0
-                ~ < t n { = sumlog + sumlog ( float_log . pf + foff t ) = t + t 1 }
-                : ArimaLik lk ( _ar_lik_ml_from . pssq q sumlog n )
+                ~ < t n { = sumlog + sumlog ( float_log ( slice_at [f] pf + foff t ) ) = t + t 1 }
+                : ArimaLik lk ( _ar_lik_ml_from ( slice_at [f] pssq q ) sumlog n )
                 ? . lk ok { = val - 0.0 . lk loglik } {}
             } {}
-            = . pout k2 val
+            ( slice_put [f] pout k2 val )
             = q + q 1
         }
         = g_ag_t_post + g_ag_t_post - ( now_ms ) + t_r0 - ( now_ms ) t_r0
@@ -353,21 +337,21 @@ unsafe @ arima_eval_gpu GpuKit kit ( Vec ArimaEvalItem ) items ( Vec ArimaCtx ) 
         ( vec_push [GkArg] call ( gk_out_f ssq ) )
         ( vec_push [GkArg] call ( gk_i64 ncss ) )
         : b ran ( gk_run kit ( _ag_kernel_src ) `arima_css` ( gk_grid ncss 64 ) 64 call )
-        : *f pssq ( vec_data [f] ssq )
-        : *i pmeta ( vec_data [i] cmeta )
+        : ( Slice f ) pssq ( slice_from_vec [f] ssq )
+        : ( Slice i ) pmeta ( slice_from_vec [i] cmeta )
         : ~ i q 0
         ~ < q ncss {
             : i k2 ( _ar_geti css_idx q )
-            : i n . pmeta + * q 8 1
-            : i pfc . pmeta + * q 8 2
-            : i ncq . pmeta + * q 8 3
+            : i n ( slice_at [i] pmeta + * q 8 1 )
+            : i pfc ( slice_at [i] pmeta + * q 8 2 )
+            : i ncq ( slice_at [i] pmeta + * q 8 3 )
             : i nc ? > ncq pfc ncq pfc
             : ~ f val 1000000000000.0
             ? ran {
-                : ArimaLik lk ( _ar_lik_css_from . pssq q - n nc )
+                : ArimaLik lk ( _ar_lik_css_from ( slice_at [f] pssq q ) - n nc )
                 ? . lk ok { = val - 0.0 . lk loglik } {}
             } {}
-            = . pout k2 val
+            ( slice_put [f] pout k2 val )
             = q + q 1
         }
     } {}

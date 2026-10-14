@@ -61,6 +61,7 @@ $ `stdlib/std/thread.nu`
 $ `stdlib/std/sysinfo.nu`
 $ `stdlib/ext/json.nu`
 $ `stdlib/std/arc.nu`
+$ `stdlib/std/par.nu`
 
 : i ARIMA_CSS 0
 : i ARIMA_ML 1
@@ -116,13 +117,13 @@ $ `stdlib/std/arc.nu`
 
 // ── Small vector helpers ──────────────────────────────────────────────
 
-unsafe @ __ar_vec_copy ( Vec f ) src → ( Vec f ) {
+@ __ar_vec_copy ( Vec f ) src → ( Vec f ) {
     : i n ( vec_len [f] src )
     : ( Vec f ) out ( vec_zeroed [f] n )
-    : *f s ( vec_data [f] src )
-    : *f o ( vec_data [f] out )
+    : ( Slice f ) s ( slice_from_vec [f] src )
+    : ( Slice f ) o ( slice_from_vec [f] out )
     : ~ i k 0
-    ~ < k n { = . o k . s k = k + k 1 }
+    ~ < k n { ( slice_put [f] o k ( slice_at [f] s k ) ) = k + k 1 }
     ^ out
 }
 
@@ -156,22 +157,22 @@ unsafe @ __ar_vec_copy ( Vec f ) src → ( Vec f ) {
 
 // Polynomial product: (1 + Σ a_i B^i)(1 + Σ b_j B^j) → the coefficients
 // beyond the leading 1, length len(a) + len(b).
-unsafe @ __ar_poly_mul ( Vec f ) a ( Vec f ) b → ( Vec f ) {
+@ __ar_poly_mul ( Vec f ) a ( Vec f ) b → ( Vec f ) {
     : i na ( vec_len [f] a )
     : i nb ( vec_len [f] b )
     : ( Vec f ) out ( vec_zeroed [f] + na nb )
-    : *f o ( vec_data [f] out )
-    : *f pa ( vec_data [f] a )
-    : *f pb ( vec_data [f] b )
+    : ( Slice f ) o ( slice_from_vec [f] out )
+    : ( Slice f ) pa ( slice_from_vec [f] a )
+    : ( Slice f ) pb ( slice_from_vec [f] b )
     : ~ i i 0
-    ~ < i na { = . o i + . o i . pa i = i + i 1 }
+    ~ < i na { ( slice_put [f] o i + ( slice_at [f] o i ) ( slice_at [f] pa i ) ) = i + i 1 }
     : ~ i j 0
     ~ < j nb {
-        = . o j + . o j . pb j
+        ( slice_put [f] o j + ( slice_at [f] o j ) ( slice_at [f] pb j ) )
         = i 0
         ~ < i na {
             : i k + + i j 1
-            = . o k + . o k * . pa i . pb j
+            ( slice_put [f] o k + ( slice_at [f] o k ) * ( slice_at [f] pa i ) ( slice_at [f] pb j ) )
             = i + i 1
         }
         = j + j 1
@@ -195,23 +196,23 @@ unsafe @ __ar_poly_mul ( Vec f ) a ( Vec f ) b → ( Vec f ) {
 
 // The AR side as "1 − Σ φ B^k" coefficients: φ(B)Φ(B^s) expanded, the
 // signs such that the result is the φ_k of the expanded polynomial.
-unsafe @ _ar_expand_ar ( Vec f ) phi ( Vec f ) sphi i s → ( Vec f ) {
+@ _ar_expand_ar ( Vec f ) phi ( Vec f ) sphi i s → ( Vec f ) {
     // Work with the "1 + a B" convention: a = −φ.
     : ( Vec f ) a ( __ar_vec_copy phi )
     : ( Vec f ) b ( __ar_seasonal_spread sphi s )
     : i na ( vec_len [f] a )
-    : *f pa ( vec_data [f] a )
+    : ( Slice f ) pa ( slice_from_vec [f] a )
     : ~ i k 0
-    ~ < k na { = . pa k - 0.0 . pa k = k + k 1 }
+    ~ < k na { ( slice_put [f] pa k - 0.0 ( slice_at [f] pa k ) ) = k + k 1 }
     : i nb ( vec_len [f] b )
-    : *f pb ( vec_data [f] b )
+    : ( Slice f ) pb ( slice_from_vec [f] b )
     = k 0
-    ~ < k nb { = . pb k - 0.0 . pb k = k + k 1 }
+    ~ < k nb { ( slice_put [f] pb k - 0.0 ( slice_at [f] pb k ) ) = k + k 1 }
     : ( Vec f ) prod ( __ar_poly_mul a b )
     : i np ( vec_len [f] prod )
-    : *f pp ( vec_data [f] prod )
+    : ( Slice f ) pp ( slice_from_vec [f] prod )
     = k 0
-    ~ < k np { = . pp k - 0.0 . pp k = k + k 1 }
+    ~ < k np { ( slice_put [f] pp k - 0.0 ( slice_at [f] pp k ) ) = k + k 1 }
     ^ prod
 }
 
@@ -224,7 +225,7 @@ unsafe @ _ar_expand_ar ( Vec f ) phi ( Vec f ) sphi i s → ( Vec f ) {
 
 // The differencing polynomial (1 − B)^d (1 − B^s)^D as "1 − Σ δ_k B^k":
 // returns δ (length d + s·D), so that y_t = w_t + Σ δ_k y_{t−k}.
-unsafe @ _ar_delta i d i D i s → ( Vec f ) {
+@ _ar_delta i d i D i s → ( Vec f ) {
     : ~ ( Vec f ) poly ( vec_new [f] )  // "1 + Σ c B^k" convention
     : ~ i k 0
     ~ < k d {
@@ -243,23 +244,23 @@ unsafe @ _ar_delta i d i D i s → ( Vec f ) {
         = k + k 1
     }
     : i n ( vec_len [f] poly )
-    : *f pp ( vec_data [f] poly )
+    : ( Slice f ) pp ( slice_from_vec [f] poly )
     = k 0
-    ~ < k n { = . pp k - 0.0 . pp k = k + k 1 }
+    ~ < k n { ( slice_put [f] pp k - 0.0 ( slice_at [f] pp k ) ) = k + k 1 }
     ^ poly
 }
 
 // Δ^d Δ_s^D y: the first d + s·D values are consumed.
-unsafe @ arima_difference ( Vec f ) y i d i D i s → ( Vec f ) {
+@ arima_difference ( Vec f ) y i d i D i s → ( Vec f ) {
     : ~ ( Vec f ) cur ( __ar_vec_copy y )
     : ~ i k 0
     ~ < k d {
         : i n ( vec_len [f] cur )
         : ( Vec f ) nxt ( vec_zeroed [f] ? > n 1 - n 1 0 )
-        : *f c ( vec_data [f] cur )
-        : *f o ( vec_data [f] nxt )
+        : ( Slice f ) c ( slice_from_vec [f] cur )
+        : ( Slice f ) o ( slice_from_vec [f] nxt )
         : ~ i t 1
-        ~ < t n { = . o - t 1 - . c t . c - t 1 = t + t 1 }
+        ~ < t n { ( slice_put [f] o - t 1 - ( slice_at [f] c t ) ( slice_at [f] c - t 1 ) ) = t + t 1 }
         = cur nxt
         = k + k 1
     }
@@ -267,10 +268,10 @@ unsafe @ arima_difference ( Vec f ) y i d i D i s → ( Vec f ) {
     ~ < k D {
         : i n ( vec_len [f] cur )
         : ( Vec f ) nxt ( vec_zeroed [f] ? > n s - n s 0 )
-        : *f c ( vec_data [f] cur )
-        : *f o ( vec_data [f] nxt )
+        : ( Slice f ) c ( slice_from_vec [f] cur )
+        : ( Slice f ) o ( slice_from_vec [f] nxt )
         : ~ i t s
-        ~ < t n { = . o - t s - . c t . c - t s = t + t 1 }
+        ~ < t n { ( slice_put [f] o - t s - ( slice_at [f] c t ) ( slice_at [f] c - t s ) ) = t + t 1 }
         = cur nxt
         = k + k 1
     }
@@ -284,30 +285,30 @@ unsafe @ arima_difference ( Vec f ) y i d i D i s → ( Vec f ) {
 // image is a stationary polynomial. The inverse recovers the raw values
 // from a stationary polynomial; a non-stationary one has no preimage.
 
-unsafe @ _ar_partrans ( Vec f ) raw i off i n → ( Vec f ) {
+@ _ar_partrans ( Vec f ) raw i off i n → ( Vec f ) {
     : ( Vec f ) out ( vec_zeroed [f] n )
     ? == n 0 { ^ out } {}
     : ( Vec f ) work ( vec_zeroed [f] n )
-    : *f o ( vec_data [f] out )
-    : *f w ( vec_data [f] work )
-    : *f r ( vec_data [f] raw )
+    : ( Slice f ) o ( slice_from_vec [f] out )
+    : ( Slice f ) w ( slice_from_vec [f] work )
+    : ( Slice f ) r ( slice_from_vec [f] raw )
     : ~ i j 0
     ~ < j n {
-        : f x . r + off j
+        : f x ( slice_at [f] r + off j )
         // tanh, without a libm call the GPU could not match.
         : f e ( float_exp * 2.0 x )
         : f t ? ( float_is_inf e ) 1.0 / - e 1.0 + e 1.0
-        = . o j t
-        = . w j t
+        ( slice_put [f] o j t )
+        ( slice_put [f] w j t )
         = j + j 1
     }
     = j 1
     ~ < j n {
-        : f a . o j
+        : f a ( slice_at [f] o j )
         : ~ i k 0
-        ~ < k j { = . w k - . w k * a . o - - j k 1 = k + k 1 }
+        ~ < k j { ( slice_put [f] w k - ( slice_at [f] w k ) * a ( slice_at [f] o - - j k 1 ) ) = k + k 1 }
         = k 0
-        ~ < k j { = . o k . w k = k + k 1 }
+        ~ < k j { ( slice_put [f] o k ( slice_at [f] w k ) ) = k + k 1 }
         = j + j 1
     }
     ^ out
@@ -315,32 +316,32 @@ unsafe @ _ar_partrans ( Vec f ) raw i off i n → ( Vec f ) {
 
 // Inverse: AR coefficients → raw. Returns F when the polynomial is not
 // stationary (a partial autocorrelation reaches 1 in magnitude).
-unsafe @ _ar_invpartrans ( Vec f ) phi ( Vec f ) raw i off → b {
+@ _ar_invpartrans ( Vec f ) phi ( Vec f ) raw i off → b {
     : i n ( vec_len [f] phi )
     ? == n 0 { ^ T } {}
     : ( Vec f ) nw ( __ar_vec_copy phi )
     : ( Vec f ) work ( __ar_vec_copy phi )
-    : *f nu ( vec_data [f] nw )
-    : *f w ( vec_data [f] work )
-    : *f r ( vec_data [f] raw )
+    : ( Slice f ) nu ( slice_from_vec [f] nw )
+    : ( Slice f ) w ( slice_from_vec [f] work )
+    : ( Slice f ) r ( slice_from_vec [f] raw )
     : ~ b ok T
     : ~ i j - n 1
     ~ & ok > j 0 {
-        : f a . nu j
+        : f a ( slice_at [f] nu j )
         ? >= ( float_abs a ) 1.0 { = ok F } {
             : ~ i k 0
-            ~ < k j { = . w k / + . nu k * a . nu - - j k 1 - 1.0 * a a = k + k 1 }
+            ~ < k j { ( slice_put [f] w k / + ( slice_at [f] nu k ) * a ( slice_at [f] nu - - j k 1 ) - 1.0 * a a ) = k + k 1 }
             = k 0
-            ~ < k j { = . nu k . w k = k + k 1 }
+            ~ < k j { ( slice_put [f] nu k ( slice_at [f] w k ) ) = k + k 1 }
         }
         = j - j 1
     }
     ? ok {
         = j 0
         ~ & ok < j n {
-            : f x . nu j
+            : f x ( slice_at [f] nu j )
             ? >= ( float_abs x ) 1.0 { = ok F } {
-                = . r + off j * 0.5 ( float_log / + 1.0 x - 1.0 x )
+                ( slice_put [f] r + off j * 0.5 ( float_log / + 1.0 x - 1.0 x ) )
             }
             = j + j 1
         }
@@ -370,21 +371,21 @@ unsafe @ _ar_invpartrans ( Vec f ) phi ( Vec f ) raw i off → b {
 }
 
 // Raw (transformed) vector → coefficients. Layout: φ, θ, Φ, Θ, μ.
-unsafe @ _ar_coef_of_raw ArimaSpec sp ( Vec f ) raw → ArimaCoef {
+@ _ar_coef_of_raw ArimaSpec sp ( Vec f ) raw → ArimaCoef {
     : ~ i off 0
     : ( Vec f ) phi ( _ar_partrans raw off . sp p )
     = off + off . sp p
     : ( Vec f ) th ( _ar_partrans raw off . sp q )
-    : *f pt ( vec_data [f] th )
+    : ( Slice f ) pt ( slice_from_vec [f] th )
     : ~ i k 0
-    ~ < k . sp q { = . pt k - 0.0 . pt k = k + k 1 }
+    ~ < k . sp q { ( slice_put [f] pt k - 0.0 ( slice_at [f] pt k ) ) = k + k 1 }
     = off + off . sp q
     : ( Vec f ) sphi ( _ar_partrans raw off . sp P )
     = off + off . sp P
     : ( Vec f ) sth ( _ar_partrans raw off . sp Q )
-    : *f ps ( vec_data [f] sth )
+    : ( Slice f ) ps ( slice_from_vec [f] sth )
     = k 0
-    ~ < k . sp Q { = . ps k - 0.0 . ps k = k + k 1 }
+    ~ < k . sp Q { ( slice_put [f] ps k - 0.0 ( slice_at [f] ps k ) ) = k + k 1 }
     = off + off . sp Q
     : f mu ? . sp mean ( _ar_at raw off ) 0.0
     ^ @ ArimaCoef { phi th sphi sth mu }
@@ -396,23 +397,23 @@ unsafe @ _ar_coef_of_raw ArimaSpec sp ( Vec f ) raw → ArimaCoef {
 
 // Coefficients → raw vector; F when a polynomial is outside its region
 // (then `raw` is left as it was for that polynomial).
-unsafe @ __ar_raw_of_coef ArimaSpec sp ArimaCoef c ( Vec f ) raw → b {
+@ __ar_raw_of_coef ArimaSpec sp ArimaCoef c ( Vec f ) raw → b {
     : ~ b ok T
     : ~ i off 0
     ? ( _ar_invpartrans . c phi raw off ) {} { = ok F }
     = off + off . sp p
     : ( Vec f ) nth ( __ar_vec_copy . c theta )
-    : *f pt ( vec_data [f] nth )
+    : ( Slice f ) pt ( slice_from_vec [f] nth )
     : ~ i k 0
-    ~ < k . sp q { = . pt k - 0.0 . pt k = k + k 1 }
+    ~ < k . sp q { ( slice_put [f] pt k - 0.0 ( slice_at [f] pt k ) ) = k + k 1 }
     ? ( _ar_invpartrans nth raw off ) {} { = ok F }
     = off + off . sp q
     ? ( _ar_invpartrans . c sphi raw off ) {} { = ok F }
     = off + off . sp P
     : ( Vec f ) nst ( __ar_vec_copy . c stheta )
-    : *f ps ( vec_data [f] nst )
+    : ( Slice f ) ps ( slice_from_vec [f] nst )
     = k 0
-    ~ < k . sp Q { = . ps k - 0.0 . ps k = k + k 1 }
+    ~ < k . sp Q { ( slice_put [f] ps k - 0.0 ( slice_at [f] ps k ) ) = k + k 1 }
     ? ( _ar_invpartrans nst raw off ) {} { = ok F }
     = off + off . sp Q
     ? . sp mean { ( vec_set [f] raw off . c mu ) } {}
@@ -480,115 +481,134 @@ unsafe @ __ar_raw_of_coef ArimaSpec sp ArimaCoef c ( Vec f ) raw → b {
 // out = T · X for a square X (rd × rd), T the transition matrix by its
 // structure: rows < r are the companion (φ_{i+1} x_0 + x_{i+1}), row r is
 // Z (the observation row), rows beyond shift the differencing states.
-unsafe @ __ar_tmul ArimaSS ss ( Vec f ) x ( Vec f ) out → v {
+@ __ar_tmul ArimaSS ss ( Vec f ) x ( Vec f ) out → v {
     : i r . ss r
     : i rd . ss rd
     : i nd . ss nd
-    : *f X ( vec_data [f] x )
-    : *f O ( vec_data [f] out )
-    : *f phi ( vec_data [f] . ss phi )
-    : *f dl ( vec_data [f] . ss delta )
+    // Rows as windows of rd: a loop over a row's columns is checked once.
+    : ( Slice f ) X ( slice_from_vec [f] x )
+    : ( Slice f ) O ( slice_from_vec [f] out )
+    : ( Slice f ) phi ( slice_prefix [f] ( slice_from_vec [f] . ss phi ) r )
+    : ( Slice f ) dl ( slice_prefix [f] ( slice_from_vec [f] . ss delta ) nd )
+    : ( Slice f ) X0 ( slice_window [f] X 0 rd )
     : ~ i i 0
     ~ < i r {
+        : ( Slice f ) Or ( slice_window [f] O * i rd rd )
+        : f ph ( slice_at [f] phi i )
         : ~ i j 0
-        ~ < j rd {
-            : ~ f v * . phi i . X j
-            ? < + i 1 r { = v + v . X + * + i 1 rd j } {}
-            = . O + * i rd j v
-            = j + j 1
+        ? < + i 1 r {
+            : ( Slice f ) Xn ( slice_window [f] X * + i 1 rd rd )
+            ~ < j rd { ( slice_put [f] Or j + * ph ( slice_at [f] X0 j ) ( slice_at [f] Xn j ) ) = j + j 1 }
+        } {
+            ~ < j rd { ( slice_put [f] Or j * ph ( slice_at [f] X0 j ) ) = j + j 1 }
         }
         = i + i 1
     }
     ? > nd 0 {
+        // row r: Z X, accumulated over the differencing rows in order
+        : ( Slice f ) Or ( slice_window [f] O * r rd rd )
         : ~ i j 0
-        ~ < j rd {
-            : ~ f v . X j
-            : ~ i k 0
-            ~ < k nd { = v + v * . dl k . X + * + r k rd j = k + k 1 }
-            = . O + * r rd j v
-            = j + j 1
+        ~ < j rd { ( slice_put [f] Or j ( slice_at [f] X0 j ) ) = j + j 1 }
+        : ~ i k 0
+        ~ < k nd {
+            : f dk ( slice_at [f] dl k )
+            : ( Slice f ) Xk ( slice_window [f] X * + r k rd rd )
+            = j 0
+            ~ < j rd { ( slice_put [f] Or j + ( slice_at [f] Or j ) * dk ( slice_at [f] Xk j ) ) = j + j 1 }
+            = k + k 1
         }
         = i + r 1
         ~ < i rd {
+            : ( Slice f ) Oi ( slice_window [f] O * i rd rd )
+            : ( Slice f ) Xp ( slice_window [f] X * - i 1 rd rd )
             = j 0
-            ~ < j rd { = . O + * i rd j . X + * - i 1 rd j = j + j 1 }
+            ~ < j rd { ( slice_put [f] Oi j ( slice_at [f] Xp j ) ) = j + j 1 }
             = i + i 1
         }
     } {}
 }
 
 // out = M · Tᵀ: the same structure applied on the right.
-unsafe @ __ar_tmul_right ArimaSS ss ( Vec f ) m ( Vec f ) out → v {
+@ __ar_tmul_right ArimaSS ss ( Vec f ) m ( Vec f ) out → v {
     : i r . ss r
     : i rd . ss rd
     : i nd . ss nd
-    : *f M ( vec_data [f] m )
-    : *f O ( vec_data [f] out )
-    : *f phi ( vec_data [f] . ss phi )
-    : *f dl ( vec_data [f] . ss delta )
+    : ( Slice f ) M ( slice_from_vec [f] m )
+    : ( Slice f ) O ( slice_from_vec [f] out )
+    : ( Slice f ) phi ( slice_prefix [f] ( slice_from_vec [f] . ss phi ) r )
+    : ( Slice f ) dl ( slice_prefix [f] ( slice_from_vec [f] . ss delta ) nd )
     : ~ i i 0
     ~ < i rd {
-        : i row * i rd
+        : ( Slice f ) Mr ( slice_window [f] M * i rd rd )
+        : ( Slice f ) Or ( slice_window [f] O * i rd rd )
+        : ( Slice f ) Ma ( slice_prefix [f] Mr r )
+        : f m0 ( slice_at [f] Mr 0 )
         : ~ i j 0
         ~ < j r {
-            : ~ f v * . phi j . M row
-            ? < + j 1 r { = v + v . M + row + j 1 } {}
-            = . O + row j v
+            : ~ f v * ( slice_at [f] phi j ) m0
+            ? < + j 1 r { = v + v ( slice_at [f] Ma + j 1 ) } {}
+            ( slice_put [f] Or j v )
             = j + j 1
         }
         ? > nd 0 {
-            : ~ f v . M row
+            : ( Slice f ) Md ( slice_window [f] Mr r nd )
+            : ~ f v m0
             : ~ i k 0
-            ~ < k nd { = v + v * . dl k . M + row + r k = k + k 1 }
-            = . O + row r v
+            ~ < k nd { = v + v * ( slice_at [f] dl k ) ( slice_at [f] Md k ) = k + k 1 }
+            ( slice_put [f] Or r v )
             = j + r 1
-            ~ < j rd { = . O + row j . M + row - j 1 = j + j 1 }
+            ~ < j rd { ( slice_put [f] Or j ( slice_at [f] Mr - j 1 ) ) = j + j 1 }
         } {}
         = i + i 1
     }
 }
 
 // a ← T a.
-unsafe @ __ar_tvec ArimaSS ss → v {
+@ __ar_tvec ArimaSS ss → v {
     : i r . ss r
     : i rd . ss rd
     : i nd . ss nd
-    : *f A ( vec_data [f] . ss a )
-    : *f O ( vec_data [f] . ss pz )
-    : *f phi ( vec_data [f] . ss phi )
-    : *f dl ( vec_data [f] . ss delta )
+    : ( Slice f ) A ( slice_prefix [f] ( slice_from_vec [f] . ss a ) rd )
+    : ( Slice f ) O ( slice_prefix [f] ( slice_from_vec [f] . ss pz ) rd )
+    : ( Slice f ) phi ( slice_prefix [f] ( slice_from_vec [f] . ss phi ) r )
+    : ( Slice f ) dl ( slice_prefix [f] ( slice_from_vec [f] . ss delta ) nd )
+    : ( Slice f ) Ar ( slice_prefix [f] A r )
+    : f a0 ( slice_at [f] A 0 )
     : ~ i i 0
     ~ < i r {
-        : ~ f v * . phi i . A 0
-        ? < + i 1 r { = v + v . A + i 1 } {}
-        = . O i v
+        : ~ f v * ( slice_at [f] phi i ) a0
+        ? < + i 1 r { = v + v ( slice_at [f] Ar + i 1 ) } {}
+        ( slice_put [f] O i v )
         = i + i 1
     }
     ? > nd 0 {
-        : ~ f v . A 0
+        : ( Slice f ) Ad ( slice_window [f] A r nd )
+        : ~ f v a0
         : ~ i k 0
-        ~ < k nd { = v + v * . dl k . A + r k = k + k 1 }
-        = . O r v
+        ~ < k nd { = v + v * ( slice_at [f] dl k ) ( slice_at [f] Ad k ) = k + k 1 }
+        ( slice_put [f] O r v )
         = i + r 1
-        ~ < i rd { = . O i . A - i 1 = i + i 1 }
+        ~ < i rd { ( slice_put [f] O i ( slice_at [f] A - i 1 ) ) = i + i 1 }
     } {}
     = i 0
-    ~ < i rd { = . A i . O i = i + i 1 }
+    ~ < i rd { ( slice_put [f] A i ( slice_at [f] O i ) ) = i + i 1 }
 }
 
 // P ← T P Tᵀ + V, V = θ θᵀ on the ARMA block.
-unsafe @ __ar_predict_cov ArimaSS ss → v {
+@ __ar_predict_cov ArimaSS ss → v {
     ( __ar_tmul ss . ss pm . ss scratch )
     ( __ar_tmul_right ss . ss scratch . ss pm )
     : i r . ss r
     : i rd . ss rd
-    : *f P ( vec_data [f] . ss pm )
-    : *f th ( vec_data [f] . ss theta )
+    : ( Slice f ) P ( slice_from_vec [f] . ss pm )
+    : ( Slice f ) th ( slice_prefix [f] ( slice_from_vec [f] . ss theta ) r )
     : ~ i i 0
     ~ < i r {
+        : ( Slice f ) Pr ( slice_window [f] P * i rd r )
+        : f ti ( slice_at [f] th i )
         : ~ i j 0
         ~ < j r {
-            = . P + * i rd j + . P + * i rd j * . th i . th j
+            ( slice_put [f] Pr j + ( slice_at [f] Pr j ) * ti ( slice_at [f] th j ) )
             = j + j 1
         }
         = i + i 1
@@ -596,33 +616,36 @@ unsafe @ __ar_predict_cov ArimaSS ss → v {
 }
 
 // Z a and Z P Zᵀ, P Z into pz.
-unsafe @ __ar_observe ArimaSS ss → f {
+@ __ar_observe ArimaSS ss → f {
     : i r . ss r
     : i rd . ss rd
     : i nd . ss nd
-    : *f P ( vec_data [f] . ss pm )
-    : *f pz ( vec_data [f] . ss pz )
-    : *f dl ( vec_data [f] . ss delta )
+    : ( Slice f ) P ( slice_from_vec [f] . ss pm )
+    : ( Slice f ) pz ( slice_prefix [f] ( slice_from_vec [f] . ss pz ) rd )
+    : ( Slice f ) dl ( slice_prefix [f] ( slice_from_vec [f] . ss delta ) nd )
     : ~ i i 0
     ~ < i rd {
-        : ~ f v . P * i rd
+        : ( Slice f ) Pr ( slice_window [f] P * i rd rd )
+        : ( Slice f ) Pd ( slice_window [f] Pr r nd )
+        : ~ f v ( slice_at [f] Pr 0 )
         : ~ i k 0
-        ~ < k nd { = v + v * . dl k . P + * i rd + r k = k + k 1 }
-        = . pz i v
+        ~ < k nd { = v + v * ( slice_at [f] dl k ) ( slice_at [f] Pd k ) = k + k 1 }
+        ( slice_put [f] pz i v )
         = i + i 1
     }
-    : ~ f fv . pz 0
+    : ( Slice f ) pzd ( slice_window [f] pz r nd )
+    : ~ f fv ( slice_at [f] pz 0 )
     : ~ i k 0
-    ~ < k nd { = fv + fv * . dl k . pz + r k = k + k 1 }
+    ~ < k nd { = fv + fv * ( slice_at [f] dl k ) ( slice_at [f] pzd k ) = k + k 1 }
     ^ fv
 }
 
-unsafe @ __ar_predicted ArimaSS ss → f {
-    : *f A ( vec_data [f] . ss a )
-    : *f dl ( vec_data [f] . ss delta )
-    : ~ f y . A 0
+@ __ar_predicted ArimaSS ss → f {
+    : ( Slice f ) A ( slice_from_vec [f] . ss a )
+    : ( Slice f ) dl ( slice_from_vec [f] . ss delta )
+    : ~ f y ( slice_at [f] A 0 )
     : ~ i k 0
-    ~ < k . ss nd { = y + y * . dl k . A + . ss r k = k + k 1 }
+    ~ < k . ss nd { = y + y * ( slice_at [f] dl k ) ( slice_at [f] A + . ss r k ) = k + k 1 }
     ^ y
 }
 
@@ -642,17 +665,17 @@ unsafe @ __ar_predicted ArimaSS ss → f {
 // transition. Before that, the O(r_d²) covariance form. The two agree
 // to the last bit with what the covariance form would go on producing,
 // short of the increments it stopped adding.
-unsafe @ _ar_step ArimaSS ss f y → ArimaStep {
+@ _ar_step ArimaSS ss f y → ArimaStep {
     : i rd . ss rd
-    : *f A ( vec_data [f] . ss a )
-    : *f fz ( vec_data [f] . ss fz )
-    ? != . fz 1 0.0 {
-        : f fss . fz 0
+    : ( Slice f ) A ( slice_from_vec [f] . ss a )
+    : ( Slice f ) fz ( slice_from_vec [f] . ss fz )
+    ? != ( slice_at [f] fz 1 ) 0.0 {
+        : f fss ( slice_at [f] fz 0 )
         : f pred ( __ar_predicted ss )
         : f v - y pred
-        : *f G ( vec_data [f] . ss kg )
+        : ( Slice f ) G ( slice_from_vec [f] . ss kg )
         : ~ i i 0
-        ~ < i rd { = . A i + . A i * . G i v = i + i 1 }
+        ~ < i rd { ( slice_put [f] A i + ( slice_at [f] A i ) * ( slice_at [f] G i ) v ) = i + i 1 }
         ( __ar_tvec ss )
         ^ @ ArimaStep { v fss pred }
     } {}
@@ -660,38 +683,42 @@ unsafe @ _ar_step ArimaSS ss f y → ArimaStep {
     : f pred ( __ar_predicted ss )
     : f v - y pred
     ? > fv 0.0 {} { ^ @ ArimaStep { v -1.0 pred } }
-    : *f P ( vec_data [f] . ss pm )
-    : *f pz ( vec_data [f] . ss pz )
+    : ( Slice f ) P ( slice_from_vec [f] . ss pm )
+    : ( Slice f ) pz ( slice_prefix [f] ( slice_from_vec [f] . ss pz ) rd )
+    : ( Slice f ) Ad ( slice_prefix [f] A rd )
     : f g / v fv
     : ~ i i 0
-    ~ < i rd { = . A i + . A i * . pz i g = i + i 1 }
+    ~ < i rd { ( slice_put [f] Ad i + ( slice_at [f] Ad i ) * ( slice_at [f] pz i ) g ) = i + i 1 }
     = i 0
     ~ < i rd {
-        : f pi / . pz i fv
+        : f pi / ( slice_at [f] pz i ) fv
+        : ( Slice f ) Pr ( slice_window [f] P * i rd rd )
         : ~ i j 0
-        ~ < j rd { = . P + * i rd j - . P + * i rd j * pi . pz j = j + j 1 }
+        ~ < j rd { ( slice_put [f] Pr j - ( slice_at [f] Pr j ) * pi ( slice_at [f] pz j ) ) = j + j 1 }
         = i + i 1
     }
     ( __ar_tvec ss )
     ( __ar_predict_cov ss )
     // the steady-state test against the covariance a step ago
-    : *f Q ( vec_data [f] . ss prev )
+    : i rr * rd rd
+    : ( Slice f ) Q ( slice_prefix [f] ( slice_from_vec [f] . ss prev ) rr )
+    : ( Slice f ) Pa ( slice_prefix [f] P rr )
     : ~ f dmax 0.0
     = i 0
-    ~ < i * rd rd {
-        : f dd ( float_abs - . P i . Q i )
+    ~ < i rr {
+        : f dd ( float_abs - ( slice_at [f] Pa i ) ( slice_at [f] Q i ) )
         ? > dd dmax { = dmax dd } {}
-        = . Q i . P i
+        ( slice_put [f] Q i ( slice_at [f] Pa i ) )
         = i + i 1
     }
-    ? <= dmax * 0.00000000000001 + 1.0 ( float_abs . P 0 ) {
+    ? <= dmax * 0.00000000000001 + 1.0 ( float_abs ( slice_at [f] P 0 ) ) {
         : f fss ( __ar_observe ss )
         ? > fss 0.0 {
-            : *f G ( vec_data [f] . ss kg )
+            : ( Slice f ) G ( slice_from_vec [f] . ss kg )
             = i 0
-            ~ < i rd { = . G i / . pz i fss = i + i 1 }
-            = . fz 0 fss
-            = . fz 1 1.0
+            ~ < i rd { ( slice_put [f] G i / ( slice_at [f] pz i ) fss ) = i + i 1 }
+            ( slice_put [f] fz 0 fss )
+            ( slice_put [f] fz 1 1.0 )
         } {}
     } {}
     ^ @ ArimaStep { v fv pred }
@@ -699,40 +726,44 @@ unsafe @ _ar_step ArimaSS ss f y → ArimaStep {
 
 // Solve M x = b for a small dense system by Gaussian elimination with
 // partial pivoting; M and b are overwritten, x lands in b. F when singular.
-unsafe @ _ar_solve ( Vec f ) M ( Vec f ) b i n → b {
-    : *f pm ( vec_data [f] M )
-    : *f pb ( vec_data [f] b )
+@ _ar_solve ( Vec f ) M ( Vec f ) b i n → b {
+    : ( Slice f ) pm ( slice_from_vec [f] M )
+    : ( Slice f ) pb ( slice_prefix [f] ( slice_from_vec [f] b ) n )
     : ~ i c 0
     ~ < c n {
         : ~ i piv c
-        : ~ f best ( float_abs . pm + * c n c )
+        : ~ f best ( float_abs ( slice_at [f] pm + * c n c ) )
         : ~ i rr + c 1
         ~ < rr n {
-            : f a ( float_abs . pm + * rr n c )
+            : f a ( float_abs ( slice_at [f] pm + * rr n c ) )
             ? > a best { = best a = piv rr } {}
             = rr + rr 1
         }
         ? <= best 0.0 { ^ F } {}
+        // rows as windows of n: the column loops below are checked once
+        : ( Slice f ) Rc ( slice_window [f] pm * c n n )
         ? != piv c {
+            : ( Slice f ) Rp ( slice_window [f] pm * piv n n )
             : ~ i j 0
             ~ < j n {
-                : f t . pm + * c n j
-                = . pm + * c n j . pm + * piv n j
-                = . pm + * piv n j t
+                : f t ( slice_at [f] Rc j )
+                ( slice_put [f] Rc j ( slice_at [f] Rp j ) )
+                ( slice_put [f] Rp j t )
                 = j + j 1
             }
-            : f tb . pb c
-            = . pb c . pb piv
-            = . pb piv tb
+            : f tb ( slice_at [f] pb c )
+            ( slice_put [f] pb c ( slice_at [f] pb piv ) )
+            ( slice_put [f] pb piv tb )
         } {}
-        : f pv . pm + * c n c
+        : f pv ( slice_at [f] Rc c )
         = rr + c 1
         ~ < rr n {
-            : f fac / . pm + * rr n c pv
+            : ( Slice f ) Rr ( slice_window [f] pm * rr n n )
+            : f fac / ( slice_at [f] Rr c ) pv
             ? != fac 0.0 {
                 : ~ i j c
-                ~ < j n { = . pm + * rr n j - . pm + * rr n j * fac . pm + * c n j = j + j 1 }
-                = . pb rr - . pb rr * fac . pb c
+                ~ < j n { ( slice_put [f] Rr j - ( slice_at [f] Rr j ) * fac ( slice_at [f] Rc j ) ) = j + j 1 }
+                ( slice_put [f] pb rr - ( slice_at [f] pb rr ) * fac ( slice_at [f] pb c ) )
             } {}
             = rr + rr 1
         }
@@ -740,10 +771,11 @@ unsafe @ _ar_solve ( Vec f ) M ( Vec f ) b i n → b {
     }
     : ~ i i - n 1
     ~ >= i 0 {
-        : ~ f v . pb i
+        : ( Slice f ) Ri ( slice_window [f] pm * i n n )
+        : ~ f v ( slice_at [f] pb i )
         : ~ i j + i 1
-        ~ < j n { = v - v * . pm + * i n j . pb j = j + j 1 }
-        = . pb i / v . pm + * i n i
+        ~ < j n { = v - v * ( slice_at [f] Ri j ) ( slice_at [f] pb j ) = j + j 1 }
+        ( slice_put [f] pb i / v ( slice_at [f] Ri i ) )
         = i - i 1
     }
     ^ T
@@ -752,60 +784,67 @@ unsafe @ _ar_solve ( Vec f ) M ( Vec f ) b i n → b {
 // The autocovariances γ(0..m−1) of the ARMA(p', q') with expanded
 // polynomials (σ² = 1): the Yule–Walker system for γ(0..p'), then the
 // recursion. Also the ψ weights ψ(0..m−1). F when the system is singular.
-unsafe @ _ar_autocov ( Vec f ) ar ( Vec f ) ma i m ( Vec f ) gamma ( Vec f ) psi → b {
+@ _ar_autocov ( Vec f ) ar ( Vec f ) ma i m ( Vec f ) gamma ( Vec f ) psi → b {
     : i pf ( vec_len [f] ar )
     : i qf ( vec_len [f] ma )
-    : *f par ( vec_data [f] ar )
-    : *f pma ( vec_data [f] ma )
-    : *f pg ( vec_data [f] gamma )
-    : *f pp ( vec_data [f] psi )
+    : ( Slice f ) par ( slice_from_vec [f] ar )
+    : ( Slice f ) pma ( slice_from_vec [f] ma )
+    : ( Slice f ) pg ( slice_from_vec [f] gamma )
+    : ( Slice f ) pp ( slice_from_vec [f] psi )
     // ψ
-    = . pp 0 1.0
+    ( slice_put [f] pp 0 1.0 )
     : ~ i k 1
     ~ < k m {
-        : ~ f v ? <= k qf . pma - k 1 0.0
-        : ~ i j 1
-        ~ & <= j pf <= j k { = v + v * . par - j 1 . pp - k j = j + j 1 }
-        = . pp k v
+        : ~ f v ? <= k qf ( slice_at [f] pma - k 1 ) 0.0
+        // ψ_k += φ_j ψ_{k−j}, j = 1 … min(p', k): the two runs as windows
+        : i jm ? < pf k pf k
+        : ( Slice f ) Pa ( slice_prefix [f] par jm )
+        : ( Slice f ) Pw ( slice_window [f] pp - k jm jm )
+        : ~ i jj 0
+        ~ < jj jm { = v + v * ( slice_at [f] Pa jj ) ( slice_at [f] Pw - - jm 1 jj ) = jj + jj 1 }
+        ( slice_put [f] pp k v )
         = k + k 1
     }
     // γ(0..p')
     : i n1 + pf 1
     : ( Vec f ) M ( vec_zeroed [f] * n1 n1 )
     : ( Vec f ) rhs ( vec_zeroed [f] n1 )
-    : *f pM ( vec_data [f] M )
-    : *f pr ( vec_data [f] rhs )
+    : ( Slice f ) pM ( slice_from_vec [f] M )
+    : ( Slice f ) pr ( slice_from_vec [f] rhs )
     = k 0
     ~ < k n1 {
-        = . pM + * k n1 k + . pM + * k n1 k 1.0
+        ( slice_put [f] pM + * k n1 k + ( slice_at [f] pM + * k n1 k ) 1.0 )
         : ~ i j 1
         ~ <= j pf {
             : i idx ? >= - k j 0 - k j - j k
-            = . pM + * k n1 idx - . pM + * k n1 idx . par - j 1
+            ( slice_put [f] pM + * k n1 idx - ( slice_at [f] pM + * k n1 idx ) ( slice_at [f] par - j 1 ) )
             = j + j 1
         }
         : ~ f v 0.0
         = j k
         ~ <= j qf {
-            : f thj ? == j 0 1.0 . pma - j 1
-            = v + v * thj . pp - j k
+            : f thj ? == j 0 1.0 ( slice_at [f] pma - j 1 )
+            = v + v * thj ( slice_at [f] pp - j k )
             = j + j 1
         }
-        = . pr k v
+        ( slice_put [f] pr k v )
         = k + k 1
     }
     : b ok ( _ar_solve M rhs n1 )
     ? ok {
         = k 0
-        ~ & < k n1 < k m { = . pg k . pr k = k + k 1 }
+        ~ & < k n1 < k m { ( slice_put [f] pg k ( slice_at [f] pr k ) ) = k + k 1 }
         = k n1
+        : ( Slice f ) Pa ( slice_prefix [f] par pf )
         ~ < k m {
             : ~ f v 0.0
-            : ~ i j 1
-            ~ <= j pf { = v + v * . par - j 1 . pg - k j = j + j 1 }
-            = j k
-            ~ <= j qf { = v + v * . pma - j 1 . pp - j k = j + j 1 }
-            = . pg k v
+            // γ_k += φ_j γ_{k−j}, j = 1 … p' (k > p')
+            : ( Slice f ) Gw ( slice_window [f] pg - k pf pf )
+            : ~ i jj 0
+            ~ < jj pf { = v + v * ( slice_at [f] Pa jj ) ( slice_at [f] Gw - - pf 1 jj ) = jj + jj 1 }
+            : ~ i j k
+            ~ <= j qf { = v + v * ( slice_at [f] pma - j 1 ) ( slice_at [f] pp - j k ) = j + j 1 }
+            ( slice_put [f] pg k v )
             = k + k 1
         }
     } {}
@@ -820,51 +859,54 @@ unsafe @ _ar_autocov ( Vec f ) ar ( Vec f ) ma i m ( Vec f ) gamma ( Vec f ) psi
 // doubling recursion needed dozens of them for a seasonal polynomial's
 // roots close to the circle. Writes the ARMA block of pm; the
 // differencing block gets the diffuse prior.
-unsafe @ _ar_init_cov ArimaSS ss → b {
+@ _ar_init_cov ArimaSS ss → b {
     : i r . ss r
     : i rd . ss rd
-    : *f P ( vec_data [f] . ss pm )
+    : ( Slice f ) P ( slice_from_vec [f] . ss pm )
     ( __ar_fill . ss pm 0.0 )
-    : *f phi ( vec_data [f] . ss phi )
-    : *f th ( vec_data [f] . ss theta )
+    : ( Slice f ) phi ( slice_from_vec [f] . ss phi )
+    : ( Slice f ) th ( slice_from_vec [f] . ss theta )
     // the expanded polynomials back from the padded state form
     : ~ i pf r
-    ~ & > pf 0 == . phi - pf 1 0.0 { = pf - pf 1 }
+    ~ & > pf 0 == ( slice_at [f] phi - pf 1 ) 0.0 { = pf - pf 1 }
     : ~ i qf - r 1
-    ~ & > qf 0 == . th qf 0.0 { = qf - qf 1 }
+    ~ & > qf 0 == ( slice_at [f] th qf ) 0.0 { = qf - qf 1 }
     : ( Vec f ) ar ( vec_zeroed [f] pf )
     : ( Vec f ) ma ( vec_zeroed [f] qf )
     : ~ i k 0
-    ~ < k pf { ( vec_set [f] ar k . phi k ) = k + k 1 }
+    ~ < k pf { ( vec_set [f] ar k ( slice_at [f] phi k ) ) = k + k 1 }
     = k 0
-    ~ < k qf { ( vec_set [f] ma k . th + k 1 ) = k + k 1 }
+    ~ < k qf { ( vec_set [f] ma k ( slice_at [f] th + k 1 ) ) = k + k 1 }
     : ( Vec f ) gamma ( vec_zeroed [f] r )
     : ( Vec f ) psi ( vec_zeroed [f] r )
     : b ok ( _ar_autocov ar ma r gamma psi )
     ? ok {
-        : *f pg ( vec_data [f] gamma )
-        : *f pp ( vec_data [f] psi )
+        : ( Slice f ) pg ( slice_from_vec [f] gamma )
+        : ( Slice f ) pp ( slice_from_vec [f] psi )
         : ( Vec f ) A ( vec_zeroed [f] * r r )
         : ( Vec f ) B ( vec_zeroed [f] * r r )
-        : *f pa ( vec_data [f] A )
-        : *f pb ( vec_data [f] B )
+        : ( Slice f ) pa ( slice_from_vec [f] A )
+        : ( Slice f ) pb ( slice_from_vec [f] B )
         // A = Φ Γ, B = Φ C  (Φ[i][m] = φ_{i+1+m} = phi[i+m], zero past r)
         : ~ i i 0
         ~ < i r {
+            : ( Slice f ) Phi ( slice_window [f] phi i - r i )
+            : ( Slice f ) Ar ( slice_window [f] pa * i r r )
+            : ( Slice f ) Br ( slice_window [f] pb * i r r )
             : ~ i l 0
             ~ < l r {
                 : ~ f va 0.0
                 : ~ f vb 0.0
                 : ~ i m 0
                 ~ < m - r i {
-                    : f f1 . phi + i m
+                    : f f1 ( slice_at [f] Phi m )
                     : i dlt ? >= - m l 0 - m l - l m
-                    = va + va * f1 . pg dlt
-                    ? > l m { = vb + vb * f1 . pp - - l 1 m } {}
+                    = va + va * f1 ( slice_at [f] pg dlt )
+                    ? > l m { = vb + vb * f1 ( slice_at [f] pp - - l 1 m ) } {}
                     = m + m 1
                 }
-                = . pa + * i r l va
-                = . pb + * i r l vb
+                ( slice_put [f] Ar l va )
+                ( slice_put [f] Br l vb )
                 = l + l 1
             }
             = i + i 1
@@ -872,19 +914,28 @@ unsafe @ _ar_init_cov ArimaSS ss → b {
         // P = A Φᵀ + B Θᵀ + (B Θᵀ)ᵀ + Θ Θᵀ  (Θ[j][l] = θ_{j+l} = th[j+l])
         = i 0
         ~ < i r {
+            : ( Slice f ) Ar ( slice_window [f] pa * i r r )
+            : ( Slice f ) Br ( slice_window [f] pb * i r r )
+            : ( Slice f ) Thi ( slice_window [f] th i - r i )
+            : ( Slice f ) Pr ( slice_window [f] P * i rd r )
             : ~ i j 0
             ~ < j r {
+                : i nl - r j
+                : ( Slice f ) Phj ( slice_window [f] phi j nl )
+                : ( Slice f ) Thj ( slice_window [f] th j nl )
+                : ( Slice f ) Arl ( slice_prefix [f] Ar nl )
+                : ( Slice f ) Brl ( slice_prefix [f] Br nl )
                 : ~ f v 0.0
                 : ~ i l 0
-                ~ < l - r j {
-                    : f fj . phi + j l
-                    : f tj . th + j l
-                    = v + v * . pa + * i r l fj
-                    = v + v * . pb + * i r l tj
-                    ? < l - r i { = v + v * . th + i l tj } {}
+                ~ < l nl {
+                    : f fj ( slice_at [f] Phj l )
+                    : f tj ( slice_at [f] Thj l )
+                    = v + v * ( slice_at [f] Arl l ) fj
+                    = v + v * ( slice_at [f] Brl l ) tj
+                    ? < l - r i { = v + v * ( slice_at [f] Thi l ) tj } {}
                     = l + l 1
                 }
-                = . P + * i rd j v
+                ( slice_put [f] Pr j v )
                 = j + j 1
             }
             = i + i 1
@@ -892,46 +943,50 @@ unsafe @ _ar_init_cov ArimaSS ss → b {
         // the (B Θᵀ)ᵀ term: add B Θᵀ transposed
         = i 0
         ~ < i r {
+            : i nl - r i
+            : ( Slice f ) Thi ( slice_window [f] th i nl )
+            : ( Slice f ) Pr ( slice_window [f] P * i rd r )
             : ~ i j 0
             ~ < j r {
+                : ( Slice f ) Bj ( slice_window [f] pb * j r nl )
                 : ~ f v 0.0
                 : ~ i l 0
-                ~ < l - r i { = v + v * . pb + * j r l . th + i l = l + l 1 }
-                = . P + * i rd j + . P + * i rd j v
+                ~ < l nl { = v + v * ( slice_at [f] Bj l ) ( slice_at [f] Thi l ) = l + l 1 }
+                ( slice_put [f] Pr j + ( slice_at [f] Pr j ) v )
                 = j + j 1
             }
             = i + i 1
         }
     } {}
     : ~ i i r
-    ~ < i rd { = . P + * i rd i ARIMA_KAPPA = i + i 1 }
+    ~ < i rd { ( slice_put [f] P + * i rd i ARIMA_KAPPA ) = i + i 1 }
     ^ ok
 }
 
 // The same by doubling (P_{k+1} = P_k + A_k P_k A_kᵀ, A_{k+1} = A_k²):
 // kept as the independent check of the closed form.
-unsafe @ _ar_init_cov_doubling ArimaSS ss → b {
+@ _ar_init_cov_doubling ArimaSS ss → b {
     : i r . ss r
     : i rd . ss rd
-    : *f P ( vec_data [f] . ss pm )
+    : ( Slice f ) P ( slice_from_vec [f] . ss pm )
     ( __ar_fill . ss pm 0.0 )
     // Dense r × r work: A, X, and two temporaries.
     : ( Vec f ) A ( vec_zeroed [f] * r r )
     : ( Vec f ) X ( vec_zeroed [f] * r r )
     : ( Vec f ) T1 ( vec_zeroed [f] * r r )
     : ( Vec f ) T2 ( vec_zeroed [f] * r r )
-    : *f pa ( vec_data [f] A )
-    : *f px ( vec_data [f] X )
-    : *f t1 ( vec_data [f] T1 )
-    : *f t2 ( vec_data [f] T2 )
-    : *f phi ( vec_data [f] . ss phi )
-    : *f th ( vec_data [f] . ss theta )
+    : ( Slice f ) pa ( slice_from_vec [f] A )
+    : ( Slice f ) px ( slice_from_vec [f] X )
+    : ( Slice f ) t1 ( slice_from_vec [f] T1 )
+    : ( Slice f ) t2 ( slice_from_vec [f] T2 )
+    : ( Slice f ) phi ( slice_from_vec [f] . ss phi )
+    : ( Slice f ) th ( slice_from_vec [f] . ss theta )
     : ~ i i 0
     ~ < i r {
-        = . pa * i r . phi i
-        ? < + i 1 r { = . pa + * i r + i 1 1.0 } {}
+        ( slice_put [f] pa * i r ( slice_at [f] phi i ) )
+        ? < + i 1 r { ( slice_put [f] pa + * i r + i 1 1.0 ) } {}
         : ~ i j 0
-        ~ < j r { = . px + * i r j * . th i . th j = j + j 1 }
+        ~ < j r { ( slice_put [f] px + * i r j * ( slice_at [f] th i ) ( slice_at [f] th j ) ) = j + j 1 }
         = i + i 1
     }
     : ~ i iter 0
@@ -945,8 +1000,8 @@ unsafe @ _ar_init_cov_doubling ArimaSS ss → b {
             ~ < j r {
                 : ~ f v 0.0
                 : ~ i k 0
-                ~ < k r { = v + v * . pa + * i r k . px + * k r j = k + k 1 }
-                = . t1 + * i r j v
+                ~ < k r { = v + v * ( slice_at [f] pa + * i r k ) ( slice_at [f] px + * k r j ) = k + k 1 }
+                ( slice_put [f] t1 + * i r j v )
                 = j + j 1
             }
             = i + i 1
@@ -957,8 +1012,8 @@ unsafe @ _ar_init_cov_doubling ArimaSS ss → b {
             ~ < j r {
                 : ~ f v 0.0
                 : ~ i k 0
-                ~ < k r { = v + v * . t1 + * i r k . pa + * j r k = k + k 1 }
-                = . px + * i r j + . px + * i r j v
+                ~ < k r { = v + v * ( slice_at [f] t1 + * i r k ) ( slice_at [f] pa + * j r k ) = k + k 1 }
+                ( slice_put [f] px + * i r j + ( slice_at [f] px + * i r j ) v )
                 = j + j 1
             }
             = i + i 1
@@ -970,8 +1025,8 @@ unsafe @ _ar_init_cov_doubling ArimaSS ss → b {
             ~ < j r {
                 : ~ f v 0.0
                 : ~ i k 0
-                ~ < k r { = v + v * . pa + * i r k . pa + * k r j = k + k 1 }
-                = . t2 + * i r j v
+                ~ < k r { = v + v * ( slice_at [f] pa + * i r k ) ( slice_at [f] pa + * k r j ) = k + k 1 }
+                ( slice_put [f] t2 + * i r j v )
                 : f av ( float_abs v )
                 ? > av amax { = amax av } {}
                 = j + j 1
@@ -979,7 +1034,7 @@ unsafe @ _ar_init_cov_doubling ArimaSS ss → b {
             = i + i 1
         }
         = i 0
-        ~ < i * r r { = . pa i . t2 i = i + i 1 }
+        ~ < i * r r { ( slice_put [f] pa i ( slice_at [f] t2 i ) ) = i + i 1 }
         ? ( float_is_nan amax ) { = ok F = going F } {}
         ? < amax 0.0000000000000001 { = going F } {}
         = iter + iter 1
@@ -987,11 +1042,11 @@ unsafe @ _ar_init_cov_doubling ArimaSS ss → b {
     = i 0
     ~ < i r {
         : ~ i j 0
-        ~ < j r { = . P + * i rd j . px + * i r j = j + j 1 }
+        ~ < j r { ( slice_put [f] P + * i rd j ( slice_at [f] px + * i r j ) ) = j + j 1 }
         = i + i 1
     }
     = i r
-    ~ < i rd { = . P + * i rd i ARIMA_KAPPA = i + i 1 }
+    ~ < i rd { ( slice_put [f] P + * i rd i ARIMA_KAPPA ) = i + i 1 }
     ^ ok
 }
 
@@ -1114,28 +1169,34 @@ unsafe @ _ar_init_cov_doubling ArimaSS ss → b {
 // start needs nothing else: F₁ = P₀₀, K₁ = T P e₀ / F₁, W₁ = K₁,
 // M₁ = −F₁). Once the increment is below 10⁻¹⁴ (1 + F) in every element
 // the gain is fixed — the steady state — and only the state moves.
-unsafe @ _ar_filter_arma ( Vec f ) phiv ( Vec f ) thv ( Vec f ) col ( Vec f ) w f mu → ArimaLik {
+@ _ar_filter_arma ( Vec f ) phiv ( Vec f ) thv ( Vec f ) col ( Vec f ) w f mu → ArimaLik {
     : i r ( vec_len [f] phiv )
     : i n ( vec_len [f] w )
-    : *f phi ( vec_data [f] phiv )
-    : *f p0 ( vec_data [f] col )
-    : *f pw ( vec_data [f] w )
-    : f f0 . p0 0
+    // Every vector cut to r (the series to n): a loop to r indexes all of
+    // them with no check per element.
+    : ( Slice f ) phi ( slice_prefix [f] ( slice_from_vec [f] phiv ) r )
+    : ( Slice f ) p0 ( slice_prefix [f] ( slice_from_vec [f] col ) r )
+    : ( Slice f ) pw ( slice_prefix [f] ( slice_from_vec [f] w ) n )
+    : f f0 ( slice_at [f] p0 0 )
     ? > f0 0.0 {} { ^ @ ArimaLik { F 0.0 0.0 0 } }
     : ( Vec f ) av ( vec_zeroed [f] r )
     : ( Vec f ) kv ( vec_zeroed [f] r )
     : ( Vec f ) wv ( vec_zeroed [f] r )
     : ( Vec f ) ov ( vec_zeroed [f] r )
-    : *f A ( vec_data [f] av )
-    : *f K ( vec_data [f] kv )
-    : *f W ( vec_data [f] wv )
-    : *f O ( vec_data [f] ov )
+    : ( Slice f ) A ( slice_prefix [f] ( slice_from_vec [f] av ) r )
+    : ( Slice f ) K ( slice_prefix [f] ( slice_from_vec [f] kv ) r )
+    : ( Slice f ) W ( slice_prefix [f] ( slice_from_vec [f] wv ) r )
+    : ( Slice f ) O ( slice_prefix [f] ( slice_from_vec [f] ov ) r )
+    // a[i+1] and w[i+1] for the rows below the last: windows from 1
+    : i r1 - r 1
+    : ( Slice f ) A1 ( slice_window [f] A 1 r1 )
+    : ( Slice f ) W1 ( slice_window [f] W 1 r1 )
     : ~ i i 0
     ~ < i r {
-        : ~ f v * . phi i . p0 0
-        ? < + i 1 r { = v + v . p0 + i 1 } {}
-        = . K i / v f0
-        = . W i . K i
+        : ~ f v * ( slice_at [f] phi i ) ( slice_at [f] p0 0 )
+        ? < + i 1 r { = v + v ( slice_at [f] p0 + i 1 ) } {}
+        ( slice_put [f] K i / v f0 )
+        ( slice_put [f] W i ( slice_at [f] K i ) )
         = i + i 1
     }
     : ~ f fv f0
@@ -1147,38 +1208,39 @@ unsafe @ _ar_filter_arma ( Vec f ) phiv ( Vec f ) thv ( Vec f ) col ( Vec f ) w 
     : ~ f sumlog 0.0
     : ~ i t 0
     ~ & ok < t n {
-        : f v - - . pw t mu . A 0
+        : f v - - ( slice_at [f] pw t ) mu ( slice_at [f] A 0 )
         = ssq + ssq / * v v fv
         = sumlog + sumlog logf
-        // a ← T a + K v
+        // a ← T a + K v (the last row has no successor to add)
+        : f a0 ( slice_at [f] A 0 )
         = i 0
-        ~ < i r {
-            : ~ f x * . phi i . A 0
-            ? < + i 1 r { = x + x . A + i 1 } {}
-            = . O i + x * . K i v
+        ~ < i r1 {
+            ( slice_put [f] O i + + * ( slice_at [f] phi i ) a0 ( slice_at [f] A1 i ) * ( slice_at [f] K i ) v )
             = i + i 1
         }
+        ( slice_put [f] O r1 + * ( slice_at [f] phi r1 ) a0 * ( slice_at [f] K r1 ) v )
         = i 0
-        ~ < i r { = . A i . O i = i + i 1 }
+        ~ < i r { ( slice_put [f] A i ( slice_at [f] O i ) ) = i + i 1 }
         ? frozen {} {
-            : f w0 . W 0
+            : f w0 ( slice_at [f] W 0 )
             : f fn + fv * * w0 w0 mm
             : ~ f wmax 0.0
             = i 0
-            ~ < i r {
-                : ~ f x * . phi i w0
-                ? < + i 1 r { = x + x . W + i 1 } {}
-                = . O i x
-                : f aw ( float_abs . W i )
+            ~ < i r1 {
+                ( slice_put [f] O i + * ( slice_at [f] phi i ) w0 ( slice_at [f] W1 i ) )
+                : f aw ( float_abs ( slice_at [f] W i ) )
                 ? > aw wmax { = wmax aw } {}
                 = i + i 1
             }
+            ( slice_put [f] O r1 * ( slice_at [f] phi r1 ) w0 )
+            : f awl ( float_abs ( slice_at [f] W r1 ) )
+            ? > awl wmax { = wmax awl } {}
             ? <= * ( float_abs mm ) * wmax wmax * 0.00000000000001 + 1.0 fv { = frozen T } {
                 ? > fn 0.0 {
                     = i 0
                     ~ < i r {
-                        = . K i / + * . K i fv * * . O i mm w0 fn
-                        = . W i - . O i * . K i w0
+                        ( slice_put [f] K i / + * ( slice_at [f] K i ) fv * * ( slice_at [f] O i ) mm w0 fn )
+                        ( slice_put [f] W i - ( slice_at [f] O i ) * ( slice_at [f] K i ) w0 )
                         = i + i 1
                     }
                     = mm + mm / * * mm w0 * mm w0 fv
@@ -1295,7 +1357,7 @@ unsafe @ _ar_filter_arma ( Vec f ) phiv ( Vec f ) thv ( Vec f ) col ( Vec f ) w 
 // method (and CSS's conditioning count), and a count of evaluations.
 : ArimaObj {
     ArimaSpec sp
-    ( Vec f ) w
+    ( Arc ( Vec f ) ) w  // shared with the evaluations' threads
     i method
     i ncond
     i evals
@@ -1311,82 +1373,46 @@ unsafe @ _ar_filter_arma ( Vec f ) phiv ( Vec f ) thv ( Vec f ) col ( Vec f ) w 
     ^ 1000000000000.0
 }
 
-unsafe @ __ar_objective * ArimaObj o ( Vec f ) raw → f {
+@ __ar_objective inout ArimaObj o ( Vec f ) raw → f {
     = . o evals + . o evals 1
-    ^ ( __ar_eval . o sp . o w . o method . o ncond raw )
+    ^ ( __ar_eval . o sp ( arc_get [( Vec f )] . o w ) . o method . o ncond raw )
 }
 
 // One evaluation as a job: its parameters (raw, or — kind 1 — natural
-// coefficients for the Hessian), its slot in the answers.
+// coefficients for the Hessian), and the series it is evaluated on,
+// shared with the other jobs and their threads.
 : ArimaJob {
     ArimaSpec sp
-    i w  // the series, a view: its Vec's control word (the batch's caller keeps it)
+    ( Arc ( Vec f ) ) w
     i method
     i ncond
-    i raw  // the point, a view likewise
-    i out  // the answers, a view likewise: this job writes slot idx
-    i idx
+    ( Vec f ) raw
     i kind  // 0 raw objective, 1 natural objective, 2/3 prepare (raw/natural, ML), 4/5 prepare (raw/natural, CSS)
-    ( Box ArimaPrep ) prep  // a prepare job's result
 }
 
-unsafe @ __ar_job_run * ArimaJob j → v {
-    : ( Vec f ) w # ( Vec f ) . j w
-    : ( Vec f ) raw # ( Vec f ) . j raw
-    ? >= . j kind 2 {
-        : b natural | == . j kind 3 == . j kind 5
-        : b cov < . j kind 4
-        = . j prep ( _ar_prep_at . j sp raw natural cov )
-        ^
-    } {}
-    : ( Vec f ) out # ( Vec f ) . j out
-    ? == . j kind 1 {
-        ( vec_set [f] out . j idx ( __ar_eval_natural . j sp w . j method . j ncond raw ) )
-    } {
-        ( vec_set [f] out . j idx ( __ar_eval . j sp w . j method . j ncond raw ) )
-    }
+@ __ar_job_value ArimaJob j → f {
+    : ( Vec f ) w ( arc_get [( Vec f )] . j w )
+    ? == . j kind 1 { ^ ( __ar_eval_natural . j sp w . j method . j ncond . j raw ) } {}
+    ^ ( __ar_eval . j sp w . j method . j ncond . j raw )
 }
 
-// Job `k` of a batch whose jobs start at `jp`.
-unsafe @ _ar_job_at i jp i k → *ArimaJob { ^ # *ArimaJob + jp * k Z ArimaJob }
-
-// A worker: every job of the `n` at `jp` whose index ≡ lane (mod stride).
-unsafe @ __ar_lane_run i jp i n i lane i stride → v {
-    : ~ i k lane
-    ~ < k n {
-        ( __ar_job_run ( _ar_job_at jp k ) )
-        = k + k stride
-    }
-}
-
-// Run every job: on a pool of __ar_threads workers striding the list
-// when `par`, else in place. The batch's Vec owns the jobs (and what the
-// prepare jobs made); the workers write into them through the address,
-// which stays put while they run.
-unsafe @ _ar_jobs_run ( Vec ArimaJob ) jobs b par → v {
+// Every job's objective value, by index: on __ar_threads threads
+// (stdlib/std/par.nu) when `par`, else in place — the same numbers
+// either way.
+@ _ar_jobs_eval sink ( Vec ArimaJob ) jobs b par → ( Vec f ) {
     : i n ( vec_len [ArimaJob] jobs )
-    : i jp # i ( vec_data [ArimaJob] jobs )
-    : ~ i nt ? par ( __ar_threads ) 1
-    ? > nt n { = nt n } {}
-    ? > nt 1 {
-        : ( Vec Thread ) ts ( vec_new [Thread] )
-        : ~ i l 0
-        ~ < l nt {
-            : i lane l
-            : i stride nt
-            // A spawn that fails runs the lane here.
-            : ( @ v ) body \ → v { ( __ar_lane_run jp n lane stride ) }
-            ?? ( thread_spawn_owned body ) {
-                T t → { ( vec_push [Thread] ts t ) }
-                F _ → { ( __ar_lane_run jp n lane stride ) }
-            }
-            = l + l 1
-        }
-        = l 0
-        ~ < l ( vec_len [Thread] ts ) { ?? ( vec_get [Thread] ts l ) { T t → { : i _j ( thread_join t ) } F _ → {} } = l + l 1 }
-    } {
-        ( __ar_lane_run jp n 0 1 )
-    }
+    : ( Arc ( Vec ArimaJob ) ) ja ( arc_new [( Vec ArimaJob )] jobs )
+    ^ ( par_map_index [f] n ? par ( __ar_threads ) 1 \ i k → f { ^ ( __ar_job_value ( vec_at [ArimaJob] ( arc_get [( Vec ArimaJob )] ja ) k ) ) } )
+}
+
+// Every prepare job's state-space form, by index, likewise.
+@ _ar_jobs_prep sink ( Vec ArimaJob ) jobs b par → ( Vec ArimaPrep ) {
+    : i n ( vec_len [ArimaJob] jobs )
+    : ( Arc ( Vec ArimaJob ) ) ja ( arc_new [( Vec ArimaJob )] jobs )
+    ^ ( par_map_index [ArimaPrep] n ? par ( __ar_threads ) 1 \ i k → ArimaPrep {
+        : ArimaJob j ( vec_at [ArimaJob] ( arc_get [( Vec ArimaJob )] ja ) k )
+        ^ ( _ar_prep_at . j sp . j raw | == . j kind 3 == . j kind 5 < . j kind 4 )
+    } )
 }
 
 // A state-space form at a parameter point, prepared for a device: the
@@ -1406,7 +1432,7 @@ unsafe @ _ar_jobs_run ( Vec ArimaJob ) jobs b par → v {
 
 // Prepare at `raw` (transformed parameters when natural = F, natural
 // coefficients when T); with_cov adds the stationary covariance.
-@ _ar_prep_at ArimaSpec sp ( Vec f ) raw b natural b with_cov → ( Box ArimaPrep ) {
+@ _ar_prep_at ArimaSpec sp ( Vec f ) raw b natural b with_cov → ArimaPrep {
     : ArimaCoef cf ? natural ( _ar_coef_of_natural sp raw ) ( _ar_coef_of_raw sp raw )
     : ( Vec f ) ar ( _ar_expand_ar . cf phi . cf sphi . sp s )
     : ( Vec f ) ma ( _ar_expand_ma . cf theta . cf stheta . sp s )
@@ -1415,18 +1441,17 @@ unsafe @ _ar_jobs_run ( Vec ArimaJob ) jobs b par → v {
         : ArimaArma am ( _ar_arma_new ar ma )
         : ( Vec f ) p0 ( vec_zeroed [f] . am r )
         : b ok ( _ar_init_col . am r . am phi . am theta p0 )
-        ^ ( box_new [ArimaPrep] @ ArimaPrep { ok . am r ( __ar_vec_copy . am phi ) ( __ar_vec_copy . am theta ) p0 ar ma mu } )
+        ^ @ ArimaPrep { ok . am r ( __ar_vec_copy . am phi ) ( __ar_vec_copy . am theta ) p0 ar ma mu }
     } {}
-    ^ ( box_new [ArimaPrep] @ ArimaPrep { T 0 ( vec_new [f] ) ( vec_new [f] ) ( vec_new [f] ) ar ma mu } )
+    ^ @ ArimaPrep { T 0 ( vec_new [f] ) ( vec_new [f] ) ( vec_new [f] ) ar ma mu }
 }
 
-// One job of a batch: what it reads (views of the caller's Vecs) and
-// where its answer goes.
-@ _ar_job ArimaSpec sp ( Vec f ) w i method i ncond ( Vec f ) raw ( Vec f ) out i idx i kind → ArimaJob {
-    ^ @ ArimaJob { sp # i w method ncond # i raw # i out idx kind ( box_null [ArimaPrep] ) }
+// One job of a batch: what it reads (its own copy of the point).
+@ _ar_job ArimaSpec sp ( Arc ( Vec f ) ) w i method i ncond ( Vec f ) raw i kind → ArimaJob {
+    ^ @ ArimaJob { sp w method ncond ( __ar_vec_copy raw ) kind }
 }
 
-unsafe @ __ar_work * ArimaObj o → i { ^ ( __ar_work_of . o sp ( vec_len [f] . o w ) . o method ) }
+@ __ar_work ArimaObj o → i { ^ ( __ar_work_of . o sp ( vec_len [f] ( arc_get [( Vec f )] . o w ) ) . o method ) }
 
 // The same for a spec, a series length and a method.
 @ __ar_work_of ArimaSpec sp i n i method → i {
@@ -1442,7 +1467,7 @@ unsafe @ __ar_work * ArimaObj o → i { ^ ( __ar_work_of . o sp ( vec_len [f] . 
 // Evaluate the objective at every row of `raws` into `out`: on threads,
 // __ar_threads at a time, when an evaluation is worth one; otherwise
 // in place. Either way the answers are the same numbers.
-unsafe @ __ar_eval_batch * ArimaObj o ( Vec ( Vec f ) ) raws ( Vec f ) out → v {
+@ __ar_eval_batch inout ArimaObj o ( Vec ( Vec f ) ) raws ( Vec f ) out → v {
     : i m ( vec_len [( Vec f )] raws )
     = . o evals + . o evals m
     : b par & > ( __ar_work o ) ARIMA_PAR_WORK > m 1
@@ -1450,12 +1475,12 @@ unsafe @ __ar_eval_batch * ArimaObj o ( Vec ( Vec f ) ) raws ( Vec f ) out → v
     : ~ i i 0
     ~ < i m {
         ?? ( vec_get [( Vec f )] raws i ) {
-            T rw → { ( vec_push [ArimaJob] jobs ( _ar_job . o sp . o w . o method . o ncond rw out i 0 ) ) }
+            T rw → { ( vec_push [ArimaJob] jobs ( _ar_job . o sp . o w . o method . o ncond rw 0 ) ) }
             F _ → {}
         }
         = i + i 1
     }
-    ( _ar_jobs_run jobs par )
+    ( __ar_copy_into out ( _ar_jobs_eval jobs par ) )
 }
 
 // ── The optimizer as a state machine ──────────────────────────────────
@@ -1495,48 +1520,32 @@ unsafe @ __ar_eval_batch * ArimaObj o ( Vec ( Vec f ) ) raws ( Vec f ) out → v
     b done
 }
 
-unsafe @ __ar_bfgs_new ( Vec f ) raw0 → ( Box ArimaBfgs ) {
+@ __ar_bfgs_new ( Vec f ) raw0 → ArimaBfgs {
     : i k ( vec_len [f] raw0 )
-    : ( Box ArimaBfgs ) b ( box_new [ArimaBfgs] @ ArimaBfgs {} )
-    : *ArimaBfgs st # *ArimaBfgs ( box_ptr [ArimaBfgs] b )
-    = . st k k
-    = . st raw ( __ar_vec_copy raw0 )
-    = . st g ( vec_zeroed [f] k )
-    = . st d ( vec_zeroed [f] k )
-    = . st s ( vec_zeroed [f] k )
-    = . st yv ( vec_zeroed [f] k )
-    = . st hy ( vec_zeroed [f] k )
-    = . st trial ( vec_zeroed [f] k )
-    = . st H ( vec_zeroed [f] * k k )
-    = . st hs ( vec_zeroed [f] k )
-    : *f pH ( vec_data [f] . st H )
+    : ( Vec f ) H ( vec_zeroed [f] * k k )
+    : ( Slice f ) pH ( slice_from_vec [f] H )
     : ~ i i 0
-    ~ < i k { = . pH + * i k i 1.0 = i + i 1 }
-    = . st f0 0.0
-    = . st fn 0.0
-    = . st alpha 1.0
-    = . st gd 0.0
-    = . st tries 0
-    = . st iter 0
-    = . st phase ARIMA_PH_START
-    = . st converged F
-    = . st done ? == k 0 T F
-    ^ b
+    ~ < i k { ( slice_put [f] pH + * i k i 1.0 ) = i + i 1 }
+    ^ @ ArimaBfgs {
+        k ( __ar_vec_copy raw0 ) ( vec_zeroed [f] k ) ( vec_zeroed [f] k ) ( vec_zeroed [f] k ) ( vec_zeroed [f] k )
+        ( vec_zeroed [f] k ) ( vec_zeroed [f] k ) H ( vec_zeroed [f] k )
+        0.0 0.0 1.0 0.0 0 0 ARIMA_PH_START F ? == k 0 T F
+    }
 }
 
 // The 2k stencil points around raw, with the step of each coordinate
 // recorded in hs.
-unsafe @ __ar_bfgs_stencil * ArimaBfgs st ( Vec ( Vec f ) ) out → v {
+@ __ar_bfgs_stencil inout ArimaBfgs st ( Vec ( Vec f ) ) out → v {
     : i k . st k
-    : *f pr ( vec_data [f] . st raw )
-    : *f ph ( vec_data [f] . st hs )
+    : ( Slice f ) pr ( slice_from_vec [f] . st raw )
+    : ( Slice f ) ph ( slice_from_vec [f] . st hs )
     : ~ i i 0
     ~ < i k {
-        : f x . pr i
+        : f x ( slice_at [f] pr i )
         : ~ f h 0.00001
         : f ax ( float_abs x )
         ? > ax 1.0 { = h * h ax } {}
-        = . ph i h
+        ( slice_put [f] ph i h )
         : ( Vec f ) up ( __ar_vec_copy . st raw )
         ( vec_set [f] up i + x h )
         ( vec_push [( Vec f )] out up )
@@ -1548,7 +1557,7 @@ unsafe @ __ar_bfgs_stencil * ArimaBfgs st ( Vec ( Vec f ) ) out → v {
 }
 
 // What the machine wants evaluated next (owned by the caller).
-unsafe @ __ar_bfgs_requests * ArimaBfgs st → ( Vec ( Vec f ) ) {
+@ __ar_bfgs_requests inout ArimaBfgs st → ( Vec ( Vec f ) ) {
     : ( Vec ( Vec f ) ) out ( vec_new [( Vec f )] )
     ? . st done { ^ out } {}
     ? == . st phase ARIMA_PH_START {
@@ -1561,14 +1570,14 @@ unsafe @ __ar_bfgs_requests * ArimaBfgs st → ( Vec ( Vec f ) ) {
 }
 
 // The gradient from stencil values starting at `off` in vals, into `into`.
-unsafe @ __ar_bfgs_take_grad * ArimaBfgs st ( Vec f ) vals i off ( Vec f ) into → v {
+@ __ar_bfgs_take_grad inout ArimaBfgs st ( Vec f ) vals i off ( Vec f ) into → v {
     : i k . st k
-    : *f pv ( vec_data [f] vals )
-    : *f ph ( vec_data [f] . st hs )
-    : *f pg ( vec_data [f] into )
+    : ( Slice f ) pv ( slice_from_vec [f] vals )
+    : ( Slice f ) ph ( slice_from_vec [f] . st hs )
+    : ( Slice f ) pg ( slice_from_vec [f] into )
     : ~ i i 0
     ~ < i k {
-        = . pg i / - . pv + off * 2 i . pv + + off * 2 i 1 * 2.0 . ph i
+        ( slice_put [f] pg i / - ( slice_at [f] pv + off * 2 i ) ( slice_at [f] pv + + off * 2 i 1 ) * 2.0 ( slice_at [f] ph i ) )
         = i + i 1
     }
 }
@@ -1576,66 +1585,66 @@ unsafe @ __ar_bfgs_take_grad * ArimaBfgs st ( Vec f ) vals i off ( Vec f ) into 
 // From a gradient at raw: the direction d = −H g, and the first trial —
 // no coordinate moving by more than one, the transform saturating beyond
 // a few units.
-unsafe @ __ar_bfgs_direction * ArimaBfgs st → v {
+@ __ar_bfgs_direction inout ArimaBfgs st → v {
     : i k . st k
-    : *f pg ( vec_data [f] . st g )
-    : *f pd ( vec_data [f] . st d )
-    : *f pH ( vec_data [f] . st H )
-    : *f pr ( vec_data [f] . st raw )
-    : *f pt ( vec_data [f] . st trial )
+    : ( Slice f ) pg ( slice_from_vec [f] . st g )
+    : ( Slice f ) pd ( slice_from_vec [f] . st d )
+    : ( Slice f ) pH ( slice_from_vec [f] . st H )
+    : ( Slice f ) pr ( slice_from_vec [f] . st raw )
+    : ( Slice f ) pt ( slice_from_vec [f] . st trial )
     : ~ f gd 0.0
     : ~ i i 0
     ~ < i k {
         : ~ f v 0.0
         : ~ i j 0
-        ~ < j k { = v + v * . pH + * i k j . pg j = j + j 1 }
-        = . pd i - 0.0 v
-        = gd + gd * . pg i . pd i
+        ~ < j k { = v + v * ( slice_at [f] pH + * i k j ) ( slice_at [f] pg j ) = j + j 1 }
+        ( slice_put [f] pd i - 0.0 v )
+        = gd + gd * ( slice_at [f] pg i ) ( slice_at [f] pd i )
         = i + i 1
     }
     ? >= gd 0.0 {
         = i 0
         ~ < i k {
             : ~ i j 0
-            ~ < j k { = . pH + * i k j ? == i j 1.0 0.0 = j + j 1 }
-            = . pd i - 0.0 . pg i
+            ~ < j k { ( slice_put [f] pH + * i k j ? == i j 1.0 0.0 ) = j + j 1 }
+            ( slice_put [f] pd i - 0.0 ( slice_at [f] pg i ) )
             = i + i 1
         }
         = gd 0.0
         = i 0
-        ~ < i k { = gd - gd * . pg i . pg i = i + i 1 }
+        ~ < i k { = gd - gd * ( slice_at [f] pg i ) ( slice_at [f] pg i ) = i + i 1 }
     } {}
     = . st gd gd
     : ~ f dmax 0.0
     = i 0
-    ~ < i k { : f a ( float_abs . pd i ) ? > a dmax { = dmax a } {} = i + i 1 }
+    ~ < i k { : f a ( float_abs ( slice_at [f] pd i ) ) ? > a dmax { = dmax a } {} = i + i 1 }
     = . st alpha ? > dmax 1.0 / 1.0 dmax 1.0
     = . st tries 0
     = i 0
-    ~ < i k { = . pt i + . pr i * . st alpha . pd i = i + i 1 }
+    ~ < i k { ( slice_put [f] pt i + ( slice_at [f] pr i ) * . st alpha ( slice_at [f] pd i ) ) = i + i 1 }
     = . st phase ARIMA_PH_TRIAL
 }
 
 // Take the values of the last request. Returns T when the machine is done.
-unsafe @ __ar_bfgs_absorb * ArimaBfgs st ( Vec f ) vals → b {
+@ __ar_bfgs_absorb inout ArimaBfgs st ( Vec f ) vals → b {
     ? . st done { ^ T } {}
     : i k . st k
-    : *f pv ( vec_data [f] vals )
+    : ( Slice f ) pv ( slice_from_vec [f] vals )
     ? == . st phase ARIMA_PH_START {
-        = . st f0 . pv 0
+        = . st f0 ( slice_at [f] pv 0 )
         ( __ar_bfgs_take_grad st vals 1 . st g )
         ( __ar_bfgs_direction st )
         ^ F
     } {}
     ? == . st phase ARIMA_PH_TRIAL {
-        = . st fn . pv 0
+        = . st fn ( slice_at [f] pv 0 )
         ? <= . st fn + . st f0 * * 0.0001 . st alpha . st gd {
             // accepted: move, then ask for the gradient there
-            : *f pr ( vec_data [f] . st raw )
-            : *f pt ( vec_data [f] . st trial )
-            : *f ps ( vec_data [f] . st s )
+            : ( Slice f ) pr ( slice_from_vec [f] . st raw )
+            : ( Slice f ) pt ( slice_from_vec [f] . st trial )
+            : ( Slice f ) ps ( slice_from_vec [f] . st s )
             : ~ i i 0
-            ~ < i k { = . ps i - . pt i . pr i = . pr i . pt i = i + i 1 }
+            ~ < i k { ( slice_put [f] ps i - ( slice_at [f] pt i ) ( slice_at [f] pr i ) ) ( slice_put [f] pr i ( slice_at [f] pt i ) ) = i + i 1 }
             = . st phase ARIMA_PH_GRAD
             ^ F
         } {
@@ -1647,33 +1656,33 @@ unsafe @ __ar_bfgs_absorb * ArimaBfgs st ( Vec f ) vals → b {
                 ^ T
             } {}
             = . st alpha * . st alpha 0.5
-            : *f pr ( vec_data [f] . st raw )
-            : *f pt ( vec_data [f] . st trial )
-            : *f pd ( vec_data [f] . st d )
+            : ( Slice f ) pr ( slice_from_vec [f] . st raw )
+            : ( Slice f ) pt ( slice_from_vec [f] . st trial )
+            : ( Slice f ) pd ( slice_from_vec [f] . st d )
             : ~ i i 0
-            ~ < i k { = . pt i + . pr i * . st alpha . pd i = i + i 1 }
+            ~ < i k { ( slice_put [f] pt i + ( slice_at [f] pr i ) * . st alpha ( slice_at [f] pd i ) ) = i + i 1 }
             ^ F
         }
     } {}
     // ARIMA_PH_GRAD: the gradient at the accepted point — the update.
     : ( Vec f ) gn ( vec_zeroed [f] k )
     ( __ar_bfgs_take_grad st vals 0 gn )
-    : *f pg ( vec_data [f] . st g )
-    : *f pgn ( vec_data [f] gn )
-    : *f ps ( vec_data [f] . st s )
-    : *f py ( vec_data [f] . st yv )
-    : *f phy ( vec_data [f] . st hy )
-    : *f pH ( vec_data [f] . st H )
+    : ( Slice f ) pg ( slice_from_vec [f] . st g )
+    : ( Slice f ) pgn ( slice_from_vec [f] gn )
+    : ( Slice f ) ps ( slice_from_vec [f] . st s )
+    : ( Slice f ) py ( slice_from_vec [f] . st yv )
+    : ( Slice f ) phy ( slice_from_vec [f] . st hy )
+    : ( Slice f ) pH ( slice_from_vec [f] . st H )
     : ~ f smax 0.0
     : ~ f sy 0.0
     : ~ f gmax 0.0
     : ~ i i 0
     ~ < i k {
-        : f a ( float_abs . ps i )
+        : f a ( float_abs ( slice_at [f] ps i ) )
         ? > a smax { = smax a } {}
-        = . py i - . pgn i . pg i
-        = sy + sy * . ps i . py i
-        : f ga ( float_abs . pgn i )
+        ( slice_put [f] py i - ( slice_at [f] pgn i ) ( slice_at [f] pg i ) )
+        = sy + sy * ( slice_at [f] ps i ) ( slice_at [f] py i )
+        : f ga ( float_abs ( slice_at [f] pgn i ) )
         ? > ga gmax { = gmax ga } {}
         = i + i 1
     }
@@ -1683,13 +1692,13 @@ unsafe @ __ar_bfgs_absorb * ArimaBfgs st ( Vec f ) vals → b {
         ? == . st iter 0 {
             : ~ f yy 0.0
             = i 0
-            ~ < i k { = yy + yy * . py i . py i = i + i 1 }
+            ~ < i k { = yy + yy * ( slice_at [f] py i ) ( slice_at [f] py i ) = i + i 1 }
             ? > yy 0.0 {
                 : f sc / sy yy
                 = i 0
                 ~ < i k {
                     : ~ i j 0
-                    ~ < j k { = . pH + * i k j ? == i j sc 0.0 = j + j 1 }
+                    ~ < j k { ( slice_put [f] pH + * i k j ? == i j sc 0.0 ) = j + j 1 }
                     = i + i 1
                 }
             } {}
@@ -1700,21 +1709,21 @@ unsafe @ __ar_bfgs_absorb * ArimaBfgs st ( Vec f ) vals → b {
         ~ < i k {
             : ~ f v 0.0
             : ~ i j 0
-            ~ < j k { = v + v * . pH + * i k j . py j = j + j 1 }
-            = . phy i v
+            ~ < j k { = v + v * ( slice_at [f] pH + * i k j ) ( slice_at [f] py j ) = j + j 1 }
+            ( slice_put [f] phy i v )
             = i + i 1
         }
         : ~ f yhy 0.0
         = i 0
-        ~ < i k { = yhy + yhy * . py i . phy i = i + i 1 }
+        ~ < i k { = yhy + yhy * ( slice_at [f] py i ) ( slice_at [f] phy i ) = i + i 1 }
         = i 0
         ~ < i k {
             : ~ i j 0
             ~ < j k {
-                : f hij . pH + * i k j
-                : f ss_term * * rho + 1.0 * rho yhy * . ps i . ps j
-                : f cross * rho + * . phy i . ps j * . ps i . phy j
-                = . pH + * i k j - + hij ss_term cross
+                : f hij ( slice_at [f] pH + * i k j )
+                : f ss_term * * rho + 1.0 * rho yhy * ( slice_at [f] ps i ) ( slice_at [f] ps j )
+                : f cross * rho + * ( slice_at [f] phy i ) ( slice_at [f] ps j ) * ( slice_at [f] ps i ) ( slice_at [f] phy j )
+                ( slice_put [f] pH + * i k j - + hij ss_term cross )
                 = j + j 1
             }
             = i + i 1
@@ -1723,7 +1732,7 @@ unsafe @ __ar_bfgs_absorb * ArimaBfgs st ( Vec f ) vals → b {
     : f df - . st f0 . st fn
     = . st f0 . st fn
     = i 0
-    ~ < i k { = . pg i . pgn i = i + i 1 }
+    ~ < i k { ( slice_put [f] pg i ( slice_at [f] pgn i ) ) = i + i 1 }
     = . st iter + . st iter 1
     : ~ b stop F
     ? | < df * ARIMA_TOL + 1.0 ( float_abs . st f0 ) < smax 0.000000001 {
@@ -1744,11 +1753,10 @@ unsafe @ __ar_bfgs_absorb * ArimaBfgs st ( Vec f ) vals → b {
 
 // Minimise the objective from `raw` (updated in place): the machine
 // driven with the batch evaluator.
-unsafe @ __ar_bfgs * ArimaObj o ( Vec f ) raw → ArimaOpt {
+@ __ar_bfgs inout ArimaObj o ( Vec f ) raw → ArimaOpt {
     : i k ( vec_len [f] raw )
     ? == k 0 { ^ @ ArimaOpt { T ( __ar_objective o raw ) 0 } } {}
-    : ( Box ArimaBfgs ) stb ( __ar_bfgs_new raw )
-    : *ArimaBfgs st # *ArimaBfgs ( box_ptr [ArimaBfgs] stb )
+    : ~ ArimaBfgs st ( __ar_bfgs_new raw )
     : ~ b done F
     ~ ! done {
         : ( Vec ( Vec f ) ) reqs ( __ar_bfgs_requests st )
@@ -1789,17 +1797,25 @@ unsafe @ __ar_bfgs * ArimaObj o ( Vec f ) raw → ArimaOpt {
     i xtr  // 1 when a linear trend (drift) is among the regressors
 }
 
-// An ArimaModel is a handle on its state in an Arc (stdlib/std/arc.nu):
-// every copy is the same state, and the last owner releases it.
-: ArimaModel { ( Arc ArimaModelImpl ) a }
+// An ArimaModel is a handle on its state in a Locked (stdlib/std/thread.nu):
+// every copy is the same state, stepped by any of them on any thread, and
+// the last owner releases it. A call checks the state out (locked_take),
+// works on it and puts it back; another thread's call waits meanwhile.
+: ArimaModel { ( Locked ArimaModelImpl ) l }
 
-@ ArimaModel_share ArimaModel h → ArimaModel { ^ @ ArimaModel { ( arc_clone [ArimaModelImpl] . h a ) } }
+@ ArimaModel_share ArimaModel h → ArimaModel { ^ @ ArimaModel { ( Locked_share [ArimaModelImpl] . h l ) } }
 
 @ ArimaModel_drop sink ArimaModel h → v {}
-// The state, for this package's own code.
-unsafe @ _ArimaModel_ptr ArimaModel h → *ArimaModelImpl { ^ ( arc_ptr [ArimaModelImpl] . h a ) }
+
+@ __ar_model_of sink ArimaModelImpl m → ArimaModel { ^ @ ArimaModel { ( locked_new [ArimaModelImpl] m ) } }
+
+// A model state with its fit statistics at zero and no regressors.
+@ __ar_model_blank ArimaSpec sp ArimaCoef c ArimaSS ss i method → ArimaModelImpl {
+    ^ @ ArimaModelImpl { sp c 0.0 0.0 0.0 0.0 0.0 0 0 0 method F 0 0 ss ( vec_new [f] ) 0.0 0.0 0.0 ( vec_new [i] ) 0 ( vec_new [f] ) 0 0 }
+}
+
 // Does the model carry regressors at all?
-unsafe @ __ar_has_x * ArimaModelImpl m → b {
+@ __ar_has_x ArimaModelImpl m → b {
     ^ > ( vec_len [f] . m xcoef ) 0
 }
 
@@ -1809,123 +1825,231 @@ unsafe @ __ar_has_x * ArimaModelImpl m → b {
 
 // The deterministic seasonal at row `t`: the intercept and the Fourier
 // terms of every period (0.0 when the model has none).
-unsafe @ __ar_fourier * ArimaModelImpl m i t → f {
+@ __ar_fourier ArimaModelImpl m i t → f {
     ? ( __ar_has_x m ) {} { ^ 0.0 }
-    : *f c ( vec_data [f] . m xcoef )
-    : *i per ( vec_data [i] . m xper )
+    : ( Slice f ) c ( slice_from_vec [f] . m xcoef )
+    : ( Slice i ) per ( slice_from_vec [i] . m xper )
     : i np ( vec_len [i] . m xper )
-    : ~ f mu . c 0
+    : ~ f mu ( slice_at [f] c 0 )
     : ~ i q 1
     : ~ i p 0
     ~ < p np {
-        : f base / * TAU # f t # f . per p
+        : f base / * TAU # f t # f ( slice_at [i] per p )
         : ~ i k 1
         ~ <= k . m xk {
             : f a * base # f k
-            = mu + mu * . c q ( float_sin a )
-            = mu + mu * . c + q 1 ( float_cos a )
+            = mu + mu * ( slice_at [f] c q ) ( float_sin a )
+            = mu + mu * ( slice_at [f] c + q 1 ) ( float_cos a )
             = q + q 2
             = k + k 1
         }
         = p + p 1
     }
-    ? != . m xtr 0 { = mu + mu * . c q # f t } {}
+    ? != . m xtr 0 { = mu + mu * ( slice_at [f] c q ) # f t } {}
     ^ mu
 }
 
-unsafe @ arima_spec_of ArimaModel m__h → ArimaSpec {
-    : *ArimaModelImpl m ( _ArimaModel_ptr m__h )
+@ __arima_spec_of_in inout ArimaModelImpl m → ArimaSpec {
     ^ . m spec
 }
 
-unsafe @ arima_sigma2 ArimaModel m__h → f {
-    : *ArimaModelImpl m ( _ArimaModel_ptr m__h )
+@ arima_spec_of ArimaModel m__h → ArimaSpec {
+    : ~ ArimaModelImpl m ( locked_take [ArimaModelImpl] . m__h l )
+    : ArimaSpec res ( __arima_spec_of_in m )
+    ( locked_restore [ArimaModelImpl] . m__h l m )
+    ^ res
+}
+
+@ __arima_sigma2_in inout ArimaModelImpl m → f {
     ^ . m sigma2
 }
 
-unsafe @ arima_loglik ArimaModel m__h → f {
-    : *ArimaModelImpl m ( _ArimaModel_ptr m__h )
+@ arima_sigma2 ArimaModel m__h → f {
+    : ~ ArimaModelImpl m ( locked_take [ArimaModelImpl] . m__h l )
+    : f res ( __arima_sigma2_in m )
+    ( locked_restore [ArimaModelImpl] . m__h l m )
+    ^ res
+}
+
+@ __arima_loglik_in inout ArimaModelImpl m → f {
     ^ . m loglik
 }
 
-unsafe @ arima_aic ArimaModel m__h → f {
-    : *ArimaModelImpl m ( _ArimaModel_ptr m__h )
+@ arima_loglik ArimaModel m__h → f {
+    : ~ ArimaModelImpl m ( locked_take [ArimaModelImpl] . m__h l )
+    : f res ( __arima_loglik_in m )
+    ( locked_restore [ArimaModelImpl] . m__h l m )
+    ^ res
+}
+
+@ __arima_aic_in inout ArimaModelImpl m → f {
     ^ . m aic
 }
 
-unsafe @ arima_aicc ArimaModel m__h → f {
-    : *ArimaModelImpl m ( _ArimaModel_ptr m__h )
+@ arima_aic ArimaModel m__h → f {
+    : ~ ArimaModelImpl m ( locked_take [ArimaModelImpl] . m__h l )
+    : f res ( __arima_aic_in m )
+    ( locked_restore [ArimaModelImpl] . m__h l m )
+    ^ res
+}
+
+@ __arima_aicc_in inout ArimaModelImpl m → f {
     ^ . m aicc
 }
 
-unsafe @ arima_n ArimaModel m__h → i {
-    : *ArimaModelImpl m ( _ArimaModel_ptr m__h )
+@ arima_aicc ArimaModel m__h → f {
+    : ~ ArimaModelImpl m ( locked_take [ArimaModelImpl] . m__h l )
+    : f res ( __arima_aicc_in m )
+    ( locked_restore [ArimaModelImpl] . m__h l m )
+    ^ res
+}
+
+@ __arima_n_in inout ArimaModelImpl m → i {
     ^ . m n
 }
 
-unsafe @ arima_converged ArimaModel m__h → b {
-    : *ArimaModelImpl m ( _ArimaModel_ptr m__h )
+@ arima_n ArimaModel m__h → i {
+    : ~ ArimaModelImpl m ( locked_take [ArimaModelImpl] . m__h l )
+    : i res ( __arima_n_in m )
+    ( locked_restore [ArimaModelImpl] . m__h l m )
+    ^ res
+}
+
+@ __arima_converged_in inout ArimaModelImpl m → b {
     ^ . m converged
 }
 
+@ arima_converged ArimaModel m__h → b {
+    : ~ ArimaModelImpl m ( locked_take [ArimaModelImpl] . m__h l )
+    : b res ( __arima_converged_in m )
+    ( locked_restore [ArimaModelImpl] . m__h l m )
+    ^ res
+}
+
 // Objective evaluations the fit took.
-unsafe @ arima_evals ArimaModel m__h → i {
-    : *ArimaModelImpl m ( _ArimaModel_ptr m__h )
+@ __arima_evals_in inout ArimaModelImpl m → i {
     ^ . m evals
+}
+
+@ arima_evals ArimaModel m__h → i {
+    : ~ ArimaModelImpl m ( locked_take [ArimaModelImpl] . m__h l )
+    : i res ( __arima_evals_in m )
+    ( locked_restore [ArimaModelImpl] . m__h l m )
+    ^ res
 }
 
 // Standard errors, coefficient order (may hold NaN). Borrowed: valid
 // while the model is.
-unsafe @ arima_se ArimaModel m__h → ( Vec f ) {
-    : *ArimaModelImpl m ( _ArimaModel_ptr m__h )
+@ __arima_se_in inout ArimaModelImpl m → ( Vec f ) {
     ^ . m se
+}
+
+@ arima_se ArimaModel m__h → ( Vec f ) {
+    : ~ ArimaModelImpl m ( locked_take [ArimaModelImpl] . m__h l )
+    : ( Vec f ) res ( __ar_vec_copy ( __arima_se_in m ) )
+    ( locked_restore [ArimaModelImpl] . m__h l m )
+    ^ res
 }
 
 // The regressors (see arima_fit_regress): harmonics per period, the
 // coefficients (borrowed), the next observation's row, 1 with a trend.
-unsafe @ arima_xk ArimaModel m__h → i {
-    : *ArimaModelImpl m ( _ArimaModel_ptr m__h )
+@ __arima_xk_in inout ArimaModelImpl m → i {
     ^ . m xk
 }
 
-unsafe @ arima_xcoef ArimaModel m__h → ( Vec f ) {
-    : *ArimaModelImpl m ( _ArimaModel_ptr m__h )
+@ arima_xk ArimaModel m__h → i {
+    : ~ ArimaModelImpl m ( locked_take [ArimaModelImpl] . m__h l )
+    : i res ( __arima_xk_in m )
+    ( locked_restore [ArimaModelImpl] . m__h l m )
+    ^ res
+}
+
+@ __arima_xcoef_in inout ArimaModelImpl m → ( Vec f ) {
     ^ . m xcoef
 }
 
-unsafe @ arima_xt ArimaModel m__h → i {
-    : *ArimaModelImpl m ( _ArimaModel_ptr m__h )
+@ arima_xcoef ArimaModel m__h → ( Vec f ) {
+    : ~ ArimaModelImpl m ( locked_take [ArimaModelImpl] . m__h l )
+    : ( Vec f ) res ( __ar_vec_copy ( __arima_xcoef_in m ) )
+    ( locked_restore [ArimaModelImpl] . m__h l m )
+    ^ res
+}
+
+@ __arima_xt_in inout ArimaModelImpl m → i {
     ^ . m xt
 }
 
-unsafe @ arima_xtr ArimaModel m__h → i {
-    : *ArimaModelImpl m ( _ArimaModel_ptr m__h )
+@ arima_xt ArimaModel m__h → i {
+    : ~ ArimaModelImpl m ( locked_take [ArimaModelImpl] . m__h l )
+    : i res ( __arima_xt_in m )
+    ( locked_restore [ArimaModelImpl] . m__h l m )
+    ^ res
+}
+
+@ __arima_xtr_in inout ArimaModelImpl m → i {
     ^ . m xtr
 }
 
-unsafe @ arima_phi ArimaModel m__h → ( Vec f ) {
-    : *ArimaModelImpl m ( _ArimaModel_ptr m__h )
+@ arima_xtr ArimaModel m__h → i {
+    : ~ ArimaModelImpl m ( locked_take [ArimaModelImpl] . m__h l )
+    : i res ( __arima_xtr_in m )
+    ( locked_restore [ArimaModelImpl] . m__h l m )
+    ^ res
+}
+
+@ __arima_phi_in inout ArimaModelImpl m → ( Vec f ) {
     : ArimaCoef c . m coef ^ . c phi
 }
 
-unsafe @ arima_theta ArimaModel m__h → ( Vec f ) {
-    : *ArimaModelImpl m ( _ArimaModel_ptr m__h )
+@ arima_phi ArimaModel m__h → ( Vec f ) {
+    : ~ ArimaModelImpl m ( locked_take [ArimaModelImpl] . m__h l )
+    : ( Vec f ) res ( __ar_vec_copy ( __arima_phi_in m ) )
+    ( locked_restore [ArimaModelImpl] . m__h l m )
+    ^ res
+}
+
+@ __arima_theta_in inout ArimaModelImpl m → ( Vec f ) {
     : ArimaCoef c . m coef ^ . c theta
 }
 
-unsafe @ arima_sphi ArimaModel m__h → ( Vec f ) {
-    : *ArimaModelImpl m ( _ArimaModel_ptr m__h )
+@ arima_theta ArimaModel m__h → ( Vec f ) {
+    : ~ ArimaModelImpl m ( locked_take [ArimaModelImpl] . m__h l )
+    : ( Vec f ) res ( __ar_vec_copy ( __arima_theta_in m ) )
+    ( locked_restore [ArimaModelImpl] . m__h l m )
+    ^ res
+}
+
+@ __arima_sphi_in inout ArimaModelImpl m → ( Vec f ) {
     : ArimaCoef c . m coef ^ . c sphi
 }
 
-unsafe @ arima_stheta ArimaModel m__h → ( Vec f ) {
-    : *ArimaModelImpl m ( _ArimaModel_ptr m__h )
+@ arima_sphi ArimaModel m__h → ( Vec f ) {
+    : ~ ArimaModelImpl m ( locked_take [ArimaModelImpl] . m__h l )
+    : ( Vec f ) res ( __ar_vec_copy ( __arima_sphi_in m ) )
+    ( locked_restore [ArimaModelImpl] . m__h l m )
+    ^ res
+}
+
+@ __arima_stheta_in inout ArimaModelImpl m → ( Vec f ) {
     : ArimaCoef c . m coef ^ . c stheta
 }
 
-unsafe @ arima_mu ArimaModel m__h → f {
-    : *ArimaModelImpl m ( _ArimaModel_ptr m__h )
+@ arima_stheta ArimaModel m__h → ( Vec f ) {
+    : ~ ArimaModelImpl m ( locked_take [ArimaModelImpl] . m__h l )
+    : ( Vec f ) res ( __ar_vec_copy ( __arima_stheta_in m ) )
+    ( locked_restore [ArimaModelImpl] . m__h l m )
+    ^ res
+}
+
+@ __arima_mu_in inout ArimaModelImpl m → f {
     : ArimaCoef c . m coef ^ . c mu
+}
+
+@ arima_mu ArimaModel m__h → f {
+    : ~ ArimaModelImpl m ( locked_take [ArimaModelImpl] . m__h l )
+    : f res ( __arima_mu_in m )
+    ( locked_restore [ArimaModelImpl] . m__h l m )
+    ^ res
 }
 
 // The full state-space form for the coefficients, with the differencing
@@ -1941,14 +2065,14 @@ unsafe @ arima_mu ArimaModel m__h → f {
 
 // Run the full model over the raw series to reach its end state. The
 // mean is removed on the way in (the state holds y − μ).
-unsafe @ __ar_run_full * ArimaModelImpl m ( Vec f ) y → v {
+@ __ar_run_full inout ArimaModelImpl m ( Vec f ) y → v {
     : i n ( vec_len [f] y )
-    : *f py ( vec_data [f] y )
+    : ( Slice f ) py ( slice_from_vec [f] y )
     : ArimaCoef mc . m coef
     : ArimaSS ss . m ss
     : ~ i t 0
     ~ < t n {
-        : ArimaStep st ( _ar_step ss - . py t . mc mu )
+        : ArimaStep st ( _ar_step ss - ( slice_at [f] py t ) . mc mu )
         = . m last_innovation . st innovation
         = . m last_variance * . st variance . m sigma2
         = . m last_predicted + . st predicted . mc mu
@@ -1958,21 +2082,21 @@ unsafe @ __ar_run_full * ArimaModelImpl m ( Vec f ) y → v {
 
 // Numerical Hessian of −loglik over the natural coefficients at the
 // optimum → standard errors. NaN where the curvature is not positive.
-unsafe @ __ar_stderr * ArimaModelImpl m ( Vec f ) w → ( Vec f ) {
+@ __ar_stderr ArimaModelImpl m ( Vec f ) w → ( Vec f ) {
     : ArimaSpec sp . m spec
     : i k ( __ar_ncoef sp )
     ? == k 0 { ^ ( vec_zeroed [f] 0 ) } {}
     : ( Vec ( Vec f ) ) pts ( __ar_hessian_points m )
     : i np ( vec_len [( Vec f )] pts )
-    : ( Vec f ) vals ( vec_zeroed [f] np )
+    : ( Arc ( Vec f ) ) wa ( arc_new [( Vec f )] ( __ar_vec_copy w ) )
     : ( Vec ArimaJob ) jobs ( vec_new [ArimaJob] )
     : ~ i q 0
     ~ < q np {
-        ?? ( vec_get [( Vec f )] pts q ) { T pt → { ( vec_push [ArimaJob] jobs ( _ar_job sp w . m method 0 pt vals q 1 ) ) } F _ → {} }
+        ?? ( vec_get [( Vec f )] pts q ) { T pt → { ( vec_push [ArimaJob] jobs ( _ar_job sp ( Arc_share [( Vec f )] wa ) . m method 0 pt 1 ) ) } F _ → {} }
         = q + q 1
     }
     : b par > * ( __ar_work_of sp ( vec_len [f] w ) . m method ) np ARIMA_PAR_WORK
-    ( _ar_jobs_run jobs par )
+    : ( Vec f ) vals ( _ar_jobs_eval jobs par )
     ^ ( __ar_hessian_fold m vals )
 }
 
@@ -1984,26 +2108,26 @@ unsafe @ __ar_stderr * ArimaModelImpl m ( Vec f ) w → ( Vec f ) {
 
 // The stencil of the Hessian of −loglik over the natural coefficients at
 // the model's optimum: four points per (i ≤ j) pair, natural coordinates.
-unsafe @ __ar_hessian_points * ArimaModelImpl m → ( Vec ( Vec f ) ) {
+@ __ar_hessian_points ArimaModelImpl m → ( Vec ( Vec f ) ) {
     : ArimaSpec sp . m spec
     : i k ( __ar_ncoef sp )
     : ( Vec f ) x ( _ar_natural_of_coef sp . m coef )
-    : *f px ( vec_data [f] x )
+    : ( Slice f ) px ( slice_from_vec [f] x )
     : ( Vec ( Vec f ) ) pts ( vec_new [( Vec f )] )
     : ~ i i 0
     ~ < i k {
         : ~ i j i
         ~ < j k {
-            : f hi ( __ar_hstep . px i )
-            : f hj ( __ar_hstep . px j )
+            : f hi ( __ar_hstep ( slice_at [f] px i ) )
+            : f hj ( __ar_hstep ( slice_at [f] px j ) )
             : ~ i sgn 0
             ~ < sgn 4 {
                 : ( Vec f ) pt ( __ar_vec_copy x )
-                : *f pp ( vec_data [f] pt )
+                : ( Slice f ) pp ( slice_from_vec [f] pt )
                 : f si ? < sgn 2 hi - 0.0 hi
                 : f sj ? | == sgn 0 == sgn 2 hj - 0.0 hj
-                = . pp i + . pp i si
-                = . pp j + . pp j sj
+                ( slice_put [f] pp i + ( slice_at [f] pp i ) si )
+                ( slice_put [f] pp j + ( slice_at [f] pp j ) sj )
                 ( vec_push [( Vec f )] pts pt )
                 = sgn + sgn 1
             }
@@ -2016,31 +2140,31 @@ unsafe @ __ar_hessian_points * ArimaModelImpl m → ( Vec ( Vec f ) ) {
 
 // The stencil's values → standard errors (NaN where the curvature is
 // not positive, or the Hessian is singular).
-unsafe @ __ar_hessian_fold * ArimaModelImpl m ( Vec f ) vals → ( Vec f ) {
+@ __ar_hessian_fold ArimaModelImpl m ( Vec f ) vals → ( Vec f ) {
     : ArimaSpec sp . m spec
     : i k ( __ar_ncoef sp )
     : ( Vec f ) se ( vec_zeroed [f] k )
     ? == k 0 { ^ se } {}
-    : *f pse ( vec_data [f] se )
+    : ( Slice f ) pse ( slice_from_vec [f] se )
     : ( Vec f ) x ( _ar_natural_of_coef sp . m coef )
-    : *f px ( vec_data [f] x )
+    : ( Slice f ) px ( slice_from_vec [f] x )
     : ( Vec f ) Hm ( vec_zeroed [f] * k k )
-    : *f pH ( vec_data [f] Hm )
-    : *f pv ( vec_data [f] vals )
+    : ( Slice f ) pH ( slice_from_vec [f] Hm )
+    : ( Slice f ) pv ( slice_from_vec [f] vals )
     : ~ i q 0
     : ~ i i 0
     ~ < i k {
         : ~ i j i
         ~ < j k {
-            : f hi ( __ar_hstep . px i )
-            : f hj ( __ar_hstep . px j )
-            : f fpp . pv * 4 q
-            : f fpm . pv + * 4 q 1
-            : f fmp . pv + * 4 q 2
-            : f fmm . pv + * 4 q 3
+            : f hi ( __ar_hstep ( slice_at [f] px i ) )
+            : f hj ( __ar_hstep ( slice_at [f] px j ) )
+            : f fpp ( slice_at [f] pv * 4 q )
+            : f fpm ( slice_at [f] pv + * 4 q 1 )
+            : f fmp ( slice_at [f] pv + * 4 q 2 )
+            : f fmm ( slice_at [f] pv + * 4 q 3 )
             : f v / - - + fpp fmm fpm fmp * * 4.0 hi hj
-            = . pH + * i k j v
-            = . pH + * j k i v
+            ( slice_put [f] pH + * i k j v )
+            ( slice_put [f] pH + * j k i v )
             = q + q 1
             = j + j 1
         }
@@ -2048,17 +2172,17 @@ unsafe @ __ar_hessian_fold * ArimaModelImpl m ( Vec f ) vals → ( Vec f ) {
     }
     // Invert by Gauss–Jordan; a failure leaves NaN everywhere.
     : ( Vec f ) inv ( vec_zeroed [f] * k k )
-    : *f pi ( vec_data [f] inv )
+    : ( Slice f ) pi ( slice_from_vec [f] inv )
     = i 0
-    ~ < i k { = . pi + * i k i 1.0 = i + i 1 }
+    ~ < i k { ( slice_put [f] pi + * i k i 1.0 ) = i + i 1 }
     : ~ b ok T
     : ~ i c 0
     ~ & ok < c k {
         : ~ i piv c
-        : ~ f best ( float_abs . pH + * c k c )
+        : ~ f best ( float_abs ( slice_at [f] pH + * c k c ) )
         : ~ i rr + c 1
         ~ < rr k {
-            : f a ( float_abs . pH + * rr k c )
+            : f a ( float_abs ( slice_at [f] pH + * rr k c ) )
             ? > a best { = best a = piv rr } {}
             = rr + rr 1
         }
@@ -2066,27 +2190,27 @@ unsafe @ __ar_hessian_fold * ArimaModelImpl m ( Vec f ) vals → ( Vec f ) {
             ? != piv c {
                 : ~ i j 0
                 ~ < j k {
-                    : f t1 . pH + * c k j
-                    = . pH + * c k j . pH + * piv k j
-                    = . pH + * piv k j t1
-                    : f t2 . pi + * c k j
-                    = . pi + * c k j . pi + * piv k j
-                    = . pi + * piv k j t2
+                    : f t1 ( slice_at [f] pH + * c k j )
+                    ( slice_put [f] pH + * c k j ( slice_at [f] pH + * piv k j ) )
+                    ( slice_put [f] pH + * piv k j t1 )
+                    : f t2 ( slice_at [f] pi + * c k j )
+                    ( slice_put [f] pi + * c k j ( slice_at [f] pi + * piv k j ) )
+                    ( slice_put [f] pi + * piv k j t2 )
                     = j + j 1
                 }
             } {}
-            : f pv . pH + * c k c
+            : f pv ( slice_at [f] pH + * c k c )
             : ~ i j 0
-            ~ < j k { = . pH + * c k j / . pH + * c k j pv = . pi + * c k j / . pi + * c k j pv = j + j 1 }
+            ~ < j k { ( slice_put [f] pH + * c k j / ( slice_at [f] pH + * c k j ) pv ) ( slice_put [f] pi + * c k j / ( slice_at [f] pi + * c k j ) pv ) = j + j 1 }
             = rr 0
             ~ < rr k {
                 ? != rr c {
-                    : f fac . pH + * rr k c
+                    : f fac ( slice_at [f] pH + * rr k c )
                     ? != fac 0.0 {
                         = j 0
                         ~ < j k {
-                            = . pH + * rr k j - . pH + * rr k j * fac . pH + * c k j
-                            = . pi + * rr k j - . pi + * rr k j * fac . pi + * c k j
+                            ( slice_put [f] pH + * rr k j - ( slice_at [f] pH + * rr k j ) * fac ( slice_at [f] pH + * c k j ) )
+                            ( slice_put [f] pi + * rr k j - ( slice_at [f] pi + * rr k j ) * fac ( slice_at [f] pi + * c k j ) )
                             = j + j 1
                         }
                     } {}
@@ -2098,8 +2222,8 @@ unsafe @ __ar_hessian_fold * ArimaModelImpl m ( Vec f ) vals → ( Vec f ) {
     }
     = i 0
     ~ < i k {
-        : f vii . pi + * i k i
-        = . pse i ? & ok > vii 0.0 ( float_sqrt vii ) / 0.0 0.0
+        : f vii ( slice_at [f] pi + * i k i )
+        ( slice_put [f] pse i ? & ok > vii 0.0 ( float_sqrt vii ) / 0.0 0.0 )
         = i + i 1
     }
     ^ se
@@ -2163,13 +2287,12 @@ unsafe @ __ar_hessian_fold * ArimaModelImpl m ( Vec f ) vals → ( Vec f ) {
 // order; the search passes the largest order it screens); without
 // `with_se` the model has neither standard errors nor a filtered state —
 // a screened candidate, judged by its AICc and discarded.
-unsafe @ __ar_fit_cond ( Vec f ) y ArimaSpec sp0 i method i ncond b with_se → ArimaModel {
+@ __ar_fit_cond ( Vec f ) y ArimaSpec sp0 i method i ncond b with_se → ArimaModel {
     : ArimaSpec sp ( arima_spec_with_mean sp0 . sp0 mean )
     : ( Vec f ) w ( arima_difference y . sp d . sp D . sp s )
     : ( Vec f ) raw ( __ar_raw_start w sp )
-    // the objective's parameter block (it keeps w for the fit)
-    : ( Box ArimaObj ) ob ( box_new [ArimaObj] @ ArimaObj { sp w ARIMA_CSS ncond 0 } )
-    : *ArimaObj o # *ArimaObj ( box_ptr [ArimaObj] ob )
+    // the objective's parameter block (it shares w with the evaluations)
+    : ~ ArimaObj o @ ArimaObj { sp ( arc_new [( Vec f )] w ) ARIMA_CSS ncond 0 }
     : ~ ArimaOpt opt ( __ar_bfgs o raw )
     : ~ i iters . opt iterations
     ? == method ARIMA_ML {
@@ -2178,19 +2301,16 @@ unsafe @ __ar_fit_cond ( Vec f ) y ArimaSpec sp0 i method i ncond b with_se → 
         = opt opt2
         = iters + iters . opt2 iterations
     } {}
-    ^ ( __ar_model_from_raw y . o w sp method ncond raw . opt converged iters . o evals with_se with_se )
+    ^ ( __ar_model_from_raw y ( arc_get [( Vec f )] . o w ) sp method ncond raw . opt converged iters . o evals with_se with_se )
 }
 
 // The model at an optimum: coefficients, statistics, standard errors,
 // and the full state filtered over the raw series.
-unsafe @ __ar_model_from_raw ( Vec f ) y ( Vec f ) w ArimaSpec sp i method i ncond ( Vec f ) raw b converged i iters i evals b with_se b with_state → ArimaModel {
+@ __ar_model_from_raw ( Vec f ) y ( Vec f ) w ArimaSpec sp i method i ncond ( Vec f ) raw b converged i iters i evals b with_se b with_state → ArimaModel {
     : i k ( __ar_ncoef sp )
     : ArimaCoef c ( _ar_coef_of_raw sp raw )
     : ArimaLik lk ? == method ARIMA_CSS ( __ar_loglik_css sp c w ncond ) ( __ar_loglik_ml sp c w )
-    : ( Arc ArimaModelImpl ) m__box ( arc_zero [ArimaModelImpl] )
-    : *ArimaModelImpl m ( arc_ptr [ArimaModelImpl] m__box )
-    = . m spec sp
-    = . m coef c
+    : ~ ArimaModelImpl m ( __ar_model_blank sp c ( __ar_full_ss sp c ) method )
     = . m sigma2 . lk sigma2
     = . m loglik . lk loglik
     : f kk # f + k 1
@@ -2201,25 +2321,15 @@ unsafe @ __ar_model_from_raw ( Vec f ) y ( Vec f ) w ArimaSpec sp i method i nco
     = . m n ( vec_len [f] y )
     = . m n_fit ( vec_len [f] y )
     = . m n_used . lk n_used
-    = . m method method
     = . m converged & converged . lk ok
     = . m iterations iters
     = . m evals evals
-    = . m ss ( __ar_full_ss sp c )
     = . m se ? with_se ( __ar_stderr m w ) ( vec_zeroed [f] k )
-    = . m last_innovation 0.0
-    = . m last_variance 0.0
-    = . m last_predicted 0.0
-    = . m xper ( vec_new [i] )
-    = . m xk 0
-    = . m xcoef ( vec_new [f] )
-    = . m xt 0
-    = . m xtr 0
     // The full model's pass over the raw series is O(n · r_d²) — for a
     // weekly season the cost of the fit itself over again — and a
     // candidate the search will discard has no use for a state.
     ? with_state { ( __ar_run_full m y ) } {}
-    ^ @ ArimaModel { m__box }
+    ^ ( __ar_model_of m )
 }
 
 // The starting parameters for a fit: zeros, the mean at the sample mean.
@@ -2260,7 +2370,7 @@ unsafe @ __ar_model_from_raw ( Vec f ) y ( Vec f ) w ArimaSpec sp i method i nco
 // (and CSS's conditioning count, 0 = the model's own order).
 : ArimaCtx {
     ArimaSpec sp
-    ( Vec f ) w
+    ( Arc ( Vec f ) ) w  // shared with the evaluations' threads
     i method
     i ncond
 }
@@ -2276,7 +2386,7 @@ unsafe @ __ar_model_from_raw ( Vec f ) y ( Vec f ) w ArimaSpec sp i method i nco
             T it → {
                 ?? ( vec_get [ArimaCtx] ctxs . it ctx ) {
                     T cx → {
-                        : i wk ( __ar_work_of . cx sp ( vec_len [f] . cx w ) . cx method )
+                        : i wk ( __ar_work_of . cx sp ( vec_len [f] ( arc_get [( Vec f )] . cx w ) ) . cx method )
                         ? > wk big { = big wk } {}
                     }
                     F _ → {}
@@ -2295,7 +2405,7 @@ unsafe @ __ar_model_from_raw ( Vec f ) y ( Vec f ) w ArimaSpec sp i method i nco
         ?? ( vec_get [ArimaEvalItem] items i ) {
             T it → {
                 ?? ( vec_get [ArimaCtx] ctxs . it ctx ) {
-                    T cx → { ( vec_push [ArimaJob] jobs ( _ar_job . cx sp . cx w . cx method . cx ncond . it raw out i . it kind ) ) }
+                    T cx → { ( vec_push [ArimaJob] jobs ( _ar_job . cx sp . cx w . cx method . cx ncond . it raw . it kind ) ) }
                     F _ → {}
                 }
             }
@@ -2303,11 +2413,11 @@ unsafe @ __ar_model_from_raw ( Vec f ) y ( Vec f ) w ArimaSpec sp i method i nco
         }
         = i + i 1
     }
-    ( _ar_jobs_run jobs par )
+    ( __ar_copy_into out ( _ar_jobs_eval jobs par ) )
 }
 
 : ArimaFitState {
-    ( Box ArimaBfgs ) st
+    ArimaBfgs st
     i stage  // 0 = CSS running, 1 = ML running, 2 = finished
     i iters
     i evals
@@ -2318,20 +2428,21 @@ unsafe @ __ar_model_from_raw ( Vec f ) y ( Vec f ) w ArimaSpec sp i method i nco
 
 // Fit `series` (each a raw series) under `sp` by `method`, the
 // evaluations batched through `evaluator`.
-unsafe @ arima_fit_many_with ( Vec ( Vec f ) ) series ArimaSpec sp0 i method ( @ v ( Vec ArimaEvalItem ) ( Vec ArimaCtx ) ( Vec f ) ) evaluator → ( Vec ArimaModel ) {
+@ arima_fit_many_with ( Vec ( Vec f ) ) series ArimaSpec sp0 i method ( @ v ( Vec ArimaEvalItem ) ( Vec ArimaCtx ) ( Vec f ) ) evaluator → ( Vec ArimaModel ) {
     : ArimaSpec sp ( arima_spec_with_mean sp0 . sp0 mean )
     : i K ( vec_len [( Vec f )] series )
-    // Per-model state, boxed (its address stays put while these grow).
-    : ( Vec ( Box ArimaCtx ) ) ctxp ( vec_new [( Box ArimaCtx )] )
-    : ( Vec ( Box ArimaFitState ) ) fsp ( vec_new [( Box ArimaFitState )] )
+    // Per-model state: its context, and its optimizer, checked out of
+    // the Vec while a round changes it (__ar_fs_take / __ar_fs_put).
+    : ( Vec ArimaCtx ) ctxv ( vec_new [ArimaCtx] )
+    : ( Vec ArimaFitState ) fsv ( vec_new [ArimaFitState] )
     : ~ i i 0
     ~ < i K {
         ?? ( vec_get [( Vec f )] series i ) {
             T y → {
                 : ( Vec f ) w ( arima_difference y . sp d . sp D . sp s )
                 : ( Vec f ) raw ( __ar_raw_start w sp )
-                ( vec_push [( Box ArimaCtx )] ctxp ( box_new [ArimaCtx] @ ArimaCtx { sp w ARIMA_CSS 0 } ) )
-                ( vec_push [( Box ArimaFitState )] fsp ( box_new [ArimaFitState] @ ArimaFitState { ( __ar_bfgs_new raw ) 0 0 0 F 0 0 } ) )
+                ( vec_push [ArimaCtx] ctxv @ ArimaCtx { sp ( arc_new [( Vec f )] w ) ARIMA_CSS 0 } )
+                ( vec_push [ArimaFitState] fsv @ ArimaFitState { ( __ar_bfgs_new raw ) 0 0 0 F 0 0 } )
             }
             F _ → {}
         }
@@ -2343,56 +2454,49 @@ unsafe @ arima_fit_many_with ( Vec ( Vec f ) ) series ArimaSpec sp0 i method ( @
         : ( Vec ArimaEvalItem ) items ( vec_new [ArimaEvalItem] )
         = i 0
         ~ < i K {
-            : *ArimaFitState f ( _ar_fs_at fsp i )
+            : ~ ArimaFitState f ( __ar_fs_take fsv i )
             = . f req_at ( vec_len [ArimaEvalItem] items )
             = . f req_n 0
             ? < . f stage 2 {
-                : ( Vec ( Vec f ) ) reqs ( __ar_bfgs_requests # *ArimaBfgs ( box_ptr [ArimaBfgs] . f st ) )
+                : ( Vec ( Vec f ) ) reqs ( __ar_bfgs_requests . f st )
                 : i nr ( vec_len [( Vec f )] reqs )
                 : ~ i q 0
                 ~ < q nr {
-                    ?? ( vec_get [( Vec f )] reqs q ) { T rw → { ( vec_push [ArimaEvalItem] items @ ArimaEvalItem { i rw 0 } ) } F _ → {} }
+                    ?? ( vec_get [( Vec f )] reqs q ) { T rw → { ( vec_push [ArimaEvalItem] items @ ArimaEvalItem { i ( __ar_vec_copy rw ) 0 } ) } F _ → {} }
                     = q + q 1
                 }
                 = . f req_n nr
                 = . f evals + . f evals nr
                 ? > nr 0 { = active T } {}
             } {}
+            ( __ar_fs_put fsv i f )
             = i + i 1
         }
         ? active {
             : ( Vec f ) vals ( vec_zeroed [f] ( vec_len [ArimaEvalItem] items ) )
-            // the contexts as the evaluator sees them, by value
-            : ( Vec ArimaCtx ) ctxs ( vec_new [ArimaCtx] )
+            ( evaluator items ctxv vals )
+            : ( Slice f ) pv ( slice_from_vec [f] vals )
             = i 0
             ~ < i K {
-                : *ArimaCtx cx ( _ar_ctx_at ctxp i )
-                ( vec_push [ArimaCtx] ctxs @ ArimaCtx { . cx sp . cx w . cx method . cx ncond } )
-                = i + i 1
-            }
-            ( evaluator items ctxs vals )
-            : *f pv ( vec_data [f] vals )
-            = i 0
-            ~ < i K {
-                : *ArimaFitState f ( _ar_fs_at fsp i )
+                : ~ ArimaFitState f ( __ar_fs_take fsv i )
                 ? & < . f stage 2 > . f req_n 0 {
                     : ( Vec f ) mine ( vec_zeroed [f] . f req_n )
-                    : *f pm ( vec_data [f] mine )
+                    : ( Slice f ) pm ( slice_from_vec [f] mine )
                     : ~ i q 0
-                    ~ < q . f req_n { = . pm q . pv + . f req_at q = q + q 1 }
-                    : *ArimaBfgs st # *ArimaBfgs ( box_ptr [ArimaBfgs] . f st )
-                    ? ( __ar_bfgs_absorb st mine ) {
-                        = . f iters + . f iters . st iter
-                        = . f converged . st converged
+                    ~ < q . f req_n { ( slice_put [f] pm q ( slice_at [f] pv + . f req_at q ) ) = q + q 1 }
+                    ? ( __ar_bfgs_absorb . f st mine ) {
+                        = . f iters + . f iters . . f st iter
+                        = . f converged . . f st converged
                         ? & == . f stage 0 == method ARIMA_ML {
                             // CSS done: ML from there (the store lets the CSS state go)
-                            = . f st ( __ar_bfgs_new . st raw )
+                            = . f st ( __ar_bfgs_new . . f st raw )
                             = . f stage 1
-                            : *ArimaCtx cx ( _ar_ctx_at ctxp i )
-                            = . cx method ARIMA_ML
+                            : ArimaCtx cx ( vec_at [ArimaCtx] ctxv i )
+                            ( vec_put [ArimaCtx] ctxv i @ ArimaCtx { . cx sp . cx w ARIMA_ML . cx ncond } )
                         } { = . f stage 2 }
                     } {}
                 } {}
+                ( __ar_fs_put fsv i f )
                 = i + i 1
             }
         } {}
@@ -2400,12 +2504,11 @@ unsafe @ arima_fit_many_with ( Vec ( Vec f ) ) series ArimaSpec sp0 i method ( @
     : ( Vec ArimaModel ) out ( vec_new [ArimaModel] )
     = i 0
     ~ < i K {
-        : *ArimaFitState f ( _ar_fs_at fsp i )
-        : *ArimaCtx cx ( _ar_ctx_at ctxp i )
+        : ArimaFitState f ( vec_at [ArimaFitState] fsv i )
+        : ArimaCtx cx ( vec_at [ArimaCtx] ctxv i )
         ?? ( vec_get [( Vec f )] series i ) {
             T y → {
-                : *ArimaBfgs st # *ArimaBfgs ( box_ptr [ArimaBfgs] . f st )
-                ( vec_push [ArimaModel] out ( __ar_model_from_raw y . cx w sp method 0 . st raw . f converged . f iters . f evals F T ) )
+                ( vec_push [ArimaModel] out ( __ar_model_from_raw y ( arc_get [( Vec f )] . cx w ) sp method 0 . . f st raw . f converged . f iters . f evals F T ) )
             }
             F _ → {}
         }
@@ -2418,18 +2521,18 @@ unsafe @ arima_fit_many_with ( Vec ( Vec f ) ) series ArimaSpec sp0 i method ( @
     : ( Vec ArimaCtx ) hctx ( vec_new [ArimaCtx] )
     = i 0
     ~ < i K {
-        : *ArimaCtx cx ( _ar_ctx_at ctxp i )
-        = . cx method method
-        ( vec_push [ArimaCtx] hctx @ ArimaCtx { . cx sp . cx w . cx method . cx ncond } )
+        : ArimaCtx cx ( vec_at [ArimaCtx] ctxv i )
+        ( vec_push [ArimaCtx] hctx @ ArimaCtx { . cx sp . cx w method . cx ncond } )
         ( vec_push [i] hat ( vec_len [ArimaEvalItem] hitems ) )
         ?? ( vec_get [ArimaModel] out i ) {
             T mmh → {
-                : *ArimaModelImpl mm ( _ArimaModel_ptr mmh )
+                : ~ ArimaModelImpl mm ( locked_take [ArimaModelImpl] . mmh l )
                 : ( Vec ( Vec f ) ) pts ( __ar_hessian_points mm )
+                ( locked_restore [ArimaModelImpl] . mmh l mm )
                 : i np ( vec_len [( Vec f )] pts )
                 : ~ i q 0
                 ~ < q np {
-                    ?? ( vec_get [( Vec f )] pts q ) { T pt → { ( vec_push [ArimaEvalItem] hitems @ ArimaEvalItem { i pt 1 } ) } F _ → {} }
+                    ?? ( vec_get [( Vec f )] pts q ) { T pt → { ( vec_push [ArimaEvalItem] hitems @ ArimaEvalItem { i ( __ar_vec_copy pt ) 1 } ) } F _ → {} }
                     = q + q 1
                 }
                 ( vec_push [i] hn np )
@@ -2440,20 +2543,20 @@ unsafe @ arima_fit_many_with ( Vec ( Vec f ) ) series ArimaSpec sp0 i method ( @
     }
     : ( Vec f ) hvals ( vec_zeroed [f] ( vec_len [ArimaEvalItem] hitems ) )
     ? > ( vec_len [ArimaEvalItem] hitems ) 0 { ( evaluator hitems hctx hvals ) } {}
-    : *f phv ( vec_data [f] hvals )
+    : ( Slice f ) phv ( slice_from_vec [f] hvals )
     = i 0
     ~ < i K {
         ?? ( vec_get [ArimaModel] out i ) {
             T mmh → {
-                : *ArimaModelImpl mm ( _ArimaModel_ptr mmh )
+                : ~ ArimaModelImpl mm ( locked_take [ArimaModelImpl] . mmh l )
                 : i np ( _ar_geti hn i )
                 : i at ( _ar_geti hat i )
                 : ( Vec f ) mine ( vec_zeroed [f] np )
-                : *f pm ( vec_data [f] mine )
+                : ( Slice f ) pm ( slice_from_vec [f] mine )
                 : ~ i q 0
-                ~ < q np { = . pm q . phv + at q = q + q 1 }
-                ( vec_free [f] . mm se )
+                ~ < q np { ( slice_put [f] pm q ( slice_at [f] phv + at q ) ) = q + q 1 }
                 = . mm se ( __ar_hessian_fold mm mine )
+                ( locked_restore [ArimaModelImpl] . mmh l mm )
             }
             F _ → {}
         }
@@ -2462,12 +2565,18 @@ unsafe @ arima_fit_many_with ( Vec ( Vec f ) ) series ArimaSpec sp0 i method ( @
     ^ out
 }
 
-unsafe @ _ar_ctx_at ( Vec ( Box ArimaCtx ) ) v i k → *ArimaCtx {
-    ^ # *ArimaCtx ( box_ptr [ArimaCtx] ( vec_at [( Box ArimaCtx )] v k ) )
+// Model `k`'s fit state, out of the Vec (the last one takes its place)…
+@ __ar_fs_take ( Vec ArimaFitState ) v i k → ArimaFitState {
+    : i last - ( vec_len [ArimaFitState] v ) 1
+    ? != k last { ( vec_swap [ArimaFitState] v k last ) } {}
+    ?? ( vec_pop [ArimaFitState] v ) { T x → { ^ x } F → { ( nurl_panic `arima: fit state out of range` ) ^ ( __ar_fs_take v k ) } }
 }
 
-unsafe @ _ar_fs_at ( Vec ( Box ArimaFitState ) ) v i k → *ArimaFitState {
-    ^ # *ArimaFitState ( box_ptr [ArimaFitState] ( vec_at [( Box ArimaFitState )] v k ) )
+// …and back in its place.
+@ __ar_fs_put ( Vec ArimaFitState ) v i k sink ArimaFitState x → v {
+    ( vec_push [ArimaFitState] v x )
+    : i last - ( vec_len [ArimaFitState] v ) 1
+    ? != k last { ( vec_swap [ArimaFitState] v k last ) } {}
 }
 
 @ _ar_geti ( Vec i ) v i k → i {
@@ -2499,37 +2608,43 @@ unsafe @ _ar_fs_at ( Vec ( Box ArimaFitState ) ) v i k → *ArimaFitState {
 
 // h steps ahead from the model's current state: means and standard
 // errors (σ² applied). The state is left where it was.
-unsafe @ arima_forecast ArimaModel m__h i h → ArimaForecast {
-    : *ArimaModelImpl m ( _ArimaModel_ptr m__h )
+@ __arima_forecast_in inout ArimaModelImpl m i h → ArimaForecast {
     : ( Vec f ) mean ( vec_zeroed [f] h )
     : ( Vec f ) se ( vec_zeroed [f] h )
     : ArimaSS ss . m ss
     : ArimaCoef mc . m coef
     : ( Vec f ) a0 ( __ar_vec_copy . ss a )
     : ( Vec f ) p0 ( __ar_vec_copy . ss pm )
-    : *f pm ( vec_data [f] mean )
-    : *f pse ( vec_data [f] se )
+    : ( Slice f ) pm ( slice_from_vec [f] mean )
+    : ( Slice f ) pse ( slice_from_vec [f] se )
     : ~ i j 0
     ~ < j h {
         : f fv ( __ar_observe ss )
-        = . pm j + ( __ar_predicted ss ) . mc mu
-        ? ( __ar_has_x m ) { = . pm j + . pm j ( __ar_fourier m + . m xt j ) } {}
+        ( slice_put [f] pm j + ( __ar_predicted ss ) . mc mu )
+        ? ( __ar_has_x m ) { ( slice_put [f] pm j + ( slice_at [f] pm j ) ( __ar_fourier m + . m xt j ) ) } {}
         : f vr * fv . m sigma2
-        = . pse j ? > vr 0.0 ( float_sqrt vr ) 0.0
+        ( slice_put [f] pse j ? > vr 0.0 ( float_sqrt vr ) 0.0 )
         ( __ar_tvec ss )
         ( __ar_predict_cov ss )
         = j + j 1
     }
     // restore
-    : *f A ( vec_data [f] . ss a )
-    : *f P ( vec_data [f] . ss pm )
-    : *f A0 ( vec_data [f] a0 )
-    : *f P0 ( vec_data [f] p0 )
+    : ( Slice f ) A ( slice_from_vec [f] . ss a )
+    : ( Slice f ) P ( slice_from_vec [f] . ss pm )
+    : ( Slice f ) A0 ( slice_from_vec [f] a0 )
+    : ( Slice f ) P0 ( slice_from_vec [f] p0 )
     : ~ i i 0
-    ~ < i . ss rd { = . A i . A0 i = i + i 1 }
+    ~ < i . ss rd { ( slice_put [f] A i ( slice_at [f] A0 i ) ) = i + i 1 }
     = i 0
-    ~ < i * . ss rd . ss rd { = . P i . P0 i = i + i 1 }
+    ~ < i * . ss rd . ss rd { ( slice_put [f] P i ( slice_at [f] P0 i ) ) = i + i 1 }
     ^ @ ArimaForecast { mean se }
+}
+
+@ arima_forecast ArimaModel m__h i h → ArimaForecast {
+    : ~ ArimaModelImpl m ( locked_take [ArimaModelImpl] . m__h l )
+    : ArimaForecast res ( __arima_forecast_in m h )
+    ( locked_restore [ArimaModelImpl] . m__h l m )
+    ^ res
 }
 
 : ArimaUpdate {
@@ -2548,8 +2663,7 @@ unsafe @ arima_forecast ArimaModel m__h i h → ArimaForecast {
 // restart. The answer then carries what the model predicted and the
 // variance it would have judged an observation by; innovation and z are
 // NaN, because there was nothing to be surprised by.
-unsafe @ arima_update ArimaModel m__h f y → ArimaUpdate {
-    : *ArimaModelImpl m ( _ArimaModel_ptr m__h )
+@ __arima_update_in inout ArimaModelImpl m f y → ArimaUpdate {
     : ArimaCoef mc . m coef
     : ArimaSS ss . m ss
     = . m n + . m n 1
@@ -2580,6 +2694,13 @@ unsafe @ arima_update ArimaModel m__h f y → ArimaUpdate {
     ^ @ ArimaUpdate { pred . st innovation vr z }
 }
 
+@ arima_update ArimaModel m__h f y → ArimaUpdate {
+    : ~ ArimaModelImpl m ( locked_take [ArimaModelImpl] . m__h l )
+    : ArimaUpdate res ( __arima_update_in m y )
+    ( locked_restore [ArimaModelImpl] . m__h l m )
+    ^ res
+}
+
 // Forget the observations: the state goes back to where a freshly fitted
 // model's stands before its first point (the stationary covariance for
 // the ARMA part, diffuse for the differencing), `n` to 0. The
@@ -2595,8 +2716,7 @@ unsafe @ arima_update ArimaModel m__h f y → ArimaUpdate {
 // observation has, counted from the fit's origin (negative for rows
 // before it) — a replay that begins elsewhere than the fit did keeps the
 // seasonal's phase. A model without regressors ignores it.
-unsafe @ arima_restart_at ArimaModel m__h i t0 → v {
-    : *ArimaModelImpl m ( _ArimaModel_ptr m__h )
+@ __arima_restart_at_in inout ArimaModelImpl m i t0 → v {
     ( _ar_ss_free . m ss )
     = . m ss ( __ar_full_ss . m spec . m coef )
     = . m n 0
@@ -2606,13 +2726,17 @@ unsafe @ arima_restart_at ArimaModel m__h i t0 → v {
     = . m xt t0
 }
 
+@ arima_restart_at ArimaModel m__h i t0 → v {
+    : ~ ArimaModelImpl m ( locked_take [ArimaModelImpl] . m__h l )
+    ( __arima_restart_at_in m t0 )
+    ( locked_restore [ArimaModelImpl] . m__h l m )
+}
+
 // A deep copy: coefficients, fit statistics, standard errors and the
 // state, so the copy can be stepped without moving the original.
-unsafe @ arima_clone ArimaModel m__h → ArimaModel {
-    : *ArimaModelImpl m ( _ArimaModel_ptr m__h )
-    : ~ ArimaModelImpl c @ ArimaModelImpl {}
-    = . c spec . m spec
-    = . c coef ( __ar_coef_clone . m coef )
+@ __arima_clone_in inout ArimaModelImpl m → ArimaModel {
+    : ArimaSS src . m ss
+    : ~ ArimaModelImpl c ( __ar_model_blank . m spec ( __ar_coef_clone . m coef ) @ ArimaSS { . src r . src nd . src rd ( __ar_vec_copy . src phi ) ( __ar_vec_copy . src theta ) ( __ar_vec_copy . src delta ) ( __ar_vec_copy . src a ) ( __ar_vec_copy . src pm ) ( __ar_vec_copy . src scratch ) ( __ar_vec_copy . src scratch2 ) ( __ar_vec_copy . src pz ) ( __ar_vec_copy . src prev ) ( __ar_vec_copy . src kg ) ( __ar_vec_copy . src fz ) } . m method )
     = . c sigma2 . m sigma2
     = . c loglik . m loglik
     = . c aic . m aic
@@ -2621,12 +2745,9 @@ unsafe @ arima_clone ArimaModel m__h → ArimaModel {
     = . c n . m n
     = . c n_fit . m n_fit
     = . c n_used . m n_used
-    = . c method . m method
     = . c converged . m converged
     = . c iterations . m iterations
     = . c evals . m evals
-    : ArimaSS src . m ss
-    = . c ss @ ArimaSS { . src r . src nd . src rd ( __ar_vec_copy . src phi ) ( __ar_vec_copy . src theta ) ( __ar_vec_copy . src delta ) ( __ar_vec_copy . src a ) ( __ar_vec_copy . src pm ) ( __ar_vec_copy . src scratch ) ( __ar_vec_copy . src scratch2 ) ( __ar_vec_copy . src pz ) ( __ar_vec_copy . src prev ) ( __ar_vec_copy . src kg ) ( __ar_vec_copy . src fz ) }
     = . c se ( __ar_vec_copy . m se )
     = . c last_innovation . m last_innovation
     = . c last_variance . m last_variance
@@ -2636,7 +2757,14 @@ unsafe @ arima_clone ArimaModel m__h → ArimaModel {
     = . c xcoef ( __ar_vec_copy . m xcoef )
     = . c xt . m xt
     = . c xtr . m xtr
-    ^ @ ArimaModel { ( arc_new [ArimaModelImpl] c ) }
+    ^ ( __ar_model_of c )
+}
+
+@ arima_clone ArimaModel m__h → ArimaModel {
+    : ~ ArimaModelImpl m ( locked_take [ArimaModelImpl] . m__h l )
+    : ArimaModel res ( __arima_clone_in m )
+    ( locked_restore [ArimaModelImpl] . m__h l m )
+    ^ res
 }
 
 @ __ar_veci_copy ( Vec i ) src → ( Vec i ) {
@@ -2681,23 +2809,27 @@ unsafe @ arima_clone ArimaModel m__h → ArimaModel {
 // fixed amount a row is ARIMA(0,1,0) with drift exactly, and without the
 // term the order search has only a unit root to climb with. Everything
 // is least squares first, the ARIMA on the residuals after.
-unsafe @ arima_fit_regress ( Vec f ) y ( Vec i ) periods i k b trend ArimaSpec sp i method → ArimaModel {
+@ arima_fit_regress ( Vec f ) y ( Vec i ) periods i k b trend ArimaSpec sp i method → ArimaModel {
     : ( Vec f ) coef ( __ar_fourier_ols y periods k trend )
     : ( Vec f ) res ( __ar_fourier_residuals y periods k trend coef )
     : ArimaModel m ( arima_fit_method res sp method )
-    ( __ar_attach_fourier ( _ArimaModel_ptr m ) periods k trend coef ( vec_len [f] y ) )
+    : ~ ArimaModelImpl mi ( locked_take [ArimaModelImpl] . m l )
+    ( __ar_attach_fourier mi periods k trend coef ( vec_len [f] y ) )
+    ( locked_restore [ArimaModelImpl] . m l mi )
     ^ m
 }
 
-unsafe @ arima_auto_regress ( Vec f ) y ( Vec i ) periods i k b trend i s → ArimaModel {
+@ arima_auto_regress ( Vec f ) y ( Vec i ) periods i k b trend i s → ArimaModel {
     : ( Vec f ) coef ( __ar_fourier_ols y periods k trend )
     : ( Vec f ) res ( __ar_fourier_residuals y periods k trend coef )
     : ArimaModel m ( arima_auto res s )
-    ( __ar_attach_fourier ( _ArimaModel_ptr m ) periods k trend coef ( vec_len [f] y ) )
+    : ~ ArimaModelImpl mi ( locked_take [ArimaModelImpl] . m l )
+    ( __ar_attach_fourier mi periods k trend coef ( vec_len [f] y ) )
+    ( locked_restore [ArimaModelImpl] . m l mi )
     ^ m
 }
 
-unsafe @ __ar_attach_fourier * ArimaModelImpl m ( Vec i ) periods i k b trend ( Vec f ) coef i n → v {
+@ __ar_attach_fourier inout ArimaModelImpl m ( Vec i ) periods i k b trend ( Vec f ) coef i n → v {
     ( vec_free [i] . m xper )
     ( vec_free [f] . m xcoef )
     = . m xper ( __ar_veci_copy periods )
@@ -2733,26 +2865,26 @@ unsafe @ __ar_attach_fourier * ArimaModelImpl m ( Vec i ) periods i k b trend ( 
 // Least squares by the normal equations (a handful of columns; rows
 // with a NaN reading are left out). Zeros when the system is singular
 // — fewer rows than columns.
-unsafe @ __ar_fourier_ols ( Vec f ) y ( Vec i ) periods i k b trend → ( Vec f ) {
+@ __ar_fourier_ols ( Vec f ) y ( Vec i ) periods i k b trend → ( Vec f ) {
     : i n ( vec_len [f] y )
     : i nc + + 1 * 2 * k ( vec_len [i] periods ) ? trend 1 0
     : ( Vec f ) M ( vec_zeroed [f] * nc nc )
     : ( Vec f ) b ( vec_zeroed [f] nc )
     : ( Vec f ) row ( vec_zeroed [f] nc )
-    : *f pm ( vec_data [f] M )
-    : *f pb ( vec_data [f] b )
-    : *f pr ( vec_data [f] row )
-    : *f py ( vec_data [f] y )
+    : ( Slice f ) pm ( slice_from_vec [f] M )
+    : ( Slice f ) pb ( slice_from_vec [f] b )
+    : ( Slice f ) pr ( slice_from_vec [f] row )
+    : ( Slice f ) py ( slice_from_vec [f] y )
     : ~ i t 0
     ~ < t n {
-        : f v . py t
+        : f v ( slice_at [f] py t )
         ? ( float_is_nan v ) {} {
             ( __ar_fourier_row periods k trend t row )
             : ~ i i 0
             ~ < i nc {
-                = . pb i + . pb i * . pr i v
+                ( slice_put [f] pb i + ( slice_at [f] pb i ) * ( slice_at [f] pr i ) v )
                 : ~ i j 0
-                ~ < j nc { = . pm + * i nc j + . pm + * i nc j * . pr i . pr j = j + j 1 }
+                ~ < j nc { ( slice_put [f] pm + * i nc j + ( slice_at [f] pm + * i nc j ) * ( slice_at [f] pr i ) ( slice_at [f] pr j ) ) = j + j 1 }
                 = i + i 1
             }
         }
@@ -2762,22 +2894,22 @@ unsafe @ __ar_fourier_ols ( Vec f ) y ( Vec i ) periods i k b trend → ( Vec f 
     ^ b
 }
 
-unsafe @ __ar_fourier_residuals ( Vec f ) y ( Vec i ) periods i k b trend ( Vec f ) coef → ( Vec f ) {
+@ __ar_fourier_residuals ( Vec f ) y ( Vec i ) periods i k b trend ( Vec f ) coef → ( Vec f ) {
     : i n ( vec_len [f] y )
     : i nc ( vec_len [f] coef )
     : ( Vec f ) res ( vec_zeroed [f] n )
     : ( Vec f ) row ( vec_zeroed [f] nc )
-    : *f pr ( vec_data [f] row )
-    : *f pc ( vec_data [f] coef )
-    : *f py ( vec_data [f] y )
-    : *f po ( vec_data [f] res )
+    : ( Slice f ) pr ( slice_from_vec [f] row )
+    : ( Slice f ) pc ( slice_from_vec [f] coef )
+    : ( Slice f ) py ( slice_from_vec [f] y )
+    : ( Slice f ) po ( slice_from_vec [f] res )
     : ~ i t 0
     ~ < t n {
         ( __ar_fourier_row periods k trend t row )
         : ~ f mu 0.0
         : ~ i i 0
-        ~ < i nc { = mu + mu * . pr i . pc i = i + i 1 }
-        = . po t - . py t mu
+        ~ < i nc { = mu + mu * ( slice_at [f] pr i ) ( slice_at [f] pc i ) = i + i 1 }
+        ( slice_put [f] po t - ( slice_at [f] py t ) mu )
         = t + t 1
     }
     ^ res
@@ -2794,25 +2926,25 @@ unsafe @ __ar_fourier_residuals ( Vec f ) y ( Vec i ) periods i k b trend ( Vec 
 
 // The KPSS statistic for level stationarity of `x`, with the Bartlett
 // long-run variance over l = 4 (n/100)^{1/4} lags (Kwiatkowski et al.).
-unsafe @ arima_kpss ( Vec f ) x → f {
+@ arima_kpss ( Vec f ) x → f {
     : i n ( vec_len [f] x )
     ? < n 8 { ^ 0.0 } {}
-    : *f px ( vec_data [f] x )
+    : ( Slice f ) px ( slice_from_vec [f] x )
     : ~ f mean 0.0
     : ~ i t 0
-    ~ < t n { = mean + mean . px t = t + t 1 }
+    ~ < t n { = mean + mean ( slice_at [f] px t ) = t + t 1 }
     = mean / mean # f n
     : ( Vec f ) e ( vec_zeroed [f] n )
-    : *f pe ( vec_data [f] e )
+    : ( Slice f ) pe ( slice_from_vec [f] e )
     : ~ f s 0.0
     : ~ f eta 0.0
     : ~ f s2 0.0
     = t 0
     ~ < t n {
-        = . pe t - . px t mean
-        = s + s . pe t
+        ( slice_put [f] pe t - ( slice_at [f] px t ) mean )
+        = s + s ( slice_at [f] pe t )
         = eta + eta * s s
-        = s2 + s2 * . pe t . pe t
+        = s2 + s2 * ( slice_at [f] pe t ) ( slice_at [f] pe t )
         = t + t 1
     }
     : i l # i ( float_floor * 4.0 ( float_pow / # f n 100.0 0.25 ) )
@@ -2821,7 +2953,7 @@ unsafe @ arima_kpss ( Vec f ) x → f {
     ~ <= k l {
         : ~ f g 0.0
         = t k
-        ~ < t n { = g + g * . pe t . pe - t k = t + t 1 }
+        ~ < t n { = g + g * ( slice_at [f] pe t ) ( slice_at [f] pe - t k ) = t + t 1 }
         = lrv + lrv * * 2.0 - 1.0 / # f k # f + l 1 g
         = k + k 1
     }
@@ -2982,8 +3114,7 @@ unsafe @ arima_kpss ( Vec f ) x → f {
 }
 
 // Coefficients and fit statistics as JSON, for a report or a table.
-unsafe @ arima_coef ArimaModel m__h → Json {
-    : *ArimaModelImpl m ( _ArimaModel_ptr m__h )
+@ __arima_coef_in inout ArimaModelImpl m → Json {
     : Json o ( json_obj_new )
     : ArimaCoef mc . m coef
     ( json_obj_set o `order` ( __ar_jspec . m spec ) )
@@ -3013,6 +3144,13 @@ unsafe @ arima_coef ArimaModel m__h → Json {
     ( json_obj_set o `iterations` ( json_int . m iterations ) )
     ( json_obj_set o `evaluations` ( json_int . m evals ) )
     ^ o
+}
+
+@ arima_coef ArimaModel m__h → Json {
+    : ~ ArimaModelImpl m ( locked_take [ArimaModelImpl] . m__h l )
+    : Json res ( __arima_coef_in m )
+    ( locked_restore [ArimaModelImpl] . m__h l m )
+    ^ res
 }
 
 // ── Persistence ───────────────────────────────────────────────────────
@@ -3075,8 +3213,7 @@ unsafe @ arima_coef ArimaModel m__h → Json {
     ^ 0
 }
 
-unsafe @ arima_to_json ArimaModel m__h → String {
-    : *ArimaModelImpl m ( _ArimaModel_ptr m__h )
+@ __arima_to_json_in inout ArimaModelImpl m → String {
     : Json o ( json_obj_new )
     : ArimaCoef mc . m coef
     : ArimaSS ss . m ss
@@ -3123,13 +3260,20 @@ unsafe @ arima_to_json ArimaModel m__h → String {
     ^ s
 }
 
+@ arima_to_json ArimaModel m__h → String {
+    : ~ ArimaModelImpl m ( locked_take [ArimaModelImpl] . m__h l )
+    : String res ( __arima_to_json_in m )
+    ( locked_restore [ArimaModelImpl] . m__h l m )
+    ^ res
+}
+
 // The order fields of a saved model: under `order`, or (older files) at
 // the top level.
 @ __ar_spec_of_json Json so → ArimaSpec {
     ^ @ ArimaSpec { ( __ar_jint so `p` ) ( __ar_jint so `d` ) ( __ar_jint so `q` ) ( __ar_jint so `P` ) ( __ar_jint so `D` ) ( __ar_jint so `Q` ) ( __ar_jint so `s` ) ?? ( json_obj_get so `mean` ) { T mv → ( json_as_bool mv ) F _ → F } }
 }
 
-unsafe @ arima_from_json s src → ?ArimaModel {
+@ arima_from_json s src → ?ArimaModel {
     ?? ( json_parse src ) {
         T o → {
             : ~ b ok ( json_is_obj o )
@@ -3147,9 +3291,8 @@ unsafe @ arima_from_json s src → ?ArimaModel {
             : ( Vec f ) sth ?? ( json_obj_get o `seasonal_theta` ) { T a → ( __ar_unbits a ) F _ → ( vec_new [f] ) }
             : ArimaCoef c @ ArimaCoef { phi th sphi sth ( __ar_unbit o `mu` ) }
             : ArimaSS fss ( __ar_full_ss sp c )
-            : ~ ArimaModelImpl m @ ArimaModelImpl {}
-            = . m spec sp
-            = . m coef c
+            : ~ ArimaModelImpl m ( __ar_model_blank sp c fss ( __ar_jint o `method` ) )
+            : ArimaSS ms . m ss
             = . m sigma2 ( __ar_unbit o `sigma2` )
             = . m loglik ( __ar_unbit o `loglik` )
             = . m aic ( __ar_unbit o `aic` )
@@ -3158,37 +3301,35 @@ unsafe @ arima_from_json s src → ?ArimaModel {
             = . m n ( __ar_jint o `n` )
             = . m n_fit ( __ar_jint o `n_fit` )
             = . m n_used ( __ar_jint o `n_used` )
-            = . m method ( __ar_jint o `method` )
             = . m converged ?? ( json_obj_get o `converged` ) { T cv → ( json_as_bool cv ) F _ → F }
             = . m iterations ( __ar_jint o `iterations` )
             = . m evals ( __ar_jint o `evaluations` )
             ?? ( json_obj_get o `state_a` ) {
                 T a → {
                     : ( Vec f ) av ( __ar_unbits a )
-                    ? == ( vec_len [f] av ) . fss rd { ( __ar_copy_into . fss a av ) } {}
+                    ? == ( vec_len [f] av ) . ms rd { ( __ar_copy_into . ms a av ) } {}
                 }
                 F _ → {}
             }
             ?? ( json_obj_get o `state_p` ) {
                 T a → {
                     : ( Vec f ) pv ( __ar_unbits a )
-                    ? == ( vec_len [f] pv ) * . fss rd . fss rd { ( __ar_copy_into . fss pm pv ) ( __ar_copy_into . fss prev pv ) } {}
+                    ? == ( vec_len [f] pv ) * . ms rd . ms rd { ( __ar_copy_into . ms pm pv ) ( __ar_copy_into . ms prev pv ) } {}
                 }
                 F _ → {}
             }
             ?? ( json_obj_get o `steady_gain` ) {
                 T a → {
                     : ( Vec f ) gv ( __ar_unbits a )
-                    ? == ( vec_len [f] gv ) . fss rd {
-                        ( __ar_copy_into . fss kg gv )
-                        : *f fz ( vec_data [f] . fss fz )
-                        = . fz 0 ( __ar_unbit o `steady_f` )
-                        = . fz 1 1.0
+                    ? == ( vec_len [f] gv ) . ms rd {
+                        ( __ar_copy_into . ms kg gv )
+                        : ( Slice f ) fz ( slice_from_vec [f] . ms fz )
+                        ( slice_put [f] fz 0 ( __ar_unbit o `steady_f` ) )
+                        ( slice_put [f] fz 1 1.0 )
                     } {}
                 }
                 F _ → {}
             }
-            = . m ss fss
             = . m se ?? ( json_obj_get o `se` ) { T a → ( __ar_unbits a ) F _ → ( vec_zeroed [f] ( __ar_ncoef sp ) ) }
             = . m last_innovation ( __ar_unbit o `last_innovation` )
             = . m last_variance ( __ar_unbit o `last_variance` )
@@ -3221,7 +3362,7 @@ unsafe @ arima_from_json s src → ?ArimaModel {
                 }
                 F _ → {}
             }
-            ^ @ ?ArimaModel { T @ ArimaModel { ( arc_new [ArimaModelImpl] m ) } }
+            ^ @ ?ArimaModel { T ( __ar_model_of m ) }
         }
         F _ → { ^ @ ?ArimaModel { F } }
     }

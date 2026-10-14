@@ -192,6 +192,18 @@ be harmless. h262: a float passed where a parameter is a struct by value
 ill-typed call that read the double as the slice; integers were already
 rejected (h188), floats are now too.
 
+`stdlib/std/par.nu`'s `par_map_index n nt f` runs `f k` for every index
+on up to `nt` threads and returns the results by index — each worker
+sends `(index, result)` back over a channel, so nothing is shared
+mutably. A batch of independent evaluations (an optimizer's gradient
+stencil, one model per series) was otherwise written by handing worker
+threads raw addresses of their result slots. `arima` (101 → 1, the GPU
+kernel launch) evaluates through it; its matrix rows are windows and its
+`a[i+1]` loops read windows that start at 1, so the bounds checks leave
+the loops: the same fits take 23% fewer instructions, bit-identical.
+An `ArimaModel` is a `Locked` handle — two threads stepping one model
+through its `Arc` raced.
+
 Packages: `oauth`, `iforest`, `vindex`, `data`, `cli`, `psql`, `redis`,
 `zst`, `video`, `ply`, `swarm` and `mlp` have no `unsafe` function left
 (`video` / `ply` / `swarm` keep their state in a `Locked` or a frozen

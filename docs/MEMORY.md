@@ -630,7 +630,9 @@ A panic is not outside the model: what a panic abandons is reclaimed
   wrote it is the `unsafe` one, and the code above that stays safe.
 - **Share mutable state through a handle.** Between threads, send it
   through a `Channel` or keep it in a `Locked` (§6.5); an `Arc` shares a
-  value nobody changes. Within a thread, to share a closure beyond the
+  value nobody changes. Independent work over an index range is
+  `par_map_index n threads f` (stdlib/std/par.nu): the results come back
+  by index, with no result slot handed to a thread by its address. Within a thread, to share a closure beyond the
   data it mutates, move that data into a heap-backed handle and capture
   the handle by value.
 - **Graphs.** A graph that is built once can be an `Rc` / `Arc` structure.

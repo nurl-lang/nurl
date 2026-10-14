@@ -9,6 +9,7 @@ Requires NURL 0.73.0 (`slice_at`, `slice_put`, `rc_take`, `locked_take`).
 - Loops that read or wrote through `vec_data` pointers index slices (`slice_at` / `slice_put`, as fast as the pointers), and functions with nothing raw in them are no longer marked `unsafe`.
 - 18 fewer functions are `unsafe` than in 0.35.1 (248 left).
 - Requires gpu 0.17, whose kernel compile and launch are `raw` (the callers here were already `unsafe`).
+- Requires arima 0.6 (a `Locked` model handle; fits 23% fewer instructions); nothing here changed.
 
 ## [0.35.1] — 2026-10-12
 
