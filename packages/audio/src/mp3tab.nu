@@ -18,6 +18,7 @@
 // width of the escape field that carries values above 14; books 24..31 do the
 // same with a second table. That sharing is in the standard, not a trick here.
 
+$ `stdlib/core/slice.nu`
 $ `stdlib/core/vec.nu`
 
 @ _mp3_zeros i n → ( Vec i ) {

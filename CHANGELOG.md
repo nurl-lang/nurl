@@ -178,6 +178,20 @@ temporary handed to a call whose result is `!T E` with an enum error
 value that cannot hold the argument, so the temporary waited for a
 consumer a binding never is.
 
+`gguf` (73 → 0) reads its file the same way. Its dequantiser takes each
+block as a window of the block's own size (`slice_window P * b 18 18`)
+and writes it through a window of the output, so every index inside is
+provably in range and the bounds checks leave the loop: 2–4× faster than
+the pointer loops it replaces, the same bytes out. For that, a view of
+plain numbers handed to a safe function (`( Slice u ) w` into a helper
+that stores an f32 through it) no longer ends the borrows of the other
+views of the same Vec — a Slice never moves its storage and a number
+owns nothing to drop; until now only a direct `slice_put` was known to
+be harmless. h262: a float passed where a parameter is a struct by value
+(`( first x )` with `f x` and a `( Slice u )` parameter) compiled to an
+ill-typed call that read the double as the slice; integers were already
+rejected (h188), floats are now too.
+
 Packages: `oauth`, `iforest`, `vindex`, `data`, `cli`, `psql`, `redis`,
 `zst`, `video`, `ply`, `swarm` and `mlp` have no `unsafe` function left
 (`video` / `ply` / `swarm` keep their state in a `Locked` or a frozen

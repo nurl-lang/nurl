@@ -41,31 +41,23 @@ $ `gguf.nu`
     ^ # f ( bits_to_f32 ( gg_f16_to_f32_bits h ) )
 }
 
-// f16 at byte offset o of pointer P (little-endian).
-unsafe @ __gg_ld_f16 * u P i o → f {
-    ^ ( gg_f16_to_f | # i . P o << # i . P + o 1 8 )
+// f16 at byte offset o of a block (little-endian).
+inline @ __gg_ld_f16 ( Slice u ) P i o → f {
+    ^ ( gg_f16_to_f ( slice_u16_le P o ) )
 }
 
-@ __gg_push_f ( Vec u ) out f v → v {
-    ( bytes_push_u32_le out # u32 ( f32_to_bits # f32 v ) )
-}
+// Byte `o` of a block.
+inline @ __gg_b ( Slice u ) P i o → i { ^ # i ( slice_at [u] P o ) }
 
 // signed 8-bit read
-unsafe @ __gg_i8 * u P i off → i {
-    : i x # i . P off
+inline @ __gg_i8 ( Slice u ) P i off → i {
+    : i x # i ( slice_at [u] P off )
     ^ ? > x 127 - x 256 x
 }
 
-// Q6_K produces its four quarters out of order, so it needs indexed
-// stores rather than appends: the Vec is pre-sized once and written by
-// element index.
-@ __gg_set_f ( Vec u ) out i idx f v → v {
-    : i bits ( f32_to_bits # f32 v )
-    : i o * idx 4
-    ( vec_set [u] out o # u & bits 255 )
-    ( vec_set [u] out + o 1 # u & >> bits 8 255 )
-    ( vec_set [u] out + o 2 # u & >> bits 16 255 )
-    ( vec_set [u] out + o 3 # u & >> bits 24 255 )
+// Element `k` of an output window, as little-endian f32.
+inline @ __gg_put ( Slice u ) W i k f v → v {
+    ( slice_put_u32_le W * k 4 ( f32_to_bits # f32 v ) )
 }
 
 // ── K-quant helpers (super-blocks of 256) ───────────────────────────
@@ -75,14 +67,14 @@ unsafe @ __gg_i8 * u P i off → i {
 // scales[4..7] (min); the last four take their low nibble from
 // scales[8..11] and their high 2 bits from the top of scales[0..7].
 // This is ggml's get_scale_min_k4, byte for byte.
-unsafe @ __gg_k4_scale * u P i base i j → i {
-    ? < j 4 { ^ & # i . P + base j 63 } {}
-    ^ | & # i . P + base + j 4 15 << >> # i . P + base - j 4 6 4
+inline @ __gg_k4_scale ( Slice u ) P i base i j → i {
+    ? < j 4 { ^ & ( __gg_b P + base j ) 63 } {}
+    ^ | & ( __gg_b P + base + j 4 ) 15 << >> ( __gg_b P + base - j 4 ) 6 4
 }
 
-unsafe @ __gg_k4_min * u P i base i j → i {
-    ? < j 4 { ^ & # i . P + base + j 4 63 } {}
-    ^ | >> # i . P + base + j 4 4 << >> # i . P + base j 6 4
+inline @ __gg_k4_min ( Slice u ) P i base i j → i {
+    ? < j 4 { ^ & ( __gg_b P + base + j 4 ) 63 } {}
+    ^ | >> ( __gg_b P + base + j 4 ) 4 << >> ( __gg_b P + base j ) 6 4
 }
 
 // Dequantise a contiguous ELEMENT RANGE of tensor #idx — [first,
@@ -137,16 +129,19 @@ unsafe @ __gg_k4_min * u P i base i j → i {
 }
 
 // The decoder. `first`/`count` are block-aligned element bounds,
-// validated by the public entries above.
-unsafe @ __gg_dequant Gguf g i idx i first i count → !( Vec u ) String {
+// validated by the public entries above. Every block is read through a
+// window of its own fixed size and written through one of 4·block bytes,
+// so each index inside is provably in range: one check per block, not
+// per byte.
+@ __gg_dequant Gguf g i idx i first i count → !( Vec u ) String {
     : ~ i gt -1
     : ~ i nb -1
-    : ~ i addr 0
+    : ~ ( Slice u ) T0 ( slice_empty [u] )
     ?? ( vec_get [GgufTensor] ( gguf_tensors g ) idx ) {
         T t → {
             = gt . t gtype
             = nb . t nbytes
-            = addr # i ( gguf_tensor_ptr g t )
+            ? >= nb 0 { = T0 ( gguf_tensor_bytes g t ) } {}
         }
         F → {}
     }
@@ -159,66 +154,43 @@ unsafe @ __gg_dequant Gguf g i idx i first i count → !( Vec u ) String {
     // of fixed-size blocks, so the offset is exact.
     : i blk0 ( gguf_type_blck gt )
     : i esz ( gguf_type_size gt )
-    = addr + addr * / first blk0 esz
     : i ne count
-    = nb * / count blk0 esz
-    : *u P # *u addr
-    : ( Vec u ) out ( vec_with_cap [u] * ne 4 )
-    // Q6_K writes its four quarters out of order (see below), so its
-    // buffer is materialised up front and filled by index.
-    ? == gt 14 {
-        : ~ i z 0
-        ~ < z * ne 4 {
-            ( vec_push [u] out # u 0 )
-            = z + z 1
-        }
-    } {}
+    : ( Slice u ) P ( slice_window [u] T0 * / first blk0 esz * / count blk0 esz )
 
     // F32: verbatim copy.
-    ? == gt 0 {
-        ( bytes_extend_raw out # s P nb )
-        ^ @ !( Vec u ) String { T out }
-    } {}
+    ? == gt 0 { ^ @ !( Vec u ) String { T ( slice_to_vec [u] P ) } } {}
+
+    : ( Vec u ) outv ( vec_zeroed [u] * ne 4 )
+    : ( Slice u ) O ( slice_from_vec [u] outv )
 
     // F64: narrow each element.
     ? == gt 28 {
         : ~ i k 0
         ~ < k ne {
-            : i o * k 8
-            : ~ i b8 0
-            : ~ i j 8
-            ~ > j 0 {
-                = j - j 1
-                = b8 | << b8 8 # i . P + o j
-            }
-            ( __gg_push_f out ( bits_to_f64 b8 ) )
+            ( __gg_put O k ( bits_to_f64 ( slice_u64_le P * k 8 ) ) )
             = k + k 1
         }
-        ^ @ !( Vec u ) String { T out }
+        ^ @ !( Vec u ) String { T outv }
     } {}
 
     // F16: pure bit transport, no rounding anywhere.
     ? == gt 1 {
         : ~ i k 0
         ~ < k ne {
-            : i o * k 2
-            : i h | # i . P o << # i . P + o 1 8
-            ( bytes_push_u32_le out # u32 ( gg_f16_to_f32_bits h ) )
+            ( slice_put_u32_le O * k 4 ( gg_f16_to_f32_bits ( slice_u16_le P * k 2 ) ) )
             = k + k 1
         }
-        ^ @ !( Vec u ) String { T out }
+        ^ @ !( Vec u ) String { T outv }
     } {}
 
     // BF16: f32 with the low 16 mantissa bits dropped — shift back up.
     ? == gt 30 {
         : ~ i k 0
         ~ < k ne {
-            : i o * k 2
-            : i h | # i . P o << # i . P + o 1 8
-            ( bytes_push_u32_le out # u32 << h 16 )
+            ( slice_put_u32_le O * k 4 << ( slice_u16_le P * k 2 ) 16 )
             = k + k 1
         }
-        ^ @ !( Vec u ) String { T out }
+        ^ @ !( Vec u ) String { T outv }
     } {}
 
     // Q4_0
@@ -226,23 +198,19 @@ unsafe @ __gg_dequant Gguf g i idx i first i count → !( Vec u ) String {
         : i nblk / ne 32
         : ~ i b 0
         ~ < b nblk {
-            : i base * b 18
-            : f d ( __gg_ld_f16 P base )
+            : ( Slice u ) B ( slice_window [u] P * b 18 18 )
+            : ( Slice u ) W ( slice_window [u] O * b 128 128 )
+            : f d ( __gg_ld_f16 B 0 )
             : ~ i j 0
             ~ < j 16 {
-                : i q & # i . P + base + 2 j 15
-                ( __gg_push_f out * d # f - q 8 )
-                = j + j 1
-            }
-            = j 0
-            ~ < j 16 {
-                : i q & >> # i . P + base + 2 j 4 15
-                ( __gg_push_f out * d # f - q 8 )
+                : i x ( __gg_b B + 2 j )
+                ( __gg_put W j * d # f - & x 15 8 )
+                ( __gg_put W + j 16 * d # f - & >> x 4 15 8 )
                 = j + j 1
             }
             = b + b 1
         }
-        ^ @ !( Vec u ) String { T out }
+        ^ @ !( Vec u ) String { T outv }
     } {}
 
     // Q4_1
@@ -250,24 +218,20 @@ unsafe @ __gg_dequant Gguf g i idx i first i count → !( Vec u ) String {
         : i nblk / ne 32
         : ~ i b 0
         ~ < b nblk {
-            : i base * b 20
-            : f d ( __gg_ld_f16 P base )
-            : f m ( __gg_ld_f16 P + base 2 )
+            : ( Slice u ) B ( slice_window [u] P * b 20 20 )
+            : ( Slice u ) W ( slice_window [u] O * b 128 128 )
+            : f d ( __gg_ld_f16 B 0 )
+            : f m ( __gg_ld_f16 B 2 )
             : ~ i j 0
             ~ < j 16 {
-                : i q & # i . P + base + 4 j 15
-                ( __gg_push_f out + * d # f q m )
-                = j + j 1
-            }
-            = j 0
-            ~ < j 16 {
-                : i q & >> # i . P + base + 4 j 4 15
-                ( __gg_push_f out + * d # f q m )
+                : i x ( __gg_b B + 4 j )
+                ( __gg_put W j + * d # f & x 15 m )
+                ( __gg_put W + j 16 + * d # f & >> x 4 15 m )
                 = j + j 1
             }
             = b + b 1
         }
-        ^ @ !( Vec u ) String { T out }
+        ^ @ !( Vec u ) String { T outv }
     } {}
 
     // Q8_0
@@ -275,18 +239,17 @@ unsafe @ __gg_dequant Gguf g i idx i first i count → !( Vec u ) String {
         : i nblk / ne 32
         : ~ i b 0
         ~ < b nblk {
-            : i base * b 34
-            : f d ( __gg_ld_f16 P base )
+            : ( Slice u ) B ( slice_window [u] P * b 34 34 )
+            : ( Slice u ) W ( slice_window [u] O * b 128 128 )
+            : f d ( __gg_ld_f16 B 0 )
             : ~ i j 0
             ~ < j 32 {
-                : ~ i q # i . P + base + 2 j
-                ? > q 127 { = q - q 256 } {}
-                ( __gg_push_f out * d # f q )
+                ( __gg_put W j * d # f ( __gg_i8 B + 2 j ) )
                 = j + j 1
             }
             = b + b 1
         }
-        ^ @ !( Vec u ) String { T out }
+        ^ @ !( Vec u ) String { T outv }
     } {}
 
     // Q5_0 — 22-byte block: f16 d + 4 bytes of 5th bits + 16 nibble bytes
@@ -294,29 +257,22 @@ unsafe @ __gg_dequant Gguf g i idx i first i count → !( Vec u ) String {
         : i nblk / ne 32
         : ~ i b 0
         ~ < b nblk {
-            : i base * b 22
-            : f d ( __gg_ld_f16 P base )
-            : i qh | | # i . P + base 2 << # i . P + base 3 8
-            | << # i . P + base 4 16 << # i . P + base 5 24
+            : ( Slice u ) B ( slice_window [u] P * b 22 22 )
+            : ( Slice u ) W ( slice_window [u] O * b 128 128 )
+            : f d ( __gg_ld_f16 B 0 )
+            : i qh ( slice_u32_le B 2 )
             : ~ i j 0
             ~ < j 16 {
-                : i lo & # i . P + base + 6 j 15
-                : i hi >> # i . P + base + 6 j 4
+                : i x ( __gg_b B + 6 j )
                 : i h0 << & >> qh j 1 4
                 : i h1 << & >> qh + j 16 1 4
-                ( __gg_push_f out * d # f - | lo h0 16 )
-                = j + j 1
-            }
-            = j 0
-            ~ < j 16 {
-                : i hi & >> # i . P + base + 6 j 4 15
-                : i h1 << & >> qh + j 16 1 4
-                ( __gg_push_f out * d # f - | hi h1 16 )
+                ( __gg_put W j * d # f - | & x 15 h0 16 )
+                ( __gg_put W + j 16 * d # f - | & >> x 4 15 h1 16 )
                 = j + j 1
             }
             = b + b 1
         }
-        ^ @ !( Vec u ) String { T out }
+        ^ @ !( Vec u ) String { T outv }
     } {}
 
     // Q5_1 — 24-byte block: f16 d + f16 m + 4 bytes of 5th bits + 16 nibbles
@@ -324,28 +280,23 @@ unsafe @ __gg_dequant Gguf g i idx i first i count → !( Vec u ) String {
         : i nblk / ne 32
         : ~ i b 0
         ~ < b nblk {
-            : i base * b 24
-            : f d ( __gg_ld_f16 P base )
-            : f m ( __gg_ld_f16 P + base 2 )
-            : i qh | | # i . P + base 4 << # i . P + base 5 8
-            | << # i . P + base 6 16 << # i . P + base 7 24
+            : ( Slice u ) B ( slice_window [u] P * b 24 24 )
+            : ( Slice u ) W ( slice_window [u] O * b 128 128 )
+            : f d ( __gg_ld_f16 B 0 )
+            : f m ( __gg_ld_f16 B 2 )
+            : i qh ( slice_u32_le B 4 )
             : ~ i j 0
             ~ < j 16 {
-                : i lo & # i . P + base + 8 j 15
+                : i x ( __gg_b B + 8 j )
                 : i h0 << & >> qh j 1 4
-                ( __gg_push_f out + * d # f | lo h0 m )
-                = j + j 1
-            }
-            = j 0
-            ~ < j 16 {
-                : i hi & >> # i . P + base + 8 j 4 15
                 : i h1 << & >> qh + j 16 1 4
-                ( __gg_push_f out + * d # f | hi h1 m )
+                ( __gg_put W j + * d # f | & x 15 h0 m )
+                ( __gg_put W + j 16 + * d # f | & >> x 4 15 h1 m )
                 = j + j 1
             }
             = b + b 1
         }
-        ^ @ !( Vec u ) String { T out }
+        ^ @ !( Vec u ) String { T outv }
     } {}
 
     // Q4_K — 144-byte super-block of 256: f16 d + f16 dmin + 12 scale
@@ -355,32 +306,31 @@ unsafe @ __gg_dequant Gguf g i idx i first i count → !( Vec u ) String {
         : i nblk / ne 256
         : ~ i b 0
         ~ < b nblk {
-            : i base * b 144
-            : f d ( __gg_ld_f16 P base )
-            : f dmin ( __gg_ld_f16 P + base 2 )
-            : i sbase + base 4
-            : i qbase + base 16
+            : ( Slice u ) B ( slice_window [u] P * b 144 144 )
+            : ( Slice u ) W ( slice_window [u] O * b 1024 1024 )
+            : f d ( __gg_ld_f16 B 0 )
+            : f dmin ( __gg_ld_f16 B 2 )
             : ~ i sub 0
             ~ < sub 8 {
-                : f d1 * d # f ( __gg_k4_scale P sbase sub )
-                : f m1 * dmin # f ( __gg_k4_min P sbase sub )
+                : f d1 * d # f ( __gg_k4_scale B 4 sub )
+                : f m1 * dmin # f ( __gg_k4_min B 4 sub )
                 // sub-blocks 0,2,4,6 read low nibbles; 1,3,5,7 the high
                 // nibbles of the SAME 32 bytes
-                : i half / sub 2
-                : i qoff + qbase * half 32
+                : i qoff + 16 * / sub 2 32
                 : b hi_nib == % sub 2 1
+                : i ob * sub 32
                 : ~ i l 0
                 ~ < l 32 {
-                    : i byte # i . P + qoff l
+                    : i byte ( __gg_b B + qoff l )
                     : i q ? hi_nib >> byte 4 & byte 15
-                    ( __gg_push_f out - * d1 # f q m1 )
+                    ( __gg_put W + ob l - * d1 # f q m1 )
                     = l + l 1
                 }
                 = sub + sub 1
             }
             = b + b 1
         }
-        ^ @ !( Vec u ) String { T out }
+        ^ @ !( Vec u ) String { T outv }
     } {}
 
     // Q5_K — 176-byte super-block: f16 d + f16 dmin + 12 scale bytes +
@@ -389,32 +339,30 @@ unsafe @ __gg_dequant Gguf g i idx i first i count → !( Vec u ) String {
         : i nblk / ne 256
         : ~ i b 0
         ~ < b nblk {
-            : i base * b 176
-            : f d ( __gg_ld_f16 P base )
-            : f dmin ( __gg_ld_f16 P + base 2 )
-            : i sbase + base 4
-            : i hbase + base 16
-            : i qbase + base 48
+            : ( Slice u ) B ( slice_window [u] P * b 176 176 )
+            : ( Slice u ) W ( slice_window [u] O * b 1024 1024 )
+            : f d ( __gg_ld_f16 B 0 )
+            : f dmin ( __gg_ld_f16 B 2 )
             : ~ i sub 0
             ~ < sub 8 {
-                : f d1 * d # f ( __gg_k4_scale P sbase sub )
-                : f m1 * dmin # f ( __gg_k4_min P sbase sub )
-                : i half / sub 2
-                : i qoff + qbase * half 32
+                : f d1 * d # f ( __gg_k4_scale B 4 sub )
+                : f m1 * dmin # f ( __gg_k4_min B 4 sub )
+                : i qoff + 48 * / sub 2 32
                 : b hi_nib == % sub 2 1
+                : i ob * sub 32
                 : ~ i l 0
                 ~ < l 32 {
-                    : i byte # i . P + qoff l
+                    : i byte ( __gg_b B + qoff l )
                     : i q ? hi_nib >> byte 4 & byte 15
-                    : i hbit & >> # i . P + hbase l sub 1
-                    ( __gg_push_f out - * d1 # f + q << hbit 4 m1 )
+                    : i hbit & >> ( __gg_b B + 16 l ) sub 1
+                    ( __gg_put W + ob l - * d1 # f + q << hbit 4 m1 )
                     = l + l 1
                 }
                 = sub + sub 1
             }
             = b + b 1
         }
-        ^ @ !( Vec u ) String { T out }
+        ^ @ !( Vec u ) String { T outv }
     } {}
 
     // Q6_K — 210-byte super-block: 128 low-nibble bytes + 64 bytes of
@@ -424,42 +372,40 @@ unsafe @ __gg_dequant Gguf g i idx i first i count → !( Vec u ) String {
         : i nblk / ne 256
         : ~ i b 0
         ~ < b nblk {
-            : i base * b 210
-            : i qlb base
-            : i qhb + base 128
-            : i scb + base 192
-            : f d ( __gg_ld_f16 P + base 208 )
+            : ( Slice u ) B ( slice_window [u] P * b 210 210 )
+            : ( Slice u ) W ( slice_window [u] O * b 1024 1024 )
+            : f d ( __gg_ld_f16 B 208 )
             : ~ i n 0
             ~ < n 2 {
-                : i ql0 + qlb * n 64
-                : i qh0 + qhb * n 32
-                : i sc0 + scb * n 8
+                : i ql0 * n 64
+                : i qh0 + 128 * n 32
+                : i sc0 + 192 * n 8
                 : ~ i l 0
                 ~ < l 32 {
                     : i is / l 16
-                    : i qhv # i . P + qh0 l
-                    : i b1 # i . P + ql0 l
-                    : i b2 # i . P + ql0 + l 32
+                    : i qhv ( __gg_b B + qh0 l )
+                    : i b1 ( __gg_b B + ql0 l )
+                    : i b2 ( __gg_b B + ql0 + l 32 )
                     : i q1 - | & b1 15 << & qhv 3 4 32
                     : i q2 - | & b2 15 << & >> qhv 2 3 4 32
                     : i q3 - | >> b1 4 << & >> qhv 4 3 4 32
                     : i q4 - | >> b2 4 << & >> qhv 6 3 4 32
-                    : i s1 ( __gg_i8 P + sc0 is )
-                    : i s2 ( __gg_i8 P + sc0 + is 2 )
-                    : i s3 ( __gg_i8 P + sc0 + is 4 )
-                    : i s4 ( __gg_i8 P + sc0 + is 6 )
-                    : i obase + * b 256 + * n 128 l
-                    ( __gg_set_f out obase * d * # f s1 # f q1 )
-                    ( __gg_set_f out + obase 32 * d * # f s2 # f q2 )
-                    ( __gg_set_f out + obase 64 * d * # f s3 # f q3 )
-                    ( __gg_set_f out + obase 96 * d * # f s4 # f q4 )
+                    : i s1 ( __gg_i8 B + sc0 is )
+                    : i s2 ( __gg_i8 B + sc0 + is 2 )
+                    : i s3 ( __gg_i8 B + sc0 + is 4 )
+                    : i s4 ( __gg_i8 B + sc0 + is 6 )
+                    : i ob + * n 128 l
+                    ( __gg_put W ob * d * # f s1 # f q1 )
+                    ( __gg_put W + ob 32 * d * # f s2 # f q2 )
+                    ( __gg_put W + ob 64 * d * # f s3 # f q3 )
+                    ( __gg_put W + ob 96 * d * # f s4 # f q4 )
                     = l + l 1
                 }
                 = n + n 1
             }
             = b + b 1
         }
-        ^ @ !( Vec u ) String { T out }
+        ^ @ !( Vec u ) String { T outv }
     } {}
 
     : String m ( string_from `gguf: dequantisation not implemented for type ` )

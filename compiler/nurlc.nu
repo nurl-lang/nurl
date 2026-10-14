@@ -12172,7 +12172,9 @@ unsafe @ __has_pct_token s ll s name → b {
     // Vec i )` parameter): the callee would read the integer as the
     // struct's bytes — for a String, a Vec or a handle, as its control
     // block's address (h188). An enum parameter takes a bare variant.
-    ? & & & & > ( int_width at ) 0 ( __is_named_agg pllvm ) ( bck_sound ) ! ( bck_unsafe_ctx )
+    // (A float is a number too: `( first x )` with `f x` and a `( Slice u )`
+    // parameter read the double's bytes as the slice, h262.)
+    ? & & & & | | > ( int_width at ) 0 ( seq at `double` ) ( seq at `float` ) ( __is_named_agg pllvm ) ( bck_sound ) ! ( bck_unsafe_ctx )
     == 0 ( nurl_sym_len2 g_root_syms ( nurl_str_slice pllvm 1 - ( nurl_str_len pllvm ) 1 ) `__variants` ) {
         ( die lex ( nurl_str_cat3
         ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
@@ -27302,6 +27304,19 @@ unsafe @ bck_sx_split s args → s {
     ^ ( str_contains_word `i64 i32 i16 i8 u64 u32 u16 u8 f64 f32 float i1` ta )
 }
 
+// Is parameter `aix` of `callee` declared a Slice of plain numbers?
+@ __bck_param_scalar_slice s callee s aix → b {
+    : s src ( nurl_sym_get2 g_root_syms callee `__ptypes_src` )
+    ? == 0 ( nurl_str_len src ) { ^ F } {}
+    : ~ s pt ( __ptypes_nth src ( nurl_str_to_int aix ) )
+    : s w0 ( str_first_word pt ) = pt ( str_skip_word pt )
+    : s w1 ( str_first_word pt ) = pt ( str_skip_word pt )
+    : s w2 ( str_first_word pt ) = pt ( str_skip_word pt )
+    : s w3 ( str_first_word pt )
+    ? | | | ! ( seq w0 `(` ) ! ( seq w1 `Slice` ) ! ( seq w3 `)` ) != 0 ( nurl_str_len ( str_skip_word pt ) ) { ^ F } {}
+    ^ ( str_contains_word `u i f b u8 u16 u32 u64 i8 i16 i32 i64 f32 f64` w2 )
+}
+
 @ bck_callee_drops_elems s callee s aix → b {
     : s base ( bck_generic_base callee )
     // Replacing one element of plain numbers drops nothing: a view of the
@@ -27315,6 +27330,12 @@ unsafe @ bck_sx_split s args → s {
     // holds — unless it only adds to or reorders it (bck_elem_keeper): an
     // element handle a borrow copied still points where it did.
     ? == lk 2 { ^ F } {}
+    // A safe function handed a view of plain numbers (`( Slice u ) w`)
+    // can store numbers through it and nothing else: a Slice never moves
+    // its storage, and a number owns nothing to drop. Other views of the
+    // same Vec read what they did (a helper writing one f32 into an output
+    // window, gguf's dequantiser).
+    ? & != 0 ( nurl_sym_len g_fn_safe callee ) ( __bck_param_scalar_slice callee aix ) { ^ F } {}
     // A safe function says which it may (its drop summary); raw code is
     // taken at its mutation summary.
     ? != 0 ( nurl_sym_len g_fn_safe callee ) { ^ ( nurl_sym_has_word g_fn_drops callee aix ) } {}
