@@ -11,6 +11,7 @@
 // reason a multi-gigabyte tarball is not this tool's job yet.
 
 $ `stdlib/core/io.nu`
+$ `stdlib/core/slice.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/fs.nu`
@@ -193,7 +194,7 @@ unsafe @ __tar_list ( Vec TarEntry ) entries b verbose → v {
     ( bx_write out )
 }
 
-unsafe @ ap_tar ( Vec String ) argv → i {
+@ ap_tar ( Vec String ) argv → i {
     // `tar cf x.tar dir` — the leading bundle with no dash is the
     // historical spelling and still the common one.
     : ( Vec String ) av ( vec_new [String] )
@@ -262,8 +263,8 @@ unsafe @ ap_tar ( Vec String ) argv → i {
                     // formality rather than a requirement, which is what
                     // every modern tar does.
                     : i n ( vec_len [u] raw )
-                    : *u p ( vec_data [u] raw )
-                    : b looks_gz & >= n 2 & == 31 & 255 # i . p 0 == 139 & 255 # i . p 1
+                    : ( Slice u ) p ( slice_from_vec [u] raw )
+                    : b looks_gz & >= n 2 & == 31 & 255 # i ( slice_at [u] p 0 ) == 139 & 255 # i ( slice_at [u] p 1 )
                     : ( Vec u ) plain ( vec_new [u] )
                     : ~ b have T
                     ? | gz looks_gz {

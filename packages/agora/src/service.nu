@@ -303,7 +303,7 @@ unsafe @ __ag_mcp_init → v {
 
 // At app build time only (no worker runs yet): the server for this mode
 // (the one built for the other mode is released by the assignment).
-unsafe @ __ag_mcp_init_for_mode → v {
+@ __ag_mcp_init_for_mode → v {
     ? & g_ag_mcp_made != g_ag_mcp_oidc ( ag_auth_oidc ) { = g_ag_mcp_made F } {}
     ( __ag_mcp_init )
 }

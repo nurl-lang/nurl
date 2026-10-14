@@ -95,51 +95,51 @@ $ `stdlib/std/async_ffi.nu`
 
 & `c` @ nurl_udp_bind s host i port → i
 
-& `c` @ nurl_udp_connect i handle s host i port → i
+unsafe & `c` @ nurl_udp_connect i handle s host i port → i
 
-& `c` @ nurl_udp_send_to i handle *u buf i n s host i port → i
+unsafe & `c` @ nurl_udp_send_to i handle *u buf i n s host i port → i
 
-& `c` @ nurl_udp_recv_from i handle *u buf i n → i
+unsafe & `c` @ nurl_udp_recv_from i handle *u buf i n → i
 
-& `c` @ nurl_udp_send i handle *u buf i n → i
+unsafe & `c` @ nurl_udp_send i handle *u buf i n → i
 
-& `c` @ nurl_udp_recv i handle *u buf i n → i
+unsafe & `c` @ nurl_udp_recv i handle *u buf i n → i
 
-& `c` @ nurl_udp_peer_addr i handle → s
+unsafe & `c` @ nurl_udp_peer_addr i handle → s
 
-& `c` @ nurl_udp_local_addr i handle → sink s
+unsafe & `c` @ nurl_udp_local_addr i handle → sink s
 
-& `c` @ nurl_udp_err_kind i handle → i
+unsafe & `c` @ nurl_udp_err_kind i handle → i
 
-& `c` @ nurl_udp_get_fd i handle → i
+unsafe & `c` @ nurl_udp_get_fd i handle → i
 
-& `c` @ nurl_udp_family i handle → i
+unsafe & `c` @ nurl_udp_family i handle → i
 
-& `c` @ nurl_udp_set_nonblock i handle i on → v
+unsafe & `c` @ nurl_udp_set_nonblock i handle i on → v
 
-& `c` @ nurl_udp_set_timeout i handle i ms → v
+unsafe & `c` @ nurl_udp_set_timeout i handle i ms → v
 
-& `c` @ nurl_udp_close i handle → v
+unsafe & `c` @ nurl_udp_close i handle → v
 
-& `c` @ nurl_udp_set_broadcast i handle i on → i
+unsafe & `c` @ nurl_udp_set_broadcast i handle i on → i
 
 & `c` @ nurl_udp_join_group i handle s group s iface → i
 
 & `c` @ nurl_udp_leave_group i handle s group s iface → i
 
-& `c` @ nurl_udp_set_multicast_ttl i handle i ttl → i
+unsafe & `c` @ nurl_udp_set_multicast_ttl i handle i ttl → i
 
-& `c` @ nurl_udp_set_multicast_loop i handle i on → i
+unsafe & `c` @ nurl_udp_set_multicast_loop i handle i on → i
 
-& `c` @ nurl_udp_recv_into i handle *u buf i cap *u addr_out → i
+unsafe & `c` @ nurl_udp_recv_into i handle *u buf i cap *u addr_out → i
 
-& `c` @ nurl_udp_send_addr i handle *u buf i n *u addr → i
+unsafe & `c` @ nurl_udp_send_addr i handle *u buf i n *u addr → i
 
 & `c` @ nurl_udp_addr_resolve s host i port *u addr_out → i
 
 & `c` @ nurl_udp_addr_format *u addr → sink s
 
-& `c` @ nurl_udp_setsockopt_int i handle i level i opt i val → i
+unsafe & `c` @ nurl_udp_setsockopt_int i handle i level i opt i val → i
 
 // ── Public types ───────────────────────────────────────────────────
 

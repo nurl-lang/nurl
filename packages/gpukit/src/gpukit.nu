@@ -40,6 +40,7 @@
 // released by hand; `gk_close` is an optional early release of one owner.
 
 $ `stdlib/core/vec.nu`
+$ `stdlib/core/slice.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/ext/env.nu`
 $ `stdlib/std/arc.nu`
@@ -113,7 +114,7 @@ $ `deps/gpu/src/gpu.nu`
 
 unsafe @ _GpuKit_ptr GpuKit h → *GpuKitImpl { ^ ( arc_ptr [GpuKitImpl] . h a ) }
 
-unsafe @ __gk_col ( Vec i ) v i k → i { ^ . ( vec_data [i] v ) k }
+@ __gk_col ( Vec i ) v i k → i { ^ ( vec_at [i] v k ) }
 
 // ── Lifecycle ─────────────────────────────────────────────────────────
 

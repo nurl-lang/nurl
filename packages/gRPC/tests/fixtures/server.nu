@@ -1,14 +1,15 @@
 // Independent gRPC runtimes drive this one-connection fixture. Exiting after
 // peer shutdown lets the harness check complete connection cleanup with LSan.
 $ `../../src/server.nu`
+$ `stdlib/core/slice.nu`
 $ `stdlib/core/io.nu`
 
 : TestCall { i id String method ( Vec u ) aggregate i count }
 
-unsafe @ find_call ( Vec TestCall ) calls i id → i {
+@ find_call ( Vec TestCall ) calls i id → i {
     : ~ i k 0
     ~ < k ( vec_len [TestCall] calls ) {
-        : TestCall call . ( vec_data [TestCall] calls ) k
+        : TestCall call ( vec_at [TestCall] calls k )
         ? == . call id id { ^ k } {}
         = k + k 1
     }

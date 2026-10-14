@@ -8,6 +8,7 @@
 // in memory unless the tool's own definition requires it.
 
 $ `stdlib/core/io.nu`
+$ `stdlib/core/slice.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/fs.nu`
@@ -418,7 +419,7 @@ unsafe @ ap_xxd ( Vec String ) argv → i {
     }
 }
 
-unsafe @ ap_cmp ( Vec String ) argv → i {
+@ ap_cmp ( Vec String ) argv → i {
     : BxOpts o ( bx_getopt argv 1 `sln:` `silent=s,verbose=l,bytes=n` )
     : ~ i rc 0
     ? ! ( bx_ok o ) { = rc 2 } {
@@ -438,8 +439,8 @@ unsafe @ ap_cmp ( Vec String ) argv → i {
             ? & ok1 ok2 {
                 : i na ( vec_len [u] a )
                 : i nb ( vec_len [u] b )
-                : *u pa ( vec_data [u] a )
-                : *u pb ( vec_data [u] b )
+                : ( Slice u ) pa ( slice_from_vec [u] a )
+                : ( Slice u ) pb ( slice_from_vec [u] b )
                 : i lim ? < na nb na nb
                 : i cap ? ( bx_has o `n` ) ( bx_count ( bx_val o `n` ) ) -1
                 : i scan ? & >= cap 0 < cap lim cap lim
@@ -448,8 +449,8 @@ unsafe @ ap_cmp ( Vec String ) argv → i {
                 : String out ( string_new )
                 : ~ i i 0
                 ~ < i scan {
-                    : i ca & 255 # i . pa i
-                    : i cb & 255 # i . pb i
+                    : i ca & 255 # i ( slice_at [u] pa i )
+                    : i cb & 255 # i ( slice_at [u] pb i )
                     ? != ca cb {
                         = differ T
                         ? listall {
@@ -572,14 +573,14 @@ unsafe @ ap_strings ( Vec String ) argv → i {
     }
 }
 
-unsafe @ __split_write s prefix i index i width b numeric ( Vec u ) data i from i len → i {
+@ __split_write s prefix i index i width b numeric ( Vec u ) data i from i len → i {
     : String name ( string_from prefix )
     ( __split_suffix name index width numeric )
     : ( Vec u ) piece ( vec_new [u] )
-    : *u p ( vec_data [u] data )
+    : ( Slice u ) p ( slice_from_vec [u] data )
     : ~ i k 0
     ~ < k len {
-        ( vec_push [u] piece # u & 255 # i . p + from k )
+        ( vec_push [u] piece # u & 255 # i ( slice_at [u] p + from k ) )
         = k + k 1
     }
     : ~ i rc 0
@@ -593,7 +594,7 @@ unsafe @ __split_write s prefix i index i width b numeric ( Vec u ) data i from 
     ^ rc
 }
 
-unsafe @ ap_split ( Vec String ) argv → i {
+@ ap_split ( Vec String ) argv → i {
     : BxOpts o ( bx_getopt argv 1 `b:l:a:d` `bytes=b,lines=l,suffix-length=a,numeric-suffixes=d` )
     : ~ i rc 0
     ? ! ( bx_ok o ) { = rc 1 } {
@@ -605,7 +606,7 @@ unsafe @ ap_split ( Vec String ) argv → i {
         : ( Vec u ) data ( bx_slurp input ok )
         ? ! ok { = rc 1 } {
             : i n ( vec_len [u] data )
-            : *u p ( vec_data [u] data )
+            : ( Slice u ) p ( slice_from_vec [u] data )
             : ~ i index 0
             ? ( bx_has o `b` ) {
                 : i chunk ( bx_count ( bx_val o `b` ) )
@@ -631,7 +632,7 @@ unsafe @ ap_split ( Vec String ) argv → i {
                     : ~ i lines 0
                     : ~ i k 0
                     ~ < k n {
-                        ? == 10 & 255 # i . p k {
+                        ? == 10 & 255 # i ( slice_at [u] p k ) {
                             = lines + lines 1
                             ? >= lines per {
                                 : i one ( __split_write prefix index width numeric data from - + k 1 from )
@@ -674,7 +675,7 @@ unsafe @ ap_split ( Vec String ) argv → i {
     }
 }
 
-unsafe @ ap_dd ( Vec String ) argv → i {
+@ ap_dd ( Vec String ) argv → i {
     : String inf_s ( string_new )
     : String outf_s ( string_new )
     : String bs_str ( string_new )
@@ -713,7 +714,7 @@ unsafe @ ap_dd ( Vec String ) argv → i {
         ^ 1
     } {}
     : i n ( vec_len [u] data )
-    : *u p ( vec_data [u] data )
+    : ( Slice u ) p ( slice_from_vec [u] data )
     : i from ? > * skip bs n n * skip bs
     : i avail - n from
     : i want ? >= count 0 * count bs avail
@@ -725,7 +726,7 @@ unsafe @ ap_dd ( Vec String ) argv → i {
     : ( Vec u ) outbuf ( vec_new [u] )
     : ~ i k 0
     ~ < k take {
-        ( vec_push [u] outbuf # u & 255 # i . p + from k )
+        ( vec_push [u] outbuf # u & 255 # i ( slice_at [u] p + from k ) )
         = k + k 1
     }
     : ~ i rc 0
@@ -739,10 +740,10 @@ unsafe @ ap_dd ( Vec String ) argv → i {
                 : ~ b ok2 T
                 : ( Vec u ) old ( bx_slurp outf ok2 )
                 : i on ( vec_len [u] old )
-                : *u op ( vec_data [u] old )
+                : ( Slice u ) op ( slice_from_vec [u] old )
                 : ~ i q 0
                 ~ < q * seek bs {
-                    ( vec_push [u] final # u ? < q on & 255 # i . op q 0 )
+                    ( vec_push [u] final # u ? < q on & 255 # i ( slice_at [u] op q ) 0 )
                     = q + q 1
                 }
             } {

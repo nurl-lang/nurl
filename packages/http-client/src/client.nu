@@ -439,13 +439,13 @@ unsafe @ __hc_h1_headers * HttpClientImpl c s host s path i is_https ( Vec Heade
     ^ blob
 }
 
-unsafe @ __hc_user_has ( Vec Header ) user s lname → b {
+@ __hc_user_has ( Vec Header ) user s lname → b {
     : i n ( vec_len [Header] user )
-    : *Header d ( vec_data [Header] user )
+    : ( Slice Header ) d ( slice_from_vec [Header] user )
     : ~ i k 0
     : ~ b hit F
     ~ & ! hit < k n {
-        : Header h . d k
+        : Header h ( slice_at [Header] d k )
         ? ( _hc_eq_ci ( string_data . h name ) lname ) { = hit T } {}
         = k + k 1
     }
@@ -699,13 +699,13 @@ unsafe @ __hc_do_h2 * HttpClientImpl c * HcOriginImpl o s method s path ( Vec He
     }
 }
 
-unsafe @ __hc_hlist_has ( Vec Header ) hs s lname → b {
+@ __hc_hlist_has ( Vec Header ) hs s lname → b {
     : i n ( vec_len [Header] hs )
-    : *Header d ( vec_data [Header] hs )
+    : ( Slice Header ) d ( slice_from_vec [Header] hs )
     : ~ i k 0
     : ~ b hit F
     ~ & ! hit < k n {
-        : Header h . d k
+        : Header h ( slice_at [Header] d k )
         ? ( _hc_eq_ci ( string_data . h name ) lname ) { = hit T } {}
         = k + k 1
     }
@@ -757,13 +757,13 @@ unsafe @ __hc_decode_response * HttpClientImpl c HttpResponse r s method → !Ht
 
 // Drop the Content-Encoding header once we have decoded the body, so the
 // caller does not double-decode.
-unsafe @ __hc_strip_encoding HttpResponse r → v {
+@ __hc_strip_encoding HttpResponse r → v {
     : i n ( vec_len [Header] . r headers )
-    : *Header d ( vec_data [Header] . r headers )
+    : ( Slice Header ) d ( slice_from_vec [Header] . r headers )
     : ~ i idx -1
     : ~ i k 0
     ~ & == idx -1 < k n {
-        : Header h . d k
+        : Header h ( slice_at [Header] d k )
         ? ( _hc_eq_ci ( string_data . h name ) `content-encoding` ) { = idx k } {}
         = k + k 1
     }
@@ -772,12 +772,12 @@ unsafe @ __hc_strip_encoding HttpResponse r → v {
     } {}
 }
 
-unsafe @ __hc_header_value ( Vec Header ) hs s lname → String {
+@ __hc_header_value ( Vec Header ) hs s lname → String {
     : i n ( vec_len [Header] hs )
-    : *Header d ( vec_data [Header] hs )
+    : ( Slice Header ) d ( slice_from_vec [Header] hs )
     : ~ i k 0
     ~ < k n {
-        : Header h . d k
+        : Header h ( slice_at [Header] d k )
         ? ( _hc_eq_ci ( string_data . h name ) lname ) { ^ ( string_from ( string_data . h value ) ) } {}
         = k + k 1
     }
@@ -918,13 +918,13 @@ unsafe @ http_client_request HttpClient c__h s method s url sink ( Vec Header ) 
     }
 }
 
-unsafe @ __hc_clone_headers ( Vec Header ) hs → ( Vec Header ) {
+@ __hc_clone_headers ( Vec Header ) hs → ( Vec Header ) {
     : ( Vec Header ) out ( vec_new [Header] )
     : i n ( vec_len [Header] hs )
-    : *Header d ( vec_data [Header] hs )
+    : ( Slice Header ) d ( slice_from_vec [Header] hs )
     : ~ i k 0
     ~ < k n {
-        : Header h . d k
+        : Header h ( slice_at [Header] d k )
         ( vec_push [Header] out ( header_new ( string_data . h name ) ( string_data . h value ) ) )
         = k + k 1
     }

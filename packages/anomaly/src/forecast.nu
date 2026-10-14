@@ -34,6 +34,7 @@
 // Gaps inside the fit window are bridged linearly for the fit only.
 
 $ `stdlib/core/io.nu`
+$ `stdlib/core/slice.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/float.nu`
@@ -439,18 +440,18 @@ unsafe @ __fc_jobs_run ( Vec FcJob ) jobs → v {
 : s FC_KIND_COUNTER `counter (rises by a fixed step and resets)`
 
 // The kind and the spread of the present readings.
-unsafe @ __fc_series_kind ( Vec f ) vals → FcSeries {
+@ __fc_series_kind ( Vec f ) vals → FcSeries {
     : i n ( vec_len [f] vals )
     : ( Vec f ) y ( vec_new [f] )
     ? < n 3 { ^ @ FcSeries { y n F 0 0.0 } } {}
-    : *f pv ( vec_data [f] vals )
+    : ( Slice f ) pv ( slice_from_vec [f] vals )
     // distinct values, up to three
-    : ~ f v1 . pv 0
+    : ~ f v1 ( slice_at [f] pv 0 )
     : ~ f v2 v1
     : ~ i nd 1
     : ~ i k 1
     ~ & < k n < nd 3 {
-        : f v . pv k
+        : f v ( slice_at [f] pv k )
         ? | == v v1 & > nd 1 == v v2 {} {
             ? == nd 1 { = v2 v = nd 2 } { = nd 3 }
         }
@@ -460,22 +461,22 @@ unsafe @ __fc_series_kind ( Vec f ) vals → FcSeries {
     // spread: 1.4826 × MAD
     : ( Vec f ) sorted ( vec_with_cap [f] n )
     = k 0
-    ~ < k n { ( vec_push [f] sorted . pv k ) = k + k 1 }
+    ~ < k n { ( vec_push [f] sorted ( slice_at [f] pv k ) ) = k + k 1 }
     ( sort_by [f] sorted \ f a f b → i { ? < a b { ^ -1 } {} ? > a b { ^ 1 } {} ^ 0 } )
     : f med ( _fc_getf sorted / n 2 )
     : ( Vec f ) dev ( vec_with_cap [f] n )
     = k 0
-    ~ < k n { ( vec_push [f] dev ( float_abs - . pv k med ) ) = k + k 1 }
+    ~ < k n { ( vec_push [f] dev ( float_abs - ( slice_at [f] pv k ) med ) ) = k + k 1 }
     ( sort_by [f] dev \ f a f b → i { ? < a b { ^ -1 } {} ? > a b { ^ 1 } {} ^ 0 } )
     : ~ f spread * 1.4826 ( _fc_getf dev / n 2 )
     ? > spread 0.0 {} {
         : ~ f sum 0.0
         = k 0
-        ~ < k n { = sum + sum . pv k = k + k 1 }
+        ~ < k n { = sum + sum ( slice_at [f] pv k ) = k + k 1 }
         : f mean / sum # f n
         : ~ f sq 0.0
         = k 0
-        ~ < k n { = sq + sq * - . pv k mean - . pv k mean = k + k 1 }
+        ~ < k n { = sq + sq * - ( slice_at [f] pv k ) mean - ( slice_at [f] pv k ) mean = k + k 1 }
         = spread ( float_sqrt / sq # f n )
     }
     // counter: it never goes down except to reset — every fall is a
@@ -487,7 +488,7 @@ unsafe @ __fc_series_kind ( Vec f ) vals → FcSeries {
     : ( Vec f ) falls ( vec_new [f] )
     = k 1
     ~ < k n {
-        : f d - . pv k . pv - k 1
+        : f d - ( slice_at [f] pv k ) ( slice_at [f] pv - k 1 )
         ? > d 0.0 { ( vec_push [f] pos d ) } { ? < d 0.0 { ( vec_push [f] falls ( float_abs d ) ) } {} }
         = k + k 1
     }

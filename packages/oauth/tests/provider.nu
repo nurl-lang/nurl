@@ -22,6 +22,7 @@
 //   provider --port N
 
 $ `stdlib/std/args.nu`
+$ `stdlib/core/slice.nu`
 $ `stdlib/std/net.nu`
 $ `stdlib/std/time.nu`
 $ `stdlib/std/bytes.nu`
@@ -269,12 +270,12 @@ $ `stdlib/ext/http_response.nu`
     ^ ( prov_json 200 out )
 }
 
-unsafe @ prov_param ( Vec UrlParam ) ps s key → String {
+@ prov_param ( Vec UrlParam ) ps s key → String {
     : i n ( vec_len [UrlParam] ps )
-    : *UrlParam data ( vec_data [UrlParam] ps )
+    : ( Slice UrlParam ) data ( slice_from_vec [UrlParam] ps )
     : ~ i k 0
     ~ < k n {
-        : UrlParam pp . data k
+        : UrlParam pp ( slice_at [UrlParam] data k )
         ? == 1 ( nurl_str_eq ( string_data . pp key ) key ) {
             ^ ( string_from ( string_data . pp val ) )
         } {}

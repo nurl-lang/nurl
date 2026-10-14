@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.4.5] — 2026-10-14
+
+Requires NURL 0.73.0 (`slice_at`, `slice_put`, `rc_take`, `locked_take`).
+
+### Changed
+
+- The connection is a `TcpConn` (`tcp_connect`, then `tcp_starttls` for the SSLRequest upgrade) in a `Locked`, instead of a raw socket handle, a zeroed `TlsConn` and an `Arc` changed through a raw pointer. The password prompt is `term_read_password`. No function is `unsafe` any more; a 200 000-row result over TLS reads in 543 ms where it took 606 ms.
+- 20 fewer functions are `unsafe` than in 0.4.4 (0 left).
+
 ## [0.4.4] — 2026-10-12
 
 Requires NURL 0.73.0, in which a standard-library handle holds its

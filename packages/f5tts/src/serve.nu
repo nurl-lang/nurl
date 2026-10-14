@@ -234,7 +234,7 @@ unsafe @ __f5s_voice_get s id f target → ?F5Voice {
 // --unload-after is for.
 @ __f5s_cur_id → s { ^ g_f5_cur_id }
 
-unsafe @ __f5s_switch_to s id → b {
+@ __f5s_switch_to s id → b {
     ? == 0 ( nurl_str_len id ) { ^ T } {}
     ? != 0 ( nurl_str_eq ( __f5s_cur_id ) id ) { ^ T } {}
     : String ck ( string_new )

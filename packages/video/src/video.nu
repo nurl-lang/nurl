@@ -130,14 +130,14 @@ unsafe @ vid_avi_movi_off VidAvi h → i { : *VidAviImpl v ( __VidAvi_ptr h ) ^ 
 
 unsafe @ vid_avi_movi_end VidAvi h → i { : *VidAviImpl v ( __VidAvi_ptr h ) ^ . v movi_end }
 
-unsafe @ __vd_u32 ( Vec u ) b i off → i {
-    : *u p ( vec_data [u] b )
-    ^ + + + # i . p off << # i . p + off 1 8 << # i . p + off 2 16 << # i . p + off 3 24
+@ __vd_u32 ( Vec u ) b i off → i {
+    : ( Slice u ) p ( slice_from_vec [u] b )
+    ^ + + + # i ( slice_at [u] p off ) << # i ( slice_at [u] p + off 1 ) 8 << # i ( slice_at [u] p + off 2 ) 16 << # i ( slice_at [u] p + off 3 ) 24
 }
 
-unsafe @ __vd_fourcc ( Vec u ) b i off i a i b2 i c i d → b {
-    : *u p ( vec_data [u] b )
-    ^ & & & == # i . p off a == # i . p + off 1 b2 == # i . p + off 2 c == # i . p + off 3 d
+@ __vd_fourcc ( Vec u ) b i off i a i b2 i c i d → b {
+    : ( Slice u ) p ( slice_from_vec [u] b )
+    ^ & & & == # i ( slice_at [u] p off ) a == # i ( slice_at [u] p + off 1 ) b2 == # i ( slice_at [u] p + off 2 ) c == # i ( slice_at [u] p + off 3 ) d
 }
 
 @ __vd_read_at File f i off i n → !( Vec u ) IoErr {
@@ -251,14 +251,14 @@ unsafe @ vid_avi_open s path → !VidAvi String {
 
 // The fourcc of this stream's compressed-video chunks: 'NNdc' where NN
 // is the stream index in decimal.
-unsafe @ __vd_dc_match ( Vec u ) h i stream → b {
-    : *u p ( vec_data [u] h )
+@ __vd_dc_match ( Vec u ) h i stream → b {
+    : ( Slice u ) p ( slice_from_vec [u] h )
     : i d0 + 48 / stream 10
     : i d1 + 48 % stream 10
-    ? & == # i . p 0 d0 == # i . p 1 d1 {} { ^ F }
+    ? & == # i ( slice_at [u] p 0 ) d0 == # i ( slice_at [u] p 1 ) d1 {} { ^ F }
     // 'dc' compressed, 'db' uncompressed-but-often-jpeg-anyway
-    : i c2 # i . p 2
-    : i c3 # i . p 3
+    : i c2 # i ( slice_at [u] p 2 )
+    : i c3 # i ( slice_at [u] p 3 )
     ? & == c2 100 == c3 99 { ^ T } {}
     ^ & == c2 100 == c3 98
 }

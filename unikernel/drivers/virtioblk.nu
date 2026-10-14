@@ -65,7 +65,7 @@ $ `stdlib/hal/virtio.nu`
     b ready
 }
 
-@ __cfg8 i base i off → i {
+unsafe @ __cfg8 i base i off → i {
     : i word ( mmio_read32 + + base ( vio_reg_config ) & off ~ 3 )
     ^ & >> word * 8 & off 3 255
 }

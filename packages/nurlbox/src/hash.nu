@@ -8,6 +8,7 @@
 // `sha256sum -c SUMS` round-trip.
 
 $ `stdlib/core/io.nu`
+$ `stdlib/core/slice.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/fs.nu`
@@ -240,14 +241,14 @@ unsafe @ ap_base64 ( Vec String ) argv → i {
     ^ t
 }
 
-unsafe @ __cksum ( Vec u ) data → i {
+@ __cksum ( Vec u ) data → i {
     : ( Vec i ) tbl ( __cksum_table )
     : ~ i crc 0
     : i n ( vec_len [u] data )
-    : *u p ( vec_data [u] data )
+    : ( Slice u ) p ( slice_from_vec [u] data )
     : ~ i i 0
     ~ < i n {
-        : i b & 255 # i . p i
+        : i b & 255 # i ( slice_at [u] p i )
         : i idx & 255 ^^ >> crc 24 b
         : ~ i tv 0
         ?? ( vec_get [i] tbl idx ) { T x → { = tv x } F _ → {} }

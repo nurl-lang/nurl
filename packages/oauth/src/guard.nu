@@ -102,14 +102,14 @@ $ `stdlib/core/slice.nu`
 // Verify the request's bearer token directly — for a handler that wants
 // the identity without being wrapped, or for a protocol other than HTTP
 // routing (a WebSocket upgrade, an MCP session).
-unsafe @ oidc_request_identity OidcProvider p OidcPolicy pol HttpRequest req → !OidcIdentity OauthErr {
+@ oidc_request_identity OidcProvider p OidcPolicy pol HttpRequest req → !OidcIdentity OauthErr {
     ?? ( parse_bearer_auth req ) {
         T t → {
             : !OidcIdentity OauthErr r ( oidc_verify_token p pol ( string_data t ) )
             ^ r
         }
         F _ → {
-            ( _oidc_err ( _OidcProvider_ptr p ) `no bearer token` )
+            ( _oidc_err_h p `no bearer token` )
             ^ @ !OidcIdentity OauthErr { F OaBadToken }
         }
     }

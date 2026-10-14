@@ -36,6 +36,7 @@
 // optional early releases).
 
 $ `stdlib/core/vec.nu`
+$ `stdlib/core/slice.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/std/float.nu`
 $ `stdlib/std/floatbits.nu`
@@ -623,18 +624,18 @@ unsafe @ mlp_train Mlp m ( Vec f ) X i n i d ( Vec f ) Y i dout MlpCfg cfg → M
 
 // ── MinMax scaler ─────────────────────────────────────────────────────
 
-unsafe @ minmax_fit ( Vec f ) X i n i d → MinMax {
+@ minmax_fit ( Vec f ) X i n i d → MinMax {
     : ( Vec f ) lo ( __zeros d )
     : ( Vec f ) hi ( __zeros d )
-    : *f xp ( vec_data [f] X )
+    : ( Slice f ) xp ( slice_from_vec [f] X )
     : ~ i c 0
     ~ < c d {
         : ~ f mn 0.0
         : ~ f mx 0.0
-        ? > n 0 { = mn . xp c = mx . xp c } {}
+        ? > n 0 { = mn ( slice_at [f] xp c ) = mx ( slice_at [f] xp c ) } {}
         : ~ i r 1
         ~ < r n {
-            : f v . xp + * r d c
+            : f v ( slice_at [f] xp + * r d c )
             ? < v mn { = mn v } {}
             ? > v mx { = mx v } {}
             = r + r 1
@@ -647,18 +648,18 @@ unsafe @ minmax_fit ( Vec f ) X i n i d → MinMax {
 }
 
 // Scale rows in place: x' = (x − lo) / (hi − lo); zero-range columns → 0.
-unsafe @ minmax_apply MinMax mm ( Vec f ) X i n → v {
+@ minmax_apply MinMax mm ( Vec f ) X i n → v {
     : i d . mm n_cols
-    : *f lop ( vec_data [f] . mm lo )
-    : *f hip ( vec_data [f] . mm hi )
-    : *f xp ( vec_data [f] X )
+    : ( Slice f ) lop ( slice_from_vec [f] . mm lo )
+    : ( Slice f ) hip ( slice_from_vec [f] . mm hi )
+    : ( Slice f ) xp ( slice_from_vec [f] X )
     : ~ i r 0
     ~ < r n {
         : ~ i c 0
         ~ < c d {
             : i o + * r d c
-            : f range - . hip c . lop c
-            : f v ? == range 0.0 0.0 / - . xp o . lop c range
+            : f range - ( slice_at [f] hip c ) ( slice_at [f] lop c )
+            : f v ? == range 0.0 0.0 / - ( slice_at [f] xp o ) ( slice_at [f] lop c ) range
             ( vec_set [f] X o v )
             = c + c 1
         }

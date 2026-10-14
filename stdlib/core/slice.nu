@@ -113,7 +113,7 @@ $ `stdlib/core/vec.nu`
 // Bounds-checked element read. Returns None on out-of-range or empty
 // slice. Mirrors `vec_get`'s semantics.
 @ slice_get [A] ( Slice A ) s i idx → ?A {
-    ? | < idx 0 >= idx . s len { ^ @ ?A { F # A 0 } } {}
+    ? >= # u64 idx # u64 . s len { ^ @ ?A { F # A 0 } } {}
     : *A p . s data
     ^ @ ?A { T . p idx }
 }
@@ -134,7 +134,7 @@ $ `stdlib/core/vec.nu`
 // from each Vec's control block past every store.
 @ slice_at [A] ( Slice A ) s i idx → A {
     : i n . s len
-    ? | < idx 0 >= idx n { ( __slice_index_panic idx n ) } {}
+    ? >= # u64 idx # u64 n { ( __slice_index_panic idx n ) } {}
     : *A p . s data
     ^ . p idx
 }
@@ -144,17 +144,26 @@ $ `stdlib/core/vec.nu`
 // view. The view's length is fixed, so a store never moves the storage.
 @ slice_put [A] ( Slice A ) s i idx A x → v {
     : i n . s len
-    ? | < idx 0 >= idx n { ( __slice_index_panic idx n ) } {}
+    ? >= # u64 idx # u64 n { ( __slice_index_panic idx n ) } {}
     : *A p . s data
     : A old . p idx
     ( mem_take old )
     = . p idx x
 }
 
+// The first `n` elements, panicking when the slice holds fewer. Slices cut
+// to one length `n` share it: a loop indexing all of them at one index is
+// checked once, not once per slice — parallel arrays (a tree's columns)
+// walked by data-dependent indices pay for one bounds check per step.
+@ slice_prefix [A] ( Slice A ) s i n → ( Slice A ) {
+    ? >= # u64 n # u64 + . s len 1 { ( __slice_index_panic n . s len ) } {}
+    ^ @ ( Slice A ) { . s data n }
+}
+
 // The byte at `idx` (0..255), or 0 outside [0, len): the read a parser
 // makes one or two bytes past its cursor, with no Option to unwrap.
 inline @ slice_byte ( Slice u ) s i idx → i {
-    ? | < idx 0 >= idx . s len { ^ 0 } {}
+    ? >= # u64 idx # u64 . s len { ^ 0 } {}
     : *u p . s data
     ^ & # i . p idx 255
 }

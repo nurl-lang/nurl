@@ -27,6 +27,7 @@
 // timestamps reproducible in tests. The plain variants read the wall clock.
 
 $ `stdlib/core/vec.nu`
+$ `stdlib/core/slice.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/std/float.nu`
 $ `stdlib/std/time.nu`
@@ -2721,12 +2722,12 @@ unsafe @ model_import_at Model mo__h ( Vec Json ) recs i now → ImportReport {
 }
 
 // Rows the version would flag at `margin`: count of dfs <= -margin.
-unsafe @ cal_flagged_at CalVer cv f margin → i {
+@ cal_flagged_at CalVer cv f margin → i {
     : i n ( vec_len [f] . cv dfs )
-    : *f dp ( vec_data [f] . cv dfs )
+    : ( Slice f ) dp ( slice_from_vec [f] . cv dfs )
     : f line - 0.0 margin
     : ~ i c 0
-    ~ & < c n <= . dp c line { = c + c 1 }
+    ~ & < c n <= ( slice_at [f] dp c ) line { = c + c 1 }
     ^ c
 }
 
@@ -2748,10 +2749,10 @@ unsafe @ cal_flagged_at CalVer cv f margin → i {
 // would flag points the forest itself calls normal, and a rate the data
 // cannot supply is answered by the honest count next to the margin, not
 // by a margin below zero.
-unsafe @ cal_margin_for_rate CalVer cv f rate → f {
+@ cal_margin_for_rate CalVer cv f rate → f {
     : i n ( vec_len [f] . cv dfs )
     ? <= n 0 { ^ . cv cur_margin } {}
-    : *f dp ( vec_data [f] . cv dfs )
+    : ( Slice f ) dp ( slice_from_vec [f] . cv dfs )
     : ~ f r rate
     ? < r 0.0 { = r 0.0 } {}
     ? > r 1.0 { = r 1.0 } {}
@@ -2761,11 +2762,11 @@ unsafe @ cal_margin_for_rate CalVer cv f rate → f {
     : ~ i kt k
     : ~ b incl T
     ? > k 0 {
-        : f tv . dp - k 1
+        : f tv ( slice_at [f] dp - k 1 )
         : ~ i lo - k 1
-        ~ & > lo 0 == . dp - lo 1 tv { = lo - lo 1 }
+        ~ & > lo 0 == ( slice_at [f] dp - lo 1 ) tv { = lo - lo 1 }
         : ~ i hi - k 1
-        ~ & < + hi 1 n == . dp + hi 1 tv { = hi + hi 1 }
+        ~ & < + hi 1 n == ( slice_at [f] dp + hi 1 ) tv { = hi + hi 1 }
         : i whole + hi 1
         = incl <= - whole k - k lo
         = kt ? incl whole lo
@@ -2773,10 +2774,10 @@ unsafe @ cal_margin_for_rate CalVer cv f rate → f {
     : ~ f exact 0.0
     ? <= kt 0 {
         // Just above the worst point, by a hair that survives rounding.
-        : f w - 0.0 . dp 0
+        : f w - 0.0 ( slice_at [f] dp 0 )
         = exact + w + * ( float_abs w ) 0.000000001 0.000000000001
     } {
-        = exact - 0.0 . dp - kt 1
+        = exact - 0.0 ( slice_at [f] dp - kt 1 )
     }
     ? < exact 0.0 { ^ 0.0 } {}
     : i tol / kt 10

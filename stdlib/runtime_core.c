@@ -4363,6 +4363,17 @@ long long nurl_monotonic_ns(void) {
     return (long long)ts.tv_sec * 1000000000LL + (long long)ts.tv_nsec;
 }
 
+/* CLOCK_REALTIME in nanoseconds since the Unix epoch, straight from the
+ * runtime, as nurl_monotonic_ns: `now_ms` / `now_seconds` read it on
+ * every call, and the clock_gettime FFI route looked CLOCK_REALTIME up by
+ * name first — a chain of strcmp calls per clock read. 0 if the clock is
+ * missing. */
+long long nurl_realtime_ns(void) {
+    struct timespec ts;
+    if (clock_gettime(CLOCK_REALTIME, &ts) != 0) return 0;
+    return (long long)ts.tv_sec * 1000000000LL + (long long)ts.tv_nsec;
+}
+
 /* waitpid status decoders — the W* macros are preprocessor bit-twiddles
  * and macOS expands them against an int lvalue, so bind locally first. */
 long long nurl_wait_is_exited (long long status) {

@@ -22,6 +22,7 @@
 // the win, and bit-equality makes the switch invisible.
 
 $ `stdlib/core/io.nu`
+$ `stdlib/core/slice.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/std/float.nu`
@@ -137,7 +138,7 @@ unsafe @ __ag_kit → GpuKit {
 // Public view of the kit for sibling modules (aegpu.nu shares the device —
 // __-prefixed functions are file-scoped). Only valid after anom_gpu_engine
 // reported `cuda` or `cpu`.
-unsafe @ anom_gpu_kit → GpuKit { ^ ( __ag_kit ) }
+@ anom_gpu_kit → GpuKit { ^ ( __ag_kit ) }
 
 // Release the device + kernel cache (tests call this so leak checkers see a
 // closed shop; a long-running service just keeps the singleton).
@@ -263,17 +264,17 @@ unsafe @ anom_decisions VerModel vm ( Vec f ) scaled i n_rows i n_cols → ( Vec
 // ── Percentile (numpy 'linear' interpolation, for contamination) ──────
 
 // q in [0,1] over an ASCENDING-sorted vector.
-unsafe @ _an_percentile ( Vec f ) sorted f q → f {
+@ _an_percentile ( Vec f ) sorted f q → f {
     : i n ( vec_len [f] sorted )
     ? <= n 0 { ^ 0.0 } {}
-    : *f dp ( vec_data [f] sorted )
-    ? <= n 1 { ^ . dp 0 } {}
+    : ( Slice f ) dp ( slice_from_vec [f] sorted )
+    ? <= n 1 { ^ ( slice_at [f] dp 0 ) } {}
     : ~ f pos * q # f - n 1
     ? < pos 0.0 { = pos 0.0 } {}
     : ~ i lo # i ( float_floor pos )
-    ? >= lo - n 1 { ^ . dp - n 1 } {}
+    ? >= lo - n 1 { ^ ( slice_at [f] dp - n 1 ) } {}
     : f frac - pos # f lo
-    ^ + . dp lo * - . dp + lo 1 . dp lo frac
+    ^ + ( slice_at [f] dp lo ) * - ( slice_at [f] dp + lo 1 ) ( slice_at [f] dp lo ) frac
 }
 
 // ── Version training ──────────────────────────────────────────────────
@@ -282,7 +283,7 @@ unsafe @ _an_percentile ( Vec f ) sorted f q → f {
 // `cfg.max_samples` is clamped to the row count; contamination < 0 = "auto"
 // (offset pinned at -0.5), else offset_ is the 100*c percentile of the
 // training set's score_samples — so `predict == -1` flags ~c of training.
-unsafe @ anom_train_version ( Vec f ) scaled i n_rows i n_cols VerCfg cfg → VerModel {
+@ anom_train_version ( Vec f ) scaled i n_rows i n_cols VerCfg cfg → VerModel {
     : ~ i samp . cfg max_samples
     ? > samp n_rows { = samp n_rows } {}
     : IForest fo ( iforest_train scaled n_rows n_cols . cfg n_estimators samp ANOM_SEED )
@@ -297,10 +298,10 @@ unsafe @ anom_train_version ( Vec f ) scaled i n_rows i n_cols VerCfg cfg → Ve
     ? >= . cfg contamination 0.0 {
         : ( Vec f ) raw ( anom_scores vm scaled n_rows n_cols )
         : ( Vec f ) ss ( vec_with_cap [f] n_rows )
-        : *f rp ( vec_data [f] raw )
+        : ( Slice f ) rp ( slice_from_vec [f] raw )
         : ~ i r 0
         ~ < r n_rows {
-            ( vec_push [f] ss - 0.0 . rp r )
+            ( vec_push [f] ss - 0.0 ( slice_at [f] rp r ) )
             = r + r 1
         }
         ( sort_by [f] ss \ f a f b → i {
@@ -318,7 +319,7 @@ unsafe @ anom_train_version ( Vec f ) scaled i n_rows i n_cols VerCfg cfg → Ve
 // Fit a scaler over the raw matrix, train one version on the standardised
 // copy, then score every row. Anomaly ⇔ decision_function <= -cfg.margin
 // (margin 0 reproduces the reference's predict == -1 batch rule).
-unsafe @ anomaly_batch ( Vec f ) data i n_rows i n_cols VerCfg cfg → BatchReport {
+@ anomaly_batch ( Vec f ) data i n_rows i n_cols VerCfg cfg → BatchReport {
     : Scaler sc ( scaler_fit data n_rows n_cols )
     : ( Vec f ) scaled ( vec_clone [f] data )
     ( scaler_apply_matrix sc scaled n_rows n_cols )
@@ -326,10 +327,10 @@ unsafe @ anomaly_batch ( Vec f ) data i n_rows i n_cols VerCfg cfg → BatchRepo
 
     : ( Vec f ) scores ( anom_decisions vm scaled n_rows n_cols )
     : ( Vec i ) hits ( vec_new [i] )
-    : *f dfp ( vec_data [f] scores )
+    : ( Slice f ) dfp ( slice_from_vec [f] scores )
     : ~ i r 0
     ~ < r n_rows {
-        ? ( anom_is_anomaly vm . dfp r ) { ( vec_push [i] hits r ) } {}
+        ? ( anom_is_anomaly vm ( slice_at [f] dfp r ) ) { ( vec_push [i] hits r ) } {}
         = r + r 1
     }
 

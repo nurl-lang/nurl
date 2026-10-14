@@ -28,6 +28,7 @@
 // the token carries no `kid` — the common single-key provider.
 
 $ `stdlib/core/string.nu`
+$ `stdlib/core/slice.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/encode.nu`
@@ -186,12 +187,12 @@ $ `stdlib/ext/json.nu`
 // key rather than betting on the first. That is the case during a key
 // rotation, when the provider publishes the old and the new key and the
 // tokens in flight carry no `kid` to tell them apart.
-unsafe @ jwks_select_from ( Vec JwkKey ) ks s kid s alg i from → i {
+@ jwks_select_from ( Vec JwkKey ) ks s kid s alg i from → i {
     : i n ( vec_len [JwkKey] ks )
-    : *JwkKey data ( vec_data [JwkKey] ks )
+    : ( Slice JwkKey ) data ( slice_from_vec [JwkKey] ks )
     : ~ i k ? > from 0 from 0
     ~ < k n {
-        : JwkKey jk . data k
+        : JwkKey jk ( slice_at [JwkKey] data k )
         ? ( jwk_matches jk kid alg ) { ^ k } {}
         = k + k 1
     }
@@ -200,12 +201,12 @@ unsafe @ jwks_select_from ( Vec JwkKey ) ks s kid s alg i from → i {
 
 // Does the set hold a key with this `kid` at all? Used to decide whether
 // an unknown `kid` justifies re-fetching the JWKS.
-unsafe @ jwks_has_kid ( Vec JwkKey ) ks s kid → b {
+@ jwks_has_kid ( Vec JwkKey ) ks s kid → b {
     : i n ( vec_len [JwkKey] ks )
-    : *JwkKey data ( vec_data [JwkKey] ks )
+    : ( Slice JwkKey ) data ( slice_from_vec [JwkKey] ks )
     : ~ i k 0
     ~ < k n {
-        : JwkKey jk . data k
+        : JwkKey jk ( slice_at [JwkKey] data k )
         ? == 1 ( nurl_str_eq ( string_data . jk kid ) kid ) { ^ T } {}
         = k + k 1
     }

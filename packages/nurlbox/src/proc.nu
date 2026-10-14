@@ -486,18 +486,18 @@ unsafe @ ap_kill ( Vec String ) argv → i {
 // bytes on Linux with `ut_type` a short at offset 0; USER_PROCESS is 7.
 // A machine with no utmp answers -1 and `uptime` leaves the field out
 // rather than claiming nobody is here.
-unsafe @ __count_users → i {
+@ __count_users → i {
     : ~ b ok T
     : ( Vec u ) data ( bx_slurp `/var/run/utmp` ok )
     ? ! ok {
         ^ -1
     } {}
     : i n ( vec_len [u] data )
-    : *u p ( vec_data [u] data )
+    : ( Slice u ) p ( slice_from_vec [u] data )
     : ~ i count 0
     : ~ i off 0
     ~ <= + off 384 n {
-        : i kind | & 255 # i . p off << & 255 # i . p + off 1 8
+        : i kind | & 255 # i ( slice_at [u] p off ) << & 255 # i ( slice_at [u] p + off 1 ) 8
         ? == kind 7 { = count + count 1 } {}
         = off + off 384
     }

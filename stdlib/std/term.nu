@@ -47,6 +47,19 @@ $ `stdlib/ext/env.nu`  // $COLUMNS / $LINES fallback for term_width
 // bytes C wrote (the struct is opaque here) and released with the state.
 : TermState { i fd ( Vec u ) saved }
 
+// The runtime's echo-off line read (stdlib/runtime_core.c): the prompt goes
+// to stderr, and the line comes back without its newline, the caller's.
+& `c` @ nurl_read_password s prompt → sink s
+
+// A line read from stdin with the terminal's echo off — a password prompt.
+// Where echo cannot be turned off (stdin is not a terminal, WASI) the line
+// is read as typed.
+@ term_read_password s prompt → String {
+    : s raw ( nurl_read_password prompt )
+    : String out ( string_from raw )
+    ^ out
+}
+
 @ term_is_tty i fd → b {
     ^ == # i ( isatty # i32 fd ) 1
 }

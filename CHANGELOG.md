@@ -8,6 +8,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Taking `unsafe` out of the packages. A handle's state is changed in safe
+code now: `rc_take` / `rc_restore` (stdlib/std/rc.nu) and `locked_take` /
+`locked_restore` (stdlib/std/thread.nu) check the state out of an `Rc` or
+a `Locked` into a local — nothing copied — for `inout` helpers to change,
+and back in; every other use of it panics (`Rc`) or waits (`Locked`) until
+it is back (docs/MEMORY.md §7.6). `slice_prefix` cuts parallel columns to
+one length, so a walk over them checks each index once. Bounds checks
+(`vec_at`, `vec_put`, `vec_get`, `vec_set`, `slice_*`) are one unsigned
+compare: a `vec_at` / `vec_put` write loop runs in 1.0 s where it took
+1.4 s. `arc_get` lends a payload that has a `% Drop` and no clone (the
+copying branch for a cyclic payload is dead for it, and the compiler no
+longer rejects code a constant condition leaves dead). `now_ms` /
+`now_seconds` read the clock in one runtime call instead of looking
+CLOCK_REALTIME up by name first (~2 300 instructions a call).
+`term_read_password` and `tls_accept_conn` are new safe wrappers.
+
+Seven more holes are closed (h249–h255), and none is known open: functions
+that take a runtime handle as a plain integer (`tcp_conn_view`,
+`tls_attach*`, `tls_accept*`, the `nurl_tcp_*` / `nurl_udp_*` /
+`nurl_proc_*` builtins and stdlib FFI, the library's raw symbol table
+`nurl_sym_*`) were callable from safe code, so a made-up number was read
+or freed as a socket or a table, and the unikernel HAL's `mmio_*` / `virtio_*` / `virtq_*`
+helpers wrote to any physical address. They are `unsafe` only; a stdlib foreign
+function says so with `unsafe & …`. `SymTab` could be built around a
+made-up number or shared between threads: it is sealed, move-only and
+`% NotSync` now. The language server reaches its tables through two
+accessors instead of raw handles.
+
+Packages: `oauth`, `iforest`, `vindex`, `data`, `cli`, `psql` and `redis`
+have no `unsafe` function left, and 13 functions elsewhere were marked
+`unsafe` with nothing raw in them; about a hundred more raw `vec_data`
+loops are slices. `oauth`'s provider and policy were shared between a
+server's workers through an `Arc` changed in place — a data race; they
+are a `Locked` now, with the key set and the policy read as `Arc`
+snapshots, so verification still runs in parallel.
+
 Four holes found while taking `unsafe` out of the packages are closed
 (h245–h248): a view of an `Rc`'s value outlived an `rc_set` made through
 another handle on the same value — a clone, a field or an aliased

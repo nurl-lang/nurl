@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.1.8] — 2026-10-14
+
+Requires NURL 0.73.0 (`slice_at`, `slice_put`, `rc_take`, `locked_take`).
+
+### Changed
+
+- Training and scoring index slices (`slice_at`, `slice_prefix`: a tree walk checks each node index once) instead of raw pointers; the scores are bit-identical and scoring runs as fast. A corrupt model's child index now panics instead of reading out of bounds. No function is `unsafe` any more.
+- 7 fewer functions are `unsafe` than in 0.1.7 (0 left).
+
 ## [0.1.7] — 2026-10-09
 
 Requires NURL 0.72.0, which draws the raw-memory boundary at every call:

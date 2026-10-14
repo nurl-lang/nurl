@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.2.3] — 2026-10-14
+
+Requires NURL 0.73.0 (`slice_at`, `slice_put`, `rc_take`, `locked_take`).
+
+### Changed
+
+- The index is read through `arc_get` (it never changes once built). No function is `unsafe` any more; a search retires 11 % fewer instructions.
+- 8 fewer functions are `unsafe` than in 0.2.2 (0 left).
+
 ## [0.2.2] — 2026-10-11
 
 Requires NURL 0.73.0, which allows `mem_forget`, `mem_take` and the

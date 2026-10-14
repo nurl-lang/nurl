@@ -6,6 +6,7 @@
 //   geomcheck <dir> <H> <W>
 
 $ `stdlib/core/string.nu`
+$ `stdlib/core/slice.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/std/float.nu`
@@ -21,7 +22,7 @@ $ `src/geom.nu`
 
 // The `n` f32s of `dir/name` as f64s; empty when the file is missing or
 // the wrong size.
-unsafe @ __gc_read s dir s name i n → ( Vec f ) {
+@ __gc_read s dir s name i n → ( Vec f ) {
     : String p ( string_from dir )
     ( string_push_str p name )
     ?? ( read_file_bytes ( string_data p ) ) {
@@ -29,13 +30,13 @@ unsafe @ __gc_read s dir s name i n → ( Vec f ) {
         T raw → {
             ? == ( vec_len [u] raw ) * n 4 {
                 : ( Vec f ) out ( vec_zeroed [f] n )
-                : *f op ( vec_data [f] out )
-                : *u rp ( vec_data [u] raw )
+                : ( Slice f ) op ( slice_from_vec [f] out )
+                : ( Slice u ) rp ( slice_from_vec [u] raw )
                 : ~ i j 0
                 ~ < j n {
                     : i o * j 4
-                    : i bits | # i . rp o | << # i . rp + o 1 8 | << # i . rp + o 2 16 << # i . rp + o 3 24
-                    = . op j # f ( bits_to_f32 bits )
+                    : i bits | # i ( slice_at [u] rp o ) | << # i ( slice_at [u] rp + o 1 ) 8 | << # i ( slice_at [u] rp + o 2 ) 16 << # i ( slice_at [u] rp + o 3 ) 24
+                    ( slice_put [f] op j # f ( bits_to_f32 bits ) )
                     = j + j 1
                 }
                 ^ out

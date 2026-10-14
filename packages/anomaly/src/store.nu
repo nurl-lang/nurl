@@ -67,24 +67,24 @@ $ `stdlib/core/slice.nu`
 
 // ── VerModel ⇄ bytes ──────────────────────────────────────────────────
 
-unsafe @ __an_blob_push_ivec ( Vec u ) out ( Vec i ) xs → v {
+@ __an_blob_push_ivec ( Vec u ) out ( Vec i ) xs → v {
     : i n ( vec_len [i] xs )
     ( bytes_push_u64_le out # u64 n )
-    : *i dp ( vec_data [i] xs )
+    : ( Slice i ) dp ( slice_from_vec [i] xs )
     : ~ i k 0
     ~ < k n {
-        ( bytes_push_u64_le out # u64 . dp k )
+        ( bytes_push_u64_le out # u64 ( slice_at [i] dp k ) )
         = k + k 1
     }
 }
 
-unsafe @ __an_blob_push_fvec ( Vec u ) out ( Vec f ) xs → v {
+@ __an_blob_push_fvec ( Vec u ) out ( Vec f ) xs → v {
     : i n ( vec_len [f] xs )
     ( bytes_push_u64_le out # u64 n )
-    : *f dp ( vec_data [f] xs )
+    : ( Slice f ) dp ( slice_from_vec [f] xs )
     : ~ i k 0
     ~ < k n {
-        ( bytes_push_f64_le out . dp k )
+        ( bytes_push_f64_le out ( slice_at [f] dp k ) )
         = k + k 1
     }
 }
@@ -143,12 +143,12 @@ unsafe @ __an_blob_push_fvec ( Vec u ) out ( Vec f ) xs → v {
 }
 
 // Every node index in xs must lie in [-1, n_nodes).
-unsafe @ __an_blob_idx_ok ( Vec i ) xs i n_nodes → b {
+@ __an_blob_idx_ok ( Vec i ) xs i n_nodes → b {
     : i n ( vec_len [i] xs )
-    : *i dp ( vec_data [i] xs )
+    : ( Slice i ) dp ( slice_from_vec [i] xs )
     : ~ i k 0
     ~ < k n {
-        : i x . dp k
+        : i x ( slice_at [i] dp k )
         ? || < x -1 >= x n_nodes { ^ F } {}
         = k + k 1
     }
@@ -976,7 +976,7 @@ unsafe @ store_load_fc Store st s name → ?FcModel {
 
 // ── The scored-verdict cache, as a blob ───────────────────────────────
 
-unsafe @ store_save_scores Store st s name ScoreCache c → b {
+@ store_save_scores Store st s name ScoreCache c → b {
     ? . st ok {} { ^ F }
     : ( Vec u ) out ( vec_new [u] )
     ( bytes_extend_str out `ANOMSCR2` )
@@ -997,18 +997,18 @@ unsafe @ store_save_scores Store st s name ScoreCache c → b {
     }
     : i nr ( vec_len [i] . c state )
     ( bytes_push_u64_le out # u64 nr )
-    : *i stp ( vec_data [i] . c state )
-    : *f scp ( vec_data [f] . c score )
-    : *f svp ( vec_data [f] . c severity )
-    : *i prp ( vec_data [i] . c present )
-    : *i flp ( vec_data [i] . c flagged )
+    : ( Slice i ) stp ( slice_from_vec [i] . c state )
+    : ( Slice f ) scp ( slice_from_vec [f] . c score )
+    : ( Slice f ) svp ( slice_from_vec [f] . c severity )
+    : ( Slice i ) prp ( slice_from_vec [i] . c present )
+    : ( Slice i ) flp ( slice_from_vec [i] . c flagged )
     = k 0
     ~ < k nr {
-        ( bytes_push_f64_le out . scp k )
-        ( bytes_push_f64_le out . svp k )
-        ( bytes_push_u64_le out # u64 . stp k )
-        ( bytes_push_u64_le out # u64 . prp k )
-        ( bytes_push_u64_le out # u64 . flp k )
+        ( bytes_push_f64_le out ( slice_at [f] scp k ) )
+        ( bytes_push_f64_le out ( slice_at [f] svp k ) )
+        ( bytes_push_u64_le out # u64 ( slice_at [i] stp k ) )
+        ( bytes_push_u64_le out # u64 ( slice_at [i] prp k ) )
+        ( bytes_push_u64_le out # u64 ( slice_at [i] flp k ) )
         = k + k 1
     }
     : b ok ( __st_blob_put st name ANOM_KIND_SCORES out )

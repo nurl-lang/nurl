@@ -377,7 +377,7 @@ inline @ alloc_grow_pow2 i cap i need i first → i {
 @ vec_get [A] ( Vec A ) v i idx → ?A {
     : s ctl . v ctl
     : i len ( __vec_len_raw ctl )
-    ? | < idx 0 >= idx len { ^ @ ?A { F # A 0 } } {}
+    ? >= # u64 idx # u64 len { ^ @ ?A { F # A 0 } } {}
     : *A data # *A ( nurl_vctl_data ctl )
     : A x . data idx
     ^ @ ?A { T x }
@@ -403,7 +403,7 @@ inline @ alloc_grow_pow2 i cap i need i first → i {
     : s ctl . v ctl
     : *A data # *A ( nurl_vctl_data ctl )
     : i len ( __vec_len_raw ctl )
-    ? | < idx 0 >= idx len { ( __vec_index_panic idx len ) } {}
+    ? >= # u64 idx # u64 len { ( __vec_index_panic idx len ) } {}
     ^ . data idx
 }
 
@@ -414,7 +414,7 @@ inline @ alloc_grow_pow2 i cap i need i first → i {
     : s ctl . v ctl
     : *A data # *A ( nurl_vctl_data ctl )
     : i len ( __vec_len_raw ctl )
-    ? | < idx 0 >= idx len { ( __vec_index_panic idx len ) } {}
+    ? >= # u64 idx # u64 len { ( __vec_index_panic idx len ) } {}
     : A old . data idx
     ( mem_take old )
     = . data idx x
@@ -424,7 +424,7 @@ inline @ alloc_grow_pow2 i cap i need i first → i {
 @ vec_set [A] ( Vec A ) v i idx A x → b {
     : s ctl . v ctl
     : i len ( __vec_len_raw ctl )
-    ? | < idx 0 >= idx len { ^ F } {}
+    ? >= # u64 idx # u64 len { ^ F } {}
     : *A data # *A ( nurl_vctl_data ctl )
     : A old . data idx
     ( mem_take old )
@@ -438,7 +438,7 @@ inline @ alloc_grow_pow2 i cap i need i first → i {
 @ vec_replace [A] ( Vec A ) v i idx A x → ?A {
     : s ctl . v ctl
     : i len ( __vec_len_raw ctl )
-    ? | < idx 0 >= idx len { ^ @ ?A { F # A 0 } } {}
+    ? >= # u64 idx # u64 len { ^ @ ?A { F # A 0 } } {}
     : *A data # *A ( nurl_vctl_data ctl )
     : A old . data idx
     ( mem_take old )  // the element leaves the container
@@ -487,7 +487,7 @@ inline @ alloc_grow_pow2 i cap i need i first → i {
 @ vec_remove [A] ( Vec A ) v i idx → ?A {
     : s ctl . v ctl
     : i len ( __vec_len_raw ctl )
-    ? | < idx 0 >= idx len { ^ @ ?A { F # A 0 } } {}
+    ? >= # u64 idx # u64 len { ^ @ ?A { F # A 0 } } {}
     : *A data # *A ( nurl_vctl_data ctl )
     : A x . data idx
     ( mem_take x )  // the element leaves the container

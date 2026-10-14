@@ -84,16 +84,15 @@ $ `stdlib/std/rc.nu`
     ( Vec CliCmd ) cmds
 }
 
-// A Cli is a handle on its state in an Arc (stdlib/std/arc.nu):
-// every copy is the same state (a CliCtx's back-ref is one), and the last
-// owner releases it — its strings, flags and commands are dropped with it.
+// A Cli is a handle on its state in an Rc (stdlib/std/rc.nu): every copy
+// is the same state (a CliCtx's back-ref is one), and the last owner
+// releases it — its strings, flags and commands are dropped with it. A
+// builder checks the state out (rc_take) and back in; a run reads it.
 : Cli { ( Rc CliImpl ) a }
 
 @ Cli_share Cli h → Cli { ^ @ Cli { ( rc_clone [CliImpl] . h a ) } }
 
 @ Cli_drop sink Cli h → v {}
-
-unsafe @ __Cli_ptr Cli h → *CliImpl { ^ ( rc_ptr [CliImpl] . h a ) }
 
 // ── Colour (decided once per run: stdout is a TTY and $NO_COLOR unset) ──
 
@@ -149,44 +148,43 @@ unsafe @ __Cli_ptr Cli h → *CliImpl { ^ ( rc_ptr [CliImpl] . h a ) }
 
 // ── Flag builders (global flags; applied across all commands) ──────────
 
-unsafe @ __cli_add_flag * CliImpl c s long i short s metavar s help i kind s dflt s env → v {
+@ __cli_add_flag Cli h s long i short s metavar s help i kind s dflt s env → v {
     : CliFlag f @ CliFlag {
         ( string_from long ) short ( string_from metavar ) ( string_from help )
         kind ( string_from dflt ) ( string_from env )
     }
+    : ~ CliImpl c ( rc_take [CliImpl] . h a )
     ( vec_push [CliFlag] . c globals f )
+    ( rc_restore [CliImpl] . h a c )
 }
 
-unsafe @ cli_flag_bool Cli c__h s long i short s help → v {
-    : *CliImpl c ( __Cli_ptr c__h )
-    ( __cli_add_flag c long short `` help 2 `` `` )
+@ cli_flag_bool Cli c__h s long i short s help → v {
+    ( __cli_add_flag c__h long short `` help 2 `` `` )
 }
 
-unsafe @ cli_flag_str Cli c__h s long i short s metavar s help s dflt s env → v {
-    : *CliImpl c ( __Cli_ptr c__h )
-    ( __cli_add_flag c long short metavar help 0 dflt env )
+@ cli_flag_str Cli c__h s long i short s metavar s help s dflt s env → v {
+    ( __cli_add_flag c__h long short metavar help 0 dflt env )
 }
 
-unsafe @ cli_flag_int Cli c__h s long i short s metavar s help i dflt s env → v {
-    : *CliImpl c ( __Cli_ptr c__h )
+@ cli_flag_int Cli c__h s long i short s metavar s help i dflt s env → v {
     : String d ( string_new )
     ( string_push_int d dflt )
-    ( __cli_add_flag c long short metavar help 1 ( string_data d ) env )
+    ( __cli_add_flag c__h long short metavar help 1 ( string_data d ) env )
 }
 
-unsafe @ cli_flag_float Cli c__h s long i short s metavar s help f dflt s env → v {
-    : *CliImpl c ( __Cli_ptr c__h )
+@ cli_flag_float Cli c__h s long i short s metavar s help f dflt s env → v {
     : String d ( string_new )
     ( string_push_float d dflt )
-    ( __cli_add_flag c long short metavar help 3 ( string_data d ) env )
+    ( __cli_add_flag c__h long short metavar help 3 ( string_data d ) env )
 }
 
 // ── Command registration ──────────────────────────────────────────────
 
-unsafe @ cli_cmd Cli c__h s name s help ( @ i CliCtx ) handler → v {
-    : *CliImpl c ( __Cli_ptr c__h )
+@ cli_cmd Cli c__h s name s help ( @ i CliCtx ) handler → v {
     : CliCmd cmd @ CliCmd { ( string_from name ) ( string_from help ) handler }
+    : ~ CliImpl c ( rc_take [CliImpl] . c__h a )
     ( vec_push [CliCmd] . c cmds cmd )
+    ( rc_restore [CliImpl] . c__h a c )
 }
 
 // Default handler — the whole program IS the command (psql/redis-cli style:
@@ -195,14 +193,15 @@ unsafe @ cli_cmd Cli c__h s name s help ( @ i CliCtx ) handler → v {
 // a first non-option token that matches no registered command routes here
 // (and stays readable as ctx_arg 0), and a bare invocation runs it instead
 // of printing usage. Registered subcommands still win when they match.
-unsafe @ cli_default Cli c__h ( @ i CliCtx ) handler → v {
-    : *CliImpl c ( __Cli_ptr c__h )
+@ cli_default Cli c__h ( @ i CliCtx ) handler → v {
     : CliCmd cmd @ CliCmd { ( string_new ) ( string_new ) handler }
+    : ~ CliImpl c ( rc_take [CliImpl] . c__h a )
     ( vec_push [CliCmd] . c cmds cmd )
+    ( rc_restore [CliImpl] . c__h a c )
 }
 
 // Index of the command named `name`, or None.
-unsafe @ __cli_find_cmd * CliImpl c s name → ?i {
+@ __cli_find_cmd CliImpl c s name → ?i {
     : i n ( vec_len [CliCmd] . c cmds )
     : ~ i k 0
     ~ < k n {
@@ -220,7 +219,7 @@ unsafe @ __cli_find_cmd * CliImpl c s name → ?i {
 // ── Context accessors (used inside handlers) ──────────────────────────
 
 // Resolve a string flag: explicit value → env fallback → default → "".
-unsafe @ __cli_fallback * CliImpl c s name → String {
+@ __cli_fallback CliImpl c s name → String {
     : i n ( vec_len [CliFlag] . c globals )
     : ~ i k 0
     ~ < k n {
@@ -243,12 +242,13 @@ unsafe @ __cli_fallback * CliImpl c s name → String {
     ^ ( string_new )
 }
 
-unsafe @ ctx_str CliCtx x s name → String {
+@ ctx_str CliCtx x s name → String {
     ?? ( args_value . x parser name ) {
         T v → { ^ v }
         F junk → { ( string_free junk ) }
     }
-    ^ ( __cli_fallback ( __Cli_ptr . x cli ) name )
+    : Cli cl . x cli
+    ^ ( __cli_fallback ( rc_get [CliImpl] . cl a ) name )
 }
 
 @ ctx_int CliCtx x s name → i {
@@ -345,7 +345,7 @@ unsafe @ ctx_str CliCtx x s name → String {
     ~ < pw 24 { ( string_push_char out 32 ) = pw + pw 1 }
 }
 
-unsafe @ __cli_render_options * CliImpl c String out → v {
+@ __cli_render_options CliImpl c String out → v {
     : String hdr ( __sgr 1 `OPTIONS` )
     ( string_push_str out ( string_data hdr ) )
     ( string_push_char out 10 )
@@ -383,7 +383,7 @@ unsafe @ __cli_render_options * CliImpl c String out → v {
 }
 
 // Longest command name, for column alignment.
-unsafe @ __cli_cmd_width * CliImpl c → i {
+@ __cli_cmd_width CliImpl c → i {
     : i n ( vec_len [CliCmd] . c cmds )
     : ~ i w 0
     : ~ i k 0
@@ -397,7 +397,7 @@ unsafe @ __cli_cmd_width * CliImpl c → i {
     ^ w
 }
 
-unsafe @ __cli_print_help * CliImpl c → v {
+@ __cli_print_help CliImpl c → v {
     : String out ( string_new )
     // header
     : String prog ( __sgr 1 ( string_data . c prog ) )
@@ -462,7 +462,7 @@ unsafe @ __cli_print_help * CliImpl c → v {
     ( nurl_print ( string_data out ) )
 }
 
-unsafe @ __cli_print_cmd_help * CliImpl c i idx → v {
+@ __cli_print_cmd_help CliImpl c i idx → v {
     : String out ( string_new )
     ?? ( vec_get [CliCmd] . c cmds idx ) {
         T cm → {
@@ -492,7 +492,7 @@ unsafe @ __cli_print_cmd_help * CliImpl c i idx → v {
 }
 
 // A styled "error: <msg>" line + usage hint on stderr.
-unsafe @ __cli_err * CliImpl c s msg → v {
+@ __cli_err CliImpl c s msg → v {
     : String pre ( __fg 1 `error:` )
     ( nurl_eprint ( string_data pre ) )
     ( string_free pre )
@@ -505,7 +505,7 @@ unsafe @ __cli_err * CliImpl c s msg → v {
 
 // ── Run ───────────────────────────────────────────────────────────────
 
-unsafe @ __cli_register_flags * CliImpl c ArgParser p → v {
+@ __cli_register_flags CliImpl c ArgParser p → v {
     : i n ( vec_len [CliFlag] . c globals )
     : ~ i k 0
     ~ < k n {
@@ -527,8 +527,8 @@ unsafe @ __cli_register_flags * CliImpl c ArgParser p → v {
 // Some(rc) when it ran (or when --help short-circuited it); None when no
 // default exists. The ctx carries an EMPTY cmdname so ctx_arg/ctx_nargs
 // treat every positional as an argument.
-unsafe @ __cli_try_default Cli c__h ArgParser p → ?i {
-    : *CliImpl c ( __Cli_ptr c__h )
+@ __cli_try_default Cli c__h ArgParser p → ?i {
+    : CliImpl c ( rc_get [CliImpl] . c__h a )
     ?? ( __cli_find_cmd c `` ) {
         T didx → {
             ? ( args_present p `help` ) {
@@ -544,7 +544,7 @@ unsafe @ __cli_try_default Cli c__h ArgParser p → ?i {
     }
 }
 
-unsafe @ __cli_dispatch * CliImpl c i idx CliCtx ctx → i {
+@ __cli_dispatch CliImpl c i idx CliCtx ctx → i {
     ?? ( vec_get [CliCmd] . c cmds idx ) {
         T cm → {
             : ( @ i CliCtx ) f . cm handler
@@ -554,7 +554,7 @@ unsafe @ __cli_dispatch * CliImpl c i idx CliCtx ctx → i {
     }
 }
 
-unsafe @ __cli_print_version * CliImpl c → v {
+@ __cli_print_version CliImpl c → v {
     ( nurl_print ( string_data . c prog ) )
     ( nurl_print ` ` )
     ( nurl_print ( string_data . c version ) )
@@ -563,8 +563,8 @@ unsafe @ __cli_print_version * CliImpl c → v {
 
 // Parse the real argv, route to a subcommand, and return its exit code.
 // Handles `--help` / `--version`, unknown commands, and parse errors.
-unsafe @ cli_run Cli c__h → i {
-    : *CliImpl c ( __Cli_ptr c__h )
+@ cli_run Cli c__h → i {
+    : CliImpl c ( rc_get [CliImpl] . c__h a )
     ( __cli_detect_color )
 
     : ( Vec String ) argv ( env_args_list )

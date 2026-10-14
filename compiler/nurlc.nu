@@ -2448,6 +2448,9 @@ unsafe @ emit_coverage_modules s module → b {
 // `--unsafe-report`: the program's own `unsafe` functions (outside the
 // standard library), one `file:line name` per line — the surface a
 // reviewer has to trust.
+// > 0 while an arm of a `?` whose condition folded to a constant is
+// generated: code that never runs, for this instance (gen_cond).
+: ~ i g_dead_arm 0
 : ~ i g_unsafe_report 0
 : ~ s g_unsafe_list ``
 
@@ -11360,7 +11363,8 @@ unsafe @ nurl_lex_peek4_type i h → i {
     // A value that cannot be copied (a `% Drop` with no clone): no copy can
     // be made — a generic copying its `T` (box_clone, rc payloads) is
     // instantiated with one (h235).
-    ? & ( __type_needs_drop ty syms ) ! ( __clone_supported ty syms ) {
+    // (Not in an arm a constant condition left dead: it never runs.)
+    ? & & ( __type_needs_drop ty syms ) ! ( __clone_supported ty syms ) == 0 g_dead_arm {
         ? ( __nc_drop_ty ty ) {
             ( die lex ( nurl_str_cat3 `'mem_dup' would copy a '` ( llvm_to_nurl ty ) `', and it cannot be copied: it has a '% Drop' of its own and no clone, so the copy and the original would both release it. A generic that copies its T (box_clone, a container's clone) cannot be used with this type; move the value instead, or give the type a clone.` ) )
         } {}
@@ -16039,6 +16043,10 @@ unsafe @ gen_cond i lex i syms i cg → s {
     // Allow non-i1 integer conditions (e.g. `? & i64a i64b { … }`) by
     // narrowing to i1 via `icmp ne … 0`.
     = cv ( coerce_to_i1 lex syms cv ct cg )
+    // A condition folded to a constant (`( mem_ts_cyclic [T] )` in a
+    // generic instance) leaves one arm dead: never run, for this instance.
+    : b c_dead_then ( seq cv `false` )
+    : b c_dead_else ( seq cv `true` )
     : s lt ( nurl_cg_lbl cg `then` )
     : s le ( nurl_cg_lbl cg `else` )
     : s lend ( nurl_cg_lbl cg `end` )
@@ -16132,7 +16140,9 @@ unsafe @ gen_cond i lex i syms i cg → s {
     : i t_sxn0 g_sx_n
     : i t_mp0 g_member_path_on
     = g_member_path_on ? & != 0 __sx_me == t_tt0 TT_DOT 1 g_member_path_on
+    = g_dead_arm + g_dead_arm ? c_dead_then 1 0
     : ~ s tv ( gen_expr lex syms cg )
+    = g_dead_arm - g_dead_arm ? c_dead_then 1 0
     = g_member_path_on t_mp0
     : s t_sx ? != 0 __sx_me ( __sx_operand syms t_tt0 t_v0 ( nurl_get_last_type ) ( __sx_froot syms t_tt0 ( nurl_get_last_type ) ) t_sxn0 ) ``
     ( bck_save_expr_carriers syms `__last_join_params__` t_tt0 t_v0 )
@@ -16318,7 +16328,9 @@ unsafe @ gen_cond i lex i syms i cg → s {
     : i e_sxn0 g_sx_n
     : i e_mp0 g_member_path_on
     = g_member_path_on ? & != 0 __sx_me == e_tt0 TT_DOT 1 g_member_path_on
+    = g_dead_arm + g_dead_arm ? c_dead_else 1 0
     : ~ s ev ( gen_expr lex syms cg )
+    = g_dead_arm - g_dead_arm ? c_dead_else 1 0
     = g_member_path_on e_mp0
     : s e_sx ? != 0 __sx_me ( __sx_operand syms e_tt0 e_v0 ( nurl_get_last_type ) ( __sx_froot syms e_tt0 ( nurl_get_last_type ) ) e_sxn0 ) ``
     ( bck_save_expr_carriers syms `__last_join_params__` e_tt0 e_v0 )
@@ -23134,6 +23146,21 @@ unsafe @ __trust_key s path → s {
 
 // The raw-memory primitives: what they hand out or take is memory the
 // checker cannot follow.
+// The standard library's functions over a runtime handle passed as a plain
+// integer (the socket of a TcpConn, a TLS session's transport): a number
+// that is not a live handle is an address they read or free.
+// The hardware layer's functions over a physical address passed as a plain
+// integer (stdlib/hal): the CPU (mmio_*) or the device (a virtio register
+// block, a descriptor the device writes through) reads or writes there,
+// whatever the number is.
+@ bck_raw_addr_call s base → b {
+    ^ ( str_contains_word `mmio_read32 mmio_write32 mmio_set32 mmio_clear32 virtio_probe virtio_vendor virtio_status virtio_set_status virtio_reset virtio_device_features virtio_set_driver_features virtio_init virtio_driver_ok virtio_queue_max virtio_queue_setup virtio_notify virtio_isr virtio_isr_ack virtio_config_u8 virtio_config_generation virtq_desc_set virtq_add_single` base )
+}
+
+@ bck_raw_handle_call s base → b {
+    ^ ( str_contains_word `tcp_conn_view tcp_conn_adopt tls_attach tls_attach_alpn tls_attach_resume tls_attach_verify tls_attach_alpn_verify tls_attach_full tls_accept tls_accept_alpn tls_accept_rsa tls_accept_rsa_alpn tls_accept_mldsa tls_accept_mldsa_alpn tls_accept_dual_alpn` base )
+}
+
 @ bck_raw_call s base → b {
     // (`vec_set_len` declares raw writes initialised: the elements it
     // exposes are whatever the memory held.)
@@ -23183,6 +23210,23 @@ unsafe @ __trust_key s path → s {
 // A standard-library function whose name begins with `__` is the library's
 // own machinery: it takes control blocks and buffers as plain `s` and trusts
 // them, so outside the library only an `unsafe` caller may use it.
+// The standard library's raw symbol table (stdlib/core/symtab.nu): its
+// `i` handle is the address of the table, which any number can pose as,
+// and any thread can hold. (A program — the compiler is one — may define
+// functions of these names itself; only the library's are meant.)
+// Declared in the standard library (a program may define its own of the
+// name).
+@ __fn_from_stdlib s cn → b {
+    : s f ( nurl_sym_get2 g_vis_syms cn `__src_file` )
+    ^ & != 0 ( nurl_str_len f ) ( bck_trusted_file f )
+}
+
+@ __fn_stdlib_raw_table s cn → b {
+    ? ! ( str_contains_word `nurl_sym_new nurl_sym_free nurl_sym_def nurl_sym_get` cn ) { ^ F } {}
+    : s f ( nurl_sym_get2 g_vis_syms cn `__src_file` )
+    ^ & != 0 ( nurl_str_len f ) ( bck_trusted_file f )
+}
+
 @ __fn_stdlib_internal s cn → b {
     ? == 0 ( nurl_str_starts cn `__` ) { ^ F } {}
     : s f ( nurl_sym_get2 g_vis_syms cn `__src_file` )
@@ -23218,6 +23262,18 @@ unsafe @ __callee_decl_name s cn → s {
     // other thread can see the Arc may.
     ? ( seq base `arc_set` ) {
         ( die lex `'arc_set' replaces an Arc's payload in place, but an Arc's payload is frozen once made: every thread holding a clone reads it without a lock, so replacing it races them. arc_new the new value as an Arc of its own; keep state one thread changes in an Rc; put state threads share and change in a Locked (stdlib/std/thread.nu) and replace it with locked_set, which holds its lock. Only an 'unsafe' function, vouching that no other thread can see this Arc, may call arc_set.` )
+        ^ v
+    } {}
+    ? ( __fn_stdlib_raw_table call_name ) {
+        ( die lex ( nurl_str_cat3 `'` call_name `' takes the standard library's raw symbol table as a plain integer — the table's address, which any number can pose as and any thread can hold — so only an 'unsafe' function may call it. Use a SymTab (symtab_new, symtab_def, symtab_get): it owns its table, cannot be made up, and releases the table when it goes.` ) )
+        ^ v
+    } {}
+    ? & ( bck_raw_addr_call base ) ( __fn_from_stdlib base ) {
+        ( die lex ( nurl_str_cat3 `'` base `' takes a physical address as a plain integer, and the CPU or the device reads or writes memory there whatever the number is — only an 'unsafe' function, which vouches that the address is the device's own register block or a buffer it owns, may call it.` ) )
+        ^ v
+    } {}
+    ? | != 0 ( nurl_sym_len2 syms call_name `__ffi_raw` ) ( bck_raw_handle_call base ) {
+        ( die lex ( nurl_str_cat3 `'` call_name `' takes a runtime handle — the address of the runtime's own record for a socket, a process or a stream — as a plain integer, and reads or frees what is there: a number that is not a live handle is memory the program does not own. Only an 'unsafe' function may call it. Use the handle type the standard library wraps it in (TcpConn, UdpSocket, ProcChild, …), whose operations are safe.` ) )
         ^ v
     } {}
     ? & != 0 ( nurl_sym_len2 syms call_name `__ffi` ) ! ( bck_trusted_file ( nurl_sym_get2 syms call_name `__ffi_src` ) ) {
@@ -43491,6 +43547,11 @@ unsafe @ __ffi_param_count s pt → i {
     // …and where it was declared: one declared outside the stdlib is raw
     // memory to its callers (bck_check_raw_call).
     ( nurl_sym_def syms ( nurl_str_cat fname `__ffi_src` ) ( vis_current_src_file ) )
+    // `unsafe & …`: a foreign function that takes a runtime handle (an
+    // address the runtime casts back to its struct) as a plain integer, so
+    // any number a program makes up is an address it reads or frees. Raw
+    // for programs, even declared in the stdlib (bck_check_raw_call).
+    ? != 0 g_pending_unsafe { ( nurl_sym_def syms ( nurl_str_cat fname `__ffi_raw` ) `1` ) = g_pending_unsafe 0 } {}
     // Per-parameter LLVM types for call-site width coercion (see `ptypes`).
     ( nurl_sym_def syms ( nurl_str_cat fname `__ffi_params` ) ptypes )
     // emit_header already emits `declare` lines for a small set of libc
@@ -49509,8 +49570,8 @@ unsafe @ __rt_decl_ptypes s region → s {
     ( __emit_rt_decl syms `declare i64    @nurl_is_nan(double)` )
     ( __emit_rt_decl syms `declare i64    @nurl_is_inf(double)` )
     ( __emit_rt_decl syms `declare i64  @nurl_dir_list_open(i8*)` )
-    ( __emit_rt_decl syms `declare i8*  @nurl_dir_list_next(i64)` )
-    ( __emit_rt_decl syms `declare void @nurl_dir_list_close(i64)` )
+    ( __emit_rt_decl syms `declare i8*  @nurl_dir_list_next(i64) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare void @nurl_dir_list_close(i64) "nurl.raw"="1"` )
     ( __emit_rt_decl syms `declare i64  @nurl_http_perform_full(i8*, i8*, i8*, i8*)` )
     ( __emit_rt_decl syms `declare i64  @nurl_http_perform_full_to(i8*, i8*, i8*, i8*, i64, i64)` )
     // The 7 accessors (status / err_kind / body / body_len /
@@ -49518,31 +49579,31 @@ unsafe @ __rt_decl_ptypes s region → s {
     // in stdlib/ext/http.nu that read the NurlHttpResponse struct via
     // nurl_peek. Only the C-side freer stays — it walks the headers
     // array deallocating every name/value pair.
-    ( __emit_rt_decl syms `declare void @nurl_http_response_free(i64)` )
+    ( __emit_rt_decl syms `declare void @nurl_http_response_free(i64) "nurl.raw"="1"` )
     ( __emit_rt_decl syms `declare i64  @nurl_http_stream_open_to(i8*, i8*, i8*, i8*, i64, i64)` )
     ( __emit_rt_decl syms `declare i8*  @nurl_http_stream_next(i64)` )
     ( __emit_rt_decl syms `declare void @nurl_http_stream_close(i64)` )
     ( __emit_rt_decl syms `declare i64  @nurl_http_stream_pump_headers(i64)` )
     ( __emit_rt_decl syms `declare i64  @nurl_proc_run(i8*, i8*, i64, i8*) "nurl.raw"="1"` )
-    ( __emit_rt_decl syms `declare i64  @nurl_proc_exit_code(i64)` )
-    ( __emit_rt_decl syms `declare i64  @nurl_proc_err_kind(i64)` )
-    ( __emit_rt_decl syms `declare i8*  @nurl_proc_stdout(i64)` )
-    ( __emit_rt_decl syms `declare i8*  @nurl_proc_stderr(i64)` )
-    ( __emit_rt_decl syms `declare i64  @nurl_proc_stdout_len(i64)` )
-    ( __emit_rt_decl syms `declare i64  @nurl_proc_stderr_len(i64)` )
-    ( __emit_rt_decl syms `declare void @nurl_proc_free(i64)` )
+    ( __emit_rt_decl syms `declare i64  @nurl_proc_exit_code(i64) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare i64  @nurl_proc_err_kind(i64) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare i8*  @nurl_proc_stdout(i64) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare i8*  @nurl_proc_stderr(i64) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare i64  @nurl_proc_stdout_len(i64) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare i64  @nurl_proc_stderr_len(i64) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare void @nurl_proc_free(i64) "nurl.raw"="1"` )
     ( __emit_rt_decl syms `declare i64  @nurl_proc_spawn(i8*, i8*, i64)` )
-    ( __emit_rt_decl syms `declare i64  @nurl_proc_spawn_err_kind(i64)` )
-    ( __emit_rt_decl syms `declare i64  @nurl_proc_spawn_pid(i64)` )
+    ( __emit_rt_decl syms `declare i64  @nurl_proc_spawn_err_kind(i64) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare i64  @nurl_proc_spawn_pid(i64) "nurl.raw"="1"` )
     ( __emit_rt_decl syms `declare i64  @nurl_proc_spawn_write(i64, i8*, i64) "nurl.raw"="1"` )
-    ( __emit_rt_decl syms `declare void @nurl_proc_spawn_close_stdin(i64)` )
-    ( __emit_rt_decl syms `declare i8*  @nurl_proc_spawn_read_line(i64, i64)` )
-    ( __emit_rt_decl syms `declare i64  @nurl_proc_spawn_read_line_len(i64)` )
-    ( __emit_rt_decl syms `declare i64  @nurl_proc_spawn_eof(i64)` )
-    ( __emit_rt_decl syms `declare i64  @nurl_proc_spawn_last_io_err(i64)` )
-    ( __emit_rt_decl syms `declare i64  @nurl_proc_spawn_wait(i64)` )
-    ( __emit_rt_decl syms `declare i64  @nurl_proc_spawn_kill(i64, i64)` )
-    ( __emit_rt_decl syms `declare void @nurl_proc_spawn_free(i64)` )
+    ( __emit_rt_decl syms `declare void @nurl_proc_spawn_close_stdin(i64) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare i8*  @nurl_proc_spawn_read_line(i64, i64) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare i64  @nurl_proc_spawn_read_line_len(i64) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare i64  @nurl_proc_spawn_eof(i64) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare i64  @nurl_proc_spawn_last_io_err(i64) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare i64  @nurl_proc_spawn_wait(i64) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare i64  @nurl_proc_spawn_kill(i64, i64) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare void @nurl_proc_spawn_free(i64) "nurl.raw"="1"` )
     // Crypto hash transforms (SHA-1/256/512, MD5, HMAC-SHA-256/512)
     // live in pure NURL under `stdlib/std/hash_*.nu`. Random surface
     // (`rand_u64` / `rand_hex_str`) is in `stdlib/std/random.nu`;
@@ -49554,25 +49615,25 @@ unsafe @ __rt_decl_ptypes s region → s {
     ( __emit_rt_decl syms `declare i64  @nurl_tcp_listen(i8*, i64, i64)` )
     ( __emit_rt_decl syms `declare i64  @nurl_tcp_listen_tls(i8*, i64, i64, i8*, i8*)` )
     ( __emit_rt_decl syms `declare i64  @nurl_tcp_listen_tls_alpn(i8*, i64, i64, i8*, i8*, i8*)` )
-    ( __emit_rt_decl syms `declare i8*  @nurl_tcp_alpn_selected(i64)` )
-    ( __emit_rt_decl syms `declare i64  @nurl_tcp_tls_add_sni(i64, i8*, i8*, i8*)` )
-    ( __emit_rt_decl syms `declare i64  @nurl_tcp_tls_reload(i64, i8*, i8*, i8*)` )
-    ( __emit_rt_decl syms `declare i64  @nurl_tcp_tls_require_client_cert(i64, i8*, i64)` )
-    ( __emit_rt_decl syms `declare i8*  @nurl_tcp_peer_cert_subject(i64)` )
-    ( __emit_rt_decl syms `declare i64  @nurl_tcp_accept(i64)` )
+    ( __emit_rt_decl syms `declare i8*  @nurl_tcp_alpn_selected(i64) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare i64  @nurl_tcp_tls_add_sni(i64, i8*, i8*, i8*) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare i64  @nurl_tcp_tls_reload(i64, i8*, i8*, i8*) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare i64  @nurl_tcp_tls_require_client_cert(i64, i8*, i64) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare i8*  @nurl_tcp_peer_cert_subject(i64) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare i64  @nurl_tcp_accept(i64) "nurl.raw"="1"` )
     ( __emit_rt_decl syms `declare i64  @nurl_tcp_read(i64, i8*, i64) "nurl.raw"="1"` )
     ( __emit_rt_decl syms `declare i64  @nurl_tcp_write(i64, i8*, i64) "nurl.raw"="1"` )
-    ( __emit_rt_decl syms `declare void @nurl_tcp_close(i64)` )
-    ( __emit_rt_decl syms `declare void @nurl_tcp_shutdown(i64)` )
-    ( __emit_rt_decl syms `declare i64  @nurl_tcp_err_kind(i64)` )
-    ( __emit_rt_decl syms `declare i8*  @nurl_tcp_peer_addr(i64)` )
-    ( __emit_rt_decl syms `declare void @nurl_tcp_set_timeout(i64, i64)` )
+    ( __emit_rt_decl syms `declare void @nurl_tcp_close(i64) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare void @nurl_tcp_shutdown(i64) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare i64  @nurl_tcp_err_kind(i64) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare i8*  @nurl_tcp_peer_addr(i64) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare void @nurl_tcp_set_timeout(i64, i64) "nurl.raw"="1"` )
     // Thread / mutex / cond live in pure-NURL FFI in
     // stdlib/std/thread.nu — libpthread symbols (pthread_create /
     // mutex_* / cond_*) plus the tiny nurl_pthread_join_ptr /
     // _detach_ptr trampolines are declared on-demand in that module
     // via `& `c` @ ...`.
-    ( __emit_rt_decl syms `declare void @nurl_signal_install_shutdown(i64)` )
+    ( __emit_rt_decl syms `declare void @nurl_signal_install_shutdown(i64) "nurl.raw"="1"` )
     ( __emit_rt_decl syms `declare void @nurl_signal_trigger_shutdown()` )
     ( __emit_rt_decl syms `declare void @nurl_panic(i8* nocapture) noreturn` )
     ( __emit_rt_decl syms `declare i64  @nurl_recover(i8*, i8*) "nurl.raw"="1"` )
@@ -52979,7 +53040,8 @@ unsafe @ parse_program i lex i syms i cg → v {
         ? != rv 0 {
             : s pm ( nurl_panic_last_msg )
             ? ( seq pm `__nurlc_diag__` )
-            {  // A reported diagnostic. The panic may have unwound out of
+            { = g_dead_arm 0
+                // A reported diagnostic. The panic may have unwound out of
                 // buffered closure-IR emission — reset the output stack to
                 // a fresh module buffer and resync to the next declaration.
                 // The failed compilation never exposes that partial IR.

@@ -189,13 +189,13 @@ unsafe @ __uni_ft_get * UnigramImpl u i h s text i off i len → i {
 //   has_leaf(u) = (u >> 8) & 1
 //   value(u)    = u & 0x7FFFFFFF        (read from the leaf unit)
 
-unsafe @ __uni_unit ( Vec u ) trie i k → i {
-    : *u p ( vec_data [u] trie )
+@ __uni_unit ( Vec u ) trie i k → i {
+    : ( Slice u ) p ( slice_from_vec [u] trie )
     : i o * k 4
-    : i b0 # i . p o
-    : i b1 # i . p + o 1
-    : i b2 # i . p + o 2
-    : i b3 # i . p + o 3
+    : i b0 # i ( slice_at [u] p o )
+    : i b1 # i ( slice_at [u] p + o 1 )
+    : i b2 # i ( slice_at [u] p + o 2 )
+    : i b3 # i ( slice_at [u] p + o 3 )
     ^ | | | b0 << b1 8 << b2 16 << b3 24
 }
 

@@ -4,7 +4,8 @@
 $ `stdlib/ext/http2_conn.nu`
 $ `stdlib/std/bytes.nu`
 
-@ connection → H2Connection {
+// (A dummy socket handle the writer never touches: raw, so `unsafe`.)
+unsafe @ connection → H2Connection {
     ^ @ H2Connection {
         ( tcp_conn_view 0 )
         4096 0 256 65535 16384 65536

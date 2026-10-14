@@ -21,16 +21,13 @@
 //     \?           this help            \q         quit
 
 $ `stdlib/core/io.nu`
+$ `stdlib/std/term.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/ext/env.nu`
 $ `deps/cli/src/cli.nu`
 $ `pg.nu`
 $ `stdlib/core/slice.nu`
-
-& `c` @ isatty i32 fd → i32
-
-& `c` @ nurl_read_password s prompt → s
 
 @ __sslmode_code s m → i {
     ? ( nurl_str_eq m `disable` ) { ^ 0 } {}
@@ -418,7 +415,7 @@ $ `stdlib/core/slice.nu`
 
 // Connect, and if the server demands a password we don't have, prompt for
 // one on the terminal (echo disabled) and retry once — the way psql does.
-unsafe @ __connect ConnInfo ci i tty → !PgConn PgErr {
+@ __connect ConnInfo ci i tty → !PgConn PgErr {
     : !PgConn PgErr cr ( pg_connect ( string_data . ci host ) . ci port ( string_data . ci user ) ( string_data . ci password ) ( string_data . ci database ) . ci sslmode )
     ?? cr {
         T c → ^ @ !PgConn PgErr { T c }
@@ -429,8 +426,8 @@ unsafe @ __connect ConnInfo ci i tty → !PgConn PgErr {
                 ( string_push_str prompt `Password for user ` )
                 ( string_push_str prompt ( string_data . ci user ) )
                 ( string_push_str prompt `: ` )
-                : s pw ( nurl_read_password ( string_data prompt ) )
-                ^ ( pg_connect ( string_data . ci host ) . ci port ( string_data . ci user ) pw ( string_data . ci database ) . ci sslmode )
+                : String pw ( term_read_password ( string_data prompt ) )
+                ^ ( pg_connect ( string_data . ci host ) . ci port ( string_data . ci user ) ( string_data pw ) ( string_data . ci database ) . ci sslmode )
             } { ^ @ !PgConn PgErr { F e } }
         }
     }
@@ -438,7 +435,7 @@ unsafe @ __connect ConnInfo ci i tty → !PgConn PgErr {
 
 // The whole program is one default command (psql style): flags, an optional
 // postgres://… URL positional, then one-shot -c or the REPL.
-unsafe @ __psql_go CliCtx x → i {
+@ __psql_go CliCtx x → i {
     : String hostv ( ctx_str x `host` )
     : String userv ( ctx_str x `user` )
     : String passv ( ctx_str x `password` )
@@ -471,7 +468,7 @@ unsafe @ __psql_go CliCtx x → i {
         = . ci database ( string_from ( string_data . ci user ) )
     } {}
 
-    : i tty # i ( isatty # i32 0 )
+    : i tty ? ( term_is_tty 0 ) 1 0
     : !PgConn PgErr cr ( __connect ci tty )
     ?? cr {
         F e → {

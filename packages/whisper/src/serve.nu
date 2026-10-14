@@ -474,7 +474,7 @@ unsafe @ __srv_run sink ( Vec u ) wav s lang b use_vad b with_ts b as_text → H
     ^ ( response_text 404 `test page not found — reinstall the package (nurlpkg stages views/ into share/whisper/), or run from the package directory\n` )
 }
 
-unsafe @ __srv_health HttpRequest req → HttpResponse {
+@ __srv_health HttpRequest req → HttpResponse {
     : Json o ( json_obj_new )
     // `ok` = loaded and serving; `idle` = unloaded by --unload-after, the
     // next request reloads it (still healthy — a client should not treat
@@ -535,7 +535,7 @@ unsafe @ __srv_health HttpRequest req → HttpResponse {
     : !v WsErr _w ( ws_send_text c ( string_data body ) )
 }
 
-unsafe @ __srv_ws_config TcpConn c ( Vec u ) payload → v {
+@ __srv_ws_config TcpConn c ( Vec u ) payload → v {
     : String ps ( string_new )
     : ~ i k 0
     ~ < k ( vec_len [u] payload ) {
@@ -654,7 +654,7 @@ unsafe @ __srv_ws_emit TcpConn c VadStream vs → v {
 
 // The upgrade hook: T = this was a WebSocket connection and it has been
 // served to completion; F = not an upgrade, fall through to the router.
-unsafe @ __srv_ws_hook TcpConn c HttpRequest rq → b {
+@ __srv_ws_hook TcpConn c HttpRequest rq → b {
     ? ( ws_is_upgrade rq ) {} { ^ F }
     // An unauthorized upgrade falls through to the ordinary handler: the
     // client asked for a 101 and gets a 401 page, which every WebSocket

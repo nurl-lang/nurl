@@ -412,7 +412,7 @@ A function or method declaration may carry a leading `unsafe` prefix
 - call a raw-memory primitive (`nurl_alloc`, `nurl_free`, `nurl_realloc`,
   `nurl_peek*` / `nurl_poke*`, `nurl_memcpy`, …), an ownership primitive
   that gives a value up or claims it by hand (`mem_forget`, `mem_take`,
-  `mem_put_back`), an `rcbox` primitive (`rcbox_new`, `rcbox_zero`,
+  `mem_put_back`, `vec_put_back`), an `rcbox` primitive (`rcbox_new`, `rcbox_zero`,
   `rcbox_share`, `rcbox_release`, `rcbox_ptr`), an `Arc` held as a
   plain word (`arc_into_word`, `arc_from_word`, `arc_word_share`), an
   `Arc`'s payload replaced in place (`arc_set`: the payload is frozen
@@ -424,6 +424,20 @@ A function or method declaration may carry a leading `unsafe` prefix
   library's own machinery, which trusts the control blocks and buffers
   it is handed);
 - call a foreign (`&`) function declared outside the standard library;
+- pass a runtime handle as a plain integer: a standard-library function
+  or foreign function that takes the address of the runtime's own record
+  for a socket, a process or a stream as an `i` (`tcp_conn_view`,
+  `tcp_conn_adopt`, `tls_attach*`, `tls_accept*`, the `nurl_tcp_*`,
+  `nurl_udp_*`, `nurl_proc_*` builtins, the library's raw symbol table
+  `nurl_sym_*`) — a number that is not a live handle is memory the program
+  does not own. The library declares such a
+  foreign function `unsafe & …`; a program reaches the same operations
+  through the handle types (`TcpConn`, `UdpSocket`, `ProcChild`, and
+  `tcp_starttls`, `tls_accept_conn` for a TLS upgrade);
+- touch a device by physical address: the unikernel HAL's `mmio_*` and
+  `virtio_*` / `virtq_*` functions take a device or ring address as an
+  `i`, and any number reaches any memory through them; a driver marks the
+  functions that do it `unsafe`;
 - read or write a mutable global that owns something (§3.4), or take a
   global's address with `mem_addr`.
 

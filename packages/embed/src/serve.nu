@@ -449,7 +449,7 @@ unsafe @ __em_post HttpRequest req → HttpResponse {
     ^ ( __em_run texts normalize )
 }
 
-unsafe @ __em_health HttpRequest req → HttpResponse {
+@ __em_health HttpRequest req → HttpResponse {
     : Embed e ( __em_model )
     : Json o ( json_obj_new )
     // `healthy` either way: an engine whose weights are unloaded under

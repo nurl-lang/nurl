@@ -6,6 +6,7 @@
 // this event API. send accepts one complete message into a bounded queue;
 // flush writes only available HTTP/2 credit and next services the peer.
 $ `metadata.nu`
+$ `stdlib/core/slice.nu`
 $ `stdlib/ext/http2_server.nu`
 
 : GrpcServerLimits {
@@ -141,11 +142,11 @@ $ `stdlib/ext/http2_server.nu`
     }
 }
 
-unsafe @ __grpc_server_index GrpcServer server i sid → i {
+@ __grpc_server_index GrpcServer server i sid → i {
     : ~ i k 0
-    : *GrpcServerCall p ( vec_data [GrpcServerCall] . server calls )
+    : ( Slice GrpcServerCall ) p ( slice_from_vec [GrpcServerCall] . server calls )
     ~ < k ( vec_len [GrpcServerCall] . server calls ) {
-        : GrpcServerCall call . p k
+        : GrpcServerCall call ( slice_at [GrpcServerCall] p k )
         ? == . call stream_id sid { ^ k } {}
         = k + k 1
     }
@@ -154,8 +155,8 @@ unsafe @ __grpc_server_index GrpcServer server i sid → i {
 
 // The call in slot `idx` of the server's table (`. server calls`): a borrow
 // of that table only.
-unsafe @ __grpc_server_get ( Vec GrpcServerCall ) calls i idx → GrpcServerCall {
-    ^ . ( vec_data [GrpcServerCall] calls ) idx
+@ __grpc_server_get ( Vec GrpcServerCall ) calls i idx → GrpcServerCall {
+    ^ ( vec_at [GrpcServerCall] calls idx )
 }
 
 // The call in slot `idx`, in place: a field written through it replaces
@@ -243,7 +244,7 @@ unsafe @ __grpc_server_prune GrpcServer server → v {
     ^ @ !i GrpcError { T idx }
 }
 
-unsafe @ __grpc_server_headers ( Vec Header ) metadata i encoding i max_metadata → !( Vec Header ) GrpcError {
+@ __grpc_server_headers ( Vec Header ) metadata i encoding i max_metadata → !( Vec Header ) GrpcError {
     : ( Vec Header ) encoded \ ( grpc_metadata_encode metadata max_metadata )
     : ( Vec Header ) headers ( grpc_metadata_new )
     ( vec_push [Header] headers ( header_new `:status` `200` ) )
@@ -254,7 +255,7 @@ unsafe @ __grpc_server_headers ( Vec Header ) metadata i encoding i max_metadata
     } {}
     : ~ i k 0
     ~ < k ( vec_len [Header] encoded ) {
-        ( vec_push [Header] headers ( grpc_header_clone . ( vec_data [Header] encoded ) k ) )
+        ( vec_push [Header] headers ( grpc_header_clone ( vec_at [Header] encoded k ) ) )
         = k + k 1
     }
     ?? ( grpc_headers_check_size headers max_metadata ) {

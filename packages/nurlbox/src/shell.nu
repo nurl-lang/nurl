@@ -485,16 +485,16 @@ unsafe @ __xargs_run ( Vec String ) cmd b trace → i {
 // Split stdin into items: whitespace-separated, or NUL-separated with
 // -0. Quoting is honoured for the whitespace form, because `xargs` is
 // most often fed `ls` output and a quoted name must survive.
-unsafe @ __xargs_items b nul ( Vec String ) out → v {
+@ __xargs_items b nul ( Vec String ) out → v {
     : ( Vec u ) data ( read_all_stdin_bytes )
     : i n ( vec_len [u] data )
-    : *u p ( vec_data [u] data )
+    : ( Slice u ) p ( slice_from_vec [u] data )
     : String cur ( string_new )
     : ~ b any F
     : ~ i quote 0
     : ~ i i 0
     ~ < i n {
-        : i c & 255 # i . p i
+        : i c & 255 # i ( slice_at [u] p i )
         ? nul {
             ? == c 0 {
                 ( vec_push [String] out ( string_clone cur ) )

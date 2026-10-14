@@ -28,9 +28,11 @@
 // attached for anything else the provider sent (groups, roles, tenant).
 
 $ `stdlib/core/string.nu`
+$ `stdlib/core/slice.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/time.nu`
 $ `stdlib/ext/json.nu`
+$ `stdlib/std/thread.nu`
 $ `stdlib/std/arc.nu`
 
 // ── What can be wrong with a claim set ─────────────────────────────
@@ -136,12 +138,12 @@ $ `stdlib/std/arc.nu`
     ^ out
 }
 
-unsafe @ __cl_list_has ( Vec String ) list s want → b {
+@ __cl_list_has ( Vec String ) list s want → b {
     : i n ( vec_len [String] list )
-    : *String data ( vec_data [String] list )
+    : ( Slice String ) data ( slice_from_vec [String] list )
     : ~ i k 0
     ~ < k n {
-        : String item . data k
+        : String item ( slice_at [String] data k )
         ? == 1 ( nurl_str_eq ( string_data item ) want ) { ^ T } {}
         = k + k 1
     }
@@ -192,83 +194,113 @@ unsafe @ __cl_list_has ( Vec String ) list s want → b {
     b allow_symmetric  // permit HS* (only with a configured shared secret)
 }
 
-// An OidcPolicy is a handle on its state in an Arc (stdlib/std/arc.nu):
-// every copy is the same state, and the last owner releases it.
-: OidcPolicy { ( Arc OidcPolicyImpl ) a }
+// An OidcPolicy is a handle on its state: every copy is the same policy,
+// the last owner releases it, and a server's workers share it. The policy
+// is a snapshot in an Arc, kept in a Locked (stdlib/std/thread.nu): a
+// check takes another share of the snapshot — one count, nothing copied —
+// and reads it with no lock held; a setter checks the snapshot out
+// (locked_take), and puts back a new one made from a copy of it.
+: OidcPolicy { ( Locked ( Arc OidcPolicyImpl ) ) st }
 
-@ OidcPolicy_share OidcPolicy h → OidcPolicy { ^ @ OidcPolicy { ( arc_clone [OidcPolicyImpl] . h a ) } }
+@ OidcPolicy_share OidcPolicy h → OidcPolicy { ^ @ OidcPolicy { ( Locked_share [( Arc OidcPolicyImpl )] . h st ) } }
 
 @ OidcPolicy_drop sink OidcPolicy h → v {}
 
-unsafe @ _OidcPolicy_ptr OidcPolicy h → *OidcPolicyImpl { ^ ( arc_ptr [OidcPolicyImpl] . h a ) }
-
-unsafe @ oidc_policy_new s issuer s audience → OidcPolicy {
-    : ~ OidcPolicyImpl p @ OidcPolicyImpl {}
-    = . p issuer ( string_from issuer )
-    = . p audience ( string_from audience )
-    = . p nonce ( string_new )
-    = . p algs ( string_new )
-    = . p leeway 60
-    = . p max_age 0
-    = . p require_sub T
-    = . p require_exp T
-    = . p allow_symmetric F
-    ^ @ OidcPolicy { ( arc_new [OidcPolicyImpl] p ) }
+@ oidc_policy_new s issuer s audience → OidcPolicy {
+    : OidcPolicyImpl p @ OidcPolicyImpl {
+        ( string_from issuer )
+        ( string_from audience )
+        ( string_new )
+        ( string_new )
+        60
+        0
+        T
+        T
+        F
+    }
+    ^ @ OidcPolicy { ( locked_new [( Arc OidcPolicyImpl )] ( arc_new [OidcPolicyImpl] p ) ) }
 }
 
 // Let go of `p` now rather than at the end of its owner's scope.
 @ oidc_policy_free sink OidcPolicy p → v {}
 
-unsafe @ oidc_policy_set_issuer OidcPolicy p__h s issuer → v {
-    : *OidcPolicyImpl p ( _OidcPolicy_ptr p__h )
-    ( _oauth_set_str . p issuer issuer )
+// The policy as it is now: what one check applies.
+@ _oidc_policy_now OidcPolicy h → ( Arc OidcPolicyImpl ) { ^ ( locked_get [( Arc OidcPolicyImpl )] . h st ) }
+
+// A setter's half: the policy checked out, as a copy to change, and the
+// changed copy checked back in as the new snapshot.
+@ _oidc_policy_out OidcPolicy h → OidcPolicyImpl {
+    : ( Arc OidcPolicyImpl ) a ( locked_take [( Arc OidcPolicyImpl )] . h st )
+    ^ ( mem_dup ( arc_get [OidcPolicyImpl] a ) )
 }
 
-unsafe @ oidc_policy_set_audience OidcPolicy p__h s audience → v {
-    : *OidcPolicyImpl p ( _OidcPolicy_ptr p__h )
-    ( _oauth_set_str . p audience audience )
+@ _oidc_policy_in OidcPolicy h sink OidcPolicyImpl p → v {
+    ( locked_restore [( Arc OidcPolicyImpl )] . h st ( arc_new [OidcPolicyImpl] p ) )
 }
 
-unsafe @ oidc_policy_set_nonce OidcPolicy p__h s nonce → v {
-    : *OidcPolicyImpl p ( _OidcPolicy_ptr p__h )
-    ( _oauth_set_str . p nonce nonce )
+@ oidc_policy_set_issuer OidcPolicy h s issuer → v {
+    : ~ OidcPolicyImpl p ( _oidc_policy_out h )
+    = . p issuer ( string_from issuer )
+    ( _oidc_policy_in h p )
 }
 
-unsafe @ oidc_policy_set_algs OidcPolicy p__h s algs → v {
-    : *OidcPolicyImpl p ( _OidcPolicy_ptr p__h )
-    ( _oauth_set_str . p algs algs )
+@ oidc_policy_set_audience OidcPolicy h s audience → v {
+    : ~ OidcPolicyImpl p ( _oidc_policy_out h )
+    = . p audience ( string_from audience )
+    ( _oidc_policy_in h p )
 }
 
-unsafe @ oidc_policy_set_leeway OidcPolicy p__h i secs → v {
-    : *OidcPolicyImpl p ( _OidcPolicy_ptr p__h )
+@ oidc_policy_set_nonce OidcPolicy h s nonce → v {
+    : ~ OidcPolicyImpl p ( _oidc_policy_out h )
+    = . p nonce ( string_from nonce )
+    ( _oidc_policy_in h p )
+}
+
+@ oidc_policy_set_algs OidcPolicy h s algs → v {
+    : ~ OidcPolicyImpl p ( _oidc_policy_out h )
+    = . p algs ( string_from algs )
+    ( _oidc_policy_in h p )
+}
+
+@ oidc_policy_set_leeway OidcPolicy h i secs → v {
+    : ~ OidcPolicyImpl p ( _oidc_policy_out h )
     = . p leeway secs
+    ( _oidc_policy_in h p )
 }
 
-unsafe @ oidc_policy_set_max_age OidcPolicy p__h i secs → v {
-    : *OidcPolicyImpl p ( _OidcPolicy_ptr p__h )
+@ oidc_policy_set_max_age OidcPolicy h i secs → v {
+    : ~ OidcPolicyImpl p ( _oidc_policy_out h )
     = . p max_age secs
+    ( _oidc_policy_in h p )
 }
 
-unsafe @ oidc_policy_require_sub OidcPolicy p__h b on → v {
-    : *OidcPolicyImpl p ( _OidcPolicy_ptr p__h )
+@ oidc_policy_require_sub OidcPolicy h b on → v {
+    : ~ OidcPolicyImpl p ( _oidc_policy_out h )
     = . p require_sub on
+    ( _oidc_policy_in h p )
 }
 
-unsafe @ oidc_policy_require_exp OidcPolicy p__h b on → v {
-    : *OidcPolicyImpl p ( _OidcPolicy_ptr p__h )
+@ oidc_policy_require_exp OidcPolicy h b on → v {
+    : ~ OidcPolicyImpl p ( _oidc_policy_out h )
     = . p require_exp on
+    ( _oidc_policy_in h p )
 }
 
-unsafe @ oidc_policy_allow_symmetric OidcPolicy p__h b on → v {
-    : *OidcPolicyImpl p ( _OidcPolicy_ptr p__h )
+@ oidc_policy_allow_symmetric OidcPolicy h b on → v {
+    : ~ OidcPolicyImpl p ( _oidc_policy_out h )
     = . p allow_symmetric on
+    ( _oidc_policy_in h p )
 }
 
 // Is `alg` inside the policy's allowlist? An empty allowlist means "any
 // algorithm the verifier supports", which still excludes HS* unless the
 // caller deliberately allowed symmetric keys.
-unsafe @ oidc_policy_alg_allowed OidcPolicy p__h s alg → b {
-    : *OidcPolicyImpl p ( _OidcPolicy_ptr p__h )
+@ oidc_policy_alg_allowed OidcPolicy h s alg → b {
+    : ( Arc OidcPolicyImpl ) a ( _oidc_policy_now h )
+    ^ ( _oidc_policy_alg_allowed ( arc_get [OidcPolicyImpl] a ) alg )
+}
+
+@ _oidc_policy_alg_allowed OidcPolicyImpl p s alg → b {
     ? == 0 ( string_len . p algs ) { ^ T } {}
     : ( Vec String ) list ( string_split . p algs ` ` )
     : b found ( __cl_list_has list alg )
@@ -297,8 +329,14 @@ unsafe @ oidc_policy_alg_allowed OidcPolicy p__h s alg → b {
     ^ ( _claims_check c pol__h now T )
 }
 
-unsafe @ _claims_check Json c OidcPolicy pol__h i now b access → ?ClaimErr {
-    : *OidcPolicyImpl pol ( _OidcPolicy_ptr pol__h )
+@ _claims_check Json c OidcPolicy pol__h i now b access → ?ClaimErr {
+    : ( Arc OidcPolicyImpl ) a ( _oidc_policy_now pol__h )
+    ^ ( _claims_check_with c ( arc_get [OidcPolicyImpl] a ) now access )
+}
+
+// The check under one copy of the policy (a verification takes one copy
+// for every rule it applies).
+@ _claims_check_with Json c OidcPolicyImpl pol i now b access → ?ClaimErr {
     ? ( json_is_obj c ) {} { ^ @ ?ClaimErr { T ClNotObject } }
     : i leeway . pol leeway
 

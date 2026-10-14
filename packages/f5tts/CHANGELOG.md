@@ -3,6 +3,15 @@
 All notable changes to this package are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.3.5] — 2026-10-14
+
+Requires NURL 0.73.0 (`slice_at`, `slice_put`, `rc_take`, `locked_take`).
+
+### Changed
+
+- Loops that read or wrote through `vec_data` pointers index slices (`slice_at` / `slice_put`, as fast as the pointers), and functions with nothing raw in them are no longer marked `unsafe`.
+- 1 fewer functions are `unsafe` than in 0.3.4 (107 left).
+
 ## [0.3.4] — 2026-10-12
 
 Requires NURL 0.73.0, in which a field written through a raw pointer

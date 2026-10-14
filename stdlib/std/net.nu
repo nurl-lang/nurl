@@ -267,6 +267,14 @@ $ `stdlib/std/thread.nu`
     ^ . p raw
 }
 
+// The server side of a TLS handshake over an accepted plaintext conn, with
+// a certificate chain and key in memory (tls_accept): the TlsConn takes
+// the socket over, and `c` — every copy of it — no longer closes it. On a
+// failed handshake the TLS layer has closed the socket.
+@ tls_accept_conn TcpConn c ( Vec u ) cert_chain ( Vec u ) priv → !TlsConn TlsErr {
+    ^ ( tls_accept ( __tcp_conn_release c ) cert_chain priv )
+}
+
 // Render a NetErr variant name as a raw `s` for log lines.
 @ net_err_name NetErr e → s {
     ^ ?? e {
@@ -919,7 +927,7 @@ $ `stdlib/std/thread.nu`
     ^ ( nurl_tcp_peer_addr ( __conn_fd c ) )
 }
 
-& `c` @ nurl_tcp_local_addr i handle → sink s
+unsafe & `c` @ nurl_tcp_local_addr i handle → sink s
 
 // OWNED String "ip:port" of the address a listener is actually bound to,
 // read fresh from getsockname. This is the counterpart of listening on
@@ -937,7 +945,7 @@ $ `stdlib/std/thread.nu`
     ( nurl_tcp_set_timeout ( __conn_fd c ) ms )
 }
 
-& `c` @ nurl_tcp_set_send_buffer i handle i bytes → i
+unsafe & `c` @ nurl_tcp_set_send_buffer i handle i bytes → i
 
 // Request the native TCP send-buffer size in bytes (1..2147483647).
 // The operating system may adjust this value. TLS uses the same underlying
@@ -1244,7 +1252,7 @@ $ `stdlib/std/thread.nu`
 // counts allowed; -1 = nothing written, err_kind set). With one segment
 // empty it is exactly nurl_tcp_write. Declared here rather than in the
 // compiler preamble, like the other stdlib-only runtime entry points.
-& `c` @ nurl_tcp_write2 i conn *u b1 i n1 *u b2 i n2 → i
+unsafe & `c` @ nurl_tcp_write2 i conn *u b1 i n1 *u b2 i n2 → i
 
 // The one blocking send loop behind tcp_write_all, tcp_write_str and
 // tcp_write_all2: writes the logical concatenation `p1[0..n1)‖p2[0..n2)`
@@ -1354,9 +1362,9 @@ $ `stdlib/std/async_ffi.nu`
 // declared in async_ffi.nu (imported above) so the pure TLS stack can
 // use them too without an import cycle.
 
-& `c` @ nurl_tcp_ref i handle → v
+unsafe & `c` @ nurl_tcp_ref i handle → v
 
-& `c` @ nurl_tcp_unref i handle → v
+unsafe & `c` @ nurl_tcp_unref i handle → v
 
 // Take/drop an extra reference on a listener handle so it survives a
 // concurrent `tcp_close_listener` (e.g. `server_stop` fired from another

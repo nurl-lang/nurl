@@ -430,7 +430,7 @@ unsafe @ __cmd_probe s host i port → i {
     ^ ok
 }
 
-unsafe @ __kat_one s label i level s d s z s ekd s dkd → b {
+@ __kat_one s label i level s d s z s ekd s dkd → b {
     : ( Vec u ) dv ( __hexv d )
     : ( Vec u ) zv ( __hexv z )
     : MlkemKeys ks ( mlkem_keygen_derand level dv zv )
@@ -442,8 +442,8 @@ unsafe @ __kat_one s label i level s d s z s ekd s dkd → b {
     : ( Vec u ) ss ( mlkem_decaps level ( mlkem_dk ks ) ( mlkem_ct en ) )
     : b okrt ( bytes_eq ss ( mlkem_ss en ) )
     : ( Vec u ) bad ( bytes_slice ( mlkem_ct en ) 0 ( vec_len [u] ( mlkem_ct en ) ) )
-    : *u bp ( vec_data [u] bad )
-    = . bp 0 # u ^^ # i . bp 0 1
+    : ( Slice u ) bp ( slice_from_vec [u] bad )
+    ( slice_put [u] bp 0 # u ^^ # i . bp 0 1 )
     : ( Vec u ) rej ( mlkem_decaps level ( mlkem_dk ks ) bad )
     : b okrej & ! ( bytes_eq rej ss ) == ( vec_len [u] rej ) 32
 

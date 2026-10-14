@@ -11,20 +11,20 @@ $ `stdlib/core/slice.nu`
 // Let go of `metadata` now rather than at the end of its owner's scope.
 @ grpc_metadata_free sink ( Vec Header ) metadata → v {}
 
-unsafe @ grpc_header_count ( Vec Header ) headers s name → i {
+@ grpc_header_count ( Vec Header ) headers s name → i {
     : ~ i count 0
     : ~ i header_index 0
     ~ < header_index ( vec_len [Header] headers ) {
-        : Header h . ( vec_data [Header] headers ) header_index
+        : Header h ( vec_at [Header] headers header_index )
         = header_index + header_index 1 ? != ( nurl_str_eq ( string_data . h name ) name ) 0 { = count + count 1 } {} }
     ^ count
 }
 
 // Borrowed until headers are freed. Use count to distinguish absent/empty.
-unsafe @ grpc_header_value ( Vec Header ) headers s name → s {
+@ grpc_header_value ( Vec Header ) headers s name → s {
     : ~ i header_index 0
     ~ < header_index ( vec_len [Header] headers ) {
-        : Header h . ( vec_data [Header] headers ) header_index
+        : Header h ( vec_at [Header] headers header_index )
         = header_index + header_index 1 ? != ( nurl_str_eq ( string_data . h name ) name ) 0 { ^ ( string_data . h value ) } {} }
     ^ ``
 }
@@ -101,12 +101,12 @@ unsafe @ grpc_header_value ( Vec Header ) headers s name → s {
     ^ @ !v GrpcError { T 0 }
 }
 
-unsafe @ grpc_headers_check_size ( Vec Header ) headers i limit → !v GrpcError {
+@ grpc_headers_check_size ( Vec Header ) headers i limit → !v GrpcError {
     ? <= limit 0 { ^ @ !v GrpcError { F ( grpc_error GRPC_INVALID_ARGUMENT `invalid metadata limit` ) } } {}
     : ~ i remaining limit
     : ~ i header_index 0
     ~ < header_index ( vec_len [Header] headers ) {
-        : Header h . ( vec_data [Header] headers ) header_index
+        : Header h ( vec_at [Header] headers header_index )
         = header_index + header_index 1
         \ ( __grpc_metadata_charge remaining ( string_len . h name ) ( string_len . h value ) )
     }
@@ -137,13 +137,13 @@ unsafe @ grpc_headers_check_size ( Vec Header ) headers i limit → !v GrpcError
     ^ result
 }
 
-unsafe @ grpc_metadata_encode ( Vec Header ) metadata i limit → !( Vec Header ) GrpcError {
+@ grpc_metadata_encode ( Vec Header ) metadata i limit → !( Vec Header ) GrpcError {
     \ ( grpc_headers_check_size metadata limit )
     : ( Vec Header ) out ( grpc_metadata_new )
     : ~ i remaining limit
     : ~ i header_index 0
     ~ < header_index ( vec_len [Header] metadata ) {
-        : Header h . ( vec_data [Header] metadata ) header_index
+        : Header h ( vec_at [Header] metadata header_index )
         = header_index + header_index 1
         ? | ! ( grpc_metadata_key . h name ) ( grpc_metadata_reserved . h name ) {
             ^ @ !( Vec Header ) GrpcError { F ( grpc_error GRPC_INVALID_ARGUMENT `invalid or reserved metadata key` ) }
@@ -214,13 +214,13 @@ unsafe @ grpc_metadata_encode ( Vec Header ) metadata i limit → !( Vec Header 
     ^ @ !v GrpcError { T 0 }
 }
 
-unsafe @ grpc_metadata_decode ( Vec Header ) headers i limit → !( Vec Header ) GrpcError {
+@ grpc_metadata_decode ( Vec Header ) headers i limit → !( Vec Header ) GrpcError {
     \ ( grpc_headers_check_size headers limit )
     : ( Vec Header ) out ( grpc_metadata_new )
     : ~ i remaining limit
     : ~ i header_index 0
     ~ < header_index ( vec_len [Header] headers ) {
-        : Header h . ( vec_data [Header] headers ) header_index
+        : Header h ( vec_at [Header] headers header_index )
         = header_index + header_index 1
         ? & ! ( grpc_metadata_reserved . h name ) ( grpc_metadata_key . h name ) {
             ? ( string_ends_with . h name `-bin` ) {

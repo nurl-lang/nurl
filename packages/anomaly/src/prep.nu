@@ -982,7 +982,7 @@ unsafe @ anomaly_missing_cols Meta m__h Json raw → ( Vec String ) {
 // number of cells masked. A column with too few readings to say, or with
 // no spread at all, is left exactly as it is: not being able to tell is
 // not a licence to erase.
-unsafe @ anomaly_mask_absurd ( Vec f ) data i n_rows i n_cols ( Vec i ) counts → i {
+@ anomaly_mask_absurd ( Vec f ) data i n_rows i n_cols ( Vec i ) counts → i {
     ? & > n_rows 0 > n_cols 0 {} { ^ 0 }
     : ~ i total 0
     : ~ i c 0
@@ -990,10 +990,10 @@ unsafe @ anomaly_mask_absurd ( Vec f ) data i n_rows i n_cols ( Vec i ) counts �
         : ~ i stride / n_rows ANOM_ABSURD_SAMPLE
         ? < stride 1 { = stride 1 } {}
         : ( Vec f ) sample ( vec_new [f] )
-        : *f dp ( vec_data [f] data )
+        : ( Slice f ) dp ( slice_from_vec [f] data )
         : ~ i r 0
         ~ < r n_rows {
-            : f v . dp + * r n_cols c
+            : f v ( slice_at [f] dp + * r n_cols c )
             ? ( float_is_nan v ) {} { ( vec_push [f] sample v ) }
             = r + r stride
         }
@@ -1023,14 +1023,14 @@ unsafe @ anomaly_mask_absurd ( Vec f ) data i n_rows i n_cols ( Vec i ) counts �
             }
             ? & > sigma 0.0 ( _an_finite sigma ) {
                 : f lim * ANOM_ABSURD_SIGMAS sigma
-                : *f wp ( vec_data [f] data )
+                : ( Slice f ) wp ( slice_from_vec [f] data )
                 = r 0
                 ~ < r n_rows {
                     : i off + * r n_cols c
-                    : f v . wp off
+                    : f v ( slice_at [f] wp off )
                     ? ( float_is_nan v ) {} {
                         ? > ( float_abs - v med ) lim {
-                            = . wp off ( float_nan )
+                            ( slice_put [f] wp off ( float_nan ) )
                             = masked + masked 1
                         } {}
                     }
@@ -1076,17 +1076,17 @@ unsafe @ anomaly_mask_absurd ( Vec f ) data i n_rows i n_cols ( Vec i ) counts �
 // the largest of them, so a single reading of 1e200 gives a std of about
 // 1e199 and not the infinity that once turned the persisted scaler into
 // JSON nulls the model could no longer be opened from.
-unsafe @ scaler_fit ( Vec f ) data i n_rows i n_cols → Scaler {
+@ scaler_fit ( Vec f ) data i n_rows i n_cols → Scaler {
     : ( Vec f ) mean ( vec_with_cap [f] n_cols )
     : ( Vec f ) inv ( vec_with_cap [f] n_cols )
-    : *f dp ( vec_data [f] data )
+    : ( Slice f ) dp ( slice_from_vec [f] data )
     : ~ i c 0
     ~ < c n_cols {
         // Pass 1: the readings present, and their mean.
         : ~ i m 0
         : ~ i r 0
         ~ < r n_rows {
-            ? ( float_is_nan . dp + * r n_cols c ) {} { = m + m 1 }
+            ? ( float_is_nan ( slice_at [f] dp + * r n_cols c ) ) {} { = m + m 1 }
             = r + r 1
         }
         : ~ f mu 0.0
@@ -1094,7 +1094,7 @@ unsafe @ scaler_fit ( Vec f ) data i n_rows i n_cols → Scaler {
             : f fm # f m
             = r 0
             ~ < r n_rows {
-                : f v . dp + * r n_cols c
+                : f v ( slice_at [f] dp + * r n_cols c )
                 ? ( float_is_nan v ) {} { = mu + mu / v fm }
                 = r + r 1
             }
@@ -1104,7 +1104,7 @@ unsafe @ scaler_fit ( Vec f ) data i n_rows i n_cols → Scaler {
         : ~ f scale 0.0
         = r 0
         ~ < r n_rows {
-            : f v . dp + * r n_cols c
+            : f v ( slice_at [f] dp + * r n_cols c )
             ? ( float_is_nan v ) {} {
                 : f dh ( float_abs - / v 2.0 muh )
                 ? > dh scale { = scale dh } {}
@@ -1116,7 +1116,7 @@ unsafe @ scaler_fit ( Vec f ) data i n_rows i n_cols → Scaler {
         ? > scale 0.0 {
             = r 0
             ~ < r n_rows {
-                : f v . dp + * r n_cols c
+                : f v ( slice_at [f] dp + * r n_cols c )
                 ? ( float_is_nan v ) {} {
                     : f u / - / v 2.0 muh scale
                     = ss + ss * u u

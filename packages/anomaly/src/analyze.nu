@@ -23,6 +23,7 @@
 // when the process died without saying so.
 
 $ `stdlib/core/string.nu`
+$ `stdlib/core/slice.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/std/time.nu`
@@ -71,7 +72,7 @@ $ `src/orgfiles.nu`
 // step is found wherever it is.
 : AnaSep { f sep i rows }
 
-unsafe @ _ana_separation Model mo f rate → AnaSep {
+@ _ana_separation Model mo f rate → AnaSep {
     : CalReport cr ( model_calibrate mo 0 0 )
     : ~ AnaSep out @ AnaSep { -1.0 0 }
     : i ni ( vec_len [CalVer] . cr items )
@@ -81,7 +82,7 @@ unsafe @ _ana_separation Model mo f rate → AnaSep {
             T cv → {
                 : i n ( vec_len [f] . cv dfs )
                 ? & == ( nurl_str_eq ( string_data . cv cvname ) `range_guard` ) 1 > n 3 {
-                    : *f dp ( vec_data [f] . cv dfs )
+                    : ( Slice f ) dp ( slice_from_vec [f] . cv dfs )
                     : ~ i cut # i ( float_round * rate # f n )
                     ? < cut 1 { = cut 1 } {}
                     // Look for the step over block sizes up to a quarter
@@ -98,8 +99,8 @@ unsafe @ _ana_separation Model mo f rate → AnaSep {
                     ~ <= j jmax {
                         : i lo - * 2 j 1
                         ? < lo n {
-                            : f w - 0.0 . dp - j 1
-                            : f ref - 0.0 . dp lo
+                            : f w - 0.0 ( slice_at [f] dp - j 1 )
+                            : f ref - 0.0 ( slice_at [f] dp lo )
                             ? & > w 0.0 > ref 0.0 {
                                 : f r / w ref
                                 ? > r best { = best r = bestj j } {}

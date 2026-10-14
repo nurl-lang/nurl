@@ -7,11 +7,14 @@
 // nothing could read or free again — and to keep 4096 buckets however
 // large it grew, so a long-running user that re-defines the same keys
 // (the language server) grew without bound.
+//
+// The test drives the raw table itself (a plain integer address), so it
+// is 'unsafe'; programs use SymTab.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/symtab.nu`
 
-@ main → i {
+unsafe @ main → i {
     : i h ( nurl_sym_new )
     // Many distinct keys: past the first rehash (8192 entries).
     : ~ i k 0

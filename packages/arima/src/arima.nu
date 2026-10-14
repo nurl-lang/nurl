@@ -52,6 +52,7 @@
 // series or many candidate orders at once.
 
 $ `stdlib/core/string.nu`
+$ `stdlib/core/slice.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/box.nu`
 $ `stdlib/std/float.nu`
@@ -125,28 +126,28 @@ unsafe @ __ar_vec_copy ( Vec f ) src → ( Vec f ) {
     ^ out
 }
 
-unsafe @ __ar_copy_into ( Vec f ) dst ( Vec f ) src → v {
+@ __ar_copy_into ( Vec f ) dst ( Vec f ) src → v {
     : i n ( vec_len [f] dst )
-    : *f d ( vec_data [f] dst )
-    : *f s ( vec_data [f] src )
+    : ( Slice f ) d ( slice_from_vec [f] dst )
+    : ( Slice f ) s ( slice_from_vec [f] src )
     : ~ i k 0
-    ~ < k n { = . d k . s k = k + k 1 }
+    ~ < k n { ( slice_put [f] d k ( slice_at [f] s k ) ) = k + k 1 }
 }
 
-unsafe @ __ar_fill ( Vec f ) v f x → v {
+@ __ar_fill ( Vec f ) v f x → v {
     : i n ( vec_len [f] v )
-    : *f p ( vec_data [f] v )
+    : ( Slice f ) p ( slice_from_vec [f] v )
     : ~ i k 0
-    ~ < k n { = . p k x = k + k 1 }
+    ~ < k n { ( slice_put [f] p k x ) = k + k 1 }
 }
 
-unsafe @ __ar_max_abs ( Vec f ) v → f {
+@ __ar_max_abs ( Vec f ) v → f {
     : i n ( vec_len [f] v )
-    : *f p ( vec_data [f] v )
+    : ( Slice f ) p ( slice_from_vec [f] v )
     : ~ f m 0.0
     : ~ i k 0
     ~ < k n {
-        : f a ( float_abs . p k )
+        : f a ( float_abs ( slice_at [f] p k ) )
         ? > a m { = m a } {}
         = k + k 1
     }
@@ -179,14 +180,14 @@ unsafe @ __ar_poly_mul ( Vec f ) a ( Vec f ) b → ( Vec f ) {
 }
 
 // A seasonal polynomial 1 + Σ c_j B^{s j} spread to lag form.
-unsafe @ __ar_seasonal_spread ( Vec f ) c i s → ( Vec f ) {
+@ __ar_seasonal_spread ( Vec f ) c i s → ( Vec f ) {
     : i n ( vec_len [f] c )
     : ( Vec f ) out ( vec_zeroed [f] * n s )
-    : *f o ( vec_data [f] out )
-    : *f pc ( vec_data [f] c )
+    : ( Slice f ) o ( slice_from_vec [f] out )
+    : ( Slice f ) pc ( slice_from_vec [f] c )
     : ~ i j 0
     ~ < j n {
-        = . o - * + j 1 s 1 . pc j
+        ( slice_put [f] o - * + j 1 s 1 ( slice_at [f] pc j ) )
         = j + j 1
     }
     ^ out
@@ -443,9 +444,9 @@ unsafe @ __ar_raw_of_coef ArimaSpec sp ArimaCoef c ( Vec f ) raw → b {
 }
 
 // Has the covariance recursion converged (see _ar_step)?
-unsafe @ _ar_ss_steady ArimaSS ss → b {
-    : *f fz ( vec_data [f] . ss fz )
-    ^ != . fz 1 0.0
+@ _ar_ss_steady ArimaSS ss → b {
+    : ( Slice f ) fz ( slice_from_vec [f] . ss fz )
+    ^ != ( slice_at [f] fz 1 ) 0.0
 }
 
 // Let go of `ss` now — what a state stored in a model's heap block is
@@ -454,7 +455,7 @@ unsafe @ _ar_ss_steady ArimaSS ss → b {
 
 // Build the form from expanded polynomials (ar: "1 − Σ φ B^k" φ's; ma:
 // "1 + Σ θ B^k" θ's) and the differencing δ.
-unsafe @ _ar_ss_new ( Vec f ) ar ( Vec f ) ma ( Vec f ) delta → ArimaSS {
+@ _ar_ss_new ( Vec f ) ar ( Vec f ) ma ( Vec f ) delta → ArimaSS {
     : i pf ( vec_len [f] ar )
     : i qf ( vec_len [f] ma )
     : ~ i r pf
@@ -464,15 +465,15 @@ unsafe @ _ar_ss_new ( Vec f ) ar ( Vec f ) ma ( Vec f ) delta → ArimaSS {
     : i rd + r nd
     : ( Vec f ) phi ( vec_zeroed [f] r )
     : ( Vec f ) th ( vec_zeroed [f] r )
-    : *f pphi ( vec_data [f] phi )
-    : *f pth ( vec_data [f] th )
-    : *f par ( vec_data [f] ar )
-    : *f pma ( vec_data [f] ma )
+    : ( Slice f ) pphi ( slice_from_vec [f] phi )
+    : ( Slice f ) pth ( slice_from_vec [f] th )
+    : ( Slice f ) par ( slice_from_vec [f] ar )
+    : ( Slice f ) pma ( slice_from_vec [f] ma )
     : ~ i k 0
-    ~ < k pf { = . pphi k . par k = k + k 1 }
-    = . pth 0 1.0
+    ~ < k pf { ( slice_put [f] pphi k ( slice_at [f] par k ) ) = k + k 1 }
+    ( slice_put [f] pth 0 1.0 )
     = k 0
-    ~ < k qf { = . pth + k 1 . pma k = k + k 1 }
+    ~ < k qf { ( slice_put [f] pth + k 1 ( slice_at [f] pma k ) ) = k + k 1 }
     ^ @ ArimaSS { r nd rd phi th ( __ar_vec_copy delta ) ( vec_zeroed [f] rd ) ( vec_zeroed [f] * rd rd ) ( vec_zeroed [f] * rd rd ) ( vec_zeroed [f] * rd rd ) ( vec_zeroed [f] rd ) ( vec_zeroed [f] * rd rd ) ( vec_zeroed [f] rd ) ( vec_zeroed [f] 2 ) }
 }
 
@@ -1011,7 +1012,7 @@ unsafe @ _ar_init_cov_doubling ArimaSS ss → b {
     ( Vec f ) theta
 }
 
-unsafe @ _ar_arma_new ( Vec f ) ar ( Vec f ) ma → ArimaArma {
+@ _ar_arma_new ( Vec f ) ar ( Vec f ) ma → ArimaArma {
     : i pf ( vec_len [f] ar )
     : i qf ( vec_len [f] ma )
     : ~ i r pf
@@ -1019,15 +1020,15 @@ unsafe @ _ar_arma_new ( Vec f ) ar ( Vec f ) ma → ArimaArma {
     ? < r 1 { = r 1 } {}
     : ( Vec f ) phi ( vec_zeroed [f] r )
     : ( Vec f ) th ( vec_zeroed [f] r )
-    : *f pphi ( vec_data [f] phi )
-    : *f pth ( vec_data [f] th )
-    : *f par ( vec_data [f] ar )
-    : *f pma ( vec_data [f] ma )
+    : ( Slice f ) pphi ( slice_from_vec [f] phi )
+    : ( Slice f ) pth ( slice_from_vec [f] th )
+    : ( Slice f ) par ( slice_from_vec [f] ar )
+    : ( Slice f ) pma ( slice_from_vec [f] ma )
     : ~ i k 0
-    ~ < k pf { = . pphi k . par k = k + k 1 }
-    = . pth 0 1.0
+    ~ < k pf { ( slice_put [f] pphi k ( slice_at [f] par k ) ) = k + k 1 }
+    ( slice_put [f] pth 0 1.0 )
     = k 0
-    ~ < k qf { = . pth + k 1 . pma k = k + k 1 }
+    ~ < k qf { ( slice_put [f] pth + k 1 ( slice_at [f] pma k ) ) = k + k 1 }
     ^ @ ArimaArma { r phi th }
 }
 
@@ -1038,35 +1039,35 @@ unsafe @ _ar_arma_new ( Vec f ) ar ( Vec f ) ma → ArimaArma {
 // four terms of _ar_init_cov applied to the unit vector instead of
 // multiplied out — Φ(Γ Φᵀe₀) + Φ(C Θᵀe₀) + Θ(Bᵀe₀) + Θ(Θᵀe₀) with B = ΦC.
 // It is all the Chandrasekhar recursion needs of P.
-unsafe @ _ar_init_col i r ( Vec f ) phiv ( Vec f ) thv ( Vec f ) out → b {
-    : *f phi ( vec_data [f] phiv )
-    : *f th ( vec_data [f] thv )
-    : *f po ( vec_data [f] out )
+@ _ar_init_col i r ( Vec f ) phiv ( Vec f ) thv ( Vec f ) out → b {
+    : ( Slice f ) phi ( slice_from_vec [f] phiv )
+    : ( Slice f ) th ( slice_from_vec [f] thv )
+    : ( Slice f ) po ( slice_from_vec [f] out )
     // the expanded polynomials back from the padded state form
     : ~ i pf r
-    ~ & > pf 0 == . phi - pf 1 0.0 { = pf - pf 1 }
+    ~ & > pf 0 == ( slice_at [f] phi - pf 1 ) 0.0 { = pf - pf 1 }
     : ~ i qf - r 1
-    ~ & > qf 0 == . th qf 0.0 { = qf - qf 1 }
+    ~ & > qf 0 == ( slice_at [f] th qf ) 0.0 { = qf - qf 1 }
     : ( Vec f ) ar ( vec_zeroed [f] pf )
     : ( Vec f ) ma ( vec_zeroed [f] qf )
     : ~ i k 0
-    ~ < k pf { ( vec_set [f] ar k . phi k ) = k + k 1 }
+    ~ < k pf { ( vec_set [f] ar k ( slice_at [f] phi k ) ) = k + k 1 }
     = k 0
-    ~ < k qf { ( vec_set [f] ma k . th + k 1 ) = k + k 1 }
+    ~ < k qf { ( vec_set [f] ma k ( slice_at [f] th + k 1 ) ) = k + k 1 }
     : ( Vec f ) gamma ( vec_zeroed [f] r )
     : ( Vec f ) psi ( vec_zeroed [f] r )
     : b ok ( _ar_autocov ar ma r gamma psi )
     ? ok {
-        : *f pg ( vec_data [f] gamma )
-        : *f pp ( vec_data [f] psi )
+        : ( Slice f ) pg ( slice_from_vec [f] gamma )
+        : ( Slice f ) pp ( slice_from_vec [f] psi )
         // x = Γ Φᵀe₀, y = C Θᵀe₀, b = Bᵀe₀ — Φ[i][m] = φ_{i+m}, Θ[i][l] = θ_{i+l},
         // Γ[m][l] = γ(|m−l|), C[m][l] = ψ_{l−1−m} (l > m)
         : ( Vec f ) xv ( vec_zeroed [f] r )
         : ( Vec f ) yv ( vec_zeroed [f] r )
         : ( Vec f ) bv ( vec_zeroed [f] r )
-        : *f x ( vec_data [f] xv )
-        : *f y ( vec_data [f] yv )
-        : *f b ( vec_data [f] bv )
+        : ( Slice f ) x ( slice_from_vec [f] xv )
+        : ( Slice f ) y ( slice_from_vec [f] yv )
+        : ( Slice f ) b ( slice_from_vec [f] bv )
         : ~ i m 0
         ~ < m r {
             : ~ f sx 0.0
@@ -1075,14 +1076,14 @@ unsafe @ _ar_init_col i r ( Vec f ) phiv ( Vec f ) thv ( Vec f ) out → b {
             : ~ i l 0
             ~ < l r {
                 : i dlt ? >= - m l 0 - m l - l m
-                = sx + sx * . pg dlt . phi l
-                ? > l m { = sy + sy * . pp - - l 1 m . th l } {}
-                ? < l m { = sb + sb * . phi l . pp - - m 1 l } {}
+                = sx + sx * ( slice_at [f] pg dlt ) ( slice_at [f] phi l )
+                ? > l m { = sy + sy * ( slice_at [f] pp - - l 1 m ) ( slice_at [f] th l ) } {}
+                ? < l m { = sb + sb * ( slice_at [f] phi l ) ( slice_at [f] pp - - m 1 l ) } {}
                 = l + l 1
             }
-            = . x m sx
-            = . y m sy
-            = . b m sb
+            ( slice_put [f] x m sx )
+            ( slice_put [f] y m sy )
+            ( slice_put [f] b m sb )
             = m + m 1
         }
         : ~ i i 0
@@ -1090,11 +1091,11 @@ unsafe @ _ar_init_col i r ( Vec f ) phiv ( Vec f ) thv ( Vec f ) out → b {
             : ~ f v 0.0
             : ~ i l 0
             ~ < l - r i {
-                = v + v * . phi + i l + . x l . y l
-                = v + v * . th + i l + . b l . th l
+                = v + v * ( slice_at [f] phi + i l ) + ( slice_at [f] x l ) ( slice_at [f] y l )
+                = v + v * ( slice_at [f] th + i l ) + ( slice_at [f] b l ) ( slice_at [f] th l )
                 = l + l 1
             }
-            = . po i v
+            ( slice_put [f] po i v )
             = i + i 1
         }
     } {}
@@ -1234,7 +1235,7 @@ unsafe @ _ar_filter_arma ( Vec f ) phiv ( Vec f ) thv ( Vec f ) col ( Vec f ) w 
 // different observations, and the ones that drop more of the start win
 // on the drop, not the fit (measured on a true AR(1): AR(4) by 5 AICc,
 // against the exact likelihood's AR(1) by 4).
-unsafe @ __ar_loglik_css ArimaSpec sp ArimaCoef c ( Vec f ) w i ncond → ArimaLik {
+@ __ar_loglik_css ArimaSpec sp ArimaCoef c ( Vec f ) w i ncond → ArimaLik {
     : ( Vec f ) ar ( _ar_expand_ar . c phi . c sphi . sp s )
     : ( Vec f ) ma ( _ar_expand_ma . c theta . c stheta . sp s )
     : i pf ( vec_len [f] ar )
@@ -1244,10 +1245,10 @@ unsafe @ __ar_loglik_css ArimaSpec sp ArimaCoef c ( Vec f ) w i ncond → ArimaL
     : ~ ArimaLik out @ ArimaLik { F 0.0 0.0 0 }
     ? > n nc {
         : ( Vec f ) e ( vec_zeroed [f] n )
-        : *f pe ( vec_data [f] e )
-        : *f pw ( vec_data [f] w )
-        : *f par ( vec_data [f] ar )
-        : *f pma ( vec_data [f] ma )
+        : ( Slice f ) pe ( slice_from_vec [f] e )
+        : ( Slice f ) pw ( slice_from_vec [f] w )
+        : ( Slice f ) par ( slice_from_vec [f] ar )
+        : ( Slice f ) pma ( slice_from_vec [f] ma )
         // A seasonal polynomial is sparse — (p+1)(P+1)−1 terms across
         // s·P+p lags — and a zero coefficient's term is exactly zero, so
         // the lags that carry one are visited and the sums are the
@@ -1255,31 +1256,31 @@ unsafe @ __ar_loglik_css ArimaSpec sp ArimaCoef c ( Vec f ) w i ncond → ArimaL
         : ( Vec i ) ari ( vec_new [i] )
         : ( Vec i ) mai ( vec_new [i] )
         : ~ i i 0
-        ~ < i pf { ? == . par i 0.0 {} { ( vec_push [i] ari i ) } = i + i 1 }
+        ~ < i pf { ? == ( slice_at [f] par i ) 0.0 {} { ( vec_push [i] ari i ) } = i + i 1 }
         = i 0
-        ~ < i qf { ? == . pma i 0.0 {} { ( vec_push [i] mai i ) } = i + i 1 }
+        ~ < i qf { ? == ( slice_at [f] pma i ) 0.0 {} { ( vec_push [i] mai i ) } = i + i 1 }
         : i nar ( vec_len [i] ari )
         : i nma ( vec_len [i] mai )
-        : *i pari ( vec_data [i] ari )
-        : *i pmai ( vec_data [i] mai )
+        : ( Slice i ) pari ( slice_from_vec [i] ari )
+        : ( Slice i ) pmai ( slice_from_vec [i] mai )
         : ~ f ssq 0.0
         : ~ i t nc
         ~ < t n {
-            : ~ f v - . pw t . c mu
+            : ~ f v - ( slice_at [f] pw t ) . c mu
             = i 0
             ~ < i nar {
-                : i lag . pari i
-                = v - v * . par lag - . pw - t + lag 1 . c mu
+                : i lag ( slice_at [i] pari i )
+                = v - v * ( slice_at [f] par lag ) - ( slice_at [f] pw - t + lag 1 ) . c mu
                 = i + i 1
             }
             : ~ i j 0
             ~ < j nma {
-                : i lag . pmai j
+                : i lag ( slice_at [i] pmai j )
                 : i at - t + lag 1
-                ? >= at nc { = v - v * . pma lag . pe at } {}
+                ? >= at nc { = v - v * ( slice_at [f] pma lag ) ( slice_at [f] pe at ) } {}
                 = j + j 1
             }
-            = . pe t v
+            ( slice_put [f] pe t v )
             = ssq + ssq * v v
             = t + t 1
         }
@@ -1405,7 +1406,7 @@ unsafe @ _ar_jobs_run ( Vec ArimaJob ) jobs b par → v {
 
 // Prepare at `raw` (transformed parameters when natural = F, natural
 // coefficients when T); with_cov adds the stationary covariance.
-unsafe @ _ar_prep_at ArimaSpec sp ( Vec f ) raw b natural b with_cov → ( Box ArimaPrep ) {
+@ _ar_prep_at ArimaSpec sp ( Vec f ) raw b natural b with_cov → ( Box ArimaPrep ) {
     : ArimaCoef cf ? natural ( _ar_coef_of_natural sp raw ) ( _ar_coef_of_raw sp raw )
     : ( Vec f ) ar ( _ar_expand_ar . cf phi . cf sphi . sp s )
     : ( Vec f ) ma ( _ar_expand_ma . cf theta . cf stheta . sp s )
@@ -1421,7 +1422,7 @@ unsafe @ _ar_prep_at ArimaSpec sp ( Vec f ) raw b natural b with_cov → ( Box A
 
 // One job of a batch: what it reads (views of the caller's Vecs) and
 // where its answer goes.
-unsafe @ _ar_job ArimaSpec sp ( Vec f ) w i method i ncond ( Vec f ) raw ( Vec f ) out i idx i kind → ArimaJob {
+@ _ar_job ArimaSpec sp ( Vec f ) w i method i ncond ( Vec f ) raw ( Vec f ) out i idx i kind → ArimaJob {
     ^ @ ArimaJob { sp # i w method ncond # i raw # i out idx kind ( box_null [ArimaPrep] ) }
 }
 
@@ -2113,44 +2114,44 @@ unsafe @ __ar_hessian_fold * ArimaModelImpl m ( Vec f ) vals → ( Vec f ) {
 }
 
 // Natural coefficients (φ, θ, Φ, Θ, μ in one vector) → the bundle.
-unsafe @ _ar_coef_of_natural ArimaSpec sp ( Vec f ) x → ArimaCoef {
+@ _ar_coef_of_natural ArimaSpec sp ( Vec f ) x → ArimaCoef {
     : ArimaCoef c ( _ar_coef_new sp )
-    : *f px ( vec_data [f] x )
+    : ( Slice f ) px ( slice_from_vec [f] x )
     : ~ i off 0
     : ~ i i 0
-    ~ < i . sp p { ( vec_set [f] . c phi i . px + off i ) = i + i 1 }
+    ~ < i . sp p { ( vec_set [f] . c phi i ( slice_at [f] px + off i ) ) = i + i 1 }
     = off + off . sp p
     = i 0
-    ~ < i . sp q { ( vec_set [f] . c theta i . px + off i ) = i + i 1 }
+    ~ < i . sp q { ( vec_set [f] . c theta i ( slice_at [f] px + off i ) ) = i + i 1 }
     = off + off . sp q
     = i 0
-    ~ < i . sp P { ( vec_set [f] . c sphi i . px + off i ) = i + i 1 }
+    ~ < i . sp P { ( vec_set [f] . c sphi i ( slice_at [f] px + off i ) ) = i + i 1 }
     = off + off . sp P
     = i 0
-    ~ < i . sp Q { ( vec_set [f] . c stheta i . px + off i ) = i + i 1 }
+    ~ < i . sp Q { ( vec_set [f] . c stheta i ( slice_at [f] px + off i ) ) = i + i 1 }
     = off + off . sp Q
-    ^ @ ArimaCoef { . c phi . c theta . c sphi . c stheta ? . sp mean . px off 0.0 }
+    ^ @ ArimaCoef { . c phi . c theta . c sphi . c stheta ? . sp mean ( slice_at [f] px off ) 0.0 }
 }
 
 // The bundle → the natural vector.
-unsafe @ _ar_natural_of_coef ArimaSpec sp ArimaCoef mc → ( Vec f ) {
+@ _ar_natural_of_coef ArimaSpec sp ArimaCoef mc → ( Vec f ) {
     : i k ( __ar_ncoef sp )
     : ( Vec f ) x ( vec_zeroed [f] k )
-    : *f px ( vec_data [f] x )
+    : ( Slice f ) px ( slice_from_vec [f] x )
     : ~ i off 0
     : ~ i i 0
-    ~ < i . sp p { = . px + off i ( _ar_at . mc phi i ) = i + i 1 }
+    ~ < i . sp p { ( slice_put [f] px + off i ( _ar_at . mc phi i ) ) = i + i 1 }
     = off + off . sp p
     = i 0
-    ~ < i . sp q { = . px + off i ( _ar_at . mc theta i ) = i + i 1 }
+    ~ < i . sp q { ( slice_put [f] px + off i ( _ar_at . mc theta i ) ) = i + i 1 }
     = off + off . sp q
     = i 0
-    ~ < i . sp P { = . px + off i ( _ar_at . mc sphi i ) = i + i 1 }
+    ~ < i . sp P { ( slice_put [f] px + off i ( _ar_at . mc sphi i ) ) = i + i 1 }
     = off + off . sp P
     = i 0
-    ~ < i . sp Q { = . px + off i ( _ar_at . mc stheta i ) = i + i 1 }
+    ~ < i . sp Q { ( slice_put [f] px + off i ( _ar_at . mc stheta i ) ) = i + i 1 }
     = off + off . sp Q
-    ? . sp mean { = . px off . mc mu } {}
+    ? . sp mean { ( slice_put [f] px off . mc mu ) } {}
     ^ x
 }
 
@@ -2222,15 +2223,15 @@ unsafe @ __ar_model_from_raw ( Vec f ) y ( Vec f ) w ArimaSpec sp i method i nco
 }
 
 // The starting parameters for a fit: zeros, the mean at the sample mean.
-unsafe @ __ar_raw_start ( Vec f ) w ArimaSpec sp → ( Vec f ) {
+@ __ar_raw_start ( Vec f ) w ArimaSpec sp → ( Vec f ) {
     : i k ( __ar_ncoef sp )
     : ( Vec f ) raw ( vec_zeroed [f] k )
     ? . sp mean {
         : i n ( vec_len [f] w )
-        : *f pw ( vec_data [f] w )
+        : ( Slice f ) pw ( slice_from_vec [f] w )
         : ~ f sum 0.0
         : ~ i t 0
-        ~ < t n { = sum + sum . pw t = t + t 1 }
+        ~ < t n { = sum + sum ( slice_at [f] pw t ) = t + t 1 }
         ( vec_set [f] raw - k 1 ? > n 0 / sum # f n 0.0 )
     } {}
     ^ raw
@@ -2266,7 +2267,7 @@ unsafe @ __ar_raw_start ( Vec f ) w ArimaSpec sp → ( Vec f ) {
 
 // The threaded CPU evaluator: every item on a thread of its own,
 // __ar_threads at a time, when one is worth it.
-unsafe @ arima_eval_cpu ( Vec ArimaEvalItem ) items ( Vec ArimaCtx ) ctxs ( Vec f ) out → v {
+@ arima_eval_cpu ( Vec ArimaEvalItem ) items ( Vec ArimaCtx ) ctxs ( Vec f ) out → v {
     : i m ( vec_len [ArimaEvalItem] items )
     : ~ i big 0
     : ~ i i 0
@@ -2708,9 +2709,9 @@ unsafe @ __ar_attach_fourier * ArimaModelImpl m ( Vec i ) periods i k b trend ( 
 
 // One row of the design: 1, then per period and harmonic sin, cos,
 // then t when a trend is fitted.
-unsafe @ __ar_fourier_row ( Vec i ) periods i k b trend i t ( Vec f ) row → v {
-    : *f x ( vec_data [f] row )
-    = . x 0 1.0
+@ __ar_fourier_row ( Vec i ) periods i k b trend i t ( Vec f ) row → v {
+    : ( Slice f ) x ( slice_from_vec [f] row )
+    ( slice_put [f] x 0 1.0 )
     : ~ i q 1
     : i np ( vec_len [i] periods )
     : ~ i p 0
@@ -2719,14 +2720,14 @@ unsafe @ __ar_fourier_row ( Vec i ) periods i k b trend i t ( Vec f ) row → v 
         : ~ i j 1
         ~ <= j k {
             : f a * base # f j
-            = . x q ( float_sin a )
-            = . x + q 1 ( float_cos a )
+            ( slice_put [f] x q ( float_sin a ) )
+            ( slice_put [f] x + q 1 ( float_cos a ) )
             = q + q 2
             = j + j 1
         }
         = p + p 1
     }
-    ? trend { = . x q # f t } {}
+    ? trend { ( slice_put [f] x q # f t ) } {}
 }
 
 // Least squares by the normal equations (a handful of columns; rows
@@ -2846,21 +2847,21 @@ unsafe @ arima_kpss ( Vec f ) x → f {
 }
 
 // The sample autocorrelation of x at lag k.
-unsafe @ arima_acf ( Vec f ) x i k → f {
+@ arima_acf ( Vec f ) x i k → f {
     : i n ( vec_len [f] x )
     ? | <= k 0 >= k n { ^ 0.0 } {}
-    : *f px ( vec_data [f] x )
+    : ( Slice f ) px ( slice_from_vec [f] x )
     : ~ f mean 0.0
     : ~ i t 0
-    ~ < t n { = mean + mean . px t = t + t 1 }
+    ~ < t n { = mean + mean ( slice_at [f] px t ) = t + t 1 }
     = mean / mean # f n
     : ~ f c0 0.0
     : ~ f ck 0.0
     = t 0
     ~ < t n {
-        : f e - . px t mean
+        : f e - ( slice_at [f] px t ) mean
         = c0 + c0 * e e
-        ? >= t k { = ck + ck * e - . px - t k mean } {}
+        ? >= t k { = ck + ck * e - ( slice_at [f] px - t k ) mean } {}
         = t + t 1
     }
     ? > c0 0.0 {} { ^ 0.0 }
@@ -2958,12 +2959,12 @@ unsafe @ arima_acf ( Vec f ) x i k → f {
 
 // ── Reporting ─────────────────────────────────────────────────────────
 
-unsafe @ _ar_jarr ( Vec f ) v → Json {
+@ _ar_jarr ( Vec f ) v → Json {
     : Json a ( json_arr_new )
     : i n ( vec_len [f] v )
-    : *f p ( vec_data [f] v )
+    : ( Slice f ) p ( slice_from_vec [f] v )
     : ~ i k 0
-    ~ < k n { ( json_arr_push a ( json_float . p k ) ) = k + k 1 }
+    ~ < k n { ( json_arr_push a ( json_float ( slice_at [f] p k ) ) ) = k + k 1 }
     ^ a
 }
 
@@ -3026,13 +3027,13 @@ unsafe @ arima_coef ArimaModel m__h → Json {
     ^ a
 }
 
-unsafe @ __ar_jbits ( Vec f ) v → Json {
+@ __ar_jbits ( Vec f ) v → Json {
     : Json a ( json_arr_new )
     : i n ( vec_len [f] v )
-    : *f p ( vec_data [f] v )
+    : ( Slice f ) p ( slice_from_vec [f] v )
     : ~ i k 0
     ~ < k n {
-        ( json_arr_push a ( json_int ( f64_to_bits . p k ) ) )
+        ( json_arr_push a ( json_int ( f64_to_bits ( slice_at [f] p k ) ) ) )
         = k + k 1
     }
     ^ a
@@ -3042,14 +3043,14 @@ unsafe @ __ar_jbits ( Vec f ) v → Json {
     ^ ( json_int ( f64_to_bits x ) )
 }
 
-unsafe @ __ar_unbits Json a → ( Vec f ) {
+@ __ar_unbits Json a → ( Vec f ) {
     : i n ( json_arr_len a )
     : ( Vec f ) out ( vec_zeroed [f] n )
-    : *f p ( vec_data [f] out )
+    : ( Slice f ) p ( slice_from_vec [f] out )
     : ~ i k 0
     ~ < k n {
         ?? ( json_arr_get a k ) {
-            T v → { ? ( json_is_num v ) { = . p k ( bits_to_f64 ( json_as_int v ) ) } {} }
+            T v → { ? ( json_is_num v ) { ( slice_put [f] p k ( bits_to_f64 ( json_as_int v ) ) ) } {} }
             F _ → {}
         }
         = k + k 1

@@ -69,32 +69,32 @@ $ `stdlib/core/slice.nu`
 // rather than trap, so a renderer fed empty input yields an empty string
 // instead of crashing.
 
-unsafe @ chart_min ( Vec f ) v → f {
+@ chart_min ( Vec f ) v → f {
     : i n ( vec_len [f] v )
     ? == n 0 { ^ 0.0 } {}
-    : *f dp ( vec_data [f] v )
-    : ~ f m . dp 0
+    : ( Slice f ) dp ( slice_from_vec [f] v )
+    : ~ f m ( slice_at [f] dp 0 )
     : ~ i i 1
-    ~ < i n { : f x . dp i ? < x m { = m x } {} = i + i 1 }
+    ~ < i n { : f x ( slice_at [f] dp i ) ? < x m { = m x } {} = i + i 1 }
     ^ m
 }
 
-unsafe @ chart_max ( Vec f ) v → f {
+@ chart_max ( Vec f ) v → f {
     : i n ( vec_len [f] v )
     ? == n 0 { ^ 0.0 } {}
-    : *f dp ( vec_data [f] v )
-    : ~ f m . dp 0
+    : ( Slice f ) dp ( slice_from_vec [f] v )
+    : ~ f m ( slice_at [f] dp 0 )
     : ~ i i 1
-    ~ < i n { : f x . dp i ? > x m { = m x } {} = i + i 1 }
+    ~ < i n { : f x ( slice_at [f] dp i ) ? > x m { = m x } {} = i + i 1 }
     ^ m
 }
 
-unsafe @ chart_sum ( Vec f ) v → f {
+@ chart_sum ( Vec f ) v → f {
     : i n ( vec_len [f] v )
-    : *f dp ( vec_data [f] v )
+    : ( Slice f ) dp ( slice_from_vec [f] v )
     : ~ f s 0.0
     : ~ i i 0
-    ~ < i n { = s + s . dp i = i + i 1 }
+    ~ < i n { = s + s ( slice_at [f] dp i ) = i + i 1 }
     ^ s
 }
 
@@ -110,17 +110,17 @@ unsafe @ chart_sum ( Vec f ) v → f {
 // the series min and max. A flat series (range 0) draws as a mid-height
 // baseline rather than dividing by zero.
 
-unsafe @ chart_sparkline ( Vec f ) v → String {
+@ chart_sparkline ( Vec f ) v → String {
     : i n ( vec_len [f] v )
     : String out ( string_with_cap * n 3 )
     ? == n 0 { ^ out } {}
-    : *f dp ( vec_data [f] v )
+    : ( Slice f ) dp ( slice_from_vec [f] v )
     : f mn ( chart_min v )
     : f mx ( chart_max v )
     : f range - mx mn
     : ~ i i 0
     ~ < i n {
-        : f x . dp i
+        : f x ( slice_at [f] dp i )
         : ~ i lvl 4
         ? > range 0.0 { = lvl + 1 # i ( float_round * 7.0 / - x mn range ) } {}
         ? < lvl 1 { = lvl 1 } {}
@@ -174,7 +174,7 @@ unsafe @ chart_sparkline ( Vec f ) v → String {
 // row is `<label> <bar> <value>`; the value is printed with %g so whole
 // numbers stay whole.
 
-unsafe @ chart_bars ( Vec String ) labels ( Vec f ) values i width → String {
+@ chart_bars ( Vec String ) labels ( Vec f ) values i width → String {
     : i n ( vec_len [f] values )
     : String out ( string_new )
     ? == n 0 { ^ out } {}
@@ -196,12 +196,12 @@ unsafe @ chart_bars ( Vec String ) labels ( Vec f ) values i width → String {
     : ~ f scale 0.0
     ? > mx 0.0 { = scale / # f * w 8 mx } {}
 
-    : *f dp ( vec_data [f] values )
+    : ( Slice f ) dp ( slice_from_vec [f] values )
     = i 0
     ~ < i n {
         ( __push_label out labels i lw )
         ( string_push_char out 32 )
-        : f x . dp i
+        : f x ( slice_at [f] dp i )
         : ~ i eighths 0
         ? > x 0.0 { = eighths # i ( float_round * x scale ) } {}
         ? < eighths 0 { = eighths 0 } {}
@@ -232,7 +232,7 @@ unsafe @ chart_bars ( Vec String ) labels ( Vec f ) values i width → String {
     ( string_push_char dst 41 )  // )
 }
 
-unsafe @ chart_hist ( Vec f ) values i bins i width → String {
+@ chart_hist ( Vec f ) values i bins i width → String {
     : i n ( vec_len [f] values )
     : String out ( string_new )
     ? == n 0 { ^ out } {}
@@ -247,10 +247,10 @@ unsafe @ chart_hist ( Vec f ) values i bins i width → String {
     : ~ i b 0
     ~ < b nb { ( vec_push [f] counts 0.0 ) = b + b 1 }
 
-    : *f dp ( vec_data [f] values )
+    : ( Slice f ) dp ( slice_from_vec [f] values )
     : ~ i i 0
     ~ < i n {
-        : f x . dp i
+        : f x ( slice_at [f] dp i )
         : ~ i bi 0
         ? > range 0.0 { = bi # i ( float_floor * # f nb / - x mn range ) } {}
         ? < bi 0 { = bi 0 } {}
@@ -304,7 +304,7 @@ unsafe @ chart_hist ( Vec f ) values i bins i width → String {
     ( string_push_str out raw )
 }
 
-unsafe @ chart_plot ( Vec f ) values i width i height → String {
+@ chart_plot ( Vec f ) values i width i height → String {
     : i n ( vec_len [f] values )
     : String out ( string_new )
     ? | < n 1 | < width 1 < height 1 { ^ out } {}
@@ -312,7 +312,7 @@ unsafe @ chart_plot ( Vec f ) values i width i height → String {
     : f mn ( chart_min values )
     : f mx ( chart_max values )
     : f range - mx mn
-    : *f dp ( vec_data [f] values )
+    : ( Slice f ) dp ( slice_from_vec [f] values )
 
     // Character grid, row-major, 0 = blank / 1 = mark.
     : i cells * width height
@@ -329,7 +329,7 @@ unsafe @ chart_plot ( Vec f ) values i width i height → String {
         ? > width 1 { = si # i ( float_round / # f * c - n 1 # f - width 1 ) } {}
         ? < si 0 { = si 0 } {}
         ? >= si n { = si - n 1 } {}
-        : f val . dp si
+        : f val ( slice_at [f] dp si )
         : ~ i row / - height 1 2
         ? > range 0.0 { = row # i ( float_round * # f - height 1 / - mx val range ) } {}
         ? < row 0 { = row 0 } {}

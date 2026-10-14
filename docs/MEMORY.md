@@ -902,6 +902,28 @@ And `vec_put_back` took on trust that `x` came out of slot `i`: written
 back into another slot, two slots held one value (h248). It is raw, for
 `unsafe` code, as `mem_put_back` is.
 
+And three were in the standard library's surface rather than the
+checker: functions that take a runtime handle — the address of the
+runtime's record for a socket — as a plain integer were callable from
+safe code, so a made-up number was read as one (`tcp_conn_view`, h249), or
+freed (`nurl_tcp_close`, a preamble builtin, h250; `nurl_udp_close`, a
+foreign function the library declares, h251). They are raw now: the
+library declares such a foreign function `unsafe & …` and marks such a
+builtin raw, and a program reaches sockets through `TcpConn` (with
+`tcp_starttls` and `tls_accept_conn` for a TLS upgrade).
+
+The library's raw symbol table was the same: `nurl_sym_*`
+(stdlib/core/symtab.nu) took the table's address as a plain integer (h252),
+and the owning `SymTab` around it could be built from a made-up number
+(h253) or shared between threads in an `Arc` (h254). The raw table is
+`unsafe` only; `SymTab` is sealed (only `symtab_new` makes one), moves
+rather than copies, and is `% NotSync`.
+
+The unikernel HAL was the last of the kind: `mmio_write32` and the
+`virtio_*` / `virtq_*` helpers take a physical address as an `i`, so safe
+code wrote to a made-up address (h255). They are raw now; a driver's
+functions that reach a device register are `unsafe`.
+
 The rules that carry it:
 
 - **An owned value moves.** Storing it into an aggregate, an Option or a
@@ -1061,7 +1083,9 @@ operations.
 *State threads share and change is a `Locked [T]`* (stdlib/std/thread.nu):
 a shared handle of its own over a mutex and the value, reached only
 through `locked_with` (runs a closure on the value with the lock held),
-`locked_get` (a copy) and `locked_set`. The lock that guards the data is
+`locked_get` (a copy), `locked_set`, and `locked_take` / `locked_restore`
+(the value checked out to one thread to change in place, every other
+operation waiting until it is back). The lock that guards the data is
 the one its type names, so no lock is counted and none can be forgotten.
 State one thread changes is an `Rc`; a value built first is shared whole
 with `arc_new`.
@@ -1374,22 +1398,43 @@ release it, so no handle hook releases anything itself
 one is raw (the standard library's, or `unsafe` code's); a zero handle is
 `# Regex # s 0`.
 
-A program's own handle — one state that every copy shares — wraps an
-`Arc` (an `Rc` when the state can hold the handle again, so the cycle is
-collected), and both hooks are safe code:
+A program's own handle — one state that every copy shares — wraps a
+shared handle of the standard library, and every hook and accessor is safe
+code. Which one is decided by what the state does:
+
+| The state | Its handle holds | Read | Changed |
+|---|---|---|---|
+| built once, then only read (an index, a model, a dataset) | `( Arc Impl )` | `arc_get` lends it | never: build it whole, then `arc_new` |
+| changed, one thread (a builder, a cursor, a parser's state) | `( Rc Impl )` | `rc_get` lends it | `rc_take` … `rc_restore` |
+| changed, shared between threads (a cache, a connection pool) | `( Locked Impl )` | `locked_get` copies it | `locked_take` … `locked_restore` |
+| read on every request, changed rarely (keys, a policy) | `( Locked ( Arc Impl ) )` | `locked_get` shares the snapshot | take it, `arc_new` a changed copy, restore |
 
 ```
-: Cache { ( Arc CacheImpl ) a }
-@ Cache_share Cache h → Cache { ^ @ Cache { ( arc_clone [CacheImpl] . h a ) } }
+: Cache { ( Rc CacheImpl ) a }
+@ Cache_share Cache h → Cache { ^ @ Cache { ( rc_clone [CacheImpl] . h a ) } }
 @ Cache_drop sink Cache h → v {}
-@ cache_new → Cache { ^ @ Cache { ( arc_new [CacheImpl] @ CacheImpl { … } ) } }
+@ cache_new → Cache { ^ @ Cache { ( rc_new [CacheImpl] @ CacheImpl { … } ) } }
+
+@ cache_hits Cache h → i { ^ . ( rc_get [CacheImpl] . h a ) hits }
+
+@ cache_put Cache h s key s val → v {
+    : ~ CacheImpl c ( rc_take [CacheImpl] . h a )   // the state, checked out
+    ( __cache_put c key val )                        // helpers take `inout CacheImpl`
+    ( rc_restore [CacheImpl] . h a c )               // …and checked back in
+}
 ```
 
-The empty hook makes `Cache` a handle; its `Arc` field is dropped once the
-hook returns, and the last owner releases the state. Only reaching into
-the state through a pointer (`arc_ptr`) is `unsafe`. Every package's
-handles are written this way; the counted blocks of `stdlib/core/rcbox.nu`
-are the standard library's own.
+The empty hook makes `Cache` a handle; its field is dropped once the hook
+returns, and the last owner releases the state. A check-out moves the
+state into a local — nothing is copied — and every operation on the value
+through any copy of the handle panics (`Rc`) or waits (`Locked`) until it
+is restored; one never restored (its owner panicked) leaves the handle
+empty, and nothing leaks. A helper that changes the state takes it
+`inout`, so a public function checks it out once and the helpers it calls
+work on the local. Reaching into the state through a pointer (`arc_ptr`,
+`rc_ptr`) is `unsafe`, and changing an `Arc`'s payload that way is a data
+race once the handle crosses a thread; the counted blocks of
+`stdlib/core/rcbox.nu` are the standard library's own.
 
 **Raw memory reached from an `unsafe` structure.** A struct behind a
 `nurl_alloc` pointer is not dropped by the compiler. A parameter stored

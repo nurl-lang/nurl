@@ -87,28 +87,28 @@ unsafe @ lsm_key_hash * u p i off i len → i {
 }
 
 // Set the k bit positions of one hash into `bits`.
-unsafe @ __bloom_set ( Vec u ) bits i nbits i h → v {
+@ __bloom_set ( Vec u ) bits i nbits i h → v {
     : i h2 | >> h 33 1
-    : *u p ( vec_data [u] bits )
+    : ( Slice u ) p ( slice_from_vec [u] bits )
     : ~ i i 0
     ~ < i SST_BLOOM_K {
         : i pos % & + h * i h2 9223372036854775807 nbits
         : i byte / pos 8
-        : i cur # i . p byte
-        = . p byte # u | cur << 1 % pos 8
+        : i cur # i ( slice_at [u] p byte )
+        ( slice_put [u] p byte # u | cur << 1 % pos 8 )
         = i + i 1
     }
 }
 
-unsafe @ __bloom_test ( Vec u ) bits i nbits i h → b {
+@ __bloom_test ( Vec u ) bits i nbits i h → b {
     ? <= nbits 0 { ^ T } {}
     : i h2 | >> h 33 1
-    : *u p ( vec_data [u] bits )
+    : ( Slice u ) p ( slice_from_vec [u] bits )
     : ~ i i 0
     ~ < i SST_BLOOM_K {
         : i pos % & + h * i h2 9223372036854775807 nbits
         : i byte / pos 8
-        ? == 0 & # i . p byte << 1 % pos 8 { ^ F } {}
+        ? == 0 & # i ( slice_at [u] p byte ) << 1 % pos 8 { ^ F } {}
         = i + i 1
     }
     ^ T

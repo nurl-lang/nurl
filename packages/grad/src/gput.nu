@@ -619,7 +619,7 @@ unsafe @ _GpOpt_ptr GpOpt h → *GpOptImpl { ^ ( arc_ptr [GpOptImpl] . h a ) }
 // The acc-reduce block for one input: [nd ost dec fdim fdec], plus tfree.
 // dec = row-major strides of the input's dims aligned into out dims (1 on
 // broadcast dims); fdim/fdec describe the odometer over the broadcast dims.
-unsafe @ _gp_accred_block ( Vec i ) meta ( Vec i ) oshape ( Vec i ) ost ( Vec i ) eff inout i tfree → v {
+@ _gp_accred_block ( Vec i ) meta ( Vec i ) oshape ( Vec i ) ost ( Vec i ) eff inout i tfree → v {
     : i nd ( vec_len [i] oshape )
     ( vec_push [i] meta nd )
     ( _gp_push_vec meta ost )

@@ -98,7 +98,7 @@ $ `stdlib/core/slice.nu`
 
 // Print the header lines of a PLY, verbatim — they were written to be
 // read — plus what the body size implies about them.
-unsafe @ __pc_info → i {
+@ __pc_info → i {
     ? < ( nurl_argc ) 3 {
         ( nurl_print `ply: which cloud? — ply info cloud.ply\n` )
         ^ 2
@@ -111,8 +111,8 @@ unsafe @ __pc_info → i {
         }
         T b → {
             : i n ( vec_len [u] b )
-            : *u p ( vec_data [u] b )
-            ? & & & >= n 4 == 112 # i . p 0 == 108 # i . p 1 == 121 # i . p 2 {} {
+            : ( Slice u ) p ( slice_from_vec [u] b )
+            ? & & & >= n 4 == 112 # i ( slice_at [u] p 0 ) == 108 # i ( slice_at [u] p 1 ) == 121 # i ( slice_at [u] p 2 ) {} {
                 ( nurl_print `ply: ` ) ( nurl_print path )
                 ( nurl_print ` does not start with 'ply'\n` )
                 ^ 1
@@ -124,10 +124,10 @@ unsafe @ __pc_info → i {
             : ~ i ls 0
             : ~ i k 0
             ~ & == done 0 < k lim {
-                ? == # i . p k 10 {
+                ? == # i ( slice_at [u] p k ) 10 {
                     : ~ String line ( string_new )
                     : ~ i j ls
-                    ~ < j k { ( string_push_char line # i . p j ) = j + j 1 }
+                    ~ < j k { ( string_push_char line # i ( slice_at [u] p j ) ) = j + j 1 }
                     ( nurl_print ( string_data line ) ) ( nurl_print `\n` )
                     ? == 0 ( nurl_str_cmp ( string_data line ) `end_header` ) {
                         = done 1
