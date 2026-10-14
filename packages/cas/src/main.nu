@@ -61,7 +61,7 @@ $ `manifest.nu`
         ^ 0
     } {}
     ? ( args_present p `version` ) {
-        ( nurl_print `cas 0.1.5\n` )
+        ( nurl_print `cas ` ) ( nurl_print ( pkg_version ) ) ( nurl_print `\n` )
         ^ 0
     } {}
 
