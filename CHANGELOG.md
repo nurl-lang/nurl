@@ -381,6 +381,15 @@ generic that copies its `T` cannot be instantiated with one (h235)
   a module global or a closure's capture is rejected; a parameter's field
   stays a lend, and one read through a pointer is raw code's to vouch for.
 
+- **A result's error that cannot be copied, and an option of an option,
+  are dropped** (h237, h238). `! i Res` never dropped an error it held,
+  and `??String` / `??Res` — bound, returned, discarded or popped out of
+  a `( Vec ?T )` — never dropped the inner option's payload (LSan, or
+  valgrind for `??String`, on main). Such an error is owned through the
+  same twin as its Ok payload; the inner option is the outer one's
+  payload, dropped through its own twin, and a match arm's inner option is
+  a cursor over the outer binding.
+
 - **A closure never run leaves its capture to the frame** (h236). A
   closure whose body moves out a capture it cannot copy took it over when
   it was made, so one never run — or run without reaching the move —

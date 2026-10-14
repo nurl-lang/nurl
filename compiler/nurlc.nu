@@ -7425,10 +7425,24 @@ unsafe @ extract_fn_ptr_return_type s fn_ptr_type → s {
                 : s c ( nurl_cg_reg cg )
                 ( nurl_print `  ` ) ( nurl_print c ) ( nurl_print ` = and i1 ` ) ( nurl_print ro )
                 ( nurl_print `, ` ) ( nurl_print tag ) ( nurl_print `\n` )
-                ( __handle_drop_ensure __dop )
-                ( __dropifv_request __dop )
-                ( nurl_print `  call void @__dropifv_` ) ( nurl_print ( __drop_mangle __dop ) ) ( nurl_print `(i1 ` ) ( nurl_print c )
-                ( nurl_print `, ` ) ( nurl_print ( nurl_llty __dop ) ) ( nurl_print ` ` ) ( nurl_print pv ) ( nurl_print `)` ) ( emit_dbg_eol )
+                ? != 0 ( nurl_str_starts __dop `{ i1, ` ) {
+                    // (An option of an option: the inner one's own drop, h238.)
+                    : s dl ( nurl_cg_lbl cg `ddrop` )
+                    : s dx ( nurl_cg_lbl cg `ddone` )
+                    ( nurl_print `  br i1 ` ) ( nurl_print c ) ( nurl_print `, label %` ) ( nurl_print dl ) ( nurl_print `, label %` ) ( nurl_print dx ) ( nurl_print `\n` )
+                    ( nurl_print dl ) ( nurl_print `:\n` )
+                    ( gen_drop_for_type __dop syms )
+                    ( nurl_print `  call void @` ) ( nurl_print ( llvm_source_fn ( nurl_str_cat `drop__` ( __drop_mangle __dop ) ) ) )
+                    ( nurl_print `(` ) ( nurl_print __dop ) ( nurl_print ` ` ) ( nurl_print pv ) ( nurl_print `)\n` )
+                    ( nurl_print `  br label %` ) ( nurl_print dx ) ( nurl_print `\n` )
+                    ( nurl_print dx ) ( nurl_print `:\n` )
+                    ( nurl_sym_def syms `__cur_lbl__` dx )
+                } {
+                    ( __handle_drop_ensure __dop )
+                    ( __dropifv_request __dop )
+                    ( nurl_print `  call void @__dropifv_` ) ( nurl_print ( __drop_mangle __dop ) ) ( nurl_print `(i1 ` ) ( nurl_print c )
+                    ( nurl_print `, ` ) ( nurl_print ( nurl_llty __dop ) ) ( nurl_print ` ` ) ( nurl_print pv ) ( nurl_print `)` ) ( emit_dbg_eol )
+                }
             } {}
             // …and a result's error, when the tag says that is what it holds.
             ? != 0 ( nurl_str_len __doe ) {
@@ -17924,9 +17938,12 @@ unsafe @ gen_match i lex i syms i cg → s {
                         } {} }
                     {}
                     // A String / Vec payload of a fresh option or result.
-                    ? & & pt0_is_opt_bool != 0 ( nurl_str_len scrut_own ) ( __is_handle_ty pt0_eff ) {
-                        ( __handle_drop_ensure pt0_eff )
-                        ( mem_own_add_user_drop syms cg vp0 pt0_eff )
+                    // (An option payload — `??T`'s inner option — counts as its
+                    // registration twin, h238.)
+                    : s pt0_reg ( __udrop_regty pt0_eff )
+                    ? & & pt0_is_opt_bool != 0 ( nurl_str_len scrut_own ) ( __is_handle_ty pt0_reg ) {
+                        ( __handle_drop_ensure pt0_reg )
+                        ( mem_own_add_user_drop syms cg vp0 pt0_reg )
                         ( mem_udrop_flag_set syms cg vp0 scrut_own )
                         ( nurl_sym_def syms ( nurl_str_cat vp0 `__sborrow` ) `dyn` )
                     } {}
@@ -17935,9 +17952,9 @@ unsafe @ gen_match i lex i syms i cg → s {
                     // takes the option's ownership along.
                     // mem_udrop_ptr_of answers `` for an empty name.
                     : s __mop ( mem_udrop_ptr_of syms match_var_name )
-                    ? & & & pt0_is_opt_bool == 0 ( nurl_str_len scrut_own ) != 0 ( nurl_str_len __mop ) ( __is_handle_ty pt0_eff ) {
-                        ( __handle_drop_ensure pt0_eff )
-                        ( mem_own_add_user_drop syms cg vp0 pt0_eff )
+                    ? & & & pt0_is_opt_bool == 0 ( nurl_str_len scrut_own ) != 0 ( nurl_str_len __mop ) ( __is_handle_ty pt0_reg ) {
+                        ( __handle_drop_ensure pt0_reg )
+                        ( mem_own_add_user_drop syms cg vp0 pt0_reg )
                         ( mem_udrop_flag_set syms cg vp0 `0` )
                         ( mem_udrop_link_alias syms vp0 __mop )
                     } {}
@@ -17945,9 +17962,9 @@ unsafe @ gen_match i lex i syms i cg → s {
                     // the parameter (its caller hands the option over).
                     ? & & & & pt0_is_opt_bool == 0 ( nurl_str_len scrut_own ) == 0 ( nurl_str_len __mop )
                     >= ( nurl_sym_word_index syms `__fn_param_names__` match_var_name ) 0
-                    ( __is_handle_ty pt0_eff ) {
-                        ( __handle_drop_ensure pt0_eff )
-                        ( mem_own_add_user_drop syms cg vp0 pt0_eff )
+                    ( __is_handle_ty pt0_reg ) {
+                        ( __handle_drop_ensure pt0_reg )
+                        ( mem_own_add_user_drop syms cg vp0 pt0_reg )
                         ( mem_udrop_flag_set syms cg vp0 `0` )
                         ( nurl_sym_def syms ( nurl_str_cat vp0 `__optparam` ) match_var_name )
                     } {}
@@ -43423,10 +43440,37 @@ unsafe @ __ffi_param_count s pt → i {
     ^ ( __is_owned_struct_ty ty )
 }
 
+// The index of the `}` that closes the `{` at the start of `s`, or -1.
+unsafe @ __brace_close s s → i {
+    : i n ( nurl_str_len s )
+    : *u sp # *u s
+    : ~ i depth 0
+    : ~ i i 0
+    ~ < i n {
+        : i c # i . sp i
+        ? == c 123 { = depth + depth 1 } {}
+        ? == c 125 {
+            = depth - depth 1
+            ? == depth 0 { ^ i } {}
+        } {}
+        = i + i 1
+    }
+    ^ -1
+}
+
 // The payload type of an option `{ i1, T }` whose T is a String, a Vec or
 // an owning struct; `` otherwise.
 @ __opt_payload s ty → s {
     : i n ( nurl_str_len ty )
+    // An option of an option that owns something (`??String`, `??Res`):
+    // the inner one is the payload, dropped through its own twin (h238).
+    ? & & > n 12 != 0 ( nurl_str_starts ty `{ i1, { i1, ` ) == ( nurl_str_get ty - n 1 ) 125 {
+        : s ip ( nurl_str_slice ty 6 - n 8 )
+        ? == ( __brace_close ip ) - ( nurl_str_len ip ) 1 {
+            ? != 0 ( nurl_str_len ( __wrap_twin ip ) ) { ^ ip } {}
+        } {}
+        ^ ( nurl_str_cat `` `` )
+    } {}
     ? | < n 9 == 0 ( nurl_str_starts ty `{ i1, %` ) { ^ ( nurl_str_cat `` `` ) } {}
     ? != ( nurl_str_get ty - n 1 ) 125 { ^ ( nurl_str_cat `` `` ) } {}
     : ~ s p ( nurl_str_slice ty 6 - n 8 )
@@ -43534,6 +43578,9 @@ unsafe @ __opt_err_mangle s e → s {
     ? | >= ( nurl_str_find t ` ` ) 0 >= ( nurl_str_find e ` ` ) 0 { ^ ( nurl_str_cat `` `` ) } {}
     ? ( __is_value_handle e )
     { ^ e } {}
+    // An error that cannot be copied (a `% Drop` value with no clone):
+    // owned the same way (h237) — it was never dropped.
+    ? ( __nc_drop_ty e ) { ^ e } {}
     ^ ( nurl_str_cat `` `` )
 }
 
@@ -43559,7 +43606,8 @@ unsafe @ __opt_err_mangle s e → s {
     ? & == 0 ( nurl_str_len p ) == 0 ( nurl_str_len ep ) { ^ ( nurl_str_cat ty `` ) } {}
     // The twin is named for T (and, for a result, E): `%__opt.<T>.<E>`.
     : s body ( nurl_str_slice ty 6 - ( nurl_str_len ty ) 8 )
-    : i cm ( nurl_str_find body `, ` )
+    // (An option of an option: the whole body is T, h238.)
+    : i cm ? & != 0 ( nurl_str_starts body `{ ` ) == ( __brace_close body ) - ( nurl_str_len body ) 1 -1 ( nurl_str_find body `, ` )
     : s t ? < cm 0 ( nurl_str_cat body `` ) ( nurl_str_slice body 0 cm )
     // (The payload spelled like the error: a result of `*St` is `St*`.)
     : s sv ? < cm 0 ( nurl_str_cat `%__opt.` ( __drop_mangle t ) )
