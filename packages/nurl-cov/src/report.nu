@@ -86,30 +86,34 @@ $ `model.nu`
 // Coverage graphs name their sources absolutely, because the compiler
 // wrote them that way. A report read next to the code wants the path the
 // reader would type, so the working directory is taken off the front.
-unsafe @ report_display s path s root → s {
+@ report_display s path s root → String {
     : i rn ( nurl_str_len root )
-    ? == rn 0 { ^ path } {}
+    ? == rn 0 { ^ ( string_from path ) } {}
     : i pn ( nurl_str_len path )
-    ? <= pn rn { ^ path } {}
+    ? <= pn rn { ^ ( string_from path ) } {}
+    : ( Slice u ) pb ( slice_of_str path )
+    : ( Slice u ) rb ( slice_of_str root )
     : ~ i k 0
     ~ < k rn {
-        ? != ( nurl_str_at path pn k ) ( nurl_str_at root rn k ) { ^ path } {}
+        ? != ( slice_byte pb k ) ( slice_byte rb k ) { ^ ( string_from path ) } {}
         = k + k 1
     }
-    ? == 47 ( nurl_str_at path pn rn ) { ^ # s + # i path + rn 1 } {}
-    ^ path
+    ? == 47 ( slice_byte pb rn ) {
+        : String out ( string_new )
+        ( string_push_window out pb + rn 1 - pn + rn 1 )
+        ^ out
+    } {}
+    ^ ( string_from path )
 }
 
 // A long path is cut at the FRONT: the tail is the part that identifies
 // the file, and truncating it turns every file in a directory into the
 // same row.
-unsafe @ __rep_name String out s path i width → v {
+@ __rep_name String out s path i width → v {
     : i n ( nurl_str_len path )
     ? <= n width { ( __rep_pad_right out path width ) ^ v } {}
     ( string_push_str out `...` )
-    : *u at # *u + # i path - n - width 3
-    : String tail ( string_from_bytes at - width 3 )
-    ( string_push_str out ( string_data tail ) )
+    ( string_push_window out ( slice_of_str path ) - n - width 3 - width 3 )
 }
 
 @ report_render Cov c RepStyle st s root → String {
@@ -127,7 +131,7 @@ unsafe @ __rep_name String out s path i width → v {
     ~ < i n {
         : CovStat s ( cov_file_stat c i )
         : i tenths ( cov_pct_tenths . s lines_hit . s lines_found )
-        ( __rep_name out ( report_display ( cov_file_path c i ) root ) REP_NAME_W )
+        ( __rep_name out ( string_data ( report_display ( cov_file_path c i ) root ) ) REP_NAME_W )
         ( __rep_ratio out . s lines_hit . s lines_found 12 )
         ( __rep_tint out st tenths )
         ( __rep_pct out tenths 8 )
@@ -167,7 +171,7 @@ unsafe @ __rep_name String out s path i width → v {
     ~ < i n {
         : CovStat s ( cov_file_stat c i )
         ? < . s lines_hit . s lines_found {
-            ( string_push_str out ( report_display ( cov_file_path c i ) root ) )
+            ( string_push_str out ( string_data ( report_display ( cov_file_path c i ) root ) ) )
             ( string_push_str out `\n  uncovered lines: ` )
             ( __rep_ranges out c i )
             ( string_push_str out `\n` )

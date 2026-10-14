@@ -11336,8 +11336,7 @@ unsafe @ nurl_lex_peek4_type i h → i {
         // `<type> <depth>`: the type may hold spaces of its own — an option
         // or a result is `{ i1, %K }` (h267: a `?K` taken out of a Locked
         // was left in its slot, and the restore dropped it under the taker).
-        : ~ i __tfk - ( nurl_str_len __tfa ) 1
-        ~ & >= __tfk 0 != ( nurl_str_get __tfa __tfk ) 32 { = __tfk - __tfk 1 }
+        : i __tfk ( str_last_space __tfa )
         : s __tft ? > __tfk 0 ( nurl_str_slice __tfa 0 __tfk ) ``
         = __tfa ? >= __tfk 0 ( nurl_str_slice __tfa + __tfk 1 - - ( nurl_str_len __tfa ) __tfk 1 ) __tfa
         : s __tfl ( nurl_llty __tft )
@@ -38047,6 +38046,14 @@ unsafe @ str_skip_word s str → s {
     ^ # s ( nurl_strdup_n # s + # i p pos - slen pos )
 }
 
+// Index of the last space in str, or -1: measured once, then read backwards.
+unsafe @ str_last_space s str → i {
+    : *u p # *u str
+    : ~ i k - ( nurl_str_len str ) 1
+    ~ & >= k 0 != 32 # i . p k { = k - k 1 }
+    ^ k
+}
+
 // `str` without its first `n` words.
 @ str_skip_words s str i n → s {
     : ~ s r ( nurl_str_cat str `` )
@@ -40897,6 +40904,18 @@ unsafe @ check_type_known i lex i syms s llvm_ty s ctx i tline i tcol → v {
 }
 
 @ defer_instantiation_at s fname s mangled s type_args i syms s caller_file i caller_line i caller_col → v {
+    // No template under this name: said here, at the call, rather than at
+    // the flush. Inside another generic's instantiation the call's result
+    // would otherwise be typed `i64` (compute_generic_ret_ty's fallback)
+    // and reported as a type mismatch against whatever it initialises.
+    ? == 0 ( nurl_str_len ( nurl_sym_get2 g_generic_syms fname `__gsrc` ) ) {
+        ( nurl_eprintln ( nurl_str_cat4
+        ( nurl_str_cat4 caller_file `:` ( nurl_str_int caller_line ) `:` )
+        ( nurl_str_cat ( nurl_str_int caller_col ) `: error: call to generic function '` )
+        fname
+        `' but no generic of that name is defined in this file or any '$'-imported file — add the '$' import for the file that defines it` ) )
+        ( __diag_abort )
+    } {}
     : s ret_ty ( compute_generic_ret_ty fname type_args )
     ( nurl_sym_def syms mangled ret_ty )
     : s cnt_s ( nurl_sym_get g_generic_syms `__deferred_count__` )

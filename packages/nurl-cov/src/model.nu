@@ -46,24 +46,13 @@ $ `stdlib/core/slice.nu`
     ( Vec CovFn ) funcs
 }
 
-: CovImpl {
+: Cov {
     ( Vec CovFile ) files
     i objects  // how many coverage objects were folded in
 }
 
-// A Cov is a handle on its state in an Arc (stdlib/std/arc.nu):
-// every copy is the same state, and the last owner releases it.
-: Cov { ( Arc CovImpl ) a }
-
-@ Cov_share Cov h → Cov { ^ @ Cov { ( arc_clone [CovImpl] . h a ) } }
-
-@ Cov_drop sink Cov h → v {}
-
-unsafe @ __Cov_ptr Cov h → *CovImpl { ^ ( arc_ptr [CovImpl] . h a ) }
-
 // How many coverage objects were folded in.
-unsafe @ cov_objects Cov c__h → i {
-    : *CovImpl c ( __Cov_ptr c__h )
+@ cov_objects Cov c → i {
     ^ . c objects
 }
 
@@ -76,12 +65,7 @@ unsafe @ cov_objects Cov c__h → i {
     i funcs_hit
 }
 
-unsafe @ cov_new → Cov {
-    : ~ CovImpl c @ CovImpl {}
-    = . c files ( vec_new [CovFile] )
-    = . c objects 0
-    ^ @ Cov { ( arc_new [CovImpl] c ) }
-}
+@ cov_new → Cov { ^ @ Cov { ( vec_new [CovFile] ) 0 } }
 
 // The files (and everything they hold) are dropped with their Vec.
 // Let go of `c` now rather than at the end of its owner's scope.
@@ -99,13 +83,11 @@ unsafe @ cov_new → Cov {
     } {}
 }
 
-unsafe @ cov_file_count Cov c__h → i {
-    : *CovImpl c ( __Cov_ptr c__h )
+@ cov_file_count Cov c → i {
     ^ ( vec_len [CovFile] . c files )
 }
 
-unsafe @ cov_file_path Cov c__h i idx → s {
-    : *CovImpl c ( __Cov_ptr c__h )
+@ cov_file_path Cov c i idx → s {
     ^ ?? ( vec_get [CovFile] . c files idx ) {
         T f → ( string_data . f path )
         F _ → ``
@@ -113,9 +95,7 @@ unsafe @ cov_file_path Cov c__h i idx → s {
 }
 
 // The row for `path`, created when this is the first object to mention it.
-unsafe @ cov_file_idx Cov c__h s path → i { ^ ( __cov_file_idx ( __Cov_ptr c__h ) path ) }
-
-unsafe @ __cov_file_idx * CovImpl c s path → i {
+@ cov_file_idx inout Cov c s path → i {
     : i n ( vec_len [CovFile] . c files )
     : ~ i i 0
     ~ < i n {
@@ -137,8 +117,7 @@ unsafe @ __cov_file_idx * CovImpl c s path → i {
 
 // ── Folding one object in ────────────────────────────────────────
 
-unsafe @ cov_add_object Cov c__h GcovObj o → v {
-    : *CovImpl c ( __Cov_ptr c__h )
+@ cov_add_object inout Cov c GcovObj o → v {
     : i nf ( gcov_file_count o )
     : ~ i src 0
     ~ < src nf {
@@ -149,19 +128,19 @@ unsafe @ cov_add_object Cov c__h GcovObj o → v {
     = . c objects + 1 . c objects
 }
 
-unsafe @ __cov_add_file * CovImpl c GcovObj o LineTab t i src → v {
-    : i fidx ( __cov_file_idx c ( gcov_file_path o src ) )
+@ __cov_add_file inout Cov c GcovObj o LineTab t i src → v {
+    : i fidx ( cov_file_idx c ( gcov_file_path o src ) )
     ?? ( vec_get [CovFile] . c files fidx ) {
         T f → {
-            : i n ( vec_len [i] ( linetab_exists t ) )
+            : i n ( linetab_lines t )
             : ~ i l 0
             ~ < l n {
-                ? != 0 ( __cov_at ( linetab_exists t ) l ) {
+                ? != 0 ( linetab_exists_at t l ) {
                     ( __cov_grow . f exists l )
                     ( __cov_grow . f count l )
                     ( vec_set [i] . f exists l 1 )
                     ( vec_set [i] . f count l
-                    + ( __cov_at . f count l ) ( __cov_at ( linetab_count t ) l ) )
+                    + ( __cov_at . f count l ) ( linetab_count_at t l ) )
                 } {}
                 = l + l 1
             }
@@ -175,15 +154,15 @@ unsafe @ __cov_add_file * CovImpl c GcovObj o LineTab t i src → v {
 // Branch rows arrive grouped by line and numbered from zero within each
 // line, which is what makes them addressable across binaries.
 @ __cov_add_branches CovFile f LineTab t → v {
-    : i n / ( vec_len [i] ( linetab_br t ) ) LBR_W
+    : i n ( linetab_br_rows t )
     : ~ i k 0
     : ~ i line -1
     : ~ i idx 0
     ~ < k n {
-        : i l ( __cov_at ( linetab_br t ) + * k LBR_W LBR_LINE )
+        : i l ( linetab_br_at t k LBR_LINE )
         ? != l line { = line l = idx 0 } {}
         ( __cov_branch_add . f branches l idx
-        ( __cov_at ( linetab_br t ) + * k LBR_W LBR_COUNT ) )
+        ( linetab_br_at t k LBR_COUNT ) )
         = idx + idx 1
         = k + k 1
     }
@@ -206,11 +185,11 @@ unsafe @ __cov_add_file * CovImpl c GcovObj o LineTab t i src → v {
 
 // Block 0 is the entry block, so its count is the call count.
 @ __cov_add_funcs CovFile f GcovObj o LineTab t → v {
-    : i n / ( vec_len [i] ( linetab_fnrow t ) ) LFN_W
+    : i n ( linetab_fn_rows t )
     : ~ i k 0
     ~ < k n {
-        : i line ( __cov_at ( linetab_fnrow t ) + * k LFN_W LFN_LINE )
-        : i fi ( __cov_at ( linetab_fnrow t ) + * k LFN_W LFN_FN )
+        : i line ( linetab_fn_at t k LFN_LINE )
+        : i fi ( linetab_fn_at t k LFN_FN )
         ? > ( gcov_fn_nblocks o fi ) 0 {
             ( __cov_fn_add . f funcs ( gcov_fn_name o fi ) line
             ( gcov_block_count o fi 0 ) )
@@ -243,23 +222,11 @@ unsafe @ __cov_add_file * CovImpl c GcovObj o LineTab t i src → v {
 // the package's coverage would drown the package: the number a maintainer
 // acts on is the coverage of the code they wrote.
 
-unsafe @ cov_keep_only Cov c__h ( Vec String ) prefixes → v {
-    : *CovImpl c ( __Cov_ptr c__h )
+@ cov_keep_only inout Cov c ( Vec String ) prefixes → v {
     ? == 0 ( vec_len [String] prefixes ) { ^ v } {}
-    : ( Vec CovFile ) keep ( vec_new [CovFile] )
-    : i n ( vec_len [CovFile] . c files )
-    : ~ i i 0
-    ~ < i n {
-        // Each file is taken out of the list (its slot left empty): a kept
-        // one moves to `keep`, any other is dropped here.
-        ?? ( vec_replace [CovFile] . c files i # CovFile 0 ) {
-            T f → ? ( __cov_matches ( string_data . f path ) prefixes ) { ( vec_push [CovFile] keep f ) } {}
-            F _ → {}
-        }
-        = i + i 1
-    }
-    ( vec_clear [CovFile] . c files )
-    ( vec_append [CovFile] . c files keep )
+    ( vec_retain [CovFile] . c files \ CovFile f → b {
+        ^ ( __cov_matches ( string_data . f path ) prefixes )
+    } )
 }
 
 @ __cov_matches s path ( Vec String ) prefixes → b {
@@ -291,8 +258,7 @@ unsafe @ cov_keep_only Cov c__h ( Vec String ) prefixes → v {
 }
 
 // Order the report the way a person reads it: by path.
-unsafe @ cov_sort Cov c__h → v {
-    : *CovImpl c ( __Cov_ptr c__h )
+@ cov_sort inout Cov c → v {
     : i n ( vec_len [CovFile] . c files )
     : ~ i i 1
     ~ < i n {
@@ -313,8 +279,7 @@ unsafe @ cov_sort Cov c__h → v {
 
 // ── Reading the model back ───────────────────────────────────────
 
-unsafe @ cov_file_stat Cov c__h i idx → CovStat {
-    : *CovImpl c ( __Cov_ptr c__h )
+@ cov_file_stat Cov c i idx → CovStat {
     : ~ i lf 0
     : ~ i lh 0
     : ~ i bf 0
@@ -355,8 +320,7 @@ unsafe @ cov_file_stat Cov c__h i idx → CovStat {
     ^ @ CovStat { lf lh bf bh ff fh }
 }
 
-unsafe @ cov_total Cov c__h → CovStat {
-    : *CovImpl c ( __Cov_ptr c__h )
+@ cov_total Cov c → CovStat {
     : ~ i lf 0
     : ~ i lh 0
     : ~ i bf 0
@@ -366,7 +330,7 @@ unsafe @ cov_total Cov c__h → CovStat {
     : i n ( vec_len [CovFile] . c files )
     : ~ i i 0
     ~ < i n {
-        : CovStat s ( cov_file_stat c__h i )
+        : CovStat s ( cov_file_stat c i )
         = lf + lf . s lines_found
         = lh + lh . s lines_hit
         = bf + bf . s branches_found
@@ -378,56 +342,49 @@ unsafe @ cov_total Cov c__h → CovStat {
     ^ @ CovStat { lf lh bf bh ff fh }
 }
 
-unsafe @ cov_max_line Cov c__h i idx → i {
-    : *CovImpl c ( __Cov_ptr c__h )
+@ cov_max_line Cov c i idx → i {
     ^ ?? ( vec_get [CovFile] . c files idx ) {
         T f → ? > ( vec_len [i] . f exists ) 0 - ( vec_len [i] . f exists ) 1 0
         F _ → 0
     }
 }
 
-unsafe @ cov_line_exists Cov c__h i idx i line → b {
-    : *CovImpl c ( __Cov_ptr c__h )
+@ cov_line_exists Cov c i idx i line → b {
     ^ ?? ( vec_get [CovFile] . c files idx ) {
         T f → != 0 ( __cov_at . f exists line )
         F _ → F
     }
 }
 
-unsafe @ cov_line_count Cov c__h i idx i line → i {
-    : *CovImpl c ( __Cov_ptr c__h )
+@ cov_line_count Cov c i idx i line → i {
     ^ ?? ( vec_get [CovFile] . c files idx ) {
         T f → ( __cov_at . f count line )
         F _ → 0
     }
 }
 
-unsafe @ cov_branch_rows Cov c__h i idx → i {
-    : *CovImpl c ( __Cov_ptr c__h )
+@ cov_branch_rows Cov c i idx → i {
     ^ ?? ( vec_get [CovFile] . c files idx ) {
         T f → / ( vec_len [i] . f branches ) CBR_W
         F _ → 0
     }
 }
 
-unsafe @ cov_branch_field Cov c__h i idx i row i field → i {
-    : *CovImpl c ( __Cov_ptr c__h )
+@ cov_branch_field Cov c i idx i row i field → i {
     ^ ?? ( vec_get [CovFile] . c files idx ) {
         T f → ( __cov_at . f branches + * row CBR_W field )
         F _ → 0
     }
 }
 
-unsafe @ cov_fn_rows Cov c__h i idx → i {
-    : *CovImpl c ( __Cov_ptr c__h )
+@ cov_fn_rows Cov c i idx → i {
     ^ ?? ( vec_get [CovFile] . c files idx ) {
         T f → ( vec_len [CovFn] . f funcs )
         F _ → 0
     }
 }
 
-unsafe @ cov_fn_name Cov c__h i idx i row → s {
-    : *CovImpl c ( __Cov_ptr c__h )
+@ cov_fn_name Cov c i idx i row → s {
     ^ ?? ( vec_get [CovFile] . c files idx ) {
         T f → ?? ( vec_get [CovFn] . f funcs row ) {
             T e → ( string_data . e name )
@@ -437,16 +394,14 @@ unsafe @ cov_fn_name Cov c__h i idx i row → s {
     }
 }
 
-unsafe @ cov_fn_line Cov c__h i idx i row → i {
-    : *CovImpl c ( __Cov_ptr c__h )
+@ cov_fn_line Cov c i idx i row → i {
     ^ ?? ( vec_get [CovFile] . c files idx ) {
         T f → ?? ( vec_get [CovFn] . f funcs row ) { T e → . e line F _ → 0 }
         F _ → 0
     }
 }
 
-unsafe @ cov_fn_called Cov c__h i idx i row → i {
-    : *CovImpl c ( __Cov_ptr c__h )
+@ cov_fn_called Cov c i idx i row → i {
     ^ ?? ( vec_get [CovFile] . c files idx ) {
         T f → ?? ( vec_get [CovFn] . f funcs row ) { T e → . e called F _ → 0 }
         F _ → 0

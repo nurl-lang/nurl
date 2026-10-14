@@ -67,6 +67,8 @@
 
 & `c` @ nurl_cc_collect → v
 
+$ `stdlib/core/mem.nu`
+
 : RcImpl [A] {
     i count
     i weak
@@ -176,8 +178,11 @@
     : *( RcImpl A ) impl # *( RcImpl A ) . r ctl
     ? == 0 & . impl cc RC_TAKEN { ( __rc_not_taken_panic ) } {}
     = . impl cc ^^ . impl cc RC_TAKEN
-    // (It replaces the zero bytes rc_take left, which drop as nothing.)
-    = . impl value x
+    // It replaces the zero bytes rc_take left: they own nothing, so they
+    // are swapped out and forgotten rather than run through the value's
+    // drop glue.
+    : A zero ( mem_replace [A] . impl value x )
+    ( mem_forget zero )
 }
 
 // A raw `*T` to the shared value's slot, for FFI that fills a struct in

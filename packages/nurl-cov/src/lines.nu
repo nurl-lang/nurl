@@ -65,33 +65,25 @@ $ `stdlib/std/arc.nu`
 
 @ LineTab_drop sink LineTab h → v {}
 
-unsafe @ __LineTab_ptr LineTab h → *LineTabImpl { ^ ( arc_ptr [LineTabImpl] . h a ) }
+// The table's columns, read in place: a column is never handed out as a
+// Vec, which out of a shared table would be a copy of it per call.
+@ linetab_maxline LineTab h → i { ^ . ( arc_get [LineTabImpl] . h a ) maxline }
 
-// The table's columns, lent: they live as long as the LineTab does.
-unsafe @ linetab_maxline LineTab t__h → i {
-    : *LineTabImpl t ( __LineTab_ptr t__h )
-    ^ . t maxline
-}
+// Per-line columns, indexed by line number; 0 past the end.
+@ linetab_lines LineTab h → i { ^ ( vec_len [i] . ( arc_get [LineTabImpl] . h a ) exists ) }
 
-unsafe @ linetab_exists LineTab t__h → ( Vec i ) {
-    : *LineTabImpl t ( __LineTab_ptr t__h )
-    ^ . t exists
-}
+@ linetab_exists_at LineTab h i line → i { ^ ( __ln_at . ( arc_get [LineTabImpl] . h a ) exists line ) }
 
-unsafe @ linetab_count LineTab t__h → ( Vec i ) {
-    : *LineTabImpl t ( __LineTab_ptr t__h )
-    ^ . t count
-}
+@ linetab_count_at LineTab h i line → i { ^ ( __ln_at . ( arc_get [LineTabImpl] . h a ) count line ) }
 
-unsafe @ linetab_br LineTab t__h → ( Vec i ) {
-    : *LineTabImpl t ( __LineTab_ptr t__h )
-    ^ . t br
-}
+// Branch rows (stride LBR_W) and function-start rows (stride LFN_W).
+@ linetab_br_rows LineTab h → i { ^ / ( vec_len [i] . ( arc_get [LineTabImpl] . h a ) br ) LBR_W }
 
-unsafe @ linetab_fnrow LineTab t__h → ( Vec i ) {
-    : *LineTabImpl t ( __LineTab_ptr t__h )
-    ^ . t fnrow
-}
+@ linetab_br_at LineTab h i row i field → i { ^ ( __ln_at . ( arc_get [LineTabImpl] . h a ) br + * row LBR_W field ) }
+
+@ linetab_fn_rows LineTab h → i { ^ / ( vec_len [i] . ( arc_get [LineTabImpl] . h a ) fnrow ) LFN_W }
+
+@ linetab_fn_at LineTab h i row i field → i { ^ ( __ln_at . ( arc_get [LineTabImpl] . h a ) fnrow + * row LFN_W field ) }
 
 @ __ln_at ( Vec i ) v i idx → i {
     ^ ?? ( vec_get [i] v idx ) { T x → x F _ → 0 }
@@ -127,19 +119,12 @@ unsafe @ linetab_fnrow LineTab t__h → ( Vec i ) {
 // Let go of `t` now rather than at the end of its owner's scope.
 @ linetab_free sink LineTab t → v {}
 
-unsafe @ lines_build GcovObj o i src → LineTab {
-    : ( Arc LineTabImpl ) t__box ( arc_zero [LineTabImpl] )
-    : *LineTabImpl t ( arc_ptr [LineTabImpl] t__box )
-    = . t src src
-    = . t maxline 0
-    = . t exists ( vec_new [i] )
-    = . t count ( vec_new [i] )
-    = . t br ( vec_new [i] )
-    = . t fnrow ( vec_new [i] )
-    = . t occ ( vec_new [i] )
-    = . t occ_next ( vec_new [i] )
-    = . t head ( vec_new [i] )
-    = . t tail ( vec_new [i] )
+@ lines_build GcovObj o i src → LineTab {
+    : ~ LineTabImpl t @ LineTabImpl {
+        src 0
+        ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] )
+        ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] )
+    }
     : i nfn ( gcov_fn_count o )
     : ~ i fi 0
     ~ < fi nfn {
@@ -152,14 +137,16 @@ unsafe @ lines_build GcovObj o i src → LineTab {
         = fi + fi 1
     }
     ( __ln_resolve o t )
-    ^ @ LineTab { t__box }
+    // Built: nothing changes it from here on, so every copy reads it
+    // without a lock.
+    ^ @ LineTab { ( arc_new [LineTabImpl] t ) }
 }
 
 // Walk one function's block-line rows in BLOCK order, which is the order
 // gcov visits them and therefore the order a line's blocks are listed in.
 // The notes store them per block already, but nothing in the format
 // promises ascending order, so the rows are chained per block first.
-unsafe @ __ln_scan_fn GcovObj o * LineTabImpl t i fi i src → v {
+@ __ln_scan_fn GcovObj o inout LineTabImpl t i fi i src → v {
     : i nb ( gcov_fn_nblocks o fi )
     ? == nb 0 { ^ v } {}
     : i first ( gcov_fn_bl_first o fi )
@@ -189,7 +176,7 @@ unsafe @ __ln_scan_fn GcovObj o * LineTabImpl t i fi i src → v {
     }
 }
 
-unsafe @ __ln_add_occ * LineTabImpl t i line i fi i blk → v {
+@ __ln_add_occ inout LineTabImpl t i line i fi i blk → v {
     : i slot / ( vec_len [i] . t occ ) LOC_W
     ( vec_push [i] . t occ line )
     ( vec_push [i] . t occ fi )
@@ -204,13 +191,13 @@ unsafe @ __ln_add_occ * LineTabImpl t i line i fi i blk → v {
     ? > line . t maxline { = . t maxline line } {}
 }
 
-unsafe @ __ln_occ * LineTabImpl t i slot i field → i {
+@ __ln_occ LineTabImpl t i slot i field → i {
     ^ ( __ln_at . t occ + * slot LOC_W field )
 }
 
 // Is (fi, blk) one of the blocks on this line? The membership test is what
 // separates traffic entering the line from traffic already inside it.
-unsafe @ __ln_on_line * LineTabImpl t i line i fi i blk → b {
+@ __ln_on_line LineTabImpl t i line i fi i blk → b {
     : ~ i slot ( __ln_at . t head line )
     ~ > slot 0 {
         : i s - slot 1
@@ -220,7 +207,7 @@ unsafe @ __ln_on_line * LineTabImpl t i line i fi i blk → b {
     ^ F
 }
 
-unsafe @ __ln_resolve GcovObj o * LineTabImpl t → v {
+@ __ln_resolve GcovObj o inout LineTabImpl t → v {
     : ~ i line 1
     ~ <= line . t maxline {
         ? != 0 ( __ln_at . t head line ) {
@@ -231,7 +218,7 @@ unsafe @ __ln_resolve GcovObj o * LineTabImpl t → v {
     }
 }
 
-unsafe @ __ln_line_count GcovObj o * LineTabImpl t i line → i {
+@ __ln_line_count GcovObj o LineTabImpl t i line → i {
     : ~ i total 0
     : ~ i slot ( __ln_at . t head line )
     ~ > slot 0 {
@@ -271,7 +258,7 @@ unsafe @ __ln_line_count GcovObj o * LineTabImpl t i line → i {
 // all of them: zero means the decision was never reached, which reads very
 // differently from "reached, and always went the same way".
 
-unsafe @ __ln_line_branches GcovObj o * LineTabImpl t i line → v {
+@ __ln_line_branches GcovObj o inout LineTabImpl t i line → v {
     : ~ i slot ( __ln_at . t head line )
     ~ > slot 0 {
         : i s - slot 1
@@ -320,7 +307,7 @@ unsafe @ __ln_line_branches GcovObj o * LineTabImpl t i line → v {
 // was drained. When no cycle is left, the total is the number of times the
 // line went round.
 
-unsafe @ __ln_cycles GcovObj o * LineTabImpl t i line → i {
+@ __ln_cycles GcovObj o LineTabImpl t i line → i {
     // Collect the line's distinct blocks as the nodes of a sub-graph.
     : ( Vec i ) nd_fn ( vec_new [i] )
     : ( Vec i ) nd_blk ( vec_new [i] )

@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.3.0] — 2026-10-14
+
+### Changed
+
+- No `unsafe` function left (104 in the previous release). The store
+  is a `Locked`: two threads using one database took turns only by
+  luck before — every call reached the state through `arc_ptr`. The
+  memtable and the write-ahead log are values the store owns and
+  changes through `inout`; a table reader keeps its block cache and
+  file behind its own lock and its Bloom filter in an `Arc` beside it,
+  so a get the filter rules out takes no lock at all; cursors are `Rc`
+  handles that never leave the operation that opened them.
+- Keys are compared through byte views (`slice_bytes_cmp`, memcmp)
+  instead of raw pointers, and the merge iterator keeps a copy of every
+  source's head, so a step reads the heads without opening a cursor and
+  each entry costs one cursor call to move and one to read its value.
+- Measured against the previous release (300 000 keys, five interleaved
+  runs, medians): batched writes and absent reads equal, point reads
+  +7 %, a full scan 229 ms against 241, compaction equal.
+- `stats` counts filter-answered gets for the store's life (the tables
+  of a compaction no longer take their counts with them).
+
 ## [0.2.5] — 2026-10-14
 
 Requires NURL 0.73.0 (`slice_at`, `slice_put`, `rc_take`, `locked_take`).

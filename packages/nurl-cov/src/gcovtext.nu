@@ -99,13 +99,13 @@ $ `stdlib/core/slice.nu`
     // Functions starting on a line, chained so the walk below is one pass.
     // Several can share a line: a generic monomorphised four ways, or a
     // closure declared inside a call.
-    : i nfr / ( vec_len [i] ( linetab_fnrow t ) ) LFN_W
+    : i nfr ( linetab_fn_rows t )
     : ( Vec i ) fhead ( vec_new [i] )
     : ( Vec i ) ftail ( vec_new [i] )
     : ( Vec i ) fnext ( vec_new [i] )
     : ~ i k 0
     ~ < k nfr {
-        : i fline ( __gt_at ( linetab_fnrow t ) + * k LFN_W LFN_LINE )
+        : i fline ( linetab_fn_at t k LFN_LINE )
         ( __gt_growto fhead fline )
         ( __gt_growto ftail fline )
         ( vec_push [i] fnext 0 )
@@ -121,7 +121,7 @@ $ `stdlib/core/slice.nu`
     : ( Vec String ) lines ( __gt_source_lines path )
     : i nsrc ( vec_len [String] lines )
     : i last ? > nsrc ( linetab_maxline t ) nsrc ( linetab_maxline t )
-    : i nbr / ( vec_len [i] ( linetab_br t ) ) LBR_W
+    : i nbr ( linetab_br_rows t )
     : ~ i bcur 0
     : ~ i idx 0
     : ~ i l 1
@@ -129,11 +129,11 @@ $ `stdlib/core/slice.nu`
         : ~ i slot ? < l ( vec_len [i] fhead ) ( __gt_at fhead l ) 0
         ~ > slot 0 {
             ( __gt_fn_header out o
-            ( __gt_at ( linetab_fnrow t ) + * - slot 1 LFN_W LFN_FN ) )
+            ( linetab_fn_at t - slot 1 LFN_FN ) )
             = slot ( __gt_at fnext - slot 1 )
         }
-        : b has & < l ( vec_len [i] ( linetab_exists t ) ) != 0 ( __gt_at ( linetab_exists t ) l )
-        ( __gt_gutter out has ? has ( __gt_at ( linetab_count t ) l ) 0 l )
+        : b has & < l ( linetab_lines t ) != 0 ( linetab_exists_at t l )
+        ( __gt_gutter out has ? has ( linetab_count_at t l ) 0 l )
         ?? ( vec_get [String] lines - l 1 ) {
             T text → ( string_push_str out ( string_data text ) )
             F _ → {}
@@ -142,14 +142,14 @@ $ `stdlib/core/slice.nu`
         // Branch rows arrive in ascending line order, so one cursor walks
         // them alongside the source.
         = idx 0
-        ~ & < bcur nbr == l ( __gt_at ( linetab_br t ) + * bcur LBR_W LBR_LINE ) {
+        ~ & < bcur nbr == l ( linetab_br_at t bcur LBR_LINE ) {
             ( string_push_str out `branch ` )
             ( __gt_pad_int out idx 2 )
-            ? == 0 ( __gt_at ( linetab_br t ) + * bcur LBR_W LBR_TOTAL ) {
+            ? == 0 ( linetab_br_at t bcur LBR_TOTAL ) {
                 ( string_push_str out ` never executed` )
             } {
                 ( string_push_str out ` taken ` )
-                ( string_push_int out ( __gt_at ( linetab_br t ) + * bcur LBR_W LBR_COUNT ) )
+                ( string_push_int out ( linetab_br_at t bcur LBR_COUNT ) )
             }
             ( string_push_char out 10 )
             = idx + idx 1
@@ -236,7 +236,8 @@ $ `stdlib/core/slice.nu`
     ^ out
 }
 
-unsafe @ __gt_slice s text i from i len → String {
-    : *u at # *u + # i text from
-    ^ ( string_from_bytes at len )
+@ __gt_slice s text i from i len → String {
+    : String out ( string_new )
+    ( string_push_window out ( slice_of_str text ) from len )
+    ^ out
 }

@@ -260,13 +260,11 @@ $ `stdlib/ext/env.nu`
     ^ out
 }
 
-unsafe @ runner_data_path s notes → String {
+@ runner_data_path s notes → String {
     : i n ( nurl_str_len notes )
     : String out ( string_new )
     ? > n 5 {
-        : *u at # *u + # i notes 0
-        : String stem ( string_from_bytes at - n 5 )
-        ( string_push_str out ( string_data stem ) )
+        ( string_push_window out ( slice_of_str notes ) 0 - n 5 )
     } {
         ( string_push_str out notes )
     }

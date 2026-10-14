@@ -1,6 +1,6 @@
 [package]
 name = "nurl-cov"
-version = "0.2.3"
+version = "0.3.0"
 description = "Test-coverage mapper for NURL. Builds a package's test suite with the compiler's GCOV instrumentation, runs it, and reads the resulting .gcno/.gcda coverage graphs in pure NURL — no llvm-cov, no gcov, nothing to install. Reports line and branch coverage per source file and per function, merged across every test binary, as a summary table, gcov-style annotated source, an LCOV tracefile for CI and editors, a standalone HTML report, or JSON. `--fail-under` turns it into a gate."
 # The coverage build passes --no-dce so that a function nothing calls is
 # still in the binary and still counted, as zero. Forwarding that flag

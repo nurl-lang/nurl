@@ -380,6 +380,9 @@ $ `stdlib/core/rcbox.nu`
     // other operation waits on `cv` until it is restored.
     b taken
     Cond cv
+    // Threads asleep in cond_wait on `cv`: a restore with nobody waiting
+    // skips the broadcast (changed only with `mu` held).
+    i waiters
 }
 
 : Locked [T] { ( Shared ( LockedImpl T ) ) ctl }
@@ -387,7 +390,7 @@ $ `stdlib/core/rcbox.nu`
 % Sync Locked {}
 
 @ locked_new [T] sink T x → ( Locked T ) {
-    ^ @ ( Locked T ) { ( shared_new [( LockedImpl T )] @ ( LockedImpl T ) { ( mutex_new ) x F ( cond_new ) } ) }
+    ^ @ ( Locked T ) { ( shared_new [( LockedImpl T )] @ ( LockedImpl T ) { ( mutex_new ) x F ( cond_new ) 0 } ) }
 }
 
 // A Locked over the all-zero value of T. Outside `unsafe` only for a T
@@ -414,7 +417,7 @@ $ `stdlib/core/rcbox.nu`
 @ locked_with [T] ( Locked T ) l ( @ v T ) f → v {
     : *( LockedImpl T ) p ( shared_ptr [( LockedImpl T )] . l ctl )
     ( mutex_lock . p mu )
-    ~ . p taken { ( cond_wait . p cv . p mu ) }
+    ~ . p taken { = . p waiters + . p waiters 1 ( cond_wait . p cv . p mu ) = . p waiters - . p waiters 1 }
     ( f . p val )
     ( mutex_unlock . p mu )
 }
@@ -423,7 +426,7 @@ $ `stdlib/core/rcbox.nu`
 @ locked_get [T] ( Locked T ) l → T {
     : *( LockedImpl T ) p ( shared_ptr [( LockedImpl T )] . l ctl )
     ( mutex_lock . p mu )
-    ~ . p taken { ( cond_wait . p cv . p mu ) }
+    ~ . p taken { = . p waiters + . p waiters 1 ( cond_wait . p cv . p mu ) = . p waiters - . p waiters 1 }
     : T c ( mem_dup . p val )
     ( mutex_unlock . p mu )
     ^ c
@@ -433,7 +436,7 @@ $ `stdlib/core/rcbox.nu`
 @ locked_set [T] ( Locked T ) l sink T x → v {
     : *( LockedImpl T ) p ( shared_ptr [( LockedImpl T )] . l ctl )
     ( mutex_lock . p mu )
-    ~ . p taken { ( cond_wait . p cv . p mu ) }
+    ~ . p taken { = . p waiters + . p waiters 1 ( cond_wait . p cv . p mu ) = . p waiters - . p waiters 1 }
     = . p val x
     ( mutex_unlock . p mu )
 }
@@ -446,7 +449,7 @@ $ `stdlib/core/rcbox.nu`
 @ locked_take [T] ( Locked T ) l → T {
     : *( LockedImpl T ) p ( shared_ptr [( LockedImpl T )] . l ctl )
     ( mutex_lock . p mu )
-    ~ . p taken { ( cond_wait . p cv . p mu ) }
+    ~ . p taken { = . p waiters + . p waiters 1 ( cond_wait . p cv . p mu ) = . p waiters - . p waiters 1 }
     // (Claimed out of its slot, it leaves zero bytes there.)
     : T x . p val
     ( mem_take x )
@@ -461,10 +464,13 @@ $ `stdlib/core/rcbox.nu`
     : *( LockedImpl T ) p ( shared_ptr [( LockedImpl T )] . l ctl )
     ( mutex_lock . p mu )
     ? ! . p taken { ( mutex_unlock . p mu ) ( nurl_panic `locked_restore: the value was not taken` ) } {}
-    // (It replaces the zero bytes locked_take left, which drop as nothing.)
-    = . p val x
+    // It replaces the zero bytes locked_take left: they own nothing, so
+    // they are swapped out and forgotten rather than run through the
+    // value's drop glue (which walks every field of a large record).
+    : T zero ( mem_replace [T] . p val x )
+    ( mem_forget zero )
     = . p taken F
-    ( cond_broadcast . p cv )
+    ? > . p waiters 0 { ( cond_broadcast . p cv ) } {}
     ( mutex_unlock . p mu )
 }
 

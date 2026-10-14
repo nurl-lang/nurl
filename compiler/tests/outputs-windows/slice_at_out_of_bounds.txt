@@ -1,0 +1,9 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+7
+index out of bounds
+index out of bounds
+index out of bounds: the index is -1 but the slice length is 1
+index out of bounds: the index is 1 but the slice length is 1

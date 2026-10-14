@@ -20,9 +20,9 @@
 // value as of sequence S" (take the first match with seq <= S) from the
 // same search.
 //
-//   ( mt_new seed )                       → MemTable   a handle: every copy
-//                                                    is the same table, the
-//                                                    last owner releases it
+//   ( mt_new seed )                       → MemTable   a value: its owner
+//                                                    (the store) changes it
+//                                                    through `inout`
 //   ( mt_put m key val seq kind )         → v      kind: MT_PUT / MT_DEL
 //   ( mt_find m key snap )                → i      node index, 0 = miss
 //   ( mt_seek m key snap )                → i      first node >= key
@@ -30,16 +30,17 @@
 //   ( mt_key m n ) / ( mt_val m n )       → ( Vec u )   owned copies
 //   ( mt_seq m n ) / ( mt_kind m n )      → i
 //   ( mt_count m ) / ( mt_bytes m )       → i
+//   ( mt_key_view m n )                   → ( Slice u )  the key in place
 //   ( mt_free m )                         → v      early release (optional)
 
 $ `stdlib/core/vec.nu`
-$ `stdlib/std/arc.nu`
+$ `stdlib/core/slice.nu`
 
 : i MT_MAXLVL 12
 : i MT_PUT 1
 : i MT_DEL 0
 
-: MemTableImpl {
+: MemTable {
     ( Vec u ) arena
     ( Vec i ) koff
     ( Vec i ) klen
@@ -54,67 +55,33 @@ $ `stdlib/std/arc.nu`
     i rng
 }
 
-// A MemTable is a handle on its state in an Arc (stdlib/std/arc.nu):
-// every copy is the same state, and the last owner releases it.
-: MemTable { ( Arc MemTableImpl ) a }
-
-@ MemTable_share MemTable h → MemTable { ^ @ MemTable { ( arc_clone [MemTableImpl] . h a ) } }
-
-@ MemTable_drop sink MemTable h → v {}
-
-unsafe @ __MemTable_ptr MemTable h → *MemTableImpl { ^ ( arc_ptr [MemTableImpl] . h a ) }
-
-// ── raw byte compare ────────────────────────────────────────────────
+// ── byte order ──────────────────────────────────────────────────────
 //
 // Bytewise, unsigned, shorter-is-smaller — the total order the whole
 // package agrees on: memtable, SSTable, merge, scan.
 
-unsafe @ lsm_bytes_cmp_raw * u ap i aoff i alen * u bp i boff i blen → i {
-    : i lim ? < alen blen alen blen
-    : ~ i k 0
-    ~ < k lim {
-        : i ca # i . ap + aoff k
-        : i cb # i . bp + boff k
-        ? != ca cb { ^ ? < ca cb -1 1 } {}
-        = k + k 1
-    }
-    ? == alen blen { ^ 0 } {}
-    ^ ? < alen blen -1 1
-}
+@ lsm_bytes_cmp_view ( Slice u ) a ( Slice u ) b → i { ^ ( slice_bytes_cmp a b ) }
 
 // Compare two whole byte vectors.
-unsafe @ lsm_bytes_cmp ( Vec u ) a ( Vec u ) b → i {
-    ^ ( lsm_bytes_cmp_raw ( vec_data [u] a ) 0 ( vec_len [u] a )
-    ( vec_data [u] b ) 0 ( vec_len [u] b ) )
+@ lsm_bytes_cmp ( Vec u ) a ( Vec u ) b → i {
+    ^ ( slice_bytes_cmp ( slice_from_vec [u] a ) ( slice_from_vec [u] b ) )
 }
 
 // ── construction ────────────────────────────────────────────────────
 
-unsafe @ mt_new i seed → MemTable {
-    : ( Arc MemTableImpl ) m__box ( arc_zero [MemTableImpl] )
-    : *MemTableImpl m ( arc_ptr [MemTableImpl] m__box )
-    = . m arena ( vec_new [u] )
-    = . m koff ( vec_new [i] )
-    = . m klen ( vec_new [i] )
-    = . m voff ( vec_new [i] )
-    = . m vlen ( vec_new [i] )
-    = . m nseq ( vec_new [i] )
-    = . m nkind ( vec_new [i] )
-    = . m nlvl ( vec_new [i] )
-    = . m links ( vec_new [i] )
-    = . m level 1
-    = . m count 0
-    = . m rng ? == seed 0 88172645463325252 seed
+@ mt_new i seed → MemTable {
+    : ~ MemTable m @ MemTable { ( vec_new [u] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] )
+        ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) 1 0 ? == seed 0 88172645463325252 seed }
     // Node 0 is the head sentinel, so index 0 doubles as "nil" — a link
     // can never legitimately point back at the head.
     : i _head ( __mt_alloc_node m 0 0 0 0 0 MT_PUT MT_MAXLVL )
-    ^ @ MemTable { m__box }
+    ^ m
 }
 
 // Let go of `m` now rather than at the end of its owner's scope.
 @ mt_free sink MemTable m → v {}
 
-unsafe @ __mt_alloc_node * MemTableImpl m i ko i kl i vo i vl i seq i kind i lvl → i {
+@ __mt_alloc_node inout MemTable m i ko i kl i vo i vl i seq i kind i lvl → i {
     : i idx ( vec_len [i] . m koff )
     ( vec_push [i] . m koff ko )
     ( vec_push [i] . m klen kl )
@@ -137,34 +104,24 @@ unsafe @ __mt_alloc_node * MemTableImpl m i ko i kl i vo i vl i seq i kind i lvl
     ^ ?? ( vec_get [i] v idx ) { T x → x F _ → 0 }
 }
 
-unsafe @ __mt_link * MemTableImpl m i node i lvl → i {
+@ __mt_link MemTable m i node i lvl → i {
     ^ ( _mt_iat . m links + * node MT_MAXLVL lvl )
 }
 
-unsafe @ __mt_set_link * MemTableImpl m i node i lvl i to → v {
+@ __mt_set_link inout MemTable m i node i lvl i to → v {
     : b _ok ( vec_set [i] . m links + * node MT_MAXLVL lvl to )
 }
 
-unsafe @ mt_seq MemTable m__h i node → i {
-    : *MemTableImpl m ( __MemTable_ptr m__h )
-    ^ ( _mt_iat . m nseq node )
-}
+@ mt_seq MemTable m i node → i { ^ ( _mt_iat . m nseq node ) }
 
-unsafe @ mt_kind MemTable m__h i node → i {
-    : *MemTableImpl m ( __MemTable_ptr m__h )
-    ^ ( _mt_iat . m nkind node )
-}
+@ mt_kind MemTable m i node → i { ^ ( _mt_iat . m nkind node ) }
 
-unsafe @ mt_count MemTable m__h → i {
-    : *MemTableImpl m ( __MemTable_ptr m__h )
-    ^ . m count
-}
+@ mt_count MemTable m → i { ^ . m count }
 
 // Bytes held: the arena plus the per-node integer rows. The store
 // compares this against its memtable budget, so it has to count the
 // index too — a million tiny keys is mostly index.
-unsafe @ mt_bytes MemTable m__h → i {
-    : *MemTableImpl m ( __MemTable_ptr m__h )
+@ mt_bytes MemTable m → i {
     : i nodes ( vec_len [i] . m koff )
     ^ + ( vec_len [u] . m arena ) * nodes * 8 + 7 MT_MAXLVL
 }
@@ -176,24 +133,26 @@ unsafe @ mt_bytes MemTable m__h → i {
     ^ out
 }
 
-unsafe @ mt_key MemTable m__h i node → ( Vec u ) {
-    : *MemTableImpl m ( __MemTable_ptr m__h )
+@ mt_key MemTable m i node → ( Vec u ) {
     ^ ( _mt_slice . m arena ( _mt_iat . m koff node ) ( _mt_iat . m klen node ) )
 }
 
-unsafe @ mt_val MemTable m__h i node → ( Vec u ) {
-    : *MemTableImpl m ( __MemTable_ptr m__h )
+@ mt_val MemTable m i node → ( Vec u ) {
     ^ ( _mt_slice . m arena ( _mt_iat . m voff node ) ( _mt_iat . m vlen node ) )
+}
+
+// A node's key in place, for merge comparisons that must not allocate:
+// a view of the arena, valid while the memtable is not written to.
+@ mt_key_view MemTable m i node → ( Slice u ) {
+    ^ ( slice_window [u] ( slice_from_vec [u] . m arena ) ( _mt_iat . m koff node ) ( _mt_iat . m klen node ) )
 }
 
 // ── ordering ────────────────────────────────────────────────────────
 
 // Compare node `node` against the probe (key, seq) in memtable order:
 // key ascending, sequence descending. <0 means the node sorts first.
-unsafe @ __mt_cmp_node * MemTableImpl m i node * u pp i poff i plen i pseq → i {
-    : *u ap ( vec_data [u] . m arena )
-    : i c ( lsm_bytes_cmp_raw ap ( _mt_iat . m koff node ) ( _mt_iat . m klen node )
-    pp poff plen )
+@ __mt_cmp_node MemTable m i node ( Slice u ) probe i pseq → i {
+    : i c ( slice_bytes_cmp ( mt_key_view m node ) probe )
     ? != c 0 { ^ c } {}
     : i ns ( _mt_iat . m nseq node )
     ? == ns pseq { ^ 0 } {}
@@ -202,7 +161,7 @@ unsafe @ __mt_cmp_node * MemTableImpl m i node * u pp i poff i plen i pseq → i
 
 // xorshift64 — deterministic level draws, so a given write sequence
 // always builds the same structure and tests can rely on it.
-unsafe @ __mt_rand * MemTableImpl m → i {
+@ __mt_rand inout MemTable m → i {
     : ~ i x . m rng
     = x ^^ x << x 13
     = x ^^ x >> x 7
@@ -211,7 +170,7 @@ unsafe @ __mt_rand * MemTableImpl m → i {
     ^ & x 9223372036854775807
 }
 
-unsafe @ __mt_pick_level * MemTableImpl m → i {
+@ __mt_pick_level inout MemTable m → i {
     : ~ i lvl 1
     : ~ b climb T
     ~ climb {
@@ -222,7 +181,7 @@ unsafe @ __mt_pick_level * MemTableImpl m → i {
 
 // Walk down the levels to the last node that sorts BEFORE the probe,
 // recording the path in `prev` when it is non-empty.
-unsafe @ __mt_descend * MemTableImpl m * u pp i poff i plen i pseq ( Vec i ) prev → i {
+@ __mt_descend MemTable m ( Slice u ) probe i pseq ( Vec i ) prev → i {
     : ~ i x 0
     : ~ i lv - . m level 1
     ~ >= lv 0 {
@@ -230,7 +189,7 @@ unsafe @ __mt_descend * MemTableImpl m * u pp i poff i plen i pseq ( Vec i ) pre
         ~ more {
             : i nx ( __mt_link m x lv )
             ? == nx 0 { = more F } {
-                ? < ( __mt_cmp_node m nx pp poff plen pseq ) 0 { = x nx } { = more F }
+                ? < ( __mt_cmp_node m nx probe pseq ) 0 { = x nx } { = more F }
             }
         }
         ? > ( vec_len [i] prev ) lv { : b _ok ( vec_set [i] prev lv x ) } {}
@@ -243,8 +202,7 @@ unsafe @ __mt_descend * MemTableImpl m * u pp i poff i plen i pseq ( Vec i ) pre
 
 // Append (key, val) as a new version. Both are COPIED into the arena;
 // the caller keeps ownership of the vectors it passed in.
-unsafe @ mt_put MemTable m__h ( Vec u ) key ( Vec u ) val i seq i kind → v {
-    : *MemTableImpl m ( __MemTable_ptr m__h )
+@ mt_put inout MemTable m ( Vec u ) key ( Vec u ) val i seq i kind → v {
     : i kl ( vec_len [u] key )
     : i vl ? == kind MT_PUT ( vec_len [u] val ) 0
     : i ko ( vec_len [u] . m arena )
@@ -256,10 +214,9 @@ unsafe @ mt_put MemTable m__h ( Vec u ) key ( Vec u ) val i seq i kind → v {
     : ~ i l 0
     ~ < l MT_MAXLVL { ( vec_push [i] prev 0 ) = l + l 1 }
 
-    // The probe is the key we just copied in — take the arena pointer
-    // AFTER the extends above, which may have moved the buffer.
-    : *u ap ( vec_data [u] . m arena )
-    : i _x ( __mt_descend m ap ko kl seq prev )
+    // (The probe is the caller's key: equal to the bytes just appended,
+    // and not a view of the arena the descent reads.)
+    : i _x ( __mt_descend m ( slice_from_vec [u] key ) seq prev )
 
     : i lvl ( __mt_pick_level m )
     ? > lvl . m level {
@@ -283,52 +240,21 @@ unsafe @ mt_put MemTable m__h ( Vec u ) key ( Vec u ) val i seq i kind → v {
 
 // First node with (key, seq) >= (probe, snap) — i.e. the newest version
 // of `key` no newer than `snap`, or the next key after it. 0 = end.
-unsafe @ mt_seek MemTable m__h ( Vec u ) key i snap → i {
-    : *MemTableImpl m ( __MemTable_ptr m__h )
-    ^ ( __mt_seek m key snap )
-}
-
-unsafe @ __mt_seek * MemTableImpl m ( Vec u ) key i snap → i {
+@ mt_seek MemTable m ( Vec u ) key i snap → i {
     : ( Vec i ) none ( vec_new [i] )
-    : i x ( __mt_descend m ( vec_data [u] key ) 0 ( vec_len [u] key ) snap none )
+    : i x ( __mt_descend m ( slice_from_vec [u] key ) snap none )
     ^ ( __mt_link m x 0 )
 }
 
 // The node holding `key` as of `snap`, or 0. The caller still has to ask
 // mt_kind: a tombstone is a hit that means "deleted", not "not found".
-unsafe @ mt_find MemTable m__h ( Vec u ) key i snap → i {
-    : *MemTableImpl m ( __MemTable_ptr m__h )
-    : i cand ( __mt_seek m key snap )
+@ mt_find MemTable m ( Vec u ) key i snap → i {
+    : i cand ( mt_seek m key snap )
     ? == cand 0 { ^ 0 } {}
-    : i c ( lsm_bytes_cmp_raw ( vec_data [u] . m arena )
-    ( _mt_iat . m koff cand ) ( _mt_iat . m klen cand )
-    ( vec_data [u] key ) 0 ( vec_len [u] key ) )
+    : i c ( slice_bytes_cmp ( mt_key_view m cand ) ( slice_from_vec [u] key ) )
     ^ ? == c 0 cand 0
 }
 
-unsafe @ mt_first MemTable m__h → i {
-    : *MemTableImpl m ( __MemTable_ptr m__h )
-    ^ ( __mt_link m 0 0 )
-}
+@ mt_first MemTable m → i { ^ ( __mt_link m 0 0 ) }
 
-unsafe @ mt_next MemTable m__h i node → i {
-    : *MemTableImpl m ( __MemTable_ptr m__h )
-    ^ ( __mt_link m node 0 )
-}
-
-// Borrowed view of a node's key, for merge comparisons that must not
-// allocate. Valid until the next mt_put (which may move the arena).
-unsafe @ mt_kptr MemTable m__h → *u {
-    : *MemTableImpl m ( __MemTable_ptr m__h )
-    ^ ( vec_data [u] . m arena )
-}
-
-unsafe @ mt_koff MemTable m__h i node → i {
-    : *MemTableImpl m ( __MemTable_ptr m__h )
-    ^ ( _mt_iat . m koff node )
-}
-
-unsafe @ mt_klen MemTable m__h i node → i {
-    : *MemTableImpl m ( __MemTable_ptr m__h )
-    ^ ( _mt_iat . m klen node )
-}
+@ mt_next MemTable m i node → i { ^ ( __mt_link m node 0 ) }

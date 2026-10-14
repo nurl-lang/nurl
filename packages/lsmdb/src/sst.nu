@@ -52,6 +52,8 @@ $ `stdlib/std/fs.nu`
 $ `stdlib/std/deflate.nu`
 $ `memtable.nu`
 $ `stdlib/std/arc.nu`
+$ `stdlib/std/thread.nu`
+$ `stdlib/std/rc.nu`
 $ `stdlib/core/slice.nu`
 
 : i SST_BLOCK 4096
@@ -69,11 +71,12 @@ $ `stdlib/core/slice.nu`
 // FNV-1a over the key, folded to 64 bits. The filter needs two
 // independent hashes; the second is derived by odd-shifting the first
 // (Kirsch–Mitzenmacher), which is standard and keeps one pass over the key.
-unsafe @ lsm_key_hash * u p i off i len → i {
+@ lsm_key_hash ( Slice u ) p → i {
     : ~ i h 1469598103934665603
     : ~ i k 0
+    : i len ( slice_len [u] p )
     ~ < k len {
-        = h ^^ h # i . p + off k
+        = h ^^ h # i ( slice_at [u] p k )
         = h * h 1099511628211
         = k + k 1
     }
@@ -135,33 +138,19 @@ unsafe @ lsm_key_hash * u p i off i len → i {
 // A writer nobody finished (a failed flush) still closes its file.
 % Drop SstWriterImpl { @ drop SstWriterImpl w → v { ( file_close . w f ) } }
 
-: SstWriter { ( Arc SstWriterImpl ) a }
+: SstWriter { ( Rc SstWriterImpl ) l }
 
-@ SstWriter_share SstWriter h → SstWriter { ^ @ SstWriter { ( arc_clone [SstWriterImpl] . h a ) } }
+@ SstWriter_share SstWriter h → SstWriter { ^ @ SstWriter { ( rc_clone [SstWriterImpl] . h l ) } }
 
 @ SstWriter_drop sink SstWriter h → v {}
 
-unsafe @ __SstWriter_ptr SstWriter h → *SstWriterImpl { ^ ( arc_ptr [SstWriterImpl] . h a ) }
-
-unsafe @ sst_create s path → !SstWriter String {
+@ sst_create s path → !SstWriter String {
     : !File IoErr fr ( file_create path )
     ?? fr {
         T f → {
-            : ~ SstWriterImpl w @ SstWriterImpl {}
-            = . w f f
-            = . w buf ( vec_with_cap [u] + SST_BLOCK 1024 )
-            = . w index ( vec_new [u] )
-            = . w hashes ( vec_new [i] )
-            = . w off 0
-            = . w blkoff 0
-            = . w count 0
-            = . w maxseq 0
-            = . w nblocks 0
-            = . w lastkoff 0
-            = . w lastklen 0
-            = . w failed 0
-            = . w crc ( crc32_ctx )
-            ^ @ !SstWriter String { T @ SstWriter { ( arc_new [SstWriterImpl] w ) } }
+            : SstWriterImpl w @ SstWriterImpl { f ( vec_with_cap [u] + SST_BLOCK 1024 ) ( vec_new [u] ) ( vec_new [i] )
+                0 0 0 0 0 0 0 0 ( crc32_ctx ) }
+            ^ @ !SstWriter String { T @ SstWriter { ( rc_new [SstWriterImpl] w ) } }
         }
         F _ → {
             : String msg ( string_from `lsmdb: cannot create table ` )
@@ -173,15 +162,15 @@ unsafe @ sst_create s path → !SstWriter String {
 
 // The table file is finished with (written out, or given up on): close
 // it now, so the reader that opens it next sees every byte.
-unsafe @ __sstw_close * SstWriterImpl w → v {
+@ __sstw_close inout SstWriterImpl w → v {
     ( file_close . w f )
     // The closed file's handle leaves the writer (dropped here).
-    = . w f # File # s 0
+    = . w f ( file_none )
 }
 
 // Close the current block: append its CRC trailer, write it, and record
 // (last key, offset, payload length) in the index.
-unsafe @ __sst_flush_block * SstWriterImpl w → !v String {
+@ __sst_flush_block inout SstWriterImpl w → !v String {
     : i plen ( vec_len [u] . w buf )
     ? == plen 0 { ^ @ !v String { T 0 } } {}
     : i crc ( crc32_ctx_hash . w crc . w buf )
@@ -211,8 +200,14 @@ unsafe @ __sst_flush_block * SstWriterImpl w → !v String {
 
 // Append one entry. Keys must arrive in the package's total order —
 // the memtable walk and the compaction merge both produce exactly that.
-unsafe @ sst_add SstWriter w__h ( Vec u ) key ( Vec u ) val i seq i kind → !v String {
-    : *SstWriterImpl w ( __SstWriter_ptr w__h )
+@ sst_add SstWriter w__h ( Vec u ) key ( Vec u ) val i seq i kind → !v String {
+    : ~ SstWriterImpl w ( rc_take [SstWriterImpl] . w__h l )
+    : !v String __res ( __sst_add_in w key val seq kind )
+    ( rc_restore [SstWriterImpl] . w__h l w )
+    ^ __res
+}
+
+@ __sst_add_in inout SstWriterImpl w ( Vec u ) key ( Vec u ) val i seq i kind → !v String {
     : i kl ( vec_len [u] key )
     : i vl ? == kind MT_PUT ( vec_len [u] val ) 0
     ( bytes_push_u32_le . w buf # u32 kl )
@@ -224,7 +219,7 @@ unsafe @ sst_add SstWriter w__h ( Vec u ) key ( Vec u ) val i seq i kind → !v 
     ( vec_extend [u] . w buf key )
     ? > vl 0 { ( vec_extend [u] . w buf val ) } {}
 
-    ( vec_push [i] . w hashes ( lsm_key_hash ( vec_data [u] key ) 0 kl ) )
+    ( vec_push [i] . w hashes ( lsm_key_hash ( slice_from_vec [u] key ) ) )
     = . w count + . w count 1
     ? > seq . w maxseq { = . w maxseq seq } {}
 
@@ -232,7 +227,7 @@ unsafe @ sst_add SstWriter w__h ( Vec u ) key ( Vec u ) val i seq i kind → !v 
     ^ @ !v String { T 0 }
 }
 
-unsafe @ __sst_write_tail * SstWriterImpl w ( Vec u ) payload → !i String {
+@ __sst_write_tail inout SstWriterImpl w ( Vec u ) payload → !i String {
     : i at . w off
     : i crc ( crc32_ctx_hash . w crc payload )
     ( bytes_push_u32_le payload # u32 crc )
@@ -246,8 +241,14 @@ unsafe @ __sst_write_tail * SstWriterImpl w ( Vec u ) payload → !i String {
 // Flush the tail block, emit the filter, the index and the footer, then
 // fsync. When this returns the table is durable and self-describing;
 // only after that may a manifest name it.
-unsafe @ sst_finish SstWriter w__h → !i String {
-    : *SstWriterImpl w ( __SstWriter_ptr w__h )
+@ sst_finish SstWriter w__h → !i String {
+    : ~ SstWriterImpl w ( rc_take [SstWriterImpl] . w__h l )
+    : !i String __res ( __sst_finish_in w )
+    ( rc_restore [SstWriterImpl] . w__h l w )
+    ^ __res
+}
+
+@ __sst_finish_in inout SstWriterImpl w → !i String {
     : !v String fb ( __sst_flush_block w )
     ?? fb { T _ → {} F e → { ( __sstw_close w ) ^ @ !i String { F e } } }
 
@@ -320,7 +321,6 @@ unsafe @ sst_finish SstWriter w__h → !i String {
     i maxseq
     i filesize
     i reads  // blocks actually pulled off disk
-    i filtered  // gets the filter answered without a read
     i hits  // blocks served from the cache
     Crc32 crc  // one CRC table for the life of the reader
     ( Vec ( Vec u ) ) cache  // SST_CACHE slots, direct-mapped by block index
@@ -332,13 +332,21 @@ unsafe @ sst_finish SstWriter w__h → !i String {
 // glue).
 % Drop SstReaderImpl { @ drop SstReaderImpl r → v { ( file_close . r f ) } }
 
-: SstReader { ( Arc SstReaderImpl ) a }
+: SstReader {
+    ( Locked SstReaderImpl ) l
+    ( Arc SstFilter ) flt
+}
 
-@ SstReader_share SstReader h → SstReader { ^ @ SstReader { ( arc_clone [SstReaderImpl] . h a ) } }
+// A table's Bloom filter, fixed once the table is open: a get that the
+// filter rules out is answered without taking the reader's lock.
+: SstFilter {
+    ( Vec u ) bloom  // bit bytes only
+    i nbits
+}
+
+@ SstReader_share SstReader h → SstReader { ^ @ SstReader { ( Locked_share [SstReaderImpl] . h l ) ( arc_clone [SstFilter] . h flt ) } }
 
 @ SstReader_drop sink SstReader h → v {}
-
-unsafe @ __SstReader_ptr SstReader h → *SstReaderImpl { ^ ( arc_ptr [SstReaderImpl] . h a ) }
 
 : SstHit {
     i found
@@ -361,7 +369,7 @@ unsafe @ __SstReader_ptr SstReader h → *SstReaderImpl { ^ ( arc_ptr [SstReader
 // Read `n` bytes at `off` and prove them against their CRC trailer.
 // Returns the payload only. A checksum mismatch is an error — never
 // data: a torn or rotted block must not surface as a value.
-unsafe @ __sst_read_verified * SstReaderImpl r i off i plen → !( Vec u ) String {
+@ __sst_read_verified inout SstReaderImpl r i off i plen → !( Vec u ) String {
     : !( Vec u ) IoErr rr ( file_read_at . r f off + plen 4 )
     ?? rr {
         T raw → {
@@ -380,35 +388,17 @@ unsafe @ __sst_read_verified * SstReaderImpl r i off i plen → !( Vec u ) Strin
     }
 }
 
-unsafe @ sst_open s path → !SstReader String {
+@ sst_open s path → !SstReader String {
     : !File IoErr fr ( file_open path )
-    : ~ File f # File # s 0
+    : ~ File f ( file_none )
     ?? fr { T h → { = f h } F _ → {
             ^ @ !SstReader String { F ( __sst_err path `cannot open table` ) } } }
 
-    // The handle first: every early return below lets go of it, and its
+    // The state first: every early return below lets go of it, and its
     // drop closes the file.
-    : SstReader rh @ SstReader { ( arc_zero [SstReaderImpl] ) }
-    : *SstReaderImpl r ( arc_ptr [SstReaderImpl] . rh a )
-    = . r f f
-    = . r path ( string_from path )
-    = . r ikeys ( vec_new [u] )
-    = . r ikoff ( vec_new [i] )
-    = . r iklen ( vec_new [i] )
-    = . r iboff ( vec_new [i] )
-    = . r iblen ( vec_new [i] )
-    = . r bloom ( vec_new [u] )
-    = . r nbits 0
-    = . r nblocks 0
-    = . r nentries 0
-    = . r maxseq 0
-    = . r filesize 0
-    = . r reads 0
-    = . r filtered 0
-    = . r hits 0
-    = . r crc ( crc32_ctx )
-    = . r cache ( vec_with_cap [( Vec u )] SST_CACHE )
-    = . r cache_bi ( vec_with_cap [i] SST_CACHE )
+    : ~ SstReaderImpl r @ SstReaderImpl { ( File_share f ) ( string_from path ) ( vec_new [u] ) ( vec_new [i] )
+        ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [u] ) 0 0 0 0 0 0 0 ( crc32_ctx )
+        ( vec_with_cap [( Vec u )] SST_CACHE ) ( vec_with_cap [i] SST_CACHE ) }
     : ~ i cs 0
     ~ < cs SST_CACHE {
         ( vec_push [( Vec u )] . r cache ( vec_new [u] ) )
@@ -463,10 +453,11 @@ unsafe @ sst_open s path → !SstReader String {
         }
         F e → { ^ @ !SstReader String { F e } }
     }
-    ^ @ !SstReader String { T rh }
+    : SstFilter flt @ SstFilter { ( vec_clone [u] . r bloom ) . r nbits }
+    ^ @ !SstReader String { T @ SstReader { ( locked_new [SstReaderImpl] r ) ( arc_new [SstFilter] flt ) } }
 }
 
-unsafe @ __sst_parse_index * SstReaderImpl r ( Vec u ) idx → !v String {
+@ __sst_parse_index inout SstReaderImpl r ( Vec u ) idx → !v String {
     : i n ( vec_len [u] idx )
     ? < n 4 { ^ @ !v String { F ( __sst_err ( string_data . r path ) `malformed index` ) } } {}
     : i nb ?? ( bytes_read_u32_le idx 0 ) { T x → # i x F _ → 0 }
@@ -494,50 +485,81 @@ unsafe @ __sst_parse_index * SstReaderImpl r ( Vec u ) idx → !v String {
 // Let go of `r` now rather than at the end of its owner's scope.
 @ sst_close sink SstReader r → v {}
 
-unsafe @ sst_entries SstReader r__h → i {
-    : *SstReaderImpl r ( __SstReader_ptr r__h )
+@ sst_entries SstReader r__h → i {
+    : ~ SstReaderImpl r ( locked_take [SstReaderImpl] . r__h l )
+    : i __res ( __sst_entries_in r )
+    ( locked_restore [SstReaderImpl] . r__h l r )
+    ^ __res
+}
+
+@ __sst_entries_in inout SstReaderImpl r → i {
     ^ . r nentries
 }
 
-unsafe @ sst_maxseq SstReader r__h → i {
-    : *SstReaderImpl r ( __SstReader_ptr r__h )
+@ sst_maxseq SstReader r__h → i {
+    : ~ SstReaderImpl r ( locked_take [SstReaderImpl] . r__h l )
+    : i __res ( __sst_maxseq_in r )
+    ( locked_restore [SstReaderImpl] . r__h l r )
+    ^ __res
+}
+
+@ __sst_maxseq_in inout SstReaderImpl r → i {
     ^ . r maxseq
 }
 
-unsafe @ sst_blocks SstReader r__h → i {
-    : *SstReaderImpl r ( __SstReader_ptr r__h )
+@ sst_blocks SstReader r__h → i {
+    : ~ SstReaderImpl r ( locked_take [SstReaderImpl] . r__h l )
+    : i __res ( __sst_blocks_in r )
+    ( locked_restore [SstReaderImpl] . r__h l r )
+    ^ __res
+}
+
+@ __sst_blocks_in inout SstReaderImpl r → i {
     ^ . r nblocks
 }
 
-unsafe @ sst_filesize SstReader r__h → i {
-    : *SstReaderImpl r ( __SstReader_ptr r__h )
+@ sst_filesize SstReader r__h → i {
+    : ~ SstReaderImpl r ( locked_take [SstReaderImpl] . r__h l )
+    : i __res ( __sst_filesize_in r )
+    ( locked_restore [SstReaderImpl] . r__h l r )
+    ^ __res
+}
+
+@ __sst_filesize_in inout SstReaderImpl r → i {
     ^ . r filesize
 }
 
-unsafe @ sst_reads SstReader r__h → i {
-    : *SstReaderImpl r ( __SstReader_ptr r__h )
+@ sst_reads SstReader r__h → i {
+    : ~ SstReaderImpl r ( locked_take [SstReaderImpl] . r__h l )
+    : i __res ( __sst_reads_in r )
+    ( locked_restore [SstReaderImpl] . r__h l r )
+    ^ __res
+}
+
+@ __sst_reads_in inout SstReaderImpl r → i {
     ^ . r reads
 }
 
-unsafe @ sst_filtered SstReader r__h → i {
-    : *SstReaderImpl r ( __SstReader_ptr r__h )
-    ^ . r filtered
+@ sst_hits SstReader r__h → i {
+    : ~ SstReaderImpl r ( locked_take [SstReaderImpl] . r__h l )
+    : i __res ( __sst_hits_in r )
+    ( locked_restore [SstReaderImpl] . r__h l r )
+    ^ __res
 }
 
-unsafe @ sst_hits SstReader r__h → i {
-    : *SstReaderImpl r ( __SstReader_ptr r__h )
+@ __sst_hits_in inout SstReaderImpl r → i {
     ^ . r hits
 }
 
 // First block whose LAST key >= probe, or nblocks if the probe is past
 // the end of the table. Binary search over the index.
-unsafe @ __sst_find_block * SstReaderImpl r * u kp i klen → i {
-    : *u ip ( vec_data [u] . r ikeys )
+@ __sst_find_block SstReaderImpl r ( Slice u ) probe → i {
+    : ( Slice u ) ip ( slice_from_vec [u] . r ikeys )
     : ~ i lo 0
     : ~ i hi . r nblocks
     ~ < lo hi {
         : i mid / + lo hi 2
-        : i c ( lsm_bytes_cmp_raw ip ( _mt_iat . r ikoff mid ) ( _mt_iat . r iklen mid ) kp 0 klen )
+        : i c ( slice_bytes_cmp ( slice_window [u] ip ( _mt_iat . r ikoff mid ) ( _mt_iat . r iklen mid ) ) probe )
         ? < c 0 { = lo + mid 1 } { = hi mid }
     }
     ^ lo
@@ -552,7 +574,7 @@ unsafe @ __sst_find_block * SstReaderImpl r * u kp i klen → i {
 // workload with locality) costs one verification per block rather than
 // one per key: at ~100 entries to a 4 KiB block, that is the difference
 // between checksumming 4 KiB per read and 40 bytes.
-unsafe @ __sst_load_block * SstReaderImpl r i bi → !( Vec u ) String {
+@ __sst_load_block inout SstReaderImpl r i bi → !( Vec u ) String {
     : i slot % bi SST_CACHE
     ? == ( _mt_iat . r cache_bi slot ) bi {
         ?? ( vec_get [( Vec u )] . r cache slot ) {
@@ -591,17 +613,30 @@ unsafe @ __sst_load_block * SstReaderImpl r i bi → !( Vec u ) String {
 // ── point lookup ────────────────────────────────────────────────────
 
 // The newest version of `key` with seq <= snap. `found` is 0 when the
-// table has nothing for the key; a tombstone comes back as found=1 with
+// table has nothing for the key, -1 when its filter said so without a
+// read (the store counts those); a tombstone comes back as found=1 with
 // kind=MT_DEL, which the store must honour as "deleted here, stop".
-unsafe @ sst_get SstReader r__h ( Vec u ) key i snap → !SstHit String {
-    : *SstReaderImpl r ( __SstReader_ptr r__h )
-    : i klen ( vec_len [u] key )
-    : *u kp ( vec_data [u] key )
-    ? ( __bloom_test . r bloom . r nbits ( lsm_key_hash kp 0 klen ) ) {} {
-        = . r filtered + . r filtered 1
-        ^ @ !SstHit String { T @ SstHit { 0 MT_PUT 0 ( vec_new [u] ) } }
+@ sst_get SstReader r__h ( Vec u ) key i snap → !SstHit String {
+    ^ ( sst_get_hashed r__h key ( lsm_key_hash ( slice_from_vec [u] key ) ) snap )
+}
+
+// The same with the key's lsm_key_hash already computed — a store asking
+// every table for one key hashes it once.
+@ sst_get_hashed SstReader r__h ( Vec u ) key i kh i snap → !SstHit String {
+    : SstFilter flt ( arc_get [SstFilter] . r__h flt )
+    ? ( __bloom_test . flt bloom . flt nbits kh ) {} {
+        ^ @ !SstHit String { T @ SstHit { -1 MT_PUT 0 ( vec_new [u] ) } }
     }
-    : ~ i bi ( __sst_find_block r kp klen )
+    : ~ SstReaderImpl r ( locked_take [SstReaderImpl] . r__h l )
+    : !SstHit String __res ( __sst_get_in r key snap )
+    ( locked_restore [SstReaderImpl] . r__h l r )
+    ^ __res
+}
+
+@ __sst_get_in inout SstReaderImpl r ( Vec u ) key i snap → !SstHit String {
+    : i klen ( vec_len [u] key )
+    : ( Slice u ) kv ( slice_from_vec [u] key )
+    : ~ i bi ( __sst_find_block r kv )
     : ~ b scanning T
     ~ & scanning < bi . r nblocks {
         : !( Vec u ) String br ( __sst_load_block r bi )
@@ -618,7 +653,7 @@ unsafe @ sst_get SstReader r__h ( Vec u ) key i snap → !SstHit String {
                         : i seq ?? ( bytes_read_u64_le blk + pos 8 ) { T x → # i x F _ → 0 }
                         : i kind ?? ( vec_get [u] blk + pos 16 ) { T x → # i x F _ → 0 }
                         : i koff + pos SST_HDR
-                        : i c ( lsm_bytes_cmp_raw ( vec_data [u] blk ) koff kl kp 0 klen )
+                        : i c ( slice_bytes_cmp ( slice_window [u] ( slice_from_vec [u] blk ) koff kl ) kv )
                         ? > c 0 {
                             // past the key entirely — no older versions anywhere
                             = past T = scanning F
@@ -660,85 +695,170 @@ unsafe @ sst_get SstReader r__h ( Vec u ) key i snap → !SstHit String {
     String err
 }
 
-: SstCursor { ( Arc SstCursorImpl ) a }
+: SstCursor { ( Rc SstCursorImpl ) l }
 
-@ SstCursor_share SstCursor h → SstCursor { ^ @ SstCursor { ( arc_clone [SstCursorImpl] . h a ) } }
+@ SstCursor_share SstCursor h → SstCursor { ^ @ SstCursor { ( rc_clone [SstCursorImpl] . h l ) } }
 
 @ SstCursor_drop sink SstCursor h → v {}
 
 // Package-shared (one underscore): the merge in lsmdb.nu opens each
 // cursor once per step and reads its head in place.
-unsafe @ _SstCursor_ptr SstCursor h → *SstCursorImpl { ^ ( arc_ptr [SstCursorImpl] . h a ) }
 
-unsafe @ sst_cursor SstReader r → SstCursor {
-    : ~ SstCursorImpl c @ SstCursorImpl {}
-    = . c r ( SstReader_share r )
-    = . c blk ( vec_new [u] )
-    = . c bi 0
-    = . c pos 0
-    = . c valid 0
-    = . c kl 0
-    = . c vl 0
-    = . c seq 0
-    = . c kind MT_PUT
-    = . c koff 0
-    = . c failed 0
-    = . c err ( string_new )
-    ^ @ SstCursor { ( arc_new [SstCursorImpl] c ) }
+@ sst_cursor SstReader r → SstCursor {
+    ^ @ SstCursor { ( rc_new [SstCursorImpl] @ SstCursorImpl { ( SstReader_share r ) ( vec_new [u] ) 0 0 0 0 0 0 MT_PUT 0 0 ( string_new ) } ) }
 }
 
 // Let go of `c` now rather than at the end of its owner's scope.
 @ sc_free sink SstCursor c → v {}
 
-unsafe @ sc_valid SstCursor c__h → b {
-    : *SstCursorImpl c ( _SstCursor_ptr c__h )
+// Everything a merge needs from a cursor's head, read in one go: whether
+// it is on an entry (and whether it failed), the key (an owned copy), the
+// sequence and the kind.
+: ScHead {
+    b valid
+    b failed
+    ( Vec u ) key
+    i seq
+    i kind
+}
+
+@ __sc_head SstCursorImpl c → ScHead {
+    : b valid == . c valid 1
+    ^ @ ScHead { valid == . c failed 1 ? valid ( _sc_key c ) ( vec_new [u] ) . c seq . c kind }
+}
+
+@ sc_head SstCursor h → ScHead {
+    : SstCursorImpl c ( rc_take [SstCursorImpl] . h l )
+    : ScHead r ( __sc_head c )
+    ( rc_restore [SstCursorImpl] . h l c )
+    ^ r
+}
+
+// Step to the next entry and read its head (sc_next, then sc_head).
+@ sc_next_head SstCursor h → ScHead {
+    : ~ SstCursorImpl c ( rc_take [SstCursorImpl] . h l )
+    ( _sc_next c )
+    : ScHead r ( __sc_head c )
+    ( rc_restore [SstCursorImpl] . h l c )
+    ^ r
+}
+
+@ sc_valid SstCursor c__h → b {
+    : ~ SstCursorImpl c ( rc_take [SstCursorImpl] . c__h l )
+    : b __res ( __sc_valid_in c )
+    ( rc_restore [SstCursorImpl] . c__h l c )
+    ^ __res
+}
+
+@ __sc_valid_in inout SstCursorImpl c → b {
     ^ == . c valid 1
 }
 
-unsafe @ sc_failed SstCursor c__h → b {
-    : *SstCursorImpl c ( _SstCursor_ptr c__h )
+@ sc_failed SstCursor c__h → b {
+    : ~ SstCursorImpl c ( rc_take [SstCursorImpl] . c__h l )
+    : b __res ( __sc_failed_in c )
+    ( rc_restore [SstCursorImpl] . c__h l c )
+    ^ __res
+}
+
+@ __sc_failed_in inout SstCursorImpl c → b {
     ^ == . c failed 1
 }
 
-unsafe @ sc_err SstCursor c__h → s {
-    : *SstCursorImpl c ( _SstCursor_ptr c__h )
-    ^ ( string_data . c err )
+@ sc_err SstCursor c__h → String {
+    : SstCursorImpl c ( rc_take [SstCursorImpl] . c__h l )
+    : String r ( string_from ( string_data . c err ) )
+    ( rc_restore [SstCursorImpl] . c__h l c )
+    ^ r
 }
 
-unsafe @ sc_seq SstCursor c__h → i {
-    : *SstCursorImpl c ( _SstCursor_ptr c__h )
+@ sc_seq SstCursor c__h → i {
+    : ~ SstCursorImpl c ( rc_take [SstCursorImpl] . c__h l )
+    : i __res ( __sc_seq_in c )
+    ( rc_restore [SstCursorImpl] . c__h l c )
+    ^ __res
+}
+
+@ __sc_seq_in inout SstCursorImpl c → i {
     ^ . c seq
 }
 
-unsafe @ sc_kind SstCursor c__h → i {
-    : *SstCursorImpl c ( _SstCursor_ptr c__h )
+@ sc_kind SstCursor c__h → i {
+    : ~ SstCursorImpl c ( rc_take [SstCursorImpl] . c__h l )
+    : i __res ( __sc_kind_in c )
+    ( rc_restore [SstCursorImpl] . c__h l c )
+    ^ __res
+}
+
+@ __sc_kind_in inout SstCursorImpl c → i {
     ^ . c kind
 }
 
-unsafe @ sc_klen SstCursor c__h → i {
-    : *SstCursorImpl c ( _SstCursor_ptr c__h )
+@ sc_klen SstCursor c__h → i {
+    : ~ SstCursorImpl c ( rc_take [SstCursorImpl] . c__h l )
+    : i __res ( __sc_klen_in c )
+    ( rc_restore [SstCursorImpl] . c__h l c )
+    ^ __res
+}
+
+@ __sc_klen_in inout SstCursorImpl c → i {
     ^ . c kl
 }
 
-unsafe @ sc_kptr SstCursor c__h → *u {
-    : *SstCursorImpl c ( _SstCursor_ptr c__h )
-    ^ ( vec_data [u] . c blk )
+@ sc_koff SstCursor c__h → i {
+    : ~ SstCursorImpl c ( rc_take [SstCursorImpl] . c__h l )
+    : i __res ( __sc_koff_in c )
+    ( rc_restore [SstCursorImpl] . c__h l c )
+    ^ __res
 }
 
-unsafe @ sc_koff SstCursor c__h → i {
-    : *SstCursorImpl c ( _SstCursor_ptr c__h )
+@ __sc_koff_in inout SstCursorImpl c → i {
     ^ . c koff
 }
 
-unsafe @ sc_key SstCursor c__h → ( Vec u ) { ^ ( _sc_key ( _SstCursor_ptr c__h ) ) }
+@ sc_key SstCursor h → ( Vec u ) {
+    : SstCursorImpl c ( rc_take [SstCursorImpl] . h l )
+    : ( Vec u ) r ( _sc_key c )
+    ( rc_restore [SstCursorImpl] . h l c )
+    ^ r
+}
 
-unsafe @ sc_val SstCursor c__h → ( Vec u ) { ^ ( _sc_val ( _SstCursor_ptr c__h ) ) }
+@ sc_val SstCursor h → ( Vec u ) {
+    : SstCursorImpl c ( rc_take [SstCursorImpl] . h l )
+    : ( Vec u ) r ( _sc_val c )
+    ( rc_restore [SstCursorImpl] . h l c )
+    ^ r
+}
 
-unsafe @ _sc_key * SstCursorImpl c → ( Vec u ) { ^ ( _mt_slice . c blk . c koff . c kl ) }
+@ _sc_key SstCursorImpl c → ( Vec u ) { ^ ( _mt_slice . c blk . c koff . c kl ) }
 
-unsafe @ _sc_val * SstCursorImpl c → ( Vec u ) { ^ ( _mt_slice . c blk + . c koff . c kl . c vl ) }
+@ _sc_val SstCursorImpl c → ( Vec u ) { ^ ( _mt_slice . c blk + . c koff . c kl . c vl ) }
 
-unsafe @ __sc_fail * SstCursorImpl c sink String e → v {
+// The cursor's head against (key, seq) in merge order — key ascending,
+// the newer version first: <0 when the head sorts first.
+@ __sc_head_cmp_view SstCursorImpl c ( Slice u ) key i seq → i {
+    : i cmp ( slice_bytes_cmp ( slice_window [u] ( slice_from_vec [u] . c blk ) . c koff . c kl ) key )
+    ? != cmp 0 { ^ cmp } {}
+    ? == . c seq seq { ^ 0 } {}
+    ^ ? > . c seq seq -1 1
+}
+
+@ sc_head_cmp SstCursor h ( Slice u ) key i seq → i {
+    : SstCursorImpl c ( rc_take [SstCursorImpl] . h l )
+    : i r ( __sc_head_cmp_view c key seq )
+    ( rc_restore [SstCursorImpl] . h l c )
+    ^ r
+}
+
+// `a`'s head against `b`'s (two different cursors).
+@ sc_head_cmp_cursor SstCursor a SstCursor b → i {
+    : SstCursorImpl cb ( rc_take [SstCursorImpl] . b l )
+    : i r ( sc_head_cmp a ( slice_window [u] ( slice_from_vec [u] . cb blk ) . cb koff . cb kl ) . cb seq )
+    ( rc_restore [SstCursorImpl] . b l cb )
+    ^ r
+}
+
+@ __sc_fail inout SstCursorImpl c sink String e → v {
     = . c failed 1
     = . c valid 0
     ( string_free . c err )
@@ -746,7 +866,7 @@ unsafe @ __sc_fail * SstCursorImpl c sink String e → v {
 }
 
 // Decode the entry the cursor's `pos` points at.
-unsafe @ __sc_decode * SstCursorImpl c → b {
+@ __sc_decode inout SstCursorImpl c → b {
     : i total ( __sst_entry_len . c blk . c pos )
     ? == total 0 { ^ F } {}
     = . c kl ?? ( bytes_read_u32_le . c blk . c pos ) { T x → # i x F _ → 0 }
@@ -758,10 +878,12 @@ unsafe @ __sc_decode * SstCursorImpl c → b {
     ^ T
 }
 
-unsafe @ __sc_load * SstCursorImpl c i bi → b {
-    : *SstReaderImpl rr ( __SstReader_ptr . c r )
-    ? >= bi . rr nblocks { = . c valid 0 ^ F } {}
-    : !( Vec u ) String br ( __sst_load_block rr bi )
+@ __sc_load inout SstCursorImpl c i bi → b {
+    : ~ SstReaderImpl rr ( locked_take [SstReaderImpl] . . c r l )
+    : b inside < bi . rr nblocks
+    : !( Vec u ) String br ? inside ( __sst_load_block rr bi ) @ !( Vec u ) String { F ( string_new ) }
+    ( locked_restore [SstReaderImpl] . . c r l rr )
+    ? inside {} { = . c valid 0 ^ F }
     ?? br {
         T blk → {
             ( vec_free [u] . c blk )
@@ -774,18 +896,28 @@ unsafe @ __sc_load * SstCursorImpl c i bi → b {
     }
 }
 
-unsafe @ sc_first SstCursor c__h → v {
-    : *SstCursorImpl c ( _SstCursor_ptr c__h )
+@ sc_first SstCursor c__h → v {
+    : ~ SstCursorImpl c ( rc_take [SstCursorImpl] . c__h l )
+    ( __sc_first_in c )
+    ( rc_restore [SstCursorImpl] . c__h l c )
+}
+
+@ __sc_first_in inout SstCursorImpl c → v {
     = . c valid 0
     : b _ok ( __sc_load c 0 )
 }
 
-unsafe @ sc_next SstCursor c__h → v {
-    : *SstCursorImpl c ( _SstCursor_ptr c__h )
+@ sc_next SstCursor c__h → v {
+    : ~ SstCursorImpl c ( rc_take [SstCursorImpl] . c__h l )
+    ( __sc_next_in c )
+    ( rc_restore [SstCursorImpl] . c__h l c )
+}
+
+@ __sc_next_in inout SstCursorImpl c → v {
     ( _sc_next c )
 }
 
-unsafe @ _sc_next * SstCursorImpl c → v {
+@ _sc_next inout SstCursorImpl c → v {
     ? == . c valid 1 {} { ^ }
     = . c pos + . c pos + SST_HDR + . c kl . c vl
     ? ( __sc_decode c ) {} {
@@ -794,18 +926,25 @@ unsafe @ _sc_next * SstCursorImpl c → v {
 }
 
 // Position at the first entry >= (key, snap).
-unsafe @ sc_seek SstCursor c__h ( Vec u ) key i snap → v {
-    : *SstCursorImpl c ( _SstCursor_ptr c__h )
+@ sc_seek SstCursor c__h ( Vec u ) key i snap → v {
+    : ~ SstCursorImpl c ( rc_take [SstCursorImpl] . c__h l )
+    ( __sc_seek_in c key snap )
+    ( rc_restore [SstCursorImpl] . c__h l c )
+}
+
+@ __sc_seek_in inout SstCursorImpl c ( Vec u ) key i snap → v {
     = . c valid 0
     : i klen ( vec_len [u] key )
-    : *u kp ( vec_data [u] key )
-    : i bi ( __sst_find_block ( __SstReader_ptr . c r ) kp klen )
+    : ( Slice u ) kv ( slice_from_vec [u] key )
+    : SstReaderImpl rr ( locked_take [SstReaderImpl] . . c r l )
+    : i bi ( __sst_find_block rr kv )
+    ( locked_restore [SstReaderImpl] . . c r l rr )
     ? ( __sc_load c bi ) {} { ^ }
     : ~ b searching T
     ~ searching {
         ? == . c valid 1 {} { = searching F }
         ? searching {
-            : i cc ( lsm_bytes_cmp_raw ( vec_data [u] . c blk ) . c koff . c kl kp 0 klen )
+            : i cc ( slice_bytes_cmp ( slice_window [u] ( slice_from_vec [u] . c blk ) . c koff . c kl ) kv )
             ? | > cc 0 & == cc 0 <= . c seq snap { = searching F } { ( _sc_next c ) }
         } {}
     }

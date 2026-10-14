@@ -215,6 +215,20 @@ two threads using one kit raced on the cache and the pool through
 `arc_ptr`. `lingbot-map` (66 → 2, its RoPE launches) runs its host
 reference code over slices and its checkpoint through a checked byte
 view; its parsed options held views of strings the parser had freed.
+`lsmdb` (104 → 0) is a `Locked` store over values it owns (memtable,
+log) and table readers whose Bloom filters answer without a lock; it
+matches the previous release's speed. `locked_restore` and `rc_restore`
+no longer run the zero bytes `*_take` left through the value's drop glue
+(200 instructions a call on lsmdb's store), and `locked_restore` wakes
+nobody when nobody waits.
+`nurl-cov` (103 → 0) reads its coverage graphs through checked byte
+views into a plain value and freezes it in an `Arc` once solved; its
+per-line table is read in place, where the old accessors handed out a copy
+of a whole column per call. Output is byte-identical, llvm-cov differential
+and 201 corrupted graphs included. A call to an undefined generic inside
+another generic's body is now reported as such, at the call: it was typed
+`i64` and reported as a type mismatch against what it initialised
+(`rc.nu` called `mem_replace` without importing `stdlib/core/mem.nu`).
 `nurllama` (68 → 8) keeps its engine and its finetune state in `Locked`s
 — two requests evaluating one model raced on its KV cache — and samples
 from a row of logits read in one take.

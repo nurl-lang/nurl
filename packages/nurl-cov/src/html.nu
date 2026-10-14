@@ -72,7 +72,7 @@ $ `stdlib/core/slice.nu`
         ( string_push_str out `<tr><td><a href="#f` )
         ( string_push_int out i )
         ( string_push_str out `">` )
-        ( __ht_esc out ( report_display ( cov_file_path c i ) root ) )
+        ( __ht_esc out ( string_data ( report_display ( cov_file_path c i ) root ) ) )
         ( string_push_str out `</a></td><td>` )
         ( __ht_ratio out . s lines_hit . s lines_found )
         ( string_push_str out `</td><td class="` )
@@ -127,7 +127,7 @@ $ `stdlib/core/slice.nu`
     // reading. The ones with gaps are the ones worth landing on.
     ? < . s lines_hit . s lines_found { ( string_push_str out ` open` ) } {}
     ( string_push_str out `><summary><code>` )
-    ( __ht_esc out ( report_display ( cov_file_path c idx ) root ) )
+    ( __ht_esc out ( string_data ( report_display ( cov_file_path c idx ) root ) ) )
     ( string_push_str out `</code> <span class="` )
     ( string_push_str out ( __ht_class tenths floor_tenths ) )
     ( string_push_str out `">` )
@@ -191,9 +191,10 @@ $ `stdlib/core/slice.nu`
     ^ out
 }
 
-unsafe @ __ht_slice s text i from i len → String {
-    : *u at # *u + # i text from
-    ^ ( string_from_bytes at len )
+@ __ht_slice s text i from i len → String {
+    : String out ( string_new )
+    ( string_push_window out ( slice_of_str text ) from len )
+    ^ out
 }
 
 @ __ht_style String out → v {
