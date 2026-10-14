@@ -33,6 +33,7 @@ $ `stdlib/std/hashmap.nu`
 $ `stdlib/std/utf8.nu`
 $ `stdlib/std/arc.nu`
 $ `stdlib/core/slice.nu`
+$ `stdlib/std/unicat.nu`
 
 : i TT_NORMAL 1
 : i TT_UNKNOWN 2
@@ -53,8 +54,8 @@ $ `stdlib/core/slice.nu`
     ( Vec String ) pieces
     ( Vec f ) scores
     ( Vec i ) ttype
-    ( HashMap s i ) lookup
-    ( HashMap s i ) ranks
+    ( HashMap String i ) lookup  // its own copy of every piece
+    ( HashMap String i ) ranks
     ( Vec String ) rankkeys
     ( Vec String ) byte_enc
     ( Vec i ) byte_id
@@ -85,12 +86,14 @@ $ `stdlib/core/slice.nu`
 @ Tok_drop sink Tok h → v {}
 
 // ── string-keyed map helpers (yoloe/bpe.nu idiom) ───────────────────
-@ __tk_set ( HashMap s i ) m s key i val → v {
-    : ?i _old ( map_set [s i] m key val \ s x → i { ^ ( hash_string x ) } \ s a s b → b { ^ ( eq_string a b ) } )
+@ __tk_set ( HashMap String i ) m s key i val → v {
+    : ?i _old ( map_set [String i] m ( string_from key ) val \ String x → i { ^ ( hash_string ( string_data x ) ) }
+    \ String a String b → b { ^ ( eq_string ( string_data a ) ( string_data b ) ) } )
 }
 
-@ __tk_get ( HashMap s i ) m s key → ?i {
-    ^ ( map_get [s i] m key \ s x → i { ^ ( hash_string x ) } \ s a s b → b { ^ ( eq_string a b ) } )
+// Looked up by a borrowed key: nothing allocated.
+@ __tk_get ( HashMap String i ) m s key → ?i {
+    ^ ( map_get_with [String i s] m key \ s x → i { ^ ( hash_string x ) } \ String a s b → b { ^ ( eq_string ( string_data a ) b ) } )
 }
 
 @ _tk_geti ( Vec i ) v i k i def → i {
@@ -171,10 +174,7 @@ $ `stdlib/core/slice.nu`
 //   scores  SPM merge scores (empty for BPE)
 //   types   token types (TT_NORMAL/CONTROL/USER/BYTE/…); empty = all NORMAL
 //   merges  BPE merge rules, "A B", in rank order (empty for SPM)
-// `unsafe`: the lookup and rank maps are keyed by views of the tokenizer's
-// own piece and merge strings — they never change once built, and they move
-// with it into its Arc, so the keys stay valid for as long as the maps do.
-unsafe @ tok_build TokSpec spec sink ( Vec String ) pieces sink ( Vec f ) scores sink ( Vec i ) types sink ( Vec String ) merges → !Tok String {
+@ tok_build TokSpec spec sink ( Vec String ) pieces sink ( Vec f ) scores sink ( Vec i ) types sink ( Vec String ) merges → !Tok String {
     : i nvocab ( vec_len [String] pieces )
     ? == nvocab 0 {
         ^ ( __tk_err `tokenizer: empty vocabulary` )
@@ -192,10 +192,28 @@ unsafe @ tok_build TokSpec spec sink ( Vec String ) pieces sink ( Vec f ) scores
     // vocabulary falls back to per-byte pieces — lossless, just not the
     // model's segmentation — so it is not silently wrong, merely unmerged.
 
+    // piece → id (last one wins on a duplicate piece, like llama.cpp's
+    // token_to_id map), and for BPE "A B" → merge rank: maps of their own
+    // copies of the text, built before the pieces move into the Tok.
+    : ( HashMap String i ) lookup ( map_with_cap [String i] * nvocab 2 \ String x → i { ^ ( hash_string ( string_data x ) ) } )
+    : ~ i k 0
+    ~ < k nvocab {
+        ?? ( vec_get [String] pieces k ) { T p → { ( __tk_set lookup ( string_data p ) k ) } F → {} }
+        = k + k 1
+    }
+    : ( HashMap String i ) ranks ( map_new [String i] )
+    ? == mode TOK_BPE {
+        = k 0
+        ~ < k ( vec_len [String] merges ) {
+            ?? ( vec_get [String] merges k ) { T own → { ( __tk_set ranks ( string_data own ) k ) } F → {} }
+            = k + k 1
+        }
+    } {}
+
     // Built here, then shared: an Arc's payload is fixed once made, so every
     // reader below takes it through arc_get with no lock.
     : ~ TokImpl t @ TokImpl {
-        mode pieces scores types ( map_new [s i] ) ( map_new [s i] ) merges
+        mode pieces scores types lookup ranks merges
         ? == mode TOK_BPE ( _tk_build_byte_enc ) ( vec_new [String] )
         ( vec_new [i] ) . spec pre . spec bos . spec eos . spec unk
         . spec add_bos . spec add_eos . spec add_space_prefix
@@ -203,17 +221,9 @@ unsafe @ tok_build TokSpec spec sink ( Vec String ) pieces sink ( Vec f ) scores
     }
 
     // types default to NORMAL when the source gave none
-    : ~ i k ( vec_len [i] . t ttype )
+    = k ( vec_len [i] . t ttype )
     ~ < k nvocab {
         ( vec_push [i] . t ttype TT_NORMAL )
-        = k + k 1
-    }
-
-    // piece → id (last one wins on a duplicate piece, like llama.cpp's
-    // token_to_id map). Keys borrow the pieces' heap buffers.
-    = k 0
-    ~ < k nvocab {
-        ( __tk_set . t lookup ( _tk_piece_data t k ) k )
         = k + k 1
     }
 
@@ -267,18 +277,6 @@ unsafe @ tok_build TokSpec spec sink ( Vec String ) pieces sink ( Vec f ) scores
         }
     }
 
-    // BPE merge ranks: "A B" → rank. The keys borrow the merge strings' own
-    // buffers, which the Tok now owns.
-    ? == mode TOK_BPE {
-        : ~ i r 0
-        ~ < r ( vec_len [String] . t rankkeys ) {
-            ?? ( vec_get [String] . t rankkeys r ) {
-                T own → { ( __tk_set . t ranks ( string_data own ) r ) }
-                F → {}
-            }
-            = r + r 1
-        }
-    } {}
     ^ @ !Tok String { T @ Tok { ( arc_new [TokImpl] t ) } }
 }
 
@@ -487,16 +485,6 @@ unsafe @ tok_build TokSpec spec sink ( Vec String ) pieces sink ( Vec f ) scores
 
 @ __tk_is_ascii_digit i b2 → b { ^ & >= b2 48 <= b2 57 }
 
-@ __tk_is_ws i b2 → b {
-    ^ | | | == b2 32 == b2 9 == b2 10 == b2 13
-}
-
-// "letter" under the v1 \p{L} approximation: ASCII letter or any
-// non-ASCII lead byte (multibyte scripts tokenize as letter runs).
-@ __tk_is_letterish i b2 → b {
-    ^ | ( __tk_is_ascii_letter b2 ) >= b2 128
-}
-
 // GPT-2 contraction after an apostrophe at text[p]: returns the length
 // INCLUDING the apostrophe, or 0.
 @ __tk_contraction ( Slice u ) text_v i p i n → i {
@@ -509,6 +497,48 @@ unsafe @ tok_build TokSpec spec sink ( Vec String ) pieces sink ( Vec f ) scores
     ? & == c1 118 == c2 101 { ^ 3 } {}
     ? & == c1 108 == c2 108 { ^ 3 } {}
     ^ 0
+}
+
+// The codepoint the byte at r belongs to (a continuation byte answers
+// for the character it is part of), so a run that steps byte by byte
+// classifies every byte of a character alike.
+@ __tk_cp_at ( Slice u ) t i r i n → i {
+    : ~ i k r
+    ~ & > k 0 & < - r k 3 == & ( slice_byte t k ) 192 128 { = k - k 1 }
+    : i b0 ( slice_byte t k )
+    ? < b0 128 { ^ b0 } {}
+    : i len ? >= b0 240 4 ? >= b0 224 3 ? >= b0 192 2 1
+    ? | == len 1 > + k len n { ^ 65533 } {}
+    : ~ i c & b0 ? == len 2 31 ? == len 3 15 7
+    : ~ i j 1
+    ~ < j len { = c | << c 6 & ( slice_byte t + k j ) 63 = j + j 1 }
+    ^ c
+}
+
+// Bytes in the character that starts at p.
+@ __tk_cp_len ( Slice u ) t i p i n → i {
+    : i b0 ( slice_byte t p )
+    : i len ? >= b0 240 4 ? >= b0 224 3 ? >= b0 192 2 1
+    ^ ? > + p len n - n p len
+}
+
+// \p{L}, \p{N} and \s at byte r (ASCII answered without decoding).
+@ __tk_letter_at ( Slice u ) t i r i n → b {
+    : i b ( slice_byte t r )
+    ? < b 128 { ^ ( __tk_is_ascii_letter b ) } {}
+    ^ ( uc_is_letter ( __tk_cp_at t r n ) )
+}
+
+@ __tk_digit_at ( Slice u ) t i r i n → b {
+    : i b ( slice_byte t r )
+    ? < b 128 { ^ ( __tk_is_ascii_digit b ) } {}
+    ^ ( uc_is_number ( __tk_cp_at t r n ) )
+}
+
+@ __tk_ws_at ( Slice u ) t i r i n → b {
+    : i b ( slice_byte t r )
+    ? < b 128 { ^ | == b 32 & >= b 9 <= b 13 } {}
+    ^ ( uc_is_space ( __tk_cp_at t r n ) )
 }
 
 // qwen2's pre-tokenizer, alternation by alternation — the order is what
@@ -536,38 +566,38 @@ unsafe @ tok_build TokSpec spec sink ( Vec String ) pieces sink ( Vec f ) scores
     } {}
 
     // 2 — the lead char must not be a letter, a digit or a newline
-    ? & ! ( __tk_is_letterish b0 ) & ! ( __tk_is_ascii_digit b0 ) & != b0 10 != b0 13 {
-        ? & < + p 1 n ( __tk_is_letterish ( slice_byte text_v + p 1 ) ) {
+    ? & ! ( __tk_letter_at text_v p n ) & ! ( __tk_digit_at text_v p n ) & != b0 10 != b0 13 {
+        ? & < + p 1 n ( __tk_letter_at text_v + p 1 n ) {
             : ~ i r + p 1
-            ~ & < r n ( __tk_is_letterish ( slice_byte text_v r ) ) { = r + r 1 }
+            ~ & < r n ( __tk_letter_at text_v r n ) { = r + r 1 }
             ^ - r p
         } {}
     } {}
-    ? ( __tk_is_letterish b0 ) {
+    ? ( __tk_letter_at text_v p n ) {
         : ~ i r p
-        ~ & < r n ( __tk_is_letterish ( slice_byte text_v r ) ) { = r + r 1 }
+        ~ & < r n ( __tk_letter_at text_v r n ) { = r + r 1 }
         ^ - r p
     } {}
 
     // 3
-    ? ( __tk_is_ascii_digit b0 ) { ^ 1 } {}
+    ? ( __tk_digit_at text_v p n ) { ^ ( __tk_cp_len text_v p n ) } {}
 
     // 4 — an optional single space, then a punctuation run, then newlines
     : ~ i q p
     : ~ i lead 0
     ? & == b0 32 < + p 1 n {
         : i b1 ( slice_byte text_v + p 1 )
-        ? & ! ( __tk_is_ws b1 ) & ! ( __tk_is_letterish b1 ) ! ( __tk_is_ascii_digit b1 ) {
+        ? & ! ( __tk_ws_at text_v + p 1 n ) & ! ( __tk_letter_at text_v + p 1 n ) ! ( __tk_digit_at text_v + p 1 n ) {
             = q + p 1
             = lead 1
         } {}
     } {}
-    ? | > lead 0 & ! ( __tk_is_ws b0 ) & ! ( __tk_is_letterish b0 ) ! ( __tk_is_ascii_digit b0 ) {
+    ? | > lead 0 & ! ( __tk_ws_at text_v p n ) & ! ( __tk_letter_at text_v p n ) ! ( __tk_digit_at text_v p n ) {
         : ~ i r q
         : ~ b more T
         ~ & more < r n {
             : i cc ( slice_byte text_v r )
-            ? | | ( __tk_is_ws cc ) ( __tk_is_letterish cc ) ( __tk_is_ascii_digit cc ) { = more F } { = r + r 1 }
+            ? | | ( __tk_ws_at text_v r n ) ( __tk_letter_at text_v r n ) ( __tk_digit_at text_v r n ) { = more F } { = r + r 1 }
         }
         ? > r q {
             ~ & < r n | == ( slice_byte text_v r ) 10 == ( slice_byte text_v r ) 13 { = r + r 1 }
@@ -576,9 +606,9 @@ unsafe @ tok_build TokSpec spec sink ( Vec String ) pieces sink ( Vec f ) scores
     } {}
 
     // 5/6/7 — whitespace
-    ? ( __tk_is_ws b0 ) {
+    ? ( __tk_ws_at text_v p n ) {
         : ~ i r p
-        ~ & < r n ( __tk_is_ws ( slice_byte text_v r ) ) { = r + r 1 }
+        ~ & < r n ( __tk_ws_at text_v r n ) { = r + r 1 }
         // 5: through the LAST newline inside the run, if any
         : ~ i nl -1
         : ~ i k p
@@ -629,23 +659,23 @@ unsafe @ tok_build TokSpec spec sink ( Vec String ) pieces sink ( Vec f ) scores
     : ~ i lead 0
     ? & == b0 32 < + p 1 n {
         : i b1 ( slice_byte text_v + p 1 )
-        ? ! ( __tk_is_ws b1 ) {
+        ? ! ( __tk_ws_at text_v + p 1 n ) {
             = q + p 1
             = lead 1
         } {}
     } {}
     : i c ( slice_byte text_v q )
-    ? ( __tk_is_letterish c ) {
+    ? ( __tk_letter_at text_v q n ) {
         : ~ i r q
-        ~ & < r n ( __tk_is_letterish ( slice_byte text_v r ) ) { = r + r 1 }
+        ~ & < r n ( __tk_letter_at text_v r n ) { = r + r 1 }
         ^ + lead - r q
     } {}
-    ? ( __tk_is_ascii_digit c ) {
+    ? ( __tk_digit_at text_v q n ) {
         : ~ i r q
-        ~ & < r n ( __tk_is_ascii_digit ( slice_byte text_v r ) ) { = r + r 1 }
+        ~ & < r n ( __tk_digit_at text_v r n ) { = r + r 1 }
         ^ + lead - r q
     } {}
-    ? ( __tk_is_ws c ) {
+    ? ( __tk_ws_at text_v q n ) {
         // Whitespace run (only reachable with lead == 0). GPT-2's rule is
         // `\s+(?!\S)` BEFORE `\s+`: a run followed by a non-space gives its
         // LAST character back, so that the next token starts with it — " leading"
@@ -655,7 +685,7 @@ unsafe @ tok_build TokSpec spec sink ( Vec String ) pieces sink ( Vec f ) scores
         // not, and nothing noticed until a vocabulary without a merge for the
         // double space came along.)
         : ~ i r q
-        ~ & < r n ( __tk_is_ws ( slice_byte text_v r ) ) { = r + r 1 }
+        ~ & < r n ( __tk_ws_at text_v r n ) { = r + r 1 }
         ? & < r n > - r q 1 { ^ - - r q 1 } {}
         ^ - r q
     } {}
@@ -664,7 +694,7 @@ unsafe @ tok_build TokSpec spec sink ( Vec String ) pieces sink ( Vec f ) scores
     : ~ b more T
     ~ & more < r n {
         : i cc ( slice_byte text_v r )
-        ? | | ( __tk_is_ws cc ) ( __tk_is_letterish cc ) ( __tk_is_ascii_digit cc ) { = more F } { = r + r 1 }
+        ? | | ( __tk_ws_at text_v r n ) ( __tk_letter_at text_v r n ) ( __tk_digit_at text_v r n ) { = more F } { = r + r 1 }
     }
     ^ + lead - r q
 }

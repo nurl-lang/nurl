@@ -44,10 +44,10 @@ unsafe @ __winsize → WinSz {
 @ __push_num String s i n → v { ( string_push_str s ( nurl_str_int n ) ) }
 
 // Average a source rectangle [x0,x1)×[y0,y1) of `im` into out[0..2] (R,G,B),
-// 4-byte slots. This box filter (area average) is what makes the downscaled
+// one slot each. This box filter (area average) is what makes the downscaled
 // preview look smooth instead of the aliased mess that point-sampling a
 // 640-wide frame into ~100 cells produces. At least one pixel is sampled.
-unsafe @ __avg3 Image im i x0 i x1 i y0 i y1 * u out → v {
+@ __avg3 Image im i x0 i x1 i y0 i y1 ( Vec i ) out → v {
     : i xb ? > x1 + x0 1 x1 + x0 1
     : i yb ? > y1 + y0 1 y1 + y0 1
     : ~ i sr 0
@@ -67,9 +67,9 @@ unsafe @ __avg3 Image im i x0 i x1 i y0 i y1 * u out → v {
         = y + y 1
     }
     ? == cnt 0 { = cnt 1 } {}
-    ( nurl_poke_i32 out 0 / sr cnt )
-    ( nurl_poke_i32 out 1 / sg cnt )
-    ( nurl_poke_i32 out 2 / sb cnt )
+    ( vec_set [i] out 0 / sr cnt )
+    ( vec_set [i] out 1 / sg cnt )
+    ( vec_set [i] out 2 / sb cnt )
 }
 
 // Clear the screen and hide the cursor (call once before a live loop).
@@ -88,7 +88,7 @@ unsafe @ __avg3 Image im i x0 i x1 i y0 i y1 * u out → v {
 }
 
 // Render `im` to the terminal as truecolor half-blocks, scaled to fit.
-unsafe @ img_show Image im → v {
+@ img_show Image im → v {
     : i W ( img_w im )
     : i H ( img_h im )
     : WinSz wsz ( __winsize )
@@ -111,10 +111,8 @@ unsafe @ img_show Image im → v {
     : i out_h_px * 2 out_rows
 
     // one averaged pixel each (R, G, B as i32 slots), reused for every cell
-    : ( Vec u ) tcv ( vec_zeroed [u] 16 )
-    : ( Vec u ) bcv ( vec_zeroed [u] 16 )
-    : *u tcell ( vec_data [u] tcv )
-    : *u bcell ( vec_data [u] bcv )
+    : ( Vec i ) tcell ( vec_zeroed [i] 3 )
+    : ( Vec i ) bcell ( vec_zeroed [i] 3 )
     : String s ( string_with_cap + 64 * * out_w out_rows 44 )
     ( string_push_char s 27 ) ( string_push_str s `[H` )  // cursor home
     : ~ i ry 0
@@ -130,13 +128,13 @@ unsafe @ img_show Image im → v {
             ( __avg3 im sx0 sx1 syt1 syb1 bcell )  // bottom pixel (background)
             // ESC [ 38;2;tr;tg;tb;48;2;br;bg;bb m  ▀(U+2580 = 226 150 128)
             ( string_push_char s 27 ) ( string_push_str s `[38;2;` )
-            ( __push_num s ( nurl_peek_i32 tcell 0 ) ) ( string_push_char s 59 )
-            ( __push_num s ( nurl_peek_i32 tcell 1 ) ) ( string_push_char s 59 )
-            ( __push_num s ( nurl_peek_i32 tcell 2 ) )
+            ( __push_num s ( vec_at [i] tcell 0 ) ) ( string_push_char s 59 )
+            ( __push_num s ( vec_at [i] tcell 1 ) ) ( string_push_char s 59 )
+            ( __push_num s ( vec_at [i] tcell 2 ) )
             ( string_push_str s `;48;2;` )
-            ( __push_num s ( nurl_peek_i32 bcell 0 ) ) ( string_push_char s 59 )
-            ( __push_num s ( nurl_peek_i32 bcell 1 ) ) ( string_push_char s 59 )
-            ( __push_num s ( nurl_peek_i32 bcell 2 ) )
+            ( __push_num s ( vec_at [i] bcell 0 ) ) ( string_push_char s 59 )
+            ( __push_num s ( vec_at [i] bcell 1 ) ) ( string_push_char s 59 )
+            ( __push_num s ( vec_at [i] bcell 2 ) )
             ( string_push_char s 109 )  // 'm'
             ( string_push_char s 226 ) ( string_push_char s 150 ) ( string_push_char s 128 )
             = cx + cx 1

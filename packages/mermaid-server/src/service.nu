@@ -23,6 +23,8 @@ $ `stdlib/ext/mcp_server.nu`
 $ `stdlib/ext/json.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
+$ `stdlib/std/arc.nu`
+$ `stdlib/std/thread.nu`
 $ `graph.nu`
 $ `parse.nu`
 $ `theme.nu`
@@ -37,16 +39,27 @@ $ `render.nu`
 // stale; swarm-mcp's had frozen five releases back.
 : s MMD_VERSION ( pkg_version )
 
-: ~ MmdTemplateSet g_mmd_ts 0
+// No set installed yet: no templates.
+@ __mmds_no_set → ( Locked ( Arc MmdTemplateSet ) ) {
+    : MmdTemplateSet ts @ MmdTemplateSet { 0 ( string_new ) ( vec_new [MmdTemplate] ) ( string_new ) }
+    ^ ( locked_new [( Arc MmdTemplateSet )] ( arc_new [MmdTemplateSet] ts ) )
+}
 
-// Install `ts` as the set every request renders with (it moves into the
-// global; a set installed before is released).
-unsafe @ mmd_state_init sink MmdTemplateSet ts → v { = g_mmd_ts ts }
+: ( Locked ( Arc MmdTemplateSet ) ) g_mmd_ts ( __mmds_no_set )
 
-// The installed set, lent: valid while it stays installed.
-unsafe @ mmd_state → MmdTemplateSet {
-    : *MmdTemplateSet p ( mem_addr g_mmd_ts )
-    ^ @ MmdTemplateSet { . p kind . p root . p items . p default_name }
+// Install `ts` as the set every request renders with (a set installed
+// before is released once no request holds it).
+@ mmd_state_init sink MmdTemplateSet ts → v {
+    ( locked_set [( Arc MmdTemplateSet )] g_mmd_ts ( arc_new [MmdTemplateSet] ts ) )
+}
+
+// The installed set: a share of it, read with arc_get, valid however
+// long the caller keeps it.
+@ mmd_state → ( Arc MmdTemplateSet ) {
+    : ( Arc MmdTemplateSet ) cur ( locked_take [( Arc MmdTemplateSet )] g_mmd_ts )
+    : ( Arc MmdTemplateSet ) out ( arc_clone [MmdTemplateSet] cur )
+    ( locked_restore [( Arc MmdTemplateSet )] g_mmd_ts cur )
+    ^ out
 }
 
 // ── The pipeline ─────────────────────────────────────────────────────
@@ -70,7 +83,8 @@ unsafe @ mmd_state → MmdTemplateSet {
 // Parse, lay out and render `src` with the named template (empty = the
 // default one). The returned struct owns everything in it.
 @ mmd_render_source s src s tmpl → MmdRenderRes {
-    : MmdTemplateSet ts ( mmd_state )
+    : ( Arc MmdTemplateSet ) tsa ( mmd_state )
+    : MmdTemplateSet ts ( arc_get [MmdTemplateSet] tsa )
     : i ti ( mmd_templates_find ts tmpl )
     ? < ti 0 {
         : String m ( string_with_cap 96 )
@@ -134,10 +148,9 @@ unsafe @ mmd_state → MmdTemplateSet {
     ^ out
 }
 
-unsafe @ __mmds_body HttpRequest req → String {
-    : i n ( vec_len [u] . req body )
-    ? == n 0 { ^ ( string_new ) } {}
-    ^ ( string_from_bytes ( vec_data [u] . req body ) n )
+@ __mmds_body HttpRequest req → String {
+    ? == ( vec_len [u] . req body ) 0 { ^ ( string_new ) } {}
+    ^ ( bytes_to_str . req body )
 }
 
 // `?template=`, else the `X-Template` header, else empty (the default).
@@ -195,7 +208,8 @@ unsafe @ __mmds_body HttpRequest req → String {
 }
 
 @ mmd_templates_json → Json {
-    : MmdTemplateSet ts ( mmd_state )
+    : ( Arc MmdTemplateSet ) tsa ( mmd_state )
+    : MmdTemplateSet ts ( arc_get [MmdTemplateSet] tsa )
     : Json arr ( json_arr_new )
     : i n ( mmd_templates_count ts )
     : ~ i i 0
@@ -357,7 +371,8 @@ unsafe @ __mmds_body HttpRequest req → String {
 }
 
 @ __mmds_tool_templates → Json {
-    : MmdTemplateSet ts ( mmd_state )
+    : ( Arc MmdTemplateSet ) tsa ( mmd_state )
+    : MmdTemplateSet ts ( arc_get [MmdTemplateSet] tsa )
     : String body ( string_with_cap 256 )
     ( string_push_str body `templates loaded from ` )
     ( string_push_str body ( string_data . ts root ) )

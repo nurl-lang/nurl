@@ -95,18 +95,18 @@ $ `stdlib/core/slice.nu`
 // O(rows) per byte, O(N²) over the table; measured: it turned a sub-second
 // extract into minutes.)
 
-// byte at offset k of a *u pointer, as an int
-unsafe @ __b * u p i k → i { ^ # i . p k }
+// byte at offset k of a cell's view, as an int
+@ __b ( Slice u ) p i k → i { ^ # i ( slice_at [u] p k ) }
 
 // decimal digit at offset k
-unsafe @ __dig * u p i k → i { ^ - ( __b p k ) 48 }
+@ __dig ( Slice u ) p i k → i { ^ - ( __b p k ) 48 }
 
 // "type" cell → 0..9 (the ten words start with distinct letters a..j)
-unsafe @ __type_id * u p → i { ^ - ( __b p 0 ) 97 }
+@ __type_id ( Slice u ) p → i { ^ - ( __b p 0 ) 97 }
 
 // "YYYY-MM-DD" → a compact, order-preserving day key in [0, ~1112) (11 bits),
 // so type+date+uuid pack into one non-negative i64 for a radix sort.
-unsafe @ __date_key * u p → i {
+@ __date_key ( Slice u ) p → i {
     : i y + + + * ( __dig p 0 ) 1000 * ( __dig p 1 ) 100 * ( __dig p 2 ) 10 ( __dig p 3 )
     : i mo + * ( __dig p 5 ) 10 ( __dig p 6 )
     : i da + * ( __dig p 8 ) 10 ( __dig p 9 )
@@ -117,7 +117,7 @@ unsafe @ __date_key * u p → i {
 @ __hexv i c → i { ? <= c 57 - c 48 - c 87 }
 
 // first 16 hex chars of a uuid → an i64 tie-breaker
-unsafe @ __hex16 * u p → i {
+@ __hex16 ( Slice u ) p → i {
     : ~ i acc 0
     : ~ i k 0
     ~ < k 16 {
@@ -127,76 +127,12 @@ unsafe @ __hex16 * u p → i {
     ^ acc
 }
 
-// Inline i64 quicksort — the same Hoare-partition / median-of-three /
-// recurse-the-smaller-half shape as std/sort, comparing i64 values directly
-// with a small-range insertion-sort cutoff. The win here is NOT closure
-// elimination: a monomorphic closure call is branch-predicted and costs ~1-2%
-// (measured), and std/sort inlines its comparator well. The win is that the
-// sort keys are packed into one i64 ONCE up front (see bench_csv_sort) so no
-// comparison re-derives (type, date, uuid) — the comparator would otherwise
-// re-parse strings on every one of ~20 M calls. That is the several-times gap;
-// the direct i64 compare vs the closure's `x - y` sign is a rounding error.
-unsafe @ __swp_i * i a i i i j → v {
-    : i x . a i
-    : i y . a j
-    = . a i y
-    = . a j x
-}
-
-unsafe @ __part_i * i a i lo i hi → i {
-    : i mid + lo / - hi lo 2
-    ? > . a lo . a mid { ( __swp_i a lo mid ) } {}
-    ? > . a lo . a hi { ( __swp_i a lo hi ) } {}
-    ? > . a mid . a hi { ( __swp_i a mid hi ) } {}
-    : i pivot . a mid
-    : ~ i i - lo 1
-    : ~ i j + hi 1
-    ~ T {
-        = i + i 1
-        ~ < . a i pivot { = i + i 1 }
-        = j - j 1
-        ~ > . a j pivot { = j - j 1 }
-        ? >= i j { ^ j } {}
-        ( __swp_i a i j )
-    }
-}
-
-// insertion sort for a small range — cheaper than partitioning once the
-// subarray is tiny, and where a median-of-three quicksort spends most of
-// its comparisons
-unsafe @ __ins_i * i a i lo i hi → v {
-    : ~ i i + lo 1
-    ~ <= i hi {
-        : i x . a i
-        : ~ i j i
-        ~ & > j lo > . a - j 1 x {
-            = . a j . a - j 1
-            = j - j 1
-        }
-        = . a j x
-        = i + i 1
-    }
-}
-
-unsafe @ __qs_i * i a i lo i hi → v {
-    : ~ i l lo
-    : ~ i h hi
-    ~ < l h {
-        ? <= - h l 16 {
-            ( __ins_i a l h )
-            = l h
-        } {
-            : i p ( __part_i a l h )
-            ? < - p l - h p {
-                ( __qs_i a l p )
-                = l + p 1
-            } {
-                ( __qs_i a + p 1 h )
-                = h p
-            }
-        }
-    }
-}
+// The sort keys are packed into one i64 ONCE up front (see
+// bench_csv_sort), so no comparison re-derives (type, date, uuid) — a
+// comparator would otherwise re-parse strings on every one of ~20 M calls.
+// The packed keys then go through the standard library's sort_by, whose
+// comparator inlines: it beats the hand-written pointer quicksort this
+// benchmark used to carry by a quarter (58 ms against 78 ms a pass).
 
 // one of ten low-cardinality `type` values (many rows share each, so the
 // date and uuid keys actually decide the order)
@@ -406,7 +342,7 @@ unsafe @ __qs_i * i a i lo i hi → v {
 // date, uuid) keys ONCE into integers. The million-row table is the bulk of
 // the setup's memory and this helper's own local, so it is gone before the
 // timed sort allocates; the keys are all the sort needs.
-unsafe @ __csv_sort_keys i n → ( Vec i ) {
+@ __csv_sort_keys i n → ( Vec i ) {
     : CSVTable t ( csv_table_from_string ( __gen_csv n ) )
     : i cty ( __col t `type` )
     : i cda ( __col t `date` )
@@ -419,32 +355,30 @@ unsafe @ __csv_sort_keys i n → ( Vec i ) {
     : ( Vec i ) key ( vec_with_cap [i] n )
     : ~ i r0 0
     ~ < r0 n {
-        : i tid ( __type_id ( slice_data [u] ( csv_table_view t r0 cty ) ) )
-        : i dk ( __date_key ( slice_data [u] ( csv_table_view t r0 cda ) ) )
-        : i uu & ( __hex16 ( slice_data [u] ( csv_table_view t r0 cuu ) ) ) 140737488355327
+        : i tid ( __type_id ( csv_table_view t r0 cty ) )
+        : i dk ( __date_key ( csv_table_view t r0 cda ) )
+        : i uu & ( __hex16 ( csv_table_view t r0 cuu ) ) 140737488355327
         ( vec_push [i] key | | << tid 58 << dk 47 uu )
         = r0 + r0 1
     }
     ^ key
 }
 
-unsafe @ bench_csv_sort → BenchRow {
+@ bench_csv_sort → BenchRow {
     : i n 1000000
     : ( Vec i ) key ( __csv_sort_keys n )
-    : *i kp ( vec_data [i] key )
-    : ( Vec i ) work ( vec_with_cap [i] n )
-    : ~ i f 0
-    ~ < f n { ( vec_push [i] work 0 ) = f + f 1 }
-    : *i wp ( vec_data [i] work )
+    : ( Slice i ) kp ( slice_prefix [i] ( slice_from_vec [i] key ) n )
+    : ( Vec i ) work ( vec_zeroed [i] n )
+    : ( Slice i ) wp ( slice_prefix [i] ( slice_from_vec [i] work ) n )
     : ( Vec i ) sink ( vec_new [i] )
     ( vec_push [i] sink 0 )
     // --- timed: copy the packed keys into the work buffer (fresh unsorted
     // input each pass), then quicksort them in place.
     : BenchRow r ( bench_thpt `csv sort 1M×8` n `M/s` \ → v {
         : ~ i c 0
-        ~ < c n { = . wp c . kp c = c + c 1 }
-        ( __qs_i wp 0 - n 1 )
-        ( vec_set [i] sink 0 + ( __ipeek sink 0 ) . wp 0 )
+        ~ < c n { ( slice_put [i] wp c ( slice_at [i] kp c ) ) = c + c 1 }
+        ( sort_by [i] work \ i x i y → i { ^ ? < x y -1 ? > x y 1 0 } )
+        ( vec_set [i] sink 0 + ( __ipeek sink 0 ) ( vec_at [i] work 0 ) )
     } )
     ^ r
 }

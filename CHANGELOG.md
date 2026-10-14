@@ -203,6 +203,16 @@ kernel launch) evaluates through it; its matrix rows are windows and its
 the loops: the same fits take 23% fewer instructions, bit-identical.
 An `ArimaModel` is a `Locked` handle — two threads stepping one model
 through its `Arc` raced.
+`tokenizer` (1 → 0) owns its map keys; its pre-tokenizers now classify
+characters by Unicode category, as HF's regexes do — every non-ASCII byte
+counted as a letter, and `(§`, `½` or a no-break space split unlike the
+model's own tokenizer. `yoloe` has 13 left (19), each an ioctl, an mmap'd
+camera buffer or an Xlib call.
+`agora` (36 → 0), `mermaid-server` (3 → 0) and `tensor` (6 → 0) keep
+their program-wide state in Locked globals set at start instead of raw
+globals behind `mem_addr`. `benchmark` (11 → 0) reads its CSV keys from checked cell views and sorts
+them with `sort_by`, which beats the pointer quicksort it carried by a
+quarter (58 ms a pass against 78).
 
 Packages: `oauth`, `iforest`, `vindex`, `data`, `cli`, `psql`, `redis`,
 `zst`, `video`, `ply`, `swarm` and `mlp` have no `unsafe` function left
@@ -315,6 +325,22 @@ generic that copies its `T` cannot be instantiated with one (h235)
 (*Fixed*, *Changed*).
 
 ### Added
+
+- **Globals set at start** (spec §3.4, docs/MEMORY.md Module globals,
+  grammar `start_init`). `: ( Locked T ) g ( make )` runs `make`, a
+  function of no arguments, once before `main`; nothing writes `g` after,
+  and its type must synchronise itself (`Locked`, `Arc`, `Channel`,
+  `Mutex`, `Cond`, `Semaphore`), so safe code reads it from any thread —
+  program-wide state no longer needs an `unsafe` accessor over a raw
+  global and a hand-held mutex. A `( Vec T )` set at start is rejected
+  (h263: two threads pushing through it raced).
+
+- **`map_get_with` and stdlib/std/unicat.nu.** A `HashMap` that owns its
+  `String` keys is looked up by a borrowed `s` with nothing allocated
+  (`map_get_with [K V Q]`: the query's own hash and a key-to-query
+  equality). `uc_is_letter` / `uc_is_number` / `uc_is_space` answer
+  `\p{L}`, `\p{N}` and `\s` from Unicode range tables
+  (tools/gen_unicat.py), built once at start.
 
 - **`Locked [T]`: shared state threads change** (stdlib/std/thread.nu).
   A shared handle over a mutex and the value, reached only through
@@ -544,6 +570,17 @@ generic that copies its `T` cannot be instantiated with one (h235)
   `$NURL_STDLIB/stdlib`, each recognised by its `core/vec.nu`; h178).
 
 ### Fixed
+
+- **A struct that cannot be copied moves out of a struct literal's
+  source, and drops when handed to a call as a temporary** (h264, h265).
+  A struct holding a library handle's option (`St { String path
+  ?Database db }`) taken into a returned literal (`^ @ Who { 0 . w st rs
+  }`) was neither zeroed in `w` nor copied — freed with `w` while the
+  result held it (agora's `GET /m/me`: heap-use-after-free). Handed to a
+  call that returns another such struct (`( conn ( mk ) )`), the
+  temporary was never dropped (agora leaked a path per REST call). It
+  moves whole now, and the callee's summary decides the temporary's drop
+  as for a String or a Vec.
 
 - **A binding of a nested lending call borrows what the inner call lends**
   (h214). `: e ( vec_at ( vec_at top 0 ) 0 )`, `( vec_get ( vec_at top 0

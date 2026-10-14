@@ -77,7 +77,7 @@ unsafe @ __XWin_ptr XWin h → *XWinImpl { ^ ( arc_ptr [XWinImpl] . h a ) }
 // The window that never opened (ok=0): w×h is still the frame size.
 @ xwin_none i w i h → XWin { ^ @ XWin { ( arc_new [XWinImpl] @ XWinImpl { 0 0 0 0 ( vec_new [u] ) w h 0 } ) } }
 
-unsafe @ xwin_ok XWin h → b { : *XWinImpl x ( __XWin_ptr h ) ^ != . x ok 0 }
+@ xwin_ok XWin h → b { ^ != . ( arc_get [XWinImpl] . h a ) ok 0 }
 
 // Free the XImage (not its pixels — they are the Vec's: XDestroyImage frees
 // a non-null data pointer, so it is cleared first) and the GC, and close the

@@ -199,7 +199,8 @@ $ `service.nu`
 }
 
 @ __mmdm_list_templates → i {
-    : MmdTemplateSet ts ( mmd_state )
+    : ( Arc MmdTemplateSet ) tsa ( mmd_state )
+    : MmdTemplateSet ts ( arc_get [MmdTemplateSet] tsa )
     : i n ( mmd_templates_count ts )
     : ~ i i 0
     ~ < i n {
@@ -308,7 +309,7 @@ $ `service.nu`
                                     ( nurl_eprint MMD_VERSION )
                                     ( nurl_eprint ` — ` )
                                     : String b ( string_with_cap 64 )
-                                    ( string_push_int b ( mmd_templates_count ( mmd_state ) ) )
+                                    ( string_push_int b ( mmd_templates_count ( arc_get [MmdTemplateSet] ( mmd_state ) ) ) )
                                     ( string_push_str b ` template(s), ` )
                                     ( string_push_int b workers )
                                     ( string_push_str b ` worker(s); MCP at /mcp` )

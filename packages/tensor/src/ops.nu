@@ -8,6 +8,7 @@
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/float.nu`
 $ `stdlib/std/floatbits.nu`
+$ `stdlib/std/thread.nu`
 $ `deps/gpukit/src/kernels.nu`
 $ `tensor.nu`
 
@@ -27,66 +28,59 @@ $ `tensor.nu`
 //     tensor_gpu_close.
 //   * tensor_gpu_off() disables the route (closing an open kit);
 //     tensor_gpu_active() reports the current state.
-: ~ i g_t_gpu 0  // 0 unprobed, 1 ready, -1 unavailable/disabled
-// The adopted kit: one owner of it, kept in a global for as long as the
-// route is open (tensor_gpu_close lets it go).
-: ~ ? GpuKit g_t_kit 0
-
-unsafe @ __t_adopt GpuKit kit → v {
-    // the global holds one owner of it from here
-    = g_t_kit @ ?GpuKit { T ( GpuKit_share kit ) }
+: TGpu {
+    i state  // 0 unprobed, 1 ready, -1 unavailable/disabled
+    ? GpuKit kit  // the adopted kit: one owner of it while the route is open
 }
 
-@ __t_gpu_ready → b {
-    ? != g_t_gpu 0 { ^ == g_t_gpu 1 } {}
-    : s ev ( getenv `NURL_TENSOR_GPU` )
-    ? & != # i ev 0 == ( nurl_str_eq ev `0` ) 1 {
-        = g_t_gpu -1
-        ^ F
+@ __t_gpu_blank → ( Locked TGpu ) { ^ ( locked_new [TGpu] @ TGpu { 0 @ ?GpuKit { F } } ) }
+
+: ( Locked TGpu ) g_t_gpu ( __t_gpu_blank )
+
+// The route's kit for one call — one more owner of it — probing on first
+// use; F when there is none.
+@ __t_gpu_kit → ?GpuKit {
+    : ~ TGpu g ( locked_take [TGpu] g_t_gpu )
+    ? == . g state 0 {
+        = . g state -1
+        : s ev ( getenv `NURL_TENSOR_GPU` )
+        ? | == # i ev 0 == ( nurl_str_eq ev `0` ) 0 {
+            : GpuKit kit ( gk_open 0 )
+            ? & ( gk_ok kit ) == ( nurl_str_eq ( gk_backend kit ) `cuda` ) 1 {
+                = . g kit @ ?GpuKit { T ( GpuKit_share kit ) }
+                = . g state 1
+            } {}
+        } {}
     } {}
-    : GpuKit kit ( gk_open 0 )
-    ? & ( gk_ok kit ) == ( nurl_str_eq ( gk_backend kit ) `cuda` ) 1 {
-        ( __t_adopt kit )
-        = g_t_gpu 1
-        ^ T
+    : ~ ? GpuKit out @ ?GpuKit { F }
+    ? == . g state 1 {
+        ?? . g kit { T k → { = out @ ?GpuKit { T ( GpuKit_share k ) } } F → {} }
     } {}
-    = g_t_gpu -1
-    ^ F
+    ( locked_restore [TGpu] g_t_gpu g )
+    ^ out
 }
 
-// One more owner of the open kit, for one call (the route is open:
-// __t_gpu_ready).
-unsafe @ __t_kit → GpuKit {
-    ?? g_t_kit {
-        T k → { ^ ( GpuKit_share k ) }
-        F → { ( nurl_panic `tensor: the GPU route is open without a kit` ) }
-    }
+// Set the route's state and kit (the kit held before is let go).
+@ __t_gpu_set i state ? GpuKit kit → v {
+    ( locked_set [TGpu] g_t_gpu @ TGpu { state kit } )
 }
 
 // Opt IN with a caller-opened kit (any backend — the caller chose it).
 // tensor holds the kit (one more owner of it) until tensor_gpu_close /
 // tensor_gpu_off.
 @ tensor_use_gpu GpuKit kit → v {
-    ( tensor_gpu_close )
-    ? ( gk_ok kit ) { ( __t_adopt kit ) = g_t_gpu 1 } { = g_t_gpu -1 }
+    ? ( gk_ok kit ) { ( __t_gpu_set 1 @ ?GpuKit { T ( GpuKit_share kit ) } ) } { ( __t_gpu_set -1 @ ?GpuKit { F } ) }
 }
 
 // Disable the matmul GPU route for this process (idempotent).
-@ tensor_gpu_off → v {
-    ( tensor_gpu_close )
-    = g_t_gpu -1
-}
+@ tensor_gpu_off → v { ( __t_gpu_set -1 @ ?GpuKit { F } ) }
 
 // Is the route currently open?
-@ tensor_gpu_active → b { ^ == g_t_gpu 1 }
+@ tensor_gpu_active → b { ^ == . ( locked_get [TGpu] g_t_gpu ) state 1 }
 
 // Let the tensor GPU singleton go (the process-lifetime owner the global
 // held). The next big matmul may re-probe (unlike tensor_gpu_off).
-unsafe @ tensor_gpu_close → v {
-    // the global's owner, released here
-    = g_t_kit @ ?GpuKit { F }
-    = g_t_gpu 0
-}
+@ tensor_gpu_close → v { ( __t_gpu_set 0 @ ?GpuKit { F } ) }
 
 @ __round_vec ( Vec f ) v i dtype → v {
     ? == dtype TE_F32 {} { ^ }
@@ -276,9 +270,10 @@ unsafe @ tensor_gpu_close → v {
     // nothing to hand a kernel that would upload a zero-length buffer
     ? | ( _t_absent a ) ( _t_absent b ) { = done T } {}
     ? & == done F >= * * M N K 100000 {
-        ? ( __t_gpu_ready ) {
-            ? ( gk_matmul_f ( __t_kit ) c . a data . b data M K N ) { = done T } {}
-        } {}
+        ?? ( __t_gpu_kit ) {
+            T kit → { ? ( gk_matmul_f kit c . a data . b data M K N ) { = done T } {} }
+            F → {}
+        }
     } {}
     ? done {} {
         : ~ i i 0

@@ -274,19 +274,18 @@ $ `ops.nu`  // _t_bshape / _t_eff_strides / _t_batch_eff (one broadcast impl)
 // ONNX style) and are validated BEFORE anything touches the device — the
 // ndarray API rejects out-of-range indices instead of zero-filling.
 
-// outer·ax·inner view of `shape` around `axis`.
-unsafe @ __dt_axview ( Vec i ) shape i axis * u pouter * u pinner → v {
+// outer·ax·inner view of `shape` around `axis`: the product of the dims
+// before it (`before` T) or after it.
+@ __dt_axprod ( Vec i ) shape i axis b before → i {
     : i nd ( vec_len [i] shape )
-    : ~ i outer 1
-    : ~ i inner 1
-    : ~ i k 0
-    ~ < k nd {
-        ? < k axis { = outer * outer ( _ti shape k ) } {}
-        ? > k axis { = inner * inner ( _ti shape k ) } {}
+    : ~ i p 1
+    : ~ i k ? before 0 + axis 1
+    : i end ? before axis nd
+    ~ < k end {
+        = p * p ( _ti shape k )
         = k + k 1
     }
-    ( nurl_poke pouter 0 outer )
-    ( nurl_poke pinner 0 inner )
+    ^ p
 }
 
 @ __dt_idx_ok ( Vec i ) idx i axin → b {
@@ -300,7 +299,7 @@ unsafe @ __dt_axview ( Vec i ) shape i axis * u pouter * u pinner → v {
     ^ T
 }
 
-unsafe @ dtensor_gather GpuKit kit DTensor a i axis ( Vec i ) idx → ?DTensor {
+@ dtensor_gather GpuKit kit DTensor a i axis ( Vec i ) idx → ?DTensor {
     ? ( dtensor_ok a ) {} { ^ @ ?DTensor { F } }
     : i nd ( dtensor_ndim a )
     ? & >= axis 0 < axis nd {} { ^ @ ?DTensor { F } }
@@ -308,11 +307,8 @@ unsafe @ dtensor_gather GpuKit kit DTensor a i axis ( Vec i ) idx → ?DTensor {
     ? > nidx 0 {} { ^ @ ?DTensor { F } }
     : i axin ( _ti . a shape axis )
     ? ( __dt_idx_ok idx axin ) {} { ^ @ ?DTensor { F } }
-    : ( Vec u ) cells__b ( vec_zeroed [u] 16 )
-    : *u cells ( vec_data [u] cells__b )
-    ( __dt_axview . a shape axis cells # *u + # i cells 8 )
-    : i outer ( nurl_peek cells 0 )
-    : i inner ( nurl_peek cells 1 )
+    : i outer ( __dt_axprod . a shape axis T )
+    : i inner ( __dt_axprod . a shape axis F )
     : ( Vec i ) oshape ( _shape_copy . a shape )
     ( vec_set [i] oshape axis nidx )
     : DTensor o ( __dt_new kit a oshape * * outer nidx inner )
@@ -326,7 +322,7 @@ unsafe @ dtensor_gather GpuKit kit DTensor a i axis ( Vec i ) idx → ?DTensor {
 // out = a with out[.., idx[g], ..] = upd[.., g, ..] along `axis`; `upd`'s
 // shape must equal a's with the axis dim replaced by len(idx). Duplicate
 // indices leave which write survives unspecified (ONNX semantics).
-unsafe @ dtensor_scatter GpuKit kit DTensor a i axis ( Vec i ) idx DTensor upd → ?DTensor {
+@ dtensor_scatter GpuKit kit DTensor a i axis ( Vec i ) idx DTensor upd → ?DTensor {
     ? & ( dtensor_ok a ) ( dtensor_ok upd ) {} { ^ @ ?DTensor { F } }
     ? == . a dtype . upd dtype {} { ^ @ ?DTensor { F } }
     : i nd ( dtensor_ndim a )
@@ -342,11 +338,8 @@ unsafe @ dtensor_scatter GpuKit kit DTensor a i axis ( Vec i ) idx DTensor upd �
         ? == ( _ti . upd shape k ) want {} { ^ @ ?DTensor { F } }
         = k + k 1
     }
-    : ( Vec u ) cells__b ( vec_zeroed [u] 16 )
-    : *u cells ( vec_data [u] cells__b )
-    ( __dt_axview . a shape axis cells # *u + # i cells 8 )
-    : i outer ( nurl_peek cells 0 )
-    : i inner ( nurl_peek cells 1 )
+    : i outer ( __dt_axprod . a shape axis T )
+    : i inner ( __dt_axprod . a shape axis F )
     : DTensor o ( __dt_new kit a ( _shape_copy . a shape ) ( dtensor_size a ) )
     : GkBuf ixb ( gk_dbuf_new kit nidx GK_I64 )
     : ~ b r ( gk_dbuf_upload_i kit ixb idx )

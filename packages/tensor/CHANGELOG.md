@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.6.5] — 2026-10-14
+
+Requires NURL 0.73.0 with globals set at start (`: ( Locked T ) g ( make )`).
+
+### Changed
+
+- No `unsafe` function is left (6 in 0.6.4). The matmul GPU route's state
+  and kit are one Locked global set at start: probing, adopting a kit and
+  closing it no longer race a matmul on another thread, which took its
+  kit from a raw global. `dtensor_gather` / `dtensor_scatter` compute the
+  outer·axis·inner split as two products instead of poking them through a
+  scratch buffer.
+
 ## [0.6.4] — 2026-10-12
 
 Requires NURL 0.73.0, in which a field written through a raw pointer

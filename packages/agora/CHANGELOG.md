@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.6.0] — 2026-10-14
+
+Requires NURL 0.73.0 with globals set at start (`: ( Locked T ) g ( make )`).
+
+### Changed
+
+- No `unsafe` function is left (36 in 0.5.6). The service state, the
+  sign-in configuration, the verdict cache with the provider, and the MCP
+  server are Locked globals set at start, reached in safe code from every
+  worker; the wait counter is a `( Locked i )` instead of an atomic
+  through `mem_addr`; a cut message body is pushed from a checked window.
+- Accessors of configured text (`ag_auth_home`, `ag_auth_issuer`,
+  `ag_local_identity`, …) return a `String` of their own, not a view into
+  the state another thread may replace.
+
+### Fixed
+
+- `GET /m/me` inside a repository read the organisation's store after it
+  was freed, and every REST call leaked its store's path — both compiler
+  holes (h264, h265), closed there.
+
 ## [0.5.6] — 2026-10-14
 
 Requires NURL 0.73.0 (`slice_at`, `slice_put`, `rc_take`, `locked_take`).

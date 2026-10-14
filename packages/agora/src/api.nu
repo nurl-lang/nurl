@@ -24,6 +24,7 @@
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
+$ `stdlib/std/thread.nu`
 $ `stdlib/std/hash_sha256.nu`
 $ `stdlib/std/random.nu`
 $ `stdlib/std/path.nu`
@@ -74,45 +75,59 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
     String local_origin  // the directory it was resolved from (@cwd); '' otherwise
 }
 
-: ~ AgState g_ag_state 0
-
-// Open the store at `db_path` and install the state (a state installed
-// before is released by the assignment).
-unsafe @ ag_state_init s db_path → b {
-    = g_ag_state @ AgState { ( ag_store_open db_path ) ( string_new ) ( string_new ) }
-    ^ . . g_ag_state store ok
+// The state before ag_state_init: no store open, no local identity.
+@ __ag_state_blank → ( Locked AgState ) {
+    ^ ( locked_new [AgState] @ AgState { @ AgStore { ( string_new ) F @ ?Database { F } } ( string_new ) ( string_new ) } )
 }
 
-unsafe @ __ag_state → *AgState { ^ ( mem_addr g_ag_state ) }
+: ( Locked AgState ) g_ag_state ( __ag_state_blank )
 
-unsafe @ ag_state_set_local s name → v {
-    : *AgState p ( __ag_state )
-    ( string_clear . p local )
-    ( string_push_str . p local name )
-    ( string_clear . p local_origin )
+// Open the store at `db_path` and install the state (a store opened
+// before is released by the assignment).
+@ ag_state_init s db_path → b {
+    : ~ AgState st ( locked_take [AgState] g_ag_state )
+    = . st store ( ag_store_open db_path )
+    : b ok . . st store ok
+    ( locked_restore [AgState] g_ag_state st )
+    ^ ok
+}
+
+@ ag_state_set_local s name → v {
+    : ~ AgState st ( locked_take [AgState] g_ag_state )
+    ( string_clear . st local )
+    ( string_push_str . st local name )
+    ( string_clear . st local_origin )
+    ( locked_restore [AgState] g_ag_state st )
 }
 
 // A local identity that came from `@cwd`: remembered with its directory.
-unsafe @ ag_state_set_local_from s name s origin → v {
+@ ag_state_set_local_from s name s origin → v {
     ( ag_state_set_local name )
-    : *AgState p ( __ag_state )
-    ( string_push_str . p local_origin origin )
+    : ~ AgState st ( locked_take [AgState] g_ag_state )
+    ( string_push_str . st local_origin origin )
+    ( locked_restore [AgState] g_ag_state st )
 }
 
-unsafe @ ag_local_origin → s {
-    : *AgState p ( __ag_state )
-    ^ ( string_data . p local_origin )
+@ ag_local_origin → String {
+    : AgState st ( locked_take [AgState] g_ag_state )
+    : String o ( string_from ( string_data . st local_origin ) )
+    ( locked_restore [AgState] g_ag_state st )
+    ^ o
 }
 
-// The store handle, lent: the path String stays the state's.
-unsafe @ ag_store → AgStore {
-    : *AgState p ( __ag_state )
-    ^ @ AgStore { ( string_from ( string_data . . p store path ) ) . . p store ok @ ?Database { F } }
+// The store handle: its own copy of the path, no connection.
+@ ag_store → AgStore {
+    : AgState st ( locked_take [AgState] g_ag_state )
+    : AgStore r @ AgStore { ( string_from ( string_data . . st store path ) ) . . st store ok @ ?Database { F } }
+    ( locked_restore [AgState] g_ag_state st )
+    ^ r
 }
 
-unsafe @ ag_local_identity → s {
-    : *AgState p ( __ag_state )
-    ^ ( string_data . p local )
+@ ag_local_identity → String {
+    : AgState st ( locked_take [AgState] g_ag_state )
+    : String o ( string_from ( string_data . st local ) )
+    ( locked_restore [AgState] g_ag_state st )
+    ^ o
 }
 
 // ── Caller ───────────────────────────────────────────────────────────
@@ -253,8 +268,8 @@ unsafe @ ag_local_identity → s {
         }
         ^ ( ag_caller_anon )
     } {}
-    : s local ( ag_local_identity )
-    ? > ( nurl_str_len local ) 0 { ^ ( ag_caller_local_from st local ( ag_local_origin ) now ) } {}
+    : String local ( ag_local_identity )
+    ? > ( string_len local ) 0 { : String org ( ag_local_origin ) ^ ( ag_caller_local_from st ( string_data local ) ( string_data org ) now ) } {}
     ^ ( ag_caller_anon )
 }
 
@@ -483,7 +498,7 @@ unsafe @ ag_local_identity → s {
 // `#41 public alice 3m: body` — a mailbox message reads `dm` instead of
 // the channel, since the reader IS the mailbox. A body over `maxb`
 // bytes (0 = no limit) is cut, ending `… (+N bytes: msg id=41)`.
-unsafe @ __ag_msg_line String out AgMsg m i now i maxb → v {
+@ __ag_msg_line String out AgMsg m i now i maxb → v {
     ( string_push_str out `#` )
     ( string_push_int out . m id )
     ( string_push_str out ` ` )
@@ -502,7 +517,7 @@ unsafe @ __ag_msg_line String out AgMsg m i now i maxb → v {
     : i n ( string_len . m body )
     : i k ( ag_cut_at body n ( __ag_budget m maxb ) )
     ? < k n {
-        ( string_push_bytes out # *u body k )
+        ( string_push_window out ( slice_of_str body ) 0 k )
         ( string_push_str out `… (+` )
         ( string_push_int out - n k )
         ( string_push_str out ` bytes: msg id=` )
@@ -1063,7 +1078,23 @@ unsafe @ __ag_msg_line String out AgMsg m i now i maxb → v {
 // as brief would (`busy` says so). 0 = no cap (stdio: one agent, one
 // process). The counter is a process-lifetime cell.
 : ~ i g_ag_wait_cap 0
-: ~ i g_ag_wait_n 0  // waits in progress (atomic)
+
+@ __ag_wait_n0 → ( Locked i ) { ^ ( locked_new [i] 0 ) }
+
+: ( Locked i ) g_ag_wait_n ( __ag_wait_n0 )  // waits in progress
+
+// One more wait in progress, unless `cap` are already: T if it was counted.
+@ __ag_wait_enter i cap → b {
+    : i n ( locked_take [i] g_ag_wait_n )
+    ? >= n cap { ( locked_restore [i] g_ag_wait_n n ) ^ F } {}
+    ( locked_restore [i] g_ag_wait_n + n 1 )
+    ^ T
+}
+
+@ __ag_wait_leave → v {
+    : i n ( locked_take [i] g_ag_wait_n )
+    ( locked_restore [i] g_ag_wait_n - n 1 )
+}
 
 @ ag_wait_cap_set i workers → v {
     : i reserve ? > / workers 4 2 / workers 4 2
@@ -1075,14 +1106,11 @@ unsafe @ __ag_msg_line String out AgMsg m i now i maxb → v {
 // then deliver. Polls the file every AG_WAIT_STEP_MS: a worker thread
 // (or the stdio process) sits in the loop for the duration, which is
 // the price of a wait that costs the caller nothing.
-unsafe @ __ag_op_wait AgStore st s me Json args i now → AgRes {
+@ __ag_op_wait AgStore st s me Json args i now → AgRes {
     : i timeout ( __ag_clamp ( _ag_arg_int args `timeout_s` AG_WAIT_DEFAULT ) 1 AG_WAIT_MAX )
     : ~ b busy F
     ? != 0 g_ag_wait_cap {
-        ? >= ( nurl_atomic_i64_inc # *u ( mem_addr g_ag_wait_n ) ) g_ag_wait_cap {
-            : i _d ( nurl_atomic_i64_dec_fetch # *u ( mem_addr g_ag_wait_n ) )
-            = busy T
-        } {}
+        = busy ! ( __ag_wait_enter g_ag_wait_cap )
     } {}
     : i deadline ? busy 0 + ( now_ms ) * timeout 1000
     : ~ i steps 0
@@ -1092,7 +1120,7 @@ unsafe @ __ag_op_wait AgStore st s me Json args i now → AgRes {
         = steps + steps 1
         ? == steps AG_WAIT_TOUCH_STEPS { ( ag_agent_touch st me ( now_seconds ) ) = steps 0 } {}
     }
-    ? & != 0 g_ag_wait_cap ! busy { : i _d ( nurl_atomic_i64_dec_fetch # *u ( mem_addr g_ag_wait_n ) ) } {}
+    ? & != 0 g_ag_wait_cap ! busy { ( __ag_wait_leave ) } {}
     : i then ( now_seconds )
     ? ( __ag_arg_bool args `deliver` T ) {
         : AgRes r ( __ag_op_brief st me args then )

@@ -1040,6 +1040,11 @@ unsafe @ agg_field_count i syms s ot → i {
 // compiler-emitted `<name>__nurlown` flag). `main` releases them on the
 // way out — nothing else can, since a global outlives every scope.
 : ~ s g_owned_globals ``
+
+// Globals set once at program start (`: ( Locked T ) g ( make )`), as
+// `<name> <function> <type>;` triples: the entry point calls each function
+// before main, in declaration order (emit_global_inits).
+: ~ s g_init_globals ``
 // Cascade guard: 1 while parsing a VALUE OPERAND (a binary/unary/cast/
 // member operand, a call argument, a `?`/`??` condition/scrutinee, or a
 // return value). `^` (return) is control flow and is meaningless in those
@@ -21368,7 +21373,9 @@ unsafe @ mem_path_to_indices s path → s {
             // or a struct of plain numbers (`( arima_update ( model_at t j )
             // y )` — the model's share leaked): dropped here when it
             // provably keeps no hold on this argument.
-            : b __hret & ! __scalar_ret | | ( __is_handle_ty __crt ) ( __wrap_of_values __crt ) ( __ty_no_address __crt 0 )
+            // (…or a struct that cannot be copied — a library handle's
+            // option in it: `( conn ( mk ) )` leaked the St, h265.)
+            : b __hret & ! __scalar_ret | | | ( __is_handle_ty __crt ) ( __wrap_of_values __crt ) ( __ty_no_address __crt 0 ) ( __lit_moves_whole __crt )
             ? & __hret ! shadowed {
                 : s __tad ( nurl_cg_reg cg )
                 ( emit_sink_flag_load ( mem_argdrop_const syms call_name fname arg_idx ) __tad )
@@ -33326,7 +33333,7 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
             : s __adp ( str_first_word __adf )
             : s __adt ( str_first_word ( str_skip_word ( str_skip_word ( str_skip_word __adf ) ) ) )
             = __ad_field_moves & & != 0 ( nurl_str_len __adp ) ( nurl_sym_has_word syms `__user_drops__` __adp )
-            & == 0 ( nurl_sym_len2 syms __adp `__pname` ) | ( __is_handle_ty __adt ) ( __is_closure_llty fty )
+            & == 0 ( nurl_sym_len2 syms __adp `__pname` ) | | ( __is_handle_ty __adt ) ( __is_closure_llty fty ) ( __lit_moves_whole __adt )
         } {}
         // (Nor a number read out of one — `^ @ Ser { y . kd kind }`: a copy,
         // and `kd` is dropped with all it holds; skipping it leaked its Vec.)
@@ -33471,6 +33478,17 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
                     } { = fval ( mem_emit_cloneif cg fty fval __tl ) }
                 } {}
                 = fld_lent `` } {}
+            // A field that owns something but is no handle a store can copy
+            // (a struct holding a library handle's option, `AgStore { String
+            // path ?Database db }`) moves whole: zeroed at the source while
+            // the struct owns it. Left there, the struct's drop freed what
+            // the literal now held (h264).
+            ? & & & & ! __fs_defer ( nurl_sym_has_word syms `__user_drops__` fs_ptr )
+            == 0 ( nurl_sym_len2 syms fs_ptr `__pname` ) ! | ( __is_handle_ty fs_fty ) ( __is_closure_llty fs_fty ) ( __lit_moves_whole fs_fty ) {
+                ( mem_udrop_takeover_opt syms cg fs_ptr ( nurl_lex_line lex ) )
+                ( mem_zero_field cg fs_ptr fs_sty fs_idx fs_fty ( mem_udrop_flag_get syms cg fs_ptr ) )
+                = fld_lent ``
+            } {}
         } {}
         // A literal nested in a returned one lends the same way (`^ @
         // !HpackDecoded E { T @ HpackDecoded { hdrs cur } }`, cur a cursor
@@ -42891,6 +42909,41 @@ unsafe @ __alloca_struct_params i syms i cg → v {
     }
 }
 
+// A global set at program start: before main and before any thread exists,
+// each initialiser runs once and its value is stored; nothing writes the
+// global again (gen_const_decl rejects `= g`), so every thread reads one
+// value that synchronises itself (a Locked, an Arc, a Channel, …).
+@ emit_global_inits → v {
+    : ~ s rest ( nurl_str_cat g_init_globals `` )
+    : ~ i k 0
+    ~ != 0 ( nurl_str_len rest ) {
+        : i semi ( nurl_str_find rest `;` )
+        : s ent ( nurl_str_slice rest 0 semi )
+        = rest ( nurl_str_slice rest + semi 1 - - ( nurl_str_len rest ) semi 1 )
+        : s g ( str_first_word ent )
+        : s fn ( str_first_word ( str_skip_word ent ) )
+        : s ll ( str_skip_word ( str_skip_word ent ) )
+        : s n ( nurl_str_int k )
+        = k + k 1
+        // The initialiser: a function of no arguments returning the type.
+        : s frt ( nurl_sym_get g_root_syms fn )
+        ? | | == 0 ( nurl_sym_len2 g_root_syms fn `__arity` ) != 0 ( nurl_str_to_int ( nurl_sym_get2 g_root_syms fn `__arity` ) ) ! ( seq ( nurl_llty frt ) ll ) {
+            ( die_at ( nurl_sym_get2 g_root_syms g `__initglobal_at` ) ( nurl_str_cat4 `the global '` g ( nurl_str_cat4 `' is set at start by '` ? < ( nurl_str_find fn `__fp` ) 0 fn ( nurl_str_slice fn 0 ( nurl_str_find fn `__fp` ) ) `', which must be a function of no arguments returning '` ( __zty_show ll ) ) `'.` ) )
+        } {}
+        ( nurl_print `  %_gi` ) ( nurl_print n ) ( nurl_print ` = call ` ) ( nurl_print ll )
+        ( nurl_print ` @` ) ( nurl_print ( llvm_call_fn fn ) ) ( nurl_print `()\n` )
+        ( nurl_print `  store ` ) ( nurl_print ll ) ( nurl_print ` %_gi` ) ( nurl_print n )
+        ( nurl_print `, ` ) ( nurl_print ll ) ( nurl_print `* @` ) ( nurl_print g ) ( nurl_print `\n` )
+    }
+}
+
+// The handle types a global set at start may hold: each synchronises its
+// own state, so every thread may read the one value.
+@ __init_global_ty_ok s lt → b {
+    ? | | != 0 ( nurl_str_starts lt `%Locked__` ) != 0 ( nurl_str_starts lt `%Arc__` ) != 0 ( nurl_str_starts lt `%Channel__` ) { ^ T } {}
+    ^ ( str_contains_word `%Mutex %Cond %Semaphore` lt )
+}
+
 @ emit_main_wrapper s ret_ty → v {
     // Synthetic C-ABI wrapper. It CALLS the module-defined `@_nurl_main`,
     // which the optimizer may inline — so under --g it needs a subprogram
@@ -42902,6 +42955,7 @@ unsafe @ __alloca_struct_params i syms i cg → v {
     ( nurl_print ` {\n` )
     ( emit `entry:` )
     ( emit_call `call void @nurl_init(i32 %argc, i8** %argv)` )
+    ( emit_global_inits )
     ? ( seq ret_ty `void` )
     { ( emit_call `call void @_nurl_main()` )
         ( emit_owned_global_release )
@@ -43301,6 +43355,29 @@ unsafe @ __check_value_type_defined i lex i syms s llvm_ty s ctx i tline i tcol 
                 ( nurl_sym_def syms ( nurl_str_cat cname `__ownglobal` ) `1` )
             } {}
             // TEMPORARILY DISABLED: ( nurl_sym_def syms ( nurl_str_cat cname `__newsyntax` ) `1` )
+        }
+        // `: ( Locked T ) g ( make )` — a global set once at program start
+        // by a function of no arguments (emit_global_inits), never
+        // written after: safe code reads it from any thread.
+        ? & == tt TT_LPAREN ! is_mutable
+        { ( nurl_lex_advance lex )
+            : s __gi_fn ( nurl_lex_val lex )
+            ? ( is_ident_tok ( nurl_lex_type lex ) ) {} { ( die lex `a global set at start names a function of no arguments: ': ( Locked T ) g ( make_state )'` ) }
+            ( nurl_lex_advance lex )
+            ? == ( nurl_lex_type lex ) TT_RPAREN {} { ( die lex ( nurl_str_cat3 `a global set at start is initialised by a function of NO arguments — '( ` __gi_fn ` )'. Wrap the call with its arguments in a function of its own.` ) ) }
+            ( nurl_lex_advance lex )
+            // A file-private initialiser (`__make`) is this file's own.
+            : s __gi_call ? ( priv_is_private __gi_fn ) ( priv_mangle_for __gi_fn ( priv_file_id ) ) __gi_fn
+            : s __gi_ll ( nurl_llty lt )
+            ? ( __init_global_ty_ok __gi_ll ) {} {
+                ( die lex ( nurl_str_cat3 `the global '` cname ( nurl_str_cat3 `' is set at start, so every thread reads it: its type must synchronise itself — ( Locked T ), ( Arc T ), ( Channel T ), Mutex, Cond or Semaphore — not '` ( __zty_show __gi_ll ) `'. Keep changing state in a Locked.` ) ) )
+            }
+            ( nurl_print `@` ) ( nurl_print cname ) ( nurl_print ` = global ` ) ( nurl_print __gi_ll ) ( nurl_print ` zeroinitializer\n\n` )
+            ( nurl_sym_def syms cname lt )
+            ( nurl_sym_def syms ( nurl_str_cat cname `__global` ) `1` )
+            ( nurl_sym_def syms ( nurl_str_cat cname `__initglobal` ) __gi_call )
+            ( nurl_sym_def syms ( nurl_str_cat cname `__initglobal_at` ) ( nurl_str_cat3 ( nurl_lex_filename lex ) `:` ( nurl_str_int __cv_line ) ) )
+            = g_init_globals ( nurl_str_cat4 g_init_globals cname ( nurl_str_cat3 ` ` __gi_call ` ` ) ( nurl_str_cat __gi_ll `;` ) )
         }
         ? == tt TT_FLOAT
         { : s fv ( nurl_lex_val lex )
@@ -43994,6 +44071,24 @@ unsafe @ __opt_err_mangle s e → s {
 // with them, field by field, through the drop graph's `drop__<S>` — unless
 // the program gives it a `% Drop` of its own. Cached once the struct's
 // fields are known.
+// A struct type that owns something a store cannot copy (a library
+// handle's option among its fields): a struct literal takes such a field
+// out of a struct this function owns by moving it whole.
+@ __lit_moves_whole s ty → b {
+    ? ( __is_handle_ty ty ) { ^ F } {}
+    : i n ( nurl_str_len ty )
+    ? | < n 2 != ( nurl_str_get ty 0 ) 37 { ^ F } {}
+    ? == ( nurl_str_get ty - n 1 ) 42 { ^ F } {}
+    ? | ( __is_libh ty ) != 0 ( nurl_str_starts ty `%dyn.` ) { ^ F } {}
+    : s sname ( nurl_str_slice ty 1 - n 1 )
+    ? == 0 ( nurl_sym_len2 g_root_syms sname `__field_count` ) { ^ F } {}
+    ? != 0 ( nurl_sym_len2 g_root_syms sname `__variants` ) { ^ F } {}
+    // (Only a `% Drop` of its own stops it — not the drop the compiler
+    // writes for it, field by field.)
+    ? ( __has_user_drop ty ) { ^ F } {}
+    ^ ( __type_needs_drop ty g_root_syms )
+}
+
 @ __is_owned_struct_ty s ty → b {
     ? == 0 g_root_syms { ^ F } {}
     : i n ( nurl_str_len ty )

@@ -28,6 +28,8 @@ $ `stdlib/ext/mcp.nu`
 $ `stdlib/ext/mcp_http.nu`
 $ `stdlib/ext/mcp_auth.nu`
 $ `stdlib/ext/mcp_server.nu`
+$ `stdlib/std/arc.nu`
+$ `stdlib/std/thread.nu`
 $ `stdlib/ext/json.nu`
 $ `stdlib/std/time.nu`
 $ `stdlib/std/sysinfo.nu`
@@ -224,7 +226,7 @@ Remember: note_set / note / notes for facts about the repository that outlive th
 //                    plus the query string
 //   nothing / else   the query string as flat strings (handlers accept
 //                    numeric strings)
-unsafe @ __ag_http_args HttpRequest req s op → Json {
+@ __ag_http_args HttpRequest req s op → Json {
     : b has_body > ( vec_len [u] . req body ) 0
     : ~ b is_text F
     : ~ b is_form F
@@ -245,7 +247,7 @@ unsafe @ __ag_http_args HttpRequest req s op → Json {
     : Json o ( json_obj_new )
     ( __ag_put_pairs o ( string_data . req query ) )
     ? has_body {
-        : String text ( string_from_bytes ( vec_data [u] . req body ) ( vec_len [u] . req body ) )
+        : String text ( bytes_to_str . req body )
         ? is_form { ( __ag_put_pairs o ( string_data text ) ) } {}
         ? is_text {
             : s field ( ag_op_text_arg op )
@@ -281,37 +283,40 @@ unsafe @ __ag_http_args HttpRequest req s op → Json {
 
 // The one McpServer the HTTP face serves: built by ag_build_app before
 // any worker runs (or on first use), in a global that owns it for the
-// rest of the process. `__ag_mcp_srv` lends it to a request.
+// rest of the process. `__ag_mcp_srv` hands a request a share of it.
 // Its tools depend on the mode (signed in, every tool takes repo and
 // as), so ag_build_app rebuilds it for an app of the other mode — what a
 // process that builds both (the tests) needs; a server builds one.
 : AgMcpWiring {
-    McpServer server
+    b made
+    b oidc  // the mode it was built for
+    ( Arc McpServer ) server
 }
 
-: ~ AgMcpWiring g_ag_mcp 0
-: ~ b g_ag_mcp_made F
-: ~ b g_ag_mcp_oidc F
+@ __ag_mcp_blank → ( Locked AgMcpWiring ) {
+    ^ ( locked_new [AgMcpWiring] @ AgMcpWiring { F F ( arc_new [McpServer] ( mcp_server_new `agora` AG_VERSION ) ) } )
+}
 
-unsafe @ __ag_mcp_init → v {
-    ? ! g_ag_mcp_made {
-        = g_ag_mcp_oidc ( ag_auth_oidc )
-        = g_ag_mcp @ AgMcpWiring { ( ag_mcp_server ) }
-        = g_ag_mcp_made T
+: ( Locked AgMcpWiring ) g_ag_mcp ( __ag_mcp_blank )
+
+// The server, built on first use — or rebuilt when `rebuild` and it was
+// built for the other mode (at app build time, before any worker runs).
+@ __ag_mcp_get b rebuild → ( Arc McpServer ) {
+    : ~ AgMcpWiring w ( locked_take [AgMcpWiring] g_ag_mcp )
+    : b oidc ( ag_auth_oidc )
+    ? | ! . w made & rebuild != . w oidc oidc {
+        = . w oidc oidc
+        = . w server ( arc_new [McpServer] ( ag_mcp_server ) )
+        = . w made T
     } {}
+    : ( Arc McpServer ) out ( arc_clone [McpServer] . w server )
+    ( locked_restore [AgMcpWiring] g_ag_mcp w )
+    ^ out
 }
 
-// At app build time only (no worker runs yet): the server for this mode
-// (the one built for the other mode is released by the assignment).
-@ __ag_mcp_init_for_mode → v {
-    ? & g_ag_mcp_made != g_ag_mcp_oidc ( ag_auth_oidc ) { = g_ag_mcp_made F } {}
-    ( __ag_mcp_init )
-}
+@ __ag_mcp_init_for_mode → v { : ( Arc McpServer ) _s ( __ag_mcp_get T ) }
 
-unsafe @ __ag_mcp_srv → McpServer {
-    ( __ag_mcp_init )
-    ^ . g_ag_mcp server
-}
+@ __ag_mcp_srv → ( Arc McpServer ) { ^ ( __ag_mcp_get F ) }
 
 // /mcp — Streamable HTTP, the caller resolved per request and handed
 // to the dispatch as its context.
@@ -320,8 +325,8 @@ unsafe @ __ag_mcp_srv → McpServer {
     ? ( ag_auth_oidc ) { ^ ( __ag_h_mcp_oidc req now ) } {}
     : AgCaller caller ( __ag_http_caller req ( ag_store ) now )
     : Json ctx ( __ag_ctx_of caller )
-    : McpServer srv ( __ag_mcp_srv )
-    : ( @ ?Json Json ) d \ Json rq → ?Json { ^ ( mcp_server_envelope_as srv rq ctx ) }
+    : ( Arc McpServer ) srv ( __ag_mcp_srv )
+    : ( @ ?Json Json ) d \ Json rq → ?Json { ^ ( mcp_server_envelope_as ( arc_get [McpServer] srv ) rq ctx ) }
     : ( @ HttpResponse HttpRequest ) h ( mcp_http_handler d )
     : HttpResponse out ( h req )
     ^ out
@@ -333,9 +338,9 @@ unsafe @ __ag_mcp_srv → McpServer {
 @ __ag_h_mcp_oidc HttpRequest req i now → HttpResponse {
     : s method ( string_data . req method )
     ? != 0 ( nurl_str_eq method `OPTIONS` ) {
-        : McpServer srv0 ( __ag_mcp_srv )
+        : ( Arc McpServer ) srv0 ( __ag_mcp_srv )
         : Json c0 ( json_obj_new )
-        : ( @ ?Json Json ) d0 \ Json rq → ?Json { ^ ( mcp_server_envelope_as srv0 rq c0 ) }
+        : ( @ ?Json Json ) d0 \ Json rq → ?Json { ^ ( mcp_server_envelope_as ( arc_get [McpServer] srv0 ) rq c0 ) }
         : ( @ HttpResponse HttpRequest ) h0 ( mcp_http_handler d0 )
         : HttpResponse pre ( h0 req )
         ^ pre
@@ -347,8 +352,8 @@ unsafe @ __ag_mcp_srv → McpServer {
     ( json_obj_set ctx `org` ( json_str_lit ( string_data . . w who org ) ) )
     ( json_obj_set ctx `sub` ( json_str_lit ( string_data . . w who sub ) ) )
     ( json_obj_set ctx `email` ( json_str_lit ( string_data . . w who email ) ) )
-    : McpServer srv ( __ag_mcp_srv )
-    : ( @ ?Json Json ) d \ Json rq → ?Json { ^ ( mcp_server_envelope_as srv rq ctx ) }
+    : ( Arc McpServer ) srv ( __ag_mcp_srv )
+    : ( @ ?Json Json ) d \ Json rq → ?Json { ^ ( mcp_server_envelope_as ( arc_get [McpServer] srv ) rq ctx ) }
     : ( @ HttpResponse HttpRequest ) h ( mcp_http_handler d )
     : HttpResponse out ( h req )
     ^ out
@@ -418,7 +423,8 @@ unsafe @ __ag_mcp_srv → McpServer {
 
 // The sign-in callback page of the web root.
 @ __ag_serve_callback → HttpResponse {
-    : String path ( path_join ( ag_auth_webroot ) `oauth-callback.html` )
+    : String root ( ag_auth_webroot )
+    : String path ( path_join ( string_data root ) `oauth-callback.html` )
     ?? ( read_file ( string_data path ) ) {
         T text → {
             : HttpResponse r ( response_new 200 )

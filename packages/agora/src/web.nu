@@ -86,10 +86,13 @@ $ `auth.nu`
     ^ ( json_obj_new )
 }
 
+// A configured string as JSON.
+@ __ag_jstr String x → Json { ^ ( json_str_lit ( string_data x ) ) }
+
 // The origin absolute URLs are built on: configured, else the request's.
 @ ag_base_url HttpRequest req → String {
-    : s pu ( ag_auth_public_url )
-    ? > ( nurl_str_len pu ) 0 { ^ ( string_from pu ) } {}
+    : String pu ( ag_auth_public_url )
+    ? > ( string_len pu ) 0 { ^ pu } {}
     ^ ( mcp_auth_base_url req `` )
 }
 
@@ -244,7 +247,8 @@ $ `auth.nu`
     : String resource ( string_from ( string_data base ) )
     ( string_push_str resource `/mcp` )
     : String scope ( ag_auth_scope )
-    : Json md ( mcp_auth_resource_metadata ( string_data resource ) ( ag_auth_issuer ) ( string_data scope ) )
+    : String iss ( ag_auth_issuer )
+    : Json md ( mcp_auth_resource_metadata ( string_data resource ) ( string_data iss ) ( string_data scope ) )
     : HttpResponse r ( mcp_auth_metadata_response md )
     ^ r
 }
@@ -269,9 +273,9 @@ $ `auth.nu`
     : b on ( ag_auth_oidc )
     ( json_obj_set o `enabled` ( json_bool on ) )
     ( json_obj_set o `mode` ( json_str_lit ? on `oidc` `local` ) )
-    ( json_obj_set o `issuer` ( json_str_lit ( ag_auth_issuer ) ) )
-    ( json_obj_set o `client_id` ( json_str_lit ( ag_auth_client_id ) ) )
-    ( json_obj_set o `audience` ( json_str_lit ( ag_auth_audience ) ) )
+    ( json_obj_set o `issuer` ( __ag_jstr ( ag_auth_issuer ) ) )
+    ( json_obj_set o `client_id` ( __ag_jstr ( ag_auth_client_id ) ) )
+    ( json_obj_set o `audience` ( __ag_jstr ( ag_auth_audience ) ) )
     : String scope ( string_from `openid profile email ` )
     : String api ( ag_auth_scope )
     ( string_push_str scope ( string_data api ) )
@@ -294,7 +298,8 @@ $ `auth.nu`
 @ __ag_is_owner_admin AgWho w → b {
     ? ( ag_auth_oidc ) {} { ^ F }
     ? ( ag_principal_is_admin . w who ) {} { ^ F }
-    ^ != 0 ( nurl_str_eq ( string_data . . w who org ) ( ag_auth_owner ) )
+    : String owner ( ag_auth_owner )
+    ^ != 0 ( nurl_str_eq ( string_data . . w who org ) ( string_data owner ) )
 }
 
 // GET /m/me[?repo=] — who is signed in; with a repository, its counts.
@@ -729,7 +734,7 @@ $ `auth.nu`
     ? == . w status 0 {} { ^ ( ag_who_deny w ) }
     ? ( __ag_is_owner_admin w ) {} { ^ ( ag_json_err 403 `administrators of the owner organisation only` ) }
     : Json out ( json_obj_new )
-    ( json_obj_set out `owner` ( json_str_lit ( ag_auth_owner ) ) )
+    ( json_obj_set out `owner` ( __ag_jstr ( ag_auth_owner ) ) )
     ( json_obj_set out `tenants` ( ag_tenants_json ) )
     ^ ( __ag_json_ok out )
 }

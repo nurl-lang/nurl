@@ -153,6 +153,16 @@ owns its text, as a mutable string binding does: a fresh string assigned
 to it — from a call that hands it over on every path, or on this call
 only (its guard slot says so, h202) — is released by the next assignment.
 
+State that every thread shares and safe code reaches lives in a global
+**set at start** instead: `: ( Locked T ) g ( make )` calls `make`, a
+function of no arguments, once before `main`, and nothing writes `g`
+afterwards. Its type must synchronise itself (`( Locked T )`,
+`( Arc T )`, `( Channel T )`, `Mutex`, `Cond`, `Semaphore`) — a
+`( Vec T )` pushed from two threads through it would race, so it is
+rejected (h263). A read borrows the handle; `: ( Locked T ) h g`, a
+struct field or a `^ g` clone it, so the global is never moved or
+dropped.
+
 ### Parameter passing conventions
 
 A parameter has one of three conventions:

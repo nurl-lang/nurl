@@ -556,6 +556,25 @@ Module globals). Every thread can reach it, so only an `unsafe` function
 unsafe @ model_drop → v { = g_model @ ?Model { F } }
 ```
 
+A global **set at start** holds program-wide state that safe code reads
+from any thread. Its initialiser is a function of no arguments in
+parentheses, run once before `main` (and before any thread exists); its
+type must synchronise itself — `( Locked T )`, `( Arc T )`,
+`( Channel T )`, `Mutex`, `Cond` or `Semaphore` — and nothing assigns it
+afterwards. A read borrows the handle; binding it, storing it or returning
+it clones the handle, so the global itself is never moved or dropped.
+
+```
+@ make_registry → ( Locked Registry ) { ^ ( locked_new [Registry] ( registry_new ) ) }
+: ( Locked Registry ) g_registry ( make_registry )
+
+@ register s name → v {            // safe: the Locked holds the lock
+    : ~ Registry r ( locked_take [Registry] g_registry )
+    ( registry_add r name )
+    ( locked_restore [Registry] g_registry r )
+}
+```
+
 `( mem_addr g )` (`unsafe`) is a `*T` to the mutable global `g` of type
 `T` — a struct global's fields reached through a pointer, or an address a
 foreign function or an atomic operation writes through. Given an `inout`

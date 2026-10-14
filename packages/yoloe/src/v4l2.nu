@@ -71,10 +71,10 @@ unsafe @ __Camera_ptr Camera h → *CameraImpl { ^ ( arc_ptr [CameraImpl] . h a 
 
 @ __MAP_SHARED → i { ^ 1 }
 
-// Zero `nslots` 4-byte slots of a buffer.
-unsafe @ __zero * u b i nslots → v {
+// Zero a request buffer for its next use.
+@ __zero ( Vec u ) b → v {
     : ~ i k 0
-    ~ < k nslots { ( nurl_poke_i32 b k 0 ) = k + k 1 }
+    ~ < k ( vec_len [u] b ) { ( vec_set [u] b k 0 ) = k + k 1 }
 }
 
 // Open a webcam and start YUYV streaming at w×h with `nbuf` ring buffers.
@@ -116,7 +116,7 @@ unsafe @ cam_open s path i w i h i nbuf → Camera {
     : *u bf ( vec_data [u] bfv )
     : ~ i bi 0
     ~ < bi got {
-        ( __zero bf 22 )
+        ( __zero bfv )
         ( nurl_poke_i32 bf 0 bi )  // index @0
         ( nurl_poke_i32 bf 1 ( __BUF_TYPE_CAPTURE ) )  // type @4
         ( nurl_poke_i32 bf 15 ( __MEMORY_MMAP ) )  // memory @60
@@ -146,11 +146,11 @@ unsafe @ cam_open s path i w i h i nbuf → Camera {
     ^ ( __cam_new @ CameraImpl { fd aw ah got ptrs lens 1 } )
 }
 
-unsafe @ cam_ok Camera h → b { : *CameraImpl c ( __Camera_ptr h ) ^ != . c ok 0 }
+@ cam_ok Camera h → b { ^ != . ( arc_get [CameraImpl] . h a ) ok 0 }
 
-unsafe @ cam_w Camera h → i { : *CameraImpl c ( __Camera_ptr h ) ^ . c w }
+@ cam_w Camera h → i { ^ . ( arc_get [CameraImpl] . h a ) w }
 
-unsafe @ cam_h Camera h → i { : *CameraImpl c ( __Camera_ptr h ) ^ . c h }
+@ cam_h Camera h → i { ^ . ( arc_get [CameraImpl] . h a ) h }
 
 @ __clip255 i v → i { ^ ? < v 0 0 ? > v 255 255 v }
 

@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.4.0] — 2026-10-14
+
+Requires NURL 0.73.0 with globals set at start (`: ( Locked T ) g ( make )`).
+
+### Changed
+
+- No `unsafe` function is left (3 in 0.3.4). The template set is an
+  `( Arc MmdTemplateSet )` in a Locked global set at start: `mmd_state`
+  hands a request a share of it (read with `arc_get`), so installing
+  another set while requests render no longer frees the one they read.
+  A request body is decoded with `bytes_to_str`.
+
 ## [0.3.4] — 2026-10-12
 
 Requires NURL 0.73.0, in which a field written through a raw pointer

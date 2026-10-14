@@ -78,11 +78,11 @@ $ `stdlib/core/slice.nu`
     TomlValue root
 }
 
-unsafe @ ag_config_load s path → AgConfig {
-    ? > ( nurl_str_len path ) 0 {} { ^ @ AgConfig { F ( string_new ) ( string_new ) # TomlValue TBool } }
+@ ag_config_load s path → AgConfig {
+    ? > ( nurl_str_len path ) 0 {} { ^ @ AgConfig { F ( string_new ) ( string_new ) @ TomlValue { TBool F } } }
     : !String IoErr r ( read_file path )
     ?? r {
-        F _ → { ^ @ AgConfig { F ( string_new ) ( string_new ) # TomlValue TBool } }
+        F _ → { ^ @ AgConfig { F ( string_new ) ( string_new ) @ TomlValue { TBool F } } }
         T txt → {
             ?? ( toml_parse ( string_data txt ) ) {
                 T v → { ^ @ AgConfig { T ( string_from path ) ( string_new ) v } }
@@ -90,7 +90,7 @@ unsafe @ ag_config_load s path → AgConfig {
                     : String msg ( string_from path )
                     ( string_push_str msg `: ` )
                     ( string_push_str msg ( toml_err_name e ) )
-                    ^ @ AgConfig { F ( string_from path ) msg # TomlValue TBool }
+                    ^ @ AgConfig { F ( string_from path ) msg @ TomlValue { TBool F } }
                 }
             }
         }
@@ -188,9 +188,11 @@ unsafe @ ag_config_load s path → AgConfig {
 
 // ── Service-wide state ───────────────────────────────────────────────
 //
-// Set once at startup (ag_auth_configure) and read by every worker. The
-// three mutable parts — the provider, the issuer template it was built
-// from, and the token cache — are touched only under g_ag_auth_mu.
+// Set once at startup (ag_auth_configure) and read by every worker: an
+// AgConf in g_ag_conf. The parts requests change — the provider, the
+// issuer template it was built from, the token cache, the files known to
+// be ready — are an AgGuard in g_ag_guard. Both are Locked globals set at
+// start, so every worker reaches them in safe code.
 
 : AgAuthHit {
     String hash  // sha256(token), hex
@@ -198,7 +200,9 @@ unsafe @ ag_config_load s path → AgConfig {
     AgPrincipal who
 }
 
-: AgAuth {
+// What the service was configured with: written at start, read by every
+// request.
+: AgConf {
     b oidc
     b multi
     String home
@@ -209,37 +213,32 @@ unsafe @ ag_config_load s path → AgConfig {
     String allowed  // comma-separated tenant ids, lowercase ('' = only decisions in the registry)
     String public_url
     String webroot  // the web page's directory ('' = none)
-    String iss_tmpl  // guarded: the provider's `{tenantid}` issuer template
-    ? OidcProvider prov  // guarded: one share of the provider; F = not discovered
-    ( Vec AgAuthHit ) hits  // guarded
-    ( Vec String ) ready  // guarded: files whose schema is in place
 }
 
-: ~ AgAuth g_ag_auth 0
-: ~ b g_ag_auth_made F
-: ~ Mutex g_ag_auth_mu 0
+// What requests change: the provider, the verdict cache, the files known
+// to be ready.
+: AgGuard {
+    String iss_tmpl  // the provider's `{tenantid}` issuer template
+    ? OidcProvider prov  // one share of the provider; F = not discovered
+    ( Vec AgAuthHit ) hits
+    ( Vec String ) ready  // files whose schema is in place
+}
+
+@ __ag_conf_blank → ( Locked AgConf ) {
+    ^ ( locked_new [AgConf] @ AgConf {
+        F F ( string_new ) ( string_new ) ( string_new ) ( string_new ) ( string_new ) ( string_new ) ( string_new ) ( string_new )
+    } )
+}
+
+@ __ag_guard_blank → ( Locked AgGuard ) {
+    ^ ( locked_new [AgGuard] @ AgGuard { ( string_new ) @ ?OidcProvider { F } ( vec_new [AgAuthHit] ) ( vec_new [String] ) } )
+}
+
+: ( Locked AgConf ) g_ag_conf ( __ag_conf_blank )
+: ( Locked AgGuard ) g_ag_guard ( __ag_guard_blank )
 
 : i AG_AUTH_CACHE_S 60
 : i AG_AUTH_CACHE_MAX 512
-
-unsafe @ __ag_auth → *AgAuth {
-    ? ! g_ag_auth_made {
-        = g_ag_auth @ AgAuth {
-            F F ( string_new ) ( string_new ) ( string_new ) ( string_new ) ( string_new ) ( string_new ) ( string_new )
-            ( string_new ) ( string_new ) @ ?OidcProvider { F } ( vec_new [AgAuthHit] ) ( vec_new [String] )
-        }
-        = g_ag_auth_mu ( mutex_new )
-        = g_ag_auth_made T
-    } {}
-    ^ ( mem_addr g_ag_auth )
-}
-
-unsafe @ __ag_lock → v {
-    : *AgAuth _a ( __ag_auth )
-    ( mutex_lock g_ag_auth_mu )
-}
-
-unsafe @ __ag_unlock → v { ( mutex_unlock g_ag_auth_mu ) }
 
 @ __ag_set String dst s v → v {
     ( string_clear dst )
@@ -260,47 +259,45 @@ unsafe @ __ag_unlock → v { ( mutex_unlock g_ag_auth_mu ) }
 }
 
 // The directory everything of a signed-in service lives in.
-unsafe @ ag_auth_set_home s home → v {
-    : *AgAuth a ( __ag_auth )
-    ( __ag_set . a home home )
+@ ag_auth_set_home s home → v {
+    : ~ AgConf c ( locked_take [AgConf] g_ag_conf )
+    ( __ag_set . c home home )
+    ( locked_restore [AgConf] g_ag_conf c )
 }
 
-unsafe @ ag_auth_home → s { ^ ( string_data . ( __ag_auth ) home ) }
-
-unsafe @ ag_auth_set_webroot s dir → v {
-    : *AgAuth a ( __ag_auth )
-    ( __ag_set . a webroot dir )
+@ ag_auth_set_webroot s dir → v {
+    : ~ AgConf c ( locked_take [AgConf] g_ag_conf )
+    ( __ag_set . c webroot dir )
+    ( locked_restore [AgConf] g_ag_conf c )
 }
-
-unsafe @ ag_auth_webroot → s { ^ ( string_data . ( __ag_auth ) webroot ) }
 
 // Switch the signed-in mode on (or off). `audience` '' = api://<client id>.
-unsafe @ ag_auth_configure b on b multi s issuer s client_id s audience s owner s allowed s public_url → v {
+@ ag_auth_configure b on b multi s issuer s client_id s audience s owner s allowed s public_url → v {
     : ( Slice u ) public_url_v ( slice_of_str public_url )
-    : *AgAuth a ( __ag_auth )
-    = . a oidc on
-    = . a multi multi
-    ( __ag_set . a issuer issuer )
-    ( __ag_set . a client_id client_id )
-    ? > ( nurl_str_len audience ) 0 { ( __ag_set . a audience audience ) } {
-        ( __ag_set . a audience `api://` )
-        ( string_push_str . a audience client_id )
-    }
     : String ow ( _ag_lower owner )
-    ( __ag_set . a owner ( string_data ow ) )
     : String al ( _ag_lower allowed )
-    ( __ag_set . a allowed ( string_data al ) )
     // No trailing '/': paths are appended to it.
     : ~ i pn ( nurl_str_len public_url )
     ~ & > pn 0 == ( slice_byte public_url_v - pn 1 ) 47 { = pn - pn 1 }
     : String pu ( string_substr ( string_from public_url ) 0 pn )
-    ( __ag_set . a public_url ( string_data pu ) )
-    ( __ag_lock )
-    // a store through the pointer drops nothing: the old share leaves first
-    = . a prov @ ?OidcProvider { F }
-    ( string_clear . a iss_tmpl )
-    ( vec_clear [AgAuthHit] . a hits )
-    ( __ag_unlock )
+    : ~ AgConf c ( locked_take [AgConf] g_ag_conf )
+    = . c oidc on
+    = . c multi multi
+    ( __ag_set . c issuer issuer )
+    ( __ag_set . c client_id client_id )
+    ? > ( nurl_str_len audience ) 0 { ( __ag_set . c audience audience ) } {
+        ( __ag_set . c audience `api://` )
+        ( string_push_str . c audience client_id )
+    }
+    ( __ag_set . c owner ( string_data ow ) )
+    ( __ag_set . c allowed ( string_data al ) )
+    ( __ag_set . c public_url ( string_data pu ) )
+    ( locked_restore [AgConf] g_ag_conf c )
+    : ~ AgGuard g ( locked_take [AgGuard] g_ag_guard )
+    = . g prov @ ?OidcProvider { F }
+    ( string_clear . g iss_tmpl )
+    ( vec_clear [AgAuthHit] . g hits )
+    ( locked_restore [AgGuard] g_ag_guard g )
 }
 
 // Read [auth] and [service].public_url from `cfg`, the environment
@@ -338,23 +335,48 @@ unsafe @ ag_auth_configure b on b multi s issuer s client_id s audience s owner 
     ^ T
 }
 
-unsafe @ ag_auth_oidc → b { ^ . ( __ag_auth ) oidc }
+@ ag_auth_oidc → b {
+    : AgConf c ( locked_take [AgConf] g_ag_conf )
+    : b on . c oidc
+    ( locked_restore [AgConf] g_ag_conf c )
+    ^ on
+}
 
-unsafe @ ag_auth_multi → b { ^ . ( __ag_auth ) multi }
+@ ag_auth_multi → b {
+    : AgConf c ( locked_take [AgConf] g_ag_conf )
+    : b on . c multi
+    ( locked_restore [AgConf] g_ag_conf c )
+    ^ on
+}
 
-unsafe @ ag_auth_issuer → s { ^ ( string_data . ( __ag_auth ) issuer ) }
+// One configured string, copied: 0 home, 1 webroot, 2 issuer, 3 client
+// id, 4 audience, 5 owner, 6 public url.
+@ __ag_conf_str i which → String {
+    : AgConf c ( locked_take [AgConf] g_ag_conf )
+    : String out ( string_from ( string_data
+    ? == which 0 . c home ? == which 1 . c webroot ? == which 2 . c issuer
+    ? == which 3 . c client_id ? == which 4 . c audience ? == which 5 . c owner . c public_url ) )
+    ( locked_restore [AgConf] g_ag_conf c )
+    ^ out
+}
 
-unsafe @ ag_auth_client_id → s { ^ ( string_data . ( __ag_auth ) client_id ) }
+@ ag_auth_home → String { ^ ( __ag_conf_str 0 ) }
 
-unsafe @ ag_auth_audience → s { ^ ( string_data . ( __ag_auth ) audience ) }
+@ ag_auth_webroot → String { ^ ( __ag_conf_str 1 ) }
 
-unsafe @ ag_auth_owner → s { ^ ( string_data . ( __ag_auth ) owner ) }
+@ ag_auth_issuer → String { ^ ( __ag_conf_str 2 ) }
 
-unsafe @ ag_auth_public_url → s { ^ ( string_data . ( __ag_auth ) public_url ) }
+@ ag_auth_client_id → String { ^ ( __ag_conf_str 3 ) }
+
+@ ag_auth_audience → String { ^ ( __ag_conf_str 4 ) }
+
+@ ag_auth_owner → String { ^ ( __ag_conf_str 5 ) }
+
+@ ag_auth_public_url → String { ^ ( __ag_conf_str 6 ) }
 
 // The OAuth scope a client asks for: <audience>/access_as_user.
 @ ag_auth_scope → String {
-    : String s ( string_from ( ag_auth_audience ) )
+    : String s ( ag_auth_audience )
     ( string_push_str s `/access_as_user` )
     ^ s
 }
@@ -383,7 +405,8 @@ unsafe @ ag_auth_public_url → s { ^ ( string_data . ( __ag_auth ) public_url )
 }
 
 @ ag_org_path s org → String {
-    : String dir ( path_join ( ag_auth_home ) `orgs` )
+    : String home ( ag_auth_home )
+    : String dir ( path_join ( string_data home ) `orgs` )
     : String f ( string_from org )
     ( string_push_str f `.db` )
     : String p ( path_join ( string_data dir ) ( string_data f ) )
@@ -392,7 +415,8 @@ unsafe @ ag_auth_public_url → s { ^ ( string_data . ( __ag_auth ) public_url )
 
 // The directory of an organisation's repository files.
 @ ag_org_repo_dir s org → String {
-    : String dir ( path_join ( ag_auth_home ) `orgs` )
+    : String home ( ag_auth_home )
+    : String dir ( path_join ( string_data home ) `orgs` )
     : String p ( path_join ( string_data dir ) org )
     ^ p
 }
@@ -418,27 +442,26 @@ unsafe @ ag_auth_public_url → s { ^ ( string_data . ( __ag_auth ) public_url )
 }
 
 // Is `path` among the files whose schema this process made sure of?
-unsafe @ __ag_ready s path → b {
+@ __ag_ready s path → b {
     : ~ b ready F
-    ( __ag_lock )
-    : *AgAuth a ( __ag_auth )
-    : i n ( vec_len [String] . a ready )
+    : AgGuard g ( locked_take [AgGuard] g_ag_guard )
+    : i n ( vec_len [String] . g ready )
     : ~ i k 0
     ~ & ! ready < k n {
-        ?? ( vec_get [String] . a ready k ) {
+        ?? ( vec_get [String] . g ready k ) {
             T p → { = ready != 0 ( nurl_str_eq ( string_data p ) path ) }
             F _ → {}
         }
         = k + k 1
     }
-    ( __ag_unlock )
+    ( locked_restore [AgGuard] g_ag_guard g )
     ^ ready
 }
 
-unsafe @ __ag_mark_ready s path → v {
-    ( __ag_lock )
-    ( vec_push [String] . ( __ag_auth ) ready ( string_from path ) )
-    ( __ag_unlock )
+@ __ag_mark_ready s path → v {
+    : AgGuard g ( locked_take [AgGuard] g_ag_guard )
+    ( vec_push [String] . g ready ( string_from path ) )
+    ( locked_restore [AgGuard] g_ag_guard g )
 }
 
 // The organisation's file of people, its schema made sure of once per
@@ -511,8 +534,9 @@ unsafe @ __ag_mark_ready s path → v {
 : s AG_TENANT_BLOCKED `blocked`
 
 @ __ag_tenants_open → !Database SqliteErr {
-    ?? ( dir_create_all ( ag_auth_home ) ) { T _ → {} F _ → {} }
-    : String path ( path_join ( ag_auth_home ) `tenants.db` )
+    : String home ( ag_auth_home )
+    ?? ( dir_create_all ( string_data home ) ) { T _ → {} F _ → {} }
+    : String path ( path_join ( string_data home ) `tenants.db` )
     ?? ( sqlite_open ( string_data path ) ) {
         F e → { ^ @ !Database SqliteErr { F e } }
         T db → {
@@ -545,7 +569,8 @@ unsafe @ __ag_mark_ready s path → v {
 // (with `label`, e.g. the e-mail of who knocked) and refused.
 @ ag_tenant_admitted s tid s label i now → b {
     ? > ( nurl_str_len tid ) 0 {} { ^ F }
-    ? != 0 ( nurl_str_eq tid ( ag_auth_owner ) ) { ^ T } {}
+    : String owner ( ag_auth_owner )
+    ? != 0 ( nurl_str_eq tid ( string_data owner ) ) { ^ T } {}
     : ~ b ok F
     ?? ( __ag_tenants_open ) {
         F _ → {}
@@ -654,9 +679,8 @@ unsafe @ __ag_mark_ready s path → v {
 }
 
 // A remembered verdict for this token, if one is still good.
-unsafe @ __ag_cache_get String h i now → ?AgPrincipal {
-    ( __ag_lock )
-    : *AgAuth a ( __ag_auth )
+@ __ag_cache_get String h i now → ?AgPrincipal {
+    : AgGuard a ( locked_take [AgGuard] g_ag_guard )
     : ~ ? AgPrincipal out @ ?AgPrincipal { F }
     : i n ( vec_len [AgAuthHit] . a hits )
     : ~ i k 0
@@ -672,18 +696,17 @@ unsafe @ __ag_cache_get String h i now → ?AgPrincipal {
         }
         = k + k 1
     }
-    ( __ag_unlock )
+    ( locked_restore [AgGuard] g_ag_guard a )
     ^ out
 }
 
-unsafe @ __ag_cache_put String h i until AgPrincipal p → v {
-    ( __ag_lock )
-    : *AgAuth a ( __ag_auth )
+@ __ag_cache_put String h i until AgPrincipal p → v {
+    : AgGuard a ( locked_take [AgGuard] g_ag_guard )
     // Full: start over. Every entry is at most a minute old, so the cost
     // is one more signature check per live token, once.
     ? >= ( vec_len [AgAuthHit] . a hits ) AG_AUTH_CACHE_MAX { ( vec_clear [AgAuthHit] . a hits ) } {}
     ( vec_push [AgAuthHit] . a hits @ AgAuthHit { ( string_from ( string_data h ) ) until ( ag_principal_clone p ) } )
-    ( __ag_unlock )
+    ( locked_restore [AgGuard] g_ag_guard a )
 }
 
 // Remember `p` as the verified owner of `token` until `until` — what a
@@ -696,23 +719,23 @@ unsafe @ __ag_cache_put String h i until AgPrincipal p → v {
 }
 
 // Forget every remembered verdict (a role or a tenant decision changed).
-unsafe @ ag_auth_forget_all → v {
-    ( __ag_lock )
-    ( vec_clear [AgAuthHit] . ( __ag_auth ) hits )
-    ( __ag_unlock )
+@ ag_auth_forget_all → v {
+    : AgGuard a ( locked_take [AgGuard] g_ag_guard )
+    ( vec_clear [AgAuthHit] . a hits )
+    ( locked_restore [AgGuard] g_ag_guard a )
 }
 
-// The provider; discovered on first use. Call with the lock held.
-unsafe @ __ag_provider_locked → ?OidcProvider {
-    : *AgAuth a ( __ag_auth )
+// The provider; discovered on first use, by whoever holds the guard
+// (`a`, taken from g_ag_guard), for the configured `issuer`.
+@ __ag_provider_in inout AgGuard a s issuer b multi → ?OidcProvider {
     ?? . a prov { T pv → { ^ @ ?OidcProvider { T ( OidcProvider_share pv ) } } F → {} }
-    ? . a multi {
+    ? multi {
         // Multi-tenant: the discovery document's issuer is a template
         // ("…/{tenantid}/v2.0"), which oidc_discover's issuer check can
         // never match. Read the template and the JWKS URI from the
         // document directly; every token's `iss` is later measured
         // against the template with the token's own `tid` in it.
-        : String url ( oidc_discovery_url ( string_data . a issuer ) )
+        : String url ( oidc_discovery_url issuer )
         : HttpClient hc ( http_client_new )
         : ~ String body ( string_new )
         ?? ( http_client_get hc ( string_data url ) ) {
@@ -729,13 +752,13 @@ unsafe @ __ag_provider_locked → ?OidcProvider {
             F _ → {}
         }
         ? & > ( string_len tmpl ) 0 > ( string_len jwks ) 0 {} { ^ @ ?OidcProvider { F } }
-        : OidcProvider p ( oidc_provider_new ( string_data . a issuer ) )
+        : OidcProvider p ( oidc_provider_new issuer )
         ( oidc_provider_set_jwks_uri p ( string_data jwks ) )
         ( __ag_set . a iss_tmpl ( string_data tmpl ) )
         = . a prov @ ?OidcProvider { T ( OidcProvider_share p ) }
         ^ @ ?OidcProvider { T p }
     } {}
-    ?? ( oidc_provider_discover ( string_data . a issuer ) ) {
+    ?? ( oidc_provider_discover issuer ) {
         T p → {
             = . a prov @ ?OidcProvider { T ( OidcProvider_share p ) }
             ^ @ ?OidcProvider { T p }
@@ -748,15 +771,17 @@ unsafe @ __ag_provider_locked → ?OidcProvider {
 // not wait for discovery and the key set. F when it cannot be reached
 // (it is retried on the next request).
 @ ag_auth_warm → b {
-    ( __ag_lock )
+    : String iss ( ag_auth_issuer )
+    : b multi ( ag_auth_multi )
+    : ~ AgGuard a ( locked_take [AgGuard] g_ag_guard )
     : ~ b ok F
-    ?? ( __ag_provider_locked ) {
+    ?? ( __ag_provider_in a ( string_data iss ) multi ) {
         T p → {
             ?? ( oidc_fetch_jwks p ) { T _ → {} F → { = ok T } }
         }
         F → {}
     }
-    ( __ag_unlock )
+    ( locked_restore [AgGuard] g_ag_guard a )
     ^ ok
 }
 
@@ -808,22 +833,22 @@ unsafe @ __ag_provider_locked → ?OidcProvider {
 
 // Verify `token`; on success, the person, with their organisation's
 // database and their row in it made sure of.
-unsafe @ __ag_verify s token i now → AgPrincipal {
+@ __ag_verify s token i now → AgPrincipal {
     ? ( ag_auth_multi ) {
         : String tid0 ( __ag_unverified_tid token )
         ? ( ag_tenant_admitted ( string_data tid0 ) `` now ) {} {
             ^ ( ag_principal_anon `this organisation is not approved for this agora yet — an administrator of the service has to allow it` )
         }
     } {}
-    ( __ag_lock )
+    : AgConf c ( locked_get [AgConf] g_ag_conf )
+    : ~ AgGuard a ( locked_take [AgGuard] g_ag_guard )
     : ~ ? OidcIdentity got @ ?OidcIdentity { F }
     : ~ String why ( string_new )
-    ?? ( __ag_provider_locked ) {
+    ?? ( __ag_provider_in a ( string_data . c issuer ) . c multi ) {
         F → { ( __ag_set why `the identity provider could not be reached` ) }
         T p → {
-            : *AgAuth a ( __ag_auth )
-            : ~ String want_iss ( string_from ( string_data . a issuer ) )
-            ? . a multi {
+            : ~ String want_iss ( string_from ( string_data . c issuer ) )
+            ? . c multi {
                 : String tid ( __ag_unverified_tid token )
                 = want_iss ( __ag_issuer_for ( string_data . a iss_tmpl ) ( string_data tid ) )
             } {}
@@ -833,7 +858,7 @@ unsafe @ __ag_verify s token i now → AgPrincipal {
                 // Both spellings are this application.
                 : ~ i attempt 0
                 ~ < attempt 2 {
-                    : s aud ? == attempt 0 ( string_data . a audience ) ( string_data . a client_id )
+                    : s aud ? == attempt 0 ( string_data . c audience ) ( string_data . c client_id )
                     : OidcPolicy pol ( oidc_policy_new ( string_data want_iss ) aud )
                     ?? ( oidc_verify_access_token_at p pol token now ) {
                         T id → {
@@ -851,7 +876,7 @@ unsafe @ __ag_verify s token i now → AgPrincipal {
             } { ( __ag_set why `the token names no tenant to derive an issuer from` ) }
         }
     }
-    ( __ag_unlock )
+    ( locked_restore [AgGuard] g_ag_guard a )
     ?? got {
         F → { ^ ( ag_principal_anon ( string_data why ) ) }
         T id → {

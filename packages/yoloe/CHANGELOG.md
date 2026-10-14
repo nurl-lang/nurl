@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.7.6] — 2026-10-14
+
+### Changed
+
+- 6 fewer `unsafe` functions (13 left, each an ioctl, an mmap'd V4L2
+  buffer or an Xlib call): `cam_ok` / `cam_w` / `cam_h` / `xwin_ok` read
+  their handle through `arc_get`, the terminal preview averages into a
+  `( Vec i )` instead of poking a scratch buffer, and a V4L2 request buffer
+  is zeroed through its Vec.
+
 ## [0.7.5] — 2026-10-14
 
 Requires gpu 0.17 and onnx 0.11.2.
