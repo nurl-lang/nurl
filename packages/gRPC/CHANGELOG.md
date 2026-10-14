@@ -1,13 +1,21 @@
 # Changelog
 
-## [0.2.5] — 2026-10-14
+## [0.3.0] — 2026-10-14
 
 Requires NURL 0.73.0 (`slice_at`, `slice_put`, `rc_take`, `locked_take`).
 
 ### Changed
 
 - Loops that read or wrote through `vec_data` pointers index slices (`slice_at` / `slice_put`, as fast as the pointers), and functions with nothing raw in them are no longer marked `unsafe`.
-- 11 fewer functions are `unsafe` than in 0.2.4 (21 left).
+- No `unsafe` left (22 before; needs the stdlib's `h2_stream_data_at`).
+  `GrpcClient` is an `Rc` handle, not an `Arc`: every call drives the
+  HTTP/2 transport inside it, which is not synchronised, so a client and
+  its calls now stay on the thread that made them — the compiler refuses
+  to send one, where before two threads sharing a client raced on the
+  transport. The server's call table is changed by checking a call out
+  of it (a swap and a pop, no copy) and back, instead of writing through
+  a pointer into the table; flushing sends the unsent tail of a buffer
+  with `h2_stream_data_at` instead of a hand-made view of it.
 
 ## [0.2.4] — 2026-10-12
 

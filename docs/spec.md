@@ -518,7 +518,7 @@ field. Reading a plain field is not.
 `raw` is not a reserved word: it is the prefix only right before a
 top-level `@` or `:`, and anywhere else it is an ordinary identifier (a
 field, a binding, a constant). An import's alias is never a `raw` that
-an `@` follows. It is refused on an `impl` method — a trait method can be
+an `@` or a `:` follows. It is refused on an `impl` method — a trait method can be
 called through a `dyn` value, where no caller can be checked — and on a
 const, an enum and a generic struct.
 

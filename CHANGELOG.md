@@ -110,7 +110,21 @@ pointers. `template` (35 → 0) and `pki-server` (19 → 0) keep their state
 as a frozen `Arc` read with `arc_get` and, where it changes, a `Locked`
 snapshot or an `inout` local; `template`'s `tset_add` used to change a set
 in place while a render on another worker read it, and an `{% include %}`
-pointed the render at a source a concurrent add could free. Storing an
+pointed the render at a source a concurrent add could free. `gRPC`
+(22 → 0), `http-client` (32 → 0) and `audio` (29 → 0) follow: an
+`HttpClient` is a `Locked` (requests on two threads changed its pool and
+cookie jar through `arc_ptr` at once), a `GrpcClient` an `Rc` the
+compiler keeps on one thread (its HTTP/2 transport is not synchronised),
+a gRPC server's call table and an origin pool are changed by checking a
+record out and back in, and a `VadStream` is a `Locked`. Three stdlib
+additions close the gaps they hit: `h2_stream_data_at` sends from an
+offset of a buffer (what a flush loop faked with a raw view of the
+unsent tail), `hp_stream_open_on_vec` takes the request body as a `Vec`,
+and `h3_client_ok` asks whether `h3_client_connect` connected at all
+(callers read the handle's raw control word). A `raw : S { … }` on the
+line after an import was taken for the import's alias (only `raw @` was
+excluded), and the struct then broke as a generic argument; a `raw`
+before `:` is the prefix too now. Storing an
 `f32` through a slice window ended the borrows of
 the other windows (its instances are named for LLVM's `float`, which the
 scalar rule did not list); it no longer does.

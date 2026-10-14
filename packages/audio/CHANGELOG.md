@@ -7,7 +7,12 @@ Requires NURL 0.73.0 (`slice_at`, `slice_put`, `rc_take`, `locked_take`).
 ### Changed
 
 - Loops that read or wrote through `vec_data` pointers index slices (`slice_at` / `slice_put`, as fast as the pointers), and functions with nothing raw in them are no longer marked `unsafe`.
-- 17 fewer functions are `unsafe` than in 0.8.3 (29 left).
+- No `unsafe` left (29 before). `VadStream` keeps its state in a
+  `Locked` (one thread may push while another takes) instead of an `Arc`
+  changed through `arc_ptr`; the MP3 tables are filled through slices;
+  the MDCT, side-info and Huffman passes index slices and windows. MP3
+  output is bit-identical and encodes in the same wall time (6 s of
+  stereo at 128 kbit/s: 111 ms best of 15 either way).
 
 ## [0.8.3] — 2026-10-11
 

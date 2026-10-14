@@ -1,6 +1,8 @@
-// HTTP/2-backed gRPC calls. A client and all its calls have one owner/driver.
-// A GrpcClient is a handle: every copy is the same client, and each call
-// holds one, so the transport outlives every call on it. The last owner
+// HTTP/2-backed gRPC calls. A client and all its calls have one owner/driver
+// — one thread: the client is an `Rc` handle, so the compiler keeps it (and
+// every call, which holds one) on the thread that made it; the HTTP/2
+// transport inside is not synchronised. Every copy is the same client, and
+// each call holds one, so the transport outlives every call on it. The last owner
 // disconnects a transport the client opened (grpc_client_connect_*); one it
 // was lent (grpc_client_from_h2) stays its owner's. A GrpcCall is released
 // by its owner's drop, which cancels an unfinished call. Nothing here is
@@ -8,7 +10,7 @@
 // functions are optional early releases.
 // Sending borrows protobuf bytes. Receiving transfers an owned GrpcMessage.
 $ `stdlib/ext/http2_client.nu`
-$ `stdlib/std/arc.nu`
+$ `stdlib/std/rc.nu`
 $ `metadata.nu`
 
 : GrpcClientImpl { H2Client transport String scheme String authority b owns_transport }
@@ -20,13 +22,11 @@ $ `metadata.nu`
     @ drop GrpcClientImpl c → v { ? . c owns_transport { ( h2_client_disconnect . c transport ) } {} }
 }
 
-: GrpcClient { ( Arc GrpcClientImpl ) a }
+: GrpcClient { ( Rc GrpcClientImpl ) a }
 
-@ GrpcClient_share GrpcClient h → GrpcClient { ^ @ GrpcClient { ( arc_clone [GrpcClientImpl] . h a ) } }
+@ GrpcClient_share GrpcClient h → GrpcClient { ^ @ GrpcClient { ( rc_clone [GrpcClientImpl] . h a ) } }
 
 @ GrpcClient_drop sink GrpcClient h → v {}
-
-unsafe @ __GrpcClient_ptr GrpcClient h → *GrpcClientImpl { ^ ( arc_ptr [GrpcClientImpl] . h a ) }
 
 : GrpcCallOptions { i timeout_ns i max_send_message i max_recv_message i max_metadata i encoding }
 : GrpcCall {
@@ -49,13 +49,10 @@ unsafe @ __GrpcClient_ptr GrpcClient h → *GrpcClientImpl { ^ ( arc_ptr [GrpcCl
 }
 
 // A client over a transport the caller keeps owning (and closes itself).
-unsafe @ grpc_client_from_h2 H2Client transport s scheme s authority → GrpcClient {
-    : ~ GrpcClientImpl c @ GrpcClientImpl {}
-    = . c transport ( H2Client_share transport )  // the caller keeps its own copy
-    = . c scheme ( string_from scheme )
-    = . c authority ( string_from authority )
-    = . c owns_transport F
-    ^ @ GrpcClient { ( arc_new [GrpcClientImpl] c ) }
+@ grpc_client_from_h2 H2Client transport s scheme s authority → GrpcClient {
+    // the caller keeps its own copy of the transport
+    : GrpcClientImpl c @ GrpcClientImpl { ( H2Client_share transport ) ( string_from scheme ) ( string_from authority ) F }
+    ^ @ GrpcClient { ( rc_new [GrpcClientImpl] c ) }
 }
 
 @ __grpc_client_transport_error H2ClientErr error → GrpcError {
@@ -74,19 +71,15 @@ unsafe @ grpc_client_from_h2 H2Client transport s scheme s authority → GrpcCli
     ^ ( grpc_error code ( h2_client_err_name error ) )
 }
 
-unsafe @ __grpc_client_connected sink H2Client transport s scheme s host i port → GrpcClient {
+@ __grpc_client_connected sink H2Client transport s scheme s host i port → GrpcClient {
     : String authority ( string_new )
     : String host_text ( string_from host )
     ? & ( string_contains host_text `:` ) ! ( string_starts_with host_text `[` ) {
         ( string_push_char authority 91 ) ( string_push_str authority host ) ( string_push_char authority 93 )
     } { ( string_push_str authority host ) }
     ( string_push_char authority 58 ) ( string_push_int authority port )
-    : ~ GrpcClientImpl c @ GrpcClientImpl {}
-    = . c transport transport
-    = . c scheme ( string_from scheme )
-    = . c authority authority
-    = . c owns_transport T
-    ^ @ GrpcClient { ( arc_new [GrpcClientImpl] c ) }
+    : GrpcClientImpl c @ GrpcClientImpl { transport ( string_from scheme ) authority T }
+    ^ @ GrpcClient { ( rc_new [GrpcClientImpl] c ) }
 }
 
 @ grpc_client_connect_h2c s host i port → !GrpcClient GrpcError {
@@ -107,8 +100,8 @@ unsafe @ __grpc_client_connected sink H2Client transport s scheme s host i port 
 // transport closes when the last call on it is gone too).
 @ grpc_client_close sink GrpcClient client → v {}
 
-unsafe @ grpc_call_open GrpcClient client__h s path ( Vec Header ) metadata GrpcCallOptions opts → !GrpcCall GrpcError {
-    : *GrpcClientImpl client ( __GrpcClient_ptr client__h )
+@ grpc_call_open GrpcClient client__h s path ( Vec Header ) metadata GrpcCallOptions opts → !GrpcCall GrpcError {
+    : GrpcClientImpl client ( rc_get [GrpcClientImpl] . client__h a )
     ? ! ( grpc_method_path path ) { ^ @ !GrpcCall GrpcError { F ( grpc_error GRPC_INVALID_ARGUMENT `invalid RPC method path` ) } } {}
     ? | | < . opts timeout_ns 0 <= . opts max_send_message 0 > . opts max_send_message 2147483647 {
         ^ @ !GrpcCall GrpcError { F ( grpc_error GRPC_INVALID_ARGUMENT `invalid call options` ) }
@@ -150,8 +143,8 @@ unsafe @ grpc_call_open GrpcClient client__h s path ( Vec Header ) metadata Grpc
             ( grpc_metadata_new ) ( grpc_metadata_new ) } }
 }
 
-unsafe @ grpc_call_cancel inout GrpcCall call → !v GrpcError {
-    : *GrpcClientImpl cl ( __GrpcClient_ptr . call client )
+@ grpc_call_cancel inout GrpcCall call → !v GrpcError {
+    : GrpcClientImpl cl ( rc_get [GrpcClientImpl] . . call client a )
     ^ ?? ( h2_client_cancel . cl transport . call stream_id ( h2_err_cancel ) ) {
         T _ → @ !v GrpcError { T 0 }
         F e → @ !v GrpcError { F ( __grpc_client_transport_error e ) }
@@ -165,8 +158,8 @@ unsafe @ grpc_call_cancel inout GrpcCall call → !v GrpcError {
 // peer's stream resources; the decoder, the metadata and the call's share
 // of its client go with the drop glue.
 % Drop GrpcCall {
-    unsafe @ drop GrpcCall call → v {
-        : *GrpcClientImpl cl ( __GrpcClient_ptr . call client )
+    @ drop GrpcCall call → v {
+        : GrpcClientImpl cl ( rc_get [GrpcClientImpl] . . call client a )
         ?? ( h2_client_cancel . cl transport . call stream_id ( h2_err_cancel ) ) { T _ → {} F _ → {} }
         ?? ( h2_client_release_stream . cl transport . call stream_id ) { T _ → {} F _ → {} }
     }
@@ -174,17 +167,17 @@ unsafe @ grpc_call_cancel inout GrpcCall call → !v GrpcError {
 
 // Queue one framed message. RESOURCE_EXHAUSTED/H2CWouldBlock leaves the
 // borrowed input untouched: receive/pump existing messages before retrying.
-unsafe @ grpc_call_send inout GrpcCall call ( Vec u ) message → !v GrpcError {
+@ grpc_call_send inout GrpcCall call ( Vec u ) message → !v GrpcError {
     : ( Vec u ) framed \ ( grpc_frame message . call encoding . call max_send_message )
-    : *GrpcClientImpl cl ( __GrpcClient_ptr . call client )
+    : GrpcClientImpl cl ( rc_get [GrpcClientImpl] . . call client a )
     ^ ?? ( h2_client_send . cl transport . call stream_id framed F ) {
         T _ → @ !v GrpcError { T 0 }
         F e → @ !v GrpcError { F ( __grpc_client_transport_error e ) }
     }
 }
 
-unsafe @ grpc_call_half_close inout GrpcCall call → !v GrpcError {
-    : *GrpcClientImpl cl ( __GrpcClient_ptr . call client )
+@ grpc_call_half_close inout GrpcCall call → !v GrpcError {
+    : GrpcClientImpl cl ( rc_get [GrpcClientImpl] . . call client a )
     ^ ?? ( h2_client_send . cl transport . call stream_id ( vec_new [u] ) T ) {
         T _ → @ !v GrpcError { T 0 }
         F e → @ !v GrpcError { F ( __grpc_client_transport_error e ) }
@@ -212,8 +205,8 @@ unsafe @ grpc_call_half_close inout GrpcCall call → !v GrpcError {
 
 // Move currently received bytes into the bounded message decoder and validate
 // headers once. No socket read occurs here; this also supports shared drivers.
-unsafe @ __grpc_call_update inout GrpcCall call → !v GrpcError {
-    : *GrpcClientImpl cl ( __GrpcClient_ptr . call client )
+@ __grpc_call_update inout GrpcCall call → !v GrpcError {
+    : GrpcClientImpl cl ( rc_get [GrpcClientImpl] . . call client a )
     : H2CStream stream ?? ( h2_client_stream_state . cl transport . call stream_id ) {
         T s → s F _ → { ^ @ !v GrpcError { F ( grpc_error GRPC_FAILED_PRECONDITION `call already released` ) } }
     }
@@ -247,8 +240,8 @@ unsafe @ __grpc_call_update inout GrpcCall call → !v GrpcError {
     ^ @ !v GrpcError { T 0 }
 }
 
-unsafe @ grpc_call_pump inout GrpcCall call → !v GrpcError {
-    : *GrpcClientImpl cl ( __GrpcClient_ptr . call client )
+@ grpc_call_pump inout GrpcCall call → !v GrpcError {
+    : GrpcClientImpl cl ( rc_get [GrpcClientImpl] . . call client a )
     ?? ( h2_client_pump_once . cl transport ) {
         T _ → {} F e → { ^ @ !v GrpcError { F ( __grpc_client_transport_error e ) } }
     }
@@ -286,12 +279,14 @@ unsafe @ grpc_call_pump inout GrpcCall call → !v GrpcError {
 
 // Receive one message, or present=false after successful final status. The
 // same primitive supports unary and all three streaming RPC cardinalities.
-unsafe @ grpc_call_receive inout GrpcCall call → !GrpcMessage GrpcError {
-    : *GrpcClientImpl cl ( __GrpcClient_ptr . call client )
+@ grpc_call_receive inout GrpcCall call → !GrpcMessage GrpcError {
+    // a share of the transport, not a view of the call: the loop below
+    // changes the call
+    : H2Client transport ( H2Client_share . ( rc_get [GrpcClientImpl] . . call client a ) transport )
     ~ T {
         : !v GrpcError updated ( __grpc_call_update call )
         ?? updated { T _ → {} F e → { ^ @ !GrpcMessage GrpcError { F e } } }
-        : H2CStream stream ?? ( h2_client_stream_state . cl transport . call stream_id ) {
+        : H2CStream stream ?? ( h2_client_stream_state transport . call stream_id ) {
             T s → s F _ → { ^ @ !GrpcMessage GrpcError { F ( grpc_error GRPC_FAILED_PRECONDITION `call already released` ) } }
         }
         : ~ b decode_ready T

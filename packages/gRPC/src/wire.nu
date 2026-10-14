@@ -104,15 +104,15 @@ $ `stdlib/ext/compress.nu`
     ^ F
 }
 
-unsafe @ grpc_method_path s path → b {
-    : i n ( nurl_str_len path )
+@ grpc_method_path s path → b {
+    : ( Slice u ) p ( slice_of_str path )
+    : i n ( slice_len [u] p )
     ? < n 4 { ^ F } {}
-    : *u p # *u path
-    ? != # i . p 0 47 { ^ F } {}
+    ? != ( slice_byte p 0 ) 47 { ^ F } {}
     : ~ i slash 0
     : ~ i k 1
     ~ < k n {
-        : i c # i . p k
+        : i c ( slice_byte p k )
         ? == c 47 {
             ? | != slash 0 | == k 1 == k - n 1 { ^ F } {}
             = slash k

@@ -93,7 +93,7 @@ decl = import_decl                 (*  $                             *)
    fields are raw memory, as for a struct with a raw-pointer field.
    `raw` is no reserved word — it is the prefix only right before `@` or
    `:` at the top level, and an import's alias is never a `raw` that `@`
-   follows. It is refused on an `impl` method (a `dyn` call has no caller
+   or `:` follows. It is refused on an `impl` method (a `dyn` call has no caller
    to check), a const, an enum and a generic struct. *)
 decl_prefix = 'pub' | 'simd' | 'inline' | 'unsafe' | 'raw' ;
 

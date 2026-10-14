@@ -2440,10 +2440,11 @@ unsafe @ emit_coverage_modules s module → b {
 : ~ i g_pending_rawrep 0
 
 // An import's optional alias (`$ `path` alias`): an identifier — but not
-// a `raw` that opens the next declaration (`raw @ f …` on the line below).
+// a `raw` that opens the next declaration (`raw @ f …` or `raw : S { … }`
+// on the line below): a `raw` before `@` or `:` is always the prefix.
 @ __import_alias_tok i lex → b {
     ? != ( nurl_lex_type lex ) TT_IDENT { ^ F } {}
-    ? & ( seq ( nurl_lex_val lex ) `raw` ) == ( nurl_lex_peek_type lex ) TT_AT { ^ F } {}
+    ? & ( seq ( nurl_lex_val lex ) `raw` ) | == ( nurl_lex_peek_type lex ) TT_AT == ( nurl_lex_peek_type lex ) TT_COLON { ^ F } {}
     ^ T
 }
 

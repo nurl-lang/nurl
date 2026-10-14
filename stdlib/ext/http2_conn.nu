@@ -1711,6 +1711,14 @@ $ `stdlib/core/mem.nu`
 }
 
 @ h2_stream_data inout H2Connection c i sid ( Vec u ) data b end_stream → !i H2ConnErr {
+    ^ ( h2_stream_data_at c sid data 0 end_stream )
+}
+
+// Queue one DATA frame from byte `off` of `data` on — what an earlier
+// call did not take — without copying the rest. An offset outside the
+// buffer is a protocol error.
+@ h2_stream_data_at inout H2Connection c i sid ( Vec u ) data i off b end_stream → !i H2ConnErr {
+    ? | < off 0 > off ( vec_len [u] data ) { ^ @ !i H2ConnErr { F H2ConnProtocol } } {}
     : i idx ( __h2_find_stream_index c sid )
     ? < idx 0 { ^ @ !i H2ConnErr { F H2ConnProtocol } } {}
     : H2Stream s ( __h2_get_stream . c streams idx )
@@ -1718,7 +1726,7 @@ $ `stdlib/core/mem.nu`
     | == . s state ( h2_state_closed ) == . s state ( h2_state_half_closed_local ) {
         ^ @ !i H2ConnErr { F H2ConnProtocol }
     } {}
-    : i length ( vec_len [u] data )
+    : i length - ( vec_len [u] data ) off
     ? & > length 0 >= ( h2_frame_writer_pending . c writer ) 65536 {
         ( h2_frame_writer_starve . c writer )
         ^ @ !i H2ConnErr { T 0 }
@@ -1736,7 +1744,7 @@ $ `stdlib/core/mem.nu`
         ( h2_frame_writer_starve . c writer )
         ^ @ !i H2ConnErr { T 0 }
     } {}
-    : ( Vec u ) view ( vec_borrow_raw [u] ( vec_data [u] data ) count )
+    : ( Vec u ) view ( vec_borrow_raw [u] # *u + # i ( vec_data [u] data ) off count )
     : !v H2FrameErr wr ( __h2_queue_frame c ( h2_type_data ) ? ended ( h2_flag_end_stream ) 0 sid view )
     ?? wr { T _ → {} F e → { ^ @ !i H2ConnErr { F ( __h2_frame_err_to_conn e ) } } }
     = . c conn_send_window - . c conn_send_window count

@@ -7,7 +7,16 @@ Requires NURL 0.73.0 (`slice_at`, `slice_put`, `rc_take`, `locked_take`).
 ### Changed
 
 - Loops that read or wrote through `vec_data` pointers index slices (`slice_at` / `slice_put`, as fast as the pointers), and functions with nothing raw in them are no longer marked `unsafe`.
-- 5 fewer functions are `unsafe` than in 0.3.4 (32 left).
+- No `unsafe` left (32 before; needs the stdlib's `hp_stream_open_on_vec`
+  and `h3_client_ok`). The client's state is in a `Locked`: a request
+  checks it out for its length, so requests through one shared client run
+  one at a time — before, requests on two threads changed the pool and
+  the jar through `arc_ptr` at once, and a pool that grew under one
+  request left the other's origin record dangling. Each origin's
+  connections are options (`?H2Client`, `?HttpConn`, `?H3Client`)
+  instead of made-up null handles beside a `has_*` flag.
+- `http_client_jar` returns a copy of the jar; `http_client_set_jar`
+  (new) replaces it, to seed a session cookie.
 
 ## [0.3.4] — 2026-10-12
 

@@ -860,6 +860,13 @@ $ `stdlib/core/mem.nu`
     ^ h
 }
 
+// The same with the request body as a Vec (lent: the request is written
+// before this returns).
+@ hp_stream_open_on_vec sink HttpConn conn s method s host i port i is_https s target
+( Vec u ) body s headers_blob s ua → HttpStreamState {
+    ^ ( hp_stream_open_on conn method host port is_https target ( vec_data [u] body ) ( vec_len [u] body ) headers_blob ua )
+}
+
 // Detach the transport from a finished stream: Some(conn) when the
 // response left it reusable — body fully decoded, no error, no
 // `Connection: close`, no EOF-delimited body, and no stray bytes after
