@@ -1,6 +1,6 @@
 COMPILE FAIL
 ERRORS
-compiler/tests/diag_init_global_args.nu:7:25: error: a global set at start is initialised by a function of NO arguments — '( make )'. Wrap the call with its arguments in a function of its own.
+compiler/tests/diag_init_global_args.nu:9:25: error: a global set at start is initialised by a function of NO arguments — '( make )'. Wrap the call with its arguments in a function of its own.
 : ( Locked i ) g ( make 5 )
                         ^
 error: aborting due to 1 previous error

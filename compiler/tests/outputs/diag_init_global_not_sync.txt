@@ -1,6 +1,6 @@
 COMPILE FAIL
 ERRORS
-compiler/tests/diag_init_global_not_sync.nu:7:1: error: the global 'g' is set at start, so every thread reads it: its type must synchronise itself — ( Locked T ), ( Arc T ), ( Channel T ), Mutex, Cond or Semaphore — not 'i'. Keep changing state in a Locked.
+compiler/tests/diag_init_global_not_sync.nu:9:1: error: the global 'g' is set at start, so every thread reads it: its type must synchronise itself — ( Locked T ), ( Arc T ), ( Channel T ), Mutex, Cond or Semaphore — not 'i'. Keep changing state in a Locked.
 @ main → i { ^ g }
 ^
 error: aborting due to 1 previous error

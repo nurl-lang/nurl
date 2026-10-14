@@ -1,5 +1,5 @@
 COMPILE FAIL
 ERRORS
-compiler/tests/diag_init_global_arity.nu:7: error: the global 'g' is set at start by 'make', which must be a function of no arguments returning '( Locked i )'.
+compiler/tests/diag_init_global_arity.nu:9: error: the global 'g' is set at start by 'make', which must be a function of no arguments returning '( Locked i )'.
 error: aborting due to 1 previous error
 note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

@@ -1,6 +1,6 @@
 COMPILE FAIL
 ERRORS
-compiler/tests/diag_init_global_not_fn.nu:5:20: error: a global set at start names a function of no arguments: ': ( Locked T ) g ( make_state )'
+compiler/tests/diag_init_global_not_fn.nu:6:20: error: a global set at start names a function of no arguments: ': ( Locked T ) g ( make_state )'
 : ( Locked i ) g ( 5 )
                    ^
 error: aborting due to 1 previous error
