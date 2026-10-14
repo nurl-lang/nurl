@@ -390,6 +390,16 @@ generic that copies its `T` cannot be instantiated with one (h235)
   payload, dropped through its own twin, and a match arm's inner option is
   a cursor over the outer binding.
 
+- **A closure handed back owns what it cannot copy** (h239). A closure
+  returned right where it is made (`^ \ → v { ( eat r ) }`) took such a
+  capture over when made and released it only if run: never run, it
+  leaked (LSan); one that only read it could not be handed back (h224).
+  Its env now owns the capture under a flag of its own: the body clears it
+  where it moves the value out, the env's drop releases what was not
+  taken. Run again after the move, or copied, it stops with a panic
+  (memory-safe: the caller cannot see the move, and two envs would own one
+  value).
+
 - **A closure never run leaves its capture to the frame** (h236). A
   closure whose body moves out a capture it cannot copy took it over when
   it was made, so one never run — or run without reaching the move —

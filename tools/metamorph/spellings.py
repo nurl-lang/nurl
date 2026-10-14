@@ -1504,9 +1504,6 @@ CLASSES = [
                 "    : Box2 b ( mk )",
                 extra=RES_TYPE + ": Box2 { ( @ i ) get }\n@ mk → Box2 {\n    : Res r @ Res { ( vec_new [i] ) }\n"
                       "    : ( @ i ) f \\ → i { ( vec_len [i] . r buf ) }\n    ^ @ Box2 { f }\n}\n"),
-            "reader-over-sink-param": prog(
-                "    : ( @ i ) g ( mk @ Res { ( vec_new [i] ) } )",
-                extra=RES_TYPE + "@ mk sink Res r → ( @ i ) {\n    ^ \\ → i { ( vec_len [i] . r buf ) }\n}\n"),
             "slice-of-sink-vec": prog(
                 "    : ( Vec i ) a ( vec_new [i] )\n"
                 "    : ( Slice i ) s ( view_of a )",
@@ -1691,6 +1688,17 @@ CLASSES = [
                 prelude=PRELUDE_VEC + "$ `stdlib/std/rc.nu`\n",
                 extra=RES_TYPE + "@ mkr → Res { ^ @ Res { ( vec_new [i] ) } }\n"
                       "@ look Res r → i { ^ ( vec_len [i] . r buf ) }\n@ id Res r → Res { ^ r }\n"),
+            # A closure handed back right where it is made owns the capture
+            # it cannot copy under a flag of its own (h239): reading a
+            # `sink` parameter, or never run.
+            "returned-reader-owns-sink-param": prog(
+                "    : ( @ i ) g ( mk @ Res { ( vec_new [i] ) } )\n"
+                "    : i a ( g )\n"
+                "    : i b ( g )",
+                extra=RES_TYPE + "@ mk sink Res r → ( @ i ) {\n    ^ \\ → i { ( vec_len [i] . r buf ) }\n}\n"),
+            "returned-consumer-never-run": prog(
+                "    : ( @ v ) f ( mk )",
+                extra=RES_TYPE + "@ eat sink Res r → v { }\n@ mk → ( @ v ) {\n    : Res r @ Res { ( vec_new [i] ) }\n    ^ \\ → v { ( eat r ) }\n}\n"),
             "fn-lends-param-field-uncopyable": prog(
                 "    : Hold h @ Hold { @ Res { ( vec_new [i] ) } 1 }\n"
                 "    : i n ( vec_len [i] . ( held h ) buf )",

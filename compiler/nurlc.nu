@@ -1394,6 +1394,11 @@ unsafe @ agg_field_count i syms s ot → i {
 // over only when it moves it out, and a closure never run leaves it to
 // the frame (__byref_flag_vars, h236).
 : ~ s g_nc_flag_caps ``
+// …and those of a closure returned from the frame: the env owns them
+// under a flag of its own, which the
+// body clears where it moves the value out; the env's drop releases what
+// was not taken (h239).
+: ~ s g_nc_own_caps ``
 // …and, for one that a thread or a fiber will run, the captures it takes
 // over from bindings the function no longer uses (gen_closure_expr).
 : ~ s g_env_moved ``
@@ -35204,6 +35209,12 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
         = fvs ( str_skip_word fvs )
         = ty ( nurl_str_cat ty `, i1*` )
     }
+    // …then one `i1` per capture the env owns under a flag (g_nc_own_caps).
+    : ~ s ocs ( nurl_str_cat g_nc_own_caps `` )
+    ~ != 0 ( nurl_str_len ocs ) {
+        = ocs ( str_skip_word ocs )
+        = ty ( nurl_str_cat ty `, i1` )
+    }
     = ty ( nurl_str_cat ty ` }` )
     ty
 }
@@ -35322,6 +35333,40 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
         = vars ( str_skip_word vars )
         = field_idx + field_idx 1
     }
+    // The captures the env owns under a flag (g_nc_own_caps): released if
+    // the body did not take them; an env holding one cannot be copied —
+    // two owners of one value — so a copy stops (h239).
+    : ~ s msgs ``
+    ? != 0 ( nurl_str_len g_nc_own_caps ) {
+        : ~ i ofi + field_idx ( count_words ( __byref_flag_vars captured_vars syms ) )
+        : ~ s ocs ( nurl_str_cat g_nc_own_caps `` )
+        ~ != 0 ( nurl_str_len ocs ) {
+            : s ov ( str_first_word ocs ) = ocs ( str_skip_word ocs )
+            : s ovt ( nurl_sym_get syms ov )
+            : s ht ( nurl_llty ovt )
+            : s hm ( __drop_mangle ovt )
+            ( __handle_drop_ensure ovt )
+            ( gen_drop_for_type ovt syms )
+            : s k ( nurl_str_cat `o` ( nurl_str_int ofi ) )
+            : s vfi ( nurl_str_int ( __word_pos captured_vars ov ) )
+            : s fg ( nurl_str_cat4 `  %f` k ` = getelementptr ` ( nurl_str_cat4 struct_name `, ` struct_name ( nurl_str_cat3 `* %t, i32 0, i32 ` ( nurl_str_int ofi ) `\n` ) ) )
+            : s fl ( nurl_str_cat4 `  %l` k ` = load i1, i1* %f` ( nurl_str_cat k `\n` ) )
+            : s br ( nurl_str_cat4 `  br i1 %l` k ( nurl_str_cat3 `, label %y` k `, label %z` ) ( nurl_str_cat3 k `\ny` ( nurl_str_cat k `:\n` ) ) )
+            : s vg ( nurl_str_cat4 `  %q` k ` = getelementptr ` ( nurl_str_cat4 struct_name `, ` struct_name ( nurl_str_cat3 `* %t, i32 0, i32 ` vfi `\n` ) ) )
+            : s vl ( nurl_str_cat4 `  %v` k ( nurl_str_cat3 ` = load ` ht `, ` ) ( nurl_str_cat4 ht `* %q` k `\n` ) )
+            : s dc ( nurl_str_cat4 `  call void @` ( llvm_source_fn ( nurl_str_cat `drop__` hm ) ) ( nurl_str_cat3 `(` ht ` %v` ) ( nurl_str_cat3 k `)\n  br label %z` ( nurl_str_cat3 k `\nz` ( nurl_str_cat k `:\n` ) ) ) )
+            = drop_body ( nurl_str_cat4 drop_body ( nurl_str_cat3 fg fl br ) ( nurl_str_cat vg vl ) dc )
+            = ofi + ofi 1
+        }
+        ( __emit_rt_decl syms `declare void @nurl_panic(i8* nocapture) noreturn` )
+        = clone_body ( nurl_str_cat3 clone_body `  call void @nurl_panic(i8* @__cclone.` ( nurl_str_cat fname `)\n` ) )
+        : s m1 `a closure that moved out a value it cannot copy was run again\00`
+        : s m2 `a closure owning a value it cannot copy was copied\00`
+        = msgs ( nurl_str_cat4 ( nurl_str_cat4 `\n@__cmoved.` fname ` = private constant [` ( nurl_str_int - ( nurl_str_len m1 ) 2 ) )
+        ( nurl_str_cat3 ` x i8] c"` ( nurl_str_slice m1 0 - ( nurl_str_len m1 ) 3 ) `\00"` )
+        ( nurl_str_cat4 `\n@__cclone.` fname ` = private constant [` ( nurl_str_int - ( nurl_str_len m2 ) 2 ) )
+        ( nurl_str_cat3 ` x i8] c"` ( nurl_str_slice m2 0 - ( nurl_str_len m2 ) 3 ) `\00"\n` ) )
+    } {}
     : b nested != 0 ( nurl_str_len drop_body )
     : b traced != 0 ( nurl_str_len trace_body )
     : s drop_ref ? nested ( nurl_str_cat `@__cenv_drop.` fname ) ( nurl_str_cat `null` `` )
@@ -35357,7 +35402,7 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
     { : s tentry ( nurl_str_cat4 `(i8* %env, i8* %vis) {\nentry:\n  %t = bitcast i8* %env to ` struct_name `*\n` `` )
         = out ( nurl_str_cat4 out `\ndefine void @__cenv_trace.` fname ( nurl_str_cat4 tentry trace_body `  ret void\n}\n` `` ) ) }
     {}
-    ^ out
+    ^ ( nurl_str_cat out msgs )
 }
 
 @ gen_env_allocation s struct_name s captured_vars s vt_name i syms i cg → s {
@@ -35503,6 +35548,20 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
         ( nurl_print `, ` ) ( nurl_print struct_name ) ( nurl_print `* ` ) ( nurl_print typed_ptr )
         ( nurl_print `, i32 0, i32 ` ) ( nurl_print ( nurl_str_int field_idx ) ) ( nurl_print `\n` )
         ( nurl_print `  store i1* ` ) ( nurl_print fl ) ( nurl_print `, i1** ` ) ( nurl_print fp ) ( nurl_print `\n` )
+        = field_idx + field_idx 1
+    }
+    // The captures the env owns under a flag (g_nc_own_caps): moved in —
+    // the binding no longer drops them — with the flag set.
+    : ~ s ocs ( nurl_str_cat g_nc_own_caps `` )
+    ~ != 0 ( nurl_str_len ocs ) {
+        : s ov ( str_first_word ocs ) = ocs ( str_skip_word ocs )
+        : s oup ( mem_udrop_ptr_of syms ov )
+        ? != 0 ( nurl_str_len oup ) { ( mem_udrop_flag_set syms cg oup `0` ) } {}
+        : s op ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print op ) ( nurl_print ` = getelementptr ` ) ( nurl_print struct_name )
+        ( nurl_print `, ` ) ( nurl_print struct_name ) ( nurl_print `* ` ) ( nurl_print typed_ptr )
+        ( nurl_print `, i32 0, i32 ` ) ( nurl_print ( nurl_str_int field_idx ) ) ( nurl_print `\n` )
+        ( nurl_print `  store i1 1, i1* ` ) ( nurl_print op ) ( nurl_print `\n` )
         = field_idx + field_idx 1
     }
 
@@ -36048,6 +36107,7 @@ unsafe @ __thr_peel s lty → s {
     // the body can build a closure of its own.
     : b clo_detach_lit != 0 g_clo_detach
     : s __ncf_saved ( nurl_str_cat g_nc_flag_caps `` )
+    : s __nco_saved ( nurl_str_cat g_nc_own_caps `` )
     = g_clo_detach 0
     : s clo_bind_name ( nurl_str_cat g_clo_bind_name `` )
     = g_clo_bind_name ``
@@ -36110,6 +36170,9 @@ unsafe @ __thr_peel s lty → s {
     // Only outer locals (those with __ptr in syms) are captured, not globals/functions.
     : s captured_vars ( simple_capture_analysis lex syms param_names )
     = g_nc_flag_caps ( __nc_flag_caps captured_vars syms ? | clo_returned clo_detach_lit T F )
+    // (Returned only: a thread's or fiber's closure is copied as it is
+    // handed over, and keeps the move-when-made rule of h222.)
+    = g_nc_own_caps ( __nc_flag_caps captured_vars syms ? & clo_returned ! clo_detach_lit F T )
     : i captured_count ( count_words captured_vars )
     // What it can capture, for the thread-shared cycle rules (published
     // when the literal is done: the body may build closures of its own).
@@ -36553,6 +36616,37 @@ unsafe @ __thr_peel s lty → s {
             ( nurl_sym_def body_syms ( nurl_str_cat bp `__live` ) fptr )
             ( nurl_sym_def body_syms ( nurl_str_cat bp `__outer_owned` ) `1` )
             ( nurl_sym_def body_syms ( nurl_str_cat bp `__udty` ) fvty )
+            ( nurl_sym_def body_syms ( nurl_str_cat bp `__sborrow` ) `` )
+            ( nurl_sym_def body_syms ( nurl_str_cat bp `__alias` ) `` )
+            ( nurl_sym_def body_syms ( nurl_str_cat bp `__borrowers` ) `` )
+            ( nurl_sym_def body_syms ( nurl_str_cat bp `__fsrc` ) `` )
+            = cap_idx + cap_idx 1
+        }
+        // A capture the env owns under its own flag (g_nc_own_caps): the
+        // body moves it out through that flag; run again after the move,
+        // it stops (its caller cannot see the move, h239).
+        : ~ s ocs ( nurl_str_cat g_nc_own_caps `` )
+        ~ != 0 ( nurl_str_len ocs ) {
+            : s ov ( str_first_word ocs ) = ocs ( str_skip_word ocs )
+            : s ovt ( nurl_sym_get syms ov )
+            : s ofg ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print ofg ) ( nurl_print ` = getelementptr ` ) ( nurl_print env_struct_name )
+            ( nurl_print `, ` ) ( nurl_print env_struct_name ) ( nurl_print `* ` ) ( nurl_print typed_env )
+            ( nurl_print `, i32 0, i32 ` ) ( nurl_print ( nurl_str_int cap_idx ) ) ( nurl_print `\n` )
+            : s ofl ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print ofl ) ( nurl_print ` = load i1, i1* ` ) ( nurl_print ofg ) ( nurl_print `\n` )
+            : s oko ( nurl_cg_lbl cg `cown_ok` )
+            : s obad ( nurl_cg_lbl cg `cown_gone` )
+            ( nurl_print `  br i1 ` ) ( nurl_print ofl ) ( nurl_print `, label %` ) ( nurl_print oko ) ( nurl_print `, label %` ) ( nurl_print obad ) ( nurl_print `\n` )
+            ( nurl_print obad ) ( nurl_print `:\n` )
+            ( __emit_rt_decl syms `declare void @nurl_panic(i8* nocapture) noreturn` )
+            ( nurl_print `  call void @nurl_panic(i8* @__cmoved.` ) ( nurl_print closure_fn_name ) ( nurl_print `)\n  unreachable\n` )
+            ( nurl_print oko ) ( nurl_print `:\n` )
+            ( nurl_sym_def body_syms `__cur_lbl__` oko )
+            : s bp ( nurl_sym_get2 body_syms ov `__ptr` )
+            ( nurl_sym_def body_syms ( nurl_str_cat bp `__live` ) ofg )
+            ( nurl_sym_def body_syms ( nurl_str_cat bp `__outer_owned` ) `1` )
+            ( nurl_sym_def body_syms ( nurl_str_cat bp `__udty` ) ovt )
             ( nurl_sym_def body_syms ( nurl_str_cat bp `__sborrow` ) `` )
             ( nurl_sym_def body_syms ( nurl_str_cat bp `__alias` ) `` )
             ( nurl_sym_def body_syms ( nurl_str_cat bp `__borrowers` ) `` )
@@ -37101,7 +37195,7 @@ unsafe @ __thr_peel s lty → s {
         ~ != 0 ( nurl_str_len __ncv ) {
             : s __nw ( str_first_word __ncv ) = __ncv ( str_skip_word __ncv )
             : s __nt ( nurl_sym_get syms __nw )
-            ? & & & | ! ( str_contains_word clo_released __nw ) ( str_contains_word g_nc_flag_caps __nw ) ! ( __is_capture_byref __nw syms ) ! ( __is_handle_ty __nt ) ( __nc_drop_ty __nt ) {
+            ? & & & & | ! ( str_contains_word clo_released __nw ) ( str_contains_word g_nc_flag_caps __nw ) ! ( str_contains_word g_nc_own_caps __nw ) ! ( __is_capture_byref __nw syms ) ! ( __is_handle_ty __nt ) ( __nc_drop_ty __nt ) {
                 = __cap_sx ( __sx_join __cap_sx ( nurl_str_cat3 `\\(` __nw `)` ) )
             } {}
         }
@@ -37109,6 +37203,7 @@ unsafe @ __thr_peel s lty → s {
     ( __sx_publish __sx_me ? == 0 ( nurl_str_len __cap_sx ) `-` __cap_sx )
 
     = g_nc_flag_caps __ncf_saved
+    = g_nc_own_caps __nco_saved
     result2
 }
 
@@ -37129,6 +37224,18 @@ unsafe @ __thr_peel s lty → s {
 
 // ── String Helpers ───────────────────────────────────────────────
 // Count words in a space-separated string
+// The 1-based position of word `w` in `list`, 0 when absent.
+@ __word_pos s list s w → i {
+    : ~ s r ( nurl_str_cat list `` )
+    : ~ i k 1
+    ~ != 0 ( nurl_str_len r ) {
+        ? ( seq ( str_first_word r ) w ) { ^ k } {}
+        = r ( str_skip_word r )
+        = k + k 1
+    }
+    ^ 0
+}
+
 @ count_words s word_list → i {
     ? == 0 ( nurl_str_len word_list ) ^ 0 {}
 

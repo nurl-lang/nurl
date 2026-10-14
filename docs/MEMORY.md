@@ -847,7 +847,10 @@ binding (its source expression `\(r)`) and the walk ends it with the
 binding — handed out of the frame, it is rejected (h224). A closure that
 stays in its frame and may move such a capture out carries the binding's
 drop flag: the body clears it where it moves the value, and the frame
-drops what was not taken — a closure never run leaks nothing (h236). And a `sink`
+drops what was not taken — a closure never run leaks nothing (h236). One
+handed back right where it is made owns such a capture in its env under a
+flag of its own: the env's drop releases what the body did not take, and
+running it again after the move, or copying it, stops with a panic (h239). And a `sink`
 parameter is a binding of the function's own frame: a view of it handed
 back is rejected as a view of a local is (h225).
 
