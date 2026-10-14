@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_closure_ret_uncopyable_capture.nu:17:31: error: a closure hands its result to its caller as the caller's own, but 'r' is captured by this closure, which keeps it for its next call, and a 'Res' cannot be copied — the value would be released twice. Hand back a value the body makes (a literal, or a call that hands its result over), or let the closure take the value as a parameter and return what it builds from it.
+    : ( @ Res ) f \ → Res { r }
+                              ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

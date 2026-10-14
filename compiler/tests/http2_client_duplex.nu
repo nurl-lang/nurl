@@ -13,7 +13,6 @@
 // requires: live
 $ `stdlib/ext/http2_client.nu`
 $ `stdlib/std/thread.nu`
-$ `stdlib/std/arc.nu`
 
 // Name the failing half on the way out — only when something failed, so the
 // recorded output stays identical on every platform. A bare T/F golden says
@@ -67,7 +66,7 @@ unsafe @ buffered_frame ( Vec u ) bytes → b {
     ^ >= ( vec_len [u] bytes ) + 9 length
 }
 
-@ peer TcpConn tcp ( Arc i ) outcome → v {
+@ peer TcpConn tcp ( Locked i ) outcome → v {
     : ~ b ok ( small_send_buffer tcp )
     ( tcp_set_timeout tcp 5000 )
     ?? ( h2_read_preface tcp ) { T _ → {} F _ → { = ok F } }
@@ -182,7 +181,7 @@ unsafe @ buffered_frame ( Vec u ) bytes → b {
         ( count `peer_write_pending` ( h2_frame_writer_pending writer ) )
         ( count `peer_rx_buffered` ( vec_len [u] rx ) )
     } {}
-    ( arc_set [i] outcome ? complete 1 0 )
+    ( locked_set [i] outcome ? complete 1 0 )
     // A completed response can leave WINDOW_UPDATE frames in flight. Drain
     // until the client closes, so closing this raw test peer does not reset
     // the socket while those legitimate control frames are being delivered.
@@ -207,7 +206,7 @@ unsafe @ buffered_frame ( Vec u ) bytes → b {
         = k + k 1
     }
     ( string_free address )
-    : ( Arc i ) outcome ( arc_new [i] 0 )
+    : ( Locked i ) outcome ( locked_new [i] 0 )
     : !Thread ThreadErr worker ( thread_spawn_owned \ → v {
         ?? ( tcp_accept listener ) { T tcp → { ( peer tcp outcome ) } F _ → {} }
     } )
@@ -251,13 +250,13 @@ unsafe @ buffered_frame ( Vec u ) bytes → b {
         F _ → { = ok F }
     }
     ?? worker { T thread → { : i ignored ( thread_join thread ) } F _ → { = ok F } }
-    : b final & ok == ( arc_get [i] outcome ) 1
+    : b final & ok == ( locked_get [i] outcome ) 1
     ? ! final {
         ( note `client_ok` ok )
-        ( note `peer_outcome` == ( arc_get [i] outcome ) 1 )
+        ( note `peer_outcome` == ( locked_get [i] outcome ) 1 )
     } {}
     = ok final
-    ( arc_free [i] outcome ) ( tcp_close_listener listener )
+    ( tcp_close_listener listener )
     ( nurl_print ? ok `duplex_small_buffers=T\n` `duplex_small_buffers=F\n` )
     ^ ? ok 0 1
 }

@@ -52,7 +52,59 @@ with its last owner (*Changed*). The compiler compiles itself in 16 %
 fewer instructions and 9–10 % less time than before this work
 (*Performance*).
 
+An `Arc`'s payload is frozen once made: safe code no longer changes what
+every clone reads without a lock, on any thread and under any lock, and
+shared state that changes lives in the new `Locked [T]`, whose own lock
+its operations hold (*Changed*, *Added*). That closes the last two ways
+found to race a payload — a mutation the check did not follow (h212) and
+the making thread changing it under a worker (h213) — and replaces the
+compiler's lock counting with a rule that needs none. The rule runs on
+the borrow walk, and building it there found two holes in the walk
+itself, both use-after-free from safe code on the previous release: a
+binding of a nested lending call borrowed nothing (h214), a helper
+handing back what a generic accessor lent said it lent nothing (h215),
+and a block's value handed out through the block's own binding borrowed
+nothing (h216) (*Fixed*). Following the one source it still left
+unmodelled, a call through a closure value, found two more: a body's
+final value written without `^` was not judged as `^` judges it, so a
+closure falling off with what it lent (h217) and a function falling off
+with a lend — even `@ idv ( Vec i ) v → ( Vec i ) { v }` (h218) — made
+their callers release what they did not own. Both spellings now mean the
+same, and the metamorphic matrix holds them side by side (*Fixed*). What
+a closure hands back is its caller's own, so three more followed: one
+that cannot be copied and that the closure does not own is rejected
+(h219), a raw string it lent comes back a copy and any other view of
+what it captured is rejected (h220), and no function hands back a field
+it cannot copy out of a struct it drops (h221) (*Fixed*, *Changed*). What
+a closure captures it holds by the same rules: a value it cannot copy
+that its body moves out is the env's from then on (h222), a closure that
+only reads one is a view of its binding and does not outlive it (h224),
+and a `sink` parameter is the function's own to the view walk (h225)
+(*Fixed*, *Changed*). An option or result of a value that cannot be
+copied is now dropped when bound (h223), a match on a borrowed one no
+longer releases its owner's payload (h226), and a payload the arm only
+borrows is not handed to an owner (h227) (*Fixed*). What a lending call
+hands back is no `sink`'s to release: a String comes over as a copy
+(h228), and a value that cannot be copied — lent, or a field of a struct
+that still drops it — is rejected where it would be stored or released
+(h229, h230) (*Fixed*, *Changed*). An enum lends its payload to a
+match's arms — a String goes to a `sink` as a copy, one that cannot be
+copied is rejected (h231) — and a temporary that cannot be copied, or a
+matched enum a call handed over, is dropped where nothing else owns it
+(h232, h233) (*Fixed*). A temporary that cannot be copied handed straight
+to a call is dropped after it or moves into the result (h234), and a
+generic that copies its `T` cannot be instantiated with one (h235)
+(*Fixed*, *Changed*).
+
 ### Added
+
+- **`Locked [T]`: shared state threads change** (stdlib/std/thread.nu).
+  A shared handle over a mutex and the value, reached only through
+  `locked_with` (runs a closure on the value with the lock held),
+  `locked_get` (a copy) and `locked_set`. The lock that guards the data
+  is the one its type names, so it is never forgotten, never the wrong
+  one, and the compiler counts no lock. It is `% Sync`: an `( Arc ( Locked
+  T ) )` or a `Locked` captured by every worker is the one value.
 
 - **Module globals that own their value** (spec §3.4, docs/MEMORY.md
   "Module globals"). `: ~ T g 0` for a `T` that owns something — a
@@ -132,6 +184,19 @@ fewer instructions and 9–10 % less time than before this work
   `# i . h ctl` / `mem_forget` pairs that kept a handle in a global.
 
 ### Changed
+
+- **An `Arc`'s payload is frozen once made** (docs/MEMORY.md §6.5;
+  breaking). `Arc` makes the count atomic, not the data: every clone reads
+  the payload without a lock. Safe code may no longer change it — on any
+  thread, the one that made it included, and whatever lock it holds: a
+  call that hands an `arc_get` result, or a field of one, to anything
+  that changes it is an error at that call, and `arc_set` is for `unsafe`
+  code only. Build the value first and `arc_new` it whole; put state
+  threads share and change in a `Locked` (*Added*); keep state one thread
+  changes in an `Rc`. A payload that synchronises itself (`% Sync`:
+  `Mutex`, `Channel`, `Locked`) is used through its own operations as
+  before. No package changed its payload; three tests did, and
+  `http2_client_duplex` keeps its outcome flag in a `( Locked i )`.
 
 - **More of the standard library's owners release nothing by hand.**
   - `Cell` is a `( Shared RawBlock )`: the bytes release themselves with
@@ -261,6 +326,282 @@ fewer instructions and 9–10 % less time than before this work
   `$NURL_STDLIB/stdlib`, each recognised by its `core/vec.nu`; h178).
 
 ### Fixed
+
+- **A binding of a nested lending call borrows what the inner call lends**
+  (h214). `: e ( vec_at ( vec_at top 0 ) 0 )`, `( vec_get ( vec_at top 0
+  ) 0 )` bound or matched, and the same over `arc_get` or a helper that
+  hands back its argument: the binding borrowed only what the outer call
+  was handed directly — a temporary — so it borrowed nothing, and
+  releasing `top` left it dangling (ASan heap-use-after-free on the
+  probe). A `let` / assignment of such a call, and a `match` of one,
+  carry the call's source expression, and the binding borrows every
+  source a lent argument reaches. Block and `??` expressions now have
+  source expressions of their own (a block's tail; a match's arms, an
+  arm handing back its payload standing for the matched value), and so
+  does a field of a call's result.
+
+- **A function's final value returns as `^` returns it** (h218). A body
+  that falls off with a name, a call, a field read or a literal — `@ idv
+  ( Vec i ) v → ( Vec i ) { v }`, `{ ( vec_at xs 0 ) }`, `{ . b items }`,
+  `{ : e ( vec_at xs 0 ) e }` — was summarised as handing over a value of its own
+  where the same body with `^` lent, so every caller released its
+  argument's contents (ASan heap-use-after-free on main for each); a
+  literal holding a parameter's field copied it where `^` lent it. The
+  fall-off path had grown its own, narrower copy of `gen_ret`'s rules;
+  now such a final statement is compiled by `gen_ret` itself
+  (`gen_block_ret` → `g_ret_implicit`). Whether a statement is the last
+  is read off the source text — balanced parentheses, backtick strings
+  and `//` comments skipped as the lexer skips them — so nothing is
+  lexed twice. One fewer rule set; and the fall-off tail now gets `^`'s
+  tail calls too.
+
+- **A closure cannot hand back what it does not own and cannot copy**
+  (h219). A `% Drop` value with no clone — its parameter, its capture, a
+  field of either, or what a lending call lent (`( vec_at rs 0 )`) — was
+  handed to a caller that takes a closure's result as its own: released
+  by its owner and by the caller (ASan heap-use-after-free on main). The
+  value is rejected where it is handed back; a call, at module end on the
+  callee's final summary (`resolve_clo_nc_rets`).
+
+- **A view a closure hands back is followed** (h220). A call through a
+  closure value had the source expression `*` (not modelled), and a raw
+  string the body lent was taken as owned: `( string_data x )` of a
+  parameter or capture, or a Slice of the Vec it was handed, dangled once
+  the source grew (ASan heap-use-after-free on main). A raw string the
+  closure lent now comes back a copy at the call (`mem_clo_ret_own_str`);
+  any other view holds every argument (`\(args)`), so the walk ends it as
+  it ends a function's; and a view of what the closure captured — which
+  its caller cannot see — is rejected in the body, followed through the
+  body's own bindings (`__cvt`).
+
+- **No function hands back a field it cannot copy out of a struct it
+  drops** (h221). `: Hold h @ Hold { … } ^ . h r`, with `r` a `% Drop`
+  value with no clone, returned the field while `h`'s drop released it on
+  the way out (ASan heap-use-after-free on main). Such a field of a local,
+  a module global or a closure's capture is rejected; a parameter's field
+  stays a lend, and one read through a pointer is raw code's to vouch for.
+
+- **A result's error that cannot be copied, and an option of an option,
+  are dropped** (h237, h238). `! i Res` never dropped an error it held,
+  and `??String` / `??Res` — bound, returned, discarded or popped out of
+  a `( Vec ?T )` — never dropped the inner option's payload (LSan, or
+  valgrind for `??String`, on main). Such an error is owned through the
+  same twin as its Ok payload; the inner option is the outer one's
+  payload, dropped through its own twin, and a match arm's inner option is
+  a cursor over the outer binding.
+
+- **A closure that may leave its frame owns what it cannot copy**
+  (h240–h244). The env of a closure handed to a thread or a fiber, to a
+  callee, or bound to a name used other than as a callee (`^ f`,
+  `( go f )`) now owns a capture it cannot copy, as a returned one does
+  (h239), from the moment it is made; a later use of the binding in the
+  frame is a use of a moved value. A copy of the env takes the capture
+  over — the env it was copied from gives it up, through the env's own
+  address, with no runtime change — so the copy a thread runs releases
+  it, and one bound for a thread but never handed over releases it with
+  its env (it leaked, h240). On main a frame using the value after a
+  thread's closure took it (h241), a closure argument whose callee ran it
+  (h242 — its body reset the key telling a literal argument apart, so the
+  move was never recorded), a bound closure handed back or kept (h243)
+  and a closure run after its thread's copy (h244) all released one value
+  twice; h243 reached a frame's drop flag after the frame returned on
+  this branch (h236). The original run after its copy took the value
+  stops with a panic. A thread's closure may now read such a capture.
+
+- **A closure handed back owns what it cannot copy** (h239). A closure
+  returned right where it is made (`^ \ → v { ( eat r ) }`) took such a
+  capture over when made and released it only if run: never run, it
+  leaked (LSan); one that only read it could not be handed back (h224).
+  Its env now owns the capture under a flag of its own: the body clears it
+  where it moves the value out, the env's drop releases what was not
+  taken. Run again after the move, or copied, it stops with a panic
+  (memory-safe: the caller cannot see the move, and two envs would own one
+  value).
+
+- **A closure never run leaves its capture to the frame** (h236). A
+  closure whose body moves out a capture it cannot copy took it over when
+  it was made, so one never run — or run without reaching the move —
+  leaked it (LSan). A closure that stays in its frame now carries the
+  binding's drop flag (as a by-pointer capture does): the body clears it
+  where it moves the value out, and the frame drops what the closure did
+  not take. A closure returned or handed to a thread keeps the old rule.
+
+- **A temporary argument that cannot be copied has an owner** (h234). `(
+  look ( mk ) )` or `: Res r ( id ( mk ) )`, `mk` handing over a `% Drop`
+  value with no clone, left the temporary with no owner (LSan on main).
+  It is dropped after the call unless the callee keeps it, and moves into
+  the result when the callee hands it back — the lend check of h230 takes
+  such a result for the caller's own.
+
+- **A generic does not copy what cannot be copied** (h235). `( box_clone
+  [Res] b )` copied the payload's bits through `mem_dup`: two boxes, one
+  buffer (ASan heap-use-after-free on main). `mem_dup` of a value that
+  cannot be copied is rejected at the instantiation.
+
+- **An enum lends its payload to the arms** (h231). `?? m { Text t → {
+  ( consume t ) } … }`, `consume` taking a `sink String`, released the
+  payload the enum still held; a `% Drop` payload was made the arm's own
+  and released twice even when only read (ASan heap-use-after-free on
+  main). The payload of an enum a binding or parameter holds is lent; a
+  lent binding handed to a `sink` goes as a copy, or is rejected when it
+  cannot be copied.
+
+- **A temporary that cannot be copied is dropped** (h232). `( mk )`
+  thrown away, or `. ( mkh ) n` read for one field, never dropped a `%
+  Drop` value or a struct holding one (LSan on main). Such a temporary is
+  dropped where it is discarded, and a call's struct read for a field that
+  owns nothing is dropped there — exactly when the call handed it over.
+
+- **A match on an enum a call handed over drops it** (h233). `?? ( mk ) {
+  … }` left the enum with no owner: its cell and payload leaked (LSan on
+  main). It gets an owner of its own for the rest of the scope, and its
+  payload is lent to the arms.
+
+- **A `sink` is not handed what a call only lends** (h228). `( consume (
+  vec_at v 0 ) )` with `consume` taking a `sink String` released the
+  element the Vec still held (ASan heap-use-after-free on main): a
+  declared `sink` counted as an explicit release. A lent call result that
+  can be copied now goes to a `sink` as a copy.
+
+- **A field that cannot be copied does not leave a struct that drops it**
+  (h229). `( eat . h r )`, `r` a `% Drop` value with no clone, handed the
+  field to a `sink` while `h` kept it (ASan heap-use-after-free on main);
+  a String field is emptied where it lives, this one cannot be. Rejected.
+
+- **A lent value that cannot be copied is not stored** (h230). `(
+  vec_at v 0 )` of a `( Vec Res )` pushed into another Vec, put in a
+  struct literal or handed to a `sink` had two owners (ASan
+  heap-use-after-free on main). Whether the call lends is decided at
+  module end on its final summary — a generic instance is compiled late —
+  and such a store is rejected (`resolve_nc_lent_stores`).
+
+- **An option of a value that cannot be copied is dropped** (h223). A
+  `?Res` or `! Res E` (`Res` a `% Drop` value with no clone) bound to a
+  name, returned, discarded, replaced or handed to a `sink` was never
+  dropped: its payload leaked (LSan on main). It is now registered
+  through the same twin as an option of a String (`__opt_payload`), and
+  a match arm's payload is a cursor over the binding, so a payload moved
+  out — into a `sink`, out of the match — takes the option along.
+
+- **A match on a borrowed option keeps its owner's payload** (h226).
+  `?? o { T r → … }` on a `?Res` parameter the function only borrows
+  made `r` the arm's own and released it: the caller's next use read
+  freed memory (ASan heap-use-after-free on main). The payload of an
+  option parameter is the caller's, as a String payload's is.
+
+- **A payload the arm only borrows stays where it is** (h227). A match
+  on an option a struct field keeps handed its payload to the binding
+  the match initialised (`: Res q ?? . h o { T r → { r } … }`): the
+  binding and the struct both released it (ASan heap-use-after-free on
+  main). A field scrutinee is always lent now — a local's too — and a
+  lent payload that cannot be copied is not handed to an owner.
+
+- **A closure that moves out what it captured takes it over** (h222). A
+  body moving a value it cannot copy (a `% Drop` value with no clone)
+  out of its capture — into a literal, a container or a callee that
+  keeps it — left the enclosing binding owning it too: released by the
+  value the closure built and again at the end of the binding's scope
+  (ASan heap-use-after-free on main). Only a `sink` call or a release
+  counted as taking the capture, and only a String or a Vec moved into
+  the env. Such a move now takes the capture over (`__clo_take_capture`):
+  the enclosing binding no longer drops it, and a second use of the
+  closure is a use after the move. (A closure that does this and is
+  never run leaks the value, as one that releases a String does.)
+
+- **A closure over a value it cannot copy is a view of it** (h224). A
+  capture by value of a `% Drop` value with no clone copies its bits
+  into the env while the binding keeps owning what they point at; a
+  closure handed back — `^ f`, or inside a struct literal — outlived the
+  binding and its caller read freed memory (ASan heap-use-after-free on
+  main). The closure literal's source expression now holds such a
+  capture (`\(r)`), so the borrow walk ends it with the binding: handing
+  it out of the frame is rejected, using it in the frame is not.
+
+- **A `sink` parameter is the function's own to the view walk** (h225).
+  A view of a `sink` parameter handed back — a Slice of the Vec it was
+  given, a closure over a `% Drop` value it was given — passed as a view
+  of storage the caller holds, but the caller gave that value up and the
+  function dropped it on the way out (ASan heap-use-after-free on main).
+  Only a raw-string `sink` counted. Every `sink` parameter the function
+  drops is now a binding of its frame to the walk.
+
+- **A closure's final value is its caller's own** (h217). A call through
+  a closure value takes the result as its own, and a body written with
+  `^` copied what it only lent — but one that fell off its end with it
+  did not: `\ → ( Vec i ) { ( vec_at outer 0 ) }`, a capture handed back
+  by name, a field of a capture or of a struct the body made, a binding
+  that owns nothing (an alias, a join), each released `outer`'s element
+  or the closure's own capture in the caller (ASan heap-use-after-free on
+  main). The final value is now copied unless the body owns it: a call
+  by its callee's answer for this invocation, a binding by its drop flag
+  (it then leaves with the return; a capture by pointer stays the
+  enclosing frame's), a field read always — except out of a call that
+  handed the whole over, where it leaves with it. The body's final value
+  is now compiled by `gen_ret` as functions' is (`g_clo_body_ret`), and
+  `gen_ret` itself copies the closure results its own rules left lent: a
+  capture by pointer, a field of a capture, a field of a call that lent
+  it — `^` had the same gaps.
+
+- **A value handed out of a block through the block's own binding
+  borrows what that binding held** (h216). `: v { : t ( vec_at outer 0 )
+  t }` — or the same in a `?` / `??` arm, through an assignment in a
+  nested block, or through a chain of the block's names — borrowed
+  nothing: the walk resolves names where the value is used, and the
+  block's names had ended with it, so releasing `outer` left `v`
+  dangling (ASan heap-use-after-free on the probe; it also hid a view of
+  an `Arc`'s payload from the frozen-payload rule). A value-position
+  block notes what each binding it declares holds — its `let`, an
+  assignment in it, one in a block nested in it — and its value's source
+  expression names those instead (`g_blk_lets`, `__sx_close`).
+
+- **A helper that hands back what a later-compiled accessor lends says
+  so** (h215). `@ first_of ( Vec ( Vec i ) ) xs → ( Vec i ) { ^ ( vec_at
+  xs 0 ) }` — or `: e ( vec_at xs 0 ) ^ e` — was summarised as lending
+  nothing: `vec_at` is a generic instantiated at the end of the module,
+  so its summary did not exist when `first_of`'s was written. A caller's
+  temporary was dropped under the result (`( first_of ( mk ) )`: ASan
+  heap-use-after-free at run time), and a caller could release `xs`
+  while the result was still read. Each parameter handed to such a callee
+  is noted with its position, and once every summary is final a fixed
+  point decides which parameters the helper lends back
+  (`resolve_retfwd_lends`): the caller copies out of a temporary, and the
+  walk keeps the source alive.
+
+- **The thread that made an `Arc` can no longer change its payload while
+  a worker reads it** (h213). The race check asked only what a detached
+  closure did to the payload, so the spawning thread's own `vec_set` /
+  `vec_push` through `arc_get` passed as "one thread changing its own
+  data" — while the worker it had started read the same buffer: ASan's
+  heap-use-after-free in every run, the worker reading a `String` the
+  maker had just replaced. A held lock did not help either: the check
+  took any `mutex_lock` as proof, whichever lock it was. The payload is
+  now frozen once made (*Changed*), which needs no lock bookkeeping at
+  all — the compiler's lock counter, its spawn records and its per-closure
+  summaries are gone — and shared state that changes lives in a `Locked`
+  (*Added*). The rule is decided on the borrow walk, not on the spelling:
+  what a call lends through an `Arc` parameter is a view of the payload,
+  followed into bindings, names it is copied to, borrows of it, fields,
+  elements an accessor lends, `?` / `??` arms and match payloads — each
+  of which a check that tracked `arc_get` bindings by name had let
+  through. `arc_set` was `unsafe`-bodied but callable from safe code
+  (an `unsafe` function's callers need no marking, spec §3.3d); the call
+  is now refused outside `unsafe`, like the raw-memory primitives.
+
+- **A thread that mutates an `Arc`'s payload is rejected however the
+  payload reaches the mutation** (h212). The check knew one shape: a
+  binding `arc_get` bound, then a container mutator on it. Two threads
+  mutated one payload unlocked — lost updates, `realloc(): invalid old
+  size`, ASan's double free — when the view was written in place
+  (`( vec_push ( arc_get a ) x )`), was a field of a view, was handed to a
+  helper that mutates its parameter, or was a `String` or a map handed to
+  its own mutators, whose summaries (writes through raw pointers) close
+  only after every body is compiled. Each argument's provenance is now
+  followed — a view bound or written in place, a field path rooted at one,
+  an `Arc` handle — and a call handing one to a mutated parameter is
+  parked; after the module a fixed point over the final summaries decides
+  which functions mutate the payload of which `Arc` parameter, and a
+  call that does, at any depth, is rejected (h213 then moved the error
+  from the detach to that call).
 
 - **Cloning one handle from several threads at once keeps the count**
   (h211). A share that read an owner count of 1 skipped the locked add
@@ -499,6 +840,20 @@ fewer instructions and 9–10 % less time than before this work
     helper, `mem_arg_consumption`). Probe h142.
 
 ### Performance
+
+- **The compiler hoists IR type definitions without a two-byte search
+  of the whole module.** `__types_first` looked for `\n%` with `memmem`
+  across every module it emitted, megabytes at a time. It now finds each
+  line ending at `memchr` speed and checks the byte after it. Together
+  with removing the per-argument string work of the old Arc check, the
+  self-compile retires 1.5 % fewer instructions than main on the same
+  input (11.508e9 vs 11.684e9). The new checks — the borrow walk's
+  frozen-payload rows, block and `??` source expressions, the forward
+  lend fixed point (h212–h216), the final value read as a `^` (h217,
+  h218), what a closure may hand back (h219–h221) and what captures,
+  options, enums, sinks, temporaries and generics own (h222–h235, about
+  1.5 % of the self-compile on their own) — are included in that figure. The bench kernels compile
+  to the same code as on main.
 
 - **Keccak's round constants are built once.** Every SHA-3 / SHAKE
   sponge (and every four-way one, and SLH-DSA's context) built its own Vec

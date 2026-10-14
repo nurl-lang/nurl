@@ -99,6 +99,11 @@ def prog(body, prelude=PRELUDE_VEC, extra=""):
     return f"{prelude}{extra}\n@ main → i {{\n{body}\n    ^ 0\n}}\n"
 
 
+# A value that cannot be copied: a `% Drop` struct with no clone (h219, h221).
+RES_TYPE = (": Res { ( Vec i ) buf }\n"
+            "% Drop Res {\n    @ drop Res r → v { ( vec_free [i] . r buf ) }\n}\n")
+
+
 # ── The classes ─────────────────────────────────────────────────────────
 
 CLASSES = [
@@ -252,11 +257,14 @@ CLASSES = [
     {
         "name": "arc-shared-mutation",
         "severity": "memory-unsafety",
-        "doc": "A thread closure mutates the CONTENTS of an Arc it did "
-               "not create, with no lock held. Arc makes the refcount "
-               "atomic and nothing else.",
+        "doc": "Safe code changes the CONTENTS of an Arc — on any thread, "
+               "the one that made it included, and under any lock. Arc "
+               "makes the refcount atomic and nothing else: every clone "
+               "reads the payload without a lock (docs/MEMORY.md §6.5, "
+               "h212/h213). The view is followed on the borrow walk, so "
+               "each spelling hands it to the mutator a different way.",
         "expect": REJECT_DEFAULT,
-        "expect_msg": ["thread_spawn closure"],
+        "expect_msg": ["an Arc's payload is frozen once made"],
         "spellings": {
             "inline-push": prog(
                 "    : ( Vec i ) d ( vec_new [i] )\n"
@@ -314,6 +322,66 @@ CLASSES = [
                 "    ?? r { T t → { ( thread_join t ) } F e → {} }\n"
                 "    ( mutex_free m )",
                 prelude=PRELUDE_ARC),
+            # Once the controls of a lock-counting rule: a mutation by the
+            # thread that made the Arc, and one under a Mutex the type does
+            # not tie to the data — both race the clones' unlocked reads.
+            "maker-thread-push": prog(
+                "    : ( Vec i ) d ( vec_new [i] )\n"
+                "    : ( Arc ( Vec i ) ) a ( arc_new [( Vec i )] d )\n"
+                "    : ( Vec i ) v ( arc_get [( Vec i )] a )\n"
+                "    ( vec_push [i] v 1 )",
+                prelude=PRELUDE_ARC),
+            "mutex-held-push": prog(
+                "    : ( Vec i ) d ( vec_new [i] )\n"
+                "    : ( Arc ( Vec i ) ) a ( arc_new [( Vec i )] d )\n"
+                "    : Mutex m ( mutex_new )\n"
+                "    : ( @ v ) w \\ → v {\n"
+                "        ( mutex_lock m )\n"
+                "        : ( Vec i ) v ( arc_get [( Vec i )] a )\n"
+                "        ( vec_push [i] v 1 )\n"
+                "        ( mutex_unlock m )\n"
+                "    }\n"
+                "    : !Thread ThreadErr r ( thread_spawn w )\n"
+                "    ?? r { T t → { ( thread_join t ) } F e → {} }\n"
+                "    ( mutex_free m )",
+                prelude=PRELUDE_ARC),
+            # The view reaching the mutator through the flow the borrow
+            # walk follows.
+            "through-cond-arm": prog(
+                "    : ( Arc ( Vec i ) ) a ( arc_new [( Vec i )] ( vec_new [i] ) )\n"
+                "    : b c == 1 1\n"
+                "    : ( Vec i ) v ? c ( arc_get [( Vec i )] a ) ( vec_new [i] )\n"
+                "    ( vec_push [i] v 1 )",
+                prelude=PRELUDE_ARC),
+            "through-match-payload": prog(
+                "    : ( Vec ( Vec i ) ) vv ( vec_new [( Vec i )] )\n"
+                "    ( vec_push [( Vec i )] vv ( vec_new [i] ) )\n"
+                "    : ( Arc ( Vec ( Vec i ) ) ) aa ( arc_new [( Vec ( Vec i ) )] vv )\n"
+                "    ?? ( vec_get [( Vec i )] ( arc_get [( Vec ( Vec i ) )] aa ) 0 ) { T e → { ( vec_push [i] e 1 ) } F _ → {} }",
+                prelude=PRELUDE_ARC),
+            "through-element": prog(
+                "    : ( Vec ( Vec i ) ) vv ( vec_new [( Vec i )] )\n"
+                "    ( vec_push [( Vec i )] vv ( vec_new [i] ) )\n"
+                "    : ( Arc ( Vec ( Vec i ) ) ) aa ( arc_new [( Vec ( Vec i ) )] vv )\n"
+                "    : ( Vec i ) e ( vec_at [( Vec i )] ( arc_get [( Vec ( Vec i ) )] aa ) 0 )\n"
+                "    ( vec_push [i] e 1 )",
+                prelude=PRELUDE_ARC),
+            "through-copied-name": prog(
+                "    : ( Arc ( Vec i ) ) a ( arc_new [( Vec i )] ( vec_new [i] ) )\n"
+                "    : ( Vec i ) v ( arc_get [( Vec i )] a )\n"
+                "    : ( Vec i ) w v\n"
+                "    ( vec_push [i] w 1 )",
+                prelude=PRELUDE_ARC),
+            "through-block-local": prog(
+                "    : ( Arc ( Vec i ) ) a ( arc_new [( Vec i )] ( vec_new [i] ) )\n"
+                "    : ( Vec i ) v { : ( Vec i ) t ( arc_get [( Vec i )] a ) t }\n"
+                "    ( vec_push [i] v 1 )",
+                prelude=PRELUDE_ARC),
+            "through-helper-return": prog(
+                "    : ( Arc ( Vec i ) ) a ( arc_new [( Vec i )] ( vec_new [i] ) )\n"
+                "    ( vec_push [i] ( id_vec ( arc_get [( Vec i )] a ) ) 1 )",
+                prelude=PRELUDE_ARC,
+                extra="@ id_vec ( Vec i ) v → ( Vec i ) { ^ v }\n"),
         },
     },
     {
@@ -1331,6 +1399,210 @@ CLASSES = [
         },
     },
     {
+        "name": "unowned-result-handed-over",
+        "severity": "memory-unsafety",
+        "doc": "A closure's caller takes its result as its own (h217), so "
+               "a value the body does not own and cannot copy — its "
+               "parameter, its capture, a field of either, what a lending "
+               "call lent — cannot be handed back (h219); nor a view of "
+               "what it captured, which its caller cannot follow (h220); "
+               "nor can any function hand back such a field of a struct it "
+               "drops (h221). `^` and the body's final value are one "
+               "spelling.",
+        "expect": REJECT_DEFAULT,
+        "expect_msg": ["a closure hands its result to its caller as the caller's own",
+                       "a closure hands back a view",
+                       "cannot be copied out of it"],
+        "spellings": {
+            "capture-falloff": prog(
+                "    : Res r @ Res { ( vec_new [i] ) }\n"
+                "    : ( @ Res ) f \\ → Res { r }\n"
+                "    : Res a ( f )", extra=RES_TYPE),
+            "capture-caret": prog(
+                "    : Res r @ Res { ( vec_new [i] ) }\n"
+                "    : ( @ Res ) f \\ → Res { ^ r }\n"
+                "    : Res a ( f )", extra=RES_TYPE),
+            "param-falloff": prog(
+                "    : Res r @ Res { ( vec_new [i] ) }\n"
+                "    : ( @ Res Res ) f \\ Res p → Res { p }\n"
+                "    : Res a ( f r )", extra=RES_TYPE),
+            "capture-field-falloff": prog(
+                "    : Hold h @ Hold { @ Res { ( vec_new [i] ) } 1 }\n"
+                "    : ( @ Res ) f \\ → Res { . h r }\n"
+                "    : Res a ( f )",
+                extra=RES_TYPE + ": Hold { Res r i n }\n"),
+            "lending-call-falloff": prog(
+                "    : ( Vec Res ) rs ( vec_new [Res] )\n"
+                "    ( vec_push [Res] rs @ Res { ( vec_new [i] ) } )\n"
+                "    : ( @ Res ) f \\ → Res { ( vec_at [Res] rs 0 ) }\n"
+                "    : Res a ( f )", extra=RES_TYPE),
+            "view-of-capture": prog(
+                "    : ( Vec i ) v ( vec_new [i] )\n"
+                "    : ( @ ( Slice i ) ) f \\ → ( Slice i ) { ( slice_from_vec [i] v ) }\n"
+                "    : ( Slice i ) sl ( f )",
+                prelude=PRELUDE_VEC + "$ `stdlib/core/slice.nu`\n"),
+            "view-of-capture-via-binding": prog(
+                "    : ( Vec i ) v ( vec_new [i] )\n"
+                "    : ( @ ( Slice i ) ) f \\ → ( Slice i ) { : ( Slice i ) t ( slice_from_vec [i] v ) ^ t }\n"
+                "    : ( Slice i ) sl ( f )",
+                prelude=PRELUDE_VEC + "$ `stdlib/core/slice.nu`\n"),
+            "dropped-field-caret": prog(
+                "    : Res a ( mk )",
+                extra=RES_TYPE + ": Hold { Res r i n }\n"
+                      "@ mk → Res {\n    : Hold h @ Hold { @ Res { ( vec_new [i] ) } 1 }\n    ^ . h r\n}\n"),
+            "dropped-field-falloff": prog(
+                "    : Res a ( mk )",
+                extra=RES_TYPE + ": Hold { Res r i n }\n"
+                      "@ mk → Res {\n    : Hold h @ Hold { @ Res { ( vec_new [i] ) } 1 }\n    . h r\n}\n"),
+        },
+    },
+    {
+        "name": "closure-holds-uncopyable-capture",
+        "severity": "memory-unsafety",
+        "doc": "A capture that cannot be copied (a `% Drop` value with no "
+               "clone): a body that moves it out takes it over, so the "
+               "closure runs at most once (h222); a closure that only reads "
+               "it is a view of the binding and does not leave its frame "
+               "(h224) — one that may leave it owns it (h240–h243); and a view of a `sink` parameter, which the "
+               "function drops, is not handed back (h225).",
+        "expect": REJECT_DEFAULT,
+        "expect_msg": ["frees it when it runs",
+                       "this returns a view of",
+                       "by a closure that may outlive this frame"],
+        "spellings": {
+            # A closure that may leave its frame takes the capture over
+            # when it is made: the frame cannot use it after (h241–h243).
+            "thread-literal-then-frame-use": prog(
+                "    : Res r @ Res { ( vec_new [i] ) }\n"
+                "    : !Thread ThreadErr t ( thread_spawn \\ → v { ( eat r ) } )\n"
+                "    ( eat r )",
+                prelude=PRELUDE_VEC + PRELUDE_THREAD,
+                extra=RES_TYPE + "@ eat sink Res r → v { }\n"),
+            "bound-spawned-then-frame-use": prog(
+                "    : Res r @ Res { ( vec_new [i] ) }\n"
+                "    : ( @ v ) f \\ → v { ( eat r ) }\n"
+                "    : !Thread ThreadErr t ( thread_spawn f )\n"
+                "    ( eat r )",
+                prelude=PRELUDE_VEC + PRELUDE_THREAD,
+                extra=RES_TYPE + "@ eat sink Res r → v { }\n"),
+            "call-arg-literal-then-frame-use": prog(
+                "    : Res r @ Res { ( vec_new [i] ) }\n"
+                "    ( run \\ → v { ( eat r ) } )\n"
+                "    ( eat r )",
+                extra=RES_TYPE + "@ eat sink Res r → v { }\n@ run ( @ v ) f → v { ( f ) }\n"),
+            "bound-handed-on-then-frame-use": prog(
+                "    : Res r @ Res { ( vec_new [i] ) }\n"
+                "    : ( @ i ) f \\ → i { ( vec_len [i] . r buf ) }\n"
+                "    : i a ( run f )\n"
+                "    : i n ( vec_len [i] . r buf )",
+                extra=RES_TYPE + "@ run ( @ i ) f → i { ^ ( f ) }\n"),
+            "into-literal-twice": prog(
+                "    : Res r @ Res { ( vec_new [i] ) }\n"
+                "    : ( @ Hold ) f \\ → Hold { @ Hold { r 1 } }\n"
+                "    : Hold a ( f )\n"
+                "    : Hold b ( f )",
+                extra=RES_TYPE + ": Hold { Res r i n }\n"),
+            "into-literal-caret-twice": prog(
+                "    : Res r @ Res { ( vec_new [i] ) }\n"
+                "    : ( @ Hold ) f \\ → Hold { ^ @ Hold { r 1 } }\n"
+                "    : Hold a ( f )\n"
+                "    : Hold b ( f )",
+                extra=RES_TYPE + ": Hold { Res r i n }\n"),
+            "into-vec-twice": prog(
+                "    : Res r @ Res { ( vec_new [i] ) }\n"
+                "    : ( @ ( Vec Res ) ) f \\ → ( Vec Res ) { : ( Vec Res ) o ( vec_new [Res] ) ( vec_push [Res] o r ) ^ o }\n"
+                "    : ( Vec Res ) a ( f )\n"
+                "    : ( Vec Res ) b ( f )", extra=RES_TYPE),
+            "read-after-move": prog(
+                "    : Res r @ Res { ( vec_new [i] ) }\n"
+                "    : ( @ Hold ) f \\ → Hold { @ Hold { r 1 } }\n"
+                "    : Hold a ( f )\n"
+                "    : i n ( vec_len [i] . r buf )",
+                extra=RES_TYPE + ": Hold { Res r i n }\n"),
+            "slice-of-sink-vec": prog(
+                "    : ( Vec i ) a ( vec_new [i] )\n"
+                "    : ( Slice i ) s ( view_of a )",
+                prelude=PRELUDE_VEC + "$ `stdlib/core/slice.nu`\n",
+                extra="@ view_of sink ( Vec i ) v → ( Slice i ) {\n    ^ ( slice_from_vec [i] v )\n}\n"),
+        },
+    },
+    {
+        "name": "uncopyable-option-ownership",
+        "severity": "memory-unsafety",
+        "doc": "An option of a value that cannot be copied (a `% Drop` "
+               "value with no clone): a match on a borrowed one does not "
+               "release its owner's payload (h226), and a payload the arm "
+               "only borrows — of an option a struct field keeps — is not "
+               "handed to an owner (h227). The runtime half is checked by "
+               "the controls below (h223): each such option is dropped.",
+        "expect": REJECT_DEFAULT,
+        "expect_msg": ["would have to be copied here"],
+        "spellings": {
+            "field-payload-out": prog(
+                "    : Holder h @ Holder { @ ?Res { T @ Res { ( vec_new [i] ) } } 1 }\n"
+                "    : Res q ?? . h o { T r → { r } F _ → { @ Res { ( vec_new [i] ) } } }",
+                extra=RES_TYPE + ": Holder { ?Res o i n }\n"),
+            "field-payload-out-block": prog(
+                "    : Holder h @ Holder { @ ?Res { T @ Res { ( vec_new [i] ) } } 1 }\n"
+                "    : Res q ?? . h o { T r → { : i z 0 r } F _ → { @ Res { ( vec_new [i] ) } } }",
+                extra=RES_TYPE + ": Holder { ?Res o i n }\n"),
+        },
+    },
+    {
+        "name": "lent-value-stored",
+        "severity": "memory-unsafety",
+        "doc": "What a call only lends is not stored or released by "
+               "another owner: a value that cannot be copied lent by a "
+               "call and handed to a keeping or `sink` parameter or a "
+               "literal (h230), or such a field moved out of a struct that "
+               "still drops it (h229). (A String lent to a `sink` is "
+               "handed a copy, h228: see the controls.)",
+        "expect": REJECT_DEFAULT,
+        "expect_msg": ["lends what it hands back", "out of a field", "would have to be copied here", "would copy a"],
+        "spellings": {
+            "lent-into-literal": prog(
+                "    : ( Vec Res ) v ( vec_new [Res] )\n"
+                "    ( vec_push [Res] v @ Res { ( vec_new [i] ) } )\n"
+                "    : Hold h @ Hold { ( vec_at [Res] v 0 ) 1 }",
+                extra=RES_TYPE + ": Hold { Res r i n }\n"),
+            "lent-pushed": prog(
+                "    : ( Vec Res ) v ( vec_new [Res] )\n"
+                "    ( vec_push [Res] v @ Res { ( vec_new [i] ) } )\n"
+                "    : ( Vec Res ) w ( vec_new [Res] )\n"
+                "    ( vec_push [Res] w ( vec_at [Res] v 0 ) )", extra=RES_TYPE),
+            "lent-to-sink": prog(
+                "    : ( Vec Res ) v ( vec_new [Res] )\n"
+                "    ( vec_push [Res] v @ Res { ( vec_new [i] ) } )\n"
+                "    ( eat ( vec_at [Res] v 0 ) )",
+                extra=RES_TYPE + "@ eat sink Res r → v { }\n"),
+            "lent-via-fn-to-sink": prog(
+                "    : ( Vec Res ) v ( vec_new [Res] )\n"
+                "    ( vec_push [Res] v @ Res { ( vec_new [i] ) } )\n"
+                "    ( eat ( first v ) )",
+                extra=RES_TYPE + "@ eat sink Res r → v { }\n@ first ( Vec Res ) v → Res { ^ ( vec_at [Res] v 0 ) }\n"),
+            "field-to-sink": prog(
+                "    : Hold h @ Hold { @ Res { ( vec_new [i] ) } 1 }\n"
+                "    ( eat . h r )",
+                extra=RES_TYPE + ": Hold { Res r i n }\n@ eat sink Res r → v { }\n"),
+            "enum-payload-to-sink": prog(
+                "    : Shape s @ Shape { Has @ Res { ( vec_new [i] ) } }\n"
+                "    ?? s { Has r → { ( eat r ) } Bare → {} }",
+                extra=RES_TYPE + ": | Shape { Has Res Bare }\n@ eat sink Res r → v { }\n"),
+            "enum-payload-out": prog(
+                "    : Shape s @ Shape { Has @ Res { ( vec_new [i] ) } }\n"
+                "    : Res q ?? s { Has r → { r } Bare → { @ Res { ( vec_new [i] ) } } }",
+                extra=RES_TYPE + ": | Shape { Has Res Bare }\n"),
+            "generic-copy-uncopyable": prog(
+                "    : ( Box Res ) b ( box_new [Res] @ Res { ( vec_new [i] ) } )\n"
+                "    : ( Box Res ) c ( box_clone [Res] b )",
+                prelude=PRELUDE_VEC + "$ `stdlib/core/box.nu`\n", extra=RES_TYPE),
+            "param-field-to-sink": prog(
+                "    : Hold h @ Hold { @ Res { ( vec_new [i] ) } 1 }\n"
+                "    ( take h )",
+                extra=RES_TYPE + ": Hold { Res r i n }\n@ eat sink Res r → v { }\n@ take Hold h → v { ( eat . h r ) }\n"),
+        },
+    },
+    {
         "name": "controls",
         "doc": "Correct programs. A class of its own because a checker "
                "that rejects these is worse than one that misses a bug — "
@@ -1344,11 +1616,152 @@ CLASSES = [
                "would encode that documented noise as a regression.",
         "expect": ACCEPT,
         "spellings": {
-            "single-thread-arc-mutation": prog(
+            # What a closure may hand back: a value it makes, even one that
+            # cannot be copied; a view of its argument (h219, h220). A
+            # function lends its parameter's field that cannot be copied.
+            "closure-makes-uncopyable": prog(
+                "    : ( @ Res ) mk \\ → Res { @ Res { ( vec_new [i] ) } }\n"
+                "    : Res a ( mk )\n"
+                "    : Res b ( mk )", extra=RES_TYPE),
+            "closure-view-of-argument": prog(
+                "    : ( Vec i ) w ( vec_new [i] )\n"
+                "    ( vec_push [i] w 7 )\n"
+                "    : ( @ ( Slice i ) ( Vec i ) ) f \\ ( Vec i ) x → ( Slice i ) { ( slice_from_vec [i] x ) }\n"
+                "    : ( Slice i ) sl ( f w )\n"
+                "    : i n ( slice_len [i] sl )",
+                prelude=PRELUDE_VEC + "$ `stdlib/core/slice.nu`\n"),
+            # A closure moving out a capture it cannot copy, run once; one
+            # reading it in its frame; a view of a lent parameter handed
+            # back (h222, h224, h225).
+            "closure-moves-capture-once": prog(
+                "    : Res r @ Res { ( vec_new [i] ) }\n"
+                "    : ( @ Hold ) f \\ → Hold { @ Hold { r 1 } }\n"
+                "    : Hold a ( f )",
+                extra=RES_TYPE + ": Hold { Res r i n }\n"),
+            "closure-reads-capture-in-frame": prog(
+                "    : Res r @ Res { ( vec_new [i] ) }\n"
+                "    : ( @ i ) f \\ → i { ( vec_len [i] . r buf ) }\n"
+                "    : i a ( f )\n"
+                "    : i b ( f )", extra=RES_TYPE),
+            "closure-over-lent-param-returned": prog(
+                "    : Res r @ Res { ( vec_new [i] ) }\n"
+                "    : ( @ i ) g ( mk r )\n"
+                "    : i n ( g )",
+                extra=RES_TYPE + "@ mk Res r → ( @ i ) {\n    ^ \\ → i { ( vec_len [i] . r buf ) }\n}\n"),
+            # An option of a value that cannot be copied: bound, replaced,
+            # matched (read, consumed, moved out), lent to a function that
+            # matches it (h223, h226) — each payload dropped once.
+            "uncopyable-option-bound": prog(
+                "    : ?Res p @ ?Res { T @ Res { ( vec_new [i] ) } }\n"
+                "    : ~ ?Res q @ ?Res { T @ Res { ( vec_new [i] ) } }\n"
+                "    = q @ ?Res { F }", extra=RES_TYPE),
+            "uncopyable-option-matched": prog(
+                "    : ?Res p @ ?Res { T @ Res { ( vec_new [i] ) } }\n"
+                "    : Res m ?? p { T r → { r } F _ → { @ Res { ( vec_new [i] ) } } }", extra=RES_TYPE),
+            "uncopyable-option-lent-matched": prog(
+                "    : ?Res p @ ?Res { T @ Res { ( vec_new [i] ) } }\n"
+                "    : i a ( peek p )\n"
+                "    : i b ( peek p )",
+                extra=RES_TYPE + "@ peek ?Res o → i { ?? o { T r → { ^ ( vec_len [i] . r buf ) } F _ → { ^ 0 } } }\n"),
+            "uncopyable-result-bound": prog(
+                "    : !Res i p @ !Res i { T @ Res { ( vec_new [i] ) } }", extra=RES_TYPE),
+            # A String a call lends, handed to a `sink`: a copy goes over
+            # (h228); a `% Drop` element popped first, then handed on.
+            "lent-string-to-sink": prog(
+                "    : ( Vec String ) v ( vec_new [String] )\n"
+                "    ( vec_push [String] v ( string_from `abc` ) )\n"
+                "    ( consume ( vec_at [String] v 0 ) )\n"
+                "    : i n ( string_len ( vec_at [String] v 0 ) )",
+                prelude=PRELUDE_VEC + "$ `stdlib/core/string.nu`\n",
+                extra="@ consume sink String s → v { }\n"),
+            "popped-element-to-sink": prog(
+                "    : ( Vec Res ) rs ( vec_new [Res] )\n"
+                "    ( vec_push [Res] rs @ Res { ( vec_new [i] ) } )\n"
+                "    ?? ( vec_pop [Res] rs ) { T r → { ( eat r ) } F _ → {} }",
+                extra=RES_TYPE + "@ eat sink Res r → v { }\n"),
+            # An enum's payload read in place or handed to a `sink` as a
+            # copy; temporaries and matched temporaries dropped (h231-h233).
+            "enum-string-payload-to-sink": prog(
+                "    : Msg m @ Msg { Text ( string_from `a string long enough to live on the heap` ) }\n"
+                "    ?? m { Text t → { ( consume t ) } Quiet → {} }\n"
+                "    ?? m { Text t → { ( consume t ) } Quiet → {} }",
+                prelude=PRELUDE_VEC + "$ `stdlib/core/string.nu`\n",
+                extra=": | Msg { Text String Quiet }\n@ consume sink String s → v { }\n"),
+            "uncopyable-temporaries": prog(
+                "    ( mkr )\n"
+                "    : i k . ( mkh ) n\n"
+                "    ?? ( mks ) { Has r → { : i z ( vec_len [i] . r buf ) } Bare → {} }",
+                extra=RES_TYPE + ": Hold { Res r i n }\n: | Shape { Has Res Bare }\n"
+                      "@ mkr → Res { ^ @ Res { ( vec_new [i] ) } }\n@ mkh → Hold { ^ @ Hold { ( mkr ) 7 } }\n"
+                      "@ mks → Shape { ^ @ Shape { Has ( mkr ) } }\n"),
+            # Temporaries that cannot be copied handed to calls: dropped
+            # after them, or moved into the result (h234).
+            "uncopyable-temp-args": prog(
+                "    : i n ( look ( mkr ) )\n"
+                "    : Res a ( id ( mkr ) )\n"
+                "    : ( Rc Res ) c ( rc_new [Res] ( id ( mkr ) ) )",
+                prelude=PRELUDE_VEC + "$ `stdlib/std/rc.nu`\n",
+                extra=RES_TYPE + "@ mkr → Res { ^ @ Res { ( vec_new [i] ) } }\n"
+                      "@ look Res r → i { ^ ( vec_len [i] . r buf ) }\n@ id Res r → Res { ^ r }\n"),
+            # A closure handed back right where it is made owns the capture
+            # it cannot copy under a flag of its own (h239): reading a
+            # `sink` parameter, or never run.
+            "returned-reader-owns-sink-param": prog(
+                "    : ( @ i ) g ( mk @ Res { ( vec_new [i] ) } )\n"
+                "    : i a ( g )\n"
+                "    : i b ( g )",
+                extra=RES_TYPE + "@ mk sink Res r → ( @ i ) {\n    ^ \\ → i { ( vec_len [i] . r buf ) }\n}\n"),
+            # Any closure that may leave its frame owns such a capture, and
+            # a copy of it (a thread's) takes it over (h240, h243).
+            "thread-bound-never-spawned": prog(
+                "    : Res r @ Res { ( vec_new [i] ) }\n"
+                "    : ( @ v ) f \\ → v { ( eat r ) }\n"
+                "    ? == 1 2 { : !Thread ThreadErr t ( thread_spawn f ) } {}",
+                prelude=PRELUDE_VEC + PRELUDE_THREAD,
+                extra=RES_TYPE + "@ eat sink Res r → v { }\n"),
+            "thread-reads-capture": prog(
+                "    : Res r @ Res { ( vec_new [i] ) }\n"
+                "    : !Thread ThreadErr t ( thread_spawn \\ → v { : i n ( vec_len [i] . r buf ) } )\n"
+                "    ?? t { T th → ( thread_join th ) F e → {} }",
+                prelude=PRELUDE_VEC + PRELUDE_THREAD,
+                extra=RES_TYPE),
+            "bound-consumer-returned": prog(
+                "    : ( @ v ) g ( mk )\n"
+                "    ( g )",
+                extra=RES_TYPE + "@ eat sink Res r → v { }\n@ mk → ( @ v ) {\n    : Res r @ Res { ( vec_new [i] ) }\n    : ( @ v ) f \\ → v { ( eat r ) }\n    ^ f\n}\n"),
+            # A bound reader handed back, bare or in a struct, owns the capture
+            # (h243; h224 rejected these as views).
+            "bound-reader-returned": prog(
+                "    : ( @ i ) g ( mk )",
+                extra=RES_TYPE + "@ mk → ( @ i ) {\n    : Res r @ Res { ( vec_new [i] ) }\n"
+                      "    : ( @ i ) f \\ → i { ( vec_len [i] . r buf ) }\n    ^ f\n}\n"),
+            "bound-reader-returned-falloff": prog(
+                "    : ( @ i ) g ( mk )",
+                extra=RES_TYPE + "@ mk → ( @ i ) {\n    : Res r @ Res { ( vec_new [i] ) }\n"
+                      "    : ( @ i ) f \\ → i { ( vec_len [i] . r buf ) }\n    f\n}\n"),
+            "bound-reader-in-returned-struct": prog(
+                "    : Box2 b ( mk )",
+                extra=RES_TYPE + ": Box2 { ( @ i ) get }\n@ mk → Box2 {\n    : Res r @ Res { ( vec_new [i] ) }\n"
+                      "    : ( @ i ) f \\ → i { ( vec_len [i] . r buf ) }\n    ^ @ Box2 { f }\n}\n"),
+            "returned-consumer-never-run": prog(
+                "    : ( @ v ) f ( mk )",
+                extra=RES_TYPE + "@ eat sink Res r → v { }\n@ mk → ( @ v ) {\n    : Res r @ Res { ( vec_new [i] ) }\n    ^ \\ → v { ( eat r ) }\n}\n"),
+            "fn-lends-param-field-uncopyable": prog(
+                "    : Hold h @ Hold { @ Res { ( vec_new [i] ) } 1 }\n"
+                "    : i n ( vec_len [i] . ( held h ) buf )",
+                extra=RES_TYPE + ": Hold { Res r i n }\n@ held Hold h → Res { . h r }\n"),
+            # An Arc's payload is built first and shared whole, and a copy
+            # taken out of it is the taker's own to change.
+            "arc-built-then-shared": prog(
                 "    : ( Vec i ) d ( vec_new [i] )\n"
+                "    ( vec_push [i] d 1 )\n"
                 "    : ( Arc ( Vec i ) ) a ( arc_new [( Vec i )] d )\n"
-                "    : ( Vec i ) v ( arc_get [( Vec i )] a )\n"
-                "    ( vec_push [i] v 1 )",
+                "    : i n ( vec_len [i] ( arc_get [( Vec i )] a ) )",
+                prelude=PRELUDE_ARC),
+            "copy-out-of-arc-mutated": prog(
+                "    : ( Arc ( Vec i ) ) a ( arc_new [( Vec i )] ( vec_new [i] ) )\n"
+                "    : ( Vec i ) mine ( vec_clone [i] ( arc_get [( Vec i )] a ) )\n"
+                "    ( vec_push [i] mine 1 )",
                 prelude=PRELUDE_ARC),
             "thread-reads-only": prog(
                 "    : ( Vec i ) d ( vec_new [i] )\n"
@@ -1369,19 +1782,16 @@ CLASSES = [
                 "    : !Thread ThreadErr r ( thread_spawn w )\n"
                 "    ?? r { T t → { ( thread_join t ) } F e → {} }",
                 prelude=PRELUDE_ARC),
-            "mutex-guarded-mutation": prog(
-                "    : ( Vec i ) d ( vec_new [i] )\n"
-                "    : ( Arc ( Vec i ) ) a ( arc_new [( Vec i )] d )\n"
-                "    : Mutex m ( mutex_new )\n"
+            # Shared state that changes is a Locked: its own lock is held
+            # for the change, on the worker and on the maker alike.
+            "locked-guarded-mutation": prog(
+                "    : ( Locked ( Vec i ) ) l ( locked_new [( Vec i )] ( vec_new [i] ) )\n"
                 "    : ( @ v ) w \\ → v {\n"
-                "        ( mutex_lock m )\n"
-                "        : ( Vec i ) v ( arc_get [( Vec i )] a )\n"
-                "        ( vec_push [i] v 1 )\n"
-                "        ( mutex_unlock m )\n"
+                "        ( locked_with [( Vec i )] l \\ ( Vec i ) xs → v { ( vec_push [i] xs 1 ) } )\n"
                 "    }\n"
                 "    : !Thread ThreadErr r ( thread_spawn w )\n"
-                "    ?? r { T t → { ( thread_join t ) } F e → {} }\n"
-                "    ( mutex_free m )",
+                "    ( locked_set [( Vec i )] l ( vec_new [i] ) )\n"
+                "    ?? r { T t → { ( thread_join t ) } F e → {} }",
                 prelude=PRELUDE_ARC),
             # Send/Sync controls. A derivation that rejects the
             # thread-nonsend / thread-nonsync classes is worthless if it
@@ -1668,6 +2078,14 @@ CLASSES = [
 # is reported separately.
 
 RECOVER_PRELUDE = "$ `stdlib/std/panic.nu`\n$ `stdlib/core/string.nu`\n"
+# (returned-lend: `outer` holds one vector; the spelling hands element 0
+# back and the caller pushes into it, then reads element 0 again.)
+LEND_SETUP = ("    : ( Vec ( Vec i ) ) outer ( vec_new [( Vec i )] )\n"
+              "    : ( Vec i ) seed ( vec_new [i] )\n"
+              "    ( vec_push [i] seed 5 )\n"
+              "    ( vec_push [( Vec i )] outer seed )\n")
+LEND_READ = ("\n    ( nurl_print ( nurl_str_int "
+             "( vec_len [i] ( vec_at [( Vec i )] outer 0 ) ) ) )")
 GUARD = ("@ guard ( @ v ) cl → v {\n"
          "    : !v PanicInfo r ( recover cl )\n"
          "    ?? r { T _ → {}  F p → ( panic_info_free p ) }\n}\n")
@@ -1775,6 +2193,104 @@ RUNTIME_CLASSES = [
                 "    ?? r { T _ → {}  F p → ( panic_info_free p ) }\n"
                 "    ( nurl_print . out body ) ( nurl_print `\\n` )\n"
                 "    ( nurl_free # s . out body )\n    ^ 0\n}\n"),
+        },
+    },
+    {
+        # The same lend handed back N ways (h217, h218). A function may
+        # lend what it was given; a call through a closure value owns
+        # its result. Either way the caller's push must land where the
+        # spelling says and nothing may be released twice — and `^ x`
+        # versus a body that falls off with `x` is no difference at all.
+        # Every spelling here was a heap-use-after-free on main except
+        # the `^` ones, which is exactly the disagreement this axis is
+        # for.
+        "name": "returned-lend",
+        "severity": "memory-unsafety",
+        "doc": "An element of the caller's vector handed back by a "
+               "function or a closure, spelled with `^` or as the value "
+               "the body falls off with; the caller pushes into it and "
+               "reads the vector again.",
+        "spellings": {
+            "fn-caret-call": prog(
+                LEND_SETUP + "    ( vec_push [i] ( first outer ) 1 )" + LEND_READ,
+                extra="@ first ( Vec ( Vec i ) ) xs → ( Vec i ) { ^ ( vec_at [( Vec i )] xs 0 ) }\n"),
+            "fn-falloff-call": prog(
+                LEND_SETUP + "    ( vec_push [i] ( first outer ) 1 )" + LEND_READ,
+                extra="@ first ( Vec ( Vec i ) ) xs → ( Vec i ) { ( vec_at [( Vec i )] xs 0 ) }\n"),
+            "fn-falloff-alias": prog(
+                LEND_SETUP + "    ( vec_push [i] ( first outer ) 1 )" + LEND_READ,
+                extra="@ first ( Vec ( Vec i ) ) xs → ( Vec i ) { : ( Vec i ) e ( vec_at [( Vec i )] xs 0 ) e }\n"),
+            "fn-falloff-param": prog(
+                LEND_SETUP + "    ( vec_push [i] ( idv ( vec_at [( Vec i )] outer 0 ) ) 1 )" + LEND_READ,
+                extra="@ idv ( Vec i ) v → ( Vec i ) { v }\n"),
+            "fn-falloff-field": prog(
+                "    : ( Vec i ) seed ( vec_new [i] )\n"
+                "    ( vec_push [i] seed 5 )\n"
+                "    : Bx b @ Bx { seed 1 }\n"
+                "    ( vec_push [i] ( items_of b ) 1 )\n"
+                "    ( nurl_print ( nurl_str_int ( vec_len [i] . b items ) ) )",
+                extra=": Bx { ( Vec i ) items i n }\n"
+                      "@ items_of Bx b → ( Vec i ) { . b items }\n"),
+            "fn-caret-literal": prog(
+                "    : ( Vec i ) seed ( vec_new [i] )\n"
+                "    ( vec_push [i] seed 5 )\n"
+                "    : Bx b @ Bx { seed 1 }\n"
+                "    : Bx w ( wrap b )\n"
+                "    ( vec_push [i] . w items 1 )\n"
+                "    ( nurl_print ( nurl_str_int ( vec_len [i] . b items ) ) )",
+                extra=": Bx { ( Vec i ) items i n }\n"
+                      "@ wrap Bx p → Bx { ^ @ Bx { . p items 2 } }\n"),
+            "fn-falloff-literal": prog(
+                "    : ( Vec i ) seed ( vec_new [i] )\n"
+                "    ( vec_push [i] seed 5 )\n"
+                "    : Bx b @ Bx { seed 1 }\n"
+                "    : Bx w ( wrap b )\n"
+                "    ( vec_push [i] . w items 1 )\n"
+                "    ( nurl_print ( nurl_str_int ( vec_len [i] . b items ) ) )",
+                extra=": Bx { ( Vec i ) items i n }\n"
+                      "@ wrap Bx p → Bx { @ Bx { . p items 2 } }\n"),
+            "fn-falloff-join": prog(
+                LEND_SETUP + "    ( vec_push [i] ( pick outer T ) 1 )" + LEND_READ,
+                extra="@ pick ( Vec ( Vec i ) ) xs b c → ( Vec i ) { ? c { ( vec_at [( Vec i )] xs 0 ) } { ( vec_new [i] ) } }\n"),
+            "closure-caret-call": prog(
+                LEND_SETUP +
+                "    : ( @ ( Vec i ) ) f \\ → ( Vec i ) { ^ ( vec_at [( Vec i )] outer 0 ) }\n"
+                "    ( vec_push [i] ( f ) 1 )" + LEND_READ),
+            "closure-falloff-call": prog(
+                LEND_SETUP +
+                "    : ( @ ( Vec i ) ) f \\ → ( Vec i ) { ( vec_at [( Vec i )] outer 0 ) }\n"
+                "    ( vec_push [i] ( f ) 1 )" + LEND_READ),
+            "closure-falloff-alias": prog(
+                LEND_SETUP +
+                "    : ( @ ( Vec i ) ) f \\ → ( Vec i ) { : ( Vec i ) e ( vec_at [( Vec i )] outer 0 ) e }\n"
+                "    ( vec_push [i] ( f ) 1 )" + LEND_READ),
+            "closure-falloff-capture": prog(
+                "    : ( Vec i ) seed ( vec_new [i] )\n"
+                "    ( vec_push [i] seed 5 )\n"
+                "    : ( @ ( Vec i ) ) f \\ → ( Vec i ) { seed }\n"
+                "    ( vec_push [i] ( f ) 1 )\n"
+                "    ( vec_push [i] ( f ) 1 )\n"
+                "    ( nurl_print ( nurl_str_int ( vec_len [i] seed ) ) )"),
+            "closure-caret-capture": prog(
+                "    : ( Vec i ) seed ( vec_new [i] )\n"
+                "    ( vec_push [i] seed 5 )\n"
+                "    : ( @ ( Vec i ) ) f \\ → ( Vec i ) { ^ seed }\n"
+                "    ( vec_push [i] ( f ) 1 )\n"
+                "    ( vec_push [i] ( f ) 1 )\n"
+                "    ( nurl_print ( nurl_str_int ( vec_len [i] seed ) ) )"),
+            "closure-falloff-capture-field": prog(
+                "    : ( Vec i ) seed ( vec_new [i] )\n"
+                "    ( vec_push [i] seed 5 )\n"
+                "    : Bx b @ Bx { seed 1 }\n"
+                "    : ( @ ( Vec i ) ) f \\ → ( Vec i ) { . b items }\n"
+                "    ( vec_push [i] ( f ) 1 )\n"
+                "    ( nurl_print ( nurl_str_int ( vec_len [i] . b items ) ) )",
+                extra=": Bx { ( Vec i ) items i n }\n"),
+            "generic-closure-falloff": prog(
+                LEND_SETUP +
+                "    : ( Vec i ) r ( apply [( Vec i )] \\ → ( Vec i ) { ( vec_at [( Vec i )] outer 0 ) } )\n"
+                "    ( vec_push [i] r 1 )" + LEND_READ,
+                extra="@ apply [T] ( @ T ) f → T { ^ ( f ) }\n"),
         },
     },
 ]

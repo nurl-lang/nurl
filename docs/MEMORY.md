@@ -582,9 +582,6 @@ boundary:
 - **Marker assertions.** `% Send`, `% Sync`, `% NotSend`, `% NotSync` and
   `% Resource` are assertions about a type the compiler cannot verify
   (§6.5, §7.7).
-- **Whether a lock is held.** Mutation of shared state outside a `Mutex`
-  is rejected, but whether a `mutex_lock` is held at a given point is
-  counted, not proved per path (§6.5).
 - **Logical leaks.** A cache or map that a program keeps growing and never
   shrinks holds memory that is still reachable. That is program
   behaviour, not a leak the memory model can see.
@@ -604,8 +601,9 @@ A panic is not outside the model: what a panic abandons is reclaimed
 - **Use the safe element access.** `vec_at`, `vec_put` and `vec_get` are
   bounds-checked and compile to the same loop as raw pointer access.
   `vec_data` + `unsafe` is not faster.
-- **Share mutable state through a handle.** Between threads use `Channel`,
-  `Mutex` or `Arc` (§6.5). Within a thread, to share a closure beyond the
+- **Share mutable state through a handle.** Between threads, send it
+  through a `Channel` or keep it in a `Locked` (§6.5); an `Arc` shares a
+  value nobody changes. Within a thread, to share a closure beyond the
   data it mutates, move that data into a heap-backed handle and capture
   the handle by value.
 - **Graphs.** A graph that is built once can be an `Rc` / `Arc` structure.
@@ -630,7 +628,7 @@ A panic is not outside the model: what a panic abandons is reclaimed
 | Releasing a value a closure still holds | §2.11 |
 | Borrow used after its owner moved, ended, or was reassigned | §6.2 |
 | Non-shareable value crossing a thread boundary | §6.5 |
-| Shared mutation outside a lock | §6.5 |
+| Changing an `Arc`'s payload, which clones read without a lock | §6.5 |
 | Cycle of thread-shared handles | §7.7 |
 | Out-of-bounds element access | bounds-checked (`vec_at` panics, `vec_get` returns None) |
 | Raw pointers, casts, raw memory, foreign calls | only inside `unsafe` (spec §3.3d) |
@@ -792,6 +790,100 @@ the one owner could be sharing. A clone is asked of a borrow, and every
 thread holding an `Arc` borrows the handle in its payload at once, so the
 threads' shares were lost and the value freed under the payload. A share
 now always takes the locked add; only a release keeps the shortcut.
+Following an `Arc`'s payload through the borrow walk (§6.5) found two
+more in the walk itself. A binding bound to a call whose lent argument
+was itself a lending call — `( vec_at ( vec_at top 0 ) 0 )`, `( vec_get
+( arc_get a ) 0 )`, a `??` over one — borrowed only what the outer call
+was handed directly, which was a temporary, so it borrowed nothing and
+outlived `top` (h214). Such a binding, and a match's payloads, now
+borrow what the inner calls lend: the row carries the call's source
+expression. And a helper that handed back an element its accessor lent
+(`^ ( vec_at xs 0 )`) said it lent nothing, because the accessor — a
+generic, instantiated at the end of the module — had no summary yet when
+the helper's was written: a caller's temporary was dropped under the
+result, and a caller could release `xs` while still reading it (h215).
+The positions handed to such a callee are noted, and which parameters
+the helper lends is settled on the final summaries. A third was a value
+handed out of a block through a binding the block declared — `: v { : t
+( vec_at outer 0 ) t }` — which borrowed nothing: the walk resolves names
+where the value is used, and the block's own had ended (h216). A
+value-position block now notes what each binding it declares holds, and
+its value names that instead.
+Probing the one source the walk still left unmodelled — the result of
+a call through a closure value — found that a body's *final value*, the
+one it falls off with when no `^` is written, was not judged as `^`
+judges it. A closure falling off with what it only lent — `( vec_at
+outer 0 )`, a capture by name, a field of one, a binding that owns
+nothing — handed that to a caller that takes a closure's result as its
+own, and the caller released `outer`'s element (h217). A function
+falling off with a lend — `@ idv ( Vec i ) v → ( Vec i ) { v }`, `{ (
+vec_at xs 0 ) }`, `{ . b items }` — was summarised as handing over a
+value of its own, and every caller released its argument's contents
+(h218). Written with `^`, both were sound. Now a function body whose
+final statement is a name, a call, a field read or a literal compiles
+it as the `^` it means (the statement's end is read off the source text, so
+nothing is lexed twice), and a closure's final value is copied unless
+the body owns it — the callee's answer for a call, the drop flag for a
+binding it keeps, and always for a field read except out of a call that
+handed the whole over. `tools/metamorph/spellings.py` holds the
+spellings side by side (`returned-lend`). Following that through found
+three more. A closure handing back a value that cannot be copied (a `%
+Drop` value with no clone) that it does not own — its parameter, its
+capture, a field of either, what a lending call lent — released it twice
+(h219): rejected. A raw string a closure lent, and any other view it
+handed back, was not followed at the call (h220): the string now comes
+back a copy, a view of an argument is followed as a function's is, and a
+view of what the closure captured — which its caller cannot see — is
+rejected. And a function handing back a field it cannot copy out of a
+struct it drops returned it released (h221): rejected.
+
+What a closure holds follows the same rules. A body that moves a value it
+cannot copy out of its capture — into a literal, a container, a callee
+that keeps it — takes that capture over: the enclosing binding no longer
+drops it, and a second use of the closure is a use after the move
+(h222). A closure that only reads such a capture holds a copy of its
+bits while the binding owns what they point at, so it is a view of the
+binding (its source expression `\(r)`) and the walk ends it with the
+binding — handed out of the frame, it is rejected (h224). A closure that
+stays in its frame and may move such a capture out carries the binding's
+drop flag: the body clears it where it moves the value, and the frame
+drops what was not taken — a closure never run leaks nothing (h236). One
+handed back right where it is made owns such a capture in its env under a
+flag of its own: the env's drop releases what the body did not take, and
+running it again after the move stops with a panic (h239). So does any
+closure that may leave its frame — handed to a thread, a fiber or a
+callee, or bound to a name the function uses other than as a callee: the
+binding is moved when the closure is made (h240–h243). A copy of such an
+env takes its captures over — the env it was copied from, reached
+through its own address, gives them up — so the copy a thread runs owns
+them, and the original, run after that, stops with a panic (h244). And a `sink`
+parameter is a binding of the function's own frame: a view of it handed
+back is rejected as a view of a local is (h225).
+
+An option or result of a value that cannot be copied (`?Res`, `! Res E`)
+is registered like an option of a String: its binding drops the payload
+(h223) — and a result's error that cannot be copied (h237), and an option
+of an option, whose inner option is the payload (h238), and a match arm's payload is a cursor over the binding — or over
+the parameter, whose caller keeps it (h226). A field scrutinee lends its
+payload to the arm, and a lent payload that cannot be copied cannot be
+handed to an owner (h227).
+
+What a call only lends (`vec_at`, an accessor) is not a `sink`'s to
+release: one that can be copied is handed over as a copy (h228). One that
+cannot be copied cannot be stored where it is kept or released — a
+callee's keeping or `sink` parameter, a literal's field — decided on the
+lending call's final summary at module end (h230); nor can such a field
+leave a struct that still drops it (h229).
+
+An enum lends its payload to a match's arms (h231): read in place, handed
+to a `sink` as a copy, never released by the arm. An enum a call handed
+over and nothing binds is given an owner for the rest of the scope
+(h233), and any other temporary — discarded, or read for a field that
+owns nothing — is dropped where it is left, when the call handed it over
+(h232). One handed straight to another call is dropped after that call,
+or becomes the result when the callee hands it back (h234). `mem_dup` —
+and so every generic that copies its `T`, `box_clone` among them — is
+rejected for a value that cannot be copied (h235).
 
 The rules that carry it:
 
@@ -826,9 +918,10 @@ The rules that carry it:
   longer than its source.
 - **Threads and fibers.** A closure run on another thread or fiber moves
   its captures. Handles whose copy is a share of one object (`Channel`,
-  `Mutex`, `Arc`, `HttpServer`) are captured as a share of their own, so
-  both sides keep using them and either may end first. Shared mutable
-  state goes through one of those handles (§6.5).
+  `Mutex`, `Arc`, `Locked`, `HttpServer`) are captured as a share of their
+  own, so both sides keep using them and either may end first. State
+  threads share and change is a `Locked`; an `Arc`'s payload is frozen
+  once made (§6.5).
 - **Raw memory only in `unsafe`** (spec §3.3d): a raw pointer taken by a
   call or handed back by one, a primitive that reads or writes as far as
   its caller says (`memmem`, `fwrite`, `nurl_str_at`), a C `FILE*`. A
@@ -925,12 +1018,36 @@ handle). A negative marker outranks a positive one on the same type.
 
 **Shared mutation.** A closure run on another thread moves its captures,
 so the spawner cannot keep using a plain `Vec` a worker was handed. Only
-share handles (`Channel`, `Mutex`, `Arc`) are used on both sides. A
-thread that mutates the contents of an `Arc` it did not create, without
-holding a lock, is rejected: `Arc` makes the reference count atomic, not
-the data. Put the data behind a `Mutex`. Whether the lock is held is
-counted over `mutex_lock` / `mutex_unlock` calls, not proved per path
-(§3).
+share handles (`Channel`, `Mutex`, `Arc`, `Locked`) are used on both
+sides.
+
+*An `Arc`'s payload is frozen once made.* `Arc` makes the reference
+count atomic, not the data: every thread holding a clone reads the
+payload with ordinary loads. So safe code never changes it, on any
+thread — the one that made it included (h213) — and whatever lock it
+holds: a `Mutex` the type does not tie to the data proves nothing about
+the threads that read it without taking that lock. What a call lends
+through an `Arc` parameter is a view of the payload — `arc_get`'s
+result, or a helper's over it — and the borrow walk follows it wherever
+the rules follow a borrow: into a binding, a borrow of it, a name it is
+copied to, a field, an element an accessor lends out of it, either arm of
+a `?` or `??`, a match payload. A call that hands one to a parameter its
+callee changes — a container mutator, a `String`'s or a map's, a helper
+of the program's, at any depth — is the error, reported at that call;
+summaries that close only after every body is compiled (writes through
+raw pointers) are waited for, and the verdict is reached on the final
+ones (h212). `arc_set`, which replaces the payload, is for `unsafe` code
+only. A payload whose type synchronises itself (asserted
+`% Sync`: `Mutex`, `Channel`, `Locked`) is changed through its own
+operations.
+
+*State threads share and change is a `Locked [T]`* (stdlib/std/thread.nu):
+a shared handle of its own over a mutex and the value, reached only
+through `locked_with` (runs a closure on the value with the lock held),
+`locked_get` (a copy) and `locked_set`. The lock that guards the data is
+the one its type names, so no lock is counted and none can be forgotten.
+State one thread changes is an `Rc`; a value built first is shared whole
+with `arc_new`.
 
 ### 6.6 How the guarantee is checked
 
@@ -1094,7 +1211,16 @@ fixed:
 - the caller keeps what it passes and drops a temporary it made for the
   call right after it;
 - what the body stores or returns is a copy, and every closure result is
-  owned by its caller;
+  owned by its caller — whether the body returns it with `^` or falls off
+  its end with it (h217); a raw string it lent comes back a copy (h220);
+- a result that cannot be copied has to be the body's own: its parameter,
+  its capture, a field of either or what a call lent is rejected (h219);
+- a view it hands back (a Slice, a struct of views) may point into its
+  arguments, which the call follows, never into what it captured (h220);
+- a capture it cannot copy and moves out (into a literal, a container, a
+  callee that keeps it) is the env's from then on, so the closure runs
+  at most once (h222); one it only reads keeps the closure a view of the
+  binding, which does not leave the binding's frame (h224);
 - releasing a parameter inside the body is a compile error.
 
 Accordingly, every `*_free_with` (`vec_free_with`, `box_free_with`,
@@ -1362,7 +1488,8 @@ Their cycles are rejected at compile time instead:
 - **An `Arc` whose payload can lead back to it is frozen once made.**
   `( mem_ts_cyclic [( Arc T )] )` walks the thread-shared graph. For such
   an `Arc`, `arc_get` returns a copy, and `arc_set` / `arc_ptr` are
-  compile errors. The payload is built first and shared whole, a tree
+  compile errors even in `unsafe` code (every `Arc`'s payload is frozen
+  in safe code, §6.5). The payload is built first and shared whole, a tree
   from its leaves up. `ArcWeak` (`arc_downgrade` / `arc_weak_upgrade`)
   points back without owning. A closure inside a library handle's state
   (a job handler, a route) is not followed by this walk: it reached that

@@ -129,9 +129,11 @@ exception: h32, a `Slice` of a `Vec`, is closed), is a guarantee:
 - **P2** done: moves, borrows, views, keeping containers and callees,
   closures (C1/C2) — the rules are the default; `NURL_SOUND=0` restores
   the old checker for A/B triage only.
-- **P3** partly: a closure run on another thread moves its captures and
-  only share handles cross threads (Channel, Mutex, Arc; HttpServer became
-  one). Open: proving the lock is held by path (today a counted lint).
+- **P3** done: a closure run on another thread moves its captures and
+  only share handles cross threads (Channel, Mutex, Arc, Locked;
+  HttpServer became one). An Arc's payload is frozen once made; state
+  threads share and change is a Locked, reached only with its own lock
+  held, so no lock is counted (h213).
 - **P4** done for the documented seam (defer/return, per-path transfer
   flag); the leak argument is MEMORY.md §6.2 + §7.
 - **P5** done: MEMORY.md §6 states the guarantee; ASan/LSan stay as the

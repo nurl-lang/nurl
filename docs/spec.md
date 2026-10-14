@@ -414,7 +414,9 @@ A function or method declaration may carry a leading `unsafe` prefix
   that gives a value up or claims it by hand (`mem_forget`, `mem_take`,
   `mem_put_back`), an `rcbox` primitive (`rcbox_new`, `rcbox_zero`,
   `rcbox_share`, `rcbox_release`, `rcbox_ptr`), an `Arc` held as a
-  plain word (`arc_into_word`, `arc_from_word`, `arc_word_share`) or a C
+  plain word (`arc_into_word`, `arc_from_word`, `arc_word_share`), an
+  `Arc`'s payload replaced in place (`arc_set`: the payload is frozen
+  once made, docs/MEMORY.md §6.5) or a C
   primitive that reads or writes as far as its caller says, takes a
   `FILE*` or a format string (`memmem`, `fwrite`, `fopen`, `printf`, …:
   the builtins marked raw in `stdlib/core/builtins.nu`);

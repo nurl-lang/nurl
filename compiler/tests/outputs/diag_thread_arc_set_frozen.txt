@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_thread_arc_set_frozen.nu:12:19: error: 'arc_set' replaces an Arc's payload in place, but an Arc's payload is frozen once made: every thread holding a clone reads it without a lock, so replacing it races them. arc_new the new value as an Arc of its own; keep state one thread changes in an Rc; put state threads share and change in a Locked (stdlib/std/thread.nu) and replace it with locked_set, which holds its lock. Only an 'unsafe' function, vouching that no other thread can see this Arc, may call arc_set.
+    ( arc_set [i] a 2 )
+                  ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

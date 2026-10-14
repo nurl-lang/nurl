@@ -1,0 +1,12 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+drop
+1
+drop
+drop
+drop
+3
+2
+drop

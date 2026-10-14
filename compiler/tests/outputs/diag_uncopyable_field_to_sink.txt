@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_uncopyable_field_to_sink.nu:18:17: error: argument 1 to 'eat' moves a 'Res' out of a field, and it cannot be copied — the struct it is a field of still drops it, so it would be released twice. Move the whole struct, take the value out by replacing the field (keep it in a binding of its own), or lend it (drop 'sink').
+    ( eat . h r )
+                ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

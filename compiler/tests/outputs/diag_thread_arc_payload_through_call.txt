@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_thread_arc_payload_through_call.nu:28: error: this call hands 'string_push_char' the contents of Arc 'b' to change, but an Arc's payload is frozen once made: every thread holding a clone reads it without a lock, so changing it races them, whatever lock this code holds. Build the value before arc_new and arc_new it whole; keep state one thread changes in an Rc; put state threads share and change in a Locked (stdlib/std/thread.nu) and change it with locked_with / locked_set, which hold its lock.
+        ~ < k 1000 { ( string_push_char ( arc_get [String] b ) 65 ) = k + k 1 }
+compiler/tests/diag_thread_arc_payload_through_call.nu:30: error: this call hands 'string_push_char' the contents of Arc 'a' to change, but an Arc's payload is frozen once made: every thread holding a clone reads it without a lock, so changing it races them, whatever lock this code holds. Build the value before arc_new and arc_new it whole; keep state one thread changes in an Rc; put state threads share and change in a Locked (stdlib/std/thread.nu) and change it with locked_with / locked_set, which hold its lock.
+    ( string_push_char ( arc_get [String] a ) 66 )
+error: compilation aborted — 2 borrow-checker violations (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

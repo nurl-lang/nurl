@@ -15,10 +15,12 @@
 // length and the same backing pointer — and whichever reallocates first
 // frees the buffer the other is still holding.
 //
-// The error fires at `thread_spawn`, not at the mutation: mutating an
-// Arc's contents from ONE thread is ordinary correct code (see
-// thread_arc_shared_mutation_ok.nu), so it is the detach that makes it a
-// race and the detach that the diagnostic names.
+// The error fires at the mutation. It used to fire at `thread_spawn`,
+// on the theory that one thread changing an Arc's contents is fine; but a
+// thread that changes them while a worker it started reads them races
+// just the same (h213), and a lock no type ties to the data proves
+// nothing. An Arc's payload is frozen once made (docs/MEMORY.md §6.5);
+// shared state that changes is a Locked (thread_arc_shared_mutation_ok).
 
 $ `stdlib/std/arc.nu`
 $ `stdlib/std/thread.nu`

@@ -121,6 +121,13 @@ $ `stdlib/core/box.nu`
 // share it, and the last one to go releases it and anything still queued.
 : Channel [A] { ( Shared ( ChImpl A ) ) ctl }
 
+// A Channel is reached from every thread that holds a copy and changes
+// only under its own lock (chan_send / chan_recv): its contents are
+// synchronised, so one inside an Arc may be sent to and received from by
+// every thread (docs/MEMORY.md §6.5). What may travel through it is still
+// asked of the element (`chan_send` needs it Send).
+% Sync Channel {}
+
 // Type-erased view of ChannelImpl[A]. Every field of ChannelImpl[A] is
 // exactly one machine word — Mutex / Cond / Vec are single-pointer
 // handles, `closed` is an i64 — so the struct layout is INDEPENDENT of
