@@ -850,7 +850,13 @@ drop flag: the body clears it where it moves the value, and the frame
 drops what was not taken — a closure never run leaks nothing (h236). One
 handed back right where it is made owns such a capture in its env under a
 flag of its own: the env's drop releases what the body did not take, and
-running it again after the move, or copying it, stops with a panic (h239). And a `sink`
+running it again after the move stops with a panic (h239). So does any
+closure that may leave its frame — handed to a thread, a fiber or a
+callee, or bound to a name the function uses other than as a callee: the
+binding is moved when the closure is made (h240–h243). A copy of such an
+env takes its captures over — the env it was copied from, reached
+through its own address, gives them up — so the copy a thread runs owns
+them, and the original, run after that, stops with a panic (h244). And a `sink`
 parameter is a binding of the function's own frame: a view of it handed
 back is rejected as a view of a local is (h225).
 

@@ -1,0 +1,17 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+drop
+eaten
+drop
+1
+drop
+0
+0
+0
+drop
+eaten
+drop
+1
+drop

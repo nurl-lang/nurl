@@ -1463,12 +1463,39 @@ CLASSES = [
                "clone): a body that moves it out takes it over, so the "
                "closure runs at most once (h222); a closure that only reads "
                "it is a view of the binding and does not leave its frame "
-               "(h224); and a view of a `sink` parameter, which the "
+               "(h224) — one that may leave it owns it (h240–h243); and a view of a `sink` parameter, which the "
                "function drops, is not handed back (h225).",
         "expect": REJECT_DEFAULT,
         "expect_msg": ["frees it when it runs",
-                       "this returns a view of"],
+                       "this returns a view of",
+                       "by a closure that may outlive this frame"],
         "spellings": {
+            # A closure that may leave its frame takes the capture over
+            # when it is made: the frame cannot use it after (h241–h243).
+            "thread-literal-then-frame-use": prog(
+                "    : Res r @ Res { ( vec_new [i] ) }\n"
+                "    : !Thread ThreadErr t ( thread_spawn \\ → v { ( eat r ) } )\n"
+                "    ( eat r )",
+                prelude=PRELUDE_VEC + PRELUDE_THREAD,
+                extra=RES_TYPE + "@ eat sink Res r → v { }\n"),
+            "bound-spawned-then-frame-use": prog(
+                "    : Res r @ Res { ( vec_new [i] ) }\n"
+                "    : ( @ v ) f \\ → v { ( eat r ) }\n"
+                "    : !Thread ThreadErr t ( thread_spawn f )\n"
+                "    ( eat r )",
+                prelude=PRELUDE_VEC + PRELUDE_THREAD,
+                extra=RES_TYPE + "@ eat sink Res r → v { }\n"),
+            "call-arg-literal-then-frame-use": prog(
+                "    : Res r @ Res { ( vec_new [i] ) }\n"
+                "    ( run \\ → v { ( eat r ) } )\n"
+                "    ( eat r )",
+                extra=RES_TYPE + "@ eat sink Res r → v { }\n@ run ( @ v ) f → v { ( f ) }\n"),
+            "bound-handed-on-then-frame-use": prog(
+                "    : Res r @ Res { ( vec_new [i] ) }\n"
+                "    : ( @ i ) f \\ → i { ( vec_len [i] . r buf ) }\n"
+                "    : i a ( run f )\n"
+                "    : i n ( vec_len [i] . r buf )",
+                extra=RES_TYPE + "@ run ( @ i ) f → i { ^ ( f ) }\n"),
             "into-literal-twice": prog(
                 "    : Res r @ Res { ( vec_new [i] ) }\n"
                 "    : ( @ Hold ) f \\ → Hold { @ Hold { r 1 } }\n"
@@ -1492,18 +1519,6 @@ CLASSES = [
                 "    : Hold a ( f )\n"
                 "    : i n ( vec_len [i] . r buf )",
                 extra=RES_TYPE + ": Hold { Res r i n }\n"),
-            "reader-returned": prog(
-                "    : ( @ i ) g ( mk )",
-                extra=RES_TYPE + "@ mk → ( @ i ) {\n    : Res r @ Res { ( vec_new [i] ) }\n"
-                      "    : ( @ i ) f \\ → i { ( vec_len [i] . r buf ) }\n    ^ f\n}\n"),
-            "reader-returned-falloff": prog(
-                "    : ( @ i ) g ( mk )",
-                extra=RES_TYPE + "@ mk → ( @ i ) {\n    : Res r @ Res { ( vec_new [i] ) }\n"
-                      "    : ( @ i ) f \\ → i { ( vec_len [i] . r buf ) }\n    f\n}\n"),
-            "reader-in-returned-struct": prog(
-                "    : Box2 b ( mk )",
-                extra=RES_TYPE + ": Box2 { ( @ i ) get }\n@ mk → Box2 {\n    : Res r @ Res { ( vec_new [i] ) }\n"
-                      "    : ( @ i ) f \\ → i { ( vec_len [i] . r buf ) }\n    ^ @ Box2 { f }\n}\n"),
             "slice-of-sink-vec": prog(
                 "    : ( Vec i ) a ( vec_new [i] )\n"
                 "    : ( Slice i ) s ( view_of a )",
@@ -1696,6 +1711,38 @@ CLASSES = [
                 "    : i a ( g )\n"
                 "    : i b ( g )",
                 extra=RES_TYPE + "@ mk sink Res r → ( @ i ) {\n    ^ \\ → i { ( vec_len [i] . r buf ) }\n}\n"),
+            # Any closure that may leave its frame owns such a capture, and
+            # a copy of it (a thread's) takes it over (h240, h243).
+            "thread-bound-never-spawned": prog(
+                "    : Res r @ Res { ( vec_new [i] ) }\n"
+                "    : ( @ v ) f \\ → v { ( eat r ) }\n"
+                "    ? == 1 2 { : !Thread ThreadErr t ( thread_spawn f ) } {}",
+                prelude=PRELUDE_VEC + PRELUDE_THREAD,
+                extra=RES_TYPE + "@ eat sink Res r → v { }\n"),
+            "thread-reads-capture": prog(
+                "    : Res r @ Res { ( vec_new [i] ) }\n"
+                "    : !Thread ThreadErr t ( thread_spawn \\ → v { : i n ( vec_len [i] . r buf ) } )\n"
+                "    ?? t { T th → ( thread_join th ) F e → {} }",
+                prelude=PRELUDE_VEC + PRELUDE_THREAD,
+                extra=RES_TYPE),
+            "bound-consumer-returned": prog(
+                "    : ( @ v ) g ( mk )\n"
+                "    ( g )",
+                extra=RES_TYPE + "@ eat sink Res r → v { }\n@ mk → ( @ v ) {\n    : Res r @ Res { ( vec_new [i] ) }\n    : ( @ v ) f \\ → v { ( eat r ) }\n    ^ f\n}\n"),
+            # A bound reader handed back, bare or in a struct, owns the capture
+            # (h243; h224 rejected these as views).
+            "bound-reader-returned": prog(
+                "    : ( @ i ) g ( mk )",
+                extra=RES_TYPE + "@ mk → ( @ i ) {\n    : Res r @ Res { ( vec_new [i] ) }\n"
+                      "    : ( @ i ) f \\ → i { ( vec_len [i] . r buf ) }\n    ^ f\n}\n"),
+            "bound-reader-returned-falloff": prog(
+                "    : ( @ i ) g ( mk )",
+                extra=RES_TYPE + "@ mk → ( @ i ) {\n    : Res r @ Res { ( vec_new [i] ) }\n"
+                      "    : ( @ i ) f \\ → i { ( vec_len [i] . r buf ) }\n    f\n}\n"),
+            "bound-reader-in-returned-struct": prog(
+                "    : Box2 b ( mk )",
+                extra=RES_TYPE + ": Box2 { ( @ i ) get }\n@ mk → Box2 {\n    : Res r @ Res { ( vec_new [i] ) }\n"
+                      "    : ( @ i ) f \\ → i { ( vec_len [i] . r buf ) }\n    ^ @ Box2 { f }\n}\n"),
             "returned-consumer-never-run": prog(
                 "    : ( @ v ) f ( mk )",
                 extra=RES_TYPE + "@ eat sink Res r → v { }\n@ mk → ( @ v ) {\n    : Res r @ Res { ( vec_new [i] ) }\n    ^ \\ → v { ( eat r ) }\n}\n"),

@@ -35209,12 +35209,15 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
         = fvs ( str_skip_word fvs )
         = ty ( nurl_str_cat ty `, i1*` )
     }
-    // …then one `i1` per capture the env owns under a flag (g_nc_own_caps).
+    // …then one `i1` per capture the env owns under a flag (g_nc_own_caps),
+    // and the env's own address: a copy (nurl_closure_clone) reaches the
+    // env it was copied from through it, to take those captures over.
     : ~ s ocs ( nurl_str_cat g_nc_own_caps `` )
     ~ != 0 ( nurl_str_len ocs ) {
         = ocs ( str_skip_word ocs )
         = ty ( nurl_str_cat ty `, i1` )
     }
+    ? != 0 ( nurl_str_len g_nc_own_caps ) { = ty ( nurl_str_cat ty `, i8*` ) } {}
     = ty ( nurl_str_cat ty ` }` )
     ty
 }
@@ -35358,14 +35361,23 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
             = drop_body ( nurl_str_cat4 drop_body ( nurl_str_cat3 fg fl br ) ( nurl_str_cat vg vl ) dc )
             = ofi + ofi 1
         }
-        ( __emit_rt_decl syms `declare void @nurl_panic(i8* nocapture) noreturn` )
-        = clone_body ( nurl_str_cat3 clone_body `  call void @nurl_panic(i8* @__cclone.` ( nurl_str_cat fname `)\n` ) )
+        // A copy takes the captures over (h240): the env it was copied
+        // from — reached through its own address, the field after the
+        // flags — gives them up, so one of the two releases each, and the
+        // other, run, stops as one run after the move does.
+        : s sfi ( nurl_str_int ofi )
+        : s sgep ( nurl_str_cat4 `  %nsp = getelementptr ` struct_name ( nurl_str_cat4 `, ` struct_name `* %t, i32 0, i32 ` sfi ) `\n` )
+        : ~ s cb ( nurl_str_cat4 sgep `  %nss = load i8*, i8** %nsp\n  %nsr = bitcast i8* %nss to ` struct_name `*\n` )
+        : ~ i cfi + field_idx ( count_words ( __byref_flag_vars captured_vars syms ) )
+        ~ < cfi ofi {
+            : s ck ( nurl_str_int cfi )
+            = cb ( nurl_str_cat4 cb ( nurl_str_cat4 `  %nsf` ck ` = getelementptr ` struct_name ) ( nurl_str_cat4 `, ` struct_name `* %nsr, i32 0, i32 ` ck ) ( nurl_str_cat3 `\n  store i1 0, i1* %nsf` ck `\n` ) )
+            = cfi + cfi 1
+        }
+        = clone_body ( nurl_str_cat3 clone_body cb `  store i8* %env, i8** %nsp\n` )
         : s m1 `a closure that moved out a value it cannot copy was run again\00`
-        : s m2 `a closure owning a value it cannot copy was copied\00`
-        = msgs ( nurl_str_cat4 ( nurl_str_cat4 `\n@__cmoved.` fname ` = private constant [` ( nurl_str_int - ( nurl_str_len m1 ) 2 ) )
-        ( nurl_str_cat3 ` x i8] c"` ( nurl_str_slice m1 0 - ( nurl_str_len m1 ) 3 ) `\00"` )
-        ( nurl_str_cat4 `\n@__cclone.` fname ` = private constant [` ( nurl_str_int - ( nurl_str_len m2 ) 2 ) )
-        ( nurl_str_cat3 ` x i8] c"` ( nurl_str_slice m2 0 - ( nurl_str_len m2 ) 3 ) `\00"\n` ) )
+        = msgs ( nurl_str_cat ( nurl_str_cat4 `\n@__cmoved.` fname ` = private constant [` ( nurl_str_int - ( nurl_str_len m1 ) 2 ) )
+        ( nurl_str_cat3 ` x i8] c"` ( nurl_str_slice m1 0 - ( nurl_str_len m1 ) 3 ) `\00"\n` ) )
     } {}
     : b nested != 0 ( nurl_str_len drop_body )
     : b traced != 0 ( nurl_str_len trace_body )
@@ -35564,6 +35576,13 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
         ( nurl_print `  store i1 1, i1* ` ) ( nurl_print op ) ( nurl_print `\n` )
         = field_idx + field_idx 1
     }
+    ? != 0 ( nurl_str_len g_nc_own_caps ) {
+        : s sp ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print sp ) ( nurl_print ` = getelementptr ` ) ( nurl_print struct_name )
+        ( nurl_print `, ` ) ( nurl_print struct_name ) ( nurl_print `* ` ) ( nurl_print typed_ptr )
+        ( nurl_print `, i32 0, i32 ` ) ( nurl_print ( nurl_str_int field_idx ) ) ( nurl_print `\n` )
+        ( nurl_print `  store i8* ` ) ( nurl_print env_ptr ) ( nurl_print `, i8** ` ) ( nurl_print sp ) ( nurl_print `\n` )
+    } {}
 
     env_ptr
 }
@@ -36002,6 +36021,30 @@ unsafe @ __thr_peel s lty → s {
     ( seq fname `spawn_joinable` )
 }
 
+// Whether the closure bound to `bind` here may leave this frame: the rest
+// of the function (from `from`) names it other than as the callee of a call
+// — an argument, a value assigned or returned. Read-only: the lexer is put
+// back. No function around it (or another lexer): it may.
+@ __clo_bind_escapes i lex i syms s bind i from → b {
+    : s hp ( nurl_sym_get syms `__fn_hdr_pos__` )
+    ? | == 0 ( nurl_str_len hp ) ! ( seq ( nurl_sym_get syms `__fn_hdr_lex__` ) ( nurl_str_int lex ) ) { ^ T } {}
+    : i here ( nurl_lex_cur_start lex )
+    ( nurl_lex_set_pos lex ( nurl_str_to_int hp ) )
+    ( skip_balanced lex )
+    : i fend ( nurl_lex_cur_start lex )
+    ( nurl_lex_set_pos lex from )
+    : ~ b esc F
+    : ~ i p1 0
+    ~ & & ! esc < ( nurl_lex_cur_start lex ) fend != ( nurl_lex_type lex ) TT_EOF {
+        : i tt ( nurl_lex_type lex )
+        ? & & ( is_ident_tok tt ) != p1 TT_LPAREN ( seq ( nurl_lex_val lex ) bind ) { = esc T } {}
+        = p1 tt
+        ( nurl_lex_advance lex )
+    }
+    ( nurl_lex_set_pos lex here )
+    ^ esc
+}
+
 // The captures a thread's or a fiber's closure takes over: owning String /
 // Vec / handle bindings of this frame that the rest of the function never
 // names again (a forward scan of its body) and that no loop around the
@@ -36106,6 +36149,9 @@ unsafe @ __thr_peel s lty → s {
     // binding (its name) that may be (__clo_detach_moves). Read before
     // the body can build a closure of its own.
     : b clo_detach_lit != 0 g_clo_detach
+    // Built as a call's argument: used right where it is made. Read before
+    // the body, whose own calls set and clear the same key (h240).
+    : b clo_in_arg ( seq ( nurl_sym_get syms `__in_call_arg__` ) `1` )
     : s __ncf_saved ( nurl_str_cat g_nc_flag_caps `` )
     : s __nco_saved ( nurl_str_cat g_nc_own_caps `` )
     = g_clo_detach 0
@@ -36169,10 +36215,15 @@ unsafe @ __thr_peel s lty → s {
     // syms is the OUTER scope; param_names is a space-separated list of closure params.
     // Only outer locals (those with __ptr in syms) are captured, not globals/functions.
     : s captured_vars ( simple_capture_analysis lex syms param_names )
-    = g_nc_flag_caps ( __nc_flag_caps captured_vars syms ? | clo_returned clo_detach_lit T F )
-    // (Returned only: a thread's or fiber's closure is copied as it is
-    // handed over, and keeps the move-when-made rule of h222.)
-    = g_nc_own_caps ( __nc_flag_caps captured_vars syms ? & clo_returned ! clo_detach_lit F T )
+    // A closure bound to a name the rest of the function only calls stays
+    // in this frame: it reaches its captures' drop flags there (h236).
+    // Any other — handed back, to a thread or a fiber, to a callee, stored —
+    // may outlive the frame: its env owns them, under flags of its own
+    // (h239), and a copy of it takes them over (h240).
+    : b clo_stays & & & != 0 ( nurl_str_len clo_bind_name ) ! clo_returned ! clo_detach_lit
+    ! ( __clo_bind_escapes lex syms clo_bind_name body_start_pos )
+    = g_nc_flag_caps ( __nc_flag_caps captured_vars syms ! clo_stays )
+    = g_nc_own_caps ( __nc_flag_caps captured_vars syms clo_stays )
     : i captured_count ( count_words captured_vars )
     // What it can capture, for the thread-shared cycle rules (published
     // when the literal is done: the body may build closures of its own).
@@ -36218,9 +36269,11 @@ unsafe @ __thr_peel s lty → s {
                 : b __cap_own | ( nurl_sym_has_word syms `__owned_strings__` ( nurl_sym_get2 syms __cap_w `__ptr` ) ) ( nurl_sym_has_word syms `__owned_slices__` __cap_w )
                 = __cap_sx ( __sx_join __cap_sx ? __cap_own ( nurl_str_cat3 `\\(` __cap_w `)` ) ( nurl_str_cat __cap_w `` ) )
             } {}
-            ? ( bck_is_heap_lty __cap_ll )
-            { ( bck_note_read __cap_w )
-                = __cap_heap ? == 0 ( nurl_str_len __cap_heap )
+            // (One the env owns is no longer the frame's: running the
+            // closure reads the env's, h240.)
+            ? ( bck_is_heap_lty __cap_ll ) { ( bck_note_read __cap_w ) } {}
+            ? & ( bck_is_heap_lty __cap_ll ) ! ( str_contains_word g_nc_own_caps __cap_w )
+            { = __cap_heap ? == 0 ( nurl_str_len __cap_heap )
                 ( nurl_str_cat __cap_w `` )
                 ( nurl_str_cat3 __cap_heap ` ` __cap_w ) }
             {}
@@ -36917,11 +36970,17 @@ unsafe @ __thr_peel s lty → s {
     = g_closure_effects __cl_effects_saved
     = g_clo_caps_now __cl_capsnow_saved
     : ~ s __cl_frees ``
-    : b __cl_used_now ( seq ( nurl_sym_get syms `__in_call_arg__` ) `1` )
+    : b __cl_used_now clo_in_arg
+    // What the env owns left this frame when the closure was made.
+    : ~ s __cl_own ( nurl_str_cat g_nc_own_caps `` )
+    ~ != 0 ( nurl_str_len __cl_own ) {
+        : s __cl_n ( str_first_word __cl_own ) = __cl_own ( str_skip_word __cl_own )
+        ( bck_stash_move __cl_n ( nurl_lex_line lex ) `a closure that may outlive this frame` )
+    }
     ~ != 0 ( nurl_str_len __cl_cons ) {
         : s __cl_n ( str_first_word __cl_cons )
         = __cl_cons ( str_skip_word __cl_cons )
-        ? ( str_contains_word captured_vars __cl_n ) {
+        ? & ( str_contains_word captured_vars __cl_n ) ! ( str_contains_word g_nc_own_caps __cl_n ) {
             = __cl_frees ? == 0 ( nurl_str_len __cl_frees ) ( nurl_str_cat __cl_n `` ) ( nurl_str_cat3 __cl_frees ` ` __cl_n )
             ? __cl_used_now
             { ( bck_stash_maybe_move __cl_n ( nurl_lex_line lex )

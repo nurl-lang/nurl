@@ -390,6 +390,24 @@ generic that copies its `T` cannot be instantiated with one (h235)
   payload, dropped through its own twin, and a match arm's inner option is
   a cursor over the outer binding.
 
+- **A closure that may leave its frame owns what it cannot copy**
+  (h240–h244). The env of a closure handed to a thread or a fiber, to a
+  callee, or bound to a name used other than as a callee (`^ f`,
+  `( go f )`) now owns a capture it cannot copy, as a returned one does
+  (h239), from the moment it is made; a later use of the binding in the
+  frame is a use of a moved value. A copy of the env takes the capture
+  over — the env it was copied from gives it up, through the env's own
+  address, with no runtime change — so the copy a thread runs releases
+  it, and one bound for a thread but never handed over releases it with
+  its env (it leaked, h240). On main a frame using the value after a
+  thread's closure took it (h241), a closure argument whose callee ran it
+  (h242 — its body reset the key telling a literal argument apart, so the
+  move was never recorded), a bound closure handed back or kept (h243)
+  and a closure run after its thread's copy (h244) all released one value
+  twice; h243 reached a frame's drop flag after the frame returned on
+  this branch (h236). The original run after its copy took the value
+  stops with a panic. A thread's closure may now read such a capture.
+
 - **A closure handed back owns what it cannot copy** (h239). A closure
   returned right where it is made (`^ \ → v { ( eat r ) }`) took such a
   capture over when made and released it only if run: never run, it
