@@ -12,6 +12,8 @@ Requires NURL 0.73.0 (grammar v2.9 `raw`, `slice_window`, `file_is_open`).
 - The `f5k_*` kernel launchers take device addresses as integers and are `raw` (NURL grammar v2.9): the model code that allocated the buffers is what vouches for them. Needs gpukit 0.10.2.
 - 22 more functions are `unsafe`/`raw` than in 0.3.4 (130 now): where they launch kernels of their own, the trust is now written down.
 - Requires gpu 0.17 (its handle structs are sealed and its address-taking functions `raw`); nothing here changed.
+- Requires safetensor 0.6 (`st_tensor_ptr` is `raw` there; the loaders that take tensor addresses were already `unsafe`).
+- Requires torchpt 0.4 (`pt_tensor_ptr` and `pt_read_f64` are `raw` there; the loaders that call them were already `unsafe`).
 
 ## [0.3.4] — 2026-10-12
 

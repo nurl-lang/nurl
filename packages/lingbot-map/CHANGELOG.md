@@ -8,6 +8,7 @@ Requires NURL 0.73.0 (grammar v2.9 `raw`, `slice_window`, `file_is_open`).
 
 - The 2-D / 3-D RoPE kernels check their position buffers' dtype and length and skip a position past the cos/sin tables instead of reading beyond them. Needs gpukit 0.10.2.
 - 2 more functions are `unsafe`/`raw` than in 0.11.1 (100 now): where they launch kernels of their own, the trust is now written down.
+- Requires torchpt 0.4 (`pt_tensor_ptr` and `pt_read_f64` are `raw` there; the loaders that call them were already `unsafe`).
 
 ## [0.11.1] — 2026-10-12
 

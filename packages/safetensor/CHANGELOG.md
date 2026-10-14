@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.6.0] — 2026-10-14
+
+Requires the NURL with `stdlib/std/mmap.nu` (`file_map`, `mapped_bytes`)
+and the little-endian slice words (`slice_u16_le`, `slice_put_u32_le`, …).
+
+### Changed
+
+- No function is `unsafe` any more (34 were). An `St` holds its bytes as
+  a `MappedFile` — mapped where the platform maps files, read whole
+  elsewhere — and every read goes through a checked view of it, so a
+  tensor of another file, or one whose table lies, panics instead of
+  reading past the mapping. The open / lseek / mmap / munmap code is the
+  stdlib's.
+- `st_tensor_ptr` is `raw` (only an `unsafe` caller may take a tensor's
+  address); `st_tensor_bytes s t` is the safe way in — the tensor's bytes
+  as a `Slice u` the borrow checker holds to `s`.
+- `st_dequant` / `st_dequant_range` are faster: F32 is one copy of the
+  tensor's bytes, F16 / BF16 widen in loops of their own with one bounds
+  check per word (40M elements: F16 257 → 201 ms, BF16 197 → 185 ms, F32
+  165 → 126 ms; the same bytes out, except that a signalling NaN's payload
+  is now kept as stored rather than quieted).
+- `StWriter` is an `Rc` (it is changed in place by every add, which an
+  `Arc` shared it across threads for); an add checks its state out and
+  back in.
+
 ## [0.5.0] — 2026-10-11
 
 Requires NURL 0.73.0, which allows `mem_forget`, `mem_take` and the

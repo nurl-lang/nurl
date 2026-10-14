@@ -616,6 +616,14 @@ A panic is not outside the model: what a panic abandons is reclaimed
   GPU staging buffer as a `Slice f32` that lives no longer than it, and
   yoloe's mask and image-packing loops over windows of it run 10–30%
   faster than the `nurl_peek_f32` / `nurl_poke_f32` loops they replace.
+  A file is lent the same way: `file_map` (stdlib/std/mmap.nu) maps it
+  and `mapped_bytes` views it as a `Slice u` held to the `MappedFile`;
+  binary formats read and write little-endian words in a byte view with
+  `slice_u16_le` / `slice_u32_le` / `slice_u64_le` and their
+  `slice_put_*` twins — one check per word, the bytes fused into one
+  load by LLVM. safetensor's dequantiser reads that way, 6–24% faster
+  than the pointer loops it replaces; a view that has to outlive its
+  storage becomes a Vec of its own with `slice_to_vec`.
 - **Put a contract where it is kept.** A function that only its caller
   can make sound (an address it is handed, a size it trusts, kernel code
   it runs) is `raw @` (spec §3.3e): the caller that allocated, checked or

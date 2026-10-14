@@ -12,5 +12,5 @@ gpukit = { path = "../gpukit", version = "^0.10" }
 image = { path = "../image", version = "^0" }
 ply = { path = "../ply", version = "^0.3" }
 video = { path = "../video", version = "^0" }
-safetensor = { path = "../safetensor", version = "^0.5" }
+safetensor = { path = "../safetensor", version = "^0.6" }
 onnx = { path = "../onnx", version = "^0.11" }

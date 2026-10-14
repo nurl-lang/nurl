@@ -129,6 +129,55 @@ before `:` is the prefix too now. Storing an
 the other windows (its instances are named for LLVM's `float`, which the
 scalar rule did not list); it no longer does.
 
+`http` (30 → 0) and `image` (14 → 0) follow: an `HttpApp`'s setters
+check its state out of the `Rc`, the request dispatcher reads a frozen
+`Arc` of the router and the static root, and the HTTP/3 side of `listen`
+holds options instead of handles forged from zero; a JPEG decoder reads
+its input through a `Slice u` (0.3% fewer instructions, same output).
+`http3_creds_ok` asks whether `http3_creds_load` loaded anything. h257: a
+binding read out of a field takes the field's value over when the field
+is replaced (h196), and storing it back copied it as if it still
+borrowed — the value it owned was never dropped (`: ( Vec i ) c . s v
+= . s v ( vec_new ) ( work s c ) = . s v c`, the progressive JPEG scan
+loop). Such a store moves the binding when it owns the value and copies
+it only while it borrows. h259: a closure-valued `?` / `??` statement
+whose arm ended in an assignment (`= base ( wrap base )`) took the
+assigned closure for an owned temporary of the join and freed it when the
+statement ended, under the binding that held it (`http`'s TLS listener
+crashed at startup wrapping its handler for HTTP/3). A join nothing takes
+owns nothing now: an arm drops a temporary it made, an assigned closure
+stays its binding's, and a join whose value is taken gets an owned copy
+from every arm.
+
+`stdlib/std/mmap.nu` maps a file read-only (`file_map`, or a whole-file
+read where the platform does not map files; `mapped_of_bytes` wraps
+bytes already in memory) and lends it as a checked `Slice u`
+(`mapped_bytes`) the borrow checker holds to the `MappedFile`; the last
+copy unmaps it, and `mapped_ptr` is the `raw` address for a device
+upload. Every model loader wrote its own open / lseek / mmap / munmap
+and read through the pointer. `slice_u16_le` / `slice_u32_le` /
+`slice_u64_le` read a little-endian word at a byte offset of a view and
+`slice_put_u16_le` / `slice_put_u32_le` / `slice_put_u64_le` store one —
+one bounds check per word, the bytes fused into one unaligned access —
+and `slice_to_vec` copies a view into a Vec of its own (the borrow
+checker's messages already named it; it did not exist). `safetensor`
+(34 → 0) reads through them: its tensors are views of the mapping, a
+tensor table that lies panics rather than reading past it, and
+`st_dequant` is 6–24% faster than its pointer loops (F32 is one copy).
+
+h260: `zip_open` (stdlib/ext/zip.nu) was safe and the archive it returned
+kept a bare pointer into the caller's Vec, so the Vec could go first and
+every later read of the archive read freed memory. A `ZipArchive` now
+reads a `MappedFile` it owns or shares, through checked views:
+`zip_open` keeps a copy of the bytes, `zip_open_owned` takes them over,
+`zip_open_mapped` shares a mapping, and `zip_open_ptr` is gone (its one
+caller, torchpt, maps the file instead). `torchpt` (94 → 0) reads its
+checkpoint and its pickle that way. h261: a String / Vec / handle
+temporary handed to a call whose result is `!T E` with an enum error
+(`!ZipArchive ZipErr`) was never dropped — the result did not count as a
+value that cannot hold the argument, so the temporary waited for a
+consumer a binding never is.
+
 Packages: `oauth`, `iforest`, `vindex`, `data`, `cli`, `psql`, `redis`,
 `zst`, `video`, `ply`, `swarm` and `mlp` have no `unsafe` function left
 (`video` / `ply` / `swarm` keep their state in a `Locked` or a frozen

@@ -6970,14 +6970,17 @@ unsafe @ extract_fn_ptr_return_type s fn_ptr_type → s {
 }
 
 // `{ i1, T }` / `{ i1, T, E }` whose parts are numbers, flags or values
-// dropped as handles (Strings, Vecs, owning structs) — never raw addresses.
+// dropped as handles (Strings, Vecs, owning structs), or hold no address at
+// all (an error enum, `ZipErr`) — never raw addresses. (Without the last,
+// `!ZipArchive ZipErr` was no value: a handle temporary handed to such a
+// call was deferred for a consumer a binding never is, and leaked.)
 @ __wrap_of_values s ty → b {
     ? == 0 ( nurl_str_starts ty `{ i1, ` ) { ^ F } {}
     : s a ( __wrap_part ty 0 )
     : s b ( __wrap_part ty 1 )
     ? == 0 ( nurl_str_len a ) { ^ F } {}
-    : b an | | | > ( int_width a ) 0 ( seq a `double` ) ( seq a `float` ) ( __is_handle_ty a )
-    : b bn | | | | == 0 ( nurl_str_len b ) > ( int_width b ) 0 ( seq b `double` ) ( seq b `float` ) ( __is_handle_ty b )
+    : b an | | | | > ( int_width a ) 0 ( seq a `double` ) ( seq a `float` ) ( __is_handle_ty a ) ( __ty_no_address a 0 )
+    : b bn | | | | | == 0 ( nurl_str_len b ) > ( int_width b ) 0 ( seq b `double` ) ( seq b `float` ) ( __is_handle_ty b ) ( __ty_no_address b 0 )
     ^ & an bn
 }
 
@@ -7536,12 +7539,27 @@ unsafe @ extract_fn_ptr_return_type s fn_ptr_type → s {
 // literal or a closure-returning call produced is fresh and moves in;
 // anything else is borrowed from an owner that keeps it, so the place
 // gets a clone. Returns the value to store.
-// Does an arm (first token `tt0`) end in an assignment — a bare `= x y`, or
-// a block whose tail statement is one? Its value is the assigned binding's,
-// not a temporary.
-@ __arm_tail_assigns i syms i tt0 → b {
-    ? == tt0 TT_EQ { ^ T } {}
-    ^ & == tt0 TT_LBRACE == ( nurl_str_to_int ( nurl_sym_get syms `__tail_first_tt__` ) ) TT_EQ
+// The closure an arm of a join nothing takes (a statement) yields: a
+// temporary it made — a literal, a call's result — is dropped in the arm;
+// anything else (a binding, an assignment's value, `= base ( wrap base )`)
+// is its owner's, and the join must not take it for its own. Published as
+// the join's temporary, an assigned closure was freed when the statement
+// ended, under the binding that held it (h259).
+@ mem_clo_arm_discard i syms i cg s ty s val i first_tt → v {
+    ? == first_tt TT_BACKSLASH {
+        : s env ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print env ) ( nurl_print ` = extractvalue ` ) ( nurl_print ( nurl_llty ty ) )
+        ( nurl_print ` ` ) ( nurl_print val ) ( nurl_print `, 1\n` )
+        ( nurl_print `  call void @nurl_closure_drop(i8* ` ) ( nurl_print env ) ( nurl_print `)\n` )
+        ( __clo_tmp_set `` )
+        ( nurl_sym_def syms `__last_closure_env__` `` )
+        ^ v
+    } {}
+    : s env ( __clo_temp_owner syms val )
+    ? != 0 ( nurl_str_len env ) {
+        ( nurl_print `  call void @nurl_closure_drop(i8* ` ) ( nurl_print env ) ( nurl_print `)\n` )
+        ( __clo_tmp_set `` )
+    } {}
 }
 
 // The handles a closure captured live on in the owner it is stored into
@@ -16057,6 +16075,8 @@ unsafe @ gen_cond i lex i syms i cg → s {
     // Does this `?` head a statement? Decided before the arms move the
     // statement anchor; the parked-drop verdict at the join reads it.
     : b c_is_stmt ( mem_join_heads_stmt lex )
+    // Whether anything takes the join's value (gen_match's m_val).
+    : b c_valu | ! c_is_stmt != 0 g_blk_val_depth
     ( nurl_lex_advance lex )
     // The condition is a value operand — a `^` here is a cascade.
     // Parsing a CONDITION: a `{` after a ternary in here opens this
@@ -16178,11 +16198,11 @@ unsafe @ gen_cond i lex i syms i cg → s {
     : s tt2 ( nurl_get_last_type )
     // A closure-valued `?` is an owned temporary (docs/MEMORY.md §7.4):
     // each arm hands the join an env of its own — a literal or a call's
-    // result as is, anything borrowed as a clone.
-    // (Not an arm whose tail is an assignment, `{ … = base w }`: what it
-    // yields is that binding's own closure, and a copy made for a join no
-    // statement consumes leaked.)
-    ? & ( __is_closure_ty tt2 ) ! ( __arm_tail_assigns syms t_tt0 ) { = tv ( mem_clo_into_owner syms cg tt2 tv t_tt0 ) } {}
+    // result as is, anything borrowed (a binding, an assignment's value)
+    // as a clone. A join nothing takes (a statement) owns nothing: each
+    // arm drops the temporary it made, and an assignment's value stays
+    // the assigned binding's (mem_clo_arm_discard).
+    ? ( __is_closure_ty tt2 ) { ? c_valu { = tv ( mem_clo_into_owner syms cg tt2 tv t_tt0 ) } { ( mem_clo_arm_discard syms cg tt2 tv t_tt0 ) } } {}
     : s t_slice_flag ( nurl_str_cat ( nurl_sym_get syms `__last_slice_owned__` ) `` )
     : s t_str_flag ( nurl_str_cat ( nurl_sym_get syms `__last_call_ret_owned__` ) `` )
     : b t_alias != 0 ( nurl_sym_len syms `__last_value_alias__` )
@@ -16365,7 +16385,7 @@ unsafe @ gen_cond i lex i syms i cg → s {
     : s e_inherited ( mem_exits_inherit e_pend0 )
     = c_exits ( mem_exits_join c_exits e_inherited )
     : s et2 ( nurl_get_last_type )
-    ? & ( __is_closure_ty et2 ) ! ( __arm_tail_assigns syms e_tt0 ) { = ev ( mem_clo_into_owner syms cg et2 ev e_tt0 ) } {}
+    ? ( __is_closure_ty et2 ) { ? c_valu { = ev ( mem_clo_into_owner syms cg et2 ev e_tt0 ) } { ( mem_clo_arm_discard syms cg et2 ev e_tt0 ) } } {}
     : s e_slice_flag ( nurl_str_cat ( nurl_sym_get syms `__last_slice_owned__` ) `` )
     : s e_str_flag ( nurl_str_cat ( nurl_sym_get syms `__last_call_ret_owned__` ) `` )
     : b e_alias != 0 ( nurl_sym_len syms `__last_value_alias__` )
@@ -16680,7 +16700,7 @@ unsafe @ gen_cond i lex i syms i cg → s {
                 ( nurl_sym_def syms `__last_join_own__` sjo )
             } {}
             // Both arms handed over an owned env: so does the join.
-            ? ( __is_closure_ty phi_ty ) { ( mem_retclo_take syms cg res phi_ty ) } {}
+            ? & c_valu ( __is_closure_ty phi_ty ) { ( mem_retclo_take syms cg res phi_ty ) } {}
             // then-LITERAL beside an OWNED else-arm: the then block was
             // emitted before the else's ownedness was knowable (see
             // t_is_lit above), so uniform ownership is repaired HERE,
@@ -18287,10 +18307,13 @@ unsafe @ gen_match i lex i syms i cg → s {
                 = arm_dup T
             } {}
             // A closure-valued `??` is an owned temporary (docs/MEMORY.md
-            // §7.4): each arm hands the join an env of its own.
-            ? & & == 0 g_did_ret ( __is_closure_ty arm_type ) ! ( __arm_tail_assigns syms arm_tt0 )
-            { = arm_result ( mem_clo_into_owner syms cg arm_type arm_result arm_tt0 ) }
-            {}
+            // §7.4): each arm hands the join an env of its own — or, when
+            // nothing takes the join's value, drops the one it made
+            // (gen_cond).
+            ? & == 0 g_did_ret ( __is_closure_ty arm_type ) {
+                ? m_val { = arm_result ( mem_clo_into_owner syms cg arm_type arm_result arm_tt0 ) }
+                { ( mem_clo_arm_discard syms cg arm_type arm_result arm_tt0 ) }
+            } {}
             : s arm_owner ( mem_arm_string_owner syms cg arm_type arm_tt0 arm_result arm_dup )
             : ~ s arm_hown `false`
             ? == 0 g_did_ret { = arm_hown ( mem_arm_hown syms cg arm_type arm_tt0 arm_v0 arm_retid m_jdepth ) } {}
@@ -18568,7 +18591,7 @@ unsafe @ gen_match i lex i syms i cg → s {
         ( nurl_print ` = phi ` ) ( nurl_print ( nurl_llty phi_type ) )
         ( nurl_print ` ` ) ( nurl_print phi_full ) ( nurl_print `\n` )
         // Every arm handed over an owned env: so does the join.
-        ? ( __is_closure_ty phi_type ) { ( mem_retclo_take syms cg final_reg phi_type ) } {}
+        ? & m_val ( __is_closure_ty phi_type ) { ( mem_retclo_take syms cg final_reg phi_type ) } {}
         ? & any_hown ( __is_handle_ty ( __udrop_regty phi_type ) ) {
             : s own_reg ( nurl_cg_reg cg )
             : ~ s hfull ( nurl_str_cat hown_entries `` )
@@ -46991,6 +47014,17 @@ unsafe @ __sx_names_capture i syms s sx → b {
         ? & == 0 ( nurl_str_len up ) >= ( nurl_sym_word_index syms `__fn_param_names__` val ) 0 { ^ ( nurl_str_cat `` `` ) } {}
         ? == 0 ( nurl_str_len up ) { ^ ( nurl_str_cat `1` `` ) } {}
         : s sb ( nurl_sym_get2 syms up `__sborrow` )
+        // A binding read out of a field that may have taken the field's
+        // value over since (__fs_viewers_take): lent only while its flag
+        // says it does not own it. Copied always, the value it took over
+        // was never dropped (`: ( Vec i ) c . s v = . s v ( vec_new ) …
+        // = . s v c`).
+        ? & & ( seq sb `1` ) != 0 ( nurl_sym_len2 syms up `__fview` ) ( nurl_sym_has_word syms `__user_drops__` up ) {
+            : s fv ( mem_udrop_flag_get syms cg up )
+            : s fr ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print fr ) ( nurl_print ` = xor i1 ` ) ( nurl_print fv ) ( nurl_print `, 1\n` )
+            ^ fr
+        } {}
         ? | | ( seq sb `1` ) ( seq sb `local` ) ( seq sb `elem` ) { ^ ( nurl_str_cat `1` `` ) } {}
         ? == ( nurl_str_get sb 0 ) 33 { ^ ( nurl_str_cat sb `` ) } {}
         ? == ( nurl_str_get sb 0 ) 64 {

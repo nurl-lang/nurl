@@ -15,8 +15,8 @@
 //
 // mmap-backed and lazy, like safetensor and gguf: only the pickle is
 // read up front, so listing the tensors of a 4.6 GB checkpoint costs
-// megabytes, not gigabytes. Tensor bytes are addressed straight out of
-// the mapping.
+// megabytes, not gigabytes. Tensor bytes are read straight out of the
+// mapping (stdlib/std/mmap.nu), through checked views of it.
 //
 // Entries are ZIP-stored (torch never deflates tensor data), which is
 // what makes in-place addressing possible; a deflated storage is
@@ -34,10 +34,13 @@
 //   ( pt_nelems p idx )           → i
 //   ( pt_nbytes p idx )           → i
 //   ( pt_is_contiguous p idx )    → b
-//   ( pt_tensor_ptr p idx )       → *u     into the mapping
+//   ( pt_tensor_bytes p idx )     → ( Slice u )   its nbytes, out of the
+//                                    mapping — a view held to `p`
+//   ( pt_tensor_ptr p idx )       → *u     raw: their address
 //   ( pt_dequant p idx )          → !( Vec u ) String    f32 LE bytes
 //   ( pt_dequant_range p idx first count ) → !( Vec u ) String
-//   ( pt_read_f64 p idx first count dst )  → b            into an f64 buffer
+//   ( pt_read_f64_into p idx first count dst ) → b        into a ( Slice f )
+//   ( pt_read_f64 p idx first count dst )  → b            raw: into a *f
 //
 // Names are the dotted path from the pickle root: a plain state_dict
 // gives `blocks.0.attn.qkv.weight`, while a training checkpoint saved as
@@ -56,6 +59,8 @@ $ `stdlib/std/floatbits.nu`
 $ `stdlib/ext/zip.nu`
 $ `pickle.nu`
 $ `stdlib/std/arc.nu`
+$ `stdlib/std/mmap.nu`
+$ `stdlib/core/slice.nu`
 
 // Up to 8 dimensions is more than any real checkpoint tensor uses; the
 // limit keeps the per-tensor record a fixed size.
@@ -73,31 +78,19 @@ $ `stdlib/std/arc.nu`
 }
 
 : PtImpl {
-    * u map
-    i map_size
-    b from_mmap
-    ( Vec u ) buf  // the bytes `map` points into, when they are not a mapping
+    MappedFile file  // the checkpoint's bytes: a mapping, or the file read whole
     ( Vec PtTensor ) tensors
     ( Vec i ) dims  // 16 slots per tensor (PtTensor.shape_at): one array, not one per tensor
 }
 
-// The mapping is the raw resource: its last owner unmaps it, as pt_close
-// did. The tensor table and the buffer go with the drop glue.
-% Drop PtImpl {
-    unsafe @ drop PtImpl p → v {
-        ? . p from_mmap { : i32 _u ( munmap . p map . p map_size ) } {}
-    }
-}
-
-// A Pt is a handle on its state in an Arc (stdlib/std/arc.nu):
-// every copy is the same open checkpoint, and the last owner releases it.
+// A Pt is a handle on its state in an Arc (stdlib/std/arc.nu), frozen once
+// parsed: every copy is the same open checkpoint, and the last owner lets
+// go of the mapping.
 : Pt { ( Arc PtImpl ) a }
 
 @ Pt_share Pt h → Pt { ^ @ Pt { ( arc_clone [PtImpl] . h a ) } }
 
 @ Pt_drop sink Pt h → v {}
-
-unsafe @ __Pt_ptr Pt h → *PtImpl { ^ ( arc_ptr [PtImpl] . h a ) }
 
 @ _pt_geti ( Vec i ) v i k → i { ?? ( vec_get [i] v k ) { T x → ^ x F → ^ 0 } }
 
@@ -111,30 +104,30 @@ unsafe @ __Pt_ptr Pt h → *PtImpl { ^ ( arc_ptr [PtImpl] . h a ) }
 
 // ── accessors ───────────────────────────────────────────────────────
 
-unsafe @ pt_n_tensors Pt p__h → i {
-    : *PtImpl p ( __Pt_ptr p__h )
+@ pt_n_tensors Pt p__h → i {
+    : PtImpl p ( arc_get [PtImpl] . p__h a )
     ^ ( vec_len [PtTensor] . p tensors )
 }
 
-unsafe @ __pt_at * PtImpl p i idx → ?PtTensor { ^ ( vec_get [PtTensor] . p tensors idx ) }
+@ __pt_at PtImpl p i idx → ?PtTensor { ^ ( vec_get [PtTensor] . p tensors idx ) }
 
-unsafe @ pt_name Pt p__h i idx → s {
-    : *PtImpl p ( __Pt_ptr p__h )
+@ pt_name Pt p__h i idx → s {
+    : PtImpl p ( arc_get [PtImpl] . p__h a )
     ?? ( __pt_at p idx ) { T t → ^ ( string_data . t name ) F → ^ `` }
 }
 
-unsafe @ pt_dtype Pt p__h i idx → i {
-    : *PtImpl p ( __Pt_ptr p__h )
+@ pt_dtype Pt p__h i idx → i {
+    : PtImpl p ( arc_get [PtImpl] . p__h a )
     ?? ( __pt_at p idx ) { T t → ^ . t dtype F → ^ PKS_UNKNOWN }
 }
 
-unsafe @ pt_ndim Pt p__h i idx → i {
-    : *PtImpl p ( __Pt_ptr p__h )
+@ pt_ndim Pt p__h i idx → i {
+    : PtImpl p ( arc_get [PtImpl] . p__h a )
     ?? ( __pt_at p idx ) { T t → ^ . t ndim F → ^ 0 }
 }
 
-unsafe @ pt_dim Pt p__h i idx i j → i {
-    : *PtImpl p ( __Pt_ptr p__h )
+@ pt_dim Pt p__h i idx i j → i {
+    : PtImpl p ( arc_get [PtImpl] . p__h a )
     ?? ( __pt_at p idx ) {
         T t → {
             ? | < j 0 >= j . t ndim { ^ 0 } {}
@@ -144,8 +137,8 @@ unsafe @ pt_dim Pt p__h i idx i j → i {
     }
 }
 
-unsafe @ pt_stride Pt p__h i idx i j → i {
-    : *PtImpl p ( __Pt_ptr p__h )
+@ pt_stride Pt p__h i idx i j → i {
+    : PtImpl p ( arc_get [PtImpl] . p__h a )
     ?? ( __pt_at p idx ) {
         T t → {
             ? | < j 0 >= j . t ndim { ^ 0 } {}
@@ -155,33 +148,42 @@ unsafe @ pt_stride Pt p__h i idx i j → i {
     }
 }
 
-unsafe @ pt_nelems Pt p__h i idx → i {
-    : *PtImpl p ( __Pt_ptr p__h )
+@ pt_nelems Pt p__h i idx → i {
+    : PtImpl p ( arc_get [PtImpl] . p__h a )
     ?? ( __pt_at p idx ) { T t → ^ . t nelems F → ^ 0 }
 }
 
-unsafe @ pt_nbytes Pt p__h i idx → i {
-    : *PtImpl p ( __Pt_ptr p__h )
+@ pt_nbytes Pt p__h i idx → i {
+    : PtImpl p ( arc_get [PtImpl] . p__h a )
     ?? ( __pt_at p idx ) { T t → ^ . t nbytes F → ^ 0 }
 }
 
-unsafe @ pt_is_contiguous Pt p__h i idx → b {
-    : *PtImpl p ( __Pt_ptr p__h )
+@ pt_is_contiguous Pt p__h i idx → b {
+    : PtImpl p ( arc_get [PtImpl] . p__h a )
     ?? ( __pt_at p idx ) { T t → ^ == . t contiguous 1 F → ^ F }
 }
 
-unsafe @ pt_offset Pt p__h i idx → i {
-    : *PtImpl p ( __Pt_ptr p__h )
+@ pt_offset Pt p__h i idx → i {
+    : PtImpl p ( arc_get [PtImpl] . p__h a )
     ?? ( __pt_at p idx ) { T t → ^ . t data_off F → ^ -1 }
 }
 
-// Raw bytes of a tensor, addressed in the mapping. Valid while the Pt is.
-unsafe @ pt_tensor_ptr Pt p__h i idx → *u {
-    : *PtImpl p ( __Pt_ptr p__h )
+// A tensor's bytes — its `nbytes` from element 0 — straight out of the
+// mapping: a checked view that lives no longer than `p__h`. Empty for an
+// index out of range.
+@ pt_tensor_bytes Pt p__h i idx → ( Slice u ) {
+    : PtImpl p ( arc_get [PtImpl] . p__h a )
     ?? ( __pt_at p idx ) {
-        T t → ^ # *u + # i . p map . t data_off
-        F → ^ # *u 0
+        T t → ^ ( slice_window [u] ( mapped_bytes . p file ) . t data_off . t nbytes )
+        F → ^ ( slice_empty [u] )
     }
+}
+
+// Their address, for a device upload. raw: the caller keeps `p__h` alive
+// while it is used; null for an index out of range.
+raw @ pt_tensor_ptr Pt p__h i idx → *u {
+    ? | < idx 0 >= idx ( pt_n_tensors p__h ) { ^ # *u 0 } {}
+    ^ ( slice_data [u] ( pt_tensor_bytes p__h idx ) )
 }
 
 @ pt_find Pt p__h s name → i {
@@ -379,12 +381,10 @@ unsafe @ pt_tensor_ptr Pt p__h i idx → *u {
 
 // ── open ────────────────────────────────────────────────────────────
 
-// Parse the checkpoint at m[0, sz). `keep` is what m points into when that is
-// not a mapping (the Pt holds it for as long as the tensors are read);
-// pt_open hands in an empty Vec for a mapping, which it owns until this
-// succeeds.
-unsafe @ __pt_parse * u m i sz sink ( Vec u ) keep → !Pt String {
-    : !ZipArchive ZipErr zr ( zip_open_ptr m sz )
+// Parse the checkpoint `file` holds; the Pt keeps it for as long as the
+// tensors are read.
+@ __pt_parse sink MappedFile file → !Pt String {
+    : !ZipArchive ZipErr zr ( zip_open_mapped file )
     ?? zr {
         F e → {
             : String msg ( string_from `torchpt: not a zip-format checkpoint (` )
@@ -431,7 +431,7 @@ unsafe @ __pt_parse * u m i sz sink ( Vec u ) keep → !Pt String {
                     ^ @ !Pt String { F msg }
                 }
                 T pdata → {
-                    : !Pk String kr ( pk_parse ( vec_data [u] pdata ) ( vec_len [u] pdata ) )
+                    : !Pk String kr ( pk_parse ( slice_from_vec [u] pdata ) )
                     ?? kr {
                         F e → {
                             ( zip_close za )
@@ -449,7 +449,7 @@ unsafe @ __pt_parse * u m i sz sink ( Vec u ) keep → !Pt String {
                                 { T s → ( string_from ( string_data s ) ) F → ( string_from `torchpt: parse failed` ) }
                                 ^ @ !Pt String { F em }
                             } {}
-                            : Pt h @ Pt { ( arc_new [PtImpl] @ PtImpl { m sz F keep tensors dims } ) }
+                            : Pt h @ Pt { ( arc_new [PtImpl] @ PtImpl { file tensors dims } ) }
                             ^ @ !Pt String { T h }
                         }
                     }
@@ -459,44 +459,18 @@ unsafe @ __pt_parse * u m i sz sink ( Vec u ) keep → !Pt String {
     }
 }
 
-unsafe @ pt_open s path → !Pt String {
-    ? != ( posix_const `MAP_PRIVATE` ) -1 {
-        : i32 fd ( open path # i32 ( posix_const `O_RDONLY` ) # i32 0 )
-        ? < # i fd 0 {
-            : String m ( string_from `torchpt: cannot open ` )
-            ( string_push_str m path )
-            ^ @ !Pt String { F m }
-        } {}
-        : i sz ( lseek fd 0 # i32 2 )
-        ? < sz 22 {
-            : i _c ( close # i fd )
-            ^ ( __pt_errs `torchpt: file too small to be a zip archive` )
-        } {}
-        : *u m ( mmap # *u 0 sz # i32 ( posix_const `PROT_READ` ) # i32 ( posix_const `MAP_PRIVATE` ) fd 0 )
-        : i _c ( close # i fd )
-        ? == # i m -1 { ^ ( __pt_errs `torchpt: mmap failed` ) } {}
-        : !Pt String r ( __pt_parse m sz ( vec_new [u] ) )
-        ?? r {
-            T ph → {
-                // from here on the Pt owns the mapping
-                : *PtImpl p ( __Pt_ptr ph )
-                = . p from_mmap T
-                ^ @ !Pt String { T ph }
-            }
-            F e → {
-                : i32 _u ( munmap m sz )
-                ^ @ !Pt String { F e }
-            }
+// mmap-backed where the platform has it (POSIX), a whole-file read where it
+// does not (wasm, win32).
+@ pt_open s path → !Pt String {
+    ?? ( file_map path ) {
+        T m → {
+            ? < ( mapped_len m ) 22 { ^ ( __pt_errs `torchpt: file too small to be a zip archive` ) } {}
+            ^ ( __pt_parse m )
         }
-    } {
-        // no mmap: the Pt keeps the file's bytes its tensors point into
-        ?? ( read_file_bytes path ) {
-            T data → { ^ ( __pt_parse ( vec_data [u] data ) ( vec_len [u] data ) data ) }
-            F _ → {
-                : String m ( string_from `torchpt: cannot read ` )
-                ( string_push_str m path )
-                ^ @ !Pt String { F m }
-            }
+        F _ → {
+            : String msg ( string_from `torchpt: cannot open ` )
+            ( string_push_str msg path )
+            ^ @ !Pt String { F msg }
         }
     }
 }
@@ -516,78 +490,70 @@ unsafe @ pt_open s path → !Pt String {
 // Storage-element offset of a tensor's logical element `n`, walking the
 // shape from the fastest-varying axis outward. Contiguous tensors take
 // the identity path, so the common case costs one comparison.
-unsafe @ __pt_elem_index * PtImpl p i idx i n → i {
-    ?? ( __pt_at p idx ) {
-        F → ^ 0
-        T t → {
-            ? == . t contiguous 1 { ^ n } {}
-            : *i sh # *i + # i ( vec_data [i] . p dims ) * 8 . t shape_at
-            : ~ i rem n
-            : ~ i off 0
-            : ~ i j - . t ndim 1
-            ~ >= j 0 {
-                : i d . sh j
-                ? > d 0 {
-                    = off + off * % rem d . sh + 8 j
-                    = rem / rem d
-                } {}
-                = j - j 1
-            }
-            ^ off
-        }
+@ __pt_elem_index PtImpl p PtTensor t i n → i {
+    ? == . t contiguous 1 { ^ n } {}
+    : i sh . t shape_at
+    : ~ i rem n
+    : ~ i off 0
+    : ~ i j - . t ndim 1
+    ~ >= j 0 {
+        : i d ( vec_at [i] . p dims + sh j )
+        ? > d 0 {
+            = off + off * % rem d ( vec_at [i] . p dims + + sh 8 j )
+            = rem / rem d
+        } {}
+        = j - j 1
     }
+    ^ off
 }
 
-unsafe @ __pt_u16 * u P i o → i { ^ + # i . P o * # i . P + o 1 256 }
-
-unsafe @ __pt_u32 * u P i o → i { ^ + ( __pt_u16 P o ) * ( __pt_u16 P + o 2 ) 65536 }
-
-unsafe @ __pt_u64 * u P i o → i { ^ + ( __pt_u32 P o ) * ( __pt_u32 P + o 4 ) 4294967296 }
-
-unsafe @ __pt_elem_f32bits i dtype * u P i off → i {
-    ? == dtype PKS_F32 { ^ ( __pt_u32 P off ) } {}
-    ? == dtype PKS_F64 { ^ ( f32_to_bits # f32 ( bits_to_f64 ( __pt_u64 P off ) ) ) } {}
-    ? == dtype PKS_F16 { ^ ( f16_bits_to_f32_bits ( __pt_u16 P off ) ) } {}
-    ? == dtype PKS_BF16 { ^ ( bf16_bits_to_f32_bits ( __pt_u16 P off ) ) } {}
+// One element at byte `off` of the mapping, as f32 bits.
+@ __pt_elem_f32bits i dtype ( Slice u ) P i off → i {
+    ? == dtype PKS_F32 { ^ ( slice_u32_le P off ) } {}
+    ? == dtype PKS_F64 { ^ ( f32_to_bits # f32 ( bits_to_f64 ( slice_u64_le P off ) ) ) } {}
+    ? == dtype PKS_F16 { ^ ( f16_bits_to_f32_bits ( slice_u16_le P off ) ) } {}
+    ? == dtype PKS_BF16 { ^ ( bf16_bits_to_f32_bits ( slice_u16_le P off ) ) } {}
     ? == dtype PKS_I64 {
-        : i raw ( __pt_u64 P off )
+        : i raw ( slice_u64_le P off )
         ^ ( f32_to_bits # f32 # f raw )
     } {}
     ? == dtype PKS_I32 {
-        : i raw ( __pt_u32 P off )
+        : i raw ( slice_u32_le P off )
         ^ ( f32_to_bits # f32 # f ? >= raw 2147483648 - raw 4294967296 raw )
     } {}
     ? == dtype PKS_I16 {
-        : i raw ( __pt_u16 P off )
+        : i raw ( slice_u16_le P off )
         ^ ( f32_to_bits # f32 # f ? >= raw 32768 - raw 65536 raw )
     } {}
     ? == dtype PKS_I8 {
-        : i raw # i . P off
+        : i raw # i ( slice_at [u] P off )
         ^ ( f32_to_bits # f32 # f ? >= raw 128 - raw 256 raw )
     } {}
-    ? | == dtype PKS_U8 == dtype PKS_BOOL { ^ ( f32_to_bits # f32 # f # i . P off ) } {}
+    ? | == dtype PKS_U8 == dtype PKS_BOOL { ^ ( f32_to_bits # f32 # f # i ( slice_at [u] P off ) ) } {}
     ^ 0
 }
 
-unsafe @ pt_dequant_range Pt p__h i idx i first i count → !( Vec u ) String {
-    : *PtImpl p ( __Pt_ptr p__h )
-    ? | < idx 0 >= idx ( pt_n_tensors p__h ) { ^ ( __pt_err_vec `torchpt: tensor index out of range` ) } {}
-    : i nelems ( pt_nelems p__h idx )
-    ? | | < first 0 < count 0 > + first count nelems {
+@ pt_dequant_range Pt p__h i idx i first i count → !( Vec u ) String {
+    : PtImpl p ( arc_get [PtImpl] . p__h a )
+    ? | < idx 0 >= idx ( vec_len [PtTensor] . p tensors ) { ^ ( __pt_err_vec `torchpt: tensor index out of range` ) } {}
+    : PtTensor t ( vec_at [PtTensor] . p tensors idx )
+    ? | | < first 0 < count 0 > + first count . t nelems {
         ^ ( __pt_err_vec `torchpt: element range outside the tensor` )
     } {}
-    : i dtype ( pt_dtype p__h idx )
+    : i dtype . t dtype
     : i esize ( pk_storage_esize dtype )
     ? == esize 0 { ^ ( __pt_err_vec `torchpt: unsupported dtype` ) } {}
-    : *u base ( pt_tensor_ptr p__h idx )
-    : ( Vec u ) out ( vec_with_cap [u] ? > * count 4 0 * count 4 1 )
+    : ( Slice u ) src ( mapped_bytes . p file )
+    : i base . t data_off
+    // F32 in storage order is the result's own bytes: one copy.
+    ? & == dtype PKS_F32 == . t contiguous 1 {
+        ^ @ !( Vec u ) String { T ( slice_to_vec [u] ( slice_window [u] src + base * first 4 * count 4 ) ) }
+    } {}
+    : ( Vec u ) out ( vec_zeroed [u] * count 4 )
+    : ( Slice u ) q ( slice_from_vec [u] out )
     : ~ i j 0
     ~ < j count {
-        : i bits ( __pt_elem_f32bits dtype base * ( __pt_elem_index p idx + first j ) esize )
-        ( vec_push [u] out # u & bits 255 )
-        ( vec_push [u] out # u & / bits 256 255 )
-        ( vec_push [u] out # u & / bits 65536 255 )
-        ( vec_push [u] out # u & / bits 16777216 255 )
+        ( slice_put_u32_le q * j 4 ( __pt_elem_f32bits dtype src + base * ( __pt_elem_index p t + first j ) esize ) )
         = j + j 1
     }
     ^ @ !( Vec u ) String { T out }
@@ -597,26 +563,34 @@ unsafe @ pt_dequant_range Pt p__h i idx i first i count → !( Vec u ) String {
     ^ ( pt_dequant_range p__h idx 0 ( pt_nelems p__h idx ) )
 }
 
-// Read `count` elements starting at `first` straight into a caller's f64
-// buffer — the shape the tensor package wants, without a byte round-trip.
-unsafe @ pt_read_f64 Pt p__h i idx i first i count * f dst → b {
-    : *PtImpl p ( __Pt_ptr p__h )
-    ? | < idx 0 >= idx ( pt_n_tensors p__h ) { ^ F } {}
-    : i nelems ( pt_nelems p__h idx )
-    ? | | < first 0 < count 0 > + first count nelems { ^ F } {}
-    : i dtype ( pt_dtype p__h idx )
+// Read `count` elements starting at `first` straight into `dst` (which
+// must hold them) — the shape the tensor package wants, without a byte
+// round-trip.
+@ pt_read_f64_into Pt p__h i idx i first i count ( Slice f ) dst → b {
+    : PtImpl p ( arc_get [PtImpl] . p__h a )
+    ? | < idx 0 >= idx ( vec_len [PtTensor] . p tensors ) { ^ F } {}
+    : PtTensor t ( vec_at [PtTensor] . p tensors idx )
+    ? | | < first 0 < count 0 > + first count . t nelems { ^ F } {}
+    : i dtype . t dtype
     : i esize ( pk_storage_esize dtype )
     ? == esize 0 { ^ F } {}
-    : *u base ( pt_tensor_ptr p__h idx )
+    : ( Slice u ) src ( mapped_bytes . p file )
+    : ( Slice f ) out ( slice_prefix [f] dst count )
     : ~ i j 0
     ~ < j count {
-        : i off * ( __pt_elem_index p idx + first j ) esize
+        : i off + . t data_off * ( __pt_elem_index p t + first j ) esize
         // f64 storages keep their full precision; everything else is
         // exactly representable in f32 first.
-        : f x ? == dtype PKS_F64 ( bits_to_f64 ( __pt_u64 base off ) )
-        # f ( bits_to_f32 ( __pt_elem_f32bits dtype base off ) )
-        = . dst j x
+        : f x ? == dtype PKS_F64 ( bits_to_f64 ( slice_u64_le src off ) )
+        # f ( bits_to_f32 ( __pt_elem_f32bits dtype src off ) )
+        ( slice_put [f] out j x )
         = j + j 1
     }
     ^ T
+}
+
+// The same into a raw buffer of `count` f64s. raw: the caller vouches for
+// `dst`.
+raw @ pt_read_f64 Pt p__h i idx i first i count * f dst → b {
+    ^ ( pt_read_f64_into p__h idx first count ( slice_from_raw [f] dst count ) )
 }

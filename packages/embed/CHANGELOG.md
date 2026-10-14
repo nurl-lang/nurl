@@ -9,6 +9,7 @@ Requires NURL 0.73.0 (`slice_at`, `slice_put`, `rc_take`, `locked_take`).
 - Loops that read or wrote through `vec_data` pointers index slices (`slice_at` / `slice_put`, as fast as the pointers), and functions with nothing raw in them are no longer marked `unsafe`.
 - 1 fewer functions are `unsafe` than in 0.5.4 (44 left).
 - Requires gpu 0.17 (its batched upload is `raw`; the loader here was already `unsafe`).
+- Requires safetensor 0.6 (`st_tensor_ptr` is `raw` there; the loaders that take tensor addresses were already `unsafe`).
 
 ## [0.5.4] — 2026-10-12
 

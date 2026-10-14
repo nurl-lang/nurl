@@ -23,7 +23,7 @@ $ `core.nu`
 // returns. `bp` is a view of the caller's bytes (jpeg_decode's `buf`
 // outlives the decoder), not a copy.
 : Jpeg {
-    * u bp i len
+    ( Slice u ) data i len  // the stream: a view of the caller's bytes
     i width i height i ncomp
     ( Vec i ) cid ( Vec i ) chf ( Vec i ) cvf ( Vec i ) ctq ( Vec i ) ctd ( Vec i ) cta ( Vec i ) cpred
     i hmax i vmax i restart
@@ -72,48 +72,29 @@ $ `core.nu`
     ^ z
 }
 
-unsafe @ __jpg_new ( Vec u ) buf → Jpeg {
-    : ~ Jpeg j @ Jpeg { ( vec_data [u] buf ) ( vec_len [u] buf ) }
-    = . j cid ( _ivec 4 0 )
-    = . j chf ( _ivec 4 1 )
-    = . j cvf ( _ivec 4 1 )
-    = . j ctq ( _ivec 4 0 )
-    = . j ctd ( _ivec 4 0 )
-    = . j cta ( _ivec 4 0 )
-    = . j cpred ( _ivec 4 0 )
-    = . j qt ( _ivec 256 0 )
-    = . j hmin ( _ivec 136 0 )
-    = . j hmaxc ( _ivec 136 -1 )
-    = . j hptr ( _ivec 136 0 )
-    = . j hvals ( _ivec 2048 0 )
-    = . j idct_a ( _idct_basis )
-    = . j zz ( _zigzag )
-    = . j bcnt 0
-    = . j marker 0
-    = . j restart 0
-    = . j ok T
-    = . j prog F
-    = . j ss 0
-    = . j se 63
-    = . j ah 0
-    = . j al 0
-    = . j eobrun 0
-    = . j nscomp 0
-    = . j scomp ( _ivec 4 0 )
-    = . j coefs ( vec_new [( Vec i )] )
-    = . j cbw ( _ivec 4 0 )
-    = . j cbh ( _ivec 4 0 )
-    ^ j
+@ __jpg_new ( Vec u ) buf → Jpeg {
+    ^ @ Jpeg {
+        ( slice_from_vec [u] buf ) ( vec_len [u] buf )
+        0 0 0
+        ( _ivec 4 0 ) ( _ivec 4 1 ) ( _ivec 4 1 ) ( _ivec 4 0 ) ( _ivec 4 0 ) ( _ivec 4 0 ) ( _ivec 4 0 )
+        0 0 0
+        ( _ivec 256 0 )
+        ( _ivec 136 0 ) ( _ivec 136 -1 ) ( _ivec 136 0 ) ( _ivec 2048 0 )
+        ( _idct_basis ) ( _zigzag )
+        0 0 0 0
+        T
+        F 0 63 0 0 0
+        0 ( _ivec 4 0 )
+        ( vec_new [( Vec i )] )
+        ( _ivec 4 0 ) ( _ivec 4 0 )
+    }
 }
 
 // ── Bytes of the stream ───────────────────────────────────────────────
 
 // Byte `p` of the stream, 0 outside it (what _byte answers for a Vec).
-unsafe @ __jb inout Jpeg j i p → i {
-    ? & >= p 0 < p . j len {
-        : *u b . j bp
-        ^ # i . b p
-    } {}
+@ __jb inout Jpeg j i p → i {
+    ? & >= p 0 < p . j len { ^ ( slice_byte . j data p ) } {}
     ^ 0
 }
 
@@ -121,7 +102,7 @@ unsafe @ __jb inout Jpeg j i p → i {
 @ __ju16 inout Jpeg j i p → i { ^ + * ( __jb j p ) 256 ( __jb j + p 1 ) }
 
 // ── Entropy bit reader (handles 0xFF00 stuffing; stops at a marker) ────
-unsafe @ __jpg_bit inout Jpeg j → i {
+@ __jpg_bit inout Jpeg j → i {
     ? > . j bcnt 0 {} {
         : i p . j bpos
         ? >= p . j len { = . j marker 217 ^ 0 } {}
@@ -177,7 +158,7 @@ unsafe @ __jpg_bit inout Jpeg j → i {
 }
 
 // ── Decode + dequantize one 8×8 block into `blk` (natural order) ──────
-unsafe @ __jpg_block inout Jpeg j i comp ( Vec i ) blk → v {
+@ __jpg_block inout Jpeg j i comp ( Vec i ) blk → v {
     : ~ i k 0
     ~ < k 64 { ( vec_set [i] blk k 0 ) = k + k 1 }
     : i tq * ( _b_i . j ctq comp ) 64
@@ -250,7 +231,7 @@ unsafe @ __jpg_block inout Jpeg j i comp ( Vec i ) blk → v {
 }
 
 // Reset at a restart marker: drop partial bits, skip FFDn, clear predictors.
-unsafe @ __jpg_restart inout Jpeg j → v {
+@ __jpg_restart inout Jpeg j → v {
     = . j bcnt 0
     = . j marker 0
     : i p . j bpos
@@ -325,7 +306,7 @@ unsafe @ __jpg_restart inout Jpeg j → v {
     }
 }
 
-unsafe @ __jpg_sof inout Jpeg j i dp → b {
+@ __jpg_sof inout Jpeg j i dp → b {
     ? == ( __jb j dp ) 8 {} { ^ F }
     = . j height ( __ju16 j + dp 1 )
     = . j width ( __ju16 j + dp 3 )
@@ -358,7 +339,7 @@ unsafe @ __jpg_sof inout Jpeg j i dp → b {
     ^ T
 }
 
-unsafe @ __jpg_sos inout Jpeg j i dp → v {
+@ __jpg_sos inout Jpeg j i dp → v {
     : ~ i ns ( __jb j dp )
     ? || < ns 1 > ns 4 { = ns 1 } {}
     = . j nscomp ns
@@ -416,14 +397,14 @@ unsafe @ __jpg_sos inout Jpeg j i dp → v {
     }
 }
 
-unsafe @ __jpg_prog_restart inout Jpeg j → v {
+@ __jpg_prog_restart inout Jpeg j → v {
     ( __jpg_restart j )
     = . j eobrun 0
 }
 
 // DC scan, one block. First pass (Ah=0) decodes the diff at reduced
 // precision; refinement passes append one magnitude bit.
-unsafe @ __jpg_prog_dc inout Jpeg j i ci ( Vec i ) cf i bidx → v {
+@ __jpg_prog_dc inout Jpeg j i ci ( Vec i ) cf i bidx → v {
     : i base * bidx 64
     ? == . j ah 0 {
         : i td ( _b_i . j ctd ci )
@@ -441,7 +422,7 @@ unsafe @ __jpg_prog_dc inout Jpeg j i ci ( Vec i ) cf i bidx → v {
 }
 
 // AC scan, first pass (Ah=0): run-length + size symbols with EOB runs.
-unsafe @ __jpg_prog_ac1 inout Jpeg j i ci ( Vec i ) cf i bidx → v {
+@ __jpg_prog_ac1 inout Jpeg j i ci ( Vec i ) cf i bidx → v {
     : i base * bidx 64
     ? > . j eobrun 0 { = . j eobrun - . j eobrun 1 ^ } {}
     : i ta + 4 ( _b_i . j cta ci )
@@ -483,7 +464,7 @@ unsafe @ __jpg_prog_ac1 inout Jpeg j i ci ( Vec i ) cf i bidx → v {
 
 // AC scan, refinement pass (Ah>0): new coefficients arrive as ±1<<Al and
 // every already-nonzero coefficient on the way gets a correction bit.
-unsafe @ __jpg_prog_ac2 inout Jpeg j i ci ( Vec i ) cf i bidx → v {
+@ __jpg_prog_ac2 inout Jpeg j i ci ( Vec i ) cf i bidx → v {
     : i base * bidx 64
     : i bit << 1 . j al
     ? > . j eobrun 0 {
@@ -539,14 +520,14 @@ unsafe @ __jpg_prog_ac2 inout Jpeg j i ci ( Vec i ) cf i bidx → v {
 // the decoder for the scan: the decoder (its bit reader and tables) and
 // the plane a block is decoded into are then two values, not a value and
 // a borrow of it.
-unsafe @ __jpg_prog_scan inout Jpeg j → v {
+@ __jpg_prog_scan inout Jpeg j → v {
     : ( Vec ( Vec i ) ) coefs . j coefs
     = . j coefs ( vec_new [( Vec i )] )  // coefs keeps what the field held
     ( __jpg_prog_scan_planes j coefs )
     = . j coefs coefs
 }
 
-unsafe @ __jpg_prog_scan_planes inout Jpeg j ( Vec ( Vec i ) ) coefs → v {
+@ __jpg_prog_scan_planes inout Jpeg j ( Vec ( Vec i ) ) coefs → v {
     : i ns . j nscomp
     ? == ns 1 {
         : i ci ( _b_i . j scomp 0 )
@@ -659,7 +640,7 @@ unsafe @ __jpg_prog_scan_planes inout Jpeg j ( Vec ( Vec i ) ) coefs → v {
 
 // Walk all segments. Sequential (SOF0/SOF1) frames decode at their single
 // SOS; progressive (SOF2) frames accumulate scans until EOI, then finish.
-unsafe @ __jpg_run inout Jpeg j → ?Image {
+@ __jpg_run inout Jpeg j → ?Image {
     : ~ i p 2
     : i n . j len
     : ~ b sof F

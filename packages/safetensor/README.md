@@ -66,7 +66,8 @@ before anything else noticed.
 | `st_parse_bytes` | an in-memory image; the `St` keeps the buffer |
 | `st_tensors` / `st_n_tensors` | the tensor table (name, dtype, shape, extent) |
 | `st_find_tensor` | by name, `-1` when absent |
-| `st_tensor_ptr` | the bytes, straight out of the mapping — no copy |
+| `st_tensor_bytes` | the bytes, straight out of the mapping — no copy: a checked `Slice u` that lives no longer than the `St` |
+| `st_tensor_ptr` | their address, for a device upload — `raw`: only an `unsafe` caller, which keeps the `St` alive, may take it |
 | `st_dequant` | the tensor as **f32**, whatever it was stored as |
 | `st_dequant_range` | elements `[first, first+count)` — **exact**, because safetensors has no block quantisation, so a single row of a 262 144-row embedding table can be read without touching the rest |
 

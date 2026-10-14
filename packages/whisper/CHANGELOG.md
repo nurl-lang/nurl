@@ -9,6 +9,7 @@ Requires NURL 0.73.0 (`slice_at`, `slice_put`, `rc_take`, `locked_take`).
 - Loops that read or wrote through `vec_data` pointers index slices (`slice_at` / `slice_put`, as fast as the pointers), and functions with nothing raw in them are no longer marked `unsafe`.
 - 3 fewer functions are `unsafe` than in 3.0.1 (57 left).
 - Requires gpu 0.17. The `wk_*` launchers take device addresses as plain integers and launch kernels that index them by the sizes they are given; they were safe to call with any numbers — now they are `raw` (their callers already vouched), and `wk_build`, which compiles this package's own kernel sources, is `unsafe`.
+- Requires safetensor 0.6 (`st_tensor_ptr` is `raw` there; the loaders that take tensor addresses were already `unsafe`).
 
 ## [3.0.1] — 2026-10-12
 

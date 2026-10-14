@@ -204,6 +204,84 @@ inline @ slice_byte ( Slice u ) s i idx → i {
     ^ & # i . p idx 255
 }
 
+// A Vec of its own holding a copy of every element of the view: an
+// element that owns something is copied deep (`mem_dup`), anything else
+// as is (one memcpy). What a view that must outlive its storage — a
+// result, a global, a thread's capture — is turned into.
+@ slice_to_vec [A] ( Slice A ) s → ( Vec A ) {
+    : i n . s len
+    : ( Vec A ) out ( vec_with_cap [A] n )
+    ? > n 0 {
+        : *A dst ( vec_data [A] out )
+        : *A src . s data
+        : ~ i k 0
+        ~ < k n {
+            = . dst k ( mem_dup . src k )
+            = k + k 1
+        }
+        : b _l ( vec_set_len [A] out n )
+    } {}
+    ^ out
+}
+
+// ── Little-endian words in a byte view ───────────────────────────────
+// The u16 / u32 / u64 at byte `off`, and stores of one: a single bounds
+// check for the whole word (panicking, like slice_at, when it does not
+// fit), then the bytes — which LLVM fuses into one unaligned load or
+// store. What a binary-format reader (a tensor container, an audio frame,
+// a header) did through a raw pointer, or paid a check per byte for.
+// A u64 comes back as its i64 bit pattern.
+
+@ __slice_word_panic i off i w i len → v {
+    ( __slice_index_panic + off - w 1 len )
+}
+
+inline @ slice_u16_le ( Slice u ) s i off → i {
+    ? | < off 0 > off - . s len 2 { ( __slice_word_panic off 2 . s len ) } {}
+    : *u p . s data
+    ^ | # i . p off << # i . p + off 1 8
+}
+
+inline @ slice_u32_le ( Slice u ) s i off → i {
+    ? | < off 0 > off - . s len 4 { ( __slice_word_panic off 4 . s len ) } {}
+    : *u p . s data
+    ^ | | # i . p off << # i . p + off 1 8 | << # i . p + off 2 16 << # i . p + off 3 24
+}
+
+inline @ slice_u64_le ( Slice u ) s i off → i {
+    ? | < off 0 > off - . s len 8 { ( __slice_word_panic off 8 . s len ) } {}
+    : *u p . s data
+    : i lo | | # i . p off << # i . p + off 1 8 | << # i . p + off 2 16 << # i . p + off 3 24
+    : i hi | | # i . p + off 4 << # i . p + off 5 8 | << # i . p + off 6 16 << # i . p + off 7 24
+    ^ | lo << hi 32
+}
+
+inline @ slice_put_u16_le ( Slice u ) s i off i x → v {
+    ? | < off 0 > off - . s len 2 { ( __slice_word_panic off 2 . s len ) } {}
+    : *u p . s data
+    = . p off # u & x 255
+    = . p + off 1 # u & >> x 8 255
+}
+
+inline @ slice_put_u32_le ( Slice u ) s i off i x → v {
+    ? | < off 0 > off - . s len 4 { ( __slice_word_panic off 4 . s len ) } {}
+    : *u p . s data
+    = . p off # u & x 255
+    = . p + off 1 # u & >> x 8 255
+    = . p + off 2 # u & >> x 16 255
+    = . p + off 3 # u & >> x 24 255
+}
+
+inline @ slice_put_u64_le ( Slice u ) s i off i x → v {
+    ? | < off 0 > off - . s len 8 { ( __slice_word_panic off 8 . s len ) } {}
+    : *u p . s data
+    : ~ i k 0
+    ~ < k 8 {
+        = . p + off k # u & >> x * k 8 255
+        = k + k 1
+    }
+}
+
 // First / last element — convenience wrappers, same None-on-empty
 // semantics as `slice_get`.
 @ slice_first [A] ( Slice A ) s → ?A {

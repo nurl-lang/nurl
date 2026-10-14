@@ -54,7 +54,7 @@ $ `src/selftest.nu`
     }
 }
 
-unsafe @ __cmd_stats St st s name → i {
+@ __cmd_stats St st s name → i {
     : i idx ( st_find_tensor st name )
     ? < idx 0 {
         ( nurl_eprintln `safetensor: no such tensor` )
@@ -63,7 +63,7 @@ unsafe @ __cmd_stats St st s name → i {
     ?? ( st_dequant st idx ) {
         T raw → {
             : i n / ( vec_len [u] raw ) 4
-            : *u p ( vec_data [u] raw )
+            : ( Slice u ) p ( slice_from_vec [u] raw )
             : ~ f mn 1.0e30
             : ~ f mx -1.0e30
             : ~ f sum 0.0

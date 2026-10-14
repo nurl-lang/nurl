@@ -91,23 +91,23 @@ $ `stdlib/core/slice.nu`
     ^ 0
 }
 
-unsafe @ cmd_stats Pt p s name → i {
+@ cmd_stats Pt p s name → i {
     : i idx ( pt_find p name )
     ? < idx 0 { ( nurl_print `no such tensor\n` ) ^ 1 } {}
     : i n ( pt_nelems p idx )
     ? == n 0 { ( nurl_print `empty tensor\n` ) ^ 1 } {}
     : ( Vec f ) bv ( vec_zeroed [f] n )
-    : *f buf ( vec_data [f] bv )
-    ? ! ( pt_read_f64 p idx 0 n buf ) {
+    : ( Slice f ) buf ( slice_from_vec [f] bv )
+    ? ! ( pt_read_f64_into p idx 0 n buf ) {
         ( nurl_print `cannot read tensor (non-contiguous or unsupported dtype)\n` )
         ^ 1
     } {}
-    : ~ f lo . buf 0
-    : ~ f hi . buf 0
+    : ~ f lo ( slice_at [f] buf 0 )
+    : ~ f hi ( slice_at [f] buf 0 )
     : ~ f sum 0.0
     : ~ i j 0
     ~ < j n {
-        : f x . buf j
+        : f x ( slice_at [f] buf j )
         ? < x lo { = lo x } {}
         ? > x hi { = hi x } {}
         = sum + sum x
@@ -121,22 +121,22 @@ unsafe @ cmd_stats Pt p s name → i {
     ^ 0
 }
 
-unsafe @ cmd_head Pt p s name i count → i {
+@ cmd_head Pt p s name i count → i {
     : i idx ( pt_find p name )
     ? < idx 0 { ( nurl_print `no such tensor\n` ) ^ 1 } {}
     : i n ( pt_nelems p idx )
     : i want ? > count n n count
     ? <= want 0 { ( nurl_print `\n` ) ^ 0 } {}
     : ( Vec f ) bv ( vec_zeroed [f] want )
-    : *f buf ( vec_data [f] bv )
-    ? ! ( pt_read_f64 p idx 0 want buf ) {
+    : ( Slice f ) buf ( slice_from_vec [f] bv )
+    ? ! ( pt_read_f64_into p idx 0 want buf ) {
         ( nurl_print `cannot read tensor\n` )
         ^ 1
     } {}
     : ~ i j 0
     ~ < j want {
         ? > j 0 { ( nurl_print ` ` ) } {}
-        ( nurl_print ( nurl_str_float . buf j ) )
+        ( nurl_print ( nurl_str_float ( slice_at [f] buf j ) ) )
         = j + j 1
     }
     ( nurl_print `\n` )
@@ -146,7 +146,7 @@ unsafe @ cmd_head Pt p s name i count → i {
 // "<name> <dtype> <shape> <v0> <v1> …" per tensor. Values print through
 // nurl_str_float, which round-trips — so a diff against torch is a diff
 // of numbers, not of formatting.
-unsafe @ cmd_dump Pt p → i {
+@ cmd_dump Pt p → i {
     : i n ( pt_n_tensors p )
     : ~ i j 0
     ~ < j n {
@@ -158,11 +158,11 @@ unsafe @ cmd_dump Pt p → i {
         : i cnt ( pt_nelems p j )
         ? > cnt 0 {
             : ( Vec f ) bv ( vec_zeroed [f] cnt )
-            : *f buf ( vec_data [f] bv )
-            ? ( pt_read_f64 p j 0 cnt buf ) {
+            : ( Slice f ) buf ( slice_from_vec [f] bv )
+            ? ( pt_read_f64_into p j 0 cnt buf ) {
                 : ~ i e 0
                 ~ < e cnt {
-                    ( nurl_print ` ` ) ( nurl_print ( nurl_str_float . buf e ) )
+                    ( nurl_print ` ` ) ( nurl_print ( nurl_str_float ( slice_at [f] buf e ) ) )
                     = e + e 1
                 }
             } { ( nurl_print ` READ-FAILED` ) }

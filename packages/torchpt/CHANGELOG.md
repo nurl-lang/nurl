@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.4.0] — 2026-10-14
+
+Requires the NURL with `stdlib/std/mmap.nu`, `zip_open_mapped` and the
+little-endian slice words.
+
+### Changed
+
+- No function is `unsafe` any more (94 were). A `Pt` holds the checkpoint
+  as a `MappedFile` (mapped, or read whole where the platform does not
+  map files), the zip directory is read over that mapping
+  (`zip_open_mapped`), and every element is read through a checked view
+  of it. The pickle tree is built in a local the parser changes through
+  `inout` and then frozen in the `Pk`'s `Arc`; `pk_parse` takes the
+  pickle's bytes as a `Slice u`.
+- `pt_tensor_bytes` lends a tensor's bytes as a `Slice u` held to the
+  `Pt`; `pt_tensor_ptr` is `raw`. `pt_read_f64_into` reads into a
+  `Slice f`; `pt_read_f64`, which writes through a `*f`, is `raw`.
+- `pt_dequant` of a contiguous F32 tensor is one copy of its bytes, and
+  every other dtype writes each element once instead of pushing four
+  bytes.
+
 ## [0.3.0] — 2026-10-11
 
 Requires NURL 0.73.0, which allows `mem_forget`, `mem_take` and the

@@ -12,7 +12,7 @@
 //
 // The result is a value tree in flat arrays (no per-node allocation):
 //
-//   ( pk_parse * u p i n )     → !Pk String
+//   ( pk_parse p )             → !Pk String   (p: the pickle's bytes)
 //   ( pk_free k )              → v    early release (optional)
 //   ( pk_root k )              → i    root node id
 //   ( __pk_kind k id )           → i    PK_*
@@ -165,26 +165,17 @@ $ `stdlib/core/slice.nu`
 
 @ Pk_drop sink Pk h → v {}
 
-unsafe @ __Pk_ptr Pk h → *PkImpl { ^ ( arc_ptr [PkImpl] . h a ) }
-
-unsafe @ pk_new → Pk {
-    : ~ PkImpl k @ PkImpl {}
-    = . k kind ( vec_new [i] )
-    = . k va ( vec_new [i] )
-    = . k vb ( vec_new [i] )
-    = . k kids ( vec_new [i] )
-    = . k strs ( vec_new [String] )
-    = . k blob ( vec_new [u] )
-    = . k stack ( vec_new [i] )
-    = . k memo ( vec_new [i] )
-    = . k stor ( vec_new [i] )
-    = . k tens ( vec_new [i] )
-    = . k dims ( vec_new [i] )
-    = . k root ( vec_new [i] )
-    = . k errs ( vec_new [String] )
+// An empty tree: the parser builds into it, then freezes it in a Pk.
+@ __pk_impl_new → PkImpl {
+    : PkImpl k @ PkImpl {
+        ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [String] ) ( vec_new [u] )
+        ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [String] )
+    }
     ( vec_push [i] . k root -1 )
-    ^ @ Pk { ( arc_new [PkImpl] k ) }
+    ^ k
 }
+
+@ pk_new → Pk { ^ @ Pk { ( arc_new [PkImpl] ( __pk_impl_new ) ) } }
 
 // Let go of `k` now rather than at the end of its owner's scope.
 @ pk_free sink Pk k → v {}
@@ -195,84 +186,84 @@ unsafe @ pk_new → Pk {
     ?? ( vec_get [i] v idx ) { T x → ^ x F → ^ 0 }
 }
 
-unsafe @ pk_root Pk k__h → i { ^ ( __pk_root ( __Pk_ptr k__h ) ) }
+@ pk_root Pk h → i { ^ ( __pk_root ( arc_get [PkImpl] . h a ) ) }
 
-unsafe @ __pk_root * PkImpl k → i {
+@ __pk_root PkImpl k → i {
     ^ ( __pk_geti . k root 0 )
 }
 
-unsafe @ pk_n_nodes Pk k__h → i { ^ ( __pk_n_nodes ( __Pk_ptr k__h ) ) }
+@ pk_n_nodes Pk h → i { ^ ( __pk_n_nodes ( arc_get [PkImpl] . h a ) ) }
 
-unsafe @ __pk_n_nodes * PkImpl k → i {
+@ __pk_n_nodes PkImpl k → i {
     ^ ( vec_len [i] . k kind )
 }
 
-unsafe @ pk_kind Pk k__h i id → i { ^ ( __pk_kind ( __Pk_ptr k__h ) id ) }
+@ pk_kind Pk h i id → i { ^ ( __pk_kind ( arc_get [PkImpl] . h a ) id ) }
 
-unsafe @ __pk_kind * PkImpl k i id → i {
+@ __pk_kind PkImpl k i id → i {
     ? | < id 0 >= id ( vec_len [i] . k kind ) { ^ PK_OTHER } {}
     ^ ( __pk_geti . k kind id )
 }
 
-unsafe @ pk_int Pk k__h i id → i { ^ ( __pk_int ( __Pk_ptr k__h ) id ) }
+@ pk_int Pk h i id → i { ^ ( __pk_int ( arc_get [PkImpl] . h a ) id ) }
 
-unsafe @ __pk_int * PkImpl k i id → i {
+@ __pk_int PkImpl k i id → i {
     ? | < id 0 >= id ( vec_len [i] . k kind ) { ^ 0 } {}
     ^ ( __pk_geti . k va id )
 }
 
-unsafe @ pk_float Pk k__h i id → f { ^ ( __pk_float ( __Pk_ptr k__h ) id ) }
+@ pk_float Pk h i id → f { ^ ( __pk_float ( arc_get [PkImpl] . h a ) id ) }
 
-unsafe @ __pk_float * PkImpl k i id → f {
+@ __pk_float PkImpl k i id → f {
     ? | < id 0 >= id ( vec_len [i] . k kind ) { ^ 0.0 } {}
     ^ ( bits_to_f64 ( __pk_geti . k va id ) )
 }
 
-unsafe @ pk_str Pk k__h i id → s { ^ ( __pk_str ( __Pk_ptr k__h ) id ) }
+@ pk_str Pk h i id → s { ^ ( __pk_str ( arc_get [PkImpl] . h a ) id ) }
 
-unsafe @ __pk_str * PkImpl k i id → s {
+@ __pk_str PkImpl k i id → s {
     ? != ( __pk_kind k id ) PK_STR { ^ `` } {}
     : i si ( __pk_geti . k va id )
     ?? ( vec_get [String] . k strs si ) { T s → ^ ( string_data s ) F → ^ `` }
 }
 
 // Items in a tuple/list, pairs in a dict, bytes in a byte string.
-unsafe @ pk_len Pk k__h i id → i { ^ ( __pk_len ( __Pk_ptr k__h ) id ) }
+@ pk_len Pk h i id → i { ^ ( __pk_len ( arc_get [PkImpl] . h a ) id ) }
 
-unsafe @ __pk_len * PkImpl k i id → i {
+@ __pk_len PkImpl k i id → i {
     : i kd ( __pk_kind k id )
     ? | | | == kd PK_TUPLE == kd PK_LIST == kd PK_DICT == kd PK_BYTES
     { ^ ( __pk_geti . k vb id ) } {}
     ^ 0
 }
 
-unsafe @ pk_item Pk k__h i id i j → i { ^ ( __pk_item ( __Pk_ptr k__h ) id j ) }
+@ pk_item Pk h i id i j → i { ^ ( __pk_item ( arc_get [PkImpl] . h a ) id j ) }
 
-unsafe @ __pk_item * PkImpl k i id i j → i {
+@ __pk_item PkImpl k i id i j → i {
     : i kd ( __pk_kind k id )
     ? & != kd PK_TUPLE != kd PK_LIST { ^ -1 } {}
     ? | < j 0 >= j ( __pk_geti . k vb id ) { ^ -1 } {}
     ^ ( __pk_geti . k kids + ( __pk_geti . k va id ) j )
 }
 
-unsafe @ pk_key Pk k__h i id i j → i { ^ ( __pk_key ( __Pk_ptr k__h ) id j ) }
+@ pk_key Pk h i id i j → i { ^ ( __pk_key ( arc_get [PkImpl] . h a ) id j ) }
 
-unsafe @ __pk_key * PkImpl k i id i j → i {
+@ __pk_key PkImpl k i id i j → i {
     ? != ( __pk_kind k id ) PK_DICT { ^ -1 } {}
     ? | < j 0 >= j ( __pk_geti . k vb id ) { ^ -1 } {}
     ^ ( __pk_geti . k kids + ( __pk_geti . k va id ) * j 2 )
 }
 
-unsafe @ pk_val Pk k__h i id i j → i { ^ ( __pk_val ( __Pk_ptr k__h ) id j ) }
+@ pk_val Pk h i id i j → i { ^ ( __pk_val ( arc_get [PkImpl] . h a ) id j ) }
 
-unsafe @ __pk_val * PkImpl k i id i j → i {
+@ __pk_val PkImpl k i id i j → i {
     ? != ( __pk_kind k id ) PK_DICT { ^ -1 } {}
     ? | < j 0 >= j ( __pk_geti . k vb id ) { ^ -1 } {}
     ^ ( __pk_geti . k kids + + ( __pk_geti . k va id ) * j 2 1 )
 }
 
-unsafe @ pk_dict_get Pk k__h i id s key → i {
-    : *PkImpl k ( __Pk_ptr k__h )
+@ pk_dict_get Pk h i id s key → i {
+    : PkImpl k ( arc_get [PkImpl] . h a )
     : i n ( __pk_len k id )
     : ~ i j 0
     ~ < j n {
@@ -283,39 +274,39 @@ unsafe @ pk_dict_get Pk k__h i id s key → i {
     ^ -1
 }
 
-unsafe @ pk_tensor_storage Pk k__h i id → i { ^ ( __pk_tensor_storage ( __Pk_ptr k__h ) id ) }
+@ pk_tensor_storage Pk h i id → i { ^ ( __pk_tensor_storage ( arc_get [PkImpl] . h a ) id ) }
 
-unsafe @ __pk_tensor_storage * PkImpl k i id → i {
+@ __pk_tensor_storage PkImpl k i id → i {
     ? != ( __pk_kind k id ) PK_TENSOR { ^ -1 } {}
     ^ ( __pk_geti . k tens * ( __pk_geti . k va id ) 4 )
 }
 
-unsafe @ pk_tensor_offset Pk k__h i id → i { ^ ( __pk_tensor_offset ( __Pk_ptr k__h ) id ) }
+@ pk_tensor_offset Pk h i id → i { ^ ( __pk_tensor_offset ( arc_get [PkImpl] . h a ) id ) }
 
-unsafe @ __pk_tensor_offset * PkImpl k i id → i {
+@ __pk_tensor_offset PkImpl k i id → i {
     ? != ( __pk_kind k id ) PK_TENSOR { ^ 0 } {}
     ^ ( __pk_geti . k tens + * ( __pk_geti . k va id ) 4 1 )
 }
 
-unsafe @ pk_tensor_ndim Pk k__h i id → i { ^ ( __pk_tensor_ndim ( __Pk_ptr k__h ) id ) }
+@ pk_tensor_ndim Pk h i id → i { ^ ( __pk_tensor_ndim ( arc_get [PkImpl] . h a ) id ) }
 
-unsafe @ __pk_tensor_ndim * PkImpl k i id → i {
+@ __pk_tensor_ndim PkImpl k i id → i {
     ? != ( __pk_kind k id ) PK_TENSOR { ^ 0 } {}
     ^ ( __pk_geti . k tens + * ( __pk_geti . k va id ) 4 2 )
 }
 
-unsafe @ pk_tensor_dim Pk k__h i id i j → i { ^ ( __pk_tensor_dim ( __Pk_ptr k__h ) id j ) }
+@ pk_tensor_dim Pk h i id i j → i { ^ ( __pk_tensor_dim ( arc_get [PkImpl] . h a ) id j ) }
 
-unsafe @ __pk_tensor_dim * PkImpl k i id i j → i {
+@ __pk_tensor_dim PkImpl k i id i j → i {
     ? != ( __pk_kind k id ) PK_TENSOR { ^ 0 } {}
     : i t * ( __pk_geti . k va id ) 4
     ? | < j 0 >= j ( __pk_geti . k tens + t 2 ) { ^ 0 } {}
     ^ ( __pk_geti . k dims + ( __pk_geti . k tens + t 3 ) j )
 }
 
-unsafe @ pk_tensor_stride Pk k__h i id i j → i { ^ ( __pk_tensor_stride ( __Pk_ptr k__h ) id j ) }
+@ pk_tensor_stride Pk h i id i j → i { ^ ( __pk_tensor_stride ( arc_get [PkImpl] . h a ) id j ) }
 
-unsafe @ __pk_tensor_stride * PkImpl k i id i j → i {
+@ __pk_tensor_stride PkImpl k i id i j → i {
     ? != ( __pk_kind k id ) PK_TENSOR { ^ 0 } {}
     : i t * ( __pk_geti . k va id ) 4
     : i nd ( __pk_geti . k tens + t 2 )
@@ -323,37 +314,37 @@ unsafe @ __pk_tensor_stride * PkImpl k i id i j → i {
     ^ ( __pk_geti . k dims + + ( __pk_geti . k tens + t 3 ) nd j )
 }
 
-unsafe @ pk_n_storages Pk k__h → i { ^ ( __pk_n_storages ( __Pk_ptr k__h ) ) }
+@ pk_n_storages Pk h → i { ^ ( __pk_n_storages ( arc_get [PkImpl] . h a ) ) }
 
-unsafe @ __pk_n_storages * PkImpl k → i {
+@ __pk_n_storages PkImpl k → i {
     ^ / ( vec_len [i] . k stor ) 3
 }
 
-unsafe @ pk_storage_dtype Pk k__h i sid → i { ^ ( __pk_storage_dtype ( __Pk_ptr k__h ) sid ) }
+@ pk_storage_dtype Pk h i sid → i { ^ ( __pk_storage_dtype ( arc_get [PkImpl] . h a ) sid ) }
 
-unsafe @ __pk_storage_dtype * PkImpl k i sid → i {
+@ __pk_storage_dtype PkImpl k i sid → i {
     ? | < sid 0 >= sid ( __pk_n_storages k ) { ^ PKS_UNKNOWN } {}
     ^ ( __pk_geti . k stor * sid 3 )
 }
 
-unsafe @ pk_storage_key Pk k__h i sid → s { ^ ( __pk_storage_key ( __Pk_ptr k__h ) sid ) }
+@ pk_storage_key Pk h i sid → s { ^ ( __pk_storage_key ( arc_get [PkImpl] . h a ) sid ) }
 
-unsafe @ __pk_storage_key * PkImpl k i sid → s {
+@ __pk_storage_key PkImpl k i sid → s {
     ? | < sid 0 >= sid ( __pk_n_storages k ) { ^ `` } {}
     : i si ( __pk_geti . k stor + * sid 3 1 )
     ?? ( vec_get [String] . k strs si ) { T s → ^ ( string_data s ) F → ^ `` }
 }
 
-unsafe @ pk_storage_numel Pk k__h i sid → i { ^ ( __pk_storage_numel ( __Pk_ptr k__h ) sid ) }
+@ pk_storage_numel Pk h i sid → i { ^ ( __pk_storage_numel ( arc_get [PkImpl] . h a ) sid ) }
 
-unsafe @ __pk_storage_numel * PkImpl k i sid → i {
+@ __pk_storage_numel PkImpl k i sid → i {
     ? | < sid 0 >= sid ( __pk_n_storages k ) { ^ 0 } {}
     ^ ( __pk_geti . k stor + * sid 3 2 )
 }
 
 // ── construction helpers ────────────────────────────────────────────
 
-unsafe @ __pk_node * PkImpl k i kd i a i b → i {
+@ __pk_node inout PkImpl k i kd i a i b → i {
     : i id ( vec_len [i] . k kind )
     ( vec_push [i] . k kind kd )
     ( vec_push [i] . k va a )
@@ -361,32 +352,32 @@ unsafe @ __pk_node * PkImpl k i kd i a i b → i {
     ^ id
 }
 
-unsafe @ __pk_intern * PkImpl k s text → i {
+@ __pk_intern inout PkImpl k s text → i {
     : i idx ( vec_len [String] . k strs )
     ( vec_push [String] . k strs ( string_from text ) )
     ^ idx
 }
 
-unsafe @ __pk_push * PkImpl k i id → v { ( vec_push [i] . k stack id ) }
+@ __pk_push inout PkImpl k i id → v { ( vec_push [i] . k stack id ) }
 
-unsafe @ __pk_depth * PkImpl k → i { ^ ( vec_len [i] . k stack ) }
+@ __pk_depth PkImpl k → i { ^ ( vec_len [i] . k stack ) }
 
-unsafe @ __pk_pop * PkImpl k → i {
+@ __pk_pop inout PkImpl k → i {
     : i n ( vec_len [i] . k stack )
     ? <= n 0 { ^ -1 } {}
     : i id ( __pk_geti . k stack - n 1 )
-    : b _t ( vec_set_len [i] . k stack - n 1 )
+    : b _t ( vec_truncate [i] . k stack - n 1 )
     ^ id
 }
 
-unsafe @ __pk_peek * PkImpl k i back → i {
+@ __pk_peek PkImpl k i back → i {
     : i n ( vec_len [i] . k stack )
     ? | < back 0 >= back n { ^ -1 } {}
     ^ ( __pk_geti . k stack - - n 1 back )
 }
 
 // Stack index of the topmost MARK, or -1.
-unsafe @ __pk_find_mark * PkImpl k → i {
+@ __pk_find_mark PkImpl k → i {
     : ~ i j - ( vec_len [i] . k stack ) 1
     ~ >= j 0 {
         ? == ( __pk_geti . k kind ( __pk_geti . k stack j ) ) PK_MARK { ^ j } {}
@@ -395,39 +386,39 @@ unsafe @ __pk_find_mark * PkImpl k → i {
     ^ -1
 }
 
-unsafe @ __pk_memo_put * PkImpl k i slot i id → v {
+@ __pk_memo_put inout PkImpl k i slot i id → v {
     ? | < slot 0 > slot 16777216 { ^ v } {}
     ~ <= ( vec_len [i] . k memo ) slot { ( vec_push [i] . k memo -1 ) }
     : b _s ( vec_set [i] . k memo slot id )
 }
 
-unsafe @ __pk_memo_get * PkImpl k i slot → i {
+@ __pk_memo_get PkImpl k i slot → i {
     ? | < slot 0 >= slot ( vec_len [i] . k memo ) { ^ -1 } {}
     ^ ( __pk_geti . k memo slot )
 }
 
 // Record the first error and return the sentinel the step loop stops on.
-unsafe @ __pk_fail * PkImpl k s msg → i {
+@ __pk_fail inout PkImpl k s msg → i {
     ? == 0 ( vec_len [String] . k errs )
     { ( vec_push [String] . k errs ( string_from msg ) ) } {}
     ^ -1
 }
 
-unsafe @ pk_error Pk k__h → s { ^ ( __pk_error ( __Pk_ptr k__h ) ) }
+@ pk_error Pk h → s { ^ ( __pk_error ( arc_get [PkImpl] . h a ) ) }
 
-unsafe @ __pk_error * PkImpl k → s {
+@ __pk_error PkImpl k → s {
     ?? ( vec_get [String] . k errs 0 ) { T s → ^ ( string_data s ) F → ^ `` }
 }
 
 // ── little-endian scalar reads ──────────────────────────────────────
 
-unsafe @ __pk_u8 * u p i off → i { ^ # i . p off }
+@ __pk_u8 ( Slice u ) p i off → i { ^ # i ( slice_at [u] p off ) }
 
-unsafe @ __pk_u16 * u p i off → i { ^ + ( __pk_u8 p off ) * ( __pk_u8 p + off 1 ) 256 }
+@ __pk_u16 ( Slice u ) p i off → i { ^ + ( __pk_u8 p off ) * ( __pk_u8 p + off 1 ) 256 }
 
-unsafe @ __pk_u32 * u p i off → i { ^ + ( __pk_u16 p off ) * ( __pk_u16 p + off 2 ) 65536 }
+@ __pk_u32 ( Slice u ) p i off → i { ^ + ( __pk_u16 p off ) * ( __pk_u16 p + off 2 ) 65536 }
 
-unsafe @ __pk_i32 * u p i off → i {
+@ __pk_i32 ( Slice u ) p i off → i {
     : i v ( __pk_u32 p off )
     ^ ? >= v 2147483648 - v 4294967296 v
 }
@@ -442,7 +433,7 @@ unsafe @ __pk_i32 * u p i off → i {
 // LONG1/LONG4 payload: little-endian two's-complement, arbitrary length.
 // Anything wider than 8 bytes cannot be a real dimension or count; it
 // reads as 0 rather than silently wrapping into a plausible number.
-unsafe @ __pk_long * u p i off i len → i {
+@ __pk_long ( Slice u ) p i off i len → i {
     ? | <= len 0 > len 8 { ^ 0 } {}
     : ~ i acc 0
     : ~ i j - len 1
@@ -454,11 +445,18 @@ unsafe @ __pk_long * u p i off i len → i {
 
 // BINFLOAT is IEEE-754 double, BIG-endian — the one big-endian field in
 // an otherwise little-endian protocol.
-unsafe @ __pk_f64be * u p i off → i {
+@ __pk_f64be ( Slice u ) p i off → i {
     : ~ i bits 0
     : ~ i j 0
     ~ < j 8 { = bits + * bits 256 ( __pk_u8 p + off j ) = j + j 1 }
     ^ bits
+}
+
+// `n` bytes of the stream from `off`, as text.
+@ __pk_text ( Slice u ) p i off i n → String {
+    : String t ( string_new )
+    ( string_push_window t p off n )
+    ^ t
 }
 
 // ── reductions ──────────────────────────────────────────────────────
@@ -467,7 +465,7 @@ unsafe @ __pk_f64be * u p i off → i {
 //   (storage, storage_offset, size, stride, requires_grad, backward_hooks)
 // Returns the node id, or -1 when the argument shapes are not what the
 // name promises.
-unsafe @ __pk_build_tensor * PkImpl k i args → i {
+@ __pk_build_tensor inout PkImpl k i args → i {
     ? < ( __pk_len k args ) 4 { ^ -1 } {}
     : i sn ( __pk_item k args 0 )
     ? != ( __pk_kind k sn ) PK_PERSID { ^ -1 } {}
@@ -503,7 +501,7 @@ unsafe @ __pk_build_tensor * PkImpl k i args → i {
 
 // REDUCE / NEWOBJ: `callable` is a PK_GLOBAL naming a class we either
 // know how to represent as data, or do not. Nothing is ever invoked.
-unsafe @ __pk_reduce * PkImpl k i callable i args → i {
+@ __pk_reduce inout PkImpl k i callable i args → i {
     ? != ( __pk_kind k callable ) PK_GLOBAL { ^ ( __pk_node k PK_OTHER 0 0 ) } {}
     : s nm ( __pk_str_of_global k callable )
     ? | ( nurl_str_eq nm `torch._utils._rebuild_tensor_v2` )
@@ -524,15 +522,15 @@ unsafe @ __pk_reduce * PkImpl k i callable i args → i {
 
 // A GLOBAL's dotted name. Kept separate from pk_str so PK_STR stays the
 // only kind that reads as text to callers.
-unsafe @ pk_str_of_global Pk k__h i id → s { ^ ( __pk_str_of_global ( __Pk_ptr k__h ) id ) }
+@ pk_str_of_global Pk h i id → s { ^ ( __pk_str_of_global ( arc_get [PkImpl] . h a ) id ) }
 
-unsafe @ __pk_str_of_global * PkImpl k i id → s {
+@ __pk_str_of_global PkImpl k i id → s {
     ? != ( __pk_kind k id ) PK_GLOBAL { ^ `` } {}
     : i si ( __pk_geti . k va id )
     ?? ( vec_get [String] . k strs si ) { T s → ^ ( string_data s ) F → ^ `` }
 }
 
-unsafe @ __pk_global * PkImpl k s modname s qname → i {
+@ __pk_global inout PkImpl k s modname s qname → i {
     : String full ( string_from modname )
     ( string_push_char full 46 )
     ( string_push_str full qname )
@@ -542,13 +540,13 @@ unsafe @ __pk_global * PkImpl k s modname s qname → i {
 }
 
 // Collapse everything above the topmost MARK into one container node.
-unsafe @ __pk_collapse * PkImpl k i kd i mark → i {
+@ __pk_collapse inout PkImpl k i kd i mark → i {
     : i n ( vec_len [i] . k stack )
     : i count - - n mark 1
     : i start ( vec_len [i] . k kids )
     : ~ i j + mark 1
     ~ < j n { ( vec_push [i] . k kids ( __pk_geti . k stack j ) ) = j + j 1 }
-    : b _t ( vec_set_len [i] . k stack mark )
+    : b _t ( vec_truncate [i] . k stack mark )
     ^ ( __pk_node k kd start ? == kd PK_DICT / count 2 count )
 }
 
@@ -558,7 +556,7 @@ unsafe @ __pk_collapse * PkImpl k i kd i mark → i {
 // has to be relocated once, on the first extend. Costs a copy of what
 // the container already holds, which for the build-then-fill shape that
 // pickle actually emits is a copy of nothing.
-unsafe @ __pk_make_room * PkImpl k i target i pair → v {
+@ __pk_make_room inout PkImpl k i target i pair → v {
     : i kstart ( __pk_geti . k va target )
     : i kcount ( __pk_geti . k vb target )
     : i have ? == pair 1 * kcount 2 kcount
@@ -570,7 +568,7 @@ unsafe @ __pk_make_room * PkImpl k i target i pair → v {
 }
 
 // Append the run above the topmost MARK to an existing list/dict node.
-unsafe @ __pk_extend * PkImpl k i target i mark i pair → b {
+@ __pk_extend inout PkImpl k i target i mark i pair → b {
     : i n ( vec_len [i] . k stack )
     : i count - - n mark 1
     ? & == pair 1 != % count 2 0 { ^ F } {}
@@ -581,7 +579,7 @@ unsafe @ __pk_extend * PkImpl k i target i mark i pair → b {
     : i kcount ( __pk_geti . k vb target )
     : ~ i j + mark 1
     ~ < j n { ( vec_push [i] . k kids ( __pk_geti . k stack j ) ) = j + j 1 }
-    : b _t ( vec_set_len [i] . k stack mark )
+    : b _t ( vec_truncate [i] . k stack mark )
     : b _s ( vec_set [i] . k vb target + kcount ? == pair 1 / count 2 count )
     ^ T
 }
@@ -591,7 +589,7 @@ unsafe @ __pk_extend * PkImpl k i target i mark i pair → b {
 // Returns the offset just past the opcode it consumed, -1 on error
 // (message recorded in the VM) or -2 on STOP.
 
-unsafe @ __pk_step * PkImpl k * u p i n i at → i {
+@ __pk_step inout PkImpl k ( Slice u ) p i n i at → i {
     : i op ( __pk_u8 p at )
     : i q + at 1
 
@@ -657,7 +655,7 @@ unsafe @ __pk_step * PkImpl k * u p i n i at → i {
         : i ln ? == op 140 ( __pk_u8 p q ) ( __pk_u32 p q )
         ? | < ln 0 > + + q hdr ln n { ^ ( __pk_fail k `pickle: string runs past end` ) } {}
         : i si ( vec_len [String] . k strs )
-        ( vec_push [String] . k strs ( string_from_bytes # *u + # i p + q hdr ln ) )
+        ( vec_push [String] . k strs ( __pk_text p + q hdr ln ) )
         ( __pk_push k ( __pk_node k PK_STR si 0 ) )
         ^ + + q hdr ln
     } {}
@@ -668,7 +666,7 @@ unsafe @ __pk_step * PkImpl k * u p i n i at → i {
         ? | < ln 0 > + + q hdr ln n { ^ ( __pk_fail k `pickle: bytes run past end` ) } {}
         : i bstart ( vec_len [u] . k blob )
         : ~ i j 0
-        ~ < j ln { ( vec_push [u] . k blob . p + + q hdr j ) = j + j 1 }
+        ~ < j ln { ( vec_push [u] . k blob ( slice_at [u] p + + q hdr j ) ) = j + j 1 }
         ( __pk_push k ( __pk_node k PK_BYTES bstart ln ) )
         ^ + + q hdr ln
     } {}
@@ -710,7 +708,7 @@ unsafe @ __pk_step * PkImpl k * u p i n i at → i {
         : i start ( vec_len [i] . k kids )
         : ~ i j - cnt 1
         ~ >= j 0 { ( vec_push [i] . k kids ( __pk_peek k j ) ) = j - j 1 }
-        : b _t ( vec_set_len [i] . k stack - ( vec_len [i] . k stack ) cnt )
+        : b _t ( vec_truncate [i] . k stack - ( vec_len [i] . k stack ) cnt )
         ( __pk_push k ( __pk_node k PK_TUPLE start cnt ) )
         ^ q
     } {}
@@ -741,7 +739,7 @@ unsafe @ __pk_step * PkImpl k * u p i n i at → i {
         : i kcount ( __pk_geti . k vb target )
         ? == pair 1 { ( vec_push [i] . k kids ( __pk_peek k 1 ) ) } {}
         ( vec_push [i] . k kids ( __pk_peek k 0 ) )
-        : b _t ( vec_set_len [i] . k stack - ( vec_len [i] . k stack ) - need 1 )
+        : b _t ( vec_truncate [i] . k stack - ( vec_len [i] . k stack ) - need 1 )
         : b _s ( vec_set [i] . k vb target + kcount 1 )
         ^ q
     } {}
@@ -754,8 +752,8 @@ unsafe @ __pk_step * PkImpl k * u p i n i at → i {
         : ~ i e2 + e1 1
         ~ & < e2 n != ( __pk_u8 p e2 ) 10 { = e2 + e2 1 }
         ? >= e2 n { ^ ( __pk_fail k `pickle: unterminated GLOBAL name` ) } {}
-        : String mods ( string_from_bytes # *u + # i p q - e1 q )
-        : String qs ( string_from_bytes # *u + # i p + e1 1 - e2 + e1 1 )
+        : String mods ( __pk_text p q - e1 q )
+        : String qs ( __pk_text p + e1 1 - e2 + e1 1 )
         ( __pk_push k ( __pk_global k ( string_data mods ) ( string_data qs ) ) )
         ^ + e2 1
     } {}
@@ -816,7 +814,7 @@ unsafe @ __pk_step * PkImpl k * u p i n i at → i {
     ? == op 49 {  // POP_MARK
         : i m ( __pk_find_mark k )
         ? < m 0 { ^ ( __pk_fail k `pickle: POP_MARK with no MARK` ) } {}
-        : b _t ( vec_set_len [i] . k stack m )
+        : b _t ( vec_truncate [i] . k stack m )
         ^ q
     } {}
 
@@ -826,9 +824,9 @@ unsafe @ __pk_step * PkImpl k * u p i n i at → i {
     ^ r
 }
 
-unsafe @ pk_parse * u p i n → !Pk String {
-    : Pk kh ( pk_new )
-    : *PkImpl k ( __Pk_ptr kh )
+@ pk_parse ( Slice u ) p → !Pk String {
+    : i n ( slice_len [u] p )
+    : ~ PkImpl k ( __pk_impl_new )
     ? <= n 0 {
         ^ @ !Pk String { F ( string_from `pickle: empty input` ) }
     } {}
@@ -851,14 +849,14 @@ unsafe @ pk_parse * u p i n → !Pk String {
         { : i _e ( __pk_fail k `pickle: step budget exhausted` ) = failed T } {}
     }
     ? failed {
-        : String em ( string_from ( pk_error kh ) )
+        : String em ( string_from ( __pk_error k ) )
         ^ @ !Pk String { F em }
     } {}
     ? ! stopped {
         ^ @ !Pk String { F ( string_from `pickle: stream ended without STOP` ) }
     } {}
-    ? < ( pk_root kh ) 0 {
+    ? < ( __pk_root k ) 0 {
         ^ @ !Pk String { F ( string_from `pickle: empty pickle` ) }
     } {}
-    ^ @ !Pk String { T kh }
+    ^ @ !Pk String { T @ Pk { ( arc_new [PkImpl] k ) } }
 }

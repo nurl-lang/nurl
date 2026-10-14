@@ -27,7 +27,8 @@
 //   ( stw_free w )                       → v   early release (optional)
 //
 // A StWriter is a handle: every copy is the same writer, and the last owner
-// releases it. Nothing here is released by hand.
+// releases it. Nothing here is released by hand. It stays on the thread
+// that made it (an Rc): adds change it in place.
 
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
@@ -35,7 +36,7 @@ $ `stdlib/std/fs.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/floatbits.nu`
 $ `safetensor.nu`
-$ `stdlib/std/arc.nu`
+$ `stdlib/std/rc.nu`
 
 @ __stw_gf ( Vec f ) v i k → f { ?? ( vec_get [f] v k ) { T x → x F → 0.0 } }
 
@@ -59,38 +60,34 @@ $ `stdlib/std/arc.nu`
     b first  // no comma before the first entry
 }
 
-// A StWriter is a handle on its state in an Arc (stdlib/std/arc.nu):
-// every copy is the same writer, and the last owner releases it.
-: StWriter { ( Arc StWriterImpl ) a }
+// A StWriter is a handle on its state in an Rc (stdlib/std/rc.nu): every
+// copy is the same writer, and the last owner releases it. An add checks
+// the state out (rc_take), changes it and puts it back.
+: StWriter { ( Rc StWriterImpl ) r }
 
-@ StWriter_share StWriter h → StWriter { ^ @ StWriter { ( arc_clone [StWriterImpl] . h a ) } }
+@ StWriter_share StWriter h → StWriter { ^ @ StWriter { ( rc_clone [StWriterImpl] . h r ) } }
 
 @ StWriter_drop sink StWriter h → v {}
 
-unsafe @ __StWriter_ptr StWriter h → *StWriterImpl { ^ ( arc_ptr [StWriterImpl] . h a ) }
-
-unsafe @ stw_new → StWriter {
-    : ~ StWriterImpl w @ StWriterImpl {}
-    = . w hdr ( string_from `{` )
-    = . w chunks ( vec_new [StwChunk] )
-    = . w dlen 0
-    = . w first T
-    ^ @ StWriter { ( arc_new [StWriterImpl] w ) }
+@ stw_new → StWriter {
+    ^ @ StWriter { ( rc_new [StWriterImpl] @ StWriterImpl { ( string_from `{` ) ( vec_new [StwChunk] ) 0 T } ) }
 }
 
 // Take ownership of `cb` as the next tensor's data region and write its
 // header entry.
-unsafe @ __stw_push_chunk * StWriterImpl w s name i dtype ( Vec i ) shape ( Vec u ) cb → v {
+@ __stw_push_chunk StWriter h s name i dtype ( Vec i ) shape sink ( Vec u ) cb → v {
+    : ~ StWriterImpl w ( rc_take [StWriterImpl] . h r )
     : i at . w dlen
     : i endo + at ( vec_len [u] cb )
     ( vec_push [StwChunk] . w chunks @ StwChunk { cb } )
     = . w dlen endo
     ( __stw_entry w name dtype shape at endo )
+    ( rc_restore [StWriterImpl] . h r w )
 }
 
 // Append the JSON header entry for a tensor whose bytes already sit in
 // . w data at [at, endo).
-unsafe @ __stw_entry * StWriterImpl w s name i dtype ( Vec i ) shape i at i endo → v {
+@ __stw_entry inout StWriterImpl w s name i dtype ( Vec i ) shape i at i endo → v {
     ? . w first { = . w first F } { ( string_push_str . w hdr `,` ) }
     ( string_push_str . w hdr `"` )
     ( string_push_str . w hdr name )
@@ -112,16 +109,14 @@ unsafe @ __stw_entry * StWriterImpl w s name i dtype ( Vec i ) shape i at i endo
 
 // Any dtype: `bytes` is the tensor's raw little-endian payload (borrowed:
 // copied into a fresh chunk, the caller keeps its own vec).
-unsafe @ stw_add_raw StWriter w__h s name i dtype ( Vec i ) shape ( Vec u ) bytes → v {
-    : *StWriterImpl w ( __StWriter_ptr w__h )
+@ stw_add_raw StWriter w s name i dtype ( Vec i ) shape ( Vec u ) bytes → v {
     : ( Vec u ) cb ( vec_with_cap [u] ( vec_len [u] bytes ) )
     ( bytes_extend_bytes cb bytes )
     ( __stw_push_chunk w name dtype shape cb )
 }
 
 // F32: host f64 rounded to float32 on write.
-unsafe @ stw_add_f32 StWriter w__h s name ( Vec i ) shape ( Vec f ) v → v {
-    : *StWriterImpl w ( __StWriter_ptr w__h )
+@ stw_add_f32 StWriter w s name ( Vec i ) shape ( Vec f ) v → v {
     : ( Vec u ) cb ( vec_with_cap [u] * 4 ( vec_len [f] v ) )
     : ~ i k 0
     ~ < k ( vec_len [f] v ) {
@@ -132,8 +127,7 @@ unsafe @ stw_add_f32 StWriter w__h s name ( Vec i ) shape ( Vec f ) v → v {
 }
 
 // F64: host f64 exact.
-unsafe @ stw_add_f64 StWriter w__h s name ( Vec i ) shape ( Vec f ) v → v {
-    : *StWriterImpl w ( __StWriter_ptr w__h )
+@ stw_add_f64 StWriter w s name ( Vec i ) shape ( Vec f ) v → v {
     : ( Vec u ) cb ( vec_with_cap [u] * 8 ( vec_len [f] v ) )
     : ~ i k 0
     ~ < k ( vec_len [f] v ) {
@@ -144,8 +138,7 @@ unsafe @ stw_add_f64 StWriter w__h s name ( Vec i ) shape ( Vec f ) v → v {
 }
 
 // F16: host f64 → IEEE half (round-to-nearest-even via floatbits).
-unsafe @ stw_add_f16 StWriter w__h s name ( Vec i ) shape ( Vec f ) v → v {
-    : *StWriterImpl w ( __StWriter_ptr w__h )
+@ stw_add_f16 StWriter w s name ( Vec i ) shape ( Vec f ) v → v {
     : ( Vec u ) cb ( vec_with_cap [u] * 2 ( vec_len [f] v ) )
     : ~ i k 0
     ~ < k ( vec_len [f] v ) {
@@ -156,8 +149,7 @@ unsafe @ stw_add_f16 StWriter w__h s name ( Vec i ) shape ( Vec f ) v → v {
 }
 
 // BF16: host f64 → bfloat16 (truncated top 16 bits of the f32).
-unsafe @ stw_add_bf16 StWriter w__h s name ( Vec i ) shape ( Vec f ) v → v {
-    : *StWriterImpl w ( __StWriter_ptr w__h )
+@ stw_add_bf16 StWriter w s name ( Vec i ) shape ( Vec f ) v → v {
     : ( Vec u ) cb ( vec_with_cap [u] * 2 ( vec_len [f] v ) )
     : ~ i k 0
     ~ < k ( vec_len [f] v ) {
@@ -168,8 +160,7 @@ unsafe @ stw_add_bf16 StWriter w__h s name ( Vec i ) shape ( Vec f ) v → v {
 }
 
 // I64 from a host i vector.
-unsafe @ stw_add_i64 StWriter w__h s name ( Vec i ) shape ( Vec i ) v → v {
-    : *StWriterImpl w ( __StWriter_ptr w__h )
+@ stw_add_i64 StWriter w s name ( Vec i ) shape ( Vec i ) v → v {
     : ( Vec u ) cb ( vec_with_cap [u] * 8 ( vec_len [i] v ) )
     : ~ i k 0
     ~ < k ( vec_len [i] v ) {
@@ -181,8 +172,8 @@ unsafe @ stw_add_i64 StWriter w__h s name ( Vec i ) shape ( Vec i ) v → v {
 
 // The whole file as one byte vector (small files / tests; a big file
 // wants stw_write, which streams the chunks and never concatenates).
-unsafe @ stw_finish StWriter w__h → ( Vec u ) {
-    : *StWriterImpl w ( __StWriter_ptr w__h )
+@ stw_finish StWriter h → ( Vec u ) {
+    : ~ StWriterImpl w ( rc_take [StWriterImpl] . h r )
     ( string_push_str . w hdr `}` )
     : i hlen ( string_len . w hdr )
     : ( Vec u ) out ( vec_with_cap [u] + + 8 hlen . w dlen )
@@ -200,6 +191,7 @@ unsafe @ stw_finish StWriter w__h → ( Vec u ) {
         }
         = c + c 1
     }
+    ( rc_restore [StWriterImpl] . h r w )
     ^ out
 }
 
@@ -210,8 +202,8 @@ unsafe @ stw_finish StWriter w__h → ( Vec u ) {
 // model's 16 GB merge briefly doubles the writer to 32 GB and is the
 // difference between finishing and the OOM killer. Zero extra copies
 // here; the on-disk bytes are identical.
-unsafe @ stw_write StWriter w__h s path → !v String {
-    : *StWriterImpl w ( __StWriter_ptr w__h )
+@ stw_write StWriter h s path → !v String {
+    : ~ StWriterImpl w ( rc_take [StWriterImpl] . h r )
     ( string_push_str . w hdr `}` )
     : i hlen ( string_len . w hdr )
     : ( Vec u ) pre ( vec_new [u] )
@@ -239,10 +231,10 @@ unsafe @ stw_write StWriter w__h s path → !v String {
         }
         = c + c 1
     }
+    ( rc_restore [StWriterImpl] . h r w )
     ? wok { ^ @ !v String { T } }
     ^ @ !v String { F ( string_from `safetensor: cannot write file` ) }
 }
 
-// Let go of `w` now rather than at the end of its owner's scope.
 // Let go of `w` now rather than at the end of its owner's scope.
 @ stw_free sink StWriter w → v {}
