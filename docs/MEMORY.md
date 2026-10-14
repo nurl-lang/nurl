@@ -599,8 +599,14 @@ A panic is not outside the model: what a panic abandons is reclaimed
   not possible; that is the move. Take a copy (`string_clone`,
   `vec_clone`, `mem_dup`) or restructure so the consumer borrows.
 - **Use the safe element access.** `vec_at`, `vec_put` and `vec_get` are
-  bounds-checked and compile to the same loop as raw pointer access.
-  `vec_data` + `unsafe` is not faster.
+  bounds-checked and compile to the same loop as raw pointer access when
+  the loop only reads. A loop that writes one `Vec` while reading others
+  (a kernel: `c[k] = a[k] + b[k]`) indexes `Slice`s of them instead
+  (`slice_from_vec`, `slice_at`, `slice_put`): a slice keeps its data
+  pointer and length in registers, so the bounds checks leave the loop
+  and it vectorises exactly as raw pointer code does, where `vec_at` /
+  `vec_put` re-read both from each Vec's control block past every store.
+  `vec_data` + `unsafe` is not faster than either.
 - **Share mutable state through a handle.** Between threads, send it
   through a `Channel` or keep it in a `Locked` (§6.5); an `Arc` shares a
   value nobody changes. Within a thread, to share a closure beyond the
@@ -884,6 +890,17 @@ owns nothing — is dropped where it is left, when the call handed it over
 or becomes the result when the callee hands it back (h234). `mem_dup` —
 and so every generic that copies its `T`, `box_clone` among them — is
 rejected for a value that cannot be copied (h235).
+
+Taking the packages' `unsafe` apart found four more. Every copy of an
+`Rc` is the same value, and a view of it (`rc_get`) ended only when the
+handle it came from was handed to `rc_set` — not another handle on the
+same value: a clone (h245), a field holding one (h247), or a parameter
+the caller filled with the same value (h246). The walk now ends the
+borrows of every `( Rc T )` handle a function holds, of that type, when
+any of them is handed to a call that may drop or replace what it holds.
+And `vec_put_back` took on trust that `x` came out of slot `i`: written
+back into another slot, two slots held one value (h248). It is raw, for
+`unsafe` code, as `mem_put_back` is.
 
 The rules that carry it:
 
@@ -1312,7 +1329,7 @@ are dropped, moved and copied by the same rules:
 | `( mem_forget x )` | gives up `x`'s value without releasing it; `unsafe` only |
 | `( mem_replace [T] place x )` | `x` goes into `place` (a mutable binding, a field of one, or a field through a pointer) and what `place` held comes back, owned; nothing is dropped or copied (stdlib/core/mem.nu, `unsafe`) |
 | `( vec_retain [A] v keep )` | the elements `keep` answers T for stay, in order; the rest are dropped, in place (stdlib/core/vec.nu) |
-| `( vec_put_back [A] v i x )` | `x`, read out of slot `i` and updated, goes back: the check-in of a table that lends its records by value; a function handing its parameter on to it writes it back too, for its own callers |
+| `( vec_put_back [A] v i x )` | `x`, read out of slot `i` and updated, goes back: the check-in of a table that lends its records by value; a function handing its parameter on to it writes it back too, for its own callers. Nothing checks that `i` is the slot `x` was read from, so it is `unsafe` only, as `mem_put_back` is (h248) |
 
 **Foreign results a caller owns.** A C function returning a string it
 allocated declares its result `→ sink s` (spec §7.2): the binding the

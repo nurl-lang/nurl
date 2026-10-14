@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Four holes found while taking `unsafe` out of the packages are closed
+(h245–h248): a view of an `Rc`'s value outlived an `rc_set` made through
+another handle on the same value — a clone, a field or an aliased
+parameter — and `vec_put_back` wrote an element back into a slot it was
+not read from. `vec_put_back` is now `unsafe` only, as `mem_put_back` is
+(docs/MEMORY.md §6.2). `slice_at` / `slice_put` (stdlib/core/slice.nu)
+are the bounds-checked indexing a kernel over several `Vec`s wants: a
+loop that writes one Vec while reading others through slices runs as
+fast as the raw-pointer loop (0.30 s against 0.31 s on a 4000-element
+`c[k] = a[k] + 2 b[k]`, where `vec_at` / `vec_put` take 1.3 s), so the
+packages' raw `vec_data` loops become safe ones.
+
 Every hole the 0.72.0 release review left open in the memory guarantee is
 closed: the 34 probes of `tools/fuzz/holes/open/` (now h145–h178) and sixteen
 more found on the way (h179–h194) are rejected or run clean under

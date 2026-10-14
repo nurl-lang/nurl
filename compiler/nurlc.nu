@@ -160,6 +160,12 @@
 : ~ b g_origin_arg_str F  // the argument origin_call_arg records is a raw string the compiler manages
 : ~ i g_use_ownstr 0  // a return went through __nurl_ownstr (gen_ret)
 : ~ s g_bck_own_params ``  // the parameters the function being walked owns (a safe `sink s`)
+// The bindings and field paths of the function being walked that hold an
+// `Rc` handle, as `name=type` words (bck_note_rc_arg). Every copy of an Rc
+// is the same value, so a call that may drop or replace what one handle
+// holds ends the borrows of every other handle of the same type: they may
+// be the same value (bck_borrow_sweep).
+: ~ s g_bck_rcty ``
 // 1 once the program declares a `% Drop` impl of its own (scan_impl_decl):
 // until then no type has one, and the questions that walk a struct's
 // fields looking for one answer at once.
@@ -14505,6 +14511,11 @@ unsafe @ bck_check_lit_moves i lex i line i col s what s tab i scmask s moved s 
             ( __clo_effect_note arg_froot call_name arg_idx )
             ( __drop_note arg_froot call_name arg_idx )
         } {}
+        // (An Rc handed to a call: the walk asks which handles may be the
+        // same value.)
+        ? ( is_ident_tok bck_arg_tt ) { ( bck_note_rc_arg bck_arg_val at ) } {
+            ? != 0 ( nurl_str_len arg_froot ) { ( bck_note_rc_arg arg_froot at ) } {}
+        }
         // (A value that holds nothing — a number, a struct of numbers — is
         // a copy: there is no move to decide and nothing to lend.)
         ? & & & ( is_ident_tok bck_arg_tt )
@@ -22798,6 +22809,7 @@ unsafe @ mem_own_add_user_drop i syms i cg s ptr s vt → v {
         ( nurl_sym_set g_bck `pending_kind` `` )
         ( nurl_sym_set g_bck `pmoves` `` )
         ( nurl_sym_set g_bck `pmaybes` `` )
+        = g_bck_rcty ``
         = g_bck_depth 0
         = g_bck_cap_names ``
         = g_bck_cap_via ``
@@ -23125,7 +23137,7 @@ unsafe @ __trust_key s path → s {
 @ bck_raw_call s base → b {
     // (`vec_set_len` declares raw writes initialised: the elements it
     // exposes are whatever the memory held.)
-    ^ ( str_contains_word `nurl_alloc nurl_zalloc nurl_free nurl_realloc alloc zalloc mem_forget nurl_peek nurl_poke nurl_vctl_get nurl_vctl_set nurl_vctl_data nurl_memcpy nurl_memmove nurl_memset malloc calloc realloc free memcpy memmove memset nurl_closure_drop nurl_closure_clone rcbox_ptr rcbox_new rcbox_zero rcbox_share rcbox_release shared_new shared_zero shared_null shared_ptr shared_addr shared_publish_once shared_into_word shared_from_word vec_publish_once arc_into_word arc_from_word arc_word_share mem_take mem_put_back mem_addr vec_set_len` base )
+    ^ ( str_contains_word `nurl_alloc nurl_zalloc nurl_free nurl_realloc alloc zalloc mem_forget nurl_peek nurl_poke nurl_vctl_get nurl_vctl_set nurl_vctl_data nurl_memcpy nurl_memmove nurl_memset malloc calloc realloc free memcpy memmove memset nurl_closure_drop nurl_closure_clone rcbox_ptr rcbox_new rcbox_zero rcbox_share rcbox_release shared_new shared_zero shared_null shared_ptr shared_addr shared_publish_once shared_into_word shared_from_word vec_publish_once arc_into_word arc_from_word arc_word_share mem_take mem_put_back vec_put_back mem_addr vec_set_len` base )
 }
 
 // A function that takes a raw pointer (`*T` in a parameter's type, outside
@@ -27271,6 +27283,26 @@ unsafe @ bck_sx_split s args → s {
     ^ ( str_contains_word `vec_push vec_insert vec_extend vec_extend_range vec_append vec_reserve vec_shrink_to_fit vec_resize_zeroed vec_swap vec_reverse vec_sort vec_sort_by deque_push_back deque_push_front string_reserve string_reserve_at string_commit string_insert string_append rc_clone rc_downgrade arc_clone` base )
 }
 
+// `name` (a binding or a field path) holds an `( Rc T )` of type `ty`.
+@ bck_note_rc_arg s name s ty → v {
+    ? | == g_borrowck 0 != g_bck_rec_off 0 { ^ } {}
+    ? == 0 ( nurl_str_starts ( nurl_llty ty ) `%Rc__` ) { ^ } {}
+    : s w ( nurl_str_cat3 name `=` ( nurl_llty ty ) )
+    ? ! ( str_contains_word g_bck_rcty w ) { = g_bck_rcty ? == 0 ( nurl_str_len g_bck_rcty ) w ( nurl_str_cat3 g_bck_rcty ` ` w ) } {}
+}
+
+// The Rc type `name` was seen holding in this function, or ``.
+@ bck_rc_type_of s name → s {
+    ? == 0 ( nurl_str_len g_bck_rcty ) { ^ `` } {}
+    : s key ( nurl_str_cat name `=` )
+    : ~ s rest ( nurl_str_cat g_bck_rcty `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? != 0 ( nurl_str_starts w key ) { ^ ( nurl_str_slice w ( nurl_str_len key ) - ( nurl_str_len w ) ( nurl_str_len key ) ) } {}
+    }
+    ^ ``
+}
+
 @ bck_borrow_sweep s ist s st s rec i kc → s {
     : ~ s out st
     : s wn ( bck_field rec 1 )
@@ -27315,6 +27347,17 @@ unsafe @ bck_sx_split s args → s {
                         = out ( bck_view_end out sid ( bck_field_int rec 3 ) ( nurl_str_cat4 pw0 ( bck_fn_show ( bck_field rec 5 ) ) `', which may move or free its buffer` `` ) )
                     } {}
                 }
+            } {}
+        } {}
+        // Another handle of the same `( Rc T )` type, which may be the same
+        // value: what the call drops through it is what this borrows from.
+        ? & & & == 0 ( nurl_str_len why ) ! hit >= wid 0 | | | == kc 9 == kc 12 == kc 13 == kc 32 {
+            : s wty ( bck_rc_type_of ( nurl_sym_get2 g_bck `rv_` wn ) )
+            ? & & != 0 ( nurl_str_len wty ) != rid wroot ( seq wty ( bck_rc_type_of ( nurl_sym_get2 g_bck `rv_` srcs ) ) ) {
+                ? ( bck_callee_drops_elems ( bck_field rec 5 ) ( bck_field rec 6 ) ) {
+                    = why ( nurl_str_cat4 `'` ( bck_name_show ( nurl_sym_get2 g_bck `rv_` wn ) ) `', which may be another handle on the same Rc value, was passed to '` ( nurl_str_cat ( bck_fn_show ( bck_field rec 5 ) ) `', which may drop or replace what it holds` ) )
+                    = eonly T
+                } {}
             } {}
         } {}
         ? != 0 ( nurl_str_len why ) {
@@ -28161,6 +28204,7 @@ unsafe @ bck_loop_mask s pre s post → s {
     : i n ? == 0 ( nurl_str_len ns ) 0 ( nurl_str_to_int ns )
     : s ix ( nurl_str_int n )
     ( nurl_sym_def g_deferred_bck ( nurl_str_cat `o` ix ) g_bck_own_params )
+    ( nurl_sym_def g_deferred_bck ( nurl_str_cat `r` ix ) g_bck_rcty )
     ( nurl_sym_def g_deferred_bck ( nurl_str_cat `s` ix )
     ( nurl_sym_get g_bck `stmts` ) )
     ( nurl_sym_def g_deferred_bck ( nurl_str_cat `p` ix ) params )
@@ -28193,6 +28237,7 @@ unsafe @ bck_loop_mask s pre s post → s {
         ( nurl_sym_set g_bck `reads` `` )
         = g_bck_cap_via ( nurl_sym_get g_deferred_bck ( nurl_str_cat `c` ix ) )
         = g_bck_own_params ( nurl_sym_get g_deferred_bck ( nurl_str_cat `o` ix ) )
+        = g_bck_rcty ( nurl_sym_get g_deferred_bck ( nurl_str_cat `r` ix ) )
         ( bck_analyze ( nurl_sym_get g_deferred_bck ( nurl_str_cat `p` ix ) ) )
         = i + i 1
     }

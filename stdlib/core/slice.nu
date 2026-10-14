@@ -26,6 +26,12 @@
 //   // Bounds-checked single-element read.
 //   : ? i x ( slice_get [i] s 3 )
 //
+//   // Indexing a loop wants: panics when out of range, like vec_at /
+//   // vec_put. A kernel that writes one Vec while reading others runs
+//   // as fast over slices as over raw pointers.
+//   : i x ( slice_at [i] s 3 )
+//   ( slice_put [i] s 3 + x 1 )
+//
 //   // A string's bytes, measured once; 0 past the end.
 //   : ( Slice u ) b ( slice_of_str text )
 //   : i c ( slice_byte b 0 )
@@ -110,6 +116,39 @@ $ `stdlib/core/vec.nu`
     ? | < idx 0 >= idx . s len { ^ @ ?A { F # A 0 } } {}
     : *A p . s data
     ^ @ ?A { T . p idx }
+}
+
+// Never returns: defined ahead of its callers so they are compiled knowing
+// that, and the optimiser can treat the check as a loop exit.
+@ __slice_index_panic i idx i len → v {
+    ( nurl_eprint `index out of bounds: the index is ` ) ( nurl_eprint_int idx )
+    ( nurl_eprint ` but the slice length is ` ) ( nurl_eprintln_int len )
+    ( nurl_panic `index out of bounds` )
+}
+
+// The element at `idx`, panicking like vec_at when it is out of range;
+// an owning element comes back as a borrow of the storage. A Slice holds
+// its data pointer and length in registers, so a loop that reads several
+// Vecs and writes another through slices keeps both out of the loop and
+// vectorises as raw pointer code does — vec_at / vec_put re-read them
+// from each Vec's control block past every store.
+@ slice_at [A] ( Slice A ) s i idx → A {
+    : i n . s len
+    ? | < idx 0 >= idx n { ( __slice_index_panic idx n ) } {}
+    : *A p . s data
+    ^ . p idx
+}
+
+// Store `x` at `idx` of the storage the slice views (dropping the element
+// it replaces), panicking when `idx` is out of range — vec_put through a
+// view. The view's length is fixed, so a store never moves the storage.
+@ slice_put [A] ( Slice A ) s i idx A x → v {
+    : i n . s len
+    ? | < idx 0 >= idx n { ( __slice_index_panic idx n ) } {}
+    : *A p . s data
+    : A old . p idx
+    ( mem_take old )
+    = . p idx x
 }
 
 // The byte at `idx` (0..255), or 0 outside [0, len): the read a parser
