@@ -45,8 +45,8 @@ $ `src/gradfit.nu`
 }
 
 // p95 (nearest-rank) of per-row MSEs + mean, and outlier flags vs that
-// threshold. Returns the flags; writes mean mse + threshold through cells.
-unsafe @ eval_model Mlp m ( Vec f ) X i n ( Vec f ) O i no i d * u meanb * u thrb → ( Vec i ) {
+// threshold. Returns the flags; stores mean mse and threshold in stats[0..2].
+@ eval_model Mlp m ( Vec f ) X i n ( Vec f ) O i no i d ( Vec f ) stats → ( Vec i ) {
     : ( Vec f ) mses ( vec_new [f] )
     : ~ f tot 0.0
     : ~ i r 0
@@ -56,11 +56,11 @@ unsafe @ eval_model Mlp m ( Vec f ) X i n ( Vec f ) O i no i d * u meanb * u thr
         = tot + tot e
         = r + r 1
     }
-    ( nurl_poke meanb 0 ( f64_to_bits / tot # f n ) )
+    : b _m ( vec_set [f] stats 0 / tot # f n )
     ( sort_by [f] mses \ f a f b → i { ^ ? < a b -1 ? > a b 1 0 } )
     : i p95i # i * 0.95 # f n
     : f thr ( _mlp_fget mses p95i )
-    ( nurl_poke thrb 0 ( f64_to_bits thr ) )
+    : b _t ( vec_set [f] stats 1 thr )
     : ( Vec i ) flags ( vec_new [i] )
     = r 0
     ~ < r no {
@@ -70,7 +70,7 @@ unsafe @ eval_model Mlp m ( Vec f ) X i n ( Vec f ) O i no i d * u meanb * u thr
     ^ flags
 }
 
-unsafe @ main → i {
+@ main → i {
     // the oracle recipe's data shape: 2-D latent → 6-D + noise, 60 outliers
     : i N 1200
     : i D 6
@@ -115,18 +115,12 @@ unsafe @ main → i {
 
     : Mlp mh . fh model
     : Mlp mg . fg model
-    : ( Vec u ) mb1__b ( vec_zeroed [u] 8 )
-    : *u mb1 ( vec_data [u] mb1__b )
-    : ( Vec u ) tb1__b ( vec_zeroed [u] 8 )
-    : *u tb1 ( vec_data [u] tb1__b )
-    : ( Vec u ) mb2__b ( vec_zeroed [u] 8 )
-    : *u mb2 ( vec_data [u] mb2__b )
-    : ( Vec u ) tb2__b ( vec_zeroed [u] 8 )
-    : *u tb2 ( vec_data [u] tb2__b )
-    : ( Vec i ) flh ( eval_model mh X N O NO D mb1 tb1 )
-    : ( Vec i ) flg ( eval_model mg X N O NO D mb2 tb2 )
-    : f mseh ( bits_to_f64 ( nurl_peek mb1 0 ) )
-    : f mseg ( bits_to_f64 ( nurl_peek mb2 0 ) )
+    : ( Vec f ) st1 ( vec_new [f] ) ( vec_push [f] st1 0.0 ) ( vec_push [f] st1 0.0 )
+    : ( Vec f ) st2 ( vec_new [f] ) ( vec_push [f] st2 0.0 ) ( vec_push [f] st2 0.0 )
+    : ( Vec i ) flh ( eval_model mh X N O NO D st1 )
+    : ( Vec i ) flg ( eval_model mg X N O NO D st2 )
+    : f mseh ( _mlp_fget st1 0 )
+    : f mseg ( _mlp_fget st2 0 )
     ( nurl_print `  hand mse ` ) ( nurl_print ( nurl_str_float mseh ) )
     ( nurl_print ` · grad mse ` ) ( nurl_print ( nurl_str_float mseg ) )
     ( nurl_print `\n` )

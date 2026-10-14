@@ -1,5 +1,5 @@
 (* NURL — Neural Unified Representation Language
-   Grammar v2.8 — complete language specification
+   Grammar v2.9 — complete language specification
    File extension: .nu
 
    All expressions use PREFIX NOTATION.
@@ -59,7 +59,7 @@ decl = import_decl                 (*  $                             *)
      | ('pub')? trait_decl         (*  %  IDENT  {                   *)
      | ('pub')? impl_decl          (*  %  IDENT  type                *)
      | decl_prefix* fn_decl        (*  @  (only kind enforced in v2.0)*)
-     | ('pub')? struct_decl        (*  :  IDENT   {                  *)
+     | ('pub')? 'raw'? struct_decl (*  :  IDENT   {   (raw v2.9)     *)
      | ('pub')? enum_decl          (*  :  |                          *)
      | ('pub')? const_decl         (*  :  type                       *)
      ;
@@ -83,8 +83,19 @@ decl = import_decl                 (*  $                             *)
    raw-memory primitive or a foreign function declared outside the
    standard library; the author vouches that the function is safe for
    every caller, so calling one needs no marking. A method in an `impl`
-   block may carry it too. *)
-decl_prefix = 'pub' | 'simd' | 'inline' | 'unsafe' ;
+   block may carry it too.
+
+   `raw` (v2.9, docs/spec.md §3.3e) is `unsafe` with the promise moved to
+   the caller: the body may use raw memory, and the function trusts its
+   caller for what it requires (a live address, a size that fits, code
+   that is sound), so only an `unsafe` or `raw` function may call it.
+   `raw` before a struct seals it: a literal of it and a write to its
+   fields are raw memory, as for a struct with a raw-pointer field.
+   `raw` is no reserved word — it is the prefix only right before `@` or
+   `:` at the top level, and an import's alias is never a `raw` that `@`
+   follows. It is refused on an `impl` method (a `dyn` call has no caller
+   to check), a const, an enum and a generic struct. *)
+decl_prefix = 'pub' | 'simd' | 'inline' | 'unsafe' | 'raw' ;
 
 
 (* $ `path` IDENT?
@@ -946,6 +957,9 @@ IDENT       = IDENT_PLAIN ( '::' IDENT_PLAIN )* ;
      simd                    →  CPU-dispatch prefix (v2.6) (TT_SIMD)
      inline                  →  always-inline prefix (v2.7) (TT_INLINE)
      unsafe                  →  raw-memory prefix (v2.8)  (TT_UNSAFE)
+     raw                     →  caller-vouched prefix (v2.9) — contextual:
+                                an IDENT anywhere but right before a
+                                top-level `@` or `:`
      break                   →  leave innermost loop      (TT_BREAK)
      continue                →  next iteration            (TT_CONTINUE)
 

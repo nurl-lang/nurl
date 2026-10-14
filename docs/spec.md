@@ -1,6 +1,6 @@
 # NURL Language Reference
 
-**Status:** language specification, grammar v2.8. This document is the
+**Status:** language specification, grammar v2.9. This document is the
 normative reference for the NURL — Neural Unified Representation Language —
 source language as implemented by `compiler/nurlc.nu`.
 
@@ -80,6 +80,7 @@ used as variable, parameter, field, or function names:
 | `TT_SIMD` | `simd` | CPU-dispatch prefix on a function (v2.6, §3.3b) |
 | `TT_INLINE` | `inline` | always-inline prefix on a function (v2.7, §3.3c) |
 | `TT_UNSAFE` | `unsafe` | raw-memory prefix on a function (v2.8, §3.3d) |
+| — | `raw` | caller-vouched prefix on a function or struct (v2.9, §3.3e) — an `IDENT` everywhere but right before a top-level `@` or `:` |
 | `TT_BOOL` | `T` `F` | boolean literals |
 | `TT_SIZEOF` | `Z` | sizeof operator |
 | `TT_PUB` | `pub` | visibility prefix (v2.0) |
@@ -156,7 +157,7 @@ declaration is one of:
 | `$ "path" IDENT?` | import |
 | `('pub')? & "lib" @ name params → type` | FFI |
 | `('pub')? @ name [T]? params → type { body }` | function |
-| `('pub')? : Name [T]? { fields }` | struct |
+| `('pub')? ('raw')? : Name [T]? { fields }` | struct (`raw` seals it, §3.3e) |
 | `('pub')? : \| Name { variants }` | enum |
 | `('pub')? : type IDENT value` | const / global |
 | `('pub')? % Name [T]? (: Super+)? { ... }` | trait (`: Super` = supertraits; body may hold `type Item` assoc-type decls) |
@@ -434,6 +435,9 @@ A function or method declaration may carry a leading `unsafe` prefix
   foreign function `unsafe & …`; a program reaches the same operations
   through the handle types (`TcpConn`, `UdpSocket`, `ProcChild`, and
   `tcp_starttls`, `tls_accept_conn` for a TLS upgrade);
+- pass a C stream as a string: `file_raw` hands a `File`'s `FILE*` out as
+  an `s`, and `file_from_raw` takes any `s` as one and closes it when the
+  `File` goes (a program opens a `File` and asks `file_is_open`);
 - touch a device by physical address: the unikernel HAL's `mmio_*` and
   `virtio_*` / `virtq_*` functions take a device or ring address as an
   `i`, and any number reaches any memory through them; a driver marks the
@@ -477,6 +481,46 @@ Ordinary code never needs it: `String`, `Vec`, `HashMap`, `Box` / `Rc` /
 `Arc`, channels and structs of them release themselves. `unsafe` is for
 the exceptional case — a binding to a C library, a hand-laid-out buffer
 handed to a GPU, a data structure whose invariant the rules cannot see.
+
+### 3.3e `raw` — a contract the caller keeps (grammar v2.9)
+
+An `unsafe` function promises that it is safe for every caller. Some
+functions cannot promise that: what makes the call sound is something
+only the caller knows — that an address is live device memory, that a
+count fits the buffer behind a pointer, that kernel source it compiles
+and runs is sound. Such a function is declared `raw`:
+
+```
+// requires: n <= vec_len v
+raw @ sum_first ( Vec i ) v i n → i {
+    : *i p ( vec_data [i] v )
+    : ~ i s 0
+    : ~ i k 0
+    ~ < k n { = s + s . p k = k + k 1 }
+    ^ s
+}
+```
+
+Its body may use raw memory, as an `unsafe` one's may, and only an
+`unsafe` (or `raw`) function may call it — the caller is the one that
+vouches. That is the rule a foreign function already follows when the
+standard library declares it `unsafe & …`; `raw @` gives it to a NURL
+function. The place a contract is established — the function that
+allocated the buffer, checked the sizes, wrote the kernel — is then the
+`unsafe` one, and everything above it stays safe.
+
+`raw` before a struct seals it: `raw : DevBuf { i addr i n }` says that
+the fields carry an invariant the code managing them relies on (here,
+that `addr` holds `n` elements), so a literal of it and a write to one of
+its fields are raw memory, as they are for a struct with a raw-pointer
+field. Reading a plain field is not.
+
+`raw` is not a reserved word: it is the prefix only right before a
+top-level `@` or `:`, and anywhere else it is an ordinary identifier (a
+field, a binding, a constant). An import's alias is never a `raw` that
+an `@` follows. It is refused on an `impl` method — a trait method can be
+called through a `dyn` value, where no caller can be checked — and on a
+const, an enum and a generic struct.
 
 ### 3.4 Constants and globals
 
@@ -2297,16 +2341,16 @@ Four new diagnostics shipped 2026-05-25 closing the remaining
 
 ### 11.1 Grammar version
 
-This document corresponds to **grammar v2.8** (the `unsafe` raw-memory
-prefix, §3.3d; v2.7 added the `inline` always-inline prefix, §3.3c; v2.6 added the `simd` CPU-dispatch prefix, §3.3b, and the
+This document corresponds to **grammar v2.9** (the `raw` caller-vouched
+prefix, §3.3e; v2.8 the `unsafe` raw-memory prefix, §3.3d; v2.7 added the `inline` always-inline prefix, §3.3c; v2.6 added the `simd` CPU-dispatch prefix, §3.3b, and the
 `v256` lane type; v2.5 the `v128` SIMD lane type, §4.1b; v2.4
 `break` / `continue`; v2.3 dynamic trait objects). The authoritative grammar lives in
 [`spec/grammar.ebnf`](../spec/grammar.ebnf); changes since v1.x are
 tracked in that file's prelude.
 
-A compiler is "v2.8 conformant" if it accepts every program the EBNF
+A compiler is "v2.9 conformant" if it accepts every program the EBNF
 generates and rejects every program the EBNF does not generate, with
-the semantics defined here. A program is "v2.8 portable" if it relies
+the semantics defined here. A program is "v2.9 portable" if it relies
 only on features documented in this spec or in
 [`spec/grammar.ebnf`](../spec/grammar.ebnf) — not on
 compiler-internal accidents.

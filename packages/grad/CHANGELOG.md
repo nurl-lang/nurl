@@ -2,12 +2,12 @@
 
 ## [0.12.1] — 2026-10-14
 
-Requires NURL 0.73.0 (`slice_at`, `slice_put`, `rc_take`, `locked_take`).
+Requires NURL 0.73.0 (grammar v2.9 `raw`, `slice_window`, `file_is_open`).
 
 ### Changed
 
-- Loops that read or wrote through `vec_data` pointers index slices (`slice_at` / `slice_put`, as fast as the pointers), and functions with nothing raw in them are no longer marked `unsafe`.
-- 1 fewer functions are `unsafe` than in 0.12.0 (156 left).
+- The f32 staging helpers vouch for the cast kernels they launch (gpukit 0.10.2's `gk_run_dev` is `raw`).
+- 1 more functions are `unsafe`/`raw` than in 0.12.0 (158 now): where they launch kernels of their own, the trust is now written down.
 
 ## [0.12.0] — 2026-10-12
 

@@ -2429,6 +2429,30 @@ unsafe @ emit_coverage_modules s module → b {
 : ~ i g_pending_unsafe 0
 // The functions declared `unsafe` (name → 1; 0 until the first one).
 : ~ i g_unsafe_fns 0
+// `raw @ f …` (grammar v2.9): f's body may use raw memory, as an `unsafe`
+// one's may, and f's CALLER must vouch for what it requires — only an
+// `unsafe` (or `raw`) function may call it. Name → "1", from the signature scan.
+: ~ i g_raw_fns 0
+: ~ i g_pending_raw 0
+// `raw : Name { … }`: the struct's fields carry an invariant its API keeps
+// (a device address that must stay inside its block), so it is sealed like
+// one with a raw-pointer field — a literal or a field write is raw memory.
+: ~ i g_pending_rawrep 0
+
+// An import's optional alias (`$ `path` alias`): an identifier — but not
+// a `raw` that opens the next declaration (`raw @ f …` on the line below).
+@ __import_alias_tok i lex → b {
+    ? != ( nurl_lex_type lex ) TT_IDENT { ^ F } {}
+    ? & ( seq ( nurl_lex_val lex ) `raw` ) == ( nurl_lex_peek_type lex ) TT_AT { ^ F } {}
+    ^ T
+}
+
+// `raw` is a prefix only where a declaration starts — an identifier there
+// cannot begin anything else — so it is no reserved word.
+@ __raw_prefix_tok i lex → b {
+    ? != ( nurl_lex_type lex ) TT_IDENT { ^ F } {}
+    ^ ( seq ( nurl_lex_val lex ) `raw` )
+}
 // Set by a call to nurl_vctl_data; the let that binds its result marks the
 // pointer `__velem` (its element accesses carry the vec-elem TBAA tag).
 : ~ i g_vctl_seen 0
@@ -23157,6 +23181,13 @@ unsafe @ __trust_key s path → s {
     ^ ( str_contains_word `mmio_read32 mmio_write32 mmio_set32 mmio_clear32 virtio_probe virtio_vendor virtio_status virtio_set_status virtio_reset virtio_device_features virtio_set_driver_features virtio_init virtio_driver_ok virtio_queue_max virtio_queue_setup virtio_notify virtio_isr virtio_isr_ack virtio_config_u8 virtio_config_generation virtq_desc_set virtq_add_single` base )
 }
 
+// The standard library's file stream passed as a string ('s'): file_raw
+// hands a File's C stream (a FILE*) out as text, and file_from_raw takes any
+// string as one and closes it when the File goes.
+@ bck_raw_stream_call s base → b {
+    ^ ( str_contains_word `file_raw file_from_raw` base )
+}
+
 @ bck_raw_handle_call s base → b {
     ^ ( str_contains_word `tcp_conn_view tcp_conn_adopt tls_attach tls_attach_alpn tls_attach_resume tls_attach_verify tls_attach_alpn_verify tls_attach_full tls_accept tls_accept_alpn tls_accept_rsa tls_accept_rsa_alpn tls_accept_mldsa tls_accept_mldsa_alpn tls_accept_dual_alpn` base )
 }
@@ -23253,6 +23284,12 @@ unsafe @ __callee_decl_name s cn → s {
 @ bck_check_raw_call i lex i syms s call_name → v {
     ? | ! ( bck_sound ) ( bck_unsafe_ctx ) { ^ v } {}
     : s base ( bck_generic_base call_name )
+    ? != 0 g_raw_fns {
+        ? | != 0 ( nurl_sym_len g_raw_fns call_name ) != 0 ( nurl_sym_len g_raw_fns ( __callee_decl_name call_name ) ) {
+            ( die lex ( nurl_str_cat3 `'` ( bck_fn_show call_name ) `' is declared 'raw': it trusts its caller for what its comment says it requires (a pointer that is live, a size that fits, code that is sound), which the compiler cannot check — so only an 'unsafe' function, vouching for that, may call it. Use the safe API its package offers around it, or, if this function genuinely needs it and you vouch for the call, declare it 'unsafe @ name …'.` ) )
+            ^ v
+        } {}
+    } {}
     ? | ( bck_raw_call base ) != 0 ( nurl_sym_len2 syms call_name `__rawcall` ) {
         ( die lex ( nurl_str_cat3 `'` base `' handles raw memory, which only an 'unsafe' function may do: what it returns or takes is memory the compiler cannot follow, so a mistake there is a use-after-free, a double free or a leak no check can see. Use the owning types instead (String, Vec, HashMap, Box/Rc, a struct of them — they release themselves), or, if this function genuinely needs raw memory and you vouch for its memory safety, declare it 'unsafe @ name …'.` ) )
         ^ v
@@ -23270,6 +23307,10 @@ unsafe @ __callee_decl_name s cn → s {
     } {}
     ? & ( bck_raw_addr_call base ) ( __fn_from_stdlib base ) {
         ( die lex ( nurl_str_cat3 `'` base `' takes a physical address as a plain integer, and the CPU or the device reads or writes memory there whatever the number is — only an 'unsafe' function, which vouches that the address is the device's own register block or a buffer it owns, may call it.` ) )
+        ^ v
+    } {}
+    ? & ( bck_raw_stream_call base ) ( __fn_from_stdlib base ) {
+        ( die lex ( nurl_str_cat3 `'` base `' passes a C stream (a FILE*) as a string ('s'): read as text it is not one, and a string taken as a stream is closed as one when its File goes — memory the program does not own. Only an 'unsafe' function may call it. Use a File (file_open, file_create, file_close): it owns its stream, and closing it twice is harmless.` ) )
         ^ v
     } {}
     ? | != 0 ( nurl_sym_len2 syms call_name `__ffi_raw` ) ( bck_raw_handle_call base ) {
@@ -23334,7 +23375,7 @@ unsafe @ __callee_decl_name s cn → s {
 // `what` (a literal of / a write to … of) a sealed `ty` outside `unsafe`.
 @ __sealed_die i lex s ty s what → v {
     ( die lex ( nurl_str_cat4 what ` '` ( __ty_src_show ty )
-    `' is raw memory, which only an 'unsafe' function may touch: its representation (a raw-pointer field, or a library handle's control block) carries an invariant the code managing it relies on, so a value built or changed field by field could point anywhere. Build and change it through its API — its constructors and accessors (slice_from_vec / slice_empty / slice_len, vec_new / vec_len, …) — or, if this function genuinely manages that memory and you vouch for its memory safety, declare it 'unsafe @ name …'.` ) )
+    `' is raw memory, which only an 'unsafe' function may touch: its representation (a raw-pointer field, a library handle's control block, or a 'raw' struct's fields) carries an invariant the code managing it relies on, so a value built or changed field by field could point anywhere. Build and change it through its API — its constructors and accessors (slice_from_vec / slice_empty / slice_len, vec_new / vec_len, …) — or, if this function genuinely manages that memory and you vouch for its memory safety, declare it 'unsafe @ name …'.` ) )
 }
 
 // The arguments the result of the call just generated may borrow from:
@@ -27228,8 +27269,20 @@ unsafe @ bck_sx_split s args → s {
     ^ ( nurl_str_slice callee 0 k )
 }
 
+// An instance of a generic over one plain scalar (`slice_put__f64`): what
+// its element "drops" is a number, which owns nothing.
+@ __inst_of_scalar s callee → b {
+    : i k ( nurl_str_find callee `__` )
+    ? < k 0 { ^ F } {}
+    : s ta ( nurl_str_slice callee + k 2 - - ( nurl_str_len callee ) k 2 )
+    ^ ( str_contains_word `i64 i32 i16 i8 u64 u32 u16 u8 f64 f32 i1` ta )
+}
+
 @ bck_callee_drops_elems s callee s aix → b {
     : s base ( bck_generic_base callee )
+    // Replacing one element of plain numbers drops nothing: a view of the
+    // container, or of another element, still reads what it did.
+    ? & ( str_contains_word `slice_put vec_put vec_set` base ) ( __inst_of_scalar callee ) { ^ F } {}
     // (The library's droppers and keepers say so of the container they
     // are handed first; a value they store is not theirs to drop.)
     : i lk ( bck_lib_kind base )
@@ -42980,6 +43033,7 @@ unsafe @ __check_value_type_defined i lex i syms s llvm_ty s ctx i tline i tcol 
     // record per-file origin / public marker so cross-file references
     // can be checked at parse_type_base / gen_agg_lit time.
     ( vis_record_type sname ( vis_take_pending_pub ) )
+    ? != 0 g_pending_rawrep { ( nurl_sym_def syms ( nurl_str_cat sname `__rawrep` ) `1` ) = g_pending_rawrep 0 } {}
     ( nurl_print `%` ) ( nurl_print sname ) ( nurl_print ` = type { ` )
     : ~ i first 1
     : ~ i fidx 0
@@ -47854,7 +47908,7 @@ unsafe @ __sx_names_capture i syms s sx → b {
                     {  // Nested import: skip path STR + optional alias IDENT
                         ( nurl_lex_advance lx )
                         ? == ( nurl_lex_type lx ) TT_STR { ( nurl_lex_advance lx ) } {}
-                        ? ( is_ident_tok ( nurl_lex_type lx ) ) { ( nurl_lex_advance lx ) } {}
+                        ? ( __import_alias_tok lx ) { ( nurl_lex_advance lx ) } {}
                     }
                     { ? & == depth 0 == tt TT_AT
                         { ( nurl_lex_advance lx )
@@ -48048,7 +48102,7 @@ unsafe @ alias_rewrite_source s src s names s prefix → s {
     // (`import_decl = '$' STR IDENT?`), and a type keyword there reads as
     // a typo in every case anyone would write. Falling through leaves the
     // token to the top-level dispatcher, which names it.
-    ? == ( nurl_lex_type lex ) TT_IDENT
+    ? ( __import_alias_tok lex )
     { = alias ( nurl_lex_val lex )
         ( nurl_lex_advance lex )
     }
@@ -49652,14 +49706,17 @@ unsafe @ __rt_decl_ptypes s region → s {
 // Called at every `$`-import path read site (scan_generic_structs,
 // scan_fn_sigs, gen_import_decl) so all three dedup tables key on the
 // same canonical form.
-// Directory portion of a file path (everything before the last '/'), or
-// "" when the path has no '/' (i.e. it lives in the current directory).
+// Directory portion of a file path (everything before the last '/' or
+// '\'), or "" when the path has neither (i.e. it lives in the current
+// directory). '\' counts because Windows callers — nurlpkg among them —
+// pass native paths like `C:\...\src\main.nu`.
 unsafe @ __dirname s p → s {
     : i n ( nurl_str_len p )
     : *u p_p # *u p
     : ~ i i - n 1
     ~ >= i 0 {
-        ? == ( nurl_str_at p_p n i ) 47 { ^ ( nurl_str_slice p 0 i ) } {}
+        : i c ( nurl_str_at p_p n i )
+        ? | == c 47 == c 92 { ^ ( nurl_str_slice p 0 i ) } {}
         = i - i 1
     }
     ^ ( nurl_str_cat `` `` )
@@ -50867,6 +50924,9 @@ unsafe @ __body_end_note i lex i at i stop → v {
         ~ & != ( nurl_lex_type lex ) TT_RBRACE != ( nurl_lex_type lex ) TT_EOF {
             // (`unsafe @ m …`: the prefix is the codegen pass's to read.)
             ? == ( nurl_lex_type lex ) TT_UNSAFE { ( nurl_lex_advance lex ) } {}
+            ? ( __raw_prefix_tok lex )
+            { ( die lex `'raw' is not allowed on an impl method: a trait method can be called through a 'dyn' value, where no caller can be checked. Keep the method's contract inside it ('unsafe @ m …' that checks what it needs), or have it call a 'raw @' function of its own from an 'unsafe' method.` ) }
+            {}
             ? & == ( nurl_lex_type lex ) TT_IDENT ( seq ( nurl_lex_val lex ) `type` )
             { : s pair ( __parse_assoc_binding lex )
                 = bindings ? == 0 ( nurl_str_len bindings )
@@ -52019,7 +52079,7 @@ unsafe @ __ptypes_tail s pt → s {
             ? == ( nurl_lex_type lex ) TT_STR {
                 : s path ( __norm_import_path ( nurl_lex_val lex ) )
                 ( nurl_lex_advance lex )
-                ? ( is_ident_tok ( nurl_lex_type lex ) ) { ( nurl_lex_advance lex ) } {}
+                ? ( __import_alias_tok lex ) { ( nurl_lex_advance lex ) } {}
                 : s __gs_key ( __canon_import_key path )
                 : s marker ( nurl_sym_get g_generic_struct_syms `__scanned__` )
                 ? ( str_contains_word marker __gs_key ) {} {
@@ -52233,12 +52293,13 @@ unsafe @ priv_resolve i lex i syms s fname → s {
                     // ternary chain below sees the post-pub token.
                     // Grammar v2.6 adds `simd`, and the two may appear in either
                     // order — hence a loop rather than two sequential tests.
-                    ~ | | | == ( nurl_lex_type lex ) TT_PUB == ( nurl_lex_type lex ) TT_SIMD == ( nurl_lex_type lex ) TT_INLINE == ( nurl_lex_type lex ) TT_UNSAFE
-                    { ? == ( nurl_lex_type lex ) TT_PUB
-                        { = g_pending_pub 1 }
-                        { ? == ( nurl_lex_type lex ) TT_SIMD
-                            { = g_pending_simd 1 }
-                            { ? == ( nurl_lex_type lex ) TT_UNSAFE { = g_pending_unsafe 1 } { = g_pending_inline 1 } } }
+                    ~ | | | | == ( nurl_lex_type lex ) TT_PUB == ( nurl_lex_type lex ) TT_SIMD == ( nurl_lex_type lex ) TT_INLINE == ( nurl_lex_type lex ) TT_UNSAFE ( __raw_prefix_tok lex )
+                    { ? ( __raw_prefix_tok lex ) { = g_pending_raw 1 = g_pending_unsafe 1 } {
+                            ? == ( nurl_lex_type lex ) TT_PUB
+                            { = g_pending_pub 1 }
+                            { ? == ( nurl_lex_type lex ) TT_SIMD
+                                { = g_pending_simd 1 }
+                                { ? == ( nurl_lex_type lex ) TT_UNSAFE { = g_pending_unsafe 1 } { = g_pending_inline 1 } } } }
                         ( nurl_lex_advance lex )
                     }
                     : i tt ( nurl_lex_type lex )
@@ -52270,6 +52331,8 @@ unsafe @ priv_resolve i lex i syms s fname → s {
                     = g_pending_inline 0
                     : b decl_unsafe != 0 g_pending_unsafe
                     = g_pending_unsafe 0
+                    : b decl_raw != 0 g_pending_raw
+                    = g_pending_raw 0
                     ? == tt TT_AT
                     { ( nurl_lex_advance lex )
                         ? ( is_ident_tok ( nurl_lex_type lex ) )
@@ -52295,6 +52358,10 @@ unsafe @ priv_resolve i lex i syms s fname → s {
                                 ? == g_unsafe_fns 0 { = g_unsafe_fns ( nurl_sym_new ) } {}
                                 ( nurl_sym_def g_unsafe_fns fname `1` )
                                 ( note_unsafe_fn __fpos fname )
+                            } {}
+                            ? decl_raw {
+                                ? == g_raw_fns 0 { = g_raw_fns ( nurl_sym_new ) } {}
+                                ( nurl_sym_def g_raw_fns fname `1` )
                             } {}
                             // Generic function [T U ...]: skip type params, mark as generic.
                             // Slice type param [type name]: treat like regular params (not generic).
@@ -52592,7 +52659,7 @@ unsafe @ priv_resolve i lex i syms s fname → s {
                         : s path ( __norm_import_path ( nurl_lex_val lex ) )
                         ( nurl_lex_advance lex )  // skip path STR
                         : ~ s alias ``
-                        ? ( is_ident_tok ( nurl_lex_type lex ) )
+                        ? ( __import_alias_tok lex )
                         { = alias ( nurl_lex_val lex )
                             ( nurl_lex_advance lex )
                         }
@@ -52792,7 +52859,7 @@ unsafe @ priv_resolve i lex i syms s fname → s {
                         { : s path ( __norm_import_path ( nurl_lex_val lex ) )
                             ( nurl_lex_advance lex )
                             : ~ s alias ``
-                            ? ( is_ident_tok ( nurl_lex_type lex ) )
+                            ? ( __import_alias_tok lex )
                             { = alias ( nurl_lex_val lex ) ( nurl_lex_advance lex ) }
                             {}
                             : s __tn_key ( __canon_import_key path )
@@ -52874,15 +52941,25 @@ unsafe @ priv_resolve i lex i syms s fname → s {
     // Grammar v2.6 adds the `simd` CPU-dispatch prefix alongside `pub`;
     // both are optional and order-independent, so consume whatever run
     // of them precedes the declaration token.
-    ~ | | | == ( nurl_lex_type lex ) TT_PUB == ( nurl_lex_type lex ) TT_SIMD == ( nurl_lex_type lex ) TT_INLINE == ( nurl_lex_type lex ) TT_UNSAFE
-    { ? == ( nurl_lex_type lex ) TT_PUB
-        { = g_pending_pub 1 }
-        { ? == ( nurl_lex_type lex ) TT_SIMD
-            { = g_pending_simd 1 }
-            { ? == ( nurl_lex_type lex ) TT_UNSAFE { = g_pending_unsafe 1 } { = g_pending_inline 1 } } }
+    : ~ b raw_prefix F
+    : ~ i raw_line 0
+    : ~ i raw_col 0
+    ~ | | | | == ( nurl_lex_type lex ) TT_PUB == ( nurl_lex_type lex ) TT_SIMD == ( nurl_lex_type lex ) TT_INLINE == ( nurl_lex_type lex ) TT_UNSAFE ( __raw_prefix_tok lex )
+    { ? ( __raw_prefix_tok lex ) { = raw_prefix T = g_pending_unsafe 1 = raw_line ( nurl_lex_line lex ) = raw_col ( nurl_lex_col lex ) } {
+            ? == ( nurl_lex_type lex ) TT_PUB
+            { = g_pending_pub 1 }
+            { ? == ( nurl_lex_type lex ) TT_SIMD
+                { = g_pending_simd 1 }
+                { ? == ( nurl_lex_type lex ) TT_UNSAFE { = g_pending_unsafe 1 } { = g_pending_inline 1 } } } }
         ( nurl_lex_advance lex )
     }
     : i tt ( nurl_lex_type lex )
+    // `raw` is a contract on calling a function; it has nothing to say
+    // about any other declaration.
+    ? & raw_prefix & != tt TT_AT != tt TT_COLON
+    { ( die lex `'raw' is a prefix on function and struct declarations only — 'raw @ name …' says that a caller must vouch for what the function requires, so only an 'unsafe' function may call it; 'raw : Name { … }' seals a struct whose fields carry an invariant. It has no meaning on an import, trait or FFI declaration (a foreign function takes 'unsafe & …')` ) }
+    {}
+    ? & raw_prefix == tt TT_COLON { = g_pending_unsafe 0 = g_pending_rawrep 1 } {}
     // `simd` is meaningful only on a function. Anywhere else it is a
     // silent no-op that would leak onto the next `@` the parser reached
     // — the same cross-file bug `pub` had, so it gets the same fix:
@@ -52915,7 +52992,14 @@ unsafe @ priv_resolve i lex i syms s fname → s {
     { ( die lex `'inline' and 'simd' cannot both be applied to one function — 'simd' replaces the function with a CPU-dispatching stub, which is exactly the opaque call 'inline' asks to remove` ) }
     {}
     ? == tt TT_AT { ( gen_fn_decl lex syms cg ) }
-    ? == tt TT_COLON { ( gen_const_or_struct lex syms ) }
+    ? == tt TT_COLON {
+        ( gen_const_or_struct lex syms )
+        // Still pending: the ':' declared a const, an enum or a generic struct.
+        ? != 0 g_pending_rawrep {
+            = g_pending_rawrep 0
+            ( die_pos lex raw_line raw_col `'raw' seals a plain struct ('raw : Name { … }') — not a const, an enum or a generic struct` )
+        } {}
+    }
     ? == tt TT_AMP { ( gen_ffi_decl lex syms ) }
     ? == tt TT_DOLLAR { ( gen_import_decl lex syms cg ) }
     ? == tt TT_PERCENT { ( gen_trait_or_impl lex syms cg ) }
@@ -53155,6 +53239,26 @@ unsafe @ llvm_linkage_init → v {
 : ~ i g_split_part 0  // i64[n]: which part each function went to
 : ~ i g_split_fill 0  // i64[parts]: bytes assigned to each part so far
 : ~ i g_split_priv 0  // symtab: private global name → the part that owns it
+: ~ i g_split_rep 0  // i64[n]: 1 when a small function may be copied into other parts
+: ~ i g_split_repmask 0  // i64[n]: bit k set when part k calls the small function (its copy goes there)
+: ~ i g_sp_rchg 0  // a pass of __sp_rep_scan set a new bit
+
+// A function this small (bytes of IR text, its name included) is copied
+// into every part, not only defined in its own. ThinLTO's import cannot
+// stand in for the copy: the IR mover maps an imported function's struct
+// types onto any structurally equal type of the importing module, and
+// with opaque pointers every Vec is `{ ptr }` and every Slice
+// `{ ptr, i64 }` — slice_at imported as taking a `%RawBlock` no longer
+// matches its call site's `%Slice__f64`, and a call whose type differs
+// from its callee's is never inlined. mlp's training loop, written over
+// slices, ran 4× slower split than unsplit (12.3 s against 3.0 s) for
+// that alone. The copy is `linkonce_odr`: each part inlines it where it
+// is called and drops it when nothing is left, and the link keeps the
+// one strong definition in the function's own part. A part gets the copies
+// it calls and those copies' own small callees, no others: copying every
+// small function everywhere cost a large program's build a quarter more.
+: i SPLIT_REP_MAX 1600
+
 : ~ i g_split_fh 0  // FILE* of the part being written, as an integer
 // The module text, as an integer cast of a BORROWED `s`. Deliberately
 // not a `: ~ s` global: a mutable string global owns its buffer, and
@@ -55714,6 +55818,62 @@ unsafe @ __sp_pin_free → v {
     = g_sp_pqn 0
 }
 
+// Mark, for part `k`, every copyable small function an `@name` in module
+// bytes [from, to) names outside its own part.
+unsafe @ __sp_rep_scan i from i to i k → v {
+    : *u mp # *u # s g_dce_mod
+    : i bit << 1 k
+    : ~ i p from
+    ~ < p to {
+        ? != & # i . mp p 255 64 { = p + p 1 } {
+            : ~ i q + p 1
+            ~ & < q to ( __dce_ident_byte & # i . mp q 255 ) { = q + q 1 }
+            ? == q + p 1 { = p q } {
+                : u sv . mp q
+                = . mp q # u 0
+                : s ent ( nurl_sym_get g_dce_map # s + # i mp + p 1 )
+                = . mp q sv
+                ? != 0 ( nurl_str_len ent ) {
+                    : i idx ( nurl_str_to_int ent )
+                    ? & != 0 ( nurl_peek # s g_split_rep idx ) != k ( nurl_peek # s g_split_part idx ) {
+                        : i m ( nurl_peek # s g_split_repmask idx )
+                        ? == 0 & m bit { ( nurl_poke # s g_split_repmask idx | m bit ) = g_sp_rchg 1 } {}
+                    } {}
+                } {}
+                = p q
+            }
+        }
+    }
+}
+
+// Which parts each copyable function goes to: those whose own functions
+// call it, closed over the copies' calls (a copy in part k that calls
+// another small function needs that one in part k too).
+unsafe @ __sp_rep_masks i n → v {
+    : ~ i fi 0
+    ~ < fi n {
+        : i pk ( nurl_peek # s g_split_part fi )
+        ? < pk g_split_n { ( __sp_rep_scan ( nurl_peek # s g_dce_start fi ) ( nurl_peek # s g_dce_end fi ) pk ) } {}
+        = fi + fi 1
+    }
+    = g_sp_rchg 1
+    ~ != 0 g_sp_rchg {
+        = g_sp_rchg 0
+        = fi 0
+        ~ < fi n {
+            : i m ( nurl_peek # s g_split_repmask fi )
+            ? != 0 m {
+                : ~ i k 0
+                ~ < k g_split_n {
+                    ? != 0 & m << 1 k { ( __sp_rep_scan ( nurl_peek # s g_dce_start fi ) ( nurl_peek # s g_dce_end fi ) k ) } {}
+                    = k + k 1
+                }
+            } {}
+            = fi + fi 1
+        }
+    }
+}
+
 // Partition the indexed module across g_split_n files.
 unsafe @ split_emit_module i n i mlen → v {
     : *u mp # *u # s g_dce_mod
@@ -55750,6 +55910,8 @@ unsafe @ split_emit_module i n i mlen → v {
     } {}
     : i simd_part - g_split_n 1
     = g_split_part # i # s ( nurl_zalloc * n 8 )
+    = g_split_rep # i # s ( nurl_zalloc * n 8 )
+    = g_split_repmask # i # s ( nurl_zalloc * n 8 )
     = g_split_fill # i # s ( nurl_zalloc * g_split_n 8 )
     = g_split_priv ( nurl_sym_new )
     // Cut the rest of the function sequence into CONTIGUOUS runs of
@@ -55781,12 +55943,14 @@ unsafe @ split_emit_module i n i mlen → v {
                 } {
                     ? & >= acc target < cur - g_split_n 1 { = cur + cur 1 = acc 0 } {}
                     ( nurl_poke # s g_split_part fi cur )
+                    ? <= - en st SPLIT_REP_MAX { ( nurl_poke # s g_split_rep fi 1 ) } {}
                     = acc + acc - en st
                     ( nurl_poke # s g_split_fill cur + ( nurl_peek # s g_split_fill cur ) - en st )
                 } } }
         = fi + fi 1
     }
     ( __sp_pin_free )
+    ( __sp_rep_masks n )
     // Register every private global, then attribute it to the parts
     // that name it — module scope first, so a constant a global's own
     // initializer reaches is pinned to every part before any single
@@ -55810,9 +55974,11 @@ unsafe @ split_emit_module i n i mlen → v {
     : ~ i si 0
     ~ < si n {
         : i pk ( nurl_peek # s g_split_part si )
+        // A copied function's literals go wherever the copies do.
+        : i owner ? != 0 ( nurl_peek # s g_split_rep si ) g_split_n pk
         ? < pk g_split_n
         { ( __sp_scan_refs ( nurl_peek # s g_dce_start si )
-            ( nurl_peek # s g_dce_end si ) pk ) }
+            ( nurl_peek # s g_dce_end si ) owner ) }
         {}
         = si + si 1
     }
@@ -55829,7 +55995,13 @@ unsafe @ split_emit_module i n i mlen → v {
             : i pk ( nurl_peek # s g_split_part ei )
             ? | == pk k == pk + g_split_n 1
             { ( __ir_write_function st en 1 ) }
-            { ? != pk g_split_n { ( __sp_declare st en ) } {} }
+            { ? != pk g_split_n {
+                    ? != 0 & ( nurl_peek # s g_split_repmask ei ) << 1 k {
+                        // `define <ret> @f(…)` → `define linkonce_odr <ret> @f(…)`
+                        ( __sp_puts `define linkonce_odr ` )
+                        ( __ir_write_function + st 7 en 1 )
+                    } { ( __sp_declare st en ) }
+                } {} }
             = pos en
             = ei + ei 1
         }
@@ -55838,9 +56010,13 @@ unsafe @ split_emit_module i n i mlen → v {
         = k + k 1
     }
     ( nurl_free # s g_split_part )
+    ( nurl_free # s g_split_rep )
+    ( nurl_free # s g_split_repmask )
     ( nurl_free # s g_split_fill )
     ( nurl_sym_free g_split_priv )
     = g_split_part 0
+    = g_split_rep 0
+    = g_split_repmask 0
     = g_split_fill 0
     = g_split_priv 0
 }

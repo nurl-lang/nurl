@@ -2,12 +2,14 @@
 
 ## [0.10.2] — 2026-10-14
 
-Requires NURL 0.73.0 (`slice_at`, `slice_put`, `rc_take`, `locked_take`).
+Requires NURL 0.73.0 (grammar v2.9 `raw`, `slice_window`, `file_is_open`).
 
 ### Changed
 
-- Loops that read or wrote through `vec_data` pointers index slices (`slice_at` / `slice_put`, as fast as the pointers), and functions with nothing raw in them are no longer marked `unsafe`.
-- 1 fewer functions are `unsafe` than in 0.10.1 (48 left).
+- `gk_run`, `gk_run_dev` and `gk_buf_wrap` are `raw` (NURL grammar v2.9): they launch kernel source over device addresses given as integers, or take an integer as device memory, so only an `unsafe` caller — which vouches for what it hands them — may call them. `GkBuf` and the pool's blocks are `raw` structs: safe code cannot make one up.
+- Every operation checks what its kernel indexes before it launches: sizes through overflow-checked products (`_gk_p2/3/4` — a product that wrapped to a buffer's length no longer passes), `gk_buf_view` / `gk_buf_view_as` inside their buffer (none otherwise), `gk_matmul_f` / the elementwise and dot kernels against their Vecs' lengths, softmax rows at least one column wide.
+- `gk_map_f` / `gkd_map` accept only an expression over `x`, numbers and math functions, `gkd_ew` / `gkd_ew_bc` only `+ - * /`, and identifiers as kernel names (`gk_expr_ok`, `gk_op_ok`, `gk_name_ok`): text spliced into a kernel can no longer reach memory.
+- 19 more functions are `unsafe`/`raw` than in 0.10.1 (68 now): where they launch kernels of their own, the trust is now written down.
 
 ## [0.10.1] — 2026-10-12
 

@@ -2,12 +2,12 @@
 
 ## [0.3.12] — 2026-10-14
 
-Requires NURL 0.73.0 (`slice_at`, `slice_put`, `rc_take`, `locked_take`).
+Requires NURL 0.73.0 (grammar v2.9 `raw`, `slice_window`, `file_is_open`).
 
 ### Changed
 
-- Loops that read or wrote through `vec_data` pointers index slices (`slice_at` / `slice_put`, as fast as the pointers), and functions with nothing raw in them are no longer marked `unsafe`.
-- 2 fewer functions are `unsafe` than in 0.3.11 (9 left).
+- Training indexes row windows of its buffers (`slice_window`, NURL 0.73.0): one bounds check per row, none per element. The backward pass accumulates Wᵀδ row by row, which vectorises and sums each element in the same order as before — the trained weights are bit-identical, and training runs 26% faster (gradfit_test's hand engine: 2.12 s against 2.85 s). No function is `unsafe` any more, tests included.
+- 11 fewer functions are `unsafe` than in 0.3.11 (0 left).
 
 ## [0.3.11] — 2026-10-12
 

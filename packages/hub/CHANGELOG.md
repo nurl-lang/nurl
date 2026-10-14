@@ -1,5 +1,14 @@
 # hub changelog
 
+## [0.2.3] — 2026-10-14
+
+Requires NURL 0.73.0.
+
+### Changed
+
+- The staging file of a download is a `?File` until it is open, instead of a `File` made up from a null address. No function is `unsafe` any more.
+- 1 fewer functions are `unsafe` than in 0.2.2 (0 left).
+
 ## [0.2.2] — 2026-10-12
 
 Requires NURL 0.73.0, in which a standard-library handle holds its

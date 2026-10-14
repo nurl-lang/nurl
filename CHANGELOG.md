@@ -24,6 +24,34 @@ longer rejects code a constant condition leaves dead). `now_ms` /
 CLOCK_REALTIME up by name first (~2 300 instructions a call).
 `term_read_password` and `tls_accept_conn` are new safe wrappers.
 
+Grammar v2.9 adds `raw` (spec §3.3e). `raw @ f …` is a function whose
+soundness rests on its caller — an address it is handed, a size it trusts,
+kernel code it runs — so only an `unsafe` function may call it, the rule a
+foreign function declared `unsafe & …` already follows; `raw : S { … }`
+seals a struct whose fields carry such an invariant. `raw` is no reserved
+word: it is the prefix only right before a top-level `@` or `:`. nurlfmt
+keeps it on its declaration's line.
+
+`slice_window s from n` is the `n` elements from `from`, checked once, so
+a loop to `n` over it needs no check per element; storing a number
+through one window no longer ends a borrow of another window of the same
+Vec. `mlp`'s training loop over windows has no `unsafe` left and runs 26%
+faster than the raw-pointer loop it replaces (2.12 s against 2.85 s,
+bit-identical output).
+
+A split build (`nurl.sh`'s default, one module part per core) inlined
+nothing small across parts: ThinLTO imported `slice_at` and the Vec
+accessors, but mapped their struct types onto structurally equal ones of
+the importing module (every Vec is `{ ptr }` under opaque pointers), and a
+call whose type differs from its callee's is never inlined — mlp's
+slice loop ran 4× slower split than unsplit. A small function is now also
+copied (`linkonce_odr`) into each part that calls it; a large program's
+build takes ~20% longer than before (anomaly: 48 s → 58 s, against 192 s
+unsplit). Functions start on a 64-byte line (`-align-all-functions=6`),
+so one function's size no longer moves another's hot loop across a
+Skylake JCC boundary: mlp's gradfit_test retired the same instructions
+in 9 s or 13 s depending on an unrelated edit, and no longer does.
+
 Seven more holes are closed (h249–h255), and none is known open: functions
 that take a runtime handle as a plain integer (`tcp_conn_view`,
 `tls_attach*`, `tls_accept*`, the `nurl_tcp_*` / `nurl_udp_*` /
@@ -34,10 +62,32 @@ helpers wrote to any physical address. They are `unsafe` only; a stdlib foreign
 function says so with `unsafe & …`. `SymTab` could be built around a
 made-up number or shared between threads: it is sealed, move-only and
 `% NotSync` now. The language server reaches its tables through two
-accessors instead of raw handles.
+accessors instead of raw handles. h256: `file_from_raw` closed any string
+as a C stream and `file_raw` handed a `FILE*` out as text; both are raw,
+and `file_is_open` is the safe question.
 
-Packages: `oauth`, `iforest`, `vindex`, `data`, `cli`, `psql` and `redis`
-have no `unsafe` function left, and 13 functions elsewhere were marked
+Packages, where `raw` was missing: gpukit's `gk_run` / `gk_run_dev` ran
+kernel source over device addresses given as integers and `gk_buf_wrap`
+took any integer as device memory, from safe code; they are `raw`, and
+`GkBuf`, gpukit's pool blocks and onnx's `RTensor` are `raw` structs.
+gpukit's operations check what their kernels index before they launch:
+sizes through overflow-checked products (a wrapped `m*k` passed for a
+buffer's length), views inside their buffer, `gk_matmul_f` / the
+elementwise and dot kernels against their Vecs' lengths, and the
+expression `gk_map_f` / `gkd_map` splice into kernel source limited to
+`x`, numbers and math functions (operators to `+ - * /`). lingbot-map's
+rope kernels range-check the positions they look tables up by. onnx's
+tensors carry the engine and run they came from: `rt_download` and
+`dtensor_from_output` read a tensor of an earlier run — whose device
+memory `rt_reset` had released — and now refuse it. Functions that launch
+kernels of their own (f5tts, grad, onnx, lingbot-map) are `unsafe` where
+they establish what the kernel needs, and f5tts's launchers over raw
+device addresses are `raw`.
+
+Packages: `oauth`, `iforest`, `vindex`, `data`, `cli`, `psql`, `redis`,
+`zst`, `video`, `ply`, `swarm` and `mlp` have no `unsafe` function left
+(`video` / `ply` / `swarm` keep their state in a `Locked` or a frozen
+`Arc`; `zst`'s inspector read past a truncated file and reads zeros now), and 13 functions elsewhere were marked
 `unsafe` with nothing raw in them; about a hundred more raw `vec_data`
 loops are slices. `oauth`'s provider and policy were shared between a
 server's workers through an `Arc` changed in place — a data race; they

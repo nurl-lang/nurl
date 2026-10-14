@@ -52,8 +52,6 @@ $ `stdlib/std/arc.nu`
 
 @ VwState_drop sink VwState h → v {}
 
-unsafe @ __VwState_ptr VwState h → *VwStateImpl { ^ ( arc_ptr [VwStateImpl] . h a ) }
-
 // The page as compiled in. `--page FILE` reads from disk instead, which is
 // the only way to iterate on the viewer without rebuilding.
 @ vw_page s override → String {
@@ -73,8 +71,8 @@ unsafe @ __VwState_ptr VwState h → *VwStateImpl { ^ ( arc_ptr [VwStateImpl] . 
     ^ out
 }
 
-unsafe @ h_vw_index VwState h HttpRequest req Params p → HttpResponse {
-    : *VwStateImpl st ( __VwState_ptr h )
+@ h_vw_index VwState h HttpRequest req Params p → HttpResponse {
+    : VwStateImpl st ( arc_get [VwStateImpl] . h a )  // read-only once made
     : HttpResponse r ( response_new 200 )
     ( response_set_header r `Content-Type` `text/html; charset=utf-8` )
     // the page is regenerated on every build; never let a browser keep one
@@ -83,8 +81,8 @@ unsafe @ h_vw_index VwState h HttpRequest req Params p → HttpResponse {
     ^ r
 }
 
-unsafe @ h_vw_cloud VwState h HttpRequest req Params p → HttpResponse {
-    : *VwStateImpl st ( __VwState_ptr h )
+@ h_vw_cloud VwState h HttpRequest req Params p → HttpResponse {
+    : VwStateImpl st ( arc_get [VwStateImpl] . h a )  // read-only once made
     : HttpResponse r ( response_new 200 )
     ( response_set_header r `Content-Type` `application/octet-stream` )
     // the page shows this instead of the URL, so the window says which

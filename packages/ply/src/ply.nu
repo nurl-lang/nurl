@@ -29,7 +29,7 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/floatbits.nu`
-$ `stdlib/std/arc.nu`
+$ `stdlib/std/thread.nu`
 
 // The count field is fixed-width so the header keeps its byte length
 // when the real number is patched in. 12 digits holds any cloud a
@@ -38,7 +38,7 @@ $ `stdlib/std/arc.nu`
 : i PLY_FLUSH_AT 4096
 
 : PlyWImpl {
-    File f  // raw 0 once finished
+    File f  // closed once finished (file_is_open says so)
     i n
     i ascii
     i cnt_off  // where the count field starts, for the patch at the end
@@ -49,13 +49,11 @@ $ `stdlib/std/arc.nu`
 // Finish a writer nobody finished: flush, patch the count, close.
 % Drop PlyWImpl { @ drop PlyWImpl w → v { : b _ok ( __ply_close . w f . w ascii . w abuf . w bbuf . w cnt_off . w n ) } }
 
-: PlyW { ( Arc PlyWImpl ) a }
+: PlyW { ( Locked PlyWImpl ) st }
 
-@ PlyW_share PlyW h → PlyW { ^ @ PlyW { ( arc_clone [PlyWImpl] . h a ) } }
+@ PlyW_share PlyW h → PlyW { ^ @ PlyW { ( Locked_share [PlyWImpl] . h st ) } }
 
 @ PlyW_drop sink PlyW h → v {}
-
-unsafe @ __PlyW_ptr PlyW h → *PlyWImpl { ^ ( arc_ptr [PlyWImpl] . h a ) }
 
 @ __ply_wr File f String s → b {
     : ( Vec u ) b ( bytes_from_str ( string_data s ) )
@@ -92,7 +90,7 @@ unsafe @ __PlyW_ptr PlyW h → *PlyWImpl { ^ ( arc_ptr [PlyWImpl] . h a ) }
 
 // Open `path` and write the header. `comment` goes in as one comment
 // line ("" for none) — a place for provenance, not for structure.
-unsafe @ ply_create s path i ascii s comment → !PlyW String {
+@ ply_create s path i ascii s comment → !PlyW String {
     ?? ( file_create path ) {
         F _e → {
             : String m ( string_from `ply: cannot write ` )
@@ -110,21 +108,17 @@ unsafe @ ply_create s path i ascii s comment → !PlyW String {
                 ( file_close f )
                 ^ @ !PlyW String { F ( string_from `ply: cannot write the header` ) }
             }
-            : ~ PlyWImpl w @ PlyWImpl {}
-            = . w f f
-            = . w n 0
-            = . w ascii ascii
-            = . w cnt_off off
-            = . w abuf ( string_new )
-            = . w bbuf ( vec_new [u] )
-            ^ @ !PlyW String { T @ PlyW { ( arc_new [PlyWImpl] w ) } }
+            : PlyWImpl w @ PlyWImpl { f 0 ascii off ( string_new ) ( vec_new [u] ) }
+            ^ @ !PlyW String { T @ PlyW { ( locked_new [PlyWImpl] w ) } }
         }
     }
 }
 
-unsafe @ ply_count PlyW w__h → i {
-    : *PlyWImpl w ( __PlyW_ptr w__h )
-    ^ . w n
+@ ply_count PlyW w__h → i {
+    : PlyWImpl w ( locked_take [PlyWImpl] . w__h st )
+    : i n . w n
+    ( locked_restore [PlyWImpl] . w__h st w )
+    ^ n
 }
 
 // One little-endian float32, appended to the binary buffer.
@@ -144,14 +138,17 @@ unsafe @ ply_count PlyW w__h → i {
 
 // Write out whatever is buffered. Idempotent; ply_vertex calls it on
 // its own past PLY_FLUSH_AT bytes.
-unsafe @ ply_flush PlyW w__h → b {
-    ^ ( __ply_flush ( __PlyW_ptr w__h ) )
+@ ply_flush PlyW w__h → b {
+    : ~ PlyWImpl w ( locked_take [PlyWImpl] . w__h st )
+    : b ok ( __ply_flush w )
+    ( locked_restore [PlyWImpl] . w__h st w )
+    ^ ok
 }
 
-unsafe @ __ply_flush * PlyWImpl w → b {
+@ __ply_flush inout PlyWImpl w → b {
     : b ok ( __ply_flush_bufs . w f . w ascii . w abuf . w bbuf )
     // the buffer keeps its capacity for the next PLY_FLUSH_AT bytes
-    ? != . w ascii 0 { ( string_clear . w abuf ) } { : b _t ( vec_set_len [u] . w bbuf 0 ) }
+    ? != . w ascii 0 { ( string_clear . w abuf ) } { ( vec_clear [u] . w bbuf ) }
     ^ ok
 }
 
@@ -173,7 +170,7 @@ unsafe @ __ply_flush * PlyWImpl w → b {
 // Flush what is buffered, rewind to the count field, overwrite it in
 // place, close. Nothing to do for a writer finished already.
 @ __ply_close File f i ascii String abuf ( Vec u ) bbuf i cnt_off i n → b {
-    ? == 0 # i ( file_raw f ) { ^ T } {}
+    ? ( file_is_open f ) {} { ^ T }
     : ~ b ok ( __ply_flush_bufs f ascii abuf bbuf )
     ? ok {
         ?? ( file_seek f cnt_off 0 ) {
@@ -189,8 +186,13 @@ unsafe @ __ply_flush * PlyWImpl w → b {
 }
 
 // Push one vertex. Colour components are clamped to 0..255.
-unsafe @ ply_vertex PlyW w__h f x f y f z i r i g i b → v {
-    : *PlyWImpl w ( __PlyW_ptr w__h )
+@ ply_vertex PlyW w__h f x f y f z i r i g i b → v {
+    : ~ PlyWImpl w ( locked_take [PlyWImpl] . w__h st )
+    ( __ply_vertex w x y z r g b )
+    ( locked_restore [PlyWImpl] . w__h st w )
+}
+
+@ __ply_vertex inout PlyWImpl w f x f y f z i r i g i b → v {
     : i rr ( __ply_clamp_u8 r )
     : i gg ( __ply_clamp_u8 g )
     : i bb ( __ply_clamp_u8 b )
@@ -224,10 +226,10 @@ unsafe @ ply_vertex PlyW w__h f x f y f z i r i g i b → v {
 
 // Flush, rewind to the count field, overwrite it in place, close. The
 // buffers go with the handle's last owner.
-unsafe @ ply_finish PlyW w__h → b {
-    : *PlyWImpl w ( __PlyW_ptr w__h )
+@ ply_finish PlyW w__h → b {
+    : PlyWImpl w ( locked_take [PlyWImpl] . w__h st )
+    // Closes the file: the writer's drop then finds nothing left to do.
     : b ok ( __ply_close . w f . w ascii . w abuf . w bbuf . w cnt_off . w n )
-    // The closed file's handle leaves the writer (dropped here).
-    = . w f # File # s 0
+    ( locked_restore [PlyWImpl] . w__h st w )
     ^ ok
 }

@@ -2,12 +2,12 @@
 
 ## [0.2.5] — 2026-10-14
 
-Requires NURL 0.73.0 (`slice_at`, `slice_put`, `rc_take`, `locked_take`).
+Requires NURL 0.73.0 (grammar v2.9 `raw`, `slice_window`, `file_is_open`).
 
 ### Changed
 
-- Loops that read or wrote through `vec_data` pointers index slices (`slice_at` / `slice_put`, as fast as the pointers), and functions with nothing raw in them are no longer marked `unsafe`.
-- 3 fewer functions are `unsafe` than in 0.2.4 (8 left).
+- An opened AVI keeps its state in a `Locked` (stdlib/std/thread.nu) instead of an `Arc` changed through a raw pointer, and its file is a `File` the state owns from the start (no zeroed placeholder). No function is `unsafe` any more.
+- 11 fewer functions are `unsafe` than in 0.2.4 (0 left).
 
 ## [0.2.4] — 2026-10-12
 

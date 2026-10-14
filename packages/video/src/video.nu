@@ -41,7 +41,7 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/std/path.nu`
 $ `stdlib/std/process.nu`
-$ `stdlib/std/arc.nu`
+$ `stdlib/std/thread.nu`
 $ `stdlib/core/slice.nu`
 
 // ── what is a video ─────────────────────────────────────────────────
@@ -109,26 +109,34 @@ $ `stdlib/core/slice.nu`
     i movi_end
 }
 
-// An opened AVI is a handle: every copy is the same open file, and the
-// last owner closes it. vid_avi_close is an optional early release.
-: VidAvi { ( Arc VidAviImpl ) a }
+// An opened AVI is a handle on its state in a Locked (stdlib/std/thread.nu):
+// every copy is the same open file, the last owner closes it, and a read
+// checks the state out (locked_take) — copies on several threads take
+// turns at the file position. vid_avi_close is an optional early release.
+: VidAvi { ( Locked VidAviImpl ) st }
 
-@ VidAvi_share VidAvi h → VidAvi { ^ @ VidAvi { ( arc_clone [VidAviImpl] . h a ) } }
+@ VidAvi_share VidAvi h → VidAvi { ^ @ VidAvi { ( Locked_share [VidAviImpl] . h st ) } }
 
 @ VidAvi_drop sink VidAvi h → v {}
 
-unsafe @ __VidAvi_ptr VidAvi h → *VidAviImpl { ^ ( arc_ptr [VidAviImpl] . h a ) }
+// One header field: 0 fps_num, 1 fps_den, 2 vstream, 3 movi_off, 4 movi_end.
+@ __vd_field VidAvi h i which → i {
+    : VidAviImpl v ( locked_take [VidAviImpl] . h st )
+    : i r ? == which 0 . v fps_num ? == which 1 . v fps_den ? == which 2 . v vstream ? == which 3 . v movi_off . v movi_end
+    ( locked_restore [VidAviImpl] . h st v )
+    ^ r
+}
 
 // The stream's declared frame rate, fps_num / fps_den (dwRate / dwScale).
-unsafe @ vid_avi_fps_num VidAvi h → i { : *VidAviImpl v ( __VidAvi_ptr h ) ^ . v fps_num }
+@ vid_avi_fps_num VidAvi h → i { ^ ( __vd_field h 0 ) }
 
-unsafe @ vid_avi_fps_den VidAvi h → i { : *VidAviImpl v ( __VidAvi_ptr h ) ^ . v fps_den }
+@ vid_avi_fps_den VidAvi h → i { ^ ( __vd_field h 1 ) }
 // Index of the video stream (the NN of its 'NNdc' chunks).
-unsafe @ vid_avi_vstream VidAvi h → i { : *VidAviImpl v ( __VidAvi_ptr h ) ^ . v vstream }
+@ vid_avi_vstream VidAvi h → i { ^ ( __vd_field h 2 ) }
 // The movi LIST's payload: [movi_off, movi_end) in the file.
-unsafe @ vid_avi_movi_off VidAvi h → i { : *VidAviImpl v ( __VidAvi_ptr h ) ^ . v movi_off }
+@ vid_avi_movi_off VidAvi h → i { ^ ( __vd_field h 3 ) }
 
-unsafe @ vid_avi_movi_end VidAvi h → i { : *VidAviImpl v ( __VidAvi_ptr h ) ^ . v movi_end }
+@ vid_avi_movi_end VidAvi h → i { ^ ( __vd_field h 4 ) }
 
 @ __vd_u32 ( Vec u ) b i off → i {
     : ( Slice u ) p ( slice_from_vec [u] b )
@@ -151,22 +159,21 @@ unsafe @ vid_avi_movi_end VidAvi h → i { : *VidAviImpl v ( __VidAvi_ptr h ) ^ 
 // Walk the RIFF tree far enough to know the frame rate, which stream is
 // the video, and where the movi payload lives. Everything else in the
 // file is somebody else's business.
-unsafe @ vid_avi_open s path → !VidAvi String {
+@ vid_avi_open s path → !VidAvi String {
     : ~ i fsize 0
     ?? ( file_size path ) {
         T n → { = fsize n }
         F _e → { ^ @ !VidAvi String { F ( string_from `cannot stat the video` ) } }
     }
-    : ~ File f # File # s 0
     ?? ( file_open path ) {
         F _e → { ^ @ !VidAvi String { F ( string_from `cannot open the video` ) } }
-        T fh → { = f fh }
+        T f → { ^ ( __vd_open_file f fsize ) }
     }
-    // The handle first: every way out below lets go of it, and its drop
-    // closes the file.
-    : VidAvi av @ VidAvi { ( arc_zero [VidAviImpl] ) }
-    : *VidAviImpl v ( arc_ptr [VidAviImpl] . av a )
-    = . v f f
+}
+
+// The file is this function's: every way out below lets go of it, and
+// its drop closes it; the handle takes it on success.
+@ __vd_open_file sink File f i fsize → !VidAvi String {
     // RIFF....AVI<space>
     : ~ b hdr_ok F
     ?? ( __vd_read_at f 0 12 ) {
@@ -236,13 +243,8 @@ unsafe @ vid_avi_open s path → !VidAvi String {
     } {}
     ? < fps_den 1 { = fps_den 1 } {}
     ? < fps_num 1 { = fps_num 25 = fps_den 1 } {}
-    = . v fsize fsize
-    = . v fps_num fps_num
-    = . v fps_den fps_den
-    = . v vstream vstream
-    = . v movi_off movi_off
-    = . v movi_end movi_end
-    ^ @ !VidAvi String { T av }
+    : VidAviImpl st @ VidAviImpl { f fsize fps_num fps_den vstream movi_off movi_end }
+    ^ @ !VidAvi String { T @ VidAvi { ( locked_new [VidAviImpl] st ) } }
 }
 
 // Let go of `v` now rather than at the end of its owner's scope; the last
@@ -265,8 +267,14 @@ unsafe @ vid_avi_open s path → !VidAvi String {
 
 // Extract every `stride`-th video frame as a JPEG file into `outdir`,
 // stopping the numbering at what was kept. Returns the kept count.
-unsafe @ vid_avi_extract VidAvi v__h s outdir i stride → !i String {
-    : *VidAviImpl v ( __VidAvi_ptr v__h )
+@ vid_avi_extract VidAvi v__h s outdir i stride → !i String {
+    : ~ VidAviImpl v ( locked_take [VidAviImpl] . v__h st )
+    : !i String r ( __vd_extract v outdir stride )
+    ( locked_restore [VidAviImpl] . v__h st v )
+    ^ r
+}
+
+@ __vd_extract inout VidAviImpl v s outdir i stride → !i String {
     : ~ i off . v movi_off
     : ~ i seen 0
     : ~ i kept 0
@@ -287,8 +295,7 @@ unsafe @ vid_avi_extract VidAvi v__h s outdir i stride → !i String {
                                 F _e → { = bad T ( string_push_str err `truncated frame` ) }
                                 T jb → {
                                     // an MJPEG chunk IS a JPEG: FF D8 …
-                                    : *u jp ( vec_data [u] jb )
-                                    ? & >= sz 2 & == # i . jp 0 255 == # i . jp 1 216 {
+                                    ? & >= ( vec_len [u] jb ) 2 & == # i ( vec_at [u] jb 0 ) 255 == # i ( vec_at [u] jb 1 ) 216 {
                                         : String dgt ( string_new )
                                         ( string_push_int dgt kept )
                                         : String name ( string_new )

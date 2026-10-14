@@ -29,8 +29,10 @@ $ `gpukit.nu`
     ^ s
 }
 
-@ __gk_ew GpuKit kit s name s op ( Vec f ) out ( Vec f ) a ( Vec f ) b → b {
+// The kernel reads a[i] and b[i] for every i of out: both must hold them.
+unsafe @ __gk_ew GpuKit kit s name s op ( Vec f ) out ( Vec f ) a ( Vec f ) b → b {
     : i n ( vec_len [f] out )
+    ? | < ( vec_len [f] a ) n < ( vec_len [f] b ) n { ^ F } {}
     : String src ( __gk_ew_src name op )
     : ( Vec GkArg ) call ( vec_new [GkArg] )
     ( vec_push [GkArg] call ( gk_in_f a ) )
@@ -52,9 +54,12 @@ $ `gpukit.nu`
 // ── Unary map: out[i] = <expr>, with `x` bound to in[i] ────────────────
 // `kname` is the CUDA entry name (a valid C identifier, stable per `expr` so
 // caching works). `expr` is C over the local `double x`, e.g. `x*x`,
-// `1.0/(1.0+exp(-x))`, `x>0.0?x:0.0`.
-@ gk_map_f GpuKit kit s kname ( Vec f ) out ( Vec f ) in s expr → b {
+// `1.0/(1.0+exp(-x))`, `x>0.0?x:0.0` — checked (gk_expr_ok): F for anything
+// else, and for a name that is not an identifier.
+unsafe @ gk_map_f GpuKit kit s kname ( Vec f ) out ( Vec f ) in s expr → b {
+    ? & ( gk_name_ok kname ) ( gk_expr_ok expr ) {} { ^ F }
     : i n ( vec_len [f] out )
+    ? < ( vec_len [f] in ) n { ^ F } {}
     : String src ( string_from `extern "C" __global__ void ` )
     ( string_push_str src kname )
     ( string_push_str src `(const double* in, double* out, long long n){` )
@@ -131,7 +136,12 @@ $ `gpukit.nu`
     ^ src
 }
 
-@ gk_matmul_f GpuKit kit ( Vec f ) c ( Vec f ) a ( Vec f ) b i m i k i n → b {
+// F unless a holds m×k, b k×n and c m×n elements: the kernels index all
+// three by those dimensions.
+unsafe @ gk_matmul_f GpuKit kit ( Vec f ) c ( Vec f ) a ( Vec f ) b i m i k i n → b {
+    ? ! ( __gk_dims_fit ( vec_len [f] a ) m k ) { ^ F } {}
+    ? ! ( __gk_dims_fit ( vec_len [f] b ) k n ) { ^ F } {}
+    ? ! ( __gk_dims_fit ( vec_len [f] c ) m n ) { ^ F } {}
     : b on_cpu ( nurl_str_eq ( gk_backend kit ) `cpu` )
     : String src ? on_cpu ( __gk_matmul_src_cpu ) ( __gk_matmul_src_gpu )
     : s entry ? on_cpu `gk_matmul_tiled` `gk_matmul`
@@ -147,6 +157,17 @@ $ `gpukit.nu`
     ( vec_push [GkArg] call ( gk_i64 n ) )
     : b r ( gk_run kit ( string_data src ) entry ( gk_grid tiles 256 ) 256 call )
     ^ r
+}
+
+// Whether a buffer of `len` elements holds an r×c matrix: neither
+// dimension negative, and r·c ≤ len without the product overflowing.
+@ gk_dims_fit_len i len i r i c → b { ^ ( __gk_dims_fit len r c ) }
+
+@ __gk_dims_fit i len i r i c → b {
+    ? | < r 0 < c 0 { ^ F } {}
+    ? | == r 0 == c 0 { ^ T } {}
+    ? > r / len c { ^ F } {}
+    ^ <= * r c len
 }
 
 // ── Reductions (parallel partials + host combine) ─────────────────────
@@ -165,7 +186,7 @@ $ `gpukit.nu`
 }
 
 // Sum of `x`. None on a device error.
-@ gk_reduce_sum_f GpuKit kit ( Vec f ) x → ?f {
+unsafe @ gk_reduce_sum_f GpuKit kit ( Vec f ) x → ?f {
     : i n ( vec_len [f] x )
     ? <= n 0 { ^ @ ?f { T 0.0 } } {}
     : i threads ( _gk_partial_threads n )
@@ -190,9 +211,11 @@ $ `gpukit.nu`
     ? ok { ^ @ ?f { T acc } } { ^ @ ?f { F } }
 }
 
-// Dot product a·b (equal lengths assumed). None on a device error.
-@ gk_dot_f GpuKit kit ( Vec f ) a ( Vec f ) b → ?f {
+// Dot product a·b over a's length. None on a device error, or when b is
+// shorter than a.
+unsafe @ gk_dot_f GpuKit kit ( Vec f ) a ( Vec f ) b → ?f {
     : i n ( vec_len [f] a )
+    ? < ( vec_len [f] b ) n { ^ @ ?f { F } } {}
     ? <= n 0 { ^ @ ?f { T 0.0 } } {}
     : i threads ( _gk_partial_threads n )
     : ( Vec f ) partial ( _gk_zeros threads )

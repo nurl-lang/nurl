@@ -416,7 +416,16 @@ $ `stdlib/ext/http_cli.nu`
 // every change that matters — an edit to runtime_core.c silently reused the
 // object compiled before it, and the module kept the old runtime until
 // something happened to touch the aggregator itself.
-unsafe @ wb_tu_text s dir s name ( Vec String ) seen String out → v {
+// Offset of the first byte `b` in str at or after `from`, counted from
+// `from`; -1 when there is none.
+@ __wb_find_byte String str i from i b → i {
+    : i n ( string_len str )
+    : ~ i k from
+    ~ < k n { ? == ( string_get str k ) b { ^ - k from } {} = k + k 1 }
+    ^ -1
+}
+
+@ wb_tu_text s dir s name ( Vec String ) seen String out → v {
     : i ns ( vec_len [String] seen )
     : ~ i sk 0
     ~ < sk ns {
@@ -433,14 +442,13 @@ unsafe @ wb_tu_text s dir s name ( Vec String ) seen String out → v {
             : i slen ( string_len src )
             : ~ i pos 0
             ~ < pos slen {
-                : s tailp # s + # i ( string_data src ) pos
                 // The directive may be indented and spaced out — runtime.c
                 // guards one include inside an `#if`, as `#  include "…"`.
                 // Matching the literal `#include "` missed it, so that file
                 // stayed out of the cache key and its object went stale the
                 // moment only it changed: a build that linked yesterday's
                 // runtime and failed on a symbol added today.
-                : i rel ( nurl_str_find tailp `#` )
+                : i rel ( __wb_find_byte src pos 35 )  // '#'
                 ? < rel 0 { = pos slen } {
                     : ~ i k + + pos rel 1
                     ~ & < k slen | == ( string_get src k ) 32 == ( string_get src k ) 9 { = k + k 1 }
@@ -450,8 +458,8 @@ unsafe @ wb_tu_text s dir s name ( Vec String ) seen String out → v {
                         ~ & < k slen | == ( string_get src k ) 32 == ( string_get src k ) 9 { = k + k 1 }
                         ? & < k slen == ( string_get src k ) 34 {
                             : i st + k 1
-                            : s namep # s + # i ( string_data src ) st
-                            : i q ( nurl_str_find namep `"` )
+                            : i q ( __wb_find_byte src st 34 )  // '"'
+
                             ? >= q 0 {
                                 : String inc ( string_substr src st q )
                                 ( wb_tu_text dir ( string_data inc ) seen out )

@@ -21,7 +21,7 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/dist/ring.nu`
-$ `stdlib/std/arc.nu`
+$ `stdlib/std/thread.nu`
 
 @ census_hello_t → i { ^ 3 }
 
@@ -66,25 +66,30 @@ $ `stdlib/std/arc.nu`
 
 : RosterImpl { ( Vec Member ) members }
 
-// A Roster is a handle on its member list in an Arc (stdlib/std/arc.nu):
-// every copy is the same roster, and the last owner releases it.
-: Roster { ( Arc RosterImpl ) a }
+// A Roster is a handle on its member list in a Locked (stdlib/std/thread.nu):
+// every copy is the same roster, the last owner releases it, and an
+// operation checks the list out (locked_take) for its duration.
+: Roster { ( Locked RosterImpl ) st }
 
-@ Roster_share Roster h → Roster { ^ @ Roster { ( arc_clone [RosterImpl] . h a ) } }
+@ Roster_share Roster h → Roster { ^ @ Roster { ( Locked_share [RosterImpl] . h st ) } }
 
 @ Roster_drop sink Roster h → v {}
 
-unsafe @ __Roster_ptr Roster h → *RosterImpl { ^ ( arc_ptr [RosterImpl] . h a ) }
-
 @ roster_new → Roster {
-    ^ @ Roster { ( arc_new [RosterImpl] @ RosterImpl { ( vec_new [Member] ) } ) }
+    ^ @ Roster { ( locked_new [RosterImpl] @ RosterImpl { ( vec_new [Member] ) } ) }
 }
 
 // Let go of `r` now rather than at the end of its owner's scope (optional).
 @ roster_free sink Roster r → v {}
 
-unsafe @ roster_has Roster r__h ( Vec u ) pubkey → b {
-    : *RosterImpl r ( __Roster_ptr r__h )
+@ roster_has Roster r__h ( Vec u ) pubkey → b {
+    : RosterImpl r ( locked_take [RosterImpl] . r__h st )
+    : b found ( __roster_has r pubkey )
+    ( locked_restore [RosterImpl] . r__h st r )
+    ^ found
+}
+
+@ __roster_has RosterImpl r ( Vec u ) pubkey → b {
     : i n ( vec_len [Member] . r members )
     : ~ b found F : ~ i k 0
     ~ & ! found < k n {
@@ -94,18 +99,23 @@ unsafe @ roster_has Roster r__h ( Vec u ) pubkey → b {
     ^ found
 }
 
-unsafe @ roster_count Roster r__h → i {
-    : *RosterImpl r ( __Roster_ptr r__h )
-    ^ ( vec_len [Member] . r members )
+@ roster_count Roster r__h → i {
+    : RosterImpl r ( locked_take [RosterImpl] . r__h st )
+    : i n ( vec_len [Member] . r members )
+    ( locked_restore [RosterImpl] . r__h st r )
+    ^ n
 }
 
 // Fold a worker into the roster + ring, once. Returns T if newly added.
-unsafe @ roster_add Roster r__h Ring ring ( Vec u ) pubkey i id i vnodes → b {
-    ? ( roster_has r__h pubkey ) { ^ F } {}
-    : *RosterImpl r ( __Roster_ptr r__h )
-    : ( Vec u ) cp ( vec_with_cap [u] ( vec_len [u] pubkey ) )
-    ( vec_extend [u] cp pubkey )
-    ( vec_push [Member] . r members @ Member { cp id } )
-    ( ring_add_member ring pubkey vnodes )
-    ^ T
+@ roster_add Roster r__h Ring ring ( Vec u ) pubkey i id i vnodes → b {
+    : ~ RosterImpl r ( locked_take [RosterImpl] . r__h st )
+    : b added ! ( __roster_has r pubkey )
+    ? added {
+        : ( Vec u ) cp ( vec_with_cap [u] ( vec_len [u] pubkey ) )
+        ( vec_extend [u] cp pubkey )
+        ( vec_push [Member] . r members @ Member { cp id } )
+    } {}
+    ( locked_restore [RosterImpl] . r__h st r )
+    ? added { ( ring_add_member ring pubkey vnodes ) } {}
+    ^ added
 }

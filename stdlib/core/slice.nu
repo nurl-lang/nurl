@@ -160,6 +160,17 @@ $ `stdlib/core/vec.nu`
     ^ @ ( Slice A ) { . s data n }
 }
 
+// The `n` elements from `from`, panicking when the slice does not hold
+// them — slice_prefix at an offset. A row of a row-major matrix taken this
+// way is checked once, and a loop to `n` over it needs no check per
+// element: the view's length is the loop's bound.
+@ slice_window [A] ( Slice A ) s i from i n → ( Slice A ) {
+    : i len . s len
+    ? | >= # u64 from # u64 + len 1 >= # u64 n # u64 + - len from 1 { ( __slice_index_panic + from n len ) } {}
+    : *A base . s data
+    ^ @ ( Slice A ) { # *A + # i base * from * Z A 1 n }
+}
+
 // The byte at `idx` (0..255), or 0 outside [0, len): the read a parser
 // makes one or two bytes past its cursor, with no Option to unwrap.
 inline @ slice_byte ( Slice u ) s i idx → i {

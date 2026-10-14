@@ -606,7 +606,16 @@ A panic is not outside the model: what a panic abandons is reclaimed
   pointer and length in registers, so the bounds checks leave the loop
   and it vectorises exactly as raw pointer code does, where `vec_at` /
   `vec_put` re-read both from each Vec's control block past every store.
-  `vec_data` + `unsafe` is not faster than either.
+  A matrix row, or any run a loop walks to its length, is a
+  `slice_window` (`slice_prefix` from 0): it is checked once, and the
+  loop over it needs no check per element. Several windows of one `Vec`
+  may be read and written together when its elements own nothing.
+  `vec_data` + `unsafe` is not faster than either — `mlp`'s training loop,
+  rewritten over windows, runs 26% faster than its raw-pointer form.
+- **Put a contract where it is kept.** A function that only its caller
+  can make sound (an address it is handed, a size it trusts, kernel code
+  it runs) is `raw @` (spec §3.3e): the caller that allocated, checked or
+  wrote it is the `unsafe` one, and the code above that stays safe.
 - **Share mutable state through a handle.** Between threads, send it
   through a `Channel` or keep it in a `Locked` (§6.5); an `Arc` shares a
   value nobody changes. Within a thread, to share a closure beyond the
@@ -919,10 +928,28 @@ and the owning `SymTab` around it could be built from a made-up number
 `unsafe` only; `SymTab` is sealed (only `symtab_new` makes one), moves
 rather than copies, and is `% NotSync`.
 
-The unikernel HAL was the last of the kind: `mmio_write32` and the
+The unikernel HAL was another of the kind: `mmio_write32` and the
 `virtio_*` / `virtq_*` helpers take a physical address as an `i`, so safe
 code wrote to a made-up address (h255). They are raw now; a driver's
-functions that reach a device register are `unsafe`.
+functions that reach a device register are `unsafe`. And the file layer:
+`file_from_raw` took any string as a C stream and closed it with its
+`File`, and `file_raw` handed a `File`'s `FILE*` out as text (h256). Both
+are raw; `file_is_open` answers what a caller used the stream for.
+
+Packages had the same shape where the language could not say it: a
+function whose soundness rests on its caller — gpukit's `gk_run` and
+`gk_run_dev` compile and launch kernel source over device addresses
+passed as integers, `gk_buf_wrap` takes any integer as device memory —
+could only be marked `unsafe`, which promises safety to every caller, so
+safe code reached them with a made-up address or a kernel of its own.
+Grammar v2.9's `raw` (spec §3.3e) puts that promise on the caller: these
+are `raw @`, `GkBuf` / `GkMemImpl` / onnx's `RTensor` are `raw :` structs,
+and the operations above them check what the kernels index (sizes
+through overflow-checked products, a view inside its buffer, an
+expression a kernel splices in limited to `x`, numbers and math
+functions) before they launch. onnx's tensors also carry the engine and
+run they came from: a tensor of an earlier run, whose device memory
+rt_reset released, is refused rather than read.
 
 The rules that carry it:
 

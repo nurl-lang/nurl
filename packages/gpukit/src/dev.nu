@@ -40,7 +40,7 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
 // into it — holds the block, and its LAST owner hands it back to the
 // kit's pool (gpukit.nu): nothing is freed by hand. gk_dbuf_free is an
 // optional early release of one owner.
-: GkBuf {
+raw : GkBuf {
     i dptr
     i n
     i dtype
@@ -49,7 +49,7 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
 
 // The owner of one pooled block: its device pointer and the kit whose
 // pool it came from (held, so the kit — and its device — outlive it).
-: GkMemImpl { i dptr GpuKit kit }
+raw : GkMemImpl { i dptr GpuKit kit }
 
 % Drop GkMemImpl { unsafe @ drop GkMemImpl x → v { ( _gk_pool_give ( _GpuKit_ptr . x kit ) . x dptr ) } }
 
@@ -69,27 +69,50 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
     }
 }
 
+// A GkBuf is `raw`: its `dptr` is device memory holding `n` elements of
+// `dtype` for as long as the GkBuf lives, and every kernel launched over it
+// relies on that. Only this file's functions (and `unsafe` code) build one.
+
+// Products of sizes as a kernel will form them: -1 when a factor is
+// negative or the product overflows, which no buffer length equals.
+@ _gk_p2 i a i b → i {
+    ? | < a 0 < b 0 { ^ -1 } {}
+    ? | == a 0 == b 0 { ^ 0 } {}
+    ? > a / 9223372036854775807 b { ^ -1 } {}
+    ^ * a b
+}
+
+@ _gk_p3 i a i b i c → i { ^ ( _gk_p2 ( _gk_p2 a b ) c ) }
+
+@ _gk_p4 i a i b i c i d → i { ^ ( _gk_p2 ( _gk_p3 a b c ) d ) }
+
 // A buffer that is not there: what a failed allocation returns, and the
 // placeholder for an absent operand (a missing bias, mask, …).
-@ gk_buf_none i dtype → GkBuf { ^ @ GkBuf { 0 0 dtype ( __gk_nomem ) } }
+unsafe @ gk_buf_none i dtype → GkBuf { ^ @ GkBuf { 0 0 dtype ( __gk_nomem ) } }
 
-// `n` elements of `b` starting at element `off`, same dtype. The view
-// holds `b`'s block: it stays valid however long the view lives.
-@ gk_buf_view GkBuf b i off i n → GkBuf {
+// `n` elements of `b` starting at element `off`, same dtype — none when
+// [off, off + n) is not inside b. The view holds `b`'s block: it stays
+// valid however long the view lives.
+unsafe @ gk_buf_view GkBuf b i off i n → GkBuf {
+    ? | | < off 0 < n 0 > n - . b n off { ^ ( gk_buf_none . b dtype ) } {}
     ^ @ GkBuf { + . b dptr * off ( __gk_esz . b dtype ) n . b dtype ( __gk_mem_share . b mem ) }
 }
 
 // `n` elements of type `dtype` at BYTE offset `boff` into `b` — a view
 // that reinterprets (an f32 block read as i64 indices, say). Holds `b`'s
-// block like gk_buf_view.
-@ gk_buf_view_as GkBuf b i boff i n i dtype → GkBuf {
+// block like gk_buf_view; none when the bytes are not inside b.
+unsafe @ gk_buf_view_as GkBuf b i boff i n i dtype → GkBuf {
+    : i have ( _gk_p2 . b n ( __gk_esz . b dtype ) )
+    : i want ( _gk_p2 n ( __gk_esz dtype ) )
+    ? | | | < boff 0 < want 0 < have 0 > want - have boff { ^ ( gk_buf_none dtype ) } {}
     ^ @ GkBuf { + . b dptr boff n dtype ( __gk_mem_share . b mem ) }
 }
 
 // A buffer over device memory something else owns (another package's
 // allocation, a raw pointer out of a C library). It owns nothing: the
-// caller keeps the memory alive for as long as the GkBuf is used.
-@ gk_buf_wrap i dptr i n i dtype → GkBuf { ^ @ GkBuf { dptr n dtype ( __gk_nomem ) } }
+// caller vouches (`raw`) that `dptr` holds `n` elements of `dtype` and
+// stays alive for as long as the GkBuf is used.
+raw @ gk_buf_wrap i dptr i n i dtype → GkBuf { ^ @ GkBuf { dptr n dtype ( __gk_nomem ) } }
 
 @ __gk_esz i dtype → i { ? == dtype GK_F32 { ^ 4 } {} ^ 8 }
 
@@ -401,7 +424,7 @@ unsafe @ gk_prof_report GpuKit kit__h → v {
     }
 }
 
-unsafe @ gk_run_dev GpuKit kit__h s src s name i grid i block ( Vec i ) args → b {
+raw @ gk_run_dev GpuKit kit__h s src s name i grid i block ( Vec i ) args → b {
     : *GpuKitImpl kit ( _GpuKit_ptr kit__h )
     ? . kit ok {} { ^ F }
     : i slot ( _gk_kernel_slot kit src name )
@@ -433,7 +456,10 @@ unsafe @ gk_run_dev GpuKit kit__h s src s name i grid i block ( Vec i ) args →
     ^ s
 }
 
-@ gkd_ew GpuKit kit s opname s op GkBuf o GkBuf a GkBuf b → b {
+// `op` is one of + - * / and `opname` an identifier (gk_op_ok,
+// gk_name_ok); F otherwise.
+unsafe @ gkd_ew GpuKit kit s opname s op GkBuf o GkBuf a GkBuf b → b {
+    ? & ( gk_name_ok opname ) ( gk_op_ok op ) {} { ^ F }
     ? & & ( gk_buf_ok o ) ( gk_buf_ok a ) ( gk_buf_ok b ) {} { ^ F }
     ? & == . o dtype . a dtype == . a dtype . b dtype {} { ^ F }
     : i n . o n
@@ -514,7 +540,8 @@ unsafe @ gk_run_dev GpuKit kit__h s src s name i grid i block ( Vec i ) args →
 
 // out over `odims`; a and b read through their stride tables (entries ≥ 0,
 // 0 = broadcast). Float dtypes only.
-@ gkd_ew_bc GpuKit kit s opname s op GkBuf o GkBuf a GkBuf b ( Vec i ) odims ( Vec i ) astr ( Vec i ) bstr → b {
+unsafe @ gkd_ew_bc GpuKit kit s opname s op GkBuf o GkBuf a GkBuf b ( Vec i ) odims ( Vec i ) astr ( Vec i ) bstr → b {
+    ? & ( gk_name_ok opname ) ( gk_op_ok op ) {} { ^ F }
     ? & & ( gk_buf_ok o ) ( gk_buf_ok a ) ( gk_buf_ok b ) {} { ^ F }
     ? & == . o dtype . a dtype == . a dtype . b dtype {} { ^ F }
     ? != . o dtype GK_I64 {} { ^ F }
@@ -569,7 +596,9 @@ unsafe @ gk_run_dev GpuKit kit__h s src s name i grid i block ( Vec i ) args →
 // `expr` is C over the local `T x`; use the dtype-suffixed math calls via
 // the helpers below (they pick expf vs exp, …).
 
-@ gkd_map GpuKit kit s mapname s expr GkBuf o GkBuf a → b {
+// `expr` is checked like gk_map_f's (gk_expr_ok); F otherwise.
+unsafe @ gkd_map GpuKit kit s mapname s expr GkBuf o GkBuf a → b {
+    ? & ( gk_name_ok mapname ) ( gk_expr_ok expr ) {} { ^ F }
     ? & ( gk_buf_ok o ) ( gk_buf_ok a ) {} { ^ F }
     ? & == . o dtype . a dtype == . o n . a n {} { ^ F }
     : i n . o n
@@ -870,10 +899,10 @@ unsafe @ gk_run_dev GpuKit kit__h s src s name i grid i block ( Vec i ) args →
     ^ s
 }
 
-@ gkd_matmul GpuKit kit GkBuf c GkBuf a GkBuf b i m i k i n → b {
+unsafe @ gkd_matmul GpuKit kit GkBuf c GkBuf a GkBuf b i m i k i n → b {
     ? & & ( gk_buf_ok c ) ( gk_buf_ok a ) ( gk_buf_ok b ) {} { ^ F }
     ? & == . c dtype . a dtype == . a dtype . b dtype {} { ^ F }
-    ? & & == . a n * m k == . b n * k n == . c n * m n {} { ^ F }
+    ? & & == . a n ( _gk_p2 m k ) == . b n ( _gk_p2 k n ) == . c n ( _gk_p2 m n ) {} { ^ F }
     : b on_cpu ( nurl_str_eq ( gk_backend kit ) `cpu` )
     : s tn ( _gk_tname . c dtype )
     : String kname ( string_from ( _gk_pfx . c dtype ) )
@@ -914,14 +943,14 @@ unsafe @ gk_run_dev GpuKit kit__h s src s name i grid i block ( Vec i ) args →
 // 0 broadcasts its single matrix across the whole batch. Accumulation is
 // sequential over K in the element type, exactly like gkd_matmul.
 
-@ gkd_bmm GpuKit kit GkBuf y GkBuf a GkBuf b i batch i m i kk i n i abatch i bbatch → b {
+unsafe @ gkd_bmm GpuKit kit GkBuf y GkBuf a GkBuf b i batch i m i kk i n i abatch i bbatch → b {
     ? & & ( gk_buf_ok y ) ( gk_buf_ok a ) ( gk_buf_ok b ) {} { ^ F }
     ? & == . y dtype . a dtype == . a dtype . b dtype {} { ^ F }
     ? != . y dtype GK_I64 {} { ^ F }
     ? & & & > batch 0 > m 0 > kk 0 > n 0 {} { ^ F }
-    : i asz ? != abatch 0 { * * batch m kk } { * m kk }
-    : i bsz ? != bbatch 0 { * * batch kk n } { * kk n }
-    ? & & == . a n asz == . b n bsz == . y n * * batch m n {} { ^ F }
+    : i asz ? != abatch 0 { ( _gk_p3 batch m kk ) } { ( _gk_p2 m kk ) }
+    : i bsz ? != bbatch 0 { ( _gk_p3 batch kk n ) } { ( _gk_p2 kk n ) }
+    ? & & == . a n asz == . b n bsz == . y n ( _gk_p3 batch m n ) {} { ^ F }
     : i astep ? != abatch 0 { * m kk } { 0 }
     : i bstep ? != bbatch 0 { * kk n } { 0 }
     : b on_cpu ( nurl_str_eq ( gk_backend kit ) `cpu` )
@@ -1010,11 +1039,11 @@ unsafe @ gk_run_dev GpuKit kit__h s src s name i grid i block ( Vec i ) args →
 // Negative indices wrap once (ONNX semantics). Out-of-range indices read
 // 0 / skip the write — never out of bounds. Any element type.
 
-@ gkd_gather GpuKit kit GkBuf y GkBuf d GkBuf ix i outer i axin i inner i nidx → b {
+unsafe @ gkd_gather GpuKit kit GkBuf y GkBuf d GkBuf ix i outer i axin i inner i nidx → b {
     ? & & & ( gk_buf_ok y ) ( gk_buf_ok d ) ( gk_buf_ok ix ) == . ix dtype GK_I64 {} { ^ F }
     ? == . y dtype . d dtype {} { ^ F }
     ? & & & > outer 0 > axin 0 > inner 0 > nidx 0 {} { ^ F }
-    ? & & == . d n * * outer axin inner == . y n * * outer nidx inner >= . ix n nidx {} { ^ F }
+    ? & & == . d n ( _gk_p3 outer axin inner ) == . y n ( _gk_p3 outer nidx inner ) >= . ix n nidx {} { ^ F }
     : s tn ( _gk_tname . y dtype )
     : String kname ( string_from ( _gk_pfx . y dtype ) )
     ( string_push_str kname `gather` )
@@ -1042,12 +1071,12 @@ unsafe @ gk_run_dev GpuKit kit__h s src s name i grid i block ( Vec i ) args →
 // y = d with y[outer, ix[g], inner] = u[outer, g, inner]. When several
 // indices collide the surviving write is unspecified (ONNX leaves this
 // undefined too). `y` may be `d` itself for in-place update.
-@ gkd_scatter GpuKit kit GkBuf y GkBuf d GkBuf ix GkBuf u i outer i ax i inner i nidx → b {
+unsafe @ gkd_scatter GpuKit kit GkBuf y GkBuf d GkBuf ix GkBuf u i outer i ax i inner i nidx → b {
     ? & & & ( gk_buf_ok y ) ( gk_buf_ok d ) ( gk_buf_ok ix ) ( gk_buf_ok u ) {} { ^ F }
     ? & & == . y dtype . d dtype == . d dtype . u dtype == . ix dtype GK_I64 {} { ^ F }
     ? & & & > outer 0 > ax 0 > inner 0 > nidx 0 {} { ^ F }
-    ? & == . y n . d n == . y n * * outer ax inner {} { ^ F }
-    ? & == . u n * * outer nidx inner >= . ix n nidx {} { ^ F }
+    ? & == . y n . d n == . y n ( _gk_p3 outer ax inner ) {} { ^ F }
+    ? & == . u n ( _gk_p3 outer nidx inner ) >= . ix n nidx {} { ^ F }
     ? != . y dptr . d dptr {
         ? == ( gpu_dtod ( gpu_buffer_view . y dptr * . y n ( __gk_esz . y dtype ) ) . d dptr ) 0 {} { ^ F }
     } {}
@@ -1077,10 +1106,11 @@ unsafe @ gk_run_dev GpuKit kit__h s src s name i grid i block ( Vec i ) args →
 
 // ── Row softmax: numerically stable, one thread per row ───────────────
 
-@ gkd_softmax_rows GpuKit kit GkBuf o GkBuf a i rows i cols → b {
+unsafe @ gkd_softmax_rows GpuKit kit GkBuf o GkBuf a i rows i cols → b {
     ? & ( gk_buf_ok o ) ( gk_buf_ok a ) {} { ^ F }
-    ? & == . o dtype . a dtype == . o n * rows cols {} { ^ F }
-    ? == . a n * rows cols {} { ^ F }
+    ? & == . o dtype . a dtype == . o n ( _gk_p2 rows cols ) {} { ^ F }
+    ? > cols 0 {} { ^ F }  // each row reads its x[0]
+    ? == . a n ( _gk_p2 rows cols ) {} { ^ F }
     : s tn ( _gk_tname . o dtype )
     : s ex ? == . o dtype GK_F32 { `expf` } { `exp` }
     : String kname ( string_from ( _gk_pfx . o dtype ) )
@@ -1110,7 +1140,7 @@ unsafe @ gk_run_dev GpuKit kit__h s src s name i grid i block ( Vec i ) args →
 // Returns the sum as f64 regardless of the buffer dtype (partials
 // accumulate in the buffer's element type).
 
-@ gkd_sum GpuKit kit GkBuf a → ?f {
+unsafe @ gkd_sum GpuKit kit GkBuf a → ?f {
     ? ( gk_buf_ok a ) {} { ^ @ ?f { F } }
     : i n . a n
     ? <= n 0 { ^ @ ?f { T 0.0 } } {}

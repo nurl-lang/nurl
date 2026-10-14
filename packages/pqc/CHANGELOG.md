@@ -7,12 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.2.7] — 2026-10-14
 
-Requires NURL 0.73.0 (`slice_at`, `slice_put`, `rc_take`, `locked_take`).
+Requires NURL 0.73.0.
 
 ### Changed
 
-- Loops that read or wrote through `vec_data` pointers index slices (`slice_at` / `slice_put`, as fast as the pointers), and functions with nothing raw in them are no longer marked `unsafe`.
-- 1 fewer functions are `unsafe` than in 0.2.6 (1 left).
+- `pqc probe` holds its connection as a `?TlsConn` until the handshake succeeds, instead of a `TlsConn` made up from a null address. No function is `unsafe` any more.
+- 2 fewer functions are `unsafe` than in 0.2.6 (0 left).
 
 ## [0.2.6] — 2026-10-12
 

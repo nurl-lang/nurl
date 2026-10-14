@@ -548,7 +548,7 @@ unsafe @ gk_compile GpuKit kit__h s src s name → b {
 // Compile-cached, marshal, launch, sync, download. `call` lists the
 // kernel's arguments in declaration order (buffers and scalars interleaved
 // exactly as the kernel signature expects). Returns F on any device error.
-unsafe @ gk_run GpuKit kit__h s src s name i grid i block ( Vec GkArg ) call → b {
+raw @ gk_run GpuKit kit__h s src s name i grid i block ( Vec GkArg ) call → b {
     : *GpuKitImpl kit ( _GpuKit_ptr kit__h )
     ? . kit ok {} { ^ F }
     : i slot ( _gk_kernel_slot kit src name )
@@ -612,4 +612,88 @@ unsafe @ gk_run GpuKit kit__h s src s name i grid i block ( Vec GkArg ) call →
 
     // the device buffers go with `bufs`
     ^ ok
+}
+
+// ── Code a kernel splices in ──────────────────────────────────────────
+// gkd_map / gk_map_f put an expression into the kernel's source, gkd_ew /
+// gkd_ew_bc an operator, and every kernel a name. That text is code the
+// kernel runs, so it is checked rather than trusted: a name is a C
+// identifier; an operator is one of + - * /; an expression is C over `x`
+// alone — numbers, the math functions listed here, arithmetic,
+// comparison and `?:`. No other name may appear (the kernel's buffers are
+// names), and no `[`, `&`, `;`, brace, quote or `#`, so an expression can
+// neither reach memory nor end the statement it sits in.
+
+: s GK_EXPR_FNS ` x exp expf log logf sqrt sqrtf rsqrtf tanh tanhf erf erff fabs fabsf fmax fmaxf fmin fminf pow powf sin sinf cos cosf floor floorf ceil ceilf `
+
+@ _gk_ident_ch i c → b {
+    ? & >= c 97 <= c 122 { ^ T } {}
+    ? & >= c 65 <= c 90 { ^ T } {}
+    ? & >= c 48 <= c 57 { ^ T } {}
+    ^ == c 95
+}
+
+// A kernel or operation name: [A-Za-z0-9_]+.
+@ gk_name_ok s name → b {
+    : ( Slice u ) t ( slice_of_str name )
+    : i n ( slice_len [u] t )
+    ? == n 0 { ^ F } {}
+    : ~ i k 0
+    ~ < k n { ? ( _gk_ident_ch # i ( slice_at [u] t k ) ) {} { ^ F } = k + k 1 }
+    ^ T
+}
+
+@ gk_op_ok s op → b {
+    ^ | | | != 0 ( nurl_str_eq op `+` ) != 0 ( nurl_str_eq op `-` ) != 0 ( nurl_str_eq op `*` ) != 0 ( nurl_str_eq op `/` )
+}
+
+@ gk_expr_ok s e → b {
+    : ( Slice u ) t ( slice_of_str e )
+    : i n ( slice_len [u] t )
+    ? == n 0 { ^ F } {}
+    : ~ i k 0
+    : ~ i depth 0
+    ~ < k n {
+        : i c # i ( slice_at [u] t k )
+        ? | | & >= c 97 <= c 122 & >= c 65 <= c 90 == c 95 {
+            // A name: only x and the listed functions.
+            : ~ i j k
+            ~ & < j n ( _gk_ident_ch # i ( slice_at [u] t j ) ) { = j + j 1 }
+            : String w ( string_with_cap + - j k 2 )
+            ( string_push_char w 32 )
+            : ~ i q k
+            ~ < q j { ( string_push_char w # i ( slice_at [u] t q ) ) = q + q 1 }
+            ( string_push_char w 32 )
+            ? < ( nurl_str_find GK_EXPR_FNS ( string_data w ) ) 0 { ^ F } {}
+            = k j
+        } {
+            ? | & >= c 48 <= c 57 == c 46 {
+                // A number: digits and '.', an exponent with its sign, an f suffix.
+                : ~ i j + k 1
+                : ~ b go T
+                ~ & go < j n {
+                    : i d # i ( slice_at [u] t j )
+                    ? | & >= d 48 <= d 57 == d 46 { = j + j 1 } {
+                        ? | == d 101 == d 69 {
+                            = j + j 1
+                            ? < j n {
+                                : i sg # i ( slice_at [u] t j )
+                                ? | == sg 43 == sg 45 { = j + j 1 } {}
+                            } {}
+                        } { ? | == d 102 == d 70 { = j + j 1 = go F } { = go F } }
+                    }
+                }
+                = k j
+            } {
+                ? == c 40 { = depth + depth 1 } {
+                    ? == c 41 { = depth - depth 1 ? < depth 0 { ^ F } {} } {
+                        // space + - * / ? : < > = ! ,
+                        ? | | | | | | | | | | | == c 32 == c 43 == c 45 == c 42 == c 47 == c 63 == c 58 == c 60 == c 62 == c 61 == c 33 == c 44 {} { ^ F }
+                    }
+                }
+                = k + k 1
+            }
+        }
+    }
+    ^ == depth 0
 }

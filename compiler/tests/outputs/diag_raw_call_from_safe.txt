@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_raw_call_from_safe.nu:19:19: error: 'sum_first' is declared 'raw': it trusts its caller for what its comment says it requires (a pointer that is live, a size that fits, code that is sound), which the compiler cannot check — so only an 'unsafe' function, vouching for that, may call it. Use the safe API its package offers around it, or, if this function genuinely needs it and you vouch for the call, declare it 'unsafe @ name …'.
+    ^ ( sum_first v 1000 )
+                  ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

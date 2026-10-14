@@ -2,6 +2,15 @@
 
 All notable changes to this package are documented here.
 
+## [0.3.6] — 2026-10-14
+
+Requires NURL 0.73.0.
+
+### Changed
+
+- The include scan behind the runtime object's cache key reads the source by index instead of through pointers into it; the key is unchanged. No function is `unsafe` any more.
+- 1 fewer functions are `unsafe` than in 0.3.5 (0 left).
+
 ## [0.3.5] — 2026-10-09
 
 ### Fixed

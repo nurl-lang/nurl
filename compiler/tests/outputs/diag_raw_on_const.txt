@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_raw_on_const.nu:3:1: error: 'raw' seals a plain struct ('raw : Name { … }') — not a const, an enum or a generic struct
+raw : i LIMIT 5
+^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

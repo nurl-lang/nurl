@@ -943,7 +943,7 @@ unsafe @ _gp_node * GProgImpl pg i id → GpNode {
 // slower, never wrong (a mid-training step can leave too little free VRAM
 // for the staging buffer).
 
-@ __gp_dl_f32 GpuKit kit GkBuf b ( Vec f ) dst → b {
+unsafe @ __gp_dl_f32 GpuKit kit GkBuf b ( Vec f ) dst → b {
     : i n . b n
     : GkBuf stg ( gk_dbuf_new kit n GK_F64 )
     ? ( gk_buf_ok stg ) {} { ^ ( gk_dbuf_download kit b dst ) }
@@ -960,7 +960,7 @@ unsafe @ _gp_node * GProgImpl pg i id → GpNode {
 
 // The cast kernel is __gp_upload_f32's gp_f2f — same source, same cache
 // entry — but filling an EXISTING buffer instead of allocating one.
-@ __gp_ul_f32 GpuKit kit GkBuf b ( Vec f ) src → b {
+unsafe @ __gp_ul_f32 GpuKit kit GkBuf b ( Vec f ) src → b {
     : i n . b n
     : GkBuf stg ( gk_dbuf_new kit n GK_F64 )
     ? ( gk_buf_ok stg ) {} { ^ ( gk_dbuf_upload kit b src ) }

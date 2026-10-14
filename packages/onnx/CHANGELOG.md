@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.11.2] — 2026-10-14
+
+Requires NURL 0.73.0 (grammar v2.9 `raw`, `slice_window`, `file_is_open`).
+
+### Changed
+
+- `RTensor` is a `raw` struct and carries the engine and run it came from: `rt_download` and `dtensor_from_output` refuse a tensor of another engine or of an earlier run, whose device memory `rt_reset` (or the next run) released — they read it before. Needs gpukit 0.10.2.
+- 6 more functions are `unsafe`/`raw` than in 0.11.1 (83 now): where they launch kernels of their own, the trust is now written down.
+
 ## [0.11.1] — 2026-10-12
 
 Requires NURL 0.73.0, in which a field written through a raw pointer

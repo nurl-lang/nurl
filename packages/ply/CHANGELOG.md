@@ -2,12 +2,12 @@
 
 ## [0.3.5] — 2026-10-14
 
-Requires NURL 0.73.0 (`slice_at`, `slice_put`, `rc_take`, `locked_take`).
+Requires NURL 0.73.0 (grammar v2.9 `raw`, `slice_window`, `file_is_open`).
 
 ### Changed
 
-- Loops that read or wrote through `vec_data` pointers index slices (`slice_at` / `slice_put`, as fast as the pointers), and functions with nothing raw in them are no longer marked `unsafe`.
-- 2 fewer functions are `unsafe` than in 0.3.4 (10 left).
+- The writer keeps its state in a `Locked`, closes its file once (`file_is_open`, NURL 0.73.0) instead of replacing it with a made-up null `File`, and the viewer reads its page through `arc_get`. No function is `unsafe` any more.
+- 12 fewer functions are `unsafe` than in 0.3.4 (0 left).
 
 ## [0.3.4] — 2026-10-12
 

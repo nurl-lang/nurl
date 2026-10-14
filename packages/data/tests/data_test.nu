@@ -38,7 +38,7 @@ $ `src/data.nu`
 
 // Run a whole epoch, appending each emitted example's id (y[0]) to `ids`.
 // Also asserts x[0] == id (feature/label stay aligned per row).
-unsafe @ epoch_ids DataLoader dl ( Vec i ) ids * u okal → v {
+@ epoch_ids DataLoader dl ( Vec i ) ids ( Vec i ) okal → v {
     : ( Vec f ) bx ( vec_new [f] )
     : ( Vec f ) by ( vec_new [f] )
     : ~ i rows ( dl_next dl bx by )
@@ -47,7 +47,7 @@ unsafe @ epoch_ids DataLoader dl ( Vec i ) ids * u okal → v {
         ~ < k rows {
             : i id # i ( gf by k )
             ( vec_push [i] ids id )
-            ? == # i ( gf bx * k 2 ) id {} { ( nurl_poke okal 0 0 ) }
+            ? == # i ( gf bx * k 2 ) id {} { ( vec_put [i] okal 0 0 ) }
             = k + k 1
         }
         = rows ( dl_next dl bx by )
@@ -78,12 +78,11 @@ unsafe @ epoch_ids DataLoader dl ( Vec i ) ids * u okal → v {
     ^ T
 }
 
-unsafe @ main → i {
+@ main → i {
     : i N 10
     : DataSet ds ( mkds N )
-    : ( Vec u ) okal__b ( vec_zeroed [u] 8 )
-    : *u okal ( vec_data [u] okal__b )
-    ( nurl_poke okal 0 1 )
+    : ( Vec i ) okal ( vec_new [i] )
+    ( vec_push [i] okal 1 )
 
     // ── determinism + coverage (batch 3, no drop_last) ──
     : DataLoader dl ( dl_new ds 3 F 42 )
@@ -91,7 +90,7 @@ unsafe @ main → i {
     : ( Vec i ) e1 ( vec_new [i] )
     ( epoch_ids dl e1 okal )
     ( check ( sorted_covers e1 N ) `epoch covers every example exactly once` )
-    ( check == ( nurl_peek okal 0 ) 1 `features stay row-aligned with labels` )
+    ( check == ( vec_at [i] okal 0 ) 1 `features stay row-aligned with labels` )
     // reset with the SAME seed → identical order
     ( dl_reset dl 42 )
     : ( Vec i ) e2 ( vec_new [i] )
@@ -153,7 +152,7 @@ unsafe @ main → i {
             : DataLoader dlst ( dl_stream st 3 F 7 )
             : ( Vec i ) strm ( vec_new [i] )
             ( epoch_ids dlst strm okal )
-            ( check == ( nurl_peek okal 0 ) 1 `streamed rows stay feature/label-aligned` )
+            ( check == ( vec_at [i] okal 0 ) 1 `streamed rows stay feature/label-aligned` )
             ( check ( ids_eq mem strm ) `streamed batches == in-memory batches (same seed)` )
             ( check ( sorted_covers strm N ) `streamed epoch covers once` )
         }

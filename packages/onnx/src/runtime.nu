@@ -26,8 +26,13 @@ $ `deps/gpukit/src/devops.nu`
 $ `model.nu`
 $ `stdlib/std/arc.nu`
 
-// A device-resident tensor: name, CUdeviceptr (i64), shape, element count.
-: RTensor { String name i dptr ( Vec i ) shape i nelem }
+// A device-resident tensor: name, CUdeviceptr (i64), shape, element count,
+// and the engine and run it came from. `raw`: dptr is device memory only
+// while that run's buffers are — rt_reset (and the next run, which resets
+// first) releases them — so only this package builds one, and the readers
+// (rt_download, dtensor_from_output) refuse a tensor of another engine or
+// an earlier run.
+raw : RTensor { String name i dptr ( Vec i ) shape i nelem i eng i run }
 
 // The engine's state. `g` is the kit's device (another owner of it);
 // `owned` holds every device block a run allocated (rt_reset / the
@@ -47,6 +52,14 @@ $ `stdlib/std/arc.nu`
     String output1_name
     b ok
     ( Vec GpuBuffer ) owned
+    i run  // advanced by rt_reset: an RTensor of an earlier run is stale
+}
+
+// Whether `t` is a tensor of this engine's current run (its device memory
+// still held).
+unsafe @ __rt_current * EngineImpl e RTensor t → b {
+    ? <= . t dptr 0 { ^ F } {}  // none, or a host-int tensor (RT_HOSTI): no device memory
+    ^ & == . t eng # i e == . t run . e run
 }
 
 // An Engine is a handle on its state in an Arc (stdlib/std/arc.nu):
@@ -66,9 +79,9 @@ unsafe @ _rt_engine_ptr Engine h → *EngineImpl { ^ ( arc_ptr [EngineImpl] . h 
 // GkBuf views over an RTensor's device allocation, for the gkd_* kernels.
 // Everything on the value map is f32 except the raw token input and ArgMax
 // outputs, which the call sites view as i64 explicitly.
-@ __rt_fbuf RTensor t → GkBuf { ^ ( gk_buf_wrap . t dptr . t nelem GK_F32 ) }
+unsafe @ __rt_fbuf RTensor t → GkBuf { ^ ( gk_buf_wrap . t dptr . t nelem GK_F32 ) }
 
-@ __rt_ibuf RTensor t → GkBuf { ^ ( gk_buf_wrap . t dptr . t nelem GK_I64 ) }
+unsafe @ __rt_ibuf RTensor t → GkBuf { ^ ( gk_buf_wrap . t dptr . t nelem GK_I64 ) }
 
 @ __rt_op_fail s op → v {
     ( nurl_eprint `[onnx] kernel failed: ` )
@@ -142,7 +155,7 @@ unsafe @ __init_f32 * EngineImpl e s name i k → f {  // k-th value of a FLOAT 
     : GpuKit kit ( gk_open ordinal )
     : b ok ( gk_ok kit )
     ^ @ Engine { ( arc_new [EngineImpl] @ EngineImpl { ( gk_gpu kit ) kit ( vec_new [RTensor] )
-            0 ( string_new ) ( string_new ) ( string_new ) ok ( vec_new [GpuBuffer] ) } ) }
+            0 ( string_new ) ( string_new ) ( string_new ) ok ( vec_new [GpuBuffer] ) 0 } ) }
 }
 
 // Install the caller's graph for a run: its names are copied, its
@@ -171,6 +184,7 @@ unsafe @ rt_reset Engine e__h → v {
     : *EngineImpl e ( __Engine_ptr e__h )
     ( vec_clear [GpuBuffer] . e owned )
     ( vec_clear [RTensor] . e vals )
+    = . e run + . e run 1
 }
 
 unsafe @ rt_ok Engine e__h → b {
@@ -185,7 +199,7 @@ unsafe @ rt_name Engine e__h → s {
 
 // Register a device tensor under `name` with an explicit shape vector.
 unsafe @ rt_put * EngineImpl e s name i dptr sink ( Vec i ) shape → v {
-    ( vec_push [RTensor] . e vals @ RTensor { ( string_from name ) dptr shape ( __prod shape ) } )
+    ( vec_push [RTensor] . e vals @ RTensor { ( string_from name ) dptr shape ( __prod shape ) # i e . e run } )
 }
 
 @ __shape2 i a i b → ( Vec i ) { : ( Vec i ) v ( vec_new [i] ) ( vec_push [i] v a ) ( vec_push [i] v b ) ^ v }
@@ -206,7 +220,7 @@ unsafe @ rt_find * EngineImpl e s name → i {
 }
 
 unsafe @ rt_at * EngineImpl e i idx → RTensor {
-    ?? ( vec_get [RTensor] . e vals idx ) { T t → ^ t F _ → ^ @ RTensor { ( string_new ) 0 ( vec_new [i] ) 0 } }
+    ?? ( vec_get [RTensor] . e vals idx ) { T t → ^ t F _ → ^ @ RTensor { ( string_new ) 0 ( vec_new [i] ) 0 0 0 } }
 }
 // Input name of a node (k-th), as an `s`.
 unsafe @ __in * EngineImpl e ONode n i k → RTensor {
@@ -1221,7 +1235,7 @@ unsafe @ rt_run Engine e__h OGraph g * u input_host i in_rows i in_cols → RTen
 // Download a device tensor into a fresh host f32 buffer — a GpuHost,
 // released with its last owner (`gpu_host_ptr` / `gpu_host_get_f32` read it).
 unsafe @ rt_download Engine e__h RTensor t → GpuHost {
-    : i n . t nelem
+    : i n ? ( __rt_current ( __Engine_ptr e__h ) t ) . t nelem 0
     : GpuHost host ( gpu_host_alloc * n 4 )
     : i _rc ( gpu_download ( gpu_host_ptr host ) ( gpu_buffer_view . t dptr * n 4 ) )
     ^ host
@@ -1233,9 +1247,9 @@ unsafe @ rt_download Engine e__h RTensor t → GpuHost {
 unsafe @ rt_output1 Engine e__h → RTensor {
     : *EngineImpl e ( __Engine_ptr e__h )
     : s nm ( string_data . e output1_name )
-    ? == ( nurl_str_len nm ) 0 { ^ @ RTensor { ( string_new ) 0 ( vec_new [i] ) 0 } } {}
+    ? == ( nurl_str_len nm ) 0 { ^ @ RTensor { ( string_new ) 0 ( vec_new [i] ) 0 0 0 } } {}
     : i oi ( rt_find e nm )
-    ? < oi 0 { ^ @ RTensor { ( string_new ) 0 ( vec_new [i] ) 0 } } { ^ ( rt_at e oi ) }
+    ? < oi 0 { ^ @ RTensor { ( string_new ) 0 ( vec_new [i] ) 0 0 0 } } { ^ ( rt_at e oi ) }
 }
 
 // Let go of `e` now rather than at the end of its owner's scope. The
@@ -1267,9 +1281,9 @@ unsafe @ rt_output1 Engine e__h → RTensor {
 // a dummy address (nothing is dereferenced on a census kit). Returns the
 // number of calls the kit REJECTED — 0 on success; a rejection means a
 // wrapper's validation changed under this census and it must follow.
-@ __cz_f i n → GkBuf { ^ ( gk_buf_wrap 4096 n GK_F32 ) }
+unsafe @ __cz_f i n → GkBuf { ^ ( gk_buf_wrap 4096 n GK_F32 ) }
 
-@ __cz_i i n → GkBuf { ^ ( gk_buf_wrap 4096 n GK_I64 ) }
+unsafe @ __cz_i i n → GkBuf { ^ ( gk_buf_wrap 4096 n GK_I64 ) }
 
 @ __cz_ok b ok s what → i {
     ? ok { ^ 0 } {}

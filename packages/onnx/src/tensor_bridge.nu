@@ -32,7 +32,7 @@ $ `runtime.nu`
 unsafe @ rt_run_dtensor Engine e__h OGraph g DTensor d → RTensor {
     : *EngineImpl e ( _rt_engine_ptr e__h )
     ? & ( dtensor_ok d ) == ( dtensor_dtype d ) TE_F32 {} {
-        ^ @ RTensor { ( string_new ) 0 ( vec_new [i] ) 0 }
+        ^ @ RTensor { ( string_new ) 0 ( vec_new [i] ) 0 0 0 }
     }
     ( rt_reset e__h )
     ( _rt_set_graph e g )
@@ -44,9 +44,9 @@ unsafe @ rt_run_dtensor Engine e__h OGraph g DTensor d → RTensor {
 // Wrap a run's output as an OWNED device tensor (device-to-device copy —
 // see the ownership note above). The result lives independently of the
 // engine: rt_reset / the engine's last owner do not touch it.
-@ dtensor_from_output GpuKit kit Engine e RTensor t → DTensor {
+unsafe @ dtensor_from_output GpuKit kit Engine e RTensor t → DTensor {
     : i n . t nelem
-    ? & > n 0 != . t dptr 0 {} {
+    ? & > n 0 ( __rt_current ( _rt_engine_ptr e ) t ) {} {
         ^ @ DTensor { TE_F32 ( vec_new [i] ) ( gk_buf_none GK_F32 ) }
     }
     : GkBuf b ( gk_dbuf_new kit n GK_F32 )

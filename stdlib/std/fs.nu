@@ -913,6 +913,10 @@ $ `stdlib/core/rcbox.nu`
     ^ # s . ( shared_ptr [FileImpl] . f ctl ) fp
 }
 
+// Whether `f` still has its stream: F for a null File and after
+// file_close (on any copy).
+@ file_is_open File f → b { ^ != 0 # i ( file_raw f ) }
+
 // Take over an open FILE* (0 gives the null File): the File's last owner
 // closes it.
 @ file_from_raw s fp → File {

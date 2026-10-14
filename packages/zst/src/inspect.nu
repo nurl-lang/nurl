@@ -15,17 +15,24 @@
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
+$ `stdlib/core/slice.nu`
 $ `stdlib/std/zstd.nu`
 
 : i ZI_MAGIC 0xFD2FB528
 : i ZI_SKIP_LO 0x184D2A50
 : i ZI_SKIP_HI 0x184D2A5F
 
-unsafe @ __zi_u32 * u p i off → i {
-    ^ | | | # i . p off
-    << # i . p + off 1 8
-    << # i . p + off 2 16
-    << # i . p + off 3 24
+// A byte of the file, or 0 past its end: the inspector reports a
+// truncated file as malformed rather than reading beyond it.
+@ __zi_b ( Slice u ) p i k → i {
+    ?? ( slice_get [u] p k ) { T x → ^ # i x F _ → ^ 0 }
+}
+
+@ __zi_u32 ( Slice u ) p i off → i {
+    ^ | | | ( __zi_b p off )
+    << ( __zi_b p + off 1 ) 8
+    << ( __zi_b p + off 2 ) 16
+    << ( __zi_b p + off 3 ) 24
 }
 
 // Human sizes: a block report is unreadable in raw bytes.
@@ -73,64 +80,63 @@ unsafe @ __zi_u32 * u p i off → i {
 // Returns the number of header bytes, and reports through `slot`:
 //   slot 0 = block type, 1 = regenerated size, 2 = compressed size,
 //   slot 3 = stream count (0 for raw/RLE).
-unsafe @ __zi_literals * u p i off i avail ( Vec i ) slot → i {
+@ __zi_literals ( Slice u ) p i off i avail ( Vec i ) slot → i {
     ? <= avail 0 { ^ -1 } {}
-    : *i sp ( vec_data [i] slot )
-    : i b0 # i . p off
+    : i b0 ( __zi_b p off )
     : i btype & b0 3
     : i sfmt & >> b0 2 3
-    = . sp 0 btype
-    = . sp 3 0
+    ( vec_set [i] slot 0 btype )
+    ( vec_set [i] slot 3 0 )
     ? <= btype 1 {
         ? == sfmt 1 {
             ? < avail 2 { ^ -1 } {}
-            = . sp 1 >> | b0 << # i . p + off 1 8 4
-            = . sp 2 ? == btype 0 . sp 1 1
+            ( vec_set [i] slot 1 >> | b0 << ( __zi_b p + off 1 ) 8 4 )
+            ( vec_set [i] slot 2 ? == btype 0 ( vec_at [i] slot 1 ) 1 )
             ^ 2
         } {}
         ? == sfmt 3 {
             ? < avail 3 { ^ -1 } {}
-            : i v | | b0 << # i . p + off 1 8 << # i . p + off 2 16
-            = . sp 1 & >> v 4 0xFFFFF
-            = . sp 2 ? == btype 0 . sp 1 1
+            : i v | | b0 << ( __zi_b p + off 1 ) 8 << ( __zi_b p + off 2 ) 16
+            ( vec_set [i] slot 1 & >> v 4 0xFFFFF )
+            ( vec_set [i] slot 2 ? == btype 0 ( vec_at [i] slot 1 ) 1 )
             ^ 3
         } {}
-        = . sp 1 >> b0 3
-        = . sp 2 ? == btype 0 . sp 1 1
+        ( vec_set [i] slot 1 >> b0 3 )
+        ( vec_set [i] slot 2 ? == btype 0 ( vec_at [i] slot 1 ) 1 )
         ^ 1
     } {}
     ? == sfmt 0 {
         ? < avail 3 { ^ -1 } {}
-        : i v | | b0 << # i . p + off 1 8 << # i . p + off 2 16
-        = . sp 1 & >> v 4 1023
-        = . sp 2 & >> v 14 1023
-        = . sp 3 1
+        : i v | | b0 << ( __zi_b p + off 1 ) 8 << ( __zi_b p + off 2 ) 16
+        ( vec_set [i] slot 1 & >> v 4 1023 )
+        ( vec_set [i] slot 2 & >> v 14 1023 )
+        ( vec_set [i] slot 3 1 )
         ^ 3
     } {}
     ? == sfmt 1 {
         ? < avail 3 { ^ -1 } {}
-        : i v | | b0 << # i . p + off 1 8 << # i . p + off 2 16
-        = . sp 1 & >> v 4 1023
-        = . sp 2 & >> v 14 1023
-        = . sp 3 4
+        : i v | | b0 << ( __zi_b p + off 1 ) 8 << ( __zi_b p + off 2 ) 16
+        ( vec_set [i] slot 1 & >> v 4 1023 )
+        ( vec_set [i] slot 2 & >> v 14 1023 )
+        ( vec_set [i] slot 3 4 )
         ^ 3
     } {}
     ? == sfmt 2 {
         ? < avail 4 { ^ -1 } {}
-        : i v | | | b0 << # i . p + off 1 8 << # i . p + off 2 16
-        << # i . p + off 3 24
-        = . sp 1 & >> v 4 16383
-        = . sp 2 & >> v 18 16383
-        = . sp 3 4
+        : i v | | | b0 << ( __zi_b p + off 1 ) 8 << ( __zi_b p + off 2 ) 16
+        << ( __zi_b p + off 3 ) 24
+        ( vec_set [i] slot 1 & >> v 4 16383 )
+        ( vec_set [i] slot 2 & >> v 18 16383 )
+        ( vec_set [i] slot 3 4 )
         ^ 4
     } {}
     ? < avail 5 { ^ -1 } {}
-    : i v | | | b0 << # i . p + off 1 8 << # i . p + off 2 16
-    << # i . p + off 3 24
-    : i hi # i . p + off 4
-    = . sp 1 & >> v 4 0x3FFFF
-    = . sp 2 & | >> v 22 << hi 10 0x3FFFF
-    = . sp 3 4
+    : i v | | | b0 << ( __zi_b p + off 1 ) 8 << ( __zi_b p + off 2 ) 16
+    << ( __zi_b p + off 3 ) 24
+    : i hi ( __zi_b p + off 4 )
+    ( vec_set [i] slot 1 & >> v 4 0x3FFFF )
+    ( vec_set [i] slot 2 & | >> v 22 << hi 10 0x3FFFF )
+    ( vec_set [i] slot 3 4 )
     ^ 5
 }
 
@@ -149,8 +155,8 @@ unsafe @ __zi_literals * u p i off i avail ( Vec i ) slot → i {
 }
 
 // One frame, from `at`. Returns the offset just past it, or -1.
-unsafe @ __zi_frame ( Vec u ) src i at String out i idx → i {
-    : *u p ( vec_data [u] src )
+@ __zi_frame ( Vec u ) src i at String out i idx → i {
+    : ( Slice u ) p ( slice_from_vec [u] src )
     : i n ( vec_len [u] src )
     : i magic ( __zi_u32 p at )
     ? & >= magic ZI_SKIP_LO <= magic ZI_SKIP_HI {
@@ -167,7 +173,7 @@ unsafe @ __zi_frame ( Vec u ) src i at String out i idx → i {
     ? != magic ZI_MAGIC { ^ -1 } {}
     : ~ i off + at 4
     ? >= off n { ^ -1 } {}
-    : i desc # i . p off
+    : i desc ( __zi_b p off )
     = off + off 1
     : i fcs_flag >> desc 6
     : i single & >> desc 5 1
@@ -175,7 +181,7 @@ unsafe @ __zi_frame ( Vec u ) src i at String out i idx → i {
     : i did_flag & desc 3
     : ~ i window 0
     ? == single 0 {
-        : i wd # i . p off
+        : i wd ( __zi_b p off )
         = off + off 1
         : i base << 1 + 10 >> wd 3
         = window + base * >> base 3 & wd 7
@@ -184,7 +190,7 @@ unsafe @ __zi_frame ( Vec u ) src i at String out i idx → i {
     ? != did_flag 0 {
         : i nb ? == did_flag 1 1 ? == did_flag 2 2 4
         : ~ i k 0
-        ~ < k nb { = dictid | dictid << # i . p + off k * k 8 = k + k 1 }
+        ~ < k nb { = dictid | dictid << ( __zi_b p + off k ) * k 8 = k + k 1 }
         = off + off nb
     } {}
     : ~ i fcs -1
@@ -192,7 +198,7 @@ unsafe @ __zi_frame ( Vec u ) src i at String out i idx → i {
         : i nb ? == fcs_flag 0 1 ? == fcs_flag 1 2 ? == fcs_flag 2 4 8
         = fcs 0
         : ~ i k 0
-        ~ < k nb { = fcs | fcs << # i . p + off k * k 8 = k + k 1 }
+        ~ < k nb { = fcs | fcs << ( __zi_b p + off k ) * k 8 = k + k 1 }
         ? == nb 2 { = fcs + fcs 256 } {}
         = off + off nb
     } {}
@@ -216,13 +222,12 @@ unsafe @ __zi_frame ( Vec u ) src i at String out i idx → i {
     : ( Vec i ) slot ( vec_new [i] )
     ( vec_push [i] slot 0 ) ( vec_push [i] slot 0 )
     ( vec_push [i] slot 0 ) ( vec_push [i] slot 0 )
-    : *i sp ( vec_data [i] slot )
     : ~ i bno 0
     : ~ b last F
     : ~ b bad F
     ~ & ! last ! bad {
         ? > + off 3 n { = bad T } {
-            : i hdr | | # i . p off << # i . p + off 1 8 << # i . p + off 2 16
+            : i hdr | | ( __zi_b p off ) << ( __zi_b p + off 1 ) 8 << ( __zi_b p + off 2 ) 16
             = off + off 3
             = last != & hdr 1 0
             : i btype & >> hdr 1 3
@@ -238,33 +243,33 @@ unsafe @ __zi_frame ( Vec u ) src i at String out i idx → i {
                 : i used ( __zi_literals p off blen slot )
                 ? < used 0 { = bad T } {
                     : String lit ( string_with_cap 32 )
-                    ( string_push_str lit ( __zi_lit_name # i . sp 0 # i . sp 3 ) )
+                    ( string_push_str lit ( __zi_lit_name ( vec_at [i] slot 0 ) ( vec_at [i] slot 3 ) ) )
                     ( string_push_char lit 32 )
-                    ( __zi_size lit # i . sp 1 )
-                    ? >= # i . sp 0 2 {
+                    ( __zi_size lit ( vec_at [i] slot 1 ) )
+                    ? >= ( vec_at [i] slot 0 ) 2 {
                         ( string_push_str lit `→` )
-                        ( __zi_size lit # i . sp 2 )
+                        ( __zi_size lit ( vec_at [i] slot 2 ) )
                     } {}
                     ( __zi_col out ( string_data lit ) 26 )
                     // Sequences: the count, then the three table modes.
-                    : i so + off ? >= # i . sp 0 2 + used # i . sp 2
-                    + used ? == # i . sp 0 1 1 # i . sp 1
+                    : i so + off ? >= ( vec_at [i] slot 0 ) 2 + used ( vec_at [i] slot 2 )
+                    + used ? == ( vec_at [i] slot 0 ) 1 1 ( vec_at [i] slot 1 )
                     ? > + so 1 + off blen { = bad T } {
-                        : i b0 # i . p so
+                        : i b0 ( __zi_b p so )
                         : ~ i nseq 0
                         : ~ i after + so 1
                         ? < b0 128 { = nseq b0 } {
                             ? == b0 255 {
-                                = nseq + | # i . p + so 1 << # i . p + so 2 8 0x7F00
+                                = nseq + | ( __zi_b p + so 1 ) << ( __zi_b p + so 2 ) 8 0x7F00
                                 = after + so 3
                             } {
-                                = nseq + << - b0 128 8 # i . p + so 1
+                                = nseq + << - b0 128 8 ( __zi_b p + so 1 )
                                 = after + so 2
                             }
                         }
                         ( __zi_num_col out nseq 6 )
                         ? > nseq 0 {
-                            : i modes # i . p after
+                            : i modes ( __zi_b p after )
                             ( string_push_str out ( __zi_mode_name & >> modes 6 3 ) )
                             ( string_push_char out 47 )
                             ( string_push_str out ( __zi_mode_name & >> modes 4 3 ) )
