@@ -171,6 +171,31 @@ $ `stdlib/core/vec.nu`
     ^ @ ( Slice A ) { # *A + # i base * from * Z A 1 n }
 }
 
+// Whether two byte views hold the same bytes: one length compare, then
+// memcmp over memory both views own. What a lookup probing a table against
+// a window of its input asks, with no pointer of its own.
+@ slice_bytes_eq ( Slice u ) a ( Slice u ) b → b {
+    : i n . a len
+    ? != n . b len { ^ F } {}
+    ? <= n 0 { ^ T } {}
+    ^ == 0 # i ( memcmp # s . a data # s . b data n )
+}
+
+// Lexicographic order of two byte views (memcmp, then the shorter first):
+// -1, 0 or 1.
+@ slice_bytes_cmp ( Slice u ) a ( Slice u ) b → i {
+    : i la . a len
+    : i lb . b len
+    : i n ? < la lb la lb
+    ? > n 0 {
+        : i c # i ( memcmp # s . a data # s . b data n )
+        ? != c 0 { ^ ? < c 0 -1 1 } {}
+    } {}
+    ? < la lb { ^ -1 } {}
+    ? > la lb { ^ 1 } {}
+    ^ 0
+}
+
 // The byte at `idx` (0..255), or 0 outside [0, len): the read a parser
 // makes one or two bytes past its cursor, with no Option to unwrap.
 inline @ slice_byte ( Slice u ) s i idx → i {

@@ -84,8 +84,6 @@ $ `stdlib/core/slice.nu`
 
 @ Tok_drop sink Tok h → v {}
 
-unsafe @ __Tok_ptr Tok h → *TokImpl { ^ ( arc_ptr [TokImpl] . h a ) }
-
 // ── string-keyed map helpers (yoloe/bpe.nu idiom) ───────────────────
 @ __tk_set ( HashMap s i ) m s key i val → v {
     : ?i _old ( map_set [s i] m key val \ s x → i { ^ ( hash_string x ) } \ s a s b → b { ^ ( eq_string a b ) } )
@@ -104,7 +102,7 @@ unsafe @ __Tok_ptr Tok h → *TokImpl { ^ ( arc_ptr [TokImpl] . h a ) }
 }
 
 // Borrowed data pointer of piece #k ("" when out of range).
-unsafe @ _tk_piece_data * TokImpl t i k → s {
+@ _tk_piece_data TokImpl t i k → s {
     ?? ( vec_get [String] . t pieces k ) { T p → { ^ ( string_data p ) } F → { ^ `` } }
 }
 
@@ -173,6 +171,9 @@ unsafe @ _tk_piece_data * TokImpl t i k → s {
 //   scores  SPM merge scores (empty for BPE)
 //   types   token types (TT_NORMAL/CONTROL/USER/BYTE/…); empty = all NORMAL
 //   merges  BPE merge rules, "A B", in rank order (empty for SPM)
+// `unsafe`: the lookup and rank maps are keyed by views of the tokenizer's
+// own piece and merge strings — they never change once built, and they move
+// with it into its Arc, so the keys stay valid for as long as the maps do.
 unsafe @ tok_build TokSpec spec sink ( Vec String ) pieces sink ( Vec f ) scores sink ( Vec i ) types sink ( Vec String ) merges → !Tok String {
     : i nvocab ( vec_len [String] pieces )
     ? == nvocab 0 {
@@ -191,26 +192,15 @@ unsafe @ tok_build TokSpec spec sink ( Vec String ) pieces sink ( Vec f ) scores
     // vocabulary falls back to per-byte pieces — lossless, just not the
     // model's segmentation — so it is not silently wrong, merely unmerged.
 
-    : ( Arc TokImpl ) t__box ( arc_zero [TokImpl] )
-    : *TokImpl t ( arc_ptr [TokImpl] t__box )
-    = . t mode mode
-    = . t pieces pieces
-    = . t scores scores
-    = . t ttype types
-    = . t sp_ids ( vec_new [i] )
-    = . t sp_first ( vec_new [i] )
-    = . t lookup ( map_new [s i] )
-    = . t ranks ( map_new [s i] )
-    = . t rankkeys merges
-    = . t byte_enc ? == mode TOK_BPE ( _tk_build_byte_enc ) ( vec_new [String] )
-    = . t byte_id ( vec_new [i] )
-    = . t pre . spec pre
-    = . t bos . spec bos
-    = . t eos . spec eos
-    = . t unk . spec unk
-    = . t add_bos . spec add_bos
-    = . t add_eos . spec add_eos
-    = . t add_space_prefix . spec add_space_prefix
+    // Built here, then shared: an Arc's payload is fixed once made, so every
+    // reader below takes it through arc_get with no lock.
+    : ~ TokImpl t @ TokImpl {
+        mode pieces scores types ( map_new [s i] ) ( map_new [s i] ) merges
+        ? == mode TOK_BPE ( _tk_build_byte_enc ) ( vec_new [String] )
+        ( vec_new [i] ) . spec pre . spec bos . spec eos . spec unk
+        . spec add_bos . spec add_eos . spec add_space_prefix
+        ( vec_new [i] ) ( vec_new [i] )
+    }
 
     // types default to NORMAL when the source gave none
     : ~ i k ( vec_len [i] . t ttype )
@@ -240,8 +230,9 @@ unsafe @ tok_build TokSpec spec sink ( Vec String ) pieces sink ( Vec f ) scores
         ? | == ty TT_CONTROL == ty TT_USER {
             : s pc ( _tk_piece_data t k )
             ? > ( nurl_str_len pc ) 0 {
+                : i b0 ( nurl_str_get pc 0 )
                 ( vec_push [i] . t sp_ids k )
-                ( vec_set [i] . t sp_first ( nurl_str_get pc 0 ) 1 )
+                ( vec_set [i] . t sp_first b0 1 )
             } {}
         } {}
         = k + k 1
@@ -288,29 +279,29 @@ unsafe @ tok_build TokSpec spec sink ( Vec String ) pieces sink ( Vec f ) scores
             = r + r 1
         }
     } {}
-    ^ @ !Tok String { T @ Tok { t__box } }
+    ^ @ !Tok String { T @ Tok { ( arc_new [TokImpl] t ) } }
 }
 
 // Let go of `t` now rather than at the end of its owner's scope.
 @ tok_free sink Tok t → v {}
 
-unsafe @ tok_n_vocab Tok t__h → i {
-    : *TokImpl t ( __Tok_ptr t__h )
+@ tok_n_vocab Tok t__h → i {
+    : TokImpl t ( arc_get [TokImpl] . t__h a )
     ^ ( vec_len [String] . t pieces )
 }
 
-unsafe @ tok_bos Tok t__h → i {
-    : *TokImpl t ( __Tok_ptr t__h )
+@ tok_bos Tok t__h → i {
+    : TokImpl t ( arc_get [TokImpl] . t__h a )
     ^ . t bos
 }
 
-unsafe @ tok_eos Tok t__h → i {
-    : *TokImpl t ( __Tok_ptr t__h )
+@ tok_eos Tok t__h → i {
+    : TokImpl t ( arc_get [TokImpl] . t__h a )
     ^ . t eos
 }
 
-unsafe @ tok_unk Tok t__h → i {
-    : *TokImpl t ( __Tok_ptr t__h )
+@ tok_unk Tok t__h → i {
+    : TokImpl t ( arc_get [TokImpl] . t__h a )
     ^ . t unk
 }
 
@@ -318,9 +309,9 @@ unsafe @ tok_unk Tok t__h → i {
 
 // Push token(s) for one unmerged symbol: vocab piece, else per-byte
 // <0xNN>, else UNK once.
-unsafe @ __tk_spm_emit * TokImpl t s esc ( Slice u ) esc_v i off i len ( Vec i ) out → v {
+@ __tk_spm_emit TokImpl t s esc ( Slice u ) esc_v i off i len ( Vec i ) out → v {
     : String sym ( string_new )
-    ( string_push_bytes sym # *u + # i esc off len )
+    ( string_push_window sym esc_v off len )
     ?? ( __tk_get . t lookup ( string_data sym ) ) {
         T id → { ( vec_push [i] out id ) }
         F → {
@@ -389,19 +380,19 @@ unsafe @ __tk_spm_emit * TokImpl t s esc ( Slice u ) esc_v i off i len ( Vec i )
 }
 
 // Push the pair (left, right) if the vocabulary knows their concatenation.
-unsafe @ __tk_spm_try * TokImpl t s e String pair ( Vec i ) starts ( Vec i ) lens ( Vec f ) sc ( Vec i ) lf ( Vec i ) rt ( Vec i ) sz i left i right → v {
+@ __tk_spm_try TokImpl t ( Slice u ) e_v String pair ( Vec i ) starts ( Vec i ) lens ( Vec f ) sc ( Vec i ) lf ( Vec i ) rt ( Vec i ) sz i left i right → v {
     ? | < left 0 < right 0 { ^ v } {}
     : i o1 ( _tk_geti starts left 0 )
     : i n + ( _tk_geti lens left 0 ) ( _tk_geti lens right 0 )
     ( string_clear pair )
-    ( string_push_bytes pair # *u + # i e o1 n )
+    ( string_push_window pair e_v o1 n )
     ?? ( __tk_get . t lookup ( string_data pair ) ) {
         T id → { ( __tk_bg_push sc lf rt sz ( __tk_getf . t scores id ) left right n ) }
         F → {}
     }
 }
 
-unsafe @ __tk_spm_encode * TokImpl t s text ( Vec i ) out → v {
+@ __tk_spm_encode TokImpl t s text ( Vec i ) out → v {
     : ( Slice u ) text_v ( slice_of_str text )
     // escape: optional leading space, then every ' ' → ▁ (E2 96 81)
     : String esc ( string_new )
@@ -460,7 +451,7 @@ unsafe @ __tk_spm_encode * TokImpl t s text ( Vec i ) out → v {
     : ~ i j 0
     ~ >= j 0 {
         : i nj ( _tk_geti nxt j -1 )
-        ( __tk_spm_try t e pair starts lens hsc hlf hrt hsz j nj )
+        ( __tk_spm_try t e_v pair starts lens hsc hlf hrt hsz j nj )
         = j nj
     }
     ~ > ( vec_len [f] hsc ) 0 {
@@ -476,8 +467,8 @@ unsafe @ __tk_spm_encode * TokImpl t s text ( Vec i ) out → v {
             : i nn ( _tk_geti nxt r -1 )
             ( vec_set [i] nxt l nn )
             ? >= nn 0 { ( vec_set [i] prv nn l ) } {}
-            ( __tk_spm_try t e pair starts lens hsc hlf hrt hsz ( _tk_geti prv l -1 ) l )
-            ( __tk_spm_try t e pair starts lens hsc hlf hrt hsz l nn )
+            ( __tk_spm_try t e_v pair starts lens hsc hlf hrt hsz ( _tk_geti prv l -1 ) l )
+            ( __tk_spm_try t e_v pair starts lens hsc hlf hrt hsz l nn )
         } {}
     }
 
@@ -679,7 +670,7 @@ unsafe @ __tk_spm_encode * TokImpl t s text ( Vec i ) out → v {
 }
 
 // BPE-merge one pre-token (raw bytes text[off..off+len)) and append ids.
-unsafe @ __tk_bpe_word * TokImpl t ( Slice u ) text_v i off i len ( Vec i ) out → v {
+@ __tk_bpe_word TokImpl t ( Slice u ) text_v i off i len ( Vec i ) out → v {
     // word = remapped single-byte symbols
     : ( Vec String ) word ( vec_new [String] )
     : ~ i j 0
@@ -723,8 +714,9 @@ unsafe @ __tk_bpe_word * TokImpl t ( Slice u ) text_v i off i len ( Vec i ) out 
             = k + k 1
         }
         ? >= best 0 {
-            // concat word[best] ++ word[best+1], drop word[best+1]
-            ?? ( vec_get [String] word + best 1 ) {
+            // concat word[best] ++ word[best+1], drop word[best+1]: the right
+            // piece leaves the word first, so the append reads a String of its own
+            ?? ( vec_remove [String] word + best 1 ) {
                 T b3 → {
                     ?? ( vec_get [String] word best ) {
                         T a → { ( string_push_str a ( string_data b3 ) ) }
@@ -733,7 +725,6 @@ unsafe @ __tk_bpe_word * TokImpl t ( Slice u ) text_v i off i len ( Vec i ) out 
                 }
                 F → {}
             }
-            : ?String _rm ( vec_remove [String] word + best 1 )
             = again T
         } {}
     }
@@ -755,7 +746,7 @@ unsafe @ __tk_bpe_word * TokImpl t ( Slice u ) text_v i off i len ( Vec i ) out 
 // The text is measured once and every pre-token scanner reads the view:
 // each of them used to measure it again from its start (strnlen per byte),
 // which made encoding a corpus without special tokens quadratic.
-unsafe @ __tk_bpe_encode * TokImpl t s text ( Vec i ) out → v {
+@ __tk_bpe_encode TokImpl t s text ( Vec i ) out → v {
     : ( Slice u ) text_v ( slice_of_str text )
     : i n ( slice_len [u] text_v )
     : ~ i p 0
@@ -768,9 +759,10 @@ unsafe @ __tk_bpe_encode * TokImpl t s text ( Vec i ) out → v {
 
 // ── public encode / decode ──────────────────────────────────────────
 
-// The longest special-token piece matching `text` at `p`, or -1. Only called
-// when text[p] is a byte some special piece starts with.
-unsafe @ __tk_special_at * TokImpl t s text i p i n → i {
+// The longest special-token piece matching `text` (its bytes `tv`, n of
+// them) at `p`, or -1. Only called when text[p] is a byte some special piece
+// starts with.
+@ __tk_special_at TokImpl t ( Slice u ) tv i p i n → i {
     : ~ i best -1
     : ~ i best_len 0
     : ~ i j 0
@@ -782,11 +774,12 @@ unsafe @ __tk_special_at * TokImpl t s text i p i n → i {
         ? & > pl best_len <= + p pl n {
             : ~ b eq T
             : ~ i c 0
-            // nurl_str_at, not nurl_str_get: `text` is the WHOLE corpus here
-            // and nurl_str_get re-runs strlen on every call, which turns this
-            // scan quadratic (2 MB took 98 s; 25 MB would have taken hours)
+            // A slice measured once, not nurl_str_get: `text` is the WHOLE
+            // corpus here and nurl_str_get re-runs strlen on every call, which
+            // turns this scan quadratic (2 MB took 98 s; 25 MB, hours)
+            : ( Slice u ) pv ( slice_of_str pc )
             ~ & eq < c pl {
-                ? != ( nurl_str_at text n + p c ) ( nurl_str_at pc pl c ) { = eq F } {}
+                ? != ( slice_byte tv + p c ) ( slice_byte pv c ) { = eq F } {}
                 = c + c 1
             }
             ? eq { = best id = best_len pl } {}
@@ -797,12 +790,12 @@ unsafe @ __tk_special_at * TokImpl t s text i p i n → i {
 }
 
 // Encode one run of ordinary text (no special tokens inside it).
-unsafe @ __tk_encode_raw * TokImpl t s text ( Vec i ) out → v {
+@ __tk_encode_raw TokImpl t s text ( Vec i ) out → v {
     ? == . t mode TOK_SPM { ( __tk_spm_encode t text out ) } { ( __tk_bpe_encode t text out ) }
 }
 
-unsafe @ tok_encode Tok t__h s text b add_special → ( Vec i ) {
-    : *TokImpl t ( __Tok_ptr t__h )
+@ tok_encode Tok t__h s text b add_special → ( Vec i ) {
+    : TokImpl t ( arc_get [TokImpl] . t__h a )
     : ( Vec i ) out ( vec_new [i] )
     ? & & add_special . t add_bos >= . t bos 0 { ( vec_push [i] out . t bos ) } {}
     // Split the text on special tokens (`<start_of_turn>`, `<|im_start|>`, …)
@@ -812,15 +805,16 @@ unsafe @ tok_encode Tok t__h s text b add_special → ( Vec i ) {
     // parse_special: `nurllama tokenize --no-special` still treats the markers
     // as literal text.
     ? & add_special > ( vec_len [i] . t sp_ids ) 0 {
-        : i n ( nurl_str_len text )
+        // Measured once — nurl_str_get would run strlen over the whole
+        // corpus once per BYTE
+        : ( Slice u ) tv ( slice_of_str text )
+        : i n ( slice_len [u] tv )
         : String buf ( string_new )
         : ~ i p 0
         ~ < p n {
-            // nurl_str_at with the hoisted length — nurl_str_get would run
-            // strlen over the whole corpus once per BYTE
-            : i b0 ( nurl_str_at text n p )
+            : i b0 ( slice_byte tv p )
             : ~ i hit -1
-            ? != 0 ( _tk_geti . t sp_first b0 0 ) { = hit ( __tk_special_at t text p n ) } {}
+            ? != 0 ( _tk_geti . t sp_first b0 0 ) { = hit ( __tk_special_at t tv p n ) } {}
             ? >= hit 0 {
                 ? > ( string_len buf ) 0 {
                     ( __tk_encode_raw t ( string_data buf ) out )
@@ -844,13 +838,13 @@ unsafe @ tok_encode Tok t__h s text b add_special → ( Vec i ) {
 // Raw bytes of one token: SPM BYTE pieces become their byte, ▁ becomes
 // a space, control tokens become nothing; BPE pieces run the inverse
 // byte remap.
-unsafe @ tok_piece Tok t__h i id → ( Vec u ) { ^ ( __tk_piece ( __Tok_ptr t__h ) id ) }
+@ tok_piece Tok t__h i id → ( Vec u ) { ^ ( __tk_piece ( arc_get [TokImpl] . t__h a ) id ) }
 
 // The text of piece `id` as stored in the vocabulary (borrowed: valid while
 // the Tok is; "" out of range).
-unsafe @ tok_piece_str Tok t__h i id → s { ^ ( _tk_piece_data ( __Tok_ptr t__h ) id ) }
+@ tok_piece_str Tok t__h i id → s { ^ ( _tk_piece_data ( arc_get [TokImpl] . t__h a ) id ) }
 
-unsafe @ __tk_piece * TokImpl t i id → ( Vec u ) {
+@ __tk_piece TokImpl t i id → ( Vec u ) {
     : ( Vec u ) out ( vec_new [u] )
     ? | < id 0 >= id ( vec_len [String] . t pieces ) { ^ out } {}
     : i ty ( _tk_geti . t ttype id TT_NORMAL )
@@ -906,8 +900,8 @@ unsafe @ __tk_piece * TokImpl t i id → ( Vec u ) {
     ^ out
 }
 
-unsafe @ tok_decode Tok t__h ( Vec i ) ids → ( Vec u ) {
-    : *TokImpl t ( __Tok_ptr t__h )
+@ tok_decode Tok t__h ( Vec i ) ids → ( Vec u ) {
+    : TokImpl t ( arc_get [TokImpl] . t__h a )
     : ( Vec u ) out ( vec_new [u] )
     : ~ i k 0
     ~ < k ( vec_len [i] ids ) {

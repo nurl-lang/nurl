@@ -10,6 +10,7 @@
 // conventions that disagree with each other — see src/hf.nu.) A GGUF's
 // vocabulary is loaded by whoever has the GGUF; nurllama does.
 
+$ `stdlib/core/io.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/std/args.nu`
@@ -34,10 +35,8 @@ $ `src/hf.nu`
     ( nurl_print `\n` )
 }
 
-unsafe @ __tkcli_out ( Vec u ) b → v {
-    : i n ( vec_len [u] b )
-    ? > n 0 { : i _w ( write 1 # *u ( vec_data [u] b ) n ) } {}
-}
+// Raw bytes to stdout, in order with the prints around them.
+@ __tkcli_out ( Vec u ) b → v { ( write_bytes b ) }
 
 @ main → i {
     : ArgParser p ( args_new `tokenizer` `Encode and decode text with a Hugging Face vocabulary (vocab.json + merges.txt).` )

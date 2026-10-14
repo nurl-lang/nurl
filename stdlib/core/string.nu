@@ -488,6 +488,13 @@ $ `stdlib/core/char.nu`
     ^ ( vec_len [u] ( __sbuf str ) )
 }
 
+// The String's bytes as a view: its own length, embedded NULs included
+// (slice_of_str of string_data would stop at the first NUL and measure
+// with strlen). A view of `str`: it ends where `str` changes.
+@ string_bytes String str → ( Slice u ) {
+    ^ ( slice_from_vec [u] ( __sbuf str ) )
+}
+
 @ string_data String str → s {
     ^ # s ( vec_data [u] ( __sbuf str ) )
 }
@@ -606,6 +613,15 @@ $ `stdlib/core/char.nu`
         : b _ok ( vec_set_len [u] b + len n )
     } {}
     ( _string_seal str )
+}
+
+// The `n` bytes of `s` from `off`, appended exactly (NULs included) —
+// string_push_bytes over a view, checked once: it panics when the slice
+// does not hold them. A tokenizer or a parser appends a token's bytes
+// this way without a pointer of its own.
+@ string_push_window String str ( Slice u ) s i off i n → v {
+    : ( Slice u ) w ( slice_window [u] s off n )
+    ( string_push_bytes str ( slice_data [u] w ) n )
 }
 
 @ string_push_int String str i n → v {

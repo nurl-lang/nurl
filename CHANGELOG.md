@@ -32,6 +32,12 @@ seals a struct whose fields carry such an invariant. `raw` is no reserved
 word: it is the prefix only right before a top-level `@` or `:`. nurlfmt
 keeps it on its declaration's line.
 
+`string_push_window` appends a byte range of a view to a String,
+`string_bytes` views a String's own bytes (NULs included, no strlen), and
+`slice_bytes_eq` / `slice_bytes_cmp` compare two byte views — what a
+tokenizer or parser used pointer arithmetic for. `tokenizer` has one
+`unsafe` function left of 42, with bit-identical encodings.
+
 `slice_window s from n` is the `n` elements from `from`, checked once, so
 a loop to `n` over it needs no check per element; storing a number
 through one window no longer ends a borrow of another window of the same

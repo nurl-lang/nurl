@@ -2,12 +2,12 @@
 
 ## [0.4.4] — 2026-10-14
 
-Requires NURL 0.73.0 (`slice_at`, `slice_put`, `rc_take`, `locked_take`).
+Requires NURL 0.73.0.
 
 ### Changed
 
-- Loops that read or wrote through `vec_data` pointers index slices (`slice_at` / `slice_put`, as fast as the pointers), and functions with nothing raw in them are no longer marked `unsafe`.
-- 1 fewer functions are `unsafe` than in 0.4.3 (42 left).
+- A tokenizer's state is built as a plain struct and shared frozen in its `Arc`: encode, decode and the accessors read it through `arc_get`, with no lock and no raw pointer. Text is walked through slices (`slice_byte`, `slice_window`, `string_push_window`, `slice_bytes_eq` — NURL 0.73.0), so a probe or a byte read can no longer run past the text. Encodings are bit-identical and as fast (a 400 kB SPM / BPE / Unigram run against the previous version).
+- 42 fewer functions are `unsafe` than in 0.4.3 (1 left: `tok_build`, whose lookup maps are keyed by views of the tokenizer's own strings).
 
 ## [0.4.3] — 2026-10-11
 
