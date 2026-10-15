@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.13.0] — 2026-10-14
+
+### Changed
+
+- The tape (`GTape`), the optimizer (`Opt`), the device replay (`GProg`, `GpOpt`) and the fused plan (`GpPlan`, `GpFuse`) are plain values passed `inout`, no longer handles over raw pointers: every op that records takes `inout GTape tp`, readers (`tape_ok`, `gvar_value`, `g_scalar`, `tape_len`, `tape_mark`) borrow it. 146 `unsafe` functions are down to 6 — the kernel launches and the f32 device transfers.
+- `backward` allocates a node's input gradients before it reads the node's own, and accumulates through gradients already allocated (`_g_acc_into`), so nothing changes the tape while a gradient is read. Gradients are bit-identical to 0.12 on every test (finite differences, the analytic identities, the LoRA block, the autoencoder, the device parity suites), and training runs as fast (train_test 3.1 s either way).
+
+### Migration
+
+- Bind a tape `: ~ GTape tp ( tape_new )` and pass it as before; a closure that builds on a tape (closures cannot take `inout`) makes its own and hands it back with what it built (tests/grad_test.nu `GRun`).
+
 ## [0.12.2] — 2026-10-14
 
 ### Changed

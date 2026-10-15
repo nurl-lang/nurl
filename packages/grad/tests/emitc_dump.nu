@@ -18,7 +18,7 @@ $ `src/grad.nu`
 $ `src/emitc.nu`
 $ `deps/tensor/src/tensor.nu`
 
-@ sc GTape tp f v b param → GVar {
+@ sc inout GTape tp f v b param → GVar {
     : ( Vec f ) d ( vec_new [f] )
     ( vec_push [f] d v )
     : ( Vec i ) s ( vec_new [i] )
@@ -34,7 +34,7 @@ $ `deps/tensor/src/tensor.nu`
     : f P0 0.31
     : f P1 -0.42
     : f P2 0.9
-    : GTape tp ( tape_new )
+    : ~ GTape tp ( tape_new )
     : GVar p0 ( sc tp P0 T )
     : GVar p1 ( sc tp P1 T )
     : GVar p2 ( sc tp P2 T )

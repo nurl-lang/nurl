@@ -83,7 +83,7 @@ $ `deps/gpukit/src/dev.nu`
             ( check >= T2 8 `prompt tokenizes (>= 8 tokens)` )
 
             // ── 2. build the graph + the wiring oracle ──────────────
-            : GTape tp ( tape_new )
+            : ~ GTape tp ( tape_new )
             : ( Vec i ) pids ( vec_new [i] )
             : FtG fg ( ft_graph m tp ids 8 16.0 42 pids )
             ( check ( tape_ok tp ) `full 30-layer graph builds (tape healthy)` )

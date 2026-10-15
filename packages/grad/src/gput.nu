@@ -428,25 +428,22 @@ extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double*
 
 // Every simple textual replacement of `needle` with `rep` in `hay`. `needle`
 // must be non-empty; used only on the fixed kernel source above.
-unsafe @ _str_replace_all s hay s needle s rep → String {
+@ _str_replace_all s hay s needle s rep → String {
     : ( Slice u ) hay_v ( slice_of_str hay )
-    : i nl ( nurl_str_len needle )
+    : ( Slice u ) nd_v ( slice_of_str needle )
+    : i nl ( slice_len [u] nd_v )
     ? > nl 0 {} { ^ ( string_from hay ) }
     : String out ( string_new )
-    : i hl ( nurl_str_len hay )
+    : i hl ( slice_len [u] hay_v )
     : ~ i i2 0
     ~ < i2 hl {
-        : i rel ( nurl_str_find # s + # i hay i2 needle )
-        : i f ? < rel 0 -1 + i2 rel
-        ? < f 0 {
-            : ~ i k i2
-            ~ < k hl { ( string_push_char out ( slice_byte hay_v k ) ) = k + k 1 }
-            = i2 hl
-        } {
-            : ~ i k i2
-            ~ < k f { ( string_push_char out ( slice_byte hay_v k ) ) = k + k 1 }
+        : b hit ? <= + i2 nl hl ( slice_bytes_eq ( slice_window [u] hay_v i2 nl ) nd_v ) F
+        ? hit {
             ( string_push_str out rep )
-            = i2 + f nl
+            = i2 + i2 nl
+        } {
+            ( string_push_char out ( slice_byte hay_v i2 ) )
+            = i2 + i2 1
         }
     }
     ^ out
@@ -474,7 +471,7 @@ unsafe @ _str_replace_all s hay s needle s rep → String {
     GkBuf meta  // i64 stride/offset blocks
 }
 
-: GProgImpl {
+: GProg {
     b ok
     GpuKit kit
     ( Vec GpNode ) nodes
@@ -485,15 +482,7 @@ unsafe @ _str_replace_all s hay s needle s rep → String {
 
 // A GProg is a handle on its state in an Arc (stdlib/std/arc.nu):
 // every copy is the same state, and the last owner releases it.
-: GProg { ( Arc GProgImpl ) a }
-
-@ GProg_share GProg h → GProg { ^ @ GProg { ( arc_clone [GProgImpl] . h a ) } }
-
-@ GProg_drop sink GProg h → v {}
-
 // The state, for this package's own code.
-unsafe @ _GProg_ptr GProg h → *GProgImpl { ^ ( arc_ptr [GProgImpl] . h a ) }
-
 // The f32 source is constant but building it runs 10 full-source string
 // passes, so cache it — otherwise _gp_src (called on EVERY kernel launch,
 // though only the NAME feeds gpukit's cache) would regenerate ~15 KB of
@@ -534,7 +523,7 @@ unsafe @ _GProg_ptr GProg h → *GProgImpl { ^ ( arc_ptr [GProgImpl] . h a ) }
 }
 
 // Kernel source for a program's dtype.
-unsafe @ _gp_src * GProgImpl pg → s {
+@ _gp_src inout GProg pg → s {
     ? == . pg dtype 1 { ^ ( __gp_src_f32c ) } {}
     ? == . pg dtype 2 { ^ ( __gp_src_mixedc ) } {}
     ^ ( __gp_src_f64 )
@@ -554,12 +543,13 @@ unsafe @ _gp_src * GProgImpl pg → s {
 // 4B training step after the big one was fixed. Minimized repro in
 // compiler/tests once the compiler bug is fixed; until then no literal
 // ternaries in call arguments on hot paths.)
-unsafe @ __gp_kn * GProgImpl pg s name → String {
+@ __gp_kn inout GProg pg s name → String {
     ? | == . pg dtype 1 == . pg dtype 2 {
         : ~ s pre `gpf_`
         ? == . pg dtype 2 { = pre `gpm_` } {}
         : String o ( string_from pre )
-        ( string_push_str o # s + # i name 3 )
+        : ( Slice u ) nv ( slice_of_str name )
+        ( string_push_window o nv 3 - ( slice_len [u] nv ) 3 )
         ^ o
     } {}
     ^ ( string_from name )
@@ -568,18 +558,18 @@ unsafe @ __gp_kn * GProgImpl pg s name → String {
 // A scalar float arg for the dtype. Only pure f32 (dtype 1) narrows scalars
 // to 4-byte; mixed (dtype 2) keeps the f64 8-byte scalar args (the kernel
 // signatures leave scalar `double` params untouched — only pointers change).
-unsafe @ __gp_argf * GProgImpl pg f v → i {
+@ __gp_argf inout GProg pg f v → i {
     ? == . pg dtype 1 { ^ ( gpu_arg_i32 ( f32_to_bits # f32 v ) ) } {}
     ^ ( gpu_arg_i64 ( f64_to_bits v ) )
 }
 
 // The element buffer dtype: f32 storage for both pure-f32 and mixed.
-unsafe @ __gp_edt * GProgImpl pg → i { ? | == . pg dtype 1 == . pg dtype 2 { ^ GK_F32 } {} ^ GK_F64 }
+@ __gp_edt inout GProg pg → i { ? | == . pg dtype 1 == . pg dtype 2 { ^ GK_F32 } {} ^ GK_F64 }
 
 // Device optimizer over a captured program's parameters — opt.nu mirrored:
 // per-param L2, global-norm clip, the same runtime 1−β Adam arithmetic, the
 // step counter behind the heap pointer.
-: GpOptImpl {
+: GpOpt {
     b ok
     i kind  // 0 sgd · 1 adam
     f lr
@@ -596,15 +586,7 @@ unsafe @ __gp_edt * GProgImpl pg → i { ? | == . pg dtype 1 == . pg dtype 2 { ^
 
 // A GpOpt is a handle on its state in an Arc (stdlib/std/arc.nu):
 // every copy is the same state, and the last owner releases it.
-: GpOpt { ( Arc GpOptImpl ) a }
-
-@ GpOpt_share GpOpt h → GpOpt { ^ @ GpOpt { ( arc_clone [GpOptImpl] . h a ) } }
-
-@ GpOpt_drop sink GpOpt h → v {}
-
 // The state, for this package's own code.
-unsafe @ _GpOpt_ptr GpOpt h → *GpOptImpl { ^ ( arc_ptr [GpOptImpl] . h a ) }
-
 @ _gp_nobuf → GkBuf { ^ ( gk_buf_none 0 ) }
 
 // ── capture-time metadata builders ───────────────────────────────────
@@ -659,7 +641,7 @@ unsafe @ _GpOpt_ptr GpOpt h → *GpOptImpl { ^ ( arc_ptr [GpOptImpl] . h a ) }
 
 // ── capture ──────────────────────────────────────────────────────────
 
-unsafe @ _gp_fail * GProgImpl pg s why → v {
+@ _gp_fail inout GProg pg s why → v {
     ? . pg ok { ( nurl_eprint `gput: capture failed: ` ) ( nurl_eprintln why ) } {}
     = . pg ok F
 }
@@ -670,7 +652,7 @@ unsafe @ _gp_fail * GProgImpl pg s why → v {
 // consts turned capture into a >8-minute host loop). Instead: upload the
 // f64 data with a straight memcpy (the fast GK_F64 path) into a transient
 // staging buffer, then convert on the DEVICE.
-unsafe @ __gp_upload_f32 GpuKit kit * Tensor t → GkBuf {
+unsafe @ __gp_upload_f32 GpuKit kit Tensor t → GkBuf {
     : i n ( vec_len [f] . t data )
     : GkBuf out ( gk_dbuf_new kit n GK_F32 )
     ? ( gk_buf_ok out ) {} { ^ ( _gp_nobuf ) }
@@ -692,11 +674,11 @@ unsafe @ __gp_upload_f32 GpuKit kit * Tensor t → GkBuf {
 // A LAZY const (grad_const_lazy) carries a shape and no values: allocate
 // its buffer from the shape and upload nothing — the caller fills it after
 // the capture via gput_set_input.
-unsafe @ _gp_lazy * Tensor t → b {
+@ _gp_lazy Tensor t → b {
     ^ & == ( vec_len [f] . t data ) 0 > ( _t_prod . t shape ) 0
 }
 
-unsafe @ _gp_upload_tensor GpuKit kit * Tensor t i edt → GkBuf {
+@ _gp_upload_tensor GpuKit kit Tensor t i edt → GkBuf {
     ? ( _gp_lazy t ) { ^ ( gk_dbuf_new kit ( _t_prod . t shape ) edt ) } {}
     ? == edt GK_F32 { ^ ( __gp_upload_f32 kit t ) } {}
     : i n ( vec_len [f] . t data )
@@ -709,27 +691,20 @@ unsafe @ _gp_upload_tensor GpuKit kit * Tensor t i edt → GkBuf {
 
 // Mirror one recorded episode ([0, tape_len)) onto the device. `loss` is the
 // node backward seeds from. Check gput_ok before use.
-@ gput_capture GpuKit kit GTape tp__h GVar loss → GProg {
-    ^ ( gput_capture_dt kit tp__h loss 0 )
+@ gput_capture GpuKit kit GTape tp GVar loss → GProg {
+    ^ ( gput_capture_dt kit tp loss 0 )
 }
 
 // As gput_capture, but the DEVICE replay runs in the given element dtype
 // (0 GK_F64 · 1 GK_F32). The CPU tape stays f64: an f32 program halves
 // device memory and runs f32 ALUs, at float32 precision (the parity test
 // bounds the gap ~1e-5 rel; it is NOT bit-equal to the tape like f64 is).
-unsafe @ gput_capture_dt GpuKit kit GTape tp__h GVar loss i dtype → GProg {
-    : *GTapeImpl tp ( _GTape_ptr tp__h )
-    : ( Arc GProgImpl ) pg__box ( arc_zero [GProgImpl] )
-    : *GProgImpl pg ( arc_ptr [GProgImpl] pg__box )
-    = . pg ok T
-    = . pg dtype dtype
-    = . pg kit ( GpuKit_share kit )  // the program holds the kit too
-    = . pg nodes ( vec_new [GpNode] )
-    = . pg loss . loss id
-    = . pg gexec ( gpu_graph_none )
-    ? & ( tape_ok tp__h ) >= . loss id 0 {} { ( _gp_fail pg `tape is poisoned or loss invalid` ) ^ @ GProg { pg__box } }
-    ? ( gk_ok kit ) {} { ( _gp_fail pg `no device` ) ^ @ GProg { pg__box } }
-    : i nn ( tape_len tp__h )
+@ gput_capture_dt GpuKit kit GTape tp GVar loss i dtype → GProg {
+    // (the program holds the kit too)
+    : ~ GProg pg @ GProg { T ( GpuKit_share kit ) ( vec_new [GpNode] ) . loss id ( gpu_graph_none ) dtype }
+    ? & ( tape_ok tp ) >= . loss id 0 {} { ( _gp_fail pg `tape is poisoned or loss invalid` ) ^ pg }
+    ? ( gk_ok kit ) {} { ( _gp_fail pg `no device` ) ^ pg }
+    : i nn ( tape_len tp )
     // reach = loss-ancestor set; need = requires-grad propagation (a param
     // in the ancestor cone). The backward sweep and the gradient BUFFERS
     // exist only where both hold — grad.nu's rule mirrored, and a frozen
@@ -780,7 +755,7 @@ unsafe @ gput_capture_dt GpuKit kit GTape tp__h GVar loss i dtype → GProg {
     = k 0
     ~ & < k nn . pg ok {
         : GNode nd ?? ( vec_get [GNode] . tp nodes k ) { T x → x F → @ GNode { -1 -1 -1 0.0 } }
-        : *Tensor tv # *Tensor ( _g_val tp k )
+        : Tensor tv ( _g_v tp k )
         ? == . tv dtype TE_F64 {} { ( _gp_fail pg `only TE_F64 tapes` ) }
         // a lazy const has a shape and no values yet — size from the shape
         : i n ? ( _gp_lazy tv ) ( _t_prod . tv shape ) ( vec_len [f] . tv data )
@@ -808,8 +783,8 @@ unsafe @ gput_capture_dt GpuKit kit GTape tp__h GVar loss i dtype → GProg {
         : i op . nd op
         ? & >= op ( gop_add ) <= op ( gop_div ) {
             // binop: ew blocks B0(fwd) B1(g,b) B2(g,a) B3(g,g) + accred A/B
-            : *Tensor ta # *Tensor ( _g_val tp . nd a )
-            : *Tensor tb # *Tensor ( _g_val tp . nd b )
+            : Tensor ta ( _g_v tp . nd a )
+            : Tensor tb ( _g_v tp . nd b )
             : i nd2 ( vec_len [i] . tv shape )
             : ( Vec i ) ost ( _t_strides . tv shape )
             : ( Vec i ) ae ( _t_eff_strides . ta shape nd2 )
@@ -842,15 +817,15 @@ unsafe @ gput_capture_dt GpuKit kit GTape tp__h GVar loss i dtype → GProg {
             } {}
         } {}
         ? == op ( gop_matmul ) {
-            : *Tensor ta # *Tensor ( _g_val tp . nd a )
-            : *Tensor tb # *Tensor ( _g_val tp . nd b )
+            : Tensor ta ( _g_v tp . nd a )
+            : Tensor tb ( _g_v tp . nd b )
             ( vec_push [i] dims ( _ti . ta shape 0 ) )
             ( vec_push [i] dims ( _ti . ta shape 1 ) )
             ( vec_push [i] dims ( _ti . tb shape 1 ) )
         } {}
         ? == op ( gop_bmm ) {
-            : *Tensor ta # *Tensor ( _g_val tp . nd a )
-            : *Tensor tb # *Tensor ( _g_val tp . nd b )
+            : Tensor ta ( _g_v tp . nd a )
+            : Tensor tb ( _g_v tp . nd b )
             ? & == ( vec_len [i] . ta shape ) 3 == ( vec_len [i] . tb shape ) 3 {} {
                 ( _gp_fail pg `bmm: only full-batch [B,m,k]x[B,k,n] on the device` )
             }
@@ -867,7 +842,7 @@ unsafe @ gput_capture_dt GpuKit kit GTape tp__h GVar loss i dtype → GProg {
             } {}
         } {}
         ? == op ( gop_transpose ) {
-            : *Tensor ta # *Tensor ( _g_val tp . nd a )
+            : Tensor ta ( _g_v tp . nd a )
             ( vec_push [i] dims ( _ti . ta shape 0 ) )
             ( vec_push [i] dims ( _ti . ta shape 1 ) )
         } {}
@@ -884,21 +859,20 @@ unsafe @ gput_capture_dt GpuKit kit GTape tp__h GVar loss i dtype → GProg {
             ( vec_push [i] dims ( _ti . tv shape axis ) )
             ( vec_push [i] dims inner )
             ? == op ( gop_concat ) {
-                : *Tensor ta # *Tensor ( _g_val tp . nd a )
+                : Tensor ta ( _g_v tp . nd a )
                 ( vec_push [i] dims ( _ti . ta shape axis ) )
             } {}
         } {}
         ? == op ( gop_slice ) {
-            : *Tensor ta # *Tensor ( _g_val tp . nd a )
-            : s axp ( _g_aux_ptr tp k )
-            : *GAux ax # *GAux axp
+            : Tensor ta ( _g_v tp . nd a )
+            : ( Vec i ) axs ?? ( vec_get [( Vec i )] . tp aux k ) { T x → x F → ( vec_new [i] ) }
             : ( Vec i ) ost ( _t_strides . tv shape )
             : ( Vec i ) ist ( _t_strides . ta shape )
             : ( Vec i ) mv ( vec_new [i] )
             ( vec_push [i] mv ( vec_len [i] . tv shape ) )
             ( _gp_push_vec mv ost )
             ( _gp_push_vec mv ist )
-            ( _gp_push_vec mv . ax starts )
+            ( _gp_push_vec mv axs )
             = meta ( gk_dbuf_new kit ( vec_len [i] mv ) GK_I64 )
             ? & ( gk_buf_ok meta ) ( gk_dbuf_upload_i kit meta mv ) {} { ( _gp_fail pg `meta upload failed` ) }
         } {}
@@ -913,11 +887,10 @@ unsafe @ gput_capture_dt GpuKit kit GTape tp__h GVar loss i dtype → GProg {
         } )
         = k + k 1
     }
-    ^ @ GProg { pg__box }
+    ^ pg
 }
 
-unsafe @ gput_ok GProg pg__h → b {
-    : *GProgImpl pg ( _GProg_ptr pg__h )
+@ gput_ok inout GProg pg → b {
     ^ . pg ok
 }
 
@@ -926,7 +899,7 @@ unsafe @ gput_ok GProg pg__h → b {
 // kit's pool), the captured graph and its hold on the kit.
 @ gput_free sink GProg pg → v {}
 
-unsafe @ _gp_node * GProgImpl pg i id → GpNode {
+@ _gp_node inout GProg pg i id → GpNode {
     ^ ?? ( vec_get [GpNode] . pg nodes id ) {
         T x → x
         F → @ GpNode { -1 -1 -1 0.0 0 0 0 0 ( vec_new [i] ) ( _gp_nobuf ) ( _gp_nobuf ) ( _gp_nobuf ) ( _gp_nobuf ) }
@@ -991,8 +964,7 @@ unsafe @ __gp_ul_f32 GpuKit kit GkBuf b ( Vec f ) src → b {
 }
 
 // Fresh values for an input slot (a const's minibatch rows, or a param).
-unsafe @ gput_set_input GProg pg__h GVar v ( Vec f ) data → b {
-    : *GProgImpl pg ( _GProg_ptr pg__h )
+@ gput_set_input inout GProg pg GVar v ( Vec f ) data → b {
     ? . pg ok {} { ^ F }
     ? & >= . v id 0 < . v id ( vec_len [GpNode] . pg nodes ) {} { ^ F }
     : GpNode nd ( _gp_node pg . v id )
@@ -1002,13 +974,13 @@ unsafe @ gput_set_input GProg pg__h GVar v ( Vec f ) data → b {
 
 // ── replay: forward ──────────────────────────────────────────────────
 
-unsafe @ _gp_run * GProgImpl pg s name i grid i block ( Vec i ) args → b {
+unsafe @ _gp_run inout GProg pg s name i grid i block ( Vec i ) args → b {
     : String kn ( __gp_kn pg name )
     : b r ( gk_run_dev . pg kit ( _gp_src pg ) ( string_data kn ) grid block args )
     ^ r
 }
 
-unsafe @ _gp_fill_buf * GProgImpl pg GkBuf b f v → b {
+@ _gp_fill_buf inout GProg pg GkBuf b f v → b {
     : ( Vec i ) a ( vec_new [i] )
     ( vec_push [i] a ( gk_arg_dev b ) )
     ( vec_push [i] a ( gpu_arg_i64 . b n ) )
@@ -1018,7 +990,7 @@ unsafe @ _gp_fill_buf * GProgImpl pg GkBuf b f v → b {
 }
 
 // One forward launch for node `k`. Leaves are data — nothing to do.
-unsafe @ _gp_fwd_node * GProgImpl pg i k → b {
+@ _gp_fwd_node inout GProg pg i k → b {
     : GpNode nd ( _gp_node pg k )
     : i op . nd op
     ? <= op ( gop_const ) { ^ T } {}
@@ -1153,7 +1125,7 @@ unsafe @ _gp_fwd_node * GProgImpl pg i k → b {
     ^ r
 }
 
-unsafe @ __gput_fwd_launches * GProgImpl pg → b {
+@ __gput_fwd_launches inout GProg pg → b {
     : i n ( vec_len [GpNode] . pg nodes )
     : ~ b r T
     : ~ i k 0
@@ -1165,8 +1137,7 @@ unsafe @ __gput_fwd_launches * GProgImpl pg → b {
 }
 
 // Recompute every non-leaf value on the device, in tape order.
-unsafe @ gput_forward GProg pg__h → b {
-    : *GProgImpl pg ( _GProg_ptr pg__h )
+@ gput_forward inout GProg pg → b {
     ? . pg ok {} { ^ F }
     ( gk_autosync F )
     : b r ( __gput_fwd_launches pg )
@@ -1179,7 +1150,7 @@ unsafe @ gput_forward GProg pg__h → b {
 
 // The out-shaped contribution `src` accumulated into input `dst`'s gradient
 // over the broadcast axes (block at `moff`, odometer size `tfree`).
-unsafe @ _gp_accred * GProgImpl pg GpNode dst GpNode nd GkBuf src i moff i tfree f sgn → b {
+@ _gp_accred inout GProg pg GpNode dst GpNode nd GkBuf src i moff i tfree f sgn → b {
     : ( Vec i ) a ( vec_new [i] )
     ( vec_push [i] a ( gk_arg_dev . dst grad ) )
     ( vec_push [i] a ( gk_arg_dev src ) )
@@ -1193,7 +1164,7 @@ unsafe @ _gp_accred * GProgImpl pg GpNode dst GpNode nd GkBuf src i moff i tfree
 }
 
 // g (out-shaped) ⊙ other-input → scr, via the ew block at `moff`.
-unsafe @ _gp_scr_ew * GProgImpl pg GpNode nd GkBuf x GkBuf y i moff i op → b {
+@ _gp_scr_ew inout GProg pg GpNode nd GkBuf x GkBuf y i moff i op → b {
     : ( Vec i ) a ( vec_new [i] )
     ( vec_push [i] a ( gk_arg_dev x ) )
     ( vec_push [i] a ( gk_arg_dev y ) )
@@ -1206,7 +1177,7 @@ unsafe @ _gp_scr_ew * GProgImpl pg GpNode nd GkBuf x GkBuf y i moff i op → b {
     ^ r
 }
 
-unsafe @ _gp_bwd_node * GProgImpl pg i k → b {
+@ _gp_bwd_node inout GProg pg i k → b {
     : GpNode nd ( _gp_node pg k )
     ? == . nd reach 1 {} { ^ T }
     : i op . nd op
@@ -1392,7 +1363,7 @@ unsafe @ _gp_bwd_node * GProgImpl pg i k → b {
 
 // Zero every gradient, seed dL/d(loss) = 1, sweep the tape in reverse over
 // the loss-ancestor set, then zero const-leaf gradients (grad.nu's epilogue).
-unsafe @ __gput_bwd_launches * GProgImpl pg → b {
+@ __gput_bwd_launches inout GProg pg → b {
     : i n ( vec_len [GpNode] . pg nodes )
     : ~ b r T
     : ~ i k 0
@@ -1415,8 +1386,7 @@ unsafe @ __gput_bwd_launches * GProgImpl pg → b {
     ^ r
 }
 
-unsafe @ gput_backward GProg pg__h → b {
-    : *GProgImpl pg ( _GProg_ptr pg__h )
+@ gput_backward inout GProg pg → b {
     ? . pg ok {} { ^ F }
     ( gk_autosync F )
     : b r ( __gput_bwd_launches pg )
@@ -1432,8 +1402,7 @@ unsafe @ gput_backward GProg pg__h → b {
 // gput_set_input (plain HtoD; the recorded kernels read the buffers).
 // Returns F where graphs are unavailable (CPU backend) — callers keep
 // using gput_forward/gput_backward.
-unsafe @ gput_graph_capture GProg pg__h → b {
-    : *GProgImpl pg ( _GProg_ptr pg__h )
+@ gput_graph_capture inout GProg pg → b {
     ? . pg ok {} { ^ F }
     ? ( gpu_graph_ok . pg gexec ) { ^ T } {}
     : GpuKit kit . pg kit
@@ -1455,9 +1424,7 @@ unsafe @ gput_graph_capture GProg pg__h → b {
 // (gput_set_input), gpopt_prepare (one 16-byte ctl upload), and ONE
 // gput_episode launch. The optimizer's per-step scalars ride the ctl
 // buffer, so the captured launches never change.
-unsafe @ gput_graph_capture_train GProg pg__h GpOpt go__h → b {
-    : *GpOptImpl go ( _GpOpt_ptr go__h )
-    : *GProgImpl pg ( _GProg_ptr pg__h )
+@ gput_graph_capture_train inout GProg pg inout GpOpt go → b {
     ? & . pg ok . go ok {} { ^ F }
     ? ( gpu_graph_ok . pg gexec ) { ^ T } {}
     ? ( _gpopt_ensure go pg ) {} { ^ F }
@@ -1477,21 +1444,19 @@ unsafe @ gput_graph_capture_train GProg pg__h GpOpt go__h → b {
 }
 
 // Run one fused episode (falls back to the per-node path without a graph).
-unsafe @ gput_episode GProg pg__h → b {
-    : *GProgImpl pg ( _GProg_ptr pg__h )
+@ gput_episode inout GProg pg → b {
     ? . pg ok {} { ^ F }
     ? ( gpu_graph_ok . pg gexec ) {
         ^ == ( gpu_graph_launch ( gk_gpu . pg kit ) . pg gexec ) 0
     } {}
-    ? ( gput_forward pg__h ) {} { ^ F }
-    ^ ( gput_backward pg__h )
+    ? ( gput_forward pg ) {} { ^ F }
+    ^ ( gput_backward pg )
 }
 
 // ── readback ─────────────────────────────────────────────────────────
 
 // Download a node's value into `out` (resized by the caller to node size).
-unsafe @ gput_value GProg pg__h GVar v ( Vec f ) out → b {
-    : *GProgImpl pg ( _GProg_ptr pg__h )
+@ gput_value inout GProg pg GVar v ( Vec f ) out → b {
     ? . pg ok {} { ^ F }
     ? & >= . v id 0 < . v id ( vec_len [GpNode] . pg nodes ) {} { ^ F }
     : GpNode nd ( _gp_node pg . v id )
@@ -1499,8 +1464,7 @@ unsafe @ gput_value GProg pg__h GVar v ( Vec f ) out → b {
     ^ ( _gp_dl . pg kit . nd val out )
 }
 
-unsafe @ gput_grad GProg pg__h GVar v ( Vec f ) out → b {
-    : *GProgImpl pg ( _GProg_ptr pg__h )
+@ gput_grad inout GProg pg GVar v ( Vec f ) out → b {
     ? . pg ok {} { ^ F }
     ? & >= . v id 0 < . v id ( vec_len [GpNode] . pg nodes ) {} { ^ F }
     : GpNode nd ( _gp_node pg . v id )
@@ -1516,8 +1480,7 @@ unsafe @ gput_grad GProg pg__h GVar v ( Vec f ) out → b {
 }
 
 // The loss scalar (node value element 0).
-unsafe @ gput_loss GProg pg__h → f {
-    : *GProgImpl pg ( _GProg_ptr pg__h )
+@ gput_loss inout GProg pg → f {
     : GpNode nd ( _gp_node pg . pg loss )
     : ( Vec f ) o ( vec_new [f] )
     ( vec_push [f] o 0.0 )
@@ -1529,9 +1492,7 @@ unsafe @ gput_loss GProg pg__h → f {
 
 // Write every parameter node's device value back into the CPU tape's own
 // tensor (in place), so gvar_value reflects the trained weights.
-unsafe @ gput_param_sync_host GProg pg__h GTape tp__h → b {
-    : *GProgImpl pg ( _GProg_ptr pg__h )
-    : *GTapeImpl tp ( _GTape_ptr tp__h )
+@ gput_param_sync_host inout GProg pg GTape tp → b {
     ? . pg ok {} { ^ F }
     : i n ( vec_len [GpNode] . pg nodes )
     : ~ b r T
@@ -1539,7 +1500,7 @@ unsafe @ gput_param_sync_host GProg pg__h GTape tp__h → b {
     ~ & < k n r {
         : GpNode nd ( _gp_node pg k )
         ? == . nd op ( gop_param ) {
-            : *Tensor tv # *Tensor ( _g_val tp k )
+            : Tensor tv ( _g_v tp k )
             = r ( _gp_dl . pg kit . nd val . tv data )
         } {}
         = k + k 1
@@ -1549,21 +1510,9 @@ unsafe @ gput_param_sync_host GProg pg__h GTape tp__h → b {
 
 // ── the device optimizer ─────────────────────────────────────────────
 
-unsafe @ gpopt_new i kind f lr → GpOpt {
-    : ~ GpOptImpl o @ GpOptImpl {}
-    = . o ok T
-    = . o kind kind
-    = . o lr lr
-    = . o clip 0.0
-    = . o t 0
-    = . o ids ( vec_new [i] )
-    = . o alphas ( vec_new [f] )
-    = . o m ( vec_new [GkBuf] )
-    = . o v ( vec_new [GkBuf] )
-    = . o ptab ( _gp_nobuf )
-    = . o nrm ( _gp_nobuf )
-    = . o ctl ( _gp_nobuf )
-    ^ @ GpOpt { ( arc_new [GpOptImpl] o ) }
+@ gpopt_new i kind f lr → GpOpt {
+    ^ @ GpOpt { T kind lr 0.0 0 ( vec_new [i] ) ( vec_new [f] ) ( vec_new [GkBuf] ) ( vec_new [GkBuf] )
+        ( _gp_nobuf ) ( _gp_nobuf ) ( _gp_nobuf ) }
 }
 
 @ gpopt_sgd_new f lr → GpOpt { ^ ( gpopt_new 0 lr ) }
@@ -1574,8 +1523,7 @@ unsafe @ gpopt_new i kind f lr → GpOpt {
 // moment and table buffers go with its last owner).
 @ gpopt_free sink GpOpt o → v {}
 
-unsafe @ gpopt_set_clip GpOpt o__h f maxn → v {
-    : *GpOptImpl o ( _GpOpt_ptr o__h )
+@ gpopt_set_clip inout GpOpt o f maxn → v {
     = . o clip maxn
 }
 
@@ -1587,67 +1535,54 @@ unsafe @ gpopt_set_clip GpOpt o__h f maxn → v {
 // Params are read/written through gput_value / gput_set_input; these cover
 // the rest. `pi` is the gpopt_add registration index.
 
-unsafe @ gpopt_t GpOpt o__h → i {
-    : *GpOptImpl o ( _GpOpt_ptr o__h )
+@ gpopt_t inout GpOpt o → i {
     ^ . o t
 }
 
-unsafe @ gpopt_set_t GpOpt o__h i t2 → v {
-    : *GpOptImpl o ( _GpOpt_ptr o__h )
+@ gpopt_set_t inout GpOpt o i t2 → v {
     = . o t t2
 }
 
-unsafe @ gpopt_count GpOpt o__h → i {
-    : *GpOptImpl o ( _GpOpt_ptr o__h )
+@ gpopt_count inout GpOpt o → i {
     ^ ( vec_len [i] . o ids )
 }
 
-unsafe @ __gpopt_buf * GpOptImpl o b want_v i pi → GkBuf {
+@ __gpopt_buf inout GpOpt o b want_v i pi → GkBuf {
     ^ ?? ( vec_get [GkBuf] ? want_v . o v . o m pi ) { T x → x F → ( _gp_nobuf ) }
 }
 
-unsafe @ __gpopt_mv_dl * GpOptImpl o * GProgImpl pg b want_v i pi ( Vec f ) out → b {
+@ __gpopt_mv_dl inout GpOpt o inout GProg pg b want_v i pi ( Vec f ) out → b {
     ? & & . o ok >= pi 0 < pi ( vec_len [GkBuf] . o m ) {} { ^ F }
     : GkBuf b ( __gpopt_buf o want_v pi )
     ? & ( gk_buf_ok b ) == ( vec_len [f] out ) . b n {} { ^ F }
     ^ ( _gp_dl . pg kit b out )
 }
 
-unsafe @ __gpopt_mv_ul * GpOptImpl o * GProgImpl pg b want_v i pi ( Vec f ) src → b {
+@ __gpopt_mv_ul inout GpOpt o inout GProg pg b want_v i pi ( Vec f ) src → b {
     ? & & . o ok >= pi 0 < pi ( vec_len [GkBuf] . o m ) {} { ^ F }
     : GkBuf b ( __gpopt_buf o want_v pi )
     ? & ( gk_buf_ok b ) == ( vec_len [f] src ) . b n {} { ^ F }
     ^ ( _gp_ul . pg kit b src )
 }
 
-unsafe @ gpopt_m_download GpOpt o__h GProg pg__h i pi ( Vec f ) out → b {
-    : *GpOptImpl o ( _GpOpt_ptr o__h )
-    : *GProgImpl pg ( _GProg_ptr pg__h )
+@ gpopt_m_download inout GpOpt o inout GProg pg i pi ( Vec f ) out → b {
     ^ ( __gpopt_mv_dl o pg F pi out )
 }
 
-unsafe @ gpopt_v_download GpOpt o__h GProg pg__h i pi ( Vec f ) out → b {
-    : *GpOptImpl o ( _GpOpt_ptr o__h )
-    : *GProgImpl pg ( _GProg_ptr pg__h )
+@ gpopt_v_download inout GpOpt o inout GProg pg i pi ( Vec f ) out → b {
     ^ ( __gpopt_mv_dl o pg T pi out )
 }
 
-unsafe @ gpopt_m_upload GpOpt o__h GProg pg__h i pi ( Vec f ) src → b {
-    : *GpOptImpl o ( _GpOpt_ptr o__h )
-    : *GProgImpl pg ( _GProg_ptr pg__h )
+@ gpopt_m_upload inout GpOpt o inout GProg pg i pi ( Vec f ) src → b {
     ^ ( __gpopt_mv_ul o pg F pi src )
 }
 
-unsafe @ gpopt_v_upload GpOpt o__h GProg pg__h i pi ( Vec f ) src → b {
-    : *GpOptImpl o ( _GpOpt_ptr o__h )
-    : *GProgImpl pg ( _GProg_ptr pg__h )
+@ gpopt_v_upload inout GpOpt o inout GProg pg i pi ( Vec f ) src → b {
     ^ ( __gpopt_mv_ul o pg T pi src )
 }
 
 // Register one parameter (its Adam moments start at zero, on the device).
-unsafe @ gpopt_add GpOpt o__h GProg pg__h GVar p f alpha → v {
-    : *GpOptImpl o ( _GpOpt_ptr o__h )
-    : *GProgImpl pg ( _GProg_ptr pg__h )
+@ gpopt_add inout GpOpt o inout GProg pg GVar p f alpha → v {
     ? & . o ok >= . p id 0 {} { ^ v }
     : GpNode nd ( _gp_node pg . p id )
     : GkBuf mb ( gk_dbuf_new . pg kit . nd n ( __gp_edt pg ) )
@@ -1664,7 +1599,7 @@ unsafe @ gpopt_add GpOpt o__h GProg pg__h GVar p f alpha → v {
 }
 
 // Ensure the ctl buffer and (with clipping) the [dptr len] table exist.
-unsafe @ _gpopt_ensure * GpOptImpl o * GProgImpl pg → b {
+@ _gpopt_ensure inout GpOpt o inout GProg pg → b {
     ? ( gk_buf_ok . o ctl ) {} {
         = . o ctl ( gk_dbuf_new . pg kit 2 ( __gp_edt pg ) )
         ? ( gk_buf_ok . o ctl ) {} { = . o ok F ^ F }
@@ -1694,9 +1629,7 @@ unsafe @ _gpopt_ensure * GpOptImpl o * GProgImpl pg → b {
 // opt.nu), and upload [lrt, 1.0] into ctl. The device half then overwrites
 // ctl[1] with the clip scale when clipping is on. Graph-safe: per episode
 // this is ONE 16-byte upload.
-unsafe @ gpopt_prepare GpOpt o__h GProg pg__h → b {
-    : *GpOptImpl o ( _GpOpt_ptr o__h )
-    : *GProgImpl pg ( _GProg_ptr pg__h )
+@ gpopt_prepare inout GpOpt o inout GProg pg → b {
     ? & . o ok . pg ok {} { ^ F }
     ? ( _gpopt_ensure o pg ) {} { ^ F }
     : ~ f lrt . o lr
@@ -1714,7 +1647,7 @@ unsafe @ gpopt_prepare GpOpt o__h GProg pg__h → b {
 
 // The DEVICE half: (clip-scale kernel when clipping) + one gp_opt launch
 // per backward-active parameter. Pure launches — capturable into a graph.
-unsafe @ _gpopt_launches * GpOptImpl o * GProgImpl pg → b {
+@ _gpopt_launches inout GpOpt o inout GProg pg → b {
     : ~ b r T
     ? > . o clip 0.0 {
         : ( Vec i ) a ( vec_new [i] )
@@ -1753,10 +1686,8 @@ unsafe @ _gpopt_launches * GpOptImpl o * GProgImpl pg → b {
 // untouched params (not loss ancestors) are SKIPPED, the clip norm covers
 // every registered ancestor's gradient in registration order, Adam's lr_t
 // comes from host pow exactly like the CPU path.
-unsafe @ gpopt_step GpOpt o__h GProg pg__h → b {
-    : *GpOptImpl o ( _GpOpt_ptr o__h )
-    : *GProgImpl pg ( _GProg_ptr pg__h )
-    ? ( gpopt_prepare o__h pg__h ) {} { ^ F }
+@ gpopt_step inout GpOpt o inout GProg pg → b {
+    ? ( gpopt_prepare o pg ) {} { ^ F }
     ( gk_autosync F )
     : b r ( _gpopt_launches o pg )
     ( gk_autosync T )

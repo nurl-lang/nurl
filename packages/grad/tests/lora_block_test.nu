@@ -55,7 +55,7 @@ $ `deps/gpukit/src/dev.nu`
 
 // loss of a block variant (fresh tape each call — the FD probe path)
 unsafe @ block_loss Blk bl → f {
-    : GTape tp ( tape_new )
+    : ~ GTape tp ( tape_new )
     : GVar l ( build_block tp bl # *u 0 # *u 0 )
     : f v ( g_scalar tp l )
     ^ v
@@ -85,7 +85,7 @@ unsafe @ main → i {
     // ── 1. FD through the whole block ────────────────────────────────
     ( nurl_print `— finite differences through the block —\n` )
     : Blk bl ( blk_new 42 F )
-    : GTape tp ( tape_new )
+    : ~ GTape tp ( tape_new )
     : ( Vec u ) pav__b ( vec_zeroed [u] * 7 8 )
     : *u pav ( vec_data [u] pav__b )
     : ( Vec u ) pbv__b ( vec_zeroed [u] * 7 8 )
@@ -124,7 +124,7 @@ unsafe @ main → i {
     // ── 2. the LoRA init identity (B = 0) ────────────────────────────
     ( nurl_print `— B=0 init identity —\n` )
     : Blk bz ( blk_new 42 T )
-    : GTape tpz ( tape_new )
+    : ~ GTape tpz ( tape_new )
     : ( Vec u ) pavz__b ( vec_zeroed [u] * 7 8 )
     : *u pavz ( vec_data [u] pavz__b )
     : ( Vec u ) pbvz__b ( vec_zeroed [u] * 7 8 )
@@ -169,7 +169,7 @@ unsafe @ main → i {
         ( nurl_print `  backend: ` )
         ( nurl_print ( gk_backend kit ) )
         ( nurl_print `\n` )
-        : GProg pg ( gput_capture kit tp loss )
+        : ~ GProg pg ( gput_capture kit tp loss )
         ( check ( gput_ok pg ) `block capture succeeds` )
         : ~ b rp F
         ? ( gput_ok pg ) {
@@ -219,14 +219,14 @@ unsafe @ main → i {
         } {}
         // — 4. a short LoRA training run on the device —
         ( nurl_print `— device LoRA training (B=0 init, 60 Adam steps) —\n` )
-        : GTape tpt ( tape_new )
+        : ~ GTape tpt ( tape_new )
         : ( Vec u ) pat__b ( vec_zeroed [u] * 7 8 )
         : *u pat ( vec_data [u] pat__b )
         : ( Vec u ) pbt__b ( vec_zeroed [u] * 7 8 )
         : *u pbt ( vec_data [u] pbt__b )
         : GVar lt ( build_block tpt bz pat pbt )
-        : GProg pgt ( gput_capture kit tpt lt )
-        : GpOpt go ( gpopt_adam_new 0.01 )
+        : ~ GProg pgt ( gput_capture kit tpt lt )
+        : ~ GpOpt go ( gpopt_adam_new 0.01 )
         : ~ i k3 0
         ~ < k3 7 {
             ( gpopt_add go pgt @ GVar { ( nurl_peek pat k3 ) } 0.0 )

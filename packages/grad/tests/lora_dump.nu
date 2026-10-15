@@ -35,7 +35,7 @@ unsafe @ main → i {
     ( dumpv `cosv` . bl cosv ) ( dumpv `sinv` . bl sinv )
     ( dumpv `mask` . bl mask ) ( dumpv `onehot` . bl onehot )
     ( dumpv `la` . bl la ) ( dumpv `lb` . bl lb )
-    : GTape tp ( tape_new )
+    : ~ GTape tp ( tape_new )
     : ( Vec u ) pav__b ( vec_zeroed [u] * 7 8 )
     : *u pav ( vec_data [u] pav__b )
     : ( Vec u ) pbv__b ( vec_zeroed [u] * 7 8 )

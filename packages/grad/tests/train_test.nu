@@ -42,7 +42,7 @@ $ `deps/tensor/src/tensor.nu`
 }
 
 // Glorot-uniform [fin,fout] weight + zero [fout] bias, mlp's recipe.
-@ glorot GTape tp Rng g i fin i fout → GVar {
+@ glorot inout GTape tp Rng g i fin i fout → GVar {
     : f bound ( float_sqrt / 6.0 # f + fin fout )
     : ( Vec f ) w ( vec_with_cap [f] * fin fout )
     : ~ i k 0
@@ -54,7 +54,7 @@ $ `deps/tensor/src/tensor.nu`
     ^ p
 }
 
-@ zerosb GTape tp i n → GVar {
+@ zerosb inout GTape tp i n → GVar {
     : ( Vec f ) z ( vec_with_cap [f] n )
     : ~ i k 0
     ~ < k n { ( vec_push [f] z 0.0 ) = k + k 1 }
@@ -71,12 +71,12 @@ $ `deps/tensor/src/tensor.nu`
     ( vec_push [f] w0 0.5 ) ( vec_push [f] w0 -0.25 ) ( vec_push [f] w0 1.5 )
     : ( Vec f ) cv ( vec_new [f] )
     ( vec_push [f] cv 1.0 ) ( vec_push [f] cv 2.0 ) ( vec_push [f] cv -3.0 )
-    : GTape tp ( tape_new )
+    : ~ GTape tp ( tape_new )
     : Tensor wt ( mk1 w0 )
     : GVar p ( grad_param tp wt )
     : Tensor ct ( mk1 cv )
     : GVar c ( grad_const tp ct )
-    : Opt o ( opt_adam_new 0.01 )
+    : ~ Opt o ( opt_adam_new 0.01 )
     ( opt_add o tp p 0.0 )
     : i mark ( tape_mark tp )
     : ~ i ep 0
@@ -123,12 +123,12 @@ $ `deps/tensor/src/tensor.nu`
     ( check == ( opt_t o ) 2 `optimizer step count is 2` )
 
     ( nurl_print `— SGD + weight decay, exact —\n` )
-    : GTape tp2 ( tape_new )
+    : ~ GTape tp2 ( tape_new )
     : Tensor wt2 ( mk1 w0 )
     : GVar p2 ( grad_param tp2 wt2 )
     : Tensor ct2 ( mk1 cv )
     : GVar c2 ( grad_const tp2 ct2 )
-    : Opt o2 ( opt_sgd_new 0.1 )
+    : ~ Opt o2 ( opt_sgd_new 0.1 )
     ( opt_add o2 tp2 p2 0.01 )
     : GVar l2 ( g_sum tp2 ( g_mul tp2 p2 c2 ) )
     : b _b2 ( backward tp2 l2 )
@@ -146,12 +146,12 @@ $ `deps/tensor/src/tensor.nu`
 
     ( nurl_print `— global-norm clipping —\n` )
     // single param, grad = c (norm = sqrt(14)); clip to 1.0 → step = lr·c/|c|
-    : GTape tp3 ( tape_new )
+    : ~ GTape tp3 ( tape_new )
     : Tensor wt3 ( mk1 w0 )
     : GVar p3 ( grad_param tp3 wt3 )
     : Tensor ct3 ( mk1 cv )
     : GVar c3 ( grad_const tp3 ct3 )
-    : Opt o3 ( opt_sgd_new 0.1 )
+    : ~ Opt o3 ( opt_sgd_new 0.1 )
     ( opt_add o3 tp3 p3 0.0 )
     ( opt_set_clip o3 1.0 )
     : GVar l3 ( g_sum tp3 ( g_mul tp3 p3 c3 ) )
@@ -189,7 +189,7 @@ $ `deps/tensor/src/tensor.nu`
         = r + r 1
     }
     // train: Adam 1e-3 (sklearn default), batch 200, 60 epochs
-    : GTape tpt ( tape_new )
+    : ~ GTape tpt ( tape_new )
     : Rng ig ( rng_seed 1 )
     : GVar W1 ( glorot tpt ig D 64 )
     : GVar B1 ( zerosb tpt 64 )
@@ -199,7 +199,7 @@ $ `deps/tensor/src/tensor.nu`
     : GVar B3 ( zerosb tpt 64 )
     : GVar W4 ( glorot tpt ig 64 D )
     : GVar B4 ( zerosb tpt D )
-    : Opt ot ( opt_adam_new 0.001 )
+    : ~ Opt ot ( opt_adam_new 0.001 )
     ( opt_add ot tpt W1 0.0001 ) ( opt_add ot tpt B1 0.0 )
     ( opt_add ot tpt W2 0.0001 ) ( opt_add ot tpt B2 0.0 )
     ( opt_add ot tpt W3 0.0001 ) ( opt_add ot tpt B3 0.0 )

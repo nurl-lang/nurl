@@ -2,6 +2,12 @@
 
 All notable changes to the `nurllama` package.
 
+## [0.21.0] — 2026-10-14
+
+### Changed
+
+- Finetuning follows grad 0.13: `ft_graph` takes the tape `inout`, and the device program it uploads into is passed `inout` too.
+
 ## [0.20.0] — 2026-10-14
 
 ### Changed

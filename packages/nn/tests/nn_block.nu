@@ -158,7 +158,7 @@ $ `deps/tensor/src/tensor.nu`
 }
 
 // slice a [r,c] range out of the la/lb pools as a param/const tensor
-@ tsub GTape tp ( Vec f ) pool i off i r i c b param → GVar {
+@ tsub inout GTape tp ( Vec f ) pool i off i r i c b param → GVar {
     : ( Vec f ) v ( vec_with_cap [f] * r c )
     : ~ i k 0
     ~ < k * r c { ( vec_push [f] v ( _tf pool + off k ) ) = k + k 1 }
@@ -169,7 +169,7 @@ $ `deps/tensor/src/tensor.nu`
 // The block, built from nn primitives. Params (registration order): the 14
 // adapter tensors A0 B0 A1 B1 … (q k v o gate up down). Writes param ids to
 // pav/pbv (7 each) when they hold the slots.
-@ build_block GTape tp Blk bl ( Vec i ) pav ( Vec i ) pbv → GVar {
+@ build_block inout GTape tp Blk bl ( Vec i ) pav ( Vec i ) pbv → GVar {
     : i HT ( cT )
     : i H ( cH )
     : i QD * ( cNH ) ( cHD )

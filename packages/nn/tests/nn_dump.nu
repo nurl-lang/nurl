@@ -35,7 +35,7 @@ $ `deps/tensor/src/tensor.nu`
     ( dumpv `cosv` . bl cosv ) ( dumpv `sinv` . bl sinv )
     ( dumpv `mask` . bl mask ) ( dumpv `onehot` . bl onehot )
     ( dumpv `la` . bl la ) ( dumpv `lb` . bl lb )
-    : GTape tp ( tape_new )
+    : ~ GTape tp ( tape_new )
     : ( Vec i ) pav ( vec_zeroed [i] 7 )
     : ( Vec i ) pbv ( vec_zeroed [i] 7 )
     : GVar loss ( build_block tp bl pav pbv )

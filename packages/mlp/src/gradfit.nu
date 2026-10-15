@@ -37,7 +37,7 @@ $ `deps/tensor/src/tensor.nu`
 
 // Layer l's weights as a tape parameter in matmul layout: tape[i*fout+j] =
 // m.w[wo + j*fin + i] (mlp stores [fout,fin] rows).
-@ _gf_wparam GTape tp Mlp m i l → GVar {
+@ _gf_wparam inout GTape tp Mlp m i l → GVar {
     : i fin ( _mlp_iget . m sizes l )
     : i fout ( _mlp_iget . m sizes + l 1 )
     : i wo ( _mlp_iget . m w_off l )
@@ -58,7 +58,7 @@ $ `deps/tensor/src/tensor.nu`
     ^ p
 }
 
-@ _gf_bparam GTape tp Mlp m i l → GVar {
+@ _gf_bparam inout GTape tp Mlp m i l → GVar {
     : i fout ( _mlp_iget . m sizes + l 1 )
     : i bo ( _mlp_iget . m b_off l )
     : ( Vec f ) bv ( vec_with_cap [f] fout )
@@ -72,7 +72,7 @@ $ `deps/tensor/src/tensor.nu`
 }
 
 // Rows idx[from..to) of the row-major table `X` (n×d) as a [count,d] const.
-@ _gf_rows_const GTape tp ( Vec f ) X i d ( Vec i ) idx i from i to → GVar {
+@ _gf_rows_const inout GTape tp ( Vec f ) X i d ( Vec i ) idx i from i to → GVar {
     : i cnt - to from
     : ( Vec f ) buf ( vec_with_cap [f] * cnt d )
     : ~ i k from
@@ -90,7 +90,7 @@ $ `deps/tensor/src/tensor.nu`
 }
 
 // The network forward on the tape: relu hidden layers, linear output.
-@ _gf_forward GTape tp GVar xb ( Vec GVar ) ws ( Vec GVar ) bs i nl → GVar {
+@ _gf_forward inout GTape tp GVar xb ( Vec GVar ) ws ( Vec GVar ) bs i nl → GVar {
     : ~ GVar h xb
     : ~ i l 0
     ~ < l nl {
@@ -203,7 +203,7 @@ $ `deps/tensor/src/tensor.nu`
     ? > bsz n_train { = bsz n_train } {}
     // The tape: parameters (and the fixed validation batch) live below the
     // mark; every episode above it is dropped by tape_reset_to.
-    : GTape tp ( tape_new )
+    : ~ GTape tp ( tape_new )
     : ( Vec GVar ) ws ( vec_new [GVar] )
     : ( Vec GVar ) bs2 ( vec_new [GVar] )
     : ~ i l 0
@@ -212,7 +212,7 @@ $ `deps/tensor/src/tensor.nu`
         ( vec_push [GVar] bs2 ( _gf_bparam tp m l ) )
         = l + l 1
     }
-    : Opt o ( opt_adam_new . cfg lr )
+    : ~ Opt o ( opt_adam_new . cfg lr )
     = l 0
     ~ < l nl {
         ( opt_add o tp ?? ( vec_get [GVar] ws l ) { T x → x F → @ GVar { -1 } } 0.0 )

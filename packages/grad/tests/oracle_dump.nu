@@ -58,7 +58,7 @@ $ `deps/tensor/src/tensor.nu`
     ( nurl_print `\n` )
 }
 
-@ dumpg s name GTape tp GVar v → v {
+@ dumpg s name inout GTape tp GVar v → v {
     ( nurl_print `grad ` )
     ( nurl_print name )
     : Tensor g ( grad_of tp v )
@@ -104,7 +104,7 @@ $ `deps/tensor/src/tensor.nu`
     ( dump `X` xt ) ( dump `T` tt ) ( dump `W1` w1t ) ( dump `b1` b1t )
     ( dump `W2` w2t ) ( dump `b2` b2t ) ( dump `A` at ) ( dump `Q` qt ) ( dump `P` pt )
 
-    : GTape tp ( tape_new )
+    : ~ GTape tp ( tape_new )
     : GVar w1 ( grad_param tp w1t )
     : GVar b1 ( grad_param tp b1t )
     : GVar w2 ( grad_param tp w2t )

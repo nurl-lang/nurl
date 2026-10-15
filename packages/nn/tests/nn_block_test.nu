@@ -24,7 +24,7 @@ $ `deps/tensor/src/tensor.nu`
 
 @ main → i {
     : Blk bl ( blk_new 42 F )
-    : GTape tp ( tape_new )
+    : ~ GTape tp ( tape_new )
     : ( Vec i ) pav ( vec_zeroed [i] 7 )
     : ( Vec i ) pbv ( vec_zeroed [i] 7 )
     : GVar loss ( build_block tp bl pav pbv )

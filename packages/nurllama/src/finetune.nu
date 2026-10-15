@@ -575,7 +575,7 @@ unsafe @ __ft_blank → ( Locked FtModelImpl ) { ^ ( locked_zero [FtModelImpl] )
     ^ x
 }
 
-@ __ft_const GTape tp ( Vec f ) v i r i c → GVar {
+@ __ft_const inout GTape tp ( Vec f ) v i r i c → GVar {
     : ( Vec i ) s ( vec_new [i] )
     ? > r 0 { ( vec_push [i] s r ) } {}
     ( vec_push [i] s c )
@@ -592,7 +592,7 @@ unsafe @ __ft_blank → ( Locked FtModelImpl ) { ^ ( locked_zero [FtModelImpl] )
     ^ o
 }
 
-@ __ft_ones GTape tp i n → GVar {
+@ __ft_ones inout GTape tp i n → GVar {
     : ( Vec f ) v ( vec_with_cap [f] n )
     : ~ i k 0
     ~ < k n { ( vec_push [f] v 1.0 ) = k + k 1 }
@@ -636,7 +636,7 @@ unsafe @ __ft_blank → ( Locked FtModelImpl ) { ^ ( locked_zero [FtModelImpl] )
 // elements — row-major order already lays them out that way, which makes
 // this two reshapes around the ordinary rmsnorm. `wp` 0 (llama, qwen2)
 // returns the input untouched.
-@ __ft_head_norm GTape tp GVar x GVar W b have i T2 i heads i hd GVar ones f eps → GVar {
+@ __ft_head_norm inout GTape tp GVar x GVar W b have i T2 i heads i hd GVar ones f eps → GVar {
     ? have {} { ^ x }
     : ( Vec i ) flat_s ( vec_new [i] )
     ( vec_push [i] flat_s * T2 heads )
@@ -651,7 +651,7 @@ unsafe @ __ft_blank → ( Locked FtModelImpl ) { ^ ( locked_zero [FtModelImpl] )
 }
 
 // LoRA pair registration: A [in,r] seeded small, B [r,out] zero.
-@ __ft_lora_pair GTape tp Rng rg i in i r i out ( Vec i ) pids i slot → v {
+@ __ft_lora_pair inout GTape tp Rng rg i in i r i out ( Vec i ) pids i slot → v {
     : ( Vec f ) av ( vec_with_cap [f] * in r )
     : f lim / 1.0 ( float_sqrt # f in )
     : ~ i k 0
@@ -673,7 +673,7 @@ unsafe @ __ft_blank → ( Locked FtModelImpl ) { ^ ( locked_zero [FtModelImpl] )
 
 // LoRA linear over the pids-registered adapter for `slot` (the plumbing;
 // the math is nn_lora_linear).
-@ __ft_lora_lin GTape tp GVar x GVar w0 ( Vec i ) pids i slot f scale → GVar {
+@ __ft_lora_lin inout GTape tp GVar x GVar w0 ( Vec i ) pids i slot f scale → GVar {
     : GVar pa @ GVar { ( _ti pids * slot 2 ) }
     : GVar pb @ GVar { ( _ti pids + * slot 2 1 ) }
     ^ ( nn_lora_linear tp x w0 pa pb scale )
@@ -692,14 +692,14 @@ unsafe @ __ft_blank → ( Locked FtModelImpl ) { ^ ( locked_zero [FtModelImpl] )
 // sequence (T tokens; loss over positions 0..T-2 predicting 1..T-1).
 // `pids` receives the 2·7·n_layer LoRA parameter ids (A, B per slot);
 // LoRA params register FIRST.
-@ ft_graph FtModel h GTape tp ( Vec i ) ids i r f alpha i seed ( Vec i ) pids → FtG {
+@ ft_graph FtModel h inout GTape tp ( Vec i ) ids i r f alpha i seed ( Vec i ) pids → FtG {
     : ~ FtModelImpl m ( locked_take [FtModelImpl] . h l )
     : FtG r ( __ft_graph_in m tp ids r alpha seed pids )
     ( locked_restore [FtModelImpl] . h l m )
     ^ r
 }
 
-@ __ft_graph_in inout FtModelImpl m GTape tp ( Vec i ) ids i r f alpha i seed ( Vec i ) pids → FtG {
+@ __ft_graph_in inout FtModelImpl m inout GTape tp ( Vec i ) ids i r f alpha i seed ( Vec i ) pids → FtG {
     : b _sized ( vec_resize_zeroed [i] pids * 14 . m n_layer )
     : i T2 ( vec_len [i] ids )
     : i H . m n_embd
@@ -908,7 +908,7 @@ unsafe @ __ft_blank → ( Locked FtModelImpl ) { ^ ( locked_zero [FtModelImpl] )
 // and an eager run upload identical bytes — what changes is only that one
 // tensor is resident at a time instead of the whole model.
 
-@ __ft_up_vec inout FtModelImpl m Gguf gg GProg pg i node i L s suf → b {
+@ __ft_up_vec inout FtModelImpl m Gguf gg inout GProg pg i node i L s suf → b {
     : FtV pv ( __ft_lvec gg L suf )
     ? . pv has {} { ^ F }
     ? == . m rope_style 0 {
@@ -918,7 +918,7 @@ unsafe @ __ft_blank → ( Locked FtModelImpl ) { ^ ( locked_zero [FtModelImpl] )
     ^ ( gput_set_input pg @ GVar { node } . pv v )
 }
 
-@ __ft_up_layer inout FtModelImpl m Gguf gg GProg pg i node i L i slot → b {
+@ __ft_up_layer inout FtModelImpl m Gguf gg inout GProg pg i node i L i slot → b {
     : s suf ( __ft_base_name slot )
     ? | | | | | | == slot 0 == slot 1 == slot 9 == slot 10 == slot 11 == slot 12 == slot 13 {
         ^ ( __ft_up_vec m gg pg node L suf )
@@ -933,7 +933,7 @@ unsafe @ __ft_blank → ( Locked FtModelImpl ) { ^ ( locked_zero [FtModelImpl] )
     ^ ( gput_set_input pg @ GVar { node } . w data )
 }
 
-@ __ft_up_wout inout FtModelImpl m Gguf gg GProg pg i node → b {
+@ __ft_up_wout inout FtModelImpl m Gguf gg inout GProg pg i node → b {
     : i oi ( gguf_find_tensor gg `output.weight` )
     ? >= oi 0 {
         : ~ i rows 0
@@ -996,14 +996,14 @@ unsafe @ __ft_blank → ( Locked FtModelImpl ) { ^ ( locked_zero [FtModelImpl] )
 
 // Fill every lazy base const's device buffer. Call once, right after the
 // capture; T when every tensor landed.
-@ ft_stream_upload FtModel h GProg pg → b {
+@ ft_stream_upload FtModel h inout GProg pg → b {
     : ~ FtModelImpl m ( locked_take [FtModelImpl] . h l )
     : b r ( __ft_stream_upload_in m pg )
     ( locked_restore [FtModelImpl] . h l m )
     ^ r
 }
 
-@ __ft_stream_upload_in inout FtModelImpl m GProg pg → b {
+@ __ft_stream_upload_in inout FtModelImpl m inout GProg pg → b {
     ? . m stream {} { ^ T }
     : i n ( vec_len [i] . m lz_node )
     ? > n 0 {} { ^ F }
@@ -1102,7 +1102,7 @@ unsafe @ __ft_blank → ( Locked FtModelImpl ) { ^ ( locked_zero [FtModelImpl] )
     } { ( __ft_st_add so name val n 0 ) }
 }
 
-@ __ft_ckpt_save s path inout FtModelImpl m i r GProg pg GpOpt go ( Vec i ) pids i nslot i step i dtype i wstr → b {
+@ __ft_ckpt_save s path inout FtModelImpl m i r inout GProg pg inout GpOpt go ( Vec i ) pids i nslot i step i dtype i wstr → b {
     : StWriter so ( stw_new )
     : ( Vec i ) meta ( vec_new [i] )
     ( vec_push [i] meta 1 )
@@ -1220,7 +1220,7 @@ unsafe @ __ft_blank → ( Locked FtModelImpl ) { ^ ( locked_zero [FtModelImpl] )
 // caller starts fresh); a shape/meta MISMATCH also reports F after
 // printing why — resuming a different run over it would be silent ruin,
 // so the caller must treat mismatch as fatal (mismb is poked 1).
-@ __ft_ckpt_load s path inout FtModelImpl m i r GProg pg GpOpt go ( Vec i ) pids i nslot i wstr inout i stepout inout b mismatch → b {
+@ __ft_ckpt_load s path inout FtModelImpl m i r inout GProg pg inout GpOpt go ( Vec i ) pids i nslot i wstr inout i stepout inout b mismatch → b {
     = mismatch F
     ?? ( st_open path ) {
         T st → {
@@ -1334,7 +1334,7 @@ unsafe @ __ft_blank → ( Locked FtModelImpl ) { ^ ( locked_zero [FtModelImpl] )
     // them (they only live host-side to build the graph), and a prior
     // ft_merge_st consumed the embedding table. Stream them back.
     ? | == ( vec_len [FtW] . m wq ) 0 == ( vec_len [f] . m embd ) 0 { : b _r ( __ft_reload_base_in m ) } {}
-    : GTape tp ( tape_new )
+    : ~ GTape tp ( tape_new )
     : FtG fg ( __ft_graph_in m tp ids r alpha seed pids )
     : ( Vec f ) aflat ( vec_new [f] )
     : ( Vec f ) bflat ( vec_new [f] )
@@ -1346,7 +1346,7 @@ unsafe @ __ft_blank → ( Locked FtModelImpl ) { ^ ( locked_zero [FtModelImpl] )
     : ~ f l0 0.0
     : ~ f l1 0.0
     ? ok {
-        : GProg pg ( gput_capture_dt kit tp . fg loss dtype )
+        : ~ GProg pg ( gput_capture_dt kit tp . fg loss dtype )
         = ok ( gput_ok pg )
         // streamed base: the capture allocated the buffers from the shapes,
         // now fill them one tensor at a time
@@ -1357,7 +1357,7 @@ unsafe @ __ft_blank → ( Locked FtModelImpl ) { ^ ( locked_zero [FtModelImpl] )
         // adapters + activations. The base streams back from the GGUF for the
         // merge (ft_reload_base). Training reads device buffers only.
         ? ok { ( tape_drop_consts tp ) ( __ft_drop_base_in m ) } {}
-        : GpOpt go ( gpopt_adam_new lr )
+        : ~ GpOpt go ( gpopt_adam_new lr )
         : ~ i pi 0
         ~ < pi * 2 nslot {
             ( gpopt_add go pg @ GVar { ( _ti pids pi ) } 0.0 )

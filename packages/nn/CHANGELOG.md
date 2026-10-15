@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.0] — 2026-10-14
+
+### Changed
+
+- Follows grad 0.13: the builders (`nn_const`, `nn_param`, `nn_ones`, `nn_linear`, `nn_linear_bias`, …) take the tape `inout`.
+
 ## [0.2.3] — 2026-10-14
 
 Requires NURL 0.73.0.

@@ -28,7 +28,7 @@ $ `deps/tensor/src/tensor.nu`
 }
 
 @ main → i {
-    : GTape tp ( tape_new )
+    : ~ GTape tp ( tape_new )
     // param W [2,2], const X [2,2]; loss = sum((X·W)^2)
     : ( Vec f ) wv ( vec_new [f] )
     ( vec_push [f] wv 0.5 ) ( vec_push [f] wv -0.3 ) ( vec_push [f] wv 0.2 ) ( vec_push [f] wv 0.8 )

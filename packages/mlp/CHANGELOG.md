@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.13] — 2026-10-14
+
+### Changed
+
+- `gradfit` follows grad 0.13 (the tape is passed `inout`). Results are unchanged.
+
 ## [0.3.12] — 2026-10-14
 
 Requires NURL 0.73.0 (grammar v2.9 `raw`, `slice_window`, `file_is_open`).

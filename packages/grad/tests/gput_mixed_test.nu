@@ -43,7 +43,7 @@ $ `deps/gpukit/src/dev.nu`
     ~ < k * fin fout { ( vec_push [f] out * lim - * 2.0 ( rng_u01 g ) 1.0 ) = k + k 1 }
 }
 
-@ param2 GTape tp ( Vec f ) v i r i c → GVar {
+@ param2 inout GTape tp ( Vec f ) v i r i c → GVar {
     : ( Vec i ) s ( vec_new [i] )
     ( vec_push [i] s r ) ( vec_push [i] s c )
     : Tensor t ( tensor_from_data TE_F64 s v )
@@ -51,7 +51,7 @@ $ `deps/gpukit/src/dev.nu`
     ^ p
 }
 
-@ param1 GTape tp i n → GVar {
+@ param1 inout GTape tp i n → GVar {
     : ( Vec f ) v ( vec_new [f] )
     : ~ i k 0
     ~ < k n { ( vec_push [f] v 0.0 ) = k + k 1 }
@@ -62,7 +62,7 @@ $ `deps/gpukit/src/dev.nu`
     ^ p
 }
 
-@ episode GTape tp GVar X GVar W1 GVar B1 GVar W2 GVar B2 f alpha i bsz → GVar {
+@ episode inout GTape tp GVar X GVar W1 GVar B1 GVar W2 GVar B2 f alpha i bsz → GVar {
     : GVar h ( g_relu tp ( g_add tp ( g_matmul tp X W1 ) B1 ) )
     : GVar y ( g_add tp ( g_matmul tp h W2 ) B2 )
     : GVar e ( g_sub tp y X )
@@ -75,7 +75,7 @@ $ `deps/gpukit/src/dev.nu`
 // Train the wide AE on the device with the given capture dtype; download the
 // 4 final parameters into `outp` (flat, in id order 0..3).
 @ train_device GpuKit kit ( Vec f ) all ( Vec f ) w1v ( Vec f ) w2v i D i H i BSZ i EP f ALPHA f LR i dtype ( Vec f ) outp → b {
-    : GTape tp ( tape_new )
+    : ~ GTape tp ( tape_new )
     : GVar W1 ( param2 tp w1v D H )
     : GVar B1 ( param1 tp H )
     : GVar W2 ( param2 tp w2v H D )
@@ -88,9 +88,9 @@ $ `deps/gpukit/src/dev.nu`
     : Tensor rt0 ( tensor_from_data TE_F64 sh0 r0 )
     : GVar X ( grad_const tp rt0 )
     : GVar loss ( episode tp X W1 B1 W2 B2 ALPHA BSZ )
-    : GProg pg ( gput_capture_dt kit tp loss dtype )
+    : ~ GProg pg ( gput_capture_dt kit tp loss dtype )
     : ~ b ok ( gput_ok pg )
-    : GpOpt go ( gpopt_adam_new LR )
+    : ~ GpOpt go ( gpopt_adam_new LR )
     ( gpopt_add go pg W1 ALPHA ) ( gpopt_add go pg B1 0.0 )
     ( gpopt_add go pg W2 ALPHA ) ( gpopt_add go pg B2 0.0 )
     : ~ i ep 0

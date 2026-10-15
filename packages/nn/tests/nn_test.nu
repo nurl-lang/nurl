@@ -42,7 +42,7 @@ $ `deps/tensor/src/tensor.nu`
 // Build loss = mean(layer(x)) on a fresh tape with x as the sole param,
 // x taken from `xv` (perturbed by the caller). Returns the scalar loss.
 @ layer_loss i kind ( Vec f ) xv i nt i H ( Vec f ) wv ( Vec f ) bv → f {
-    : GTape tp ( tape_new )
+    : ~ GTape tp ( tape_new )
     : GVar x ( nn_param tp xv nt H )
     : ~ GVar out @ GVar { 0 }
     ? == kind 0 { = out ( nn_silu tp x ) } {}
@@ -74,7 +74,7 @@ $ `deps/tensor/src/tensor.nu`
 
 // Analytic grad of mean(layer(x)) wrt x[probe], via backward.
 @ layer_grad i kind ( Vec f ) xv i nt i H ( Vec f ) wv ( Vec f ) bv i probe → f {
-    : GTape tp ( tape_new )
+    : ~ GTape tp ( tape_new )
     : GVar x ( nn_param tp xv nt H )
     : ~ GVar out @ GVar { 0 }
     ? == kind 0 { = out ( nn_silu tp x ) } {}
@@ -150,7 +150,7 @@ $ `deps/tensor/src/tensor.nu`
 }
 
 @ shape_checks → v {
-    : GTape tp ( tape_new )
+    : ~ GTape tp ( tape_new )
     : Rng g ( rng_seed 1 )
     : i nt 4
     : i IN 6
