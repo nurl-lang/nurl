@@ -97,14 +97,17 @@ $ `stdlib/std/thread.nu`
     String dir
     i gpu
     // the weight arena: device memory carved from 128 MB chunks (~20
-    // allocations for BGE-M3's 389 tensors, and ~20 frees on an unload)
-    ( Vec i ) arena
-    ( Vec i ) arenasz
-    ( Vec GpuBuffer ) arenao  // the chunks' owners: clearing this frees them
-    i arena_cur
+    // allocations for BGE-M3's 389 tensors, and ~20 frees on an unload).
+    // Each weight is a view of its chunk and holds it: the chunk goes back
+    // when the last weight in it does.
+    ( Vec GkBuf ) arena
+    i arena_cur  // the chunk being carved (its index in arena; -1 none)
     i arena_off
     i arena_cap
-    ( Vec GpuCopy ) up_q  // every tensor's upload, sent as ONE batch
+    // every tensor's upload, sent as ONE batch: its device view, and its
+    // tensor's index in the file
+    ( Vec GkBuf ) up_dst
+    ( Vec i ) up_src
 }
 
 // What the server reports while a forward runs: kept beside the engine,
@@ -170,16 +173,17 @@ $ `stdlib/std/thread.nu`
 // Upload one f32 tensor from the mapping to the device. On any miss or
 // dtype surprise the engine is marked broken and an empty buf returned —
 // nothing runs on a partially-loaded model.
-unsafe @ __em_up inout EmbedImpl e St s2 s name → GkBuf {
+@ __em_up inout EmbedImpl e St s2 s name → GkBuf {
     : i idx ( st_find_tensor s2 name )
     ? >= idx 0 {} { = . e ok F ^ ( gk_buf_none GK_F32 ) }
     ?? ( vec_get [StTensor] ( st_tensors s2 ) idx ) {
         T t → {
             ? == . t dtype ST_F32 {} { = . e ok F ^ ( gk_buf_none GK_F32 ) }
-            : i d ( __em_carve e * . t nelems 4 )
-            ? == d 0 { = . e ok F ^ ( gk_buf_none GK_F32 ) }
-            ( vec_push [GpuCopy] . e up_q @ GpuCopy { d # i ( st_tensor_ptr s2 t ) * . t nelems 4 } )
-            ^ ( gk_buf_wrap d . t nelems GK_F32 )
+            : GkBuf d ( __em_carve e . t nelems )
+            ? ( gk_buf_ok d ) {} { = . e ok F ^ ( gk_buf_none GK_F32 ) }
+            ( vec_push [GkBuf] . e up_dst ( gk_buf_view d 0 . t nelems ) )
+            ( vec_push [i] . e up_src idx )
+            ^ d
         }
         F → { = . e ok F ^ ( gk_buf_none GK_F32 ) }
     }
@@ -187,41 +191,46 @@ unsafe @ __em_up inout EmbedImpl e St s2 s name → GkBuf {
 
 @ __EM_ARENA_CHUNK → i { ^ 134217728 }
 
-// `bytes` of device memory for the weights' lifetime, 256-byte aligned,
+// `n` f32s of device memory for the weights' lifetime, 256-byte aligned,
 // carved from the arena: a new 128 MB chunk when the current one is full,
 // an exact-size chunk for anything larger (the 1 GB word embedding).
-// 0 = out of device memory.
-@ __em_carve inout EmbedImpl e i bytes → i {
-    : i need * / + bytes 255 256 256
+// None = out of device memory.
+@ __em_carve inout EmbedImpl e i n → GkBuf {
+    : i need * / + * n 4 255 256 256
     ? > need ( __EM_ARENA_CHUNK ) {
-        : GpuBuffer big ( gpu_alloc ( gk_gpu . e kit ) need )
-        ? == . big dptr 0 { ^ 0 } {}
-        : i bdp . big dptr
-        ( vec_push [i] . e arena bdp )
-        ( vec_push [i] . e arenasz . big bytes )
-        ( vec_push [GpuBuffer] . e arenao big )
-        ^ bdp
+        : GkBuf big ( gk_dbuf_new . e kit / need 4 GK_F32 )
+        : GkBuf v ( gk_buf_view big 0 n )
+        ( vec_push [GkBuf] . e arena big )
+        ^ v
     } {}
-    ? > + . e arena_off need . e arena_cap {
-        : GpuBuffer ch ( gpu_alloc ( gk_gpu . e kit ) ( __EM_ARENA_CHUNK ) )
-        ? == . ch dptr 0 { ^ 0 } {}
-        ( vec_push [i] . e arena . ch dptr )
-        ( vec_push [i] . e arenasz . ch bytes )
-        = . e arena_cur . ch dptr
+    ? | < . e arena_cur 0 > + . e arena_off need . e arena_cap {
+        : GkBuf ch ( gk_dbuf_new . e kit / ( __EM_ARENA_CHUNK ) 4 GK_F32 )
+        ? ( gk_buf_ok ch ) {} { ^ ( gk_buf_none GK_F32 ) }
+        = . e arena_cur ( vec_len [GkBuf] . e arena )
         = . e arena_off 0
-        = . e arena_cap . ch bytes
-        ( vec_push [GpuBuffer] . e arenao ch )
+        = . e arena_cap ( __EM_ARENA_CHUNK )
+        ( vec_push [GkBuf] . e arena ch )
     } {}
-    : i d + . e arena_cur . e arena_off
-    = . e arena_off + . e arena_off need
-    ^ d
+    : i off . e arena_off
+    = . e arena_off + off need
+    ?? ( vec_get [GkBuf] . e arena . e arena_cur ) {
+        T c → { ^ ( gk_buf_view_as c off n GK_F32 ) }
+        F → { ^ ( gk_buf_none GK_F32 ) }
+    }
 }
 
 @ __em_arena_reset inout EmbedImpl e → v {
-    ( vec_clear [GpuBuffer] . e arenao )  // the chunks go back
-    ( vec_clear [i] . e arena )
-    ( vec_clear [i] . e arenasz )
-    = . e arena_cur 0
+    // the weights' views first, then the chunks: the last holder of a
+    // chunk gives it back
+    = . e wemb ( gk_buf_none GK_F32 )
+    = . e pemb ( gk_buf_none GK_F32 )
+    = . e temb ( gk_buf_none GK_F32 )
+    = . e elnw ( gk_buf_none GK_F32 )
+    = . e elnb ( gk_buf_none GK_F32 )
+    ( vec_clear [GkBuf] . e up_dst )
+    ( vec_clear [i] . e up_src )
+    ( vec_clear [GkBuf] . e arena )
+    = . e arena_cur -1
     = . e arena_off 0
     = . e arena_cap 0
 }
@@ -305,7 +314,7 @@ unsafe @ __em_up inout EmbedImpl e St s2 s name → GkBuf {
             : ~ EmbedImpl e @ EmbedImpl {
                 ( gk_none ) cfg ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 )
                 ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( vec_new [EmbedLayer] ) T F ( string_from dir ) gpu
-                ( vec_new [i] ) ( vec_new [i] ) ( vec_new [GpuBuffer] ) 0 0 0 ( vec_new [GpuCopy] )
+                ( vec_new [GkBuf] ) -1 0 0 ( vec_new [GkBuf] ) ( vec_new [i] )
             }
             ?? ( __em_load_weights e ) {
                 T _ → {}
@@ -324,15 +333,22 @@ unsafe @ __em_up inout EmbedImpl e St s2 s name → GkBuf {
 // that `embed_unload` undoes and `embed_reload` redoes. The config and the
 // tokenizer are not touched: they are the engine; the weights are what it
 // holds. `gpu` is the ordinal the caller named at open (-1 = best).
-// Send every queued upload. Each copy __em_up queued names device memory
-// carved from this engine's arena and a tensor of the file still open in
-// the caller, sized by that tensor: what gpu_upload_batch trusts. The
-// batch is done when it returns, so the staging pair — 128 MB of
-// page-locked host memory — has nothing in flight and goes back.
-unsafe @ __em_upload_queued EmbedImpl e → b {
-    : b ok == ( gpu_upload_batch . e up_q ) 0
-    ( gpu_staging_free )
-    ^ ok
+// Send every queued upload: each tensor's bytes, a checked view of the
+// file `s2` still maps, into the view __em_up carved for it — one batch.
+// It is a one-off load, so the staging pair (128 MB of page-locked host
+// memory) goes back when it is done.
+@ __em_upload_queued inout EmbedImpl e St s2 → b {
+    : ~ ( Vec ( Slice u ) ) srcs ( vec_new [( Slice u )] )
+    : i n ( vec_len [i] . e up_src )
+    : ~ i k 0
+    ~ < k n {
+        ?? ( vec_get [StTensor] ( st_tensors s2 ) ( vec_at [i] . e up_src k ) ) {
+            T t → { ( vec_push [( Slice u )] srcs ( st_tensor_bytes s2 t ) ) }
+            F → { ^ F }
+        }
+        = k + k 1
+    }
+    ^ ( gk_dbuf_upload_batch . e kit . e up_dst srcs T )
 }
 
 @ __em_load_weights inout EmbedImpl e → !v String {
@@ -363,7 +379,8 @@ unsafe @ __em_upload_queued EmbedImpl e → b {
     ?? ( st_open ( string_data stp ) ) {
         T s2 → {
             = st_ok T
-            ( vec_clear [GpuCopy] . e up_q )
+            ( vec_clear [GkBuf] . e up_dst )
+            ( vec_clear [i] . e up_src )
             = . e wemb ( __em_up e s2 `embeddings.word_embeddings.weight` )
             = . e pemb ( __em_up e s2 `embeddings.position_embeddings.weight` )
             = . e temb ( __em_up e s2 `embeddings.token_type_embeddings.weight` )
@@ -395,9 +412,10 @@ unsafe @ __em_upload_queued EmbedImpl e → b {
             // every tensor is known and carved: one streamed upload for all
             // of them, then the file goes back
             ? . e ok {
-                ? ( __em_upload_queued e ) {} { = . e ok F }
+                ? ( __em_upload_queued e s2 ) {} { = . e ok F }
             } {}
-            ( vec_clear [GpuCopy] . e up_q )
+            ( vec_clear [GkBuf] . e up_dst )
+            ( vec_clear [i] . e up_src )
             ( st_close s2 )
         }
         F _ → {}

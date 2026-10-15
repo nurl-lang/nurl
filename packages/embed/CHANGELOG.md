@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.6.2] — 2026-10-15
+
+- No `unsafe` left. The weight arena is made of owned gpukit chunks (`gk_dbuf_new`), and each weight is a view of its chunk (`gk_buf_view_as`) that keeps the chunk alive. The one batched upload now goes through gpukit 0.11.3's safe `gk_dbuf_upload_batch` from `st_tensor_bytes` views, instead of queuing raw addresses. Embeddings are byte-identical to 0.6.1. Loading a 300 MB model on the CPU backend takes the same time (median 478 vs 475 ms over 20 runs, same CPU time).
+
 ## [0.6.1] — 2026-10-14
 
 ### Changed

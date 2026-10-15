@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.11.3] — 2026-10-15
+
+- `gk_dbuf_upload_batch kit dsts srcs release`: many uploads as one batch (pinned, double-buffered on CUDA), each from a checked `Slice u` view of exactly its buffer's bytes. Safe: the sources are views the borrow checker keeps alive for the call, so a loader no longer queues raw host addresses for `gpu_upload_batch`.
+
 ## [0.11.2] — 2026-10-15
 
 - On a census kit, `gk_dbuf_new` now returns a buffer: zeroed host memory that the buffer owns and no kernel reads. A census caller no longer forges buffers with `gk_buf_wrap` over a made-up address, and a census buffer passed to a real kit by mistake still points at memory that exists.

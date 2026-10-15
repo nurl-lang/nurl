@@ -317,6 +317,46 @@ raw @ gk_dbuf_upload_raw GpuKit kit GkBuf b * u src → b {
     ^ ( __gk_upload_view b src )
 }
 
+// Many uploads as ONE batch: srcs[k] into dsts[k], each a checked view
+// holding exactly its buffer's bytes. On CUDA the batch streams through a
+// pinned double buffer, so a model's hundreds of tensors cost one pass
+// instead of a synchronous copy each. F, with nothing sent, when the
+// lengths differ, a buffer is none or a source is not its buffer's size.
+// `release` gives the staging pair (128 MB of page-locked host memory)
+// back afterwards — for a one-off load; a caller sending batch after
+// batch keeps it.
+unsafe @ gk_dbuf_upload_batch GpuKit kit ( Vec GkBuf ) dsts ( Vec ( Slice u ) ) srcs b release → b {
+    ? ( _gk_ok kit ) {} { ^ F }
+    : i n ( vec_len [GkBuf] dsts )
+    ? == n ( vec_len [( Slice u )] srcs ) {} { ^ F }
+    : ~ ( Vec GpuCopy ) q ( vec_new [GpuCopy] )
+    : ~ i k 0
+    ~ < k n {
+        : ~ b fit F
+        ?? ( vec_get [GkBuf] dsts k ) {
+            T d → {
+                ?? ( vec_get [( Slice u )] srcs k ) {
+                    T sv → {
+                        : i bytes ( _gk_p2 . d n ( __gk_esz . d dtype ) )
+                        ? & ( gk_buf_ok d ) == ( slice_len [u] sv ) bytes {
+                            ( vec_push [GpuCopy] q @ GpuCopy { . d dptr # i ( slice_data [u] sv ) bytes } )
+                            = fit T
+                        } {}
+                    }
+                    F → {}
+                }
+            }
+            F → {}
+        }
+        ? fit {} { ^ F }
+        = k + k 1
+    }
+    ? ( _gk_census kit ) { ^ T } {}
+    : b ok == ( gpu_upload_batch q ) 0
+    ? release { ( gpu_staging_free ) } {}
+    ^ ok
+}
+
 // (`src` holds the buffer's bytes: checked by the caller above.)
 unsafe @ __gk_upload_view GkBuf b ( Slice u ) src → b {
     ^ == ( gpu_upload ( gpu_buffer_view . b dptr * . b n ( __gk_esz . b dtype ) ) ( slice_data [u] src ) ) 0
