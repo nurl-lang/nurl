@@ -1,5 +1,9 @@
 # Changelog
 
+## [3.1.3] — 2026-10-15
+
+- `__wh_source_done` is safe now that gpu 0.17.1's `gpu_staging_free` is. `unsafe` functions: 14 → 13.
+
 ## [3.1.2] — 2026-10-15
 
 ### Changed

@@ -746,6 +746,13 @@ unsafe @ gpu_upload_vec GpuBuffer dst ( Vec u ) src → i {
     ^ ( gpu_upload dst ( vec_data [u] src ) )
 }
 
+// The same from a checked view of host bytes (a tensor in a mapped file):
+// uploads its first dst.bytes bytes; a shorter view is refused.
+unsafe @ gpu_upload_bytes GpuBuffer dst ( Slice u ) src → i {
+    ? | < ( slice_len [u] src ) . dst bytes == . dst dptr 0 { ^ -1 } {}
+    ^ ( gpu_upload dst ( slice_data [u] src ) )
+}
+
 unsafe @ gpu_download_vec GpuBuffer src → ( Vec u ) {
     : ( Vec u ) out ( vec_zeroed [u] . src bytes )
     ? != . src dptr 0 { : i _r ( gpu_download ( vec_data [u] out ) src ) } {}
@@ -792,6 +799,13 @@ raw @ gpu_buffer_view i dptr i bytes → GpuBuffer { ^ @ GpuBuffer { dptr bytes 
 : ~ i __gpu_stage_a 0
 
 : ~ i __gpu_stage_b 0
+
+// Whoever stages an upload, or frees the pair, holds this first: two
+// threads uploading at once take turns at the buffers instead of filling
+// the same one, and a free never lands under a copy in flight.
+@ __gpu_stage_lk0 → ( Locked i ) { ^ ( locked_new [i] 0 ) }
+
+: ( Locked i ) g_gpu_stage_lk ( __gpu_stage_lk0 )
 
 @ __GPU_STAGE_CHUNK → i { ^ 67108864 }
 
@@ -848,17 +862,32 @@ unsafe @ __gpu_par_memcpy i dst i src i n → v {
     }
 }
 
-raw @ gpu_staging_free → v {
+// Give the pinned staging pair back (a loader calls this once its weights
+// are up). Waits for any staged upload still running.
+@ gpu_staging_free → v {
+    : i t ( locked_take [i] g_gpu_stage_lk )
+    ( __gpu_staging_free_in )
+    ( locked_restore [i] g_gpu_stage_lk t )
+}
+
+unsafe @ __gpu_staging_free_in → v {
     ? != __gpu_stage_a 0 { : i _f1 ( cuda_host_free # *u __gpu_stage_a ) = __gpu_stage_a 0 } {}
     ? != __gpu_stage_b 0 { : i _f2 ( cuda_host_free # *u __gpu_stage_b ) = __gpu_stage_b 0 } {}
 }
 
-unsafe @ __gpu_upload_staged i dptr * u host i bytes → i {
+raw @ __gpu_upload_staged i dptr * u host i bytes → i {
+    : i t ( locked_take [i] g_gpu_stage_lk )
+    : i r ( __gpu_upload_staged_in dptr host bytes )
+    ( locked_restore [i] g_gpu_stage_lk t )
+    ^ r
+}
+
+raw @ __gpu_upload_staged_in i dptr * u host i bytes → i {
     ? == __gpu_stage_a 0 { = __gpu_stage_a # i ( cuda_host_alloc ( __GPU_STAGE_CHUNK ) ) } {}
     ? == __gpu_stage_b 0 { = __gpu_stage_b # i ( cuda_host_alloc ( __GPU_STAGE_CHUNK ) ) } {}
     ? | == __gpu_stage_a 0 == __gpu_stage_b 0 {
         // pinned allocation failed — the plain path still works
-        ( gpu_staging_free )
+        ( __gpu_staging_free_in )
         ^ ( cuda_htod dptr host bytes )
     } {}
     : ~ i off 0
@@ -1012,10 +1041,17 @@ raw @ __gpu_upload_each ( Vec GpuCopy ) items → i {
 
 raw @ gpu_upload_batch ( Vec GpuCopy ) items → i {
     ? != __gpu_backend 0 { ^ ( __gpu_upload_each items ) } {}
+    : i t ( locked_take [i] g_gpu_stage_lk )
+    : i r ( __gpu_upload_batch_in items )
+    ( locked_restore [i] g_gpu_stage_lk t )
+    ^ r
+}
+
+raw @ __gpu_upload_batch_in ( Vec GpuCopy ) items → i {
     ? == __gpu_stage_a 0 { = __gpu_stage_a # i ( cuda_host_alloc ( __GPU_STAGE_CHUNK ) ) } {}
     ? == __gpu_stage_b 0 { = __gpu_stage_b # i ( cuda_host_alloc ( __GPU_STAGE_CHUNK ) ) } {}
     ? | == __gpu_stage_a 0 == __gpu_stage_b 0 {
-        ( gpu_staging_free )
+        ( __gpu_staging_free_in )
         ^ ( __gpu_upload_each items )
     } {}
     : i eva ( cuda_event_create )

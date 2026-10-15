@@ -315,7 +315,7 @@ $ `stdlib/core/slice.nu`
 // (chunk × n_ff floats) while keeping the launches amortised.
 : i LM_CHUNK 64
 
-unsafe @ __lm_upload inout LlmImpl m Gguf gg s name → i {
+@ __lm_upload inout LlmImpl m Gguf gg s name → i {
     // A second container, when one was given: same tensor, different file.
     ?? . m st {
         T sf → {
@@ -331,13 +331,11 @@ unsafe @ __lm_upload inout LlmImpl m Gguf gg s name → i {
     ? < ti 0 { ^ -1 } {}
     : ~ i gt -1
     : ~ i nb -1
-    : ~ i addr 0
     : ~ i ne0 0
     ?? ( vec_get [GgufTensor] ( gguf_tensors gg ) ti ) {
         T t → {
             = gt . t gtype
             = nb . t nbytes
-            = addr # i ( gguf_tensor_ptr gg t )
             = ne0 . t d0
         }
         F → {}
@@ -349,7 +347,7 @@ unsafe @ __lm_upload inout LlmImpl m Gguf gg s name → i {
             ^ -1
         } {}
         : i _t0 ( monotonic_ns )
-        : i _uq ( gpu_upload bq # *u addr )
+        : i _uq ?? ( vec_get [GgufTensor] ( gguf_tensors gg ) ti ) { T t → ( gpu_upload_bytes bq ( gguf_tensor_bytes gg t ) ) F → -1 }
         = __lm_up_ns + __lm_up_ns - ( monotonic_ns ) _t0
         // q8_0 goes to the device in the SPLIT per-row layout the
         // matvec kernels read (scales together, 4-aligned quants) —
@@ -362,7 +360,7 @@ unsafe @ __lm_upload inout LlmImpl m Gguf gg s name → i {
                 ^ -1
             } {}
             : i _t1 ( monotonic_ns )
-            ( lk_q8_repack . m ks . bq dptr . br dptr / ne0 32 / nb 34 )
+            ( __lm_q8_repack m bq br / ne0 32 / nb 34 )
             : i _rs ( gpu_sync . m g )
             = __lm_rp_ns + __lm_rp_ns - ( monotonic_ns ) _t1
             : i br_dp . br dptr
@@ -388,7 +386,7 @@ unsafe @ __lm_upload inout LlmImpl m Gguf gg s name → i {
                 = __lm_alloc_failed T
                 ^ -1
             } {}
-            : i _u ( gpu_upload b ( vec_data [u] raw ) )
+            : i _u ( gpu_upload_vec b raw )
             : i b_dp . b dptr
             ( vec_push [i] . m wdptr b_dp )
             ( vec_push [i] . m wbytes . b bytes )
@@ -400,6 +398,14 @@ unsafe @ __lm_upload inout LlmImpl m Gguf gg s name → i {
             ^ -1
         }
     }
+}
+
+// q8_0 weights into the split per-row layout the matvec kernels read:
+// `src` holds nblk interleaved 34-byte blocks, `dst` as many bytes —
+// both buffers the caller just sized to the tensor.
+unsafe @ __lm_q8_repack inout LlmImpl m GpuBuffer src GpuBuffer dst i nb i nblk → v {
+    ? & == . src bytes . dst bytes <= * nblk 34 . src bytes {} { ^ }
+    ( lk_q8_repack . m ks . src dptr . dst dptr nb nblk )
 }
 
 // Bytes one weight ROW occupies on the device: a quantised row is
@@ -424,6 +430,20 @@ unsafe @ __lm_upload inout LlmImpl m Gguf gg s name → i {
 @ __lm_scratch inout LlmImpl m i nfloats → i {
     : GpuBuffer b ( gpu_alloc . m g * nfloats 4 )
     ? == . b dptr 0 {
+        = __lm_alloc_failed T
+        ^ -1
+    } {}
+    : i b_dp . b dptr
+    ( vec_push [i] . m wdptr b_dp )
+    ( vec_push [i] . m wbytes . b bytes )
+    ( vec_push [GpuBuffer] . m wbufs b )
+    ^ b_dp
+}
+
+// The same, filled from host bytes (`bytes` holds at least nfloats*4).
+@ __lm_scratch_from inout LlmImpl m i nfloats ( Vec u ) bytes → i {
+    : GpuBuffer b ( gpu_alloc . m g * nfloats 4 )
+    ? | == . b dptr 0 != 0 ( gpu_upload_vec b bytes ) {
         = __lm_alloc_failed T
         ^ -1
     } {}
@@ -586,7 +606,7 @@ unsafe @ __lm_upload inout LlmImpl m Gguf gg s name → i {
 // to happen here, on this path only. (Getting this wrong is not subtle: the
 // model produces confident nonsense, which is exactly how it was found the
 // first time.)
-unsafe @ __lm_upload_st inout LlmImpl m s name → i {
+@ __lm_upload_st inout LlmImpl m s name → i {
     : St sf ?? . m st { T s0 → s0 F → { ^ -1 } }
     : String hf ( __lm_hf_name name . m st_norm_add1 )
     ? == 0 ( string_len hf ) {
@@ -605,7 +625,7 @@ unsafe @ __lm_upload_st inout LlmImpl m s name → i {
                 = __lm_alloc_failed T
                 ^ -1
             } {}
-            : i _u ( gpu_upload b ( vec_data [u] raw ) )
+            : i _u ( gpu_upload_vec b raw )
             : i b_dp . b dptr
             ( vec_push [i] . m wdptr b_dp )
             ( vec_push [i] . m wbytes . b bytes )
@@ -634,7 +654,7 @@ unsafe @ __lm_upload_st inout LlmImpl m s name → i {
 // Optional per-layer tensor: device pointer, or -1 when the model has
 // none (biases are architecture-dependent). Always uploaded as f32 —
 // a bias is a single row, so the dequant cost is nil.
-unsafe @ __lm_upload_opt inout LlmImpl m Gguf gg i layer s suffix → i {
+@ __lm_upload_opt inout LlmImpl m Gguf gg i layer s suffix → i {
     : String nm ( __lm_tname layer suffix )
     ?? . m st {
         T sf → {
@@ -658,7 +678,7 @@ unsafe @ __lm_upload_opt inout LlmImpl m Gguf gg i layer s suffix → i {
                 = __lm_alloc_failed T
                 ^ -1
             } {}
-            : i _u ( gpu_upload b ( vec_data [u] raw ) )
+            : i _u ( gpu_upload_vec b raw )
             : i b_dp . b dptr
             ( vec_push [i] . m wdptr b_dp )
             ( vec_push [i] . m wbytes . b bytes )
@@ -1018,12 +1038,12 @@ unsafe @ llm_open_st s path s weights i want_ctx → !Llm String {
             ? >= bi 0 {
                 ?? ( gguf_dequant gg bi ) {
                     T raw → {
-                        : *u P ( vec_data [u] raw )
                         : ~ i e 0
                         ~ < e . m n_expert {
-                            : i o * e 4
-                            : i bits | | | # i . P o << # i . P + o 1 8 << # i . P + o 2 16 << # i . P + o 3 24
-                            ( vec_push [f] . m exp_bias # f ( bits_to_f32 bits ) )
+                            ?? ( bytes_read_u32_le raw * e 4 ) {
+                                T bits → { ( vec_push [f] . m exp_bias # f ( bits_to_f32 # i bits ) ) }
+                                F → { = ok F }
+                            }
                             = e + e 1
                         }
                     }
@@ -1148,7 +1168,6 @@ unsafe @ llm_open_st s path s weights i want_ctx → !Llm String {
         = . m moe_downb ( __lm_scratch m * nasn . m n_embd )
         // upload all layers' expert bias (f32) for the on-device router
         : i nbias * . m n_layer . m n_expert
-        = . m bias_all ( __lm_scratch m nbias )
         : ( Vec u ) bb ( vec_new [u] )
         : ~ i bi 0
         ~ < bi nbias {
@@ -1157,8 +1176,7 @@ unsafe @ llm_open_st s path s weights i want_ctx → !Llm String {
             ( bytes_push_u32_le bb # u32 ( f32_to_bits # f32 bv ) )
             = bi + bi 1
         }
-        : GpuBuffer bu ( gpu_buffer_view . m bias_all * nbias 4 )
-        : i _ub ( gpu_upload bu ( vec_data [u] bb ) )
+        = . m bias_all ( __lm_scratch_from m nbias bb )
     } {
         = . m rlogitsd -1
         = . m router_host ( gpu_host_none )

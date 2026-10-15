@@ -2,6 +2,12 @@
 
 All notable changes to the `nurllama` package.
 
+## [0.21.2] — 2026-10-15
+
+- Weight uploads are safe code. GGUF tensors are uploaded from `gguf_tensor_bytes` views with `gpu_upload_bytes`, dequantised ones with `gpu_upload_vec`, and the router bias with a new `__lm_scratch_from`. Only the q8_0 repack kernel launch stays `unsafe`, in its own helper. `unsafe` functions: 6 → 4.
+- The MoE router bias was read through a raw pointer for `n_expert` × 4 bytes whatever the tensor's size. It is now read with the bounds-checked `bytes_read_u32_le`, and a short tensor fails the load instead of reading past it.
+- Generation on the tiny q8_0 and f32 test models is identical to 0.21.1.
+
 ## [0.21.1] — 2026-10-14
 
 ### Changed

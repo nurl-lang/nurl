@@ -587,7 +587,7 @@ unsafe @ __wh_queue_flush inout WhisperImpl w → b {
 // would have taken two hours to register — with the process unstoppable
 // (R state, ptrace could not attach) for the duration. The staged path
 // the gpu package takes for pageable memory is the right one here.
-unsafe @ __wh_source_done inout WhisperImpl w → v {
+@ __wh_source_done inout WhisperImpl w → v {
     // the staging pair is 128 MB of page-locked memory — a loader that is
     // done loading gives it back
     ( gpu_staging_free )

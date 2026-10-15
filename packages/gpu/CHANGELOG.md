@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.17.1] — 2026-10-15
+
+- The pinned staging pair is guarded by a lock. Staged uploads (`gpu_upload` of 64 MB and up, `gpu_upload_batch`) and `gpu_staging_free` take turns. Before, two threads uploading at once could fill the same staging buffer, and a free could land under a copy in flight. `gpu_staging_free` is therefore no longer `raw`: safe code may call it.
+- `gpu_upload_bytes dst (Slice u)`: upload from a checked view of host bytes (a tensor in a mapped file). A view shorter than the buffer is refused.
+
 ## [0.17.0] — 2026-10-14
 
 Requires NURL 0.73.0 (grammar v2.9 `raw`, `slice_window`).
