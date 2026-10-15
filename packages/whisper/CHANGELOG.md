@@ -1,5 +1,11 @@
 # Changelog
 
+## [3.1.1] — 2026-10-14
+
+### Fixed
+
+- `wh_open_ggml` reads the container's metadata before the engine takes the container over; the compiler now sees the metadata as a view of it (h271).
+
 ## [3.1.0] — 2026-10-14
 
 Requires NURL 0.73.0 with globals set at start, `locked_zero`,

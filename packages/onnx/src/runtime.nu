@@ -212,11 +212,21 @@ $ `stdlib/std/floatbits.nu`
 @ rt_at EngineImpl e i idx → RTensor {
     ?? ( vec_get [RTensor] . e vals idx ) { T t → ^ t F _ → ^ ( _rt_none ) }
 }
+
+// A tensor of its own: the same device block (a counted share), its own
+// name and shape — what a caller keeps after the engine goes back into its
+// Locked, where the next run replaces the value map (rt_at is a view of it).
+@ rt_own RTensor t → RTensor {
+    ^ @ RTensor { ( string_from ( string_data . t name ) ) ( gk_buf_view . t buf 0 ( gk_buf_len . t buf ) ) ( vec_clone [i] . t shape ) . t nelem . t hosti }
+}
 // Input name of a node (k-th), as an `s`.
 @ __in inout EngineImpl e ONode n i k → RTensor {
     : ( Vec String ) ins . n inputs
     : i idx ( rt_find e ( __rt_str_at ins k ) )
-    ^ ( rt_at e idx )
+    // Its own tensor: an op allocates its output into the value map after
+    // reading its inputs, and a graph may name an output after an input,
+    // which replaces (and releases) the tensor a view would still read.
+    ^ ( rt_own ( rt_at e idx ) )
 }
 
 @ __out_name ONode n → s {
@@ -911,8 +921,12 @@ $ `stdlib/std/floatbits.nu`
     : i L ( rt_dim data 1 )
     : i D ( rt_dim data 2 )
     : RTensor tok ( rt_at e ( rt_find e ( string_data . e input_name ) ) )
+    // (The operands' blocks are taken before the output joins the value
+    // map, which may move the tensors they are read from.)
+    : GkBuf db ( __rt_fbuf data )
+    : GkBuf tb ( __rt_ibuf tok )
     : GkBuf yb ( rt_alloc_out e ( __out_name n ) ( __shape2 B D ) )
-    ? ( gkd_eos_gather . e kit yb ( __rt_fbuf data ) ( __rt_ibuf tok ) B L D ) {} { ( __rt_op_fail `GatherND` ) }
+    ? ( gkd_eos_gather . e kit yb db tb B L D ) {} { ( __rt_op_fail `GatherND` ) }
 }
 
 // Gather along `axis`. Two index sources: a device tensor (e.g. the token
@@ -977,9 +991,10 @@ $ `stdlib/std/floatbits.nu`
         : ~ i r + axis 1
         ~ < r ( rt_ndim data ) { ( vec_push [i] os ( rt_dim data r ) ) = r + r 1 }
         : i prodos ( __prod os )
-        : GkBuf yb ( rt_alloc_out e ( __out_name n ) os )
+        : GkBuf db ( __rt_fbuf data )
         : GkBuf ixb ( __rt_ibuf idxt )
-        ? ( gkd_gather . e kit yb ( __rt_fbuf data ) ixb outer axis_in inner nidx ) {} { ( __rt_op_fail `Gather` ) }
+        : GkBuf yb ( rt_alloc_out e ( __out_name n ) os )
+        ? ( gkd_gather . e kit yb db ixb outer axis_in inner nidx ) {} { ( __rt_op_fail `Gather` ) }
     } {
         // host scalar index → slice one element along axis (axis removed);
         // a negative index wraps once (ONNX)
@@ -1221,7 +1236,7 @@ $ `stdlib/std/floatbits.nu`
     ( gk_autosync T )
     : b _sync ( gk_sync . e kit )
     : i oi ( rt_find e ( string_data . g output_name ) )
-    ^ ( rt_at e oi )
+    ^ ( rt_own ( rt_at e oi ) )
 }
 
 // Convenience for a 2-D (dense) input.
@@ -1248,7 +1263,7 @@ $ `stdlib/std/floatbits.nu`
     : s nm ( string_data . e output1_name )
     ? > ( nurl_str_len nm ) 0 {
         : i oi ( rt_find e nm )
-        ? >= oi 0 { = out ( rt_at e oi ) } {}
+        ? >= oi 0 { = out ( rt_own ( rt_at e oi ) ) } {}
     } {}
     ( locked_restore [EngineImpl] . h l e )
     ^ out

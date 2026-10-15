@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.12.1] — 2026-10-14
+
+### Fixed
+
+- Every op reads its inputs as tensors of its own (a counted share of the device block, its own name and shape). They were views into the value map, which the op then grows with its output — a graph naming an output after an input replaced the tensor a view still read. The compiler now rejects such a view (h271).
+- `rt_output1` and the run entry points hand back a tensor of their own, not a view of the engine's value map after the engine goes back into its `Locked` (the next run replaced what it read).
+- GatherND and the device-index Gather take their operand blocks before allocating the output.
+
 ## [0.12.0] — 2026-10-14
 
 ### Changed

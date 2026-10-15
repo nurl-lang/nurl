@@ -727,7 +727,6 @@ unsafe @ __wh_blank → ( Locked WhisperImpl ) { ^ ( locked_zero [WhisperImpl] )
             = . w logits_host ( gpu_host_none )
             ( __wh_queue_init w )
             = . w oom F
-            = . w gg @ ?Gg { T gg }
             = . w n_mels . gp n_mels
             = . w d_model . gp n_audio_state
             = . w n_head . gp n_audio_head
@@ -741,8 +740,12 @@ unsafe @ __wh_blank → ( Locked WhisperImpl ) { ^ ( locked_zero [WhisperImpl] )
             // whisper.cpp's container has no FFN width: it is 4·n_audio_state
             = . w e_ff * 4 . gp n_audio_state
             = . w d_ff * 4 . gp n_audio_state
+            : i n_text_ctx . gp n_text_ctx
+            // (The metadata is read out of the container before the engine
+            // takes the container over.)
+            = . w gg @ ?Gg { T gg }
             = . w w_half ( __wh_probe_half w )
-            ?? ( __wh_finish w . gp n_text_ctx ) {
+            ?? ( __wh_finish w n_text_ctx ) {
                 T _ → { ^ @ !Whisper String { T ( __wh_handle w ) } }
                 F e → { ^ @ !Whisper String { F e } }
             }

@@ -240,6 +240,19 @@ Outputs are byte-identical and as fast. A struct passed where the
 parameter is a number is rejected (h269): the call was emitted with the
 struct's type, and the callee read its control block's address as the
 number — onnx's parse_dump checksummed a weight block's control block.
+A function handing back the payload of a `vec_get` on its parameter's
+field (`^ ?? ( vec_get . p items i ) { T x → x … }`) now lends that
+parameter (h270): its callers' binding of the result was not tied to the
+argument, so emptying the argument's Vec afterwards left the binding
+reading freed elements, where the same `vec_get` in the caller was
+rejected.
+So does a function returning another's lent result over its parameter
+(`^ ( g p )`) when `g` was compiled first (h271): only a `g` compiled
+after it passed its lend on. `onnx` read its ops' inputs through such
+an accessor and then grew the value map they live in; each op now gets
+its inputs as tensors of its own (a counted share of the device block),
+and `rt_output1` no longer hands back a view of the engine's map after
+the engine goes back into its `Locked`.
 `nurlbox` (90 → 8, the shell's fork/pipe/exec and `find -exec`/`xargs`/
 `env`) passes its shell state `inout` instead of reading it out of a raw
 global word. The standard library gains what it reached for raw
@@ -247,6 +260,23 @@ pointers to do: `string_append` (a whole String, NULs included),
 `write_slice` (a byte view to stdout), `fs_link` (a hard link) and
 `proc_self_uid` / `_euid` / `_gid` / `_egid` / `_groups`, with Windows and
 unikernel fallbacks in the runtime.
+`grad` (146 → 6, the kernel launches and f32 device transfers) passes
+its tape, optimizer and device replay as plain values `inout`; backward
+takes a node's gradient out of the tape while it accumulates into its
+inputs' and puts it back. Gradients are bit-identical on every test;
+`nn`, `mlp` and `nurllama` follow. `swarm-mcp` (105 → 0) keeps the
+coordinator's registry in a `Locked` its tool handlers check out per
+call, and its node, retry plans, iterate runs, roster and parser are
+plain values. `process_run_strings` runs a command over an argv of
+Strings the caller owns (built in a loop, say), and
+`mcp_server_set_task_store` takes the store it keeps (`sink`; pass a
+share to go on using it) — borrowed, a hook capturing state that held the
+store's other share read as a cycle through the store.
+`f5tts` (108 → 6, its raw kernel launches) keeps its engine and vocoder
+in `Locked`s built whole, uploads weights from checked byte views, and
+serves through a Channel whose model thread owns the engine and the voice
+cache outright — a voice added or deleted over HTTP was dropped from that
+cache on the HTTP thread while the model thread could be reading it.
 `nurllama` (68 → 8) keeps its engine and its finetune state in `Locked`s
 — two requests evaluating one model raced on its KV cache — and samples
 from a row of logits read in one take.

@@ -512,6 +512,21 @@ $ `stdlib/std/time.nu`
     ^ ( __process_dispatch ( __proc_result_from_c ( nurl_proc_run cmd argv_buf argc stdin_str ) ) )
 }
 
+// …with the arguments as Strings the caller owns — an argv built in a
+// loop (numbers, paths, a variable count): they outlive the call, so the
+// argv handed on is views of them, and nothing is copied or kept.
+@ process_run_strings s cmd ( Vec String ) args s stdin_str → !Output ProcessErr {
+    : i n ( vec_len [String] args )
+    : ( Vec s ) av ( vec_with_cap [s] n )
+    : ~ i k 0
+    ~ < k n {
+        ?? ( vec_get [String] args k ) { T a → ( vec_push [s] av ( string_data a ) ) F → {} }
+        = k + k 1
+    }
+    : !Output ProcessErr res ( process_run cmd av stdin_str )
+    ^ res
+}
+
 // ── Convenience arities ────────────────────────────────────────────
 
 @ process_run0 s cmd → !Output ProcessErr {

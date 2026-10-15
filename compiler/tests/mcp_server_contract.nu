@@ -297,7 +297,7 @@ $ `stdlib/std/panic.nu`
     // message drops exactly the actionable half.
     : McpServer tsrv ( mcp_server_new `contract-tasks` `1.0.0` )
     : McpTaskStore store ( mcp_task_store_new )
-    ( mcp_server_set_task_store tsrv store \ → v {} )
+    ( mcp_server_set_task_store tsrv ( McpTaskStore_share store ) \ → v {} )
     ( show tsrv `server/discover (tasks declared)` ( req_id 30 `server/discover` ) )
     : Json tp ( json_obj_new )
     ( json_obj_set tp `taskId` ( json_str_lit `0123456789abcdef0123456789abcdef` ) )

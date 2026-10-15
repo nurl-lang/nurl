@@ -3470,6 +3470,38 @@ unsafe @ nurl_cg_lbl i h s hint → s {
 // — answered per argument by the callee's module-end lend constants
 // (mem_lend_const). `` when no argument is such a binding, or the callee is
 // a closure value (whose results are always its caller's own).
+// A `??` payload handed back (`^ x` in an arm, or the join itself) is
+// part of what its matched call lent from (`?? ( vec_get . p items i )
+// { T x → x … }`): when that is a parameter — the whole of it or a field
+// path into it — this function lends that parameter, so its callers'
+// binding of the result is a view of their argument, gone once the
+// argument is changed (h270). `key` is the call (`callee generic`),
+// `roots` its arguments' roots by position (a field path for a field). Which positions the callee
+// lends from is asked of its final summary at module end
+// (resolve_retfwd_lends); `vec_get` lends its vector.
+@ mem_ret_param_lend_via i syms s key s roots → v {
+    ? | == 0 ( nurl_str_len key ) == 0 ( nurl_str_len roots ) { ^ v } {}
+    : s cn ( str_first_word key )
+    : s self ( nurl_sym_get syms `__fn_self_name__` )
+    : s pnames ( nurl_sym_get syms `__fn_param_names__` )
+    : ~ s rest ( nurl_str_cat roots `` )
+    : ~ i ai 0
+    ~ != 0 ( nurl_str_len rest ) {
+        : s r0 ( str_first_word rest ) = rest ( str_skip_word rest )
+        // (A field path's binding: `tp.vals` is part of tp.)
+        : i dot ( nurl_str_find r0 `.` )
+        : s r ? > dot 0 ( nurl_str_slice r0 0 dot ) ( nurl_str_cat r0 `` )
+        : i pi ( str_word_index pnames r )
+        : s up ( mem_udrop_ptr_of syms r )
+        : b is_param & >= pi 0 | == 0 ( nurl_str_len up ) & != 0 ( nurl_sym_len2 syms up `__pname` ) ! ( __param_owned_slot syms up )
+        ? is_param {
+            ? ( nurl_str_starts cn `vec_get` ) { ? == ai 0 { ( __record_param_idx syms `__fn_retpart__` r ) } {} }
+            { ( __retfwd_note self ( nurl_str_cat4 cn `:` ( nurl_str_int ai ) ( nurl_str_cat `:` ( nurl_str_int pi ) ) ) ) }
+        } {}
+        = ai + ai 1
+    }
+}
+
 @ mem_ret_local_lend i syms i cg → s {
     : s key ( nurl_sym_get syms `__last_call_lend_key__` )
     : s args ( nurl_sym_get syms `__last_call_args__` )
@@ -4102,6 +4134,7 @@ unsafe @ nurl_cg_lbl i h s hint → s {
     ( nurl_sym_def syms `__last_call_lend_key__` `` )
     ( nurl_sym_def syms `__last_join_lend_key__` `` )
     ( nurl_sym_def syms `__last_join_lend_args__` `` )
+    ( nurl_sym_def syms `__last_join_lend_roots__` `` )
     // …and the join channel: a ternary that selected a parameter in an
     // EARLIER statement (`= . c max ? > max 0 max 64`) made the result of
     // `^ @ S { … }` read as "may be that argument", so the caller's binding
@@ -4272,6 +4305,13 @@ unsafe @ nurl_cg_lbl i h s hint → s {
         : s rvn ( nurl_sym_get syms `__last_call_name__` )
         ? ! ( str_contains_word rvc rvn )
         { ( nurl_sym_def g_pending_impl rvk ? == 0 ( nurl_str_len rvc ) ( nurl_str_cat rvn `` ) ( nurl_str_cat3 rvc ` ` rvn ) ) } {}
+        // …and WHICH of this function's parameters it lends back follows
+        // from g's final summary (resolve_retfwd_lends) — g compiled before
+        // this function too: what g lends was not recorded as this
+        // function's lend at all, so `^ ( g p )` over a `g` lending its
+        // argument handed callers an unchecked view of `p` (h271).
+        : s rfroots ? != 0 ( nurl_str_len g_call_roots ) ( nurl_str_cat g_call_roots `` ) ( nurl_sym_get syms `__last_call_args__` )
+        ( mem_ret_param_lend_via syms ( nurl_sym_get syms `__last_call_lend_key__` ) rfroots )
         // …and when g compiles after this function (a generic accessor
         // instantiated at module end — `^ ( vec_at xs 0 )`), WHICH
         // parameters this function lends back follows from g's final
@@ -4371,6 +4411,12 @@ unsafe @ nurl_cg_lbl i h s hint → s {
             ( __record_param_idx syms `__fn_retpart__` rpf_pn )
             = ret_field_copy T
             = hbit own
+        } {}
+    } {}
+    // `^ x` of a `??` payload: what its matched call lent (h270).
+    ? & ( is_ident_tok ret_first_tt ) ! ret_field_copy {
+        ? != 0 ( nurl_sym_len2 syms ret_first_val `__pljk` ) {
+            ( mem_ret_param_lend_via syms ( nurl_sym_get2 syms ret_first_val `__pljk` ) ( nurl_sym_get2 syms ret_first_val `__pljr` ) )
         } {}
     } {}
     // `^ p` of a String / Vec parameter: the caller's own value comes
@@ -4562,6 +4608,7 @@ unsafe @ nurl_cg_lbl i h s hint → s {
             ( mem_hown_mark_dyn syms )
             = val ( mem_emit_cloneif cg rty val ( mem_hown_static syms cg rb ) )
             = hbit jo
+            ( mem_ret_param_lend_via syms ( nurl_sym_get syms `__last_join_lend_key__` ) ( nurl_sym_get syms `__last_join_lend_roots__` ) )
             // …unless a lending arm's payload came out of a call over a
             // value this frame owns (`^ ?? ( vec_get v 0 ) { T s → s … }`,
             // v local): copied on those paths, which then own it.
@@ -4586,6 +4633,7 @@ unsafe @ nurl_cg_lbl i h s hint → s {
         ? | ( __phi_lends_params_only syms ) ! ( __clone_supported ( nurl_get_last_type ) syms ) {
             ( mem_hown_mark_dyn syms )
             = hbit ( nurl_str_cat `false` `` )
+            ( mem_ret_param_lend_via syms ( nurl_sym_get syms `__last_join_lend_key__` ) ( nurl_sym_get syms `__last_join_lend_roots__` ) )
             : s __jrl2 ? ( __clone_supported ( nurl_get_last_type ) syms ) ( mem_local_lend_of syms cg ( nurl_sym_get syms `__last_join_lend_key__` ) ( nurl_sym_get syms `__last_join_lend_args__` ) ) ``
             ? != 0 ( nurl_str_len __jrl2 ) {
                 = val ( mem_emit_cloneif cg ( nurl_get_last_type ) val __jrl2 )
@@ -17998,6 +18046,11 @@ unsafe @ gen_match i lex i syms i cg → s {
                 // (An enum's payload: lent by the enum, h231.)
                 ( nurl_sym_def syms ( nurl_str_cat pv0 `__enum_pl` ) ? pt0_is_opt_bool `` `1` )
                 ( mem_note_plend syms pv0 match_first_tt match_var_name __m_ser )
+                // …and the call it came out of, should it be handed back (h270).
+                ? != 0 ( nurl_str_len __m_lkey ) {
+                    ( nurl_sym_def syms ( nurl_str_cat pv0 `__pljk` ) __m_lkey )
+                    ( nurl_sym_def syms ( nurl_str_cat pv0 `__pljr` ) __m_lroots )
+                } {}
                 // A payload of a `vec_get` result reads that Vec slot.
                 ? & pt0_is_opt_bool != 0 ( nurl_sym_len2 syms match_var_name `__vget` )
                 { ( nurl_sym_def syms ( nurl_str_cat pv0 `__vget` ) ( nurl_sym_get2 syms match_var_name `__vget` ) )
@@ -18650,6 +18703,7 @@ unsafe @ gen_match i lex i syms i cg → s {
         } {}
         ( nurl_sym_set_deep syms `__last_join_lend_key__` __m_lkey )
         ( nurl_sym_set_deep syms `__last_join_lend_args__` __m_largs )
+        ( nurl_sym_set_deep syms `__last_join_lend_roots__` __m_lroots )
         ? & & & != 0 g_auto_drop_strings ! all_str_owned any_str_owner
         ( seq ( nurl_llty phi_type ) `i8*` ) {
             : ~ s owners ( nurl_str_cat owner_entries `` )

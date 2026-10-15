@@ -654,13 +654,16 @@ b read_only b destructive b idempotent b open_world
 // answer "method not found", which is correct: a server that cannot
 // hold a task must not claim it can.
 //
-// The server keeps its own copy of the store handle (the same task list
-// as the caller's). `hook` runs before each tasks/* dispatch, for a server whose
-// task state is only current after it polls something; pass
-// `\ → v {}` when there is nothing to do.
-@ mcp_server_set_task_store McpServer r McpTaskStore store ( @ v ) hook → v {
+// The server keeps `store`: pass a share of it (McpTaskStore_share) to go
+// on creating tasks in the same list. `hook` runs before each tasks/*
+// dispatch, for a server whose task state is only current after it polls
+// something; pass `\ → v {}` when there is nothing to do. (Taken, not
+// borrowed: what the hook captures is checked against what the server
+// keeps — a borrowed store read as the hook's owner, so a hook capturing
+// state that held the store's other share was reported as a cycle.)
+@ mcp_server_set_task_store McpServer r sink McpTaskStore store ( @ v ) hook → v {
     ( vec_clear [McpTaskStore] . r __tasks )
-    ( vec_push [McpTaskStore] . r __tasks ( McpTaskStore_share store ) )
+    ( vec_push [McpTaskStore] . r __tasks store )
     ( vec_clear [McpTaskHook] . r __task_hook )
     ( vec_push [McpTaskHook] . r __task_hook @ McpTaskHook { hook } )
 }
