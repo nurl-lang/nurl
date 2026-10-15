@@ -1,6 +1,6 @@
 COMPILE FAIL
 ERRORS
-compiler/tests/diag_closure_inout_captured_arg.nu:17:13: error: 'q' is passed 'inout' to a closure that also captures it — inside, the parameter and the capture are two names for one value, and a write through one leaves what was read through the other dangling. Pass it as the parameter only (do not capture it), or capture it only.
+compiler/tests/diag_closure_inout_captured_arg.nu:20:13: error: 'q' is passed 'inout' to a closure that also captures it — inside, the parameter and the capture are two names for one value, and a write through one leaves what was read through the other dangling. Pass it as the parameter only (do not capture it), or capture it only.
     ( app g q )
             ^
 error: aborting due to 1 previous error
