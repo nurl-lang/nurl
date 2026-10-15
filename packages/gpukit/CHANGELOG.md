@@ -7,6 +7,7 @@
 - **Read-only buffers are `__restrict__`.** The build already refuses a buffer the kernel reads that overlaps one it writes, so the qualifier is sound: the compiler reads such buffers through the read-only cache and moves their loads past stores.
 - **Narrow launches store with a 32-bit check.** When every buffer has 1 to 2^32 − 1 elements, `ST` compares a 32-bit index, the same narrowing loads already had. An index past 2^32 wraps into the buffer rather than being dropped; either way the store stays inside the buffer.
 - `gk_upload_batch kit dsts srcs hdsts hsrcs release` sends f32/f64/i64 buffers and 16-bit `GkHBuf`s in one streamed batch, each from a checked view of exactly its bytes. `gk_dbuf_upload_batch` is that call with no half buffers.
+- **Fixed: the pool's process-wide counters lost updates.** The row count, the idle byte total that decides evictions, the LRU clock and the budget were plain globals that every kit, on every thread, read and wrote back. Two kits freeing blocks at once could both read the same total. They now sit in one `( Locked GkPoolG )`, updated under its lock (`gk_pool_count`, `gk_pool_idle_bytes` and `gk_pool_budget_bytes` read them as before).
 - The cross-file `__gk_slot_of` / `__gk_run_slot` helpers are `_gk_slot_of` / `_gk_run_slot`.
 - `tests/checkedcheck.nu` covers record updates and mixed batches (81 cases on each backend).
 
