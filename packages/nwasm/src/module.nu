@@ -686,9 +686,27 @@ unsafe @ _module_func_type inout ModuleImpl m i fidx → s {
     ^ ?? ( vec_get [( Box FuncType )] . m types ti ) { T x → # s ( box_ptr [FuncType] x ) F → # s 0 }
 }
 
-unsafe @ module_func_type Module m__h i fidx → s {
-    : ~ * ModuleImpl mp ( _Module_ptr m__h )
-    ^ ( _module_func_type . mp 0 fidx )
+// The type of function `fidx` (imported or defined), copied out of the
+// module — what a caller outside the interpreter (the CLI parsing its
+// arguments) reads; F when the index is out of range.
+@ module_func_sig Module m__h i fidx → ?FuncType { ^ ( __module_func_sig ( module_impl m__h ) fidx ) }
+
+@ __module_func_sig ModuleImpl m i fidx → ?FuncType {
+    ? < fidx 0 { ^ @ ?FuncType { F } } {}
+    : ~ i ti -1
+    ? < fidx . m num_import_funcs {
+        ?? ( vec_get [( Box WImport )] . m imports fidx ) { T x → { = ti . ( box_get [WImport] x ) typeidx } F → {} }
+    } {
+        ?? ( vec_get [( Box WFunc )] . m funcs - fidx . m num_import_funcs ) { T x → { = ti . ( box_get [WFunc] x ) typeidx } F → {} }
+    }
+    ?? ( vec_get [( Box FuncType )] . m types ti ) {
+        T x → {
+            : FuncType ft ( box_get [FuncType] x )
+            ^ @ ?FuncType { T @ FuncType { ( vec_clone [i] . ft params ) ( vec_clone [i] . ft results ) } }
+        }
+        F → {}
+    }
+    ^ @ ?FuncType { F }
 }
 
 // Structural function-type equality (the call_indirect runtime check): same

@@ -15,30 +15,24 @@ $ `stdlib/ext/env.nu`
 $ `module.nu`
 $ `interp.nu`
 
-// FuncType of an exported function (or #s 0 if unavailable). Imported funcs
+// FuncType of an exported function (F if unavailable). Imported funcs
 // occupy the low indices and have none here; a defined func's is its type.
-@ __functype Module m i fidx → s {
-    ? < fidx ( module_num_import_funcs m ) { ^ # s 0 } {}
-    ^ ( module_func_type m fidx )
+@ __functype Module m i fidx → ?FuncType {
+    ? < fidx ( module_num_import_funcs m ) { ^ @ ?FuncType { F } } {}
+    ^ ( module_func_sig m fidx )
 }
 
-// valtype of parameter k / the single result (127 = i32 default if unknown).
-unsafe @ __param_ty s ftp i k → i {
-    ? == # i ftp 0 { ^ 127 } {}
-    : *FuncType ft # *FuncType ftp
-    ^ ?? ( vec_get [i] . ft params k ) { T x → x F → 127 }
+// valtype of parameter k / result k (127 = i32 default if unknown).
+@ __param_ty ? FuncType sig i k → i {
+    ?? sig { T ft → { ^ ?? ( vec_get [i] . ft params k ) { T x → x F → 127 } } F → { ^ 127 } }
 }
 
-unsafe @ __result_ty_at s ftp i k → i {
-    ? == # i ftp 0 { ^ 127 } {}
-    : *FuncType ft # *FuncType ftp
-    ^ ?? ( vec_get [i] . ft results k ) { T x → x F → 127 }
+@ __result_ty_at ? FuncType sig i k → i {
+    ?? sig { T ft → { ^ ?? ( vec_get [i] . ft results k ) { T x → x F → 127 } } F → { ^ 127 } }
 }
 
-unsafe @ __result_count s ftp → i {
-    ? == # i ftp 0 { ^ 0 } {}
-    : *FuncType ft # *FuncType ftp
-    ^ ( vec_len [i] . ft results )
+@ __result_count ? FuncType sig → i {
+    ?? sig { T ft → { ^ ( vec_len [i] . ft results ) } F → { ^ 0 } }
 }
 
 // Keep in step with nurl.toml's [package] version — `--version` is what a
@@ -80,7 +74,7 @@ unsafe @ __result_count s ftp → i {
                     : Interp it ( interp_new m )
                     ? != allow_gpu 0 { ( interp_allow_gpu it ) } {}
                     ? != allow_net 0 { ( interp_allow_net it ) } {}
-                    : s ftp ( __functype m fidx )
+                    : ?FuncType ftp ( __functype m fidx )
                     // push args, parsed per parameter type (i32/i64 decimal,
                     // f32/f64 floating-point → stored as their bit pattern)
                     : ~ i k first_arg
