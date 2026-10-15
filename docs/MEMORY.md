@@ -498,7 +498,11 @@ Fetch the view again after the mutation. A view stays a view wherever it
 goes: held in a `Slice` (`slice_from_vec`, `slice_of_str`, a CSV cell
 from `csv_table_view`), a struct, an Option or a container, captured by a
 closure, stored in a global or returned from a function, it is still a
-view of its source and ends with it. The rule applies in `unsafe`
+view of its source and ends with it. Handed to a function that stores it
+into another of its arguments — the first, or one passed `inout`,
+wherever it sits (`( add h ( slice_from_vec [f] v ) )` with `add` pushing
+the slice into `. h fs`) — it makes that argument's value hold the view,
+as a `vec_push` written in place would. The rule applies in `unsafe`
 code too, because it is decided from the program text, not from the
 capacity at run time. A mutation inside one `?` arm does not end a view
 in the other arm, and a function that mutates the container passed to it
