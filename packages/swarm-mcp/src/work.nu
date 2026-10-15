@@ -124,7 +124,7 @@ $ `token.nu`
     ^ ( kernel_handler_ka key \ → v {} )
 }
 
-unsafe @ kernel_handler_ka ( Vec u ) key ( @ v ) ka → ( @ ( Vec u ) ( Vec u ) ) {
+@ kernel_handler_ka ( Vec u ) key ( @ v ) ka → ( @ ( Vec u ) ( Vec u ) ) {
     ^ \ ( Vec u ) p → ( Vec u ) {
         ?? ( token_untag key p ) {
             F → {
@@ -138,11 +138,8 @@ unsafe @ kernel_handler_ka ( Vec u ) key ( @ v ) ka → ( @ ( Vec u ) ( Vec u ) 
                 : i lo ?? ( bytes_read_u64_be body 2 ) { T x → # i x F → 0 }
                 : i hi ?? ( bytes_read_u64_be body 10 ) { T x → # i x F → 0 }
                 : ( Vec u ) src ( bytes_slice body 18 ( vec_len [u] body ) )
-                : EParser ep ( eparser_new )
+                : ~ EParser ep ( eparser_new )
                 : i root ( expr_parse src ep )
-                // The fold opens the parser once and runs the evaluator on
-                // the pointer: one handle deref per chunk, not per element.
-                : *EParserImpl epp ( _EParser_ptr ep )
                 : ~ i acc 0
                 ? == dtype 1 {
                     // float (f64) fold: x is the integer index cast to double;
@@ -151,7 +148,7 @@ unsafe @ kernel_handler_ka ( Vec u ) key ( @ v ) ka → ( @ ( Vec u ) ( Vec u ) 
                     ? ( eparser_ok ep ) {
                         : ~ i xx lo
                         ~ < xx hi {
-                            = facc ( red_fold_f op facc ( _expr_eval_f epp root # f xx ) )
+                            = facc ( red_fold_f op facc ( _expr_eval_f ep root # f xx ) )
                             = xx + xx 1
                             ? == % - xx lo ( __ka_stride ) 0 { ( ka ) } {}
                         }
@@ -162,7 +159,7 @@ unsafe @ kernel_handler_ka ( Vec u ) key ( @ v ) ka → ( @ ( Vec u ) ( Vec u ) 
                     ? ( eparser_ok ep ) {
                         : ~ i xx lo
                         ~ < xx hi {
-                            = acc ( red_fold op acc ( _expr_eval epp root xx ) )
+                            = acc ( red_fold op acc ( _expr_eval ep root xx ) )
                             = xx + xx 1
                             ? == % - xx lo ( __ka_stride ) 0 { ( ka ) } {}
                         }

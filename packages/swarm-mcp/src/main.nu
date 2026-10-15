@@ -68,7 +68,7 @@ $ `stdlib/core/slice.nu`
 
 // ── node bundle (the cluster coordinator/worker state) ───────────
 
-: SwarmImpl {
+: Swarm {
     Transport transport
     Ring ring
     Ring gpu_ring  // the GPU capability domain (cap_gpu workers only)
@@ -83,23 +83,15 @@ $ `stdlib/core/slice.nu`
     i epoch  // bumps on every ring-membership change (block-seed invalidation)
 }
 
-// A Swarm is a handle on the node bundle in an Arc (stdlib/std/arc.nu):
-// every copy is the same node, and the last owner releases it — the
-// transport, both rings, the roster and the job node with it.
-: Swarm { ( Arc SwarmImpl ) a }
-
-@ Swarm_share Swarm h → Swarm { ^ @ Swarm { ( arc_clone [SwarmImpl] . h a ) } }
-
-@ Swarm_drop sink Swarm h → v {}
-
-unsafe @ __Swarm_ptr Swarm h → *SwarmImpl { ^ ( arc_ptr [SwarmImpl] . h a ) }
-
+// A Swarm is one node's bundle — the transport, both rings, the roster and
+// the job node — a plain value its role's loop owns and hands `inout` to
+// whatever changes it.
 @ swarm_new RelayClient rc i id i role i caps s token → Swarm {
     : ( Vec u ) me ( pk_from_id id )
     : Transport tr ( transport_open # s 0 rc 1 )
     : Ring ring ( ring_new )
     : Ring gring ( ring_new )
-    : Roster roster ( roster_new )
+    : ~ Roster roster ( roster_new )
     : JobNode jn ( job_node_new tr ring me id )
     // GPU wasm chunks route/own/forward on the GPU capability ring — every
     // node scopes the kind the same way, so mid-flight re-homing stays inside
@@ -112,7 +104,7 @@ unsafe @ __Swarm_ptr Swarm h → *SwarmImpl { ^ ( arc_ptr [SwarmImpl] . h a ) }
         ( roster_add roster ring me id ( swarm_vnodes ) caps ( now_ms ) )
         ? == & caps ( cap_gpu ) ( cap_gpu ) { ( ring_add_member gring me ( swarm_vnodes ) ) } {}
     } {}
-    ^ @ Swarm { ( arc_new [SwarmImpl] @ SwarmImpl { tr ring gring roster jn me id role caps ( token_group_id token ) ( token_key token ) 0 } ) }
+    ^ @ Swarm { tr ring gring roster jn me id role caps ( token_group_id token ) ( token_key token ) 0 }
 }
 
 // Let go of `sw` now rather than at the end of its owner's scope (optional).
@@ -120,44 +112,36 @@ unsafe @ __Swarm_ptr Swarm h → *SwarmImpl { ^ ( arc_ptr [SwarmImpl] . h a ) }
 
 // How many workers this node has folded into its ring, and how many of
 // them advertise every capability bit in `mask`.
-unsafe @ swarm_worker_count Swarm sw__h → i {
-    : *SwarmImpl sw ( __Swarm_ptr sw__h )
+@ swarm_worker_count inout Swarm sw → i {
     ^ ( roster_count . sw roster )
 }
 
-unsafe @ swarm_worker_count_caps Swarm sw__h i mask → i {
-    : *SwarmImpl sw ( __Swarm_ptr sw__h )
+@ swarm_worker_count_caps inout Swarm sw i mask → i {
     ^ ( roster_count_caps . sw roster mask )
 }
 
-unsafe @ swarm_join_group Swarm sw__h → v {
-    : *SwarmImpl sw ( __Swarm_ptr sw__h )
+@ swarm_join_group inout Swarm sw → v {
     ?? ( transport_group_join . sw transport . sw group ) { T _ → {} F _ → {} }
 }
 
-@ swarm_announce Swarm sw__h i want → v {
-    : b _ok ( swarm_announce_ok sw__h want )
+@ swarm_announce inout Swarm sw i want → v {
+    : b _ok ( swarm_announce_ok sw want )
 }
 
 // Announce presence; returns whether the broadcast reached the relay. A
 // failed send is the reconnect loop's signal that the relay is gone.
-unsafe @ swarm_announce_ok Swarm sw__h i want → b {
-    ^ ( __swarm_announce_ok_at ( __Swarm_ptr sw__h ) want )
+@ swarm_announce_ok Swarm sw i want → b {
+    ^ ( __swarm_announce_ok_at sw want )
 }
 
-// The same through the swarm's state, for a callback the swarm itself
-// stores (a job handler): it points back without owning — capturing the
-// Swarm handle there would make the swarm own a handle to itself, a cycle
-// of counts nothing frees (docs/MEMORY.md §7.7).
-unsafe @ __swarm_announce_ok_at * SwarmImpl sw i want → b {
+@ __swarm_announce_ok_at Swarm sw i want → b {
     : ( Vec u ) msg ( hello_build . sw self_id . sw role want . sw self_pk . sw self_caps )
     : ~ b ok F
     ?? ( transport_broadcast . sw transport . sw group msg ) { T _ → { = ok T } F _ → {} }
     ^ ok
 }
 
-unsafe @ swarm_on_hello Swarm sw__h Hello h → v {
-    : *SwarmImpl sw ( __Swarm_ptr sw__h )
+@ swarm_on_hello inout Swarm sw Hello h → v {
     ? == . h role ( role_worker ) {
         // Every HELLO — first or heartbeat — refreshes the member's liveness
         // stamp; swarm_expire evicts the ones that stop arriving.
@@ -189,8 +173,7 @@ unsafe @ swarm_on_hello Swarm sw__h Hello h → v {
 // Drop workers that stopped announcing, from the roster and from both rings.
 // Returns how many were evicted; a non-zero result bumps the epoch, because a
 // changed ring re-homes chunk keys and invalidates recorded block seeds.
-unsafe @ swarm_expire Swarm sw__h → i {
-    : *SwarmImpl sw ( __Swarm_ptr sw__h )
+@ swarm_expire inout Swarm sw → i {
     : ( Vec ( Vec u ) ) gone ( roster_expire . sw roster ( now_ms ) ( __roster_ttl_ms ) . sw self_pk )
     : i n ( vec_len [( Vec u )] gone )
     : ~ i k 0
@@ -208,8 +191,7 @@ unsafe @ swarm_expire Swarm sw__h → i {
     ^ n
 }
 
-unsafe @ swarm_pump Swarm sw__h i max → v {
-    : *SwarmImpl sw ( __Swarm_ptr sw__h )
+@ swarm_pump inout Swarm sw i max → v {
     : ~ b more T
     ~ more {
         ?? ( transport_recv . sw transport max ) {
@@ -217,7 +199,7 @@ unsafe @ swarm_pump Swarm sw__h i max → v {
                 : i b0 ?? ( vec_get [u] . tm payload 0 ) { T x → # i x F → 255 }
                 ? == b0 ( census_hello_t ) {
                     : Hello h ( hello_decode . tm payload )
-                    ( swarm_on_hello sw__h h )
+                    ( swarm_on_hello sw h )
                 } {
                     : JobMsg m ( jobmsg_decode . tm payload )
                     ? == . m mtype ( job_submit_t ) { ( job_on_submit . sw job m ) } {}
@@ -229,10 +211,10 @@ unsafe @ swarm_pump Swarm sw__h i max → v {
     }
 }
 
-@ swarm_discover Swarm sw__h i rounds → v {
-    ( swarm_announce sw__h 1 )
+@ swarm_discover inout Swarm sw i rounds → v {
+    ( swarm_announce sw 1 )
     : ~ i t 0
-    ~ < t rounds { ( swarm_pump sw__h 200 ) = t + t 1 }
+    ~ < t rounds { ( swarm_pump sw 200 ) = t + t 1 }
 }
 
 // ── role threads ─────────────────────────────────────────────────
@@ -318,7 +300,7 @@ unsafe @ swarm_pump Swarm sw__h i max → v {
 // re-forms — no single relay is a point of failure. Death is detected by a
 // periodic heartbeat announce whose SEND fails when the relay is gone; the
 // on-disk block cache survives the switch, so re-seeding is idempotent.
-unsafe @ node_worker ( Vec String ) relays s dhost i dport s token i vflag i gpu → v {
+@ node_worker ( Vec String ) relays s dhost i dport s token i vflag i gpu → v {
     : i id ( rand_u64 )
     : ~ i idxc 0
     : i caps ? != gpu 0 ( cap_gpu ) 0
@@ -336,21 +318,24 @@ unsafe @ node_worker ( Vec String ) relays s dhost i dport s token i vflag i gpu
                 : ( Vec u ) reg ( pk_from_id id )
                 ?? ( relay_register rc reg ) { T _ → {} F _ → {} }
                 ( relay_set_timeout rc 250 )
-                : Swarm sw__h ( swarm_new rc id ( role_worker ) caps token )
-                : *SwarmImpl sw ( __Swarm_ptr sw__h )
+                : ~ Swarm sw ( swarm_new rc id ( role_worker ) caps token )
                 // The expression fold calls back every few million elements so
                 // a worker chewing on a long chunk still announces itself —
                 // otherwise the coordinator's liveness clock cannot tell it
                 // from a dead node (the handler runs inside this pump loop).
-                // (`sw`, not `sw__h`: the swarm stores this handler, so it
-                // points back without owning — the pump loop that runs it
-                // holds sw__h.)
-                ( job_register . sw job ( kind_kernel ) ( kernel_handler_ka . sw key \ → v { : b _ok ( __swarm_announce_ok_at sw 1 ) } ) )
+                // (The handler takes the heartbeat itself — its frame, the
+                // transport, the group — not the swarm, which stores it.)
+                : ( Vec u ) ka_hello ( hello_build . sw self_id . sw role 1 . sw self_pk . sw self_caps )
+                : Transport ka_tr ( Transport_share . sw transport )
+                : ( Vec u ) ka_grp ( vec_clone [u] . sw group )
+                ( job_register . sw job ( kind_kernel ) ( kernel_handler_ka . sw key \ → v {
+                    ?? ( transport_broadcast ka_tr ka_grp ka_hello ) { T _ → {} F _ → {} }
+                } ) )
                 ( job_register . sw job ( kind_wasm ) ( wasm_handler . sw key ) )
                 ( job_register . sw job ( kind_blob ) ( blob_handler . sw key ) )
                 ? != gpu 0 { ( job_register . sw job ( kind_wasm_gpu ) ( wasm_gpu_handler . sw key ) ) } {}
-                ( swarm_join_group sw__h )
-                ( swarm_announce sw__h 1 )
+                ( swarm_join_group sw )
+                ( swarm_announce sw 1 )
                 ( nurl_flush_stdout )
                 ? == vflag 1 { ( nurl_print `swarm-mcp worker ` ) ( nurl_print ( nurl_str_int id ) ) ( nurl_print ` on relay ` ) ( nurl_print ( nurl_str_int cur ) ) ( nurl_print ? != gpu 0 ` ready (gpu)\n` ` ready\n` ) } {}
                 // pump; a heartbeat every ~2 s doubles as the relay-liveness
@@ -358,7 +343,7 @@ unsafe @ node_worker ( Vec String ) relays s dhost i dport s token i vflag i gpu
                 : ~ b live T
                 : ~ i beat 0
                 ~ live {
-                    ( swarm_pump sw__h 200 )
+                    ( swarm_pump sw 200 )
                     = beat + beat 1
                     ? >= beat 10 {
                         = beat 0
@@ -367,8 +352,8 @@ unsafe @ node_worker ( Vec String ) relays s dhost i dport s token i vflag i gpu
                         // owns it — so a worker still holding a dead peer sends
                         // re-dispatched chunks straight back into the void. Every
                         // node must converge on the same live set.
-                        : i _gone ( swarm_expire sw__h )
-                        ? ( swarm_announce_ok sw__h 1 ) {} { = live F }
+                        : i _gone ( swarm_expire sw )
+                        ? ( swarm_announce_ok sw 1 ) {} { = live F }
                     } {}
                     ( sleep_ms 5 )
                 }
@@ -383,8 +368,7 @@ unsafe @ node_worker ( Vec String ) relays s dhost i dport s token i vflag i gpu
 // Submits the kernel to the ring and returns the chunk task-ids. `expr` is the
 // raw kernel bytes; the caller owns it.
 
-unsafe @ cluster_submit Swarm sw__h i op i dtype i lo i hi ( Vec u ) expr i nchunks → ( Vec i ) {
-    : *SwarmImpl sw ( __Swarm_ptr sw__h )
+@ cluster_submit inout Swarm sw i op i dtype i lo i hi ( Vec u ) expr i nchunks → ( Vec i ) {
     : ( Vec Chunk ) chunks ( shard lo hi nchunks )
     : ( Vec i ) tids ( vec_new [i] )
     : ~ i i 0
@@ -403,8 +387,7 @@ unsafe @ cluster_submit Swarm sw__h i op i dtype i lo i hi ( Vec u ) expr i nchu
 // ring owner under `kind` (kind_wasm, or kind_wasm_gpu — the GPU capability
 // domain). The module bytes ride every chunk (workers cache by content hash,
 // so it is written once per worker).
-unsafe @ cluster_submit_wasm Swarm sw__h i lo i hi ( Vec u ) wasm i nchunks i kind → ( Vec i ) {
-    : *SwarmImpl sw ( __Swarm_ptr sw__h )
+@ cluster_submit_wasm inout Swarm sw i lo i hi ( Vec u ) wasm i nchunks i kind → ( Vec i ) {
     : ( Vec Chunk ) chunks ( shard lo hi nchunks )
     : ( Vec i ) tids ( vec_new [i] )
     : ~ i i 0
@@ -438,7 +421,7 @@ unsafe @ cluster_submit_wasm Swarm sw__h i lo i hi ( Vec u ) wasm i nchunks i ki
 // stalls with a live-looking owner, so nothing polls forever.
 @ __ft_cpu_backstop_ms → i { ^ 1800000 }  // 30 min
 
-: ChunkJobImpl {
+: ChunkJob {
     i kind  // job kind (kind_wasm_gpu)
     ( Vec u ) payload  // tagged, immutable across retries
     i idx  // chunk index (base of the ring key)
@@ -450,20 +433,14 @@ unsafe @ cluster_submit_wasm Swarm sw__h i lo i hi ( Vec u ) wasm i nchunks i ki
     i state  // 0 pending · 1 ok · 2 exhausted (failed after max attempts)
 }
 
-// A ChunkJob is a handle on one chunk's retry plan in an Arc
-// (stdlib/std/arc.nu): the task's list and a re-dispatch share it, and the
-// last owner releases it with its payload and owner key.
-: ChunkJob { ( Arc ChunkJobImpl ) a }
-
-@ ChunkJob_share ChunkJob h → ChunkJob { ^ @ ChunkJob { ( arc_clone [ChunkJobImpl] . h a ) } }
-
-@ ChunkJob_drop sink ChunkJob h → v {}
-
-unsafe @ __ChunkJob_ptr ChunkJob h → *ChunkJobImpl { ^ ( arc_ptr [ChunkJobImpl] . h a ) }
+// A ChunkJob is one chunk's retry plan, held in its task's list; a refresh
+// takes it out of the list to advance it (re-dispatch included) and puts it
+// back.
+@ __cj_blank → ChunkJob { ^ @ ChunkJob { 0 ( vec_new [u] ) 0 0 0 ( vec_new [u] ) 0 0 0 } }
 
 // A plan for chunk `idx`, just dispatched as task `tid` to `owner`.
 @ __cj_new i kind ( Vec u ) payload i idx i tid ( Vec u ) owner i now → ChunkJob {
-    ^ @ ChunkJob { ( arc_new [ChunkJobImpl] @ ChunkJobImpl { kind payload idx 0 tid owner 1 now 0 } ) }
+    ^ @ ChunkJob { kind payload idx 0 tid owner 1 now 0 }
 }
 
 // Ring key for chunk `idx` under retry `salt`. Both idx and salt are folded
@@ -482,27 +459,25 @@ unsafe @ __ChunkJob_ptr ChunkJob h → *ChunkJobImpl { ^ ( arc_ptr [ChunkJobImpl
 // The owner pubkey for `key` in the ring `kind` routes on (copied; empty on an
 // empty ring). GPU chunks resolve against the capability ring, everything else
 // against the general one — the same rule dist/job dispatches by.
-unsafe @ __cj_owner Swarm sw__h i kind ( Vec u ) key → ( Vec u ) {
-    : *SwarmImpl sw ( __Swarm_ptr sw__h )
+@ __cj_owner inout Swarm sw i kind ( Vec u ) key → ( Vec u ) {
     : Ring r ? == kind ( kind_wasm_gpu ) . sw gpu_ring . sw ring
     ^ ?? ( ring_owner_pk r key ) { T pk → pk F → ( vec_new [u] ) }
 }
 
 // Does the ring `kind` routes on still have anyone in it?
-unsafe @ __cj_ring_empty Swarm sw__h i kind → b {
-    : *SwarmImpl sw ( __Swarm_ptr sw__h )
+@ __cj_ring_empty inout Swarm sw i kind → b {
     : Ring r ? == kind ( kind_wasm_gpu ) . sw gpu_ring . sw ring
     ^ == ( ring_point_count r ) 0
 }
 
-@ __cj_gpu_owner Swarm sw__h ( Vec u ) key → ( Vec u ) { ^ ( __cj_owner sw__h ( kind_wasm_gpu ) key ) }
+@ __cj_gpu_owner inout Swarm sw ( Vec u ) key → ( Vec u ) { ^ ( __cj_owner sw ( kind_wasm_gpu ) key ) }
 
-unsafe @ cj_tids ( Vec ChunkJob ) jobs → ( Vec i ) {
+@ cj_tids ( Vec ChunkJob ) jobs → ( Vec i ) {
     : ( Vec i ) t ( vec_new [i] )
     : i n ( vec_len [ChunkJob] jobs )
     : ~ i k 0
     ~ < k n {
-        ?? ( vec_get [ChunkJob] jobs k ) { T h → { : *ChunkJobImpl cj ( __ChunkJob_ptr h ) ( vec_push [i] t . cj tid ) } F → {} }
+        ?? ( vec_get [ChunkJob] jobs k ) { T cj → { ( vec_push [i] t . cj tid ) } F → {} }
         = k + k 1
     }
     ^ t
@@ -516,8 +491,7 @@ unsafe @ cj_tids ( Vec ChunkJob ) jobs → ( Vec i ) {
 // cluster_submit_wasm_gpu, but each chunk keeps its tagged payload and owner so
 // task_refresh can re-dispatch it. Returns the ChunkJob vector (the caller
 // derives tids with cj_tids and stores the plan on the Task).
-unsafe @ cluster_dispatch_gpu_ft Swarm sw__h i mode i lo i hi i kbins ( Vec i ) params ( Vec u ) wasm i nchunks → ( Vec ChunkJob ) {
-    : *SwarmImpl sw ( __Swarm_ptr sw__h )
+@ cluster_dispatch_gpu_ft inout Swarm sw i mode i lo i hi i kbins ( Vec i ) params ( Vec u ) wasm i nchunks → ( Vec ChunkJob ) {
     : ( Vec Chunk ) chunks ( shard lo hi nchunks )
     : ( Vec ChunkJob ) jobs ( vec_new [ChunkJob] )
     : i now ( now_ms )
@@ -528,7 +502,7 @@ unsafe @ cluster_dispatch_gpu_ft Swarm sw__h i mode i lo i hi i kbins ( Vec i ) 
         : ( Vec u ) slice ( vec_new [u] )
         : ( Vec u ) payload ( wasm_gpu_chunk_payload mode . c lo . c hi kbins params slice wasm )
         : ( Vec u ) tagged ( token_tag . sw key payload )
-        : ( Vec u ) owner ( __cj_gpu_owner sw__h rkey )
+        : ( Vec u ) owner ( __cj_gpu_owner sw rkey )
         : i tid ( job_submit . sw job ( kind_wasm_gpu ) rkey tagged )
         ( vec_push [ChunkJob] jobs ( __cj_new ( kind_wasm_gpu ) tagged i tid owner now ) )
         = i + i 1
@@ -537,10 +511,9 @@ unsafe @ cluster_dispatch_gpu_ft Swarm sw__h i mode i lo i hi i kbins ( Vec i ) 
 }
 
 // One ChunkJob around an already-tagged payload, dispatched now.
-unsafe @ __cj_dispatch Swarm sw__h i kind i idx ( Vec u ) tagged i now → ChunkJob {
-    : *SwarmImpl sw ( __Swarm_ptr sw__h )
+@ __cj_dispatch inout Swarm sw i kind i idx ( Vec u ) tagged i now → ChunkJob {
     : ( Vec u ) rkey ( chunk_key_salted idx 0 )
-    : ( Vec u ) owner ( __cj_owner sw__h kind rkey )
+    : ( Vec u ) owner ( __cj_owner sw kind rkey )
     : i tid ( job_submit . sw job kind rkey tagged )
     ^ ( __cj_new kind tagged idx tid owner now )
 }
@@ -549,8 +522,7 @@ unsafe @ __cj_dispatch Swarm sw__h i kind i idx ( Vec u ) tagged i now → Chunk
 // the plan is what lets task_refresh notice a worker that died mid-chunk.
 // Without it an expression task whose owner disappeared stayed `running`
 // forever, which an agent can only poll into infinity.
-unsafe @ cluster_dispatch_kernel_ft Swarm sw__h i op i dtype i lo i hi ( Vec u ) expr i nchunks → ( Vec ChunkJob ) {
-    : *SwarmImpl sw ( __Swarm_ptr sw__h )
+@ cluster_dispatch_kernel_ft inout Swarm sw i op i dtype i lo i hi ( Vec u ) expr i nchunks → ( Vec ChunkJob ) {
     : ( Vec Chunk ) chunks ( shard lo hi nchunks )
     : ( Vec ChunkJob ) jobs ( vec_new [ChunkJob] )
     : i now ( now_ms )
@@ -559,7 +531,7 @@ unsafe @ cluster_dispatch_kernel_ft Swarm sw__h i op i dtype i lo i hi ( Vec u )
         : Chunk c ?? ( vec_get [Chunk] chunks i ) { T x → x F → @ Chunk { 0 0 } }
         : ( Vec u ) payload ( chunk_payload op dtype . c lo . c hi expr )
         : ( Vec u ) tagged ( token_tag . sw key payload )
-        ( vec_push [ChunkJob] jobs ( __cj_dispatch sw__h ( kind_kernel ) i tagged now ) )
+        ( vec_push [ChunkJob] jobs ( __cj_dispatch sw ( kind_kernel ) i tagged now ) )
         = i + i 1
     }
     ^ jobs
@@ -567,8 +539,7 @@ unsafe @ cluster_dispatch_kernel_ft Swarm sw__h i op i dtype i lo i hi ( Vec u )
 
 // Dispatch a wasm-module task (CPU kind_wasm or GPU kind_wasm_gpu) with a
 // retry plan — the module bytes ride each chunk exactly as cluster_submit_wasm.
-unsafe @ cluster_dispatch_wasm_ft Swarm sw__h i lo i hi ( Vec u ) wasm i nchunks i kind → ( Vec ChunkJob ) {
-    : *SwarmImpl sw ( __Swarm_ptr sw__h )
+@ cluster_dispatch_wasm_ft inout Swarm sw i lo i hi ( Vec u ) wasm i nchunks i kind → ( Vec ChunkJob ) {
     : ( Vec Chunk ) chunks ( shard lo hi nchunks )
     : ( Vec ChunkJob ) jobs ( vec_new [ChunkJob] )
     : i now ( now_ms )
@@ -577,7 +548,7 @@ unsafe @ cluster_dispatch_wasm_ft Swarm sw__h i lo i hi ( Vec u ) wasm i nchunks
         : Chunk c ?? ( vec_get [Chunk] chunks i ) { T x → x F → @ Chunk { 0 0 } }
         : ( Vec u ) payload ( wasm_chunk_payload . c lo . c hi wasm )
         : ( Vec u ) tagged ( token_tag . sw key payload )
-        ( vec_push [ChunkJob] jobs ( __cj_dispatch sw__h kind i tagged now ) )
+        ( vec_push [ChunkJob] jobs ( __cj_dispatch sw kind i tagged now ) )
         = i + i 1
     }
     ^ jobs
@@ -586,17 +557,16 @@ unsafe @ cluster_dispatch_wasm_ft Swarm sw__h i lo i hi ( Vec u ) wasm i nchunks
 // Re-dispatch one failed/lost chunk: salt the key until it maps to an owner
 // other than the one that just failed (bounded probes), resubmit the retained
 // payload there, and refresh the plan. No ring mutation — steering only.
-unsafe @ __cj_redispatch Swarm sw__h * ChunkJobImpl cj → v {
-    : *SwarmImpl sw ( __Swarm_ptr sw__h )
+@ __cj_redispatch inout Swarm sw inout ChunkJob cj → v {
     : JobNode jn . sw job
     : ~ i s + . cj salt 1
     : ~ ( Vec u ) newkey ( chunk_key_salted . cj idx s )
-    : ~ ( Vec u ) newowner ( __cj_owner sw__h . cj kind newkey )
+    : ~ ( Vec u ) newowner ( __cj_owner sw . cj kind newkey )
     : ~ i probes 0
     ~ & < probes 16 & > ( vec_len [u] newowner ) 0 & > ( vec_len [u] . cj owner ) 0 ( bytes_eq newowner . cj owner ) {
         = s + s 1
         = newkey ( chunk_key_salted . cj idx s )
-        = newowner ( __cj_owner sw__h . cj kind newkey )
+        = newowner ( __cj_owner sw . cj kind newkey )
         = probes + probes 1
     }
     : i tid ( job_submit jn . cj kind newkey . cj payload )
@@ -613,8 +583,7 @@ unsafe @ __cj_redispatch Swarm sw__h * ChunkJobImpl cj → v {
 // `data` is the WHOLE dataset's raw LE f64 bytes (empty when the task has no
 // dataset); each chunk ships exactly its own slice data[clo·8, chi·8) — the
 // split travels with its task, so a worker needs no separate fetch.
-unsafe @ cluster_submit_wasm_gpu Swarm sw__h i mode i lo i hi i kbins ( Vec i ) params ( Vec u ) data ( Vec u ) wasm i nchunks → ( Vec i ) {
-    : *SwarmImpl sw ( __Swarm_ptr sw__h )
+@ cluster_submit_wasm_gpu inout Swarm sw i mode i lo i hi i kbins ( Vec i ) params ( Vec u ) data ( Vec u ) wasm i nchunks → ( Vec i ) {
     : b hasdata > ( vec_len [u] data ) 0
     : ( Vec Chunk ) chunks ( shard lo hi nchunks )
     : ( Vec i ) tids ( vec_new [i] )
@@ -632,8 +601,7 @@ unsafe @ cluster_submit_wasm_gpu Swarm sw__h i mode i lo i hi i kbins ( Vec i ) 
 }
 
 // All chunk results present? (cluster job results are recorded by task-id.)
-unsafe @ tids_ready Swarm sw__h ( Vec i ) tids → b {
-    : *SwarmImpl sw ( __Swarm_ptr sw__h )
+@ tids_ready inout Swarm sw ( Vec i ) tids → b {
     : i n ( vec_len [i] tids )
     : ~ b all T : ~ i k 0
     ~ & all < k n {
@@ -654,8 +622,7 @@ unsafe @ tids_ready Swarm sw__h ( Vec i ) tids → b {
 // failed instead of silently reducing zeros into the answer.
 : Combined { i value i nfail }
 
-unsafe @ tids_combine Swarm sw__h i dtype i op ( Vec i ) tids → Combined {
-    : *SwarmImpl sw ( __Swarm_ptr sw__h )
+@ tids_combine inout Swarm sw i dtype i op ( Vec i ) tids → Combined {
     : i n ( vec_len [i] tids )
     : ~ i acc ? == dtype 1 ( f64_to_bits ( red_id_f op ) ) ( red_id op )
     : ~ i nfail 0
@@ -704,8 +671,7 @@ unsafe @ tids_combine Swarm sw__h i dtype i op ( Vec i ) tids → Combined {
     ~ < k 8 { ( vec_set [u] v + off k # u & >> bits * k 8 255 ) = k + k 1 }
 }
 
-unsafe @ tids_combine_vec Swarm sw__h i mode i kbins ( Vec i ) tids → CombinedV {
-    : *SwarmImpl sw ( __Swarm_ptr sw__h )
+@ tids_combine_vec inout Swarm sw i mode i kbins ( Vec i ) tids → CombinedV {
     : b ksum | == mode ( gpu_mode_hist ) == mode ( gpu_mode_vecreduce )
     : ( Vec u ) acc ( vec_new [u] )
     ? ksum {
@@ -754,17 +720,16 @@ unsafe @ tids_combine_vec Swarm sw__h i mode i kbins ( Vec i ) tids → Combined
 
 // ── submit role (manual CLI testing, no MCP) ─────────────────────
 
-unsafe @ run_submit s host i port i op i lo i hi s expr s token → i {
+@ run_submit s host i port i op i lo i hi s expr s token → i {
     ?? ( relay_dial host port ) {
         T rc → {
             : i myid ( rand_u64 )
             : ( Vec u ) reg ( pk_from_id myid )
             ?? ( relay_register rc reg ) { T _ → {} F _ → {} }
             ( relay_set_timeout rc 250 )
-            : Swarm sw__h ( swarm_new rc myid ( role_client ) 0 token )
-            : *SwarmImpl sw ( __Swarm_ptr sw__h )
-            ( swarm_join_group sw__h )
-            ( swarm_discover sw__h 8 )
+            : ~ Swarm sw ( swarm_new rc myid ( role_client ) 0 token )
+            ( swarm_join_group sw )
+            ( swarm_discover sw 8 )
             : i nworkers ( roster_count . sw roster )
             ? == nworkers 0 {
                 ( nurl_print `swarm-mcp: no workers found\n` )
@@ -772,10 +737,10 @@ unsafe @ run_submit s host i port i op i lo i hi s expr s token → i {
             } {}
             : ( Vec u ) eb ( bytes_from_str expr )
             : i nchunks ( nchunks_for nworkers )
-            : ( Vec i ) tids ( cluster_submit sw__h op 0 lo hi eb nchunks )
+            : ( Vec i ) tids ( cluster_submit sw op 0 lo hi eb nchunks )
             : ~ i rnd 0
-            ~ & ! ( tids_ready sw__h tids ) < rnd 400 { ( swarm_pump sw__h 200 ) = rnd + rnd 1 }
-            : Combined cb ( tids_combine sw__h 0 op tids )
+            ~ & ! ( tids_ready sw tids ) < rnd 400 { ( swarm_pump sw 200 ) = rnd + rnd 1 }
+            : Combined cb ( tids_combine sw 0 op tids )
             : i total . cb value
             // nurl_println_int appends a newline (it is puts-shaped), so building
             // a one-line summary out of it printed the range across four lines.
@@ -797,7 +762,7 @@ unsafe @ run_submit s host i port i op i lo i hi s expr s token → i {
 
 // ── runwasm role (manual CLI testing of a compiled .wasm kernel) ──
 
-unsafe @ run_runwasm s host i port i op i lo i hi s wasmpath s token → i {
+@ run_runwasm s host i port i op i lo i hi s wasmpath s token → i {
     : !( Vec u ) IoErr wr ( read_file_bytes wasmpath )
     : ~ i rc 0
     ?? wr {
@@ -809,10 +774,9 @@ unsafe @ run_runwasm s host i port i op i lo i hi s wasmpath s token → i {
                     : ( Vec u ) reg ( pk_from_id myid )
                     ?? ( relay_register relc reg ) { T _ → {} F _ → {} }
                     ( relay_set_timeout relc 250 )
-                    : Swarm sw__h ( swarm_new relc myid ( role_client ) 0 token )
-                    : *SwarmImpl sw ( __Swarm_ptr sw__h )
-                    ( swarm_join_group sw__h )
-                    ( swarm_discover sw__h 8 )
+                    : ~ Swarm sw ( swarm_new relc myid ( role_client ) 0 token )
+                    ( swarm_join_group sw )
+                    ( swarm_discover sw 8 )
                     : i nworkers ( roster_count . sw roster )
                     ? == nworkers 0 {
                         ( nurl_print `swarm-mcp: no workers found\n` ) = rc 1
@@ -821,14 +785,14 @@ unsafe @ run_runwasm s host i port i op i lo i hi s wasmpath s token → i {
                         : i nchunks ( nchunks_wasm nworkers )
                         ( nurl_print `swarm-mcp: ` ) ( nurl_print_int nworkers ) ( nurl_print ` worker(s), ` )
                         ( nurl_print_int nchunks ) ( nurl_print ` wasm chunk(s)\n` )
-                        : ( Vec i ) tids ( cluster_submit_wasm sw__h lo hi wasm nchunks ( kind_wasm ) )
+                        : ( Vec i ) tids ( cluster_submit_wasm sw lo hi wasm nchunks ( kind_wasm ) )
                         : ~ i rnd 0
-                        ~ & ! ( tids_ready sw__h tids ) < rnd 600 { ( swarm_pump sw__h 200 ) = rnd + rnd 1 }
-                        : Combined cb ( tids_combine sw__h 0 op tids )
+                        ~ & ! ( tids_ready sw tids ) < rnd 600 { ( swarm_pump sw 200 ) = rnd + rnd 1 }
+                        : Combined cb ( tids_combine sw 0 op tids )
                         : i total . cb value
                         ? > . cb nfail 0 {
                             ( nurl_print `swarm-mcp: WARNING ` ) ( nurl_print ( nurl_str_int . cb nfail ) ) ( nurl_print ` chunk(s) failed` )
-                            : String we ( __tids_first_error sw__h tids )
+                            : String we ( __tids_first_error sw tids )
                             ? > ( string_len we ) 0 { ( nurl_print `: ` ) ( nurl_print ( string_data we ) ) } {}
                             ( nurl_print `\n` )
                         } {}
@@ -849,10 +813,10 @@ unsafe @ run_runwasm s host i port i op i lo i hi s wasmpath s token → i {
 //  MCP server — the LLM-facing control surface
 // ══════════════════════════════════════════════════════════════════
 
-// The coordinator's registry — McpState in the owned global g_mcp, with its
-// Task and Dataset records boxed in it (a box stays put, so a *Task or a
-// *Dataset into one stays valid while the registry grows) — lives for the
-// whole program. A field replaced in a record drops what it held.
+// The coordinator's registry — McpState, which node_mcp keeps in a Locked
+// the tool handlers check it out of for each call — lives for the whole
+// program. Tasks and datasets are found by id and taken out of their list
+// while a call works on one beside the rest of the state.
 : Task {
     i id
     ( Vec u ) expr  // kernel bytes
@@ -878,43 +842,49 @@ unsafe @ run_runwasm s host i port i op i lo i hi s wasmpath s token → i {
 
 : McpState {
     Swarm swarm  // the coordinator node
-    ( Vec ( Box Task ) ) tasks
+    ( Vec Task ) tasks
     i next_id
     ( Vec WasmCached ) wcache  // compiled kernel modules by source hash
-    ( Vec ( Box Dataset ) ) datasets  // uploaded data the CUDA tools map over
+    ( Vec Dataset ) datasets  // uploaded data the CUDA tools map over
     i next_ds
     ( Vec String ) seeded  // "blockhex|chunk|epoch" — blocks CONFIRMED cached at their owner
     McpTaskStore mcptasks  // io.modelcontextprotocol/tasks handles, keyed by task id
-    s last_task  // *Task the tool call currently in flight registered (0 = none)
+    i last_task  // id of the task the tool call in flight registered (0 = none)
+    ( Vec IterRun ) iter_runs  // async compute_iterate runs (a finished one stays pollable)
+    i iter_next
+    ( Vec String ) relays  // a copy of node_mcp's relay list (mcp_reconnect)
+    i relay_from  // next relay index to try
+    String token
+    i reconnects
 }
 
-// Constructor: the task joins the registry at once (McpState owns it); the
-// *Task points into its box.
-unsafe @ task_new i id sink ( Vec u ) expr i dtype i lo i hi i op i nchunks sink ( Vec i ) tids → *Task {
-    : ( Box Task ) b ( box_new [Task] @ Task { id expr dtype lo hi op nchunks tids 0 0 0 ( gpu_mode_scalar ) 0 ( vec_new [u] ) ( string_new ) 0 0 ( vec_new [ChunkJob] ) 0 ( string_new ) } )
-    : *Task t # *Task ( box_ptr [Task] b )
-    : *McpState st ( __mcp_st )
-    ( vec_push [( Box Task )] . st tasks b )
-    ^ t
+// A task with id `id`, nothing landed yet. The submit path fills it in and
+// task_store hands it to the registry.
+@ task_new i id sink ( Vec u ) expr i dtype i lo i hi i op i nchunks sink ( Vec i ) tids → Task {
+    ^ @ Task { id expr dtype lo hi op nchunks tids 0 0 0 ( gpu_mode_scalar ) 0 ( vec_new [u] ) ( string_new ) 0 0 ( vec_new [ChunkJob] ) 0 ( string_new ) }
 }
 
-: ~ McpState g_mcp 0  // filled by node_mcp
-
-unsafe @ __mcp_st → *McpState { ^ ( mem_addr g_mcp ) }
-
-// Remember a freshly-submitted task (task_new put it in the registry) as
-// the one the in-flight tool call produced. Every submit path goes through here so
-// the MCP tasks layer (below) can link its handle to the swarm task
-// without each tool having to thread the pointer back out.
+// The registry takes `t` (McpState owns every task), and remembers it as the
+// one the in-flight tool call produced, so the MCP tasks layer (below) can
+// link its handle to the swarm task without each tool threading it back.
 //
 // `last_task` is a single-slot handoff, which is sound because the MCP
 // endpoint is a SERIAL accept loop (`server_run`): exactly one tool call
 // is ever in flight. It is cleared before dispatch and read immediately
 // after, so a tool that submits nothing leaves it at 0.
-unsafe @ task_register * Task t → v {
-    : *McpState st ( __mcp_st )
-    = . st last_task # s t
+@ task_store inout McpState st sink Task t → v {
+    = . st last_task . t id
+    ( vec_push [Task] . st tasks t )
 }
+
+// Task `k` out of the registry to work on (an empty one stands in), and
+// back. Nothing is copied either way.
+@ __task_take inout McpState st i k → Task {
+    : Task blank ( task_new 0 ( vec_new [u] ) 0 0 0 0 0 ( vec_new [i] ) )
+    ^ ?? ( vec_replace [Task] . st tasks k blank ) { T x → x F → ( task_new 0 ( vec_new [u] ) 0 0 0 0 0 ( vec_new [i] ) ) }
+}
+
+@ __task_put inout McpState st i k sink Task t → v { : ?Task _old ( vec_replace [Task] . st tasks k t ) }
 
 // ── datasets: uploaded arrays the CUDA tools map over ────────────
 // A dataset is a flat f64 array held at the coordinator as raw LE bytes.
@@ -930,19 +900,18 @@ unsafe @ task_register * Task t → v {
 // `dtype` is the storage type code (== the kernel's has_data value): 1 f64 · 2
 // f32 · 3 i32 · 4 i64. Elements are stored in their native width; the count and
 // all byte offsets scale by that width. The GPU promotes each to a double.
-unsafe @ ds_esz_of * Dataset d → i { ^ ( data_dtype_esz . d dtype ) }
+@ ds_esz_of Dataset d → i { ^ ( data_dtype_esz . d dtype ) }
 
-unsafe @ ds_count_of * Dataset d → i { ^ / . d nbytes ( ds_esz_of d ) }
+@ ds_count_of Dataset d → i { ^ / . d nbytes ( ds_esz_of d ) }
 
-unsafe @ ds_is_file * Dataset d → b { ^ > ( string_len . d path ) 0 }
+@ ds_is_file Dataset d → b { ^ > ( string_len . d path ) 0 }
 
 // The dtype code for a dataset id (1 f64 default if unknown) — the has_data
 // value the CUDA generator and the chunk payload carry for this dataset.
-unsafe @ ds_dtype_id i dsid → i {
-    : s p ( ds_find dsid )
-    ? == # i p 0 { ^ ( data_dtype_f64 ) } {}
-    : *Dataset d # *Dataset p
-    ^ . d dtype
+@ ds_dtype_id McpState st i dsid → i {
+    : i k ( ds_find st dsid )
+    ? < k 0 { ^ ( data_dtype_f64 ) } {}
+    ^ ?? ( vec_get [Dataset] . st datasets k ) { T d → . d dtype F → ( data_dtype_f64 ) }
 }
 
 // Read one element at byte offset `off` as a double, honouring the dtype.
@@ -959,7 +928,7 @@ unsafe @ ds_dtype_id i dsid → i {
 // Block b's raw bytes: sliced from RAM, or read from the source file at the
 // block's fixed grid offset (file-backed). One block (≤ 1 MiB) at a time — the
 // coordinator's memory never scales with the dataset size.
-unsafe @ ds_block_bytes * Dataset d i b → ( Vec u ) {
+@ ds_block_bytes Dataset d i b → ( Vec u ) {
     : i bv ( blob_block_vals )
     : i off * b * bv 8
     : i end0 + off * bv 8
@@ -1024,18 +993,30 @@ unsafe @ ds_block_bytes * Dataset d i b → ( Vec u ) {
     ^ out
 }
 
-unsafe @ ds_find i id → s {
-    : *McpState st ( __mcp_st )
-    : i n ( vec_len [( Box Dataset )] . st datasets )
-    : ~ s found # s 0
+// The index of dataset `id` in the registry, -1 if none.
+@ ds_find McpState st i id → i {
+    : i n ( vec_len [Dataset] . st datasets )
+    : ~ i found -1
     : ~ i k 0
-    ~ & == # i found 0 < k n {
-        : s pp ?? ( vec_get [( Box Dataset )] . st datasets k ) { T x → # s ( box_ptr [Dataset] x ) F → # s 0 }
-        ? != # i pp 0 { : *Dataset d # *Dataset pp ? == . d id id { = found pp } {} } {}
+    ~ & < found 0 < k n {
+        ?? ( vec_get [Dataset] . st datasets k ) { T d → { ? == . d id id { = found k } {} } F → {} }
         = k + k 1
     }
     ^ found
 }
+
+// Dataset `k` out of the registry to work on beside the rest of the state
+// (an empty one stands in), and back. Nothing is copied either way.
+@ __ds_blank → Dataset { ^ @ Dataset { 0 ( string_new ) ( vec_new [u] ) ( vec_new [( Vec u )] ) ( string_new ) 0 0 } }
+
+// The element count of dataset `k` (0 if none).
+@ __ds_count McpState st i k → i { ^ ?? ( vec_get [Dataset] . st datasets k ) { T d → ( ds_count_of d ) F → 0 } }
+
+@ __ds_take inout McpState st i k → Dataset {
+    ^ ?? ( vec_replace [Dataset] . st datasets k ( __ds_blank ) ) { T x → x F → ( __ds_blank ) }
+}
+
+@ __ds_put inout McpState st i k sink Dataset d → v { : ?Dataset _old ( vec_replace [Dataset] . st datasets k d ) }
 
 // one-pass min/max/mean of raw LE f64 bytes, attached to a JSON object
 // Dataset-backed GPU submit over CONTENT-ADDRESSED blocks (payload v4).
@@ -1055,8 +1036,7 @@ unsafe @ ds_find i id → s {
 // referenced block is confirmed cached are the (small) compute chunks
 // submitted; each references its blocks by hash and the worker assembles the
 // slice from its cache, failing visibly on any missing block.
-unsafe @ cluster_submit_wasm_gpu_ds Swarm sw__h i mode i rlo i rhi i kbins ( Vec i ) params * Dataset d ( Vec u ) wasm i nchunks_want ( Vec String ) seeded inout i nseed_cell → ( Vec i ) {
-    : *SwarmImpl sw ( __Swarm_ptr sw__h )
+@ cluster_submit_wasm_gpu_ds inout Swarm sw i mode i rlo i rhi i kbins ( Vec i ) params Dataset d ( Vec u ) wasm i nchunks_want ( Vec String ) seeded inout i nseed_cell → ( Vec i ) {
     // Elements per 1 MiB block depends on the storage width (f64/i64 = 131072,
     // f32/i32 = 262144). Blocks stay byte-aligned (esz divides 1 MiB), so an
     // element never straddles two blocks.
@@ -1106,7 +1086,7 @@ unsafe @ cluster_submit_wasm_gpu_ds Swarm sw__h i mode i rlo i rhi i kbins ( Vec
                 = nseeded + nseeded 1
                 // confirm THIS block before sending the next
                 : ~ i r 0
-                ~ & < r 600 ! ( job_has . sw job stid ) { ( swarm_pump sw__h 100 ) = r + r 1 }
+                ~ & < r 600 ! ( job_has . sw job stid ) { ( swarm_pump sw 100 ) = r + r 1 }
                 : ~ b okseed F
                 ?? ( job_await . sw job stid ) {
                     T rr → {
@@ -1215,8 +1195,7 @@ unsafe @ cluster_submit_wasm_gpu_ds Swarm sw__h i mode i rlo i rhi i kbins ( Vec
 
 @ __wcache_max → i { ^ 32 }
 
-unsafe @ __wcache_get s hex → ?( Vec u ) {
-    : *McpState st ( __mcp_st )
+@ __wcache_get McpState st s hex → ?( Vec u ) {
     : i n ( vec_len [WasmCached] . st wcache )
     : ~ i k 0
     ~ < k n {
@@ -1232,29 +1211,25 @@ unsafe @ __wcache_get s hex → ?( Vec u ) {
         }
         = k + k 1
     }
-    ^ @ ?( Vec u ) { F # ( Vec u ) 0 }
+    ^ @ ?( Vec u ) { F ( vec_new [u] ) }
 }
 
 // Insert a copy. At capacity the whole cache resets — a parameter scan lives
 // in one entry, so simplicity beats an eviction policy here.
-unsafe @ __wcache_put s hex ( Vec u ) wasm → v {
-    : *McpState st ( __mcp_st )
+@ __wcache_put inout McpState st s hex ( Vec u ) wasm → v {
     ? >= ( vec_len [WasmCached] . st wcache ) ( __wcache_max ) { ( vec_clear [WasmCached] . st wcache ) } {}
     : ( Vec u ) cp ( vec_with_cap [u] ( vec_len [u] wasm ) )
     ( vec_extend [u] cp wasm )
     ( vec_push [WasmCached] . st wcache @ WasmCached { ( string_from hex ) cp } )
 }
 
-unsafe @ mcp_swarm → Swarm { : *McpState st ( __mcp_st ) ^ ( Swarm_share . st swarm ) }
-
-@ mcp_pump i rounds → v {
-    : Swarm sw__h ( mcp_swarm )
+@ mcp_pump inout McpState st i rounds → v {
     : ~ i k 0
-    ~ < k rounds { ( swarm_pump sw__h 150 ) = k + k 1 }
+    ~ < k rounds { ( swarm_pump . st swarm 150 ) = k + k 1 }
     // Every pump also ages the roster: a worker that died stops heartbeating,
     // and leaving it in the ring made every later submit re-dispatch around a
     // ghost. Cheap (the roster is a handful of members).
-    : i _gone ( swarm_expire sw__h )
+    : i _gone ( swarm_expire . st swarm )
 }
 
 // Refresh one task's status; combine if every chunk has landed. A finished
@@ -1264,8 +1239,7 @@ unsafe @ mcp_swarm → Swarm { : *McpState st ( __mcp_st ) ^ ( Swarm_share . st 
 // The reason the first failed chunk gave, or "" when none did. Workers append
 // it to a failed result frame (wasmkernel chunk_err_push), so a task can say
 // WHY it failed instead of only how many chunks did.
-unsafe @ __tids_first_error Swarm sw__h ( Vec i ) tids → String {
-    : *SwarmImpl sw ( __Swarm_ptr sw__h )
+@ __tids_first_error inout Swarm sw ( Vec i ) tids → String {
     : i n ( vec_len [i] tids )
     : ~ String out ( string_new )
     : ~ i k 0
@@ -1287,15 +1261,13 @@ unsafe @ __tids_first_error Swarm sw__h ( Vec i ) tids → String {
     ^ out
 }
 
-unsafe @ __task_finalize * Task t → v {
-    : Swarm sw__h ( mcp_swarm )
-    : *SwarmImpl sw ( __Swarm_ptr sw__h )
+@ __task_finalize inout Swarm sw inout Task t → v {
     ? == . t mode ( gpu_mode_scalar ) {
-        : Combined cb ( tids_combine sw__h . t dtype . t op . t tids )
+        : Combined cb ( tids_combine sw . t dtype . t op . t tids )
         = . t result . cb value
         = . t failed . cb nfail
     } {
-        : CombinedV cv ( tids_combine_vec sw__h . t mode . t kbins . t tids )
+        : CombinedV cv ( tids_combine_vec sw . t mode . t kbins . t tids )
         = . t vres . cv bytes
         = . t failed . cv nfail
         ? & == . t failed 0 > ( string_len . t out_file ) 0 {
@@ -1306,7 +1278,7 @@ unsafe @ __task_finalize * Task t → v {
         } {}
     }
     ? & > . t failed 0 == ( string_len . t errmsg ) 0 {
-        = . t errmsg ( __tids_first_error sw__h . t tids )
+        = . t errmsg ( __tids_first_error sw . t tids )
     } {}
     = . t done 1
 }
@@ -1316,8 +1288,7 @@ unsafe @ __task_finalize * Task t → v {
 // chunk asks the roster instead: its owner is presumed lost once it has been
 // evicted for missing heartbeats, with a long backstop so a task can never run
 // forever. An owner we never resolved (empty ring at dispatch) is lost too.
-unsafe @ __cj_presumed_lost Swarm sw__h * ChunkJobImpl cj i now → b {
-    : *SwarmImpl sw ( __Swarm_ptr sw__h )
+@ __cj_presumed_lost inout Swarm sw inout ChunkJob cj i now → b {
     ? == . cj kind ( kind_wasm_gpu ) { ^ > - now . cj submit_ms ( __ft_deadline_ms ) } {}
     ? > - now . cj submit_ms ( __ft_cpu_backstop_ms ) { ^ T } {}
     ? == ( vec_len [u] . cj owner ) 0 { ^ T } {}
@@ -1330,95 +1301,101 @@ unsafe @ __cj_presumed_lost Swarm sw__h * ChunkJobImpl cj i now → b {
 // has attempts left, else marked exhausted. Only when every chunk is settled do
 // we combine — so a returned result still covers every chunk, now surviving a
 // worker death mid-task instead of erroring out.
-unsafe @ __task_ft_refresh * Task t → v {
-    : Swarm sw__h ( mcp_swarm )
-    : *SwarmImpl sw ( __Swarm_ptr sw__h )
+@ __task_ft_refresh inout Swarm sw inout Task t → v {
     : JobNode jn . sw job
     : i n ( vec_len [ChunkJob] . t chunkjobs )
     : i now ( now_ms )
     : ~ i pending 0
     : ~ i k 0
     ~ < k n {
-        ?? ( vec_get [ChunkJob] . t chunkjobs k ) { T cjh → {
-                : *ChunkJobImpl cj ( __ChunkJob_ptr cjh )
-                ? == . cj state 0 {
-                    : ~ i out 0  // 0 still waiting · 1 ok · 2 failed this attempt
-                    ? ( job_has jn . cj tid ) {
-                        ?? ( job_await jn . cj tid ) {
-                            T r → {
-                                ?? ( token_untag . sw key r ) {
-                                    T body → {
-                                        // Two result frames ride the wire and they are
-                                        // NOT interchangeable: an expression chunk
-                                        // answers with a bare [partial:8], the wasm
-                                        // kinds with [ok:1][partial:8]. Reading the
-                                        // first byte of an expression partial as an
-                                        // "ok" flag makes every healthy chunk look
-                                        // failed (a partial's top BE byte is almost
-                                        // always 0), so the frame is parsed by kind.
-                                        ? == . cj kind ( kind_kernel ) {
-                                            = out ? >= ( vec_len [u] body ) 8 1 2
-                                        } {
-                                            : i okb ?? ( vec_get [u] body 0 ) { T x → # i x F → 0 }
-                                            = out ? == okb 1 1 2
-                                        }
+        // The plan leaves its slot while it advances, and goes back.
+        : ~ ChunkJob cj ?? ( vec_replace [ChunkJob] . t chunkjobs k ( __cj_blank ) ) { T x → x F → ( __cj_blank ) }
+        {
+            ? == . cj state 0 {
+                : ~ i out 0  // 0 still waiting · 1 ok · 2 failed this attempt
+                ? ( job_has jn . cj tid ) {
+                    ?? ( job_await jn . cj tid ) {
+                        T r → {
+                            ?? ( token_untag . sw key r ) {
+                                T body → {
+                                    // Two result frames ride the wire and they are
+                                    // NOT interchangeable: an expression chunk
+                                    // answers with a bare [partial:8], the wasm
+                                    // kinds with [ok:1][partial:8]. Reading the
+                                    // first byte of an expression partial as an
+                                    // "ok" flag makes every healthy chunk look
+                                    // failed (a partial's top BE byte is almost
+                                    // always 0), so the frame is parsed by kind.
+                                    ? == . cj kind ( kind_kernel ) {
+                                        = out ? >= ( vec_len [u] body ) 8 1 2
+                                    } {
+                                        : i okb ?? ( vec_get [u] body 0 ) { T x → # i x F → 0 }
+                                        = out ? == okb 1 1 2
                                     }
-                                    F → { = out 2 }
                                 }
+                                F → { = out 2 }
                             }
-                            F → { = out 2 }
                         }
-                    } {
-                        ? ( __cj_presumed_lost sw__h cj now ) { = out 2 } {}
+                        F → { = out 2 }
                     }
-                    ? == out 1 { = . cj state 1 } {}
-                    ? == out 2 {
-                        // Nobody left to route to: stop burning attempts and let
-                        // the task finish as an honest error.
-                        ? ( __cj_ring_empty sw__h . cj kind ) { = . cj state 2 } {
-                            ? < . cj attempts ( __ft_max_attempts ) {
-                                ( __cj_redispatch sw__h cj )
-                                = . t retries + . t retries 1
-                                = pending + pending 1
-                            } { = . cj state 2 }
-                        }
-                    } {}
-                    ? == out 0 { = pending + pending 1 } {}
+                } {
+                    ? ( __cj_presumed_lost sw cj now ) { = out 2 } {}
+                }
+                ? == out 1 { = . cj state 1 } {}
+                ? == out 2 {
+                    // Nobody left to route to: stop burning attempts and let
+                    // the task finish as an honest error.
+                    ? ( __cj_ring_empty sw . cj kind ) { = . cj state 2 } {
+                        ? < . cj attempts ( __ft_max_attempts ) {
+                            ( __cj_redispatch sw cj )
+                            = . t retries + . t retries 1
+                            = pending + pending 1
+                        } { = . cj state 2 }
+                    }
                 } {}
-            } F → {} }
+                ? == out 0 { = pending + pending 1 } {}
+            } {}
+        }
+        : ?ChunkJob _old ( vec_replace [ChunkJob] . t chunkjobs k cj )
         = k + k 1
     }
     ? == pending 0 {
         = . t tids ( cj_tids . t chunkjobs )
-        ( __task_finalize t )
+        ( __task_finalize sw t )
         // the retry plan (retained payloads) is no longer needed
         ( vec_clear [ChunkJob] . t chunkjobs )
     } {}
 }
 
-unsafe @ task_refresh * Task t → v {
+@ task_refresh inout Swarm sw inout Task t → v {
     ? == . t done 1 { ^ v } {}
-    ? > ( vec_len [ChunkJob] . t chunkjobs ) 0 { ( __task_ft_refresh t ) ^ v } {}
-    : Swarm sw__h ( mcp_swarm )
-    : *SwarmImpl sw ( __Swarm_ptr sw__h )
-    ? ( tids_ready sw__h . t tids ) { ( __task_finalize t ) } {}
+    ? > ( vec_len [ChunkJob] . t chunkjobs ) 0 { ( __task_ft_refresh sw t ) ^ v } {}
+    ? ( tids_ready sw . t tids ) { ( __task_finalize sw t ) } {}
 }
 
-unsafe @ task_find i id → s {
-    : *McpState st ( __mcp_st )
-    : i n ( vec_len [( Box Task )] . st tasks )
-    : ~ s found # s 0
+// The index of task `id` in the registry, -1 if none.
+@ task_find McpState st i id → i {
+    : i n ( vec_len [Task] . st tasks )
+    : ~ i found -1
     : ~ i k 0
-    ~ & == # i found 0 < k n {
-        : s pp ?? ( vec_get [( Box Task )] . st tasks k ) { T x → # s ( box_ptr [Task] x ) F → # s 0 }
-        ? != # i pp 0 { : *Task t # *Task pp ? == . t id id { = found pp } {} } {}
+    ~ & < found 0 < k n {
+        ?? ( vec_get [Task] . st tasks k ) { T t → { ? == . t id id { = found k } {} } F → {} }
         = k + k 1
     }
     ^ found
 }
 
+// Refresh task `k` and describe it.
+@ __task_json_at inout McpState st i k → Json {
+    : ~ Task t ( __task_take st k )
+    ( task_refresh . st swarm t )
+    : Json o ( task_to_json t )
+    ( __task_put st k t )
+    ^ o
+}
+
 // Build the JSON-as-text result body for one task (LLM-readable + parseable).
-unsafe @ task_to_json * Task t → Json {
+@ task_to_json Task t → Json {
     : Json o ( json_obj_new )
     ( json_obj_set o `task_id` ( json_int . t id ) )
     ( json_obj_set o `status` ( json_str_lit ? == . t done 1 ? > . t failed 0 `error` `done` `running` ) )
@@ -1459,7 +1436,7 @@ unsafe @ task_to_json * Task t → Json {
 
 @ __vres_b64_max → i { ^ 65536 }
 
-unsafe @ __task_vres_json Json o * Task t → v {
+@ __task_vres_json Json o Task t → v {
     : i cnt / ( vec_len [u] . t vres ) 8
     ( json_obj_set o `count` ( json_int cnt ) )
     ? > ( string_len . t out_file ) 0 {
@@ -1518,7 +1495,7 @@ unsafe @ __task_vres_json Json o * Task t → v {
 
 // ── tool: compute_submit ─────────────────────────────────────────
 
-unsafe @ tool_submit Json args → Json {
+@ tool_submit inout McpState st Json args → Json {
     : ?Json ej ( json_obj_get args `expr` )
     : ?Json lj ( json_obj_get args `lo` )
     : ?Json hj ( json_obj_get args `hi` )
@@ -1535,7 +1512,7 @@ unsafe @ tool_submit Json args → Json {
 
     // Validate the kernel parses before shipping it to workers.
     : ( Vec u ) eb ( bytes_from_str expr )
-    : EParser ep ( eparser_new )
+    : ~ EParser ep ( eparser_new )
     : i root ( expr_parse eb ep )
     : b okp ( eparser_ok ep )
     ? ! okp {
@@ -1545,45 +1522,41 @@ unsafe @ tool_submit Json args → Json {
     // Discover the live workers, then shard + submit.
     // a dead relay here means the coordinator reconnects to the next in the
     // list before submitting — a relay failure does not take the API down
-    ? ( mcp_ensure_relay ) {} {}
-    : Swarm sw__h ( mcp_swarm )
-    : *SwarmImpl sw ( __Swarm_ptr sw__h )
-    ( swarm_discover sw__h 6 )
-    : i nworkers ( roster_count . sw roster )
+    ? ( mcp_ensure_relay st ) {} {}
+    ( swarm_discover . st swarm 6 )
+    : i nworkers ( roster_count . . st swarm roster )
     ? == nworkers 0 {
         ^ ( mcp_tool_result_error `no workers in the cluster — start some with 'swarm-mcp worker'` )
     } {}
     : i nchunks ( nchunks_for nworkers )
-    : ( Vec ChunkJob ) jobs ( cluster_dispatch_kernel_ft sw__h op dtype lo hi eb nchunks )
+    : ( Vec ChunkJob ) jobs ( cluster_dispatch_kernel_ft . st swarm op dtype lo hi eb nchunks )
     : ( Vec i ) tids ( cj_tids jobs )
 
-    : *McpState st ( __mcp_st )
-    : *Task t ( task_new . st next_id eb dtype lo hi op nchunks tids )
+    : ~ Task t ( task_new . st next_id eb dtype lo hi op nchunks tids )
     ( vec_append [ChunkJob] . t chunkjobs jobs )
     = . st next_id + . st next_id 1
-    ( task_register t )
 
     // Pump briefly so small tasks come back as "done" immediately.
-    ( mcp_pump 8 )
-    ( task_refresh t )
-    ^ ( tool_result_json ( task_to_json t ) )
+    ( mcp_pump st 8 )
+    ( task_refresh . st swarm t )
+    : Json o ( tool_result_json ( task_to_json t ) )
+    ( task_store st t )
+    ^ o
 }
 
 // ── tool: compute_run_wasm / compute_submit_kernel (phase 2) ─────────
 // Ship a compiled wasm module to the cluster as a task (takes ownership of
 // `wasm`, frees it). Shared by both phase-2 tools.
 
-unsafe @ __ship_wasm ( Vec u ) wasm i lo i hi i op i dtype i gpu → Json {
+@ __ship_wasm inout McpState st ( Vec u ) wasm i lo i hi i op i dtype i gpu → Json {
     ? == ( vec_len [u] wasm ) 0 { ^ ( mcp_tool_result_error `empty wasm module` ) } {}
     // a dead relay here means the coordinator reconnects to the next in the
     // list before submitting — a relay failure does not take the API down
-    ? ( mcp_ensure_relay ) {} {}
-    : Swarm sw__h ( mcp_swarm )
-    : *SwarmImpl sw ( __Swarm_ptr sw__h )
-    ( swarm_discover sw__h 6 )
+    ? ( mcp_ensure_relay st ) {} {}
+    ( swarm_discover . st swarm 6 )
     : i nworkers ? != gpu 0
-    ( roster_count_caps . sw roster ( cap_gpu ) )
-    ( roster_count . sw roster )
+    ( roster_count_caps . . st swarm roster ( cap_gpu ) )
+    ( roster_count . . st swarm roster )
     ? == nworkers 0 {
         ^ ? != gpu 0
         ( mcp_tool_result_error `no GPU workers in the cluster — start some with 'swarm-mcp --worker --gpu' (needs the pure-NURL nwasm runtime and an NVIDIA GPU)` )
@@ -1591,19 +1564,19 @@ unsafe @ __ship_wasm ( Vec u ) wasm i lo i hi i op i dtype i gpu → Json {
     } {}
     : i nchunks ( nchunks_wasm nworkers )
     : i kind ? != gpu 0 ( kind_wasm_gpu ) ( kind_wasm )
-    : ( Vec ChunkJob ) jobs ( cluster_dispatch_wasm_ft sw__h lo hi wasm nchunks kind )
+    : ( Vec ChunkJob ) jobs ( cluster_dispatch_wasm_ft . st swarm lo hi wasm nchunks kind )
     : ( Vec i ) tids ( cj_tids jobs )
-    : *McpState st ( __mcp_st )
-    : *Task t ( task_new . st next_id ( bytes_from_str ? != gpu 0 `<wasm kernel (gpu)>` `<wasm kernel>` ) dtype lo hi op nchunks tids )
+    : ~ Task t ( task_new . st next_id ( bytes_from_str ? != gpu 0 `<wasm kernel (gpu)>` `<wasm kernel>` ) dtype lo hi op nchunks tids )
     ( vec_append [ChunkJob] . t chunkjobs jobs )
     = . st next_id + . st next_id 1
-    ( task_register t )
-    ( mcp_pump 8 )
-    ( task_refresh t )
-    ^ ( tool_result_json ( task_to_json t ) )
+    ( mcp_pump st 8 )
+    ( task_refresh . st swarm t )
+    : Json o ( tool_result_json ( task_to_json t ) )
+    ( task_store st t )
+    ^ o
 }
 
-@ tool_run_wasm Json args → Json {
+@ tool_run_wasm inout McpState st Json args → Json {
     : ?Json wj ( json_obj_get args `wasm_base64` )
     : ?Json lj ( json_obj_get args `lo` )
     : ?Json hj ( json_obj_get args `hi` )
@@ -1621,13 +1594,13 @@ unsafe @ __ship_wasm ( Vec u ) wasm i lo i hi i op i dtype i gpu → Json {
     : !( Vec u ) ParseErr dr ( b64_decode_vec w64 )
     ?? dr {
         F e → { ^ ( mcp_tool_result_error `wasm_base64 is not valid base64` ) }
-        T wasm → { ^ ( __ship_wasm wasm lo hi op dtype gpu ) }
+        T wasm → { ^ ( __ship_wasm st wasm lo hi op dtype gpu ) }
     }
 }
 
 // compute_submit_kernel: the server compiles NURL source → wasm itself (via the
 // build API), then runs it — the model hands over a kernel as plain NURL.
-@ tool_submit_kernel Json args → Json {
+@ tool_submit_kernel inout McpState st Json args → Json {
     : ?Json sj ( json_obj_get args `source` )
     : ?Json lj ( json_obj_get args `lo` )
     : ?Json hj ( json_obj_get args `hi` )
@@ -1655,7 +1628,7 @@ unsafe @ __ship_wasm ( Vec u ) wasm i lo i hi i op i dtype i gpu → Json {
             : Json e ( mcp_tool_result_error ( string_data em ) )
             ^ e
         }
-        T wasm → { ^ ( __ship_wasm wasm lo hi op dtype gpu ) }
+        T wasm → { ^ ( __ship_wasm st wasm lo hi op dtype gpu ) }
     }
 }
 
@@ -1697,7 +1670,7 @@ unsafe @ __ship_wasm ( Vec u ) wasm i lo i hi i op i dtype i gpu → Json {
 
 // Shared CUDA submit: validate → wrap → cached-or-remote compile → shard to
 // the GPU ring → record the task. Frees `params`; borrows `cuda`/`out_file`.
-unsafe @ __submit_cuda_task s cuda i op i mode i lo i hi i kbins ( Vec i ) params s out_file i dsid → Json {
+@ __submit_cuda_task inout McpState st s cuda i op i mode i lo i hi i kbins ( Vec i ) params s out_file i dsid → Json {
     ? ! ( cuda_src_ok cuda ) {
         ^ ( mcp_tool_result_error `the CUDA source may not contain a backtick character` )
     } {}
@@ -1711,16 +1684,15 @@ unsafe @ __submit_cuda_task s cuda i op i mode i lo i hi i kbins ( Vec i ) param
     : ~ i rlo lo
     : ~ i rhi hi
     // dataset: bind it, default a missing range to [0, count), bounds-check
-    : ~ s dsp # s 0
+    : ~ i dsk -1
     ? != dsid 0 {
-        = dsp ( ds_find dsid )
-        ? == # i dsp 0 {
+        = dsk ( ds_find st dsid )
+        ? < dsk 0 {
             ^ ( mcp_tool_result_error `no such dataset — upload one with compute_upload_data (or check compute_list_data)` )
         } {}
-        : *Dataset d # *Dataset dsp
         ? < rlo 0 { = rlo 0 } {}
-        ? < rhi 0 { = rhi ( ds_count_of d ) } {}
-        ? | | < rlo 0 > rhi ( ds_count_of d ) >= rlo rhi {
+        ? < rhi 0 { = rhi ( __ds_count st dsk ) } {}
+        ? | | < rlo 0 > rhi ( __ds_count st dsk ) >= rlo rhi {
             ^ ( mcp_tool_result_error `the range [lo, hi) must lie within the dataset: 0 <= lo < hi <= its count` )
         } {}
     } {
@@ -1742,7 +1714,7 @@ unsafe @ __submit_cuda_task s cuda i op i mode i lo i hi i kbins ( Vec i ) param
         } {}
     } {}
     : i has_params ? > ( vec_len [i] params ) 0 1 0
-    : i has_data ? != dsid 0 ( ds_dtype_id dsid ) 0
+    : i has_data ? != dsid 0 ( ds_dtype_id st dsid ) 0
     : String wrapped ( cuda_wrap cuda op mode has_params has_data )
     // module cache: keyed by the generated source (params ride argv → the
     // hash — and the worker-side module cache — survive parameter changes)
@@ -1750,7 +1722,7 @@ unsafe @ __submit_cuda_task s cuda i op i mode i lo i hi i kbins ( Vec i ) param
     : String hex ( _wasm_hash srcb )
     : ~ ( Vec u ) wasm ( vec_new [u] )
     : ~ b have F
-    ?? ( __wcache_get ( string_data hex ) ) {
+    ?? ( __wcache_get st ( string_data hex ) ) {
         T hitw → { = wasm hitw = have T }
         F → {}
     }
@@ -1764,17 +1736,15 @@ unsafe @ __submit_cuda_task s cuda i op i mode i lo i hi i kbins ( Vec i ) param
             }
             T builtw → {
                 = wasm builtw
-                ( __wcache_put ( string_data hex ) wasm )
+                ( __wcache_put st ( string_data hex ) wasm )
             }
         }
     } {}
     // a dead relay here means the coordinator reconnects to the next in the
     // list before submitting — a relay failure does not take the API down
-    ? ( mcp_ensure_relay ) {} {}
-    : Swarm sw__h ( mcp_swarm )
-    : *SwarmImpl sw ( __Swarm_ptr sw__h )
-    ( swarm_discover sw__h 6 )
-    : i ngpu ( roster_count_caps . sw roster ( cap_gpu ) )
+    ? ( mcp_ensure_relay st ) {} {}
+    ( swarm_discover . st swarm 6 )
+    : i ngpu ( roster_count_caps . . st swarm roster ( cap_gpu ) )
     ? == ngpu 0 {
         ^ ( mcp_tool_result_error `no GPU workers in the cluster — start some with 'swarm-mcp --worker --gpu' (needs the pure-NURL nwasm runtime and an NVIDIA GPU)` )
     } {}
@@ -1785,7 +1755,6 @@ unsafe @ __submit_cuda_task s cuda i op i mode i lo i hi i kbins ( Vec i ) param
     : i span - rhi rlo
     : ~ i nchunks nchunks0
     ? > nchunks span { = nchunks span } {}
-    : *McpState st0 ( __mcp_st )
     : ~ i nseed 0
     : ~ ( Vec i ) tids ( vec_new [i] )
     // Non-dataset GPU tasks get a per-chunk retry plan (fault tolerance): a
@@ -1794,15 +1763,15 @@ unsafe @ __submit_cuda_task s cuda i op i mode i lo i hi i kbins ( Vec i ) param
     // failure is a follow-up, so they stay non-retryable (documented).
     : ~ ( Vec ChunkJob ) ftjobs ( vec_new [ChunkJob] )
     ? != dsid 0 {
-        : *Dataset d # *Dataset dsp
-        = tids ( cluster_submit_wasm_gpu_ds sw__h mode rlo rhi kbins params d wasm nchunks . st0 seeded nseed )
+        : ~ Dataset d ( __ds_take st dsk )
+        = tids ( cluster_submit_wasm_gpu_ds . st swarm mode rlo rhi kbins params d wasm nchunks . st seeded nseed )
+        ( __ds_put st dsk d )
     } {
-        = ftjobs ( cluster_dispatch_gpu_ft sw__h mode rlo rhi kbins params wasm nchunks )
+        = ftjobs ( cluster_dispatch_gpu_ft . st swarm mode rlo rhi kbins params wasm nchunks )
         = tids ( cj_tids ftjobs )
     }
     = nchunks ( vec_len [i] tids )
-    : *McpState st ( __mcp_st )
-    : *Task t ( task_new . st next_id ( bytes_from_str cuda ) 1 rlo rhi op nchunks tids )
+    : ~ Task t ( task_new . st next_id ( bytes_from_str cuda ) 1 rlo rhi op nchunks tids )
     = . t mode mode
     = . t kbins kbins
     = . t dsid dsid
@@ -1810,10 +1779,11 @@ unsafe @ __submit_cuda_task s cuda i op i mode i lo i hi i kbins ( Vec i ) param
     ( vec_append [ChunkJob] . t chunkjobs ftjobs )
     ? > ( nurl_str_len out_file ) 0 { ( string_push_str . t out_file out_file ) } {}
     = . st next_id + . st next_id 1
-    ( task_register t )
-    ( mcp_pump 8 )
-    ( task_refresh t )
-    ^ ( tool_result_json ( task_to_json t ) )
+    ( mcp_pump st 8 )
+    ( task_refresh . st swarm t )
+    : Json o ( tool_result_json ( task_to_json t ) )
+    ( task_store st t )
+    ^ o
 }
 
 // Parse a JSON number array into a fresh Vec f (F on any non-number).
@@ -1844,31 +1814,31 @@ unsafe @ __submit_cuda_task s cuda i op i mode i lo i hi i kbins ( Vec i ) param
 // gradient of a fit and the state it updates coincide, but k-means sufficient
 // statistics, EM stats and A·v for power iteration do not. Returns the
 // failed-chunk count (0 = every chunk reported).
-unsafe @ __iterate_round Swarm sw__h ( Vec u ) wasm i S i A ( Vec i ) xparams i rlo i rhi ( Vec f ) state i dsid ( Vec String ) seeded inout i nseed_cell ( Vec f ) grad → i {
-    : *SwarmImpl sw ( __Swarm_ptr sw__h )
+@ __iterate_round inout McpState st ( Vec u ) wasm i S i A ( Vec i ) xparams i rlo i rhi ( Vec f ) state i dsid inout i nseed_cell ( Vec f ) grad → i {
     : ( Vec i ) params ( vec_new [i] )
     : ~ i j 0
     ~ < j S { ( vec_push [i] params ( f64_to_bits ?? ( vec_get [f] state j ) { T x → x F → 0.0 } ) ) = j + j 1 }
     : ~ i xj 0
     ~ < xj ( vec_len [i] xparams ) { ( vec_push [i] params ?? ( vec_get [i] xparams xj ) { T x → x F → 0 } ) = xj + xj 1 }
-    : *McpState st0 ( __mcp_st )
-    : i ngpu ( roster_count_caps . sw roster ( cap_gpu ) )
+    : i ngpu ( roster_count_caps . . st swarm roster ( cap_gpu ) )
     : i nchunks0 ( nchunks_wasm ngpu )
     : i span - rhi rlo
     : ~ i nchunks nchunks0
     ? > nchunks span { = nchunks span } {}
     : ~ ( Vec i ) tids ( vec_new [i] )
     ? != dsid 0 {
-        : *Dataset d # *Dataset ( ds_find dsid )
-        = tids ( cluster_submit_wasm_gpu_ds sw__h ( gpu_mode_vecreduce ) rlo rhi A params d wasm nchunks . st0 seeded nseed_cell )
+        : i dsk ( ds_find st dsid )
+        : ~ Dataset d ( __ds_take st dsk )
+        = tids ( cluster_submit_wasm_gpu_ds . st swarm ( gpu_mode_vecreduce ) rlo rhi A params d wasm nchunks . st seeded nseed_cell )
+        ( __ds_put st dsk d )
     } {
         : ( Vec u ) dbytes ( vec_new [u] )
-        = tids ( cluster_submit_wasm_gpu sw__h ( gpu_mode_vecreduce ) rlo rhi A params dbytes wasm nchunks )
+        = tids ( cluster_submit_wasm_gpu . st swarm ( gpu_mode_vecreduce ) rlo rhi A params dbytes wasm nchunks )
     }
     // drive to completion
     : ~ i r 0
-    ~ & < r 4000 ! ( tids_ready sw__h tids ) { ( swarm_pump sw__h 100 ) = r + r 1 }
-    : CombinedV cv ( tids_combine_vec sw__h ( gpu_mode_vecreduce ) A tids )
+    ~ & < r 4000 ! ( tids_ready . st swarm tids ) { ( swarm_pump . st swarm 100 ) = r + r 1 }
+    : CombinedV cv ( tids_combine_vec . st swarm ( gpu_mode_vecreduce ) A tids )
     ( vec_clear [f] grad )
     : ~ i b 0
     ~ < b A { ( vec_push [f] grad ( bits_to_f64 ( __f64le_get . cv bytes * b 8 ) ) ) = b + b 1 }
@@ -1879,7 +1849,7 @@ unsafe @ __iterate_round Swarm sw__h ( Vec u ) wasm i S i A ( Vec i ) xparams i 
 // worker, gather the S new state components, and overwrite `state` in place.
 // The packed param buffer the update kernel reads is state ++ acc ++ [N] ++
 // xparams. Returns the failed-chunk count (0 = the whole state came back).
-@ __iterate_update Swarm sw__h ( Vec u ) uwasm i S i A ( Vec f ) grad i N ( Vec i ) xparams ( Vec f ) state → i {
+@ __iterate_update inout Swarm sw ( Vec u ) uwasm i S i A ( Vec f ) grad i N ( Vec i ) xparams ( Vec f ) state → i {
     : ( Vec i ) up ( vec_new [i] )
     : ~ i j 0
     ~ < j S { ( vec_push [i] up ( f64_to_bits ?? ( vec_get [f] state j ) { T x → x F → 0.0 } ) ) = j + j 1 }
@@ -1889,10 +1859,10 @@ unsafe @ __iterate_round Swarm sw__h ( Vec u ) wasm i S i A ( Vec i ) xparams i 
     : ~ i xj 0
     ~ < xj ( vec_len [i] xparams ) { ( vec_push [i] up ?? ( vec_get [i] xparams xj ) { T x → x F → 0 } ) = xj + xj 1 }
     : ( Vec u ) nodata ( vec_new [u] )
-    : ( Vec i ) tids ( cluster_submit_wasm_gpu sw__h ( gpu_mode_sample ) 0 S 0 up nodata uwasm 1 )
+    : ( Vec i ) tids ( cluster_submit_wasm_gpu sw ( gpu_mode_sample ) 0 S 0 up nodata uwasm 1 )
     : ~ i r 0
-    ~ & < r 4000 ! ( tids_ready sw__h tids ) { ( swarm_pump sw__h 100 ) = r + r 1 }
-    : CombinedV cv ( tids_combine_vec sw__h ( gpu_mode_sample ) 0 tids )
+    ~ & < r 4000 ! ( tids_ready sw tids ) { ( swarm_pump sw 100 ) = r + r 1 }
+    : CombinedV cv ( tids_combine_vec sw ( gpu_mode_sample ) 0 tids )
     ? == . cv nfail 0 {
         ? == ( vec_len [u] . cv bytes ) * S 8 {
             : ~ i b 0
@@ -1911,22 +1881,22 @@ unsafe @ __iterate_round Swarm sw__h ( Vec u ) wasm i S i A ( Vec i ) xparams i 
 // resubmit; see swarm_help "limits".)
 @ __ft_round_retries → i { ^ 3 }
 
-@ __iterate_round_ft Swarm sw__h ( Vec u ) wasm i S i A ( Vec i ) xparams i rlo i rhi ( Vec f ) state i dsid ( Vec String ) seeded inout i nseed_cell ( Vec f ) grad → i {
+@ __iterate_round_ft inout McpState st ( Vec u ) wasm i S i A ( Vec i ) xparams i rlo i rhi ( Vec f ) state i dsid inout i nseed_cell ( Vec f ) grad → i {
     : ~ i nf 1
     : ~ i att 0
     ~ & > nf 0 < att ( __ft_round_retries ) {
         = nseed_cell 0
-        = nf ( __iterate_round sw__h wasm S A xparams rlo rhi state dsid seeded nseed_cell grad )
+        = nf ( __iterate_round st wasm S A xparams rlo rhi state dsid nseed_cell grad )
         = att + att 1
     }
     ^ nf
 }
 
-@ __iterate_update_ft Swarm sw__h ( Vec u ) uwasm i S i A ( Vec f ) grad i N ( Vec i ) xparams ( Vec f ) state → i {
+@ __iterate_update_ft inout Swarm sw ( Vec u ) uwasm i S i A ( Vec f ) grad i N ( Vec i ) xparams ( Vec f ) state → i {
     : ~ i nf 1
     : ~ i att 0
     ~ & > nf 0 < att ( __ft_round_retries ) {
-        = nf ( __iterate_update sw__h uwasm S A grad N xparams state )
+        = nf ( __iterate_update sw uwasm S A grad N xparams state )
         = att + att 1
     }
     ^ nf
@@ -1938,7 +1908,7 @@ unsafe @ __iterate_round Swarm sw__h ( Vec u ) wasm i S i A ( Vec i ) xparams i 
 // contract the submit tools follow, so a long training is never at the
 // mercy of one HTTP call's timeout. The run keeps everything a round
 // needs; the compiled modules are freed the moment the run finishes.
-: IterRunImpl {
+: IterRun {
     i id
     i status  // 0 running · 1 done · 2 error
     b have_update
@@ -1965,60 +1935,30 @@ unsafe @ __iterate_round Swarm sw__h ( Vec u ) wasm i S i A ( Vec i ) xparams i 
     ( Vec f ) prev
 }
 
-// An IterRun is a handle on a run in an Arc (stdlib/std/arc.nu): the
-// tool call that started it and the async registry share it, and the last
-// owner releases it.
-: IterRun { ( Arc IterRunImpl ) a }
-
-@ IterRun_share IterRun h → IterRun { ^ @ IterRun { ( arc_clone [IterRunImpl] . h a ) } }
-
-@ IterRun_drop sink IterRun h → v {}
-
-unsafe @ __IterRun_ptr IterRun h → *IterRunImpl { ^ ( arc_ptr [IterRunImpl] . h a ) }
-
-// The async runs, kept for the program's lifetime (a finished run stays
-// pollable); held in an owned global like McpState.
-: IterRuns {
-    ( Vec IterRun ) v
+// An IterRun is one compute_iterate run: the tool call's own, or — async —
+// the registry's (McpState.iter_runs), taken out to advance it.
+@ __iter_blank → IterRun {
+    ^ @ IterRun { 0 0 F ( vec_new [u] ) ( vec_new [u] ) 0 0 0 0 0 0 0.0 0.0 0 0 0 0 0 0.0 F
+        ( vec_new [i] ) ( vec_new [f] ) ( vec_new [f] ) ( vec_new [f] ) }
 }
 
-: ~ IterRuns g_iter_runs 0
-: ~ b g_iter_runs_made F
-
-: ~ i g_iter_next 1
-
-unsafe @ __iter_runs → *IterRuns {
-    ? ! g_iter_runs_made {
-        = . g_iter_runs v ( vec_new [IterRun] )
-        = g_iter_runs_made T
-    } {}
-    ^ ( mem_addr g_iter_runs )
-}
-
-// The run with `id`, another owner of it; F if none.
-unsafe @ __iter_find i id → ?IterRun {
-    : *IterRuns rs ( __iter_runs )
+// The async runs live in McpState.iter_runs for the program's lifetime (a
+// finished run stays pollable). The index of run `id` there, -1 if none.
+@ __iter_find McpState st i id → i {
+    : ~ i found -1
     : ~ i k 0
-    ~ < k ( vec_len [IterRun] . rs v ) {
-        ?? ( vec_get [IterRun] . rs v k ) {
-            T h → {
-                : *IterRunImpl r ( __IterRun_ptr h )
-                ? == . r id id { ^ @ ?IterRun { T ( IterRun_share h ) } } {}
-            }
-            F → {}
-        }
+    ~ & < found 0 < k ( vec_len [IterRun] . st iter_runs ) {
+        ?? ( vec_get [IterRun] . st iter_runs k ) { T r → { ? == . r id id { = found k } {} } F → {} }
         = k + k 1
     }
-    ^ @ ?IterRun { F }
+    ^ found
 }
 
 // One full round (accumulate + step), updating the run in place — the exact
 // body the synchronous loop used to inline.
-unsafe @ __iterate_step Swarm sw__h * IterRunImpl r → v {
-    : *SwarmImpl sw ( __Swarm_ptr sw__h )
-    : *McpState st ( __mcp_st )
+@ __iterate_step inout McpState st inout IterRun r → v {
     : ~ i nseed 0
-    : i nf ( __iterate_round_ft sw__h . r wasm . r S . r A . r xparams . r rlo . r rhi . r state . r dsid . st seeded nseed . r grad )
+    : i nf ( __iterate_round_ft st . r wasm . r S . r A . r xparams . r rlo . r rhi . r state . r dsid nseed . r grad )
     = . r total_seeded + . r total_seeded nseed
     ? > nf 0 {
         = . r failed nf
@@ -2029,7 +1969,7 @@ unsafe @ __iterate_step Swarm sw__h * IterRunImpl r → v {
         ( vec_clear [f] . r prev )
         : ~ i sj 0
         ~ < sj . r S { ( vec_push [f] . r prev ?? ( vec_get [f] . r state sj ) { T x → x F → 0.0 } ) = sj + sj 1 }
-        : i nfu ( __iterate_update_ft sw__h . r uwasm . r S . r A . r grad . r N . r xparams . r state )
+        : i nfu ( __iterate_update_ft . st swarm . r uwasm . r S . r A . r grad . r N . r xparams . r state )
         ? > nfu 0 { = . r failed nfu = . r rnd . r rounds } {
             : ~ f dmax 0.0
             : ~ i j 0
@@ -2067,13 +2007,12 @@ unsafe @ __iterate_step Swarm sw__h * IterRunImpl r → v {
 // Advance until done / converged / a chunk failure — or, with budget_ns > 0,
 // until the slice's time is up. Finalizes the status and releases the
 // compiled modules when the run leaves "running".
-unsafe @ __iter_advance Swarm sw__h * IterRunImpl r i budget_ns → v {
-    : *SwarmImpl sw ( __Swarm_ptr sw__h )
+@ __iter_advance inout McpState st inout IterRun r i budget_ns → v {
     ? == . r status 0 {} { ^ v }
     : i t0 ( monotonic_ns )
     : ~ b more T
     ~ & & & more < . r rnd . r rounds ! . r converged == . r failed 0 {
-        ( __iterate_step sw__h r )
+        ( __iterate_step st r )
         ? & > budget_ns 0 > - ( monotonic_ns ) t0 budget_ns { = more F } {}
     }
     ? | | >= . r rnd . r rounds . r converged > . r failed 0 {
@@ -2087,7 +2026,7 @@ unsafe @ __iter_advance Swarm sw__h * IterRunImpl r i budget_ns → v {
 }
 
 // The result object both the synchronous return and the status poll share.
-unsafe @ __iter_result_json * IterRunImpl r b with_id → Json {
+@ __iter_result_json IterRun r b with_id → Json {
     : Json o ( json_obj_new )
     ? with_id {
         ( json_obj_set o `task_id` ( json_int . r id ) )
@@ -2111,7 +2050,7 @@ unsafe @ __iter_result_json * IterRunImpl r b with_id → Json {
     ^ o
 }
 
-unsafe @ tool_iterate Json args → Json {
+@ tool_iterate inout McpState st Json args → Json {
     : ?Json cj ( json_obj_get args `cuda` )
     : ?Json sj ( json_obj_get args `state` )
     : ?Json uj ( json_obj_get args `update` )
@@ -2168,18 +2107,17 @@ unsafe @ tool_iterate Json args → Json {
     : ~ i rlo ?? ( json_obj_get args `lo` ) { T x → ?? ( json_num_as_i x ) { T v → v F → -1 } F → -1 }
     : ~ i rhi ?? ( json_obj_get args `hi` ) { T x → ?? ( json_num_as_i x ) { T v → v F → -1 } F → -1 }
     ? != dsid 0 {
-        : s dsp ( ds_find dsid )
-        ? == # i dsp 0 { ^ ( mcp_tool_result_error `no such dataset — upload one with compute_upload_data` ) } {}
-        : *Dataset d # *Dataset dsp
+        : i dsk ( ds_find st dsid )
+        ? < dsk 0 { ^ ( mcp_tool_result_error `no such dataset — upload one with compute_upload_data` ) } {}
         ? < rlo 0 { = rlo 0 } {}
-        ? < rhi 0 { = rhi ( ds_count_of d ) } {}
-        ? | | < rlo 0 > rhi ( ds_count_of d ) >= rlo rhi { ^ ( mcp_tool_result_error `the range [lo, hi) must lie within the dataset` ) } {}
+        ? < rhi 0 { = rhi ( __ds_count st dsk ) } {}
+        ? | | < rlo 0 > rhi ( __ds_count st dsk ) >= rlo rhi { ^ ( mcp_tool_result_error `the range [lo, hi) must lie within the dataset` ) } {}
     } {
         ? & >= rlo 0 > rhi rlo {} { ^ ( mcp_tool_result_error `"lo" and "hi" are required without a "dataset" (lo < hi)` ) }
     }
     : i N - rhi rlo
     : i has_params 1  // state (+ params) always rides as params
-    : i has_data ? != dsid 0 ( ds_dtype_id dsid ) 0
+    : i has_data ? != dsid 0 ( ds_dtype_id st dsid ) 0
     // build the vecreduce (accumulate) module ONCE (source-hash cached; the
     // state is a param, so the SAME module serves every round — no rebuild,
     // warm worker cache). In general mode also build the update module.
@@ -2188,7 +2126,7 @@ unsafe @ tool_iterate Json args → Json {
     : String hex ( _wasm_hash srcb )
     : ~ ( Vec u ) wasm ( vec_new [u] )
     : ~ b have F
-    ?? ( __wcache_get ( string_data hex ) ) { T hitw → { = wasm hitw = have T } F → {} }
+    ?? ( __wcache_get st ( string_data hex ) ) { T hitw → { = wasm hitw = have T } F → {} }
     ? ! have {
         : !( Vec u ) String cr ( compile_to_wasm ( string_data wrapped ) )
         ?? cr {
@@ -2197,7 +2135,7 @@ unsafe @ tool_iterate Json args → Json {
                 : Json e ( mcp_tool_result_error ( string_data em ) )
                 ^ e
             }
-            T builtw → { = wasm builtw ( __wcache_put ( string_data hex ) wasm ) }
+            T builtw → { = wasm builtw ( __wcache_put st ( string_data hex ) wasm ) }
         }
     } {}
     : ~ ( Vec u ) uwasm ( vec_new [u] )
@@ -2206,7 +2144,7 @@ unsafe @ tool_iterate Json args → Json {
         : ( Vec u ) usrcb ( bytes_from_str ( string_data uwrapped ) )
         : String uhex ( _wasm_hash usrcb )
         : ~ b uhave F
-        ?? ( __wcache_get ( string_data uhex ) ) { T hitw → { = uwasm hitw = uhave T } F → {} }
+        ?? ( __wcache_get st ( string_data uhex ) ) { T hitw → { = uwasm hitw = uhave T } F → {} }
         ? ! uhave {
             : !( Vec u ) String ucr ( compile_to_wasm ( string_data uwrapped ) )
             ?? ucr {
@@ -2215,34 +2153,30 @@ unsafe @ tool_iterate Json args → Json {
                     : Json e ( mcp_tool_result_error ( string_data em ) )
                     ^ e
                 }
-                T builtw → { = uwasm builtw ( __wcache_put ( string_data uhex ) uwasm ) }
+                T builtw → { = uwasm builtw ( __wcache_put st ( string_data uhex ) uwasm ) }
             }
         } {}
     } {}
     // a dead relay here means the coordinator reconnects to the next in the
     // list before submitting — a relay failure does not take the API down
-    ? ( mcp_ensure_relay ) {} {}
-    : Swarm sw__h ( mcp_swarm )
-    : *SwarmImpl sw ( __Swarm_ptr sw__h )
-    ( swarm_discover sw__h 6 )
-    : i ngpu ( roster_count_caps . sw roster ( cap_gpu ) )
+    ? ( mcp_ensure_relay st ) {} {}
+    ( swarm_discover . st swarm 6 )
+    : i ngpu ( roster_count_caps . . st swarm roster ( cap_gpu ) )
     ? == ngpu 0 { ^ ( mcp_tool_result_error `no GPU workers in the cluster — start some with 'swarm-mcp --worker --gpu'` ) } {}
     // ── the run object (shared by the sync path and async polls) ──
-    : IterRun rh @ IterRun { ( arc_new [IterRunImpl] @ IterRunImpl {
-            0 0 have_update wasm uwasm S A N rlo rhi dsid lr eps rounds 0 0 0 0 0.0 F
-            xparams state ( vec_new [f] ) ( vec_new [f] ) } ) }
-    : *IterRunImpl r ( __IterRun_ptr rh )
+    : ~ IterRun r @ IterRun {
+        0 0 have_update wasm uwasm S A N rlo rhi dsid lr eps rounds 0 0 0 0 0.0 F
+        xparams state ( vec_new [f] ) ( vec_new [f] ) }
     : b want_async ?? ( json_obj_get args `async` ) { T x → ( json_bool_val x ) F → F }
     ? want_async {
         // register + return immediately; compute_iterate_status advances it
-        = . r id g_iter_next
-        = g_iter_next + g_iter_next 1
-        : *IterRuns rs ( __iter_runs )
-        ( vec_push [IterRun] . rs v ( IterRun_share rh ) )
+        = . r id . st iter_next
+        = . st iter_next + . st iter_next 1
         : Json o0 ( __iter_result_json r T )
+        ( vec_push [IterRun] . st iter_runs r )
         ^ ( tool_result_json o0 )
     } {}
-    ( __iter_advance sw__h r 0 )
+    ( __iter_advance st r 0 )
     ? > . r failed 0 {
         ^ ( mcp_tool_result_error `a chunk failed on a worker (bad kernel, missing GPU, or a lost block) — the run was stopped` )
     } {}
@@ -2251,23 +2185,22 @@ unsafe @ tool_iterate Json args → Json {
 }
 
 // Advance an async iterate run by a bounded time slice and report it.
-unsafe @ tool_iterate_status Json args → Json {
+@ tool_iterate_status inout McpState st Json args → Json {
     : i id ?? ( json_obj_get args `task_id` ) { T x → ?? ( json_num_as_i x ) { T v → v F → 0 } F → 0 }
-    : IterRun rh ?? ( __iter_find id ) {
-        T x → x
-        F → { ^ ( mcp_tool_result_error `no such iterate run — start one with compute_iterate {"async":true,...}` ) }
-    }
-    : *IterRunImpl r ( __IterRun_ptr rh )
+    : i k ( __iter_find st id )
+    ? < k 0 { ^ ( mcp_tool_result_error `no such iterate run — start one with compute_iterate {"async":true,...}` ) } {}
+    // The run is out of the registry while it advances (an empty one stands
+    // in), and back after; nothing is copied.
+    : ~ IterRun r ?? ( vec_replace [IterRun] . st iter_runs k ( __iter_blank ) ) { T x → x F → ( __iter_blank ) }
     ? == . r status 0 {
         : ~ i budget_ms ?? ( json_obj_get args `budget_ms` ) { T x → ?? ( json_num_as_i x ) { T v → v F → 8000 } F → 8000 }
         ? < budget_ms 100 { = budget_ms 100 } {}
         ? > budget_ms 60000 { = budget_ms 60000 } {}
-        ? ( mcp_ensure_relay ) {} {}
-        : Swarm sw__h ( mcp_swarm )
-        : *SwarmImpl sw ( __Swarm_ptr sw__h )
-        ( __iter_advance sw__h r * budget_ms 1000000 )
+        ? ( mcp_ensure_relay st ) {} {}
+        ( __iter_advance st r * budget_ms 1000000 )
     } {}
     : Json o ( __iter_result_json r T )
+    : ?IterRun _old ( vec_replace [IterRun] . st iter_runs k r )
     ^ ( tool_result_json o )
 }
 
@@ -2312,7 +2245,7 @@ unsafe @ tool_iterate_status Json args → Json {
 
 @ __shuffle_keys_inline → i { ^ 8192 }  // more groups than this must go to out_file
 
-unsafe @ tool_shuffle Json args → Json {
+@ tool_shuffle inout McpState st Json args → Json {
     : ?Json cj ( json_obj_get args `map` )
     : b have_map ?? cj { T _ → T F → F }
     ? have_map {} { ^ ( mcp_tool_result_error `compute_shuffle needs "map" — a pair of CUDA device functions __device__ long long key(long long x[, double v][, const double* p]) and __device__ double value(...) that emit one (key, value) per element — plus "reduce" (sum|product|min|max|count) and "lo"/"hi" (or "dataset")` ) }
@@ -2329,21 +2262,20 @@ unsafe @ tool_shuffle Json args → Json {
     }
     : ~ i rlo ?? ( json_obj_get args `lo` ) { T x → ?? ( json_num_as_i x ) { T v → v F → -1 } F → -1 }
     : ~ i rhi ?? ( json_obj_get args `hi` ) { T x → ?? ( json_num_as_i x ) { T v → v F → -1 } F → -1 }
-    : ~ s dsp # s 0
+    : ~ i dsk -1
     ? != dsid 0 {
-        = dsp ( ds_find dsid )
-        ? == # i dsp 0 { ^ ( mcp_tool_result_error `no such dataset — upload one with compute_upload_data` ) } {}
-        : *Dataset d # *Dataset dsp
+        = dsk ( ds_find st dsid )
+        ? < dsk 0 { ^ ( mcp_tool_result_error `no such dataset — upload one with compute_upload_data` ) } {}
         ? < rlo 0 { = rlo 0 } {}
-        ? < rhi 0 { = rhi ( ds_count_of d ) } {}
-        ? | | < rlo 0 > rhi ( ds_count_of d ) >= rlo rhi { ^ ( mcp_tool_result_error `the range [lo, hi) must lie within the dataset` ) } {}
+        ? < rhi 0 { = rhi ( __ds_count st dsk ) } {}
+        ? | | < rlo 0 > rhi ( __ds_count st dsk ) >= rlo rhi { ^ ( mcp_tool_result_error `the range [lo, hi) must lie within the dataset` ) } {}
     } {
         ? & >= rlo 0 > rhi rlo {} { ^ ( mcp_tool_result_error `"lo" and "hi" are required without a "dataset" (lo < hi)` ) }
     }
     ? > - rhi rlo ( __shuffle_cap ) { ^ ( mcp_tool_result_error `shuffle range too large: hi - lo must be <= 134217728 (128 M)` ) } {}
     : s out_file ?? ( json_obj_get args `out_file` ) { T v → ( json_str_data v ) F → `` }
     : i has_params ? > ( vec_len [i] params ) 0 1 0
-    : i has_data ? != dsid 0 ( ds_dtype_id dsid ) 0
+    : i has_data ? != dsid 0 ( ds_dtype_id st dsid ) 0
     // per-chunk hash-table size: a power of two ≥ 2× the distinct-key bound (a
     // chunk holds no more distinct keys than its range, nor than the cap). Load
     // factor ≤ ½ so the open-addressing reduce rarely probes far; if a chunk's
@@ -2361,7 +2293,7 @@ unsafe @ tool_shuffle Json args → Json {
     : String hex ( _wasm_hash srcb )
     : ~ ( Vec u ) wasm ( vec_new [u] )
     : ~ b have F
-    ?? ( __wcache_get ( string_data hex ) ) { T hitw → { = wasm hitw = have T } F → {} }
+    ?? ( __wcache_get st ( string_data hex ) ) { T hitw → { = wasm hitw = have T } F → {} }
     ? ! have {
         : !( Vec u ) String cr ( compile_to_wasm ( string_data wrapped ) )
         ?? cr {
@@ -2370,34 +2302,32 @@ unsafe @ tool_shuffle Json args → Json {
                 : Json e ( mcp_tool_result_error ( string_data em ) )
                 ^ e
             }
-            T builtw → { = wasm builtw ( __wcache_put ( string_data hex ) wasm ) }
+            T builtw → { = wasm builtw ( __wcache_put st ( string_data hex ) wasm ) }
         }
     } {}
-    ? ( mcp_ensure_relay ) {} {}
-    : Swarm sw__h ( mcp_swarm )
-    : *SwarmImpl sw ( __Swarm_ptr sw__h )
-    ( swarm_discover sw__h 6 )
-    : i ngpu ( roster_count_caps . sw roster ( cap_gpu ) )
+    ? ( mcp_ensure_relay st ) {} {}
+    ( swarm_discover . st swarm 6 )
+    : i ngpu ( roster_count_caps . . st swarm roster ( cap_gpu ) )
     ? == ngpu 0 { ^ ( mcp_tool_result_error `no GPU workers in the cluster — start some with 'swarm-mcp --worker --gpu'` ) } {}
     // each chunk returns a compact 16·K-byte partial table (not O(span)), so
     // chunking is purely about spreading the map+reduce across the ring
     : i span - rhi rlo
     : ~ i nchunks ( nchunks_wasm ngpu )
     ? > nchunks span { = nchunks span } {}
-    : *McpState st ( __mcp_st )
     : ~ i nseed 0
     : ~ ( Vec i ) tids ( vec_new [i] )
     ? != dsid 0 {
-        : *Dataset d # *Dataset dsp
-        = tids ( cluster_submit_wasm_gpu_ds sw__h ( gpu_mode_shuffle_reduce ) rlo rhi ktab params d wasm nchunks . st seeded nseed )
+        : ~ Dataset d ( __ds_take st dsk )
+        = tids ( cluster_submit_wasm_gpu_ds . st swarm ( gpu_mode_shuffle_reduce ) rlo rhi ktab params d wasm nchunks . st seeded nseed )
+        ( __ds_put st dsk d )
     } {
         : ( Vec u ) dbytes ( vec_new [u] )
-        = tids ( cluster_submit_wasm_gpu sw__h ( gpu_mode_shuffle_reduce ) rlo rhi ktab params dbytes wasm nchunks )
+        = tids ( cluster_submit_wasm_gpu . st swarm ( gpu_mode_shuffle_reduce ) rlo rhi ktab params dbytes wasm nchunks )
     }
     // drive to completion, collect the concatenated per-chunk partial tables
     : ~ i r 0
-    ~ & < r 6000 ! ( tids_ready sw__h tids ) { ( swarm_pump sw__h 100 ) = r + r 1 }
-    : CombinedV cv ( tids_combine_vec sw__h ( gpu_mode_shuffle_reduce ) ktab tids )
+    ~ & < r 6000 ! ( tids_ready . st swarm tids ) { ( swarm_pump . st swarm 100 ) = r + r 1 }
+    : CombinedV cv ( tids_combine_vec . st swarm ( gpu_mode_shuffle_reduce ) ktab tids )
     ? > . cv nfail 0 {
         ^ ( mcp_tool_result_error `a shuffle chunk failed on a worker (bad kernel, missing GPU, or a lost block)` )
     } {}
@@ -2474,7 +2404,7 @@ unsafe @ tool_shuffle Json args → Json {
     ^ ( tool_result_json o )
 }
 
-@ tool_submit_cuda Json args → Json {
+@ tool_submit_cuda inout McpState st Json args → Json {
     : ?Json cj ( json_obj_get args `cuda` )
     ? ! ?? cj { T _ → T F → F } {
         ^ ( mcp_tool_result_error `compute_submit_cuda needs "cuda" (a __device__ double f(long long x) function) plus "lo"/"hi" (or "dataset"); "reduce"/"params" optional` )
@@ -2487,13 +2417,13 @@ unsafe @ tool_shuffle Json args → Json {
     : i dsid ?? ( json_obj_get args `dataset` ) { T v → ( json_as_int v ) F → 0 }
     ?? ( __parse_params args ) {
         F → { ^ ( mcp_tool_result_error `"params" must be an array of numbers` ) }
-        T params → { ^ ( __submit_cuda_task cuda op ( gpu_mode_scalar ) lo hi 0 params `` dsid ) }
+        T params → { ^ ( __submit_cuda_task st cuda op ( gpu_mode_scalar ) lo hi 0 params `` dsid ) }
     }
 }
 
 // compute_sample_cuda: every f(x) comes back — the cluster gathers the range
 // into one array (curves, fields, images).
-@ tool_sample_cuda Json args → Json {
+@ tool_sample_cuda inout McpState st Json args → Json {
     : ?Json cj ( json_obj_get args `cuda` )
     : ?Json lj ( json_obj_get args `lo` )
     : ?Json hj ( json_obj_get args `hi` )
@@ -2507,13 +2437,13 @@ unsafe @ tool_shuffle Json args → Json {
     : i dsid ?? ( json_obj_get args `dataset` ) { T v → ( json_as_int v ) F → 0 }
     ?? ( __parse_params args ) {
         F → { ^ ( mcp_tool_result_error `"params" must be an array of numbers` ) }
-        T params → { ^ ( __submit_cuda_task cuda 0 ( gpu_mode_sample ) lo hi 0 params out_file dsid ) }
+        T params → { ^ ( __submit_cuda_task st cuda 0 ( gpu_mode_sample ) lo hi 0 params out_file dsid ) }
     }
 }
 
 // compute_histogram_cuda: bin(x) picks a bucket, val(x) the weight (default
 // 1.0); K bin sums come back — a whole distribution in one pass.
-@ tool_hist_cuda Json args → Json {
+@ tool_hist_cuda inout McpState st Json args → Json {
     : ?Json cj ( json_obj_get args `cuda` )
     : ?Json kj ( json_obj_get args `bins` )
     ? | ! ?? cj { T _ → T F → F } ! ?? kj { T _ → T F → F } {
@@ -2531,7 +2461,7 @@ unsafe @ tool_shuffle Json args → Json {
     } {}
     ?? ( __parse_params args ) {
         F → { ^ ( mcp_tool_result_error `"params" must be an array of numbers` ) }
-        T params → { ^ ( __submit_cuda_task cuda 0 ( gpu_mode_hist ) lo hi kbins params out_file dsid ) }
+        T params → { ^ ( __submit_cuda_task st cuda 0 ( gpu_mode_hist ) lo hi kbins params out_file dsid ) }
     }
 }
 
@@ -2588,7 +2518,7 @@ unsafe @ tool_shuffle Json args → Json {
 
 @ __strvec_at ( Vec String ) v i i → s { ^ ?? ( vec_get [String] v i ) { T x → ( string_data x ) F → `` } }
 
-unsafe @ __ds_persist * Dataset d ( Vec u ) rawbytes → v {
+@ __ds_persist Dataset d ( Vec u ) rawbytes → v {
     : String dir ( __ds_dir )
     ?? ( dir_create_all ( string_data dir ) ) { T _ → {} F e → { ^ v } }
     // where the bytes live on disk: the original file, or a written .data copy
@@ -2616,8 +2546,7 @@ unsafe @ __ds_persist * Dataset d ( Vec u ) rawbytes → v {
 }
 
 // Reload every persisted dataset into the (freshly initialised) McpState.
-unsafe @ __ds_load_all → v {
-    : *McpState st ( __mcp_st )
+@ __ds_load_all inout McpState st → v {
     : String dir ( __ds_dir )
     : ~ i maxid 0
     : ~ i loaded 0
@@ -2644,8 +2573,7 @@ unsafe @ __ds_load_all → v {
                                         : i nblk / ( vec_len [u] manbytes ) 32
                                         : ~ i b 0
                                         ~ < b nblk { ( vec_push [( Vec u )] blocks ( bytes_slice manbytes * b 32 + * b 32 32 ) ) = b + b 1 }
-                                        : ( Box Dataset ) dsb ( box_new [Dataset] @ Dataset { id ( string_from ( __strvec_at lines 4 ) ) ( vec_new [u] ) blocks ( string_from ( __strvec_at lines 3 ) ) nbytes dtype } )
-                                        ( vec_push [( Box Dataset )] . st datasets dsb )
+                                        ( vec_push [Dataset] . st datasets @ Dataset { id ( string_from ( __strvec_at lines 4 ) ) ( vec_new [u] ) blocks ( string_from ( __strvec_at lines 3 ) ) nbytes dtype } )
                                         ? > id maxid { = maxid id } {}
                                         = loaded + loaded 1
                                     }
@@ -2667,23 +2595,21 @@ unsafe @ __ds_load_all → v {
 
 // Register a dataset from its manifest, augmenting the already-built stats
 // object `o` (min/max/mean) with dataset_id/name/count/dtype, and returning it.
-unsafe @ __ds_register s name sink ( Vec u ) bytes sink String path i nbytes i dtype sink ( Vec ( Vec u ) ) blocks Json o → Json {
-    : *McpState st ( __mcp_st )
+@ __ds_register inout McpState st s name sink ( Vec u ) bytes sink String path i nbytes i dtype sink ( Vec ( Vec u ) ) blocks Json o → Json {
     : i id . st next_ds
     = . st next_ds + . st next_ds 1
-    : ( Box Dataset ) db ( box_new [Dataset] @ Dataset { id ( string_from name ) bytes blocks path nbytes dtype } )
-    : *Dataset d # *Dataset ( box_ptr [Dataset] db )
-    ( vec_push [( Box Dataset )] . st datasets db )
+    : Dataset d @ Dataset { id ( string_from name ) bytes blocks path nbytes dtype }
     ( __ds_persist d . d bytes )
     ( json_obj_set o `dataset_id` ( json_int . d id ) )
     ? > ( nurl_str_len name ) 0 { ( json_obj_set o `name` ( json_str_lit name ) ) } {}
     ( json_obj_set o `count` ( json_int ( ds_count_of d ) ) )
     ( json_obj_set o `dtype` ( json_str_lit ( __dtype_name dtype ) ) )
     ? ( ds_is_file d ) { ( json_obj_set o `file_backed` ( json_bool T ) ) } {}
+    ( vec_push [Dataset] . st datasets d )
     ^ o
 }
 
-@ tool_upload_data Json args → Json {
+@ tool_upload_data inout McpState st Json args → Json {
     : s b64 ?? ( json_obj_get args `data_base64` ) { T v → ( json_str_data v ) F → `` }
     : s fpath ?? ( json_obj_get args `file` ) { T v → ( json_str_data v ) F → `` }
     : s name ?? ( json_obj_get args `name` ) { T v → ( json_str_data v ) F → `` }
@@ -2708,7 +2634,7 @@ unsafe @ __ds_register s name sink ( Vec u ) bytes sink String path i nbytes i d
         ? == ( vec_len [( Vec u )] blocks ) 0 {
             ^ ( mcp_tool_result_error `could not read the file for hashing (it may have changed or become unreadable)` )
         } {}
-        : Json idj ( __ds_register name ( vec_new [u] ) ( string_from fpath ) fsz dtc blocks o )
+        : Json idj ( __ds_register st name ( vec_new [u] ) ( string_from fpath ) fsz dtc blocks o )
         ^ ( tool_result_json idj )
     } {}
     // BASE64 path: the raw bytes ride the request, so they stay in RAM (capped).
@@ -2728,25 +2654,25 @@ unsafe @ __ds_register s name sink ( Vec u ) bytes sink String path i nbytes i d
     : ( Vec ( Vec u ) ) blocks ( blob_manifest bytes )
     : Json o ( json_obj_new )
     ( __stats_json o bytes dtc )
-    : Json idj ( __ds_register name bytes ( string_new ) blen dtc blocks o )
+    : Json idj ( __ds_register st name bytes ( string_new ) blen dtc blocks o )
     ^ ( tool_result_json idj )
 }
 
-unsafe @ tool_list_data Json args → Json {
-    : *McpState st ( __mcp_st )
+@ tool_list_data McpState st Json args → Json {
     : Json arr ( json_arr_new )
-    : i n ( vec_len [( Box Dataset )] . st datasets )
+    : i n ( vec_len [Dataset] . st datasets )
     : ~ i k 0
     ~ < k n {
-        : s pp ?? ( vec_get [( Box Dataset )] . st datasets k ) { T x → # s ( box_ptr [Dataset] x ) F → # s 0 }
-        ? != # i pp 0 {
-            : *Dataset d # *Dataset pp
-            : Json o ( json_obj_new )
-            ( json_obj_set o `dataset_id` ( json_int . d id ) )
-            ? > ( string_len . d name ) 0 { ( json_obj_set o `name` ( json_str_lit ( string_data . d name ) ) ) } {}
-            ( json_obj_set o `count` ( json_int ( ds_count_of d ) ) )
-            ( json_arr_push arr o )
-        } {}
+        ?? ( vec_get [Dataset] . st datasets k ) {
+            T d → {
+                : Json o ( json_obj_new )
+                ( json_obj_set o `dataset_id` ( json_int . d id ) )
+                ? > ( string_len . d name ) 0 { ( json_obj_set o `name` ( json_str_lit ( string_data . d name ) ) ) } {}
+                ( json_obj_set o `count` ( json_int ( ds_count_of d ) ) )
+                ( json_arr_push arr o )
+            }
+            F → {}
+        }
         = k + k 1
     }
     : Json o ( json_obj_new )
@@ -2761,20 +2687,18 @@ unsafe @ tool_list_data Json args → Json {
 // found" or a task that keeps retrying gives a model nothing to reason about:
 // it cannot see whether a worker ever joined, whether it is GPU-capable, or
 // whether the node it is waiting on has gone silent.
-unsafe @ tool_status Json args → Json {
-    ? ( mcp_ensure_relay ) {} {}
-    : Swarm sw__h ( mcp_swarm )
-    : *SwarmImpl sw ( __Swarm_ptr sw__h )
-    ( swarm_discover sw__h 4 )
+@ tool_status inout McpState st Json args → Json {
+    ? ( mcp_ensure_relay st ) {} {}
+    ( swarm_discover . st swarm 4 )
     : i now ( now_ms )
     : Json o ( json_obj_new )
-    : i n ( roster_count . sw roster )
+    : i n ( roster_count . . st swarm roster )
     ( json_obj_set o `workers` ( json_int n ) )
-    ( json_obj_set o `gpu_workers` ( json_int ( roster_count_caps . sw roster ( cap_gpu ) ) ) )
+    ( json_obj_set o `gpu_workers` ( json_int ( roster_count_caps . . st swarm roster ( cap_gpu ) ) ) )
     : Json arr ( json_arr_new )
     : ~ i k 0
     ~ < k n {
-        : MemberView mv ( roster_view . sw roster k )
+        : MemberView mv ( roster_view . . st swarm roster k )
         : Json w ( json_obj_new )
         ( json_obj_set w `node_id` ( json_str_lit ( nurl_str_int . mv id ) ) )
         ( json_obj_set w `gpu` ( json_bool ? == & . mv caps ( cap_gpu ) ( cap_gpu ) T F ) )
@@ -2783,27 +2707,20 @@ unsafe @ tool_status Json args → Json {
         = k + k 1
     }
     ( json_obj_set o `worker_list` arr )
-    : *McpState st ( __mcp_st )
-    ( json_obj_set o `tasks` ( json_int ( vec_len [( Box Task )] . st tasks ) ) )
-    ( json_obj_set o `datasets` ( json_int ( vec_len [( Box Dataset )] . st datasets ) ) )
+    ( json_obj_set o `tasks` ( json_int ( vec_len [Task] . st tasks ) ) )
+    ( json_obj_set o `datasets` ( json_int ( vec_len [Dataset] . st datasets ) ) )
     // A worker silent past this is evicted from the rings.
     ( json_obj_set o `liveness_ttl_ms` ( json_int ( __roster_ttl_ms ) ) )
     ^ ( tool_result_json o )
 }
 
-unsafe @ tool_list Json args → Json {
-    ( mcp_pump 4 )
-    : *McpState st ( __mcp_st )
+@ tool_list inout McpState st Json args → Json {
+    ( mcp_pump st 4 )
     : Json arr ( json_arr_new )
-    : i n ( vec_len [( Box Task )] . st tasks )
+    : i n ( vec_len [Task] . st tasks )
     : ~ i k 0
     ~ < k n {
-        : s pp ?? ( vec_get [( Box Task )] . st tasks k ) { T x → # s ( box_ptr [Task] x ) F → # s 0 }
-        ? != # i pp 0 {
-            : *Task t # *Task pp
-            ( task_refresh t )
-            ( json_arr_push arr ( task_to_json t ) )
-        } {}
+        ( json_arr_push arr ( __task_json_at st k ) )
         = k + k 1
     }
     : Json o ( json_obj_new )
@@ -2813,16 +2730,14 @@ unsafe @ tool_list Json args → Json {
 
 // ── tool: compute_result ─────────────────────────────────────────
 
-unsafe @ tool_result Json args → Json {
+@ tool_result inout McpState st Json args → Json {
     : ?Json idj ( json_obj_get args `task_id` )
     ? ! ?? idj { T _ → T F → F } { ^ ( mcp_tool_result_error `compute_result needs "task_id" (int)` ) } {}
     : i id ?? idj { T v → ( json_as_int v ) F → 0 }
-    ( mcp_pump 4 )
-    : s tp ( task_find id )
-    ? == # i tp 0 { ^ ( mcp_tool_result_error `no such task_id` ) } {}
-    : *Task t # *Task tp
-    ( task_refresh t )
-    ^ ( tool_result_json ( task_to_json t ) )
+    ( mcp_pump st 4 )
+    : i k ( task_find st id )
+    ? < k 0 { ^ ( mcp_tool_result_error `no such task_id` ) } {}
+    ^ ( tool_result_json ( __task_json_at st k ) )
 }
 
 // ── MCP tasks extension (io.modelcontextprotocol/tasks) ──────────
@@ -2834,7 +2749,7 @@ unsafe @ tool_result Json args → Json {
 // a task-capable client gets a CreateTaskResult from the submit call and
 // polls `tasks/get`, with no swarm-specific tool knowledge at all.
 //
-// The mapping is one MCP task handle per swarm *Task, linked by the
+// The mapping is one MCP task handle per swarm Task, linked by the
 // swarm task's integer id (mcp_task_set_link). Everything else — id
 // generation, TTL, the wire shapes, the capability gate — is the
 // stdlib's (stdlib/ext/mcp_tasks.nu); this file only decides WHICH calls
@@ -2842,11 +2757,6 @@ unsafe @ tool_result Json args → Json {
 //
 // Task creation is server-directed and per-request: a client that does
 // not declare the extension on the call gets exactly the old behaviour.
-
-unsafe @ mcp_task_store → McpTaskStore {
-    : *McpState st ( __mcp_st )
-    ^ . st mcptasks
-}
 
 // An hour is far longer than any submit takes, but a client that walks
 // away should not pin the result set forever.
@@ -2865,16 +2775,16 @@ unsafe @ mcp_task_store → McpTaskStore {
 // outcome, not a JSON-RPC fault, so they still COMPLETE the task (the
 // payload's own "status" field says "error"). `failed` is reserved for
 // the case where the swarm task itself has vanished.
-unsafe @ __mcp_task_sync s mt → v {
+@ __mcp_task_sync inout McpState st s mt → v {
     ? ( mcp_task_status_is_terminal ( mcp_task_status mt ) ) { ^ v } {}
-    : s tp ( task_find ( mcp_task_link mt ) )
-    ? == # i tp 0 {
+    : i k ( task_find st ( mcp_task_link mt ) )
+    ? < k 0 {
         ( mcp_task_fail mt mcp_err_internal_error
         `the underlying swarm task is no longer registered` )
         ^ v
     } {}
-    : *Task t # *Task tp
-    ( task_refresh t )
+    : ~ Task t ( __task_take st k )
+    ( task_refresh . st swarm t )
     ? == . t done 1 {
         ? > . t failed 0 {
             ( mcp_task_set_message mt `finished with failed chunks` )
@@ -2885,17 +2795,18 @@ unsafe @ __mcp_task_sync s mt → v {
     } {
         ( mcp_task_set_message mt `chunks in flight` )
     }
+    ( __task_put st k t )
 }
 
 // Advance every live task before answering a poll. Cheap: a finished
 // swarm task short-circuits in task_refresh, and a completed MCP task
 // is skipped outright.
-@ __mcp_tasks_sync_all → v {
-    : McpTaskStore store ( mcp_task_store )
+@ __mcp_tasks_sync_all inout McpState st → v {
+    : McpTaskStore store ( McpTaskStore_share . st mcptasks )
     : i n ( mcp_task_store_count store )
     : ~ i k 0
     ~ < k n {
-        ( __mcp_task_sync ( mcp_task_nth store k ) )
+        ( __mcp_task_sync st ( mcp_task_nth store k ) )
         = k + k 1
     }
 }
@@ -2903,17 +2814,15 @@ unsafe @ __mcp_task_sync s mt → v {
 // Wrap the swarm task a just-completed tool call registered into an MCP
 // task handle. None when the call registered nothing — an argument
 // error or an empty cluster is an immediate tool result, not a task.
-unsafe @ __mcp_task_augment s name Json args → ?Json {
-    : *McpState st ( __mcp_st )
-    : s lt . st last_task
-    ? == # i lt 0 { ^ @ ?Json { F @ Json { JNull } } } {}
-    : *Task t # *Task lt
-    : s mt ( mcp_task_create ( mcp_task_store ) `tools/call` name ( json_clone args )
+@ __mcp_task_augment inout McpState st s name Json args → ?Json {
+    : i lt . st last_task
+    ? == lt 0 { ^ @ ?Json { F @ Json { JNull } } } {}
+    : s mt ( mcp_task_create . st mcptasks `tools/call` name ( json_clone args )
     ( __mcp_task_ttl ) ( __mcp_task_poll ) )
-    ( mcp_task_set_link mt . t id )
+    ( mcp_task_set_link mt lt )
     // The submit path already pumped once, so a small range may well be
     // done here — seeding the state now saves the client a round trip.
-    ( __mcp_task_sync mt )
+    ( __mcp_task_sync st mt )
     ^ @ ?Json { T ( mcp_task_create_result mt ) }
 }
 
@@ -3148,16 +3057,15 @@ unsafe @ __mcp_task_augment s name Json args → ?Json {
 // behaviour, and so does a call that registered no swarm task (an
 // argument error, or an empty cluster).
 
-unsafe @ __ms_task_begin McpCall call → b {
+@ __ms_task_begin inout McpState st McpCall call → b {
     ? ! ( mcp_call_wants_tasks call ) { ^ F } {}
-    : *McpState st ( __mcp_st )
-    = . st last_task # s 0
+    = . st last_task 0
     ^ T
 }
 
-@ __ms_task_finish b augment s name Json args Json result → Json {
+@ __ms_task_finish inout McpState st b augment s name Json args Json result → Json {
     ? augment {
-        ?? ( __mcp_task_augment name args ) {
+        ?? ( __mcp_task_augment st name args ) {
             T ctr → {
                 ^ ctr
             }
@@ -3172,14 +3080,19 @@ unsafe @ __ms_task_begin McpCall call → b {
 // open-world; none destroys state a caller can lose; the submits are
 // not idempotent (each one queues fresh work), the queries are.
 
-@ ms_server → McpServer {
+// The server over the coordinator's state `ms`. Every handler checks the
+// state out of `ms` for the call and back in (locked_take / locked_restore):
+// the endpoint is a serial accept loop, so one call holds it at a time.
+@ ms_server ( Locked McpState ) ms McpTaskStore store → McpServer {
     : McpServer srv ( mcp_server_new `swarm-mcp` ( sm_version ) )
     ( mcp_server_set_instructions srv ( sm_instructions ) )
-    ( mcp_server_set_task_store srv ( mcp_task_store ) \ → v {
+    ( mcp_server_set_task_store srv ( McpTaskStore_share store ) \ → v {
         // A poll must answer from the cluster's current state, not the
         // state at submit time.
-        ( mcp_pump 4 )
-        ( __mcp_tasks_sync_all )
+        : ~ McpState st ( locked_take [McpState] ms )
+        ( mcp_pump st 4 )
+        ( __mcp_tasks_sync_all st )
+        ( locked_restore [McpState] ms st )
     } )
 
     ( mcp_server_add_tool_full srv `swarm_help`
@@ -3191,89 +3104,153 @@ unsafe @ __ms_task_begin McpCall call → b {
     `Distributed map-reduce over an integer/float EXPRESSION in x across [lo, hi): evaluate the kernel per x, fold with reduce (sum/product/min/max/count). Returns a task_id; poll compute_result. E.g. {"expr":"x*x","lo":1,"hi":1000000,"reduce":"sum"}. Grammar, dtype and examples: swarm_help "expr".`
     ( ms_schema_submit ) F F F T
     \ Json a McpCall c → Json {
-        : b aug ( __ms_task_begin c )
-        ^ ( __ms_task_finish aug `compute_submit` a ( tool_submit a ) )
+        : ~ McpState st ( locked_take [McpState] ms )
+        : b aug ( __ms_task_begin st c )
+        : Json res ( tool_submit st a )
+        : Json r ( __ms_task_finish st aug `compute_submit` a res )
+        ( locked_restore [McpState] ms st )
+        ^ r
     } )
 
     ( mcp_server_add_tool_ctx srv `compute_submit_kernel`
     `Run an arbitrary NURL kernel for what the expression language can't express (loops, helpers). Give just the per-element kernel as NURL source (@ kernel i x → i { … }); the server wraps it, compiles to wasm, shards it, and folds kernel(x) over [lo, hi) with reduce. Compile errors are returned. Returns a task_id; poll compute_result. Already-compiled module: compute_run_wasm.`
     ( ms_schema_submit_kernel ) F F F T
     \ Json a McpCall c → Json {
-        : b aug ( __ms_task_begin c )
-        ^ ( __ms_task_finish aug `compute_submit_kernel` a ( tool_submit_kernel a ) )
+        : ~ McpState st ( locked_take [McpState] ms )
+        : b aug ( __ms_task_begin st c )
+        : Json res ( tool_submit_kernel st a )
+        : Json r ( __ms_task_finish st aug `compute_submit_kernel` a res )
+        ( locked_restore [McpState] ms st )
+        ^ r
     } )
 
     ( mcp_server_add_tool_ctx srv `compute_submit_cuda`
     `Distributed GPU map-reduce — write only a CUDA-C __device__ double f(long long x); the server generates the whole GPU program and the --gpu workers run it, folding f(x) over [lo, hi) with reduce (a float). For heavy numeric ranges, millions to billions of x: integrals, Monte-Carlo sums, parameter scans. Needs a --gpu worker; returns a task_id, poll compute_result. CUDA ABI, params and datasets: swarm_help "cuda".`
     ( ms_schema_submit_cuda ) F F F T
     \ Json a McpCall c → Json {
-        : b aug ( __ms_task_begin c )
-        ^ ( __ms_task_finish aug `compute_submit_cuda` a ( tool_submit_cuda a ) )
+        : ~ McpState st ( locked_take [McpState] ms )
+        : b aug ( __ms_task_begin st c )
+        : Json res ( tool_submit_cuda st a )
+        : Json r ( __ms_task_finish st aug `compute_submit_cuda` a res )
+        ( locked_restore [McpState] ms st )
+        ^ r
     } )
 
     ( mcp_server_add_tool_ctx srv `compute_sample_cuda`
     `Distributed GPU map that returns EVERY value in order — sample a curve, render a field, tabulate a function. CUDA-C f(x) over [lo, hi); results inline (JSON ≤ 1024, base64 ≤ 65536) or to out_file (≤ 1M); min/max/mean included. Needs a --gpu worker; returns a task_id, poll compute_result. ABI & params: swarm_help "cuda".`
     ( ms_schema_sample_cuda ) F F F T
     \ Json a McpCall c → Json {
-        : b aug ( __ms_task_begin c )
-        ^ ( __ms_task_finish aug `compute_sample_cuda` a ( tool_sample_cuda a ) )
+        : ~ McpState st ( locked_take [McpState] ms )
+        : b aug ( __ms_task_begin st c )
+        : Json res ( tool_sample_cuda st a )
+        : Json r ( __ms_task_finish st aug `compute_sample_cuda` a res )
+        ( locked_restore [McpState] ms st )
+        ^ r
     } )
 
     ( mcp_server_add_tool_ctx srv `compute_histogram_cuda`
     `Distributed GPU binned aggregation in ONE pass: CUDA-C bin(x) picks one of K buckets, val(x) (default 1.0) is added — value distributions, densities, class counts, binned integrals. K bin sums come back (JSON ≤ 1024, base64 ≤ 65536, out_file beyond). Needs a --gpu worker; returns a task_id, poll compute_result. ABI & params: swarm_help "cuda".`
     ( ms_schema_hist_cuda ) F F F T
     \ Json a McpCall c → Json {
-        : b aug ( __ms_task_begin c )
-        ^ ( __ms_task_finish aug `compute_histogram_cuda` a ( tool_hist_cuda a ) )
+        : ~ McpState st ( locked_take [McpState] ms )
+        : b aug ( __ms_task_begin st c )
+        : Json res ( tool_hist_cuda st a )
+        : Json r ( __ms_task_finish st aug `compute_histogram_cuda` a res )
+        ( locked_restore [McpState] ms st )
+        ^ r
     } )
 
     ( mcp_server_add_tool_full srv `compute_iterate`
     `Iterative solver with the loop IN THE ENGINE — one call returns the converged "state". Each round reduces a CUDA grad() into an accumulator, then applies a step rule. DEFAULT is gradient descent (give "lr", state[j] -= lr*grad[j]/N); for k-means, EM, power iteration, PageRank, momentum/Adam give an "update" device function (and "acc_dim" when the accumulator is wider than the state). Over a dataset the data caches after round one. Needs a --gpu worker. Recipes and the swarm_state/swarm_acc/swarm_N accessors: swarm_help "iterate".`
     ( ms_schema_iterate ) F F F T
-    \ Json a → Json { ^ ( tool_iterate a ) } )
+    \ Json a → Json {
+        : ~ McpState st ( locked_take [McpState] ms )
+        : Json r ( tool_iterate st a )
+        ( locked_restore [McpState] ms st )
+        ^ r
+    } )
 
     ( mcp_server_add_tool_full srv `compute_iterate_status`
     `Advance and inspect an ASYNC iterate run. Start one with compute_iterate {"async":true, ...} (returns task_id immediately); each status call advances the loop by a bounded time slice ("budget_ms", default 8000, max 60000) and returns {status: running|done|error, state, rounds_run, rounds_total, last_max_delta, seeded_blocks}. Poll until "done" — a long training is never at the mercy of one HTTP call's timeout.`
     ( ms_schema_iterate_status ) F F F T
-    \ Json a → Json { ^ ( tool_iterate_status a ) } )
+    \ Json a → Json {
+        : ~ McpState st ( locked_take [McpState] ms )
+        : Json r ( tool_iterate_status st a )
+        ( locked_restore [McpState] ms st )
+        ^ r
+    } )
 
     ( mcp_server_add_tool_full srv `compute_shuffle`
     `Group-by-key / reduce-by-key. A CUDA key(x)+value(x) map plus a reduce op; both the map AND the per-key reduce run distributed on the GPU (a combiner), and the coordinator merges compact per-chunk tables. Returns { "groups": {…}, "n_groups", "pairs_mapped" } (or {n_groups, saved_to} with out_file, required past 8192 groups). Word-count, keyed histograms, joins. hi - lo ≤ 128 M; distinct keys are per-chunk-bounded (~131072) so total cardinality scales with the worker count (hundreds of thousands to millions). Needs a --gpu worker. Details: swarm_help "shuffle".`
     ( ms_schema_shuffle ) F F F T
-    \ Json a → Json { ^ ( tool_shuffle a ) } )
+    \ Json a → Json {
+        : ~ McpState st ( locked_take [McpState] ms )
+        : Json r ( tool_shuffle st a )
+        ( locked_restore [McpState] ms st )
+        ^ r
+    } )
 
     ( mcp_server_add_tool_full srv `compute_upload_data`
     `Upload a dataset the GPU tools map over: {"data_base64": raw little-endian} (in memory, ≤ 256 MiB) or {"file": path on the MCP host} (STREAMED from disk, ≤ 64 GiB). "dtype" is the element type — f64 (default), f32, i32, i64 (native width; f32/i32 halve memory), promoted to double on the GPU so your kernel is always f(long long x, double v). Returns {dataset_id, count, dtype, min, max, mean, file_backed}. Then pass "dataset":id to the CUDA tools. Data is cut into content-addressed 1 MiB blocks cached per worker, so it moves ONCE. Details: swarm_help "datasets".`
     ( ms_schema_upload_data ) F F F T
-    \ Json a → Json { ^ ( tool_upload_data a ) } )
+    \ Json a → Json {
+        : ~ McpState st ( locked_take [McpState] ms )
+        : Json r ( tool_upload_data st a )
+        ( locked_restore [McpState] ms st )
+        ^ r
+    } )
 
     ( mcp_server_add_tool_full srv `compute_list_data`
     `List every uploaded dataset: id, name, element count.`
     ( ms_schema_empty ) T F T T
-    \ Json a → Json { ^ ( tool_list_data a ) } )
+    \ Json a → Json {
+        : ~ McpState st ( locked_take [McpState] ms )
+        : Json r ( tool_list_data st a )
+        ( locked_restore [McpState] ms st )
+        ^ r
+    } )
 
     ( mcp_server_add_tool_ctx srv `compute_run_wasm`
     `Like compute_submit_kernel but you provide an already-compiled wasm32-wasi module (base64) instead of NURL source — e.g. one built with the nurl_build_wasm tool. The module's main reads lo and hi from argv, folds the kernel over [lo, hi), and prints the partial. Returns a task_id; poll compute_result.`
     ( ms_schema_run_wasm ) F F F T
     \ Json a McpCall c → Json {
-        : b aug ( __ms_task_begin c )
-        ^ ( __ms_task_finish aug `compute_run_wasm` a ( tool_run_wasm a ) )
+        : ~ McpState st ( locked_take [McpState] ms )
+        : b aug ( __ms_task_begin st c )
+        : Json res ( tool_run_wasm st a )
+        : Json r ( __ms_task_finish st aug `compute_run_wasm` a res )
+        ( locked_restore [McpState] ms st )
+        ^ r
     } )
 
     ( mcp_server_add_tool_full srv `swarm_status`
     `The cluster as the coordinator currently sees it: how many workers have joined, which of them are GPU-capable, how long since each was last heard from (they heartbeat every ~2 s; one silent past liveness_ttl_ms is evicted), plus task and dataset counts. Check this first when a submit says there are no workers, or when a task keeps retrying.`
     ( ms_schema_empty ) T F T T
-    \ Json a → Json { ^ ( tool_status a ) } )
+    \ Json a → Json {
+        : ~ McpState st ( locked_take [McpState] ms )
+        : Json r ( tool_status st a )
+        ( locked_restore [McpState] ms st )
+        ^ r
+    } )
 
     ( mcp_server_add_tool_full srv `compute_list`
     `List every submitted task with its status (running|done), kernel, range, reduce op, and result if finished.`
     ( ms_schema_empty ) T F T T
-    \ Json a → Json { ^ ( tool_list a ) } )
+    \ Json a → Json {
+        : ~ McpState st ( locked_take [McpState] ms )
+        : Json r ( tool_list st a )
+        ( locked_restore [McpState] ms st )
+        ^ r
+    } )
 
     ( mcp_server_add_tool_full srv `compute_result`
     `Get one task by task_id: its status and, once finished, the reduced result.`
     ( ms_schema_result ) T F T T
-    \ Json a → Json { ^ ( tool_result a ) } )
+    \ Json a → Json {
+        : ~ McpState st ( locked_take [McpState] ms )
+        : Json r ( tool_result st a )
+        ( locked_restore [McpState] ms st )
+        ^ r
+    } )
     ^ srv
 }
 
@@ -3283,39 +3260,27 @@ unsafe @ __ms_task_begin McpCall call → b {
 // transport). Runs the blocking HTTP server off the reactor on its own thread,
 // so a slow TLS handshake never stalls a co-located relay or worker.
 
-// The coordinator's relay endpoints and its current index — the submit path
-// rebuilds the swarm against the next relay when the current one dies
-// (mcp_ensure_relay below). Held as globals because the MCP handlers are
-// top-level functions over module state, like the swarm itself.
-: ~ ( Vec String ) g_mcp_relays 0  // a copy of node_mcp's list
-: ~ i g_mcp_from 0  // next relay index to try
-: ~ s g_mcp_token ``
-: ~ i g_mcp_reconnects 0
-
 // Build a fresh coordinator swarm on the next reachable relay and swap it
 // into the McpState, preserving tasks / datasets / caches. Returns F when no
 // relay in the list is reachable. Called from the submit path when the
 // current relay looks dead, so a relay failure does not take the API down.
-unsafe @ mcp_reconnect → b {
-    : *McpState st ( __mcp_st )
-    : ( Vec String ) relays g_mcp_relays
+@ mcp_reconnect inout McpState st → b {
     : ~ i idxc 0
     : ~ b ok F
-    ?? ( relay_dial_list relays `127.0.0.1` 47700 g_mcp_from idxc ) {
+    ?? ( relay_dial_list . st relays `127.0.0.1` 47700 . st relay_from idxc ) {
         T rc → {
             : i cur idxc
-            = g_mcp_from % + cur 1 ( vec_len [String] relays )
+            = . st relay_from % + cur 1 ( vec_len [String] . st relays )
             : i myid ( rand_u64 )
             : ( Vec u ) reg ( pk_from_id myid )
             ?? ( relay_register rc reg ) { T _ → {} F _ → {} }
             ( relay_set_timeout rc 150 )
-            : Swarm nsw__h ( swarm_new rc myid ( role_client ) 0 g_mcp_token )
-            : *SwarmImpl nsw ( __Swarm_ptr nsw__h )
-            ( swarm_join_group nsw__h )
-            ( swarm_discover nsw__h 6 )
+            : ~ Swarm nsw ( swarm_new rc myid ( role_client ) 0 ( string_data . st token ) )
+            ( swarm_join_group nsw )
+            ( swarm_discover nsw 6 )
             // storing the new node releases the one McpState held
-            = . st swarm nsw__h
-            = g_mcp_reconnects + g_mcp_reconnects 1
+            = . st swarm nsw
+            = . st reconnects + . st reconnects 1
             = ok T
         }
         F _ → {}
@@ -3325,13 +3290,12 @@ unsafe @ mcp_reconnect → b {
 
 // Before a submit: if a heartbeat to the current relay fails, the relay is
 // gone — reconnect to the next. Returns T once a live relay is in place.
-@ mcp_ensure_relay → b {
-    : Swarm sw__h ( mcp_swarm )
-    ? ( swarm_announce_ok sw__h 0 ) { ^ T } {}
-    ^ ( mcp_reconnect )
+@ mcp_ensure_relay inout McpState st → b {
+    ? ( swarm_announce_ok . st swarm 0 ) { ^ T } {}
+    ^ ( mcp_reconnect st )
 }
 
-unsafe @ node_mcp ( Vec String ) relays s rhost i rport s mcp_host i mcp_port s cert s key s token → v {
+@ node_mcp ( Vec String ) relays s rhost i rport s mcp_host i mcp_port s cert s key s token → v {
     : ~ i idxc 0
     ?? ( relay_dial_list relays `127.0.0.1` 47700 0 idxc ) {
         T rc → {
@@ -3340,28 +3304,17 @@ unsafe @ node_mcp ( Vec String ) relays s rhost i rport s mcp_host i mcp_port s 
             : ( Vec u ) reg ( pk_from_id myid )
             ?? ( relay_register rc reg ) { T _ → {} F _ → {} }
             ( relay_set_timeout rc 150 )
-            : Swarm sw__h ( swarm_new rc myid ( role_client ) 0 token )
-            : *SwarmImpl sw ( __Swarm_ptr sw__h )
-            ( swarm_join_group sw__h )
-            ( swarm_discover sw__h 6 )
-            : *McpState st ( __mcp_st )
-            = . st swarm sw__h
-            = . st tasks ( vec_new [( Box Task )] )
-            = . st wcache ( vec_new [WasmCached] )
-            = . st datasets ( vec_new [( Box Dataset )] )
-            = . st next_ds 1
-            = . st next_id 1
-            = . st seeded ( vec_new [String] )
-            = . st mcptasks ( mcp_task_store_new )
-            = . st last_task # s 0
-            = g_mcp_relays relays
-            = g_mcp_from % + cur 1 ( vec_len [String] relays )
-            = g_mcp_token token
+            : ~ Swarm sw ( swarm_new rc myid ( role_client ) 0 token )
+            ( swarm_join_group sw )
+            ( swarm_discover sw 6 )
+            : McpTaskStore store ( mcp_task_store_new )
+            : ~ McpState st @ McpState { sw ( vec_new [Task] ) 1 ( vec_new [WasmCached] ) ( vec_new [Dataset] ) 1
+                ( vec_new [String] ) ( McpTaskStore_share store ) 0 ( vec_new [IterRun] ) 1
+                ( vec_clone [String] relays ) % + cur 1 ( vec_len [String] relays ) ( string_from token ) 0 }
             // recover any datasets persisted by a previous run of this coordinator
-            ( __ds_load_all )
-            // Built after g_mcp is filled: the task store lives on the
-            // McpState, and mcp_server_set_task_store reads it.
-            : McpServer msrv ( ms_server )
+            ( __ds_load_all st )
+            : ( Locked McpState ) ms ( locked_new [McpState] st )
+            : McpServer msrv ( ms_server ms store )
             : ( @ HttpResponse HttpRequest ) mcph
             ( mcp_http_handler ( mcp_server_http_dispatch msrv ) )
             // Serve the MCP transport at /mcp (and bare / for convenience) and

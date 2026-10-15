@@ -596,7 +596,7 @@ $ `stdlib/core/slice.nu`
 // worker names under $TMPDIR (preopened into the sandbox via --dir); the
 // exact byte length is validated (8·(hi−lo), or 8·K for a histogram).
 // Runtime params ride argv as f64-bit-pattern decimals.
-unsafe @ __wasm_run_gpu String path GpuChunk c → GpuOut {
+@ __wasm_run_gpu String path GpuChunk c → GpuOut {
     : String tmp ( env_var_or `TMPDIR` `/tmp` )
     : b vecmode | | | == . c mode ( gpu_mode_sample ) == . c mode ( gpu_mode_shuffle_map ) == . c mode ( gpu_mode_shuffle_reduce ) | == . c mode ( gpu_mode_hist ) == . c mode ( gpu_mode_vecreduce )
     : b hasdata > ( vec_len [u] . c data ) 0
@@ -619,46 +619,27 @@ unsafe @ __wasm_run_gpu String path GpuChunk c → GpuOut {
         ( string_push_str inp `.bin` )
         ?? ( write_file_bytes ( string_data inp ) . c data ) { T _ → {} F e → { = inp_ok F } }
     } {}
-    // The numeric argv strings (lo, hi, K, params…) are variable-count and
-    // built in loops — a `: s` binding would be auto-reclaimed at its block's
-    // end, BEFORE process_run reads it. So they live in ONE owned arena
-    // String as NUL-separated segments; the args vec gets pointer views into
-    // it, resolved only after the arena stops growing (pushes may realloc).
-    : String blob ( string_new )
-    : ( Vec i ) offs ( vec_new [i] )
-    ( vec_push [i] offs ( string_len blob ) )
-    ( string_push_str blob ( nurl_str_int . c lo ) ) ( string_push_char blob 0 )
-    ( vec_push [i] offs ( string_len blob ) )
-    ( string_push_str blob ( nurl_str_int . c hi ) ) ( string_push_char blob 0 )
+    // The argv, as Strings of its own (process_run_strings): the numeric
+    // ones (lo, hi, K, params…) are built in loops.
+    : ( Vec String ) args ( vec_new [String] )
+    ( vec_push [String] args ( string_from `run` ) )
+    ( vec_push [String] args ( string_from `--allow-gpu` ) )
+    ? | vecmode hasdata { ( vec_push [String] args ( string_from `--dir` ) ) ( vec_push [String] args ( string_from ( string_data tmp ) ) ) } {}
+    ( vec_push [String] args ( string_from ( string_data path ) ) )
+    ( vec_push [String] args ( string_from ( nurl_str_int . c lo ) ) )
+    ( vec_push [String] args ( string_from ( nurl_str_int . c hi ) ) )
+    ? hasdata { ( vec_push [String] args ( string_from ( string_data inp ) ) ) } {}
+    ? vecmode { ( vec_push [String] args ( string_from ( string_data outp ) ) ) } {}
     // hist, vecreduce AND shuffle_reduce carry K (bin count / gradient dim /
     // hash-table slots) in argv
     ? | | == . c mode ( gpu_mode_hist ) == . c mode ( gpu_mode_vecreduce ) == . c mode ( gpu_mode_shuffle_reduce ) {
-        ( vec_push [i] offs ( string_len blob ) )
-        ( string_push_str blob ( nurl_str_int . c kbins ) ) ( string_push_char blob 0 )
+        ( vec_push [String] args ( string_from ( nurl_str_int . c kbins ) ) )
     } {}
     : i np ( vec_len [i] . c params )
     : ~ i k 0
     ~ < k np {
-        ( vec_push [i] offs ( string_len blob ) )
-        ( string_push_str blob ( nurl_str_int ?? ( vec_get [i] . c params k ) { T x → x F → 0 } ) )
-        ( string_push_char blob 0 )
+        ( vec_push [String] args ( string_from ( nurl_str_int ?? ( vec_get [i] . c params k ) { T x → x F → 0 } ) ) )
         = k + k 1
-    }
-    : i base # i ( string_data blob )
-    : ( Vec s ) args ( vec_new [s] )
-    ( vec_push [s] args `run` )
-    ( vec_push [s] args `--allow-gpu` )
-    ? | vecmode hasdata { ( vec_push [s] args `--dir` ) ( vec_push [s] args ( string_data tmp ) ) } {}
-    ( vec_push [s] args ( string_data path ) )
-    ( vec_push [s] args # s + base ?? ( vec_get [i] offs 0 ) { T x → x F → 0 } )
-    ( vec_push [s] args # s + base ?? ( vec_get [i] offs 1 ) { T x → x F → 0 } )
-    ? hasdata { ( vec_push [s] args ( string_data inp ) ) } {}
-    ? vecmode { ( vec_push [s] args ( string_data outp ) ) } {}
-    : i ntail - ( vec_len [i] offs ) 2
-    : ~ i t 0
-    ~ < t ntail {
-        ( vec_push [s] args # s + base ?? ( vec_get [i] offs + 2 t ) { T x → x F → 0 } )
-        = t + t 1
     }
     : String rt ( __wasm_runtime )
     : ~ i ok 0
@@ -668,7 +649,7 @@ unsafe @ __wasm_run_gpu String path GpuChunk c → GpuOut {
     ? ! inp_ok {
         ^ @ GpuOut { 0 0 outb ( string_from `could not stage the chunk's input data in $TMPDIR` ) }
     } {}
-    ?? ( process_run ( string_data rt ) args `` ) {
+    ?? ( process_run_strings ( string_data rt ) args `` ) {
         T out → {
             ? == ( output_exit_code out ) 0 {
                 ? vecmode {

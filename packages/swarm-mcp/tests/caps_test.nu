@@ -40,7 +40,7 @@ $ `src/census.nu`
 
     // ── roster: caps recorded, counted by mask ────────────────────
     : Ring ring ( ring_new )
-    : Roster r ( roster_new )
+    : ~ Roster r ( roster_new )
     : ( Vec u ) a ( mkpk 10 )
     : ( Vec u ) b ( mkpk 60 )
     : ( Vec u ) c ( mkpk 110 )

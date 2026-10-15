@@ -30,8 +30,8 @@
 // Tokens are kept in two parallel int vectors; the parser builds a flat
 // stride-4 node arena (tag,a,b,c) and returns the root index — the resp.nu
 // arena pattern, so nesting needs no per-node allocation. An EParser is a
-// handle (Arc): `( eparser_new )`, then `expr_parse`, `eparser_ok`,
-// `expr_eval` / `expr_eval_f`; its last owner releases it. Float literals carry
+// plain value: `( eparser_new )` into a `: ~` binding, then `expr_parse`
+// (which fills it), `eparser_ok`, `expr_eval` / `expr_eval_f` (which read it). Float literals carry
 // the f64 bit pattern (via floatbits) in the value slot, so the all-int arena
 // holds them losslessly; the float evaluator reinterprets them back.
 
@@ -142,7 +142,7 @@ $ `stdlib/std/arc.nu`
 
 // ── parser → flat node arena ─────────────────────────────────────
 
-: EParserImpl {
+: EParser {
     ( Vec i ) tk
     ( Vec i ) tv
     i pos
@@ -150,37 +150,24 @@ $ `stdlib/std/arc.nu`
     b ok
 }
 
-// An EParser is a handle on its state in an Arc (stdlib/std/arc.nu):
-// every copy is the same parser, and the last owner releases it.
-: EParser { ( Arc EParserImpl ) a }
-
-@ EParser_share EParser h → EParser { ^ @ EParser { ( arc_clone [EParserImpl] . h a ) } }
-
-@ EParser_drop sink EParser h → v {}
-
-// The parser in place. One underscore: shared with work.nu, whose fold opens
-// the handle once per chunk and evaluates on the pointer.
-unsafe @ _EParser_ptr EParser h → *EParserImpl { ^ ( arc_ptr [EParserImpl] . h a ) }
-
 // A parser with nothing parsed yet (eparser_ok is F until expr_parse succeeds).
 @ eparser_new → EParser {
-    ^ @ EParser { ( arc_new [EParserImpl] @ EParserImpl { ( vec_new [i] ) ( vec_new [i] ) 0 ( vec_new [i] ) F } ) }
+    ^ @ EParser { ( vec_new [i] ) ( vec_new [i] ) 0 ( vec_new [i] ) F }
 }
 
 // Did the last expr_parse accept its source?
-unsafe @ eparser_ok EParser p__h → b {
-    : *EParserImpl p ( _EParser_ptr p__h )
+@ eparser_ok EParser p → b {
     ^ . p ok
 }
 
-unsafe @ __ep_kind * EParserImpl p → i { ^ ?? ( vec_get [i] . p tk . p pos ) { T x → x F → 0 } }
+@ __ep_kind EParser p → i { ^ ?? ( vec_get [i] . p tk . p pos ) { T x → x F → 0 } }
 
-unsafe @ __ep_val * EParserImpl p → i { ^ ?? ( vec_get [i] . p tv . p pos ) { T x → x F → 0 } }
+@ __ep_val EParser p → i { ^ ?? ( vec_get [i] . p tv . p pos ) { T x → x F → 0 } }
 
-unsafe @ __ep_adv * EParserImpl p → v { = . p pos + . p pos 1 }
+@ __ep_adv inout EParser p → v { = . p pos + . p pos 1 }
 
 // Push a node, return its index.
-unsafe @ __ep_node * EParserImpl p i tag i a i b i c → i {
+@ __ep_node inout EParser p i tag i a i b i c → i {
     : i idx / ( vec_len [i] . p arena ) 4
     ( vec_push [i] . p arena tag )
     ( vec_push [i] . p arena a )
@@ -190,11 +177,11 @@ unsafe @ __ep_node * EParserImpl p i tag i a i b i c → i {
 }
 
 // Expect+consume a token kind; flag an error if it is not there.
-unsafe @ __ep_expect * EParserImpl p i kind → v {
+@ __ep_expect inout EParser p i kind → v {
     ? == ( __ep_kind p ) kind { ( __ep_adv p ) } { = . p ok F }
 }
 
-unsafe @ __ep_primary * EParserImpl p → i {
+@ __ep_primary inout EParser p → i {
     : i k ( __ep_kind p )
     ? == k 1 { : i v ( __ep_val p ) ( __ep_adv p ) ^ ( __ep_node p 0 v 0 0 ) } {}  // INT
     ? == k 24 { : i bits ( __ep_val p ) ( __ep_adv p ) ^ ( __ep_node p 20 bits 0 0 ) } {}  // FLT (f64 bits)
@@ -226,12 +213,12 @@ unsafe @ __ep_primary * EParserImpl p → i {
     ^ 0
 }
 
-unsafe @ __ep_unary * EParserImpl p → i {
+@ __ep_unary inout EParser p → i {
     ? == ( __ep_kind p ) 4 { ( __ep_adv p ) ^ ( __ep_node p 2 ( __ep_unary p ) 0 0 ) } {}  // -unary → NEG
     ^ ( __ep_primary p )
 }
 
-unsafe @ __ep_muldiv * EParserImpl p → i {
+@ __ep_muldiv inout EParser p → i {
     : ~ i a ( __ep_unary p )
     ~ & . p ok | == ( __ep_kind p ) 5 | == ( __ep_kind p ) 6 == ( __ep_kind p ) 7 {
         : i op ( __ep_kind p )
@@ -242,7 +229,7 @@ unsafe @ __ep_muldiv * EParserImpl p → i {
     ^ a
 }
 
-unsafe @ __ep_addsub * EParserImpl p → i {
+@ __ep_addsub inout EParser p → i {
     : ~ i a ( __ep_muldiv p )
     ~ & . p ok | == ( __ep_kind p ) 3 == ( __ep_kind p ) 4 {
         : i op ( __ep_kind p )
@@ -253,7 +240,7 @@ unsafe @ __ep_addsub * EParserImpl p → i {
     ^ a
 }
 
-unsafe @ __ep_compare * EParserImpl p → i {
+@ __ep_compare inout EParser p → i {
     : i a ( __ep_addsub p )
     : i k ( __ep_kind p )
     ? & . p ok & >= k 8 <= k 13 {
@@ -264,7 +251,7 @@ unsafe @ __ep_compare * EParserImpl p → i {
     ^ a
 }
 
-unsafe @ __ep_logic * EParserImpl p → i {
+@ __ep_logic inout EParser p → i {
     : ~ i a ( __ep_compare p )
     ~ & . p ok | == ( __ep_kind p ) 14 == ( __ep_kind p ) 15 {
         : i op ( __ep_kind p )
@@ -275,7 +262,7 @@ unsafe @ __ep_logic * EParserImpl p → i {
     ^ a
 }
 
-unsafe @ __ep_expr * EParserImpl p → i {
+@ __ep_expr inout EParser p → i {
     : i cond ( __ep_logic p )
     ? & . p ok == ( __ep_kind p ) 16 {  // cond ? then : else
         ( __ep_adv p )
@@ -290,8 +277,7 @@ unsafe @ __ep_expr * EParserImpl p → i {
 // Parse `src` → (arena, root). On any error, ok=0; the caller checks it
 // (eparser_ok). The arena stays in the EParser; the root index is the return
 // value. A parser can be reused: each parse starts from empty vectors.
-unsafe @ expr_parse ( Vec u ) src EParser p__h → i {
-    : *EParserImpl p ( _EParser_ptr p__h )
+@ expr_parse ( Vec u ) src inout EParser p → i {
     ( vec_clear [i] . p tk )
     ( vec_clear [i] . p tv )
     ( vec_clear [i] . p arena )
@@ -308,16 +294,16 @@ unsafe @ expr_parse ( Vec u ) src EParser p__h → i {
 @ eparser_free sink EParser p → v {}
 
 // ── evaluator ────────────────────────────────────────────────────
-// Reads the arena through the parser pointer (a borrow), so evaluating does
+// Reads the arena through a borrow of the parser, so evaluating does
 // not move the arena field out of the parser — the worker evaluates the same
 // parsed expression for every x in its sub-range. The public expr_eval /
-// expr_eval_f open the handle once; the recursion runs on the pointer.
+// expr_eval_f borrow the parser; so does the recursion.
 
-unsafe @ __ar * EParserImpl p i node i off → i { ^ ?? ( vec_get [i] . p arena + * node 4 off ) { T x → x F → 0 } }
+@ __ar EParser p i node i off → i { ^ ?? ( vec_get [i] . p arena + * node 4 off ) { T x → x F → 0 } }
 
-unsafe inline @ expr_eval EParser p__h i node i x → i { ^ ( _expr_eval ( _EParser_ptr p__h ) node x ) }
+inline @ expr_eval EParser p i node i x → i { ^ ( _expr_eval p node x ) }
 
-unsafe @ _expr_eval * EParserImpl p i node i x → i {
+@ _expr_eval EParser p i node i x → i {
     : i tag ( __ar p node 0 )
     : i a ( __ar p node 1 )
     : i b ( __ar p node 2 )
@@ -352,9 +338,9 @@ unsafe @ _expr_eval * EParserImpl p i node i x → i {
 // f64 bit pattern and are reinterpreted back. Div/mod by zero → 0.0; mod is the
 // truncated remainder (a − b·trunc(a/b)), matching the int evaluator's rule.
 
-unsafe inline @ expr_eval_f EParser p__h i node f x → f { ^ ( _expr_eval_f ( _EParser_ptr p__h ) node x ) }
+inline @ expr_eval_f EParser p i node f x → f { ^ ( _expr_eval_f p node x ) }
 
-unsafe @ _expr_eval_f * EParserImpl p i node f x → f {
+@ _expr_eval_f EParser p i node f x → f {
     : i tag ( __ar p node 0 )
     : i a ( __ar p node 1 )
     : i b ( __ar p node 2 )
