@@ -85,6 +85,44 @@ unsafe @ gk_buf_view_as GkBuf b i boff i n i dtype → GkBuf {
     ^ @ GkBuf { + . b dptr boff n dtype ( __gk_mem_share . b mem ) }
 }
 
+// ── 16-bit float buffers (GkHBuf) ─────────────────────────────────────
+
+unsafe @ gk_hbuf_none → GkHBuf { ^ @ GkHBuf { 0 0 F ( __gk_nomem ) } }
+
+@ gk_hbuf_ok GkHBuf h → b { ^ != . h dptr 0 }
+
+@ gk_hbuf_len GkHBuf h → i { ^ . h n }
+
+// `n` 16-bit floats at BYTE offset `boff` into `b` (f16, or bf16 when `bf`):
+// a view holding `b`'s block, none when the 2n bytes are not inside b or
+// boff is odd. How a model carves its half weights out of one allocation.
+unsafe @ gk_hbuf_of GkBuf b i boff i n b bf → GkHBuf {
+    : i have ( _gk_p2 . b n ( __gk_esz . b dtype ) )
+    : i want ( _gk_p2 n 2 )
+    ? | | | < boff 0 < want 1 < have 0 > want - have boff { ^ ( gk_hbuf_none ) } {}
+    ? | != 0 % boff 2 ! ( gk_buf_ok b ) { ^ ( gk_hbuf_none ) } {}
+    ^ @ GkHBuf { + . b dptr boff n bf ( __gk_mem_share . b mem ) }
+}
+
+// A new buffer of `n` 16-bit floats (contents undefined until uploaded).
+@ gk_hbuf_new GpuKit kit i n b bf → GkHBuf {
+    ? < n 1 { ^ ( gk_hbuf_none ) } {}
+    : GkBuf b ( gk_dbuf_new kit / + n 1 2 GK_F32 )
+    ^ ( gk_hbuf_of b 0 n bf )
+}
+
+// Upload `n` halves from a checked view of their bytes (2n of them, little
+// endian, as a checkpoint stores them): F unless `src` holds that many.
+@ gk_hbuf_upload_bytes GpuKit kit GkHBuf h ( Slice u ) src → b {
+    ? ( gk_hbuf_ok h ) {} { ^ F }
+    ? < ( slice_len [u] src ) * . h n 2 { ^ F } {}
+    ^ ( __gk_hupload_view h src )
+}
+
+unsafe @ __gk_hupload_view GkHBuf h ( Slice u ) src → b {
+    ^ == ( gpu_upload ( gpu_buffer_view . h dptr * . h n 2 ) ( slice_data [u] src ) ) 0
+}
+
 // A buffer over device memory something else owns (another package's
 // allocation, a raw pointer out of a C library). It owns nothing: the
 // caller vouches (`raw`) that `dptr` holds `n` elements of `dtype` and
@@ -130,9 +168,13 @@ raw @ gk_buf_wrap i dptr i n i dtype → GkBuf { ^ @ GkBuf { dptr n dtype ( __gk
 @ gk_dbuf_new GpuKit h i n i dtype → GkBuf {
     ? & ( _gk_ok h ) > n 0 {} { ^ ( gk_buf_none dtype ) }
     ? ( _gk_census h ) { ^ ( __gk_census_buf h n dtype ) } {}
+    // (The byte count is the checked product: n * 8 wraps for an n near
+    // 2^61, and a buffer of 8 bytes would then claim 2^61 elements to
+    // every check that trusts its length.)
+    : i bytes ( _gk_p2 n ( __gk_esz dtype ) )
+    ? < bytes 1 { ^ ( gk_buf_none dtype ) } {}
     : GkInfo kit ( arc_get [GkInfo] . h info )
     ( _gk_pool_default kit )
-    : i bytes * n ( __gk_esz dtype )
     : ~ GkState st ( locked_take [GkState] . h st )
     : i dptr ( __gk_alloc_in st kit bytes )
     ( locked_restore [GkState] . h st st )
@@ -400,9 +442,18 @@ unsafe @ gk_dbuf_download_i GpuKit kit GkBuf b ( Vec i ) dst → b {
 // launches can turn this off, launch away, and gk_sync once at the end —
 // the CUDA stream serialises kernels, and downloads synchronise
 // implicitly; the CPU backend runs launches synchronously either way.
+// gk_autosync switches it for every kit of the process; gk_async for one
+// kit, which is what a library holding its own kit wants — it does not
+// change how anyone else's launches behave.
 : ~ b g_gk_autosync T
 
 @ gk_autosync b on → v { = g_gk_autosync on }
+
+@ gk_async GpuKit h b on → v {
+    : ~ GkState kit ( locked_take [GkState] . h st )
+    = . kit async on
+    ( locked_restore [GkState] . h st kit )
+}
 
 @ gk_sync GpuKit kit → b {
     ? ( _gk_census kit ) { ^ T } {}
@@ -546,10 +597,11 @@ raw @ gk_run_dev GpuKit h s src s name i grid i block ( Vec i ) args → b {
     : GkInfo inf ( arc_get [GkInfo] . h info )
     : ~ GkState kit ( locked_take [GkState] . h st )
     : b ok ( __gk_launch_in kit inf src name grid block args )
+    : b wait & g_gk_autosync ! . kit async
     ( locked_restore [GkState] . h st kit )
     ? ok {} { ^ F }
     ? . inf census { ^ T } {}
-    ? g_gk_autosync { ^ == ( gpu_sync . inf gpu ) 0 } {}
+    ? wait { ^ == ( gpu_sync . inf gpu ) 0 } {}
     ^ T
 }
 

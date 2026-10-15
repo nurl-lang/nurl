@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.11.10] — 2026-10-15
+
+- **Checked loads are as fast as raw ones on CUDA.** When every buffer of a launch has 1 to 2^32 − 1 elements, a checked load clamps its index with one 32-bit `min` against the last element. Before, it used a 64-bit compare and select. The 64-bit form stopped the compiler from strength-reducing a loop's addresses, and f5tts's grouped convolution (31 taps, 16 groups, 1024 channels) ran 1.8× slower as a checked kernel than as its raw original. It now runs at parity: 0.80 ms per call, both forms, with byte-identical output. Launches with a buffer that is empty or has 2^32 elements or more keep the 64-bit check.
+- An out-of-range checked load now reads the buffer's **last** element, on every backend. It used to read element 0. Either way it is an element of the buffer, never memory past it. Out-of-range stores are still dropped.
+- `gk_async kit on`: launches on one kit stop waiting for the device. `gk_autosync` switches every kit in the process, so a library that holds its own kit had to flip process-wide state for everyone. Downloads still wait for the kernels before them.
+- **Fixed: `gk_dbuf_new` overflowed its byte count.** It computed `n × element size` without a check, so `n` near 2^61 wrapped to a few bytes while the buffer still claimed `n` elements. Every check that trusts a buffer's length would then allow reads and writes far past the allocation. On the CPU backend that is host memory. The product is now overflow-checked, and such a request returns no buffer.
+- **The checked subset can express hand-tuned kernels:**
+  - **16-bit float buffers.** `GkHBuf` holds IEEE half or bfloat16 values (`gk_hbuf_new`, `gk_hbuf_of` as a view of a `GkBuf`'s bytes, `gk_hbuf_upload_bytes`). `gk_call_half_in` binds one read-only, and `LD` returns the element as a float, converted exactly: every one of the 65 536 bit patterns of each format matches the host conversion. It is a type of its own rather than a `GkBuf` dtype, so none of the existing ops, all written for 8- and 4-byte elements, can be handed one.
+  - **Warp shuffles.** `SHFL_DOWN(v, off)` and `SHFL_XOR(v, mask)` take float, double, long long or int values. They follow `SYNC()`'s rule (every `if` / `for` / `while` around one decides the same for the whole block), and a kernel that uses one runs only in blocks of whole warps. An offset outside 0–31 returns the lane's own value. The CPU backend runs them through a shared slot.
+  - **Per-thread arrays.** `LOCAL_F` / `LOCAL_D` / `LOCAL_L(name, N);` arrays start zeroed and are reached through checked `LD` / `ST`. With constant indices, as in an unrolled loop, the check folds away and the array lives in registers.
+  - **`UNROLL`** before a `for` loop asks the compiler to unroll it.
+- `tests/gpukit_test.sh` runs the checked-kernel cases on CUDA as well as on the CPU backend (77 cases each).
+
 ## [0.11.9] — 2026-10-15
 
 - The host-memory kernels `gk_add_f` / `gk_sub_f` / `gk_mul_f` / `gk_div_f`, `gk_map_f`, `gk_reduce_sum_f` and `gk_dot_f` are checked kernels over views of the caller's `Vec`s. None of them is `unsafe` any more (4 fewer; `gk_matmul_f`'s tiled kernel stays).

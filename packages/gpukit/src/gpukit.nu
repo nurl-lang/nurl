@@ -99,6 +99,7 @@ $ `deps/gpu/src/gpu.nu`
     ( Vec i ) pstamp
     GpuTimer ev0  // the profiler's event pair (gk_prof)
     GpuTimer ev1
+    b async  // gk_async: launches on this kit do not wait for the device
 }
 
 // The process-wide pool counters (gk_pool_count / gk_pool_idle_bytes) sum
@@ -132,7 +133,7 @@ $ `deps/gpu/src/gpu.nu`
 @ __gk_state → GkState {
     ^ @ GkState { ( vec_new [GkKernelEntry] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [String] )
         ( vec_new [GpuBuffer] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] )
-        ( gpu_timer_none ) ( gpu_timer_none ) }
+        ( gpu_timer_none ) ( gpu_timer_none ) F }
 }
 
 @ __gk_kit sink Gpu g b ok b census → GpuKit {

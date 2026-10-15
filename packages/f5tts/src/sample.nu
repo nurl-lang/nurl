@@ -60,7 +60,7 @@ $ `kernels.nu`
 // `cond_mel` is the reference recording's mel, frames × mel_channels; the
 // generated frames follow it in the same buffer and the model is free to
 // overwrite them. `out` receives duration × mel_channels.
-unsafe @ f5_sample F5Model m ( Vec i ) ids i duration ( Vec f ) cond_mel
+@ f5_sample F5Model m ( Vec i ) ids i duration ( Vec f ) cond_mel
 i steps f cfg f sway ( Vec f ) noise ( Vec f ) out → b {
     : i mel ( f5_mel m )
     : i n duration
@@ -93,10 +93,10 @@ i steps f cfg f sway ( Vec f ) noise ( Vec f ) out → b {
         ( f5_set_step m st )
         = ok & ok ( f5_forward m )
         // v = cond + (cond − uncond)·cfg, written over the first row block
-        = ok & ok ( f5k_cfg ( f5_kit m ) . ( f5_buf_pred m ) dptr
-        . ( f5_buf_vel m ) dptr n mel cfg )
-        = ok & ok ( f5k_axpy ( f5_kit m ) . ( f5_buf_x m ) dptr
-        . ( f5_buf_vel m ) dptr dt * n mel )
+        = ok & ok ( f5k_cfg ( f5_kit m ) ( f5_buf_pred m )
+        ( f5_buf_vel m ) n mel cfg )
+        = ok & ok ( f5k_axpy ( f5_kit m ) ( f5_buf_x m )
+        ( f5_buf_vel m ) dt * n mel )
         ? ok {} { ^ F }
         = st + st 1
     }

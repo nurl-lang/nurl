@@ -144,8 +144,6 @@ $ `stdlib/std/thread.nu`
     ?? ( vec_get [GkBuf] v k ) { T x → { ^ x } F → { ^ ( __f5m_nobuf ) } }
 }
 
-@ __f5m_dptr ( Vec GkBuf ) v i k → i { ^ . ( __f5m_bget v k ) dptr }
-
 // ── weights ─────────────────────────────────────────────────────────
 
 // Upload one f32 tensor straight out of the mapping. The checkpoint is f32
@@ -719,6 +717,10 @@ $ `stdlib/std/thread.nu`
     ? ( gk_ok . m kit ) {} {
         ^ ( __f5m_err `f5tts: no GPU backend available (neither CUDA nor a host C++ compiler)` )
     }
+    // A forward is ~400 launches in one stream; none of them needs the
+    // device to have finished the one before (downloads wait for it), so
+    // the host queues the next one while the device runs.
+    ( gk_async . m kit T )
     : String pfx ( __f5m_probe_prefix m )
     ? > ( string_len pfx ) 0 {} {
         ^ ( __f5m_err `f5tts: this file has no F5-TTS transformer in it (looked for proj_out.weight under every prefix a release uses)` )
@@ -911,25 +913,25 @@ $ `stdlib/std/thread.nu`
 // The depthwise convolution is what gives the text encoder its receptive
 // field — there is no attention in it at all — and GRN is what keeps one
 // feature from swallowing the block.
-unsafe @ __f5m_convnext inout F5ModelImpl m i idx GkBuf x i rows → b {
+@ __f5m_convnext inout F5ModelImpl m i idx GkBuf x i rows → b {
     : i td . m td
     : i inner * 2 td
     : GkBuf t2 ( __f5m_view . . m sc tscr2 0 * rows td )
     : GkBuf t3 ( __f5m_view . . m sc tscr3 0 * rows td )
     : GkBuf big ( __f5m_view . . m sc tscr 0 * rows inner )
-    : ~ b ok ( f5k_conv1d_t4 . m kit . x dptr . t2 dptr
-    ( __f5m_dptr . m tb_dw_w idx ) ( __f5m_dptr . m tb_dw_b idx ) 1 rows td td
+    : ~ b ok ( f5k_conv1d_t4 . m kit x t2
+    ( __f5m_bget . m tb_dw_w idx ) ( __f5m_bget . m tb_dw_b idx ) 1 rows td td
     . m tb_k / . m tb_k 2 td )
-    = ok & ok ( f5k_lnaff . m kit . t2 dptr . t3 dptr
-    ( __f5m_dptr . m tb_n_w idx ) ( __f5m_dptr . m tb_n_b idx ) rows td 1.0e-6 )
+    = ok & ok ( f5k_lnaff . m kit t2 t3
+    ( __f5m_bget . m tb_n_w idx ) ( __f5m_bget . m tb_n_b idx ) rows td 1.0e-6 )
     = ok & ok ( gkd_gemm . m kit big t3 ( __f5m_bget . m tb_p1_w idx )
     ( __f5m_bget . m tb_p1_b idx ) 1 rows inner td 1.0 1.0 1 )
-    = ok & ok ( f5k_gelu_erf . m kit . big dptr * rows inner )
-    = ok & ok ( f5k_grn . m kit . big dptr . . . m sc grn_gx dptr . . . m sc grn_mean dptr
-    ( __f5m_dptr . m tb_gg idx ) ( __f5m_dptr . m tb_gb idx ) rows inner )
+    = ok & ok ( f5k_gelu_erf . m kit big * rows inner )
+    = ok & ok ( f5k_grn . m kit big . . m sc grn_gx . . m sc grn_mean
+    ( __f5m_bget . m tb_gg idx ) ( __f5m_bget . m tb_gb idx ) rows inner )
     = ok & ok ( gkd_gemm . m kit t2 big ( __f5m_bget . m tb_p2_w idx )
     ( __f5m_bget . m tb_p2_b idx ) 1 rows td inner 1.0 1.0 1 )
-    = ok & ok ( f5k_addinto . m kit . x dptr . t2 dptr * rows td )
+    = ok & ok ( f5k_addinto . m kit x t2 * rows td )
     ^ ok
 }
 
@@ -944,7 +946,7 @@ unsafe @ __f5m_convnext inout F5ModelImpl m i idx GkBuf x i rows → b {
     ^ __res
 }
 
-unsafe @ __f5_text_encode_in inout F5ModelImpl m ( Vec i ) ids b drop i row_off → b {
+@ __f5_text_encode_in inout F5ModelImpl m ( Vec i ) ids b drop i row_off → b {
     : i n . m n
     : i td . m td
     : ( Vec f ) rowsf ( vec_with_cap [f] * n td )
@@ -954,11 +956,11 @@ unsafe @ __f5_text_encode_in inout F5ModelImpl m ( Vec i ) ids b drop i row_off 
     : ~ b ok ( gk_dbuf_upload . m kit dst rowsf )
     = ok & ok ( gk_dbuf_upload . m kit . . m sc keep keepf )
     ? ok {} { ^ F }
-    = ok & ok ( f5k_maskrows . m kit . dst dptr . . . m sc keep dptr n td )
+    = ok & ok ( f5k_maskrows . m kit dst . . m sc keep n td )
     : ~ i k 0
     ~ < k . m nconv {
         = ok & ok ( __f5m_convnext m k dst n )
-        = ok & ok ( f5k_maskrows . m kit . dst dptr . . . m sc keep dptr n td )
+        = ok & ok ( f5k_maskrows . m kit dst . . m sc keep n td )
         = k + k 1
     }
     ^ ok
@@ -990,7 +992,7 @@ unsafe @ __f5_text_encode_in inout F5ModelImpl m ( Vec i ) ids b drop i row_off 
     ^ __res
 }
 
-unsafe @ __f5_set_times_in inout F5ModelImpl m ( Vec f ) ts → b {
+@ __f5_set_times_in inout F5ModelImpl m ( Vec f ) ts → b {
     : i dim . m dim
     : i S ( vec_len [f] ts )
     ? > S 0 {} { ^ F }
@@ -1025,10 +1027,10 @@ unsafe @ __f5_set_times_in inout F5ModelImpl m ( Vec f ) ts → b {
     }
     : ~ b ok ( gk_dbuf_upload . m kit sins e )
     = ok & ok ( gkd_gemm . m kit hid sins . m tm0_w . m tm0_b 1 S dim 256 1.0 1.0 1 )
-    = ok & ok ( f5k_silu . m kit . hid dptr * S dim )
+    = ok & ok ( f5k_silu . m kit hid * S dim )
     = ok & ok ( gkd_gemm . m kit emb hid . m tm2_w . m tm2_b 1 S dim dim 1.0 1.0 1 )
     // every modulation runs the same SiLU on it, so it happens once
-    = ok & ok ( f5k_silu . m kit . emb dptr * S dim )
+    = ok & ok ( f5k_silu . m kit emb * S dim )
     = ok & ok ( gkd_gemm . m kit . m mod_all emb . m an_all . m anb_all 1 S
     * . m depth * 6 dim dim 1.0 1.0 1 )
     = ok & ok ( gkd_gemm . m kit . m mod2_all emb . m no_w . m no_b 1 S * 2 dim dim 1.0 1.0 1 )
@@ -1056,7 +1058,7 @@ unsafe @ __f5_set_times_in inout F5ModelImpl m ( Vec f ) ts → b {
     ^ __res
 }
 
-unsafe @ __f5_forward_in inout F5ModelImpl m → b {
+@ __f5_forward_in inout F5ModelImpl m → b {
     : i n . m n
     : i batch . m batch
     : i rows * batch n
@@ -1075,17 +1077,17 @@ unsafe @ __f5_forward_in inout F5ModelImpl m → b {
 
     // input embedding: the noised mel, the conditioning mel and the text,
     // side by side, projected to the model width
-    : ~ b ok ( f5k_concat3 . m kit . . . m sc xbuf dptr . . . m sc cond2 dptr
-    . . . m sc txt2 dptr . cat dptr batch n mel td )
+    : ~ b ok ( f5k_concat3 . m kit . . m sc xbuf . . m sc cond2
+    . . m sc txt2 cat batch n mel td )
     = ok & ok ( gkd_gemm . m kit h cat . m ie_w . m ie_b 1 rows dim + * 2 mel td 1.0 1.0 1 )
     // the convolutional position embedding, added as a residual
-    = ok & ok ( f5k_conv1d_t4 . m kit . h dptr . tmp dptr . . m cp0_w dptr
-    . . m cp0_b dptr batch n dim dim . m cp_k / . m cp_k 2 . m cp_groups )
-    = ok & ok ( f5k_mish . m kit . tmp dptr * rows dim )
-    = ok & ok ( f5k_conv1d_t4 . m kit . tmp dptr . hn dptr . . m cp2_w dptr
-    . . m cp2_b dptr batch n dim dim . m cp_k / . m cp_k 2 . m cp_groups )
-    = ok & ok ( f5k_mish . m kit . hn dptr * rows dim )
-    = ok & ok ( f5k_addinto . m kit . h dptr . hn dptr * rows dim )
+    = ok & ok ( f5k_conv1d_t4 . m kit h tmp . m cp0_w
+    . m cp0_b batch n dim dim . m cp_k / . m cp_k 2 . m cp_groups )
+    = ok & ok ( f5k_mish . m kit tmp * rows dim )
+    = ok & ok ( f5k_conv1d_t4 . m kit tmp hn . m cp2_w
+    . m cp2_b batch n dim dim . m cp_k / . m cp_k 2 . m cp_groups )
+    = ok & ok ( f5k_mish . m kit hn * rows dim )
+    = ok & ok ( f5k_addinto . m kit h hn * rows dim )
     ? ok {} { ^ F }
 
     : f qscale / 1.0 ( sqrt # f hd )
@@ -1099,36 +1101,36 @@ unsafe @ __f5_forward_in inout F5ModelImpl m → b {
         : GkBuf shift_mlp ( __f5m_view mod * 3 dim dim )
         : GkBuf scale_mlp ( __f5m_view mod * 4 dim dim )
         : GkBuf gate_mlp ( __f5m_view mod * 5 dim dim )
-        = ok & ok ( f5k_modln . m kit . h dptr . hn dptr . scale_msa dptr
-        . shift_msa dptr rows dim 1.0e-6 )
+        = ok & ok ( f5k_modln . m kit h hn scale_msa
+        shift_msa rows dim 1.0e-6 )
         : GkBuf qkv ( __f5m_view . . m sc qkv 0 * rows * 3 dim )
         = ok & ok ( gkd_gemm . m kit qkv hn ( __f5m_bget . m wqkv L ) ( __f5m_bget . m bqkv L )
         1 rows * 3 dim dim 1.0 1.0 1 )
         // q, k and v now sit side by side in one row, so each split reads its
         // own third in place: the same kernel with the row width and a column
         // offset, and no copy between them
-        = ok & ok ( f5k_split_rope_s . m kit . qkv dptr . . . m sc qb dptr
-        . . . m sc cosd dptr . . . m sc sind dptr batch n heads hd 1 * 3 dim 0 )
-        = ok & ok ( f5k_split_rope_s . m kit . qkv dptr . . . m sc kb dptr
-        . . . m sc cosd dptr . . . m sc sind dptr batch n heads hd 1 * 3 dim dim )
-        = ok & ok ( f5k_split_rope_s . m kit . qkv dptr . . . m sc vb dptr
-        . . . m sc cosd dptr . . . m sc sind dptr batch n heads hd 0 * 3 dim * 2 dim )
+        = ok & ok ( f5k_split_rope_s . m kit qkv . . m sc qb
+        . . m sc cosd . . m sc sind batch n heads hd 1 * 3 dim 0 )
+        = ok & ok ( f5k_split_rope_s . m kit qkv . . m sc kb
+        . . m sc cosd . . m sc sind batch n heads hd 1 * 3 dim dim )
+        = ok & ok ( f5k_split_rope_s . m kit qkv . . m sc vb
+        . . m sc cosd . . m sc sind batch n heads hd 0 * 3 dim * 2 dim )
         = ok & ok ( gkd_attention . m kit ( __f5m_view . . m sc ob 0 * rows dim )
         ( __f5m_view . . m sc qb 0 * rows dim ) ( __f5m_view . . m sc kb 0 * rows dim )
         ( __f5m_view . . m sc vb 0 * rows dim ) * batch heads n n hd qscale )
-        = ok & ok ( f5k_merge . m kit . . . m sc ob dptr . tmp dptr batch n heads hd )
+        = ok & ok ( f5k_merge . m kit . . m sc ob tmp batch n heads hd )
         = ok & ok ( gkd_gemm . m kit hn tmp ( __f5m_bget . m wo L ) ( __f5m_bget . m bo L )
         1 rows dim dim 1.0 1.0 1 )
-        = ok & ok ( f5k_gated_add . m kit . h dptr . hn dptr . gate_msa dptr rows dim )
+        = ok & ok ( f5k_gated_add . m kit h hn gate_msa rows dim )
 
-        = ok & ok ( f5k_modln . m kit . h dptr . hn dptr . scale_mlp dptr
-        . shift_mlp dptr rows dim 1.0e-6 )
+        = ok & ok ( f5k_modln . m kit h hn scale_mlp
+        shift_mlp rows dim 1.0e-6 )
         = ok & ok ( gkd_gemm . m kit ffb hn ( __f5m_bget . m f1_w L ) ( __f5m_bget . m f1_b L )
         1 rows inner dim 1.0 1.0 1 )
-        = ok & ok ( f5k_gelu_tanh . m kit . ffb dptr * rows inner )
+        = ok & ok ( f5k_gelu_tanh . m kit ffb * rows inner )
         = ok & ok ( gkd_gemm . m kit tmp ffb ( __f5m_bget . m f2_w L ) ( __f5m_bget . m f2_b L )
         1 rows dim inner 1.0 1.0 1 )
-        = ok & ok ( f5k_gated_add . m kit . h dptr . tmp dptr . gate_mlp dptr rows dim )
+        = ok & ok ( f5k_gated_add . m kit h tmp gate_mlp rows dim )
         ? ok {} { ^ F }
         = L + L 1
     }
@@ -1138,7 +1140,7 @@ unsafe @ __f5_forward_in inout F5ModelImpl m → b {
     : GkBuf fmod ( __f5m_view . m mod2_all * . m cur_step * 2 dim * 2 dim )
     : GkBuf fscale ( __f5m_view fmod 0 dim )
     : GkBuf fshift ( __f5m_view fmod dim dim )
-    = ok & ok ( f5k_modln . m kit . h dptr . hn dptr . fscale dptr . fshift dptr
+    = ok & ok ( f5k_modln . m kit h hn fscale fshift
     rows dim 1.0e-6 )
     = ok & ok ( gkd_gemm . m kit predb hn . m po_w . m po_b 1 rows mel dim 1.0 1.0 1 )
     ^ ok

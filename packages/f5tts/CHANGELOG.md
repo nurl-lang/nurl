@@ -3,6 +3,20 @@
 All notable changes to this package are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.5.0] — 2026-10-15
+
+### Changed
+
+- **No `unsafe` left** (6 → 0). Every kernel of the port is a gpukit checked kernel: modulated and affine LayerNorm, the gated residual, the RoPE head split, the head merge, the four activations, the four-position grouped convolution, GRN, and the sampler's odds and ends. Each reaches device memory only through `LD` / `ST`, which check every index against the `GkBuf` it was bound to. The launchers (`f5k_*`) take `GkBuf`s instead of raw device addresses, so the model, the vocoder and the sampler call them as plain safe functions.
+- The unused `f5k_conv1d`, `f5k_conv1d_t`, `f5k_split_rope` and `f5k_dup` are gone.
+- The engine's kit launches asynchronously (`gk_async`). A forward is about 400 launches in one stream, so the host no longer waits for the device between them.
+
+### Verified
+
+- Byte-identical wav output to 0.4.0 for a fixed seed.
+- Against PyTorch: the text encoder and 22-block forward, one guided step, and the whole pipeline (mel and waveform) pass with dumps from `tests/ref_dit.py` / `tests/ref_gen.py`.
+- RTX 4090, 8.4 s of audio: 2076 ms against 2117 ms for 0.4.0 (−2 %, median of 3, interleaved). The device time of the convolution is 1.53 ms per call against 1.58.
+
 ## [0.4.0] — 2026-10-14
 
 ### Changed

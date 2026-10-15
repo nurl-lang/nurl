@@ -23,6 +23,19 @@ raw : GkBuf {
     ? GkMem mem
 }
 
+// A device buffer of 16-bit floats — IEEE half (`bf` F) or bfloat16 (`bf`
+// T) — that a checked kernel reads as floats (gk_call_half_in). A model's
+// weights stay half in device memory: half the bytes is half the traffic
+// of a memory-bound matvec. Its own type rather than a GkBuf dtype, so none
+// of gpukit's ops — every one of them written for 8- and 4-byte elements —
+// can be handed one. `mem` holds the block it lives in.
+raw : GkHBuf {
+    i dptr
+    i n
+    b bf
+    ? GkMem mem
+}
+
 // The owner of one pooled block: its device pointer and the kit whose
 // pool it came from (held, so the kit — and its device — outlive it).
 // A census kit's block is `host` itself — bytes this owner holds, given
