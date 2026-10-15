@@ -646,26 +646,14 @@ extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double*
     = . pg ok F
 }
 
-// A one-shot f64->f32 device converter. gk_dbuf_upload's f32 path converts
-// element-by-element on the HOST (one FFI per element) — fine for a small
-// vector, catastrophic for a large frozen weight (a 30-layer model's ~150M
-// consts turned capture into a >8-minute host loop). Instead: upload the
-// f64 data with a straight memcpy (the fast GK_F64 path) into a transient
-// staging buffer, then convert on the DEVICE.
-unsafe @ __gp_upload_f32 GpuKit kit Tensor t → GkBuf {
-    : i n ( vec_len [f] . t data )
-    : GkBuf out ( gk_dbuf_new kit n GK_F32 )
+// A tensor's values in a new f32 device buffer. gk_dbuf_upload converts a
+// large f32 upload on the device (a staging f64 memcpy and one cast
+// kernel), which a frozen weight needs: element by element on the host, a
+// 30-layer model's ~150M consts took more than 8 minutes to capture.
+@ __gp_upload_f32 GpuKit kit Tensor t → GkBuf {
+    : GkBuf out ( gk_dbuf_new kit ( vec_len [f] . t data ) GK_F32 )
     ? ( gk_buf_ok out ) {} { ^ ( _gp_nobuf ) }
-    : GkBuf stg ( gk_dbuf_new kit n GK_F64 )
-    ? ( gk_buf_ok stg ) {} { ^ ( _gp_nobuf ) }
-    ? ( gk_dbuf_upload kit stg . t data ) {} { ^ ( _gp_nobuf ) }
-    : s src `extern "C" __global__ void gp_f2f(const double* in, float* out, long long n){ long long i = (long long)blockIdx.x * blockDim.x + threadIdx.x; if (i < n) out[i] = (float)in[i]; }`
-    : ( Vec i ) a ( vec_new [i] )
-    ( vec_push [i] a ( gk_arg_dev stg ) )
-    ( vec_push [i] a ( gk_arg_dev out ) )
-    ( vec_push [i] a ( gpu_arg_i64 n ) )
-    : b r ( gk_run_dev kit src `gp_f2f` ( gk_grid n 256 ) 256 a )
-    ? r { ^ out } {}
+    ? ( gk_dbuf_upload kit out . t data ) { ^ out } {}
     ^ ( _gp_nobuf )
 }
 
@@ -908,45 +896,14 @@ unsafe @ __gp_upload_f32 GpuKit kit Tensor t → GkBuf {
 
 // ── bulk f32 transfers ───────────────────────────────────────────────
 //
-// gk_dbuf_upload/download convert f32 buffers on the HOST, one FFI call
-// per element — fine for a norm vector, minutes for the ~100M elements a
-// checkpoint save or a per-step minibatch refresh walks. These stage
-// through a transient f64 device buffer instead: one straight memcpy plus
-// one cast kernel. Every failure path falls back to the host loop —
-// slower, never wrong (a mid-training step can leave too little free VRAM
-// for the staging buffer).
+// f32 transfers: gk_dbuf_upload/download stage a large one through a
+// transient f64 device buffer — one memcpy plus one cast kernel — and fall
+// back to the host loop when the staging buffer cannot be had (slower,
+// never wrong: a mid-training step can leave too little free VRAM).
 
-unsafe @ __gp_dl_f32 GpuKit kit GkBuf b ( Vec f ) dst → b {
-    : i n . b n
-    : GkBuf stg ( gk_dbuf_new kit n GK_F64 )
-    ? ( gk_buf_ok stg ) {} { ^ ( gk_dbuf_download kit b dst ) }
-    : s src `extern "C" __global__ void gp_f2d(const float* in, double* out, long long n){ long long i = (long long)blockIdx.x * blockDim.x + threadIdx.x; if (i < n) out[i] = (double)in[i]; }`
-    : ( Vec i ) a ( vec_new [i] )
-    ( vec_push [i] a ( gk_arg_dev b ) )
-    ( vec_push [i] a ( gk_arg_dev stg ) )
-    ( vec_push [i] a ( gpu_arg_i64 n ) )
-    : ~ b r ( gk_run_dev kit src `gp_f2d` ( gk_grid n 256 ) 256 a )
-    = r & r ( gk_dbuf_download kit stg dst )
-    ? r { ^ T } {}
-    ^ ( gk_dbuf_download kit b dst )
-}
+@ __gp_dl_f32 GpuKit kit GkBuf b ( Vec f ) dst → b { ^ ( gk_dbuf_download kit b dst ) }
 
-// The cast kernel is __gp_upload_f32's gp_f2f — same source, same cache
-// entry — but filling an EXISTING buffer instead of allocating one.
-unsafe @ __gp_ul_f32 GpuKit kit GkBuf b ( Vec f ) src → b {
-    : i n . b n
-    : GkBuf stg ( gk_dbuf_new kit n GK_F64 )
-    ? ( gk_buf_ok stg ) {} { ^ ( gk_dbuf_upload kit b src ) }
-    : ~ b r ( gk_dbuf_upload kit stg src )
-    : s src2 `extern "C" __global__ void gp_f2f(const double* in, float* out, long long n){ long long i = (long long)blockIdx.x * blockDim.x + threadIdx.x; if (i < n) out[i] = (float)in[i]; }`
-    : ( Vec i ) a ( vec_new [i] )
-    ( vec_push [i] a ( gk_arg_dev stg ) )
-    ( vec_push [i] a ( gk_arg_dev b ) )
-    ( vec_push [i] a ( gpu_arg_i64 n ) )
-    = r & r ( gk_run_dev kit src2 `gp_f2f` ( gk_grid n 256 ) 256 a )
-    ? r { ^ T } {}
-    ^ ( gk_dbuf_upload kit b src )
-}
+@ __gp_ul_f32 GpuKit kit GkBuf b ( Vec f ) src → b { ^ ( gk_dbuf_upload kit b src ) }
 
 // dtype-aware transfers: f64 buffers take gk's straight-memcpy path, big
 // f32 buffers the staged cast. The 4096-element floor keeps small vectors

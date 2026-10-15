@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.13.1] — 2026-10-15
+
+### Changed
+
+- The f32 upload / download helpers are plain calls to gpukit 0.11.1's
+  `gk_dbuf_upload` / `gk_dbuf_download`, which do the staged device-side
+  cast themselves: three `unsafe` functions fewer (6 to 3; what stays
+  launches the fused kernels). Every test identical, timings at parity.
+  Requires gpukit 0.11.1.
+
 ## [0.13.0] — 2026-10-14
 
 ### Changed

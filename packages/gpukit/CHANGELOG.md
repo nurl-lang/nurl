@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.11.1] — 2026-10-15
+
+### Performance
+
+- `gk_dbuf_upload` / `gk_dbuf_download` move a large f32 buffer (4096
+  elements and up) through a staging f64 device buffer and one cast
+  kernel — one memcpy instead of one foreign call per element. What grad
+  did for itself with its own kernels is now what every caller gets; the
+  host loop stays as the fallback (no staging memory) and for small
+  buffers.
+
 ## [0.11.0] — 2026-10-14
 
 Requires NURL 0.73.0 with globals set at start and h264–h268 closed.

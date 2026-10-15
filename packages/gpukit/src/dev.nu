@@ -192,6 +192,24 @@ unsafe @ __gk_owned_buf GpuKit h i dptr i n i dtype → GkBuf {
 // Let go of `b` now rather than at the end of its owner's scope.
 @ gk_dbuf_free sink GkBuf b → v {}
 
+// An f32 buffer `b` filled from (`up`) or read into an f64 Vec through a
+// staging f64 buffer and one cast kernel. F when the staging buffer or the
+// kernel is not to be had (the caller takes the host path).
+unsafe @ __gk_f32_dev GpuKit kit GkBuf b ( Vec f ) host b up → b {
+    : i n . b n
+    : GkBuf stg ( gk_dbuf_new kit n GK_F64 )
+    ? ( gk_buf_ok stg ) {} { ^ F }
+    : ( Vec i ) a ( vec_new [i] )
+    ? up {
+        ? ( gk_dbuf_upload kit stg host ) {} { ^ F }
+        ( vec_push [i] a ( gk_arg_dev stg ) ) ( vec_push [i] a ( gk_arg_dev b ) ) ( vec_push [i] a ( gpu_arg_i64 n ) )
+        ^ ( gk_run_dev kit `extern "C" __global__ void gk_d2f(const double* in, float* out, long long n){ long long i = (long long)blockIdx.x * blockDim.x + threadIdx.x; if (i < n) out[i] = (float)in[i]; }` `gk_d2f` ( gk_grid n 256 ) 256 a )
+    } {}
+    ( vec_push [i] a ( gk_arg_dev b ) ) ( vec_push [i] a ( gk_arg_dev stg ) ) ( vec_push [i] a ( gpu_arg_i64 n ) )
+    ? ( gk_run_dev kit `extern "C" __global__ void gk_f2d(const float* in, double* out, long long n){ long long i = (long long)blockIdx.x * blockDim.x + threadIdx.x; if (i < n) out[i] = (double)in[i]; }` `gk_f2d` ( gk_grid n 256 ) 256 a ) {} { ^ F }
+    ^ ( gk_dbuf_download kit stg host )
+}
+
 // Host f64 vector → device (converted to the buffer's element type: f32
 // rounds, i64 truncates like a C cast). Copies min(len(src), b.n) elements;
 // missing elements upload as 0. The direct (non-converting) f64 path is
@@ -204,6 +222,13 @@ unsafe @ gk_dbuf_upload GpuKit kit GkBuf b ( Vec f ) src → b {
     : GpuBuffer gb ( gpu_buffer_view . b dptr * n ( __gk_esz . b dtype ) )
     ? & == . b dtype GK_F64 >= m n {
         ^ == ( gpu_upload gb # *u ( vec_data [f] src ) ) 0
+    } {}
+    // f32 with the whole source in hand: one memcpy into a staging f64
+    // buffer and one cast kernel on the device. The host loop below makes
+    // one foreign call per element — minutes for a model's weights. (Under
+    // 4096 elements the launch costs more than the loop.)
+    ? & & & == . b dtype GK_F32 >= m n >= n 4096 ! ( _gk_census kit ) {
+        ? ( __gk_f32_dev kit b src T ) { ^ T } {}
     } {}
     // stage-convert on the host, then one upload
     : GpuHost stage ( gpu_host_alloc * n ( __gk_esz . b dtype ) )
@@ -229,6 +254,10 @@ unsafe @ gk_dbuf_download GpuKit kit GkBuf b ( Vec f ) dst → b {
     : GpuBuffer gb ( gpu_buffer_view . b dptr * n ( __gk_esz . b dtype ) )
     ? == . b dtype GK_F64 {
         ^ == ( gpu_download # *u ( vec_data [f] dst ) gb ) 0
+    } {}
+    // f32: cast to f64 on the device, then one memcpy (see gk_dbuf_upload).
+    ? & & == . b dtype GK_F32 >= n 4096 ! ( _gk_census kit ) {
+        ? ( __gk_f32_dev kit b dst F ) { ^ T } {}
     } {}
     : GpuHost stage ( gpu_host_alloc * n ( __gk_esz . b dtype ) )
     : *u sp ( gpu_host_ptr stage )
