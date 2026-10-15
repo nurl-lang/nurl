@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.8] — 2026-10-15
+
+- The device ops `gkd_ew` (add / sub / mul / div), `gkd_ew_bc`, `gkd_map` (relu, sigmoid, exp, tanh, sqrt, log, …), `gkd_gather`, `gkd_scatter`, `gkd_softmax_rows` and `gkd_sum` are checked kernels launched by `gk_run_checked_dev`. Every element they read or write is checked against its buffer, and none of them is `unsafe` any more (7 fewer). Their outputs are the same: 12/12 device-layer and 61/61 op-family checks against numpy on both backends, and onnx's static kernels match onnxruntime. With gpu 0.17.4 they are faster on the CPU backend than the raw kernels were.
+- A built checked kernel is held once and shared (`Arc`), so a launch no longer copies its source out of the cache. The kernel name is checked when the kernel is built, not on every launch.
+- Checked kernels' shared helpers sit behind an include guard and their per-buffer macros are `#undef`ined first, so many checked kernels concatenate into one translation unit (onnx's static backend does).
+- The `GkBuf` type family moves to `src/devbuf.nu`, which `dev.nu` and `checked.nu` both import.
+
 ## [0.11.7] — 2026-10-15
 
 - **Block launches in the checked subset.** `gk_run_checked_dev` runs `nblocks` blocks of `block` threads over device buffers, bound with `gk_call_dev` (read and written) or `gk_call_dev_in` (read only). They may be f64, f32 or i64, and nothing is copied. The body also sees `tid`, `bid`, `bdim` and `nblocks`, and may use two new constructs:

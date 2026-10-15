@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.17.4] — 2026-10-15
+
+- CPU backend: a kernel is inlined into its launch loop (`__global__` is `always_inline inline` on the host).
+  - The loop reads the arguments out of the parameter block once, not once per element.
+  - It sets the block and grid coordinates that do not change once per host thread.
+  - It walks (block, thread) as a collapsed loop instead of dividing per element.
+
+  The kernel then reads the coordinates the loop just stored from registers, not thread-local storage, and the compiler vectorises what it can. Per-element arithmetic is unchanged, so results are bit-identical: gpukit's suite against numpy, anomaly's and arima's bit-identity gates, grad's parity tests and onnx's static backend all pass. A 4M-element f64 multiply runs 5× faster (1.45 s → 0.27 s for 50 calls), and 200 000 launches over 256 floats take 1.33 s instead of 1.55 s.
+
 ## [0.17.3] — 2026-10-15
 
 - `__gpu_host_cell`, the bounds check every host-buffer cell access makes, is a plain function: it reads only the buffer's size and never needed `unsafe`. Found by stripping each remaining `unsafe` in gpu, gpukit and nwasm in turn and checking that the compiler still demands it. This was the only one it did not.

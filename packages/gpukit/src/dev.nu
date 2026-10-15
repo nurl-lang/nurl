@@ -31,36 +31,10 @@ $ `stdlib/core/slice.nu`
 $ `gpukit.nu`
 $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
 
-: i GK_F64 0
-: i GK_F32 1
-: i GK_I64 2
-
-// An element-typed device allocation: `dptr`, `n` and `dtype` are plain
-// fields (read them freely), `mem` owns the block. dptr 0 = failed or
-// empty. Every copy of a GkBuf — a struct field, a Vec element, a view
-// into it — holds the block, and its LAST owner hands it back to the
-// kit's pool (gpukit.nu): nothing is freed by hand. gk_dbuf_free is an
-// optional early release of one owner.
-raw : GkBuf {
-    i dptr
-    i n
-    i dtype
-    ? GkMem mem
-}
-
-// The owner of one pooled block: its device pointer and the kit whose
-// pool it came from (held, so the kit — and its device — outlive it).
-// A census kit's block is `host` itself — bytes this owner holds, given
-// back to no pool.
-raw : GkMemImpl { i dptr GpuKit kit ( Vec u ) host }
-
-% Drop GkMemImpl { @ drop GkMemImpl x → v { ? == 0 ( vec_len [u] . x host ) { ( _gk_pool_give . x kit . x dptr ) } {} } }
-
-: GkMem { ( Arc GkMemImpl ) a }
-
-@ GkMem_share GkMem h → GkMem { ^ @ GkMem { ( arc_clone [GkMemImpl] . h a ) } }
-
-@ GkMem_drop sink GkMem h → v {}
+$ `devbuf.nu`  // GkBuf and its owner
+// (After GkBuf: checked.nu binds them. The ops below run as its checked
+// kernels — gk_run_checked_dev.)
+$ `checked.nu`
 
 @ __gk_nomem → ?GkMem { ^ @ ?GkMem { F } }
 
@@ -597,22 +571,18 @@ raw @ __gk_launch_in inout GkState kit GkInfo inf s src s name i grid i block ( 
 // ── Elementwise binary with scalar broadcast ──────────────────────────
 // out[i] = a[i] <op> b[i*bs]; bs = 1 for a full vector, 0 broadcasts b[0].
 
-@ __gkd_ew_src s name s tn s op → String {
-    : String s ( string_from `extern "C" __global__ void ` )
-    ( string_push_str s name )
-    ( string_push_str s `(const ` ) ( string_push_str s tn ) ( string_push_str s `* a, const ` )
-    ( string_push_str s tn ) ( string_push_str s `* b, long long bs, ` )
-    ( string_push_str s tn ) ( string_push_str s `* o, long long n){` )
-    ( string_push_str s `long long i=blockIdx.x*blockDim.x+threadIdx.x;` )
-    ( string_push_str s `if(i<n){o[i]=a[i]` )
+// The kernel, in gpukit's checked subset (gk_run_checked_dev): every
+// element read and written is checked against its buffer.
+@ __gkd_ew_body s op → String {
+    : ~ String s ( string_from `if (gid < n) { ST(o, gid, LD(a, gid) ` )
     ( string_push_str s op )
-    ( string_push_str s `b[i*bs];}}` )
+    ( string_push_str s ` LD(b, gid * bs)); }` )
     ^ s
 }
 
 // `op` is one of + - * / and `opname` an identifier (gk_op_ok,
 // gk_name_ok); F otherwise.
-unsafe @ gkd_ew GpuKit kit s opname s op GkBuf o GkBuf a GkBuf b → b {
+@ gkd_ew GpuKit kit s opname s op GkBuf o GkBuf a GkBuf b → b {
     ? & ( gk_name_ok opname ) ( gk_op_ok op ) {} { ^ F }
     ? & & ( gk_buf_ok o ) ( gk_buf_ok a ) ( gk_buf_ok b ) {} { ^ F }
     ? & == . o dtype . a dtype == . a dtype . b dtype {} { ^ F }
@@ -620,17 +590,13 @@ unsafe @ gkd_ew GpuKit kit s opname s op GkBuf o GkBuf a GkBuf b → b {
     : i bs ? == . b n 1 { 0 } { 1 }
     ? | == . b n 1 == . b n n {} { ^ F }
     ? == . a n n {} { ^ F }
-    : String kname ( string_from ( _gk_pfx . o dtype ) )
+    : ~ String kname ( string_from ( _gk_pfx . o dtype ) )
     ( string_push_str kname opname )
-    : String src ( __gkd_ew_src ( string_data kname ) ( _gk_tname . o dtype ) op )
-    : ( Vec i ) args ( vec_new [i] )
-    ( vec_push [i] args ( gk_arg_dev a ) )
-    ( vec_push [i] args ( gk_arg_dev b ) )
-    ( vec_push [i] args ( gpu_arg_i64 bs ) )
-    ( vec_push [i] args ( gk_arg_dev o ) )
-    ( vec_push [i] args ( gpu_arg_i64 n ) )
-    : b r ( gk_run_dev kit ( string_data src ) ( string_data kname ) ( gk_grid n 256 ) 256 args )
-    ^ r
+    : String body ( __gkd_ew_body op )
+    : ~ GkCall c ( gk_call_new )
+    ( gk_call_dev c `a` a ) ( gk_call_dev c `b` b ) ( gk_call_dev c `o` o )
+    ( gk_call_i64 c `bs` bs ) ( gk_call_i64 c `n` n )
+    ^ ( gk_run_checked_dev kit c ( string_data kname ) ( string_data body ) ( gk_grid n 256 ) 256 )
 }
 
 @ gkd_add GpuKit kit GkBuf o GkBuf a GkBuf b → b { ^ ( gkd_ew kit `add` `+` o a b ) }
@@ -663,38 +629,27 @@ unsafe @ gkd_ew GpuKit kit s opname s op GkBuf o GkBuf a GkBuf b → b {
     ^ off
 }
 
-@ __gkd_ewbc_src s name s tn s op → String {
-    : String s ( string_from `extern "C" __global__ void ` )
-    ( string_push_str s name )
-    ( string_push_str s `(const ` ) ( string_push_str s tn ) ( string_push_str s `* a, const ` )
-    ( string_push_str s tn ) ( string_push_str s `* b, ` )
-    ( string_push_str s tn ) ( string_push_str s `* o, long long n` )
-    : ~ i k 0
-    ~ < k 6 { ( string_push_str s `, long long d` ) ( string_push_char s + 48 k ) = k + k 1 }
-    = k 0
-    ~ < k 6 { ( string_push_str s `, long long A` ) ( string_push_char s + 48 k ) = k + k 1 }
-    = k 0
-    ~ < k 6 { ( string_push_str s `, long long B` ) ( string_push_char s + 48 k ) = k + k 1 }
-    ( string_push_str s `){long long i=blockIdx.x*blockDim.x+threadIdx.x;` )
-    ( string_push_str s `if(i>=n)return;long long t=i,ai=0,bi=0,c;` )
-    = k 5
-    ~ > k 0 {
-        ( string_push_str s `c=t%d` ) ( string_push_char s + 48 k )
-        ( string_push_str s `;t/=d` ) ( string_push_char s + 48 k )
-        ( string_push_str s `;ai+=c*A` ) ( string_push_char s + 48 k )
-        ( string_push_str s `;bi+=c*B` ) ( string_push_char s + 48 k )
-        ( string_push_str s `;` )
-        = k - k 1
-    }
-    ( string_push_str s `c=t;ai+=c*A0;bi+=c*B0;o[i]=a[ai]` )
+// The checked kernel: output element i's coordinates over the six
+// (left-padded) dims give each input's offset through its stride table.
+@ __gkd_ewbc_body s op → String {
+    : ~ String s ( string_from `if (gid < n) {
+    long long t = gid, ai = 0, bi = 0, c = 0;
+    c = t % d5; t /= d5; ai += c * A5; bi += c * B5;
+    c = t % d4; t /= d4; ai += c * A4; bi += c * B4;
+    c = t % d3; t /= d3; ai += c * A3; bi += c * B3;
+    c = t % d2; t /= d2; ai += c * A2; bi += c * B2;
+    c = t % d1; t /= d1; ai += c * A1; bi += c * B1;
+    c = t; ai += c * A0; bi += c * B0;
+    ST(o, gid, LD(a, ai) ` )
     ( string_push_str s op )
-    ( string_push_str s `b[bi];}` )
+    ( string_push_str s ` LD(b, bi));
+}` )
     ^ s
 }
 
 // out over `odims`; a and b read through their stride tables (entries ≥ 0,
 // 0 = broadcast). Float dtypes only.
-unsafe @ gkd_ew_bc GpuKit kit s opname s op GkBuf o GkBuf a GkBuf b ( Vec i ) odims ( Vec i ) astr ( Vec i ) bstr → b {
+@ gkd_ew_bc GpuKit kit s opname s op GkBuf o GkBuf a GkBuf b ( Vec i ) odims ( Vec i ) astr ( Vec i ) bstr → b {
     ? & ( gk_name_ok opname ) ( gk_op_ok op ) {} { ^ F }
     ? & & ( gk_buf_ok o ) ( gk_buf_ok a ) ( gk_buf_ok b ) {} { ^ F }
     ? & == . o dtype . a dtype == . a dtype . b dtype {} { ^ F }
@@ -713,37 +668,32 @@ unsafe @ gkd_ew_bc GpuKit kit s opname s op GkBuf o GkBuf a GkBuf b ( Vec i ) od
     ? good {} { ^ F }
     ? == total . o n {} { ^ F }
     ? & < ( __gk_maxoff odims astr nd ) . a n < ( __gk_maxoff odims bstr nd ) . b n {} { ^ F }
-    : String kname ( string_from ( _gk_pfx . o dtype ) )
+    : ~ String kname ( string_from ( _gk_pfx . o dtype ) )
     ( string_push_str kname `bc` )
     ( string_push_str kname opname )
-    : String src ( __gkd_ewbc_src ( string_data kname ) ( _gk_tname . o dtype ) op )
-    : ( Vec i ) args ( vec_new [i] )
-    ( vec_push [i] args ( gk_arg_dev a ) )
-    ( vec_push [i] args ( gk_arg_dev b ) )
-    ( vec_push [i] args ( gk_arg_dev o ) )
-    ( vec_push [i] args ( gpu_arg_i64 total ) )
+    : String body ( __gkd_ewbc_body op )
+    : ~ GkCall c ( gk_call_new )
+    ( gk_call_dev c `a` a ) ( gk_call_dev c `b` b ) ( gk_call_dev c `o` o )
+    ( gk_call_i64 c `n` total )
     : i pad - 6 nd
     // dims, then a-strides, then b-strides — each left-padded to 6 entries
+    : String dn ( string_from `d0 d1 d2 d3 d4 d5 A0 A1 A2 A3 A4 A5 B0 B1 B2 B3 B4 B5` )
     = k 0
     ~ < k 6 {
         : i dv ? < k pad { 1 } { ( _gk_vi odims - k pad ) }
-        ( vec_push [i] args ( gpu_arg_i64 dv ) )
-        = k + k 1
-    }
-    = k 0
-    ~ < k 6 {
         : i av ? < k pad { 0 } { ( _gk_vi astr - k pad ) }
-        ( vec_push [i] args ( gpu_arg_i64 av ) )
-        = k + k 1
-    }
-    = k 0
-    ~ < k 6 {
         : i bv ? < k pad { 0 } { ( _gk_vi bstr - k pad ) }
-        ( vec_push [i] args ( gpu_arg_i64 bv ) )
+        ( __gkd_dim_arg c `d` k dv ) ( __gkd_dim_arg c `A` k av ) ( __gkd_dim_arg c `B` k bv )
         = k + k 1
     }
-    : b r ( gk_run_dev kit ( string_data src ) ( string_data kname ) ( gk_grid total 256 ) 256 args )
-    ^ r
+    ^ ( gk_run_checked_dev kit c ( string_data kname ) ( string_data body ) ( gk_grid total 256 ) 256 )
+}
+
+// Bind scalar `<p><k>` (d0, A3, …) to `v`.
+@ __gkd_dim_arg inout GkCall c s p i k i v → v {
+    : ~ String nm ( string_from p )
+    ( string_push_int nm k )
+    ( gk_call_i64 c ( string_data nm ) v )
 }
 
 // ── Unary map: out[i] = expr(x) with x = in[i] ────────────────────────
@@ -751,28 +701,21 @@ unsafe @ gkd_ew_bc GpuKit kit s opname s op GkBuf o GkBuf a GkBuf b ( Vec i ) od
 // the helpers below (they pick expf vs exp, …).
 
 // `expr` is checked like gk_map_f's (gk_expr_ok); F otherwise.
-unsafe @ gkd_map GpuKit kit s mapname s expr GkBuf o GkBuf a → b {
+@ gkd_map GpuKit kit s mapname s expr GkBuf o GkBuf a → b {
     ? & ( gk_name_ok mapname ) ( gk_expr_ok expr ) {} { ^ F }
     ? & ( gk_buf_ok o ) ( gk_buf_ok a ) {} { ^ F }
     ? & == . o dtype . a dtype == . o n . a n {} { ^ F }
     : i n . o n
-    : s tn ( _gk_tname . o dtype )
-    : String kname ( string_from ( _gk_pfx . o dtype ) )
+    : ~ String kname ( string_from ( _gk_pfx . o dtype ) )
     ( string_push_str kname mapname )
-    : String src ( string_from `extern "C" __global__ void ` )
-    ( string_push_str src ( string_data kname ) )
-    ( string_push_str src `(const ` ) ( string_push_str src tn ) ( string_push_str src `* in, ` )
-    ( string_push_str src tn ) ( string_push_str src `* o, long long n){` )
-    ( string_push_str src `long long i=blockIdx.x*blockDim.x+threadIdx.x;` )
-    ( string_push_str src `if(i<n){` ) ( string_push_str src tn ) ( string_push_str src ` x=in[i];o[i]=(` )
-    ( string_push_str src expr )
-    ( string_push_str src `);}}` )
-    : ( Vec i ) args ( vec_new [i] )
-    ( vec_push [i] args ( gk_arg_dev a ) )
-    ( vec_push [i] args ( gk_arg_dev o ) )
-    ( vec_push [i] args ( gpu_arg_i64 n ) )
-    : b r ( gk_run_dev kit ( string_data src ) ( string_data kname ) ( gk_grid n 256 ) 256 args )
-    ^ r
+    : ~ String body ( string_from `if (gid < n) { ` )
+    ( string_push_str body ( _gk_tname . o dtype ) )
+    ( string_push_str body ` x = LD(a, gid); ST(o, gid, (` )
+    ( string_push_str body expr )
+    ( string_push_str body `)); }` )
+    : ~ GkCall c ( gk_call_new )
+    ( gk_call_dev c `a` a ) ( gk_call_dev c `o` o ) ( gk_call_i64 c `n` n )
+    ^ ( gk_run_checked_dev kit c ( string_data kname ) ( string_data body ) ( gk_grid n 256 ) 256 )
 }
 
 @ gkd_relu GpuKit kit GkBuf o GkBuf a → b {
@@ -1193,108 +1136,93 @@ unsafe @ gkd_bmm GpuKit kit GkBuf y GkBuf a GkBuf b i batch i m i kk i n i abatc
 // Negative indices wrap once (ONNX semantics). Out-of-range indices read
 // 0 / skip the write — never out of bounds. Any element type.
 
-unsafe @ gkd_gather GpuKit kit GkBuf y GkBuf d GkBuf ix i outer i axin i inner i nidx → b {
+@ gkd_gather GpuKit kit GkBuf y GkBuf d GkBuf ix i outer i axin i inner i nidx → b {
     ? & & & ( gk_buf_ok y ) ( gk_buf_ok d ) ( gk_buf_ok ix ) == . ix dtype GK_I64 {} { ^ F }
     ? == . y dtype . d dtype {} { ^ F }
     ? & & & > outer 0 > axin 0 > inner 0 > nidx 0 {} { ^ F }
     ? & & == . d n ( _gk_p3 outer axin inner ) == . y n ( _gk_p3 outer nidx inner ) >= . ix n nidx {} { ^ F }
-    : s tn ( _gk_tname . y dtype )
-    : String kname ( string_from ( _gk_pfx . y dtype ) )
+    : ~ String kname ( string_from ( _gk_pfx . y dtype ) )
     ( string_push_str kname `gather` )
-    : String src ( string_from `extern "C" __global__ void ` )
-    ( string_push_str src ( string_data kname ) )
-    ( string_push_str src `(const ` ) ( string_push_str src tn ) ( string_push_str src `* D, const long long* ix, ` )
-    ( string_push_str src tn ) ( string_push_str src `* Y, long long axin, long long inner, long long nidx, long long total){` )
-    ( string_push_str src `long long i=blockIdx.x*blockDim.x+threadIdx.x;if(i>=total)return;` )
-    ( string_push_str src `long long ii=i%inner;long long t=i/inner;long long g=t%nidx;long long o=t/nidx;` )
-    ( string_push_str src `long long x=ix[g];if(x<0)x+=axin;` )
-    ( string_push_str src tn ) ( string_push_str src ` v=0;if(x>=0&&x<axin)v=D[(o*axin+x)*inner+ii];Y[i]=v;}` )
     : i total * * outer nidx inner
-    : ( Vec i ) args ( vec_new [i] )
-    ( vec_push [i] args ( gk_arg_dev d ) )
-    ( vec_push [i] args ( gk_arg_dev ix ) )
-    ( vec_push [i] args ( gk_arg_dev y ) )
-    ( vec_push [i] args ( gpu_arg_i64 axin ) )
-    ( vec_push [i] args ( gpu_arg_i64 inner ) )
-    ( vec_push [i] args ( gpu_arg_i64 nidx ) )
-    ( vec_push [i] args ( gpu_arg_i64 total ) )
-    : b r ( gk_run_dev kit ( string_data src ) ( string_data kname ) ( gk_grid total 256 ) 256 args )
-    ^ r
+    : ~ GkCall c ( gk_call_new )
+    ( gk_call_dev c `D` d ) ( gk_call_dev c `ix` ix ) ( gk_call_dev c `Y` y )
+    ( gk_call_i64 c `axin` axin ) ( gk_call_i64 c `inner` inner ) ( gk_call_i64 c `nidx` nidx ) ( gk_call_i64 c `total` total )
+    ^ ( gk_run_checked_dev kit c ( string_data kname ) `if (gid < total) {
+    long long ii = gid % inner;
+    long long t = gid / inner;
+    long long g = t % nidx;
+    long long o = t / nidx;
+    long long x = LD(ix, g);
+    if (x < 0) { x += axin; }
+    if (x >= 0 && x < axin) { ST(Y, gid, LD(D, (o * axin + x) * inner + ii)); } else { ST(Y, gid, 0); }
+}` ( gk_grid total 256 ) 256 )
 }
 
 // y = d with y[outer, ix[g], inner] = u[outer, g, inner]. When several
 // indices collide the surviving write is unspecified (ONNX leaves this
 // undefined too). `y` may be `d` itself for in-place update.
-unsafe @ gkd_scatter GpuKit kit GkBuf y GkBuf d GkBuf ix GkBuf u i outer i ax i inner i nidx → b {
+@ gkd_scatter GpuKit kit GkBuf y GkBuf d GkBuf ix GkBuf u i outer i ax i inner i nidx → b {
     ? & & & ( gk_buf_ok y ) ( gk_buf_ok d ) ( gk_buf_ok ix ) ( gk_buf_ok u ) {} { ^ F }
     ? & & == . y dtype . d dtype == . d dtype . u dtype == . ix dtype GK_I64 {} { ^ F }
     ? & & & > outer 0 > ax 0 > inner 0 > nidx 0 {} { ^ F }
     ? & == . y n . d n == . y n ( _gk_p3 outer ax inner ) {} { ^ F }
     ? & == . u n ( _gk_p3 outer nidx inner ) >= . ix n nidx {} { ^ F }
+    : ~ String kname ( string_from ( _gk_pfx . y dtype ) )
     ? != . y dptr . d dptr {
-        ? == ( gpu_dtod ( gpu_buffer_view . y dptr * . y n ( __gk_esz . y dtype ) ) . d dptr ) 0 {} { ^ F }
+        : ~ String cname ( string_from ( _gk_pfx . y dtype ) )
+        ( string_push_str cname `copy` )
+        : ~ GkCall cc ( gk_call_new )
+        ( gk_call_dev cc `D` d ) ( gk_call_dev cc `Y` y ) ( gk_call_i64 cc `n` . y n )
+        ? ( gk_run_checked_dev kit cc ( string_data cname ) `if (gid < n) { ST(Y, gid, LD(D, gid)); }` ( gk_grid . y n 256 ) 256 ) {} { ^ F }
     } {}
-    : s tn ( _gk_tname . y dtype )
-    : String kname ( string_from ( _gk_pfx . y dtype ) )
     ( string_push_str kname `scatter` )
-    : String src ( string_from `extern "C" __global__ void ` )
-    ( string_push_str src ( string_data kname ) )
-    ( string_push_str src `(` ) ( string_push_str src tn ) ( string_push_str src `* Y, const long long* ix, const ` )
-    ( string_push_str src tn ) ( string_push_str src `* U, long long ax, long long inner, long long nidx, long long total){` )
-    ( string_push_str src `long long i=blockIdx.x*blockDim.x+threadIdx.x;if(i>=total)return;` )
-    ( string_push_str src `long long ii=i%inner;long long t=i/inner;long long g=t%nidx;long long o=t/nidx;` )
-    ( string_push_str src `long long x=ix[g];if(x<0)x+=ax;` )
-    ( string_push_str src `if(x>=0&&x<ax)Y[(o*ax+x)*inner+ii]=U[i];}` )
     : i total * * outer nidx inner
-    : ( Vec i ) args ( vec_new [i] )
-    ( vec_push [i] args ( gk_arg_dev y ) )
-    ( vec_push [i] args ( gk_arg_dev ix ) )
-    ( vec_push [i] args ( gk_arg_dev u ) )
-    ( vec_push [i] args ( gpu_arg_i64 ax ) )
-    ( vec_push [i] args ( gpu_arg_i64 inner ) )
-    ( vec_push [i] args ( gpu_arg_i64 nidx ) )
-    ( vec_push [i] args ( gpu_arg_i64 total ) )
-    : b r ( gk_run_dev kit ( string_data src ) ( string_data kname ) ( gk_grid total 256 ) 256 args )
-    ^ r
+    : ~ GkCall c ( gk_call_new )
+    ( gk_call_dev c `Y` y ) ( gk_call_dev c `ix` ix ) ( gk_call_dev c `U` u )
+    ( gk_call_i64 c `ax` ax ) ( gk_call_i64 c `inner` inner ) ( gk_call_i64 c `nidx` nidx ) ( gk_call_i64 c `total` total )
+    ^ ( gk_run_checked_dev kit c ( string_data kname ) `if (gid < total) {
+    long long ii = gid % inner;
+    long long t = gid / inner;
+    long long g = t % nidx;
+    long long o = t / nidx;
+    long long x = LD(ix, g);
+    if (x < 0) { x += ax; }
+    if (x >= 0 && x < ax) { ST(Y, (o * ax + x) * inner + ii, LD(U, gid)); }
+}` ( gk_grid total 256 ) 256 )
 }
 
 // ── Row softmax: numerically stable, one thread per row ───────────────
 
-unsafe @ gkd_softmax_rows GpuKit kit GkBuf o GkBuf a i rows i cols → b {
+@ gkd_softmax_rows GpuKit kit GkBuf o GkBuf a i rows i cols → b {
     ? & ( gk_buf_ok o ) ( gk_buf_ok a ) {} { ^ F }
     ? & == . o dtype . a dtype == . o n ( _gk_p2 rows cols ) {} { ^ F }
     ? > cols 0 {} { ^ F }  // each row reads its x[0]
     ? == . a n ( _gk_p2 rows cols ) {} { ^ F }
     : s tn ( _gk_tname . o dtype )
     : s ex ? == . o dtype GK_F32 { `expf` } { `exp` }
-    : String kname ( string_from ( _gk_pfx . o dtype ) )
+    : ~ String kname ( string_from ( _gk_pfx . o dtype ) )
     ( string_push_str kname `softmax` )
-    : String src ( string_from `extern "C" __global__ void ` )
-    ( string_push_str src ( string_data kname ) )
-    ( string_push_str src `(const ` ) ( string_push_str src tn ) ( string_push_str src `* a, ` )
-    ( string_push_str src tn ) ( string_push_str src `* o, long long rows, long long cols){` )
-    ( string_push_str src `long long r=blockIdx.x*blockDim.x+threadIdx.x;` )
-    ( string_push_str src `if(r<rows){const ` ) ( string_push_str src tn ) ( string_push_str src `* x=a+r*cols;` )
-    ( string_push_str src tn ) ( string_push_str src `* y=o+r*cols;` )
-    ( string_push_str src tn ) ( string_push_str src ` m=x[0];for(long long k=1;k<cols;k++)if(x[k]>m)m=x[k];` )
-    ( string_push_str src tn ) ( string_push_str src ` s=0;for(long long k=0;k<cols;k++){y[k]=` )
-    ( string_push_str src ex )
-    ( string_push_str src `(x[k]-m);s+=y[k];}` )
-    ( string_push_str src `for(long long k=0;k<cols;k++)y[k]/=s;}}` )
-    : ( Vec i ) args ( vec_new [i] )
-    ( vec_push [i] args ( gk_arg_dev a ) )
-    ( vec_push [i] args ( gk_arg_dev o ) )
-    ( vec_push [i] args ( gpu_arg_i64 rows ) )
-    ( vec_push [i] args ( gpu_arg_i64 cols ) )
-    : b r ( gk_run_dev kit ( string_data src ) ( string_data kname ) ( gk_grid rows 256 ) 256 args )
-    ^ r
+    : ~ String body ( string_from `if (gid < rows) {
+    long long r0 = gid * cols;
+    ` )
+    ( string_push_str body tn ) ( string_push_str body ` m = LD(a, r0);
+    for (long long k = 1; k < cols; k++) { if (LD(a, r0 + k) > m) { m = LD(a, r0 + k); } }
+    ` )
+    ( string_push_str body tn ) ( string_push_str body ` s = 0;
+    for (long long k = 0; k < cols; k++) { ST(o, r0 + k, ` )
+    ( string_push_str body ex ) ( string_push_str body `(LD(a, r0 + k) - m)); s += LD(o, r0 + k); }
+    for (long long k = 0; k < cols; k++) { ST(o, r0 + k, LD(o, r0 + k) / s); }
+}` )
+    : ~ GkCall c ( gk_call_new )
+    ( gk_call_dev c `a` a ) ( gk_call_dev c `o` o ) ( gk_call_i64 c `rows` rows ) ( gk_call_i64 c `cols` cols )
+    ^ ( gk_run_checked_dev kit c ( string_data kname ) ( string_data body ) ( gk_grid rows 256 ) 256 )
 }
 
 // ── Sum reduction (device partials + single-thread combine) ───────────
 // Returns the sum as f64 regardless of the buffer dtype (partials
 // accumulate in the buffer's element type).
 
-unsafe @ gkd_sum GpuKit kit GkBuf a → ?f {
+@ gkd_sum GpuKit kit GkBuf a → ?f {
     ? ( gk_buf_ok a ) {} { ^ @ ?f { F } }
     : i n . a n
     ? <= n 0 { ^ @ ?f { T 0.0 } } {}
@@ -1302,20 +1230,16 @@ unsafe @ gkd_sum GpuKit kit GkBuf a → ?f {
     : GkBuf part ( gk_dbuf_new kit threads . a dtype )
     ? ( gk_buf_ok part ) {} { ^ @ ?f { F } }
     : s tn ( _gk_tname . a dtype )
-    : String kname ( string_from ( _gk_pfx . a dtype ) )
+    : ~ String kname ( string_from ( _gk_pfx . a dtype ) )
     ( string_push_str kname `rsum` )
-    : String src ( string_from `extern "C" __global__ void ` )
-    ( string_push_str src ( string_data kname ) )
-    ( string_push_str src `(const ` ) ( string_push_str src tn ) ( string_push_str src `* in, ` )
-    ( string_push_str src tn ) ( string_push_str src `* partial, long long n){` )
-    ( string_push_str src `long long tid=blockIdx.x*blockDim.x+threadIdx.x;long long stride=gridDim.x*blockDim.x;` )
-    ( string_push_str src tn ) ( string_push_str src ` s=0;for(long long i=tid;i<n;i+=stride)s+=in[i];partial[tid]=s;}` )
-    : ( Vec i ) args ( vec_new [i] )
-    ( vec_push [i] args ( gk_arg_dev a ) )
-    ( vec_push [i] args ( gk_arg_dev part ) )
-    ( vec_push [i] args ( gpu_arg_i64 n ) )
+    : ~ String body ( string_from tn )
+    ( string_push_str body ` s = 0;
+for (long long i = gid; i < n; i += nthreads) { s += LD(in, i); }
+ST(partial, gid, s);` )
+    : ~ GkCall c ( gk_call_new )
+    ( gk_call_dev c `in` a ) ( gk_call_dev c `partial` part ) ( gk_call_i64 c `n` n )
     : i blocks / threads 256
-    : ~ b ok ( gk_run_dev kit ( string_data src ) ( string_data kname ) blocks 256 args )
+    : ~ b ok ( gk_run_checked_dev kit c ( string_data kname ) ( string_data body ) blocks 256 )
     : ~ f acc 0.0
     ? ok {
         : ( Vec f ) host ( _gk_zeros threads )
