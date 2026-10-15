@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.2] — 2026-10-15
+
+### Fixed
+
+- `_gp_run` launched a kernel over whatever argument words it was handed, yet it was declared `unsafe @`, a promise to every caller. A program importing grad could call it from safe code with made-up device addresses. It is now `raw`, and the six launchers that build its arguments from a program's own buffers vouch for them (`unsafe`). Moving these kernels into gpukit's checked subset, which takes the vouching away, is the next step.
+- The f32 and mixed-precision kernel sources were cached lazily in string globals. Two threads training at once could each build one and free the other's while it was launching from it. Both are now built once at start (`( Arc String )`, a few microseconds) and borrowed by every launch.
+
 ## [0.13.1] — 2026-10-15
 
 ### Changed

@@ -484,17 +484,17 @@ extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double*
 // every copy is the same state, and the last owner releases it.
 // The state, for this package's own code.
 // The f32 source is constant but building it runs 10 full-source string
-// passes, so cache it — otherwise _gp_src (called on EVERY kernel launch,
-// though only the NAME feeds gpukit's cache) would regenerate ~15 KB of
-// string ops thousands of times per training and dominate the run.
-: ~ s g_gp_src_f32 ``  // the global owns it (released when the program ends)
+// passes, so it is built once — otherwise _gp_src (called on EVERY kernel
+// launch, though only the NAME feeds gpukit's cache) would regenerate ~15
+// KB of string ops thousands of times per training and dominate the run.
+// Built at start (a few microseconds) and shared: a lazily filled string
+// global was a race between two threads training at once — each could
+// free the string the other was launching from.
+@ __gp_src_f32_make → ( Arc String ) { ^ ( arc_new [String] ( __gp_src_f32 ) ) }
 
-@ __gp_src_f32c → s {
-    ? != 0 ( nurl_str_len g_gp_src_f32 ) { ^ g_gp_src_f32 } {}
-    : String o ( __gp_src_f32 )
-    = g_gp_src_f32 ( nurl_str_cat ( string_data o ) `` )
-    ^ g_gp_src_f32
-}
+: ( Arc String ) g_gp_src_f32 ( __gp_src_f32_make )
+
+@ __gp_src_f32c → s { ^ ( string_data ( arc_get [String] g_gp_src_f32 ) ) }
 
 // MIXED precision (dtype 2): f32 STORAGE, f64 ACCUMULATION. Every buffer
 // pointer (`double*`) becomes `float*` — so val/grad/moment tensors are
@@ -513,14 +513,11 @@ extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double*
     ^ x
 }
 
-: ~ s g_gp_src_mixed ``  // the global owns it (released when the program ends)
+@ __gp_src_mixed_make → ( Arc String ) { ^ ( arc_new [String] ( __gp_src_mixed ) ) }
 
-@ __gp_src_mixedc → s {
-    ? != 0 ( nurl_str_len g_gp_src_mixed ) { ^ g_gp_src_mixed } {}
-    : String o ( __gp_src_mixed )
-    = g_gp_src_mixed ( nurl_str_cat ( string_data o ) `` )
-    ^ g_gp_src_mixed
-}
+: ( Arc String ) g_gp_src_mixed ( __gp_src_mixed_make )
+
+@ __gp_src_mixedc → s { ^ ( string_data ( arc_get [String] g_gp_src_mixed ) ) }
 
 // Kernel source for a program's dtype.
 @ _gp_src inout GProg pg → s {
@@ -931,13 +928,13 @@ extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double*
 
 // ── replay: forward ──────────────────────────────────────────────────
 
-unsafe @ _gp_run inout GProg pg s name i grid i block ( Vec i ) args → b {
+raw @ _gp_run inout GProg pg s name i grid i block ( Vec i ) args → b {
     : String kn ( __gp_kn pg name )
     : b r ( gk_run_dev . pg kit ( _gp_src pg ) ( string_data kn ) grid block args )
     ^ r
 }
 
-@ _gp_fill_buf inout GProg pg GkBuf b f v → b {
+unsafe @ _gp_fill_buf inout GProg pg GkBuf b f v → b {
     : ( Vec i ) a ( vec_new [i] )
     ( vec_push [i] a ( gk_arg_dev b ) )
     ( vec_push [i] a ( gpu_arg_i64 . b n ) )
@@ -947,7 +944,7 @@ unsafe @ _gp_run inout GProg pg s name i grid i block ( Vec i ) args → b {
 }
 
 // One forward launch for node `k`. Leaves are data — nothing to do.
-@ _gp_fwd_node inout GProg pg i k → b {
+unsafe @ _gp_fwd_node inout GProg pg i k → b {
     : GpNode nd ( _gp_node pg k )
     : i op . nd op
     ? <= op ( gop_const ) { ^ T } {}
@@ -1107,7 +1104,7 @@ unsafe @ _gp_run inout GProg pg s name i grid i block ( Vec i ) args → b {
 
 // The out-shaped contribution `src` accumulated into input `dst`'s gradient
 // over the broadcast axes (block at `moff`, odometer size `tfree`).
-@ _gp_accred inout GProg pg GpNode dst GpNode nd GkBuf src i moff i tfree f sgn → b {
+unsafe @ _gp_accred inout GProg pg GpNode dst GpNode nd GkBuf src i moff i tfree f sgn → b {
     : ( Vec i ) a ( vec_new [i] )
     ( vec_push [i] a ( gk_arg_dev . dst grad ) )
     ( vec_push [i] a ( gk_arg_dev src ) )
@@ -1121,7 +1118,7 @@ unsafe @ _gp_run inout GProg pg s name i grid i block ( Vec i ) args → b {
 }
 
 // g (out-shaped) ⊙ other-input → scr, via the ew block at `moff`.
-@ _gp_scr_ew inout GProg pg GpNode nd GkBuf x GkBuf y i moff i op → b {
+unsafe @ _gp_scr_ew inout GProg pg GpNode nd GkBuf x GkBuf y i moff i op → b {
     : ( Vec i ) a ( vec_new [i] )
     ( vec_push [i] a ( gk_arg_dev x ) )
     ( vec_push [i] a ( gk_arg_dev y ) )
@@ -1134,7 +1131,7 @@ unsafe @ _gp_run inout GProg pg s name i grid i block ( Vec i ) args → b {
     ^ r
 }
 
-@ _gp_bwd_node inout GProg pg i k → b {
+unsafe @ _gp_bwd_node inout GProg pg i k → b {
     : GpNode nd ( _gp_node pg k )
     ? == . nd reach 1 {} { ^ T }
     : i op . nd op
@@ -1604,7 +1601,7 @@ unsafe @ _gp_run inout GProg pg s name i grid i block ( Vec i ) args → b {
 
 // The DEVICE half: (clip-scale kernel when clipping) + one gp_opt launch
 // per backward-active parameter. Pure launches — capturable into a graph.
-@ _gpopt_launches inout GpOpt o inout GProg pg → b {
+unsafe @ _gpopt_launches inout GpOpt o inout GProg pg → b {
     : ~ b r T
     ? > . o clip 0.0 {
         : ( Vec i ) a ( vec_new [i] )

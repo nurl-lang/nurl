@@ -15,7 +15,9 @@ $ `stdlib/core/string.nu`
 
 : ~ s g_msg `start`
 
-@ main → i {
+// (`unsafe`: a global that owns a heap string is reachable from every
+// thread, so only code vouching that nothing races on it may hand it one.)
+unsafe @ main → i {
     ( nurl_print g_msg ) ( nurl_print `\n` )
 
     = g_msg `middle`

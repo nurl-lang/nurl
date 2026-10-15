@@ -50,7 +50,9 @@ $ `stdlib/core/string.nu`
 }
 
 // A binding off a mutable string global (copied); the global replaced.
-@ off_global → i {
+// (`unsafe` here and in `note`: only code vouching that nothing races on
+// a global may hand it a string to own.)
+unsafe @ off_global → i {
     = g_name ( nurl_str_cat `ab` `cd` )
     : s saved g_name
     = g_name ( nurl_str_cat `ef` `gh!` )
@@ -65,7 +67,7 @@ $ `stdlib/core/string.nu`
 }
 
 // A join of an owned local and a fresh value, kept in a global.
-@ note s pos s name → v {
+unsafe @ note s pos s name → v {
     : s rec ( nurl_str_cat3 pos ` ` name )
     = g_name ? == 0 ( nurl_str_len g_name ) rec ( nurl_str_cat3 g_name `|` rec )
 }

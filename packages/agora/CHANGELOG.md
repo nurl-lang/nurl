@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.7.0] — 2026-10-15
+
+### Fixed
+
+- The local refusal message (`ag_set_local_refusal`) was a string global that each refusal freed and replaced. Requests resolve on many threads, so a reader could print a message another thread had just freed. It is now a `( Locked String )` set at start, and `ag_local_refusal` returns a copy (`String`, was a view). The compiler now rejects the old form in safe code (h273).
+
 ## [0.6.0] — 2026-10-14
 
 Requires NURL 0.73.0 with globals set at start (`: ( Locked T ) g ( make )`).

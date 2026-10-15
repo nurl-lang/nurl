@@ -315,7 +315,7 @@ static void __nurl_ensure(int n) {
 
 // Compile CUDA-C `src` (entry `name`) to a host shared object and dlopen it.
 // Returns the dlopen handle (0 on failure), analogous to cuda_module_load.
-unsafe @ cpu_compile s src s name → *u {
+raw @ cpu_compile s src s name → *u {
     : String casts ( __parse_casts src name )
     : String c ( string_with_cap + 2048 ( nurl_str_len src ) )
     ( string_push_str c ( __cpu_header ) )
@@ -435,13 +435,13 @@ unsafe @ __copy_words * u dst * u src i bytes → v {
     ~ < k words { ( nurl_poke_i32 dst k ( nurl_peek_i32 src k ) ) = k + k 1 }
 }
 
-unsafe @ cpu_htod i dst * u host i bytes → i { ( __copy_words # *u dst host bytes ) ^ 0 }
+raw @ cpu_htod i dst * u host i bytes → i { ( __copy_words # *u dst host bytes ) ^ 0 }
 
-unsafe @ cpu_dtoh * u host i src i bytes → i { ( __copy_words host # *u src bytes ) ^ 0 }
+raw @ cpu_dtoh * u host i src i bytes → i { ( __copy_words host # *u src bytes ) ^ 0 }
 
 // Run a compiled kernel: `fn` is the __cpu_launch pointer, `params` the same
 // void** array gpu_launch builds for CUDA. 0 == success.
-unsafe @ cpu_launch i fn i params i grid i block → i {
+raw @ cpu_launch i fn i params i grid i block → i {
     ( nurl_cpu_launch # *u fn # *u params grid block )
     ^ 0
 }

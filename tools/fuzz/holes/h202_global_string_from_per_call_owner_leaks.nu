@@ -1,6 +1,7 @@
 // H202: a string module global assigned the result of a call whose ownership is decided per call (a body whose paths disagree — a literal on one, a fresh string on another — or a call compiled after its caller), directly or through a `?` join (`= g ? c ( f n ) `-``), recorded the incoming value as not owned: the fresh string was owned by no one, and every reassignment leaked the one before.
 // Closed: the global takes the owner the call's guard slot proves — the slot is emptied, and the global's flag says whether it held the value; a value lent back from the global's own (`= g ( pick g n )`) is the buffer it already owns, kept rather than freed (gen_assign).
 // main (before this PR): LeakSanitizer, one string per reassignment.
+// Since h273, safe code may not hand a global a string to own at all (another thread could be reading the one the assignment frees), so this probe is rejected; the owning codegen it exercised is covered from `unsafe` code by compiler/tests/owned_string_slot_copies.nu.
 $ `stdlib/core/string.nu`
 
 @ label i n → s {

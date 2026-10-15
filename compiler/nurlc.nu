@@ -1078,6 +1078,10 @@ unsafe @ agg_field_count i syms s ot → i {
 // Names of the mutable string globals that own their buffer (each has a
 // compiler-emitted `<name>__nurlown` flag). `main` releases them on the
 // way out — nothing else can, since a global outlives every scope.
+// (nurlc keeps its working state in `s` globals like this one, and only
+// `unsafe` code may hand a global a string to own — another thread could
+// be reading the one the assignment frees, h273. The compiler runs on one
+// thread, so the functions that do it are `unsafe`, vouching for that.)
 : ~ s g_owned_globals ``
 
 // Globals set once at program start (`: ( Locked T ) g ( make )`), as
@@ -2527,7 +2531,7 @@ unsafe @ emit_coverage_modules s module → b {
 : ~ i g_unsafe_report 0
 : ~ s g_unsafe_list ``
 
-@ note_unsafe_fn s pos s name → v {
+unsafe @ note_unsafe_fn s pos s name → v {
     ? ( bck_trusted_file pos ) { ^ v } {}
     : s rec ( nurl_str_cat3 pos ` ` name )
     = g_unsafe_list ? == 0 ( nurl_str_len g_unsafe_list ) rec ( nurl_str_cat3 g_unsafe_list `\n` rec )
@@ -4064,7 +4068,7 @@ unsafe @ nurl_cg_lbl i h s hint → s {
     }
 }
 
-@ gen_ret i lex i syms i cg → s {
+unsafe @ gen_ret i lex i syms i cg → s {
     // A fall-off value has no `^` token to step over (gen_block_ret).
     : b __ret_imp g_ret_implicit
     = g_ret_implicit F
@@ -5436,7 +5440,70 @@ unsafe @ nurl_cg_lbl i h s hint → s {
     res
 }
 
-@ gen_ident i lex i syms i cg → s {
+// A mutable global every thread can reach: one of a scalar type is read
+// and written with RELAXED (monotonic) atomics. Two plain accesses to it
+// at once are a data race — undefined behaviour, which the program's
+// memory safety does not survive — while relaxed ones are well defined:
+// never torn, ordered by nothing else, and on x86-64 and AArch64 the very
+// same load and store instructions. A bool is a byte in memory; it is
+// accessed as one (LLVM has no atomic i1).
+// The alignment of a scalar global's atomic access, 0 when `ll` is no
+// scalar (an aggregate: those take `unsafe`, __ownglobal_gate).
+@ glob_atomic_align s ll → i {
+    ? | ( seq ll `i64` ) ( seq ll `double` ) { ^ 8 } {}
+    ? | ( seq ll `i32` ) ( seq ll `float` ) { ^ 4 } {}
+    ? ( seq ll `i16` ) { ^ 2 } {}
+    ? | ( seq ll `i8` ) ( seq ll `i1` ) { ^ 1 } {}
+    : i n ( nurl_str_len ll )
+    ? & > n 0 == ( nurl_str_get ll - n 1 ) 42 { ^ 8 } {}
+    ? ( seq ll `ptr` ) { ^ 8 } {}
+    ^ 0
+}
+
+// Is `name` a mutable global read and written atomically?
+@ glob_is_atomic i syms s name s lt → b {
+    ? == 0 ( nurl_sym_len2 syms name `__mutable` ) { ^ F } {}
+    ^ > ( glob_atomic_align ( nurl_llty lt ) ) 0
+}
+
+// The value of global `name` (of type `lt`), loaded.
+@ load_global i syms i cg s lt s name → s {
+    ? ! ( glob_is_atomic syms name lt ) { ^ ( load_var cg lt ( nurl_str_cat `@` name ) ) } {}
+    : s ll ( nurl_llty lt )
+    : s res ( nurl_cg_reg cg )
+    ? ( seq ll `i1` ) {
+        : s bp ( nurl_cg_reg cg )
+        : s by ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print bp ) ( nurl_print ` = bitcast i1* @` ) ( nurl_print name ) ( nurl_print ` to i8*\n` )
+        ( nurl_print `  ` ) ( nurl_print by ) ( nurl_print ` = load atomic i8, i8* ` ) ( nurl_print bp ) ( nurl_print ` monotonic, align 1\n` )
+        ( nurl_print `  ` ) ( nurl_print res ) ( nurl_print ` = trunc i8 ` ) ( nurl_print by ) ( nurl_print ` to i1\n` )
+        ^ res
+    } {}
+    ( nurl_print `  ` ) ( nurl_print res ) ( nurl_print ` = load atomic ` ) ( nurl_print ll ) ( nurl_print `, ` ) ( nurl_print ll )
+    ( nurl_print `* @` ) ( nurl_print name ) ( nurl_print ` monotonic, align ` ) ( nurl_print ( nurl_str_int ( glob_atomic_align ll ) ) ) ( nurl_print `\n` )
+    ^ res
+}
+
+// Store `val` (of type `vt`) into global `name`, without the line's end.
+@ store_global i syms i cg s vt s val s name → v {
+    : s ll ( nurl_llty vt )
+    ? ! ( glob_is_atomic syms name vt ) {
+        ( nurl_print `  store ` ) ( nurl_print ll ) ( nurl_print ` ` ) ( nurl_print val ) ( nurl_print `, ` ) ( nurl_print ll ) ( nurl_print `* @` ) ( nurl_print name )
+        ^ v
+    } {}
+    ? ( seq ll `i1` ) {
+        : s bp ( nurl_cg_reg cg )
+        : s by ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print by ) ( nurl_print ` = zext i1 ` ) ( nurl_print val ) ( nurl_print ` to i8\n` )
+        ( nurl_print `  ` ) ( nurl_print bp ) ( nurl_print ` = bitcast i1* @` ) ( nurl_print name ) ( nurl_print ` to i8*\n` )
+        ( nurl_print `  store atomic i8 ` ) ( nurl_print by ) ( nurl_print `, i8* ` ) ( nurl_print bp ) ( nurl_print ` monotonic, align 1` )
+        ^ v
+    } {}
+    ( nurl_print `  store atomic ` ) ( nurl_print ll ) ( nurl_print ` ` ) ( nurl_print val ) ( nurl_print `, ` ) ( nurl_print ll ) ( nurl_print `* @` ) ( nurl_print name )
+    ( nurl_print ` monotonic, align ` ) ( nurl_print ( nurl_str_int ( glob_atomic_align ll ) ) )
+}
+
+unsafe @ gen_ident i lex i syms i cg → s {
     ? ( is_ident_tok ( nurl_lex_type lex ) )
     { : s name ( nurl_lex_val lex )
         // The identifier's own position, captured before the advance —
@@ -5632,7 +5699,7 @@ unsafe @ nurl_cg_lbl i h s hint → s {
         ^ ? != 0 ( nurl_str_len ptr )
         ( load_var cg lt ptr )
         ? != 0 ( nurl_str_len glb )
-        ( load_var cg lt ( nurl_str_cat `@` name ) )
+        ( load_global syms cg lt name )
         ( nurl_str_cat `%` name )
     }
     { : i ut ( nurl_lex_type lex )
@@ -6485,7 +6552,7 @@ unsafe @ subst_source_raw s src s from s to → s {
 // substituted to `to`. For a thunk, `to` is the impl's NURL type name; for a
 // call-site fn-pointer type, any concrete type works (object-safe ⇒ Self only
 // appears as the receiver, which the caller passes as i8*).
-@ dyn_subst_parts s declTrait s m s to → s {
+unsafe @ dyn_subst_parts s declTrait s m s to → s {
     : s tparam ( nurl_sym_get2 g_trait_syms declTrait `__tparam` )
     : s rawsig ( nurl_sym_get2 g_trait_syms declTrait ( nurl_str_cat `__` ( nurl_str_cat m `__sig` ) ) )
     // Branch form, not a `?`-join with a tracked-ident arm — the join
@@ -7470,7 +7537,7 @@ unsafe @ extract_fn_ptr_return_type s fn_ptr_type → s {
 // The call side of the rule above: a closure-returning call hands its
 // caller an env the caller owns. Publish it for the consuming binding /
 // argument / return.
-@ __clo_tmp_set s v → v { = g_clo_tmp ( nurl_str_cat v `` ) }
+unsafe @ __clo_tmp_set s v → v { = g_clo_tmp ( nurl_str_cat v `` ) }
 
 // The env an owned closure TEMPORARY carries, or `` when `val` is not one.
 // A closure-returning call and a closure-valued `?` / `??` join publish
@@ -11539,6 +11606,12 @@ unsafe @ nurl_lex_peek4_type i h → i {
         ( nurl_sym_def syms `__last_call_forward__` `` )
         ( nurl_sym_def syms `__last_value_borrow__` `` )
         ( nurl_sym_def syms `__last_call_ret_view__` `` )
+        // …but it IS owned, always: handed straight to a call
+        // (`( f ( mem_dup x ) )`), the copy is a temporary the caller
+        // drops after it like any owned call result. With no call name
+        // to ask, the argument path recognises the copy by its register
+        // (SSA: no other value has it). Before, every such copy leaked.
+        ( nurl_sym_def syms `__last_fresh_reg__` r )
         ( nurl_set_last_type ty )
         ^ r
     } {}
@@ -12520,7 +12593,7 @@ unsafe @ __ty_is_callable s ty → b {
 }
 
 // Producer `me` built `sx`.
-@ __sx_publish i me s sx → v {
+unsafe @ __sx_publish i me s sx → v {
     ? == 0 me { ^ } {}
     = g_sx ( nurl_str_cat sx `` )
     = g_sx_at me
@@ -13021,7 +13094,7 @@ unsafe @ bck_check_lit_moves i lex i line i col s what s tab i scmask s moved s 
     } {}
 }
 
-@ gen_call i lex i syms i cg → s {
+unsafe @ gen_call i lex i syms i cg → s {
     // The call's own line — the lexer has moved past `)` by the time a
     // use of a closure binding is noted (bck_note_closure_caps).
     : i __call_line ( nurl_lex_line lex )
@@ -16104,7 +16177,7 @@ unsafe @ bck_check_lit_moves i lex i line i col s what s tab i scmask s moved s 
 // Can no value of type `ty` hold an address — numbers, Strings, Vecs of
 // such, options / results and plain structs of them. A view, a raw
 // pointer, an enum, a library handle or a trait object can.
-@ __ty_no_address s ty0 i depth → b {
+unsafe @ __ty_no_address s ty0 i depth → b {
     ? > depth 6 { ^ F } {}
     : s ty ( nurl_llty ty0 )
     : i n ( nurl_str_len ty )
@@ -17102,7 +17175,7 @@ unsafe @ gen_cond i lex i syms i cg → s {
 // before it consumed the token — by the time a select arm's body is
 // re-lexed the outer lexer has moved past the whole construct, and the
 // sub-lexer knows only its own synthetic buffer.
-@ gen_select i lex i syms i cg i sel_line i sel_col → s {
+unsafe @ gen_select i lex i syms i cg i sel_line i sel_col → s {
     : s __sel_file ( nurl_lex_filename lex )
     ( expect lex TT_LBRACE )  // consume the '{'
 
@@ -19740,7 +19813,7 @@ unsafe @ __sx_close s sx i mind → s {
 
 // A `let` (or an assignment) of `name` to a value whose source expression
 // is `sx`, inside a value block: noted for its tail (g_blk_lets, h216).
-@ __blk_log s name s sx b is_let → v {
+unsafe @ __blk_log s name s sx b is_let → v {
     ? | == 0 g_blk_val_depth == 0 g_srcx_on { ^ v } {}
     : i own ? is_let g_blk_depth ( __blk_owner name )
     // (An assignment to a name no enclosing value block declared is the
@@ -21558,7 +21631,9 @@ unsafe @ mem_path_to_indices s path → s {
     : b __tfo & & == arg_tt TT_DOT != 0 ( nurl_sym_len syms `__last_tmp_field_own__` ) ( __is_handle_ty at )
     ? | __tfo & & & & != 0 g_auto_drop_strings == arg_tt TT_LPAREN | | ( __is_handle_ty at ) __topt & ( __nc_drop_ty at ) == 0 ( nurl_str_starts at `%dyn.` )
     == 0 ( nurl_sym_len syms `__last_value_borrow__` ) == 0 ( nurl_sym_len syms `__last_call_ret_view__` ) {
-        : s __tro ? __tfo ( nurl_sym_get syms `__last_tmp_field_own__` ) ( mem_call_retown syms cg )
+        : ~ s __tro ? __tfo ( nurl_sym_get syms `__last_tmp_field_own__` ) ( mem_call_retown syms cg )
+        // a `( mem_dup x )` copy: owned, with no call to ask (gen_mem_dup)
+        ? & == 0 ( nurl_str_len __tro ) ( seq ( nurl_sym_get syms `__last_fresh_reg__` ) av ) { = __tro `true` } {}
         ? != 0 ( nurl_str_len __tro ) {
             : s __tnk ( mem_arg_not_kept cg call_name fname arg_idx shadowed )
             : ~ s __tc ( nurl_cg_reg cg )
@@ -23179,7 +23254,7 @@ unsafe @ mem_own_add_user_drop i syms i cg s ptr s vt → v {
 // Inside a closure body: `name` (a binding or a field path) goes to
 // `callee` as argument `aix` — an effect of running the closure when it is
 // one of its captures.
-@ __clo_effect_note s name s callee i aix → v {
+unsafe @ __clo_effect_note s name s callee i aix → v {
     ? == 0 ( nurl_str_len g_clo_caps_now ) { ^ } {}
     : i dot ( nurl_str_find name `.` )
     : s root ? > dot 0 ( nurl_str_slice name 0 dot ) ( nurl_str_cat name `` )
@@ -23209,7 +23284,7 @@ unsafe @ mem_own_add_user_drop i syms i cg s ptr s vt → v {
     }
 }
 
-@ bck_note_closure_caps i syms s name i line → v {
+unsafe @ bck_note_closure_caps i syms s name i line → v {
     ? == g_borrowck 0 { ^ v } {}
     // What running it does to its captures (bck_closure_effects_run).
     ( bck_closure_effects_run ( nurl_sym_get2 syms name `__closure_effects` ) line )
@@ -23258,7 +23333,7 @@ unsafe @ mem_own_add_user_drop i syms i cg s ptr s vt → v {
 
 // Remember that `name` is a closure binding carrying captures, for the
 // pre-filter above. Idempotent — a rebound name is already present.
-@ bck_add_cap_name s name → v {
+unsafe @ bck_add_cap_name s name → v {
     ? ( str_contains_word g_bck_cap_names name ) { ^ v } {}
     = g_bck_cap_names ? == 0 ( nurl_str_len g_bck_cap_names )
     ( nurl_str_cat name `` )
@@ -23405,7 +23480,7 @@ unsafe @ __trust_key s path → s {
     ^ ( nurl_str_cat3 ( __trust_key dir ) `/` `\n` )
 }
 
-@ bck_trusted_file s path → b {
+unsafe @ bck_trusted_file s path → b {
     ? == 0 ( nurl_str_len path ) { ^ F } {}
     ? == g_trust_memo 0 {
         = g_trust_memo ( nurl_sym_new )
@@ -23795,7 +23870,7 @@ unsafe @ __rpg_bit i f i k → i {
 }
 
 // Make `fn` the function the next records belong to.
-@ __rpg_enter s fn → v {
+unsafe @ __rpg_enter s fn → v {
     ? ( seq fn g_rpg_cur ) { ^ v } {}
     ? == g_rpg_names 0 { = g_rpg_names ( nurl_sym_new ) } {}
     = g_rpg_cur ( nurl_str_cat fn `` )
@@ -24497,7 +24572,7 @@ unsafe @ __ty_holds_view s ty i depth → b {
 }
 
 // Stash `name` (consumed at `line`) for the current statement.
-@ bck_stash_move s name i line s cause → v {
+unsafe @ bck_stash_move s name i line s cause → v {
     // Inside a closure body the record cannot go into the enclosing
     // function's statement list, but the FACT that this name was
     // consumed still matters to whoever captured it — keep the name.
@@ -24836,7 +24911,7 @@ unsafe @ bck_swap_char s str i from i to → s {
 
 // RHS reads and call effects belong to the old binding. Installing the
 // result revives the destination only after those effects have applied.
-@ bck_record_binding s kind s name i line i cls s lty → v {
+unsafe @ bck_record_binding s kind s name i line i cls s lty → v {
     = g_bck_bind_scalar cls
     // (A view that owns nothing — a struct of views, a Slice — is marked
     // `w`: no storage of its own for a result to point into.)
@@ -27718,7 +27793,7 @@ unsafe @ bck_sx_split s args → s {
 }
 
 // `name` (a binding or a field path) holds an `( Rc T )` of type `ty`.
-@ bck_note_rc_arg s name s ty → v {
+unsafe @ bck_note_rc_arg s name s ty → v {
     ? | == g_borrowck 0 != g_bck_rec_off 0 { ^ } {}
     ? == 0 ( nurl_str_starts ( nurl_llty ty ) `%Rc__` ) { ^ } {}
     : s w ( nurl_str_cat3 name `=` ( nurl_llty ty ) )
@@ -28655,7 +28730,7 @@ unsafe @ bck_loop_mask s pre s post → s {
 
 // Walk every parked function, now that every summary is final. Called
 // from main() beside resolve_pending_escapes.
-@ resolve_deferred_borrowck → v {
+unsafe @ resolve_deferred_borrowck → v {
     ? == g_borrowck 0 { ^ } {}
     : s ns ( nurl_sym_get g_deferred_bck `n` )
     ? == 0 ( nurl_str_len ns ) { ^ } {}
@@ -28685,7 +28760,7 @@ unsafe @ bck_loop_mask s pre s post → s {
 // body is fully parsed — runs the analyze walk over the captured
 // statement list. No-op when --borrowck is off. `lex` gives the
 // source filename; `syms` gives the function's parameter names.
-@ borrowck_fn_end i lex i syms s fname → v {
+unsafe @ borrowck_fn_end i lex i syms s fname → v {
     ? == g_borrowck 0 {} {
         ( nurl_sym_set g_bck `file` ( nurl_lex_filename lex ) )
         = g_bck_own_params ( nurl_str_cat ( nurl_sym_get syms `__fn_ownstr_params__` ) `` )
@@ -29282,7 +29357,7 @@ unsafe @ bck_loop_mask s pre s post → s {
     ^ ``
 }
 
-@ gen_let_or_struct i lex i syms i cg → s {
+unsafe @ gen_let_or_struct i lex i syms i cg → s {
     // One statement's worth of lifetime — see g_init_terminated.
     = g_init_terminated 0
     // Borrow checker: source line of the `:` token, for the record.
@@ -29924,7 +29999,7 @@ unsafe @ bck_loop_mask s pre s post → s {
     }
 }
 
-@ gen_assign i lex i syms i cg → s {
+unsafe @ gen_assign i lex i syms i cg → s {
     // Borrow checker: source line of the `=` token.
     : i bck_line ( nurl_lex_line lex )
     ( nurl_lex_advance lex )
@@ -30402,11 +30477,13 @@ unsafe @ bck_loop_mask s pre s post → s {
             : s __gk ( nurl_cg_reg cg )
             : s __gs ( nurl_cg_reg cg )
             : s __gfin ( nurl_cg_reg cg )
+            // (Relaxed atomics, as for every scalar global: the flag and
+            // the old pointer are words other threads may touch at once.)
             ( nurl_print `  ` ) ( nurl_print __gf )
-            ( nurl_print ` = load i64, i64* @` ) ( nurl_print name )
-            ( nurl_print `__nurlown\n` )
+            ( nurl_print ` = load atomic i64, i64* @` ) ( nurl_print name )
+            ( nurl_print `__nurlown monotonic, align 8\n` )
             ( nurl_print `  ` ) ( nurl_print __go )
-            ( nurl_print ` = load i8*, i8** @` ) ( nurl_print name ) ( nurl_print `\n` )
+            ( nurl_print ` = load atomic i8*, i8** @` ) ( nurl_print name ) ( nurl_print ` monotonic, align 8\n` )
             ( nurl_print `  ` ) ( nurl_print __gc )
             ( nurl_print ` = icmp ne i64 ` ) ( nurl_print __gf ) ( nurl_print `, 0\n` )
             ( nurl_print `  ` ) ( nurl_print __gsm )
@@ -30430,6 +30507,15 @@ unsafe @ bck_loop_mask s pre s post → s {
             // reassignment leaked the previous one (h202).
             : ~ s __gi ( nurl_str_cat ? | lhs_glob_owned rhs_is_owned_call2 `1` `0` `` )
             : s __ggd ( nurl_sym_get syms `__last_call_guard__` )
+            // Safe code never hands a global a string to own. Every thread
+            // can read the global, and the next assignment frees what it
+            // owns — under a reader in another thread (h273). Text that
+            // changes at run time lives in a `( Locked String )` set at
+            // start; an `unsafe` function may still store an owned string
+            // here, vouching that nothing races on the global.
+            ? & & ( bck_sound ) ! ( bck_unsafe_ctx ) | | lhs_glob_owned rhs_is_owned_call2 & ! rhs_is_owned_call2 != 0 ( nurl_str_len __ggd ) {
+                ( die lex ( nurl_str_cat3 `the global '` name `' would own this string, and every thread can read it: the next assignment frees the string it owns, under a reader in another thread. A mutable 's' global holds literals in safe code. Keep text that changes at run time in a '( Locked String )' global set at start (': ( Locked String ) g ( make )'), or assign it from an 'unsafe' function, which vouches that nothing races on it.` ) )
+            } {}
             ? & & ! lhs_glob_owned ! rhs_is_owned_call2 != 0 ( nurl_str_len __ggd ) {
                 : s __gv ( nurl_cg_reg cg )
                 : s __gn ( nurl_cg_reg cg )
@@ -30445,8 +30531,8 @@ unsafe @ bck_loop_mask s pre s post → s {
             ( nurl_print `  ` ) ( nurl_print __gfin )
             ( nurl_print ` = select i1 ` ) ( nurl_print __gsm ) ( nurl_print `, i64 ` ) ( nurl_print __gf )
             ( nurl_print `, i64 ` ) ( nurl_print __gi ) ( nurl_print `\n` )
-            ( nurl_print `  store i64 ` ) ( nurl_print __gfin )
-            ( nurl_print `, i64* @` ) ( nurl_print name ) ( nurl_print `__nurlown\n` )
+            ( nurl_print `  store atomic i64 ` ) ( nurl_print __gfin )
+            ( nurl_print `, i64* @` ) ( nurl_print name ) ( nurl_print `__nurlown monotonic, align 8\n` )
         }
         {}
         // Same for a moved user `% Drop` binding: `= name x` transfers x's
@@ -30634,9 +30720,7 @@ unsafe @ bck_loop_mask s pre s post → s {
             ( nurl_print `* ` ) ( nurl_print ptr ) ( emit_dbg_line_eol bck_line )
         }
         { ? != 0 ( nurl_str_len glb )
-            { ( nurl_print `  store ` ) ( nurl_print ( nurl_llty vt ) ) ( nurl_print ` ` )
-                ( nurl_print store_val ) ( nurl_print `, ` ) ( nurl_print ( nurl_llty vt ) )
-                ( nurl_print `* @` ) ( nurl_print name ) ( emit_dbg_line_eol bck_line )
+            { ( store_global syms cg vt store_val name ) ( emit_dbg_line_eol bck_line )
             }
             {  // No alloca, no global: the target does not exist. This
                 // used to fall through SILENTLY — the RHS was evaluated
@@ -31141,6 +31225,9 @@ unsafe @ bck_loop_mask s pre s post → s {
 @ __ownglobal_gate i lex i syms s name → v {
     ? | == 0 ( nurl_sym_len2 syms name `__ownglobal` ) ! ( bck_sound ) { ^ v } {}
     ? ( bck_unsafe_ctx ) { ^ v } {}
+    ? != 0 ( nurl_sym_len2 syms name `__aggglobal` ) {
+        ( die lex ( nurl_str_cat3 `the global '` name `' is a mutable struct (or option), and every thread can reach it: no single atomic access covers more than one word, so a read here racing a write elsewhere sees half of each. Keep it in a '( Locked T )' global set at start (': ( Locked T ) g ( make )'), or reach it only from an 'unsafe' function ('unsafe @ name …'), which vouches that the program does not race on it.` ) )
+    } {}
     ( die lex ( nurl_str_cat3 `the global '` name `' owns what it holds (a String, a Vec, a handle, a struct of them), and every thread can reach it: a read here could see a value another thread is replacing and dropping. Reach it from an 'unsafe' function ('unsafe @ name …'), which vouches that the program does not race on it, and give the rest of the program a safe accessor.` ) )
 }
 
@@ -32165,7 +32252,7 @@ unsafe @ __ty_holds_addr s ty i depth → b {
 : ~ i g_dead_payload 0
 
 // A cast of a fresh allocation is that allocation (g_last_alloc_reg).
-@ gen_cast i lex i syms i cg → s {
+unsafe @ gen_cast i lex i syms i cg → s {
     = g_cast_fresh_in 0
     : s r ( __gen_cast_body lex syms cg )
     ? != 0 g_cast_fresh_in {
@@ -32826,7 +32913,7 @@ unsafe @ __ty_holds_addr s ty i depth → b {
 
 // ── Member . obj field|index ───────────────────────────────────────
 
-@ gen_member i lex i syms i cg → s {
+unsafe @ gen_member i lex i syms i cg → s {
     ( nurl_lex_advance lex )
     : i __mb_tt ( nurl_lex_type lex )
     : s __mb_val ( nurl_str_cat ( nurl_lex_val lex ) `` )
@@ -33124,7 +33211,7 @@ unsafe @ __ty_holds_addr s ty i depth → b {
                             : s idx_val ? != 0 ( nurl_str_len idx_ptr )
                             ( load_var cg idx_lt idx_ptr )
                             ? != 0 ( nurl_str_len idx_glb )
-                            ( load_var cg idx_lt ( nurl_str_cat `@` fname ) )
+                            ( load_global syms cg idx_lt fname )
                             ( nurl_str_cat `%` fname )
                             // Extract data pointer from slice aggregate
                             : s data_ptr ( nurl_cg_reg cg )
@@ -36588,7 +36675,7 @@ unsafe @ __thr_peel s lty → s {
 // binding still named later (a Vec the thread fills for the spawner) stays
 // shared, as before. A closure bound to a name counts only when the rest of
 // the function hands that name to a spawn.
-@ __clo_detach_moves i lex i syms s caps b lit s bind → s {
+unsafe @ __clo_detach_moves i lex i syms s caps b lit s bind → s {
     ? & ! lit == 0 ( nurl_str_len bind ) { ^ ( nurl_str_cat `` `` ) } {}
     : s hp ( nurl_sym_get syms `__fn_hdr_pos__` )
     ? | == 0 ( nurl_str_len hp ) ! ( seq ( nurl_sym_get syms `__fn_hdr_lex__` ) ( nurl_str_int lex ) ) { ^ ( nurl_str_cat `` `` ) } {}
@@ -36652,7 +36739,7 @@ unsafe @ __thr_peel s lty → s {
 // A closure body is its own function, never a destructor: the drop glue a
 // `% Drop` impl (or a library handle's drop hook) ends with belongs to the
 // impl's receiver, not to whatever the closure's first slot holds.
-@ gen_closure_expr i lex i syms i cg → s {
+unsafe @ gen_closure_expr i lex i syms i cg → s {
     : s __glue_saved ( nurl_str_cat g_drop_glue_ty `` )
     = g_drop_glue_ty ``
     = g_last_alloc_reg ``
@@ -36664,7 +36751,7 @@ unsafe @ __thr_peel s lty → s {
     ^ r
 }
 
-@ __gen_closure_expr i lex i syms i cg → s {
+unsafe @ __gen_closure_expr i lex i syms i cg → s {
     // This literal's number as a source-expression producer: what the
     // views it captures point into (__cap_sx).
     : i __sx_me ( __sx_enter )
@@ -40603,7 +40690,7 @@ unsafe @ __tok_src_text i lex → s {
 // quadratic in the line a template sits on, paid per instantiation.
 : ~ s g_nl_buf ``
 
-@ __nl_pad i n → s {
+unsafe @ __nl_pad i n → s {
     ? <= n 0 { ^ ( nurl_str_cat `` `` ) } {}
     ~ < ( nurl_str_len g_nl_buf ) n { = g_nl_buf ( nurl_str_cat3 g_nl_buf g_nl_buf `\n` ) }
     ^ ( nurl_str_slice g_nl_buf 0 n )
@@ -41038,7 +41125,7 @@ unsafe @ check_type_known i lex i syms s llvm_ty s ctx i tline i tcol → v {
     ` — every parameter is substituted by position, so a different count leaves a parameter unsubstituted in the emitted type (or mangles a reference to a type nothing defines). Write one type argument per declared parameter.` ) ) )
 }
 
-@ ensure_struct_instantiated i syms s sname s ta_list → v {
+unsafe @ ensure_struct_instantiated i syms s sname s ta_list → v {
     : s tparams ( nurl_sym_get2 g_generic_struct_syms sname `__stparams` )
     ? != 0 ( nurl_str_len tparams ) {
         // Skip tparam-only instantiations: they appear inside generic
@@ -41438,7 +41525,7 @@ unsafe @ __ha_is_ret s line → b {
 // the clone. They keep calling `@f`, i.e. they re-enter through the
 // dispatcher — one correctly-predicted branch per recursion, against
 // the alternative of rewriting call sites inside IR text.
-@ emit_multiversion s fn_ir s lname s ret_ll s params → v {
+unsafe @ emit_multiversion s fn_ir s lname s ret_ll s params → v {
     // Everything from "\nentry:\n" onwards is the body, verbatim. The
     // header is rebuilt rather than patched: the caller still holds the
     // three pieces it was printed from, so there is nothing to parse.
@@ -41714,7 +41801,7 @@ unsafe @ __lazy_scan → v {
 
 // Compile one stored function, in the file and on the lines it was
 // written on (the same re-parse a generic instantiation makes).
-@ __lazy_emit s fname i syms i cg → v {
+unsafe @ __lazy_emit s fname i syms i cg → v {
     ? != 0 g_lazy_trace { ( nurl_eprintln ( nurl_str_cat `nurlc: lazy function compiled late (not reached by lazy_reach): ` fname ) ) } {}
     : s src ( nurl_sym_get2 g_lazy fname `__src` )
     : s raw ( nurl_sym_get2 g_lazy fname `__raw` )
@@ -41741,7 +41828,7 @@ unsafe @ __lazy_scan → v {
 
 // Generic instances and lazy functions demand each other: flush the
 // instances, compile what the module now refers to, until neither grows.
-@ lazy_flush i syms i cg → v {
+unsafe @ lazy_flush i syms i cg → v {
     ~ T {
         ( flush_deferred_instantiations syms cg )
         ? == g_lazy 0 { ^ } {}
@@ -41837,7 +41924,7 @@ unsafe @ __lazy_scan → v {
         `. A declaration is '@ name params → ret { body }' — parameters are 'type name' pairs and the return type follows '→'. E.g. '@ add i a i b → i { ^ + a b }'. For a generic, the type list goes right after the name: '@ push [A] ( Vec A ) v A x → v { ... }'.` ) ) }
 }
 
-@ gen_fn_decl_concrete s fname i lex i syms i cg → v {
+unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     = g_vctl_seen 0
     ( nurl_cg_reset cg )
     // Where this function starts, for a forward scan of its body
@@ -43250,9 +43337,9 @@ unsafe @ __alloca_struct_params i syms i cg → v {
         : s n ( nurl_str_int k )
         = k + k 1
         ( nurl_print `  %_gf` ) ( nurl_print n )
-        ( nurl_print ` = load i64, i64* @` ) ( nurl_print g ) ( nurl_print `__nurlown\n` )
+        ( nurl_print ` = load atomic i64, i64* @` ) ( nurl_print g ) ( nurl_print `__nurlown monotonic, align 8\n` )
         ( nurl_print `  %_gv` ) ( nurl_print n )
-        ( nurl_print ` = load i8*, i8** @` ) ( nurl_print g ) ( nurl_print `\n` )
+        ( nurl_print ` = load atomic i8*, i8** @` ) ( nurl_print g ) ( nurl_print ` monotonic, align 8\n` )
         ( nurl_print `  %_gc` ) ( nurl_print n )
         ( nurl_print ` = icmp ne i64 %_gf` ) ( nurl_print n ) ( nurl_print `, 0\n` )
         ( nurl_print `  %_gs` ) ( nurl_print n )
@@ -43609,7 +43696,7 @@ unsafe @ __check_value_type_defined i lex i syms s llvm_ty s ctx i tline i tcol 
     ^ 0
 }
 
-@ gen_const_decl s ty_tok b is_mutable i lex i syms i ty_line i ty_col → v {
+unsafe @ gen_const_decl s ty_tok b is_mutable i lex i syms i ty_line i ty_col → v {
     // Where to anchor a bad type: the caller consumed the type token before
     // handing it over, so this is the NAME slot that follows it — one token
     // to the right of the mistake and on its line, which is what the reader
@@ -43706,7 +43793,17 @@ unsafe @ __check_value_type_defined i lex i syms s llvm_ty s ctx i tline i tcol 
                 ( nurl_sym_def syms ( nurl_str_cat cname `__ptr` ) ( nurl_str_cat `@` cname ) )
                 ( nurl_sym_def syms ( nurl_str_cat cname `__inout` ) `1` )
                 ( nurl_sym_def syms ( nurl_str_cat cname `__ownglobal` ) `1` )
-            } {}
+            } {
+                // A mutable global of a struct or an option of plain values
+                // owns nothing, but it is still more than one word: no
+                // atomic covers it, and a read racing a write sees half of
+                // each. Only an `unsafe` function reaches it, like one that
+                // owns something.
+                ? & is_mutable == 0 ( glob_atomic_align ( nurl_llty lt ) ) {
+                    ( nurl_sym_def syms ( nurl_str_cat cname `__ownglobal` ) `1` )
+                    ( nurl_sym_def syms ( nurl_str_cat cname `__aggglobal` ) `1` )
+                } {}
+            }
             // TEMPORARILY DISABLED: ( nurl_sym_def syms ( nurl_str_cat cname `__newsyntax` ) `1` )
         }
         // `: ( Locked T ) g ( make )` — a global set once at program start
@@ -44495,7 +44592,7 @@ unsafe @ __opt_err_mangle s e → s {
 : ~ s g_hmemo_log ``
 : ~ i g_hmemo_depth 0
 
-@ __hmemo_open s key → i {
+unsafe @ __hmemo_open s key → i {
     : i mark ( nurl_str_len g_hmemo_log )
     ( nurl_sym_def g_impl_name_syms key `1` )
     = g_hmemo_log ( nurl_str_cat3 g_hmemo_log key ` ` )
@@ -44503,7 +44600,7 @@ unsafe @ __opt_err_mangle s e → s {
     ^ mark
 }
 
-@ __hmemo_close s key i mark b r → v {
+unsafe @ __hmemo_close s key i mark b r → v {
     = g_hmemo_depth - g_hmemo_depth 1
     ? ! r {
         : s since ( nurl_str_slice g_hmemo_log mark - ( nurl_str_len g_hmemo_log ) mark )
@@ -47428,7 +47525,7 @@ unsafe @ __sx_names_capture i syms s sx → b {
 // a callee that keeps it): the env takes it over from the enclosing binding
 // (gen_env_allocation), and every use of the closure may consume it — a
 // second call is a use after the move (bck_note_closure_caps).
-@ __clo_take_capture i syms s name → v {
+unsafe @ __clo_take_capture i syms s name → v {
     : s cc ( nurl_sym_get syms `__clo_consumed__` )
     ? ! ( str_contains_word cc name ) { ( nurl_sym_set_deep syms `__clo_consumed__` ( nurl_str_cat3 cc ` ` name ) ) } {}
     ? & != g_borrowck 0 ! ( str_contains_word g_closure_consumed name ) {
@@ -48659,7 +48756,7 @@ unsafe @ alias_rewrite_source s src s names s prefix → s {
 // fields), then again to actually emit the function. The two passes
 // share `syms` so the rescan's emitted instantiations are visible to
 // the body-parsing pass.
-@ emit_one_instantiation s fname s mangled s type_args s caller_file s caller_line s caller_col i syms i cg → v {
+unsafe @ emit_one_instantiation s fname s mangled s type_args s caller_file s caller_line s caller_col i syms i cg → v {
     : s tparams ( nurl_sym_get2 g_generic_syms fname `__tparams` )
     : s gsrc ( nurl_sym_get2 g_generic_syms fname `__gsrc` )
     // No stored template for this name: the call site referenced a
@@ -51215,7 +51312,7 @@ unsafe @ __body_end_note i lex i at i stop → v {
 // register_missing_defaults: for each of a trait's default methods that the
 // impl did NOT override, register a dispatch entry (method##ImplLLVM →
 // ret_ty) so that call sites resolve. Called after the whole signature scan.
-@ register_missing_defaults i lex s tname s impl_nurl s impl_llvm s impl_mangle s provided s bindings i syms → v {
+unsafe @ register_missing_defaults i lex s tname s impl_nurl s impl_llvm s impl_mangle s provided s bindings i syms → v {
     : s tparam ( nurl_sym_get2 g_trait_syms tname `__tparam` )
     : ~ s defaults ( nurl_sym_get2 g_trait_syms tname `__defaults` )
     ~ != 0 ( nurl_str_len defaults ) {
@@ -51329,7 +51426,7 @@ unsafe @ __body_end_note i lex i at i stop → v {
 // For trait_decl: stores default-method templates in g_trait_syms.
 // For impl_decl: register explicit method signatures, then defer contract
 // checks and default registration until every trait declaration is known.
-@ scan_impl_decl i lex i syms → v {
+unsafe @ scan_impl_decl i lex i syms → v {
     : i impl_pos ( nurl_lex_cur_start lex )
     ( nurl_lex_advance lex )  // skip '%'
     : s tname ( nurl_lex_val lex )
@@ -51638,7 +51735,7 @@ unsafe @ __ptypes_tail s pt → s {
 // applies to a default body. Both sides are then lowered by the SAME scanner
 // the impl's own registration went through, so the comparison is of lowered
 // types and conventions (`inout` included), not of source spelling.
-@ __impl_sig_check i lex s tname s mname s impl_nurl s impl_llvm s ty s tparam s bindings → v {
+unsafe @ __impl_sig_check i lex s tname s mname s impl_nurl s impl_llvm s ty s tparam s bindings → v {
     : s sig ( nurl_sym_get2 g_trait_syms tname ( nurl_str_cat3 `__` mname `__sig` ) )
     ? == 0 ( nurl_str_len sig ) { ^ } {}
     // A type parameter with no Self name to put in its place (a compound impl
@@ -51761,7 +51858,7 @@ unsafe @ __ptypes_tail s pt → s {
 // emit_missing_defaults: for each trait default not overridden by the impl,
 // splice "T" → impl's NURL type name into the stored template, prepend
 // "@ mname__ImplMangle", and re-lex/emit via gen_fn_decl.
-@ emit_missing_defaults s tname s impl_nurl s impl_mangle s provided s bindings i syms i cg → v {
+unsafe @ emit_missing_defaults s tname s impl_nurl s impl_mangle s provided s bindings i syms i cg → v {
     : s tparam ( nurl_sym_get2 g_trait_syms tname `__tparam` )
     : ~ s defaults ( nurl_sym_get2 g_trait_syms tname `__defaults` )
     ~ != 0 ( nurl_str_len defaults ) {
@@ -51835,7 +51932,7 @@ unsafe @ __ptypes_tail s pt → s {
 
 // dyn_note_needed: add `tname` to the set of traits that need a fat-pointer
 // type + Drop impl emitted. Idempotent (set semantics over g_dyn_needed).
-@ dyn_note_needed s tname → v {
+unsafe @ dyn_note_needed s tname → v {
     // Copy into the global accumulator: tname is a borrowed parameter,
     // and the caller's owning binding is dropped at ITS scope exit —
     // storing the bare pointer left g_dyn_needed reading freed trait
@@ -51878,7 +51975,7 @@ unsafe @ __ptypes_tail s pt → s {
 
 @ __dyn_flat_reset → v { = g_dyn_flat_out `` = g_dyn_flat_seen `` }
 
-@ __dyn_flat_add s vtTrait s declTrait → v {
+unsafe @ __dyn_flat_add s vtTrait s declTrait → v {
     : ~ s ms ( nurl_sym_get2 g_trait_syms declTrait `__methods` )
     ~ != 0 ( nurl_str_len ms ) {
         : s m ( str_first_word ms ) = ms ( str_skip_word ms )
@@ -51931,7 +52028,7 @@ unsafe @ __ptypes_tail s pt → s {
 
 // dyn_method_decltrait: which trait (the object's own or a supertrait) declares
 // method `m` — used to read the method's signature for the call/thunk type.
-@ dyn_method_decltrait s tname s m → s {
+unsafe @ dyn_method_decltrait s tname s m → s {
     ( __dyn_flat_reset )
     // Own a copy so the cursor is TRACKED (the __ptypes_nth idiom):
     // dyn_flat_methods returns a BORROW of its global accumulator, and
@@ -52301,7 +52398,7 @@ unsafe @ __ptypes_tail s pt → s {
 // gen_trait_or_impl: emit IR for a % trait/impl declaration.
 // Trait decls emit no IR directly. Impl decls emit explicit methods and then
 // synthesize specialised copies of any trait default methods the impl omitted.
-@ gen_trait_or_impl i lex i syms i cg → v {
+unsafe @ gen_trait_or_impl i lex i syms i cg → v {
     // Grammar v2.0+: `pub` on trait/impl decls is accepted (forward-
     // compat) but not yet enforced — trait methods are mangled at
     // emission so cross-file dispatch is type-driven, not name-
@@ -56572,7 +56669,7 @@ unsafe @ split_emit_module i n i mlen → v {
     ( nurl_print `source-to-binary build use ./nurl.sh <file.nu> [output].\n` )
 }
 
-@ __compile_pipeline s src s path i syms i cg → v {
+unsafe @ __compile_pipeline s src s path i syms i cg → v {
     : ~ i compile_error 0
     // Collect the whole module into one buffering frame so the
     // dead-function pass can decide what actually reaches stdout (see

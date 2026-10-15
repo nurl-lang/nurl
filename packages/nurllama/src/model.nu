@@ -691,12 +691,24 @@ unsafe @ __lm_q8_repack inout LlmImpl m GpuBuffer src GpuBuffer dst i nb i nblk 
     }
 }
 
-@ __lm_upload_layer inout LlmImpl m Gguf gg i layer s suffix ( Vec i ) dst ( Vec i ) tdst → b {
+// One layer's tensor `suffix`, uploaded: its device address and its ggml
+// type (address -1 when it is missing or failed).
+: LmUp { i d i t }
+
+@ __lm_upload_layer inout LlmImpl m Gguf gg i layer s suffix → LmUp {
     : String nm ( __lm_tname layer suffix )
     : i d ( __lm_upload m gg ( string_data nm ) )
-    ? < d 0 { ^ F } {}
-    ( vec_push [i] dst d )
-    ( vec_push [i] tdst __lm_last_type )
+    ^ @ LmUp { d __lm_last_type }
+}
+
+// Append an uploaded tensor to the model's per-layer columns `dst` (the
+// address) and `tdst` (its type). Two steps, not one call that takes the
+// model and two of its own columns: a callee holding the whole model could
+// replace the column it was also handed.
+@ __lm_put LmUp u inout ( Vec i ) dst inout ( Vec i ) tdst → b {
+    ? < . u d 0 { ^ F } {}
+    ( vec_push [i] dst . u d )
+    ( vec_push [i] tdst . u t )
     ^ T
 }
 
@@ -736,7 +748,7 @@ unsafe @ __lm_q8_repack inout LlmImpl m GpuBuffer src GpuBuffer dst i nb i nblk 
     = __lm_lt now
 }
 
-unsafe @ llm_open_st s path s weights i want_ctx → !Llm String {
+@ llm_open_st s path s weights i want_ctx → !Llm String {
     ( __lm_lp_start )
     : Gguf gg ?? ( gguf_open path ) {
         T g0 → g0
@@ -974,7 +986,7 @@ unsafe @ llm_open_st s path s weights i want_ctx → !Llm String {
     } {}
     : ~ i L 0
     ~ & ok < L . m n_layer {
-        ? ( __lm_upload_layer m gg L `attn_norm.weight` . m attn_norm . m tq_attn_norm ) {} { = ok F }
+        ? ( __lm_put ( __lm_upload_layer m gg L `attn_norm.weight` ) . m attn_norm . m tq_attn_norm ) {} { = ok F }
         // phi3 ships Q, K and V as ONE tensor (`attn_qkv`, rows q|k|v) and the
         // FFN gate and up as one (`ffn_up`, rows gate|up). Nothing needs to be
         // split: a weight is just a device pointer plus a row count, so the
@@ -997,11 +1009,11 @@ unsafe @ llm_open_st s path s weights i want_ctx → !Llm String {
                 ( vec_push [i] . m tq_wv gt )
             }
         } {
-            ? ( __lm_upload_layer m gg L `attn_q.weight` . m wq . m tq_wq ) {} { = ok F }
-            ? ( __lm_upload_layer m gg L `attn_k.weight` . m wk . m tq_wk ) {} { = ok F }
-            ? ( __lm_upload_layer m gg L `attn_v.weight` . m wv . m tq_wv ) {} { = ok F }
+            ? ( __lm_put ( __lm_upload_layer m gg L `attn_q.weight` ) . m wq . m tq_wq ) {} { = ok F }
+            ? ( __lm_put ( __lm_upload_layer m gg L `attn_k.weight` ) . m wk . m tq_wk ) {} { = ok F }
+            ? ( __lm_put ( __lm_upload_layer m gg L `attn_v.weight` ) . m wv . m tq_wv ) {} { = ok F }
         }
-        ? ( __lm_upload_layer m gg L `attn_output.weight` . m wo . m tq_wo ) {} { = ok F }
+        ? ( __lm_put ( __lm_upload_layer m gg L `attn_output.weight` ) . m wo . m tq_wo ) {} { = ok F }
         // qwen2 carries Q/K/V biases; llama does not. Absent = -1 = skip.
         ( vec_push [i] . m bq ( __lm_upload_opt m gg L `attn_q.bias` ) )
         ( vec_push [i] . m bk ( __lm_upload_opt m gg L `attn_k.bias` ) )
@@ -1013,7 +1025,7 @@ unsafe @ llm_open_st s path s weights i want_ctx → !Llm String {
         ( vec_push [i] . m k_norm ( __lm_upload_opt m gg L `attn_k_norm.weight` ) )
         ( vec_push [i] . m post_attn_norm ( __lm_upload_opt m gg L `post_attention_norm.weight` ) )
         ( vec_push [i] . m post_ffn_norm ( __lm_upload_opt m gg L `post_ffw_norm.weight` ) )
-        ? ( __lm_upload_layer m gg L `ffn_norm.weight` . m ffn_norm . m tq_ffn_norm ) {} { = ok F }
+        ? ( __lm_put ( __lm_upload_layer m gg L `ffn_norm.weight` ) . m ffn_norm . m tq_ffn_norm ) {} { = ok F }
         : b moe_layer & . m bidir >= L . m first_dense
         ? moe_layer {
             // MoE layer: no dense FFN tensors — placeholders keep the
@@ -1024,13 +1036,13 @@ unsafe @ llm_open_st s path s weights i want_ctx → !Llm String {
             ( vec_push [i] . m tq_gate 0 )
             ( vec_push [i] . m w_up -1 )
             ( vec_push [i] . m tq_up 0 )
-            ? ( __lm_upload_layer m gg L `ffn_gate_inp.weight` . m gate_inp . m tq_gate_inp ) {} { = ok F }
-            ? ( __lm_upload_layer m gg L `ffn_gate_exps.weight` . m gate_exps . m tq_gate_exps ) {} { = ok F }
-            ? ( __lm_upload_layer m gg L `ffn_up_exps.weight` . m up_exps . m tq_up_exps ) {} { = ok F }
-            ? ( __lm_upload_layer m gg L `ffn_down_exps.weight` . m down_exps . m tq_down_exps ) {} { = ok F }
-            ? ( __lm_upload_layer m gg L `ffn_gate_shexp.weight` . m gate_shexp . m tq_gate_shexp ) {} { = ok F }
-            ? ( __lm_upload_layer m gg L `ffn_up_shexp.weight` . m up_shexp . m tq_up_shexp ) {} { = ok F }
-            ? ( __lm_upload_layer m gg L `ffn_down_shexp.weight` . m down_shexp . m tq_down_shexp ) {} { = ok F }
+            ? ( __lm_put ( __lm_upload_layer m gg L `ffn_gate_inp.weight` ) . m gate_inp . m tq_gate_inp ) {} { = ok F }
+            ? ( __lm_put ( __lm_upload_layer m gg L `ffn_gate_exps.weight` ) . m gate_exps . m tq_gate_exps ) {} { = ok F }
+            ? ( __lm_put ( __lm_upload_layer m gg L `ffn_up_exps.weight` ) . m up_exps . m tq_up_exps ) {} { = ok F }
+            ? ( __lm_put ( __lm_upload_layer m gg L `ffn_down_exps.weight` ) . m down_exps . m tq_down_exps ) {} { = ok F }
+            ? ( __lm_put ( __lm_upload_layer m gg L `ffn_gate_shexp.weight` ) . m gate_shexp . m tq_gate_shexp ) {} { = ok F }
+            ? ( __lm_put ( __lm_upload_layer m gg L `ffn_up_shexp.weight` ) . m up_shexp . m tq_up_shexp ) {} { = ok F }
+            ? ( __lm_put ( __lm_upload_layer m gg L `ffn_down_shexp.weight` ) . m down_shexp . m tq_down_shexp ) {} { = ok F }
             // the router bias is HOST data: the grouped top-k runs on the
             // CPU over 256 scores per position
             : String bn ( __lm_tname L `exp_probs_b.bias` )
@@ -1053,7 +1065,7 @@ unsafe @ llm_open_st s path s weights i want_ctx → !Llm String {
                 }
             } { = ok F }
         } {
-            ? ( __lm_upload_layer m gg L `ffn_down.weight` . m w_down . m tq_down ) {} { = ok F }
+            ? ( __lm_put ( __lm_upload_layer m gg L `ffn_down.weight` ) . m w_down . m tq_down ) {} { = ok F }
             // Fused FFN gate+up (phi3): one tensor of 2*n_ff rows, gate first.
             : String upn ( __lm_tname L `ffn_up.weight` )
             : i up_rows ( __lm_tensor_rows gg ( string_data upn ) )
@@ -1068,8 +1080,8 @@ unsafe @ llm_open_st s path s weights i want_ctx → !Llm String {
                     ( vec_push [i] . m tq_up ugt )
                 }
             } {
-                ? ( __lm_upload_layer m gg L `ffn_gate.weight` . m w_gate . m tq_gate ) {} { = ok F }
-                ? ( __lm_upload_layer m gg L `ffn_up.weight` . m w_up . m tq_up ) {} { = ok F }
+                ? ( __lm_put ( __lm_upload_layer m gg L `ffn_gate.weight` ) . m w_gate . m tq_gate ) {} { = ok F }
+                ? ( __lm_put ( __lm_upload_layer m gg L `ffn_up.weight` ) . m w_up . m tq_up ) {} { = ok F }
             }
             // placeholders on the MoE side too
             ( vec_push [i] . m gate_inp -1 )

@@ -268,7 +268,8 @@ $ `service.nu`
         = caller ( ag_caller_local_from ( ag_store ) ( string_data who ) ( string_data org ) now )
         ? . caller authed {} {
             ( nurl_eprint `agora: ` )
-            ( nurl_eprintln ( ag_local_refusal ) )
+            : String why ( ag_local_refusal )
+            ( nurl_eprintln ( string_data why ) )
             ^ 2
         }
     } {}

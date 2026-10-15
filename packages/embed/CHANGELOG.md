@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.6.3] — 2026-10-15
+
+- **Fixed: every forward leaked a share of each weight chunk.** Each layer was handed to the block as `( mem_dup lay )`, a copy of its sixteen weight views, and the compiler never dropped such a copy (fixed in the compiler: a `mem_dup` copy handed straight to a call is now dropped after it). The chunks were never freed. An idle `serve --unload-after` process therefore kept its device memory, and the ASan check reported the chunks as leaks. The block now borrows the layer in place, with no copy (16 fewer reference-count round trips per layer). The suite passes 5/5, including the unload and ASan checks that failed.
+- The server's token and model name are a `( Locked EmCfg )` that requests read as copies, instead of string globals holding copies of the caller's strings. The compiler now refuses a string global that owns its text in safe code, because the next assignment can free it under a reader in another thread.
+
 ## [0.6.2] — 2026-10-15
 
 - No `unsafe` left. The weight arena is made of owned gpukit chunks (`gk_dbuf_new`), and each weight is a view of its chunk (`gk_buf_view_as`) that keeps the chunk alive. The one batched upload now goes through gpukit 0.11.3's safe `gk_dbuf_upload_batch` from `st_tensor_bytes` views, instead of queuing raw addresses. Embeddings are byte-identical to 0.6.1. Loading a 300 MB model on the CPU backend takes the same time (median 478 vs 475 ms over 20 runs, same CPU time).

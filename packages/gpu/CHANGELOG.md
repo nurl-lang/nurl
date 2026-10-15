@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.17.5] — 2026-10-15
+
+### Fixed
+
+- **The driver layer was callable from safe code.** Twenty-three functions take a context, module, function, event, graph, stream or device address as a plain integer and pass it to the CUDA driver, or compile and load C code on the CPU backend. Any importer could call them from safe code: `( cpu_launch 4096 0 1 1 )` jumped to address 4096, and `( cuda_free p )` freed whatever `p` named. They are now `raw` (the caller vouches), so only `unsafe` code may call them: `cuda_ctx_bind`, `cuda_ctx_destroy`, `cuda_ctx_destroy_dev`, `cuda_dtod`, `cuda_dtoh`, `cuda_htod`, `cuda_htod_async`, `cuda_event_record` / `_sync` / `_elapsed_bits` / `_free`, `cuda_free`, `cuda_function`, `cuda_graph_launch` / `_free`, `cuda_launch`, `cuda_module_load` / `_unload`, `cuda_stream_sync`, `cpu_compile`, `cpu_launch`, `cpu_htod`, `cpu_dtoh`.
+- The safe wrappers over them (`gpu_bind_thread`, `gpu_timer_mark`, `gpu_timer_ns`, `gpu_graph_launch`) take the unforgeable `Gpu` / `GpuTimer` / `GpuGraph` handles and vouch for what they pass. Every caller in the package tree already went through these wrappers or was `unsafe`.
+
 ## [0.17.4] — 2026-10-15
 
 - CPU backend: a kernel is inlined into its launch loop (`__global__` is `always_inline inline` on the host).

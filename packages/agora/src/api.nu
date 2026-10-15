@@ -246,13 +246,17 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
     ^ @ AgCaller { T ( string_from name ) }
 }
 
-// Why the last local resolution refused (empty when it did not): a String
-// the global owns, replaced by each refusal.
-: ~ s g_ag_refusal ``
+// Why the last local resolution refused (empty when it did not), replaced
+// by each refusal. Requests resolve on many threads, so it is a Locked
+// String read as a copy: a plain string global freed its old message
+// under a reader in another thread.
+@ __ag_refusal0 → ( Locked String ) { ^ ( locked_new [String] ( string_new ) ) }
 
-@ ag_set_local_refusal s why → v { = g_ag_refusal ( nurl_str_cat why `` ) }
+: ( Locked String ) g_ag_refusal ( __ag_refusal0 )
 
-@ ag_local_refusal → s { ^ g_ag_refusal }
+@ ag_set_local_refusal s why → v { ( locked_set [String] g_ag_refusal ( string_from why ) ) }
+
+@ ag_local_refusal → String { ^ ( locked_get [String] g_ag_refusal ) }
 
 // The caller behind an MCP dispatch context (`mcp_call_context`): the
 // HTTP transport puts {"agent": id} there once it has verified the
@@ -310,8 +314,8 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
 }
 
 @ __ag_unauthorized → AgRes {
-    : s why ( ag_local_refusal )
-    ? > ( nurl_str_len why ) 0 { ^ ( _ag_err 401 why ) } {}
+    : String why ( ag_local_refusal )
+    ? > ( string_len why ) 0 { ^ ( _ag_err 401 ( string_data why ) ) } {}
     ^ ( _ag_err 401 `not signed in: call join once, then send its token as Authorization: Bearer <token> (over stdio, start the server with --as NAME)` )
 }
 

@@ -88,8 +88,17 @@ $ `stdlib/core/slice.nu`
 
 : ( Locked EmServe ) g_em ( __em_serve_blank )
 
-: ~ s g_em_token ``
-: ~ s g_em_name ``
+// The bearer token (empty = open) and the served model's name, set when
+// serving starts and read by every request as copies. (String globals
+// holding copies of the caller's strings could be replaced under a
+// reader in another thread; the compiler refuses that in safe code.)
+: EmCfg { String token String name }
+
+@ __em_cfg0 → ( Locked EmCfg ) { ^ ( locked_new [EmCfg] @ EmCfg { ( string_new ) ( string_new ) } ) }
+
+: ( Locked EmCfg ) g_em_cfg ( __em_cfg0 )
+
+@ __em_cfg → EmCfg { ^ ( locked_get [EmCfg] g_em_cfg ) }
 
 // One more owner of the served model (only while serving).
 @ __em_model → Embed {
@@ -253,13 +262,15 @@ $ `stdlib/core/slice.nu`
 }
 
 @ __em_authed HttpRequest req → b {
-    ? == ( nurl_str_len g_em_token ) 0 { ^ T } {}
+    : EmCfg cf ( __em_cfg )
+    : s tok ( string_data . cf token )
+    ? == ( nurl_str_len tok ) 0 { ^ T } {}
     : ~ b ok F
     ?? ( header_get . req headers `authorization` ) {
         T hv → {
             : s h ( string_data hv )
             ? & > ( nurl_str_len h ) 7 != 0 ( nurl_str_starts h `Bearer ` ) {
-                ? ( __em_tok_eq ( nurl_str_slice h 7 - ( nurl_str_len h ) 7 ) g_em_token ) { = ok T } {}
+                ? ( __em_tok_eq ( nurl_str_slice h 7 - ( nurl_str_len h ) 7 ) tok ) { = ok T } {}
             } {}
         }
         F → {}
@@ -267,7 +278,7 @@ $ `stdlib/core/slice.nu`
     ? ok { ^ T } {}
     : String qt ( __em_query_val ( string_data . req query ) `token` )
     ? > ( string_len qt ) 0 {
-        ? ( __em_tok_eq ( string_data qt ) g_em_token ) { = ok T } {}
+        ? ( __em_tok_eq ( string_data qt ) tok ) { = ok T } {}
     } {}
     ^ ok
 }
@@ -350,7 +361,8 @@ $ `stdlib/core/slice.nu`
         = k + k 1
     }
     ( string_push_str bs `],"model":` )
-    : Json mn ( json_str_lit g_em_name )
+    : EmCfg cf ( __em_cfg )
+    : Json mn ( json_str_lit ( string_data . cf name ) )
     : String mns ( json_stringify mn )
     ( string_push_str bs ( string_data mns ) )
     ( string_push_str bs `,"dimension":` )
@@ -445,7 +457,8 @@ $ `stdlib/core/slice.nu`
     // `healthy` either way: an engine whose weights are unloaded under
     // --unload-after answers the next request, it just pays the reload
     : b _s1 ( json_obj_set o `status` ( json_str_lit `healthy` ) )
-    : b _s2 ( json_obj_set o `model` ( json_str_lit g_em_name ) )
+    : EmCfg cf ( __em_cfg )
+    : b _s2 ( json_obj_set o `model` ( json_str_lit ( string_data . cf name ) ) )
     : b _s3 ( json_obj_set o `model_loaded` ( json_bool ( embed_loaded e ) ) )
     : b _u1 ( json_obj_set o `unload_after_s` ( json_int / . sv unload_ms 1000 ) )
     : b _u2 ( json_obj_set o `loads` ( json_int . sv loads ) )
@@ -475,8 +488,7 @@ $ `stdlib/core/slice.nu`
 // Serve `e` (borrowed for the server's lifetime). Blocks until stopped.
 @ embed_serve Embed e s name s host i port s token i unload_s → i {
     ( locked_set [EmServe] g_em @ EmServe { @ ?Embed { T ( Embed_share e ) } 0 * unload_s 1000 ( monotonic_ns ) 1 0 0 T } )
-    = g_em_token ( nurl_str_cat token `` )
-    = g_em_name ( nurl_str_cat name `` )
+    ( locked_set [EmCfg] g_em_cfg @ EmCfg { ( string_from token ) ( string_from name ) } )
     : ( @ v ) modelfn \ → v { ( __em_model_loop ) }
     // joined before this returns: the model thread reads the engine, and
     // the caller lets the engine go as soon as serving ends

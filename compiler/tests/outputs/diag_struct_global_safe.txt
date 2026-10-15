@@ -1,0 +1,10 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_struct_global_safe.nu:10:27: error: the global 'g_pair' is a mutable struct (or option), and every thread can reach it: no single atomic access covers more than one word, so a read here racing a write elsewhere sees half of each. Keep it in a '( Locked T )' global set at start (': ( Locked T ) g ( make )'), or reach it only from an 'unsafe' function ('unsafe @ name …'), which vouches that the program does not race on it.
+@ peek → i { ^ . g_pair a }
+                          ^
+compiler/tests/diag_struct_global_safe.nu:12:29: error: the global 'g_pair' is a mutable struct (or option), and every thread can reach it: no single atomic access covers more than one word, so a read here racing a write elsewhere sees half of each. Keep it in a '( Locked T )' global set at start (': ( Locked T ) g ( make )'), or reach it only from an 'unsafe' function ('unsafe @ name …'), which vouches that the program does not race on it.
+@ poke i v → v { = g_pair @ Pair { v v } }
+                            ^
+error: aborting due to 2 previous errors
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

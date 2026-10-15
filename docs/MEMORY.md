@@ -152,6 +152,16 @@ whose place is the caller's for the call (`mem_replace` is built on it). A raw-s
 owns its text, as a mutable string binding does: a fresh string assigned
 to it — from a call that hands it over on every path, or on this call
 only (its guard slot says so, h202) — is released by the next assignment.
+That release can free the text under a reader in another thread, so only
+an `unsafe` function hands a string global a string to own (h273); in
+safe code it holds literals.
+
+A global of plain scalars needs no `unsafe`: an integer, bool, float or
+`s` global is read and written with relaxed atomics, so threads racing on
+it see whole values (a race on a plain load and store is undefined
+behaviour). A struct or option global of plain values is more than one
+word, which no atomic access covers, so it is `unsafe`-only like an
+owning one (h272).
 
 State that every thread shares and safe code reaches lives in a global
 **set at start** instead: `: ( Locked T ) g ( make )` calls `make`, a

@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.36.4] — 2026-10-15
+
+### Fixed
+
+- The audit log's actor was a string global that each request's gate replaced. The analyze handler lets go of the service lock while it waits, so a gate could free the actor's name while an audit line was being written. The actor is now a `( Locked String )`, read as a copy when the line is written.
+
 ## [0.36.3] — 2026-10-15
 
 Requires gpukit 0.11.7 (`gk_run_checked_dev`).

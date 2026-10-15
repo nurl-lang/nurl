@@ -380,7 +380,7 @@ unsafe @ gpu_mem_total Gpu g → i {
 // have no such state and answer T. Idempotent and cheap — call it at the
 // top of any work item that may run on a thread the device was not
 // opened on.
-@ gpu_bind_thread Gpu g → b {
+unsafe @ gpu_bind_thread Gpu g → b {
     ? != __gpu_backend 0 { ^ T } {}
     ^ ( cuda_ctx_bind . g ctx )
 }
@@ -405,14 +405,14 @@ unsafe @ gpu_timer_none → GpuTimer { ^ @ GpuTimer { 0 ( __gpu_nores ) } }
 
 @ gpu_timer_ok GpuTimer t → b { ^ != . t ev 0 }
 
-@ gpu_timer_mark Gpu g GpuTimer t → v {
+unsafe @ gpu_timer_mark Gpu g GpuTimer t → v {
     ? | != __gpu_backend 0 == . t ev 0 { ^ } {}
     : i _r ( cuda_event_record . t ev )
 }
 
 // Nanoseconds between two marks. Blocks until the end event has
 // completed on the device, so it is a measurement point, not free.
-@ gpu_timer_ns Gpu g GpuTimer start GpuTimer end → i {
+unsafe @ gpu_timer_ns Gpu g GpuTimer start GpuTimer end → i {
     ? | | != __gpu_backend 0 == . start ev 0 == . end ev 0 { ^ 0 } {}
     : i _s ( cuda_event_sync . end ev )
     : i bits ( cuda_event_elapsed_bits . start ev . end ev )
@@ -448,7 +448,7 @@ unsafe @ gpu_graph_none → GpuGraph { ^ @ GpuGraph { 0 ( __gpu_nores ) } }
 
 @ gpu_graph_ok GpuGraph x → b { ^ != . x exec 0 }
 
-@ gpu_graph_launch Gpu g GpuGraph x → i {
+unsafe @ gpu_graph_launch Gpu g GpuGraph x → i {
     ? | != __gpu_backend 0 == . x exec 0 { ^ 1 } {}
     ^ ( cuda_graph_launch . x exec )
 }

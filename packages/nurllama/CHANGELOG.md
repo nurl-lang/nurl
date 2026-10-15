@@ -2,6 +2,11 @@
 
 All notable changes to the `nurllama` package.
 
+## [0.21.3] — 2026-10-15
+
+- The API server's text settings (the resident model's name, the store root, the wizard's model, token and history path, `--weights`) are a `( Locked ApiCfg )` read as copies. As string globals they were replaced at run time (a model switch renames the resident model) while other requests read them, and the compiler now refuses that in safe code.
+- `llm_open_st` is no longer `unsafe` (4 → 3). Each layer tensor is uploaded first and then appended to the model's per-layer columns by `__lm_put`, which takes only those two columns. Before, one call took the whole model `inout` together with two of its own columns, and the borrow checker rightly refused it: through the model, the callee could have replaced a column it was also holding. Inference is unchanged: the 22 inference checks (numpy logits and greedy text, CPU/GPU parity, K-quants, gemma3, qwen2) pass.
+
 ## [0.21.2] — 2026-10-15
 
 - Weight uploads are safe code. GGUF tensors are uploaded from `gguf_tensor_bytes` views with `gpu_upload_bytes`, dequantised ones with `gpu_upload_vec`, and the router bias with a new `__lm_scratch_from`. Only the q8_0 repack kernel launch stays `unsafe`, in its own helper. `unsafe` functions: 6 → 4.

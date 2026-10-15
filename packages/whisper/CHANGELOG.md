@@ -1,5 +1,10 @@
 # Changelog
 
+## [3.2.1] — 2026-10-15
+
+- **Fixed: WebSocket streams shared their settings.** The sample format and the language a stream sends in its config message lived in two globals. Two streams open at once took each other's format, so float32 audio was decoded as PCM16, and each other's language; one could also free the language string the other was transcribing with. Each connection now keeps its own `WsCfg`.
+- The server's model directory, default language and token are a `( Locked SrvCfg )` that requests and the unload reaper read as copies. As string globals they were replaced and reset while other threads could read them, which the compiler now refuses in safe code.
+
 ## [3.2.0] — 2026-10-15
 
 - The load queue holds device views and tensor indices instead of raw host addresses. At flush it builds checked views of the mapped file (ggml or safetensors) and sends them with gpu 0.17.2's `gpu_upload_views`, still one batch. Host reads of the encoder output, logits and argmax go through gpu's bounds-checked `gpu_host_get_f32` / `gpu_host_get_i32`. `unsafe` functions: 13 → 9.

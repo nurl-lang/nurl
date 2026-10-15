@@ -8,6 +8,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Mutable globals no longer race. A scalar mutable global (an integer,
+bool, float or `s`) is read and written with relaxed atomics, so two
+threads touching it see whole values instead of having undefined
+behaviour; on x86-64 and AArch64 the instructions are the same ones (the
+compiler's self-compile, the heaviest user of globals there is, retires
+0.4 % more instructions in the same cycles). Two holes in safe code are
+closed: a struct global was read and written whole from several threads
+(h272; it is now `unsafe`-only, like a global that owns something), and a
+`s` global took ownership of a fresh string, which the next assignment
+freed under a reader in another thread — a use-after-free ASan reports
+within a few thousand iterations (h273; in safe code a `s` global now
+holds literals, and text that changes at run time lives in a
+`( Locked String )` set at start). agora's refusal message had exactly
+that race and moves into a `Locked String`. nurlc runs on one thread, and
+the 47 functions that store owned strings into its globals are marked
+`unsafe`.
+A `( mem_dup x )` copy handed straight to a call
+(`( f ( mem_dup x ) )`) was never dropped: the copy is no call, so the
+argument path had no callee to ask whether the caller owned it. It is
+dropped after the call now, as any owned call result is
+(`compiler/tests/mem_dup_temp_arg.nu`); packages/embed leaked a share of
+every weight chunk per forward this way.
+
 Taking `unsafe` out of the packages. A handle's state is changed in safe
 code now: `rc_take` / `rc_restore` (stdlib/std/rc.nu) and `locked_take` /
 `locked_restore` (stdlib/std/thread.nu) check the state out of an `Rc` or
