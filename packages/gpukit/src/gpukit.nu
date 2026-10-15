@@ -577,6 +577,41 @@ raw @ _gk_slot_launch inout GkState kit i slot i grid i block ( Vec i ) args →
 
 // ── The workhorse ─────────────────────────────────────────────────────
 
+// Does an output (kind 1 / 3) of `call` share bytes with another buffer?
+raw @ __gk_out_overlaps ( Vec GkArg ) call → b {
+    : i n ( vec_len [GkArg] call )
+    : ~ i i0 0
+    ~ < i0 n {
+        ?? ( vec_get [GkArg] call i0 ) {
+            T a → {
+                ? | == . a kind 1 == . a kind 3 {
+                    : i lo # i . a host
+                    : i hi + lo . a bytes
+                    : ~ i j 0
+                    ~ < j n {
+                        ? != j i0 {
+                            ?? ( vec_get [GkArg] call j ) {
+                                T b → {
+                                    ? != . b kind 2 {
+                                        : i lo2 # i . b host
+                                        : i hi2 + lo2 . b bytes
+                                        ? & < lo hi2 < lo2 hi { ^ T } {}
+                                    } {}
+                                }
+                                F _ → {}
+                            }
+                        } {}
+                        = j + j 1
+                    }
+                } {}
+            }
+            F _ → {}
+        }
+        = i0 + i0 1
+    }
+    ^ F
+}
+
 // Compile-cached, marshal, launch, sync, download. `call` lists the
 // kernel's arguments in declaration order (buffers and scalars interleaved
 // exactly as the kernel signature expects). Returns F on any device error.
@@ -588,6 +623,27 @@ raw @ gk_run GpuKit h s src s name i grid i block ( Vec GkArg ) call → b {
     ? | < slot 0 . kit census {
         ( locked_restore [GkState] . h st st )
         ^ >= slot 0
+    } {}
+
+    // The CPU backend's device memory IS host memory, and a launch runs to
+    // completion before it returns: the kernel can work on the caller's
+    // buffers where they are — nothing copied in, nothing copied out. Not
+    // when an output overlaps another buffer of the call: the copies are
+    // what gave the kernel the inputs as they were before it wrote.
+    ? & ( gpu_is_cpu ) ! ( __gk_out_overlaps call ) {
+        : ( Vec i ) dargs ( vec_new [i] )
+        : i nd ( vec_len [GkArg] call )
+        : ~ i q 0
+        ~ < q nd {
+            ?? ( vec_get [GkArg] call q ) {
+                T a → { ( vec_push [i] dargs ? == . a kind 2 . a argval # i . a host ) }
+                F _ → {}
+            }
+            = q + q 1
+        }
+        : i rc ( _gk_slot_launch st slot grid block dargs )
+        ( locked_restore [GkState] . h st st )
+        ^ == rc 0
     } {}
 
     : i nc ( vec_len [GkArg] call )

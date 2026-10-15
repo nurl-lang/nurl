@@ -15,32 +15,24 @@
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
 $ `gpukit.nu`
+$ `checked.nu`  // the kernels below are checked kernels
 
 // ── Elementwise binary: out[i] = a[i] <op> b[i] ───────────────────────
 
-@ __gk_ew_src s name s op → String {
-    : String s ( string_from `extern "C" __global__ void ` )
-    ( string_push_str s name )
-    ( string_push_str s `(const double* a, const double* b, double* out, long long n){` )
-    ( string_push_str s `long long i=blockIdx.x*blockDim.x+threadIdx.x;` )
-    ( string_push_str s `if(i<n){out[i]=a[i]` )
-    ( string_push_str s op )
-    ( string_push_str s `b[i];}}` )
-    ^ s
-}
-
 // The kernel reads a[i] and b[i] for every i of out: both must hold them.
-unsafe @ __gk_ew GpuKit kit s name s op ( Vec f ) out ( Vec f ) a ( Vec f ) b → b {
+// A checked kernel over views of the three Vecs — nothing copied on the
+// host, every element checked against its Vec.
+@ __gk_ew GpuKit kit s name s op ( Vec f ) out ( Vec f ) a ( Vec f ) b → b {
     : i n ( vec_len [f] out )
     ? | < ( vec_len [f] a ) n < ( vec_len [f] b ) n { ^ F } {}
-    : String src ( __gk_ew_src name op )
-    : ( Vec GkArg ) call ( vec_new [GkArg] )
-    ( vec_push [GkArg] call ( gk_in_f a ) )
-    ( vec_push [GkArg] call ( gk_in_f b ) )
-    ( vec_push [GkArg] call ( gk_out_f out ) )
-    ( vec_push [GkArg] call ( gk_i64 n ) )
-    : b r ( gk_run kit ( string_data src ) name ( gk_grid n 256 ) 256 call )
-    ^ r
+    : ~ String body ( string_from `ST(out, gid, LD(a, gid) ` )
+    ( string_push_str body op )
+    ( string_push_str body ` LD(b, gid));` )
+    : ~ GkCall c ( gk_call_new )
+    ( gk_call_view_f c `a` ( slice_from_vec [f] a ) )
+    ( gk_call_view_f c `b` ( slice_from_vec [f] b ) )
+    ( gk_call_view_out_f c `out` ( slice_from_vec [f] out ) )
+    ^ ( gk_run_checked kit c name ( string_data body ) n 256 )
 }
 
 @ gk_add_f GpuKit kit ( Vec f ) out ( Vec f ) a ( Vec f ) b → b { ^ ( __gk_ew kit `gk_add` `+` out a b ) }
@@ -56,23 +48,17 @@ unsafe @ __gk_ew GpuKit kit s name s op ( Vec f ) out ( Vec f ) a ( Vec f ) b �
 // caching works). `expr` is C over the local `double x`, e.g. `x*x`,
 // `1.0/(1.0+exp(-x))`, `x>0.0?x:0.0` — checked (gk_expr_ok): F for anything
 // else, and for a name that is not an identifier.
-unsafe @ gk_map_f GpuKit kit s kname ( Vec f ) out ( Vec f ) in s expr → b {
+@ gk_map_f GpuKit kit s kname ( Vec f ) out ( Vec f ) in s expr → b {
     ? & ( gk_name_ok kname ) ( gk_expr_ok expr ) {} { ^ F }
     : i n ( vec_len [f] out )
     ? < ( vec_len [f] in ) n { ^ F } {}
-    : String src ( string_from `extern "C" __global__ void ` )
-    ( string_push_str src kname )
-    ( string_push_str src `(const double* in, double* out, long long n){` )
-    ( string_push_str src `long long i=blockIdx.x*blockDim.x+threadIdx.x;` )
-    ( string_push_str src `if(i<n){double x=in[i];out[i]=(` )
-    ( string_push_str src expr )
-    ( string_push_str src `);}}` )
-    : ( Vec GkArg ) call ( vec_new [GkArg] )
-    ( vec_push [GkArg] call ( gk_in_f in ) )
-    ( vec_push [GkArg] call ( gk_out_f out ) )
-    ( vec_push [GkArg] call ( gk_i64 n ) )
-    : b r ( gk_run kit ( string_data src ) kname ( gk_grid n 256 ) 256 call )
-    ^ r
+    : ~ String body ( string_from `double x = LD(src, gid); ST(out, gid, (` )
+    ( string_push_str body expr )
+    ( string_push_str body `));` )
+    : ~ GkCall c ( gk_call_new )
+    ( gk_call_view_f c `src` ( slice_from_vec [f] in ) )
+    ( gk_call_view_out_f c `out` ( slice_from_vec [f] out ) )
+    ^ ( gk_run_checked kit c kname ( string_data body ) n 256 )
 }
 
 // ── Matrix multiply: C[M×N] = A[M×K] · B[K×N] (row-major) ──────────────
@@ -186,56 +172,40 @@ unsafe @ gk_matmul_f GpuKit kit ( Vec f ) c ( Vec f ) a ( Vec f ) b i m i k i n 
 }
 
 // Sum of `x`. None on a device error.
-unsafe @ gk_reduce_sum_f GpuKit kit ( Vec f ) x → ?f {
+@ gk_reduce_sum_f GpuKit kit ( Vec f ) x → ?f {
     : i n ( vec_len [f] x )
     ? <= n 0 { ^ @ ?f { T 0.0 } } {}
     : i threads ( _gk_partial_threads n )
-    : ( Vec f ) partial ( _gk_zeros threads )
-    : String src ( string_from `extern "C" __global__ void gk_reduce_sum(const double* in, double* partial, long long n){` )
-    ( string_push_str src `long long tid=blockIdx.x*blockDim.x+threadIdx.x;long long stride=gridDim.x*blockDim.x;` )
-    ( string_push_str src `double s=0.0;for(long long i=tid;i<n;i+=stride)s+=in[i];partial[tid]=s;}` )
-    : ( Vec GkArg ) call ( vec_new [GkArg] )
-    ( vec_push [GkArg] call ( gk_in_f x ) )
-    ( vec_push [GkArg] call ( gk_out_f partial ) )
-    ( vec_push [GkArg] call ( gk_i64 n ) )
-    : i blocks / threads 256
-    : b ok ( gk_run kit ( string_data src ) `gk_reduce_sum` blocks 256 call )
+    : ~ GkCall c ( gk_call_new )
+    ( gk_call_view_f c `src` ( slice_from_vec [f] x ) )
+    ( gk_call_out_f c `partial` ( _gk_zeros threads ) )
+    ( gk_call_i64 c `n` n )
+    : b ok ( gk_run_checked kit c `gk_reduce_sum` `double s = 0.0; for (long long i = gid; i < n; i += nthreads) { s += LD(src, i); } ST(partial, gid, s);` threads 256 )
+    ^ ( __gk_fold_partials c ok )
+}
+
+// The host fold of a reduction's per-thread partials, in thread order.
+@ __gk_fold_partials inout GkCall c b ok → ?f {
+    ? ok {} { ^ @ ?f { F } }
+    : ( Vec f ) partial ( gk_call_take_f c `partial` )
     : ~ f acc 0.0
-    ? ok {
-        : ~ i k 0
-        ~ < k threads {
-            ?? ( vec_get [f] partial k ) { T v → { = acc + acc v } F _ → {} }
-            = k + k 1
-        }
-    } {}
-    ? ok { ^ @ ?f { T acc } } { ^ @ ?f { F } }
+    : ~ i k 0
+    ~ < k ( vec_len [f] partial ) { = acc + acc ( vec_at [f] partial k ) = k + k 1 }
+    ^ @ ?f { T acc }
 }
 
 // Dot product a·b over a's length. None on a device error, or when b is
 // shorter than a.
-unsafe @ gk_dot_f GpuKit kit ( Vec f ) a ( Vec f ) b → ?f {
+@ gk_dot_f GpuKit kit ( Vec f ) a ( Vec f ) b → ?f {
     : i n ( vec_len [f] a )
     ? < ( vec_len [f] b ) n { ^ @ ?f { F } } {}
     ? <= n 0 { ^ @ ?f { T 0.0 } } {}
     : i threads ( _gk_partial_threads n )
-    : ( Vec f ) partial ( _gk_zeros threads )
-    : String src ( string_from `extern "C" __global__ void gk_dot(const double* a, const double* b, double* partial, long long n){` )
-    ( string_push_str src `long long tid=blockIdx.x*blockDim.x+threadIdx.x;long long stride=gridDim.x*blockDim.x;` )
-    ( string_push_str src `double s=0.0;for(long long i=tid;i<n;i+=stride)s+=a[i]*b[i];partial[tid]=s;}` )
-    : ( Vec GkArg ) call ( vec_new [GkArg] )
-    ( vec_push [GkArg] call ( gk_in_f a ) )
-    ( vec_push [GkArg] call ( gk_in_f b ) )
-    ( vec_push [GkArg] call ( gk_out_f partial ) )
-    ( vec_push [GkArg] call ( gk_i64 n ) )
-    : i blocks / threads 256
-    : b ok ( gk_run kit ( string_data src ) `gk_dot` blocks 256 call )
-    : ~ f acc 0.0
-    ? ok {
-        : ~ i k 0
-        ~ < k threads {
-            ?? ( vec_get [f] partial k ) { T v → { = acc + acc v } F _ → {} }
-            = k + k 1
-        }
-    } {}
-    ? ok { ^ @ ?f { T acc } } { ^ @ ?f { F } }
+    : ~ GkCall c ( gk_call_new )
+    ( gk_call_view_f c `a` ( slice_from_vec [f] a ) )
+    ( gk_call_view_f c `b` ( slice_from_vec [f] b ) )
+    ( gk_call_out_f c `partial` ( _gk_zeros threads ) )
+    ( gk_call_i64 c `n` n )
+    : b ok ( gk_run_checked kit c `gk_dot` `double s = 0.0; for (long long i = gid; i < n; i += nthreads) { s += LD(a, i) * LD(b, i); } ST(partial, gid, s);` threads 256 )
+    ^ ( __gk_fold_partials c ok )
 }

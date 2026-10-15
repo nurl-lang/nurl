@@ -49,7 +49,8 @@ $ `devbuf.nu`
 
 // One binding: kind 0 f64 input, 1 f64 output, 2 i64 input, 3 i64 output,
 // 4 i64 scalar, 5 f64 scalar, 6 f64 input view, 7 i64 input view, 8 device
-// buffer read, 9 device buffer read and written. `slot` indexes fv / iv for a buffer and holds
+// buffer read, 9 device buffer read and written, 10 f64 output view, 11 i64
+// output view. `slot` indexes fv / iv for a buffer and holds
 // the value (an f64's bits) for a scalar.
 : GkCall {
     ( Vec String ) names
@@ -98,6 +99,19 @@ $ `devbuf.nu`
 @ gk_call_view_f inout GkCall c s name ( Slice f ) v → v {
     ( __gkc_add c name 6 ( vec_len [( Slice f )] . c fs ) )
     ( vec_push [( Slice f )] . c fs v )
+}
+
+// An output read and written where it is — a view of the caller's storage
+// (a Slice is writable, as slice_put is): the kernel's stores land in it,
+// and an element the kernel does not write keeps its value.
+@ gk_call_view_out_f inout GkCall c s name ( Slice f ) v → v {
+    ( __gkc_add c name 10 ( vec_len [( Slice f )] . c fs ) )
+    ( vec_push [( Slice f )] . c fs v )
+}
+
+@ gk_call_view_out_i inout GkCall c s name ( Slice i ) v → v {
+    ( __gkc_add c name 11 ( vec_len [( Slice i )] . c is ) )
+    ( vec_push [( Slice i )] . c is v )
 }
 
 @ gk_call_view_i inout GkCall c s name ( Slice i ) v → v {
@@ -447,10 +461,10 @@ $ `devbuf.nu`
     ^ T
 }
 
-@ __gkc_ty i kind → s { ? | | == kind 0 == kind 1 == kind 6 { ^ `double` } {} ^ `long long` }
+@ __gkc_ty i kind → s { ? ( __gkc_isf kind ) { ^ `double` } {} ^ `long long` }
 
 // An f64 binding (input, output or view)?
-@ __gkc_isf i kind → b { ^ | | == kind 0 == kind 1 == kind 6 }
+@ __gkc_isf i kind → b { ^ | | | == kind 0 == kind 1 == kind 6 == kind 10 }
 
 // The length binding `k` is bound with (-1: a scalar).
 @ __gkc_blen GkCall c i k → i {
@@ -458,8 +472,8 @@ $ `devbuf.nu`
     : i sl ( vec_at [i] . c slots k )
     ? | == kd 0 == kd 1 { ^ ( vec_len [f] ( vec_at [( Vec f )] . c fv sl ) ) } {}
     ? | == kd 2 == kd 3 { ^ ( vec_len [i] ( vec_at [( Vec i )] . c iv sl ) ) } {}
-    ? == kd 6 { ^ ( slice_len [f] ( vec_at [( Slice f )] . c fs sl ) ) } {}
-    ? == kd 7 { ^ ( slice_len [i] ( vec_at [( Slice i )] . c is sl ) ) } {}
+    ? | == kd 6 == kd 10 { ^ ( slice_len [f] ( vec_at [( Slice f )] . c fs sl ) ) } {}
+    ? | == kd 7 == kd 11 { ^ ( slice_len [i] ( vec_at [( Slice i )] . c is sl ) ) } {}
     ^ -1
 }
 
@@ -523,9 +537,9 @@ static __device__ inline void __gk_stl(long long* p, long long n, long long i, l
             ( string_push_str src ? ( __gkc_isf kd ) `(i) __gk_ldd(__gk_p` `(i) __gk_ldl(__gk_p` )
             ( string_push_str src ( string_data ks ) ) ( string_push_str src `, __gk_n` ) ( string_push_str src ( string_data gs ) )
             ( string_push_str src `, (long long)(i))\n` )
-            ? | == kd 1 == kd 3 {
+            ? | | == kd 1 == kd 3 | == kd 10 == kd 11 {
                 ( string_push_str src `#undef __GK_ST_` ) ( string_push_str src nm ) ( string_push_str src `\n#define __GK_ST_` ) ( string_push_str src nm )
-                ( string_push_str src ? == kd 1 `(i, v) __gk_std(__gk_p` `(i, v) __gk_stl(__gk_p` )
+                ( string_push_str src ? ( __gkc_isf kd ) `(i, v) __gk_std(__gk_p` `(i, v) __gk_stl(__gk_p` )
                 ( string_push_str src ( string_data ks ) ) ( string_push_str src `, __gk_n` ) ( string_push_str src ( string_data gs ) )
                 ( string_push_str src `, (long long)(i), (v))\n` )
             } {}
@@ -539,7 +553,7 @@ static __device__ inline void __gk_stl(long long* p, long long n, long long i, l
         : i kd ( vec_at [i] . c kinds k )
         : String ks ( string_from ( nurl_str_int k ) )
         ? | < kd 4 > kd 5 {
-            ( string_push_str src ? | | == kd 0 == kd 2 > kd 5 `const ` `` )
+            ( string_push_str src ? | | == kd 0 == kd 2 | == kd 6 == kd 7 `const ` `` )
             ( string_push_str src ( __gkc_ty kd ) ) ( string_push_str src `* __gk_p` ) ( string_push_str src ( string_data ks ) )
             ( string_push_str src `, long long __gk_n` ) ( string_push_str src ( string_data ks ) )
         } {
@@ -584,7 +598,7 @@ unsafe @ gk_run_checked GpuKit kit inout GkCall c s kname s body i nthreads i bl
         : i kd ( vec_at [i] . c kinds k )
         ( string_push_char key 1 ) ( string_push_str key nm ) ( string_push_char key + 48 kd )
         ? | < kd 4 > kd 5 { ( string_push_char bufs 32 ) ( string_push_str bufs nm ) } {}
-        ? | == kd 1 == kd 3 { ( string_push_char outs 32 ) ( string_push_str outs nm ) } {}
+        ? | | == kd 1 == kd 3 | == kd 10 == kd 11 { ( string_push_char outs 32 ) ( string_push_str outs nm ) } {}
         = k + k 1
     }
     // (…and which buffers share a length: __gkc_groups.)
@@ -601,7 +615,7 @@ unsafe @ gk_run_checked GpuKit kit inout GkCall c s kname s body i nthreads i bl
         ~ < k nb {
             : s nm ( string_data ( vec_at [String] . c names k ) )
             ? ( __gkc_name_ok nm ) {} { = . c err ( __gkc_why `binding name` nm ) ^ F }
-            ? > ( vec_at [i] . c kinds k ) 7 { = . c err ( __gkc_why `a device buffer is launched by gk_run_checked_dev` nm ) ^ F } {}
+            ? | == ( vec_at [i] . c kinds k ) 8 == ( vec_at [i] . c kinds k ) 9 { = . c err ( __gkc_why `a device buffer is launched by gk_run_checked_dev` nm ) ^ F } {}
             = k + k 1
         }
         : ~ ( Vec i ) inits ( vec_new [i] )
@@ -650,6 +664,20 @@ unsafe @ gk_run_checked GpuKit kit inout GkCall c s kname s body i nthreads i bl
             : ( Slice i ) sv ( vec_at [( Slice i )] . c is sl )
             : i ln ( slice_len [i] sv )
             ? == ln 0 { ( vec_push [GkArg] call ( gk_in_i one_i ) ) } { ( vec_push [GkArg] call ( gk_buf_in # *u ( slice_data [i] sv ) * ln 8 ) ) }
+            ( vec_push [GkArg] call ( gk_i64 ln ) )
+        } {}
+        // An output view: the kernel writes into the caller's storage — it
+        // goes up as it is and comes back after the launch.
+        ? == kd 10 {
+            : ( Slice f ) sv ( vec_at [( Slice f )] . c fs sl )
+            : i ln ( slice_len [f] sv )
+            ? == ln 0 { ( vec_push [GkArg] call ( gk_in_f one_f ) ) } { ( vec_push [GkArg] call @ GkArg { 3 # *u ( slice_data [f] sv ) * ln 8 0 } ) }
+            ( vec_push [GkArg] call ( gk_i64 ln ) )
+        } {}
+        ? == kd 11 {
+            : ( Slice i ) sv ( vec_at [( Slice i )] . c is sl )
+            : i ln ( slice_len [i] sv )
+            ? == ln 0 { ( vec_push [GkArg] call ( gk_in_i one_i ) ) } { ( vec_push [GkArg] call @ GkArg { 3 # *u ( slice_data [i] sv ) * ln 8 0 } ) }
             ( vec_push [GkArg] call ( gk_i64 ln ) )
         } {}
         ? == kd 4 { ( vec_push [GkArg] call ( gk_i64 sl ) ) } {}

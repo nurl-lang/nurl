@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.11.9] — 2026-10-15
+
+- The host-memory kernels `gk_add_f` / `gk_sub_f` / `gk_mul_f` / `gk_div_f`, `gk_map_f`, `gk_reduce_sum_f` and `gk_dot_f` are checked kernels over views of the caller's `Vec`s. None of them is `unsafe` any more (4 fewer; `gk_matmul_f`'s tiled kernel stays).
+- New output view bindings: `gk_call_view_out_f` / `gk_call_view_out_i` bind a `Slice` the kernel writes into in place, as `slice_put` writes through one.
+- On the CPU backend, `gk_run` hands the kernel the caller's buffers where they are. The backend's device memory is host memory and a launch completes before it returns, so nothing is copied in or out. The copying path remains for a call whose output overlaps another of its buffers, so the kernel still reads its inputs as they were. Same results, with large calls far faster:
+
+  | Call | Before | Now |
+  |---|---|---|
+  | 4M-element `gk_mul_f` ×30 | 2.1–2.7 s | 0.06–0.11 s |
+  | 4M `gk_dot_f` ×20 | 1.3–1.4 s | 0.03–0.06 s |
+  | `gk_map_f` ×20 | about 1.0 s | about 0.1 s |
+
+  Small calls are at parity.
+
 ## [0.11.8] — 2026-10-15
 
 - The device ops `gkd_ew` (add / sub / mul / div), `gkd_ew_bc`, `gkd_map` (relu, sigmoid, exp, tanh, sqrt, log, …), `gkd_gather`, `gkd_scatter`, `gkd_softmax_rows` and `gkd_sum` are checked kernels launched by `gk_run_checked_dev`. Every element they read or write is checked against its buffer, and none of them is `unsafe` any more (7 fewer). Their outputs are the same: 12/12 device-layer and 61/61 op-family checks against numpy on both backends, and onnx's static kernels match onnxruntime. With gpu 0.17.4 they are faster on the CPU backend than the raw kernels were.
