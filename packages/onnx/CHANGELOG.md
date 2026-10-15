@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.12.2] — 2026-10-15
+
+- `rt_kernel_census` allocates its buffers with `gk_dbuf_new` on the census kit (gpukit 0.11.2), so `__cz_f` and `__cz_i` no longer need `unsafe`. onnx now has no `unsafe` code. The census and static-backend tests give the same results.
+
 ## [0.12.1] — 2026-10-14
 
 ### Fixed

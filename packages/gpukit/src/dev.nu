@@ -50,9 +50,11 @@ raw : GkBuf {
 
 // The owner of one pooled block: its device pointer and the kit whose
 // pool it came from (held, so the kit — and its device — outlive it).
-raw : GkMemImpl { i dptr GpuKit kit }
+// A census kit's block is `host` itself — bytes this owner holds, given
+// back to no pool.
+raw : GkMemImpl { i dptr GpuKit kit ( Vec u ) host }
 
-% Drop GkMemImpl { @ drop GkMemImpl x → v { ( _gk_pool_give . x kit . x dptr ) } }
+% Drop GkMemImpl { @ drop GkMemImpl x → v { ? == 0 ( vec_len [u] . x host ) { ( _gk_pool_give . x kit . x dptr ) } {} } }
 
 : GkMem { ( Arc GkMemImpl ) a }
 
@@ -153,6 +155,7 @@ raw @ gk_buf_wrap i dptr i n i dtype → GkBuf { ^ @ GkBuf { dptr n dtype ( __gk
 
 @ gk_dbuf_new GpuKit h i n i dtype → GkBuf {
     ? & ( _gk_ok h ) > n 0 {} { ^ ( gk_buf_none dtype ) }
+    ? ( _gk_census h ) { ^ ( __gk_census_buf h n dtype ) } {}
     : GkInfo kit ( arc_get [GkInfo] . h info )
     ( _gk_pool_default kit )
     : i bytes * n ( __gk_esz dtype )
@@ -163,11 +166,24 @@ raw @ gk_buf_wrap i dptr i n i dtype → GkBuf { ^ @ GkBuf { dptr n dtype ( __gk
     ^ ( __gk_owned_buf h dptr n dtype )
 }
 
+// A census kit launches nothing, so no kernel ever reads its buffers. Each
+// is still real memory its owner holds — zeroed host bytes for `n`
+// elements — so a census buffer handed to a real kit by mistake points at
+// memory that exists (a CPU kernel sees zeros, CUDA reports an invalid
+// address), never at a made-up one.
+unsafe @ __gk_census_buf GpuKit h i n i dtype → GkBuf {
+    : i bytes ( _gk_p2 n ( __gk_esz dtype ) )
+    ? < bytes 1 { ^ ( gk_buf_none dtype ) } {}
+    : ( Vec u ) host ( vec_zeroed [u] bytes )
+    : i dptr # i ( vec_data [u] host )
+    ^ @ GkBuf { dptr n dtype @ ?GkMem { T @ GkMem { ( arc_new [GkMemImpl] @ GkMemImpl { dptr ( GpuKit_share h ) host } ) } } }
+}
+
 // The GkBuf over the pool block at `dptr`, `n` elements of `dtype`, that
 // gk_dbuf_new just took for it: its owner gives the block back to `h`'s
 // pool.
 unsafe @ __gk_owned_buf GpuKit h i dptr i n i dtype → GkBuf {
-    ^ @ GkBuf { dptr n dtype @ ?GkMem { T @ GkMem { ( arc_new [GkMemImpl] @ GkMemImpl { dptr ( GpuKit_share h ) } ) } } }
+    ^ @ GkBuf { dptr n dtype @ ?GkMem { T @ GkMem { ( arc_new [GkMemImpl] @ GkMemImpl { dptr ( GpuKit_share h ) ( vec_new [u] ) } ) } } }
 }
 
 // A block of `bytes` for a new buffer — a block this size an earlier

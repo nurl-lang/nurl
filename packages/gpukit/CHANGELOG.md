@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.11.2] — 2026-10-15
+
+- On a census kit, `gk_dbuf_new` now returns a buffer: zeroed host memory that the buffer owns and no kernel reads. A census caller no longer forges buffers with `gk_buf_wrap` over a made-up address, and a census buffer passed to a real kit by mistake still points at memory that exists.
+
 ## [0.11.1] — 2026-10-15
 
 ### Performance

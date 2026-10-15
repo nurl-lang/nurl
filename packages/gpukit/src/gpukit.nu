@@ -203,8 +203,9 @@ $ `deps/gpu/src/gpu.nu`
 // calls through a census kit yields precisely the kernel set a static
 // build (a precompiled kernels_static.c, native or wasm32) has to link,
 // from the same source builders that run on a device: nothing mirrored
-// by hand, nothing to rot. Buffers for the calls can be gk_buf_wrap
-// views over any nonzero address; nothing is dereferenced.
+// by hand, nothing to rot. Buffers for the calls come from gk_dbuf_new on
+// the census kit itself: zeroed host memory the buffer owns, which no
+// kernel reads.
 @ gk_open_census → GpuKit { ^ ( __gk_kit ( gpu_none ) T T ) }
 
 @ gk_is_census GpuKit kit → b { ^ ( _gk_census kit ) }
