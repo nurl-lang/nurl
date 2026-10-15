@@ -3,6 +3,18 @@
 All notable changes to this package are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.0] — 2026-10-14
+
+### Changed
+
+- 108 `unsafe` functions down to 6 — the raw kernel launches. The engine (`F5Model`) and the vocoder (`Vocos`) are `Locked` handles over plain values, built field by field into a local and handed over whole, not zero-filled Arcs written through `arc_ptr`; their buffer accessors hand back counted shares of the device blocks. Weights upload from checked byte views of the checkpoint (`st_tensor_bytes` / `pt_tensor_bytes`), and the convolution permutes read through `slice_u32_le`.
+- The vocabulary is keyed by Strings of its own, not by pointers into a byte arena; a vocabulary and a voice are frozen Arcs read through `arc_get`.
+- The server's queue is a Channel; each job carries its own reply channel. The model thread owns the engine, the vocoder, the vocabulary and the voice cache outright; the configuration and the counters are `Locked` globals set at start (the configured strings were raw pointers to the caller's arguments).
+
+### Fixed
+
+- Adding or deleting a voice dropped it from the voice cache on the HTTP thread while the model thread could be reading the cache — a data race. The drop now travels the model thread's queue, ahead of any request sent after it.
+
 ## [0.3.6] — 2026-10-14
 
 ### Changed

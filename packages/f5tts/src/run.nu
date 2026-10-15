@@ -65,18 +65,19 @@ $ `stdlib/core/slice.nu`
     String text
 }
 
-// An F5Voice is a handle on its state in an Arc (stdlib/std/arc.nu):
-// every copy is the same voice, and the last owner releases it.
+// An F5Voice is a handle on its state in an Arc (stdlib/std/arc.nu),
+// frozen once prepared: every copy reads the same voice (arc_get), and the
+// last owner releases it.
 : F5Voice { ( Arc F5VoiceImpl ) a }
 
 @ F5Voice_share F5Voice h → F5Voice { ^ @ F5Voice { ( arc_clone [F5VoiceImpl] . h a ) } }
 
 @ F5Voice_drop sink F5Voice h → v {}
 
-unsafe @ __F5Voice_ptr F5Voice h → *F5VoiceImpl { ^ ( arc_ptr [F5VoiceImpl] . h a ) }
+@ __F5Voice_get F5Voice h → F5VoiceImpl { ^ ( arc_get [F5VoiceImpl] . h a ) }
 
-unsafe @ f5_voice_target F5Voice v__h → f {
-    : *F5VoiceImpl v ( __F5Voice_ptr v__h )
+@ f5_voice_target F5Voice v__h → f {
+    : F5VoiceImpl v ( __F5Voice_get v__h )
     ^ . v target
 }
 
@@ -167,8 +168,8 @@ unsafe @ f5_voice_target F5Voice v__h → f {
 //
 // How much text fits beside a reference of this length inside the 22-second
 // window the model was trained on, at the reference's own speaking rate.
-unsafe @ f5_max_chars F5Voice v__h f speed → i {
-    : *F5VoiceImpl v ( __F5Voice_ptr v__h )
+@ f5_max_chars F5Voice v__h f speed → i {
+    : F5VoiceImpl v ( __F5Voice_get v__h )
     : f secs / # f . v samples # f F5_SR
     : i rb ( nurl_str_len ( string_data . v text ) )
     : f room - 22.0 secs
@@ -197,8 +198,8 @@ unsafe @ f5_max_chars F5Voice v__h f speed → i {
 
 : i F5_SHORT_TAPER_END 120
 
-unsafe @ f5_duration F5Voice v__h s gen_text i n_text f speed → i {
-    : *F5VoiceImpl v ( __F5Voice_ptr v__h )
+@ f5_duration F5Voice v__h s gen_text i n_text f speed → i {
+    : F5VoiceImpl v ( __F5Voice_get v__h )
     : i gen_bytes ( nurl_str_len gen_text )
     : ~ f local speed
     ? g_f5r_shortfix {} {
@@ -236,16 +237,16 @@ unsafe @ f5_duration F5Voice v__h s gen_text i n_text f speed → i {
     ^ d
 }
 
-unsafe @ f5_ref_audio_len F5Voice v__h → i {
-    : *F5VoiceImpl v ( __F5Voice_ptr v__h )
+@ f5_ref_audio_len F5Voice v__h → i {
+    : F5VoiceImpl v ( __F5Voice_get v__h )
     ^ / . v samples F5_HOP
 }
 
 // ── one chunk ───────────────────────────────────────────────────────
 
-unsafe @ __f5r_synth_once F5Model m Vocos vc F5Voice vh F5Vocab vocab s gen_text
+@ __f5r_synth_once F5Model m Vocos vc F5Voice vh F5Vocab vocab s gen_text
 i steps f cfg f sway f speed i seed ( Vec f ) out → b {
-    : *F5VoiceImpl v ( __F5Voice_ptr vh )
+    : F5VoiceImpl v ( __F5Voice_get vh )
     : ( Vec i ) ids ( vec_new [i] )
     : String full ( string_clone . v text )
     ( string_push_str full gen_text )
@@ -1027,7 +1028,7 @@ i steps f cfg f sway f speed f fade_s i seed i retries f max_wer i splitfail ( V
     ^ ok
 }
 
-unsafe @ f5_voice_rms F5Voice v__h → f {
-    : *F5VoiceImpl v ( __F5Voice_ptr v__h )
+@ f5_voice_rms F5Voice v__h → f {
+    : F5VoiceImpl v ( __F5Voice_get v__h )
     ^ . v rms
 }
