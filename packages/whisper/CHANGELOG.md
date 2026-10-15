@@ -1,5 +1,11 @@
 # Changelog
 
+## [3.2.0] — 2026-10-15
+
+- The load queue holds device views and tensor indices instead of raw host addresses. At flush it builds checked views of the mapped file (ggml or safetensors) and sends them with gpu 0.17.2's `gpu_upload_views`, still one batch. Host reads of the encoder output, logits and argmax go through gpu's bounds-checked `gpu_host_get_f32` / `gpu_host_get_i32`. `unsafe` functions: 13 → 9.
+- ggml: `gg_file_take` / `gg_file_put` check the mapped file out for a batched reader, and `gg_toff` gives a tensor's offset.
+- Transcripts from synthetic ggml models (f16 and f32) and encoder output from a synthetic HF checkpoint (f32, f16 and bf16 tensors) are byte-identical to 3.1.3, at the same speed.
+
 ## [3.1.3] — 2026-10-15
 
 - `__wh_source_done` is safe now that gpu 0.17.1's `gpu_staging_free` is. `unsafe` functions: 14 → 13.

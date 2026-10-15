@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.17.2] — 2026-10-15
+
+- `gpu_buffer_sub b off bytes`: a bounds-checked sub-view of a buffer that shares its owner, so it stays valid however long it lives. `gpu_buffer_none` returns an empty buffer.
+- `gpu_upload_views dsts srcs`: the batched upload (pinned staging, copy threads) from checked `Slice` views, each exactly its buffer's size. Safe, where `gpu_upload_batch` takes raw addresses.
+
 ## [0.17.1] — 2026-10-15
 
 - The pinned staging pair is guarded by a lock. Staged uploads (`gpu_upload` of 64 MB and up, `gpu_upload_batch`) and `gpu_staging_free` take turns. Before, two threads uploading at once could fill the same staging buffer, and a free could land under a copy in flight. `gpu_staging_free` is therefore no longer `raw`: safe code may call it.

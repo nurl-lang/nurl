@@ -98,6 +98,16 @@ $ `stdlib/core/slice.nu`
 // parsed metadata (vocabulary, tensor table). gg_ptr answers null after.
 @ gg_release_data Gg g → v { ( locked_set [? MappedFile] . g file @ ?MappedFile { F } ) }
 
+// The mapped file, checked out for a reader that needs many views of it at
+// once (a batched upload); every other use of `g` waits until gg_file_put
+// returns it. F once gg_release_data gave it back.
+@ gg_file_take Gg g → ?MappedFile { ^ ( locked_take [? MappedFile] . g file ) }
+
+@ gg_file_put Gg g sink ? MappedFile f → v { ( locked_restore [? MappedFile] . g file f ) }
+
+// Where tensor `ti`'s bytes start in the file; -1 for no such tensor.
+@ gg_toff Gg h i ti → i { ?? ( vec_get [i] . ( gg_meta h ) toffs ti ) { T x → { ^ x } F → { ^ -1 } } }
+
 // Early release (optional): the last owner gives everything back.
 @ gg_close sink Gg g → v {}
 

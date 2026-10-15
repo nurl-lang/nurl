@@ -746,6 +746,37 @@ unsafe @ gpu_upload_vec GpuBuffer dst ( Vec u ) src → i {
     ^ ( gpu_upload dst ( vec_data [u] src ) )
 }
 
+// Many uploads as ONE batch (gpu_upload_batch: pinned staging, copy
+// threads, DMA overlapping the fill): srcs[k] into dsts[k], each a checked
+// view of exactly its buffer's bytes. -1, with nothing sent, when the
+// lengths differ or a pair does not match.
+unsafe @ gpu_upload_views ( Vec GpuBuffer ) dsts ( Vec ( Slice u ) ) srcs → i {
+    : i n ( vec_len [GpuBuffer] dsts )
+    ? == n ( vec_len [( Slice u )] srcs ) {} { ^ -1 }
+    : ~ ( Vec GpuCopy ) q ( vec_new [GpuCopy] )
+    : ~ i k 0
+    ~ < k n {
+        : ~ b fit F
+        ?? ( vec_get [GpuBuffer] dsts k ) {
+            T d → {
+                ?? ( vec_get [( Slice u )] srcs k ) {
+                    T sv → {
+                        ? & != . d dptr 0 == ( slice_len [u] sv ) . d bytes {
+                            ( vec_push [GpuCopy] q @ GpuCopy { . d dptr # i ( slice_data [u] sv ) . d bytes } )
+                            = fit T
+                        } {}
+                    }
+                    F → {}
+                }
+            }
+            F → {}
+        }
+        ? fit {} { ^ -1 }
+        = k + k 1
+    }
+    ^ ( gpu_upload_batch q )
+}
+
 // The same from a checked view of host bytes (a tensor in a mapped file):
 // uploads its first dst.bytes bytes; a shorter view is refused.
 unsafe @ gpu_upload_bytes GpuBuffer dst ( Slice u ) src → i {
@@ -781,6 +812,18 @@ unsafe @ gpu_alloc Gpu g i bytes → GpuBuffer {
 // sub-range of a live buffer, or memory something else allocated. The
 // caller keeps the memory alive for as long as the view is used.
 raw @ gpu_buffer_view i dptr i bytes → GpuBuffer { ^ @ GpuBuffer { dptr bytes ( __gpu_nores ) } }
+
+// A buffer that is not there (dptr 0): what a failed lookup returns.
+unsafe @ gpu_buffer_none → GpuBuffer { ^ @ GpuBuffer { 0 0 ( __gpu_nores ) } }
+
+// `bytes` bytes of `b` from byte `off`: a view that holds b's memory (its
+// owner is shared), so it stays valid however long it lives. An empty
+// buffer when the range is not inside b.
+unsafe @ gpu_buffer_sub GpuBuffer b i off i bytes → GpuBuffer {
+    ? | | | == . b dptr 0 < off 0 < bytes 0 > bytes - . b bytes off { ^ ( gpu_buffer_none ) } {}
+    : ?GpuRes own ?? . b own { T r → @ ?GpuRes { T ( GpuRes_share r ) } F → @ ?GpuRes { F } }
+    ^ @ GpuBuffer { + . b dptr off bytes own }
+}
 
 // Let go of `b` now rather than at the end of its owner's scope.
 @ gpu_free sink GpuBuffer b → v {}
