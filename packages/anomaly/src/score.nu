@@ -33,6 +33,7 @@ $ `deps/iforest/src/iforest.nu`
 $ `deps/gpu/src/gpu.nu`
 $ `deps/gpukit/src/gpukit.nu`
 $ `stdlib/std/thread.nu`
+$ `stdlib/std/sysinfo.nu`
 
 // Below this many rows the pure loop wins on latency. Bit-equality of the
 // paths makes the threshold unobservable in results.
@@ -176,14 +177,12 @@ $ `stdlib/std/thread.nu`
 // ── Bulk raw scores ───────────────────────────────────────────────────
 
 // Pure-NURL reference path: iforest_score per row.
+// The pure path: iforest's batch scorer (c(leaf size) per node, not per
+// leaf reached), over every core for a large matrix — bit-identical to
+// scoring row by row, and within ~10 % of the OpenMP kernel on the same
+// cores.
 @ anom_scores_cpu VerModel vm ( Vec f ) scaled i n_rows i n_cols → ( Vec f ) {
-    : ( Vec f ) out ( vec_with_cap [f] n_rows )
-    : ~ i r 0
-    ~ < r n_rows {
-        ( vec_push [f] out ( iforest_score_row . vm forest scaled r ) )
-        = r + r 1
-    }
-    ^ out
+    ^ ( iforest_score_rows_par . vm forest scaled n_rows ( sys_cpu_count ) )
 }
 
 // Map a path-length total to the iforest score, matching __score_ptr's

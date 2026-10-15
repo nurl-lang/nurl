@@ -42,6 +42,8 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/core/slice.nu`
 $ `stdlib/std/float.nu`
 $ `stdlib/std/rng.nu`
+$ `stdlib/std/par.nu`
+$ `stdlib/std/arc.nu`
 
 // Euler–Mascheroni constant, for the harmonic-number approximation in c(n).
 : f GAMMA 0.5772156649015329
@@ -307,6 +309,103 @@ inline @ __path_len IfCols c i root ( Slice f ) xs i base → f {
     }
     : f avg / total # f nt
     ^ ( float_pow 2.0 - 0.0 / avg cpsi )
+}
+
+// ── Batch scoring ─────────────────────────────────────────────────────
+//
+// iforest_score_row computes c(leaf size) — a log — at every leaf it
+// reaches, once per tree per row. A batch computes it once per NODE
+// (`cleaf`) and adds the table entry instead: the same values summed in
+// the same order, so every score is bit-identical to the per-row one.
+
+@ __if_cleaf IForest fo → ( Vec f ) {
+    : i n ( vec_len [i] . fo size )
+    : ( Vec f ) out ( vec_with_cap [f] n )
+    : ~ i k 0
+    ~ < k n { ( vec_push [f] out ( iforest_avg_path ( vec_at [i] . fo size k ) ) ) = k + k 1 }
+    ^ out
+}
+
+inline @ __path_len_c IfCols c ( Slice f ) cl i root ( Slice f ) xs i base → f {
+    : ~ i node root
+    : ~ i depth 0
+    : ~ b going T
+    ~ going {
+        : i fq ( slice_at [i] . c feat node )
+        ? < fq 0 {
+            = going F
+        } {
+            : f xv ( slice_at [f] xs + base fq )
+            ? < xv ( slice_at [f] . c spl node ) { = node ( slice_at [i] . c lf node ) } { = node ( slice_at [i] . c rt node ) }
+            = depth + depth 1
+        }
+    }
+    ^ + # f depth ( slice_at [f] cl node )
+}
+
+// Scores of rows [lo, hi) of `data` into `out`.
+@ __if_score_span IForest fo ( Vec f ) cleaf ( Vec f ) data i lo i hi ( Vec f ) out → v {
+    : i nt ( vec_len [i] . fo roots )
+    : f cpsi . fo c_psi
+    : i nc . fo n_cols
+    : ( Slice i ) rts ( slice_from_vec [i] . fo roots )
+    : IfCols cols ( __if_cols fo )
+    : ( Slice f ) cl ( slice_from_vec [f] cleaf )
+    : ( Slice f ) xs ( slice_from_vec [f] data )
+    : ~ i r lo
+    ~ < r hi {
+        ? | <= nt 0 <= cpsi 0.0 { ( vec_push [f] out ? <= nt 0 0.0 0.5 ) } {
+            : ~ f total 0.0
+            : ~ i k 0
+            ~ < k nt {
+                = total + total ( __path_len_c cols cl ( slice_at [i] rts k ) xs * r nc )
+                = k + k 1
+            }
+            ( vec_push [f] out ( float_pow 2.0 - 0.0 / / total # f nt cpsi ) )
+        }
+        = r + r 1
+    }
+}
+
+// The scores of the first `n_rows` rows of `data` (n_cols values each),
+// equal to iforest_score_row's for each; a row past the data scores 0.5.
+@ iforest_score_rows IForest fo ( Vec f ) data i n_rows → ( Vec f ) {
+    : i have / ( vec_len [f] data ) ? > . fo n_cols 0 . fo n_cols 1
+    : i n ? > n_rows have have n_rows
+    : ( Vec f ) out ( vec_with_cap [f] n_rows )
+    ( __if_score_span fo ( __if_cleaf fo ) data 0 n out )
+    : ~ i r n
+    ~ < r n_rows { ( vec_push [f] out 0.5 ) = r + r 1 }
+    ^ out
+}
+
+: __IfJob { IForest fo ( Vec f ) cleaf ( Vec f ) data i n i per }
+
+// iforest_score_rows over `nt` worker threads (the rows split into
+// chunks; the same scores, in order). Below a few thousand rows the
+// threads cost more than they save, and it scores on this one.
+@ iforest_score_rows_par IForest fo ( Vec f ) data i n_rows i nt → ( Vec f ) {
+    ? | <= nt 1 < n_rows 4096 { ^ ( iforest_score_rows fo data n_rows ) } {}
+    : i have / ( vec_len [f] data ) ? > . fo n_cols 0 . fo n_cols 1
+    : i n ? > n_rows have have n_rows
+    : i nch * nt 8
+    : i per / + n - nch 1 nch
+    : ( Arc __IfJob ) ja ( arc_new [__IfJob] @ __IfJob { fo ( __if_cleaf fo ) ( vec_clone [f] data ) n per } )
+    : ( Vec ( Vec f ) ) parts ( par_map_index [( Vec f )] nch nt \ i c → ( Vec f ) {
+        : __IfJob j ( arc_get [__IfJob] ja )
+        : i lo * c . j per
+        : ~ i hi + lo . j per
+        ? > hi . j n { = hi . j n } {}
+        : ( Vec f ) o ( vec_new [f] )
+        ? < lo hi { ( __if_score_span . j fo . j cleaf . j data lo hi o ) } {}
+        ^ o
+    } )
+    : ( Vec f ) out ( vec_with_cap [f] n_rows )
+    : ~ i c 0
+    ~ < c nch { ( vec_extend [f] out ( vec_at [( Vec f )] parts c ) ) = c + c 1 }
+    : ~ i r n
+    ~ < r n_rows { ( vec_push [f] out 0.5 ) = r + r 1 }
+    ^ out
 }
 
 // ── Accessors / cleanup ───────────────────────────────────────────────

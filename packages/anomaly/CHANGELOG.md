@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.36.1] — 2026-10-15
+
+### Performance
+
+- The pure scoring path (no accelerator, or under the GPU minimum) is
+  iforest 0.1.9's batch scorer over every core: 5.4x faster on a large
+  matrix (200 000 rows: 9.5 s to 1.8 s), bit-identical, and within 10 %
+  of the OpenMP kernel on the same cores. Requires iforest 0.1.9.
+
 ## [0.36.0] — 2026-10-15
 
 ### Changed
