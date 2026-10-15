@@ -420,6 +420,31 @@ inline @ alloc_grow_pow2 i cap i need i first → i {
     = . data idx x
 }
 
+// Run `f` on the element at `idx` in place: nothing is copied, moved or
+// dropped, so a large record or one that owns buffers is changed where it
+// lives. F, and `f` does not run, when `idx` is out of range. `v` is taken
+// `inout`, so a closure that could reach `v` (capturing it, or the record
+// it is a field of) is rejected: nothing can grow or shrink the Vec under
+// the element `f` is holding.
+@ vec_update [A] inout ( Vec A ) v i idx ( @ v inout A ) f → b {
+    : s ctl . v ctl
+    : i len ( __vec_len_raw ctl )
+    ? >= # u64 idx # u64 len { ^ F } {}
+    : ~ * A data # *A ( nurl_vctl_data ctl )
+    ( f . data idx )
+    ^ T
+}
+
+// vec_update with a result: `f`'s, or `none` (and `f` does not run) when
+// `idx` is out of range.
+@ vec_apply [A R] inout ( Vec A ) v i idx R none ( @ R inout A ) f → R {
+    : s ctl . v ctl
+    : i len ( __vec_len_raw ctl )
+    ? >= # u64 idx # u64 len { ^ none } {}
+    : ~ * A data # *A ( nurl_vctl_data ctl )
+    ^ ( f . data idx )
+}
+
 // The element `x` replaces is dropped (vec_replace hands it back instead).
 @ vec_set [A] ( Vec A ) v i idx A x → b {
     : s ctl . v ctl

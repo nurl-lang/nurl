@@ -422,6 +422,17 @@ generic that copies its `T` cannot be instantiated with one (h235)
   `locked_restore` moving it back. nwasm 3.0.0 uses them to run its
   instance under a lock without `unsafe`.
 
+- **`vec_update` / `vec_apply`** (stdlib/core/vec.nu, spec §7.2). Run
+  a closure on one element of a Vec in place: a record that owns buffers
+  is neither copied nor moved. `vec_apply` hands back the closure's
+  result, or a fallback when the index is out of range. The Vec is passed
+  `inout`, so a closure that could reach it (capturing it, or the record
+  it is a field of) is rejected: nothing grows or shrinks the Vec under
+  the element. The capture check now also covers a field passed `inout`
+  (`. c fds` beside a closure capturing `c`) and closures written inline
+  at the call, which it missed before. nwasm 3.1.0 keeps its WASI
+  descriptor table with them, without `unsafe`.
+
 - **Process control without pointers** (stdlib/std/process.nu).
   `process_run_inherit` runs an argv as a child sharing this process's
   stdio and returns its exit status. `posix_execvp` replaces the process
@@ -685,6 +696,15 @@ generic that copies its `T` cannot be instantiated with one (h235)
   `$NURL_STDLIB/stdlib`, each recognised by its `core/vec.nu`; h178).
 
 ### Fixed
+
+- **A `??` whose arms each hand over a value of their own no longer
+  borrows what it matched on.** `: ( Vec u ) h ?? ( vec_get [Fd] fds 0 )
+  { T d → ( vec_clone [u] . d host ) F → ( vec_new [u] ) }` was taken
+  for a borrow of `fds`, and changing `fds` afterwards was rejected. The
+  scrutinee's lend went to the binding wholesale. Now the binding's
+  source expression decides, arm by arm, and a payload view (`T d →
+  ( slice_from_vec [u] . d host )`) still borrows
+  (bck_join_owned_arms, should_fail_join_payload_view).
 
 - **A pointer is not passed where a struct is, nor a struct where a
   pointer is** (h268). A `*f` handed to a `( Slice f )` parameter — or,

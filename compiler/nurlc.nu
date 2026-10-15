@@ -1344,6 +1344,10 @@ unsafe @ agg_field_count i syms s ot → i {
 : ~ i g_ff_gen 0  // function counter keying the field-owner flags (mem_ff_slot)
 : ~ i g_ff_any 0  // 1 once this function made a field-owner flag
 : ~ i g_summaries_final 0  // 1 once the module's functions are all compiled (mem_emit_arg_flags): __hown_dyn may memoize
+// The last `let`'s right-hand source expression (g_bck_rhs_sx), kept past
+// its row: a join it bound is followed by that expression, exactly (h216),
+// not by a blanket borrow row.
+: ~ s g_bck_let_sx_last ``
 : ~ i g_match_ser 0  // matches compiled so far (keys a match's payload provenance, mem_note_plend)
 : ~ i g_loop_nest 0  // loops open around the statement being compiled (gen_while / gen_for)
 : ~ i g_ff_mark 0  // 1 while a drop point may precede (in a loop) a field-owner flag's first store
@@ -13599,24 +13603,29 @@ unsafe @ bck_check_lit_moves i lex i line i col s what s tab i scmask s moved s 
         // binding's backing pointer (`__ptr`) typed `<T>*`; emit no
         // value load. Everything else is the ordinary by-value path.
         : b is_inout_arg ( str_contains_word callee_inout ( nurl_str_int arg_idx ) )
-        ? & != 0 g_borrowck ( is_ident_tok bck_arg_tt ) {
-            : s __ioa_name ( nurl_str_cat bck_arg_val `` )
-            ? is_inout_arg {
-                ? | ( str_contains_word __callee_caps __ioa_name ) ( str_contains_word __call_caps __ioa_name )
-                { ( die lex ( nurl_str_cat3 `'` __ioa_name `' is passed 'inout' to a closure that also captures it — inside, the parameter and the capture are two names for one value, and a write through one leaves what was read through the other dangling. Pass it as the parameter only (do not capture it), or capture it only.` ) ) } {}
-                = __call_io_roots ( nurl_str_cat3 __call_io_roots ` ` __ioa_name )
-            } {
-                : s __ioa_caps ( nurl_sym_get2 syms __ioa_name `__closure_caps` )
-                ? != 0 ( nurl_str_len __ioa_caps ) {
-                    : ~ s __ioa_r ( nurl_str_cat __call_io_roots `` )
-                    ~ != 0 ( nurl_str_len __ioa_r ) {
-                        : s __ioa_w ( str_first_word __ioa_r ) = __ioa_r ( str_skip_word __ioa_r )
-                        ? ( str_contains_word __ioa_caps __ioa_w )
-                        { ( die lex ( nurl_str_cat3 `'` __ioa_w `' is passed 'inout' beside a closure that captures it — the callee can reach one value under two unrelated names, and a write through one leaves what was read through the other dangling. Pass it as the parameter only (do not capture it), or capture it only.` ) ) } {}
-                    }
-                    = __call_caps ( nurl_str_cat3 __call_caps ` ` __ioa_caps )
-                } {}
-            }
+        ? & != 0 g_borrowck | ( is_ident_tok bck_arg_tt ) & is_inout_arg == bck_arg_tt TT_DOT {
+            // `. c fds` passed inout: the value reached is `c`'s
+            : ~ s __ioa_name ( nurl_str_cat bck_arg_val `` )
+            ? == bck_arg_tt TT_DOT {
+                = __ioa_name ``
+                ? ( is_ident_tok ( nurl_lex_peek_type lex ) ) { = __ioa_name ( nurl_str_cat ( nurl_lex_peek_val lex ) `` ) } {}
+            } {}
+            ? == 0 ( nurl_str_len __ioa_name ) {} { ? is_inout_arg {
+                    ? | ( str_contains_word __callee_caps __ioa_name ) ( str_contains_word __call_caps __ioa_name )
+                    { ( die lex ( nurl_str_cat3 `'` __ioa_name `' is passed 'inout' to a closure that also captures it — inside, the parameter and the capture are two names for one value, and a write through one leaves what was read through the other dangling. Pass it as the parameter only (do not capture it), or capture it only.` ) ) } {}
+                    = __call_io_roots ( nurl_str_cat3 __call_io_roots ` ` __ioa_name )
+                } {
+                    : s __ioa_caps ( nurl_sym_get2 syms __ioa_name `__closure_caps` )
+                    ? != 0 ( nurl_str_len __ioa_caps ) {
+                        : ~ s __ioa_r ( nurl_str_cat __call_io_roots `` )
+                        ~ != 0 ( nurl_str_len __ioa_r ) {
+                            : s __ioa_w ( str_first_word __ioa_r ) = __ioa_r ( str_skip_word __ioa_r )
+                            ? ( str_contains_word __ioa_caps __ioa_w )
+                            { ( die lex ( nurl_str_cat3 `'` __ioa_w `' is passed 'inout' beside a closure that captures it — the callee can reach one value under two unrelated names, and a write through one leaves what was read through the other dangling. Pass it as the parameter only (do not capture it), or capture it only.` ) ) } {}
+                        }
+                        = __call_caps ( nurl_str_cat3 __call_caps ` ` __ioa_caps )
+                    } {}
+                } }
         } {}
         // Exclusive-access check. A bare-identifier argument that is
         // mutably borrowed (`inout`) here must not be aliased by
@@ -14351,6 +14360,22 @@ unsafe @ bck_check_lit_moves i lex i line i col s what s tab i scmask s moved s 
         ? & != 0 g_srcx_on ( __is_closure_ty at ) {
             ? == bck_arg_tt TT_BACKSLASH { ( bck_closure_effects_run ( nurl_sym_get syms `__last_closure_effects__` ) ( nurl_lex_line lex ) ) } {}
             ? ( is_ident_tok bck_arg_tt ) { ( bck_closure_effects_run ( nurl_sym_get2 syms bck_arg_val `__closure_effects` ) ( nurl_lex_line lex ) ) } {}
+        } {}
+        // An inline closure literal's captures are known only now: one of
+        // them passed inout earlier in this call is the same aliasing the
+        // pre-generation check catches for a closure binding, and an inout
+        // argument after it is checked against them.
+        ? & != 0 g_borrowck == bck_arg_tt TT_BACKSLASH {
+            : s __il_caps ( nurl_sym_get syms `__last_closure_caps__` )
+            ? != 0 ( nurl_str_len __il_caps ) {
+                : ~ s __il_r ( nurl_str_cat __call_io_roots `` )
+                ~ != 0 ( nurl_str_len __il_r ) {
+                    : s __il_w ( str_first_word __il_r ) = __il_r ( str_skip_word __il_r )
+                    ? ( str_contains_word __il_caps __il_w )
+                    { ( die lex ( nurl_str_cat3 `'` __il_w `' is passed 'inout' beside a closure that captures it — the callee can reach one value under two unrelated names, and a write through one leaves what was read through the other dangling. Pass it as the parameter only (do not capture it), or capture it only.` ) ) } {}
+                }
+                = __call_caps ( nurl_str_cat3 __call_caps ` ` __il_caps )
+            } {}
         } {}
         // A closure handed over here: what it captured (sound rules — the
         // owners a callee that keeps it then depends on, after the loop).
@@ -16862,7 +16887,9 @@ unsafe @ gen_cond i lex i syms i cg → s {
                 ? & == 0 tdr == 0 edr { ( nurl_print `, ` ) } {}
                 ? == 0 edr { ( nurl_print `[ ` ) ( nurl_print e_hown ) ( nurl_print `, %` ) ( nurl_print elbl ) ( nurl_print ` ]` ) } {}
                 ( nurl_print `\n` )
-                ( nurl_sym_def syms `__last_join_own__` jo )
+                // both live arms own: a constant (see the `??` join)
+                : b __q_allown & | != 0 tdr ( seq t_hown `true` ) | != 0 edr ( seq e_hown `true` )
+                ( nurl_sym_def syms `__last_join_own__` ? __q_allown `true` jo )
             } {}
             // An owning struct out of two calls (mem_arm_struct_hown): the
             // phi of their bits, when every live arm has one.
@@ -18782,7 +18809,11 @@ unsafe @ gen_match i lex i syms i cg → s {
             : ~ s hfull ( nurl_str_cat hown_entries `` )
             ? != 0 ( nurl_str_len fallback_pred ) { = hfull ( nurl_str_cat4 hfull `, [ false, %` fallback_pred ` ]` ) } {}
             ( nurl_print `  ` ) ( nurl_print own_reg ) ( nurl_print ` = phi i1 ` ) ( nurl_print hfull ) ( nurl_print `\n` )
-            ( nurl_sym_def syms `__last_join_own__` own_reg )
+            // Every arm hands over a value of its own: the join owns on
+            // every path — a constant, which a binding takes for owned
+            // (no borrow of the scrutinee its arms read to make it).
+            : b __m_allown & < ( nurl_str_find hfull `[ false` ) 0 < ( nurl_str_find hfull `[ %` ) 0
+            ( nurl_sym_def syms `__last_join_own__` ? __m_allown `true` own_reg )
         } {}
         ( nurl_sym_set_deep syms `__last_join_lend_key__` __m_lkey )
         ( nurl_sym_set_deep syms `__last_join_lend_args__` __m_largs )
@@ -21955,11 +21986,19 @@ unsafe @ __src_has_raw_ptr s text → b {
     // arm's.
     ? | == rhs_tt TT_QUESTQUEST == rhs_tt TT_QUEST { ? != 0 ( nurl_sym_len syms `__last_join_own__` ) {
             : s jo ( nurl_sym_get syms `__last_join_own__` )
+            // Owned on every path: a value of its own.
+            ? ( seq jo `true` ) { ( mem_udrop_flag_set syms cg ptr `1` ) ( __sb syms ptr `` ) ^ v } {}
             ( mem_udrop_flag_set syms cg ptr jo )
             // Owned on some paths, lent on others (`{ ( string_from d ) } { h0 }`):
             // whether it owns is its flag, which a store or return consults.
             ( __sb syms ptr `dyn` )
-            ( bck_note_borrow syms ptr )
+            // What it may borrow: its `let` row's source expression says,
+            // arm by arm (a `vec_clone` arm borrows nothing) — the blanket
+            // borrow row would also hand it the lend of the scrutinee's
+            // call, which only the arms that yield a payload pass on.
+            : b __j_let ( seq ( nurl_sym_get2 syms ptr `__bname` ) ( nurl_sym_get g_bck `lastname` ) )
+            : b __j_sx & & != 0 g_srcx_on __j_let ( __sx_lends_any g_bck_let_sx_last )
+            ? __j_sx {} { ( bck_note_borrow syms ptr ) }
             ^ v } {} } {}
     ? & != 0 ( nurl_str_len rhs_borrow ) == rhs_tt TT_LPAREN {
         ? != 0 ( nurl_sym_len2 syms ( nurl_sym_get syms `__last_call_name__` ) `__ret_borrow` ) {
@@ -26476,6 +26515,11 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                 ( nurl_sym_set g_bck ( bck_bkey `vw_` ( bck_field rec 1 ) ) ? ( seq ( bck_field rec 5 ) `o` ) `o` ? | ( seq ( bck_field rec 5 ) `v` ) ( seq ( bck_field rec 5 ) `w` ) `1` `` )
                 ( nurl_sym_set g_bck ( bck_bkey `wv_` ( bck_field rec 1 ) ) ? ( seq ( bck_field rec 5 ) `w` ) `1` `` )
                 ? != 0 g_bck_has_borrow { ( nurl_sym_set g_bck ( bck_bkey `bs_` ( bck_field rec 1 ) ) `` ) } {}
+                // A join or a block (`n` with no call of its own): its source
+                // expression names each arm's sources, a call in an arm by
+                // that callee's summary — the line's other calls (the
+                // scrutinee's `vec_get`) lend to the arms, not to it.
+                ? & == lmk0 110 == 0 ( nurl_str_len ( bck_field rec 6 ) ) { ( nurl_sym_set g_bck `plend` `` ) } {}
                 = st ( bck_bind_row st ( bck_field_int rec 1 ) rec lsrcs lmk )
                 ? == lmk0 110 { = st ( bck_nest_borrow st ( bck_field_int rec 1 ) lnest ) } {}
                 = p + p 1
@@ -29393,6 +29437,7 @@ unsafe @ bck_loop_mask s pre s post → s {
         ? & != 0 g_bck_closure_depth >= ( bck_walk_class vt ) 2 { ( __clo_view_note syms name g_bck_rhs_sx T ) } {}
         ( bck_record_binding `let` name bck_line ( bck_walk_class vt ) vt )
         = g_bck_rhs_callee ``
+        = g_bck_let_sx_last ( nurl_str_cat g_bck_rhs_sx `` )
         = g_bck_rhs_sx ``
         ? | != 0 g_rprov_on != 0 g_rpg_on { ( __rprov_bind syms name vt __rp_reads bck_rhs_tt F ) } {}
         ? != 0 g_clo_lend_set { ( mem_note_clo_lend syms name vt bck_rhs_tt ) } {}
@@ -29701,6 +29746,7 @@ unsafe @ bck_loop_mask s pre s post → s {
             ? & != 0 g_bck_closure_depth >= ( bck_walk_class ( nurl_llty ptype ) ) 2 { ( __clo_view_note syms name g_bck_rhs_sx T ) } {}
             ( bck_record_binding `let` name bck_line ( bck_walk_class ( nurl_llty ptype ) ) ( nurl_llty ptype ) )
             = g_bck_rhs_callee ``
+            = g_bck_let_sx_last ( nurl_str_cat g_bck_rhs_sx `` )
             = g_bck_rhs_sx ``
             ? | != 0 g_rprov_on != 0 g_rpg_on { ( __rprov_bind syms name ( nurl_llty ptype ) __rp_reads bck_rhs_tt F ) } {}
             ? != 0 g_clo_lend_set { ( mem_note_clo_lend syms name vt bck_rhs_tt ) } {}
@@ -30083,6 +30129,7 @@ unsafe @ bck_loop_mask s pre s post → s {
         ? & != 0 g_bck_closure_depth >= ( bck_walk_class vt ) 2 { ( __clo_view_note syms name g_bck_rhs_sx F ) } {}
         ( bck_record_binding `assign` name bck_line ( bck_walk_class vt ) vt )
         = g_bck_rhs_callee ``
+        = g_bck_let_sx_last ( nurl_str_cat g_bck_rhs_sx `` )
         = g_bck_rhs_sx ``
         ? | != 0 g_rprov_on != 0 g_rpg_on { ( __rprov_bind syms name vt __rp_reads bck_rhs_tt T ) } {}
         ( bck_assign_alias syms bck_rhs_tt bck_rhs_val name vt bck_line )

@@ -1916,11 +1916,18 @@ place. Three rules keep it exclusive: the argument must be a mutable
 `: ~` binding; a closure value carries no summary of what it does, so
 every view into an `inout` argument ends at the call (the closure may
 move or free what it holds); and a closure may not be handed `inout` a
-binding it also captures — nor may a call pass a binding `inout` beside a
-closure argument that captures it — because inside, the parameter and the
-capture would be two names for one value. `locked_update` and
-`locked_apply` (stdlib/std/thread.nu) are built on it: they run a closure
-on a `Locked` value where it lives, without moving it out and back.
+binding it also captures — nor may a call pass a binding (or a field of
+one, `. c fds`) `inout` beside a closure argument, named or written inline,
+that captures it — because inside, the parameter and the capture would be
+two names for one value. `locked_update` and `locked_apply`
+(stdlib/std/thread.nu) are built on it: they run a closure on a `Locked`
+value where it lives, without moving it out and back. So are `vec_update`
+and `vec_apply` (stdlib/core/vec.nu): they run one on a Vec's element in
+place, the Vec passed `inout` so that a closure able to grow or shrink it
+under that element is rejected. A closure captures a scalar by value: an
+assignment to one inside it changes the closure's copy (the compiler warns),
+so a result comes back as the closure's return value (`vec_apply`,
+`locked_apply`) or through an `inout` parameter.
 
 A foreign (`&`) declaration may mark a parameter `inout` too: the C
 function takes a pointer to a `T` it writes a result through, and the

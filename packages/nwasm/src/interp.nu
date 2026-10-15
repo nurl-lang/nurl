@@ -247,6 +247,51 @@ $ `stdlib/core/slice.nu`
 // `append` = O_APPEND: every write lands at the end regardless of pos.
 : WFd { i kind ( Vec u ) data i pos ( Vec u ) host ( Vec u ) name b writable b dirty b append }
 
+// What WASI calls see of the host, per process in the guest's terms: the
+// argument and environment lists, the descriptor table (0/1/2 stdio, 3
+// preopen, …; a closed one is kind 0) and the captured output. A spawned
+// thread's instance shares its owner's (one Locked handle), so a file one
+// thread opens is the same fd in another, and two threads' calls take
+// turns at it instead of writing one record at once.
+: WasiCtx {
+    ( Vec WFd ) fds
+    ( Vec u ) capout  // captured module stdout (raw bytes, NULs preserved)
+    ( Vec u ) caperr  // captured module stderr
+}
+
+// The program's arguments (argv[0] = program) and environment entries
+// ("NAME=VALUE"): set before it runs and read by every thread, so they are
+// frozen — reading them takes no lock — and a push makes a new set.
+: ArgEnv { ( Vec Arg ) argv ( Vec Arg ) envp }
+
+@ __args_copy ( Vec Arg ) src → ( Vec Arg ) {
+    : ~ ( Vec Arg ) out ( vec_new [Arg] )
+    : i n ( vec_len [Arg] src )
+    : ~ i k 0
+    ~ < k n { ( vec_push [Arg] out @ Arg { ( vec_clone [u] . ( vec_at [Arg] src k ) bytes ) } ) = k + k 1 }
+    ^ out
+}
+
+// `a` with entry `b` appended to its arguments (`to_argv`) or environment.
+@ __argenv_push ( Arc ArgEnv ) a ( Vec u ) b b to_argv → ( Arc ArgEnv ) {
+    : ArgEnv o ( arc_get [ArgEnv] a )
+    : ~ ( Vec Arg ) av ( __args_copy . o argv )
+    : ~ ( Vec Arg ) ev ( __args_copy . o envp )
+    ? to_argv { ( vec_push [Arg] av @ Arg { ( vec_clone [u] b ) } ) } { ( vec_push [Arg] ev @ Arg { ( vec_clone [u] b ) } ) }
+    ^ ( arc_new [ArgEnv] @ ArgEnv { av ev } )
+}
+
+@ __wasi_ctx_new → ( Locked WasiCtx ) {
+    : ~ WasiCtx c @ WasiCtx { ( vec_new [WFd] ) ( vec_new [u] ) ( vec_new [u] ) }
+    // fds 0/1/2 = stdin/stdout/stderr (kind 1); higher slots filled by preopen.
+    : ~ i k 0
+    ~ < k 3 { ( vec_push [WFd] . c fds ( __mkfd 1 ) ) = k + k 1 }
+    ^ ( locked_new [WasiCtx] c )
+}
+
+// Descriptor `fd`'s kind; 0 when there is no such open descriptor.
+@ __fd_kind WasiCtx c i fd → i { ?? ( vec_get [WFd] . c fds fd ) { T x → { ^ . x kind } F → { ^ 0 } } }
+
 : InterpImpl {
     s mod  // *ModuleImpl
     ( Vec i ) vs  // value stack
@@ -268,9 +313,9 @@ $ `stdlib/core/slice.nu`
     ( Vec i ) table  // runtime funcref table (mutable via table.set/grow/…)
     ( Vec i ) data_dropped  // 1 per data segment once dropped / active
     ( Vec i ) elem_dropped  // 1 per element segment once dropped / active
-    ( Vec ( Box Arg ) ) argv  // WASI program arguments (argv[0] = program)
-    ( Vec ( Box Arg ) ) envp  // WASI environment entries ("NAME=VALUE")
-    ( Vec ( Box WFd ) ) fds  // file-descriptor table (0/1/2 stdio, 3 preopen, …; a closed one is an empty box)
+    ( Locked WasiCtx ) wasi  // the WASI host state, shared with every thread of the instance
+    ( Arc ArgEnv ) argenv  // the program's arguments and environment, shared and frozen
+    b cap  // capture stdout/stderr into the WasiCtx's capout/caperr instead of the host streams
     // Why execution stopped, as one word so the driver's hot loop tests one
     // load instead of two byte fields: bit 0 = trapped, bit 1 = exited (via
     // proc_exit). `interp_trapped` / `interp_exited` are the readers; nothing
@@ -334,9 +379,6 @@ $ `stdlib/core/slice.nu`
     // Slot 0 is reserved — the stdlib reads handle 0 as "failed".
     ( Vec i ) nethandles
     ( Vec i ) netkinds  // 1 = TCP, 2 = UDP (which close the runtime owes it)
-    b cap  // capture stdout/stderr into capout/caperr instead of the host streams
-    ( Vec u ) capout  // captured module stdout (raw bytes, NULs preserved)
-    ( Vec u ) caperr  // captured module stderr
     ( Vec s ) pfuncs  // *PFunc per defined function, predecoded lazily (#s 0 until first call)
     ( Vec ( Box PFunc ) ) pf_owned  // the records `pfuncs` points at: this instance owns them
     // Threads (wasi-threads). A spawned thread runs its OWN Interp — own
@@ -353,10 +395,17 @@ $ `stdlib/core/slice.nu`
     i tstart_fidx  // cached export index of `wasi_thread_start` (-2 = not looked up)
     i sp_global  // cached global index of `__stack_pointer` (-2 = not looked up)
     ( Vec i ) import_ids  // per import: its dispatch number (__wasi_resolve; -3 = not yet)
+    ( Vec i ) import_sigs  // per import: params | results << 16 (-1 = not yet)
     // The module this instance runs, held so it outlives every user of `mod`
     // (owner only; a thread borrows its owner's).
     Module modh
 }
+
+// The instance's WASI state, checked out for one call (every other thread's
+// WASI call waits until __ctx_put returns it).
+@ __ctx_take inout InterpImpl it → WasiCtx { ^ ( locked_take [WasiCtx] . it wasi ) }
+
+@ __ctx_put inout InterpImpl it sink WasiCtx c → v { ( locked_restore [WasiCtx] . it wasi c ) }
 
 // The call-out bridge's closure environment, decomposed for the emitted
 // code (which calls fn(env)) and released with the instance. Not a closure
@@ -462,6 +511,7 @@ unsafe @ interp_new Module m__h → Interp {
     = . it modh ( Module_share m__h )
     = . it pfuncs ( vec_new [s] )
     = . it import_ids ( vec_new [i] )
+    = . it import_sigs ( vec_new [i] )
     = . it pf_owned ( vec_new [( Box PFunc )] )
     = . it jit_ctx_mem ( vec_new [( Vec i )] )
     = . it vs ( vec_new [i] )
@@ -497,12 +547,11 @@ unsafe @ interp_new Module m__h → Interp {
     = . it mem_pages __mpages
     = . it mem_bytes * __mpages ( __page )
     = . it globals ( vec_new [i] )
-    = . it argv ( vec_new [( Box Arg )] )
-    = . it envp ( vec_new [( Box Arg )] )
-    = . it fds ( vec_new [( Box WFd )] )
+    = . it wasi ( __wasi_ctx_new )
+    = . it argenv ( arc_new [ArgEnv] @ ArgEnv { ( vec_new [Arg] ) ( vec_new [Arg] ) } )
+    = . it cap F
     // fds 0/1/2 = stdin/stdout/stderr (kind 1); higher slots filled by preopen.
     : ~ i sfd 0
-    ~ < sfd 3 { ( vec_push [( Box WFd )] . it fds ( __mkfd 1 ) ) = sfd + sfd 1 }
     = . it halt 0
     = . it exit_code 0
     = . it trapmsg ( vec_new [u] )
@@ -533,9 +582,6 @@ unsafe @ interp_new Module m__h → Interp {
     = . it netkinds ( vec_new [i] )
     ( vec_push [i] . it nethandles 0 )
     ( vec_push [i] . it netkinds 0 )
-    = . it cap F
-    = . it capout ( vec_new [u] )
-    = . it caperr ( vec_new [u] )
     = . it owner # s 0
     = . it next_tid 1
     = . it thread_kids ( vec_new [i] )
@@ -609,10 +655,9 @@ unsafe @ interp_new Module m__h → Interp {
     ^ h
 }
 
-// A fresh file-descriptor record of the given kind (a box: a *WFd into
-// it stays put while the table grows).
-@ __mkfd i kind → ( Box WFd ) {
-    ^ ( box_new [WFd] @ WFd { kind ( vec_new [u] ) 0 ( vec_new [u] ) ( vec_new [u] ) F F F } )
+// A fresh file-descriptor record of the given kind (0 = closed).
+@ __mkfd i kind → WFd {
+    ^ @ WFd { kind ( vec_new [u] ) 0 ( vec_new [u] ) ( vec_new [u] ) F F F }
 }
 
 // The JIT's code arena: chunks of executable memory, each mapped from the
@@ -662,14 +707,19 @@ unsafe @ __jit_arena_unmap i arena → v {
 // console. Enable before exec_func; read the buffers after it.
 @ interp_capture Interp h → v { ( locked_update [InterpImpl] . h l \ inout InterpImpl it → v { = . it cap T } ) }
 
+// The instance's WASI state (a share of it).
+@ __interp_wasi Interp h → ( Locked WasiCtx ) {
+    ^ ( locked_apply [InterpImpl ( Locked WasiCtx )] . h l \ inout InterpImpl it → ( Locked WasiCtx ) { ^ ( Locked_share [WasiCtx] . it wasi ) } )
+}
+
 // The captured bytes — a copy of the Interp's buffers. Raw bytes, exactly
 // as the module wrote them: a NUL neither truncates nor terminates.
 @ interp_stdout_bytes Interp h → ( Vec u ) {
-    ^ ( locked_apply [InterpImpl ( Vec u )] . h l \ inout InterpImpl it → ( Vec u ) { ^ ( vec_clone [u] . it capout ) } )
+    ^ ( locked_apply [WasiCtx ( Vec u )] ( __interp_wasi h ) \ inout WasiCtx c → ( Vec u ) { ^ ( vec_clone [u] . c capout ) } )
 }
 
 @ interp_stderr_bytes Interp h → ( Vec u ) {
-    ^ ( locked_apply [InterpImpl ( Vec u )] . h l \ inout InterpImpl it → ( Vec u ) { ^ ( vec_clone [u] . it caperr ) } )
+    ^ ( locked_apply [WasiCtx ( Vec u )] ( __interp_wasi h ) \ inout WasiCtx c → ( Vec u ) { ^ ( vec_clone [u] . c caperr ) } )
 }
 
 // Did the guest trap? Did it call proc_exit? The two halves of `halt`.
@@ -708,13 +758,13 @@ unsafe @ __jit_arena_unmap i arena → v {
 // Append a program argument (copied from a NUL-terminated host string).
 @ interp_push_arg Interp h s str → v {
     : ( Vec u ) b ( bytes_from_str str )
-    ( locked_update [InterpImpl] . h l \ inout InterpImpl it → v { ( vec_push [( Box Arg )] . it argv ( box_new [Arg] @ Arg { ( vec_clone [u] b ) } ) ) } )
+    ( locked_update [InterpImpl] . h l \ inout InterpImpl it → v { = . it argenv ( __argenv_push . it argenv b T ) } )
 }
 
 // Append an environment entry ("NAME=VALUE", copied).
 @ interp_push_env Interp h s str → v {
     : ( Vec u ) b ( bytes_from_str str )
-    ( locked_update [InterpImpl] . h l \ inout InterpImpl it → v { ( vec_push [( Box Arg )] . it envp ( box_new [Arg] @ Arg { ( vec_clone [u] b ) } ) ) } )
+    ( locked_update [InterpImpl] . h l \ inout InterpImpl it → v { = . it argenv ( __argenv_push . it argenv b F ) } )
 }
 
 // Enable the module "env" GPU/CUDA host-import bridge. Off by default: those
@@ -731,13 +781,14 @@ unsafe @ __jit_arena_unmap i arena → v {
 
 // Grant the module one preopened host directory, visible to it as `guest_name`
 // (the path it resolves opens against). Installed as fd 3.
-unsafe @ interp_set_preopen Interp it__h s host_path s guest_name → v {
-    : ~ * InterpImpl it ( __Interp_ptr it__h )
-    : ( Box WFd ) fb ( __mkfd 2 )
-    : *WFd f # *WFd ( box_ptr [WFd] fb )
+@ interp_set_preopen Interp it__h s host_path s guest_name → v {
+    : ~ WFd f ( __mkfd 2 )
     = . f host ( bytes_from_str host_path )
     = . f name ( bytes_from_str guest_name )
-    ( vec_push [( Box WFd )] . ( __host . it 0 ) fds fb )
+    : ( Locked WasiCtx ) w ( __interp_wasi it__h )
+    : ~ WasiCtx c ( locked_take [WasiCtx] w )
+    ( vec_push [WFd] . c fds f )
+    ( locked_restore [WasiCtx] w c )
 }
 
 // Run the module's start-section function, if any — the final instantiation
@@ -769,7 +820,9 @@ unsafe @ __interp_thread_new inout InterpImpl parent → ( Arc InterpImpl ) {
     = . it vs ( vec_new [i] )
     = . it mem_pages . ho mem_pages
     = . it mem_bytes . ho mem_bytes
-    = . it fds ( vec_new [( Box WFd )] )  // unused in a thread: __host redirects
+    = . it wasi ( Locked_share [WasiCtx] . ho wasi )
+    = . it argenv ( arc_clone [ArgEnv] . ho argenv )
+    = . it cap . ho cap
     = . it halt 0
     = . it exit_code 0
     = . it trapmsg ( vec_new [u] )
@@ -781,9 +834,6 @@ unsafe @ __interp_thread_new inout InterpImpl parent → ( Arc InterpImpl ) {
     = . it shared_mem . ho shared_mem
     = . it nethandles ( vec_new [i] )
     = . it netkinds ( vec_new [i] )
-    = . it cap . ho cap
-    = . it capout ( vec_new [u] )
-    = . it caperr ( vec_new [u] )
     = . it owner # s ho
     = . it next_tid 0
     = . it thread_kids ( vec_new [i] )
@@ -801,6 +851,7 @@ unsafe @ __interp_thread_new inout InterpImpl parent → ( Arc InterpImpl ) {
     // mutated in place), so a thread decodes what it actually runs.
     = . it pfuncs ( vec_new [s] )
     = . it import_ids ( vec_new [i] )
+    = . it import_sigs ( vec_new [i] )
     = . it pf_owned ( vec_new [( Box PFunc )] )
     = . it jit_ctx_mem ( vec_new [( Vec i )] )
     : i nf ( vec_len [( Box WFunc )] . m funcs )
@@ -1269,11 +1320,16 @@ unsafe @ __call_import inout InterpImpl it inout ModuleImpl m i fidx → v {
     // compares, and a module calling the host in a loop paid it per call.
     ~ <= ( vec_len [i] . it import_ids ) fidx { ( vec_push [i] . it import_ids -3 ) }
     : ~ i id ( vec_at [i] . it import_ids fidx )
+    // (The import record itself only to resolve it, and for an import no
+    // dispatch number covers.)
+    ? != id -3 { ? ( __wasi_dispatch_id it id ) { ^ v } {} } {}
     : s wp ?? ( vec_get [( Box WImport )] . m imports fidx ) { T x → # s ( box_ptr [WImport] x ) F → # s 0 }
     ? == # i wp 0 { ( __trap it `bad import index` ) ^ v } {}
     : *WImport w # *WImport wp
-    ? == id -3 { = id ( __wasi_resolve . w module . w field ) ( vec_put [i] . it import_ids fidx id ) } {}
-    ? ( __wasi_dispatch_id it id ) { ^ v } {}
+    ? == id -3 {
+        = id ( __wasi_resolve . w module . w field ) ( vec_put [i] . it import_ids fidx id )
+        ? ( __wasi_dispatch_id it id ) { ^ v } {}
+    } {}
     ( __wasi_dispatch it . w module . w field )
 }
 
@@ -6291,10 +6347,18 @@ unsafe @ __rdo_dyn inout InterpImpl it inout ModuleImpl m s caller i callee i ar
 }
 
 unsafe @ __rdo_import inout InterpImpl it inout ModuleImpl m i callee i argbase * i caller_rbase → v {
-    : s wt ( _module_func_type m callee )
-    : ~ i np 0
-    : ~ i nr 0
-    ? != # i wt 0 { : *FuncType wft # *FuncType wt = np ( vec_len [i] . wft params ) = nr ( vec_len [i] . wft results ) } {}
+    // The import's parameter and result counts, looked up once: a module
+    // calling the host in a loop paid the signature walk per call.
+    ~ <= ( vec_len [i] . it import_sigs ) callee { ( vec_push [i] . it import_sigs -1 ) }
+    : ~ i sig ( vec_at [i] . it import_sigs callee )
+    ? < sig 0 {
+        : s wt ( _module_func_type m callee )
+        = sig 0
+        ? != # i wt 0 { : *FuncType wft # *FuncType wt = sig | ( vec_len [i] . wft params ) << ( vec_len [i] . wft results ) 16 } {}
+        ( vec_put [i] . it import_sigs callee sig )
+    } {}
+    : i np & sig 65535
+    : i nr >> sig 16
     : ~ i ak 0
     ~ < ak np { ( __push it . caller_rbase + argbase ak ) = ak + ak 1 }
     ( __call_import it m callee )
@@ -6533,7 +6597,7 @@ unsafe @ __f32_unary i op i ab → i {
 
 // Overwrite/extend a file fd's buffer at byte offset `at` (gap zero-filled —
 // the file-semantics core shared by fd_write and fd_pwrite).
-unsafe @ __fd_put_at * WFd f i at ( Vec u ) buf → v {
+@ __fd_put_at inout WFd f i at ( Vec u ) buf → v {
     = . f dirty T
     : i bn ( vec_len [u] buf )
     ~ < ( vec_len [u] . f data ) + at bn { ( vec_push [u] . f data # u 0 ) }
@@ -6543,7 +6607,7 @@ unsafe @ __fd_put_at * WFd f i at ( Vec u ) buf → v {
 
 // Write `len` bytes of memory at `ptr` to fd: 1 stdout, 2 stderr, else a file
 // descriptor's buffer at its current position (flushed to disk on close/sync).
-unsafe @ __wasi_write_bytes inout InterpImpl it i fd i ptr i len → v {
+@ __wasi_write_bytes inout InterpImpl it i fd i ptr i len → v {
     ? <= len 0 { ^ v } {}
     // A write cannot cover more bytes than linear memory holds; a larger length
     // is a hostile iovec — trap rather than pre-allocate gigabytes for it.
@@ -6551,28 +6615,42 @@ unsafe @ __wasi_write_bytes inout InterpImpl it i fd i ptr i len → v {
     : ( Vec u ) buf ( vec_with_cap [u] len )
     : ~ i k 0
     ~ < k len { ( vec_push [u] buf # u & ( __mem_load it + ptr k 1 0 ) 255 ) = k + k 1 }
+    // The host's own streams: nothing shared to take turns at.
+    ? & | == fd 1 == fd 2 ! . it cap {
+        : String s ( bytes_to_str buf )
+        ? == fd 2 { ( nurl_eprint ( string_data s ) ) } { ( nurl_print ( string_data s ) ) }
+        ^ v
+    } {}
+    : ~ WasiCtx c ( __ctx_take it )
+    ( __ctx_write c fd buf )
+    ( __ctx_put it c )
+}
+
+// `buf` to fd: 1 stdout, 2 stderr (or the captured copies of them), else a
+// file descriptor's buffer at its current position (flushed to disk on
+// close/sync).
+@ __ctx_write inout WasiCtx c i fd ( Vec u ) buf → v {
+    : i len ( vec_len [u] buf )
     ? | == fd 1 == fd 2 {
-        ? . it cap {
-            // An embedder asked for the output as a value: raw bytes,
-            // appended, NULs preserved — bytes_to_str would truncate at
-            // the first NUL a binary-printing module emits.
-            : ~ * InterpImpl hoc ( __host it )
-            : ( Vec u ) dst ? == fd 2 . hoc caperr . hoc capout
-            : ~ i c 0
-            ~ < c len { ( vec_push [u] dst # u ?? ( vec_get [u] buf c ) { T x → # i x F → 0 } ) = c + c 1 }
-        } {
-            : String s ( bytes_to_str buf )
-            ? == fd 2 { ( nurl_eprint ( string_data s ) ) } { ( nurl_print ( string_data s ) ) }
-        }
-    } {
-        : s fp ( __fd_at it fd )
-        ? != # i fp 0 {
-            : *WFd f # *WFd fp
-            : i at ? . f append ( vec_len [u] . f data ) . f pos
-            ( __fd_put_at f at buf )
-            = . f pos + at len
-        } {}
-    }
+        // Captured (the caller printed the host's own streams): an
+        // embedder asked for the output as a value — raw bytes, appended,
+        // NULs preserved; bytes_to_str would truncate at the first NUL a
+        // binary-printing module emits.
+        ? == fd 2 { ( __bytes_append . c caperr buf ) } { ( __bytes_append . c capout buf ) }
+        ^ v
+    } {}
+    ? == ( __fd_kind c fd ) 0 { ^ v } {}
+    : b _w ( vec_update [WFd] . c fds fd \ inout WFd f → v {
+        : i at ? . f append ( vec_len [u] . f data ) . f pos
+        ( __fd_put_at f at buf )
+        = . f pos + at len
+    } )
+}
+
+@ __bytes_append inout ( Vec u ) dst ( Vec u ) src → v {
+    : i n ( vec_len [u] src )
+    : ~ i k 0
+    ~ < k n { ( vec_push [u] dst ( vec_at [u] src k ) ) = k + k 1 }
 }
 
 @ __wasi_proc_exit inout InterpImpl it → v {
@@ -6610,9 +6688,26 @@ unsafe @ __wasi_write_bytes inout InterpImpl it i fd i ptr i len → v {
 }
 
 // Fetch the fd record for descriptor `fd`, or #s 0 if out of range / closed.
-unsafe @ __fd_at inout InterpImpl it i fd → s {
-    : ~ * InterpImpl ho ( __host it )
-    ^ ?? ( vec_get [( Box WFd )] . ho fds fd ) { T x → # s ( box_ptr [WFd] x ) F → # s 0 }
+// The host directory behind dir fd `fd` (a preopen or one opened later) —
+// the base every path_* call resolves against; F unless it is a directory.
+@ __dir_host inout InterpImpl it i fd → ?( Vec u ) {
+    : ~ WasiCtx c ( __ctx_take it )
+    : ~ ? ( Vec u ) r @ ?( Vec u ) { F }
+    ?? ( vec_get [WFd] . c fds fd ) {
+        T d → { ? | == . d kind 2 == . d kind 4 { = r @ ?( Vec u ) { T ( vec_clone [u] . d host ) } } {} }
+        F → {}
+    }
+    ( __ctx_put it c )
+    ^ r
+}
+
+// Install `f` as the next descriptor; its number.
+@ __fd_push inout InterpImpl it sink WFd f → i {
+    : ~ WasiCtx c ( __ctx_take it )
+    : i n ( vec_len [WFd] . c fds )
+    ( vec_push [WFd] . c fds f )
+    ( __ctx_put it c )
+    ^ n
 }
 
 // Read `len` bytes of linear memory at `ptr` into a fresh byte vector.
@@ -6647,12 +6742,12 @@ unsafe @ __fd_at inout InterpImpl it i fd → s {
 
 // Join a dir fd's host path + "/" + `len` guest bytes at `ptr` into an owned
 // String; #s 0 (as String data) is never returned — the caller checked the fd.
-unsafe @ __join_path inout InterpImpl it * WFd d i ptr i len → String {
+@ __join_path inout InterpImpl it ( Vec u ) dhost i ptr i len → String {
     : ( Vec u ) full ( vec_new [u] )
-    : i hn ( vec_len [u] . d host )
+    : i hn ( vec_len [u] dhost )
     : ~ i k 0
-    ~ < k hn { ( vec_push [u] full ?? ( vec_get [u] . d host k ) { T x → x F → # u 0 } ) = k + k 1 }
-    ? & > hn 0 != ?? ( vec_get [u] . d host - hn 1 ) { T x → # i x F → 0 } 47 { ( vec_push [u] full # u 47 ) } {}
+    ~ < k hn { ( vec_push [u] full ?? ( vec_get [u] dhost k ) { T x → x F → # u 0 } ) = k + k 1 }
+    ? & > hn 0 != ?? ( vec_get [u] dhost - hn 1 ) { T x → # i x F → 0 } 47 { ( vec_push [u] full # u 47 ) } {}
     : ( Vec u ) rel ( __mem_slice it ptr len )
     : i rn ( vec_len [u] rel )
     : ~ i j 0
@@ -6663,12 +6758,13 @@ unsafe @ __join_path inout InterpImpl it * WFd d i ptr i len → String {
 
 // The dir fd record for `fd`, or #s 0 unless it is a directory (preopen or
 // opened) — the base every path_* call resolves against.
-unsafe @ __dirfd_at inout InterpImpl it i fd → s {
-    : s dp ( __fd_at it fd )
-    ? == # i dp 0 { ^ # s 0 } {}
-    : *WFd d # *WFd dp
-    ? | == . d kind 2 == . d kind 4 { ^ dp } {}
-    ^ # s 0
+// Join dir fd `fd`'s host path and `len` guest bytes at `ptr`; F when `fd`
+// is not a directory.
+@ __dir_path inout InterpImpl it i fd i ptr i len → ?String {
+    ?? ( __dir_host it fd ) {
+        T dh → { ^ @ ?String { T ( __join_path it dh ptr len ) } }
+        F → { ^ @ ?String { F } }
+    }
 }
 
 // path_open(dirfd, dirflags, path_ptr, path_len, oflags, rights_base,
@@ -6676,7 +6772,7 @@ unsafe @ __dirfd_at inout InterpImpl it i fd → s {
 // oflags: 1 CREAT, 2 DIRECTORY, 4 EXCL, 8 TRUNC. fdflags: 1 APPEND.
 // rights bit 6 (fd_write) makes the fd writable. Files are slurped into a
 // buffer; writes are flushed on close/sync/exit.
-unsafe @ __wasi_path_open inout InterpImpl it → v {
+@ __wasi_path_open inout InterpImpl it → v {
     : i ofd_p ( __pop it )
     : i fdflags ( __pop it )
     ( __pop it )  // fs_rights_inheriting (i64 cell)
@@ -6686,10 +6782,14 @@ unsafe @ __wasi_path_open inout InterpImpl it → v {
     : i path_p ( __pop it )
     ( __pop it )  // dirflags
     : i dirfd ( __pop it )
-    : s dp ( __dirfd_at it dirfd )
-    ? == # i dp 0 { ( __push it 8 ) ^ v } {}  // EBADF
-    : *WFd d # *WFd dp
-    : String hs ( __join_path it d path_p path_len )
+    : ?String hp ( __dir_path it dirfd path_p path_len )
+    ?? hp {
+        T hs → { ( __path_open_in it hs ofd_p fdflags rights oflags ) }
+        F → { ( __push it 8 ) }  // EBADF
+    }
+}
+
+@ __path_open_in inout InterpImpl it String hs i ofd_p i fdflags i rights i oflags → v {
     : i creat & oflags 1
     : i wantdir & oflags 2
     : i excl & oflags 4
@@ -6699,12 +6799,9 @@ unsafe @ __wasi_path_open inout InterpImpl it → v {
     ? != wantdir 0 {
         // open a directory: it must exist and be a directory
         ? ( __is_dir ( string_data hs ) ) {
-            : ( Box WFd ) nfb ( __mkfd 4 )
-            : *WFd nf # *WFd ( box_ptr [WFd] nfb )
+            : ~ WFd nf ( __mkfd 4 )
             = . nf host ( bytes_from_str ( string_data hs ) )
-            : ~ * InterpImpl ho1 ( __host it )
-            ( __m_put_u32 it ofd_p ( vec_len [( Box WFd )] . ho1 fds ) )
-            ( vec_push [( Box WFd )] . ho1 fds nfb )
+            ( __m_put_u32 it ofd_p ( __fd_push it nf ) )
         } { = rc ? != 0 ( nurl_file_exists ( string_data hs ) ) 54 44 }  // ENOTDIR / ENOENT
         ( __push it rc )
         ^ v
@@ -6713,18 +6810,14 @@ unsafe @ __wasi_path_open inout InterpImpl it → v {
     ? & & != creat 0 != excl 0 != exists 0 { ( __push it 20 ) ^ v } {}  // EEXIST
     ? & != exists 0 ( __is_dir ( string_data hs ) ) {
         // an existing directory opened without O_DIRECTORY: readable as a dir fd
-        : ( Box WFd ) nfb ( __mkfd 4 )
-        : *WFd nf # *WFd ( box_ptr [WFd] nfb )
+        : ~ WFd nf ( __mkfd 4 )
         = . nf host ( bytes_from_str ( string_data hs ) )
-        : ~ * InterpImpl ho2 ( __host it )
-        ( __m_put_u32 it ofd_p ( vec_len [( Box WFd )] . ho2 fds ) )
-        ( vec_push [( Box WFd )] . ho2 fds nfb )
+        ( __m_put_u32 it ofd_p ( __fd_push it nf ) )
         ( __push it 0 )
         ^ v
     } {}
     ? & == exists 0 == creat 0 { ( __push it 44 ) ^ v } {}  // ENOENT
-    : ( Box WFd ) nfb ( __mkfd 3 )
-    : *WFd nf # *WFd ( box_ptr [WFd] nfb )
+    : ~ WFd nf ( __mkfd 3 )
     = . nf host ( bytes_from_str ( string_data hs ) )
     ? & != exists 0 == trunc 0 {
         // keep existing contents (read, or write without truncation)
@@ -6747,134 +6840,159 @@ unsafe @ __wasi_path_open inout InterpImpl it → v {
         ?? cr { T x → {} F e → { = rc ( __ioerr_errno e ) } }
         ? != rc 0 { ( __push it rc ) ^ v } {}
     } {}
-    : ~ * InterpImpl ho3 ( __host it )
-    ( __m_put_u32 it ofd_p ( vec_len [( Box WFd )] . ho3 fds ) )
-    ( vec_push [( Box WFd )] . ho3 fds nfb )
+    ( __m_put_u32 it ofd_p ( __fd_push it nf ) )
     ( __push it 0 )
 }
 
 // fd_pread / fd_pwrite: positioned I/O that leaves the fd offset untouched.
-unsafe @ __wasi_fd_pread inout InterpImpl it → v {
+@ __wasi_fd_pread inout InterpImpl it → v {
     : i nread_p ( __pop it )
     : i offset ( __pop it )
     : i iovs_len ( __pop it )
     : i iovs ( __pop it )
     : i fd ( __pop it )
-    : s fp ( __fd_at it fd )
-    ? == # i fp 0 { ( __push it 8 ) ^ v } {}
-    : *WFd f # *WFd fp
-    ? != . f kind 3 { ( __m_put_u32 it nread_p 0 ) ( __push it 0 ) ^ v } {}
-    : i dn ( vec_len [u] . f data )
-    : i maxio . it mem_bytes
-    : ~ i at offset
-    : ~ i total 0
-    : ~ i iv 0
-    ~ & & ! ( __interp_trapped it ) < iv iovs_len <= iv maxio {
-        : i bufp ( __m_get_u32 it + iovs * iv 8 )
-        : i buflen ( __m_get_u32 it + + iovs * iv 8 4 )
-        : ~ i c 0
-        ~ & < c buflen < at dn {
-            ( __mem_store it + bufp c 1 ?? ( vec_get [u] . f data at ) { T x → # i x F → 0 } )
-            = at + at 1
-            = c + c 1
+    : ~ WasiCtx c ( __ctx_take it )
+    : i rc ( vec_apply [WFd i] . c fds fd 8 \ inout WFd f → i {
+        ? == . f kind 0 { ^ 8 } {}
+        ? != . f kind 3 { ( __m_put_u32 it nread_p 0 ) ^ 0 } {}
+        : i dn ( vec_len [u] . f data )
+        : i maxio . it mem_bytes
+        : ~ i at offset
+        : ~ i total 0
+        : ~ i iv 0
+        ~ & & ! ( __interp_trapped it ) < iv iovs_len <= iv maxio {
+            : i bufp ( __m_get_u32 it + iovs * iv 8 )
+            : i buflen ( __m_get_u32 it + + iovs * iv 8 4 )
+            : ~ i c2 0
+            ~ & < c2 buflen < at dn {
+                ( __mem_store it + bufp c2 1 ?? ( vec_get [u] . f data at ) { T x → # i x F → 0 } )
+                = at + at 1
+                = c2 + c2 1
+            }
+            = total + total c2
+            = iv + iv 1
         }
-        = total + total c
-        = iv + iv 1
-    }
-    ( __m_put_u32 it nread_p total )
-    ( __push it 0 )
+        ( __m_put_u32 it nread_p total )
+        ^ 0
+    } )
+    ( __ctx_put it c )
+    ( __push it rc )
 }
 
-unsafe @ __wasi_fd_pwrite inout InterpImpl it → v {
+@ __wasi_fd_pwrite inout InterpImpl it → v {
     : i nwritten_p ( __pop it )
     : i offset ( __pop it )
     : i iovs_len ( __pop it )
     : i iovs ( __pop it )
     : i fd ( __pop it )
-    : s fp ( __fd_at it fd )
-    ? == # i fp 0 { ( __push it 8 ) ^ v } {}
-    : *WFd f # *WFd fp
-    ? ! . f writable { ( __push it 8 ) ^ v } {}
-    : i maxio . it mem_bytes
-    : ~ i at offset
-    : ~ i total 0
-    : ~ i iv 0
-    ~ & & ! ( __interp_trapped it ) < iv iovs_len <= iv maxio {
-        : i bufp ( __m_get_u32 it + iovs * iv 8 )
-        : i buflen ( __m_get_u32 it + + iovs * iv 8 4 )
-        : ( Vec u ) chunk ( __mem_slice it bufp buflen )
-        ( __fd_put_at f at chunk )
-        = at + at buflen
-        = total + total buflen
-        = iv + iv 1
-    }
-    ( __m_put_u32 it nwritten_p total )
-    ( __push it 0 )
+    : ~ WasiCtx c ( __ctx_take it )
+    : i rc ( vec_apply [WFd i] . c fds fd 8 \ inout WFd f → i {
+        ? == . f kind 0 { ^ 8 } {}
+        ? ! . f writable { ^ 8 } {}
+        : i maxio . it mem_bytes
+        : ~ i at offset
+        : ~ i total 0
+        : ~ i iv 0
+        ~ & & ! ( __interp_trapped it ) < iv iovs_len <= iv maxio {
+            : i bufp ( __m_get_u32 it + iovs * iv 8 )
+            : i buflen ( __m_get_u32 it + + iovs * iv 8 4 )
+            : ( Vec u ) chunk ( __mem_slice it bufp buflen )
+            ( __fd_put_at f at chunk )
+            = at + at buflen
+            = total + total buflen
+            = iv + iv 1
+        }
+        ( __m_put_u32 it nwritten_p total )
+        ^ 0
+    } )
+    ( __ctx_put it c )
+    ( __push it rc )
 }
 
 // path_create_directory / path_remove_directory / path_unlink_file /
 // path_rename / path_filestat_get — the host-directory mutations, resolved
 // against a dir fd exactly like path_open.
-unsafe @ __wasi_path_create_directory inout InterpImpl it → v {
+@ __wasi_path_create_directory inout InterpImpl it → v {
     : i path_len ( __pop it )
     : i path_p ( __pop it )
     : i dirfd ( __pop it )
-    : s dp ( __dirfd_at it dirfd )
-    ? == # i dp 0 { ( __push it 8 ) ^ v } {}
-    : String hs ( __join_path it # *WFd dp path_p path_len )
-    : !v IoErr r ( dir_create ( string_data hs ) )
-    ( __push it ?? r { T x → 0 F e → ( __ioerr_errno e ) } )
+    : ?String hp ( __dir_path it dirfd path_p path_len )
+    ?? hp {
+        T hs → {
+            : !v IoErr r ( dir_create ( string_data hs ) )
+            ( __push it ?? r { T x → 0 F e → ( __ioerr_errno e ) } )
+        }
+        F → { ( __push it 8 ) }
+    }
 }
 
-unsafe @ __wasi_path_remove_directory inout InterpImpl it → v {
+@ __wasi_path_remove_directory inout InterpImpl it → v {
     : i path_len ( __pop it )
     : i path_p ( __pop it )
     : i dirfd ( __pop it )
-    : s dp ( __dirfd_at it dirfd )
-    ? == # i dp 0 { ( __push it 8 ) ^ v } {}
-    : String hs ( __join_path it # *WFd dp path_p path_len )
-    : i rc ( nurl_dir_remove ( string_data hs ) )
-    ( __push it ? == rc 0 0 ( __ioerr_errno ( _io_err_of_kind ( errno_kind ) ) ) )
+    : ?String hp ( __dir_path it dirfd path_p path_len )
+    ?? hp {
+        T hs → {
+            : i rc ( nurl_dir_remove ( string_data hs ) )
+            ( __push it ? == rc 0 0 ( __ioerr_errno ( _io_err_of_kind ( errno_kind ) ) ) )
+        }
+        F → { ( __push it 8 ) }
+    }
 }
 
-unsafe @ __wasi_path_unlink_file inout InterpImpl it → v {
+@ __wasi_path_unlink_file inout InterpImpl it → v {
     : i path_len ( __pop it )
     : i path_p ( __pop it )
     : i dirfd ( __pop it )
-    : s dp ( __dirfd_at it dirfd )
-    ? == # i dp 0 { ( __push it 8 ) ^ v } {}
-    : String hs ( __join_path it # *WFd dp path_p path_len )
-    : i32 rc ( unlink ( string_data hs ) )
-    ( __push it ? == # i rc 0 0 ( __ioerr_errno ( _io_err_of_kind ( errno_kind ) ) ) )
+    : ?String hp ( __dir_path it dirfd path_p path_len )
+    ?? hp {
+        T hs → {
+            : !v IoErr r ( file_delete ( string_data hs ) )
+            ( __push it ?? r { T x → 0 F e → ( __ioerr_errno e ) } )
+        }
+        F → { ( __push it 8 ) }
+    }
 }
 
-unsafe @ __wasi_path_rename inout InterpImpl it → v {
+@ __wasi_path_rename inout InterpImpl it → v {
     : i new_len ( __pop it )
     : i new_p ( __pop it )
     : i new_dirfd ( __pop it )
     : i old_len ( __pop it )
     : i old_p ( __pop it )
     : i old_dirfd ( __pop it )
-    : s odp ( __dirfd_at it old_dirfd )
-    : s ndp ( __dirfd_at it new_dirfd )
-    ? | == # i odp 0 == # i ndp 0 { ( __push it 8 ) ^ v } {}
-    : String os ( __join_path it # *WFd odp old_p old_len )
-    : String ns ( __join_path it # *WFd ndp new_p new_len )
-    : !v IoErr r ( fs_rename ( string_data os ) ( string_data ns ) )
-    ( __push it ?? r { T x → 0 F e → ( __ioerr_errno e ) } )
+    : ?String op ( __dir_path it old_dirfd old_p old_len )
+    : ?String np ( __dir_path it new_dirfd new_p new_len )
+    ?? op {
+        T os → {
+            ?? np {
+                T ns → {
+                    : !v IoErr r ( fs_rename ( string_data os ) ( string_data ns ) )
+                    ( __push it ?? r { T x → 0 F e → ( __ioerr_errno e ) } )
+                }
+                F → { ( __push it 8 ) }
+            }
+        }
+        F → { ( __push it 8 ) }
+    }
 }
 
 // path_filestat_get(dirfd, flags, path_ptr, path_len, st_p): 64-byte filestat —
 // filetype at +16, size at +32 (the fields programs actually read).
-unsafe @ __wasi_path_filestat_get inout InterpImpl it → v {
+@ __wasi_path_filestat_get inout InterpImpl it → v {
     : i st_p ( __pop it )
     : i path_len ( __pop it )
     : i path_p ( __pop it )
     ( __pop it )  // lookup flags
     : i dirfd ( __pop it )
-    : s dp ( __dirfd_at it dirfd )
-    ? == # i dp 0 { ( __push it 8 ) ^ v } {}
-    : String hs ( __join_path it # *WFd dp path_p path_len )
+    : ?String hp ( __dir_path it dirfd path_p path_len )
+    ?? hp {
+        T hs → { ( __path_filestat_in it hs st_p ) }
+        F → { ( __push it 8 ) }
+    }
+}
+
+@ __path_filestat_in inout InterpImpl it String hs i st_p → v {
     : ~ i rc 0
     : ~ i k 0
     ~ < k 64 { ( __mem_store it + st_p k 1 0 ) = k + k 1 }
@@ -6897,17 +7015,19 @@ unsafe @ __wasi_path_filestat_get inout InterpImpl it → v {
 // entry = 24-byte header (d_next u64, d_ino u64, d_namlen u32, d_type u8+pad)
 // + name. A partially-written final entry with bufused == buf_len tells libc
 // to enlarge and retry, per the ABI.
-unsafe @ __wasi_fd_readdir inout InterpImpl it → v {
+@ __wasi_fd_readdir inout InterpImpl it → v {
     : i bufused_p ( __pop it )
     : i cookie ( __pop it )
     : i buf_len ( __pop it )
     : i buf ( __pop it )
     : i fd ( __pop it )
-    : s fp ( __fd_at it fd )
-    ? == # i fp 0 { ( __push it 8 ) ^ v } {}
-    : *WFd f # *WFd fp
-    ? ! | == . f kind 2 == . f kind 4 { ( __push it 54 ) ^ v } {}  // ENOTDIR
-    : String hostdir ( bytes_to_str . f host )
+    : ~ WasiCtx c ( __ctx_take it )
+    : i kind ( __fd_kind c fd )
+    : ( Vec u ) hostb ?? ( vec_get [WFd] . c fds fd ) { T d → ( vec_clone [u] . d host ) F → ( vec_new [u] ) }
+    ( __ctx_put it c )
+    ? == kind 0 { ( __push it 8 ) ^ v } {}
+    ? ! | == kind 2 == kind 4 { ( __push it 54 ) ^ v } {}  // ENOTDIR
+    : String hostdir ( bytes_to_str hostb )
     : !( Vec String ) IoErr lr ( dir_list ( string_data hostdir ) )
     : ~ i rc 0
     : ~ i used 0
@@ -6918,7 +7038,7 @@ unsafe @ __wasi_fd_readdir inout InterpImpl it → v {
             : ~ i idx cookie
             : ~ b full F
             ~ & ! full < idx n {
-                : String nm ?? ( vec_get [String] names idx ) { T x → x F → # String 0 }
+                : String nm ( vec_at [String] names idx )
                 : i nlen ( nurl_str_len ( string_data nm ) )
                 // d_type: probe the joined path (3 dir / 4 regular)
                 : String sub ( __join_path2 hostdir ( string_data nm ) )
@@ -6972,109 +7092,126 @@ unsafe @ __wasi_fd_readdir inout InterpImpl it → v {
     ^ out
 }
 
-unsafe @ __wasi_fd_read inout InterpImpl it → v {
+@ __wasi_fd_read inout InterpImpl it → v {
     : i nread_p ( __pop it )
     : i iovs_len ( __pop it )
     : i iovs ( __pop it )
     : i fd ( __pop it )
-    : s fp ( __fd_at it fd )
-    ? == # i fp 0 { ( __m_put_u32 it nread_p 0 ) ( __push it 0 ) ^ v } {}
-    : *WFd f # *WFd fp
-    ? != . f kind 3 { ( __m_put_u32 it nread_p 0 ) ( __push it 0 ) ^ v } {}  // stdin/dir → EOF
-    : i dn ( vec_len [u] . f data )
-    : i maxio . it mem_bytes
-    : ~ i total 0
-    : ~ i iv 0
-    ~ & & ! ( __interp_trapped it ) < iv iovs_len <= iv maxio {
-        : i bufp ( __m_get_u32 it + iovs * iv 8 )
-        : i buflen ( __m_get_u32 it + + iovs * iv 8 4 )
-        : ~ i c 0
-        ~ & < c buflen < . f pos dn {
-            ( __mem_store it + bufp c 1 ?? ( vec_get [u] . f data . f pos ) { T x → # i x F → 0 } )
-            = . f pos + . f pos 1
-            = c + c 1
+    : ~ WasiCtx c ( __ctx_take it )
+    : i rc ( vec_apply [WFd i] . c fds fd -1 \ inout WFd f → i {
+        ? != . f kind 3 { ^ -1 } {}  // stdin/dir/closed → EOF
+        : i dn ( vec_len [u] . f data )
+        : i maxio . it mem_bytes
+        : ~ i total 0
+        : ~ i iv 0
+        ~ & & ! ( __interp_trapped it ) < iv iovs_len <= iv maxio {
+            : i bufp ( __m_get_u32 it + iovs * iv 8 )
+            : i buflen ( __m_get_u32 it + + iovs * iv 8 4 )
+            : ~ i c2 0
+            ~ & < c2 buflen < . f pos dn {
+                ( __mem_store it + bufp c2 1 ?? ( vec_get [u] . f data . f pos ) { T x → # i x F → 0 } )
+                = . f pos + . f pos 1
+                = c2 + c2 1
+            }
+            = total + total c2
+            = iv + iv 1
         }
-        = total + total c
-        = iv + iv 1
-    }
-    ( __m_put_u32 it nread_p total )
+        ( __m_put_u32 it nread_p total )
+        ^ 0
+    } )
+    ( __ctx_put it c )
+    ? < rc 0 { ( __m_put_u32 it nread_p 0 ) } {}
     ( __push it 0 )
 }
 
-unsafe @ __wasi_fd_seek inout InterpImpl it → v {
+@ __wasi_fd_seek inout InterpImpl it → v {
     : i noff_p ( __pop it )
     : i whence ( __pop it )
     : i offset ( __pop it )
     : i fd ( __pop it )
-    : s fp ( __fd_at it fd )
-    ? == # i fp 0 { ( __mem_store it noff_p 8 0 ) ( __push it 0 ) ^ v } {}
-    : *WFd f # *WFd fp
-    : i dn ( vec_len [u] . f data )
-    : i base ? == whence 0 0 ? == whence 1 . f pos dn  // SET / CUR / END
-    : i np + base offset
-    = . f pos ? < np 0 0 np
-    ( __mem_store it noff_p 8 . f pos )
+    : ~ WasiCtx c ( __ctx_take it )
+    : b ok ( vec_apply [WFd b] . c fds fd F \ inout WFd f → b {
+        ? == . f kind 0 { ^ F } {}
+        : i dn ( vec_len [u] . f data )
+        : i base ? == whence 0 0 ? == whence 1 . f pos dn  // SET / CUR / END
+        : i np + base offset
+        = . f pos ? < np 0 0 np
+        ( __mem_store it noff_p 8 . f pos )
+        ^ T
+    } )
+    ( __ctx_put it c )
+    ? ok {} { ( __mem_store it noff_p 8 0 ) }
     ( __push it 0 )
 }
 
-unsafe @ __wasi_args_sizes_get inout InterpImpl it → v {
+@ __wasi_args_sizes_get inout InterpImpl it → v {
     : i bufsz_p ( __pop it )
-    : i argc_p ( __pop it )
-    : i argc ( vec_len [( Box Arg )] . ( __host it ) argv )
+    : i cnt_p ( __pop it )
+    : ( Arc ArgEnv ) ae ( arc_clone [ArgEnv] . it argenv )
+    : ArgEnv c ( arc_get [ArgEnv] ae )
+    : i n ( vec_len [Arg] . c argv )
     : ~ i bufsz 0
     : ~ i k 0
-    ~ < k argc {
-        : *Arg a # *Arg ?? ( vec_get [( Box Arg )] . ( __host it ) argv k ) { T x → # s ( box_ptr [Arg] x ) F → # s 0 }
-        = bufsz + bufsz + ( vec_len [u] . a bytes ) 1
+    ~ < k n {
+        ?? ( vec_get [Arg] . c argv k ) { T a → { = bufsz + bufsz + ( vec_len [u] . a bytes ) 1 } F → {} }
         = k + k 1
     }
-    ( __m_put_u32 it argc_p argc )
+    ( __m_put_u32 it cnt_p n )
     ( __m_put_u32 it bufsz_p bufsz )
     ( __push it 0 )
 }
 
-unsafe @ __wasi_args_get inout InterpImpl it → v {
+@ __wasi_args_get inout InterpImpl it → v {
     : i buf_p ( __pop it )
-    : i argv_p ( __pop it )
-    : i argc ( vec_len [( Box Arg )] . ( __host it ) argv )
+    : i vec_p ( __pop it )
+    : ( Arc ArgEnv ) ae ( arc_clone [ArgEnv] . it argenv )
+    : ArgEnv c ( arc_get [ArgEnv] ae )
+    : i n ( vec_len [Arg] . c argv )
     : ~ i cur buf_p
     : ~ i k 0
-    ~ < k argc {
-        : *Arg a # *Arg ?? ( vec_get [( Box Arg )] . ( __host it ) argv k ) { T x → # s ( box_ptr [Arg] x ) F → # s 0 }
-        ( __m_put_u32 it + argv_p * k 4 cur )
-        : i blen ( vec_len [u] . a bytes )
-        : ~ i j 0
-        ~ < j blen { ( __mem_store it + cur j 1 ?? ( vec_get [u] . a bytes j ) { T x → # i x F → 0 } ) = j + j 1 }
-        ( __mem_store it + cur blen 1 0 )  // NUL terminator
-        = cur + cur + blen 1
+    ~ < k n {
+        ?? ( vec_get [Arg] . c argv k ) {
+            T a → {
+                ( __m_put_u32 it + vec_p * k 4 cur )
+                : i blen ( vec_len [u] . a bytes )
+                : ~ i j 0
+                ~ < j blen { ( __mem_store it + cur j 1 ?? ( vec_get [u] . a bytes j ) { T x → # i x F → 0 } ) = j + j 1 }
+                ( __mem_store it + cur blen 1 0 )  // NUL terminator
+                = cur + cur + blen 1
+            }
+            F → {}
+        }
         = k + k 1
     }
     ( __push it 0 )
 }
 
-unsafe @ __wasi_fd_prestat_get inout InterpImpl it → v {
+@ __wasi_fd_prestat_get inout InterpImpl it → v {
     : i buf ( __pop it )
     : i fd ( __pop it )
-    : s fp ( __fd_at it fd )
-    ? == # i fp 0 { ( __push it 8 ) ^ v } {}  // EBADF: ends libc's preopen scan
-    : *WFd f # *WFd fp
-    ? != . f kind 2 { ( __push it 8 ) ^ v } {}
+    : ~ WasiCtx c ( __ctx_take it )
+    : i kind ( __fd_kind c fd )
+    : i nlen ?? ( vec_get [WFd] . c fds fd ) { T d → ( vec_len [u] . d name ) F → 0 }
+    ( __ctx_put it c )
+    ? != kind 2 { ( __push it 8 ) ^ v } {}  // EBADF: ends libc's preopen scan
     ( __mem_store it buf 1 0 )  // pr_type = dir
-    ( __m_put_u32 it + buf 4 ( vec_len [u] . f name ) )  // pr_name_len
+    ( __m_put_u32 it + buf 4 nlen )  // pr_name_len
     ( __push it 0 )
 }
 
-unsafe @ __wasi_fd_prestat_dir_name inout InterpImpl it → v {
+@ __wasi_fd_prestat_dir_name inout InterpImpl it → v {
     : i plen ( __pop it )
     : i pptr ( __pop it )
     : i fd ( __pop it )
-    : s fp ( __fd_at it fd )
-    ? == # i fp 0 { ( __push it 8 ) ^ v } {}
-    : *WFd f # *WFd fp
-    : i nn ( vec_len [u] . f name )
+    : ~ WasiCtx c ( __ctx_take it )
+    : i kind ( __fd_kind c fd )
+    : ( Vec u ) nm ?? ( vec_get [WFd] . c fds fd ) { T d → ( vec_clone [u] . d name ) F → ( vec_new [u] ) }
+    ( __ctx_put it c )
+    ? == kind 0 { ( __push it 8 ) ^ v } {}
+    : i nn ( vec_len [u] nm )
     : i n ? < plen nn plen nn
     : ~ i k 0
-    ~ < k n { ( __mem_store it + pptr k 1 ?? ( vec_get [u] . f name k ) { T x → # i x F → 0 } ) = k + k 1 }
+    ~ < k n { ( __mem_store it + pptr k 1 ?? ( vec_get [u] nm k ) { T x → # i x F → 0 } ) = k + k 1 }
     ( __push it 0 )
 }
 
@@ -7082,14 +7219,15 @@ unsafe @ __wasi_fd_prestat_dir_name inout InterpImpl it → v {
 // opened 4)→directory(3), file→regular(4).
 @ __filetype_of i kind → i { ^ ? | == kind 2 == kind 4 3 ? == kind 3 4 2 }
 
-unsafe @ __wasi_fd_fdstat_get inout InterpImpl it → v {
+@ __wasi_fd_fdstat_get inout InterpImpl it → v {
     : i stat_p ( __pop it )
     : i fd ( __pop it )
-    : s fp ( __fd_at it fd )
+    : ~ WasiCtx c ( __ctx_take it )
+    : ~ i kind ( __fd_kind c fd )
+    ( __ctx_put it c )
+    ? == kind 0 { = kind 1 } {}  // unknown: answered as a character device
     : ~ i k 0
     ~ < k 24 { ( __mem_store it + stat_p k 1 0 ) = k + k 1 }
-    : ~ i kind 1
-    ? != # i fp 0 { : *WFd f # *WFd fp = kind . f kind } {}
     ( __mem_store it stat_p 1 ( __filetype_of kind ) )
     // grant all rights so libc never refuses an operation
     ( __mem_store it + stat_p 8 8 -1 )
@@ -7097,16 +7235,18 @@ unsafe @ __wasi_fd_fdstat_get inout InterpImpl it → v {
     ( __push it 0 )
 }
 
-unsafe @ __wasi_fd_filestat_get inout InterpImpl it → v {
+@ __wasi_fd_filestat_get inout InterpImpl it → v {
     : i st_p ( __pop it )
     : i fd ( __pop it )
-    : s fp ( __fd_at it fd )
+    : ~ WasiCtx c ( __ctx_take it )
+    : i kind ( __fd_kind c fd )
+    : i size ?? ( vec_get [WFd] . c fds fd ) { T d → ( vec_len [u] . d data ) F → 0 }
+    ( __ctx_put it c )
     : ~ i k 0
     ~ < k 64 { ( __mem_store it + st_p k 1 0 ) = k + k 1 }
-    ? != # i fp 0 {
-        : *WFd f # *WFd fp
-        ( __mem_store it + st_p 16 1 ( __filetype_of . f kind ) )  // filetype
-        ( __mem_store it + st_p 32 8 ( vec_len [u] . f data ) )  // file size
+    ? != kind 0 {
+        ( __mem_store it + st_p 16 1 ( __filetype_of kind ) )  // filetype
+        ( __mem_store it + st_p 32 8 size )  // file size
     } {}
     ( __push it 0 )
 }
@@ -7118,7 +7258,7 @@ unsafe @ __wasi_fd_filestat_get inout InterpImpl it → v {
 // the disk, so its failure is the ONLY chance the guest has to learn that
 // the write did not happen. Swallowing it made `write_file` report
 // success for a file the host never created.
-unsafe @ __fd_flush * WFd f → i {
+@ __fd_flush inout WFd f → i {
     ? & . f writable . f dirty {
         : String hs ( bytes_to_str . f host )
         : !v IoErr wr ( write_file_bytes ( string_data hs ) . f data )
@@ -7131,56 +7271,61 @@ unsafe @ __fd_flush * WFd f → i {
 
 // Flush every open dirty file — called on proc_exit and when _start returns,
 // so buffered writes are never lost to a missing fd_close.
-unsafe @ __interp_flush inout InterpImpl it → v {
-    : ~ * InterpImpl ho ( __host it )
-    : i n ( vec_len [( Box WFd )] . ho fds )
+@ __interp_flush inout InterpImpl it → v {
+    : ~ WasiCtx c ( __ctx_take it )
+    : i n ( vec_len [WFd] . c fds )
     : ~ i k 3
-    ~ < k n { ?? ( vec_get [( Box WFd )] . ho fds k ) { T b → { : s pp # s ( box_ptr [WFd] b ) ? != # i pp 0 { ( __fd_flush # *WFd pp ) } {} } F → {} } = k + k 1 }
+    ~ < k n { : i _r ( vec_apply [WFd i] . c fds k 0 \ inout WFd f → i { ^ ( __fd_flush f ) } ) = k + k 1 }
+    ( __ctx_put it c )
 }
 
 @ interp_flush Interp h → v { ( locked_update [InterpImpl] . h l \ inout InterpImpl it → v { ( __interp_flush it ) } ) }
 
-unsafe @ __wasi_fd_close inout InterpImpl it → v {
+@ __wasi_fd_close inout InterpImpl it → v {
     : i fd ( __pop it )
-    : s fp ( __fd_at it fd )
+    : ~ WasiCtx c ( __ctx_take it )
     : ~ i rc 0
-    ? != # i fp 0 {
-        : *WFd f # *WFd fp
-        = rc ( __fd_flush f )
-        ? >= fd 3 { ( vec_put [( Box WFd )] . ( __host it ) fds fd ( box_null [WFd] ) ) } {}  // keep stdio
+    ? != ( __fd_kind c fd ) 0 {
+        = rc ( vec_apply [WFd i] . c fds fd 0 \ inout WFd f → i { ^ ( __fd_flush f ) } )
+        ? >= fd 3 { ( vec_put [WFd] . c fds fd ( __mkfd 0 ) ) } {}  // keep stdio
     } {}
+    ( __ctx_put it c )
     ( __push it rc )
 }
 
-unsafe @ __wasi_fd_sync inout InterpImpl it → v {
+@ __wasi_fd_sync inout InterpImpl it → v {
     : i fd ( __pop it )
-    : s fp ( __fd_at it fd )
-    ? == # i fp 0 { ( __push it 8 ) ^ v } {}  // EBADF
-    ( __push it ( __fd_flush # *WFd fp ) )
+    : ~ WasiCtx c ( __ctx_take it )
+    : i rc ( vec_apply [WFd i] . c fds fd 8 \ inout WFd f → i { ? == . f kind 0 { ^ 8 } {} ^ ( __fd_flush f ) } )  // EBADF
+    ( __ctx_put it c )
+    ( __push it rc )
 }
 
 // fd_tell(fd, off_p): current offset as u64.
-unsafe @ __wasi_fd_tell inout InterpImpl it → v {
+@ __wasi_fd_tell inout InterpImpl it → v {
     : i off_p ( __pop it )
     : i fd ( __pop it )
-    : s fp ( __fd_at it fd )
-    ? == # i fp 0 { ( __push it 8 ) ^ v } {}
-    : *WFd f # *WFd fp
-    ( __mem_store it off_p 8 . f pos )
+    : ~ WasiCtx c ( __ctx_take it )
+    : i kind ( __fd_kind c fd )
+    : i pos ?? ( vec_get [WFd] . c fds fd ) { T d → . d pos F → 0 }
+    ( __ctx_put it c )
+    ? == kind 0 { ( __push it 8 ) ^ v } {}
+    ( __mem_store it off_p 8 pos )
     ( __push it 0 )
 }
 
 // environ_sizes_get / environ_get: the entries pushed via interp_push_env
 // (the host environment is NOT inherited — capability-style, like --env).
-unsafe @ __wasi_environ_sizes_get inout InterpImpl it → v {
+@ __wasi_environ_sizes_get inout InterpImpl it → v {
     : i bufsz_p ( __pop it )
     : i cnt_p ( __pop it )
-    : i n ( vec_len [( Box Arg )] . ( __host it ) envp )
+    : ( Arc ArgEnv ) ae ( arc_clone [ArgEnv] . it argenv )
+    : ArgEnv c ( arc_get [ArgEnv] ae )
+    : i n ( vec_len [Arg] . c envp )
     : ~ i bufsz 0
     : ~ i k 0
     ~ < k n {
-        : *Arg a # *Arg ?? ( vec_get [( Box Arg )] . ( __host it ) envp k ) { T x → # s ( box_ptr [Arg] x ) F → # s 0 }
-        = bufsz + bufsz + ( vec_len [u] . a bytes ) 1
+        ?? ( vec_get [Arg] . c envp k ) { T a → { = bufsz + bufsz + ( vec_len [u] . a bytes ) 1 } F → {} }
         = k + k 1
     }
     ( __m_put_u32 it cnt_p n )
@@ -7188,20 +7333,26 @@ unsafe @ __wasi_environ_sizes_get inout InterpImpl it → v {
     ( __push it 0 )
 }
 
-unsafe @ __wasi_environ_get inout InterpImpl it → v {
+@ __wasi_environ_get inout InterpImpl it → v {
     : i buf_p ( __pop it )
-    : i envv_p ( __pop it )
-    : i n ( vec_len [( Box Arg )] . ( __host it ) envp )
+    : i vec_p ( __pop it )
+    : ( Arc ArgEnv ) ae ( arc_clone [ArgEnv] . it argenv )
+    : ArgEnv c ( arc_get [ArgEnv] ae )
+    : i n ( vec_len [Arg] . c envp )
     : ~ i cur buf_p
     : ~ i k 0
     ~ < k n {
-        : *Arg a # *Arg ?? ( vec_get [( Box Arg )] . ( __host it ) envp k ) { T x → # s ( box_ptr [Arg] x ) F → # s 0 }
-        ( __m_put_u32 it + envv_p * k 4 cur )
-        : i blen ( vec_len [u] . a bytes )
-        : ~ i j 0
-        ~ < j blen { ( __mem_store it + cur j 1 ?? ( vec_get [u] . a bytes j ) { T x → # i x F → 0 } ) = j + j 1 }
-        ( __mem_store it + cur blen 1 0 )  // NUL terminator
-        = cur + cur + blen 1
+        ?? ( vec_get [Arg] . c envp k ) {
+            T a → {
+                ( __m_put_u32 it + vec_p * k 4 cur )
+                : i blen ( vec_len [u] . a bytes )
+                : ~ i j 0
+                ~ < j blen { ( __mem_store it + cur j 1 ?? ( vec_get [u] . a bytes j ) { T x → # i x F → 0 } ) = j + j 1 }
+                ( __mem_store it + cur blen 1 0 )  // NUL terminator
+                = cur + cur + blen 1
+            }
+            F → {}
+        }
         = k + k 1
     }
     ( __push it 0 )
@@ -7258,10 +7409,12 @@ unsafe @ __wasi_environ_get inout InterpImpl it → v {
             // fd_read (1) / fd_write (2): ready now, or EBADF for a
             // descriptor the guest never opened.
             : i fd ( __m_get_u32 it + sub 16 )
-            : s fp ( __fd_at it fd )
+            : ~ WasiCtx c ( __ctx_take it )
+            : i fk ( __fd_kind c fd )
+            ( __ctx_put it c )
             : i ev + out * nev 32
             ( __mem_store it ev 8 userdata )
-            ( __mem_store it + ev 8 2 ? == # i fp 0 8 0 )
+            ( __mem_store it + ev 8 2 ? == fk 0 8 0 )
             ( __mem_store it + ev 10 1 tag )
             ( __mem_store it + ev 16 8 0 )
             ( __mem_store it + ev 24 2 0 )

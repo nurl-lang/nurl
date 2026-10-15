@@ -1,5 +1,11 @@
 # Changelog
 
+## [3.1.0] — 2026-10-15
+
+- The WASI host state (descriptor table, captured output) is a `Locked WasiCtx` shared by an instance and every thread it spawns. Arguments and environment are a frozen, shared `Arc ArgEnv`, which a push replaces. Before, the WASI handlers reached the owning instance through a raw pointer, and two threads doing file I/O at once wrote one descriptor record unsynchronised. Now their calls take turns. The handlers change a descriptor in place with `vec_update` / `vec_apply` instead of `*WFd` casts, and `interp_set_preopen` is safe. `unsafe` functions: 125 → 95.
+- Host calls got faster. An import's parameter and result counts are cached instead of looked up per call, the import record is read only to resolve it, and writes to the host's own stdout/stderr take no lock. 2M host calls: 1.24 G → 1.02 G instructions (−18 %). 1M `fd_write` calls: 2.63 G → 2.49 G (−5 %).
+- All nine unit suites give byte-identical output under tier 8, tier 7 and the interpreter, and the four-thread wasi-threads program behaves as before.
+
 ## [3.0.0] — 2026-10-15
 
 ### Changed
