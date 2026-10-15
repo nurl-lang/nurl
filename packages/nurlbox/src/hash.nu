@@ -120,7 +120,7 @@ $ `bx.nu`
     }
 }
 
-unsafe @ bx_sum i kind ( Vec String ) argv → i {
+@ bx_sum i kind ( Vec String ) argv → i {
     : BxOpts o ( bx_getopt argv 1 `cbtsw` `check=c,binary=b,text=t,status=s,warn=w` )
     : ~ i rc 0
     ? ! ( bx_ok o ) { = rc 1 } {
@@ -139,7 +139,7 @@ unsafe @ bx_sum i kind ( Vec String ) argv → i {
                 ?? ( __hash_file kind p ) {
                     T hex → {
                         : String out ( string_new )
-                        ( string_push_bytes out # *u ( string_data hex ) ( string_len hex ) )
+                        ( string_append out hex )
                         ( string_push_str out `  ` )
                         ( string_push_str out p )
                         ( string_push_char out 10 )
@@ -164,7 +164,7 @@ unsafe @ bx_sum i kind ( Vec String ) argv → i {
 
 // ── base64 ────────────────────────────────────────────────────────
 
-unsafe @ ap_base64 ( Vec String ) argv → i {
+@ ap_base64 ( Vec String ) argv → i {
     : BxOpts o ( bx_getopt argv 1 `dw:` `decode=d,wrap=w` )
     : ~ i rc 0
     ? ! ( bx_ok o ) { = rc 1 } {
@@ -202,13 +202,13 @@ unsafe @ ap_base64 ( Vec String ) argv → i {
                 : String out ( string_new )
                 : i n ( string_len enc )
                 ? <= width 0 {
-                    ( string_push_bytes out # *u ( string_data enc ) n )
+                    ( string_push_window out ( string_bytes enc ) 0 n )
                     ( string_push_char out 10 )
                 } {
                     : ~ i i 0
                     ~ < i n {
                         : i take ? < - n i width - n i width
-                        ( string_push_bytes out # *u + # i ( string_data enc ) i take )
+                        ( string_push_window out ( string_bytes enc ) i take )
                         ( string_push_char out 10 )
                         = i + i take
                     }

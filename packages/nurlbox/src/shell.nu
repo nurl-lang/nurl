@@ -14,6 +14,7 @@ $ `stdlib/core/posix.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/std/term.nu`
 $ `stdlib/std/time.nu`
+$ `stdlib/std/process.nu`
 $ `stdlib/ext/regex.nu`
 $ `bx.nu`
 $ `sys.nu`
@@ -51,7 +52,7 @@ $ `stdlib/core/slice.nu`
     ^ F
 }
 
-unsafe @ __test_unary s op s arg → b {
+@ __test_unary s op s arg → b {
     : i c ( nurl_str_get op 1 )
     ? == c 122 { ^ == ( nurl_str_len arg ) 0 } {}
     ? == c 110 { ^ != ( nurl_str_len arg ) 0 } {}
@@ -75,8 +76,8 @@ unsafe @ __test_unary s op s arg → b {
             // apply to the owner, the group bits to a member, otherwise
             // the other bits — the same three-way choice the kernel makes.
             : i m ( stat_mode_bits st )
-            : i uid # i ( geteuid )
-            : i gid # i ( getegid )
+            : i uid ( proc_self_euid )
+            : i gid ( proc_self_egid )
             : ~ i bits & m 7
             ? == . st uid uid { = bits & >> m 6 7 } {
                 ? == . st gid gid { = bits & >> m 3 7 } {}
@@ -293,13 +294,13 @@ unsafe @ __test_unary s op s arg → b {
 // `S : REGEX` — an anchored match; the result is the match length (or
 // the first captured group, which this engine does not offer, so the
 // length is what it always returns).
-unsafe @ __expr_match ( Vec String ) t → String {
+@ __expr_match ( Vec String ) t → String {
     : ~ String acc ( __expr_atom t )
     ~ & > ( __expr_left t ) 0 ( bx_streq ( __expr_tok t g_expr_pos ) `:` ) {
         = g_expr_pos + g_expr_pos 1
         : String pat ( __expr_atom t )
         : String anchored ( string_from `^` )
-        ( string_push_bytes anchored # *u ( string_data pat ) ( string_len pat ) )
+        ( string_append anchored pat )
         : String bre ( _bre_to_ere ( string_data anchored ) )
         : ~ i len 0
         ?? ( regex_compile ( string_data bre ) ) {

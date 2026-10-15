@@ -2071,6 +2071,61 @@ char *nurl_user_name(long long uid) {
     return NULL;
 }
 
+/* The calling process's ids, for whoami / id / groups: kind 0 uid, 1 euid,
+ * 2 gid, 3 egid. 0 (root's) where there is no such notion (Windows, the
+ * unikernel), which is what those report. */
+long long nurl_self_id(long long kind) {
+#if defined(__unix__) || defined(__APPLE__)
+    switch (kind) {
+    case 0: return (long long)getuid();
+    case 1: return (long long)geteuid();
+    case 2: return (long long)getgid();
+    case 3: return (long long)getegid();
+    }
+#else
+    (void)kind;
+#endif
+    return 0;
+}
+
+/* The supplementary group ids into `out` (room for `cap` int64s); returns
+ * how many there are — more than `cap` when `out` was too small, -1 on
+ * failure, 0 where there are none to report. */
+long long nurl_self_groups(long long *out, long long cap) {
+#if defined(__unix__) || defined(__APPLE__)
+    int n = getgroups(0, NULL);
+    if (n < 0) return -1;
+    if (n == 0) return 0;
+    gid_t *tmp = (gid_t *)malloc(sizeof(gid_t) * (size_t)n);
+    if (!tmp) return -1;
+    int got = getgroups(n, tmp);
+    if (got < 0) { free(tmp); return -1; }
+    for (int k = 0; k < got && k < cap; k++) out[k] = (long long)tmp[k];
+    free(tmp);
+    return (long long)got;
+#else
+    (void)out; (void)cap;
+    return 0;
+#endif
+}
+
+/* A hard link: 0 or -1 with errno, as link(2). Windows: CreateHardLinkA. */
+int nurl_hard_link(const char *target, const char *linkpath) {
+    if (!target || !linkpath) { errno = EINVAL; return -1; }
+#ifdef _WIN32
+    if (CreateHardLinkA(linkpath, target, NULL)) return 0;
+    DWORD e = GetLastError();
+    if      (e == ERROR_ALREADY_EXISTS)  errno = EEXIST;
+    else if (e == ERROR_ACCESS_DENIED)   errno = EACCES;
+    else if (e == ERROR_PATH_NOT_FOUND ||
+             e == ERROR_FILE_NOT_FOUND)  errno = ENOENT;
+    else                                  errno = EIO;
+    return -1;
+#else
+    return link(target, linkpath);
+#endif
+}
+
 char *nurl_group_name(long long gid) {
 #if defined(__unix__) || defined(__APPLE__)
     struct group *gr = getgrgid((gid_t)gid);

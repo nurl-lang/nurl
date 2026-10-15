@@ -19,6 +19,7 @@
 // (`-n 5`), `--name=value`, `--` and a bare `-` (an operand, by
 // universal convention stdin) all behave as POSIX describes.
 
+$ `stdlib/std/thread.nu`
 $ `stdlib/core/io.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
@@ -63,9 +64,9 @@ $ `stdlib/core/slice.nu`
     ? > n 0 { ( write_string buf ) } {}
 }
 
-unsafe @ bx_write_bytes ( Vec u ) buf → v {
+@ bx_write_bytes ( Vec u ) buf → v {
     : i n ( vec_len [u] buf )
-    ? > n 0 { ( nurl_print_bytes # s ( vec_data [u] buf ) n ) } {}
+    ? > n 0 { ( write_slice ( slice_window [u] ( slice_from_vec [u] buf ) 0 n ) ) } {}
 }
 
 // ── Small string helpers ──────────────────────────────────────────
@@ -443,25 +444,32 @@ unsafe @ bx_write_bytes ( Vec u ) buf → v {
 // compiles every module ALONE and would not resolve it. So main.nu hands the
 // table over as a value at startup and sh.nu calls what it was given.
 //
-// The global owns the closure for the life of the process; installing
-// another hook replaces it (and releases the one before).
+// The hook is set at start to none and replaced under its lock; a call
+// copies the closure out first and runs it with the lock released, so an
+// applet the hook runs may dispatch again (the shell running a script that
+// runs the shell).
 
 : BxDispatch { ( @ i s ( Vec String ) ) run }
 
-: ~ BxDispatch g_bx_dispatch 0
-: ~ b g_bx_dispatch_set F
+@ __bx_dispatch_none → ( Locked ? BxDispatch ) { ^ ( locked_new [? BxDispatch] @ ?BxDispatch { F } ) }
 
-unsafe @ bx_dispatch_set sink ( @ i s ( Vec String ) ) f → v {
-    = g_bx_dispatch @ BxDispatch { f }
-    = g_bx_dispatch_set T
+: ( Locked ? BxDispatch ) g_bx_dispatch ( __bx_dispatch_none )
+
+@ bx_dispatch_set sink ( @ i s ( Vec String ) ) f → v {
+    ( locked_set [? BxDispatch] g_bx_dispatch @ ?BxDispatch { T @ BxDispatch { f } } )
 }
 
 // -1 when nobody installed one, which is every caller that is not the
 // multiplexer — a library used on its own has no applet table.
-unsafe @ bx_dispatch s name ( Vec String ) argv → i {
-    ? ! g_bx_dispatch_set { ^ -1 } {}
-    : ( @ i s ( Vec String ) ) f . g_bx_dispatch run
-    ^ ( f name argv )
+@ bx_dispatch s name ( Vec String ) argv → i {
+    : ?BxDispatch d ( locked_get [? BxDispatch] g_bx_dispatch )
+    ?? d {
+        T h → {
+            : ( @ i s ( Vec String ) ) f . h run
+            ^ ( f name argv )
+        }
+        F → { ^ -1 }
+    }
 }
 
 // Which applet names this binary answers to, and whether a given name is one

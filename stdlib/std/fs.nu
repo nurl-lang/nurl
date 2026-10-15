@@ -448,6 +448,19 @@ $ `stdlib/core/rcbox.nu`
 // of nurlpkg should fall back to copying.
 & `c` @ symlink s target s linkpath → i32
 
+& `c` @ nurl_hard_link s target s linkpath → i32
+
+// A hard link: `linkpath` names the same file `target` does (link(2);
+// CreateHardLinkA on Windows).
+@ fs_link s target s linkpath → !v IoErr {
+    : i32 rc ( nurl_hard_link target linkpath )
+    ? == rc 0 {
+        ^ @ !v IoErr { T 0 }
+    } {}
+    : IoErr e ( _io_err_of_kind ( errno_kind ) )
+    ^ @ !v IoErr { F e }
+}
+
 // Create a symbolic link at `linkpath` pointing to `target`. Returns
 // IoErr {AlreadyExists} if the entry already exists (errno = EEXIST),
 // {PermissionDenied} on EACCES, {Other} for everything else.

@@ -43,7 +43,7 @@ $ `stdlib/core/slice.nu`
 // trusts the size) comes back empty — the streaming reader is the only
 // one that works here, and that is not a detail a caller should have to
 // know.
-unsafe @ __proc_read s path String out → b {
+@ __proc_read s path String out → b {
     ( string_clear out )
     ?? ( bufreader_open path ) {
         F _ → { ^ F }
@@ -52,7 +52,7 @@ unsafe @ __proc_read s path String out → b {
             : ~ b more T
             ~ more {
                 ? ( bufreader_read_line_raw br line ) {
-                    ( string_push_bytes out # *u ( string_data line ) ( string_len line ) )
+                    ( string_append out line )
                 } { = more F }
             }
             ( bufreader_close br )
@@ -121,7 +121,7 @@ unsafe @ __proc_read s path String out → b {
 // A process's command as `ps` shows it: the full argv with NULs turned
 // into spaces, or the kernel thread's name in brackets when argv is
 // empty — which is exactly how the kernel distinguishes the two.
-unsafe @ __proc_command i pid String out → b {
+@ __proc_command i pid String out → b {
     ( string_clear out )
     : String p ( __proc_path pid `cmdline` )
     : String raw ( string_new )
@@ -146,7 +146,7 @@ unsafe @ __proc_command i pid String out → b {
             : ~ i cn ( string_len comm )
             ~ & > cn 0 == ( string_get comm - cn 1 ) 10 { = cn - cn 1 }
             ( string_push_char out 91 )
-            ( string_push_bytes out # *u ( string_data comm ) cn )
+            ( string_push_window out ( string_bytes comm ) 0 cn )
             ( string_push_char out 93 )
         } {}
     }
@@ -177,7 +177,7 @@ unsafe @ __proc_command i pid String out → b {
 
 // ── ps ────────────────────────────────────────────────────────────
 
-unsafe @ ap_ps ( Vec String ) argv → i {
+@ ap_ps ( Vec String ) argv → i {
     : BxOpts o ( bx_getopt argv 1 `aefluwo:` `` )
     : ~ i rc 0
     ? ! ( bx_ok o ) { = rc 1 } {
@@ -207,11 +207,11 @@ unsafe @ ap_ps ( Vec String ) argv → i {
                                     }
                                 } {}
                                 : i w ( string_len user )
-                                ( string_push_bytes out # *u ( string_data user ) ? > w 8 8 w )
+                                ( string_push_window out ( string_bytes user ) 0 ? > w 8 8 w )
                                 : ~ i pad - 8 ? > w 8 8 w
                                 ~ > pad 0 { ( string_push_char out 32 ) = pad - pad 1 }
                                 ( string_push_char out 32 )
-                                ( string_push_bytes out # *u ( string_data cmd ) ( string_len cmd ) )
+                                ( string_append out cmd )
                                 ( string_push_char out 10 )
                             } {}
                         }
@@ -258,7 +258,7 @@ unsafe @ ap_ps ( Vec String ) argv → i {
     ^ found
 }
 
-unsafe @ ap_kill ( Vec String ) argv → i {
+@ ap_kill ( Vec String ) argv → i {
     : i n ( vec_len [String] argv )
     : ~ i sig 15
     : ~ i i 1
@@ -288,7 +288,7 @@ unsafe @ ap_kill ( Vec String ) argv → i {
             : String nm ( __sig_name k )
             ( bx_push_right out ( nurl_str_int k ) 2 )
             ( string_push_str out `) ` )
-            ( string_push_bytes out # *u ( string_data nm ) ( string_len nm ) )
+            ( string_append out nm )
             ( string_push_char out 10 )
             = k + k 1
         }
@@ -504,7 +504,7 @@ unsafe @ ap_kill ( Vec String ) argv → i {
     ^ count
 }
 
-unsafe @ ap_uptime ( Vec String ) argv → i {
+@ ap_uptime ( Vec String ) argv → i {
     : String up ( string_new )
     ? ! ( __proc_read `/proc/uptime` up ) {
         ( bx_err `/proc/uptime is not readable — this machine cannot answer that` )
@@ -516,7 +516,7 @@ unsafe @ ap_uptime ( Vec String ) argv → i {
     ( string_push_char out 32 )
     : Time now ( time_now_local )
     : String clock ( time_format now `%H:%M:%S` )
-    ( string_push_bytes out # *u ( string_data clock ) ( string_len clock ) )
+    ( string_append out clock )
     ( string_push_str out ` up ` )
     : i days / secs 86400
     ? > days 0 {
@@ -547,7 +547,7 @@ unsafe @ ap_uptime ( Vec String ) argv → i {
         ~ < k 3 {
             ? > k 0 { ( string_push_str out `, ` ) } {}
             : String lf ( __field ( string_data load ) k )
-            ( string_push_bytes out # *u ( string_data lf ) ( string_len lf ) )
+            ( string_append out lf )
             = k + k 1
         }
     } {}
@@ -589,7 +589,7 @@ unsafe @ ap_uptime ( Vec String ) argv → i {
     ^ T
 }
 
-unsafe @ ap_mount ( Vec String ) argv → i {
+@ ap_mount ( Vec String ) argv → i {
     : i n ( vec_len [String] argv )
     ? > n 1 {
         // Mounting is a privileged syscall this package does not wrap;
@@ -607,13 +607,13 @@ unsafe @ ap_mount ( Vec String ) argv → i {
     ~ < i cnt {
         ?? ( vec_get [MountEnt] ms i ) {
             T m → {
-                ( string_push_bytes out # *u ( string_data . m dev ) ( string_len . m dev ) )
+                ( string_append out . m dev )
                 ( string_push_str out ` on ` )
-                ( string_push_bytes out # *u ( string_data . m dir ) ( string_len . m dir ) )
+                ( string_append out . m dir )
                 ( string_push_str out ` type ` )
-                ( string_push_bytes out # *u ( string_data . m kind ) ( string_len . m kind ) )
+                ( string_append out . m kind )
                 ( string_push_str out ` (` )
-                ( string_push_bytes out # *u ( string_data . m opts ) ( string_len . m opts ) )
+                ( string_append out . m opts )
                 ( string_push_str out `)\n` )
             }
             F _ → {}

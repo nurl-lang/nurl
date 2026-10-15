@@ -94,10 +94,10 @@ $ `stdlib/core/slice.nu`
     ^ F
 }
 
-unsafe @ __sed_compile_re String pat b icase → Regex {
+@ __sed_compile_re String pat b icase → Regex {
     : String work ? icase ( _grep_lower ( string_data pat ) ) ( string_clone pat )
     : String ere ? g_sed_ere ( string_clone work ) ( _bre_to_ere ( string_data work ) )
-    : ~ Regex out # Regex # s 0
+    : ~ Regex out ( _grep_empty_regex )
     ?? ( regex_compile ( string_data ere ) ) {
         T r → { = out r }
         F _ → { = g_sed_bad T }
@@ -182,7 +182,7 @@ unsafe @ __sed_compile_re String pat b icase → Regex {
     }
 }
 
-unsafe @ __sed_parse s src ( Vec SedCmd ) out → v {
+@ __sed_parse s src ( Vec SedCmd ) out → v {
     : ( Slice u ) src_v ( slice_of_str src )
     : i n ( nurl_str_len src )
     = g_sed_pos 0
@@ -196,10 +196,10 @@ unsafe @ __sed_parse s src ( Vec SedCmd ) out → v {
         } {
             : ~ i a1kind 0
             : ~ i a1line 0
-            : ~ Regex a1re # Regex # s 0
+            : ~ Regex a1re ( _grep_empty_regex )
             : ~ i a2kind 0
             : ~ i a2line 0
-            : ~ Regex a2re # Regex # s 0
+            : ~ Regex a2re ( _grep_empty_regex )
             ( __sed_addr src n a1kind a1line a1re )
             ? & != a1kind SED_ADDR_NONE == ( __sed_at src n ) 44 {
                 = g_sed_pos + g_sed_pos 1
@@ -216,7 +216,7 @@ unsafe @ __sed_parse s src ( Vec SedCmd ) out → v {
             = g_sed_pos + g_sed_pos 1
             : String arg1 ( string_new )
             : String arg2 ( string_new )
-            : ~ Regex re # Regex # s 0
+            : ~ Regex re ( _grep_empty_regex )
             : ~ b has_re F
             : ~ i sflags 0
             : ~ i soccur 0
@@ -352,7 +352,7 @@ unsafe @ __sed_parse s src ( Vec SedCmd ) out → v {
 }
 
 // s/// over the pattern space. Returns T when anything changed.
-unsafe @ __sed_subst SedCmd c String space → b {
+@ __sed_subst SedCmd c String space → b {
     : b global != 0 & . c sflags SED_S_GLOBAL
     : b icase != 0 & . c sflags SED_S_ICASE
     : String probe ? icase ( _grep_lower ( string_data space ) ) ( string_clone space )
@@ -389,7 +389,7 @@ unsafe @ __sed_subst SedCmd c String space → b {
                         = j + j 1
                     }
                     : String rep ( regex_expand ( string_data space ) slots ( string_data . c arg1 ) )
-                    ( string_push_bytes out # *u ( string_data rep ) ( string_len rep ) )
+                    ( string_append out rep )
                     = changed T
                 } {
                     : ~ i k2 abs
@@ -415,12 +415,12 @@ unsafe @ __sed_subst SedCmd c String space → b {
     }
     ? changed {
         ( string_clear space )
-        ( string_push_bytes space # *u ( string_data out ) ( string_len out ) )
+        ( string_append space out )
     } {}
     ^ changed
 }
 
-unsafe @ __sed_translit SedCmd c String space → v {
+@ __sed_translit SedCmd c String space → v {
     : s from ( string_data . c arg1 )
     : ( Slice u ) from_v ( slice_of_str from )
     : s to ( string_data . c arg2 )
@@ -444,7 +444,7 @@ unsafe @ __sed_translit SedCmd c String space → v {
         = i + i 1
     }
     ( string_clear space )
-    ( string_push_bytes space # *u ( string_data out ) ( string_len out ) )
+    ( string_append space out )
 }
 
 // A file whose last line has no newline must not grow one — `sed` is a
@@ -461,14 +461,14 @@ unsafe @ __sed_translit SedCmd c String space → v {
     } {}
 }
 
-unsafe @ __sed_emit String out String line b had_nl → v {
+@ __sed_emit String out String line b had_nl → v {
     ( __sed_out_prep out )
-    ( string_push_bytes out # *u ( string_data line ) ( string_len line ) )
+    ( string_append out line )
     ? had_nl { ( string_push_char out 10 ) } { = g_sed_nonl T }
 }
 
 // Read one line, keeping whether it carried a terminator.
-unsafe @ __sed_read BufReader br String raw String dst inout b had_nl → b {
+@ __sed_read BufReader br String raw String dst inout b had_nl → b {
     ? ! ( bufreader_read_line_raw br raw ) {
         = had_nl F
         ^ F
@@ -483,7 +483,7 @@ unsafe @ __sed_read BufReader br String raw String dst inout b had_nl → b {
         = had_nl T
     } {}
     ( string_clear dst )
-    ( string_push_bytes dst # *u ( string_data raw ) body )
+    ( string_push_window dst ( string_bytes raw ) 0 body )
     ^ T
 }
 
@@ -506,7 +506,7 @@ unsafe @ __sed_read BufReader br String raw String dst inout b had_nl → b {
 : ~ b g_sed_quit F
 : ~ i g_sed_rc 0
 
-unsafe @ __sed_stream ( Vec SedCmd ) cmds ( Vec i ) ranges s path b quiet String out → i {
+@ __sed_stream ( Vec SedCmd ) cmds ( Vec i ) ranges s path b quiet String out → i {
     ?? ( bx_reader path ) {
         F _ → { ^ 1 }
         T br → {
@@ -557,7 +557,7 @@ unsafe @ __sed_stream ( Vec SedCmd ) cmds ( Vec i ) ranges s path b quiet String
                                     : ~ i e 0
                                     ~ & < e pn != ( string_get space e ) 10 { = e + e 1 }
                                     ( __sed_out_prep out )
-                                    ( string_push_bytes out # *u ( string_data space ) e )
+                                    ( string_push_window out ( string_bytes space ) 0 e )
                                     ( string_push_char out 10 )
                                 } {}
                                 ? & sel == k 100 { = deleted T } {}
@@ -568,7 +568,7 @@ unsafe @ __sed_stream ( Vec SedCmd ) cmds ( Vec i ) ranges s path b quiet String
                                     ? >= e pn { = deleted T } {
                                         : String rest ( string_substr space + e 1 - pn + e 1 )
                                         ( string_clear space )
-                                        ( string_push_bytes space # *u ( string_data rest ) ( string_len rest ) )
+                                        ( string_append space rest )
                                         = restart T
                                         = next ncmds
                                     }
@@ -582,7 +582,7 @@ unsafe @ __sed_stream ( Vec SedCmd ) cmds ( Vec i ) ranges s path b quiet String
                                     ? ! quiet { ( __sed_emit out space space_nl ) } {}
                                     ? have_ahead {
                                         ( string_clear space )
-                                        ( string_push_bytes space # *u ( string_data ahead ) ( string_len ahead ) )
+                                        ( string_append space ahead )
                                         = space_nl ahead_nl
                                         = lineno + lineno 1
                                         = have_ahead ( __sed_read br raw ahead ahead_nl )
@@ -595,7 +595,7 @@ unsafe @ __sed_stream ( Vec SedCmd ) cmds ( Vec i ) ranges s path b quiet String
                                 ? & sel == k 78 {
                                     ? have_ahead {
                                         ( string_push_char space 10 )
-                                        ( string_push_bytes space # *u ( string_data ahead ) ( string_len ahead ) )
+                                        ( string_append space ahead )
                                         = space_nl ahead_nl
                                         = lineno + lineno 1
                                         = have_ahead ( __sed_read br raw ahead ahead_nl )
@@ -608,43 +608,43 @@ unsafe @ __sed_stream ( Vec SedCmd ) cmds ( Vec i ) ranges s path b quiet String
                                     ( string_push_char out 10 )
                                 } {}
                                 ? & sel == k 97 {
-                                    ( string_push_bytes append # *u ( string_data . c arg1 ) ( string_len . c arg1 ) )
+                                    ( string_append append . c arg1 )
                                     ( string_push_char append 10 )
                                 } {}
                                 ? & sel == k 105 {
                                     ( __sed_out_prep out )
-                                    ( string_push_bytes out # *u ( string_data . c arg1 ) ( string_len . c arg1 ) )
+                                    ( string_append out . c arg1 )
                                     ( string_push_char out 10 )
                                 } {}
                                 ? & sel == k 99 {
                                     ( __sed_out_prep out )
-                                    ( string_push_bytes out # *u ( string_data . c arg1 ) ( string_len . c arg1 ) )
+                                    ( string_append out . c arg1 )
                                     ( string_push_char out 10 )
                                     = deleted T
                                 } {}
                                 ? & sel == k 121 { ( __sed_translit c space ) } {}
                                 ? & sel == k 104 {
                                     ( string_clear hold )
-                                    ( string_push_bytes hold # *u ( string_data space ) ( string_len space ) )
+                                    ( string_append hold space )
                                 } {}
                                 ? & sel == k 72 {
                                     ( string_push_char hold 10 )
-                                    ( string_push_bytes hold # *u ( string_data space ) ( string_len space ) )
+                                    ( string_append hold space )
                                 } {}
                                 ? & sel == k 103 {
                                     ( string_clear space )
-                                    ( string_push_bytes space # *u ( string_data hold ) ( string_len hold ) )
+                                    ( string_append space hold )
                                 } {}
                                 ? & sel == k 71 {
                                     ( string_push_char space 10 )
-                                    ( string_push_bytes space # *u ( string_data hold ) ( string_len hold ) )
+                                    ( string_append space hold )
                                 } {}
                                 ? & sel == k 120 {
                                     : String tmp ( string_clone space )
                                     ( string_clear space )
-                                    ( string_push_bytes space # *u ( string_data hold ) ( string_len hold ) )
+                                    ( string_append space hold )
                                     ( string_clear hold )
-                                    ( string_push_bytes hold # *u ( string_data tmp ) ( string_len tmp ) )
+                                    ( string_append hold tmp )
                                 } {}
                                 ? & sel == k 98 {
                                     ? == ( string_len . c arg1 ) 0 { = next ncmds } {
@@ -664,7 +664,7 @@ unsafe @ __sed_stream ( Vec SedCmd ) cmds ( Vec i ) ranges s path b quiet String
                                 ? & sel == k 114 {
                                     ?? ( read_file ( string_data . c arg1 ) ) {
                                         T txt → {
-                                            ( string_push_bytes append # *u ( string_data txt ) ( string_len txt ) )
+                                            ( string_append append txt )
                                         }
                                         F _ → {}
                                     }
@@ -692,14 +692,14 @@ unsafe @ __sed_stream ( Vec SedCmd ) cmds ( Vec i ) ranges s path b quiet String
                 ? & ! deleted ! quiet { ( __sed_emit out space space_nl ) } {}
                 ? > ( string_len append ) 0 {
                     ( __sed_out_prep out )
-                    ( string_push_bytes out # *u ( string_data append ) ( string_len append ) )
+                    ( string_append out append )
                     ( string_clear append )
                 } {}
                 ? > ( string_len out ) 32768 { ( bx_write out ) ( string_clear out ) } {}
                 ? & have_space ! g_sed_quit {
                     ? have_ahead {
                         ( string_clear space )
-                        ( string_push_bytes space # *u ( string_data ahead ) ( string_len ahead ) )
+                        ( string_append space ahead )
                         = space_nl ahead_nl
                         = have_ahead ( __sed_read br raw ahead ahead_nl )
                     } { = have_space F }

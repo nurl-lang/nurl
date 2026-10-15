@@ -1245,3 +1245,35 @@ $ `stdlib/std/time.nu`
 // Let go of `p` now rather than at the end of its owner's scope; the
 // last owner shuts the child down.
 @ proc_free sink ProcChild p → v {}
+
+// ── The process's own identity ──────────────────────────────────────
+// Its user and group ids, real and effective, and its supplementary
+// groups — 0 and none where the platform has no such notion (Windows,
+// the unikernel), which is what those report for whoami / id.
+
+& `c` @ nurl_self_id i kind → i
+
+& `c` @ nurl_self_groups *i out i cap → i
+
+@ proc_self_uid → i { ^ ( nurl_self_id 0 ) }
+
+@ proc_self_euid → i { ^ ( nurl_self_id 1 ) }
+
+@ proc_self_gid → i { ^ ( nurl_self_id 2 ) }
+
+@ proc_self_egid → i { ^ ( nurl_self_id 3 ) }
+
+@ proc_self_groups → ( Vec i ) {
+    : ~ i cap 32
+    ~ T {
+        : ( Vec i ) out ( vec_zeroed [i] cap )
+        : i n ( nurl_self_groups ( vec_data [i] out ) cap )
+        ? <= n 0 { ^ ( vec_new [i] ) } {}
+        ? <= n cap {
+            : b _t ( vec_truncate [i] out n )
+            ^ out
+        } {}
+        = cap n
+    }
+    ^ ( vec_new [i] )
+}

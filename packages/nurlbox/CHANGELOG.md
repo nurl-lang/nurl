@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.4.0] — 2026-10-14
+
+### Changed
+
+- 8 `unsafe` functions left of 90, all of them process control the
+  standard library has no safe form of: the shell's fork / pipe / exec
+  and waitpid, `find -exec`, `xargs` and `env`'s exec.
+- The shell's state is one value its `sh` run owns and lends `inout` to
+  the interpreter, where it was a raw word in a global read back through
+  `arc_ptr` — nothing tied it to the state's owner, and a nested `sh`
+  (an applet run from a script) swapped it by hand.
+- Strings are appended with `string_append` / `string_push_window` and
+  written with `write_slice` (NUL-exact, checked) instead of a raw
+  pointer and a length; `od`, `hexdump`, `xxd`, `strings` and `tr` read
+  their input and tables through checked byte views.
+- `whoami`, `id`, `groups`, `test -O/-G` and `ln` use the standard
+  library's `proc_self_*` and `fs_link` instead of declaring libc's
+  `getuid` / `getgroups` / `link` themselves; `getgroups` was read back four
+  bytes at a time through a raw pointer.
+- `grep -F` and `sed` hold a real `Regex` (compiled from `^`) in a slot
+  that needs none, where a zero bit pattern posed as one.
+- The applet hook (`bx_dispatch_set`) is a `Locked` global set at start; a
+  dispatch copies the closure out and runs it unlocked, so an applet may
+  dispatch again.
+
+The busybox differential gives the same result as 0.3.5 (347 of 348, the
+one difference `ls`'s exit status for a missing entry, 2 as GNU against
+busybox's 1). `tr`, `grep -F`, `od` and `sed` on 32 MB run as fast or
+faster (125/145/846/2827 ms against 127/154/893/2817).
+
 ## [0.3.5] — 2026-10-14
 
 Requires NURL 0.73.0 (`slice_at`, `slice_put`, `rc_take`, `locked_take`).

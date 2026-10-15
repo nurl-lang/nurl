@@ -805,32 +805,19 @@ $ `stdlib/core/slice.nu`
     i depth  // command-substitution nesting, for a sanity bound
 }
 
-: ShState { ( Arc ShStateImpl ) a }
+// The shell's state is one value, owned by the `sh` run that made it and
+// lent `inout` to everything that reads or changes it — a nested `sh`
+// (an applet run from a script) has its own.
 
-@ ShState_share ShState h → ShState { ^ @ ShState { ( arc_clone [ShStateImpl] . h a ) } }
-
-@ ShState_drop sink ShState h → v {}
-
-: ~ i g_sh_state 0  // the current state's block, lent by the ShState that made it
-
-unsafe @ __st → *ShStateImpl { ^ ( arc_ptr [ShStateImpl] # ( Arc ShStateImpl ) g_sh_state ) }
-
-// A fresh state (counters zero), made the current one.
-unsafe @ __sh_state_new → ShState {
-    : ( Arc ShStateImpl ) p__box ( arc_zero [ShStateImpl] )
-    : *ShStateImpl st ( arc_ptr [ShStateImpl] p__box )
-    = . st names ( vec_new [String] )
-    = . st values ( vec_new [String] )
-    = . st fnames ( vec_new [String] )
-    = . st fnodes ( vec_new [i] )
-    = . st params ( vec_new [String] )
-    = . st argv0 ( string_from `sh` )
-    = g_sh_state # i . p__box ctl
-    ^ @ ShState { p__box }
+// A fresh state: no variables, no functions, counters zero.
+@ __sh_state_new → ShStateImpl {
+    ^ @ ShStateImpl {
+        ( vec_new [String] ) ( vec_new [String] ) ( vec_new [String] ) ( vec_new [i] )
+        ( vec_new [String] ) ( string_from `sh` ) 0 0 0 0 0 0 0
+    }
 }
 
-unsafe @ __sh_var_index s name → i {
-    : *ShStateImpl st ( __st )
+@ __sh_var_index inout ShStateImpl st s name → i {
     : i n ( vec_len [String] . st names )
     : ~ i i 0
     ~ < i n {
@@ -840,9 +827,8 @@ unsafe @ __sh_var_index s name → i {
     ^ -1
 }
 
-unsafe @ __sh_set s name s value → v {
-    : *ShStateImpl st ( __st )
-    : i idx ( __sh_var_index name )
+@ __sh_set inout ShStateImpl st s name s value → v {
+    : i idx ( __sh_var_index st name )
     ? >= idx 0 {
         ?? ( vec_get [String] . st values idx ) {
             T slot → {
@@ -859,9 +845,8 @@ unsafe @ __sh_set s name s value → v {
 
 // A shell variable, then the environment, then the empty string — the
 // order every shell resolves in.
-unsafe @ __sh_get s name → String {
-    : *ShStateImpl st ( __st )
-    : i idx ( __sh_var_index name )
+@ __sh_get inout ShStateImpl st s name → String {
+    : i idx ( __sh_var_index st name )
     ? >= idx 0 { ^ ( string_from ( bx_at . st values idx ) ) } {}
     ?? ( env_get name ) {
         T v → { ^ v }
@@ -869,9 +854,8 @@ unsafe @ __sh_get s name → String {
     }
 }
 
-unsafe @ __sh_unset s name → v {
-    : *ShStateImpl st ( __st )
-    : i idx ( __sh_var_index name )
+@ __sh_unset inout ShStateImpl st s name → v {
+    : i idx ( __sh_var_index st name )
     ? >= idx 0 {
         ( vec_remove [String] . st names idx )
         ( vec_remove [String] . st values idx )
@@ -879,8 +863,7 @@ unsafe @ __sh_unset s name → v {
     ?? ( env_unset name ) { T _ → {} F _ → {} }
 }
 
-unsafe @ __sh_func_index s name → i {
-    : *ShStateImpl st ( __st )
+@ __sh_func_index inout ShStateImpl st s name → i {
     : i n ( vec_len [String] . st fnames )
     : ~ i i 0
     ~ < i n {
@@ -926,8 +909,7 @@ unsafe @ __sh_func_index s name → i {
 
 // Positional parameters joined with a space — `$*`, and `$@` outside
 // quotes where the split puts them back apart anyway.
-unsafe @ __sh_params_joined → String {
-    : *ShStateImpl st ( __st )
+@ __sh_params_joined inout ShStateImpl st → String {
     : String out ( string_new )
     : i n ( vec_len [String] . st params )
     : ~ i i 0
@@ -949,7 +931,7 @@ unsafe @ __sh_params_joined → String {
     ~ & < g_ari_pos n ( bx_is_blank ( slice_byte src_v g_ari_pos ) ) { = g_ari_pos + g_ari_pos 1 }
 }
 
-@ __ari_primary s src → i {
+@ __ari_primary inout ShStateImpl st s src → i {
     : ( Slice u ) src_v ( slice_of_str src )
     : i n ( nurl_str_len src )
     ( __ari_skip src )
@@ -957,22 +939,22 @@ unsafe @ __sh_params_joined → String {
     : i c ( slice_byte src_v g_ari_pos )
     ? == c 40 {
         = g_ari_pos + g_ari_pos 1
-        : i v ( __ari_or src )
+        : i v ( __ari_or st src )
         ( __ari_skip src )
         ? & < g_ari_pos n == ( slice_byte src_v g_ari_pos ) 41 { = g_ari_pos + g_ari_pos 1 } {}
         ^ v
     } {}
     ? == c 33 {
         = g_ari_pos + g_ari_pos 1
-        ^ ? == ( __ari_primary src ) 0 1 0
+        ^ ? == ( __ari_primary st src ) 0 1 0
     } {}
     ? == c 45 {
         = g_ari_pos + g_ari_pos 1
-        ^ - 0 ( __ari_primary src )
+        ^ - 0 ( __ari_primary st src )
     } {}
     ? == c 43 {
         = g_ari_pos + g_ari_pos 1
-        ^ ( __ari_primary src )
+        ^ ( __ari_primary st src )
     } {}
     ? ( bx_is_digit c ) {
         : ~ i v 0
@@ -987,7 +969,7 @@ unsafe @ __sh_params_joined → String {
     ? ( __sh_is_name_char c T ) {
         : i start g_ari_pos
         ~ & < g_ari_pos n ( __sh_is_name_char ( slice_byte src_v g_ari_pos ) F ) { = g_ari_pos + g_ari_pos 1 }
-        : String v ( __sh_get ( nurl_str_slice src start - g_ari_pos start ) )
+        : String v ( __sh_get st ( nurl_str_slice src start - g_ari_pos start ) )
         : i r ( nurl_str_to_int ( string_data v ) )
         ^ r
     } {}
@@ -995,15 +977,15 @@ unsafe @ __sh_params_joined → String {
     ^ 0
 }
 
-@ __ari_mul s src → i {
+@ __ari_mul inout ShStateImpl st s src → i {
     : ( Slice u ) src_v ( slice_of_str src )
     : i n ( nurl_str_len src )
-    : ~ i acc ( __ari_primary src )
+    : ~ i acc ( __ari_primary st src )
     ( __ari_skip src )
     ~ & < g_ari_pos n | | == ( slice_byte src_v g_ari_pos ) 42 == ( slice_byte src_v g_ari_pos ) 47 == ( slice_byte src_v g_ari_pos ) 37 {
         : i op ( slice_byte src_v g_ari_pos )
         = g_ari_pos + g_ari_pos 1
-        : i rhs ( __ari_primary src )
+        : i rhs ( __ari_primary st src )
         ? == op 42 { = acc * acc rhs } {
             ? == rhs 0 { = acc 0 } {
                 ? == op 47 { = acc / acc rhs } { = acc - acc * rhs / acc rhs }
@@ -1014,25 +996,25 @@ unsafe @ __sh_params_joined → String {
     ^ acc
 }
 
-@ __ari_add s src → i {
+@ __ari_add inout ShStateImpl st s src → i {
     : ( Slice u ) src_v ( slice_of_str src )
     : i n ( nurl_str_len src )
-    : ~ i acc ( __ari_mul src )
+    : ~ i acc ( __ari_mul st src )
     ( __ari_skip src )
     ~ & < g_ari_pos n | == ( slice_byte src_v g_ari_pos ) 43 == ( slice_byte src_v g_ari_pos ) 45 {
         : i op ( slice_byte src_v g_ari_pos )
         = g_ari_pos + g_ari_pos 1
-        : i rhs ( __ari_mul src )
+        : i rhs ( __ari_mul st src )
         = acc ? == op 43 + acc rhs - acc rhs
         ( __ari_skip src )
     }
     ^ acc
 }
 
-@ __ari_cmp s src → i {
+@ __ari_cmp inout ShStateImpl st s src → i {
     : ( Slice u ) src_v ( slice_of_str src )
     : i n ( nurl_str_len src )
-    : ~ i acc ( __ari_add src )
+    : ~ i acc ( __ari_add st src )
     ( __ari_skip src )
     ~ & < g_ari_pos n | | | == ( slice_byte src_v g_ari_pos ) 60 == ( slice_byte src_v g_ari_pos ) 62 & == ( slice_byte src_v g_ari_pos ) 61 == ( slice_byte src_v + g_ari_pos 1 ) 61 & == ( slice_byte src_v g_ari_pos ) 33 == ( slice_byte src_v + g_ari_pos 1 ) 61 {
         : i c1 ( slice_byte src_v g_ari_pos )
@@ -1042,7 +1024,7 @@ unsafe @ __sh_params_joined → String {
         ? == c1 62 { = op ? == c2 61 3 2 = g_ari_pos + g_ari_pos ? == c2 61 2 1 } {}
         ? == c1 61 { = op 4 = g_ari_pos + g_ari_pos 2 } {}
         ? == c1 33 { = op 5 = g_ari_pos + g_ari_pos 2 } {}
-        : i rhs ( __ari_add src )
+        : i rhs ( __ari_add st src )
         : ~ b r F
         ? == op 0 { = r < acc rhs } {}
         ? == op 1 { = r <= acc rhs } {}
@@ -1056,37 +1038,37 @@ unsafe @ __sh_params_joined → String {
     ^ acc
 }
 
-@ __ari_and s src → i {
+@ __ari_and inout ShStateImpl st s src → i {
     : ( Slice u ) src_v ( slice_of_str src )
     : i n ( nurl_str_len src )
-    : ~ i acc ( __ari_cmp src )
+    : ~ i acc ( __ari_cmp st src )
     ( __ari_skip src )
     ~ & < + g_ari_pos 1 n & == ( slice_byte src_v g_ari_pos ) 38 == ( slice_byte src_v + g_ari_pos 1 ) 38 {
         = g_ari_pos + g_ari_pos 2
-        : i rhs ( __ari_cmp src )
+        : i rhs ( __ari_cmp st src )
         = acc ? & != acc 0 != rhs 0 1 0
         ( __ari_skip src )
     }
     ^ acc
 }
 
-@ __ari_or s src → i {
+@ __ari_or inout ShStateImpl st s src → i {
     : ( Slice u ) src_v ( slice_of_str src )
     : i n ( nurl_str_len src )
-    : ~ i acc ( __ari_and src )
+    : ~ i acc ( __ari_and st src )
     ( __ari_skip src )
     ~ & < + g_ari_pos 1 n & == ( slice_byte src_v g_ari_pos ) 124 == ( slice_byte src_v + g_ari_pos 1 ) 124 {
         = g_ari_pos + g_ari_pos 2
-        : i rhs ( __ari_and src )
+        : i rhs ( __ari_and st src )
         = acc ? | != acc 0 != rhs 0 1 0
         ( __ari_skip src )
     }
     ^ acc
 }
 
-@ __sh_arith s src → i {
+@ __sh_arith inout ShStateImpl st s src → i {
     = g_ari_pos 0
-    ^ ( __ari_or src )
+    ^ ( __ari_or st src )
 }
 
 // ── Expansion ─────────────────────────────────────────────────────
@@ -1096,10 +1078,9 @@ unsafe @ __sh_params_joined → String {
 
 @ __sh_default_ifs → s { ^ ` \t\n` }
 
-unsafe @ __sh_ifs → String {
-    : i idx ( __sh_var_index `IFS` )
+@ __sh_ifs inout ShStateImpl st → String {
+    : i idx ( __sh_var_index st `IFS` )
     ? >= idx 0 {
-        : *ShStateImpl st ( __st )
         ^ ( string_from ( bx_at . st values idx ) )
     } {}
     ^ ( string_from ( __sh_default_ifs ) )
@@ -1129,7 +1110,7 @@ unsafe @ __sh_ifs → String {
 }
 
 // `${NAME<op>word}` — the braced form, cursor just past the `{`.
-unsafe @ __sh_brace ShWord src i from i to ShWord acc i q → v {
+@ __sh_brace inout ShStateImpl st ShWord src i from i to ShWord acc i q → v {
     : ~ i i from
     // `${#NAME}` is the length of NAME.
     ? & < i to == ( __shw_at src i ) 35 {
@@ -1139,7 +1120,7 @@ unsafe @ __sh_brace ShWord src i from i to ShWord acc i q → v {
             ( string_push_char nm ( __shw_at src i ) )
             = i + i 1
         }
-        : String v ? ( bx_streq ( string_data nm ) `@` ) ( __sh_params_joined ) ( __sh_get ( string_data nm ) )
+        : String v ? ( bx_streq ( string_data nm ) `@` ) ( __sh_params_joined st ) ( __sh_get st ( string_data nm ) )
         ( __shw_push_str acc ( nurl_str_int ( string_len v ) ) q )
         ^
     } {}
@@ -1155,7 +1136,7 @@ unsafe @ __sh_brace ShWord src i from i to ShWord acc i q → v {
             = i + i 1
         }
     } {}
-    : String value ( __sh_special ( string_data nm ) )
+    : String value ( __sh_special st ( string_data nm ) )
     : ~ b unset == ( string_len value ) 0
     ? >= i to {
         ( __shw_push_str acc ( string_data value ) q )
@@ -1179,11 +1160,11 @@ unsafe @ __sh_brace ShWord src i from i to ShWord acc i q → v {
         ( __shw_push rest ( __shw_at src i ) ( __shw_q src i ) )
         = i + i 1
     }
-    : String repl ( __sh_expand_to_string rest )
+    : String repl ( __sh_expand_to_string st rest )
     ? | == op 45 == op 61 {
         ? unset {
             ( __shw_push_str acc ( string_data repl ) q )
-            ? == op 61 { ( __sh_set ( string_data nm ) ( string_data repl ) ) } {}
+            ? == op 61 { ( __sh_set st ( string_data nm ) ( string_data repl ) ) } {}
         } { ( __shw_push_str acc ( string_data value ) q ) }
     } {
         ? == op 43 {
@@ -1192,7 +1173,6 @@ unsafe @ __sh_brace ShWord src i from i to ShWord acc i q → v {
             ? == op 63 {
                 ? unset {
                     ( bx_err ? > ( string_len repl ) 0 ( string_data repl ) `parameter not set` )
-                    : *ShStateImpl st ( __st )
                     = . st exiting 1
                     = . st exit_code 1
                 } { ( __shw_push_str acc ( string_data value ) q ) }
@@ -1207,13 +1187,12 @@ unsafe @ __sh_brace ShWord src i from i to ShWord acc i q → v {
 }
 
 // `$?`, `$#`, `$$`, `$0`…`$9`, `$*`, and ordinary names.
-unsafe @ __sh_special s name → String {
+@ __sh_special inout ShStateImpl st s name → String {
     : ( Slice u ) name_v ( slice_of_str name )
-    : *ShStateImpl st ( __st )
     ? ( bx_streq name `?` ) { ^ ( string_from ( nurl_str_int . st status ) ) } {}
     ? ( bx_streq name `#` ) { ^ ( string_from ( nurl_str_int ( vec_len [String] . st params ) ) ) } {}
     ? ( bx_streq name `$` ) { ^ ( string_from ( nurl_str_int # i ( getpid ) ) ) } {}
-    ? | ( bx_streq name `*` ) ( bx_streq name `@` ) { ^ ( __sh_params_joined ) } {}
+    ? | ( bx_streq name `*` ) ( bx_streq name `@` ) { ^ ( __sh_params_joined st ) } {}
     ? ( bx_streq name `0` ) { ^ ( string_clone . st argv0 ) } {}
     : i n ( nurl_str_len name )
     ? > n 0 {
@@ -1231,19 +1210,18 @@ unsafe @ __sh_special s name → String {
             ^ ( string_new )
         } {}
     } {}
-    ^ ( __sh_get name )
+    ^ ( __sh_get st name )
 }
 
 // One word, expanded into `acc`; `$@` splits, so completed fields go to
 // `fields` and `acc` restarts.
-unsafe @ __sh_expand_into ShWord w ShWord acc ( Vec ShWord ) fields → v {
-    : *ShStateImpl st ( __st )
+@ __sh_expand_into inout ShStateImpl st ShWord w ShWord acc ( Vec ShWord ) fields → v {
     : i n ( __shw_len w )
     : ~ i i 0
     // A leading unquoted `~` is $HOME.
     ? & & > n 0 == ( __shw_at w 0 ) 126 == 0 ( __shw_q w 0 ) {
         ? | == n 1 == ( __shw_at w 1 ) 47 {
-            : String home ( __sh_get `HOME` )
+            : String home ( __sh_get st `HOME` )
             ( __shw_push_str acc ( string_data home ) 2 )
             = i 1
         } {}
@@ -1275,7 +1253,7 @@ unsafe @ __sh_expand_into ShWord w ShWord acc ( Vec ShWord ) fields → v {
                         // Drop the inner `))`.
                         : i el ( string_len expr )
                         : String body ( string_substr expr 0 ? > el 1 - el 1 0 )
-                        ( __shw_push_str acc ( nurl_str_int ( __sh_arith ( string_data body ) ) ) q )
+                        ( __shw_push_str acc ( nurl_str_int ( __sh_arith st ( string_data body ) ) ) q )
                         : ~ i skip + i 2
                         : ~ i d2 0
                         ~ < skip n {
@@ -1303,7 +1281,7 @@ unsafe @ __sh_expand_into ShWord w ShWord acc ( Vec ShWord ) fields → v {
                                 = k + k 1
                             }
                         }
-                        : String captured ( __sh_capture ( string_data script ) )
+                        : String captured ( __sh_capture st ( string_data script ) )
                         ( __shw_push_str acc ( string_data captured ) q )
                     }
                 } {
@@ -1321,7 +1299,7 @@ unsafe @ __sh_expand_into ShWord w ShWord acc ( Vec ShWord ) fields → v {
                                 ( __shw_push acc c q )
                                 = i + i 1
                             } {
-                                ( __sh_brace w + i 2 close acc q )
+                                ( __sh_brace st w + i 2 close acc q )
                                 = i + close 1
                             }
                         } {
@@ -1348,14 +1326,14 @@ unsafe @ __sh_expand_into ShWord w ShWord acc ( Vec ShWord ) fields → v {
                                         ( string_push_char nm ( __shw_at w k ) )
                                         = k + k 1
                                     }
-                                    : String v ( __sh_special ( string_data nm ) )
+                                    : String v ( __sh_special st ( string_data nm ) )
                                     ( __shw_push_str acc ( string_data v ) q )
                                     = i k
                                 } {
                                     ? | | | ( bx_is_digit c2 ) == c2 63 == c2 35 | == c2 36 | == c2 42 == c2 64 {
                                         : String nm ( string_new )
                                         ( string_push_char nm c2 )
-                                        : String v ( __sh_special ( string_data nm ) )
+                                        : String v ( __sh_special st ( string_data nm ) )
                                         ( __shw_push_str acc ( string_data v ) q )
                                         = i + i 2
                                     } {
@@ -1376,7 +1354,7 @@ unsafe @ __sh_expand_into ShWord w ShWord acc ( Vec ShWord ) fields → v {
                     ( string_push_char script ( __shw_at w k ) )
                     = k + k 1
                 }
-                : String captured ( __sh_capture ( string_data script ) )
+                : String captured ( __sh_capture st ( string_data script ) )
                 ( __shw_push_str acc ( string_data captured ) q )
                 = i ? < k n + k 1 n
             } {
@@ -1390,22 +1368,22 @@ unsafe @ __sh_expand_into ShWord w ShWord acc ( Vec ShWord ) fields → v {
 // The whole word as one string, no splitting and no globbing — what a
 // redirection target, a `${VAR:-word}` replacement and a case pattern
 // all need.
-@ __sh_expand_to_string ShWord w → String {
+@ __sh_expand_to_string inout ShStateImpl st ShWord w → String {
     : ShWord acc ( __shw_new )
     : ( Vec ShWord ) extra ( vec_new [ShWord] )
-    ( __sh_expand_into w acc extra )
+    ( __sh_expand_into st w acc extra )
     : String out ( string_clone . acc text )
     ^ out
 }
 
 // Full expansion: substitution, then field splitting on unquoted IFS
 // bytes, then globbing. The mask is what keeps the three honest.
-@ __sh_expand_word ShWord w ( Vec String ) out → v {
+@ __sh_expand_word inout ShStateImpl st ShWord w ( Vec String ) out → v {
     : ShWord acc ( __shw_new )
     : ( Vec ShWord ) pre ( vec_new [ShWord] )
-    ( __sh_expand_into w acc pre )
+    ( __sh_expand_into st w acc pre )
     ( vec_push [ShWord] pre ( __shw_clone acc ) )
-    : String ifs ( __sh_ifs )
+    : String ifs ( __sh_ifs st )
     : i np ( vec_len [ShWord] pre )
     : ~ i p 0
     ~ < p np {
@@ -1505,7 +1483,7 @@ unsafe @ __sh_can_fork → b {
     ^ # i r
 }
 
-@ __sh_apply_redirs ( Vec ShRedir ) rs ( Vec i ) saved_fd ( Vec i ) saved_to → b {
+@ __sh_apply_redirs inout ShStateImpl st ( Vec ShRedir ) rs ( Vec i ) saved_fd ( Vec i ) saved_to → b {
     : i n ( vec_len [ShRedir] rs )
     : ~ i i 0
     : ~ b ok T
@@ -1534,7 +1512,7 @@ unsafe @ __sh_can_fork → b {
                         }
                     }
                 } {
-                    : String target ( __sh_expand_to_string . r word )
+                    : String target ( __sh_expand_to_string st . r word )
                     ? == . r kind SHR_DUP {
                         : s t ( string_data target )
                         ? ( bx_streq t `-` ) {
@@ -1598,16 +1576,15 @@ unsafe @ __sh_can_fork → b {
     ^ | | | | | | | | | | | | | | | ( bx_streq name `cd` ) ( bx_streq name `exit` ) ( bx_streq name `export` ) ( bx_streq name `unset` ) ( bx_streq name `shift` ) ( bx_streq name `set` ) ( bx_streq name `read` ) ( bx_streq name `eval` ) ( bx_streq name `.` ) ( bx_streq name `source` ) ( bx_streq name `return` ) ( bx_streq name `break` ) ( bx_streq name `continue` ) ( bx_streq name `:` ) ( bx_streq name `local` ) ( bx_streq name `type` )
 }
 
-unsafe @ __sh_builtin ( Vec String ) argv → i {
-    : *ShStateImpl st ( __st )
+@ __sh_builtin inout ShStateImpl st ( Vec String ) argv → i {
     : s name ( bx_at argv 0 )
     : i n ( vec_len [String] argv )
     ? ( bx_streq name `:` ) { ^ 0 } {}
     ? ( bx_streq name `cd` ) {
         : ~ String dest ( string_new )
         ? > n 1 { ( string_push_str dest ( bx_at argv 1 ) ) } {
-            : String home ( __sh_get `HOME` )
-            ( string_push_bytes dest # *u ( string_data home ) ( string_len home ) )
+            : String home ( __sh_get st `HOME` )
+            ( string_append dest home )
         }
         ? == ( string_len dest ) 0 {
             ^ 0
@@ -1615,9 +1592,9 @@ unsafe @ __sh_builtin ( Vec String ) argv → i {
         // `cd -` returns to $OLDPWD, and says where it went.
         : ~ b announce F
         ? ( bx_streq ( string_data dest ) `-` ) {
-            : String old ( __sh_get `OLDPWD` )
+            : String old ( __sh_get st `OLDPWD` )
             ( string_clear dest )
-            ( string_push_bytes dest # *u ( string_data old ) ( string_len old ) )
+            ( string_append dest old )
             = announce T
         } {}
         : ~ String before ( string_new )
@@ -1629,10 +1606,10 @@ unsafe @ __sh_builtin ( Vec String ) argv → i {
         }
         ?? ( env_chdir ( string_data dest ) ) {
             T _ → {
-                ( __sh_set `OLDPWD` ( string_data before ) )
+                ( __sh_set st `OLDPWD` ( string_data before ) )
                 ?? ( env_cwd ) {
                     T c2 → {
-                        ( __sh_set `PWD` ( string_data c2 ) )
+                        ( __sh_set st `PWD` ( string_data c2 ) )
                         ? announce {
                             ( nurl_print ( string_data c2 ) )
                             ( nurl_print `\n` )
@@ -1661,10 +1638,10 @@ unsafe @ __sh_builtin ( Vec String ) argv → i {
             ? > eq 0 {
                 : s nm ( nurl_str_slice a 0 eq )
                 : s val ( nurl_str_slice a + eq 1 - ( nurl_str_len a ) + eq 1 )
-                ( __sh_set nm val )
+                ( __sh_set st nm val )
                 ?? ( env_set nm val ) { T _ → {} F _ → {} }
             } {
-                : String v ( __sh_get a )
+                : String v ( __sh_get st a )
                 ?? ( env_set a ( string_data v ) ) { T _ → {} F _ → {} }
             }
             = i + i 1
@@ -1674,7 +1651,7 @@ unsafe @ __sh_builtin ( Vec String ) argv → i {
     ? ( bx_streq name `unset` ) {
         : ~ i i 1
         ~ < i n {
-            ( __sh_unset ( bx_at argv i ) )
+            ( __sh_unset st ( bx_at argv i ) )
             = i + i 1
         }
         ^ 0
@@ -1734,10 +1711,10 @@ unsafe @ __sh_builtin ( Vec String ) argv → i {
                         }
                     } { ( string_push_str val ( bx_at fields - vi 1 ) ) }
                 } {}
-                ( __sh_set ( bx_at argv vi ) ( string_data val ) )
+                ( __sh_set st ( bx_at argv vi ) ( string_data val ) )
                 = vi + vi 1
             }
-        } { ( __sh_set `REPLY` ( string_data line ) ) }
+        } { ( __sh_set st `REPLY` ( string_data line ) ) }
         ^ ? eof 1 0
     } {}
     ? ( bx_streq name `eval` ) {
@@ -1748,7 +1725,7 @@ unsafe @ __sh_builtin ( Vec String ) argv → i {
             ( string_push_str script ( bx_at argv i ) )
             = i + i 1
         }
-        : i r ( __sh_run_string ( string_data script ) )
+        : i r ( __sh_run_string st ( string_data script ) )
         ^ r
     } {}
     ? | ( bx_streq name `.` ) ( bx_streq name `source` ) {
@@ -1758,7 +1735,7 @@ unsafe @ __sh_builtin ( Vec String ) argv → i {
         } {}
         ?? ( read_file ( bx_at argv 1 ) ) {
             T text → {
-                : i r ( __sh_run_string ( string_data text ) )
+                : i r ( __sh_run_string st ( string_data text ) )
                 ^ r
             }
             F e → {
@@ -1788,8 +1765,8 @@ unsafe @ __sh_builtin ( Vec String ) argv → i {
             : s a ( bx_at argv i )
             : i eq ( nurl_str_find a `=` )
             ? > eq 0 {
-                ( __sh_set ( nurl_str_slice a 0 eq ) ( nurl_str_slice a + eq 1 - ( nurl_str_len a ) + eq 1 ) )
-            } { ( __sh_set a `` ) }
+                ( __sh_set st ( nurl_str_slice a 0 eq ) ( nurl_str_slice a + eq 1 - ( nurl_str_len a ) + eq 1 ) )
+            } { ( __sh_set st a `` ) }
             = i + i 1
         }
         ^ 0
@@ -1800,7 +1777,7 @@ unsafe @ __sh_builtin ( Vec String ) argv → i {
         ~ < i n {
             : s a ( bx_at argv i )
             ( nurl_print a )
-            ? >= ( __sh_func_index a ) 0 { ( nurl_print ` is a function\n` ) } {
+            ? >= ( __sh_func_index st a ) 0 { ( nurl_print ` is a function\n` ) } {
                 ? ( __sh_is_builtin a ) { ( nurl_print ` is a shell builtin\n` ) } {
                     ? ( bx_is_applet a ) { ( nurl_print ` is a nurlbox applet\n` ) } {
                         ( nurl_print ` not found\n` )
@@ -1819,8 +1796,7 @@ unsafe @ __sh_builtin ( Vec String ) argv → i {
 
 // A function body, with `$1…` swapped for the call's arguments and put
 // back afterwards.
-unsafe @ __sh_call_func ( Vec ShNode ) arena i fidx ( Vec String ) argv → i {
-    : *ShStateImpl st ( __st )
+@ __sh_call_func inout ShStateImpl st ( Vec ShNode ) arena i fidx ( Vec String ) argv → i {
     : ( Vec String ) saved ( vec_new [String] )
     : i pn ( vec_len [String] . st params )
     : ~ i i 0
@@ -1837,7 +1813,7 @@ unsafe @ __sh_call_func ( Vec ShNode ) arena i fidx ( Vec String ) argv → i {
     }
     : ~ i body -1
     ?? ( vec_get [i] . st fnodes fidx ) { T x → { = body x } F _ → {} }
-    : i rc ? >= body 0 ( __sh_exec arena body ) 0
+    : i rc ? >= body 0 ( __sh_exec st arena body ) 0
     = . st returning 0
     ( vec_clear [String] . st params )
     ( vec_append [String] . st params saved )
@@ -1877,8 +1853,7 @@ unsafe @ __sh_exec_external ( Vec String ) argv → i {
     ^ ( nurl_wait_exit_status & raw 65535 )
 }
 
-unsafe @ __sh_exec_simple ( Vec ShNode ) arena i idx → i {
-    : *ShStateImpl st ( __st )
+@ __sh_exec_simple inout ShStateImpl st ( Vec ShNode ) arena i idx → i {
     : ~ i rc 0
     ?? ( vec_get [ShNode] arena idx ) {
         F _ → { ^ 0 }
@@ -1892,11 +1867,11 @@ unsafe @ __sh_exec_simple ( Vec ShNode ) arena i idx → i {
                 ?? ( vec_get [ShWord] . n words i ) {
                     T w → {
                         ? & in_prefix ( __sh_is_assign w ) {
-                            : String flat ( __sh_expand_to_string w )
+                            : String flat ( __sh_expand_to_string st w )
                             ( vec_push [String] assigns flat )
                         } {
                             = in_prefix F
-                            ( __sh_expand_word w argv )
+                            ( __sh_expand_word st w argv )
                         }
                     }
                     F _ → {}
@@ -1914,7 +1889,7 @@ unsafe @ __sh_exec_simple ( Vec ShNode ) arena i idx → i {
                     : s a ( bx_at assigns k )
                     : i eq ( nurl_str_find a `=` )
                     ? > eq 0 {
-                        ( __sh_set ( nurl_str_slice a 0 eq ) ( nurl_str_slice a + eq 1 - ( nurl_str_len a ) + eq 1 ) )
+                        ( __sh_set st ( nurl_str_slice a 0 eq ) ( nurl_str_slice a + eq 1 - ( nurl_str_len a ) + eq 1 ) )
                     } {}
                     = k + k 1
                 }
@@ -1922,7 +1897,7 @@ unsafe @ __sh_exec_simple ( Vec ShNode ) arena i idx → i {
             } {}
             : ( Vec i ) saved_fd ( vec_new [i] )
             : ( Vec i ) saved_to ( vec_new [i] )
-            ? ( __sh_apply_redirs . n redirs saved_fd saved_to ) {
+            ? ( __sh_apply_redirs st . n redirs saved_fd saved_to ) {
                 // A command's assignments go into the environment it
                 // sees, and are undone after.
                 : i an ( vec_len [String] assigns )
@@ -1939,12 +1914,12 @@ unsafe @ __sh_exec_simple ( Vec ShNode ) arena i idx → i {
                     = k + k 1
                 }
                 : s cmd ( bx_at argv 0 )
-                : i fidx ( __sh_func_index cmd )
+                : i fidx ( __sh_func_index st cmd )
                 ? >= fidx 0 {
-                    = rc ( __sh_call_func arena fidx argv )
+                    = rc ( __sh_call_func st arena fidx argv )
                 } {
                     ? ( __sh_is_builtin cmd ) {
-                        = rc ( __sh_builtin argv )
+                        = rc ( __sh_builtin st argv )
                     } {
                         ? ( bx_is_applet cmd ) {
                             // In-process: no fork needed, which is what
@@ -1964,7 +1939,7 @@ unsafe @ __sh_exec_simple ( Vec ShNode ) arena i idx → i {
 }
 
 // One pipeline stage in a child, with its ends already chosen.
-@ __sh_stage ( Vec ShNode ) arena i idx i in_fd i out_fd → i32 {
+@ __sh_stage inout ShStateImpl st ( Vec ShNode ) arena i idx i in_fd i out_fd → i32 {
     ( flush )
     : i32 pid ( fork )
     ? == # i pid 0 {
@@ -1976,7 +1951,7 @@ unsafe @ __sh_exec_simple ( Vec ShNode ) arena i idx → i {
             : i32 _c ( dup2 # i32 out_fd # i32 1 )
             : i32 _d ( close # i32 out_fd )
         } {}
-        : i rc ( __sh_exec arena idx )
+        : i rc ( __sh_exec st arena idx )
         ( flush )
         ( _exit # i32 rc )
     } {}
@@ -1990,7 +1965,7 @@ unsafe @ __sh_exec_simple ( Vec ShNode ) arena i idx → i {
 // can honestly do, and it is what makes `seq 3 | wc -l` answer on a
 // unikernel instead of refusing. A stage that never terminates will
 // never hand anything on; a real pipeline would have streamed it.
-unsafe @ __sh_pipe_sequential ( Vec ShNode ) arena i idx i stages → i {
+@ __sh_pipe_sequential inout ShStateImpl st ( Vec ShNode ) arena i idx i stages → i {
     : ~ i rc 0
     ?? ( vec_get [ShNode] arena idx ) {
         F _ → { ^ 1 }
@@ -2016,7 +1991,7 @@ unsafe @ __sh_pipe_sequential ( Vec ShNode ) arena i idx i stages → i {
                                 : i32 _c ( close fd )
                             } {}
                             ( string_clear in_path )
-                            ( string_push_bytes in_path # *u ( string_data p ) ( string_len p ) )
+                            ( string_append in_path p )
                         }
                         F _ → {
                             ( bx_err `a pipeline needs somewhere writable, and this machine has nowhere` )
@@ -2027,7 +2002,7 @@ unsafe @ __sh_pipe_sequential ( Vec ShNode ) arena i idx i stages → i {
                 } {}
                 ? == rc 0 {
                     ? last {
-                        = rc ( __sh_exec arena node )
+                        = rc ( __sh_exec st arena node )
                     } {
                         : String captured ( string_new )
                         ?? ( fs_tempfile `` `sh-pipe-out.` ) {
@@ -2038,16 +2013,16 @@ unsafe @ __sh_pipe_sequential ( Vec ShNode ) arena i idx i stages → i {
                                     : i saved ( __sh_save_fd 1 )
                                     : i32 _d ( dup2 fd # i32 1 )
                                     : i32 _c ( close fd )
-                                    = rc ( __sh_exec arena node )
+                                    = rc ( __sh_exec st arena node )
                                     ( flush )
                                     ? >= saved 0 {
                                         : i32 _d2 ( dup2 # i32 saved # i32 1 )
                                         : i32 _c2 ( close # i32 saved )
                                     } {}
-                                } { = rc ( __sh_exec arena node ) }
+                                } { = rc ( __sh_exec st arena node ) }
                                 ?? ( read_file ( string_data p ) ) {
                                     T text → {
-                                        ( string_push_bytes captured # *u ( string_data text ) ( string_len text ) )
+                                        ( string_append captured text )
                                     }
                                     F _ → {}
                                 }
@@ -2075,12 +2050,11 @@ unsafe @ __sh_pipe_sequential ( Vec ShNode ) arena i idx i stages → i {
             }
         }
     }
-    : *ShStateImpl st ( __st )
     = . st status rc
     ^ rc
 }
 
-unsafe @ __sh_exec_pipe ( Vec ShNode ) arena i idx → i {
+unsafe @ __sh_exec_pipe inout ShStateImpl st ( Vec ShNode ) arena i idx → i {
     : ~ i rc 0
     ?? ( vec_get [ShNode] arena idx ) {
         F _ → { ^ 0 }
@@ -2088,11 +2062,11 @@ unsafe @ __sh_exec_pipe ( Vec ShNode ) arena i idx → i {
             : i stages ( vec_len [i] . n kids )
             ? <= stages 1 {
                 ?? ( vec_get [i] . n kids 0 ) {
-                    T k → { ^ ( __sh_exec arena k ) }
+                    T k → { ^ ( __sh_exec st arena k ) }
                     F _ → { ^ 0 }
                 }
             } {}
-            ? ! ( __sh_can_fork ) { ^ ( __sh_pipe_sequential arena idx stages ) } {}
+            ? ! ( __sh_can_fork ) { ^ ( __sh_pipe_sequential st arena idx stages ) } {}
             : ( Vec u ) fdbuf_v ( vec_zeroed [u] 16 )
             : s fdbuf # s ( vec_data [u] fdbuf_v )
             : ( Vec i ) pids ( vec_new [i] )
@@ -2107,14 +2081,14 @@ unsafe @ __sh_exec_pipe ( Vec ShNode ) arena i idx → i {
                         ( bx_err `cannot create a pipe` )
                         = s stages
                     } {
-                        = rfd ( __le32_at fdbuf 0 )
-                        = wfd ( __le32_at fdbuf 4 )
+                        = rfd ( __le32_at ( slice_from_vec [u] fdbuf_v ) 0 )
+                        = wfd ( __le32_at ( slice_from_vec [u] fdbuf_v ) 4 )
                     }
                 } {}
                 : ~ i node -1
                 ?? ( vec_get [i] . n kids s ) { T k → { = node k } F _ → {} }
                 ? >= node 0 {
-                    : i32 pid ( __sh_stage arena node prev_read wfd )
+                    : i32 pid ( __sh_stage st arena node prev_read wfd )
                     ( vec_push [i] pids # i pid )
                 } {}
                 ? >= prev_read 0 { : i32 _c ( close # i32 prev_read ) } {}
@@ -2141,20 +2115,14 @@ unsafe @ __sh_exec_pipe ( Vec ShNode ) arena i idx → i {
             }
         }
     }
-    : *ShStateImpl st ( __st )
     = . st status rc
     ^ rc
 }
 
-// `pipe(2)` writes two ints; NURL reads them back a byte at a time
-// because an int is 32 bits and `nurl_peek` steps in 64.
-unsafe @ __le32_at s buf i off → i {
-    : *u p # *u buf
-    ^ | | | & 255 # i . p off << & 255 # i . p + off 1 8 << & 255 # i . p + off 2 16 << & 255 # i . p + off 3 24
-}
+// `pipe(2)` writes two 32-bit ints into the buffer it is given.
+@ __le32_at ( Slice u ) buf i off → i { ^ ( slice_u32_le buf off ) }
 
-unsafe @ __sh_exec ( Vec ShNode ) arena i idx → i {
-    : *ShStateImpl st ( __st )
+unsafe @ __sh_exec inout ShStateImpl st ( Vec ShNode ) arena i idx → i {
     ? < idx 0 { ^ 0 } {}
     ? != 0 . st exiting { ^ . st exit_code } {}
     : ~ i rc 0
@@ -2162,43 +2130,43 @@ unsafe @ __sh_exec ( Vec ShNode ) arena i idx → i {
         F _ → { ^ 0 }
         T n → {
             : i k . n kind
-            ? == k SH_SIMPLE { = rc ( __sh_exec_simple arena idx ) } {
-                ? == k SH_PIPE { = rc ( __sh_exec_pipe arena idx ) } {
+            ? == k SH_SIMPLE { = rc ( __sh_exec_simple st arena idx ) } {
+                ? == k SH_PIPE { = rc ( __sh_exec_pipe st arena idx ) } {
                     ? == k SH_SEQ {
                         : i cnt ( vec_len [i] . n kids )
                         : ~ i i 0
                         ~ < i cnt {
                             ?? ( vec_get [i] . n kids i ) {
-                                T child → { = rc ( __sh_exec arena child ) }
+                                T child → { = rc ( __sh_exec st arena child ) }
                                 F _ → {}
                             }
                             ? | | != 0 . st exiting | != 0 . st brk != 0 . st cont != 0 . st returning { = i cnt } { = i + i 1 }
                         }
                     } {
                         ? == k SH_AND {
-                            = rc ( __sh_exec arena . n a )
-                            ? == rc 0 { = rc ( __sh_exec arena . n b ) } {}
+                            = rc ( __sh_exec st arena . n a )
+                            ? == rc 0 { = rc ( __sh_exec st arena . n b ) } {}
                         } {
                             ? == k SH_OR {
-                                = rc ( __sh_exec arena . n a )
-                                ? != rc 0 { = rc ( __sh_exec arena . n b ) } {}
+                                = rc ( __sh_exec st arena . n a )
+                                ? != rc 0 { = rc ( __sh_exec st arena . n b ) } {}
                             } {
                                 ? == k SH_NOT {
-                                    = rc ? == ( __sh_exec arena . n a ) 0 1 0
+                                    = rc ? == ( __sh_exec st arena . n a ) 0 1 0
                                     = . st status rc
                                 } {
                                     ? == k SH_IF {
-                                        ? == ( __sh_exec arena . n a ) 0 {
-                                            = rc ( __sh_exec arena . n b )
-                                        } { = rc ? >= . n c 0 ( __sh_exec arena . n c ) 0 }
+                                        ? == ( __sh_exec st arena . n a ) 0 {
+                                            = rc ( __sh_exec st arena . n b )
+                                        } { = rc ? >= . n c 0 ( __sh_exec st arena . n c ) 0 }
                                     } {
                                         ? | == k SH_WHILE == k SH_UNTIL {
                                             : ~ b go T
                                             ~ go {
-                                                : i cond ( __sh_exec arena . n a )
+                                                : i cond ( __sh_exec st arena . n a )
                                                 : b enter ? == k SH_WHILE == cond 0 != cond 0
                                                 ? & enter == 0 . st exiting {
-                                                    = rc ( __sh_exec arena . n b )
+                                                    = rc ( __sh_exec st arena . n b )
                                                     ? != 0 . st brk {
                                                         = . st brk - . st brk 1
                                                         = go F
@@ -2222,7 +2190,7 @@ unsafe @ __sh_exec ( Vec ShNode ) arena i idx → i {
                                                     : ~ i w 0
                                                     ~ < w wn {
                                                         ?? ( vec_get [ShWord] . n words w ) {
-                                                            T word → { ( __sh_expand_word word items ) }
+                                                            T word → { ( __sh_expand_word st word items ) }
                                                             F _ → {}
                                                         }
                                                         = w + w 1
@@ -2231,8 +2199,8 @@ unsafe @ __sh_exec ( Vec ShNode ) arena i idx → i {
                                                 : i cnt ( vec_len [String] items )
                                                 : ~ i i 0
                                                 ~ < i cnt {
-                                                    ( __sh_set ( string_data . n text ) ( bx_at items i ) )
-                                                    = rc ( __sh_exec arena . n a )
+                                                    ( __sh_set st ( string_data . n text ) ( bx_at items i ) )
+                                                    = rc ( __sh_exec st arena . n a )
                                                     ? != 0 . st brk {
                                                         = . st brk - . st brk 1
                                                         = i cnt
@@ -2246,7 +2214,7 @@ unsafe @ __sh_exec ( Vec ShNode ) arena i idx → i {
                                                     : ~ String subject ( string_new )
                                                     ?? ( vec_get [ShWord] . n words 0 ) {
                                                         T w → {
-                                                            = subject ( __sh_expand_to_string w )
+                                                            = subject ( __sh_expand_to_string st w )
                                                         }
                                                         F _ → {}
                                                     }
@@ -2256,7 +2224,7 @@ unsafe @ __sh_exec ( Vec ShNode ) arena i idx → i {
                                                     ~ & ! matched < i arms {
                                                         ?? ( vec_get [ShWord] . n words + i 1 ) {
                                                             T pw → {
-                                                                : String pat ( __sh_expand_to_string pw )
+                                                                : String pat ( __sh_expand_to_string st pw )
                                                                 // The arm's alternatives are joined with a
                                                                 // `|`; each is a glob pattern.
                                                                 : ( Vec String ) alts ( string_split pat `|` )
@@ -2268,7 +2236,7 @@ unsafe @ __sh_exec ( Vec ShNode ) arena i idx → i {
                                                                 }
                                                                 ? matched {
                                                                     ?? ( vec_get [i] . n kids i ) {
-                                                                        T body → { = rc ( __sh_exec arena body ) }
+                                                                        T body → { = rc ( __sh_exec st arena body ) }
                                                                         F _ → {}
                                                                     }
                                                                 } {}
@@ -2278,7 +2246,7 @@ unsafe @ __sh_exec ( Vec ShNode ) arena i idx → i {
                                                         = i + i 1
                                                     }
                                                 } {
-                                                    ? == k SH_GROUP { = rc ( __sh_exec arena . n a ) } {
+                                                    ? == k SH_GROUP { = rc ( __sh_exec st arena . n a ) } {
                                                         ? == k SH_SUBSHELL {
                                                             // A subshell is a separate PROCESS — that is the whole
                                                             // difference between `( … )` and `{ … }`, and it is why
@@ -2290,11 +2258,11 @@ unsafe @ __sh_exec ( Vec ShNode ) arena i idx → i {
                                                                 ( flush )
                                                                 : i32 pid ( fork )
                                                                 ? == # i pid 0 {
-                                                                    : i r2 ( __sh_exec arena . n a )
+                                                                    : i r2 ( __sh_exec st arena . n a )
                                                                     ( flush )
                                                                     ( _exit # i32 r2 )
                                                                 } {}
-                                                                ? < # i pid 0 { = rc ( __sh_exec arena . n a ) } {
+                                                                ? < # i pid 0 { = rc ( __sh_exec st arena . n a ) } {
                                                                     : ( Vec u ) statusbuf_v ( vec_zeroed [u] 8 )
                                                                     : s statusbuf # s ( vec_data [u] statusbuf_v )
                                                                     : i32 _w ( waitpid pid # *u statusbuf # i32 0 )
@@ -2302,11 +2270,11 @@ unsafe @ __sh_exec ( Vec ShNode ) arena i idx → i {
                                                                 }
                                                             } {
                                                                 ( __sh_no_processes `a subshell` )
-                                                                = rc ( __sh_exec arena . n a )
+                                                                = rc ( __sh_exec st arena . n a )
                                                             }
                                                         } {
                                                             ? == k SH_FUNC {
-                                                                : i existing ( __sh_func_index ( string_data . n text ) )
+                                                                : i existing ( __sh_func_index st ( string_data . n text ) )
                                                                 ? >= existing 0 {
                                                                     : b _s ( vec_set [i] . st fnodes existing . n a )
                                                                 } {
@@ -2323,7 +2291,7 @@ unsafe @ __sh_exec ( Vec ShNode ) arena i idx → i {
                                                                         ( flush )
                                                                         : i32 pid ( fork )
                                                                         ? == # i pid 0 {
-                                                                            : i r2 ( __sh_exec arena . n a )
+                                                                            : i r2 ( __sh_exec st arena . n a )
                                                                             ( flush )
                                                                             ( _exit # i32 r2 )
                                                                         } {}
@@ -2348,7 +2316,7 @@ unsafe @ __sh_exec ( Vec ShNode ) arena i idx → i {
 
 // ── Driving a script ──────────────────────────────────────────────
 
-@ __sh_run_string s script → i {
+@ __sh_run_string inout ShStateImpl st s script → i {
     : ( Vec ShTok ) toks ( vec_new [ShTok] )
     : ( Vec String ) bodies ( vec_new [String] )
     : ~ i rc 0
@@ -2361,7 +2329,7 @@ unsafe @ __sh_exec ( Vec ShNode ) arena i idx → i {
         = g_sh_here 0
         = g_sh_perr F
         : i root ( __sh_parse_list arena toks bodies )
-        ? g_sh_perr { = rc 2 } { = rc ( __sh_exec arena root ) }
+        ? g_sh_perr { = rc 2 } { = rc ( __sh_exec st arena root ) }
         = g_sh_pos saved_pos
         = g_sh_here saved_here
         = g_sh_perr saved_err
@@ -2372,7 +2340,7 @@ unsafe @ __sh_exec ( Vec ShNode ) arena i idx → i {
 // `$(…)`: the script runs in a child with stdout on a pipe, and the
 // trailing newlines come off the result — both of those are what makes
 // `x=$(pwd)` behave.
-unsafe @ __sh_capture s script → String {
+unsafe @ __sh_capture inout ShStateImpl st s script → String {
     : String out ( string_new )
     ? ! ( __sh_can_fork ) {
         // No processes: run it HERE with stdout pointed at a temporary
@@ -2395,17 +2363,16 @@ unsafe @ __sh_capture s script → String {
                 : i saved ( __sh_save_fd 1 )
                 : i32 _d ( dup2 fd # i32 1 )
                 : i32 _c ( close fd )
-                : i rc ( __sh_run_string script )
+                : i rc ( __sh_run_string st script )
                 ( flush )
                 ? >= saved 0 {
                     : i32 _d2 ( dup2 # i32 saved # i32 1 )
                     : i32 _c2 ( close # i32 saved )
                 } {}
-                : *ShStateImpl st0 ( __st )
-                = . st0 status rc
+                = . st status rc
                 ?? ( read_file ( string_data path ) ) {
                     T text → {
-                        ( string_push_bytes out # *u ( string_data text ) ( string_len text ) )
+                        ( string_append out text )
                     }
                     F _ → {}
                 }
@@ -2423,15 +2390,15 @@ unsafe @ __sh_capture s script → String {
     ? < # i pr 0 {
         ^ out
     } {}
-    : i rfd ( __le32_at fdbuf 0 )
-    : i wfd ( __le32_at fdbuf 4 )
+    : i rfd ( __le32_at ( slice_from_vec [u] fdbuf_v ) 0 )
+    : i wfd ( __le32_at ( slice_from_vec [u] fdbuf_v ) 4 )
     ( flush )
     : i32 pid ( fork )
     ? == # i pid 0 {
         : i32 _c ( close # i32 rfd )
         : i32 _d ( dup2 # i32 wfd # i32 1 )
         : i32 _e ( close # i32 wfd )
-        : i rc ( __sh_run_string script )
+        : i rc ( __sh_run_string st script )
         ( flush )
         ( _exit # i32 rc )
     } {}
@@ -2441,13 +2408,12 @@ unsafe @ __sh_capture s script → String {
     : ~ b more T
     ~ more {
         : i got ( read # i32 rfd # *u buf 4096 )
-        ? <= got 0 { = more F } { ( string_push_bytes out # *u buf got ) }
+        ? <= got 0 { = more F } { ( string_push_window out ( slice_from_vec [u] buf_v ) 0 got ) }
     }
     : i32 _c3 ( close # i32 rfd )
     : ( Vec u ) statusbuf_v ( vec_zeroed [u] 8 )
     : s statusbuf # s ( vec_data [u] statusbuf_v )
     : i32 _w ( waitpid pid # *u statusbuf # i32 0 )
-    : *ShStateImpl st ( __st )
     = . st status ( nurl_wait_exit_status & ( nurl_peek statusbuf 0 ) 65535 )
     : ~ i n ( string_len out )
     ~ & > n 0 == ( string_get out - n 1 ) 10 { = n - n 1 }
@@ -2457,8 +2423,7 @@ unsafe @ __sh_capture s script → String {
 
 // ── The applet ────────────────────────────────────────────────────
 
-unsafe @ __sh_interactive → i {
-    : *ShStateImpl st ( __st )
+@ __sh_interactive inout ShStateImpl st → i {
     : ~ String line ( string_new )
     ~ == 0 . st exiting {
         ( nurl_print `$ ` )
@@ -2466,17 +2431,15 @@ unsafe @ __sh_interactive → i {
         = line ( read_line )
         ? & == ( string_len line ) 0 ( stdin_eof ) { = . st exiting 1 } {
             ? > ( string_len line ) 0 {
-                : i _r ( __sh_run_string ( string_data line ) )
+                : i _r ( __sh_run_string st ( string_data line ) )
             } {}
         }
     }
     ^ . st exit_code
 }
 
-unsafe @ ap_sh ( Vec String ) argv → i {
-    : i outer g_sh_state
-    : ShState sh ( __sh_state_new )
-    : *ShStateImpl st ( __st )
+@ ap_sh ( Vec String ) argv → i {
+    : ~ ShStateImpl st ( __sh_state_new )
     : i n ( vec_len [String] argv )
     : ~ i rc 0
     : ~ i i 1
@@ -2493,7 +2456,7 @@ unsafe @ ap_sh ( Vec String ) argv → i {
                     ( vec_push [String] . st params ( string_from ( bx_at argv k ) ) )
                     = k + k 1
                 }
-                = rc ( __sh_run_string ( bx_at argv + i 1 ) )
+                = rc ( __sh_run_string st ( bx_at argv + i 1 ) )
                 = did_something T
             } {
                 ( bx_err `-c needs a command` )
@@ -2513,7 +2476,7 @@ unsafe @ ap_sh ( Vec String ) argv → i {
                                 ( vec_push [String] . st params ( string_from ( bx_at argv k ) ) )
                                 = k + k 1
                             }
-                            = rc ( __sh_run_string ( string_data text ) )
+                            = rc ( __sh_run_string st ( string_data text ) )
                         }
                         F e → {
                             ( bx_err_at a ( bx_ioerr e ) )
@@ -2529,9 +2492,8 @@ unsafe @ ap_sh ( Vec String ) argv → i {
         // No script: read commands from stdin, prompting when it is a
         // terminal.
         = interactive T
-        = rc ( __sh_interactive )
+        = rc ( __sh_interactive st )
     } {}
     ? != 0 . st exiting { = rc . st exit_code } {}
-    = g_sh_state outer
     ^ rc
 }

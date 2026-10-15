@@ -52,7 +52,7 @@ $ `stdlib/core/slice.nu`
 
 // ── tac ───────────────────────────────────────────────────────────
 
-unsafe @ ap_tac ( Vec String ) argv → i {
+@ ap_tac ( Vec String ) argv → i {
     : BxOpts o ( bx_getopt argv 1 `` `` )
     : ~ i rc 0
     ? ! ( bx_ok o ) { = rc 1 } {
@@ -68,7 +68,7 @@ unsafe @ ap_tac ( Vec String ) argv → i {
                 ~ > j 0 {
                     ?? ( vec_get [String] lines - j 1 ) {
                         T l → {
-                            ( string_push_bytes out # *u ( string_data l ) ( string_len l ) )
+                            ( string_append out l )
                             ( string_push_char out 10 )
                         }
                         F _ → {}
@@ -123,7 +123,7 @@ unsafe @ ap_tac ( Vec String ) argv → i {
 
 // ── nl ────────────────────────────────────────────────────────────
 
-unsafe @ ap_nl ( Vec String ) argv → i {
+@ ap_nl ( Vec String ) argv → i {
     : BxOpts o ( bx_getopt argv 1 `b:n:s:w:v:i:` `body-numbering=b,number-format=n,number-separator=s,number-width=w,starting-line-number=v,line-increment=i` )
     : ~ i rc 0
     ? ! ( bx_ok o ) { = rc 1 } {
@@ -168,7 +168,7 @@ unsafe @ ap_nl ( Vec String ) argv → i {
                                 ~ > q 0 { ( string_push_char out 32 ) = q - q 1 }
                                 ( string_push_str out sep )
                             }
-                            ( string_push_bytes out # *u ( string_data line ) ( string_len line ) )
+                            ( string_append out line )
                             ( string_push_char out 10 )
                         } { = more F }
                     }
@@ -246,7 +246,7 @@ unsafe @ ap_nl ( Vec String ) argv → i {
     ^ F
 }
 
-unsafe @ ap_cut ( Vec String ) argv → i {
+@ ap_cut ( Vec String ) argv → i {
     : BxOpts o ( bx_getopt argv 1 `b:c:f:d:sn` `bytes=b,characters=c,fields=f,delimiter=d,only-delimited=s` )
     : ~ i rc 0
     ? ! ( bx_ok o ) { = rc 1 } {
@@ -302,7 +302,7 @@ unsafe @ ap_cut ( Vec String ) argv → i {
                                         }
                                         ? & only ! has_delim {} {
                                             ? ! has_delim {
-                                                ( string_push_bytes out # *u ( string_data line ) ln )
+                                                ( string_push_window out ( string_bytes line ) 0 ln )
                                                 ( string_push_char out 10 )
                                             } {
                                                 : ~ i field 1
@@ -413,7 +413,7 @@ unsafe @ ap_cut ( Vec String ) argv → i {
     }
 }
 
-unsafe @ ap_tr ( Vec String ) argv → i {
+@ ap_tr ( Vec String ) argv → i {
     : BxOpts o ( bx_getopt argv 1 `dsc` `delete=d,squeeze-repeats=s,complement=c` )
     : ~ i rc 0
     ? ! ( bx_ok o ) { = rc 1 } {
@@ -432,11 +432,11 @@ unsafe @ ap_tr ( Vec String ) argv → i {
             // A 256-entry table beats a search per byte, and makes -c a
             // single inversion pass instead of a special case everywhere.
             : ( Vec u ) inset_tab ( vec_zeroed [u] 256 )
-            : *u inset ( vec_data [u] inset_tab )
+            : ( Slice u ) inset ( slice_from_vec [u] inset_tab )
             : ~ i j 0
             ~ < j ( vec_len [u] set1 ) {
                 ?? ( vec_get [u] set1 j ) {
-                    T b → { = . inset # i b # u 1 }
+                    T b → { ( slice_put [u] inset # i b # u 1 ) }
                     F _ → {}
                 }
                 = j + j 1
@@ -444,25 +444,25 @@ unsafe @ ap_tr ( Vec String ) argv → i {
             ? comp {
                 : ~ i b 0
                 ~ < b 256 {
-                    = . inset b # u ? == 0 # i . inset b 1 0
+                    ( slice_put [u] inset b # u ? == 0 # i ( slice_at [u] inset b ) 1 0 )
                     = b + b 1
                 }
             } {}
             // Translation target per byte: the matching member of SET2,
             // with the last one repeated once SET2 runs out.
             : ( Vec u ) xlat_tab ( vec_zeroed [u] 256 )
-            : *u xlat ( vec_data [u] xlat_tab )
+            : ( Slice u ) xlat ( slice_from_vec [u] xlat_tab )
             : ~ i b2 0
-            ~ < b2 256 { = . xlat b2 # u b2 = b2 + b2 1 }
+            ~ < b2 256 { ( slice_put [u] xlat b2 # u b2 ) = b2 + b2 1 }
             ? & ! del > ( vec_len [u] set2 ) 0 {
                 : i n2 ( vec_len [u] set2 )
                 : ~ i idx 0
                 : ~ i b 0
                 ~ < b 256 {
-                    ? != 0 # i . inset b {
+                    ? != 0 # i ( slice_at [u] inset b ) {
                         : i pick ? < idx n2 idx - n2 1
                         ?? ( vec_get [u] set2 pick ) {
-                            T t → { = . xlat b t }
+                            T t → { ( slice_put [u] xlat b t ) }
                             F _ → {}
                         }
                         = idx + idx 1
@@ -477,18 +477,18 @@ unsafe @ ap_tr ( Vec String ) argv → i {
                 : ( Vec u ) chunk ( read_n_bytes 65536 )
                 : i cn ( vec_len [u] chunk )
                 ? == cn 0 { = more F } {
-                    : *u p ( vec_data [u] chunk )
+                    : ( Slice u ) p ( slice_from_vec [u] chunk )
                     : ~ i q 0
                     ~ < q cn {
-                        : i c & 255 # i . p q
-                        : b inset_hit != 0 # i . inset c
+                        : i c & 255 # i ( slice_at [u] p q )
+                        : b inset_hit != 0 # i ( slice_at [u] inset c )
                         ? & del inset_hit {} {
-                            : i outc ? del c & 255 # i . xlat c
+                            : i outc ? del c & 255 # i ( slice_at [u] xlat c )
                             : ~ b emit T
                             ? squeeze {
                                 // -s collapses a run only when the byte
                                 // was in the set that produced it.
-                                : b member ? del != 0 # i . inset outc inset_hit
+                                : b member ? del != 0 # i ( slice_at [u] inset outc ) inset_hit
                                 ? & member == outc last { = emit F } {}
                             } {}
                             ? emit { ( string_push_char out outc ) } {}
@@ -613,7 +613,7 @@ unsafe @ ap_tr ( Vec String ) argv → i {
     ^ ? != 0 & g_sort_flags SORT_REVERSE - 0 r r
 }
 
-unsafe @ ap_sort ( Vec String ) argv → i {
+@ ap_sort ( Vec String ) argv → i {
     : BxOpts o ( bx_getopt argv 1 `rnufbck:t:sz` `reverse=r,numeric-sort=n,unique=u,ignore-case=f,ignore-leading-blanks=b,check=c,key=k,field-separator=t,stable=s` )
     : ~ i rc 0
     ? ! ( bx_ok o ) { = rc 1 } {
@@ -677,7 +677,7 @@ unsafe @ ap_sort ( Vec String ) argv → i {
                             }
                         } {}
                         ? emit {
-                            ( string_push_bytes out # *u ( string_data l ) ( string_len l ) )
+                            ( string_append out l )
                             ( string_push_char out ? ( bx_has o `z` ) 0 10 )
                         } {}
                     }
@@ -714,7 +714,7 @@ unsafe @ ap_sort ( Vec String ) argv → i {
     }
 }
 
-unsafe @ ap_uniq ( Vec String ) argv → i {
+@ ap_uniq ( Vec String ) argv → i {
     : BxOpts o ( bx_getopt argv 1 `cduif:s:w:` `count=c,repeated=d,unique=u,ignore-case=i,skip-fields=f,skip-chars=s,check-chars=w` )
     : ~ i rc 0
     ? ! ( bx_ok o ) { = rc 1 } {
@@ -743,15 +743,15 @@ unsafe @ ap_uniq ( Vec String ) argv → i {
                         ? & >= check 0 > ( string_len key ) check {
                             : String cut ( string_substr key 0 check )
                             ( string_clear key )
-                            ( string_push_bytes key # *u ( string_data cut ) ( string_len cut ) )
+                            ( string_append key cut )
                         } {}
                         : b same & have ( string_eq key prevkey )
                         ? same { = run + run 1 } {
                             ? have { ( __uniq_emit out prev run count want_dup want_uniq ) } {}
                             ( string_clear prev )
-                            ( string_push_bytes prev # *u ( string_data line ) ( string_len line ) )
+                            ( string_append prev line )
                             ( string_clear prevkey )
-                            ( string_push_bytes prevkey # *u ( string_data key ) ( string_len key ) )
+                            ( string_append prevkey key )
                             = run 1
                             = have T
                         }
@@ -766,7 +766,7 @@ unsafe @ ap_uniq ( Vec String ) argv → i {
     ^ rc
 }
 
-unsafe @ __uniq_emit String out String line i run b count b want_dup b want_uniq → v {
+@ __uniq_emit String out String line i run b count b want_dup b want_uniq → v {
     ? & want_dup < run 2 { ^ } {}
     ? & want_uniq > run 1 { ^ } {}
     ? count {
@@ -776,7 +776,7 @@ unsafe @ __uniq_emit String out String line i run b count b want_dup b want_uniq
         ( string_push_str out d )
         ( string_push_char out 32 )
     } {}
-    ( string_push_bytes out # *u ( string_data line ) ( string_len line ) )
+    ( string_append out line )
     ( string_push_char out 10 )
 }
 

@@ -28,6 +28,7 @@
 //   ( string_push_char s c )   → v           append one byte
 //   ( string_push_str s raw )  → v           append raw i8*
 //   ( string_push_bytes s src n ) → v        append n raw bytes (no strlen)
+//   ( string_append s t )      → v           append all of t, NULs included
 //   ( string_push_int s n )    → v           append decimal integer
 //   ( string_clear s )         → v           reset to empty
 //   ( string_free s )          → v           release buffer, invalidates handle
@@ -610,6 +611,24 @@ $ `stdlib/core/char.nu`
         : *u dst ( vec_data [u] b )
         : *u dst_at # *u + # i dst len
         ( nurl_memcpy dst_at src n )
+        : b _ok ( vec_set_len [u] b + len n )
+    } {}
+    ( _string_seal str )
+}
+
+// All of `src` appended onto `str`, exactly — its own length, NULs
+// included (string_push_str stops at the first one). `src`'s bytes are
+// found after `str` has grown, so nothing read is in a buffer the growth
+// freed.
+@ string_append String str String src → v {
+    : i n ( string_len src )
+    ? > n 0 {
+        : ( Vec u ) b ( __sbuf str )
+        : i len ( vec_len [u] b )
+        ( vec_reserve [u] b + n 1 )
+        : *u dst ( vec_data [u] b )
+        : *u dst_at # *u + # i dst len
+        ( nurl_memcpy dst_at # *u ( string_data src ) n )
         : b _ok ( vec_set_len [u] b + len n )
     } {}
     ( _string_seal str )

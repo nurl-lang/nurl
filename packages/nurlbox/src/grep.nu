@@ -24,6 +24,7 @@ $ `stdlib/std/path.nu`
 $ `stdlib/std/sort.nu`
 $ `stdlib/std/cmp.nu`
 $ `stdlib/ext/regex.nu`
+$ `stdlib/std/panic.nu`
 $ `bx.nu`
 $ `filter.nu`
 $ `stdlib/core/slice.nu`
@@ -101,6 +102,16 @@ $ `stdlib/core/slice.nu`
 
 @ __grep_is_word i c → b {
     ^ | | & >= c 97 <= c 122 & >= c 65 <= c 90 | & >= c 48 <= c 57 == c 95
+}
+
+// A Regex for a slot that holds none: a fixed-string pattern's, or one
+// whose pattern failed to compile (the error is reported first). `^`
+// always compiles; it is a real Regex, safe to drop or to run.
+@ _grep_empty_regex → Regex {
+    ?? ( regex_compile `^` ) {
+        T r → { ^ r }
+        F _ → { ( panic `the regular expression ^ did not compile` ) ^ ( _grep_empty_regex ) }
+    }
 }
 
 // One pattern, compiled or literal.
@@ -325,7 +336,7 @@ $ `stdlib/core/slice.nu`
     }
 }
 
-unsafe @ ap_grep ( Vec String ) argv → i {
+@ ap_grep ( Vec String ) argv → i {
     // egrep / fgrep are grep with a matcher preselected.
     : s me ( bx_name )
     : BxOpts o ( bx_getopt argv 1 `EFivnce:lLqwxohHrRsm:f:` `extended-regexp=E,fixed-strings=F,ignore-case=i,invert-match=v,line-number=n,count=c,files-with-matches=l,files-without-match=L,quiet=q,silent=q,word-regexp=w,line-regexp=x,only-matching=o,no-filename=h,with-filename=H,recursive=r,regexp=e,file=f,max-count=m` )
@@ -373,7 +384,7 @@ unsafe @ ap_grep ( Vec String ) argv → i {
                 : s raw ( bx_at rawpats pi )
                 : String src ? != 0 & flags GREP_IGNORE ( _grep_lower raw ) ( string_from raw )
                 ? != 0 & flags GREP_FIXED {
-                    ( vec_push [GrepPat] pats @ GrepPat { # Regex # s 0 src T } )
+                    ( vec_push [GrepPat] pats @ GrepPat { ( _grep_empty_regex ) src T } )
                 } {
                     : String ere ? extended ( string_clone src ) ( _bre_to_ere ( string_data src ) )
                     ?? ( regex_compile ( string_data ere ) ) {

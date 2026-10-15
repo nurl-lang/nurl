@@ -53,11 +53,11 @@ $ `bx.nu`
 }
 
 // `size` bytes at `off`, little-endian, as an unsigned value.
-unsafe @ __od_word * u p i n i off i size → i {
+@ __od_word ( Slice u ) p i n i off i size → i {
     : ~ i v 0
     : ~ i k - size 1
     ~ >= k 0 {
-        : i b ? < + off k n & 255 # i . p + off k 0
+        : i b ? < + off k n & 255 # i ( slice_at [u] p + off k ) 0
         = v | << v 8 b
         = k - k 1
     }
@@ -103,13 +103,13 @@ unsafe @ __od_word * u p i n i off i size → i {
     ( bx_push_octal out off 7 )
 }
 
-unsafe @ __od_line String out * u p i n i off i take i kind i size i addr_kind → v {
+@ __od_line String out ( Slice u ) p i n i off i take i kind i size i addr_kind → v {
     ( __od_addr out addr_kind off )
     : ~ i k 0
     ~ < k take {
         ( string_push_char out 32 )
         ? == kind 99 {
-            ( __od_char out & 255 # i . p + off k )
+            ( __od_char out & 255 # i ( slice_at [u] p + off k ) )
             = k + k 1
         } {
             : i w ( __od_word p n + off k size )
@@ -132,7 +132,7 @@ unsafe @ __od_line String out * u p i n i off i take i kind i size i addr_kind �
     ( string_push_char out 10 )
 }
 
-unsafe @ ap_od ( Vec String ) argv → i {
+@ ap_od ( Vec String ) argv → i {
     : BxOpts o ( bx_getopt argv 1 `A:t:N:j:vbcdosxh` `address-radix=A,format=t,read-bytes=N,skip-bytes=j,output-duplicates=v` )
     : ~ i rc 0
     ? ! ( bx_ok o ) { = rc 1 } {
@@ -163,7 +163,7 @@ unsafe @ ap_od ( Vec String ) argv → i {
         : ( Vec u ) data ( bx_slurp p ok )
         ? ! ok { = rc 1 } {
             : i total ( vec_len [u] data )
-            : *u pt ( vec_data [u] data )
+            : ( Slice u ) pt ( slice_from_vec [u] data )
             : i start ? > skip total total skip
             : i end ? >= limit 0 ? > + start limit total total + start limit total
             : String out ( string_new )
@@ -182,11 +182,11 @@ unsafe @ ap_od ( Vec String ) argv → i {
                         = eliding T
                     } {}
                 } {
-                    ( string_push_bytes out # *u ( string_data line ) ( string_len line ) )
+                    ( string_append out line )
                     = eliding F
                 }
                 ( string_clear prev )
-                ( string_push_bytes prev # *u ( string_data line ) ( string_len line ) )
+                ( string_append prev line )
                 = off + off take
             }
             ? != addr_kind 110 {
@@ -217,7 +217,7 @@ unsafe @ ap_od ( Vec String ) argv → i {
 
 // ── hexdump ───────────────────────────────────────────────────────
 
-unsafe @ ap_hexdump ( Vec String ) argv → i {
+@ ap_hexdump ( Vec String ) argv → i {
     : BxOpts o ( bx_getopt argv 1 `Cn:vs:x` `` )
     : ~ i rc 0
     ? ! ( bx_ok o ) { = rc 1 } {
@@ -230,7 +230,7 @@ unsafe @ ap_hexdump ( Vec String ) argv → i {
         : ( Vec u ) data ( bx_slurp p ok )
         ? ! ok { = rc 1 } {
             : i total ( vec_len [u] data )
-            : *u pt ( vec_data [u] data )
+            : ( Slice u ) pt ( slice_from_vec [u] data )
             : i start ? > skip total total skip
             : i end ? >= limit 0 ? > + start limit total total + start limit total
             : String out ( string_new )
@@ -247,7 +247,7 @@ unsafe @ ap_hexdump ( Vec String ) argv → i {
                     ~ < k 16 {
                         ? == k 8 { ( string_push_char line 32 ) } {}
                         ? < k take {
-                            ( bx_push_hex line & 255 # i . pt + off k 2 F )
+                            ( bx_push_hex line & 255 # i ( slice_at [u] pt + off k ) 2 F )
                             ( string_push_char line 32 )
                         } { ( string_push_str line `   ` ) }
                         = k + k 1
@@ -258,7 +258,7 @@ unsafe @ ap_hexdump ( Vec String ) argv → i {
                     ( string_push_char line 124 )
                     : ~ i q 0
                     ~ < q take {
-                        : i c & 255 # i . pt + off q
+                        : i c & 255 # i ( slice_at [u] pt + off q )
                         ( string_push_char line ? & >= c 32 < c 127 c 46 )
                         = q + q 1
                     }
@@ -271,8 +271,8 @@ unsafe @ ap_hexdump ( Vec String ) argv → i {
                     ~ < k 16 {
                         ? < k take {
                             ( string_push_char line 32 )
-                            : i lo & 255 # i . pt + off k
-                            : i hi ? < + k 1 take & 255 # i . pt + off + k 1 0
+                            : i lo & 255 # i ( slice_at [u] pt + off k )
+                            : i hi ? < + k 1 take & 255 # i ( slice_at [u] pt + off + k 1 ) 0
                             ( bx_push_hex line | << hi 8 lo 4 F )
                         } { ( string_push_str line `     ` ) }
                         = k + k 2
@@ -286,11 +286,11 @@ unsafe @ ap_hexdump ( Vec String ) argv → i {
                         = eliding T
                     } {}
                 } {
-                    ( string_push_bytes out # *u ( string_data line ) ( string_len line ) )
+                    ( string_append out line )
                     = eliding F
                 }
                 ( string_clear prev )
-                ( string_push_bytes prev # *u ( string_data line ) ( string_len line ) )
+                ( string_append prev line )
                 = off + off take
             }
             ( bx_push_hex out end ? canonical 8 7 F )
@@ -308,7 +308,7 @@ unsafe @ ap_hexdump ( Vec String ) argv → i {
     ^ -1
 }
 
-unsafe @ ap_xxd ( Vec String ) argv → i {
+@ ap_xxd ( Vec String ) argv → i {
     : BxOpts o ( bx_getopt argv 1 `pruc:g:l:s:` `plain=p,revert=r,upper=u,cols=c,groupsize=g,len=l,seek=s` )
     : ~ i rc 0
     ? ! ( bx_ok o ) { = rc 1 } {
@@ -328,11 +328,11 @@ unsafe @ ap_xxd ( Vec String ) argv → i {
                 // and everything after a `  ` ASCII column.
                 : String out ( string_new )
                 : i n ( vec_len [u] data )
-                : *u pt ( vec_data [u] data )
+                : ( Slice u ) pt ( slice_from_vec [u] data )
                 : ~ i i 0
                 : ~ i hi -1
                 ~ < i n {
-                    : i c & 255 # i . pt i
+                    : i c & 255 # i ( slice_at [u] pt i )
                     ? == c 10 { = hi -1 = i + i 1 } {
                         ? & == c 58 T {
                             // Drop everything up to and including the
@@ -354,7 +354,7 @@ unsafe @ ap_xxd ( Vec String ) argv → i {
                 ( bx_write out )
             } {
                 : i total ( vec_len [u] data )
-                : *u pt ( vec_data [u] data )
+                : ( Slice u ) pt ( slice_from_vec [u] data )
                 : i start ? > skip total total skip
                 : i end ? >= limit 0 ? > + start limit total total + start limit total
                 : String out ( string_new )
@@ -364,7 +364,7 @@ unsafe @ ap_xxd ( Vec String ) argv → i {
                     ? plain {
                         : ~ i k 0
                         ~ < k take {
-                            ( bx_push_hex out & 255 # i . pt + off k 2 upper )
+                            ( bx_push_hex out & 255 # i ( slice_at [u] pt + off k ) 2 upper )
                             = k + k 1
                         }
                         ( string_push_char out 10 )
@@ -374,7 +374,7 @@ unsafe @ ap_xxd ( Vec String ) argv → i {
                         : ~ i k 0
                         ~ < k cols {
                             ? < k take {
-                                ( bx_push_hex out & 255 # i . pt + off k 2 upper )
+                                ( bx_push_hex out & 255 # i ( slice_at [u] pt + off k ) 2 upper )
                             } { ( string_push_str out `  ` ) }
                             ? == 0 - + k 1 * group / + k 1 group { ( string_push_char out 32 ) } {}
                             = k + k 1
@@ -382,7 +382,7 @@ unsafe @ ap_xxd ( Vec String ) argv → i {
                         ( string_push_char out 32 )
                         : ~ i q 0
                         ~ < q take {
-                            : i c & 255 # i . pt + off q
+                            : i c & 255 # i ( slice_at [u] pt + off q )
                             ( string_push_char out ? & >= c 32 < c 127 c 46 )
                             = q + q 1
                         }
@@ -496,7 +496,7 @@ unsafe @ ap_xxd ( Vec String ) argv → i {
 
 // ── strings ───────────────────────────────────────────────────────
 
-unsafe @ ap_strings ( Vec String ) argv → i {
+@ ap_strings ( Vec String ) argv → i {
     : BxOpts o ( bx_getopt argv 1 `n:at:f` `bytes=n,all=a,radix=t,print-file-name=f` )
     : ~ i rc 0
     ? ! ( bx_ok o ) { = rc 1 } {
@@ -509,13 +509,13 @@ unsafe @ ap_strings ( Vec String ) argv → i {
             : ( Vec u ) data ( bx_slurp p ok )
             ? ok {
                 : i n ( vec_len [u] data )
-                : *u pt ( vec_data [u] data )
+                : ( Slice u ) pt ( slice_from_vec [u] data )
                 : String out ( string_new )
                 : String run ( string_new )
                 : ~ i start 0
                 : ~ i k 0
                 ~ <= k n {
-                    : i c ? < k n & 255 # i . pt k 0
+                    : i c ? < k n & 255 # i ( slice_at [u] pt k ) 0
                     // A tab belongs to the run: `strings` on a config
                     // file that lost its extension should still show the
                     // indented lines whole.
@@ -538,7 +538,7 @@ unsafe @ ap_strings ( Vec String ) argv → i {
                                 }
                                 ( string_push_char out 32 )
                             } {}
-                            ( string_push_bytes out # *u ( string_data run ) ( string_len run ) )
+                            ( string_append out run )
                             ( string_push_char out 10 )
                         } {}
                         ( string_clear run )

@@ -174,6 +174,13 @@ $ `stdlib/core/posix.nu`  // buffered stdin bridge
     ? > n 0 { ( nurl_print_bytes # *u ( string_data str ) n ) } {}
 }
 
+// …and the bytes of a view, exactly: a window of a buffer — the part a
+// read filled, one line of a file — without copying it out first.
+@ write_slice ( Slice u ) s → v {
+    : i n ( slice_len [u] s )
+    ? > n 0 { ( nurl_print_bytes ( slice_data [u] s ) n ) } {}
+}
+
 @ flush → v {
     ( nurl_flush_stdout )
 }

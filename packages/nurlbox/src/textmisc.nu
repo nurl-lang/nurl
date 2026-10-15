@@ -110,7 +110,7 @@ $ `stdlib/core/slice.nu`
 
 @ __i_wrap i v i n → i { ^ - v * n / v n }
 
-unsafe @ ap_paste ( Vec String ) argv → i {
+@ ap_paste ( Vec String ) argv → i {
     : BxOpts o ( bx_getopt argv 1 `d:s` `delimiters=d,serial=s` )
     : ~ i rc 0
     ? ! ( bx_ok o ) { = rc 1 } {
@@ -175,7 +175,7 @@ unsafe @ ap_paste ( Vec String ) argv → i {
                         ?? ( vec_get [BufReader] rs j ) {
                             T br → {
                                 ? ( bufreader_read_line_into br line ) {
-                                    ( string_push_bytes row # *u ( string_data line ) ( string_len line ) )
+                                    ( string_append row line )
                                     = any T
                                 } { : b _s ( vec_set [i] alive j 0 ) }
                             }
@@ -185,7 +185,7 @@ unsafe @ ap_paste ( Vec String ) argv → i {
                     = j + j 1
                 }
                 ? any {
-                    ( string_push_bytes out # *u ( string_data row ) ( string_len row ) )
+                    ( string_append out row )
                     ( string_push_char out 10 )
                 } { = more F }
                 ? > ( string_len out ) 32768 { ( bx_write out ) ( string_clear out ) } {}
@@ -206,7 +206,7 @@ unsafe @ ap_paste ( Vec String ) argv → i {
 
 // ── fold ──────────────────────────────────────────────────────────
 
-unsafe @ ap_fold ( Vec String ) argv → i {
+@ ap_fold ( Vec String ) argv → i {
     // `fold -20` is the historical spelling.
     : ( Vec String ) av ( vec_new [String] )
     : i argn ( vec_len [String] argv )
@@ -259,7 +259,7 @@ unsafe @ ap_fold ( Vec String ) argv → i {
                                             } { = b - b 1 }
                                         }
                                     } {}
-                                    ( string_push_bytes out # *u + # i ( string_data line ) from - to from )
+                                    ( string_push_window out ( string_bytes line ) from - to from )
                                     ( string_push_char out 10 )
                                     = from to
                                 }

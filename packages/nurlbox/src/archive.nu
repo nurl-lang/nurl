@@ -166,7 +166,7 @@ $ `bx.nu`
     }
 }
 
-unsafe @ __tar_list ( Vec TarEntry ) entries b verbose → v {
+@ __tar_list ( Vec TarEntry ) entries b verbose → v {
     : i n ( vec_len [TarEntry] entries )
     : String out ( string_new )
     : ~ i i 0
@@ -179,12 +179,12 @@ unsafe @ __tar_list ( Vec TarEntry ) entries b verbose → v {
                         . e size . e mtime 0 0 0 1 0 0 0 0 0 0 0 0 0
                     }
                     : String modes ( stat_mode_string st )
-                    ( string_push_bytes out # *u ( string_data modes ) ( string_len modes ) )
+                    ( string_append out modes )
                     ( string_push_str out ` 0/0 ` )
                     ( string_push_int out . e size )
                     ( string_push_char out 32 )
                 } {}
-                ( string_push_bytes out # *u ( string_data . e path ) ( string_len . e path ) )
+                ( string_append out . e path )
                 ( string_push_char out 10 )
             }
             F _ → {}

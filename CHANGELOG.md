@@ -240,6 +240,13 @@ Outputs are byte-identical and as fast. A struct passed where the
 parameter is a number is rejected (h269): the call was emitted with the
 struct's type, and the callee read its control block's address as the
 number — onnx's parse_dump checksummed a weight block's control block.
+`nurlbox` (90 → 8, the shell's fork/pipe/exec and `find -exec`/`xargs`/
+`env`) passes its shell state `inout` instead of reading it out of a raw
+global word. The standard library gains what it reached for raw
+pointers to do: `string_append` (a whole String, NULs included),
+`write_slice` (a byte view to stdout), `fs_link` (a hard link) and
+`proc_self_uid` / `_euid` / `_gid` / `_egid` / `_groups`, with Windows and
+unikernel fallbacks in the runtime.
 `nurllama` (68 → 8) keeps its engine and its finetune state in `Locked`s
 — two requests evaluating one model raced on its KV cache — and samples
 from a row of logits read in one take.
