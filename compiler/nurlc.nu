@@ -21996,7 +21996,7 @@ unsafe @ __src_has_raw_ptr s text → b {
             // arm by arm (a `vec_clone` arm borrows nothing) — the blanket
             // borrow row would also hand it the lend of the scrutinee's
             // call, which only the arms that yield a payload pass on.
-            : b __j_let ( seq ( nurl_sym_get2 syms ptr `__bname` ) ( nurl_sym_get g_bck `lastname` ) )
+            : b __j_let ? == g_borrowck 0 F ( seq ( nurl_sym_get2 syms ptr `__bname` ) ( nurl_sym_get g_bck `lastname` ) )
             : b __j_sx & & != 0 g_srcx_on __j_let ( __sx_lends_any g_bck_let_sx_last )
             ? __j_sx {} { ( bck_note_borrow syms ptr ) }
             ^ v } {} } {}
