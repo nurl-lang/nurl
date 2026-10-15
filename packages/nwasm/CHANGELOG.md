@@ -1,5 +1,29 @@
 # Changelog
 
+## [2.5.0] — 2026-10-15
+
+### Changed
+
+- The module decoder is safe code: 33 `unsafe` functions in
+  src/module.nu down to 4. The byte cursor `Wc` reads a `( Slice u )`
+  of the image instead of a raw pointer. A module decodes into a plain
+  `ModuleImpl` (the image stays out of it while the cursor reads it)
+  that is then frozen in its `Arc`; the accessors read it through
+  `arc_get`. Data segments are cut with `slice_to_vec`, and name and
+  export lookups read their boxed records with `box_get`. What stays
+  `unsafe` is what hands the interpreter raw pointers into the frozen
+  module: `_Module_ptr`, `_module_func_type`, `module_func_type` and
+  `functype_eq`.
+- The interpreter keeps its `unsafe`. It is a JIT runtime: the instance
+  has a fixed address that generated code and the call-out bridge
+  capture, linear memory is a guard-page reservation shared by
+  wasi-threads, and a thread reaches its owner's tables through a raw
+  pointer under the atomics lock.
+- Every unit suite (interp, wasi, mem, table, float, semantics,
+  hardening, atomics, rjit_smoke) gives byte-identical output under
+  tier 8, tier 7 (`NURL_NWASM_RJIT=0`) and the interpreter
+  (`NURL_NWASM_JIT=0`).
+
 ## [2.4.2] — 2026-10-12
 
 Requires NURL 0.73.0, in which a field written through a raw pointer

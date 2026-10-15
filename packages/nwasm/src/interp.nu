@@ -2304,7 +2304,7 @@ unsafe @ __m3_eq * ModuleImpl m * WFunc f s hex i nloc → b {
 unsafe @ __m3_kind * ModuleImpl m i fi → i {
     : i ni . m num_import_funcs
     ? < fi ni { ^ 0 } {}
-    : s ct ( _module_func_type m fi )
+    : s ct ( _module_func_type . m 0 fi )
     ? == # i ct 0 { ^ 0 } {}
     : *FuncType ft # *FuncType ct
     ? | != ( vec_len [i] . ft params ) 5 != ( vec_len [i] . ft results ) 0 { ^ 0 } {}
@@ -2523,7 +2523,7 @@ unsafe @ __predecode * ModuleImpl m * WFunc f → ( Box PFunc ) {
                                                     ( __m3_emit pf + SB - h 5 m3 byte )
                                                     = h - h 5
                                                 } {
-                                                    : s ct ( _module_func_type m fi )
+                                                    : s ct ( _module_func_type . m 0 fi )
                                                     : ~ i cp 0
                                                     : ~ i cr 0
                                                     ? != # i ct 0 { : *FuncType ctt # *FuncType ct = cp ( vec_len [i] . ctt params ) = cr ( vec_len [i] . ctt results ) } {}
@@ -2775,7 +2775,7 @@ unsafe @ __trap_backtrace * InterpImpl it * ModuleImpl m s top → v {
         ? != # i pp 0 {
             : *Frame fr # *Frame pp
             ( __msg_push_str msg `\n  at ` )
-            : ( Vec u ) nm ( _module_func_name m . fr fidx )
+            : ( Vec u ) nm ( _module_func_name . m 0 . fr fidx )
             ? > ( vec_len [u] nm ) 0 { ( __msg_push_vec msg nm ) } { ( __msg_push_str msg `<unknown>` ) }
             ( __msg_push_str msg ` (func ` )
             ( __msg_push_int msg . fr fidx )
@@ -2879,7 +2879,7 @@ unsafe @ interp_enable_perfmap → v {
 unsafe @ __perfmap_add * ModuleImpl m i fidx i start i len → v {
     : ( Vec u ) line ( vec_new [u] )
     ( __pm_hex line start ) ( vec_push [u] line # u 32 ) ( __pm_hex line len ) ( vec_push [u] line # u 32 )
-    : ( Vec u ) nm ( _module_func_name m fidx )
+    : ( Vec u ) nm ( _module_func_name . m 0 fidx )
     ? > ( vec_len [u] nm ) 0 {
         : i nn ( vec_len [u] nm )
         : ~ i k 0
@@ -3634,7 +3634,7 @@ unsafe @ __jit_ok * PFunc pf → i {
 // the type cannot be resolved — the walker then treats it as a full read).
 unsafe @ __jit_call_win * ModuleImpl m i op i a → i {
     : ~ s ct # s 0
-    ? | == op 50 == op 210 { = ct ( _module_func_type m a ) } {
+    ? | == op 50 == op 210 { = ct ( _module_func_type . m 0 a ) } {
         ? == op 170 { = ct ?? ( vec_get [( Box FuncType )] . m types a ) { T x → # s ( box_ptr [FuncType] x ) F → # s 0 } } {} }
     ? == # i ct 0 { ^ -1 } {}
     : *FuncType cf # *FuncType ct
@@ -4349,7 +4349,7 @@ unsafe @ __jit_state_init * InterpImpl it * ModuleImpl m → v {
     = . spc 1 . it jit_slab_end
     : ~ i fk 0
     ~ < fk nall {
-        = . spc + + 2 nf fk ( __jit_sigcanon m ( _module_func_type m fk ) )
+        = . spc + + 2 nf fk ( __jit_sigcanon m ( _module_func_type . m 0 fk ) )
         = fk + fk 1
     }
     = . spc + + 2 nf nall # i . . ( __host it ) table ctl
@@ -4799,7 +4799,7 @@ unsafe @ __jit_install * InterpImpl it * ModuleImpl m * PFunc pf ( Vec u ) buf (
 unsafe @ __rj_try * InterpImpl it * ModuleImpl m * PFunc pf i fidx9 i guard → b {
     : i n . pf count
     : ( Vec i ) lt ( vec_new [i] )
-    : s ftp ( _module_func_type m fidx9 )
+    : s ftp ( _module_func_type . m 0 fidx9 )
     ? != # i ftp 0 {
         : *FuncType ft # *FuncType ftp
         : i npar ( vec_len [i] . ft params )
@@ -4824,7 +4824,7 @@ unsafe @ __rj_try * InterpImpl it * ModuleImpl m * PFunc pf i fidx9 i guard → 
     ~ < r n {
         : i op ( vec_at [i] code * r 6 )
         : ~ s cft # s 0
-        ? | == op 50 == op 210 { = cft ( _module_func_type m ( vec_at [i] code + * r 6 1 ) ) } {}
+        ? | == op 50 == op 210 { = cft ( _module_func_type . m 0 ( vec_at [i] code + * r 6 1 ) ) } {}
         ? == op 170 {
             : i tix ( vec_at [i] code + * r 6 1 )
             ? & >= tix 0 < tix ( vec_len [( Box FuncType )] . m types ) { = cft # s ( box_ptr [FuncType] ( vec_at [( Box FuncType )] . m types tix ) ) } {}
@@ -5148,7 +5148,7 @@ unsafe @ __jit_try * InterpImpl it * ModuleImpl m * PFunc pf i fidx9 → v {
                                             // frame's slots, so they only need the memory round trip when
                                             // one overlaps the argument/result window. xmm pins are
                                             // caller-saved: they always sync and reload.
-                                            : s ctw ( _module_func_type m a )
+                                            : s ctw ( _module_func_type . m 0 a )
                                             : ~ i wargs 0
                                             : ~ i wres 0
                                             ? != # i ctw 0 {
@@ -5186,7 +5186,7 @@ unsafe @ __jit_try * InterpImpl it * ModuleImpl m * PFunc pf i fidx9 → v {
                                                 ? >= a nimp {
                                                     // a one-parameter callee takes arg0 in rdx on the direct
                                                     // path (the memory copy still backs the call-out fallback)
-                                                    : s ct9 ( _module_func_type m a )
+                                                    : s ct9 ( _module_func_type . m 0 a )
                                                     ? != # i ct9 0 {
                                                         : *FuncType ctt9 # *FuncType ct9
                                                         ? == 1 ( vec_len [i] . ctt9 params ) { ( __jit_ldrdx_m buf pmap xmap cvals b raxslot ) } {}
@@ -5549,7 +5549,7 @@ unsafe @ __jit_callout * InterpImpl it * ModuleImpl m i st * i cd → i {
         = callee ?? ( vec_get [i] . tho table ei ) { T x → x F → -1 }
         ? < callee 0 { ( __trap it `call_indirect: null table element` ) ^ 1 } {}
         : s want ?? ( vec_get [( Box FuncType )] . m types & . cd 7 4294967295 ) { T x → # s ( box_ptr [FuncType] x ) F → # s 0 }
-        : s have ( _module_func_type m callee )
+        : s have ( _module_func_type . m 0 callee )
         ? | == # i want 0 == # i have 0 { ( __trap it `call_indirect: bad type index` ) ^ 1 } {}
         ? ! ( functype_eq # *FuncType want # *FuncType have ) { ( __trap it `call_indirect: signature mismatch` ) ^ 1 } {}
     } {}
@@ -5558,7 +5558,7 @@ unsafe @ __jit_callout * InterpImpl it * ModuleImpl m i st * i cd → i {
         // base, argbase 0). g_jit off for the subtree — the slab stays
         // full for exactly as long as this call is running.
         ? != 0 g_rjdbg { ( nurl_eprint `[rjit] slab exhausted entering fidx=` ) ( nurl_eprint ( nurl_str_int callee ) ) ( nurl_eprint `, interpreting its calls\n` ) } {}
-        : s ct20 ( _module_func_type m callee )
+        : s ct20 ( _module_func_type . m 0 callee )
         : ~ i cp20 0
         : ~ i cr20 0
         ? != # i ct20 0 { : *FuncType ctt20 # *FuncType ct20 = cp20 ( vec_len [i] . ctt20 params ) = cr20 ( vec_len [i] . ctt20 results ) } {}
@@ -5634,7 +5634,7 @@ unsafe @ __jit_callee * InterpImpl it * ModuleImpl m i callee * i caller_rbase i
     : s jh . pfc jit
     ? | == # i jh 0 == # i jh -1 {
         // not JIT-able: interpret it, bridging args/results through the vs
-        : s ct ( _module_func_type m callee )
+        : s ct ( _module_func_type . m 0 callee )
         : ~ i cp 0
         : ~ i cr 0
         ? != # i ct 0 { : *FuncType ctt # *FuncType ct = cp ( vec_len [i] . ctt params ) = cr ( vec_len [i] . ctt results ) } {}
@@ -5658,7 +5658,7 @@ unsafe @ __jit_callee * InterpImpl it * ModuleImpl m i callee * i caller_rbase i
         ~ < ak2 np { ( __push it . caller_rbase + argbase ak2 ) = ak2 + ak2 1 }
         ( __exec_func it callee )
         ? | ( __interp_trapped it ) != 0 . it halt { ^ 1 } {}
-        : s ct2 ( _module_func_type m callee )
+        : s ct2 ( _module_func_type . m 0 callee )
         : ~ i cr2 0
         ? != # i ct2 0 { : *FuncType ctt2 # *FuncType ct2 = cr2 ( vec_len [i] . ctt2 results ) } {}
         : ~ i rk2 cr2
@@ -6043,7 +6043,7 @@ unsafe @ __exec_func * InterpImpl it i fidx → v {
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             : i cfi ?? ( vec_get [i] . tho table ei ) { T x → x F → -1 }
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             ? < cfi 0 { ( __trap it `call_indirect: null table element` ) ( __fr_setpos tp r0 ) = pc pend } {
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 : s want ?? ( vec_get [( Box FuncType )] . m types ra ) { T x → # s ( box_ptr [FuncType] x ) F → # s 0 }
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                : s have ( _module_func_type m cfi )
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                : s have ( _module_func_type . m 0 cfi )
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 ? | == # i want 0 == # i have 0 { ( __trap it `call_indirect: bad type index` ) ( __fr_setpos tp r0 ) = pc pend } {
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     ? ! ( functype_eq # *FuncType want # *FuncType have ) { ( __trap it `call_indirect: signature mismatch` ) ( __fr_setpos tp r0 ) = pc pend } {
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         ( __fr_setpos tp pc )
@@ -6287,7 +6287,7 @@ unsafe @ __rdo_dyn * InterpImpl it * ModuleImpl m s caller i callee i argbase * 
 }
 
 unsafe @ __rdo_import * InterpImpl it * ModuleImpl m i callee i argbase * i caller_rbase → v {
-    : s wt ( _module_func_type m callee )
+    : s wt ( _module_func_type . m 0 callee )
     : ~ i np 0
     : ~ i nr 0
     ? != # i wt 0 { : *FuncType wft # *FuncType wt = np ( vec_len [i] . wft params ) = nr ( vec_len [i] . wft results ) } {}
@@ -7915,8 +7915,8 @@ unsafe @ __wasi_thread_spawn * InterpImpl it → v {
     : *InterpImpl ho ( __host it )
     : *ModuleImpl m # *ModuleImpl . ho mod
     ? == . ho tstart_fidx -2 {
-        = . ho tstart_fidx ( _module_export_func m `wasi_thread_start` )
-        = . ho sp_global ( _module_export_global m `__stack_pointer` )
+        = . ho tstart_fidx ( _module_export_func . m 0 `wasi_thread_start` )
+        = . ho sp_global ( _module_export_global . m 0 `__stack_pointer` )
     } {}
     : i fidx . ho tstart_fidx
     : i spg . ho sp_global
