@@ -1,5 +1,31 @@
 # Changelog
 
+## [3.0.0] — 2026-10-15
+
+### Changed
+
+- **Breaking:** an `Interp` is a `( Locked InterpImpl )`, and its public
+  entry points run on the instance where it lives through
+  `locked_update` / `locked_apply` — the closure takes it `inout`
+  (new in NURL: closures with `inout` parameters). The value never moves,
+  so the address the JIT and the call-out bridge hold stays put. 16 of
+  the `interp_*` functions are no longer `unsafe` (src/interp.nu: 141 to
+  125).
+- **Breaking:** `interp_stack` (which lent the instance's own value stack
+  for callers to push into) is replaced by `interp_stack_push`,
+  `interp_stack_len` and `interp_stack_at`. `interp_trapmsg`,
+  `interp_stdout_bytes` and `interp_stderr_bytes` return copies.
+- `_module_func_type` takes the module record `inout` (by address): a
+  by-value copy of it per import call showed up when the call was not
+  inlined.
+
+### Performance
+
+- Host calls are 3.3x faster: an import is resolved to its dispatch
+  number once per instance, where every call used to walk a chain of
+  string compares. A module making 2 million WASI calls: 5.05 G
+  instructions to 1.90 G, 450 ms to 135 ms.
+
 ## [2.6.0] — 2026-10-15
 
 ### Changed

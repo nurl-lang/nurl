@@ -408,6 +408,20 @@ generic that copies its `T` cannot be instantiated with one (h235)
 
 ### Added
 
+- **Closures with `inout` parameters** (spec §7.2). A closure type may
+  write `( @ R inout T )` and a closure literal `\ inout T x → R { … }`:
+  the closure takes the caller's mutable binding by address, as an
+  `inout` function parameter does, and changes it in place. The borrow
+  checker holds it to the same rules: the argument must be a mutable
+  binding, and every view into it ends at the call (a closure value
+  carries no summary). It also rejects handing a closure `inout` a
+  binding the closure captures, and passing a binding `inout` beside a
+  closure argument that captures it. New in stdlib/std/thread.nu:
+  `locked_update` and `locked_apply` run a closure on a `Locked` value
+  where it lives, instead of `locked_take` moving it out and
+  `locked_restore` moving it back. nwasm 3.0.0 uses them to run its
+  instance under a lock without `unsafe`.
+
 - **Process control without pointers** (stdlib/std/process.nu).
   `process_run_inherit` runs an argv as a child sharing this process's
   stdio and returns its exit status. `posix_execvp` replaces the process

@@ -352,6 +352,7 @@ $ `stdlib/core/slice.nu`
     ( Vec Thread ) thread_joins  // owner only: host threads, joined before free
     i tstart_fidx  // cached export index of `wasi_thread_start` (-2 = not looked up)
     i sp_global  // cached global index of `__stack_pointer` (-2 = not looked up)
+    ( Vec i ) import_ids  // per import: its dispatch number (__wasi_resolve; -3 = not yet)
     // The module this instance runs, held so it outlives every user of `mod`
     // (owner only; a thread borrows its owner's).
     Module modh
@@ -372,13 +373,20 @@ $ `stdlib/core/slice.nu`
 // thread that runs it (__wasi_thread_spawn); it owns only its own stacks,
 // globals and caches — the memory, table, segments and argv it shares are
 // its owner's, reached through `__host`.
-: Interp { ( Arc InterpImpl ) a }
+: Interp { ( Locked InterpImpl ) l }
 
-@ Interp_share Interp h → Interp { ^ @ Interp { ( arc_clone [InterpImpl] . h a ) } }
+@ Interp_share Interp h → Interp { ^ @ Interp { ( Locked_share [InterpImpl] . h l ) } }
 
 @ Interp_drop sink Interp h → v {}
 
-unsafe @ __Interp_ptr Interp h → *InterpImpl { ^ ( arc_ptr [InterpImpl] . h a ) }
+// The instance's address — fixed for its life: the Locked keeps its value
+// in one heap block, and the JIT and the call-out bridge hold this address.
+unsafe @ __Interp_ptr Interp h → *InterpImpl {
+    : ~ * ( LockedImpl InterpImpl ) p ( shared_ptr [( LockedImpl InterpImpl )] . . h l ctl )
+    ^ ( __it_addr . p val )
+}
+
+unsafe @ __it_addr inout InterpImpl x → *InterpImpl { ^ ( mem_addr x ) }
 
 // One activation record on the explicit call stack: the function, its locals,
 // its control stack, and the instruction cursor [pos, end) — pos/end are
@@ -448,11 +456,12 @@ unsafe inline @ __mem_base inout InterpImpl it → i {
 // lives as long as any instance of it.
 unsafe @ interp_new Module m__h → Interp {
     : ~ * ModuleImpl m ( _Module_ptr m__h )
-    : ( Arc InterpImpl ) it__box ( arc_zero [InterpImpl] )
-    : ~ * InterpImpl it ( arc_ptr [InterpImpl] it__box )
+    : Interp h @ Interp { ( locked_zero [InterpImpl] ) }
+    : ~ * InterpImpl it ( __Interp_ptr h )
     = . it mod # s m
     = . it modh ( Module_share m__h )
     = . it pfuncs ( vec_new [s] )
+    = . it import_ids ( vec_new [i] )
     = . it pf_owned ( vec_new [( Box PFunc )] )
     = . it jit_ctx_mem ( vec_new [( Vec i )] )
     = . it vs ( vec_new [i] )
@@ -597,7 +606,7 @@ unsafe @ interp_new Module m__h → Interp {
             = di + di 1
         }
     } {}
-    ^ @ Interp { it__box }
+    ^ h
 }
 
 // A fresh file-descriptor record of the given kind (a box: a *WFd into
@@ -651,22 +660,16 @@ unsafe @ __jit_arena_unmap i arena → v {
 // host program that runs a module as a function call wants the
 // module's output back as a VALUE, not interleaved into its own
 // console. Enable before exec_func; read the buffers after it.
-unsafe @ interp_capture Interp it__h → v {
-    : ~ * InterpImpl it ( __Interp_ptr it__h )
-    = . it cap T
+@ interp_capture Interp h → v { ( locked_update [InterpImpl] . h l \ inout InterpImpl it → v { = . it cap T } ) }
+
+// The captured bytes — a copy of the Interp's buffers. Raw bytes, exactly
+// as the module wrote them: a NUL neither truncates nor terminates.
+@ interp_stdout_bytes Interp h → ( Vec u ) {
+    ^ ( locked_apply [InterpImpl ( Vec u )] . h l \ inout InterpImpl it → ( Vec u ) { ^ ( vec_clone [u] . it capout ) } )
 }
 
-// The captured bytes — the Interp's own buffers, lent (valid while the
-// Interp lives). Raw bytes, exactly as the module wrote them: a NUL
-// neither truncates nor terminates.
-unsafe @ interp_stdout_bytes Interp it__h → ( Vec u ) {
-    : ~ * InterpImpl it ( __Interp_ptr it__h )
-    ^ . it capout
-}
-
-unsafe @ interp_stderr_bytes Interp it__h → ( Vec u ) {
-    : ~ * InterpImpl it ( __Interp_ptr it__h )
-    ^ . it caperr
+@ interp_stderr_bytes Interp h → ( Vec u ) {
+    ^ ( locked_apply [InterpImpl ( Vec u )] . h l \ inout InterpImpl it → ( Vec u ) { ^ ( vec_clone [u] . it caperr ) } )
 }
 
 // Did the guest trap? Did it call proc_exit? The two halves of `halt`.
@@ -674,66 +677,57 @@ unsafe @ interp_stderr_bytes Interp it__h → ( Vec u ) {
 // trap visible, which is what an embedder wants to report.
 @ __interp_trapped inout InterpImpl it → b { ^ != 0 & . it halt 1 }
 
-unsafe @ interp_trapped Interp it__h → b { : ~ * InterpImpl __itp ( __Interp_ptr it__h ) ^ ( __interp_trapped . __itp 0 ) }
+@ interp_trapped Interp h → b { ^ ( locked_apply [InterpImpl b] . h l \ inout InterpImpl it → b { ^ ( __interp_trapped it ) } ) }
 
 @ __interp_exited inout InterpImpl it → b { ^ != 0 & . it halt 2 }
 
-unsafe @ interp_exited Interp it__h → b { : ~ * InterpImpl __itp ( __Interp_ptr it__h ) ^ ( __interp_exited . __itp 0 ) }
+@ interp_exited Interp h → b { ^ ( locked_apply [InterpImpl b] . h l \ inout InterpImpl it → b { ^ ( __interp_exited it ) } ) }
 
-// The trap message (empty unless interp_trapped) — the Interp's own bytes, lent.
-unsafe @ interp_trapmsg Interp it__h → ( Vec u ) {
-    : ~ * InterpImpl it ( __Interp_ptr it__h )
-    ^ . it trapmsg
+// The trap message (empty unless interp_trapped), copied.
+@ interp_trapmsg Interp h → ( Vec u ) {
+    ^ ( locked_apply [InterpImpl ( Vec u )] . h l \ inout InterpImpl it → ( Vec u ) { ^ ( vec_clone [u] . it trapmsg ) } )
 }
 
 // The guest's proc_exit code (0 when it returned from _start instead).
-unsafe @ interp_exit_code Interp it__h → i {
-    : ~ * InterpImpl it ( __Interp_ptr it__h )
-    ^ . it exit_code
-}
+@ interp_exit_code Interp h → i { ^ ( locked_apply [InterpImpl i] . h l \ inout InterpImpl it → i { ^ . it exit_code } ) }
 
-// The value stack, lent: push an invoked export's arguments here before
-// exec_func, and read its results off the top after it.
-unsafe @ interp_stack Interp it__h → ( Vec i ) {
-    : ~ * InterpImpl it ( __Interp_ptr it__h )
-    ^ . it vs
+// The value stack: push an invoked export's arguments before exec_func,
+// and read its results off the top after it.
+@ interp_stack_push Interp h i v → v { ( locked_update [InterpImpl] . h l \ inout InterpImpl it → v { ( vec_push [i] . it vs v ) } ) }
+
+@ interp_stack_len Interp h → i { ^ ( locked_apply [InterpImpl i] . h l \ inout InterpImpl it → i { ^ ( vec_len [i] . it vs ) } ) }
+
+// Slot `k` of the value stack (0 = bottom); 0 past its end.
+@ interp_stack_at Interp h i k → i {
+    ^ ( locked_apply [InterpImpl i] . h l \ inout InterpImpl it → i { ^ ?? ( vec_get [i] . it vs k ) { T x → x F → 0 } } )
 }
 
 // Meter execution: at most `n` predecoded records, then trap (--fuel).
-unsafe @ interp_set_fuel Interp it__h i n → v {
-    : ~ * InterpImpl it ( __Interp_ptr it__h )
-    = . it fuel n
-}
+@ interp_set_fuel Interp h i n → v { ( locked_update [InterpImpl] . h l \ inout InterpImpl it → v { = . it fuel n } ) }
 
 // Append a program argument (copied from a NUL-terminated host string).
-unsafe @ interp_push_arg Interp it__h s str → v {
-    : ~ * InterpImpl it ( __Interp_ptr it__h )
-    ( vec_push [( Box Arg )] . it argv ( box_new [Arg] @ Arg { ( bytes_from_str str ) } ) )
+@ interp_push_arg Interp h s str → v {
+    : ( Vec u ) b ( bytes_from_str str )
+    ( locked_update [InterpImpl] . h l \ inout InterpImpl it → v { ( vec_push [( Box Arg )] . it argv ( box_new [Arg] @ Arg { ( vec_clone [u] b ) } ) ) } )
 }
 
 // Append an environment entry ("NAME=VALUE", copied).
-unsafe @ interp_push_env Interp it__h s str → v {
-    : ~ * InterpImpl it ( __Interp_ptr it__h )
-    ( vec_push [( Box Arg )] . it envp ( box_new [Arg] @ Arg { ( bytes_from_str str ) } ) )
+@ interp_push_env Interp h s str → v {
+    : ( Vec u ) b ( bytes_from_str str )
+    ( locked_update [InterpImpl] . h l \ inout InterpImpl it → v { ( vec_push [( Box Arg )] . it envp ( box_new [Arg] @ Arg { ( vec_clone [u] b ) } ) ) } )
 }
 
 // Enable the module "env" GPU/CUDA host-import bridge. Off by default: those
 // imports hand the guest raw host pointers into linear memory and forward them
 // to libcuda, so they are only safe for trusted compute — the embedder must
 // opt in explicitly (the CLI does so with --allow-gpu).
-unsafe @ interp_allow_gpu Interp it__h → v {
-    : ~ * InterpImpl it ( __Interp_ptr it__h )
-    = . it gpu_ok T
-}
+@ interp_allow_gpu Interp h → v { ( locked_update [InterpImpl] . h l \ inout InterpImpl it → v { = . it gpu_ok T } ) }
 
 // Enable the module "nurl_net" socket bridge — the guest's TCP/UDP/DNS
 // calls become this process's. Off by default for the same reason the
 // GPU bridge is: it is the guest reaching the network through us (the
 // CLI opts in with --allow-net).
-unsafe @ interp_allow_net Interp it__h → v {
-    : ~ * InterpImpl it ( __Interp_ptr it__h )
-    = . it net_ok T
-}
+@ interp_allow_net Interp h → v { ( locked_update [InterpImpl] . h l \ inout InterpImpl it → v { = . it net_ok T } ) }
 
 // Grant the module one preopened host directory, visible to it as `guest_name`
 // (the path it resolves opens against). Installed as fd 3.
@@ -806,6 +800,7 @@ unsafe @ __interp_thread_new inout InterpImpl parent → ( Arc InterpImpl ) {
     // Predecoded bodies are per-Interp (the cache is filled lazily and
     // mutated in place), so a thread decodes what it actually runs.
     = . it pfuncs ( vec_new [s] )
+    = . it import_ids ( vec_new [i] )
     = . it pf_owned ( vec_new [( Box PFunc )] )
     = . it jit_ctx_mem ( vec_new [( Vec i )] )
     : i nf ( vec_len [( Box WFunc )] . m funcs )
@@ -856,10 +851,9 @@ unsafe @ __thread_unregister inout InterpImpl it → v {
     ( __atom_unlock )
 }
 
-unsafe @ interp_run_start Interp it__h → v {
-    : ~ * InterpImpl it ( __Interp_ptr it__h )
-    : ~ * ModuleImpl m # *ModuleImpl . it mod
-    ? >= . m start_func 0 { ( __exec_func . it 0 . m start_func ) } {}
+@ interp_run_start Interp h → v {
+    : i sf ( locked_apply [InterpImpl i] . h l \ inout InterpImpl it → i { ^ . ( module_impl . it modh ) start_func } )
+    ? >= sf 0 { ( exec_func h sf ) } {}
 }
 
 @ __push inout InterpImpl it i v → v { ( vec_push [i] . it vs v ) }
@@ -1271,8 +1265,16 @@ unsafe @ __mem_grow inout InterpImpl it i delta → i {
 
 // Dispatch an imported function to the WASI host layer (no frame needed).
 unsafe @ __call_import inout InterpImpl it inout ModuleImpl m i fidx → v {
+    // Resolved once per import: the by-name match is a chain of string
+    // compares, and a module calling the host in a loop paid it per call.
+    ~ <= ( vec_len [i] . it import_ids ) fidx { ( vec_push [i] . it import_ids -3 ) }
+    : ~ i id ( vec_at [i] . it import_ids fidx )
     : s wp ?? ( vec_get [( Box WImport )] . m imports fidx ) { T x → # s ( box_ptr [WImport] x ) F → # s 0 }
-    ? != # i wp 0 { : *WImport w # *WImport wp ( __wasi_dispatch it . w module . w field ) } { ( __trap it `bad import index` ) }
+    ? == # i wp 0 { ( __trap it `bad import index` ) ^ v } {}
+    : *WImport w # *WImport wp
+    ? == id -3 { = id ( __wasi_resolve . w module . w field ) ( vec_put [i] . it import_ids fidx id ) } {}
+    ? ( __wasi_dispatch_id it id ) { ^ v } {}
+    ( __wasi_dispatch it . w module . w field )
 }
 
 // Build a frame for defined function `fidx`. `ret_dst` is the caller slot
@@ -6210,7 +6212,7 @@ unsafe @ __exec_func inout InterpImpl it i fidx → v {
     = . it fuel ? < fuel0 0 -1 ? < fuel 0 0 fuel
 }
 
-unsafe @ exec_func Interp it__h i fidx → v { : ~ * InterpImpl __itp ( __Interp_ptr it__h ) ( __exec_func . __itp 0 fidx ) }
+@ exec_func Interp h i fidx → v { ( locked_update [InterpImpl] . h l \ inout InterpImpl it → v { ( __exec_func it fidx ) } ) }
 
 // Perform a call from the register driver: `argbase` is the caller slot of
 // the first argument (and the destination of the results). Imports bridge
@@ -7136,7 +7138,7 @@ unsafe @ __interp_flush inout InterpImpl it → v {
     ~ < k n { ?? ( vec_get [( Box WFd )] . ho fds k ) { T b → { : s pp # s ( box_ptr [WFd] b ) ? != # i pp 0 { ( __fd_flush # *WFd pp ) } {} } F → {} } = k + k 1 }
 }
 
-unsafe @ interp_flush Interp it__h → v { : ~ * InterpImpl __itp ( __Interp_ptr it__h ) ( __interp_flush . __itp 0 ) }
+@ interp_flush Interp h → v { ( locked_update [InterpImpl] . h l \ inout InterpImpl it → v { ( __interp_flush it ) } ) }
 
 unsafe @ __wasi_fd_close inout InterpImpl it → v {
     : i fd ( __pop it )
@@ -7736,7 +7738,7 @@ unsafe @ __net_close_handles ( Vec i ) hs ( Vec i ) kinds → v {
     }
 }
 
-unsafe @ interp_net_close_all Interp it__h → v { : ~ * InterpImpl __itp ( __Interp_ptr it__h ) ( __interp_net_close_all . __itp 0 ) }
+@ interp_net_close_all Interp h → v { ( locked_update [InterpImpl] . h l \ inout InterpImpl it → v { ( __interp_net_close_all it ) } ) }
 
 unsafe @ __net_dispatch inout InterpImpl it ( Vec u ) field → b {
     // ── TCP ──
@@ -7957,6 +7959,82 @@ unsafe @ __wasi_thread_spawn inout InterpImpl it → v {
         }
         F e → { ( __push it -1 ) }
     }
+}
+
+// The dispatch number of an import (__wasi_dispatch_id): 1.. for a
+// wasi_snapshot_preview1 function, 0 for wasi.thread-spawn, -2 for an
+// import the by-name path answers (nurl_net, env, or one it traps on).
+@ __wasi_resolve ( Vec u ) mod ( Vec u ) field → i {
+    ? ( __feq mod `wasi` ) { ? ( __feq field `thread-spawn` ) { ^ 0 } {} ^ -2 } {}
+    ? ! ( __feq mod `wasi_snapshot_preview1` ) { ^ -2 } {}
+    ? ( __feq field `proc_exit` ) { ^ 1 } {}
+    ? ( __feq field `fd_write` ) { ^ 2 } {}
+    ? ( __feq field `fd_read` ) { ^ 3 } {}
+    ? ( __feq field `fd_seek` ) { ^ 4 } {}
+    ? ( __feq field `fd_tell` ) { ^ 5 } {}
+    ? ( __feq field `fd_pread` ) { ^ 6 } {}
+    ? ( __feq field `fd_pwrite` ) { ^ 7 } {}
+    ? ( __feq field `fd_sync` ) { ^ 8 } {}
+    ? ( __feq field `fd_datasync` ) { ^ 9 } {}
+    ? ( __feq field `fd_close` ) { ^ 10 } {}
+    ? ( __feq field `fd_readdir` ) { ^ 11 } {}
+    ? ( __feq field `path_open` ) { ^ 12 } {}
+    ? ( __feq field `path_create_directory` ) { ^ 13 } {}
+    ? ( __feq field `path_remove_directory` ) { ^ 14 } {}
+    ? ( __feq field `path_unlink_file` ) { ^ 15 } {}
+    ? ( __feq field `path_rename` ) { ^ 16 } {}
+    ? ( __feq field `path_filestat_get` ) { ^ 17 } {}
+    ? ( __feq field `args_sizes_get` ) { ^ 18 } {}
+    ? ( __feq field `args_get` ) { ^ 19 } {}
+    ? ( __feq field `fd_prestat_get` ) { ^ 20 } {}
+    ? ( __feq field `fd_prestat_dir_name` ) { ^ 21 } {}
+    ? ( __feq field `fd_fdstat_get` ) { ^ 22 } {}
+    ? ( __feq field `fd_filestat_get` ) { ^ 23 } {}
+    ? ( __feq field `environ_sizes_get` ) { ^ 24 } {}
+    ? ( __feq field `environ_get` ) { ^ 25 } {}
+    ? ( __feq field `clock_time_get` ) { ^ 26 } {}
+    ? ( __feq field `random_get` ) { ^ 27 } {}
+    ? ( __feq field `poll_oneoff` ) { ^ 28 } {}
+    ? ( __feq field `fd_fdstat_set_flags` ) { ^ 29 } {}
+    ? ( __feq field `sched_yield` ) { ^ 30 } {}
+    ^ -2
+}
+
+// Run the import `id` names (__wasi_resolve). F when it is not one this
+// path knows (the by-name dispatch answers it).
+@ __wasi_dispatch_id inout InterpImpl it i id → b {
+    ? == id 0 { ( __wasi_thread_spawn it ) ^ T } {}
+    ? == id 1 { ( __wasi_proc_exit it ) ^ T } {}
+    ? == id 2 { ( __wasi_fd_write it ) ^ T } {}
+    ? == id 3 { ( __wasi_fd_read it ) ^ T } {}
+    ? == id 4 { ( __wasi_fd_seek it ) ^ T } {}
+    ? == id 5 { ( __wasi_fd_tell it ) ^ T } {}
+    ? == id 6 { ( __wasi_fd_pread it ) ^ T } {}
+    ? == id 7 { ( __wasi_fd_pwrite it ) ^ T } {}
+    ? == id 8 { ( __wasi_fd_sync it ) ^ T } {}
+    ? == id 9 { ( __wasi_fd_sync it ) ^ T } {}
+    ? == id 10 { ( __wasi_fd_close it ) ^ T } {}
+    ? == id 11 { ( __wasi_fd_readdir it ) ^ T } {}
+    ? == id 12 { ( __wasi_path_open it ) ^ T } {}
+    ? == id 13 { ( __wasi_path_create_directory it ) ^ T } {}
+    ? == id 14 { ( __wasi_path_remove_directory it ) ^ T } {}
+    ? == id 15 { ( __wasi_path_unlink_file it ) ^ T } {}
+    ? == id 16 { ( __wasi_path_rename it ) ^ T } {}
+    ? == id 17 { ( __wasi_path_filestat_get it ) ^ T } {}
+    ? == id 18 { ( __wasi_args_sizes_get it ) ^ T } {}
+    ? == id 19 { ( __wasi_args_get it ) ^ T } {}
+    ? == id 20 { ( __wasi_fd_prestat_get it ) ^ T } {}
+    ? == id 21 { ( __wasi_fd_prestat_dir_name it ) ^ T } {}
+    ? == id 22 { ( __wasi_fd_fdstat_get it ) ^ T } {}
+    ? == id 23 { ( __wasi_fd_filestat_get it ) ^ T } {}
+    ? == id 24 { ( __wasi_environ_sizes_get it ) ^ T } {}
+    ? == id 25 { ( __wasi_environ_get it ) ^ T } {}
+    ? == id 26 { ( __wasi_clock_time_get it ) ^ T } {}
+    ? == id 27 { ( __wasi_random_get it ) ^ T } {}
+    ? == id 28 { ( __wasi_poll_oneoff it ) ^ T } {}
+    ? == id 29 { ( __pop it ) ( __pop it ) ( __push it 0 ) ^ T } {}
+    ? == id 30 { ( __push it 0 ) ^ T } {}
+    ^ F
 }
 
 @ __wasi_dispatch inout InterpImpl it ( Vec u ) mod ( Vec u ) field → v {

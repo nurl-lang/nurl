@@ -717,6 +717,40 @@ unsafe @ __strip_spaces s t → s {
     8
 }
 
+// An `inout` closure parameter: the caller's binding passed by address,
+// as an `inout` function parameter is. Its LLVM spelling is the pointer
+// `T*` written `T addrspace(0)*` — the SAME type to LLVM (address space 0
+// is the default one), but a distinct spelling here, so a closure type
+// with an inout parameter is not the one taking a raw `*T`, and the call
+// site can tell which positions take an address (__clo_inout_idx).
+@ __clo_inout_ty s t → s { ^ ( nurl_str_cat t ` addrspace(0)*` ) }
+
+@ __is_clo_inout_ty s t → b { ^ != 0 ( nurl_str_ends t ` addrspace(0)*` ) }
+
+// The pointee of an inout closure parameter's spelling.
+@ __clo_inout_base s t → s { ^ ( nurl_str_slice t 0 - ( nurl_str_len t ) ( nurl_str_len ` addrspace(0)*` ) ) }
+
+// Space-separated 0-based indices of a closure type's inout parameters
+// ("" for none, or for a type that is not a closure).
+@ __clo_inout_idx s ty → s {
+    ? == 0 ( nurl_str_len ty ) { ^ ( nurl_str_cat `` `` ) } {}
+    ? == -1 ( nurl_str_find ty ` addrspace(0)*` ) { ^ ( nurl_str_cat `` `` ) } {}
+    : s ll ( nurl_llty ty )
+    ? ! ( __is_closure_llty ll ) { ^ ( nurl_str_cat `` `` ) } {}
+    : ~ s rest ( __fnty_param_lltys ll T )
+    : ~ s out ``
+    : ~ i k 0
+    ~ != 0 ( nurl_str_len rest ) {
+        // (__fnty_param_lltys strips every space: `%Paddrspace(0)*`.)
+        ? != 0 ( nurl_str_ends ( seplist_first rest ) `addrspace(0)*` ) {
+            = out ? == 0 ( nurl_str_len out ) ( nurl_str_int k ) ( nurl_str_cat3 out ` ` ( nurl_str_int k ) )
+        } {}
+        = rest ( __seplist_rest rest )
+        = k + k 1
+    }
+    ^ out
+}
+
 // ( @ R P* )  →  { R (i8*, P0, P1, ...)*, i8* }   closure type
 // ( IDENT T+ ) →  generic_inst [Group E, currently errors]
 @ parse_type_paren i lex → s {
@@ -728,7 +762,12 @@ unsafe @ __strip_spaces s t → s {
         : s ret ( parse_type lex )
         : ~ s params ``
         ~ & != ( nurl_lex_type lex ) TT_RPAREN != ( nurl_lex_type lex ) TT_EOF {
-            : s p ( parse_type lex )
+            // `inout T`: the closure takes the caller's binding by address
+            // (see __clo_inout_ty).
+            : ~ b __p_io F
+            ? & ( is_ident_tok ( nurl_lex_type lex ) ) ( seq ( nurl_lex_val lex ) `inout` ) { = __p_io T ( nurl_lex_advance lex ) } {}
+            : s p0 ( parse_type lex )
+            : s p ? __p_io ( __clo_inout_ty p0 ) ( nurl_str_cat p0 `` )
             = params ? == 0 ( nurl_str_len params )
             ( nurl_str_cat p `` )
             ( nurl_str_cat params ( nurl_str_cat `, ` p ) )
@@ -13341,6 +13380,28 @@ unsafe @ bck_check_lit_moves i lex i line i col s what s tab i scmask s moved s 
     ? & & ! __callee_shadowed == 0 ( nurl_str_len callee_inout ) ! ( seq call_name fname )
     { = callee_inout ( nurl_sym_get g_fn_inout fname ) }
     {}
+    // A call through a closure VALUE: its inout positions are in its type.
+    : ~ b __clo_io_call F
+    // What the called closure captures, and — across this call's
+    // arguments — what closure arguments capture and which bindings go
+    // in `inout`: one value must not reach a closure both ways (it would
+    // see two unrelated names for it, and a write through one would leave
+    // a view through the other dangling).
+    : s __callee_caps ( nurl_sym_get2 syms fname `__closure_caps` )
+    : ~ s __call_caps ``
+    : ~ s __call_io_roots ``
+    ? == 0 ( nurl_str_len callee_inout ) {
+        : s __ci_ty ( nurl_sym_get syms fname )
+        = callee_inout ( __clo_inout_idx __ci_ty )
+        // A closure value carries no summaries: what it does to an inout
+        // argument is unknown, so it may change it, move its buffer, or
+        // drop what it holds — every view into it ends at the call.
+        ? != 0 ( nurl_str_len callee_inout ) {
+            = __clo_io_call T
+            ( nurl_sym_def g_fn_mutates fname ( __word_union ( nurl_sym_get g_fn_mutates fname ) callee_inout ) )
+            ( nurl_sym_def g_fn_reallocs fname ( __word_union ( nurl_sym_get g_fn_reallocs fname ) callee_inout ) )
+        } {}
+    } {}
     ? & & ! __callee_shadowed == 0 ( nurl_str_len callee_sink ) ! ( seq call_name fname )
     { = callee_sink ( nurl_sym_get g_fn_sink fname ) }
     {}
@@ -13538,6 +13599,25 @@ unsafe @ bck_check_lit_moves i lex i line i col s what s tab i scmask s moved s 
         // binding's backing pointer (`__ptr`) typed `<T>*`; emit no
         // value load. Everything else is the ordinary by-value path.
         : b is_inout_arg ( str_contains_word callee_inout ( nurl_str_int arg_idx ) )
+        ? & != 0 g_borrowck ( is_ident_tok bck_arg_tt ) {
+            : s __ioa_name ( nurl_str_cat bck_arg_val `` )
+            ? is_inout_arg {
+                ? | ( str_contains_word __callee_caps __ioa_name ) ( str_contains_word __call_caps __ioa_name )
+                { ( die lex ( nurl_str_cat3 `'` __ioa_name `' is passed 'inout' to a closure that also captures it — inside, the parameter and the capture are two names for one value, and a write through one leaves what was read through the other dangling. Pass it as the parameter only (do not capture it), or capture it only.` ) ) } {}
+                = __call_io_roots ( nurl_str_cat3 __call_io_roots ` ` __ioa_name )
+            } {
+                : s __ioa_caps ( nurl_sym_get2 syms __ioa_name `__closure_caps` )
+                ? != 0 ( nurl_str_len __ioa_caps ) {
+                    : ~ s __ioa_r ( nurl_str_cat __call_io_roots `` )
+                    ~ != 0 ( nurl_str_len __ioa_r ) {
+                        : s __ioa_w ( str_first_word __ioa_r ) = __ioa_r ( str_skip_word __ioa_r )
+                        ? ( str_contains_word __ioa_caps __ioa_w )
+                        { ( die lex ( nurl_str_cat3 `'` __ioa_w `' is passed 'inout' beside a closure that captures it — the callee can reach one value under two unrelated names, and a write through one leaves what was read through the other dangling. Pass it as the parameter only (do not capture it), or capture it only.` ) ) } {}
+                    }
+                    = __call_caps ( nurl_str_cat3 __call_caps ` ` __ioa_caps )
+                } {}
+            }
+        } {}
         // Exclusive-access check. A bare-identifier argument that is
         // mutably borrowed (`inout`) here must not be aliased by
         // another bare-identifier argument of the SAME call (whether
@@ -14650,7 +14730,10 @@ unsafe @ bck_check_lit_moves i lex i line i col s what s tab i scmask s moved s 
         // and a callee that drops or replaces what the field holds ends
         // the borrows of `b` — both decided at the walk, from the
         // callee's final summaries (a `pendfield` row).
-        ? & & != 0 ( nurl_str_len arg_froot ) summary_callee ( bck_sound ) {
+        // (A closure value with inout parameters is answered by the
+        // conservative summary given it above.)
+        : b __row_callee | summary_callee & __clo_io_call is_inout_arg
+        ? & & != 0 ( nurl_str_len arg_froot ) __row_callee ( bck_sound ) {
             ( bck_stash_store arg_froot ( nurl_lex_line lex ) call_name ( nurl_str_int arg_idx ) `pendfield` )
             ( __clo_effect_note arg_froot call_name arg_idx )
             ( __drop_note arg_froot call_name arg_idx )
@@ -14664,7 +14747,7 @@ unsafe @ bck_check_lit_moves i lex i line i col s what s tab i scmask s moved s 
         // a copy: there is no move to decide and nothing to lend.)
         ? & & & ( is_ident_tok bck_arg_tt )
         ! ( str_contains_word callee_sink ( nurl_str_int arg_idx ) )
-        summary_callee != ( bck_walk_class at ) 1
+        __row_callee != ( bck_walk_class at ) 1
         { ( bck_stash_pending_call bck_arg_val ( nurl_lex_line lex )
             call_name arg_idx fname F )
             ( __clo_effect_note bck_arg_val call_name arg_idx )
@@ -35037,7 +35120,9 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
     // never misreads a `\ ( call )` try-expression.
     : b t2_is_type & == t2 TT_IDENT | != 0 ( nurl_str_len t2m ) ( seq t2v `Vec` )
     : b lparen_type & == t1 TT_LPAREN | | | | | | | | == t2 TT_AT == t2 TT_TYPE_KW == t2 TT_STAR == t2 TT_QUEST == t2 TT_QUESTQUEST == t2 TT_LBRACK == t2 TT_BANG == t2 TT_PIPE t2_is_type
-    : b is_closure | | | | | == t1 TT_ARROW == t1 TT_TYPE_KW t1_is_type | | | == t1 TT_STAR == t1 TT_QUEST == t1 TT_LBRACK == t1 TT_BANG lparen_type & & == t1 TT_IDENT t2_is_name == t3 TT_ARROW
+    // `\ inout T name …` — an inout first parameter (__clo_inout_ty).
+    : b t1_inout & == t1 TT_IDENT ( seq t1v `inout` )
+    : b is_closure | | | | | | t1_inout == t1 TT_ARROW == t1 TT_TYPE_KW t1_is_type | | | == t1 TT_STAR == t1 TT_QUEST == t1 TT_LBRACK == t1 TT_BANG lparen_type & & == t1 TT_IDENT t2_is_name == t3 TT_ARROW
     ? is_closure
     {
         : s value ( gen_closure_expr lex syms cg )
@@ -36525,8 +36610,12 @@ unsafe @ __thr_peel s lty → s {
 
     // Parse parameters until we see arrow
     ~ != ( nurl_lex_type lex ) TT_ARROW {
-        // Parse one parameter: type name
-        : s pty ( parse_type lex )
+        // Parse one parameter: type name (`inout T name` takes the
+        // caller's binding by address — __clo_inout_ty)
+        : ~ b __lp_io F
+        ? & ( is_ident_tok ( nurl_lex_type lex ) ) ( seq ( nurl_lex_val lex ) `inout` ) { = __lp_io T ( nurl_lex_advance lex ) } {}
+        : s pty0 ( parse_type lex )
+        : s pty ? __lp_io ( __clo_inout_ty pty0 ) ( nurl_str_cat pty0 `` )
 
         ? ! ( is_ident_tok ( nurl_lex_type lex ) )
         { ( die lex ( nurl_str_cat3
@@ -36808,22 +36897,34 @@ unsafe @ __thr_peel s lty → s {
     ~ < bpi param_count {
         : s bpname ( str_first_word bp_names )
         : s bptype ( seplist_first bp_types )
-        // Alloca for each param so it can be loaded
-        : s bpptr ( nurl_cg_reg cg )
-        ( nurl_print `  ` ) ( nurl_print bpptr )
-        ( nurl_print ` = alloca ` ) ( nurl_print ( nurl_llty bptype ) ) ( nurl_print `\n` )
-        ( nurl_print `  store ` ) ( nurl_print ( nurl_llty bptype ) ) ( nurl_print ` %` )
-        ( nurl_print bpname ) ( nurl_print `, ` ) ( nurl_print ( nurl_llty bptype ) )
-        ( nurl_print `* ` ) ( nurl_print bpptr ) ( nurl_print `\n` )
-        ( nurl_sym_def body_syms bpname bptype )
-        ( nurl_sym_def body_syms ( nurl_str_cat bpname `__ptr` ) bpptr )
-        ( nurl_sym_def body_syms ( nurl_str_cat bpname `__param` ) `1` )
-        // A closure parameter is BORROWED, always: a call through a closure
-        // value cannot see the body's ownership summaries (a `( @ R P )` type
-        // carries none), so its caller keeps what it passed and drops its
-        // temporaries. What the body stores or hands back is copied
-        // (mem_lent_cond, gen_ret); released, it is an error.
-        ( nurl_sym_def body_syms ( nurl_str_cat bpname `__cloparam` ) `1` )
+        ? ( __is_clo_inout_ty bptype ) {
+            // An inout parameter is the caller's binding itself, exactly as
+            // an `inout` function parameter (gen_fn_decl): the incoming
+            // pointer is the binding's storage — no alloca, and reads and
+            // `=` writes land on the caller's value.
+            ( nurl_sym_def body_syms bpname ( __clo_inout_base bptype ) )
+            ( nurl_sym_def body_syms ( nurl_str_cat bpname `__ptr` ) ( nurl_str_cat `%` bpname ) )
+            ( nurl_sym_def body_syms ( nurl_str_cat bpname `__param` ) `1` )
+            ( nurl_sym_def body_syms ( nurl_str_cat bpname `__mutable` ) `1` )
+            ( nurl_sym_def body_syms ( nurl_str_cat bpname `__inout` ) `1` )
+        } {
+            // Alloca for each param so it can be loaded
+            : s bpptr ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print bpptr )
+            ( nurl_print ` = alloca ` ) ( nurl_print ( nurl_llty bptype ) ) ( nurl_print `\n` )
+            ( nurl_print `  store ` ) ( nurl_print ( nurl_llty bptype ) ) ( nurl_print ` %` )
+            ( nurl_print bpname ) ( nurl_print `, ` ) ( nurl_print ( nurl_llty bptype ) )
+            ( nurl_print `* ` ) ( nurl_print bpptr ) ( nurl_print `\n` )
+            ( nurl_sym_def body_syms bpname bptype )
+            ( nurl_sym_def body_syms ( nurl_str_cat bpname `__ptr` ) bpptr )
+            ( nurl_sym_def body_syms ( nurl_str_cat bpname `__param` ) `1` )
+            // A closure parameter is BORROWED, always: a call through a closure
+            // value cannot see the body's ownership summaries (a `( @ R P )` type
+            // carries none), so its caller keeps what it passed and drops its
+            // temporaries. What the body stores or hands back is copied
+            // (mem_lent_cond, gen_ret); released, it is an error.
+            ( nurl_sym_def body_syms ( nurl_str_cat bpname `__cloparam` ) `1` )
+        }
         // Mirror into the closure-local shadow-check roster.
         : s c_name_roster ( nurl_sym_get body_syms `__fn_param_names__` )
         // Same rule as an `@` declaration's parameters, and for the same

@@ -1908,6 +1908,20 @@ conventions:
 parameter's leading token. `inout` is additionally banned as a
 parameter name.
 
+A closure may take a parameter `inout` as well: its type spells it
+`( @ R inout T )` and the literal `\ inout T x → R { … }`. The argument
+is the caller's mutable binding (or a field of one), passed by address
+exactly as to a function, so the closure changes the caller's value in
+place. Three rules keep it exclusive: the argument must be a mutable
+`: ~` binding; a closure value carries no summary of what it does, so
+every view into an `inout` argument ends at the call (the closure may
+move or free what it holds); and a closure may not be handed `inout` a
+binding it also captures — nor may a call pass a binding `inout` beside a
+closure argument that captures it — because inside, the parameter and the
+capture would be two names for one value. `locked_update` and
+`locked_apply` (stdlib/std/thread.nu) are built on it: they run a closure
+on a `Locked` value where it lives, without moving it out and back.
+
 A foreign (`&`) declaration may mark a parameter `inout` too: the C
 function takes a pointer to a `T` it writes a result through, and the
 argument is a mutable binding whose address is passed — nothing is

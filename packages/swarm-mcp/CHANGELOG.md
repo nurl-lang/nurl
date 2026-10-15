@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.31.1] — 2026-10-15
+
+### Changed
+
+- Requires nwasm 3 (an `Interp` run in place under its lock; the
+  captured trap message and output come back as copies). No change here.
+
 ## [0.31.0] — 2026-10-14
 
 ### Changed

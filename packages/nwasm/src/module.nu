@@ -666,7 +666,10 @@ unsafe @ _Module_ptr Module h → *ModuleImpl { ^ ( arc_ptr [ModuleImpl] . h a )
 
 // The *FuncType of any function index — imported (low indices) or defined —
 // as an opaque pointer; #s 0 if out of range.
-unsafe @ _module_func_type ModuleImpl m i fidx → s {
+// (`inout` only so the record is passed by address: it is read, never
+// written, and on the import-call path a by-value copy of it per call
+// showed up as 2 % of the instructions.)
+unsafe @ _module_func_type inout ModuleImpl m i fidx → s {
     ? < fidx 0 { ^ # s 0 } {}
     : ~ i ti -1
     ? < fidx . m num_import_funcs {
@@ -683,7 +686,10 @@ unsafe @ _module_func_type ModuleImpl m i fidx → s {
     ^ ?? ( vec_get [( Box FuncType )] . m types ti ) { T x → # s ( box_ptr [FuncType] x ) F → # s 0 }
 }
 
-unsafe @ module_func_type Module m__h i fidx → s { ^ ( _module_func_type ( module_impl m__h ) fidx ) }
+unsafe @ module_func_type Module m__h i fidx → s {
+    : ~ * ModuleImpl mp ( _Module_ptr m__h )
+    ^ ( _module_func_type . mp 0 fidx )
+}
 
 // Structural function-type equality (the call_indirect runtime check): same
 // parameter and result valtypes, in order.

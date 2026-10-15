@@ -422,6 +422,28 @@ $ `stdlib/core/rcbox.nu`
     ( mutex_unlock . p mu )
 }
 
+// Run `f` on the value IN PLACE while holding the lock: `f` takes it
+// `inout`, so it may change any field, scalars included, and the value
+// never moves — it stays at the address it has had since locked_new (what
+// a record other code holds the address of needs). Nothing is copied.
+@ locked_update [T] ( Locked T ) l ( @ v inout T ) f → v {
+    : ~ * ( LockedImpl T ) p ( shared_ptr [( LockedImpl T )] . l ctl )
+    ( mutex_lock . p mu )
+    ~ . p taken { = . p waiters + . p waiters 1 ( cond_wait . p cv . p mu ) = . p waiters - . p waiters 1 }
+    ( f . p val )
+    ( mutex_unlock . p mu )
+}
+
+// locked_update with a result: `f`'s, returned once the lock is let go.
+@ locked_apply [T R] ( Locked T ) l ( @ R inout T ) f → R {
+    : ~ * ( LockedImpl T ) p ( shared_ptr [( LockedImpl T )] . l ctl )
+    ( mutex_lock . p mu )
+    ~ . p taken { = . p waiters + . p waiters 1 ( cond_wait . p cv . p mu ) = . p waiters - . p waiters 1 }
+    : R r ( f . p val )
+    ( mutex_unlock . p mu )
+    ^ r
+}
+
 // A copy of the value, taken under the lock.
 @ locked_get [T] ( Locked T ) l → T {
     : *( LockedImpl T ) p ( shared_ptr [( LockedImpl T )] . l ctl )

@@ -38,8 +38,8 @@ $ `src/interp.nu`
                         = r ? ( interp_trapped it ) 1 0
                     } {
                         ? ! ( interp_trapped it ) {
-                            : i n ( vec_len [i] ( interp_stack it ) )
-                            ? > n 0 { = r ?? ( vec_get [i] ( interp_stack it ) - n 1 ) { T x → x F → 0 } } {}
+                            : i n ( interp_stack_len it )
+                            ? > n 0 { = r ( interp_stack_at it - n 1 ) } {}
                         } {}
                     }
                 } {}
