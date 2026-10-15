@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.36.2] — 2026-10-15
+
+Requires gpukit 0.11.6 (`gk_call_view_f` / `gk_call_view_i`).
+
+### Changed
+
+- The accelerated scorer's kernel is written in gpukit's checked subset and launched with `gk_run_checked` over views of the forest and the matrix, so `anom_scores_gpu` is no longer `unsafe` (2 left, in the autoencoder trainer). It reads both children and keeps one by a mask instead of branching on the data. Scores are bit-identical on CUDA and on the CPU backend, and the CPU backend scores 200 000 rows × 300 trees 13 % faster (29.2 s to 25.1 s for 20 runs).
+
 ## [0.36.1] — 2026-10-15
 
 ### Performance

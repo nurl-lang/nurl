@@ -67,11 +67,33 @@ $ `src/checked.nu`
     ( nurl_print ( string_data got ) ) ( nurl_print `\n` )
 }
 
+// Inputs bound as views (gk_call_view_f / _i): read in place, an index
+// past the end of either reads its element 0.
+@ run_views GpuKit kit → v {
+    : ~ ( Vec f ) xs ( vec_new [f] )
+    ( vec_push [f] xs 1.5 ) ( vec_push [f] xs 2.5 ) ( vec_push [f] xs 3.5 )
+    : ~ ( Vec i ) ks ( vec_new [i] )
+    ( vec_push [i] ks 2 ) ( vec_push [i] ks 0 ) ( vec_push [i] ks 7 )
+    : ~ GkCall c ( gk_call_new )
+    ( gk_call_view_f c `x` ( slice_from_vec [f] xs ) )
+    ( gk_call_view_i c `k` ( slice_from_vec [i] ks ) )
+    ( gk_call_out_f c `y` ( vec_zeroed [f] 4 ) )
+    : b ok ( gk_run_checked kit c `checked_views` `ST(y, gid, LD(x, LD(k, gid)) + (double)gid);` 4 64 )
+    : ( Vec f ) ys ( gk_call_take_f c `y` )
+    : ~ String got ( string_new )
+    : ~ i j 0
+    ~ < j ( vec_len [f] ys ) { ? > j 0 { ( string_push_char got 44 ) } {} ( string_push_float got ( vec_at [f] ys j ) ) = j + j 1 }
+    : b want_ok ( nurl_str_eq ( string_data got ) `3.5,2.5,3.5,6.5` )
+    ? & ok != 0 want_ok { ( nurl_print `ok   checked kernel over views: ` ) } { ( nurl_print `FAIL checked kernel over views: ` ) = g_fail + g_fail 1 }
+    ( nurl_print ( string_data got ) ) ( nurl_print `\n` )
+}
+
 @ main → i {
     : GpuKit kit ( gk_open 0 )
     ? ( gk_ok kit ) {} { ( nurl_print `SKIP no device\n` ) ^ 0 }
     ( subset kit )
     ( run kit )
+    ( run_views kit )
     ? == g_fail 0 { ( nurl_print `checked: all passed\n` ) } { ( nurl_print `checked: FAILURES\n` ) }
     ^ 0
 }

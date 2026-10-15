@@ -32,6 +32,7 @@ $ `src/model.nu`
 $ `deps/iforest/src/iforest.nu`
 $ `deps/gpu/src/gpu.nu`
 $ `deps/gpukit/src/gpukit.nu`
+$ `deps/gpukit/src/checked.nu`
 $ `stdlib/std/thread.nu`
 $ `stdlib/std/sysinfo.nu`
 
@@ -76,28 +77,28 @@ $ `stdlib/std/sysinfo.nu`
 
 @ __ag_set i state ? GpuKit kit → v { ( locked_set [AgState] g_ag @ AgState { state kit } ) }
 
-// The path-walk kernel. One thread per row; per tree, descend by the same
-// comparison the pure walker uses and accumulate depth + c(leaf) — nothing
-// else, so the f64 sum is bit-identical to the host loop.
-@ __ag_kernel_src → s {
-    ^ `extern "C" __global__ void anomaly_paths(const double* xs, const long long* feat, const double* split, const long long* left, const long long* right, const double* cleaf, const long long* roots, long long n_rows, long long n_cols, long long n_trees, double* out)
-{
-    long long r = (long long)blockIdx.x * blockDim.x + threadIdx.x;
-    if (r >= n_rows) return;
-    const double* x = xs + r * n_cols;
-    double total = 0.0;
-    for (long long t = 0; t < n_trees; t++) {
-        long long node = roots[t];
-        long long depth = 0;
-        while (feat[node] >= 0) {
-            node = (x[feat[node]] < split[node]) ? left[node] : right[node];
-            depth++;
-        }
-        total += (double)depth + cleaf[node];
+// The path-walk kernel, in gpukit's checked subset. One thread per row
+// (`gid`); per tree, descend by the same comparison the pure walker uses
+// and accumulate depth + c(leaf) — nothing else, so the f64 sum is
+// bit-identical to the host loop. Both children are read and one kept by
+// a mask (`!(x < split)`: NaN goes right, as in the walker) — no branch on
+// the data to mispredict.
+@ __ag_kernel_body → s {
+    ^ `long long base = gid * n_cols;
+double total = 0.0;
+for (long long t = 0; t < n_trees; t++) {
+    long long node = LD(roots, t);
+    long long depth = 0;
+    while (LD(feat, node) >= 0) {
+        long long lo = LD(left, node);
+        long long hi = LD(right, node);
+        long long go = -(long long)!(LD(xs, base + LD(feat, node)) < LD(split, node));
+        node = lo ^ ((lo ^ hi) & go);
+        depth++;
     }
-    out[r] = total;
+    total += (double)depth + LD(cleaf, node);
 }
-`
+ST(out, gid, total);`
 }
 
 @ __ag_env_off → b {
@@ -132,7 +133,7 @@ $ `stdlib/std/sysinfo.nu`
         ( __ag_set -1 @ ?GpuKit { F } )
         ^ F
     }
-    ? ( gk_compile kit ( __ag_kernel_src ) `anomaly_paths` ) {} {
+    ? ( __ag_probe kit ) {} {
         ( gk_close kit )
         ( __ag_set -1 @ ?GpuKit { F } )
         ^ F
@@ -140,6 +141,30 @@ $ `stdlib/std/sysinfo.nu`
     // the global holds one owner of it from here (anom_gpu_close lets it go)
     ( __ag_set 1 @ ?GpuKit { T ( GpuKit_share kit ) } )
     ^ T
+}
+
+// Compile and run the kernel once over an empty forest: the probe that it
+// builds on this kit (and the kit's cache warmed for the real call).
+@ __ag_probe GpuKit kit → b {
+    : ~ GkCall c ( gk_call_new )
+    : ( Vec f ) e0 ( vec_new [f] )
+    : ( Vec i ) e1 ( vec_new [i] )
+    ( __ag_bind c ( slice_from_vec [f] e0 ) ( slice_from_vec [i] e1 ) ( slice_from_vec [f] e0 ) ( slice_from_vec [i] e1 ) ( slice_from_vec [i] e1 ) ( slice_from_vec [f] e0 ) ( slice_from_vec [i] e1 ) 0 0 0 0 )
+    ^ ( gk_run_checked kit c `anomaly_paths` ( __ag_kernel_body ) 0 256 )
+}
+
+@ __ag_bind inout GkCall c ( Slice f ) xs ( Slice i ) feat ( Slice f ) split ( Slice i ) left ( Slice i ) right ( Slice f ) cleaf ( Slice i ) roots i n_rows i n_cols i n_trees i n_out → v {
+    ( gk_call_view_f c `xs` xs )
+    ( gk_call_view_i c `feat` feat )
+    ( gk_call_view_f c `split` split )
+    ( gk_call_view_i c `left` left )
+    ( gk_call_view_i c `right` right )
+    ( gk_call_view_f c `cleaf` cleaf )
+    ( gk_call_view_i c `roots` roots )
+    ( gk_call_i64 c `n_rows` n_rows )
+    ( gk_call_i64 c `n_cols` n_cols )
+    ( gk_call_i64 c `n_trees` n_trees )
+    ( gk_call_out_f c `out` ( vec_zeroed [f] n_out ) )
 }
 
 // One more owner of the live kit (only valid when g_ag_state == 1).
@@ -196,7 +221,7 @@ $ `stdlib/std/sysinfo.nu`
 
 // Accelerated path. None when the accelerator is unavailable or any step
 // fails (caller falls back; failures after a good probe are reported).
-unsafe @ anom_scores_gpu VerModel vm ( Vec f ) scaled i n_rows i n_cols → ?( Vec f ) {
+@ anom_scores_gpu VerModel vm ( Vec f ) scaled i n_rows i n_cols → ?( Vec f ) {
     ? ( __ag_ensure ) {} { ^ @ ?( Vec f ) { F } }
     : IForest fo . vm forest
     : i n_trees ( vec_len [i] . fo roots )
@@ -212,26 +237,15 @@ unsafe @ anom_scores_gpu VerModel vm ( Vec f ) scaled i n_rows i n_cols → ?( V
         = k + k 1
     }
 
-    // One gk_run marshals the 7 inputs, 3 scalars and 1 output; the kernel
-    // itself (anomaly_paths) is compiled once and served from the kit cache.
+    // One checked launch over views of the forest and the matrix (nothing
+    // copied on the host); the kernel is checked and compiled once.
     : GpuKit kit ( __ag_kit )
-    : ( Vec f ) totals ( vec_with_cap [f] n_rows )
-    : *u outp # *u ( vec_data [f] totals )
-    : ( Vec GkArg ) call ( vec_new [GkArg] )
-    ( vec_push [GkArg] call ( gk_in_f scaled ) )
-    ( vec_push [GkArg] call ( gk_in_i . fo feature ) )
-    ( vec_push [GkArg] call ( gk_in_f . fo split ) )
-    ( vec_push [GkArg] call ( gk_in_i . fo left ) )
-    ( vec_push [GkArg] call ( gk_in_i . fo right ) )
-    ( vec_push [GkArg] call ( gk_in_f cleaf ) )
-    ( vec_push [GkArg] call ( gk_in_i . fo roots ) )
-    ( vec_push [GkArg] call ( gk_i64 n_rows ) )
-    ( vec_push [GkArg] call ( gk_i64 n_cols ) )
-    ( vec_push [GkArg] call ( gk_i64 n_trees ) )
-    ( vec_push [GkArg] call ( gk_buf_out outp * n_rows 8 ) )
-    : b ok ( gk_run kit ( __ag_kernel_src ) `anomaly_paths` ( gk_grid n_rows 256 ) 256 call )
+    : ~ GkCall c ( gk_call_new )
+    ( __ag_bind c ( slice_from_vec [f] scaled ) ( slice_from_vec [i] . fo feature ) ( slice_from_vec [f] . fo split ) ( slice_from_vec [i] . fo left ) ( slice_from_vec [i] . fo right ) ( slice_from_vec [f] cleaf ) ( slice_from_vec [i] . fo roots ) n_rows n_cols n_trees n_rows )
+    : b ok ( gk_run_checked kit c `anomaly_paths` ( __ag_kernel_body ) n_rows 256 )
+    : ( Vec f ) totals ( gk_call_take_f c `out` )
 
-    ? ok { ( vec_set_len [f] totals n_rows ) } {
+    ? ok {} {
         ( nurl_eprintln `anomaly: gpu scoring failed, falling back to the pure path` )
         ^ @ ?( Vec f ) { F }
     }

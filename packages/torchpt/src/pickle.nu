@@ -352,9 +352,9 @@ $ `stdlib/core/slice.nu`
     ^ id
 }
 
-@ __pk_intern inout PkImpl k s text → i {
+@ __pk_intern inout PkImpl k sink String text → i {
     : i idx ( vec_len [String] . k strs )
-    ( vec_push [String] . k strs ( string_from text ) )
+    ( vec_push [String] . k strs text )
     ^ idx
 }
 
@@ -530,10 +530,16 @@ $ `stdlib/core/slice.nu`
     ?? ( vec_get [String] . k strs si ) { T s → ^ ( string_data s ) F → ^ `` }
 }
 
-@ __pk_global inout PkImpl k s modname s qname → i {
+// `module.qualname` — built before the node is added, so the names may be
+// strings `k` itself holds.
+@ __pk_global_name s modname s qname → String {
     : String full ( string_from modname )
     ( string_push_char full 46 )
     ( string_push_str full qname )
+    ^ full
+}
+
+@ __pk_global inout PkImpl k sink String full → i {
     : i si ( vec_len [String] . k strs )
     ( vec_push [String] . k strs full )
     ^ ( __pk_node k PK_GLOBAL si 0 )
@@ -754,14 +760,14 @@ $ `stdlib/core/slice.nu`
         ? >= e2 n { ^ ( __pk_fail k `pickle: unterminated GLOBAL name` ) } {}
         : String mods ( __pk_text p q - e1 q )
         : String qs ( __pk_text p + e1 1 - e2 + e1 1 )
-        ( __pk_push k ( __pk_global k ( string_data mods ) ( string_data qs ) ) )
+        ( __pk_push k ( __pk_global k ( __pk_global_name ( string_data mods ) ( string_data qs ) ) ) )
         ^ + e2 1
     } {}
     ? == op 147 {  // STACK_GLOBAL
         ? < ( __pk_depth k ) 2 { ^ ( __pk_fail k `pickle: STACK_GLOBAL underflows` ) } {}
         : i qn ( __pk_pop k )
         : i mn ( __pk_pop k )
-        ( __pk_push k ( __pk_global k ( __pk_str k mn ) ( __pk_str k qn ) ) )
+        ( __pk_push k ( __pk_global k ( __pk_global_name ( __pk_str k mn ) ( __pk_str k qn ) ) ) )
         ^ q
     } {}
     ? == op 81 {  // BINPERSID
@@ -784,7 +790,7 @@ $ `stdlib/core/slice.nu`
         : s cname ? >= dot 0 ( nurl_str_slice full + dot 1 - - fl dot 1 ) full
         : i sid / ( vec_len [i] . k stor ) 3
         ( vec_push [i] . k stor ( pk_storage_class cname ) )
-        ( vec_push [i] . k stor ( __pk_intern k ( __pk_str k keyn ) ) )
+        ( vec_push [i] . k stor ( __pk_intern k ( string_from ( __pk_str k keyn ) ) ) )
         ( vec_push [i] . k stor ? == ( __pk_kind k numn ) PK_INT ( __pk_int k numn ) 0 )
         ( __pk_push k ( __pk_node k PK_PERSID sid 0 ) )
         ^ q

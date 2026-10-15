@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.4.1] — 2026-10-15
+
+### Fixed
+
+- `STACK_GLOBAL` and persistent-id handling built the global's name from views of the unpickler's own strings while the call that stored it could change them. The name is now built first (`__pk_global_name`), and `__pk_intern` takes the String it stores, which also saves a copy. A stricter borrow check rejects the old form.
+
 ## [0.4.0] — 2026-10-14
 
 Requires the NURL with `stdlib/std/mmap.nu`, `zip_open_mapped` and the

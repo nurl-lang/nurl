@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.6] — 2026-10-15
+
+### Fixed
+
+- The JWKS fetch passed a view of the provider's `jwks_uri` alongside the provider itself, which the fetch may change while recording an error. It now passes a copy. A stricter borrow check rejects the old form.
+
 ## [0.2.5] — 2026-10-14
 
 Requires NURL 0.73.0 (`slice_at`, `slice_put`, `rc_take`, `locked_take`).

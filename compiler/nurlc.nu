@@ -13332,6 +13332,11 @@ unsafe @ bck_check_lit_moves i lex i line i col s what s tab i scmask s moved s 
     // the binding the first argument is.
     : ~ s call_sx ``
     : ~ s __sx_arg0 ``
+    // (The owner an inout argument names, at any position — where a
+    // keeping callee may store the views it was handed beside it — and
+    // where this call's pending `vpass` rows begin.)
+    : ~ s __sx_iown ``
+    : i __sx_vp0 ? == g_borrowck 0 0 ( nurl_sym_len g_bck `pvpass` )
     : b __sx_need != 0 __sx_me
     // (How many arguments hold an address, and how many are an owner's
     // binding or field — what a callee could move or drop the storage of:
@@ -13900,13 +13905,27 @@ unsafe @ bck_check_lit_moves i lex i line i col s what s tab i scmask s moved s 
         ? != 0 __sx_me {
             // (Its class once: what it can point into, and whether it can
             // be kept or sent — bck_stash_vpass.)
-            : i __sx_c0 ( bck_walk_class at )
+            // (An inout argument is passed by address — classed as the
+            // value it names: the owner a keeping callee stores into.)
+            : i __sx_c0 ( bck_walk_class ? & is_inout_arg != 0 ( nurl_str_ends at `*` ) ( nurl_str_slice at 0 - ( nurl_str_len at ) 1 ) at )
             ? != __sx_c0 1 { = __sx_naddr + __sx_naddr 1 } {}
             ? & | == __sx_c0 0 == __sx_c0 3 | ( is_ident_tok bck_arg_tt ) == bck_arg_tt TT_DOT { = __sx_nown + __sx_nown 1 } {}
             ? == arg_idx 0 { = __sx_arg0 ? | == __sx_c0 0 == __sx_c0 3 ? ( is_ident_tok bck_arg_tt ) ( nurl_str_cat bck_arg_val `` ) ? == bck_arg_tt TT_DOT ( nurl_str_cat ( nurl_sym_get syms `__last_member_root__` ) `` ) `` `` } {}
-            : b __sx_cand | | == __sx_c0 4 & > arg_idx 0 != 0 ( nurl_str_len __sx_arg0 ) ( __thr_is_detach fname_bare )
+            : b __sx_cand | | | == __sx_c0 4 & > arg_idx 0 != 0 ( nurl_str_len __sx_arg0 ) ( __thr_is_detach fname_bare ) & ! is_inout_arg != 0 ( nurl_str_len callee_inout )
             ? & ! is_inout_arg | __sx_need & __sx_cand >= __sx_c0 2 { = arg_sx ? == __sx_c0 1 ( nurl_str_cat `-` `` ) ( __sx_operand_c syms bck_arg_tt bck_arg_val __sx_c0 ( __sx_froot syms bck_arg_tt at ) __sx_n0 ) } {}
             ? __sx_need { = call_sx ? == arg_idx 0 ( nurl_str_cat arg_sx `` ) ( nurl_str_cat3 call_sx `|` arg_sx ) } {}
+            // (`. w h` passed inout names no member root: its source
+            // expression's does — `w.h` is `w`'s.)
+            ? & & & == arg_idx 0 is_inout_arg == bck_arg_tt TT_DOT & == 0 ( nurl_str_len __sx_arg0 ) | == __sx_c0 0 == __sx_c0 3 {
+                : i __sx_dt ( nurl_str_find arg_sx `.` )
+                ? > __sx_dt 0 { = __sx_arg0 ( nurl_str_slice arg_sx 0 __sx_dt ) } {}
+            } {}
+            ? & & > arg_idx 0 is_inout_arg & == 0 ( nurl_str_len __sx_iown ) | == __sx_c0 0 == __sx_c0 3 {
+                ? ( is_ident_tok bck_arg_tt ) { = __sx_iown ( nurl_str_cat bck_arg_val `` ) } {
+                    : i __sx_dt2 ( nurl_str_find arg_sx `.` )
+                    ? & == bck_arg_tt TT_DOT > __sx_dt2 0 { = __sx_iown ( nurl_str_slice arg_sx 0 __sx_dt2 ) } {}
+                }
+            } {}
             // An Arc's payload is frozen once made (§6.5). What a callee
             // lends through an Arc parameter is a view of the payload —
             // arc_get's result, or a helper's over it — which the walk
@@ -15387,6 +15406,9 @@ unsafe @ bck_check_lit_moves i lex i line i col s what s tab i scmask s moved s 
     // arguments its result points into or lends (a callee without one —
     // a foreign function, a builtin — hands back a value of its own; a
     // closure's result is not modelled).
+    // A view stashed with no container (`-`), beside an owner passed inout
+    // past the first argument: that owner is where the callee keeps it.
+    ? & != 0 ( nurl_str_len __sx_iown ) != 0 g_borrowck { ? > ( nurl_sym_len g_bck `pvpass` ) __sx_vp0 { ( bck_vpass_own __sx_vp0 call_name __sx_iown ) } {} } {}
     ? != 0 __sx_me {
         : b __sx_sum ( __summarised_callee syms fname call_name )
         ( __sx_publish __sx_me ? __callee_shadowed ( __clo_call_sx syms fname call_sx ) ? & __sx_sum __sx_need ( nurl_str_cat4 call_name `(` call_sx `)` ) `-` )
@@ -24597,6 +24619,25 @@ unsafe @ bck_swap_char s str i from i to → s {
     } {}
 }
 
+// The `vpass` rows a call to `callee` stashed from byte `from` of the list
+// with no container (`-`) are kept, if at all, in `own`.
+@ bck_vpass_own i from s callee s own → v {
+    : s all ( nurl_sym_get g_bck `pvpass` )
+    : ~ s rest ( nurl_str_slice all from - ( nurl_str_len all ) from )
+    : ~ s out ( nurl_str_slice all 0 from )
+    ~ != 0 ( nurl_str_len rest ) {
+        ? == ( nurl_str_get rest 0 ) 32 { = rest ( nurl_str_slice rest 1 - ( nurl_str_len rest ) 1 ) continue } {}
+        : s c ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s l ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s cal ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s ix ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s sx ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s e ( nurl_str_cat4 ? & ( seq c `-` ) ( seq cal callee ) own c ` ` l ( nurl_str_cat4 ` ` cal ` ` ( nurl_str_cat3 ix ` ` sx ) ) )
+        = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat e `` ) ( nurl_str_cat3 out ` ` e )
+    }
+    ( nurl_sym_set g_bck `pvpass` out )
+}
+
 // `owner` was handed, beside a closure (argument `cidx`) that captured
 // `caps`, to `callee`: if the callee may keep the closure, `owner` may hold
 // it from here on.
@@ -26856,7 +26897,8 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                     // container — keeping it in a local literal is neither.)
                     : s vc ( bck_field rec 1 )
                     // (`=.`: stored into a field of the binding, gen_field_rhs.)
-                    ? & ! ( seq vc `-` ) | ( seq vcal `=.` ) & ( bck_callee_keeps vcal vaix ) ( nurl_sym_has_word g_fn_mutates vcal `0` ) {
+                    // (…or an owner it takes inout, at any position: bck_vpass_own.)
+                    ? & ! ( seq vc `-` ) | ( seq vcal `=.` ) & ( bck_callee_keeps vcal vaix ) | ( nurl_sym_has_word g_fn_mutates vcal `0` ) != 0 ( nurl_sym_len g_fn_inout vcal ) {
                         : s vs ( bck_sx_sources st ( bck_field rec 8 ) -1 )
                         ? ! ( seq vs `*` ) {
                             : i vroot ( bck_path_root ( nurl_str_to_int vc ) )

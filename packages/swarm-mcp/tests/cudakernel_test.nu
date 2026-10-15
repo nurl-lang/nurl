@@ -19,7 +19,7 @@ $ `src/wasmkernel.nu`
 
 @ has String hay s needle → b { ^ >= ( nurl_str_find ( string_data hay ) needle ) 0 }
 
-unsafe @ main → i {
+@ main → i {
     // ── validation ────────────────────────────────────────────────
     ( pb `plain CUDA source accepted:      ` ( cuda_src_ok `__device__ double f(long long x) { return 1.0; }` ) )
     : String tick ( string_from `double f ` )
@@ -205,7 +205,7 @@ unsafe @ main → i {
     // the user's LF must not survive raw. Check the fragment `line1` is
     // followed by the ESCAPE, not by a raw LF.
     : i at ( nurl_str_find ( string_data pe ) `line1` )
-    : b raw_lf ? >= at 0 == & # i . ( string_data pe ) + at 5 255 10 F
+    : b raw_lf ? >= at 0 == ( slice_byte ( string_bytes pe ) + at 5 ) 10 F
     ( pb `no raw LF inside the literal:    ` ? raw_lf F T )
 
     // ── wasm handler result frame: [ok:1][partial:8] ──────────────

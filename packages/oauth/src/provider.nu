@@ -379,7 +379,9 @@ $ `stdlib/std/arc.nu`
         ( _oidc_err p `no jwks_uri — run discovery or set one` )
         ^ @ ?OauthErr { T OaConfig }
     } {}
-    : !Json OauthErr kj ( __oidc_get_json p `jwks` ( string_data . p jwks_uri ) )
+    // (A copy: the fetch may record an error into `p` while it reads the URI.)
+    : String uri ( string_from ( string_data . p jwks_uri ) )
+    : !Json OauthErr kj ( __oidc_get_json p `jwks` ( string_data uri ) )
     ?? kj {
         T doc → {
             : ( Vec JwkKey ) ks ( jwks_from_json doc )

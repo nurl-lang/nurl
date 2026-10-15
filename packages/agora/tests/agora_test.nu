@@ -591,8 +591,10 @@ $ `src/service.nu`
     ^ 0
 }
 
-unsafe @ body_of HttpResponse resp → String {
-    ^ ( string_from_bytes ( vec_data [u] . resp body ) ( vec_len [u] . resp body ) )
+@ body_of HttpResponse resp → String {
+    : String out ( string_new )
+    ( string_push_window out ( slice_from_vec [u] . resp body ) 0 ( vec_len [u] . resp body ) )
+    ^ out
 }
 
 @ test_rest Router r → v {

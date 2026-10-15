@@ -271,6 +271,22 @@ else
     bad "checkedcheck build"; tail -4 "$WORK/ckbuild.err"
 fi
 
+# A view bound into a call holds what it points into: ending that while the
+# call still holds the view, or returning the call past it, does not compile.
+misuse() {  # $1 = label, $2 = body after the imports
+    printf '$ `stdlib/core/vec.nu`\n$ `stdlib/core/slice.nu`\n$ `src/checked.nu`\n%s\n' "$2" > "$WORK/misuse.nu"
+    if $NURL "$WORK/misuse.nu" "$WORK/misuse" >/dev/null 2>"$WORK/misuse.err"; then
+        bad "view misuse compiled: $1"
+    elif grep -q "holds a view of\|returns a view of" "$WORK/misuse.err"; then
+        ok "view misuse rejected: $1"
+    else
+        bad "view misuse: $1 (unexpected error)"; tail -3 "$WORK/misuse.err"
+    fi
+}
+misuse "source cleared" '@ main → i { : ~ ( Vec f ) v ( vec_zeroed [f] 8 ) : ~ GkCall c ( gk_call_new ) ( gk_call_view_f c `x` ( slice_from_vec [f] v ) ) ( vec_clear [f] v ) ^ ( vec_len [( Slice f )] . c fs ) }'
+misuse "call returned past its source" '@ mk → GkCall { : ~ ( Vec f ) v ( vec_zeroed [f] 8 ) : ~ GkCall c ( gk_call_new ) ( gk_call_view_f c `x` ( slice_from_vec [f] v ) ) ^ c }
+@ main → i { : GkCall c ( mk ) ^ ( vec_len [( Slice f )] . c fs ) }'
+
 # AddressSanitizer over the device layer + op family.
 for t in devcheck opscheck checkedcheck; do
     if NURL_SAN=1 $NURL "tests/$t.nu" "$WORK/${t}_san" >/dev/null 2>"$WORK/${t}_san_build.err"; then

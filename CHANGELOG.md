@@ -712,6 +712,24 @@ generic that copies its `T` cannot be instantiated with one (h235)
   ( slice_from_vec [u] . d host )`) still borrows
   (bck_join_owned_arms, should_fail_join_payload_view).
 
+- **A view stored into an `inout` argument makes that argument hold it.**
+  `@ add inout H h ( Slice f ) s → v { ( vec_push [( Slice f )] . h fs s ) }`
+  called as `( add h ( slice_from_vec [f] v ) )` left `h` free of `v`:
+  clearing `v` and then reading `h`'s slices compiled, and read freed
+  memory. The same `vec_push` straight into `. h fs` was caught. An
+  `inout` argument is passed by address, so it was classed as a view
+  rather than as the owner a keeping callee stores into. It is classed
+  now as the value it names (`h`, or `w` for `. w h`), so the caller's
+  value depends on what the stored view points into — wherever the inout
+  owner sits among the arguments (`( add_last ( slice_from_vec [f] v ) h )`
+  too: a keeping callee stored only into its first argument before). The same class
+  feeds the argument-alias check: a call handing `p` inout together with
+  a view into `p` (`( f p ( string_data . p uri ) )`) is now refused, as
+  it already was for a by-value owner. Two package call sites did this
+  (oauth, torchpt) and are fixed (inout_stores_view,
+  should_fail_inout_stores_view, should_fail_inout_field_stores_view,
+  should_fail_inout_later_stores_view).
+
 - **A pointer is not passed where a struct is, nor a struct where a
   pointer is** (h268). A `*f` handed to a `( Slice f )` parameter — or,
   in safe code, an `s` string to a `( Slice u )` one — compiled to an

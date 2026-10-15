@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.6] — 2026-10-15
+
+- Checked kernels read the caller's data in place: `gk_call_view_f` / `gk_call_view_i` bind a `Slice` as an input without copying it on the host. The borrow checker keeps what the view points into alive while the `GkCall` holds it: clearing the source first, or returning the call past it, does not compile (`tests/gpukit_test.sh` checks both).
+- Buffers bound with the same length share one bound, so a kernel that indexes several of them by one index (a tree's parallel node arrays) checks that index once.
+- On the host, a load's range check is a predicted branch with a cold out-of-range path, not a select the compiler folds into the load's address. On a dependent load chain (a tree walk) the select cost 25 %. CUDA keeps the select.
+- `tests/checkedcheck.nu`: a kernel over view bindings, with indices past the end of both views.
+
 ## [0.11.5] — 2026-10-15
 
 - **Checked kernels** (src/checked.nu). `gk_run_checked` launches a kernel written in a subset that cannot reach memory it was not given. The body touches buffers only through `LD(name, i)` / `ST(name, i, v)`, which gpukit defines from each bound buffer's own length. It may declare scalar locals, branch, loop and call a fixed list of math functions and rounding intrinsics. Pointers, dereferences, address-of, indexing, member access, the preprocessor, quotes, `asm`, `goto`, keyword casts, reserved names, other calls and unbalanced braces are refused, with the reason, before anything is compiled. So the launch is a safe call. Bindings move in and out of a `GkCall` (`gk_call_in_f`/`_out_f`/`_in_i`/`_out_i`/`_i64`/`_f64`, `gk_call_take_f`/`_i`). An output starts as the Vec it was bound with, so the device's previous contents never come back. A body is checked once per (name, bindings, body). `tests/checkedcheck.nu` covers 24 subset verdicts and a run with out-of-range indices.
