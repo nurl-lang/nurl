@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.11.7] — 2026-10-15
+
+- **Block launches in the checked subset.** `gk_run_checked_dev` runs `nblocks` blocks of `block` threads over device buffers, bound with `gk_call_dev` (read and written) or `gk_call_dev_in` (read only). They may be f64, f32 or i64, and nothing is copied. The body also sees `tid`, `bid`, `bdim` and `nblocks`, and may use two new constructs:
+  - `SYNC()`, a block barrier.
+  - `SHARED_D` / `SHARED_F` / `SHARED_L(name, N);`, block-shared arrays. They are zeroed when the block starts, reached only through checked `LD` / `ST`, and limited to 32 KiB per block.
+
+  A barrier that some threads of a block skip is undefined behaviour on a GPU, so `SYNC()` is accepted only where the checker proves the whole block arrives. Every `if` / `for` / `while` around it must decide by values all threads share: scalars, block coordinates, loads from read-only buffers at such indices, and locals only ever given such values (a fixpoint over the body). A cooperative body has no `return` / `break` / `continue` / `switch` / `do` and braces every branch. A buffer read-only to the kernel may not overlap one it writes. `gk_call_set_i64` / `_f64` change a scalar between launches of one call.
+- **Unsoundness fixed in the subset:**
+  - A body could call `__syncthreads()` unchecked; it is refused now in favour of `SYNC()`.
+  - A local declared without a value (`long long i, t;`) is given `= 0`. Reading it was undefined behaviour.
+  - Two checked kernels given one name shared the first one's compiled kernel, because the kit caches kernels by entry name: the second ran with the first's argument layout. Each checked kernel now has an entry point of its own.
+- `tests/checkedcheck.nu`: 54 cases. They cover 26 block-launch verdicts, a shared-array tree reduction, f32 buffers, the overlap refusal and a reused kernel name.
+
 ## [0.11.6] — 2026-10-15
 
 - Checked kernels read the caller's data in place: `gk_call_view_f` / `gk_call_view_i` bind a `Slice` as an input without copying it on the host. The borrow checker keeps what the view points into alive while the `GkCall` holds it: clearing the source first, or returning the call past it, does not compile (`tests/gpukit_test.sh` checks both).

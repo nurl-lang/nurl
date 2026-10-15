@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.36.3] — 2026-10-15
+
+Requires gpukit 0.11.7 (`gk_run_checked_dev`).
+
+### Changed
+
+- The autoencoder's device trainer (`aegpu.nu`) is written in gpukit's checked subset: forward, backward, gradient, Adam and the validation diff, with the forward and backward barriers as `SYNC()`s the subset proves every thread reaches. The state lives in `GkBuf`s, with no raw device pointers and no `vec_data`. The package has no `unsafe` left (2 before).
+- Training is bit-identical to `mlp_fit` (weights, biases, Adam state, epochs, both losses). It runs no slower: the device phase on the gpu package's CPU backend takes 105.9 s vs 113.5 s before (3 runs each, 6000 × 12 rows, 3 restarts).
+- `ANOMALY_AEGPU_CPU=1` trains through the device kernels on the CPU backend, and `tests/aegpu_smoke.sh` uses it when there is no NVIDIA GPU. The parity gate is now part of `tests/anomaly_test.sh`.
+
 ## [0.36.2] — 2026-10-15
 
 Requires gpukit 0.11.6 (`gk_call_view_f` / `gk_call_view_i`).

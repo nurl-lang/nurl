@@ -59,6 +59,15 @@ else
     bad "gpu_test on the CPU backend"; tail -8 "$WORK/gpu_cpu.out"
 fi
 
+# The autoencoder's device trainer (checked kernels with block barriers)
+# must train bit-identically to mlp_fit — on a GPU when there is one, else
+# on the CPU backend.
+if bash tests/aegpu_smoke.sh > "$WORK/aegpu.out" 2>&1; then
+    ok "aegpu parity ($(grep -c 'BIT-EXACT' "$WORK/aegpu.out") figures bit-exact)"
+else
+    bad "aegpu parity"; tail -12 "$WORK/aegpu.out"
+fi
+
 # The dashboard's metadata editor is generated from `editable_fields`, so it
 # is logic with no server behind it. Node is not a build dependency of this
 # package — skip rather than fail when it is absent.
