@@ -29020,7 +29020,11 @@ unsafe @ borrowck_fn_end i lex i syms s fname → v {
     // the time the block iterator reads it, lex already points at the
     // NEXT statement, so the diagnostic embeds the real line instead
     // of blaming the innocent neighbour.
-    = g_stmt_bare_value ? ( __stmt_is_bare_value tt ( nurl_get_last_type ) ) bck_line 0
+    // A bare `{ … }` block falls off with its LAST statement's value, so
+    // it is dead exactly when that statement was — and that statement's
+    // own gen_stmt left its verdict (and line) in the flag. A block that
+    // ends in `= x …` or a call is a scope, not a discarded value.
+    = g_stmt_bare_value ? == tt TT_LBRACE g_stmt_bare_value ? ( __stmt_is_bare_value tt ( nurl_get_last_type ) ) bck_line 0
     // Try propagation has a control-flow effect even when its success
     // payload is discarded. The backslash dispatcher publishes its own
     // classification after nested expressions, so a discarded closure

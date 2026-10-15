@@ -205,7 +205,6 @@ static void __nurl_ensure(int n) {
     ( string_push_char needle 40 )
     : i hit ( nurl_str_find src ( string_data needle ) )
     : i nlen ( string_len needle )
-    ( string_free needle )
     : ~ i op - 0 1
     ? >= hit 0 { = op + hit - nlen 1 } {
         : ~ i i 0
@@ -252,7 +251,6 @@ static void __nurl_ensure(int n) {
     ?? ( env_get `NURL_GPU_CACHE` ) {
         T v → {
             : b off ? ( nurl_str_eq ( string_data v ) `off` ) T F
-            ( string_free v )
             ^ off
         }
         F → { ^ F }
@@ -267,7 +265,6 @@ static void __nurl_ensure(int n) {
     ?? ( env_get `XDG_CACHE_HOME` ) {
         T v → {
             : String p ( path_join ( string_data v ) `nurl-gpu` )
-            ( string_free v )
             ^ p
         }
         F → {}
@@ -275,8 +272,6 @@ static void __nurl_ensure(int n) {
     : String home ( env_var_or `HOME` `.` )
     : String c ( path_join ( string_data home ) `.cache` )
     : String p ( path_join ( string_data c ) `nurl-gpu` )
-    ( string_free home )
-    ( string_free c )
     ^ p
 }
 
@@ -300,16 +295,11 @@ static void __nurl_ensure(int n) {
     ( string_push_char keyed 10 )
     ( string_push_str keyed src )
     : ( Vec u ) sb ( bytes_from_str ( string_data keyed ) )
-    ( string_free keyed )
     : String hex ( blake3_hex sb )
-    ( vec_free [u] sb )
     : String nm ( string_from `cpu-` )
     ( string_push_str nm ( string_data hex ) )
     ( string_push_str nm `.so` )
-    ( string_free hex )
     : String p ( path_join ( string_data dir ) ( string_data nm ) )
-    ( string_free dir )
-    ( string_free nm )
     ^ p
 }
 
@@ -346,7 +336,6 @@ raw @ cpu_compile s src s name → *u {
         ( string_push_str c ( string_data args ) )
         ( string_push_str c `);\n}\n}\n}\n}\n` )
     }
-    ( string_free casts )
 
     // Cache key: the hash of the GENERATED source (kernel + shim +
     // launcher), so an edited kernel misses and rebuilds while a
@@ -355,29 +344,22 @@ raw @ cpu_compile s src s name → *u {
     : ~ b use_cache ! ( __cpu_cache_off )
     : ~ String sopath ( string_new )
     ? use_cache {
-        ( string_free sopath )
         = sopath ( __cpu_cache_path ( string_data c ) )
         ? ( file_exists ( string_data sopath ) ) {
             : *u h0 ( dlopen ( string_data sopath ) 2 )
             ? != # i h0 0 {
                 // Cache hit — the generated source was only needed to
-                // compute the key; free it on the way out.
-                ( string_free c )
-                ( string_free sopath )
+                // compute the key.
                 ^ h0
             } {}
         } {}
     } {
-        ( string_free sopath )
         = sopath ( __tmp_path name `.so` )
     }
     : String cpath ( __tmp_path name `.cc` )
     : i wr ( __write_file ( string_data cpath ) ( string_data c ) )
-    ( string_free c )
     ? != 0 wr {
         ( nurl_eprint `[gpu/cpu] cannot write ` ) ( nurl_eprint ( string_data cpath ) ) ( nurl_eprint `\n` )
-        ( string_free cpath )
-        ( string_free sopath )
         ^ # *u 0
     } {}
 
@@ -402,18 +384,14 @@ raw @ cpu_compile s src s name → *u {
         ( string_push_str cmd ( string_data cpath ) )
         ( string_push_str cmd ` 2>/tmp/nurlcpu_cc.log` )
         = rc # i ( system ( string_data cmd ) )
-        ( string_free cmd )
         = cand + cand 1
     }
-    ( string_free cpath )
     ? != rc 0 {
         ( nurl_eprint `[gpu/cpu] host compile failed for ` ) ( nurl_eprint name )
         ( nurl_eprint ` (see /tmp/nurlcpu_cc.log; need a C++ compiler on PATH)\n` )
-        ( string_free sopath )
         ^ # *u 0
     } {}
     : *u handle ( dlopen ( string_data sopath ) 2 )  // RTLD_NOW
-    ( string_free sopath )
     ^ handle
 }
 
@@ -488,7 +466,6 @@ static inline float __fdiv_rn(float a, float b) { return a / b; }
 @ cpu_static_unit s ename s src → String {
     : String srcs ( string_from src )
     : String cleaned ( string_replace srcs `extern "C" ` `` )
-    ( string_free srcs )
     : String casts ( __parse_casts src ename )
     : String out ( string_with_cap + 1024 ( string_len cleaned ) )
     ( string_push_str out ( string_data cleaned ) )
@@ -499,8 +476,6 @@ static inline float __fdiv_rn(float a, float b) { return a / b; }
     ( string_push_char out 40 )
     ( string_push_str out ( string_data casts ) )
     ( string_push_str out `);\n}\n}\n` )
-    ( string_free casts )
-    ( string_free cleaned )
     ^ out
 }
 

@@ -9,6 +9,11 @@
 #  HF, and the kernels agreed with neither.
 #
 #  Run from the package dir:  ./tests/whisper_test.sh
+#
+#  Offline: WHISPER_TEST_CACHE=DIR takes every file from DIR instead of the
+#  network (tiny/{model.safetensors,config.json,tokenizer.json}, jfk.wav,
+#  ggml-tiny.bin, distil/{model.safetensors,config.json,tokenizer.json}); a
+#  file that is not there skips its tests rather than being downloaded.
 # ============================================================
 set -u
 cd "$(dirname "$0")/.."
@@ -22,6 +27,15 @@ WORK="$(mktemp -d -t whisper.XXXXXX)"
 trap 'rm -rf "$WORK"' EXIT
 PASS=0; FAIL=0
 ok()  { echo "  PASS $1"; PASS=$((PASS+1)); }
+# fetch KEY URL OUT [MAX_SECONDS]: the file from WHISPER_TEST_CACHE when set
+# (offline — never the network), else from URL.
+fetch() {
+    if [ -n "${WHISPER_TEST_CACHE:-}" ]; then
+        [ -f "$WHISPER_TEST_CACHE/$1" ] && cp -L "$WHISPER_TEST_CACHE/$1" "$3"
+        return
+    fi
+    curl -sL --max-time "${4:-900}" -f -o "$3" "$2"
+}
 bad() { echo "  FAIL $1"; FAIL=$((FAIL+1)); }
 
 echo "[1/3] build"
@@ -33,10 +47,10 @@ WH="$WORK/whisper"
 $NURL tests/ws_client.nu "$WORK/ws_client" >/dev/null 2>&1 || true
 
 echo "[2/3] whisper-tiny + a test clip"
-if ! curl -sL --max-time 900 -f -o "$WORK/model.safetensors" \
-    https://huggingface.co/openai/whisper-tiny/resolve/main/model.safetensors \
-   || ! curl -sL --max-time 120 -f -o "$WORK/config.json" \
-    https://huggingface.co/openai/whisper-tiny/resolve/main/config.json; then
+if ! fetch tiny/model.safetensors \
+    https://huggingface.co/openai/whisper-tiny/resolve/main/model.safetensors "$WORK/model.safetensors" \
+   || ! fetch tiny/config.json \
+    https://huggingface.co/openai/whisper-tiny/resolve/main/config.json "$WORK/config.json" 120; then
     echo "  SKIP (model download failed)"
     echo "== whisper tests: PASS=$PASS FAIL=$FAIL"
     exit 0
@@ -97,10 +111,10 @@ else
 fi
 
 # ── the whole thing: real speech, in and out ────────────────────────
-if curl -sL --max-time 120 -f -o "$WORK/tokenizer.json" \
-    https://huggingface.co/openai/whisper-tiny/resolve/main/tokenizer.json \
-   && curl -sL --max-time 180 -f -o "$WORK/jfk.wav" \
-    https://github.com/ggerganov/whisper.cpp/raw/master/samples/jfk.wav; then
+if fetch tiny/tokenizer.json \
+    https://huggingface.co/openai/whisper-tiny/resolve/main/tokenizer.json "$WORK/tokenizer.json" 120 \
+   && fetch jfk.wav \
+    https://github.com/ggerganov/whisper.cpp/raw/master/samples/jfk.wav "$WORK/jfk.wav" 180; then
 
     mkdir -p "$WORK/model"
     cp "$WORK/config.json" "$WORK/tokenizer.json" "$WORK/model/"
@@ -198,8 +212,8 @@ PYEOF3
     # positional special-token synthesis (<|startoftranscript|>, <|0.00|>…),
     # raw-byte vocabulary re-encoding, and the f16 half mode (ggml matrices
     # are f16 even in the "tiny" file).
-    if curl -sL --max-time 600 -f -o "$WORK/ggml-tiny.bin" \
-        https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin; then
+    if fetch ggml-tiny.bin \
+        https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin "$WORK/ggml-tiny.bin" 600; then
         GGML=$("$WH" transcribe "$WORK/ggml-tiny.bin" "$WORK/jfk.wav" 2>/dev/null)
         [ "$GGML" = "$GOT" ] \
             && ok "ggml-tiny.bin transcribes word-for-word as the HF checkpoint (one file, no sidecars)" \
@@ -373,12 +387,12 @@ fi
 # use-after-free that tiny survived by luck.
 if [ "${WHISPER_BIG_TESTS:-0}" = "1" ]; then
     mkdir -p "$WORK/distil"
-    if curl -sL --max-time 3600 -f -o "$WORK/distil/model.safetensors" \
-        https://huggingface.co/distil-whisper/distil-large-v3/resolve/main/model.safetensors \
-       && curl -sL --max-time 120 -f -o "$WORK/distil/config.json" \
-        https://huggingface.co/distil-whisper/distil-large-v3/resolve/main/config.json \
-       && curl -sL --max-time 120 -f -o "$WORK/distil/tokenizer.json" \
-        https://huggingface.co/distil-whisper/distil-large-v3/resolve/main/tokenizer.json; then
+    if fetch distil/model.safetensors \
+        https://huggingface.co/distil-whisper/distil-large-v3/resolve/main/model.safetensors "$WORK/distil/model.safetensors" 3600 \
+       && fetch distil/config.json \
+        https://huggingface.co/distil-whisper/distil-large-v3/resolve/main/config.json "$WORK/distil/config.json" 120 \
+       && fetch distil/tokenizer.json \
+        https://huggingface.co/distil-whisper/distil-large-v3/resolve/main/tokenizer.json "$WORK/distil/tokenizer.json" 120; then
 
         WANT_D=" And so, my fellow Americans, ask not what your country can do for you. Ask what you can do for your country."
         GOT_D=$("$WH" transcribe "$WORK/distil" "$WORK/jfk.wav" 2>/dev/null)

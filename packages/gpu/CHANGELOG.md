@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.17.6] — 2026-10-16
+
+- Nothing in the package frees a string or a buffer by hand any more (48 `string_free` / `vec_free` calls in the cache-path, environment and compile code). Each was an owned temporary that is released at the end of its scope anyway; the cache paths, the compile path with and without the cache, and `gpu_best_device` behave as before.
+
 ## [0.17.5] — 2026-10-15
 
 ### Fixed

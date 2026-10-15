@@ -34,6 +34,11 @@ The borrow checker no longer takes a binding whose block has ended for
 live storage of the caller's: a local copy of a parameter's element read
 in a loop body made a later store into another field of that parameter an
 error (`compiler/tests/loop_copy_then_param_field_store.nu`).
+A bare `{ … }` block in statement position is a dead value exactly when
+its last statement is one: a scope block that ends in an assignment or a
+call no longer draws "has no effect", and one that ends in a bare value is
+reported at that value's line instead of the block's
+(`compiler/tests/should_warn_dead_value.nu`).
 
 Taking `unsafe` out of the packages. A handle's state is changed in safe
 code now: `rc_take` / `rc_restore` (stdlib/std/rc.nu) and `locked_take` /

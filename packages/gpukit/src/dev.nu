@@ -342,29 +342,33 @@ raw @ gk_dbuf_upload_raw GpuKit kit GkBuf b * u src → b {
 // back afterwards — for a one-off load; a caller sending batch after
 // batch keeps it.
 unsafe @ gk_dbuf_upload_batch GpuKit kit ( Vec GkBuf ) dsts ( Vec ( Slice u ) ) srcs b release → b {
+    ^ ( gk_upload_batch kit dsts srcs ( vec_new [GkHBuf] ) ( vec_new [( Slice u )] ) release )
+}
+
+// The same batch with 16-bit float buffers among the destinations — a
+// model whose matrices stay half on the device and whose norms do not:
+// hsrcs[k] holds exactly hdsts[k]'s 2n bytes. One pass for both.
+unsafe @ gk_upload_batch GpuKit kit ( Vec GkBuf ) dsts ( Vec ( Slice u ) ) srcs ( Vec GkHBuf ) hdsts ( Vec ( Slice u ) ) hsrcs b release → b {
     ? ( _gk_ok kit ) {} { ^ F }
     : i n ( vec_len [GkBuf] dsts )
     ? == n ( vec_len [( Slice u )] srcs ) {} { ^ F }
+    : i nh ( vec_len [GkHBuf] hdsts )
+    ? == nh ( vec_len [( Slice u )] hsrcs ) {} { ^ F }
     : ~ ( Vec GpuCopy ) q ( vec_new [GpuCopy] )
     : ~ i k 0
     ~ < k n {
-        : ~ b fit F
-        ?? ( vec_get [GkBuf] dsts k ) {
-            T d → {
-                ?? ( vec_get [( Slice u )] srcs k ) {
-                    T sv → {
-                        : i bytes ( _gk_p2 . d n ( __gk_esz . d dtype ) )
-                        ? & ( gk_buf_ok d ) == ( slice_len [u] sv ) bytes {
-                            ( vec_push [GpuCopy] q @ GpuCopy { . d dptr # i ( slice_data [u] sv ) bytes } )
-                            = fit T
-                        } {}
-                    }
-                    F → {}
-                }
-            }
-            F → {}
-        }
-        ? fit {} { ^ F }
+        : GkBuf d ( vec_at [GkBuf] dsts k )
+        : ( Slice u ) sv ( vec_at [( Slice u )] srcs k )
+        ? & ( gk_buf_ok d ) == ( slice_len [u] sv ) ( _gk_p2 . d n ( __gk_esz . d dtype ) ) {} { ^ F }
+        ( vec_push [GpuCopy] q @ GpuCopy { . d dptr # i ( slice_data [u] sv ) ( slice_len [u] sv ) } )
+        = k + k 1
+    }
+    = k 0
+    ~ < k nh {
+        : GkHBuf d ( vec_at [GkHBuf] hdsts k )
+        : ( Slice u ) sv ( vec_at [( Slice u )] hsrcs k )
+        ? & ( gk_hbuf_ok d ) == ( slice_len [u] sv ) ( _gk_p2 . d n 2 ) {} { ^ F }
+        ( vec_push [GpuCopy] q @ GpuCopy { . d dptr # i ( slice_data [u] sv ) ( slice_len [u] sv ) } )
         = k + k 1
     }
     ? ( _gk_census kit ) { ^ T } {}
@@ -592,6 +596,10 @@ unsafe @ gk_dbuf_download_i GpuKit kit GkBuf b ( Vec i ) dst → b {
     }
 }
 
+// Launch kernel `name` of `src` over raw argument words. The caller vouches
+// that the words fit the kernel. The kit compiles a kernel the first time
+// its NAME is launched and keys its cache by that name: one name is one
+// kernel, and a second source under a name already launched runs the first.
 raw @ gk_run_dev GpuKit h s src s name i grid i block ( Vec i ) args → b {
     ? ( _gk_ok h ) {} { ^ F }
     : GkInfo inf ( arc_get [GkInfo] . h info )
@@ -608,7 +616,7 @@ raw @ gk_run_dev GpuKit h s src s name i grid i block ( Vec i ) args → b {
 // The cache slot of kernel `name` (compiled from `src` on first use), -1
 // when it does not compile. A kit's cache only grows, so the slot stays
 // this kernel's for as long as the kit lives.
-unsafe @ __gk_slot_of GpuKit h s src s name → i {
+unsafe @ _gk_slot_of GpuKit h s src s name → i {
     ? ( _gk_ok h ) {} { ^ -1 }
     : GkInfo inf ( arc_get [GkInfo] . h info )
     : ~ GkState kit ( locked_take [GkState] . h st )
@@ -620,7 +628,7 @@ unsafe @ __gk_slot_of GpuKit h s src s name → i {
 // gk_run_dev with the kernel's slot already known (gk_replay): no name
 // lookup. The caller vouches that `slot` is a slot of this kit's cache and
 // `args` fit the kernel in it.
-raw @ __gk_run_slot GpuKit h i slot i grid i block ( Vec i ) args → b {
+raw @ _gk_run_slot GpuKit h i slot i grid i block ( Vec i ) args → b {
     ? ( _gk_ok h ) {} { ^ F }
     : GkInfo inf ( arc_get [GkInfo] . h info )
     ? . inf census { ^ T } {}

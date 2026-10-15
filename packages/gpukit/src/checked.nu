@@ -538,6 +538,7 @@ static __device__ inline float __gk_ldb(const unsigned short* p, long long n, lo
 static __device__ inline float __gk_ldh32(const unsigned short* p, long long n, long long i) { return __gk_h2f(p[min((unsigned)i, (unsigned)n - 1u)]); }
 static __device__ inline float __gk_ldb32(const unsigned short* p, long long n, long long i) { return __gk_b2f(p[min((unsigned)i, (unsigned)n - 1u)]); }
 #define UNROLL _Pragma("unroll")
+#define __GK_ASSUME(c) __builtin_assume(c)
 #else
 __attribute__((noinline, cold)) static double __gk_ldd0(const double* p, long long n) { return p[n > 0 ? n - 1 : 0]; }
 __attribute__((noinline, cold)) static float __gk_ldf0(const float* p, long long n) { return p[n > 0 ? n - 1 : 0]; }
@@ -564,10 +565,20 @@ static inline float __gk_ldb(const unsigned short* p, long long n, long long i) 
 #define __gk_ldh32 __gk_ldh
 #define __gk_ldb32 __gk_ldb
 #define UNROLL
+#define __GK_ASSUME(c) do { if (!(c)) __builtin_unreachable(); } while (0)
 #endif
 static __device__ inline void __gk_std(double* p, long long n, long long i, double v) { if ((unsigned long long)i < (unsigned long long)n) p[i] = v; }
 static __device__ inline void __gk_stf(float* p, long long n, long long i, float v) { if ((unsigned long long)i < (unsigned long long)n) p[i] = v; }
 static __device__ inline void __gk_stl(long long* p, long long n, long long i, long long v) { if ((unsigned long long)i < (unsigned long long)n) p[i] = v; }
+#ifdef __CUDACC__
+static __device__ inline void __gk_std32(double* p, long long n, long long i, double v) { if ((unsigned)i < (unsigned)n) p[(unsigned)i] = v; }
+static __device__ inline void __gk_stf32(float* p, long long n, long long i, float v) { if ((unsigned)i < (unsigned)n) p[(unsigned)i] = v; }
+static __device__ inline void __gk_stl32(long long* p, long long n, long long i, long long v) { if ((unsigned)i < (unsigned)n) p[(unsigned)i] = v; }
+#else
+#define __gk_std32 __gk_std
+#define __gk_stf32 __gk_stf
+#define __gk_stl32 __gk_stl
+#endif
 #define LD(b, i) __GK_LD_##b(i)
 #define ST(b, i, v) __GK_ST_##b(i, v)
 #define LOCAL_D(nm, N) __GK_LC_##nm
@@ -591,7 +602,7 @@ static __device__ inline void __gk_stl(long long* p, long long n, long long i, l
         ( string_push_str src `#undef __GK_LD_` ) ( string_push_str src nm ) ( string_push_str src `\n#define __GK_LD_` ) ( string_push_str src nm ) ( string_push_str src `(i) ` )
         ( string_push_str src ( __gkc_dld dt T ) ) ( string_push_str src `(__gk_lc_` ) ( string_push_str src nm ) ( string_push_str src `, ` ) ( string_push_int src z ) ( string_push_str src `, (long long)(i))\n` )
         ( string_push_str src `#undef __GK_ST_` ) ( string_push_str src nm ) ( string_push_str src `\n#define __GK_ST_` ) ( string_push_str src nm ) ( string_push_str src `(i, v) ` )
-        ( string_push_str src ( __gkc_dst dt ) ) ( string_push_str src `(__gk_lc_` ) ( string_push_str src nm ) ( string_push_str src `, ` ) ( string_push_int src z ) ( string_push_str src `, (long long)(i), (v))\n` )
+        ( string_push_str src ( __gkc_dst dt T ) ) ( string_push_str src `(__gk_lc_` ) ( string_push_str src nm ) ( string_push_str src `, ` ) ( string_push_int src z ) ( string_push_str src `, (long long)(i), (v))\n` )
         = k + k 1
     }
 }
@@ -1166,7 +1177,10 @@ unsafe @ gk_run_checked GpuKit kit inout GkCall c s kname s body i nthreads i bl
     ? == dt 1 { ^ `__gk_ldf` } {} ? == dt 2 { ^ `__gk_ldl` } {} ^ `__gk_ldd`
 }
 
-@ __gkc_dst i dt → s { ? == dt 1 { ^ `__gk_stf` } {} ? == dt 2 { ^ `__gk_stl` } {} ^ `__gk_std` }
+@ __gkc_dst i dt b narrow → s {
+    ? narrow { ? == dt 1 { ^ `__gk_stf32` } {} ? == dt 2 { ^ `__gk_stl32` } {} ^ `__gk_std32` } {}
+    ? == dt 1 { ^ `__gk_stf` } {} ? == dt 2 { ^ `__gk_stl` } {} ^ `__gk_std`
+}
 
 // The device buffer binding `k` is bound to.
 @ __gkc_dbuf GkCall c i k → GkBuf { ^ ( vec_at [GkBuf] . c db ( vec_at [i] . c slots k ) ) }
@@ -1206,7 +1220,7 @@ unsafe @ gk_run_checked GpuKit kit inout GkCall c s kname s body i nthreads i bl
 
 // The source of a block launch: the checked accessors of every device
 // buffer and shared array, then the kernel around `body`.
-@ __gkc_source_dev GkCall c s ent s body ( Vec String ) shn ( Vec i ) sht ( Vec i ) shz b coop b narrow ( Vec String ) lcn ( Vec i ) lct ( Vec i ) lcz → String {
+@ __gkc_source_dev GkCall c s ent s body ( Vec String ) shn ( Vec i ) sht ( Vec i ) shz b coop b narrow ( Vec String ) lcn ( Vec i ) lct ( Vec i ) lcz i block → String {
     : ~ String src ( string_from ( __gkc_header ) )
     ? coop {
         ( string_push_str src `#ifndef __GK_COOP_H
@@ -1251,7 +1265,7 @@ static inline int __gk_shfl_xor(int v, int m) { __shared__ int __gk_x[1024]; int
             ( string_push_str src `, __gk_n` ) ( string_push_int src k ) ( string_push_str src `, (long long)(i))\n` )
             ? == kd 9 {
                 ( string_push_str src `#undef __GK_ST_` ) ( string_push_str src nm ) ( string_push_str src `\n#define __GK_ST_` ) ( string_push_str src nm ) ( string_push_str src `(i, v) ` )
-                ( string_push_str src ( __gkc_dst dt ) ) ( string_push_str src `(__gk_p` ) ( string_push_int src k )
+                ( string_push_str src ( __gkc_dst dt narrow ) ) ( string_push_str src `(__gk_p` ) ( string_push_int src k )
                 ( string_push_str src `, __gk_n` ) ( string_push_int src k ) ( string_push_str src `, (long long)(i), (v))\n` )
             } {}
         } {}
@@ -1278,7 +1292,7 @@ static inline int __gk_shfl_xor(int v, int m) { __shared__ int __gk_x[1024]; int
         ( string_push_str src `; __gk_z += bdim) __gk_sh_` ) ( string_push_str src nm ) ( string_push_str src `[__gk_z] = 0; __syncthreads()\n` )
         ( string_push_str src `#undef __GK_LD_` ) ( string_push_str src nm ) ( string_push_str src `\n#define __GK_LD_` ) ( string_push_str src nm ) ( string_push_str src `(i) ` ) ( string_push_str src ( __gkc_dld dt narrow ) )
         ( string_push_str src `(__gk_sh_` ) ( string_push_str src nm ) ( string_push_str src `, ` ) ( string_push_int src z ) ( string_push_str src `, (long long)(i))\n` )
-        ( string_push_str src `#undef __GK_ST_` ) ( string_push_str src nm ) ( string_push_str src `\n#define __GK_ST_` ) ( string_push_str src nm ) ( string_push_str src `(i, v) ` ) ( string_push_str src ( __gkc_dst dt ) )
+        ( string_push_str src `#undef __GK_ST_` ) ( string_push_str src nm ) ( string_push_str src `\n#define __GK_ST_` ) ( string_push_str src nm ) ( string_push_str src `(i, v) ` ) ( string_push_str src ( __gkc_dst dt narrow ) )
         ( string_push_str src `(__gk_sh_` ) ( string_push_str src nm ) ( string_push_str src `, ` ) ( string_push_int src z ) ( string_push_str src `, (long long)(i), (v))\n` )
         = k + k 1
     }
@@ -1287,11 +1301,15 @@ static inline int __gk_shfl_xor(int v, int m) { __shared__ int __gk_x[1024]; int
     ~ < k nb {
         : i kd ( vec_at [i] . c kinds k )
         ? | == kd 8 == kd 9 {
+            // (A buffer the kernel only reads overlaps none it writes —
+            // __gkc_dev_build refuses that — so it is `__restrict__`: the
+            // compiler may read it through the read-only cache and move its
+            // loads past the stores.)
             ? == kd 8 { ( string_push_str src `const ` ) } {}
-            ( string_push_str src ( __gkc_dty . ( __gkc_dbuf c k ) dtype ) ) ( string_push_str src `* __gk_p` ) ( string_push_int src k )
+            ( string_push_str src ( __gkc_dty . ( __gkc_dbuf c k ) dtype ) ) ( string_push_str src ? == kd 8 `* __restrict__ __gk_p` `* __gk_p` ) ( string_push_int src k )
             ( string_push_str src `, long long __gk_n` ) ( string_push_int src k )
         } ? == kd 12 {
-            ( string_push_str src `const unsigned short* __gk_p` ) ( string_push_int src k )
+            ( string_push_str src `const unsigned short* __restrict__ __gk_p` ) ( string_push_int src k )
             ( string_push_str src `, long long __gk_n` ) ( string_push_int src k )
         } {
             ( string_push_str src ? == kd 4 `long long ` `double ` ) ( string_push_str src ( string_data ( vec_at [String] . c names k ) ) )
@@ -1299,8 +1317,17 @@ static inline int __gk_shfl_xor(int v, int m) { __shared__ int __gk_x[1024]; int
         ( string_push_str src `, ` )
         = k + k 1
     }
+    // (The kernel is built for its block size: `bdim` is that number, and
+    // the compiler is told a thread's index is below it — so an index into
+    // a shared or per-thread array made of `tid` and loop counters can be
+    // seen to be in range, and its check folds away.)
     ( string_push_str src `long long __gk_end) {
-long long tid = threadIdx.x; long long bid = blockIdx.x; long long bdim = blockDim.x; long long nblocks = gridDim.x;
+long long tid = threadIdx.x; long long bid = blockIdx.x; long long bdim = ` )
+    ( string_push_int src block )
+    ( string_push_str src `; long long nblocks = gridDim.x;
+__GK_ASSUME(threadIdx.x < ` )
+    ( string_push_int src block )
+    ( string_push_str src `u);
 long long gid = bid * bdim + tid; long long nthreads = nblocks * bdim;
 (void)tid; (void)bid; (void)bdim; (void)nblocks; (void)gid; (void)nthreads; (void)__gk_end;
 {
@@ -1367,6 +1394,7 @@ long long gid = bid * bdim + tid; long long nthreads = nblocks * bdim;
     }
     : b narrow ( __gkc_narrow lens )
     ( string_push_char key ? narrow 110 119 )
+    ( string_push_char key 3 ) ( string_push_int key block )
     ( string_push_char key 2 ) ( string_push_str key body )
     : ~ i idx -1
     : ~ ( Arc GkcBuilt ) hit ( __gkc_lookup ( string_data key ) idx )
@@ -1414,7 +1442,7 @@ long long gid = bid * bdim + tid; long long nthreads = nblocks * bdim;
         ? < idx 0 { = idx ( __gkc_reserve ( string_data key ) ) } {}
         : String en ( __gkc_entry kname idx )
         : String b2 ( __gkc_with_inits body inits )
-        : String nsrc ( __gkc_source_dev c ( string_data en ) ( string_data b2 ) shn sht shz coop narrow lcn lct lcz )
+        : String nsrc ( __gkc_source_dev c ( string_data en ) ( string_data b2 ) shn sht shz coop narrow lcn lct lcz block )
         = hit ( __gkc_store idx nsrc en ( __gkc_shfl toks ) )
     } {}
     : GkcBuilt hb ( arc_get [GkcBuilt] hit )
@@ -1471,6 +1499,8 @@ raw : GkLaunch {
     ( Vec i ) args
     ( Vec GkBuf ) hold
     ( Vec GkHBuf ) holdh
+    ( Vec String ) snames  // the scalars, by name …
+    ( Vec i ) sword  // … and the argument word each one is
     i slot  // the kernel's slot in the kit's cache
     i nblocks
     i block
@@ -1479,7 +1509,7 @@ raw : GkLaunch {
 
 // A record that launches nothing (gk_replay answers F).
 unsafe @ gk_launch_none GpuKit kit → GkLaunch {
-    ^ @ GkLaunch { ( GpuKit_share kit ) ( __gkc_none ) ( vec_new [i] ) ( vec_new [GkBuf] ) ( vec_new [GkHBuf] ) -1 0 1 F }
+    ^ @ GkLaunch { ( GpuKit_share kit ) ( __gkc_none ) ( vec_new [i] ) ( vec_new [GkBuf] ) ( vec_new [GkHBuf] ) ( vec_new [String] ) ( vec_new [i] ) -1 0 1 F }
 }
 
 @ gk_launch_ok GkLaunch l → b { ^ . l ok }
@@ -1497,9 +1527,60 @@ unsafe @ gk_record_dev GpuKit kit inout GkCall c s kname s body i nblocks i bloc
     = k 0
     ~ < k ( vec_len [GkHBuf] . c hb ) { ( vec_push [GkHBuf] holdh ( vec_at [GkHBuf] . c hb k ) ) = k + k 1 }
     : GkcBuilt hb ( arc_get [GkcBuilt] hit )
-    : i slot ( __gk_slot_of kit ( string_data . hb src ) ( string_data . hb ename ) )
+    : i slot ( _gk_slot_of kit ( string_data . hb src ) ( string_data . hb ename ) )
     ? < slot 0 { = . c err ( __gkc_why `the kernel did not compile` `` ) ^ ( gk_launch_none kit ) } {}
-    ^ @ GkLaunch { ( GpuKit_share kit ) hit ( __gkc_dev_args c ) hold holdh slot nblocks block T }
+    // where each scalar sits among the argument words (__gkc_dev_args: two
+    // words per buffer, one per scalar)
+    : ~ ( Vec String ) snames ( vec_new [String] )
+    : ~ ( Vec i ) sword ( vec_new [i] )
+    : ~ i wd 0
+    = k 0
+    ~ < k ( vec_len [String] . c names ) {
+        : i kd ( vec_at [i] . c kinds k )
+        ? | | == kd 8 == kd 9 == kd 12 { = wd + wd 2 } {
+            ( vec_push [String] snames ( string_from ( string_data ( vec_at [String] . c names k ) ) ) )
+            ( vec_push [i] sword wd )
+            = wd + wd 1
+        }
+        = k + k 1
+    }
+    ^ @ GkLaunch { ( GpuKit_share kit ) hit ( __gkc_dev_args c ) hold holdh snames sword slot nblocks block T }
+}
+
+// Give scalar `name` of a recorded launch a new value — a decoder's
+// position, a loop count the host advances between replays. F when the
+// record has no such scalar. Any value is safe: a scalar is never an
+// address, and every index the kernel forms from it is still checked
+// against the buffers the record holds.
+unsafe @ gk_launch_set_i64 inout GkLaunch l s name i x → b {
+    : i k ( __gkc_launch_scalar l name )
+    ? < k 0 { ^ F } {}
+    ( vec_put [i] . l args k ( gpu_arg_i64 x ) )
+    ^ T
+}
+
+unsafe @ gk_launch_set_f64 inout GkLaunch l s name f x → b {
+    : i k ( __gkc_launch_scalar l name )
+    ? < k 0 { ^ F } {}
+    ( vec_put [i] . l args k ( f64_to_bits x ) )
+    ^ T
+}
+
+// Launch `nblocks` blocks from now on (the block size was built in). F
+// when nblocks is negative.
+unsafe @ gk_launch_set_blocks inout GkLaunch l i nblocks → b {
+    ? < nblocks 0 { ^ F } {}
+    = . l nblocks nblocks
+    ^ T
+}
+
+@ __gkc_launch_scalar GkLaunch l s name → i {
+    : ~ i k 0
+    ~ < k ( vec_len [String] . l snames ) {
+        ? ( nurl_str_eq ( string_data ( vec_at [String] . l snames k ) ) name ) { ^ ( vec_at [i] . l sword k ) } {}
+        = k + k 1
+    }
+    ^ -1
 }
 
 // Make a recorded launch again, on the kit it was recorded for. F when the
@@ -1507,7 +1588,7 @@ unsafe @ gk_record_dev GpuKit kit inout GkCall c s kname s body i nblocks i bloc
 unsafe @ gk_replay GkLaunch l → b {
     ? . l ok {} { ^ F }
     ? == . l nblocks 0 { ^ T } {}
-    ^ ( __gk_run_slot . l kit . l slot . l nblocks . l block . l args )
+    ^ ( _gk_run_slot . l kit . l slot . l nblocks . l block . l args )
 }
 
 // (Last: dev.nu's ops are written over GkCall.)

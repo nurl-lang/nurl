@@ -16,6 +16,11 @@
 // implementation — and a loader that adds a zero bias where none exists is fine,
 // while one that expects a bias tensor and finds none will happily read whatever
 // is next in the file.
+//
+// Device memory is gpukit's: every tensor and scratch buffer is a GkBuf (a
+// GkHBuf for a matrix kept in the checkpoint's own halves) — a view into one of
+// the model's 128 MB arena chunks that holds its chunk alive — and every kernel
+// is a checked one (kernels.nu). Nothing here handles a device address.
 
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
@@ -24,42 +29,89 @@ $ `stdlib/std/floatbits.nu`
 $ `stdlib/ext/json.nu`
 $ `stdlib/std/fs.nu`
 $ `deps/gpu/src/gpu.nu`
+$ `deps/gpukit/src/gpukit.nu`
+$ `deps/gpukit/src/dev.nu`
 $ `deps/safetensor/src/safetensor.nu`
 $ `src/ggml.nu`
 $ `src/kernels.nu`
 $ `stdlib/std/arc.nu`
 
+// One encoder layer's weights. k_proj has no bias — none is looked for.
+: WhEnc {
+    GkBuf ln1_w
+    GkBuf ln1_b
+    WhW wq
+    GkBuf bq
+    WhW wk
+    WhW wv
+    GkBuf bv
+    WhW wo
+    GkBuf bo
+    GkBuf ln2_w
+    GkBuf ln2_b
+    WhW fc1_w
+    GkBuf fc1_b
+    WhW fc2_w
+    GkBuf fc2_b
+}
+
+// One decoder layer: its weights, and its caches.
+: WhDec {
+    GkBuf ln1_w
+    GkBuf ln1_b
+    WhW wq
+    GkBuf bq
+    WhW wk  // no bias, like the encoder's
+    WhW wv
+    GkBuf bv
+    WhW wo
+    GkBuf bo
+    GkBuf lnx_w  // cross-attention's norm
+    GkBuf lnx_b
+    WhW xwq
+    GkBuf xbq
+    WhW xwk  // no bias
+    WhW xwv
+    GkBuf xbv
+    WhW xwo
+    GkBuf xbo
+    GkBuf ln2_w
+    GkBuf ln2_b
+    WhW fc1_w
+    GkBuf fc1_b
+    WhW fc2_w
+    GkBuf fc2_b
+    GkBuf kcache  // n_ctx_dec × d_model
+    GkBuf vcache
+    GkBuf xk  // the encoder's K for cross-attention, computed ONCE per clip
+    GkBuf xv
+}
+
 : WhisperImpl {
-    Gpu g
-    WhKernels ks
+    GpuKit kit
+    b warp  // the CUDA kernel shapes (warp shuffles, shared-memory tiles)
     b w_half  // matrix weights live on the device as raw f16 halves
     ? St st  // the safetensors file (HF checkpoint) — F in ggml mode
     ? Gg gg  // whisper.cpp's legacy ggml container — F in HF mode
     // the load's upload queue: every tensor is allocated as it is met and
-    // sent in ONE streamed batch (gpu_upload_batch) once the last one is
+    // sent in ONE streamed batch (gk_upload_batch) once the last one is
     // known; f16/bf16 tensors that must be widened wait in cvt_* for their
-    // bytes to land, then a kernel widens each and its raw copy is freed
-    ( Vec GpuBuffer ) up_dst  // each queued tensor's device view
-    ( Vec i ) up_ti  // its index in the container
-    ( Vec i ) up_nb  // how many of its bytes go up
-    // the weight arena: device memory is carved from 128 MB chunks (bufs
-    // holds the chunks), so a model is ~40 allocations rather than 1,300 —
-    // and ~40 frees when it is closed, which is what an idle unload pays
-    i arena_cur  // the chunk being carved (0 = none yet)
-    i arena_off
-    i arena_cap
+    // bytes to land, then a kernel widens each and the raw arena goes back
+    ( Vec GkBuf ) up_dst  // f32 destinations
+    ( Vec i ) up_ti  // each one's index in the container
+    ( Vec GkHBuf ) uph_dst  // 16-bit destinations (half matrices, widen sources)
+    ( Vec i ) uph_ti
+    // the weight arena: device memory is carved from 128 MB chunks, so a
+    // model is ~40 allocations rather than 1,300 — and ~40 frees when it is
+    // closed, which is what an idle unload pays. A view holds its chunk.
+    GkBuf arena  // the chunk being carved (none = no chunk yet)
+    i arena_off  // bytes
     // the raw arena: f16/bf16 sources waiting to be widened live here until
-    // the widen has run, then the chunks go back (cvt_raw lists them)
-    i raw_cur
+    // the widen has run
+    GkBuf raw
     i raw_off
-    i raw_cap
-    ( Vec i ) cvt_raw  // raw chunks on the device (freed after the widen)
-    ( Vec i ) cvt_rawsz
-    ( Vec GpuBuffer ) cvt_rawo  // their owners: clearing this frees them
-    ( Vec i ) cvt_src  // per tensor: where its halves landed
-    ( Vec i ) cvt_dst  // the f32 buffer the model will use
-    ( Vec i ) cvt_n  // element count
-    ( Vec i ) cvt_f16  // 1 = f16 source, 0 = bf16
+    ( Vec GkHBuf ) cvt_src  // per tensor: its halves …
+    ( Vec GkBuf ) cvt_dst  // … and the f32 buffer the model will use
     i n_mels
     i d_model
     i e_ff  // the encoder's FFN width (4·d_model in every released whisper)
@@ -73,94 +125,55 @@ $ `stdlib/std/arc.nu`
     i n_dec_layer
     i n_ctx_enc  // 1500 encoder positions
     i n_vocab
-    // encoder weights (device pointers)
-    i conv1_w
-    i conv1_b
-    i conv2_w
-    i conv2_b
-    i enc_pos
-    ( Vec i ) e_ln1_w
-    ( Vec i ) e_ln1_b
-    ( Vec i ) e_wq
-    ( Vec i ) e_bq
-    ( Vec i ) e_wk  // no bias — whisper's k_proj has none
-    ( Vec i ) e_wv
-    ( Vec i ) e_bv
-    ( Vec i ) e_wo
-    ( Vec i ) e_bo
-    ( Vec i ) e_ln2_w
-    ( Vec i ) e_ln2_b
-    ( Vec i ) e_fc1_w
-    ( Vec i ) e_fc1_b
-    ( Vec i ) e_fc2_w
-    ( Vec i ) e_fc2_b
-    i e_lnf_w
-    i e_lnf_b
+    // encoder weights
+    GkBuf conv1_w
+    GkBuf conv1_b
+    GkBuf conv2_w
+    GkBuf conv2_b
+    GkBuf enc_pos
+    ( Vec WhEnc ) enc
+    GkBuf e_lnf_w
+    GkBuf e_lnf_b
     // decoder weights
-    i tok_embd  // also the output projection — whisper ties them
-    i dec_pos
-    ( Vec i ) d_ln1_w
-    ( Vec i ) d_ln1_b
-    ( Vec i ) d_wq
-    ( Vec i ) d_bq
-    ( Vec i ) d_wk  // no bias, like the encoder's
-    ( Vec i ) d_wv
-    ( Vec i ) d_bv
-    ( Vec i ) d_wo
-    ( Vec i ) d_bo
-    ( Vec i ) d_lnx_w  // cross-attention's norm
-    ( Vec i ) d_lnx_b
-    ( Vec i ) x_wq
-    ( Vec i ) x_bq
-    ( Vec i ) x_wk  // no bias
-    ( Vec i ) x_wv
-    ( Vec i ) x_bv
-    ( Vec i ) x_wo
-    ( Vec i ) x_bo
-    ( Vec i ) d_ln2_w
-    ( Vec i ) d_ln2_b
-    ( Vec i ) d_fc1_w
-    ( Vec i ) d_fc1_b
-    ( Vec i ) d_fc2_w
-    ( Vec i ) d_fc2_b
-    i d_lnf_w
-    i d_lnf_b
-    // decoder state
-    ( Vec i ) kcache  // per layer: n_ctx_dec × d_model
-    ( Vec i ) vcache
-    ( Vec i ) xk  // per layer: the encoder's K, computed ONCE
-    ( Vec i ) xv
+    WhW tok_embd  // also the output projection — whisper ties them
+    GkBuf dec_pos
+    ( Vec WhDec ) dec
+    GkBuf d_lnf_w
+    GkBuf d_lnf_b
     i n_ctx_dec
-    i dx_d  // one token's activation
-    i dxn_d
-    i dq_d
-    i dk_d
-    i dv_d
-    i dao_d
-    i dtmp_d
-    i dff_d
-    i dsc_d  // decoder attention scratch: the composed path's score row, or
-    // the one-query fused path's per-chunk partials
-    i logits_d
-    i argmax_d
+    // decoder scratch: one token's activations
+    GkBuf dx_d
+    GkBuf dxn_d
+    GkBuf dq_d
+    GkBuf dao_d
+    GkBuf dtmp_d
+    GkBuf dff_d
+    GkBuf dsc_d  // attention scratch: the composed path's score row, or the
+    // one-query fused path's per-chunk partials
+    GkBuf logits_d
+    GkBuf argmax_d  // one i64: greedy decoding's answer
     b oom  // a device allocation came back empty — see __wh_scratch
-    GpuHost logits_host
-    // scratch
-    i mel_d  // 3000 × n_mels
-    i c1_d  // 3000 × d_model
-    i c2_d  // 1500 × d_model
-    i xn_d
-    i q_d
-    i k_d
-    i v_d
-    i ao_d
-    i tmp_d
-    i ff_d  // 1500 × 4·d_model
-    i sc_d  // n_head × 1500 × 1500 scores
-    i enc_out  // 1500 × d_model — what the decoder attends to
-    ( Vec i ) bufs  // every device allocation
-    ( Vec i ) bufsz
-    ( Vec GpuBuffer ) bufo  // their owners: released with the model
+    // encoder scratch
+    GkBuf mel_d  // 3000 × n_mels
+    GkBuf c1_d  // 3000 × d_model
+    GkBuf c2_d  // 1500 × d_model
+    GkBuf xn_d
+    GkBuf q_d
+    GkBuf k_d
+    GkBuf v_d
+    GkBuf ao_d
+    GkBuf tmp_d
+    GkBuf ff_d  // 1500 × 4·d_model
+    GkBuf sc_d  // n_head × 1500 × 1500 scores (the composed attention only)
+    GkBuf enc_out  // 1500 × d_model — what the decoder attends to
+    // the recorded launches (kernels.nu): checked and bound once, replayed
+    ( Vec GkLaunch ) enc_plan  // the encoder, for enc_frames mel frames
+    i enc_frames
+    ( Vec GkLaunch ) cross_plan  // the decoder's cross-attention K and V
+    ( Vec GkLaunch ) dec_plan  // one decoder step
+    ( Vec i ) dec_at  // per decoder layer: its KV-cache writes and self-attention
+    i dec_embed  // the token's and the position's embedding rows
+    ( Vec GkLaunch ) am_plan  // the argmax
 }
 
 // What a caller sizes inputs by: fixed once the model is open.
@@ -212,7 +225,7 @@ $ `stdlib/std/arc.nu`
 // per-thread).
 @ wh_bind_thread Whisper h → b {
     : WhisperImpl w ( locked_take [WhisperImpl] . h l )
-    : b ok ( gpu_bind_thread . w g )
+    : b ok ( gk_bind_thread . w kit )
     ( locked_restore [WhisperImpl] . h l w )
     ^ ok
 }
@@ -236,10 +249,6 @@ $ `stdlib/std/arc.nu`
     ^ @ !v String { F m }
 }
 
-@ __wh_geti ( Vec i ) v i k → i {
-    ?? ( vec_get [i] v k ) { T x → { ^ x } F → { ^ 0 } }
-}
-
 // Is `name` one of the model's MATRIX weights — a projection, an FFN layer,
 // the token embedding? These are where the parameters live (fc1 alone is
 // 4·d_model² per layer), they are consumed only by the matvec/matmul/getrow
@@ -257,9 +266,8 @@ $ `stdlib/std/arc.nu`
 }
 
 // Half mode: EVERY matrix weight in the checkpoint is f16. All-or-nothing by
-// design — the kernels take one flag per launch and every matvec weight is in
-// the matrix set, so a mixed-precision checkpoint (none exists in practice)
-// simply falls back to the f32 expansion, which is always correct.
+// design — a mixed-precision checkpoint (none exists in practice) simply
+// falls back to the f32 expansion, which is always correct.
 // The ggml twin of __wh_is_matrix — the SAME set, in whisper.cpp's
 // spelling. Two predicates because the two containers name tensors
 // differently; if you touch one, touch the other.
@@ -317,61 +325,55 @@ $ `stdlib/std/arc.nu`
 }
 
 // A tensor whose element count is not what the config says: every kernel
-// indexes it by the config's dimensions, so it would be read past its end.
-// The first such name is kept for the error; -1 makes the load fail.
-@ __wh_bad inout WhisperImpl w s name → i {
+// indexes it by the config's dimensions, so it would compute garbage.
+// The first such name is kept for the error.
+@ __wh_bad inout WhisperImpl w s name → v {
     ? == ( string_len . w bad ) 0 { ( string_push_str . w bad name ) } {}
-    ^ -1
 }
 
-// Upload a tensor from the safetensors file as f32. -1 when it is not there —
-// which is a fact about the model (k_proj has no bias), not always an error.
-// `keep16`: this is one of the model's MATRIX weights (a projection, an FFN
-// layer, the embedding) and the whole checkpoint's matrices probed as f16 —
-// upload the halves as they are and let the kernels widen at the point of
-// use. Everything else (norms, biases, convs, positions) still widens here:
-// their bytes are noise, and it keeps every other kernel untouched.
-@ __wh_up inout WhisperImpl w s name i n → i {
-    : b keep16 ( __wh_is_matrix name )
+// Upload a tensor from the checkpoint. Absent → a none buffer (gk_buf_ok
+// F), which is a fact about the model (k_proj has no bias), not always an
+// error. `matrix`: this is one of the model's MATRIX weights and the whole
+// checkpoint's matrices probed as f16 — the halves go up as they are and the
+// kernels widen at the point of use. Everything else (norms, biases, convs,
+// positions) arrives as f32: their bytes are noise.
+@ __wh_up_any inout WhisperImpl w s name i n b matrix → WhW {
+    : b keep16 & matrix . w w_half
     ?? . w gg {
         T gg → {
             : i gi ( gg_find gg name )
-            ? < gi 0 { ^ -1 } {}
+            ? < gi 0 { ^ ( wk_w_none ) } {}
             : i gt ( gg_ttype gg gi )
             : i ge ( gg_nelems gg gi )
-            ? != ge n { ^ ( __wh_bad w name ) } {}
-            ? == gt 0 { ^ ( __wh_queue w gi * ge 4 ) } {}
+            ? != ge n { ( __wh_bad w name ) ^ ( wk_w_none ) } {}
+            ? == gt 0 { ^ @ WhW { ( __wh_queue w gi ge ) ( gk_hbuf_none ) } } {}
             // f16: half mode keeps the halves; otherwise widen on device,
             // exactly like the safetensors path
-            ? & keep16 . w w_half { ^ ( __wh_queue w gi * ge 2 ) } {}
-            ^ ( __wh_queue_widen w gi ge T )
+            ? keep16 { ^ @ WhW { ( gk_buf_none GK_F32 ) ( __wh_queue_h w gi ge F ) } } {}
+            ^ @ WhW { ( __wh_queue_widen w gi ge F ) ( gk_hbuf_none ) }
         }
         F → {}
     }
-    : St sf ?? . w st { T s0 → s0 F → { ^ -1 } }
+    : St sf ?? . w st { T s0 → s0 F → { ^ ( wk_w_none ) } }
     : i ti ( st_find_tensor sf name )
-    ? < ti 0 { ^ -1 } {}
-    // A tensor that is ALREADY f32 — which is what a whisper checkpoint is —
-    // needs no conversion at all: upload it straight out of the mapping.
-    //
-    // The obvious path (st_dequant → a Vec of f32 bytes → upload) reads every
-    // element through a function call and pushes four bytes at a time. For
-    // distil-large-v3 that is 378 MILLION of each, and it cost 11.3 of the
-    // 11.6 seconds a transcription took — while reading the whole 1.5 GB file
-    // off disk takes 0.25 s. Don't copy what you can point at.
+    ? < ti 0 { ^ ( wk_w_none ) } {}
+    // A tensor that is ALREADY f32 needs no conversion at all: it goes up
+    // straight out of the mapping. (The obvious path — st_dequant to a Vec
+    // of f32 bytes, then upload — read every element through a function
+    // call: 11.3 of the 11.6 seconds a distil-large-v3 transcription took,
+    // while reading the whole file off disk takes 0.25 s.)
     ?? ( vec_get [StTensor] ( st_tensors sf ) ti ) {
         T t → {
-            ? != . t nelems n { ^ ( __wh_bad w name ) } {}
-            ? == . t dtype ST_F32 { ^ ( __wh_queue w ti . t nbytes ) } {}
+            ? != . t nelems n { ( __wh_bad w name ) ^ ( wk_w_none ) } {}
+            ? == . t dtype ST_F32 { ^ @ WhW { ( __wh_queue w ti n ) ( gk_hbuf_none ) } } {}
             // The checkpoint's own precision IS f16: for a matrix weight in
             // half mode there is nothing to widen — the halves are the model.
-            ? & & keep16 . w w_half == . t dtype ST_F16 { ^ ( __wh_queue w ti . t nbytes ) } {}
-            // f16 / bf16 — which is what a whisper checkpoint actually is — go up
-            // as RAW HALVES and are widened by a kernel. Half the bytes over PCIe,
-            // and the widening happens where there are thousands of threads for
-            // it instead of one host loop doing 378 million iterations.
+            ? & keep16 == . t dtype ST_F16 { ^ @ WhW { ( gk_buf_none GK_F32 ) ( __wh_queue_h w ti n F ) } } {}
+            // f16 / bf16 go up as RAW HALVES and are widened by a kernel:
+            // half the bytes over PCIe, and the widening runs where there
+            // are thousands of threads for it.
             ? | == . t dtype ST_F16 == . t dtype ST_BF16 {
-                ^ ( __wh_queue_widen w ti . t nelems == . t dtype ST_F16 )
+                ^ @ WhW { ( __wh_queue_widen w ti n == . t dtype ST_BF16 ) ( gk_hbuf_none ) }
             } {}
         }
         F → {}
@@ -380,231 +382,221 @@ $ `stdlib/std/arc.nu`
     // now, its Vec does not outlive this call
     ?? ( st_dequant sf ti ) {
         T raw → {
-            : i n ( vec_len [u] raw )
-            : i d ( __wh_carve w n )
-            ? == d 0 { ^ -1 } {}
-            ? == 0 ( gpu_upload_vec ( __wh_view . w bufo d n ) raw ) { ^ d } { ^ -1 }
+            ? != / ( vec_len [u] raw ) 4 n { ( __wh_bad w name ) ^ ( wk_w_none ) } {}
+            : GkBuf d ( __wh_scratch w n )
+            ? ( gk_buf_ok d ) {} { ^ ( wk_w_none ) }
+            ? ( gk_dbuf_upload_bytes . w kit d ( slice_from_vec [u] raw ) ) { ^ @ WhW { d ( gk_hbuf_none ) } } {}
+            ^ ( wk_w_none )
         }
-        F e → {
-            ^ -1
-        }
+        F _e → { ^ ( wk_w_none ) }
     }
 }
+
+// A norm, bias, conv or position tensor: always f32 on the device.
+@ __wh_up inout WhisperImpl w s name i n → GkBuf {
+    : WhW r ( __wh_up_any w name n F )
+    ^ . r f
+}
+
+// A matrix weight: the checkpoint's halves in half mode, else f32.
+@ __wh_upw inout WhisperImpl w s name i n → WhW { ^ ( __wh_up_any w name n T ) }
 
 // ── the upload queue ────────────────────────────────────────────────
 //
 // Loading used to be one synchronous copy per tensor: 1,200 of them for
 // large-v3, each staged by the driver through its own small pinned buffer,
 // 0.65 s of the load. Now a tensor is ALLOCATED where it is met — the
-// model's pointer is final at that moment — and its bytes are queued; the
-// queue goes up as one streamed batch (gpu_upload_batch: pinned staging,
-// four copy threads, DMA overlapping the fill) once every tensor is known.
+// model's buffer is final at that moment — and its bytes are queued; the
+// queue goes up as one streamed batch (pinned staging, copy threads, DMA
+// overlapping the fill) once every tensor is known.
 @ __wh_queue_init inout WhisperImpl w → v {
     = . w bad ( string_new )
-    = . w up_dst ( vec_new [GpuBuffer] )
+    = . w up_dst ( vec_new [GkBuf] )
     = . w up_ti ( vec_new [i] )
-    = . w up_nb ( vec_new [i] )
-    = . w arena_cur 0
+    = . w uph_dst ( vec_new [GkHBuf] )
+    = . w uph_ti ( vec_new [i] )
+    = . w arena ( gk_buf_none GK_F32 )
     = . w arena_off 0
-    = . w arena_cap 0
-    = . w raw_cur 0
+    = . w raw ( gk_buf_none GK_F32 )
     = . w raw_off 0
-    = . w raw_cap 0
-    = . w cvt_raw ( vec_new [i] )
-    = . w cvt_rawo ( vec_new [GpuBuffer] )
-    = . w cvt_rawsz ( vec_new [i] )
-    = . w cvt_src ( vec_new [i] )
-    = . w cvt_dst ( vec_new [i] )
-    = . w cvt_n ( vec_new [i] )
-    = . w cvt_f16 ( vec_new [i] )
+    = . w cvt_src ( vec_new [GkHBuf] )
+    = . w cvt_dst ( vec_new [GkBuf] )
 }
 
 @ __WH_ARENA_CHUNK → i { ^ 134217728 }
 
-// `bytes` of device memory for the model's lifetime, 256-byte aligned,
-// carved from the weight arena: a new 128 MB chunk when the current one is
-// full, an exact-size chunk for anything larger than that (the token
-// embedding). Every chunk sits in bufs, whose owners (bufo) the model drops.
-// 0 = out of device memory (and `oom` is set for the error message).
-@ __wh_carve inout WhisperImpl w i bytes → i {
+// `bytes` of device memory for the model's lifetime, 256-byte aligned, as
+// an f32 view: carved from the current 128 MB chunk, a new chunk when it is
+// full, an exact-size allocation for anything larger than a chunk (the
+// token embedding). None = out of device memory (and `oom` is set for the
+// error message).
+@ __wh_carve inout WhisperImpl w i bytes → GkBuf {
     : i need * / + bytes 255 256 256
-    ? > need 0 {
-        : GpuBuffer big ( gpu_alloc . w g need )
-        ? == . big dptr 0 { = . w oom T ^ 0 } {}
-        : i bdp . big dptr
-        ( vec_push [i] . w bufs bdp )
-        ( vec_push [i] . w bufsz . big bytes )
-        ( vec_push [GpuBuffer] . w bufo big )
-        ^ bdp
+    ? > need ( __WH_ARENA_CHUNK ) {
+        : GkBuf big ( gk_dbuf_new . w kit / need 4 GK_F32 )
+        ? ( gk_buf_ok big ) {} { = . w oom T }
+        ^ big
     } {}
-    ? > + . w arena_off need . w arena_cap {
-        : GpuBuffer ch ( gpu_alloc . w g ( __WH_ARENA_CHUNK ) )
-        ? == . ch dptr 0 { = . w oom T ^ 0 } {}
-        ( vec_push [i] . w bufs . ch dptr )
-        ( vec_push [i] . w bufsz . ch bytes )
-        = . w arena_cur . ch dptr
+    ? > + . w arena_off need * 4 ( gk_buf_len . w arena ) {
+        = . w arena ( gk_dbuf_new . w kit / ( __WH_ARENA_CHUNK ) 4 GK_F32 )
         = . w arena_off 0
-        = . w arena_cap . ch bytes
-        ( vec_push [GpuBuffer] . w bufo ch )
+        ? ( gk_buf_ok . w arena ) {} { = . w oom T ^ ( gk_buf_none GK_F32 ) }
     } {}
-    : i d + . w arena_cur . w arena_off
+    : GkBuf r ( gk_buf_view . w arena / . w arena_off 4 / need 4 )
     = . w arena_off + . w arena_off need
-    ^ d
+    ^ r
 }
 
-// The same, from the raw arena — memory that lives only until the widen
+// The same from the raw arena — memory that lives only until the widen
 // kernels have read it. Chunks are 16 MB or the request, whichever is
-// larger (in half mode the raw sources are a model's norms and biases,
-// a couple of megabytes in all; a checkpoint that widens every matrix
-// takes what it needs).
-@ __wh_carve_raw inout WhisperImpl w i bytes → i {
+// larger (in half mode the raw sources are a model's norms and biases, a
+// couple of megabytes in all; a checkpoint that widens every matrix takes
+// what it needs).
+@ __wh_carve_raw inout WhisperImpl w i bytes → GkBuf {
     : i need * / + bytes 255 256 256
-    ? > + . w raw_off need . w raw_cap {
+    ? > + . w raw_off need * 4 ( gk_buf_len . w raw ) {
         : i csz ? > need 16777216 need 16777216
-        : GpuBuffer ch ( gpu_alloc . w g csz )
-        ? == . ch dptr 0 { = . w oom T ^ 0 } {}
-        ( vec_push [i] . w cvt_raw . ch dptr )
-        ( vec_push [i] . w cvt_rawsz . ch bytes )
-        = . w raw_cur . ch dptr
+        = . w raw ( gk_dbuf_new . w kit / csz 4 GK_F32 )
         = . w raw_off 0
-        = . w raw_cap . ch bytes
-        ( vec_push [GpuBuffer] . w cvt_rawo ch )
+        ? ( gk_buf_ok . w raw ) {} { = . w oom T ^ ( gk_buf_none GK_F32 ) }
     } {}
-    : i d + . w raw_cur . w raw_off
+    : GkBuf r ( gk_buf_view . w raw / . w raw_off 4 / need 4 )
     = . w raw_off + . w raw_off need
+    ^ r
+}
+
+// Tensor `ti` of the container: `n` f32 elements, queued. None on OOM.
+@ __wh_queue inout WhisperImpl w i ti i n → GkBuf {
+    : GkBuf d ( gk_buf_view ( __wh_carve w * n 4 ) 0 n )
+    ? ( gk_buf_ok d ) {} { ^ d }
+    ( vec_push [GkBuf] . w up_dst ( mem_dup d ) )
+    ( vec_push [i] . w up_ti ti )
     ^ d
 }
 
-// The `bytes`-long view of whichever chunk in `bufs` holds `d` (an address
-// __wh_carve or __wh_carve_raw handed out — the newest chunk, as a rule).
-@ __wh_view ( Vec GpuBuffer ) bufs i d i bytes → GpuBuffer {
-    : ~ i k - ( vec_len [GpuBuffer] bufs ) 1
-    ~ >= k 0 {
-        ?? ( vec_get [GpuBuffer] bufs k ) {
-            T c → { ? & >= d . c dptr < d + . c dptr . c bytes { ^ ( gpu_buffer_sub c - d . c dptr bytes ) } {} }
-            F → {}
-        }
-        = k - k 1
-    }
-    ^ ( gpu_buffer_none )
-}
-
-// Carve `bytes` for tensor `ti` of the container and queue the upload of
-// its first `bytes` bytes. Returns the device pointer the model keeps, -1
-// on OOM.
-@ __wh_queue inout WhisperImpl w i ti i bytes → i {
-    : i d ( __wh_carve w bytes )
-    ? == d 0 { ^ -1 } {}
-    ( vec_push [GpuBuffer] . w up_dst ( __wh_view . w bufo d bytes ) )
-    ( vec_push [i] . w up_ti ti )
-    ( vec_push [i] . w up_nb bytes )
+// Tensor `ti`'s `n` halves (bf16 when `bf`), queued to stay half.
+@ __wh_queue_h inout WhisperImpl w i ti i n b bf → GkHBuf {
+    : GkHBuf d ( gk_hbuf_of ( __wh_carve w * n 2 ) 0 n bf )
+    ? ( gk_hbuf_ok d ) {} { ^ d }
+    ( vec_push [GkHBuf] . w uph_dst ( mem_dup d ) )
+    ( vec_push [i] . w uph_ti ti )
     ^ d
 }
 
-// Tensor `ti`'s `n` halves, which the model wants as f32: the halves are queued
-// into the raw arena, the f32 buffer is carved now (its pointer is what
-// the model keeps), and the widen kernel runs after the batch has landed.
-// Returns the f32 pointer, -1 on OOM.
-@ __wh_queue_widen inout WhisperImpl w i ti i n b f16 → i {
-    : i raw ( __wh_carve_raw w * n 2 )
-    ? == raw 0 { ^ -1 } {}
-    : i d ( __wh_carve w * n 4 )
-    ? == d 0 { ^ -1 } {}
-    ( vec_push [GpuBuffer] . w up_dst ( __wh_view . w cvt_rawo raw * n 2 ) )
-    ( vec_push [i] . w up_ti ti )
-    ( vec_push [i] . w up_nb * n 2 )
-    ( vec_push [i] . w cvt_src raw )
-    ( vec_push [i] . w cvt_dst d )
-    ( vec_push [i] . w cvt_n n )
-    ( vec_push [i] . w cvt_f16 ? f16 1 0 )
+// Tensor `ti`'s `n` halves, which the model wants as f32: the halves are
+// queued into the raw arena, the f32 buffer is carved now (it is what the
+// model keeps), and the widen kernel runs after the batch has landed.
+@ __wh_queue_widen inout WhisperImpl w i ti i n b bf → GkBuf {
+    : GkHBuf src ( gk_hbuf_of ( __wh_carve_raw w * n 2 ) 0 n bf )
+    ? ( gk_hbuf_ok src ) {} { ^ ( gk_buf_none GK_F32 ) }
+    : GkBuf d ( gk_buf_view ( __wh_carve w * n 4 ) 0 n )
+    ? ( gk_buf_ok d ) {} { ^ d }
+    ( vec_push [GkHBuf] . w uph_dst ( mem_dup src ) )
+    ( vec_push [i] . w uph_ti ti )
+    ( vec_push [GkHBuf] . w cvt_src src )
+    ( vec_push [GkBuf] . w cvt_dst ( mem_dup d ) )
     ^ d
 }
 
 // Send the queue, widen what was waiting on it, give the raw arena back.
 // F = the upload failed.
-unsafe @ __wh_queue_flush inout WhisperImpl w → b {
-    : i rc ( __wh_queue_send w )
-    ( vec_clear [GpuBuffer] . w up_dst )
+@ __wh_queue_flush inout WhisperImpl w → b {
+    : b sent ( __wh_queue_send w )
+    ( vec_clear [GkBuf] . w up_dst )
     ( vec_clear [i] . w up_ti )
-    ( vec_clear [i] . w up_nb )
-    ? != rc 0 { ^ F } {}
+    ( vec_clear [GkHBuf] . w uph_dst )
+    ( vec_clear [i] . w uph_ti )
+    ? sent {} { ^ F }
+    : b widened ( __wh_widen w )
+    // the raw chunks go back to the driver: nothing reads them any more
+    ( vec_clear [GkHBuf] . w cvt_src )
+    ( vec_clear [GkBuf] . w cvt_dst )
+    = . w raw ( gk_buf_none GK_F32 )
+    = . w raw_off 0
+    ( gk_pool_release . w kit )
+    ^ widened
+}
+
+// The widen kernels, queued behind the uploads on the same stream; the
+// raw sources must outlive them — one sync.
+@ __wh_widen inout WhisperImpl w → b {
+    : ~ ( Vec GkLaunch ) cv ( vec_new [GkLaunch] )
+    : ~ b ok T
     : ~ i k 0
-    ~ < k ( vec_len [i] . w cvt_src ) {
-        : ~ i src 0
-        : ~ i dst 0
-        : ~ i n 0
-        : ~ i f16 1
-        ?? ( vec_get [i] . w cvt_src k ) { T x → { = src x } F → {} }
-        ?? ( vec_get [i] . w cvt_dst k ) { T x → { = dst x } F → {} }
-        ?? ( vec_get [i] . w cvt_n k ) { T x → { = n x } F → {} }
-        ?? ( vec_get [i] . w cvt_f16 k ) { T x → { = f16 x } F → {} }
-        ( wk_cvt . w ks src dst n == f16 1 )
+    ~ & ok < k ( vec_len [GkHBuf] . w cvt_src ) {
+        : GkBuf d ( vec_at [GkBuf] . w cvt_dst k )
+        = ok ( wk_cvt . w kit ( vec_at [GkHBuf] . w cvt_src k ) d ( gk_buf_len d ) cv )
         = k + k 1
     }
-    // the widens are queued behind the uploads on the same stream; the raw
-    // chunks must outlive them — one sync, then the frees
-    : i _s ( gpu_sync . w g )
-    ( __wh_raw_release w )
-    ( vec_clear [i] . w cvt_src )
-    ( vec_clear [i] . w cvt_dst )
-    ( vec_clear [i] . w cvt_n )
-    ( vec_clear [i] . w cvt_f16 )
-    ^ T
+    = ok & ok ( wk_run cv )
+    ^ & ok ( gk_sync . w kit )
 }
 
 // The queued tensors' bytes, as checked views of the container's file, up
-// as one batch. -1 when the file is gone or a tensor does not fit in it.
-@ __wh_queue_send inout WhisperImpl w → i {
+// as one batch. F when the file is gone or a tensor does not fit in it.
+@ __wh_queue_send inout WhisperImpl w → b {
     ?? . w gg {
         T gg → {
             : ?MappedFile f ( gg_file_take gg )
-            : ~ i rc -1
-            ?? f { T m → { = rc ( __wh_send_mapped w gg ( mapped_bytes m ) ) } F → {} }
+            : ~ b sent F
+            ?? f { T m → { = sent ( __wh_send_mapped w gg ( mapped_bytes m ) ) } F → {} }
             ( gg_file_put gg f )
-            ^ rc
+            ^ sent
         }
         F → {}
     }
-    : St sf ?? . w st { T s0 → s0 F → { ^ -1 } }
+    : St sf ?? . w st { T s0 → s0 F → { ^ F } }
     : ~ ( Vec ( Slice u ) ) srcs ( vec_new [( Slice u )] )
-    : i n ( vec_len [i] . w up_ti )
+    : ~ ( Vec ( Slice u ) ) hsrcs ( vec_new [( Slice u )] )
     : ~ i k 0
-    ~ < k n {
-        : i nb ( vec_at [i] . w up_nb k )
+    ~ < k ( vec_len [i] . w up_ti ) {
+        : i nb * 4 ( gk_buf_len ( vec_at [GkBuf] . w up_dst k ) )
         ?? ( vec_get [StTensor] ( st_tensors sf ) ( vec_at [i] . w up_ti k ) ) {
             T t → {
                 : ( Slice u ) all ( st_tensor_bytes sf t )
-                ? > nb ( slice_len [u] all ) { ^ -1 } {}
+                ? > nb ( slice_len [u] all ) { ^ F } {}
                 ( vec_push [( Slice u )] srcs ( slice_prefix [u] all nb ) )
             }
-            F → { ^ -1 }
+            F → { ^ F }
         }
         = k + k 1
     }
-    ^ ( gpu_upload_views . w up_dst srcs )
+    = k 0
+    ~ < k ( vec_len [i] . w uph_ti ) {
+        : i nb * 2 ( gk_hbuf_len ( vec_at [GkHBuf] . w uph_dst k ) )
+        ?? ( vec_get [StTensor] ( st_tensors sf ) ( vec_at [i] . w uph_ti k ) ) {
+            T t → {
+                : ( Slice u ) all ( st_tensor_bytes sf t )
+                ? > nb ( slice_len [u] all ) { ^ F } {}
+                ( vec_push [( Slice u )] hsrcs ( slice_prefix [u] all nb ) )
+            }
+            F → { ^ F }
+        }
+        = k + k 1
+    }
+    ^ ( gk_upload_batch . w kit . w up_dst srcs . w uph_dst hsrcs F )
 }
 
-@ __wh_send_mapped inout WhisperImpl w Gg gg ( Slice u ) file → i {
+@ __wh_send_mapped inout WhisperImpl w Gg gg ( Slice u ) file → b {
     : ~ ( Vec ( Slice u ) ) srcs ( vec_new [( Slice u )] )
-    : i n ( vec_len [i] . w up_ti )
+    : ~ ( Vec ( Slice u ) ) hsrcs ( vec_new [( Slice u )] )
     : ~ i k 0
-    ~ < k n {
-        : i nb ( vec_at [i] . w up_nb k )
+    ~ < k ( vec_len [i] . w up_ti ) {
+        : i nb * 4 ( gk_buf_len ( vec_at [GkBuf] . w up_dst k ) )
         : i off ( gg_toff gg ( vec_at [i] . w up_ti k ) )
-        ? | < off 0 > nb - ( slice_len [u] file ) off { ^ -1 } {}
+        ? | < off 0 > nb - ( slice_len [u] file ) off { ^ F } {}
         ( vec_push [( Slice u )] srcs ( slice_window [u] file off nb ) )
         = k + k 1
     }
-    ^ ( gpu_upload_views . w up_dst srcs )
-}
-
-@ __wh_raw_release inout WhisperImpl w → v {
-    ( vec_clear [GpuBuffer] . w cvt_rawo )  // the raw chunks go back
-    ( vec_clear [i] . w cvt_raw )
-    ( vec_clear [i] . w cvt_rawsz )
-    = . w raw_cur 0
-    = . w raw_off 0
-    = . w raw_cap 0
+    = k 0
+    ~ < k ( vec_len [i] . w uph_ti ) {
+        : i nb * 2 ( gk_hbuf_len ( vec_at [GkHBuf] . w uph_dst k ) )
+        : i off ( gg_toff gg ( vec_at [i] . w uph_ti k ) )
+        ? | < off 0 > nb - ( slice_len [u] file ) off { ^ F } {}
+        ( vec_push [( Slice u )] hsrcs ( slice_window [u] file off nb ) )
+        = k + k 1
+    }
+    ^ ( gk_upload_batch . w kit . w up_dst srcs . w uph_dst hsrcs F )
 }
 
 @ __wh_lname i layer s suffix → String {
@@ -624,25 +616,96 @@ unsafe @ __wh_queue_flush inout WhisperImpl w → b {
     ^ s2
 }
 
-// Upload one layer tensor: its device address, -1 when it is absent.
-@ __wh_up_dlayer inout WhisperImpl w i layer s suffix i n → i {
-    : String nm ( __wh_dname layer suffix )
-    ^ ( __wh_up w ( string_data nm ) n )
-}
-
-// Upload one layer tensor: its device address, -1 when it is absent.
-@ __wh_up_layer inout WhisperImpl w i layer s suffix i n → i {
+@ __wh_ul inout WhisperImpl w i layer s suffix i n → GkBuf {
     : String nm ( __wh_lname layer suffix )
     ^ ( __wh_up w ( string_data nm ) n )
 }
 
-// A device scratch buffer — and the thing that has to be said out loud when
-// there isn't one. A failed cudaMalloc returns a null pointer, and a kernel
-// handed a null pointer does not crash: it writes nowhere and reads zeros, so
-// the encoder produces a constant, the decoder emits the same token five
-// hundred times, and the transcript is confident nonsense. That is what a full
-// card looked like from the outside. Every allocation is checked now, and the
-// model refuses to open instead.
+@ __wh_ulw inout WhisperImpl w i layer s suffix i n → WhW {
+    : String nm ( __wh_lname layer suffix )
+    ^ ( __wh_upw w ( string_data nm ) n )
+}
+
+@ __wh_udl inout WhisperImpl w i layer s suffix i n → GkBuf {
+    : String nm ( __wh_dname layer suffix )
+    ^ ( __wh_up w ( string_data nm ) n )
+}
+
+@ __wh_udlw inout WhisperImpl w i layer s suffix i n → WhW {
+    : String nm ( __wh_dname layer suffix )
+    ^ ( __wh_upw w ( string_data nm ) n )
+}
+
+// Encoder layer L's tensors, uploaded (queued).
+@ __wh_enc_layer inout WhisperImpl w i L → WhEnc {
+    : i dm . w d_model
+    : GkBuf ln1_w ( __wh_ul w L `self_attn_layer_norm.weight` dm )
+    : GkBuf ln1_b ( __wh_ul w L `self_attn_layer_norm.bias` dm )
+    : WhW wq ( __wh_ulw w L `self_attn.q_proj.weight` * dm dm )
+    : GkBuf bq ( __wh_ul w L `self_attn.q_proj.bias` dm )
+    : WhW wk ( __wh_ulw w L `self_attn.k_proj.weight` * dm dm )
+    : WhW wv ( __wh_ulw w L `self_attn.v_proj.weight` * dm dm )
+    : GkBuf bv ( __wh_ul w L `self_attn.v_proj.bias` dm )
+    : WhW wo ( __wh_ulw w L `self_attn.out_proj.weight` * dm dm )
+    : GkBuf bo ( __wh_ul w L `self_attn.out_proj.bias` dm )
+    : GkBuf ln2_w ( __wh_ul w L `final_layer_norm.weight` dm )
+    : GkBuf ln2_b ( __wh_ul w L `final_layer_norm.bias` dm )
+    : WhW fc1_w ( __wh_ulw w L `fc1.weight` * . w e_ff dm )
+    : GkBuf fc1_b ( __wh_ul w L `fc1.bias` . w e_ff )
+    : WhW fc2_w ( __wh_ulw w L `fc2.weight` * dm . w e_ff )
+    : GkBuf fc2_b ( __wh_ul w L `fc2.bias` dm )
+    ^ @ WhEnc { ln1_w ln1_b wq bq wk wv bv wo bo ln2_w ln2_b fc1_w fc1_b fc2_w fc2_b }
+}
+
+@ __wh_enc_ok WhEnc e → b {
+    : b a & & ( gk_buf_ok . e ln1_w ) ( gk_buf_ok . e ln1_b ) & ( wk_w_ok . e wq ) ( gk_buf_ok . e bq )
+    : b c & & ( wk_w_ok . e wk ) ( wk_w_ok . e wv ) & ( gk_buf_ok . e bv ) ( wk_w_ok . e wo )
+    : b d & & ( gk_buf_ok . e bo ) ( gk_buf_ok . e ln2_w ) & ( gk_buf_ok . e ln2_b ) ( wk_w_ok . e fc1_w )
+    ^ & & a c & d & & ( gk_buf_ok . e fc1_b ) ( wk_w_ok . e fc2_w ) ( gk_buf_ok . e fc2_b )
+}
+
+// Decoder layer L's tensors (queued), and its caches.
+@ __wh_dec_layer inout WhisperImpl w i L → WhDec {
+    : i dm . w d_model
+    : GkBuf ln1_w ( __wh_udl w L `self_attn_layer_norm.weight` dm )
+    : GkBuf ln1_b ( __wh_udl w L `self_attn_layer_norm.bias` dm )
+    : WhW wq ( __wh_udlw w L `self_attn.q_proj.weight` * dm dm )
+    : GkBuf bq ( __wh_udl w L `self_attn.q_proj.bias` dm )
+    : WhW wk ( __wh_udlw w L `self_attn.k_proj.weight` * dm dm )
+    : WhW wv ( __wh_udlw w L `self_attn.v_proj.weight` * dm dm )
+    : GkBuf bv ( __wh_udl w L `self_attn.v_proj.bias` dm )
+    : WhW wo ( __wh_udlw w L `self_attn.out_proj.weight` * dm dm )
+    : GkBuf bo ( __wh_udl w L `self_attn.out_proj.bias` dm )
+    // cross-attention: q comes from the decoder, k and v from the ENCODER
+    : GkBuf lnx_w ( __wh_udl w L `encoder_attn_layer_norm.weight` dm )
+    : GkBuf lnx_b ( __wh_udl w L `encoder_attn_layer_norm.bias` dm )
+    : WhW xwq ( __wh_udlw w L `encoder_attn.q_proj.weight` * dm dm )
+    : GkBuf xbq ( __wh_udl w L `encoder_attn.q_proj.bias` dm )
+    : WhW xwk ( __wh_udlw w L `encoder_attn.k_proj.weight` * dm dm )
+    : WhW xwv ( __wh_udlw w L `encoder_attn.v_proj.weight` * dm dm )
+    : GkBuf xbv ( __wh_udl w L `encoder_attn.v_proj.bias` dm )
+    : WhW xwo ( __wh_udlw w L `encoder_attn.out_proj.weight` * dm dm )
+    : GkBuf xbo ( __wh_udl w L `encoder_attn.out_proj.bias` dm )
+    : GkBuf ln2_w ( __wh_udl w L `final_layer_norm.weight` dm )
+    : GkBuf ln2_b ( __wh_udl w L `final_layer_norm.bias` dm )
+    : WhW fc1_w ( __wh_udlw w L `fc1.weight` * . w d_ff dm )
+    : GkBuf fc1_b ( __wh_udl w L `fc1.bias` . w d_ff )
+    : WhW fc2_w ( __wh_udlw w L `fc2.weight` * dm . w d_ff )
+    : GkBuf fc2_b ( __wh_udl w L `fc2.bias` dm )
+    ^ @ WhDec { ln1_w ln1_b wq bq wk wv bv wo bo lnx_w lnx_b xwq xbq xwk xwv xbv xwo xbo
+        ln2_w ln2_b fc1_w fc1_b fc2_w fc2_b ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) }
+}
+
+@ __wh_dec_ok WhDec e → b {
+    : b a & & ( gk_buf_ok . e ln1_w ) ( gk_buf_ok . e ln1_b ) & ( wk_w_ok . e wq ) ( gk_buf_ok . e bq )
+    : b c & & ( wk_w_ok . e wk ) ( wk_w_ok . e wv ) & ( gk_buf_ok . e bv ) ( wk_w_ok . e wo )
+    : b d & & ( gk_buf_ok . e bo ) ( gk_buf_ok . e lnx_w ) & ( gk_buf_ok . e lnx_b ) ( wk_w_ok . e xwq )
+    : b e2 & & ( gk_buf_ok . e xbq ) ( wk_w_ok . e xwk ) & ( wk_w_ok . e xwv ) ( gk_buf_ok . e xbv )
+    : b f2 & & ( wk_w_ok . e xwo ) ( gk_buf_ok . e xbo ) & ( gk_buf_ok . e ln2_w ) ( gk_buf_ok . e ln2_b )
+    : b g2 & & ( wk_w_ok . e fc1_w ) ( gk_buf_ok . e fc1_b ) & ( wk_w_ok . e fc2_w ) ( gk_buf_ok . e fc2_b )
+    ^ & & a c & & d e2 & f2 g2
+}
+
 // ── the weight file: gone once the weights are up ──────────────────
 //
 // Both containers arrive as an mmap of the file, and the uploads read the
@@ -655,8 +718,8 @@ unsafe @ __wh_queue_flush inout WhisperImpl w → b {
 // read-only flag) so the uploads become direct DMA. On a file-backed
 // MAP_PRIVATE mapping the driver pinned pages at ~400 KB/s — a 3 GB model
 // would have taken two hours to register — with the process unstoppable
-// (R state, ptrace could not attach) for the duration. The staged path
-// the gpu package takes for pageable memory is the right one here.
+// (R state, ptrace could not attach) for the duration. The staged path is
+// the right one here.
 @ __wh_source_done inout WhisperImpl w → v {
     // the staging pair is 128 MB of page-locked memory — a loader that is
     // done loading gives it back
@@ -668,17 +731,19 @@ unsafe @ __wh_queue_flush inout WhisperImpl w → b {
     = . w st @ ?St { F }
 }
 
-@ __wh_scratch inout WhisperImpl w i nfloats → i {
-    : i d ( __wh_carve w * nfloats 4 )
-    ? == d 0 { ^ -1 } {}
-    ^ d
+// A device scratch buffer of `nfloats` f32s — and the thing that has to
+// be said out loud when there isn't one: a model that cannot allocate its
+// buffers refuses to open (see __wh_oom_err) rather than produce a
+// confident transcript of nothing.
+@ __wh_scratch inout WhisperImpl w i nfloats → GkBuf {
+    ^ ( gk_buf_view ( __wh_carve w * nfloats 4 ) 0 nfloats )
 }
 
 // "there was not enough room", with the numbers that make it actionable.
 @ __wh_oom_err inout WhisperImpl w → !v String {
     : String m ( string_from `whisper: out of device memory loading the model` )
-    : i fr ( gpu_mem_free . w g )
-    : i to ( gpu_mem_total . w g )
+    : i fr ( gk_mem_free . w kit )
+    : i to ( gk_mem_total . w kit )
     ? > to 0 {
         ( string_push_str m ` (` )
         ( string_push_int m / fr 1048576 )
@@ -744,10 +809,6 @@ unsafe @ __wh_queue_flush inout WhisperImpl w → b {
     // half-built model whole. `gg` stays the null handle in HF mode.
     : ( Locked WhisperImpl ) lk ( __wh_blank )
     : ~ WhisperImpl w ( locked_take [WhisperImpl] lk )
-    = . w bufs ( vec_new [i] )
-    = . w bufsz ( vec_new [i] )
-    = . w bufo ( vec_new [GpuBuffer] )
-    = . w logits_host ( gpu_host_none )
     ( __wh_queue_init w )
     = . w oom F
     = . w n_mels n_mels
@@ -777,10 +838,19 @@ unsafe @ __wh_queue_flush inout WhisperImpl w → b {
 }
 
 // The engine before it is open: every field at its empty value — no
-// device, no kernels, empty Vecs. wh_open / wh_open_ggml fill every field
+// device, no buffers, empty Vecs. wh_open / wh_open_ggml fill every field
 // before anything reads it, and an early return drops the half-built
 // engine whole.
-@ __wh_blank → ( Locked WhisperImpl ) { ^ ( locked_new [WhisperImpl] @ WhisperImpl { ( gpu_none ) @ WhKernels { ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) F ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) F } F @ ?St { F } @ ?Gg { F } ( vec_new [GpuBuffer] ) ( vec_new [i] ) ( vec_new [i] ) 0 0 0 0 0 0 ( vec_new [i] ) ( vec_new [i] ) ( vec_new [GpuBuffer] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) 0 0 0 0 ( string_new ) 0 0 0 0 0 0 0 0 0 0 0 0 0 ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) 0 0 0 0 ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) 0 0 ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) 0 0 0 0 0 0 0 0 0 0 0 0 F ( gpu_host_none ) 0 0 0 0 0 0 0 0 0 0 0 0 ( vec_new [i] ) ( vec_new [i] ) ( vec_new [GpuBuffer] ) } ) }
+@ __wh_blank → ( Locked WhisperImpl ) {
+    ^ ( locked_new [WhisperImpl] @ WhisperImpl { ( gk_none ) F F @ ?St { F } @ ?Gg { F }
+        ( vec_new [GkBuf] ) ( vec_new [i] ) ( vec_new [GkHBuf] ) ( vec_new [i] ) ( gk_buf_none GK_F32 ) 0 ( gk_buf_none GK_F32 ) 0 ( vec_new [GkHBuf] ) ( vec_new [GkBuf] )
+        0 0 0 0 ( string_new ) 0 0 0 0 0 0 0 0
+        ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( vec_new [WhEnc] ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 )
+        ( wk_w_none ) ( gk_buf_none GK_F32 ) ( vec_new [WhDec] ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) 0
+        ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) F
+        ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 )
+        ( vec_new [GkLaunch] ) 0 ( vec_new [GkLaunch] ) ( vec_new [GkLaunch] ) ( vec_new [i] ) 0 ( vec_new [GkLaunch] ) } )
+}
 
 // Open a whisper.cpp ggml container: hyperparameters and tokenizer live in
 // the same file as the weights, so the only argument is the file.
@@ -791,10 +861,6 @@ unsafe @ __wh_queue_flush inout WhisperImpl w → b {
             : ~ WhisperImpl w ( locked_take [WhisperImpl] lk )
             : GgMeta gp ( gg_meta gg )
             = . w st @ ?St { F }
-            = . w bufs ( vec_new [i] )
-            = . w bufsz ( vec_new [i] )
-            = . w bufo ( vec_new [GpuBuffer] )
-            = . w logits_host ( gpu_host_none )
             ( __wh_queue_init w )
             = . w oom F
             = . w n_mels . gp n_mels
@@ -825,8 +891,8 @@ unsafe @ __wh_queue_flush inout WhisperImpl w → b {
 }
 
 // Everything after "the weight source is open and probed" — one body for
-// both containers: device, kernels, every upload (in HF names — the ggml
-// source translates), caches, scratch.
+// both containers: device, every upload (in HF names — the ggml source
+// translates), caches, scratch, the recorded launches.
 @ __wh_finish inout WhisperImpl w i n_dctx → !v String {
     // Every buffer below is sized from these, and every kernel indexes by
     // them: a config that cannot describe a whisper is refused here.
@@ -839,30 +905,13 @@ unsafe @ __wh_queue_flush inout WhisperImpl w → b {
     ? | != % . w d_model . w n_head 0 != % . w d_model . w d_head 0 {
         ^ ( __wh_err `whisper: d_model is not a multiple of the attention head count` )
     } {}
-    = . w g ( gpu_open ( gpu_best_device ) )
-    ? ( gpu_ok . w g ) {} {
+    = . w kit ( gk_open_best )
+    ? ( gk_ok . w kit ) {} {
         ^ ( __wh_err `whisper: no compute device (set NURL_GPU=cpu for the host backend)` )
     }
-    = . w ks ( wk_build . w g )
-    ? . . w ks ok {} {
-        ^ ( __wh_err `whisper: kernel compilation failed` )
-    }
-
-    = . w e_ln1_w ( vec_new [i] )
-    = . w e_ln1_b ( vec_new [i] )
-    = . w e_wq ( vec_new [i] )
-    = . w e_bq ( vec_new [i] )
-    = . w e_wk ( vec_new [i] )
-    = . w e_wv ( vec_new [i] )
-    = . w e_bv ( vec_new [i] )
-    = . w e_wo ( vec_new [i] )
-    = . w e_bo ( vec_new [i] )
-    = . w e_ln2_w ( vec_new [i] )
-    = . w e_ln2_b ( vec_new [i] )
-    = . w e_fc1_w ( vec_new [i] )
-    = . w e_fc1_b ( vec_new [i] )
-    = . w e_fc2_w ( vec_new [i] )
-    = . w e_fc2_b ( vec_new [i] )
+    // launches queue behind each other; a download is what waits
+    ( gk_async . w kit T )
+    = . w warp != 0 ( nurl_str_eq ( gk_backend . w kit ) `cuda` )
 
     : i dm . w d_model
     : ~ b ok T
@@ -873,27 +922,15 @@ unsafe @ __wh_queue_flush inout WhisperImpl w → b {
     = . w enc_pos ( __wh_up w `model.encoder.embed_positions.weight` * . w n_ctx_enc dm )
     = . w e_lnf_w ( __wh_up w `model.encoder.layer_norm.weight` dm )
     = . w e_lnf_b ( __wh_up w `model.encoder.layer_norm.bias` dm )
-    ? | | | | | < . w conv1_w 0 < . w conv1_b 0 < . w conv2_w 0 < . w conv2_b 0
-    < . w enc_pos 0 | < . w e_lnf_w 0 < . w e_lnf_b 0 { = ok F } {}
+    ? & & & ( gk_buf_ok . w conv1_w ) ( gk_buf_ok . w conv1_b ) & ( gk_buf_ok . w conv2_w ) ( gk_buf_ok . w conv2_b )
+    & ( gk_buf_ok . w enc_pos ) & ( gk_buf_ok . w e_lnf_w ) ( gk_buf_ok . w e_lnf_b ) {} { = ok F }
 
+    = . w enc ( vec_new [WhEnc] )
     : ~ i L 0
     ~ & ok < L . w n_enc_layer {
-        ( vec_push [i] . w e_ln1_w ( __wh_up_layer w L `self_attn_layer_norm.weight` dm ) ) ? < ( vec_at [i] . w e_ln1_w - ( vec_len [i] . w e_ln1_w ) 1 ) 0 { = ok F } {}
-        ( vec_push [i] . w e_ln1_b ( __wh_up_layer w L `self_attn_layer_norm.bias` dm ) ) ? < ( vec_at [i] . w e_ln1_b - ( vec_len [i] . w e_ln1_b ) 1 ) 0 { = ok F } {}
-        ( vec_push [i] . w e_wq ( __wh_up_layer w L `self_attn.q_proj.weight` * dm dm ) ) ? < ( vec_at [i] . w e_wq - ( vec_len [i] . w e_wq ) 1 ) 0 { = ok F } {}
-        ( vec_push [i] . w e_bq ( __wh_up_layer w L `self_attn.q_proj.bias` dm ) ) ? < ( vec_at [i] . w e_bq - ( vec_len [i] . w e_bq ) 1 ) 0 { = ok F } {}
-        // k_proj has NO bias — the vector is loaded, no bias is looked for
-        ( vec_push [i] . w e_wk ( __wh_up_layer w L `self_attn.k_proj.weight` * dm dm ) ) ? < ( vec_at [i] . w e_wk - ( vec_len [i] . w e_wk ) 1 ) 0 { = ok F } {}
-        ( vec_push [i] . w e_wv ( __wh_up_layer w L `self_attn.v_proj.weight` * dm dm ) ) ? < ( vec_at [i] . w e_wv - ( vec_len [i] . w e_wv ) 1 ) 0 { = ok F } {}
-        ( vec_push [i] . w e_bv ( __wh_up_layer w L `self_attn.v_proj.bias` dm ) ) ? < ( vec_at [i] . w e_bv - ( vec_len [i] . w e_bv ) 1 ) 0 { = ok F } {}
-        ( vec_push [i] . w e_wo ( __wh_up_layer w L `self_attn.out_proj.weight` * dm dm ) ) ? < ( vec_at [i] . w e_wo - ( vec_len [i] . w e_wo ) 1 ) 0 { = ok F } {}
-        ( vec_push [i] . w e_bo ( __wh_up_layer w L `self_attn.out_proj.bias` dm ) ) ? < ( vec_at [i] . w e_bo - ( vec_len [i] . w e_bo ) 1 ) 0 { = ok F } {}
-        ( vec_push [i] . w e_ln2_w ( __wh_up_layer w L `final_layer_norm.weight` dm ) ) ? < ( vec_at [i] . w e_ln2_w - ( vec_len [i] . w e_ln2_w ) 1 ) 0 { = ok F } {}
-        ( vec_push [i] . w e_ln2_b ( __wh_up_layer w L `final_layer_norm.bias` dm ) ) ? < ( vec_at [i] . w e_ln2_b - ( vec_len [i] . w e_ln2_b ) 1 ) 0 { = ok F } {}
-        ( vec_push [i] . w e_fc1_w ( __wh_up_layer w L `fc1.weight` * . w e_ff dm ) ) ? < ( vec_at [i] . w e_fc1_w - ( vec_len [i] . w e_fc1_w ) 1 ) 0 { = ok F } {}
-        ( vec_push [i] . w e_fc1_b ( __wh_up_layer w L `fc1.bias` . w e_ff ) ) ? < ( vec_at [i] . w e_fc1_b - ( vec_len [i] . w e_fc1_b ) 1 ) 0 { = ok F } {}
-        ( vec_push [i] . w e_fc2_w ( __wh_up_layer w L `fc2.weight` * dm . w e_ff ) ) ? < ( vec_at [i] . w e_fc2_w - ( vec_len [i] . w e_fc2_w ) 1 ) 0 { = ok F } {}
-        ( vec_push [i] . w e_fc2_b ( __wh_up_layer w L `fc2.bias` dm ) ) ? < ( vec_at [i] . w e_fc2_b - ( vec_len [i] . w e_fc2_b ) 1 ) 0 { = ok F } {}
+        : WhEnc e ( __wh_enc_layer w L )
+        = ok ( __wh_enc_ok e )
+        ( vec_push [WhEnc] . w enc e )
         = L + L 1
     }
     ? ok {} {
@@ -903,68 +940,18 @@ unsafe @ __wh_queue_flush inout WhisperImpl w → b {
     }
 
     // ── the decoder ──────────────────────────────────────────────────
-    = . w d_ln1_w ( vec_new [i] )
-    = . w d_ln1_b ( vec_new [i] )
-    = . w d_wq ( vec_new [i] )
-    = . w d_bq ( vec_new [i] )
-    = . w d_wk ( vec_new [i] )
-    = . w d_wv ( vec_new [i] )
-    = . w d_bv ( vec_new [i] )
-    = . w d_wo ( vec_new [i] )
-    = . w d_bo ( vec_new [i] )
-    = . w d_lnx_w ( vec_new [i] )
-    = . w d_lnx_b ( vec_new [i] )
-    = . w x_wq ( vec_new [i] )
-    = . w x_bq ( vec_new [i] )
-    = . w x_wk ( vec_new [i] )
-    = . w x_wv ( vec_new [i] )
-    = . w x_bv ( vec_new [i] )
-    = . w x_wo ( vec_new [i] )
-    = . w x_bo ( vec_new [i] )
-    = . w d_ln2_w ( vec_new [i] )
-    = . w d_ln2_b ( vec_new [i] )
-    = . w d_fc1_w ( vec_new [i] )
-    = . w d_fc1_b ( vec_new [i] )
-    = . w d_fc2_w ( vec_new [i] )
-    = . w d_fc2_b ( vec_new [i] )
-    = . w kcache ( vec_new [i] )
-    = . w vcache ( vec_new [i] )
-    = . w xk ( vec_new [i] )
-    = . w xv ( vec_new [i] )
-
-    = . w tok_embd ( __wh_up w `model.decoder.embed_tokens.weight` * . w n_vocab dm )
+    = . w tok_embd ( __wh_upw w `model.decoder.embed_tokens.weight` * . w n_vocab dm )
     = . w dec_pos ( __wh_up w `model.decoder.embed_positions.weight` * n_dctx dm )
     = . w d_lnf_w ( __wh_up w `model.decoder.layer_norm.weight` dm )
     = . w d_lnf_b ( __wh_up w `model.decoder.layer_norm.bias` dm )
-    ? | | | < . w tok_embd 0 < . w dec_pos 0 < . w d_lnf_w 0 < . w d_lnf_b 0 { = ok F } {}
+    ? & & ( wk_w_ok . w tok_embd ) ( gk_buf_ok . w dec_pos ) & ( gk_buf_ok . w d_lnf_w ) ( gk_buf_ok . w d_lnf_b ) {} { = ok F }
 
+    = . w dec ( vec_new [WhDec] )
     = L 0
     ~ & ok < L . w n_dec_layer {
-        ( vec_push [i] . w d_ln1_w ( __wh_up_dlayer w L `self_attn_layer_norm.weight` dm ) ) ? < ( vec_at [i] . w d_ln1_w - ( vec_len [i] . w d_ln1_w ) 1 ) 0 { = ok F } {}
-        ( vec_push [i] . w d_ln1_b ( __wh_up_dlayer w L `self_attn_layer_norm.bias` dm ) ) ? < ( vec_at [i] . w d_ln1_b - ( vec_len [i] . w d_ln1_b ) 1 ) 0 { = ok F } {}
-        ( vec_push [i] . w d_wq ( __wh_up_dlayer w L `self_attn.q_proj.weight` * dm dm ) ) ? < ( vec_at [i] . w d_wq - ( vec_len [i] . w d_wq ) 1 ) 0 { = ok F } {}
-        ( vec_push [i] . w d_bq ( __wh_up_dlayer w L `self_attn.q_proj.bias` dm ) ) ? < ( vec_at [i] . w d_bq - ( vec_len [i] . w d_bq ) 1 ) 0 { = ok F } {}
-        ( vec_push [i] . w d_wk ( __wh_up_dlayer w L `self_attn.k_proj.weight` * dm dm ) ) ? < ( vec_at [i] . w d_wk - ( vec_len [i] . w d_wk ) 1 ) 0 { = ok F } {}
-        ( vec_push [i] . w d_wv ( __wh_up_dlayer w L `self_attn.v_proj.weight` * dm dm ) ) ? < ( vec_at [i] . w d_wv - ( vec_len [i] . w d_wv ) 1 ) 0 { = ok F } {}
-        ( vec_push [i] . w d_bv ( __wh_up_dlayer w L `self_attn.v_proj.bias` dm ) ) ? < ( vec_at [i] . w d_bv - ( vec_len [i] . w d_bv ) 1 ) 0 { = ok F } {}
-        ( vec_push [i] . w d_wo ( __wh_up_dlayer w L `self_attn.out_proj.weight` * dm dm ) ) ? < ( vec_at [i] . w d_wo - ( vec_len [i] . w d_wo ) 1 ) 0 { = ok F } {}
-        ( vec_push [i] . w d_bo ( __wh_up_dlayer w L `self_attn.out_proj.bias` dm ) ) ? < ( vec_at [i] . w d_bo - ( vec_len [i] . w d_bo ) 1 ) 0 { = ok F } {}
-        // cross-attention: q comes from the decoder, k and v from the ENCODER
-        ( vec_push [i] . w d_lnx_w ( __wh_up_dlayer w L `encoder_attn_layer_norm.weight` dm ) ) ? < ( vec_at [i] . w d_lnx_w - ( vec_len [i] . w d_lnx_w ) 1 ) 0 { = ok F } {}
-        ( vec_push [i] . w d_lnx_b ( __wh_up_dlayer w L `encoder_attn_layer_norm.bias` dm ) ) ? < ( vec_at [i] . w d_lnx_b - ( vec_len [i] . w d_lnx_b ) 1 ) 0 { = ok F } {}
-        ( vec_push [i] . w x_wq ( __wh_up_dlayer w L `encoder_attn.q_proj.weight` * dm dm ) ) ? < ( vec_at [i] . w x_wq - ( vec_len [i] . w x_wq ) 1 ) 0 { = ok F } {}
-        ( vec_push [i] . w x_bq ( __wh_up_dlayer w L `encoder_attn.q_proj.bias` dm ) ) ? < ( vec_at [i] . w x_bq - ( vec_len [i] . w x_bq ) 1 ) 0 { = ok F } {}
-        ( vec_push [i] . w x_wk ( __wh_up_dlayer w L `encoder_attn.k_proj.weight` * dm dm ) ) ? < ( vec_at [i] . w x_wk - ( vec_len [i] . w x_wk ) 1 ) 0 { = ok F } {}
-        ( vec_push [i] . w x_wv ( __wh_up_dlayer w L `encoder_attn.v_proj.weight` * dm dm ) ) ? < ( vec_at [i] . w x_wv - ( vec_len [i] . w x_wv ) 1 ) 0 { = ok F } {}
-        ( vec_push [i] . w x_bv ( __wh_up_dlayer w L `encoder_attn.v_proj.bias` dm ) ) ? < ( vec_at [i] . w x_bv - ( vec_len [i] . w x_bv ) 1 ) 0 { = ok F } {}
-        ( vec_push [i] . w x_wo ( __wh_up_dlayer w L `encoder_attn.out_proj.weight` * dm dm ) ) ? < ( vec_at [i] . w x_wo - ( vec_len [i] . w x_wo ) 1 ) 0 { = ok F } {}
-        ( vec_push [i] . w x_bo ( __wh_up_dlayer w L `encoder_attn.out_proj.bias` dm ) ) ? < ( vec_at [i] . w x_bo - ( vec_len [i] . w x_bo ) 1 ) 0 { = ok F } {}
-        ( vec_push [i] . w d_ln2_w ( __wh_up_dlayer w L `final_layer_norm.weight` dm ) ) ? < ( vec_at [i] . w d_ln2_w - ( vec_len [i] . w d_ln2_w ) 1 ) 0 { = ok F } {}
-        ( vec_push [i] . w d_ln2_b ( __wh_up_dlayer w L `final_layer_norm.bias` dm ) ) ? < ( vec_at [i] . w d_ln2_b - ( vec_len [i] . w d_ln2_b ) 1 ) 0 { = ok F } {}
-        ( vec_push [i] . w d_fc1_w ( __wh_up_dlayer w L `fc1.weight` * . w d_ff dm ) ) ? < ( vec_at [i] . w d_fc1_w - ( vec_len [i] . w d_fc1_w ) 1 ) 0 { = ok F } {}
-        ( vec_push [i] . w d_fc1_b ( __wh_up_dlayer w L `fc1.bias` . w d_ff ) ) ? < ( vec_at [i] . w d_fc1_b - ( vec_len [i] . w d_fc1_b ) 1 ) 0 { = ok F } {}
-        ( vec_push [i] . w d_fc2_w ( __wh_up_dlayer w L `fc2.weight` * dm . w d_ff ) ) ? < ( vec_at [i] . w d_fc2_w - ( vec_len [i] . w d_fc2_w ) 1 ) 0 { = ok F } {}
-        ( vec_push [i] . w d_fc2_b ( __wh_up_dlayer w L `fc2.bias` dm ) ) ? < ( vec_at [i] . w d_fc2_b - ( vec_len [i] . w d_fc2_b ) 1 ) 0 { = ok F } {}
+        : WhDec e ( __wh_dec_layer w L )
+        = ok ( __wh_dec_ok e )
+        ( vec_push [WhDec] . w dec e )
         = L + L 1
     }
     ? ok {} {
@@ -973,6 +960,7 @@ unsafe @ __wh_queue_flush inout WhisperImpl w → b {
         ^ ( __wh_err `whisper: the checkpoint is missing decoder tensors` )
     }
     ? ( __wh_queue_flush w ) {} {
+        ? . w oom { ^ ( __wh_oom_err w ) } {}
         ^ ( __wh_err `whisper: uploading the weights to the device failed` )
     }
     ( __wh_source_done w )
@@ -988,13 +976,13 @@ unsafe @ __wh_queue_flush inout WhisperImpl w → b {
     = . w ao_d ( __wh_scratch w * . w n_ctx_enc dm )
     = . w tmp_d ( __wh_scratch w * . w n_ctx_enc dm )
     = . w ff_d ( __wh_scratch w * . w n_ctx_enc . w e_ff )
-    // The encoder's score matrix: only the COMPOSED attention writes one. Where
-    // the fused kernel runs, nothing does — and at nh = 20 over 1500 keys that
-    // buffer is 180 MB of device memory allocated to be read by nobody. It is
-    // also, on a card that is already half full, exactly the difference between
-    // the model fitting and not.
-    : b fused & . . w ks warp == . w d_head_dim 64
-    = . w sc_d ? fused { 0 } { ( __wh_scratch w * * . w n_head . w n_ctx_enc . w n_ctx_enc ) }
+    // The encoder's score matrix: only the COMPOSED attention writes one.
+    // Where the fused kernel runs, nothing does — and at nh = 20 over 1500
+    // keys that buffer is 180 MB allocated to be read by nobody: on a card
+    // that is already half full, exactly the difference between the model
+    // fitting and not.
+    : b fused & . w warp == . w head_dim 64
+    = . w sc_d ? fused { ( gk_buf_none GK_F32 ) } { ( __wh_scratch w * * . w n_head . w n_ctx_enc . w n_ctx_enc ) }
     = . w enc_out ( __wh_scratch w * . w n_ctx_enc dm )
 
     // how many tokens the decoder can hold — its positional embedding's own
@@ -1002,36 +990,154 @@ unsafe @ __wh_queue_flush inout WhisperImpl w → b {
     = . w n_ctx_dec n_dctx
     = L 0
     ~ < L . w n_dec_layer {
-        ( vec_push [i] . w kcache ( __wh_scratch w * . w n_ctx_dec dm ) )
-        ( vec_push [i] . w vcache ( __wh_scratch w * . w n_ctx_dec dm ) )
-        // the encoder's K and V for cross-attention: 1500 × . w d_model per layer,
-        // computed ONCE per clip rather than once per generated token
-        ( vec_push [i] . w xk ( __wh_scratch w * . w n_ctx_enc dm ) )
-        ( vec_push [i] . w xv ( __wh_scratch w * . w n_ctx_enc dm ) )
+        : GkBuf kc ( __wh_scratch w * . w n_ctx_dec dm )
+        : GkBuf vc ( __wh_scratch w * . w n_ctx_dec dm )
+        // the encoder's K and V for cross-attention: computed ONCE per clip
+        // rather than once per generated token
+        : GkBuf xk ( __wh_scratch w * . w n_ctx_enc dm )
+        : GkBuf xv ( __wh_scratch w * . w n_ctx_enc dm )
+        : b _u ( vec_update [WhDec] . w dec L \ inout WhDec d → v { = . d kcache kc = . d vcache vc = . d xk xk = . d xv xv } )
         = L + L 1
     }
     = . w dx_d ( __wh_scratch w dm )
     = . w dxn_d ( __wh_scratch w dm )
     = . w dq_d ( __wh_scratch w dm )
-    = . w dk_d ( __wh_scratch w dm )
-    = . w dv_d ( __wh_scratch w dm )
     = . w dao_d ( __wh_scratch w dm )
     = . w dtmp_d ( __wh_scratch w dm )
     = . w dff_d ( __wh_scratch w . w d_ff )
-    // The decoder's attention scratch, big enough for BOTH shapes it can take:
-    // the composed path's score row (n_head x the longest key run) and the
-    // fused one-query path's per-chunk partials (WH_HD + 2 floats per chunk,
-    // at most 32 chunks per head — see __wk_attn_d).
-    : i dsc_composed * . w n_head ? > . w n_ctx_enc . w n_ctx_dec . w n_ctx_enc . w n_ctx_dec
-    : i dsc_split * . w n_head * 32 66
+    // The decoder's attention scratch, big enough for BOTH shapes it can
+    // take: the composed path's score row (n_head x the longest key run) and
+    // the fused one-query path's per-chunk partials (66 floats per chunk, at
+    // most 32 chunks per head — kernels.nu).
+    : i dsc_composed * . w d_head ? > . w n_ctx_enc . w n_ctx_dec . w n_ctx_enc . w n_ctx_dec
+    : i dsc_split * . w d_head * 32 66
     = . w dsc_d ( __wh_scratch w ? > dsc_composed dsc_split { dsc_composed } { dsc_split } )
     = . w logits_d ( __wh_scratch w . w n_vocab )
-    // one int: greedy decoding's answer, so a step does not have to fetch
-    // 51865 floats to find out which of them is largest
-    = . w argmax_d ( __wh_scratch w 1 )
-    = . w logits_host ( gpu_host_alloc * . w n_vocab 4 )
+    = . w argmax_d ( gk_buf_view_as ( __wh_carve w 8 ) 0 1 GK_I64 )
     ? . w oom { ^ ( __wh_oom_err w ) } {}
+
+    ? ( __wh_plans w ) {} { ^ ( __wh_err `whisper: kernel compilation failed` ) }
     ^ @ !v String { T 0 }
+}
+
+// ── the recorded launches ───────────────────────────────────────────
+
+// The encoder over a spectrogram of `nframe` frames, recorded.
+@ __wh_enc_plan inout WhisperImpl w i nframe → b {
+    : ~ ( Vec GkLaunch ) p ( vec_new [GkLaunch] )
+    : GpuKit kit . w kit
+    : b wp . w warp
+    : i dm . w d_model
+    : i nc . w n_ctx_enc
+    : f eps 0.00001
+    : f qscale / 1.0 ( sqrt # f . w head_dim )
+    : GkBuf none ( gk_buf_none GK_F32 )
+    // conv1 (stride 1) → GELU → conv2 (stride 2) → GELU, + the stored
+    // positional embedding. That is a MATRIX (1500 × d_model), one vector
+    // per position — not a row broadcast over the batch the way a bias is.
+    // Broadcasting it would give every one of the 1500 positions the same
+    // positional vector, which is the same as having no positions.
+    : ~ b ok ( wk_conv1d_gelu kit wp . w mel_d . w conv1_w . w conv1_b none . w c1_d nframe . w n_mels dm 1 1 p )
+    = ok & ok ( wk_conv1d_gelu kit wp . w c1_d . w conv2_w . w conv2_b . w enc_pos . w c2_d nframe dm dm 2 1 p )
+    : ~ i L 0
+    ~ & ok < L . w n_enc_layer {
+        : WhEnc e ( vec_at [WhEnc] . w enc L )
+        // self-attention, NON-CAUSAL: every one of the 1500 positions sees
+        // all 1500 — a speech encoder hears the whole clip at once. Its norm
+        // first adds the previous layer's feed-forward output (none before
+        // the first layer).
+        = ok & ok ( wk_layernorm kit wp . w c2_d ? == L 0 { none } { . w tmp_d } . e ln1_w . e ln1_b . w xn_d dm eps nc p )
+        = ok & ok ( wk_matvec kit wp . e wq . w xn_d . e bq . w q_d dm dm nc p )
+        // k_proj: no bias, so none is passed
+        = ok & ok ( wk_matvec kit wp . e wk . w xn_d none . w k_d dm dm nc p )
+        = ok & ok ( wk_matvec kit wp . e wv . w xn_d . e bv . w v_d dm dm nc p )
+        = ok & ok ( wk_attn kit wp . w q_d . w k_d . w v_d . w sc_d . w ao_d . w n_head . w head_dim nc nc qscale 0 p )
+        = ok & ok ( wk_matvec kit wp . e wo . w ao_d . e bo . w tmp_d dm dm nc p )
+        // feed-forward: (+ attention's output) norm → fc1 → GELU → fc2
+        = ok & ok ( wk_layernorm kit wp . w c2_d . w tmp_d . e ln2_w . e ln2_b . w xn_d dm eps nc p )
+        = ok & ok ( wk_matvec_ex kit wp . e fc1_w . w xn_d . e fc1_b . w ff_d 0 T none . w e_ff dm nc p )
+        = ok & ok ( wk_matvec kit wp . e fc2_w . w ff_d . e fc2_b . w tmp_d dm . w e_ff nc p )
+        = L + L 1
+    }
+    = ok & ok ( wk_layernorm kit wp . w c2_d ? == . w n_enc_layer 0 { none } { . w tmp_d } . w e_lnf_w . w e_lnf_b . w enc_out dm eps nc p )
+    = . w enc_plan p
+    = . w enc_frames ? ok nframe 0
+    ^ ok
+}
+
+// Every plan but the encoder's (which is rerecorded if a spectrogram of
+// another length comes): cross-attention's K and V, one decoder step, the
+// argmax.
+@ __wh_plans inout WhisperImpl w → b {
+    : ~ b ok ( __wh_enc_plan w * 2 . w n_ctx_enc )
+    : GpuKit kit . w kit
+    : b wp . w warp
+    : i dm . w d_model
+    : i nc . w n_ctx_enc
+    : i nh . w d_head
+    : i hd . w d_head_dim
+    : f eps 0.00001
+    : f qscale / 1.0 ( sqrt # f hd )
+    : GkBuf none ( gk_buf_none GK_F32 )
+
+    // Cross-attention's K and V come from the ENCODER, and the encoder does
+    // not change while a clip is being transcribed: computed ONCE per clip
+    // (wh_prepare_cross), not once per generated token.
+    : ~ ( Vec GkLaunch ) cp ( vec_new [GkLaunch] )
+    : ~ i L 0
+    ~ & ok < L . w n_dec_layer {
+        : WhDec d ( vec_at [WhDec] . w dec L )
+        = ok & ok ( wk_matvec kit wp . d xwk . w enc_out none . d xk dm dm nc cp )
+        = ok & ok ( wk_matvec kit wp . d xwv . w enc_out . d xbv . d xv dm dm nc cp )
+        = L + L 1
+    }
+    = . w cross_plan cp
+
+    // One decoder step, recorded for token 0 at position 0: each step gives
+    // the token's row, the position's row and KV-cache row, and the number
+    // of keys its self-attention reads (dec_at).
+    //
+    // The self-attention needs no causal mask: there is exactly ONE query,
+    // at the end, and the cache holds only what came before it. Masking is
+    // what you do when you process several positions at once. Its k and v
+    // are written straight into their row of the cache.
+    : ~ ( Vec GkLaunch ) dp ( vec_new [GkLaunch] )
+    : ~ ( Vec i ) at ( vec_new [i] )
+    = . w dec_embed ( vec_len [GkLaunch] dp )
+    = ok & ok ( wk_embed kit . w tok_embd . w dec_pos . w dx_d 0 0 dm dp )
+    = L 0
+    ~ & ok < L . w n_dec_layer {
+        : WhDec d ( vec_at [WhDec] . w dec L )
+        // ── causal self-attention, over the cache ──
+        // (the norm adds the previous layer's feed-forward output first)
+        = ok & ok ( wk_layernorm kit wp . w dx_d ? == L 0 { none } { . w dtmp_d } . d ln1_w . d ln1_b . w dxn_d dm eps 1 dp )
+        = ok & ok ( wk_matvec kit wp . d wq . w dxn_d . d bq . w dq_d dm dm 1 dp )
+        ( vec_push [i] at ( vec_len [GkLaunch] dp ) )
+        = ok & ok ( wk_matvec_ex kit wp . d wk . w dxn_d none . d kcache 0 F none dm dm 1 dp )
+        = ok & ok ( wk_matvec_ex kit wp . d wv . w dxn_d . d bv . d vcache 0 F none dm dm 1 dp )
+        = ok & ok ( wk_attn kit wp . w dq_d . d kcache . d vcache . w dsc_d . w dao_d nh hd 1 1 qscale 0 dp )
+        = ok & ok ( wk_matvec kit wp . d wo . w dao_d . d bo . w dtmp_d dm dm 1 dp )
+        // ── cross-attention into the encoder's 1500 states ──
+        = ok & ok ( wk_layernorm kit wp . w dx_d . w dtmp_d . d lnx_w . d lnx_b . w dxn_d dm eps 1 dp )
+        = ok & ok ( wk_matvec kit wp . d xwq . w dxn_d . d xbq . w dq_d dm dm 1 dp )
+        = ok & ok ( wk_attn kit wp . w dq_d . d xk . d xv . w dsc_d . w dao_d nh hd 1 nc qscale 0 dp )
+        = ok & ok ( wk_matvec kit wp . d xwo . w dao_d . d xbo . w dtmp_d dm dm 1 dp )
+        // ── feed-forward ──
+        = ok & ok ( wk_layernorm kit wp . w dx_d . w dtmp_d . d ln2_w . d ln2_b . w dxn_d dm eps 1 dp )
+        = ok & ok ( wk_matvec_ex kit wp . d fc1_w . w dxn_d . d fc1_b . w dff_d 0 T none . w d_ff dm 1 dp )
+        = ok & ok ( wk_matvec kit wp . d fc2_w . w dff_d . d fc2_b . w dtmp_d dm . w d_ff 1 dp )
+        = L + L 1
+    }
+    = ok & ok ( wk_layernorm kit wp . w dx_d ? == . w n_dec_layer 0 { none } { . w dtmp_d } . w d_lnf_w . w d_lnf_b . w dxn_d dm eps 1 dp )
+    // logits: the embedding table again — whisper ties input and output
+    = ok & ok ( wk_matvec kit wp . w tok_embd . w dxn_d none . w logits_d . w n_vocab dm 1 dp )
+    = . w dec_plan dp
+    = . w dec_at at
+
+    : ~ ( Vec GkLaunch ) ap ( vec_new [GkLaunch] )
+    = ok & ok ( wk_argmax kit . w logits_d . w n_vocab . w argmax_d ap )
+    = . w am_plan ap
+    ^ ok
 }
 
 // Early release (optional): the last owner gives back every device
@@ -1047,67 +1153,16 @@ unsafe @ __wh_queue_flush inout WhisperImpl w → b {
     ( locked_restore [WhisperImpl] . h l w )
 }
 
-unsafe @ __wh_encode_in inout WhisperImpl w ( Vec f ) mel → v {
-    : i nframe / ( vec_len [f] mel ) . w n_mels
-    : i dm . w d_model
-    : i nh . w n_head
-    : i hd . w head_dim
-    : i nc . w n_ctx_enc
-    : f eps 0.00001
-
-    // mel → device
-    : ( Vec u ) raw ( vec_with_cap [u] * 4 ( vec_len [f] mel ) )
-    : ~ i k 0
-    ~ < k ( vec_len [f] mel ) {
-        ?? ( vec_get [f] mel k ) {
-            T x → { ( bytes_push_u32_le raw # u32 ( f32_to_bits # f32 x ) ) }
-            F → {}
-        }
-        = k + k 1
-    }
-    : GpuBuffer mb ( gpu_buffer_view . w mel_d * 4 ( vec_len [f] mel ) )
-    : i _u ( gpu_upload mb ( vec_data [u] raw ) )
-
-    // conv1 (stride 1) → GELU → conv2 (stride 2) → GELU
-    ( wk_conv1d . w ks . w mel_d . w conv1_w . w conv1_b . w c1_d nframe . w n_mels dm 1 1 )
-    ( wk_gelu . w ks . w c1_d * nframe dm )
-    ( wk_conv1d . w ks . w c1_d . w conv2_w . w conv2_b . w c2_d nframe dm dm 2 1 )
-    ( wk_gelu . w ks . w c2_d * nc dm )
-
-    // + the stored positional embedding. This is a MATRIX (1500 × d_model), one
-    // vector per position — not a row broadcast over the batch the way a bias is.
-    // Adding it with addrow would give every one of the 1500 positions the same
-    // positional vector, which is the same as having no positions at all.
-    ( wk_addv . w ks . w c2_d . w enc_pos * nc dm )
-
-    : f qscale / 1.0 ( sqrt # f hd )
-    : ~ i L 0
-    ~ < L . w n_enc_layer {
-        // self-attention, NON-CAUSAL: every one of the 1500 positions sees all
-        // 1500. This is the first attention in the ecosystem that does not mask
-        // the future — a speech encoder hears the whole clip at once.
-        ( wk_layernorm . w ks . w c2_d ( __wh_geti . w e_ln1_w L ) ( __wh_geti . w e_ln1_b L )
-        . w xn_d dm eps nc )
-        ( wk_matvec . w ks ( __wh_geti . w e_wq L ) . w xn_d ( __wh_geti . w e_bq L ) . w q_d dm dm nc ? . w w_half 1 0 )
-        // k_proj: no bias, so none is passed
-        ( wk_matvec . w ks ( __wh_geti . w e_wk L ) . w xn_d 0 . w k_d dm dm nc ? . w w_half 1 0 )
-        ( wk_matvec . w ks ( __wh_geti . w e_wv L ) . w xn_d ( __wh_geti . w e_bv L ) . w v_d dm dm nc ? . w w_half 1 0 )
-        ( wk_attn . w ks . w q_d . w k_d . w v_d . w sc_d . w ao_d nh hd nc nc qscale 0 )
-        ( wk_matvec . w ks ( __wh_geti . w e_wo L ) . w ao_d ( __wh_geti . w e_bo L ) . w tmp_d dm dm nc ? . w w_half 1 0 )
-        ( wk_addv . w ks . w c2_d . w tmp_d * nc dm )
-
-        // feed-forward: fc1 → GELU → fc2
-        ( wk_layernorm . w ks . w c2_d ( __wh_geti . w e_ln2_w L ) ( __wh_geti . w e_ln2_b L )
-        . w xn_d dm eps nc )
-        ( wk_matvec . w ks ( __wh_geti . w e_fc1_w L ) . w xn_d ( __wh_geti . w e_fc1_b L )
-        . w ff_d . w e_ff dm nc ? . w w_half 1 0 )
-        ( wk_gelu . w ks . w ff_d * nc . w e_ff )
-        ( wk_matvec . w ks ( __wh_geti . w e_fc2_w L ) . w ff_d ( __wh_geti . w e_fc2_b L )
-        . w tmp_d dm . w e_ff nc ? . w w_half 1 0 )
-        ( wk_addv . w ks . w c2_d . w tmp_d * nc dm )
-        = L + L 1
-    }
-    ( wk_layernorm . w ks . w c2_d . w e_lnf_w . w e_lnf_b . w enc_out dm eps nc )
+@ __wh_encode_in inout WhisperImpl w ( Vec f ) mel → v {
+    : i n ( vec_len [f] mel )
+    : i nframe / n . w n_mels
+    // more frames than the encoder's buffers hold: there is no such input
+    ? | < nframe 1 > n ( gk_buf_len . w mel_d ) { ^ } {}
+    ? != nframe . w enc_frames {
+        ? ( __wh_enc_plan w nframe ) {} { ^ }
+    } {}
+    ? ( gk_dbuf_upload . w kit ( gk_buf_view . w mel_d 0 n ) mel ) {} { ^ }
+    : b _r ( wk_run . w enc_plan )
 }
 
 // The encoder states, back on the host: 1500 × d_model, row-major.
@@ -1118,141 +1173,59 @@ unsafe @ __wh_encode_in inout WhisperImpl w ( Vec f ) mel → v {
     ^ r
 }
 
-unsafe @ __wh_enc_out_in inout WhisperImpl w → ( Vec f ) {
-    : i n * . w n_ctx_enc . w d_model
-    : GpuHost hb ( gpu_host_alloc * n 4 )
-    : *u host ( gpu_host_ptr hb )
-    : GpuBuffer b ( gpu_buffer_view . w enc_out * n 4 )
-    : i _d ( gpu_download host b )
-    : ( Vec f ) out ( vec_with_cap [f] n )
-    : ~ i k 0
-    ~ < k n {
-        ( vec_push [f] out ( gpu_host_get_f32 hb k ) )
-        = k + k 1
-    }
+@ __wh_enc_out_in inout WhisperImpl w → ( Vec f ) {
+    : ~ ( Vec f ) out ( vec_zeroed [f] ( gk_buf_len . w enc_out ) )
+    : b _d ( gk_dbuf_download . w kit . w enc_out out )
     ^ out
 }
 
 // ── the decoder ─────────────────────────────────────────────────────
 
-// Cross-attention's K and V come from the ENCODER, and the encoder does not
-// change while a clip is being transcribed. So they are computed ONCE here,
-// after wh_encode — not once per generated token, which would redo 1500×d_model
-// of work for every word.
+// Cross-attention's K and V for the clip just encoded.
 @ wh_prepare_cross Whisper h → v {
     : ~ WhisperImpl w ( locked_take [WhisperImpl] . h l )
-    ( __wh_prepare_cross_in w )
+    : b _r ( wk_run . w cross_plan )
     ( locked_restore [WhisperImpl] . h l w )
-}
-
-unsafe @ __wh_prepare_cross_in inout WhisperImpl w → v {
-    : i dm . w d_model
-    : i nc . w n_ctx_enc
-    : ~ i L 0
-    ~ < L . w n_dec_layer {
-        ( wk_matvec . w ks ( __wh_geti . w x_wk L ) . w enc_out 0
-        ( __wh_geti . w xk L ) dm dm nc ? . w w_half 1 0 )
-        ( wk_matvec . w ks ( __wh_geti . w x_wv L ) . w enc_out ( __wh_geti . w x_bv L )
-        ( __wh_geti . w xv L ) dm dm nc ? . w w_half 1 0 )
-        = L + L 1
-    }
 }
 
 // One decoder step: token `tok` at position `pos`, with everything before it
 // already in the KV cache. Leaves the logits on the device.
-//
-// The self-attention needs no causal mask: there is exactly ONE query, at the
-// end, and the cache holds only what came before it. Masking is what you do when
-// you process several positions at once.
 @ wh_decode_step Whisper h i tok i pos → v {
     : ~ WhisperImpl w ( locked_take [WhisperImpl] . h l )
     ( __wh_decode_step_in w tok pos )
     ( locked_restore [WhisperImpl] . h l w )
 }
 
-unsafe @ __wh_decode_step_in inout WhisperImpl w i tok i pos → v {
-    : i dm . w d_model
-    : i nh . w d_head
-    : i hd . w d_head_dim
-    : i nc . w n_ctx_enc
-    : f qscale / 1.0 ( sqrt # f hd )
-    : f eps 0.00001
-
-    // token embedding + the position's own vector (a matrix, one row each)
-    ( wk_getrow . w ks . w tok_embd . w dx_d tok dm ? . w w_half 1 0 )
-    ( __wk_addv_row_in w pos )
-
+@ __wh_decode_step_in inout WhisperImpl w i tok i pos → v {
+    : i row * pos . w d_model
+    : ~ b ok ( wk_set . w dec_plan . w dec_embed `row` tok )
+    = ok & ok ( wk_set . w dec_plan . w dec_embed `off` row )
     : ~ i L 0
-    ~ < L . w n_dec_layer {
-        // ── causal self-attention, over the cache ──
-        ( wk_layernorm . w ks . w dx_d ( __wh_geti . w d_ln1_w L ) ( __wh_geti . w d_ln1_b L )
-        . w dxn_d dm eps 1 )
-        ( wk_matvec . w ks ( __wh_geti . w d_wq L ) . w dxn_d ( __wh_geti . w d_bq L ) . w dq_d dm dm 1 ? . w w_half 1 0 )
-        ( wk_matvec . w ks ( __wh_geti . w d_wk L ) . w dxn_d 0 . w dk_d dm dm 1 ? . w w_half 1 0 )
-        ( wk_matvec . w ks ( __wh_geti . w d_wv L ) . w dxn_d ( __wh_geti . w d_bv L ) . w dv_d dm dm 1 ? . w w_half 1 0 )
-        ( wk_setrow . w ks ( __wh_geti . w kcache L ) . w dk_d pos dm )
-        ( wk_setrow . w ks ( __wh_geti . w vcache L ) . w dv_d pos dm )
-        ( wk_attn . w ks . w dq_d ( __wh_geti . w kcache L ) ( __wh_geti . w vcache L )
-        . w dsc_d . w dao_d nh hd 1 + pos 1 qscale 0 )
-        ( wk_matvec . w ks ( __wh_geti . w d_wo L ) . w dao_d ( __wh_geti . w d_bo L ) . w dtmp_d dm dm 1 ? . w w_half 1 0 )
-        ( wk_addv . w ks . w dx_d . w dtmp_d dm )
-
-        // ── cross-attention into the encoder's 1500 states ──
-        ( wk_layernorm . w ks . w dx_d ( __wh_geti . w d_lnx_w L ) ( __wh_geti . w d_lnx_b L )
-        . w dxn_d dm eps 1 )
-        ( wk_matvec . w ks ( __wh_geti . w x_wq L ) . w dxn_d ( __wh_geti . w x_bq L ) . w dq_d dm dm 1 ? . w w_half 1 0 )
-        ( wk_attn . w ks . w dq_d ( __wh_geti . w xk L ) ( __wh_geti . w xv L )
-        . w dsc_d . w dao_d nh hd 1 nc qscale 0 )
-        ( wk_matvec . w ks ( __wh_geti . w x_wo L ) . w dao_d ( __wh_geti . w x_bo L ) . w dtmp_d dm dm 1 ? . w w_half 1 0 )
-        ( wk_addv . w ks . w dx_d . w dtmp_d dm )
-
-        // ── feed-forward ──
-        ( wk_layernorm . w ks . w dx_d ( __wh_geti . w d_ln2_w L ) ( __wh_geti . w d_ln2_b L )
-        . w dxn_d dm eps 1 )
-        ( wk_matvec . w ks ( __wh_geti . w d_fc1_w L ) . w dxn_d ( __wh_geti . w d_fc1_b L )
-        . w dff_d . w d_ff dm 1 ? . w w_half 1 0 )
-        ( wk_gelu . w ks . w dff_d . w d_ff )
-        ( wk_matvec . w ks ( __wh_geti . w d_fc2_w L ) . w dff_d ( __wh_geti . w d_fc2_b L )
-        . w dtmp_d dm . w d_ff 1 ? . w w_half 1 0 )
-        ( wk_addv . w ks . w dx_d . w dtmp_d dm )
+    ~ < L ( vec_len [i] . w dec_at ) {
+        : i at ( vec_at [i] . w dec_at L )
+        = ok & ok ( wk_set . w dec_plan at `yoff` row )
+        = ok & ok ( wk_set . w dec_plan + at 1 `yoff` row )
+        = ok & ok ( wk_attn_keys . w dec_plan + at 2 . w warp . w d_head . w d_head_dim 1 + pos 1 0 )
         = L + L 1
     }
-    ( wk_layernorm . w ks . w dx_d . w d_lnf_w . w d_lnf_b . w dxn_d dm eps 1 )
-    // logits: the embedding table again — whisper ties input and output
-    ( wk_matvec . w ks . w tok_embd . w dxn_d 0 . w logits_d . w n_vocab dm 1 ? . w w_half 1 0 )
+    ? ok { : b _r ( wk_run . w dec_plan ) } {}
 }
 
-// x += embed_positions[pos]. The row lives inside a matrix, so it is added by
-// pointing at the row rather than by a broadcast.
+// x += embed_positions[pos], on its own: the step's own addition of its
+// position, for a caller driving the decoder by hand.
 @ wk_addv_row Whisper h i pos → v {
     : ~ WhisperImpl w ( locked_take [WhisperImpl] . h l )
-    ( __wk_addv_row_in w pos )
+    : ~ ( Vec GkLaunch ) p ( vec_new [GkLaunch] )
+    ? ( wk_addv . w kit . w dx_d . w dec_pos * pos . w d_model . w d_model p ) { : b _r ( wk_run p ) } {}
     ( locked_restore [WhisperImpl] . h l w )
-}
-
-unsafe @ __wk_addv_row_in inout WhisperImpl w i pos → v {
-    : i dm . w d_model
-    : i rowptr + . w dec_pos * * pos dm 4
-    ( wk_addv . w ks . w dx_d rowptr dm )
 }
 
 // The logits of the last step, on the host.
 @ wh_logits Whisper h → ( Vec f ) {
     : ~ WhisperImpl w ( locked_take [WhisperImpl] . h l )
-    : ( Vec f ) r ( __wh_logits_in w )
+    : ~ ( Vec f ) out ( vec_zeroed [f] . w n_vocab )
+    : b _d ( gk_dbuf_download . w kit . w logits_d out )
     ( locked_restore [WhisperImpl] . h l w )
-    ^ r
-}
-
-unsafe @ __wh_logits_in inout WhisperImpl w → ( Vec f ) {
-    : GpuBuffer b ( gpu_buffer_view . w logits_d * . w n_vocab 4 )
-    : i _d ( gpu_download ( gpu_host_ptr . w logits_host ) b )
-    : ( Vec f ) out ( vec_with_cap [f] . w n_vocab )
-    : ~ i k 0
-    ~ < k . w n_vocab {
-        ( vec_push [f] out ( gpu_host_get_f32 . w logits_host k ) )
-        = k + k 1
-    }
     ^ out
 }
 
@@ -1261,16 +1234,10 @@ unsafe @ __wh_logits_in inout WhisperImpl w → ( Vec f ) {
 // exactly as they do in wh_argmax below, so the token stream is the same one.
 @ wh_argmax_dev Whisper h → i {
     : ~ WhisperImpl w ( locked_take [WhisperImpl] . h l )
-    : i r ( __wh_argmax_dev_in w )
+    : ~ ( Vec i ) r ( vec_zeroed [i] 1 )
+    ? ( wk_run . w am_plan ) { : b _d ( gk_dbuf_download_i . w kit . w argmax_d r ) } {}
     ( locked_restore [WhisperImpl] . h l w )
-    ^ r
-}
-
-unsafe @ __wh_argmax_dev_in inout WhisperImpl w → i {
-    ( wk_argmax . w ks . w logits_d . w n_vocab . w argmax_d )
-    : GpuBuffer b ( gpu_buffer_view . w argmax_d 4 )
-    : i _d ( gpu_download ( gpu_host_ptr . w logits_host ) b )
-    ^ & ( gpu_host_get_i32 . w logits_host 0 ) 4294967295
+    ^ ( vec_at [i] r 0 )
 }
 
 // argmax — greedy decoding is what whisper does by default, and what the

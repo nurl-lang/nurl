@@ -336,6 +336,60 @@ ST(o, gid, s + LD(acc, 9) - LD(acc, 3));` 2 64 )
     ? | ( gk_launch_ok bad ) ( gk_replay bad ) { ( nurl_print `FAIL a refused body made a launch record\n` ) = g_fail + g_fail 1 } { ( nurl_print `ok   a refused body makes a record that launches nothing\n` ) }
 }
 
+// A record's scalars and block count change between replays (a decoder's
+// position); half and f32 buffers go up in one batch.
+@ urun GpuKit kit → v {
+    : GkBuf o ( gk_dbuf_new kit 256 GK_F64 )
+    : b _z ( gk_dbuf_upload kit o ( vec_zeroed [f] 256 ) )
+    : ~ GkCall c ( gk_call_new )
+    ( gk_call_dev c `o` o ) ( gk_call_i64 c `k` 0 ) ( gk_call_f64 c `w` 1.0 )
+    : ~ GkLaunch l ( gk_record_dev kit c `upd` `ST(o, gid, LD(o, gid) + w * (double)k);` 1 64 )
+    : ~ b ok ( gk_launch_ok l )
+    = ok & ok ( gk_launch_set_i64 l `k` 3 )
+    = ok & ok ( gk_launch_set_f64 l `w` 0.5 )
+    = ok & ok ( gk_replay l )
+    = ok & ok ( gk_launch_set_blocks l 4 )
+    = ok & ok ( gk_launch_set_i64 l `k` 2 )
+    = ok & ok ( gk_replay l )
+    : b nope | ( gk_launch_set_i64 l `o` 1 ) ( gk_launch_set_i64 l `zz` 1 )
+    : ~ ( Vec f ) got ( vec_zeroed [f] 256 )
+    : b _d ( gk_dbuf_download kit o got )
+    // blocks of 64: the first replay reached o[0..64) (+1.5), the second all
+    // 256 (+1.0)
+    ? & & ok ! nope & == ( vec_at [f] got 0 ) 2.5 == ( vec_at [f] got 255 ) 1.0 {
+        ( nurl_print `ok   a record's scalars and block count change between replays (a buffer's words do not)\n` )
+    } { ( nurl_print `FAIL record updates\n` ) = g_fail + g_fail 1 }
+
+    // one batch, an f32 buffer and a half buffer
+    : GkBuf fb ( gk_dbuf_new kit 3 GK_F32 )
+    : GkHBuf hb ( gk_hbuf_new kit 2 F )
+    : ~ ( Vec u ) fbytes ( vec_new [u] )
+    ( bytes_push_u32_le fbytes # u32 ( f32_to_bits # f32 1.5 ) )
+    ( bytes_push_u32_le fbytes # u32 ( f32_to_bits # f32 -2.0 ) )
+    ( bytes_push_u32_le fbytes # u32 ( f32_to_bits # f32 4.0 ) )
+    : ~ ( Vec u ) hbytes ( vec_new [u] )
+    ( vec_push [u] hbytes 0 ) ( vec_push [u] hbytes 60 )  // 1.0 in f16: 0x3C00
+    ( vec_push [u] hbytes 0 ) ( vec_push [u] hbytes 192 )  // -2.0: 0xC000
+    : ~ ( Vec GkBuf ) ds ( vec_new [GkBuf] ) ( vec_push [GkBuf] ds ( mem_dup fb ) )
+    : ~ ( Vec ( Slice u ) ) ss ( vec_new [( Slice u )] ) ( vec_push [( Slice u )] ss ( slice_from_vec [u] fbytes ) )
+    : ~ ( Vec GkHBuf ) hds ( vec_new [GkHBuf] ) ( vec_push [GkHBuf] hds ( mem_dup hb ) )
+    : ~ ( Vec ( Slice u ) ) hss ( vec_new [( Slice u )] ) ( vec_push [( Slice u )] hss ( slice_from_vec [u] hbytes ) )
+    : b up ( gk_upload_batch kit ds ss hds hss F )
+    : GkBuf sum ( gk_dbuf_new kit 3 GK_F64 )
+    : ~ GkCall c2 ( gk_call_new )
+    ( gk_call_dev_in c2 `a` fb ) ( gk_call_half_in c2 `h` hb ) ( gk_call_dev c2 `s` sum )
+    : b ran ( gk_run_checked_dev kit c2 `hsum` `if (gid < 3) { ST(s, gid, (double)LD(a, gid) + (double)LD(h, gid)); }` 1 32 )
+    : ~ ( Vec f ) g2 ( vec_zeroed [f] 3 )
+    : b _d2 ( gk_dbuf_download kit sum g2 )
+    // a short source is refused, nothing sent
+    : ~ ( Vec ( Slice u ) ) bad ( vec_new [( Slice u )] ) ( vec_push [( Slice u )] bad ( slice_prefix [u] ( slice_from_vec [u] hbytes ) 2 ) )
+    : b short ( gk_upload_batch kit ( vec_new [GkBuf] ) ( vec_new [( Slice u )] ) hds bad F )
+    // (the half buffer's last element reads its last element: h[2] = h[1])
+    ? & & & up ran ! short & & == ( vec_at [f] g2 0 ) 2.5 == ( vec_at [f] g2 1 ) -4.0 == ( vec_at [f] g2 2 ) 2.0 {
+        ( nurl_print `ok   f32 and half buffers go up in one batch; a short source is refused\n` )
+    } { ( nurl_print `FAIL mixed upload batch\n` ) = g_fail + g_fail 1 }
+}
+
 @ main → i {
     : GpuKit kit ( gk_open_best )
     ? ( gk_ok kit ) {} { ( nurl_print `SKIP no device\n` ) ^ 0 }
@@ -346,6 +400,7 @@ ST(o, gid, s + LD(acc, 9) - LD(acc, 3));` 2 64 )
     ( drun kit )
     ( xrun kit )
     ( rrun kit )
+    ( urun kit )
     ? == g_fail 0 { ( nurl_print `checked: all passed\n` ) } { ( nurl_print `checked: FAILURES\n` ) }
     ^ 0
 }

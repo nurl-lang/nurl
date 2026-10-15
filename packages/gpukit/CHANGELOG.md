@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.11.12] — 2026-10-16
+
+- **A record's scalars and block count can change between replays.** `gk_launch_set_i64 rec name x` and `gk_launch_set_f64` give a recorded launch's scalar a new value, and `gk_launch_set_blocks rec n` its block count. A decoder records its step once and replays it with the step's position, where every scalar change used to mean a fresh checked launch. Only scalars can be set: a buffer's words are not names a record answers to, and any scalar value is safe because every index the kernel forms from it is still checked against the buffers the record holds.
+- **A checked block launch is built for its block size.** `bdim` is that constant and the compiler is told `threadIdx.x < bdim`, so an index into a shared or per-thread array made of `tid` and loop counters can be seen to be in range and its check folds away. The block size is part of the kernel's cache key.
+- **Read-only buffers are `__restrict__`.** The build already refuses a buffer the kernel reads that overlaps one it writes, so the qualifier is sound: the compiler reads such buffers through the read-only cache and moves their loads past stores.
+- **Narrow launches store with a 32-bit check.** When every buffer has 1 to 2^32 − 1 elements, `ST` compares a 32-bit index, the same narrowing loads already had. An index past 2^32 wraps into the buffer rather than being dropped; either way the store stays inside the buffer.
+- `gk_upload_batch kit dsts srcs hdsts hsrcs release` sends f32/f64/i64 buffers and 16-bit `GkHBuf`s in one streamed batch, each from a checked view of exactly its bytes. `gk_dbuf_upload_batch` is that call with no half buffers.
+- The cross-file `__gk_slot_of` / `__gk_run_slot` helpers are `_gk_slot_of` / `_gk_run_slot`.
+- `tests/checkedcheck.nu` covers record updates and mixed batches (81 cases on each backend).
+
 ## [0.11.11] — 2026-10-15
 
 - **Recorded launches.** `gk_record_dev kit call kname body nblocks block` does everything `gk_run_checked_dev` does except the launch. It checks and builds the kernel, binds the call, and keeps the argument words, the kernel's cache slot and a share of every bound buffer, so the buffers live as long as the record. `gk_replay rec` then only launches, on the kit the record was made for. A replay costs what a raw `gk_run_dev` launch costs (1.55 µs against 1.6 µs per launch on an RTX 4090, with no binding names, cache key or argument building), while a fresh checked launch costs about 2.6 µs. A program that replays the same launches every step, such as grad's tape, binds and checks them once. `GkLaunch` is `raw`, because its argument words are addresses. `gk_launch_ok` and `gk_launch_none` are also new.

@@ -103,7 +103,7 @@ is mmap'd (no read into memory, no 3 GB host copy kept for the model's
 life — the resident server's RSS is ~130 MB where 1.1.x held 3.2 GB),
 every tensor is carved from 128 MB device arenas rather than allocated
 one by one, and the bytes go up as one streamed batch through pinned
-staging (`gpu_upload_batch` in packages/gpu). A cold start went from
+staging (`gk_upload_batch` in packages/gpukit). A cold start went from
 2.35 s to 0.8 s on large-v3.
 
 **`GET /`** is a built-in test page: drop an audio file on it, or press
@@ -216,8 +216,13 @@ would not survive f16.)
 * ggml containers carry no special-token text at all; the loader
   synthesizes the standard spellings at whisper.cpp's positional ids, so
   both containers run through one code path.
+* Every kernel is a checked one (`packages/gpukit`): it reaches device
+  memory only through bounds-checked loads and stores over the buffers its
+  launcher binds, so the engine is safe code end to end — no `unsafe`, no
+  device addresses. The encoder, the cross-attention projections and one
+  decoder step are recorded once when the model opens and replayed.
 * Built on `packages/audio` (WAV, resample, mel, VAD), `packages/safetensor`,
-  `packages/tokenizer`, `packages/gpu` (CUDA + CPU backends) and
+  `packages/tokenizer`, `packages/gpukit` (CUDA + CPU backends) and
   `packages/http` (server + WebSocket) — each its own package, each with
   its own test suite.
 

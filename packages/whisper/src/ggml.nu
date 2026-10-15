@@ -95,7 +95,7 @@ $ `stdlib/core/slice.nu`
 @ gg_meta Gg h → GgMeta { ^ ( arc_get [GgMeta] . h meta ) }
 
 // Give the file back — the mapping or the read buffer — and keep the
-// parsed metadata (vocabulary, tensor table). gg_ptr answers null after.
+// parsed metadata (vocabulary, tensor table).
 @ gg_release_data Gg g → v { ( locked_set [? MappedFile] . g file @ ?MappedFile { F } ) }
 
 // The mapped file, checked out for a reader that needs many views of it at
@@ -352,18 +352,6 @@ $ `stdlib/core/slice.nu`
 @ gg_nelems Gg h i ti → i {
     : GgMeta g ( gg_meta h )
     ?? ( vec_get [i] . g tnelems ti ) { T x → { ^ x } F → { ^ 0 } }
-}
-
-// The address of tensor `ti`'s bytes in the file; null once the file was
-// given back. raw: the caller keeps the file (any copy of `h`, before
-// gg_release_data) while it reads there.
-raw @ gg_ptr Gg h i ti → *u {
-    : i o2 ?? ( vec_get [i] . ( gg_meta h ) toffs ti ) { T x → x F → 0 }
-    : ?MappedFile f ( locked_take [? MappedFile] . h file )
-    : ~ * u p # *u 0
-    ?? f { T m → { = p # *u + # i ( mapped_ptr m ) o2 } F → {} }
-    ( locked_restore [? MappedFile] . h file f )
-    ^ p
 }
 
 // ── the tokenizer, synthesized ──────────────────────────────────────
