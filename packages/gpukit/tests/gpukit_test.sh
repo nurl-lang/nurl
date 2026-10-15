@@ -243,6 +243,20 @@ else
     bad "opscheck build"; tail -4 "$WORK/opsbuild.err"
 fi
 
+# The RoPE ops against a host reference (CPU backend: no device needed).
+if $NURL tests/ropecheck.nu "$WORK/ropecheck" >/dev/null 2>"$WORK/ropebuild.err"; then
+    NURL_GPU=cpu "$WORK/ropecheck" > "$WORK/rope.out" 2>&1
+    if grep -q "^SKIP\|need a C++ compiler" "$WORK/rope.out"; then
+        echo "  (rope check skipped — no backend)"
+    elif [ "$(grep -c '|ok ' "$WORK/rope.out")" = 2 ]; then
+        ok "gkd_rope2d / gkd_rope3d vs host reference"
+    else
+        bad "rope ops"; sed 's/^/    /' "$WORK/rope.out"
+    fi
+else
+    bad "ropecheck build"; tail -4 "$WORK/ropebuild.err"
+fi
+
 # AddressSanitizer over the device layer + op family.
 for t in devcheck opscheck; do
     if NURL_SAN=1 $NURL "tests/$t.nu" "$WORK/${t}_san" >/dev/null 2>"$WORK/${t}_san_build.err"; then
