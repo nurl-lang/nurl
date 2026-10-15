@@ -422,6 +422,12 @@ generic that copies its `T` cannot be instantiated with one (h235)
   `locked_restore` moving it back. nwasm 3.0.0 uses them to run its
   instance under a lock without `unsafe`.
 
+- **`float_round_even`** (stdlib/std/float.nu): round to the nearest
+  integer, ties to even (IEEE roundTiesToEven, wasm's `f*.nearest`), where
+  `float_round` takes ties away from zero. A package that needed it
+  declared libm `rint` itself, a foreign call that only `unsafe` code may
+  make.
+
 - **`vec_update` / `vec_apply`** (stdlib/core/vec.nu, spec §7.2). Run
   a closure on one element of a Vec in place: a record that owns buffers
   is neither copied nor moved. `vec_apply` hands back the closure's

@@ -20,17 +20,12 @@ $ `stdlib/std/float.nu`
 $ `stdlib/std/floatbits.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/std/thread.nu`
+$ `stdlib/std/random.nu`
 $ `stdlib/std/time.nu`
 $ `stdlib/std/arc.nu`
 $ `module.nu`
 $ `rjit.nu`
 $ `stdlib/core/slice.nu`
-
-// round-to-nearest-even (wasm f*.nearest) — libm rint honours the default mode.
-& `m` @ rint f x → f
-
-// OS entropy (runtime helper; getrandom/urandom under the hood).
-& `c` @ nurl_rand_fill *u buf i n → i
 
 // The JIT substrate: an executable page and a call through a raw address.
 // On wasm32 alloc returns 0 (no executable memory) and the runtime stays
@@ -998,22 +993,22 @@ unsafe @ __thread_unregister inout InterpImpl it → v {
 // single valtype, non-negative = an index into the type section (multi-value).
 
 // Parameter count of a block type.
-unsafe @ __bt_params inout ModuleImpl m i bt → i {
+@ __bt_params inout ModuleImpl m i bt → i {
     ? < bt 0 { ^ 0 } {}
-    : s tp ?? ( vec_get [( Box FuncType )] . m types bt ) { T x → # s ( box_ptr [FuncType] x ) F → # s 0 }
-    ? == # i tp 0 { ^ 0 } {}
-    : *FuncType ft # *FuncType tp
-    ^ ( vec_len [i] . ft params )
+    ?? ( vec_get [( Box FuncType )] . m types bt ) {
+        T x → { : FuncType ft ( box_get [FuncType] x ) ^ ( vec_len [i] . ft params ) }
+        F → { ^ 0 }
+    }
 }
 
 // Result count of a block type.
-unsafe @ __bt_results inout ModuleImpl m i bt → i {
+@ __bt_results inout ModuleImpl m i bt → i {
     ? == bt -64 { ^ 0 } {}
     ? < bt 0 { ^ 1 } {}
-    : s tp ?? ( vec_get [( Box FuncType )] . m types bt ) { T x → # s ( box_ptr [FuncType] x ) F → # s 0 }
-    ? == # i tp 0 { ^ 0 } {}
-    : *FuncType ft # *FuncType tp
-    ^ ( vec_len [i] . ft results )
+    ?? ( vec_get [( Box FuncType )] . m types bt ) {
+        T x → { : FuncType ft ( box_get [FuncType] x ) ^ ( vec_len [i] . ft results ) }
+        F → { ^ 0 }
+    }
 }
 
 // ── arithmetic helpers ───────────────────────────────────────────
@@ -4381,7 +4376,7 @@ unsafe @ __jit_sigcanon inout ModuleImpl m s ftp → i {
     : ~ i k 0
     ~ < k nt {
         : s tp # s ( box_ptr [FuncType] ( vec_at [( Box FuncType )] . m types k ) )
-        ? != # i tp 0 { ? ( functype_eq # *FuncType tp # *FuncType ftp ) { ^ k } {} } {}
+        ? != # i tp 0 { ? ( functype_eq . # *FuncType tp 0 . # *FuncType ftp 0 ) { ^ k } {} } {}
         = k + k 1
     }
     ^ -1
@@ -5611,7 +5606,7 @@ unsafe @ __jit_callout inout InterpImpl it inout ModuleImpl m i st * i cd → i 
         : s want ?? ( vec_get [( Box FuncType )] . m types & . cd 7 4294967295 ) { T x → # s ( box_ptr [FuncType] x ) F → # s 0 }
         : s have ( _module_func_type m callee )
         ? | == # i want 0 == # i have 0 { ( __trap it `call_indirect: bad type index` ) ^ 1 } {}
-        ? ! ( functype_eq # *FuncType want # *FuncType have ) { ( __trap it `call_indirect: signature mismatch` ) ^ 1 } {}
+        ? ! ( functype_eq . # *FuncType want 0 . # *FuncType have 0 ) { ( __trap it `call_indirect: signature mismatch` ) ^ 1 } {}
     } {}
     ? == st 20 {  // slab exhausted at an entry: run this call on the interpreter
         // jrb is the raw args pointer (the entry passed it as the frame
@@ -6105,7 +6100,7 @@ unsafe @ __exec_func inout InterpImpl it i fidx → v {
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 : s want ?? ( vec_get [( Box FuncType )] . m types ra ) { T x → # s ( box_ptr [FuncType] x ) F → # s 0 }
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 : s have ( _module_func_type . m 0 cfi )
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 ? | == # i want 0 == # i have 0 { ( __trap it `call_indirect: bad type index` ) ( __fr_setpos tp r0 ) = pc pend } {
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    ? ! ( functype_eq # *FuncType want # *FuncType have ) { ( __trap it `call_indirect: signature mismatch` ) ( __fr_setpos tp r0 ) = pc pend } {
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    ? ! ( functype_eq . # *FuncType want 0 . # *FuncType have 0 ) { ( __trap it `call_indirect: signature mismatch` ) ( __fr_setpos tp r0 ) = pc pend } {
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         ( __fr_setpos tp pc )
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         = fuel - fuel 1
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         : s nf9 ( __rdo_dyn it . m 0 tp cfi rb rbase )
@@ -6440,14 +6435,14 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
 // flush it forced was most of another 30 %; nbody spent 45 % of its records
 // moving values into place for it.
 
-unsafe @ __f64_unary i op i ab → i {
+@ __f64_unary i op i ab → i {
     ? == op 153 { ^ & ab 9223372036854775807 } {}  // f64.abs (clear sign)
     ? == op 154 { ^ ^^ ab -9223372036854775808 } {}  // f64.neg (flip sign)
     : f x ( bits_to_f64 ab )
     ? == op 155 { ^ ( f64_to_bits ( ceil x ) ) } {}  // f64.ceil
     ? == op 156 { ^ ( f64_to_bits ( floor x ) ) } {}  // f64.floor
     ? == op 157 { ^ ( f64_to_bits ( trunc x ) ) } {}  // f64.trunc
-    ? == op 158 { ^ ( f64_to_bits ( rint x ) ) } {}  // f64.nearest
+    ? == op 158 { ^ ( f64_to_bits ( float_round_even x ) ) } {}  // f64.nearest
     ^ ( f64_to_bits ( sqrt x ) )  // 159 f64.sqrt
 }
 
@@ -6481,14 +6476,14 @@ unsafe @ __f64_unary i op i ab → i {
     ^ ? >= a b 1 0  // 102
 }
 
-unsafe @ __f32_unary i op i ab → i {
+@ __f32_unary i op i ab → i {
     ? == op 139 { ^ & ab 2147483647 } {}  // f32.abs
     ? == op 140 { ^ & ^^ ab 2147483648 4294967295 } {}  // f32.neg
     : f x # f ( bits_to_f32 ab )
     ? == op 141 { ^ ( f32_to_bits # f32 ( ceil x ) ) } {}
     ? == op 142 { ^ ( f32_to_bits # f32 ( floor x ) ) } {}
     ? == op 143 { ^ ( f32_to_bits # f32 ( trunc x ) ) } {}
-    ? == op 144 { ^ ( f32_to_bits # f32 ( rint x ) ) } {}
+    ? == op 144 { ^ ( f32_to_bits # f32 ( float_round_even x ) ) } {}
     ^ ( f32_to_bits # f32 ( sqrt x ) )  // 145
 }
 
@@ -7447,17 +7442,14 @@ unsafe @ __f32_unary i op i ab → i {
 }
 
 // random_get(buf, len): real OS entropy via the runtime CSPRNG.
-unsafe @ __wasi_random_get inout InterpImpl it → v {
+@ __wasi_random_get inout InterpImpl it → v {
     : i len ( __pop it )
     : i buf ( __pop it )
     // The destination buffer lives in linear memory, so a length larger than
     // memory is bogus — trap instead of allocating it.
     ? > len . it mem_bytes { ( __trap it `random_get length exceeds memory` ) ( __push it 0 ) ^ v } {}
     ? > len 0 {
-        : ( Vec u ) tmp ( vec_with_cap [u] len )
-        : ~ i z 0
-        ~ < z len { ( vec_push [u] tmp # u 0 ) = z + z 1 }
-        ( nurl_rand_fill # *u ( vec_data [u] tmp ) len )
+        : ( Vec u ) tmp ( rand_bytes len )
         : ~ i k 0
         ~ < k len { ( __mem_store it + buf k 1 ?? ( vec_get [u] tmp k ) { T x → # i x F → 0 } ) = k + k 1 }
     } {}

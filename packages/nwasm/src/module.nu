@@ -693,7 +693,7 @@ unsafe @ module_func_type Module m__h i fidx → s {
 
 // Structural function-type equality (the call_indirect runtime check): same
 // parameter and result valtypes, in order.
-unsafe @ functype_eq * FuncType a * FuncType b → b {
+@ functype_eq FuncType a FuncType b → b {
     : i np ( vec_len [i] . a params )
     ? != np ( vec_len [i] . b params ) { ^ F } {}
     : i nr ( vec_len [i] . a results )
