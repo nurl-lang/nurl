@@ -8,6 +8,13 @@
 - Each node's launches are recorded on the first replay and replayed after it (`gk_record_dev` / `gk_replay`), as are the gradient zeroing, the loss seed and the optimizer step. A replay does no argument building. Records are cleared when `gpopt_add` / `gpopt_set_clip` change the step.
 - The clip norm no longer reads a table of raw gradient addresses. One single-thread launch per active parameter adds its squared gradient to a one-element accumulator, in registration order, so the sum is the one the old kernel computed. The accumulator is f32 for a pure-f32 program and f64 otherwise.
 - The single-thread sum (`sum` / `mean`) loads eight elements before adding them, in the same order.
+- **gpfuse has no `unsafe` either, so grad has none** (3 → 0). The fusion passes still write plain CUDA C over node buffers, but that text is never launched. Each kernel is rewritten into gpukit's checked subset when the plan is built:
+  - `v12[i]` becomes `LD(v12, i)` and `g7[i] = x;` becomes `ST(g7, i, x);`, with every `v<k>` / `g<k>` bound to node k's value or gradient.
+  - The early-return guards become an enclosing `if`, single-statement loop bodies are braced, and CUDA's coordinates become the subset's.
+  - Launches are recorded once and replayed.
+
+  The plan no longer uploads tables of raw device addresses (`vtab`, `gtab`), and the one-launch zero fill over an address table is a generated checked kernel with one block per gradient, as before. The plan's source is no longer freed by hand.
+- Verified: fused forward and backward are bit-identical to the per-node path on CUDA and the CPU backend (gpfuse 21/21), and the PyTorch oracles pass (f64, LoRA f64 and f32, emitted C bit-equal). The megakernel episode runs at 78–79 ms against 78 ms before.
 
 ### Verified
 
