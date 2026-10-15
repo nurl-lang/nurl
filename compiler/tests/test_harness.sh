@@ -9,7 +9,38 @@
 create_test_workdir() {
     local base="$1"
     mkdir -p "$base" || return 2
+    prune_test_workdirs "$base"
     mktemp -d "$base/run.XXXXXXXX" || return 2
+}
+
+# Earlier runs' artifact directories under `base` (one per run, a few
+# hundred MB each with sanitizer builds): the newest $NURL_TEST_KEEP_RUNS
+# (default 3) stay for inspection, older ones are removed as each new run
+# starts. A run still in progress holds the lock in its own directory
+# (hold_test_workdir) and is never removed. Without flock(1), only
+# directories nothing has touched for a day go.
+prune_test_workdirs() {
+    local base="$1" keep="${NURL_TEST_KEEP_RUNS:-3}" n=0 d
+    case "$keep" in ''|*[!0-9]*) keep=3 ;; esac
+    while IFS= read -r d; do
+        [ -n "$d" ] && [ -d "$d" ] || continue
+        n=$((n + 1))
+        [ "$n" -le "$keep" ] && continue
+        if command -v flock >/dev/null 2>&1; then
+            flock -n "$d/.lock" rm -rf -- "$d" 2>/dev/null || true
+        elif [ -n "$(find "$d" -maxdepth 0 -mmin +1440 2>/dev/null)" ]; then
+            rm -rf -- "$d" 2>/dev/null || true
+        fi
+    done <<EOF_RUNS
+$(ls -1dt "$base"/run.* 2>/dev/null)
+EOF_RUNS
+}
+
+# Hold the lock in this run's directory on fd 9 for as long as the run (and
+# whatever it starts) lives, so prune_test_workdirs leaves it alone.
+hold_test_workdir() {
+    command -v flock >/dev/null 2>&1 || return 0
+    exec 9>"$1/.lock" && flock -n 9 || true
 }
 
 # Publish complete records atomically. A check running beside --update must
