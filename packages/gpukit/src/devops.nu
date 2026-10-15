@@ -1521,3 +1521,93 @@ i batch i heads i n i nkv i hd f scale → b {
     ( vec_push [i] args ( gpu_arg_i64 d ) )
     ^ ( __gkd_launch kit src kname ( gk_grid * bsz d 256 ) args )
 }
+
+// ── Rotary position embedding over 2 and 3 axes ───────────────────
+//
+// `x` is [heads, n, dim] f32, rotated in place by per-token positions
+// (i64) into cos/sin tables (f32). gkd_rope2d: the first half of each
+// head's vector by position `rows`, the second half by `cols`, each half
+// split into (j, j+quarter) pairs. gkd_rope3d: interleaved pairs (x0,x1),
+// (x2,x3), …; frequency j < na takes `fr`'s position, j < na+nb `rw`'s,
+// the rest `cl`'s. Every buffer's size and dtype is checked against the
+// launch, and a position past the tables (or negative) leaves its pair
+// untouched. One thread per pair, each owning it: the in-place
+// read-then-write needs no barrier.
+
+@ gkd_rope2d GpuKit kit GkBuf x GkBuf rows GkBuf cols GkBuf cosb GkBuf sinb
+i heads i n i dim → b {
+    ? & & ( gk_buf_ok x ) ( gk_buf_ok rows ) ( gk_buf_ok cols ) {} { ^ F }
+    ? & ( gk_buf_ok cosb ) ( gk_buf_ok sinb ) {} { ^ F }
+    ? & & > heads 0 > n 0 & > dim 0 == % dim 4 0 {} { ^ F }
+    ? == . x n ( _gk_p3 heads n dim ) {} { ^ F }
+    // The positions are read per token, and index the tables: both sizes
+    // are checked here, and a position past the tables is skipped in the
+    // kernel (tl, the shorter table's length).
+    ? & & == . x dtype GK_F32 == . rows dtype GK_I64 == . cols dtype GK_I64 {} { ^ F }
+    ? & & >= . rows n n >= . cols n n & == . cosb dtype GK_F32 == . sinb dtype GK_F32 {} { ^ F }
+    : i tl ? < . cosb n . sinb n . cosb n . sinb n
+    : String src ( string_from `extern "C" __global__ void gkd_rope2d(float* X, const long long* rows, const long long* cols, const float* cosT, const float* sinT, long long heads, long long n, long long dim, long long tl){` )
+    ( string_push_str src `long long half=dim/2, quarter=half/2;` )
+    ( string_push_str src `long long tot=heads*n*quarter*2;` )
+    ( string_push_str src `long long idx=blockIdx.x*blockDim.x+threadIdx.x;if(idx>=tot)return;` )
+    ( string_push_str src `long long j=idx%quarter; long long r=idx/quarter;` )
+    ( string_push_str src `long long axis=r%2; r/=2;` )
+    ( string_push_str src `long long t=r%n; long long h=r/n;` )
+    ( string_push_str src `long long base=h*n*dim+t*dim+axis*half;` )
+    ( string_push_str src `long long pos=(axis==0)?rows[t]:cols[t];` )
+    ( string_push_str src `long long tbl=pos*half;if(pos<0||tbl+half>tl)return;` )
+    ( string_push_str src `float x1=X[base+j], x2=X[base+j+quarter];` )
+    ( string_push_str src `X[base+j]=x1*cosT[tbl+j]-x2*sinT[tbl+j];` )
+    ( string_push_str src `X[base+j+quarter]=x2*cosT[tbl+j+quarter]+x1*sinT[tbl+j+quarter];}` )
+    : ( Vec i ) args ( vec_new [i] )
+    ( vec_push [i] args ( gk_arg_dev x ) )
+    ( vec_push [i] args ( gk_arg_dev rows ) )
+    ( vec_push [i] args ( gk_arg_dev cols ) )
+    ( vec_push [i] args ( gk_arg_dev cosb ) )
+    ( vec_push [i] args ( gk_arg_dev sinb ) )
+    ( vec_push [i] args ( gpu_arg_i64 heads ) )
+    ( vec_push [i] args ( gpu_arg_i64 n ) )
+    ( vec_push [i] args ( gpu_arg_i64 dim ) )
+    ( vec_push [i] args ( gpu_arg_i64 tl ) )
+    : i tot * heads * n / dim 2
+    ^ ( __gkd_launch kit src ( string_from `gkd_rope2d` ) ( gk_grid tot 256 ) args )
+}
+
+@ gkd_rope3d GpuKit kit GkBuf x GkBuf fr GkBuf rw GkBuf cl GkBuf cosb GkBuf sinb
+i heads i n i dim i nt i nh → b {
+    ? & & ( gk_buf_ok x ) ( gk_buf_ok fr ) ( gk_buf_ok rw ) {} { ^ F }
+    ? & & ( gk_buf_ok cl ) ( gk_buf_ok cosb ) ( gk_buf_ok sinb ) {} { ^ F }
+    ? & & > heads 0 > n 0 & > dim 0 == % dim 2 0 {} { ^ F }
+    ? == . x n ( _gk_p3 heads n dim ) {} { ^ F }
+    // Positions and tables checked as in gkd_rope2d.
+    ? & & == . x dtype GK_F32 == . fr dtype GK_I64 & == . rw dtype GK_I64 == . cl dtype GK_I64 {} { ^ F }
+    ? & & >= . fr n n >= . rw n n & >= . cl n n & == . cosb dtype GK_F32 == . sinb dtype GK_F32 {} { ^ F }
+    : i tl ? < . cosb n . sinb n . cosb n . sinb n
+    : String src ( string_from `extern "C" __global__ void gkd_rope3d(float* X, const long long* fr, const long long* rw, const long long* cl, const float* cosT, const float* sinT, long long heads, long long n, long long dim, long long nt, long long nh, long long tl){` )
+    ( string_push_str src `long long width=dim/2;` )
+    ( string_push_str src `long long tot=heads*n*width;` )
+    ( string_push_str src `long long idx=blockIdx.x*blockDim.x+threadIdx.x;if(idx>=tot)return;` )
+    ( string_push_str src `long long j=idx%width; long long r=idx/width;` )
+    ( string_push_str src `long long t=r%n; long long h=r/n;` )
+    ( string_push_str src `long long pos = (j<nt) ? fr[t] : ((j<nt+nh) ? rw[t] : cl[t]);` )
+    ( string_push_str src `long long tbl=pos*width+j;if(pos<0||tbl>=tl)return;` )
+    ( string_push_str src `long long base=h*n*dim+t*dim+2*j;` )
+    ( string_push_str src `float c=cosT[tbl], s=sinT[tbl];` )
+    ( string_push_str src `float x1=X[base], x2=X[base+1];` )
+    ( string_push_str src `X[base]=x1*c-x2*s; X[base+1]=x1*s+x2*c;}` )
+    : ( Vec i ) args ( vec_new [i] )
+    ( vec_push [i] args ( gk_arg_dev x ) )
+    ( vec_push [i] args ( gk_arg_dev fr ) )
+    ( vec_push [i] args ( gk_arg_dev rw ) )
+    ( vec_push [i] args ( gk_arg_dev cl ) )
+    ( vec_push [i] args ( gk_arg_dev cosb ) )
+    ( vec_push [i] args ( gk_arg_dev sinb ) )
+    ( vec_push [i] args ( gpu_arg_i64 heads ) )
+    ( vec_push [i] args ( gpu_arg_i64 n ) )
+    ( vec_push [i] args ( gpu_arg_i64 dim ) )
+    ( vec_push [i] args ( gpu_arg_i64 nt ) )
+    ( vec_push [i] args ( gpu_arg_i64 nh ) )
+    ( vec_push [i] args ( gpu_arg_i64 tl ) )
+    : i tot * heads * n / dim 2
+    ^ ( __gkd_launch kit src ( string_from `gkd_rope3d` ) ( gk_grid tot 256 ) args )
+}

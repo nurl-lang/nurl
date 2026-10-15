@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.11.4] — 2026-10-15
+
+- `gkd_rope2d` and `gkd_rope3d`: rotary position embedding over two axes (half-split pairs) and three axes (interleaved pairs, frequencies split `na`/`nb`/rest), in place on a [heads, n, dim] f32 tensor, by per-token i64 positions into cos/sin tables. Every buffer's size and dtype is checked against the launch, and a position past the tables leaves its pair untouched. They are lingbot-map's kernels, moved here unchanged, so a model package no longer needs `unsafe` to launch them.
+
 ## [0.11.3] — 2026-10-15
 
 - `gk_dbuf_upload_batch kit dsts srcs release`: many uploads as one batch (pinned, double-buffered on CUDA), each from a checked `Slice u` view of exactly its buffer's bytes. Safe: the sources are views the borrow checker keeps alive for the call, so a loader no longer queues raw host addresses for `gpu_upload_batch`.

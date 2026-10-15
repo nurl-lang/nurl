@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.12.1] — 2026-10-15
+
+- No `unsafe` left. The 2-D and 3-D RoPE kernels moved into gpukit 0.11.4 as `gkd_rope2d` / `gkd_rope3d`, with the same source and the same checks. The device-block check's output is byte-identical.
+
 ## [0.12.0] — 2026-10-14
 
 Requires NURL 0.73.0 with h268 closed, and gpukit 0.11.
