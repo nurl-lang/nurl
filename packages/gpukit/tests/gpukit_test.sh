@@ -257,8 +257,22 @@ else
     bad "ropecheck build"; tail -4 "$WORK/ropebuild.err"
 fi
 
+# Checked kernels: the subset's verdicts, and one run on the CPU backend.
+if $NURL tests/checkedcheck.nu "$WORK/checkedcheck" >/dev/null 2>"$WORK/ckbuild.err"; then
+    NURL_GPU=cpu "$WORK/checkedcheck" > "$WORK/checked.out" 2>&1
+    if grep -q "^SKIP\|need a C++ compiler" "$WORK/checked.out"; then
+        echo "  (checked kernels skipped — no backend)"
+    elif grep -q "^checked: all passed" "$WORK/checked.out"; then
+        ok "checked kernels: $(grep -c '^ok ' "$WORK/checked.out") cases"
+    else
+        bad "checked kernels"; grep '^FAIL' "$WORK/checked.out" | sed 's/^/    /'
+    fi
+else
+    bad "checkedcheck build"; tail -4 "$WORK/ckbuild.err"
+fi
+
 # AddressSanitizer over the device layer + op family.
-for t in devcheck opscheck; do
+for t in devcheck opscheck checkedcheck; do
     if NURL_SAN=1 $NURL "tests/$t.nu" "$WORK/${t}_san" >/dev/null 2>"$WORK/${t}_san_build.err"; then
         "$WORK/${t}_san" >/dev/null 2>"$WORK/${t}_san.out" || true
         if grep -qE "ERROR: AddressSanitizer|detected memory leaks" "$WORK/${t}_san.out"; then

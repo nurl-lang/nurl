@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.11.5] — 2026-10-15
+
+- **Checked kernels** (src/checked.nu). `gk_run_checked` launches a kernel written in a subset that cannot reach memory it was not given. The body touches buffers only through `LD(name, i)` / `ST(name, i, v)`, which gpukit defines from each bound buffer's own length. It may declare scalar locals, branch, loop and call a fixed list of math functions and rounding intrinsics. Pointers, dereferences, address-of, indexing, member access, the preprocessor, quotes, `asm`, `goto`, keyword casts, reserved names, other calls and unbalanced braces are refused, with the reason, before anything is compiled. So the launch is a safe call. Bindings move in and out of a `GkCall` (`gk_call_in_f`/`_out_f`/`_in_i`/`_out_i`/`_i64`/`_f64`, `gk_call_take_f`/`_i`). An output starts as the Vec it was bound with, so the device's previous contents never come back. A body is checked once per (name, bindings, body). `tests/checkedcheck.nu` covers 24 subset verdicts and a run with out-of-range indices.
+- `gk_inout_f` / `gk_inout_i`: buffers uploaded before the launch and copied back after it (`GkArg` kind 3).
+
 ## [0.11.4] — 2026-10-15
 
 - `gkd_rope2d` and `gkd_rope3d`: rotary position embedding over two axes (half-split pairs) and three axes (interleaved pairs, frequencies split `na`/`nb`/rest), in place on a [heads, n, dim] f32 tensor, by per-token i64 positions into cos/sin tables. Every buffer's size and dtype is checked against the launch, and a position past the tables leaves its pair untouched. They are lingbot-map's kernels, moved here unchanged, so a model package no longer needs `unsafe` to launch them.

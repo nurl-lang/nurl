@@ -57,6 +57,8 @@ $ `deps/gpu/src/gpu.nu`
 
 // A single argument to a kernel launch.
 //   kind 0 = input buffer   1 = output buffer   2 = scalar
+//   3 = in/out buffer (uploaded, then copied back: what the kernel does not
+//   write keeps the host's values)
 : GkArg {
     i kind
     * u host  // host data pointer for a buffer binding
@@ -472,6 +474,19 @@ unsafe @ gk_out_i ( Vec i ) v → GkArg {
     : i by * ( vec_len [i] v ) 8
     ^ @ GkArg { 1 h by 0 }
 }
+
+// In/out buffers: uploaded before the launch and copied back after it.
+unsafe @ gk_inout_f ( Vec f ) v → GkArg {
+    : *u h # *u ( vec_data [f] v )
+    : i by * ( vec_len [f] v ) 8
+    ^ @ GkArg { 3 h by 0 }
+}
+
+unsafe @ gk_inout_i ( Vec i ) v → GkArg {
+    : *u h # *u ( vec_data [i] v )
+    : i by * ( vec_len [i] v ) 8
+    ^ @ GkArg { 3 h by 0 }
+}
 // Raw buffers, for element layouts other than f64/i64 (e.g. a packed float32
 // host buffer): pass the host pointer and byte size directly.
 unsafe @ gk_buf_in * u host i bytes → GkArg { ^ @ GkArg { 0 host bytes 0 } }
@@ -589,7 +604,7 @@ raw @ gk_run GpuKit h s src s name i grid i block ( Vec GkArg ) call → b {
                     ( vec_push [i] args . a argval )
                 } {
                     : GpuBuffer db ( gpu_alloc . kit gpu . a bytes )
-                    ? == . a kind 0 {
+                    ? | == . a kind 0 == . a kind 3 {
                         ? == ( gpu_upload db . a host ) 0 {} { = ok F }
                     } {}
                     ( vec_push [i] args ( gpu_arg_buffer db ) )
@@ -615,7 +630,7 @@ raw @ gk_run GpuKit h s src s name i grid i block ( Vec GkArg ) call → b {
                 T ci → {
                     ?? ( vec_get [GkArg] call ci ) {
                         T a → {
-                            ? == . a kind 1 {
+                            ? | == . a kind 1 == . a kind 3 {
                                 ?? ( vec_get [GpuBuffer] bufs j ) {
                                     T db → { ? == ( gpu_download . a host db ) 0 {} { = ok F } }
                                     F _ → {}

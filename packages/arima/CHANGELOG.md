@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.6.2] — 2026-10-15
+
+- No `unsafe` left. The device evaluator's two kernels are written in gpukit 0.11.5's checked subset: every access is an `LD` / `ST` of a buffer the call bound, and `arima_eval_gpu` is a plain function. The ML recursion now updates its state in place, with no copy-back loop, and reuses each new gain instead of reading it back. The arithmetic is unchanged and the results are bit-identical, so the checks cost nothing overall. On the CPU backend the device phase runs 10 % faster single-threaded (median 5.34 vs 5.94 s) and at parity with all threads (2.52 vs 2.53 s).
+
 ## [0.6.1] — 2026-10-14
 
 ### Changed
