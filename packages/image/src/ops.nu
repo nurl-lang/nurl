@@ -17,6 +17,7 @@
 // which source-over-blends when the source has an alpha channel.
 
 $ `stdlib/core/vec.nu`
+$ `stdlib/core/slice.nu`
 $ `stdlib/std/float.nu`
 $ `core.nu`
 
@@ -346,19 +347,19 @@ $ `core.nu`
 //
 // Returns a table: slot 0 = ksize, then per output pixel a run of
 // (1 + ksize) slots holding `xmin` followed by ksize fixed-point weights.
-unsafe @ __img_coeffs i insize i outsize i filt → ( Vec i ) {
+@ __img_coeffs i insize i outsize i filt → ( Vec i ) {
     : f scale / # f insize # f outsize
     : f fscale ? < scale 1.0 1.0 scale
     : f support * ( __img_support filt ) fscale
     : i ksize + * 2 # i ( float_ceil support ) 1
     : i stride + ksize 1
     : ( Vec i ) tab ( vec_zeroed [i] + 1 * outsize stride )
-    : *i kk ( vec_data [i] tab )
-    = . kk 0 ksize
+    : ( Slice i ) kk ( slice_from_vec [i] tab )
+    ( slice_put [i] kk 0 ksize )
     : f ss / 1.0 fscale
     // one window's float weights, reused for every output pixel
     : ( Vec f ) wv ( vec_zeroed [f] ? > ksize 0 ksize 1 )
-    : *f w ( vec_data [f] wv )
+    : ( Slice f ) w ( slice_from_vec [f] wv )
     : ~ i xx 0
     ~ < xx outsize {
         : f center * + # f xx 0.5 scale
@@ -369,26 +370,26 @@ unsafe @ __img_coeffs i insize i outsize i filt → ( Vec i ) {
         = xmax - xmax xmin
         ? < xmax 0 { = xmax 0 } {}
         : i base + 1 * xx stride
-        = . kk base xmin
+        ( slice_put [i] kk base xmin )
         // Normalise in floating point, quantise after — quantising first
         // and normalising the integers is what makes a naive port drift.
         : ~ f wsum 0.0
         : ~ i x 0
         ~ < x xmax {
             : f v ( __img_filter filt * ss - + # f + x xmin 0.5 center )
-            = . w x v
+            ( slice_put [f] w x v )
             = wsum + wsum v
             = x + x 1
         }
         = x 0
         ~ < x xmax {
-            : f v ? != wsum 0.0 / . w x wsum 0.0
-            = . kk + + base 1 x ( __img_fix v )
+            : f v ? != wsum 0.0 / ( slice_at [f] w x ) wsum 0.0
+            ( slice_put [i] kk + + base 1 x ( __img_fix v ) )
             = x + x 1
         }
         // ksize is the worst case; a clipped window leaves a shorter run,
         // marked by its own length so the passes know where to stop.
-        = . kk + base 0 + xmin * xmax 1048576
+        ( slice_put [i] kk + base 0 + xmin * xmax 1048576 )
         = xx + xx 1
     }
     ^ tab
@@ -403,7 +404,7 @@ unsafe @ __img_coeffs i insize i outsize i filt → ( Vec i ) {
 
 // Shared separable resampler: the two fixed-point passes, parameterised
 // only by which kernel fills the coefficient windows.
-unsafe @ __img_resample Image im i nw i nh i filt → Image {
+@ __img_resample Image im i nw i nh i filt → Image {
     : i w . im width
     : i h . im height
     : i c . im channels
@@ -411,15 +412,15 @@ unsafe @ __img_resample Image im i nw i nh i filt → Image {
     : i half << 1 - __IMG_PREC 1
     // horizontal pass: w → nw, height unchanged
     : ( Vec i ) kxt ( __img_coeffs w nw filt )
-    : *i kx ( vec_data [i] kxt )
-    : i ksx . kx 0
+    : ( Slice i ) kx ( slice_from_vec [i] kxt )
+    : i ksx ( slice_at [i] kx 0 )
     : Image tmp ( image_new nw h c )
     : ~ i y 0
     ~ < y h {
         : ~ i ox 0
         ~ < ox nw {
             : i base + 1 * ox + ksx 1
-            : i packed . kx base
+            : i packed ( slice_at [i] kx base )
             : i xmin % packed 1048576
             : i xlen / packed 1048576
             : ~ i k 0
@@ -427,7 +428,7 @@ unsafe @ __img_resample Image im i nw i nh i filt → Image {
                 : ~ i acc half
                 : ~ i x 0
                 ~ < x xlen {
-                    = acc + acc * ( image_get im + xmin x y k ) . kx + + base 1 x
+                    = acc + acc * ( image_get im + xmin x y k ) ( slice_at [i] kx + + base 1 x )
                     = x + x 1
                 }
                 ( image_set tmp ox y k ( __img_clip8 acc ) )
@@ -439,13 +440,13 @@ unsafe @ __img_resample Image im i nw i nh i filt → Image {
     }
     // vertical pass: h → nh
     : ( Vec i ) kyt ( __img_coeffs h nh filt )
-    : *i ky ( vec_data [i] kyt )
-    : i ksy . ky 0
+    : ( Slice i ) ky ( slice_from_vec [i] kyt )
+    : i ksy ( slice_at [i] ky 0 )
     : Image out ( image_new nw nh c )
     : ~ i oy 0
     ~ < oy nh {
         : i base + 1 * oy + ksy 1
-        : i packed . ky base
+        : i packed ( slice_at [i] ky base )
         : i ymin % packed 1048576
         : i ylen / packed 1048576
         : ~ i ox 0
@@ -455,7 +456,7 @@ unsafe @ __img_resample Image im i nw i nh i filt → Image {
                 : ~ i acc half
                 : ~ i yy 0
                 ~ < yy ylen {
-                    = acc + acc * ( image_get tmp ox + ymin yy k ) . ky + + base 1 yy
+                    = acc + acc * ( image_get tmp ox + ymin yy k ) ( slice_at [i] ky + + base 1 yy )
                     = yy + yy 1
                 }
                 ( image_set out ox oy k ( __img_clip8 acc ) )

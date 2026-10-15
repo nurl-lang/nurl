@@ -16,7 +16,7 @@ $ `src/grad.nu`
 $ `src/emitc.nu`
 $ `deps/tensor/src/tensor.nu`
 
-@ sc GTape tp f v b param → GVar {
+@ sc inout GTape tp f v b param → GVar {
     : ( Vec f ) d ( vec_new [f] )
     ( vec_push [f] d v )
     : ( Vec i ) s ( vec_new [i] )
@@ -34,7 +34,7 @@ $ `deps/tensor/src/tensor.nu`
 
 // One example's parameter gradients via the tape (fresh episode per call).
 unsafe @ tape_grads f a f b f xf f v * u ga * u gb → v {
-    : GTape tp ( tape_new )
+    : ~ GTape tp ( tape_new )
     : GVar pa ( sc tp a T )
     : GVar pb ( sc tp b T )
     : GVar xl ( sc tp xf F )
@@ -52,7 +52,7 @@ unsafe @ tape_grads f a f b f xf f v * u ga * u gb → v {
 
 unsafe @ main → i {
     // ── emit the kernel from ONE symbolic episode ────────────────────
-    : GTape tp ( tape_new )
+    : ~ GTape tp ( tape_new )
     : GVar pa ( sc tp 0.0 T )
     : GVar pb ( sc tp 0.0 T )
     : GVar xl ( sc tp 0.5 F )

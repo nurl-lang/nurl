@@ -26,7 +26,7 @@
 //   ( pp_pick_target avg_aspect ) → i                packed (w<<16)|h
 //   ( pp_fit im tw th )           → !Frame String
 //   ( pp_width fr ) ( pp_height fr ) → i
-//   ( pp_data fr )                → *f   CHW, [0,1], borrowed
+//   ( pp_data fr )                → ( Vec f )   CHW, [0,1], borrowed
 //
 // EXIF orientation is NOT applied — the reference calls
 // `exif_transpose`, but the image package does not surface EXIF, and
@@ -50,7 +50,7 @@ $ `deps/image/src/image.nu`
 
 @ pp_height Frame fr → i { ^ . fr height }
 
-unsafe @ pp_data Frame fr → *f { ^ ( vec_data [f] . fr data ) }
+@ pp_data Frame fr → ( Vec f ) { ^ . fr data }
 
 // The reference's RESOLUTION_MAPPINGS[518]: aspect-ratio key → (w, h),
 // all divisible by 14. Keys ascending, exactly the floats the table
@@ -142,7 +142,7 @@ unsafe @ pp_data Frame fr → *f { ^ ( vec_data [f] . fr data ) }
 // kernel is LANCZOS going down and BICUBIC going up, the crop offsets
 // floor — each of those is the reference's own arithmetic, not an
 // approximation of it.
-unsafe @ pp_fit Image im i tw i th → !Frame String {
+@ pp_fit Image im i tw i th → !Frame String {
     : i w . im width
     : i h . im height
     ? | | <= w 0 <= h 0 != . im channels 3 {
@@ -160,22 +160,21 @@ unsafe @ pp_fit Image im i tw i th → !Frame String {
         ^ ( __pp_err `map-anything: crop outside the resized image` `` )
     } {}
     : Image fit ( image_crop resized left top tw th )
-    // Interleaved bytes to planar floats through the raw pointers — at
-    // three planes of 518×392 that is 609k per-element calls saved.
-    : ( Vec f ) data ( vec_with_cap [f] * 3 * tw th )
-    : b _dl ( vec_set_len [f] data * 3 * tw th )
-    : *f dp ( vec_data [f] data )
-    : *u sp ( vec_data [u] . fit data )
+    // Interleaved bytes to planar floats through checked views.
+    : ( Vec f ) data ( vec_zeroed [f] * 3 * tw th )
+    : ( Slice f ) dp ( slice_from_vec [f] data )
+    : ( Slice u ) sp ( slice_from_vec [u] . fit data )
     : ~ i k 0
     ~ < k 3 {
         : i plane * k * tw th
         : ~ i y 0
         ~ < y th {
-            : i row * * y tw 3
-            : i orow + plane * y tw
+            // one row of each, so the checks leave the inner loop
+            : ( Slice f ) drow ( slice_window [f] dp + plane * y tw tw )
+            : ( Slice u ) srow ( slice_window [u] sp + * * y tw 3 k - * tw 3 k )
             : ~ i x 0
             ~ < x tw {
-                = . dp + orow x / # f # i . sp + + row * x 3 k 255.0
+                ( slice_put [f] drow x / # f # i ( slice_at [u] srow * x 3 ) 255.0 )
                 = x + x 1
             }
             = y + y 1

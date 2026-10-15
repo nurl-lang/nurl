@@ -1,5 +1,42 @@
 # Changelog
 
+## [0.4.6] — 2026-10-15
+
+### Added
+
+- `tok_empty`: a tokenizer with no vocabulary, for an engine record built
+  before its model's tokenizer is loaded (nurllama's blank engine).
+
+## [0.4.5] — 2026-10-14
+
+Requires NURL 0.73.0 with `map_get_with` (stdlib/std/hashmap.nu) and
+stdlib/std/unicat.nu.
+
+### Fixed
+
+- The BPE pre-tokenizers (GPT-2 and qwen2) classify characters as HF's
+  regexes do: `\p{L}`, `\p{N}` and `\s` by Unicode category. Every
+  non-ASCII byte counted as a letter, so `(§`, `«q»`, `½`, Arabic digits or a
+  no-break space split differently from the model's own tokenizer — 7 of 15
+  texts under qwen2 and the GPT-2 split of this repository's docs gave other
+  ids than HF `tokenizers`; all match now, at the same speed.
+
+### Changed
+
+- No `unsafe` function is left. The piece and merge-rank maps own copies of
+  their keys (`( HashMap String i )`) and are looked up by a borrowed `s`
+  with `map_get_with`, nothing allocated; they used to be keyed by views of
+  the tokenizer's own strings.
+
+## [0.4.4] — 2026-10-14
+
+Requires NURL 0.73.0.
+
+### Changed
+
+- A tokenizer's state is built as a plain struct and shared frozen in its `Arc`: encode, decode and the accessors read it through `arc_get`, with no lock and no raw pointer. Text is walked through slices (`slice_byte`, `slice_window`, `string_push_window`, `slice_bytes_eq` — NURL 0.73.0), so a probe or a byte read can no longer run past the text. Encodings are bit-identical and as fast (a 400 kB SPM / BPE / Unigram run against the previous version).
+- 42 fewer functions are `unsafe` than in 0.4.3 (1 left: `tok_build`, whose lookup maps are keyed by views of the tokenizer's own strings).
+
 ## [0.4.3] — 2026-10-11
 
 Requires NURL 0.73.0, which allows `mem_forget`, `mem_take` and the

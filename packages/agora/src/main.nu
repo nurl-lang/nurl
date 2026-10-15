@@ -176,7 +176,8 @@ $ `service.nu`
             : b multi ( ag_auth_multi )
             ( string_push_str m ? multi `multi-tenant` `single-tenant` )
             ( string_push_str m `): ` )
-            ( string_push_str m ( ag_auth_issuer ) )
+            : String iss ( ag_auth_issuer )
+            ( string_push_str m ( string_data iss ) )
             ( string_push_str m `\n  organisations under ` )
             ( string_push_str m ( string_data home ) )
             ( string_push_str m `/orgs` )
@@ -262,7 +263,9 @@ $ `service.nu`
     : ~ AgCaller caller ( ag_caller_anon )
     ? == ( ag_op_auth_kind ( string_data op ) ) 1 {
         ? ( __agm_identity x ) {} { ^ 2 }
-        = caller ( ag_caller_local_from ( ag_store ) ( ag_local_identity ) ( ag_local_origin ) now )
+        : String who ( ag_local_identity )
+        : String org ( ag_local_origin )
+        = caller ( ag_caller_local_from ( ag_store ) ( string_data who ) ( string_data org ) now )
         ? . caller authed {} {
             ( nurl_eprint `agora: ` )
             ( nurl_eprintln ( ag_local_refusal ) )

@@ -174,8 +174,10 @@
 // names, Result-typed).
 & `c` @ nurl_dir_list_open s path → i
 
+// (A runtime handle: only an `unsafe` function may call it.)
 & `c` @ nurl_dir_list_next i handle → sink s
 
+// (A runtime handle: only an `unsafe` function may call it.)
 & `c` @ nurl_dir_list_close i handle → v
 
 // libc stdio pass-throughs (FILE* carried as `s`).
@@ -329,6 +331,7 @@
 
 & `c` @ nurl_http_perform_full_to s method s url s headers s body i connect_ms i total_ms → i
 
+// (A runtime handle: only an `unsafe` function may call it.)
 & `c` @ nurl_http_response_free i handle → v
 
 // Streaming body: open a handle, pump headers, then read chunks until
@@ -350,18 +353,25 @@
 // (Raw memory: only an `unsafe` function may call it.)
 & `c` @ nurl_proc_run s argv s stdin_data i stdin_len s cwd → i
 
+// (A runtime handle: only an `unsafe` function may call it.)
 & `c` @ nurl_proc_exit_code i handle → i
 
+// (A runtime handle: only an `unsafe` function may call it.)
 & `c` @ nurl_proc_err_kind i handle → i
 
+// (A runtime handle: only an `unsafe` function may call it.)
 & `c` @ nurl_proc_stdout i handle → s
 
+// (A runtime handle: only an `unsafe` function may call it.)
 & `c` @ nurl_proc_stderr i handle → s
 
+// (A runtime handle: only an `unsafe` function may call it.)
 & `c` @ nurl_proc_stdout_len i handle → i
 
+// (A runtime handle: only an `unsafe` function may call it.)
 & `c` @ nurl_proc_stderr_len i handle → i
 
+// (A runtime handle: only an `unsafe` function may call it.)
 & `c` @ nurl_proc_free i handle → v
 
 // Long-lived child with piped stdin/stdout: spawn, write, read lines,
@@ -369,27 +379,37 @@
 // the child's stdout closed.
 & `c` @ nurl_proc_spawn s argv s cwd i merge_stderr → i
 
+// (A runtime handle: only an `unsafe` function may call it.)
 & `c` @ nurl_proc_spawn_err_kind i handle → i
 
+// (A runtime handle: only an `unsafe` function may call it.)
 & `c` @ nurl_proc_spawn_pid i handle → i
 
 // (Raw memory: only an `unsafe` function may call it.)
 & `c` @ nurl_proc_spawn_write i handle s data i len → i
 
+// (A runtime handle: only an `unsafe` function may call it.)
 & `c` @ nurl_proc_spawn_close_stdin i handle → v
 
+// (A runtime handle: only an `unsafe` function may call it.)
 & `c` @ nurl_proc_spawn_read_line i handle i timeout_ms → s
 
+// (A runtime handle: only an `unsafe` function may call it.)
 & `c` @ nurl_proc_spawn_read_line_len i handle → i
 
+// (A runtime handle: only an `unsafe` function may call it.)
 & `c` @ nurl_proc_spawn_eof i handle → i
 
+// (A runtime handle: only an `unsafe` function may call it.)
 & `c` @ nurl_proc_spawn_last_io_err i handle → i
 
+// (A runtime handle: only an `unsafe` function may call it.)
 & `c` @ nurl_proc_spawn_wait i handle → i
 
+// (A runtime handle: only an `unsafe` function may call it.)
 & `c` @ nurl_proc_spawn_kill i handle i sig → i
 
+// (A runtime handle: only an `unsafe` function may call it.)
 & `c` @ nurl_proc_spawn_free i handle → v
 
 // ── TCP / TLS sockets (raw) ────────────────────────────────────────
@@ -405,18 +425,24 @@
 
 & `c` @ nurl_tcp_listen_tls_alpn s host i port i backlog s cert_pem s key_pem s alpn → i
 
+// (A runtime handle: only an `unsafe` function may call it.)
 & `c` @ nurl_tcp_alpn_selected i conn → s
 
+// (A runtime handle: only an `unsafe` function may call it.)
 & `c` @ nurl_tcp_tls_add_sni i listener s host s cert_pem s key_pem → i
 
+// (A runtime handle: only an `unsafe` function may call it.)
 & `c` @ nurl_tcp_tls_reload i listener s host s cert_pem s key_pem → i
 
+// (A runtime handle: only an `unsafe` function may call it.)
 & `c` @ nurl_tcp_tls_require_client_cert i listener s ca_pem i require → i
 
+// (A runtime handle: only an `unsafe` function may call it.)
 & `c` @ nurl_tcp_peer_cert_subject i conn → s
 
 // Accept a connection; read/write raw bytes (return byte count, <0 on
 // error); close/shutdown; error kind, peer address, IO timeout (ms).
+// (A runtime handle: only an `unsafe` function may call it.)
 & `c` @ nurl_tcp_accept i listener → i
 
 // (Raw memory: only an `unsafe` function may call it.)
@@ -425,20 +451,26 @@
 // (Raw memory: only an `unsafe` function may call it.)
 & `c` @ nurl_tcp_write i conn s buf i len → i
 
+// (A runtime handle: only an `unsafe` function may call it.)
 & `c` @ nurl_tcp_close i conn → v
 
+// (A runtime handle: only an `unsafe` function may call it.)
 & `c` @ nurl_tcp_shutdown i conn → v
 
+// (A runtime handle: only an `unsafe` function may call it.)
 & `c` @ nurl_tcp_err_kind i conn → i
 
+// (A runtime handle: only an `unsafe` function may call it.)
 & `c` @ nurl_tcp_peer_addr i conn → s
 
+// (A runtime handle: only an `unsafe` function may call it.)
 & `c` @ nurl_tcp_set_timeout i conn i ms → v
 
 // ── Signals, panic, recover ────────────────────────────────────────
 
 // Install a SIGINT/SIGTERM handler that flips a shutdown flag servers
 // poll (std/net.nu accept loops honor it); trigger fires it manually.
+// (A runtime handle: only an `unsafe` function may call it.)
 & `c` @ nurl_signal_install_shutdown i mode → v
 
 & `c` @ nurl_signal_trigger_shutdown → v

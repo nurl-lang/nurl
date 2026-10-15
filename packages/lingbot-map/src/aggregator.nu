@@ -75,18 +75,18 @@ $ `src/rope.nu`
 // `taps` is a 4-element array; the model uses [4, 11, 17, 23], and a
 // test can point it at early groups to see how far a divergence has
 // travelled by then.
-unsafe @ ag_tap * i taps i i0 → i {
+@ ag_tap ( Slice i ) taps i i0 → i {
     : ~ i k 0
-    ~ < k 4 { ? == . taps k i0 { ^ k } {} = k + k 1 }
+    ~ < k 4 { ? == ( slice_at [i] taps k ) i0 { ^ k } {} = k + k 1 }
     ^ -1
 }
 
 // The model's own tap points.
-unsafe @ ag_default_taps * i out → v {
-    = . out 0 4 = . out 1 11 = . out 2 17 = . out 3 23
+@ ag_default_taps ( Slice i ) out → v {
+    ( slice_put [i] out 0 4 ) ( slice_put [i] out 1 11 ) ( slice_put [i] out 2 17 ) ( slice_put [i] out 3 23 )
 }
 
-unsafe @ ag_load Lw w GpuKit kit → Agg {
+@ ag_load Lw w GpuKit kit → Agg {
     : ( Vec LmBlk ) fb ( vec_new [LmBlk] )
     : ( Vec LmBlk ) gb ( vec_new [LmBlk] )
     : ~ i i0 0
@@ -101,21 +101,19 @@ unsafe @ ag_load Lw w GpuKit kit → Agg {
     // by 32 complex frequencies, the same for every forward pass.
     : i width ( rope3d_width )
     : i tn * AG_MAXPOS3 width
-    : ( Vec u ) hc__v ( vec_zeroed [u] * 8 tn )
-    : *f hc # *f ( vec_data [u] hc__v )
-    : ( Vec u ) hs__v ( vec_zeroed [u] * 8 tn )
-    : *f hs # *f ( vec_data [u] hs__v )
+    : ( Vec f ) hc__v ( vec_zeroed [f] tn )
+    : ( Slice f ) hc ( slice_from_vec [f] hc__v )
+    : ( Vec f ) hs__v ( vec_zeroed [f] tn )
+    : ( Slice f ) hs ( slice_from_vec [f] hs__v )
     ( rope3d_tables AG_MAXPOS3 hc hs )
     : GkBuf c3 ( gk_dbuf_new kit tn GK_F32 )
     : GkBuf s3 ( gk_dbuf_new kit tn GK_F32 )
-    : ( Vec f ) tc ( vec_with_cap [f] tn )
-    : ( Vec f ) ts ( vec_with_cap [f] tn )
-    : b _l1 ( vec_set_len [f] tc tn )
-    : b _l2 ( vec_set_len [f] ts tn )
-    : *f tcp ( vec_data [f] tc )
-    : *f tsp ( vec_data [f] ts )
+    : ( Vec f ) tc ( vec_zeroed [f] tn )
+    : ( Vec f ) ts ( vec_zeroed [f] tn )
+    : ( Slice f ) tcp ( slice_from_vec [f] tc )
+    : ( Slice f ) tsp ( slice_from_vec [f] ts )
     : ~ i j 0
-    ~ < j tn { = . tcp j . hc j = . tsp j . hs j = j + j 1 }
+    ~ < j tn { ( slice_put [f] tcp j ( slice_at [f] hc j ) ) ( slice_put [f] tsp j ( slice_at [f] hs j ) ) = j + j 1 }
     : b _u1 ( gk_dbuf_upload kit c3 tc )
     : b _u2 ( gk_dbuf_upload kit s3 ts )
     ^ @ Agg {
@@ -223,45 +221,44 @@ unsafe @ ag_load Lw w GpuKit kit → Agg {
 }
 
 // The six special-token rows for frame `fidx`, as a host vector.
-unsafe @ ag_special_rows Agg a i fidx i nscale → ( Vec f ) {
-    : ( Vec f ) out ( vec_with_cap [f] * AG_SPECIAL AG_DIM )
-    : b _sl ( vec_set_len [f] out * AG_SPECIAL AG_DIM )
-    : *f op ( vec_data [f] out )
-    : *f cp ( vec_data [f] . a camtok )
-    : *f rp ( vec_data [f] . a regtok )
-    : *f sp ( vec_data [f] . a scltok )
+@ ag_special_rows Agg a i fidx i nscale → ( Vec f ) {
+    : ( Vec f ) out ( vec_zeroed [f] * AG_SPECIAL AG_DIM )
+    : ( Slice f ) op ( slice_from_vec [f] out )
+    : ( Slice f ) cp ( slice_from_vec [f] . a camtok )
+    : ( Slice f ) rp ( slice_from_vec [f] . a regtok )
+    : ( Slice f ) sp ( slice_from_vec [f] . a scltok )
     : i cslot ? == fidx 0 0 1
     : i sslot ? < fidx nscale 0 1
     : ~ i c 0
-    ~ < c AG_DIM { = . op c . cp + * cslot AG_DIM c = c + c 1 }
+    ~ < c AG_DIM { ( slice_put [f] op c ( slice_at [f] cp + * cslot AG_DIM c ) ) = c + c 1 }
     : ~ i r 0
     ~ < r AG_REG {
         = c 0
         ~ < c AG_DIM {
-            = . op + * + r 1 AG_DIM c . rp + * cslot * AG_REG AG_DIM + * r AG_DIM c
+            ( slice_put [f] op + * + r 1 AG_DIM c ( slice_at [f] rp + * cslot * AG_REG AG_DIM + * r AG_DIM c ) )
             = c + c 1
         }
         = r + r 1
     }
     = c 0
-    ~ < c AG_DIM { = . op + * 5 AG_DIM c . sp + * sslot AG_DIM c = c + c 1 }
+    ~ < c AG_DIM { ( slice_put [f] op + * 5 AG_DIM c ( slice_at [f] sp + * sslot AG_DIM c ) ) = c + c 1 }
     ^ out
 }
 
 // Grid coordinates for the 3-D rope: special token j at (f, j, j), patch
 // (py, px) at (f, 6+py, 6+px) — the specials run down a diagonal the
 // patch grid never reaches.
-unsafe @ ag_pos3 i gh i gw i fidx * i fr * i rw * i cl → v {
+@ ag_pos3 i gh i gw i fidx ( Slice i ) fr ( Slice i ) rw ( Slice i ) cl → v {
     : ~ i j 0
-    ~ < j AG_SPECIAL { = . fr j fidx = . rw j j = . cl j j = j + j 1 }
+    ~ < j AG_SPECIAL { ( slice_put [i] fr j fidx ) ( slice_put [i] rw j j ) ( slice_put [i] cl j j ) = j + j 1 }
     : ~ i y 0
     ~ < y gh {
         : ~ i x 0
         ~ < x gw {
             : i idx + AG_SPECIAL + * y gw x
-            = . fr idx fidx
-            = . rw idx + AG_SPECIAL y
-            = . cl idx + AG_SPECIAL x
+            ( slice_put [i] fr idx fidx )
+            ( slice_put [i] rw idx + AG_SPECIAL y )
+            ( slice_put [i] cl idx + AG_SPECIAL x )
             = x + x 1
         }
         = y + y 1
@@ -269,16 +266,16 @@ unsafe @ ag_pos3 i gh i gw i fidx * i fr * i rw * i cl → v {
 }
 
 // Grid coordinates for the 2-D rope: specials at 0, patches offset by 1.
-unsafe @ ag_pos2 i gh i gw * i rows * i cols → v {
+@ ag_pos2 i gh i gw ( Slice i ) rows ( Slice i ) cols → v {
     : ~ i j 0
-    ~ < j AG_SPECIAL { = . rows j 0 = . cols j 0 = j + j 1 }
+    ~ < j AG_SPECIAL { ( slice_put [i] rows j 0 ) ( slice_put [i] cols j 0 ) = j + j 1 }
     : ~ i y 0
     ~ < y gh {
         : ~ i x 0
         ~ < x gw {
             : i idx + AG_SPECIAL + * y gw x
-            = . rows idx + y 1
-            = . cols idx + x 1
+            ( slice_put [i] rows idx + y 1 )
+            ( slice_put [i] cols idx + x 1 )
             = x + x 1
         }
         = y + y 1
@@ -289,32 +286,29 @@ unsafe @ ag_pos2 i gh i gw * i rows * i cols → v {
 // leaving them to the caller was a bug worth the comment: uninitialised
 // device memory made the very first block produce NaN, and a NaN 72
 // blocks deep says nothing about where it came from.
-unsafe @ ag_setup_rope2 GpuKit kit LmWs ws i hd i maxpos → b {
+@ ag_setup_rope2 GpuKit kit LmWs ws i hd i maxpos → b {
     : i half / hd 2
     : i tn * maxpos half
-    : ( Vec u ) hc__v ( vec_zeroed [u] * 8 tn )
-    : *f hc # *f ( vec_data [u] hc__v )
-    : ( Vec u ) hs__v ( vec_zeroed [u] * 8 tn )
-    : *f hs # *f ( vec_data [u] hs__v )
+    : ( Vec f ) hc__v ( vec_zeroed [f] tn )
+    : ( Slice f ) hc ( slice_from_vec [f] hc__v )
+    : ( Vec f ) hs__v ( vec_zeroed [f] tn )
+    : ( Slice f ) hs ( slice_from_vec [f] hs__v )
     ( rope2d_tables half maxpos hc hs )
-    : ( Vec f ) tc ( vec_with_cap [f] tn )
-    : ( Vec f ) ts ( vec_with_cap [f] tn )
-    : b _l1 ( vec_set_len [f] tc tn )
-    : b _l2 ( vec_set_len [f] ts tn )
-    : *f tcp ( vec_data [f] tc )
-    : *f tsp ( vec_data [f] ts )
+    : ( Vec f ) tc ( vec_zeroed [f] tn )
+    : ( Vec f ) ts ( vec_zeroed [f] tn )
+    : ( Slice f ) tcp ( slice_from_vec [f] tc )
+    : ( Slice f ) tsp ( slice_from_vec [f] ts )
     : ~ i j 0
-    ~ < j tn { = . tcp j . hc j = . tsp j . hs j = j + j 1 }
+    ~ < j tn { ( slice_put [f] tcp j ( slice_at [f] hc j ) ) ( slice_put [f] tsp j ( slice_at [f] hs j ) ) = j + j 1 }
     : b ok & ( gk_dbuf_upload kit . ws cosb tc ) ( gk_dbuf_upload kit . ws sinb ts )
     ^ ok
 }
 
-unsafe @ __ag_upi GpuKit kit GkBuf b * i p i n → b {
-    : ( Vec i ) v ( vec_with_cap [i] n )
-    : b _sl ( vec_set_len [i] v n )
-    : *i vp ( vec_data [i] v )
+@ __ag_upi GpuKit kit GkBuf b ( Slice i ) p i n → b {
+    : ( Vec i ) v ( vec_zeroed [i] n )
+    : ( Slice i ) vp ( slice_from_vec [i] v )
     : ~ i j 0
-    ~ < j n { = . vp j . p j = j + j 1 }
+    ~ < j n { ( slice_put [i] vp j ( slice_at [i] p j ) ) = j + j 1 }
     : b r ( gk_dbuf_upload_i kit b v )
     ^ r
 }
@@ -327,9 +321,9 @@ unsafe @ __ag_upi GpuKit kit GkBuf b * i p i n → b {
 //
 // Where this frame's rows go in the caches, and how much of them is
 // live, follows from `fidx` alone — see ag_kv_woff / ag_kv_nvalid.
-unsafe @ ag_forward_one GpuKit kit Agg a LmWs ws GkBuf dtok GkBuf tok
-* f img i h i w i gh i gw i fidx i nscale i kvscale i kvwindow
-i stopat * i taps GkBuf out → b {
+@ ag_forward_one GpuKit kit Agg a LmWs ws GkBuf dtok GkBuf tok
+( Slice f ) img i h i w i gh i gw i fidx i nscale i kvscale i kvwindow
+i stopat ( Slice i ) taps GkBuf out → b {
     : i np * gh gw
     : i p ( ag_ntokens gh gw )
     : i hd / AG_DIM AG_HEADS
@@ -351,16 +345,16 @@ i stopat * i taps GkBuf out → b {
     ? ( gkd_map kit `copy` `x` pdst psrc ) {} { ^ F }
 
     // positions for both rotations
-    : ( Vec u ) r2__v ( vec_zeroed [u] * 8 p )
-    : *i r2 # *i ( vec_data [u] r2__v )
-    : ( Vec u ) c2__v ( vec_zeroed [u] * 8 p )
-    : *i c2 # *i ( vec_data [u] c2__v )
-    : ( Vec u ) fr__v ( vec_zeroed [u] * 8 p )
-    : *i fr # *i ( vec_data [u] fr__v )
-    : ( Vec u ) rw__v ( vec_zeroed [u] * 8 p )
-    : *i rw # *i ( vec_data [u] rw__v )
-    : ( Vec u ) cl__v ( vec_zeroed [u] * 8 p )
-    : *i cl # *i ( vec_data [u] cl__v )
+    : ( Vec i ) r2__v ( vec_zeroed [i] p )
+    : ( Slice i ) r2 ( slice_from_vec [i] r2__v )
+    : ( Vec i ) c2__v ( vec_zeroed [i] p )
+    : ( Slice i ) c2 ( slice_from_vec [i] c2__v )
+    : ( Vec i ) fr__v ( vec_zeroed [i] p )
+    : ( Slice i ) fr ( slice_from_vec [i] fr__v )
+    : ( Vec i ) rw__v ( vec_zeroed [i] p )
+    : ( Slice i ) rw ( slice_from_vec [i] rw__v )
+    : ( Vec i ) cl__v ( vec_zeroed [i] p )
+    : ( Slice i ) cl ( slice_from_vec [i] cl__v )
     ( ag_pos2 gh gw r2 c2 )
     ( ag_pos3 gh gw fidx fr rw cl )
     : GkBuf bfr ( gk_dbuf_new kit p GK_I64 )

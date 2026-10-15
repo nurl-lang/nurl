@@ -161,19 +161,19 @@ $ `stdlib/core/slice.nu`
 @ __ma_is_dir s p → b { ^ == 2 ( nurl_path_type p ) }
 
 // ImageNet normalisation, in place over CHW planes.
-unsafe @ __ma_norm * f p i n → v {
-    : ( Vec u ) mean__v ( vec_zeroed [u] 24 )
-    : *f mean # *f ( vec_data [u] mean__v )
-    : ( Vec u ) std__v ( vec_zeroed [u] 24 )
-    : *f std # *f ( vec_data [u] std__v )
-    = . mean 0 0.485 = . mean 1 0.456 = . mean 2 0.406
-    = . std 0 0.229 = . std 1 0.224 = . std 2 0.225
+@ __ma_norm ( Slice f ) p i n → v {
+    : ( Vec f ) mean__v ( vec_zeroed [f] 3 )
+    : ( Slice f ) mean ( slice_from_vec [f] mean__v )
+    : ( Vec f ) std__v ( vec_zeroed [f] 3 )
+    : ( Slice f ) std ( slice_from_vec [f] std__v )
+    ( slice_put [f] mean 0 0.485 ) ( slice_put [f] mean 1 0.456 ) ( slice_put [f] mean 2 0.406 )
+    ( slice_put [f] std 0 0.229 ) ( slice_put [f] std 1 0.224 ) ( slice_put [f] std 2 0.225 )
     : ~ i c 0
     ~ < c 3 {
         : ~ i j 0
         ~ < j n {
             : i o + * c n j
-            = . p o / - . p o . mean c . std c
+            ( slice_put [f] p o / - ( slice_at [f] p o ) ( slice_at [f] mean c ) ( slice_at [f] std c ) )
             = j + j 1
         }
         = c + c 1
@@ -221,9 +221,9 @@ unsafe @ __ma_norm * f p i n → v {
 }
 
 : Opts {
-    s model
-    s out
-    s video
+    String model
+    String out
+    String video
     i view
     i port
     i ascii
@@ -240,12 +240,12 @@ unsafe @ __ma_norm * f p i n → v {
     i domask
     ( Vec String ) frames
     i bad  // 0 run, 1 error, 2 help, 3 view-subcommand
-    s viewfile
-    s vhost
+    String viewfile
+    String vhost
     i vtls
 }
 
-unsafe @ __ma_parse → Opts {
+@ __ma_parse → Opts {
     : ~ s model ``
     : ~ s out `cloud.ply`
     : ~ s video ``
@@ -365,7 +365,7 @@ unsafe @ __ma_parse → Opts {
         : ( Vec String ) kept ( vec_new [String] )
         : ~ i r 0
         ~ < r ( vec_len [String] fr ) {
-            ?? ( vec_replace [String] fr r # String 0 ) {
+            ?? ( vec_replace [String] fr r ( string_new ) ) {
                 T st → { ? == 0 % r stride { ( vec_push [String] kept st ) } {} }
                 F → {}
             }
@@ -385,13 +385,13 @@ unsafe @ __ma_parse → Opts {
         : b _c ( vec_truncate [String] fr maxviews )
     } {}
     ? & == bad 0 == ( vec_len [String] fr ) 0 { = bad 2 } {}
-    ^ @ Opts { model out video view port ascii verbose maxviews stride fps
-        pstride confpct maskedges masksky window overlap domask fr bad viewfile vhost vtls }
+    ^ @ Opts { ( string_from model ) ( string_from out ) ( string_from video ) view port ascii verbose maxviews stride fps
+        pstride confpct maskedges masksky window overlap domask fr bad ( string_from viewfile ) ( string_from vhost ) vtls }
 }
 
 // ── main ────────────────────────────────────────────────────────────
 
-unsafe @ main → i {
+@ main → i {
     : Opts o ( __ma_parse )
     ? == . o bad 2 {
         ( __ma_usage )
@@ -400,13 +400,13 @@ unsafe @ main → i {
     ? == . o bad 4 { ^ 0 } {}
     ? == . o bad 1 { ^ 1 } {}
     ? == . o bad 3 {
-        ^ ( vw_serve . o viewfile . o vhost . o port `` 0 . o vtls )
+        ^ ( vw_serve ( string_data . o viewfile ) ( string_data . o vhost ) . o port `` 0 . o vtls )
     } {}
 
     // the checkpoint
     : ~ s mpath ``
     : ~ String mhold ( string_new )
-    ?? ( __ma_model . o model . o verbose ) {
+    ?? ( __ma_model ( string_data . o model ) . o verbose ) {
         F e → {
             ( nurl_print `map-anything: ` )
             ( nurl_print ( string_data e ) ) ( nurl_print `\n` )
@@ -497,7 +497,8 @@ unsafe @ main → i {
     : PoseH ph ( ph_load lw kit )
     : ScaleH sh ( sh_load lw kit )
     ? ( lw_ok lw ) {} {
-        ( nurl_print ( lw_error lw ) ) ( nurl_print `\n` )
+        : String le ( lw_error lw )
+        ( nurl_print ( string_data le ) ) ( nurl_print `\n` )
         ^ 1
     }
 
@@ -530,8 +531,8 @@ unsafe @ main → i {
     : GkBuf i11b ( gk_dbuf_new kit * nmax IS_DIM GK_F32 )
     : GkBuf finb ( gk_dbuf_new kit * nmax IS_DIM GK_F32 )
     : GkBuf tok ( gk_dbuf_new kit * tpv DN_DIM GK_F32 )
-    : ( Vec u ) norm__v ( vec_zeroed [u] * 8 * 3 * h w )
-    : *f norm # *f ( vec_data [u] norm__v )
+    : ( Vec f ) norm__v ( vec_zeroed [f] * 3 * h w )
+    : ( Slice f ) norm ( slice_from_vec [f] norm__v )
 
     // sky segmentation, when asked for: the LingBot demo's skyseg.onnx,
     // fetched through hub and run through the onnx package
@@ -553,7 +554,7 @@ unsafe @ main → i {
         }
     } {}
 
-    : PlyW ply ?? ( ply_create . o out . o ascii `map-anything, pure NURL (github.com/facebookresearch/map-anything port)` ) {
+    : PlyW ply ?? ( ply_create ( string_data . o out ) . o ascii `map-anything, pure NURL (github.com/facebookresearch/map-anything port)` ) {
         F e → {
             ( nurl_print ( string_data e ) ) ( nurl_print `\n` )
             ^ 1
@@ -565,40 +566,38 @@ unsafe @ main → i {
     : GkBuf depth ( gk_dbuf_new kit hw GK_F32 )
     : GkBuf conf ( gk_dbuf_new kit hw GK_F32 )
     : GkBuf mlog ( gk_dbuf_new kit hw GK_F32 )
-    : ( Vec f ) hostv ( vec_with_cap [f] * 3 hw )
-    : b _hl ( vec_set_len [f] hostv * 3 hw )
-    : ( Vec u ) rays_h__v ( vec_zeroed [u] * 8 * 3 hw )
-    : *f rays_h # *f ( vec_data [u] rays_h__v )
-    : ( Vec u ) depth_h__v ( vec_zeroed [u] * 8 hw )
-    : *f depth_h # *f ( vec_data [u] depth_h__v )
-    : ( Vec u ) conf_h__v ( vec_zeroed [u] * 8 hw )
-    : *f conf_h # *f ( vec_data [u] conf_h__v )
-    : ( Vec u ) mlog_h__v ( vec_zeroed [u] * 8 hw )
-    : *f mlog_h # *f ( vec_data [u] mlog_h__v )
-    : ( Vec u ) pose__v ( vec_zeroed [u] 56 )
-    : *f pose # *f ( vec_data [u] pose__v )
-    : ( Vec u ) pts__v ( vec_zeroed [u] * 24 hw )
-    : *f pts # *f ( vec_data [u] pts__v )
-    : ( Vec u ) depthz__v ( vec_zeroed [u] * 8 hw )
-    : *f depthz # *f ( vec_data [u] depthz__v )
+    : ( Vec f ) rays_h__v ( vec_zeroed [f] * 3 hw )
+    : ( Slice f ) rays_h ( slice_from_vec [f] rays_h__v )
+    : ( Vec f ) depth_h__v ( vec_zeroed [f] hw )
+    : ( Slice f ) depth_h ( slice_from_vec [f] depth_h__v )
+    : ( Vec f ) conf_h__v ( vec_zeroed [f] hw )
+    : ( Slice f ) conf_h ( slice_from_vec [f] conf_h__v )
+    : ( Vec f ) mlog_h__v ( vec_zeroed [f] hw )
+    : ( Slice f ) mlog_h ( slice_from_vec [f] mlog_h__v )
+    : ( Vec f ) pose__v ( vec_zeroed [f] 7 )
+    : ( Slice f ) pose ( slice_from_vec [f] pose__v )
+    : ( Vec f ) pts__v ( vec_zeroed [f] * 3 hw )
+    : ( Slice f ) pts ( slice_from_vec [f] pts__v )
+    : ( Vec f ) depthz__v ( vec_zeroed [f] hw )
+    : ( Slice f ) depthz ( slice_from_vec [f] depthz__v )
     : ( Vec u ) mask__v ( vec_zeroed [u] hw )
-    : *u mask # *u ( vec_data [u] mask__v )
+    : ( Slice u ) mask ( slice_from_vec [u] mask__v )
     // the stitch: the previous window's last `ov` views in GLOBAL
     // coordinates, and pair buffers for the Sim(3) fit
-    : ( Vec u ) prev_pts__v ( vec_zeroed [u] * 24 * ov hw )
-    : *f prev_pts # *f ( vec_data [u] prev_pts__v )
+    : ( Vec f ) prev_pts__v ( vec_zeroed [f] * 3 * ov hw )
+    : ( Slice f ) prev_pts ( slice_from_vec [f] prev_pts__v )
     : ( Vec u ) prev_mask__v ( vec_zeroed [u] * ov hw )
-    : *u prev_mask # *u ( vec_data [u] prev_mask__v )
-    : ( Vec u ) pair_x__v ( vec_zeroed [u] * 24 * ov hw )
-    : *f pair_x # *f ( vec_data [u] pair_x__v )
-    : ( Vec u ) pair_y__v ( vec_zeroed [u] * 24 * ov hw )
-    : *f pair_y # *f ( vec_data [u] pair_y__v )
-    : ( Vec u ) xf__v ( vec_zeroed [u] 104 )
-    : *f xf # *f ( vec_data [u] xf__v )
-    = . xf 0 1.0
-    = . xf 1 1.0
-    = . xf 5 1.0
-    = . xf 9 1.0
+    : ( Slice u ) prev_mask ( slice_from_vec [u] prev_mask__v )
+    : ( Vec f ) pair_x__v ( vec_zeroed [f] * 3 * ov hw )
+    : ( Slice f ) pair_x ( slice_from_vec [f] pair_x__v )
+    : ( Vec f ) pair_y__v ( vec_zeroed [f] * 3 * ov hw )
+    : ( Slice f ) pair_y ( slice_from_vec [f] pair_y__v )
+    : ( Vec f ) xf__v ( vec_zeroed [f] 13 )
+    : ( Slice f ) xf ( slice_from_vec [f] xf__v )
+    ( slice_put [f] xf 0 1.0 )
+    ( slice_put [f] xf 1 1.0 )
+    ( slice_put [f] xf 5 1.0 )
+    ( slice_put [f] xf 9 1.0 )
 
     : ~ i total 0
     : ~ i wbase 0
@@ -616,9 +615,9 @@ unsafe @ main → i {
         // encoder over this window's views, placed into the sequence
         = k 0
         ~ < k count {
-            : *f src ?? ( vec_get [Frame] framev + wbase k ) { T v → ( pp_data v ) F → # *f 0 }
+            : ( Slice f ) src ( slice_from_vec [f] ( pp_data ( vec_at [Frame] framev + wbase k ) ) )
             : ~ i j 0
-            ~ < j * 3 * h w { = . norm j . src j = j + j 1 }
+            ~ < j * 3 * h w { ( slice_put [f] norm j ( slice_at [f] src j ) ) = j + j 1 }
             ( __ma_norm norm * h w )
             ? ( dn_forward kit dn ws norm h w gh gw tok ) {} {
                 ( nurl_print `map-anything: encoder failed\n` )
@@ -671,32 +670,19 @@ unsafe @ main → i {
                 ( nurl_print `map-anything: pose head failed\n` )
                 ^ 1
             }
-            : b _d1 ( vec_set_len [f] hostv * 3 hw )
-            ? ( gk_dbuf_download kit rays hostv ) {} { ^ 1 }
-            : ~ * f hv ( vec_data [f] hostv )
+            ? ( gk_dbuf_download kit rays rays_h__v ) {} { ^ 1 }
+            ? ( gk_dbuf_download kit depth depth_h__v ) {} { ^ 1 }
+            ? ( gk_dbuf_download kit conf conf_h__v ) {} { ^ 1 }
+            ? ( gk_dbuf_download kit mlog mlog_h__v ) {} { ^ 1 }
             : ~ i j 0
-            ~ < j * 3 hw { = . rays_h j . hv j = j + j 1 }
-            : b _d2 ( vec_set_len [f] hostv hw )
-            ? ( gk_dbuf_download kit depth hostv ) {} { ^ 1 }
-            = hv ( vec_data [f] hostv )
-            = j 0
-            ~ < j hw { = . depth_h j . hv j = j + j 1 }
-            ? ( gk_dbuf_download kit conf hostv ) {} { ^ 1 }
-            = hv ( vec_data [f] hostv )
-            = j 0
-            ~ < j hw { = . conf_h j . hv j = j + j 1 }
-            ? ( gk_dbuf_download kit mlog hostv ) {} { ^ 1 }
-            = hv ( vec_data [f] hostv )
-            = j 0
-            ~ < j hw { = . mlog_h j . hv j = j + j 1 }
 
             ( gm_world_points rays_h depth_h pose scale hw pts depthz )
             ? != . o domask 0 { ( gm_nonambig mlog_h hw mask ) } {
                 = j 0
-                ~ < j hw { = . mask j # u 1 = j + j 1 }
+                ~ < j hw { ( slice_put [u] mask j # u 1 ) = j + j 1 }
             }
             ? != . o masksky 0 {
-                : *f skpx ?? ( vec_get [Frame] framev + wbase v ) { T vv → ( pp_data vv ) F → # *f 0 }
+                : ( Slice f ) skpx ( slice_from_vec [f] ( pp_data ( vec_at [Frame] framev + wbase v ) ) )
                 ? ( sky_mask sky skpx w h mask ) {} {
                     ( nurl_print `map-anything: sky segmentation failed\n` )
                     ^ 1
@@ -713,13 +699,13 @@ unsafe @ main → i {
                 : i sbase * v hw
                 = j 0
                 ~ < j hw {
-                    ? & != # i . mask j 0 != # i . prev_mask + sbase j 0 {
-                        = . pair_x * npairs 3 . pts * j 3
-                        = . pair_x + * npairs 3 1 . pts + * j 3 1
-                        = . pair_x + * npairs 3 2 . pts + * j 3 2
-                        = . pair_y * npairs 3 . prev_pts * + sbase j 3
-                        = . pair_y + * npairs 3 1 . prev_pts + * + sbase j 3 1
-                        = . pair_y + * npairs 3 2 . prev_pts + * + sbase j 3 2
+                    ? & != # i ( slice_at [u] mask j ) 0 != # i ( slice_at [u] prev_mask + sbase j ) 0 {
+                        ( slice_put [f] pair_x * npairs 3 ( slice_at [f] pts * j 3 ) )
+                        ( slice_put [f] pair_x + * npairs 3 1 ( slice_at [f] pts + * j 3 1 ) )
+                        ( slice_put [f] pair_x + * npairs 3 2 ( slice_at [f] pts + * j 3 2 ) )
+                        ( slice_put [f] pair_y * npairs 3 ( slice_at [f] prev_pts * + sbase j 3 ) )
+                        ( slice_put [f] pair_y + * npairs 3 1 ( slice_at [f] prev_pts + * + sbase j 3 1 ) )
+                        ( slice_put [f] pair_y + * npairs 3 2 ( slice_at [f] prev_pts + * + sbase j 3 2 ) )
                         = npairs + npairs 1
                     } {}
                     = j + j 4
@@ -736,15 +722,15 @@ unsafe @ main → i {
 
             ? >= v emit_from {
                 ? > windex 0 { ( gm_sim3_apply pts hw xf ) } {}
-                : *f rgb ?? ( vec_get [Frame] framev + wbase v ) { T vv → ( pp_data vv ) F → # *f 0 }
+                : ( Slice f ) rgb ( slice_from_vec [f] ( pp_data ( vec_at [Frame] framev + wbase v ) ) )
                 : ~ i y 0
                 ~ < y h {
                     : ~ i px 0
                     ~ < px w {
                         : i idx + * y w px
-                        ? != # i . mask idx 0 {
-                            ( ply_vertex ply . pts * idx 3 . pts + * idx 3 1 . pts + * idx 3 2
-                            ( __ma_u8 . rgb idx ) ( __ma_u8 . rgb + hw idx ) ( __ma_u8 . rgb + * 2 hw idx ) )
+                        ? != # i ( slice_at [u] mask idx ) 0 {
+                            ( ply_vertex ply ( slice_at [f] pts * idx 3 ) ( slice_at [f] pts + * idx 3 1 ) ( slice_at [f] pts + * idx 3 2 )
+                            ( __ma_u8 ( slice_at [f] rgb idx ) ) ( __ma_u8 ( slice_at [f] rgb + hw idx ) ) ( __ma_u8 ( slice_at [f] rgb + * 2 hw idx ) ) )
                             = total + total 1
                         } {}
                         = px + px . o pstride
@@ -757,10 +743,10 @@ unsafe @ main → i {
                     : i slot - v - count ov
                     = j 0
                     ~ < j hw {
-                        = . prev_pts * + * slot hw j 3 . pts * j 3
-                        = . prev_pts + * + * slot hw j 3 1 . pts + * j 3 1
-                        = . prev_pts + * + * slot hw j 3 2 . pts + * j 3 2
-                        = . prev_mask + * slot hw j . mask j
+                        ( slice_put [f] prev_pts * + * slot hw j 3 ( slice_at [f] pts * j 3 ) )
+                        ( slice_put [f] prev_pts + * + * slot hw j 3 1 ( slice_at [f] pts + * j 3 1 ) )
+                        ( slice_put [f] prev_pts + * + * slot hw j 3 2 ( slice_at [f] pts + * j 3 2 ) )
+                        ( slice_put [u] prev_mask + * slot hw j ( slice_at [u] mask j ) )
                         = j + j 1
                     }
                 } {}
@@ -788,13 +774,13 @@ unsafe @ main → i {
     }
     ? != . o verbose 0 {
         ( nurl_print `wrote   ` )
-        ( nurl_print . o out )
+        ( nurl_print ( string_data . o out ) )
         ( nurl_print ` (` )
         ( nurl_print ( nurl_str_int total ) )
         ( nurl_print ` points)\n` )
     } {}
     ? != . o view 0 {
-        ^ ( vw_serve . o out . o vhost . o port `` 0 . o vtls )
+        ^ ( vw_serve ( string_data . o out ) ( string_data . o vhost ) . o port `` 0 . o vtls )
     } {}
     ^ 0
 }

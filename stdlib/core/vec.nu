@@ -377,7 +377,7 @@ inline @ alloc_grow_pow2 i cap i need i first → i {
 @ vec_get [A] ( Vec A ) v i idx → ?A {
     : s ctl . v ctl
     : i len ( __vec_len_raw ctl )
-    ? | < idx 0 >= idx len { ^ @ ?A { F # A 0 } } {}
+    ? >= # u64 idx # u64 len { ^ @ ?A { F # A 0 } } {}
     : *A data # *A ( nurl_vctl_data ctl )
     : A x . data idx
     ^ @ ?A { T x }
@@ -403,7 +403,7 @@ inline @ alloc_grow_pow2 i cap i need i first → i {
     : s ctl . v ctl
     : *A data # *A ( nurl_vctl_data ctl )
     : i len ( __vec_len_raw ctl )
-    ? | < idx 0 >= idx len { ( __vec_index_panic idx len ) } {}
+    ? >= # u64 idx # u64 len { ( __vec_index_panic idx len ) } {}
     ^ . data idx
 }
 
@@ -414,17 +414,42 @@ inline @ alloc_grow_pow2 i cap i need i first → i {
     : s ctl . v ctl
     : *A data # *A ( nurl_vctl_data ctl )
     : i len ( __vec_len_raw ctl )
-    ? | < idx 0 >= idx len { ( __vec_index_panic idx len ) } {}
+    ? >= # u64 idx # u64 len { ( __vec_index_panic idx len ) } {}
     : A old . data idx
     ( mem_take old )
     = . data idx x
+}
+
+// Run `f` on the element at `idx` in place: nothing is copied, moved or
+// dropped, so a large record or one that owns buffers is changed where it
+// lives. F, and `f` does not run, when `idx` is out of range. `v` is taken
+// `inout`, so a closure that could reach `v` (capturing it, or the record
+// it is a field of) is rejected: nothing can grow or shrink the Vec under
+// the element `f` is holding.
+@ vec_update [A] inout ( Vec A ) v i idx ( @ v inout A ) f → b {
+    : s ctl . v ctl
+    : i len ( __vec_len_raw ctl )
+    ? >= # u64 idx # u64 len { ^ F } {}
+    : ~ * A data # *A ( nurl_vctl_data ctl )
+    ( f . data idx )
+    ^ T
+}
+
+// vec_update with a result: `f`'s, or `none` (and `f` does not run) when
+// `idx` is out of range.
+@ vec_apply [A R] inout ( Vec A ) v i idx R none ( @ R inout A ) f → R {
+    : s ctl . v ctl
+    : i len ( __vec_len_raw ctl )
+    ? >= # u64 idx # u64 len { ^ none } {}
+    : ~ * A data # *A ( nurl_vctl_data ctl )
+    ^ ( f . data idx )
 }
 
 // The element `x` replaces is dropped (vec_replace hands it back instead).
 @ vec_set [A] ( Vec A ) v i idx A x → b {
     : s ctl . v ctl
     : i len ( __vec_len_raw ctl )
-    ? | < idx 0 >= idx len { ^ F } {}
+    ? >= # u64 idx # u64 len { ^ F } {}
     : *A data # *A ( nurl_vctl_data ctl )
     : A old . data idx
     ( mem_take old )
@@ -438,7 +463,7 @@ inline @ alloc_grow_pow2 i cap i need i first → i {
 @ vec_replace [A] ( Vec A ) v i idx A x → ?A {
     : s ctl . v ctl
     : i len ( __vec_len_raw ctl )
-    ? | < idx 0 >= idx len { ^ @ ?A { F # A 0 } } {}
+    ? >= # u64 idx # u64 len { ^ @ ?A { F # A 0 } } {}
     : *A data # *A ( nurl_vctl_data ctl )
     : A old . data idx
     ( mem_take old )  // the element leaves the container
@@ -459,6 +484,25 @@ inline @ alloc_grow_pow2 i cap i need i first → i {
     : *A data # *A ( nurl_vctl_data ctl )
     = . data len x
     ( nurl_vctl_set ctl 1 + len 1 )
+}
+
+// Append the low `w` bytes (1..8) of `x` to a byte Vec, least significant
+// first (`be`: most significant first) — one capacity check and one
+// length bump for the whole word, so a serializer writing u32/u64 fields
+// does not pay eight pushes per field.
+@ vec_push_word_u8 ( Vec u ) v i x i w b be → v {
+    ? | < w 1 > w 8 { ^ } {}
+    : s ctl . v ctl
+    : i len ( __vec_len_raw ctl )
+    ? > + len w ( __vec_cap_raw ctl ) { ( __vec_grow [u] ctl + len w ) } {}
+    : *u data # *u ( nurl_vctl_data ctl )
+    : ~ i k 0
+    ~ < k w {
+        : i sh * 8 ? be - - w 1 k k
+        = . data + len k # u & >> x sh 255
+        = k + k 1
+    }
+    ( nurl_vctl_set ctl 1 + len w )
 }
 
 // Insert `x` at index `idx`, shifting existing [idx..len) right by one.
@@ -487,7 +531,7 @@ inline @ alloc_grow_pow2 i cap i need i first → i {
 @ vec_remove [A] ( Vec A ) v i idx → ?A {
     : s ctl . v ctl
     : i len ( __vec_len_raw ctl )
-    ? | < idx 0 >= idx len { ^ @ ?A { F # A 0 } } {}
+    ? >= # u64 idx # u64 len { ^ @ ?A { F # A 0 } } {}
     : *A data # *A ( nurl_vctl_data ctl )
     : A x . data idx
     ( mem_take x )  // the element leaves the container

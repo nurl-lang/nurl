@@ -44,13 +44,6 @@ $ `pb.nu`
     ( Vec u ) host  // the values, little-endian (empty = no data)
 }
 
-// The host data's address (0 when there is none) — for an upload or a
-// peek; valid while the tensor is.
-unsafe @ otensor_host_ptr OTensor t → i {
-    ? == ( vec_len [u] . t host ) 0 { ^ 0 } {}
-    ^ # i ( vec_data [u] . t host )
-}
-
 : OGraph {
     ( Vec ONode ) nodes
     ( Vec OTensor ) inits
@@ -120,7 +113,7 @@ unsafe @ otensor_host_ptr OTensor t → i {
 }
 
 // ── AttributeProto ────────────────────────────────────────────────
-unsafe @ __parse_attr inout PReader r → OAttr {
+@ __parse_attr inout PReader r → OAttr {
     : ~ String name ( string_new )
     : ~ f fv 0.0
     : ~ i iv 0
@@ -151,11 +144,11 @@ unsafe @ __parse_attr inout PReader r → OAttr {
             : ~ PReader ts ( pb_submsg r )
             : OTensor t ( __parse_tensor ts )
             ( pb_absorb r ts )
-            ? & == . t dtype 7 != ( otensor_host_ptr t ) 0 {
-                : *u h # *u ( otensor_host_ptr t )
+            ? == . t dtype 7 {
+                : ( Slice u ) hb ( slice_from_vec [u] . t host )
                 : ~ i q 0
-                ~ < q . t nelem {
-                    ( vec_push [i] ints ( nurl_peek # s h q ) )
+                ~ & < q . t nelem <= * + q 1 8 ( slice_len [u] hb ) {
+                    ( vec_push [i] ints ( slice_u64_le hb * q 8 ) )
                     = q + q 1
                 }
             } {}
@@ -189,14 +182,14 @@ unsafe @ __parse_attr inout PReader r → OAttr {
 }
 
 // ── TensorProto (initializer) ─────────────────────────────────────
-unsafe @ __parse_tensor inout PReader r → OTensor {
+@ __parse_tensor inout PReader r → OTensor {
     : ( Vec i ) dims ( vec_new [i] )
     : ~ String name ( string_new )
     : ~ i dtype 0
     // The weight block is BORROWED in place out of the model buffer: the
     // slice stays valid as long as the caller's bytes do, which is why
     // the cursor no longer has to be rewound to re-read it later.
-    : ~ ( Slice u ) raw @ ( Slice u ) { # *u 0 0 }
+    : ~ ( Slice u ) raw ( slice_empty [u] )
     : ~ b have_raw F
     : ( Vec i ) i64vals ( vec_new [i] )
     ~ ( pb_more r ) {
@@ -233,23 +226,25 @@ unsafe @ __parse_tensor inout PReader r → OTensor {
     // same 8-byte LE host block the raw path produces.
     ? & & ! have_raw > ( vec_len [i] i64vals ) 0 == dtype 7 {
         : i nv ( vec_len [i] i64vals )
-        = host ( vec_with_cap [u] * nv 8 )
-        : *u h64 # *u ( vec_data [u] host )
+        = host ( vec_zeroed [u] * nv 8 )
+        : ( Slice u ) h64 ( slice_from_vec [u] host )
         : ~ i q 0
         ~ < q nv {
-            ( nurl_poke h64 q ?? ( vec_get [i] i64vals q ) { T x → x F _ → 0 } )
+            ( slice_put_u64_le h64 * q 8 ?? ( vec_get [i] i64vals q ) { T x → x F _ → 0 } )
             = q + q 1
         }
-        : b _l ( vec_set_len [u] host * nv 8 )
     } {}
     ? & have_raw > ( slice_len [u] raw ) 0 {
-        // written in place, then the length committed: no zero-fill pass
-        // over a weight block that is overwritten anyway
+        // The values are the block's bytes as they stand (little-endian
+        // both sides): one copy, and elements past the end of a short
+        // block read as zero.
         : i esz ? == dtype 7 { 8 } { 4 }  // INT64: 8-byte LE values; FLOAT (default): f32
-        = host ( vec_with_cap [u] * nelem esz )
-        : *u h # *u ( vec_data [u] host )
-        ? == dtype 7 { ( slice_i64_into raw h nelem ) } { ( slice_f32_into raw h nelem ) }
-        : b _l ( vec_set_len [u] host * nelem esz )
+        : ~ i want * nelem esz
+        ? < want 0 { = want 0 } {}
+        : i have ( slice_len [u] raw )
+        : i m ? < have want have want
+        = host ( slice_to_vec [u] ( slice_window [u] raw 0 m ) )
+        ? < m want { : b _z ( vec_resize_zeroed [u] host want ) } {}
     } {}
     ^ @ OTensor { name dims nelem dtype host }
 }

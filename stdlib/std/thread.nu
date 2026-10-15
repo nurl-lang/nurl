@@ -37,6 +37,8 @@
 //   ( locked_with    [T] l ( @ v T ) f )   → v   run f on the value, holding the lock
 //   ( locked_get     [T] l )               → T   a copy, taken under the lock
 //   ( locked_set     [T] l x )             → v   replace the value under the lock
+//   ( locked_take    [T] l )               → T   check the value out to change it
+//   ( locked_restore [T] l x )             → v   check it back in
 //   ( cond_new )                           → Cond
 //   ( cond_wait      Cond c Mutex m )      → v   (must hold m)
 //   ( cond_signal    Cond c )              → v
@@ -374,6 +376,13 @@ $ `stdlib/core/rcbox.nu`
 : LockedImpl [T] {
     Mutex mu
     T val
+    // Checked out (locked_take): the value is with one thread, and every
+    // other operation waits on `cv` until it is restored.
+    b taken
+    Cond cv
+    // Threads asleep in cond_wait on `cv`: a restore with nobody waiting
+    // skips the broadcast (changed only with `mu` held).
+    i waiters
 }
 
 : Locked [T] { ( Shared ( LockedImpl T ) ) ctl }
@@ -381,7 +390,19 @@ $ `stdlib/core/rcbox.nu`
 % Sync Locked {}
 
 @ locked_new [T] sink T x → ( Locked T ) {
-    ^ @ ( Locked T ) { ( shared_new [( LockedImpl T )] @ ( LockedImpl T ) { ( mutex_new ) x } ) }
+    ^ @ ( Locked T ) { ( shared_new [( LockedImpl T )] @ ( LockedImpl T ) { ( mutex_new ) x F ( cond_new ) 0 } ) }
+}
+
+// A Locked over the all-zero value of T. Outside `unsafe` only for a T
+// a zero is a value of (the arc_zero rule); an `unsafe` caller that fills
+// every other field in — under locked_take — before anything reads it
+// vouches for that (a large engine record built field by field).
+@ locked_zero [T] → ( Locked T ) {
+    : ( Shared ( LockedImpl T ) ) sh ( shared_zero [( LockedImpl T )] )
+    : *( LockedImpl T ) p ( shared_ptr [( LockedImpl T )] sh )
+    = . p mu ( mutex_new )
+    = . p cv ( cond_new )
+    ^ @ ( Locked T ) { sh }
 }
 
 @ Locked_share [T] ( Locked T ) l → ( Locked T ) {
@@ -396,14 +417,38 @@ $ `stdlib/core/rcbox.nu`
 @ locked_with [T] ( Locked T ) l ( @ v T ) f → v {
     : *( LockedImpl T ) p ( shared_ptr [( LockedImpl T )] . l ctl )
     ( mutex_lock . p mu )
+    ~ . p taken { = . p waiters + . p waiters 1 ( cond_wait . p cv . p mu ) = . p waiters - . p waiters 1 }
     ( f . p val )
     ( mutex_unlock . p mu )
+}
+
+// Run `f` on the value IN PLACE while holding the lock: `f` takes it
+// `inout`, so it may change any field, scalars included, and the value
+// never moves — it stays at the address it has had since locked_new (what
+// a record other code holds the address of needs). Nothing is copied.
+@ locked_update [T] ( Locked T ) l ( @ v inout T ) f → v {
+    : ~ * ( LockedImpl T ) p ( shared_ptr [( LockedImpl T )] . l ctl )
+    ( mutex_lock . p mu )
+    ~ . p taken { = . p waiters + . p waiters 1 ( cond_wait . p cv . p mu ) = . p waiters - . p waiters 1 }
+    ( f . p val )
+    ( mutex_unlock . p mu )
+}
+
+// locked_update with a result: `f`'s, returned once the lock is let go.
+@ locked_apply [T R] ( Locked T ) l ( @ R inout T ) f → R {
+    : ~ * ( LockedImpl T ) p ( shared_ptr [( LockedImpl T )] . l ctl )
+    ( mutex_lock . p mu )
+    ~ . p taken { = . p waiters + . p waiters 1 ( cond_wait . p cv . p mu ) = . p waiters - . p waiters 1 }
+    : R r ( f . p val )
+    ( mutex_unlock . p mu )
+    ^ r
 }
 
 // A copy of the value, taken under the lock.
 @ locked_get [T] ( Locked T ) l → T {
     : *( LockedImpl T ) p ( shared_ptr [( LockedImpl T )] . l ctl )
     ( mutex_lock . p mu )
+    ~ . p taken { = . p waiters + . p waiters 1 ( cond_wait . p cv . p mu ) = . p waiters - . p waiters 1 }
     : T c ( mem_dup . p val )
     ( mutex_unlock . p mu )
     ^ c
@@ -413,7 +458,41 @@ $ `stdlib/core/rcbox.nu`
 @ locked_set [T] ( Locked T ) l sink T x → v {
     : *( LockedImpl T ) p ( shared_ptr [( LockedImpl T )] . l ctl )
     ( mutex_lock . p mu )
+    ~ . p taken { = . p waiters + . p waiters 1 ( cond_wait . p cv . p mu ) = . p waiters - . p waiters 1 }
     = . p val x
+    ( mutex_unlock . p mu )
+}
+
+// Take the value out to change it, holding no lock while it is out:
+// every other operation on the Locked — from any thread — waits until
+// `locked_restore` puts it back. Nothing is copied. (Taken twice by one
+// thread without a restore in between, the second take waits forever, as
+// a mutex locked twice does.)
+@ locked_take [T] ( Locked T ) l → T {
+    : *( LockedImpl T ) p ( shared_ptr [( LockedImpl T )] . l ctl )
+    ( mutex_lock . p mu )
+    ~ . p taken { = . p waiters + . p waiters 1 ( cond_wait . p cv . p mu ) = . p waiters - . p waiters 1 }
+    // (Claimed out of its slot, it leaves zero bytes there.)
+    : T x . p val
+    ( mem_take x )
+    = . p taken ! F  // (`T` is the type parameter here)
+    ( mutex_unlock . p mu )
+    ^ x
+}
+
+// Put back the value `locked_take` took out, and wake the threads
+// waiting for it. Panics when the value was not taken.
+@ locked_restore [T] ( Locked T ) l sink T x → v {
+    : *( LockedImpl T ) p ( shared_ptr [( LockedImpl T )] . l ctl )
+    ( mutex_lock . p mu )
+    ? ! . p taken { ( mutex_unlock . p mu ) ( nurl_panic `locked_restore: the value was not taken` ) } {}
+    // It replaces the zero bytes locked_take left: they own nothing, so
+    // they are swapped out and forgotten rather than run through the
+    // value's drop glue (which walks every field of a large record).
+    : T zero ( mem_replace [T] . p val x )
+    ( mem_forget zero )
+    = . p taken F
+    ? > . p waiters 0 { ( cond_broadcast . p cv ) } {}
     ( mutex_unlock . p mu )
 }
 

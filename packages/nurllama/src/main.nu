@@ -158,8 +158,8 @@ $ `stdlib/core/slice.nu`
     }
 }
 
-unsafe @ __nl_ids_eq ( Vec i ) got * i exp i n → b {
-    ? != ( vec_len [i] got ) n { ^ F } {}
+@ __nl_ids_eq ( Vec i ) got [i exp i n → b {
+    ? | != ( vec_len [i] got ) n != . exp length n { ^ F } {}
     : ~ i k 0
     : ~ b ok T
     ~ < k n {
@@ -304,7 +304,7 @@ unsafe @ __nl_ids_eq ( Vec i ) got * i exp i n → b {
     ^ != ok 0
 }
 
-unsafe @ __nl_selftest → i {
+@ __nl_selftest → i {
     : ~ NlCnt cn @ NlCnt { 0 0 }
     : !String IoErr tf ( fs_tempfile `/tmp` `nurllama-selftest.` )
     : ~ String path ( string_new )
@@ -329,29 +329,29 @@ unsafe @ __nl_selftest → i {
 
                     : ( Vec i ) e1 ( tok_encode t `hello` T )
                     : x1 [i | 1 8]
-                    ( __nl_ck cn ( __nl_ids_eq e1 . x1 0 2 ) `SPM: 'hello' → merge chain to ▁hello` )
+                    ( __nl_ck cn ( __nl_ids_eq e1 x1 2 ) `SPM: 'hello' → merge chain to ▁hello` )
 
                     : ( Vec i ) e2 ( tok_encode t `hello world` T )
                     : x2 [i | 1 8 13]
-                    ( __nl_ck cn ( __nl_ids_eq e2 . x2 0 3 ) `SPM: two words` )
+                    ( __nl_ck cn ( __nl_ids_eq e2 x2 3 ) `SPM: two words` )
 
                     : ( Vec i ) e3 ( tok_encode t `hell` T )
                     : x3 [i | 1 7]
-                    ( __nl_ck cn ( __nl_ids_eq e3 . x3 0 2 ) `SPM: prefix piece wins` )
+                    ( __nl_ck cn ( __nl_ids_eq e3 x3 2 ) `SPM: prefix piece wins` )
 
                     // 😀 = F0 9F 98 80 → the four BYTE tokens
                     : ( Vec i ) e4 ( tok_encode t `😀` T )
                     : x4 [i | 1 3 19 20 21 22]
-                    ( __nl_ck cn ( __nl_ids_eq e4 . x4 0 6 ) `SPM: byte fallback (emoji)` )
+                    ( __nl_ck cn ( __nl_ids_eq e4 x4 6 ) `SPM: byte fallback (emoji)` )
 
                     // 'z' has no piece and no byte token → UNK
                     : ( Vec i ) e5 ( tok_encode t `z` T )
                     : x5 [i | 1 3 0]
-                    ( __nl_ck cn ( __nl_ids_eq e5 . x5 0 3 ) `SPM: unknown char → UNK` )
+                    ( __nl_ck cn ( __nl_ids_eq e5 x5 3 ) `SPM: unknown char → UNK` )
 
                     : ( Vec i ) e6 ( tok_encode t `` T )
                     : x6 [i | 1]
-                    ( __nl_ck cn ( __nl_ids_eq e6 . x6 0 1 ) `SPM: empty text → just BOS` )
+                    ( __nl_ck cn ( __nl_ids_eq e6 x6 1 ) `SPM: empty text → just BOS` )
 
                     // decode: control tokens vanish, ▁ → space, bytes rejoin
                     : ( Vec i ) e7 ( tok_encode t `hello world` T )
@@ -382,17 +382,17 @@ unsafe @ __nl_selftest → i {
                     // "hello hello" → [hello, Ġhello]; gpt2 adds no BOS
                     : ( Vec i ) e1 ( tok_encode t `hello hello` T )
                     : x1 [i | 8 9]
-                    ( __nl_ck cn ( __nl_ids_eq e1 . x1 0 2 ) `BPE: merge ranks + space glue` )
+                    ( __nl_ck cn ( __nl_ids_eq e1 x1 2 ) `BPE: merge ranks + space glue` )
 
                     // partial merges only: "hell" stops at rank-3 product
                     : ( Vec i ) e2 ( tok_encode t `hell` T )
                     : x2 [i | 7]
-                    ( __nl_ck cn ( __nl_ids_eq e2 . x2 0 1 ) `BPE: partial merge chain` )
+                    ( __nl_ck cn ( __nl_ids_eq e2 x2 1 ) `BPE: partial merge chain` )
 
                     // 'ol' has no merge → two singles
                     : ( Vec i ) e3 ( tok_encode t `ol` T )
                     : x3 [i | 3 2]
-                    ( __nl_ck cn ( __nl_ids_eq e3 . x3 0 2 ) `BPE: unmergeable pair stays split` )
+                    ( __nl_ck cn ( __nl_ids_eq e3 x3 2 ) `BPE: unmergeable pair stays split` )
 
                     : ( Vec i ) e4 ( tok_encode t `hello hello` T )
                     : ( Vec u ) d4 ( tok_decode t e4 )
@@ -559,7 +559,7 @@ unsafe @ __nl_selftest → i {
     }
 }
 
-unsafe @ main → i {
+@ main → i {
     : ArgParser p ( args_new `nurllama` `Run language models locally — phase 2: the GGUF-vocabulary tokenizer.` )
     ( args_flag p `help` 104 `show this help` )
     ( args_flag p `yes` 121 `start: reuse the existing config without asking` )
@@ -1012,7 +1012,7 @@ unsafe @ main → i {
                         ~ < gi ( vec_len [i] gen ) {
                             : ( Vec u ) pb ( tok_piece t ( _dz_geti gen gi ) )
                             : i pn ( vec_len [u] pb )
-                            ? > pn 0 { : i _w ( write 1 # *u ( vec_data [u] pb ) pn ) } {}
+                            ? > pn 0 { : i _w ( fd_write_all 1 pb ) } {}
                             = gi + gi 1
                         }
                         ( flush )
@@ -1022,10 +1022,11 @@ unsafe @ main → i {
 
                         ( llm_prefill m ids )
                         ? ( nurl_str_eq cmd `logits` ) {
+                            : ( Vec f ) lg ( llm_logits m )
                             : ~ i j 0
                             ~ < j ( llm_n_vocab m ) {
                                 : String ln ( string_new )
-                                ( string_push_float ln ( llm_logit m j ) )
+                                ( string_push_float ln ( vec_at [f] lg j ) )
                                 ( nurl_print ( string_data ln ) )
                                 ( nurl_print `\n` )
                                 = j + j 1
@@ -1056,7 +1057,7 @@ unsafe @ main → i {
                                 ? == nt2 ( tok_eos t ) { = stop T } {
                                     : ( Vec u ) pb ( tok_piece t nt2 )
                                     : i pn ( vec_len [u] pb )
-                                    ? > pn 0 { : i _w ( write 1 # *u ( vec_data [u] pb ) pn ) } {}
+                                    ? > pn 0 { : i _w ( fd_write_all 1 pb ) } {}
                                     ( flush )
                                     ( llm_eval m nt2 pos )
                                     = pos + pos 1
@@ -1121,7 +1122,7 @@ unsafe @ main → i {
                             }
                             : ( Vec u ) out ( tok_decode t ids )
                             : i n ( vec_len [u] out )
-                            ? > n 0 { : i _w ( write 1 # *u ( vec_data [u] out ) n ) } {}
+                            ? > n 0 { : i _w ( fd_write_all 1 out ) } {}
                             ( nurl_print `\n` )
                         } {
                             ? ( nurl_str_eq cmd `vocab` ) {

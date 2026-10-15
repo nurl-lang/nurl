@@ -39,8 +39,6 @@ $ `stdlib/core/string.nu`
 $ `stdlib/std/float.nu`
 $ `deps/tensor/src/tensor.nu`
 $ `deps/tensor/src/ops.nu`
-$ `stdlib/std/arc.nu`
-$ `stdlib/core/box.nu`
 
 // ── op codes ──────────────────────────────────────────────────────────
 @ gop_param → i { ^ 0 }
@@ -104,40 +102,33 @@ $ `stdlib/core/box.nu`
     i id
 }
 
-: GTapeImpl {
+: GTape {
     i ok  // 1 healthy · 0 poisoned (shape mismatch etc.)
     ( Vec GNode ) nodes
-    ( Vec ( Box Tensor ) ) vals  // the value per node (a box: its address is stable)
-    ( Vec ( Box Tensor ) ) grads  // the gradient per node, an empty box until backward touches it
-    ( Vec ( Box GAux ) ) aux  // per node, an empty box for ops that need none (slice starts)
+    ( Vec Tensor ) vals  // the value per node
+    ( Vec Tensor ) grads  // the gradient per node (an empty tensor until touched)
+    ( Vec u ) ghas  // per node: 1 once its gradient exists
+    ( Vec ( Vec i ) ) aux  // per node: slice starts (g_slice), empty for other ops
 }
 
-// A GTape is a handle on its state in an Arc (stdlib/std/arc.nu):
-// every copy is the same state, and the last owner releases it.
-: GTape { ( Arc GTapeImpl ) a }
+// A GTape is a plain value: builders take it `inout`, readers borrow it,
+// and the views gvar_value / grad_of lend out live as long as the borrow.
 
-@ GTape_share GTape h → GTape { ^ @ GTape { ( arc_clone [GTapeImpl] . h a ) } }
+@ _g_empty → Tensor { ^ @ Tensor { 0 ( vec_new [i] ) ( vec_new [f] ) } }
 
-@ GTape_drop sink GTape h → v {}
+// Node id's value / gradient, lent (empty when out of range or absent).
+@ _g_v GTape tp i id → Tensor { ^ ?? ( vec_get [Tensor] . tp vals id ) { T x → x F → ( _g_empty ) } }
 
-// The state, for this package's own code.
-unsafe @ _GTape_ptr GTape h → *GTapeImpl { ^ ( arc_ptr [GTapeImpl] . h a ) }
+@ _g_gv GTape tp i id → Tensor { ^ ?? ( vec_get [Tensor] . tp grads id ) { T x → x F → ( _g_empty ) } }
+
+@ _g_has_grad GTape tp i id → b { ^ ?? ( vec_get [u] . tp ghas id ) { T x → == x 1 F → F } }
 
 // Per-node auxiliary payload (only g_slice uses one today).
-: GAux {
-    ( Vec i ) starts
-}
 
 // ── construction / lifecycle ─────────────────────────────────────────
 
-unsafe @ tape_new → GTape {
-    : ~ GTapeImpl tp @ GTapeImpl {}
-    = . tp ok 1
-    = . tp nodes ( vec_new [GNode] )
-    = . tp vals ( vec_new [( Box Tensor )] )
-    = . tp grads ( vec_new [( Box Tensor )] )
-    = . tp aux ( vec_new [( Box GAux )] )
-    ^ @ GTape { ( arc_new [GTapeImpl] tp ) }
+@ tape_new → GTape {
+    ^ @ GTape { 1 ( vec_new [GNode] ) ( vec_new [Tensor] ) ( vec_new [Tensor] ) ( vec_new [u] ) ( vec_new [( Vec i )] ) }
 }
 
 // Let go of `tp` now rather than at the end of its owner's scope. The
@@ -145,8 +136,7 @@ unsafe @ tape_new → GTape {
 // aux block it holds (boxes in Vecs: dropped with them).
 @ tape_free sink GTape tp → v {}
 
-unsafe @ tape_ok GTape tp__h → b {
-    : *GTapeImpl tp ( _GTape_ptr tp__h )
+@ tape_ok GTape tp → b {
     ^ == . tp ok 1
 }
 
@@ -161,48 +151,44 @@ unsafe @ tape_ok GTape tp__h → b {
 // ONLY call it after a successful device capture: the CPU tape can no longer
 // forward/backward once its const values are gone. Freeing is null-safe —
 // tape_free / tape_reset_to re-read through the same guarded idiom.
-unsafe @ tape_drop_consts GTape tp__h → v {
-    : *GTapeImpl tp ( _GTape_ptr tp__h )
+@ tape_drop_consts inout GTape tp → v {
     : i n ( vec_len [GNode] . tp nodes )
     : ~ i k 0
     ~ < k n {
         : GNode nd ?? ( vec_get [GNode] . tp nodes k ) { T x → x F → @ GNode { -1 -1 -1 0.0 } }
         ? == . nd op ( gop_const ) {
-            ( vec_put [( Box Tensor )] . tp vals k ( box_null [Tensor] ) )
+            : b _d ( vec_set [Tensor] . tp vals k ( _g_empty ) )
         } {}
         = k + k 1
     }
 }
 
-unsafe @ tape_len GTape tp__h → i {
-    : *GTapeImpl tp ( _GTape_ptr tp__h )
+@ tape_len GTape tp → i {
     ^ ( vec_len [GNode] . tp nodes )
 }
 
 // Watermark for tape_reset_to: everything appended after `mark` is dropped.
-unsafe @ tape_mark GTape tp__h → i {
-    : *GTapeImpl tp ( _GTape_ptr tp__h )
+@ tape_mark GTape tp → i {
     ^ ( vec_len [GNode] . tp nodes )
 }
 
 // Drop every node at id >= mark (and its tensors) and ZERO the gradients
 // of what remains — a fresh episode over the surviving parameters. The vecs
 // keep their capacity, so a minibatch loop does not re-malloc the arena.
-unsafe @ tape_reset_to GTape tp__h i mark → v {
-    : *GTapeImpl tp ( _GTape_ptr tp__h )
+@ tape_reset_to inout GTape tp i mark → v {
     : i n ( vec_len [GNode] . tp nodes )
     ? < mark n {
         : b _t1 ( vec_truncate [GNode] . tp nodes mark )
-        : b _t2 ( vec_truncate [( Box Tensor )] . tp vals mark )
-        : b _t3 ( vec_truncate [( Box Tensor )] . tp grads mark )
-        : b _t4 ( vec_truncate [( Box GAux )] . tp aux mark )
+        : b _t2 ( vec_truncate [Tensor] . tp vals mark )
+        : b _t3 ( vec_truncate [Tensor] . tp grads mark )
+        : b _t4 ( vec_truncate [u] . tp ghas mark )
+        : b _t5 ( vec_truncate [( Vec i )] . tp aux mark )
     } {}
     // zero the surviving grads in place (keep their buffers)
     : ~ i k 0
     ~ < k mark {
-        : s gp ( _g_grad_ptr tp k )
-        ? != # i gp 0 {
-            : *Tensor g # *Tensor gp
+        ? ( _g_has_grad tp k ) {
+            : Tensor g ( _g_gv tp k )
             : i gn ( vec_len [f] . g data )
             : ~ i j 0
             ~ < j gn { ( vec_set [f] . g data j 0.0 ) = j + j 1 }
@@ -214,26 +200,7 @@ unsafe @ tape_reset_to GTape tp__h i mark → v {
 
 // ── internals ─────────────────────────────────────────────────────────
 
-// The Tensor in node `id`'s box of `cells` (null when out of range or the
-// box is empty): the address stays put while the tape grows.
-unsafe @ _g_cell ( Vec ( Box Tensor ) ) cells i id → s {
-    ?? ( vec_get [( Box Tensor )] cells id ) {
-        T b → { ^ # s ( box_ptr [Tensor] b ) }
-        F → { ^ # s 0 }
-    }
-}
-
-unsafe @ _g_val * GTapeImpl tp i id → s { ^ ( _g_cell . tp vals id ) }
-
-unsafe @ _g_grad_ptr * GTapeImpl tp i id → s { ^ ( _g_cell . tp grads id ) }
-
-unsafe @ _g_aux_ptr * GTapeImpl tp i id → s {
-    ? | < id 0 >= id ( vec_len [( Box GAux )] . tp aux ) { ^ # s 0 } {}
-    : *( Box GAux ) d ( vec_data [( Box GAux )] . tp aux )
-    ^ # s ( box_ptr [GAux] . d id )
-}
-
-unsafe @ _g_poison * GTapeImpl tp s why → GVar {
+@ _g_poison inout GTape tp s why → GVar {
     ? == . tp ok 1 {
         ( nurl_eprint `grad: tape poisoned: ` )
         ( nurl_eprintln why )
@@ -244,25 +211,23 @@ unsafe @ _g_poison * GTapeImpl tp s why → GVar {
 
 // Poison the tape from outside (a builder that meets a shape it cannot
 // express): reports `why` once and hands back the invalid GVar.
-unsafe @ grad_poison GTape tp__h s why → GVar {
-    : *GTapeImpl tp ( _GTape_ptr tp__h )
+@ grad_poison inout GTape tp s why → GVar {
     ^ ( _g_poison tp why )
 }
 
 // Append a node whose value is `val` (ownership moves to the tape).
-unsafe @ _g_push * GTapeImpl tp i op i a i b f sc Tensor val → GVar {
+@ _g_push inout GTape tp i op i a i b f sc Tensor val → GVar {
     : i id ( vec_len [GNode] . tp nodes )
     ( vec_push [GNode] . tp nodes @ GNode { op a b sc } )
-    ( vec_push [( Box Tensor )] . tp vals ( box_new [Tensor] val ) )
-    ( vec_push [( Box Tensor )] . tp grads ( box_null [Tensor] ) )
-    ( vec_push [( Box GAux )] . tp aux ( box_null [GAux] ) )
+    ( vec_push [Tensor] . tp vals val )
+    ( vec_push [Tensor] . tp grads ( _g_empty ) )
+    ( vec_push [u] . tp ghas # u 0 )
+    ( vec_push [( Vec i )] . tp aux ( vec_new [i] ) )
     ^ @ GVar { id }
 }
 
 // Equal-shape check for M1 binops.
-unsafe @ _g_same_shape s pa s pb → b {
-    : *Tensor a # *Tensor pa
-    : *Tensor b # *Tensor pb
+@ _g_same_shape Tensor a Tensor b → b {
     : i n ( vec_len [i] . a shape )
     ? != n ( vec_len [i] . b shape ) { ^ F } {}
     : ~ i k 0
@@ -277,15 +242,13 @@ unsafe @ _g_same_shape s pa s pb → b {
 
 // Register a PARAMETER (requires-grad leaf). The tensor is COPIED in; the
 // live, optimizer-updated copy is the tape's (read it via gvar_value).
-unsafe @ grad_param GTape tp__h Tensor w → GVar {
-    : *GTapeImpl tp ( _GTape_ptr tp__h )
+@ grad_param inout GTape tp Tensor w → GVar {
     ? == . tp ok 1 {} { ^ @ GVar { -1 } }
     ^ ( _g_push tp ( gop_param ) -1 -1 0.0 ( tensor_clone w ) )
 }
 
 // Register a CONSTANT (no gradient flows into it).
-unsafe @ grad_const GTape tp__h Tensor c → GVar {
-    : *GTapeImpl tp ( _GTape_ptr tp__h )
+@ grad_const inout GTape tp Tensor c → GVar {
     ? == . tp ok 1 {} { ^ @ GVar { -1 } }
     ^ ( _g_push tp ( gop_const ) -1 -1 0.0 ( tensor_clone c ) )
 }
@@ -302,8 +265,7 @@ unsafe @ grad_const GTape tp__h Tensor c → GVar {
 //
 // The CPU tape CANNOT evaluate through a lazy const — it has no values.
 // Use it only on a graph that will be captured and run on the device.
-unsafe @ grad_const_lazy GTape tp__h ( Vec i ) shape i dtype → GVar {
-    : *GTapeImpl tp ( _GTape_ptr tp__h )
+@ grad_const_lazy inout GTape tp ( Vec i ) shape i dtype → GVar {
     ? == . tp ok 1 {} { ^ @ GVar { -1 } }
     : Tensor t @ Tensor { dtype ( vec_clone [i] shape ) ( vec_new [f] ) }
     ^ ( _g_push tp ( gop_const ) -1 -1 0.0 t )
@@ -313,104 +275,87 @@ unsafe @ grad_const_lazy GTape tp__h ( Vec i ) shape i dtype → GVar {
 
 // The node's value as a BORROWED Tensor view (do not free; invalid after
 // tape_free / a reset past this node).
-unsafe @ gvar_value GTape tp__h GVar v → Tensor {
-    : *GTapeImpl tp ( _GTape_ptr tp__h )
-    : *Tensor p # *Tensor ( _g_val tp . v id )
-    ^ @ Tensor { . p dtype . p shape . p data }
+@ gvar_value GTape tp GVar v → Tensor {
+    : Tensor p ( _g_v tp . v id )
+    ^ p
 }
 
 // The accumulated gradient as a BORROWED Tensor view. Allocates a zero
 // gradient on first touch so the borrow is always valid.
-unsafe @ grad_of GTape tp__h GVar v → Tensor {
-    : *GTapeImpl tp ( _GTape_ptr tp__h )
+@ grad_of inout GTape tp GVar v → Tensor {
     ( _g_ensure_grad tp . v id )
-    : *Tensor p # *Tensor ( _g_grad_ptr tp . v id )
-    ^ @ Tensor { . p dtype . p shape . p data }
+    : Tensor p ( _g_gv tp . v id )
+    ^ p
 }
 
 // First element of the node's value — the scalar-loss readout.
-unsafe @ g_scalar GTape tp__h GVar v → f {
-    : *GTapeImpl tp ( _GTape_ptr tp__h )
-    : *Tensor p # *Tensor ( _g_val tp . v id )
+@ g_scalar GTape tp GVar v → f {
+    : Tensor p ( _g_v tp . v id )
     ^ ( _tf . p data 0 )
 }
 
 // ── ops: binary (equal shapes) ───────────────────────────────────────
 
-// A borrowed Tensor view of a tape value (alias — never free).
-unsafe @ _g_view s pp → Tensor {
-    : *Tensor p # *Tensor pp
-    ^ @ Tensor { . p dtype . p shape . p data }
-}
-
-unsafe @ _g_binop * GTapeImpl tp GVar a GVar b i op → GVar {
+@ _g_binop inout GTape tp GVar a GVar b i op → GVar {
     ? == . tp ok 1 {} { ^ @ GVar { -1 } }
     ? & >= . a id 0 >= . b id 0 {} { ^ ( _g_poison tp `binop on a poisoned input` ) }
-    : s pa ( _g_val tp . a id )
-    : s pb ( _g_val tp . b id )
+    : Tensor pa ( _g_v tp . a id )
+    : Tensor pb ( _g_v tp . b id )
     ? ( _g_same_shape pa pb ) {} {
         // shapes differ → numpy broadcast through the tensor package
-        : Tensor va ( _g_view pa )
-        : Tensor vb ( _g_view pb )
         : ~ ? Tensor r @ ?Tensor { F }
-        ? == op ( gop_add ) { = r ( tensor_add va vb ) } {}
-        ? == op ( gop_sub ) { = r ( tensor_sub va vb ) } {}
-        ? == op ( gop_mul ) { = r ( tensor_mul va vb ) } {}
-        ? == op ( gop_div ) { = r ( tensor_div va vb ) } {}
+        ? == op ( gop_add ) { = r ( tensor_add pa pb ) } {}
+        ? == op ( gop_sub ) { = r ( tensor_sub pa pb ) } {}
+        ? == op ( gop_mul ) { = r ( tensor_mul pa pb ) } {}
+        ? == op ( gop_div ) { = r ( tensor_div pa pb ) } {}
         ?? r {
             T out → { ^ ( _g_push tp op . a id . b id 0.0 out ) }
             F → { ^ ( _g_poison tp `binop shapes are not broadcast-compatible` ) }
         }
     }
-    : *Tensor ta # *Tensor pa
-    : *Tensor tb # *Tensor pb
-    : i n ( vec_len [f] . ta data )
+    : i n ( vec_len [f] . pa data )
     : ( Vec f ) out ( vec_with_cap [f] n )
     : ~ i k 0
     ? == op ( gop_add ) {
-        ~ < k n { ( vec_push [f] out + ( _tf . ta data k ) ( _tf . tb data k ) ) = k + k 1 }
+        ~ < k n { ( vec_push [f] out + ( _tf . pa data k ) ( _tf . pb data k ) ) = k + k 1 }
     } {
         ? == op ( gop_sub ) {
-            ~ < k n { ( vec_push [f] out - ( _tf . ta data k ) ( _tf . tb data k ) ) = k + k 1 }
+            ~ < k n { ( vec_push [f] out - ( _tf . pa data k ) ( _tf . pb data k ) ) = k + k 1 }
         } {
             ? == op ( gop_mul ) {
-                ~ < k n { ( vec_push [f] out * ( _tf . ta data k ) ( _tf . tb data k ) ) = k + k 1 }
+                ~ < k n { ( vec_push [f] out * ( _tf . pa data k ) ( _tf . pb data k ) ) = k + k 1 }
             } {
-                ~ < k n { ( vec_push [f] out / ( _tf . ta data k ) ( _tf . tb data k ) ) = k + k 1 }
+                ~ < k n { ( vec_push [f] out / ( _tf . pa data k ) ( _tf . pb data k ) ) = k + k 1 }
             }
         }
     }
-    : ( Vec i ) shp ( vec_clone [i] . ta shape )
-    : Tensor val @ Tensor { . ta dtype shp out }
+    : ( Vec i ) shp ( vec_clone [i] . pa shape )
+    : Tensor val @ Tensor { . pa dtype shp out }
     ^ ( _g_push tp op . a id . b id 0.0 val )
 }
 
-unsafe @ g_add GTape tp__h GVar a GVar b → GVar {
-    : *GTapeImpl tp ( _GTape_ptr tp__h )
+@ g_add inout GTape tp GVar a GVar b → GVar {
     ^ ( _g_binop tp a b ( gop_add ) )
 }
 
-unsafe @ g_sub GTape tp__h GVar a GVar b → GVar {
-    : *GTapeImpl tp ( _GTape_ptr tp__h )
+@ g_sub inout GTape tp GVar a GVar b → GVar {
     ^ ( _g_binop tp a b ( gop_sub ) )
 }
 
-unsafe @ g_mul GTape tp__h GVar a GVar b → GVar {
-    : *GTapeImpl tp ( _GTape_ptr tp__h )
+@ g_mul inout GTape tp GVar a GVar b → GVar {
     ^ ( _g_binop tp a b ( gop_mul ) )
 }
 
-unsafe @ g_div GTape tp__h GVar a GVar b → GVar {
-    : *GTapeImpl tp ( _GTape_ptr tp__h )
+@ g_div inout GTape tp GVar a GVar b → GVar {
     ^ ( _g_binop tp a b ( gop_div ) )
 }
 
 // ── ops: unary / scalar ──────────────────────────────────────────────
 
-unsafe @ _g_unary * GTapeImpl tp GVar a i op f sc → GVar {
+@ _g_unary inout GTape tp GVar a i op f sc → GVar {
     ? == . tp ok 1 {} { ^ @ GVar { -1 } }
     ? >= . a id 0 {} { ^ ( _g_poison tp `unary on a poisoned input` ) }
-    : *Tensor ta # *Tensor ( _g_val tp . a id )
+    : Tensor ta ( _g_v tp . a id )
     : i n ( vec_len [f] . ta data )
     : ( Vec f ) out ( vec_with_cap [f] n )
     : ~ i k 0
@@ -439,57 +384,48 @@ unsafe @ _g_unary * GTapeImpl tp GVar a i op f sc → GVar {
     ^ ( _g_push tp op . a id -1 sc val )
 }
 
-unsafe @ g_neg GTape tp__h GVar a → GVar {
-    : *GTapeImpl tp ( _GTape_ptr tp__h )
+@ g_neg inout GTape tp GVar a → GVar {
     ^ ( _g_unary tp a ( gop_neg ) 0.0 )
 }
 
-unsafe @ g_adds GTape tp__h GVar a f sc → GVar {
-    : *GTapeImpl tp ( _GTape_ptr tp__h )
+@ g_adds inout GTape tp GVar a f sc → GVar {
     ^ ( _g_unary tp a ( gop_adds ) sc )
 }
 
-unsafe @ g_muls GTape tp__h GVar a f sc → GVar {
-    : *GTapeImpl tp ( _GTape_ptr tp__h )
+@ g_muls inout GTape tp GVar a f sc → GVar {
     ^ ( _g_unary tp a ( gop_muls ) sc )
 }
 
-unsafe @ g_relu GTape tp__h GVar a → GVar {
-    : *GTapeImpl tp ( _GTape_ptr tp__h )
+@ g_relu inout GTape tp GVar a → GVar {
     ^ ( _g_unary tp a ( gop_relu ) 0.0 )
 }
 
-unsafe @ g_sigmoid GTape tp__h GVar a → GVar {
-    : *GTapeImpl tp ( _GTape_ptr tp__h )
+@ g_sigmoid inout GTape tp GVar a → GVar {
     ^ ( _g_unary tp a ( gop_sigmoid ) 0.0 )
 }
 
-unsafe @ g_tanh GTape tp__h GVar a → GVar {
-    : *GTapeImpl tp ( _GTape_ptr tp__h )
+@ g_tanh inout GTape tp GVar a → GVar {
     ^ ( _g_unary tp a ( gop_tanh ) 0.0 )
 }
 
-unsafe @ g_exp GTape tp__h GVar a → GVar {
-    : *GTapeImpl tp ( _GTape_ptr tp__h )
+@ g_exp inout GTape tp GVar a → GVar {
     ^ ( _g_unary tp a ( gop_exp ) 0.0 )
 }
 
-unsafe @ g_log GTape tp__h GVar a → GVar {
-    : *GTapeImpl tp ( _GTape_ptr tp__h )
+@ g_log inout GTape tp GVar a → GVar {
     ^ ( _g_unary tp a ( gop_log ) 0.0 )
 }
 
-unsafe @ g_sqrt GTape tp__h GVar a → GVar {
-    : *GTapeImpl tp ( _GTape_ptr tp__h )
+@ g_sqrt inout GTape tp GVar a → GVar {
     ^ ( _g_unary tp a ( gop_sqrt ) 0.0 )
 }
 
 // ── ops: all-axes reductions (result shape [1]) ─────────────────────
 
-unsafe @ _g_reduce * GTapeImpl tp GVar a i op → GVar {
+@ _g_reduce inout GTape tp GVar a i op → GVar {
     ? == . tp ok 1 {} { ^ @ GVar { -1 } }
     ? >= . a id 0 {} { ^ ( _g_poison tp `reduce on a poisoned input` ) }
-    : *Tensor ta # *Tensor ( _g_val tp . a id )
+    : Tensor ta ( _g_v tp . a id )
     : i n ( vec_len [f] . ta data )
     : ~ f acc 0.0
     : ~ i k 0
@@ -503,22 +439,20 @@ unsafe @ _g_reduce * GTapeImpl tp GVar a i op → GVar {
     ^ ( _g_push tp op . a id -1 0.0 val )
 }
 
-unsafe @ g_sum GTape tp__h GVar a → GVar {
-    : *GTapeImpl tp ( _GTape_ptr tp__h )
+@ g_sum inout GTape tp GVar a → GVar {
     ^ ( _g_reduce tp a ( gop_sum ) )
 }
 
-unsafe @ g_mean GTape tp__h GVar a → GVar {
-    : *GTapeImpl tp ( _GTape_ptr tp__h )
+@ g_mean inout GTape tp GVar a → GVar {
     ^ ( _g_reduce tp a ( gop_mean ) )
 }
 
 // Mean squared error as a composite: mean((y − t)²). Exercises fan-out-free
 // chaining; the FD harness covers it end to end.
-@ g_mse GTape tp__h GVar y GVar t → GVar {
-    : GVar d ( g_sub tp__h y t )
-    : GVar d2 ( g_mul tp__h d d )
-    ^ ( g_mean tp__h d2 )
+@ g_mse inout GTape tp GVar y GVar t → GVar {
+    : GVar d ( g_sub tp y t )
+    : GVar d2 ( g_mul tp d d )
+    ^ ( g_mean tp d2 )
 }
 
 // ── ops: linear algebra / shape (M2) ────────────────────────────────
@@ -526,75 +460,68 @@ unsafe @ g_mean GTape tp__h GVar a → GVar {
 // out), so grad's results are the tensor package's results — including its
 // GPU matmul path and any future backend work.
 
-unsafe @ g_matmul GTape tp__h GVar a GVar b → GVar {
-    : *GTapeImpl tp ( _GTape_ptr tp__h )
+@ g_matmul inout GTape tp GVar a GVar b → GVar {
     ? == . tp ok 1 {} { ^ @ GVar { -1 } }
     ? & >= . a id 0 >= . b id 0 {} { ^ ( _g_poison tp `matmul on a poisoned input` ) }
-    ?? ( tensor_matmul ( _g_view ( _g_val tp . a id ) ) ( _g_view ( _g_val tp . b id ) ) ) {
+    ?? ( tensor_matmul ( _g_v tp . a id ) ( _g_v tp . b id ) ) {
         T out → { ^ ( _g_push tp ( gop_matmul ) . a id . b id 0.0 out ) }
         F → { ^ ( _g_poison tp `matmul shape mismatch (needs [m,k]x[k,n])` ) }
     }
 }
 
-unsafe @ g_bmm GTape tp__h GVar a GVar b → GVar {
-    : *GTapeImpl tp ( _GTape_ptr tp__h )
+@ g_bmm inout GTape tp GVar a GVar b → GVar {
     ? == . tp ok 1 {} { ^ @ GVar { -1 } }
     ? & >= . a id 0 >= . b id 0 {} { ^ ( _g_poison tp `bmm on a poisoned input` ) }
-    ?? ( tensor_bmm ( _g_view ( _g_val tp . a id ) ) ( _g_view ( _g_val tp . b id ) ) ) {
+    ?? ( tensor_bmm ( _g_v tp . a id ) ( _g_v tp . b id ) ) {
         T out → { ^ ( _g_push tp ( gop_bmm ) . a id . b id 0.0 out ) }
         F → { ^ ( _g_poison tp `bmm shape mismatch (needs [B,m,k]x[B,k,n])` ) }
     }
 }
 
-unsafe @ g_transpose GTape tp__h GVar a → GVar {
-    : *GTapeImpl tp ( _GTape_ptr tp__h )
+@ g_transpose inout GTape tp GVar a → GVar {
     ? == . tp ok 1 {} { ^ @ GVar { -1 } }
     ? >= . a id 0 {} { ^ ( _g_poison tp `transpose on a poisoned input` ) }
-    ?? ( tensor_transpose ( _g_view ( _g_val tp . a id ) ) ) {
+    ?? ( tensor_transpose ( _g_v tp . a id ) ) {
         T out → { ^ ( _g_push tp ( gop_transpose ) . a id -1 0.0 out ) }
         F → { ^ ( _g_poison tp `transpose needs a 2-D input` ) }
     }
 }
 
 // `shape` is borrowed (copied here; tensor_reshape adopts the copy).
-unsafe @ g_reshape GTape tp__h GVar a ( Vec i ) shape → GVar {
-    : *GTapeImpl tp ( _GTape_ptr tp__h )
+@ g_reshape inout GTape tp GVar a ( Vec i ) shape → GVar {
     ? == . tp ok 1 {} { ^ @ GVar { -1 } }
     ? >= . a id 0 {} { ^ ( _g_poison tp `reshape on a poisoned input` ) }
-    ?? ( tensor_reshape ( _g_view ( _g_val tp . a id ) ) ( vec_clone [i] shape ) ) {
+    ?? ( tensor_reshape ( _g_v tp . a id ) ( vec_clone [i] shape ) ) {
         T out → { ^ ( _g_push tp ( gop_reshape ) . a id -1 0.0 out ) }
         F → { ^ ( _g_poison tp `reshape element count mismatch` ) }
     }
 }
 
-unsafe @ g_softmax GTape tp__h GVar a i axis → GVar {
-    : *GTapeImpl tp ( _GTape_ptr tp__h )
+@ g_softmax inout GTape tp GVar a i axis → GVar {
     ? == . tp ok 1 {} { ^ @ GVar { -1 } }
     ? >= . a id 0 {} { ^ ( _g_poison tp `softmax on a poisoned input` ) }
-    : Tensor out ( tensor_softmax ( _g_view ( _g_val tp . a id ) ) axis )
+    : Tensor out ( tensor_softmax ( _g_v tp . a id ) axis )
     ^ ( _g_push tp ( gop_softmax ) . a id -1 # f axis out )
 }
 
 // starts/stops are borrowed; starts is retained (aux) for the backward scatter.
-unsafe @ g_slice GTape tp__h GVar a ( Vec i ) starts ( Vec i ) stops → GVar {
-    : *GTapeImpl tp ( _GTape_ptr tp__h )
+@ g_slice inout GTape tp GVar a ( Vec i ) starts ( Vec i ) stops → GVar {
     ? == . tp ok 1 {} { ^ @ GVar { -1 } }
     ? >= . a id 0 {} { ^ ( _g_poison tp `slice on a poisoned input` ) }
-    ?? ( tensor_slice ( _g_view ( _g_val tp . a id ) ) starts stops ) {
+    ?? ( tensor_slice ( _g_v tp . a id ) starts stops ) {
         T out → {
             : GVar v ( _g_push tp ( gop_slice ) . a id -1 0.0 out )
-            ( vec_put [( Box GAux )] . tp aux . v id ( box_new [GAux] @ GAux { ( vec_clone [i] starts ) } ) )
+            : b _a ( vec_set [( Vec i )] . tp aux . v id ( vec_clone [i] starts ) )
             ^ v
         }
         F → { ^ ( _g_poison tp `slice window out of range` ) }
     }
 }
 
-unsafe @ g_concat GTape tp__h GVar a GVar b i axis → GVar {
-    : *GTapeImpl tp ( _GTape_ptr tp__h )
+@ g_concat inout GTape tp GVar a GVar b i axis → GVar {
     ? == . tp ok 1 {} { ^ @ GVar { -1 } }
     ? & >= . a id 0 >= . b id 0 {} { ^ ( _g_poison tp `concat on a poisoned input` ) }
-    ?? ( tensor_concat2 ( _g_view ( _g_val tp . a id ) ) ( _g_view ( _g_val tp . b id ) ) axis ) {
+    ?? ( tensor_concat2 ( _g_v tp . a id ) ( _g_v tp . b id ) axis ) {
         T out → { ^ ( _g_push tp ( gop_concat ) . a id . b id # f axis out ) }
         F → { ^ ( _g_poison tp `concat shapes differ off-axis` ) }
     }
@@ -607,9 +534,15 @@ unsafe @ g_concat GTape tp__h GVar a GVar b i axis → GVar {
 // size-1 or missing dst dim receives the sum over that out axis). sgn is
 // +1/-1 (sub/div's second input negates). Row-major walk of `c` — one
 // documented, deterministic accumulation order.
-unsafe @ _g_acc_reduce * GTapeImpl tp i dst Tensor c f sgn → v {
+@ _g_acc_reduce inout GTape tp i dst Tensor c f sgn → v {
     ( _g_ensure_grad tp dst )
-    : *Tensor gd # *Tensor ( _g_grad_ptr tp dst )
+    ( _g_acc_into tp dst c sgn )
+}
+
+// …into a gradient already there (written in place through its buffer:
+// the tape itself does not change).
+@ _g_acc_into GTape tp i dst Tensor c f sgn → v {
+    : Tensor gd ( _g_gv tp dst )
     : i nd ( vec_len [i] . c shape )
     : ( Vec i ) cst ( _t_strides . c shape )
     : ( Vec i ) eff ( _t_eff_strides . gd shape nd )
@@ -632,23 +565,21 @@ unsafe @ _g_acc_reduce * GTapeImpl tp i dst Tensor c f sgn → v {
 }
 
 // Allocate node id's gradient as zeros (same shape as its value) if absent.
-unsafe @ _g_ensure_grad * GTapeImpl tp i id → v {
-    : s gp ( _g_grad_ptr tp id )
-    ? != # i gp 0 { ^ v } {}
-    : *Tensor vp # *Tensor ( _g_val tp id )
+@ _g_ensure_grad inout GTape tp i id → v {
+    ? ( _g_has_grad tp id ) { ^ v } {}
+    : Tensor vp ( _g_v tp id )
     : i n ( vec_len [f] . vp data )
     : ( Vec f ) z ( vec_with_cap [f] n )
     : ~ i k 0
     ~ < k n { ( vec_push [f] z 0.0 ) = k + k 1 }
     : ( Vec i ) shp ( vec_clone [i] . vp shape )
-    // the slot is an empty box (_g_grad_ptr said so)
-    : b _s ( vec_set [( Box Tensor )] . tp grads id ( box_new [Tensor] @ Tensor { . vp dtype shp z } ) )
+    : b _s ( vec_set [Tensor] . tp grads id @ Tensor { . vp dtype shp z } )
+    : b _h ( vec_set [u] . tp ghas id # u 1 )
 }
 
 // dL/d(node) of `loss` seeds to ones; every earlier node receives the sum of
 // its consumers' contributions. Returns F on a poisoned/invalid tape.
-unsafe @ backward GTape tp__h GVar loss → b {
-    : *GTapeImpl tp ( _GTape_ptr tp__h )
+@ backward inout GTape tp GVar loss → b {
     ? == . tp ok 1 {} { ^ F }
     ? >= . loss id 0 {} { ^ F }
     : i top . loss id
@@ -670,18 +601,14 @@ unsafe @ backward GTape tp__h GVar loss → b {
         = q2 + q2 1
     }
     ( _g_ensure_grad tp top )
-    : *Tensor gl # *Tensor ( _g_grad_ptr tp top )
+    : Tensor gl ( _g_gv tp top )
     : i ln ( vec_len [f] . gl data )
     : ~ i q 0
     ~ < q ln { ( vec_set [f] . gl data q 1.0 ) = q + q 1 }
     : ~ i k top
     ~ >= k 0 {
         : GNode nd ?? ( vec_get [GNode] . tp nodes k ) { T x → x F → @ GNode { -1 -1 -1 0.0 } }
-        : s gp ( _g_grad_ptr tp k )
-        ? & & != # i gp 0 > . nd op ( gop_const ) == ( _ti need k ) 1 {
-            : *Tensor g # *Tensor gp
-            : *Tensor yv # *Tensor ( _g_val tp k )
-            : i n ( vec_len [f] . g data )
+        ? & & ( _g_has_grad tp k ) > . nd op ( gop_const ) == ( _ti need k ) 1 {
             : i op . nd op
             : i ia . nd a
             : i ib . nd b
@@ -689,58 +616,59 @@ unsafe @ backward GTape tp__h GVar loss → b {
             : b needb & >= ib 0 == ( _ti need ib ) 1
             ? needa { ( _g_ensure_grad tp ia ) } {}
             ? needb { ( _g_ensure_grad tp ib ) } {}
+            // (Its inputs' gradients are allocated above, so nothing below
+            // changes the tape while `g` and `yv` read it: accumulation
+            // writes through buffers that are already there.)
+            : Tensor g ( _g_gv tp k )
+            : Tensor yv ( _g_v tp k )
+            : i n ( vec_len [f] . g data )
             // binops: broadcast-aware. Contributions are built through the
             // tensor package (broadcasting), then summed over broadcast axes
             // into each input's own shape by _g_acc_reduce.
             ? == op ( gop_add ) {
-                : Tensor gv @ Tensor { . g dtype . g shape . g data }
-                ? needa { ( _g_acc_reduce tp ia gv 1.0 ) } {}
-                ? needb { ( _g_acc_reduce tp ib gv 1.0 ) } {}
+                ? needa { ( _g_acc_into tp ia g 1.0 ) } {}
+                ? needb { ( _g_acc_into tp ib g 1.0 ) } {}
             } {}
             ? == op ( gop_sub ) {
-                : Tensor gv @ Tensor { . g dtype . g shape . g data }
-                ? needa { ( _g_acc_reduce tp ia gv 1.0 ) } {}
-                ? needb { ( _g_acc_reduce tp ib gv -1.0 ) } {}
+                ? needa { ( _g_acc_into tp ia g 1.0 ) } {}
+                ? needb { ( _g_acc_into tp ib g -1.0 ) } {}
             } {}
             ? == op ( gop_mul ) {
-                : Tensor gv @ Tensor { . g dtype . g shape . g data }
-                : Tensor av2 ( _g_view ( _g_val tp ia ) )
-                : Tensor bv2 ( _g_view ( _g_val tp ib ) )
+                : Tensor av2 ( _g_v tp ia )
+                : Tensor bv2 ( _g_v tp ib )
                 ? needa {
-                    ?? ( tensor_mul gv bv2 ) {
+                    ?? ( tensor_mul g bv2 ) {
                         T ca → {
-                            ( _g_acc_reduce tp ia ca 1.0 )
+                            ( _g_acc_into tp ia ca 1.0 )
                         }
                         F → {}
                     }
                 } {}
                 ? needb {
-                    ?? ( tensor_mul gv av2 ) {
+                    ?? ( tensor_mul g av2 ) {
                         T cb → {
-                            ( _g_acc_reduce tp ib cb 1.0 )
+                            ( _g_acc_into tp ib cb 1.0 )
                         }
                         F → {}
                     }
                 } {}
             } {}
             ? == op ( gop_div ) {
-                : Tensor gv @ Tensor { . g dtype . g shape . g data }
-                : Tensor bv2 ( _g_view ( _g_val tp ib ) )
-                : Tensor yv2 @ Tensor { . yv dtype . yv shape . yv data }
+                : Tensor bv2 ( _g_v tp ib )
                 ? needa {
-                    ?? ( tensor_div gv bv2 ) {
+                    ?? ( tensor_div g bv2 ) {
                         T ca → {
-                            ( _g_acc_reduce tp ia ca 1.0 )
+                            ( _g_acc_into tp ia ca 1.0 )
                         }
                         F → {}
                     }
                 } {}
                 ? needb {
-                    ?? ( tensor_mul gv yv2 ) {
+                    ?? ( tensor_mul g yv ) {
                         T t1 → {
                             ?? ( tensor_div t1 bv2 ) {
                                 T cb → {
-                                    ( _g_acc_reduce tp ib cb -1.0 )
+                                    ( _g_acc_into tp ib cb -1.0 )
                                 }
                                 F → {}
                             }
@@ -750,7 +678,7 @@ unsafe @ backward GTape tp__h GVar loss → b {
                 } {}
             } {}
             ? == op ( gop_neg ) {
-                : *Tensor ga # *Tensor ( _g_grad_ptr tp ia )
+                : Tensor ga ( _g_gv tp ia )
                 : ~ i j 0
                 ~ < j n {
                     ( vec_set [f] . ga data j - ( _tf . ga data j ) ( _tf . g data j ) )
@@ -758,7 +686,7 @@ unsafe @ backward GTape tp__h GVar loss → b {
                 }
             } {}
             ? == op ( gop_adds ) {
-                : *Tensor ga # *Tensor ( _g_grad_ptr tp ia )
+                : Tensor ga ( _g_gv tp ia )
                 : ~ i j 0
                 ~ < j n {
                     ( vec_set [f] . ga data j + ( _tf . ga data j ) ( _tf . g data j ) )
@@ -766,7 +694,7 @@ unsafe @ backward GTape tp__h GVar loss → b {
                 }
             } {}
             ? == op ( gop_muls ) {
-                : *Tensor ga # *Tensor ( _g_grad_ptr tp ia )
+                : Tensor ga ( _g_gv tp ia )
                 : f sc . nd s
                 : ~ i j 0
                 ~ < j n {
@@ -775,7 +703,7 @@ unsafe @ backward GTape tp__h GVar loss → b {
                 }
             } {}
             ? == op ( gop_relu ) {
-                : *Tensor ga # *Tensor ( _g_grad_ptr tp ia )
+                : Tensor ga ( _g_gv tp ia )
                 : ~ i j 0
                 ~ < j n {
                     ? > ( _tf . yv data j ) 0.0 {
@@ -785,7 +713,7 @@ unsafe @ backward GTape tp__h GVar loss → b {
                 }
             } {}
             ? == op ( gop_sigmoid ) {
-                : *Tensor ga # *Tensor ( _g_grad_ptr tp ia )
+                : Tensor ga ( _g_gv tp ia )
                 : ~ i j 0
                 ~ < j n {
                     : f yj ( _tf . yv data j )
@@ -794,7 +722,7 @@ unsafe @ backward GTape tp__h GVar loss → b {
                 }
             } {}
             ? == op ( gop_tanh ) {
-                : *Tensor ga # *Tensor ( _g_grad_ptr tp ia )
+                : Tensor ga ( _g_gv tp ia )
                 : ~ i j 0
                 ~ < j n {
                     : f yj ( _tf . yv data j )
@@ -803,7 +731,7 @@ unsafe @ backward GTape tp__h GVar loss → b {
                 }
             } {}
             ? == op ( gop_exp ) {
-                : *Tensor ga # *Tensor ( _g_grad_ptr tp ia )
+                : Tensor ga ( _g_gv tp ia )
                 : ~ i j 0
                 ~ < j n {
                     ( vec_set [f] . ga data j + ( _tf . ga data j ) * ( _tf . g data j ) ( _tf . yv data j ) )
@@ -811,8 +739,8 @@ unsafe @ backward GTape tp__h GVar loss → b {
                 }
             } {}
             ? == op ( gop_log ) {
-                : *Tensor ga # *Tensor ( _g_grad_ptr tp ia )
-                : *Tensor av # *Tensor ( _g_val tp ia )
+                : Tensor ga ( _g_gv tp ia )
+                : Tensor av ( _g_v tp ia )
                 : ~ i j 0
                 ~ < j n {
                     ( vec_set [f] . ga data j + ( _tf . ga data j ) / ( _tf . g data j ) ( _tf . av data j ) )
@@ -820,7 +748,7 @@ unsafe @ backward GTape tp__h GVar loss → b {
                 }
             } {}
             ? == op ( gop_sqrt ) {
-                : *Tensor ga # *Tensor ( _g_grad_ptr tp ia )
+                : Tensor ga ( _g_gv tp ia )
                 : ~ i j 0
                 ~ < j n {
                     ( vec_set [f] . ga data j + ( _tf . ga data j ) / ( _tf . g data j ) * 2.0 ( _tf . yv data j ) )
@@ -828,7 +756,7 @@ unsafe @ backward GTape tp__h GVar loss → b {
                 }
             } {}
             ? == op ( gop_sum ) {
-                : *Tensor ga # *Tensor ( _g_grad_ptr tp ia )
+                : Tensor ga ( _g_gv tp ia )
                 : f g0 ( _tf . g data 0 )
                 : i an ( vec_len [f] . ga data )
                 : ~ i j 0
@@ -838,7 +766,7 @@ unsafe @ backward GTape tp__h GVar loss → b {
                 }
             } {}
             ? == op ( gop_mean ) {
-                : *Tensor ga # *Tensor ( _g_grad_ptr tp ia )
+                : Tensor ga ( _g_gv tp ia )
                 : f g0 ( _tf . g data 0 )
                 : i an ( vec_len [f] . ga data )
                 : f gper / g0 # f an
@@ -853,10 +781,10 @@ unsafe @ backward GTape tp__h GVar loss → b {
                 // dB[p,j] += Σ_i A[i,p]·g[i,j]. Serial inner sums, row-major.
                 // (an unneeded side's grad slot is NULL — deref only under
                 // its need flag; the loops below are inside those guards)
-                : *Tensor ga # *Tensor ? needa ( _g_grad_ptr tp ia ) # s 0
-                : *Tensor gb # *Tensor ? needb ( _g_grad_ptr tp ib ) # s 0
-                : *Tensor av # *Tensor ( _g_val tp ia )
-                : *Tensor bv # *Tensor ( _g_val tp ib )
+                : Tensor ga ( _g_gv tp ia )
+                : Tensor gb ( _g_gv tp ib )
+                : Tensor av ( _g_v tp ia )
+                : Tensor bv ( _g_v tp ib )
                 : i M ( _ti . av shape 0 )
                 : i K ( _ti . av shape 1 )
                 : i N2 ( _ti . bv shape 1 )
@@ -893,10 +821,10 @@ unsafe @ backward GTape tp__h GVar loss → b {
             } {}
             ? == op ( gop_bmm ) {
                 // per-batch matmul backward, identical index math + batch offset
-                : *Tensor ga # *Tensor ? needa ( _g_grad_ptr tp ia ) # s 0
-                : *Tensor gb # *Tensor ? needb ( _g_grad_ptr tp ib ) # s 0
-                : *Tensor av # *Tensor ( _g_val tp ia )
-                : *Tensor bv # *Tensor ( _g_val tp ib )
+                : Tensor ga ( _g_gv tp ia )
+                : Tensor gb ( _g_gv tp ib )
+                : Tensor av ( _g_v tp ia )
+                : Tensor bv ( _g_v tp ib )
                 : i B2 ( _ti . av shape 0 )
                 : i M ( _ti . av shape 1 )
                 : i K ( _ti . av shape 2 )
@@ -941,7 +869,7 @@ unsafe @ backward GTape tp__h GVar loss → b {
             } {}
             ? == op ( gop_transpose ) {
                 // out is [N,M] of input [M,N]: ga[i,j] += g[j,i]
-                : *Tensor ga # *Tensor ( _g_grad_ptr tp ia )
+                : Tensor ga ( _g_gv tp ia )
                 : i M ( _ti . ga shape 0 )
                 : i N2 ( _ti . ga shape 1 )
                 : ~ i i2 0
@@ -957,7 +885,7 @@ unsafe @ backward GTape tp__h GVar loss → b {
             } {}
             ? == op ( gop_reshape ) {
                 // same row-major order, flat pass-through
-                : *Tensor ga # *Tensor ( _g_grad_ptr tp ia )
+                : Tensor ga ( _g_gv tp ia )
                 : ~ i j 0
                 ~ < j n {
                     ( vec_set [f] . ga data j + ( _tf . ga data j ) ( _tf . g data j ) )
@@ -966,7 +894,7 @@ unsafe @ backward GTape tp__h GVar loss → b {
             } {}
             ? == op ( gop_softmax ) {
                 // dx = y ⊙ (g − Σ_axis(g⊙y)), per slice along the axis
-                : *Tensor ga # *Tensor ( _g_grad_ptr tp ia )
+                : Tensor ga ( _g_gv tp ia )
                 : i axis # i . nd s
                 : i ndim ( vec_len [i] . yv shape )
                 : ~ i outer 1
@@ -1001,9 +929,8 @@ unsafe @ backward GTape tp__h GVar loss → b {
             } {}
             ? == op ( gop_slice ) {
                 // scatter g back into the input window at aux.starts
-                : *Tensor ga # *Tensor ( _g_grad_ptr tp ia )
-                : s axp ( _g_aux_ptr tp k )
-                : *GAux ax # *GAux axp
+                : Tensor ga ( _g_gv tp ia )
+                : ( Vec i ) axs ?? ( vec_get [( Vec i )] . tp aux k ) { T x → x F → ( vec_new [i] ) }
                 : i ndim ( vec_len [i] . yv shape )
                 : ( Vec i ) ost ( _t_strides . yv shape )
                 : ( Vec i ) ist ( _t_strides . ga shape )
@@ -1016,7 +943,7 @@ unsafe @ backward GTape tp__h GVar loss → b {
                         : i st ( _ti ost d )
                         : i ix / rem st
                         = rem % rem st
-                        = ioff + ioff * + ix ( _ti . ax starts d ) ( _ti ist d )
+                        = ioff + ioff * + ix ( _ti axs d ) ( _ti ist d )
                         = d + d 1
                     }
                     ( vec_set [f] . ga data ioff + ( _tf . ga data ioff ) ( _tf . g data lin ) )
@@ -1025,8 +952,8 @@ unsafe @ backward GTape tp__h GVar loss → b {
             } {}
             ? == op ( gop_concat ) {
                 // split g along the axis at a's extent
-                : *Tensor ga # *Tensor ? needa ( _g_grad_ptr tp ia ) # s 0
-                : *Tensor gb # *Tensor ? needb ( _g_grad_ptr tp ib ) # s 0
+                : Tensor ga ( _g_gv tp ia )
+                : Tensor gb ( _g_gv tp ib )
                 : i axis # i . nd s
                 : i ndim ( vec_len [i] . yv shape )
                 : i da ( _ti . ga shape axis )

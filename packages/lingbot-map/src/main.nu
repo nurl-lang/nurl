@@ -55,8 +55,8 @@ $ `stdlib/core/slice.nu`
 : f LM_CONF 1.5
 
 : Opts {
-    s model
-    s out
+    String model
+    String out
     f conf
     i pixstride
     i maxframes
@@ -67,8 +67,8 @@ $ `stdlib/core/slice.nu`
     i bad
     i view
     i port
-    s page
-    s host
+    String page
+    String host
     i tls
     i imgsize
 }
@@ -277,7 +277,7 @@ $ `stdlib/core/slice.nu`
     ^ T
 }
 
-unsafe @ __lm_parse → Opts {
+@ __lm_parse → Opts {
     : ( Vec String ) fr ( vec_new [String] )
     : ~ s model ``
     : ~ s out `cloud.ply`
@@ -428,7 +428,7 @@ unsafe @ __lm_parse → Opts {
         : ( Vec String ) kept ( vec_new [String] )
         : ~ i r 0
         ~ < r ( vec_len [String] fr ) {
-            ?? ( vec_replace [String] fr r # String 0 ) {
+            ?? ( vec_replace [String] fr r ( string_new ) ) {
                 T st → { ? == 0 % r fstride { ( vec_push [String] kept st ) } {} }
                 F → {}
             }
@@ -437,7 +437,7 @@ unsafe @ __lm_parse → Opts {
         ( vec_clear [String] fr )
         ( vec_append [String] fr kept )
     } {}
-    ^ @ Opts { model out conf pstride maxf verbose profile ascii fr bad view port page host tls imgsize }
+    ^ @ Opts { ( string_from model ) ( string_from out ) conf pstride maxf verbose profile ascii fr bad view port ( string_from page ) ( string_from host ) tls imgsize }
 }
 
 // ── the checkpoint ──────────────────────────────────────────────────
@@ -495,19 +495,19 @@ unsafe @ __lm_parse → Opts {
 
 // ── one frame ───────────────────────────────────────────────────────
 
-unsafe @ __lm_norm * f p i h i w → v {
-    : ( Vec u ) mean__v ( vec_zeroed [u] 24 )
-    : *f mean # *f ( vec_data [u] mean__v )
-    : ( Vec u ) std__v ( vec_zeroed [u] 24 )
-    : *f std # *f ( vec_data [u] std__v )
-    = . mean 0 0.485 = . mean 1 0.456 = . mean 2 0.406
-    = . std 0 0.229 = . std 1 0.224 = . std 2 0.225
+@ __lm_norm ( Slice f ) p i h i w → v {
+    : ( Vec f ) mean__v ( vec_zeroed [f] 3 )
+    : ( Slice f ) mean ( slice_from_vec [f] mean__v )
+    : ( Vec f ) std__v ( vec_zeroed [f] 3 )
+    : ( Slice f ) std ( slice_from_vec [f] std__v )
+    ( slice_put [f] mean 0 0.485 ) ( slice_put [f] mean 1 0.456 ) ( slice_put [f] mean 2 0.406 )
+    ( slice_put [f] std 0 0.229 ) ( slice_put [f] std 1 0.224 ) ( slice_put [f] std 2 0.225 )
     : ~ i c 0
     ~ < c 3 {
         : ~ i j 0
         ~ < j * h w {
             : i o + * c * h w j
-            = . p o / - . p o . mean c . std c
+            ( slice_put [f] p o / - ( slice_at [f] p o ) ( slice_at [f] mean c ) ( slice_at [f] std c ) )
             = j + j 1
         }
         = c + c 1
@@ -524,24 +524,24 @@ unsafe @ __lm_norm * f p i h i w → v {
 // Emit the points of one frame into the PLY writer. `rgb` is the
 // un-normalised CHW image, `dep` and `cf` are the head's outputs,
 // `kinv` and `c2w` the camera. The writer buffers and flushes itself.
-unsafe @ __lm_emit PlyW p * f rgb * f dep * f cf * f kinv * f c2w
+@ __lm_emit PlyW p ( Slice f ) rgb ( Slice f ) dep ( Slice f ) cf ( Slice f ) kinv ( Slice f ) c2w
 i h i w f cmin i stride → v {
-    : ( Vec u ) wp__v ( vec_zeroed [u] 24 )
-    : *f wp # *f ( vec_data [u] wp__v )
+    : ( Vec f ) wp__v ( vec_zeroed [f] 3 )
+    : ( Slice f ) wp ( slice_from_vec [f] wp__v )
     : i plane * h w
     : ~ i y 0
     ~ < y h {
         : ~ i x 0
         ~ < x w {
             : i idx + * y w x
-            ? > . cf idx cmin {
+            ? > ( slice_at [f] cf idx ) cmin {
                 // INTEGER pixel coordinates: the reference builds its
                 // grid with np.arange(W), not sample centres
-                ( unproject # f x # f y . dep idx kinv c2w wp )
-                ( ply_vertex p . wp 0 . wp 1 . wp 2
-                ( __lm_u8 . rgb idx )
-                ( __lm_u8 . rgb + plane idx )
-                ( __lm_u8 . rgb + * 2 plane idx ) )
+                ( unproject # f x # f y ( slice_at [f] dep idx ) kinv c2w wp )
+                ( ply_vertex p ( slice_at [f] wp 0 ) ( slice_at [f] wp 1 ) ( slice_at [f] wp 2 )
+                ( __lm_u8 ( slice_at [f] rgb idx ) )
+                ( __lm_u8 ( slice_at [f] rgb + plane idx ) )
+                ( __lm_u8 ( slice_at [f] rgb + * 2 plane idx ) ) )
             } {}
             = x + x stride
         }
@@ -627,7 +627,7 @@ i h i w f cmin i stride → v {
     ( nurl_print ` GB` )
 }
 
-unsafe @ main → i {
+@ main → i {
     // `lingbot-map view <cloud.ply>` — look at a cloud that already exists,
     // without a checkpoint, a GPU or a reconstruction. Taken before the
     // options are parsed because a bare filename is a frame everywhere else.
@@ -685,14 +685,14 @@ unsafe @ main → i {
     // long as 4.6 GB takes to arrive, so it had better be there.
     ? != . o verbose 0 {
         ( nurl_print `frames ` ) ( nurl_print ( nurl_str_int nframes ) )
-        ( nurl_print ` -> ` ) ( nurl_print . o out ) ( nurl_print `\n` )
+        ( nurl_print ` -> ` ) ( nurl_print ( string_data . o out ) ) ( nurl_print `\n` )
     } {}
 
     // Resolved before the GPU is touched: a checkpoint that is missing or
     // still downloading has nothing to do with the device, and failing in
     // that order is what a reader expects.
     : ~ String model ( string_new )
-    ?? ( __lm_model . o model . o verbose ) {
+    ?? ( __lm_model ( string_data . o model ) . o verbose ) {
         F e → {
             ( nurl_print `lingbot-map: no checkpoint: ` )
             ( nurl_print ( string_data e ) ) ( nurl_print `\n` )
@@ -748,17 +748,17 @@ unsafe @ main → i {
             : CamHead chd ( ch_load lw kit )
             : Dpt dp ( dp_load lw kit )
             ? ( lw_ok lw ) {} {
-                ( nurl_print ( lw_error lw ) ) ( nurl_print `\n` ) ^ 1
+                ( nurl_print ( string_data ( lw_error lw ) ) ) ( nurl_print `\n` ) ^ 1
             }
-            : !PlyW String po ( ply_create . o out . o ascii `lingbot-map, pure NURL` )
+            : !PlyW String po ( ply_create ( string_data . o out ) . o ascii `lingbot-map, pure NURL` )
             ?? po {
                 F e → {
                     ( nurl_print ( string_data e ) ) ( nurl_print `\n` ) ^ 1
                 }
                 T ply → {
                     : ChWs cws ( ch_ws_new kit nframes )
-                    : ( Vec u ) taps__v ( vec_zeroed [u] 32 )
-                    : *i taps # *i ( vec_data [u] taps__v )
+                    : ( Vec i ) taps__v ( vec_zeroed [i] 4 )
+                    : ( Slice i ) taps ( slice_from_vec [i] taps__v )
                     ( ag_default_taps taps )
                     : ~ i p 0
                     : ~ i dn 0
@@ -826,12 +826,11 @@ unsafe @ main → i {
                                     } {}
                                     // the RGB has to be kept before the
                                     // normalisation eats it in place
-                                    : ( Vec f ) rgbv ( vec_with_cap [f] * 3 * h w )
-                                    : b _rl ( vec_set_len [f] rgbv * 3 * h w )
-                                    : *f rgb ( vec_data [f] rgbv )
-                                    : *f src ( pp_data f )
+                                    : ( Vec f ) rgbv ( vec_zeroed [f] * 3 * h w )
+                                    : ( Slice f ) rgb ( slice_from_vec [f] rgbv )
+                                    : ( Slice f ) src ( pp_data f )
                                     : ~ i j 0
-                                    ~ < j * 3 * h w { = . rgb j . src j = j + j 1 }
+                                    ~ < j * 3 * h w { ( slice_put [f] rgb j ( slice_at [f] src j ) ) = j + j 1 }
                                     ( __lm_norm src h w )
 
                                     : i big ? > p dn p dn
@@ -883,12 +882,9 @@ unsafe @ main → i {
                                     ? != . o profile 0 { : b _sy3 ( gk_sync kit ) } {}
                                     : i t_dpt ( monotonic_ns )
                                     ? == failed 0 {
-                                        : ( Vec f ) pv ( vec_with_cap [f] 9 )
-                                        : b _pl ( vec_set_len [f] pv 9 )
-                                        : ( Vec f ) dv ( vec_with_cap [f] * h w )
-                                        : b _dl ( vec_set_len [f] dv * h w )
-                                        : ( Vec f ) cv ( vec_with_cap [f] * h w )
-                                        : b _cl ( vec_set_len [f] cv * h w )
+                                        : ( Vec f ) pv ( vec_zeroed [f] 9 )
+                                        : ( Vec f ) dv ( vec_zeroed [f] * h w )
+                                        : ( Vec f ) cv ( vec_zeroed [f] * h w )
                                         : b okd & & ( gk_dbuf_download kit pose pv )
                                         ( gk_dbuf_download kit depth dv )
                                         ( gk_dbuf_download kit conf cv )
@@ -898,18 +894,18 @@ unsafe @ main → i {
                                         }
                                         : i t_dl ( monotonic_ns )
                                         ? == failed 0 {
-                                            : *f pe ( vec_data [f] pv )
-                                            : ( Vec u ) kk__v ( vec_zeroed [u] 128 )
-                                            : *f kk # *f ( vec_data [u] kk__v )
-                                            : ( Vec u ) ki__v ( vec_zeroed [u] 128 )
-                                            : *f ki # *f ( vec_data [u] ki__v )
-                                            : ( Vec u ) c2w__v ( vec_zeroed [u] 128 )
-                                            : *f c2w # *f ( vec_data [u] c2w__v )
+                                            : ( Slice f ) pe ( slice_from_vec [f] pv )
+                                            : ( Vec f ) kk__v ( vec_zeroed [f] 16 )
+                                            : ( Slice f ) kk ( slice_from_vec [f] kk__v )
+                                            : ( Vec f ) ki__v ( vec_zeroed [f] 16 )
+                                            : ( Slice f ) ki ( slice_from_vec [f] ki__v )
+                                            : ( Vec f ) c2w__v ( vec_zeroed [f] 16 )
+                                            : ( Slice f ) c2w ( slice_from_vec [f] c2w__v )
                                             ( pose_enc_to_intri pe h w kk )
                                             ( intri_inverse kk ki )
                                             ( pose_enc_to_c2w pe c2w )
-                                            ( __lm_emit ply rgb ( vec_data [f] dv )
-                                            ( vec_data [f] cv ) ki c2w h w . o conf . o pixstride )
+                                            ( __lm_emit ply rgb ( slice_from_vec [f] dv )
+                                            ( slice_from_vec [f] cv ) ki c2w h w . o conf . o pixstride )
                                             ? != . o profile 0 {
                                                 ( nurl_print `   prep ` )
                                                 ( nurl_print ( nurl_str_int / - t_prep t_frame0 1000000 ) )
@@ -956,7 +952,7 @@ unsafe @ main → i {
                     }
                     ? == failed 0 {
                         ( nurl_print `wrote ` ) ( nurl_print ( nurl_str_int total ) )
-                        ( nurl_print ` points to ` ) ( nurl_print . o out )
+                        ( nurl_print ` points to ` ) ( nurl_print ( string_data . o out ) )
                         ( nurl_print `  (` ) ( nurl_print ( nurl_str_int nframes ) )
                         ( nurl_print ` frames, ` )
                         ( nurl_print ( nurl_str_int
@@ -976,7 +972,7 @@ unsafe @ main → i {
     ( gk_close kit )
     ? != serve 0 {
         ( nurl_print `\n` )
-        : i vrc ( vw_serve . o out . o host . o port . o page 0 . o tls )
+        : i vrc ( vw_serve ( string_data . o out ) ( string_data . o host ) . o port ( string_data . o page ) 0 . o tls )
         ? != vrc 0 { = rc vrc } {}
     } {}
 

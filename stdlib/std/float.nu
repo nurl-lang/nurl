@@ -78,6 +78,11 @@ $ `stdlib/core/errors.nu`
 
 & `m` @ round f x → f
 
+// Round to the nearest integer, ties to even (IEEE 754 roundTiesToEven, the
+// default rounding mode) — wasm's `f*.nearest`, where `round` takes ties
+// away from zero.
+& `m` @ rint f x → f
+
 & `m` @ log f x → f
 
 & `m` @ exp f x → f
@@ -117,6 +122,8 @@ $ `stdlib/core/errors.nu`
 @ float_ceil f x → f { ^ ( ceil x ) }
 
 @ float_round f x → f { ^ ( round x ) }
+
+@ float_round_even f x → f { ^ ( rint x ) }
 
 @ float_log f x → f { ^ ( log x ) }
 

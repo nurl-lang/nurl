@@ -76,6 +76,40 @@ $ `stdlib/core/slice.nu`
 // Per-session tool configuration and compiler capability result.
 : ~ i g_tools 0
 
+// The server's string tables. Each is the standard library's raw symbol
+// table, held in an `i` global for the life of the process; the accessors
+// below are the only code that hands one to `nurl_sym_*`, so no caller can
+// pass a number that is not a live table. The server is one thread.
+: | LspTable { LtTools LtDocs LtDocUris LtDefs LtDefsByUri LtAllNames LtIndexed }
+
+unsafe @ __lsp_tables_init → v {
+    = g_tools ( nurl_sym_new )
+    = g_docs ( nurl_sym_new )
+    = g_doc_uris ( nurl_sym_new )
+    = g_defs ( nurl_sym_new )
+    = g_defs_by_uri ( nurl_sym_new )
+    = g_all_names ( nurl_sym_new )
+    = g_indexed ( nurl_sym_new )
+}
+
+unsafe @ __lsp_table LspTable t → i {
+    ^ ?? t {
+        LtTools → g_tools
+        LtDocs → g_docs
+        LtDocUris → g_doc_uris
+        LtDefs → g_defs
+        LtDefsByUri → g_defs_by_uri
+        LtAllNames → g_all_names
+        LtIndexed → g_indexed
+    }
+}
+
+// The value bound to `key` in table `t` (an owned copy; `` when absent).
+unsafe @ lsp_get LspTable t s key → s { ^ ( nurl_sym_get ( __lsp_table t ) key ) }
+
+// Bind `key` to a copy of `val` in table `t`.
+unsafe @ lsp_def LspTable t s key s val → v { ( nurl_sym_def ( __lsp_table t ) key val ) }
+
 @ __build_capabilities → Json {
     : Json caps ( json_obj_new )
     // Full document sync: every didChange carries the whole buffer.
@@ -497,10 +531,10 @@ unsafe @ __path_to_uri s path → String {
     : String formatter_config ( __resolve_tool params `formatterPath` `NURLFMT` `nurlfmt` )
     : String compiler ( __stable_command ( string_data compiler_config ) )
     : String formatter ( __stable_command ( string_data formatter_config ) )
-    ( nurl_sym_def g_tools `compiler` ( string_data compiler ) )
-    ( nurl_sym_def g_tools `formatter` ( string_data formatter ) )
-    ( nurl_sym_def g_tools `compiler_checked` `` )
-    ( nurl_sym_def g_tools `compiler_error` `` )
+    ( lsp_def LtTools `compiler` ( string_data compiler ) )
+    ( lsp_def LtTools `formatter` ( string_data formatter ) )
+    ( lsp_def LtTools `compiler_checked` `` )
+    ( lsp_def LtTools `compiler_error` `` )
     : String root ( __init_option params `stdlibRoot` )
     ? > ( string_len root ) 0 { : !v IoErr _set ( env_set `NURL_STDLIB` ( string_data root ) ) } {
         : String existing ( env_var_or `NURL_STDLIB` `` )
@@ -514,25 +548,25 @@ unsafe @ __path_to_uri s path → String {
 }
 
 @ __compiler_error → s {
-    : s workspace_error ( nurl_sym_get g_tools `workspace_error` )
+    : s workspace_error ( lsp_get LtTools `workspace_error` )
     ? > ( nurl_str_len workspace_error ) 0 { ^ workspace_error } {}
-    ? == 0 ( nurl_str_len ( nurl_sym_get g_tools `compiler_checked` ) ) {
-        ( nurl_sym_def g_tools `compiler_error` `` )
-        : s compiler ( nurl_sym_get g_tools `compiler` )
+    ? == 0 ( nurl_str_len ( lsp_get LtTools `compiler_checked` ) ) {
+        ( lsp_def LtTools `compiler_error` `` )
+        : s compiler ( lsp_get LtTools `compiler` )
         : !Output ProcessErr result ( process_run1 compiler `--help` )
         ?? result {
-            F e → { ( nurl_sym_def g_tools `compiler_error` ( nurl_str_cat3 `cannot execute compiler '` compiler ( nurl_str_cat `': ` ( process_err_name e ) ) ) ) }
+            F e → { ( lsp_def LtTools `compiler_error` ( nurl_str_cat3 `cannot execute compiler '` compiler ( nurl_str_cat `': ` ( process_err_name e ) ) ) ) }
             T out → {
                 ? | ! ( output_success out ) | < ( nurl_str_find ( output_stdout out ) `--stdin` ) 0 < ( nurl_str_find ( output_stdout out ) `--check` ) 0 {
-                    ( nurl_sym_def g_tools `compiler_error` ( nurl_str_cat3 `compiler '` compiler `' does not support --stdin and --check; rebuild or select a matching toolchain` ) )
+                    ( lsp_def LtTools `compiler_error` ( nurl_str_cat3 `compiler '` compiler `' does not support --stdin and --check; rebuild or select a matching toolchain` ) )
                 } {}
             }
         }
-        ? == 0 ( nurl_str_len ( nurl_sym_get g_tools `compiler_error` ) ) {
-            ( nurl_sym_def g_tools `compiler_checked` `1` )
+        ? == 0 ( nurl_str_len ( lsp_get LtTools `compiler_error` ) ) {
+            ( lsp_def LtTools `compiler_checked` `1` )
         } {}
     } {}
-    ^ ( nurl_sym_get g_tools `compiler_error` )
+    ^ ( lsp_get LtTools `compiler_error` )
 }
 
 @ __compile_diagnostics s uri s content → Json {
@@ -553,7 +587,7 @@ unsafe @ __path_to_uri s path → String {
     ( vec_push [s] nc_args `--check` )
     ( vec_push [s] nc_args `--` )
     ( vec_push [s] nc_args ( string_data path ) )
-    : s compiler ( nurl_sym_get g_tools `compiler` )
+    : s compiler ( lsp_get LtTools `compiler` )
     : !Output ProcessErr pr ( process_run compiler nc_args content )
     ?? pr {
         F e → { ( json_arr_push diags ( __build_diagnostic 1 1 1 ( nurl_str_cat `cannot execute compiler: ` ( process_err_name e ) ) ) ) }
@@ -614,14 +648,14 @@ unsafe @ __path_to_uri s path → String {
     ( string_push_str val ( nurl_str_int line ) )
     ( string_push_char val 9 )
     ( string_push_str val ( nurl_str_int kind ) )
-    ( nurl_sym_def g_defs name ( string_data val ) )
+    ( lsp_def LtDefs name ( string_data val ) )
 
     // g_defs_by_uri entry: append "name\tline\tkind" triplet to the
     // existing TSV (or seed it). Same-line idempotence isn't worth the
     // bookkeeping — a re-index of an already-indexed URI is gated by
     // __index_uri clearing g_indexed[path] first, so a fresh listing
     // starts from an empty slot anyway.
-    : s prev ( nurl_sym_get g_defs_by_uri uri )
+    : s prev ( lsp_get LtDefsByUri uri )
     : String acc ( string_with_cap + ( nurl_str_len prev ) 64 )
     ? > ( nurl_str_len prev ) 0 {
         ( string_push_str acc prev )
@@ -632,22 +666,22 @@ unsafe @ __path_to_uri s path → String {
     ( string_push_str acc ( nurl_str_int line ) )
     ( string_push_char acc 9 )
     ( string_push_str acc ( nurl_str_int kind ) )
-    ( nurl_sym_def g_defs_by_uri uri ( string_data acc ) )
+    ( lsp_def LtDefsByUri uri ( string_data acc ) )
 
     // First-time-seen → append to the all-names TSV. Skipped on
     // duplicates so the iterator stays linear-bounded by distinct
     // names rather than register-call count.
-    : s seen ( nurl_sym_get g_all_names name )
+    : s seen ( lsp_get LtAllNames name )
     ? == 0 ( nurl_str_len seen ) {
-        ( nurl_sym_def g_all_names name `1` )
-        : s prev_list ( nurl_sym_get g_all_names `:list` )
+        ( lsp_def LtAllNames name `1` )
+        : s prev_list ( lsp_get LtAllNames `:list` )
         : String list_acc ( string_with_cap + ( nurl_str_len prev_list ) + 8 ( nurl_str_len name ) )
         ? > ( nurl_str_len prev_list ) 0 {
             ( string_push_str list_acc prev_list )
             ( string_push_char list_acc 9 )
         } {}
         ( string_push_str list_acc name )
-        ( nurl_sym_def g_all_names `:list` ( string_data list_acc ) )
+        ( lsp_def LtAllNames `:list` ( string_data list_acc ) )
     } {}
 }
 
@@ -870,12 +904,12 @@ unsafe @ __path_to_uri s path → String {
 // ── Workspace + transitive import indexing ─────────────────────────
 
 @ __set_workspace_root s root → v {
-    ( nurl_sym_def g_indexed `:root` root )
+    ( lsp_def LtIndexed `:root` root )
     = g_workspace_root_set 1
 }
 
 @ __get_workspace_root → s {
-    ^ ( nurl_sym_get g_indexed `:root` )
+    ^ ( lsp_get LtIndexed `:root` )
 }
 
 // Match the compiler's importer-relative, workspace and installed-stdlib
@@ -985,12 +1019,12 @@ unsafe @ __path_to_uri s path → String {
 // for top-level decls, and recurses into its imports. Dedup via
 // g_indexed so cycles + diamonds visit each file once.
 @ __index_path s abs_path → v {
-    : s marker ( nurl_sym_get g_indexed abs_path )
+    : s marker ( lsp_get LtIndexed abs_path )
     ? == 0 ( nurl_str_len marker ) {
-        ( nurl_sym_def g_indexed abs_path `1` )
-        : s open_uri ( nurl_sym_get g_docs ( nurl_str_cat `:path:` abs_path ) )
+        ( lsp_def LtIndexed abs_path `1` )
+        : s open_uri ( lsp_get LtDocs ( nurl_str_cat `:path:` abs_path ) )
         : s content ? > ( nurl_str_len open_uri ) 0
-        ( nurl_sym_get g_docs open_uri ) ( __read_if_exists abs_path )
+        ( lsp_get LtDocs open_uri ) ( __read_if_exists abs_path )
         ? > ( nurl_str_len content ) 0 {
             : String uri ? > ( nurl_str_len open_uri ) 0 ( string_from open_uri ) ( __path_to_uri abs_path )
             ( __index_content ( string_data uri ) content )
@@ -1021,9 +1055,9 @@ unsafe @ __path_to_uri s path → String {
     // flag first; imports remain cached. Also reset the TSV slot so
     // re-indexing replaces rather than appends — otherwise outline
     // entries would double on every keystroke.
-    ( nurl_sym_def g_docs ( nurl_str_cat `:path:` ( string_data path ) ) uri )
-    ( nurl_sym_def g_indexed ( string_data path ) `` )
-    ( nurl_sym_def g_defs_by_uri uri `` )
+    ( lsp_def LtDocs ( nurl_str_cat `:path:` ( string_data path ) ) uri )
+    ( lsp_def LtIndexed ( string_data path ) `` )
+    ( lsp_def LtDefsByUri uri `` )
     ( __index_path ( string_data path ) )
 }
 
@@ -1040,7 +1074,7 @@ unsafe @ __path_to_uri s path → String {
 // Re-run diagnostics for `uri` using its current stored text. Called
 // from didOpen / didChange after the store mutates.
 @ __recompile_and_publish s uri → v {
-    : s text ( nurl_sym_get g_docs uri )
+    : s text ( lsp_get LtDocs uri )
     : Json diags ( __compile_diagnostics uri text )
     // Unused-import warnings arrive from `nurlc --lint` itself (it
     // attributes every decl to its defining file and tracks which file
@@ -1074,7 +1108,7 @@ unsafe @ __path_to_uri s path → String {
                 : ?Json txt ( json_obj_get t `text` )
                 ?? txt {
                     T tj → {
-                        ( nurl_sym_def g_docs uri ( json_str_data tj ) )
+                        ( lsp_def LtDocs uri ( json_str_data tj ) )
                         ( __track_doc_uri uri )
                         ( __index_uri uri )
                         ( __recompile_and_publish uri )
@@ -1103,7 +1137,7 @@ unsafe @ __path_to_uri s path → String {
                             : ?Json txt ( json_obj_get ej `text` )
                             ?? txt {
                                 T tj → {
-                                    ( nurl_sym_def g_docs uri ( json_str_data tj ) )
+                                    ( lsp_def LtDocs uri ( json_str_data tj ) )
                                     ( __index_uri uri )
                                     ( __recompile_and_publish uri )
                                 }
@@ -1123,9 +1157,9 @@ unsafe @ __path_to_uri s path → String {
     : s uri ( __extract_uri params )
     ? > ( nurl_str_len uri ) 0 {
         // Clear stored content + clear client-side diagnostics.
-        ( nurl_sym_def g_docs uri `` )
+        ( lsp_def LtDocs uri `` )
         : String path ( __uri_to_path uri )
-        ( nurl_sym_def g_docs ( nurl_str_cat `:path:` ( string_data path ) ) `` )
+        ( lsp_def LtDocs ( nurl_str_cat `:path:` ( string_data path ) ) `` )
         ( __publish_diagnostics uri ( json_arr_new ) )
     } {}
 }
@@ -1201,12 +1235,12 @@ unsafe @ __path_to_uri s path → String {
                                     T ln → {
                                         ?? col_p {
                                             T cn → {
-                                                : s content ( nurl_sym_get g_docs uri )
+                                                : s content ( lsp_get LtDocs uri )
                                                 ? > ( nurl_str_len content ) 0 {
                                                     : ?String tk ( __token_at content ln cn )
                                                     ?? tk {
                                                         T name → {
-                                                            : s defs_val ( nurl_sym_get g_defs ( string_data name ) )
+                                                            : s defs_val ( lsp_get LtDefs ( string_data name ) )
                                                             ? > ( nurl_str_len defs_val ) 0 {
                                                                 // value is "uri\tline"
                                                                 : i n ( nurl_str_len defs_val )
@@ -1288,7 +1322,7 @@ unsafe @ __path_to_uri s path → String {
     : Json result ( json_arr_new )
     : s uri ( __extract_uri params )
     ? > ( nurl_str_len uri ) 0 {
-        : s tsv ( nurl_sym_get g_defs_by_uri uri )
+        : s tsv ( lsp_get LtDefsByUri uri )
         : i n ( nurl_str_len tsv )
         : ~ i pos 0
         ~ < pos n {
@@ -1405,12 +1439,12 @@ unsafe @ __path_to_uri s path → String {
                                     T ln → {
                                         ?? col_p {
                                             T cn → {
-                                                : s content ( nurl_sym_get g_docs uri )
+                                                : s content ( lsp_get LtDocs uri )
                                                 ? > ( nurl_str_len content ) 0 {
                                                     : ?String tk ( __token_at content ln cn )
                                                     ?? tk {
                                                         T name → {
-                                                            : s defs_val ( nurl_sym_get g_defs ( string_data name ) )
+                                                            : s defs_val ( lsp_get LtDefs ( string_data name ) )
                                                             ? > ( nurl_str_len defs_val ) 0 {
                                                                 : i dn ( nurl_str_len defs_val )
                                                                 : i t1 ( __index_of_byte defs_val 0 dn 9 )
@@ -1601,9 +1635,9 @@ unsafe @ __path_to_uri s path → String {
                                     T ln → {
                                         ?? col_p {
                                             T cn → {
-                                                : s content ( nurl_sym_get g_docs uri )
+                                                : s content ( lsp_get LtDocs uri )
                                                 : String prefix ( __prefix_at content ln cn )
-                                                : s tsv ( nurl_sym_get g_all_names `:list` )
+                                                : s tsv ( lsp_get LtAllNames `:list` )
                                                 : i nt ( nurl_str_len tsv )
                                                 : ~ i tpos 0
                                                 ~ < tpos nt {
@@ -1611,7 +1645,7 @@ unsafe @ __path_to_uri s path → String {
                                                     : i sep ? >= tend 0 tend nt
                                                     : String name ( __substr tsv tpos sep )
                                                     ? ( __starts_with ( string_data name ) ( string_data prefix ) ) {
-                                                        : s defs_val ( nurl_sym_get g_defs ( string_data name ) )
+                                                        : s defs_val ( lsp_get LtDefs ( string_data name ) )
                                                         ? > ( nurl_str_len defs_val ) 0 {
                                                             : i dn ( nurl_str_len defs_val )
                                                             : i t1 ( __index_of_byte defs_val 0 dn 9 )
@@ -1677,12 +1711,12 @@ unsafe @ __path_to_uri s path → String {
     : Json edits ( json_arr_new )
     : s uri ( __extract_uri params )
     ? > ( nurl_str_len uri ) 0 {
-        : s content ( nurl_sym_get g_docs uri )
+        : s content ( lsp_get LtDocs uri )
         // Call nurlfmt --stdin; feed the buffer via process_run's
         // stdin_str parameter. nurlfmt: 1 arg = `--stdin`.
         : ( Vec s ) args ( vec_with_cap [s] 1 )
         ( vec_push [s] args `--stdin` )
-        : s formatter ( nurl_sym_get g_tools `formatter` )
+        : s formatter ( lsp_get LtTools `formatter` )
         : !Output ProcessErr pr ( process_run formatter args content )
         ?? pr {
             F e → {
@@ -1760,7 +1794,7 @@ unsafe @ __path_to_uri s path → String {
         T qj → = query ( json_str_data qj )
         F _ → {}
     }
-    : s tsv ( nurl_sym_get g_all_names `:list` )
+    : s tsv ( lsp_get LtAllNames `:list` )
     : i nt ( nurl_str_len tsv )
     : ~ i tpos 0
     ~ < tpos nt {
@@ -1768,7 +1802,7 @@ unsafe @ __path_to_uri s path → String {
         : i sep ? >= tend 0 tend nt
         : String name ( __substr tsv tpos sep )
         ? ( __ci_contains ( string_data name ) query ) {
-            : s defs_val ( nurl_sym_get g_defs ( string_data name ) )
+            : s defs_val ( lsp_get LtDefs ( string_data name ) )
             ? > ( nurl_str_len defs_val ) 0 {
                 : i dn ( nurl_str_len defs_val )
                 : i t1 ( __index_of_byte defs_val 0 dn 9 )
@@ -1817,7 +1851,7 @@ unsafe @ __path_to_uri s path → String {
     : Json ranges ( json_arr_new )
     : s uri ( __extract_uri params )
     ? > ( nurl_str_len uri ) 0 {
-        : s content ( nurl_sym_get g_docs uri )
+        : s content ( lsp_get LtDocs uri )
         : ( Slice u ) content_v ( slice_of_str content )
         : i n ( nurl_str_len content )
         : ( Vec i ) stack ( vec_new [i] )
@@ -1949,14 +1983,14 @@ unsafe @ __path_to_uri s path → String {
 
 // Sweep every open document for references to `name`, appending to `out`.
 @ __refs_all_docs s name Json out → v {
-    : s list ( nurl_sym_get g_doc_uris `list` )
+    : s list ( lsp_get LtDocUris `list` )
     : i n ( nurl_str_len list )
     : ~ i pos 0
     ~ < pos n {
         : i nl ( __index_of_byte list pos n 10 )
         : i end ? < nl 0 n nl
         : String duri ( __substr list pos end )
-        : s dc ( nurl_sym_get g_docs ( string_data duri ) )
+        : s dc ( lsp_get LtDocs ( string_data duri ) )
         ? > ( nurl_str_len dc ) 0 { ( __collect_refs_in_doc ( string_data duri ) dc name out ) } {}
         = pos ? < nl 0 n + nl 1
     }
@@ -1981,7 +2015,7 @@ unsafe @ __path_to_uri s path → String {
                                     T ln → {
                                         ?? col_p {
                                             T cn → {
-                                                : s content ( nurl_sym_get g_docs uri )
+                                                : s content ( lsp_get LtDocs uri )
                                                 ? > ( nurl_str_len content ) 0 {
                                                     : ?String tk ( __token_at content ln cn )
                                                     ?? tk {
@@ -2097,24 +2131,24 @@ unsafe @ __path_to_uri s path → String {
 // closed / never-opened decl files are read from disk so the
 // declaration site is always covered.
 @ __rename_all_docs s name s new_name Json changes → v {
-    : s list ( nurl_sym_get g_doc_uris `list` )
+    : s list ( lsp_get LtDocUris `list` )
     : i n ( nurl_str_len list )
     : ~ i pos 0
     ~ < pos n {
         : i nl ( __index_of_byte list pos n 10 )
         : i end ? < nl 0 n nl
         : String duri ( __substr list pos end )
-        : s dc ( nurl_sym_get g_docs ( string_data duri ) )
+        : s dc ( lsp_get LtDocs ( string_data duri ) )
         ? > ( nurl_str_len dc ) 0 { ( __rename_edits_for_doc ( string_data duri ) dc name new_name changes ) } {}
         = pos ? < nl 0 n + nl 1
     }
-    : s defs_val ( nurl_sym_get g_defs name )
+    : s defs_val ( lsp_get LtDefs name )
     ? > ( nurl_str_len defs_val ) 0 {
         : i dn ( nurl_str_len defs_val )
         : i t1 ( __index_of_byte defs_val 0 dn 9 )
         ? >= t1 0 {
             : String def_uri ( __substr defs_val 0 t1 )
-            : s open_body ( nurl_sym_get g_docs ( string_data def_uri ) )
+            : s open_body ( lsp_get LtDocs ( string_data def_uri ) )
             ? == 0 ( nurl_str_len open_body ) {
                 : String def_path ( __uri_to_path ( string_data def_uri ) )
                 : s def_content ( __read_if_exists ( string_data def_path ) )
@@ -2179,7 +2213,7 @@ unsafe @ __path_to_uri s path → String {
             = err_msg `rename rejected: newName collides with a NURL type keyword or reserved word`
             = have_err T
         } {
-            : s content ( nurl_sym_get g_docs uri )
+            : s content ( lsp_get LtDocs uri )
             ? | ! have_pos == ( nurl_str_len content ) 0 {
                 = err_msg `rename rejected: document not open or position missing`
                 = have_err T
@@ -2238,12 +2272,12 @@ unsafe @ __path_to_uri s path → String {
 }
 
 @ __track_doc_uri s uri → v {
-    : s cur ( nurl_sym_get g_doc_uris `list` )
+    : s cur ( lsp_get LtDocUris `list` )
     ? ( __uri_in_list cur uri ) {} {
         : String acc ( string_with_cap + + ( nurl_str_len cur ) ( nurl_str_len uri ) 1 )
         ? > ( nurl_str_len cur ) 0 { ( string_push_str acc cur ) ( string_push_char acc 10 ) } {}
         ( string_push_str acc uri )
-        ( nurl_sym_def g_doc_uris `list` ( string_data acc ) )
+        ( lsp_def LtDocUris `list` ( string_data acc ) )
     }
 }
 
@@ -2283,7 +2317,7 @@ unsafe @ __path_to_uri s path → String {
         : s root ( __get_workspace_root )
         ?? ( env_chdir root ) {
             T → {}
-            F _ → { ( nurl_sym_def g_tools `workspace_error` ( nurl_str_cat `cannot enter workspace directory: ` root ) ) }
+            F _ → { ( lsp_def LtTools `workspace_error` ( nurl_str_cat `cannot enter workspace directory: ` root ) ) }
         }
     } {}
     : Json caps ( __build_capabilities )
@@ -2466,13 +2500,7 @@ unsafe @ __path_to_uri s path → String {
 }
 
 @ main → i {
-    = g_tools ( nurl_sym_new )
-    = g_docs ( nurl_sym_new )
-    = g_doc_uris ( nurl_sym_new )
-    = g_defs ( nurl_sym_new )
-    = g_defs_by_uri ( nurl_sym_new )
-    = g_all_names ( nurl_sym_new )
-    = g_indexed ( nurl_sym_new )
+    ( __lsp_tables_init )
     : ~ b done F
     ~ ! done {
         : ?Json mr ( read_message )

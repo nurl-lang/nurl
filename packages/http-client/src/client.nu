@@ -50,7 +50,8 @@ $ `stdlib/ext/http2_client.nu`
 $ `stdlib/ext/http3_client.nu`
 $ `stdlib/ext/cookies.nu`
 $ `stdlib/ext/compress.nu`
-$ `stdlib/std/arc.nu`
+$ `stdlib/std/thread.nu`
+$ `stdlib/core/option.nu`
 $ `stdlib/core/slice.nu`
 
 // ── Errors ────────────────────────────────────────────────────────────
@@ -110,52 +111,42 @@ $ `stdlib/core/slice.nu`
 // One live connection per (scheme, host, port). `proto` records what the
 // origin negotiated: 0 nothing yet, 1 HTTP/1.1, 2 HTTP/2, 3 HTTP/3. For
 // h2 the pooled connection is the multiplexed H2Client; for h1 it is one
-// idle keep-alive HttpConn, present only while `has_h1` is 1; for h3 it
-// is the QUIC connection in an H3Client handle (present only while
-// `has_h3` is 1), beside whatever TCP connection the origin still holds.
-// A connection field whose `has_*` is 0 holds nothing (zeroes): the
-// record's drop releases every field it holds.
+// idle keep-alive HttpConn, present only while it is not lent to a
+// request; for h3 it is the QUIC connection in an H3Client handle, beside
+// whatever TCP connection the origin still holds. Each is an option: an
+// absent connection is F, never a made-up handle.
 : HcOriginImpl {
     String key  // "scheme://host:port"
     String host
     i port
     i is_https
     i proto
-    i has_h2 H2Client h2
-    i has_h1 HttpConn h1
+    ? H2Client h2
+    ? HttpConn h1
     i pq  // 1 = the TLS key exchange for this origin was post-quantum
-    i has_h3 H3Client h3
+    ? H3Client h3
     i alt_h3_port  // the port an Alt-Svc named for h3 (0 none seen)
     i alt_h3_until  // ... valid until this wall-clock second
     i h3_failed  // 1 = a QUIC attempt failed here; TCP from now on
     i pq_tcp  // the TCP connection's post-quantum evidence, kept beside h3's
 }
 
-// The client's pool holds each origin as a handle on its record in an
-// Arc (stdlib/std/arc.nu); the pool is its only owner, so the record
-// goes with the client. Its drop closes the connections it still holds —
-// h2 and h1 are sockets the record owns, the QUIC connection is told
-// goodbye — and the compiler then releases the fields (drop glue).
-: HcOrigin { ( Arc HcOriginImpl ) a }
-
-@ HcOrigin_share HcOrigin h → HcOrigin { ^ @ HcOrigin { ( arc_clone [HcOriginImpl] . h a ) } }
-
-@ HcOrigin_drop sink HcOrigin h → v {}
-
-unsafe @ __HcOrigin_ptr HcOrigin h → *HcOriginImpl { ^ ( arc_ptr [HcOriginImpl] . h a ) }
-
+// An origin's record closes the connections it still holds when it goes
+// (the pool is its only owner, so it goes with the client): h2 and h1 are
+// sockets the record owns, the QUIC connection is told goodbye. The
+// compiler then releases the fields (drop glue).
 % Drop HcOriginImpl {
     @ drop HcOriginImpl o → v {
-        ? != . o has_h2 0 { ( h2_client_disconnect . o h2 ) } {}
-        ? != . o has_h1 0 { ( hp_conn_close . o h1 ) } {}
-        ? != . o has_h3 0 { ( h3_client_close . o h3 ) } {}
+        ?? . o h2 { T c → { ( h2_client_disconnect c ) } F → {} }
+        ?? . o h1 { T c → { ( hp_conn_close c ) } F → {} }
+        ?? . o h3 { T c → { ( h3_client_close c ) } F → {} }
     }
 }
 
 // ── Client ────────────────────────────────────────────────────────────
 : HttpClientImpl {
     CookieJar jar
-    ( Vec HcOrigin ) origins  // one record per origin, in an Arc: stable identity
+    ( Vec HcOriginImpl ) origins  // one record per origin; a request checks its origin's out
     i verify  // verify TLS chains (1) or not (0)
     i follow  // follow redirects (1) or return the 3xx (0)
     i max_redirects
@@ -169,104 +160,114 @@ unsafe @ __HcOrigin_ptr HcOrigin h → *HcOriginImpl { ^ ( arc_ptr [HcOriginImpl
     i last_pq  // 1 = post-quantum key exchange
 }
 
-// An HttpClient is a handle on its state in an Arc (stdlib/std/arc.nu):
-// every copy is the same state, and the last owner releases it — the
-// pool (each origin's record closes its connections), the cookie jar
-// and the user agent.
-: HttpClient { ( Arc HttpClientImpl ) a }
+// An HttpClient is a handle on its state in a Locked (stdlib/std/thread.nu):
+// every copy is the same client, on any thread, and the last owner
+// releases it — the pool (each origin's record closes its connections),
+// the cookie jar and the user agent. A request checks the state out for
+// its length, so requests through one client run one at a time (they
+// share its connections and its jar); a client per thread runs them in
+// parallel.
+: HttpClient { ( Locked HttpClientImpl ) l }
 
-@ HttpClient_share HttpClient h → HttpClient { ^ @ HttpClient { ( arc_clone [HttpClientImpl] . h a ) } }
+@ HttpClient_share HttpClient h → HttpClient { ^ @ HttpClient { ( Locked_share [HttpClientImpl] . h l ) } }
 
 @ HttpClient_drop sink HttpClient h → v {}
 
-unsafe @ __HttpClient_ptr HttpClient h → *HttpClientImpl { ^ ( arc_ptr [HttpClientImpl] . h a ) }
-
-unsafe @ http_client_new → HttpClient {
-    : ~ HttpClientImpl c @ HttpClientImpl {}
-    = . c jar ( cookie_jar_new )
-    = . c origins ( vec_new [HcOrigin] )
-    = . c verify 1
-    = . c follow 1
-    = . c max_redirects 10
-    = . c timeout_ms 30000
-    = . c decompress 1
-    = . c body_max 0
-    = . c ua ( string_from `nurl-http-client/0.1` )
-    = . c h3_mode 0
-    = . c last_proto 0
-    = . c last_pq 0
-    ^ @ HttpClient { ( arc_new [HttpClientImpl] c ) }
+@ http_client_new → HttpClient {
+    ^ @ HttpClient { ( locked_new [HttpClientImpl] @ HttpClientImpl {
+            ( cookie_jar_new ) ( vec_new [HcOriginImpl] ) 1 1 10 30000 1 0
+            ( string_from `nurl-http-client/0.1` ) 0 0 0 } ) }
 }
 
 // ── Configuration (chainable-by-mutation) ─────────────────────────────
 
 // Skip TLS certificate / hostname verification. For pinned, self-signed
 // or test servers only — an unverified connection authenticates nothing.
-unsafe @ http_client_set_verify HttpClient c__h b on → v {
-    : *HttpClientImpl c ( __HttpClient_ptr c__h )
+@ http_client_set_verify HttpClient c__h b on → v {
+    : ~ HttpClientImpl c ( locked_take [HttpClientImpl] . c__h l )
     = . c verify ? on 1 0
+    ( locked_restore [HttpClientImpl] . c__h l c )
 }
 
 // Follow 3xx redirects (default) or hand the 3xx response back.
-unsafe @ http_client_set_follow HttpClient c__h b on → v {
-    : *HttpClientImpl c ( __HttpClient_ptr c__h )
+@ http_client_set_follow HttpClient c__h b on → v {
+    : ~ HttpClientImpl c ( locked_take [HttpClientImpl] . c__h l )
     = . c follow ? on 1 0
+    ( locked_restore [HttpClientImpl] . c__h l c )
 }
 
-unsafe @ http_client_set_max_redirects HttpClient c__h i n → v {
-    : *HttpClientImpl c ( __HttpClient_ptr c__h )
+@ http_client_set_max_redirects HttpClient c__h i n → v {
+    : ~ HttpClientImpl c ( locked_take [HttpClientImpl] . c__h l )
     = . c max_redirects n
+    ( locked_restore [HttpClientImpl] . c__h l c )
 }
 
 // Per read/write deadline in milliseconds (0 = none). A stalled server
 // answers HcTimeout instead of hanging.
-unsafe @ http_client_set_timeout HttpClient c__h i ms → v {
-    : *HttpClientImpl c ( __HttpClient_ptr c__h )
+@ http_client_set_timeout HttpClient c__h i ms → v {
+    : ~ HttpClientImpl c ( locked_take [HttpClientImpl] . c__h l )
     = . c timeout_ms ms
+    ( locked_restore [HttpClientImpl] . c__h l c )
 }
 
 // Offer and decode gzip/deflate bodies (default) or leave the body as
 // the wire carried it (the caller then owns Content-Encoding).
-unsafe @ http_client_set_decompress HttpClient c__h b on → v {
-    : *HttpClientImpl c ( __HttpClient_ptr c__h )
+@ http_client_set_decompress HttpClient c__h b on → v {
+    : ~ HttpClientImpl c ( locked_take [HttpClientImpl] . c__h l )
     = . c decompress ? on 1 0
+    ( locked_restore [HttpClientImpl] . c__h l c )
 }
 
 // Cap the (decoded) response body; a larger body answers HcTooLarge.
-unsafe @ http_client_set_body_max HttpClient c__h i n → v {
-    : *HttpClientImpl c ( __HttpClient_ptr c__h )
+@ http_client_set_body_max HttpClient c__h i n → v {
+    : ~ HttpClientImpl c ( locked_take [HttpClientImpl] . c__h l )
     = . c body_max n
+    ( locked_restore [HttpClientImpl] . c__h l c )
 }
 
-unsafe @ http_client_set_user_agent HttpClient c__h s ua → v {
-    : *HttpClientImpl c ( __HttpClient_ptr c__h )
-    ( string_free . c ua )
+@ http_client_set_user_agent HttpClient c__h s ua → v {
+    : ~ HttpClientImpl c ( locked_take [HttpClientImpl] . c__h l )
     = . c ua ( string_from ua )
+    ( locked_restore [HttpClientImpl] . c__h l c )
 }
 
 // The protocol / key-exchange facts of the most recent request.
 // HTTP/3: 0 (default) use QUIC once an origin's response has advertised
 // it with `Alt-Svc: h3=...`; 1 try QUIC first on every https origin
 // (falling back to TCP when the attempt fails); 2 never.
-unsafe @ http_client_set_h3 HttpClient c__h i mode → v {
-    : *HttpClientImpl c ( __HttpClient_ptr c__h )
+@ http_client_set_h3 HttpClient c__h i mode → v {
+    : ~ HttpClientImpl c ( locked_take [HttpClientImpl] . c__h l )
     = . c h3_mode mode
+    ( locked_restore [HttpClientImpl] . c__h l c )
 }
 
-unsafe @ http_client_last_proto HttpClient c__h → i {
-    : *HttpClientImpl c ( __HttpClient_ptr c__h )
-    ^ . c last_proto
+@ http_client_last_proto HttpClient c__h → i {
+    : HttpClientImpl c ( locked_take [HttpClientImpl] . c__h l )
+    : i r . c last_proto
+    ( locked_restore [HttpClientImpl] . c__h l c )
+    ^ r
 }
 
-unsafe @ http_client_last_pq HttpClient c__h → b {
-    : *HttpClientImpl c ( __HttpClient_ptr c__h )
-    ^ != . c last_pq 0
+@ http_client_last_pq HttpClient c__h → b {
+    : HttpClientImpl c ( locked_take [HttpClientImpl] . c__h l )
+    : b r != . c last_pq 0
+    ( locked_restore [HttpClientImpl] . c__h l c )
+    ^ r
 }
 
-// Direct access to the cookie jar (seed a session cookie, inspect, …).
-unsafe @ http_client_jar HttpClient c__h → CookieJar {
-    : *HttpClientImpl c ( __HttpClient_ptr c__h )
-    ^ . c jar
+// A copy of the cookie jar (to inspect); http_client_set_jar replaces it
+// (to seed a session cookie).
+@ http_client_jar HttpClient c__h → CookieJar {
+    : HttpClientImpl c ( locked_take [HttpClientImpl] . c__h l )
+    : CookieJar j ( mem_dup . c jar )
+    ( locked_restore [HttpClientImpl] . c__h l c )
+    ^ j
+}
+
+@ http_client_set_jar HttpClient c__h sink CookieJar jar → v {
+    : ~ HttpClientImpl c ( locked_take [HttpClientImpl] . c__h l )
+    = . c jar jar
+    ( locked_restore [HttpClientImpl] . c__h l c )
 }
 
 // ── Origin pool ───────────────────────────────────────────────────────
@@ -280,64 +281,52 @@ unsafe @ http_client_jar HttpClient c__h → CookieJar {
     ^ k
 }
 
-// Find the pooled origin for `key`: its record, or 0. Runs on every
-// request: the handles are read in place (k < n), no option per element.
-unsafe @ __hc_find_origin * HttpClientImpl c s key → i {
-    : i n ( vec_len [HcOrigin] . c origins )
-    : *HcOrigin d ( vec_data [HcOrigin] . c origins )
+// The pool's index of the origin for `key`, or -1.
+@ __hc_find_origin HttpClientImpl c s key → i {
+    : i n ( vec_len [HcOriginImpl] . c origins )
+    : ( Slice HcOriginImpl ) d ( slice_from_vec [HcOriginImpl] . c origins )
     : ~ i k 0
-    : ~ i found 0
-    ~ & == found 0 < k n {
-        : *HcOriginImpl o ( __HcOrigin_ptr . d k )
-        ? ( nurl_str_eq ( string_data . o key ) key ) { = found # i o } {}
+    ~ < k n {
+        ? != 0 ( nurl_str_eq ( string_data . ( slice_at [HcOriginImpl] d k ) key ) key ) { ^ k } {}
         = k + k 1
     }
-    ^ found
+    ^ -1
 }
 
-// Get or create the origin record for scheme://host:port (no connection
-// opened yet). The record lives in the pool, which keeps it for the
-// client's lifetime; the pointer is valid while the client is.
-unsafe @ __hc_origin * HttpClientImpl c s scheme s host i port → *HcOriginImpl {
+// Check the origin record for scheme://host:port out of the pool (a new
+// one, with no connection, when there is none yet); __hc_origin_put puts
+// it back. The pool's order is nobody's business, so taking is a swap
+// with the last record and a pop, and putting back a push.
+@ __hc_origin_take inout HttpClientImpl c s scheme s host i port → HcOriginImpl {
     : String key ( __hc_origin_key scheme host port )
     : i ex ( __hc_find_origin c ( string_data key ) )
-    ? != ex 0 { ^ # *HcOriginImpl ex } {}
-    // A zeroed record: no connection, no Alt-Svc, nothing failed yet.
-    : ( Arc HcOriginImpl ) o__box ( arc_zero [HcOriginImpl] )
-    : *HcOriginImpl o ( arc_ptr [HcOriginImpl] o__box )
-    = . o key key
-    = . o host ( string_from host )
-    = . o port port
-    = . o is_https ( nurl_str_eq scheme `https` )
-    ( vec_push [HcOrigin] . c origins @ HcOrigin { o__box } )
-    ^ o
+    ? >= ex 0 {
+        : b _s ( vec_swap [HcOriginImpl] . c origins ex - ( vec_len [HcOriginImpl] . c origins ) 1 )
+        ?? ( vec_pop [HcOriginImpl] . c origins ) { T o → { ^ o } F → {} }
+    } {}
+    ^ @ HcOriginImpl { key ( string_from host ) port ? != 0 ( nurl_str_eq scheme `https` ) 1 0 0
+        @ ?H2Client { F } @ ?HttpConn { F } 0 @ ?H3Client { F } 0 0 0 0 }
+}
+
+@ __hc_origin_put inout HttpClientImpl c sink HcOriginImpl o → v {
+    ( vec_push [HcOriginImpl] . c origins o )
 }
 
 // Close whatever connection an origin holds (called on error / teardown).
-unsafe @ __hc_origin_drop_conn * HcOriginImpl o → v {
-    ? != . o has_h2 0 {
-        ( h2_client_disconnect . o h2 )
-        = . o h2 # H2Client 0
-        = . o has_h2 0
-    } {}
-    ? != . o has_h1 0 {
-        ( hp_conn_close . o h1 )
-        = . o h1 # HttpConn 0
-        = . o has_h1 0
-    } {}
+@ __hc_origin_drop_conn inout HcOriginImpl o → v {
+    : ?H2Client h2 ( mem_replace [? H2Client] . o h2 @ ?H2Client { F } )
+    ?? h2 { T c → { ( h2_client_disconnect c ) } F → {} }
+    : ?HttpConn h1 ( mem_replace [? HttpConn] . o h1 @ ?HttpConn { F } )
+    ?? h1 { T c → { ( hp_conn_close c ) } F → {} }
     ( __hc_origin_drop_h3 o )
     = . o proto 0
 }
 
 // The QUIC connection is done (failed, or the client is closing it): it is
-// let go of now rather than with the record — the release closes the
-// socket, and the emptied field holds nothing for the record's drop.
-unsafe @ __hc_origin_drop_h3 * HcOriginImpl o → v {
-    ? != . o has_h3 0 {
-        ( h3_client_close . o h3 )
-        ( h3_client_free . o h3 )
-        = . o has_h3 0
-    } {}
+// let go of now rather than with the record.
+@ __hc_origin_drop_h3 inout HcOriginImpl o → v {
+    : ?H3Client h3 ( mem_replace [? H3Client] . o h3 @ ?H3Client { F } )
+    ?? h3 { T c → { ( h3_client_close c ) } F → {} }
 }
 
 // ── Establishing a connection for an origin ───────────────────────────
@@ -347,8 +336,8 @@ unsafe @ __hc_origin_drop_h3 * HcOriginImpl o → v {
 // (mapped by __hc_conn_err). An https origin is dialled with ALPN
 // "h2 http/1.1" and offered its cached TLS session; the negotiated ALPN
 // decides h2 vs h1. Plaintext http is HTTP/1.1 only.
-unsafe @ __hc_ensure_conn * HttpClientImpl c * HcOriginImpl o → i {
-    ? | != . o has_h2 0 != . o has_h1 0 { ^ 0 } {}
+@ __hc_ensure_conn HttpClientImpl c inout HcOriginImpl o → i {
+    ? | ( opt_is_some [H2Client] . o h2 ) ( opt_is_some [HttpConn] . o h1 ) { ^ 0 } {}
     ? != . o is_https 0 {
         : ( Vec u ) sess ( hp_session_lookup ( string_data . o host ) . o port )
         : !TlsConn TlsErr tr ( tls_connect_full ( string_data . o host ) . o port ( string_data . o host ) `h2 http/1.1` sess . c verify )
@@ -364,16 +353,15 @@ unsafe @ __hc_ensure_conn * HttpClientImpl c * HcOriginImpl o → i {
                     ?? hr {
                         F _ → { ^ 6 }  // the failed client closed the conn
                         T cl → {
-                            = . o has_h2 1
-                            = . o h2 cl
+                            = . o h2 @ ?H2Client { T cl }
                             = . o proto 2
                             ^ 0
                         }
                     }
                 } {
-                    = . o h1 ( hp_conn_from_tls tc ( string_data . o host ) . o port )
-                    ? > . c timeout_ms 0 { ( hp_conn_set_timeout . o h1 . c timeout_ms ) } {}
-                    = . o has_h1 1
+                    : HttpConn hc ( hp_conn_from_tls tc ( string_data . o host ) . o port )
+                    ? > . c timeout_ms 0 { ( hp_conn_set_timeout hc . c timeout_ms ) } {}
+                    = . o h1 @ ?HttpConn { T hc }
                     = . o proto 1
                     ^ 0
                 }
@@ -385,9 +373,8 @@ unsafe @ __hc_ensure_conn * HttpClientImpl c * HcOriginImpl o → i {
     ?? co {
         F e → { ^ ? == e 1 1 6 }
         T conn → {
-            = . o h1 conn
-            ? > . c timeout_ms 0 { ( hp_conn_set_timeout . o h1 . c timeout_ms ) } {}
-            = . o has_h1 1
+            ? > . c timeout_ms 0 { ( hp_conn_set_timeout conn . c timeout_ms ) } {}
+            = . o h1 @ ?HttpConn { T conn }
             = . o proto 1
             ^ 0
         }
@@ -411,13 +398,13 @@ unsafe @ __hc_ensure_conn * HttpClientImpl c * HcOriginImpl o → i {
 // Build the request header blob for the h1 transport: the caller's
 // headers, then a Cookie line (from the jar) and Accept-Encoding when
 // decompression is on and the caller did not set them.
-unsafe @ __hc_h1_headers * HttpClientImpl c s host s path i is_https ( Vec Header ) user → String {
+@ __hc_h1_headers HttpClientImpl c s host s path i is_https ( Vec Header ) user → String {
     : String blob ( string_new )
     : i n ( vec_len [Header] user )
-    : *Header d ( vec_data [Header] user )
+    : ( Slice Header ) d ( slice_from_vec [Header] user )
     : ~ i k 0
     ~ < k n {
-        : Header h . d k
+        : Header h ( slice_at [Header] d k )
         ( string_push_str blob ( string_data . h name ) )
         ( string_push_str blob `: ` )
         ( string_push_str blob ( string_data . h value ) )
@@ -439,13 +426,13 @@ unsafe @ __hc_h1_headers * HttpClientImpl c s host s path i is_https ( Vec Heade
     ^ blob
 }
 
-unsafe @ __hc_user_has ( Vec Header ) user s lname → b {
+@ __hc_user_has ( Vec Header ) user s lname → b {
     : i n ( vec_len [Header] user )
-    : *Header d ( vec_data [Header] user )
+    : ( Slice Header ) d ( slice_from_vec [Header] user )
     : ~ i k 0
     : ~ b hit F
     ~ & ! hit < k n {
-        : Header h . d k
+        : Header h ( slice_at [Header] d k )
         ? ( _hc_eq_ci ( string_data . h name ) lname ) { = hit T } {}
         = k + k 1
     }
@@ -456,13 +443,13 @@ unsafe @ __hc_user_has ( Vec Header ) user s lname → b {
 //
 // Returns the unified HttpResponse or an HttpClientErr. `user` headers
 // are BORROWED-consumed (freed here). `body` is BORROWED.
-unsafe @ __hc_do * HttpClientImpl c * HcOriginImpl o s method s path ( Vec Header ) user ( Vec u ) body → !HttpResponse HttpClientErr {
+@ __hc_do inout HttpClientImpl c inout HcOriginImpl o s method s path ( Vec Header ) user ( Vec u ) body → !HttpResponse HttpClientErr {
     // HTTP/3 first when the origin advertised it (or QUIC-first was asked
     // for), unless a QUIC attempt already failed here.
     ? & & != . o is_https 0 != . c h3_mode 2 == . o h3_failed 0 {
         : b want | == . c h3_mode 1 & > . o alt_h3_port 0 > . o alt_h3_until ( now_seconds )
-        ? & want == . o has_h3 0 { ( __hc_h3_connect c o ) } {}
-        ? & want != . o has_h3 0 {
+        ? & want ! ( opt_is_some [H3Client] . o h3 ) { ( __hc_h3_connect c o ) } {}
+        ? & want ( opt_is_some [H3Client] . o h3 ) {
             = . c last_proto 3
             = . c last_pq . o pq
             : ~ i h3e 0
@@ -494,24 +481,23 @@ unsafe @ __hc_do * HttpClientImpl c * HcOriginImpl o s method s path ( Vec Heade
 
 // Dial QUIC to the origin (on the Alt-Svc port when one was named). A
 // failed attempt marks the origin TCP-only.
-unsafe @ __hc_h3_connect * HttpClientImpl c * HcOriginImpl o → v {
+@ __hc_h3_connect HttpClientImpl c inout HcOriginImpl o → v {
     : i port ? > . o alt_h3_port 0 . o alt_h3_port . o port
     : i tmo ? > . c timeout_ms 0 . c timeout_ms 10000
     : H3Client cl ( h3_client_connect ( string_data . o host ) port ( string_data . o host ) . c verify tmo )
     // a null handle: the name did not resolve or no socket was bound; a
     // handshake that did not complete is released with `cl`
-    ? == 0 # i . cl ctl { = . o h3_failed 1 ^ } {}
+    ? ! ( h3_client_ok cl ) { = . o h3_failed 1 ^ } {}
     ? ! ( h3_client_connected cl ) { = . o h3_failed 1 ^ } {}
     ? > . c body_max 0 { ( h3_client_set_body_max cl . c body_max ) } {}
     = . o pq ? ( h3_client_is_pq cl ) 1 0
-    = . o has_h3 1
-    = . o h3 cl
+    = . o h3 @ ?H3Client { T cl }
 }
 
 // One request over the origin's QUIC connection. `user` is borrowed —
 // the caller still owns it, so a failure can retry over TCP with the
 // same list. The error is the H3ClientErr code (see ext/http3_client.nu).
-unsafe @ __hc_do_h3 * HttpClientImpl c * HcOriginImpl o s method s path ( Vec Header ) user ( Vec u ) body → !HttpResponse i {
+@ __hc_do_h3 HttpClientImpl c HcOriginImpl o s method s path ( Vec Header ) user ( Vec u ) body → !HttpResponse i {
     : ( Vec Header ) hs ( __hc_clone_headers user )
     ? ! ( __hc_hlist_has hs `cookie` ) {
         : String ck ( cookie_jar_header . c jar ( string_data . o host ) path T ( now_seconds ) )
@@ -525,7 +511,10 @@ unsafe @ __hc_do_h3 * HttpClientImpl c * HcOriginImpl o s method s path ( Vec He
         ( vec_push [Header] hs ( header_new `user-agent` ( string_data . c ua ) ) )
     } {}
     : i tmo ? > . c timeout_ms 0 . c timeout_ms 60000
-    : !HttpResponse i rr ( h3_client_request . o h3 method `https` ( string_data . o host ) path hs body tmo )
+    : !HttpResponse i rr ?? . o h3 {
+        T h3 → ( h3_client_request h3 method `https` ( string_data . o host ) path hs body tmo )
+        F → @ !HttpResponse i { F 0 }
+    }
     ( __hc_free_headers hs )
     ?? rr {
         F e → { ^ @ !HttpResponse i { F e } }
@@ -537,7 +526,7 @@ unsafe @ __hc_do_h3 * HttpClientImpl c * HcOriginImpl o s method s path ( Vec He
 // `h3=":443"; ma=86400` — for the origin; `clear` forgets it. An
 // alternative on another host is not followed (its certificate would
 // have to be checked for THIS origin; the same host is the common case).
-unsafe @ __hc_capture_alt_svc * HttpClientImpl c * HcOriginImpl o HttpResponse r → v {
+@ __hc_capture_alt_svc inout HcOriginImpl o HttpResponse r → v {
     : String v ( __hc_header_value . r headers `alt-svc` )
     : s av ( string_data v )
     : ( Slice u ) av_v ( slice_of_str av )
@@ -593,16 +582,18 @@ unsafe @ __hc_capture_alt_svc * HttpClientImpl c * HcOriginImpl o HttpResponse r
 }
 
 // HTTP/1.1 over the pooled keep-alive connection.
-unsafe @ __hc_do_h1 * HttpClientImpl c * HcOriginImpl o s method s path ( Vec Header ) user ( Vec u ) body → !HttpResponse HttpClientErr {
+@ __hc_do_h1 HttpClientImpl c inout HcOriginImpl o s method s path ( Vec Header ) user ( Vec u ) body → !HttpResponse HttpClientErr {
     : String blob ( __hc_h1_headers c ( string_data . o host ) path . o is_https user )
     ( __hc_free_headers user )
     // Detach the pooled conn; hp_stream_release re-pools it if reusable.
     // The stream owns it from here (hp_stream_close closes it), so the
     // record's field is emptied: its drop must not see it again.
-    : HttpConn conn . o h1
-    = . o h1 # HttpConn 0  // the record gives it up: conn keeps it
-    = . o has_h1 0
-    : HttpStreamState st ( hp_stream_open_on conn method ( string_data . o host ) . o port . o is_https path ( vec_data [u] body ) ( vec_len [u] body ) ( string_data blob ) ( string_data . c ua ) )
+    : ?HttpConn held ( mem_replace [? HttpConn] . o h1 @ ?HttpConn { F } )
+    : HttpConn conn ?? held { T x → x F → {
+            ( string_free blob )
+            ^ @ !HttpResponse HttpClientErr { F # HttpClientErr HcConnect }
+        } }
+    : HttpStreamState st ( hp_stream_open_on_vec conn method ( string_data . o host ) . o port . o is_https path body ( string_data blob ) ( string_data . c ua ) )
     ( string_free blob )
     ? > . c body_max 0 { ( hp_stream_set_body_max st . c body_max ) } {}
     ~ == ( hp_stream_finished st ) 0 { ( hp_stream_pump st ) }
@@ -615,7 +606,7 @@ unsafe @ __hc_do_h1 * HttpClientImpl c * HcOriginImpl o s method s path ( Vec He
     : !HttpResponse HttpClientErr r ( __hc_response_from_stream c st method )
     // Re-pool the connection when the response left it reusable.
     ?? ( hp_stream_release st ) {
-        T back → { = . o h1 back = . o has_h1 1 }
+        T back → { = . o h1 @ ?HttpConn { T back } }
         F _ → { = . o proto 0 }
     }
     ^ r
@@ -631,7 +622,7 @@ unsafe @ __hc_do_h1 * HttpClientImpl c * HcOriginImpl o s method s path ( Vec He
 
 // Assemble an HttpResponse (status, headers, body) from a finished h1
 // stream, decoding the body if it is compressed and decompression is on.
-unsafe @ __hc_response_from_stream * HttpClientImpl c HttpStreamState st s method → !HttpResponse HttpClientErr {
+@ __hc_response_from_stream HttpClientImpl c HttpStreamState st s method → !HttpResponse HttpClientErr {
     : HttpResponse r ( response_new ( hp_stream_status st ) )
     : i hc ( hp_stream_header_count st )
     : ~ i k 0
@@ -645,7 +636,7 @@ unsafe @ __hc_response_from_stream * HttpClientImpl c HttpStreamState st s metho
 }
 
 // ── HTTP/2 over the pooled multiplexed connection ─────────────────────
-unsafe @ __hc_do_h2 * HttpClientImpl c * HcOriginImpl o s method s path ( Vec Header ) user ( Vec u ) body → !HttpResponse HttpClientErr {
+@ __hc_do_h2 HttpClientImpl c inout HcOriginImpl o s method s path ( Vec Header ) user ( Vec u ) body → !HttpResponse HttpClientErr {
     // Pseudo-headers are added by h2_client_submit; we pass the regular
     // header list, adding Cookie / Accept-Encoding like the h1 path.
     : ( Vec Header ) hs ( vec_new [Header] )
@@ -669,17 +660,22 @@ unsafe @ __hc_do_h2 * HttpClientImpl c * HcOriginImpl o s method s path ( Vec He
     } {}
     : ( Vec u ) bcopy ( vec_new [u] )
     ( bytes_extend_bytes bcopy body )
+    // a share of the connection: an error below drops the record's
+    : H2Client h2 ?? . o h2 { T x → ( H2Client_share x ) F → {
+            ( __hc_free_headers hs )
+            ^ @ !HttpResponse HttpClientErr { F # HttpClientErr HcConnect }
+        } }
     : s scheme ? != . o is_https 0 `https` `http`
-    : !i H2ClientErr sr ( h2_client_submit . o h2 method scheme ( string_data . o host ) path hs bcopy )
+    : !i H2ClientErr sr ( h2_client_submit h2 method scheme ( string_data . o host ) path hs bcopy )
     ( __hc_free_headers hs )
     ?? sr {
         F _ → { ( __hc_origin_drop_conn o ) ^ @ !HttpResponse HttpClientErr { F # HttpClientErr HcProtocol } }
         T sid → {
-            : !v H2ClientErr rr ( h2_client_run_until_complete . o h2 )
+            : !v H2ClientErr rr ( h2_client_run_until_complete h2 )
             ?? rr {
                 F e → { ( __hc_origin_drop_conn o ) ^ @ !HttpResponse HttpClientErr { F ( __hc_h2_err e ) } }
                 T _ → {
-                    : !HttpResponse H2ClientErr tr ( h2_client_take_response . o h2 sid )
+                    : !HttpResponse H2ClientErr tr ( h2_client_take_response h2 sid )
                     ?? tr {
                         F e → { ^ @ !HttpResponse HttpClientErr { F ( __hc_h2_err e ) } }
                         T resp → { ^ ( __hc_decode_response c resp method ) }
@@ -699,13 +695,13 @@ unsafe @ __hc_do_h2 * HttpClientImpl c * HcOriginImpl o s method s path ( Vec He
     }
 }
 
-unsafe @ __hc_hlist_has ( Vec Header ) hs s lname → b {
+@ __hc_hlist_has ( Vec Header ) hs s lname → b {
     : i n ( vec_len [Header] hs )
-    : *Header d ( vec_data [Header] hs )
+    : ( Slice Header ) d ( slice_from_vec [Header] hs )
     : ~ i k 0
     : ~ b hit F
     ~ & ! hit < k n {
-        : Header h . d k
+        : Header h ( slice_at [Header] d k )
         ? ( _hc_eq_ci ( string_data . h name ) lname ) { = hit T } {}
         = k + k 1
     }
@@ -715,7 +711,7 @@ unsafe @ __hc_hlist_has ( Vec Header ) hs s lname → b {
 // All transports share this owning response decoder. Malformed compressed
 // content is a protocol error; compressed output beyond the configured cap
 // is HcTooLarge. On failure the response is freed, never returned encoded.
-unsafe @ __hc_decode_response * HttpClientImpl c HttpResponse r s method → !HttpResponse HttpClientErr {
+@ __hc_decode_response HttpClientImpl c HttpResponse r s method → !HttpResponse HttpClientErr {
     ? & > . c body_max 0 > ( vec_len [u] . r body ) . c body_max {
         ( http_response_free r )
         ^ @ !HttpResponse HttpClientErr { F HcTooLarge }
@@ -757,13 +753,13 @@ unsafe @ __hc_decode_response * HttpClientImpl c HttpResponse r s method → !Ht
 
 // Drop the Content-Encoding header once we have decoded the body, so the
 // caller does not double-decode.
-unsafe @ __hc_strip_encoding HttpResponse r → v {
+@ __hc_strip_encoding HttpResponse r → v {
     : i n ( vec_len [Header] . r headers )
-    : *Header d ( vec_data [Header] . r headers )
+    : ( Slice Header ) d ( slice_from_vec [Header] . r headers )
     : ~ i idx -1
     : ~ i k 0
     ~ & == idx -1 < k n {
-        : Header h . d k
+        : Header h ( slice_at [Header] d k )
         ? ( _hc_eq_ci ( string_data . h name ) `content-encoding` ) { = idx k } {}
         = k + k 1
     }
@@ -772,12 +768,12 @@ unsafe @ __hc_strip_encoding HttpResponse r → v {
     } {}
 }
 
-unsafe @ __hc_header_value ( Vec Header ) hs s lname → String {
+@ __hc_header_value ( Vec Header ) hs s lname → String {
     : i n ( vec_len [Header] hs )
-    : *Header d ( vec_data [Header] hs )
+    : ( Slice Header ) d ( slice_from_vec [Header] hs )
     : ~ i k 0
     ~ < k n {
-        : Header h . d k
+        : Header h ( slice_at [Header] d k )
         ? ( _hc_eq_ci ( string_data . h name ) lname ) { ^ ( string_from ( string_data . h value ) ) } {}
         = k + k 1
     }
@@ -787,12 +783,12 @@ unsafe @ __hc_header_value ( Vec Header ) hs s lname → String {
 // ── Cookie capture ────────────────────────────────────────────────────
 
 // Store every Set-Cookie of a response into the jar.
-unsafe @ __hc_capture_cookies * HttpClientImpl c HttpResponse r s host s path → v {
+@ __hc_capture_cookies inout HttpClientImpl c HttpResponse r s host s path → v {
     : i n ( vec_len [Header] . r headers )
-    : *Header d ( vec_data [Header] . r headers )
+    : ( Slice Header ) d ( slice_from_vec [Header] . r headers )
     : ~ i k 0
     ~ < k n {
-        : Header h . d k
+        : Header h ( slice_at [Header] d k )
         ? ( _hc_eq_ci ( string_data . h name ) `set-cookie` ) {
             : b _s ( cookie_jar_set . c jar ( string_data . h value ) host path ( now_seconds ) )
         } {}
@@ -810,8 +806,10 @@ unsafe @ __hc_capture_cookies * HttpClientImpl c HttpResponse r s host s path �
 // The one entry point: send `method` to `url` with `body` and the caller's
 // `headers`, following redirects and carrying cookies. `headers` is
 // consumed (freed); `body` is borrowed.
-unsafe @ http_client_request HttpClient c__h s method s url sink ( Vec Header ) headers ( Vec u ) body → !HttpResponse HttpClientErr {
-    : *HttpClientImpl c ( __HttpClient_ptr c__h )
+@ http_client_request HttpClient c__h s method s url sink ( Vec Header ) headers ( Vec u ) body → !HttpResponse HttpClientErr {
+    // The client is checked out for the whole request (redirects included)
+    // and back in before the result is returned.
+    : ~ HttpClientImpl c ( locked_take [HttpClientImpl] . c__h l )
     : ~ String cur_url ( string_from url )
     : ~ String cur_method ( string_from method )
     : ~ i redirects 0
@@ -838,7 +836,7 @@ unsafe @ http_client_request HttpClient c__h s method s url sink ( Vec Header ) 
                 } {
                     : i port ( url_port_or_default u )
                     : String tgt ( url_request_target u )
-                    : *HcOriginImpl o ( __hc_origin c scheme ( string_data . u host ) port )
+                    : ~ HcOriginImpl o ( __hc_origin_take c scheme ( string_data . u host ) port )
                     // Copy the header list per attempt (each __hc_do consumes it).
                     : ( Vec Header ) attempt ( __hc_clone_headers headers )
                     : !HttpResponse HttpClientErr rr ( __hc_do c o ( string_data cur_method ) ( string_data tgt ) attempt body )
@@ -850,7 +848,7 @@ unsafe @ http_client_request HttpClient c__h s method s url sink ( Vec Header ) 
                         }
                         T resp → {
                             ( __hc_capture_cookies c resp ( string_data . u host ) ( string_data tgt ) )
-                            ? != . o is_https 0 { ( __hc_capture_alt_svc c o resp ) } {}
+                            ? != . o is_https 0 { ( __hc_capture_alt_svc o resp ) } {}
                             : i sc . resp status
                             : String loc ( __hc_header_value . resp headers `location` )
                             : b redir & & != . c follow 0 ( __hc_is_redirect sc ) > ( string_len loc ) 0
@@ -886,6 +884,7 @@ unsafe @ http_client_request HttpClient c__h s method s url sink ( Vec Header ) 
                             }
                         }
                     }
+                    ( __hc_origin_put c o )
                     ( string_free tgt )
                     ( url_free u )
                 }
@@ -895,6 +894,7 @@ unsafe @ http_client_request HttpClient c__h s method s url sink ( Vec Header ) 
     ( __hc_free_headers headers )
     ( string_free cur_url )
     ( string_free cur_method )
+    ( locked_restore [HttpClientImpl] . c__h l c )
     ? == result_kind 1 {
         ^ @ !HttpResponse HttpClientErr { T out }
     } {
@@ -918,13 +918,13 @@ unsafe @ http_client_request HttpClient c__h s method s url sink ( Vec Header ) 
     }
 }
 
-unsafe @ __hc_clone_headers ( Vec Header ) hs → ( Vec Header ) {
+@ __hc_clone_headers ( Vec Header ) hs → ( Vec Header ) {
     : ( Vec Header ) out ( vec_new [Header] )
     : i n ( vec_len [Header] hs )
-    : *Header d ( vec_data [Header] hs )
+    : ( Slice Header ) d ( slice_from_vec [Header] hs )
     : ~ i k 0
     ~ < k n {
-        : Header h . d k
+        : Header h ( slice_at [Header] d k )
         ( vec_push [Header] out ( header_new ( string_data . h name ) ( string_data . h value ) ) )
         = k + k 1
     }
@@ -981,8 +981,8 @@ unsafe @ __hc_clone_headers ( Vec Header ) hs → ( Vec Header ) {
 @ http_client_status HttpResponse r → i { ^ . r status }
 
 // The response body as a borrowed String view (valid until free).
-unsafe @ http_client_body_str HttpResponse r → String {
-    ^ ( string_from_bytes ( vec_data [u] . r body ) ( vec_len [u] . r body ) )
+@ http_client_body_str HttpResponse r → String {
+    ^ ( bytes_to_str . r body )
 }
 
 @ http_client_header HttpResponse r s name → String {

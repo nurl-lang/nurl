@@ -19,18 +19,13 @@ $ `pb.nu`
 $ `model.nu`
 $ `runtime.nu`
 
-& `c` @ nurl_peek_f32 *u base i idx → f
-
-// Load a raw little-endian f32 file: its values as bytes (4 per element),
-// empty when the file cannot be read.
-unsafe @ load_f32 s path → ( Vec u ) {
+// Load a raw little-endian f32 file: its values as bytes (4 per element,
+// a trailing partial one dropped), empty when the file cannot be read.
+@ load_f32 s path → ( Vec u ) {
     ?? ( read_file_bytes path ) {
         T bytes → {
-            : i n / ( vec_len [u] bytes ) 4
-            : ( Vec u ) host ( vec_with_cap [u] * n 4 )
-            ( vec_f32_into bytes # *u ( vec_data [u] host ) n )
-            : b _l ( vec_set_len [u] host * n 4 )
-            ^ host
+            ( vec_truncate [u] bytes * / ( vec_len [u] bytes ) 4 4 )
+            ^ bytes
         }
         F _ → { ^ ( vec_new [u] ) }
     }
@@ -38,7 +33,7 @@ unsafe @ load_f32 s path → ( Vec u ) {
 
 @ print_f f x → v { ( nurl_print ( nurl_str_float x ) ) }
 
-unsafe @ main → i {
+@ main → i {
     : ( Vec String ) av ( env_args_list )
     ? < ( vec_len [String] av ) 3 {
         ( nurl_print `usage: onnx <model.onnx> <input.f32> [expected.f32]\n` )
@@ -66,7 +61,7 @@ unsafe @ main → i {
     ( nurl_print `device: ` ) ( nurl_print ( rt_name e ) ) ( nurl_print `\n` )
     ( nurl_print `input elements: ` ) ( nurl_print ( nurl_str_int in_n ) ) ( nurl_print `\n` )
 
-    : RTensor out ( rt_run e g # *u ( vec_data [u] input ) 1 in_n )
+    : RTensor out ( rt_run e g ( slice_from_vec [u] input ) 1 in_n )
     // RTensor carries its full shape now (the 0.5.0 tensor bridge replaced
     // the old rows/cols pair); the element count is a field, not a product.
     : i out_n . out nelem
@@ -85,13 +80,13 @@ unsafe @ main → i {
     ? > ( vec_len [String] av ) 3 {
         : String exp_path ?? ( vec_get [String] av 3 ) { T x → x F _ → ( string_new ) }
         : ( Vec u ) expb ( load_f32 ( string_data exp_path ) )
-        : *u exp # *u ( vec_data [u] expb )
+        : ( Slice u ) exp ( slice_from_vec [u] expb )
         : i en / ( vec_len [u] expb ) 4
         : ~ i bad 0
         : ~ f maxerr 0.0
         : ~ i j 0
         ~ < j en {
-            : ~ f d - ( gpu_host_get_f32 host j ) ( nurl_peek_f32 exp j )
+            : ~ f d - ( gpu_host_get_f32 host j ) # f ( bits_to_f32 ( slice_u32_le exp * j 4 ) )
             ? < d 0.0 { = d - 0.0 d } {}
             ? > d maxerr { = maxerr d } {}
             ? > d 0.001 { = bad + bad 1 } {}

@@ -191,7 +191,7 @@ $ `stdlib/core/vec.nu`
     ( nurl_print `--- tasks: declared with a store ---\n` )
     : McpServer srv2 ( mcp_server_new `caps` `2.0.0` )
     : McpTaskStore store ( mcp_task_store_new )
-    ( mcp_server_set_task_store srv2 store \ → v { ( nurl_print `hook ran\n` ) } )
+    ( mcp_server_set_task_store srv2 ( McpTaskStore_share store ) \ → v { ( nurl_print `hook ran\n` ) } )
     ( mcp_server_add_tool srv2 `plain` `No annotations.` ( mcp_schema_empty )
     \ Json a → Json { ^ ( noop_tool a ) } )
     : Json d1 ( dispatch srv2 ( req_of `server/discover` F ) )

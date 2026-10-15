@@ -2,6 +2,90 @@
 
 All notable changes to the `nurllama` package.
 
+## [0.21.2] — 2026-10-15
+
+- Weight uploads are safe code. GGUF tensors are uploaded from `gguf_tensor_bytes` views with `gpu_upload_bytes`, dequantised ones with `gpu_upload_vec`, and the router bias with a new `__lm_scratch_from`. Only the q8_0 repack kernel launch stays `unsafe`, in its own helper. `unsafe` functions: 6 → 4.
+- The MoE router bias was read through a raw pointer for `n_expert` × 4 bytes whatever the tensor's size. It is now read with the bounds-checked `bytes_read_u32_le`, and a short tensor fails the load instead of reading past it.
+- Generation on the tiny q8_0 and f32 test models is identical to 0.21.1.
+
+## [0.21.1] — 2026-10-14
+
+### Changed
+
+- The engine and finetune records start as literals of their empty values
+  (`gpu_none`, `gpu_kernel_none`, `tok_empty`, `gguf_empty`, empty Vecs)
+  instead of `locked_zero`: two `unsafe` functions fewer. What stays
+  `unsafe` uploads device memory or launches kernels. Requires tokenizer
+  0.4.6 and gguf 0.6.1.
+
+## [0.21.0] — 2026-10-14
+
+### Changed
+
+- Finetuning follows grad 0.13: `ft_graph` takes the tape `inout`, and the device program it uploads into is passed `inout` too.
+
+## [0.20.0] — 2026-10-14
+
+### Changed
+
+- 8 `unsafe` functions left (68 in 0.19.2): the kernel compile, the
+  device uploads, the evaluation core that launches kernels over device
+  addresses, and building an engine from zeroed memory.
+- A `Llm` is its engine in a `Locked` beside its immutable record
+  (tokenizer, vocabulary size, context, mask id, diffusion flag) in an
+  `Arc`: an evaluation takes the engine for the call and gives it back,
+  where it was an `Arc` changed through `arc_ptr` from any thread holding
+  a copy — two requests evaluating at once raced on the KV cache and the
+  scratch buffers. `llm_tok`, `llm_n_vocab`, `llm_n_ctx`, `llm_mask_id`
+  and `llm_is_diffusion` never wait for an evaluation.
+- `FtModel` is its training state in a `Locked`, likewise; the public
+  calls take it and hand an `inout` view to their bodies, so a call that
+  calls another (`ft_train_ck` → `ft_graph` → `ft_embed`) does not take
+  it twice.
+- The server's resident model is a `Locked` global set at start.
+- Sampling reads a row of logits with one take of the engine
+  (`llm_logits` / `llm_logits_row`, new) instead of one per logit;
+  `exp` is the standard library's.
+- `nurllama run`/`dgen` write generated text with `fd_write_all`; the
+  pull's staging file starts as `file_none`; checkpoint F64 tensors are
+  read through a checked byte view.
+- Outputs are byte-identical to 0.19.2: logits, greedy and sampled
+  generation (llama and llada2, f32 and Q8_0), and a LoRA finetune's
+  adapters, checkpoint, resume, streamed run and merged model.
+
+### Fixed
+
+- tests/start_test.sh matched the wizard's `→` with `.`, which is one
+  byte under a C locale: the checkpoint-listing check failed outside a
+  UTF-8 locale.
+
+## [0.19.2] — 2026-10-14
+
+### Fixed
+
+- A Gemma checkpoint's norm weights (stored as w − 1) were widened by
+  `__lm_add1` through safetensor's `_st_u32`, which takes a byte view
+  since safetensor 0.6 — it was still handed the buffer's raw address, and
+  read it as a view of garbage length. The compiler accepted the
+  ill-typed call; it rejects it now (h268). `__lm_add1` works on a view
+  of the buffer and is no longer `unsafe`.
+
+### Changed
+
+- Requires gpukit 0.11 (its kit state behind a lock; census accessors return a `String`).
+
+## [0.19.1] — 2026-10-14
+
+Requires NURL 0.73.0 (`slice_at`, `slice_put`, `rc_take`, `locked_take`).
+
+### Changed
+
+- Loops that read or wrote through `vec_data` pointers index slices (`slice_at` / `slice_put`, as fast as the pointers), and functions with nothing raw in them are no longer marked `unsafe`.
+- 2 fewer functions are `unsafe` than in 0.19.0 (67 left).
+- Requires gguf 0.6 (`gguf_tensor_ptr` is `raw` there; the loaders that take tensor addresses were already `unsafe`) — its dequantiser is 2–4× faster.
+- Requires gpu 0.17. The `lk_*` launchers take device addresses as plain integers and launch kernels that index them by the sizes they are given; they were safe to call with any numbers — now they are `raw` (their callers already vouched), and `lk_build`, which compiles this package's own kernel sources, is `unsafe`.
+- Requires safetensor 0.6 (`st_tensor_ptr` is `raw` there; the loaders that take tensor addresses were already `unsafe`).
+
 ## [0.19.0] — 2026-10-12
 
 Requires NURL 0.73.0, in which a field written through a raw pointer

@@ -27,37 +27,14 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/std/floatbits.nu`
 $ `stdlib/std/arc.nu`
+$ `stdlib/core/slice.nu`
 $ `gpukit.nu`
 $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
 
-: i GK_F64 0
-: i GK_F32 1
-: i GK_I64 2
-
-// An element-typed device allocation: `dptr`, `n` and `dtype` are plain
-// fields (read them freely), `mem` owns the block. dptr 0 = failed or
-// empty. Every copy of a GkBuf — a struct field, a Vec element, a view
-// into it — holds the block, and its LAST owner hands it back to the
-// kit's pool (gpukit.nu): nothing is freed by hand. gk_dbuf_free is an
-// optional early release of one owner.
-: GkBuf {
-    i dptr
-    i n
-    i dtype
-    ? GkMem mem
-}
-
-// The owner of one pooled block: its device pointer and the kit whose
-// pool it came from (held, so the kit — and its device — outlive it).
-: GkMemImpl { i dptr GpuKit kit }
-
-% Drop GkMemImpl { unsafe @ drop GkMemImpl x → v { ( _gk_pool_give ( _GpuKit_ptr . x kit ) . x dptr ) } }
-
-: GkMem { ( Arc GkMemImpl ) a }
-
-@ GkMem_share GkMem h → GkMem { ^ @ GkMem { ( arc_clone [GkMemImpl] . h a ) } }
-
-@ GkMem_drop sink GkMem h → v {}
+$ `devbuf.nu`  // GkBuf and its owner
+// (After GkBuf: checked.nu binds them. The ops below run as its checked
+// kernels — gk_run_checked_dev.)
+$ `checked.nu`
 
 @ __gk_nomem → ?GkMem { ^ @ ?GkMem { F } }
 
@@ -69,27 +46,50 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
     }
 }
 
+// A GkBuf is `raw`: its `dptr` is device memory holding `n` elements of
+// `dtype` for as long as the GkBuf lives, and every kernel launched over it
+// relies on that. Only this file's functions (and `unsafe` code) build one.
+
+// Products of sizes as a kernel will form them: -1 when a factor is
+// negative or the product overflows, which no buffer length equals.
+@ _gk_p2 i a i b → i {
+    ? | < a 0 < b 0 { ^ -1 } {}
+    ? | == a 0 == b 0 { ^ 0 } {}
+    ? > a / 9223372036854775807 b { ^ -1 } {}
+    ^ * a b
+}
+
+@ _gk_p3 i a i b i c → i { ^ ( _gk_p2 ( _gk_p2 a b ) c ) }
+
+@ _gk_p4 i a i b i c i d → i { ^ ( _gk_p2 ( _gk_p3 a b c ) d ) }
+
 // A buffer that is not there: what a failed allocation returns, and the
 // placeholder for an absent operand (a missing bias, mask, …).
-@ gk_buf_none i dtype → GkBuf { ^ @ GkBuf { 0 0 dtype ( __gk_nomem ) } }
+unsafe @ gk_buf_none i dtype → GkBuf { ^ @ GkBuf { 0 0 dtype ( __gk_nomem ) } }
 
-// `n` elements of `b` starting at element `off`, same dtype. The view
-// holds `b`'s block: it stays valid however long the view lives.
-@ gk_buf_view GkBuf b i off i n → GkBuf {
+// `n` elements of `b` starting at element `off`, same dtype — none when
+// [off, off + n) is not inside b. The view holds `b`'s block: it stays
+// valid however long the view lives.
+unsafe @ gk_buf_view GkBuf b i off i n → GkBuf {
+    ? | | < off 0 < n 0 > n - . b n off { ^ ( gk_buf_none . b dtype ) } {}
     ^ @ GkBuf { + . b dptr * off ( __gk_esz . b dtype ) n . b dtype ( __gk_mem_share . b mem ) }
 }
 
 // `n` elements of type `dtype` at BYTE offset `boff` into `b` — a view
 // that reinterprets (an f32 block read as i64 indices, say). Holds `b`'s
-// block like gk_buf_view.
-@ gk_buf_view_as GkBuf b i boff i n i dtype → GkBuf {
+// block like gk_buf_view; none when the bytes are not inside b.
+unsafe @ gk_buf_view_as GkBuf b i boff i n i dtype → GkBuf {
+    : i have ( _gk_p2 . b n ( __gk_esz . b dtype ) )
+    : i want ( _gk_p2 n ( __gk_esz dtype ) )
+    ? | | | < boff 0 < want 0 < have 0 > want - have boff { ^ ( gk_buf_none dtype ) } {}
     ^ @ GkBuf { + . b dptr boff n dtype ( __gk_mem_share . b mem ) }
 }
 
 // A buffer over device memory something else owns (another package's
 // allocation, a raw pointer out of a C library). It owns nothing: the
-// caller keeps the memory alive for as long as the GkBuf is used.
-@ gk_buf_wrap i dptr i n i dtype → GkBuf { ^ @ GkBuf { dptr n dtype ( __gk_nomem ) } }
+// caller vouches (`raw`) that `dptr` holds `n` elements of `dtype` and
+// stays alive for as long as the GkBuf is used.
+raw @ gk_buf_wrap i dptr i n i dtype → GkBuf { ^ @ GkBuf { dptr n dtype ( __gk_nomem ) } }
 
 @ __gk_esz i dtype → i { ? == dtype GK_F32 { ^ 4 } {} ^ 8 }
 
@@ -127,30 +127,78 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
 
 // ── Lifecycle ─────────────────────────────────────────────────────────
 
-unsafe @ gk_dbuf_new GpuKit kit__h i n i dtype → GkBuf {
-    : *GpuKitImpl kit ( _GpuKit_ptr kit__h )
-    ? & . kit ok > n 0 {} { ^ ( gk_buf_none dtype ) }
+@ gk_dbuf_new GpuKit h i n i dtype → GkBuf {
+    ? & ( _gk_ok h ) > n 0 {} { ^ ( gk_buf_none dtype ) }
+    ? ( _gk_census h ) { ^ ( __gk_census_buf h n dtype ) } {}
+    : GkInfo kit ( arc_get [GkInfo] . h info )
     ( _gk_pool_default kit )
     : i bytes * n ( __gk_esz dtype )
-    // a block this size that an earlier owner let go of
-    : ~ i dptr ( _gk_pool_take kit bytes )
-    ? == dptr 0 {
-        : ~ GpuBuffer gb ( gpu_alloc . kit gpu bytes )
-        // out of memory: the pool is holding blocks nothing is using — give
-        // them back and ask once more before reporting failure
-        ? == . gb dptr 0 {
-            ( _gk_pool_release kit )
-            = gb ( gpu_alloc . kit gpu bytes )
-        } {}
-        ? == . gb dptr 0 { ^ ( gk_buf_none dtype ) } {}
-        = dptr . gb dptr
-        ( _gk_pool_add kit gb )
+    : ~ GkState st ( locked_take [GkState] . h st )
+    : i dptr ( __gk_alloc_in st kit bytes )
+    ( locked_restore [GkState] . h st st )
+    ? == dptr 0 { ^ ( gk_buf_none dtype ) } {}
+    ^ ( __gk_owned_buf h dptr n dtype )
+}
+
+// A census kit launches nothing, so no kernel ever reads its buffers. Each
+// is still real memory its owner holds — zeroed host bytes for `n`
+// elements — so a census buffer handed to a real kit by mistake points at
+// memory that exists (a CPU kernel sees zeros, CUDA reports an invalid
+// address), never at a made-up one.
+unsafe @ __gk_census_buf GpuKit h i n i dtype → GkBuf {
+    : i bytes ( _gk_p2 n ( __gk_esz dtype ) )
+    ? < bytes 1 { ^ ( gk_buf_none dtype ) } {}
+    : ( Vec u ) host ( vec_zeroed [u] bytes )
+    : i dptr # i ( vec_data [u] host )
+    ^ @ GkBuf { dptr n dtype @ ?GkMem { T @ GkMem { ( arc_new [GkMemImpl] @ GkMemImpl { dptr ( GpuKit_share h ) host } ) } } }
+}
+
+// The GkBuf over the pool block at `dptr`, `n` elements of `dtype`, that
+// gk_dbuf_new just took for it: its owner gives the block back to `h`'s
+// pool.
+unsafe @ __gk_owned_buf GpuKit h i dptr i n i dtype → GkBuf {
+    ^ @ GkBuf { dptr n dtype @ ?GkMem { T @ GkMem { ( arc_new [GkMemImpl] @ GkMemImpl { dptr ( GpuKit_share h ) ( vec_new [u] ) } ) } } }
+}
+
+// A block of `bytes` for a new buffer — a block this size an earlier
+// owner let go of, or a fresh one — in use in the pool; 0 when the device
+// has no room even after the pool gave its idle blocks back.
+@ __gk_alloc_in inout GkState st GkInfo kit i bytes → i {
+    : i dptr ( _gk_pool_take st bytes )
+    ? != dptr 0 { ^ dptr } {}
+    : ~ GpuBuffer gb ( gpu_alloc . kit gpu bytes )
+    // out of memory: the pool is holding blocks nothing is using — give
+    // them back and ask once more before reporting failure
+    ? == . gb dptr 0 {
+        ( _gk_pool_release st )
+        = gb ( gpu_alloc . kit gpu bytes )
     } {}
-    ^ @ GkBuf { dptr n dtype @ ?GkMem { T @ GkMem { ( arc_new [GkMemImpl] @ GkMemImpl { dptr ( GpuKit_share kit__h ) } ) } } }
+    : i d . gb dptr
+    ? == d 0 { ^ 0 } {}
+    ( _gk_pool_add st gb )
+    ^ d
 }
 
 // Let go of `b` now rather than at the end of its owner's scope.
 @ gk_dbuf_free sink GkBuf b → v {}
+
+// An f32 buffer `b` filled from (`up`) or read into an f64 Vec through a
+// staging f64 buffer and one cast kernel. F when the staging buffer or the
+// kernel is not to be had (the caller takes the host path).
+unsafe @ __gk_f32_dev GpuKit kit GkBuf b ( Vec f ) host b up → b {
+    : i n . b n
+    : GkBuf stg ( gk_dbuf_new kit n GK_F64 )
+    ? ( gk_buf_ok stg ) {} { ^ F }
+    : ( Vec i ) a ( vec_new [i] )
+    ? up {
+        ? ( gk_dbuf_upload kit stg host ) {} { ^ F }
+        ( vec_push [i] a ( gk_arg_dev stg ) ) ( vec_push [i] a ( gk_arg_dev b ) ) ( vec_push [i] a ( gpu_arg_i64 n ) )
+        ^ ( gk_run_dev kit `extern "C" __global__ void gk_d2f(const double* in, float* out, long long n){ long long i = (long long)blockIdx.x * blockDim.x + threadIdx.x; if (i < n) out[i] = (float)in[i]; }` `gk_d2f` ( gk_grid n 256 ) 256 a )
+    } {}
+    ( vec_push [i] a ( gk_arg_dev b ) ) ( vec_push [i] a ( gk_arg_dev stg ) ) ( vec_push [i] a ( gpu_arg_i64 n ) )
+    ? ( gk_run_dev kit `extern "C" __global__ void gk_f2d(const float* in, double* out, long long n){ long long i = (long long)blockIdx.x * blockDim.x + threadIdx.x; if (i < n) out[i] = (double)in[i]; }` `gk_f2d` ( gk_grid n 256 ) 256 a ) {} { ^ F }
+    ^ ( gk_dbuf_download kit stg host )
+}
 
 // Host f64 vector → device (converted to the buffer's element type: f32
 // rounds, i64 truncates like a C cast). Copies min(len(src), b.n) elements;
@@ -164,6 +212,13 @@ unsafe @ gk_dbuf_upload GpuKit kit GkBuf b ( Vec f ) src → b {
     : GpuBuffer gb ( gpu_buffer_view . b dptr * n ( __gk_esz . b dtype ) )
     ? & == . b dtype GK_F64 >= m n {
         ^ == ( gpu_upload gb # *u ( vec_data [f] src ) ) 0
+    } {}
+    // f32 with the whole source in hand: one memcpy into a staging f64
+    // buffer and one cast kernel on the device. The host loop below makes
+    // one foreign call per element — minutes for a model's weights. (Under
+    // 4096 elements the launch costs more than the loop.)
+    ? & & & == . b dtype GK_F32 >= m n >= n 4096 ! ( _gk_census kit ) {
+        ? ( __gk_f32_dev kit b src T ) { ^ T } {}
     } {}
     // stage-convert on the host, then one upload
     : GpuHost stage ( gpu_host_alloc * n ( __gk_esz . b dtype ) )
@@ -190,6 +245,10 @@ unsafe @ gk_dbuf_download GpuKit kit GkBuf b ( Vec f ) dst → b {
     ? == . b dtype GK_F64 {
         ^ == ( gpu_download # *u ( vec_data [f] dst ) gb ) 0
     } {}
+    // f32: cast to f64 on the device, then one memcpy (see gk_dbuf_upload).
+    ? & & == . b dtype GK_F32 >= n 4096 ! ( _gk_census kit ) {
+        ? ( __gk_f32_dev kit b dst F ) { ^ T } {}
+    } {}
     : GpuHost stage ( gpu_host_alloc * n ( __gk_esz . b dtype ) )
     : *u sp ( gpu_host_ptr stage )
     : i rc ( gpu_download sp gb )
@@ -215,9 +274,92 @@ unsafe @ gk_dbuf_download GpuKit kit GkBuf b ( Vec f ) dst → b {
 // walks every element through f64 twice (widen on read, narrow on
 // upload) and allocates two host buffers the size of the tensor to do
 // it. On a 4.6 GB model that is most of the load.
-unsafe @ gk_dbuf_upload_raw GpuKit kit GkBuf b * u src → b {
+//
+// raw: nothing here can check that `src` addresses those bytes; a caller
+// that has them as a checked view uploads with gk_dbuf_upload_bytes.
+raw @ gk_dbuf_upload_raw GpuKit kit GkBuf b * u src → b {
     ? & ( gk_buf_ok b ) != # i src 0 {} { ^ F }
     ^ == ( gpu_upload ( gpu_buffer_view . b dptr * . b n ( __gk_esz . b dtype ) ) src ) 0
+}
+
+// The same from a checked view of the bytes (a tensor's bytes in a mapped
+// file, safetensor's st_tensor_bytes): F unless it holds the buffer's
+// b.n elements. Safe, and as fast — one memcpy to the device.
+@ gk_dbuf_upload_bytes GpuKit kit GkBuf b ( Slice u ) src → b {
+    ? ( gk_buf_ok b ) {} { ^ F }
+    ? < ( slice_len [u] src ) * . b n ( __gk_esz . b dtype ) { ^ F } {}
+    ^ ( __gk_upload_view b src )
+}
+
+// Many uploads as ONE batch: srcs[k] into dsts[k], each a checked view
+// holding exactly its buffer's bytes. On CUDA the batch streams through a
+// pinned double buffer, so a model's hundreds of tensors cost one pass
+// instead of a synchronous copy each. F, with nothing sent, when the
+// lengths differ, a buffer is none or a source is not its buffer's size.
+// `release` gives the staging pair (128 MB of page-locked host memory)
+// back afterwards — for a one-off load; a caller sending batch after
+// batch keeps it.
+unsafe @ gk_dbuf_upload_batch GpuKit kit ( Vec GkBuf ) dsts ( Vec ( Slice u ) ) srcs b release → b {
+    ? ( _gk_ok kit ) {} { ^ F }
+    : i n ( vec_len [GkBuf] dsts )
+    ? == n ( vec_len [( Slice u )] srcs ) {} { ^ F }
+    : ~ ( Vec GpuCopy ) q ( vec_new [GpuCopy] )
+    : ~ i k 0
+    ~ < k n {
+        : ~ b fit F
+        ?? ( vec_get [GkBuf] dsts k ) {
+            T d → {
+                ?? ( vec_get [( Slice u )] srcs k ) {
+                    T sv → {
+                        : i bytes ( _gk_p2 . d n ( __gk_esz . d dtype ) )
+                        ? & ( gk_buf_ok d ) == ( slice_len [u] sv ) bytes {
+                            ( vec_push [GpuCopy] q @ GpuCopy { . d dptr # i ( slice_data [u] sv ) bytes } )
+                            = fit T
+                        } {}
+                    }
+                    F → {}
+                }
+            }
+            F → {}
+        }
+        ? fit {} { ^ F }
+        = k + k 1
+    }
+    ? ( _gk_census kit ) { ^ T } {}
+    : b ok == ( gpu_upload_batch q ) 0
+    ? release { ( gpu_staging_free ) } {}
+    ^ ok
+}
+
+// (`src` holds the buffer's bytes: checked by the caller above.)
+unsafe @ __gk_upload_view GkBuf b ( Slice u ) src → b {
+    ^ == ( gpu_upload ( gpu_buffer_view . b dptr * . b n ( __gk_esz . b dtype ) ) ( slice_data [u] src ) ) 0
+}
+
+// Device → a checked view of host bytes: F unless `dst` has room for the
+// buffer's b.n elements. The download counterpart of gk_dbuf_upload_bytes.
+@ gk_dbuf_download_bytes GpuKit kit GkBuf b ( Slice u ) dst → b {
+    ? ( gk_buf_ok b ) {} { ^ F }
+    ? < ( slice_len [u] dst ) * . b n ( __gk_esz . b dtype ) { ^ F } {}
+    ^ ( __gk_download_view b dst )
+}
+
+// (`dst` has room for the buffer's bytes: checked by the caller above.)
+unsafe @ __gk_download_view GkBuf b ( Slice u ) dst → b {
+    ^ == ( gpu_download ( slice_data [u] dst ) ( gpu_buffer_view . b dptr * . b n ( __gk_esz . b dtype ) ) ) 0
+}
+
+// Device → device: all of `src` into the front of `dst`. F unless both are
+// there, share a dtype and `dst` holds at least src.n elements.
+@ gk_dbuf_copy GpuKit kit GkBuf dst GkBuf src → b {
+    ? & ( gk_buf_ok dst ) ( gk_buf_ok src ) {} { ^ F }
+    ? | != . dst dtype . src dtype < . dst n . src n { ^ F } {}
+    ^ ( __gk_copy_in dst src )
+}
+
+// (Both live, one dtype, `dst` large enough: checked by the caller above.)
+unsafe @ __gk_copy_in GkBuf dst GkBuf src → b {
+    ^ == ( gpu_dtod ( gpu_buffer_view . dst dptr * . src n ( __gk_esz . src dtype ) ) . src dptr ) 0
 }
 
 // Exact i64 host view (GK_I64 buffers only — index tensors must never make
@@ -262,10 +404,9 @@ unsafe @ gk_dbuf_download_i GpuKit kit GkBuf b ( Vec i ) dst → b {
 
 @ gk_autosync b on → v { = g_gk_autosync on }
 
-unsafe @ gk_sync GpuKit kit__h → b {
-    : *GpuKitImpl kit ( _GpuKit_ptr kit__h )
-    ? . kit census { ^ T } {}
-    ^ == ( gpu_sync . kit gpu ) 0
+@ gk_sync GpuKit kit → b {
+    ? ( _gk_census kit ) { ^ T } {}
+    ^ == ( gpu_sync . ( arc_get [GkInfo] . kit info ) gpu ) 0
 }
 
 // ── Per-kernel profiling ──────────────────────────────────────────────
@@ -282,14 +423,16 @@ unsafe @ gk_sync GpuKit kit__h → b {
 // the program.
 : ~ b g_gk_prof F
 
-unsafe @ gk_prof GpuKit kit__h b on → v {
-    : *GpuKitImpl kit ( _GpuKit_ptr kit__h )
-    ? & on . kit ok {
+@ gk_prof GpuKit h b on → v {
+    ? & on ( _gk_ok h ) {
+        : GkInfo inf ( arc_get [GkInfo] . h info )
+        : ~ GkState kit ( locked_take [GkState] . h st )
         ? ( gpu_timer_ok . kit ev0 ) {} {
-            = . kit ev0 ( gpu_timer_new . kit gpu )
-            = . kit ev1 ( gpu_timer_new . kit gpu )
+            = . kit ev0 ( gpu_timer_new . inf gpu )
+            = . kit ev1 ( gpu_timer_new . inf gpu )
         }
         = g_gk_prof ( gpu_timer_ok . kit ev0 )
+        ( locked_restore [GkState] . h st kit )
     } { = g_gk_prof F }
 }
 
@@ -297,57 +440,54 @@ unsafe @ gk_prof GpuKit kit__h b on → v {
 
 // Drop every accumulated count — e.g. after a warm-up frame, so the
 // numbers describe the steady state and not the compiles.
-unsafe @ gk_prof_reset GpuKit kit__h → v {
-    : *GpuKitImpl kit ( _GpuKit_ptr kit__h )
-    : i base # i ( vec_data [GkKernelEntry] . kit cache )
-    : i n ( vec_len [GkKernelEntry] . kit cache )
+@ gk_prof_reset GpuKit h → v {
+    : ~ GkState kit ( locked_take [GkState] . h st )
+    : i n ( vec_len [i] . kit kcalls )
     : ~ i k 0
     ~ < k n {
-        // counters only, in place — the name and the kernel stay put
-        : *GkKernelEntry e # *GkKernelEntry + base * k Z GkKernelEntry
-        = . e calls 0
-        = . e ns 0
+        // counters only — the name and the kernel stay put
+        ( vec_put [i] . kit kcalls k 0 )
+        ( vec_put [i] . kit kns k 0 )
         = k + k 1
     }
+    ( locked_restore [GkState] . h st kit )
 }
 
-unsafe @ __gk_prof_add * GpuKitImpl kit i slot i ns → v {
-    ? & >= slot 0 < slot ( vec_len [GkKernelEntry] . kit cache ) {
-        : *GkKernelEntry e # *GkKernelEntry + # i ( vec_data [GkKernelEntry] . kit cache ) * slot Z GkKernelEntry
-        = . e calls + . e calls 1
-        = . e ns + . e ns ns
+@ __gk_prof_add inout GkState kit i slot i ns → v {
+    ? & >= slot 0 < slot ( vec_len [i] . kit kcalls ) {
+        ( vec_put [i] . kit kcalls slot + ( vec_at [i] . kit kcalls slot ) 1 )
+        ( vec_put [i] . kit kns slot + ( vec_at [i] . kit kns slot ) ns )
     } {}
 }
 
-// Total device time accumulated so far, in nanoseconds.
-unsafe @ gk_prof_total GpuKit kit__h → i {
-    : *GpuKitImpl kit ( _GpuKit_ptr kit__h )
-    : i n ( vec_len [GkKernelEntry] . kit cache )
+@ __gk_prof_sum GkState kit → i {
     : ~ i total 0
     : ~ i k 0
-    ~ < k n {
-        ?? ( vec_get [GkKernelEntry] . kit cache k ) {
-            T e → { = total + total . e ns }
-            F _ → {}
-        }
+    ~ < k ( vec_len [i] . kit kns ) {
+        = total + total ( vec_at [i] . kit kns k )
         = k + k 1
     }
     ^ total
 }
 
+// Total device time accumulated so far, in nanoseconds.
+@ gk_prof_total GpuKit h → i {
+    : GkState kit ( locked_take [GkState] . h st )
+    : i t ( __gk_prof_sum kit )
+    ( locked_restore [GkState] . h st kit )
+    ^ t
+}
+
 // Kernels by device time, slowest first, with the share of the total.
-unsafe @ gk_prof_report GpuKit kit__h → v {
-    : *GpuKitImpl kit ( _GpuKit_ptr kit__h )
+@ gk_prof_report GpuKit h → v {
+    : GkState kit ( locked_take [GkState] . h st )
+    ( __gk_prof_report_in kit )
+    ( locked_restore [GkState] . h st kit )
+}
+
+@ __gk_prof_report_in GkState kit → v {
     : i n ( vec_len [GkKernelEntry] . kit cache )
-    : ~ i total 0
-    : ~ i k 0
-    ~ < k n {
-        ?? ( vec_get [GkKernelEntry] . kit cache k ) {
-            T e → { = total + total . e ns }
-            F _ → {}
-        }
-        = k + k 1
-    }
+    : i total ( __gk_prof_sum kit )
     ( nurl_print `gpukit profile: ` )
     ( nurl_print ( nurl_str_int / total 1000000 ) )
     ( nurl_print ` ms of device time over ` )
@@ -369,26 +509,26 @@ unsafe @ gk_prof_report GpuKit kit__h → v {
                 = q + q 1
             }
             ? seen {} {
-                ?? ( vec_get [GkKernelEntry] . kit cache j ) {
-                    T e → { ? > . e ns bestns { = bestns . e ns = best j } {} }
-                    F _ → {}
-                }
+                : i nsj ( vec_at [i] . kit kns j )
+                ? > nsj bestns { = bestns nsj = best j } {}
             }
             = j + j 1
         }
         ? < best 0 { = shown n } {
             ( vec_push [i] done best )
+            : i calls ( vec_at [i] . kit kcalls best )
+            : i ns ( vec_at [i] . kit kns best )
             ?? ( vec_get [GkKernelEntry] . kit cache best ) {
                 T e → {
-                    ? > . e calls 0 {
+                    ? > calls 0 {
                         ( nurl_print `  ` )
-                        ( nurl_print ( nurl_str_int / * . e ns 100 total ) )
+                        ( nurl_print ( nurl_str_int / * ns 100 total ) )
                         ( nurl_print `%  ` )
-                        ( nurl_print ( nurl_str_int / . e ns 1000 ) )
+                        ( nurl_print ( nurl_str_int / ns 1000 ) )
                         ( nurl_print ` us  ` )
-                        ( nurl_print ( nurl_str_int . e calls ) )
+                        ( nurl_print ( nurl_str_int calls ) )
                         ( nurl_print ` calls  ` )
-                        ( nurl_print ( nurl_str_int / . e ns ? > . e calls 0 . e calls 1 ) )
+                        ( nurl_print ( nurl_str_int / ns calls ) )
                         ( nurl_print ` ns/call  ` )
                         ( nurl_print ( string_data . e name ) )
                         ( nurl_print `\n` )
@@ -401,56 +541,62 @@ unsafe @ gk_prof_report GpuKit kit__h → v {
     }
 }
 
-unsafe @ gk_run_dev GpuKit kit__h s src s name i grid i block ( Vec i ) args → b {
-    : *GpuKitImpl kit ( _GpuKit_ptr kit__h )
-    ? . kit ok {} { ^ F }
-    : i slot ( _gk_kernel_slot kit src name )
+raw @ gk_run_dev GpuKit h s src s name i grid i block ( Vec i ) args → b {
+    ? ( _gk_ok h ) {} { ^ F }
+    : GkInfo inf ( arc_get [GkInfo] . h info )
+    : ~ GkState kit ( locked_take [GkState] . h st )
+    : b ok ( __gk_launch_in kit inf src name grid block args )
+    ( locked_restore [GkState] . h st kit )
+    ? ok {} { ^ F }
+    ? . inf census { ^ T } {}
+    ? g_gk_autosync { ^ == ( gpu_sync . inf gpu ) 0 } {}
+    ^ T
+}
+
+// Compile (cached) and launch, the state held: F when the compile or the
+// launch failed. A census kit records the kernel and launches nothing.
+raw @ __gk_launch_in inout GkState kit GkInfo inf s src s name i grid i block ( Vec i ) args → b {
+    : i slot ( _gk_kernel_slot kit inf src name )
     ? >= slot 0 {} { ^ F }
-    ? . kit census { ^ T } {}
-    ? g_gk_prof { ( gpu_timer_mark . kit gpu . kit ev0 ) } {}
+    ? . inf census { ^ T } {}
+    ? g_gk_prof { ( gpu_timer_mark . inf gpu . kit ev0 ) } {}
     ? == ( _gk_slot_launch kit slot grid block args ) 0 {} { ^ F }
     ? g_gk_prof {
-        ( gpu_timer_mark . kit gpu . kit ev1 )
-        ( __gk_prof_add kit slot ( gpu_timer_ns . kit gpu . kit ev0 . kit ev1 ) )
+        ( gpu_timer_mark . inf gpu . kit ev1 )
+        ( __gk_prof_add kit slot ( gpu_timer_ns . inf gpu . kit ev0 . kit ev1 ) )
     } {}
-    ? g_gk_autosync { ^ == ( gpu_sync . kit gpu ) 0 } {}
     ^ T
 }
 
 // ── Elementwise binary with scalar broadcast ──────────────────────────
 // out[i] = a[i] <op> b[i*bs]; bs = 1 for a full vector, 0 broadcasts b[0].
 
-@ __gkd_ew_src s name s tn s op → String {
-    : String s ( string_from `extern "C" __global__ void ` )
-    ( string_push_str s name )
-    ( string_push_str s `(const ` ) ( string_push_str s tn ) ( string_push_str s `* a, const ` )
-    ( string_push_str s tn ) ( string_push_str s `* b, long long bs, ` )
-    ( string_push_str s tn ) ( string_push_str s `* o, long long n){` )
-    ( string_push_str s `long long i=blockIdx.x*blockDim.x+threadIdx.x;` )
-    ( string_push_str s `if(i<n){o[i]=a[i]` )
+// The kernel, in gpukit's checked subset (gk_run_checked_dev): every
+// element read and written is checked against its buffer.
+@ __gkd_ew_body s op → String {
+    : ~ String s ( string_from `if (gid < n) { ST(o, gid, LD(a, gid) ` )
     ( string_push_str s op )
-    ( string_push_str s `b[i*bs];}}` )
+    ( string_push_str s ` LD(b, gid * bs)); }` )
     ^ s
 }
 
+// `op` is one of + - * / and `opname` an identifier (gk_op_ok,
+// gk_name_ok); F otherwise.
 @ gkd_ew GpuKit kit s opname s op GkBuf o GkBuf a GkBuf b → b {
+    ? & ( gk_name_ok opname ) ( gk_op_ok op ) {} { ^ F }
     ? & & ( gk_buf_ok o ) ( gk_buf_ok a ) ( gk_buf_ok b ) {} { ^ F }
     ? & == . o dtype . a dtype == . a dtype . b dtype {} { ^ F }
     : i n . o n
     : i bs ? == . b n 1 { 0 } { 1 }
     ? | == . b n 1 == . b n n {} { ^ F }
     ? == . a n n {} { ^ F }
-    : String kname ( string_from ( _gk_pfx . o dtype ) )
+    : ~ String kname ( string_from ( _gk_pfx . o dtype ) )
     ( string_push_str kname opname )
-    : String src ( __gkd_ew_src ( string_data kname ) ( _gk_tname . o dtype ) op )
-    : ( Vec i ) args ( vec_new [i] )
-    ( vec_push [i] args ( gk_arg_dev a ) )
-    ( vec_push [i] args ( gk_arg_dev b ) )
-    ( vec_push [i] args ( gpu_arg_i64 bs ) )
-    ( vec_push [i] args ( gk_arg_dev o ) )
-    ( vec_push [i] args ( gpu_arg_i64 n ) )
-    : b r ( gk_run_dev kit ( string_data src ) ( string_data kname ) ( gk_grid n 256 ) 256 args )
-    ^ r
+    : String body ( __gkd_ew_body op )
+    : ~ GkCall c ( gk_call_new )
+    ( gk_call_dev c `a` a ) ( gk_call_dev c `b` b ) ( gk_call_dev c `o` o )
+    ( gk_call_i64 c `bs` bs ) ( gk_call_i64 c `n` n )
+    ^ ( gk_run_checked_dev kit c ( string_data kname ) ( string_data body ) ( gk_grid n 256 ) 256 )
 }
 
 @ gkd_add GpuKit kit GkBuf o GkBuf a GkBuf b → b { ^ ( gkd_ew kit `add` `+` o a b ) }
@@ -483,38 +629,28 @@ unsafe @ gk_run_dev GpuKit kit__h s src s name i grid i block ( Vec i ) args →
     ^ off
 }
 
-@ __gkd_ewbc_src s name s tn s op → String {
-    : String s ( string_from `extern "C" __global__ void ` )
-    ( string_push_str s name )
-    ( string_push_str s `(const ` ) ( string_push_str s tn ) ( string_push_str s `* a, const ` )
-    ( string_push_str s tn ) ( string_push_str s `* b, ` )
-    ( string_push_str s tn ) ( string_push_str s `* o, long long n` )
-    : ~ i k 0
-    ~ < k 6 { ( string_push_str s `, long long d` ) ( string_push_char s + 48 k ) = k + k 1 }
-    = k 0
-    ~ < k 6 { ( string_push_str s `, long long A` ) ( string_push_char s + 48 k ) = k + k 1 }
-    = k 0
-    ~ < k 6 { ( string_push_str s `, long long B` ) ( string_push_char s + 48 k ) = k + k 1 }
-    ( string_push_str s `){long long i=blockIdx.x*blockDim.x+threadIdx.x;` )
-    ( string_push_str s `if(i>=n)return;long long t=i,ai=0,bi=0,c;` )
-    = k 5
-    ~ > k 0 {
-        ( string_push_str s `c=t%d` ) ( string_push_char s + 48 k )
-        ( string_push_str s `;t/=d` ) ( string_push_char s + 48 k )
-        ( string_push_str s `;ai+=c*A` ) ( string_push_char s + 48 k )
-        ( string_push_str s `;bi+=c*B` ) ( string_push_char s + 48 k )
-        ( string_push_str s `;` )
-        = k - k 1
-    }
-    ( string_push_str s `c=t;ai+=c*A0;bi+=c*B0;o[i]=a[ai]` )
+// The checked kernel: output element i's coordinates over the six
+// (left-padded) dims give each input's offset through its stride table.
+@ __gkd_ewbc_body s op → String {
+    : ~ String s ( string_from `if (gid < n) {
+    long long t = gid, ai = 0, bi = 0, c = 0;
+    c = t % d5; t /= d5; ai += c * A5; bi += c * B5;
+    c = t % d4; t /= d4; ai += c * A4; bi += c * B4;
+    c = t % d3; t /= d3; ai += c * A3; bi += c * B3;
+    c = t % d2; t /= d2; ai += c * A2; bi += c * B2;
+    c = t % d1; t /= d1; ai += c * A1; bi += c * B1;
+    c = t; ai += c * A0; bi += c * B0;
+    ST(o, gid, LD(a, ai) ` )
     ( string_push_str s op )
-    ( string_push_str s `b[bi];}` )
+    ( string_push_str s ` LD(b, bi));
+}` )
     ^ s
 }
 
 // out over `odims`; a and b read through their stride tables (entries ≥ 0,
 // 0 = broadcast). Float dtypes only.
 @ gkd_ew_bc GpuKit kit s opname s op GkBuf o GkBuf a GkBuf b ( Vec i ) odims ( Vec i ) astr ( Vec i ) bstr → b {
+    ? & ( gk_name_ok opname ) ( gk_op_ok op ) {} { ^ F }
     ? & & ( gk_buf_ok o ) ( gk_buf_ok a ) ( gk_buf_ok b ) {} { ^ F }
     ? & == . o dtype . a dtype == . a dtype . b dtype {} { ^ F }
     ? != . o dtype GK_I64 {} { ^ F }
@@ -532,64 +668,54 @@ unsafe @ gk_run_dev GpuKit kit__h s src s name i grid i block ( Vec i ) args →
     ? good {} { ^ F }
     ? == total . o n {} { ^ F }
     ? & < ( __gk_maxoff odims astr nd ) . a n < ( __gk_maxoff odims bstr nd ) . b n {} { ^ F }
-    : String kname ( string_from ( _gk_pfx . o dtype ) )
+    : ~ String kname ( string_from ( _gk_pfx . o dtype ) )
     ( string_push_str kname `bc` )
     ( string_push_str kname opname )
-    : String src ( __gkd_ewbc_src ( string_data kname ) ( _gk_tname . o dtype ) op )
-    : ( Vec i ) args ( vec_new [i] )
-    ( vec_push [i] args ( gk_arg_dev a ) )
-    ( vec_push [i] args ( gk_arg_dev b ) )
-    ( vec_push [i] args ( gk_arg_dev o ) )
-    ( vec_push [i] args ( gpu_arg_i64 total ) )
+    : String body ( __gkd_ewbc_body op )
+    : ~ GkCall c ( gk_call_new )
+    ( gk_call_dev c `a` a ) ( gk_call_dev c `b` b ) ( gk_call_dev c `o` o )
+    ( gk_call_i64 c `n` total )
     : i pad - 6 nd
     // dims, then a-strides, then b-strides — each left-padded to 6 entries
+    : String dn ( string_from `d0 d1 d2 d3 d4 d5 A0 A1 A2 A3 A4 A5 B0 B1 B2 B3 B4 B5` )
     = k 0
     ~ < k 6 {
         : i dv ? < k pad { 1 } { ( _gk_vi odims - k pad ) }
-        ( vec_push [i] args ( gpu_arg_i64 dv ) )
-        = k + k 1
-    }
-    = k 0
-    ~ < k 6 {
         : i av ? < k pad { 0 } { ( _gk_vi astr - k pad ) }
-        ( vec_push [i] args ( gpu_arg_i64 av ) )
-        = k + k 1
-    }
-    = k 0
-    ~ < k 6 {
         : i bv ? < k pad { 0 } { ( _gk_vi bstr - k pad ) }
-        ( vec_push [i] args ( gpu_arg_i64 bv ) )
+        ( __gkd_dim_arg c `d` k dv ) ( __gkd_dim_arg c `A` k av ) ( __gkd_dim_arg c `B` k bv )
         = k + k 1
     }
-    : b r ( gk_run_dev kit ( string_data src ) ( string_data kname ) ( gk_grid total 256 ) 256 args )
-    ^ r
+    ^ ( gk_run_checked_dev kit c ( string_data kname ) ( string_data body ) ( gk_grid total 256 ) 256 )
+}
+
+// Bind scalar `<p><k>` (d0, A3, …) to `v`.
+@ __gkd_dim_arg inout GkCall c s p i k i v → v {
+    : ~ String nm ( string_from p )
+    ( string_push_int nm k )
+    ( gk_call_i64 c ( string_data nm ) v )
 }
 
 // ── Unary map: out[i] = expr(x) with x = in[i] ────────────────────────
 // `expr` is C over the local `T x`; use the dtype-suffixed math calls via
 // the helpers below (they pick expf vs exp, …).
 
+// `expr` is checked like gk_map_f's (gk_expr_ok); F otherwise.
 @ gkd_map GpuKit kit s mapname s expr GkBuf o GkBuf a → b {
+    ? & ( gk_name_ok mapname ) ( gk_expr_ok expr ) {} { ^ F }
     ? & ( gk_buf_ok o ) ( gk_buf_ok a ) {} { ^ F }
     ? & == . o dtype . a dtype == . o n . a n {} { ^ F }
     : i n . o n
-    : s tn ( _gk_tname . o dtype )
-    : String kname ( string_from ( _gk_pfx . o dtype ) )
+    : ~ String kname ( string_from ( _gk_pfx . o dtype ) )
     ( string_push_str kname mapname )
-    : String src ( string_from `extern "C" __global__ void ` )
-    ( string_push_str src ( string_data kname ) )
-    ( string_push_str src `(const ` ) ( string_push_str src tn ) ( string_push_str src `* in, ` )
-    ( string_push_str src tn ) ( string_push_str src `* o, long long n){` )
-    ( string_push_str src `long long i=blockIdx.x*blockDim.x+threadIdx.x;` )
-    ( string_push_str src `if(i<n){` ) ( string_push_str src tn ) ( string_push_str src ` x=in[i];o[i]=(` )
-    ( string_push_str src expr )
-    ( string_push_str src `);}}` )
-    : ( Vec i ) args ( vec_new [i] )
-    ( vec_push [i] args ( gk_arg_dev a ) )
-    ( vec_push [i] args ( gk_arg_dev o ) )
-    ( vec_push [i] args ( gpu_arg_i64 n ) )
-    : b r ( gk_run_dev kit ( string_data src ) ( string_data kname ) ( gk_grid n 256 ) 256 args )
-    ^ r
+    : ~ String body ( string_from `if (gid < n) { ` )
+    ( string_push_str body ( _gk_tname . o dtype ) )
+    ( string_push_str body ` x = LD(a, gid); ST(o, gid, (` )
+    ( string_push_str body expr )
+    ( string_push_str body `)); }` )
+    : ~ GkCall c ( gk_call_new )
+    ( gk_call_dev c `a` a ) ( gk_call_dev c `o` o ) ( gk_call_i64 c `n` n )
+    ^ ( gk_run_checked_dev kit c ( string_data kname ) ( string_data body ) ( gk_grid n 256 ) 256 )
 }
 
 @ gkd_relu GpuKit kit GkBuf o GkBuf a → b {
@@ -870,10 +996,10 @@ unsafe @ gk_run_dev GpuKit kit__h s src s name i grid i block ( Vec i ) args →
     ^ s
 }
 
-@ gkd_matmul GpuKit kit GkBuf c GkBuf a GkBuf b i m i k i n → b {
+unsafe @ gkd_matmul GpuKit kit GkBuf c GkBuf a GkBuf b i m i k i n → b {
     ? & & ( gk_buf_ok c ) ( gk_buf_ok a ) ( gk_buf_ok b ) {} { ^ F }
     ? & == . c dtype . a dtype == . a dtype . b dtype {} { ^ F }
-    ? & & == . a n * m k == . b n * k n == . c n * m n {} { ^ F }
+    ? & & == . a n ( _gk_p2 m k ) == . b n ( _gk_p2 k n ) == . c n ( _gk_p2 m n ) {} { ^ F }
     : b on_cpu ( nurl_str_eq ( gk_backend kit ) `cpu` )
     : s tn ( _gk_tname . c dtype )
     : String kname ( string_from ( _gk_pfx . c dtype ) )
@@ -914,14 +1040,14 @@ unsafe @ gk_run_dev GpuKit kit__h s src s name i grid i block ( Vec i ) args →
 // 0 broadcasts its single matrix across the whole batch. Accumulation is
 // sequential over K in the element type, exactly like gkd_matmul.
 
-@ gkd_bmm GpuKit kit GkBuf y GkBuf a GkBuf b i batch i m i kk i n i abatch i bbatch → b {
+unsafe @ gkd_bmm GpuKit kit GkBuf y GkBuf a GkBuf b i batch i m i kk i n i abatch i bbatch → b {
     ? & & ( gk_buf_ok y ) ( gk_buf_ok a ) ( gk_buf_ok b ) {} { ^ F }
     ? & == . y dtype . a dtype == . a dtype . b dtype {} { ^ F }
     ? != . y dtype GK_I64 {} { ^ F }
     ? & & & > batch 0 > m 0 > kk 0 > n 0 {} { ^ F }
-    : i asz ? != abatch 0 { * * batch m kk } { * m kk }
-    : i bsz ? != bbatch 0 { * * batch kk n } { * kk n }
-    ? & & == . a n asz == . b n bsz == . y n * * batch m n {} { ^ F }
+    : i asz ? != abatch 0 { ( _gk_p3 batch m kk ) } { ( _gk_p2 m kk ) }
+    : i bsz ? != bbatch 0 { ( _gk_p3 batch kk n ) } { ( _gk_p2 kk n ) }
+    ? & & == . a n asz == . b n bsz == . y n ( _gk_p3 batch m n ) {} { ^ F }
     : i astep ? != abatch 0 { * m kk } { 0 }
     : i bstep ? != bbatch 0 { * kk n } { 0 }
     : b on_cpu ( nurl_str_eq ( gk_backend kit ) `cpu` )
@@ -1014,29 +1140,22 @@ unsafe @ gk_run_dev GpuKit kit__h s src s name i grid i block ( Vec i ) args →
     ? & & & ( gk_buf_ok y ) ( gk_buf_ok d ) ( gk_buf_ok ix ) == . ix dtype GK_I64 {} { ^ F }
     ? == . y dtype . d dtype {} { ^ F }
     ? & & & > outer 0 > axin 0 > inner 0 > nidx 0 {} { ^ F }
-    ? & & == . d n * * outer axin inner == . y n * * outer nidx inner >= . ix n nidx {} { ^ F }
-    : s tn ( _gk_tname . y dtype )
-    : String kname ( string_from ( _gk_pfx . y dtype ) )
+    ? & & == . d n ( _gk_p3 outer axin inner ) == . y n ( _gk_p3 outer nidx inner ) >= . ix n nidx {} { ^ F }
+    : ~ String kname ( string_from ( _gk_pfx . y dtype ) )
     ( string_push_str kname `gather` )
-    : String src ( string_from `extern "C" __global__ void ` )
-    ( string_push_str src ( string_data kname ) )
-    ( string_push_str src `(const ` ) ( string_push_str src tn ) ( string_push_str src `* D, const long long* ix, ` )
-    ( string_push_str src tn ) ( string_push_str src `* Y, long long axin, long long inner, long long nidx, long long total){` )
-    ( string_push_str src `long long i=blockIdx.x*blockDim.x+threadIdx.x;if(i>=total)return;` )
-    ( string_push_str src `long long ii=i%inner;long long t=i/inner;long long g=t%nidx;long long o=t/nidx;` )
-    ( string_push_str src `long long x=ix[g];if(x<0)x+=axin;` )
-    ( string_push_str src tn ) ( string_push_str src ` v=0;if(x>=0&&x<axin)v=D[(o*axin+x)*inner+ii];Y[i]=v;}` )
     : i total * * outer nidx inner
-    : ( Vec i ) args ( vec_new [i] )
-    ( vec_push [i] args ( gk_arg_dev d ) )
-    ( vec_push [i] args ( gk_arg_dev ix ) )
-    ( vec_push [i] args ( gk_arg_dev y ) )
-    ( vec_push [i] args ( gpu_arg_i64 axin ) )
-    ( vec_push [i] args ( gpu_arg_i64 inner ) )
-    ( vec_push [i] args ( gpu_arg_i64 nidx ) )
-    ( vec_push [i] args ( gpu_arg_i64 total ) )
-    : b r ( gk_run_dev kit ( string_data src ) ( string_data kname ) ( gk_grid total 256 ) 256 args )
-    ^ r
+    : ~ GkCall c ( gk_call_new )
+    ( gk_call_dev c `D` d ) ( gk_call_dev c `ix` ix ) ( gk_call_dev c `Y` y )
+    ( gk_call_i64 c `axin` axin ) ( gk_call_i64 c `inner` inner ) ( gk_call_i64 c `nidx` nidx ) ( gk_call_i64 c `total` total )
+    ^ ( gk_run_checked_dev kit c ( string_data kname ) `if (gid < total) {
+    long long ii = gid % inner;
+    long long t = gid / inner;
+    long long g = t % nidx;
+    long long o = t / nidx;
+    long long x = LD(ix, g);
+    if (x < 0) { x += axin; }
+    if (x >= 0 && x < axin) { ST(Y, gid, LD(D, (o * axin + x) * inner + ii)); } else { ST(Y, gid, 0); }
+}` ( gk_grid total 256 ) 256 )
 }
 
 // y = d with y[outer, ix[g], inner] = u[outer, g, inner]. When several
@@ -1046,64 +1165,57 @@ unsafe @ gk_run_dev GpuKit kit__h s src s name i grid i block ( Vec i ) args →
     ? & & & ( gk_buf_ok y ) ( gk_buf_ok d ) ( gk_buf_ok ix ) ( gk_buf_ok u ) {} { ^ F }
     ? & & == . y dtype . d dtype == . d dtype . u dtype == . ix dtype GK_I64 {} { ^ F }
     ? & & & > outer 0 > ax 0 > inner 0 > nidx 0 {} { ^ F }
-    ? & == . y n . d n == . y n * * outer ax inner {} { ^ F }
-    ? & == . u n * * outer nidx inner >= . ix n nidx {} { ^ F }
+    ? & == . y n . d n == . y n ( _gk_p3 outer ax inner ) {} { ^ F }
+    ? & == . u n ( _gk_p3 outer nidx inner ) >= . ix n nidx {} { ^ F }
+    : ~ String kname ( string_from ( _gk_pfx . y dtype ) )
     ? != . y dptr . d dptr {
-        ? == ( gpu_dtod ( gpu_buffer_view . y dptr * . y n ( __gk_esz . y dtype ) ) . d dptr ) 0 {} { ^ F }
+        : ~ String cname ( string_from ( _gk_pfx . y dtype ) )
+        ( string_push_str cname `copy` )
+        : ~ GkCall cc ( gk_call_new )
+        ( gk_call_dev cc `D` d ) ( gk_call_dev cc `Y` y ) ( gk_call_i64 cc `n` . y n )
+        ? ( gk_run_checked_dev kit cc ( string_data cname ) `if (gid < n) { ST(Y, gid, LD(D, gid)); }` ( gk_grid . y n 256 ) 256 ) {} { ^ F }
     } {}
-    : s tn ( _gk_tname . y dtype )
-    : String kname ( string_from ( _gk_pfx . y dtype ) )
     ( string_push_str kname `scatter` )
-    : String src ( string_from `extern "C" __global__ void ` )
-    ( string_push_str src ( string_data kname ) )
-    ( string_push_str src `(` ) ( string_push_str src tn ) ( string_push_str src `* Y, const long long* ix, const ` )
-    ( string_push_str src tn ) ( string_push_str src `* U, long long ax, long long inner, long long nidx, long long total){` )
-    ( string_push_str src `long long i=blockIdx.x*blockDim.x+threadIdx.x;if(i>=total)return;` )
-    ( string_push_str src `long long ii=i%inner;long long t=i/inner;long long g=t%nidx;long long o=t/nidx;` )
-    ( string_push_str src `long long x=ix[g];if(x<0)x+=ax;` )
-    ( string_push_str src `if(x>=0&&x<ax)Y[(o*ax+x)*inner+ii]=U[i];}` )
     : i total * * outer nidx inner
-    : ( Vec i ) args ( vec_new [i] )
-    ( vec_push [i] args ( gk_arg_dev y ) )
-    ( vec_push [i] args ( gk_arg_dev ix ) )
-    ( vec_push [i] args ( gk_arg_dev u ) )
-    ( vec_push [i] args ( gpu_arg_i64 ax ) )
-    ( vec_push [i] args ( gpu_arg_i64 inner ) )
-    ( vec_push [i] args ( gpu_arg_i64 nidx ) )
-    ( vec_push [i] args ( gpu_arg_i64 total ) )
-    : b r ( gk_run_dev kit ( string_data src ) ( string_data kname ) ( gk_grid total 256 ) 256 args )
-    ^ r
+    : ~ GkCall c ( gk_call_new )
+    ( gk_call_dev c `Y` y ) ( gk_call_dev c `ix` ix ) ( gk_call_dev c `U` u )
+    ( gk_call_i64 c `ax` ax ) ( gk_call_i64 c `inner` inner ) ( gk_call_i64 c `nidx` nidx ) ( gk_call_i64 c `total` total )
+    ^ ( gk_run_checked_dev kit c ( string_data kname ) `if (gid < total) {
+    long long ii = gid % inner;
+    long long t = gid / inner;
+    long long g = t % nidx;
+    long long o = t / nidx;
+    long long x = LD(ix, g);
+    if (x < 0) { x += ax; }
+    if (x >= 0 && x < ax) { ST(Y, (o * ax + x) * inner + ii, LD(U, gid)); }
+}` ( gk_grid total 256 ) 256 )
 }
 
 // ── Row softmax: numerically stable, one thread per row ───────────────
 
 @ gkd_softmax_rows GpuKit kit GkBuf o GkBuf a i rows i cols → b {
     ? & ( gk_buf_ok o ) ( gk_buf_ok a ) {} { ^ F }
-    ? & == . o dtype . a dtype == . o n * rows cols {} { ^ F }
-    ? == . a n * rows cols {} { ^ F }
+    ? & == . o dtype . a dtype == . o n ( _gk_p2 rows cols ) {} { ^ F }
+    ? > cols 0 {} { ^ F }  // each row reads its x[0]
+    ? == . a n ( _gk_p2 rows cols ) {} { ^ F }
     : s tn ( _gk_tname . o dtype )
     : s ex ? == . o dtype GK_F32 { `expf` } { `exp` }
-    : String kname ( string_from ( _gk_pfx . o dtype ) )
+    : ~ String kname ( string_from ( _gk_pfx . o dtype ) )
     ( string_push_str kname `softmax` )
-    : String src ( string_from `extern "C" __global__ void ` )
-    ( string_push_str src ( string_data kname ) )
-    ( string_push_str src `(const ` ) ( string_push_str src tn ) ( string_push_str src `* a, ` )
-    ( string_push_str src tn ) ( string_push_str src `* o, long long rows, long long cols){` )
-    ( string_push_str src `long long r=blockIdx.x*blockDim.x+threadIdx.x;` )
-    ( string_push_str src `if(r<rows){const ` ) ( string_push_str src tn ) ( string_push_str src `* x=a+r*cols;` )
-    ( string_push_str src tn ) ( string_push_str src `* y=o+r*cols;` )
-    ( string_push_str src tn ) ( string_push_str src ` m=x[0];for(long long k=1;k<cols;k++)if(x[k]>m)m=x[k];` )
-    ( string_push_str src tn ) ( string_push_str src ` s=0;for(long long k=0;k<cols;k++){y[k]=` )
-    ( string_push_str src ex )
-    ( string_push_str src `(x[k]-m);s+=y[k];}` )
-    ( string_push_str src `for(long long k=0;k<cols;k++)y[k]/=s;}}` )
-    : ( Vec i ) args ( vec_new [i] )
-    ( vec_push [i] args ( gk_arg_dev a ) )
-    ( vec_push [i] args ( gk_arg_dev o ) )
-    ( vec_push [i] args ( gpu_arg_i64 rows ) )
-    ( vec_push [i] args ( gpu_arg_i64 cols ) )
-    : b r ( gk_run_dev kit ( string_data src ) ( string_data kname ) ( gk_grid rows 256 ) 256 args )
-    ^ r
+    : ~ String body ( string_from `if (gid < rows) {
+    long long r0 = gid * cols;
+    ` )
+    ( string_push_str body tn ) ( string_push_str body ` m = LD(a, r0);
+    for (long long k = 1; k < cols; k++) { if (LD(a, r0 + k) > m) { m = LD(a, r0 + k); } }
+    ` )
+    ( string_push_str body tn ) ( string_push_str body ` s = 0;
+    for (long long k = 0; k < cols; k++) { ST(o, r0 + k, ` )
+    ( string_push_str body ex ) ( string_push_str body `(LD(a, r0 + k) - m)); s += LD(o, r0 + k); }
+    for (long long k = 0; k < cols; k++) { ST(o, r0 + k, LD(o, r0 + k) / s); }
+}` )
+    : ~ GkCall c ( gk_call_new )
+    ( gk_call_dev c `a` a ) ( gk_call_dev c `o` o ) ( gk_call_i64 c `rows` rows ) ( gk_call_i64 c `cols` cols )
+    ^ ( gk_run_checked_dev kit c ( string_data kname ) ( string_data body ) ( gk_grid rows 256 ) 256 )
 }
 
 // ── Sum reduction (device partials + single-thread combine) ───────────
@@ -1118,20 +1230,16 @@ unsafe @ gk_run_dev GpuKit kit__h s src s name i grid i block ( Vec i ) args →
     : GkBuf part ( gk_dbuf_new kit threads . a dtype )
     ? ( gk_buf_ok part ) {} { ^ @ ?f { F } }
     : s tn ( _gk_tname . a dtype )
-    : String kname ( string_from ( _gk_pfx . a dtype ) )
+    : ~ String kname ( string_from ( _gk_pfx . a dtype ) )
     ( string_push_str kname `rsum` )
-    : String src ( string_from `extern "C" __global__ void ` )
-    ( string_push_str src ( string_data kname ) )
-    ( string_push_str src `(const ` ) ( string_push_str src tn ) ( string_push_str src `* in, ` )
-    ( string_push_str src tn ) ( string_push_str src `* partial, long long n){` )
-    ( string_push_str src `long long tid=blockIdx.x*blockDim.x+threadIdx.x;long long stride=gridDim.x*blockDim.x;` )
-    ( string_push_str src tn ) ( string_push_str src ` s=0;for(long long i=tid;i<n;i+=stride)s+=in[i];partial[tid]=s;}` )
-    : ( Vec i ) args ( vec_new [i] )
-    ( vec_push [i] args ( gk_arg_dev a ) )
-    ( vec_push [i] args ( gk_arg_dev part ) )
-    ( vec_push [i] args ( gpu_arg_i64 n ) )
+    : ~ String body ( string_from tn )
+    ( string_push_str body ` s = 0;
+for (long long i = gid; i < n; i += nthreads) { s += LD(in, i); }
+ST(partial, gid, s);` )
+    : ~ GkCall c ( gk_call_new )
+    ( gk_call_dev c `in` a ) ( gk_call_dev c `partial` part ) ( gk_call_i64 c `n` n )
     : i blocks / threads 256
-    : ~ b ok ( gk_run_dev kit ( string_data src ) ( string_data kname ) blocks 256 args )
+    : ~ b ok ( gk_run_checked_dev kit c ( string_data kname ) ( string_data body ) blocks 256 )
     : ~ f acc 0.0
     ? ok {
         : ( Vec f ) host ( _gk_zeros threads )

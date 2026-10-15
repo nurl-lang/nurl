@@ -18,13 +18,12 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/floatbits.nu`
+$ `stdlib/core/slice.nu`
 $ `stdlib/std/float.nu`
 
 // f32 element idx out of the canonical little-endian buffer.
-unsafe @ __gq_f32 * u P i idx → f {
-    : i o * idx 4
-    : i bits | | | # i . P o << # i . P + o 1 8 << # i . P + o 2 16 << # i . P + o 3 24
-    ^ # f ( bits_to_f32 bits )
+inline @ __gq_f32 ( Slice u ) P i idx → f {
+    ^ # f ( bits_to_f32 ( slice_u32_le P * idx 4 ) )
 }
 
 @ __gq_err s msg → !( Vec u ) String {
@@ -32,11 +31,11 @@ unsafe @ __gq_f32 * u P i idx → f {
 }
 
 // f32-LE → f16-LE, round-to-nearest-even per element.
-unsafe @ gq_f16_encode ( Vec u ) f32le → !( Vec u ) String {
+@ gq_f16_encode ( Vec u ) f32le → !( Vec u ) String {
     : i nb ( vec_len [u] f32le )
     ? != % nb 4 0 { ^ ( __gq_err `gguf: f16 encode input is not whole f32 elements` ) } {}
     : i n / nb 4
-    : *u P ( vec_data [u] f32le )
+    : ( Slice u ) P ( slice_from_vec [u] f32le )
     : ( Vec u ) out ( vec_new [u] )
     : ~ i k 0
     ~ < k n {
@@ -49,11 +48,11 @@ unsafe @ gq_f16_encode ( Vec u ) f32le → !( Vec u ) String {
 }
 
 // f32-LE → bf16-LE, round-to-nearest-even per element.
-unsafe @ gq_bf16_encode ( Vec u ) f32le → !( Vec u ) String {
+@ gq_bf16_encode ( Vec u ) f32le → !( Vec u ) String {
     : i nb ( vec_len [u] f32le )
     ? != % nb 4 0 { ^ ( __gq_err `gguf: bf16 encode input is not whole f32 elements` ) } {}
     : i n / nb 4
-    : *u P ( vec_data [u] f32le )
+    : ( Slice u ) P ( slice_from_vec [u] f32le )
     : ( Vec u ) out ( vec_new [u] )
     : ~ i k 0
     ~ < k n {
@@ -69,12 +68,12 @@ unsafe @ gq_bf16_encode ( Vec u ) f32le → !( Vec u ) String {
 // then 32 bytes of roundf(x * (127/amax)) two's-complement int8.
 // ggml's quantize_row_q8_0_ref, including the id = d ? 1/d : 0 guard
 // (an all-zero block stores d = 0 and 32 zero quants).
-unsafe @ gq_q8_0_encode ( Vec u ) f32le → !( Vec u ) String {
+@ gq_q8_0_encode ( Vec u ) f32le → !( Vec u ) String {
     : i nb ( vec_len [u] f32le )
     ? != % nb 4 0 { ^ ( __gq_err `gguf: Q8_0 encode input is not whole f32 elements` ) } {}
     : i n / nb 4
     ? != % n 32 0 { ^ ( __gq_err `gguf: Q8_0 encode needs a multiple of 32 elements` ) } {}
-    : *u P ( vec_data [u] f32le )
+    : ( Slice u ) P ( slice_from_vec [u] f32le )
     : i nblk / n 32
     : ( Vec u ) out ( vec_new [u] )
     ( vec_reserve [u] out * nblk 34 )

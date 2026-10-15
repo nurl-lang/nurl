@@ -4,6 +4,15 @@ All notable changes to `zst` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the version
 scheme is [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.3] — 2026-10-14
+
+Requires NURL 0.73.0 (grammar v2.9 `raw`, `slice_window`, `file_is_open`).
+
+### Changed
+
+- `zst i` (inspect) reads the file through a slice: past the end of a truncated file it reads zeros instead of memory beyond the buffer. No function is `unsafe` any more.
+- 4 fewer functions are `unsafe` than in 0.2.2 (0 left).
+
 ## [0.2.2] — 2026-10-07
 
 Requires NURL 0.71.0, whose ownership rules are on by default: the

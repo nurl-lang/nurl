@@ -40,6 +40,7 @@
 // Any CUDA failure exits non-zero WITHOUT producing output — the worker
 // reports the chunk as failed (ok=0) instead of folding silent zeros.
 
+$ `stdlib/core/slice.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `wasmkernel.nu`
@@ -48,12 +49,13 @@ $ `wasmkernel.nu`
 // The user source is spliced into a generated NURL backtick literal; a
 // backtick would terminate it (NURL strings cannot contain one, escaped or
 // not), so reject it outright. Everything else is escaped below.
-unsafe @ cuda_src_ok s src → b {
-    : i n ( nurl_str_len src )
+@ cuda_src_ok s src → b {
+    : ( Slice u ) sv ( slice_of_str src )
+    : i n ( slice_len [u] sv )
     : ~ b ok T
     : ~ i k 0
     ~ & ok < k n {
-        ? == & # i . src k 255 96 { = ok F } {}
+        ? == ( slice_byte sv k ) 96 { = ok F } {}
         = k + k 1
     }
     ^ ok
@@ -62,11 +64,12 @@ unsafe @ cuda_src_ok s src → b {
 // Escape for embedding inside a generated backtick literal: the NURL lexer
 // recognises \n \t \r \\ and passes any other \X through verbatim — so
 // backslash, LF, TAB and CR are the exact set that must be encoded.
-unsafe @ __cuda_escape String w s src → v {
-    : i n ( nurl_str_len src )
+@ __cuda_escape String w s src → v {
+    : ( Slice u ) sv ( slice_of_str src )
+    : i n ( slice_len [u] sv )
     : ~ i k 0
     ~ < k n {
-        : i c & # i . src k 255
+        : i c ( slice_byte sv k )
         ? == c 92 { ( string_push_char w 92 ) ( string_push_char w 92 ) }
         { ? == c 10 { ( string_push_char w 92 ) ( string_push_char w 110 ) }
             { ? == c 9 { ( string_push_char w 92 ) ( string_push_char w 116 ) }

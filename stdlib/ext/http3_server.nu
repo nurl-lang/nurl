@@ -132,6 +132,10 @@ $ `stdlib/core/rcbox.nu`
     ^ out
 }
 
+// Did the files load? F for the empty credentials http3_creds_load
+// answers when the certificate or the key cannot be read or parsed.
+@ http3_creds_ok QuicCreds k → b { ^ != 0 ( shared_addr [QuicCredsImpl] . k ctl ) }
+
 // Add the second, ML-DSA identity `tcp_listen_tls_dual` serves on the TCP
 // side, so QUIC connections get the same per-ClientHello choice
 // (RFC 8446 §4.4.2.2). F when the files do not load or the key is not

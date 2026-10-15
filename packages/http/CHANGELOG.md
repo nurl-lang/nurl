@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.7.6] — 2026-10-14
+
+Requires the NURL with `rc_take` / `rc_restore` and `http3_creds_ok`.
+
+### Changed
+
+- No function is `unsafe` any more (30 were): an `HttpApp`'s setters check its state out of the `Rc` and back in, the request dispatcher reads a frozen `Arc` of the router, the static flag and the web root, and `http_app_router` hands out a copy of the router.
+- The HTTP/3 side of `listen` holds its server, socket and thread as options instead of handles made from zero, and asks `http3_creds_ok` whether the credentials loaded.
+
 ## [0.7.5] — 2026-10-12
 
 Requires the NURL in which `Thread` holds its state in a `( Shared T )`:

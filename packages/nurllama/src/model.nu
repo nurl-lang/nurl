@@ -204,15 +204,39 @@ $ `stdlib/core/slice.nu`
     i prof_out_ns
 }
 
-// A Llm is a handle on its state in an Arc (stdlib/std/arc.nu):
-// every copy is the same state, and the last owner releases it.
-: Llm { ( Arc LlmImpl ) a }
+// What a loaded model is and never changes: read without waiting for an
+// evaluation.
+: LlmInfo {
+    Tok tok
+    i n_vocab
+    i n_ctx
+    i mask_id
+    b bidir
+}
 
-@ Llm_share Llm h → Llm { ^ @ Llm { ( arc_clone [LlmImpl] . h a ) } }
+// A Llm is a handle: the engine in a Locked — an evaluation takes it for
+// the call and gives it back, so two threads using one model take turns
+// instead of racing on its caches and scratch — beside its dimensions in
+// an Arc. Every copy is the same model; the last owner releases it.
+: Llm {
+    ( Locked LlmImpl ) l
+    ( Arc LlmInfo ) info
+}
+
+@ Llm_share Llm h → Llm { ^ @ Llm { ( Locked_share [LlmImpl] . h l ) ( arc_clone [LlmInfo] . h info ) } }
 
 @ Llm_drop sink Llm h → v {}
 
-unsafe @ __Llm_ptr Llm h → *LlmImpl { ^ ( arc_ptr [LlmImpl] . h a ) }
+// The engine of a model that is opening: every field at its empty value —
+// no device, no kernels, an empty tokenizer and container, empty Vecs.
+// llm_open_st fills every field before anything reads it, and an early
+// return drops the half-built engine whole.
+@ __lm_blank → ( Locked LlmImpl ) { ^ ( locked_new [LlmImpl] @ LlmImpl { ( gpu_none ) @ LlmKernels { ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) F ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) F } ( tok_empty ) 0 0 0 0 0 0 0 0 0 0 0.0 0.0 0 0.0 0.0 F 0 0 0.0 F 0 0 0 0 0 0 0 0 0.0 F ( vec_new [i] ) ( vec_new [i] ) ( vec_new [f] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) 0 ( gpu_host_none ) 0 0 0 0 0 0 0 ( gguf_empty ) @ ?St { F } F 0 0 ( vec_new [u] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [GpuBuffer] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) 0 ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) 0 0 ( vec_new [i] ) ( vec_new [i] ) 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ( gpu_host_none ) 0 0 ( gpu_host_none ) ( gpu_host_none ) F 0 0 0 0 0 } ) }
+
+@ __lm_handle sink LlmImpl m → Llm {
+    : LlmInfo inf @ LlmInfo { ( Tok_share . m tok ) . m n_vocab . m n_ctx . m mask_id . m bidir }
+    ^ @ Llm { ( locked_new [LlmImpl] m ) ( arc_new [LlmInfo] inf ) }
+}
 
 @ __lm_err s msg → !Llm String {
     ^ @ !Llm String { F ( string_from msg ) }
@@ -220,7 +244,7 @@ unsafe @ __Llm_ptr Llm h → *LlmImpl { ^ ( arc_ptr [LlmImpl] . h a ) }
 
 // Profiler clock: drain the GPU queue, then read the monotonic clock, so a
 // phase's accumulated ns reflect real device work rather than launch return.
-unsafe @ __lm_prof_now * LlmImpl m → i {
+@ __lm_prof_now inout LlmImpl m → i {
     : i _s ( gpu_sync . m g )
     ^ ( monotonic_ns )
 }
@@ -291,7 +315,7 @@ unsafe @ __lm_prof_now * LlmImpl m → i {
 // (chunk × n_ff floats) while keeping the launches amortised.
 : i LM_CHUNK 64
 
-unsafe @ __lm_upload * LlmImpl m Gguf gg s name → i {
+@ __lm_upload inout LlmImpl m Gguf gg s name → i {
     // A second container, when one was given: same tensor, different file.
     ?? . m st {
         T sf → {
@@ -307,13 +331,11 @@ unsafe @ __lm_upload * LlmImpl m Gguf gg s name → i {
     ? < ti 0 { ^ -1 } {}
     : ~ i gt -1
     : ~ i nb -1
-    : ~ i addr 0
     : ~ i ne0 0
     ?? ( vec_get [GgufTensor] ( gguf_tensors gg ) ti ) {
         T t → {
             = gt . t gtype
             = nb . t nbytes
-            = addr # i ( gguf_tensor_ptr gg t )
             = ne0 . t d0
         }
         F → {}
@@ -325,7 +347,7 @@ unsafe @ __lm_upload * LlmImpl m Gguf gg s name → i {
             ^ -1
         } {}
         : i _t0 ( monotonic_ns )
-        : i _uq ( gpu_upload bq # *u addr )
+        : i _uq ?? ( vec_get [GgufTensor] ( gguf_tensors gg ) ti ) { T t → ( gpu_upload_bytes bq ( gguf_tensor_bytes gg t ) ) F → -1 }
         = __lm_up_ns + __lm_up_ns - ( monotonic_ns ) _t0
         // q8_0 goes to the device in the SPLIT per-row layout the
         // matvec kernels read (scales together, 4-aligned quants) —
@@ -338,7 +360,7 @@ unsafe @ __lm_upload * LlmImpl m Gguf gg s name → i {
                 ^ -1
             } {}
             : i _t1 ( monotonic_ns )
-            ( lk_q8_repack . m ks . bq dptr . br dptr / ne0 32 / nb 34 )
+            ( __lm_q8_repack m bq br / ne0 32 / nb 34 )
             : i _rs ( gpu_sync . m g )
             = __lm_rp_ns + __lm_rp_ns - ( monotonic_ns ) _t1
             : i br_dp . br dptr
@@ -364,7 +386,7 @@ unsafe @ __lm_upload * LlmImpl m Gguf gg s name → i {
                 = __lm_alloc_failed T
                 ^ -1
             } {}
-            : i _u ( gpu_upload b ( vec_data [u] raw ) )
+            : i _u ( gpu_upload_vec b raw )
             : i b_dp . b dptr
             ( vec_push [i] . m wdptr b_dp )
             ( vec_push [i] . m wbytes . b bytes )
@@ -376,6 +398,14 @@ unsafe @ __lm_upload * LlmImpl m Gguf gg s name → i {
             ^ -1
         }
     }
+}
+
+// q8_0 weights into the split per-row layout the matvec kernels read:
+// `src` holds nblk interleaved 34-byte blocks, `dst` as many bytes —
+// both buffers the caller just sized to the tensor.
+unsafe @ __lm_q8_repack inout LlmImpl m GpuBuffer src GpuBuffer dst i nb i nblk → v {
+    ? & == . src bytes . dst bytes <= * nblk 34 . src bytes {} { ^ }
+    ( lk_q8_repack . m ks . src dptr . dst dptr nb nblk )
 }
 
 // Bytes one weight ROW occupies on the device: a quantised row is
@@ -397,9 +427,23 @@ unsafe @ __lm_upload * LlmImpl m Gguf gg s name → i {
 }
 
 // Allocate an f32 scratch/cache device buffer of n floats (tracked).
-unsafe @ __lm_scratch * LlmImpl m i nfloats → i {
+@ __lm_scratch inout LlmImpl m i nfloats → i {
     : GpuBuffer b ( gpu_alloc . m g * nfloats 4 )
     ? == . b dptr 0 {
+        = __lm_alloc_failed T
+        ^ -1
+    } {}
+    : i b_dp . b dptr
+    ( vec_push [i] . m wdptr b_dp )
+    ( vec_push [i] . m wbytes . b bytes )
+    ( vec_push [GpuBuffer] . m wbufs b )
+    ^ b_dp
+}
+
+// The same, filled from host bytes (`bytes` holds at least nfloats*4).
+@ __lm_scratch_from inout LlmImpl m i nfloats ( Vec u ) bytes → i {
+    : GpuBuffer b ( gpu_alloc . m g * nfloats 4 )
+    ? | == . b dptr 0 != 0 ( gpu_upload_vec b bytes ) {
         = __lm_alloc_failed T
         ^ -1
     } {}
@@ -499,7 +543,7 @@ unsafe @ __lm_scratch * LlmImpl m i nfloats → i {
 // dequanted f32 bytes, before upload: out-lane (h·hd + 2j) ← (h·hd + j),
 // (h·hd + 2j+1) ← (h·hd + rd/2 + j) for j < rd/2; lanes ≥ rd untouched.
 // A weight permutes ROW blocks of the [out, in] tensor; a bias, elements.
-unsafe @ __lm_st_rope_permute * LlmImpl m s name ( Vec u ) raw → v {
+@ __lm_st_rope_permute inout LlmImpl m s name ( Vec u ) raw → v {
     ? == . m rope_style 0 {} { ^ v }
     : b isq | != 0 ( nurl_str_ends name `attn_q.weight` ) != 0 ( nurl_str_ends name `attn_q.bias` )
     : b isk | != 0 ( nurl_str_ends name `attn_k.weight` ) != 0 ( nurl_str_ends name `attn_k.bias` )
@@ -562,7 +606,7 @@ unsafe @ __lm_st_rope_permute * LlmImpl m s name ( Vec u ) raw → v {
 // to happen here, on this path only. (Getting this wrong is not subtle: the
 // model produces confident nonsense, which is exactly how it was found the
 // first time.)
-unsafe @ __lm_upload_st * LlmImpl m s name → i {
+@ __lm_upload_st inout LlmImpl m s name → i {
     : St sf ?? . m st { T s0 → s0 F → { ^ -1 } }
     : String hf ( __lm_hf_name name . m st_norm_add1 )
     ? == 0 ( string_len hf ) {
@@ -581,7 +625,7 @@ unsafe @ __lm_upload_st * LlmImpl m s name → i {
                 = __lm_alloc_failed T
                 ^ -1
             } {}
-            : i _u ( gpu_upload b ( vec_data [u] raw ) )
+            : i _u ( gpu_upload_vec b raw )
             : i b_dp . b dptr
             ( vec_push [i] . m wdptr b_dp )
             ( vec_push [i] . m wbytes . b bytes )
@@ -596,18 +640,13 @@ unsafe @ __lm_upload_st * LlmImpl m s name → i {
 }
 
 // x ← x + 1 over a buffer of f32 bytes, in place (see __lm_upload_st).
-unsafe @ __lm_add1 ( Vec u ) raw → v {
-    : i n / ( vec_len [u] raw ) 4
-    : *u p ( vec_data [u] raw )
+@ __lm_add1 ( Vec u ) raw → v {
+    : ( Slice u ) p ( slice_from_vec [u] raw )
+    : i n / ( slice_len [u] p ) 4
     : ~ i k 0
     ~ < k n {
-        : f v # f ( bits_to_f32 ( _st_u32 p * k 4 ) )
-        : i bits # i ( f32_to_bits # f32 + v 1.0 )
-        : i o * k 4
-        = . p o # u & bits 255
-        = . p + o 1 # u & >> bits 8 255
-        = . p + o 2 # u & >> bits 16 255
-        = . p + o 3 # u & >> bits 24 255
+        : f v # f ( bits_to_f32 ( slice_u32_le p * k 4 ) )
+        ( slice_put_u32_le p * k 4 # i ( f32_to_bits # f32 + v 1.0 ) )
         = k + k 1
     }
 }
@@ -615,7 +654,7 @@ unsafe @ __lm_add1 ( Vec u ) raw → v {
 // Optional per-layer tensor: device pointer, or -1 when the model has
 // none (biases are architecture-dependent). Always uploaded as f32 —
 // a bias is a single row, so the dequant cost is nil.
-unsafe @ __lm_upload_opt * LlmImpl m Gguf gg i layer s suffix → i {
+@ __lm_upload_opt inout LlmImpl m Gguf gg i layer s suffix → i {
     : String nm ( __lm_tname layer suffix )
     ?? . m st {
         T sf → {
@@ -639,7 +678,7 @@ unsafe @ __lm_upload_opt * LlmImpl m Gguf gg i layer s suffix → i {
                 = __lm_alloc_failed T
                 ^ -1
             } {}
-            : i _u ( gpu_upload b ( vec_data [u] raw ) )
+            : i _u ( gpu_upload_vec b raw )
             : i b_dp . b dptr
             ( vec_push [i] . m wdptr b_dp )
             ( vec_push [i] . m wbytes . b bytes )
@@ -652,7 +691,7 @@ unsafe @ __lm_upload_opt * LlmImpl m Gguf gg i layer s suffix → i {
     }
 }
 
-unsafe @ __lm_upload_layer * LlmImpl m Gguf gg i layer s suffix ( Vec i ) dst ( Vec i ) tdst → b {
+@ __lm_upload_layer inout LlmImpl m Gguf gg i layer s suffix ( Vec i ) dst ( Vec i ) tdst → b {
     : String nm ( __lm_tname layer suffix )
     : i d ( __lm_upload m gg ( string_data nm ) )
     ? < d 0 { ^ F } {}
@@ -722,8 +761,8 @@ unsafe @ llm_open_st s path s weights i want_ctx → !Llm String {
 
     // zeroed: every handle field starts as the null handle, so an early
     // return drops a half-built model cleanly
-    : Llm h @ Llm { ( arc_zero [LlmImpl] ) }
-    : *LlmImpl m ( __Llm_ptr h )
+    : ( Locked LlmImpl ) lk ( __lm_blank )
+    : ~ LlmImpl m ( locked_take [LlmImpl] lk )
     = __lm_alloc_failed F
     = . m prof_on F
     = . m prof_attn_ns 0
@@ -999,12 +1038,12 @@ unsafe @ llm_open_st s path s weights i want_ctx → !Llm String {
             ? >= bi 0 {
                 ?? ( gguf_dequant gg bi ) {
                     T raw → {
-                        : *u P ( vec_data [u] raw )
                         : ~ i e 0
                         ~ < e . m n_expert {
-                            : i o * e 4
-                            : i bits | | | # i . P o << # i . P + o 1 8 << # i . P + o 2 16 << # i . P + o 3 24
-                            ( vec_push [f] . m exp_bias # f ( bits_to_f32 bits ) )
+                            ?? ( bytes_read_u32_le raw * e 4 ) {
+                                T bits → { ( vec_push [f] . m exp_bias # f ( bits_to_f32 # i bits ) ) }
+                                F → { = ok F }
+                            }
                             = e + e 1
                         }
                     }
@@ -1129,7 +1168,6 @@ unsafe @ llm_open_st s path s weights i want_ctx → !Llm String {
         = . m moe_downb ( __lm_scratch m * nasn . m n_embd )
         // upload all layers' expert bias (f32) for the on-device router
         : i nbias * . m n_layer . m n_expert
-        = . m bias_all ( __lm_scratch m nbias )
         : ( Vec u ) bb ( vec_new [u] )
         : ~ i bi 0
         ~ < bi nbias {
@@ -1138,8 +1176,7 @@ unsafe @ llm_open_st s path s weights i want_ctx → !Llm String {
             ( bytes_push_u32_le bb # u32 ( f32_to_bits # f32 bv ) )
             = bi + bi 1
         }
-        : GpuBuffer bu ( gpu_buffer_view . m bias_all * nbias 4 )
-        : i _ub ( gpu_upload bu ( vec_data [u] bb ) )
+        = . m bias_all ( __lm_scratch_from m nbias bb )
     } {
         = . m rlogitsd -1
         = . m router_host ( gpu_host_none )
@@ -1175,7 +1212,7 @@ unsafe @ llm_open_st s path s weights i want_ctx → !Llm String {
         }
         F → {}
     }
-    ^ @ !Llm String { T h }
+    ^ @ !Llm String { T ( __lm_handle m ) }
 }
 
 // The profiler's totals (NURLLAMA_PROF) are printed when the model goes:
@@ -1205,34 +1242,27 @@ unsafe @ llm_open_st s path s weights i want_ctx → !Llm String {
 // Early release (optional): the model's last owner gives everything back.
 @ llm_close sink Llm m → v {}
 
-unsafe @ llm_tok Llm m__h → Tok {
-    : *LlmImpl m ( __Llm_ptr m__h )
-    ^ . m tok
-}
+@ llm_tok Llm h → Tok { ^ ( Tok_share . ( arc_get [LlmInfo] . h info ) tok ) }
 
-unsafe @ llm_n_vocab Llm m__h → i {
-    : *LlmImpl m ( __Llm_ptr m__h )
-    ^ . m n_vocab
-}
+@ llm_n_vocab Llm h → i { ^ . ( arc_get [LlmInfo] . h info ) n_vocab }
 
-unsafe @ llm_n_ctx Llm m__h → i {
-    : *LlmImpl m ( __Llm_ptr m__h )
-    ^ . m n_ctx
-}
+@ llm_n_ctx Llm h → i { ^ . ( arc_get [LlmInfo] . h info ) n_ctx }
 
-unsafe @ llm_logit Llm m__h i idx → f {
-    : *LlmImpl m ( __Llm_ptr m__h )
-    ^ ( gpu_host_get_f32 . m logits_host idx )
+@ llm_logit Llm h i idx → f {
+    : LlmImpl m ( locked_take [LlmImpl] . h l )
+    : f r ( gpu_host_get_f32 . m logits_host idx )
+    ( locked_restore [LlmImpl] . h l m )
+    ^ r
 }
 
 // One decode step: token at position pos (0-based; caller feeds
 // positions sequentially). Logits for the NEXT token land in
 // logits_host.
 // One decode step: token at position pos.
-@ llm_eval Llm m__h i token i pos → v {
+@ llm_eval Llm h i token i pos → v {
     : ( Vec i ) one ( vec_new [i] )
     ( vec_push [i] one token )
-    ( llm_eval_n m__h one 0 1 pos )
+    ( llm_eval_n h one 0 1 pos )
 }
 
 // Evaluate `count` tokens — ids[first .. first+count) — starting at
@@ -1240,9 +1270,10 @@ unsafe @ llm_logit Llm m__h i idx → f {
 // runs per position over the cache this same batch already filled (its
 // causal window differs per position). Logits are produced for the LAST
 // position only, which is all a prefill or a decode step needs.
-unsafe @ llm_eval_n Llm m__h ( Vec i ) ids i first i count i pos0 → v {
-    : *LlmImpl m ( __Llm_ptr m__h )
+@ llm_eval_n Llm h ( Vec i ) ids i first i count i pos0 → v {
+    : ~ LlmImpl m ( locked_take [LlmImpl] . h l )
     ( __lm_eval_core m ids first count pos0 0 T 1 )
+    ( locked_restore [LlmImpl] . h l m )
 }
 
 // Diffusion window evaluation (llada2): the batch is a block window at
@@ -1252,9 +1283,10 @@ unsafe @ llm_eval_n Llm m__h ( Vec i ) ids i first i count i pos0 → v {
 // denoise step samples all of them). The window's K/V rows land in the
 // cache at pos0.., overwriting the previous step's; earlier (frozen)
 // blocks keep theirs, which is exactly the block-diffusion mask.
-unsafe @ llm_eval_win Llm m__h ( Vec i ) ids i first i count i pos0 i kvlen b want_logits → v {
-    : *LlmImpl m ( __Llm_ptr m__h )
+@ llm_eval_win Llm h ( Vec i ) ids i first i count i pos0 i kvlen b want_logits → v {
+    : ~ LlmImpl m ( locked_take [LlmImpl] . h l )
     ( __lm_eval_core m ids first count pos0 kvlen F ? want_logits 2 0 )
+    ( locked_restore [LlmImpl] . h l m )
 }
 
 // MoE routing for window row `b2` of the just-downloaded router logits:
@@ -1263,7 +1295,7 @@ unsafe @ llm_eval_win Llm m__h ( Vec i ) ids i first i count i pos0 i kvlen b wa
 // n_expert_used best experts inside them), weights = the UNBIASED
 // scores of the winners, normalised, times expert_weights_scale.
 // Appends (expert, weight) pairs to sel/wts.
-unsafe @ __lm_moe_route * LlmImpl m i L i b2 ( Vec i ) sel ( Vec f ) wts → v {
+@ __lm_moe_route inout LlmImpl m i L i b2 ( Vec i ) sel ( Vec f ) wts → v {
     : i nx . m n_expert
     : i per_grp ? > . m n_group 0 / nx . m n_group nx
     : ( Vec f ) sc ( vec_new [f] )
@@ -1405,7 +1437,7 @@ unsafe @ __lm_moe_route * LlmImpl m i L i b2 ( Vec i ) sel ( Vec f ) wts → v {
     }
 }
 
-unsafe @ __lm_eval_core * LlmImpl m ( Vec i ) ids i first i count i pos0 i kvlen b causal i logits_mode → v {
+unsafe @ __lm_eval_core inout LlmImpl m ( Vec i ) ids i first i count i pos0 i kvlen b causal i logits_mode → v {
     ? < count 1 { ^ v } {}
     : i ne . m n_embd
     : i hd . m head_dim
@@ -1641,39 +1673,58 @@ unsafe @ __lm_eval_core * LlmImpl m ( Vec i ) ids i first i count i pos0 i kvlen
 
 // After a mode-3 (greedy) window eval: the argmax token id and its
 // softmax probability for window row `row`.
-unsafe @ llm_win_id Llm m__h i row → i {
-    : *LlmImpl m ( __Llm_ptr m__h )
-    ^ # i ( gpu_host_get_i32 . m amid_h row )
+@ llm_win_id Llm h i row → i {
+    : LlmImpl m ( locked_take [LlmImpl] . h l )
+    : i r # i ( gpu_host_get_i32 . m amid_h row )
+    ( locked_restore [LlmImpl] . h l m )
+    ^ r
 }
 
-unsafe @ llm_win_prob Llm m__h i row → f {
-    : *LlmImpl m ( __Llm_ptr m__h )
-    ^ ( gpu_host_get_f32 . m amprob_h row )
+@ llm_win_prob Llm h i row → f {
+    : LlmImpl m ( locked_take [LlmImpl] . h l )
+    : f r ( gpu_host_get_f32 . m amprob_h row )
+    ( locked_restore [LlmImpl] . h l m )
+    ^ r
 }
 
 // Greedy window eval: run the forward and reduce to (id, prob) per
 // position on the device (no full-vocab download).
-unsafe @ llm_win_greedy Llm m__h ( Vec i ) ids i first i count i pos0 i kvlen → v {
-    : *LlmImpl m ( __Llm_ptr m__h )
+@ llm_win_greedy Llm h ( Vec i ) ids i first i count i pos0 i kvlen → v {
+    : ~ LlmImpl m ( locked_take [LlmImpl] . h l )
     ( __lm_eval_core m ids first count pos0 kvlen F 3 )
+    ( locked_restore [LlmImpl] . h l m )
 }
 
 // Logit `idx` of window row `row` after an all-positions eval
 // (llm_eval_win with logits). Row 0 = the window's first position.
-unsafe @ llm_logit_at Llm m__h i row i idx → f {
-    : *LlmImpl m ( __Llm_ptr m__h )
-    ^ ( gpu_host_get_f32 . m logits_host + * row . m n_vocab idx )
+@ llm_logit_at Llm h i row i idx → f {
+    : LlmImpl m ( locked_take [LlmImpl] . h l )
+    : f r ( gpu_host_get_f32 . m logits_host + * row . m n_vocab idx )
+    ( locked_restore [LlmImpl] . h l m )
+    ^ r
 }
 
-unsafe @ llm_mask_id Llm m__h → i {
-    : *LlmImpl m ( __Llm_ptr m__h )
-    ^ . m mask_id
+@ llm_mask_id Llm h → i { ^ . ( arc_get [LlmInfo] . h info ) mask_id }
+
+@ llm_is_diffusion Llm h → b { ^ . ( arc_get [LlmInfo] . h info ) bidir }
+
+// The logits of window row `row` (0 after a single-token eval), all
+// n_vocab of them, copied out with the engine held once — a sampler that
+// reads every logit should not take the lock per logit.
+@ llm_logits_row Llm h i row → ( Vec f ) {
+    : LlmImpl m ( locked_take [LlmImpl] . h l )
+    : i nv . m n_vocab
+    : ( Vec f ) out ( vec_zeroed [f] nv )
+    : ( Slice f32 ) lg ( gpu_host_f32 . m logits_host )
+    : ( Slice f ) o ( slice_from_vec [f] out )
+    : ( Slice f32 ) src ( slice_window [f32] lg * row nv nv )
+    : ~ i k 0
+    ~ < k nv { ( slice_put [f] o k # f ( slice_at [f32] src k ) ) = k + k 1 }
+    ( locked_restore [LlmImpl] . h l m )
+    ^ out
 }
 
-unsafe @ llm_is_diffusion Llm m__h → b {
-    : *LlmImpl m ( __Llm_ptr m__h )
-    ^ . m bidir
-}
+@ llm_logits Llm h → ( Vec f ) { ^ ( llm_logits_row h 0 ) }
 
 // The largest chunk a single llm_eval_n call may take.
 @ llm_chunk → i { ^ LM_CHUNK }
@@ -1681,13 +1732,13 @@ unsafe @ llm_is_diffusion Llm m__h → b {
 // Prefill: run the whole prompt through the model in chunks, leaving the
 // KV cache filled and the logits set for the LAST prompt token — the
 // distribution the first generated token is drawn from.
-@ llm_prefill Llm m__h ( Vec i ) ids → v {
+@ llm_prefill Llm h ( Vec i ) ids → v {
     : i n ( vec_len [i] ids )
     : ~ i off 0
     ~ < off n {
         : i left - n off
         : i take ? < left LM_CHUNK left LM_CHUNK
-        ( llm_eval_n m__h ids off take off )
+        ( llm_eval_n h ids off take off )
         = off + off take
     }
 }

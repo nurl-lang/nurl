@@ -1,5 +1,53 @@
 # Changelog
 
+## [0.6.2] — 2026-10-15
+
+- No `unsafe` left. The weight arena is made of owned gpukit chunks (`gk_dbuf_new`), and each weight is a view of its chunk (`gk_buf_view_as`) that keeps the chunk alive. The one batched upload now goes through gpukit 0.11.3's safe `gk_dbuf_upload_batch` from `st_tensor_bytes` views, instead of queuing raw addresses. Embeddings are byte-identical to 0.6.1. Loading a 300 MB model on the CPU backend takes the same time (median 478 vs 475 ms over 20 runs, same CPU time).
+
+## [0.6.1] — 2026-10-14
+
+### Changed
+
+- Requires gpukit 0.11 (its kit state behind a lock; census accessors return a `String`).
+
+## [0.6.0] — 2026-10-14
+
+Requires NURL 0.73.0 with globals set at start and h264–h266 closed.
+
+### Changed
+
+- 2 `unsafe` functions left (43 in 0.5.5): carving a weight out of the
+  device arena (`gk_buf_wrap`) and sending the queued uploads
+  (`gpu_upload_batch`, then `gpu_staging_free`).
+- An `Embed` is the tokenizer, the configuration and a status record,
+  each shared, beside the engine in a `Locked`: a forward, a load or an
+  unload hold the engine, while tokenizing, `embed_dim`, `embed_loaded`
+  and the health report never wait for one. The engine was an Arc
+  changed through raw pointers from any thread.
+- `embed_backend` / `embed_device_name` return a `String` of their own.
+- The server's model queue is a `Channel` with an answer channel per
+  request, and its state a Locked global set at start — no hand-linked
+  job list behind a hand-held mutex. The unload timer ticks through the
+  same queue.
+
+### Verified
+
+- On a synthetic two-layer XLM-R model (random weights, a trained Unigram
+  vocabulary) the embeddings are bit-identical to 0.5.5's and within
+  7e-8 of a NumPy forward; the server answers concurrent batches, unloads
+  when idle and reloads, ASan-clean.
+
+## [0.5.5] — 2026-10-14
+
+Requires NURL 0.73.0 (`slice_at`, `slice_put`, `rc_take`, `locked_take`).
+
+### Changed
+
+- Loops that read or wrote through `vec_data` pointers index slices (`slice_at` / `slice_put`, as fast as the pointers), and functions with nothing raw in them are no longer marked `unsafe`.
+- 1 fewer functions are `unsafe` than in 0.5.4 (44 left).
+- Requires gpu 0.17 (its batched upload is `raw`; the loader here was already `unsafe`).
+- Requires safetensor 0.6 (`st_tensor_ptr` is `raw` there; the loaders that take tensor addresses were already `unsafe`).
+
 ## [0.5.4] — 2026-10-12
 
 Requires NURL 0.73.0, in which a field written through a raw pointer
@@ -15,7 +63,6 @@ The published 0.5.3 does not compile under it.
   of them is allocated or released by hand.
 - The GPU kit a model replaces is dropped by the store.
 - Requires gpu 0.16.
-
 
 ## [0.5.3] — 2026-10-11
 

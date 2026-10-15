@@ -36,6 +36,7 @@
 // fixed-point original written out.
 
 $ `stdlib/core/vec.nu`
+$ `stdlib/core/slice.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/std/float.nu`
 $ `mp3tab.nu`
@@ -141,9 +142,9 @@ $ `mp3tab.nu`
 // bitrates[index][version], version 0 = MPEG-2.5, 2 = MPEG-2, 3 = MPEG-1.
 // Index 0 is free format and 15 is forbidden; both read as -1 here, so no
 // caller can ask for them by accident.
-unsafe @ __mp3_bitrate_table → ( Vec i ) {
+@ __mp3_bitrate_table → ( Vec i ) {
     : ( Vec i ) v ( _mp3_zeros 64 )
-    : *i p ( vec_data [i] v )
+    : ( Slice i ) p ( slice_from_vec [i] v )
     : ~ i at 0
     = at ( _mp3_pl8 p at -1 -1 -1 -1 8 -1 8 32 )
     = at ( _mp3_pl8 p at 16 -1 16 40 24 -1 24 48 )
@@ -156,13 +157,13 @@ unsafe @ __mp3_bitrate_table → ( Vec i ) {
     ^ v
 }
 
-unsafe @ __mp3_bitrate_index i bitr i version → i {
+@ __mp3_bitrate_index i bitr i version → i {
     : ( Vec i ) t ( __mp3_bitrate_table )
-    : *i p ( vec_data [i] t )
+    : ( Slice i ) p ( slice_from_vec [i] t )
     : ~ i found -1
     : ~ i k 0
     ~ < k 16 {
-        : i here . p + * k 4 version
+        : i here ( slice_at [i] p + * k 4 version )
         ? & < found 0 == here bitr { = found k } {}
         = k + k 1
     }
@@ -172,9 +173,9 @@ unsafe @ __mp3_bitrate_index i bitr i version → i {
 // Which big-values width gets how many scalefactor bands in region 0 and
 // region 1. The two regions exist so three different Huffman books can cover
 // one granule; the split points have to fall on band boundaries.
-unsafe @ __mp3_subdv0 → ( Vec i ) {
+@ __mp3_subdv0 → ( Vec i ) {
     : ( Vec i ) v ( _mp3_zeros 24 )
-    : *i p ( vec_data [i] v )
+    : ( Slice i ) p ( slice_from_vec [i] v )
     : ~ i at 0
     = at ( _mp3_pl8 p at 0 0 0 0 0 0 1 1 )
     = at ( _mp3_pl8 p at 1 2 2 2 3 3 3 4 )
@@ -182,9 +183,9 @@ unsafe @ __mp3_subdv0 → ( Vec i ) {
     ^ v
 }
 
-unsafe @ __mp3_subdv1 → ( Vec i ) {
+@ __mp3_subdv1 → ( Vec i ) {
     : ( Vec i ) v ( _mp3_zeros 24 )
-    : *i p ( vec_data [i] v )
+    : ( Slice i ) p ( slice_from_vec [i] v )
     : ~ i at 0
     = at ( _mp3_pl8 p at 0 0 0 0 0 1 1 1 )
     = at ( _mp3_pl8 p at 2 2 3 3 4 4 4 5 )
@@ -195,9 +196,9 @@ unsafe @ __mp3_subdv1 → ( Vec i ) {
 // The filterbank, rounded to the nine decimals the ISO tables carry. The
 // rounding is not cosmetic: it is what makes this filterbank the standard's
 // filterbank rather than one that merely comes very close to it.
-unsafe @ __mp3_build_fl → ( Vec f ) {
+@ __mp3_build_fl → ( Vec f ) {
     : ( Vec f ) v ( _mp3_fzeros 2048 )
-    : *f p ( vec_data [f] v )
+    : ( Slice f ) p ( slice_from_vec [f] v )
     : f step / MP3_PI 64.0
     : ~ i i 0
     ~ < i 32 {
@@ -208,7 +209,7 @@ unsafe @ __mp3_build_fl → ( Vec f ) {
             : f ang * step * # f two_i_1 # f k
             : f c * 1.0e9 ( cos ang )
             : f r ? >= c 0.0 ( floor + c 0.5 ) ( ceil - c 0.5 )
-            = . p + * i 64 j / r 1.0e9
+            ( slice_put [f] p + * i 64 j / r 1.0e9 )
             = j + j 1
         }
         = i + i 1
@@ -218,9 +219,9 @@ unsafe @ __mp3_build_fl → ( Vec f ) {
 
 // Window and basis folded into one table: the MDCT of a long block is a
 // 36-tap dot product per output, and the sine window belongs inside it.
-unsafe @ __mp3_build_cosl → ( Vec f ) {
+@ __mp3_build_cosl → ( Vec f ) {
     : ( Vec f ) v ( _mp3_fzeros 648 )
-    : *f p ( vec_data [f] v )
+    : ( Slice f ) p ( slice_from_vec [f] v )
     : f pi36 / MP3_PI 36.0
     : f pi72 / MP3_PI 72.0
     : ~ i mm 0
@@ -231,7 +232,7 @@ unsafe @ __mp3_build_cosl → ( Vec f ) {
             : f w ( sin * pi36 + # f k 0.5 )
             : i two_k_19 + * 2 k 19
             : f ang * pi72 * # f two_k_19 # f two_m_1
-            = . p + * mm 36 k * w ( cos ang )
+            ( slice_put [f] p + * mm 36 k * w ( cos ang ) )
             = k + k 1
         }
         = mm + mm 1
@@ -242,24 +243,16 @@ unsafe @ __mp3_build_cosl → ( Vec f ) {
 // Table B.9: the butterfly between neighbouring bands cancels the aliasing
 // the filterbank introduced, and the decoder runs the same one backwards.
 // `which` 0 gives the c/sqrt(1+c²) half, 1 the 1/sqrt(1+c²) half.
-unsafe @ __mp3_alias_c i which → ( Vec f ) {
-    : ( Vec f ) v ( _mp3_fzeros 8 )
-    : *f p ( vec_data [f] v )
-    : ( Vec f ) src ( _mp3_fzeros 8 )
-    : *f s ( vec_data [f] src )
-    = . s 0 -0.6
-    = . s 1 -0.535
-    = . s 2 -0.33
-    = . s 3 -0.185
-    = . s 4 -0.095
-    = . s 5 -0.041
-    = . s 6 -0.0142
-    = . s 7 -0.0037
+@ __mp3_alias_c i which → ( Vec f ) {
+    : ( Vec f ) v ( vec_with_cap [f] 8 )
+    : ( Vec f ) src ( vec_new [f] )
+    ( vec_push [f] src -0.6 ) ( vec_push [f] src -0.535 ) ( vec_push [f] src -0.33 ) ( vec_push [f] src -0.185 )
+    ( vec_push [f] src -0.095 ) ( vec_push [f] src -0.041 ) ( vec_push [f] src -0.0142 ) ( vec_push [f] src -0.0037 )
     : ~ i k 0
     ~ < k 8 {
-        : f c . s k
+        : f c ( vec_at [f] src k )
         : f d ( sqrt + 1.0 * c c )
-        = . p k ? == which 0 / c d / 1.0 d
+        ( vec_push [f] v ? == which 0 / c d / 1.0 d )
         = k + k 1
     }
     ^ v
@@ -267,12 +260,12 @@ unsafe @ __mp3_alias_c i which → ( Vec f ) {
 
 // x^(3/4) with the standard's -0.0946 offset and a rounding half, for every
 // integer a quantised value can reach before the escape path takes over.
-unsafe @ __mp3_build_idx34 → ( Vec i ) {
+@ __mp3_build_idx34 → ( Vec i ) {
     : ( Vec i ) v ( _mp3_zeros 10000 )
-    : *i p ( vec_data [i] v )
+    : ( Slice i ) p ( slice_from_vec [i] v )
     : ~ i k 0
     ~ < k 10000 {
-        = . p k # i + ( pow # f k 0.75 ) 0.4054
+        ( slice_put [i] p k # i + ( pow # f k 0.75 ) 0.4054 )
         = k + k 1
     }
     ^ v
@@ -354,21 +347,21 @@ unsafe @ __mp3_build_idx34 → ( Vec i ) {
 // 32 new samples in, 32 subband samples out. The window buffer is a ring of
 // 512: each call drops the oldest 32 and the cursor walks back by 32 (480
 // forward, modulo 512), which is why the samples go in backwards.
-unsafe @ __mp3_subband inout Mp3 m ( Vec f ) pcm i npcm i pos i stride i ch i sbase → v {
-    : *f x ( vec_data [f] . m xbuf )
-    : *f ew ( vec_data [f] . m enw )
-    : *f flp ( vec_data [f] . m fl )
-    : *f y ( vec_data [f] . m yw )
-    : *f sbp ( vec_data [f] . m sb )
-    : *f src ( vec_data [f] pcm )
-    : *i offp ( vec_data [i] . m xoff )
+@ __mp3_subband inout Mp3 m ( Vec f ) pcm i npcm i pos i stride i ch i sbase → v {
+    : ( Slice f ) x ( slice_from_vec [f] . m xbuf )
+    : ( Slice f ) ew ( slice_from_vec [f] . m enw )
+    : ( Slice f ) flp ( slice_from_vec [f] . m fl )
+    : ( Slice f ) y ( slice_from_vec [f] . m yw )
+    : ( Slice f ) sbp ( slice_from_vec [f] . m sb )
+    : ( Slice f ) src ( slice_from_vec [f] pcm )
+    : ( Slice i ) offp ( slice_from_vec [i] . m xoff )
     : i xb * ch MP3_HAN
-    : i off . offp ch
+    : i off ( slice_at [i] offp ch )
     : ~ i mm 0
     ~ < mm 32 {
         : i idx + pos * mm stride
-        : f s ? < idx npcm . src idx 0.0
-        = . x + xb & + off - 31 mm 511 s
+        : f s ? < idx npcm ( slice_at [f] src idx ) 0.0
+        ( slice_put [f] x + xb & + off - 31 mm 511 s )
         = mm + mm 1
     }
     // Fold the 512-tap window down to 64 by adding the eight 64-sample
@@ -380,27 +373,27 @@ unsafe @ __mp3_subband inout Mp3 m ( Vec f ) pcm i npcm i pos i stride i ch i sb
         : ~ i j 0
         ~ < j 8 {
             : i k << j 6
-            : f xv . x + xb & + + off i k 511
-            : f wv . ew + i k
+            : f xv ( slice_at [f] x + xb & + + off i k 511 )
+            : f wv ( slice_at [f] ew + i k )
             = acc + acc * xv wv
             = j + j 1
         }
-        = . y i * 0.5 acc
+        ( slice_put [f] y i * 0.5 acc )
         = i + i 1
     }
-    = . offp ch & + off 480 511
+    ( slice_put [i] offp ch & + off 480 511 )
     = i 0
     ~ < i 32 {
         : i fb * i 64
         : ~ f acc 0.0
         : ~ i j 0
         ~ < j 64 {
-            : f fv . flp + fb j
-            : f yv . y j
+            : f fv ( slice_at [f] flp + fb j )
+            : f yv ( slice_at [f] y j )
             = acc + acc * fv yv
             = j + j 1
         }
-        = . sbp + sbase i * 0.5 acc
+        ( slice_put [f] sbp + sbase i * 0.5 acc )
         = i + i 1
     }
 }
@@ -411,15 +404,15 @@ unsafe @ __mp3_subband inout Mp3 m ( Vec f ) pcm i npcm i pos i stride i ch i sb
 }
 
 // Polyphase, then the MDCT of 18 previous subband samples with 18 new ones.
-unsafe @ __mp3_mdct inout Mp3 m ( Vec f ) pcm i npcm i base → v {
+@ __mp3_mdct inout Mp3 m ( Vec f ) pcm i npcm i base → v {
     : i chn . m channels
     : i gpf . m gpf
-    : *f sbp ( vec_data [f] . m sb )
-    : *f xrp ( vec_data [f] . m xr )
-    : *f mi ( vec_data [f] . m mdin )
-    : *f cosl ( vec_data [f] . m cosl )
-    : *f cap ( vec_data [f] . m ca )
-    : *f csp ( vec_data [f] . m cs )
+    : ( Slice f ) sbp ( slice_from_vec [f] . m sb )
+    : ( Slice f ) xrp ( slice_from_vec [f] . m xr )
+    : ( Slice f ) mi ( slice_from_vec [f] . m mdin )
+    : ( Slice f ) cosl ( slice_from_vec [f] . m cosl )
+    : ( Slice f ) cap ( slice_from_vec [f] . m ca )
+    : ( Slice f ) csp ( slice_from_vec [f] . m cs )
     : ~ i ch 0
     ~ < ch chn {
         : ~ i gr 0
@@ -435,53 +428,58 @@ unsafe @ __mp3_mdct inout Mp3 m ( Vec f ) pcm i npcm i base → v {
             // row; undoing it here is cheaper than a second filterbank.
             = k 1
             ~ < k 18 {
-                : i row ( __mp3_sb_row m ch + gr 1 k )
+                : ( Slice f ) rw ( slice_window [f] sbp ( __mp3_sb_row m ch + gr 1 k ) 32 )
                 : ~ i band 1
                 ~ < band 32 {
-                    : i at + row band
-                    = . sbp at - 0.0 . sbp at
+                    ( slice_put [f] rw band - 0.0 ( slice_at [f] rw band ) )
                     = band + band 2
                 }
                 = k + k 2
             }
             : i xrbase * + * ch gpf gr MP3_GRAN
+            : ( Slice f ) mw ( slice_window [f] mi 0 36 )
+            : ( Slice f ) basis ( slice_window [f] cosl 0 648 )
             : ~ i band 0
             ~ < band 32 {
                 = k 0
                 ~ < k 18 {
                     : i r0 ( __mp3_sb_row m ch gr k )
                     : i r1 ( __mp3_sb_row m ch + gr 1 k )
-                    = . mi k . sbp + r0 band
-                    = . mi + k 18 . sbp + r1 band
+                    ( slice_put [f] mw k ( slice_at [f] sbp + r0 band ) )
+                    ( slice_put [f] mw + k 18 ( slice_at [f] sbp + r1 band ) )
                     = k + k 1
                 }
                 : i obase + xrbase * band 18
+                // windows over the whole basis and this band's 18 outputs:
+                // every index below is in range by the loop bounds, so no
+                // check is left in the loops
+                : ( Slice f ) xo ( slice_window [f] xrp obase 18 )
                 : ~ i mm 0
                 ~ < mm 18 {
                     : i cb * mm 36
                     : ~ f acc 0.0
                     : ~ i j 0
                     ~ < j 36 {
-                        : f iv . mi j
-                        : f cvv . cosl + cb j
-                        = acc + acc * iv cvv
+                        = acc + acc * ( slice_at [f] mw j ) ( slice_at [f] basis + cb j )
                         = j + j 1
                     }
-                    = . xrp + obase mm * 0.5 acc
+                    ( slice_put [f] xo mm * 0.5 acc )
                     = mm + mm 1
                 }
                 ? > band 0 {
-                    : i pbase + xrbase * - band 1 18
+                    // the 8 lines either side of the band edge
+                    : ( Slice f ) xa ( slice_window [f] xrp obase 8 )
+                    : ( Slice f ) xb ( slice_window [f] xrp + xrbase - * band 18 8 8 )
+                    : ( Slice f ) cw8 ( slice_window [f] csp 0 8 )
+                    : ( Slice f ) aw8 ( slice_window [f] cap 0 8 )
                     : ~ i t 0
                     ~ < t 8 {
-                        : i ia + obase t
-                        : i ib + pbase - 17 t
-                        : f a . xrp ia
-                        : f b . xrp ib
-                        : f cv . csp t
-                        : f av . cap t
-                        = . xrp ia - * a cv * b av
-                        = . xrp ib + * b cv * a av
+                        : f a ( slice_at [f] xa t )
+                        : f b ( slice_at [f] xb - 7 t )
+                        : f cv ( slice_at [f] cw8 t )
+                        : f av ( slice_at [f] aw8 t )
+                        ( slice_put [f] xa t - * a cv * b av )
+                        ( slice_put [f] xb - 7 t + * b cv * a av )
                         = t + t 1
                     }
                 } {}
@@ -492,9 +490,11 @@ unsafe @ __mp3_mdct inout Mp3 m ( Vec f ) pcm i npcm i base → v {
         // The last granule's subband samples are the next frame's history.
         : i from ( __mp3_sb_row m ch gpf 0 )
         : i to ( __mp3_sb_row m ch 0 0 )
+        : ( Slice f ) src ( slice_window [f] sbp from 576 )
+        : ( Slice f ) dst ( slice_window [f] sbp to 576 )
         : ~ i k 0
         ~ < k 576 {
-            = . sbp + to k . sbp + from k
+            ( slice_put [f] dst k ( slice_at [f] src k ) )
             = k + k 1
         }
         = ch + ch 1
@@ -506,40 +506,40 @@ unsafe @ __mp3_mdct inout Mp3 m ( Vec f ) pcm i npcm i base → v {
 // Every spectral value divided by one step size and raised to 3/4, which is
 // the companding curve the format fixes. `step` is the exponent the decoder
 // will undo; a larger step is a coarser grid and fewer bits.
-unsafe @ __mp3_quantize inout Mp3 m i xrbase i ixbase i step f xrmax → i {
+@ __mp3_quantize inout Mp3 m i xrbase i ixbase i step f xrmax → i {
     : f e / # f - 0 step 4.0
     : f scale ( pow 2.0 e )
     // 8192^(4/3): past this the values no longer fit the code books, so
     // there is nothing to learn from finishing the pass.
     ? > * xrmax scale 165140.0 { ^ 16384 } {}
-    : *f xrp ( vec_data [f] . m xr )
-    : *i ixp ( vec_data [i] . m ix )
-    : *i t34 ( vec_data [i] . m idx34 )
+    : ( Slice f ) xrp ( slice_from_vec [f] . m xr )
+    : ( Slice i ) ixp ( slice_from_vec [i] . m ix )
+    : ( Slice i ) t34 ( slice_from_vec [i] . m idx34 )
     : ~ i mx 0
     : ~ i i 0
     ~ < i MP3_GRAN {
-        : f xv . xrp + xrbase i
+        : f xv ( slice_at [f] xrp + xrbase i )
         : f u * ( fabs xv ) scale
         : ~ i q 0
         ? < u 9999.0 {
             : i ln # i + u 0.5
-            = q . t34 ln
+            = q ( slice_at [i] t34 ln )
         } {
             = q # i ( pow u 0.75 )
         }
-        = . ixp + ixbase i q
+        ( slice_put [i] ixp + ixbase i q )
         ? > q mx { = mx q } {}
         = i + i 1
     }
     ^ mx
 }
 
-unsafe @ __mp3_ix_max inout Mp3 m i ixbase i begin i end → i {
-    : *i ixp ( vec_data [i] . m ix )
+@ __mp3_ix_max inout Mp3 m i ixbase i begin i end → i {
+    : ( Slice i ) ixp ( slice_from_vec [i] . m ix )
     : ~ i mx 0
     : ~ i i begin
     ~ < i end {
-        : i v . ixp + ixbase i
+        : i v ( slice_at [i] ixp + ixbase i )
         ? > v mx { = mx v } {}
         = i + i 1
     }
@@ -549,22 +549,22 @@ unsafe @ __mp3_ix_max inout Mp3 m i ixbase i begin i end → i {
 // A granule ends in zeros, and before them in values of at most one. Those
 // two tails get cheaper codings than the general one, so the boundaries
 // between the three areas are worth finding exactly.
-unsafe @ __mp3_calc_runlen inout Mp3 m i ixbase → v {
-    : *i ixp ( vec_data [i] . m ix )
+@ __mp3_calc_runlen inout Mp3 m i ixbase → v {
+    : ( Slice i ) ixp ( slice_from_vec [i] . m ix )
     : ~ i i MP3_GRAN
     : ~ b stop F
     ~ & > i 1 ! stop {
-        : i a . ixp + ixbase - i 1
-        : i b . ixp + ixbase - i 2
+        : i a ( slice_at [i] ixp + ixbase - i 1 )
+        : i b ( slice_at [i] ixp + ixbase - i 2 )
         ? & == a 0 == b 0 { = i - i 2 } { = stop T }
     }
     = . m c_cnt1 0
     = stop F
     ~ & > i 3 ! stop {
-        : i a . ixp + ixbase - i 1
-        : i b . ixp + ixbase - i 2
-        : i c . ixp + ixbase - i 3
-        : i d . ixp + ixbase - i 4
+        : i a ( slice_at [i] ixp + ixbase - i 1 )
+        : i b ( slice_at [i] ixp + ixbase - i 2 )
+        : i c ( slice_at [i] ixp + ixbase - i 3 )
+        : i d ( slice_at [i] ixp + ixbase - i 4 )
         ? & & <= a 1 <= b 1 & <= c 1 <= d 1 {
             = . m c_cnt1 + . m c_cnt1 1
             = i - i 4
@@ -575,29 +575,29 @@ unsafe @ __mp3_calc_runlen inout Mp3 m i ixbase → v {
 
 // The quadruple area has two code books and no way to tell in advance which
 // is cheaper, so both are counted and the smaller wins.
-unsafe @ __mp3_count1_bits inout Mp3 m i ixbase → i {
-    : *i ixp ( vec_data [i] . m ix )
-    : *i hl ( vec_data [i] . m hlen )
-    : *i ho ( vec_data [i] . m hoff )
-    : i o32 . ho 32
-    : i o33 . ho 33
+@ __mp3_count1_bits inout Mp3 m i ixbase → i {
+    : ( Slice i ) ixp ( slice_from_vec [i] . m ix )
+    : ( Slice i ) hl ( slice_from_vec [i] . m hlen )
+    : ( Slice i ) ho ( slice_from_vec [i] . m hoff )
+    : i o32 ( slice_at [i] ho 32 )
+    : i o33 ( slice_at [i] ho 33 )
     : ~ i sum0 0
     : ~ i sum1 0
     : ~ i i << . m c_bigv 1
     : ~ i k 0
     ~ < k . m c_cnt1 {
-        : i v . ixp + ixbase i
-        : i w . ixp + ixbase + i 1
-        : i x . ixp + ixbase + i 2
-        : i y . ixp + ixbase + i 3
+        : i v ( slice_at [i] ixp + ixbase i )
+        : i w ( slice_at [i] ixp + ixbase + i 1 )
+        : i x ( slice_at [i] ixp + ixbase + i 2 )
+        : i y ( slice_at [i] ixp + ixbase + i 3 )
         : i p + + + v << w 1 << x 2 << y 3
         : ~ i sg 0
         ? != v 0 { = sg + sg 1 } {}
         ? != w 0 { = sg + sg 1 } {}
         ? != x 0 { = sg + sg 1 } {}
         ? != y 0 { = sg + sg 1 } {}
-        : i l0 . hl + o32 p
-        : i l1 . hl + o33 p
+        : i l0 ( slice_at [i] hl + o32 p )
+        : i l1 ( slice_at [i] hl + o33 p )
         = sum0 + sum0 + sg l0
         = sum1 + sum1 + sg l1
         = i + i 4
@@ -609,7 +609,7 @@ unsafe @ __mp3_count1_bits inout Mp3 m i ixbase → i {
 // Where the big-values area splits into its three regions. The split has to
 // land on a scalefactor band boundary, so this walks the band table down from
 // the nominal count until it finds one that fits.
-unsafe @ __mp3_subdivide inout Mp3 m → v {
+@ __mp3_subdivide inout Mp3 m → v {
     ? == . m c_bigv 0 {
         = . m c_r0 0
         = . m c_r1 0
@@ -617,59 +617,59 @@ unsafe @ __mp3_subdivide inout Mp3 m → v {
         = . m c_a2 0
         = . m c_a3 0
     } {
-        : *i sf ( vec_data [i] . m sfb )
-        : *i d0 ( vec_data [i] . m sdv0 )
-        : *i d1 ( vec_data [i] . m sdv1 )
+        : ( Slice i ) sf ( slice_from_vec [i] . m sfb )
+        : ( Slice i ) d0 ( slice_from_vec [i] . m sdv0 )
+        : ( Slice i ) d1 ( slice_from_vec [i] . m sdv1 )
         : i sb0 * . m sri 23
         : i bvr << . m c_bigv 1
         : ~ i anz 0
         : ~ b go T
         ~ go {
-            : i sv . sf + sb0 anz
+            : i sv ( slice_at [i] sf + sb0 anz )
             ? < sv bvr { = anz + anz 1 } { = go F }
         }
-        : ~ i tc . d0 anz
+        : ~ i tc ( slice_at [i] d0 anz )
         : ~ b done F
         ~ & > tc 0 ! done {
-            : i sv . sf + sb0 + tc 1
+            : i sv ( slice_at [i] sf + sb0 + tc 1 )
             ? <= sv bvr { = done T } { = tc - tc 1 }
         }
         = . m c_r0 tc
-        = . m c_a1 . sf + sb0 + tc 1
+        = . m c_a1 ( slice_at [i] sf + sb0 + tc 1 )
         : i base2 + sb0 + tc 1
-        = tc . d1 anz
+        = tc ( slice_at [i] d1 anz )
         = done F
         ~ & > tc 0 ! done {
-            : i sv . sf + base2 + tc 1
+            : i sv ( slice_at [i] sf + base2 + tc 1 )
             ? <= sv bvr { = done T } { = tc - tc 1 }
         }
         = . m c_r1 tc
-        = . m c_a2 . sf + base2 + tc 1
+        = . m c_a2 ( slice_at [i] sf + base2 + tc 1 )
         = . m c_a3 bvr
     }
 }
 
-unsafe @ __mp3_count_bit inout Mp3 m i ixbase i start i end i table → i {
+@ __mp3_count_bit inout Mp3 m i ixbase i start i end i table → i {
     ? == table 0 { ^ 0 } {}
-    : *i ixp ( vec_data [i] . m ix )
-    : *i hl ( vec_data [i] . m hlen )
-    : *i ho ( vec_data [i] . m hoff )
-    : *i hy ( vec_data [i] . m hylen )
-    : *i hb ( vec_data [i] . m hlinbits )
-    : i off . ho table
-    : i ylen . hy table
-    : i linbits . hb table
+    : ( Slice i ) ixp ( slice_from_vec [i] . m ix )
+    : ( Slice i ) hl ( slice_from_vec [i] . m hlen )
+    : ( Slice i ) ho ( slice_from_vec [i] . m hoff )
+    : ( Slice i ) hy ( slice_from_vec [i] . m hylen )
+    : ( Slice i ) hb ( slice_from_vec [i] . m hlinbits )
+    : i off ( slice_at [i] ho table )
+    : i ylen ( slice_at [i] hy table )
+    : i linbits ( slice_at [i] hb table )
     : i esc ? > table 15 1 0
     : ~ i sum 0
     : ~ i i start
     ~ < i end {
-        : ~ i x . ixp + ixbase i
-        : ~ i y . ixp + ixbase + i 1
+        : ~ i x ( slice_at [i] ixp + ixbase i )
+        : ~ i y ( slice_at [i] ixp + ixbase + i 1 )
         ? == esc 1 {
             ? > x 14 { = x 15 = sum + sum linbits } {}
             ? > y 14 { = y 15 = sum + sum linbits } {}
         } {}
-        : i l . hl + off + * x ylen y
+        : i l ( slice_at [i] hl + off + * x ylen y )
         = sum + sum l
         ? != x 0 { = sum + sum 1 } {}
         ? != y 0 { = sum + sum 1 } {}
@@ -682,18 +682,18 @@ unsafe @ __mp3_count_bit inout Mp3 m i ixbase i start i end i table → i {
 // not arbitrary: the books come in families that only differ in how far they
 // reach, so the first one wide enough is the first one worth counting, and
 // only its near neighbours can beat it.
-unsafe @ __mp3_choose_table inout Mp3 m i ixbase i begin i end → i {
+@ __mp3_choose_table inout Mp3 m i ixbase i begin i end → i {
     : i mx0 ( __mp3_ix_max m ixbase begin end )
     ? == mx0 0 { ^ 0 } {}
-    : *i hx ( vec_data [i] . m hxlen )
-    : *i hm ( vec_data [i] . m hlinmax )
+    : ( Slice i ) hx ( slice_from_vec [i] . m hxlen )
+    : ( Slice i ) hm ( slice_from_vec [i] . m hlinmax )
     ? < mx0 15 {
         : ~ i ch0 0
         : ~ i i 14
         : ~ b go T
         ~ & > i 0 go {
             = i - i 1
-            : i xl . hx i
+            : i xl ( slice_at [i] hx i )
             ? > xl mx0 { = ch0 i = go F } {}
         }
         : ~ i s0 ( __mp3_count_bit m ixbase begin end ch0 )
@@ -731,14 +731,14 @@ unsafe @ __mp3_choose_table inout Mp3 m i ixbase i begin i end → i {
     : ~ i i 15
     : ~ b go T
     ~ & < i 24 go {
-        : i lm . hm i
+        : i lm ( slice_at [i] hm i )
         ? >= lm rest { = ca0 i = go F } {}
         = i + i 1
     }
     = i 24
     = go T
     ~ & < i 32 go {
-        : i lm . hm i
+        : i lm ( slice_at [i] hm i )
         ? >= lm rest { = cb0 i = go F } {}
         = i + i 1
     }
@@ -831,11 +831,11 @@ unsafe @ __mp3_choose_table inout Mp3 m i ixbase i begin i end → i {
 
 // ------------------------------------------------------------ frame assembly
 
-unsafe @ __mp3_iteration inout Mp3 m → v {
+@ __mp3_iteration inout Mp3 m → v {
     : i chn . m channels
     : i gpf . m gpf
-    : *f xrp ( vec_data [f] . m xr )
-    : *i sip ( vec_data [i] . m si )
+    : ( Slice f ) xrp ( slice_from_vec [f] . m xr )
+    : ( Slice i ) sip ( slice_from_vec [i] . m si )
     : i per_ch / . m mean_bits chn
     : ~ i ch 0
     ~ < ch chn {
@@ -845,7 +845,7 @@ unsafe @ __mp3_iteration inout Mp3 m → v {
             : ~ f xrmax 0.0
             : ~ i i 0
             ~ < i MP3_GRAN {
-                : f a ( fabs . xrp + xrbase i )
+                : f a ( fabs ( slice_at [f] xrp + xrbase i ) )
                 ? > a xrmax { = xrmax a } {}
                 = i + i 1
             }
@@ -870,16 +870,16 @@ unsafe @ __mp3_iteration inout Mp3 m → v {
             } {}
             = . m resv_size + . m resv_size - per_ch part23
             : i sb0 * + * gr chn ch MP3_SI_N
-            = . sip + sb0 MP3_SI_PART23 part23
-            = . sip + sb0 MP3_SI_BIGV . m c_bigv
-            = . sip + sb0 MP3_SI_CNT1 . m c_cnt1
-            = . sip + sb0 MP3_SI_GGAIN + . m c_step 210
-            = . sip + sb0 MP3_SI_TS0 . m c_ts0
-            = . sip + sb0 MP3_SI_TS1 . m c_ts1
-            = . sip + sb0 MP3_SI_TS2 . m c_ts2
-            = . sip + sb0 MP3_SI_R0 . m c_r0
-            = . sip + sb0 MP3_SI_R1 . m c_r1
-            = . sip + sb0 MP3_SI_C1T . m c_c1t
+            ( slice_put [i] sip + sb0 MP3_SI_PART23 part23 )
+            ( slice_put [i] sip + sb0 MP3_SI_BIGV . m c_bigv )
+            ( slice_put [i] sip + sb0 MP3_SI_CNT1 . m c_cnt1 )
+            ( slice_put [i] sip + sb0 MP3_SI_GGAIN + . m c_step 210 )
+            ( slice_put [i] sip + sb0 MP3_SI_TS0 . m c_ts0 )
+            ( slice_put [i] sip + sb0 MP3_SI_TS1 . m c_ts1 )
+            ( slice_put [i] sip + sb0 MP3_SI_TS2 . m c_ts2 )
+            ( slice_put [i] sip + sb0 MP3_SI_R0 . m c_r0 )
+            ( slice_put [i] sip + sb0 MP3_SI_R1 . m c_r1 )
+            ( slice_put [i] sip + sb0 MP3_SI_C1T . m c_c1t )
             = gr + gr 1
         }
         = ch + ch 1
@@ -890,8 +890,8 @@ unsafe @ __mp3_iteration inout Mp3 m → v {
 // This encoder never carries bits forward into the next frame, so whatever a
 // granule did not spend has to be spent here, as stuffing. A frame that came
 // out short is a frame the next sync word starts in the middle of.
-unsafe @ __mp3_resv_end inout Mp3 m → v {
-    : *i sip ( vec_data [i] . m si )
+@ __mp3_resv_end inout Mp3 m → v {
+    : ( Slice i ) sip ( slice_from_vec [i] . m si )
     = . m resv_drain 0
     ? & == . m channels 2 == & . m mean_bits 1 1 {
         = . m resv_size + . m resv_size 1
@@ -906,9 +906,9 @@ unsafe @ __mp3_resv_end inout Mp3 m → v {
         = . m resv_size - . m resv_size rem
     } {}
     ? > stuff 0 {
-        : i cur . sip MP3_SI_PART23
+        : i cur ( slice_at [i] sip MP3_SI_PART23 )
         ? < + cur stuff 4095 {
-            = . sip MP3_SI_PART23 + cur stuff
+            ( slice_put [i] sip MP3_SI_PART23 + cur stuff )
         } {
             : ~ i left stuff
             : ~ i gr 0
@@ -917,10 +917,10 @@ unsafe @ __mp3_resv_end inout Mp3 m → v {
                 ~ < ch . m channels {
                     ? > left 0 {
                         : i sb0 * + * gr . m channels ch MP3_SI_N
-                        : i c . sip + sb0 MP3_SI_PART23
+                        : i c ( slice_at [i] sip + sb0 MP3_SI_PART23 )
                         : i extra - 4095 c
                         : i take ? < extra left extra left
-                        = . sip + sb0 MP3_SI_PART23 + c take
+                        ( slice_put [i] sip + sb0 MP3_SI_PART23 + c take )
                         = left - left take
                     } {}
                     = ch + ch 1
@@ -934,8 +934,7 @@ unsafe @ __mp3_resv_end inout Mp3 m → v {
     } {}
 }
 
-unsafe @ __mp3_side_info inout Mp3 m → v {
-    : *i sip ( vec_data [i] . m si )
+@ __mp3_side_info inout Mp3 m → v {
     : i chn . m channels
     : i gpf . m gpf
     ( __mp3_putbits m 2047 11 )
@@ -972,41 +971,41 @@ unsafe @ __mp3_side_info inout Mp3 m → v {
         : ~ i ch 0
         ~ < ch chn {
             : i sb0 * + * gr chn ch MP3_SI_N
-            ( __mp3_putbits m . sip + sb0 MP3_SI_PART23 12 )
-            ( __mp3_putbits m . sip + sb0 MP3_SI_BIGV 9 )
-            ( __mp3_putbits m . sip + sb0 MP3_SI_GGAIN 8 )
+            ( __mp3_putbits m ( vec_at [i] . m si + sb0 MP3_SI_PART23 ) 12 )
+            ( __mp3_putbits m ( vec_at [i] . m si + sb0 MP3_SI_BIGV ) 9 )
+            ( __mp3_putbits m ( vec_at [i] . m si + sb0 MP3_SI_GGAIN ) 8 )
             // scalefac_compress 0: with no masking model there are no
             // scalefactors, so every band's slen is zero.
             ? == . m version 3 { ( __mp3_putbits m 0 4 ) } { ( __mp3_putbits m 0 9 ) }
             ( __mp3_putbits m 0 1 )
-            ( __mp3_putbits m . sip + sb0 MP3_SI_TS0 5 )
-            ( __mp3_putbits m . sip + sb0 MP3_SI_TS1 5 )
-            ( __mp3_putbits m . sip + sb0 MP3_SI_TS2 5 )
-            ( __mp3_putbits m . sip + sb0 MP3_SI_R0 4 )
-            ( __mp3_putbits m . sip + sb0 MP3_SI_R1 3 )
+            ( __mp3_putbits m ( vec_at [i] . m si + sb0 MP3_SI_TS0 ) 5 )
+            ( __mp3_putbits m ( vec_at [i] . m si + sb0 MP3_SI_TS1 ) 5 )
+            ( __mp3_putbits m ( vec_at [i] . m si + sb0 MP3_SI_TS2 ) 5 )
+            ( __mp3_putbits m ( vec_at [i] . m si + sb0 MP3_SI_R0 ) 4 )
+            ( __mp3_putbits m ( vec_at [i] . m si + sb0 MP3_SI_R1 ) 3 )
             ? == . m version 3 { ( __mp3_putbits m 0 1 ) } {}
             ( __mp3_putbits m 0 1 )
-            ( __mp3_putbits m . sip + sb0 MP3_SI_C1T 1 )
+            ( __mp3_putbits m ( vec_at [i] . m si + sb0 MP3_SI_C1T ) 1 )
             = ch + ch 1
         }
         = gr + gr 1
     }
 }
 
-unsafe @ __mp3_huffman_pair inout Mp3 m i table i x0 i y0 → v {
-    : *i hc ( vec_data [i] . m hcode )
-    : *i hl ( vec_data [i] . m hlen )
-    : *i ho ( vec_data [i] . m hoff )
-    : *i hy ( vec_data [i] . m hylen )
-    : *i hb ( vec_data [i] . m hlinbits )
+@ __mp3_huffman_pair inout Mp3 m i table i x0 i y0 → v {
+    : ( Slice i ) hc ( slice_from_vec [i] . m hcode )
+    : ( Slice i ) hl ( slice_from_vec [i] . m hlen )
+    : ( Slice i ) ho ( slice_from_vec [i] . m hoff )
+    : ( Slice i ) hy ( slice_from_vec [i] . m hylen )
+    : ( Slice i ) hb ( slice_from_vec [i] . m hlinbits )
     : i signx ? > x0 0 0 1
     : i signy ? > y0 0 0 1
     : ~ i x ? > x0 0 x0 - 0 x0
     : ~ i y ? > y0 0 y0 - 0 y0
-    : i off . ho table
-    : i ylen . hy table
+    : i off ( slice_at [i] ho table )
+    : i ylen ( slice_at [i] hy table )
     ? > table 15 {
-        : i linbits . hb table
+        : i linbits ( slice_at [i] hb table )
         : ~ i lx 0
         : ~ i ly 0
         ? > x 14 { = lx - x 15 = x 15 } {}
@@ -1014,7 +1013,7 @@ unsafe @ __mp3_huffman_pair inout Mp3 m i table i x0 i y0 → v {
         : i idx + off + * x ylen y
         : ~ i ext 0
         : ~ i xbits 0
-        ( __mp3_putbits m . hc idx . hl idx )
+        ( __mp3_putbits m ( slice_at [i] hc idx ) ( slice_at [i] hl idx ) )
         ? > x 14 { = ext | ext lx = xbits + xbits linbits } {}
         ? != x 0 { = ext | << ext 1 signx = xbits + xbits 1 } {}
         ? > y 14 { = ext | << ext linbits ly = xbits + xbits linbits } {}
@@ -1022,19 +1021,19 @@ unsafe @ __mp3_huffman_pair inout Mp3 m i table i x0 i y0 → v {
         ( __mp3_putbits m ext xbits )
     } {
         : i idx + off + * x ylen y
-        : ~ i code . hc idx
-        : ~ i cbits . hl idx
+        : ~ i code ( slice_at [i] hc idx )
+        : ~ i cbits ( slice_at [i] hl idx )
         ? != x 0 { = code | << code 1 signx = cbits + cbits 1 } {}
         ? != y 0 { = code | << code 1 signy = cbits + cbits 1 } {}
         ( __mp3_putbits m code cbits )
     }
 }
 
-unsafe @ __mp3_huffman_quad inout Mp3 m i table i v0 i w0 i x0 i y0 → v {
-    : *i hc ( vec_data [i] . m hcode )
-    : *i hl ( vec_data [i] . m hlen )
-    : *i ho ( vec_data [i] . m hoff )
-    : i off . ho table
+@ __mp3_huffman_quad inout Mp3 m i table i v0 i w0 i x0 i y0 → v {
+    : ( Slice i ) hc ( slice_from_vec [i] . m hcode )
+    : ( Slice i ) hl ( slice_from_vec [i] . m hlen )
+    : ( Slice i ) ho ( slice_from_vec [i] . m hoff )
+    : i off ( slice_at [i] ho table )
     : i sv ? > v0 0 0 1
     : i sw ? > w0 0 0 1
     : i sx ? > x0 0 0 1
@@ -1045,7 +1044,7 @@ unsafe @ __mp3_huffman_quad inout Mp3 m i table i v0 i w0 i x0 i y0 → v {
     : i y ? > y0 0 y0 - 0 y0
     : i p + + + v << w 1 << x 2 << y 3
     : i idx + off p
-    ( __mp3_putbits m . hc idx . hl idx )
+    ( __mp3_putbits m ( slice_at [i] hc idx ) ( slice_at [i] hl idx ) )
     : ~ i code 0
     : ~ i cbits 0
     ? != v 0 { = code sv = cbits 1 } {}
@@ -1055,27 +1054,24 @@ unsafe @ __mp3_huffman_quad inout Mp3 m i table i v0 i w0 i x0 i y0 → v {
     ( __mp3_putbits m code cbits )
 }
 
-unsafe @ __mp3_huffman_bits inout Mp3 m i gr i ch → v {
-    : *i ixp ( vec_data [i] . m ix )
-    : *i sip ( vec_data [i] . m si )
-    : *i sf ( vec_data [i] . m sfb )
+@ __mp3_huffman_bits inout Mp3 m i gr i ch → v {
     : i chn . m channels
     : i gpf . m gpf
     : i ixbase * + * ch gpf gr MP3_GRAN
     : i sb0 * + * gr chn ch MP3_SI_N
     : i bits0 ( __mp3_bitpos m )
-    : i bv . sip + sb0 MP3_SI_BIGV
+    : i bv ( vec_at [i] . m si + sb0 MP3_SI_BIGV )
     : i bigvalues << bv 1
     : i sbi * . m sri 23
-    : i r0v . sip + sb0 MP3_SI_R0
-    : i r1v . sip + sb0 MP3_SI_R1
+    : i r0v ( vec_at [i] . m si + sb0 MP3_SI_R0 )
+    : i r1v ( vec_at [i] . m si + sb0 MP3_SI_R1 )
     : i i1 + r0v 1
-    : i r1start . sf + sbi i1
+    : i r1start ( vec_at [i] . m sfb + sbi i1 )
     : i i2 + i1 + r1v 1
-    : i r2start . sf + sbi i2
-    : i ts0 . sip + sb0 MP3_SI_TS0
-    : i ts1 . sip + sb0 MP3_SI_TS1
-    : i ts2 . sip + sb0 MP3_SI_TS2
+    : i r2start ( vec_at [i] . m sfb + sbi i2 )
+    : i ts0 ( vec_at [i] . m si + sb0 MP3_SI_TS0 )
+    : i ts1 ( vec_at [i] . m si + sb0 MP3_SI_TS1 )
+    : i ts2 ( vec_at [i] . m si + sb0 MP3_SI_TS2 )
     : ~ i i 0
     ~ < i bigvalues {
         : i a ? >= i r1start 1 0
@@ -1083,24 +1079,24 @@ unsafe @ __mp3_huffman_bits inout Mp3 m i gr i ch → v {
         : i which + a b
         : i table ? == which 0 ts0 ? == which 1 ts1 ts2
         ? != table 0 {
-            ( __mp3_huffman_pair m table . ixp + ixbase i . ixp + ixbase + i 1 )
+            ( __mp3_huffman_pair m table ( vec_at [i] . m ix + ixbase i ) ( vec_at [i] . m ix + ixbase + i 1 ) )
         } {}
         = i + i 2
     }
-    : i c1v . sip + sb0 MP3_SI_C1T
-    : i cntv . sip + sb0 MP3_SI_CNT1
+    : i c1v ( vec_at [i] . m si + sb0 MP3_SI_C1T )
+    : i cntv ( vec_at [i] . m si + sb0 MP3_SI_CNT1 )
     : i c1table + c1v 32
     : i count1end + bigvalues << cntv 2
     = i bigvalues
     ~ < i count1end {
-        ( __mp3_huffman_quad m c1table . ixp + ixbase i . ixp + ixbase + i 1
-        . ixp + ixbase + i 2 . ixp + ixbase + i 3 )
+        ( __mp3_huffman_quad m c1table ( vec_at [i] . m ix + ixbase i ) ( vec_at [i] . m ix + ixbase + i 1 )
+        ( vec_at [i] . m ix + ixbase + i 2 ) ( vec_at [i] . m ix + ixbase + i 3 ) )
         = i + i 4
     }
     // Whatever the granule was given and did not use is padded with ones,
     // which is the one pattern no Huffman code in the format begins with.
     : i used - ( __mp3_bitpos m ) bits0
-    : i p23 . sip + sb0 MP3_SI_PART23
+    : i p23 ( vec_at [i] . m si + sb0 MP3_SI_PART23 )
     : ~ i left - p23 used
     ~ >= left 32 {
         ( __mp3_putbits m 4294967295 32 )
@@ -1112,9 +1108,9 @@ unsafe @ __mp3_huffman_bits inout Mp3 m i gr i ch → v {
     } {}
 }
 
-unsafe @ __mp3_format inout Mp3 m → v {
-    : *f xrp ( vec_data [f] . m xr )
-    : *i ixp ( vec_data [i] . m ix )
+@ __mp3_format inout Mp3 m → v {
+    : ( Slice f ) xrp ( slice_from_vec [f] . m xr )
+    : ( Slice i ) ixp ( slice_from_vec [i] . m ix )
     : i chn . m channels
     : i gpf . m gpf
     // The quantiser worked on magnitudes; the sign comes back from the
@@ -1126,9 +1122,9 @@ unsafe @ __mp3_format inout Mp3 m → v {
             : i base * + * ch gpf gr MP3_GRAN
             : ~ i i 0
             ~ < i MP3_GRAN {
-                : f xv . xrp + base i
-                : i q . ixp + base i
-                ? & < xv 0.0 > q 0 { = . ixp + base i - 0 q } {}
+                : f xv ( slice_at [f] xrp + base i )
+                : i q ( slice_at [i] ixp + base i )
+                ? & < xv 0.0 > q 0 { ( slice_put [i] ixp + base i - 0 q ) } {}
                 = i + i 1
             }
             = gr + gr 1

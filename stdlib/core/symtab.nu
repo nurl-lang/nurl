@@ -10,8 +10,10 @@
 //   ( nurl_sym_free h )       → v      release the table and every key
 //                                       and value it holds
 //
-// The `i` handle is the raw table the compiler shares. A program holds a
-// SymTab instead, which releases its table when it goes, like a Vec:
+// The `i` handle is the raw table — its address — and only an `unsafe`
+// function may pass one (any number could pose as a table, and any thread
+// could hold it). A program holds a SymTab instead, which releases its
+// table when it goes, like a Vec:
 //
 //   ( symtab_new )            → SymTab
 //   ( symtab_def t k v )      → v
@@ -198,12 +200,21 @@
 
 // ── the owning handle ───────────────────────────────────────────────
 
-: SymTab { i h }
+// A program's symbol table: it owns the table and releases it when it
+// goes. The field is the table's address, so the struct is sealed — only
+// this module makes one (symtab_new) — and with a `% Drop` and no clone it
+// moves rather than copies: no two SymTabs release one table. It may move
+// to another thread, but not be shared between threads (an Arc of it),
+// since symtab_def changes the table with no lock. The raw `i` API above is
+// `unsafe` only for programs (spec §3.3d).
+: SymTab { * u t }
 
-% Drop SymTab { @ drop SymTab t → v { ( nurl_sym_free . t h ) } }
+% Drop SymTab { @ drop SymTab x → v { ( nurl_sym_free # i . x t ) } }
 
-@ symtab_new → SymTab { ^ @ SymTab { ( nurl_sym_new ) } }
+% NotSync SymTab {}
 
-@ symtab_def SymTab t s name s type → v { ( nurl_sym_def . t h name type ) }
+@ symtab_new → SymTab { ^ @ SymTab { # *u ( nurl_sym_new ) } }
 
-@ symtab_get SymTab t s name → s { ^ ( nurl_sym_get . t h name ) }
+@ symtab_def SymTab x s name s type → v { ( nurl_sym_def # i . x t name type ) }
+
+@ symtab_get SymTab x s name → s { ^ ( nurl_sym_get # i . x t name ) }

@@ -48,9 +48,9 @@ $ `stdlib/hal/virtio.nu`
 
 unsafe @ dev_base ( Vec u ) w → i { ^ # i ( vec_data [u] w ) }
 
-@ dev_set i base i off i val → v { ( mmio_write32 + base off # i32 val ) }
+unsafe @ dev_set i base i off i val → v { ( mmio_write32 + base off # i32 val ) }
 
-@ dev_get i base i off → i { ^ ( mmio_read32 + base off ) }
+unsafe @ dev_get i base i off → i { ^ ( mmio_read32 + base off ) }
 
 // A device that answers like QEMU's: magic, version 2, a device id,
 // VERSION_1 in the upper feature word and some device-specific bits in
@@ -77,7 +77,7 @@ unsafe @ dev_base ( Vec u ) w → i { ^ # i ( vec_data [u] w ) }
     ( dev_set base ( vio_reg_device_features ) ? == sel 1 hi lo )
 }
 
-@ main → i {
+unsafe @ main → i {
     // ── probe ────────────────────────────────────────────────────
     : ( Vec u ) w ( dev_new )
     : i base ( dev_base w )
@@ -200,7 +200,7 @@ unsafe @ dev_base ( Vec u ) w → i { ^ # i ( vec_data [u] w ) }
 // helpers are the device's side of that conversation: the same
 // handshake, with the window updated between the driver's steps.
 
-@ virtio_init_scripted i base i want_lo → b {
+unsafe @ virtio_init_scripted i base i want_lo → b {
     ( virtio_reset base )
     ( virtio_set_status base ( vio_status_acknowledge ) )
     ( virtio_set_status base ( vio_status_driver ) )
@@ -216,7 +216,7 @@ unsafe @ dev_base ( Vec u ) w → i { ^ # i ( vec_data [u] w ) }
 
 // The same, against a device that clears FEATURES_OK — the spec's way
 // of saying "I do not accept that set".
-@ virtio_init_refusing i base → b {
+unsafe @ virtio_init_refusing i base → b {
     ( virtio_reset base )
     ( virtio_set_status base ( vio_status_acknowledge ) )
     ( virtio_set_status base ( vio_status_driver ) )

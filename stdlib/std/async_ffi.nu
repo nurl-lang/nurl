@@ -18,7 +18,7 @@
 
 & `c` @ nurl_fiber_spawn_joinable *u fn *u env → i
 
-& `c` @ nurl_fiber_join i fiber → v
+unsafe & `c` @ nurl_fiber_join i fiber → v
 
 & `c` @ nurl_fiber_yield → v
 
@@ -26,9 +26,9 @@
 
 & `c` @ nurl_fiber_worker_id → i
 
-& `c` @ nurl_fiber_park_with_mutex i mutex_h → v
+unsafe & `c` @ nurl_fiber_park_with_mutex i mutex_h → v
 
-& `c` @ nurl_fiber_unpark i fiber_h → v
+unsafe & `c` @ nurl_fiber_unpark i fiber_h → v
 
 & `c` @ nurl_runtime_init i workers → v
 
@@ -52,27 +52,27 @@
 // NurlTcp pointer every nurl_tcp_* builtin traffics in, not an OS fd;
 // `nurl_tcp_get_fd` is the bridge to the reactor's fd-based API.
 
-& `c` @ nurl_tcp_get_fd i handle → i
+unsafe & `c` @ nurl_tcp_get_fd i handle → i
 
 // What a read/write on this socket should wait for, in milliseconds;
 // 0 = for ever. The fiber paths need it because they park on the
 // reactor instead of on SO_RCVTIMEO.
-& `c` @ nurl_tcp_timeout_ms i handle → i
+unsafe & `c` @ nurl_tcp_timeout_ms i handle → i
 
-& `c` @ nurl_tcp_set_nonblock i handle i on → v
+unsafe & `c` @ nurl_tcp_set_nonblock i handle i on → v
 
 // Absolute write budget shared by native syscalls, TLS records and fibers.
-& `c` @ nurl_tcp_set_write_deadline i handle i ns → v
+unsafe & `c` @ nurl_tcp_set_write_deadline i handle i ns → v
 
-& `c` @ nurl_tcp_write_deadline i handle → i
+unsafe & `c` @ nurl_tcp_write_deadline i handle → i
 
-& `c` @ nurl_tcp_write_wait_ms i handle → i
+unsafe & `c` @ nurl_tcp_write_wait_ms i handle → i
 
 // Wait for either readable(1) or writable(2) readiness on one fd.
 & `c` @ nurl_reactor_wait_io i fd i events i timeout_ms → i
 
-& `c` @ nurl_tcp_write_nowait i handle *u bytes i length → i
+unsafe & `c` @ nurl_tcp_write_nowait i handle *u bytes i length → i
 
-& `c` @ nurl_tcp_wait_io i handle i events i timeout_ms → i
+unsafe & `c` @ nurl_tcp_wait_io i handle i events i timeout_ms → i
 
-& `c` @ nurl_tcp_read_nowait i handle *u bytes i length → i
+unsafe & `c` @ nurl_tcp_read_nowait i handle *u bytes i length → i

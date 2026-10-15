@@ -110,7 +110,7 @@ $ `stdlib/core/slice.nu`
 
 @ __i_wrap i v i n → i { ^ - v * n / v n }
 
-unsafe @ ap_paste ( Vec String ) argv → i {
+@ ap_paste ( Vec String ) argv → i {
     : BxOpts o ( bx_getopt argv 1 `d:s` `delimiters=d,serial=s` )
     : ~ i rc 0
     ? ! ( bx_ok o ) { = rc 1 } {
@@ -175,7 +175,7 @@ unsafe @ ap_paste ( Vec String ) argv → i {
                         ?? ( vec_get [BufReader] rs j ) {
                             T br → {
                                 ? ( bufreader_read_line_into br line ) {
-                                    ( string_push_bytes row # *u ( string_data line ) ( string_len line ) )
+                                    ( string_append row line )
                                     = any T
                                 } { : b _s ( vec_set [i] alive j 0 ) }
                             }
@@ -185,7 +185,7 @@ unsafe @ ap_paste ( Vec String ) argv → i {
                     = j + j 1
                 }
                 ? any {
-                    ( string_push_bytes out # *u ( string_data row ) ( string_len row ) )
+                    ( string_append out row )
                     ( string_push_char out 10 )
                 } { = more F }
                 ? > ( string_len out ) 32768 { ( bx_write out ) ( string_clear out ) } {}
@@ -206,7 +206,7 @@ unsafe @ ap_paste ( Vec String ) argv → i {
 
 // ── fold ──────────────────────────────────────────────────────────
 
-unsafe @ ap_fold ( Vec String ) argv → i {
+@ ap_fold ( Vec String ) argv → i {
     // `fold -20` is the historical spelling.
     : ( Vec String ) av ( vec_new [String] )
     : i argn ( vec_len [String] argv )
@@ -259,7 +259,7 @@ unsafe @ ap_fold ( Vec String ) argv → i {
                                             } { = b - b 1 }
                                         }
                                     } {}
-                                    ( string_push_bytes out # *u + # i ( string_data line ) from - to from )
+                                    ( string_push_window out ( string_bytes line ) from - to from )
                                     ( string_push_char out 10 )
                                     = from to
                                 }
@@ -487,7 +487,7 @@ unsafe @ ap_fold ( Vec String ) argv → i {
 
 // ── dos2unix / unix2dos ───────────────────────────────────────────
 
-unsafe @ __crlf_convert s path b to_dos b in_place → i {
+@ __crlf_convert s path b to_dos b in_place → i {
     : ~ b ok T
     : ( Vec u ) data ( bx_slurp path ok )
     ? ! ok {
@@ -495,13 +495,13 @@ unsafe @ __crlf_convert s path b to_dos b in_place → i {
     } {}
     : String out ( string_new )
     : i n ( vec_len [u] data )
-    : *u p ( vec_data [u] data )
+    : ( Slice u ) p ( slice_from_vec [u] data )
     : ~ i i 0
     ~ < i n {
-        : i c & 255 # i . p i
+        : i c & 255 # i ( slice_at [u] p i )
         ? == c 13 {
             // A lone CR is data; a CR before LF is a line ending.
-            ? & < + i 1 n == 10 & 255 # i . p + i 1 {} { ( string_push_char out 13 ) }
+            ? & < + i 1 n == 10 & 255 # i ( slice_at [u] p + i 1 ) {} { ( string_push_char out 13 ) }
         } {
             ? == c 10 {
                 ? to_dos { ( string_push_char out 13 ) } {}
@@ -619,26 +619,26 @@ unsafe @ __crlf_convert s path b to_dos b in_place → i {
 
 // Two historical checksums, neither of them a hash: the BSD one is a
 // 16-bit rotate-and-add, the System V one a byte sum folded twice.
-unsafe @ __sum_bsd ( Vec u ) data → i {
+@ __sum_bsd ( Vec u ) data → i {
     : i n ( vec_len [u] data )
-    : *u p ( vec_data [u] data )
+    : ( Slice u ) p ( slice_from_vec [u] data )
     : ~ i s 0
     : ~ i i 0
     ~ < i n {
         = s | >> s 1 << & s 1 15
-        = s & + s & 255 # i . p i 65535
+        = s & + s & 255 # i ( slice_at [u] p i ) 65535
         = i + i 1
     }
     ^ s
 }
 
-unsafe @ __sum_sysv ( Vec u ) data → i {
+@ __sum_sysv ( Vec u ) data → i {
     : i n ( vec_len [u] data )
-    : *u p ( vec_data [u] data )
+    : ( Slice u ) p ( slice_from_vec [u] data )
     : ~ i s 0
     : ~ i i 0
     ~ < i n {
-        = s + s & 255 # i . p i
+        = s + s & 255 # i ( slice_at [u] p i )
         = i + i 1
     }
     : i r + & s 65535 >> s 16

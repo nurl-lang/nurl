@@ -21,15 +21,14 @@ $ `src/dpthead.nu`
     ^ 1
 }
 
-unsafe @ __dt_up GpuKit kit * u raw i off i n → GkBuf {
-    : ( Vec f ) host ( vec_with_cap [f] n )
-    : b _l ( vec_set_len [f] host n )
-    : *f hp ( vec_data [f] host )
+unsafe @ __dt_up GpuKit kit ( Slice u ) raw i off i n → GkBuf {
+    : ( Vec f ) host ( vec_zeroed [f] n )
+    : ( Slice f ) hp ( slice_from_vec [f] host )
     : ~ i j 0
     ~ < j n {
         : i o * + off j 4
-        : i bits | # i . raw o | << # i . raw + o 1 8 | << # i . raw + o 2 16 << # i . raw + o 3 24
-        = . hp j # f ( bits_to_f32 bits )
+        : i bits | # i ( slice_at [u] raw o ) | << # i ( slice_at [u] raw + o 1 ) 8 | << # i ( slice_at [u] raw + o 2 ) 16 << # i ( slice_at [u] raw + o 3 ) 24
+        ( slice_put [f] hp j # f ( bits_to_f32 bits ) )
         = j + j 1
     }
     : GkBuf b ( gk_dbuf_new kit n GK_F32 )
@@ -38,21 +37,19 @@ unsafe @ __dt_up GpuKit kit * u raw i off i n → GkBuf {
 }
 
 unsafe @ __dt_dump GpuKit kit s dir s name GkBuf b i n → b {
-    : ( Vec f ) host ( vec_with_cap [f] n )
-    : b _hl ( vec_set_len [f] host n )
+    : ( Vec f ) host ( vec_zeroed [f] n )
     ? ( gk_dbuf_download kit b host ) {} { ^ F }
-    : ( Vec u ) out ( vec_with_cap [u] * n 4 )
-    : b _ol ( vec_set_len [u] out * n 4 )
-    : *u op ( vec_data [u] out )
-    : *f hp ( vec_data [f] host )
+    : ( Vec u ) out ( vec_zeroed [u] * n 4 )
+    : ( Slice u ) op ( slice_from_vec [u] out )
+    : ( Slice f ) hp ( slice_from_vec [f] host )
     : ~ i j 0
     ~ < j n {
-        : i bits # i ( f32_to_bits # f32 . hp j )
+        : i bits # i ( f32_to_bits # f32 ( slice_at [f] hp j ) )
         : i o * j 4
-        = . op o # u & bits 255
-        = . op + o 1 # u & >> bits 8 255
-        = . op + o 2 # u & >> bits 16 255
-        = . op + o 3 # u & >> bits 24 255
+        ( slice_put [u] op o # u & bits 255 )
+        ( slice_put [u] op + o 1 # u & >> bits 8 255 )
+        ( slice_put [u] op + o 2 # u & >> bits 16 255 )
+        ( slice_put [u] op + o 3 # u & >> bits 24 255 )
         = j + j 1
     }
     : String p ( string_from dir )
@@ -94,9 +91,9 @@ unsafe @ main → i {
     : GpuKit kit ( gk_open_best )
     ? ( gk_ok kit ) {} { ^ ( __dt_die `no compute device` ) }
     : Dpt d ( dp_load lw kit )
-    ? ( lw_ok lw ) {} { ^ ( __dt_die ( lw_error lw ) ) }
+    ? ( lw_ok lw ) {} { ^ ( __dt_die ( string_data ( lw_error lw ) ) ) }
 
-    : *u rp ( vec_data [u] raw )
+    : ( Slice u ) rp ( slice_from_vec [u] raw )
     : i per * np 1536
     : GkBuf h0 ( __dt_up kit rp 0 per )
     : GkBuf h1 ( __dt_up kit rp per per )

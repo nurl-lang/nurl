@@ -153,6 +153,16 @@ owns its text, as a mutable string binding does: a fresh string assigned
 to it — from a call that hands it over on every path, or on this call
 only (its guard slot says so, h202) — is released by the next assignment.
 
+State that every thread shares and safe code reaches lives in a global
+**set at start** instead: `: ( Locked T ) g ( make )` calls `make`, a
+function of no arguments, once before `main`, and nothing writes `g`
+afterwards. Its type must synchronise itself (`( Locked T )`,
+`( Arc T )`, `( Channel T )`, `Mutex`, `Cond`, `Semaphore`) — a
+`( Vec T )` pushed from two threads through it would race, so it is
+rejected (h263). A read borrows the handle; `: ( Locked T ) h g`, a
+struct field or a `^ g` clone it, so the global is never moved or
+dropped.
+
 ### Parameter passing conventions
 
 A parameter has one of three conventions:
@@ -488,7 +498,11 @@ Fetch the view again after the mutation. A view stays a view wherever it
 goes: held in a `Slice` (`slice_from_vec`, `slice_of_str`, a CSV cell
 from `csv_table_view`), a struct, an Option or a container, captured by a
 closure, stored in a global or returned from a function, it is still a
-view of its source and ends with it. The rule applies in `unsafe`
+view of its source and ends with it. Handed to a function that stores it
+into another of its arguments — the first, or one passed `inout`,
+wherever it sits (`( add h ( slice_from_vec [f] v ) )` with `add` pushing
+the slice into `. h fs`) — it makes that argument's value hold the view,
+as a `vec_push` written in place would. The rule applies in `unsafe`
 code too, because it is decided from the program text, not from the
 capacity at run time. A mutation inside one `?` arm does not end a view
 in the other arm, and a function that mutates the container passed to it
@@ -599,11 +613,40 @@ A panic is not outside the model: what a panic abandons is reclaimed
   not possible; that is the move. Take a copy (`string_clone`,
   `vec_clone`, `mem_dup`) or restructure so the consumer borrows.
 - **Use the safe element access.** `vec_at`, `vec_put` and `vec_get` are
-  bounds-checked and compile to the same loop as raw pointer access.
-  `vec_data` + `unsafe` is not faster.
+  bounds-checked and compile to the same loop as raw pointer access when
+  the loop only reads. A loop that writes one `Vec` while reading others
+  (a kernel: `c[k] = a[k] + b[k]`) indexes `Slice`s of them instead
+  (`slice_from_vec`, `slice_at`, `slice_put`): a slice keeps its data
+  pointer and length in registers, so the bounds checks leave the loop
+  and it vectorises exactly as raw pointer code does, where `vec_at` /
+  `vec_put` re-read both from each Vec's control block past every store.
+  A matrix row, or any run a loop walks to its length, is a
+  `slice_window` (`slice_prefix` from 0): it is checked once, and the
+  loop over it needs no check per element. Several windows of one `Vec`
+  may be read and written together when its elements own nothing.
+  `vec_data` + `unsafe` is not faster than either — `mlp`'s training loop,
+  rewritten over windows, runs 26% faster than its raw-pointer form.
+  A buffer a library owns is lent the same way: `gpu_host_f32` views a
+  GPU staging buffer as a `Slice f32` that lives no longer than it, and
+  yoloe's mask and image-packing loops over windows of it run 10–30%
+  faster than the `nurl_peek_f32` / `nurl_poke_f32` loops they replace.
+  A file is lent the same way: `file_map` (stdlib/std/mmap.nu) maps it
+  and `mapped_bytes` views it as a `Slice u` held to the `MappedFile`;
+  binary formats read and write little-endian words in a byte view with
+  `slice_u16_le` / `slice_u32_le` / `slice_u64_le` and their
+  `slice_put_*` twins — one check per word, the bytes fused into one
+  load by LLVM. safetensor's dequantiser reads that way, 6–24% faster
+  than the pointer loops it replaces; a view that has to outlive its
+  storage becomes a Vec of its own with `slice_to_vec`.
+- **Put a contract where it is kept.** A function that only its caller
+  can make sound (an address it is handed, a size it trusts, kernel code
+  it runs) is `raw @` (spec §3.3e): the caller that allocated, checked or
+  wrote it is the `unsafe` one, and the code above that stays safe.
 - **Share mutable state through a handle.** Between threads, send it
   through a `Channel` or keep it in a `Locked` (§6.5); an `Arc` shares a
-  value nobody changes. Within a thread, to share a closure beyond the
+  value nobody changes. Independent work over an index range is
+  `par_map_index n threads f` (stdlib/std/par.nu): the results come back
+  by index, with no result slot handed to a thread by its address. Within a thread, to share a closure beyond the
   data it mutates, move that data into a heap-backed handle and capture
   the handle by value.
 - **Graphs.** A graph that is built once can be an `Rc` / `Arc` structure.
@@ -885,6 +928,57 @@ or becomes the result when the callee hands it back (h234). `mem_dup` —
 and so every generic that copies its `T`, `box_clone` among them — is
 rejected for a value that cannot be copied (h235).
 
+Taking the packages' `unsafe` apart found four more. Every copy of an
+`Rc` is the same value, and a view of it (`rc_get`) ended only when the
+handle it came from was handed to `rc_set` — not another handle on the
+same value: a clone (h245), a field holding one (h247), or a parameter
+the caller filled with the same value (h246). The walk now ends the
+borrows of every `( Rc T )` handle a function holds, of that type, when
+any of them is handed to a call that may drop or replace what it holds.
+And `vec_put_back` took on trust that `x` came out of slot `i`: written
+back into another slot, two slots held one value (h248). It is raw, for
+`unsafe` code, as `mem_put_back` is.
+
+And three were in the standard library's surface rather than the
+checker: functions that take a runtime handle — the address of the
+runtime's record for a socket — as a plain integer were callable from
+safe code, so a made-up number was read as one (`tcp_conn_view`, h249), or
+freed (`nurl_tcp_close`, a preamble builtin, h250; `nurl_udp_close`, a
+foreign function the library declares, h251). They are raw now: the
+library declares such a foreign function `unsafe & …` and marks such a
+builtin raw, and a program reaches sockets through `TcpConn` (with
+`tcp_starttls` and `tls_accept_conn` for a TLS upgrade).
+
+The library's raw symbol table was the same: `nurl_sym_*`
+(stdlib/core/symtab.nu) took the table's address as a plain integer (h252),
+and the owning `SymTab` around it could be built from a made-up number
+(h253) or shared between threads in an `Arc` (h254). The raw table is
+`unsafe` only; `SymTab` is sealed (only `symtab_new` makes one), moves
+rather than copies, and is `% NotSync`.
+
+The unikernel HAL was another of the kind: `mmio_write32` and the
+`virtio_*` / `virtq_*` helpers take a physical address as an `i`, so safe
+code wrote to a made-up address (h255). They are raw now; a driver's
+functions that reach a device register are `unsafe`. And the file layer:
+`file_from_raw` took any string as a C stream and closed it with its
+`File`, and `file_raw` handed a `File`'s `FILE*` out as text (h256). Both
+are raw; `file_is_open` answers what a caller used the stream for.
+
+Packages had the same shape where the language could not say it: a
+function whose soundness rests on its caller — gpukit's `gk_run` and
+`gk_run_dev` compile and launch kernel source over device addresses
+passed as integers, `gk_buf_wrap` takes any integer as device memory —
+could only be marked `unsafe`, which promises safety to every caller, so
+safe code reached them with a made-up address or a kernel of its own.
+Grammar v2.9's `raw` (spec §3.3e) puts that promise on the caller: these
+are `raw @`, `GkBuf` / `GkMemImpl` / onnx's `RTensor` are `raw :` structs,
+and the operations above them check what the kernels index (sizes
+through overflow-checked products, a view inside its buffer, an
+expression a kernel splices in limited to `x`, numbers and math
+functions) before they launch. onnx's tensors also carry the engine and
+run they came from: a tensor of an earlier run, whose device memory
+rt_reset released, is refused rather than read.
+
 The rules that carry it:
 
 - **An owned value moves.** Storing it into an aggregate, an Option or a
@@ -1044,7 +1138,9 @@ operations.
 *State threads share and change is a `Locked [T]`* (stdlib/std/thread.nu):
 a shared handle of its own over a mutex and the value, reached only
 through `locked_with` (runs a closure on the value with the lock held),
-`locked_get` (a copy) and `locked_set`. The lock that guards the data is
+`locked_get` (a copy), `locked_set`, and `locked_take` / `locked_restore`
+(the value checked out to one thread to change in place, every other
+operation waiting until it is back). The lock that guards the data is
 the one its type names, so no lock is counted and none can be forgotten.
 State one thread changes is an `Rc`; a value built first is shared whole
 with `arc_new`.
@@ -1312,7 +1408,7 @@ are dropped, moved and copied by the same rules:
 | `( mem_forget x )` | gives up `x`'s value without releasing it; `unsafe` only |
 | `( mem_replace [T] place x )` | `x` goes into `place` (a mutable binding, a field of one, or a field through a pointer) and what `place` held comes back, owned; nothing is dropped or copied (stdlib/core/mem.nu, `unsafe`) |
 | `( vec_retain [A] v keep )` | the elements `keep` answers T for stay, in order; the rest are dropped, in place (stdlib/core/vec.nu) |
-| `( vec_put_back [A] v i x )` | `x`, read out of slot `i` and updated, goes back: the check-in of a table that lends its records by value; a function handing its parameter on to it writes it back too, for its own callers |
+| `( vec_put_back [A] v i x )` | `x`, read out of slot `i` and updated, goes back: the check-in of a table that lends its records by value; a function handing its parameter on to it writes it back too, for its own callers. Nothing checks that `i` is the slot `x` was read from, so it is `unsafe` only, as `mem_put_back` is (h248) |
 
 **Foreign results a caller owns.** A C function returning a string it
 allocated declares its result `→ sink s` (spec §7.2): the binding the
@@ -1357,22 +1453,43 @@ release it, so no handle hook releases anything itself
 one is raw (the standard library's, or `unsafe` code's); a zero handle is
 `# Regex # s 0`.
 
-A program's own handle — one state that every copy shares — wraps an
-`Arc` (an `Rc` when the state can hold the handle again, so the cycle is
-collected), and both hooks are safe code:
+A program's own handle — one state that every copy shares — wraps a
+shared handle of the standard library, and every hook and accessor is safe
+code. Which one is decided by what the state does:
+
+| The state | Its handle holds | Read | Changed |
+|---|---|---|---|
+| built once, then only read (an index, a model, a dataset) | `( Arc Impl )` | `arc_get` lends it | never: build it whole, then `arc_new` |
+| changed, one thread (a builder, a cursor, a parser's state) | `( Rc Impl )` | `rc_get` lends it | `rc_take` … `rc_restore` |
+| changed, shared between threads (a cache, a connection pool) | `( Locked Impl )` | `locked_get` copies it | `locked_take` … `locked_restore` |
+| read on every request, changed rarely (keys, a policy) | `( Locked ( Arc Impl ) )` | `locked_get` shares the snapshot | take it, `arc_new` a changed copy, restore |
 
 ```
-: Cache { ( Arc CacheImpl ) a }
-@ Cache_share Cache h → Cache { ^ @ Cache { ( arc_clone [CacheImpl] . h a ) } }
+: Cache { ( Rc CacheImpl ) a }
+@ Cache_share Cache h → Cache { ^ @ Cache { ( rc_clone [CacheImpl] . h a ) } }
 @ Cache_drop sink Cache h → v {}
-@ cache_new → Cache { ^ @ Cache { ( arc_new [CacheImpl] @ CacheImpl { … } ) } }
+@ cache_new → Cache { ^ @ Cache { ( rc_new [CacheImpl] @ CacheImpl { … } ) } }
+
+@ cache_hits Cache h → i { ^ . ( rc_get [CacheImpl] . h a ) hits }
+
+@ cache_put Cache h s key s val → v {
+    : ~ CacheImpl c ( rc_take [CacheImpl] . h a )   // the state, checked out
+    ( __cache_put c key val )                        // helpers take `inout CacheImpl`
+    ( rc_restore [CacheImpl] . h a c )               // …and checked back in
+}
 ```
 
-The empty hook makes `Cache` a handle; its `Arc` field is dropped once the
-hook returns, and the last owner releases the state. Only reaching into
-the state through a pointer (`arc_ptr`) is `unsafe`. Every package's
-handles are written this way; the counted blocks of `stdlib/core/rcbox.nu`
-are the standard library's own.
+The empty hook makes `Cache` a handle; its field is dropped once the hook
+returns, and the last owner releases the state. A check-out moves the
+state into a local — nothing is copied — and every operation on the value
+through any copy of the handle panics (`Rc`) or waits (`Locked`) until it
+is restored; one never restored (its owner panicked) leaves the handle
+empty, and nothing leaks. A helper that changes the state takes it
+`inout`, so a public function checks it out once and the helpers it calls
+work on the local. Reaching into the state through a pointer (`arc_ptr`,
+`rc_ptr`) is `unsafe`, and changing an `Arc`'s payload that way is a data
+race once the handle crosses a thread; the counted blocks of
+`stdlib/core/rcbox.nu` are the standard library's own.
 
 **Raw memory reached from an `unsafe` structure.** A struct behind a
 `nurl_alloc` pointer is not dropped by the compiler. A parameter stored

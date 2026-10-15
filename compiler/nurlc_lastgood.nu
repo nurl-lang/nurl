@@ -160,6 +160,12 @@
 : ~ b g_origin_arg_str F  // the argument origin_call_arg records is a raw string the compiler manages
 : ~ i g_use_ownstr 0  // a return went through __nurl_ownstr (gen_ret)
 : ~ s g_bck_own_params ``  // the parameters the function being walked owns (a safe `sink s`)
+// The bindings and field paths of the function being walked that hold an
+// `Rc` handle, as `name=type` words (bck_note_rc_arg). Every copy of an Rc
+// is the same value, so a call that may drop or replace what one handle
+// holds ends the borrows of every other handle of the same type: they may
+// be the same value (bck_borrow_sweep).
+: ~ s g_bck_rcty ``
 // 1 once the program declares a `% Drop` impl of its own (scan_impl_decl):
 // until then no type has one, and the questions that walk a struct's
 // fields looking for one answer at once.
@@ -2442,6 +2448,9 @@ unsafe @ emit_coverage_modules s module → b {
 // `--unsafe-report`: the program's own `unsafe` functions (outside the
 // standard library), one `file:line name` per line — the surface a
 // reviewer has to trust.
+// > 0 while an arm of a `?` whose condition folded to a constant is
+// generated: code that never runs, for this instance (gen_cond).
+: ~ i g_dead_arm 0
 : ~ i g_unsafe_report 0
 : ~ s g_unsafe_list ``
 
@@ -11354,7 +11363,8 @@ unsafe @ nurl_lex_peek4_type i h → i {
     // A value that cannot be copied (a `% Drop` with no clone): no copy can
     // be made — a generic copying its `T` (box_clone, rc payloads) is
     // instantiated with one (h235).
-    ? & ( __type_needs_drop ty syms ) ! ( __clone_supported ty syms ) {
+    // (Not in an arm a constant condition left dead: it never runs.)
+    ? & & ( __type_needs_drop ty syms ) ! ( __clone_supported ty syms ) == 0 g_dead_arm {
         ? ( __nc_drop_ty ty ) {
             ( die lex ( nurl_str_cat3 `'mem_dup' would copy a '` ( llvm_to_nurl ty ) `', and it cannot be copied: it has a '% Drop' of its own and no clone, so the copy and the original would both release it. A generic that copies its T (box_clone, a container's clone) cannot be used with this type; move the value instead, or give the type a clone.` ) )
         } {}
@@ -14505,6 +14515,11 @@ unsafe @ bck_check_lit_moves i lex i line i col s what s tab i scmask s moved s 
             ( __clo_effect_note arg_froot call_name arg_idx )
             ( __drop_note arg_froot call_name arg_idx )
         } {}
+        // (An Rc handed to a call: the walk asks which handles may be the
+        // same value.)
+        ? ( is_ident_tok bck_arg_tt ) { ( bck_note_rc_arg bck_arg_val at ) } {
+            ? != 0 ( nurl_str_len arg_froot ) { ( bck_note_rc_arg arg_froot at ) } {}
+        }
         // (A value that holds nothing — a number, a struct of numbers — is
         // a copy: there is no move to decide and nothing to lend.)
         ? & & & ( is_ident_tok bck_arg_tt )
@@ -16028,6 +16043,10 @@ unsafe @ gen_cond i lex i syms i cg → s {
     // Allow non-i1 integer conditions (e.g. `? & i64a i64b { … }`) by
     // narrowing to i1 via `icmp ne … 0`.
     = cv ( coerce_to_i1 lex syms cv ct cg )
+    // A condition folded to a constant (`( mem_ts_cyclic [T] )` in a
+    // generic instance) leaves one arm dead: never run, for this instance.
+    : b c_dead_then ( seq cv `false` )
+    : b c_dead_else ( seq cv `true` )
     : s lt ( nurl_cg_lbl cg `then` )
     : s le ( nurl_cg_lbl cg `else` )
     : s lend ( nurl_cg_lbl cg `end` )
@@ -16121,7 +16140,9 @@ unsafe @ gen_cond i lex i syms i cg → s {
     : i t_sxn0 g_sx_n
     : i t_mp0 g_member_path_on
     = g_member_path_on ? & != 0 __sx_me == t_tt0 TT_DOT 1 g_member_path_on
+    = g_dead_arm + g_dead_arm ? c_dead_then 1 0
     : ~ s tv ( gen_expr lex syms cg )
+    = g_dead_arm - g_dead_arm ? c_dead_then 1 0
     = g_member_path_on t_mp0
     : s t_sx ? != 0 __sx_me ( __sx_operand syms t_tt0 t_v0 ( nurl_get_last_type ) ( __sx_froot syms t_tt0 ( nurl_get_last_type ) ) t_sxn0 ) ``
     ( bck_save_expr_carriers syms `__last_join_params__` t_tt0 t_v0 )
@@ -16307,7 +16328,9 @@ unsafe @ gen_cond i lex i syms i cg → s {
     : i e_sxn0 g_sx_n
     : i e_mp0 g_member_path_on
     = g_member_path_on ? & != 0 __sx_me == e_tt0 TT_DOT 1 g_member_path_on
+    = g_dead_arm + g_dead_arm ? c_dead_else 1 0
     : ~ s ev ( gen_expr lex syms cg )
+    = g_dead_arm - g_dead_arm ? c_dead_else 1 0
     = g_member_path_on e_mp0
     : s e_sx ? != 0 __sx_me ( __sx_operand syms e_tt0 e_v0 ( nurl_get_last_type ) ( __sx_froot syms e_tt0 ( nurl_get_last_type ) ) e_sxn0 ) ``
     ( bck_save_expr_carriers syms `__last_join_params__` e_tt0 e_v0 )
@@ -22798,6 +22821,7 @@ unsafe @ mem_own_add_user_drop i syms i cg s ptr s vt → v {
         ( nurl_sym_set g_bck `pending_kind` `` )
         ( nurl_sym_set g_bck `pmoves` `` )
         ( nurl_sym_set g_bck `pmaybes` `` )
+        = g_bck_rcty ``
         = g_bck_depth 0
         = g_bck_cap_names ``
         = g_bck_cap_via ``
@@ -23122,10 +23146,17 @@ unsafe @ __trust_key s path → s {
 
 // The raw-memory primitives: what they hand out or take is memory the
 // checker cannot follow.
+// The standard library's functions over a runtime handle passed as a plain
+// integer (the socket of a TcpConn, a TLS session's transport): a number
+// that is not a live handle is an address they read or free.
+@ bck_raw_handle_call s base → b {
+    ^ ( str_contains_word `tcp_conn_view tcp_conn_adopt tls_attach tls_attach_alpn tls_attach_resume tls_attach_verify tls_attach_alpn_verify tls_attach_full tls_accept tls_accept_alpn tls_accept_rsa tls_accept_rsa_alpn tls_accept_mldsa tls_accept_mldsa_alpn tls_accept_dual_alpn` base )
+}
+
 @ bck_raw_call s base → b {
     // (`vec_set_len` declares raw writes initialised: the elements it
     // exposes are whatever the memory held.)
-    ^ ( str_contains_word `nurl_alloc nurl_zalloc nurl_free nurl_realloc alloc zalloc mem_forget nurl_peek nurl_poke nurl_vctl_get nurl_vctl_set nurl_vctl_data nurl_memcpy nurl_memmove nurl_memset malloc calloc realloc free memcpy memmove memset nurl_closure_drop nurl_closure_clone rcbox_ptr rcbox_new rcbox_zero rcbox_share rcbox_release shared_new shared_zero shared_null shared_ptr shared_addr shared_publish_once shared_into_word shared_from_word vec_publish_once arc_into_word arc_from_word arc_word_share mem_take mem_put_back mem_addr vec_set_len` base )
+    ^ ( str_contains_word `nurl_alloc nurl_zalloc nurl_free nurl_realloc alloc zalloc mem_forget nurl_peek nurl_poke nurl_vctl_get nurl_vctl_set nurl_vctl_data nurl_memcpy nurl_memmove nurl_memset malloc calloc realloc free memcpy memmove memset nurl_closure_drop nurl_closure_clone rcbox_ptr rcbox_new rcbox_zero rcbox_share rcbox_release shared_new shared_zero shared_null shared_ptr shared_addr shared_publish_once shared_into_word shared_from_word vec_publish_once arc_into_word arc_from_word arc_word_share mem_take mem_put_back vec_put_back mem_addr vec_set_len` base )
 }
 
 // A function that takes a raw pointer (`*T` in a parameter's type, outside
@@ -23206,6 +23237,10 @@ unsafe @ __callee_decl_name s cn → s {
     // other thread can see the Arc may.
     ? ( seq base `arc_set` ) {
         ( die lex `'arc_set' replaces an Arc's payload in place, but an Arc's payload is frozen once made: every thread holding a clone reads it without a lock, so replacing it races them. arc_new the new value as an Arc of its own; keep state one thread changes in an Rc; put state threads share and change in a Locked (stdlib/std/thread.nu) and replace it with locked_set, which holds its lock. Only an 'unsafe' function, vouching that no other thread can see this Arc, may call arc_set.` )
+        ^ v
+    } {}
+    ? | != 0 ( nurl_sym_len2 syms call_name `__ffi_raw` ) ( bck_raw_handle_call base ) {
+        ( die lex ( nurl_str_cat3 `'` call_name `' takes a runtime handle — the address of the runtime's own record for a socket, a process or a stream — as a plain integer, and reads or frees what is there: a number that is not a live handle is memory the program does not own. Only an 'unsafe' function may call it. Use the handle type the standard library wraps it in (TcpConn, UdpSocket, ProcChild, …), whose operations are safe.` ) )
         ^ v
     } {}
     ? & != 0 ( nurl_sym_len2 syms call_name `__ffi` ) ! ( bck_trusted_file ( nurl_sym_get2 syms call_name `__ffi_src` ) ) {
@@ -27271,6 +27306,26 @@ unsafe @ bck_sx_split s args → s {
     ^ ( str_contains_word `vec_push vec_insert vec_extend vec_extend_range vec_append vec_reserve vec_shrink_to_fit vec_resize_zeroed vec_swap vec_reverse vec_sort vec_sort_by deque_push_back deque_push_front string_reserve string_reserve_at string_commit string_insert string_append rc_clone rc_downgrade arc_clone` base )
 }
 
+// `name` (a binding or a field path) holds an `( Rc T )` of type `ty`.
+@ bck_note_rc_arg s name s ty → v {
+    ? | == g_borrowck 0 != g_bck_rec_off 0 { ^ } {}
+    ? == 0 ( nurl_str_starts ( nurl_llty ty ) `%Rc__` ) { ^ } {}
+    : s w ( nurl_str_cat3 name `=` ( nurl_llty ty ) )
+    ? ! ( str_contains_word g_bck_rcty w ) { = g_bck_rcty ? == 0 ( nurl_str_len g_bck_rcty ) w ( nurl_str_cat3 g_bck_rcty ` ` w ) } {}
+}
+
+// The Rc type `name` was seen holding in this function, or ``.
+@ bck_rc_type_of s name → s {
+    ? == 0 ( nurl_str_len g_bck_rcty ) { ^ `` } {}
+    : s key ( nurl_str_cat name `=` )
+    : ~ s rest ( nurl_str_cat g_bck_rcty `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? != 0 ( nurl_str_starts w key ) { ^ ( nurl_str_slice w ( nurl_str_len key ) - ( nurl_str_len w ) ( nurl_str_len key ) ) } {}
+    }
+    ^ ``
+}
+
 @ bck_borrow_sweep s ist s st s rec i kc → s {
     : ~ s out st
     : s wn ( bck_field rec 1 )
@@ -27315,6 +27370,17 @@ unsafe @ bck_sx_split s args → s {
                         = out ( bck_view_end out sid ( bck_field_int rec 3 ) ( nurl_str_cat4 pw0 ( bck_fn_show ( bck_field rec 5 ) ) `', which may move or free its buffer` `` ) )
                     } {}
                 }
+            } {}
+        } {}
+        // Another handle of the same `( Rc T )` type, which may be the same
+        // value: what the call drops through it is what this borrows from.
+        ? & & & == 0 ( nurl_str_len why ) ! hit >= wid 0 | | | == kc 9 == kc 12 == kc 13 == kc 32 {
+            : s wty ( bck_rc_type_of ( nurl_sym_get2 g_bck `rv_` wn ) )
+            ? & & != 0 ( nurl_str_len wty ) != rid wroot ( seq wty ( bck_rc_type_of ( nurl_sym_get2 g_bck `rv_` srcs ) ) ) {
+                ? ( bck_callee_drops_elems ( bck_field rec 5 ) ( bck_field rec 6 ) ) {
+                    = why ( nurl_str_cat4 `'` ( bck_name_show ( nurl_sym_get2 g_bck `rv_` wn ) ) `', which may be another handle on the same Rc value, was passed to '` ( nurl_str_cat ( bck_fn_show ( bck_field rec 5 ) ) `', which may drop or replace what it holds` ) )
+                    = eonly T
+                } {}
             } {}
         } {}
         ? != 0 ( nurl_str_len why ) {
@@ -28161,6 +28227,7 @@ unsafe @ bck_loop_mask s pre s post → s {
     : i n ? == 0 ( nurl_str_len ns ) 0 ( nurl_str_to_int ns )
     : s ix ( nurl_str_int n )
     ( nurl_sym_def g_deferred_bck ( nurl_str_cat `o` ix ) g_bck_own_params )
+    ( nurl_sym_def g_deferred_bck ( nurl_str_cat `r` ix ) g_bck_rcty )
     ( nurl_sym_def g_deferred_bck ( nurl_str_cat `s` ix )
     ( nurl_sym_get g_bck `stmts` ) )
     ( nurl_sym_def g_deferred_bck ( nurl_str_cat `p` ix ) params )
@@ -28193,6 +28260,7 @@ unsafe @ bck_loop_mask s pre s post → s {
         ( nurl_sym_set g_bck `reads` `` )
         = g_bck_cap_via ( nurl_sym_get g_deferred_bck ( nurl_str_cat `c` ix ) )
         = g_bck_own_params ( nurl_sym_get g_deferred_bck ( nurl_str_cat `o` ix ) )
+        = g_bck_rcty ( nurl_sym_get g_deferred_bck ( nurl_str_cat `r` ix ) )
         ( bck_analyze ( nurl_sym_get g_deferred_bck ( nurl_str_cat `p` ix ) ) )
         = i + i 1
     }
@@ -35209,12 +35277,15 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
         = fvs ( str_skip_word fvs )
         = ty ( nurl_str_cat ty `, i1*` )
     }
-    // …then one `i1` per capture the env owns under a flag (g_nc_own_caps).
+    // …then one `i1` per capture the env owns under a flag (g_nc_own_caps),
+    // and the env's own address: a copy (nurl_closure_clone) reaches the
+    // env it was copied from through it, to take those captures over.
     : ~ s ocs ( nurl_str_cat g_nc_own_caps `` )
     ~ != 0 ( nurl_str_len ocs ) {
         = ocs ( str_skip_word ocs )
         = ty ( nurl_str_cat ty `, i1` )
     }
+    ? != 0 ( nurl_str_len g_nc_own_caps ) { = ty ( nurl_str_cat ty `, i8*` ) } {}
     = ty ( nurl_str_cat ty ` }` )
     ty
 }
@@ -35358,14 +35429,23 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
             = drop_body ( nurl_str_cat4 drop_body ( nurl_str_cat3 fg fl br ) ( nurl_str_cat vg vl ) dc )
             = ofi + ofi 1
         }
-        ( __emit_rt_decl syms `declare void @nurl_panic(i8* nocapture) noreturn` )
-        = clone_body ( nurl_str_cat3 clone_body `  call void @nurl_panic(i8* @__cclone.` ( nurl_str_cat fname `)\n` ) )
+        // A copy takes the captures over (h240): the env it was copied
+        // from — reached through its own address, the field after the
+        // flags — gives them up, so one of the two releases each, and the
+        // other, run, stops as one run after the move does.
+        : s sfi ( nurl_str_int ofi )
+        : s sgep ( nurl_str_cat4 `  %nsp = getelementptr ` struct_name ( nurl_str_cat4 `, ` struct_name `* %t, i32 0, i32 ` sfi ) `\n` )
+        : ~ s cb ( nurl_str_cat4 sgep `  %nss = load i8*, i8** %nsp\n  %nsr = bitcast i8* %nss to ` struct_name `*\n` )
+        : ~ i cfi + field_idx ( count_words ( __byref_flag_vars captured_vars syms ) )
+        ~ < cfi ofi {
+            : s ck ( nurl_str_int cfi )
+            = cb ( nurl_str_cat4 cb ( nurl_str_cat4 `  %nsf` ck ` = getelementptr ` struct_name ) ( nurl_str_cat4 `, ` struct_name `* %nsr, i32 0, i32 ` ck ) ( nurl_str_cat3 `\n  store i1 0, i1* %nsf` ck `\n` ) )
+            = cfi + cfi 1
+        }
+        = clone_body ( nurl_str_cat3 clone_body cb `  store i8* %env, i8** %nsp\n` )
         : s m1 `a closure that moved out a value it cannot copy was run again\00`
-        : s m2 `a closure owning a value it cannot copy was copied\00`
-        = msgs ( nurl_str_cat4 ( nurl_str_cat4 `\n@__cmoved.` fname ` = private constant [` ( nurl_str_int - ( nurl_str_len m1 ) 2 ) )
-        ( nurl_str_cat3 ` x i8] c"` ( nurl_str_slice m1 0 - ( nurl_str_len m1 ) 3 ) `\00"` )
-        ( nurl_str_cat4 `\n@__cclone.` fname ` = private constant [` ( nurl_str_int - ( nurl_str_len m2 ) 2 ) )
-        ( nurl_str_cat3 ` x i8] c"` ( nurl_str_slice m2 0 - ( nurl_str_len m2 ) 3 ) `\00"\n` ) )
+        = msgs ( nurl_str_cat ( nurl_str_cat4 `\n@__cmoved.` fname ` = private constant [` ( nurl_str_int - ( nurl_str_len m1 ) 2 ) )
+        ( nurl_str_cat3 ` x i8] c"` ( nurl_str_slice m1 0 - ( nurl_str_len m1 ) 3 ) `\00"\n` ) )
     } {}
     : b nested != 0 ( nurl_str_len drop_body )
     : b traced != 0 ( nurl_str_len trace_body )
@@ -35564,6 +35644,13 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
         ( nurl_print `  store i1 1, i1* ` ) ( nurl_print op ) ( nurl_print `\n` )
         = field_idx + field_idx 1
     }
+    ? != 0 ( nurl_str_len g_nc_own_caps ) {
+        : s sp ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print sp ) ( nurl_print ` = getelementptr ` ) ( nurl_print struct_name )
+        ( nurl_print `, ` ) ( nurl_print struct_name ) ( nurl_print `* ` ) ( nurl_print typed_ptr )
+        ( nurl_print `, i32 0, i32 ` ) ( nurl_print ( nurl_str_int field_idx ) ) ( nurl_print `\n` )
+        ( nurl_print `  store i8* ` ) ( nurl_print env_ptr ) ( nurl_print `, i8** ` ) ( nurl_print sp ) ( nurl_print `\n` )
+    } {}
 
     env_ptr
 }
@@ -36002,6 +36089,30 @@ unsafe @ __thr_peel s lty → s {
     ( seq fname `spawn_joinable` )
 }
 
+// Whether the closure bound to `bind` here may leave this frame: the rest
+// of the function (from `from`) names it other than as the callee of a call
+// — an argument, a value assigned or returned. Read-only: the lexer is put
+// back. No function around it (or another lexer): it may.
+@ __clo_bind_escapes i lex i syms s bind i from → b {
+    : s hp ( nurl_sym_get syms `__fn_hdr_pos__` )
+    ? | == 0 ( nurl_str_len hp ) ! ( seq ( nurl_sym_get syms `__fn_hdr_lex__` ) ( nurl_str_int lex ) ) { ^ T } {}
+    : i here ( nurl_lex_cur_start lex )
+    ( nurl_lex_set_pos lex ( nurl_str_to_int hp ) )
+    ( skip_balanced lex )
+    : i fend ( nurl_lex_cur_start lex )
+    ( nurl_lex_set_pos lex from )
+    : ~ b esc F
+    : ~ i p1 0
+    ~ & & ! esc < ( nurl_lex_cur_start lex ) fend != ( nurl_lex_type lex ) TT_EOF {
+        : i tt ( nurl_lex_type lex )
+        ? & & ( is_ident_tok tt ) != p1 TT_LPAREN ( seq ( nurl_lex_val lex ) bind ) { = esc T } {}
+        = p1 tt
+        ( nurl_lex_advance lex )
+    }
+    ( nurl_lex_set_pos lex here )
+    ^ esc
+}
+
 // The captures a thread's or a fiber's closure takes over: owning String /
 // Vec / handle bindings of this frame that the rest of the function never
 // names again (a forward scan of its body) and that no loop around the
@@ -36106,6 +36217,9 @@ unsafe @ __thr_peel s lty → s {
     // binding (its name) that may be (__clo_detach_moves). Read before
     // the body can build a closure of its own.
     : b clo_detach_lit != 0 g_clo_detach
+    // Built as a call's argument: used right where it is made. Read before
+    // the body, whose own calls set and clear the same key (h240).
+    : b clo_in_arg ( seq ( nurl_sym_get syms `__in_call_arg__` ) `1` )
     : s __ncf_saved ( nurl_str_cat g_nc_flag_caps `` )
     : s __nco_saved ( nurl_str_cat g_nc_own_caps `` )
     = g_clo_detach 0
@@ -36169,10 +36283,15 @@ unsafe @ __thr_peel s lty → s {
     // syms is the OUTER scope; param_names is a space-separated list of closure params.
     // Only outer locals (those with __ptr in syms) are captured, not globals/functions.
     : s captured_vars ( simple_capture_analysis lex syms param_names )
-    = g_nc_flag_caps ( __nc_flag_caps captured_vars syms ? | clo_returned clo_detach_lit T F )
-    // (Returned only: a thread's or fiber's closure is copied as it is
-    // handed over, and keeps the move-when-made rule of h222.)
-    = g_nc_own_caps ( __nc_flag_caps captured_vars syms ? & clo_returned ! clo_detach_lit F T )
+    // A closure bound to a name the rest of the function only calls stays
+    // in this frame: it reaches its captures' drop flags there (h236).
+    // Any other — handed back, to a thread or a fiber, to a callee, stored —
+    // may outlive the frame: its env owns them, under flags of its own
+    // (h239), and a copy of it takes them over (h240).
+    : b clo_stays & & & != 0 ( nurl_str_len clo_bind_name ) ! clo_returned ! clo_detach_lit
+    ! ( __clo_bind_escapes lex syms clo_bind_name body_start_pos )
+    = g_nc_flag_caps ( __nc_flag_caps captured_vars syms ! clo_stays )
+    = g_nc_own_caps ( __nc_flag_caps captured_vars syms clo_stays )
     : i captured_count ( count_words captured_vars )
     // What it can capture, for the thread-shared cycle rules (published
     // when the literal is done: the body may build closures of its own).
@@ -36218,9 +36337,11 @@ unsafe @ __thr_peel s lty → s {
                 : b __cap_own | ( nurl_sym_has_word syms `__owned_strings__` ( nurl_sym_get2 syms __cap_w `__ptr` ) ) ( nurl_sym_has_word syms `__owned_slices__` __cap_w )
                 = __cap_sx ( __sx_join __cap_sx ? __cap_own ( nurl_str_cat3 `\\(` __cap_w `)` ) ( nurl_str_cat __cap_w `` ) )
             } {}
-            ? ( bck_is_heap_lty __cap_ll )
-            { ( bck_note_read __cap_w )
-                = __cap_heap ? == 0 ( nurl_str_len __cap_heap )
+            // (One the env owns is no longer the frame's: running the
+            // closure reads the env's, h240.)
+            ? ( bck_is_heap_lty __cap_ll ) { ( bck_note_read __cap_w ) } {}
+            ? & ( bck_is_heap_lty __cap_ll ) ! ( str_contains_word g_nc_own_caps __cap_w )
+            { = __cap_heap ? == 0 ( nurl_str_len __cap_heap )
                 ( nurl_str_cat __cap_w `` )
                 ( nurl_str_cat3 __cap_heap ` ` __cap_w ) }
             {}
@@ -36917,11 +37038,17 @@ unsafe @ __thr_peel s lty → s {
     = g_closure_effects __cl_effects_saved
     = g_clo_caps_now __cl_capsnow_saved
     : ~ s __cl_frees ``
-    : b __cl_used_now ( seq ( nurl_sym_get syms `__in_call_arg__` ) `1` )
+    : b __cl_used_now clo_in_arg
+    // What the env owns left this frame when the closure was made.
+    : ~ s __cl_own ( nurl_str_cat g_nc_own_caps `` )
+    ~ != 0 ( nurl_str_len __cl_own ) {
+        : s __cl_n ( str_first_word __cl_own ) = __cl_own ( str_skip_word __cl_own )
+        ( bck_stash_move __cl_n ( nurl_lex_line lex ) `a closure that may outlive this frame` )
+    }
     ~ != 0 ( nurl_str_len __cl_cons ) {
         : s __cl_n ( str_first_word __cl_cons )
         = __cl_cons ( str_skip_word __cl_cons )
-        ? ( str_contains_word captured_vars __cl_n ) {
+        ? & ( str_contains_word captured_vars __cl_n ) ! ( str_contains_word g_nc_own_caps __cl_n ) {
             = __cl_frees ? == 0 ( nurl_str_len __cl_frees ) ( nurl_str_cat __cl_n `` ) ( nurl_str_cat3 __cl_frees ` ` __cl_n )
             ? __cl_used_now
             { ( bck_stash_maybe_move __cl_n ( nurl_lex_line lex )
@@ -43387,6 +43514,11 @@ unsafe @ __ffi_param_count s pt → i {
     // …and where it was declared: one declared outside the stdlib is raw
     // memory to its callers (bck_check_raw_call).
     ( nurl_sym_def syms ( nurl_str_cat fname `__ffi_src` ) ( vis_current_src_file ) )
+    // `unsafe & …`: a foreign function that takes a runtime handle (an
+    // address the runtime casts back to its struct) as a plain integer, so
+    // any number a program makes up is an address it reads or frees. Raw
+    // for programs, even declared in the stdlib (bck_check_raw_call).
+    ? != 0 g_pending_unsafe { ( nurl_sym_def syms ( nurl_str_cat fname `__ffi_raw` ) `1` ) = g_pending_unsafe 0 } {}
     // Per-parameter LLVM types for call-site width coercion (see `ptypes`).
     ( nurl_sym_def syms ( nurl_str_cat fname `__ffi_params` ) ptypes )
     // emit_header already emits `declare` lines for a small set of libc
@@ -49405,8 +49537,8 @@ unsafe @ __rt_decl_ptypes s region → s {
     ( __emit_rt_decl syms `declare i64    @nurl_is_nan(double)` )
     ( __emit_rt_decl syms `declare i64    @nurl_is_inf(double)` )
     ( __emit_rt_decl syms `declare i64  @nurl_dir_list_open(i8*)` )
-    ( __emit_rt_decl syms `declare i8*  @nurl_dir_list_next(i64)` )
-    ( __emit_rt_decl syms `declare void @nurl_dir_list_close(i64)` )
+    ( __emit_rt_decl syms `declare i8*  @nurl_dir_list_next(i64) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare void @nurl_dir_list_close(i64) "nurl.raw"="1"` )
     ( __emit_rt_decl syms `declare i64  @nurl_http_perform_full(i8*, i8*, i8*, i8*)` )
     ( __emit_rt_decl syms `declare i64  @nurl_http_perform_full_to(i8*, i8*, i8*, i8*, i64, i64)` )
     // The 7 accessors (status / err_kind / body / body_len /
@@ -49414,31 +49546,31 @@ unsafe @ __rt_decl_ptypes s region → s {
     // in stdlib/ext/http.nu that read the NurlHttpResponse struct via
     // nurl_peek. Only the C-side freer stays — it walks the headers
     // array deallocating every name/value pair.
-    ( __emit_rt_decl syms `declare void @nurl_http_response_free(i64)` )
+    ( __emit_rt_decl syms `declare void @nurl_http_response_free(i64) "nurl.raw"="1"` )
     ( __emit_rt_decl syms `declare i64  @nurl_http_stream_open_to(i8*, i8*, i8*, i8*, i64, i64)` )
     ( __emit_rt_decl syms `declare i8*  @nurl_http_stream_next(i64)` )
     ( __emit_rt_decl syms `declare void @nurl_http_stream_close(i64)` )
     ( __emit_rt_decl syms `declare i64  @nurl_http_stream_pump_headers(i64)` )
     ( __emit_rt_decl syms `declare i64  @nurl_proc_run(i8*, i8*, i64, i8*) "nurl.raw"="1"` )
-    ( __emit_rt_decl syms `declare i64  @nurl_proc_exit_code(i64)` )
-    ( __emit_rt_decl syms `declare i64  @nurl_proc_err_kind(i64)` )
-    ( __emit_rt_decl syms `declare i8*  @nurl_proc_stdout(i64)` )
-    ( __emit_rt_decl syms `declare i8*  @nurl_proc_stderr(i64)` )
-    ( __emit_rt_decl syms `declare i64  @nurl_proc_stdout_len(i64)` )
-    ( __emit_rt_decl syms `declare i64  @nurl_proc_stderr_len(i64)` )
-    ( __emit_rt_decl syms `declare void @nurl_proc_free(i64)` )
+    ( __emit_rt_decl syms `declare i64  @nurl_proc_exit_code(i64) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare i64  @nurl_proc_err_kind(i64) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare i8*  @nurl_proc_stdout(i64) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare i8*  @nurl_proc_stderr(i64) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare i64  @nurl_proc_stdout_len(i64) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare i64  @nurl_proc_stderr_len(i64) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare void @nurl_proc_free(i64) "nurl.raw"="1"` )
     ( __emit_rt_decl syms `declare i64  @nurl_proc_spawn(i8*, i8*, i64)` )
-    ( __emit_rt_decl syms `declare i64  @nurl_proc_spawn_err_kind(i64)` )
-    ( __emit_rt_decl syms `declare i64  @nurl_proc_spawn_pid(i64)` )
+    ( __emit_rt_decl syms `declare i64  @nurl_proc_spawn_err_kind(i64) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare i64  @nurl_proc_spawn_pid(i64) "nurl.raw"="1"` )
     ( __emit_rt_decl syms `declare i64  @nurl_proc_spawn_write(i64, i8*, i64) "nurl.raw"="1"` )
-    ( __emit_rt_decl syms `declare void @nurl_proc_spawn_close_stdin(i64)` )
-    ( __emit_rt_decl syms `declare i8*  @nurl_proc_spawn_read_line(i64, i64)` )
-    ( __emit_rt_decl syms `declare i64  @nurl_proc_spawn_read_line_len(i64)` )
-    ( __emit_rt_decl syms `declare i64  @nurl_proc_spawn_eof(i64)` )
-    ( __emit_rt_decl syms `declare i64  @nurl_proc_spawn_last_io_err(i64)` )
-    ( __emit_rt_decl syms `declare i64  @nurl_proc_spawn_wait(i64)` )
-    ( __emit_rt_decl syms `declare i64  @nurl_proc_spawn_kill(i64, i64)` )
-    ( __emit_rt_decl syms `declare void @nurl_proc_spawn_free(i64)` )
+    ( __emit_rt_decl syms `declare void @nurl_proc_spawn_close_stdin(i64) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare i8*  @nurl_proc_spawn_read_line(i64, i64) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare i64  @nurl_proc_spawn_read_line_len(i64) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare i64  @nurl_proc_spawn_eof(i64) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare i64  @nurl_proc_spawn_last_io_err(i64) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare i64  @nurl_proc_spawn_wait(i64) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare i64  @nurl_proc_spawn_kill(i64, i64) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare void @nurl_proc_spawn_free(i64) "nurl.raw"="1"` )
     // Crypto hash transforms (SHA-1/256/512, MD5, HMAC-SHA-256/512)
     // live in pure NURL under `stdlib/std/hash_*.nu`. Random surface
     // (`rand_u64` / `rand_hex_str`) is in `stdlib/std/random.nu`;
@@ -49450,25 +49582,25 @@ unsafe @ __rt_decl_ptypes s region → s {
     ( __emit_rt_decl syms `declare i64  @nurl_tcp_listen(i8*, i64, i64)` )
     ( __emit_rt_decl syms `declare i64  @nurl_tcp_listen_tls(i8*, i64, i64, i8*, i8*)` )
     ( __emit_rt_decl syms `declare i64  @nurl_tcp_listen_tls_alpn(i8*, i64, i64, i8*, i8*, i8*)` )
-    ( __emit_rt_decl syms `declare i8*  @nurl_tcp_alpn_selected(i64)` )
-    ( __emit_rt_decl syms `declare i64  @nurl_tcp_tls_add_sni(i64, i8*, i8*, i8*)` )
-    ( __emit_rt_decl syms `declare i64  @nurl_tcp_tls_reload(i64, i8*, i8*, i8*)` )
-    ( __emit_rt_decl syms `declare i64  @nurl_tcp_tls_require_client_cert(i64, i8*, i64)` )
-    ( __emit_rt_decl syms `declare i8*  @nurl_tcp_peer_cert_subject(i64)` )
-    ( __emit_rt_decl syms `declare i64  @nurl_tcp_accept(i64)` )
+    ( __emit_rt_decl syms `declare i8*  @nurl_tcp_alpn_selected(i64) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare i64  @nurl_tcp_tls_add_sni(i64, i8*, i8*, i8*) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare i64  @nurl_tcp_tls_reload(i64, i8*, i8*, i8*) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare i64  @nurl_tcp_tls_require_client_cert(i64, i8*, i64) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare i8*  @nurl_tcp_peer_cert_subject(i64) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare i64  @nurl_tcp_accept(i64) "nurl.raw"="1"` )
     ( __emit_rt_decl syms `declare i64  @nurl_tcp_read(i64, i8*, i64) "nurl.raw"="1"` )
     ( __emit_rt_decl syms `declare i64  @nurl_tcp_write(i64, i8*, i64) "nurl.raw"="1"` )
-    ( __emit_rt_decl syms `declare void @nurl_tcp_close(i64)` )
-    ( __emit_rt_decl syms `declare void @nurl_tcp_shutdown(i64)` )
-    ( __emit_rt_decl syms `declare i64  @nurl_tcp_err_kind(i64)` )
-    ( __emit_rt_decl syms `declare i8*  @nurl_tcp_peer_addr(i64)` )
-    ( __emit_rt_decl syms `declare void @nurl_tcp_set_timeout(i64, i64)` )
+    ( __emit_rt_decl syms `declare void @nurl_tcp_close(i64) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare void @nurl_tcp_shutdown(i64) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare i64  @nurl_tcp_err_kind(i64) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare i8*  @nurl_tcp_peer_addr(i64) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare void @nurl_tcp_set_timeout(i64, i64) "nurl.raw"="1"` )
     // Thread / mutex / cond live in pure-NURL FFI in
     // stdlib/std/thread.nu — libpthread symbols (pthread_create /
     // mutex_* / cond_*) plus the tiny nurl_pthread_join_ptr /
     // _detach_ptr trampolines are declared on-demand in that module
     // via `& `c` @ ...`.
-    ( __emit_rt_decl syms `declare void @nurl_signal_install_shutdown(i64)` )
+    ( __emit_rt_decl syms `declare void @nurl_signal_install_shutdown(i64) "nurl.raw"="1"` )
     ( __emit_rt_decl syms `declare void @nurl_signal_trigger_shutdown()` )
     ( __emit_rt_decl syms `declare void @nurl_panic(i8* nocapture) noreturn` )
     ( __emit_rt_decl syms `declare i64  @nurl_recover(i8*, i8*) "nurl.raw"="1"` )
@@ -52875,7 +53007,8 @@ unsafe @ parse_program i lex i syms i cg → v {
         ? != rv 0 {
             : s pm ( nurl_panic_last_msg )
             ? ( seq pm `__nurlc_diag__` )
-            {  // A reported diagnostic. The panic may have unwound out of
+            { = g_dead_arm 0
+                // A reported diagnostic. The panic may have unwound out of
                 // buffered closure-IR emission — reset the output stack to
                 // a fresh module buffer and resync to the next declaration.
                 // The failed compilation never exposes that partial IR.

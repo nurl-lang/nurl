@@ -77,6 +77,18 @@ $ `tools/nurlfmt/tokenize.nu`
     ^ F
 }
 
+// Whether token `k` (of n) is `@` or `:` — what a `raw` prefix precedes.
+unsafe @ __pp_next_is_decl FmtToks ts i k i n → b {
+    ? >= k n { ^ F } {}
+    ?? ( vec_get [FmtTok] . ts toks k ) {
+        T t → {
+            : s nx ( fmt_tok_text ts t )
+            ^ | ( __pp_text_eq nx `@` ) ( __pp_text_eq nx `:` )
+        }
+        F _ → { ^ F }
+    }
+}
+
 // True iff `t` is the first token of a top-level declaration shape.
 // At depth 0 these tokens start a new decl and get a blank line
 // above (`@` fn, `$` import, `&` ffi, `%` trait/impl, `:` struct/
@@ -160,6 +172,11 @@ $ `tools/nurlfmt/tokenize.nu`
                 : i kind . t kind
                 : s text ( fmt_tok_text ts t )
                 : i nl . t nl_before
+                // Grammar v2.9 `raw` prefix (`raw @ f …`, `raw : S { … }`) —
+                // the `pub` rule again, but `raw` is no reserved word: it
+                // is the prefix only right before `@` or `:`.
+                : b raw_pfx & ( __pp_text_eq text `raw` ) ( __pp_next_is_decl ts + idx 1 n )
+                : b top_start | ( __pp_starts_top_decl text ) raw_pfx
 
                 // A `%` here is a `%Trait` object TYPE sigil (docs/spec.md §4.9),
                 // not the trait/impl DECLARATION sigil and not the modulo
@@ -229,7 +246,7 @@ $ `tools/nurlfmt/tokenize.nu`
                             // respected (typically 0 → single space).
                             : b at_top_boundary & ! pct_type & == bd 0
                             & == pd 0
-                            & ( __pp_starts_top_decl text )
+                            & top_start
                             & ! prev_was_pub
                             & ! == prev_kind TT_FMT_COMMENT
                             // supertrait `:` is part of the trait header, not a boundary
@@ -398,7 +415,7 @@ $ `tools/nurlfmt/tokenize.nu`
                     // If this token started a top-level decl (it is a
                     // top-decl-starter at bd==0), remember it so the
                     // next boundary can identify `$`-only chains.
-                    ? & & ( __pp_starts_top_decl text ) == bd 0 ! pct_type {
+                    ? & & top_start == bd 0 ! pct_type {
                         = prev_top_starter text
                         // Arm FFI-glue only for `&`; any other depth-0
                         // decl-starter (incl. the FFI's own `@`, which
@@ -421,7 +438,7 @@ $ `tools/nurlfmt/tokenize.nu`
                     // to glue. `pub` inside a comment/string never
                     // reaches this path (those are non-IDENT kinds).
                     ? & & == bd 0 == pd 0
-                    | | | ( __pp_text_eq text `pub` ) ( __pp_text_eq text `simd` ) ( __pp_text_eq text `inline` ) ( __pp_text_eq text `unsafe` ) {
+                    | | | | ( __pp_text_eq text `pub` ) ( __pp_text_eq text `simd` ) ( __pp_text_eq text `inline` ) ( __pp_text_eq text `unsafe` ) raw_pfx {
                         = prev_was_pub T
                     } {
                         = prev_was_pub F

@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.5.2] — 2026-10-14
+
+Requires NURL 0.73.0 (`rand_bytes`).
+
+### Changed
+
+- No `unsafe` left (19 before). The CA's state is read through
+  `arc_get` (nothing changes it once made: a new CA's state is built,
+  its PEMs filled in, and only then shared), its random bytes come from
+  the stdlib's `rand_bytes`, and the loaded CA is no longer an owning
+  module global: `pki_service_init` returns it and `pki_build_app ca`
+  hands it to the routes that sign, verify or publish with it.
+
 ## [0.5.1] — 2026-10-12
 
 Requires NURL 0.73.0, in which a field written through a raw pointer

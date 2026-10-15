@@ -67,6 +67,8 @@
 
 & `c` @ nurl_cc_collect → v
 
+$ `stdlib/core/mem.nu`
+
 : RcImpl [A] {
     i count
     i weak
@@ -75,6 +77,18 @@
 }
 
 : Rc [A] { s ctl }
+
+// The bit of `cc` (beside the collector's, stdlib/runtime_core.c) that
+// says the value is checked out (rc_take).
+: i RC_TAKEN 32
+
+@ __rc_taken_panic → v {
+    ( nurl_panic `rc: the value was taken (rc_take) and not restored` )
+}
+
+@ __rc_not_taken_panic → v {
+    ( nurl_panic `rc_restore: the value was not taken` )
+}
 
 : Weak [A] { s ctl }
 
@@ -118,6 +132,7 @@
 // storing or returning it copies (docs/MEMORY.md §7.6).
 @ rc_get [A] ( Rc A ) r → A {
     : *( RcImpl A ) impl # *( RcImpl A ) . r ctl
+    ? != 0 & . impl cc RC_TAKEN { ( __rc_taken_panic ) } {}
     ^ . impl value
 }
 
@@ -125,16 +140,49 @@
 // the new value.
 @ rc_set [A] ( Rc A ) r A x → v {
     : *( RcImpl A ) impl # *( RcImpl A ) . r ctl
+    ? != 0 & . impl cc RC_TAKEN { ( __rc_taken_panic ) } {}
     = . impl value x  // drops the old value
 }
 
 // Overwrite and hand back the old value (the caller's from now on).
 @ rc_replace [A] ( Rc A ) r A x → A {
     : *( RcImpl A ) impl # *( RcImpl A ) . r ctl
+    ? != 0 & . impl cc RC_TAKEN { ( __rc_taken_panic ) } {}
     : A old . impl value
     ( mem_take old )
     = . impl value x
     ^ old
+}
+
+// The value, taken out of the Rc to be changed and put back with
+// `rc_restore`: the check-out of state that every handle shares. Nothing
+// is copied: the value moves out, and until it is restored every handle
+// on it — `rc_get`, `rc_set`, `rc_replace`, `rc_take` through any of them
+// — panics instead of reading a value that is not there. One never put
+// back (dropped, or its owner panicked) leaves the Rc empty for good;
+// nothing leaks and nothing is read that is gone.
+@ rc_take [A] ( Rc A ) r → A {
+    : *( RcImpl A ) impl # *( RcImpl A ) . r ctl
+    ? != 0 & . impl cc RC_TAKEN { ( __rc_taken_panic ) } {}
+    // (Claimed out of its slot, it leaves zero bytes there, which drop
+    // and trace as nothing.)
+    : A x . impl value
+    ( mem_take x )
+    = . impl cc | . impl cc RC_TAKEN
+    ^ x
+}
+
+// Put back a value `rc_take` took out (or any other: the Rc holds it from
+// now on). Panics when the Rc's value was not taken.
+@ rc_restore [A] ( Rc A ) r sink A x → v {
+    : *( RcImpl A ) impl # *( RcImpl A ) . r ctl
+    ? == 0 & . impl cc RC_TAKEN { ( __rc_not_taken_panic ) } {}
+    = . impl cc ^^ . impl cc RC_TAKEN
+    // It replaces the zero bytes rc_take left: they own nothing, so they
+    // are swapped out and forgotten rather than run through the value's
+    // drop glue.
+    : A zero ( mem_replace [A] . impl value x )
+    ( mem_forget zero )
 }
 
 // A raw `*T` to the shared value's slot, for FFI that fills a struct in

@@ -22,13 +22,11 @@ $ `deps/tensor/src/tensor.nu`
     ( nurl_print label ) ( nurl_print `\n` )
 }
 
-unsafe @ main → i {
+@ main → i {
     : Blk bl ( blk_new 42 F )
-    : GTape tp ( tape_new )
-    : ( Vec u ) pav__b ( vec_zeroed [u] * 7 8 )
-    : *u pav ( vec_data [u] pav__b )
-    : ( Vec u ) pbv__b ( vec_zeroed [u] * 7 8 )
-    : *u pbv ( vec_data [u] pbv__b )
+    : ~ GTape tp ( tape_new )
+    : ( Vec i ) pav ( vec_zeroed [i] 7 )
+    : ( Vec i ) pbv ( vec_zeroed [i] 7 )
     : GVar loss ( build_block tp bl pav pbv )
     ( check ( tape_ok tp ) `block builds (tape healthy)` )
     : f l ( g_scalar tp loss )
@@ -38,8 +36,8 @@ unsafe @ main → i {
     : ~ b allok T
     : ~ i k 0
     ~ < k 7 {
-        : GVar pa @ GVar { ( nurl_peek pav k ) }
-        : GVar pb @ GVar { ( nurl_peek pbv k ) }
+        : GVar pa @ GVar { ( vec_at [i] pav k ) }
+        : GVar pb @ GVar { ( vec_at [i] pbv k ) }
         // (one gradient read at a time: grad_of may add to the tape)
         : Tensor ga ( grad_of tp pa )
         : ~ b nza F

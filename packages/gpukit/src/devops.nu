@@ -24,7 +24,11 @@ $ `dev.nu`
 
 // Launch the cached kernel. The arg vector and the source/name buffers
 // every op wrapper builds per call are handed in and go with this call.
-@ __gkd_launch GpuKit kit sink String src sink String kname i grid sink ( Vec i ) args → b {
+// Every operation in this file checks its buffers' sizes and dtypes
+// against the dimensions it launches over (products through _gk_p2/3/4,
+// which cannot overflow into a match) before it gets here, and its kernel
+// keeps every index it forms inside them.
+unsafe @ __gkd_launch GpuKit kit sink String src sink String kname i grid sink ( Vec i ) args → b {
     : b r ( gk_run_dev kit ( string_data src ) ( string_data kname ) grid 256 args )
     ^ r
 }
@@ -56,7 +60,7 @@ $ `dev.nu`
     ? & & ( __gkd_isfloat y ) ( gk_buf_ok a ) ( gk_buf_ok b ) {} { ^ F }
     ? & == . y dtype . a dtype == . a dtype . b dtype {} { ^ F }
     ? & & > m 0 > n 0 > k 0 {} { ^ F }
-    ? & & == . a n * m k == . b n * k n == . y n * m n {} { ^ F }
+    ? & & == . a n ( _gk_p2 m k ) == . b n ( _gk_p2 k n ) == . y n ( _gk_p2 m n ) {} { ^ F }
     ? != hasb 0 {
         ? & & ( gk_buf_ok c ) == . c dtype . y dtype >= . c n n {} { ^ F }
     } {}
@@ -186,7 +190,7 @@ $ `dev.nu`
     ? & & & > cin 0 > h 0 > wd 0 > cout 0 {} { ^ F }
     ? & & & > kh 0 > kw 0 > oh 0 > ow 0 {} { ^ F }
     ? & > sh 0 > sw 0 {} { ^ F }
-    ? & & == . x n * * cin h wd == . w n * * * cout cin kh kw == . y n * * cout oh ow {} { ^ F }
+    ? & & == . x n ( _gk_p3 cin h wd ) == . w n ( _gk_p4 cout cin kh kw ) == . y n ( _gk_p3 cout oh ow ) {} { ^ F }
     ? != hasb 0 {
         ? & & ( gk_buf_ok bias ) == . bias dtype . y dtype >= . bias n cout {} { ^ F }
     } {}
@@ -326,7 +330,7 @@ $ `dev.nu`
     ? & & & > cin 0 > h 0 > wd 0 > cout 0 {} { ^ F }
     ? & & & > kh 0 > kw 0 > oh 0 > ow 0 {} { ^ F }
     ? & & & > sh 0 > sw 0 > dh 0 > dw 0 {} { ^ F }
-    ? & & == . x n * * cin h wd == . w n * * * cout cin kh kw == . y n * * cout oh ow {} { ^ F }
+    ? & & == . x n ( _gk_p3 cin h wd ) == . w n ( _gk_p4 cout cin kh kw ) == . y n ( _gk_p3 cout oh ow ) {} { ^ F }
     ? != hasb 0 {
         ? & & ( gk_buf_ok bias ) == . bias dtype . y dtype >= . bias n cout {} { ^ F }
     } {}
@@ -385,7 +389,7 @@ $ `dev.nu`
     ? & & & > cin 0 > h 0 > wd 0 > cout 0 {} { ^ F }
     ? & & & > kh 0 > kw 0 > oh 0 > ow 0 {} { ^ F }
     ? & > sh 0 > sw 0 {} { ^ F }
-    ? & & == . x n * * cin h wd == . w n * * * cin cout kh kw == . y n * * cout oh ow {} { ^ F }
+    ? & & == . x n ( _gk_p3 cin h wd ) == . w n ( _gk_p4 cin cout kh kw ) == . y n ( _gk_p3 cout oh ow ) {} { ^ F }
     ? != hasb 0 {
         ? & & ( gk_buf_ok bias ) == . bias dtype . y dtype >= . bias n cout {} { ^ F }
     } {}
@@ -458,7 +462,7 @@ $ `dev.nu`
     ? == . y dtype . x dtype {} { ^ F }
     ? & & & > c 0 > h 0 > wd 0 & > kh 0 > kw 0 {} { ^ F }
     ? & & & > oh 0 > ow 0 > sh 0 > sw 0 {} { ^ F }
-    ? & == . x n * * c h wd == . y n * * c oh ow {} { ^ F }
+    ? & == . x n ( _gk_p3 c h wd ) == . y n ( _gk_p3 c oh ow ) {} { ^ F }
     : s tn ( _gk_tname . y dtype )
     : String kname ( __gkd_name . y dtype )
     : String src ( __gkd_head kname `maxpool2d` )
@@ -500,7 +504,7 @@ $ `dev.nu`
     ? & == . y dtype . x dtype == . x dtype . sc dtype {} { ^ F }
     ? & & == . sc dtype . bb dtype == . bb dtype . mean dtype == . mean dtype . var dtype {} { ^ F }
     ? & > c 0 > hw 0 {} { ^ F }
-    ? & == . x n * c hw == . y n * c hw {} { ^ F }
+    ? & == . x n ( _gk_p2 c hw ) == . y n ( _gk_p2 c hw ) {} { ^ F }
     ? & & & >= . sc n c >= . bb n c >= . mean n c >= . var n c {} { ^ F }
     : s tn ( _gk_tname . y dtype )
     : String kname ( __gkd_name . y dtype )
@@ -591,7 +595,7 @@ $ `dev.nu`
     ? & == . y dtype . x dtype == . x dtype . sc dtype {} { ^ F }
     ? == . sc dtype . bi dtype {} { ^ F }
     ? & > outer 0 > ax 0 {} { ^ F }
-    ? & == . x n * outer ax == . y n * outer ax {} { ^ F }
+    ? & == . x n ( _gk_p2 outer ax ) == . y n ( _gk_p2 outer ax ) {} { ^ F }
     ? & >= . sc n ax >= . bi n ax {} { ^ F }
     : s tn ( _gk_tname . y dtype )
     : s sfx ( __gkd_sfx . y dtype )
@@ -732,12 +736,12 @@ i heads i n i nkv i hd i hpb f scale → b {
     : b masked ( gk_buf_ok mask )
     ? masked {
         ? & & > hpb 0 == % heads hpb 0 == . mask dtype . o dtype {} { ^ F }
-        ? >= . mask n * / heads hpb nkv {} { ^ F }
+        ? >= . mask n ( _gk_p2 / heads hpb nkv ) {} { ^ F }
     } {}
     // BQ x hd and BQ x BK both have to divide the 256-thread block
     ? == % hd 16 0 {} { ^ F }
     ? & & == . q n * heads * n hd == . o n * heads * n hd
-    & == . k n * heads * nkv hd == . v n * heads * nkv hd {} { ^ F }
+    & == . k n ( _gk_p3 heads nkv hd ) == . v n ( _gk_p3 heads nkv hd ) {} { ^ F }
     // Only on CUDA: the CPU backend runs one "thread" per block index
     // with no shared memory to speak of, and the composed path is the
     // better shape there.
@@ -767,7 +771,7 @@ i heads i n i nkv i hd i hpb f scale → b {
     = bk * / bk 16 16
     ? > bk 64 { = bk 64 } {}
     ? < bk 16 { = bk 16 } {}
-    ? >= * bq hd * 16 256 {} { ^ F }
+    ? >= ( _gk_p2 bq hd ) * 16 256 {} { ^ F }
     : s tn ( _gk_tname . o dtype )
     : s sfx ( __gkd_sfx . o dtype )
     : String kname ( __gkd_name . o dtype )
@@ -929,11 +933,11 @@ i batch i heads i n i nkv i hd f scale → b {
     ? & & & & > batch 0 > heads 0 > n 0 > nkv 0 > hd 0 {} { ^ F }
     : b masked ( gk_buf_ok mask )
     ? masked {
-        ? & == . mask dtype . o dtype >= . mask n * batch nkv {} { ^ F }
+        ? & == . mask dtype . o dtype >= . mask n ( _gk_p2 batch nkv ) {} { ^ F }
     } {}
     ? == % hd 16 0 {} { ^ F }
     ? & & == . q n * * * batch n heads hd == . o n * * * batch n heads hd
-    & == . k n * * * batch nkv heads hd == . v n * * * batch nkv heads hd {} { ^ F }
+    & == . k n ( _gk_p4 batch nkv heads hd ) == . v n ( _gk_p4 batch nkv heads hd ) {} { ^ F }
     ? ( nurl_str_eq ( gk_backend kit ) `cuda` ) {} { ^ F }
     : i esz ( gk_buf_esz o )
     // identical tile sizing to gkd_attention_masked — see there
@@ -955,7 +959,7 @@ i batch i heads i n i nkv i hd f scale → b {
     = bk * / bk 16 16
     ? > bk 64 { = bk 64 } {}
     ? < bk 16 { = bk 16 } {}
-    ? >= * bq hd * 16 256 {} { ^ F }
+    ? >= ( _gk_p2 bq hd ) * 16 256 {} { ^ F }
     : s tn ( _gk_tname . o dtype )
     : s sfx ( __gkd_sfx . o dtype )
     : String kname ( __gkd_name . o dtype )
@@ -1089,7 +1093,7 @@ i batch i heads i n i nkv i hd f scale → b {
     ? & ( __gkd_isfloat y ) ( gk_buf_ok x ) {} { ^ F }
     ? == . y dtype . x dtype {} { ^ F }
     ? & & > outer 0 > ax 0 > inner 0 {} { ^ F }
-    ? & == . x n * * outer ax inner == . y n * * outer ax inner {} { ^ F }
+    ? & == . x n ( _gk_p3 outer ax inner ) == . y n ( _gk_p3 outer ax inner ) {} { ^ F }
     : s tn ( _gk_tname . y dtype )
     : s sfx ( __gkd_sfx . y dtype )
     : String kname ( __gkd_name . y dtype )
@@ -1129,7 +1133,7 @@ i batch i heads i n i nkv i hd f scale → b {
     ? == . dst dtype . src dtype {} { ^ F }
     ? & & > outer 0 > src_ax 0 > inner 0 {} { ^ F }
     ? & >= off 0 <= + off src_ax dst_ax {} { ^ F }
-    ? & == . src n * * outer src_ax inner == . dst n * * outer dst_ax inner {} { ^ F }
+    ? & == . src n ( _gk_p3 outer src_ax inner ) == . dst n ( _gk_p3 outer dst_ax inner ) {} { ^ F }
     : s tn ( _gk_tname . dst dtype )
     : String kname ( __gkd_name . dst dtype )
     : String src2 ( __gkd_head kname `copyax` )
@@ -1159,7 +1163,7 @@ i batch i heads i n i nkv i hd f scale → b {
     ? == . dst dtype . src dtype {} { ^ F }
     ? & & > outer 0 > sz 0 > inner 0 {} { ^ F }
     ? & >= soff 0 <= + soff sz src_ax {} { ^ F }
-    ? & == . src n * * outer src_ax inner == . dst n * * outer sz inner {} { ^ F }
+    ? & == . src n ( _gk_p3 outer src_ax inner ) == . dst n ( _gk_p3 outer sz inner ) {} { ^ F }
     : s tn ( _gk_tname . dst dtype )
     : String kname ( __gkd_name . dst dtype )
     : String src2 ( __gkd_head kname `sliceax` )
@@ -1349,7 +1353,7 @@ i batch i heads i n i nkv i hd f scale → b {
     ? == . y dtype . x dtype {} { ^ F }
     ? ( __gkd_isfloat y ) {} { ^ F }
     ? & & & > c 0 > h 0 > wd 0 & > oh 0 > ow 0 {} { ^ F }
-    ? & == . x n * * c h wd == . y n * * c oh ow {} { ^ F }
+    ? & == . x n ( _gk_p3 c h wd ) == . y n ( _gk_p3 c oh ow ) {} { ^ F }
     : s tn ( _gk_tname . y dtype )
     : String kname ( __gkd_name . y dtype )
     ( string_push_str kname ? != align 0 `ac` `` )
@@ -1390,8 +1394,8 @@ i batch i heads i n i nkv i hd f scale → b {
     ? == . y dtype . x dtype {} { ^ F }
     ? & & & > c 0 > h 0 > wd 0 & > oh 0 > ow 0 {} { ^ F }
     ? & > sh 0 > sw 0 {} { ^ F }
-    ? & <= oh * h sh <= ow * wd sw {} { ^ F }
-    ? & == . x n * * c h wd == . y n * * c oh ow {} { ^ F }
+    ? & <= oh ( _gk_p2 h sh ) <= ow ( _gk_p2 wd sw ) {} { ^ F }
+    ? & == . x n ( _gk_p3 c h wd ) == . y n ( _gk_p3 c oh ow ) {} { ^ F }
     : s tn ( _gk_tname . y dtype )
     : String kname ( __gkd_name . y dtype )
     : String src ( __gkd_head kname `resizenn` )
@@ -1419,7 +1423,7 @@ i batch i heads i n i nkv i hd f scale → b {
     ? & ( gk_buf_ok y ) ( gk_buf_ok x ) {} { ^ F }
     ? == . y dtype . x dtype {} { ^ F }
     ? & > outer 0 > rep 0 {} { ^ F }
-    ? & == . x n outer == . y n * outer rep {} { ^ F }
+    ? & == . x n outer == . y n ( _gk_p2 outer rep ) {} { ^ F }
     : s tn ( _gk_tname . y dtype )
     : String kname ( __gkd_name . y dtype )
     : String src ( __gkd_head kname `expandl` )
@@ -1442,7 +1446,7 @@ i batch i heads i n i nkv i hd f scale → b {
     ? & ( __gkd_isfloat y ) ( gk_buf_ok x ) {} { ^ F }
     ? == . y dtype . x dtype {} { ^ F }
     ? & > outer 0 > ax 0 {} { ^ F }
-    ? & == . x n * outer ax == . y n outer {} { ^ F }
+    ? & == . x n ( _gk_p2 outer ax ) == . y n outer {} { ^ F }
     : s tn ( _gk_tname . y dtype )
     : String kname ( __gkd_name . y dtype )
     : String src ( __gkd_head kname `rl2` )
@@ -1468,7 +1472,7 @@ i batch i heads i n i nkv i hd f scale → b {
 @ gkd_argmax GpuKit kit GkBuf y GkBuf x i outer i ax → b {
     ? & & ( gk_buf_ok y ) ( gk_buf_ok x ) == . y dtype GK_I64 {} { ^ F }
     ? & > outer 0 > ax 0 {} { ^ F }
-    ? & == . x n * outer ax == . y n outer {} { ^ F }
+    ? & == . x n ( _gk_p2 outer ax ) == . y n outer {} { ^ F }
     : s tn ( _gk_tname . x dtype )
     : String kname ( __gkd_name . x dtype )
     : String src ( __gkd_head kname `argmax` )
@@ -1495,7 +1499,7 @@ i batch i heads i n i nkv i hd f scale → b {
     ? & & & ( __gkd_isfloat y ) ( gk_buf_ok data ) ( gk_buf_ok tok ) == . tok dtype GK_I64 {} { ^ F }
     ? == . y dtype . data dtype {} { ^ F }
     ? & & > bsz 0 > l 0 > d 0 {} { ^ F }
-    ? & & == . data n * * bsz l d == . y n * bsz d >= . tok n * bsz l {} { ^ F }
+    ? & & == . data n ( _gk_p3 bsz l d ) == . y n ( _gk_p2 bsz d ) >= . tok n ( _gk_p2 bsz l ) {} { ^ F }
     : s tn ( _gk_tname . y dtype )
     : String kname ( __gkd_name . y dtype )
     : String src ( __gkd_head kname `eosg` )
@@ -1516,4 +1520,94 @@ i batch i heads i n i nkv i hd f scale → b {
     ( vec_push [i] args ( gpu_arg_i64 l ) )
     ( vec_push [i] args ( gpu_arg_i64 d ) )
     ^ ( __gkd_launch kit src kname ( gk_grid * bsz d 256 ) args )
+}
+
+// ── Rotary position embedding over 2 and 3 axes ───────────────────
+//
+// `x` is [heads, n, dim] f32, rotated in place by per-token positions
+// (i64) into cos/sin tables (f32). gkd_rope2d: the first half of each
+// head's vector by position `rows`, the second half by `cols`, each half
+// split into (j, j+quarter) pairs. gkd_rope3d: interleaved pairs (x0,x1),
+// (x2,x3), …; frequency j < na takes `fr`'s position, j < na+nb `rw`'s,
+// the rest `cl`'s. Every buffer's size and dtype is checked against the
+// launch, and a position past the tables (or negative) leaves its pair
+// untouched. One thread per pair, each owning it: the in-place
+// read-then-write needs no barrier.
+
+@ gkd_rope2d GpuKit kit GkBuf x GkBuf rows GkBuf cols GkBuf cosb GkBuf sinb
+i heads i n i dim → b {
+    ? & & ( gk_buf_ok x ) ( gk_buf_ok rows ) ( gk_buf_ok cols ) {} { ^ F }
+    ? & ( gk_buf_ok cosb ) ( gk_buf_ok sinb ) {} { ^ F }
+    ? & & > heads 0 > n 0 & > dim 0 == % dim 4 0 {} { ^ F }
+    ? == . x n ( _gk_p3 heads n dim ) {} { ^ F }
+    // The positions are read per token, and index the tables: both sizes
+    // are checked here, and a position past the tables is skipped in the
+    // kernel (tl, the shorter table's length).
+    ? & & == . x dtype GK_F32 == . rows dtype GK_I64 == . cols dtype GK_I64 {} { ^ F }
+    ? & & >= . rows n n >= . cols n n & == . cosb dtype GK_F32 == . sinb dtype GK_F32 {} { ^ F }
+    : i tl ? < . cosb n . sinb n . cosb n . sinb n
+    : String src ( string_from `extern "C" __global__ void gkd_rope2d(float* X, const long long* rows, const long long* cols, const float* cosT, const float* sinT, long long heads, long long n, long long dim, long long tl){` )
+    ( string_push_str src `long long half=dim/2, quarter=half/2;` )
+    ( string_push_str src `long long tot=heads*n*quarter*2;` )
+    ( string_push_str src `long long idx=blockIdx.x*blockDim.x+threadIdx.x;if(idx>=tot)return;` )
+    ( string_push_str src `long long j=idx%quarter; long long r=idx/quarter;` )
+    ( string_push_str src `long long axis=r%2; r/=2;` )
+    ( string_push_str src `long long t=r%n; long long h=r/n;` )
+    ( string_push_str src `long long base=h*n*dim+t*dim+axis*half;` )
+    ( string_push_str src `long long pos=(axis==0)?rows[t]:cols[t];` )
+    ( string_push_str src `long long tbl=pos*half;if(pos<0||tbl+half>tl)return;` )
+    ( string_push_str src `float x1=X[base+j], x2=X[base+j+quarter];` )
+    ( string_push_str src `X[base+j]=x1*cosT[tbl+j]-x2*sinT[tbl+j];` )
+    ( string_push_str src `X[base+j+quarter]=x2*cosT[tbl+j+quarter]+x1*sinT[tbl+j+quarter];}` )
+    : ( Vec i ) args ( vec_new [i] )
+    ( vec_push [i] args ( gk_arg_dev x ) )
+    ( vec_push [i] args ( gk_arg_dev rows ) )
+    ( vec_push [i] args ( gk_arg_dev cols ) )
+    ( vec_push [i] args ( gk_arg_dev cosb ) )
+    ( vec_push [i] args ( gk_arg_dev sinb ) )
+    ( vec_push [i] args ( gpu_arg_i64 heads ) )
+    ( vec_push [i] args ( gpu_arg_i64 n ) )
+    ( vec_push [i] args ( gpu_arg_i64 dim ) )
+    ( vec_push [i] args ( gpu_arg_i64 tl ) )
+    : i tot * heads * n / dim 2
+    ^ ( __gkd_launch kit src ( string_from `gkd_rope2d` ) ( gk_grid tot 256 ) args )
+}
+
+@ gkd_rope3d GpuKit kit GkBuf x GkBuf fr GkBuf rw GkBuf cl GkBuf cosb GkBuf sinb
+i heads i n i dim i nt i nh → b {
+    ? & & ( gk_buf_ok x ) ( gk_buf_ok fr ) ( gk_buf_ok rw ) {} { ^ F }
+    ? & & ( gk_buf_ok cl ) ( gk_buf_ok cosb ) ( gk_buf_ok sinb ) {} { ^ F }
+    ? & & > heads 0 > n 0 & > dim 0 == % dim 2 0 {} { ^ F }
+    ? == . x n ( _gk_p3 heads n dim ) {} { ^ F }
+    // Positions and tables checked as in gkd_rope2d.
+    ? & & == . x dtype GK_F32 == . fr dtype GK_I64 & == . rw dtype GK_I64 == . cl dtype GK_I64 {} { ^ F }
+    ? & & >= . fr n n >= . rw n n & >= . cl n n & == . cosb dtype GK_F32 == . sinb dtype GK_F32 {} { ^ F }
+    : i tl ? < . cosb n . sinb n . cosb n . sinb n
+    : String src ( string_from `extern "C" __global__ void gkd_rope3d(float* X, const long long* fr, const long long* rw, const long long* cl, const float* cosT, const float* sinT, long long heads, long long n, long long dim, long long nt, long long nh, long long tl){` )
+    ( string_push_str src `long long width=dim/2;` )
+    ( string_push_str src `long long tot=heads*n*width;` )
+    ( string_push_str src `long long idx=blockIdx.x*blockDim.x+threadIdx.x;if(idx>=tot)return;` )
+    ( string_push_str src `long long j=idx%width; long long r=idx/width;` )
+    ( string_push_str src `long long t=r%n; long long h=r/n;` )
+    ( string_push_str src `long long pos = (j<nt) ? fr[t] : ((j<nt+nh) ? rw[t] : cl[t]);` )
+    ( string_push_str src `long long tbl=pos*width+j;if(pos<0||tbl>=tl)return;` )
+    ( string_push_str src `long long base=h*n*dim+t*dim+2*j;` )
+    ( string_push_str src `float c=cosT[tbl], s=sinT[tbl];` )
+    ( string_push_str src `float x1=X[base], x2=X[base+1];` )
+    ( string_push_str src `X[base]=x1*c-x2*s; X[base+1]=x1*s+x2*c;}` )
+    : ( Vec i ) args ( vec_new [i] )
+    ( vec_push [i] args ( gk_arg_dev x ) )
+    ( vec_push [i] args ( gk_arg_dev fr ) )
+    ( vec_push [i] args ( gk_arg_dev rw ) )
+    ( vec_push [i] args ( gk_arg_dev cl ) )
+    ( vec_push [i] args ( gk_arg_dev cosb ) )
+    ( vec_push [i] args ( gk_arg_dev sinb ) )
+    ( vec_push [i] args ( gpu_arg_i64 heads ) )
+    ( vec_push [i] args ( gpu_arg_i64 n ) )
+    ( vec_push [i] args ( gpu_arg_i64 dim ) )
+    ( vec_push [i] args ( gpu_arg_i64 nt ) )
+    ( vec_push [i] args ( gpu_arg_i64 nh ) )
+    ( vec_push [i] args ( gpu_arg_i64 tl ) )
+    : i tot * heads * n / dim 2
+    ^ ( __gkd_launch kit src ( string_from `gkd_rope3d` ) ( gk_grid tot 256 ) args )
 }

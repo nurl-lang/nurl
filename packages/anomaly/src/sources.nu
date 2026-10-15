@@ -998,17 +998,10 @@ $ `stdlib/core/slice.nu`
 // ── Running ───────────────────────────────────────────────────────────
 
 // Sources mid-run, as "<org>/<id>", so a manual run and the scheduler
-// never fetch the same source at once. Touched only under the service
-// lock (which is what the `unsafe` on its two users vouches for).
-: ~ ( Vec String ) g_src_running 0
-: ~ b g_src_running_made F
+// never fetch the same source at once.
+@ __src_running_blank → ( Locked ( Vec String ) ) { ^ ( locked_new [( Vec String )] ( vec_new [String] ) ) }
 
-unsafe @ __src_running_init → v {
-    ? g_src_running_made {} {
-        = g_src_running ( vec_new [String] )
-        = g_src_running_made T
-    }
-}
+: ( Locked ( Vec String ) ) g_src_running ( __src_running_blank )
 
 @ __src_run_key s org s id → String {
     : String k ( string_from org )
@@ -1017,10 +1010,9 @@ unsafe @ __src_running_init → v {
     ^ k
 }
 
-unsafe @ source_is_running s org s id → b {
+@ source_is_running s org s id → b {
     : String key ( __src_run_key org id )
-    ( __src_running_init )
-    : ( Vec String ) v g_src_running
+    : ( Vec String ) v ( locked_take [( Vec String )] g_src_running )
     : i n ( vec_len [String] v )
     : ~ i k 0
     : ~ b found F
@@ -1031,12 +1023,12 @@ unsafe @ source_is_running s org s id → b {
         }
         = k + k 1
     }
+    ( locked_restore [( Vec String )] g_src_running v )
     ^ found
 }
 
-unsafe @ __src_mark_running s org s id b on → v {
-    ( __src_running_init )
-    : ( Vec String ) v g_src_running
+@ __src_mark_running s org s id b on → v {
+    : ~ ( Vec String ) v ( locked_take [( Vec String )] g_src_running )
     ? on {
         ( vec_push [String] v ( __src_run_key org id ) )
     } {
@@ -1055,18 +1047,19 @@ unsafe @ __src_mark_running s org s id b on → v {
             ?? ( vec_remove [String] v hit ) { T gone → {} F _ → {} }
         } {}
     }
+    ( locked_restore [( Vec String )] g_src_running v )
 }
 
 // Import projected points into the source's model, claiming a model the
 // run brings into being for the organisation. Returns "" or why not.
 // The caller holds the service lock.
-unsafe @ __src_ingest s org Json src SrcProject sp i now b trained_out → String {
+@ __src_ingest s org Json src SrcProject sp i now b trained_out → String {
     : String model ( __src_jstr src `model` )
     : String who ( string_from `source:` )
     : String sid ( __src_jstr src `id` )
     ( string_push_str who ( string_data sid ) )
     ( anomaly_set_actor ( string_data who ) )
-    : Store st ( store_open_org ( orgfiles_root ) org )
+    : Store st ( store_open_org ( string_data ( orgfiles_root ) ) org )
     : b existed ( store_exists st ( string_data model ) )
     : ~ String err ( string_new )
     ? & existed ( anomaly_authz_enabled ) {
@@ -1086,15 +1079,13 @@ unsafe @ __src_ingest s org Json src SrcProject sp i now b trained_out → Strin
     ? > ( string_len err ) 0 {
         ^ err
     } {}
-    : Model mo__h ( model_open st ( string_data model ) )
-    : *ModelImpl mo ( _Model_ptr mo__h )
+    : ~ Model mo ( model_open st ( string_data model ) )
     // A categorical column is declared before the first point arrives,
     // or a coordinate would be judged a number by its first value. On a
     // model that already knows the column the kind is settled and the
     // declaration is a no-op.
     ?? ( json_obj_get src `categorical` ) {
         T cv → {
-            : *MetaImpl mm ( _Meta_ptr . mo meta )
             : i ncv ( json_arr_len cv )
             : ~ i k 0
             ~ < k ncv {
@@ -1107,7 +1098,7 @@ unsafe @ __src_ingest s org Json src SrcProject sp i now b trained_out → Strin
         }
         F _ → {}
     }
-    : ImportReport rep ( model_import_at mo__h . sp points now )
+    : ImportReport rep ( model_import_at mo . sp points now )
     ? > ( string_len . rep err ) 0 {
         = err ( string_clone . rep err )
     } {
@@ -1124,7 +1115,7 @@ unsafe @ __src_ingest s org Json src SrcProject sp i now b trained_out → Strin
     ( __src_set_int src `last_rows` . rep accepted )
     ( __src_set_int src `total_rows` + ( _src_jint src `total_rows` 0 ) . rep accepted )
     ( json_obj_set src `last_trained` ( json_bool . rep trained ) )
-    ? . rep trained { ( json_obj_set src `last_tuned` ( json_bool ( __src_first_train mo__h src . sp points now ) ) ) } {}
+    ? . rep trained { ( json_obj_set src `last_tuned` ( json_bool ( __src_first_train mo src . sp points now ) ) ) } {}
     ^ err
 }
 
@@ -1171,13 +1162,12 @@ unsafe @ __src_ingest s org Json src SrcProject sp i now b trained_out → Strin
 // version on fits the daily rhythm the feed has, not a plain ARIMA. A
 // model tuned before, by hand or by an earlier run, is left as it is.
 // Returns whether the margins were calibrated now.
-unsafe @ __src_first_train Model mo Json src ( Vec Json ) points i now → b {
-    : Meta mm__h ( model_metadata mo )
-    : *MetaImpl mm ( _Meta_ptr mm__h )
+@ __src_first_train inout Model mo Json src ( Vec Json ) points i now → b {
+    : ~ Meta mm ( model_metadata mo )
     ? == . mm tuned_at 0 {} { ^ F }
     : i season ( source_season_of ( source_step_of points ) )
     ? > season 0 {
-        : i at ( meta_find_version mm__h ANOM_FC_NAME )
+        : i at ( meta_find_version mm ANOM_FC_NAME )
         : ~ b unset T
         ? >= at 0 { ?? ( vec_get [VerCfg] . mm versions at ) { T vc → { ? > . vc window_size 0 { = unset F } {} } F _ → {} } } {}
         ? unset { : b _w ( model_set_version_window mo ANOM_FC_NAME season 0 ) } {}

@@ -1,0 +1,8 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+1 3 5 7 9 
+replaced
+3
+2

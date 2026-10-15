@@ -52,132 +52,151 @@ $ `deps/gpukit/src/gpukit.nu`
 @ _aeg_eval_chunk → i { ^ 4096 }
 
 // ── the kernels ───────────────────────────────────────────────────────
-// meta (i64): [0]=n_layers [1]=n_a [2]=d [3]=dout, then sizes(nl+1),
-// w_off(nl), b_off(nl), a_off(nl+1). One block per row for fwd/bwd/diff
-// (threads stride the neurons, __syncthreads between layers); one thread
-// per parameter for grad/adam.
-@ _aeg_kernel_src → s {
-    ^ `extern "C" __global__ void ae_fwd(const long long* meta, const double* X, const long long* idx, long long at, long long count, long long d, const double* w, const double* bb, double* acts)
-{
-    long long s = blockIdx.x; if (s >= count) return;
-    long long nl = meta[0]; long long n_a = meta[1];
-    const long long* sz = meta + 4;
-    const long long* wop = sz + nl + 1;
-    const long long* bop = wop + nl;
-    const long long* aop = bop + nl;
-    long long r = idx[at + s];
-    double* a = acts + s * n_a;
-    for (long long c = threadIdx.x; c < d; c += blockDim.x) a[c] = X[r * d + c];
-    __syncthreads();
+// In gpukit's checked subset (gk_run_checked_dev): every read and write is
+// an LD / ST of a bound device buffer, and the barriers are SYNC()s the
+// subset proves the whole block reaches. meta (i64): [0]=n_layers [1]=n_a
+// [2]=d [3]=dout, then sizes(nl+1) at 4, w_off(nl), b_off(nl), a_off(nl+1).
+// One block per row for fwd/bwd/diff (threads stride the neurons, a SYNC()
+// between layers); one thread per parameter for grad/adam.
+
+@ _aeg_fwd_body → s {
+    ^ `long long s = bid;
+if (s < count) {
+    long long nl = LD(meta, 0);
+    long long n_a = LD(meta, 1);
+    long long wb = 4 + nl + 1;
+    long long bb0 = wb + nl;
+    long long ab = bb0 + nl;
+    long long r = LD(idx, at + s);
+    long long a = s * n_a;
+    for (long long c = tid; c < d; c += bdim) { ST(acts, a + c, LD(X, r * d + c)); }
+    SYNC();
     for (long long l = 0; l < nl; l++) {
-        long long fin = sz[l]; long long fout = sz[l + 1];
-        long long wo = wop[l]; long long bo = bop[l];
-        long long ai = aop[l]; long long ao = aop[l + 1];
-        int last = (l == nl - 1) ? 1 : 0;
-        for (long long j = threadIdx.x; j < fout; j += blockDim.x) {
-            double z = bb[bo + j];
+        long long fin = LD(meta, 4 + l);
+        long long fout = LD(meta, 5 + l);
+        long long wo = LD(meta, wb + l);
+        long long bo = LD(meta, bb0 + l);
+        long long ai = LD(meta, ab + l);
+        long long ao = LD(meta, ab + l + 1);
+        long long last = (l == nl - 1) ? 1 : 0;
+        for (long long j = tid; j < fout; j += bdim) {
+            double z = LD(bb, bo + j);
             long long wrow = wo + j * fin;
-            for (long long i2 = 0; i2 < fin; i2++)
-                z = __dadd_rn(z, __dmul_rn(w[wrow + i2], a[ai + i2]));
-            if (!last && z < 0.0) z = 0.0;
-            a[ao + j] = z;
+            for (long long i2 = 0; i2 < fin; i2++) {
+                z = __dadd_rn(z, __dmul_rn(LD(w, wrow + i2), LD(acts, a + ai + i2)));
+            }
+            if (!last && z < 0.0) { z = 0.0; }
+            ST(acts, a + ao + j, z);
         }
-        __syncthreads();
+        SYNC();
     }
+}`
 }
-extern "C" __global__ void ae_bwd(const long long* meta, const double* Y, const long long* idx, long long at, long long count, long long dout, const double* w, const double* acts, double* deltas, double* outdiff)
-{
-    long long s = blockIdx.x; if (s >= count) return;
-    long long nl = meta[0]; long long n_a = meta[1];
-    const long long* sz = meta + 4;
-    const long long* wop = sz + nl + 1;
-    const long long* aop = wop + nl + nl;
-    long long r = idx[at + s];
-    const double* a = acts + s * n_a;
-    double* dl = deltas + s * n_a;
-    long long oa = aop[nl];
-    for (long long j = threadIdx.x; j < dout; j += blockDim.x) {
-        double e = __dsub_rn(a[oa + j], Y[r * dout + j]);
-        dl[oa + j] = e;
-        outdiff[s * dout + j] = e;
+
+@ _aeg_bwd_body → s {
+    ^ `long long s = bid;
+if (s < count) {
+    long long nl = LD(meta, 0);
+    long long n_a = LD(meta, 1);
+    long long wb = 4 + nl + 1;
+    long long ab = wb + nl + nl;
+    long long r = LD(idx, at + s);
+    long long a = s * n_a;
+    long long oa = LD(meta, ab + nl);
+    for (long long j = tid; j < dout; j += bdim) {
+        double e = __dsub_rn(LD(acts, a + oa + j), LD(Y, r * dout + j));
+        ST(deltas, a + oa + j, e);
+        ST(outdiff, s * dout + j, e);
     }
-    __syncthreads();
+    SYNC();
     for (long long l = nl - 1; l >= 1; l--) {
-        long long fin = sz[l]; long long fout = sz[l + 1];
-        long long wo = wop[l]; long long ai = aop[l]; long long ao = aop[l + 1];
-        for (long long i3 = threadIdx.x; i3 < fin; i3 += blockDim.x) {
+        long long fin = LD(meta, 4 + l);
+        long long fout = LD(meta, 5 + l);
+        long long wo = LD(meta, wb + l);
+        long long ai = LD(meta, ab + l);
+        long long ao = LD(meta, ab + l + 1);
+        for (long long i3 = tid; i3 < fin; i3 += bdim) {
             double sm = 0.0;
-            for (long long j2 = 0; j2 < fout; j2++)
-                sm = __dadd_rn(sm, __dmul_rn(w[wo + j2 * fin + i3], dl[ao + j2]));
-            if (a[ai + i3] <= 0.0) sm = 0.0;
-            dl[ai + i3] = sm;
+            for (long long j2 = 0; j2 < fout; j2++) {
+                sm = __dadd_rn(sm, __dmul_rn(LD(w, wo + j2 * fin + i3), LD(deltas, a + ao + j2)));
+            }
+            if (LD(acts, a + ai + i3) <= 0.0) { sm = 0.0; }
+            ST(deltas, a + ai + i3, sm);
         }
-        __syncthreads();
+        SYNC();
     }
+}`
 }
-extern "C" __global__ void ae_grad(const long long* meta, long long n_w, long long n_b, long long count, const double* acts, const double* deltas, double* gw, double* gb)
-{
-    long long k = (long long)blockIdx.x * blockDim.x + threadIdx.x;
-    long long nl = meta[0]; long long n_a = meta[1];
-    const long long* sz = meta + 4;
-    const long long* wop = sz + nl + 1;
-    const long long* bop = wop + nl;
-    const long long* aop = bop + nl;
-    if (k < n_w) {
-        long long l = nl - 1;
-        while (l > 0 && wop[l] > k) l--;
-        long long fin = sz[l];
-        long long off = k - wop[l];
-        long long j = off / fin; long long i2 = off % fin;
-        long long ai = aop[l]; long long ao = aop[l + 1];
-        double acc = 0.0;
-        for (long long s = 0; s < count; s++)
-            acc = __dadd_rn(acc, __dmul_rn(deltas[s * n_a + ao + j], acts[s * n_a + ai + i2]));
-        gw[k] = acc;
-    } else if (k < n_w + n_b) {
-        long long kb = k - n_w;
-        long long l = nl - 1;
-        while (l > 0 && bop[l] > kb) l--;
-        long long j = kb - bop[l];
-        long long ao = aop[l + 1];
-        double acc = 0.0;
-        for (long long s = 0; s < count; s++)
-            acc = __dadd_rn(acc, deltas[s * n_a + ao + j]);
-        gb[kb] = acc;
+
+@ _aeg_grad_body → s {
+    ^ `long long k = gid;
+long long nl = LD(meta, 0);
+long long n_a = LD(meta, 1);
+long long wb = 4 + nl + 1;
+long long bb0 = wb + nl;
+long long ab = bb0 + nl;
+if (k < n_w) {
+    long long l = nl - 1;
+    while (l > 0 && LD(meta, wb + l) > k) { l--; }
+    long long fin = LD(meta, 4 + l);
+    long long off = k - LD(meta, wb + l);
+    long long j = off / fin;
+    long long i2 = off % fin;
+    long long ai = LD(meta, ab + l);
+    long long ao = LD(meta, ab + l + 1);
+    double acc = 0.0;
+    for (long long s = 0; s < count; s++) {
+        acc = __dadd_rn(acc, __dmul_rn(LD(deltas, s * n_a + ao + j), LD(acts, s * n_a + ai + i2)));
     }
+    ST(gw, k, acc);
+} else if (k < n_w + n_b) {
+    long long kb = k - n_w;
+    long long l = nl - 1;
+    while (l > 0 && LD(meta, bb0 + l) > kb) { l--; }
+    long long j = kb - LD(meta, bb0 + l);
+    long long ao = LD(meta, ab + l + 1);
+    double acc = 0.0;
+    for (long long s = 0; s < count; s++) { acc = __dadd_rn(acc, LD(deltas, s * n_a + ao + j)); }
+    ST(gb, kb, acc);
+}`
 }
-extern "C" __global__ void ae_adam(long long n_w, long long n_b, double lrt, double alpha, double fb, double* w, double* bb, double* mw, double* vw, double* mb, double* vb, double* gw, double* gb)
-{
-    long long k = (long long)blockIdx.x * blockDim.x + threadIdx.x;
-    double b1 = 0.9; double b2 = 0.999; double eps = 0.00000001;
-    if (k < n_w) {
-        double g = __dadd_rn(gw[k], __dmul_rn(alpha, w[k])) / fb;
-        double nm = __dadd_rn(__dmul_rn(b1, mw[k]), __dmul_rn(__dsub_rn(1.0, b1), g));
-        double nv = __dadd_rn(__dmul_rn(b2, vw[k]), __dmul_rn(__dsub_rn(1.0, b2), __dmul_rn(g, g)));
-        mw[k] = nm; vw[k] = nv;
-        w[k] = __dsub_rn(w[k], __dmul_rn(lrt, nm) / __dadd_rn(sqrt(nv), eps));
-        gw[k] = 0.0;
-    } else if (k < n_w + n_b) {
-        long long kb = k - n_w;
-        double g = gb[kb] / fb;
-        double nm = __dadd_rn(__dmul_rn(b1, mb[kb]), __dmul_rn(__dsub_rn(1.0, b1), g));
-        double nv = __dadd_rn(__dmul_rn(b2, vb[kb]), __dmul_rn(__dsub_rn(1.0, b2), __dmul_rn(g, g)));
-        mb[kb] = nm; vb[kb] = nv;
-        bb[kb] = __dsub_rn(bb[kb], __dmul_rn(lrt, nm) / __dadd_rn(sqrt(nv), eps));
-        gb[kb] = 0.0;
+
+@ _aeg_adam_body → s {
+    ^ `long long k = gid;
+double b1 = 0.9;
+double b2 = 0.999;
+double eps = 0.00000001;
+if (k < n_w) {
+    double g = __dadd_rn(LD(gw, k), __dmul_rn(alpha, LD(w, k))) / fb;
+    double nm = __dadd_rn(__dmul_rn(b1, LD(mw, k)), __dmul_rn(__dsub_rn(1.0, b1), g));
+    double nv = __dadd_rn(__dmul_rn(b2, LD(vw, k)), __dmul_rn(__dsub_rn(1.0, b2), __dmul_rn(g, g)));
+    ST(mw, k, nm);
+    ST(vw, k, nv);
+    ST(w, k, __dsub_rn(LD(w, k), __dmul_rn(lrt, nm) / __dadd_rn(sqrt(nv), eps)));
+    ST(gw, k, 0.0);
+} else if (k < n_w + n_b) {
+    long long kb = k - n_w;
+    double g = LD(gb, kb) / fb;
+    double nm = __dadd_rn(__dmul_rn(b1, LD(mb, kb)), __dmul_rn(__dsub_rn(1.0, b1), g));
+    double nv = __dadd_rn(__dmul_rn(b2, LD(vb, kb)), __dmul_rn(__dsub_rn(1.0, b2), __dmul_rn(g, g)));
+    ST(mb, kb, nm);
+    ST(vb, kb, nv);
+    ST(bb, kb, __dsub_rn(LD(bb, kb), __dmul_rn(lrt, nm) / __dadd_rn(sqrt(nv), eps)));
+    ST(gb, kb, 0.0);
+}`
+}
+
+@ _aeg_diff_body → s {
+    ^ `long long s = bid;
+if (s < count) {
+    long long nl = LD(meta, 0);
+    long long n_a = LD(meta, 1);
+    long long oa = LD(meta, 4 + (nl + 1) + nl + nl + nl);
+    long long r = LD(idx, at + s);
+    for (long long j = tid; j < dout; j += bdim) {
+        ST(outdiff, s * dout + j, __dsub_rn(LD(acts, s * n_a + oa + j), LD(Y, r * dout + j)));
     }
-}
-extern "C" __global__ void ae_diff(const long long* meta, const double* Y, const long long* idx, long long at, long long count, long long dout, const double* acts, double* outdiff)
-{
-    long long s = blockIdx.x; if (s >= count) return;
-    long long nl = meta[0]; long long n_a = meta[1];
-    const long long* aop = meta + 4 + (nl + 1) + nl + nl;
-    long long oa = aop[nl];
-    long long r = idx[at + s];
-    for (long long j = threadIdx.x; j < dout; j += blockDim.x)
-        outdiff[s * dout + j] = __dsub_rn(acts[s * n_a + oa + j], Y[r * dout + j]);
-}
-`
+}`
 }
 
 // ── device context ────────────────────────────────────────────────────
@@ -185,27 +204,22 @@ extern "C" __global__ void ae_diff(const long long* meta, const double* Y, const
 // except idx / meta (i64). X doubles as Y (autoencoder: target == input).
 : AeGpu {
     b ok
-    Gpu g
-    GpuKernel kfwd
-    GpuKernel kbwd
-    GpuKernel kgrad
-    GpuKernel kadam
-    GpuKernel kdiff
-    GpuBuffer bmeta
-    GpuBuffer bx
-    GpuBuffer bidx
-    GpuBuffer bw
-    GpuBuffer bb
-    GpuBuffer bmw
-    GpuBuffer bvw
-    GpuBuffer bmb
-    GpuBuffer bvb
-    GpuBuffer bgw
-    GpuBuffer bgb
-    GpuBuffer bacts
-    GpuBuffer bdeltas
-    GpuBuffer bodt  // train outdiff: bsz × dout
-    GpuBuffer bode  // eval outdiff: eval_chunk × dout
+    GpuKit kit
+    GkBuf bmeta
+    GkBuf bx
+    GkBuf bidx
+    GkBuf bw
+    GkBuf bb
+    GkBuf bmw
+    GkBuf bvw
+    GkBuf bmb
+    GkBuf bvb
+    GkBuf bgw
+    GkBuf bgb
+    GkBuf bacts
+    GkBuf bdeltas
+    GkBuf bodt  // train outdiff: bsz × dout
+    GkBuf bode  // eval outdiff: eval_chunk × dout
 }
 
 // The meta buffer content for a freshly built net.
@@ -227,49 +241,67 @@ extern "C" __global__ void ae_diff(const long long* meta, const double* Y, const
     ^ meta
 }
 
-// Open the context: buffers + the five kernels, on score.nu's device
-// singleton. Any failure → ok=F (caller falls back to mlp_fit).
-unsafe @ _aeg_open Mlp m i n i d i dout i bsz → AeGpu {
-    : Gpu g ( gk_gpu ( __an_gpukit_ref ) )
-    : s src ( _aeg_kernel_src )
-    : GpuKernel kfwd ( gpu_compile g src `ae_fwd` )
-    : GpuKernel kbwd ( gpu_compile g src `ae_bwd` )
-    : GpuKernel kgrad ( gpu_compile g src `ae_grad` )
-    : GpuKernel kadam ( gpu_compile g src `ae_adam` )
-    : GpuKernel kdiff ( gpu_compile g src `ae_diff` )
+// Open the context: the buffers, on score.nu's device singleton (the
+// kernels are checked and compiled at their first launch). Any failure →
+// ok=F (caller falls back to mlp_fit).
+@ _aeg_open Mlp m i n i d i dout i bsz → AeGpu {
+    : GpuKit kit ( __an_gpukit_ref )
     : ( Vec i ) meta ( _aeg_meta m d dout )
     : i ch ( _aeg_eval_chunk )
     : i rows ? > bsz ch bsz ch
-    : GpuBuffer bmeta ( gpu_alloc g * ( vec_len [i] meta ) 8 )
-    : GpuBuffer bx ( gpu_alloc g * * n d 8 )
-    : GpuBuffer bidx ( gpu_alloc g * n 8 )
-    : GpuBuffer bw ( gpu_alloc g * . m n_w 8 )
-    : GpuBuffer bb2 ( gpu_alloc g * . m n_b 8 )
-    : GpuBuffer bmw ( gpu_alloc g * . m n_w 8 )
-    : GpuBuffer bvw ( gpu_alloc g * . m n_w 8 )
-    : GpuBuffer bmb ( gpu_alloc g * . m n_b 8 )
-    : GpuBuffer bvb ( gpu_alloc g * . m n_b 8 )
-    : GpuBuffer bgw ( gpu_alloc g * . m n_w 8 )
-    : GpuBuffer bgb ( gpu_alloc g * . m n_b 8 )
-    : GpuBuffer bacts ( gpu_alloc g * * rows . m n_a 8 )
-    : GpuBuffer bdeltas ( gpu_alloc g * * bsz . m n_a 8 )
-    : GpuBuffer bodt ( gpu_alloc g * * bsz dout 8 )
-    : GpuBuffer bode ( gpu_alloc g * * ch dout 8 )
+    : GkBuf bmeta ( gk_dbuf_new kit ( vec_len [i] meta ) GK_I64 )
+    : GkBuf bx ( gk_dbuf_new kit * n d GK_F64 )
+    : GkBuf bidx ( gk_dbuf_new kit n GK_I64 )
+    : GkBuf bw ( gk_dbuf_new kit . m n_w GK_F64 )
+    : GkBuf bb2 ( gk_dbuf_new kit . m n_b GK_F64 )
+    : GkBuf bmw ( gk_dbuf_new kit . m n_w GK_F64 )
+    : GkBuf bvw ( gk_dbuf_new kit . m n_w GK_F64 )
+    : GkBuf bmb ( gk_dbuf_new kit . m n_b GK_F64 )
+    : GkBuf bvb ( gk_dbuf_new kit . m n_b GK_F64 )
+    : GkBuf bgw ( gk_dbuf_new kit . m n_w GK_F64 )
+    : GkBuf bgb ( gk_dbuf_new kit . m n_b GK_F64 )
+    : GkBuf bacts ( gk_dbuf_new kit * rows . m n_a GK_F64 )
+    : GkBuf bdeltas ( gk_dbuf_new kit * bsz . m n_a GK_F64 )
+    : GkBuf bodt ( gk_dbuf_new kit * bsz dout GK_F64 )
+    : GkBuf bode ( gk_dbuf_new kit * ch dout GK_F64 )
     : ~ b ok T
-    ? ( gpu_kernel_ok kfwd ) {} { = ok F }
-    ? ( gpu_kernel_ok kbwd ) {} { = ok F }
-    ? ( gpu_kernel_ok kgrad ) {} { = ok F }
-    ? ( gpu_kernel_ok kadam ) {} { = ok F }
-    ? ( gpu_kernel_ok kdiff ) {} { = ok F }
-    ? != . bmeta dptr 0 {} { = ok F }
-    ? != . bx dptr 0 {} { = ok F }
-    ? != . bidx dptr 0 {} { = ok F }
-    ? != . bw dptr 0 {} { = ok F }
-    ? != . bb2 dptr 0 {} { = ok F }
-    ? != . bacts dptr 0 {} { = ok F }
-    ? != . bdeltas dptr 0 {} { = ok F }
-    ? ok { ? != ( gpu_upload bmeta # *u ( vec_data [i] meta ) ) 0 { = ok F } {} } {}
-    ^ @ AeGpu { ok g kfwd kbwd kgrad kadam kdiff bmeta bx bidx bw bb2 bmw bvw bmb bvb bgw bgb bacts bdeltas bodt bode }
+    ? & & & ( gk_buf_ok bmeta ) ( gk_buf_ok bx ) ( gk_buf_ok bidx ) & ( gk_buf_ok bw ) ( gk_buf_ok bb2 ) {} { = ok F }
+    ? & & & ( gk_buf_ok bmw ) ( gk_buf_ok bvw ) ( gk_buf_ok bmb ) & ( gk_buf_ok bvb ) ( gk_buf_ok bgw ) {} { = ok F }
+    ? & & & ( gk_buf_ok bgb ) ( gk_buf_ok bacts ) ( gk_buf_ok bdeltas ) & ( gk_buf_ok bodt ) ( gk_buf_ok bode ) {} { = ok F }
+    ? ok { = ok ( gk_dbuf_upload_i kit bmeta meta ) } {}
+    ^ @ AeGpu { ok kit bmeta bx bidx bw bb2 bmw bvw bmb bvb bgw bgb bacts bdeltas bodt bode }
+}
+
+// The bound launches of one training run: each kernel's buffers, and its
+// scalars set per launch (gk_call_set_*).
+: AeCalls { GkCall fwd GkCall bwd GkCall grad GkCall adam GkCall vfwd GkCall diff }
+
+@ _aeg_calls AeGpu cx Mlp m i d i dout f alpha → AeCalls {
+    : ~ GkCall f1 ( gk_call_new )
+    ( gk_call_dev_in f1 `meta` . cx bmeta ) ( gk_call_dev_in f1 `X` . cx bx ) ( gk_call_dev_in f1 `idx` . cx bidx )
+    ( gk_call_i64 f1 `at` 0 ) ( gk_call_i64 f1 `count` 0 ) ( gk_call_i64 f1 `d` d )
+    ( gk_call_dev_in f1 `w` . cx bw ) ( gk_call_dev_in f1 `bb` . cx bb ) ( gk_call_dev f1 `acts` . cx bacts )
+    : ~ GkCall f2 ( gk_call_new )
+    ( gk_call_dev_in f2 `meta` . cx bmeta ) ( gk_call_dev_in f2 `Y` . cx bx ) ( gk_call_dev_in f2 `idx` . cx bidx )
+    ( gk_call_i64 f2 `at` 0 ) ( gk_call_i64 f2 `count` 0 ) ( gk_call_i64 f2 `dout` dout )
+    ( gk_call_dev_in f2 `w` . cx bw ) ( gk_call_dev_in f2 `acts` . cx bacts ) ( gk_call_dev f2 `deltas` . cx bdeltas ) ( gk_call_dev f2 `outdiff` . cx bodt )
+    : ~ GkCall f3 ( gk_call_new )
+    ( gk_call_dev_in f3 `meta` . cx bmeta ) ( gk_call_i64 f3 `n_w` . m n_w ) ( gk_call_i64 f3 `n_b` . m n_b ) ( gk_call_i64 f3 `count` 0 )
+    ( gk_call_dev_in f3 `acts` . cx bacts ) ( gk_call_dev_in f3 `deltas` . cx bdeltas ) ( gk_call_dev f3 `gw` . cx bgw ) ( gk_call_dev f3 `gb` . cx bgb )
+    : ~ GkCall f4 ( gk_call_new )
+    ( gk_call_i64 f4 `n_w` . m n_w ) ( gk_call_i64 f4 `n_b` . m n_b )
+    ( gk_call_f64 f4 `lrt` 0.0 ) ( gk_call_f64 f4 `alpha` alpha ) ( gk_call_f64 f4 `fb` 1.0 )
+    ( gk_call_dev f4 `w` . cx bw ) ( gk_call_dev f4 `bb` . cx bb ) ( gk_call_dev f4 `mw` . cx bmw ) ( gk_call_dev f4 `vw` . cx bvw )
+    ( gk_call_dev f4 `mb` . cx bmb ) ( gk_call_dev f4 `vb` . cx bvb ) ( gk_call_dev f4 `gw` . cx bgw ) ( gk_call_dev f4 `gb` . cx bgb )
+    : ~ GkCall f5 ( gk_call_new )
+    ( gk_call_dev_in f5 `meta` . cx bmeta ) ( gk_call_dev_in f5 `X` . cx bx ) ( gk_call_dev_in f5 `idx` . cx bidx )
+    ( gk_call_i64 f5 `at` 0 ) ( gk_call_i64 f5 `count` 0 ) ( gk_call_i64 f5 `d` d )
+    ( gk_call_dev_in f5 `w` . cx bw ) ( gk_call_dev_in f5 `bb` . cx bb ) ( gk_call_dev f5 `acts` . cx bacts )
+    : ~ GkCall f6 ( gk_call_new )
+    ( gk_call_dev_in f6 `meta` . cx bmeta ) ( gk_call_dev_in f6 `Y` . cx bx ) ( gk_call_dev_in f6 `idx` . cx bidx )
+    ( gk_call_i64 f6 `at` 0 ) ( gk_call_i64 f6 `count` 0 ) ( gk_call_i64 f6 `dout` dout )
+    ( gk_call_dev_in f6 `acts` . cx bacts ) ( gk_call_dev f6 `outdiff` . cx bode )
+    ^ @ AeCalls { f1 f2 f3 f4 f5 f6 }
 }
 
 // score.nu's kit (only valid when the engine probe succeeded).
@@ -281,7 +313,7 @@ unsafe @ _aeg_open Mlp m i n i d i dout i bsz → AeGpu {
 // Adam state and t are updated in place, exactly as mlp_train leaves them.
 // On ANY device error sets `fail` and returns immediately (the caller
 // discards everything and reruns on the CPU).
-unsafe @ _aeg_train AeGpu cx Mlp m ( Vec f ) X i n i d i dout MlpCfg cfg inout i fail → MlpTrain {
+@ _aeg_train AeGpu cx Mlp m ( Vec f ) X i n i d i dout MlpCfg cfg inout i fail → MlpTrain {
     : Rng g2 ( rng_seed . cfg seed )
     : i oa2 ( _mlp_iget . m a_off . m n_layers )
     // One shuffled split: [0, n_train) train, [n_train, n) validation.
@@ -306,17 +338,18 @@ unsafe @ _aeg_train AeGpu cx Mlp m ( Vec f ) X i n i d i dout MlpCfg cfg inout i
     : ( Vec f ) zeros ( vec_with_cap [f] . m n_w )
     : ~ i z 0
     ~ < z . m n_w { ( vec_push [f] zeros 0.0 ) = z + z 1 }
-    : ~ i up 0
-    = up + up ( gpu_upload . cx bw # *u ( vec_data [f] . m w ) )
-    = up + up ( gpu_upload . cx bb # *u ( vec_data [f] . m b ) )
-    = up + up ( gpu_upload . cx bmw # *u ( vec_data [f] zeros ) )
-    = up + up ( gpu_upload . cx bvw # *u ( vec_data [f] zeros ) )
-    = up + up ( gpu_upload . cx bmb # *u ( vec_data [f] zeros ) )
-    = up + up ( gpu_upload . cx bvb # *u ( vec_data [f] zeros ) )
-    = up + up ( gpu_upload . cx bgw # *u ( vec_data [f] zeros ) )
-    = up + up ( gpu_upload . cx bgb # *u ( vec_data [f] zeros ) )
-    = up + up ( gpu_upload . cx bx # *u ( vec_data [f] X ) )
-    ? != up 0 {
+    : GpuKit kit . cx kit
+    : ~ b up T
+    = up & up ( gk_dbuf_upload kit . cx bw . m w )
+    = up & up ( gk_dbuf_upload kit . cx bb . m b )
+    = up & up ( gk_dbuf_upload kit . cx bmw zeros )
+    = up & up ( gk_dbuf_upload kit . cx bvw zeros )
+    = up & up ( gk_dbuf_upload kit . cx bmb zeros )
+    = up & up ( gk_dbuf_upload kit . cx bvb zeros )
+    = up & up ( gk_dbuf_upload kit . cx bgw zeros )
+    = up & up ( gk_dbuf_upload kit . cx bgb zeros )
+    = up & up ( gk_dbuf_upload kit . cx bx X )
+    ? ! up {
         = fail 1
         ^ @ MlpTrain { 0 0.0 0.0 F }
     } {}
@@ -331,8 +364,9 @@ unsafe @ _aeg_train AeGpu cx Mlp m ( Vec f ) X i n i d i dout MlpCfg cfg inout i
     = z 0
     ~ < z * ? > bsz ch bsz ch dout { ( vec_push [f] od 0.0 ) = z + z 1 }
     : i nparam + . m n_w . m n_b
-    : i pgrid ( gpu_grid nparam 256 )
+    : i pgrid ( gk_grid nparam 256 )
     : f alpha . cfg alpha
+    : ~ AeCalls ac ( _aeg_calls cx m d dout alpha )
     : ~ f fb0 0.0  // per-batch, set below
     : ~ i tstep 0
     : ~ f best 0.0
@@ -350,7 +384,7 @@ unsafe @ _aeg_train AeGpu cx Mlp m ( Vec f ) X i n i d i dout MlpCfg cfg inout i
             ( vec_swap [i] idx k j )
             = k + k 1
         }
-        = gerr + gerr ( gpu_upload . cx bidx # *u ( vec_data [i] idx ) )
+        ? ( gk_dbuf_upload_i kit . cx bidx idx ) {} { = gerr + gerr 1 }
         // Minibatch pass.
         : ~ f se 0.0
         : ~ i at 0
@@ -359,61 +393,21 @@ unsafe @ _aeg_train AeGpu cx Mlp m ( Vec f ) X i n i d i dout MlpCfg cfg inout i
             ? > bend n_train { = bend n_train } {}
             : i cnt - bend at
             // forward + backprop + gradient + Adam, on the device
-            : ( Vec i ) a1 ( vec_new [i] )
-            ( vec_push [i] a1 ( gpu_arg_buffer . cx bmeta ) )
-            ( vec_push [i] a1 ( gpu_arg_buffer . cx bx ) )
-            ( vec_push [i] a1 ( gpu_arg_buffer . cx bidx ) )
-            ( vec_push [i] a1 ( gpu_arg_i64 at ) )
-            ( vec_push [i] a1 ( gpu_arg_i64 cnt ) )
-            ( vec_push [i] a1 ( gpu_arg_i64 d ) )
-            ( vec_push [i] a1 ( gpu_arg_buffer . cx bw ) )
-            ( vec_push [i] a1 ( gpu_arg_buffer . cx bb ) )
-            ( vec_push [i] a1 ( gpu_arg_buffer . cx bacts ) )
-            = gerr + gerr ( gpu_launch . cx kfwd cnt 64 a1 )
-            : ( Vec i ) a2 ( vec_new [i] )
-            ( vec_push [i] a2 ( gpu_arg_buffer . cx bmeta ) )
-            ( vec_push [i] a2 ( gpu_arg_buffer . cx bx ) )
-            ( vec_push [i] a2 ( gpu_arg_buffer . cx bidx ) )
-            ( vec_push [i] a2 ( gpu_arg_i64 at ) )
-            ( vec_push [i] a2 ( gpu_arg_i64 cnt ) )
-            ( vec_push [i] a2 ( gpu_arg_i64 dout ) )
-            ( vec_push [i] a2 ( gpu_arg_buffer . cx bw ) )
-            ( vec_push [i] a2 ( gpu_arg_buffer . cx bacts ) )
-            ( vec_push [i] a2 ( gpu_arg_buffer . cx bdeltas ) )
-            ( vec_push [i] a2 ( gpu_arg_buffer . cx bodt ) )
-            = gerr + gerr ( gpu_launch . cx kbwd cnt 64 a2 )
-            : ( Vec i ) a3 ( vec_new [i] )
-            ( vec_push [i] a3 ( gpu_arg_buffer . cx bmeta ) )
-            ( vec_push [i] a3 ( gpu_arg_i64 . m n_w ) )
-            ( vec_push [i] a3 ( gpu_arg_i64 . m n_b ) )
-            ( vec_push [i] a3 ( gpu_arg_i64 cnt ) )
-            ( vec_push [i] a3 ( gpu_arg_buffer . cx bacts ) )
-            ( vec_push [i] a3 ( gpu_arg_buffer . cx bdeltas ) )
-            ( vec_push [i] a3 ( gpu_arg_buffer . cx bgw ) )
-            ( vec_push [i] a3 ( gpu_arg_buffer . cx bgb ) )
-            = gerr + gerr ( gpu_launch . cx kgrad pgrid 256 a3 )
+            : b _s1 & ( gk_call_set_i64 . ac fwd `at` at ) ( gk_call_set_i64 . ac fwd `count` cnt )
+            ? ( gk_run_checked_dev kit . ac fwd `ae_fwd` ( _aeg_fwd_body ) cnt 64 ) {} { = gerr + gerr 1 }
+            : b _s2 & ( gk_call_set_i64 . ac bwd `at` at ) ( gk_call_set_i64 . ac bwd `count` cnt )
+            ? ( gk_run_checked_dev kit . ac bwd `ae_bwd` ( _aeg_bwd_body ) cnt 64 ) {} { = gerr + gerr 1 }
+            : b _s3 ( gk_call_set_i64 . ac grad `count` cnt )
+            ? ( gk_run_checked_dev kit . ac grad `ae_grad` ( _aeg_grad_body ) pgrid 256 ) {} { = gerr + gerr 1 }
             // Adam scalars on the host — exactly mlp's expressions.
             = tstep + tstep 1
             : f tf # f tstep
             : f lrt * . cfg lr / ( sqrt - 1.0 ( pow 0.999 tf ) ) - 1.0 ( pow 0.9 tf )
             = fb0 # f cnt
-            : ( Vec i ) a4 ( vec_new [i] )
-            ( vec_push [i] a4 ( gpu_arg_i64 . m n_w ) )
-            ( vec_push [i] a4 ( gpu_arg_i64 . m n_b ) )
-            ( vec_push [i] a4 ( gpu_arg_i64 ( f64_to_bits lrt ) ) )
-            ( vec_push [i] a4 ( gpu_arg_i64 ( f64_to_bits alpha ) ) )
-            ( vec_push [i] a4 ( gpu_arg_i64 ( f64_to_bits fb0 ) ) )
-            ( vec_push [i] a4 ( gpu_arg_buffer . cx bw ) )
-            ( vec_push [i] a4 ( gpu_arg_buffer . cx bb ) )
-            ( vec_push [i] a4 ( gpu_arg_buffer . cx bmw ) )
-            ( vec_push [i] a4 ( gpu_arg_buffer . cx bvw ) )
-            ( vec_push [i] a4 ( gpu_arg_buffer . cx bmb ) )
-            ( vec_push [i] a4 ( gpu_arg_buffer . cx bvb ) )
-            ( vec_push [i] a4 ( gpu_arg_buffer . cx bgw ) )
-            ( vec_push [i] a4 ( gpu_arg_buffer . cx bgb ) )
-            = gerr + gerr ( gpu_launch . cx kadam pgrid 256 a4 )
+            : b _s4 & ( gk_call_set_f64 . ac adam `lrt` lrt ) ( gk_call_set_f64 . ac adam `fb` fb0 )
+            ? ( gk_run_checked_dev kit . ac adam `ae_adam` ( _aeg_adam_body ) pgrid 256 ) {} { = gerr + gerr 1 }
             // the training-loss contribution, folded in the CPU's flat order
-            = gerr + gerr ( gpu_download # *u ( vec_data [f] od ) . cx bodt )
+            ? ( gk_dbuf_download kit . cx bodt od ) {} { = gerr + gerr 1 }
             : ~ i s2 0
             ~ < s2 cnt {
                 : ~ i j2 0
@@ -437,28 +431,11 @@ unsafe @ _aeg_train AeGpu cx Mlp m ( Vec f ) X i n i d i dout MlpCfg cfg inout i
                 : ~ i vend + vat ch
                 ? > vend n { = vend n } {}
                 : i vcnt - vend vat
-                : ( Vec i ) a5 ( vec_new [i] )
-                ( vec_push [i] a5 ( gpu_arg_buffer . cx bmeta ) )
-                ( vec_push [i] a5 ( gpu_arg_buffer . cx bx ) )
-                ( vec_push [i] a5 ( gpu_arg_buffer . cx bidx ) )
-                ( vec_push [i] a5 ( gpu_arg_i64 vat ) )
-                ( vec_push [i] a5 ( gpu_arg_i64 vcnt ) )
-                ( vec_push [i] a5 ( gpu_arg_i64 d ) )
-                ( vec_push [i] a5 ( gpu_arg_buffer . cx bw ) )
-                ( vec_push [i] a5 ( gpu_arg_buffer . cx bb ) )
-                ( vec_push [i] a5 ( gpu_arg_buffer . cx bacts ) )
-                = gerr + gerr ( gpu_launch . cx kfwd vcnt 64 a5 )
-                : ( Vec i ) a6 ( vec_new [i] )
-                ( vec_push [i] a6 ( gpu_arg_buffer . cx bmeta ) )
-                ( vec_push [i] a6 ( gpu_arg_buffer . cx bx ) )
-                ( vec_push [i] a6 ( gpu_arg_buffer . cx bidx ) )
-                ( vec_push [i] a6 ( gpu_arg_i64 vat ) )
-                ( vec_push [i] a6 ( gpu_arg_i64 vcnt ) )
-                ( vec_push [i] a6 ( gpu_arg_i64 dout ) )
-                ( vec_push [i] a6 ( gpu_arg_buffer . cx bacts ) )
-                ( vec_push [i] a6 ( gpu_arg_buffer . cx bode ) )
-                = gerr + gerr ( gpu_launch . cx kdiff vcnt 64 a6 )
-                = gerr + gerr ( gpu_download # *u ( vec_data [f] od ) . cx bode )
+                : b _s5 & ( gk_call_set_i64 . ac vfwd `at` vat ) ( gk_call_set_i64 . ac vfwd `count` vcnt )
+                ? ( gk_run_checked_dev kit . ac vfwd `ae_fwd` ( _aeg_fwd_body ) vcnt 64 ) {} { = gerr + gerr 1 }
+                : b _s6 & ( gk_call_set_i64 . ac diff `at` vat ) ( gk_call_set_i64 . ac diff `count` vcnt )
+                ? ( gk_run_checked_dev kit . ac diff `ae_diff` ( _aeg_diff_body ) vcnt 64 ) {} { = gerr + gerr 1 }
+                ? ( gk_dbuf_download kit . cx bode od ) {} { = gerr + gerr 1 }
                 : ~ i s3 0
                 ~ < s3 vcnt {
                     : ~ i j3 0
@@ -485,8 +462,7 @@ unsafe @ _aeg_train AeGpu cx Mlp m ( Vec f ) X i n i d i dout MlpCfg cfg inout i
                 ? | ! have_best < crit best { = best crit } {}
                 = have_best T
                 ? . cfg early_stop {
-                    = gerr + gerr ( gpu_download # *u ( vec_data [f] best_w ) . cx bw )
-                    = gerr + gerr ( gpu_download # *u ( vec_data [f] best_b ) . cx bb )
+                    ? & ( gk_dbuf_download kit . cx bw best_w ) ( gk_dbuf_download kit . cx bb best_b ) {} { = gerr + gerr 1 }
                 } {}
             } {
                 = bad + bad 1
@@ -508,15 +484,20 @@ unsafe @ _aeg_train AeGpu cx Mlp m ( Vec f ) X i n i d i dout MlpCfg cfg inout i
         = c3 0
         ~ < c3 . m n_b { ( vec_set [f] . m b c3 ( _mlp_fget best_b c3 ) ) = c3 + c3 1 }
     } {
-        = derr + derr ( gpu_download # *u ( vec_data [f] . m w ) . cx bw )
-        = derr + derr ( gpu_download # *u ( vec_data [f] . m b ) . cx bb )
+        ? & ( gk_dbuf_download kit . cx bw . m w ) ( gk_dbuf_download kit . cx bb . m b ) {} { = derr + derr 1 }
     }
-    = derr + derr ( gpu_download # *u ( vec_data [f] . m mw ) . cx bmw )
-    = derr + derr ( gpu_download # *u ( vec_data [f] . m vw ) . cx bvw )
-    = derr + derr ( gpu_download # *u ( vec_data [f] . m mb ) . cx bmb )
-    = derr + derr ( gpu_download # *u ( vec_data [f] . m vb ) . cx bvb )
+    ? & & ( gk_dbuf_download kit . cx bmw . m mw ) ( gk_dbuf_download kit . cx bvw . m vw ) & ( gk_dbuf_download kit . cx bmb . m mb ) ( gk_dbuf_download kit . cx bvb . m vb ) {} { = derr + derr 1 }
     ? != derr 0 { = fail 1 } {}
     ^ @ MlpTrain { epoch train_loss best stopped }
+}
+
+// ANOMALY_AEGPU_CPU=1: train through the device kernels on the gpu
+// package's CPU backend too — how the parity test and the kernels' timing
+// run on a machine without a GPU (native mlp_fit is the faster CPU path).
+@ __aeg_cpu_on → b {
+    : s v ( getenv `ANOMALY_AEGPU_CPU` )
+    ? == # i v 0 { ^ F } {}
+    ^ != 0 ( nurl_str_eq v `1` )
 }
 
 // ── the public entry: mlp_fit, GPU when a CUDA device is present ─────
@@ -524,7 +505,7 @@ unsafe @ _aeg_train AeGpu cx Mlp m ( Vec f ) X i n i d i dout MlpCfg cfg inout i
 // autoencoder case (target == input). Falls back to mlp_fit whenever the
 // engine is not `cuda` or any device step fails.
 @ aegpu_fit ( Vec i ) sizes ( Vec f ) X i n i d MlpCfg cfg i restarts → MlpFit {
-    ? == ( nurl_str_eq ( anom_gpu_engine ) `cuda` ) 1 {} {
+    ? | != 0 ( nurl_str_eq ( anom_gpu_engine ) `cuda` ) & != 0 ( nurl_str_eq ( anom_gpu_engine ) `cpu` ) ( __aeg_cpu_on ) {} {
         ^ ( mlp_fit sizes X n d X d cfg restarts )
     }
     // The batch size is data-dependent but restart-independent: compute it
@@ -548,6 +529,9 @@ unsafe @ _aeg_train AeGpu cx Mlp m ( Vec f ) X i n i d i dout MlpCfg cfg inout i
         ( nurl_eprintln `anomaly: autoencoder GPU setup failed, training on the CPU` )
         ^ ( mlp_fit sizes X n d X d cfg restarts )
     }
+    // Launches stream without a sync each: the downloads wait for them.
+    : b prev_sync g_gk_autosync
+    ( gk_autosync F )
     : ~ i fail 0
     : ~ MlpTrain best_tr ( _aeg_train cx best_m X n d d cfg fail )
     : ~ i r 1
@@ -563,6 +547,7 @@ unsafe @ _aeg_train AeGpu cx Mlp m ( Vec f ) X i n i d i dout MlpCfg cfg inout i
         }
         = r + r 1
     }
+    ( gk_autosync prev_sync )
     : i failed fail
     ? != failed 0 {
         ( nurl_eprintln `anomaly: autoencoder GPU training failed, retraining on the CPU` )

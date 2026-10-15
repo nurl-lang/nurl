@@ -27,6 +27,7 @@
 // browser warns once, but the bytes cross the LAN encrypted.
 
 $ `stdlib/core/string.nu`
+$ `stdlib/core/slice.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/std/path.nu`
@@ -51,8 +52,6 @@ $ `stdlib/std/arc.nu`
 
 @ VwState_drop sink VwState h → v {}
 
-unsafe @ __VwState_ptr VwState h → *VwStateImpl { ^ ( arc_ptr [VwStateImpl] . h a ) }
-
 // The page as compiled in. `--page FILE` reads from disk instead, which is
 // the only way to iterate on the viewer without rebuilding.
 @ vw_page s override → String {
@@ -72,8 +71,8 @@ unsafe @ __VwState_ptr VwState h → *VwStateImpl { ^ ( arc_ptr [VwStateImpl] . 
     ^ out
 }
 
-unsafe @ h_vw_index VwState h HttpRequest req Params p → HttpResponse {
-    : *VwStateImpl st ( __VwState_ptr h )
+@ h_vw_index VwState h HttpRequest req Params p → HttpResponse {
+    : VwStateImpl st ( arc_get [VwStateImpl] . h a )  // read-only once made
     : HttpResponse r ( response_new 200 )
     ( response_set_header r `Content-Type` `text/html; charset=utf-8` )
     // the page is regenerated on every build; never let a browser keep one
@@ -82,8 +81,8 @@ unsafe @ h_vw_index VwState h HttpRequest req Params p → HttpResponse {
     ^ r
 }
 
-unsafe @ h_vw_cloud VwState h HttpRequest req Params p → HttpResponse {
-    : *VwStateImpl st ( __VwState_ptr h )
+@ h_vw_cloud VwState h HttpRequest req Params p → HttpResponse {
+    : VwStateImpl st ( arc_get [VwStateImpl] . h a )  // read-only once made
     : HttpResponse r ( response_new 200 )
     ( response_set_header r `Content-Type` `application/octet-stream` )
     // the page shows this instead of the URL, so the window says which
@@ -95,7 +94,7 @@ unsafe @ h_vw_cloud VwState h HttpRequest req Params p → HttpResponse {
 }
 
 // Serve `path` until interrupted. Returns a process exit code.
-unsafe @ vw_serve s path s host i port s page_override i quiet i tls → i {
+@ vw_serve s path s host i port s page_override i quiet i tls → i {
     : !( Vec u ) IoErr rd ( read_file_bytes path )
     : ~ ( Vec u ) blob ( vec_new [u] )
     ?? rd {
@@ -113,8 +112,8 @@ unsafe @ vw_serve s path s host i port s page_override i quiet i tls → i {
     } {}
     // "ply" — checked here rather than in the browser so the error names
     // the file the user typed, on the terminal they typed it in
-    : *u magic ( vec_data [u] blob )
-    ? & & == 112 # i . magic 0 == 108 # i . magic 1 == 121 # i . magic 2 {} {
+    : ( Slice u ) magic ( slice_from_vec [u] blob )
+    ? & & == 112 # i ( slice_at [u] magic 0 ) == 108 # i ( slice_at [u] magic 1 ) == 121 # i ( slice_at [u] magic 2 ) {} {
         ( nurl_print `ply: ` ) ( nurl_print path )
         ( nurl_print ` does not start with 'ply' — not a point cloud\n` )
         ^ 1

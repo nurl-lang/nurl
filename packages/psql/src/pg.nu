@@ -29,7 +29,7 @@ $ `stdlib/std/hash_md5.nu`
 $ `stdlib/std/random.nu`
 $ `scram.nu`
 $ `stdlib/std/tls.nu`
-$ `stdlib/std/arc.nu`
+$ `stdlib/std/thread.nu`
 $ `stdlib/core/slice.nu`
 
 // SSLRequest magic (1234 << 16 | 5679) and the protocol-3.0 version word.
@@ -56,10 +56,8 @@ $ `stdlib/core/slice.nu`
 }
 
 : PgConnImpl {
+    TcpConn conn  // the transport: plaintext, or TLS once tcp_starttls ran
     i tls  // 0 plaintext, 1 TLS
-    i raw  // raw socket handle (plaintext reads; fd the TLS layer took over)
-    TcpConn tcp  // plaintext transport (writes via tcp_write_all)
-    TlsConn tc  // TLS transport (when tls = 1)
     ( Vec u ) rxbuf  // backend bytes not yet split into messages
     String lasterr  // last ErrorResponse / failure text
     i be_pid
@@ -71,65 +69,73 @@ $ `stdlib/core/slice.nu`
     i started  // 1 once the StartupMessage went out: say Terminate on close
 }
 
-// The transport is the connection's raw resource: its last owner says
-// goodbye (a best-effort Terminate, once the server was spoken to) and
-// closes the TLS session or the socket — what pg_close did by hand. The
-// buffers and strings go with the drop glue.
-% Drop PgConnImpl { @ drop PgConnImpl c → v { ( __pg_teardown . c started . c tls . c tc . c tcp . c raw ) } }
-
-@ __pg_teardown i started i tls TlsConn tc TcpConn tcp i raw → v {
-    ? == started 1 {
-        : ( Vec u ) term ( vec_with_cap [u] 5 )
-        ( vec_push [u] term # u 88 )
-        ( __push32 term 4 )
-        ? == tls 1 {
-            ?? ( tls_write tc term ) { T _ → {} F _ → {} }
-        } {
-            ?? ( tcp_write_all tcp term ) { T _ → {} F _ → {} }
-        }
-    } {}
-    ? == tls 1 { ( tls_close tc ) } { ( nurl_tcp_close raw ) }
+// Its last owner says goodbye — a best-effort Terminate, once the server
+// was spoken to — and the TcpConn then closes the TLS session or the
+// socket with the rest of the fields.
+% Drop PgConnImpl {
+    @ drop PgConnImpl c → v {
+        ? == . c started 1 {
+            : ( Vec u ) term ( vec_with_cap [u] 5 )
+            ( vec_push [u] term # u 88 )
+            ( __push32 term 4 )
+            ?? ( tcp_write_all . c conn term ) { T _ → {} F _ → {} }
+        } {}
+    }
 }
 
-: PgConn { ( Arc PgConnImpl ) a }
+// A PgConn is a handle on its state in a Locked (stdlib/std/thread.nu):
+// every copy is the same connection, the last owner closes it, and a
+// query checks the state out (locked_take) for its round trip — copies on
+// several threads take turns.
+: PgConn { ( Locked PgConnImpl ) st }
 
-@ PgConn_share PgConn h → PgConn { ^ @ PgConn { ( arc_clone [PgConnImpl] . h a ) } }
+@ PgConn_share PgConn h → PgConn { ^ @ PgConn { ( Locked_share [PgConnImpl] . h st ) } }
 
 @ PgConn_drop sink PgConn h → v {}
 
-unsafe @ __PgConn_ptr PgConn h → *PgConnImpl { ^ ( arc_ptr [PgConnImpl] . h a ) }
-
-// The connection's text fields, lent: they live as long as the PgConn.
-// lasterr is the last ErrorResponse (`[SQLSTATE] message`), empty if none.
-unsafe @ pg_conn_lasterr PgConn c__h → String {
-    : *PgConnImpl c ( __PgConn_ptr c__h )
-    ^ . c lasterr
+// The connection's text fields, copied out. lasterr is the last
+// ErrorResponse (`[SQLSTATE] message`), empty if none.
+@ pg_conn_lasterr PgConn h → String {
+    : ~ PgConnImpl c ( locked_take [PgConnImpl] . h st )
+    : String r ( string_clone . c lasterr )
+    ( locked_restore [PgConnImpl] . h st c )
+    ^ r
 }
 
-unsafe @ pg_conn_server_version PgConn c__h → String {
-    : *PgConnImpl c ( __PgConn_ptr c__h )
-    ^ . c srv_ver
+@ pg_conn_server_version PgConn h → String {
+    : ~ PgConnImpl c ( locked_take [PgConnImpl] . h st )
+    : String r ( string_clone . c srv_ver )
+    ( locked_restore [PgConnImpl] . h st c )
+    ^ r
 }
 
-unsafe @ pg_conn_db_name PgConn c__h → String {
-    : *PgConnImpl c ( __PgConn_ptr c__h )
-    ^ . c db_name
+@ pg_conn_db_name PgConn h → String {
+    : ~ PgConnImpl c ( locked_take [PgConnImpl] . h st )
+    : String r ( string_clone . c db_name )
+    ( locked_restore [PgConnImpl] . h st c )
+    ^ r
 }
 
-unsafe @ pg_conn_user_name PgConn c__h → String {
-    : *PgConnImpl c ( __PgConn_ptr c__h )
-    ^ . c user_name
+@ pg_conn_user_name PgConn h → String {
+    : ~ PgConnImpl c ( locked_take [PgConnImpl] . h st )
+    : String r ( string_clone . c user_name )
+    ( locked_restore [PgConnImpl] . h st c )
+    ^ r
 }
 
-unsafe @ pg_conn_host_name PgConn c__h → String {
-    : *PgConnImpl c ( __PgConn_ptr c__h )
-    ^ . c host_name
+@ pg_conn_host_name PgConn h → String {
+    : ~ PgConnImpl c ( locked_take [PgConnImpl] . h st )
+    : String r ( string_clone . c host_name )
+    ( locked_restore [PgConnImpl] . h st c )
+    ^ r
 }
 
 // 1 when the connection runs over TLS, 0 when it is plaintext.
-unsafe @ pg_conn_tls PgConn c__h → i {
-    : *PgConnImpl c ( __PgConn_ptr c__h )
-    ^ . c tls
+@ pg_conn_tls PgConn h → i {
+    : ~ PgConnImpl c ( locked_take [PgConnImpl] . h st )
+    : i r . c tls
+    ( locked_restore [PgConnImpl] . h st c )
+    ^ r
 }
 
 : PgMsg {
@@ -207,36 +213,19 @@ unsafe @ pg_conn_tls PgConn c__h → i {
 }
 
 // ── transport ─────────────────────────────────────────────────────
-unsafe @ __pg_write * PgConnImpl c ( Vec u ) bytes → i {
-    ? == . c tls 1 {
-        ?? ( tls_write . c tc bytes ) { T _ → ^ 1 F _ → ^ 0 }
-    } {
-        ?? ( tcp_write_all . c tcp bytes ) { T _ → ^ 1 F _ → ^ 0 }
+@ __pg_write inout PgConnImpl c ( Vec u ) bytes → i {
+    ?? ( tcp_write_all . c conn bytes ) { T _ → ^ 1 F _ → ^ 0 }
+}
+
+// Read one chunk onto rxbuf. Returns 1 on progress, 0 on EOF/error.
+@ __pg_fill inout PgConnImpl c → i {
+    ?? ( tcp_read_into . c conn . c rxbuf 16384 ) {
+        T n → { ? <= n 0 { ^ 0 } {} ^ 1 }
+        F _ → ^ 0
     }
 }
 
-// Read one chunk into rxbuf. Returns 1 on progress, 0 on EOF/error.
-unsafe @ __pg_fill * PgConnImpl c → i {
-    ? == . c tls 1 {
-        ?? ( tls_read . c tc 16384 ) {
-            T v → {
-                ? == ( vec_len [u] v ) 0 { ^ 0 } {}
-                ( bytes_extend_bytes . c rxbuf v )
-                ^ 1
-            }
-            F _ → ^ 0
-        }
-    } {
-        : ( Vec u ) tmp ( vec_with_cap [u] 16384 )
-        : i got ( nurl_tcp_read . c raw # s ( vec_data [u] tmp ) 16384 )
-        ? <= got 0 { ^ 0 } {}
-        : b _ok ( vec_set_len [u] tmp got )
-        ( bytes_extend_bytes . c rxbuf tmp )
-        ^ 1
-    }
-}
-
-unsafe @ __pg_ensure * PgConnImpl c i n → i {
+@ __pg_ensure inout PgConnImpl c i n → i {
     ~ < ( vec_len [u] . c rxbuf ) n {
         ? == ( __pg_fill c ) 0 { ^ 0 } {}
     }
@@ -244,7 +233,7 @@ unsafe @ __pg_ensure * PgConnImpl c i n → i {
 }
 
 // Pull the next backend message (type byte + length-framed payload).
-unsafe @ __pg_next * PgConnImpl c → !PgMsg PgErr {
+@ __pg_next inout PgConnImpl c → !PgMsg PgErr {
     ? == ( __pg_ensure c 5 ) 0 { ^ @ !PgMsg PgErr { F # PgErr PgProtocol } } {}
     : i mtype ( __bget . c rxbuf 0 )
     : i len ( __rd32 . c rxbuf 1 )
@@ -253,13 +242,12 @@ unsafe @ __pg_next * PgConnImpl c → !PgMsg PgErr {
     : ( Vec u ) payload ( bytes_slice . c rxbuf 5 total )
     : i have ( vec_len [u] . c rxbuf )
     : ( Vec u ) rest ( bytes_slice . c rxbuf total have )
-    ( vec_free [u] . c rxbuf )
     = . c rxbuf rest
     ^ @ !PgMsg PgErr { T @ PgMsg { mtype payload } }
 }
 
 // Frame and send a typed frontend message.
-unsafe @ __pg_send_typed * PgConnImpl c i mtype ( Vec u ) payload → i {
+@ __pg_send_typed inout PgConnImpl c i mtype ( Vec u ) payload → i {
     : ( Vec u ) msg ( vec_with_cap [u] + ( vec_len [u] payload ) 5 )
     ( vec_push [u] msg # u mtype )
     ( __push32 msg + 4 ( vec_len [u] payload ) )
@@ -297,7 +285,7 @@ unsafe @ __pg_send_typed * PgConnImpl c i mtype ( Vec u ) payload → i {
 
 // ── authentication ────────────────────────────────────────────────
 // MD5: "md5" + md5_hex( md5_hex(password ++ user) ++ salt )
-unsafe @ __pg_md5_auth * PgConnImpl c s user s password ( Vec u ) salt → i {
+@ __pg_md5_auth inout PgConnImpl c s user s password ( Vec u ) salt → i {
     : ( Vec u ) inner ( vec_new [u] )
     ( __push_raw inner password )
     ( __push_raw inner user )
@@ -321,7 +309,7 @@ unsafe @ __pg_md5_auth * PgConnImpl c s user s password ( Vec u ) salt → i {
 
 // SCRAM-SHA-256 exchange. Returns 1 on the messages being sent OK; the
 // final server-signature check happens when SASLFinal arrives.
-unsafe @ __pg_scram_init * PgConnImpl c String cfb → i {
+@ __pg_scram_init inout PgConnImpl c String cfb → i {
     : String full ( string_with_cap + 8 ( string_len cfb ) )
     ( string_push_str full `n,,` )
     ( string_push_str full ( string_data cfb ) )
@@ -334,7 +322,7 @@ unsafe @ __pg_scram_init * PgConnImpl c String cfb → i {
 }
 
 // Run the whole startup→auth→ReadyForQuery sequence.
-unsafe @ __pg_authenticate * PgConnImpl c s user s password → !v PgErr {
+@ __pg_authenticate inout PgConnImpl c s user s password → !v PgErr {
     : ( Vec u ) pwbytes ( vec_new [u] )
     ( __push_raw pwbytes password )
 
@@ -397,7 +385,6 @@ unsafe @ __pg_authenticate * PgConnImpl c s user s password → !v PgErr {
                 } {}
             } {
                 ? == t 69 {
-                    ( string_free . c lasterr )
                     = . c lasterr ( __pg_error_text pl )
                     = done 1 = rc 3
                 } {
@@ -411,7 +398,6 @@ unsafe @ __pg_authenticate * PgConnImpl c s user s password → !v PgErr {
                             : i vs + e 1
                             : ~ i ve vs
                             ~ & < ve pn != ( __bget pl ve ) 0 { = ve + ve 1 }
-                            ( string_free . c srv_ver )
                             = . c srv_ver ( __slice_str pl vs ve )
                         } {}
                     } {}
@@ -435,54 +421,31 @@ unsafe @ __pg_authenticate * PgConnImpl c s user s password → !v PgErr {
 }
 
 // ── connection ────────────────────────────────────────────────────
-// Try the SSLRequest negotiation on the raw socket. Returns 'S'(83) if
-// the server agrees to TLS, 'N'(78) if not, <0 on I/O failure.
-unsafe @ __pg_ssl_request i raw → i {
+// Ask the server for TLS (SSLRequest) on the plaintext connection. Returns
+// 'S'(83) if it agrees, 'N'(78) if not, <0 on I/O failure.
+@ __pg_ssl_request TcpConn conn → i {
     : ( Vec u ) req ( vec_new [u] )
     ( __push32 req 8 )
     ( __push32 req 80877103 )
-    : TcpConn t ( tcp_conn_view raw )
-    ?? ( tcp_write_all t req ) { T _ → {} F _ → { ^ -1 } }
-    : ( Vec u ) one ( vec_with_cap [u] 1 )
-    : i got ( nurl_tcp_read raw # s ( vec_data [u] one ) 1 )
-    ? <= got 0 { ^ -1 } {}
-    : b _ok ( vec_set_len [u] one got )
-    : i r ( __bget one 0 )
-    ^ r
+    ?? ( tcp_write_all conn req ) { T _ → {} F _ → { ^ -1 } }
+    ?? ( tcp_read_chunk conn 1 ) {
+        T one → { ? == ( vec_len [u] one ) 0 { ^ -1 } {} ^ ( __bget one 0 ) }
+        F _ → { ^ -1 }
+    }
 }
 
-unsafe @ pg_connect s host i port s user s password s database i sslmode → !PgConn PgErr {
-    : i rawfd ( nurl_tcp_connect host port )
-    ? != ( nurl_tcp_err_kind rawfd ) 0 {
-        ( nurl_tcp_close rawfd )  // failed handles still own their allocation
-        ^ @ !PgConn PgErr { F # PgErr PgConnFail }
-    } {}
-
-    // The handle first: every early return below lets go of it, and its
-    // drop closes the socket.
-    : PgConn h @ PgConn { ( arc_zero [PgConnImpl] ) }
-    : *PgConnImpl c ( arc_ptr [PgConnImpl] . h a )
-    = . c tls 0
-    = . c raw rawfd
-    = . c tcp ( tcp_conn_view rawfd )
-    = . c tc # TlsConn # s 0
-    = . c rxbuf ( vec_new [u] )
-    = . c lasterr ( string_with_cap 0 )
-    = . c be_pid 0
-    = . c be_key 0
-    = . c srv_ver ( string_with_cap 0 )
-    = . c db_name ( string_from database )
-    = . c user_name ( string_from user )
-    = . c host_name ( string_from host )
-    = . c started 0
-
-    // ── optional TLS upgrade (SSLRequest → pure-NURL TLS) ──
+@ pg_connect s host i port s user s password s database i sslmode → !PgConn PgErr {
+    : TcpConn conn ?? ( tcp_connect host port ) {
+        T c → c
+        F _ → { ^ @ !PgConn PgErr { F # PgErr PgConnFail } }
+    }
+    // ── optional TLS upgrade (SSLRequest → pure-NURL TLS, in place) ──
+    : ~ i tls 0
     ? > sslmode 0 {
-        : i resp ( __pg_ssl_request rawfd )
+        : i resp ( __pg_ssl_request conn )
         ? == resp 83 {
-            : !TlsConn TlsErr tr ? >= sslmode 3 ( tls_attach_verify rawfd host ) ( tls_attach rawfd host )
-            ?? tr {
-                T tc → { = . c tls 1 = . c tc tc }
+            ?? ( tcp_starttls conn host >= sslmode 3 ) {
+                T _ → { = tls 1 }
                 F _ → { ^ @ !PgConn PgErr { F # PgErr PgTls } }
             }
         } {
@@ -490,6 +453,21 @@ unsafe @ pg_connect s host i port s user s password s database i sslmode → !Pg
             ? >= sslmode 2 { ^ @ !PgConn PgErr { F # PgErr PgTls } } {}
         }
     } {}
+    // The state now: every early return below lets go of it, and its drop
+    // closes the connection.
+    : ~ PgConnImpl c @ PgConnImpl {
+        conn
+        tls
+        ( vec_new [u] )
+        ( string_new )
+        0
+        0
+        ( string_new )
+        ( string_from database )
+        ( string_from user )
+        ( string_from host )
+        0
+    }
 
     // ── StartupMessage ──
     : ( Vec u ) startup ( vec_new [u] )
@@ -513,14 +491,20 @@ unsafe @ pg_connect s host i port s user s password s database i sslmode → !Pg
     // Authentication failed: the connection is let go with the error (the
     // caller only inspects the PgErr).
     ?? ( __pg_authenticate c user password ) {
-        T _ → { ^ @ !PgConn PgErr { T h } }
+        T _ → { ^ @ !PgConn PgErr { T @ PgConn { ( locked_new [PgConnImpl] c ) } } }
         F e → { ^ @ !PgConn PgErr { F e } }
     }
 }
 
 // ── simple query ──────────────────────────────────────────────────
-unsafe @ pg_query PgConn c__h s sql → !PgResult PgErr {
-    : *PgConnImpl c ( __PgConn_ptr c__h )
+@ pg_query PgConn h s sql → !PgResult PgErr {
+    : ~ PgConnImpl c ( locked_take [PgConnImpl] . h st )
+    : !PgResult PgErr r ( __pg_query c sql )
+    ( locked_restore [PgConnImpl] . h st c )
+    ^ r
+}
+
+@ __pg_query inout PgConnImpl c s sql → !PgResult PgErr {
     : ( Vec u ) payload ( vec_new [u] )
     ( __push_cstr payload sql )
     : i wok ( __pg_send_typed c 81 payload )
@@ -583,8 +567,6 @@ unsafe @ pg_query PgConn c__h s sql → !PgResult PgErr {
                         = tag ( __slice_str pl 0 e )
                     } {
                         ? == t 69 {
-                            // a store through the pointer does not drop the old text
-                            ( string_free . c lasterr )
                             = . c lasterr ( __pg_error_text pl )
                             = done 1 = rc 3
                         } {

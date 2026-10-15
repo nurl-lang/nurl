@@ -1,5 +1,42 @@
 # Changelog
 
+## [0.13.1] — 2026-10-15
+
+### Changed
+
+- The f32 upload / download helpers are plain calls to gpukit 0.11.1's
+  `gk_dbuf_upload` / `gk_dbuf_download`, which do the staged device-side
+  cast themselves: three `unsafe` functions fewer (6 to 3; what stays
+  launches the fused kernels). Every test identical, timings at parity.
+  Requires gpukit 0.11.1.
+
+## [0.13.0] — 2026-10-14
+
+### Changed
+
+- The tape (`GTape`), the optimizer (`Opt`), the device replay (`GProg`, `GpOpt`) and the fused plan (`GpPlan`, `GpFuse`) are plain values passed `inout`, no longer handles over raw pointers: every op that records takes `inout GTape tp`, readers (`tape_ok`, `gvar_value`, `g_scalar`, `tape_len`, `tape_mark`) borrow it. 146 `unsafe` functions are down to 6 — the kernel launches and the f32 device transfers.
+- `backward` allocates a node's input gradients before it reads the node's own, and accumulates through gradients already allocated (`_g_acc_into`), so nothing changes the tape while a gradient is read. Gradients are bit-identical to 0.12 on every test (finite differences, the analytic identities, the LoRA block, the autoencoder, the device parity suites), and training runs as fast (train_test 3.1 s either way).
+
+### Migration
+
+- Bind a tape `: ~ GTape tp ( tape_new )` and pass it as before; a closure that builds on a tape (closures cannot take `inout`) makes its own and hands it back with what it built (tests/grad_test.nu `GRun`).
+
+## [0.12.2] — 2026-10-14
+
+### Changed
+
+- Requires gpukit 0.11 (its kit state behind a lock; census accessors return a `String`).
+
+## [0.12.1] — 2026-10-14
+
+Requires NURL 0.73.0 (grammar v2.9 `raw`, `slice_window`, `file_is_open`).
+
+### Changed
+
+- The f32 staging helpers vouch for the cast kernels they launch (gpukit 0.10.2's `gk_run_dev` is `raw`).
+- 1 more functions are `unsafe`/`raw` than in 0.12.0 (158 now): where they launch kernels of their own, the trust is now written down.
+- Requires gpu 0.17 (its handle structs are sealed and its address-taking functions `raw`); nothing here changed.
+
 ## [0.12.0] — 2026-10-12
 
 Requires NURL 0.73.0, in which a field written through a raw pointer
@@ -18,7 +55,6 @@ The published 0.11.3 does not compile under it.
   same tape, which may add to it (the tests and the reference dump
   programs read one gradient at a time).
 - Requires gpu 0.16.
-
 
 ## [0.11.3] — 2026-10-11
 

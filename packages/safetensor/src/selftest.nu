@@ -82,7 +82,7 @@ $ `stdlib/core/slice.nu`
     }
 }
 
-unsafe @ st_selftest → i {
+@ st_selftest → i {
     ( nurl_print `safetensor selftest — a header that lies must be a clean error` ) ( nurl_print `\n` )
 
     // ── the honest file parses, and its numbers come back ──────────────
@@ -96,7 +96,7 @@ unsafe @ st_selftest → i {
             ( __ok >= idx 0 `honest file: tensor found by name` )
             ?? ( st_dequant st idx ) {
                 T raw → {
-                    : *u p ( vec_data [u] raw )
+                    : ( Slice u ) p ( slice_from_vec [u] raw )
                     : ~ b eq == 16 ( vec_len [u] raw )
                     : ~ i k 0
                     ~ < k 4 {
@@ -204,7 +204,7 @@ unsafe @ st_selftest → i {
         T st → {
             ?? ( st_dequant st 0 ) {
                 T raw → {
-                    : *u p ( vec_data [u] raw )
+                    : ( Slice u ) p ( slice_from_vec [u] raw )
                     : f a # f ( bits_to_f32 ( _st_u32 p 0 ) )
                     : f b # f ( bits_to_f32 ( _st_u32 p 4 ) )
                     ( __ok & == a 1.0 == b 2.0 `F16 widens to f32 (1.0, 2.0)` )
@@ -228,7 +228,7 @@ unsafe @ st_selftest → i {
         T st → {
             ?? ( st_dequant st 0 ) {
                 T raw → {
-                    : *u p ( vec_data [u] raw )
+                    : ( Slice u ) p ( slice_from_vec [u] raw )
                     : f a # f ( bits_to_f32 ( _st_u32 p 0 ) )
                     : f b # f ( bits_to_f32 ( _st_u32 p 4 ) )
                     ( __ok & == a 1.0 == b 2.0 `BF16 widens to f32 (1.0, 2.0)` )
@@ -251,7 +251,7 @@ unsafe @ st_selftest → i {
         T st → {
             ?? ( st_dequant_range st 0 2 2 ) {
                 T raw → {
-                    : *u p ( vec_data [u] raw )
+                    : ( Slice u ) p ( slice_from_vec [u] raw )
                     : f a # f ( bits_to_f32 ( _st_u32 p 0 ) )
                     ( __ok & == 8 ( vec_len [u] raw ) == a 3.0 `element range [2,4) is exact` )
                 }

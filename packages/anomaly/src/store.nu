@@ -67,24 +67,24 @@ $ `stdlib/core/slice.nu`
 
 // ── VerModel ⇄ bytes ──────────────────────────────────────────────────
 
-unsafe @ __an_blob_push_ivec ( Vec u ) out ( Vec i ) xs → v {
+@ __an_blob_push_ivec ( Vec u ) out ( Vec i ) xs → v {
     : i n ( vec_len [i] xs )
     ( bytes_push_u64_le out # u64 n )
-    : *i dp ( vec_data [i] xs )
+    : ( Slice i ) dp ( slice_from_vec [i] xs )
     : ~ i k 0
     ~ < k n {
-        ( bytes_push_u64_le out # u64 . dp k )
+        ( bytes_push_u64_le out # u64 ( slice_at [i] dp k ) )
         = k + k 1
     }
 }
 
-unsafe @ __an_blob_push_fvec ( Vec u ) out ( Vec f ) xs → v {
+@ __an_blob_push_fvec ( Vec u ) out ( Vec f ) xs → v {
     : i n ( vec_len [f] xs )
     ( bytes_push_u64_le out # u64 n )
-    : *f dp ( vec_data [f] xs )
+    : ( Slice f ) dp ( slice_from_vec [f] xs )
     : ~ i k 0
     ~ < k n {
-        ( bytes_push_f64_le out . dp k )
+        ( bytes_push_f64_le out ( slice_at [f] dp k ) )
         = k + k 1
     }
 }
@@ -143,12 +143,12 @@ unsafe @ __an_blob_push_fvec ( Vec u ) out ( Vec f ) xs → v {
 }
 
 // Every node index in xs must lie in [-1, n_nodes).
-unsafe @ __an_blob_idx_ok ( Vec i ) xs i n_nodes → b {
+@ __an_blob_idx_ok ( Vec i ) xs i n_nodes → b {
     : i n ( vec_len [i] xs )
-    : *i dp ( vec_data [i] xs )
+    : ( Slice i ) dp ( slice_from_vec [i] xs )
     : ~ i k 0
     ~ < k n {
-        : i x . dp k
+        : i x ( slice_at [i] dp k )
         ? || < x -1 >= x n_nodes { ^ F } {}
         = k + k 1
     }
@@ -157,7 +157,7 @@ unsafe @ __an_blob_idx_ok ( Vec i ) xs i n_nodes → b {
 
 // Parse a forest blob. None on any structural violation: bad magic, short
 // buffer, absurd counts, mismatched array lengths, out-of-range indices.
-unsafe @ vermodel_from_bytes ( Vec u ) buf → ?VerModel {
+@ vermodel_from_bytes ( Vec u ) buf → ?VerModel {
     : ( Vec u ) magic ( bytes_from_str `ANOMFOR1` )
     : b magic_ok ( bytes_starts_with buf magic )
     ? magic_ok {} { ^ @ ?VerModel { F } }
@@ -171,9 +171,7 @@ unsafe @ vermodel_from_bytes ( Vec u ) buf → ?VerModel {
     ? . rd ok {
         : i n ( vec_len [u] buf )
         ? > + . rd pos nlen n { = . rd ok F } {
-            : *u bp ( vec_data [u] buf )
-            : i base + # i bp . rd pos
-            = vname ( string_from_bytes # *u base nlen )
+            = vname ( bytes_to_str ( bytes_slice buf . rd pos + . rd pos nlen ) )
             = . rd pos + . rd pos nlen
         }
     } {}
@@ -914,11 +912,11 @@ unsafe @ vermodel_from_bytes ( Vec u ) buf → ?VerModel {
     ^ ok
 }
 
-unsafe @ store_load_ae Store st s name → ?AeModel {
+@ store_load_ae Store st s name → ?AeModel {
     ?? ( __st_blob_get st name ANOM_KIND_AE ) {
         F _ → { ^ @ ?AeModel { F } }
         T data → {
-            : String txt ( string_from_bytes ( vec_data [u] data ) ( vec_len [u] data ) )
+            : String txt ( bytes_to_str data )
             : ?AeModel m ( ae_from_json_str ( string_data txt ) )
             ^ m
         }
@@ -932,11 +930,11 @@ unsafe @ store_load_ae Store st s name → ?AeModel {
     ^ ok
 }
 
-unsafe @ store_load_fc Store st s name → ?FcModel {
+@ store_load_fc Store st s name → ?FcModel {
     ?? ( __st_blob_get st name ANOM_KIND_FC ) {
         F _ → { ^ @ ?FcModel { F } }
         T data → {
-            : String txt ( string_from_bytes ( vec_data [u] data ) ( vec_len [u] data ) )
+            : String txt ( bytes_to_str data )
             : ?FcModel m ( fc_from_json_str ( string_data txt ) )
             ^ m
         }
@@ -976,7 +974,7 @@ unsafe @ store_load_fc Store st s name → ?FcModel {
 
 // ── The scored-verdict cache, as a blob ───────────────────────────────
 
-unsafe @ store_save_scores Store st s name ScoreCache c → b {
+@ store_save_scores Store st s name ScoreCache c → b {
     ? . st ok {} { ^ F }
     : ( Vec u ) out ( vec_new [u] )
     ( bytes_extend_str out `ANOMSCR2` )
@@ -997,18 +995,18 @@ unsafe @ store_save_scores Store st s name ScoreCache c → b {
     }
     : i nr ( vec_len [i] . c state )
     ( bytes_push_u64_le out # u64 nr )
-    : *i stp ( vec_data [i] . c state )
-    : *f scp ( vec_data [f] . c score )
-    : *f svp ( vec_data [f] . c severity )
-    : *i prp ( vec_data [i] . c present )
-    : *i flp ( vec_data [i] . c flagged )
+    : ( Slice i ) stp ( slice_from_vec [i] . c state )
+    : ( Slice f ) scp ( slice_from_vec [f] . c score )
+    : ( Slice f ) svp ( slice_from_vec [f] . c severity )
+    : ( Slice i ) prp ( slice_from_vec [i] . c present )
+    : ( Slice i ) flp ( slice_from_vec [i] . c flagged )
     = k 0
     ~ < k nr {
-        ( bytes_push_f64_le out . scp k )
-        ( bytes_push_f64_le out . svp k )
-        ( bytes_push_u64_le out # u64 . stp k )
-        ( bytes_push_u64_le out # u64 . prp k )
-        ( bytes_push_u64_le out # u64 . flp k )
+        ( bytes_push_f64_le out ( slice_at [f] scp k ) )
+        ( bytes_push_f64_le out ( slice_at [f] svp k ) )
+        ( bytes_push_u64_le out # u64 ( slice_at [i] stp k ) )
+        ( bytes_push_u64_le out # u64 ( slice_at [i] prp k ) )
+        ( bytes_push_u64_le out # u64 ( slice_at [i] flp k ) )
         = k + k 1
     }
     : b ok ( __st_blob_put st name ANOM_KIND_SCORES out )
@@ -1017,7 +1015,7 @@ unsafe @ store_save_scores Store st s name ScoreCache c → b {
 
 // Load the cache; None when absent, truncated or structurally impossible.
 // A rejected cache costs a rescan, never a wrong verdict.
-unsafe @ store_load_scores Store st s name → ?ScoreCache {
+@ store_load_scores Store st s name → ?ScoreCache {
     ?? ( __st_blob_get st name ANOM_KIND_SCORES ) {
         T buf → {
             // ANOMSCR1 aggregated by minimum decision value; 2 by the
@@ -1041,9 +1039,7 @@ unsafe @ store_load_scores Store st s name → ?ScoreCache {
                 ? || < nlen 0 > nlen ANOM_BLOB_MAX_NAME { = . rd ok F } {
                     : i n ( vec_len [u] buf )
                     ? > + . rd pos nlen n { = . rd ok F } {
-                        : *u bp ( vec_data [u] buf )
-                        : i base2 + # i bp . rd pos
-                        ( vec_push [String] . c vnames ( string_from_bytes # *u base2 nlen ) )
+                        ( vec_push [String] . c vnames ( bytes_to_str ( bytes_slice buf . rd pos + . rd pos nlen ) ) )
                         = . rd pos + . rd pos nlen
                     }
                 }
@@ -1499,7 +1495,7 @@ unsafe @ store_load_scores Store st s name → ?ScoreCache {
 }
 
 // One flat model directory into this organisation's database.
-unsafe @ store_migrate_dir Store st s root s name i now → b {
+@ store_migrate_dir Store st s root s name i now → b {
     ? . st ok {} { ^ F }
     : String meta ( __st_flat_text root name `metadata.json` )
     ? > ( string_len meta ) 0 {} { ^ F }
@@ -1522,7 +1518,7 @@ unsafe @ store_migrate_dir Store st s root s name i now → b {
     }
     : ~ i seen ( vec_len [String] lines )
     ?? ( meta_from_json_str ( string_data meta ) ) {
-        T m → { = seen . ( _Meta_ptr m ) n_seen }
+        T m → { = seen . m n_seen }
         F _ → {}
     }
     : ~ i base - seen ( vec_len [String] lines )
@@ -1571,10 +1567,11 @@ unsafe @ store_migrate_dir Store st s root s name i now → b {
                         T fn → {
                             : s f ( string_data fn )
                             ? & ( __st_starts f `version_` ) ( __st_ends f `.forest` ) {
-                                : i fl ( nurl_str_len f )
+                                : ( Slice u ) fv ( slice_of_str f )
+                                : i fl ( slice_len [u] fv )
                                 : String vn ( string_new )
                                 : ~ i c 8
-                                ~ < c - fl 7 { ( string_push_char vn ( nurl_str_at f fl c ) ) = c + c 1 }
+                                ~ < c - fl 7 { ( string_push_char vn ( slice_byte fv c ) ) = c + c 1 }
                                 : String kind ( __st_forest_kind ( string_data vn ) )
                                 ? ( __st_flat_blob root name f st ( string_data kind ) ) {} { = ok F }
                             } {}
@@ -1825,7 +1822,7 @@ unsafe @ store_migrate_dir Store st s root s name i now → b {
 // has that name — two models of one name in one organisation is exactly
 // what the organisation-as-database rule exists to prevent. The source
 // keeps its rows if any part of the write fails.
-unsafe @ store_move_model Store src Store dst s name i now → b {
+@ store_move_model Store src Store dst s name i now → b {
     ? & . src ok . dst ok {} { ^ F }
     ? ( store_exists src name ) {} { ^ F }
     ? ( store_exists dst name ) { ^ F } {}
@@ -1834,7 +1831,7 @@ unsafe @ store_move_model Store src Store dst s name i now → b {
     ? > ( string_len meta ) 0 {} { ^ F }
     : ~ i seen 0
     ?? ( meta_from_json_str ( string_data meta ) ) {
-        T m → { = seen . ( _Meta_ptr m ) n_seen }
+        T m → { = seen . m n_seen }
         F _ → {}
     }
     : ( Vec String ) lines ( store_load_points src name )

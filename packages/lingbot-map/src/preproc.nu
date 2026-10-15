@@ -40,7 +40,7 @@ $ `deps/image/src/image.nu`
 
 @ pp_height Frame fr → i { ^ . fr height }
 
-unsafe @ pp_data Frame fr → *f { ^ ( vec_data [f] . fr data ) }
+@ pp_data Frame fr → ( Slice f ) { ^ ( slice_from_vec [f] . fr data ) }
 
 @ __pp_err s msg s detail → !Frame String {
     : String m ( string_from msg )
@@ -83,7 +83,7 @@ unsafe @ pp_data Frame fr → *f { ^ ( vec_data [f] . fr data ) }
 // applying the wrong one. Video-derived frames, which is what streaming
 // reconstruction is actually fed, carry no EXIF. Applying it belongs with
 // EXIF support in `image`, not with a guess here.
-unsafe @ pp_load s path i size i patch → !Frame String {
+@ pp_load s path i size i patch → !Frame String {
     ?? ( image_load path ) {
         F → {
             : String m ( string_from `lingbot-map: cannot decode ` )
@@ -113,10 +113,9 @@ unsafe @ pp_load s path i size i patch → !Frame String {
             ? != ch 3 {
                 ^ ( __pp_err `lingbot-map: expected an RGB frame from ` path )
             } {}
-            : ( Vec f ) data ( vec_with_cap [f] * 3 * w h )
-            : b _dl ( vec_set_len [f] data * 3 * w h )
-            : *f dp ( vec_data [f] data )
-            : *u sp ( vec_data [u] . fit data )
+            : ( Vec f ) data ( vec_zeroed [f] * 3 * w h )
+            : ( Slice f ) dp ( slice_from_vec [f] data )
+            : ( Slice u ) sp ( slice_from_vec [u] . fit data )
             : ~ i k 0
             ~ < k 3 {
                 : i plane * k * w h
@@ -126,7 +125,7 @@ unsafe @ pp_load s path i size i patch → !Frame String {
                     : i orow + plane * y w
                     : ~ i x 0
                     ~ < x w {
-                        = . dp + orow x / # f # i . sp + + row * x ch k 255.0
+                        ( slice_put [f] dp + orow x / # f # i ( slice_at [u] sp + + row * x ch k ) 255.0 )
                         = x + x 1
                     }
                     = y + y 1

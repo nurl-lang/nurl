@@ -20,17 +20,12 @@ $ `stdlib/std/float.nu`
 $ `stdlib/std/floatbits.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/std/thread.nu`
+$ `stdlib/std/random.nu`
 $ `stdlib/std/time.nu`
 $ `stdlib/std/arc.nu`
 $ `module.nu`
 $ `rjit.nu`
 $ `stdlib/core/slice.nu`
-
-// round-to-nearest-even (wasm f*.nearest) — libm rint honours the default mode.
-& `m` @ rint f x → f
-
-// OS entropy (runtime helper; getrandom/urandom under the hood).
-& `c` @ nurl_rand_fill *u buf i n → i
 
 // The JIT substrate: an executable page and a call through a raw address.
 // On wasm32 alloc returns 0 (no executable memory) and the runtime stays
@@ -247,6 +242,51 @@ $ `stdlib/core/slice.nu`
 // `append` = O_APPEND: every write lands at the end regardless of pos.
 : WFd { i kind ( Vec u ) data i pos ( Vec u ) host ( Vec u ) name b writable b dirty b append }
 
+// What WASI calls see of the host, per process in the guest's terms: the
+// argument and environment lists, the descriptor table (0/1/2 stdio, 3
+// preopen, …; a closed one is kind 0) and the captured output. A spawned
+// thread's instance shares its owner's (one Locked handle), so a file one
+// thread opens is the same fd in another, and two threads' calls take
+// turns at it instead of writing one record at once.
+: WasiCtx {
+    ( Vec WFd ) fds
+    ( Vec u ) capout  // captured module stdout (raw bytes, NULs preserved)
+    ( Vec u ) caperr  // captured module stderr
+}
+
+// The program's arguments (argv[0] = program) and environment entries
+// ("NAME=VALUE"): set before it runs and read by every thread, so they are
+// frozen — reading them takes no lock — and a push makes a new set.
+: ArgEnv { ( Vec Arg ) argv ( Vec Arg ) envp }
+
+@ __args_copy ( Vec Arg ) src → ( Vec Arg ) {
+    : ~ ( Vec Arg ) out ( vec_new [Arg] )
+    : i n ( vec_len [Arg] src )
+    : ~ i k 0
+    ~ < k n { ( vec_push [Arg] out @ Arg { ( vec_clone [u] . ( vec_at [Arg] src k ) bytes ) } ) = k + k 1 }
+    ^ out
+}
+
+// `a` with entry `b` appended to its arguments (`to_argv`) or environment.
+@ __argenv_push ( Arc ArgEnv ) a ( Vec u ) b b to_argv → ( Arc ArgEnv ) {
+    : ArgEnv o ( arc_get [ArgEnv] a )
+    : ~ ( Vec Arg ) av ( __args_copy . o argv )
+    : ~ ( Vec Arg ) ev ( __args_copy . o envp )
+    ? to_argv { ( vec_push [Arg] av @ Arg { ( vec_clone [u] b ) } ) } { ( vec_push [Arg] ev @ Arg { ( vec_clone [u] b ) } ) }
+    ^ ( arc_new [ArgEnv] @ ArgEnv { av ev } )
+}
+
+@ __wasi_ctx_new → ( Locked WasiCtx ) {
+    : ~ WasiCtx c @ WasiCtx { ( vec_new [WFd] ) ( vec_new [u] ) ( vec_new [u] ) }
+    // fds 0/1/2 = stdin/stdout/stderr (kind 1); higher slots filled by preopen.
+    : ~ i k 0
+    ~ < k 3 { ( vec_push [WFd] . c fds ( __mkfd 1 ) ) = k + k 1 }
+    ^ ( locked_new [WasiCtx] c )
+}
+
+// Descriptor `fd`'s kind; 0 when there is no such open descriptor.
+@ __fd_kind WasiCtx c i fd → i { ?? ( vec_get [WFd] . c fds fd ) { T x → { ^ . x kind } F → { ^ 0 } } }
+
 : InterpImpl {
     s mod  // *ModuleImpl
     ( Vec i ) vs  // value stack
@@ -268,9 +308,9 @@ $ `stdlib/core/slice.nu`
     ( Vec i ) table  // runtime funcref table (mutable via table.set/grow/…)
     ( Vec i ) data_dropped  // 1 per data segment once dropped / active
     ( Vec i ) elem_dropped  // 1 per element segment once dropped / active
-    ( Vec ( Box Arg ) ) argv  // WASI program arguments (argv[0] = program)
-    ( Vec ( Box Arg ) ) envp  // WASI environment entries ("NAME=VALUE")
-    ( Vec ( Box WFd ) ) fds  // file-descriptor table (0/1/2 stdio, 3 preopen, …; a closed one is an empty box)
+    ( Locked WasiCtx ) wasi  // the WASI host state, shared with every thread of the instance
+    ( Arc ArgEnv ) argenv  // the program's arguments and environment, shared and frozen
+    b cap  // capture stdout/stderr into the WasiCtx's capout/caperr instead of the host streams
     // Why execution stopped, as one word so the driver's hot loop tests one
     // load instead of two byte fields: bit 0 = trapped, bit 1 = exited (via
     // proc_exit). `interp_trapped` / `interp_exited` are the readers; nothing
@@ -334,9 +374,6 @@ $ `stdlib/core/slice.nu`
     // Slot 0 is reserved — the stdlib reads handle 0 as "failed".
     ( Vec i ) nethandles
     ( Vec i ) netkinds  // 1 = TCP, 2 = UDP (which close the runtime owes it)
-    b cap  // capture stdout/stderr into capout/caperr instead of the host streams
-    ( Vec u ) capout  // captured module stdout (raw bytes, NULs preserved)
-    ( Vec u ) caperr  // captured module stderr
     ( Vec s ) pfuncs  // *PFunc per defined function, predecoded lazily (#s 0 until first call)
     ( Vec ( Box PFunc ) ) pf_owned  // the records `pfuncs` points at: this instance owns them
     // Threads (wasi-threads). A spawned thread runs its OWN Interp — own
@@ -352,10 +389,18 @@ $ `stdlib/core/slice.nu`
     ( Vec Thread ) thread_joins  // owner only: host threads, joined before free
     i tstart_fidx  // cached export index of `wasi_thread_start` (-2 = not looked up)
     i sp_global  // cached global index of `__stack_pointer` (-2 = not looked up)
+    ( Vec i ) import_ids  // per import: its dispatch number (__wasi_resolve; -3 = not yet)
+    ( Vec i ) import_sigs  // per import: params | results << 16 (-1 = not yet)
     // The module this instance runs, held so it outlives every user of `mod`
     // (owner only; a thread borrows its owner's).
     Module modh
 }
+
+// The instance's WASI state, checked out for one call (every other thread's
+// WASI call waits until __ctx_put returns it).
+@ __ctx_take inout InterpImpl it → WasiCtx { ^ ( locked_take [WasiCtx] . it wasi ) }
+
+@ __ctx_put inout InterpImpl it sink WasiCtx c → v { ( locked_restore [WasiCtx] . it wasi c ) }
 
 // The call-out bridge's closure environment, decomposed for the emitted
 // code (which calls fn(env)) and released with the instance. Not a closure
@@ -372,13 +417,20 @@ $ `stdlib/core/slice.nu`
 // thread that runs it (__wasi_thread_spawn); it owns only its own stacks,
 // globals and caches — the memory, table, segments and argv it shares are
 // its owner's, reached through `__host`.
-: Interp { ( Arc InterpImpl ) a }
+: Interp { ( Locked InterpImpl ) l }
 
-@ Interp_share Interp h → Interp { ^ @ Interp { ( arc_clone [InterpImpl] . h a ) } }
+@ Interp_share Interp h → Interp { ^ @ Interp { ( Locked_share [InterpImpl] . h l ) } }
 
 @ Interp_drop sink Interp h → v {}
 
-unsafe @ __Interp_ptr Interp h → *InterpImpl { ^ ( arc_ptr [InterpImpl] . h a ) }
+// The instance's address — fixed for its life: the Locked keeps its value
+// in one heap block, and the JIT and the call-out bridge hold this address.
+unsafe @ __Interp_ptr Interp h → *InterpImpl {
+    : ~ * ( LockedImpl InterpImpl ) p ( shared_ptr [( LockedImpl InterpImpl )] . . h l ctl )
+    ^ ( __it_addr . p val )
+}
+
+unsafe @ __it_addr inout InterpImpl x → *InterpImpl { ^ ( mem_addr x ) }
 
 // One activation record on the explicit call stack: the function, its locals,
 // its control stack, and the instruction cursor [pos, end) — pos/end are
@@ -440,19 +492,21 @@ unsafe @ __Interp_ptr Interp h → *InterpImpl { ^ ( arc_ptr [InterpImpl] . h a 
 @ interp_disable_guard → v { = g_guard 0 }
 
 // The linear memory's base address, whichever representation is live.
-unsafe inline @ __mem_base * InterpImpl it → i {
+unsafe inline @ __mem_base inout InterpImpl it → i {
     ? != 0 . it mem_raw { ^ . it mem_raw } { ^ # i ( vec_data [u] . ( __host it ) mem ) }
 }
 
 // Instantiate `m`. The instance holds a share of the module, so the module
 // lives as long as any instance of it.
 unsafe @ interp_new Module m__h → Interp {
-    : *ModuleImpl m ( _Module_ptr m__h )
-    : ( Arc InterpImpl ) it__box ( arc_zero [InterpImpl] )
-    : *InterpImpl it ( arc_ptr [InterpImpl] it__box )
+    : ~ * ModuleImpl m ( _Module_ptr m__h )
+    : Interp h @ Interp { ( locked_zero [InterpImpl] ) }
+    : ~ * InterpImpl it ( __Interp_ptr h )
     = . it mod # s m
     = . it modh ( Module_share m__h )
     = . it pfuncs ( vec_new [s] )
+    = . it import_ids ( vec_new [i] )
+    = . it import_sigs ( vec_new [i] )
     = . it pf_owned ( vec_new [( Box PFunc )] )
     = . it jit_ctx_mem ( vec_new [( Vec i )] )
     = . it vs ( vec_new [i] )
@@ -488,12 +542,11 @@ unsafe @ interp_new Module m__h → Interp {
     = . it mem_pages __mpages
     = . it mem_bytes * __mpages ( __page )
     = . it globals ( vec_new [i] )
-    = . it argv ( vec_new [( Box Arg )] )
-    = . it envp ( vec_new [( Box Arg )] )
-    = . it fds ( vec_new [( Box WFd )] )
+    = . it wasi ( __wasi_ctx_new )
+    = . it argenv ( arc_new [ArgEnv] @ ArgEnv { ( vec_new [Arg] ) ( vec_new [Arg] ) } )
+    = . it cap F
     // fds 0/1/2 = stdin/stdout/stderr (kind 1); higher slots filled by preopen.
     : ~ i sfd 0
-    ~ < sfd 3 { ( vec_push [( Box WFd )] . it fds ( __mkfd 1 ) ) = sfd + sfd 1 }
     = . it halt 0
     = . it exit_code 0
     = . it trapmsg ( vec_new [u] )
@@ -524,9 +577,6 @@ unsafe @ interp_new Module m__h → Interp {
     = . it netkinds ( vec_new [i] )
     ( vec_push [i] . it nethandles 0 )
     ( vec_push [i] . it netkinds 0 )
-    = . it cap F
-    = . it capout ( vec_new [u] )
-    = . it caperr ( vec_new [u] )
     = . it owner # s 0
     = . it next_tid 1
     = . it thread_kids ( vec_new [i] )
@@ -586,10 +636,10 @@ unsafe @ interp_new Module m__h → Interp {
                 // `off > cap - dn` rather than `off + dn > cap`: the offset
                 // is a number the module chose, and the sum can wrap.
                 ? | < off 0 > off - cap dn {
-                    ( __trap it `data segment does not fit in linear memory` )
+                    ( __trap . it 0 `data segment does not fit in linear memory` )
                 } {
                     ? > dn 0 {
-                        : s dst # s + ( __mem_base it ) off
+                        : s dst # s + ( __mem_base . it 0 ) off
                         ( nurl_memcpy dst # s ( vec_data [u] . ds bytes ) dn )
                     } {}
                 }
@@ -597,13 +647,12 @@ unsafe @ interp_new Module m__h → Interp {
             = di + di 1
         }
     } {}
-    ^ @ Interp { it__box }
+    ^ h
 }
 
-// A fresh file-descriptor record of the given kind (a box: a *WFd into
-// it stays put while the table grows).
-@ __mkfd i kind → ( Box WFd ) {
-    ^ ( box_new [WFd] @ WFd { kind ( vec_new [u] ) 0 ( vec_new [u] ) ( vec_new [u] ) F F F } )
+// A fresh file-descriptor record of the given kind (0 = closed).
+@ __mkfd i kind → WFd {
+    ^ @ WFd { kind ( vec_new [u] ) 0 ( vec_new [u] ) ( vec_new [u] ) F F F }
 }
 
 // The JIT's code arena: chunks of executable memory, each mapped from the
@@ -651,99 +700,90 @@ unsafe @ __jit_arena_unmap i arena → v {
 // host program that runs a module as a function call wants the
 // module's output back as a VALUE, not interleaved into its own
 // console. Enable before exec_func; read the buffers after it.
-unsafe @ interp_capture Interp it__h → v {
-    : *InterpImpl it ( __Interp_ptr it__h )
-    = . it cap T
+@ interp_capture Interp h → v { ( locked_update [InterpImpl] . h l \ inout InterpImpl it → v { = . it cap T } ) }
+
+// The instance's WASI state (a share of it).
+@ __interp_wasi Interp h → ( Locked WasiCtx ) {
+    ^ ( locked_apply [InterpImpl ( Locked WasiCtx )] . h l \ inout InterpImpl it → ( Locked WasiCtx ) { ^ ( Locked_share [WasiCtx] . it wasi ) } )
 }
 
-// The captured bytes — the Interp's own buffers, lent (valid while the
-// Interp lives). Raw bytes, exactly as the module wrote them: a NUL
-// neither truncates nor terminates.
-unsafe @ interp_stdout_bytes Interp it__h → ( Vec u ) {
-    : *InterpImpl it ( __Interp_ptr it__h )
-    ^ . it capout
+// The captured bytes — a copy of the Interp's buffers. Raw bytes, exactly
+// as the module wrote them: a NUL neither truncates nor terminates.
+@ interp_stdout_bytes Interp h → ( Vec u ) {
+    ^ ( locked_apply [WasiCtx ( Vec u )] ( __interp_wasi h ) \ inout WasiCtx c → ( Vec u ) { ^ ( vec_clone [u] . c capout ) } )
 }
 
-unsafe @ interp_stderr_bytes Interp it__h → ( Vec u ) {
-    : *InterpImpl it ( __Interp_ptr it__h )
-    ^ . it caperr
+@ interp_stderr_bytes Interp h → ( Vec u ) {
+    ^ ( locked_apply [WasiCtx ( Vec u )] ( __interp_wasi h ) \ inout WasiCtx c → ( Vec u ) { ^ ( vec_clone [u] . c caperr ) } )
 }
 
 // Did the guest trap? Did it call proc_exit? The two halves of `halt`.
 // Both can be set: a trap while unwinding an exiting module leaves the
 // trap visible, which is what an embedder wants to report.
-unsafe @ __interp_trapped * InterpImpl it → b { ^ != 0 & . it halt 1 }
+@ __interp_trapped inout InterpImpl it → b { ^ != 0 & . it halt 1 }
 
-unsafe @ interp_trapped Interp it__h → b { ^ ( __interp_trapped ( __Interp_ptr it__h ) ) }
+@ interp_trapped Interp h → b { ^ ( locked_apply [InterpImpl b] . h l \ inout InterpImpl it → b { ^ ( __interp_trapped it ) } ) }
 
-unsafe @ __interp_exited * InterpImpl it → b { ^ != 0 & . it halt 2 }
+@ __interp_exited inout InterpImpl it → b { ^ != 0 & . it halt 2 }
 
-unsafe @ interp_exited Interp it__h → b { ^ ( __interp_exited ( __Interp_ptr it__h ) ) }
+@ interp_exited Interp h → b { ^ ( locked_apply [InterpImpl b] . h l \ inout InterpImpl it → b { ^ ( __interp_exited it ) } ) }
 
-// The trap message (empty unless interp_trapped) — the Interp's own bytes, lent.
-unsafe @ interp_trapmsg Interp it__h → ( Vec u ) {
-    : *InterpImpl it ( __Interp_ptr it__h )
-    ^ . it trapmsg
+// The trap message (empty unless interp_trapped), copied.
+@ interp_trapmsg Interp h → ( Vec u ) {
+    ^ ( locked_apply [InterpImpl ( Vec u )] . h l \ inout InterpImpl it → ( Vec u ) { ^ ( vec_clone [u] . it trapmsg ) } )
 }
 
 // The guest's proc_exit code (0 when it returned from _start instead).
-unsafe @ interp_exit_code Interp it__h → i {
-    : *InterpImpl it ( __Interp_ptr it__h )
-    ^ . it exit_code
-}
+@ interp_exit_code Interp h → i { ^ ( locked_apply [InterpImpl i] . h l \ inout InterpImpl it → i { ^ . it exit_code } ) }
 
-// The value stack, lent: push an invoked export's arguments here before
-// exec_func, and read its results off the top after it.
-unsafe @ interp_stack Interp it__h → ( Vec i ) {
-    : *InterpImpl it ( __Interp_ptr it__h )
-    ^ . it vs
+// The value stack: push an invoked export's arguments before exec_func,
+// and read its results off the top after it.
+@ interp_stack_push Interp h i v → v { ( locked_update [InterpImpl] . h l \ inout InterpImpl it → v { ( vec_push [i] . it vs v ) } ) }
+
+@ interp_stack_len Interp h → i { ^ ( locked_apply [InterpImpl i] . h l \ inout InterpImpl it → i { ^ ( vec_len [i] . it vs ) } ) }
+
+// Slot `k` of the value stack (0 = bottom); 0 past its end.
+@ interp_stack_at Interp h i k → i {
+    ^ ( locked_apply [InterpImpl i] . h l \ inout InterpImpl it → i { ^ ?? ( vec_get [i] . it vs k ) { T x → x F → 0 } } )
 }
 
 // Meter execution: at most `n` predecoded records, then trap (--fuel).
-unsafe @ interp_set_fuel Interp it__h i n → v {
-    : *InterpImpl it ( __Interp_ptr it__h )
-    = . it fuel n
-}
+@ interp_set_fuel Interp h i n → v { ( locked_update [InterpImpl] . h l \ inout InterpImpl it → v { = . it fuel n } ) }
 
 // Append a program argument (copied from a NUL-terminated host string).
-unsafe @ interp_push_arg Interp it__h s str → v {
-    : *InterpImpl it ( __Interp_ptr it__h )
-    ( vec_push [( Box Arg )] . it argv ( box_new [Arg] @ Arg { ( bytes_from_str str ) } ) )
+@ interp_push_arg Interp h s str → v {
+    : ( Vec u ) b ( bytes_from_str str )
+    ( locked_update [InterpImpl] . h l \ inout InterpImpl it → v { = . it argenv ( __argenv_push . it argenv b T ) } )
 }
 
 // Append an environment entry ("NAME=VALUE", copied).
-unsafe @ interp_push_env Interp it__h s str → v {
-    : *InterpImpl it ( __Interp_ptr it__h )
-    ( vec_push [( Box Arg )] . it envp ( box_new [Arg] @ Arg { ( bytes_from_str str ) } ) )
+@ interp_push_env Interp h s str → v {
+    : ( Vec u ) b ( bytes_from_str str )
+    ( locked_update [InterpImpl] . h l \ inout InterpImpl it → v { = . it argenv ( __argenv_push . it argenv b F ) } )
 }
 
 // Enable the module "env" GPU/CUDA host-import bridge. Off by default: those
 // imports hand the guest raw host pointers into linear memory and forward them
 // to libcuda, so they are only safe for trusted compute — the embedder must
 // opt in explicitly (the CLI does so with --allow-gpu).
-unsafe @ interp_allow_gpu Interp it__h → v {
-    : *InterpImpl it ( __Interp_ptr it__h )
-    = . it gpu_ok T
-}
+@ interp_allow_gpu Interp h → v { ( locked_update [InterpImpl] . h l \ inout InterpImpl it → v { = . it gpu_ok T } ) }
 
 // Enable the module "nurl_net" socket bridge — the guest's TCP/UDP/DNS
 // calls become this process's. Off by default for the same reason the
 // GPU bridge is: it is the guest reaching the network through us (the
 // CLI opts in with --allow-net).
-unsafe @ interp_allow_net Interp it__h → v {
-    : *InterpImpl it ( __Interp_ptr it__h )
-    = . it net_ok T
-}
+@ interp_allow_net Interp h → v { ( locked_update [InterpImpl] . h l \ inout InterpImpl it → v { = . it net_ok T } ) }
 
 // Grant the module one preopened host directory, visible to it as `guest_name`
 // (the path it resolves opens against). Installed as fd 3.
-unsafe @ interp_set_preopen Interp it__h s host_path s guest_name → v {
-    : *InterpImpl it ( __Interp_ptr it__h )
-    : ( Box WFd ) fb ( __mkfd 2 )
-    : *WFd f # *WFd ( box_ptr [WFd] fb )
+@ interp_set_preopen Interp it__h s host_path s guest_name → v {
+    : ~ WFd f ( __mkfd 2 )
     = . f host ( bytes_from_str host_path )
     = . f name ( bytes_from_str guest_name )
-    ( vec_push [( Box WFd )] . ( __host it ) fds fb )
+    : ( Locked WasiCtx ) w ( __interp_wasi it__h )
+    : ~ WasiCtx c ( locked_take [WasiCtx] w )
+    ( vec_push [WFd] . c fds f )
+    ( locked_restore [WasiCtx] w c )
 }
 
 // Run the module's start-section function, if any — the final instantiation
@@ -752,8 +792,8 @@ unsafe @ interp_set_preopen Interp it__h s host_path s guest_name → v {
 // that instantiated it. File descriptors, socket handles and captured
 // output are per-INSTANCE in wasm terms but per-PROCESS in the guest's:
 // a file opened by one thread has to be the same fd in another.
-unsafe inline @ __host * InterpImpl it → *InterpImpl {
-    ? == # i . it owner 0 { ^ it } {}
+unsafe inline @ __host inout InterpImpl it → *InterpImpl {
+    ? == # i . it owner 0 { ^ ( mem_addr it ) } {}
     ^ # *InterpImpl . it owner
 }
 
@@ -763,19 +803,21 @@ unsafe inline @ __host * InterpImpl it → *InterpImpl {
 // stays in the owner, reached through `__host` (a threaded module's memory
 // is allocated at its maximum up front and never moves), so the thread's
 // instance owns, and drops with its last owner, only what is its own.
-unsafe @ __interp_thread_new * InterpImpl parent → ( Arc InterpImpl ) {
-    : *InterpImpl ho ( __host parent )
-    : *ModuleImpl m # *ModuleImpl . ho mod
+unsafe @ __interp_thread_new inout InterpImpl parent → ( Arc InterpImpl ) {
+    : ~ * InterpImpl ho ( __host parent )
+    : ~ * ModuleImpl m # *ModuleImpl . ho mod
     // Zeroed: the fields not set below (mem_raw, the JIT state, the shared
     // tables) read as "none" — mem_raw is the memory base's selector.
     : ( Arc InterpImpl ) cb ( arc_zero [InterpImpl] )
-    : *InterpImpl it ( arc_ptr [InterpImpl] cb )
+    : ~ * InterpImpl it ( arc_ptr [InterpImpl] cb )
     = . it mod . ho mod
     = . it modh ( Module_share . ho modh )
     = . it vs ( vec_new [i] )
     = . it mem_pages . ho mem_pages
     = . it mem_bytes . ho mem_bytes
-    = . it fds ( vec_new [( Box WFd )] )  // unused in a thread: __host redirects
+    = . it wasi ( Locked_share [WasiCtx] . ho wasi )
+    = . it argenv ( arc_clone [ArgEnv] . ho argenv )
+    = . it cap . ho cap
     = . it halt 0
     = . it exit_code 0
     = . it trapmsg ( vec_new [u] )
@@ -787,9 +829,6 @@ unsafe @ __interp_thread_new * InterpImpl parent → ( Arc InterpImpl ) {
     = . it shared_mem . ho shared_mem
     = . it nethandles ( vec_new [i] )
     = . it netkinds ( vec_new [i] )
-    = . it cap . ho cap
-    = . it capout ( vec_new [u] )
-    = . it caperr ( vec_new [u] )
     = . it owner # s ho
     = . it next_tid 0
     = . it thread_kids ( vec_new [i] )
@@ -806,6 +845,8 @@ unsafe @ __interp_thread_new * InterpImpl parent → ( Arc InterpImpl ) {
     // Predecoded bodies are per-Interp (the cache is filled lazily and
     // mutated in place), so a thread decodes what it actually runs.
     = . it pfuncs ( vec_new [s] )
+    = . it import_ids ( vec_new [i] )
+    = . it import_sigs ( vec_new [i] )
     = . it pf_owned ( vec_new [( Box PFunc )] )
     = . it jit_ctx_mem ( vec_new [( Vec i )] )
     : i nf ( vec_len [( Box WFunc )] . m funcs )
@@ -826,7 +867,7 @@ unsafe @ __interp_thread_new * InterpImpl parent → ( Arc InterpImpl ) {
 
 // Publish a new memory size to every Interp in the group. Called with the
 // atomics lock held.
-unsafe @ __mem_publish * InterpImpl ho i pages i bytes → v {
+unsafe @ __mem_publish inout InterpImpl ho i pages i bytes → v {
     = . ho mem_pages pages
     = . ho mem_bytes bytes
     : i n ( vec_len [i] . ho thread_kids )
@@ -834,7 +875,7 @@ unsafe @ __mem_publish * InterpImpl ho i pages i bytes → v {
     ~ < k n {
         : i kp ?? ( vec_get [i] . ho thread_kids k ) { T x → x F → 0 }
         ? != kp 0 {
-            : *InterpImpl kid # *InterpImpl # s kp
+            : ~ * InterpImpl kid # *InterpImpl # s kp
             = . kid mem_pages pages
             = . kid mem_bytes bytes
         } {}
@@ -843,28 +884,27 @@ unsafe @ __mem_publish * InterpImpl ho i pages i bytes → v {
 }
 
 // Leave the group (the thread is done with its Interp).
-unsafe @ __thread_unregister * InterpImpl it → v {
+unsafe @ __thread_unregister inout InterpImpl it → v {
     ? == # i . it owner 0 { ^ v } {}
-    : *InterpImpl ho ( __host it )
+    : ~ * InterpImpl ho ( __host it )
     ( __atom_lock )
     : i n ( vec_len [i] . ho thread_kids )
     : ~ i k 0
     ~ < k n {
-        ? == ?? ( vec_get [i] . ho thread_kids k ) { T x → x F → 0 } # i it { ( vec_set [i] . ho thread_kids k 0 ) } {}
+        ? == ?? ( vec_get [i] . ho thread_kids k ) { T x → x F → 0 } # i ( mem_addr it ) { ( vec_set [i] . ho thread_kids k 0 ) } {}
         = k + k 1
     }
     ( __atom_unlock )
 }
 
-unsafe @ interp_run_start Interp it__h → v {
-    : *InterpImpl it ( __Interp_ptr it__h )
-    : *ModuleImpl m # *ModuleImpl . it mod
-    ? >= . m start_func 0 { ( __exec_func it . m start_func ) } {}
+@ interp_run_start Interp h → v {
+    : i sf ( locked_apply [InterpImpl i] . h l \ inout InterpImpl it → i { ^ . ( module_impl . it modh ) start_func } )
+    ? >= sf 0 { ( exec_func h sf ) } {}
 }
 
-unsafe @ __push * InterpImpl it i v → v { ( vec_push [i] . it vs v ) }
+@ __push inout InterpImpl it i v → v { ( vec_push [i] . it vs v ) }
 
-unsafe @ __pop * InterpImpl it → i {
+@ __pop inout InterpImpl it → i {
     : i n ( vec_len [i] . it vs )
     ? <= n 0 { ( __trap it `value stack underflow` ) ^ 0 } {}
     : i v ?? ( vec_get [i] . it vs - n 1 ) { T x → x F → 0 }
@@ -872,10 +912,10 @@ unsafe @ __pop * InterpImpl it → i {
     ^ v
 }
 
-unsafe @ __vsh * InterpImpl it → i { ^ ( vec_len [i] . it vs ) }
+@ __vsh inout InterpImpl it → i { ^ ( vec_len [i] . it vs ) }
 
 // Truncate the value stack back to height h.
-unsafe @ __vtrunc * InterpImpl it i h → v {
+@ __vtrunc inout InterpImpl it i h → v {
     ~ > ( vec_len [i] . it vs ) h { ( vec_pop [i] . it vs ) }
 }
 
@@ -953,28 +993,28 @@ unsafe @ __vtrunc * InterpImpl it i h → v {
 // single valtype, non-negative = an index into the type section (multi-value).
 
 // Parameter count of a block type.
-unsafe @ __bt_params * ModuleImpl m i bt → i {
+@ __bt_params inout ModuleImpl m i bt → i {
     ? < bt 0 { ^ 0 } {}
-    : s tp ?? ( vec_get [( Box FuncType )] . m types bt ) { T x → # s ( box_ptr [FuncType] x ) F → # s 0 }
-    ? == # i tp 0 { ^ 0 } {}
-    : *FuncType ft # *FuncType tp
-    ^ ( vec_len [i] . ft params )
+    ?? ( vec_get [( Box FuncType )] . m types bt ) {
+        T x → { : FuncType ft ( box_get [FuncType] x ) ^ ( vec_len [i] . ft params ) }
+        F → { ^ 0 }
+    }
 }
 
 // Result count of a block type.
-unsafe @ __bt_results * ModuleImpl m i bt → i {
+@ __bt_results inout ModuleImpl m i bt → i {
     ? == bt -64 { ^ 0 } {}
     ? < bt 0 { ^ 1 } {}
-    : s tp ?? ( vec_get [( Box FuncType )] . m types bt ) { T x → # s ( box_ptr [FuncType] x ) F → # s 0 }
-    ? == # i tp 0 { ^ 0 } {}
-    : *FuncType ft # *FuncType tp
-    ^ ( vec_len [i] . ft results )
+    ?? ( vec_get [( Box FuncType )] . m types bt ) {
+        T x → { : FuncType ft ( box_get [FuncType] x ) ^ ( vec_len [i] . ft results ) }
+        F → { ^ 0 }
+    }
 }
 
 // ── arithmetic helpers ───────────────────────────────────────────
 
 // Set the trap flag with a message (the uniform way every trap is raised).
-unsafe @ __trap * InterpImpl it s msg → v {
+@ __trap inout InterpImpl it s msg → v {
     = . it halt | . it halt 1
     ( vec_free [u] . it trapmsg )
     = . it trapmsg ( bytes_from_str msg )
@@ -983,25 +1023,25 @@ unsafe @ __trap * InterpImpl it s msg → v {
 // wasm div/rem semantics: divide-by-zero traps; signed div overflow
 // (minv / −1, where minv = INT32_MIN or INT64_MIN) traps; signed rem by −1 is
 // defined as 0 (also dodging the host SIGFPE on INT_MIN % −1).
-unsafe @ __div_s * InterpImpl it i a i b i minv → i {
+@ __div_s inout InterpImpl it i a i b i minv → i {
     ? == b 0 { ( __trap it `integer divide by zero` ) ^ 0 } {}
     ? & == a minv == b -1 { ( __trap it `integer overflow` ) ^ 0 } {}
     ^ / a b
 }
 
-unsafe @ __rem_s * InterpImpl it i a i b → i {
+@ __rem_s inout InterpImpl it i a i b → i {
     ? == b 0 { ( __trap it `integer divide by zero` ) ^ 0 } {}
     ? == b -1 { ^ 0 } {}
     ^ % a b
 }
 
 // Unsigned variants over already-nonnegative operands (u32 zero-extended).
-unsafe @ __div_u * InterpImpl it i a i b → i {
+@ __div_u inout InterpImpl it i a i b → i {
     ? == b 0 { ( __trap it `integer divide by zero` ) ^ 0 } {}
     ^ / a b
 }
 
-unsafe @ __rem_u * InterpImpl it i a i b → i {
+@ __rem_u inout InterpImpl it i a i b → i {
     ? == b 0 { ( __trap it `integer divide by zero` ) ^ 0 } {}
     ^ % a b
 }
@@ -1072,7 +1112,7 @@ unsafe @ __rem_u * InterpImpl it i a i b → i {
 // Trapping float→int truncation core (wasm's two distinct traps): NaN →
 // `invalid conversion to integer`; trunc(x) outside [lo, hi) → `integer
 // overflow`. Returns the integral value as f64.
-unsafe @ __trunc_ck * InterpImpl it b isnan f x f lo f hi → f {
+@ __trunc_ck inout InterpImpl it b isnan f x f lo f hi → f {
     ? isnan { ( __trap it `invalid conversion to integer` ) ^ 0.0 } {}
     : f t ( trunc x )
     ? ! & >= t lo < t hi { ( __trap it `integer overflow` ) ^ 0.0 } {}
@@ -1155,7 +1195,7 @@ unsafe @ __mem_store_split s base i ea i n i val → v {
 // sign-extension it will never reach from that site, and declines. Forcing
 // it was 9.5 % off the benchmark corpus, 24 % off nbody and matmul, 19 %
 // off sieve.
-unsafe inline @ __mem_load * InterpImpl it i ea i n i signed → i {
+unsafe inline @ __mem_load inout InterpImpl it i ea i n i signed → i {
     ? | < ea 0 > + ea n . it mem_bytes {
         ( __trap_oob it `memory load out of bounds` ea n )
         ^ 0
@@ -1188,7 +1228,7 @@ unsafe inline @ __mem_load * InterpImpl it i ea i n i signed → i {
 // independent locations, and guests rely on it — two malloc headers, two
 // struct fields, a length beside a flag. The symptom is a heap that grows
 // a wrong size field and hands out a wild pointer somewhere else.
-unsafe @ __mem_store_bytes * InterpImpl it i ea i n i val → v {
+unsafe @ __mem_store_bytes inout InterpImpl it i ea i n i val → v {
     : *u mb # *u ( __mem_base it )
     : ~ i k 0
     ~ < k n {
@@ -1198,7 +1238,7 @@ unsafe @ __mem_store_bytes * InterpImpl it i ea i n i val → v {
 }
 
 // Write the low n bytes of val little-endian to mem[ea].
-unsafe inline @ __mem_store * InterpImpl it i ea i n i val → v {
+unsafe inline @ __mem_store inout InterpImpl it i ea i n i val → v {
     ? | < ea 0 > + ea n . it mem_bytes {
         ( __trap_oob it `memory store out of bounds` ea n )
         ^ v
@@ -1225,8 +1265,8 @@ unsafe inline @ __mem_store * InterpImpl it i ea i n i val → v {
 // Grow linear memory by `delta` pages. Returns the old page count, or −1 when
 // the declared maximum (or the wasm32 hard limit of 65536 pages) would be
 // exceeded — the value memory.grow pushes.
-unsafe @ __mem_grow * InterpImpl it i delta → i {
-    : *ModuleImpl m # *ModuleImpl . it mod
+unsafe @ __mem_grow inout InterpImpl it i delta → i {
+    : ~ * ModuleImpl m # *ModuleImpl . it mod
     : ~ i limit 65536
     ? & > . m mem_max 0 < . m mem_max limit { = limit . m mem_max } {}
     // A shared memory already owns its maximum: growing is only raising
@@ -1240,11 +1280,11 @@ unsafe @ __mem_grow * InterpImpl it i delta → i {
     // which is exactly what the guest allocator uses as its new arena.)
     ? != . m mem_shared 0 {
         ( __atom_lock )
-        : *InterpImpl ho ( __host it )
+        : ~ * InterpImpl ho ( __host it )
         : i old . ho mem_pages
         ? == delta 0 { ( __atom_unlock ) ^ old } {}
         ? | < delta 0 > + old delta limit { ( __atom_unlock ) ^ -1 } {}
-        ( __mem_publish ho + old delta * + old delta ( __page ) )
+        ( __mem_publish . ho 0 + old delta * + old delta ( __page ) )
         ( __atom_unlock )
         ^ old
     } {}
@@ -1270,9 +1310,22 @@ unsafe @ __mem_grow * InterpImpl it i delta → i {
 // the function's results are left on top. Recurses for `call`.
 
 // Dispatch an imported function to the WASI host layer (no frame needed).
-unsafe @ __call_import * InterpImpl it * ModuleImpl m i fidx → v {
+unsafe @ __call_import inout InterpImpl it inout ModuleImpl m i fidx → v {
+    // Resolved once per import: the by-name match is a chain of string
+    // compares, and a module calling the host in a loop paid it per call.
+    ~ <= ( vec_len [i] . it import_ids ) fidx { ( vec_push [i] . it import_ids -3 ) }
+    : ~ i id ( vec_at [i] . it import_ids fidx )
+    // (The import record itself only to resolve it, and for an import no
+    // dispatch number covers.)
+    ? != id -3 { ? ( __wasi_dispatch_id it id ) { ^ v } {} } {}
     : s wp ?? ( vec_get [( Box WImport )] . m imports fidx ) { T x → # s ( box_ptr [WImport] x ) F → # s 0 }
-    ? != # i wp 0 { : *WImport w # *WImport wp ( __wasi_dispatch it . w module . w field ) } { ( __trap it `bad import index` ) }
+    ? == # i wp 0 { ( __trap it `bad import index` ) ^ v } {}
+    : *WImport w # *WImport wp
+    ? == id -3 {
+        = id ( __wasi_resolve . w module . w field ) ( vec_put [i] . it import_ids fidx id )
+        ? ( __wasi_dispatch_id it id ) { ^ v } {}
+    } {}
+    ( __wasi_dispatch it . w module . w field )
 }
 
 // Build a frame for defined function `fidx`. `ret_dst` is the caller slot
@@ -1282,16 +1335,16 @@ unsafe @ __call_import * InterpImpl it * ModuleImpl m i fidx → v {
 // arguments straight from the caller's slots, so only the outermost frame
 // touches the value stack.
 // the reference-typed declared locals of a fresh or recycled frame: null
-unsafe @ __refl_null * PFunc pf * i rb → v {
+unsafe @ __refl_null inout PFunc pf * i rb → v {
     : i nr ( vec_len [i] . pf refl )
     : ~ i k 0
     ~ < k nr { = . rb ( vec_at [i] . pf refl k ) -1 = k + k 1 }
 }
 
-unsafe @ __frame_new * InterpImpl it * ModuleImpl m i fidx i ret_dst → s {
+unsafe @ __frame_new inout InterpImpl it inout ModuleImpl m i fidx i ret_dst → s {
     : s pins ( __pfunc_for it m fidx )
     ? == # i pins 0 { ( __trap it `bad function index` ) ^ # s 0 } {}
-    : *PFunc pfc # *PFunc pins
+    : ~ * PFunc pfc # *PFunc pins
     // Reuse a frame from this function's pool when one is free: a call then
     // costs zeroing the declared locals instead of allocating and zero-
     // filling the whole slot array. Parameters are overwritten by the
@@ -1307,7 +1360,7 @@ unsafe @ __frame_new * InterpImpl it * ModuleImpl m i fidx i ret_dst → s {
             : *i rb ( vec_data [i] . rfr regs )
             : ~ i zk . pfc nparams
             ~ < zk . pfc nlocals { = . rb zk 0 = zk + zk 1 }
-            ( __refl_null pfc rb )
+            ( __refl_null . pfc 0 rb )
             = . rfr pos 0
             = . rfr ret_dst ret_dst
             ? < ret_dst 0 {
@@ -1332,7 +1385,7 @@ unsafe @ __frame_new * InterpImpl it * ModuleImpl m i fidx i ret_dst → s {
         : ~ i kk 0
         ~ < kk knum { = . kb + kbase kk ?? ( vec_get [i] . pfc kv kk ) { T x → x F → 0 } = kk + kk 1 }
     } {}
-    ( __refl_null pfc ( vec_data [i] regs ) )
+    ( __refl_null . pfc 0 ( vec_data [i] regs ) )
     ? < ret_dst 0 {
         // outermost: pop the arguments off the value stack, last first
         : ~ i pk . pfc nparams
@@ -1360,7 +1413,7 @@ unsafe inline @ __fr_setpos s tp i v → v {
 unsafe @ __frame_recycle s pp → v {
     ? == # i pp 0 { ^ v } {}
     : *Frame fr # *Frame pp
-    : *PFunc pf # *PFunc . fr pins
+    : ~ * PFunc pf # *PFunc . fr pins
     = . fr prev . pf pool
     = . pf pool pp
 }
@@ -1474,7 +1527,7 @@ unsafe @ __frame_recycle s pp → v {
 // loop ends with. The add record keeps its B/C operands; the store's
 // address slot takes A and its offset takes D. The value slot must be
 // the add's destination, a stack temp.
-unsafe @ __fuse_addstoref * PFunc pf i lastp i sb i addr i val i off → b {
+@ __fuse_addstoref inout PFunc pf i lastp i sb i addr i val i off → b {
     ? < lastp 0 { ^ F } {}
     ? != ( vec_len [i] . pf code ) * + lastp 1 6 { ^ F } {}
     : i base * lastp 6
@@ -1487,7 +1540,7 @@ unsafe @ __fuse_addstoref * PFunc pf i lastp i sb i addr i val i off → b {
     ^ T
 }
 
-unsafe @ __fuse_loadshl * PFunc pf i lastp i io i sb i dst i adr i off → b {
+@ __fuse_loadshl inout PFunc pf i lastp i io i sb i dst i adr i off → b {
     ? ! | == io 18 == io 20 { ^ F } {}  // i64.load / i32.load only
     ? < lastp 0 { ^ F } {}
     ? != ( vec_len [i] . pf code ) * + lastp 1 6 { ^ F } {}
@@ -1503,7 +1556,7 @@ unsafe @ __fuse_loadshl * PFunc pf i lastp i io i sb i dst i adr i off → b {
     ^ T
 }
 
-unsafe @ __fuse_loadshladd * PFunc pf i labfloor i io i sb i dst i fz i off i byte → b {
+@ __fuse_loadshladd inout PFunc pf i labfloor i io i sb i dst i fz i off i byte → b {
     ? ! | == io 18 == io 20 { ^ F } {}
     ? | < byte 0 >= byte 4294967296 { ^ F } {}
     : i ti - / ( vec_len [i] . pf code ) 6 1
@@ -1532,7 +1585,7 @@ unsafe @ __fuse_loadshladd * PFunc pf i labfloor i io i sb i dst i fz i off i by
 // producer folds only while its index operand is still the pool zero —
 // the D slot is what the fused form takes for `x` — and f64.sub picks
 // its fused spelling by which side the temp is on.
-unsafe @ __fuse_aluf * PFunc pf i lastp i io i sb i dst i x1 i x2 i zslot → b {
+@ __fuse_aluf inout PFunc pf i lastp i io i sb i dst i x1 i x2 i zslot → b {
     ? < lastp 0 { ^ F } {}
     ? != ( vec_len [i] . pf code ) * + lastp 1 6 { ^ F } {}
     : i base * lastp 6
@@ -1750,7 +1803,7 @@ unsafe @ __fuse_aluf * PFunc pf i lastp i io i sb i dst i x1 i x2 i zslot → b 
 // Emit one 6-slot record; returns its index.
 // Emit one record; the source byte offset goes to the SIDE table (read
 // only by the trap backtrace), so every record word is operand payload.
-unsafe @ __pf_emit * PFunc pf i op i a i b i cc i dd i byte → i {
+@ __pf_emit inout PFunc pf i op i a i b i cc i dd i byte → i {
     : ( Vec i ) code . pf code
     : i idx / ( vec_len [i] code ) 6
     ( vec_push [i] code op ) ( vec_push [i] code a ) ( vec_push [i] code b )
@@ -1802,7 +1855,7 @@ unsafe @ __pf_emit * PFunc pf i op i a i b i cc i dd i byte → i {
 // that `end`, which is past the fused record, never inside the pair.
 //
 // W5 packs cmpop<<21 | rhs-slot; the byte offset lives in the side table.
-unsafe @ __fuse_addbr * PFunc pf i lastp i labfloor i tgt i lop i lb i lc i byte → i {
+unsafe @ __fuse_addbr inout PFunc pf i lastp i labfloor i tgt i lop i lb i lc i byte → i {
     ? | < lastp 1 > labfloor - lastp 1 { ^ -1 } {}
     ? | < byte 0 >= byte 4294967296 { ^ -1 } {}
     ? | < lc 0 >= lc 2097152 { ^ -1 } {}
@@ -1840,7 +1893,7 @@ unsafe @ __fuse_addbr * PFunc pf i lastp i labfloor i tgt i lop i lb i lc i byte
 // the previous instruction was straight-line, and no control opcode is, so
 // no label can sit between the compare and the branch — which is the only
 // way a path could reach the branch without the compare.
-unsafe @ __fuse_branch * PFunc pf i lastp i labfloor i cond i tgt i byte → i {
+@ __fuse_branch inout PFunc pf i lastp i labfloor i cond i tgt i byte → i {
     ? < lastp 0 { ^ -1 } {}
     ? != ( vec_len [i] . pf code ) * + lastp 1 6 { ^ -1 } {}
     : i base * lastp 6
@@ -1882,7 +1935,7 @@ unsafe @ __fuse_branch * PFunc pf i lastp i labfloor i cond i tgt i byte → i {
 // with the same value, and `__fuse_branch` folds it into the branch. The
 // temp is popped by the outer eqz, so nothing else reads the inner one's
 // 0/1; no label can sit between the two (lastp is -1 across merge points).
-unsafe @ __fuse_eqz2 * PFunc pf i lastp i sb i src → b {
+@ __fuse_eqz2 inout PFunc pf i lastp i sb i src → b {
     ? < lastp 0 { ^ F } {}
     ? != ( vec_len [i] . pf code ) * + lastp 1 6 { ^ F } {}
     : i base * lastp 6
@@ -1898,7 +1951,7 @@ unsafe @ __fuse_eqz2 * PFunc pf i lastp i sb i src → b {
 // condition slot for br_if (-1 = unconditional). `h` is the height AFTER any
 // condition pop. Fills patch sites for forward targets. Returns nothing; the
 // caller handles liveness.
-unsafe @ __emit_branch * PFunc pf ( Vec ( Box PBlk ) ) open i k i cond i sb i h i byte i lastp i labfloor → v {
+unsafe @ __emit_branch inout PFunc pf ( Vec ( Box PBlk ) ) open i k i cond i sb i h i byte i lastp i labfloor → v {
     : i n ( vec_len [( Box PBlk )] open )
     ? >= k n { ( __pf_emit pf ( __R_TRAPUN ) 0 0 0 0 byte ) ^ v } {}
     : s bp ?? ( vec_get [( Box PBlk )] open - - n 1 k ) { T x → # s ( box_ptr [PBlk] x ) F → # s 0 }
@@ -1991,7 +2044,7 @@ unsafe @ __emit_branch * PFunc pf ( Vec ( Box PBlk ) ) open i k i cond i sb i h 
 // One structural walk of the body collecting the distinct constants. Every
 // other opcode is stepped over by `__skip_imm`, the same routine the decoder
 // already trusts for immediate layout, so this cannot desynchronise.
-unsafe @ __const_pool * ModuleImpl m * WFunc f ( Vec i ) kv → v {
+@ __const_pool inout ModuleImpl m WFunc f ( Vec i ) kv → v {
     // Pool entry 0 is the address-fusion zero. Every load record carries a
     // second address operand (see `__fuse_addr`); an access with nothing
     // folded into it names this slot, so the arm adds a slot that is always
@@ -2019,7 +2072,7 @@ unsafe @ __const_pool * ModuleImpl m * WFunc f ( Vec i ) kv → v {
 
 // Bind height `h` to the constant `cv`: the pool slot when the pre-scan
 // interned it, otherwise the CONST record into the canonical slot.
-unsafe @ __kbind * PFunc pf ( Vec i ) vm ( Vec i ) kv i L i sb i h i cv i live i byte → v {
+@ __kbind inout PFunc pf ( Vec i ) vm ( Vec i ) kv i L i sb i h i cv i live i byte → v {
     : i idx ( __kfind kv cv )
     ? >= idx 0 { ( __vset vm h + L idx ) } {
         ? != 0 live { ( __pf_emit pf ( __R_CONST ) + sb h cv 0 0 byte ) } {}
@@ -2035,7 +2088,7 @@ unsafe @ __kbind * PFunc pf ( Vec i ) vm ( Vec i ) kv i L i sb i h i cv i live i
 // Materialise every alias below `h` into its canonical slot, then reset the
 // whole map. `h` = 0 makes it a pure reset; `live` = 0 means nothing was
 // aliased in the first place, so the reset alone is the whole job.
-unsafe @ __vflush * PFunc pf ( Vec i ) vm i sb i h i live i byte → v {
+@ __vflush inout PFunc pf ( Vec i ) vm i sb i h i live i byte → v {
     : i n ( vec_len [i] vm )
     : ~ i k 0
     ~ < k n {
@@ -2101,7 +2154,7 @@ unsafe @ __vflush * PFunc pf ( Vec i ) vm i sb i h i live i byte → v {
 
 // Retarget the last record's destination to local `li`, or report that the
 // move has to be a real MOV after all. `hm1` is the height of the value.
-unsafe @ __fold_set * PFunc pf ( Vec i ) vm i lastp i sb i hm1 i li → b {
+@ __fold_set inout PFunc pf ( Vec i ) vm i lastp i sb i hm1 i li → b {
     ? < lastp 0 { ^ F } {}
     ? >= ?? ( vec_get [i] vm hm1 ) { T x → x F → -1 } 0 { ^ F } {}
     : i dstat + * lastp 6 1
@@ -2114,7 +2167,7 @@ unsafe @ __fold_set * PFunc pf ( Vec i ) vm i lastp i sb i hm1 i li → b {
 // A write to local `li` invalidates every live stack entry aliasing it:
 // those are copied to their canonical slots first, while `li` still holds
 // the old value.
-unsafe @ __vkill * PFunc pf ( Vec i ) vm i sb i h i li i live i byte → v {
+@ __vkill inout PFunc pf ( Vec i ) vm i sb i h i li i live i byte → v {
     : i n ( vec_len [i] vm )
     : i lim ? < h n h n
     : ~ i k 0
@@ -2147,7 +2200,7 @@ unsafe @ __vkill * PFunc pf ( Vec i ) vm i sb i h i li i live i byte → v {
 // Returns `base << 21 | index` (slots are capped at 2^20), or -1 when there
 // is nothing to fold. On success the add record is gone, so the load takes
 // its index and every earlier record index still means what it did.
-unsafe @ __fuse_addr * PFunc pf i lastp i addr i sb → i {
+unsafe @ __fuse_addr inout PFunc pf i lastp i addr i sb → i {
     ? < lastp 0 { ^ -1 } {}
     ? != ( vec_len [i] . pf code ) * + lastp 1 6 { ^ -1 } {}
     : i base * lastp 6
@@ -2193,7 +2246,7 @@ unsafe @ __fuse_addr * PFunc pf i lastp i addr i sb → i {
 // single-use argument as __fuse_selc, with __fuse_addr's stack-slot
 // clause. The `other == tA` rejection covers `t OP t`, where the second
 // read has no slot to read from once the temp is never written.
-unsafe @ __fuse_alu2 * PFunc pf i lastp i io i sb i dst i x1 i x2 i byte → b {
+@ __fuse_alu2 inout PFunc pf i lastp i io i sb i dst i x1 i x2 i byte → b {
     ? < lastp 0 { ^ F } {}
     ? != ( vec_len [i] . pf code ) * + lastp 1 6 { ^ F } {}
     : i base * lastp 6
@@ -2236,7 +2289,7 @@ unsafe @ __fuse_alu2 * PFunc pf i lastp i io i sb i dst i x1 i x2 i byte → b {
     ^ F
 }
 
-unsafe @ __wrap_skippable * ModuleImpl m inout Wc c → b {
+@ __wrap_skippable inout ModuleImpl m inout Wc c → b {
     ? >= . c pos . c len { ^ F } {}
     : i nx # i ?? ( vec_get [u] . m code . c pos ) { T x → x F → # u 0 }
     ? ( __insens_binop nx ) { ^ T } {}
@@ -2282,7 +2335,7 @@ unsafe @ __wrap_skippable * ModuleImpl m inout Wc c → b {
 
 // Does `f`'s body, from its first instruction on, spell `hex` byte for byte,
 // with `nloc` declared locals, all i64?
-unsafe @ __m3_eq * ModuleImpl m * WFunc f s hex i nloc → b {
+unsafe @ __m3_eq inout ModuleImpl m WFunc f s hex i nloc → b {
     : i n - . f code_end . f code_start
     : i hl ( nurl_str_len hex )
     ? != * n 2 hl { ^ F } {}
@@ -2301,7 +2354,7 @@ unsafe @ __m3_eq * ModuleImpl m * WFunc f s hex i nloc → b {
 
 // 1 when function `fi` is compiler-rt's __multi3, 2 when it is
 // compiler-builtins' (the two store their halves in opposite orders), else 0.
-unsafe @ __m3_kind * ModuleImpl m i fi → i {
+unsafe @ __m3_kind inout ModuleImpl m i fi → i {
     : i ni . m num_import_funcs
     ? < fi ni { ^ 0 } {}
     : s ct ( _module_func_type m fi )
@@ -2313,9 +2366,9 @@ unsafe @ __m3_kind * ModuleImpl m i fi → i {
     ~ < k 5 { ? != ( vec_at [i] . ft params k ) 126 { ^ 0 } {} = k + k 1 }
     : s fs ?? ( vec_get [( Box WFunc )] . m funcs - fi ni ) { T x → # s ( box_ptr [WFunc] x ) F → # s 0 }
     ? == # i fs 0 { ^ 0 } {}
-    : *WFunc f # *WFunc fs
-    ? ( __m3_eq m f ( __m3_crt ) 1 ) { ^ 1 } {}
-    ? ( __m3_eq m f ( __m3_rust ) 6 ) { ^ 2 } {}
+    : ~ * WFunc f # *WFunc fs
+    ? ( __m3_eq m . f 0 ( __m3_crt ) 1 ) { ^ 1 } {}
+    ? ( __m3_eq m . f 0 ( __m3_rust ) 6 ) { ^ 2 } {}
     ^ 0
 }
 
@@ -2324,7 +2377,7 @@ unsafe @ __m3_kind * ModuleImpl m i fi → i {
 // a_lo·b_lo, the high word a_lo·b_hi + a_hi·b_lo + mulhu(a_lo, b_lo), each
 // mod 2^64 — then stored in the order the matched body stores them, so a
 // trap on the second store leaves memory as the body would.
-unsafe @ __m3_emit * PFunc pf i a i kind i byte → v {
+@ __m3_emit inout PFunc pf i a i kind i byte → v {
     : i mul ( __iop 126 )  // i64.mul
     : i add ( __iop 124 )  // i64.add
     : i st ( __iop 55 )  // i64.store
@@ -2343,11 +2396,11 @@ unsafe @ __m3_emit * PFunc pf i a i kind i byte → v {
     }
 }
 
-unsafe @ __predecode * ModuleImpl m * WFunc f → ( Box PFunc ) {
+unsafe @ __predecode inout ModuleImpl m WFunc f → ( Box PFunc ) {
     // The record is filled in place through `pf`; the box is the owner the
     // caller keeps (it.pf_owned).
     : ( Box PFunc ) pfb ( box_new [PFunc] @ PFunc { ( vec_new [i] ) ( vec_new [i] ) 0 0 0 0 0 0 0 ( vec_new [i] ) # s 0 ( vec_new [i] ) # s 0 0 ( vec_new [i] ) ( vec_new [( Box Frame )] ) } )
-    : *PFunc pf # *PFunc ( box_ptr [PFunc] pfb )
+    : ~ * PFunc pf # *PFunc ( box_ptr [PFunc] pfb )
     = . pf code ( vec_new [i] )
     = . pf aux ( vec_new [i] )
     = . pf bytes ( vec_new [i] )
@@ -2398,7 +2451,7 @@ unsafe @ __predecode * ModuleImpl m * WFunc f → ( Box PFunc ) {
         : i op ( wc_u8 c )
         ? | == op 2 == op 3 {  // block / loop
             = labfloor / ( vec_len [i] . pf code ) 6
-            ( __vflush pf vm SB h live byte )
+            ( __vflush . pf 0 vm SB h live byte )
             : i bt ( wc_sleb c )
             : i p ( __bt_params m bt )
             : i r ( __bt_results m bt )
@@ -2413,21 +2466,21 @@ unsafe @ __predecode * ModuleImpl m * WFunc f → ( Box PFunc ) {
                 ? != 0 live {
                     = h - h 1
                     : i cnd ( __vg vm SB h )
-                    ( __vflush pf vm SB h live byte )
-                    : i rec ( __pf_emit pf ( __R_IFZ ) -1 cnd 0 0 byte )
+                    ( __vflush . pf 0 vm SB h live byte )
+                    : i rec ( __pf_emit . pf 0 ( __R_IFZ ) -1 cnd 0 0 byte )
                     ( vec_push [( Box PBlk )] open ( __pblk_new 2 - h p p r 1 rec ) )
                 } { ( vec_push [( Box PBlk )] open ( __pblk_new 2 h p r 0 -1 ) ) }
             } {
                 ? == op 5 {  // else
                     = labfloor / ( vec_len [i] . pf code ) 6
-                    ( __vflush pf vm SB h live byte )
+                    ( __vflush . pf 0 vm SB h live byte )
                     : i n ( vec_len [( Box PBlk )] open )
                     : s bp ?? ( vec_get [( Box PBlk )] open - n 1 ) { T x → # s ( box_ptr [PBlk] x ) F → # s 0 }
                     ? != # i bp 0 {
                         : *PBlk blk # *PBlk bp
                         ? != 0 . blk live_entry {
                             // end of a live then-arm jumps past the else arm
-                            ? != 0 live { = . blk else_br ( __pf_emit pf ( __R_BR ) -1 0 0 0 byte ) } {}
+                            ? != 0 live { = . blk else_br ( __pf_emit . pf 0 ( __R_BR ) -1 0 0 0 byte ) } {}
                             // the cond==0 edge lands here
                             ? >= . blk t0 0 { ( vec_set [i] . pf code + * . blk t0 6 1 ( vec_len [i] . pf code ) ) = . blk t0 -1 } {}
                             = h + . blk base . blk params
@@ -2437,7 +2490,7 @@ unsafe @ __predecode * ModuleImpl m * WFunc f → ( Box PFunc ) {
                 } {
                     ? == op 11 {  // end: close the frame, patch all forward targets here
                         = labfloor / ( vec_len [i] . pf code ) 6
-                        ( __vflush pf vm SB h live byte )
+                        ( __vflush . pf 0 vm SB h live byte )
                         : i n ( vec_len [( Box PBlk )] open )
                         : s bp ?? ( vec_get [( Box PBlk )] open - n 1 ) { T x → # s ( box_ptr [PBlk] x ) F → # s 0 }
                         : ?( Box PBlk ) popped ( vec_pop [( Box PBlk )] open )  // dropped with this arm
@@ -2467,15 +2520,15 @@ unsafe @ __predecode * ModuleImpl m * WFunc f → ( Box PFunc ) {
                     } {
                         ? == op 12 {  // br
                             : i k ( wc_uleb c )
-                            ? != 0 live { ( __vflush pf vm SB h live byte ) ( __emit_branch pf open k -1 SB h byte -1 -1 ) = live 0 } {}
+                            ? != 0 live { ( __vflush . pf 0 vm SB h live byte ) ( __emit_branch . pf 0 open k -1 SB h byte -1 -1 ) = live 0 } {}
                         } {
                             ? == op 13 {  // br_if: pop cond, branch on it, fall through otherwise
                                 : i k ( wc_uleb c )
                                 ? != 0 live {
                                     = h - h 1
                                     : i cnd ( __vg vm SB h )
-                                    ( __vflush pf vm SB h live byte )
-                                    ( __emit_branch pf open k cnd SB h byte lastp labfloor )
+                                    ( __vflush . pf 0 vm SB h live byte )
+                                    ( __emit_branch . pf 0 open k cnd SB h byte lastp labfloor )
                                 } {}
                             } {
                                 ? == op 14 {  // br_table
@@ -2483,7 +2536,7 @@ unsafe @ __predecode * ModuleImpl m * WFunc f → ( Box PFunc ) {
                                     ? == 0 live { : ~ i sk 0 ~ <= sk nl { ( wc_uleb c ) = sk + sk 1 } } {
                                         = h - h 1
                                         : i idxs ( __vg vm SB h )
-                                        ( __vflush pf vm SB h live byte )
+                                        ( __vflush . pf 0 vm SB h live byte )
                                         : i astart ( vec_len [i] . pf aux )
                                         : i non ( vec_len [( Box PBlk )] open )
                                         : ~ i lk 0
@@ -2503,31 +2556,31 @@ unsafe @ __predecode * ModuleImpl m * WFunc f → ( Box PFunc ) {
                                             }
                                             = lk + lk 1
                                         }
-                                        ( __pf_emit pf ( __R_BRTBL ) astart idxs nl 0 byte )
+                                        ( __pf_emit . pf 0 ( __R_BRTBL ) astart idxs nl 0 byte )
                                         = live 0
                                     }
                                 } {
                                     ? == op 15 {  // return
                                         ? != 0 live {
-                                            ( __vflush pf vm SB h live byte )
-                                            ( __pf_emit pf ( __R_RET ) + SB - h nresults nresults 0 0 byte )
+                                            ( __vflush . pf 0 vm SB h live byte )
+                                            ( __pf_emit . pf 0 ( __R_RET ) + SB - h nresults nresults 0 0 byte )
                                             = live 0
                                         } {}
                                     } {
                                         ? == op 16 {  // call
                                             : i fi ( wc_uleb c )
                                             ? != 0 live {
-                                                ( __vflush pf vm SB h live byte )
+                                                ( __vflush . pf 0 vm SB h live byte )
                                                 : i m3 ( __m3_kind m fi )
                                                 ? != m3 0 {
-                                                    ( __m3_emit pf + SB - h 5 m3 byte )
+                                                    ( __m3_emit . pf 0 + SB - h 5 m3 byte )
                                                     = h - h 5
                                                 } {
                                                     : s ct ( _module_func_type m fi )
                                                     : ~ i cp 0
                                                     : ~ i cr 0
                                                     ? != # i ct 0 { : *FuncType ctt # *FuncType ct = cp ( vec_len [i] . ctt params ) = cr ( vec_len [i] . ctt results ) } {}
-                                                    ( __pf_emit pf ? < fi . m num_import_funcs ( __R_CALLIMP ) ( __R_CALL ) fi + SB - h cp 0 0 byte )
+                                                    ( __pf_emit . pf 0 ? < fi . m num_import_funcs ( __R_CALLIMP ) ( __R_CALL ) fi + SB - h cp 0 0 byte )
                                                     = h + - h cp cr
                                                     ? > h maxh { = maxh h } {}
                                                 }
@@ -2538,37 +2591,37 @@ unsafe @ __predecode * ModuleImpl m * WFunc f → ( Box PFunc ) {
                                                 ? != 0 live {
                                                     = h - h 1
                                                     : i idxs ( __vg vm SB h )
-                                                    ( __vflush pf vm SB h live byte )
+                                                    ( __vflush . pf 0 vm SB h live byte )
                                                     : s ct ?? ( vec_get [( Box FuncType )] . m types ti ) { T x → # s ( box_ptr [FuncType] x ) F → # s 0 }
                                                     : ~ i cp 0
                                                     : ~ i cr 0
                                                     ? != # i ct 0 { : *FuncType ctt # *FuncType ct = cp ( vec_len [i] . ctt params ) = cr ( vec_len [i] . ctt results ) } {}
-                                                    ( __pf_emit pf ( __R_CALLIND ) ti + SB - h cp idxs 0 byte )
+                                                    ( __pf_emit . pf 0 ( __R_CALLIND ) ti + SB - h cp idxs 0 byte )
                                                     = h + - h cp cr
                                                     ? > h maxh { = maxh h } {}
                                                 } {}
                                             } {
-                                                ? == op 0 { ? != 0 live { ( __vflush pf vm SB 0 live byte ) ( __pf_emit pf ( __R_UNREACH ) 0 0 0 0 byte ) = live 0 } {} } {
+                                                ? == op 0 { ? != 0 live { ( __vflush . pf 0 vm SB 0 live byte ) ( __pf_emit . pf 0 ( __R_UNREACH ) 0 0 0 0 byte ) = live 0 } {} } {
                                                     ? == op 1 {} {  // nop
                                                         ? == op 26 { ? != 0 live { = h - h 1 } {} } {  // drop
                                                             ? | == op 27 == op 28 {  // select (typed select folds to the same record)
                                                                 ? == op 28 { : i tc ( wc_uleb c ) ( wc_skip c tc ) } {}
                                                                 ? != 0 live {
-                                                                    ( __pf_emit pf ( __R_SEL ) + SB - h 3 ( __vg vm SB - h 3 ) ( __vg vm SB - h 2 ) ( __vg vm SB - h 1 ) byte ) ( __vset vm - h 3 -1 )
+                                                                    ( __pf_emit . pf 0 ( __R_SEL ) + SB - h 3 ( __vg vm SB - h 3 ) ( __vg vm SB - h 2 ) ( __vg vm SB - h 1 ) byte ) ( __vset vm - h 3 -1 )
                                                                     = h - h 2
                                                                 } {}
                                                             } {
                                                                 ? == op 32 { : i li ( wc_uleb c ) ? != 0 live { ( __vset vm h li ) = h + h 1 ? > h maxh { = maxh h } {} } {} } {
-                                                                    ? == op 33 { : i li ( wc_uleb c ) ? != 0 live { ? ( __fold_set pf vm lastp SB - h 1 li ) {} { : i sv ( __vg vm SB - h 1 ) ( __vkill pf vm SB - h 1 li live byte ) ( __pf_emit pf ( __R_MOV ) li sv 0 0 byte ) } = h - h 1 } {} } {
-                                                                        ? == op 34 { : i li ( wc_uleb c ) ? != 0 live { ? ( __fold_set pf vm lastp SB - h 1 li ) {} { : i sv ( __vg vm SB - h 1 ) ( __vkill pf vm SB - h 1 li live byte ) ( __pf_emit pf ( __R_MOV ) li sv 0 0 byte ) } ( __vset vm - h 1 li ) } {} } {
-                                                                            ? == op 35 { : i gi ( wc_uleb c ) ? != 0 live { ( __pf_emit pf ( __R_GG ) + SB h gi 0 0 byte ) ( __vset vm h -1 ) = h + h 1 ? > h maxh { = maxh h } {} } {} } {
-                                                                                ? == op 36 { : i gi ( wc_uleb c ) ? != 0 live { ( __pf_emit pf ( __R_GS ) gi ( __vg vm SB - h 1 ) 0 0 byte ) = h - h 1 } {} } {
-                                                                                    ? == op 37 { ( wc_uleb c ) ? != 0 live { ( __pf_emit pf ( __R_TABGET ) + SB - h 1 ( __vg vm SB - h 1 ) 0 0 byte ) ( __vset vm - h 1 -1 ) } {} } {
-                                                                                        ? == op 38 { ( wc_uleb c ) ? != 0 live { ( __pf_emit pf ( __R_TABSET ) ( __vg vm SB - h 2 ) ( __vg vm SB - h 1 ) 0 0 byte ) = h - h 2 } {} } {
-                                                                                            ? == op 65 { : i cv ( wc_sleb c ) ? != 0 live { ( __kbind pf vm kv L SB h ( __w32 cv ) live byte ) = h + h 1 ? > h maxh { = maxh h } {} } {} } {
-                                                                                                ? == op 66 { : i cv ( wc_sleb c ) ? != 0 live { ( __kbind pf vm kv L SB h cv live byte ) = h + h 1 ? > h maxh { = maxh h } {} } {} } {
-                                                                                                    ? == op 67 { : i cv ( __read_le c 4 ) ? != 0 live { ( __kbind pf vm kv L SB h cv live byte ) = h + h 1 ? > h maxh { = maxh h } {} } {} } {
-                                                                                                        ? == op 68 { : i cv ( __read_le c 8 ) ? != 0 live { ( __kbind pf vm kv L SB h cv live byte ) = h + h 1 ? > h maxh { = maxh h } {} } {} } {
+                                                                    ? == op 33 { : i li ( wc_uleb c ) ? != 0 live { ? ( __fold_set . pf 0 vm lastp SB - h 1 li ) {} { : i sv ( __vg vm SB - h 1 ) ( __vkill . pf 0 vm SB - h 1 li live byte ) ( __pf_emit . pf 0 ( __R_MOV ) li sv 0 0 byte ) } = h - h 1 } {} } {
+                                                                        ? == op 34 { : i li ( wc_uleb c ) ? != 0 live { ? ( __fold_set . pf 0 vm lastp SB - h 1 li ) {} { : i sv ( __vg vm SB - h 1 ) ( __vkill . pf 0 vm SB - h 1 li live byte ) ( __pf_emit . pf 0 ( __R_MOV ) li sv 0 0 byte ) } ( __vset vm - h 1 li ) } {} } {
+                                                                            ? == op 35 { : i gi ( wc_uleb c ) ? != 0 live { ( __pf_emit . pf 0 ( __R_GG ) + SB h gi 0 0 byte ) ( __vset vm h -1 ) = h + h 1 ? > h maxh { = maxh h } {} } {} } {
+                                                                                ? == op 36 { : i gi ( wc_uleb c ) ? != 0 live { ( __pf_emit . pf 0 ( __R_GS ) gi ( __vg vm SB - h 1 ) 0 0 byte ) = h - h 1 } {} } {
+                                                                                    ? == op 37 { ( wc_uleb c ) ? != 0 live { ( __pf_emit . pf 0 ( __R_TABGET ) + SB - h 1 ( __vg vm SB - h 1 ) 0 0 byte ) ( __vset vm - h 1 -1 ) } {} } {
+                                                                                        ? == op 38 { ( wc_uleb c ) ? != 0 live { ( __pf_emit . pf 0 ( __R_TABSET ) ( __vg vm SB - h 2 ) ( __vg vm SB - h 1 ) 0 0 byte ) = h - h 2 } {} } {
+                                                                                            ? == op 65 { : i cv ( wc_sleb c ) ? != 0 live { ( __kbind . pf 0 vm kv L SB h ( __w32 cv ) live byte ) = h + h 1 ? > h maxh { = maxh h } {} } {} } {
+                                                                                                ? == op 66 { : i cv ( wc_sleb c ) ? != 0 live { ( __kbind . pf 0 vm kv L SB h cv live byte ) = h + h 1 ? > h maxh { = maxh h } {} } {} } {
+                                                                                                    ? == op 67 { : i cv ( __read_le c 4 ) ? != 0 live { ( __kbind . pf 0 vm kv L SB h cv live byte ) = h + h 1 ? > h maxh { = maxh h } {} } {} } {
+                                                                                                        ? == op 68 { : i cv ( __read_le c 8 ) ? != 0 live { ( __kbind . pf 0 vm kv L SB h cv live byte ) = h + h 1 ? > h maxh { = maxh h } {} } {} } {
                                                                                                             ? & >= op 40 <= op 53 {  // loads: A=dst B=base C=off D=index
                                                                                                                 ( wc_uleb c )
                                                                                                                 : i off & ( wc_uleb c ) 4294967295
@@ -2576,10 +2629,10 @@ unsafe @ __predecode * ModuleImpl m * WFunc f → ( Box PFunc ) {
                                                                                                                     : i adr ( __vg vm SB - h 1 )
                                                                                                                     : i ldst + SB - h 1
                                                                                                                     : i lio ( __iop op )
-                                                                                                                    ? ( __fuse_loadshl pf lastp lio SB ldst adr off ) {} {
-                                                                                                                        : i fz ( __fuse_addr pf lastp adr SB )
-                                                                                                                        ? & >= fz 0 ( __fuse_loadshladd pf labfloor lio SB ldst fz off byte ) {} {
-                                                                                                                            ( __pf_emit pf lio ldst ? < fz 0 adr >> fz 21 off ? < fz 0 L & fz 2097151 byte )
+                                                                                                                    ? ( __fuse_loadshl . pf 0 lastp lio SB ldst adr off ) {} {
+                                                                                                                        : i fz ( __fuse_addr . pf 0 lastp adr SB )
+                                                                                                                        ? & >= fz 0 ( __fuse_loadshladd . pf 0 labfloor lio SB ldst fz off byte ) {} {
+                                                                                                                            ( __pf_emit . pf 0 lio ldst ? < fz 0 adr >> fz 21 off ? < fz 0 L & fz 2097151 byte )
                                                                                                                         }
                                                                                                                     }
                                                                                                                     ( __vset vm - h 1 -1 )
@@ -2591,19 +2644,19 @@ unsafe @ __predecode * ModuleImpl m * WFunc f → ( Box PFunc ) {
                                                                                                                     ? != 0 live {
                                                                                                                         : i sad ( __vg vm SB - h 2 )
                                                                                                                         : i sva ( __vg vm SB - h 1 )
-                                                                                                                        ? & == op 57 ( __fuse_addstoref pf lastp SB sad sva off ) {} {
-                                                                                                                            ( __pf_emit pf ( __iop op ) sad sva off 0 byte )
+                                                                                                                        ? & == op 57 ( __fuse_addstoref . pf 0 lastp SB sad sva off ) {} {
+                                                                                                                            ( __pf_emit . pf 0 ( __iop op ) sad sva off 0 byte )
                                                                                                                         }
                                                                                                                         = h - h 2
                                                                                                                     } {}
                                                                                                                 } {
-                                                                                                                    ? == op 63 { ( wc_u8 c ) ? != 0 live { ( __pf_emit pf ( __R_MEMSZ ) + SB h 0 0 0 byte ) ( __vset vm h -1 ) = h + h 1 ? > h maxh { = maxh h } {} } {} } {
-                                                                                                                        ? == op 64 { ( wc_u8 c ) ? != 0 live { ( __pf_emit pf ( __R_MEMGROW ) + SB - h 1 ( __vg vm SB - h 1 ) 0 0 byte ) ( __vset vm - h 1 -1 ) } {} } {
+                                                                                                                    ? == op 63 { ( wc_u8 c ) ? != 0 live { ( __pf_emit . pf 0 ( __R_MEMSZ ) + SB h 0 0 0 byte ) ( __vset vm h -1 ) = h + h 1 ? > h maxh { = maxh h } {} } {} } {
+                                                                                                                        ? == op 64 { ( wc_u8 c ) ? != 0 live { ( __pf_emit . pf 0 ( __R_MEMGROW ) + SB - h 1 ( __vg vm SB - h 1 ) 0 0 byte ) ( __vset vm - h 1 -1 ) } {} } {
                                                                                                                             ? | == op 69 | == op 80 | & >= op 103 <= op 105 | & >= op 121 <= op 123 & >= op 192 <= op 196 {
                                                                                                                                 // integer unary: in place at the top slot
                                                                                                                                 ? != 0 live {
                                                                                                                                     : i usrc ( __vg vm SB - h 1 )
-                                                                                                                                    ? & == op 69 ( __fuse_eqz2 pf lastp SB usrc ) {} { ( __pf_emit pf ( __iop op ) + SB - h 1 usrc 0 0 byte ) }
+                                                                                                                                    ? & == op 69 ( __fuse_eqz2 . pf 0 lastp SB usrc ) {} { ( __pf_emit . pf 0 ( __iop op ) + SB - h 1 usrc 0 0 byte ) }
                                                                                                                                     ( __vset vm - h 1 -1 )
                                                                                                                                 } {}
                                                                                                                             } {
@@ -2614,8 +2667,8 @@ unsafe @ __predecode * ModuleImpl m * WFunc f → ( Box PFunc ) {
                                                                                                                                         : i bdst + SB - h 2
                                                                                                                                         : i bx1 ( __vg vm SB - h 2 )
                                                                                                                                         : i bx2 ( __vg vm SB - h 1 )
-                                                                                                                                        ? ( __fuse_alu2 pf lastp bio SB bdst bx1 bx2 byte ) {} {
-                                                                                                                                            ( __pf_emit pf bio bdst bx1 bx2 0 byte )
+                                                                                                                                        ? ( __fuse_alu2 . pf 0 lastp bio SB bdst bx1 bx2 byte ) {} {
+                                                                                                                                            ( __pf_emit . pf 0 bio bdst bx1 bx2 0 byte )
                                                                                                                                         }
                                                                                                                                         ( __vset vm - h 2 -1 )
                                                                                                                                         = h - h 1
@@ -2634,17 +2687,17 @@ unsafe @ __predecode * ModuleImpl m * WFunc f → ( Box PFunc ) {
                                                                                                                                                 : i fdst + SB - h np
                                                                                                                                                 : i fx1 ( __vg vm SB - h np )
                                                                                                                                                 : i fx2 ? == np 2 ( __vg vm SB - h 1 ) 0
-                                                                                                                                                ? & == np 2 ( __fuse_aluf pf lastp fio SB fdst fx1 fx2 . pf nlocals ) {} {
-                                                                                                                                                    ( __pf_emit pf fio fdst fx1 fx2 0 byte )
+                                                                                                                                                ? & == np 2 ( __fuse_aluf . pf 0 lastp fio SB fdst fx1 fx2 . pf nlocals ) {} {
+                                                                                                                                                    ( __pf_emit . pf 0 fio fdst fx1 fx2 0 byte )
                                                                                                                                                 }
                                                                                                                                                 ( __vset vm - h np -1 )
                                                                                                                                                 = h + - h np 1
                                                                                                                                             }
                                                                                                                                         } {}
                                                                                                                                     } {
-                                                                                                                                        ? == op 208 { ( wc_u8 c ) ? != 0 live { ( __kbind pf vm kv L SB h -1 live byte ) = h + h 1 ? > h maxh { = maxh h } {} } {} } {
-                                                                                                                                            ? == op 209 { ? != 0 live { ( __pf_emit pf ( __R_ISNULL ) + SB - h 1 ( __vg vm SB - h 1 ) 0 0 byte ) ( __vset vm - h 1 -1 ) } {} } {
-                                                                                                                                                ? == op 210 { : i rfi ( wc_uleb c ) ? != 0 live { ( __kbind pf vm kv L SB h rfi live byte ) = h + h 1 ? > h maxh { = maxh h } {} } {} } {
+                                                                                                                                        ? == op 208 { ( wc_u8 c ) ? != 0 live { ( __kbind . pf 0 vm kv L SB h -1 live byte ) = h + h 1 ? > h maxh { = maxh h } {} } {} } {
+                                                                                                                                            ? == op 209 { ? != 0 live { ( __pf_emit . pf 0 ( __R_ISNULL ) + SB - h 1 ( __vg vm SB - h 1 ) 0 0 byte ) ( __vset vm - h 1 -1 ) } {} } {
+                                                                                                                                                ? == op 210 { : i rfi ( wc_uleb c ) ? != 0 live { ( __kbind . pf 0 vm kv L SB h rfi live byte ) = h + h 1 ? > h maxh { = maxh h } {} } {} } {
                                                                                                                                                     ? == op 252 {  // 0xfc family: vs bridge, pops/pushes per sub
                                                                                                                                                         : i sub ( wc_uleb c )
                                                                                                                                                         : ~ i bop 0
@@ -2663,8 +2716,8 @@ unsafe @ __predecode * ModuleImpl m * WFunc f → ( Box PFunc ) {
                                                                                                                                                                 ? | == sub 8 | == sub 10 | == sub 11 | == sub 12 | == sub 14 == sub 17 { = pops 3 } {
                                                                                                                                                                     ? == sub 15 { = pops 2 = push 1 } {
                                                                                                                                                                         ? == sub 16 { = push 1 } {} } } }
-                                                                                                                                                            ( __vflush pf vm SB h live byte )
-                                                                                                                                                            ( __pf_emit pf ( __R_FCB ) sub bop + SB - h pops | << pops 1 push byte )
+                                                                                                                                                            ( __vflush . pf 0 vm SB h live byte )
+                                                                                                                                                            ( __pf_emit . pf 0 ( __R_FCB ) sub bop + SB - h pops | << pops 1 push byte )
                                                                                                                                                             = h + - h pops push
                                                                                                                                                             ? > h maxh { = maxh h } {}
                                                                                                                                                         } {}
@@ -2677,8 +2730,8 @@ unsafe @ __predecode * ModuleImpl m * WFunc f → ( Box PFunc ) {
                                                                                                                                                                 : i shape ( __atom_shape asub )
                                                                                                                                                                 : i pops >> shape 1
                                                                                                                                                                 : i push & shape 1
-                                                                                                                                                                ( __vflush pf vm SB h live byte )
-                                                                                                                                                                ( __pf_emit pf ( __R_ATOM ) asub aoff + SB - h pops | << pops 1 push byte )
+                                                                                                                                                                ( __vflush . pf 0 vm SB h live byte )
+                                                                                                                                                                ( __pf_emit . pf 0 ( __R_ATOM ) asub aoff + SB - h pops | << pops 1 push byte )
                                                                                                                                                                 = h + - h pops push
                                                                                                                                                                 ? > h maxh { = maxh h } {}
                                                                                                                                                             } {}
@@ -2686,7 +2739,7 @@ unsafe @ __predecode * ModuleImpl m * WFunc f → ( Box PFunc ) {
                                                                                                                                                             // unsupported (0xfd and anything unknown): keep alignment,
                                                                                                                                                             // trap if ever executed
                                                                                                                                                             ? == op 253 { ( __skip_imm c op ) } {}
-                                                                                                                                                            ? != 0 live { ( __vflush pf vm SB 0 live byte ) ( __pf_emit pf ( __R_TRAPUN ) 0 0 0 0 byte ) } {}
+                                                                                                                                                            ? != 0 live { ( __vflush . pf 0 vm SB 0 live byte ) ( __pf_emit . pf 0 ( __R_TRAPUN ) 0 0 0 0 byte ) } {}
                                                                                                                                                         }
                                                                                                                                                     } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } }
         // Arm the fold for the next instruction. Every arm above that is
@@ -2707,7 +2760,7 @@ unsafe @ __predecode * ModuleImpl m * WFunc f → ( Box PFunc ) {
     // `end` was reachable — the return arm performs the whole frame
     // transition inline, so falling off the end (an outer-loop round
     // trip) is left to hostile modules only.
-    ? != 0 live { ( __pf_emit pf ( __R_RET ) + SB - h nresults nresults 0 0 . f code_end ) } {}
+    ? != 0 live { ( __pf_emit . pf 0 ( __R_RET ) + SB - h nresults nresults 0 0 . f code_end ) } {}
 
     // Past the slot cap the packed operand fields would wrap, so the body is
     // replaced by a single trap: the module still loads and still decodes,
@@ -2722,7 +2775,7 @@ unsafe @ __predecode * ModuleImpl m * WFunc f → ( Box PFunc ) {
         = . pf code ( vec_new [i] )
         = . pf kv ( vec_new [i] )
         = . pf bytes ( vec_new [i] )
-        ( __pf_emit pf ( __R_TRAPUN ) 0 0 0 0 . f code_start )
+        ( __pf_emit . pf 0 ( __R_TRAPUN ) 0 0 0 0 . f code_start )
         = . pf count 1
         = . pf nlocals nparams
         ( vec_clear [i] . pf refl )
@@ -2747,7 +2800,7 @@ unsafe @ __predecode * ModuleImpl m * WFunc f → ( Box PFunc ) {
     ^ pfb
 }
 // Get-or-build the PFunc for defined function `fidx`.
-unsafe @ __pfunc_for * InterpImpl it * ModuleImpl m i fidx → s {
+unsafe @ __pfunc_for inout InterpImpl it inout ModuleImpl m i fidx → s {
     : i di - fidx . m num_import_funcs
     // Bound first: `di` comes from a call record, i.e. straight out of the
     // module, so a hostile index must not be allowed to grow the cache.
@@ -2757,8 +2810,8 @@ unsafe @ __pfunc_for * InterpImpl it * ModuleImpl m i fidx → s {
     ? != # i have 0 { ^ have } {}
     : s fp ?? ( vec_get [( Box WFunc )] . m funcs di ) { T x → # s ( box_ptr [WFunc] x ) F → # s 0 }
     ? == # i fp 0 { ^ # s 0 } {}
-    : *WFunc f # *WFunc fp
-    : ( Box PFunc ) owned ( __predecode m f )
+    : ~ * WFunc f # *WFunc fp
+    : ( Box PFunc ) owned ( __predecode m . f 0 )
     : s built # s ( box_ptr [PFunc] owned )
     ( vec_push [( Box PFunc )] . it pf_owned owned )
     ( vec_set [s] . it pfuncs di built )
@@ -2767,7 +2820,7 @@ unsafe @ __pfunc_for * InterpImpl it * ModuleImpl m i fidx → s {
 
 // On trap: append a wasm backtrace (innermost first) to the trap message,
 // naming frames from the module's name section when present.
-unsafe @ __trap_backtrace * InterpImpl it * ModuleImpl m s top → v {
+unsafe @ __trap_backtrace inout InterpImpl it inout ModuleImpl m s top → v {
     : ( Vec u ) msg . it trapmsg
     : ~ s pp top
     : ~ i shown 0
@@ -2785,7 +2838,7 @@ unsafe @ __trap_backtrace * InterpImpl it * ModuleImpl m s top → v {
             // offset stays meaningful against a wasm-objdump of the file.
             // pos can sit one past the last record (fell off the end) —
             // clamp before reading.
-            : *PFunc bpf # *PFunc . fr pins
+            : ~ * PFunc bpf # *PFunc . fr pins
             : ~ i bpos . fr pos
             ? >= bpos * . bpf count 6 { = bpos - * . bpf count 6 6 } {}
             : ~ i boff 0
@@ -2876,7 +2929,7 @@ unsafe @ interp_enable_perfmap → v {
 }
 
 // one perf-map line for a function just placed at [start, start+len)
-unsafe @ __perfmap_add * ModuleImpl m i fidx i start i len → v {
+unsafe @ __perfmap_add inout ModuleImpl m i fidx i start i len → v {
     : ( Vec u ) line ( vec_new [u] )
     ( __pm_hex line start ) ( vec_push [u] line # u 32 ) ( __pm_hex line len ) ( vec_push [u] line # u 32 )
     : ( Vec u ) nm ( _module_func_name m fidx )
@@ -3225,7 +3278,7 @@ unsafe @ __perfmap_add * ModuleImpl m i fidx i start i len → v {
 // unreachable in practice). JIT only unlimited-fuel runs: a metered run
 // keeps the interpreter, which charges fuel exactly, so no fuel
 // accounting is emitted.
-unsafe @ __jit_ok * PFunc pf → i {
+@ __jit_ok inout PFunc pf → i {
     : i n . pf count
     ? == n 0 { ^ 0 } {}
     : ( Vec i ) code . pf code
@@ -3632,7 +3685,7 @@ unsafe @ __jit_ok * PFunc pf → i {
 
 // Argument/result window of a call record: nargs*65536+nres (or -1 when
 // the type cannot be resolved — the walker then treats it as a full read).
-unsafe @ __jit_call_win * ModuleImpl m i op i a → i {
+unsafe @ __jit_call_win inout ModuleImpl m i op i a → i {
     : ~ s ct # s 0
     ? | == op 50 == op 210 { = ct ( _module_func_type m a ) } {
         ? == op 170 { = ct ?? ( vec_get [( Box FuncType )] . m types a ) { T x → # s ( box_ptr [FuncType] x ) F → # s 0 } } {} }
@@ -3644,7 +3697,7 @@ unsafe @ __jit_call_win * ModuleImpl m i op i a → i {
 // Is slot s provably dead at record `start` — overwritten before any
 // read on every path? DFS over the record CFG; anything the walker does
 // not understand counts as a read.
-unsafe @ __jit_slot_dead * ModuleImpl m ( Vec i ) auxv ( Vec i ) code i n i start i s → i {
+@ __jit_slot_dead inout ModuleImpl m ( Vec i ) auxv ( Vec i ) code i n i start i s → i {
     ? | < start 0 >= start n { ^ 1 } {}  // fell off the end: the trailing RET reads nothing
     : ( Vec i ) seen ( vec_new [i] )
     : ~ i z 0
@@ -3724,7 +3777,7 @@ unsafe @ __jit_slot_dead * ModuleImpl m ( Vec i ) auxv ( Vec i ) code i n i star
 // (the callee reads them through the args pointer), and the FCB operand
 // window (the driver reads it from frame memory). Unknown ops keep
 // every write. Returns 0/1 per slot (1 = must write).
-unsafe @ __jit_kv_writes * PFunc pf ( Vec i ) pmap ( Vec i ) xmap ( Vec i ) cvals → ( Vec i ) {
+@ __jit_kv_writes inout PFunc pf ( Vec i ) pmap ( Vec i ) xmap ( Vec i ) cvals → ( Vec i ) {
     : i nsl . pf nslots
     : i nl . pf nlocals
     : i knum ( vec_len [i] . pf kv )
@@ -3903,7 +3956,7 @@ unsafe @ __jit_kv_writes * PFunc pf ( Vec i ) pmap ( Vec i ) xmap ( Vec i ) cval
 // A reusable 7-word JIT call context from the per-Interp freelist (word 0
 // links the free chain). This replaces a Vec per call-out — the profile
 // showed vec_new/push/grow/free dominating recursive guest calls.
-unsafe @ __jit_ctx_get * InterpImpl it → *i {
+unsafe @ __jit_ctx_get inout InterpImpl it → *i {
     : i h . it jit_ctx_free
     ? != h 0 {
         : *i b # *i h
@@ -3917,7 +3970,7 @@ unsafe @ __jit_ctx_get * InterpImpl it → *i {
     ^ b
 }
 
-unsafe @ __jit_ctx_put * InterpImpl it * i b → v {
+unsafe @ __jit_ctx_put inout InterpImpl it * i b → v {
     = . b 0 . it jit_ctx_free
     = . it jit_ctx_free # i b
 }
@@ -4298,11 +4351,11 @@ unsafe @ __jit_ctx_put * InterpImpl it * i b → v {
 // cd[6] on entry, and the result status is written back there: 0 = done,
 // 1 = trap/halt recorded (the code exits with status 11, "already
 // recorded", which every driver maps to a plain trapped return).
-unsafe @ __jit_inline_co * InterpImpl it → v {
+unsafe @ __jit_inline_co inout InterpImpl it → v {
     : *i cd # *i . it jit_cur_cd
     : i st . cd 6
-    : *ModuleImpl m # *ModuleImpl . it mod
-    : i tr ( __jit_callout it m st cd )
+    : ~ * ModuleImpl m # *ModuleImpl . it mod
+    : i tr ( __jit_callout it . m 0 st cd )
     // memory.grow moved the guest memory: the emitted code reloads its
     // base/limit registers from these words after the call returns
     = . cd 1 ( __mem_base it )
@@ -4317,19 +4370,19 @@ unsafe @ __jit_inline_co * InterpImpl it → v {
 // The smallest type index structurally equal to type `ftp` (-1 when it
 // names no type): two functions may be called through each other's
 // call_indirect exactly when these agree.
-unsafe @ __jit_sigcanon * ModuleImpl m s ftp → i {
+unsafe @ __jit_sigcanon inout ModuleImpl m s ftp → i {
     ? == # i ftp 0 { ^ -1 } {}
     : i nt ( vec_len [( Box FuncType )] . m types )
     : ~ i k 0
     ~ < k nt {
         : s tp # s ( box_ptr [FuncType] ( vec_at [( Box FuncType )] . m types k ) )
-        ? != # i tp 0 { ? ( functype_eq # *FuncType tp # *FuncType ftp ) { ^ k } {} } {}
+        ? != # i tp 0 { ? ( functype_eq . # *FuncType tp 0 . # *FuncType ftp 0 ) { ^ k } {} } {}
         = k + k 1
     }
     ^ -1
 }
 
-unsafe @ __jit_state_init * InterpImpl it * ModuleImpl m → v {
+unsafe @ __jit_state_init inout InterpImpl it inout ModuleImpl m → v {
     ? != 0 . it jit_slab { ^ v } {}
     : i bytes 16777216
     = . it jit_slab_mem ( vec_zeroed [u] bytes )
@@ -4360,7 +4413,9 @@ unsafe @ __jit_state_init * InterpImpl it * ModuleImpl m → v {
     // fn(env) directly. The instance keeps its own copy of the env
     // (jit_co, released with the instance; the closure itself is dropped
     // at the end of this scope, docs/MEMORY.md §7.4).
-    : ( @ v ) co \ → v { ( __jit_inline_co it ) }
+    // (The bridge runs against THIS instance: it captures the address.)
+    : ~ * InterpImpl itp ( mem_addr it )
+    : ( @ v ) co \ → v { ( __jit_inline_co . itp 0 ) }
     : *u cofn # *u co 0
     : *u coenv ( nurl_closure_clone # *u co 1 )
     = . it jit_co @ JitCoEnv { # s coenv }
@@ -4498,7 +4553,7 @@ unsafe @ __jit_state_init * InterpImpl it * ModuleImpl m → v {
 // vec; slots whose every access is an xmm-path operand compete for
 // xmm8..xmm15 instead and land in `xpins`. NURL_NWASM_PIN=0 turns the
 // whole tier off (A/B and debugging).
-unsafe @ __jit_pin_select * PFunc pf ( Vec i ) xpins i guard → ( Vec i ) {
+@ __jit_pin_select inout PFunc pf ( Vec i ) xpins i guard → ( Vec i ) {
     : i kvbase . pf nlocals
     : i kvn ( vec_len [i] . pf kv )
     : ( Vec i ) pins ( vec_new [i] )
@@ -4629,7 +4684,7 @@ unsafe @ __jit_pin_select * PFunc pf ( Vec i ) xpins i guard → ( Vec i ) {
 
 // n bytes of code space at a 64-byte boundary in the instance's arena, the
 // pages under it writable (0 when no executable memory exists).
-unsafe @ __jit_arena_alloc * InterpImpl it i n → i {
+unsafe @ __jit_arena_alloc inout InterpImpl it i n → i {
     : i need & + n 63 -64
     // First use: one 1 GiB address-space reservation, committed page by
     // page as code arrives, so every function stays within a rel32 call of
@@ -4684,7 +4739,7 @@ unsafe @ __jit_put_rel32 i site i ent → b {
 
 // Publish defined function d's direct entry, and link every call site that
 // was waiting for it (their pages are sealed: writable just for the patch).
-unsafe @ __jit_publish * InterpImpl it i d i ent → v {
+unsafe @ __jit_publish inout InterpImpl it i d i ent → v {
     : *i ftw # *i + . it jit_spcell 16
     = . ftw d ent
     ? | < d 0 >= d ( vec_len [i] . it jit_lhead ) { ^ v } {}
@@ -4713,7 +4768,7 @@ unsafe @ __jit_publish * InterpImpl it i d i ent → v {
 // stub (label n) with the fault-to-trap handler in guard mode. Shared by the
 // template tier and tier 8 (rjit.nu): both hand over the code, the label
 // table and the page-relative jump-table entries.
-unsafe @ __jit_install * InterpImpl it * ModuleImpl m * PFunc pf ( Vec u ) buf ( Vec i ) lab ( Vec i ) pta_off ( Vec i ) pta_stub ( Vec i ) cs_off ( Vec i ) cs_fx ( Vec i ) cs_kind i n i guard i fidx9 → v {
+unsafe @ __jit_install inout InterpImpl it inout ModuleImpl m inout PFunc pf ( Vec u ) buf ( Vec i ) lab ( Vec i ) pta_off ( Vec i ) pta_stub ( Vec i ) cs_off ( Vec i ) cs_fx ( Vec i ) cs_kind i n i guard i fidx9 → v {
     : i len ( vec_len [u] buf )
     : i pa ( __jit_arena_alloc it + len 16 )
     ? == pa 0 { = . pf jit # s -1 ^ v } {}  // no executable memory (wasm)
@@ -4796,7 +4851,7 @@ unsafe @ __jit_install * InterpImpl it * ModuleImpl m * PFunc pf ( Vec u ) buf (
 // Tier 8: compile pf with the register allocator (rjit.nu). Guard-page mode
 // only — it emits no bounds checks. False leaves the function to the
 // template tier.
-unsafe @ __rj_try * InterpImpl it * ModuleImpl m * PFunc pf i fidx9 i guard → b {
+unsafe @ __rj_try inout InterpImpl it inout ModuleImpl m inout PFunc pf i fidx9 i guard → b {
     : i n . pf count
     : ( Vec i ) lt ( vec_new [i] )
     : s ftp ( _module_func_type m fidx9 )
@@ -4810,7 +4865,7 @@ unsafe @ __rj_try * InterpImpl it * ModuleImpl m * PFunc pf i fidx9 i guard → 
     ? & >= di 0 < di ( vec_len [( Box WFunc )] . m funcs ) {
         : s wfp # s ( box_ptr [WFunc] ( vec_at [( Box WFunc )] . m funcs di ) )
         ? != # i wfp 0 {
-            : *WFunc wf # *WFunc wfp
+            : ~ * WFunc wf # *WFunc wfp
             : i nloc ( vec_len [i] . wf locals )
             : ~ i k 0
             ~ < k nloc { ( vec_push [i] lt ( __rj_ty ( vec_at [i] . wf locals k ) ) ) = k + k 1 }
@@ -4864,7 +4919,7 @@ unsafe @ __rj_try * InterpImpl it * ModuleImpl m * PFunc pf i fidx9 i guard → 
     ^ F
 }
 
-unsafe @ __jit_try * InterpImpl it * ModuleImpl m * PFunc pf i fidx9 → v {
+unsafe @ __jit_try inout InterpImpl it inout ModuleImpl m inout PFunc pf i fidx9 → v {
     ? != # i . pf jit 0 { ^ v } {}  // already tried (handle or -1)
     // tier 8 emits no bounds checks: guard-page memory, or no memory at all
     ? & != 0 g_rjit | != 0 . it mem_raw != 1 . m has_mem {
@@ -5522,8 +5577,8 @@ unsafe @ __jit_try * InterpImpl it * ModuleImpl m * PFunc pf i fidx9 → v {
 // to read.
 // Handle one pending call-out (the request is in cd; `st` says which
 // kind). Returns 0 to continue, 1 when a trap/halt was recorded.
-unsafe @ __jit_callout * InterpImpl it * ModuleImpl m i st * i cd → i {
-    : *InterpImpl tho ( __host it )
+unsafe @ __jit_callout inout InterpImpl it inout ModuleImpl m i st * i cd → i {
+    : ~ * InterpImpl tho ( __host it )
     : ~ i callee . cd 4
     : i argbase . cd 5
     : *i jrb # *i . cd 0
@@ -5551,7 +5606,7 @@ unsafe @ __jit_callout * InterpImpl it * ModuleImpl m i st * i cd → i {
         : s want ?? ( vec_get [( Box FuncType )] . m types & . cd 7 4294967295 ) { T x → # s ( box_ptr [FuncType] x ) F → # s 0 }
         : s have ( _module_func_type m callee )
         ? | == # i want 0 == # i have 0 { ( __trap it `call_indirect: bad type index` ) ^ 1 } {}
-        ? ! ( functype_eq # *FuncType want # *FuncType have ) { ( __trap it `call_indirect: signature mismatch` ) ^ 1 } {}
+        ? ! ( functype_eq . # *FuncType want 0 . # *FuncType have 0 ) { ( __trap it `call_indirect: signature mismatch` ) ^ 1 } {}
     } {}
     ? == st 20 {  // slab exhausted at an entry: run this call on the interpreter
         // jrb is the raw args pointer (the entry passed it as the frame
@@ -5580,7 +5635,7 @@ unsafe @ __jit_callout * InterpImpl it * ModuleImpl m i st * i cd → i {
     ^ ? | ( __interp_trapped it ) != 0 . it halt 1 0
 }
 
-unsafe @ __jit_run * InterpImpl it * ModuleImpl m * PFunc pfj i argsp → i {
+unsafe @ __jit_run inout InterpImpl it inout ModuleImpl m inout PFunc pfj i argsp → i {
     : s jh . pfj jit
     : *i cd ( __jit_ctx_get it )
     : *i spc # *i . it jit_spcell
@@ -5607,7 +5662,7 @@ unsafe @ __jit_run * InterpImpl it * ModuleImpl m * PFunc pfj i argsp → i {
 // interpreter driver, no value-stack traffic; anything else (imports,
 // non-templatable bodies, or past the recursion cap) falls back to the
 // interpreter. Returns 0 on success, non-zero on trap/halt.
-unsafe @ __jit_callee * InterpImpl it * ModuleImpl m i callee * i caller_rbase i argbase → i {
+unsafe @ __jit_callee inout InterpImpl it inout ModuleImpl m i callee * i caller_rbase i argbase → i {
     // imports and the depth cap take the interpreter's bridge
     ? < callee . m num_import_funcs {
         ( __rdo_import it m callee argbase caller_rbase )
@@ -5620,9 +5675,9 @@ unsafe @ __jit_callee * InterpImpl it * ModuleImpl m i callee * i caller_rbase i
         = . it jit_lc_fidx callee
         = . it jit_lc_pf # i cpins
     } {}
-    : *PFunc pfc # *PFunc cpins
+    : ~ * PFunc pfc # *PFunc cpins
     ? == # i . pfc jit 0 {
-        ( __jit_try it m pfc callee )
+        ( __jit_try it m . pfc 0 callee )
         // compiled and call-out-free: publish the direct entry so JIT
         // callers stop coming through this driver at all
         : s njh . pfc jit
@@ -5650,7 +5705,7 @@ unsafe @ __jit_callee * InterpImpl it * ModuleImpl m i callee * i caller_rbase i
     // through the pointer and writes results back there — no Frame.
     : i argsp + # i caller_rbase * argbase 8
     = g_jit_depth + g_jit_depth 1
-    : i st ? > g_jit_depth 12000 9 ( __jit_run it m pfc argsp )
+    : i st ? > g_jit_depth 12000 9 ( __jit_run it m . pfc 0 argsp )
     = g_jit_depth - g_jit_depth 1
     ? == st 9 {  // depth cap: the interpreter has no such limit
         : ~ i ak2 0
@@ -5674,19 +5729,19 @@ unsafe @ __jit_callee * InterpImpl it * ModuleImpl m i callee * i caller_rbase i
     ^ 0
 }
 
-unsafe @ __exec_func * InterpImpl it i fidx → v {
+unsafe @ __exec_func inout InterpImpl it i fidx → v {
     ? != 0 . it halt { ^ v } {}
-    : *ModuleImpl m # *ModuleImpl . it mod
+    : ~ * ModuleImpl m # *ModuleImpl . it mod
     // The table is the instantiating thread's (a spawned thread's own
     // instance shares it).
-    : *InterpImpl tho ( __host it )
+    : ~ * InterpImpl tho ( __host it )
     // Imported functions occupy the low indices → dispatch to the host (WASI).
-    ? < fidx . m num_import_funcs { ( __call_import it m fidx ) ^ v } {}
+    ? < fidx . m num_import_funcs { ( __call_import it . m 0 fidx ) ^ v } {}
     // The activation stack is the frames themselves: `prev` links each to
     // its caller (and doubles as the recycle freelist link while parked),
     // `depth` bounds recursion — no vector, no counter register, and a
     // call or return is a handful of raw loads and stores.
-    : s fr0 ( __frame_new it m fidx -1 )
+    : s fr0 ( __frame_new it . m 0 fidx -1 )
     ? != # i fr0 0 {
         : *Frame f00 # *Frame fr0
         = . f00 prev # s 0
@@ -5703,9 +5758,9 @@ unsafe @ __exec_func * InterpImpl it i fidx → v {
     // store path the templates skip.
     ? & & != 0 g_jit == 0 . it shared_mem & < . it fuel 0 != # i fr0 0 {
         : *Frame fj # *Frame fr0
-        : *PFunc pfj # *PFunc . fj pins
+        : ~ * PFunc pfj # *PFunc . fj pins
         ? == # i . pfj jit 0 {
-            ( __jit_try it m pfj fidx )
+            ( __jit_try it . m 0 . pfj 0 fidx )
             : s njh . pfj jit
             ? & != # i njh 0 != # i njh -1 {
                 // publish the DIRECT entry: page + the 28-byte driver preamble
@@ -5715,7 +5770,7 @@ unsafe @ __exec_func * InterpImpl it i fidx → v {
         : s jh . pfj jit
         ? & != # i jh 0 != # i jh -1 {
             : *i jrb ( vec_data [i] . fj regs )
-            : i status ( __jit_run it m pfj # i jrb )
+            : i status ( __jit_run it . m 0 . pfj 0 # i jrb )
             ? & != 0 g_rjdbg != 0 status { ( nurl_eprint `[rjit] outermost fidx=` ) ( nurl_eprint ( nurl_str_int fidx ) ) ( nurl_eprint ` status=` ) ( nurl_eprint ( nurl_str_int status ) ) ( nurl_eprint `\n` ) } {}
             // status 8 (slab full before anything ran) falls through to the
             // interpreter driver below — the args are still in the frame.
@@ -5763,7 +5818,7 @@ unsafe @ __exec_func * InterpImpl it i fidx → v {
     = tp fr0
     ~ & != # i tp 0 == 0 . it halt {
         : *Frame fr # *Frame tp
-        : *PFunc npf # *PFunc . fr pins
+        : ~ * PFunc npf # *PFunc . fr pins
         = pbase ( vec_data [i] . npf code )
         = rbase ( vec_data [i] . fr regs )
         = pc . fr pos
@@ -5842,11 +5897,11 @@ unsafe @ __exec_func * InterpImpl it i fidx → v {
                                                                                                                                                                                                                     ? == op 50 {  // __R_CALL
                                                                                                                                                                                                                         ( __fr_setpos tp pc )
                                                                                                                                                                                                                         = fuel - fuel 1
-                                                                                                                                                                                                                        : s nf9 ( __rdo_call it m tp ra rb rbase pbase r0 )
+                                                                                                                                                                                                                        : s nf9 ( __rdo_call it . m 0 tp ra rb rbase pbase r0 )
                                                                                                                                                                                                                         ? != # i nf9 0 {  // defined callee: enter its frame without leaving the loop
                                                                                                                                                                                                                             = tp nf9
                                                                                                                                                                                                                             : *Frame f8 # *Frame tp
-                                                                                                                                                                                                                            : *PFunc p8 # *PFunc . f8 pins
+                                                                                                                                                                                                                            : ~ * PFunc p8 # *PFunc . f8 pins
                                                                                                                                                                                                                             = pbase ( vec_data [i] . p8 code )
                                                                                                                                                                                                                             = rbase ( vec_data [i] . f8 regs )
                                                                                                                                                                                                                             = pc 0
@@ -5877,7 +5932,7 @@ unsafe @ __exec_func * InterpImpl it i fidx → v {
                                                                                                                                                                                                                                                 ~ < rk rb { = . crb9 + rdst9 rk . rbase + ra rk = rk + rk 1 }
                                                                                                                                                                                                                                                 ( __frame_recycle tp )
                                                                                                                                                                                                                                                 = tp cp9
-                                                                                                                                                                                                                                                : *PFunc p9 # *PFunc . cf9 pins
+                                                                                                                                                                                                                                                : ~ * PFunc p9 # *PFunc . cf9 pins
                                                                                                                                                                                                                                                 = pbase ( vec_data [i] . p9 code )
                                                                                                                                                                                                                                                 = rbase crb9
                                                                                                                                                                                                                                                 = pc . cf9 pos
@@ -6023,7 +6078,7 @@ unsafe @ __exec_func * InterpImpl it i fidx → v {
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             } {
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 ? == op 169 {  // __R_BRTBL
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     : *Frame ftb # *Frame tp
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    : *PFunc tpf # *PFunc . ftb pins
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    : ~ * PFunc tpf # *PFunc . ftb pins
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     : *i abase ( vec_data [i] . tpf aux )
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     : i ui ( __u32 . rbase rb )
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     : i pick ? < ui rc ui rc
@@ -6043,16 +6098,16 @@ unsafe @ __exec_func * InterpImpl it i fidx → v {
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             : i cfi ?? ( vec_get [i] . tho table ei ) { T x → x F → -1 }
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             ? < cfi 0 { ( __trap it `call_indirect: null table element` ) ( __fr_setpos tp r0 ) = pc pend } {
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 : s want ?? ( vec_get [( Box FuncType )] . m types ra ) { T x → # s ( box_ptr [FuncType] x ) F → # s 0 }
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                : s have ( _module_func_type m cfi )
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                : s have ( _module_func_type . m 0 cfi )
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 ? | == # i want 0 == # i have 0 { ( __trap it `call_indirect: bad type index` ) ( __fr_setpos tp r0 ) = pc pend } {
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    ? ! ( functype_eq # *FuncType want # *FuncType have ) { ( __trap it `call_indirect: signature mismatch` ) ( __fr_setpos tp r0 ) = pc pend } {
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    ? ! ( functype_eq . # *FuncType want 0 . # *FuncType have 0 ) { ( __trap it `call_indirect: signature mismatch` ) ( __fr_setpos tp r0 ) = pc pend } {
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         ( __fr_setpos tp pc )
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         = fuel - fuel 1
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        : s nf9 ( __rdo_dyn it m tp cfi rb rbase )
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        : s nf9 ( __rdo_dyn it . m 0 tp cfi rb rbase )
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         ? != # i nf9 0 {  // defined callee: enter its frame without leaving the loop
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             = tp nf9
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             : *Frame f8 # *Frame tp
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            : *PFunc p8 # *PFunc . f8 pins
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            : ~ * PFunc p8 # *PFunc . f8 pins
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             = pbase ( vec_data [i] . p8 code )
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             = rbase ( vec_data [i] . f8 regs )
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             = pc 0
@@ -6147,7 +6202,7 @@ unsafe @ __exec_func * InterpImpl it i fidx → v {
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         ? == op 210 {  // __R_CALLIMP: bridge a host import (known at predecode)
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             ( __fr_setpos tp pc )
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             = fuel - fuel 1
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            ( __rdo_import it m ra rb rbase )
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            ( __rdo_import it . m 0 ra rb rbase )
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             ? != 0 . it halt { ( __fr_setpos tp r0 ) = tail 1 = pc pend } {}
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         } {
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             ? == op 175 { = . rbase ra ( __w32 . rbase rb ) } {  // i64.extend_i32_s (not emitted today — see __wrap_skippable)
@@ -6176,7 +6231,7 @@ unsafe @ __exec_func * InterpImpl it i fidx → v {
             // than carried in the driver: two loads on a frame transition
             // instead of two registers held across every record.
             : *Frame ff # *Frame tp
-            : *PFunc dpf # *PFunc . ff pins
+            : ~ * PFunc dpf # *PFunc . ff pins
             : i lloc . dpf sbase
             : i nres . dpf nresults
             : i rdst . ff ret_dst
@@ -6197,7 +6252,7 @@ unsafe @ __exec_func * InterpImpl it i fidx → v {
             = tp cp2
         } {}
     }
-    ? ( __interp_trapped it ) { ( __trap_backtrace it m tp ) } {}
+    ? ( __interp_trapped it ) { ( __trap_backtrace it . m 0 tp ) } {}
     : ~ s cw tp
     ~ != # i cw 0 {
         : *Frame cf # *Frame cw
@@ -6208,7 +6263,7 @@ unsafe @ __exec_func * InterpImpl it i fidx → v {
     = . it fuel ? < fuel0 0 -1 ? < fuel 0 0 fuel
 }
 
-unsafe @ exec_func Interp it__h i fidx → v { ( __exec_func ( __Interp_ptr it__h ) fidx ) }
+@ exec_func Interp h i fidx → v { ( locked_update [InterpImpl] . h l \ inout InterpImpl it → v { ( __exec_func it fidx ) } ) }
 
 // Perform a call from the register driver: `argbase` is the caller slot of
 // the first argument (and the destination of the results). Imports bridge
@@ -6220,7 +6275,7 @@ unsafe @ exec_func Interp it__h i fidx → v { ( __exec_func ( __Interp_ptr it__
 // the first execution, so the per-call cost is the freelist pop, the
 // argument copy and the chain link — no lookups, no nested call on the
 // pooled path. Returns the new frame, or 0 on trap.
-unsafe @ __rdo_call * InterpImpl it * ModuleImpl m s caller i callee i argbase * i caller_rbase * i rpb i rec0 → s {
+unsafe @ __rdo_call inout InterpImpl it inout ModuleImpl m s caller i callee i argbase * i caller_rbase * i rpb i rec0 → s {
     : ~ s cpins # s . rpb + rec0 4
     ? == # i cpins 0 {
         = cpins ( __pfunc_for it m callee )
@@ -6229,7 +6284,7 @@ unsafe @ __rdo_call * InterpImpl it * ModuleImpl m s caller i callee i argbase *
     } {}
     : *Frame cfr9 # *Frame caller
     ? >= . cfr9 depth . it max_depth { ( __trap it `call stack exhausted` ) ^ # s 0 } {}
-    : *PFunc pfc # *PFunc cpins
+    : ~ * PFunc pfc # *PFunc cpins
     : s rf . pfc pool
     ? != # i rf 0 {
         : *Frame rfr # *Frame rf
@@ -6237,7 +6292,7 @@ unsafe @ __rdo_call * InterpImpl it * ModuleImpl m s caller i callee i argbase *
         : *i rb ( vec_data [i] . rfr regs )
         : ~ i zk . pfc nparams
         ~ < zk . pfc nlocals { = . rb zk 0 = zk + zk 1 }
-        ( __refl_null pfc rb )
+        ( __refl_null . pfc 0 rb )
         : i np . pfc nparams
         : ~ i ak 0
         ~ < ak np { = . rb ak . caller_rbase + argbase ak = ak + ak 1 }
@@ -6252,7 +6307,7 @@ unsafe @ __rdo_call * InterpImpl it * ModuleImpl m s caller i callee i argbase *
     ? == # i nf 0 { ^ # s 0 } {}
     : *Frame nfr # *Frame nf
     : *i nrb ( vec_data [i] . nfr regs )
-    : *PFunc npf # *PFunc . nfr pins
+    : ~ * PFunc npf # *PFunc . nfr pins
     : i np . npf nparams
     : ~ i ak 0
     ~ < ak np { = . nrb ak . caller_rbase + argbase ak = ak + ak 1 }
@@ -6264,7 +6319,7 @@ unsafe @ __rdo_call * InterpImpl it * ModuleImpl m s caller i callee i argbase *
 // The import bridge (its own record since the predecoder knows), and the
 // dynamic spelling call_indirect still needs: resolve at run time, bridge
 // imports through the value stack.
-unsafe @ __rdo_dyn * InterpImpl it * ModuleImpl m s caller i callee i argbase * i caller_rbase → s {
+unsafe @ __rdo_dyn inout InterpImpl it inout ModuleImpl m s caller i callee i argbase * i caller_rbase → s {
     ? < callee . m num_import_funcs {
         ( __rdo_import it m callee argbase caller_rbase )
         ^ # s 0
@@ -6277,7 +6332,7 @@ unsafe @ __rdo_dyn * InterpImpl it * ModuleImpl m s caller i callee i argbase * 
     ? == # i nf 0 { ^ # s 0 } {}
     : *Frame nfr # *Frame nf
     : *i nrb ( vec_data [i] . nfr regs )
-    : *PFunc npf # *PFunc . nfr pins
+    : ~ * PFunc npf # *PFunc . nfr pins
     : i np . npf nparams
     : ~ i ak 0
     ~ < ak np { = . nrb ak . caller_rbase + argbase ak = ak + ak 1 }
@@ -6286,11 +6341,19 @@ unsafe @ __rdo_dyn * InterpImpl it * ModuleImpl m s caller i callee i argbase * 
     ^ nf
 }
 
-unsafe @ __rdo_import * InterpImpl it * ModuleImpl m i callee i argbase * i caller_rbase → v {
-    : s wt ( _module_func_type m callee )
-    : ~ i np 0
-    : ~ i nr 0
-    ? != # i wt 0 { : *FuncType wft # *FuncType wt = np ( vec_len [i] . wft params ) = nr ( vec_len [i] . wft results ) } {}
+unsafe @ __rdo_import inout InterpImpl it inout ModuleImpl m i callee i argbase * i caller_rbase → v {
+    // The import's parameter and result counts, looked up once: a module
+    // calling the host in a loop paid the signature walk per call.
+    ~ <= ( vec_len [i] . it import_sigs ) callee { ( vec_push [i] . it import_sigs -1 ) }
+    : ~ i sig ( vec_at [i] . it import_sigs callee )
+    ? < sig 0 {
+        : s wt ( _module_func_type m callee )
+        = sig 0
+        ? != # i wt 0 { : *FuncType wft # *FuncType wt = sig | ( vec_len [i] . wft params ) << ( vec_len [i] . wft results ) 16 } {}
+        ( vec_put [i] . it import_sigs callee sig )
+    } {}
+    : i np & sig 65535
+    : i nr >> sig 16
     : ~ i ak 0
     ~ < ak np { ( __push it . caller_rbase + argbase ak ) = ak + ak 1 }
     ( __call_import it m callee )
@@ -6307,7 +6370,7 @@ unsafe @ __rdo_import * InterpImpl it * ModuleImpl m i callee i argbase * i call
 // register for the frame's slot base. `op` here is the wasm opcode: each
 // arm passes its own literal, so the arm keeps only the one branch it
 // needs.
-unsafe @ __rdiv * InterpImpl it i op i a i b → i {
+@ __rdiv inout InterpImpl it i op i a i b → i {
     ? == op 127 { ^ ( __div_s it a b -9223372036854775808 ) } {}
     ? == op 128 { ? == b 0 { ( __trap it `integer divide by zero` ) ^ 0 } {} ^ ( __udiv64 a b ) } {}  // i64.div_u
     ? == op 129 { ^ ( __rem_s it a b ) } {}
@@ -6372,14 +6435,14 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
 // flush it forced was most of another 30 %; nbody spent 45 % of its records
 // moving values into place for it.
 
-unsafe @ __f64_unary i op i ab → i {
+@ __f64_unary i op i ab → i {
     ? == op 153 { ^ & ab 9223372036854775807 } {}  // f64.abs (clear sign)
     ? == op 154 { ^ ^^ ab -9223372036854775808 } {}  // f64.neg (flip sign)
     : f x ( bits_to_f64 ab )
     ? == op 155 { ^ ( f64_to_bits ( ceil x ) ) } {}  // f64.ceil
     ? == op 156 { ^ ( f64_to_bits ( floor x ) ) } {}  // f64.floor
     ? == op 157 { ^ ( f64_to_bits ( trunc x ) ) } {}  // f64.trunc
-    ? == op 158 { ^ ( f64_to_bits ( rint x ) ) } {}  // f64.nearest
+    ? == op 158 { ^ ( f64_to_bits ( float_round_even x ) ) } {}  // f64.nearest
     ^ ( f64_to_bits ( sqrt x ) )  // 159 f64.sqrt
 }
 
@@ -6413,14 +6476,14 @@ unsafe @ __f64_unary i op i ab → i {
     ^ ? >= a b 1 0  // 102
 }
 
-unsafe @ __f32_unary i op i ab → i {
+@ __f32_unary i op i ab → i {
     ? == op 139 { ^ & ab 2147483647 } {}  // f32.abs
     ? == op 140 { ^ & ^^ ab 2147483648 4294967295 } {}  // f32.neg
     : f x # f ( bits_to_f32 ab )
     ? == op 141 { ^ ( f32_to_bits # f32 ( ceil x ) ) } {}
     ? == op 142 { ^ ( f32_to_bits # f32 ( floor x ) ) } {}
     ? == op 143 { ^ ( f32_to_bits # f32 ( trunc x ) ) } {}
-    ? == op 144 { ^ ( f32_to_bits # f32 ( rint x ) ) } {}
+    ? == op 144 { ^ ( f32_to_bits # f32 ( float_round_even x ) ) } {}
     ^ ( f32_to_bits # f32 ( sqrt x ) )  // 145
 }
 
@@ -6456,7 +6519,7 @@ unsafe @ __f32_unary i op i ab → i {
 // The int↔float conversions (0xa7..0xbf). Reinterpret (0xbc..0xbf) is the
 // identity because a value already lives as its bit pattern; the trapping
 // truncations report through `it` and their result is then dead.
-unsafe @ __convert * InterpImpl it i op i ab → i {
+@ __convert inout InterpImpl it i op i ab → i {
     ? == op 167 { ^ ( __w32 ab ) } {}  // i32.wrap_i64
     ? == op 172 { ^ ( __w32 ab ) } {}  // i64.extend_i32_s
     ? == op 173 { ^ & ab 4294967295 } {}  // i64.extend_i32_u
@@ -6523,13 +6586,13 @@ unsafe @ __convert * InterpImpl it i op i ab → i {
     ^ eq
 }
 
-unsafe @ __m_get_u32 * InterpImpl it i a → i { ^ & ( __mem_load it a 4 0 ) 4294967295 }
+@ __m_get_u32 inout InterpImpl it i a → i { ^ & ( __mem_load it a 4 0 ) 4294967295 }
 
-unsafe @ __m_put_u32 * InterpImpl it i a i val → v { ( __mem_store it a 4 val ) }
+@ __m_put_u32 inout InterpImpl it i a i val → v { ( __mem_store it a 4 val ) }
 
 // Overwrite/extend a file fd's buffer at byte offset `at` (gap zero-filled —
 // the file-semantics core shared by fd_write and fd_pwrite).
-unsafe @ __fd_put_at * WFd f i at ( Vec u ) buf → v {
+@ __fd_put_at inout WFd f i at ( Vec u ) buf → v {
     = . f dirty T
     : i bn ( vec_len [u] buf )
     ~ < ( vec_len [u] . f data ) + at bn { ( vec_push [u] . f data # u 0 ) }
@@ -6539,7 +6602,7 @@ unsafe @ __fd_put_at * WFd f i at ( Vec u ) buf → v {
 
 // Write `len` bytes of memory at `ptr` to fd: 1 stdout, 2 stderr, else a file
 // descriptor's buffer at its current position (flushed to disk on close/sync).
-unsafe @ __wasi_write_bytes * InterpImpl it i fd i ptr i len → v {
+@ __wasi_write_bytes inout InterpImpl it i fd i ptr i len → v {
     ? <= len 0 { ^ v } {}
     // A write cannot cover more bytes than linear memory holds; a larger length
     // is a hostile iovec — trap rather than pre-allocate gigabytes for it.
@@ -6547,37 +6610,51 @@ unsafe @ __wasi_write_bytes * InterpImpl it i fd i ptr i len → v {
     : ( Vec u ) buf ( vec_with_cap [u] len )
     : ~ i k 0
     ~ < k len { ( vec_push [u] buf # u & ( __mem_load it + ptr k 1 0 ) 255 ) = k + k 1 }
-    ? | == fd 1 == fd 2 {
-        ? . it cap {
-            // An embedder asked for the output as a value: raw bytes,
-            // appended, NULs preserved — bytes_to_str would truncate at
-            // the first NUL a binary-printing module emits.
-            : *InterpImpl hoc ( __host it )
-            : ( Vec u ) dst ? == fd 2 . hoc caperr . hoc capout
-            : ~ i c 0
-            ~ < c len { ( vec_push [u] dst # u ?? ( vec_get [u] buf c ) { T x → # i x F → 0 } ) = c + c 1 }
-        } {
-            : String s ( bytes_to_str buf )
-            ? == fd 2 { ( nurl_eprint ( string_data s ) ) } { ( nurl_print ( string_data s ) ) }
-        }
-    } {
-        : s fp ( __fd_at it fd )
-        ? != # i fp 0 {
-            : *WFd f # *WFd fp
-            : i at ? . f append ( vec_len [u] . f data ) . f pos
-            ( __fd_put_at f at buf )
-            = . f pos + at len
-        } {}
-    }
+    // The host's own streams: nothing shared to take turns at.
+    ? & | == fd 1 == fd 2 ! . it cap {
+        : String s ( bytes_to_str buf )
+        ? == fd 2 { ( nurl_eprint ( string_data s ) ) } { ( nurl_print ( string_data s ) ) }
+        ^ v
+    } {}
+    : ~ WasiCtx c ( __ctx_take it )
+    ( __ctx_write c fd buf )
+    ( __ctx_put it c )
 }
 
-unsafe @ __wasi_proc_exit * InterpImpl it → v {
+// `buf` to fd: 1 stdout, 2 stderr (or the captured copies of them), else a
+// file descriptor's buffer at its current position (flushed to disk on
+// close/sync).
+@ __ctx_write inout WasiCtx c i fd ( Vec u ) buf → v {
+    : i len ( vec_len [u] buf )
+    ? | == fd 1 == fd 2 {
+        // Captured (the caller printed the host's own streams): an
+        // embedder asked for the output as a value — raw bytes, appended,
+        // NULs preserved; bytes_to_str would truncate at the first NUL a
+        // binary-printing module emits.
+        ? == fd 2 { ( __bytes_append . c caperr buf ) } { ( __bytes_append . c capout buf ) }
+        ^ v
+    } {}
+    ? == ( __fd_kind c fd ) 0 { ^ v } {}
+    : b _w ( vec_update [WFd] . c fds fd \ inout WFd f → v {
+        : i at ? . f append ( vec_len [u] . f data ) . f pos
+        ( __fd_put_at f at buf )
+        = . f pos + at len
+    } )
+}
+
+@ __bytes_append inout ( Vec u ) dst ( Vec u ) src → v {
+    : i n ( vec_len [u] src )
+    : ~ i k 0
+    ~ < k n { ( vec_push [u] dst ( vec_at [u] src k ) ) = k + k 1 }
+}
+
+@ __wasi_proc_exit inout InterpImpl it → v {
     = . it exit_code ( __pop it )
     = . it halt | . it halt 2
     ( __interp_flush it )
 }
 
-unsafe @ __wasi_fd_write * InterpImpl it → v {
+@ __wasi_fd_write inout InterpImpl it → v {
     : i nwritten ( __pop it )
     : i iovs_len ( __pop it )
     : i iovs ( __pop it )
@@ -6606,13 +6683,30 @@ unsafe @ __wasi_fd_write * InterpImpl it → v {
 }
 
 // Fetch the fd record for descriptor `fd`, or #s 0 if out of range / closed.
-unsafe @ __fd_at * InterpImpl it i fd → s {
-    : *InterpImpl ho ( __host it )
-    ^ ?? ( vec_get [( Box WFd )] . ho fds fd ) { T x → # s ( box_ptr [WFd] x ) F → # s 0 }
+// The host directory behind dir fd `fd` (a preopen or one opened later) —
+// the base every path_* call resolves against; F unless it is a directory.
+@ __dir_host inout InterpImpl it i fd → ?( Vec u ) {
+    : ~ WasiCtx c ( __ctx_take it )
+    : ~ ? ( Vec u ) r @ ?( Vec u ) { F }
+    ?? ( vec_get [WFd] . c fds fd ) {
+        T d → { ? | == . d kind 2 == . d kind 4 { = r @ ?( Vec u ) { T ( vec_clone [u] . d host ) } } {} }
+        F → {}
+    }
+    ( __ctx_put it c )
+    ^ r
+}
+
+// Install `f` as the next descriptor; its number.
+@ __fd_push inout InterpImpl it sink WFd f → i {
+    : ~ WasiCtx c ( __ctx_take it )
+    : i n ( vec_len [WFd] . c fds )
+    ( vec_push [WFd] . c fds f )
+    ( __ctx_put it c )
+    ^ n
 }
 
 // Read `len` bytes of linear memory at `ptr` into a fresh byte vector.
-unsafe @ __mem_slice * InterpImpl it i ptr i len → ( Vec u ) {
+@ __mem_slice inout InterpImpl it i ptr i len → ( Vec u ) {
     // Clamp to memory size: a slice can never be longer than linear memory, so
     // a bogus guest length cannot force a multi-gigabyte allocation. Bytes past
     // the end still trap in __mem_load, so this only bounds the up-front cap.
@@ -6643,12 +6737,12 @@ unsafe @ __mem_slice * InterpImpl it i ptr i len → ( Vec u ) {
 
 // Join a dir fd's host path + "/" + `len` guest bytes at `ptr` into an owned
 // String; #s 0 (as String data) is never returned — the caller checked the fd.
-unsafe @ __join_path * InterpImpl it * WFd d i ptr i len → String {
+@ __join_path inout InterpImpl it ( Vec u ) dhost i ptr i len → String {
     : ( Vec u ) full ( vec_new [u] )
-    : i hn ( vec_len [u] . d host )
+    : i hn ( vec_len [u] dhost )
     : ~ i k 0
-    ~ < k hn { ( vec_push [u] full ?? ( vec_get [u] . d host k ) { T x → x F → # u 0 } ) = k + k 1 }
-    ? & > hn 0 != ?? ( vec_get [u] . d host - hn 1 ) { T x → # i x F → 0 } 47 { ( vec_push [u] full # u 47 ) } {}
+    ~ < k hn { ( vec_push [u] full ?? ( vec_get [u] dhost k ) { T x → x F → # u 0 } ) = k + k 1 }
+    ? & > hn 0 != ?? ( vec_get [u] dhost - hn 1 ) { T x → # i x F → 0 } 47 { ( vec_push [u] full # u 47 ) } {}
     : ( Vec u ) rel ( __mem_slice it ptr len )
     : i rn ( vec_len [u] rel )
     : ~ i j 0
@@ -6659,12 +6753,13 @@ unsafe @ __join_path * InterpImpl it * WFd d i ptr i len → String {
 
 // The dir fd record for `fd`, or #s 0 unless it is a directory (preopen or
 // opened) — the base every path_* call resolves against.
-unsafe @ __dirfd_at * InterpImpl it i fd → s {
-    : s dp ( __fd_at it fd )
-    ? == # i dp 0 { ^ # s 0 } {}
-    : *WFd d # *WFd dp
-    ? | == . d kind 2 == . d kind 4 { ^ dp } {}
-    ^ # s 0
+// Join dir fd `fd`'s host path and `len` guest bytes at `ptr`; F when `fd`
+// is not a directory.
+@ __dir_path inout InterpImpl it i fd i ptr i len → ?String {
+    ?? ( __dir_host it fd ) {
+        T dh → { ^ @ ?String { T ( __join_path it dh ptr len ) } }
+        F → { ^ @ ?String { F } }
+    }
 }
 
 // path_open(dirfd, dirflags, path_ptr, path_len, oflags, rights_base,
@@ -6672,7 +6767,7 @@ unsafe @ __dirfd_at * InterpImpl it i fd → s {
 // oflags: 1 CREAT, 2 DIRECTORY, 4 EXCL, 8 TRUNC. fdflags: 1 APPEND.
 // rights bit 6 (fd_write) makes the fd writable. Files are slurped into a
 // buffer; writes are flushed on close/sync/exit.
-unsafe @ __wasi_path_open * InterpImpl it → v {
+@ __wasi_path_open inout InterpImpl it → v {
     : i ofd_p ( __pop it )
     : i fdflags ( __pop it )
     ( __pop it )  // fs_rights_inheriting (i64 cell)
@@ -6682,10 +6777,14 @@ unsafe @ __wasi_path_open * InterpImpl it → v {
     : i path_p ( __pop it )
     ( __pop it )  // dirflags
     : i dirfd ( __pop it )
-    : s dp ( __dirfd_at it dirfd )
-    ? == # i dp 0 { ( __push it 8 ) ^ v } {}  // EBADF
-    : *WFd d # *WFd dp
-    : String hs ( __join_path it d path_p path_len )
+    : ?String hp ( __dir_path it dirfd path_p path_len )
+    ?? hp {
+        T hs → { ( __path_open_in it hs ofd_p fdflags rights oflags ) }
+        F → { ( __push it 8 ) }  // EBADF
+    }
+}
+
+@ __path_open_in inout InterpImpl it String hs i ofd_p i fdflags i rights i oflags → v {
     : i creat & oflags 1
     : i wantdir & oflags 2
     : i excl & oflags 4
@@ -6695,12 +6794,9 @@ unsafe @ __wasi_path_open * InterpImpl it → v {
     ? != wantdir 0 {
         // open a directory: it must exist and be a directory
         ? ( __is_dir ( string_data hs ) ) {
-            : ( Box WFd ) nfb ( __mkfd 4 )
-            : *WFd nf # *WFd ( box_ptr [WFd] nfb )
+            : ~ WFd nf ( __mkfd 4 )
             = . nf host ( bytes_from_str ( string_data hs ) )
-            : *InterpImpl ho1 ( __host it )
-            ( __m_put_u32 it ofd_p ( vec_len [( Box WFd )] . ho1 fds ) )
-            ( vec_push [( Box WFd )] . ho1 fds nfb )
+            ( __m_put_u32 it ofd_p ( __fd_push it nf ) )
         } { = rc ? != 0 ( nurl_file_exists ( string_data hs ) ) 54 44 }  // ENOTDIR / ENOENT
         ( __push it rc )
         ^ v
@@ -6709,18 +6805,14 @@ unsafe @ __wasi_path_open * InterpImpl it → v {
     ? & & != creat 0 != excl 0 != exists 0 { ( __push it 20 ) ^ v } {}  // EEXIST
     ? & != exists 0 ( __is_dir ( string_data hs ) ) {
         // an existing directory opened without O_DIRECTORY: readable as a dir fd
-        : ( Box WFd ) nfb ( __mkfd 4 )
-        : *WFd nf # *WFd ( box_ptr [WFd] nfb )
+        : ~ WFd nf ( __mkfd 4 )
         = . nf host ( bytes_from_str ( string_data hs ) )
-        : *InterpImpl ho2 ( __host it )
-        ( __m_put_u32 it ofd_p ( vec_len [( Box WFd )] . ho2 fds ) )
-        ( vec_push [( Box WFd )] . ho2 fds nfb )
+        ( __m_put_u32 it ofd_p ( __fd_push it nf ) )
         ( __push it 0 )
         ^ v
     } {}
     ? & == exists 0 == creat 0 { ( __push it 44 ) ^ v } {}  // ENOENT
-    : ( Box WFd ) nfb ( __mkfd 3 )
-    : *WFd nf # *WFd ( box_ptr [WFd] nfb )
+    : ~ WFd nf ( __mkfd 3 )
     = . nf host ( bytes_from_str ( string_data hs ) )
     ? & != exists 0 == trunc 0 {
         // keep existing contents (read, or write without truncation)
@@ -6743,134 +6835,159 @@ unsafe @ __wasi_path_open * InterpImpl it → v {
         ?? cr { T x → {} F e → { = rc ( __ioerr_errno e ) } }
         ? != rc 0 { ( __push it rc ) ^ v } {}
     } {}
-    : *InterpImpl ho3 ( __host it )
-    ( __m_put_u32 it ofd_p ( vec_len [( Box WFd )] . ho3 fds ) )
-    ( vec_push [( Box WFd )] . ho3 fds nfb )
+    ( __m_put_u32 it ofd_p ( __fd_push it nf ) )
     ( __push it 0 )
 }
 
 // fd_pread / fd_pwrite: positioned I/O that leaves the fd offset untouched.
-unsafe @ __wasi_fd_pread * InterpImpl it → v {
+@ __wasi_fd_pread inout InterpImpl it → v {
     : i nread_p ( __pop it )
     : i offset ( __pop it )
     : i iovs_len ( __pop it )
     : i iovs ( __pop it )
     : i fd ( __pop it )
-    : s fp ( __fd_at it fd )
-    ? == # i fp 0 { ( __push it 8 ) ^ v } {}
-    : *WFd f # *WFd fp
-    ? != . f kind 3 { ( __m_put_u32 it nread_p 0 ) ( __push it 0 ) ^ v } {}
-    : i dn ( vec_len [u] . f data )
-    : i maxio . it mem_bytes
-    : ~ i at offset
-    : ~ i total 0
-    : ~ i iv 0
-    ~ & & ! ( __interp_trapped it ) < iv iovs_len <= iv maxio {
-        : i bufp ( __m_get_u32 it + iovs * iv 8 )
-        : i buflen ( __m_get_u32 it + + iovs * iv 8 4 )
-        : ~ i c 0
-        ~ & < c buflen < at dn {
-            ( __mem_store it + bufp c 1 ?? ( vec_get [u] . f data at ) { T x → # i x F → 0 } )
-            = at + at 1
-            = c + c 1
+    : ~ WasiCtx c ( __ctx_take it )
+    : i rc ( vec_apply [WFd i] . c fds fd 8 \ inout WFd f → i {
+        ? == . f kind 0 { ^ 8 } {}
+        ? != . f kind 3 { ( __m_put_u32 it nread_p 0 ) ^ 0 } {}
+        : i dn ( vec_len [u] . f data )
+        : i maxio . it mem_bytes
+        : ~ i at offset
+        : ~ i total 0
+        : ~ i iv 0
+        ~ & & ! ( __interp_trapped it ) < iv iovs_len <= iv maxio {
+            : i bufp ( __m_get_u32 it + iovs * iv 8 )
+            : i buflen ( __m_get_u32 it + + iovs * iv 8 4 )
+            : ~ i c2 0
+            ~ & < c2 buflen < at dn {
+                ( __mem_store it + bufp c2 1 ?? ( vec_get [u] . f data at ) { T x → # i x F → 0 } )
+                = at + at 1
+                = c2 + c2 1
+            }
+            = total + total c2
+            = iv + iv 1
         }
-        = total + total c
-        = iv + iv 1
-    }
-    ( __m_put_u32 it nread_p total )
-    ( __push it 0 )
+        ( __m_put_u32 it nread_p total )
+        ^ 0
+    } )
+    ( __ctx_put it c )
+    ( __push it rc )
 }
 
-unsafe @ __wasi_fd_pwrite * InterpImpl it → v {
+@ __wasi_fd_pwrite inout InterpImpl it → v {
     : i nwritten_p ( __pop it )
     : i offset ( __pop it )
     : i iovs_len ( __pop it )
     : i iovs ( __pop it )
     : i fd ( __pop it )
-    : s fp ( __fd_at it fd )
-    ? == # i fp 0 { ( __push it 8 ) ^ v } {}
-    : *WFd f # *WFd fp
-    ? ! . f writable { ( __push it 8 ) ^ v } {}
-    : i maxio . it mem_bytes
-    : ~ i at offset
-    : ~ i total 0
-    : ~ i iv 0
-    ~ & & ! ( __interp_trapped it ) < iv iovs_len <= iv maxio {
-        : i bufp ( __m_get_u32 it + iovs * iv 8 )
-        : i buflen ( __m_get_u32 it + + iovs * iv 8 4 )
-        : ( Vec u ) chunk ( __mem_slice it bufp buflen )
-        ( __fd_put_at f at chunk )
-        = at + at buflen
-        = total + total buflen
-        = iv + iv 1
-    }
-    ( __m_put_u32 it nwritten_p total )
-    ( __push it 0 )
+    : ~ WasiCtx c ( __ctx_take it )
+    : i rc ( vec_apply [WFd i] . c fds fd 8 \ inout WFd f → i {
+        ? == . f kind 0 { ^ 8 } {}
+        ? ! . f writable { ^ 8 } {}
+        : i maxio . it mem_bytes
+        : ~ i at offset
+        : ~ i total 0
+        : ~ i iv 0
+        ~ & & ! ( __interp_trapped it ) < iv iovs_len <= iv maxio {
+            : i bufp ( __m_get_u32 it + iovs * iv 8 )
+            : i buflen ( __m_get_u32 it + + iovs * iv 8 4 )
+            : ( Vec u ) chunk ( __mem_slice it bufp buflen )
+            ( __fd_put_at f at chunk )
+            = at + at buflen
+            = total + total buflen
+            = iv + iv 1
+        }
+        ( __m_put_u32 it nwritten_p total )
+        ^ 0
+    } )
+    ( __ctx_put it c )
+    ( __push it rc )
 }
 
 // path_create_directory / path_remove_directory / path_unlink_file /
 // path_rename / path_filestat_get — the host-directory mutations, resolved
 // against a dir fd exactly like path_open.
-unsafe @ __wasi_path_create_directory * InterpImpl it → v {
+@ __wasi_path_create_directory inout InterpImpl it → v {
     : i path_len ( __pop it )
     : i path_p ( __pop it )
     : i dirfd ( __pop it )
-    : s dp ( __dirfd_at it dirfd )
-    ? == # i dp 0 { ( __push it 8 ) ^ v } {}
-    : String hs ( __join_path it # *WFd dp path_p path_len )
-    : !v IoErr r ( dir_create ( string_data hs ) )
-    ( __push it ?? r { T x → 0 F e → ( __ioerr_errno e ) } )
+    : ?String hp ( __dir_path it dirfd path_p path_len )
+    ?? hp {
+        T hs → {
+            : !v IoErr r ( dir_create ( string_data hs ) )
+            ( __push it ?? r { T x → 0 F e → ( __ioerr_errno e ) } )
+        }
+        F → { ( __push it 8 ) }
+    }
 }
 
-unsafe @ __wasi_path_remove_directory * InterpImpl it → v {
+@ __wasi_path_remove_directory inout InterpImpl it → v {
     : i path_len ( __pop it )
     : i path_p ( __pop it )
     : i dirfd ( __pop it )
-    : s dp ( __dirfd_at it dirfd )
-    ? == # i dp 0 { ( __push it 8 ) ^ v } {}
-    : String hs ( __join_path it # *WFd dp path_p path_len )
-    : i rc ( nurl_dir_remove ( string_data hs ) )
-    ( __push it ? == rc 0 0 ( __ioerr_errno ( _io_err_of_kind ( errno_kind ) ) ) )
+    : ?String hp ( __dir_path it dirfd path_p path_len )
+    ?? hp {
+        T hs → {
+            : i rc ( nurl_dir_remove ( string_data hs ) )
+            ( __push it ? == rc 0 0 ( __ioerr_errno ( _io_err_of_kind ( errno_kind ) ) ) )
+        }
+        F → { ( __push it 8 ) }
+    }
 }
 
-unsafe @ __wasi_path_unlink_file * InterpImpl it → v {
+@ __wasi_path_unlink_file inout InterpImpl it → v {
     : i path_len ( __pop it )
     : i path_p ( __pop it )
     : i dirfd ( __pop it )
-    : s dp ( __dirfd_at it dirfd )
-    ? == # i dp 0 { ( __push it 8 ) ^ v } {}
-    : String hs ( __join_path it # *WFd dp path_p path_len )
-    : i32 rc ( unlink ( string_data hs ) )
-    ( __push it ? == # i rc 0 0 ( __ioerr_errno ( _io_err_of_kind ( errno_kind ) ) ) )
+    : ?String hp ( __dir_path it dirfd path_p path_len )
+    ?? hp {
+        T hs → {
+            : !v IoErr r ( file_delete ( string_data hs ) )
+            ( __push it ?? r { T x → 0 F e → ( __ioerr_errno e ) } )
+        }
+        F → { ( __push it 8 ) }
+    }
 }
 
-unsafe @ __wasi_path_rename * InterpImpl it → v {
+@ __wasi_path_rename inout InterpImpl it → v {
     : i new_len ( __pop it )
     : i new_p ( __pop it )
     : i new_dirfd ( __pop it )
     : i old_len ( __pop it )
     : i old_p ( __pop it )
     : i old_dirfd ( __pop it )
-    : s odp ( __dirfd_at it old_dirfd )
-    : s ndp ( __dirfd_at it new_dirfd )
-    ? | == # i odp 0 == # i ndp 0 { ( __push it 8 ) ^ v } {}
-    : String os ( __join_path it # *WFd odp old_p old_len )
-    : String ns ( __join_path it # *WFd ndp new_p new_len )
-    : !v IoErr r ( fs_rename ( string_data os ) ( string_data ns ) )
-    ( __push it ?? r { T x → 0 F e → ( __ioerr_errno e ) } )
+    : ?String op ( __dir_path it old_dirfd old_p old_len )
+    : ?String np ( __dir_path it new_dirfd new_p new_len )
+    ?? op {
+        T os → {
+            ?? np {
+                T ns → {
+                    : !v IoErr r ( fs_rename ( string_data os ) ( string_data ns ) )
+                    ( __push it ?? r { T x → 0 F e → ( __ioerr_errno e ) } )
+                }
+                F → { ( __push it 8 ) }
+            }
+        }
+        F → { ( __push it 8 ) }
+    }
 }
 
 // path_filestat_get(dirfd, flags, path_ptr, path_len, st_p): 64-byte filestat —
 // filetype at +16, size at +32 (the fields programs actually read).
-unsafe @ __wasi_path_filestat_get * InterpImpl it → v {
+@ __wasi_path_filestat_get inout InterpImpl it → v {
     : i st_p ( __pop it )
     : i path_len ( __pop it )
     : i path_p ( __pop it )
     ( __pop it )  // lookup flags
     : i dirfd ( __pop it )
-    : s dp ( __dirfd_at it dirfd )
-    ? == # i dp 0 { ( __push it 8 ) ^ v } {}
-    : String hs ( __join_path it # *WFd dp path_p path_len )
+    : ?String hp ( __dir_path it dirfd path_p path_len )
+    ?? hp {
+        T hs → { ( __path_filestat_in it hs st_p ) }
+        F → { ( __push it 8 ) }
+    }
+}
+
+@ __path_filestat_in inout InterpImpl it String hs i st_p → v {
     : ~ i rc 0
     : ~ i k 0
     ~ < k 64 { ( __mem_store it + st_p k 1 0 ) = k + k 1 }
@@ -6893,17 +7010,19 @@ unsafe @ __wasi_path_filestat_get * InterpImpl it → v {
 // entry = 24-byte header (d_next u64, d_ino u64, d_namlen u32, d_type u8+pad)
 // + name. A partially-written final entry with bufused == buf_len tells libc
 // to enlarge and retry, per the ABI.
-unsafe @ __wasi_fd_readdir * InterpImpl it → v {
+@ __wasi_fd_readdir inout InterpImpl it → v {
     : i bufused_p ( __pop it )
     : i cookie ( __pop it )
     : i buf_len ( __pop it )
     : i buf ( __pop it )
     : i fd ( __pop it )
-    : s fp ( __fd_at it fd )
-    ? == # i fp 0 { ( __push it 8 ) ^ v } {}
-    : *WFd f # *WFd fp
-    ? ! | == . f kind 2 == . f kind 4 { ( __push it 54 ) ^ v } {}  // ENOTDIR
-    : String hostdir ( bytes_to_str . f host )
+    : ~ WasiCtx c ( __ctx_take it )
+    : i kind ( __fd_kind c fd )
+    : ( Vec u ) hostb ?? ( vec_get [WFd] . c fds fd ) { T d → ( vec_clone [u] . d host ) F → ( vec_new [u] ) }
+    ( __ctx_put it c )
+    ? == kind 0 { ( __push it 8 ) ^ v } {}
+    ? ! | == kind 2 == kind 4 { ( __push it 54 ) ^ v } {}  // ENOTDIR
+    : String hostdir ( bytes_to_str hostb )
     : !( Vec String ) IoErr lr ( dir_list ( string_data hostdir ) )
     : ~ i rc 0
     : ~ i used 0
@@ -6914,7 +7033,7 @@ unsafe @ __wasi_fd_readdir * InterpImpl it → v {
             : ~ i idx cookie
             : ~ b full F
             ~ & ! full < idx n {
-                : String nm ?? ( vec_get [String] names idx ) { T x → x F → # String 0 }
+                : String nm ( vec_at [String] names idx )
                 : i nlen ( nurl_str_len ( string_data nm ) )
                 // d_type: probe the joined path (3 dir / 4 regular)
                 : String sub ( __join_path2 hostdir ( string_data nm ) )
@@ -6968,109 +7087,126 @@ unsafe @ __wasi_fd_readdir * InterpImpl it → v {
     ^ out
 }
 
-unsafe @ __wasi_fd_read * InterpImpl it → v {
+@ __wasi_fd_read inout InterpImpl it → v {
     : i nread_p ( __pop it )
     : i iovs_len ( __pop it )
     : i iovs ( __pop it )
     : i fd ( __pop it )
-    : s fp ( __fd_at it fd )
-    ? == # i fp 0 { ( __m_put_u32 it nread_p 0 ) ( __push it 0 ) ^ v } {}
-    : *WFd f # *WFd fp
-    ? != . f kind 3 { ( __m_put_u32 it nread_p 0 ) ( __push it 0 ) ^ v } {}  // stdin/dir → EOF
-    : i dn ( vec_len [u] . f data )
-    : i maxio . it mem_bytes
-    : ~ i total 0
-    : ~ i iv 0
-    ~ & & ! ( __interp_trapped it ) < iv iovs_len <= iv maxio {
-        : i bufp ( __m_get_u32 it + iovs * iv 8 )
-        : i buflen ( __m_get_u32 it + + iovs * iv 8 4 )
-        : ~ i c 0
-        ~ & < c buflen < . f pos dn {
-            ( __mem_store it + bufp c 1 ?? ( vec_get [u] . f data . f pos ) { T x → # i x F → 0 } )
-            = . f pos + . f pos 1
-            = c + c 1
+    : ~ WasiCtx c ( __ctx_take it )
+    : i rc ( vec_apply [WFd i] . c fds fd -1 \ inout WFd f → i {
+        ? != . f kind 3 { ^ -1 } {}  // stdin/dir/closed → EOF
+        : i dn ( vec_len [u] . f data )
+        : i maxio . it mem_bytes
+        : ~ i total 0
+        : ~ i iv 0
+        ~ & & ! ( __interp_trapped it ) < iv iovs_len <= iv maxio {
+            : i bufp ( __m_get_u32 it + iovs * iv 8 )
+            : i buflen ( __m_get_u32 it + + iovs * iv 8 4 )
+            : ~ i c2 0
+            ~ & < c2 buflen < . f pos dn {
+                ( __mem_store it + bufp c2 1 ?? ( vec_get [u] . f data . f pos ) { T x → # i x F → 0 } )
+                = . f pos + . f pos 1
+                = c2 + c2 1
+            }
+            = total + total c2
+            = iv + iv 1
         }
-        = total + total c
-        = iv + iv 1
-    }
-    ( __m_put_u32 it nread_p total )
+        ( __m_put_u32 it nread_p total )
+        ^ 0
+    } )
+    ( __ctx_put it c )
+    ? < rc 0 { ( __m_put_u32 it nread_p 0 ) } {}
     ( __push it 0 )
 }
 
-unsafe @ __wasi_fd_seek * InterpImpl it → v {
+@ __wasi_fd_seek inout InterpImpl it → v {
     : i noff_p ( __pop it )
     : i whence ( __pop it )
     : i offset ( __pop it )
     : i fd ( __pop it )
-    : s fp ( __fd_at it fd )
-    ? == # i fp 0 { ( __mem_store it noff_p 8 0 ) ( __push it 0 ) ^ v } {}
-    : *WFd f # *WFd fp
-    : i dn ( vec_len [u] . f data )
-    : i base ? == whence 0 0 ? == whence 1 . f pos dn  // SET / CUR / END
-    : i np + base offset
-    = . f pos ? < np 0 0 np
-    ( __mem_store it noff_p 8 . f pos )
+    : ~ WasiCtx c ( __ctx_take it )
+    : b ok ( vec_apply [WFd b] . c fds fd F \ inout WFd f → b {
+        ? == . f kind 0 { ^ F } {}
+        : i dn ( vec_len [u] . f data )
+        : i base ? == whence 0 0 ? == whence 1 . f pos dn  // SET / CUR / END
+        : i np + base offset
+        = . f pos ? < np 0 0 np
+        ( __mem_store it noff_p 8 . f pos )
+        ^ T
+    } )
+    ( __ctx_put it c )
+    ? ok {} { ( __mem_store it noff_p 8 0 ) }
     ( __push it 0 )
 }
 
-unsafe @ __wasi_args_sizes_get * InterpImpl it → v {
+@ __wasi_args_sizes_get inout InterpImpl it → v {
     : i bufsz_p ( __pop it )
-    : i argc_p ( __pop it )
-    : i argc ( vec_len [( Box Arg )] . ( __host it ) argv )
+    : i cnt_p ( __pop it )
+    : ( Arc ArgEnv ) ae ( arc_clone [ArgEnv] . it argenv )
+    : ArgEnv c ( arc_get [ArgEnv] ae )
+    : i n ( vec_len [Arg] . c argv )
     : ~ i bufsz 0
     : ~ i k 0
-    ~ < k argc {
-        : *Arg a # *Arg ?? ( vec_get [( Box Arg )] . ( __host it ) argv k ) { T x → # s ( box_ptr [Arg] x ) F → # s 0 }
-        = bufsz + bufsz + ( vec_len [u] . a bytes ) 1
+    ~ < k n {
+        ?? ( vec_get [Arg] . c argv k ) { T a → { = bufsz + bufsz + ( vec_len [u] . a bytes ) 1 } F → {} }
         = k + k 1
     }
-    ( __m_put_u32 it argc_p argc )
+    ( __m_put_u32 it cnt_p n )
     ( __m_put_u32 it bufsz_p bufsz )
     ( __push it 0 )
 }
 
-unsafe @ __wasi_args_get * InterpImpl it → v {
+@ __wasi_args_get inout InterpImpl it → v {
     : i buf_p ( __pop it )
-    : i argv_p ( __pop it )
-    : i argc ( vec_len [( Box Arg )] . ( __host it ) argv )
+    : i vec_p ( __pop it )
+    : ( Arc ArgEnv ) ae ( arc_clone [ArgEnv] . it argenv )
+    : ArgEnv c ( arc_get [ArgEnv] ae )
+    : i n ( vec_len [Arg] . c argv )
     : ~ i cur buf_p
     : ~ i k 0
-    ~ < k argc {
-        : *Arg a # *Arg ?? ( vec_get [( Box Arg )] . ( __host it ) argv k ) { T x → # s ( box_ptr [Arg] x ) F → # s 0 }
-        ( __m_put_u32 it + argv_p * k 4 cur )
-        : i blen ( vec_len [u] . a bytes )
-        : ~ i j 0
-        ~ < j blen { ( __mem_store it + cur j 1 ?? ( vec_get [u] . a bytes j ) { T x → # i x F → 0 } ) = j + j 1 }
-        ( __mem_store it + cur blen 1 0 )  // NUL terminator
-        = cur + cur + blen 1
+    ~ < k n {
+        ?? ( vec_get [Arg] . c argv k ) {
+            T a → {
+                ( __m_put_u32 it + vec_p * k 4 cur )
+                : i blen ( vec_len [u] . a bytes )
+                : ~ i j 0
+                ~ < j blen { ( __mem_store it + cur j 1 ?? ( vec_get [u] . a bytes j ) { T x → # i x F → 0 } ) = j + j 1 }
+                ( __mem_store it + cur blen 1 0 )  // NUL terminator
+                = cur + cur + blen 1
+            }
+            F → {}
+        }
         = k + k 1
     }
     ( __push it 0 )
 }
 
-unsafe @ __wasi_fd_prestat_get * InterpImpl it → v {
+@ __wasi_fd_prestat_get inout InterpImpl it → v {
     : i buf ( __pop it )
     : i fd ( __pop it )
-    : s fp ( __fd_at it fd )
-    ? == # i fp 0 { ( __push it 8 ) ^ v } {}  // EBADF: ends libc's preopen scan
-    : *WFd f # *WFd fp
-    ? != . f kind 2 { ( __push it 8 ) ^ v } {}
+    : ~ WasiCtx c ( __ctx_take it )
+    : i kind ( __fd_kind c fd )
+    : i nlen ?? ( vec_get [WFd] . c fds fd ) { T d → ( vec_len [u] . d name ) F → 0 }
+    ( __ctx_put it c )
+    ? != kind 2 { ( __push it 8 ) ^ v } {}  // EBADF: ends libc's preopen scan
     ( __mem_store it buf 1 0 )  // pr_type = dir
-    ( __m_put_u32 it + buf 4 ( vec_len [u] . f name ) )  // pr_name_len
+    ( __m_put_u32 it + buf 4 nlen )  // pr_name_len
     ( __push it 0 )
 }
 
-unsafe @ __wasi_fd_prestat_dir_name * InterpImpl it → v {
+@ __wasi_fd_prestat_dir_name inout InterpImpl it → v {
     : i plen ( __pop it )
     : i pptr ( __pop it )
     : i fd ( __pop it )
-    : s fp ( __fd_at it fd )
-    ? == # i fp 0 { ( __push it 8 ) ^ v } {}
-    : *WFd f # *WFd fp
-    : i nn ( vec_len [u] . f name )
+    : ~ WasiCtx c ( __ctx_take it )
+    : i kind ( __fd_kind c fd )
+    : ( Vec u ) nm ?? ( vec_get [WFd] . c fds fd ) { T d → ( vec_clone [u] . d name ) F → ( vec_new [u] ) }
+    ( __ctx_put it c )
+    ? == kind 0 { ( __push it 8 ) ^ v } {}
+    : i nn ( vec_len [u] nm )
     : i n ? < plen nn plen nn
     : ~ i k 0
-    ~ < k n { ( __mem_store it + pptr k 1 ?? ( vec_get [u] . f name k ) { T x → # i x F → 0 } ) = k + k 1 }
+    ~ < k n { ( __mem_store it + pptr k 1 ?? ( vec_get [u] nm k ) { T x → # i x F → 0 } ) = k + k 1 }
     ( __push it 0 )
 }
 
@@ -7078,14 +7214,15 @@ unsafe @ __wasi_fd_prestat_dir_name * InterpImpl it → v {
 // opened 4)→directory(3), file→regular(4).
 @ __filetype_of i kind → i { ^ ? | == kind 2 == kind 4 3 ? == kind 3 4 2 }
 
-unsafe @ __wasi_fd_fdstat_get * InterpImpl it → v {
+@ __wasi_fd_fdstat_get inout InterpImpl it → v {
     : i stat_p ( __pop it )
     : i fd ( __pop it )
-    : s fp ( __fd_at it fd )
+    : ~ WasiCtx c ( __ctx_take it )
+    : ~ i kind ( __fd_kind c fd )
+    ( __ctx_put it c )
+    ? == kind 0 { = kind 1 } {}  // unknown: answered as a character device
     : ~ i k 0
     ~ < k 24 { ( __mem_store it + stat_p k 1 0 ) = k + k 1 }
-    : ~ i kind 1
-    ? != # i fp 0 { : *WFd f # *WFd fp = kind . f kind } {}
     ( __mem_store it stat_p 1 ( __filetype_of kind ) )
     // grant all rights so libc never refuses an operation
     ( __mem_store it + stat_p 8 8 -1 )
@@ -7093,16 +7230,18 @@ unsafe @ __wasi_fd_fdstat_get * InterpImpl it → v {
     ( __push it 0 )
 }
 
-unsafe @ __wasi_fd_filestat_get * InterpImpl it → v {
+@ __wasi_fd_filestat_get inout InterpImpl it → v {
     : i st_p ( __pop it )
     : i fd ( __pop it )
-    : s fp ( __fd_at it fd )
+    : ~ WasiCtx c ( __ctx_take it )
+    : i kind ( __fd_kind c fd )
+    : i size ?? ( vec_get [WFd] . c fds fd ) { T d → ( vec_len [u] . d data ) F → 0 }
+    ( __ctx_put it c )
     : ~ i k 0
     ~ < k 64 { ( __mem_store it + st_p k 1 0 ) = k + k 1 }
-    ? != # i fp 0 {
-        : *WFd f # *WFd fp
-        ( __mem_store it + st_p 16 1 ( __filetype_of . f kind ) )  // filetype
-        ( __mem_store it + st_p 32 8 ( vec_len [u] . f data ) )  // file size
+    ? != kind 0 {
+        ( __mem_store it + st_p 16 1 ( __filetype_of kind ) )  // filetype
+        ( __mem_store it + st_p 32 8 size )  // file size
     } {}
     ( __push it 0 )
 }
@@ -7114,7 +7253,7 @@ unsafe @ __wasi_fd_filestat_get * InterpImpl it → v {
 // the disk, so its failure is the ONLY chance the guest has to learn that
 // the write did not happen. Swallowing it made `write_file` report
 // success for a file the host never created.
-unsafe @ __fd_flush * WFd f → i {
+@ __fd_flush inout WFd f → i {
     ? & . f writable . f dirty {
         : String hs ( bytes_to_str . f host )
         : !v IoErr wr ( write_file_bytes ( string_data hs ) . f data )
@@ -7127,56 +7266,61 @@ unsafe @ __fd_flush * WFd f → i {
 
 // Flush every open dirty file — called on proc_exit and when _start returns,
 // so buffered writes are never lost to a missing fd_close.
-unsafe @ __interp_flush * InterpImpl it → v {
-    : *InterpImpl ho ( __host it )
-    : i n ( vec_len [( Box WFd )] . ho fds )
+@ __interp_flush inout InterpImpl it → v {
+    : ~ WasiCtx c ( __ctx_take it )
+    : i n ( vec_len [WFd] . c fds )
     : ~ i k 3
-    ~ < k n { ?? ( vec_get [( Box WFd )] . ho fds k ) { T b → { : s pp # s ( box_ptr [WFd] b ) ? != # i pp 0 { ( __fd_flush # *WFd pp ) } {} } F → {} } = k + k 1 }
+    ~ < k n { : i _r ( vec_apply [WFd i] . c fds k 0 \ inout WFd f → i { ^ ( __fd_flush f ) } ) = k + k 1 }
+    ( __ctx_put it c )
 }
 
-unsafe @ interp_flush Interp it__h → v { ( __interp_flush ( __Interp_ptr it__h ) ) }
+@ interp_flush Interp h → v { ( locked_update [InterpImpl] . h l \ inout InterpImpl it → v { ( __interp_flush it ) } ) }
 
-unsafe @ __wasi_fd_close * InterpImpl it → v {
+@ __wasi_fd_close inout InterpImpl it → v {
     : i fd ( __pop it )
-    : s fp ( __fd_at it fd )
+    : ~ WasiCtx c ( __ctx_take it )
     : ~ i rc 0
-    ? != # i fp 0 {
-        : *WFd f # *WFd fp
-        = rc ( __fd_flush f )
-        ? >= fd 3 { ( vec_put [( Box WFd )] . ( __host it ) fds fd ( box_null [WFd] ) ) } {}  // keep stdio
+    ? != ( __fd_kind c fd ) 0 {
+        = rc ( vec_apply [WFd i] . c fds fd 0 \ inout WFd f → i { ^ ( __fd_flush f ) } )
+        ? >= fd 3 { ( vec_put [WFd] . c fds fd ( __mkfd 0 ) ) } {}  // keep stdio
     } {}
+    ( __ctx_put it c )
     ( __push it rc )
 }
 
-unsafe @ __wasi_fd_sync * InterpImpl it → v {
+@ __wasi_fd_sync inout InterpImpl it → v {
     : i fd ( __pop it )
-    : s fp ( __fd_at it fd )
-    ? == # i fp 0 { ( __push it 8 ) ^ v } {}  // EBADF
-    ( __push it ( __fd_flush # *WFd fp ) )
+    : ~ WasiCtx c ( __ctx_take it )
+    : i rc ( vec_apply [WFd i] . c fds fd 8 \ inout WFd f → i { ? == . f kind 0 { ^ 8 } {} ^ ( __fd_flush f ) } )  // EBADF
+    ( __ctx_put it c )
+    ( __push it rc )
 }
 
 // fd_tell(fd, off_p): current offset as u64.
-unsafe @ __wasi_fd_tell * InterpImpl it → v {
+@ __wasi_fd_tell inout InterpImpl it → v {
     : i off_p ( __pop it )
     : i fd ( __pop it )
-    : s fp ( __fd_at it fd )
-    ? == # i fp 0 { ( __push it 8 ) ^ v } {}
-    : *WFd f # *WFd fp
-    ( __mem_store it off_p 8 . f pos )
+    : ~ WasiCtx c ( __ctx_take it )
+    : i kind ( __fd_kind c fd )
+    : i pos ?? ( vec_get [WFd] . c fds fd ) { T d → . d pos F → 0 }
+    ( __ctx_put it c )
+    ? == kind 0 { ( __push it 8 ) ^ v } {}
+    ( __mem_store it off_p 8 pos )
     ( __push it 0 )
 }
 
 // environ_sizes_get / environ_get: the entries pushed via interp_push_env
 // (the host environment is NOT inherited — capability-style, like --env).
-unsafe @ __wasi_environ_sizes_get * InterpImpl it → v {
+@ __wasi_environ_sizes_get inout InterpImpl it → v {
     : i bufsz_p ( __pop it )
     : i cnt_p ( __pop it )
-    : i n ( vec_len [( Box Arg )] . ( __host it ) envp )
+    : ( Arc ArgEnv ) ae ( arc_clone [ArgEnv] . it argenv )
+    : ArgEnv c ( arc_get [ArgEnv] ae )
+    : i n ( vec_len [Arg] . c envp )
     : ~ i bufsz 0
     : ~ i k 0
     ~ < k n {
-        : *Arg a # *Arg ?? ( vec_get [( Box Arg )] . ( __host it ) envp k ) { T x → # s ( box_ptr [Arg] x ) F → # s 0 }
-        = bufsz + bufsz + ( vec_len [u] . a bytes ) 1
+        ?? ( vec_get [Arg] . c envp k ) { T a → { = bufsz + bufsz + ( vec_len [u] . a bytes ) 1 } F → {} }
         = k + k 1
     }
     ( __m_put_u32 it cnt_p n )
@@ -7184,20 +7328,26 @@ unsafe @ __wasi_environ_sizes_get * InterpImpl it → v {
     ( __push it 0 )
 }
 
-unsafe @ __wasi_environ_get * InterpImpl it → v {
+@ __wasi_environ_get inout InterpImpl it → v {
     : i buf_p ( __pop it )
-    : i envv_p ( __pop it )
-    : i n ( vec_len [( Box Arg )] . ( __host it ) envp )
+    : i vec_p ( __pop it )
+    : ( Arc ArgEnv ) ae ( arc_clone [ArgEnv] . it argenv )
+    : ArgEnv c ( arc_get [ArgEnv] ae )
+    : i n ( vec_len [Arg] . c envp )
     : ~ i cur buf_p
     : ~ i k 0
     ~ < k n {
-        : *Arg a # *Arg ?? ( vec_get [( Box Arg )] . ( __host it ) envp k ) { T x → # s ( box_ptr [Arg] x ) F → # s 0 }
-        ( __m_put_u32 it + envv_p * k 4 cur )
-        : i blen ( vec_len [u] . a bytes )
-        : ~ i j 0
-        ~ < j blen { ( __mem_store it + cur j 1 ?? ( vec_get [u] . a bytes j ) { T x → # i x F → 0 } ) = j + j 1 }
-        ( __mem_store it + cur blen 1 0 )  // NUL terminator
-        = cur + cur + blen 1
+        ?? ( vec_get [Arg] . c envp k ) {
+            T a → {
+                ( __m_put_u32 it + vec_p * k 4 cur )
+                : i blen ( vec_len [u] . a bytes )
+                : ~ i j 0
+                ~ < j blen { ( __mem_store it + cur j 1 ?? ( vec_get [u] . a bytes j ) { T x → # i x F → 0 } ) = j + j 1 }
+                ( __mem_store it + cur blen 1 0 )  // NUL terminator
+                = cur + cur + blen 1
+            }
+            F → {}
+        }
         = k + k 1
     }
     ( __push it 0 )
@@ -7205,7 +7355,7 @@ unsafe @ __wasi_environ_get * InterpImpl it → v {
 
 // clock_time_get(id, precision, time_ptr): realtime (0) from the wall clock,
 // everything else from the monotonic clock. Nanoseconds.
-unsafe @ __wasi_clock_time_get * InterpImpl it → v {
+@ __wasi_clock_time_get inout InterpImpl it → v {
     : i t_p ( __pop it )
     ( __pop it )  // precision (i64)
     : i id ( __pop it )
@@ -7226,7 +7376,7 @@ unsafe @ __wasi_clock_time_get * InterpImpl it → v {
 // clock_id(16) timeout(24) precision(32) flags(40) — flag bit 0 means
 // the timeout is ABSOLUTE — and for an fd subscription fd(16).
 // Event is 32 bytes: userdata(0) error(8) type(10) nbytes(16) flags(24).
-unsafe @ __wasi_poll_oneoff * InterpImpl it → v {
+@ __wasi_poll_oneoff inout InterpImpl it → v {
     : i nev_p ( __pop it )
     : i nsubs ( __pop it )
     : i out ( __pop it )
@@ -7254,10 +7404,12 @@ unsafe @ __wasi_poll_oneoff * InterpImpl it → v {
             // fd_read (1) / fd_write (2): ready now, or EBADF for a
             // descriptor the guest never opened.
             : i fd ( __m_get_u32 it + sub 16 )
-            : s fp ( __fd_at it fd )
+            : ~ WasiCtx c ( __ctx_take it )
+            : i fk ( __fd_kind c fd )
+            ( __ctx_put it c )
             : i ev + out * nev 32
             ( __mem_store it ev 8 userdata )
-            ( __mem_store it + ev 8 2 ? == # i fp 0 8 0 )
+            ( __mem_store it + ev 8 2 ? == fk 0 8 0 )
             ( __mem_store it + ev 10 1 tag )
             ( __mem_store it + ev 16 8 0 )
             ( __mem_store it + ev 24 2 0 )
@@ -7290,17 +7442,14 @@ unsafe @ __wasi_poll_oneoff * InterpImpl it → v {
 }
 
 // random_get(buf, len): real OS entropy via the runtime CSPRNG.
-unsafe @ __wasi_random_get * InterpImpl it → v {
+@ __wasi_random_get inout InterpImpl it → v {
     : i len ( __pop it )
     : i buf ( __pop it )
     // The destination buffer lives in linear memory, so a length larger than
     // memory is bogus — trap instead of allocating it.
     ? > len . it mem_bytes { ( __trap it `random_get length exceeds memory` ) ( __push it 0 ) ^ v } {}
     ? > len 0 {
-        : ( Vec u ) tmp ( vec_with_cap [u] len )
-        : ~ i z 0
-        ~ < z len { ( vec_push [u] tmp # u 0 ) = z + z 1 }
-        ( nurl_rand_fill # *u ( vec_data [u] tmp ) len )
+        : ( Vec u ) tmp ( rand_bytes len )
         : ~ i k 0
         ~ < k len { ( __mem_store it + buf k 1 ?? ( vec_get [u] tmp k ) { T x → # i x F → 0 } ) = k + k 1 }
     } {}
@@ -7310,7 +7459,7 @@ unsafe @ __wasi_random_get * InterpImpl it → v {
 // An out-of-bounds access says WHICH address and against what bound: with
 // threads those two numbers separate "the guest computed a wild pointer"
 // from "this thread's view of the memory size is behind the others".
-unsafe @ __trap_oob * InterpImpl it s what i ea i n → v {
+@ __trap_oob inout InterpImpl it s what i ea i n → v {
     = . it halt | . it halt 1
     ( vec_free [u] . it trapmsg )
     : String m ( string_from what )
@@ -7327,7 +7476,7 @@ unsafe @ __trap_oob * InterpImpl it s what i ea i n → v {
 }
 
 // Trap with a message that carries a dynamic name (import module/field).
-unsafe @ __trap_named * InterpImpl it s prefix ( Vec u ) name → v {
+@ __trap_named inout InterpImpl it s prefix ( Vec u ) name → v {
     = . it halt | . it halt 1
     ( vec_free [u] . it trapmsg )
     : ( Vec u ) msg ( bytes_from_str prefix )
@@ -7351,89 +7500,89 @@ unsafe @ __trap_named * InterpImpl it s prefix ( Vec u ) name → v {
 
 // Host base address of the guest linear memory (recomputed per call — a
 // memory.grow between host calls may relocate the backing).
-unsafe @ __gpu_base * InterpImpl it → i { ^ ( __mem_base it ) }
+@ __gpu_base inout InterpImpl it → i { ^ ( __mem_base it ) }
 
 // Guest offset → host pointer (NULL stays NULL).
-unsafe @ __gpu_ptr * InterpImpl it i off → *u {
+unsafe @ __gpu_ptr inout InterpImpl it i off → *u {
     : i o & off 4294967295
     ? == o 0 { ^ # *u 0 } {}
     ^ # *u + ( __gpu_base it ) o
 }
 
-unsafe @ __cu_init * InterpImpl it → v {
+unsafe @ __cu_init inout InterpImpl it → v {
     : i flags ( __pop it )
     ( __push it # i ( cuInit # i32 flags ) )
 }
 
-unsafe @ __cu_device_get_count * InterpImpl it → v {
+unsafe @ __cu_device_get_count inout InterpImpl it → v {
     : i count ( __pop it )
     ( __push it # i ( cuDeviceGetCount ( __gpu_ptr it count ) ) )
 }
 
-unsafe @ __cu_device_get * InterpImpl it → v {
+unsafe @ __cu_device_get inout InterpImpl it → v {
     : i ordinal ( __pop it )
     : i device ( __pop it )
     ( __push it # i ( cuDeviceGet ( __gpu_ptr it device ) # i32 ordinal ) )
 }
 
-unsafe @ __cu_device_get_name * InterpImpl it → v {
+unsafe @ __cu_device_get_name inout InterpImpl it → v {
     : i dev ( __pop it )
     : i len ( __pop it )
     : i name ( __pop it )
     ( __push it # i ( cuDeviceGetName ( __gpu_ptr it name ) # i32 len # i32 dev ) )
 }
 
-unsafe @ __cu_ctx_create * InterpImpl it → v {
+unsafe @ __cu_ctx_create inout InterpImpl it → v {
     : i dev ( __pop it )
     : i flags ( __pop it )
     : i pctx ( __pop it )
     ( __push it # i ( cuCtxCreate ( __gpu_ptr it pctx ) # i32 flags # i32 dev ) )
 }
 
-unsafe @ __cu_ctx_destroy * InterpImpl it → v {
+unsafe @ __cu_ctx_destroy inout InterpImpl it → v {
     : i ctx ( __pop it )
     ( __push it # i ( cuCtxDestroy ctx ) )
 }
 
-unsafe @ __cu_ctx_sync * InterpImpl it → v { ( __push it # i ( cuCtxSynchronize ) ) }
+unsafe @ __cu_ctx_sync inout InterpImpl it → v { ( __push it # i ( cuCtxSynchronize ) ) }
 
-unsafe @ __cu_module_load * InterpImpl it → v {
+unsafe @ __cu_module_load inout InterpImpl it → v {
     : i image ( __pop it )
     : i module ( __pop it )
     ( __push it # i ( cuModuleLoadData ( __gpu_ptr it module ) ( __gpu_ptr it image ) ) )
 }
 
-unsafe @ __cu_module_unload * InterpImpl it → v {
+unsafe @ __cu_module_unload inout InterpImpl it → v {
     : i module ( __pop it )
     ( __push it # i ( cuModuleUnload module ) )
 }
 
-unsafe @ __cu_module_get_function * InterpImpl it → v {
+unsafe @ __cu_module_get_function inout InterpImpl it → v {
     : i name ( __pop it )
     : i hmod ( __pop it )
     : i hfunc ( __pop it )
     ( __push it # i ( cuModuleGetFunction ( __gpu_ptr it hfunc ) hmod # s ( __gpu_ptr it name ) ) )
 }
 
-unsafe @ __cu_mem_alloc * InterpImpl it → v {
+unsafe @ __cu_mem_alloc inout InterpImpl it → v {
     : i bytesize ( __pop it )
     : i dptr ( __pop it )
     ( __push it # i ( cuMemAlloc ( __gpu_ptr it dptr ) bytesize ) )
 }
 
-unsafe @ __cu_mem_free * InterpImpl it → v {
+unsafe @ __cu_mem_free inout InterpImpl it → v {
     : i dptr ( __pop it )
     ( __push it # i ( cuMemFree dptr ) )
 }
 
-unsafe @ __cu_memcpy_htod * InterpImpl it → v {
+unsafe @ __cu_memcpy_htod inout InterpImpl it → v {
     : i n ( __pop it )
     : i src ( __pop it )
     : i dst ( __pop it )
     ( __push it # i ( cuMemcpyHtoD dst ( __gpu_ptr it src ) n ) )
 }
 
-unsafe @ __cu_memcpy_dtoh * InterpImpl it → v {
+unsafe @ __cu_memcpy_dtoh inout InterpImpl it → v {
     : i n ( __pop it )
     : i src ( __pop it )
     : i dst ( __pop it )
@@ -7451,7 +7600,7 @@ unsafe @ __cu_memcpy_dtoh * InterpImpl it → v {
 // ignores the rest, and each translated entry is a valid host address.
 @ __GPU_MAX_ARGS → i { ^ 64 }
 
-unsafe @ __cu_launch_kernel * InterpImpl it → v {
+unsafe @ __cu_launch_kernel inout InterpImpl it → v {
     : i extra ( __pop it )
     : i params ( __pop it )
     : i stream ( __pop it )
@@ -7480,7 +7629,7 @@ unsafe @ __cu_launch_kernel * InterpImpl it → v {
     ( __push it rc )
 }
 
-unsafe @ __cu_get_error_name * InterpImpl it → v {
+@ __cu_get_error_name inout InterpImpl it → v {
     // Writes a HOST const char* into the guest out-slot — unusable as a guest
     // offset. Write NULL so cuda_error_name falls back to a static string;
     // diagnostics only, never on the compute path.
@@ -7490,7 +7639,7 @@ unsafe @ __cu_get_error_name * InterpImpl it → v {
     ( __push it 0 )
 }
 
-unsafe @ __nvrtc_create * InterpImpl it → v {
+unsafe @ __nvrtc_create inout InterpImpl it → v {
     : i incs ( __pop it )
     : i headers ( __pop it )
     : i nh ( __pop it )
@@ -7504,7 +7653,7 @@ unsafe @ __nvrtc_create * InterpImpl it → v {
 // a host copy of the array is built with every entry translated (guest offset
 // → host address). nopt bounds the array exactly; entries past guest memory
 // (a hostile/broken module) become NULL rather than wild host pointers.
-unsafe @ __nvrtc_compile * InterpImpl it → v {
+unsafe @ __nvrtc_compile inout InterpImpl it → v {
     : i opts ( __pop it )
     : i nopt ( __pop it )
     : i prog ( __pop it )
@@ -7530,37 +7679,37 @@ unsafe @ __nvrtc_compile * InterpImpl it → v {
     ( __push it rc )
 }
 
-unsafe @ __nvrtc_ptx_size * InterpImpl it → v {
+unsafe @ __nvrtc_ptx_size inout InterpImpl it → v {
     : i sz ( __pop it )
     : i prog ( __pop it )
     ( __push it # i ( nvrtcGetPTXSize prog ( __gpu_ptr it sz ) ) )
 }
 
-unsafe @ __nvrtc_get_ptx * InterpImpl it → v {
+unsafe @ __nvrtc_get_ptx inout InterpImpl it → v {
     : i ptx ( __pop it )
     : i prog ( __pop it )
     ( __push it # i ( nvrtcGetPTX prog ( __gpu_ptr it ptx ) ) )
 }
 
-unsafe @ __nvrtc_log_size * InterpImpl it → v {
+unsafe @ __nvrtc_log_size inout InterpImpl it → v {
     : i sz ( __pop it )
     : i prog ( __pop it )
     ( __push it # i ( nvrtcGetProgramLogSize prog ( __gpu_ptr it sz ) ) )
 }
 
-unsafe @ __nvrtc_get_log * InterpImpl it → v {
+unsafe @ __nvrtc_get_log inout InterpImpl it → v {
     : i log ( __pop it )
     : i prog ( __pop it )
     ( __push it # i ( nvrtcGetProgramLog prog ( __gpu_ptr it log ) ) )
 }
 
-unsafe @ __nvrtc_destroy * InterpImpl it → v {
+unsafe @ __nvrtc_destroy inout InterpImpl it → v {
     : i prog ( __pop it )
     ( __push it # i ( nvrtcDestroyProgram ( __gpu_ptr it prog ) ) )
 }
 
 // GPU host-import dispatch (module "env"). Returns T if handled.
-unsafe @ __gpu_dispatch * InterpImpl it ( Vec u ) field → b {
+@ __gpu_dispatch inout InterpImpl it ( Vec u ) field → b {
     ? ( __feq field `cuInit` ) { ( __cu_init it ) ^ T } {}
     ? ( __feq field `cuDeviceGetCount` ) { ( __cu_device_get_count it ) ^ T } {}
     ? ( __feq field `cuDeviceGet` ) { ( __cu_device_get it ) ^ T } {}
@@ -7612,7 +7761,7 @@ unsafe @ __gpu_dispatch * InterpImpl it ( Vec u ) field → b {
 //     dereference on demand. An index can only miss.
 
 // Guest (ptr,len) span → host pointer; 0 when it leaves linear memory.
-unsafe @ __net_span * InterpImpl it i off i len → s {
+unsafe @ __net_span inout InterpImpl it i off i len → s {
     : i o & off 4294967295
     : i n . it mem_bytes
     ? | < len 0 > + o len n { ^ # s 0 } {}
@@ -7622,7 +7771,7 @@ unsafe @ __net_span * InterpImpl it i off i len → s {
 // Guest pointer to a NUL-terminated string → host `s`. A string with no
 // terminator inside linear memory reads as empty rather than running off
 // the end of the buffer.
-unsafe @ __net_cstr * InterpImpl it i off → s {
+unsafe @ __net_cstr inout InterpImpl it i off → s {
     : i o & off 4294967295
     : i n . it mem_bytes
     ? >= o n { ^ `` } {}
@@ -7640,7 +7789,7 @@ unsafe @ __net_cstr * InterpImpl it i off → s {
 // answer the byte count — the import ABI for every host call that
 // produces text (addresses, DNS answers), because the host cannot
 // allocate inside the guest's linear memory.
-unsafe @ __net_put_str * InterpImpl it i off i cap s src → i {
+@ __net_put_str inout InterpImpl it i off i cap s src → i {
     : ( Slice u ) src_v ( slice_of_str src )
     ? == # i src 0 { ^ 0 } {}
     : i n ( nurl_str_len src )
@@ -7654,7 +7803,7 @@ unsafe @ __net_put_str * InterpImpl it i off i cap s src → i {
 
 // Same, for an OWNED host string: copied out, then released (a String
 // takes it over).
-unsafe @ __net_put_owned * InterpImpl it i off i cap sink s src → i {
+@ __net_put_owned inout InterpImpl it i off i cap sink s src → i {
     ? == # i src 0 { ^ 0 } {}
     : String own ( string_adopt src )
     ^ ( __net_put_str it off cap ( string_data own ) )
@@ -7668,9 +7817,9 @@ unsafe @ __net_put_owned * InterpImpl it i off i cap sink s src → i {
 // to somebody else. That surfaced far away as a wild pointer inside the
 // guest's own frame parser. The critical sections here are table-only —
 // no blocking host call happens while the lock is held.
-unsafe @ __net_reg * InterpImpl it0 i h i kind → i {
+unsafe @ __net_reg inout InterpImpl it0 i h i kind → i {
     ? == h 0 { ^ 0 } {}
-    : *InterpImpl it ( __host it0 )
+    : ~ * InterpImpl it ( __host it0 )
     ( __atom_lock )
     : i n ( vec_len [i] . it nethandles )
     : ~ i slot 0
@@ -7692,8 +7841,8 @@ unsafe @ __net_reg * InterpImpl it0 i h i kind → i {
 }
 
 // Guest index → host handle; 0 for anything the guest made up.
-unsafe @ __net_h * InterpImpl it0 i idx → i {
-    : *InterpImpl it ( __host it0 )
+unsafe @ __net_h inout InterpImpl it0 i idx → i {
+    : ~ * InterpImpl it ( __host it0 )
     ? <= idx 0 { ^ 0 } {}
     ( __atom_lock )
     : ~ i h 0
@@ -7705,8 +7854,8 @@ unsafe @ __net_h * InterpImpl it0 i idx → i {
 }
 
 // Retire an index — the host handle is already closed by the caller.
-unsafe @ __net_drop * InterpImpl it0 i idx → v {
-    : *InterpImpl it ( __host it0 )
+unsafe @ __net_drop inout InterpImpl it0 i idx → v {
+    : ~ * InterpImpl it ( __host it0 )
     ( __atom_lock )
     ? | <= idx 0 >= idx ( vec_len [i] . it nethandles ) { ( __atom_unlock ) ^ v } {}
     ( vec_set [i] . it nethandles idx 0 )
@@ -7717,7 +7866,7 @@ unsafe @ __net_drop * InterpImpl it0 i idx → v {
 // Close every socket the guest left open. A wasm module that exits (or
 // traps) mid-flight would otherwise leak the host's descriptors, which
 // matters most for the embedded case: swarm-mcp runs kernels in-process.
-unsafe @ __interp_net_close_all * InterpImpl it → v { ( __net_close_handles . it nethandles . it netkinds ) }
+@ __interp_net_close_all inout InterpImpl it → v { ( __net_close_handles . it nethandles . it netkinds ) }
 
 unsafe @ __net_close_handles ( Vec i ) hs ( Vec i ) kinds → v {
     : i n ( vec_len [i] hs )
@@ -7734,9 +7883,9 @@ unsafe @ __net_close_handles ( Vec i ) hs ( Vec i ) kinds → v {
     }
 }
 
-unsafe @ interp_net_close_all Interp it__h → v { ( __interp_net_close_all ( __Interp_ptr it__h ) ) }
+@ interp_net_close_all Interp h → v { ( locked_update [InterpImpl] . h l \ inout InterpImpl it → v { ( __interp_net_close_all it ) } ) }
 
-unsafe @ __net_dispatch * InterpImpl it ( Vec u ) field → b {
+unsafe @ __net_dispatch inout InterpImpl it ( Vec u ) field → b {
     // ── TCP ──
     ? ( __feq field `tcp_listen` ) {
         : i backlog ( __pop it ) : i port ( __pop it ) : i hp ( __pop it )
@@ -7910,13 +8059,13 @@ unsafe @ __net_dispatch * InterpImpl it ( Vec u ) field → b {
 // the host sets the new instance's exported `__stack_pointer` from it
 // before the first call. Without the export the spawn is refused rather
 // than letting two threads share one stack.
-unsafe @ __wasi_thread_spawn * InterpImpl it → v {
+unsafe @ __wasi_thread_spawn inout InterpImpl it → v {
     : i start_arg ( __pop it )
-    : *InterpImpl ho ( __host it )
-    : *ModuleImpl m # *ModuleImpl . ho mod
+    : ~ * InterpImpl ho ( __host it )
+    : ~ * ModuleImpl m # *ModuleImpl . ho mod
     ? == . ho tstart_fidx -2 {
-        = . ho tstart_fidx ( _module_export_func m `wasi_thread_start` )
-        = . ho sp_global ( _module_export_global m `__stack_pointer` )
+        = . ho tstart_fidx ( _module_export_func . m 0 `wasi_thread_start` )
+        = . ho sp_global ( _module_export_global . m 0 `__stack_pointer` )
     } {}
     : i fidx . ho tstart_fidx
     : i spg . ho sp_global
@@ -7931,20 +8080,20 @@ unsafe @ __wasi_thread_spawn * InterpImpl it → v {
     // nothing here has to outlive the spawn.
     : ( @ v ) body \ → v {
         // The thread's instance, dropped when the body ends.
-        : ( Arc InterpImpl ) cinst ( __interp_thread_new ho )
-        : *InterpImpl child ( arc_ptr [InterpImpl] cinst )
+        : ( Arc InterpImpl ) cinst ( __interp_thread_new . ho 0 )
+        : ~ * InterpImpl child ( arc_ptr [InterpImpl] cinst )
         ( vec_set [i] . child globals spg stack_top )
         ( vec_push [i] . child vs tid )
         ( vec_push [i] . child vs start_arg )
-        ( __exec_func child fidx )
+        ( __exec_func . child 0 fidx )
         // A trap kills only this thread, so it has to be reported here or
         // it is silent: the guest's join just never completes.
-        ? ( __interp_trapped child ) {
+        ? ( __interp_trapped . child 0 ) {
             ( nurl_eprint `nwasm: thread trap: ` )
             ( nurl_eprintln ( string_data ( bytes_to_str . child trapmsg ) ) )
         } {}
-        ( __interp_flush child )
-        ( __thread_unregister child )
+        ( __interp_flush . child 0 )
+        ( __thread_unregister . child 0 )
     }
     ?? ( thread_spawn body ) {
         T t → {
@@ -7957,7 +8106,83 @@ unsafe @ __wasi_thread_spawn * InterpImpl it → v {
     }
 }
 
-unsafe @ __wasi_dispatch * InterpImpl it ( Vec u ) mod ( Vec u ) field → v {
+// The dispatch number of an import (__wasi_dispatch_id): 1.. for a
+// wasi_snapshot_preview1 function, 0 for wasi.thread-spawn, -2 for an
+// import the by-name path answers (nurl_net, env, or one it traps on).
+@ __wasi_resolve ( Vec u ) mod ( Vec u ) field → i {
+    ? ( __feq mod `wasi` ) { ? ( __feq field `thread-spawn` ) { ^ 0 } {} ^ -2 } {}
+    ? ! ( __feq mod `wasi_snapshot_preview1` ) { ^ -2 } {}
+    ? ( __feq field `proc_exit` ) { ^ 1 } {}
+    ? ( __feq field `fd_write` ) { ^ 2 } {}
+    ? ( __feq field `fd_read` ) { ^ 3 } {}
+    ? ( __feq field `fd_seek` ) { ^ 4 } {}
+    ? ( __feq field `fd_tell` ) { ^ 5 } {}
+    ? ( __feq field `fd_pread` ) { ^ 6 } {}
+    ? ( __feq field `fd_pwrite` ) { ^ 7 } {}
+    ? ( __feq field `fd_sync` ) { ^ 8 } {}
+    ? ( __feq field `fd_datasync` ) { ^ 9 } {}
+    ? ( __feq field `fd_close` ) { ^ 10 } {}
+    ? ( __feq field `fd_readdir` ) { ^ 11 } {}
+    ? ( __feq field `path_open` ) { ^ 12 } {}
+    ? ( __feq field `path_create_directory` ) { ^ 13 } {}
+    ? ( __feq field `path_remove_directory` ) { ^ 14 } {}
+    ? ( __feq field `path_unlink_file` ) { ^ 15 } {}
+    ? ( __feq field `path_rename` ) { ^ 16 } {}
+    ? ( __feq field `path_filestat_get` ) { ^ 17 } {}
+    ? ( __feq field `args_sizes_get` ) { ^ 18 } {}
+    ? ( __feq field `args_get` ) { ^ 19 } {}
+    ? ( __feq field `fd_prestat_get` ) { ^ 20 } {}
+    ? ( __feq field `fd_prestat_dir_name` ) { ^ 21 } {}
+    ? ( __feq field `fd_fdstat_get` ) { ^ 22 } {}
+    ? ( __feq field `fd_filestat_get` ) { ^ 23 } {}
+    ? ( __feq field `environ_sizes_get` ) { ^ 24 } {}
+    ? ( __feq field `environ_get` ) { ^ 25 } {}
+    ? ( __feq field `clock_time_get` ) { ^ 26 } {}
+    ? ( __feq field `random_get` ) { ^ 27 } {}
+    ? ( __feq field `poll_oneoff` ) { ^ 28 } {}
+    ? ( __feq field `fd_fdstat_set_flags` ) { ^ 29 } {}
+    ? ( __feq field `sched_yield` ) { ^ 30 } {}
+    ^ -2
+}
+
+// Run the import `id` names (__wasi_resolve). F when it is not one this
+// path knows (the by-name dispatch answers it).
+@ __wasi_dispatch_id inout InterpImpl it i id → b {
+    ? == id 0 { ( __wasi_thread_spawn it ) ^ T } {}
+    ? == id 1 { ( __wasi_proc_exit it ) ^ T } {}
+    ? == id 2 { ( __wasi_fd_write it ) ^ T } {}
+    ? == id 3 { ( __wasi_fd_read it ) ^ T } {}
+    ? == id 4 { ( __wasi_fd_seek it ) ^ T } {}
+    ? == id 5 { ( __wasi_fd_tell it ) ^ T } {}
+    ? == id 6 { ( __wasi_fd_pread it ) ^ T } {}
+    ? == id 7 { ( __wasi_fd_pwrite it ) ^ T } {}
+    ? == id 8 { ( __wasi_fd_sync it ) ^ T } {}
+    ? == id 9 { ( __wasi_fd_sync it ) ^ T } {}
+    ? == id 10 { ( __wasi_fd_close it ) ^ T } {}
+    ? == id 11 { ( __wasi_fd_readdir it ) ^ T } {}
+    ? == id 12 { ( __wasi_path_open it ) ^ T } {}
+    ? == id 13 { ( __wasi_path_create_directory it ) ^ T } {}
+    ? == id 14 { ( __wasi_path_remove_directory it ) ^ T } {}
+    ? == id 15 { ( __wasi_path_unlink_file it ) ^ T } {}
+    ? == id 16 { ( __wasi_path_rename it ) ^ T } {}
+    ? == id 17 { ( __wasi_path_filestat_get it ) ^ T } {}
+    ? == id 18 { ( __wasi_args_sizes_get it ) ^ T } {}
+    ? == id 19 { ( __wasi_args_get it ) ^ T } {}
+    ? == id 20 { ( __wasi_fd_prestat_get it ) ^ T } {}
+    ? == id 21 { ( __wasi_fd_prestat_dir_name it ) ^ T } {}
+    ? == id 22 { ( __wasi_fd_fdstat_get it ) ^ T } {}
+    ? == id 23 { ( __wasi_fd_filestat_get it ) ^ T } {}
+    ? == id 24 { ( __wasi_environ_sizes_get it ) ^ T } {}
+    ? == id 25 { ( __wasi_environ_get it ) ^ T } {}
+    ? == id 26 { ( __wasi_clock_time_get it ) ^ T } {}
+    ? == id 27 { ( __wasi_random_get it ) ^ T } {}
+    ? == id 28 { ( __wasi_poll_oneoff it ) ^ T } {}
+    ? == id 29 { ( __pop it ) ( __pop it ) ( __push it 0 ) ^ T } {}
+    ? == id 30 { ( __push it 0 ) ^ T } {}
+    ^ F
+}
+
+@ __wasi_dispatch inout InterpImpl it ( Vec u ) mod ( Vec u ) field → v {
     ? ( __feq mod `wasi` ) {
         ? ( __feq field `thread-spawn` ) { ( __wasi_thread_spawn it ) ^ v } {}
         ( __trap_named it `unsupported wasi import: ` field ) ^ v
@@ -8019,25 +8244,25 @@ unsafe @ __wasi_dispatch * InterpImpl it ( Vec u ) mod ( Vec u ) field → v {
 // Callers bounds-check dst/src/n before calling (memory.copy / memory.fill
 // / memory.init do it up front, spec-style); these just move the bytes.
 // nurl_memmove is the overlap-safe one — memory.copy allows aliasing.
-unsafe @ __mem_copy * InterpImpl it i dst i src i n → v {
+unsafe @ __mem_copy inout InterpImpl it i dst i src i n → v {
     ? <= n 0 { ^ v } {}
     : s base # s ( __mem_base it )
     ( nurl_memmove # s + # i base dst # s + # i base src n )
 }
 
-unsafe @ __mem_fill * InterpImpl it i dst i val i n → v {
+unsafe @ __mem_fill inout InterpImpl it i dst i val i n → v {
     ? <= n 0 { ^ v } {}
     : s base # s ( __mem_base it )
     ( nurl_memset # s + # i base dst & val 255 n )
 }
 
 // The *DataSeg / *ElemSeg at segment index k (#s 0 if out of range).
-unsafe @ __data_at * ModuleImpl m i k → s {
+unsafe @ __data_at inout ModuleImpl m i k → s {
     ? | < k 0 >= k ( vec_len [( Box DataSeg )] . m datas ) { ^ # s 0 } {}
     ^ ?? ( vec_get [( Box DataSeg )] . m datas k ) { T x → # s ( box_ptr [DataSeg] x ) F → # s 0 }
 }
 
-unsafe @ __elem_at * ModuleImpl m i k → s {
+unsafe @ __elem_at inout ModuleImpl m i k → s {
     ? | < k 0 >= k ( vec_len [( Box ElemSeg )] . m elems ) { ^ # s 0 } {}
     ^ ?? ( vec_get [( Box ElemSeg )] . m elems k ) { T x → # s ( box_ptr [ElemSeg] x ) F → # s 0 }
 }
@@ -8087,7 +8312,7 @@ unsafe @ __atom_unlock → v { ( pthread_mutex_unlock # *u # s g_atom_mx ) }
 
 // Natural alignment is required by the spec: an unaligned atomic traps
 // rather than being emulated.
-unsafe @ __atom_check * InterpImpl it i ea i w → b {
+@ __atom_check inout InterpImpl it i ea i w → b {
     ? != 0 % ea w { ( __trap it `unaligned atomic access` ) ^ F } {}
     ? | < ea 0 > + ea w . it mem_bytes { ( __trap it `atomic access out of bounds` ) ^ F } {}
     ^ T
@@ -8110,7 +8335,7 @@ unsafe @ __atom_notify i count → i {
 
 // 0 = woken, 1 = the value had already changed, 2 = timed out.
 // `timeout` is nanoseconds, negative for "no timeout".
-unsafe @ __atom_wait * InterpImpl it i ea i w i expected i timeout → i {
+unsafe @ __atom_wait inout InterpImpl it i ea i w i expected i timeout → i {
     ( __atom_lock )
     : i cur ( __mem_load it ea w 0 )
     ? != cur ( __atom_mask expected w ) { ( __atom_unlock ) ^ 1 } {}
@@ -8161,7 +8386,7 @@ unsafe @ __atom_wait * InterpImpl it i ea i w i expected i timeout → i {
     ^ 5  // rmw: 2 pops, 1 push
 }
 
-unsafe @ __exec_atomic * InterpImpl it i sub i off → v {
+@ __exec_atomic inout InterpImpl it i sub i off → v {
     ? == sub 3 { ^ v } {}  // atomic.fence — the lock is the fence
     ? == sub 0 {  // memory.atomic.notify
         : i count ( __pop it )
@@ -8229,16 +8454,16 @@ unsafe @ __exec_atomic * InterpImpl it i sub i off → v {
     ( __trap it `unsupported atomic opcode` )
 }
 
-unsafe @ __exec_fc * InterpImpl it i sub i bop → v {
+unsafe @ __exec_fc inout InterpImpl it i sub i bop → v {
     // Table and segments are the instantiating thread's (shared).
-    : *InterpImpl tho ( __host it )
+    : ~ * InterpImpl tho ( __host it )
     ? == sub 8 {  // memory.init dataidx: copy from a passive data segment
         : i didx bop
         : i n ( __u32 ( __pop it ) )
         : i src ( __u32 ( __pop it ) )
         : i dst ( __u32 ( __pop it ) )
-        : *ModuleImpl m # *ModuleImpl . it mod
-        : s dp ( __data_at m didx )
+        : ~ * ModuleImpl m # *ModuleImpl . it mod
+        : s dp ( __data_at . m 0 didx )
         : i dropped ?? ( vec_get [i] . tho data_dropped didx ) { T x → x F → 1 }
         ? | == # i dp 0 & == dropped 1 > n 0 { ( __trap it `memory.init: dropped or bad data segment` ) ^ v } {}
         : *DataSeg ds # *DataSeg dp
@@ -8279,8 +8504,8 @@ unsafe @ __exec_fc * InterpImpl it i sub i bop → v {
         : i n ( __u32 ( __pop it ) )
         : i src ( __u32 ( __pop it ) )
         : i dst ( __u32 ( __pop it ) )
-        : *ModuleImpl m # *ModuleImpl . it mod
-        : s ep ( __elem_at m eidx )
+        : ~ * ModuleImpl m # *ModuleImpl . it mod
+        : s ep ( __elem_at . m 0 eidx )
         : i dropped ?? ( vec_get [i] . tho elem_dropped eidx ) { T x → x F → 1 }
         ? | == # i ep 0 & == dropped 1 > n 0 { ( __trap it `table.init: dropped or bad element segment` ) ^ v } {}
         : *ElemSeg es # *ElemSeg ep
@@ -8316,7 +8541,7 @@ unsafe @ __exec_fc * InterpImpl it i sub i bop → v {
     ? == sub 15 {  // table.grow: [init n] → old size, or −1 past the maximum
         : i n ( __u32 ( __pop it ) )
         : i init ( __pop it )
-        : *ModuleImpl m # *ModuleImpl . it mod
+        : ~ * ModuleImpl m # *ModuleImpl . it mod
         : i old ( vec_len [i] . tho table )
         : ~ i limit 10000000
         ? > . m table_max 0 { = limit . m table_max } {}

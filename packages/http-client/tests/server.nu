@@ -93,7 +93,7 @@ $ `../../http/src/http.nu`
 
 // mode: 0 deflate, 1 corrupt gzip CRC, 2 valid expansion beyond a cap,
 // 3 zlib data incorrectly labelled gzip.
-unsafe @ h_compression i mode → HttpResponse {
+@ h_compression i mode → HttpResponse {
     : ( Vec u ) plain ( bytes_from_str `the quick brown fox jumps over the lazy dog` )
     ? == mode 2 {
         : ~ i k 0
@@ -105,9 +105,9 @@ unsafe @ h_compression i mode → HttpResponse {
     ?? result {
         T encoded → {
             ? == mode 1 {
-                : *u data ( vec_data [u] encoded )
+                // a corrupted CRC: flip a bit of the gzip trailer
                 : i crc - ( vec_len [u] encoded ) 8
-                = . data crc # u ^^ # i . data crc 1
+                ( vec_put [u] encoded crc # u ^^ # i ( vec_at [u] encoded crc ) 1 )
             } {}
             ( response_set_header r `Content-Encoding` ? == mode 0 `deflate` `gzip` )
             ( response_set_body_bytes r encoded )

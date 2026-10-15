@@ -36,7 +36,7 @@ $ `deps/gpukit/src/dev.nu`
     ~ < k * fin fout { ( vec_push [f] out * lim - * 2.0 ( rng_u01 g ) 1.0 ) = k + k 1 }
 }
 
-@ param2 GTape tp ( Vec f ) v i r i c → GVar {
+@ param2 inout GTape tp ( Vec f ) v i r i c → GVar {
     : ( Vec i ) s ( vec_new [i] )
     ( vec_push [i] s r ) ( vec_push [i] s c )
     : Tensor t ( tensor_from_data TE_F64 s v )
@@ -44,7 +44,7 @@ $ `deps/gpukit/src/dev.nu`
     ^ p
 }
 
-@ param1 GTape tp i n → GVar {
+@ param1 inout GTape tp i n → GVar {
     : ( Vec f ) v ( vec_new [f] )
     : ~ i k 0
     ~ < k n { ( vec_push [f] v 0.1 ) = k + k 1 }
@@ -56,7 +56,7 @@ $ `deps/gpukit/src/dev.nu`
 }
 
 // the AE episode plus extra unaries so every fusable op class is on the tape
-@ episode GTape tp GVar X GVar W1 GVar B1 GVar W2 GVar B2 f alpha i bsz → GVar {
+@ episode inout GTape tp GVar X GVar W1 GVar B1 GVar W2 GVar B2 f alpha i bsz → GVar {
     : GVar pre ( g_add tp ( g_matmul tp X W1 ) B1 )
     : GVar h ( g_relu tp pre )
     : GVar hs ( g_mul tp h ( g_sigmoid tp pre ) )
@@ -69,7 +69,7 @@ $ `deps/gpukit/src/dev.nu`
     ^ ( g_muls tp num / 1.0 * 2.0 # f bsz )
 }
 
-@ build_graph GTape tp ( Vec f ) xv ( Vec f ) w1v ( Vec f ) w2v i D i H i BSZ → GVar {
+@ build_graph inout GTape tp ( Vec f ) xv ( Vec f ) w1v ( Vec f ) w2v i D i H i BSZ → GVar {
     : GVar W1 ( param2 tp w1v D H )
     : GVar B1 ( param1 tp H )
     : GVar W2 ( param2 tp w2v H D )
@@ -104,13 +104,13 @@ $ `deps/gpukit/src/dev.nu`
     ( nurl_print `backend: ` ) ( nurl_print ( gk_backend kit ) ) ( nurl_print `\n` )
 
     // CPU reference tape (values live on the tape after the build)
-    : GTape tp ( tape_new )
+    : ~ GTape tp ( tape_new )
     : GVar loss ( build_graph tp xv w1v w2v D H BSZ )
 
-    : GProg pg ( gput_capture kit tp loss )
+    : ~ GProg pg ( gput_capture kit tp loss )
     ( check ( gput_ok pg ) `f64 capture succeeds` )
 
-    : GpPlan pl ( gpfuse_plan pg )
+    : ~ GpPlan pl ( gpfuse_plan pg )
     ( check ( gpfuse_plan_ok pl ) `fusion plan builds` )
     : i nseg / ( vec_len [i] ( gpfuse_plan_segs pl ) ) 2
     ( nurl_print `  segments ` ) ( nurl_println_int nseg )
@@ -313,12 +313,12 @@ $ `deps/gpukit/src/dev.nu`
     }
 
     // f32: the substituted source compiles and the loss tracks in tolerance
-    : GTape tf ( tape_new )
+    : ~ GTape tf ( tape_new )
     : GVar lossf ( build_graph tf xv w1v w2v D H BSZ )
     : f cl ( g_scalar tf lossf )
-    : GProg pf ( gput_capture_dt kit tf lossf 1 )
+    : ~ GProg pf ( gput_capture_dt kit tf lossf 1 )
     ( check ( gput_ok pf ) `f32 capture succeeds` )
-    : GpPlan plf ( gpfuse_plan pf )
+    : ~ GpPlan plf ( gpfuse_plan pf )
     ( check ( gpfuse_plan_ok plf ) `f32 fusion plan builds` )
     : b fr2 ( gpfuse_forward pf plf )
     ( check fr2 `f32 fused forward runs` )
@@ -333,15 +333,15 @@ $ `deps/gpukit/src/dev.nu`
     ( check < rel 0.001 `f32 fused loss tracks the f64 tape (<1e-3)` )
 
     // ── turnkey session: same three-call loop, bit-equal to per-node ──
-    : GTape ts ( tape_new )
+    : ~ GTape ts ( tape_new )
     : GVar losss ( build_graph ts xv w1v w2v D H BSZ )
-    : GProg ps ( gput_capture kit ts losss )
-    : GpOpt gos ( gpopt_adam_new 0.01 )
+    : ~ GProg ps ( gput_capture kit ts losss )
+    : ~ GpOpt gos ( gpopt_adam_new 0.01 )
     // register the two weight matrices (ids 0 and 4 on this graph)
     : GVar sW1 @ GVar { 0 }
     : GVar sW2 @ GVar { 4 }
     ( gpopt_add gos ps sW1 0.0 ) ( gpopt_add gos ps sW2 0.0 )
-    : GpFuse sess ( gpfuse_open ps gos )
+    : ~ GpFuse sess ( gpfuse_open ps gos )
     : b iscuda ? == 1 ( nurl_str_eq ( gk_backend kit ) `cuda` ) T F
     ( check == ( gpfuse_active sess ) iscuda `session active exactly on the cuda backend` )
     : ~ b se T

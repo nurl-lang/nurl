@@ -22,37 +22,36 @@ $ `src/preproc.nu`
 
 : i STRIDE 9973
 
-unsafe @ imnet_norm * f p i h i w → v {
-    : ( Vec u ) mean__v ( vec_zeroed [u] 24 )
-    : *f mean # *f ( vec_data [u] mean__v )
-    : ( Vec u ) std__v ( vec_zeroed [u] 24 )
-    : *f std # *f ( vec_data [u] std__v )
-    = . mean 0 0.485 = . mean 1 0.456 = . mean 2 0.406
-    = . std 0 0.229 = . std 1 0.224 = . std 2 0.225
+@ imnet_norm ( Slice f ) p i h i w → v {
+    : ( Vec f ) mean__v ( vec_zeroed [f] 3 )
+    : ( Slice f ) mean ( slice_from_vec [f] mean__v )
+    : ( Vec f ) std__v ( vec_zeroed [f] 3 )
+    : ( Slice f ) std ( slice_from_vec [f] std__v )
+    ( slice_put [f] mean 0 0.485 ) ( slice_put [f] mean 1 0.456 ) ( slice_put [f] mean 2 0.406 )
+    ( slice_put [f] std 0 0.229 ) ( slice_put [f] std 1 0.224 ) ( slice_put [f] std 2 0.225 )
     : ~ i c 0
     ~ < c 3 {
         : ~ i j 0
         ~ < j * h w {
             : i o + * c * h w j
-            = . p o / - . p o . mean c . std c
+            ( slice_put [f] p o / - ( slice_at [f] p o ) ( slice_at [f] mean c ) ( slice_at [f] std c ) )
             = j + j 1
         }
         = c + c 1
     }
 }
 
-unsafe @ dump s label GkBuf b GpuKit kit i h i w s tail → v {
-    : ( Vec f ) hv ( vec_with_cap [f] * h w )
-    : b _sl ( vec_set_len [f] hv * h w )
+@ dump s label GkBuf b GpuKit kit i h i w s tail → v {
+    : ( Vec f ) hv ( vec_zeroed [f] * h w )
     ? ( gk_dbuf_download kit b hv ) {} { ( nurl_print `download FAILED\n` ) ^ v }
     ( nurl_print label )
     ( nurl_print ` 1x1x` ) ( nurl_print ( nurl_str_int h ) )
     ( nurl_print `x` ) ( nurl_print ( nurl_str_int w ) )
     ( nurl_print tail ) ( nurl_print ` |` )
-    : *f p ( vec_data [f] hv )
+    : ( Slice f ) p ( slice_from_vec [f] hv )
     : ~ i j 0
     ~ < j * h w {
-        ( nurl_print ` ` ) ( nurl_print ( nurl_str_float . p j ) )
+        ( nurl_print ` ` ) ( nurl_print ( nurl_str_float ( slice_at [f] p j ) ) )
         = j + j STRIDE
     }
     ( nurl_print `\n` )
@@ -60,24 +59,22 @@ unsafe @ dump s label GkBuf b GpuKit kit i h i w s tail → v {
 
 // world_points, in the reference's own layout: H x W x 3, unprojected
 // at INTEGER pixel coordinates the way np.arange builds the grid.
-unsafe @ wdump GpuKit kit GkBuf pose GkBuf depth i h i w → v {
-    : ( Vec f ) pv ( vec_with_cap [f] 9 )
-    : b _pl ( vec_set_len [f] pv 9 )
-    : ( Vec f ) dv ( vec_with_cap [f] * h w )
-    : b _dl ( vec_set_len [f] dv * h w )
+@ wdump GpuKit kit GkBuf pose GkBuf depth i h i w → v {
+    : ( Vec f ) pv ( vec_zeroed [f] 9 )
+    : ( Vec f ) dv ( vec_zeroed [f] * h w )
     ? & ( gk_dbuf_download kit pose pv ) ( gk_dbuf_download kit depth dv ) {} {
         ( nurl_print `download FAILED\n` ) ^ v
     }
-    : *f pe ( vec_data [f] pv )
-    : *f dep ( vec_data [f] dv )
-    : ( Vec u ) kk__v ( vec_zeroed [u] 128 )
-    : *f kk # *f ( vec_data [u] kk__v )
-    : ( Vec u ) ki__v ( vec_zeroed [u] 128 )
-    : *f ki # *f ( vec_data [u] ki__v )
-    : ( Vec u ) c2w__v ( vec_zeroed [u] 128 )
-    : *f c2w # *f ( vec_data [u] c2w__v )
-    : ( Vec u ) wp__v ( vec_zeroed [u] 24 )
-    : *f wp # *f ( vec_data [u] wp__v )
+    : ( Slice f ) pe ( slice_from_vec [f] pv )
+    : ( Slice f ) dep ( slice_from_vec [f] dv )
+    : ( Vec f ) kk__v ( vec_zeroed [f] 16 )
+    : ( Slice f ) kk ( slice_from_vec [f] kk__v )
+    : ( Vec f ) ki__v ( vec_zeroed [f] 16 )
+    : ( Slice f ) ki ( slice_from_vec [f] ki__v )
+    : ( Vec f ) c2w__v ( vec_zeroed [f] 16 )
+    : ( Slice f ) c2w ( slice_from_vec [f] c2w__v )
+    : ( Vec f ) wp__v ( vec_zeroed [f] 3 )
+    : ( Slice f ) wp ( slice_from_vec [f] wp__v )
     ( pose_enc_to_intri pe h w kk )
     ( intri_inverse kk ki )
     ( pose_enc_to_c2w pe c2w )
@@ -87,14 +84,14 @@ unsafe @ wdump GpuKit kit GkBuf pose GkBuf depth i h i w → v {
     : ~ i j 0
     ~ < j * 3 * h w {
         : i px / j 3
-        ( unproject # f % px w # f / px w . dep px ki c2w wp )
-        ( nurl_print ` ` ) ( nurl_print ( nurl_str_float . wp % j 3 ) )
+        ( unproject # f % px w # f / px w ( slice_at [f] dep px ) ki c2w wp )
+        ( nurl_print ` ` ) ( nurl_print ( nurl_str_float ( slice_at [f] wp % j 3 ) ) )
         = j + j STRIDE
     }
     ( nurl_print `\n` )
 }
 
-unsafe @ main → i {
+@ main → i {
     ? < ( nurl_argc ) 3 { ( nurl_print `usage: depthcheck <ckpt.pt> <frame>\n` ) ^ 2 } {}
     : GpuKit kit ( gk_open_best )
     ? ( gk_ok kit ) {} { ( nurl_print `no gpukit backend\n` ) ^ 1 }
@@ -114,7 +111,7 @@ unsafe @ main → i {
                     : Agg a ( ag_load lw kit )
                     : Dpt dp ( dp_load lw kit )
                     : CamHead chd ( ch_load lw kit )
-                    ? ( lw_ok lw ) {} { ( nurl_print ( lw_error lw ) ) ( nurl_print `\n` ) ^ 1 }
+                    ? ( lw_ok lw ) {} { ( nurl_print ( string_data ( lw_error lw ) ) ) ( nurl_print `\n` ) ^ 1 }
                     : i p ( ag_ntokens gh gw )
                     : i dn ( dn_tokens gh gw )
                     : i big ? > p dn p dn
@@ -122,8 +119,8 @@ unsafe @ main → i {
                     : GkBuf dtok ( gk_dbuf_new kit * dn 1024 GK_F32 )
                     : GkBuf tok ( gk_dbuf_new kit * p 1024 GK_F32 )
                     : GkBuf out ( gk_dbuf_new kit * 4 * p 2048 GK_F32 )
-                    : ( Vec u ) taps__v ( vec_zeroed [u] 32 )
-                    : *i taps # *i ( vec_data [u] taps__v )
+                    : ( Vec i ) taps__v ( vec_zeroed [i] 4 )
+                    : ( Slice i ) taps ( slice_from_vec [i] taps__v )
                     ( ag_default_taps taps )
                     ? ( ag_forward_one kit a ws dtok tok ( pp_data f ) h w gh gw 0 1 AG_KV_SCALE AG_KV_WINDOW -1 taps out ) {}
                     { ( nurl_print `aggregator FAILED\n` ) ^ 1 }

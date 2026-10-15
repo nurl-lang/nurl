@@ -228,7 +228,8 @@ unsafe @ test_batch → v {
 // "device memory" is host RAM, which nothing here can see exactly.
 : Held { GpuBuffer buf GpuKernel k GpuTimer t }
 
-@ __rel_round Gpu g i mb → i {
+// unsafe: compiles one fixed no-op kernel.
+unsafe @ __rel_round Gpu g i mb → i {
     : GpuBuffer a ( gpu_alloc g * mb 1048576 )
     : ( Vec GpuBuffer ) keep ( vec_new [GpuBuffer] )
     ( vec_push [GpuBuffer] keep ( gpu_alloc g * mb 1048576 ) )

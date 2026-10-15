@@ -75,7 +75,7 @@ unsafe @ __vec_box ( Vec u ) v → i {
     b ready
 }
 
-@ __cfg_u8 i base i off → i {
+unsafe @ __cfg_u8 i base i off → i {
     // Config space is byte-addressable; a 32-bit read at the aligned
     // word and a shift is what a device that only answers word reads
     // needs, and works either way.
@@ -158,7 +158,7 @@ unsafe @ __vnet_bring_up i base i qsize → *VirtioNet {
     ^ nic
 }
 
-@ __queue_live i base i qidx Virtq q i qs → b {
+unsafe @ __queue_live i base i qidx Virtq q i qs → b {
     ^ ( virtio_queue_setup base qidx qs
     ( __vq_phys q ( vq_desc_off ) )
     ( __vq_phys q ( vq_avail_off qs ) )

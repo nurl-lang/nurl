@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.6.1] — 2026-10-15
+
+### Added
+
+- `gguf_empty`: a container with no metadata, tensors or bytes, for an
+  engine record built before its model file is opened.
+
+## [0.6.0] — 2026-10-14
+
+Requires the NURL with `stdlib/std/mmap.nu`, the little-endian slice words
+and the borrow rule for views of plain numbers handed to a safe function.
+
+### Changed
+
+- No function is `unsafe` any more (73 were). A `Gguf` holds the file as
+  a `MappedFile`, the parser's cursor reads a checked view of it, and
+  `gguf_tensor_bytes` lends a tensor's bytes as a `Slice u` held to the
+  `Gguf`; `gguf_tensor_ptr` is `raw`.
+- The dequantiser reads each block through a window of the block's own
+  size and writes it through a window of its output, so every index
+  inside is provably in range: one check per block. It is 2–4× faster
+  than the pointer loops it replaces (1M elements: Q4_K 7.2 → 1.7 ms,
+  Q6_K 11.9 → 3.3 ms, Q8_0 8.8 → 2.2 ms, F16 11.0 → 5.1 ms), with the
+  same bytes out.
+- `GgufW` and `GgufS` are `Rc` handles (every call changes them in place,
+  which their `Arc` let two threads do at once); each call checks the
+  state out and back in.
+
 ## [0.5.0] — 2026-10-11
 
 Requires NURL 0.73.0, which allows `mem_forget`, `mem_take` and the

@@ -26,7 +26,9 @@
 //   ( gguf_kv_f_or g key def )        → f   f32/f64-typed KV
 //   ( gguf_kv_str_or g key def )      → s   BORROWED from g
 //   ( gguf_find_tensor g name )       → i   index, -1 when absent
-//   ( gguf_tensor_ptr g t )           → *u  BORROWED tensor bytes
+//   ( gguf_tensor_bytes g t )         → ( Slice u )  a tensor's bytes, a
+//                                       view held to `g`
+//   ( gguf_tensor_ptr g t )           → *u  raw: their address
 //   ( gguf_type_name t ) ( gguf_type_blck t ) ( gguf_type_size t )
 //
 // Layout invariants enforced at parse time: magic, version ∈ {2,3},
@@ -46,6 +48,8 @@ $ `stdlib/std/bytes.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/std/floatbits.nu`
 $ `stdlib/std/arc.nu`
+$ `stdlib/std/mmap.nu`
+$ `stdlib/core/slice.nu`
 
 // ── GGUF metadata value types (spec) ────────────────────────────────
 : i GGUF_VT_U8 0
@@ -173,36 +177,30 @@ $ `stdlib/std/arc.nu`
     ( Vec GgufTensor ) tensors
     i data_off
     i data_size
-    * u map
-    i map_size
-    b from_mmap
-    ( Vec u ) buf  // the bytes `map` points into, when they are not a mapping
+    MappedFile file  // the bytes: a mapping, or a buffer read whole
 }
 
-// The mapping is the raw resource: its last owner unmaps it, as gguf_close
-// did. The tables and the buffer go with the drop glue.
-% Drop GgufImpl {
-    unsafe @ drop GgufImpl g → v {
-        ? . g from_mmap { : i32 _u ( munmap . g map . g map_size ) } {}
-    }
-}
-
-// A Gguf is a handle on its state in an Arc (stdlib/std/arc.nu):
-// every copy is the same open file, and the last owner releases it.
+// A Gguf is a handle on its state in an Arc (stdlib/std/arc.nu), frozen
+// once parsed: every copy is the same open file, and the last owner lets
+// go of the mapping.
 : Gguf { ( Arc GgufImpl ) a }
 
 @ Gguf_share Gguf h → Gguf { ^ @ Gguf { ( arc_clone [GgufImpl] . h a ) } }
 
 @ Gguf_drop sink Gguf h → v {}
 
-unsafe @ __Gguf_ptr Gguf h → *GgufImpl { ^ ( arc_ptr [GgufImpl] . h a ) }
+// A container with nothing in it: no metadata, no tensors, no bytes. What
+// an engine record holds before its model file is opened.
+@ gguf_empty → Gguf {
+    ^ @ Gguf { ( arc_new [GgufImpl] @ GgufImpl { 0 0 ( vec_new [GgufKv] ) ( vec_new [GgufTensor] ) 0 0 ( mapped_of_bytes ( vec_new [u] ) ) } ) }
+}
 
-// ── bounded little-endian cursor over the raw mapping ───────────────
+// ── bounded little-endian cursor over the mapping ───────────────────
 // Every read checks the remaining byte budget first; the first
 // out-of-bounds read latches `fail` and all subsequent reads return
 // zero values, so a parse can run to a checkpoint and test `fail` once.
 : GCur {
-    * u p
+    ( Slice u ) p
     i n
     i off
     b fail
@@ -212,34 +210,31 @@ unsafe @ __Gguf_ptr Gguf h → *GgufImpl { ^ ( arc_ptr [GgufImpl] . h a ) }
 
 // Overflow-safe budget check: compares k against (n - off), never
 // forms off + k (a huge attacker-chosen k must not wrap negative).
-unsafe @ __gc_need inout GCur c i k → b {
+@ __gc_need inout GCur c i k → b {
     ? . c fail { ^ F } {}
     ? | < k 0 > k - . c n . c off { = . c fail T ^ F } {}
     ^ T
 }
 
-unsafe @ __gc_u8 inout GCur c → i {
+@ __gc_u8 inout GCur c → i {
     ? ( __gc_need c 1 ) {} { ^ 0 }
-    : *u P . c p
-    : i v # i . P . c off
+    : i v # i ( slice_at [u] . c p . c off )
     = . c off + . c off 1
     ^ v
 }
 
-unsafe @ __gc_u16 inout GCur c → i {
+@ __gc_u16 inout GCur c → i {
     ? ( __gc_need c 2 ) {} { ^ 0 }
-    : *u P . c p
     : i o . c off
     = . c off + o 2
-    ^ | # i . P o << # i . P + o 1 8
+    ^ ( slice_u16_le . c p o )
 }
 
-unsafe @ __gc_u32 inout GCur c → i {
+@ __gc_u32 inout GCur c → i {
     ? ( __gc_need c 4 ) {} { ^ 0 }
-    : *u P . c p
     : i o . c off
     = . c off + o 4
-    ^ | # i . P o | << # i . P + o 1 8 | << # i . P + o 2 16 << # i . P + o 3 24
+    ^ ( slice_u32_le . c p o )
 }
 
 // Reads 8 bytes as i64 (two's-complement bit pattern). GGUF stores
@@ -256,21 +251,21 @@ unsafe @ __gc_u32 inout GCur c → i {
 // remaining file bytes anyway). `forbid_nul` rejects embedded NULs —
 // required for keys and tensor names which flow into C-string
 // comparisons; value strings keep arbitrary bytes.
-unsafe @ __gc_str inout GCur c i maxlen b forbid_nul → String {
+@ __gc_str inout GCur c i maxlen b forbid_nul → String {
     : i len ( __gc_u64 c )
     ? . c fail { ^ ( string_new ) } {}
     ? | < len 0 > len maxlen { = . c fail T ^ ( string_new ) } {}
     ? ( __gc_need c len ) {} { ^ ( string_new ) }
-    : *u P . c p
+    : ( Slice u ) w ( slice_window [u] . c p . c off len )
     ? forbid_nul {
         : ~ i j 0
         ~ < j len {
-            ? == # i . P + . c off j 0 { = . c fail T = j len } { = j + j 1 }
+            ? == ( slice_at [u] w j ) 0 { = . c fail T = j len } { = j + j 1 }
         }
     } {}
     ? . c fail { ^ ( string_new ) } {}
-    : *u src # *u + # i . c p . c off
-    : String out ( string_from_bytes src len )
+    : String out ( string_new )
+    ( string_push_window out w 0 len )
     = . c off + . c off len
     ^ out
 }
@@ -287,7 +282,7 @@ unsafe @ __gc_str inout GCur c i maxlen b forbid_nul → String {
     ^ 0
 }
 
-unsafe @ __g_read_int inout GCur c i vt → i {
+@ __g_read_int inout GCur c i vt → i {
     ? == vt 0 { ^ ( __gc_u8 c ) } {}
     ? == vt 1 {
         : i x ( __gc_u8 c )
@@ -312,7 +307,7 @@ unsafe @ __g_read_int inout GCur c i vt → i {
     ^ 0
 }
 
-unsafe @ __g_read_f inout GCur c i vt → f {
+@ __g_read_f inout GCur c i vt → f {
     ? == vt 6 {
         : i bits ( __gc_u32 c )
         ^ # f ( bits_to_f32 bits )
@@ -330,7 +325,7 @@ unsafe @ __g_read_f inout GCur c i vt → f {
 // Both always return a fully-initialised value (owned fields present
 // even on failure) so error paths free exactly one shape.
 
-unsafe @ __g_parse_kv inout GCur c → GgufKv {
+@ __g_parse_kv inout GCur c → GgufKv {
     : String key ( __gc_str c 65536 T )
     : i vt ( __gc_u32 c )
     : ~ i ival 0
@@ -388,7 +383,7 @@ unsafe @ __g_parse_kv inout GCur c → GgufKv {
 
 // Per-dimension cap 2^48 and running-product cap 2^48 keep
 // nelems * max-block-bytes (292) far away from i64 overflow.
-unsafe @ __g_parse_tensor inout GCur c → GgufTensor {
+@ __g_parse_tensor inout GCur c → GgufTensor {
     : String name ( __gc_str c 4096 T )
     : i nd ( __gc_u32 c )
     : ~ i d0 1
@@ -438,11 +433,11 @@ unsafe @ __g_parse_tensor inout GCur c → GgufTensor {
 }
 
 // ── the parser ──────────────────────────────────────────────────────
-// Parses the metadata + tensor table of [p, p+n). `keep` is what p points
-// into when that is not a mapping (the Gguf holds it for as long as the
-// tensors are read); gguf_open hands in an empty Vec for a mapping, which
-// it owns until this succeeds.
-unsafe @ __gguf_parse * u p i n sink ( Vec u ) keep → !Gguf String {
+// Parses the metadata + tensor table of the bytes `file` holds; the Gguf
+// keeps it for as long as the tensors are read.
+@ __gguf_parse sink MappedFile file → !Gguf String {
+    : ( Slice u ) p ( mapped_bytes file )
+    : i n ( slice_len [u] p )
     ? < n 24 { ^ ( __g_errs `gguf: file too small to be GGUF (< 24 bytes)` ) } {}
     : ~ GCur c @ GCur { p n 0 F }
     : i m0 ( __gc_u8 c )
@@ -627,61 +622,30 @@ unsafe @ __gguf_parse * u p i n sink ( Vec u ) keep → !Gguf String {
         ^ @ !Gguf String { F m }
     } {}
 
-    : Gguf h @ Gguf { ( arc_new [GgufImpl] @ GgufImpl { ver align kvs ts doff dsize p n F keep } ) }
+    : Gguf h @ Gguf { ( arc_new [GgufImpl] @ GgufImpl { ver align kvs ts doff dsize file } ) }
     ^ @ !Gguf String { T h }
 }
 
 // ── open / close ────────────────────────────────────────────────────
 
-// mmap-backed open (POSIX). Platforms without MAP_PRIVATE (wasm,
-// win32) fall back to reading the whole file into an owned buffer —
-// correct everywhere, mmap-lazy where it matters.
-unsafe @ gguf_open s path → !Gguf String {
-    ? != ( posix_const `MAP_PRIVATE` ) -1 {
-        : i32 fd ( open path # i32 ( posix_const `O_RDONLY` ) # i32 0 )
-        ? < # i fd 0 {
-            : String m ( string_from `gguf: cannot open ` )
-            ( string_push_str m path )
-            ^ @ !Gguf String { F m }
-        } {}
-        : i sz ( lseek fd 0 # i32 2 )
-        ? < sz 24 {
-            : i _c ( close # i fd )
-            ^ ( __g_errs `gguf: file too small to be GGUF (< 24 bytes)` )
-        } {}
-        : *u m ( mmap # *u 0 sz # i32 ( posix_const `PROT_READ` ) # i32 ( posix_const `MAP_PRIVATE` ) fd 0 )
-        : i _c ( close # i fd )
-        ? == # i m -1 { ^ ( __g_errs `gguf: mmap failed` ) } {}
-        : !Gguf String r ( __gguf_parse m sz ( vec_new [u] ) )
-        ?? r {
-            T gh → {
-                // from here on the Gguf owns the mapping
-                : *GgufImpl g ( __Gguf_ptr gh )
-                = . g from_mmap T
-                ^ @ !Gguf String { T gh }
-            }
-            F e → {
-                : i32 _u ( munmap m sz )
-                ^ @ !Gguf String { F e }
-            }
-        }
-    } {
-        // no mmap: the Gguf keeps the file's bytes its tensors point into
-        ?? ( read_file_bytes path ) {
-            T data → { ^ ( __gguf_parse ( vec_data [u] data ) ( vec_len [u] data ) data ) }
-            F _ → {
-                : String m ( string_from `gguf: cannot read ` )
-                ( string_push_str m path )
-                ^ @ !Gguf String { F m }
-            }
+// mmap-backed open where the platform maps files (POSIX); elsewhere (wasm,
+// win32) the whole file is read into a buffer the Gguf owns — correct
+// everywhere, mmap-lazy where it matters.
+@ gguf_open s path → !Gguf String {
+    ?? ( file_map path ) {
+        T m → { ^ ( __gguf_parse m ) }
+        F _ → {
+            : String msg ( string_from `gguf: cannot open ` )
+            ( string_push_str msg path )
+            ^ @ !Gguf String { F msg }
         }
     }
 }
 
-// Parse an in-memory GGUF image. The Gguf keeps `data` (its tensors point
-// into it).
-unsafe @ gguf_parse_bytes sink ( Vec u ) data → !Gguf String {
-    ^ ( __gguf_parse ( vec_data [u] data ) ( vec_len [u] data ) data )
+// Parse an in-memory GGUF image. The Gguf keeps `data` (its tensors are
+// read out of it).
+@ gguf_parse_bytes sink ( Vec u ) data → !Gguf String {
+    ^ ( __gguf_parse ( mapped_of_bytes data ) )
 }
 
 // Let go of `g` now rather than at the end of its owner's scope; the last
@@ -690,44 +654,44 @@ unsafe @ gguf_parse_bytes sink ( Vec u ) data → !Gguf String {
 
 // ── accessors ───────────────────────────────────────────────────────
 
-unsafe @ gguf_version Gguf g__h → i {
-    : *GgufImpl g ( __Gguf_ptr g__h )
+@ gguf_version Gguf g__h → i {
+    : GgufImpl g ( arc_get [GgufImpl] . g__h a )
     ^ . g version
 }
 
-unsafe @ gguf_align Gguf g__h → i {
-    : *GgufImpl g ( __Gguf_ptr g__h )
+@ gguf_align Gguf g__h → i {
+    : GgufImpl g ( arc_get [GgufImpl] . g__h a )
     ^ . g align
 }
 
-unsafe @ gguf_n_kv Gguf g__h → i {
-    : *GgufImpl g ( __Gguf_ptr g__h )
+@ gguf_n_kv Gguf g__h → i {
+    : GgufImpl g ( arc_get [GgufImpl] . g__h a )
     ^ ( vec_len [GgufKv] . g kvs )
 }
 
 // The metadata and tensor tables (borrowed: valid while the Gguf is).
-unsafe @ gguf_kvs Gguf g__h → ( Vec GgufKv ) {
-    : *GgufImpl g ( __Gguf_ptr g__h )
+@ gguf_kvs Gguf g__h → ( Vec GgufKv ) {
+    : GgufImpl g ( arc_get [GgufImpl] . g__h a )
     ^ . g kvs
 }
 
-unsafe @ gguf_tensors Gguf g__h → ( Vec GgufTensor ) {
-    : *GgufImpl g ( __Gguf_ptr g__h )
+@ gguf_tensors Gguf g__h → ( Vec GgufTensor ) {
+    : GgufImpl g ( arc_get [GgufImpl] . g__h a )
     ^ . g tensors
 }
 
-unsafe @ gguf_n_tensors Gguf g__h → i {
-    : *GgufImpl g ( __Gguf_ptr g__h )
+@ gguf_n_tensors Gguf g__h → i {
+    : GgufImpl g ( arc_get [GgufImpl] . g__h a )
     ^ ( vec_len [GgufTensor] . g tensors )
 }
 
-unsafe @ gguf_data_size Gguf g__h → i {
-    : *GgufImpl g ( __Gguf_ptr g__h )
+@ gguf_data_size Gguf g__h → i {
+    : GgufImpl g ( arc_get [GgufImpl] . g__h a )
     ^ . g data_size
 }
 
-unsafe @ gguf_find_kv Gguf g__h s key → i {
-    : *GgufImpl g ( __Gguf_ptr g__h )
+@ gguf_find_kv Gguf g__h s key → i {
+    : GgufImpl g ( arc_get [GgufImpl] . g__h a )
     : ~ i k 0
     : ~ i found -1
     ~ < k ( vec_len [GgufKv] . g kvs ) {
@@ -741,8 +705,8 @@ unsafe @ gguf_find_kv Gguf g__h s key → i {
     ^ found
 }
 
-unsafe @ gguf_kv_int_or Gguf g__h s key i def → i {
-    : *GgufImpl g ( __Gguf_ptr g__h )
+@ gguf_kv_int_or Gguf g__h s key i def → i {
+    : GgufImpl g ( arc_get [GgufImpl] . g__h a )
     : i idx ( gguf_find_kv g__h key )
     ? < idx 0 { ^ def } {}
     ?? ( vec_get [GgufKv] . g kvs idx ) {
@@ -751,8 +715,8 @@ unsafe @ gguf_kv_int_or Gguf g__h s key i def → i {
     }
 }
 
-unsafe @ gguf_kv_f_or Gguf g__h s key f def → f {
-    : *GgufImpl g ( __Gguf_ptr g__h )
+@ gguf_kv_f_or Gguf g__h s key f def → f {
+    : GgufImpl g ( arc_get [GgufImpl] . g__h a )
     : i idx ( gguf_find_kv g__h key )
     ? < idx 0 { ^ def } {}
     ?? ( vec_get [GgufKv] . g kvs idx ) {
@@ -763,8 +727,8 @@ unsafe @ gguf_kv_f_or Gguf g__h s key f def → f {
 
 // BORROWED: the returned s points into g (or is `def`); valid while
 // the Gguf is. Do not free.
-unsafe @ gguf_kv_str_or Gguf g__h s key s def → s {
-    : *GgufImpl g ( __Gguf_ptr g__h )
+@ gguf_kv_str_or Gguf g__h s key s def → s {
+    : GgufImpl g ( arc_get [GgufImpl] . g__h a )
     : i idx ( gguf_find_kv g__h key )
     ? < idx 0 { ^ def } {}
     ?? ( vec_get [GgufKv] . g kvs idx ) {
@@ -773,8 +737,8 @@ unsafe @ gguf_kv_str_or Gguf g__h s key s def → s {
     }
 }
 
-unsafe @ gguf_find_tensor Gguf g__h s name → i {
-    : *GgufImpl g ( __Gguf_ptr g__h )
+@ gguf_find_tensor Gguf g__h s name → i {
+    : GgufImpl g ( arc_get [GgufImpl] . g__h a )
     : ~ i k 0
     : ~ i found -1
     ~ < k ( vec_len [GgufTensor] . g tensors ) {
@@ -788,9 +752,18 @@ unsafe @ gguf_find_tensor Gguf g__h s name → i {
     ^ found
 }
 
-// BORROWED pointer to a tensor's first byte inside the mapping; valid
-// while the Gguf is. Length is t.nbytes (when ≥ 0).
-unsafe @ gguf_tensor_ptr Gguf g__h GgufTensor t → *u {
-    : *GgufImpl g ( __Gguf_ptr g__h )
-    ^ # *u + + # i . g map . g data_off . t offset
+// A tensor's bytes inside the mapping — t.nbytes of them, or everything
+// to the end of the data section when its type cannot be sized — as a
+// checked view that lives no longer than `g__h`.
+@ gguf_tensor_bytes Gguf g__h GgufTensor t → ( Slice u ) {
+    : GgufImpl g ( arc_get [GgufImpl] . g__h a )
+    : i rel . t offset
+    : i n ? >= . t nbytes 0 . t nbytes - . g data_size rel
+    ^ ( slice_window [u] ( mapped_bytes . g file ) + . g data_off rel n )
+}
+
+// Their address, for a device upload. raw: the caller keeps `g__h` alive
+// while it is used; the length is t.nbytes (when ≥ 0).
+raw @ gguf_tensor_ptr Gguf g__h GgufTensor t → *u {
+    ^ ( slice_data [u] ( gguf_tensor_bytes g__h t ) )
 }

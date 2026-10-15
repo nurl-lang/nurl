@@ -79,6 +79,8 @@ $ `stdlib/std/async_ffi.nu`
 
 & `c` @ nurl_monotonic_ns → i
 
+& `c` @ nurl_realtime_ns → i
+
 // Does this runtime multiplex EVERYTHING onto the calling thread? 1 on
 // the freestanding runtime, where "threads" are coroutines on one vCPU;
 // 0 wherever the operating system schedules for us. It is the only
@@ -87,17 +89,11 @@ $ `stdlib/std/async_ffi.nu`
 & `c` @ nurl_runtime_is_cooperative → i
 
 @ now_ms → i {
-    : ~ Timespec ts @ Timespec { 0 0 }
-    : i32 rc ( clock_gettime # i32 ( posix_const `CLOCK_REALTIME` ) ts )
-    ? != rc 0 { ^ 0 } {}
-    ^ + * . ts sec 1000 / . ts nsec 1000000
+    ^ / ( nurl_realtime_ns ) 1000000
 }
 
 @ now_seconds → i {
-    : ~ Timespec ts @ Timespec { 0 0 }
-    : i32 rc ( clock_gettime # i32 ( posix_const `CLOCK_REALTIME` ) ts )
-    ? != rc 0 { ^ 0 } {}
-    ^ . ts sec
+    ^ / ( nurl_realtime_ns ) 1000000000
 }
 
 // CLOCK_MONOTONIC in nanoseconds. Answered by the runtime directly, in

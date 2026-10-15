@@ -33,13 +33,13 @@ unsafe @ __ic_read s dir s name i want → ( Vec f ) {
         T raw → {
             ? == ( vec_len [u] raw ) * want 4 {
                 : b _l ( vec_set_len [f] out want )
-                : *u rp ( vec_data [u] raw )
-                : *f op ( vec_data [f] out )
+                : ( Slice u ) rp ( slice_from_vec [u] raw )
+                : ( Slice f ) op ( slice_from_vec [f] out )
                 : ~ i j 0
                 ~ < j want {
                     : i o * j 4
-                    : i bits | # i . rp o | << # i . rp + o 1 8 | << # i . rp + o 2 16 << # i . rp + o 3 24
-                    = . op j # f ( bits_to_f32 bits )
+                    : i bits | # i ( slice_at [u] rp o ) | << # i ( slice_at [u] rp + o 1 ) 8 | << # i ( slice_at [u] rp + o 2 ) 16 << # i ( slice_at [u] rp + o 3 ) 24
+                    ( slice_put [f] op j # f ( bits_to_f32 bits ) )
                     = j + j 1
                 }
             } {}
@@ -49,21 +49,19 @@ unsafe @ __ic_read s dir s name i want → ( Vec f ) {
 }
 
 unsafe @ __ic_dump GpuKit kit s dir s name GkBuf b i n → b {
-    : ( Vec f ) host ( vec_with_cap [f] n )
-    : b _hl ( vec_set_len [f] host n )
+    : ( Vec f ) host ( vec_zeroed [f] n )
     ? ( gk_dbuf_download kit b host ) {} { ^ F }
-    : ( Vec u ) out ( vec_with_cap [u] * n 4 )
-    : b _ol ( vec_set_len [u] out * n 4 )
-    : *u op ( vec_data [u] out )
-    : *f hp ( vec_data [f] host )
+    : ( Vec u ) out ( vec_zeroed [u] * n 4 )
+    : ( Slice u ) op ( slice_from_vec [u] out )
+    : ( Slice f ) hp ( slice_from_vec [f] host )
     : ~ i j 0
     ~ < j n {
-        : i bits # i ( f32_to_bits # f32 . hp j )
+        : i bits # i ( f32_to_bits # f32 ( slice_at [f] hp j ) )
         : i o * j 4
-        = . op o # u & bits 255
-        = . op + o 1 # u & >> bits 8 255
-        = . op + o 2 # u & >> bits 16 255
-        = . op + o 3 # u & >> bits 24 255
+        ( slice_put [u] op o # u & bits 255 )
+        ( slice_put [u] op + o 1 # u & >> bits 8 255 )
+        ( slice_put [u] op + o 2 # u & >> bits 16 255 )
+        ( slice_put [u] op + o 3 # u & >> bits 24 255 )
         = j + j 1
     }
     : String p ( string_from dir )
@@ -103,32 +101,31 @@ unsafe @ main → i {
     : GpuKit kit ( gk_open_best )
     ? ( gk_ok kit ) {} { ^ ( __ic_die `no compute device` ) }
     : InfoShare ish ( is_load lw kit )
-    ? ( lw_ok lw ) {} { ^ ( __ic_die ( lw_error lw ) ) }
+    ? ( lw_ok lw ) {} { ^ ( __ic_die ( string_data ( lw_error lw ) ) ) }
 
     // Assemble the UN-normed sequence on the host: per view patches
     // then cls, scale row left zero for is_finish_input to fill.
-    : ( Vec f ) hx ( vec_with_cap [f] * n IS_DIM )
-    : b _hl ( vec_set_len [f] hx * n IS_DIM )
-    : *f xp ( vec_data [f] hx )
-    : *f fp ( vec_data [f] feats )
-    : *f rp ( vec_data [f] regs )
+    : ( Vec f ) hx ( vec_zeroed [f] * n IS_DIM )
+    : ( Slice f ) xp ( slice_from_vec [f] hx )
+    : ( Slice f ) fp ( slice_from_vec [f] feats )
+    : ( Slice f ) rp ( slice_from_vec [f] regs )
     : ~ i v 0
     ~ < v nv {
         : i vbase * * v tpv IS_DIM
         : ~ i j 0
         ~ < j * np IS_DIM {
-            = . xp + vbase j . fp + * * v np IS_DIM j
+            ( slice_put [f] xp + vbase j ( slice_at [f] fp + * * v np IS_DIM j ) )
             = j + j 1
         }
         = j 0
         ~ < j IS_DIM {
-            = . xp + + vbase * np IS_DIM j . rp + * v IS_DIM j
+            ( slice_put [f] xp + + vbase * np IS_DIM j ( slice_at [f] rp + * v IS_DIM j ) )
             = j + j 1
         }
         = v + v 1
     }
     : ~ i z * * nv tpv IS_DIM
-    ~ < z * n IS_DIM { = . xp z 0.0 = z + z 1 }
+    ~ < z * n IS_DIM { ( slice_put [f] xp z 0.0 ) = z + z 1 }
 
     : GkBuf x ( gk_dbuf_new kit * n IS_DIM GK_F32 )
     ? ( gk_dbuf_upload kit x hx ) {} { ^ ( __ic_die `upload failed` ) }

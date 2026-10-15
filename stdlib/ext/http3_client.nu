@@ -228,6 +228,10 @@ $ `stdlib/core/mem.nu`
     ^ @ H3Client { h__box }
 }
 
+// Is there a connection at all? F for the null handle h3_client_connect
+// answers when the name did not resolve or no socket could be bound.
+@ h3_client_ok H3Client h → b { ^ != 0 ( shared_addr [H3ClientImpl] . h ctl ) }
+
 @ h3_client_connected H3Client h__h → b {
     : *H3ClientImpl h ( __H3Client_ptr h__h )
     ^ ( quic_client_connected . h qc )

@@ -15,14 +15,13 @@
 //   A rediss:// URL implies --tls.
 
 $ `stdlib/core/io.nu`
+$ `stdlib/std/term.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/ext/env.nu`
 $ `deps/cli/src/cli.nu`
 $ `redis.nu`
 $ `stdlib/core/slice.nu`
-
-& `c` @ isatty i32 fd → i32
 
 @ __atoi s str → i {
     : ( Slice u ) str_v ( slice_of_str str )
@@ -252,7 +251,7 @@ $ `stdlib/core/slice.nu`
 
 // The whole program is one default command (redis-cli style): flags,
 // an optional redis://…/rediss://… URL positional, then one-shot or REPL.
-unsafe @ __redis_go CliCtx x → i {
+@ __redis_go CliCtx x → i {
     : String hostv ( ctx_str x `host` )
     : String passv ( ctx_str x `password` )
     : String userv ( ctx_str x `user` )
@@ -281,7 +280,7 @@ unsafe @ __redis_go CliCtx x → i {
     // --insecure downgrades verify-full to encrypt-only.
     ? & == insecure 1 > . ci tlsmode 0 { = . ci tlsmode 1 } {}
 
-    : i tty # i ( isatty # i32 0 )
+    : i tty ? ( term_is_tty 0 ) 1 0
 
     : !RedisConn RedisErr cr ( __connect ci )
     ?? cr {

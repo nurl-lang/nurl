@@ -73,7 +73,7 @@ $ `hf.nu`
     }
 }
 
-unsafe @ hub_fetch_blob String root s url s staging s expected → !String String {
+@ hub_fetch_blob String root s url s staging s expected → !String String {
     // already cached? a content-addressed name is its own proof.
     ? == ( nurl_str_len expected ) 64 {
         : String bp0 ( hub_blob_path root expected )
@@ -129,8 +129,8 @@ unsafe @ hub_fetch_blob String root s url s staging s expected → !String Strin
             : ~ b failed F
             : ~ String ferr ( string_new )
 
-            : ~ i fh_ok 0
-            : ~ File f # File # s 0
+            // The staging file, once it is open (its last owner closes it).
+            : ~ ? File fo @ ?File { F }
             ? resume {
                 : !i String rr ( __hub_rehash_part h ( string_data part ) )
                 ?? rr {
@@ -139,13 +139,13 @@ unsafe @ hub_fetch_blob String root s url s staging s expected → !String Strin
                 }
                 ? failed {} {
                     ?? ( file_append ( string_data part ) ) {
-                        T fa → { = f fa = fh_ok 1 }
+                        T fa → { = fo @ ?File { T fa } }
                         F _ → { = failed T = ferr ( string_from `hub: cannot open the staging file` ) }
                     }
                 }
             } {
                 ?? ( file_create ( string_data part ) ) {
-                    T fa → { = f fa = fh_ok 1 }
+                    T fa → { = fo @ ?File { T fa } }
                     F _ → { = failed T = ferr ( string_from `hub: cannot create the staging file` ) }
                 }
             }
@@ -159,24 +159,22 @@ unsafe @ hub_fetch_blob String root s url s staging s expected → !String Strin
                     T piece → {
                         : i pn ( vec_len [u] piece )
                         ? > pn 0 {
-                            ?? ( file_write_chunk f piece ) {
-                                T _ → {
-                                    ( sha256_update h piece )
-                                    = done_bytes + done_bytes pn
-                                    ( progress_add pg pn )
-                                }
-                                F _ → {
-                                    = failed T
-                                    = more F
-                                    = ferr ( string_from `hub: disk write failed mid-download` )
-                                }
+                            : b wrote ?? fo { T f → ?? ( file_write_chunk f piece ) { T _ → T F _ → F } F → F }
+                            ? wrote {
+                                ( sha256_update h piece )
+                                = done_bytes + done_bytes pn
+                                ( progress_add pg pn )
+                            } {
+                                = failed T
+                                = more F
+                                = ferr ( string_from `hub: disk write failed mid-download` )
                             }
                         } {}
                     }
                     F → { = more F }
                 }
             }
-            ? == fh_ok 1 { ( file_close f ) } {}
+            ?? fo { T f → ( file_close f ) F → {} }
             ( progress_done pg )
 
             ? failed {} {

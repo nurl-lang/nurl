@@ -40,9 +40,9 @@
 // keeps every CUDA call on one thread, which is where a context wants
 // to be.
 //
-// Handlers are top-level functions over module globals, not closures —
-// closure environments are manual in NURL and a server's handlers live
-// for the process (same idiom as whisper/nurllama).
+// Handlers are top-level functions over globals set at start: the
+// queue (a Channel) and the server's state (a Locked), reached from every
+// fiber and thread in safe code.
 
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
@@ -51,176 +51,168 @@ $ `stdlib/std/thread.nu`
 $ `stdlib/std/time.nu`
 $ `stdlib/std/url.nu`
 $ `stdlib/std/arc.nu`
+$ `stdlib/std/channel.nu`
+$ `stdlib/std/bytes.nu`
 $ `stdlib/ext/json.nu`
 $ `deps/http/src/http.nu`
 $ `model.nu`
 $ `stdlib/core/slice.nu`
 
-: ~ ? Embed g_em 0  // one owner of the served model, while serving (F = not serving)
+// The server's state: the served model while serving, the request count
+// and the weights' lease clock — a Locked global set at start, so the
+// handlers, the model thread and the ticker all reach it in safe code.
+: EmServe {
+    ? Embed model  // one owner of the served model, while serving
+    i reqs
+    // ── the weights as a lease: --unload-after ──
+    // The model thread is the only thread that touches the device, so it
+    // is the one that lets the weights go and brings them back: a job
+    // arriving at an unloaded engine reloads it first (embed_reload — the
+    // tokenizer and config never left, so the request was already
+    // tokenized on its own fiber); a tick with the idle clock past the
+    // limit unloads (embed_unload — the arena, the pool, the kernels, the
+    // CUDA context). The ticks come from a ticker thread, five a second
+    // while the limit is on; without them the model thread sleeps until
+    // a job and the limit could never fire.
+    i unload_ms  // 0 = the weights stay for the process's life
+    i idle_since  // monotonic_ns at the end of the last job
+    i loads  // 1 is the load before the port opened
+    i unloads
+    i load_ms  // the last load's wall time
+    b serving
+}
+
+@ __em_serve_blank → ( Locked EmServe ) {
+    ^ ( locked_new [EmServe] @ EmServe { @ ?Embed { F } 0 0 0 0 0 0 F } )
+}
+
+: ( Locked EmServe ) g_em ( __em_serve_blank )
+
+: ~ s g_em_token ``
+: ~ s g_em_name ``
 
 // One more owner of the served model (only while serving).
-unsafe @ __em_model → Embed {
-    ?? g_em {
-        T e → { ^ ( Embed_share e ) }
+@ __em_model → Embed {
+    : EmServe sv ( locked_take [EmServe] g_em )
+    : ~ ? Embed out @ ?Embed { F }
+    ?? . sv model { T e → { = out @ ?Embed { T ( Embed_share e ) } } F → {} }
+    ( locked_restore [EmServe] g_em sv )
+    ?? out {
+        T e → { ^ e }
         F → { ( nurl_panic `embed: no model is being served` ) }
     }
 }
 
-: ~ s g_em_token ``
-: ~ s g_em_name ``
-: ~ i g_em_reqs 0
-
-// ── the weights as a lease: --unload-after ─────────────────────────
-//
-// The model thread is the only thread that touches the device, so it is
-// the one that lets the weights go and brings them back: a job arriving
-// at an unloaded engine reloads it first (embed_reload — the tokenizer
-// and config never left, so the request was already tokenized on its own
-// fiber); a wake with no job and the idle clock past the limit unloads
-// (embed_unload — the arena, the pool, the kernels, the CUDA context).
-// The wakes come from a ticker thread that broadcasts the request cond
-// five times a second while the flag is on; without it the model thread
-// sleeps until a job and the limit could never fire.
-: ~ i g_em_unload_ms 0  // 0 = the weights stay for the process's life
-: ~ i g_em_idle_since 0  // monotonic_ns at the end of the last job
-: ~ i g_em_loads 0  // 1 is the load before the port opened
-: ~ i g_em_unloads 0
-: ~ i g_em_load_ms 0  // the last load's wall time
-
 // ── The model queue ───────────────────────────────────────────────────
 //
-// One job per waiting request, linked through the jobs themselves — a
-// module global holds one word, so the queue is two pointers, and its
-// lock and two conditions sit in an EmSync module global the server
-// fills once and keeps for the process (the model thread and the ticker
-// outlive any one scope, as the handlers do). The submitting fiber owns
-// the job (an EmJob handle) and keeps it until it has seen `done`; the
-// queue and the model thread only borrow its address meanwhile.
-: EmJobImpl {
-    i next
+// One job per waiting request on a channel the model thread drains; the
+// job carries the channel its answer goes back on, and the submitting
+// fiber waits on that. A tick (the unload timer) and a stop travel the
+// same queue, so the model thread waits on one thing.
+: i EM_JOB 0
+: i EM_TICK 1
+: i EM_STOP 2
+
+: EmJob {
+    i kind
     ( Vec i ) ids  // flat tokens for the whole request
     ( Vec i ) offs  // B+1 offsets into ids
-    ( Vec f ) out  // B*dim floats, written in place
+    i nout  // B*dim floats come back
     b normalize
-    b done
-    b ok
+    ( Channel ( Vec f ) ) reply  // the embeddings, or an empty Vec on failure
 }
 
-: EmJob { ( Arc EmJobImpl ) a }
+@ __em_queue_new → ( Channel EmJob ) { ^ ( chan_new [EmJob] ) }
 
-@ EmJob_drop sink EmJob h → v {}
+: ( Channel EmJob ) g_q ( __em_queue_new )
 
-: ~ i g_q_head 0
-: ~ i g_q_tail 0
-: ~ b g_q_stop F
-: EmSync {
-    Mutex m  // guards the queue, g_q_stop, the idle clock and g_em_reqs
-    Cond req  // a job was queued, the server is stopping, or a ticker wake
-    Cond done  // a job was finished
+@ __em_signal i kind → v {
+    : b _s ( chan_send [EmJob] g_q @ EmJob { kind ( vec_new [i] ) ( vec_new [i] ) 0 F ( chan_new [( Vec f )] ) } )
 }
-
-: ~ EmSync g_q_sync 0  // zero until the server first runs
-: ~ b g_q_sync_made F
-
-unsafe @ __em_sync → *EmSync { ^ ( mem_addr g_q_sync ) }
 
 // Run one request's forward — the WHOLE batch, one job — on the model
 // thread and wait for it. The job takes `ids` and `offs`; what comes
 // back is the `nout` floats of the batch's embeddings, or an empty Vec
 // when the forward failed.
-unsafe @ __em_submit sink ( Vec i ) ids sink ( Vec i ) offs i nout b normalize → ( Vec f ) {
-    ? g_q_sync_made {} { ^ ( vec_new [f] ) }
-    : *EmSync q ( __em_sync )
-    : ( Vec f ) out ( vec_with_cap [f] nout )
-    : ~ i z 0
-    ~ < z nout { ( vec_push [f] out 0.0 ) = z + z 1 }
-    : EmJob jh @ EmJob { ( arc_new [EmJobImpl] @ EmJobImpl { 0 ids offs out normalize F F } ) }
-    : *EmJobImpl j ( arc_ptr [EmJobImpl] . jh a )
-    ( mutex_lock . q m )
-    ? == g_q_tail 0 {
-        = g_q_head # i j
-        = g_q_tail # i j
-    } {
-        : *EmJobImpl t # *EmJobImpl g_q_tail
-        = . t next # i j
-        = g_q_tail # i j
+@ __em_submit sink ( Vec i ) ids sink ( Vec i ) offs i nout b normalize → ( Vec f ) {
+    : ( Channel ( Vec f ) ) reply ( chan_new [( Vec f )] )
+    ? ( chan_send [EmJob] g_q @ EmJob { EM_JOB ids offs nout normalize ( Channel_share [( Vec f )] reply ) } ) {} { ^ ( vec_new [f] ) }
+    ?? ( chan_recv [( Vec f )] reply ) {
+        T out → { ^ out }
+        F → { ^ ( vec_new [f] ) }
     }
-    ( cond_signal . q req )
-    ~ ! . j done { ( cond_wait . q done . q m ) }
-    ( mutex_unlock . q m )
-    ? . j ok {} { ^ ( vec_new [f] ) }
-    // the embeddings leave the job (which drops the rest with jh)
-    : ( Vec f ) res . j out
-    = . j out ( vec_new [f] )  // res keeps what the field held
-    ^ res
 }
 
-// The model thread: take jobs, run them, wake the waiter.
-unsafe @ __em_model_loop → v {
+// A tick while nothing is queued: is it time to let the weights go?
+@ __em_maybe_unload Embed e → v {
+    : ~ EmServe sv ( locked_take [EmServe] g_em )
+    ? & > . sv unload_ms 0 ( embed_loaded e ) {
+        ? >= ( elapsed_ms_since . sv idle_since ) . sv unload_ms {
+            ( embed_unload e )
+            = . sv unloads + . sv unloads 1
+            : String m ( string_from `embed: idle for ` )
+            ( string_push_int m / . sv unload_ms 1000 )
+            ( string_push_str m ` s — weights unloaded (device memory released; the next request reloads them)` )
+            ( nurl_eprintln ( string_data m ) )
+        } {}
+    } {}
+    ( locked_restore [EmServe] g_em sv )
+}
+
+// Bring the weights back for a job: F when they would not load.
+@ __em_ensure_loaded Embed e → b {
+    ? ( embed_loaded e ) { ^ T } {}
+    : i t0 ( monotonic_ns )
+    ?? ( embed_reload e ) {
+        T _ → {
+            : i ms / - ( monotonic_ns ) t0 1000000
+            : ~ EmServe sv ( locked_take [EmServe] g_em )
+            = . sv loads + . sv loads 1
+            = . sv load_ms ms
+            ( locked_restore [EmServe] g_em sv )
+            : String m ( string_from `embed: weights loaded in ` )
+            ( string_push_int m ms )
+            ( string_push_str m ` ms` )
+            ( nurl_eprintln ( string_data m ) )
+            ^ T
+        }
+        F le → {
+            ( nurl_eprintln ( string_data le ) )
+            ^ F
+        }
+    }
+}
+
+// The model thread: take jobs, run them, answer the waiter.
+@ __em_model_loop → v {
     : Embed e ( __em_model )
-    : *EmSync q ( __em_sync )
     : ~ b run T
     ~ run {
-        ( mutex_lock . q m )
-        ~ & == g_q_head 0 ! g_q_stop {
-            ( cond_wait . q req . q m )
-            // a ticker wake: nothing queued — is it time to let go?
-            ? & & == g_q_head 0 > g_em_unload_ms 0 ( embed_loaded e ) {
-                ? >= ( elapsed_ms_since g_em_idle_since ) g_em_unload_ms {
-                    ( embed_unload e )
-                    = g_em_unloads + g_em_unloads 1
-                    : String m ( string_from `embed: idle for ` )
-                    ( string_push_int m / g_em_unload_ms 1000 )
-                    ( string_push_str m ` s — weights unloaded (device memory released; the next request reloads them)` )
-                    ( nurl_eprintln ( string_data m ) )
-                } {}
-            } {}
-        }
-        ? == g_q_head 0 {
-            ( mutex_unlock . q m )
-            = run F
-        } {
-            : *EmJobImpl j # *EmJobImpl g_q_head
-            = g_q_head . j next
-            ? == g_q_head 0 { = g_q_tail 0 } {}
-            ( mutex_unlock . q m )
-            : ~ b r T
-            ? ( embed_loaded e ) {} {
-                : i t0 ( monotonic_ns )
-                ?? ( embed_reload e ) {
-                    T _ → {
-                        = g_em_loads + g_em_loads 1
-                        = g_em_load_ms / - ( monotonic_ns ) t0 1000000
-                        : String m ( string_from `embed: weights loaded in ` )
-                        ( string_push_int m g_em_load_ms )
-                        ( string_push_str m ` ms` )
-                        ( nurl_eprintln ( string_data m ) )
-                    }
-                    F le → {
-                        ( nurl_eprintln ( string_data le ) )
-                        = r F
+        ?? ( chan_recv [EmJob] g_q ) {
+            F → { = run F }
+            T j → {
+                ? == . j kind EM_STOP { = run F } {
+                    ? == . j kind EM_TICK { ( __em_maybe_unload e ) } {
+                        : ( Vec f ) out ( vec_zeroed [f] . j nout )
+                        : ~ b r ( __em_ensure_loaded e )
+                        ? r { = r ( embed_encode_batch e . j ids . j offs out . j normalize ) } {}
+                        : ~ EmServe sv ( locked_take [EmServe] g_em )
+                        = . sv idle_since ( monotonic_ns )
+                        ( locked_restore [EmServe] g_em sv )
+                        : b _a ( chan_send [( Vec f )] . j reply ? r out ( vec_new [f] ) )
                     }
                 }
             }
-            ? r { = r ( embed_encode_batch e . j ids . j offs . j out . j normalize ) } {}
-            ( mutex_lock . q m )
-            = g_em_idle_since ( monotonic_ns )
-            = . j ok r
-            = . j done T
-            ( cond_broadcast . q done )
-            ( mutex_unlock . q m )
         }
     }
 }
 
-// Five wakes a second for the model thread while --unload-after is on.
-unsafe @ __em_ticker → v {
-    : *EmSync q ( __em_sync )
-    ~ T {
+// Five ticks a second for the model thread while serving with
+// --unload-after.
+@ __em_ticker → v {
+    ~ . ( locked_get [EmServe] g_em ) serving {
         ( sleep_ms 200 )
-        ( mutex_lock . q m )
-        ( cond_broadcast . q req )
-        ( mutex_unlock . q m )
+        ( __em_signal EM_TICK )
     }
 }
 
@@ -295,7 +287,7 @@ unsafe @ __em_ticker → v {
 // device forward — and the whole request is ONE job: the model thread
 // sees every text of the batch at once and runs them as a few padded
 // batched forwards (embed_encode_batch), not one forward per text.
-unsafe @ __em_run ( Vec String ) texts b normalize → HttpResponse {
+@ __em_run ( Vec String ) texts b normalize → HttpResponse {
     : Embed e ( __em_model )
     : i nt ( vec_len [String] texts )
     : i dim ( embed_dim e )
@@ -328,12 +320,10 @@ unsafe @ __em_run ( Vec String ) texts b normalize → HttpResponse {
     ? ok {} { ^ ( __em_jerr 500 `embedding failed` ) }
     : ( Vec f ) flat ( __em_submit ids offs * nt dim normalize )
     ? > ( vec_len [f] flat ) 0 {} { ^ ( __em_jerr 500 `embedding failed` ) }
-    // one per served request, not per text in a batch — the queue mutex
-    // is what makes it a count and not a race
-    : *EmSync q ( __em_sync )
-    ( mutex_lock . q m )
-    = g_em_reqs + g_em_reqs 1
-    ( mutex_unlock . q m )
+    // one per served request, not per text in a batch
+    : ~ EmServe sv ( locked_take [EmServe] g_em )
+    = . sv reqs + . sv reqs 1
+    ( locked_restore [EmServe] g_em sv )
     // The body is built as ONE string, not a Json tree. A 64-text batch
     // is ~65k floats; as json_float nodes that is 65k allocations whose
     // frees each walk the panic-unwind journal the handler's panic→500
@@ -405,11 +395,10 @@ unsafe @ __em_run ( Vec String ) texts b normalize → HttpResponse {
     ^ have
 }
 
-unsafe @ __em_post HttpRequest req → HttpResponse {
+@ __em_post HttpRequest req → HttpResponse {
     ? ( __em_authed req ) {} { ^ ( __em_jerr 401 `unauthorized — pass 'Authorization: Bearer <token>'` ) }
     // the body is raw bytes; JSON wants a NUL-terminated string
-    : String bodys ( string_new )
-    ( string_push_bytes bodys ( vec_data [u] . req body ) ( vec_len [u] . req body ) )
+    : String bodys ( bytes_to_str . req body )
     : !Json JsonError parsed ( json_parse ( string_data bodys ) )
     ?? parsed {
         T root → {
@@ -449,26 +438,29 @@ unsafe @ __em_post HttpRequest req → HttpResponse {
     ^ ( __em_run texts normalize )
 }
 
-unsafe @ __em_health HttpRequest req → HttpResponse {
+@ __em_health HttpRequest req → HttpResponse {
     : Embed e ( __em_model )
+    : EmServe sv ( locked_get [EmServe] g_em )
     : Json o ( json_obj_new )
     // `healthy` either way: an engine whose weights are unloaded under
     // --unload-after answers the next request, it just pays the reload
     : b _s1 ( json_obj_set o `status` ( json_str_lit `healthy` ) )
     : b _s2 ( json_obj_set o `model` ( json_str_lit g_em_name ) )
     : b _s3 ( json_obj_set o `model_loaded` ( json_bool ( embed_loaded e ) ) )
-    : b _u1 ( json_obj_set o `unload_after_s` ( json_int / g_em_unload_ms 1000 ) )
-    : b _u2 ( json_obj_set o `loads` ( json_int g_em_loads ) )
-    : b _u3 ( json_obj_set o `unloads` ( json_int g_em_unloads ) )
-    : b _u4 ( json_obj_set o `last_load_ms` ( json_int g_em_load_ms ) )
+    : b _u1 ( json_obj_set o `unload_after_s` ( json_int / . sv unload_ms 1000 ) )
+    : b _u2 ( json_obj_set o `loads` ( json_int . sv loads ) )
+    : b _u3 ( json_obj_set o `unloads` ( json_int . sv unloads ) )
+    : b _u4 ( json_obj_set o `last_load_ms` ( json_int . sv load_ms ) )
     ? ! ( embed_loaded e ) {
-        : b _u5 ( json_obj_set o `idle_s` ( json_int / ( elapsed_ms_since g_em_idle_since ) 1000 ) )
+        : b _u5 ( json_obj_set o `idle_s` ( json_int / ( elapsed_ms_since . sv idle_since ) 1000 ) )
     } {}
-    : b _s4 ( json_obj_set o `device` ( json_str_lit ( embed_backend e ) ) )
+    : String be ( embed_backend e )
+    : b _s4 ( json_obj_set o `device` ( json_str_lit ( string_data be ) ) )
     : b _s5 ( json_obj_set o `dimension` ( json_int ( embed_dim e ) ) )
-    : b _s6 ( json_obj_set o `requests` ( json_int g_em_reqs ) )
+    : b _s6 ( json_obj_set o `requests` ( json_int . sv reqs ) )
     : b _s7 ( json_obj_set o `max_seq` ( json_int ( embed_maxseq e ) ) )
-    : b _s8 ( json_obj_set o `device_name` ( json_str_lit ( embed_device_name e ) ) )
+    : String dn ( embed_device_name e )
+    : b _s8 ( json_obj_set o `device_name` ( json_str_lit ( string_data dn ) ) )
     // What the device-buffer pool is holding, so "where did the VRAM go"
     // is a question the server answers instead of one an operator has to
     // reverse-engineer from nvidia-smi. Two plain integer loads while the
@@ -481,22 +473,10 @@ unsafe @ __em_health HttpRequest req → HttpResponse {
 }
 
 // Serve `e` (borrowed for the server's lifetime). Blocks until stopped.
-unsafe @ embed_serve Embed e s name s host i port s token i unload_s → i {
-    = g_em @ ?Embed { T ( Embed_share e ) }
-    = g_em_unload_ms * unload_s 1000
-    = g_em_idle_since ( monotonic_ns )
-    = g_em_loads 1
-    = g_em_unloads 0
-    = g_em_load_ms 0
+@ embed_serve Embed e s name s host i port s token i unload_s → i {
+    ( locked_set [EmServe] g_em @ EmServe { @ ?Embed { T ( Embed_share e ) } 0 * unload_s 1000 ( monotonic_ns ) 1 0 0 T } )
     = g_em_token ( nurl_str_cat token `` )
     = g_em_name ( nurl_str_cat name `` )
-    ? ! g_q_sync_made {
-        = . g_q_sync m ( mutex_new )
-        = . g_q_sync req ( cond_new )
-        = . g_q_sync done ( cond_new )
-        = g_q_sync_made T
-    } {}
-    : *EmSync q ( __em_sync )
     : ( @ v ) modelfn \ → v { ( __em_model_loop ) }
     // joined before this returns: the model thread reads the engine, and
     // the caller lets the engine go as soon as serving ends
@@ -514,7 +494,9 @@ unsafe @ embed_serve Embed e s name s host i port s token i unload_s → i {
             T th → { ( thread_detach th ) }
             F _te → {
                 ( nurl_eprint `embed: cannot start the unload timer — the weights stay loaded\n` )
-                = g_em_unload_ms 0
+                : ~ EmServe sv ( locked_take [EmServe] g_em )
+                = . sv unload_ms 0
+                ( locked_restore [EmServe] g_em sv )
             }
         }
     } {}
@@ -550,11 +532,11 @@ unsafe @ embed_serve Embed e s name s host i port s token i unload_s → i {
     ( nurl_print `\n` )
 
     : i rc ( http_app_listen a host port )
-    ( mutex_lock . q m )
-    = g_q_stop T
-    ( cond_broadcast . q req )
-    ( mutex_unlock . q m )
+    ( __em_signal EM_STOP )
     ?? model_th { T th → { : i _j ( thread_join th ) } F _te → {} }
-    = g_em @ ?Embed { F }
+    : ~ EmServe sv ( locked_take [EmServe] g_em )
+    = . sv model @ ?Embed { F }
+    = . sv serving F
+    ( locked_restore [EmServe] g_em sv )
     ^ rc
 }

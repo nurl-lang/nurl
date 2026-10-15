@@ -122,22 +122,23 @@ $ `stdlib/core/slice.nu`
 }
 
 @ lt_at LineTab t i line → i {
-    ^ ?? ( vec_get [i] ( linetab_count t ) line ) { T x → x F _ → -1 }
+    ? >= line ( linetab_lines t ) { ^ -1 } {}
+    ^ ( linetab_count_at t line )
 }
 
 @ lt_exists LineTab t i line → b {
-    ^ ?? ( vec_get [i] ( linetab_exists t ) line ) { T x → != 0 x F _ → F }
+    ^ != 0 ( linetab_exists_at t line )
 }
 
 // Branch rows for one line, in the order the notes numbered them.
 @ br_count LineTab t i line i idx → i {
-    : i n / ( vec_len [i] ( linetab_br t ) ) LBR_W
+    : i n ( linetab_br_rows t )
     : ~ i seen 0
     : ~ i k 0
     ~ < k n {
-        ? == line ?? ( vec_get [i] ( linetab_br t ) + * k LBR_W LBR_LINE ) { T x → x F _ → -1 } {
+        ? == line ( linetab_br_at t k LBR_LINE ) {
             ? == seen idx {
-                ^ ?? ( vec_get [i] ( linetab_br t ) + * k LBR_W LBR_COUNT ) { T x → x F _ → -1 }
+                ^ ( linetab_br_at t k LBR_COUNT )
             } {}
             = seen + seen 1
         } {}
@@ -232,8 +233,8 @@ $ `stdlib/core/slice.nu`
 }
 
 @ check_merge s notes s data → v {
-    : Cov one ( cov_new )
-    : Cov two ( cov_new )
+    : ~ Cov one ( cov_new )
+    : ~ Cov two ( cov_new )
     ?? ( gcov_read notes data ) {
         T o → { ( cov_add_object one o ) }
         F _ → {}
@@ -262,7 +263,7 @@ $ `stdlib/core/slice.nu`
 }
 
 @ check_formats s notes s data → v {
-    : Cov c ( cov_new )
+    : ~ Cov c ( cov_new )
     ?? ( gcov_read notes data ) {
         T o → { ( cov_add_object c o ) }
         F _ → {}

@@ -80,7 +80,7 @@ $ `deps/gpu/src/gpu.nu`
     ^ r
 }
 
-@ __lk_compile Gpu g String src s name → GpuKernel { ^ ( gpu_compile g ( string_data src ) name ) }
+raw @ __lk_compile Gpu g String src s name → GpuKernel { ^ ( gpu_compile g ( string_data src ) name ) }
 
 @ __lk_matvec → s {
     ^ `extern "C" __global__ void matvec(
@@ -1272,7 +1272,8 @@ $ `deps/gpu/src/gpu.nu`
     }` )
 }
 
-@ lk_build Gpu g → LlmKernels {
+// unsafe: compiles this file's own kernel sources.
+unsafe @ lk_build Gpu g → LlmKernels {
     : GpuKernel k1 ( gpu_compile g ( __lk_matvec ) `matvec` )
     : GpuKernel k2 ( gpu_compile g ( __lk_rmsnorm ) `rmsnorm` )
     : GpuKernel k3 ( gpu_compile g ( __lk_rope ) `rope` )
@@ -1331,8 +1332,11 @@ $ `deps/gpu/src/gpu.nu`
 }
 
 // ── launch wrappers (raw device pointers, onnx op idiom) ────────────
+// Each takes device addresses as plain integers and launches a kernel
+// that indexes them by the sizes it is given, so each is `raw`: the
+// caller vouches that every address is a live buffer that big.
 
-@ lk_matvec LlmKernels ks i wd i xd i yd i rows i cols i batch → v {
+raw @ lk_matvec LlmKernels ks i wd i xd i yd i rows i cols i batch → v {
     : ( Vec i ) a ( vec_new [i] )
     ( vec_push [i] a ( gpu_arg_i64 wd ) )
     ( vec_push [i] a ( gpu_arg_i64 xd ) )
@@ -1346,7 +1350,7 @@ $ `deps/gpu/src/gpu.nu`
 // Quantised matvec dispatch: `gt` is the ggml tensor type of W.
 // Returns F when the type has no device kernel (the caller then falls
 // back to the f32 path — correctness first, always).
-@ lk_matvec_q LlmKernels ks i gt i wd i xd i yd i rows i cols i batch → b {
+raw @ lk_matvec_q LlmKernels ks i gt i wd i xd i yd i rows i cols i batch → b {
     : ~ i which -1
     ? == gt 0 { = which 0 } {}
     ? == gt 1 { = which 5 } {}
@@ -1450,7 +1454,7 @@ $ `deps/gpu/src/gpu.nu`
 // One batched matvec over all n_assign expert assignments. Output row a
 // uses expert expid_dev[a] and input row a/xk of x. Returns F when `gt`
 // has no batched kernel (caller falls back).
-@ lk_matvec_experts LlmKernels ks i gt i wd i xd i yd i expid_dev i rows i cols i xk i n_assign → b {
+raw @ lk_matvec_experts LlmKernels ks i gt i wd i xd i yd i expid_dev i rows i cols i xk i n_assign → b {
     ? | == gt 0 == gt 8 {} { ^ F }
     : ( Vec i ) a ( vec_new [i] )
     ( vec_push [i] a ( gpu_arg_i64 wd ) )
@@ -1479,7 +1483,7 @@ $ `deps/gpu/src/gpu.nu`
 
 // On-device routing: fills expid_dev / wts_dev [count·n_used] from the
 // router logits and the expert bias. One thread per position.
-@ lk_moe_route LlmKernels ks i logitsd i biasd i expid_dev i wts_dev i n_expert i n_group i topk_group i n_used f scale i norm i count → v {
+raw @ lk_moe_route LlmKernels ks i logitsd i biasd i expid_dev i wts_dev i n_expert i n_group i topk_group i n_used f scale i norm i count → v {
     : ( Vec i ) a ( vec_new [i] )
     ( vec_push [i] a ( gpu_arg_i64 logitsd ) )
     ( vec_push [i] a ( gpu_arg_i64 biasd ) )
@@ -1498,7 +1502,7 @@ $ `deps/gpu/src/gpu.nu`
 // Greedy argmax + softmax-prob per position, on device.
 // Repack one uploaded q8_0 tensor into the split per-row layout (see
 // __lk_q8_repack). `nb` = quant blocks per row, `nblk` = blocks total.
-@ lk_q8_repack LlmKernels ks i srcd i dstd i nb i nblk → v {
+raw @ lk_q8_repack LlmKernels ks i srcd i dstd i nb i nblk → v {
     : ( Vec i ) a ( vec_new [i] )
     ( vec_push [i] a ( gpu_arg_i64 srcd ) )
     ( vec_push [i] a ( gpu_arg_i64 dstd ) )
@@ -1507,7 +1511,7 @@ $ `deps/gpu/src/gpu.nu`
     : i _r ( gpu_launch . ks q8_repack ( gpu_grid nblk 256 ) 256 a )
 }
 
-@ lk_argmax_conf LlmKernels ks i logitsd i outid i outprob i vocab i count → v {
+raw @ lk_argmax_conf LlmKernels ks i logitsd i outid i outprob i vocab i count → v {
     : ( Vec i ) a ( vec_new [i] )
     ( vec_push [i] a ( gpu_arg_i64 logitsd ) )
     ( vec_push [i] a ( gpu_arg_i64 outid ) )
@@ -1522,7 +1526,7 @@ $ `deps/gpu/src/gpu.nu`
 }
 
 // out[pos] += Σ_j wts[pos*K+j] · down[(pos*K+j)] over `dim` floats.
-@ lk_moe_scatter LlmKernels ks i downd i wtsd i outd i K i dim i count → v {
+raw @ lk_moe_scatter LlmKernels ks i downd i wtsd i outd i K i dim i count → v {
     : ( Vec i ) a ( vec_new [i] )
     ( vec_push [i] a ( gpu_arg_i64 downd ) )
     ( vec_push [i] a ( gpu_arg_i64 wtsd ) )
@@ -1533,7 +1537,7 @@ $ `deps/gpu/src/gpu.nu`
     : i _r ( gpu_launch . ks moe_scatter ( gpu_grid * count dim 64 ) 64 a )
 }
 
-@ lk_rmsnorm LlmKernels ks i xd i wd i yd i n f eps i batch → v {
+raw @ lk_rmsnorm LlmKernels ks i xd i wd i yd i n f eps i batch → v {
     : ( Vec i ) a ( vec_new [i] )
     ( vec_push [i] a ( gpu_arg_i64 xd ) )
     ( vec_push [i] a ( gpu_arg_i64 wd ) )
@@ -1545,7 +1549,7 @@ $ `deps/gpu/src/gpu.nu`
 }
 
 // style: 0 = NORM (llama), 1 = NEOX (qwen2)
-@ lk_rope LlmKernels ks i xd i nh i hd i rd i pos f base i style i batch → v {
+raw @ lk_rope LlmKernels ks i xd i nh i hd i rd i pos f base i style i batch → v {
     : ( Vec i ) a ( vec_new [i] )
     ( vec_push [i] a ( gpu_arg_i64 xd ) )
     ( vec_push [i] a ( gpu_arg_i32 nh ) )
@@ -1565,7 +1569,7 @@ $ `deps/gpu/src/gpu.nu`
 // npos0 = the causal window of the FIRST batch element (element b sees
 // npos0 + b rows). maxpos strides the per-(batch,head) score scratch.
 // Two-pass attention: scores, then softmax + value-weighted sum.
-@ lk_attn LlmKernels ks i qd i kcd i vcd i outd i scd i nh i nkv i hd i npos0 i batch i maxpos f qscale i window i causal → v {
+raw @ lk_attn LlmKernels ks i qd i kcd i vcd i outd i scd i nh i nkv i hd i npos0 i batch i maxpos f qscale i window i causal → v {
     : ( Vec i ) a1 ( vec_new [i] )
     ( vec_push [i] a1 ( gpu_arg_i64 qd ) )
     ( vec_push [i] a1 ( gpu_arg_i64 kcd ) )
@@ -1597,7 +1601,7 @@ $ `deps/gpu/src/gpu.nu`
 
 // y ← y + a·x — the routed-expert accumulator (each selected expert's
 // down-projection lands weighted onto the residual stream).
-@ lk_axpy LlmKernels ks i yd i xd f a i n → v {
+raw @ lk_axpy LlmKernels ks i yd i xd f a i n → v {
     : ( Vec i ) ar ( vec_new [i] )
     ( vec_push [i] ar ( gpu_arg_i64 yd ) )
     ( vec_push [i] ar ( gpu_arg_i64 xd ) )
@@ -1607,7 +1611,7 @@ $ `deps/gpu/src/gpu.nu`
 }
 
 // GeGLU: g ← gelu(g) * u, in place. Same shape as lk_silumul.
-@ lk_gelumul LlmKernels ks i gd i ud i n → v {
+raw @ lk_gelumul LlmKernels ks i gd i ud i n → v {
     : ( Vec i ) a ( vec_new [i] )
     ( vec_push [i] a ( gpu_arg_i64 gd ) )
     ( vec_push [i] a ( gpu_arg_i64 ud ) )
@@ -1616,7 +1620,7 @@ $ `deps/gpu/src/gpu.nu`
 }
 
 // x ← x * s, in place.
-@ lk_scale LlmKernels ks i xd f s i n → v {
+raw @ lk_scale LlmKernels ks i xd f s i n → v {
     : ( Vec i ) a ( vec_new [i] )
     ( vec_push [i] a ( gpu_arg_i64 xd ) )
     ( vec_push [i] a ( gpu_arg_f32 s ) )
@@ -1624,7 +1628,7 @@ $ `deps/gpu/src/gpu.nu`
     : i _r ( gpu_launch . ks scale ( gpu_grid n 256 ) 256 a )
 }
 
-@ lk_silumul LlmKernels ks i gd i ud i n → v {
+raw @ lk_silumul LlmKernels ks i gd i ud i n → v {
     : ( Vec i ) a ( vec_new [i] )
     ( vec_push [i] a ( gpu_arg_i64 gd ) )
     ( vec_push [i] a ( gpu_arg_i64 ud ) )
@@ -1632,7 +1636,7 @@ $ `deps/gpu/src/gpu.nu`
     : i _r ( gpu_launch . ks silumul ( gpu_grid n 256 ) 256 a )
 }
 
-@ lk_addv LlmKernels ks i ad i bd i n → v {
+raw @ lk_addv LlmKernels ks i ad i bd i n → v {
     : ( Vec i ) a ( vec_new [i] )
     ( vec_push [i] a ( gpu_arg_i64 ad ) )
     ( vec_push [i] a ( gpu_arg_i64 bd ) )
@@ -1641,7 +1645,7 @@ $ `deps/gpu/src/gpu.nu`
 }
 
 // a[b][i] += v[i] for every row of the batch
-@ lk_addrow LlmKernels ks i ad i vd i n i batch → v {
+raw @ lk_addrow LlmKernels ks i ad i vd i n i batch → v {
     : ( Vec i ) a ( vec_new [i] )
     ( vec_push [i] a ( gpu_arg_i64 ad ) )
     ( vec_push [i] a ( gpu_arg_i64 vd ) )
@@ -1650,7 +1654,7 @@ $ `deps/gpu/src/gpu.nu`
     : i _r ( gpu_launch . ks addrow ( gpu_grid * n batch 256 ) 256 a )
 }
 
-@ lk_copyat LlmKernels ks i dstd i srcd i off i n → v {
+raw @ lk_copyat LlmKernels ks i dstd i srcd i off i n → v {
     : ( Vec i ) a ( vec_new [i] )
     ( vec_push [i] a ( gpu_arg_i64 dstd ) )
     ( vec_push [i] a ( gpu_arg_i64 srcd ) )

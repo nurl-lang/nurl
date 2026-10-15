@@ -243,8 +243,52 @@ else
     bad "opscheck build"; tail -4 "$WORK/opsbuild.err"
 fi
 
+# The RoPE ops against a host reference (CPU backend: no device needed).
+if $NURL tests/ropecheck.nu "$WORK/ropecheck" >/dev/null 2>"$WORK/ropebuild.err"; then
+    NURL_GPU=cpu "$WORK/ropecheck" > "$WORK/rope.out" 2>&1
+    if grep -q "^SKIP\|need a C++ compiler" "$WORK/rope.out"; then
+        echo "  (rope check skipped — no backend)"
+    elif [ "$(grep -c '|ok ' "$WORK/rope.out")" = 2 ]; then
+        ok "gkd_rope2d / gkd_rope3d vs host reference"
+    else
+        bad "rope ops"; sed 's/^/    /' "$WORK/rope.out"
+    fi
+else
+    bad "ropecheck build"; tail -4 "$WORK/ropebuild.err"
+fi
+
+# Checked kernels: the subset's verdicts, and one run on the CPU backend.
+if $NURL tests/checkedcheck.nu "$WORK/checkedcheck" >/dev/null 2>"$WORK/ckbuild.err"; then
+    NURL_GPU=cpu "$WORK/checkedcheck" > "$WORK/checked.out" 2>&1
+    if grep -q "^SKIP\|need a C++ compiler" "$WORK/checked.out"; then
+        echo "  (checked kernels skipped — no backend)"
+    elif grep -q "^checked: all passed" "$WORK/checked.out"; then
+        ok "checked kernels: $(grep -c '^ok ' "$WORK/checked.out") cases"
+    else
+        bad "checked kernels"; grep '^FAIL' "$WORK/checked.out" | sed 's/^/    /'
+    fi
+else
+    bad "checkedcheck build"; tail -4 "$WORK/ckbuild.err"
+fi
+
+# A view bound into a call holds what it points into: ending that while the
+# call still holds the view, or returning the call past it, does not compile.
+misuse() {  # $1 = label, $2 = body after the imports
+    printf '$ `stdlib/core/vec.nu`\n$ `stdlib/core/slice.nu`\n$ `src/checked.nu`\n%s\n' "$2" > "$WORK/misuse.nu"
+    if $NURL "$WORK/misuse.nu" "$WORK/misuse" >/dev/null 2>"$WORK/misuse.err"; then
+        bad "view misuse compiled: $1"
+    elif grep -q "holds a view of\|returns a view of" "$WORK/misuse.err"; then
+        ok "view misuse rejected: $1"
+    else
+        bad "view misuse: $1 (unexpected error)"; tail -3 "$WORK/misuse.err"
+    fi
+}
+misuse "source cleared" '@ main → i { : ~ ( Vec f ) v ( vec_zeroed [f] 8 ) : ~ GkCall c ( gk_call_new ) ( gk_call_view_f c `x` ( slice_from_vec [f] v ) ) ( vec_clear [f] v ) ^ ( vec_len [( Slice f )] . c fs ) }'
+misuse "call returned past its source" '@ mk → GkCall { : ~ ( Vec f ) v ( vec_zeroed [f] 8 ) : ~ GkCall c ( gk_call_new ) ( gk_call_view_f c `x` ( slice_from_vec [f] v ) ) ^ c }
+@ main → i { : GkCall c ( mk ) ^ ( vec_len [( Slice f )] . c fs ) }'
+
 # AddressSanitizer over the device layer + op family.
-for t in devcheck opscheck; do
+for t in devcheck opscheck checkedcheck; do
     if NURL_SAN=1 $NURL "tests/$t.nu" "$WORK/${t}_san" >/dev/null 2>"$WORK/${t}_san_build.err"; then
         "$WORK/${t}_san" >/dev/null 2>"$WORK/${t}_san.out" || true
         if grep -qE "ERROR: AddressSanitizer|detected memory leaks" "$WORK/${t}_san.out"; then

@@ -135,17 +135,17 @@ $ `stdlib/core/slice.nu`
 
 // `Aug 27 14:03` for something in the last six months, `Aug 27  2024`
 // for anything older — the rule every ls has followed since v7.
-unsafe @ __ls_time String out i mtime i now → v {
+@ __ls_time String out i mtime i now → v {
     : Time t ( time_local mtime )
     : String mon ( time_format t `%b %e ` )
-    ( string_push_bytes out # *u ( string_data mon ) ( string_len mon ) )
+    ( string_append out mon )
     ? | > mtime + now 3600 < mtime - now 15552000 {
         ( string_push_char out 32 )
         : String y ( time_format t `%Y` )
-        ( string_push_bytes out # *u ( string_data y ) ( string_len y ) )
+        ( string_append out y )
     } {
         : String hm ( time_format t `%H:%M` )
-        ( string_push_bytes out # *u ( string_data hm ) ( string_len hm ) )
+        ( string_append out hm )
     }
 }
 
@@ -157,10 +157,10 @@ unsafe @ __ls_time String out i mtime i now → v {
 
 // `%-N.Ns` — pad on the right, and TRUNCATE at N, which is what keeps
 // a long user name from shifting every column after it.
-unsafe @ __push_left String out s text i width → v {
+@ __push_left String out s text i width → v {
     : i n ( nurl_str_len text )
     : i take ? > n width width n
-    ( string_push_bytes out # *u text take )
+    ( string_push_window out ( slice_of_str text ) 0 take )
     : ~ i k - width take
     ~ > k 0 { ( string_push_char out 32 ) = k - k 1 }
 }
@@ -194,7 +194,7 @@ unsafe @ __push_left String out s text i width → v {
 // fixed ones — nlink %4, user and group %-8.8s, size %9 (or %7 under
 // -h) — not widths computed from the listing, so two `ls -l` runs over
 // different directories still line up when you read them side by side.
-unsafe @ __ls_long BxEnt e s dir i flags i now → v {
+@ __ls_long BxEnt e s dir i flags i now → v {
     : String out ( string_new )
     ? != 0 & flags LS_INODE {
         ( string_push_int out . e ino )
@@ -206,7 +206,7 @@ unsafe @ __ls_long BxEnt e s dir i flags i now → v {
     } {}
     : FileStat st @ FileStat { . e mode . e size . e mtime 0 . e uid . e gid . e nlink . e ino 0 0 . e blocks 0 0 0 0 0 }
     : String modes ( stat_mode_string st )
-    ( string_push_bytes out # *u ( string_data modes ) ( string_len modes ) )
+    ( string_append out modes )
     ( string_push_char out 32 )
     ( __push_right out ( nurl_str_int . e nlink ) 4 )
     ( string_push_char out 32 )
@@ -225,7 +225,7 @@ unsafe @ __ls_long BxEnt e s dir i flags i now → v {
     ( string_push_char out 32 )
     ( __ls_time out . e mtime now )
     ( string_push_char out 32 )
-    ( string_push_bytes out # *u ( string_data . e name ) ( string_len . e name ) )
+    ( string_append out . e name )
     : i sfx ( __ls_suffix flags . e mode )
     ? != sfx 0 { ( string_push_char out sfx ) } {}
     ? == ( nurl_stat_kind . e mode ) FS_KIND_SYMLINK {
@@ -233,7 +233,7 @@ unsafe @ __ls_long BxEnt e s dir i flags i now → v {
         ?? ( fs_readlink ( string_data full ) ) {
             T tgt → {
                 ( string_push_str out ` -> ` )
-                ( string_push_bytes out # *u ( string_data tgt ) ( string_len tgt ) )
+                ( string_append out tgt )
             }
             F _ → {}
         }
@@ -242,7 +242,7 @@ unsafe @ __ls_long BxEnt e s dir i flags i now → v {
     ( bx_write out )
 }
 
-unsafe @ __ls_name_only BxEnt e i flags → v {
+@ __ls_name_only BxEnt e i flags → v {
     : String out ( string_new )
     ? != 0 & flags LS_INODE {
         ( string_push_int out . e ino )
@@ -252,7 +252,7 @@ unsafe @ __ls_name_only BxEnt e i flags → v {
         ( __push_right out ( nurl_str_int / . e blocks 2 ) 6 )
         ( string_push_char out 32 )
     } {}
-    ( string_push_bytes out # *u ( string_data . e name ) ( string_len . e name ) )
+    ( string_append out . e name )
     : i sfx ( __ls_suffix flags . e mode )
     ? != sfx 0 { ( string_push_char out sfx ) } {}
     ( string_push_char out 10 )
@@ -260,7 +260,7 @@ unsafe @ __ls_name_only BxEnt e i flags → v {
 }
 
 // Down-then-across columns, the layout `ls` uses on a terminal.
-unsafe @ __ls_columns ( Vec BxEnt ) ents i flags i width → v {
+@ __ls_columns ( Vec BxEnt ) ents i flags i width → v {
     : i n ( vec_len [BxEnt] ents )
     ? == n 0 { ^ } {}
     : ~ i widest 0
@@ -289,7 +289,7 @@ unsafe @ __ls_columns ( Vec BxEnt ) ents i flags i width → v {
             ? < idx n {
                 ?? ( vec_get [BxEnt] ents idx ) {
                     T e → {
-                        ( string_push_bytes out # *u ( string_data . e name ) ( string_len . e name ) )
+                        ( string_append out . e name )
                         : i sfx ( __ls_suffix flags . e mode )
                         : ~ i used ( string_len . e name )
                         ? != sfx 0 { ( string_push_char out sfx ) = used + used 1 } {}
@@ -565,7 +565,7 @@ unsafe @ __ls_columns ( Vec BxEnt ) ents i flags i width → v {
     ^ rc
 }
 
-unsafe @ ap_rmdir ( Vec String ) argv → i {
+@ ap_rmdir ( Vec String ) argv → i {
     : BxOpts o ( bx_getopt argv 1 `pv` `parents=p,verbose=v` )
     : ~ i rc 0
     ? ! ( bx_ok o ) { = rc 1 } {
@@ -586,7 +586,7 @@ unsafe @ ap_rmdir ( Vec String ) argv → i {
                             : String parent ( path_dirname ( string_data p ) )
                             ? & > ( string_len parent ) 0 ! ( bx_streq ( string_data parent ) `.` ) {
                                 ( string_clear p )
-                                ( string_push_bytes p # *u ( string_data parent ) ( string_len parent ) )
+                                ( string_append p parent )
                                 = going T
                             } {}
                         } {}
@@ -837,8 +837,6 @@ unsafe @ ap_rmdir ( Vec String ) argv → i {
 
 // ── cp ────────────────────────────────────────────────────────────
 
-& `c` @ link s target s linkpath → i32
-
 : i CP_RECURSE 1
 : i CP_PRESERVE 2
 : i CP_FORCE 4
@@ -1077,7 +1075,7 @@ unsafe @ ap_rmdir ( Vec String ) argv → i {
 
 // ── ln ────────────────────────────────────────────────────────────
 
-unsafe @ ap_ln ( Vec String ) argv → i {
+@ ap_ln ( Vec String ) argv → i {
     : BxOpts o ( bx_getopt argv 1 `sfvnT` `symbolic=s,force=f,verbose=v,no-target-directory=T` )
     : ~ i rc 0
     ? ! ( bx_ok o ) { = rc 1 } {
@@ -1106,12 +1104,12 @@ unsafe @ ap_ln ( Vec String ) argv → i {
                         }
                     }
                 } {
-                    : i32 lr ( link src ( string_data d ) )
-                    ? != # i lr 0 {
-                        ( bx_err_at ( string_data d ) ( bx_ioerr ( _io_err_of_kind ( errno_kind ) ) ) )
-                        = rc 1
-                    } {
-                        ? ( bx_has o `v` ) { ( __cp_verbose ( string_data d ) src ) } {}
+                    ?? ( fs_link src ( string_data d ) ) {
+                        T _ → { ? ( bx_has o `v` ) { ( __cp_verbose ( string_data d ) src ) } {} }
+                        F e → {
+                            ( bx_err_at ( string_data d ) ( bx_ioerr e ) )
+                            = rc 1
+                        }
                     }
                 }
                 = i + i 1
@@ -1334,7 +1332,7 @@ unsafe @ ap_ln ( Vec String ) argv → i {
 
 // ── mktemp ────────────────────────────────────────────────────────
 
-unsafe @ ap_mktemp ( Vec String ) argv → i {
+@ ap_mktemp ( Vec String ) argv → i {
     : BxOpts o ( bx_getopt argv 1 `dup:tq` `directory=d,dry-run=u,tmpdir=p,quiet=q` )
     : ~ i rc 0
     ? ! ( bx_ok o ) { = rc 1 } {
@@ -1356,7 +1354,7 @@ unsafe @ ap_mktemp ( Vec String ) argv → i {
             ~ & ! made < attempt 200 {
                 : String cand ( string_clone dir )
                 ( string_push_char cand 47 )
-                ( string_push_bytes cand # *u ( string_data prefix ) ( string_len prefix ) )
+                ( string_append cand prefix )
                 ( string_push_int cand + * ( now_ms ) 1000 + attempt * # i ( getpid ) 7 )
                 ?? ( dir_create ( string_data cand ) ) {
                     T _ → {

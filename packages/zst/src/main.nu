@@ -16,6 +16,7 @@
 // thing, and `rm` is right there.
 
 $ `stdlib/core/io.nu`
+$ `stdlib/core/slice.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/args.nu`
@@ -54,14 +55,14 @@ $ `inspect.nu`
 }
 
 // Read a whole input: a file, or all of stdin when the path is empty.
-unsafe @ __read_input s path ( Vec i ) okslot → ( Vec u ) {
-    : *i op ( vec_data [i] okslot )
-    = . op 0 1
+@ __read_input s path ( Vec i ) okslot → ( Vec u ) {
+    : ( Slice i ) op ( slice_from_vec [i] okslot )
+    ( slice_put [i] op 0 1 )
     ? ( __is_stdin path ) { ^ ( read_all_stdin_bytes ) } {}
     ?? ( read_file_bytes path ) {
         T v → { ^ v }
         F _e → {
-            = . op 0 0
+            ( slice_put [i] op 0 0 )
             ( __die ( nurl_str_cat3 `cannot read '` path `'` ) )
             ^ ( vec_new [u] )
         }

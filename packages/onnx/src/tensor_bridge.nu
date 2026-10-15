@@ -10,14 +10,13 @@
 //     with dtensor_* ops — the activations never touch the host.
 //
 // Ownership rules:
-//   * rt_run_dtensor BORROWS the input DTensor (the engine registers the
-//     pointer but never releases it — the caller keeps the DTensor alive
-//     until the run's outputs are consumed or copied out).
+//   * rt_run_dtensor registers another owner of the input DTensor's
+//     device block as the graph input: the block lives as long as the run
+//     needs it, whatever the caller does with the DTensor.
 //   * dtensor_from_output COPIES the output device-to-device into a fresh
-//     owned DTensor (released with its last owner). A copy (not an
-//     ownership transfer) because graph outputs may ALIAS an engine-owned
-//     base allocation at an offset (Reshape/Split), and the engine lets
-//     its own allocations go at the next rt_reset anyway.
+//     owned DTensor (released with its last owner). A copy, not a share,
+//     because a graph output may ALIAS another tensor's block at an
+//     offset (Reshape/Split), and a DTensor is the caller's to write.
 //
 // Only TE_F32 tensors cross the seam — graphs compute in float32.
 
@@ -28,32 +27,28 @@ $ `runtime.nu`
 
 // Run a graph with a device-resident input: no host staging, no upload.
 // The DTensor must be TE_F32 and shaped as the graph expects. Returns the
-// graph's first output (engine-owned, valid until the next rt_reset).
-unsafe @ rt_run_dtensor Engine e__h OGraph g DTensor d → RTensor {
-    : *EngineImpl e ( _rt_engine_ptr e__h )
-    ? & ( dtensor_ok d ) == ( dtensor_dtype d ) TE_F32 {} {
-        ^ @ RTensor { ( string_new ) 0 ( vec_new [i] ) 0 }
-    }
-    ( rt_reset e__h )
+// graph's first output.
+@ rt_run_dtensor Engine h OGraph g DTensor d → RTensor {
+    ? & ( dtensor_ok d ) == ( dtensor_dtype d ) TE_F32 {} { ^ ( _rt_none ) }
+    : ~ EngineImpl e ( locked_take [EngineImpl] . h l )
     ( _rt_set_graph e g )
     ( rt_load_inits e g )
-    ( rt_put e ( string_data . g input_name ) ( gk_arg_dev . d buf ) ( _shape_copy . d shape ) )
-    ^ ( _rt_run_nodes e g )
+    ( rt_put e ( string_data . g input_name ) ( gk_buf_view . d buf 0 ( gk_buf_len . d buf ) ) ( _shape_copy . d shape ) )
+    : RTensor out ( _rt_run_nodes e g )
+    ( locked_restore [EngineImpl] . h l e )
+    ^ out
 }
 
-// Wrap a run's output as an OWNED device tensor (device-to-device copy —
-// see the ownership note above). The result lives independently of the
-// engine: rt_reset / the engine's last owner do not touch it.
+// Copy a run's output into an OWNED device tensor (device-to-device — see
+// the ownership note above). The result lives independently of the
+// engine and of the output.
 @ dtensor_from_output GpuKit kit Engine e RTensor t → DTensor {
     : i n . t nelem
-    ? & > n 0 != . t dptr 0 {} {
+    ? & > n 0 ( gk_buf_ok . t buf ) {} {
         ^ @ DTensor { TE_F32 ( vec_new [i] ) ( gk_buf_none GK_F32 ) }
     }
     : GkBuf b ( gk_dbuf_new kit n GK_F32 )
-    ? ( gk_buf_ok b ) {} {
-        ^ @ DTensor { TE_F32 ( vec_new [i] ) ( gk_buf_none GK_F32 ) }
-    }
-    ? == ( gpu_dtod ( gpu_buffer_view . b dptr * n 4 ) . t dptr ) 0 {} {
+    ? ( gk_dbuf_copy kit b . t buf ) {} {
         ^ @ DTensor { TE_F32 ( vec_new [i] ) ( gk_buf_none GK_F32 ) }
     }
     ^ @ DTensor { TE_F32 ( _shape_copy . t shape ) b }

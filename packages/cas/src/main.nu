@@ -34,11 +34,9 @@ $ `manifest.nu`
     ^ r
 }
 
-// Raw bytes to stdout (fd 1) — binary-safe, unlike the string printers.
-unsafe @ __cli_write_stdout ( Vec u ) data → v {
-    : i n ( vec_len [u] data )
-    ? > n 0 { : i _w ( write 1 # *u ( vec_data [u] data ) n ) } {}
-}
+// Raw bytes to stdout — binary-safe, unlike the string printers, and in
+// order with them (write_bytes shares stdout's buffer).
+@ __cli_write_stdout ( Vec u ) data → v { ( write_bytes data ) }
 
 @ __cli_err String e → i {
     ( nurl_eprintln ( string_data e ) )
@@ -63,7 +61,7 @@ unsafe @ __cli_write_stdout ( Vec u ) data → v {
         ^ 0
     } {}
     ? ( args_present p `version` ) {
-        ( nurl_print `cas 0.1.5\n` )
+        ( nurl_print `cas ` ) ( nurl_print ( pkg_version ) ) ( nurl_print `\n` )
         ^ 0
     } {}
 

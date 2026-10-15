@@ -53,6 +53,15 @@ class FormatterTest(unittest.TestCase):
                     check = self.run_fmt('--check', *args, data=data)
                     self.assertEqual((check.returncode, check.stdout), (code, b''), check.stderr)
 
+    def test_raw_prefix_glues_to_its_declaration_only(self):
+        # `raw` is a prefix right before `@` or `:` (grammar v2.9) and an
+        # ordinary identifier everywhere else.
+        src = 'raw : Dev { i addr i n }\nraw @   f   i x → i { ^ x }\n: i raw 5\n: S { i raw }\n'.encode()
+        want = 'raw : Dev { i addr i n }\n\nraw @ f i x → i { ^ x }\n\n: i raw 5\n: S { i raw }\n'.encode()
+        run = self.run_fmt(data=src)
+        self.assertEqual((run.returncode, run.stdout), (0, want), run.stderr)
+        self.assertEqual(self.run_fmt('--check', data=want).returncode, 0)
+
     def test_file_modes_and_unchanged_write(self):
         run = self.run_fmt(self.path)
         self.assertEqual((run.returncode, run.stdout), (0, CANONICAL), run.stderr)

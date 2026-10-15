@@ -1,5 +1,132 @@
 # Changelog
 
+## [0.11.9] — 2026-10-15
+
+- The host-memory kernels `gk_add_f` / `gk_sub_f` / `gk_mul_f` / `gk_div_f`, `gk_map_f`, `gk_reduce_sum_f` and `gk_dot_f` are checked kernels over views of the caller's `Vec`s. None of them is `unsafe` any more (4 fewer; `gk_matmul_f`'s tiled kernel stays).
+- New output view bindings: `gk_call_view_out_f` / `gk_call_view_out_i` bind a `Slice` the kernel writes into in place, as `slice_put` writes through one.
+- On the CPU backend, `gk_run` hands the kernel the caller's buffers where they are. The backend's device memory is host memory and a launch completes before it returns, so nothing is copied in or out. The copying path remains for a call whose output overlaps another of its buffers, so the kernel still reads its inputs as they were. Same results, with large calls far faster:
+
+  | Call | Before | Now |
+  |---|---|---|
+  | 4M-element `gk_mul_f` ×30 | 2.1–2.7 s | 0.06–0.11 s |
+  | 4M `gk_dot_f` ×20 | 1.3–1.4 s | 0.03–0.06 s |
+  | `gk_map_f` ×20 | about 1.0 s | about 0.1 s |
+
+  Small calls are at parity.
+
+## [0.11.8] — 2026-10-15
+
+- The device ops `gkd_ew` (add / sub / mul / div), `gkd_ew_bc`, `gkd_map` (relu, sigmoid, exp, tanh, sqrt, log, …), `gkd_gather`, `gkd_scatter`, `gkd_softmax_rows` and `gkd_sum` are checked kernels launched by `gk_run_checked_dev`. Every element they read or write is checked against its buffer, and none of them is `unsafe` any more (7 fewer). Their outputs are the same: 12/12 device-layer and 61/61 op-family checks against numpy on both backends, and onnx's static kernels match onnxruntime. With gpu 0.17.4 they are faster on the CPU backend than the raw kernels were.
+- A built checked kernel is held once and shared (`Arc`), so a launch no longer copies its source out of the cache. The kernel name is checked when the kernel is built, not on every launch.
+- Checked kernels' shared helpers sit behind an include guard and their per-buffer macros are `#undef`ined first, so many checked kernels concatenate into one translation unit (onnx's static backend does).
+- The `GkBuf` type family moves to `src/devbuf.nu`, which `dev.nu` and `checked.nu` both import.
+
+## [0.11.7] — 2026-10-15
+
+- **Block launches in the checked subset.** `gk_run_checked_dev` runs `nblocks` blocks of `block` threads over device buffers, bound with `gk_call_dev` (read and written) or `gk_call_dev_in` (read only). They may be f64, f32 or i64, and nothing is copied. The body also sees `tid`, `bid`, `bdim` and `nblocks`, and may use two new constructs:
+  - `SYNC()`, a block barrier.
+  - `SHARED_D` / `SHARED_F` / `SHARED_L(name, N);`, block-shared arrays. They are zeroed when the block starts, reached only through checked `LD` / `ST`, and limited to 32 KiB per block.
+
+  A barrier that some threads of a block skip is undefined behaviour on a GPU, so `SYNC()` is accepted only where the checker proves the whole block arrives. Every `if` / `for` / `while` around it must decide by values all threads share: scalars, block coordinates, loads from read-only buffers at such indices, and locals only ever given such values (a fixpoint over the body). A cooperative body has no `return` / `break` / `continue` / `switch` / `do` and braces every branch. A buffer read-only to the kernel may not overlap one it writes. `gk_call_set_i64` / `_f64` change a scalar between launches of one call.
+- **Unsoundness fixed in the subset:**
+  - A body could call `__syncthreads()` unchecked; it is refused now in favour of `SYNC()`.
+  - A local declared without a value (`long long i, t;`) is given `= 0`. Reading it was undefined behaviour.
+  - Two checked kernels given one name shared the first one's compiled kernel, because the kit caches kernels by entry name: the second ran with the first's argument layout. Each checked kernel now has an entry point of its own.
+- `tests/checkedcheck.nu`: 54 cases. They cover 26 block-launch verdicts, a shared-array tree reduction, f32 buffers, the overlap refusal and a reused kernel name.
+
+## [0.11.6] — 2026-10-15
+
+- Checked kernels read the caller's data in place: `gk_call_view_f` / `gk_call_view_i` bind a `Slice` as an input without copying it on the host. The borrow checker keeps what the view points into alive while the `GkCall` holds it: clearing the source first, or returning the call past it, does not compile (`tests/gpukit_test.sh` checks both).
+- Buffers bound with the same length share one bound, so a kernel that indexes several of them by one index (a tree's parallel node arrays) checks that index once.
+- On the host, a load's range check is a predicted branch with a cold out-of-range path, not a select the compiler folds into the load's address. On a dependent load chain (a tree walk) the select cost 25 %. CUDA keeps the select.
+- `tests/checkedcheck.nu`: a kernel over view bindings, with indices past the end of both views.
+
+## [0.11.5] — 2026-10-15
+
+- **Checked kernels** (src/checked.nu). `gk_run_checked` launches a kernel written in a subset that cannot reach memory it was not given. The body touches buffers only through `LD(name, i)` / `ST(name, i, v)`, which gpukit defines from each bound buffer's own length. It may declare scalar locals, branch, loop and call a fixed list of math functions and rounding intrinsics. Pointers, dereferences, address-of, indexing, member access, the preprocessor, quotes, `asm`, `goto`, keyword casts, reserved names, other calls and unbalanced braces are refused, with the reason, before anything is compiled. So the launch is a safe call. Bindings move in and out of a `GkCall` (`gk_call_in_f`/`_out_f`/`_in_i`/`_out_i`/`_i64`/`_f64`, `gk_call_take_f`/`_i`). An output starts as the Vec it was bound with, so the device's previous contents never come back. A body is checked once per (name, bindings, body). `tests/checkedcheck.nu` covers 24 subset verdicts and a run with out-of-range indices.
+- `gk_inout_f` / `gk_inout_i`: buffers uploaded before the launch and copied back after it (`GkArg` kind 3).
+
+## [0.11.4] — 2026-10-15
+
+- `gkd_rope2d` and `gkd_rope3d`: rotary position embedding over two axes (half-split pairs) and three axes (interleaved pairs, frequencies split `na`/`nb`/rest), in place on a [heads, n, dim] f32 tensor, by per-token i64 positions into cos/sin tables. Every buffer's size and dtype is checked against the launch, and a position past the tables leaves its pair untouched. They are lingbot-map's kernels, moved here unchanged, so a model package no longer needs `unsafe` to launch them.
+
+## [0.11.3] — 2026-10-15
+
+- `gk_dbuf_upload_batch kit dsts srcs release`: many uploads as one batch (pinned, double-buffered on CUDA), each from a checked `Slice u` view of exactly its buffer's bytes. Safe: the sources are views the borrow checker keeps alive for the call, so a loader no longer queues raw host addresses for `gpu_upload_batch`.
+
+## [0.11.2] — 2026-10-15
+
+- On a census kit, `gk_dbuf_new` now returns a buffer: zeroed host memory that the buffer owns and no kernel reads. A census caller no longer forges buffers with `gk_buf_wrap` over a made-up address, and a census buffer passed to a real kit by mistake still points at memory that exists.
+
+## [0.11.1] — 2026-10-15
+
+### Performance
+
+- `gk_dbuf_upload` / `gk_dbuf_download` move a large f32 buffer (4096
+  elements and up) through a staging f64 device buffer and one cast
+  kernel — one memcpy instead of one foreign call per element. What grad
+  did for itself with its own kernels is now what every caller gets; the
+  host loop stays as the fallback (no staging memory) and for small
+  buffers.
+
+## [0.11.0] — 2026-10-14
+
+Requires NURL 0.73.0 with globals set at start and h264–h268 closed.
+
+### Changed
+
+- A `GpuKit` is its immutable part (the device, whether it opened, whether
+  it is a census kit) in an `Arc`, beside its state (kernel cache,
+  profiler counts, device-memory pool) in a `Locked`. The state was
+  changed through `arc_ptr` from any thread holding a copy of the kit —
+  two threads compiling or allocating at once raced on the cache and the
+  pool. Each call takes the state for what it does and gives it back; a
+  launch holds it only across the launch, not the device sync.
+- `gk_census_name` / `gk_census_src` return a `String` of their own (they
+  lent the kit's, which a lock cannot lend).
+- 34 `unsafe` functions left (64 in 0.10.3): the kernel launches that
+  check their buffers before they vouch for them, the raw-pointer
+  bindings, the compile, and building a `GkBuf`. `gk_ok`, `gk_gpu`,
+  `gk_backend`, `gk_dbuf_new`, `gk_sync`, `gk_prof*`, `gk_pool_*`,
+  `gk_compile` and the other accessors are safe.
+- The pool and the profiler index their columns through checked Vec
+  access instead of `vec_data` pointers.
+
+### Added
+
+- `gk_dbuf_download_bytes kit b dst` — device to a checked view of host
+  bytes, F unless the view has room for the buffer (the download
+  counterpart of `gk_dbuf_upload_bytes`), and `gk_dbuf_copy kit dst src`,
+  a device-to-device copy that is F unless both buffers are there, share a
+  dtype and `dst` is large enough. Both safe; what `onnx` downloaded and
+  copied through raw device addresses with.
+
+## [0.10.3] — 2026-10-14
+
+### Added
+
+- `gk_dbuf_upload_bytes kit b bytes`: upload from a checked `( Slice u )`
+  (a tensor's bytes in a mapped file) — F unless it holds the buffer's
+  elements; one memcpy to the device, as fast as the raw path.
+
+### Changed
+
+- `gk_dbuf_upload_raw` is `raw`: it reads `n` elements from an address it
+  cannot check, so only an `unsafe` caller may vouch for one. (Every
+  caller already was one: safe code has no `*u` to hand it.)
+
+## [0.10.2] — 2026-10-14
+
+Requires NURL 0.73.0 (grammar v2.9 `raw`, `slice_window`, `file_is_open`).
+
+### Changed
+
+- `gk_run`, `gk_run_dev` and `gk_buf_wrap` are `raw` (NURL grammar v2.9): they launch kernel source over device addresses given as integers, or take an integer as device memory, so only an `unsafe` caller — which vouches for what it hands them — may call them. `GkBuf` and the pool's blocks are `raw` structs: safe code cannot make one up.
+- Every operation checks what its kernel indexes before it launches: sizes through overflow-checked products (`_gk_p2/3/4` — a product that wrapped to a buffer's length no longer passes), `gk_buf_view` / `gk_buf_view_as` inside their buffer (none otherwise), `gk_matmul_f` / the elementwise and dot kernels against their Vecs' lengths, softmax rows at least one column wide.
+- `gk_map_f` / `gkd_map` accept only an expression over `x`, numbers and math functions, `gkd_ew` / `gkd_ew_bc` only `+ - * /`, and identifiers as kernel names (`gk_expr_ok`, `gk_op_ok`, `gk_name_ok`): text spliced into a kernel can no longer reach memory.
+- 19 more functions are `unsafe`/`raw` than in 0.10.1 (68 now): where they launch kernels of their own, the trust is now written down.
+- Requires gpu 0.17, whose kernel compile and launch, buffer views and device-to-device copy are `raw` — the places gpukit calls them already establish what they need.
+
 ## [0.10.1] — 2026-10-12
 
 Requires NURL 0.73.0. No change of its own beyond its dependencies.

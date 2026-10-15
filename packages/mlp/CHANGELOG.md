@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.3.13] — 2026-10-14
+
+### Changed
+
+- `gradfit` follows grad 0.13 (the tape is passed `inout`). Results are unchanged.
+
+## [0.3.12] — 2026-10-14
+
+Requires NURL 0.73.0 (grammar v2.9 `raw`, `slice_window`, `file_is_open`).
+
+### Changed
+
+- Training indexes row windows of its buffers (`slice_window`, NURL 0.73.0): one bounds check per row, none per element. The backward pass accumulates Wᵀδ row by row, which vectorises and sums each element in the same order as before — the trained weights are bit-identical, and training runs 26% faster (gradfit_test's hand engine: 2.12 s against 2.85 s). No function is `unsafe` any more, tests included.
+- 11 fewer functions are `unsafe` than in 0.3.11 (0 left).
+
 ## [0.3.11] — 2026-10-12
 
 Requires NURL 0.73.0, in which a field written through a raw pointer

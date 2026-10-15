@@ -39,7 +39,7 @@ $ `deps/tensor/src/tensor.nu`
 // The C expression bound to leaf node `k`: `p[j]` for the j-th parameter,
 // the caller's expression for a data leaf, else the leaf's recorded VALUE
 // as a literal (a frozen scalar const).
-unsafe @ __ec_leaf * GTapeImpl tp i k ( Vec i ) pids ( Vec i ) lids ( Vec s ) lexprs String o → v {
+@ __ec_leaf GTape tp i k ( Vec i ) pids ( Vec i ) lids ( Vec s ) lexprs String o → v {
     : ~ i j 0
     ~ < j ( vec_len [i] pids ) {
         ? == ( _ti pids j ) k {
@@ -58,21 +58,20 @@ unsafe @ __ec_leaf * GTapeImpl tp i k ( Vec i ) pids ( Vec i ) lids ( Vec s ) le
         } {}
         = j + j 1
     }
-    : *Tensor tv # *Tensor ( _g_val tp k )
+    : Tensor tv ( _g_v tp k )
     ( __ec_f o ( _tf . tv data 0 ) )
 }
 
 // Emit the whole device function. `has_v` picks the dataset-bearing
 // signature compute_iterate uses. F on any non-scalar node / unknown op.
-unsafe @ gemit_cuda_grad GTape tp__h GVar loss ( Vec i ) pids ( Vec i ) lids ( Vec s ) lexprs b has_v String out → b {
-    : *GTapeImpl tp ( _GTape_ptr tp__h )
-    ? & ( tape_ok tp__h ) >= . loss id 0 {} { ^ F }
+@ gemit_cuda_grad GTape tp GVar loss ( Vec i ) pids ( Vec i ) lids ( Vec s ) lexprs b has_v String out → b {
+    ? & ( tape_ok tp ) >= . loss id 0 {} { ^ F }
     : i top . loss id
     // scalar check + need/reach sets (grad.nu's rules)
     : ( Vec i ) need ( vec_new [i] )
     : ~ i k 0
     ~ <= k top {
-        : *Tensor tv # *Tensor ( _g_val tp k )
+        : Tensor tv ( _g_v tp k )
         ? == ( vec_len [f] . tv data ) 1 {} { ^ F }
         : GNode nd ?? ( vec_get [GNode] . tp nodes k ) { T x → x F → @ GNode { -1 -1 -1 0.0 } }
         : ~ i nv 0

@@ -41,7 +41,7 @@ $ `stdlib/std/float.nu`
 // count — entry p depends on p alone. The reference sizes its table by
 // the sequence length, which is simply a generous upper bound (783
 // tokens for a 37x21 grid whose largest coordinate is 37).
-unsafe @ rope2d_tables i half i maxpos * f cos_t * f sin_t → v {
+@ rope2d_tables i half i maxpos ( Slice f ) cos_t ( Slice f ) sin_t → v {
     ? | <= half 0 <= maxpos 0 { ^ v } {}
     : i quarter / half 2
     : ~ i p 0
@@ -55,10 +55,10 @@ unsafe @ rope2d_tables i half i maxpos * f cos_t * f sin_t → v {
             : f c ( float_cos ang )
             : f s ( float_sin ang )
             // the table is the angle block concatenated with itself
-            = . cos_t + * p half i0 c
-            = . cos_t + * p half + i0 quarter c
-            = . sin_t + * p half i0 s
-            = . sin_t + * p half + i0 quarter s
+            ( slice_put [f] cos_t + * p half i0 c )
+            ( slice_put [f] cos_t + * p half + i0 quarter c )
+            ( slice_put [f] sin_t + * p half i0 s )
+            ( slice_put [f] sin_t + * p half + i0 quarter s )
             = i0 + i0 1
         }
         = p + p 1
@@ -68,7 +68,7 @@ unsafe @ rope2d_tables i half i maxpos * f cos_t * f sin_t → v {
 // Rotate `x` in place. `x` is [heads, n, dim] contiguous; `rows` and
 // `cols` are the per-token grid coordinates (length n); the tables come
 // from rope2d_tables with half = dim/2.
-unsafe @ rope2d_apply * f x i heads i n i dim * i rows * i cols * f cos_t * f sin_t → v {
+@ rope2d_apply ( Slice f ) x i heads i n i dim ( Slice i ) rows ( Slice i ) cols ( Slice f ) cos_t ( Slice f ) sin_t → v {
     ? | | | <= heads 0 <= n 0 <= dim 0 != % dim 2 0 { ^ v } {}
     : i half / dim 2
     : i quarter / half 2
@@ -82,19 +82,19 @@ unsafe @ rope2d_apply * f x i heads i n i dim * i rows * i cols * f cos_t * f si
             : ~ i axis 0
             ~ < axis 2 {
                 : i off + base * axis half
-                : i pos ? == axis 0 . rows t . cols t
+                : i pos ? == axis 0 ( slice_at [i] rows t ) ( slice_at [i] cols t )
                 : i tbl * pos half
                 : ~ i j 0
                 ~ < j quarter {
-                    : f x1 . x + off j
-                    : f x2 . x + off + j quarter
-                    : f c1 . cos_t + tbl j
-                    : f s1 . sin_t + tbl j
-                    : f c2 . cos_t + tbl + j quarter
-                    : f s2 . sin_t + tbl + j quarter
+                    : f x1 ( slice_at [f] x + off j )
+                    : f x2 ( slice_at [f] x + off + j quarter )
+                    : f c1 ( slice_at [f] cos_t + tbl j )
+                    : f s1 ( slice_at [f] sin_t + tbl j )
+                    : f c2 ( slice_at [f] cos_t + tbl + j quarter )
+                    : f s2 ( slice_at [f] sin_t + tbl + j quarter )
                     // rotate(x) = (−x2, x1)
-                    = . x + off j - * x1 c1 * x2 s1
-                    = . x + off + j quarter + * x2 c2 * x1 s2
+                    ( slice_put [f] x + off j - * x1 c1 * x2 s1 )
+                    ( slice_put [f] x + off + j quarter + * x2 c2 * x1 s2 )
                     = j + j 1
                 }
                 = axis + axis 1
@@ -146,7 +146,7 @@ unsafe @ rope2d_apply * f x i heads i n i dim * i rows * i cols * f cos_t * f si
 // cos/sin for one axis, written into `out` at column `col0` of a row of
 // `width` — the three axes share one table so a token's 32 frequencies
 // are contiguous.
-unsafe @ __r3_axis i dim i maxpos i col0 i width * f cos_t * f sin_t → v {
+@ __r3_axis i dim i maxpos i col0 i width ( Slice f ) cos_t ( Slice f ) sin_t → v {
     : i half / dim 2
     : ~ i p 0
     ~ < p maxpos {
@@ -155,8 +155,8 @@ unsafe @ __r3_axis i dim i maxpos i col0 i width * f cos_t * f sin_t → v {
             : f expo / # f * 2 i0 # f dim
             : f inv / 1.0 ( float_pow ROPE3_THETA expo )
             : f ang * # f p inv
-            = . cos_t + * p width + col0 i0 ( float_cos ang )
-            = . sin_t + * p width + col0 i0 ( float_sin ang )
+            ( slice_put [f] cos_t + * p width + col0 i0 ( float_cos ang ) )
+            ( slice_put [f] sin_t + * p width + col0 i0 ( float_sin ang ) )
             = i0 + i0 1
         }
         = p + p 1
@@ -169,7 +169,7 @@ unsafe @ __r3_axis i dim i maxpos i col0 i width * f cos_t * f sin_t → v {
 // aggregator's global blocks have head_dim 64 and split 20/22/22, the
 // camera head's trunk has head_dim 128 and splits 40/44/44. Same
 // kernel, same theta, different geometry.
-unsafe @ rope3d_tables_fhw i td i hd i wd i maxpos * f cos_t * f sin_t → v {
+@ rope3d_tables_fhw i td i hd i wd i maxpos ( Slice f ) cos_t ( Slice f ) sin_t → v {
     : i width / + + td hd wd 2
     ( __r3_axis td maxpos 0 width cos_t sin_t )
     ( __r3_axis hd maxpos / td 2 width cos_t sin_t )
@@ -178,14 +178,14 @@ unsafe @ rope3d_tables_fhw i td i hd i wd i maxpos * f cos_t * f sin_t → v {
 }
 
 // The aggregator's split: 20/22/22 over a 64-dim head.
-unsafe @ rope3d_tables i maxpos * f cos_t * f sin_t → v {
+@ rope3d_tables i maxpos ( Slice f ) cos_t ( Slice f ) sin_t → v {
     ( rope3d_tables_fhw R3_T R3_H R3_W maxpos cos_t sin_t )
 }
 
 // Rotate `x` [heads, n, dim] in place. `fr` / `rw` / `cl` hold each
 // token's (frame, row, column) position. dim must be 2·width (64).
-unsafe @ rope3d_apply_fhw * f x i heads i n i dim i nt i nh * i fr * i rw * i cl
-* f cos_t * f sin_t → v {
+@ rope3d_apply_fhw ( Slice f ) x i heads i n i dim i nt i nh ( Slice i ) fr ( Slice i ) rw ( Slice i ) cl
+( Slice f ) cos_t ( Slice f ) sin_t → v {
     : i width / dim 2
     ? | <= heads 0 <= n 0 { ^ v } {}
     : ~ i h 0
@@ -196,14 +196,14 @@ unsafe @ rope3d_apply_fhw * f x i heads i n i dim i nt i nh * i fr * i rw * i cl
             : ~ i j 0
             ~ < j width {
                 // which axis this frequency belongs to picks the position
-                : i pos ? < j nt . fr t ? < j + nt nh . rw t . cl t
+                : i pos ? < j nt ( slice_at [i] fr t ) ? < j + nt nh ( slice_at [i] rw t ) ( slice_at [i] cl t )
                 : i tbl + * pos width j
-                : f c . cos_t tbl
-                : f s . sin_t tbl
-                : f x1 . x + base * 2 j
-                : f x2 . x + base + * 2 j 1
-                = . x + base * 2 j - * x1 c * x2 s
-                = . x + base + * 2 j 1 + * x1 s * x2 c
+                : f c ( slice_at [f] cos_t tbl )
+                : f s ( slice_at [f] sin_t tbl )
+                : f x1 ( slice_at [f] x + base * 2 j )
+                : f x2 ( slice_at [f] x + base + * 2 j 1 )
+                ( slice_put [f] x + base * 2 j - * x1 c * x2 s )
+                ( slice_put [f] x + base + * 2 j 1 + * x1 s * x2 c )
                 = j + j 1
             }
             = t + t 1
@@ -212,6 +212,6 @@ unsafe @ rope3d_apply_fhw * f x i heads i n i dim i nt i nh * i fr * i rw * i cl
     }
 }
 
-unsafe @ rope3d_apply * f x i heads i n i dim * i fr * i rw * i cl * f cos_t * f sin_t → v {
+@ rope3d_apply ( Slice f ) x i heads i n i dim ( Slice i ) fr ( Slice i ) rw ( Slice i ) cl ( Slice f ) cos_t ( Slice f ) sin_t → v {
     ( rope3d_apply_fhw x heads n dim ( rope3d_nt ) ( rope3d_nh ) fr rw cl cos_t sin_t )
 }

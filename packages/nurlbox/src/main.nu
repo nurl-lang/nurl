@@ -249,7 +249,7 @@ $ `sh.nu`
 //
 // Kept at the end of the file, below the generated applet table, so a
 // regeneration of that table cannot take it with it.
-unsafe @ __install s dir b symlink → i {
+@ __install s dir b symlink → i {
     : ( Vec String ) argv0 ( env_args_list )
     : String self ( string_new )
     : Path me ( path_new ( bx_at argv0 0 ) )
@@ -286,11 +286,13 @@ unsafe @ __install s dir b symlink → i {
                     }
                 }
             } {
-                : i32 lr ( link ( string_data self ) ( string_data target ) )
-                ? != # i lr 0 {
-                    ( bx_err_at ( string_data target ) ( bx_ioerr ( _io_err_of_kind ( errno_kind ) ) ) )
-                    = ok F
-                } {}
+                ?? ( fs_link ( string_data self ) ( string_data target ) ) {
+                    T _ → {}
+                    F e → {
+                        ( bx_err_at ( string_data target ) ( bx_ioerr e ) )
+                        = ok F
+                    }
+                }
             }
             ? ok { = made + made 1 } { = rc 1 }
         }

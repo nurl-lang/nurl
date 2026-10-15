@@ -38,12 +38,11 @@ $ `detect.nu`
 
 // Run the detector on one image, draw boxes in place, print detections.
 // Returns the number of detections.
-unsafe @ detect_image Engine e OGraph g Image im f conf f iou → i {
+@ detect_image Engine e OGraph g Image im f conf f iou → i {
     : Image in416 ? & == ( img_w im ) 416 == ( img_h im ) 416 im ( img_resize im 416 416 )
-    : ( Vec u ) host ( img_to_nchw in416 )
-    : RTensor out ( rt_run_shaped e g ( vec_data [u] host ) ( shape4 1 3 416 416 ) )
-    : GpuHost grid__h ( rt_download e out )
-    : *u grid ( gpu_host_ptr grid__h )
+    : GpuHost host ( img_to_nchw in416 )
+    : RTensor out ( rt_run_host e g host ( shape4 1 3 416 416 ) )
+    : GpuHost grid ( rt_download e out )
     : ( Vec Detection ) raw ( yolo_decode grid conf )
     : ( Vec Detection ) dets ( yolo_nms raw iou )
     : i nd ( vec_len [Detection] dets )

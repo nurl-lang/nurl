@@ -41,35 +41,52 @@ $ `detect.nu`
     ^ v
 }
 
-unsafe @ main → i {
-    ( gpu_force_webgpu )
+// The host imports write and read through raw addresses; these wrappers
+// hand them a buffer of exactly the size the protocol above names.
+unsafe @ __od_model → ( Vec u ) {
     : i n ( host_blob_size 0 )
-    ? <= n 0 { ( host_status - 0 1 10 ) ^ 1 } {}
-    : ( Vec u ) mb ( vec_with_cap [u] n )
+    ? <= n 0 { ^ ( vec_new [u] ) } {}
+    : ( Vec u ) mb ( vec_zeroed [u] n )
     : i _r ( host_blob_read 0 ( vec_data [u] mb ) )
-    : b _s ( vec_set_len [u] mb n )
+    ^ mb
+}
+
+unsafe @ __od_frame GpuHost nchw GpuHost ctl → i {
+    ? | != ( gpu_host_bytes nchw ) * * * 3 OD_N OD_N 4 < ( gpu_host_bytes ctl ) 4 { ^ 1 } {}
+    ^ ( host_frame ( gpu_host_ptr nchw ) ( gpu_host_ptr ctl ) )
+}
+
+unsafe @ __od_result GpuHost dets i nd → v {
+    ? > * nd 24 ( gpu_host_bytes dets ) { ^ } {}
+    ( host_result ( gpu_host_ptr dets ) nd )
+}
+
+// Two integers, no memory.
+unsafe @ __od_status i code i extra → v { ( host_status code extra ) }
+
+@ main → i {
+    ( gpu_force_webgpu )
+    : ( Vec u ) mb ( __od_model )
+    : i n ( vec_len [u] mb )
+    ? <= n 0 { ( __od_status - 0 1 10 ) ^ 1 } {}
     : OGraph g ( onnx_parse mb )
-    ( host_status 1 n )
+    ( __od_status 1 n )
 
     : Engine e ( rt_open 0 )
-    ? ! ( rt_ok e ) { ( host_status - 0 1 12 ) ^ 1 } {}
-    ( host_status 2 0 )
+    ? ! ( rt_ok e ) { ( __od_status - 0 1 12 ) ^ 1 } {}
+    ( __od_status 2 0 )
 
-    : ( Vec u ) nchw_v ( vec_zeroed [u] * * * 3 OD_N OD_N 4 )
-    : ( Vec u ) ctl_v ( vec_zeroed [u] * 16 4 )
-    : ( Vec u ) dets_v ( vec_zeroed [u] * * OD_MAXDET 6 4 )
-    : *u nchw ( vec_data [u] nchw_v )
-    : *u ctl ( vec_data [u] ctl_v )
-    : *u dets_out ( vec_data [u] dets_v )
+    : GpuHost nchw ( gpu_host_alloc * * * 3 OD_N OD_N 4 )
+    : GpuHost ctl ( gpu_host_alloc * 16 4 )
+    : GpuHost dets_out ( gpu_host_alloc * * OD_MAXDET 6 4 )
 
     : ~ b run T
     ~ run {
-        : i cmd ( host_frame nchw ctl )
+        : i cmd ( __od_frame nchw ctl )
         ? == cmd 0 {
-            : f conf / # f # i ( nurl_peek_i32 ctl 0 ) 1000.0
-            : RTensor out ( rt_run_shaped e g nchw ( od_shape4 1 3 OD_N OD_N ) )
-            : GpuHost grid__h ( rt_download e out )
-            : *u grid ( gpu_host_ptr grid__h )
+            : f conf / # f ( gpu_host_get_i32 ctl 0 ) 1000.0
+            : RTensor out ( rt_run_host e g nchw ( od_shape4 1 3 OD_N OD_N ) )
+            : GpuHost grid ( rt_download e out )
             : ( Vec Detection ) raw ( yolo_decode grid conf )
             : ( Vec Detection ) dets ( yolo_nms raw 0.5 )
             : ~ i nd ( vec_len [Detection] dets )
@@ -79,18 +96,18 @@ unsafe @ main → i {
                 ?? ( vec_get [Detection] dets k ) {
                     T d → {
                         : i b * k 6
-                        ( nurl_poke_f32 dets_out + b 0 # f . d cls )
-                        ( nurl_poke_f32 dets_out + b 1 . d score )
-                        ( nurl_poke_f32 dets_out + b 2 . d cx )
-                        ( nurl_poke_f32 dets_out + b 3 . d cy )
-                        ( nurl_poke_f32 dets_out + b 4 . d w )
-                        ( nurl_poke_f32 dets_out + b 5 . d h )
+                        ( gpu_host_set_f32 dets_out + b 0 # f . d cls )
+                        ( gpu_host_set_f32 dets_out + b 1 . d score )
+                        ( gpu_host_set_f32 dets_out + b 2 . d cx )
+                        ( gpu_host_set_f32 dets_out + b 3 . d cy )
+                        ( gpu_host_set_f32 dets_out + b 4 . d w )
+                        ( gpu_host_set_f32 dets_out + b 5 . d h )
                     }
                     F _ → {}
                 }
                 = k + k 1
             }
-            ( host_result dets_out nd )
+            ( __od_result dets_out nd )
         } {
             = run F
         }

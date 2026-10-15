@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.2.5] — 2026-10-14
+
+Requires NURL 0.73.0 (grammar v2.9 `raw`, `slice_window`, `file_is_open`).
+
+### Changed
+
+- An opened AVI keeps its state in a `Locked` (stdlib/std/thread.nu) instead of an `Arc` changed through a raw pointer, and its file is a `File` the state owns from the start (no zeroed placeholder). No function is `unsafe` any more.
+- 11 fewer functions are `unsafe` than in 0.2.4 (0 left).
+
 ## [0.2.4] — 2026-10-12
 
 Requires NURL 0.73.0, in which a standard-library handle holds its

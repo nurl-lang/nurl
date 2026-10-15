@@ -1,0 +1,9 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+a name long enough to own a heap buffer
+rc: the value was taken (rc_take) and not restored
+rc: the value was taken (rc_take) and not restored
+1
+rc_restore: the value was not taken

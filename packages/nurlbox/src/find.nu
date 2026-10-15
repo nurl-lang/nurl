@@ -63,7 +63,7 @@ $ `stdlib/core/slice.nu`
 }
 
 // The `%`-directives `stat -c` understands.
-unsafe @ __stat_directive String out FileStat st s path i d → b {
+@ __stat_directive String out FileStat st s path i d → b {
     ? == d 110 { ( string_push_str out path ) ^ T } {}
     ? == d 115 { ( string_push_int out . st size ) ^ T } {}
     ? == d 98 { ( string_push_int out . st blocks ) ^ T } {}
@@ -75,19 +75,19 @@ unsafe @ __stat_directive String out FileStat st s path i d → b {
     ? == d 97 { ( __stat_octal out ( stat_mode_bits st ) ? != 0 & . st mode 3584 4 3 ) ^ T } {}
     ? == d 65 {
         : String m ( stat_mode_string st )
-        ( string_push_bytes out # *u ( string_data m ) ( string_len m ) )
+        ( string_append out m )
         ^ T
     } {}
     ? == d 117 { ( string_push_int out . st uid ) ^ T } {}
     ? == d 103 { ( string_push_int out . st gid ) ^ T } {}
     ? == d 85 {
         : String n ( __stat_name_of . st uid F )
-        ( string_push_bytes out # *u ( string_data n ) ( string_len n ) )
+        ( string_append out n )
         ^ T
     } {}
     ? == d 71 {
         : String n ( __stat_name_of . st gid T )
-        ( string_push_bytes out # *u ( string_data n ) ( string_len n ) )
+        ( string_append out n )
         ^ T
     } {}
     ? == d 104 { ( string_push_int out . st nlink ) ^ T } {}
@@ -100,10 +100,10 @@ unsafe @ __stat_directive String out FileStat st s path i d → b {
     ^ F
 }
 
-unsafe @ __stat_timestamp String out i secs i nsec → v {
+@ __stat_timestamp String out i secs i nsec → v {
     : Time t ( time_local secs )
     : String base ( time_format t `%Y-%m-%d %H:%M:%S` )
-    ( string_push_bytes out # *u ( string_data base ) ( string_len base ) )
+    ( string_append out base )
     ( string_push_char out 46 )
     : ~ i k 100000000
     ~ > k 0 {
@@ -122,31 +122,31 @@ unsafe @ __stat_timestamp String out i secs i nsec → v {
     ( string_push_int out mm )
 }
 
-unsafe @ __stat_default String out FileStat st s path → v {
+@ __stat_default String out FileStat st s path → v {
     ( string_push_str out `  File: ` )
     ( string_push_str out path )
     ? ( stat_is_symlink st ) {
         ?? ( fs_readlink path ) {
             T t → {
                 ( string_push_str out ` -> ` )
-                ( string_push_bytes out # *u ( string_data t ) ( string_len t ) )
+                ( string_append out t )
             }
             F _ → {}
         }
     } {}
     ( string_push_str out `\n  Size: ` )
     : String sz ( string_from ( nurl_str_int . st size ) )
-    ( string_push_bytes out # *u ( string_data sz ) ( string_len sz ) )
+    ( string_append out sz )
     : ~ i pad - 10 ( string_len sz )
     ~ > pad 0 { ( string_push_char out 32 ) = pad - pad 1 }
     ( string_push_str out `\tBlocks: ` )
     : String bl ( string_from ( nurl_str_int . st blocks ) )
-    ( string_push_bytes out # *u ( string_data bl ) ( string_len bl ) )
+    ( string_append out bl )
     : ~ i pad2 - 11 ( string_len bl )
     ~ > pad2 0 { ( string_push_char out 32 ) = pad2 - pad2 1 }
     ( string_push_str out `IO Block: ` )
     : String io ( string_from ( nurl_str_int . st blksize ) )
-    ( string_push_bytes out # *u ( string_data io ) ( string_len io ) )
+    ( string_append out io )
     : ~ i pad3 - 7 ( string_len io )
     ~ > pad3 0 { ( string_push_char out 32 ) = pad3 - pad3 1 }
     ( string_push_str out ( __stat_kind_word . st mode ) )
@@ -156,7 +156,7 @@ unsafe @ __stat_default String out FileStat st s path → v {
     ( string_push_int out . st dev )
     ( string_push_str out `d\tInode: ` )
     : String ino ( string_from ( nurl_str_int . st ino ) )
-    ( string_push_bytes out # *u ( string_data ino ) ( string_len ino ) )
+    ( string_append out ino )
     : ~ i pad4 - 12 ( string_len ino )
     ~ > pad4 0 { ( string_push_char out 32 ) = pad4 - pad4 1 }
     ( string_push_str out `Links: ` )
@@ -165,27 +165,27 @@ unsafe @ __stat_default String out FileStat st s path → v {
     ( __stat_octal out ( stat_mode_bits st ) 4 )
     ( string_push_char out 47 )
     : String ms ( stat_mode_string st )
-    ( string_push_bytes out # *u ( string_data ms ) ( string_len ms ) )
+    ( string_append out ms )
     ( string_push_str out `)  Uid: (` )
     : String uid ( string_from ( nurl_str_int . st uid ) )
     : ~ i up - 5 ( string_len uid )
     ~ > up 0 { ( string_push_char out 32 ) = up - up 1 }
-    ( string_push_bytes out # *u ( string_data uid ) ( string_len uid ) )
+    ( string_append out uid )
     ( string_push_char out 47 )
     : String un ( __stat_name_of . st uid F )
     : ~ i unp - 8 ( string_len un )
     ~ > unp 0 { ( string_push_char out 32 ) = unp - unp 1 }
-    ( string_push_bytes out # *u ( string_data un ) ( string_len un ) )
+    ( string_append out un )
     ( string_push_str out `)   Gid: (` )
     : String gid ( string_from ( nurl_str_int . st gid ) )
     : ~ i gp - 5 ( string_len gid )
     ~ > gp 0 { ( string_push_char out 32 ) = gp - gp 1 }
-    ( string_push_bytes out # *u ( string_data gid ) ( string_len gid ) )
+    ( string_append out gid )
     ( string_push_char out 47 )
     : String gn ( __stat_name_of . st gid T )
     : ~ i gnp - 8 ( string_len gn )
     ~ > gnp 0 { ( string_push_char out 32 ) = gnp - gnp 1 }
-    ( string_push_bytes out # *u ( string_data gn ) ( string_len gn ) )
+    ( string_append out gn )
     ( string_push_str out `)\nAccess: ` )
     ( __stat_timestamp out . st atime . st atime_ns )
     ( string_push_str out `\nModify: ` )
@@ -265,11 +265,11 @@ unsafe @ __stat_default String out FileStat st s path → v {
 : i DU_MEGA 16
 : i DU_TOTAL 32
 
-unsafe @ __du_emit s path i bytes_512 i flags → v {
+@ __du_emit s path i bytes_512 i flags → v {
     : String out ( string_new )
     ? != 0 & flags DU_HUMAN {
         : String h ( bx_human * bytes_512 512 )
-        ( string_push_bytes out # *u ( string_data h ) ( string_len h ) )
+        ( string_append out h )
     } {
         ? != 0 & flags DU_BYTES {
             ( string_push_int out * bytes_512 512 )
@@ -369,6 +369,7 @@ unsafe @ __du_emit s path i bytes_512 i flags → v {
 
 $ `stdlib/core/posix.nu`
 $ `fileops.nu`
+$ `stdlib/std/process.nu`
 
 : FindCtx {
     s path
@@ -438,30 +439,18 @@ $ `fileops.nu`
 // -exec CMD ... {} \;  — a real fork + exec, so the child writes to the
 // terminal itself instead of having its output captured and replayed
 // out of order.
-unsafe @ __find_exec ( Vec String ) toks i from i to s path → b {
+@ __find_exec ( Vec String ) toks i from i to s path → b {
     : i n - to from
     ? <= n 0 { ^ F } {}
-    ( flush )
-    : i32 pid ( fork )
-    ? == # i pid 0 {
-        : ( Vec u ) argvbuf_v ( vec_zeroed [u] * 8 + n 1 )
-        : s argvbuf # s ( vec_data [u] argvbuf_v )
-        : ~ i k 0
-        ~ < k n {
-            : s t ( __find_tok toks + from k )
-            ( nurl_poke argvbuf k # i ? ( bx_streq t `{}` ) path t )
-            = k + k 1
-        }
-        : i32 _r ( execvp # s ( nurl_peek argvbuf 0 ) # *u argvbuf )
-        ( _exit # i32 127 )
-        ^ F
-    } {}
-    ? < # i pid 0 { ^ F } {}
-    : ( Vec u ) statusbuf_v ( vec_zeroed [u] 8 )
-    : s statusbuf # s ( vec_data [u] statusbuf_v )
-    : i32 _w ( waitpid pid # *u statusbuf # i32 0 )
-    : i raw ( nurl_peek statusbuf 0 )
-    ^ == 0 ( nurl_wait_exit_status & raw 65535 )
+    // the command, `{}` replaced by the path
+    : ( Vec String ) argv ( vec_new [String] )
+    : ~ i k 0
+    ~ < k n {
+        : s t ( __find_tok toks + from k )
+        ( vec_push [String] argv ( string_from ? ( bx_streq t `{}` ) path t ) )
+        = k + k 1
+    }
+    ^ == 0 ( process_run_inherit argv 0 )
 }
 
 @ __find_print s path i term → v {

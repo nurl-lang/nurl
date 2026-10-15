@@ -7,6 +7,7 @@
 //   client --port N
 
 $ `stdlib/std/args.nu`
+$ `stdlib/core/slice.nu`
 $ `stdlib/std/time.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/encode.nu`
@@ -64,7 +65,7 @@ $ `../src/oauth.nu`
     ( ok ! ( string_eq s1 s2 ) `two states differ` )
 }
 
-unsafe @ test_jwks_offline → v {
+@ test_jwks_offline → v {
     : s doc `{"keys":[{"kty":"EC","crv":"P-256","kid":"a","alg":"ES256","use":"sig","x":"f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU","y":"x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0"},{"kty":"RSA","kid":"b","alg":"RS256","n":"AQAB","e":"AQAB"}]}`
     : ( Vec JwkKey ) ks ( jwks_parse doc )
     ( ok == ( vec_len [JwkKey] ks ) 2 `JWKS parses both keys` )
@@ -77,8 +78,8 @@ unsafe @ test_jwks_offline → v {
     // RFC 7638 §3.1's own example key thumbprint is defined for RSA; for
     // the EC key we assert only that it is stable and 43 chars of
     // base64url — the property callers rely on when using it as a kid.
-    : *JwkKey data ( vec_data [JwkKey] ks )
-    : JwkKey k0 . data 0
+    : ( Slice JwkKey ) data ( slice_from_vec [JwkKey] ks )
+    : JwkKey k0 ( slice_at [JwkKey] data 0 )
     : String tp1 ( jwk_thumbprint k0 )
     : String tp2 ( jwk_thumbprint k0 )
     ( ok & == ( string_len tp1 ) 43 ( string_eq tp1 tp2 ) `thumbprint is stable, 43 chars` )
@@ -224,15 +225,15 @@ unsafe @ test_jwks_offline → v {
     ^ out
 }
 
-unsafe @ test_rsa_offline → v {
+@ test_rsa_offline → v {
     : ( Vec JwkKey ) ks ( jwks_parse ( rsa_jwks ) )
     ( ok == ( vec_len [JwkKey] ks ) 1 `RSA JWKS parses` )
     : i idx ( jwks_select ks `rsa1` `RS256` )
     ( ok == idx 0 `a key with no alg member serves RS256` )
     ( ok == ( jwks_select ks `rsa1` `PS256` ) 0 `... and PS256` )
     ( ok == ( jwks_select ks `rsa1` `ES256` ) -1 `... but not ES256` )
-    : *JwkKey data ( vec_data [JwkKey] ks )
-    : JwkKey jk . data 0
+    : ( Slice JwkKey ) data ( slice_from_vec [JwkKey] ks )
+    : JwkKey jk ( slice_at [JwkKey] data 0 )
     ( ok == ( vec_len [u] . jk n ) 256 `2048-bit modulus decodes to 256 bytes` )
 
     ?? ( jws_verify_with_key jk ( rs256_token ) ) {
@@ -282,7 +283,7 @@ unsafe @ test_rsa_offline → v {
     ^ msg
 }
 
-unsafe @ test_eddsa_offline → v {
+@ test_eddsa_offline → v {
     : ~ ( Vec u ) seed ( vec_new [u] )
     ?? ( bytes_from_hex `9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60` ) {
         T v → { = seed v }
@@ -304,8 +305,8 @@ unsafe @ test_eddsa_offline → v {
     : ( Vec u ) msg ( jws_signing_bytes hdr pld )
     : ( Vec u ) sig ( ed25519_sign_pure seed msg )
     : String token ( jws_make hdr pld sig )
-    : *JwkKey data ( vec_data [JwkKey] ks )
-    : JwkKey jk . data 0
+    : ( Slice JwkKey ) data ( slice_from_vec [JwkKey] ks )
+    : JwkKey jk ( slice_at [JwkKey] data 0 )
     ?? ( jws_verify_with_key jk ( string_data token ) ) {
         F e → { ( ok F `EdDSA round trip verifies` ) ( nurl_eprintln ( oauth_err_name e ) ) }
         T c → {
@@ -320,7 +321,7 @@ unsafe @ test_eddsa_offline → v {
     }
 }
 
-unsafe @ test_hs256_offline → v {
+@ test_hs256_offline → v {
     : ( Vec u ) secret ( bytes_from_str `a shared secret, configured on both sides` )
     : String k64 ( b64_url_encode_vec secret )
     : String jwks ( string_with_cap 256 )
@@ -336,8 +337,8 @@ unsafe @ test_hs256_offline → v {
     : ( Vec u ) msg ( jws_signing_bytes hdr pld )
     : ( Vec u ) mac ( hmac_sha256_pure secret msg )
     : String token ( jws_make hdr pld mac )
-    : *JwkKey data ( vec_data [JwkKey] ks )
-    : JwkKey jk . data 0
+    : ( Slice JwkKey ) data ( slice_from_vec [JwkKey] ks )
+    : JwkKey jk ( slice_at [JwkKey] data 0 )
     ?? ( jws_verify_with_key jk ( string_data token ) ) {
         F e → { ( ok F `HS256 round trip verifies` ) ( nurl_eprintln ( oauth_err_name e ) ) }
         T c → {

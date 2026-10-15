@@ -9,7 +9,7 @@ $ `stdlib/ext/env.nu`
 $ `src/unigram.nu`
 $ `stdlib/core/slice.nu`
 
-unsafe @ main → i {
+@ main → i {
     : ( Vec String ) av ( env_args_list )
     ? >= ( vec_len [String] av ) 3 {} { ( nurl_print `usage: unigram_check <tokenizer.json> <corpus>\n` ) ^ 2 }
     : String tp ?? ( vec_get [String] av 1 ) { T x → x F → ( string_new ) }
@@ -26,7 +26,7 @@ unsafe @ main → i {
                     ~ <= p n {
                         ? | == p n == ( slice_byte d_v p ) 10 {
                             : String line ( string_new )
-                            ( string_push_bytes line # *u + # i d ls - p ls )
+                            ( string_push_window line d_v ls - p ls )
                             : ( Vec i ) ids ( vec_new [i] )
                             : b _ok ( uni_encode u ( string_data line ) T ids )
                             : String o ( string_new )

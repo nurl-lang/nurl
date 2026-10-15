@@ -448,6 +448,19 @@ $ `stdlib/core/rcbox.nu`
 // of nurlpkg should fall back to copying.
 & `c` @ symlink s target s linkpath → i32
 
+& `c` @ nurl_hard_link s target s linkpath → i32
+
+// A hard link: `linkpath` names the same file `target` does (link(2);
+// CreateHardLinkA on Windows).
+@ fs_link s target s linkpath → !v IoErr {
+    : i32 rc ( nurl_hard_link target linkpath )
+    ? == rc 0 {
+        ^ @ !v IoErr { T 0 }
+    } {}
+    : IoErr e ( _io_err_of_kind ( errno_kind ) )
+    ^ @ !v IoErr { F e }
+}
+
 // Create a symbolic link at `linkpath` pointing to `target`. Returns
 // IoErr {AlreadyExists} if the entry already exists (errno = EEXIST),
 // {PermissionDenied} on EACCES, {Other} for everything else.
@@ -617,6 +630,23 @@ $ `stdlib/core/rcbox.nu`
             ^ @ !( Vec u ) IoErr { T bytes }
         }
     }
+}
+
+// All of `v` to the open file descriptor `fd` (1 = standard output) — a
+// short write is continued — with nothing added: how many bytes went, or
+// -1 when a write failed.
+@ fd_write_all i fd ( Vec u ) v → i { ^ ( __fd_write_all fd v ) }
+
+unsafe @ __fd_write_all i fd ( Vec u ) v → i {
+    : i n ( vec_len [u] v )
+    : *u p ( vec_data [u] v )
+    : ~ i off 0
+    ~ < off n {
+        : i k ( write # i32 fd # *u + # i p off - n off )
+        ? <= k 0 { ^ -1 } {}
+        = off + off k
+    }
+    ^ off
 }
 
 @ write_file_bytes s path ( Vec u ) v → !v IoErr {
@@ -912,6 +942,14 @@ $ `stdlib/core/rcbox.nu`
     ? == 0 # i . f ctl { ^ # s 0 } {}
     ^ # s . ( shared_ptr [FileImpl] . f ctl ) fp
 }
+
+// Whether `f` still has its stream: F for a null File and after
+// file_close (on any copy).
+@ file_is_open File f → b { ^ != 0 # i ( file_raw f ) }
+
+// The null File: no stream (file_is_open F; every operation on it is an
+// error, closing it a no-op). A placeholder for a File opened later.
+@ file_none → File { ^ @ File { ( shared_null [FileImpl] ) } }
 
 // Take over an open FILE* (0 gives the null File): the File's last owner
 // closes it.

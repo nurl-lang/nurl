@@ -423,13 +423,13 @@ $ `write.nu`
 }
 
 // f64 vector equality against a raw expected pointer + count
-unsafe @ __st_vec_eq ( Vec f ) got * f exp i n → b {
+@ __st_vec_eq ( Vec f ) got ( Slice f ) exp i n → b {
     ? != ( vec_len [f] got ) n { ^ F } {}
     : ~ i k 0
     : ~ b ok T
     ~ < k n {
         ?? ( vec_get [f] got k ) {
-            T x → { ? == x . exp k {} { = ok F } }
+            T x → { ? == x ( slice_at [f] exp k ) {} { = ok F } }
             F → { = ok F }
         }
         = k + k 1
@@ -512,7 +512,7 @@ unsafe @ __st_vec_eq ( Vec f ) got * f exp i n → b {
 
 // Streaming-writer misuse must fail with clean errors, and the quant
 // encoders must round-trip through the dequant oracle.
-unsafe @ __st_stream_quant inout STCnt cn s gwpath → v {
+@ __st_stream_quant inout STCnt cn s gwpath → v {
     // 1. the twin file is byte-identical to the in-memory writer's
     : !String IoErr tf ( fs_tempfile `/tmp` `gguf-selftest-stream.` )
     : ~ String spath ( string_new )
@@ -531,13 +531,7 @@ unsafe @ __st_stream_quant inout STCnt cn s gwpath → v {
                     T b2 → {
                         ? == ( vec_len [u] a ) ( vec_len [u] b2 ) {
                             = same T
-                            : *u PA ( vec_data [u] a )
-                            : *u PB ( vec_data [u] b2 )
-                            : ~ i k 0
-                            ~ < k ( vec_len [u] a ) {
-                                ? == # i . PA k # i . PB k {} { = same F }
-                                = k + k 1
-                            }
+                            = same ( slice_bytes_eq ( slice_from_vec [u] a ) ( slice_from_vec [u] b2 ) )
                         } {}
                     }
                     F _ → {}
@@ -638,14 +632,14 @@ unsafe @ __st_stream_quant inout STCnt cn s gwpath → v {
     ( __st_push_f32 xf 65504.0 )
     ?? ( gq_f16_encode xf ) {
         T enc → {
-            : f16bits [i | 15872 49280 0 31743]
-            : *i EB . f16bits 0
-            : *u EP ( vec_data [u] enc )
+            : ( Vec i ) EB ( vec_new [i] )
+            ( vec_push [i] EB 15872 ) ( vec_push [i] EB 49280 ) ( vec_push [i] EB 0 ) ( vec_push [i] EB 31743 )
+            : ( Slice u ) EP ( slice_from_vec [u] enc )
             : ~ b ok == ( vec_len [u] enc ) 8
             : ~ i k 0
             ~ < k 4 {
-                : i got | # i . EP * k 2 << # i . EP + * k 2 1 8
-                ? == got . EB k {} { = ok F }
+                : i got ( slice_u16_le EP * k 2 )
+                ? == got ( vec_at [i] EB k ) {} { = ok F }
                 = k + k 1
             }
             ( __st_ck cn ok `gq_f16_encode bit-exact on representable values` )
@@ -662,14 +656,14 @@ unsafe @ __st_stream_quant inout STCnt cn s gwpath → v {
     ( __st_push_f32 xb 0.0 )
     ?? ( gq_bf16_encode xb ) {
         T enc → {
-            : bfbits [i | 16256 49152 16128 0]
-            : *i EB . bfbits 0
-            : *u EP ( vec_data [u] enc )
+            : ( Vec i ) EB ( vec_new [i] )
+            ( vec_push [i] EB 16256 ) ( vec_push [i] EB 49152 ) ( vec_push [i] EB 16128 ) ( vec_push [i] EB 0 )
+            : ( Slice u ) EP ( slice_from_vec [u] enc )
             : ~ b ok == ( vec_len [u] enc ) 8
             : ~ i k 0
             ~ < k 4 {
-                : i got | # i . EP * k 2 << # i . EP + * k 2 1 8
-                ? == got . EB k {} { = ok F }
+                : i got ( slice_u16_le EP * k 2 )
+                ? == got ( vec_at [i] EB k ) {} { = ok F }
                 = k + k 1
             }
             ( __st_ck cn ok `gq_bf16_encode bit-exact on representable values` )
@@ -749,16 +743,16 @@ unsafe @ __st_stream_quant inout STCnt cn s gwpath → v {
     ?? ( gq_q8_0_encode xr ) {
         T enc → {
             : ~ b ok T
-            : *u EP ( vec_data [u] enc )
+            : ( Slice u ) EP ( slice_from_vec [u] enc )
             : ~ i b2 0
             ~ < b2 3 {
-                : f d ( gg_f16_to_f | # i . EP * b2 34 << # i . EP + * b2 34 1 8 )
+                : f d ( gg_f16_to_f ( slice_u16_le EP * b2 34 ) )
                 : f bound + * 0.65 d 0.000001
                 : ~ i k 0
                 ~ < k 32 {
                     : ~ f x 0.0
                     ?? ( vec_get [f] xrf + * b2 32 k ) { T v2 → { = x v2 } F → {} }
-                    : ~ i q # i . EP + + * b2 34 2 k
+                    : ~ i q # i ( slice_at [u] EP + + * b2 34 2 k )
                     ? > q 127 { = q - q 256 } {}
                     : f err - x * d # f q
                     : f aerr ? < err 0.0 - 0.0 err err
@@ -784,7 +778,7 @@ unsafe @ __st_stream_quant inout STCnt cn s gwpath → v {
     ( __st_ck cn q8_badlen_rejected `Q8_0 encode rejects a non-multiple-of-32 input` )
 }
 
-unsafe @ __st_run → i {
+@ __st_run → i {
     : ~ STCnt cn @ STCnt { 0 0 }
     : GgufW w ?? ( __st_build ) {
         T w0 → w0
@@ -879,8 +873,10 @@ unsafe @ __st_run → i {
                 : !( Vec f ) String dr ( gguf_dequant_f64 g tf32 )
                 ?? dr {
                     T got → {
-                        : f32exp [f | 0.0 1.5 -2.25 3.75 100.0 -0.0078125 6.5 -7.0]
-                        ( __st_ck cn ( __st_vec_eq got . f32exp 0 8 ) `t_f32 dequant values` )
+                        : ( Vec f ) f32exp ( vec_new [f] )
+                        ( vec_push [f] f32exp 0.0 ) ( vec_push [f] f32exp 1.5 ) ( vec_push [f] f32exp -2.25 ) ( vec_push [f] f32exp 3.75 )
+                        ( vec_push [f] f32exp 100.0 ) ( vec_push [f] f32exp -0.0078125 ) ( vec_push [f] f32exp 6.5 ) ( vec_push [f] f32exp -7.0 )
+                        ( __st_ck cn ( __st_vec_eq got ( slice_from_vec [f] f32exp ) 8 ) `t_f32 dequant values` )
                     }
                     F e → {
                         ( __st_ck cn F `t_f32 dequant` )
@@ -895,8 +891,8 @@ unsafe @ __st_run → i {
                 : !( Vec u ) String dr ( gguf_dequant g tf16 )
                 ?? dr {
                     T got → {
-                        : f16exp [i | 0 1065353216 3221225472 864026624 947896320 2139095040 4286578688 2143289344 2147483648]
-                        : *i EP . f16exp 0
+                        : ( Vec i ) EP ( vec_new [i] )
+                        ( vec_push [i] EP 0 ) ( vec_push [i] EP 1065353216 ) ( vec_push [i] EP 3221225472 ) ( vec_push [i] EP 864026624 ) ( vec_push [i] EP 947896320 ) ( vec_push [i] EP 2139095040 ) ( vec_push [i] EP 4286578688 ) ( vec_push [i] EP 2143289344 ) ( vec_push [i] EP 2147483648 )
                         : ~ b ok == ( vec_len [u] got ) 36
                         : ~ i k 0
                         ~ < k 9 {
@@ -905,7 +901,7 @@ unsafe @ __st_run → i {
                                 T x → { = gb # i x }
                                 F → {}
                             }
-                            ? == gb . EP k {} { = ok F }
+                            ? == gb ( vec_at [i] EP k ) {} { = ok F }
                             = k + k 1
                         }
                         ( __st_ck cn ok `t_f16 bit-exact (incl. subnormal/inf/NaN/-0)` )
@@ -922,8 +918,8 @@ unsafe @ __st_run → i {
                 : !( Vec u ) String dr ( gguf_dequant g tbf )
                 ?? dr {
                     T got → {
-                        : bfexp [i | 1065353216 3221225472 0 2139095040]
-                        : *i EP . bfexp 0
+                        : ( Vec i ) EP ( vec_new [i] )
+                        ( vec_push [i] EP 1065353216 ) ( vec_push [i] EP 3221225472 ) ( vec_push [i] EP 0 ) ( vec_push [i] EP 2139095040 )
                         : ~ b ok == ( vec_len [u] got ) 16
                         : ~ i k 0
                         ~ < k 4 {
@@ -932,7 +928,7 @@ unsafe @ __st_run → i {
                                 T x → { = gb # i x }
                                 F → {}
                             }
-                            ? == gb . EP k {} { = ok F }
+                            ? == gb ( vec_at [i] EP k ) {} { = ok F }
                             = k + k 1
                         }
                         ( __st_ck cn ok `t_bf16 bit-exact` )
@@ -960,7 +956,7 @@ unsafe @ __st_run → i {
                 : !( Vec f ) String dr ( gguf_dequant_f64 g tq4 )
                 ?? dr {
                     T got → {
-                        ( __st_ck cn ( __st_vec_eq got ( vec_data [f] q4exp ) 32 ) `t_q4_0 dequant values` )
+                        ( __st_ck cn ( __st_vec_eq got ( slice_from_vec [f] q4exp ) 32 ) `t_q4_0 dequant values` )
                     }
                     F e → {
                         ( __st_ck cn F `t_q4_0 dequant` )
@@ -974,7 +970,7 @@ unsafe @ __st_run → i {
                 : !( Vec f ) String dr ( gguf_dequant_f64 g tq41 )
                 ?? dr {
                     T got → {
-                        ( __st_ck cn ( __st_vec_eq got ( vec_data [f] q4exp ) 32 ) `t_q4_1 equals t_q4_0 (d=1, m=-8)` )
+                        ( __st_ck cn ( __st_vec_eq got ( slice_from_vec [f] q4exp ) 32 ) `t_q4_1 equals t_q4_0 (d=1, m=-8)` )
                     }
                     F e → {
                         ( __st_ck cn F `t_q4_1 dequant` )
@@ -995,7 +991,7 @@ unsafe @ __st_run → i {
                             = k + k 1
                         }
                         ( vec_push [f] q8exp -28.0 )
-                        ( __st_ck cn ( __st_vec_eq got ( vec_data [f] q8exp ) 32 ) `t_q8_0 dequant (incl. negative q)` )
+                        ( __st_ck cn ( __st_vec_eq got ( slice_from_vec [f] q8exp ) 32 ) `t_q8_0 dequant (incl. negative q)` )
                     }
                     F e → {
                         ( __st_ck cn F `t_q8_0 dequant` )

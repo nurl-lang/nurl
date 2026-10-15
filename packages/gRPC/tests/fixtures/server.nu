@@ -1,21 +1,22 @@
 // Independent gRPC runtimes drive this one-connection fixture. Exiting after
 // peer shutdown lets the harness check complete connection cleanup with LSan.
 $ `../../src/server.nu`
+$ `stdlib/core/slice.nu`
 $ `stdlib/core/io.nu`
 
 : TestCall { i id String method ( Vec u ) aggregate i count }
 
-unsafe @ find_call ( Vec TestCall ) calls i id → i {
+@ find_call ( Vec TestCall ) calls i id → i {
     : ~ i k 0
     ~ < k ( vec_len [TestCall] calls ) {
-        : TestCall call . ( vec_data [TestCall] calls ) k
+        : TestCall call ( vec_at [TestCall] calls k )
         ? == . call id id { ^ k } {}
         = k + k 1
     }
     ^ -1
 }
 
-unsafe @ handle inout GrpcServer server ( Vec TestCall ) calls GrpcServerEvent event i encoding → !v GrpcError {
+@ handle inout GrpcServer server ( Vec TestCall ) calls GrpcServerEvent event i encoding → !v GrpcError {
     : i id . event stream_id
     : ( Vec Header ) empty ( grpc_metadata_new )
     ? == . event kind ( grpc_server_event_open ) {
@@ -38,34 +39,37 @@ unsafe @ handle inout GrpcServer server ( Vec TestCall ) calls GrpcServerEvent e
     } {}
     : i index ( find_call calls id )
     ? < index 0 { ^ @ !v GrpcError { T 0 } } {}
-    // The call is updated in its slot (removing it below is the last use).
-    : *TestCall call # *TestCall + # i ( vec_data [TestCall] calls ) * index Z TestCall
-    : s method ( string_data . call method )
+    // The call is checked out of the table while it is handled; it goes
+    // back unless it is over.
+    : ~ TestCall call ?? ( vec_remove [TestCall] calls index ) { T c → c F → { ^ @ !v GrpcError { T 0 } } }
+    : String method ( string_clone . call method )
+    : s m ( string_data method )
     ? == . event kind ( grpc_server_event_message ) {
         = . call count + . call count 1
-        ? != ( nurl_str_eq method `/test.Echo/ClientStream` ) 0 {
+        ? != ( nurl_str_eq m `/test.Echo/ClientStream` ) 0 {
             ( vec_extend [u] . call aggregate . event message )
         } {
-            ? == ( nurl_str_eq method `/test.Echo/Slow` ) 0 {
-                : i repeats ? != ( nurl_str_eq method `/test.Echo/ServerStream` ) 0 3 1
+            ? == ( nurl_str_eq m `/test.Echo/Slow` ) 0 {
+                : i repeats ? != ( nurl_str_eq m `/test.Echo/ServerStream` ) 0 3 1
                 : ~ i k 0
-                ~ < k repeats { \ ( grpc_server_send server id . event message ) = k + k 1 }
+                ~ < k repeats {
+                    : !v GrpcError sent ( grpc_server_send server id . event message )
+                    ?? sent { T _ → {} F e → { ( vec_push [TestCall] calls call ) ^ @ !v GrpcError { F e } } }
+                    = k + k 1
+                }
             } {}
         }
     } {}
     ? == . event kind ( grpc_server_event_half_close ) {
-        ? != ( nurl_str_eq method `/test.Echo/Slow` ) 0 { ^ @ !v GrpcError { T 0 } } {}
-        ? != ( nurl_str_eq method `/test.Echo/ClientStream` ) 0 { \ ( grpc_server_send server id . call aggregate ) } {}
+        ? != ( nurl_str_eq m `/test.Echo/Slow` ) 0 { ( vec_push [TestCall] calls call ) ^ @ !v GrpcError { T 0 } } {}
+        ? != ( nurl_str_eq m `/test.Echo/ClientStream` ) 0 { \ ( grpc_server_send server id . call aggregate ) } {}
         : GrpcStatus status ( grpc_status GRPC_OK `` )
         \ ( grpc_metadata_add empty `finished` `yes` )
-        : !v GrpcError result ( grpc_server_finish server id status empty )
-        // The removed call is dropped here.
-        ( vec_remove [TestCall] calls index )
-        ^ result
+        // The call is over: it is dropped with `call`.
+        ^ ( grpc_server_finish server id status empty )
     } {}
-    ? == . event kind ( grpc_server_event_cancelled ) {
-        ( vec_remove [TestCall] calls index )
-    } {}
+    ? == . event kind ( grpc_server_event_cancelled ) { ^ @ !v GrpcError { T 0 } } {}
+    ( vec_push [TestCall] calls call )
     ^ @ !v GrpcError { T 0 }
 }
 

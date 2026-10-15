@@ -462,45 +462,13 @@ $ `stdlib/core/errors.nu`
     ( vec_push [u] v # u & >> x 8 255 )
 }
 
-@ bytes_push_u32_be ( Vec u ) v u32 n → v {
-    : i x # i n
-    ( vec_push [u] v # u & >> x 24 255 )
-    ( vec_push [u] v # u & >> x 16 255 )
-    ( vec_push [u] v # u & >> x 8 255 )
-    ( vec_push [u] v # u & x 255 )
-}
+@ bytes_push_u32_be ( Vec u ) v u32 n → v { ( vec_push_word_u8 v # i n 4 T ) }
 
-@ bytes_push_u32_le ( Vec u ) v u32 n → v {
-    : i x # i n
-    ( vec_push [u] v # u & x 255 )
-    ( vec_push [u] v # u & >> x 8 255 )
-    ( vec_push [u] v # u & >> x 16 255 )
-    ( vec_push [u] v # u & >> x 24 255 )
-}
+@ bytes_push_u32_le ( Vec u ) v u32 n → v { ( vec_push_word_u8 v # i n 4 F ) }
 
-@ bytes_push_u64_be ( Vec u ) v u64 n → v {
-    : i x # i n
-    ( vec_push [u] v # u & >> x 56 255 )
-    ( vec_push [u] v # u & >> x 48 255 )
-    ( vec_push [u] v # u & >> x 40 255 )
-    ( vec_push [u] v # u & >> x 32 255 )
-    ( vec_push [u] v # u & >> x 24 255 )
-    ( vec_push [u] v # u & >> x 16 255 )
-    ( vec_push [u] v # u & >> x 8 255 )
-    ( vec_push [u] v # u & x 255 )
-}
+@ bytes_push_u64_be ( Vec u ) v u64 n → v { ( vec_push_word_u8 v # i n 8 T ) }
 
-@ bytes_push_u64_le ( Vec u ) v u64 n → v {
-    : i x # i n
-    ( vec_push [u] v # u & x 255 )
-    ( vec_push [u] v # u & >> x 8 255 )
-    ( vec_push [u] v # u & >> x 16 255 )
-    ( vec_push [u] v # u & >> x 24 255 )
-    ( vec_push [u] v # u & >> x 32 255 )
-    ( vec_push [u] v # u & >> x 40 255 )
-    ( vec_push [u] v # u & >> x 48 255 )
-    ( vec_push [u] v # u & >> x 56 255 )
-}
+@ bytes_push_u64_le ( Vec u ) v u64 n → v { ( vec_push_word_u8 v # i n 8 F ) }
 
 // ── Slice (copy) ───────────────────────────────────────────────────
 

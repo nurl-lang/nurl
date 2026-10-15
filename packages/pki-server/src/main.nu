@@ -115,15 +115,14 @@ $ `service.nu`
     } {}
 
     ( nurl_print `[pki-server] Initializing PKI subsystem...\n` )
-    : b init_ok ( pki_service_init ( string_data ca_cert ) ( string_data ca_key ) ( string_data crl_file ) ( string_data index_file ) ( string_data initial_dir ) ( string_data certs_dir ) ( string_data init_key ) ( string_data mgmt_key ) ( string_data ca_cn ) alg )
-
-    ? ! init_ok {
-        ( nurl_eprintln `[pki-server] ERROR: could not initialize the CA.` )
-        ( nurl_eprintln `[pki-server]        An existing --ca-cert/--ca-key pair that fails to load is NOT` )
-        ( nurl_eprintln `[pki-server]        replaced: overwriting it would invalidate every certificate` )
-        ( nurl_eprintln `[pki-server]        ever issued under it. Move the old pair aside to mint a new CA.` )
-        ^ 1
-    } {}
+    : ?PkiCa init ( pki_service_init ( string_data ca_cert ) ( string_data ca_key ) ( string_data crl_file ) ( string_data index_file ) ( string_data initial_dir ) ( string_data certs_dir ) ( string_data init_key ) ( string_data mgmt_key ) ( string_data ca_cn ) alg )
+    : PkiCa ca ?? init { T c → c F → {
+            ( nurl_eprintln `[pki-server] ERROR: could not initialize the CA.` )
+            ( nurl_eprintln `[pki-server]        An existing --ca-cert/--ca-key pair that fails to load is NOT` )
+            ( nurl_eprintln `[pki-server]        replaced: overwriting it would invalidate every certificate` )
+            ( nurl_eprintln `[pki-server]        ever issued under it. Move the old pair aside to mint a new CA.` )
+            ^ 1
+        } }
 
     ( nurl_print `[pki-server] CA ready: ` )
     ( nurl_print ( string_data ca_cert ) )
@@ -137,7 +136,7 @@ $ `service.nu`
     ( nurl_print ( string_data s_port_disp ) )
     ( nurl_print `\n` )
 
-    : HttpApp app ( pki_build_app )
+    : HttpApp app ( pki_build_app ca )
     : i rc ( http_app_listen app ( string_data s_host ) port )
 
     ^ rc

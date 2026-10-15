@@ -11,7 +11,7 @@ $ `src/interp.nu`
 // The same closed-form grid the oracle builds: smooth enough that a
 // wrong kernel shows as a smooth error rather than noise, structured
 // enough that a transposed axis is obvious.
-unsafe @ fill * f p i w i h i planes → v {
+@ fill ( Slice f ) p i w i h i planes → v {
     : ~ i c 0
     ~ < c planes {
         : ~ i y 0
@@ -21,7 +21,7 @@ unsafe @ fill * f p i w i h i planes → v {
                 : f fx / # f x # f w
                 : f fy / # f y # f h
                 : f v + + ( float_sin * 6.2831853 fx ) ( float_cos * 4.1887902 fy ) * 0.25 # f c
-                = . p + * c * w h + * y w x v
+                ( slice_put [f] p + * c * w h + * y w x v )
                 = x + x 1
             }
             = y + y 1
@@ -30,11 +30,11 @@ unsafe @ fill * f p i w i h i planes → v {
     }
 }
 
-unsafe @ case i sw i sh i planes i dw i dh → v {
-    : ( Vec u ) src__v ( vec_zeroed [u] * 8 * planes * sw sh )
-    : *f src # *f ( vec_data [u] src__v )
-    : ( Vec u ) dst__v ( vec_zeroed [u] * 8 * planes * dw dh )
-    : *f dst # *f ( vec_data [u] dst__v )
+@ case i sw i sh i planes i dw i dh → v {
+    : ( Vec f ) src__v ( vec_zeroed [f] * planes * sw sh )
+    : ( Slice f ) src ( slice_from_vec [f] src__v )
+    : ( Vec f ) dst__v ( vec_zeroed [f] * planes * dw dh )
+    : ( Slice f ) dst ( slice_from_vec [f] dst__v )
     ( fill src sw sh planes )
     ( interp_bicubic_aa src sw sh planes dw dh dst )
     ( nurl_print `g` ) ( nurl_print ( nurl_str_int sw ) )
@@ -44,7 +44,7 @@ unsafe @ case i sw i sh i planes i dw i dh → v {
     ( nurl_print `_` ) ( nurl_print ( nurl_str_int dh ) )
     : ~ i j 0
     ~ < j * planes * dw dh {
-        ( nurl_print ` ` ) ( nurl_print ( nurl_str_float . dst j ) )
+        ( nurl_print ` ` ) ( nurl_print ( nurl_str_float ( slice_at [f] dst j ) ) )
         = j + j 1
     }
     ( nurl_print `\n` )

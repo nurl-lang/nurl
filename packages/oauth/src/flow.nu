@@ -28,6 +28,7 @@
 // shape for anything running on the user's machine.
 
 $ `stdlib/core/string.nu`
+$ `stdlib/core/slice.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/encode.nu`
@@ -39,7 +40,7 @@ $ `errors.nu`
 $ `claims.nu`
 $ `pkce.nu`
 $ `provider.nu`
-$ `stdlib/std/arc.nu`
+$ `stdlib/std/thread.nu`
 
 // ── Client configuration ───────────────────────────────────────────
 
@@ -53,46 +54,53 @@ $ `stdlib/std/arc.nu`
     b basic_auth  // client_secret_basic instead of client_secret_post
 }
 
-// An OauthConfig is a handle on its state in an Arc (stdlib/std/arc.nu):
-// every copy is the same state, and the last owner releases it.
-: OauthConfig { ( Arc OauthConfigImpl ) a }
+// An OauthConfig is a handle on its state in a Locked (stdlib/std/thread.nu):
+// every copy is the same state, the last owner releases it, and a server's
+// workers may share it.
+: OauthConfig { ( Locked OauthConfigImpl ) st }
 
-@ OauthConfig_share OauthConfig h → OauthConfig { ^ @ OauthConfig { ( arc_clone [OauthConfigImpl] . h a ) } }
+@ OauthConfig_share OauthConfig h → OauthConfig { ^ @ OauthConfig { ( Locked_share [OauthConfigImpl] . h st ) } }
 
 @ OauthConfig_drop sink OauthConfig h → v {}
 
-unsafe @ __OauthConfig_ptr OauthConfig h → *OauthConfigImpl { ^ ( arc_ptr [OauthConfigImpl] . h a ) }
-
-unsafe @ oauth_config_new s client_id s redirect_uri s scope → OauthConfig {
-    : ~ OauthConfigImpl c @ OauthConfigImpl {}
-    = . c client_id ( string_from client_id )
-    = . c client_secret ( string_new )
-    = . c redirect_uri ( string_from redirect_uri )
-    = . c scope ( string_from scope )
-    = . c audience ( string_new )
-    = . c prompt ( string_new )
-    = . c basic_auth F
-    ^ @ OauthConfig { ( arc_new [OauthConfigImpl] c ) }
+@ oauth_config_new s client_id s redirect_uri s scope → OauthConfig {
+    : OauthConfigImpl c @ OauthConfigImpl {
+        ( string_from client_id )
+        ( string_new )
+        ( string_from redirect_uri )
+        ( string_from scope )
+        ( string_new )
+        ( string_new )
+        F
+    }
+    ^ @ OauthConfig { ( locked_new [OauthConfigImpl] c ) }
 }
 
-unsafe @ oauth_config_set_secret OauthConfig c__h s secret → v {
-    : *OauthConfigImpl c ( __OauthConfig_ptr c__h )
-    ( _oauth_set_str . c client_secret secret )
+// A copy of the config as it is now: what one request is built from.
+@ __oaf_config_get OauthConfig h → OauthConfigImpl { ^ ( locked_get [OauthConfigImpl] . h st ) }
+
+@ oauth_config_set_secret OauthConfig h s secret → v {
+    : ~ OauthConfigImpl c ( locked_take [OauthConfigImpl] . h st )
+    = . c client_secret ( string_from secret )
+    ( locked_restore [OauthConfigImpl] . h st c )
 }
 
-unsafe @ oauth_config_set_audience OauthConfig c__h s audience → v {
-    : *OauthConfigImpl c ( __OauthConfig_ptr c__h )
-    ( _oauth_set_str . c audience audience )
+@ oauth_config_set_audience OauthConfig h s audience → v {
+    : ~ OauthConfigImpl c ( locked_take [OauthConfigImpl] . h st )
+    = . c audience ( string_from audience )
+    ( locked_restore [OauthConfigImpl] . h st c )
 }
 
-unsafe @ oauth_config_set_prompt OauthConfig c__h s prompt → v {
-    : *OauthConfigImpl c ( __OauthConfig_ptr c__h )
-    ( _oauth_set_str . c prompt prompt )
+@ oauth_config_set_prompt OauthConfig h s prompt → v {
+    : ~ OauthConfigImpl c ( locked_take [OauthConfigImpl] . h st )
+    = . c prompt ( string_from prompt )
+    ( locked_restore [OauthConfigImpl] . h st c )
 }
 
-unsafe @ oauth_config_set_basic_auth OauthConfig c__h b on → v {
-    : *OauthConfigImpl c ( __OauthConfig_ptr c__h )
+@ oauth_config_set_basic_auth OauthConfig h b on → v {
+    : ~ OauthConfigImpl c ( locked_take [OauthConfigImpl] . h st )
     = . c basic_auth on
+    ( locked_restore [OauthConfigImpl] . h st c )
 }
 
 // ── Form / query encoding ──────────────────────────────────────────
@@ -116,9 +124,8 @@ unsafe @ oauth_config_set_basic_auth OauthConfig c__h b on → v {
 // The URL to send the user's browser to. `state` and `nonce` are the
 // values the caller minted (pkce.nu) and must remember: state is
 // compared on the way back, nonce is compared inside the ID token.
-unsafe @ oauth_authorize_url OidcProvider p__h OauthConfig cfg__h s state s nonce Pkce pk → String {
-    : *OauthConfigImpl cfg ( __OauthConfig_ptr cfg__h )
-    : *OidcProviderImpl p ( _OidcProvider_ptr p__h )
+@ oauth_authorize_url OidcProvider p__h OauthConfig cfg__h s state s nonce Pkce pk → String {
+    : OauthConfigImpl cfg ( __oaf_config_get cfg__h )
     : String q ( string_with_cap 512 )
     ( __oaf_kv q `response_type` `code` )
     ( __oaf_kv q `client_id` ( string_data . cfg client_id ) )
@@ -130,7 +137,7 @@ unsafe @ oauth_authorize_url OidcProvider p__h OauthConfig cfg__h s state s nonc
     ( __oaf_kv q `code_challenge_method` ( string_data . pk method ) )
     ( __oaf_kv q `audience` ( string_data . cfg audience ) )
     ( __oaf_kv q `prompt` ( string_data . cfg prompt ) )
-    : String out ( string_from ( string_data . p authorization_endpoint ) )
+    : String out ( string_from ( oidc_provider_authorization_endpoint p__h ) )
     // The endpoint may already carry a query of its own (RFC 6749 §3.1).
     ? ( string_contains out `?` ) {
         ( string_push_char out 38 )
@@ -150,12 +157,12 @@ unsafe @ oauth_authorize_url OidcProvider p__h OauthConfig cfg__h s state s nonc
     String error_description
 }
 
-unsafe @ __oaf_param ( Vec UrlParam ) ps s key → String {
+@ __oaf_param ( Vec UrlParam ) ps s key → String {
     : i n ( vec_len [UrlParam] ps )
-    : *UrlParam data ( vec_data [UrlParam] ps )
+    : ( Slice UrlParam ) data ( slice_from_vec [UrlParam] ps )
     : ~ i k 0
     ~ < k n {
-        : UrlParam pp . data k
+        : UrlParam pp ( slice_at [UrlParam] data k )
         ? == 1 ( nurl_str_eq ( string_data . pp key ) key ) {
             ^ ( string_from ( string_data . pp val ) )
         } {}
@@ -251,7 +258,7 @@ unsafe @ __oaf_param ( Vec UrlParam ) ps s key → String {
 
 // Add whichever client authentication the config asks for: the secret in
 // the body, or an Authorization header the caller then sends.
-unsafe @ __oaf_auth_header * OauthConfigImpl cfg → String {
+@ __oaf_auth_header OauthConfigImpl cfg → String {
     : String out ( string_new )
     ? & . cfg basic_auth > ( string_len . cfg client_secret ) 0 {
         : String ek ( url_percent_encode ( string_data . cfg client_id ) )
@@ -268,9 +275,13 @@ unsafe @ __oaf_auth_header * OauthConfigImpl cfg → String {
 }
 
 // POST a form to the token endpoint and read the token response.
-unsafe @ __oaf_token_request * OidcProviderImpl p * OauthConfigImpl cfg String form → !TokenSet OauthErr {
-    ? == 0 ( string_len . p token_endpoint ) {
-        ( _oidc_err p `no token_endpoint — run discovery or set one` )
+// The request runs outside the provider's lock: only the endpoint and the
+// client are read under it, and an error is recorded after.
+@ __oaf_token_request OidcProvider p OauthConfigImpl cfg String form → !TokenSet OauthErr {
+    : s endpoint ( oidc_provider_token_endpoint p )
+    : HttpClient http ( oidc_provider_http p )
+    ? == 0 ( nurl_str_len endpoint ) {
+        ( _oidc_err_h p `no token_endpoint — run discovery or set one` )
         ^ @ !TokenSet OauthErr { F OaConfig }
     } {}
     : String auth ( __oaf_auth_header cfg )
@@ -281,7 +292,7 @@ unsafe @ __oaf_token_request * OidcProviderImpl p * OauthConfigImpl cfg String f
         ( vec_push [Header] hs ( header_new `authorization` ( string_data auth ) ) )
     } {}
     : ( Vec u ) body ( bytes_from_str ( string_data form ) )
-    : !HttpResponse HttpClientErr rr ( http_client_request . p http `POST` ( string_data . p token_endpoint ) hs body )
+    : !HttpResponse HttpClientErr rr ( http_client_request http `POST` endpoint hs body )
     ?? rr {
         T r → {
             : i status ( http_client_status r )
@@ -300,28 +311,28 @@ unsafe @ __oaf_token_request * OidcProviderImpl p * OauthConfigImpl cfg String f
                             ( string_push_str msg ` — ` )
                             ( string_push_str msg ( string_data desc ) )
                         } {}
-                        ( _oidc_err p ( string_data msg ) )
+                        ( _oidc_err_h p ( string_data msg ) )
                         ^ @ !TokenSet OauthErr { F OaServer }
                     } {}
                     ? & >= status 200 < status 300 {} {
-                        ( _oidc_err_status p `token endpoint` status )
+                        ( _oidc_err_status_h p `token endpoint` status )
                         ^ @ !TokenSet OauthErr { F OaHttpStatus }
                     }
                     : TokenSet ts ( __oaf_token_set_from_json j )
                     ? == 0 ( string_len . ts access_token ) {
-                        ( _oidc_err p `token response carries no access_token` )
+                        ( _oidc_err_h p `token response carries no access_token` )
                         ^ @ !TokenSet OauthErr { F OaBadResponse }
                     } {}
                     ^ @ !TokenSet OauthErr { T ts }
                 }
                 F _ → {
-                    ( _oidc_err_status p `token endpoint (non-JSON)` status )
+                    ( _oidc_err_status_h p `token endpoint (non-JSON)` status )
                     ^ @ !TokenSet OauthErr { F OaBadResponse }
                 }
             }
         }
         F e → {
-            ( _oidc_err2 p `token endpoint: ` ( http_client_err_name e ) )
+            ( _oidc_err2_h p `token endpoint: ` ( http_client_err_name e ) )
             ^ @ !TokenSet OauthErr { F OaNetwork }
         }
     }
@@ -329,9 +340,8 @@ unsafe @ __oaf_token_request * OidcProviderImpl p * OauthConfigImpl cfg String f
 
 // Exchange the authorization code for tokens. `verifier` is the PKCE
 // secret whose challenge went out with the authorization request.
-unsafe @ oauth_exchange_code OidcProvider p__h OauthConfig cfg__h s code s verifier → !TokenSet OauthErr {
-    : *OauthConfigImpl cfg ( __OauthConfig_ptr cfg__h )
-    : *OidcProviderImpl p ( _OidcProvider_ptr p__h )
+@ oauth_exchange_code OidcProvider p__h OauthConfig cfg__h s code s verifier → !TokenSet OauthErr {
+    : OauthConfigImpl cfg ( __oaf_config_get cfg__h )
     : String form ( string_with_cap 512 )
     ( __oaf_kv form `grant_type` `authorization_code` )
     ( __oaf_kv form `code` code )
@@ -341,14 +351,13 @@ unsafe @ oauth_exchange_code OidcProvider p__h OauthConfig cfg__h s code s verif
     ? . cfg basic_auth {} {
         ( __oaf_kv form `client_secret` ( string_data . cfg client_secret ) )
     }
-    : !TokenSet OauthErr r ( __oaf_token_request p cfg form )
+    : !TokenSet OauthErr r ( __oaf_token_request p__h cfg form )
     ^ r
 }
 
 // A new access token from a refresh token — no user interaction.
-unsafe @ oauth_refresh OidcProvider p__h OauthConfig cfg__h s refresh_token → !TokenSet OauthErr {
-    : *OauthConfigImpl cfg ( __OauthConfig_ptr cfg__h )
-    : *OidcProviderImpl p ( _OidcProvider_ptr p__h )
+@ oauth_refresh OidcProvider p__h OauthConfig cfg__h s refresh_token → !TokenSet OauthErr {
+    : OauthConfigImpl cfg ( __oaf_config_get cfg__h )
     : String form ( string_with_cap 512 )
     ( __oaf_kv form `grant_type` `refresh_token` )
     ( __oaf_kv form `refresh_token` refresh_token )
@@ -357,15 +366,14 @@ unsafe @ oauth_refresh OidcProvider p__h OauthConfig cfg__h s refresh_token → 
     ? . cfg basic_auth {} {
         ( __oaf_kv form `client_secret` ( string_data . cfg client_secret ) )
     }
-    : !TokenSet OauthErr r ( __oaf_token_request p cfg form )
+    : !TokenSet OauthErr r ( __oaf_token_request p__h cfg form )
     ^ r
 }
 
 // The machine grant: this service authenticating as itself, with no user
 // behind it (RFC 6749 §4.4).
-unsafe @ oauth_client_credentials OidcProvider p__h OauthConfig cfg__h → !TokenSet OauthErr {
-    : *OauthConfigImpl cfg ( __OauthConfig_ptr cfg__h )
-    : *OidcProviderImpl p ( _OidcProvider_ptr p__h )
+@ oauth_client_credentials OidcProvider p__h OauthConfig cfg__h → !TokenSet OauthErr {
+    : OauthConfigImpl cfg ( __oaf_config_get cfg__h )
     : String form ( string_with_cap 512 )
     ( __oaf_kv form `grant_type` `client_credentials` )
     ( __oaf_kv form `client_id` ( string_data . cfg client_id ) )
@@ -374,7 +382,7 @@ unsafe @ oauth_client_credentials OidcProvider p__h OauthConfig cfg__h → !Toke
     ? . cfg basic_auth {} {
         ( __oaf_kv form `client_secret` ( string_data . cfg client_secret ) )
     }
-    : !TokenSet OauthErr r ( __oaf_token_request p cfg form )
+    : !TokenSet OauthErr r ( __oaf_token_request p__h cfg form )
     ^ r
 }
 
@@ -382,10 +390,11 @@ unsafe @ oauth_client_credentials OidcProvider p__h OauthConfig cfg__h → !Toke
 
 // The profile as the provider will state it right now, fetched with the
 // access token (OIDC core §5.3). Returns the owned claims object.
-unsafe @ oauth_userinfo OidcProvider p__h s access_token → !Json OauthErr {
-    : *OidcProviderImpl p ( _OidcProvider_ptr p__h )
-    ? == 0 ( string_len . p userinfo_endpoint ) {
-        ( _oidc_err p `no userinfo_endpoint — run discovery or set one` )
+@ oauth_userinfo OidcProvider p s access_token → !Json OauthErr {
+    : s endpoint ( oidc_provider_userinfo_endpoint p )
+    : HttpClient http ( oidc_provider_http p )
+    ? == 0 ( nurl_str_len endpoint ) {
+        ( _oidc_err_h p `no userinfo_endpoint — run discovery or set one` )
         ^ @ !Json OauthErr { F OaConfig }
     } {}
     : String auth ( string_with_cap 64 )
@@ -395,25 +404,25 @@ unsafe @ oauth_userinfo OidcProvider p__h s access_token → !Json OauthErr {
     ( vec_push [Header] hs ( header_new `authorization` ( string_data auth ) ) )
     ( vec_push [Header] hs ( header_new `accept` `application/json` ) )
     : ( Vec u ) body ( vec_new [u] )
-    : !HttpResponse HttpClientErr rr ( http_client_request . p http `GET` ( string_data . p userinfo_endpoint ) hs body )
+    : !HttpResponse HttpClientErr rr ( http_client_request http `GET` endpoint hs body )
     ?? rr {
         T r → {
             : i status ( http_client_status r )
             ? & >= status 200 < status 300 {} {
-                ( _oidc_err_status p `userinfo` status )
+                ( _oidc_err_status_h p `userinfo` status )
                 ^ @ !Json OauthErr { F OaHttpStatus }
             }
             : !Json JsonError pj ( json_parse_bytes . r body )
             ?? pj {
                 T j → { ^ @ !Json OauthErr { T j } }
                 F _ → {
-                    ( _oidc_err p `userinfo did not return JSON` )
+                    ( _oidc_err_h p `userinfo did not return JSON` )
                     ^ @ !Json OauthErr { F OaBadResponse }
                 }
             }
         }
         F e → {
-            ( _oidc_err2 p `userinfo: ` ( http_client_err_name e ) )
+            ( _oidc_err2_h p `userinfo: ` ( http_client_err_name e ) )
             ^ @ !Json OauthErr { F OaNetwork }
         }
     }
@@ -423,15 +432,14 @@ unsafe @ oauth_userinfo OidcProvider p__h s access_token → !Json OauthErr {
 // from a signed token — for a provider whose access tokens are opaque.
 // The `sub` MUST match the ID token's when both are in play (OIDC core
 // §5.3.2); with no ID token in hand, pass "" to skip that.
-unsafe @ oauth_userinfo_identity OidcProvider p__h s access_token s expect_sub → !OidcIdentity OauthErr {
-    : *OidcProviderImpl p ( _OidcProvider_ptr p__h )
-    ?? ( oauth_userinfo p__h access_token ) {
+@ oauth_userinfo_identity OidcProvider p s access_token s expect_sub → !OidcIdentity OauthErr {
+    ?? ( oauth_userinfo p access_token ) {
         T j → {
             ? > ( nurl_str_len expect_sub ) 0 {
                 : String sub ( claims_str j `sub` )
                 : b same == 1 ( nurl_str_eq ( string_data sub ) expect_sub )
                 ? same {} {
-                    ( _oidc_err p `userinfo sub does not match the ID token` )
+                    ( _oidc_err_h p `userinfo sub does not match the ID token` )
                     ^ @ !OidcIdentity OauthErr { F OaClaims }
                 }
             } {}

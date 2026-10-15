@@ -54,7 +54,7 @@ $ `src/dynamic.nu`
 }
 
 // Ingest a single-feature {"temp": t} point at absolute time `at`.
-@ ingest_temp Model mo f temp i at → v {
+@ ingest_temp inout Model mo f temp i at → v {
     : Json j ( json_obj_new )
     ( json_obj_set j `temp` ( json_float temp ) )
     : !Verdict String r ( model_ingest_at mo j at )
@@ -84,7 +84,7 @@ $ `src/dynamic.nu`
     }
 }
 
-@ probe_temp Model mo f temp → ProbeOut {
+@ probe_temp inout Model mo f temp → ProbeOut {
     : Json j ( json_obj_new )
     ( json_obj_set j `temp` ( json_float temp ) )
     : !Verdict String r ( model_detect_only mo j )
@@ -126,10 +126,10 @@ $ `src/dynamic.nu`
 // see both. A probe from the old regime is alien to short_term but familiar
 // to the long windows.
 
-unsafe @ test_routing Store st → v {
+@ test_routing Store st → v {
     = g_lcg 1
     : i NOW + T0 * 400 60
-    : Model mo ( model_open_at st `routing` T0 )
+    : ~ Model mo ( model_open_at st `routing` T0 )
     ( model_set_limits mo 10 150000 )
     ( model_set_schedule mo 10 1000 )
 
@@ -144,8 +144,7 @@ unsafe @ test_routing Store st → v {
         = j + j 1
     }
     ( check ( model_is_trained mo ) `routing: trained` )
-    : Meta mm__h ( Meta_share ( model_metadata mo ) )
-    : *MetaImpl mm ( _Meta_ptr mm__h )
+    : ~ Meta mm ( model_metadata mo )
     ( check == . mm last_trained 30 `routing: final train at 30` )
 
     // Old-regime probe: alien to short_term, familiar to the long windows.
@@ -163,7 +162,7 @@ unsafe @ test_routing Store st → v {
 
 @ test_aggregate_finetune Store st → v {
     = g_lcg 7
-    : Model mo ( model_open_at st `agg` T0 )
+    : ~ Model mo ( model_open_at st `agg` T0 )
     ( model_set_limits mo 10 150000 )
     ( model_set_schedule mo 10 1000 )
     // The sliding-window timevector needs the window to fit in this tiny
@@ -394,7 +393,7 @@ unsafe @ test_routing Store st → v {
     String feat
 }
 
-unsafe @ flat_ingest Model mo f temp f press f rain i at → FlatProbe {
+@ flat_ingest inout Model mo f temp f press f rain i at → FlatProbe {
     : Json j ( json_obj_new )
     ( json_obj_set j `temp` ( json_float temp ) )
     ( json_obj_set j `press` ( json_float press ) )
@@ -403,8 +402,7 @@ unsafe @ flat_ingest Model mo f temp f press f rain i at → FlatProbe {
     : ~ FlatProbe out @ FlatProbe { F F 0.0 ( string_new ) }
     ?? r {
         T vd → {
-            : Meta mm__h ( Meta_share ( model_metadata mo ) )
-            : *MetaImpl mm ( _Meta_ptr mm__h )
+            : ~ Meta mm ( model_metadata mo )
             : i nv ( vec_len [VerVerdict] . vd versions )
             : ~ i k 0
             ~ < k nv {
@@ -437,9 +435,9 @@ unsafe @ flat_ingest Model mo f temp f press f rain i at → FlatProbe {
 // The gauge's habit: dry nine minutes in ten.
 @ rain_now → f { ^ ? < ( lcg_u01 ) 0.9 0.0 ( tenths * 3.0 ( lcg_u01 ) ) }
 
-unsafe @ test_flatline Store st → v {
+@ test_flatline Store st → v {
     = g_lcg 11
-    : Model mo ( model_open_at st `flat` T0 )
+    : ~ Model mo ( model_open_at st `flat` T0 )
     ( model_set_limits mo 10 150000 )
     ( model_set_schedule mo 100000 100000 )
     : ~ i k 0
@@ -452,17 +450,16 @@ unsafe @ test_flatline Store st → v {
     }
     : i tr ( model_force_train_at mo + T0 * 300 60 )
     ( check > tr 0 `flatline: trained` )
-    : Meta mm__h ( Meta_share ( model_metadata mo ) )
-    : *MetaImpl mm ( _Meta_ptr mm__h )
+    : ~ Meta mm ( model_metadata mo )
     ( check == ( vec_len [f] . mm flat_sd ) ( vec_len [String] . mm feats ) `flatline: one reference per feature` )
-    ( check ( meta_version_enabled mm__h ANOM_FLAT_NAME F ) `flatline: the version exists and is on` )
-    ( check == ( meta_version_margin mm__h ANOM_FLAT_NAME 0.0 ) ANOM_FLAT_MARGIN `flatline: default margin` )
+    ( check ( meta_version_enabled mm ANOM_FLAT_NAME F ) `flatline: the version exists and is on` )
+    ( check == ( meta_version_margin mm ANOM_FLAT_NAME 0.0 ) ANOM_FLAT_MARGIN `flatline: default margin` )
 
     // The references round-trip through the metadata JSON.
-    : String js ( meta_to_json_str mm__h )
+    : String js ( meta_to_json_str mm )
     ?? ( meta_from_json_str ( string_data js ) ) {
         T m2 → {
-            ( check == ( vec_len [f] . ( _Meta_ptr m2 ) flat_run ) ( vec_len [f] . mm flat_run ) `flatline: references survive the JSON round trip` )
+            ( check == ( vec_len [f] . m2 flat_run ) ( vec_len [f] . mm flat_run ) `flatline: references survive the JSON round trip` )
         }
         F _ → { ( check F `flatline: metadata parses back` ) }
     }
@@ -514,7 +511,7 @@ unsafe @ test_flatline Store st → v {
         = k + k 1
     }
     ( check ! listed `flatline: finetune does not list it` )
-    ( check == ( meta_version_margin mm__h ANOM_FLAT_NAME 0.0 ) ANOM_FLAT_MARGIN `flatline: and its margin stands` )
+    ( check == ( meta_version_margin ( model_metadata mo ) ANOM_FLAT_NAME 0.0 ) ANOM_FLAT_MARGIN `flatline: and its margin stands` )
 
 }
 
@@ -531,7 +528,7 @@ unsafe @ test_flatline Store st → v {
 
 : MixProbe { b anomaly f score String feat }
 
-unsafe @ mix_ingest Model mo f coarse f flow i at → MixProbe {
+@ mix_ingest inout Model mo f coarse f flow i at → MixProbe {
     : Json j ( json_obj_new )
     ( json_obj_set j `coarse` ( json_float coarse ) )
     ( json_obj_set j `flow` ( json_float flow ) )
@@ -539,8 +536,7 @@ unsafe @ mix_ingest Model mo f coarse f flow i at → MixProbe {
     : ~ MixProbe out @ MixProbe { F 0.0 ( string_new ) }
     ?? r {
         T vd → {
-            : Meta mm__h ( Meta_share ( model_metadata mo ) )
-            : *MetaImpl mm ( _Meta_ptr mm__h )
+            : ~ Meta mm ( model_metadata mo )
             : i nv ( vec_len [VerVerdict] . vd versions )
             : ~ i k 0
             ~ < k nv {
@@ -568,8 +564,7 @@ unsafe @ mix_ingest Model mo f coarse f flow i at → MixProbe {
 }
 
 // The reference the fit wrote for a named column.
-unsafe @ mix_ref Meta mm__h s col → f {
-    : *MetaImpl mm ( _Meta_ptr mm__h )
+@ mix_ref Meta mm s col → f {
     : i n ( vec_len [String] . mm feats )
     : ~ i k 0
     ~ < k n {
@@ -588,7 +583,7 @@ unsafe @ mix_ref Meta mm__h s col → f {
 
 @ test_flatline_mixed Store st → v {
     = g_lcg 7
-    : Model mo ( model_open_at st `flatmix` T0 )
+    : ~ Model mo ( model_open_at st `flatmix` T0 )
     ( model_set_limits mo 10 150000 )
     ( model_set_schedule mo 100000 100000 )
     : ~ i k 0
@@ -599,7 +594,7 @@ unsafe @ mix_ref Meta mm__h s col → f {
     }
     : i tr ( model_force_train_at mo + T0 * 700 60 )
     ( check > tr 0 `flatline/mixed: trained` )
-    : Meta mm ( Meta_share ( model_metadata mo ) )
+    : Meta mm ( model_metadata mo )
     : f rc ( mix_ref mm `coarse` )
     : f rf ( mix_ref mm `flow` )
     ( check & >= rc 30.0 <= rc 40.0 `flatline/mixed: the coarse column's reference run is its own 35-row habit` )
@@ -642,7 +637,7 @@ unsafe @ mix_ref Meta mm__h s col → f {
 
 @ test_flatline_learns_habit_not_fault Store st → v {
     = g_lcg 21
-    : Model mo ( model_open_at st `flatfit` T0 )
+    : ~ Model mo ( model_open_at st `flatfit` T0 )
     ( model_set_limits mo 10 150000 )
     ( model_set_schedule mo 100000 100000 )
     : ~ i k 0
@@ -654,7 +649,7 @@ unsafe @ mix_ref Meta mm__h s col → f {
     }
     : i tr ( model_force_train_at mo + T0 * 900 60 )
     ( check > tr 0 `flatline/fit: trained on a ring that holds the freeze` )
-    : Meta mm ( Meta_share ( model_metadata mo ) )
+    : Meta mm ( model_metadata mo )
     : f rf ( mix_ref mm `flow` )
     : f rc ( mix_ref mm `coarse` )
     ( check <= rf 3.0 `flatline/fit: a freeze in the training rows does not become the reference` )

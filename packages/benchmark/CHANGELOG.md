@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.1.8] — 2026-10-14
+
+### Changed
+
+- No function is `unsafe` any more (11 were). The CSV keys are read from
+  each cell's checked view, and the packed keys are sorted by the
+  standard library's `sort_by` instead of a hand-written pointer
+  quicksort: `csv sort 1M×8` takes 58 ms a pass where it took 78.
+
 ## [0.1.7] — 2026-10-09
 
 Requires NURL 0.72.0, which draws the raw-memory boundary at every call:

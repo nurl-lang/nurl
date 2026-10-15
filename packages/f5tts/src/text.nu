@@ -35,20 +35,20 @@ $ `stdlib/core/slice.nu`
 
 : F5VocabImpl {
     ( Vec i ) ascii  // 128 slots: a one-byte character's id, -1 when absent
-    ( HashMap s i ) map  // a multi-byte character → its id; keys point into `keys`
-    ( Vec u ) keys  // every multi-byte character, NUL-terminated, back to back
+    ( HashMap String i ) map  // a multi-byte character → its id
     i size  // the vocabulary's length, which is also text_num_embeds
 }
 
-// An F5Vocab is a handle on its state in an Arc (stdlib/std/arc.nu):
-// every copy is the same vocabulary, and the last owner releases it.
+// An F5Vocab is a handle on its state in an Arc (stdlib/std/arc.nu),
+// frozen once loaded: every copy reads the same vocabulary (arc_get), and
+// the last owner releases it.
 : F5Vocab { ( Arc F5VocabImpl ) a }
 
 @ F5Vocab_share F5Vocab h → F5Vocab { ^ @ F5Vocab { ( arc_clone [F5VocabImpl] . h a ) } }
 
 @ F5Vocab_drop sink F5Vocab h → v {}
 
-unsafe @ __F5Vocab_ptr F5Vocab h → *F5VocabImpl { ^ ( arc_ptr [F5VocabImpl] . h a ) }
+@ __F5Vocab_get F5Vocab h → F5VocabImpl { ^ ( arc_get [F5VocabImpl] . h a ) }
 
 // The same read, public: run.nu's silence walk needs it too.
 @ _f5t_geti ( Vec i ) v i k → i {
@@ -67,17 +67,13 @@ unsafe @ __F5Vocab_ptr F5Vocab h → *F5VocabImpl { ^ ( arc_ptr [F5VocabImpl] . 
 // reads it as `for i, char in enumerate(f)` and drops the last character of
 // each line, so a trailing "\r" from a CRLF file would be part of the token;
 // a file ending in a newline yields no extra empty token.
-unsafe @ f5_vocab_load s path → !F5Vocab String {
+@ f5_vocab_load s path → !F5Vocab String {
     ?? ( read_file path ) {
         T txt → {
             : ( Vec i ) asc ( vec_with_cap [i] 128 )
             : ~ i k 0
             ~ < k 128 { ( vec_push [i] asc -1 ) = k + k 1 }
-            // the multi-byte tokens go into one byte arena first and are
-            // keyed once it has stopped growing (a key is a pointer into it)
-            : ( Vec u ) keys ( vec_new [u] )
-            : ( Vec i ) koff ( vec_new [i] )
-            : ( Vec i ) kid ( vec_new [i] )
+            : ( HashMap String i ) map ( map_new [String i] )
             : s data ( string_data txt )
             : ( Slice u ) data_v ( slice_of_str data )
             : i n ( nurl_str_len data )
@@ -97,11 +93,10 @@ unsafe @ f5_vocab_load s path → !F5Vocab String {
                         ? != len 1 {
                             // an empty line is a real token in the file's
                             // eyes; it was always bound to 0
-                            ( vec_push [i] koff ( vec_len [u] keys ) )
-                            ( vec_push [i] kid ? == len 0 { 0 } { id } )
+                            : String key ( string_new )
                             : ~ i j start
-                            ~ < j i { ( vec_push [u] keys # u ( slice_byte data_v j ) ) = j + j 1 }
-                            ( vec_push [u] keys # u 0 )
+                            ~ < j i { ( string_push_char key ( slice_byte data_v j ) ) = j + j 1 }
+                            ( __f5t_set map key ? == len 0 { 0 } { id } )
                         } {}
                         = id + id 1
                     } {}
@@ -109,27 +104,18 @@ unsafe @ f5_vocab_load s path → !F5Vocab String {
                 } {}
                 = i + i 1
             }
-            : ( HashMap s i ) map ( map_new [s i] )
-            : i base # i ( vec_data [u] keys )
-            = k 0
-            ~ < k ( vec_len [i] koff ) {
-                ( __f5t_set map # s + base ( __f5t_geti koff k ) ( __f5t_geti kid k ) )
-                = k + k 1
-            }
-            ^ @ !F5Vocab String { T @ F5Vocab { ( arc_new [F5VocabImpl] @ F5VocabImpl { asc map keys id } ) } }
+            ^ @ !F5Vocab String { T @ F5Vocab { ( arc_new [F5VocabImpl] @ F5VocabImpl { asc map id } ) } }
         }
         F _e → { ^ ( __f5t_err `f5tts: cannot read the vocabulary file` ) }
     }
 }
 
-@ __f5t_set ( HashMap s i ) m s key i val → v {
-    : ?i _old ( map_set [s i] m key val \ s x → i { ^ ( hash_string x ) } \ s a s b → b { ^ ( eq_string a b ) } )
+@ __f5t_set ( HashMap String i ) m sink String key i val → v {
+    : ?i _old ( map_set [String i] m key val \ String x → i { ^ ( hash_string ( string_data x ) ) }
+    \ String a String b → b { ^ ( eq_string ( string_data a ) ( string_data b ) ) } )
 }
 
-unsafe @ f5_vocab_size F5Vocab v__h → i {
-    : *F5VocabImpl v ( __F5Vocab_ptr v__h )
-    ^ . v size
-}
+@ f5_vocab_size F5Vocab v__h → i { ^ . ( __F5Vocab_get v__h ) size }
 
 // Early release (optional): the last owner of a vocabulary releases it.
 @ f5_vocab_free sink F5Vocab v → v {}
@@ -174,18 +160,18 @@ unsafe @ f5_vocab_size F5Vocab v__h → i {
     ^ T
 }
 
-unsafe @ __f5t_id_ascii * F5VocabImpl v i c → i {
+@ __f5t_id_ascii F5VocabImpl v i c → i {
     ? >= c 128 { ^ 0 } {}
     : i id ( __f5t_geti . v ascii c )
     ? < id 0 { ^ 0 } {}
     ^ id
 }
 
-unsafe @ __f5t_id_multi * F5VocabImpl v ( Slice u ) text_v i off i len → i {
+@ __f5t_id_multi F5VocabImpl v ( Slice u ) text_v i off i len → i {
     : String key ( string_new )
     : ~ i j 0
     ~ < j len { ( string_push_char key ( slice_byte text_v + off j ) ) = j + j 1 }
-    ?? ( map_get [s i] . v map ( string_data key ) \ s x → i { ^ ( hash_string x ) } \ s a s b → b { ^ ( eq_string a b ) } ) {
+    ?? ( map_get_with [String i s] . v map ( string_data key ) \ s x → i { ^ ( hash_string x ) } \ String a s b → b { ^ ( eq_string ( string_data a ) b ) } ) {
         T id → { ^ id }
         F → { ^ 0 }
     }
@@ -243,7 +229,7 @@ unsafe @ __f5t_id_multi * F5VocabImpl v ( Slice u ) text_v i off i len → i {
 
 // Emit one segment's characters, preceded by the space F5-TTS inserts in
 // front of a multi-character pure-ASCII segment. Returns the new `last`.
-unsafe @ __f5t_emit_seg * F5VocabImpl v ( Slice u ) text_v i from i to ( Vec i ) out i last → i {
+@ __f5t_emit_seg F5VocabImpl v ( Slice u ) text_v i from i to ( Vec i ) out i last → i {
     : ~ i lst last
     ? & > - to from 1 ( __f5t_needs_space lst ) {
         ( vec_push [i] out ( __f5t_id_ascii v 32 ) )
@@ -262,7 +248,7 @@ unsafe @ __f5t_emit_seg * F5VocabImpl v ( Slice u ) text_v i from i to ( Vec i )
 // A stretch of a han block with no dictionary word in it: the skip class
 // takes the alphanumeric runs, and each gap between them is ONE segment
 // (finalseg yields the split's leftovers whole, not character by character).
-unsafe @ __f5t_scan_plain * F5VocabImpl v ( Slice u ) text_v i from i to ( Vec i ) out i last → i {
+@ __f5t_scan_plain F5VocabImpl v ( Slice u ) text_v i from i to ( Vec i ) out i last → i {
     : ~ i lst last
     : ~ i j from
     : ~ i gs -1
@@ -312,7 +298,7 @@ unsafe @ __f5t_scan_plain * F5VocabImpl v ( Slice u ) text_v i from i to ( Vec i
     ^ ( __f5t_lit_at text_v pos end `c#` )
 }
 
-unsafe @ __f5t_scan_block * F5VocabImpl v ( Slice u ) text_v i from i to ( Vec i ) out i last → i {
+@ __f5t_scan_block F5VocabImpl v ( Slice u ) text_v i from i to ( Vec i ) out i last → i {
     : ~ i lst last
     : ~ i i from
     : ~ i start from
@@ -330,9 +316,9 @@ unsafe @ __f5t_scan_block * F5VocabImpl v ( Slice u ) text_v i from i to ( Vec i
 }
 
 // The character sequence, as vocabulary ids, appended to `out`.
-unsafe @ f5_text_ids F5Vocab v__h s text ( Vec i ) out → v {
+@ f5_text_ids F5Vocab v__h s text ( Vec i ) out → v {
     : ( Slice u ) text_v ( slice_of_str text )
-    : *F5VocabImpl v ( __F5Vocab_ptr v__h )
+    : F5VocabImpl v ( __F5Vocab_get v__h )
     : i n ( nurl_str_len text )
     : ~ i last -2
     : ~ i i 0

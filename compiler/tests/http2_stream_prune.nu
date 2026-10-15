@@ -29,7 +29,7 @@ $ `stdlib/ext/http2_conn.nu`
 
 // Build an H2Connection with an empty stream table and a dummy socket
 // handle (prune never touches `tcp`). Mirrors h2_conn_new's field order.
-@ mkconn → H2Connection {
+unsafe @ mkconn → H2Connection {
     : TcpConn tc ( tcp_conn_view 0 )
     ^ @ H2Connection {
         tc

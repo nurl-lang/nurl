@@ -26,6 +26,12 @@
 //   // Bounds-checked single-element read.
 //   : ? i x ( slice_get [i] s 3 )
 //
+//   // Indexing a loop wants: panics when out of range, like vec_at /
+//   // vec_put. A kernel that writes one Vec while reading others runs
+//   // as fast over slices as over raw pointers.
+//   : i x ( slice_at [i] s 3 )
+//   ( slice_put [i] s 3 + x 1 )
+//
 //   // A string's bytes, measured once; 0 past the end.
 //   : ( Slice u ) b ( slice_of_str text )
 //   : i c ( slice_byte b 0 )
@@ -107,17 +113,173 @@ $ `stdlib/core/vec.nu`
 // Bounds-checked element read. Returns None on out-of-range or empty
 // slice. Mirrors `vec_get`'s semantics.
 @ slice_get [A] ( Slice A ) s i idx → ?A {
-    ? | < idx 0 >= idx . s len { ^ @ ?A { F # A 0 } } {}
+    ? >= # u64 idx # u64 . s len { ^ @ ?A { F # A 0 } } {}
     : *A p . s data
     ^ @ ?A { T . p idx }
+}
+
+// Never returns: defined ahead of its callers so they are compiled knowing
+// that, and the optimiser can treat the check as a loop exit.
+@ __slice_index_panic i idx i len → v {
+    ( nurl_eprint `index out of bounds: the index is ` ) ( nurl_eprint_int idx )
+    ( nurl_eprint ` but the slice length is ` ) ( nurl_eprintln_int len )
+    ( nurl_panic `index out of bounds` )
+}
+
+// The element at `idx`, panicking like vec_at when it is out of range;
+// an owning element comes back as a borrow of the storage. A Slice holds
+// its data pointer and length in registers, so a loop that reads several
+// Vecs and writes another through slices keeps both out of the loop and
+// vectorises as raw pointer code does — vec_at / vec_put re-read them
+// from each Vec's control block past every store.
+@ slice_at [A] ( Slice A ) s i idx → A {
+    : i n . s len
+    ? >= # u64 idx # u64 n { ( __slice_index_panic idx n ) } {}
+    : *A p . s data
+    ^ . p idx
+}
+
+// Store `x` at `idx` of the storage the slice views (dropping the element
+// it replaces), panicking when `idx` is out of range — vec_put through a
+// view. The view's length is fixed, so a store never moves the storage.
+@ slice_put [A] ( Slice A ) s i idx A x → v {
+    : i n . s len
+    ? >= # u64 idx # u64 n { ( __slice_index_panic idx n ) } {}
+    : *A p . s data
+    : A old . p idx
+    ( mem_take old )
+    = . p idx x
+}
+
+// The first `n` elements, panicking when the slice holds fewer. Slices cut
+// to one length `n` share it: a loop indexing all of them at one index is
+// checked once, not once per slice — parallel arrays (a tree's columns)
+// walked by data-dependent indices pay for one bounds check per step.
+@ slice_prefix [A] ( Slice A ) s i n → ( Slice A ) {
+    ? >= # u64 n # u64 + . s len 1 { ( __slice_index_panic n . s len ) } {}
+    ^ @ ( Slice A ) { . s data n }
+}
+
+// The `n` elements from `from`, panicking when the slice does not hold
+// them — slice_prefix at an offset. A row of a row-major matrix taken this
+// way is checked once, and a loop to `n` over it needs no check per
+// element: the view's length is the loop's bound.
+@ slice_window [A] ( Slice A ) s i from i n → ( Slice A ) {
+    : i len . s len
+    ? | >= # u64 from # u64 + len 1 >= # u64 n # u64 + - len from 1 { ( __slice_index_panic + from n len ) } {}
+    : *A base . s data
+    ^ @ ( Slice A ) { # *A + # i base * from * Z A 1 n }
+}
+
+// Whether two byte views hold the same bytes: one length compare, then
+// memcmp over memory both views own. What a lookup probing a table against
+// a window of its input asks, with no pointer of its own.
+@ slice_bytes_eq ( Slice u ) a ( Slice u ) b → b {
+    : i n . a len
+    ? != n . b len { ^ F } {}
+    ? <= n 0 { ^ T } {}
+    ^ == 0 # i ( memcmp # s . a data # s . b data n )
+}
+
+// Lexicographic order of two byte views (memcmp, then the shorter first):
+// -1, 0 or 1.
+@ slice_bytes_cmp ( Slice u ) a ( Slice u ) b → i {
+    : i la . a len
+    : i lb . b len
+    : i n ? < la lb la lb
+    ? > n 0 {
+        : i c # i ( memcmp # s . a data # s . b data n )
+        ? != c 0 { ^ ? < c 0 -1 1 } {}
+    } {}
+    ? < la lb { ^ -1 } {}
+    ? > la lb { ^ 1 } {}
+    ^ 0
 }
 
 // The byte at `idx` (0..255), or 0 outside [0, len): the read a parser
 // makes one or two bytes past its cursor, with no Option to unwrap.
 inline @ slice_byte ( Slice u ) s i idx → i {
-    ? | < idx 0 >= idx . s len { ^ 0 } {}
+    ? >= # u64 idx # u64 . s len { ^ 0 } {}
     : *u p . s data
     ^ & # i . p idx 255
+}
+
+// A Vec of its own holding a copy of every element of the view: an
+// element that owns something is copied deep (`mem_dup`), anything else
+// as is (one memcpy). What a view that must outlive its storage — a
+// result, a global, a thread's capture — is turned into.
+@ slice_to_vec [A] ( Slice A ) s → ( Vec A ) {
+    : i n . s len
+    : ( Vec A ) out ( vec_with_cap [A] n )
+    ? > n 0 {
+        : *A dst ( vec_data [A] out )
+        : *A src . s data
+        : ~ i k 0
+        ~ < k n {
+            = . dst k ( mem_dup . src k )
+            = k + k 1
+        }
+        : b _l ( vec_set_len [A] out n )
+    } {}
+    ^ out
+}
+
+// ── Little-endian words in a byte view ───────────────────────────────
+// The u16 / u32 / u64 at byte `off`, and stores of one: a single bounds
+// check for the whole word (panicking, like slice_at, when it does not
+// fit), then the bytes — which LLVM fuses into one unaligned load or
+// store. What a binary-format reader (a tensor container, an audio frame,
+// a header) did through a raw pointer, or paid a check per byte for.
+// A u64 comes back as its i64 bit pattern.
+
+@ __slice_word_panic i off i w i len → v {
+    ( __slice_index_panic + off - w 1 len )
+}
+
+inline @ slice_u16_le ( Slice u ) s i off → i {
+    ? | < off 0 > off - . s len 2 { ( __slice_word_panic off 2 . s len ) } {}
+    : *u p . s data
+    ^ | # i . p off << # i . p + off 1 8
+}
+
+inline @ slice_u32_le ( Slice u ) s i off → i {
+    ? | < off 0 > off - . s len 4 { ( __slice_word_panic off 4 . s len ) } {}
+    : *u p . s data
+    ^ | | # i . p off << # i . p + off 1 8 | << # i . p + off 2 16 << # i . p + off 3 24
+}
+
+inline @ slice_u64_le ( Slice u ) s i off → i {
+    ? | < off 0 > off - . s len 8 { ( __slice_word_panic off 8 . s len ) } {}
+    : *u p . s data
+    : i lo | | # i . p off << # i . p + off 1 8 | << # i . p + off 2 16 << # i . p + off 3 24
+    : i hi | | # i . p + off 4 << # i . p + off 5 8 | << # i . p + off 6 16 << # i . p + off 7 24
+    ^ | lo << hi 32
+}
+
+inline @ slice_put_u16_le ( Slice u ) s i off i x → v {
+    ? | < off 0 > off - . s len 2 { ( __slice_word_panic off 2 . s len ) } {}
+    : *u p . s data
+    = . p off # u & x 255
+    = . p + off 1 # u & >> x 8 255
+}
+
+inline @ slice_put_u32_le ( Slice u ) s i off i x → v {
+    ? | < off 0 > off - . s len 4 { ( __slice_word_panic off 4 . s len ) } {}
+    : *u p . s data
+    = . p off # u & x 255
+    = . p + off 1 # u & >> x 8 255
+    = . p + off 2 # u & >> x 16 255
+    = . p + off 3 # u & >> x 24 255
+}
+
+inline @ slice_put_u64_le ( Slice u ) s i off i x → v {
+    ? | < off 0 > off - . s len 8 { ( __slice_word_panic off 8 . s len ) } {}
+    : *u p . s data
+    : ~ i k 0
+    ~ < k 8 {
+        = . p + off k # u & >> x * k 8 255
+        = k + k 1
+    }
 }
 
 // First / last element — convenience wrappers, same None-on-empty

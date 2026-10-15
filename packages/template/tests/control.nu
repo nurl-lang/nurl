@@ -130,6 +130,10 @@ $ `src/template.nu`
     = rc + rc ( check_err `err-for-nonarray` `{% for x in s %}{{ x }}{% end %}` `{"s":"str"}` `non-array` )
     = rc + rc ( check_err `err-for-malformed` `{% for %}x{% end %}` `` `malformed` )
     = rc + rc ( check_err `err-bad-op` `{% if a < b %}x{% end %}` `{"a":1,"b":2}` `unsupported operator` )
+    = rc + rc ( check_err `err-unclosed-for-empty` `{% for x in xs %}{{ x }}` `{"xs":[]}` `without matching` )
+    = rc + rc ( check_err `err-loop-attr` `{% for x in xs %}{{ loop.size }}{% end %}` `{"xs":[1]}` `unknown loop attribute` )
+    = rc + rc ( check_err `err-malformed-number` `{% if 1.2.3 == 1 %}x{% end %}` `{}` `malformed number` )
+    = rc + rc ( check_err `err-include-unquoted` `{% include header %}` `{}` `expects a quoted template name` )
 
     ? == rc 0 { ( nurl_print `control: all PASS\n` ) } {
         ( nurl_print `control: FAILURES\n` )

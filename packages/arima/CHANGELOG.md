@@ -1,5 +1,42 @@
 # Changelog
 
+## [0.6.2] — 2026-10-15
+
+- No `unsafe` left. The device evaluator's two kernels are written in gpukit 0.11.5's checked subset: every access is an `LD` / `ST` of a buffer the call bound, and `arima_eval_gpu` is a plain function. The ML recursion now updates its state in place, with no copy-back loop, and reuses each new gain instead of reading it back. The arithmetic is unchanged and the results are bit-identical, so the checks cost nothing overall. On the CPU backend the device phase runs 10 % faster single-threaded (median 5.34 vs 5.94 s) and at parity with all threads (2.52 vs 2.53 s).
+
+## [0.6.1] — 2026-10-14
+
+### Changed
+
+- Requires gpukit 0.11 (its kit state behind a lock; census accessors return a `String`).
+
+## [0.6.0] — 2026-10-14
+
+Requires NURL 0.73.0 with `stdlib/std/par.nu` (`par_map_index`).
+
+### Changed
+
+- No function is `unsafe` but the GPU evaluator, which launches this
+  package's own kernel (101 were in 0.5.4). The Kalman filter, the
+  likelihoods, the polynomial algebra and the BFGS machine index slices;
+  a matrix row is a window of its own and a loop over `a[i+1]` reads a
+  window that starts at 1, so the loop bound proves every index. The
+  same fits are 23% fewer instructions than 0.5.4 (the ARMA filter 39%),
+  with bit-identical estimates.
+- The objective evaluations of a batch run through `par_map_index`
+  (stdlib/std/par.nu): the jobs carry the series in an `Arc` and their
+  own copy of the point, and the answers come back by index — the worker
+  threads were handed raw addresses of the batch's slots. `ArimaCtx.w`
+  is an `( Arc ( Vec f ) )`.
+- An `ArimaModel` is a `Locked` handle (it was an `Arc` changed in place
+  by `arima_update`, so two threads stepping one model raced); every
+  call checks the state out and back in. `arima_se`, `arima_phi` and the
+  other vector accessors return a copy rather than a view of the state.
+- The BFGS state is a value the fit owns, the multi-series fit keeps its
+  per-series state in a Vec it checks out by index, and the model is
+  built as one value instead of field by field into zeroed memory.
+- Requires gpu 0.17 (its handle structs are sealed and its address-taking functions `raw`); nothing here changed.
+
 ## [0.5.4] — 2026-10-12
 
 Requires NURL 0.73.0, in which a field written through a raw pointer

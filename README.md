@@ -164,7 +164,7 @@ use after move, a borrow or view read after its source ended, escaping
 closure captures, iterator invalidation and unsynchronised sharing between
 threads as hard compile errors, without ever changing generated code: every
 program accepted without an `unsafe` function of its own is memory-safe
-and leak-free, apart from the open holes `docs/MEMORY.md` §6.2 lists. The
+and leak-free (`docs/MEMORY.md` §6.2; every hole found so far is closed). The
 one remaining source-level trap, the
 n-ary `&`/`|` foot-gun, is a hard error by default; `--no-strict-arity`
 demotes it to a warning for trees that need to keep building.

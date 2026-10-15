@@ -24,7 +24,6 @@ $ `stdlib/core/string.nu`
 // a different ABI for the same linker symbol — and the compiler now
 // says so instead of emitting a call the module never declared.
 $ `stdlib/core/posix.nu`
-$ `stdlib/std/arc.nu`
 
 // `ioctl` as C declares it — `int ioctl(int, unsigned long, ...)`.
 // stdlib/std/term.nu declares the same symbol, and one linker symbol
@@ -36,20 +35,14 @@ $ `stdlib/std/arc.nu`
 
 & `c` @ nurl_poke_i32 *u base i idx i32 val → v
 
-// A streaming webcam: fd, frame geometry, and the mmap'd buffer ring.
-: CameraImpl { i fd i w i h i nbuf ( Vec i ) bufptr ( Vec i ) buflen i ok }
+// A streaming webcam: fd, frame geometry, and the mmap'd buffer ring. One
+// holder owns it; its drop stops the stream, unmaps the ring and closes
+// the fd.
+: Camera { i fd i w i h i nbuf ( Vec i ) bufptr ( Vec i ) buflen i ok }
 
-% Drop CameraImpl { @ drop CameraImpl c → v { ( __cam_release c ) } }
+% Drop Camera { @ drop Camera c → v { ( __cam_release c ) } }
 
-: Camera { ( Arc CameraImpl ) a }
-
-@ Camera_share Camera h → Camera { ^ @ Camera { ( arc_clone [CameraImpl] . h a ) } }
-
-@ Camera_drop sink Camera h → v {}
-
-unsafe @ __Camera_ptr Camera h → *CameraImpl { ^ ( arc_ptr [CameraImpl] . h a ) }
-
-@ __cam_new CameraImpl c → Camera { ^ @ Camera { ( arc_new [CameraImpl] c ) } }
+@ __cam_new Camera c → Camera { ^ c }
 
 @ __O_RDWR → i { ^ 2 }
 
@@ -71,16 +64,16 @@ unsafe @ __Camera_ptr Camera h → *CameraImpl { ^ ( arc_ptr [CameraImpl] . h a 
 
 @ __MAP_SHARED → i { ^ 1 }
 
-// Zero `nslots` 4-byte slots of a buffer.
-unsafe @ __zero * u b i nslots → v {
+// Zero a request buffer for its next use.
+@ __zero ( Vec u ) b → v {
     : ~ i k 0
-    ~ < k nslots { ( nurl_poke_i32 b k 0 ) = k + k 1 }
+    ~ < k ( vec_len [u] b ) { ( vec_set [u] b k 0 ) = k + k 1 }
 }
 
 // Open a webcam and start YUYV streaming at w×h with `nbuf` ring buffers.
 unsafe @ cam_open s path i w i h i nbuf → Camera {
     : i fd # i ( open path # i32 ( __O_RDWR ) )
-    ? < fd 0 { ^ ( __cam_new @ CameraImpl { - 0 1 w h 0 ( vec_new [i] ) ( vec_new [i] ) 0 } ) } {}
+    ? < fd 0 { ^ ( __cam_new @ Camera { - 0 1 w h 0 ( vec_new [i] ) ( vec_new [i] ) 0 } ) } {}
 
     // VIDIOC_S_FMT: request YUYV w×h, progressive.
     : ( Vec u ) fmtv ( vec_zeroed [u] 208 )
@@ -92,7 +85,7 @@ unsafe @ cam_open s path i w i h i nbuf → Camera {
     ( nurl_poke_i32 fmt 5 ( __FIELD_NONE ) )  // pix.field @20
     : i rf ( ioctl # i32 fd ( __VIDIOC_S_FMT ) fmt )
     ? < rf 0 { ( close fd )
-        ^ ( __cam_new @ CameraImpl { - 0 1 w h 0 ( vec_new [i] ) ( vec_new [i] ) 0 } ) } {}
+        ^ ( __cam_new @ Camera { - 0 1 w h 0 ( vec_new [i] ) ( vec_new [i] ) 0 } ) } {}
     // the driver may adjust geometry — read back what it granted
     : i aw ( nurl_peek_i32 fmt 2 )
     : i ah ( nurl_peek_i32 fmt 3 )
@@ -106,7 +99,7 @@ unsafe @ cam_open s path i w i h i nbuf → Camera {
     : i rr ( ioctl # i32 fd ( __VIDIOC_REQBUFS ) rb )
     : i got ( nurl_peek_i32 rb 0 )
     ? | < rr 0 < got 1 { ( close fd )
-        ^ ( __cam_new @ CameraImpl { - 0 1 aw ah 0 ( vec_new [i] ) ( vec_new [i] ) 0 } ) } {}
+        ^ ( __cam_new @ Camera { - 0 1 aw ah 0 ( vec_new [i] ) ( vec_new [i] ) 0 } ) } {}
 
     // Query + mmap each buffer, then queue it.
     : ( Vec i ) ptrs ( vec_new [i] )
@@ -116,7 +109,7 @@ unsafe @ cam_open s path i w i h i nbuf → Camera {
     : *u bf ( vec_data [u] bfv )
     : ~ i bi 0
     ~ < bi got {
-        ( __zero bf 22 )
+        ( __zero bfv )
         ( nurl_poke_i32 bf 0 bi )  // index @0
         ( nurl_poke_i32 bf 1 ( __BUF_TYPE_CAPTURE ) )  // type @4
         ( nurl_poke_i32 bf 15 ( __MEMORY_MMAP ) )  // memory @60
@@ -142,22 +135,21 @@ unsafe @ cam_open s path i w i h i nbuf → Camera {
     : i so ( ioctl # i32 fd ( __VIDIOC_STREAMON ) t )
     // a stream that did not start still has its ring mapped: the drop unmaps it
     ? | < so 0 ! allok { ( close fd )
-        ^ ( __cam_new @ CameraImpl { - 0 1 aw ah got ptrs lens 0 } ) } {}
-    ^ ( __cam_new @ CameraImpl { fd aw ah got ptrs lens 1 } )
+        ^ ( __cam_new @ Camera { - 0 1 aw ah got ptrs lens 0 } ) } {}
+    ^ ( __cam_new @ Camera { fd aw ah got ptrs lens 1 } )
 }
 
-unsafe @ cam_ok Camera h → b { : *CameraImpl c ( __Camera_ptr h ) ^ != . c ok 0 }
+@ cam_ok Camera h → b { ^ != . h ok 0 }
 
-unsafe @ cam_w Camera h → i { : *CameraImpl c ( __Camera_ptr h ) ^ . c w }
+@ cam_w Camera h → i { ^ . h w }
 
-unsafe @ cam_h Camera h → i { : *CameraImpl c ( __Camera_ptr h ) ^ . c h }
+@ cam_h Camera h → i { ^ . h h }
 
 @ __clip255 i v → i { ^ ? < v 0 0 ? > v 255 255 v }
 
 // Grab one frame: dequeue a filled buffer, convert YUYV→RGB into `rgb`
 // (packed, 3 bytes/pixel, w*h*3 bytes), and requeue. Returns T on success.
-unsafe @ cam_grab Camera cam__h ( Vec u ) rgb → b {
-    : *CameraImpl c ( __Camera_ptr cam__h )
+unsafe @ cam_grab Camera c ( Vec u ) rgb → b {
     : ( Vec u ) bfv ( vec_zeroed [u] 88 )
     : *u bf ( vec_data [u] bfv )
     ( nurl_poke_i32 bf 1 ( __BUF_TYPE_CAPTURE ) )  // type @4
@@ -218,14 +210,8 @@ unsafe @ __cam_release_parts i fd i nbuf ( Vec i ) ptrs ( Vec i ) lens → v {
     ? >= fd 0 { ( close fd ) } {}
 }
 
-@ __cam_release CameraImpl c → v { ( __cam_release_parts . c fd . c nbuf . c bufptr . c buflen ) }
+@ __cam_release Camera c → v { ( __cam_release_parts . c fd . c nbuf . c bufptr . c buflen ) }
 
-// Release the camera now (optional — its last owner does it anyway). The
-// fields are cleared, so the drop finds nothing left to release.
-unsafe @ cam_close Camera h → v {
-    : *CameraImpl c ( __Camera_ptr h )
-    ( __cam_release_parts . c fd . c nbuf . c bufptr . c buflen )
-    = . c nbuf 0
-    = . c fd - 0 1
-    = . c ok 0
-}
+// Release the camera now (optional — its drop does it at the end of its
+// holder's scope anyway).
+@ cam_close sink Camera c → v {}

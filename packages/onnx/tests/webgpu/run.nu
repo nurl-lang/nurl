@@ -40,14 +40,14 @@ unsafe @ main → i {
     : ( Vec i ) shape ( vec_new [i] )
     : ~ i k 0
     ~ < k / ( vec_len [u] sb ) 8 {
-        ( vec_push [i] shape ( nurl_peek # s ( vec_data [u] sb ) k ) )
+        ( vec_push [i] shape ( slice_u64_le ( slice_from_vec [u] sb ) * k 8 ) )
         = k + k 1
     }
     : OGraph g ( onnx_parse mb )
     : Engine e ( rt_open 0 )
     ? ! ( rt_ok e ) { ^ 2 } {}
     ( nurl_print `device: ` ) ( nurl_print ( rt_name e ) ) ( nurl_print `\n` )
-    : RTensor out ( rt_run_shaped e g ( vec_data [u] input ) shape )
+    : RTensor out ( rt_run_shaped e g ( slice_from_vec [u] input ) shape )
     : GpuHost h ( rt_download e out )
     ( host_result ( gpu_host_ptr h ) . out nelem )
     ^ 0

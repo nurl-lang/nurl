@@ -20,10 +20,7 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
 $ `image.nu`
 $ `decode.nu`
-
-& `c` @ nurl_peek_f32 *u base i idx → f
-
-& `c` @ nurl_poke_f32 *u base i idx f val → v
+$ `stdlib/core/slice.nu`
 
 // Mask prototype geometry: 32 coefficients, 160×160 prototypes at stride 4.
 @ mask_nm → i { ^ 32 }
@@ -33,14 +30,13 @@ $ `decode.nu`
 @ mask_stride → i { ^ 4 }
 
 // Read a detection's nm mask coefficients from output0 (channels
-// 4+nc .. 4+nc+nm at anchor `ai`) into a fresh host f32 buffer.
-unsafe @ mask_coeffs * u out i na i nc i ai → ( Vec u ) {
+// 4+nc .. 4+nc+nm at anchor `ai`). Each is the f32 value, exactly.
+@ mask_coeffs GpuHost out i na i nc i ai → ( Vec f ) {
     : i nm ( mask_nm )
-    : ( Vec u ) cv ( vec_zeroed [u] * nm 4 )
-    : *u c ( vec_data [u] cv )
+    : ( Vec f ) cv ( vec_with_cap [f] nm )
     : ~ i m 0
     ~ < m nm {
-        ( nurl_poke_f32 c m ( nurl_peek_f32 out + * + + 4 nc m na ai ) )
+        ( vec_push [f] cv ( gpu_host_get_f32 out + * + + 4 nc m na ai ) )
         = m + m 1
     }
     ^ cv
@@ -48,29 +44,40 @@ unsafe @ mask_coeffs * u out i na i nc i ai → ( Vec u ) {
 
 // Build the 160×160 mask logit map for one detection: logit[y,x] =
 // Σ_m coeff[m]·proto[m,y,x]. proto is laid out [nm, MH, MW] row-major.
-// Returns a fresh host f32 buffer of MH*MW.
-unsafe @ mask_logits * u proto * u coeff i MH i MW → ( Vec u ) {
+// Each pixel sums its terms in m order, as one loop per pixel did, but a
+// prototype plane at a time: the inner loop runs over contiguous windows
+// and vectorises. Each logit is rounded to f32, as the map was always
+// stored. A proto smaller than that is no mask: every logit 0.
+@ mask_logits GpuHost proto ( Vec f ) coeff i MH i MW → ( Vec f ) {
     : i nm ( mask_nm )
-    : i hw * MH MW
-    : ( Vec u ) lv ( vec_zeroed [u] * hw 4 )
-    : *u L ( vec_data [u] lv )
-    : ~ i p 0
-    ~ < p hw {
-        : ~ f acc 0.0
-        : ~ i m 0
-        ~ < m nm {
-            = acc + acc * ( nurl_peek_f32 coeff m ) ( nurl_peek_f32 proto + * m hw p )
-            = m + m 1
+    : i hw ? | < MH 0 < MW 0 0 * MH MW
+    : ( Vec f ) acc ( vec_zeroed [f] hw )
+    ? < ( gpu_host_bytes proto ) * * nm hw 4 { ^ acc } {}
+    : ( Slice f32 ) pr ( gpu_host_f32 proto )
+    : ( Slice f ) cs ( slice_prefix [f] ( slice_from_vec [f] coeff ) nm )
+    : ( Slice f ) ac ( slice_from_vec [f] acc )
+    : ~ i m 0
+    ~ < m nm {
+        : f c ( slice_at [f] cs m )
+        : ( Slice f32 ) plane ( slice_window [f32] pr * m hw hw )
+        : ~ i p 0
+        ~ < p hw {
+            ( slice_put [f] ac p + ( slice_at [f] ac p ) * c # f ( slice_at [f32] plane p ) )
+            = p + p 1
         }
-        ( nurl_poke_f32 L p acc )
-        = p + p 1
+        = m + m 1
     }
-    ^ lv
+    : ~ i q 0
+    ~ < q hw {
+        ( slice_put [f] ac q # f # f32 ( slice_at [f] ac q ) )
+        = q + q 1
+    }
+    ^ acc
 }
 
 // Bilinear sample of an MH×MW grid at fractional (fy,fx); out-of-range
 // coordinates clamp to the edge (align_corners=False convention).
-unsafe @ mask_sample * u L i MH i MW f fy f fx → f {
+@ mask_sample ( Slice f ) L i MH i MW f fy f fx → f {
     : f cy ? < fy 0.0 0.0 ? > fy # f - MH 1 # f - MH 1 fy
     : f cx ? < fx 0.0 0.0 ? > fx # f - MW 1 # f - MW 1 fx
     : i y0 # i cy
@@ -79,10 +86,10 @@ unsafe @ mask_sample * u L i MH i MW f fy f fx → f {
     : i x1 ? < x0 - MW 1 + x0 1 x0
     : f dy - cy # f y0
     : f dx - cx # f x0
-    : f v00 ( nurl_peek_f32 L + * y0 MW x0 )
-    : f v01 ( nurl_peek_f32 L + * y0 MW x1 )
-    : f v10 ( nurl_peek_f32 L + * y1 MW x0 )
-    : f v11 ( nurl_peek_f32 L + * y1 MW x1 )
+    : f v00 ( slice_at [f] L + * y0 MW x0 )
+    : f v01 ( slice_at [f] L + * y0 MW x1 )
+    : f v10 ( slice_at [f] L + * y1 MW x0 )
+    : f v11 ( slice_at [f] L + * y1 MW x1 )
     : f top + * - 1.0 dx v00 * dx v01
     : f bot + * - 1.0 dx v10 * dx v11
     ^ + * - 1.0 dy top * dy bot
@@ -104,10 +111,11 @@ unsafe @ mask_sample * u L i MH i MW f fy f fx → f {
 // ORIGINAL-image pixels (x0,y0,ow,oh); for each pixel we map back through the
 // letterbox to the 160×160 mask grid and threshold the bilinearly-sampled
 // logit at 0 (sigmoid > 0.5). `S` is the model input side (640).
-unsafe @ mask_overlay Image im * u L Letterbox lb i S i x0 i y0 i ow i oh i r i gg i bb i alpha → i {
+@ mask_overlay Image im ( Vec f ) L__v Letterbox lb i S i x0 i y0 i ow i oh i r i gg i bb i alpha → i {
     : i MH ( mask_dim )
     : i MW ( mask_dim )
     : f scale . lb scale
+    : ( Slice f ) L ( slice_from_vec [f] L__v )
     : i padx . lb padx
     : i pady . lb pady
     : f rh / # f MH # f S

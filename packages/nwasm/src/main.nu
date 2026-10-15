@@ -88,7 +88,7 @@ unsafe @ __result_count s ftp → i {
                         : String a ( env_arg k )
                         : i pty ( __param_ty ftp - k first_arg )
                         : i val ? == pty 124 ( f64_to_bits ( nurl_str_to_float ( string_data a ) ) ) ? == pty 125 ( f32_to_bits # f32 ( nurl_str_to_float ( string_data a ) ) ) ( nurl_str_to_int ( string_data a ) )
-                        ( vec_push [i] ( interp_stack it ) val )
+                        ( interp_stack_push it val )
                         = k + k 1
                     }
                     ( interp_run_start it )
@@ -110,13 +110,13 @@ unsafe @ __result_count s ftp → i {
                     } {
                         // every result, in order, one per line, printed by its
                         // declared type (mirrors the reference CLI)
-                        : i n ( vec_len [i] ( interp_stack it ) )
+                        : i n ( interp_stack_len it )
                         : ~ i nres ( __result_count ftp )
                         ? > nres n { = nres n } {}
                         ? > nres 0 {
                             : ~ i rj 0
                             ~ < rj nres {
-                                : i rv ?? ( vec_get [i] ( interp_stack it ) + - n nres rj ) { T x → x F → 0 }
+                                : i rv ( interp_stack_at it + - n nres rj )
                                 : i rty ( __result_ty_at ftp rj )
                                 ? == rty 124 { ( nurl_print ( nurl_str_float ( bits_to_f64 rv ) ) ) } {
                                     ? == rty 125 { ( nurl_print ( nurl_str_float # f ( bits_to_f32 rv ) ) ) } {

@@ -1,5 +1,86 @@
 # Changelog
 
+## [3.1.1] — 2026-10-15
+
+- `unsafe` functions: interp.nu 95 → 90, module.nu 4 → 3 (the package: 102 → 96). `f32/f64.nearest` use the stdlib's `float_round_even` instead of declaring libm `rint` itself. `random_get` draws through the stdlib's `rand_bytes`, which fails closed. Block-type arities read their `FuncType` with `box_get`. `functype_eq` takes its two types by value. `__param_ty`, `__result_ty_at` and `__result_count` needed no `unsafe` at all. Suites are byte-identical under every engine, and interpreted `call_indirect` runs 0.15 % fewer instructions.
+
+## [3.1.0] — 2026-10-15
+
+- The WASI host state (descriptor table, captured output) is a `Locked WasiCtx` shared by an instance and every thread it spawns. Arguments and environment are a frozen, shared `Arc ArgEnv`, which a push replaces. Before, the WASI handlers reached the owning instance through a raw pointer, and two threads doing file I/O at once wrote one descriptor record unsynchronised. Now their calls take turns. The handlers change a descriptor in place with `vec_update` / `vec_apply` instead of `*WFd` casts, and `interp_set_preopen` is safe. `unsafe` functions in interp.nu: 125 → 95.
+- Host calls got faster. An import's parameter and result counts are cached instead of looked up per call, the import record is read only to resolve it, and writes to the host's own stdout/stderr take no lock. 2M host calls: 1.24 G → 1.02 G instructions (−18 %). 1M `fd_write` calls: 2.63 G → 2.49 G (−5 %).
+- All nine unit suites give byte-identical output under tier 8, tier 7 and the interpreter, and the four-thread wasi-threads program behaves as before.
+
+## [3.0.0] — 2026-10-15
+
+### Changed
+
+- **Breaking:** an `Interp` is a `( Locked InterpImpl )`, and its public
+  entry points run on the instance where it lives through
+  `locked_update` / `locked_apply` — the closure takes it `inout`
+  (new in NURL: closures with `inout` parameters). The value never moves,
+  so the address the JIT and the call-out bridge hold stays put. 16 of
+  the `interp_*` functions are no longer `unsafe` (src/interp.nu: 141 to
+  125).
+- **Breaking:** `interp_stack` (which lent the instance's own value stack
+  for callers to push into) is replaced by `interp_stack_push`,
+  `interp_stack_len` and `interp_stack_at`. `interp_trapmsg`,
+  `interp_stdout_bytes` and `interp_stderr_bytes` return copies.
+- `_module_func_type` takes the module record `inout` (by address): a
+  by-value copy of it per import call showed up when the call was not
+  inlined.
+
+### Performance
+
+- Host calls are 3.3x faster: an import is resolved to its dispatch
+  number once per instance, where every call used to walk a chain of
+  string compares. A module making 2 million WASI calls: 5.05 G
+  instructions to 1.90 G, 450 ms to 135 ms.
+
+## [2.6.0] — 2026-10-15
+
+### Changed
+
+- The interpreter passes its instance as `inout InterpImpl` instead of a
+  `*InterpImpl`, and its predecoded functions and decoded module as
+  `inout PFunc` / `inout ModuleImpl` (a `WFunc` by value): 51 `unsafe`
+  functions fewer in src/interp.nu (192 to 141). An `inout` parameter is
+  passed by address exactly as the raw pointer was (the IR is the same
+  pointer argument), so the instance keeps the fixed address that the
+  JIT and the call-out bridge hold. The public `interp_*` entry points are
+  now the one place that turns the `Arc` into that address. What stays
+  `unsafe` reads boxed records through `box_ptr`, reaches a thread's
+  owner through a raw pointer, or touches linear memory or JIT code.
+- The call-out bridge captures the instance's address rather than the
+  instance.
+- Every unit suite gives byte-identical output under tier 8, tier 7 and
+  the interpreter. A four-thread wasi-threads program counts to 400000 as
+  before. A program making 2 million host calls runs 5.055 G instructions
+  against 5.047 G before (+0.2 %), wall time at parity.
+
+## [2.5.0] — 2026-10-15
+
+### Changed
+
+- The module decoder is safe code: 33 `unsafe` functions in
+  src/module.nu down to 4. The byte cursor `Wc` reads a `( Slice u )`
+  of the image instead of a raw pointer. A module decodes into a plain
+  `ModuleImpl` (the image stays out of it while the cursor reads it)
+  that is then frozen in its `Arc`; the accessors read it through
+  `arc_get`. Data segments are cut with `slice_to_vec`, and name and
+  export lookups read their boxed records with `box_get`. What stays
+  `unsafe` is what hands the interpreter raw pointers into the frozen
+  module: `_Module_ptr`, `_module_func_type`, `module_func_type` and
+  `functype_eq`.
+- The interpreter keeps its `unsafe`. It is a JIT runtime: the instance
+  has a fixed address that generated code and the call-out bridge
+  capture, linear memory is a guard-page reservation shared by
+  wasi-threads, and a thread reaches its owner's tables through a raw
+  pointer under the atomics lock.
+- Every unit suite (interp, wasi, mem, table, float, semantics,
+  hardening, atomics, rjit_smoke) gives byte-identical output under
+  tier 8, tier 7 (`NURL_NWASM_RJIT=0`) and the interpreter
+  (`NURL_NWASM_JIT=0`).
+
 ## [2.4.2] — 2026-10-12
 
 Requires NURL 0.73.0, in which a field written through a raw pointer

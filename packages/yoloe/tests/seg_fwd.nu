@@ -17,8 +17,6 @@ $ `deps/onnx/src/model.nu`
 $ `deps/onnx/src/runtime.nu`
 $ `../src/image.nu`
 
-& `c` @ nurl_peek_f32 *u base i idx → f
-
 // A raw little-endian f32 file as its bytes (empty when unreadable).
 @ load_f32 s path → ( Vec u ) {
     ?? ( read_file_bytes path ) { T b → ^ b F _ → ^ ( vec_new [u] ) }
@@ -28,7 +26,7 @@ $ `../src/image.nu`
     : ( Vec i ) v ( vec_new [i] ) ( vec_push [i] v a ) ( vec_push [i] v b ) ( vec_push [i] v c ) ( vec_push [i] v d ) ^ v
 }
 
-unsafe @ main → i {
+@ main → i {
     : ( Vec String ) av ( env_args_list )
     ? < ( vec_len [String] av ) 4 { ( nurl_print `usage: seg_fwd <model> <input.ppm> <proto.f32>\n` ) ^ 2 } {}
     : String mp ?? ( vec_get [String] av 1 ) { T x → x F _ → ( string_new ) }
@@ -43,26 +41,24 @@ unsafe @ main → i {
     ?? ( img_load ( string_data ip ) ) {
         T im → {
             : Letterbox lb ( letterbox im 640 )
-            : ( Vec u ) host_v ( img_to_nchw_norm . lb img )
-            : *u host ( vec_data [u] host_v )
+            : GpuHost host ( img_to_nchw_norm . lb img )
             : Engine e ( rt_open 0 )
             ? ! ( rt_ok e ) { ( nurl_print `gpu/kernels failed\n` ) ^ 1 } {}
             ( nurl_print `device ` ) ( nurl_print ( rt_name e ) ) ( nurl_print `\n` )
-            : RTensor out ( rt_run_shaped e g host ( shape4 1 3 640 640 ) )
+            : RTensor out ( rt_run_host e g host ( shape4 1 3 640 640 ) )
             : RTensor proto ( rt_output1 e )
             ? == . proto nelem 0 { ( nurl_print `no proto output!\n` ) ^ 1 } {}
-            : GpuHost ph__h ( rt_download e proto )
-            : *u ph ( gpu_host_ptr ph__h )
+            : GpuHost ph ( rt_download e proto )
             ( nurl_print `proto floats ` ) ( nurl_print ( nurl_str_int . proto nelem ) ) ( nurl_print `\n` )
 
-            : ( Vec u ) gref_v ( load_f32 ( string_data pp ) )
-            : *u gref ( vec_data [u] gref_v )
-            : i gn / ( vec_len [u] gref_v ) 4
+            : GpuHost gref ( gpu_host_of_vec ( load_f32 ( string_data pp ) ) )
+            : i gn / ( gpu_host_bytes gref ) 4
+            ? != gn / ( gpu_host_bytes ph ) 4 { ( nurl_print `proto size differs from the reference\n` ) ^ 1 } {}
             : ~ i bad 0
             : ~ f maxerr 0.0
             : ~ i j 0
             ~ < j gn {
-                : ~ f d - ( nurl_peek_f32 ph j ) ( nurl_peek_f32 gref j )
+                : ~ f d - ( gpu_host_get_f32 ph j ) ( gpu_host_get_f32 gref j )
                 ? < d 0.0 { = d - 0.0 d } {}
                 ? > d maxerr { = maxerr d } {}
                 ? > d 0.01 { = bad + bad 1 } {}

@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.7.7] — 2026-10-14
+
+Requires NURL 0.73.0 (`slice_at`, `slice_put`, `rc_take`, `locked_take`).
+
+### Changed
+
+- Loops that read or wrote through `vec_data` pointers index slices (`slice_at` / `slice_put`, as fast as the pointers), and functions with nothing raw in them are no longer marked `unsafe`.
+- No function is `unsafe` any more (16 were in 0.7.6): the JPEG decoder reads its input through a `Slice u` (0.3% fewer instructions, the same pixels).
+
 ## [0.7.6] — 2026-10-12
 
 Requires NURL 0.73.0, in which a field written through a raw pointer

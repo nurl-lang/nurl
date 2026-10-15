@@ -20,18 +20,18 @@ $ `src/interp.nu`
     ^ / # f v 251.0
 }
 
-unsafe @ __ic_case i oh i ow → v {
+@ __ic_case i oh i ow → v {
     : i ihw * IC_M IC_M
-    : ( Vec u ) pin__v ( vec_zeroed [u] * 8 * IC_C ihw )
-    : *f pin # *f ( vec_data [u] pin__v )
+    : ( Vec f ) pin__v ( vec_zeroed [f] * IC_C ihw )
+    : ( Slice f ) pin ( slice_from_vec [f] pin__v )
     : ~ i k 0
     ~ < k IC_C {
         : ~ i p 0
-        ~ < p ihw { = . pin + * k ihw p ( __ic_val k p ) = p + p 1 }
+        ~ < p ihw { ( slice_put [f] pin + * k ihw p ( __ic_val k p ) ) = p + p 1 }
         = k + k 1
     }
-    : ( Vec u ) pout__v ( vec_zeroed [u] * 8 * IC_C * oh ow )
-    : *f pout # *f ( vec_data [u] pout__v )
+    : ( Vec f ) pout__v ( vec_zeroed [f] * IC_C * oh ow )
+    : ( Slice f ) pout ( slice_from_vec [f] pout__v )
     // DINOv2's kludge: scale_factor = (out + 0.1)/37, torch then uses
     // its reciprocal for the coordinate map.
     : f rsy / # f IC_M + # f oh 0.1
@@ -44,7 +44,7 @@ unsafe @ __ic_case i oh i ow → v {
     : ~ i j 0
     ~ < j * IC_C * oh ow {
         ( string_push_char line 32 )
-        ( string_push_float line . pout j )
+        ( string_push_float line ( slice_at [f] pout j ) )
         = j + j 1
     }
     ( puts ( string_data line ) )

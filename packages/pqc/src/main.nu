@@ -316,18 +316,18 @@ $ `stdlib/core/slice.nu`
 // that negotiated X25519MLKEM768 perfectly was reported "handshake
 // failed" — conflating "not post-quantum" with "not trusted", which are
 // exactly the two things a probe exists to keep apart.
-unsafe @ __cmd_probe s host i port → i {
+@ __cmd_probe s host i port → i {
     ( __pad host )
     : ~ b trusted T
-    : ~ TlsConn conn # TlsConn # s 0
+    : ~ ? TlsConn co @ ?TlsConn { F }
     ?? ( tls_connect host port host ) {
-        T c → { = conn c }
+        T c → { = co @ ?TlsConn { T c } }
         F e → {
             ?? e {
                 TlsBadCert → {
                     = trusted F
                     ?? ( tls_connect_insecure host port host ) {
-                        T c2 → { = conn c2 }
+                        T c2 → { = co @ ?TlsConn { T c2 } }
                         F _e2 → {}
                     }
                 }
@@ -335,18 +335,22 @@ unsafe @ __cmd_probe s host i port → i {
             }
         }
     }
-    ? == # i . conn ctl 0 {
-        ( nurl_print `--   handshake failed\n` )
-        ^ 2
-    } {}
-    : i g ( tls_group conn )
-    : b pq ( tls_is_post_quantum conn )
-    ( nurl_print ? pq `PQ   ` `no   ` )
-    ( nurl_print ( __group_name g ) )
-    ? ! trusted { ( nurl_print `   (certificate UNTRUSTED here)` ) } {}
-    ( nurl_print `\n` )
-    ( tls_close conn )
-    ^ ? pq 0 1
+    ?? co {
+        T conn → {
+            : i g ( tls_group conn )
+            : b pq ( tls_is_post_quantum conn )
+            ( nurl_print ? pq `PQ   ` `no   ` )
+            ( nurl_print ( __group_name g ) )
+            ? ! trusted { ( nurl_print `   (certificate UNTRUSTED here)` ) } {}
+            ( nurl_print `\n` )
+            ( tls_close conn )
+            ^ ? pq 0 1
+        }
+        F → {
+            ( nurl_print `--   handshake failed\n` )
+            ^ 2
+        }
+    }
 }
 
 // ── bench ──────────────────────────────────────────────────────────
@@ -430,7 +434,7 @@ unsafe @ __cmd_probe s host i port → i {
     ^ ok
 }
 
-unsafe @ __kat_one s label i level s d s z s ekd s dkd → b {
+@ __kat_one s label i level s d s z s ekd s dkd → b {
     : ( Vec u ) dv ( __hexv d )
     : ( Vec u ) zv ( __hexv z )
     : MlkemKeys ks ( mlkem_keygen_derand level dv zv )
@@ -442,8 +446,8 @@ unsafe @ __kat_one s label i level s d s z s ekd s dkd → b {
     : ( Vec u ) ss ( mlkem_decaps level ( mlkem_dk ks ) ( mlkem_ct en ) )
     : b okrt ( bytes_eq ss ( mlkem_ss en ) )
     : ( Vec u ) bad ( bytes_slice ( mlkem_ct en ) 0 ( vec_len [u] ( mlkem_ct en ) ) )
-    : *u bp ( vec_data [u] bad )
-    = . bp 0 # u ^^ # i . bp 0 1
+    : ( Slice u ) bp ( slice_from_vec [u] bad )
+    ( slice_put [u] bp 0 # u ^^ # i . bp 0 1 )
     : ( Vec u ) rej ( mlkem_decaps level ( mlkem_dk ks ) bad )
     : b okrej & ! ( bytes_eq rej ss ) == ( vec_len [u] rej ) 32
 

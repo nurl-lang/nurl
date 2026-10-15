@@ -100,18 +100,16 @@ $ `window.nu`
 // Run the network on one image, drawing boxes (and, when `want_masks`, the
 // per-object segmentation mask) onto `im`. When `verbose`, prints one line per
 // detection. Returns the detection count.
-unsafe @ process_frame Image im OGraph g Engine e ( Vec String ) names i nc b want_boxes b want_masks b verbose → i {
+@ process_frame Image im OGraph g Engine e ( Vec String ) names i nc b want_boxes b want_masks b verbose → i {
     : Letterbox lb ( letterbox im 640 )
-    : ( Vec u ) host ( img_to_nchw_norm . lb img )
-    : RTensor out ( rt_run_shaped e g ( vec_data [u] host ) ( shape4 1 3 640 640 ) )
-    : GpuHost o__h ( rt_download e out )
-    : *u o ( gpu_host_ptr o__h )
+    : GpuHost host ( img_to_nchw_norm . lb img )
+    : RTensor out ( rt_run_host e g host ( shape4 1 3 640 640 ) )
+    : GpuHost o ( rt_download e out )
     : ~ b masks want_masks
-    : ~ i proto_i 0  // proto buffer address carried as i64 (cast per use)
-    : ~ GpuHost proto_i__h ( gpu_host_none )
+    : ~ GpuHost proto ( gpu_host_none )
     ? masks {
         : RTensor proto_t ( rt_output1 e )
-        ? == . proto_t nelem 0 { = masks F } { = proto_i__h ( rt_download e proto_t ) = proto_i # i ( gpu_host_ptr proto_i__h ) }
+        ? == . proto_t nelem 0 { = masks F } { = proto ( rt_download e proto_t ) }
     } {}
     : i na 8400
     : i MH ( mask_dim )
@@ -131,9 +129,9 @@ unsafe @ process_frame Image im OGraph g Engine e ( Vec String ) names i nc b wa
                 : i x0 - ocx / ow 2
                 : i y0 - ocy / oh 2
                 ? masks {
-                    : ( Vec u ) coeff ( mask_coeffs o na nc . d ai )
-                    : ( Vec u ) L ( mask_logits # *u proto_i ( vec_data [u] coeff ) MH MW )
-                    ( mask_overlay im ( vec_data [u] L ) lb 640 x0 y0 ow oh ( pal_r k ) ( pal_g k ) ( pal_b k ) 128 )
+                    : ( Vec f ) coeff ( mask_coeffs o na nc . d ai )
+                    : ( Vec f ) L ( mask_logits proto coeff MH MW )
+                    ( mask_overlay im L lb 640 x0 y0 ow oh ( pal_r k ) ( pal_g k ) ( pal_b k ) 128 )
                 } {}
                 ? want_boxes { ( img_draw_rect im x0 y0 + x0 ow + y0 oh ( pal_r k ) ( pal_g k ) ( pal_b k ) ) } {}
                 ? verbose {

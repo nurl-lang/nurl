@@ -15,10 +15,13 @@
 //                                            the builder is spent
 // Reader:
 //   ( zip_open ( Vec u ) bytes )           → ! ZipArchive ZipErr
-//       BORROWS `bytes` — keep them alive while the archive is read.
-//   ( zip_open_ptr * u p i n )             → ! ZipArchive ZipErr
-//       Same, over a raw borrowed span — pair with mmap to read an
-//       archive far larger than RAM without copying it in.
+//       over a copy of `bytes` the archive keeps
+//   ( zip_open_owned ( Vec u ) bytes )     → ! ZipArchive ZipErr
+//       takes `bytes` over instead of copying them
+//   ( zip_open_mapped MappedFile m )       → ! ZipArchive ZipErr
+//       over a file mapping (stdlib/std/mmap.nu) it shares — read an
+//       archive far larger than RAM without copying it in
+//   ( zip_source ZipArchive )              → MappedFile   what it reads
 //   ( zip_count ZipArchive )               → i
 //   ( zip_name_at ZipArchive i )           → ? String     owned copy
 //   ( zip_size_at ZipArchive i )           → ? i          uncompressed size
@@ -34,8 +37,9 @@
 //   ( zip_close ZipArchive )               → v            early release
 //                                            (optional)
 //
-// Zip and ZipArchive are handles (stdlib/core/rcbox.nu): every copy is
-// the same builder / archive, and the last owner releases it.
+// Zip and ZipArchive are handles: every copy is the same builder /
+// archive, and the last owner releases it (an archive, the source it
+// reads with it).
 //
 // Determinism: entries carry a fixed DOS timestamp (1980-01-01), so
 // identical inputs produce byte-identical archives.
@@ -53,6 +57,8 @@ $ `stdlib/std/bytes.nu`
 $ `stdlib/ext/compress.nu`  // pure deflate/inflate + crc32 (via std/deflate.nu)
 $ `stdlib/core/rcbox.nu`
 $ `stdlib/core/mem.nu`
+$ `stdlib/core/slice.nu`
+$ `stdlib/std/mmap.nu`
 
 : | ZipErr {
     ZipBadArchive  // no/garbled end-of-central-directory or headers
@@ -90,21 +96,15 @@ $ `stdlib/core/mem.nu`
     ( vec_push [u] out # u & / v 16777216 255 )
 }
 
-@ __zip_rd_u16 * u p i off → i {
-    ^ + # i . p off * # i . p + off 1 256
-}
+@ __zip_rd_u16 ( Slice u ) p i off → i { ^ ( slice_u16_le p off ) }
 
-@ __zip_rd_u32 * u p i off → i {
-    ^ + + + # i . p off * # i . p + off 1 256 * # i . p + off 2 65536 * # i . p + off 3 16777216
-}
+@ __zip_rd_u32 ( Slice u ) p i off → i { ^ ( slice_u32_le p off ) }
 
 // 64-bit LE. ZIP64 sizes and offsets are u64 on the wire; NURL's `i` is
 // signed, so a value with bit 63 set comes back negative — callers treat
 // that as "impossible for a real file" and reject it, same as any other
 // out-of-range extent.
-@ __zip_rd_u64 * u p i off → i {
-    ^ + ( __zip_rd_u32 p off ) * ( __zip_rd_u32 p + off 4 ) 4294967296
-}
+@ __zip_rd_u64 ( Slice u ) p i off → i { ^ ( slice_u64_le p off ) }
 
 // ── raw deflate / inflate (windowBits −15) ──────────────────────────
 
@@ -119,9 +119,8 @@ $ `stdlib/core/mem.nu`
 }
 
 // Inflate exactly `usize` bytes out of src[off .. off+csize).
-@ __zip_inflate * u srcp i off i csize i usize → ?( Vec u ) {
-    : ( Vec u ) raw ( vec_new [u] )
-    ( bytes_extend_raw raw # s + # i srcp off csize )
+@ __zip_inflate ( Slice u ) src i off i csize i usize → ?( Vec u ) {
+    : ( Vec u ) raw ( slice_to_vec [u] ( slice_window [u] src off csize ) )
     : !( Vec u ) DeflateErr r ( inflate raw )
     ?? r {
         F _ → ^ @ ?( Vec u ) { F }
@@ -250,7 +249,10 @@ $ `stdlib/core/mem.nu`
 
 // ── reader ──────────────────────────────────────────────────────────
 //
-// ZipArchive: the entry count, the entries, the source span (borrowed).
+// ZipArchive: the entry count, the entries, and the source it reads — a
+// MappedFile it owns or shares, read through checked views, so no entry,
+// however the file lies about it, reads outside the source, and the
+// source lives as long as the archive does.
 // Entries are a flat i64 array, 7 slots each:
 //   0 name_off (into source)  1 name_len  2 method  3 csize
 //   4 usize    5 local_hdr_off            6 crc
@@ -258,39 +260,23 @@ $ `stdlib/core/mem.nu`
 : ZipArchiveImpl {
     i count
     ( Vec i ) entries
-    * u data  // the source, borrowed
-    i len
+    MappedFile src
 }
 
-: ZipArchive { ( Shared ZipArchiveImpl ) ctl }
+: ZipArchive { ( Arc ZipArchiveImpl ) a }
 
-@ ZipArchive_share ZipArchive h → ZipArchive { ^ @ ZipArchive { ( shared_clone [ZipArchiveImpl] . h ctl ) } }
+@ ZipArchive_share ZipArchive h → ZipArchive { ^ @ ZipArchive { ( arc_clone [ZipArchiveImpl] . h a ) } }
 
 @ ZipArchive_drop sink ZipArchive h → v {}
 
-@ __ZipArchive_ptr ZipArchive h → *ZipArchiveImpl { ^ ( shared_ptr [ZipArchiveImpl] . h ctl ) }
+@ zip_count ZipArchive h → i { ^ . ( arc_get [ZipArchiveImpl] . h a ) count }
 
-@ zip_count ZipArchive a__h → i {
-    : *ZipArchiveImpl a ( __ZipArchive_ptr a__h )
-    ^ . a count
+@ __zip_entry ZipArchive h i idx i field → i {
+    ^ ( vec_at [i] . ( arc_get [ZipArchiveImpl] . h a ) entries + * idx 7 field )
 }
 
-@ __zip_entry ZipArchive a__h i idx i field → i {
-    : *ZipArchiveImpl a ( __ZipArchive_ptr a__h )
-    : *i ep ( vec_data [i] . a entries )
-    ^ . ep + * idx 7 field
-}
-
-// The source span the archive reads.
-@ __zip_src ZipArchive a__h → *u {
-    : *ZipArchiveImpl a ( __ZipArchive_ptr a__h )
-    ^ . a data
-}
-
-@ __zip_srclen ZipArchive a__h → i {
-    : *ZipArchiveImpl a ( __ZipArchive_ptr a__h )
-    ^ . a len
-}
+// The source the archive reads: a copy of the same mapping.
+@ zip_source ZipArchive h → MappedFile { ^ ( MappedFile_share . ( arc_get [ZipArchiveImpl] . h a ) src ) }
 
 // Pull the ZIP64 overrides for one central-directory record out of its
 // extra-field block. The 0x0001 extra carries only the members whose
@@ -298,10 +284,10 @@ $ `stdlib/core/mem.nu`
 // is decided by the 32-bit values — not by the extra's length.
 // Writes the resolved triple into out[0..2]; returns F on a malformed
 // extra block.
-@ __zip_zip64_extra * u p i xoff i xlen i csize32 i usize32 i lho32 s out → b {
-    ( nurl_poke out 0 csize32 )
-    ( nurl_poke out 1 usize32 )
-    ( nurl_poke out 2 lho32 )
+@ __zip_zip64_extra ( Slice u ) p i xoff i xlen i csize32 i usize32 i lho32 ( Vec i ) out → b {
+    ( vec_put [i] out 0 csize32 )
+    ( vec_put [i] out 1 usize32 )
+    ( vec_put [i] out 2 lho32 )
     : ~ i q xoff
     : i xend + xoff xlen
     ~ <= + q 4 xend {
@@ -312,17 +298,17 @@ $ `stdlib/core/mem.nu`
             : ~ i r + q 4
             ? == usize32 4294967295 {
                 ? > + r 8 + + q 4 sz { ^ F } {}
-                ( nurl_poke out 1 ( __zip_rd_u64 p r ) )
+                ( vec_put [i] out 1 ( __zip_rd_u64 p r ) )
                 = r + r 8
             } {}
             ? == csize32 4294967295 {
                 ? > + r 8 + + q 4 sz { ^ F } {}
-                ( nurl_poke out 0 ( __zip_rd_u64 p r ) )
+                ( vec_put [i] out 0 ( __zip_rd_u64 p r ) )
                 = r + r 8
             } {}
             ? == lho32 4294967295 {
                 ? > + r 8 + + q 4 sz { ^ F } {}
-                ( nurl_poke out 2 ( __zip_rd_u64 p r ) )
+                ( vec_put [i] out 2 ( __zip_rd_u64 p r ) )
                 = r + r 8
             } {}
             ^ T
@@ -333,21 +319,29 @@ $ `stdlib/core/mem.nu`
     ^ & & != csize32 4294967295 != usize32 4294967295 != lho32 4294967295
 }
 
+// An archive over a copy of `bytes` (the caller keeps its own).
 @ zip_open ( Vec u ) bytes → !ZipArchive ZipErr {
-    ^ ( zip_open_ptr ( vec_data [u] bytes ) ( vec_len [u] bytes ) )
+    ^ ( zip_open_mapped ( mapped_of_bytes ( slice_to_vec [u] ( slice_from_vec [u] bytes ) ) ) )
 }
 
-// Open an archive that lives in a borrowed span [p, p+n). `p` must stay
-// valid while the archive is read. Nothing is copied: the entry table holds offsets
-// into the span, so an mmap of a multi-GB archive costs no RAM.
-@ zip_open_ptr * u p i n → !ZipArchive ZipErr {
+// An archive over `bytes` themselves: it takes them over.
+@ zip_open_owned sink ( Vec u ) bytes → !ZipArchive ZipErr {
+    ^ ( zip_open_mapped ( mapped_of_bytes bytes ) )
+}
+
+// An archive over a file mapping it shares (stdlib/std/mmap.nu). Nothing
+// is copied: the entry table holds offsets into the mapping, so a
+// multi-GB archive costs no RAM.
+@ zip_open_mapped MappedFile m → !ZipArchive ZipErr {
+    : ( Slice u ) p ( mapped_bytes m )
+    : i n ( slice_len [u] p )
     ? < n 22 { ^ @ !ZipArchive ZipErr { F ZipBadArchive } } {}
     // find EOCD: scan back from n-22 over the ≤64K comment window
     : ~ i eocd -1
     : ~ i scan - n 22
     : i lo ? > - n 65557 0 - n 65557 0
     ~ & >= scan lo < eocd 0 {
-        ? & & & == # i . p scan 80 == # i . p + scan 1 75 == # i . p + scan 2 5 == # i . p + scan 3 6 {
+        ? == ( __zip_rd_u32 p scan ) 0x06054b50 {
             : i clen ( __zip_rd_u16 p + scan 20 )
             ? == + + scan 22 clen n { = eocd scan } {}
         } {}
@@ -381,9 +375,7 @@ $ `stdlib/core/mem.nu`
     // entry count — never allocate on a count the file merely claims.
     ? > * count 46 cd_len { ^ @ !ZipArchive ZipErr { F ZipBadArchive } } {}
     : ( Vec i ) ents ( vec_zeroed [i] * count 7 )
-    : s entries # s ( vec_data [i] ents )
-    : ( Vec i ) x64v ( vec_zeroed [i] 3 )
-    : s x64 # s ( vec_data [i] x64v )
+    : ( Vec i ) x64 ( vec_zeroed [i] 3 )
     : ~ i pos cd_off
     : ~ i e 0
     : ~ b bad F
@@ -400,18 +392,18 @@ $ `stdlib/core/mem.nu`
             ? > + + + pos 46 nlen + xlen clen n { = bad T } {
                 : b ok64 ? zip64 ( __zip_zip64_extra p + + pos 46 nlen xlen csize32 usize32 lho32 x64 ) T
                 ? ! ok64 { = bad T } {
-                    : i csize ? zip64 ( nurl_peek x64 0 ) csize32
-                    : i usize ? zip64 ( nurl_peek x64 1 ) usize32
-                    : i lho ? zip64 ( nurl_peek x64 2 ) lho32
+                    : i csize ? zip64 ( vec_at [i] x64 0 ) csize32
+                    : i usize ? zip64 ( vec_at [i] x64 1 ) usize32
+                    : i lho ? zip64 ( vec_at [i] x64 2 ) lho32
                     ? | | | < csize 0 < usize 0 < lho 0 > + lho 30 n { = bad T } {
                         : i eoff * e 7
-                        ( nurl_poke entries + eoff 0 + pos 46 )  // name_off
-                        ( nurl_poke entries + eoff 1 nlen )
-                        ( nurl_poke entries + eoff 2 method )
-                        ( nurl_poke entries + eoff 3 csize )
-                        ( nurl_poke entries + eoff 4 usize )
-                        ( nurl_poke entries + eoff 5 lho )
-                        ( nurl_poke entries + eoff 6 crc )
+                        ( vec_put [i] ents + eoff 0 + pos 46 )  // name_off
+                        ( vec_put [i] ents + eoff 1 nlen )
+                        ( vec_put [i] ents + eoff 2 method )
+                        ( vec_put [i] ents + eoff 3 csize )
+                        ( vec_put [i] ents + eoff 4 usize )
+                        ( vec_put [i] ents + eoff 5 lho )
+                        ( vec_put [i] ents + eoff 6 crc )
                         = pos + + + pos 46 nlen + xlen clen
                         = e + e 1
                     }
@@ -422,15 +414,14 @@ $ `stdlib/core/mem.nu`
     ? bad {
         ^ @ !ZipArchive ZipErr { F ZipBadArchive }
     } {}
-    ^ @ !ZipArchive ZipErr { T @ ZipArchive { ( shared_new [ZipArchiveImpl] @ ZipArchiveImpl { count ents p n } ) } }
+    ^ @ !ZipArchive ZipErr { T @ ZipArchive { ( arc_new [ZipArchiveImpl] @ ZipArchiveImpl { count ents m } ) } }
 }
 
 @ zip_name_at ZipArchive a i idx → ?String {
     ? | < idx 0 >= idx ( zip_count a ) { ^ @ ?String { F } } {}
-    : *u p ( __zip_src a )
-    : i off ( __zip_entry a idx 0 )
-    : i len ( __zip_entry a idx 1 )
-    ^ @ ?String { T ( string_from_bytes # *u + # i p off len ) }
+    : String nm ( string_new )
+    ( string_push_window nm ( mapped_bytes . ( arc_get [ZipArchiveImpl] . a a ) src ) ( __zip_entry a idx 0 ) ( __zip_entry a idx 1 ) )
+    ^ @ ?String { T nm }
 }
 
 @ zip_size_at ZipArchive a i idx → ?i {
@@ -448,13 +439,13 @@ $ `stdlib/core/mem.nu`
     ^ @ ?i { T ( __zip_entry a idx 2 ) }
 }
 
-// Absolute offset of an entry's data bytes within the source span, or -1.
+// Absolute offset of an entry's data bytes within the source, or -1.
 // The local header's own name/extra lengths are authoritative here: a
 // writer may pad the local extra differently from the central one.
 @ zip_data_off ZipArchive a i idx → i {
     ? | < idx 0 >= idx ( zip_count a ) { ^ -1 } {}
-    : *u p ( __zip_src a )
-    : i n ( __zip_srclen a )
+    : ( Slice u ) p ( mapped_bytes . ( arc_get [ZipArchiveImpl] . a a ) src )
+    : i n ( slice_len [u] p )
     : i lho ( __zip_entry a idx 5 )
     ? | > + lho 30 n != ( __zip_rd_u32 p lho ) 0x04034b50 { ^ -1 } {}
     : i doff + + + lho 30 ( __zip_rd_u16 p + lho 26 ) ( __zip_rd_u16 p + lho 28 )
@@ -464,20 +455,14 @@ $ `stdlib/core/mem.nu`
 
 // Index of `name`, or -1. Names are compared as raw bytes.
 @ zip_find ZipArchive a s name → i {
-    : i nlen ( nurl_str_len name )
-    : *u p ( __zip_src a )
+    : ( Slice u ) want ( slice_of_str name )
+    : i nlen ( slice_len [u] want )
+    : ( Slice u ) p ( mapped_bytes . ( arc_get [ZipArchiveImpl] . a a ) src )
     : i count ( zip_count a )
     : ~ i e 0
     ~ < e count {
         ? == ( __zip_entry a e 1 ) nlen {
-            : i noff ( __zip_entry a e 0 )
-            : ~ i k 0
-            : ~ b eq T
-            ~ & < k nlen eq {
-                ? != # i . p + noff k ( nurl_str_at name nlen k ) { = eq F } {}
-                = k + k 1
-            }
-            ? eq { ^ e } {}
+            ? ( slice_bytes_eq ( slice_window [u] p ( __zip_entry a e 0 ) nlen ) want ) { ^ e } {}
         } {}
         = e + e 1
     }
@@ -486,7 +471,7 @@ $ `stdlib/core/mem.nu`
 
 @ zip_extract ZipArchive a i idx → !( Vec u ) ZipErr {
     ? | < idx 0 >= idx ( zip_count a ) { ^ @ !( Vec u ) ZipErr { F ZipNotFound } } {}
-    : *u p ( __zip_src a )
+    : ( Slice u ) p ( mapped_bytes . ( arc_get [ZipArchiveImpl] . a a ) src )
     : i method ( __zip_entry a idx 2 )
     : i csize ( __zip_entry a idx 3 )
     : i usize ( __zip_entry a idx 4 )
@@ -496,10 +481,7 @@ $ `stdlib/core/mem.nu`
     ? < doff 0 { ^ @ !( Vec u ) ZipErr { F ZipBadArchive } } {}
     : ~ ? ( Vec u ) got @ ?( Vec u ) { F }
     ? == method 0 {
-        : ( Vec u ) out ( vec_with_cap [u] ? > usize 0 usize 1 )
-        ( nurl_memcpy ( vec_data [u] out ) # *u + # i p doff csize )
-        : b _ok ( vec_set_len [u] out csize )
-        = got @ ?( Vec u ) { T out }
+        = got @ ?( Vec u ) { T ( slice_to_vec [u] ( slice_window [u] p doff csize ) ) }
     } {
         ? == method 8 {
             = got ( __zip_inflate p doff csize usize )

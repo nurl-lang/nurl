@@ -29,15 +29,14 @@ unsafe @ __hc_read_up GpuKit kit s dir s name i n → GkBuf {
         F → {}
         T raw → {
             ? == ( vec_len [u] raw ) * n 4 {
-                : ( Vec f ) host ( vec_with_cap [f] n )
-                : b _l ( vec_set_len [f] host n )
-                : *u rp ( vec_data [u] raw )
-                : *f hp ( vec_data [f] host )
+                : ( Vec f ) host ( vec_zeroed [f] n )
+                : ( Slice u ) rp ( slice_from_vec [u] raw )
+                : ( Slice f ) hp ( slice_from_vec [f] host )
                 : ~ i j 0
                 ~ < j n {
                     : i o * j 4
-                    : i bits | # i . rp o | << # i . rp + o 1 8 | << # i . rp + o 2 16 << # i . rp + o 3 24
-                    = . hp j # f ( bits_to_f32 bits )
+                    : i bits | # i ( slice_at [u] rp o ) | << # i ( slice_at [u] rp + o 1 ) 8 | << # i ( slice_at [u] rp + o 2 ) 16 << # i ( slice_at [u] rp + o 3 ) 24
+                    ( slice_put [f] hp j # f ( bits_to_f32 bits ) )
                     = j + j 1
                 }
                 : GkBuf b ( gk_dbuf_new kit n GK_F32 )
@@ -49,18 +48,17 @@ unsafe @ __hc_read_up GpuKit kit s dir s name i n → GkBuf {
     ^ out
 }
 
-unsafe @ __hc_write s dir s name * f vals i n → b {
-    : ( Vec u ) out ( vec_with_cap [u] * n 4 )
-    : b _ol ( vec_set_len [u] out * n 4 )
-    : *u op ( vec_data [u] out )
+unsafe @ __hc_write s dir s name ( Slice f ) vals i n → b {
+    : ( Vec u ) out ( vec_zeroed [u] * n 4 )
+    : ( Slice u ) op ( slice_from_vec [u] out )
     : ~ i j 0
     ~ < j n {
-        : i bits # i ( f32_to_bits # f32 . vals j )
+        : i bits # i ( f32_to_bits # f32 ( slice_at [f] vals j ) )
         : i o * j 4
-        = . op o # u & bits 255
-        = . op + o 1 # u & >> bits 8 255
-        = . op + o 2 # u & >> bits 16 255
-        = . op + o 3 # u & >> bits 24 255
+        ( slice_put [u] op o # u & bits 255 )
+        ( slice_put [u] op + o 1 # u & >> bits 8 255 )
+        ( slice_put [u] op + o 2 # u & >> bits 16 255 )
+        ( slice_put [u] op + o 3 # u & >> bits 24 255 )
         = j + j 1
     }
     : String p ( string_from dir )
@@ -92,22 +90,22 @@ unsafe @ main → i {
     ? ( gk_ok kit ) {} { ^ ( __hc_die `no compute device` ) }
     : PoseH ph ( ph_load lw kit )
     : ScaleH sh ( sh_load lw kit )
-    ? ( lw_ok lw ) {} { ^ ( __hc_die ( lw_error lw ) ) }
+    ? ( lw_ok lw ) {} { ^ ( __hc_die ( string_data ( lw_error lw ) ) ) }
 
     : GkBuf feat ( __hc_read_up kit dir `/pfeat.bin` * np 1536 )
     : GkBuf stok ( __hc_read_up kit dir `/stok.bin` 1536 )
     ? & ( gk_buf_ok feat ) ( gk_buf_ok stok ) {} { ^ ( __hc_die `cannot read inputs` ) }
 
-    : ( Vec u ) pose__v ( vec_zeroed [u] 56 )
-    : *f pose # *f ( vec_data [u] pose__v )
+    : ( Vec f ) pose__v ( vec_zeroed [f] 7 )
+    : ( Slice f ) pose ( slice_from_vec [f] pose__v )
     ? ( ph_forward kit ph feat 0 np pose ) {} { ^ ( __hc_die `ph_forward failed` ) }
     : f scale ( sh_forward kit sh stok 0 )
     ? > scale 0.0 {} { ^ ( __hc_die `sh_forward failed` ) }
 
     ? ( __hc_write dir `/nurl_pose.bin` pose 7 ) {} { ^ ( __hc_die `write pose` ) }
-    : ( Vec u ) sv__v ( vec_zeroed [u] 8 )
-    : *f sv # *f ( vec_data [u] sv__v )
-    = . sv 0 scale
+    : ( Vec f ) sv__v ( vec_zeroed [f] 1 )
+    : ( Slice f ) sv ( slice_from_vec [f] sv__v )
+    ( slice_put [f] sv 0 scale )
     ? ( __hc_write dir `/nurl_scale.bin` sv 1 ) {} { ^ ( __hc_die `write scale` ) }
     ( puts `wrote nurl_pose/scale.bin` )
     ^ 0

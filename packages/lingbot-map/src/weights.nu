@@ -20,7 +20,7 @@
 //   ( lw_nelems w name )                 → i
 //   ( lw_read w name dst n )             → b    f64 into a caller buffer
 //   ( lw_require w name d0 d1 d2 d3 )    → b    shape check; −1 = any
-//   ( lw_error w )                       → s    first failure, "" if none
+//   ( lw_error w )                       → String  first failure, "" if none
 //
 // `lw_require` accumulates: call it for every tensor a module needs,
 // then read `lw_error` once. That way a mismatched checkpoint reports
@@ -30,93 +30,100 @@
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/arc.nu`
+$ `stdlib/std/thread.nu`
+$ `stdlib/core/slice.nu`
 $ `deps/torchpt/src/torchpt.nu`
 
-: LwImpl {
+// An open checkpoint is a handle: every copy is the same mapping (Pt is
+// shared), and the last owner releases it. The first failure a check
+// records is kept beside it, behind a lock, for lw_error. lw_close is an
+// optional early release.
+: Lw {
     Pt pt  // the mapping: its last owner unmaps it
-    ( Vec String ) errs
+    ( Locked ? String ) err
 }
 
-// An open checkpoint is a handle: every copy is the same mapping, and the
-// last owner releases it. lw_close is an optional early release.
-: Lw { ( Arc LwImpl ) a }
-
-@ Lw_share Lw h → Lw { ^ @ Lw { ( arc_clone [LwImpl] . h a ) } }
+@ Lw_share Lw h → Lw { ^ @ Lw { ( Pt_share . h pt ) ( Locked_share [? String] . h err ) } }
 
 @ Lw_drop sink Lw h → v {}
-
-unsafe @ __Lw_ptr Lw h → *LwImpl { ^ ( arc_ptr [LwImpl] . h a ) }
 
 @ lw_open s path → !Lw String {
     : !Pt String r ( pt_open path )
     ?? r {
         F e → ^ @ !Lw String { F e }
-        T pt → { ^ @ !Lw String { T @ Lw { ( arc_new [LwImpl] @ LwImpl { pt ( vec_new [String] ) } ) } } }
+        T pt → { ^ @ !Lw String { T @ Lw { pt ( locked_new [? String] @ ?String { F } ) } } }
     }
 }
 
 // Release the checkpoint now (optional — its last owner does it anyway).
 @ lw_close sink Lw w → v {}
 
-unsafe @ lw_n_tensors Lw w__h → i { : *LwImpl w ( __Lw_ptr w__h ) ^ ( pt_n_tensors . w pt ) }
+@ lw_n_tensors Lw w → i { ^ ( pt_n_tensors . w pt ) }
 
-unsafe @ lw_index Lw w__h s name → i { : *LwImpl w ( __Lw_ptr w__h ) ^ ( pt_find . w pt name ) }
+@ lw_index Lw w s name → i { ^ ( pt_find . w pt name ) }
 
-unsafe @ lw_has Lw w__h s name → b { : *LwImpl w ( __Lw_ptr w__h ) ^ >= ( pt_find . w pt name ) 0 }
+@ lw_has Lw w s name → b { ^ >= ( pt_find . w pt name ) 0 }
 
-unsafe @ lw_ndim Lw w__h s name → i {
-    : *LwImpl w ( __Lw_ptr w__h )
+@ lw_ndim Lw w s name → i {
     : i i0 ( pt_find . w pt name )
     ? < i0 0 { ^ 0 } {}
     ^ ( pt_ndim . w pt i0 )
 }
 
-unsafe @ lw_dim Lw w__h s name i axis → i {
-    : *LwImpl w ( __Lw_ptr w__h )
+@ lw_dim Lw w s name i axis → i {
     : i i0 ( pt_find . w pt name )
     ? < i0 0 { ^ 0 } {}
     ^ ( pt_dim . w pt i0 axis )
 }
 
-unsafe @ lw_nelems Lw w__h s name → i {
-    : *LwImpl w ( __Lw_ptr w__h )
+@ lw_nelems Lw w s name → i {
     : i i0 ( pt_find . w pt name )
     ? < i0 0 { ^ 0 } {}
     ^ ( pt_nelems . w pt i0 )
 }
 
 // Keep the first failure only; a later one is dropped with the call.
-unsafe @ __lw_fail * LwImpl w sink String m → v {
-    ? == 0 ( vec_len [String] . w errs ) { ( vec_push [String] . w errs m ) } {}
+@ __lw_fail Lw w sink String m → v {
+    : ~ ? String e ( locked_take [? String] . w err )
+    ?? e { T _ → {} F → { = e @ ?String { T m } } }
+    ( locked_restore [? String] . w err e )
 }
 
-unsafe @ lw_error Lw w__h → s {
-    : *LwImpl w ( __Lw_ptr w__h )
-    ?? ( vec_get [String] . w errs 0 ) { T s → ^ ( string_data s ) F → ^ `` }
+// The first failure recorded, "" if none.
+@ lw_error Lw w → String {
+    : ?String e ( locked_take [? String] . w err )
+    : ~ String r ( string_new )
+    ?? e { T x → { ( string_push_str r ( string_data x ) ) } F → {} }
+    ( locked_restore [? String] . w err e )
+    ^ r
 }
 
-unsafe @ lw_ok Lw w__h → b { : *LwImpl w ( __Lw_ptr w__h ) ^ == 0 ( vec_len [String] . w errs ) }
+@ lw_ok Lw w → b {
+    : ?String e ( locked_take [? String] . w err )
+    : ~ b ok T
+    ?? e { T _ → { = ok F } F → {} }
+    ( locked_restore [? String] . w err e )
+    ^ ok
+}
+
+// The tensor's own bytes inside the mapping, when they are already
+// contiguous float32 — which is the layout a GK_F32 device buffer
+// wants, so it can be uploaded with no conversion at all. Empty when
+// the tensor is absent, strided, a different dtype or a different
+// length, and the caller falls back to the converting read.
+@ lw_f32_bytes Lw w s name i n → ( Slice u ) {
+    : i i0 ( pt_find . w pt name )
+    ? < i0 0 { ^ ( slice_of_str `` ) } {}
+    ? == ( pt_dtype . w pt i0 ) PKS_F32 {} { ^ ( slice_of_str `` ) }
+    ? ( pt_is_contiguous . w pt i0 ) {} { ^ ( slice_of_str `` ) }
+    ? == ( pt_nelems . w pt i0 ) n {} { ^ ( slice_of_str `` ) }
+    ^ ( pt_tensor_bytes . w pt i0 )
+}
 
 // Read a whole tensor into a caller-owned f64 buffer of at least
 // `n` elements. Records a failure and returns F if the tensor is absent,
 // the wrong size, or unreadable.
-// The tensor's own bytes inside the mapping, when they are already
-// contiguous float32 — which is the layout a GK_F32 device buffer
-// wants, so it can be uploaded with no conversion at all. Returns 0
-// when the tensor is absent, strided, a different dtype or a different
-// length, and the caller falls back to the converting read.
-unsafe @ lw_f32_ptr Lw w__h s name i n → *u {
-    : *LwImpl w ( __Lw_ptr w__h )
-    : i i0 ( pt_find . w pt name )
-    ? < i0 0 { ^ # *u 0 } {}
-    ? == ( pt_dtype . w pt i0 ) PKS_F32 {} { ^ # *u 0 }
-    ? ( pt_is_contiguous . w pt i0 ) {} { ^ # *u 0 }
-    ? == ( pt_nelems . w pt i0 ) n {} { ^ # *u 0 }
-    ^ ( pt_tensor_ptr . w pt i0 )
-}
-
-unsafe @ lw_read Lw w__h s name * f dst i n → b {
-    : *LwImpl w ( __Lw_ptr w__h )
+@ lw_read Lw w s name ( Slice f ) dst i n → b {
     : i i0 ( pt_find . w pt name )
     ? < i0 0 {
         : String m ( string_from `lingbot-map: checkpoint has no tensor '` )
@@ -136,7 +143,7 @@ unsafe @ lw_read Lw w__h s name * f dst i n → b {
         ( __lw_fail w m )
         ^ F
     } {}
-    ? ! ( pt_read_f64 . w pt i0 0 n dst ) {
+    ? ! ( pt_read_f64_into . w pt i0 0 n dst ) {
         : String m ( string_from `lingbot-map: cannot read '` )
         ( string_push_str m name )
         ( string_push_str m `' (unsupported dtype?)` )
@@ -149,8 +156,7 @@ unsafe @ lw_read Lw w__h s name * f dst i n → b {
 // Assert a tensor's presence and shape. Pass −1 for an axis that may be
 // anything, and for axes beyond the tensor's rank. Records the first
 // failure; returns whether THIS check passed.
-unsafe @ lw_require Lw w__h s name i d0 i d1 i d2 i d3 → b {
-    : *LwImpl w ( __Lw_ptr w__h )
+@ lw_require Lw w s name i d0 i d1 i d2 i d3 → b {
     : i i0 ( pt_find . w pt name )
     ? < i0 0 {
         : String m ( string_from `lingbot-map: checkpoint has no tensor '` )

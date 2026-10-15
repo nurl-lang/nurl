@@ -32,7 +32,7 @@ $ `stdlib/core/vec.nu`
 // Planar image [c, h, w] → one row per patch, `c·patch·patch` wide.
 // Row order is row-major over the patch grid; within a row the order is
 // channel, then kernel row, then kernel column — Conv2d's weight layout.
-unsafe @ pe_im2col * f img i c i h i w i patch * f cols → v {
+@ pe_im2col ( Slice f ) img i c i h i w i patch ( Slice f ) cols → v {
     ? | | | <= c 0 <= patch 0 < h patch < w patch { ^ v } {}
     : i gh / h patch
     : i gw / w patch
@@ -51,7 +51,7 @@ unsafe @ pe_im2col * f img i c i h i w i patch * f cols → v {
                     : i dbase + dst + * ci * patch patch * ky patch
                     : ~ i kx 0
                     ~ < kx patch {
-                        = . cols + dbase kx . img + src + * px patch kx
+                        ( slice_put [f] cols + dbase kx ( slice_at [f] img + src + * px patch kx ) )
                         = kx + kx 1
                     }
                     = ky + ky 1
@@ -71,7 +71,7 @@ unsafe @ pe_im2col * f img i c i h i w i patch * f cols → v {
 // dot product against the patch row. Swapped for a device GEMM once the
 // weights live on the device; the loop is the reference the GEMM has to
 // agree with.
-unsafe @ pe_project * f cols i p i k * f weight * f bias i n * f out → v {
+@ pe_project ( Slice f ) cols i p i k ( Slice f ) weight ( Slice f ) bias i n ( Slice f ) out → v {
     ? | | | <= p 0 <= k 0 <= n 0 == # i out 0 { ^ v } {}
     : ~ i r 0
     ~ < r p {
@@ -81,8 +81,8 @@ unsafe @ pe_project * f cols i p i k * f weight * f bias i n * f out → v {
             : i wrow * o k
             : ~ f acc 0.0
             : ~ i j 0
-            ~ < j k { = acc + acc * . cols + crow j . weight + wrow j = j + j 1 }
-            = . out + * r n o + acc . bias o
+            ~ < j k { = acc + acc * ( slice_at [f] cols + crow j ) ( slice_at [f] weight + wrow j ) = j + j 1 }
+            ( slice_put [f] out + * r n o + acc ( slice_at [f] bias o ) )
             = o + o 1
         }
         = r + r 1

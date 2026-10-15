@@ -1,5 +1,56 @@
 # Changelog
 
+## [0.7.2] — 2026-10-14
+
+### Changed
+
+- No `unsafe` code is left (1 in 0.7.1): the sky mask hands the onnx
+  runtime its input as a byte view (onnx 0.12) and reads the score map as
+  a checked `( Slice f32 )` of the download instead of peeking a raw
+  pointer.
+
+## [0.7.1] — 2026-10-14
+
+### Changed
+
+- Requires gpukit 0.11 (its kit state behind a lock; census accessors return a `String`).
+
+## [0.7.0] — 2026-10-14
+
+Requires NURL 0.73.0 and gpukit 0.10.3 (`gk_dbuf_upload_bytes`).
+
+### Changed
+
+- 1 `unsafe` function left (42 in 0.6.2): `sky_mask`, which hands the
+  ONNX runtime its input by address. The geometry, the masks, the Sim(3)
+  fit, im2col, the bicubic resampler and the preprocessing work on checked
+  slices (`( Slice f )` / `( Slice u )` parameters in place of `*f` /
+  `*u`); scratch buffers are typed Vecs instead of byte Vecs cast to
+  pointers.
+- The checkpoint (`Lw`) is its `St` plus a Locked list of failures: no
+  Arc changed through a raw pointer. `lw_f32_bytes` (a checked view of a
+  tensor's bytes) replaces `lw_f32_ptr`, and the weights upload from it
+  with gpukit's `gk_dbuf_upload_bytes`. `lw_read` fills a slice;
+  `lw_error` returns a `String` of its own; `pp_data` lends the frame's
+  `( Vec f )`.
+- The dense head's outputs download straight into the host buffers the
+  geometry reads, one copy fewer per view.
+
+### Verified
+
+- geomcheck, sim3check, interpcheck and preproccheck give byte-identical
+  output to 0.6.2 on deterministic inputs, ASan-clean, at the same speed.
+
+## [0.6.2] — 2026-10-14
+
+Requires NURL 0.73.0 (`slice_at`, `slice_put`, `rc_take`, `locked_take`).
+
+### Changed
+
+- Loops that read or wrote through `vec_data` pointers index slices (`slice_at` / `slice_put`, as fast as the pointers), and functions with nothing raw in them are no longer marked `unsafe`.
+- 1 fewer functions are `unsafe` than in 0.6.1 (58 left).
+- Requires safetensor 0.6 (`st_tensor_ptr` is `raw` there; the loaders that take tensor addresses were already `unsafe`).
+
 ## [0.6.1] — 2026-10-12
 
 ### Changed

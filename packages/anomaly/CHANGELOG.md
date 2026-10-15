@@ -1,5 +1,80 @@
 # Changelog
 
+## [0.36.3] — 2026-10-15
+
+Requires gpukit 0.11.7 (`gk_run_checked_dev`).
+
+### Changed
+
+- The autoencoder's device trainer (`aegpu.nu`) is written in gpukit's checked subset: forward, backward, gradient, Adam and the validation diff, with the forward and backward barriers as `SYNC()`s the subset proves every thread reaches. The state lives in `GkBuf`s, with no raw device pointers and no `vec_data`. The package has no `unsafe` left (2 before).
+- Training is bit-identical to `mlp_fit` (weights, biases, Adam state, epochs, both losses). It runs no slower: the device phase on the gpu package's CPU backend takes 105.9 s vs 113.5 s before (3 runs each, 6000 × 12 rows, 3 restarts).
+- `ANOMALY_AEGPU_CPU=1` trains through the device kernels on the CPU backend, and `tests/aegpu_smoke.sh` uses it when there is no NVIDIA GPU. The parity gate is now part of `tests/anomaly_test.sh`.
+
+## [0.36.2] — 2026-10-15
+
+Requires gpukit 0.11.6 (`gk_call_view_f` / `gk_call_view_i`).
+
+### Changed
+
+- The accelerated scorer's kernel is written in gpukit's checked subset and launched with `gk_run_checked` over views of the forest and the matrix, so `anom_scores_gpu` is no longer `unsafe` (2 left, in the autoencoder trainer). It reads both children and keeps one by a mask instead of branching on the data. Scores are bit-identical on CUDA and on the CPU backend, and the CPU backend scores 200 000 rows × 300 trees 13 % faster (29.2 s to 25.1 s for 20 runs).
+
+## [0.36.1] — 2026-10-15
+
+### Performance
+
+- The pure scoring path (no accelerator, or under the GPU minimum) is
+  iforest 0.1.9's batch scorer over every core: 5.4x faster on a large
+  matrix (200 000 rows: 9.5 s to 1.8 s), bit-identical, and within 10 %
+  of the OpenMP kernel on the same cores. Requires iforest 0.1.9.
+
+## [0.36.0] — 2026-10-15
+
+### Changed
+
+- Without `unsafe` but the three functions that compile and launch the GPU
+  kernels (`_aeg_open`, `_aeg_train`, `anom_scores_gpu`) — 248 before.
+  `Model`, `Meta`, `FcModel` and `Hist` are plain values: a model is
+  passed `inout` where it changes, a history window is shared read-only
+  as an `( Arc Hist )`.
+- The process-wide state — the authorization strings and cached OIDC
+  provider, the organisation-files root and link secret, the MCP wiring,
+  the sources in flight, the GPU kit — lives in start-time `Locked`
+  globals, and the service lock is a start-time `Mutex`. The getters for
+  the configured issuer, client id, audience, owner tenant, allowed
+  tenants and last verification error return an owned `String`.
+- The forecast fits run through `par_map_index` over a frozen share of
+  the jobs, each returning its result, instead of lanes writing through
+  raw pointers into the jobs Vec.
+- An import counts each cell into its column taken out of the Vec and
+  put back, and WFS local names are cut with `string_substr`.
+- Instruction count of the dynamic suite 6 % lower (blob writing goes
+  through the stdlib word push); wall times at parity.
+
+## [0.35.3] — 2026-10-14
+
+### Fixed
+
+- `imp_span_of_text` (a source's span text, "90s", "15m", …) handed its
+  text pointer where its digit helpers take a byte view: the helpers read
+  the address as the view and whatever followed it as its length, and
+  indexed that far past a short string. The compiler accepted the
+  ill-typed call; it rejects it now (h268), and the helpers get the view.
+
+### Changed
+
+- Requires gpukit 0.11.
+
+## [0.35.2] — 2026-10-14
+
+Requires NURL 0.73.0 (`slice_at`, `slice_put`, `rc_take`, `locked_take`).
+
+### Changed
+
+- Loops that read or wrote through `vec_data` pointers index slices (`slice_at` / `slice_put`, as fast as the pointers), and functions with nothing raw in them are no longer marked `unsafe`.
+- 18 fewer functions are `unsafe` than in 0.35.1 (248 left).
+- Requires gpu 0.17, whose kernel compile and launch are `raw` (the callers here were already `unsafe`).
+- Requires arima 0.6 (a `Locked` model handle; fits 23% fewer instructions); nothing here changed.
+
 ## [0.35.1] — 2026-10-12
 
 Requires NURL 0.73.0, in which a field written through a raw pointer

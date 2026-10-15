@@ -22,6 +22,7 @@
 // the win, and bit-equality makes the switch invisible.
 
 $ `stdlib/core/io.nu`
+$ `stdlib/core/slice.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/std/float.nu`
@@ -31,6 +32,9 @@ $ `src/model.nu`
 $ `deps/iforest/src/iforest.nu`
 $ `deps/gpu/src/gpu.nu`
 $ `deps/gpukit/src/gpukit.nu`
+$ `deps/gpukit/src/checked.nu`
+$ `stdlib/std/thread.nu`
+$ `stdlib/std/sysinfo.nu`
 
 // Below this many rows the pure loop wins on latency. Bit-equality of the
 // paths makes the threshold unobservable in results.
@@ -52,34 +56,49 @@ $ `deps/gpukit/src/gpukit.nu`
 // One GpuKit (device + kernel cache) per process, probed lazily on the first
 // bulk call. The gpukit facade owns the device, the compiled `anomaly_paths`
 // kernel (cached), and all the buffer marshalling. state: 0 = unprobed,
-// 1 = ready, -1 = unavailable/disabled. The global owns the open kit
-// (F = none) and drops it when anom_gpu_close lets it go.
-
-: ~ i g_ag_state 0
-: ~ ? GpuKit g_ag_kit 0
-
-// The path-walk kernel. One thread per row; per tree, descend by the same
-// comparison the pure walker uses and accumulate depth + c(leaf) — nothing
-// else, so the f64 sum is bit-identical to the host loop.
-@ __ag_kernel_src → s {
-    ^ `extern "C" __global__ void anomaly_paths(const double* xs, const long long* feat, const double* split, const long long* left, const long long* right, const double* cleaf, const long long* roots, long long n_rows, long long n_cols, long long n_trees, double* out)
-{
-    long long r = (long long)blockIdx.x * blockDim.x + threadIdx.x;
-    if (r >= n_rows) return;
-    const double* x = xs + r * n_cols;
-    double total = 0.0;
-    for (long long t = 0; t < n_trees; t++) {
-        long long node = roots[t];
-        long long depth = 0;
-        while (feat[node] >= 0) {
-            node = (x[feat[node]] < split[node]) ? left[node] : right[node];
-            depth++;
-        }
-        total += (double)depth + cleaf[node];
-    }
-    out[r] = total;
+// 1 = ready, -1 = unavailable/disabled. The global — Locked, reached from
+// every worker thread — owns the open kit (F = none) and drops it when
+// anom_gpu_close lets it go.
+: AgState {
+    i state
+    ? GpuKit kit
 }
-`
+
+@ __ag_blank → ( Locked AgState ) { ^ ( locked_new [AgState] @ AgState { 0 @ ?GpuKit { F } } ) }
+
+: ( Locked AgState ) g_ag ( __ag_blank )
+
+@ __ag_state → i {
+    : AgState a ( locked_take [AgState] g_ag )
+    : i st . a state
+    ( locked_restore [AgState] g_ag a )
+    ^ st
+}
+
+@ __ag_set i state ? GpuKit kit → v { ( locked_set [AgState] g_ag @ AgState { state kit } ) }
+
+// The path-walk kernel, in gpukit's checked subset. One thread per row
+// (`gid`); per tree, descend by the same comparison the pure walker uses
+// and accumulate depth + c(leaf) — nothing else, so the f64 sum is
+// bit-identical to the host loop. Both children are read and one kept by
+// a mask (`!(x < split)`: NaN goes right, as in the walker) — no branch on
+// the data to mispredict.
+@ __ag_kernel_body → s {
+    ^ `long long base = gid * n_cols;
+double total = 0.0;
+for (long long t = 0; t < n_trees; t++) {
+    long long node = LD(roots, t);
+    long long depth = 0;
+    while (LD(feat, node) >= 0) {
+        long long lo = LD(left, node);
+        long long hi = LD(right, node);
+        long long go = -(long long)!(LD(xs, base + LD(feat, node)) < LD(split, node));
+        node = lo ^ ((lo ^ hi) & go);
+        depth++;
+    }
+    total += (double)depth + LD(cleaf, node);
+}
+ST(out, gid, total);`
 }
 
 @ __ag_env_off → b {
@@ -99,37 +118,62 @@ $ `deps/gpukit/src/gpukit.nu`
 // another thread fails without one. gk_bind_thread is idempotent and
 // costs a cuCtxSetCurrent.
 @ __ag_ensure → b {
-    ? != g_ag_state 0 {
-        ? == g_ag_state 1 { ^ ( gk_bind_thread ( __ag_kit ) ) } {}
+    : i st ( __ag_state )
+    ? != st 0 {
+        ? == st 1 { ^ ( gk_bind_thread ( __ag_kit ) ) } {}
         ^ F
     } {}
     ? ( __ag_env_off ) {
-        = g_ag_state -1
+        ( __ag_set -1 @ ?GpuKit { F } )
         ^ F
     } {}
     : GpuKit kit ( gk_open 0 )
     ? ( gk_ok kit ) {} {
         ( gk_close kit )
-        = g_ag_state -1
+        ( __ag_set -1 @ ?GpuKit { F } )
         ^ F
     }
-    ? ( gk_compile kit ( __ag_kernel_src ) `anomaly_paths` ) {} {
+    ? ( __ag_probe kit ) {} {
         ( gk_close kit )
-        = g_ag_state -1
+        ( __ag_set -1 @ ?GpuKit { F } )
         ^ F
     }
     // the global holds one owner of it from here (anom_gpu_close lets it go)
-    ( __ag_keep_kit kit )
-    = g_ag_state 1
+    ( __ag_set 1 @ ?GpuKit { T ( GpuKit_share kit ) } )
     ^ T
 }
 
-unsafe @ __ag_keep_kit GpuKit kit → v { = g_ag_kit @ ?GpuKit { T ( GpuKit_share kit ) } }
+// Compile and run the kernel once over an empty forest: the probe that it
+// builds on this kit (and the kit's cache warmed for the real call).
+@ __ag_probe GpuKit kit → b {
+    : ~ GkCall c ( gk_call_new )
+    : ( Vec f ) e0 ( vec_new [f] )
+    : ( Vec i ) e1 ( vec_new [i] )
+    ( __ag_bind c ( slice_from_vec [f] e0 ) ( slice_from_vec [i] e1 ) ( slice_from_vec [f] e0 ) ( slice_from_vec [i] e1 ) ( slice_from_vec [i] e1 ) ( slice_from_vec [f] e0 ) ( slice_from_vec [i] e1 ) 0 0 0 0 )
+    ^ ( gk_run_checked kit c `anomaly_paths` ( __ag_kernel_body ) 0 256 )
+}
+
+@ __ag_bind inout GkCall c ( Slice f ) xs ( Slice i ) feat ( Slice f ) split ( Slice i ) left ( Slice i ) right ( Slice f ) cleaf ( Slice i ) roots i n_rows i n_cols i n_trees i n_out → v {
+    ( gk_call_view_f c `xs` xs )
+    ( gk_call_view_i c `feat` feat )
+    ( gk_call_view_f c `split` split )
+    ( gk_call_view_i c `left` left )
+    ( gk_call_view_i c `right` right )
+    ( gk_call_view_f c `cleaf` cleaf )
+    ( gk_call_view_i c `roots` roots )
+    ( gk_call_i64 c `n_rows` n_rows )
+    ( gk_call_i64 c `n_cols` n_cols )
+    ( gk_call_i64 c `n_trees` n_trees )
+    ( gk_call_out_f c `out` ( vec_zeroed [f] n_out ) )
+}
 
 // One more owner of the live kit (only valid when g_ag_state == 1).
-unsafe @ __ag_kit → GpuKit {
-    ?? g_ag_kit {
-        T k → { ^ ( GpuKit_share k ) }
+@ __ag_kit → GpuKit {
+    : AgState a ( locked_take [AgState] g_ag )
+    : ?GpuKit kit ?? . a kit { T k → @ ?GpuKit { T ( GpuKit_share k ) } F → @ ?GpuKit { F } }
+    ( locked_restore [AgState] g_ag a )
+    ?? kit {
+        T k → { ^ k }
         F → { ( nurl_panic `anomaly: no GPU kit is open` ) }
     }
 }
@@ -137,13 +181,12 @@ unsafe @ __ag_kit → GpuKit {
 // Public view of the kit for sibling modules (aegpu.nu shares the device —
 // __-prefixed functions are file-scoped). Only valid after anom_gpu_engine
 // reported `cuda` or `cpu`.
-unsafe @ anom_gpu_kit → GpuKit { ^ ( __ag_kit ) }
+@ anom_gpu_kit → GpuKit { ^ ( __ag_kit ) }
 
 // Release the device + kernel cache (tests call this so leak checkers see a
 // closed shop; a long-running service just keeps the singleton).
-unsafe @ anom_gpu_close → v {
-    = g_ag_kit @ ?GpuKit { F }  // the global's owner, released here
-    = g_ag_state 0
+@ anom_gpu_close → v {
+    ( __ag_set 0 @ ?GpuKit { F } )  // the global's owner, released here
 }
 
 // Which engine bulk scoring would use right now: `cuda`, `cpu` (the gpu
@@ -159,14 +202,12 @@ unsafe @ anom_gpu_close → v {
 // ── Bulk raw scores ───────────────────────────────────────────────────
 
 // Pure-NURL reference path: iforest_score per row.
+// The pure path: iforest's batch scorer (c(leaf size) per node, not per
+// leaf reached), over every core for a large matrix — bit-identical to
+// scoring row by row, and within ~10 % of the OpenMP kernel on the same
+// cores.
 @ anom_scores_cpu VerModel vm ( Vec f ) scaled i n_rows i n_cols → ( Vec f ) {
-    : ( Vec f ) out ( vec_with_cap [f] n_rows )
-    : ~ i r 0
-    ~ < r n_rows {
-        ( vec_push [f] out ( iforest_score_row . vm forest scaled r ) )
-        = r + r 1
-    }
-    ^ out
+    ^ ( iforest_score_rows_par . vm forest scaled n_rows ( sys_cpu_count ) )
 }
 
 // Map a path-length total to the iforest score, matching __score_ptr's
@@ -180,7 +221,7 @@ unsafe @ anom_gpu_close → v {
 
 // Accelerated path. None when the accelerator is unavailable or any step
 // fails (caller falls back; failures after a good probe are reported).
-unsafe @ anom_scores_gpu VerModel vm ( Vec f ) scaled i n_rows i n_cols → ?( Vec f ) {
+@ anom_scores_gpu VerModel vm ( Vec f ) scaled i n_rows i n_cols → ?( Vec f ) {
     ? ( __ag_ensure ) {} { ^ @ ?( Vec f ) { F } }
     : IForest fo . vm forest
     : i n_trees ( vec_len [i] . fo roots )
@@ -190,44 +231,31 @@ unsafe @ anom_scores_gpu VerModel vm ( Vec f ) scaled i n_rows i n_cols → ?( V
     // Per-node c(size), precomputed with the same host function the pure
     // walker calls at each leaf — the kernel only ever adds these values.
     : ( Vec f ) cleaf ( vec_with_cap [f] n_nodes )
-    : *i szp ( vec_data [i] . fo size )
     : ~ i k 0
     ~ < k n_nodes {
-        ( vec_push [f] cleaf ( iforest_avg_path . szp k ) )
+        ( vec_push [f] cleaf ( iforest_avg_path ( vec_at [i] . fo size k ) ) )
         = k + k 1
     }
 
-    // One gk_run marshals the 7 inputs, 3 scalars and 1 output; the kernel
-    // itself (anomaly_paths) is compiled once and served from the kit cache.
+    // One checked launch over views of the forest and the matrix (nothing
+    // copied on the host); the kernel is checked and compiled once.
     : GpuKit kit ( __ag_kit )
-    : ( Vec f ) totals ( vec_with_cap [f] n_rows )
-    : *u outp # *u ( vec_data [f] totals )
-    : ( Vec GkArg ) call ( vec_new [GkArg] )
-    ( vec_push [GkArg] call ( gk_in_f scaled ) )
-    ( vec_push [GkArg] call ( gk_in_i . fo feature ) )
-    ( vec_push [GkArg] call ( gk_in_f . fo split ) )
-    ( vec_push [GkArg] call ( gk_in_i . fo left ) )
-    ( vec_push [GkArg] call ( gk_in_i . fo right ) )
-    ( vec_push [GkArg] call ( gk_in_f cleaf ) )
-    ( vec_push [GkArg] call ( gk_in_i . fo roots ) )
-    ( vec_push [GkArg] call ( gk_i64 n_rows ) )
-    ( vec_push [GkArg] call ( gk_i64 n_cols ) )
-    ( vec_push [GkArg] call ( gk_i64 n_trees ) )
-    ( vec_push [GkArg] call ( gk_buf_out outp * n_rows 8 ) )
-    : b ok ( gk_run kit ( __ag_kernel_src ) `anomaly_paths` ( gk_grid n_rows 256 ) 256 call )
+    : ~ GkCall c ( gk_call_new )
+    ( __ag_bind c ( slice_from_vec [f] scaled ) ( slice_from_vec [i] . fo feature ) ( slice_from_vec [f] . fo split ) ( slice_from_vec [i] . fo left ) ( slice_from_vec [i] . fo right ) ( slice_from_vec [f] cleaf ) ( slice_from_vec [i] . fo roots ) n_rows n_cols n_trees n_rows )
+    : b ok ( gk_run_checked kit c `anomaly_paths` ( __ag_kernel_body ) n_rows 256 )
+    : ( Vec f ) totals ( gk_call_take_f c `out` )
 
-    ? ok { ( vec_set_len [f] totals n_rows ) } {
+    ? ok {} {
         ( nurl_eprintln `anomaly: gpu scoring failed, falling back to the pure path` )
         ^ @ ?( Vec f ) { F }
     }
 
     // Finish on the host, byte-for-byte the pure walker's arithmetic.
     : ( Vec f ) out ( vec_with_cap [f] n_rows )
-    : *f tp ( vec_data [f] totals )
     : f cpsi . fo c_psi
     : ~ i r 0
     ~ < r n_rows {
-        ( vec_push [f] out ( __ag_total_to_score . tp r n_trees cpsi ) )
+        ( vec_push [f] out ( __ag_total_to_score ( vec_at [f] totals r ) n_trees cpsi ) )
         = r + r 1
     }
     ^ @ ?( Vec f ) { T out }
@@ -248,13 +276,12 @@ unsafe @ anom_scores_gpu VerModel vm ( Vec f ) scaled i n_rows i n_cols → ?( V
 
 // decision_function for every row: -score - offset, same expression as
 // anom_decision.
-unsafe @ anom_decisions VerModel vm ( Vec f ) scaled i n_rows i n_cols → ( Vec f ) {
+@ anom_decisions VerModel vm ( Vec f ) scaled i n_rows i n_cols → ( Vec f ) {
     : ( Vec f ) ss ( anom_scores vm scaled n_rows n_cols )
-    : *f sp ( vec_data [f] ss )
     : f off . vm offset
     : ~ i r 0
     ~ < r n_rows {
-        = . sp r - - 0.0 . sp r off
+        ( vec_put [f] ss r - - 0.0 ( vec_at [f] ss r ) off )
         = r + r 1
     }
     ^ ss
@@ -263,17 +290,17 @@ unsafe @ anom_decisions VerModel vm ( Vec f ) scaled i n_rows i n_cols → ( Vec
 // ── Percentile (numpy 'linear' interpolation, for contamination) ──────
 
 // q in [0,1] over an ASCENDING-sorted vector.
-unsafe @ _an_percentile ( Vec f ) sorted f q → f {
+@ _an_percentile ( Vec f ) sorted f q → f {
     : i n ( vec_len [f] sorted )
     ? <= n 0 { ^ 0.0 } {}
-    : *f dp ( vec_data [f] sorted )
-    ? <= n 1 { ^ . dp 0 } {}
+    : ( Slice f ) dp ( slice_from_vec [f] sorted )
+    ? <= n 1 { ^ ( slice_at [f] dp 0 ) } {}
     : ~ f pos * q # f - n 1
     ? < pos 0.0 { = pos 0.0 } {}
     : ~ i lo # i ( float_floor pos )
-    ? >= lo - n 1 { ^ . dp - n 1 } {}
+    ? >= lo - n 1 { ^ ( slice_at [f] dp - n 1 ) } {}
     : f frac - pos # f lo
-    ^ + . dp lo * - . dp + lo 1 . dp lo frac
+    ^ + ( slice_at [f] dp lo ) * - ( slice_at [f] dp + lo 1 ) ( slice_at [f] dp lo ) frac
 }
 
 // ── Version training ──────────────────────────────────────────────────
@@ -282,7 +309,7 @@ unsafe @ _an_percentile ( Vec f ) sorted f q → f {
 // `cfg.max_samples` is clamped to the row count; contamination < 0 = "auto"
 // (offset pinned at -0.5), else offset_ is the 100*c percentile of the
 // training set's score_samples — so `predict == -1` flags ~c of training.
-unsafe @ anom_train_version ( Vec f ) scaled i n_rows i n_cols VerCfg cfg → VerModel {
+@ anom_train_version ( Vec f ) scaled i n_rows i n_cols VerCfg cfg → VerModel {
     : ~ i samp . cfg max_samples
     ? > samp n_rows { = samp n_rows } {}
     : IForest fo ( iforest_train scaled n_rows n_cols . cfg n_estimators samp ANOM_SEED )
@@ -297,10 +324,10 @@ unsafe @ anom_train_version ( Vec f ) scaled i n_rows i n_cols VerCfg cfg → Ve
     ? >= . cfg contamination 0.0 {
         : ( Vec f ) raw ( anom_scores vm scaled n_rows n_cols )
         : ( Vec f ) ss ( vec_with_cap [f] n_rows )
-        : *f rp ( vec_data [f] raw )
+        : ( Slice f ) rp ( slice_from_vec [f] raw )
         : ~ i r 0
         ~ < r n_rows {
-            ( vec_push [f] ss - 0.0 . rp r )
+            ( vec_push [f] ss - 0.0 ( slice_at [f] rp r ) )
             = r + r 1
         }
         ( sort_by [f] ss \ f a f b → i {
@@ -318,7 +345,7 @@ unsafe @ anom_train_version ( Vec f ) scaled i n_rows i n_cols VerCfg cfg → Ve
 // Fit a scaler over the raw matrix, train one version on the standardised
 // copy, then score every row. Anomaly ⇔ decision_function <= -cfg.margin
 // (margin 0 reproduces the reference's predict == -1 batch rule).
-unsafe @ anomaly_batch ( Vec f ) data i n_rows i n_cols VerCfg cfg → BatchReport {
+@ anomaly_batch ( Vec f ) data i n_rows i n_cols VerCfg cfg → BatchReport {
     : Scaler sc ( scaler_fit data n_rows n_cols )
     : ( Vec f ) scaled ( vec_clone [f] data )
     ( scaler_apply_matrix sc scaled n_rows n_cols )
@@ -326,10 +353,10 @@ unsafe @ anomaly_batch ( Vec f ) data i n_rows i n_cols VerCfg cfg → BatchRepo
 
     : ( Vec f ) scores ( anom_decisions vm scaled n_rows n_cols )
     : ( Vec i ) hits ( vec_new [i] )
-    : *f dfp ( vec_data [f] scores )
+    : ( Slice f ) dfp ( slice_from_vec [f] scores )
     : ~ i r 0
     ~ < r n_rows {
-        ? ( anom_is_anomaly vm . dfp r ) { ( vec_push [i] hits r ) } {}
+        ? ( anom_is_anomaly vm ( slice_at [f] dfp r ) ) { ( vec_push [i] hits r ) } {}
         = r + r 1
     }
 

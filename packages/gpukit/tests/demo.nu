@@ -49,7 +49,7 @@ $ `src/kernels.nu`
     ^ v
 }
 
-@ main → i {
+unsafe @ main → i {
     : GpuKit kit ( gk_open 0 )
     ? ( gk_ok kit ) {} {
         ( nurl_eprintln `gpukit: no device (open failed)` )

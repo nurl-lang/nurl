@@ -39,6 +39,8 @@ $ `stdlib/std/fs.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/floatbits.nu`
 $ `stdlib/std/arc.nu`
+$ `stdlib/core/slice.nu`
+$ `stdlib/std/thread.nu`
 
 @ __data_gf ( Vec f ) v i k → f { ?? ( vec_get [f] v k ) { T x → x F → 0.0 } }
 
@@ -62,34 +64,27 @@ $ `stdlib/std/arc.nu`
 
 @ DataSet_drop sink DataSet h → v {}
 
-unsafe @ __DataSet_ptr DataSet h → *DataSetImpl { ^ ( arc_ptr [DataSetImpl] . h a ) }
-
 // Take ownership of x (n·d) and y (n·l).
-unsafe @ data_new sink ( Vec f ) x sink ( Vec f ) y i n i d i l → DataSet {
-    : ~ DataSetImpl ds @ DataSetImpl {}
-    = . ds x x
-    = . ds y y
-    = . ds n n
-    = . ds d d
-    = . ds l l
+@ data_new sink ( Vec f ) x sink ( Vec f ) y i n i d i l → DataSet {
+    : DataSetImpl ds @ DataSetImpl { x y n d l }
     ^ @ DataSet { ( arc_new [DataSetImpl] ds ) }
 }
 
 // Let go of `ds` now rather than at the end of its owner's scope.
 @ data_free sink DataSet ds → v {}
 
-unsafe @ data_n DataSet ds__h → i {
-    : *DataSetImpl ds ( __DataSet_ptr ds__h )
+@ data_n DataSet ds__h → i {
+    : DataSetImpl ds ( arc_get [DataSetImpl] . ds__h a )
     ^ . ds n
 }
 
-unsafe @ data_d DataSet ds__h → i {
-    : *DataSetImpl ds ( __DataSet_ptr ds__h )
+@ data_d DataSet ds__h → i {
+    : DataSetImpl ds ( arc_get [DataSetImpl] . ds__h a )
     ^ . ds d
 }
 
-unsafe @ data_l DataSet ds__h → i {
-    : *DataSetImpl ds ( __DataSet_ptr ds__h )
+@ data_l DataSet ds__h → i {
+    : DataSetImpl ds ( arc_get [DataSetImpl] . ds__h a )
     ^ . ds l
 }
 
@@ -114,10 +109,8 @@ unsafe @ data_l DataSet ds__h → i {
 
 @ NdfStream_drop sink NdfStream h → v {}
 
-unsafe @ __NdfStream_ptr NdfStream h → *NdfStreamImpl { ^ ( arc_ptr [NdfStreamImpl] . h a ) }
-
-unsafe @ data_save_ndf s path DataSet ds__h → !v String {
-    : *DataSetImpl ds ( __DataSet_ptr ds__h )
+@ data_save_ndf s path DataSet ds__h → !v String {
+    : DataSetImpl ds ( arc_get [DataSetImpl] . ds__h a )
     : ( Vec u ) out ( vec_new [u] )
     ( vec_push [u] out # u 78 ) ( vec_push [u] out # u 68 )
     ( vec_push [u] out # u 70 ) ( vec_push [u] out # u 49 )
@@ -140,37 +133,37 @@ unsafe @ data_save_ndf s path DataSet ds__h → !v String {
     ^ @ !v String { F ( string_from `data: cannot write .ndf` ) }
 }
 
-unsafe @ ndf_open s path → !NdfStream String {
+@ ndf_open s path → !NdfStream String {
     : !File IoErr fr ( file_open path )
-    : ~ File fh # File # s 0
-    ?? fr { T h → { = fh h } F _ → { ^ @ !NdfStream String { F ( string_from `data: cannot open .ndf` ) } } }
-    // The handle first: an early return below lets go of it, and its drop
-    // closes the file.
-    : NdfStream sh @ NdfStream { ( arc_zero [NdfStreamImpl] ) }
-    : *NdfStreamImpl st ( arc_ptr [NdfStreamImpl] . sh a )
-    = . st f fh
-    : !( Vec u ) IoErr hr ( file_read_at fh 0 __NDF_HDR )
-    ?? hr {
-        T hb → {
-            ? >= ( vec_len [u] hb ) __NDF_HDR {} {
-                ^ @ !NdfStream String { F ( string_from `data: truncated .ndf header` ) }
+    ?? fr {
+        F _ → { ^ @ !NdfStream String { F ( string_from `data: cannot open .ndf` ) } }
+        T fh → {
+            // (An early return below lets go of `fh`, and its drop closes
+            // the file.)
+            : !( Vec u ) IoErr hr ( file_read_at fh 0 __NDF_HDR )
+            ?? hr {
+                T hb → {
+                    ? >= ( vec_len [u] hb ) __NDF_HDR {} {
+                        ^ @ !NdfStream String { F ( string_from `data: truncated .ndf header` ) }
+                    }
+                    : ~ b magic T
+                    ? == ?? ( vec_get [u] hb 0 ) { T x → x F → # u 0 } # u 78 {} { = magic F }
+                    ? == ?? ( vec_get [u] hb 1 ) { T x → x F → # u 0 } # u 68 {} { = magic F }
+                    ? == ?? ( vec_get [u] hb 2 ) { T x → x F → # u 0 } # u 70 {} { = magic F }
+                    ? == ?? ( vec_get [u] hb 3 ) { T x → x F → # u 0 } # u 49 {} { = magic F }
+                    ? magic {} {
+                        ^ @ !NdfStream String { F ( string_from `data: bad .ndf magic` ) }
+                    }
+                    : i n # i ?? ( bytes_read_u64_le hb 4 ) { T v → v F → # u64 0 }
+                    : i d # i ?? ( bytes_read_u64_le hb 12 ) { T v → v F → # u64 0 }
+                    : i l # i ?? ( bytes_read_u64_le hb 20 ) { T v → v F → # u64 0 }
+                    : NdfStreamImpl st @ NdfStreamImpl { fh n d l __NDF_HDR }
+                    ^ @ !NdfStream String { T @ NdfStream { ( arc_new [NdfStreamImpl] st ) } }
+                }
+                F _ → {
+                    ^ @ !NdfStream String { F ( string_from `data: cannot read .ndf header` ) }
+                }
             }
-            : ~ b magic T
-            ? == ?? ( vec_get [u] hb 0 ) { T x → x F → # u 0 } # u 78 {} { = magic F }
-            ? == ?? ( vec_get [u] hb 1 ) { T x → x F → # u 0 } # u 68 {} { = magic F }
-            ? == ?? ( vec_get [u] hb 2 ) { T x → x F → # u 0 } # u 70 {} { = magic F }
-            ? == ?? ( vec_get [u] hb 3 ) { T x → x F → # u 0 } # u 49 {} { = magic F }
-            ? magic {} {
-                ^ @ !NdfStream String { F ( string_from `data: bad .ndf magic` ) }
-            }
-            = . st n # i ?? ( bytes_read_u64_le hb 4 ) { T v → v F → # u64 0 }
-            = . st d # i ?? ( bytes_read_u64_le hb 12 ) { T v → v F → # u64 0 }
-            = . st l # i ?? ( bytes_read_u64_le hb 20 ) { T v → v F → # u64 0 }
-            = . st data_off __NDF_HDR
-            ^ @ !NdfStream String { T sh }
-        }
-        F _ → {
-            ^ @ !NdfStream String { F ( string_from `data: cannot read .ndf header` ) }
         }
     }
     ^ @ !NdfStream String { F ( string_from `data: cannot read .ndf header` ) }
@@ -180,27 +173,27 @@ unsafe @ ndf_open s path → !NdfStream String {
 // last owner closes the file).
 @ ndf_close sink NdfStream st → v {}
 
-unsafe @ ndf_n NdfStream st__h → i {
-    : *NdfStreamImpl st ( __NdfStream_ptr st__h )
+@ ndf_n NdfStream st__h → i {
+    : NdfStreamImpl st ( arc_get [NdfStreamImpl] . st__h a )
     ^ . st n
 }
 
-unsafe @ ndf_d NdfStream st__h → i {
-    : *NdfStreamImpl st ( __NdfStream_ptr st__h )
+@ ndf_d NdfStream st__h → i {
+    : NdfStreamImpl st ( arc_get [NdfStreamImpl] . st__h a )
     ^ . st d
 }
 
-unsafe @ ndf_l NdfStream st__h → i {
-    : *NdfStreamImpl st ( __NdfStream_ptr st__h )
+@ ndf_l NdfStream st__h → i {
+    : NdfStreamImpl st ( arc_get [NdfStreamImpl] . st__h a )
     ^ . st l
 }
 
 // Read example `idx`: append its d features to x_out and l labels to y_out.
-unsafe @ ndf_read_row NdfStream st__h i idx ( Vec f ) x_out ( Vec f ) y_out → b {
-    ^ ( __ndf_read_row ( __NdfStream_ptr st__h ) idx x_out y_out )
+@ ndf_read_row NdfStream st__h i idx ( Vec f ) x_out ( Vec f ) y_out → b {
+    ^ ( __ndf_read_row ( arc_get [NdfStreamImpl] . st__h a ) idx x_out y_out )
 }
 
-unsafe @ __ndf_read_row * NdfStreamImpl st i idx ( Vec f ) x_out ( Vec f ) y_out → b {
+@ __ndf_read_row NdfStreamImpl st i idx ( Vec f ) x_out ( Vec f ) y_out → b {
     : i rowf + . st d . st l
     : i off + . st data_off * idx * rowf 8
     : !( Vec u ) IoErr rr ( file_read_at . st f off * rowf 8 )
@@ -263,58 +256,46 @@ unsafe @ __ndf_read_row * NdfStreamImpl st i idx ( Vec f ) x_out ( Vec f ) y_out
 
 // A DataLoader is a handle: every copy is the same loader (one cursor
 // through the epoch), and the last owner releases it — and with it its
-// share of the dataset or stream it reads.
-: DataLoader { ( Arc DataLoaderImpl ) a }
+// share of the dataset or stream it reads. The cursor is in a Locked
+// (stdlib/std/thread.nu): a step checks it out and back in, so copies on
+// several threads take batches in turn.
+: DataLoader { ( Locked DataLoaderImpl ) st }
 
-@ DataLoader_share DataLoader h → DataLoader { ^ @ DataLoader { ( arc_clone [DataLoaderImpl] . h a ) } }
+@ DataLoader_share DataLoader h → DataLoader { ^ @ DataLoader { ( Locked_share [DataLoaderImpl] . h st ) } }
 
 @ DataLoader_drop sink DataLoader h → v {}
 
-unsafe @ __DataLoader_ptr DataLoader h → *DataLoaderImpl { ^ ( arc_ptr [DataLoaderImpl] . h a ) }
-
-unsafe @ __dl_make ? DataSet ds ? NdfStream st i n i d i l i batch b drop_last i seed i nshards i shard → DataLoader {
+@ __dl_make ? DataSet ds ? NdfStream st i n i d i l i batch b drop_last i seed i nshards i shard → DataLoader {
     : i base ( __data_shard_base n nshards shard )
     : i end ( __data_shard_base n nshards + shard 1 )
     : i cnt - end base
-    : ~ DataLoaderImpl dl @ DataLoaderImpl {}
-    = . dl ds ds
-    = . dl st st
-    = . dl n cnt
-    = . dl d d
-    = . dl l l
-    = . dl base base
-    = . dl batch batch
-    = . dl drop_last drop_last
-    = . dl shuffle > seed 0
-    = . dl pos 0
-    = . dl last_rows 0
     : ( Vec i ) idx ( vec_with_cap [i] cnt )
     : ~ i k 0
     ~ < k cnt { ( vec_push [i] idx + base k ) = k + k 1 }
-    = . dl idx idx
-    ? . dl shuffle { ( __data_shuffle . dl idx seed ) } {}
-    ^ @ DataLoader { ( arc_new [DataLoaderImpl] dl ) }
+    ? > seed 0 { ( __data_shuffle idx seed ) } {}
+    : DataLoaderImpl dl @ DataLoaderImpl { ds st cnt d l base batch drop_last > seed 0 idx 0 0 }
+    ^ @ DataLoader { ( locked_new [DataLoaderImpl] dl ) }
 }
 
 // Full in-memory dataset (one shard). seed <= 0 disables shuffling.
-unsafe @ dl_new DataSet ds__h i batch b drop_last i seed → DataLoader {
-    : *DataSetImpl ds ( __DataSet_ptr ds__h )
+@ dl_new DataSet ds__h i batch b drop_last i seed → DataLoader {
+    : DataSetImpl ds ( arc_get [DataSetImpl] . ds__h a )
     ^ ( __dl_make @ ?DataSet { T ( DataSet_share ds__h ) } @ ?NdfStream { F } . ds n . ds d . ds l batch drop_last seed 1 0 )
 }
 
-unsafe @ dl_new_shard DataSet ds__h i batch b drop_last i seed i nshards i shard → DataLoader {
-    : *DataSetImpl ds ( __DataSet_ptr ds__h )
+@ dl_new_shard DataSet ds__h i batch b drop_last i seed i nshards i shard → DataLoader {
+    : DataSetImpl ds ( arc_get [DataSetImpl] . ds__h a )
     ^ ( __dl_make @ ?DataSet { T ( DataSet_share ds__h ) } @ ?NdfStream { F } . ds n . ds d . ds l batch drop_last seed nshards shard )
 }
 
 // Streaming dataset (one shard).
-unsafe @ dl_stream NdfStream st__h i batch b drop_last i seed → DataLoader {
-    : *NdfStreamImpl st ( __NdfStream_ptr st__h )
+@ dl_stream NdfStream st__h i batch b drop_last i seed → DataLoader {
+    : NdfStreamImpl st ( arc_get [NdfStreamImpl] . st__h a )
     ^ ( __dl_make @ ?DataSet { F } @ ?NdfStream { T ( NdfStream_share st__h ) } . st n . st d . st l batch drop_last seed 1 0 )
 }
 
-unsafe @ dl_stream_shard NdfStream st__h i batch b drop_last i seed i nshards i shard → DataLoader {
-    : *NdfStreamImpl st ( __NdfStream_ptr st__h )
+@ dl_stream_shard NdfStream st__h i batch b drop_last i seed i nshards i shard → DataLoader {
+    : NdfStreamImpl st ( arc_get [NdfStreamImpl] . st__h a )
     ^ ( __dl_make @ ?DataSet { F } @ ?NdfStream { T ( NdfStream_share st__h ) } . st n . st d . st l batch drop_last seed nshards shard )
 }
 
@@ -322,16 +303,23 @@ unsafe @ dl_stream_shard NdfStream st__h i batch b drop_last i seed i nshards i 
 // function of `seed` — idx is reset to the ordered shard range [base,
 // base+n) BEFORE the shuffle, so the same seed always yields the same
 // order regardless of the loader's prior state.
-unsafe @ dl_reset DataLoader dl__h i seed → v {
-    : *DataLoaderImpl dl ( __DataLoader_ptr dl__h )
+@ dl_reset DataLoader dl__h i seed → v {
+    : ~ DataLoaderImpl dl ( locked_take [DataLoaderImpl] . dl__h st )
     : ~ i k 0
     ~ < k . dl n { ( vec_set [i] . dl idx k + . dl base k ) = k + k 1 }
     ? > seed 0 { ( __data_shuffle . dl idx seed ) } {}
     = . dl pos 0
+    ( locked_restore [DataLoaderImpl] . dl__h st dl )
 }
 
-unsafe @ dl_num_batches DataLoader dl__h → i {
-    : *DataLoaderImpl dl ( __DataLoader_ptr dl__h )
+@ dl_num_batches DataLoader dl__h → i {
+    : ~ DataLoaderImpl dl ( locked_take [DataLoaderImpl] . dl__h st )
+    : i r ( __dl_num_batches dl )
+    ( locked_restore [DataLoaderImpl] . dl__h st dl )
+    ^ r
+}
+
+@ __dl_num_batches DataLoaderImpl dl → i {
     : i b . dl batch
     ? <= b 0 { ^ 0 } {}
     ? . dl drop_last { ^ / . dl n b } {}
@@ -341,43 +329,63 @@ unsafe @ dl_num_batches DataLoader dl__h → i {
 // Emit the next batch into bx (rows·d) and by (rows·l), overwriting them.
 // Returns the row count (0 at end-of-epoch; the last batch may be partial
 // unless drop_last).
-unsafe @ dl_next DataLoader dl__h ( Vec f ) bx ( Vec f ) by → i {
-    : *DataLoaderImpl dl ( __DataLoader_ptr dl__h )
+@ dl_next DataLoader dl__h ( Vec f ) bx ( Vec f ) by → i {
+    : ~ DataLoaderImpl dl ( locked_take [DataLoaderImpl] . dl__h st )
+    : i r ( __dl_next dl bx by )
+    ( locked_restore [DataLoaderImpl] . dl__h st dl )
+    ^ r
+}
+
+@ __dl_next inout DataLoaderImpl dl ( Vec f ) bx ( Vec f ) by → i {
     : i rem - . dl n . dl pos
     ? <= rem 0 { = . dl last_rows 0 ^ 0 } {}
     : ~ i rows . dl batch
     ? > rows rem { = rows rem } {}
     ? & . dl drop_last < rows . dl batch { = . dl last_rows 0 ^ 0 } {}
-    : b _cx ( vec_set_len [f] bx 0 )
-    : b _cy ( vec_set_len [f] by 0 )
+    ( vec_clear [f] bx )
+    ( vec_clear [f] by )
     : i d . dl d
     : i l . dl l
     // The source, opened once per batch (only the one that is set is read).
-    : b inmem ?? . dl ds { T _x → T F → F }
-    // a null pointer for the source that is not set: never read
-    : *DataSetImpl ds ?? . dl ds { T h → ( __DataSet_ptr h ) F → # *DataSetImpl 0 }
-    : *NdfStreamImpl st ?? . dl st { T h → ( __NdfStream_ptr h ) F → # *NdfStreamImpl 0 }
-    : ~ i k 0
-    ~ < k rows {
-        : i ex ( __data_gi . dl idx + . dl pos k )
-        ? inmem {
-            : ~ i c 0
-            ~ < c d { ( vec_push [f] bx ( __data_gf . ds x + * ex d c ) ) = c + c 1 }
-            = c 0
-            ~ < c l { ( vec_push [f] by ( __data_gf . ds y + * ex l c ) ) = c + c 1 }
-        } {
-            : b _r ( __ndf_read_row st ex bx by )
+    ?? . dl ds {
+        T h → {
+            : DataSetImpl ds ( arc_get [DataSetImpl] . h a )
+            : ( Slice f ) xs ( slice_from_vec [f] . ds x )
+            : ( Slice f ) ys ( slice_from_vec [f] . ds y )
+            : ~ i k 0
+            ~ < k rows {
+                : i ex ( __data_gi . dl idx + . dl pos k )
+                : ~ i c 0
+                ~ < c d { ( vec_push [f] bx ( slice_at [f] xs + * ex d c ) ) = c + c 1 }
+                = c 0
+                ~ < c l { ( vec_push [f] by ( slice_at [f] ys + * ex l c ) ) = c + c 1 }
+                = k + k 1
+            }
         }
-        = k + k 1
+        F _ → {
+            ?? . dl st {
+                T h → {
+                    : NdfStreamImpl st ( arc_get [NdfStreamImpl] . h a )
+                    : ~ i k 0
+                    ~ < k rows {
+                        : b _r ( __ndf_read_row st ( __data_gi . dl idx + . dl pos k ) bx by )
+                        = k + k 1
+                    }
+                }
+                F _ → {}
+            }
+        }
     }
     = . dl pos + . dl pos rows
     = . dl last_rows rows
     ^ rows
 }
 
-unsafe @ dl_last_rows DataLoader dl__h → i {
-    : *DataLoaderImpl dl ( __DataLoader_ptr dl__h )
-    ^ . dl last_rows
+@ dl_last_rows DataLoader dl__h → i {
+    : ~ DataLoaderImpl dl ( locked_take [DataLoaderImpl] . dl__h st )
+    : i r . dl last_rows
+    ( locked_restore [DataLoaderImpl] . dl__h st dl )
+    ^ r
 }
 
 // Let go of `dl` now rather than at the end of its owner's scope.

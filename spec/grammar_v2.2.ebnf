@@ -204,7 +204,11 @@ enum_variant = IDENT type* ;
    Example:  : i INT_MIN - -9223372036854775807 1     — two's-complement min
    Example:  : i PAGE << 1 12                         — 4096 *)
 const_decl  = ':' '~'? type IDENT const_value ;
-const_value = literal | const_int_expr ;
+const_value = literal | const_int_expr | start_init ;
+(* start_init: a global set at start — a function of no arguments run once
+   before main; immutable, of a type that synchronises itself
+   ( Locked T ) ( Arc T ) ( Channel T ) Mutex Cond Semaphore. *)
+start_init  = '(' IDENT ')' ;
 const_int_expr = INT
               | ( '+' | '-' | '*' | '/' | '<<' | '>>' | '&' | '|' | '^^' )
                 const_int_expr const_int_expr ;

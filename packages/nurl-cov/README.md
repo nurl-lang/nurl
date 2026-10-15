@@ -120,7 +120,7 @@ $ `deps/nurl-cov/src/model.nu`
 
 ?? ( gcov_read `build/tests.gcno` `build/tests.gcda` ) {
     T o → {
-        : Cov c ( cov_new )
+        : ~ Cov c ( cov_new )
         ( cov_add_object c o )
         : CovStat t ( cov_total c )
         ( nurl_println ( nurl_str_int . t lines_hit ) )
@@ -129,9 +129,12 @@ $ `deps/nurl-cov/src/model.nu`
 }
 ```
 
-`GcovObj`, `LineTab` and `Cov` are handles whose last owner releases them;
-nothing is freed by hand (`gcov_free`, `linetab_free` and `cov_free` remain
-as optional early releases).
+`GcovObj` and `LineTab` are read-only once built: every copy shares one
+state in an `Arc`, read without a lock. `Cov` is a plain value its owner
+folds objects into (`cov_add_object`, `cov_keep_only` and `cov_sort` take it
+`inout`). Nothing is freed by hand (`gcov_free`, `linetab_free` and
+`cov_free` remain as optional early releases), and the package has no
+`unsafe` code.
 
 | call | |
 | --- | --- |

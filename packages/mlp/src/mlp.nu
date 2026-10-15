@@ -23,8 +23,8 @@
 // Layout: one flat weight buffer + one flat bias buffer for the whole
 // network (struct-of-arrays, like iforest's node arena). Layer l maps
 // sizes[l] → sizes[l+1]; its weights are row-major n_out×n_in at
-// w_off[l], its biases at b_off[l]. Hot loops read through raw pointers
-// (vec_data) and write with vec_set — the fft.nu idiom.
+// w_off[l], its biases at b_off[l]. Hot loops index slices of row
+// windows (slice_window): one check per row, none per element.
 //
 // Persistence: mlp_save/mlp_load round-trip through JSON with every f64
 // stored as its bit pattern (i64) — exact, platform-independent restore
@@ -36,6 +36,7 @@
 // optional early releases).
 
 $ `stdlib/core/vec.nu`
+$ `stdlib/core/slice.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/std/float.nu`
 $ `stdlib/std/floatbits.nu`
@@ -182,37 +183,42 @@ $ `stdlib/ext/json.nu`
 
 // One sample: read d input values at xp[x_at..], fill the activation
 // scratch `acts` (length n_a). Hidden layers ReLU, output linear.
-unsafe @ __mlp_forward Mlp m * f xp i x_at ( Vec f ) acts → v {
-    : *i szp ( vec_data [i] . m sizes )
-    : *i wop ( vec_data [i] . m w_off )
-    : *i bop ( vec_data [i] . m b_off )
-    : *i aop ( vec_data [i] . m a_off )
-    : *f wp ( vec_data [f] . m w )
-    : *f bp ( vec_data [f] . m b )
-    : i din . szp 0
+@ __mlp_forward Mlp m ( Slice f ) xp i x_at ( Vec f ) acts → v {
+    : ( Slice i ) szp ( slice_from_vec [i] . m sizes )
+    : ( Slice i ) wop ( slice_from_vec [i] . m w_off )
+    : ( Slice i ) bop ( slice_from_vec [i] . m b_off )
+    : ( Slice i ) aop ( slice_from_vec [i] . m a_off )
+    : ( Slice f ) wp ( slice_from_vec [f] . m w )
+    : ( Slice f ) bp ( slice_from_vec [f] . m b )
+    : ( Slice f ) ap ( slice_from_vec [f] acts )
+    : i din ( slice_at [i] szp 0 )
     : ~ i c 0
-    ~ < c din { ( vec_set [f] acts c . xp + x_at c ) = c + c 1 }
+    ~ < c din { ( slice_put [f] ap c ( slice_at [f] xp + x_at c ) ) = c + c 1 }
     : ~ i l 0
     ~ < l . m n_layers {
-        : i fin . szp l
-        : i fout . szp + l 1
-        : i wo . wop l
-        : i bo . bop l
-        : i ai . aop l
-        : i ao . aop + l 1
+        : i fin ( slice_at [i] szp l )
+        : i fout ( slice_at [i] szp + l 1 )
+        : i wo ( slice_at [i] wop l )
+        : i bo ( slice_at [i] bop l )
+        : i ai ( slice_at [i] aop l )
+        : i ao ( slice_at [i] aop + l 1 )
         : b last == l - . m n_layers 1
-        : *f ap ( vec_data [f] acts )
+        // Row windows are checked once; the loops to their lengths need no
+        // check per element.
+        : ( Slice f ) ain ( slice_window [f] ap ai fin )
+        : ( Slice f ) aout ( slice_window [f] ap ao fout )
+        : ( Slice f ) bl ( slice_window [f] bp bo fout )
         : ~ i j 0
         ~ < j fout {
-            : ~ f z . bp + bo j
-            : i wrow + wo * j fin
+            : ~ f z ( slice_at [f] bl j )
+            : ( Slice f ) wr ( slice_window [f] wp + wo * j fin fin )
             : ~ i i2 0
             ~ < i2 fin {
-                = z + z * . wp + wrow i2 . ap + ai i2
+                = z + z * ( slice_at [f] wr i2 ) ( slice_at [f] ain i2 )
                 = i2 + i2 1
             }
             ? & ! last < z 0.0 { = z 0.0 } {}
-            ( vec_set [f] acts + ao j z )
+            ( slice_put [f] aout j z )
             = j + j 1
         }
         = l + l 1
@@ -220,9 +226,9 @@ unsafe @ __mlp_forward Mlp m * f xp i x_at ( Vec f ) acts → v {
 }
 
 // Predict one row (a ( Vec f ) of the input width) → an OWNED output vec.
-unsafe @ mlp_predict Mlp m ( Vec f ) x → ( Vec f ) {
+@ mlp_predict Mlp m ( Vec f ) x → ( Vec f ) {
     : ( Vec f ) acts ( __zeros . m n_a )
-    ( __mlp_forward m ( vec_data [f] x ) 0 acts )
+    ( __mlp_forward m ( slice_from_vec [f] x ) 0 acts )
     : i dout ( _mlp_iget . m sizes . m n_layers )
     : i oa ( _mlp_iget . m a_off . m n_layers )
     : ( Vec f ) out ( vec_with_cap [f] dout )
@@ -233,21 +239,22 @@ unsafe @ mlp_predict Mlp m ( Vec f ) x → ( Vec f ) {
 
 // Mean squared error of the network over rows X (n×d row-major) against
 // targets Y (n×dout row-major): mean over every output element.
-unsafe @ mlp_mse Mlp m ( Vec f ) X i n i d ( Vec f ) Y → f {
+@ mlp_mse Mlp m ( Vec f ) X i n i d ( Vec f ) Y → f {
     ? == n 0 { ^ 0.0 } {}
     : ( Vec f ) acts ( __zeros . m n_a )
-    : *f xp ( vec_data [f] X )
-    : *f yp ( vec_data [f] Y )
+    : ( Slice f ) xp ( slice_from_vec [f] X )
+    : ( Slice f ) yp ( slice_from_vec [f] Y )
     : i dout ( _mlp_iget . m sizes . m n_layers )
     : i oa ( _mlp_iget . m a_off . m n_layers )
     : ~ f se 0.0
     : ~ i r 0
     ~ < r n {
         ( __mlp_forward m xp * r d acts )
-        : *f ap ( vec_data [f] acts )
+        : ( Slice f ) ao ( slice_window [f] ( slice_from_vec [f] acts ) oa dout )
+        : ( Slice f ) yr ( slice_window [f] yp * r dout dout )
         : ~ i j 0
         ~ < j dout {
-            : f e - . ap + oa j . yp + * r dout j
+            : f e - ( slice_at [f] ao j ) ( slice_at [f] yr j )
             = se + se * e e
             = j + j 1
         }
@@ -261,58 +268,74 @@ unsafe @ mlp_mse Mlp m ( Vec f ) X i n i d ( Vec f ) Y → f {
 // Accumulate one sample's gradient into gw / gb. `acts` must hold the
 // sample's forward pass; `deltas` is a scratch of n_a (layer-aligned like
 // acts). Returns nothing; the batch divide + L2 happen in the Adam step.
-unsafe @ __mlp_backprop Mlp m ( Vec f ) acts * f yp i y_at ( Vec f ) deltas ( Vec f ) gw ( Vec f ) gb → v {
-    : *i szp ( vec_data [i] . m sizes )
-    : *i wop ( vec_data [i] . m w_off )
-    : *i bop ( vec_data [i] . m b_off )
-    : *i aop ( vec_data [i] . m a_off )
-    : *f wp ( vec_data [f] . m w )
-    : *f ap ( vec_data [f] acts )
+@ __mlp_backprop Mlp m ( Vec f ) acts ( Slice f ) yp i y_at ( Vec f ) deltas ( Vec f ) gw ( Vec f ) gb → v {
+    : ( Slice i ) szp ( slice_from_vec [i] . m sizes )
+    : ( Slice i ) wop ( slice_from_vec [i] . m w_off )
+    : ( Slice i ) bop ( slice_from_vec [i] . m b_off )
+    : ( Slice i ) aop ( slice_from_vec [i] . m a_off )
+    : ( Slice f ) wp ( slice_from_vec [f] . m w )
+    : ( Slice f ) ap ( slice_from_vec [f] acts )
+    : ( Slice f ) dp ( slice_from_vec [f] deltas )
+    : ( Slice f ) gwp ( slice_from_vec [f] gw )
+    : ( Slice f ) gbp ( slice_from_vec [f] gb )
     : i nl . m n_layers
-    : i dout . szp nl
-    : i oa . aop nl
+    : i dout ( slice_at [i] szp nl )
+    : i oa ( slice_at [i] aop nl )
     // δ_out = ŷ − y  (squared loss, linear output)
+    : ( Slice f ) dout_s ( slice_window [f] dp oa dout )
+    : ( Slice f ) aout_s ( slice_window [f] ap oa dout )
+    : ( Slice f ) yr ( slice_window [f] yp y_at dout )
     : ~ i j 0
     ~ < j dout {
-        ( vec_set [f] deltas + oa j - . ap + oa j . yp + y_at j )
+        ( slice_put [f] dout_s j - ( slice_at [f] aout_s j ) ( slice_at [f] yr j ) )
         = j + j 1
     }
     : ~ i l - nl 1
     ~ >= l 0 {
-        : i fin . szp l
-        : i fout . szp + l 1
-        : i wo . wop l
-        : i bo . bop l
-        : i ai . aop l
-        : i ao . aop + l 1
-        : *f dp ( vec_data [f] deltas )
+        : i fin ( slice_at [i] szp l )
+        : i fout ( slice_at [i] szp + l 1 )
+        : i wo ( slice_at [i] wop l )
+        : i bo ( slice_at [i] bop l )
+        : i ai ( slice_at [i] aop l )
+        : i ao ( slice_at [i] aop + l 1 )
+        : ( Slice f ) dl ( slice_window [f] dp ao fout )
+        : ( Slice f ) ain ( slice_window [f] ap ai fin )
+        : ( Slice f ) gbl ( slice_window [f] gbp bo fout )
         // gw += δ_{l+1} ⊗ a_l ; gb += δ_{l+1}
         = j 0
         ~ < j fout {
-            : f dj . dp + ao j
-            : i wrow + wo * j fin
+            : f dj ( slice_at [f] dl j )
+            : ( Slice f ) gwr ( slice_window [f] gwp + wo * j fin fin )
             : ~ i i2 0
             ~ < i2 fin {
-                : i o + wrow i2
-                ( vec_set [f] gw o + ( _mlp_fget gw o ) * dj . ap + ai i2 )
+                ( slice_put [f] gwr i2 + ( slice_at [f] gwr i2 ) * dj ( slice_at [f] ain i2 ) )
                 = i2 + i2 1
             }
-            : i ob + bo j
-            ( vec_set [f] gb ob + ( _mlp_fget gb ob ) dj )
+            ( slice_put [f] gbl j + ( slice_at [f] gbl j ) dj )
             = j + j 1
         }
         // δ_l = (Wᵀ δ_{l+1}) ⊙ relu'(a_l) — the input layer needs none.
+        // Accumulated row by row of W into δ_l itself: each δ_l[i] still
+        // sums its terms in j order from 0.0 (the same rounding as a
+        // column walk), and the row loop needs no check per element.
         ? > l 0 {
+            : ( Slice f ) din ( slice_window [f] dp ai fin )
             : ~ i i3 0
-            ~ < i3 fin {
-                : ~ f s 0.0
-                : ~ i j2 0
-                ~ < j2 fout {
-                    = s + s * . wp + + wo * j2 fin i3 . dp + ao j2
-                    = j2 + j2 1
+            ~ < i3 fin { ( slice_put [f] din i3 0.0 ) = i3 + i3 1 }
+            : ~ i j2 0
+            ~ < j2 fout {
+                : f d2 ( slice_at [f] dl j2 )
+                : ( Slice f ) wr ( slice_window [f] wp + wo * j2 fin fin )
+                = i3 0
+                ~ < i3 fin {
+                    ( slice_put [f] din i3 + ( slice_at [f] din i3 ) * ( slice_at [f] wr i3 ) d2 )
+                    = i3 + i3 1
                 }
-                ? <= . ap + ai i3 0.0 { = s 0.0 } {}
-                ( vec_set [f] deltas + ai i3 s )
+                = j2 + j2 1
+            }
+            = i3 0
+            ~ < i3 fin {
+                ? <= ( slice_at [f] ain i3 ) 0.0 { ( slice_put [f] din i3 0.0 ) } {}
                 = i3 + i3 1
             }
         } {}
@@ -327,43 +350,48 @@ unsafe @ __mlp_backprop Mlp m ( Vec f ) acts * f yp i y_at ( Vec f ) deltas ( Ve
 // pass by value (only their Vec fields alias), so a counter FIELD on Mlp
 // could never advance across calls — it silently froze the bias correction
 // at t = 1 for every batch after the first.
-unsafe @ __mlp_adam Mlp m ( Vec f ) gw ( Vec f ) gb i bsz f lr f alpha i tstep → v {
+@ __mlp_adam Mlp m ( Vec f ) gw ( Vec f ) gb i bsz f lr f alpha i tstep → v {
     : f t # f tstep
     : f b1 0.9
     : f b2 0.999
     : f eps 0.00000001
     : f lrt * lr / ( sqrt - 1.0 ( pow b2 t ) ) - 1.0 ( pow b1 t )
     : f fb # f bsz
-    : *f wp ( vec_data [f] . m w )
-    : *f gwp ( vec_data [f] gw )
+    // One length for all four: the loop to it is checked once.
+    : ( Slice f ) wp ( slice_prefix [f] ( slice_from_vec [f] . m w ) . m n_w )
+    : ( Slice f ) gwp ( slice_prefix [f] ( slice_from_vec [f] gw ) . m n_w )
+    : ( Slice f ) mwp ( slice_prefix [f] ( slice_from_vec [f] . m mw ) . m n_w )
+    : ( Slice f ) vwp ( slice_prefix [f] ( slice_from_vec [f] . m vw ) . m n_w )
     : ~ i k 0
     ~ < k . m n_w {
-        : f g / + . gwp k * alpha . wp k fb
-        : f nm + * b1 ( _mlp_fget . m mw k ) * - 1.0 b1 g
-        : f nv + * b2 ( _mlp_fget . m vw k ) * - 1.0 b2 * g g
-        ( vec_set [f] . m mw k nm )
-        ( vec_set [f] . m vw k nv )
-        ( vec_set [f] . m w k - . wp k / * lrt nm + ( sqrt nv ) eps )
-        ( vec_set [f] gw k 0.0 )
+        : f g / + ( slice_at [f] gwp k ) * alpha ( slice_at [f] wp k ) fb
+        : f nm + * b1 ( slice_at [f] mwp k ) * - 1.0 b1 g
+        : f nv + * b2 ( slice_at [f] vwp k ) * - 1.0 b2 * g g
+        ( slice_put [f] mwp k nm )
+        ( slice_put [f] vwp k nv )
+        ( slice_put [f] wp k - ( slice_at [f] wp k ) / * lrt nm + ( sqrt nv ) eps )
+        ( slice_put [f] gwp k 0.0 )
         = k + k 1
     }
-    : *f bp ( vec_data [f] . m b )
-    : *f gbp ( vec_data [f] gb )
+    : ( Slice f ) bp ( slice_prefix [f] ( slice_from_vec [f] . m b ) . m n_b )
+    : ( Slice f ) gbp ( slice_prefix [f] ( slice_from_vec [f] gb ) . m n_b )
+    : ( Slice f ) mbp ( slice_prefix [f] ( slice_from_vec [f] . m mb ) . m n_b )
+    : ( Slice f ) vbp ( slice_prefix [f] ( slice_from_vec [f] . m vb ) . m n_b )
     = k 0
     ~ < k . m n_b {
-        : f g / . gbp k fb
-        : f nm + * b1 ( _mlp_fget . m mb k ) * - 1.0 b1 g
-        : f nv + * b2 ( _mlp_fget . m vb k ) * - 1.0 b2 * g g
-        ( vec_set [f] . m mb k nm )
-        ( vec_set [f] . m vb k nv )
-        ( vec_set [f] . m b k - . bp k / * lrt nm + ( sqrt nv ) eps )
-        ( vec_set [f] gb k 0.0 )
+        : f g / ( slice_at [f] gbp k ) fb
+        : f nm + * b1 ( slice_at [f] mbp k ) * - 1.0 b1 g
+        : f nv + * b2 ( slice_at [f] vbp k ) * - 1.0 b2 * g g
+        ( slice_put [f] mbp k nm )
+        ( slice_put [f] vbp k nv )
+        ( slice_put [f] bp k - ( slice_at [f] bp k ) / * lrt nm + ( sqrt nv ) eps )
+        ( slice_put [f] gbp k 0.0 )
         = k + k 1
     }
 }
 
 // MSE over a subset of rows given by idx[from..to) — the validation view.
-unsafe @ __mlp_mse_idx Mlp m * f xp i d * f yp i dout ( Vec i ) idx i from i to ( Vec f ) acts → f {
+@ __mlp_mse_idx Mlp m ( Slice f ) xp i d ( Slice f ) yp i dout ( Vec i ) idx i from i to ( Vec f ) acts → f {
     ? <= to from { ^ 0.0 } {}
     : i oa ( _mlp_iget . m a_off . m n_layers )
     : ~ f se 0.0
@@ -371,10 +399,11 @@ unsafe @ __mlp_mse_idx Mlp m * f xp i d * f yp i dout ( Vec i ) idx i from i to 
     ~ < k to {
         : i r ( _mlp_iget idx k )
         ( __mlp_forward m xp * r d acts )
-        : *f ap ( vec_data [f] acts )
+        : ( Slice f ) ao ( slice_window [f] ( slice_from_vec [f] acts ) oa dout )
+        : ( Slice f ) yr ( slice_window [f] yp * r dout dout )
         : ~ i j 0
         ~ < j dout {
-            : f e - . ap + oa j . yp + * r dout j
+            : f e - ( slice_at [f] ao j ) ( slice_at [f] yr j )
             = se + se * e e
             = j + j 1
         }
@@ -386,10 +415,10 @@ unsafe @ __mlp_mse_idx Mlp m * f xp i d * f yp i dout ( Vec i ) idx i from i to 
 // Train on X (n×d, row-major) against Y (n×dout). For an autoencoder pass
 // X for Y and d for dout. Returns the training report; the model is
 // updated in place (best-validation weights when early_stop is on).
-unsafe @ mlp_train Mlp m ( Vec f ) X i n i d ( Vec f ) Y i dout MlpCfg cfg → MlpTrain {
+@ mlp_train Mlp m ( Vec f ) X i n i d ( Vec f ) Y i dout MlpCfg cfg → MlpTrain {
     : Rng g ( rng_seed . cfg seed )
-    : *f xp ( vec_data [f] X )
-    : *f yp ( vec_data [f] Y )
+    : ( Slice f ) xp ( slice_from_vec [f] X )
+    : ( Slice f ) yp ( slice_from_vec [f] Y )
     : ( Vec f ) acts ( __zeros . m n_a )
     : ( Vec f ) deltas ( __zeros . m n_a )
     : ( Vec f ) gw ( __zeros . m n_w )
@@ -436,10 +465,11 @@ unsafe @ mlp_train Mlp m ( Vec f ) X i n i d ( Vec f ) Y i dout MlpCfg cfg → M
             ~ < s bend {
                 : i r ( _mlp_iget idx s )
                 ( __mlp_forward m xp * r d acts )
-                : *f ap ( vec_data [f] acts )
+                : ( Slice f ) ao ( slice_window [f] ( slice_from_vec [f] acts ) oa dout )
+                : ( Slice f ) yr ( slice_window [f] yp * r dout dout )
                 : ~ i j 0
                 ~ < j dout {
-                    : f e - . ap + oa j . yp + * r dout j
+                    : f e - ( slice_at [f] ao j ) ( slice_at [f] yr j )
                     = se + se * e e
                     = j + j 1
                 }
@@ -623,18 +653,18 @@ unsafe @ mlp_train Mlp m ( Vec f ) X i n i d ( Vec f ) Y i dout MlpCfg cfg → M
 
 // ── MinMax scaler ─────────────────────────────────────────────────────
 
-unsafe @ minmax_fit ( Vec f ) X i n i d → MinMax {
+@ minmax_fit ( Vec f ) X i n i d → MinMax {
     : ( Vec f ) lo ( __zeros d )
     : ( Vec f ) hi ( __zeros d )
-    : *f xp ( vec_data [f] X )
+    : ( Slice f ) xp ( slice_from_vec [f] X )
     : ~ i c 0
     ~ < c d {
         : ~ f mn 0.0
         : ~ f mx 0.0
-        ? > n 0 { = mn . xp c = mx . xp c } {}
+        ? > n 0 { = mn ( slice_at [f] xp c ) = mx ( slice_at [f] xp c ) } {}
         : ~ i r 1
         ~ < r n {
-            : f v . xp + * r d c
+            : f v ( slice_at [f] xp + * r d c )
             ? < v mn { = mn v } {}
             ? > v mx { = mx v } {}
             = r + r 1
@@ -647,18 +677,18 @@ unsafe @ minmax_fit ( Vec f ) X i n i d → MinMax {
 }
 
 // Scale rows in place: x' = (x − lo) / (hi − lo); zero-range columns → 0.
-unsafe @ minmax_apply MinMax mm ( Vec f ) X i n → v {
+@ minmax_apply MinMax mm ( Vec f ) X i n → v {
     : i d . mm n_cols
-    : *f lop ( vec_data [f] . mm lo )
-    : *f hip ( vec_data [f] . mm hi )
-    : *f xp ( vec_data [f] X )
+    : ( Slice f ) lop ( slice_from_vec [f] . mm lo )
+    : ( Slice f ) hip ( slice_from_vec [f] . mm hi )
+    : ( Slice f ) xp ( slice_from_vec [f] X )
     : ~ i r 0
     ~ < r n {
         : ~ i c 0
         ~ < c d {
             : i o + * r d c
-            : f range - . hip c . lop c
-            : f v ? == range 0.0 0.0 / - . xp o . lop c range
+            : f range - ( slice_at [f] hip c ) ( slice_at [f] lop c )
+            : f v ? == range 0.0 0.0 / - ( slice_at [f] xp o ) ( slice_at [f] lop c ) range
             ( vec_set [f] X o v )
             = c + c 1
         }

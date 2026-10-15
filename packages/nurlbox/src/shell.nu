@@ -14,6 +14,7 @@ $ `stdlib/core/posix.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/std/term.nu`
 $ `stdlib/std/time.nu`
+$ `stdlib/std/process.nu`
 $ `stdlib/ext/regex.nu`
 $ `bx.nu`
 $ `sys.nu`
@@ -51,7 +52,7 @@ $ `stdlib/core/slice.nu`
     ^ F
 }
 
-unsafe @ __test_unary s op s arg → b {
+@ __test_unary s op s arg → b {
     : i c ( nurl_str_get op 1 )
     ? == c 122 { ^ == ( nurl_str_len arg ) 0 } {}
     ? == c 110 { ^ != ( nurl_str_len arg ) 0 } {}
@@ -75,8 +76,8 @@ unsafe @ __test_unary s op s arg → b {
             // apply to the owner, the group bits to a member, otherwise
             // the other bits — the same three-way choice the kernel makes.
             : i m ( stat_mode_bits st )
-            : i uid # i ( geteuid )
-            : i gid # i ( getegid )
+            : i uid ( proc_self_euid )
+            : i gid ( proc_self_egid )
             : ~ i bits & m 7
             ? == . st uid uid { = bits & >> m 6 7 } {
                 ? == . st gid gid { = bits & >> m 3 7 } {}
@@ -293,13 +294,13 @@ unsafe @ __test_unary s op s arg → b {
 // `S : REGEX` — an anchored match; the result is the match length (or
 // the first captured group, which this engine does not offer, so the
 // length is what it always returns).
-unsafe @ __expr_match ( Vec String ) t → String {
+@ __expr_match ( Vec String ) t → String {
     : ~ String acc ( __expr_atom t )
     ~ & > ( __expr_left t ) 0 ( bx_streq ( __expr_tok t g_expr_pos ) `:` ) {
         = g_expr_pos + g_expr_pos 1
         : String pat ( __expr_atom t )
         : String anchored ( string_from `^` )
-        ( string_push_bytes anchored # *u ( string_data pat ) ( string_len pat ) )
+        ( string_append anchored pat )
         : String bre ( _bre_to_ere ( string_data anchored ) )
         : ~ i len 0
         ?? ( regex_compile ( string_data bre ) ) {
@@ -448,7 +449,7 @@ unsafe @ __expr_match ( Vec String ) t → String {
 
 // ── xargs ─────────────────────────────────────────────────────────
 
-unsafe @ __xargs_run ( Vec String ) cmd b trace → i {
+@ __xargs_run ( Vec String ) cmd b trace → i {
     : i n ( vec_len [String] cmd )
     ? == n 0 { ^ 0 } {}
     ? trace {
@@ -460,41 +461,23 @@ unsafe @ __xargs_run ( Vec String ) cmd b trace → i {
         }
         ( nurl_eprint `\n` )
     } {}
-    ( flush )
-    : i32 pid ( fork )
-    ? == # i pid 0 {
-        : ( Vec u ) argvbuf_v ( vec_zeroed [u] * 8 + n 1 )
-        : s argvbuf # s ( vec_data [u] argvbuf_v )
-        : ~ i k 0
-        ~ < k n {
-            ( nurl_poke argvbuf k # i ( bx_at cmd k ) )
-            = k + k 1
-        }
-        : i32 _r ( execvp ( bx_at cmd 0 ) # *u argvbuf )
-        ( _exit # i32 127 )
-        ^ 127
-    } {}
-    ? < # i pid 0 { ^ 127 } {}
-    : ( Vec u ) statusbuf_v ( vec_zeroed [u] 8 )
-    : s statusbuf # s ( vec_data [u] statusbuf_v )
-    : i32 _w ( waitpid pid # *u statusbuf # i32 0 )
-    : i raw ( nurl_peek statusbuf 0 )
-    ^ ( nurl_wait_exit_status & raw 65535 )
+    : i rc ( process_run_inherit cmd 0 )
+    ^ ? < rc 0 127 rc
 }
 
 // Split stdin into items: whitespace-separated, or NUL-separated with
 // -0. Quoting is honoured for the whitespace form, because `xargs` is
 // most often fed `ls` output and a quoted name must survive.
-unsafe @ __xargs_items b nul ( Vec String ) out → v {
+@ __xargs_items b nul ( Vec String ) out → v {
     : ( Vec u ) data ( read_all_stdin_bytes )
     : i n ( vec_len [u] data )
-    : *u p ( vec_data [u] data )
+    : ( Slice u ) p ( slice_from_vec [u] data )
     : String cur ( string_new )
     : ~ b any F
     : ~ i quote 0
     : ~ i i 0
     ~ < i n {
-        : i c & 255 # i . p i
+        : i c & 255 # i ( slice_at [u] p i )
         ? nul {
             ? == c 0 {
                 ( vec_push [String] out ( string_clone cur ) )

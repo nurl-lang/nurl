@@ -44,7 +44,7 @@ $ `deps/gpukit/src/gpukit.nu`
 $ `deps/gpukit/src/dev.nu`
 $ `stdlib/std/arc.nu`
 
-: GpPlanImpl {
+: GpPlan {
     b ok
     i kid  // unique plan id baked into kernel names
     i rows  // B — the fused chain's row count
@@ -66,31 +66,20 @@ $ `stdlib/std/arc.nu`
 
 // A GpPlan is a handle on its state in an Arc (stdlib/std/arc.nu):
 // every copy is the same state, and the last owner releases it.
-: GpPlan { ( Arc GpPlanImpl ) a }
-
-@ GpPlan_share GpPlan h → GpPlan { ^ @ GpPlan { ( arc_clone [GpPlanImpl] . h a ) } }
-
-@ GpPlan_drop sink GpPlan h → v {}
-
 // The state, for this package's own code.
-unsafe @ _GpPlan_ptr GpPlan h → *GpPlanImpl { ^ ( arc_ptr [GpPlanImpl] . h a ) }
-
 // Did the analysis find something to fuse?
-unsafe @ gpfuse_plan_ok GpPlan pl__h → b {
-    : *GpPlanImpl pl ( _GpPlan_ptr pl__h )
+@ gpfuse_plan_ok inout GpPlan pl → b {
     ^ . pl ok
 }
 
 // The fused segments as flattened (lo, hi) inclusive node-id ranges, and
 // each segment's backward row-kernel name (empty = per-node). Borrowed:
 // valid while the plan is.
-unsafe @ gpfuse_plan_segs GpPlan pl__h → ( Vec i ) {
-    : *GpPlanImpl pl ( _GpPlan_ptr pl__h )
+@ gpfuse_plan_segs inout GpPlan pl → ( Vec i ) {
     ^ . pl segs
 }
 
-unsafe @ gpfuse_plan_bnames GpPlan pl__h → ( Vec String ) {
-    : *GpPlanImpl pl ( _GpPlan_ptr pl__h )
+@ gpfuse_plan_bnames inout GpPlan pl → ( Vec String ) {
     ^ . pl bnames
 }
 
@@ -99,7 +88,7 @@ unsafe @ gpfuse_plan_bnames GpPlan pl__h → ( Vec String ) {
 // ── analysis ─────────────────────────────────────────────────────────
 
 // Is node k row-local over B rows? (see the header for the definition)
-unsafe @ _gpf_rowlocal * GProgImpl pg i k i B → b {
+@ _gpf_rowlocal inout GProg pg i k i B → b {
     : GpNode nd ( _gp_node pg k )
     ? & == . nd rows B > . nd cols 0 {} { ^ F }
     : i op . nd op
@@ -157,7 +146,7 @@ unsafe @ _gpf_rowlocal * GProgImpl pg i k i B → b {
 }
 
 // One fused-segment kernel over nodes [lo, hi].
-unsafe @ _gpf_emit_seg * GProgImpl pg i lo i hi i B s kname String o → v {
+@ _gpf_emit_seg inout GProg pg i lo i hi i B s kname String o → v {
     ( string_push_str o `extern "C" __global__ void ` )
     ( string_push_str o kname )
     ( string_push_str o `(const long long* vt, long long B)\n{\n` )
@@ -231,7 +220,7 @@ unsafe @ _gpf_emit_seg * GProgImpl pg i lo i hi i B s kname String o → v {
 }
 
 // `a`-side element of a binop/unary at (s, c).
-@ _gpf_in String o * GProgImpl pg i inid i C → v {
+@ _gpf_in String o inout GProg pg i inid i C → v {
     ( _gpf_t o inid )
     ( string_push_str o `[s * ` )
     ( string_push_str o ( nurl_str_int C ) )
@@ -239,7 +228,7 @@ unsafe @ _gpf_emit_seg * GProgImpl pg i lo i hi i B s kname String o → v {
 }
 
 // `b`-side element: matched shape, per-row vector, or scalar.
-unsafe @ _gpf_inb String o * GProgImpl pg i inid i C → v {
+@ _gpf_inb String o inout GProg pg i inid i C → v {
     : GpNode nb ( _gp_node pg inid )
     ? & == . nb rows 0 == . nb n 1 {
         ( _gpf_t o inid )
@@ -256,7 +245,7 @@ unsafe @ _gpf_inb String o * GProgImpl pg i inid i C → v {
 
 // The per-element expression for fused node k — the EXACT per-node kernel
 // arithmetic (gp_ew_bc / gp_scal / gp_trans / gp_matmul), spelled inline.
-unsafe @ _gpf_expr * GProgImpl pg i k String o → v {
+@ _gpf_expr inout GProg pg i k String o → v {
     : GpNode nd ( _gp_node pg k )
     : i op . nd op
     : i C . nd cols
@@ -294,28 +283,12 @@ unsafe @ _gpf_expr * GProgImpl pg i k String o → v {
 
 // Analyze the program, emit the fused-forward kernels, upload the pointer
 // table. ok=F (with everything freed safe) when nothing fuses.
-unsafe @ gpfuse_plan GProg pg__h → GpPlan {
-    : *GProgImpl pg ( _GProg_ptr pg__h )
-    : ( Arc GpPlanImpl ) pl__box ( arc_zero [GpPlanImpl] )
-    : *GpPlanImpl pl ( arc_ptr [GpPlanImpl] pl__box )
-    = . pl ok F
-    = . pl kid g_gpm_next
+@ gpfuse_plan inout GProg pg → GpPlan {
+    : ~ GpPlan pl @ GpPlan { F g_gpm_next 0 ( vec_new [i] ) ( string_new ) ( vec_new [String] ) ( vec_new [String] )
+        ( vec_new [String] ) ( vec_new [i] ) ( _gp_nobuf ) ( _gp_nobuf ) ( _gp_nobuf ) 0 ( string_new )
+        ( vec_new [i] ) ( vec_new [String] ) ( vec_new [String] ) }
     = g_gpm_next + g_gpm_next 1
-    = . pl segs ( vec_new [i] )
-    = . pl src ( string_new )
-    = . pl knames ( vec_new [String] )
-    = . pl bnames ( vec_new [String] )
-    = . pl pnames ( vec_new [String] )
-    = . pl pgrid ( vec_new [i] )
-    = . pl vtab ( _gp_nobuf )
-    = . pl gtab ( _gp_nobuf )
-    = . pl ftab ( _gp_nobuf )
-    = . pl fcnt 0
-    = . pl fillk ( string_new )
-    = . pl ssegs ( vec_new [i] )
-    = . pl snames ( vec_new [String] )
-    = . pl sbnames ( vec_new [String] )
-    ? . pg ok {} { ^ @ GpPlan { pl__box } }
+    ? . pg ok {} { ^ pl }
     // B = the most common 2-D row count among non-leaf nodes (the batch)
     : i nn ( vec_len [GpNode] . pg nodes )
     : ~ i B 0
@@ -335,7 +308,7 @@ unsafe @ gpfuse_plan GProg pg__h → GpPlan {
         } {}
         = k + k 1
     }
-    ? > B 0 {} { ^ @ GpPlan { pl__box } }
+    ? > B 0 {} { ^ pl }
     = . pl rows B
     // maximal consecutive fusable runs (length >= 2)
     = k 0
@@ -350,7 +323,7 @@ unsafe @ gpfuse_plan GProg pg__h → GpPlan {
             = k + hi 1
         } { = k + k 1 }
     }
-    ? > ( vec_len [i] . pl segs ) 0 {} { ^ @ GpPlan { pl__box } }
+    ? > ( vec_len [i] . pl segs ) 0 {} { ^ pl }
     // emit every segment kernel
     : i nseg / ( vec_len [i] . pl segs ) 2
     = k 0
@@ -493,12 +466,12 @@ unsafe @ gpfuse_plan GProg pg__h → GpPlan {
         = . pl fcnt / ( vec_len [i] tf2 ) 2
     } {}
     ? up { = . pl ok T } {}
-    ^ @ GpPlan { pl__box }
+    ^ pl
 }
 
 // Launches only (no sync policy) — shared by the direct path and the
 // CUDA-graph capture.
-unsafe @ _gpfuse_fwd_launches * GProgImpl pg * GpPlanImpl pl → b {
+unsafe @ _gpfuse_fwd_launches inout GProg pg inout GpPlan pl → b {
     : i nn ( vec_len [GpNode] . pg nodes )
     : i nseg / ( vec_len [i] . pl segs ) 2
     : ~ b r T
@@ -538,9 +511,7 @@ unsafe @ _gpfuse_fwd_launches * GProgImpl pg * GpPlanImpl pl → b {
 }
 
 // Fused forward: segments as one kernel each, everything else per-node.
-unsafe @ gpfuse_forward GProg pg__h GpPlan pl__h → b {
-    : *GpPlanImpl pl ( _GpPlan_ptr pl__h )
-    : *GProgImpl pg ( _GProg_ptr pg__h )
+@ gpfuse_forward inout GProg pg inout GpPlan pl → b {
     ? & . pg ok . pl ok {} { ^ F }
     ( gk_autosync F )
     : b r ( _gpfuse_fwd_launches pg pl )
@@ -593,13 +564,13 @@ unsafe @ gpfuse_forward GProg pg__h GpPlan pl__h → b {
 }
 
 // Is ew input `inid` the same [B,c] shape as consumer `nd`?
-unsafe @ _gpf_same * GProgImpl pg i inid i B i C → b {
+@ _gpf_same inout GProg pg i inid i B i C → b {
     : GpNode m ( _gp_node pg inid )
     ^ & == . m rows B == . m cols C
 }
 
 // accred wrapper: TARGET = __dadd_rn(TARGET, __dmul_rn(<sgn>, <src...>
-@ _gpf_acc_open String o * GProgImpl pg i tid i C s sgn → v {
+@ _gpf_acc_open String o inout GProg pg i tid i C s sgn → v {
     ( string_push_str o `        ` )
     ( _gpf_gel o tid C )
     ( string_push_str o ` = __dadd_rn(` )
@@ -621,7 +592,7 @@ unsafe @ _gpf_same * GProgImpl pg i inid i B i C → b {
 }
 
 // Row-space bwd kernel body for segment [lo,hi]; stage count returned.
-unsafe @ _gpf_emit_bwd_stages * GProgImpl pg i lo i hi i B String o ( Vec i ) vids ( Vec i ) gids → i {
+@ _gpf_emit_bwd_stages inout GProg pg i lo i hi i B String o ( Vec i ) vids ( Vec i ) gids → i {
     : ~ i stages 0
     : ~ i k hi
     ~ >= k lo {
@@ -816,7 +787,7 @@ unsafe @ _gpf_emit_bwd_stages * GProgImpl pg i lo i hi i B String o ( Vec i ) vi
 
 // Param-space jobs of segment [lo,hi], descending consumer order, encoded
 // as (target, kind, consumer) triples — kind 0 = matmul dW, 1 = ew b-side.
-unsafe @ _gpf_param_jobs * GProgImpl pg i lo i hi i B ( Vec i ) jobs → v {
+@ _gpf_param_jobs inout GProg pg i lo i hi i B ( Vec i ) jobs → v {
     : ~ i k hi
     ~ >= k lo {
         : GpNode nd ( _gp_node pg k )
@@ -845,7 +816,7 @@ unsafe @ _gpf_param_jobs * GProgImpl pg i lo i hi i B ( Vec i ) jobs → v {
 
 // Order safety: no gradient may collect BOTH row-space and param-space
 // contributions inside one segment (the split would reorder them).
-unsafe @ _gpf_bwd_ok * GProgImpl pg i lo i hi i B → b {
+@ _gpf_bwd_ok inout GProg pg i lo i hi i B → b {
     : ( Vec i ) rowt ( vec_new [i] )
     : ~ i k lo
     ~ <= k hi {
@@ -884,7 +855,7 @@ unsafe @ _gpf_bwd_ok * GProgImpl pg i lo i hi i B → b {
 // The param-space kernel: one grid-stride stage per distinct target, jobs
 // serial inside each thread — gp_bw_mm_b / gp_bw_accred element order.
 // Returns the widest target n (grid sizing); 0 when there are no jobs.
-unsafe @ _gpf_emit_param * GProgImpl pg i lo i hi i B String body ( Vec i ) vids ( Vec i ) gids → i {
+@ _gpf_emit_param inout GProg pg i lo i hi i B String body ( Vec i ) vids ( Vec i ) gids → i {
     : ( Vec i ) jobs ( vec_new [i] )
     ( _gpf_param_jobs pg lo hi B jobs )
     : i nj / ( vec_len [i] jobs ) 3
@@ -1000,7 +971,7 @@ unsafe @ _gpf_emit_param * GProgImpl pg i lo i hi i B String body ( Vec i ) vids
 }
 
 // Assemble the row-space bwd kernel; F when the segment has no stages.
-unsafe @ _gpf_emit_bwd_seg * GProgImpl pg i lo i hi i B s kname String o → b {
+@ _gpf_emit_bwd_seg inout GProg pg i lo i hi i B s kname String o → b {
     : String body ( string_new )
     : ( Vec i ) vids ( vec_new [i] )
     : ( Vec i ) gids ( vec_new [i] )
@@ -1028,7 +999,7 @@ unsafe @ _gpf_emit_bwd_seg * GProgImpl pg i lo i hi i B s kname String o → b {
 }
 
 // Assemble the param-space kernel; returns the widest target n (0 = none).
-unsafe @ _gpf_emit_param_seg * GProgImpl pg i lo i hi i B s kname String o → i {
+@ _gpf_emit_param_seg inout GProg pg i lo i hi i B s kname String o → i {
     : String body ( string_new )
     : ( Vec i ) vids ( vec_new [i] )
     : ( Vec i ) gids ( vec_new [i] )
@@ -1068,7 +1039,7 @@ unsafe @ _gpf_emit_param_seg * GProgImpl pg i lo i hi i B s kname String o → i
 
 // Fused backward: one zero-fill launch, the seed, then the reverse walk
 // with row-space + param-space kernels standing in for fused segments.
-unsafe @ _gpfuse_bwd_launches * GProgImpl pg * GpPlanImpl pl → b {
+unsafe @ _gpfuse_bwd_launches inout GProg pg inout GpPlan pl → b {
     : ~ b r T
     ? > . pl fcnt 0 {
         : ( Vec i ) a ( vec_new [i] )
@@ -1145,9 +1116,7 @@ unsafe @ _gpfuse_bwd_launches * GProgImpl pg * GpPlanImpl pl → b {
     ^ r
 }
 
-unsafe @ gpfuse_backward GProg pg__h GpPlan pl__h → b {
-    : *GpPlanImpl pl ( _GpPlan_ptr pl__h )
-    : *GProgImpl pg ( _GProg_ptr pg__h )
+@ gpfuse_backward inout GProg pg inout GpPlan pl → b {
     ? & . pg ok . pl ok {} { ^ F }
     ( gk_autosync F )
     : b r ( _gpfuse_bwd_launches pg pl )
@@ -1162,8 +1131,7 @@ unsafe @ gpfuse_backward GProg pg__h GpPlan pl__h → b {
 // there; the per-node path is already the optimal cpu execution. The
 // planner still builds (the bit gates run everywhere) — this is the
 // production selector.
-unsafe @ gpfuse_worthwhile GProg pg__h → b {
-    : *GProgImpl pg ( _GProg_ptr pg__h )
+@ gpfuse_worthwhile inout GProg pg → b {
     ? . pg ok {} { ^ F }
     : GpuKit kit . pg kit
     ^ == 1 ( nurl_str_eq ( gk_backend kit ) `cuda` )
@@ -1173,10 +1141,7 @@ unsafe @ gpfuse_worthwhile GProg pg__h → b {
 // backward + the optimizer, captured once. Per episode the host does
 // gput_set_input + gpopt_prepare + gput_episode — the identical driver
 // loop as the per-node graph, just with ~5 kernels inside instead of ~40.
-unsafe @ gpfuse_graph_capture_train GProg pg__h GpPlan pl__h GpOpt go__h → b {
-    : *GpPlanImpl pl ( _GpPlan_ptr pl__h )
-    : *GpOptImpl go ( _GpOpt_ptr go__h )
-    : *GProgImpl pg ( _GProg_ptr pg__h )
+@ gpfuse_graph_capture_train inout GProg pg inout GpPlan pl inout GpOpt go → b {
     ? & & . pg ok . pl ok . go ok {} { ^ F }
     ? ( gpu_graph_ok . pg gexec ) { ^ T } {}
     ? ( _gpopt_ensure go pg ) {} { ^ F }
@@ -1206,7 +1171,7 @@ unsafe @ gpfuse_graph_capture_train GProg pg__h GpPlan pl__h GpOpt go__h → b {
 
 @ _gpf_smax → i { ^ 16384 }
 
-unsafe @ _gpf_in_rowseg * GpPlanImpl pl i k → b {
+@ _gpf_in_rowseg inout GpPlan pl i k → b {
     : i nseg / ( vec_len [i] . pl segs ) 2
     : ~ i w 0
     ~ < w nseg {
@@ -1216,7 +1181,7 @@ unsafe @ _gpf_in_rowseg * GpPlanImpl pl i k → b {
     ^ F
 }
 
-unsafe @ _gpf_serial_ok * GProgImpl pg i k → b {
+@ _gpf_serial_ok inout GProg pg i k → b {
     : GpNode nd ( _gp_node pg k )
     : i op . nd op
     ? <= op ( gop_const ) { ^ F }
@@ -1249,13 +1214,13 @@ unsafe @ _gpf_serial_ok * GProgImpl pg i k → b {
 }
 
 // b-side element with the scalar-[1] broadcast collapsed to [0].
-unsafe @ _gpf_sinb String o * GProgImpl pg i inid s ix → v {
+@ _gpf_sinb String o inout GProg pg i inid s ix → v {
     : GpNode nb ( _gp_node pg inid )
     ( _gpf_sel o inid ? == . nb n 1 `0` ix )
 }
 
 // Serial forward stages; node values in program order, exact expressions.
-unsafe @ _gpf_emit_ser_stages * GProgImpl pg i lo i hi String o ( Vec i ) vids → i {
+@ _gpf_emit_ser_stages inout GProg pg i lo i hi String o ( Vec i ) vids → i {
     : ~ i stages 0
     : ~ i k lo
     ~ <= k hi {
@@ -1297,7 +1262,7 @@ unsafe @ _gpf_emit_ser_stages * GProgImpl pg i lo i hi String o ( Vec i ) vids �
 
 // The serial per-element expression at flat index e (gp_ew_bc / gp_scal /
 // gp_trans forms with the trivial layouts this class permits).
-unsafe @ _gpf_sexpr * GProgImpl pg i k String o → v {
+@ _gpf_sexpr inout GProg pg i k String o → v {
     : GpNode nd ( _gp_node pg k )
     : i op . nd op
     ? == op ( gop_add ) { ( string_push_str o `__dadd_rn(` ) ( _gpf_sel o . nd a `e` ) ( string_push_str o `, ` ) ( _gpf_sinb o pg . nd b `e` ) ( string_push_str o `)` ) ^ v } {}
@@ -1325,7 +1290,7 @@ unsafe @ _gpf_sexpr * GProgImpl pg i k String o → v {
 
 // Serial backward stages hi→lo — gp_bw_reduce / gp_bw_unary / accred
 // element order, one thread, exact accumulate order per element.
-unsafe @ _gpf_emit_ser_bwd_stages * GProgImpl pg i lo i hi String o ( Vec i ) vids ( Vec i ) gids → i {
+@ _gpf_emit_ser_bwd_stages inout GProg pg i lo i hi String o ( Vec i ) vids ( Vec i ) gids → i {
     : ~ i stages 0
     : ~ i k hi
     ~ >= k lo {
@@ -1448,7 +1413,7 @@ unsafe @ _gpf_emit_ser_bwd_stages * GProgImpl pg i lo i hi String o ( Vec i ) vi
 }
 
 // mul/div/add/sub b-side source element (accred's scr chain, inline).
-unsafe @ _gpf_ser_bsrc * GProgImpl pg i k String o → v {
+@ _gpf_ser_bsrc inout GProg pg i k String o → v {
     : GpNode nd ( _gp_node pg k )
     : i op . nd op
     ? == op ( gop_mul ) {
@@ -1473,7 +1438,7 @@ unsafe @ _gpf_ser_bsrc * GProgImpl pg i k String o → v {
 }
 
 // gp_bw_unary's accumulate expression with gi bound, serial index e.
-unsafe @ _gpf_ser_unary * GProgImpl pg i k String o → v {
+@ _gpf_ser_unary inout GProg pg i k String o → v {
     : GpNode nd ( _gp_node pg k )
     : i op . nd op
     ? == op ( gop_neg ) { ( string_push_str o `__dsub_rn(` ) ( _gpf_sgel o . nd a `e` ) ( string_push_str o `, gi)` ) ^ v } {}
@@ -1492,7 +1457,7 @@ unsafe @ _gpf_ser_unary * GProgImpl pg i k String o → v {
 }
 
 // Assemble the serial fwd kernel (T on success — always has stages).
-unsafe @ _gpf_emit_ser_seg * GProgImpl pg i lo i hi s kname String o → b {
+@ _gpf_emit_ser_seg inout GProg pg i lo i hi s kname String o → b {
     : String body ( string_new )
     : ( Vec i ) vids ( vec_new [i] )
     : i stages ( _gpf_emit_ser_stages pg lo hi body vids )
@@ -1514,7 +1479,7 @@ unsafe @ _gpf_emit_ser_seg * GProgImpl pg i lo i hi s kname String o → b {
 }
 
 // Assemble the serial bwd kernel (F when no reach-1 stages).
-unsafe @ _gpf_emit_ser_bwd_seg * GProgImpl pg i lo i hi s kname String o → b {
+@ _gpf_emit_ser_bwd_seg inout GProg pg i lo i hi s kname String o → b {
     : String body ( string_new )
     : ( Vec i ) vids ( vec_new [i] )
     : ( Vec i ) gids ( vec_new [i] )
@@ -1549,83 +1514,56 @@ unsafe @ _gpf_emit_ser_bwd_seg * GProgImpl pg i lo i hi s kname String o → b {
 // (cpu backend) or the plan is empty, every call transparently forwards
 // to the per-node path, so the loop is identical either way.
 
-: GpFuseImpl {
+: GpFuse {
     b active  // T when a worthwhile plan drives the episode
     GpPlan pl
 }
 
 // A GpFuse is a handle on its state in an Arc (stdlib/std/arc.nu):
 // every copy is the same state, and the last owner releases it.
-: GpFuse { ( Arc GpFuseImpl ) a }
-
-@ GpFuse_share GpFuse h → GpFuse { ^ @ GpFuse { ( arc_clone [GpFuseImpl] . h a ) } }
-
-@ GpFuse_drop sink GpFuse h → v {}
-
 // The state, for this package's own code.
-unsafe @ _GpFuse_ptr GpFuse h → *GpFuseImpl { ^ ( arc_ptr [GpFuseImpl] . h a ) }
-
-unsafe @ gpfuse_open GProg pg__h GpOpt go__h → GpFuse {
-    : *GProgImpl pg ( _GProg_ptr pg__h )
+@ gpfuse_open inout GProg pg inout GpOpt go → GpFuse {
     : ~ b active F
     : ~ GpPlan plan ( _gpfuse_nullplan )
-    ? & ( gpfuse_worthwhile pg__h ) . pg ok {
-        : GpPlan live ( gpfuse_plan pg__h )
-        ? . ( _GpPlan_ptr live ) ok {
-            : b _graph ( gpfuse_graph_capture_train pg__h live go__h )
+    ? & ( gpfuse_worthwhile pg ) . pg ok {
+        : ~ GpPlan live ( gpfuse_plan pg )
+        ? . live ok {
+            : b _graph ( gpfuse_graph_capture_train pg live go )
             // even without a graph (capture unavailable) the direct fused
             // path still helps — mark active so the episode uses it
             = active T
             = plan live
         } {}
     } {}
-    ^ @ GpFuse { ( arc_new [GpFuseImpl] @ GpFuseImpl { active plan } ) }
+    ^ @ GpFuse { active plan }
 }
 
-unsafe @ _gpfuse_nullplan → GpPlan {
-    : ~ GpPlanImpl pl @ GpPlanImpl {}
-    = . pl ok F
-    = . pl segs ( vec_new [i] )
-    = . pl src ( string_new )
-    = . pl knames ( vec_new [String] )
-    = . pl bnames ( vec_new [String] )
-    = . pl pnames ( vec_new [String] )
-    = . pl pgrid ( vec_new [i] )
-    = . pl vtab ( _gp_nobuf )
-    = . pl gtab ( _gp_nobuf )
-    = . pl ftab ( _gp_nobuf )
-    = . pl fcnt 0
-    = . pl fillk ( string_new )
-    = . pl ssegs ( vec_new [i] )
-    = . pl snames ( vec_new [String] )
-    = . pl sbnames ( vec_new [String] )
-    ^ @ GpPlan { ( arc_new [GpPlanImpl] pl ) }
+@ _gpfuse_nullplan → GpPlan {
+    ^ @ GpPlan { F 0 0 ( vec_new [i] ) ( string_new ) ( vec_new [String] ) ( vec_new [String] )
+        ( vec_new [String] ) ( vec_new [i] ) ( _gp_nobuf ) ( _gp_nobuf ) ( _gp_nobuf ) 0 ( string_new )
+        ( vec_new [i] ) ( vec_new [String] ) ( vec_new [String] ) }
 }
 
-unsafe @ gpfuse_active GpFuse s__h → b {
-    : *GpFuseImpl s ( _GpFuse_ptr s__h )
+@ gpfuse_active inout GpFuse s → b {
     ^ . s active
 }
 
 // One training episode. With a captured graph this is a single launch;
 // with a live plan it is the fused forward + backward + optimizer step;
 // otherwise the per-node forward/backward/step. Bit-identical either way.
-unsafe @ gpfuse_episode GpFuse s__h GProg pg__h GpOpt go__h → b {
-    : *GpFuseImpl s ( _GpFuse_ptr s__h )
-    : *GProgImpl pg ( _GProg_ptr pg__h )
-    : GpPlan pl . s pl
-    ? & . s active . ( _GpPlan_ptr pl ) ok {} {
-        ? ( gput_forward pg__h ) {} { ^ F }
-        ? ( gput_backward pg__h ) {} { ^ F }
-        ^ ( gpopt_step go__h pg__h )
+@ gpfuse_episode inout GpFuse s inout GProg pg inout GpOpt go → b {
+    ? & . s active . . s pl ok {} {
+        ? ( gput_forward pg ) {} { ^ F }
+        ? ( gput_backward pg ) {} { ^ F }
+        ^ ( gpopt_step go pg )
     }
     ? ( gpu_graph_ok . pg gexec ) {
-        ? ( gpopt_prepare go__h pg__h ) {} { ^ F }
-        ^ ( gput_episode pg__h )
+        ? ( gpopt_prepare go pg ) {} { ^ F }
+        ^ ( gput_episode pg )
     } {}
-    ? ( gpfuse_forward pg__h pl ) {} { ^ F }
-    ? ( gpfuse_backward pg__h pl ) {} { ^ F }
-    ^ ( gpopt_step go__h pg__h )
+    ? ( gpfuse_forward pg . s pl ) {} { ^ F }
+    ? ( gpfuse_backward pg . s pl ) {} { ^ F }
+    ^ ( gpopt_step go pg )
 }
 
 // Let go of `s` now rather than at the end of its owner's scope (its plan

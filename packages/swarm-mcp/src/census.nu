@@ -78,27 +78,17 @@ $ `stdlib/std/arc.nu`
 // Eviction is self-healing — a worker that comes back re-announces and rejoins.
 : Member { ( Vec u ) pubkey i id i caps i last_ms }
 
-: RosterImpl { ( Vec Member ) members }
-
-// A Roster is a handle on its member list in an Arc (stdlib/std/arc.nu):
-// every copy is the same roster, and the last owner releases it.
-: Roster { ( Arc RosterImpl ) a }
-
-@ Roster_share Roster h → Roster { ^ @ Roster { ( arc_clone [RosterImpl] . h a ) } }
-
-@ Roster_drop sink Roster h → v {}
-
-unsafe @ __Roster_ptr Roster h → *RosterImpl { ^ ( arc_ptr [RosterImpl] . h a ) }
+: Roster { ( Vec Member ) members }
 
 @ roster_new → Roster {
-    ^ @ Roster { ( arc_new [RosterImpl] @ RosterImpl { ( vec_new [Member] ) } ) }
+    ^ @ Roster { ( vec_new [Member] ) }
 }
 
 // Let go of `r` now rather than at the end of its owner's scope (optional).
 @ roster_free sink Roster r → v {}
 
 // Index of the member with `pubkey`, -1 if none.
-unsafe @ __roster_find * RosterImpl r ( Vec u ) pubkey → i {
+@ __roster_find Roster r ( Vec u ) pubkey → i {
     : i n ( vec_len [Member] . r members )
     : ~ i found -1 : ~ i k 0
     ~ & == found -1 < k n {
@@ -108,19 +98,16 @@ unsafe @ __roster_find * RosterImpl r ( Vec u ) pubkey → i {
     ^ found
 }
 
-unsafe @ roster_has Roster r__h ( Vec u ) pubkey → b {
-    : *RosterImpl r ( __Roster_ptr r__h )
+@ roster_has Roster r ( Vec u ) pubkey → b {
     ^ >= ( __roster_find r pubkey ) 0
 }
 
-unsafe @ roster_count Roster r__h → i {
-    : *RosterImpl r ( __Roster_ptr r__h )
+@ roster_count Roster r → i {
     ^ ( vec_len [Member] . r members )
 }
 
 // How many members advertise every capability bit in `mask`.
-unsafe @ roster_count_caps Roster r__h i mask → i {
-    : *RosterImpl r ( __Roster_ptr r__h )
+@ roster_count_caps Roster r i mask → i {
     : i n ( vec_len [Member] . r members )
     : ~ i c 0 : ~ i k 0
     ~ < k n {
@@ -132,8 +119,7 @@ unsafe @ roster_count_caps Roster r__h i mask → i {
 
 // Fold a worker into the roster + ring, once. Returns T if newly added.
 // `now` is the caller's clock (ms); the member's liveness stamp starts there.
-unsafe @ roster_add Roster r__h Ring ring ( Vec u ) pubkey i id i vnodes i caps i now → b {
-    : *RosterImpl r ( __Roster_ptr r__h )
+@ roster_add inout Roster r Ring ring ( Vec u ) pubkey i id i vnodes i caps i now → b {
     ? >= ( __roster_find r pubkey ) 0 { ^ F } {}
     : ( Vec u ) cp ( vec_with_cap [u] ( vec_len [u] pubkey ) )
     ( vec_extend [u] cp pubkey )
@@ -143,13 +129,13 @@ unsafe @ roster_add Roster r__h Ring ring ( Vec u ) pubkey i id i vnodes i caps 
 }
 
 // Refresh a member's liveness stamp (a re-heard HELLO). Unknown pubkey: no-op.
-// The stamp is written in place, through the element's slot.
-unsafe @ roster_touch Roster r__h ( Vec u ) pubkey i now → v {
-    : *RosterImpl r ( __Roster_ptr r__h )
+// The member leaves its slot for the write and goes back (nothing copied).
+@ roster_touch inout Roster r ( Vec u ) pubkey i now → v {
     : i k ( __roster_find r pubkey )
     ? < k 0 { ^ v } {}
-    : *Member m # *Member + # i ( vec_data [Member] . r members ) * k Z Member
+    : ~ Member m ?? ( vec_replace [Member] . r members k @ Member { ( vec_new [u] ) 0 0 0 } ) { T x → x F → { ^ v } }
     = . m last_ms now
+    : ?Member _old ( vec_replace [Member] . r members k m )
 }
 
 // Drop every member silent for longer than `ttl_ms` and return their pubkeys
@@ -161,8 +147,7 @@ unsafe @ roster_touch Roster r__h ( Vec u ) pubkey i now → v {
 // worker hears no HELLO of its own, so without the exemption it would time
 // itself out of its own ring and stop owning — and therefore stop executing —
 // every key it holds.
-unsafe @ roster_expire Roster r__h i now i ttl_ms ( Vec u ) exempt → ( Vec ( Vec u ) ) {
-    : *RosterImpl r ( __Roster_ptr r__h )
+@ roster_expire inout Roster r i now i ttl_ms ( Vec u ) exempt → ( Vec ( Vec u ) ) {
     : ( Vec ( Vec u ) ) gone ( vec_new [( Vec u )] )
     // An evicted member leaves the list (vec_remove hands it over, in order);
     // its pubkey moves into `gone`.
@@ -185,7 +170,6 @@ unsafe @ roster_expire Roster r__h i now i ttl_ms ( Vec u ) exempt → ( Vec ( V
 // model) can see the cluster the coordinator believes it has.
 : MemberView { i id i caps i last_ms }
 
-unsafe @ roster_view Roster r__h i k → MemberView {
-    : *RosterImpl r ( __Roster_ptr r__h )
+@ roster_view Roster r i k → MemberView {
     ^ ?? ( vec_get [Member] . r members k ) { T m → @ MemberView { . m id . m caps . m last_ms } F → @ MemberView { 0 0 0 } }
 }

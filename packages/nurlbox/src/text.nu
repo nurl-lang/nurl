@@ -325,14 +325,14 @@ $ `stdlib/core/slice.nu`
     }
 }
 
-unsafe @ __head_bytes s path i count → i {
+@ __head_bytes s path i count → i {
     : ~ b ok T
     : ( Vec u ) data ( bx_slurp path ok )
     : ~ i rc 0
     ? ok {
         : i n ( vec_len [u] data )
         : i take ? < count n count n
-        ? > take 0 { ( nurl_print_bytes # s ( vec_data [u] data ) take ) } {}
+        ? > take 0 { ( write_slice ( slice_window [u] ( slice_from_vec [u] data ) 0 take ) ) } {}
     } { = rc 1 }
     ^ rc
 }
@@ -391,7 +391,7 @@ unsafe @ __head_bytes s path i count → i {
 
 // Keep the last `count` lines in a ring of Strings so an input far
 // larger than memory still costs only the window.
-unsafe @ __tail_lines s path i count b from_start → i {
+@ __tail_lines s path i count b from_start → i {
     ?? ( bx_reader path ) {
         F _ → { ^ 1 }
         T br → {
@@ -419,7 +419,7 @@ unsafe @ __tail_lines s path i count b from_start → i {
                             ?? ( vec_get [String] ring head ) {
                                 T slot → {
                                     ( string_clear slot )
-                                    ( string_push_bytes slot # *u ( string_data line ) ( string_len line ) )
+                                    ( string_append slot line )
                                 }
                                 F _ → {}
                             }
@@ -444,7 +444,7 @@ unsafe @ __tail_lines s path i count b from_start → i {
     }
 }
 
-unsafe @ __tail_bytes s path i count b from_start → i {
+@ __tail_bytes s path i count b from_start → i {
     : ~ b ok T
     : ( Vec u ) data ( bx_slurp path ok )
     : ~ i rc 0
@@ -458,7 +458,7 @@ unsafe @ __tail_bytes s path i count b from_start → i {
             = from ? > - n count 0 - n count 0
         }
         : i take - n from
-        ? > take 0 { ( nurl_print_bytes # s + # i ( vec_data [u] data ) from take ) } {}
+        ? > take 0 { ( write_slice ( slice_window [u] ( slice_from_vec [u] data ) from take ) ) } {}
     } { = rc 1 }
     ^ rc
 }
@@ -723,7 +723,7 @@ unsafe @ __tail_bytes s path i count b from_start → i {
 
 // ── yes ───────────────────────────────────────────────────────────
 
-unsafe @ ap_yes ( Vec String ) argv → i {
+@ ap_yes ( Vec String ) argv → i {
     : String unit ( string_new )
     : i n ( vec_len [String] argv )
     ? <= n 1 {
@@ -741,7 +741,7 @@ unsafe @ ap_yes ( Vec String ) argv → i {
     // magnitude, and `yes` exists to saturate a pipe.
     : String block ( string_new )
     ~ < ( string_len block ) 8192 {
-        ( string_push_bytes block # *u ( string_data unit ) ( string_len unit ) )
+        ( string_append block unit )
     }
     : ~ b more T
     ~ more { ( bx_write block ) }

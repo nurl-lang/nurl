@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.3.0] — 2026-10-14
+
+### Changed
+
+- Follows grad 0.13: the builders (`nn_const`, `nn_param`, `nn_ones`, `nn_linear`, `nn_linear_bias`, …) take the tape `inout`.
+
+## [0.2.3] — 2026-10-14
+
+Requires NURL 0.73.0.
+
+### Changed
+
+- The block tests collect the adapter ids in a Vec instead of raw cells; no function is `unsafe` any more, tests included.
+- 3 fewer functions are `unsafe` than in 0.2.2 (0 left).
+
 ## [0.2.2] — 2026-10-12
 
 Requires NURL 0.73.0, in which a field written through a raw pointer

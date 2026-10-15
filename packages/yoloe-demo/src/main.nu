@@ -50,35 +50,40 @@ $ `deps/template/src/template.nu`
 $ `index_html_data.nu`
 $ `stdlib/core/slice.nu`
 
-// ── shared state (set once in main, read by the handlers) ───────────
+// ── shared state ─────────────────────────────────────────────────────
 
-: DemoState {
-    Engine eng  // the inference engine, for the program's lifetime
-    OGraph graph
-    ( Vec String ) names
-    i nc
+// What main sets up once: the handlers only read it (arc_get, no lock).
+: DemoConf {
     String device
     String model_path
     String index_html  // pre-rendered demo page
     // runtime prompting (kmax > 0 → the promptable K-slot export is loaded):
     i kmax  // prompt slots baked into the detector graph (0 = baked vocab)
-    OGraph tgraph  // MobileCLIP text encoder (pure NURL on the GPU)
     Tokenizer tk  // CLIP BPE tokenizer
-    ( Vec u ) tpe  // kmax×512 f32 text embeddings, zero-padded past nc
     ( Vec u ) model_bytes  // raw .onnx, served to the wasm client mode
     b wasm_mode  // web/yoloe_detect.wasm present → offer in-browser compute
+}
+
+// What a request changes: the engine (a run rewrites its value table)
+// and the vocabulary /prompt grows and /detect reads. Checked out of its
+// Locked for the length of one request.
+: Vocab {
+    Engine eng  // the inference engine, for the program's lifetime
+    OGraph graph
+    OGraph tgraph  // MobileCLIP text encoder (pure NURL on the GPU)
+    ( Vec String ) names
+    i nc
+    GpuHost tpe  // kmax×512 f32 text embeddings, zero-padded past nc
 }
 
 // The server's state is a handle the route closures capture: every copy is
 // the same state, and the last owner (the app's routes, when the server
 // returns) releases the engine, the graphs and the buffers.
-: Demo { ( Arc DemoState ) a }
+: Demo { ( Arc DemoConf ) a ( Locked Vocab ) vocab }
 
-@ Demo_share Demo h → Demo { ^ @ Demo { ( arc_clone [DemoState] . h a ) } }
+@ Demo_share Demo h → Demo { ^ @ Demo { ( arc_clone [DemoConf] . h a ) ( Locked_share [Vocab] . h vocab ) } }
 
 @ Demo_drop sink Demo h → v {}
-
-unsafe @ __Demo_ptr Demo h → *DemoState { ^ ( arc_ptr [DemoState] . h a ) }
 
 // ── small helpers ────────────────────────────────────────────────────
 
@@ -218,31 +223,24 @@ unsafe @ __Demo_ptr Demo h → *DemoState { ^ ( arc_ptr [DemoState] . h a ) }
 // 512-float embedding into tpe slot `slot`. The tokens ride as int64
 // [1,77]; the n1 text-encoder export ends in an L2 normalize, so the
 // slot lands in exactly the space the contrastive head was traced with.
-unsafe @ yd_encode_prompt * DemoState st s text i slot → b {
-    : Engine e . st eng
-    : ( Vec i ) row ( bpe_tokenize . st tk text 77 )
+@ yd_encode_prompt Engine e OGraph tgraph Tokenizer tk GpuHost tpe s text i slot → b {
+    : ( Vec i ) row ( bpe_tokenize tk text 77 )
     ? != ( vec_len [i] row ) 77 { ^ F } {}
-    : ( Vec u ) toksv ( vec_zeroed [u] * 77 8 )  // int64 [1,77]
-    : *u toks ( vec_data [u] toksv )
+    : ( Vec u ) toks ( vec_with_cap [u] * 77 8 )  // int64 [1,77]
     : ~ i j 0
     ~ < j 77 {
-        ( nurl_poke toks j ?? ( vec_get [i] row j ) { T x → x F _ → 0 } )
+        ( bytes_push_u64_le toks # u64 ?? ( vec_get [i] row j ) { T x → x F _ → 0 } )
         = j + j 1
     }
-    : RTensor out ( rt_run_tokens e . st tgraph toks 1 77 )
-    : ~ b ok F
-    ? == . out nelem 512 {
-        : GpuHost h__h ( rt_download e out )
-        : *u h ( gpu_host_ptr h__h )
-        : *u tp ( vec_data [u] . st tpe )
-        : ~ i q 0
-        ~ < q 512 {
-            ( nurl_poke_f32 tp + * slot 512 q ( nurl_peek_f32 h q ) )
-            = q + q 1
-        }
-        = ok T
-    } {}
-    ^ ok
+    : RTensor out ( rt_run_tokens_host e tgraph ( gpu_host_of_vec toks ) 1 77 )
+    ? != . out nelem 512 { ^ F } {}
+    : GpuHost h ( rt_download e out )
+    : ~ i q 0
+    ~ < q 512 {
+        ( gpu_host_set_f32 tpe + * slot 512 q ( gpu_host_get_f32 h q ) )
+        = q + q 1
+    }
+    ^ T
 }
 
 // Per-anchor best ENABLED class. yolo_decode argmaxes over every class
@@ -250,8 +248,10 @@ unsafe @ yd_encode_prompt * DemoState st s text i slot → b {
 // shadow an enabled custom prompt of the same object ('a dog' 0.63) and
 // the anchor vanished. Restricting the argmax to enabled classes makes
 // toggles behave the way the chips read.
-unsafe @ yd_decode * u o i na i nc f thresh ( Vec i ) flags → ( Vec Detection ) {
+@ yd_decode GpuHost o__h i na i nc f thresh ( Vec i ) flags → ( Vec Detection ) {
     : ( Vec Detection ) dets ( vec_new [Detection] )
+    ? | | < na 0 < nc 0 > + 4 nc / / ( gpu_host_bytes o__h ) 4 ? > na 0 na 1 { ^ dets } {}
+    : ( Slice f32 ) o ( gpu_host_f32 o__h )
     : ~ i a 0
     ~ < a na {
         : ~ f best 0.0
@@ -260,16 +260,16 @@ unsafe @ yd_decode * u o i na i nc f thresh ( Vec i ) flags → ( Vec Detection 
         ~ < c nc {
             : i on ?? ( vec_get [i] flags c ) { T x → x F _ → 0 }
             ? == on 1 {
-                : f sc ( nurl_peek_f32 o + * + 4 c na a )
+                : f sc # f ( slice_at [f32] o + * + 4 c na a )
                 ? > sc best { = best sc = bi c } {}
             } {}
             = c + c 1
         }
         ? & >= bi 0 > best thresh {
-            : f cx ( nurl_peek_f32 o + * 0 na a )
-            : f cy ( nurl_peek_f32 o + * 1 na a )
-            : f w ( nurl_peek_f32 o + * 2 na a )
-            : f h ( nurl_peek_f32 o + * 3 na a )
+            : f cx # f ( slice_at [f32] o + * 0 na a )
+            : f cy # f ( slice_at [f32] o + * 1 na a )
+            : f w # f ( slice_at [f32] o + * 2 na a )
+            : f h # f ( slice_at [f32] o + * 3 na a )
             ( vec_push [Detection] dets @ Detection { bi best cx cy w h a } )
         } {}
         = a + a 1
@@ -279,34 +279,31 @@ unsafe @ yd_decode * u o i na i nc f thresh ( Vec i ) flags → ( Vec Detection 
 
 // ── inference: one frame in, masks drawn on, detection JSON out ─────
 
-unsafe @ yd_detect * DemoState st Image im f conf b want_masks ( Vec i ) flags → Json {
-    : Engine e . st eng
+@ yd_detect DemoConf c Vocab v Image im f conf b want_masks ( Vec i ) flags → Json {
+    : Engine e . v eng
     : i t0 ( monotonic_ns )
 
     : Letterbox lb ( letterbox im 640 )
-    : ( Vec u ) hostv ( img_to_nchw_norm . lb img )
-    : *u host ( vec_data [u] hostv )
+    : GpuHost host ( img_to_nchw_norm . lb img )
     : ( Vec i ) s3 ( vec_new [i] )
-    ( vec_push [i] s3 1 ) ( vec_push [i] s3 . st kmax ) ( vec_push [i] s3 512 )
+    ( vec_push [i] s3 1 ) ( vec_push [i] s3 . c kmax ) ( vec_push [i] s3 512 )
     // the result is the engine's (a view of its value table), bound once
-    : RTensor out ? > . st kmax 0
-    ( rt_run_two e . st graph `images` host ( yd_shape4 1 3 640 640 ) `tpe` ( vec_data [u] . st tpe ) s3 )
-    ( rt_run_shaped e . st graph host ( yd_shape4 1 3 640 640 ) )
-    : GpuHost o__h ( rt_download e out )
-    : *u o ( gpu_host_ptr o__h )
+    : RTensor out ? > . c kmax 0
+    ( rt_run_two_host e . v graph `images` host ( yd_shape4 1 3 640 640 ) `tpe` . v tpe s3 )
+    ( rt_run_host e . v graph host ( yd_shape4 1 3 640 640 ) )
+    : GpuHost o ( rt_download e out )
 
     : ~ b masks want_masks
-    : ~ i proto_i 0
-    : ~ GpuHost proto_i__h ( gpu_host_none )
+    : ~ GpuHost proto ( gpu_host_none )
     ? masks {
         : RTensor proto_t ( rt_output1 e )
-        ? == . proto_t nelem 0 { = masks F } { = proto_i__h ( rt_download e proto_t ) = proto_i # i ( gpu_host_ptr proto_i__h ) }
+        ? == . proto_t nelem 0 { = masks F } { = proto ( rt_download e proto_t ) }
     } {}
 
     : i na 8400
     : i MH ( mask_dim )
     : i MW ( mask_dim )
-    : i ncap ? > . st kmax 0 . st kmax . st nc
+    : i ncap ? > . c kmax 0 . c kmax . v nc
     : ( Vec Detection ) raw ( yd_decode o na ncap conf flags )
     : ( Vec Detection ) dets ( yolo_nms raw 0.5 )
     : f scale . lb scale
@@ -326,12 +323,12 @@ unsafe @ yd_detect * DemoState st Image im f conf b want_masks ( Vec i ) flags �
                     : i x0 - ocx / ow 2
                     : i y0 - ocy / oh 2
                     ? masks {
-                        : ( Vec u ) coeff ( mask_coeffs o na ncap . d ai )
-                        : ( Vec u ) L ( mask_logits # *u proto_i ( vec_data [u] coeff ) MH MW )
-                        ( mask_overlay im ( vec_data [u] L ) lb 640 x0 y0 ow oh ( yd_pal_r shown ) ( yd_pal_g shown ) ( yd_pal_b shown ) 118 )
+                        : ( Vec f ) coeff ( mask_coeffs o na ncap . d ai )
+                        : ( Vec f ) L ( mask_logits proto coeff MH MW )
+                        ( mask_overlay im L lb 640 x0 y0 ow oh ( yd_pal_r shown ) ( yd_pal_g shown ) ( yd_pal_b shown ) 118 )
                     } {}
                     : Json jd ( json_obj_new )
-                    ( json_obj_set jd `n` ( json_str_lit ( yd_name_at . st names . d cls ) ) )
+                    ( json_obj_set jd `n` ( json_str_lit ( yd_name_at . v names . d cls ) ) )
                     ( json_obj_set jd `s` ( json_float . d score ) )
                     ( json_obj_set jd `c` ( json_int . d cls ) )
                     ( json_obj_set jd `k` ( json_int shown ) )
@@ -366,8 +363,8 @@ unsafe @ yd_detect * DemoState st Image im f conf b want_masks ( Vec i ) flags �
 
 // ── HTTP handlers ────────────────────────────────────────────────────
 
-unsafe @ h_index Demo d HttpRequest req Params p → HttpResponse {
-    : *DemoState st ( __Demo_ptr d )
+@ h_index Demo d HttpRequest req Params p → HttpResponse {
+    : DemoConf c ( arc_get [DemoConf] . d a )
     : HttpResponse r ( response_new 200 )
     ( response_set_header r `Content-Type` `text/html; charset=utf-8` )
     // cross-origin isolation: the wasm client mode hands frames to the
@@ -375,44 +372,46 @@ unsafe @ h_index Demo d HttpRequest req Params p → HttpResponse {
     // COOP/COEP-isolated pages. Same-origin subresources need nothing.
     ( response_set_header r `Cross-Origin-Opener-Policy` `same-origin` )
     ( response_set_header r `Cross-Origin-Embedder-Policy` `require-corp` )
-    ( response_set_body_str r ( string_data . st index_html ) )
+    ( response_set_body_str r ( string_data . c index_html ) )
     ^ r
 }
 
 // GET /wasm/model — the detector .onnx for the in-browser wasm engine.
-unsafe @ h_wasm_model Demo d HttpRequest req Params p → HttpResponse {
-    : *DemoState st ( __Demo_ptr d )
+@ h_wasm_model Demo d HttpRequest req Params p → HttpResponse {
+    : DemoConf c ( arc_get [DemoConf] . d a )
     : HttpResponse r ( response_new 200 )
     ( response_set_header r `Content-Type` `application/octet-stream` )
-    ( response_set_body_bytes r . st model_bytes )
+    ( response_set_body_bytes r . c model_bytes )
     ^ r
 }
 
 // GET /tpe — the CURRENT vocabulary embeddings (nc × 512 f32, raw LE)
 // with the class names in X-Classes. The wasm client seeds from this and
 // re-fetches after /prompt so both engines share one vocabulary.
-unsafe @ h_tpe Demo d HttpRequest req Params p → HttpResponse {
-    : *DemoState st ( __Demo_ptr d )
+@ h_tpe Demo d HttpRequest req Params p → HttpResponse {
+    : DemoConf c ( arc_get [DemoConf] . d a )
     // no embeddings without the promptable export (the slab is empty)
-    ? == . st kmax 0 {
+    ? == . c kmax 0 {
         ^ ( response_error 400 `runtime prompting is off — start the server with --text-encoder` )
     } {}
     : HttpResponse r ( response_new 200 )
     ( response_set_header r `Content-Type` `application/octet-stream` )
-    : ( Vec u ) out ( vec_with_cap [u] * . st nc 2048 )
-    : *u tp ( vec_data [u] . st tpe )
+    : Vocab v ( locked_take [Vocab] . d vocab )
+    : i ncell * . v nc 512
+    : ( Vec u ) out ( vec_with_cap [u] * ncell 4 )
     : ~ i k 0
-    ~ < k * . st nc 2048 {
-        ( vec_push [u] out . tp k )
+    ~ < k ncell {
+        ( bytes_push_u32_le out # u32 ( gpu_host_get_i32 . v tpe k ) )
         = k + k 1
     }
     : ~ String cls ( string_new )
-    : ~ i c 0
-    ~ < c . st nc {
-        ? > c 0 { ( string_push_char cls 44 ) } {}
-        ( string_push_str cls ( yd_name_at . st names c ) )
-        = c + c 1
+    : ~ i q 0
+    ~ < q . v nc {
+        ? > q 0 { ( string_push_char cls 44 ) } {}
+        ( string_push_str cls ( yd_name_at . v names q ) )
+        = q + q 1
     }
+    ( locked_restore [Vocab] . d vocab v )
     ( response_set_header r `X-Classes` ( string_data cls ) )
     ( response_set_body_bytes r out )
     ^ r
@@ -422,13 +421,14 @@ unsafe @ h_tpe Demo d HttpRequest req Params p → HttpResponse {
     ^ ( response_text 200 `ok` )
 }
 
-unsafe @ h_detect Demo d HttpRequest req Params p → HttpResponse {
-    : *DemoState st ( __Demo_ptr d )
+@ h_detect Demo d HttpRequest req Params p → HttpResponse {
+    : DemoConf c ( arc_get [DemoConf] . d a )
     : ( Vec UrlParam ) ps ( url_query_decode ( string_data . req query ) )
     : f conf ( yd_query_f ps `conf` 0.25 )
     : b want_masks ( yd_query_b ps `masks` T )
-    : i ncap ? > . st kmax 0 . st kmax . st nc
-    : ( Vec i ) flags ( yd_enabled ps . st nc ncap )
+    : Vocab v ( locked_take [Vocab] . d vocab )
+    : i ncap ? > . c kmax 0 . c kmax . v nc
+    : ( Vec i ) flags ( yd_enabled ps . v nc ncap )
 
     : ~ b ok F
     : ~ Json out ( json_null )
@@ -438,11 +438,12 @@ unsafe @ h_detect Demo d HttpRequest req Params p → HttpResponse {
             ? != ( image_channels im0 ) 3 {
                 = im ( image_convert im0 3 )
             } {}
-            = out ( yd_detect st im conf want_masks flags )
+            = out ( yd_detect c v im conf want_masks flags )
             = ok T
         }
         F _ → {}
     }
+    ( locked_restore [Vocab] . d vocab v )
     ? ok {
         ^ ( response_json 200 out )
     } {
@@ -453,12 +454,19 @@ unsafe @ h_detect Demo d HttpRequest req Params p → HttpResponse {
 // POST /prompt — body is the prompt text. Encodes it through the
 // MobileCLIP text encoder ON the GPU and appends it to the vocabulary;
 // the next /detect already sees it. JSON out: { id, name, n }.
-unsafe @ h_prompt Demo d HttpRequest req Params p → HttpResponse {
-    : *DemoState st ( __Demo_ptr d )
-    ? == . st kmax 0 {
+@ h_prompt Demo d HttpRequest req Params p → HttpResponse {
+    : DemoConf c ( arc_get [DemoConf] . d a )
+    : ~ Vocab v ( locked_take [Vocab] . d vocab )
+    : HttpResponse r ( yd_prompt_add c v req )
+    ( locked_restore [Vocab] . d vocab v )
+    ^ r
+}
+
+@ yd_prompt_add DemoConf c inout Vocab v HttpRequest req → HttpResponse {
+    ? == . c kmax 0 {
         ^ ( response_error 400 `runtime prompting is off — start the server with --text-encoder` )
     } {}
-    ? >= . st nc . st kmax {
+    ? >= . v nc . c kmax {
         ^ ( response_error 409 `all prompt slots are in use` )
     } {}
     // sanitize: printable bytes only, collapse to a trimmed prompt
@@ -467,22 +475,22 @@ unsafe @ h_prompt Demo d HttpRequest req Params p → HttpResponse {
     : ~ String txt ( string_with_cap 64 )
     : ~ i k 0
     ~ & < k bn < ( string_len txt ) 60 {
-        : i c ?? ( vec_get [u] body k ) { T x → # i x F _ → 0 }
-        ? | & >= c 32 <= c 126 >= c 128 { ( string_push_char txt c ) } {}
+        : i ch ?? ( vec_get [u] body k ) { T x → # i x F _ → 0 }
+        ? | & >= ch 32 <= ch 126 >= ch 128 { ( string_push_char txt ch ) } {}
         = k + k 1
     }
     : String trimmed ( string_trim txt )
     ? == ( string_len trimmed ) 0 {
         ^ ( response_error 400 `empty prompt` )
     } {}
-    : i slot . st nc
-    ? ( yd_encode_prompt st ( string_data trimmed ) slot ) {
-        ( vec_push [String] . st names trimmed )
-        = . st nc + slot 1
+    : i slot . v nc
+    ? ( yd_encode_prompt . v eng . v tgraph . c tk . v tpe ( string_data trimmed ) slot ) {
+        ( vec_push [String] . v names trimmed )
+        = . v nc + slot 1
         : Json j ( json_obj_new )
         ( json_obj_set j `id` ( json_int slot ) )
-        ( json_obj_set j `name` ( json_str_lit ( yd_name_at . st names slot ) ) )
-        ( json_obj_set j `n` ( json_int . st nc ) )
+        ( json_obj_set j `name` ( json_str_lit ( yd_name_at . v names slot ) ) )
+        ( json_obj_set j `n` ( json_int . v nc ) )
         : HttpResponse r ( response_json 200 j )
         ^ r
     } {
@@ -522,36 +530,29 @@ unsafe @ h_prompt Demo d HttpRequest req Params p → HttpResponse {
 }
 
 // page_path empty → the built-in template.
-unsafe @ yd_render_index s page_path * DemoState st → b {
-    : ~ b ok F
+@ yd_render_index s page_path String device String model_path i kmax b wasm_mode ( Vec String ) names i nc → ?String {
     : String tsrc ? > ( nurl_str_len page_path ) 0
     ?? ( read_file page_path ) { T t → t F _ → ( string_new ) }
     ( yd_builtin_page )
     ? > ( string_len tsrc ) 0 {
         : Json ctx ( json_obj_new )
-        ( json_obj_set ctx `device` ( json_str_lit ( string_data . st device ) ) )
-        ( json_obj_set ctx `model` ( json_str_lit ( string_data . st model_path ) ) )
-        ( json_obj_set ctx `promptable` ( json_bool > . st kmax 0 ) )
-        ( json_obj_set ctx `slots` ( json_int . st kmax ) )
-        ( json_obj_set ctx `wasm` ( json_bool . st wasm_mode ) )
+        ( json_obj_set ctx `device` ( json_str_lit ( string_data device ) ) )
+        ( json_obj_set ctx `model` ( json_str_lit ( string_data model_path ) ) )
+        ( json_obj_set ctx `promptable` ( json_bool > kmax 0 ) )
+        ( json_obj_set ctx `slots` ( json_int kmax ) )
+        ( json_obj_set ctx `wasm` ( json_bool wasm_mode ) )
         : Json arr ( json_arr_new )
         : ~ i k 0
-        ~ < k . st nc {
-            : Json c ( json_obj_new )
-            ( json_obj_set c `id` ( json_int k ) )
-            ( json_obj_set c `name` ( json_str_lit ( yd_name_at . st names k ) ) )
-            : b _p ( json_arr_push arr c )
+        ~ < k nc {
+            : Json cj ( json_obj_new )
+            ( json_obj_set cj `id` ( json_int k ) )
+            ( json_obj_set cj `name` ( json_str_lit ( yd_name_at names k ) ) )
+            : b _p ( json_arr_push arr cj )
             = k + k 1
         }
         ( json_obj_set ctx `classes` arr )
         ?? ( tpl_render ( string_data tsrc ) ctx ) {
-            T html → {
-                // updated in place: a String stored through the pointer would
-                // not be the state's to own
-                ( string_clear . st index_html )
-                ( string_push_str . st index_html ( string_data html ) )
-                = ok T
-            }
+            T html → { ^ @ ?String { T html } }
             F m → {
                 ( nurl_eprint `yoloe-demo: page template error: ` )
                 ( nurl_eprintln ( string_data m ) )
@@ -561,10 +562,10 @@ unsafe @ yd_render_index s page_path * DemoState st → b {
         ( nurl_eprint `yoloe-demo: cannot read page template: ` )
         ( nurl_eprintln page_path )
     }
-    ^ ok
+    ^ @ ?String { F }
 }
 
-unsafe @ main → i {
+@ main → i {
     : ArgParser ap ( args_new `yoloe-demo` `live YOLOE segmentation in the browser, served by pure NURL` )
     ( args_flag ap `help` 104 `show this help` )  // -h
     ( args_flag ap `tls` 115 `serve HTTPS with a fresh self-signed cert (camera works on LAN)` )  // -s
@@ -665,10 +666,7 @@ unsafe @ main → i {
                             }
                         } {}
 
-                        : Demo d @ Demo { ( arc_new [DemoState] @ DemoState {
-                                e g names nc ( string_from ( rt_name e ) ) mp ( string_new )
-                                kmax tg tkz ( vec_zeroed [u] * * kmax 512 4 ) mbytes wasm_mode } ) }
-                        : *DemoState st ( __Demo_ptr d )
+                        : GpuHost tpe ( gpu_host_alloc * * kmax 512 4 )
                         ? & prompt_ok > kmax 0 {
                             ( nurl_print `prompts  encoding ` ) ( nurl_print ( nurl_str_int nc ) )
                             ( nurl_print ` seed classes on the GPU ... ` )
@@ -676,7 +674,7 @@ unsafe @ main → i {
                             : ~ i pk 0
                             : ~ b enc_ok T
                             ~ & < pk nc enc_ok {
-                                ? ( yd_encode_prompt st ( yd_name_at . st names pk ) pk ) {} { = enc_ok F }
+                                ? ( yd_encode_prompt e tg tkz tpe ( yd_name_at names pk ) pk ) {} { = enc_ok F }
                                 = pk + pk 1
                             }
                             ? enc_ok {
@@ -690,7 +688,20 @@ unsafe @ main → i {
                         } {}
                         ? == prompt_ok F { = rc 1 } {}
 
-                        ? & prompt_ok ( yd_render_index ( string_data page ) st ) {
+                        : String device ( string_from ( rt_name e ) )
+                        : ~ b page_ok F
+                        : ~ String html ( string_new )
+                        ? prompt_ok {
+                            ?? ( yd_render_index ( string_data page ) device mp kmax wasm_mode names nc ) {
+                                T h → { = html h = page_ok T }
+                                F → {}
+                            }
+                        } {}
+                        : Demo d @ Demo {
+                            ( arc_new [DemoConf] @ DemoConf { device mp html kmax tkz mbytes wasm_mode } )
+                            ( locked_new [Vocab] @ Vocab { e g tg names nc tpe } )
+                        }
+                        ? page_ok {
                             // warm-up: compile every kernel before the first real frame
                             ( nurl_print `warmup   compiling kernels ... ` )
                             : i w0 ( monotonic_ns )
@@ -701,7 +712,10 @@ unsafe @ main → i {
                             : ( Vec i ) wflags ( vec_new [i] )
                             : ~ i z2 0
                             ~ < z2 nc { ( vec_push [i] wflags 1 ) = z2 + z2 1 }
-                            : Json wj ( yd_detect st wim 0.25 T wflags )
+                            : DemoConf wc ( arc_get [DemoConf] . d a )
+                            : Vocab wv ( locked_take [Vocab] . d vocab )
+                            : Json wj ( yd_detect wc wv wim 0.25 T wflags )
+                            ( locked_restore [Vocab] . d vocab wv )
                             ( nurl_print ( nurl_str_int / - ( monotonic_ns ) w0 1000000 ) )
                             ( nurl_print ` ms\n` )
 

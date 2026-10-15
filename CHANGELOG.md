@@ -8,6 +8,316 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Taking `unsafe` out of the packages. A handle's state is changed in safe
+code now: `rc_take` / `rc_restore` (stdlib/std/rc.nu) and `locked_take` /
+`locked_restore` (stdlib/std/thread.nu) check the state out of an `Rc` or
+a `Locked` into a local — nothing copied — for `inout` helpers to change,
+and back in; every other use of it panics (`Rc`) or waits (`Locked`) until
+it is back (docs/MEMORY.md §7.6). `slice_prefix` cuts parallel columns to
+one length, so a walk over them checks each index once. Bounds checks
+(`vec_at`, `vec_put`, `vec_get`, `vec_set`, `slice_*`) are one unsigned
+compare: a `vec_at` / `vec_put` write loop runs in 1.0 s where it took
+1.4 s. `arc_get` lends a payload that has a `% Drop` and no clone (the
+copying branch for a cyclic payload is dead for it, and the compiler no
+longer rejects code a constant condition leaves dead). `now_ms` /
+`now_seconds` read the clock in one runtime call instead of looking
+CLOCK_REALTIME up by name first (~2 300 instructions a call).
+`term_read_password` and `tls_accept_conn` are new safe wrappers.
+
+Grammar v2.9 adds `raw` (spec §3.3e). `raw @ f …` is a function whose
+soundness rests on its caller — an address it is handed, a size it trusts,
+kernel code it runs — so only an `unsafe` function may call it, the rule a
+foreign function declared `unsafe & …` already follows; `raw : S { … }`
+seals a struct whose fields carry such an invariant. `raw` is no reserved
+word: it is the prefix only right before a top-level `@` or `:`. nurlfmt
+keeps it on its declaration's line.
+
+`string_push_window` appends a byte range of a view to a String,
+`string_bytes` views a String's own bytes (NULs included, no strlen), and
+`slice_bytes_eq` / `slice_bytes_cmp` compare two byte views — what a
+tokenizer or parser used pointer arithmetic for. `tokenizer` has one
+`unsafe` function left of 42, with bit-identical encodings.
+
+`slice_window s from n` is the `n` elements from `from`, checked once, so
+a loop to `n` over it needs no check per element; storing a number
+through one window no longer ends a borrow of another window of the same
+Vec. `mlp`'s training loop over windows has no `unsafe` left and runs 26%
+faster than the raw-pointer loop it replaces (2.12 s against 2.85 s,
+bit-identical output).
+
+A split build (`nurl.sh`'s default, one module part per core) inlined
+nothing small across parts: ThinLTO imported `slice_at` and the Vec
+accessors, but mapped their struct types onto structurally equal ones of
+the importing module (every Vec is `{ ptr }` under opaque pointers), and a
+call whose type differs from its callee's is never inlined — mlp's
+slice loop ran 4× slower split than unsplit. A small function is now also
+copied (`linkonce_odr`) into each part that calls it; a large program's
+build takes ~20% longer than before (anomaly: 48 s → 58 s, against 192 s
+unsplit). Functions start on a 64-byte line (`-align-all-functions=6`),
+so one function's size no longer moves another's hot loop across a
+Skylake JCC boundary: mlp's gradfit_test retired the same instructions
+in 9 s or 13 s depending on an unrelated edit, and no longer does.
+
+Seven more holes are closed (h249–h255), and none is known open: functions
+that take a runtime handle as a plain integer (`tcp_conn_view`,
+`tls_attach*`, `tls_accept*`, the `nurl_tcp_*` / `nurl_udp_*` /
+`nurl_proc_*` builtins and stdlib FFI, the library's raw symbol table
+`nurl_sym_*`) were callable from safe code, so a made-up number was read
+or freed as a socket or a table, and the unikernel HAL's `mmio_*` / `virtio_*` / `virtq_*`
+helpers wrote to any physical address. They are `unsafe` only; a stdlib foreign
+function says so with `unsafe & …`. `SymTab` could be built around a
+made-up number or shared between threads: it is sealed, move-only and
+`% NotSync` now. The language server reaches its tables through two
+accessors instead of raw handles. h256: `file_from_raw` closed any string
+as a C stream and `file_raw` handed a `FILE*` out as text; both are raw,
+and `file_is_open` is the safe question.
+
+Packages, where `raw` was missing: gpukit's `gk_run` / `gk_run_dev` ran
+kernel source over device addresses given as integers and `gk_buf_wrap`
+took any integer as device memory, from safe code; they are `raw`, and
+`GkBuf`, gpukit's pool blocks and onnx's `RTensor` are `raw` structs.
+gpukit's operations check what their kernels index before they launch:
+sizes through overflow-checked products (a wrapped `m*k` passed for a
+buffer's length), views inside their buffer, `gk_matmul_f` / the
+elementwise and dot kernels against their Vecs' lengths, and the
+expression `gk_map_f` / `gkd_map` splice into kernel source limited to
+`x`, numbers and math functions (operators to `+ - * /`). lingbot-map's
+rope kernels range-check the positions they look tables up by. onnx's
+tensors carry the engine and run they came from: `rt_download` and
+`dtensor_from_output` read a tensor of an earlier run — whose device
+memory `rt_reset` had released — and now refuse it. Functions that launch
+kernels of their own (f5tts, grad, onnx, lingbot-map) are `unsafe` where
+they establish what the kernel needs, and f5tts's launchers over raw
+device addresses are `raw`.
+
+The `gpu` package (0.17.0) underneath them had the same gap, six ways:
+safe code built a `GpuBuffer` from any number (a literal or
+`gpu_buffer_view`), copied device-to-device from any address
+(`gpu_dtod`), made an owner that freed an address it never allocated,
+compiled and launched arbitrary kernel source, and indexed a `GpuHost`
+past its end with the unchecked `gpu_host_get_f32` / `…set…`. The handle
+structs are `raw`, those functions are `raw`, and the host accessors
+panic past the end; `packages/gpu/tests/holes_test.sh` holds all six.
+nurllama's and whisper's kernel launchers took device addresses as plain
+integers from safe code and are `raw` too. The safe way in is a view:
+`gpu_host_f32` lends a `GpuHost` as a bounds-checked `Slice f32` that
+lives no longer than it, and onnx's `rt_run_host` / `rt_run_two_host` /
+`rt_run_tokens_host` take `GpuHost` inputs they check against the shape.
+With them `objdet` (7 → 4), `yoloe` (34 → 24) and `yoloe-demo` (14 → 5)
+keep `unsafe` only for their FFI — bit-identical, and the mask and
+image-packing loops run 10–30% faster through windows than through the
+pointers. `template` (35 → 0) and `pki-server` (19 → 0) keep their state
+as a frozen `Arc` read with `arc_get` and, where it changes, a `Locked`
+snapshot or an `inout` local; `template`'s `tset_add` used to change a set
+in place while a render on another worker read it, and an `{% include %}`
+pointed the render at a source a concurrent add could free. `gRPC`
+(22 → 0), `http-client` (32 → 0) and `audio` (29 → 0) follow: an
+`HttpClient` is a `Locked` (requests on two threads changed its pool and
+cookie jar through `arc_ptr` at once), a `GrpcClient` an `Rc` the
+compiler keeps on one thread (its HTTP/2 transport is not synchronised),
+a gRPC server's call table and an origin pool are changed by checking a
+record out and back in, and a `VadStream` is a `Locked`. Three stdlib
+additions close the gaps they hit: `h2_stream_data_at` sends from an
+offset of a buffer (what a flush loop faked with a raw view of the
+unsent tail), `hp_stream_open_on_vec` takes the request body as a `Vec`,
+and `h3_client_ok` asks whether `h3_client_connect` connected at all
+(callers read the handle's raw control word). A `raw : S { … }` on the
+line after an import was taken for the import's alias (only `raw @` was
+excluded), and the struct then broke as a generic argument; a `raw`
+before `:` is the prefix too now. Storing an
+`f32` through a slice window ended the borrows of
+the other windows (its instances are named for LLVM's `float`, which the
+scalar rule did not list); it no longer does.
+
+`http` (30 → 0) and `image` (14 → 0) follow: an `HttpApp`'s setters
+check its state out of the `Rc`, the request dispatcher reads a frozen
+`Arc` of the router and the static root, and the HTTP/3 side of `listen`
+holds options instead of handles forged from zero; a JPEG decoder reads
+its input through a `Slice u` (0.3% fewer instructions, same output).
+`http3_creds_ok` asks whether `http3_creds_load` loaded anything. h257: a
+binding read out of a field takes the field's value over when the field
+is replaced (h196), and storing it back copied it as if it still
+borrowed — the value it owned was never dropped (`: ( Vec i ) c . s v
+= . s v ( vec_new ) ( work s c ) = . s v c`, the progressive JPEG scan
+loop). Such a store moves the binding when it owns the value and copies
+it only while it borrows. h259: a closure-valued `?` / `??` statement
+whose arm ended in an assignment (`= base ( wrap base )`) took the
+assigned closure for an owned temporary of the join and freed it when the
+statement ended, under the binding that held it (`http`'s TLS listener
+crashed at startup wrapping its handler for HTTP/3). A join nothing takes
+owns nothing now: an arm drops a temporary it made, an assigned closure
+stays its binding's, and a join whose value is taken gets an owned copy
+from every arm.
+
+`stdlib/std/mmap.nu` maps a file read-only (`file_map`, or a whole-file
+read where the platform does not map files; `mapped_of_bytes` wraps
+bytes already in memory) and lends it as a checked `Slice u`
+(`mapped_bytes`) the borrow checker holds to the `MappedFile`; the last
+copy unmaps it, and `mapped_ptr` is the `raw` address for a device
+upload. Every model loader wrote its own open / lseek / mmap / munmap
+and read through the pointer. `slice_u16_le` / `slice_u32_le` /
+`slice_u64_le` read a little-endian word at a byte offset of a view and
+`slice_put_u16_le` / `slice_put_u32_le` / `slice_put_u64_le` store one —
+one bounds check per word, the bytes fused into one unaligned access —
+and `slice_to_vec` copies a view into a Vec of its own (the borrow
+checker's messages already named it; it did not exist). `safetensor`
+(34 → 0) reads through them: its tensors are views of the mapping, a
+tensor table that lies panics rather than reading past it, and
+`st_dequant` is 6–24% faster than its pointer loops (F32 is one copy).
+
+h260: `zip_open` (stdlib/ext/zip.nu) was safe and the archive it returned
+kept a bare pointer into the caller's Vec, so the Vec could go first and
+every later read of the archive read freed memory. A `ZipArchive` now
+reads a `MappedFile` it owns or shares, through checked views:
+`zip_open` keeps a copy of the bytes, `zip_open_owned` takes them over,
+`zip_open_mapped` shares a mapping, and `zip_open_ptr` is gone (its one
+caller, torchpt, maps the file instead). `torchpt` (94 → 0) reads its
+checkpoint and its pickle that way. h261: a String / Vec / handle
+temporary handed to a call whose result is `!T E` with an enum error
+(`!ZipArchive ZipErr`) was never dropped — the result did not count as a
+value that cannot hold the argument, so the temporary waited for a
+consumer a binding never is.
+
+`gguf` (73 → 0) reads its file the same way. Its dequantiser takes each
+block as a window of the block's own size (`slice_window P * b 18 18`)
+and writes it through a window of the output, so every index inside is
+provably in range and the bounds checks leave the loop: 2–4× faster than
+the pointer loops it replaces, the same bytes out. For that, a view of
+plain numbers handed to a safe function (`( Slice u ) w` into a helper
+that stores an f32 through it) no longer ends the borrows of the other
+views of the same Vec — a Slice never moves its storage and a number
+owns nothing to drop; until now only a direct `slice_put` was known to
+be harmless. h262: a float passed where a parameter is a struct by value
+(`( first x )` with `f x` and a `( Slice u )` parameter) compiled to an
+ill-typed call that read the double as the slice; integers were already
+rejected (h188), floats are now too.
+
+`stdlib/std/par.nu`'s `par_map_index n nt f` runs `f k` for every index
+on up to `nt` threads and returns the results by index — each worker
+sends `(index, result)` back over a channel, so nothing is shared
+mutably. A batch of independent evaluations (an optimizer's gradient
+stencil, one model per series) was otherwise written by handing worker
+threads raw addresses of their result slots. `arima` (101 → 1, the GPU
+kernel launch) evaluates through it; its matrix rows are windows and its
+`a[i+1]` loops read windows that start at 1, so the bounds checks leave
+the loops: the same fits take 23% fewer instructions, bit-identical.
+An `ArimaModel` is a `Locked` handle — two threads stepping one model
+through its `Arc` raced.
+`map-anything` (42 → 1: the ONNX sky-mask hand-off) works on checked
+slices throughout, and uploads weights from a checked view of the mapping
+with gpukit's new `gk_dbuf_upload_bytes`; `gk_dbuf_upload_raw` is `raw`.
+`embed` (43 → 2: carving device memory and the batched upload) keeps its
+engine in a `Locked` beside its tokenizer, configuration and status, and
+its server queue is a `Channel`.
+`gpukit` (64 → 34) keeps a kit's state — kernel cache, profiler,
+device-memory pool — in a `Locked` beside its immutable device record:
+two threads using one kit raced on the cache and the pool through
+`arc_ptr`. `lingbot-map` (66 → 2, its RoPE launches) runs its host
+reference code over slices and its checkpoint through a checked byte
+view; its parsed options held views of strings the parser had freed.
+`lsmdb` (104 → 0) is a `Locked` store over values it owns (memtable,
+log) and table readers whose Bloom filters answer without a lock; it
+matches the previous release's speed. `locked_restore` and `rc_restore`
+no longer run the zero bytes `*_take` left through the value's drop glue
+(200 instructions a call on lsmdb's store), and `locked_restore` wakes
+nobody when nobody waits.
+`nurl-cov` (103 → 0) reads its coverage graphs through checked byte
+views into a plain value and freezes it in an `Arc` once solved; its
+per-line table is read in place, where the old accessors handed out a copy
+of a whole column per call. Output is byte-identical, llvm-cov differential
+and 201 corrupted graphs included. A call to an undefined generic inside
+another generic's body is now reported as such, at the call: it was typed
+`i64` and reported as a type mismatch against what it initialised
+(`rc.nu` called `mem_replace` without importing `stdlib/core/mem.nu`).
+`onnx` (76 → 2, the census's dummy device buffers) keeps its engine in a
+`Locked` and gives every tensor its own pooled device buffer: an aliasing
+Reshape holds a view of the block it aliases, a tensor outlives the run
+that made it, and a host-int operand fails its kernel where 0.11 launched
+on its `-1` sentinel address and crashed. Its run entry points take the
+input as a checked byte view; gpukit adds the matching
+`gk_dbuf_download_bytes` and a checked device copy, `gk_dbuf_copy`.
+Outputs are byte-identical and as fast. A struct passed where the
+parameter is a number is rejected (h269): the call was emitted with the
+struct's type, and the callee read its control block's address as the
+number — onnx's parse_dump checksummed a weight block's control block.
+A function handing back the payload of a `vec_get` on its parameter's
+field (`^ ?? ( vec_get . p items i ) { T x → x … }`) now lends that
+parameter (h270): its callers' binding of the result was not tied to the
+argument, so emptying the argument's Vec afterwards left the binding
+reading freed elements, where the same `vec_get` in the caller was
+rejected.
+So does a function returning another's lent result over its parameter
+(`^ ( g p )`) when `g` was compiled first (h271): only a `g` compiled
+after it passed its lend on. `onnx` read its ops' inputs through such
+an accessor and then grew the value map they live in; each op now gets
+its inputs as tensors of its own (a counted share of the device block),
+and `rt_output1` no longer hands back a view of the engine's map after
+the engine goes back into its `Locked`.
+`nurlbox` (90 → 8, the shell's fork/pipe/exec and `find -exec`/`xargs`/
+`env`) passes its shell state `inout` instead of reading it out of a raw
+global word. The standard library gains what it reached for raw
+pointers to do: `string_append` (a whole String, NULs included),
+`write_slice` (a byte view to stdout), `fs_link` (a hard link) and
+`proc_self_uid` / `_euid` / `_gid` / `_egid` / `_groups`, with Windows and
+unikernel fallbacks in the runtime.
+`grad` (146 → 6, the kernel launches and f32 device transfers) passes
+its tape, optimizer and device replay as plain values `inout`; backward
+takes a node's gradient out of the tape while it accumulates into its
+inputs' and puts it back. Gradients are bit-identical on every test;
+`nn`, `mlp` and `nurllama` follow. `swarm-mcp` (105 → 0) keeps the
+coordinator's registry in a `Locked` its tool handlers check out per
+call, and its node, retry plans, iterate runs, roster and parser are
+plain values. `process_run_strings` runs a command over an argv of
+Strings the caller owns (built in a loop, say), and
+`mcp_server_set_task_store` takes the store it keeps (`sink`; pass a
+share to go on using it) — borrowed, a hook capturing state that held the
+store's other share read as a cycle through the store.
+`f5tts` (108 → 6, its raw kernel launches) keeps its engine and vocoder
+in `Locked`s built whole, uploads weights from checked byte views, and
+serves through a Channel whose model thread owns the engine and the voice
+cache outright — a voice added or deleted over HTTP was dropped from that
+cache on the HTTP thread while the model thread could be reading it.
+`nurllama` (68 → 8) keeps its engine and its finetune state in `Locked`s
+— two requests evaluating one model raced on its KV cache — and samples
+from a row of logits read in one take.
+`whisper` (57 → 16, the raw device work) keeps its engine in a `Locked`
+beside its dimensions and its server state in Locked globals set at
+start; its ggml loader reads the mapping through checked slices. It now
+checks every tensor's size against the config at load: a checkpoint
+whose FFN was not 4·d_model was read past the end of its buffers.
+`tokenizer` (1 → 0) owns its map keys; its pre-tokenizers now classify
+characters by Unicode category, as HF's regexes do — every non-ASCII byte
+counted as a letter, and `(§`, `½` or a no-break space split unlike the
+model's own tokenizer. `yoloe` has 13 left (19), each an ioctl, an mmap'd
+camera buffer or an Xlib call.
+`agora` (36 → 0), `mermaid-server` (3 → 0) and `tensor` (6 → 0) keep
+their program-wide state in Locked globals set at start instead of raw
+globals behind `mem_addr`. `benchmark` (11 → 0) reads its CSV keys from checked cell views and sorts
+them with `sort_by`, which beats the pointer quicksort it carried by a
+quarter (58 ms a pass against 78).
+
+Packages: `oauth`, `iforest`, `vindex`, `data`, `cli`, `psql`, `redis`,
+`zst`, `video`, `ply`, `swarm` and `mlp` have no `unsafe` function left
+(`video` / `ply` / `swarm` keep their state in a `Locked` or a frozen
+`Arc`; `zst`'s inspector read past a truncated file and reads zeros now), and 13 functions elsewhere were marked
+`unsafe` with nothing raw in them; about a hundred more raw `vec_data`
+loops are slices. `oauth`'s provider and policy were shared between a
+server's workers through an `Arc` changed in place — a data race; they
+are a `Locked` now, with the key set and the policy read as `Arc`
+snapshots, so verification still runs in parallel.
+
+Four holes found while taking `unsafe` out of the packages are closed
+(h245–h248): a view of an `Rc`'s value outlived an `rc_set` made through
+another handle on the same value — a clone, a field or an aliased
+parameter — and `vec_put_back` wrote an element back into a slot it was
+not read from. `vec_put_back` is now `unsafe` only, as `mem_put_back` is
+(docs/MEMORY.md §6.2). `slice_at` / `slice_put` (stdlib/core/slice.nu)
+are the bounds-checked indexing a kernel over several `Vec`s wants: a
+loop that writes one Vec while reading others through slices runs as
+fast as the raw-pointer loop (0.30 s against 0.31 s on a 4000-element
+`c[k] = a[k] + 2 b[k]`, where `vec_at` / `vec_put` take 1.3 s), so the
+packages' raw `vec_data` loops become safe ones.
+
 Every hole the 0.72.0 release review left open in the memory guarantee is
 closed: the 34 probes of `tools/fuzz/holes/open/` (now h145–h178) and sixteen
 more found on the way (h179–h194) are rejected or run clean under
@@ -97,6 +407,72 @@ generic that copies its `T` cannot be instantiated with one (h235)
 (*Fixed*, *Changed*).
 
 ### Added
+
+- **Closures with `inout` parameters** (spec §7.2). A closure type may
+  write `( @ R inout T )` and a closure literal `\ inout T x → R { … }`:
+  the closure takes the caller's mutable binding by address, as an
+  `inout` function parameter does, and changes it in place. The borrow
+  checker holds it to the same rules: the argument must be a mutable
+  binding, and every view into it ends at the call (a closure value
+  carries no summary). It also rejects handing a closure `inout` a
+  binding the closure captures, and passing a binding `inout` beside a
+  closure argument that captures it. New in stdlib/std/thread.nu:
+  `locked_update` and `locked_apply` run a closure on a `Locked` value
+  where it lives, instead of `locked_take` moving it out and
+  `locked_restore` moving it back. nwasm 3.0.0 uses them to run its
+  instance under a lock without `unsafe`.
+
+- **`float_round_even`** (stdlib/std/float.nu): round to the nearest
+  integer, ties to even (IEEE roundTiesToEven, wasm's `f*.nearest`), where
+  `float_round` takes ties away from zero. A package that needed it
+  declared libm `rint` itself, a foreign call that only `unsafe` code may
+  make.
+
+- **`vec_update` / `vec_apply`** (stdlib/core/vec.nu, spec §7.2). Run
+  a closure on one element of a Vec in place: a record that owns buffers
+  is neither copied nor moved. `vec_apply` hands back the closure's
+  result, or a fallback when the index is out of range. The Vec is passed
+  `inout`, so a closure that could reach it (capturing it, or the record
+  it is a field of) is rejected: nothing grows or shrinks the Vec under
+  the element. The capture check now also covers a field passed `inout`
+  (`. c fds` beside a closure capturing `c`) and closures written inline
+  at the call, which it missed before. nwasm 3.1.0 keeps its WASI
+  descriptor table with them, without `unsafe`.
+
+- **Process control without pointers** (stdlib/std/process.nu).
+  `process_run_inherit` runs an argv as a child sharing this process's
+  stdio and returns its exit status. `posix_execvp` replaces the process
+  image from a `( Vec String )`. `posix_wait_exit` waits and decodes the
+  status, `posix_pipe` returns the descriptor pair as a `PosixPipe`, and
+  `posix_read_append` reads into a Vec. Code that drove fork/exec by hand
+  had to build argv arrays, status words and pipe buffers through raw
+  pointers; nurlbox's shell, `env`, `find -exec` and `xargs` need no
+  `unsafe` now.
+
+- **Globals set at start** (spec §3.4, docs/MEMORY.md Module globals,
+  grammar `start_init`). `: ( Locked T ) g ( make )` runs `make`, a
+  function of no arguments, once before `main`; nothing writes `g` after,
+  and its type must synchronise itself (`Locked`, `Arc`, `Channel`,
+  `Mutex`, `Cond`, `Semaphore`), so safe code reads it from any thread —
+  program-wide state no longer needs an `unsafe` accessor over a raw
+  global and a hand-held mutex. A `( Vec T )` set at start is rejected
+  (h263: two threads pushing through it raced).
+
+- **`locked_zero`, `fd_write_all`, `file_map_stream`, `file_none`.** `locked_zero [T]`
+  is a `Locked` over the all-zero `T`, under the `arc_zero` rule (outside
+  `unsafe` only for a `T` a zero is a value of): a large record built
+  field by field under `locked_take`. `fd_write_all fd v` writes a whole
+  `Vec u` to a file descriptor, continuing short writes. `file_map_stream`
+  maps a file for one sequential read (`MAP_POPULATE`, `MADV_SEQUENTIAL`).
+  `file_none` is the null `File`, a placeholder for one opened later
+  (programs forged it from a null pointer).
+
+- **`map_get_with` and stdlib/std/unicat.nu.** A `HashMap` that owns its
+  `String` keys is looked up by a borrowed `s` with nothing allocated
+  (`map_get_with [K V Q]`: the query's own hash and a key-to-query
+  equality). `uc_is_letter` / `uc_is_number` / `uc_is_space` answer
+  `\p{L}`, `\p{N}` and `\s` from Unicode range tables
+  (tools/gen_unicat.py), built once at start.
 
 - **`Locked [T]`: shared state threads change** (stdlib/std/thread.nu).
   A shared handle over a mutex and the value, reached only through
@@ -326,6 +702,81 @@ generic that copies its `T` cannot be instantiated with one (h235)
   `$NURL_STDLIB/stdlib`, each recognised by its `core/vec.nu`; h178).
 
 ### Fixed
+
+- **A `??` whose arms each hand over a value of their own no longer
+  borrows what it matched on.** `: ( Vec u ) h ?? ( vec_get [Fd] fds 0 )
+  { T d → ( vec_clone [u] . d host ) F → ( vec_new [u] ) }` was taken
+  for a borrow of `fds`, and changing `fds` afterwards was rejected. The
+  scrutinee's lend went to the binding wholesale. Now the binding's
+  source expression decides, arm by arm, and a payload view (`T d →
+  ( slice_from_vec [u] . d host )`) still borrows
+  (bck_join_owned_arms, should_fail_join_payload_view).
+
+- **A view stored into an `inout` argument makes that argument hold it.**
+  `@ add inout H h ( Slice f ) s → v { ( vec_push [( Slice f )] . h fs s ) }`
+  called as `( add h ( slice_from_vec [f] v ) )` left `h` free of `v`:
+  clearing `v` and then reading `h`'s slices compiled, and read freed
+  memory. The same `vec_push` straight into `. h fs` was caught. An
+  `inout` argument is passed by address, so it was classed as a view
+  rather than as the owner a keeping callee stores into. It is classed
+  now as the value it names (`h`, or `w` for `. w h`), so the caller's
+  value depends on what the stored view points into — wherever the inout
+  owner sits among the arguments (`( add_last ( slice_from_vec [f] v ) h )`
+  too: a keeping callee stored only into its first argument before). The same class
+  feeds the argument-alias check: a call handing `p` inout together with
+  a view into `p` (`( f p ( string_data . p uri ) )`) is now refused, as
+  it already was for a by-value owner. Two package call sites did this
+  (oauth, torchpt) and are fixed (inout_stores_view,
+  should_fail_inout_stores_view, should_fail_inout_field_stores_view,
+  should_fail_inout_later_stores_view).
+
+- **A pointer is not passed where a struct is, nor a struct where a
+  pointer is** (h268). A `*f` handed to a `( Slice f )` parameter — or,
+  in safe code, an `s` string to a `( Slice u )` one — compiled to an
+  ill-typed call: the callee read the address as the slice's data and
+  whatever followed in the registers as its length. Every other pairing
+  was checked (a `*T` for its own `T`, a String for an `s`, two named
+  types); this one was not. anomaly's `imp_span_of_text` passed its text
+  where its digit helpers take a byte view, and indexed past a short
+  string; nurllama widened a Gemma checkpoint's norm weights through
+  safetensor's `_st_u32` with the buffer's raw address where it takes a
+  view.
+
+- **An `unsafe` function nothing calls no longer marks the next foreign
+  function raw.** The flag behind `unsafe & …` was cleared only when a
+  function was compiled, and lazy compilation skips an unreached one, so
+  its prefix leaked onto the next foreign declaration: a program that
+  called stdlib's `unlink` and not the `unsafe @ __fd_write_all` before
+  it was told `unlink` takes a runtime handle (ply's viewer).
+
+- **An option taken out of a `Locked` leaves its slot empty** (h267).
+  `mem_take` read where the value came from as `<addr> <type> <depth>`
+  split on spaces, and an option's or a result's type (`{ i1, %K }`) has
+  spaces of its own, so `locked_take [?K]` left its copy in the slot and
+  `locked_restore`, which drops what the slot holds, dropped the value it
+  was handed back — the next take read freed memory (whisper's server:
+  the tokenizer, on the second request).
+
+- **A field that owns something, read out of a call's result, takes the
+  rest of that result with it** (h266). `^ . ( mk ) backend`, `: String
+  b . ( mk ) backend`, `( len . ( mk ) name )` and `@ W { . ( mk ) device
+  }` left the temporary's other fields undropped, and the read itself was
+  taken for a view, so nothing dropped it either (embed's health report
+  leaked through `^ . ( locked_get … ) backend`). The rest — the value
+  with that field emptied — is dropped where it is read, and the field is
+  its reader's exactly when the call handed its result over (a lent one,
+  `. ( arc_get a ) file`, stays a view).
+
+- **A struct that cannot be copied moves out of a struct literal's
+  source, and drops when handed to a call as a temporary** (h264, h265).
+  A struct holding a library handle's option (`St { String path
+  ?Database db }`) taken into a returned literal (`^ @ Who { 0 . w st rs
+  }`) was neither zeroed in `w` nor copied — freed with `w` while the
+  result held it (agora's `GET /m/me`: heap-use-after-free). Handed to a
+  call that returns another such struct (`( conn ( mk ) )`), the
+  temporary was never dropped (agora leaked a path per REST call). It
+  moves whole now, and the callee's summary decides the temporary's drop
+  as for a String or a Vec.
 
 - **A binding of a nested lending call borrows what the inner call lends**
   (h214). `: e ( vec_at ( vec_at top 0 ) 0 )`, `( vec_get ( vec_at top 0
@@ -840,6 +1291,13 @@ generic that copies its `T` cannot be instantiated with one (h235)
     helper, `mem_arg_consumption`). Probe h142.
 
 ### Performance
+
+- **`bytes_push_u32_le/_be` and `bytes_push_u64_le/_be` write the word
+  with one capacity check and one length bump** (`vec_push_word_u8`,
+  new in stdlib/core/vec.nu) instead of four or eight `vec_push` calls,
+  whose inlining into the serializer came and went with the optimizer's
+  module split. anomaly's dynamic suite, which writes its forest blobs
+  through them, retires 6 % fewer instructions.
 
 - **The compiler hoists IR type definitions without a two-byte search
   of the whole module.** `__types_first` looked for `\n%` with `memmem`

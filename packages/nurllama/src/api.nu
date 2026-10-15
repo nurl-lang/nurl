@@ -41,12 +41,15 @@ $ `src/config.nu`
 $ `src/history.nu`
 $ `src/webui.nu`
 $ `stdlib/ext/uuid.nu`
+$ `stdlib/std/thread.nu`
 
 // The resident model + the store root, reachable from the handlers. A
 // mutable `s` global owns the string it is given (docs/MEMORY.md §1): an
 // assignment releases the one it replaces, and the last is released when
 // the program ends — so each setter is the assignment of an owned copy.
-: ~ ? Llm g_api_llm 0  // the resident model (F = none)
+@ __api_llm_blank → ( Locked ? Llm ) { ^ ( locked_new [? Llm] @ ?Llm { F } ) }
+
+: ( Locked ? Llm ) g_api_llm ( __api_llm_blank )  // the resident model (F = none)
 : ~ i g_api_style 0
 : ~ s g_api_name ``
 : ~ s g_api_root ``
@@ -69,8 +72,8 @@ $ `stdlib/ext/uuid.nu`
 
 @ api_set_root String root → v { = g_api_root ( nurl_str_cat ( string_data root ) `` ) }
 
-unsafe @ __api_unload → v {
-    = g_api_llm @ ?Llm { F }
+@ __api_unload → v {
+    ( locked_set [? Llm] g_api_llm @ ?Llm { F } )
     = g_api_name ( nurl_str_cat `` `` )
 }
 
@@ -84,16 +87,27 @@ unsafe @ __api_unload → v {
 
 // One more owner of the resident model (a handler runs after __api_ensure
 // loaded it).
-unsafe @ __api_llm → Llm {
-    ?? g_api_llm {
-        T m → { ^ ( Llm_share m ) }
+@ __api_llm → Llm {
+    : ?Llm cur ( locked_take [? Llm] g_api_llm )
+    : ~ ? Llm out @ ?Llm { F }
+    ?? cur { T m → { = out @ ?Llm { T ( Llm_share m ) } } F → {} }
+    ( locked_restore [? Llm] g_api_llm cur )
+    ?? out {
+        T m → { ^ m }
         F → { ( nurl_panic `nurllama: no model is resident` ) }
     }
 }
 
+@ __api_resident → b {
+    : ?Llm cur ( locked_take [? Llm] g_api_llm )
+    : b r ( opt_is_some [Llm] cur )
+    ( locked_restore [? Llm] g_api_llm cur )
+    ^ r
+}
+
 // Load `name` unless it is already resident. Empty error = success.
-unsafe @ __api_ensure s name → String {
-    ? & ( opt_is_some [Llm] g_api_llm ) != 0 ( nurl_str_eq g_api_name name ) { ^ ( string_new ) } {}
+@ __api_ensure s name → String {
+    ? & ( __api_resident ) != 0 ( nurl_str_eq g_api_name name ) { ^ ( string_new ) } {}
     ( __api_unload )
     : String rootS ( string_from g_api_root )
     : ?String rp ( nl_resolve rootS name )
@@ -112,7 +126,7 @@ unsafe @ __api_ensure s name → String {
             ( llm_open ( string_data path ) 0 )
             ?? lr {
                 T m → {
-                    = g_api_llm @ ?Llm { T ( Llm_share m ) }
+                    ( locked_set [? Llm] g_api_llm @ ?Llm { T ( Llm_share m ) } )
                     = g_api_style style
                     ( __api_set_name name )
                     ^ ( string_new )
@@ -260,7 +274,7 @@ unsafe @ __api_ensure s name → String {
 //
 // Streams NDJSON frames as tokens decode (stream=true), or accumulates
 // and answers with a single object (stream=false).
-unsafe @ __api_generate TcpConn c s model String prompt s field b stream
+@ __api_generate TcpConn c s model String prompt s field b stream
 i npredict f temp i topk f topp i seed → b {
     : Llm m ( __api_llm )
     : Tok t ( Tok_share ( llm_tok m ) )
@@ -586,7 +600,7 @@ i npredict f temp i topk f topp i seed → b {
 // Ensure the configured model is loaded, render the message history
 // through its chat template, and return the assistant's reply — or
 // the reason it cannot (no model configured / the load failed).
-unsafe @ __web_reply Json history s new_content → !String String {
+@ __web_reply Json history s new_content → !String String {
     ? == 0 ( nurl_str_len g_api_model ) {
         ^ @ !String String { F ( string_from `no model is configured — restart the server with a model: nurllama serve MODEL (or run the setup wizard: nurllama start)` ) }
     } {}

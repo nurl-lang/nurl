@@ -195,6 +195,29 @@ $ `stdlib/core/box.nu`
     }
 }
 
+// __map_probe_with: __map_probe_for for a query `q` of another type than
+// the keys — found, or -1 (never an insert slot: map_get_with only reads).
+@ __map_probe_with [K V Q] * MapCtl c Q q i h ( @ b K Q ) eq_kq → i {
+    : i cap . c cap
+    : i mask - cap 1
+    : i start & h mask
+    : i frag ( __map_frag h )
+    : *K keys # *K ( raw_block_ptr . c keys )
+    : *u states # *u ( raw_block_ptr . c states )
+    : ~ i probe 0
+    ~ < probe cap {
+        : i idx & + start probe mask
+        : i st # i . states idx
+        ? == st 0 { ^ -1 } {}
+        ? == st frag {
+            : K k . keys idx
+            ? ( eq_kq k q ) { ^ idx } {}
+        } {}
+        = probe + probe 1
+    }
+    ^ -1
+}
+
 // __map_grow: rehash into a buffer with `target_cap` (rounded up to a
 // power of two ≥ 8 ≥ target). Tombstones are dropped during rehash. The
 // entries move bitwise into the new buffers; the old ones are released
@@ -275,6 +298,21 @@ $ `stdlib/core/box.nu`
     ? < slot 0
     { ^ @ ?V { F # V 0 } }
     {}
+    : *V vals # *V ( raw_block_ptr . c vals )
+    ^ @ ?V { T . vals slot }
+}
+
+// A lookup by a query of another type: `hash_q` hashes `q` as the key it
+// stands for hashes, and `eq_kq` says whether a stored key is it — a map
+// that owns its String keys, found by a borrowed `s` with nothing
+// allocated:
+//   ( map_get_with [String i s] m `the` \ s x → i { ^ ( hash_string x ) }
+//     \ String k s x → b { ^ ( eq_string ( string_data k ) x ) } )
+@ map_get_with [K V Q] ( HashMap K V ) m Q q ( @ i Q ) hash_q ( @ b K Q ) eq_kq → ?V {
+    : *MapCtl c ( box_ptr [MapCtl] . m ctl )
+    ? == . c cap 0 { ^ @ ?V { F # V 0 } } {}
+    : i slot ( __map_probe_with [K V Q] c q ( hash_q q ) eq_kq )
+    ? < slot 0 { ^ @ ?V { F # V 0 } } {}
     : *V vals # *V ( raw_block_ptr . c vals )
     ^ @ ?V { T . vals slot }
 }

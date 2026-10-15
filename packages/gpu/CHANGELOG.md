@@ -1,5 +1,70 @@
 # Changelog
 
+## [0.17.4] — 2026-10-15
+
+- CPU backend: a kernel is inlined into its launch loop (`__global__` is `always_inline inline` on the host).
+  - The loop reads the arguments out of the parameter block once, not once per element.
+  - It sets the block and grid coordinates that do not change once per host thread.
+  - It walks (block, thread) as a collapsed loop instead of dividing per element.
+
+  The kernel then reads the coordinates the loop just stored from registers, not thread-local storage, and the compiler vectorises what it can. Per-element arithmetic is unchanged, so results are bit-identical: gpukit's suite against numpy, anomaly's and arima's bit-identity gates, grad's parity tests and onnx's static backend all pass. A 4M-element f64 multiply runs 5× faster (1.45 s → 0.27 s for 50 calls), and 200 000 launches over 256 floats take 1.33 s instead of 1.55 s.
+
+## [0.17.3] — 2026-10-15
+
+- `__gpu_host_cell`, the bounds check every host-buffer cell access makes, is a plain function: it reads only the buffer's size and never needed `unsafe`. Found by stripping each remaining `unsafe` in gpu, gpukit and nwasm in turn and checking that the compiler still demands it. This was the only one it did not.
+
+## [0.17.2] — 2026-10-15
+
+- `gpu_buffer_sub b off bytes`: a bounds-checked sub-view of a buffer that shares its owner, so it stays valid however long it lives. `gpu_buffer_none` returns an empty buffer.
+- `gpu_upload_views dsts srcs`: the batched upload (pinned staging, copy threads) from checked `Slice` views, each exactly its buffer's size. Safe, where `gpu_upload_batch` takes raw addresses.
+
+## [0.17.1] — 2026-10-15
+
+- The pinned staging pair is guarded by a lock. Staged uploads (`gpu_upload` of 64 MB and up, `gpu_upload_batch`) and `gpu_staging_free` take turns. Before, two threads uploading at once could fill the same staging buffer, and a free could land under a copy in flight. `gpu_staging_free` is therefore no longer `raw`: safe code may call it.
+- `gpu_upload_bytes dst (Slice u)`: upload from a checked view of host bytes (a tensor in a mapped file). A view shorter than the buffer is refused.
+
+## [0.17.0] — 2026-10-14
+
+Requires NURL 0.73.0 (grammar v2.9 `raw`, `slice_window`).
+
+### Fixed
+
+- Safe code could reach memory it did not own through the package, six
+  ways (each is now a probe in `tests/holes/`, run by
+  `tests/holes_test.sh`): build a `GpuBuffer` from any number with a
+  literal or `gpu_buffer_view`; copy device-to-device from any address
+  (`gpu_dtod`); make an owner that frees an address it never allocated
+  (`__gpu_res`); compile and launch arbitrary kernel source; and index a
+  `GpuHost` past its end with `gpu_host_get_f32` / `gpu_host_set_f32` /
+  `…_i32`, which were unchecked.
+
+### Changed
+
+- The handle structs (`Gpu`, `GpuKernel`, `GpuBuffer`, `GpuTimer`,
+  `GpuGraph`, `GpuCopy` and the owner records behind them) are `raw`:
+  only the package's own vouched code builds one.
+- `raw` (the caller vouches, §3.3e): `gpu_compile`, `gpu_launch`,
+  `gpu_buffer_view`, `gpu_dtod`, `gpu_upload_batch`, `gpu_staging_free`
+  (it frees the pinned pair an upload on another thread may be using),
+  `gpu_host_ptr`.
+- `gpu_host_get_f32` / `gpu_host_set_f32` / `…_i32` panic on an index
+  past the buffer, like `vec_at`. `gpu_host_alloc` zero-fills, so a read
+  before the first write sees 0, never what the allocator last held; a
+  negative size is an empty buffer, as it is for `gpu_alloc`.
+
+### Added
+
+- `gpu_host_f32` / `gpu_host_u8`: the buffer as a bounds-checked
+  `Slice f32` / `Slice u` that lives no longer than the `GpuHost` (the
+  borrow checker holds it). A loop over a window of it keeps its checks
+  out of the loop and vectorises — the safe path is as fast as the
+  pointer one or faster.
+- `gpu_host_of_vec`: adopt a byte `Vec` as a host buffer, no copy.
+- `gpu_upload_host` / `gpu_download_host`, `gpu_upload_vec` /
+  `gpu_download_vec`: whole-buffer copies that refuse (-1) a host side of
+  the wrong size or a failed allocation instead of reading or writing
+  past it.
+
 ## [0.16.0] — 2026-10-12
 
 Requires NURL 0.73.0, in which a field written through a raw pointer

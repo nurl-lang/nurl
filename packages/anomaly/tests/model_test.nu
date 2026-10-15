@@ -2,6 +2,7 @@
 // conventions, contamination pinning, batch report parity, determinism.
 
 $ `stdlib/core/io.nu`
+$ `stdlib/core/slice.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/float.nu`
@@ -95,7 +96,7 @@ $ `src/score.nu`
 
 // ── Determinism: fixed seed ⇒ identical scores ────────────────────────
 
-unsafe @ test_determinism → v {
+@ test_determinism → v {
     : ( Vec f ) data ( make_data )
     : VerCfg cfg1 ( test_cfg -1.0 0.1 )
     : VerCfg cfg2 ( test_cfg -1.0 0.1 )
@@ -104,11 +105,11 @@ unsafe @ test_determinism → v {
     : ~ b same T
     : i n ( vec_len [f] . r1 scores )
     ? == n ( vec_len [f] . r2 scores ) {} { = same F }
-    : *f a ( vec_data [f] . r1 scores )
-    : *f b2 ( vec_data [f] . r2 scores )
+    : ( Slice f ) a ( slice_from_vec [f] . r1 scores )
+    : ( Slice f ) b2 ( slice_from_vec [f] . r2 scores )
     : ~ i k 0
     ~ < k n {
-        ? == . a k . b2 k {} { = same F }
+        ? == ( slice_at [f] a k ) ( slice_at [f] b2 k ) {} { = same F }
         = k + k 1
     }
     ( check same `determinism: two trainings give byte-identical scores` )

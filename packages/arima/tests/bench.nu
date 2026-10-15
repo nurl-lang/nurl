@@ -7,21 +7,19 @@ $ `stdlib/std/time.nu`
 $ `stdlib/ext/json.nu`
 $ `src/arima.nu`
 
-unsafe @ gauss * i seed → f {
-    = . seed 0 % + * . seed 0 1103515245 12345 2147483648
-    : f u / + # f . seed 0 1.0 2147483649.0
-    = . seed 0 % + * . seed 0 1103515245 12345 2147483648
-    : f u2 / # f . seed 0 2147483648.0
+@ gauss inout i seed → f {
+    = seed % + * seed 1103515245 12345 2147483648
+    : f u / + # f seed 1.0 2147483649.0
+    = seed % + * seed 1103515245 12345 2147483648
+    : f u2 / # f seed 2147483648.0
     ^ * ( float_sqrt * -2.0 ( float_log u ) ) ( float_cos * 6.283185307179586 u2 )
 }
 
 // SARMA(1,0,1)(1,0,1)_s by simulation from the expanded polynomials.
-unsafe @ sim i n i s f phi f th f sphi f sth i seed0 → ( Vec f ) {
+@ sim i n i s f phi f th f sphi f sth i seed0 → ( Vec f ) {
     : ( Vec f ) y ( vec_zeroed [f] n )
     : ( Vec f ) e ( vec_zeroed [f] n )
-    : ( Vec i ) seedv ( vec_zeroed [i] 1 )
-    ( vec_set [i] seedv 0 seed0 )
-    : *i seed ( vec_data [i] seedv )
+    : ~ i seed seed0
     : ~ i t 0
     ~ < t n {
         : f et ( gauss seed )

@@ -70,13 +70,13 @@ $ `src/imptime.nu`
 // ── Tags by local name ────────────────────────────────────────────────
 
 // Does this element's tag, prefix stripped, equal `want`?
-unsafe @ __wfs_tag_is Xml x s want → b {
+@ __wfs_tag_is Xml x s want → b {
     ? != . x kind 1 { ^ F } {}
     : s raw ( string_data . x tag )
     : i c ( nurl_str_find raw `:` )
     ? >= c 0 {
-        : s local # s + # i raw + c 1
-        ^ == ( nurl_str_eq local want ) 1
+        : String local ( string_substr . x tag + c 1 - ( string_len . x tag ) + c 1 )
+        ^ == ( nurl_str_eq ( string_data local ) want ) 1
     } {}
     ^ == ( nurl_str_eq raw want ) 1
 }
@@ -624,10 +624,10 @@ unsafe @ __wfs_tag_is Xml x s want → b {
 }
 
 // Local name of an element, owned.
-unsafe @ __wfs_local_name Xml x → String {
+@ __wfs_local_name Xml x → String {
     : s raw ( string_data . x tag )
     : i c ( nurl_str_find raw `:` )
-    ? >= c 0 { ^ ( string_from # s + # i raw + c 1 ) } {}
+    ? >= c 0 { ^ ( string_substr . x tag + c 1 - ( string_len . x tag ) + c 1 ) } {}
     ^ ( string_from raw )
 }
 

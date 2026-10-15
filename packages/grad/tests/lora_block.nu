@@ -182,7 +182,7 @@ $ `deps/tensor/src/tensor.nu`
 
 // ── tape builders ─────────────────────────────────────────────────────
 
-@ tconst GTape tp ( Vec f ) v i r i c → GVar {
+@ tconst inout GTape tp ( Vec f ) v i r i c → GVar {
     : ( Vec i ) s ( vec_new [i] )
     ? > r 0 { ( vec_push [i] s r ) } {}
     ( vec_push [i] s c )
@@ -192,7 +192,7 @@ $ `deps/tensor/src/tensor.nu`
 }
 
 // slice a [la, c] range out of the la/lb pools as a const/param tensor
-@ tsub GTape tp ( Vec f ) pool i off i r i c b param → GVar {
+@ tsub inout GTape tp ( Vec f ) pool i off i r i c b param → GVar {
     : ( Vec f ) v ( vec_with_cap [f] * r c )
     : ~ i k 0
     ~ < k * r c { ( vec_push [f] v ( _tf pool + off k ) ) = k + k 1 }
@@ -204,7 +204,7 @@ $ `deps/tensor/src/tensor.nu`
 }
 
 // ones column [n,1] for row reductions
-@ tones GTape tp i n → GVar {
+@ tones inout GTape tp i n → GVar {
     : ( Vec f ) v ( vec_with_cap [f] n )
     : ~ i k 0
     ~ < k n { ( vec_push [f] v 1.0 ) = k + k 1 }
@@ -213,7 +213,7 @@ $ `deps/tensor/src/tensor.nu`
 }
 
 // rmsnorm: x ⊙ rsqrt(mean(x²)+eps) ⊙ w   (row mean via ones-matmul)
-@ g_rmsnorm GTape tp GVar x GVar w GVar ones i h → GVar {
+@ g_rmsnorm inout GTape tp GVar x GVar w GVar ones i h → GVar {
     : GVar x2 ( g_mul tp x x )
     : GVar m ( g_muls tp ( g_matmul tp x2 ones ) / 1.0 # f h )  // [T,1]
     : GVar d ( g_sqrt tp ( g_adds tp m 0.000001 ) )
@@ -221,14 +221,14 @@ $ `deps/tensor/src/tensor.nu`
 }
 
 // LoRA linear: x·W0 (+bias) + (α/r)·(x·A)·B
-@ g_lora_lin GTape tp GVar x GVar w0 GVar a GVar b2 → GVar {
+@ g_lora_lin inout GTape tp GVar x GVar w0 GVar a GVar b2 → GVar {
     : GVar base ( g_matmul tp x w0 )
     : GVar delta ( g_muls tp ( g_matmul tp ( g_matmul tp x a ) b2 ) / ( cSCALE ) # f ( cR ) )
     ^ ( g_add tp base delta )
 }
 
 // NEOX rope over one [T, HD] head: halves rotate with position tables
-@ g_rope GTape tp GVar h GVar cosc GVar sinc → GVar {
+@ g_rope inout GTape tp GVar h GVar cosc GVar sinc → GVar {
     : i NT ( cT )
     : i HALF / ( cHD ) 2
     : ( Vec i ) st1 ( vec_new [i] )
@@ -247,7 +247,7 @@ $ `deps/tensor/src/tensor.nu`
 }
 
 // head slice [T, off:off+HD] of a [T, n*HD] projection
-@ g_head GTape tp GVar q i off → GVar {
+@ g_head inout GTape tp GVar q i off → GVar {
     : ( Vec i ) st ( vec_new [i] )
     ( vec_push [i] st 0 ) ( vec_push [i] st off )
     : ( Vec i ) sp ( vec_new [i] )
@@ -259,7 +259,7 @@ $ `deps/tensor/src/tensor.nu`
 // Build the whole block on `tp`. Params (in registration order): the 14
 // adapter tensors A0 B0 A1 B1 … (q k v o gate up down). Everything else is
 // const. Writes the param GVars into `pav`/`pbv` (7 each) when non-0.
-unsafe @ build_block GTape tp Blk bl * u pav * u pbv → GVar {
+unsafe @ build_block inout GTape tp Blk bl * u pav * u pbv → GVar {
     : i HT ( cT )
     : i H ( cH )
     : i QD * ( cNH ) ( cHD )

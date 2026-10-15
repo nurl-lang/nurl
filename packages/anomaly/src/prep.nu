@@ -70,7 +70,7 @@ $ `stdlib/core/slice.nu`
 // column i (empty unless categorical). `feats` is the authoritative feature
 // order once non-empty (snapshotted at each train by meta_refresh_feats);
 // until then the model is "unfrozen" and the order is derived on demand.
-: MetaImpl {
+: Meta {
     String name
     String created
     String alias  // human-readable nickname; empty = go by `name`
@@ -99,16 +99,6 @@ $ `stdlib/core/slice.nu`
     ( Vec f ) absurd_n  // readings left out of the last fit per feature (see anomaly_mask_absurd)
     ( Vec VerCfg ) versions
 }
-
-// A Meta is a handle on its state in an Arc (stdlib/std/arc.nu):
-// every copy is the same state, and the last owner releases it.
-: Meta { ( Arc MetaImpl ) a }
-
-@ Meta_share Meta h → Meta { ^ @ Meta { ( arc_clone [MetaImpl] . h a ) } }
-
-@ Meta_drop sink Meta h → v {}
-
-unsafe @ _Meta_ptr Meta h → *MetaImpl { ^ ( arc_ptr [MetaImpl] . h a ) }
 
 // ── Calendar features ─────────────────────────────────────────────────
 //
@@ -311,8 +301,7 @@ unsafe @ _Meta_ptr Meta h → *MetaImpl { ^ ( arc_ptr [MetaImpl] . h a ) }
 
 // An owned copy of a model's version configuration — what a fork takes
 // from its source.
-unsafe @ meta_clone_versions Meta m__h → ( Vec VerCfg ) {
-    : *MetaImpl m ( _Meta_ptr m__h )
+@ meta_clone_versions Meta m → ( Vec VerCfg ) {
     : i nv ( vec_len [VerCfg] . m versions )
     : ( Vec VerCfg ) out ( vec_with_cap [VerCfg] nv )
     : ~ i k 0
@@ -346,40 +335,15 @@ unsafe @ meta_clone_versions Meta m__h → ( Vec VerCfg ) {
 
 // ── Meta lifecycle ────────────────────────────────────────────────────
 
-unsafe @ meta_new s name s created → Meta {
-    : ~ MetaImpl m @ MetaImpl {}
-    = . m name ( string_from name )
-    = . m created ( string_from created )
-    = . m alias ( string_new )
-    = . m cols ( vec_new [String] )
-    = . m kinds ( vec_new [i] )
-    = . m cats ( vec_new [( Vec String )] )
-    = . m feats ( vec_new [String] )
-    = . m sc_mean ( vec_new [f] )
-    = . m sc_std ( vec_new [f] )
-    = . m absurd_n ( vec_new [f] )
-    = . m sched_below ANOM_SCHED_BELOW
-    = . m sched_at_max ANOM_SCHED_AT_MAX
-    = . m sched_ae F
-    = . m count_clock F
-    = . m n_seen 0
-    = . m n_stored 0
-    = . m last_trained 0
-    = . m trained_time 0
-    = . m tuned_at 0
-    = . m max_points ANOM_MAX_POINTS
-    = . m score_epoch 1
-    = . m votes ANOM_VOTES_DEFAULT
-    = . m feat_enc ANOM_FEAT_ENC
-    = . m train_span 0
-    = . m flat_run ( vec_new [f] )
-    = . m flat_sd ( vec_new [f] )
-    = . m versions ( meta_default_versions )
-    ^ @ Meta { ( arc_new [MetaImpl] m ) }
+@ meta_new s name s created → Meta {
+    ^ @ Meta { ( string_from name ) ( string_from created ) ( string_new ) ( vec_new [String] ) ( vec_new [i] )
+        ( vec_new [( Vec String )] ) ( vec_new [String] ) ( vec_new [f] ) ( vec_new [f] )
+        ANOM_SCHED_BELOW ANOM_SCHED_AT_MAX F F 0 0 0 0 0 ANOM_MAX_POINTS 1 ANOM_FEAT_ENC 0 ANOM_VOTES_DEFAULT
+        ( vec_new [f] ) ( vec_new [f] ) ( vec_new [f] ) ( meta_default_versions ) }
 }
 
 // Index of column `name` in the metadata, or -1.
-unsafe @ __an_col_find * MetaImpl m s name → i {
+@ __an_col_find Meta m s name → i {
     : i n ( vec_len [String] . m cols )
     : ~ i k 0
     ~ < k n {
@@ -393,21 +357,19 @@ unsafe @ __an_col_find * MetaImpl m s name → i {
 }
 
 // Column kind at index `ci` (COL_NUMERIC if somehow missing).
-unsafe @ __an_kind_at * MetaImpl m i ci → i {
+@ __an_kind_at Meta m i ci → i {
     ?? ( vec_get [i] . m kinds ci ) { T k → { ^ k } F _ → { ^ COL_NUMERIC } }
 }
 
 // A model is "frozen" once it has an authoritative feature order (set at
 // first train). Before that, feature order is derived from the metadata.
-unsafe @ meta_is_frozen Meta m__h → b {
-    : *MetaImpl m ( _Meta_ptr m__h )
+@ meta_is_frozen Meta m → b {
     ^ > ( vec_len [String] . m feats ) 0
 }
 
 // Whether any column is a timestamp — the only kind whose encoding has
 // changed between ANOM_FEAT_ENC schemes.
-unsafe @ meta_has_timestamp Meta m__h → b {
-    : *MetaImpl m ( _Meta_ptr m__h )
+@ meta_has_timestamp Meta m → b {
     : i n ( vec_len [i] . m kinds )
     : ~ i k 0
     ~ < k n {
@@ -420,11 +382,10 @@ unsafe @ meta_has_timestamp Meta m__h → b {
 // A trained model whose frozen feature order was built under an older
 // calendar encoding: it still scores, the old way, but its next retrain
 // changes what it learns.
-unsafe @ meta_retrain_required Meta m__h → b {
-    : *MetaImpl m ( _Meta_ptr m__h )
+@ meta_retrain_required Meta m → b {
     ? >= . m feat_enc ANOM_FEAT_ENC { ^ F } {}
-    ? ! ( meta_is_frozen m__h ) { ^ F } {}
-    ^ ( meta_has_timestamp m__h )
+    ? ! ( meta_is_frozen m ) { ^ F } {}
+    ^ ( meta_has_timestamp m )
 }
 
 // Declare a column's kind before its first value is seen — the one way
@@ -432,8 +393,7 @@ unsafe @ meta_retrain_required Meta m__h → b {
 // code that should be an identity, not a magnitude. A column the model
 // already knows keeps its kind (its encoding is settled); returns T only
 // when the declaration took.
-unsafe @ meta_declare_column Meta m__h s name i kind → b {
-    : *MetaImpl m ( _Meta_ptr m__h )
+@ meta_declare_column Meta m s name i kind → b {
     ? >= ( __an_col_find m name ) 0 { ^ F } {}
     ? | | == kind COL_NUMERIC == kind COL_CATEGORICAL == kind COL_TIMESTAMP {} { ^ F }
     ( vec_push [String] . m cols ( string_from name ) )
@@ -523,15 +483,13 @@ unsafe @ meta_declare_column Meta m__h s name i kind → b {
 // hour needs two days, weekday two weeks, month two years — and a later
 // retrain over a longer span brings the rest in. An unknown span (0: a
 // count clock, or a model from before the field) keeps every cycle.
-unsafe @ __an_cycle_seen Meta m__h i period → b {
-    : *MetaImpl m ( _Meta_ptr m__h )
+@ __an_cycle_seen Meta m i period → b {
     ? <= . m train_span 0 { ^ T } {}
     ^ >= . m train_span * 2 period
 }
 
 // Append column `ci`'s feature names (in canonical order) to `out`.
-unsafe @ __an_push_col_feats Meta m__h i ci ( Vec String ) out → v {
-    : *MetaImpl m ( _Meta_ptr m__h )
+@ __an_push_col_feats Meta m i ci ( Vec String ) out → v {
     ?? ( vec_get [String] . m cols ci ) {
         T c → {
             : s cn ( string_data c )
@@ -562,15 +520,15 @@ unsafe @ __an_push_col_feats Meta m__h i ci ( Vec String ) out → v {
                     ( vec_push [String] out ( __an_feat_name cn `month` ) )
                     ( vec_push [String] out ( __an_feat_name cn `weekday` ) )
                 } {
-                    ? ( __an_cycle_seen m__h 86400 ) {
+                    ? ( __an_cycle_seen m 86400 ) {
                         ( vec_push [String] out ( __an_feat_name cn `hour_sin` ) )
                         ( vec_push [String] out ( __an_feat_name cn `hour_cos` ) )
                     } {}
-                    ? ( __an_cycle_seen m__h 604800 ) {
+                    ? ( __an_cycle_seen m 604800 ) {
                         ( vec_push [String] out ( __an_feat_name cn `weekday_sin` ) )
                         ( vec_push [String] out ( __an_feat_name cn `weekday_cos` ) )
                     } {}
-                    ? ( __an_cycle_seen m__h 31557600 ) {
+                    ? ( __an_cycle_seen m 31557600 ) {
                         ( vec_push [String] out ( __an_feat_name cn `month_sin` ) )
                         ( vec_push [String] out ( __an_feat_name cn `month_cos` ) )
                     } {}
@@ -584,13 +542,12 @@ unsafe @ __an_push_col_feats Meta m__h i ci ( Vec String ) out → v {
 // The feature order implied by the current metadata: columns in first-seen
 // order, each expanded canonically (categoricals over their sorted
 // categories). Deterministic for a given metadata state. Owned result.
-unsafe @ meta_derived_feats Meta m__h → ( Vec String ) {
-    : *MetaImpl m ( _Meta_ptr m__h )
+@ meta_derived_feats Meta m → ( Vec String ) {
     : ( Vec String ) out ( vec_new [String] )
     : i n ( vec_len [String] . m cols )
     : ~ i k 0
     ~ < k n {
-        ( __an_push_col_feats m__h k out )
+        ( __an_push_col_feats m k out )
         = k + k 1
     }
     ^ out
@@ -600,8 +557,7 @@ unsafe @ meta_derived_feats Meta m__h → ( Vec String ) {
 // for a one-hot level or a calendar feature. The flatline guard watches
 // only these: a category that does not change and a month that does not
 // change are not sensors.
-unsafe @ meta_numeric_feat_mask Meta m__h → ( Vec i ) {
-    : *MetaImpl m ( _Meta_ptr m__h )
+@ meta_numeric_feat_mask Meta m → ( Vec i ) {
     : i nf ( vec_len [String] . m feats )
     : ( Vec i ) out ( vec_with_cap [i] nf )
     : i nc ( vec_len [String] . m cols )
@@ -631,9 +587,8 @@ unsafe @ meta_numeric_feat_mask Meta m__h → ( Vec i ) {
 
 // Snapshot the derived feature order as authoritative (called at train
 // time). From now on scoring projects onto exactly this vector.
-unsafe @ meta_refresh_feats Meta m__h → v {
-    : *MetaImpl m ( _Meta_ptr m__h )
-    = . m feats ( meta_derived_feats m__h )
+@ meta_refresh_feats inout Meta m → v {
+    = . m feats ( meta_derived_feats m )
 }
 
 // ── Preprocessing ─────────────────────────────────────────────────────
@@ -711,8 +666,7 @@ unsafe @ meta_refresh_feats Meta m__h → v {
 // categories are recorded in the metadata; otherwise an unseen category
 // just yields an all-zero one-hot. Returns an error message, or an empty
 // String on success.
-unsafe @ __an_encode_col Meta m__h i ci s cn Json jv ( Vec String ) names ( Vec f ) vals b learn → String {
-    : *MetaImpl m ( _Meta_ptr m__h )
+@ __an_encode_col Meta m i ci s cn Json jv ( Vec String ) names ( Vec f ) vals b learn → String {
     : i kind ( __an_kind_at m ci )
     ? == kind COL_NUMERIC {
         : ?f fx ( __an_num_of jv )
@@ -788,8 +742,7 @@ unsafe @ __an_encode_col Meta m__h i ci s cn Json jv ( Vec String ) names ( Vec 
     ^ ( string_new )
 }
 
-unsafe @ __an_preprocess Meta m__h Json raw b learn → !EncPoint String {
-    : *MetaImpl m ( _Meta_ptr m__h )
+@ __an_preprocess Meta m Json raw b learn → !EncPoint String {
     : ( Vec String ) names ( vec_new [String] )
     : ( Vec f ) vals ( vec_new [f] )
     : ( Vec String ) keys ( json_obj_keys raw )
@@ -812,7 +765,7 @@ unsafe @ __an_preprocess Meta m__h Json raw b learn → !EncPoint String {
                             } {}
                             : ~ String e2 ( string_new )
                             ? >= ci 0 {
-                                = e2 ( __an_encode_col m__h ci cn jv names vals learn )
+                                = e2 ( __an_encode_col m ci cn jv names vals learn )
                             } {}
                             ? > ( string_len e2 ) 0 {
                                 = err e2
@@ -847,8 +800,7 @@ unsafe @ __an_preprocess Meta m__h Json raw b learn → !EncPoint String {
 // standardisation is however many standard deviations 0 is from the
 // column's mean, and the range guard would then blame a value nobody
 // sent. Owned; empty when the point is complete.
-unsafe @ anomaly_missing_cols Meta m__h Json raw → ( Vec String ) {
-    : *MetaImpl m ( _Meta_ptr m__h )
+@ anomaly_missing_cols Meta m Json raw → ( Vec String ) {
     : ( Vec String ) out ( vec_new [String] )
     : i n ( vec_len [String] . m cols )
     : ~ i k 0
@@ -874,7 +826,7 @@ unsafe @ anomaly_missing_cols Meta m__h Json raw → ( Vec String ) {
 // but "Missing columns: TW" over a point that says `"TW": null` reads as
 // the service not seeing what the caller plainly sent, and the caller
 // looks for a transport bug instead of for the null.
-@ anomaly_null_cols Meta m__h Json raw ( Vec String ) missing → ( Vec String ) {
+@ anomaly_null_cols Meta m Json raw ( Vec String ) missing → ( Vec String ) {
     : ( Vec String ) out ( vec_new [String] )
     : i n ( vec_len [String] missing )
     : ~ i k 0
@@ -982,7 +934,7 @@ unsafe @ anomaly_missing_cols Meta m__h Json raw → ( Vec String ) {
 // number of cells masked. A column with too few readings to say, or with
 // no spread at all, is left exactly as it is: not being able to tell is
 // not a licence to erase.
-unsafe @ anomaly_mask_absurd ( Vec f ) data i n_rows i n_cols ( Vec i ) counts → i {
+@ anomaly_mask_absurd ( Vec f ) data i n_rows i n_cols ( Vec i ) counts → i {
     ? & > n_rows 0 > n_cols 0 {} { ^ 0 }
     : ~ i total 0
     : ~ i c 0
@@ -990,10 +942,10 @@ unsafe @ anomaly_mask_absurd ( Vec f ) data i n_rows i n_cols ( Vec i ) counts �
         : ~ i stride / n_rows ANOM_ABSURD_SAMPLE
         ? < stride 1 { = stride 1 } {}
         : ( Vec f ) sample ( vec_new [f] )
-        : *f dp ( vec_data [f] data )
+        : ( Slice f ) dp ( slice_from_vec [f] data )
         : ~ i r 0
         ~ < r n_rows {
-            : f v . dp + * r n_cols c
+            : f v ( slice_at [f] dp + * r n_cols c )
             ? ( float_is_nan v ) {} { ( vec_push [f] sample v ) }
             = r + r stride
         }
@@ -1023,14 +975,14 @@ unsafe @ anomaly_mask_absurd ( Vec f ) data i n_rows i n_cols ( Vec i ) counts �
             }
             ? & > sigma 0.0 ( _an_finite sigma ) {
                 : f lim * ANOM_ABSURD_SIGMAS sigma
-                : *f wp ( vec_data [f] data )
+                : ( Slice f ) wp ( slice_from_vec [f] data )
                 = r 0
                 ~ < r n_rows {
                     : i off + * r n_cols c
-                    : f v . wp off
+                    : f v ( slice_at [f] wp off )
                     ? ( float_is_nan v ) {} {
                         ? > ( float_abs - v med ) lim {
-                            = . wp off ( float_nan )
+                            ( slice_put [f] wp off ( float_nan ) )
                             = masked + masked 1
                         } {}
                     }
@@ -1076,17 +1028,17 @@ unsafe @ anomaly_mask_absurd ( Vec f ) data i n_rows i n_cols ( Vec i ) counts �
 // the largest of them, so a single reading of 1e200 gives a std of about
 // 1e199 and not the infinity that once turned the persisted scaler into
 // JSON nulls the model could no longer be opened from.
-unsafe @ scaler_fit ( Vec f ) data i n_rows i n_cols → Scaler {
+@ scaler_fit ( Vec f ) data i n_rows i n_cols → Scaler {
     : ( Vec f ) mean ( vec_with_cap [f] n_cols )
     : ( Vec f ) inv ( vec_with_cap [f] n_cols )
-    : *f dp ( vec_data [f] data )
+    : ( Slice f ) dp ( slice_from_vec [f] data )
     : ~ i c 0
     ~ < c n_cols {
         // Pass 1: the readings present, and their mean.
         : ~ i m 0
         : ~ i r 0
         ~ < r n_rows {
-            ? ( float_is_nan . dp + * r n_cols c ) {} { = m + m 1 }
+            ? ( float_is_nan ( slice_at [f] dp + * r n_cols c ) ) {} { = m + m 1 }
             = r + r 1
         }
         : ~ f mu 0.0
@@ -1094,7 +1046,7 @@ unsafe @ scaler_fit ( Vec f ) data i n_rows i n_cols → Scaler {
             : f fm # f m
             = r 0
             ~ < r n_rows {
-                : f v . dp + * r n_cols c
+                : f v ( slice_at [f] dp + * r n_cols c )
                 ? ( float_is_nan v ) {} { = mu + mu / v fm }
                 = r + r 1
             }
@@ -1104,7 +1056,7 @@ unsafe @ scaler_fit ( Vec f ) data i n_rows i n_cols → Scaler {
         : ~ f scale 0.0
         = r 0
         ~ < r n_rows {
-            : f v . dp + * r n_cols c
+            : f v ( slice_at [f] dp + * r n_cols c )
             ? ( float_is_nan v ) {} {
                 : f dh ( float_abs - / v 2.0 muh )
                 ? > dh scale { = scale dh } {}
@@ -1116,7 +1068,7 @@ unsafe @ scaler_fit ( Vec f ) data i n_rows i n_cols → Scaler {
         ? > scale 0.0 {
             = r 0
             ~ < r n_rows {
-                : f v . dp + * r n_cols c
+                : f v ( slice_at [f] dp + * r n_cols c )
                 ? ( float_is_nan v ) {} {
                     : f u / - / v 2.0 muh scale
                     = ss + ss * u u
@@ -1150,31 +1102,25 @@ unsafe @ scaler_fit ( Vec f ) data i n_rows i n_cols → Scaler {
 }
 
 // Standardise one point in place: x → (x - mean) * inv_std.
-unsafe @ scaler_apply Scaler sc ( Vec f ) point → v {
+@ scaler_apply Scaler sc ( Vec f ) point → v {
     : i n ( vec_len [f] point )
     : i nm ( vec_len [f] . sc mean )
-    : *f pp ( vec_data [f] point )
-    : *f mp ( vec_data [f] . sc mean )
-    : *f ip ( vec_data [f] . sc inv_std )
     : ~ i k 0
     ~ & < k n < k nm {
-        = . pp k ( __an_standardise . pp k . mp k . ip k )
+        ( vec_put [f] point k ( __an_standardise ( vec_at [f] point k ) ( vec_at [f] . sc mean k ) ( vec_at [f] . sc inv_std k ) ) )
         = k + k 1
     }
 }
 
 // Standardise a whole row-major matrix in place.
-unsafe @ scaler_apply_matrix Scaler sc ( Vec f ) data i n_rows i n_cols → v {
+@ scaler_apply_matrix Scaler sc ( Vec f ) data i n_rows i n_cols → v {
     : i nm ( vec_len [f] . sc mean )
-    : *f dp ( vec_data [f] data )
-    : *f mp ( vec_data [f] . sc mean )
-    : *f ip ( vec_data [f] . sc inv_std )
     : ~ i r 0
     ~ < r n_rows {
         : ~ i c 0
         ~ & < c n_cols < c nm {
             : i off + * r n_cols c
-            = . dp off ( __an_standardise . dp off . mp c . ip c )
+            ( vec_put [f] data off ( __an_standardise ( vec_at [f] data off ) ( vec_at [f] . sc mean c ) ( vec_at [f] . sc inv_std c ) ) )
             = c + c 1
         }
         = r + r 1
@@ -1187,21 +1133,18 @@ unsafe @ scaler_apply_matrix Scaler sc ( Vec f ) data i n_rows i n_cols → v {
 
 // Persist a fitted scaler into metadata (stored as mean + std; zero
 // variance is stored as std = 1, matching its inv_std = 1).
-unsafe @ meta_set_scaler Meta m__h Scaler sc → v {
-    : *MetaImpl m ( _Meta_ptr m__h )
+@ meta_set_scaler inout Meta m Scaler sc → v {
     : i n ( vec_len [f] . sc mean )
     : ( Vec f ) ms ( vec_with_cap [f] n )
     : ( Vec f ) ss ( vec_with_cap [f] n )
-    : *f mp ( vec_data [f] . sc mean )
-    : *f ip ( vec_data [f] . sc inv_std )
     : ~ i k 0
     ~ < k n {
         // The file must parse back: a std that is not a positive finite
         // number is written as 1 (and the mean as 0), never as the JSON
         // null a NaN or an infinity would become.
-        : ~ f mu . mp k
+        : ~ f mu ( vec_at [f] . sc mean k )
         ? ( _an_finite mu ) {} { = mu 0.0 }
-        : ~ f sd / 1.0 . ip k
+        : ~ f sd / 1.0 ( vec_at [f] . sc inv_std k )
         ? & ( _an_finite sd ) > sd 0.0 {} { = sd 1.0 }
         ( vec_push [f] ms mu )
         ( vec_push [f] ss sd )
@@ -1212,17 +1155,14 @@ unsafe @ meta_set_scaler Meta m__h Scaler sc → v {
 }
 
 // Rebuild a usable Scaler from persisted metadata. Owned result.
-unsafe @ meta_scaler Meta m__h → Scaler {
-    : *MetaImpl m ( _Meta_ptr m__h )
+@ meta_scaler Meta m → Scaler {
     : i n ( vec_len [f] . m sc_mean )
     : ( Vec f ) mean ( vec_with_cap [f] n )
     : ( Vec f ) inv ( vec_with_cap [f] n )
-    : *f mp ( vec_data [f] . m sc_mean )
-    : *f sp ( vec_data [f] . m sc_std )
     : ~ i k 0
     ~ < k n {
-        ( vec_push [f] mean . mp k )
-        : ~ f sd . sp k
+        ( vec_push [f] mean ( vec_at [f] . m sc_mean k ) )
+        : ~ f sd ( vec_at [f] . m sc_std k )
         ? & ( _an_finite sd ) > sd 0.0 {} { = sd 1.0 }
         ( vec_push [f] inv / 1.0 sd )
         = k + k 1
@@ -1315,8 +1255,7 @@ unsafe @ meta_scaler Meta m__h → Scaler {
 
 // Serialise metadata to an owned Json object (fixed field order, so the
 // same metadata always stringifies identically).
-unsafe @ meta_to_json Meta m__h → Json {
-    : *MetaImpl m ( _Meta_ptr m__h )
+@ meta_to_json Meta m → Json {
     : Json o ( json_obj_new )
     ( json_obj_set o `name` ( json_str_lit ( string_data . m name ) ) )
     ( json_obj_set o `created` ( json_str_lit ( string_data . m created ) ) )
@@ -1423,7 +1362,7 @@ unsafe @ meta_to_json Meta m__h → Json {
     ( json_obj_set o `score_epoch` ( json_int . m score_epoch ) )
     ( json_obj_set o `feature_encoding` ( json_int . m feat_enc ) )
     ( json_obj_set o `train_span` ( json_int . m train_span ) )
-    ( json_obj_set o `retrain_required` ( json_bool ( meta_retrain_required m__h ) ) )
+    ( json_obj_set o `retrain_required` ( json_bool ( meta_retrain_required m ) ) )
     ^ o
 }
 
@@ -1477,7 +1416,7 @@ unsafe @ meta_to_json Meta m__h → Json {
 
 // Parse metadata back from JSON. None on malformed shape (missing/mistyped
 // required fields).
-unsafe @ meta_from_json Json j → ?Meta {
+@ meta_from_json Json j → ?Meta {
     ? ( json_is_obj j ) {} { ^ @ ?Meta { F } }
 
     : ~ b ok T
@@ -1503,8 +1442,7 @@ unsafe @ meta_from_json Json j → ?Meta {
         ^ @ ?Meta { F }
     }
 
-    : Meta m__h ( meta_new ( string_data mname ) ( string_data mcreated ) )
-    : *MetaImpl m ( _Meta_ptr m__h )
+    : ~ Meta m ( meta_new ( string_data mname ) ( string_data mcreated ) )
 
     // Columns: column_types drives order; categories fills categorical cols.
     ?? ( json_obj_get j `column_types` ) {
@@ -1730,7 +1668,7 @@ unsafe @ meta_from_json Json j → ?Meta {
     ? ok {} {
         ^ @ ?Meta { F }
     }
-    ^ @ ?Meta { T m__h }
+    ^ @ ?Meta { T m }
 }
 
 // Convenience: metadata → compact JSON text (owned).
@@ -1762,8 +1700,7 @@ unsafe @ meta_from_json Json j → ?Meta {
 // touch `versions`; the schedule lives on Meta directly.
 
 // Index of the version named `vname`, or -1.
-unsafe @ meta_find_version Meta m__h s vname → i {
-    : *MetaImpl m ( _Meta_ptr m__h )
+@ meta_find_version Meta m s vname → i {
     : i nv ( vec_len [VerCfg] . m versions )
     : ~ i k 0
     ~ < k nv {
@@ -1777,9 +1714,8 @@ unsafe @ meta_find_version Meta m__h s vname → i {
 }
 
 // Is version `vname` enabled? `dflt` when there is no such version.
-unsafe @ meta_version_enabled Meta m__h s vname b dflt → b {
-    : *MetaImpl m ( _Meta_ptr m__h )
-    : i at ( meta_find_version m__h vname )
+@ meta_version_enabled Meta m s vname b dflt → b {
+    : i at ( meta_find_version m vname )
     ? < at 0 { ^ dflt } {}
     ?? ( vec_get [VerCfg] . m versions at ) { T vc → { ^ . vc enabled } F _ → { ^ dflt } }
 }
@@ -1789,9 +1725,8 @@ unsafe @ meta_version_enabled Meta m__h s vname b dflt → b {
 // from its forest blob — so margin changes (fine-tune, a config PUT) take
 // effect immediately, without a retrain. The blob's stored margin is only
 // the fallback for versions no longer present in the metadata.
-unsafe @ meta_version_margin Meta m__h s vname f dflt → f {
-    : *MetaImpl m ( _Meta_ptr m__h )
-    : i at ( meta_find_version m__h vname )
+@ meta_version_margin Meta m s vname f dflt → f {
+    : i at ( meta_find_version m vname )
     ? < at 0 { ^ dflt } {}
     ?? ( vec_get [VerCfg] . m versions at ) { T vc → { ^ . vc decision_margin } F _ → { ^ dflt } }
 }
@@ -1802,8 +1737,7 @@ unsafe @ meta_version_margin Meta m__h s vname f dflt → f {
 // it, and every cache entry carrying an older epoch is stale by
 // construction. One counter beats trying to reason about which caches a
 // given edit could have invalidated.
-unsafe @ meta_bump_epoch Meta m__h → v {
-    : *MetaImpl m ( _Meta_ptr m__h )
+@ meta_bump_epoch inout Meta m → v {
     = . m score_epoch + . m score_epoch 1
 }
 
@@ -1930,8 +1864,7 @@ unsafe @ meta_bump_epoch Meta m__h → v {
 // possible and still one flag away: `replace_versions` makes the object
 // the WHOLE list, which is how the dashboard's JSON editor adds and
 // removes them, and there the names it does not know are the point.
-unsafe @ meta_versions_patch_check Meta m__h Json vers b replace → String {
-    : *MetaImpl m ( _Meta_ptr m__h )
+@ meta_versions_patch_check Meta m Json vers b replace → String {
     ? ( json_is_obj vers ) {} { ^ ( string_from `versions must be a JSON object of version configs` ) }
     : ( Vec String ) keys ( json_obj_keys vers )
     : i nk ( vec_len [String] keys )
@@ -1943,7 +1876,7 @@ unsafe @ meta_versions_patch_check Meta m__h Json vers b replace → String {
                 ?? ( json_obj_get vers ( string_data vn ) ) {
                     T vo → {
                         ? ( json_is_obj vo ) {
-                            ? | replace >= ( meta_find_version m__h ( string_data vn ) ) 0 {} {
+                            ? | replace >= ( meta_find_version m ( string_data vn ) ) 0 {} {
                                 = why ( string_from `versions.` )
                                 ( string_push_str why ( string_data vn ) )
                                 ( string_push_str why ` is not a version of this model (it has: ` )
@@ -1999,8 +1932,7 @@ unsafe @ meta_versions_patch_check Meta m__h Json vers b replace → String {
 // patch may only edit versions the model has, and only a whole-list patch
 // (`replace_versions`) may name one it does not. This function is the
 // mechanism; the rule about who may use it lives with the patch.
-unsafe @ meta_apply_versions_json Meta m__h Json vers b replace → i {
-    : *MetaImpl m ( _Meta_ptr m__h )
+@ meta_apply_versions_json inout Meta m Json vers b replace → i {
     ? ( json_is_obj vers ) {} { ^ -1 }
     : ( Vec String ) keys ( json_obj_keys vers )
     : i nk ( vec_len [String] keys )
@@ -2011,7 +1943,7 @@ unsafe @ meta_apply_versions_json Meta m__h Json vers b replace → i {
                 ?? ( json_obj_get vers ( string_data vn ) ) {
                     T vo → {
                         ? ( json_is_obj vo ) {
-                            : i at ( meta_find_version m__h ( string_data vn ) )
+                            : i at ( meta_find_version m ( string_data vn ) )
                             ? >= at 0 {
                                 ?? ( vec_get [VerCfg] . m versions at ) {
                                     T cur → {

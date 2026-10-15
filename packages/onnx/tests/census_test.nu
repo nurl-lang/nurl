@@ -36,7 +36,11 @@ $ `stdlib/core/slice.nu`
 }
 
 // bytes [at, at+len) of `t` as a String
-unsafe @ __sub s t i at i len → String { ^ ( string_from_bytes # *u + # i t at len ) }
+@ __sub s t i at i len → String {
+    : String out ( string_new )
+    ( string_push_window out ( slice_of_str t ) at len )
+    ^ out
+}
 
 @ __is_id i c → b { ^ | | & >= c 97 <= c 122 & >= c 48 <= c 57 == c 95 }
 
@@ -127,7 +131,8 @@ unsafe @ __sub s t i at i len → String { ^ ( string_from_bytes # *u + # i t at
     : ~ i barriers 0
     = k 0
     ~ < k nk {
-        : s src ( gk_census_src kit k )
+        : String src__s ( gk_census_src kit k )
+        : s src ( string_data src__s )
         ? | >= ( nurl_str_find src `__syncthreads` ) 0 >= ( nurl_str_find src `__shared__` ) 0 { = barriers + barriers 1 } {}
         = k + k 1
     }
@@ -143,7 +148,7 @@ unsafe @ __sub s t i at i len → String { ^ ( string_from_bytes # *u + # i t at
     = k 0
     ~ < k nk {
         : String row ( string_from `{ "` )
-        ( string_push_str row ( gk_census_name kit k ) )
+        ( string_push_str row ( string_data ( gk_census_name kit k ) ) )
         ( string_push_str row `", __nurl_sl_` )
         ? < ( nurl_str_find ( string_data out ) ( string_data row ) ) 0 { = missing + missing 1 } {}
         = k + k 1

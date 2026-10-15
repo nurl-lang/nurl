@@ -1,5 +1,7 @@
 $ `../src/metadata.nu`
 
+$ `stdlib/core/slice.nu`
+
 @ check b condition s message → v {
     ? ! condition { ( nurl_print message ) ( nurl_print `\n` ) ( nurl_exit 1 ) } {}
 }
@@ -84,7 +86,7 @@ $ `../src/metadata.nu`
     ^ @ !v GrpcError { T 0 }
 }
 
-unsafe @ metadata → !v GrpcError {
+@ metadata → !v GrpcError {
     : ( Vec Header ) meta ( grpc_metadata_new )
     \ ( grpc_metadata_add meta `authorization` `Bearer token` )
     \ ( grpc_metadata_add meta `x-repeat` `one` )
@@ -96,7 +98,7 @@ unsafe @ metadata → !v GrpcError {
     : ( Vec Header ) decoded \ ( grpc_metadata_decode wire 8192 )
     ( check == ( vec_len [Header] decoded ) 4 `metadata count` )
     ( check == ( grpc_header_count decoded `x-repeat` ) 2 `duplicates preserved` )
-    : Header bh . ( vec_data [Header] decoded ) 3
+    : Header bh ( vec_at [Header] decoded 3 )
     ( check == ( string_len . bh value ) 3 `binary NUL preserved` )
     ( check == ( string_get . bh value 2 ) 255 `binary high byte` )
     ( error_code ( grpc_metadata_add meta `grpc-status` `0` ) GRPC_INVALID_ARGUMENT )

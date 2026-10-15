@@ -73,14 +73,14 @@ $ `work.nu`
 
 // A Swarm is a handle on the node bundle in an Arc (stdlib/std/arc.nu):
 // every copy is the same node, and the last owner releases it — the
-// transport, ring, roster and job node with it.
+// transport, ring, roster and job node with it. The bundle is fixed once
+// made (its parts are handles that change themselves), so a read of it
+// (arc_get) needs no lock.
 : Swarm { ( Arc SwarmImpl ) a }
 
 @ Swarm_share Swarm h → Swarm { ^ @ Swarm { ( arc_clone [SwarmImpl] . h a ) } }
 
 @ Swarm_drop sink Swarm h → v {}
-
-unsafe @ __Swarm_ptr Swarm h → *SwarmImpl { ^ ( arc_ptr [SwarmImpl] . h a ) }
 
 @ swarm_new RelayClient rc i id i role → Swarm {
     : ( Vec u ) me ( pk_from_id id )
@@ -97,26 +97,26 @@ unsafe @ __Swarm_ptr Swarm h → *SwarmImpl { ^ ( arc_ptr [SwarmImpl] . h a ) }
 @ swarm_free sink Swarm sw → v {}
 
 // How many workers this node has folded into its ring.
-unsafe @ swarm_worker_count Swarm sw__h → i {
-    : *SwarmImpl sw ( __Swarm_ptr sw__h )
+@ swarm_worker_count Swarm sw__h → i {
+    : SwarmImpl sw ( arc_get [SwarmImpl] . sw__h a )
     ^ ( roster_count . sw roster )
 }
 
-unsafe @ swarm_join_group Swarm sw__h → v {
-    : *SwarmImpl sw ( __Swarm_ptr sw__h )
+@ swarm_join_group Swarm sw__h → v {
+    : SwarmImpl sw ( arc_get [SwarmImpl] . sw__h a )
     ?? ( transport_group_join . sw transport . sw group ) { T _ → {} F _ → {} }
 }
 
 // Announce ourselves to the group. `want` asks hearers to reply so a newcomer
 // learns the existing members.
-unsafe @ swarm_announce Swarm sw__h i want → v {
-    : *SwarmImpl sw ( __Swarm_ptr sw__h )
+@ swarm_announce Swarm sw__h i want → v {
+    : SwarmImpl sw ( arc_get [SwarmImpl] . sw__h a )
     : ( Vec u ) msg ( hello_build . sw self_id . sw role want . sw self_pk )
     ?? ( transport_broadcast . sw transport . sw group msg ) { T _ → {} F _ → {} }
 }
 
-unsafe @ swarm_on_hello Swarm sw__h Hello h → v {
-    : *SwarmImpl sw ( __Swarm_ptr sw__h )
+@ swarm_on_hello Swarm sw__h Hello h → v {
+    : SwarmImpl sw ( arc_get [SwarmImpl] . sw__h a )
     // Only workers join the ring; a client announcing itself is reachable but
     // owns no keys.
     ? == . h role ( role_worker ) {
@@ -131,8 +131,8 @@ unsafe @ swarm_on_hello Swarm sw__h Hello h → v {
 }
 
 // Drain inbound transport messages, dispatching census HELLO and job traffic.
-unsafe @ swarm_pump Swarm sw__h i max → v {
-    : *SwarmImpl sw ( __Swarm_ptr sw__h )
+@ swarm_pump Swarm sw__h i max → v {
+    : SwarmImpl sw ( arc_get [SwarmImpl] . sw__h a )
     : ~ b more T
     ~ more {
         ?? ( transport_recv . sw transport max ) {
@@ -169,8 +169,8 @@ unsafe @ swarm_pump Swarm sw__h i max → v {
     }
 }
 
-unsafe @ swarm_register_handlers Swarm sw__h → v {
-    : *SwarmImpl sw ( __Swarm_ptr sw__h )
+@ swarm_register_handlers Swarm sw__h → v {
+    : SwarmImpl sw ( arc_get [SwarmImpl] . sw__h a )
     ( job_register . sw job ( kind_primes ) ( primes_handler ) )
     ( job_register . sw job ( kind_sumsq ) ( sumsq_handler ) )
 }
@@ -205,7 +205,7 @@ unsafe @ swarm_register_handlers Swarm sw__h → v {
     ~ < t rounds { ( swarm_pump sw 200 ) = t + t 1 }
 }
 
-unsafe @ run_submit s host i port i kind i lo i hi → i {
+@ run_submit s host i port i kind i lo i hi → i {
     ?? ( relay_dial host port ) {
         T rc → {
             : i myid ( rand_u64 )
@@ -213,7 +213,7 @@ unsafe @ run_submit s host i port i kind i lo i hi → i {
             ?? ( relay_register rc reg ) { T _ → {} F _ → {} }
             ( relay_set_timeout rc 250 )
             : Swarm sw ( swarm_new rc myid ( role_client ) )
-            : *SwarmImpl swp ( __Swarm_ptr sw )
+            : SwarmImpl swp ( arc_get [SwarmImpl] . sw a )
             ( swarm_join_group sw )
             ( swarm_discover sw 8 )
 

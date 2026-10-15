@@ -36,18 +36,18 @@ $ `stdlib/std/float.nu`
 // normalising first, so a non-unit quaternion still produces a proper
 // rotation. Predicted quaternions are never exactly unit, and the two
 // spellings differ in the last bits — this one matches.
-unsafe @ quat_to_mat f qi f qj f qk f qr * f out → v {
+@ quat_to_mat f qi f qj f qk f qr ( Slice f ) out → v {
     : f n2 + + + * qi qi * qj qj * qk qk * qr qr
     : f two_s ? > n2 0.0 / 2.0 n2 0.0
-    = . out 0 - 1.0 * two_s + * qj qj * qk qk
-    = . out 1 * two_s - * qi qj * qk qr
-    = . out 2 * two_s + * qi qk * qj qr
-    = . out 3 * two_s + * qi qj * qk qr
-    = . out 4 - 1.0 * two_s + * qi qi * qk qk
-    = . out 5 * two_s - * qj qk * qi qr
-    = . out 6 * two_s - * qi qk * qj qr
-    = . out 7 * two_s + * qj qk * qi qr
-    = . out 8 - 1.0 * two_s + * qi qi * qj qj
+    ( slice_put [f] out 0 - 1.0 * two_s + * qj qj * qk qk )
+    ( slice_put [f] out 1 * two_s - * qi qj * qk qr )
+    ( slice_put [f] out 2 * two_s + * qi qk * qj qr )
+    ( slice_put [f] out 3 * two_s + * qi qj * qk qr )
+    ( slice_put [f] out 4 - 1.0 * two_s + * qi qi * qk qk )
+    ( slice_put [f] out 5 * two_s - * qj qk * qi qr )
+    ( slice_put [f] out 6 * two_s - * qi qk * qj qr )
+    ( slice_put [f] out 7 * two_s + * qj qk * qi qr )
+    ( slice_put [f] out 8 - 1.0 * two_s + * qi qi * qj qj )
 }
 
 @ __gm_sqrt_pos f x → f { ^ ? > x 0.0 ( float_sqrt x ) 0.0 }
@@ -58,39 +58,39 @@ unsafe @ quat_to_mat f qi f qj f qk f qr * f out → v {
 // pivot, and the one with the largest |component| is kept — the standard
 // guard against the cancellation that ruins the naive trace formula near
 // a 180-degree rotation.
-unsafe @ mat_to_quat * f m * f out → v {
-    : f m00 . m 0
-    : f m01 . m 1
-    : f m02 . m 2
-    : f m10 . m 3
-    : f m11 . m 4
-    : f m12 . m 5
-    : f m20 . m 6
-    : f m21 . m 7
-    : f m22 . m 8
+@ mat_to_quat ( Slice f ) m ( Slice f ) out → v {
+    : f m00 ( slice_at [f] m 0 )
+    : f m01 ( slice_at [f] m 1 )
+    : f m02 ( slice_at [f] m 2 )
+    : f m10 ( slice_at [f] m 3 )
+    : f m11 ( slice_at [f] m 4 )
+    : f m12 ( slice_at [f] m 5 )
+    : f m20 ( slice_at [f] m 6 )
+    : f m21 ( slice_at [f] m 7 )
+    : f m22 ( slice_at [f] m 8 )
     : f a0 ( __gm_sqrt_pos + 1.0 + m00 + m11 m22 )
     : f a1 ( __gm_sqrt_pos - - + 1.0 m00 m11 m22 )
     : f a2 ( __gm_sqrt_pos - + - 1.0 m00 m11 m22 )
     : f a3 ( __gm_sqrt_pos + - - 1.0 m00 m11 m22 )
     // candidate k, as (r, i, j, k) scaled by 2*a_k
-    : ( Vec u ) c__v ( vec_zeroed [u] 128 )
-    : *f c # *f ( vec_data [u] c__v )
-    = . c 0 * a0 a0
-    = . c 1 - m21 m12
-    = . c 2 - m02 m20
-    = . c 3 - m10 m01
-    = . c 4 - m21 m12
-    = . c 5 * a1 a1
-    = . c 6 + m10 m01
-    = . c 7 + m02 m20
-    = . c 8 - m02 m20
-    = . c 9 + m10 m01
-    = . c 10 * a2 a2
-    = . c 11 + m12 m21
-    = . c 12 - m10 m01
-    = . c 13 + m02 m20
-    = . c 14 + m12 m21
-    = . c 15 * a3 a3
+    : ( Vec f ) c__v ( vec_zeroed [f] 16 )
+    : ( Slice f ) c ( slice_from_vec [f] c__v )
+    ( slice_put [f] c 0 * a0 a0 )
+    ( slice_put [f] c 1 - m21 m12 )
+    ( slice_put [f] c 2 - m02 m20 )
+    ( slice_put [f] c 3 - m10 m01 )
+    ( slice_put [f] c 4 - m21 m12 )
+    ( slice_put [f] c 5 * a1 a1 )
+    ( slice_put [f] c 6 + m10 m01 )
+    ( slice_put [f] c 7 + m02 m20 )
+    ( slice_put [f] c 8 - m02 m20 )
+    ( slice_put [f] c 9 + m10 m01 )
+    ( slice_put [f] c 10 * a2 a2 )
+    ( slice_put [f] c 11 + m12 m21 )
+    ( slice_put [f] c 12 - m10 m01 )
+    ( slice_put [f] c 13 + m02 m20 )
+    ( slice_put [f] c 14 + m12 m21 )
+    ( slice_put [f] c 15 * a3 a3 )
     : ~ i best 0
     : ~ f bestv a0
     ? > a1 bestv { = best 1 = bestv a1 } {}
@@ -98,32 +98,32 @@ unsafe @ mat_to_quat * f m * f out → v {
     ? > a3 bestv { = best 3 = bestv a3 } {}
     : f denom ? > bestv 0.1 * 2.0 bestv 0.1
     : i base * best 4
-    : f r / . c base denom
-    : f i / . c + base 1 denom
-    : f j / . c + base 2 denom
-    : f k / . c + base 3 denom
+    : f r / ( slice_at [f] c base ) denom
+    : f i / ( slice_at [f] c + base 1 ) denom
+    : f j / ( slice_at [f] c + base 2 ) denom
+    : f k / ( slice_at [f] c + base 3 ) denom
     // scalar LAST on the way out
-    = . out 0 i
-    = . out 1 j
-    = . out 2 k
-    = . out 3 r
+    ( slice_put [f] out 0 i )
+    ( slice_put [f] out 1 j )
+    ( slice_put [f] out 2 k )
+    ( slice_put [f] out 3 r )
 }
 
 // ── pose encoding → camera matrices ─────────────────────────────────
 
 // Extrinsics [R|t], world→camera, 3x4 row-major (12 doubles).
-unsafe @ pose_enc_to_extri * f pe * f out → v {
-    : ( Vec u ) r__v ( vec_zeroed [u] 72 )
-    : *f r # *f ( vec_data [u] r__v )
-    ( quat_to_mat . pe 3 . pe 4 . pe 5 . pe 6 r )
+@ pose_enc_to_extri ( Slice f ) pe ( Slice f ) out → v {
+    : ( Vec f ) r__v ( vec_zeroed [f] 9 )
+    : ( Slice f ) r ( slice_from_vec [f] r__v )
+    ( quat_to_mat ( slice_at [f] pe 3 ) ( slice_at [f] pe 4 ) ( slice_at [f] pe 5 ) ( slice_at [f] pe 6 ) r )
     : ~ i row 0
     ~ < row 3 {
         : ~ i col 0
         ~ < col 3 {
-            = . out + * row 4 col . r + * row 3 col
+            ( slice_put [f] out + * row 4 col ( slice_at [f] r + * row 3 col ) )
             = col + col 1
         }
-        = . out + * row 4 3 . pe row
+        ( slice_put [f] out + * row 4 3 ( slice_at [f] pe row ) )
         = row + row 1
     }
 }
@@ -131,44 +131,44 @@ unsafe @ pose_enc_to_extri * f pe * f out → v {
 // Intrinsics from the two field-of-view angles, 3x3 row-major.
 // The principal point is the image centre — the model is only ever fed
 // centre-cropped frames, and the reference assumes the same.
-unsafe @ pose_enc_to_intri * f pe i H i W * f out → v {
-    : f fov_h . pe 7
-    : f fov_w . pe 8
+@ pose_enc_to_intri ( Slice f ) pe i H i W ( Slice f ) out → v {
+    : f fov_h ( slice_at [f] pe 7 )
+    : f fov_w ( slice_at [f] pe 8 )
     : f fy / / # f H 2.0 ( float_tan / fov_h 2.0 )
     : f fx / / # f W 2.0 ( float_tan / fov_w 2.0 )
     : ~ i j 0
-    ~ < j 9 { = . out j 0.0 = j + j 1 }
-    = . out 0 fx
-    = . out 2 / # f W 2.0
-    = . out 4 fy
-    = . out 5 / # f H 2.0
-    = . out 8 1.0
+    ~ < j 9 { ( slice_put [f] out j 0.0 ) = j + j 1 }
+    ( slice_put [f] out 0 fx )
+    ( slice_put [f] out 2 / # f W 2.0 )
+    ( slice_put [f] out 4 fy )
+    ( slice_put [f] out 5 / # f H 2.0 )
+    ( slice_put [f] out 8 1.0 )
 }
 
 // Inverse of an intrinsics matrix of the shape above (fx, fy, cx, cy) —
 // upper triangular, so the closed form is exact and needs no pivoting.
-unsafe @ intri_inverse * f k * f out → v {
-    : f fx . k 0
-    : f fy . k 4
-    : f cx . k 2
-    : f cy . k 5
+@ intri_inverse ( Slice f ) k ( Slice f ) out → v {
+    : f fx ( slice_at [f] k 0 )
+    : f fy ( slice_at [f] k 4 )
+    : f cx ( slice_at [f] k 2 )
+    : f cy ( slice_at [f] k 5 )
     : ~ i j 0
-    ~ < j 9 { = . out j 0.0 = j + j 1 }
-    = . out 0 ? != fx 0.0 / 1.0 fx 0.0
-    = . out 2 ? != fx 0.0 / - 0.0 cx fx 0.0
-    = . out 4 ? != fy 0.0 / 1.0 fy 0.0
-    = . out 5 ? != fy 0.0 / - 0.0 cy fy 0.0
-    = . out 8 1.0
+    ~ < j 9 { ( slice_put [f] out j 0.0 ) = j + j 1 }
+    ( slice_put [f] out 0 ? != fx 0.0 / 1.0 fx 0.0 )
+    ( slice_put [f] out 2 ? != fx 0.0 / - 0.0 cx fx 0.0 )
+    ( slice_put [f] out 4 ? != fy 0.0 / 1.0 fy 0.0 )
+    ( slice_put [f] out 5 ? != fy 0.0 / - 0.0 cy fy 0.0 )
+    ( slice_put [f] out 8 1.0 )
 }
 
 // Inverse of a 4x4 SE3 (rigid) matrix: [R|t] → [Rᵀ | −Rᵀt].
 // Closed form, not a general solve — the whole point is that a rigid
 // transform's inverse costs a transpose and a matrix-vector product.
-unsafe @ se3_inverse * f m * f out → v {
+@ se3_inverse ( Slice f ) m ( Slice f ) out → v {
     : ~ i r 0
     ~ < r 3 {
         : ~ i c 0
-        ~ < c 3 { = . out + * r 4 c . m + * c 4 r = c + c 1 }
+        ~ < c 3 { ( slice_put [f] out + * r 4 c ( slice_at [f] m + * c 4 r ) ) = c + c 1 }
         = r + r 1
     }
     : ~ i i2 0
@@ -177,28 +177,28 @@ unsafe @ se3_inverse * f m * f out → v {
         : ~ i j 0
         ~ < j 3 {
             : i rb * j 4
-            = acc + acc * . m + rb i2 . m + rb 3
+            = acc + acc * ( slice_at [f] m + rb i2 ) ( slice_at [f] m + rb 3 )
             = j + j 1
         }
-        = . out + * i2 4 3 - 0.0 acc
+        ( slice_put [f] out + * i2 4 3 - 0.0 acc )
         = i2 + i2 1
     }
-    = . out 12 0.0
-    = . out 13 0.0
-    = . out 14 0.0
-    = . out 15 1.0
+    ( slice_put [f] out 12 0.0 )
+    ( slice_put [f] out 13 0.0 )
+    ( slice_put [f] out 14 0.0 )
+    ( slice_put [f] out 15 1.0 )
 }
 
 // Camera-to-world 4x4 from a pose encoding: build [R|t] world→camera,
 // lift to 4x4, invert.
-unsafe @ pose_enc_to_c2w * f pe * f out → v {
-    : ( Vec u ) e__v ( vec_zeroed [u] 128 )
-    : *f e # *f ( vec_data [u] e__v )
+@ pose_enc_to_c2w ( Slice f ) pe ( Slice f ) out → v {
+    : ( Vec f ) e__v ( vec_zeroed [f] 16 )
+    : ( Slice f ) e ( slice_from_vec [f] e__v )
     ( pose_enc_to_extri pe e )
-    = . e 12 0.0
-    = . e 13 0.0
-    = . e 14 0.0
-    = . e 15 1.0
+    ( slice_put [f] e 12 0.0 )
+    ( slice_put [f] e 13 0.0 )
+    ( slice_put [f] e 14 0.0 )
+    ( slice_put [f] e 15 1.0 )
     ( se3_inverse e out )
 }
 
@@ -208,18 +208,18 @@ unsafe @ pose_enc_to_c2w * f pe * f out → v {
 //   camera point = ray · depth        (NOT ray normalised — the model's
 //                                      depth is along z, not range)
 //   world point  = c2w · (camera point, 1)
-unsafe @ unproject f px f py f depth * f kinv * f c2w * f out → v {
-    : f cxp + + * . kinv 0 px * . kinv 1 py . kinv 2
-    : f cyp + + * . kinv 3 px * . kinv 4 py . kinv 5
-    : f czp + + * . kinv 6 px * . kinv 7 py . kinv 8
+@ unproject f px f py f depth ( Slice f ) kinv ( Slice f ) c2w ( Slice f ) out → v {
+    : f cxp + + * ( slice_at [f] kinv 0 ) px * ( slice_at [f] kinv 1 ) py ( slice_at [f] kinv 2 )
+    : f cyp + + * ( slice_at [f] kinv 3 ) px * ( slice_at [f] kinv 4 ) py ( slice_at [f] kinv 5 )
+    : f czp + + * ( slice_at [f] kinv 6 ) px * ( slice_at [f] kinv 7 ) py ( slice_at [f] kinv 8 )
     : f xc * cxp depth
     : f yc * cyp depth
     : f zc * czp depth
     : ~ i r 0
     ~ < r 3 {
         : i rb * r 4
-        : f acc + + + * . c2w rb xc * . c2w + rb 1 yc * . c2w + rb 2 zc . c2w + rb 3
-        = . out r acc
+        : f acc + + + * ( slice_at [f] c2w rb ) xc * ( slice_at [f] c2w + rb 1 ) yc * ( slice_at [f] c2w + rb 2 ) zc ( slice_at [f] c2w + rb 3 )
+        ( slice_put [f] out r acc )
         = r + r 1
     }
 }

@@ -135,7 +135,7 @@ $ `stdlib/core/slice.nu`
 
 // ── Collecting ───────────────────────────────────────────────────
 
-@ __collect Cov c s dir → i {
+@ __collect inout Cov c s dir → i {
     : ( Vec String ) notes ( runner_objects dir )
     : i n ( vec_len [String] notes )
     : ~ i ok 0
@@ -302,7 +302,7 @@ $ `stdlib/core/slice.nu`
     ? > . r broken 0 { = rc 2 } {}
     ? & == rc 0 > . r failed 0 { = rc 1 } {}
 
-    : Cov c ( cov_new )
+    : ~ Cov c ( cov_new )
     : i objects ( __collect c ( string_data workdir ) )
     ? == objects 0 {
         ( nurl_eprintln `nurl-cov: no coverage graphs were produced` )
@@ -355,7 +355,7 @@ $ `stdlib/core/slice.nu`
     }
 }
 
-@ __finish ArgParser p Cov c → i {
+@ __finish ArgParser p inout Cov c → i {
     : b all ( args_present p `all` )
     : ( Vec String ) keep ( __prefixes p all )
     ( cov_keep_only c keep )
@@ -375,7 +375,7 @@ $ `stdlib/core/slice.nu`
 }
 
 @ __cmd_report ArgParser p String dir → i {
-    : Cov c ( cov_new )
+    : ~ Cov c ( cov_new )
     : i objects ( __collect c ( string_data dir ) )
     ? == objects 0 {
         ( nurl_eprint `nurl-cov: no .gcno coverage graphs in ` )

@@ -887,11 +887,22 @@ LTO_CACHED=""
 if [ -n "$LTO_FLAG" ] && [ "$USING_ZIG" != "1" ] && [ "$(uname -s)" = "Linux" ] \
    && [ "${NURL_LTO:-thin}" != "full" ]; then
     LTO_FLAG="-flto=thin"
+    # Functions start on a 64-byte line. LLVM's default (16) lets an
+    # edit anywhere move every later function by a few bytes, and a hot
+    # loop that lands across a 32-byte line on a Skylake-family core
+    # (the JCC erratum) runs much slower: mlp's gradfit_test retired the
+    # same 108.94 G instructions after a cold function grew 48 bytes and
+    # took 13 s instead of 9 s. With every function on its own line, a
+    # function's speed depends only on its own code. The bench suite is
+    # unchanged within noise (pq and chacha20 faster); a binary grows by
+    # at most a few KiB.
     case "$OPT" in
-        -O2|-O3) LTO_TUNE_FLAGS="-Wl,-plugin-opt,O3" ;;
+        -O2|-O3) LTO_TUNE_FLAGS="-Wl,-plugin-opt,O3 -Wl,-plugin-opt,-align-all-functions=6" ;;
     esac
     if [ "${NURL_CACHE:-1}" != "0" ]; then
-        _lto_cache="${NURL_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/nurl}/thinlto"
+        # The ThinLTO key does not cover a backend option such as the
+        # alignment above, so objects built without it live elsewhere.
+        _lto_cache="${NURL_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/nurl}/thinlto-a64"
         if mkdir -p "$_lto_cache" 2>/dev/null; then
             LTO_TUNE_FLAGS="$LTO_TUNE_FLAGS -Wl,-plugin-opt,cache-dir=$_lto_cache -Wl,-plugin-opt,cache-policy=cache_size_bytes=2g:prune_interval=20m"
             LTO_CACHED=" cached"

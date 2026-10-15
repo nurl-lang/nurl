@@ -14,7 +14,10 @@ $ `src/pb.nu`
 $ `src/model.nu`
 $ `src/runtime.nu`
 
-& `c` @ nurl_peek_f32 *u base i idx → f
+$ `stdlib/std/floatbits.nu`
+
+// The k-th little-endian f32 of a byte view.
+@ f32at ( Slice u ) b i k → f { ^ # f ( bits_to_f32 ( slice_u32_le b * k 4 ) ) }
 
 : ~ i g_fail 0
 
@@ -31,7 +34,7 @@ $ `src/runtime.nu`
     ?? ( read_file_bytes path ) { T bytes → ^ bytes F _ → ^ ( vec_new [u] ) }
 }
 
-unsafe @ main → i {
+@ main → i {
     : ~ b have_model F
     : ~ OGraph g ( onnx_empty_graph )
     ?? ( read_file_bytes `tests/data/tiny.onnx` ) {
@@ -76,17 +79,17 @@ unsafe @ main → i {
 
     : ( Vec u ) input ( load_f32t `tests/data/tiny.in.f32` )
     : i in_n / ( vec_len [u] input ) 4
-    : RTensor out ( rt_run e g ( vec_data [u] input ) 1 in_n )
+    : RTensor out ( rt_run e g ( slice_from_vec [u] input ) 1 in_n )
     : GpuHost host ( rt_download e out )
     : i out_n . out nelem
     ( check == out_n 3 `output is length 3` )
 
     : ( Vec u ) exp_b ( load_f32t `tests/data/tiny.out.f32` )
-    : *u exp ( vec_data [u] exp_b )
+    : ( Slice u ) exp ( slice_from_vec [u] exp_b )
     : ~ i bad 0
     : ~ i j 0
     ~ < j 3 {
-        : ~ f d - ( nurl_peek_f32 ( gpu_host_ptr host ) j ) ( nurl_peek_f32 exp j )
+        : ~ f d - ( gpu_host_get_f32 host j ) ( f32at exp j )
         ? < d 0.0 { = d - 0.0 d } {}
         ? > d 0.001 { = bad + bad 1 } {}
         = j + j 1

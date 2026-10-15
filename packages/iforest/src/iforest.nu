@@ -39,8 +39,11 @@
 // Vec-of-Vec, and scoring walks raw pointers for speed.
 
 $ `stdlib/core/vec.nu`
+$ `stdlib/core/slice.nu`
 $ `stdlib/std/float.nu`
 $ `stdlib/std/rng.nu`
+$ `stdlib/std/par.nu`
+$ `stdlib/std/arc.nu`
 
 // Euler–Mascheroni constant, for the harmonic-number approximation in c(n).
 : f GAMMA 0.5772156649015329
@@ -107,7 +110,7 @@ $ `stdlib/std/rng.nu`
 //
 // Draw `psi` distinct row indices from [0, n) without replacement via a
 // partial Fisher–Yates shuffle, then truncate. Returns an owned ( Vec i ).
-unsafe @ __subsample Rng g i n i psi → ( Vec i ) {
+@ __subsample Rng g i n i psi → ( Vec i ) {
     : ( Vec i ) all ( vec_iota 0 n )
     : ~ i m psi
     ? > m n { = m n } {}
@@ -117,7 +120,7 @@ unsafe @ __subsample Rng g i n i psi → ( Vec i ) {
         ( vec_swap [i] all k j )
         = k + k 1
     }
-    ( vec_set_len [i] all m )
+    : b _t ( vec_truncate [i] all m )
     ^ all
 }
 
@@ -126,8 +129,8 @@ unsafe @ __subsample Rng g i n i psi → ( Vec i ) {
 // Build one subtree from the row indices `idx` (which this call OWNS: they
 // go when it returns — at most depth × psi indices are alive at once, a
 // few KB at the default psi of 256) and return its node index. `dp` is the
-// raw row-major data buffer; reading feature q of row r is dp[r*n_cols + q].
-unsafe @ __build_node IForest fo * f dp i n_cols sink ( Vec i ) idx i depth i height_limit Rng g → i {
+// row-major data; feature q of row r is dp[r*n_cols + q].
+@ __build_node IForest fo ( Slice f ) dp i n_cols sink ( Vec i ) idx i depth i height_limit Rng g → i {
     : i m ( vec_len [i] idx )
 
     // Isolated (≤1 point) or hit the depth cap → leaf.
@@ -136,7 +139,7 @@ unsafe @ __build_node IForest fo * f dp i n_cols sink ( Vec i ) idx i depth i he
         ^ leaf
     } {}
 
-    : *i idxp ( vec_data [i] idx )
+    : ( Slice i ) idxp ( slice_from_vec [i] idx )
 
     // Pick a feature that actually varies over this subsample. A column
     // every row agrees on (a one-hot category nobody sent, a sensor stuck
@@ -154,12 +157,12 @@ unsafe @ __build_node IForest fo * f dp i n_cols sink ( Vec i ) idx i depth i he
     : i max_tries * 2 n_cols
     ~ & < q 0 < tries max_tries {
         : i cand ( rng_below g n_cols )
-        : i r0 . idxp 0
-        : ~ f lo . dp + * r0 n_cols cand
+        : i r0 ( slice_at [i] idxp 0 )
+        : ~ f lo ( slice_at [f] dp + * r0 n_cols cand )
         : ~ f hi lo
         : ~ i a 1
         ~ < a m {
-            : f v . dp + * . idxp a n_cols cand
+            : f v ( slice_at [f] dp + * ( slice_at [i] idxp a ) n_cols cand )
             ? < v lo { = lo v } {}
             ? > v hi { = hi v } {}
             = a + a 1
@@ -182,9 +185,8 @@ unsafe @ __build_node IForest fo * f dp i n_cols sink ( Vec i ) idx i depth i he
     : ( Vec i ) ri ( vec_new [i] )
     : ~ i b 0
     ~ < b m {
-        : i row . idxp b
-        : i off2 + * row n_cols q
-        : f v . dp off2
+        : i row ( slice_at [i] idxp b )
+        : f v ( slice_at [f] dp + * row n_cols q )
         ? < v p { ( vec_push [i] li row ) } { ( vec_push [i] ri row ) }
         = b + b 1
     }
@@ -202,7 +204,7 @@ unsafe @ __build_node IForest fo * f dp i n_cols sink ( Vec i ) idx i depth i he
 
 // ── Training ──────────────────────────────────────────────────────────
 
-unsafe @ iforest_train ( Vec f ) data i n_rows i n_cols i n_trees i sample_size i seed → IForest {
+@ iforest_train ( Vec f ) data i n_rows i n_cols i n_trees i sample_size i seed → IForest {
     : ~ i psi sample_size
     ? > psi n_rows { = psi n_rows } {}
     ? < psi 1 { = psi 1 } {}
@@ -222,7 +224,7 @@ unsafe @ iforest_train ( Vec f ) data i n_rows i n_cols i n_trees i sample_size 
 
     : i hlim ( __height_limit psi )
     : Rng g ( rng_seed seed )
-    : *f dp ( vec_data [f] data )
+    : ( Slice f ) dp ( slice_from_vec [f] data )
 
     : ~ i t 0
     ~ < t n_trees {
@@ -236,30 +238,39 @@ unsafe @ iforest_train ( Vec f ) data i n_rows i n_cols i n_trees i sample_size 
 
 // ── Scoring ───────────────────────────────────────────────────────────
 //
-// Path length of `point` (raw *f, length n_cols) down one tree: walk from
-// `root` comparing the node's feature to its threshold, then add c(leaf
-// size) for the unbuilt subtree below where we stopped.
-unsafe @ __path_len IForest fo i root * f point → f {
-    : *i feat ( vec_data [i] . fo feature )
-    : *f spl ( vec_data [f] . fo split )
-    : *i lf ( vec_data [i] . fo left )
-    : *i rt ( vec_data [i] . fo right )
-    : *i sz ( vec_data [i] . fo size )
+// The forest's node columns, cut to one length so a walk checks each
+// node index once (slice_prefix).
+: IfCols { ( Slice i ) feat ( Slice f ) spl ( Slice i ) lf ( Slice i ) rt ( Slice i ) sz }
 
+@ __if_cols IForest fo → IfCols {
+    : i n ( vec_len [i] . fo feature )
+    ^ @ IfCols {
+        ( slice_prefix [i] ( slice_from_vec [i] . fo feature ) n )
+        ( slice_prefix [f] ( slice_from_vec [f] . fo split ) n )
+        ( slice_prefix [i] ( slice_from_vec [i] . fo left ) n )
+        ( slice_prefix [i] ( slice_from_vec [i] . fo right ) n )
+        ( slice_prefix [i] ( slice_from_vec [i] . fo size ) n )
+    }
+}
+
+// Path length of the point at `base` of `xs` (n_cols values) down one
+// tree: walk from `root` comparing the node's feature to its threshold,
+// then add c(leaf size) for the unbuilt subtree below where we stopped.
+inline @ __path_len IfCols c i root ( Slice f ) xs i base → f {
     : ~ i node root
     : ~ i depth 0
     : ~ b going T
     ~ going {
-        : i fq . feat node
+        : i fq ( slice_at [i] . c feat node )
         ? < fq 0 {
             = going F
         } {
-            : f xv . point fq
-            ? < xv . spl node { = node . lf node } { = node . rt node }
+            : f xv ( slice_at [f] xs + base fq )
+            ? < xv ( slice_at [f] . c spl node ) { = node ( slice_at [i] . c lf node ) } { = node ( slice_at [i] . c rt node ) }
             = depth + depth 1
         }
     }
-    ^ + # f depth ( iforest_avg_path . sz node )
+    ^ + # f depth ( iforest_avg_path ( slice_at [i] . c sz node ) )
 }
 
 // Anomaly score in (0, 1] for a single point given as a ( Vec f ) of length
@@ -268,38 +279,133 @@ unsafe @ __path_len IForest fo i root * f point → f {
 // path, "no information" — rather than being read past its end: a
 // forest trained on two columns handed an empty point once walked its
 // trees over whatever lay at address zero.
-unsafe @ iforest_score IForest fo ( Vec f ) point → f {
+@ iforest_score IForest fo ( Vec f ) point → f {
     ? == ( vec_len [f] point ) . fo n_cols {} { ^ 0.5 }
-    : *f pp ( vec_data [f] point )
-    ^ ( __score_ptr fo pp )
+    ^ ( __score_at fo ( slice_from_vec [f] point ) 0 )
 }
 
 // Score row `row` of a row-major ( Vec f ) matrix without copying it out.
 // A row the matrix does not hold scores 0.5, as above.
-unsafe @ iforest_score_row IForest fo ( Vec f ) data i row → f {
+@ iforest_score_row IForest fo ( Vec f ) data i row → f {
     ? & >= row 0 <= * + row 1 . fo n_cols ( vec_len [f] data ) {} { ^ 0.5 }
-    : *f dp ( vec_data [f] data )
-    : i base + # i dp * * row . fo n_cols 8
-    : *f pp # *f base
-    ^ ( __score_ptr fo pp )
+    ^ ( __score_at fo ( slice_from_vec [f] data ) * row . fo n_cols )
 }
 
-// Mean path length over the forest → score. `point` is a raw *f of n_cols.
-unsafe @ __score_ptr IForest fo * f point → f {
+// Mean path length over the forest → score, for the n_cols values at
+// `base` of `xs`.
+@ __score_at IForest fo ( Slice f ) xs i base → f {
     : i nt ( vec_len [i] . fo roots )
     ? <= nt 0 { ^ 0.0 } {}
     : f cpsi . fo c_psi
     ? <= cpsi 0.0 { ^ 0.5 } {}
 
-    : *i rts ( vec_data [i] . fo roots )
+    : ( Slice i ) rts ( slice_from_vec [i] . fo roots )
+    : IfCols cols ( __if_cols fo )
     : ~ f total 0.0
     : ~ i k 0
     ~ < k nt {
-        = total + total ( __path_len fo . rts k point )
+        = total + total ( __path_len cols ( slice_at [i] rts k ) xs base )
         = k + k 1
     }
     : f avg / total # f nt
     ^ ( float_pow 2.0 - 0.0 / avg cpsi )
+}
+
+// ── Batch scoring ─────────────────────────────────────────────────────
+//
+// iforest_score_row computes c(leaf size) — a log — at every leaf it
+// reaches, once per tree per row. A batch computes it once per NODE
+// (`cleaf`) and adds the table entry instead: the same values summed in
+// the same order, so every score is bit-identical to the per-row one.
+
+@ __if_cleaf IForest fo → ( Vec f ) {
+    : i n ( vec_len [i] . fo size )
+    : ( Vec f ) out ( vec_with_cap [f] n )
+    : ~ i k 0
+    ~ < k n { ( vec_push [f] out ( iforest_avg_path ( vec_at [i] . fo size k ) ) ) = k + k 1 }
+    ^ out
+}
+
+inline @ __path_len_c IfCols c ( Slice f ) cl i root ( Slice f ) xs i base → f {
+    : ~ i node root
+    : ~ i depth 0
+    : ~ b going T
+    ~ going {
+        : i fq ( slice_at [i] . c feat node )
+        ? < fq 0 {
+            = going F
+        } {
+            : f xv ( slice_at [f] xs + base fq )
+            ? < xv ( slice_at [f] . c spl node ) { = node ( slice_at [i] . c lf node ) } { = node ( slice_at [i] . c rt node ) }
+            = depth + depth 1
+        }
+    }
+    ^ + # f depth ( slice_at [f] cl node )
+}
+
+// Scores of rows [lo, hi) of `data` into `out`.
+@ __if_score_span IForest fo ( Vec f ) cleaf ( Vec f ) data i lo i hi ( Vec f ) out → v {
+    : i nt ( vec_len [i] . fo roots )
+    : f cpsi . fo c_psi
+    : i nc . fo n_cols
+    : ( Slice i ) rts ( slice_from_vec [i] . fo roots )
+    : IfCols cols ( __if_cols fo )
+    : ( Slice f ) cl ( slice_from_vec [f] cleaf )
+    : ( Slice f ) xs ( slice_from_vec [f] data )
+    : ~ i r lo
+    ~ < r hi {
+        ? | <= nt 0 <= cpsi 0.0 { ( vec_push [f] out ? <= nt 0 0.0 0.5 ) } {
+            : ~ f total 0.0
+            : ~ i k 0
+            ~ < k nt {
+                = total + total ( __path_len_c cols cl ( slice_at [i] rts k ) xs * r nc )
+                = k + k 1
+            }
+            ( vec_push [f] out ( float_pow 2.0 - 0.0 / / total # f nt cpsi ) )
+        }
+        = r + r 1
+    }
+}
+
+// The scores of the first `n_rows` rows of `data` (n_cols values each),
+// equal to iforest_score_row's for each; a row past the data scores 0.5.
+@ iforest_score_rows IForest fo ( Vec f ) data i n_rows → ( Vec f ) {
+    : i have / ( vec_len [f] data ) ? > . fo n_cols 0 . fo n_cols 1
+    : i n ? > n_rows have have n_rows
+    : ( Vec f ) out ( vec_with_cap [f] n_rows )
+    ( __if_score_span fo ( __if_cleaf fo ) data 0 n out )
+    : ~ i r n
+    ~ < r n_rows { ( vec_push [f] out 0.5 ) = r + r 1 }
+    ^ out
+}
+
+: __IfJob { IForest fo ( Vec f ) cleaf ( Vec f ) data i n i per }
+
+// iforest_score_rows over `nt` worker threads (the rows split into
+// chunks; the same scores, in order). Below a few thousand rows the
+// threads cost more than they save, and it scores on this one.
+@ iforest_score_rows_par IForest fo ( Vec f ) data i n_rows i nt → ( Vec f ) {
+    ? | <= nt 1 < n_rows 4096 { ^ ( iforest_score_rows fo data n_rows ) } {}
+    : i have / ( vec_len [f] data ) ? > . fo n_cols 0 . fo n_cols 1
+    : i n ? > n_rows have have n_rows
+    : i nch * nt 8
+    : i per / + n - nch 1 nch
+    : ( Arc __IfJob ) ja ( arc_new [__IfJob] @ __IfJob { fo ( __if_cleaf fo ) ( vec_clone [f] data ) n per } )
+    : ( Vec ( Vec f ) ) parts ( par_map_index [( Vec f )] nch nt \ i c → ( Vec f ) {
+        : __IfJob j ( arc_get [__IfJob] ja )
+        : i lo * c . j per
+        : ~ i hi + lo . j per
+        ? > hi . j n { = hi . j n } {}
+        : ( Vec f ) o ( vec_new [f] )
+        ? < lo hi { ( __if_score_span . j fo . j cleaf . j data lo hi o ) } {}
+        ^ o
+    } )
+    : ( Vec f ) out ( vec_with_cap [f] n_rows )
+    : ~ i c 0
+    ~ < c nch { ( vec_extend [f] out ( vec_at [( Vec f )] parts c ) ) = c + c 1 }
+    : ~ i r n
+    ~ < r n_rows { ( vec_push [f] out 0.5 ) = r + r 1 }
+    ^ out
 }
 
 // ── Accessors / cleanup ───────────────────────────────────────────────

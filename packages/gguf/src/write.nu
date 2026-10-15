@@ -54,7 +54,7 @@ $ `stdlib/std/bytes.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/std/floatbits.nu`
 $ `gguf.nu`
-$ `stdlib/std/arc.nu`
+$ `stdlib/std/rc.nu`
 
 : GgufWImpl {
     i align
@@ -71,15 +71,15 @@ $ `stdlib/std/arc.nu`
     ( Vec u ) data
 }
 
-// A GgufW is a handle on its state in an Arc (stdlib/std/arc.nu):
-// every copy is the same writer, and the last owner releases it.
-: GgufW { ( Arc GgufWImpl ) a }
+// A GgufW is a handle on its state in an Rc (stdlib/std/rc.nu): every
+// copy is the same writer, and the last owner releases it. It stays on
+// the thread that made it; every call checks the state out (rc_take),
+// changes it and puts it back.
+: GgufW { ( Rc GgufWImpl ) r }
 
-@ GgufW_share GgufW h → GgufW { ^ @ GgufW { ( arc_clone [GgufWImpl] . h a ) } }
+@ GgufW_share GgufW h → GgufW { ^ @ GgufW { ( rc_clone [GgufWImpl] . h r ) } }
 
 @ GgufW_drop sink GgufW h → v {}
-
-unsafe @ __GgufW_ptr GgufW h → *GgufWImpl { ^ ( arc_ptr [GgufWImpl] . h a ) }
 
 // length-prefixed GGUF string: u64 LE length + raw bytes (no NUL)
 @ __gw_pstr ( Vec u ) b s raw → v {
@@ -92,24 +92,13 @@ unsafe @ __GgufW_ptr GgufW h → *GgufWImpl { ^ ( arc_ptr [GgufWImpl] . h a ) }
     ( bytes_push_u32_le b # u32 vt )
 }
 
-unsafe @ gw_new i align → !GgufW String {
+@ gw_new i align → !GgufW String {
     ? | | < align 1 > align 1048576 != & align - align 1 0 {
         ^ @ !GgufW String { F ( string_from `gguf: writer alignment must be a power of two, 1..1048576` ) }
     } {}
-    : GgufW h @ GgufW { ( arc_zero [GgufWImpl] ) }
-    : *GgufWImpl w ( arc_ptr [GgufWImpl] . h a )
-    = . w align align
-    = . w n_kv 0
-    = . w kvb ( vec_new [u] )
-    = . w tnames ( vec_new [String] )
-    = . w ttype ( vec_new [i] )
-    = . w tnd ( vec_new [i] )
-    = . w td0 ( vec_new [i] )
-    = . w td1 ( vec_new [i] )
-    = . w td2 ( vec_new [i] )
-    = . w td3 ( vec_new [i] )
-    = . w toff ( vec_new [i] )
-    = . w data ( vec_new [u] )
+    : GgufW h @ GgufW { ( rc_new [GgufWImpl] @ GgufWImpl {
+            align 0 ( vec_new [u] ) ( vec_new [String] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] )
+            ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [u] ) } ) }
     ( gw_kv_u32 h `general.alignment` align )
     ^ @ !GgufW String { T h }
 }
@@ -199,70 +188,125 @@ unsafe @ gw_new i align → !GgufW String {
     }
 }
 
-unsafe @ gw_kv_u32 GgufW w__h s key i v → v {
-    : *GgufWImpl w ( __GgufW_ptr w__h )
+@ __gw_kv_u32_in inout GgufWImpl w s key i v → v {
     ( __gwkv_u32 . w kvb key v )
     = . w n_kv + . w n_kv 1
 }
 
-unsafe @ gw_kv_i32 GgufW w__h s key i v → v {
-    : *GgufWImpl w ( __GgufW_ptr w__h )
+@ gw_kv_u32 GgufW h s key i v → v {
+    : ~ GgufWImpl w ( rc_take [GgufWImpl] . h r )
+    ( __gw_kv_u32_in w key v )
+    ( rc_restore [GgufWImpl] . h r w )
+}
+
+@ __gw_kv_i32_in inout GgufWImpl w s key i v → v {
     ( __gwkv_i32 . w kvb key v )
     = . w n_kv + . w n_kv 1
 }
 
-unsafe @ gw_kv_u64 GgufW w__h s key i v → v {
-    : *GgufWImpl w ( __GgufW_ptr w__h )
+@ gw_kv_i32 GgufW h s key i v → v {
+    : ~ GgufWImpl w ( rc_take [GgufWImpl] . h r )
+    ( __gw_kv_i32_in w key v )
+    ( rc_restore [GgufWImpl] . h r w )
+}
+
+@ __gw_kv_u64_in inout GgufWImpl w s key i v → v {
     ( __gwkv_u64 . w kvb key v )
     = . w n_kv + . w n_kv 1
 }
 
-unsafe @ gw_kv_i64 GgufW w__h s key i v → v {
-    : *GgufWImpl w ( __GgufW_ptr w__h )
+@ gw_kv_u64 GgufW h s key i v → v {
+    : ~ GgufWImpl w ( rc_take [GgufWImpl] . h r )
+    ( __gw_kv_u64_in w key v )
+    ( rc_restore [GgufWImpl] . h r w )
+}
+
+@ __gw_kv_i64_in inout GgufWImpl w s key i v → v {
     ( __gwkv_i64 . w kvb key v )
     = . w n_kv + . w n_kv 1
 }
 
-unsafe @ gw_kv_f32 GgufW w__h s key f x → v {
-    : *GgufWImpl w ( __GgufW_ptr w__h )
+@ gw_kv_i64 GgufW h s key i v → v {
+    : ~ GgufWImpl w ( rc_take [GgufWImpl] . h r )
+    ( __gw_kv_i64_in w key v )
+    ( rc_restore [GgufWImpl] . h r w )
+}
+
+@ __gw_kv_f32_in inout GgufWImpl w s key f x → v {
     ( __gwkv_f32 . w kvb key x )
     = . w n_kv + . w n_kv 1
 }
 
-unsafe @ gw_kv_f64 GgufW w__h s key f x → v {
-    : *GgufWImpl w ( __GgufW_ptr w__h )
+@ gw_kv_f32 GgufW h s key f x → v {
+    : ~ GgufWImpl w ( rc_take [GgufWImpl] . h r )
+    ( __gw_kv_f32_in w key x )
+    ( rc_restore [GgufWImpl] . h r w )
+}
+
+@ __gw_kv_f64_in inout GgufWImpl w s key f x → v {
     ( __gwkv_f64 . w kvb key x )
     = . w n_kv + . w n_kv 1
 }
 
-unsafe @ gw_kv_bool GgufW w__h s key b v → v {
-    : *GgufWImpl w ( __GgufW_ptr w__h )
+@ gw_kv_f64 GgufW h s key f x → v {
+    : ~ GgufWImpl w ( rc_take [GgufWImpl] . h r )
+    ( __gw_kv_f64_in w key x )
+    ( rc_restore [GgufWImpl] . h r w )
+}
+
+@ __gw_kv_bool_in inout GgufWImpl w s key b v → v {
     ( __gwkv_bool . w kvb key v )
     = . w n_kv + . w n_kv 1
 }
 
-unsafe @ gw_kv_str GgufW w__h s key s val → v {
-    : *GgufWImpl w ( __GgufW_ptr w__h )
+@ gw_kv_bool GgufW h s key b v → v {
+    : ~ GgufWImpl w ( rc_take [GgufWImpl] . h r )
+    ( __gw_kv_bool_in w key v )
+    ( rc_restore [GgufWImpl] . h r w )
+}
+
+@ __gw_kv_str_in inout GgufWImpl w s key s val → v {
     ( __gwkv_str . w kvb key val )
     = . w n_kv + . w n_kv 1
 }
 
-unsafe @ gw_kv_arr_i32 GgufW w__h s key ( Vec i ) vals → v {
-    : *GgufWImpl w ( __GgufW_ptr w__h )
+@ gw_kv_str GgufW h s key s val → v {
+    : ~ GgufWImpl w ( rc_take [GgufWImpl] . h r )
+    ( __gw_kv_str_in w key val )
+    ( rc_restore [GgufWImpl] . h r w )
+}
+
+@ __gw_kv_arr_i32_in inout GgufWImpl w s key ( Vec i ) vals → v {
     ( __gwkv_arr_i32 . w kvb key vals )
     = . w n_kv + . w n_kv 1
 }
 
-unsafe @ gw_kv_arr_f32 GgufW w__h s key ( Vec f ) vals → v {
-    : *GgufWImpl w ( __GgufW_ptr w__h )
+@ gw_kv_arr_i32 GgufW h s key ( Vec i ) vals → v {
+    : ~ GgufWImpl w ( rc_take [GgufWImpl] . h r )
+    ( __gw_kv_arr_i32_in w key vals )
+    ( rc_restore [GgufWImpl] . h r w )
+}
+
+@ __gw_kv_arr_f32_in inout GgufWImpl w s key ( Vec f ) vals → v {
     ( __gwkv_arr_f32 . w kvb key vals )
     = . w n_kv + . w n_kv 1
 }
 
-unsafe @ gw_kv_arr_str GgufW w__h s key ( Vec String ) vals → v {
-    : *GgufWImpl w ( __GgufW_ptr w__h )
+@ gw_kv_arr_f32 GgufW h s key ( Vec f ) vals → v {
+    : ~ GgufWImpl w ( rc_take [GgufWImpl] . h r )
+    ( __gw_kv_arr_f32_in w key vals )
+    ( rc_restore [GgufWImpl] . h r w )
+}
+
+@ __gw_kv_arr_str_in inout GgufWImpl w s key ( Vec String ) vals → v {
     ( __gwkv_arr_str . w kvb key vals )
     = . w n_kv + . w n_kv 1
+}
+
+@ gw_kv_arr_str GgufW h s key ( Vec String ) vals → v {
+    : ~ GgufWImpl w ( rc_take [GgufWImpl] . h r )
+    ( __gw_kv_arr_str_in w key vals )
+    ( rc_restore [GgufWImpl] . h r w )
 }
 
 // Byte size the declared shape demands, or the validation error —
@@ -301,8 +345,7 @@ unsafe @ gw_kv_arr_str GgufW w__h s key ( Vec String ) vals → v {
 // Add a tensor: validates the declared shape against the payload size
 // with the same rules the parser enforces, aligns the data section,
 // and records the entry. Unused trailing dims pass 1.
-unsafe @ gw_tensor GgufW w__h s name i gt i nd i d0 i d1 i d2 i d3 ( Vec u ) bytes → !v String {
-    : *GgufWImpl w ( __GgufW_ptr w__h )
+@ __gw_tensor_in inout GgufWImpl w s name i gt i nd i d0 i d1 i d2 i d3 ( Vec u ) bytes → !v String {
     : ~ i nb -1
     ?? ( __gw_tensor_bytes gt nd d0 d1 d2 d3 ) {
         T n → { = nb n }
@@ -334,13 +377,19 @@ unsafe @ gw_tensor GgufW w__h s name i gt i nd i d0 i d1 i d2 i d3 ( Vec u ) byt
     ^ @ !v String { T 0 }
 }
 
+@ gw_tensor GgufW h s name i gt i nd i d0 i d1 i d2 i d3 ( Vec u ) bytes → !v String {
+    : ~ GgufWImpl w ( rc_take [GgufWImpl] . h r )
+    : !v String res ( __gw_tensor_in w name gt nd d0 d1 d2 d3 bytes )
+    ( rc_restore [GgufWImpl] . h r w )
+    ^ res
+}
+
 @ __gw_geti ( Vec i ) v i k → i {
     ?? ( vec_get [i] v k ) { T x → { ^ x } F → { ^ 0 } }
 }
 
 // Serialise the complete GGUF v3 image.
-unsafe @ gw_finish GgufW w__h → ( Vec u ) {
-    : *GgufWImpl w ( __GgufW_ptr w__h )
+@ __gw_finish_in inout GgufWImpl w → ( Vec u ) {
     : i nt ( vec_len [String] . w tnames )
     : ( Vec u ) out ( vec_new [u] )
     ( vec_push [u] out # u 71 )
@@ -372,6 +421,13 @@ unsafe @ gw_finish GgufW w__h → ( Vec u ) {
     }
     ( vec_extend [u] out . w data )
     ^ out
+}
+
+@ gw_finish GgufW h → ( Vec u ) {
+    : ~ GgufWImpl w ( rc_take [GgufWImpl] . h r )
+    : ( Vec u ) res ( __gw_finish_in w )
+    ( rc_restore [GgufWImpl] . h r w )
+    ^ res
 }
 
 @ gw_write GgufW w__h s path → !v String {
@@ -414,46 +470,27 @@ unsafe @ gw_finish GgufW w__h → ( Vec u ) {
     i data_size
 }
 
-// A GgufS is a handle on its state in an Arc (stdlib/std/arc.nu):
-// every copy is the same writer, and the last owner releases it.
-: GgufS { ( Arc GgufSImpl ) a }
+// A GgufS is a handle on its state in an Rc (stdlib/std/rc.nu), like
+// GgufW.
+: GgufS { ( Rc GgufSImpl ) r }
 
-@ GgufS_share GgufS h → GgufS { ^ @ GgufS { ( arc_clone [GgufSImpl] . h a ) } }
+@ GgufS_share GgufS h → GgufS { ^ @ GgufS { ( rc_clone [GgufSImpl] . h r ) } }
 
 @ GgufS_drop sink GgufS h → v {}
-
-unsafe @ __GgufS_ptr GgufS h → *GgufSImpl { ^ ( arc_ptr [GgufSImpl] . h a ) }
 
 @ __gws_err s msg → !v String {
     ^ @ !v String { F ( string_from msg ) }
 }
 
-unsafe @ gws_create s path i align → !GgufS String {
+@ gws_create s path i align → !GgufS String {
     ? | | < align 1 > align 1048576 != & align - align 1 0 {
         ^ @ !GgufS String { F ( string_from `gguf: writer alignment must be a power of two, 1..1048576` ) }
     } {}
     ?? ( file_create path ) {
         T fh → {
-            : GgufS h @ GgufS { ( arc_zero [GgufSImpl] ) }
-            : *GgufSImpl s ( arc_ptr [GgufSImpl] . h a )
-            = . s align align
-            = . s n_kv 0
-            = . s kvb ( vec_new [u] )
-            = . s tnames ( vec_new [String] )
-            = . s ttype ( vec_new [i] )
-            = . s tnd ( vec_new [i] )
-            = . s td0 ( vec_new [i] )
-            = . s td1 ( vec_new [i] )
-            = . s td2 ( vec_new [i] )
-            = . s td3 ( vec_new [i] )
-            = . s toff ( vec_new [i] )
-            = . s tbytes ( vec_new [i] )
-            = . s fh ( File_share fh )
-            = . s phase 0
-            = . s cur 0
-            = . s cur_got 0
-            = . s data_pos 0
-            = . s data_size 0
+            : GgufS h @ GgufS { ( rc_new [GgufSImpl] @ GgufSImpl {
+                    align 0 ( vec_new [u] ) ( vec_new [String] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] )
+                    ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) fh 0 0 0 0 0 } ) }
             ( gws_kv_u32 h `general.alignment` align )
             ^ @ !GgufS String { T h }
         }
@@ -465,74 +502,129 @@ unsafe @ gws_create s path i align → !GgufS String {
     }
 }
 
-unsafe @ gws_kv_u32 GgufS s__h s key i v → v {
-    : *GgufSImpl s ( __GgufS_ptr s__h )
+@ __gws_kv_u32_in inout GgufSImpl s s key i v → v {
     ( __gwkv_u32 . s kvb key v )
     = . s n_kv + . s n_kv 1
 }
 
-unsafe @ gws_kv_i32 GgufS s__h s key i v → v {
-    : *GgufSImpl s ( __GgufS_ptr s__h )
+@ gws_kv_u32 GgufS h s key i v → v {
+    : ~ GgufSImpl s ( rc_take [GgufSImpl] . h r )
+    ( __gws_kv_u32_in s key v )
+    ( rc_restore [GgufSImpl] . h r s )
+}
+
+@ __gws_kv_i32_in inout GgufSImpl s s key i v → v {
     ( __gwkv_i32 . s kvb key v )
     = . s n_kv + . s n_kv 1
 }
 
-unsafe @ gws_kv_u64 GgufS s__h s key i v → v {
-    : *GgufSImpl s ( __GgufS_ptr s__h )
+@ gws_kv_i32 GgufS h s key i v → v {
+    : ~ GgufSImpl s ( rc_take [GgufSImpl] . h r )
+    ( __gws_kv_i32_in s key v )
+    ( rc_restore [GgufSImpl] . h r s )
+}
+
+@ __gws_kv_u64_in inout GgufSImpl s s key i v → v {
     ( __gwkv_u64 . s kvb key v )
     = . s n_kv + . s n_kv 1
 }
 
-unsafe @ gws_kv_i64 GgufS s__h s key i v → v {
-    : *GgufSImpl s ( __GgufS_ptr s__h )
+@ gws_kv_u64 GgufS h s key i v → v {
+    : ~ GgufSImpl s ( rc_take [GgufSImpl] . h r )
+    ( __gws_kv_u64_in s key v )
+    ( rc_restore [GgufSImpl] . h r s )
+}
+
+@ __gws_kv_i64_in inout GgufSImpl s s key i v → v {
     ( __gwkv_i64 . s kvb key v )
     = . s n_kv + . s n_kv 1
 }
 
-unsafe @ gws_kv_f32 GgufS s__h s key f x → v {
-    : *GgufSImpl s ( __GgufS_ptr s__h )
+@ gws_kv_i64 GgufS h s key i v → v {
+    : ~ GgufSImpl s ( rc_take [GgufSImpl] . h r )
+    ( __gws_kv_i64_in s key v )
+    ( rc_restore [GgufSImpl] . h r s )
+}
+
+@ __gws_kv_f32_in inout GgufSImpl s s key f x → v {
     ( __gwkv_f32 . s kvb key x )
     = . s n_kv + . s n_kv 1
 }
 
-unsafe @ gws_kv_f64 GgufS s__h s key f x → v {
-    : *GgufSImpl s ( __GgufS_ptr s__h )
+@ gws_kv_f32 GgufS h s key f x → v {
+    : ~ GgufSImpl s ( rc_take [GgufSImpl] . h r )
+    ( __gws_kv_f32_in s key x )
+    ( rc_restore [GgufSImpl] . h r s )
+}
+
+@ __gws_kv_f64_in inout GgufSImpl s s key f x → v {
     ( __gwkv_f64 . s kvb key x )
     = . s n_kv + . s n_kv 1
 }
 
-unsafe @ gws_kv_bool GgufS s__h s key b v → v {
-    : *GgufSImpl s ( __GgufS_ptr s__h )
+@ gws_kv_f64 GgufS h s key f x → v {
+    : ~ GgufSImpl s ( rc_take [GgufSImpl] . h r )
+    ( __gws_kv_f64_in s key x )
+    ( rc_restore [GgufSImpl] . h r s )
+}
+
+@ __gws_kv_bool_in inout GgufSImpl s s key b v → v {
     ( __gwkv_bool . s kvb key v )
     = . s n_kv + . s n_kv 1
 }
 
-unsafe @ gws_kv_str GgufS s__h s key s val → v {
-    : *GgufSImpl s ( __GgufS_ptr s__h )
+@ gws_kv_bool GgufS h s key b v → v {
+    : ~ GgufSImpl s ( rc_take [GgufSImpl] . h r )
+    ( __gws_kv_bool_in s key v )
+    ( rc_restore [GgufSImpl] . h r s )
+}
+
+@ __gws_kv_str_in inout GgufSImpl s s key s val → v {
     ( __gwkv_str . s kvb key val )
     = . s n_kv + . s n_kv 1
 }
 
-unsafe @ gws_kv_arr_i32 GgufS s__h s key ( Vec i ) vals → v {
-    : *GgufSImpl s ( __GgufS_ptr s__h )
+@ gws_kv_str GgufS h s key s val → v {
+    : ~ GgufSImpl s ( rc_take [GgufSImpl] . h r )
+    ( __gws_kv_str_in s key val )
+    ( rc_restore [GgufSImpl] . h r s )
+}
+
+@ __gws_kv_arr_i32_in inout GgufSImpl s s key ( Vec i ) vals → v {
     ( __gwkv_arr_i32 . s kvb key vals )
     = . s n_kv + . s n_kv 1
 }
 
-unsafe @ gws_kv_arr_f32 GgufS s__h s key ( Vec f ) vals → v {
-    : *GgufSImpl s ( __GgufS_ptr s__h )
+@ gws_kv_arr_i32 GgufS h s key ( Vec i ) vals → v {
+    : ~ GgufSImpl s ( rc_take [GgufSImpl] . h r )
+    ( __gws_kv_arr_i32_in s key vals )
+    ( rc_restore [GgufSImpl] . h r s )
+}
+
+@ __gws_kv_arr_f32_in inout GgufSImpl s s key ( Vec f ) vals → v {
     ( __gwkv_arr_f32 . s kvb key vals )
     = . s n_kv + . s n_kv 1
 }
 
-unsafe @ gws_kv_arr_str GgufS s__h s key ( Vec String ) vals → v {
-    : *GgufSImpl s ( __GgufS_ptr s__h )
+@ gws_kv_arr_f32 GgufS h s key ( Vec f ) vals → v {
+    : ~ GgufSImpl s ( rc_take [GgufSImpl] . h r )
+    ( __gws_kv_arr_f32_in s key vals )
+    ( rc_restore [GgufSImpl] . h r s )
+}
+
+@ __gws_kv_arr_str_in inout GgufSImpl s s key ( Vec String ) vals → v {
     ( __gwkv_arr_str . s kvb key vals )
     = . s n_kv + . s n_kv 1
 }
 
+@ gws_kv_arr_str GgufS h s key ( Vec String ) vals → v {
+    : ~ GgufSImpl s ( rc_take [GgufSImpl] . h r )
+    ( __gws_kv_arr_str_in s key vals )
+    ( rc_restore [GgufSImpl] . h r s )
+}
+
 // Round `x` up to the writer's alignment.
-unsafe @ __gws_align_up * GgufSImpl s i x → i {
+@ __gws_align_up inout GgufSImpl s i x → i {
     : i r % x . s align
     ^ ? == r 0 x + x - . s align r
 }
@@ -541,8 +633,7 @@ unsafe @ __gws_align_up * GgufSImpl s i x → i {
 // declaration order. The data-section offset is fixed here, which is
 // what lets the whole tensor table serialise before any payload byte
 // exists.
-unsafe @ gws_tensor GgufS s__h s name i gt i nd i d0 i d1 i d2 i d3 → !v String {
-    : *GgufSImpl s ( __GgufS_ptr s__h )
+@ __gws_tensor_in inout GgufSImpl s s name i gt i nd i d0 i d1 i d2 i d3 → !v String {
     ? != . s phase 0 { ^ ( __gws_err `gguf: streaming writer is past its declare phase` ) } {}
     : ~ i nb -1
     ?? ( __gw_tensor_bytes gt nd d0 d1 d2 d3 ) {
@@ -566,7 +657,14 @@ unsafe @ gws_tensor GgufS s__h s name i gt i nd i d0 i d1 i d2 i d3 → !v Strin
     ^ @ !v String { T 0 }
 }
 
-unsafe @ __gws_write * GgufSImpl s ( Vec u ) bytes → !v String {
+@ gws_tensor GgufS h s name i gt i nd i d0 i d1 i d2 i d3 → !v String {
+    : ~ GgufSImpl s ( rc_take [GgufSImpl] . h r )
+    : !v String res ( __gws_tensor_in s name gt nd d0 d1 d2 d3 )
+    ( rc_restore [GgufSImpl] . h r s )
+    ^ res
+}
+
+@ __gws_write inout GgufSImpl s ( Vec u ) bytes → !v String {
     ?? ( file_write_chunk . s fh bytes ) {
         T _ → { ^ @ !v String { T 0 } }
         F _ → { ^ ( __gws_err `gguf: file write failed` ) }
@@ -574,7 +672,7 @@ unsafe @ __gws_write * GgufSImpl s ( Vec u ) bytes → !v String {
 }
 
 // Write `n` zero bytes (alignment padding) to the file.
-unsafe @ __gws_pad * GgufSImpl s i n → !v String {
+@ __gws_pad inout GgufSImpl s i n → !v String {
     ? <= n 0 { ^ @ !v String { T 0 } } {}
     : ( Vec u ) z ( vec_new [u] )
     : ~ i k 0
@@ -588,8 +686,7 @@ unsafe @ __gws_pad * GgufSImpl s i n → !v String {
 
 // Serialise the header, every KV and the whole tensor table, pad to
 // the alignment, and switch to the payload phase.
-unsafe @ gws_begin_data GgufS s__h → !v String {
-    : *GgufSImpl s ( __GgufS_ptr s__h )
+@ __gws_begin_data_in inout GgufSImpl s → !v String {
     ? != . s phase 0 { ^ ( __gws_err `gguf: streaming writer is past its declare phase` ) } {}
     : i nt ( vec_len [String] . s tnames )
     : ( Vec u ) out ( vec_new [u] )
@@ -629,11 +726,17 @@ unsafe @ gws_begin_data GgufS s__h → !v String {
     ^ @ !v String { T 0 }
 }
 
+@ gws_begin_data GgufS h → !v String {
+    : ~ GgufSImpl s ( rc_take [GgufSImpl] . h r )
+    : !v String res ( __gws_begin_data_in s )
+    ( rc_restore [GgufSImpl] . h r s )
+    ^ res
+}
+
 // Payload bytes for the current tensor, any chunking. When a tensor's
 // declared size is reached the writer advances to the next declared
 // tensor (inserting the alignment gap first). Overrun is an error.
-unsafe @ gws_data GgufS s__h ( Vec u ) bytes → !v String {
-    : *GgufSImpl s ( __GgufS_ptr s__h )
+@ __gws_data_in inout GgufSImpl s ( Vec u ) bytes → !v String {
     ? != . s phase 1 { ^ ( __gws_err `gguf: streaming writer is not in its data phase` ) } {}
     : i nt ( vec_len [String] . s tnames )
     ? >= . s cur nt { ^ ( __gws_err `gguf: payload bytes after the last declared tensor` ) } {}
@@ -666,10 +769,16 @@ unsafe @ gws_data GgufS s__h ( Vec u ) bytes → !v String {
     ^ @ !v String { T 0 }
 }
 
+@ gws_data GgufS h ( Vec u ) bytes → !v String {
+    : ~ GgufSImpl s ( rc_take [GgufSImpl] . h r )
+    : !v String res ( __gws_data_in s bytes )
+    ( rc_restore [GgufSImpl] . h r s )
+    ^ res
+}
+
 // All payloads in? Flush and close. The file is closed here (not by the
 // last owner) so the caller sees the failure, not a silent short file.
-unsafe @ gws_finish GgufS s__h → !v String {
-    : *GgufSImpl s ( __GgufS_ptr s__h )
+@ __gws_finish_in inout GgufSImpl s → !v String {
     ? != . s phase 1 { ^ ( __gws_err `gguf: streaming writer is not in its data phase` ) } {}
     : i nt ( vec_len [String] . s tnames )
     ? < . s cur nt {
@@ -687,6 +796,13 @@ unsafe @ gws_finish GgufS s__h → !v String {
     = . s phase 2
     ? flush_ok {} { ^ ( __gws_err `gguf: file flush failed` ) }
     ^ @ !v String { T 0 }
+}
+
+@ gws_finish GgufS h → !v String {
+    : ~ GgufSImpl s ( rc_take [GgufSImpl] . h r )
+    : !v String res ( __gws_finish_in s )
+    ( rc_restore [GgufSImpl] . h r s )
+    ^ res
 }
 
 // Let go of `s` now rather than at the end of its owner's scope.

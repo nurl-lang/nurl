@@ -130,14 +130,14 @@ $ `src/interp.nu`
                     ( interp_run_start it )
                     : i na ( vec_len [i] args )
                     : ~ i k 0
-                    ~ < k na { ( vec_push [i] ( interp_stack it ) ?? ( vec_get [i] args k ) { T x → x F → 0 } ) = k + k 1 }
+                    ~ < k na { ( interp_stack_push it ?? ( vec_get [i] args k ) { T x → x F → 0 } ) = k + k 1 }
                     ( exec_func it fidx )
                     ? want_trap {
                         = r ? ( interp_trapped it ) 1 0
                     } {
                         ? ! ( interp_trapped it ) {
-                            : i n ( vec_len [i] ( interp_stack it ) )
-                            ? > n 0 { = r ?? ( vec_get [i] ( interp_stack it ) - n 1 ) { T x → x F → 0 } } {}
+                            : i n ( interp_stack_len it )
+                            ? > n 0 { = r ( interp_stack_at it - n 1 ) } {}
                         } {}
                     }
                 } {}
@@ -176,8 +176,8 @@ $ `src/interp.nu`
                     ( interp_run_start it )
                     ( exec_func it fidx )
                     ? ! ( interp_trapped it ) {
-                        : i n ( vec_len [i] ( interp_stack it ) )
-                        ? > n 1 { = r ?? ( vec_get [i] ( interp_stack it ) - n 2 ) { T x → x F → 0 } } {}
+                        : i n ( interp_stack_len it )
+                        ? > n 1 { = r ( interp_stack_at it - n 2 ) } {}
                     } {}
                 } {}
             } {}

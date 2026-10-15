@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.3.0] — 2026-10-14
+
+### Changed
+
+- No `unsafe` code is left (103 functions in 0.2.3).
+- `gcov_read` builds the object as a plain value and freezes it in an
+  `Arc` once it is read and solved: every accessor reads it in place,
+  without a lock and without the raw pointer `__GcovObj_ptr` handed out.
+  `gcov_new` and `gcov_solve` are gone; `gcov_read` is the constructor.
+- The `.gcno`/`.gcda` word readers take a bounds-checked `( Slice u )` of
+  the file instead of a raw pointer.
+- `LineTab` is built the same way, frozen after `lines_build`. Its columns
+  are read with `linetab_exists_at`, `linetab_count_at`, `linetab_br_at`,
+  `linetab_fn_at` and the row counts `linetab_lines`, `linetab_br_rows`,
+  `linetab_fn_rows`. The old `linetab_exists`/`_count`/`_br`/`_fnrow`
+  returned a column as a `Vec`, which out of a shared table is a copy of
+  the column per call — and the callers asked once per line.
+- `Cov` is a plain value instead of an `Arc` handle: `cov_add_object`,
+  `cov_keep_only`, `cov_sort` and `cov_file_idx` take it `inout`.
+  `cov_keep_only` filters in place with `vec_retain`.
+- `report_display` returns an owned `String` instead of a view into the
+  middle of its argument.
+
+Output is byte-identical to 0.2.3: the llvm-cov differential and 201
+truncated or corrupted coverage graphs give the same bytes and exit codes
+from both. Same speed: 0.88 s against 0.92 s on the largest of them.
+
 ## [0.2.3] — 2026-10-11
 
 Requires NURL 0.73.0, which allows `mem_forget`, `mem_take` and the

@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.2.5] — 2026-10-14
+
+Requires NURL 0.73.0.
+
+### Changed
+
+- `DataSet` and `NdfStream` are read through `arc_get` (they never change once built); a `DataLoader`'s cursor is in a `Locked`. No library function is `unsafe` any more.
+- The tests pass their alignment flag in a Vec instead of a raw cell; no function is `unsafe` any more, tests included.
+- 25 fewer functions are `unsafe` than in 0.2.4 (0 left).
+
 ## [0.2.4] — 2026-10-12
 
 Requires NURL 0.73.0, in which a field written through a raw pointer

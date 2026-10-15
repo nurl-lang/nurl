@@ -512,6 +512,21 @@ $ `stdlib/std/time.nu`
     ^ ( __process_dispatch ( __proc_result_from_c ( nurl_proc_run cmd argv_buf argc stdin_str ) ) )
 }
 
+// …with the arguments as Strings the caller owns — an argv built in a
+// loop (numbers, paths, a variable count): they outlive the call, so the
+// argv handed on is views of them, and nothing is copied or kept.
+@ process_run_strings s cmd ( Vec String ) args s stdin_str → !Output ProcessErr {
+    : i n ( vec_len [String] args )
+    : ( Vec s ) av ( vec_with_cap [s] n )
+    : ~ i k 0
+    ~ < k n {
+        ?? ( vec_get [String] args k ) { T a → ( vec_push [s] av ( string_data a ) ) F → {} }
+        = k + k 1
+    }
+    : !Output ProcessErr res ( process_run cmd av stdin_str )
+    ^ res
+}
+
 // ── Convenience arities ────────────────────────────────────────────
 
 @ process_run0 s cmd → !Output ProcessErr {
@@ -1245,3 +1260,108 @@ $ `stdlib/std/time.nu`
 // Let go of `p` now rather than at the end of its owner's scope; the
 // last owner shuts the child down.
 @ proc_free sink ProcChild p → v {}
+
+// ── The process's own identity ──────────────────────────────────────
+// Its user and group ids, real and effective, and its supplementary
+// groups — 0 and none where the platform has no such notion (Windows,
+// the unikernel), which is what those report for whoami / id.
+
+& `c` @ nurl_self_id i kind → i
+
+& `c` @ nurl_self_groups *i out i cap → i
+
+@ proc_self_uid → i { ^ ( nurl_self_id 0 ) }
+
+@ proc_self_euid → i { ^ ( nurl_self_id 1 ) }
+
+@ proc_self_gid → i { ^ ( nurl_self_id 2 ) }
+
+@ proc_self_egid → i { ^ ( nurl_self_id 3 ) }
+
+@ proc_self_groups → ( Vec i ) {
+    : ~ i cap 32
+    ~ T {
+        : ( Vec i ) out ( vec_zeroed [i] cap )
+        : i n ( nurl_self_groups ( vec_data [i] out ) cap )
+        ? <= n 0 { ^ ( vec_new [i] ) } {}
+        ? <= n cap {
+            : b _t ( vec_truncate [i] out n )
+            ^ out
+        } {}
+        = cap n
+    }
+    ^ ( vec_new [i] )
+}
+
+// ── POSIX process control without pointers ──────────────────────────
+//
+// fork, dup2, close and _exit take and return plain integers and are
+// called as they are. What follows wraps the primitives that pass a
+// buffer — waitpid's status word, pipe's descriptor pair, execvp's argv
+// array, read's destination — so a shell, a supervisor or a test harness
+// controls processes without handling an address.
+
+// The two ends of a pipe(2): bytes written to `wr` are read from `rd`.
+: PosixPipe { i rd i wr }
+
+// pipe(2); F when the call failed (descriptor table full, or no pipes on
+// this machine).
+@ posix_pipe → ?PosixPipe {
+    : ( Vec i32 ) fds ( vec_zeroed [i32] 2 )
+    ? < # i ( pipe # *u ( vec_data [i32] fds ) ) 0 { ^ @ ?PosixPipe { F } } {}
+    ^ @ ?PosixPipe { T @ PosixPipe { # i ( vec_at [i32] fds 0 ) # i ( vec_at [i32] fds 1 ) } }
+}
+
+// waitpid(pid, 0): wait for the child to end. Its exit code, 128 + the
+// signal number when a signal ended it, -1 when `pid` is not a child.
+@ posix_wait_exit i pid → i {
+    : ( Vec i32 ) status ( vec_zeroed [i32] 2 )
+    ? < # i ( waitpid # i32 pid # *u ( vec_data [i32] status ) # i32 0 ) 0 { ^ -1 } {}
+    ^ ( nurl_wait_exit_status & # i ( vec_at [i32] status 0 ) 65535 )
+}
+
+// execvp(3) of `argv[from]` (looked up in PATH) with arguments
+// `argv[from..]`: this process becomes that program. Returns only when the
+// exec failed, with the errno (ENOENT: not found, EACCES: not runnable);
+// -1 when there is no program to run.
+@ posix_execvp ( Vec String ) argv i from → i {
+    : i n - ( vec_len [String] argv ) from
+    ? | <= n 0 < from 0 { ^ -1 } {}
+    // The NUL-terminated pointer array execvp reads: each entry the
+    // address of a String this function's caller keeps alive until exec.
+    : ( Vec i ) ptrs ( vec_zeroed [i] + n 1 )
+    : ~ i k 0
+    ~ < k n {
+        ( vec_put [i] ptrs k # i ( string_data ( vec_at [String] argv + from k ) ) )
+        = k + k 1
+    }
+    : i32 _rc ( execvp ( string_data ( vec_at [String] argv from ) ) # *u ( vec_data [i] ptrs ) )
+    ^ ( nurl_errno_get )
+}
+
+// Append up to `max` bytes read(2) from `fd` to `buf`. The count read: 0 at
+// end of input, -1 on an error (errno says which).
+@ posix_read_append i fd ( Vec u ) buf i max → i {
+    ? <= max 0 { ^ 0 } {}
+    : i len ( vec_len [u] buf )
+    ( vec_reserve [u] buf max )
+    : i got ( read # i32 fd # *u + # i ( vec_data [u] buf ) len max )
+    ? > got 0 { : b _l ( vec_set_len [u] buf + len got ) } {}
+    ^ got
+}
+
+// Run `argv[from..]` as a child that shares this process's stdin, stdout
+// and stderr, and wait for it: its exit status as posix_wait_exit gives it,
+// 127 when the program could not be run, -1 where there are no processes.
+// Pending stdout is flushed first, so the child's output follows ours.
+@ process_run_inherit ( Vec String ) argv i from → i {
+    ? <= - ( vec_len [String] argv ) from 0 { ^ 127 } {}
+    ( nurl_flush_stdout )
+    : i pid # i ( fork )
+    ? < pid 0 { ^ -1 } {}
+    ? == pid 0 {
+        : i _e ( posix_execvp argv from )
+        ( _exit # i32 127 )
+    } {}
+    ^ ( posix_wait_exit pid )
+}

@@ -18,9 +18,9 @@
 //             w -= lr·√(1−β2ᵗ)/(1−β1ᵗ) · m/(√v + ε)
 //             β1 = 0.9, β2 = 0.999, ε = 1e-8 — sklearn/PyTorch defaults.
 //
-// The step counter lives behind the *OptImpl heap pointer, so it ADVANCES — the
-// frozen-Adam-t bug class (a scalar counter field on a by-value struct never
-// persists in NURL) cannot recur, and tests/opt pin the trajectory bit-for-
+// opt_step takes the Opt `inout`, so its step counter ADVANCES — the
+// frozen-Adam-t bug class (a scalar counter field on a by-value struct that
+// never persists) cannot recur, and tests/opt pin the trajectory bit-for-
 // bit against a hand-computed two-step Adam.
 //
 // Clipping (`opt_set_clip o maxn`): one global L2 norm over every added
@@ -35,9 +35,8 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/std/float.nu`
 $ `grad.nu`
 $ `deps/tensor/src/tensor.nu`
-$ `stdlib/std/arc.nu`
 
-: OptImpl {
+: Opt {
     i kind  // 0 sgd · 1 adam
     f lr
     f clip  // 0 = off
@@ -51,20 +50,11 @@ $ `stdlib/std/arc.nu`
     ( Vec f ) v  // second moments (adam)
 }
 
-// An Opt is a handle on its state in an Arc (stdlib/std/arc.nu):
-// every copy is the same state, and the last owner releases it.
-: Opt { ( Arc OptImpl ) a }
-
-@ Opt_share Opt h → Opt { ^ @ Opt { ( arc_clone [OptImpl] . h a ) } }
-
-@ Opt_drop sink Opt h → v {}
-
-// The state, for this package's own code.
-unsafe @ _Opt_ptr Opt h → *OptImpl { ^ ( arc_ptr [OptImpl] . h a ) }
+// An Opt is a plain value: opt_add / opt_step take it `inout`.
 
 @ _opt_new i kind f lr → Opt {
-    ^ @ Opt { ( arc_new [OptImpl] @ OptImpl { kind lr 0.0 0 0 ( vec_new [i] ) ( vec_new [f] )
-            ( vec_new [i] ) ( vec_new [i] ) ( vec_new [f] ) ( vec_new [f] ) } ) }
+    ^ @ Opt { kind lr 0.0 0 0 ( vec_new [i] ) ( vec_new [f] )
+        ( vec_new [i] ) ( vec_new [i] ) ( vec_new [f] ) ( vec_new [f] ) }
 }
 
 @ opt_sgd_new f lr → Opt { ^ ( _opt_new 0 lr ) }
@@ -76,22 +66,18 @@ unsafe @ _Opt_ptr Opt h → *OptImpl { ^ ( arc_ptr [OptImpl] . h a ) }
 @ opt_free sink Opt o → v {}
 
 // Adam's step count so far (0 for SGD and before the first step).
-unsafe @ opt_t Opt o__h → i {
-    : *OptImpl o ( _Opt_ptr o__h )
+@ opt_t Opt o → i {
     ^ . o t
 }
 
-unsafe @ opt_set_clip Opt o__h f maxn → v {
-    : *OptImpl o ( _Opt_ptr o__h )
+@ opt_set_clip inout Opt o f maxn → v {
     = . o clip maxn
 }
 
 // Register one tape parameter with its L2 coefficient (0 for biases).
-unsafe @ opt_add Opt o__h GTape tp__h GVar p f alpha → v {
-    : *OptImpl o ( _Opt_ptr o__h )
-    : *GTapeImpl tp ( _GTape_ptr tp__h )
+@ opt_add inout Opt o GTape tp GVar p f alpha → v {
     ? >= . p id 0 {} { ^ v }
-    : *Tensor w # *Tensor ( _g_val tp . p id )
+    : Tensor w ( _g_v tp . p id )
     : i n ( vec_len [f] . w data )
     ( vec_push [i] . o ids . p id )
     ( vec_push [f] . o alphas alpha )
@@ -107,15 +93,14 @@ unsafe @ opt_add Opt o__h GTape tp__h GVar p f alpha → v {
 }
 
 // The global L2 norm of every registered parameter's gradient (0-grads skip).
-unsafe @ _opt_gnorm * OptImpl o * GTapeImpl tp → f {
+@ _opt_gnorm Opt o GTape tp → f {
     : ~ f ss 0.0
     : i np ( vec_len [i] . o ids )
     : ~ i pi 0
     ~ < pi np {
         : i id ( _ti . o ids pi )
-        : s gp ( _g_grad_ptr tp id )
-        ? != # i gp 0 {
-            : *Tensor g # *Tensor gp
+        ? ( _g_has_grad tp id ) {
+            : Tensor g ( _g_gv tp id )
             : i n ( vec_len [f] . g data )
             : ~ i k 0
             ~ < k n {
@@ -130,9 +115,7 @@ unsafe @ _opt_gnorm * OptImpl o * GTapeImpl tp → f {
 }
 
 // One update step from the gradients currently on the tape.
-unsafe @ opt_step Opt o__h GTape tp__h → v {
-    : *OptImpl o ( _Opt_ptr o__h )
-    : *GTapeImpl tp ( _GTape_ptr tp__h )
+@ opt_step inout Opt o GTape tp → v {
     // global-norm clip factor (1.0 = no scaling)
     : ~ f cs 1.0
     ? > . o clip 0.0 {
@@ -149,10 +132,9 @@ unsafe @ opt_step Opt o__h GTape tp__h → v {
     : ~ i pi 0
     ~ < pi np {
         : i id ( _ti . o ids pi )
-        : s gp ( _g_grad_ptr tp id )
-        ? != # i gp 0 {
-            : *Tensor g # *Tensor gp
-            : *Tensor w # *Tensor ( _g_val tp id )
+        ? ( _g_has_grad tp id ) {
+            : Tensor g ( _g_gv tp id )
+            : Tensor w ( _g_v tp id )
             : f alpha ( _tf . o alphas pi )
             : i off ( _ti . o offs pi )
             : i n ( _ti . o lens pi )

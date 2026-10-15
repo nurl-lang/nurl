@@ -75,7 +75,7 @@ $ `deps/gpukit/src/dev.nu`
 
 // Compare a device node against the CPU tape: 0 = bitwise equal, else the
 // worst relative difference (for the trans tier's CUDA tolerance).
-unsafe @ cmp_node GProg pg GTape tp GVar v b grads * u worst → b {
+unsafe @ cmp_node inout GProg pg inout GTape tp GVar v b grads * u worst → b {
     : Tensor ct ? grads ( grad_of tp v ) ( gvar_value tp v )
     : i n ( vec_len [f] . ct data )
     : ( Vec f ) dv ( vec_with_cap [f] n )
@@ -105,7 +105,7 @@ unsafe @ cmp_node GProg pg GTape tp GVar v b grads * u worst → b {
 // ── A: the exact tier, every op, bitwise ─────────────────────────────
 
 unsafe @ exact_tier GpuKit kit → v {
-    : GTape tp ( tape_new )
+    : ~ GTape tp ( tape_new )
     // params
     : ( Vec f ) av ( fillv 12 0.25 0.13 )
     : ( Vec i ) as2 ( shp2 4 3 )
@@ -153,7 +153,7 @@ unsafe @ exact_tier GpuKit kit → v {
     : b bok ( backward tp loss )
     ( check bok `exact tier: CPU backward runs` )
 
-    : GProg pg ( gput_capture kit tp loss )
+    : ~ GProg pg ( gput_capture kit tp loss )
     ( check ( gput_ok pg ) `exact tier: capture succeeds` )
     : ~ b fw F
     : ~ b bw F
@@ -189,7 +189,7 @@ unsafe @ exact_tier GpuKit kit → v {
 // ── B: the transcendental tier ───────────────────────────────────────
 
 unsafe @ trans_tier GpuKit kit b cpu_backend → v {
-    : GTape tp ( tape_new )
+    : ~ GTape tp ( tape_new )
     : ( Vec f ) xv ( fillv 12 0.35 0.19 )
     : ( Vec i ) xs ( shp2 3 4 )
     : Tensor xt ( mk xv xs )
@@ -204,7 +204,7 @@ unsafe @ trans_tier GpuKit kit b cpu_backend → v {
     : b bok ( backward tp loss )
     ( check bok `trans tier: CPU backward runs` )
 
-    : GProg pg ( gput_capture kit tp loss )
+    : ~ GProg pg ( gput_capture kit tp loss )
     ( check ( gput_ok pg ) `trans tier: capture succeeds` )
     : ~ b fw F
     : ~ b bw F
@@ -251,7 +251,7 @@ unsafe @ trans_tier GpuKit kit b cpu_backend → v {
 
 // Build one AE episode on the tape: rows[B,d] const → d-h-d relu net →
 // L = (Σe² + α·(ΣW1²+ΣW2²)) / (2B). Returns the loss GVar.
-@ ae_episode GTape tp GVar W1 GVar B1 GVar W2 GVar B2 Tensor rows f alpha i bsz → GVar {
+@ ae_episode inout GTape tp GVar W1 GVar B1 GVar W2 GVar B2 Tensor rows f alpha i bsz → GVar {
     : GVar X ( grad_const tp rows )
     : GVar h ( g_relu tp ( g_add tp ( g_matmul tp X W1 ) B1 ) )
     : GVar y ( g_add tp ( g_matmul tp h W2 ) B2 )
@@ -288,7 +288,7 @@ unsafe @ trans_tier GpuKit kit b cpu_backend → v {
     : ( Vec f ) b2v ( fillv D 0.0 0.0 )
 
     // — CPU path —
-    : GTape tp ( tape_new )
+    : ~ GTape tp ( tape_new )
     : ( Vec i ) w1s ( shp2 D H )
     : Tensor w1t ( mk w1v w1s )
     : GVar W1 ( grad_param tp w1t )
@@ -301,7 +301,7 @@ unsafe @ trans_tier GpuKit kit b cpu_backend → v {
     : ( Vec i ) b2s ( shp1 D )
     : Tensor b2t ( mk b2v b2s )
     : GVar B2 ( grad_param tp b2t )
-    : Opt co ( opt_adam_new LR )
+    : ~ Opt co ( opt_adam_new LR )
     ( opt_set_clip co CLIP )
     ( opt_add co tp W1 ALPHA )
     ( opt_add co tp B1 0.0 )
@@ -329,7 +329,7 @@ unsafe @ trans_tier GpuKit kit b cpu_backend → v {
     }
 
     // — device path: capture episode 0's structure, then replay —
-    : GTape tp2 ( tape_new )
+    : ~ GTape tp2 ( tape_new )
     : ( Vec i ) w1s2 ( shp2 D H )
     : Tensor w1t2 ( mk w1v w1s2 )
     : GVar W1d ( grad_param tp2 w1t2 )
@@ -357,9 +357,9 @@ unsafe @ trans_tier GpuKit kit b cpu_backend → v {
     : GVar numd ( g_add tp2 sed ( g_muls tp2 l2d ALPHA ) )
     : GVar lossd ( g_muls tp2 numd / 1.0 * 2.0 # f BSZ )
 
-    : GProg pg ( gput_capture kit tp2 lossd )
+    : ~ GProg pg ( gput_capture kit tp2 lossd )
     ( check ( gput_ok pg ) `training: capture succeeds` )
-    : GpOpt go ( gpopt_adam_new LR )
+    : ~ GpOpt go ( gpopt_adam_new LR )
     ( gpopt_set_clip go CLIP )
     ( gpopt_add go pg W1d ALPHA )
     ( gpopt_add go pg B1d 0.0 )

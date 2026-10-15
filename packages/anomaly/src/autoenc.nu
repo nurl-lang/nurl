@@ -25,6 +25,7 @@
 // coexists with the self-training forests.
 
 $ `stdlib/core/vec.nu`
+$ `stdlib/core/slice.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/std/float.nu`
 $ `stdlib/std/floatbits.nu`
@@ -100,26 +101,26 @@ $ `deps/mlp/src/mlp.nu`
 // (anomaly_project). The net cannot take one, so an absent reading is
 // filled with the midpoint of the column's training range — the value
 // that leans nowhere — and the normalised coordinates are capped.
-unsafe @ __ae_prepare_point MinMax amm ( Vec f ) x → v {
+@ __ae_prepare_point MinMax amm ( Vec f ) x → v {
     : i d . amm n_cols
     : i n ( vec_len [f] x )
-    : *f xp ( vec_data [f] x )
-    : *f lop ( vec_data [f] . amm lo )
-    : *f hip ( vec_data [f] . amm hi )
+    : ( Slice f ) xp ( slice_from_vec [f] x )
+    : ( Slice f ) lop ( slice_from_vec [f] . amm lo )
+    : ( Slice f ) hip ( slice_from_vec [f] . amm hi )
     : ~ i k 0
     ~ & < k n < k d {
-        ? ( float_is_nan . xp k ) { = . xp k / + . lop k . hip k 2.0 } {}
+        ? ( float_is_nan ( slice_at [f] xp k ) ) { ( slice_put [f] xp k / + ( slice_at [f] lop k ) ( slice_at [f] hip k ) 2.0 ) } {}
         = k + k 1
     }
     ( minmax_apply amm x 1 )
-    : *f xq ( vec_data [f] x )
+    : ( Slice f ) xq ( slice_from_vec [f] x )
     = k 0
     ~ < k n {
-        : ~ f v . xq k
+        : ~ f v ( slice_at [f] xq k )
         ? > v AE_NORM_CAP { = v AE_NORM_CAP } {}
         ? < v - 0.0 AE_NORM_CAP { = v - 0.0 AE_NORM_CAP } {}
         ? ( float_is_nan v ) { = v 0.0 } {}
-        = . xq k v
+        ( slice_put [f] xq k v )
         = k + k 1
     }
 }
@@ -127,9 +128,9 @@ unsafe @ __ae_prepare_point MinMax amm ( Vec f ) x → v {
 // The training matrix with every absent reading filled with the
 // midpoint of its column's range over the readings present (a column
 // nobody ever sent is all 0). Owned copy.
-unsafe @ __ae_fill_matrix ( Vec f ) raw i n i d → ( Vec f ) {
+@ __ae_fill_matrix ( Vec f ) raw i n i d → ( Vec f ) {
     : ( Vec f ) out ( vec_clone [f] raw )
-    : *f op ( vec_data [f] out )
+    : ( Slice f ) op ( slice_from_vec [f] out )
     : ~ i c 0
     ~ < c d {
         : ~ f lo 0.0
@@ -137,7 +138,7 @@ unsafe @ __ae_fill_matrix ( Vec f ) raw i n i d → ( Vec f ) {
         : ~ b any F
         : ~ i r 0
         ~ < r n {
-            : f v . op + * r d c
+            : f v ( slice_at [f] op + * r d c )
             ? ( float_is_nan v ) {} {
                 ? any { ? < v lo { = lo v } {} ? > v hi { = hi v } {} } { = lo v = hi v = any T }
             }
@@ -147,7 +148,7 @@ unsafe @ __ae_fill_matrix ( Vec f ) raw i n i d → ( Vec f ) {
         = r 0
         ~ < r n {
             : i o + * r d c
-            ? ( float_is_nan . op o ) { = . op o fill } {}
+            ? ( float_is_nan ( slice_at [f] op o ) ) { ( slice_put [f] op o fill ) } {}
             = r + r 1
         }
         = c + c 1
@@ -155,7 +156,7 @@ unsafe @ __ae_fill_matrix ( Vec f ) raw i n i d → ( Vec f ) {
     ^ out
 }
 
-unsafe @ ae_train_matrix ( Vec f ) raw0 i n i d ( Vec String ) feats ( Vec i ) hidden f contamination i min_rows → AeTrainOut {
+@ ae_train_matrix ( Vec f ) raw0 i n i d ( Vec String ) feats ( Vec i ) hidden f contamination i min_rows → AeTrainOut {
     ? < n min_rows {
         ^ @ AeTrainOut { ( ae_empty ) ( string_from `not enough data points to train the autoencoder` ) }
     } {}
@@ -183,13 +184,13 @@ unsafe @ ae_train_matrix ( Vec f ) raw0 i n i d ( Vec String ) feats ( Vec i ) h
 
     // 2. MinMax over the surviving raw rows, then the autoencoder.
     : ( Vec f ) Xn ( vec_with_cap [f] * nk d )
-    : *f rawp ( vec_data [f] raw )
+    : ( Slice f ) rawp ( slice_from_vec [f] raw )
     : ~ i k 0
     ~ < k nk {
         : i row ( _mlp_iget keep k )
         : ~ i c 0
         ~ < c d {
-            ( vec_push [f] Xn . rawp + * row d c )
+            ( vec_push [f] Xn ( slice_at [f] rawp + * row d c ) )
             = c + c 1
         }
         = k + k 1

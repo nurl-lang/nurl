@@ -1,5 +1,81 @@
 # Changelog
 
+## [3.2.0] — 2026-10-15
+
+- The load queue holds device views and tensor indices instead of raw host addresses. At flush it builds checked views of the mapped file (ggml or safetensors) and sends them with gpu 0.17.2's `gpu_upload_views`, still one batch. Host reads of the encoder output, logits and argmax go through gpu's bounds-checked `gpu_host_get_f32` / `gpu_host_get_i32`. `unsafe` functions: 13 → 9.
+- ggml: `gg_file_take` / `gg_file_put` check the mapped file out for a batched reader, and `gg_toff` gives a tensor's offset.
+- Transcripts from synthetic ggml models (f16 and f32) and encoder output from a synthetic HF checkpoint (f32, f16 and bf16 tensors) are byte-identical to 3.1.3, at the same speed.
+
+## [3.1.3] — 2026-10-15
+
+- `__wh_source_done` is safe now that gpu 0.17.1's `gpu_staging_free` is. `unsafe` functions: 14 → 13.
+
+## [3.1.2] — 2026-10-15
+
+### Changed
+
+- The engine starts as a literal of its empty values instead of
+  `locked_zero`, and `__wh_finish`, which needed none, is no longer marked
+  `unsafe`: 16 `unsafe` functions to 14, each of which uploads device
+  memory or launches kernels.
+
+## [3.1.1] — 2026-10-14
+
+### Fixed
+
+- `wh_open_ggml` reads the container's metadata before the engine takes the container over; the compiler now sees the metadata as a view of it (h271).
+
+## [3.1.0] — 2026-10-14
+
+Requires NURL 0.73.0 with globals set at start, `locked_zero`,
+`fd_write_all`, `file_map_stream` and h264–h267 closed.
+
+### Fixed
+
+- A checkpoint whose tensors do not have the sizes its config gives was
+  read past the end of its device buffers: the FFN width was taken to be
+  4·d_model whatever the weights said, and nothing compared a tensor's
+  element count with the shape the kernels index it by (on the CPU
+  backend the encoder came out NaN on some runs). Every tensor is checked
+  at load against the config — the error names the first that disagrees
+  — and the config's own dimensions must be positive with d_model a
+  multiple of the head counts.
+
+### Added
+
+- `encoder_ffn_dim` / `decoder_ffn_dim` from config.json (4·d_model when
+  absent, as in every released whisper).
+
+### Changed
+
+- 16 `unsafe` functions left (57 in 3.0.2): the raw device work — the
+  kernel launchers' callers, the upload queue, compiling the kernels,
+  and building the engine from zeroed memory.
+- A `Whisper` is the engine in a `Locked` beside its immutable
+  dimensions: `wh_n_mels`, `wh_d_model` and the other accessors never
+  wait for a transcription. The public calls take the engine out of the
+  lock for the call (`locked_take`) and put it back; nothing reaches it
+  through a raw pointer.
+- The server's state — the model, the counters, the idle clock — is one
+  `Locked` global set at start, and the tokenizer another; the hand-held
+  mutex and the `unsafe` accessors are gone.
+- The ggml loader reads its header and tensor table through bounds-checked
+  slices of the mapping.
+- Weights are mapped with `file_map_stream` (every page mapped in one
+  pass, read-ahead for the one sequential sweep).
+- `whisper transcribe` writes its output with `fd_write_all`.
+
+## [3.0.2] — 2026-10-14
+
+Requires NURL 0.73.0 (`slice_at`, `slice_put`, `rc_take`, `locked_take`).
+
+### Changed
+
+- Loops that read or wrote through `vec_data` pointers index slices (`slice_at` / `slice_put`, as fast as the pointers), and functions with nothing raw in them are no longer marked `unsafe`.
+- 3 fewer functions are `unsafe` than in 3.0.1 (57 left).
+- Requires gpu 0.17. The `wk_*` launchers take device addresses as plain integers and launch kernels that index them by the sizes they are given; they were safe to call with any numbers — now they are `raw` (their callers already vouched), and `wk_build`, which compiles this package's own kernel sources, is `unsafe`.
+- Requires safetensor 0.6 (`st_tensor_ptr` is `raw` there; the loaders that take tensor addresses were already `unsafe`).
+
 ## [3.0.1] — 2026-10-12
 
 Requires NURL 0.73.0, in which a field written through a raw pointer
@@ -16,7 +92,6 @@ The published 3.0.0 does not compile under it.
 - The model's replaced buffers are dropped by the store; the `mem_take`
   before each is gone.
 - Requires gpu 0.16.
-
 
 ## [3.0.0] — 2026-10-11
 

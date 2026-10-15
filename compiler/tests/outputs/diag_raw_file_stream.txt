@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_raw_file_stream.nu:7:30: error: 'file_from_raw' passes a C stream (a FILE*) as a string ('s'): read as text it is not one, and a string taken as a stream is closed as one when its File goes — memory the program does not own. Only an 'unsafe' function may call it. Use a File (file_open, file_create, file_close): it owns its stream, and closing it twice is harmless.
+    : File f ( file_from_raw `x` )
+                             ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

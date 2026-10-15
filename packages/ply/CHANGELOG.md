@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.3.5] — 2026-10-14
+
+Requires NURL 0.73.0 (grammar v2.9 `raw`, `slice_window`, `file_is_open`).
+
+### Changed
+
+- The writer keeps its state in a `Locked`, closes its file once (`file_is_open`, NURL 0.73.0) instead of replacing it with a made-up null `File`, and the viewer reads its page through `arc_get`. No function is `unsafe` any more.
+- 12 fewer functions are `unsafe` than in 0.3.4 (0 left).
+
 ## [0.3.4] — 2026-10-12
 
 Requires NURL 0.73.0, in which a field written through a raw pointer

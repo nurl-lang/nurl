@@ -13,19 +13,10 @@ $ `stdlib/std/path.nu`
 $ `stdlib/std/time.nu`
 $ `stdlib/std/term.nu`
 $ `stdlib/std/sysinfo.nu`
+$ `stdlib/std/process.nu`
 $ `stdlib/ext/env.nu`
 $ `bx.nu`
 $ `stdlib/core/slice.nu`
-
-& `c` @ getuid → i32
-
-& `c` @ geteuid → i32
-
-& `c` @ getgid → i32
-
-& `c` @ getegid → i32
-
-& `c` @ getgroups i32 size *u list → i32
 
 // ── pwd ───────────────────────────────────────────────────────────
 
@@ -147,19 +138,11 @@ $ `stdlib/core/slice.nu`
 
 // Hand the process over to `cmd`. On success this never returns — the
 // image is replaced, which is exactly what `env VAR=x prog` means.
-unsafe @ __exec_argv ( Vec String ) args i from → i {
+@ __exec_argv ( Vec String ) args i from → i {
     : i n - ( vec_len [String] args ) from
     ? <= n 0 { ^ 127 } {}
-    : ( Vec u ) argvbuf_v ( vec_zeroed [u] * 8 + n 1 )
-    : s argvbuf # s ( vec_data [u] argvbuf_v )
-    : ~ i k 0
-    ~ < k n {
-        ( nurl_poke argvbuf k # i ( bx_at args + from k ) )
-        = k + k 1
-    }
     : s cmd ( bx_at args from )
-    : i32 _rc ( execvp cmd # *u argvbuf )
-    : i err ( nurl_errno_get )
+    : i err ( posix_execvp args from )
     ( bx_err_at cmd ? == err ( posix_const `ENOENT` ) `No such file or directory` `Permission denied` )
     ^ ? == err ( posix_const `ENOENT` ) 127 126
 }
@@ -330,20 +313,20 @@ unsafe @ __exec_argv ( Vec String ) args i from → i {
     ^ + * q 2 / lo base
 }
 
-unsafe @ __pf_pad String out i width b left String body → v {
+@ __pf_pad String out i width b left String body → v {
     : i n ( string_len body )
     ? & ! left > width n {
         : ~ i k - width n
         ~ > k 0 { ( string_push_char out 32 ) = k - k 1 }
     } {}
-    ( string_push_bytes out # *u ( string_data body ) n )
+    ( string_push_window out ( string_bytes body ) 0 n )
     ? & left > width n {
         : ~ i k - width n
         ~ > k 0 { ( string_push_char out 32 ) = k - k 1 }
     } {}
 }
 
-unsafe @ ap_printf ( Vec String ) argv → i {
+@ ap_printf ( Vec String ) argv → i {
     : i n ( vec_len [String] argv )
     ? < n 2 {
         ( bx_err `usage: printf FORMAT [ARGUMENT]...` )
@@ -430,7 +413,7 @@ unsafe @ ap_printf ( Vec String ) argv → i {
                                                     ? == conv 115 {
                                                         : i al ( nurl_str_len arg )
                                                         : i take ? & >= prec 0 < prec al prec al
-                                                        ( string_push_bytes body # *u arg take )
+                                                        ( string_push_window body ( slice_of_str arg ) 0 take )
                                                     } {
                                                         ? == conv 98 {
                                                             : i _e ( __pf_escape body arg 0 ( nurl_str_len arg ) )
@@ -457,9 +440,9 @@ unsafe @ ap_printf ( Vec String ) argv → i {
                                         } {}
                                     } {}
                                     ~ > pk 0 { ( string_push_char padded 48 ) = pk - pk 1 }
-                                    ( string_push_bytes padded # *u + # i ( string_data body ) st - bn st )
+                                    ( string_push_window padded ( string_bytes body ) st - bn st )
                                     ( string_clear body )
-                                    ( string_push_bytes body # *u ( string_data padded ) ( string_len padded ) )
+                                    ( string_append body padded )
                                 } {}
                             } {}
                             ( __pf_pad out width left body )
@@ -549,7 +532,7 @@ unsafe @ ap_printf ( Vec String ) argv → i {
     }
 }
 
-unsafe @ ap_uname ( Vec String ) argv → i {
+@ ap_uname ( Vec String ) argv → i {
     : BxOpts o ( bx_getopt argv 1 `asnrvmpioA` `all=a,kernel-name=s,nodename=n,kernel-release=r,kernel-version=v,machine=m,processor=p,hardware-platform=i,operating-system=o` )
     : ~ i rc 0
     ? ! ( bx_ok o ) { = rc 1 } {
@@ -562,27 +545,27 @@ unsafe @ ap_uname ( Vec String ) argv → i {
         : String out ( string_new )
         ? want_s {
             : String v ( __uname_or ( sys_uname_field SYS_SYSNAME ) `unknown` )
-            ( string_push_bytes out # *u ( string_data v ) ( string_len v ) )
+            ( string_append out v )
         } {}
         ? | all ( bx_has o `n` ) {
             ? > ( string_len out ) 0 { ( string_push_char out 32 ) } {}
             : String v ( __uname_or ( sys_uname_field SYS_NODENAME ) `unknown` )
-            ( string_push_bytes out # *u ( string_data v ) ( string_len v ) )
+            ( string_append out v )
         } {}
         ? | all ( bx_has o `r` ) {
             ? > ( string_len out ) 0 { ( string_push_char out 32 ) } {}
             : String v ( __uname_or ( sys_uname_field SYS_RELEASE ) `unknown` )
-            ( string_push_bytes out # *u ( string_data v ) ( string_len v ) )
+            ( string_append out v )
         } {}
         ? | all ( bx_has o `v` ) {
             ? > ( string_len out ) 0 { ( string_push_char out 32 ) } {}
             : String v ( __uname_or ( sys_uname_field SYS_VERSION ) `unknown` )
-            ( string_push_bytes out # *u ( string_data v ) ( string_len v ) )
+            ( string_append out v )
         } {}
         ? | all ( bx_has o `m` ) {
             ? > ( string_len out ) 0 { ( string_push_char out 32 ) } {}
             : String v ( __uname_or ( sys_uname_field SYS_MACHINE ) `unknown` )
-            ( string_push_bytes out # *u ( string_data v ) ( string_len v ) )
+            ( string_append out v )
         } {}
         ? ( bx_has o `p` ) {
             ? > ( string_len out ) 0 { ( string_push_char out 32 ) } {}
@@ -651,8 +634,8 @@ unsafe @ ap_uname ( Vec String ) argv → i {
     }
 }
 
-unsafe @ ap_whoami ( Vec String ) argv → i {
-    : String n ( __name_of_uid # i ( geteuid ) )
+@ ap_whoami ( Vec String ) argv → i {
+    : String n ( __name_of_uid ( proc_self_euid ) )
     ( nurl_print ( string_data n ) )
     ( nurl_print `\n` )
     ^ 0
@@ -671,30 +654,13 @@ unsafe @ ap_whoami ( Vec String ) argv → i {
 }
 
 // The caller's supplementary groups, as gids.
-unsafe @ __group_ids → ( Vec i ) {
-    : ( Vec i ) out ( vec_new [i] )
-    : i32 n ( getgroups # i32 0 # *u 0 )
-    ? <= # i n 0 { ^ out } {}
-    : ( Vec u ) buf_v ( vec_zeroed [u] * 4 + # i n 1 )
-    : s buf # s ( vec_data [u] buf_v )
-    : i32 got ( getgroups n # *u buf )
-    : ~ i k 0
-    ~ < k # i got {
-        // gid_t is a 32-bit int; read four little-endian bytes.
-        : *u p # *u buf
-        : i off * k 4
-        : i g | | | & 255 # i . p off << & 255 # i . p + off 1 8 << & 255 # i . p + off 2 16 << & 255 # i . p + off 3 24
-        ( vec_push [i] out g )
-        = k + k 1
-    }
-    ^ out
-}
+@ __group_ids → ( Vec i ) { ^ ( proc_self_groups ) }
 
-unsafe @ ap_groups ( Vec String ) argv → i {
+@ ap_groups ( Vec String ) argv → i {
     // The effective group first, then the supplementary ones — the
     // order every `groups` prints, and not the order getgroups(2)
     // happens to return.
-    : i egid # i ( getegid )
+    : i egid ( proc_self_egid )
     : String primary ( __name_of_gid egid )
     ( nurl_print ( string_data primary ) )
     : ( Vec i ) gs ( __group_ids )
@@ -717,37 +683,37 @@ unsafe @ ap_groups ( Vec String ) argv → i {
     ^ 0
 }
 
-unsafe @ __id_pair String out s label i id → v {
+@ __id_pair String out s label i id → v {
     ( string_push_str out label )
     ( string_push_int out id )
     : String nm ( __name_of_gid id )
     // `1000(wau)` — the number is the fact, the name is the courtesy.
     ? ! ( bx_streq ( string_data nm ) ( nurl_str_int id ) ) {
         ( string_push_char out 40 )
-        ( string_push_bytes out # *u ( string_data nm ) ( string_len nm ) )
+        ( string_append out nm )
         ( string_push_char out 41 )
     } {}
 }
 
-unsafe @ ap_id ( Vec String ) argv → i {
+@ ap_id ( Vec String ) argv → i {
     : BxOpts o ( bx_getopt argv 1 `ugGnr` `user=u,group=g,groups=G,name=n,real=r` )
     : ~ i rc 0
     ? ! ( bx_ok o ) { = rc 1 } {
         : b real ( bx_has o `r` )
-        : i uid ? real # i ( getuid ) # i ( geteuid )
-        : i gid ? real # i ( getgid ) # i ( getegid )
+        : i uid ? real ( proc_self_uid ) ( proc_self_euid )
+        : i gid ? real ( proc_self_gid ) ( proc_self_egid )
         : b nameform ( bx_has o `n` )
         : String out ( string_new )
         ? ( bx_has o `u` ) {
             ? nameform {
                 : String nm ( __name_of_uid uid )
-                ( string_push_bytes out # *u ( string_data nm ) ( string_len nm ) )
+                ( string_append out nm )
             } { ( string_push_int out uid ) }
         } {
             ? ( bx_has o `g` ) {
                 ? nameform {
                     : String nm ( __name_of_gid gid )
-                    ( string_push_bytes out # *u ( string_data nm ) ( string_len nm ) )
+                    ( string_append out nm )
                 } { ( string_push_int out gid ) }
             } {
                 ? ( bx_has o `G` ) {
@@ -760,7 +726,7 @@ unsafe @ ap_id ( Vec String ) argv → i {
                                 ? > k 0 { ( string_push_char out 32 ) } {}
                                 ? nameform {
                                     : String nm ( __name_of_gid g )
-                                    ( string_push_bytes out # *u ( string_data nm ) ( string_len nm ) )
+                                    ( string_append out nm )
                                 } { ( string_push_int out g ) }
                             }
                             F _ → {}
@@ -773,7 +739,7 @@ unsafe @ ap_id ( Vec String ) argv → i {
                     ( string_push_int out uid )
                     ? ! ( bx_streq ( string_data un ) ( nurl_str_int uid ) ) {
                         ( string_push_char out 40 )
-                        ( string_push_bytes out # *u ( string_data un ) ( string_len un ) )
+                        ( string_append out un )
                         ( string_push_char out 41 )
                     } {}
                     ( string_push_char out 32 )
@@ -861,7 +827,7 @@ unsafe @ ap_id ( Vec String ) argv → i {
 
 // %Z, %z, %s and %N need the instant, not the calendar, so they are
 // substituted here and the rest handed to `time_format`.
-unsafe @ __date_prepass s fmt i epoch b utc → String {
+@ __date_prepass s fmt i epoch b utc → String {
     : ( Slice u ) fmt_v ( slice_of_str fmt )
     : String out ( string_new )
     : i n ( nurl_str_len fmt )
@@ -875,7 +841,7 @@ unsafe @ __date_prepass s fmt i epoch b utc → String {
                 ? utc { ( string_push_str out `UTC` ) } {
                     ?? ( tz_name epoch ) {
                         T z → {
-                            ( string_push_bytes out # *u ( string_data z ) ( string_len z ) )
+                            ( string_append out z )
                         }
                         F _ → { ( string_push_str out `UTC` ) }
                     }

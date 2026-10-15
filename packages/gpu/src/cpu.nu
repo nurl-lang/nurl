@@ -47,7 +47,10 @@ $ `stdlib/core/slice.nu`
 #include <stdint.h>
 typedef struct { int x, y, z; } __nurl_dim3;
 static __thread __nurl_dim3 blockIdx, threadIdx, blockDim, gridDim;
-#define __global__
+// A kernel is inlined into the launch loop: the coordinates the loop has
+// just stored are then read back from registers, not thread-local storage,
+// and the arguments the loop holds need no call per element.
+#define __global__ __attribute__((always_inline)) inline
 // __device__ is an execution-space qualifier, NOT a storage class:
 // "__device__ static inline f()" is legal CUDA, so expanding it to
 // "static" would emit "static static inline" (duplicate specifier).
@@ -156,6 +159,33 @@ static void __nurl_ensure(int n) {
     ( string_push_str out `*)(uintptr_t)p[` )
     ( string_push_str out ( nurl_str_int idx ) )
     ( string_push_char out 93 )  // ]
+}
+
+// `auto __aK = <cast K>;` into `c` for each argument cast of `casts` (as
+// __parse_casts builds them), and the call's argument list over them.
+@ __cpu_hoist_args s casts String c → String {
+    : ( Slice u ) v ( slice_of_str casts )
+    : i n ( slice_len [u] v )
+    : ~ String args ( string_new )
+    ? == n 0 { ^ args } {}
+    : ~ i k 0
+    : ~ i s0 0
+    : ~ i idx 0
+    ~ <= k n {
+        // items are separated by ", *(" — a cast's own text has no ", *("
+        : b cut | == k n & & & < + k 3 n == ( slice_byte v k ) 44 == ( slice_byte v + k 1 ) 32 & == ( slice_byte v + k 2 ) 42 == ( slice_byte v + k 3 ) 40
+        ? cut {
+            ( string_push_str c `auto __a` ) ( string_push_int c idx ) ( string_push_str c ` = ` )
+            ( string_push_window c v s0 - k s0 )
+            ( string_push_str c `;\n` )
+            ? > idx 0 { ( string_push_str args `, ` ) } {}
+            ( string_push_str args `__a` ) ( string_push_int args idx )
+            = idx + idx 1
+            = s0 + k 2
+            = k + k 2
+        } { = k + k 1 }
+    }
+    ^ args
 }
 
 // Parse the kernel signature and build the comma-separated call argument list
@@ -302,11 +332,19 @@ unsafe @ cpu_compile s src s name → *u {
         ( string_push_str c ( string_data casts ) )
         ( string_push_str c `);\n__nurl_fin[__nurl_cur]=1;\n}\nextern "C" void __cpu_launch(long long* p, long long grid, long long block){\n#pragma omp parallel for schedule(static)\nfor(long long __b=0;__b<grid;__b++){\nint n=(int)block;\n__nurl_ensure(n);\n__nurl_p=p;\nblockIdx.x=(int)__b;blockIdx.y=0;blockIdx.z=0;\nblockDim.x=n;blockDim.y=1;blockDim.z=1;\ngridDim.x=(int)grid;gridDim.y=1;gridDim.z=1;\nfor(int t=0;t<n;t++){\nmemcpy(&__nurl_ctx[t],&__nurl_tmpl,sizeof(ucontext_t));\n__nurl_ctx[t].uc_stack.ss_sp=__nurl_stk+(size_t)t*__NURL_STK;\n__nurl_ctx[t].uc_stack.ss_size=__NURL_STK;\n__nurl_ctx[t].uc_link=&__nurl_sched;\nmakecontext(&__nurl_ctx[t],(void(*)(void))__nurl_entry,0);\n__nurl_fin[t]=0;\n}\nint left=n;\nwhile(left>0){\nfor(int t=0;t<n;t++){\nif(__nurl_fin[t])continue;\n__nurl_cur=t;threadIdx.x=t;threadIdx.y=0;threadIdx.z=0;\nswapcontext(&__nurl_sched,&__nurl_ctx[t]);\nif(__nurl_fin[t])left--;\n}\n}\n}\n}\n` )
     } {
-        ( string_push_str c `\nextern "C" void __cpu_launch(long long* p, long long grid, long long block){\nlong long __N=grid*block;\n#pragma omp parallel for schedule(static)\nfor(long long __i=0;__i<__N;__i++){\nlong long __b=__i/block,__t=__i%block;\nblockIdx.x=(int)__b;blockIdx.y=0;blockIdx.z=0;threadIdx.x=(int)__t;threadIdx.y=0;threadIdx.z=0;blockDim.x=(int)block;blockDim.y=1;blockDim.z=1;gridDim.x=(int)grid;gridDim.y=1;gridDim.z=1;\n` )
+        // The arguments are read out of `p` once, before the loop, and the
+        // coordinates that do not change are set once per host thread: per
+        // element only blockIdx.x / threadIdx.x move, and (block, thread)
+        // come from a collapsed loop rather than a division. A kernel with
+        // many arguments (a checked kernel passes each buffer's length)
+        // pays nothing per element for them.
+        ( string_push_str c `\nextern "C" void __cpu_launch(long long* p, long long grid, long long block){\n(void)p;\n` )
+        : String args ( __cpu_hoist_args ( string_data casts ) c )
+        ( string_push_str c `#pragma omp parallel\n{\nblockIdx.y=0;blockIdx.z=0;threadIdx.y=0;threadIdx.z=0;blockDim.x=(int)block;blockDim.y=1;blockDim.z=1;gridDim.x=(int)grid;gridDim.y=1;gridDim.z=1;\n#pragma omp for collapse(2) schedule(static)\nfor(long long __b=0;__b<grid;__b++){\nfor(long long __t=0;__t<block;__t++){\nblockIdx.x=(int)__b;threadIdx.x=(int)__t;\n` )
         ( string_push_str c name )
         ( string_push_char c 40 )
-        ( string_push_str c ( string_data casts ) )
-        ( string_push_str c `);\n}\n}\n` )
+        ( string_push_str c ( string_data args ) )
+        ( string_push_str c `);\n}\n}\n}\n}\n` )
     }
     ( string_free casts )
 

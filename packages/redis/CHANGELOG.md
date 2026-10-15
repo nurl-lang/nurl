@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.3.5] — 2026-10-14
+
+Requires NURL 0.73.0 (`slice_at`, `slice_put`, `rc_take`, `locked_take`).
+
+### Changed
+
+- The connection is a `TcpConn` (`tcp_connect` / `tcp_connect_tls`) in a `Locked`, instead of a raw socket handle, a zeroed `TlsConn` and an `Arc` changed through a raw pointer. No function is `unsafe` any more.
+- 47 fewer functions are `unsafe` than in 0.3.4 (0 left).
+
 ## [0.3.4] — 2026-10-12
 
 Requires NURL 0.73.0, in which a field written through a raw pointer

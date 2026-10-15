@@ -22,7 +22,7 @@ $ `deps/tensor/src/tensor.nu`
     ( nurl_print `\n` )
 }
 
-unsafe @ main → i {
+@ main → i {
     : Blk bl ( blk_new 42 F )
     ( dumpv `x` . bl x )
     ( dumpv `wq` . bl wq ) ( dumpv `bq` . bl bq )
@@ -35,11 +35,9 @@ unsafe @ main → i {
     ( dumpv `cosv` . bl cosv ) ( dumpv `sinv` . bl sinv )
     ( dumpv `mask` . bl mask ) ( dumpv `onehot` . bl onehot )
     ( dumpv `la` . bl la ) ( dumpv `lb` . bl lb )
-    : GTape tp ( tape_new )
-    : ( Vec u ) pav__b ( vec_zeroed [u] * 7 8 )
-    : *u pav ( vec_data [u] pav__b )
-    : ( Vec u ) pbv__b ( vec_zeroed [u] * 7 8 )
-    : *u pbv ( vec_data [u] pbv__b )
+    : ~ GTape tp ( tape_new )
+    : ( Vec i ) pav ( vec_zeroed [i] 7 )
+    : ( Vec i ) pbv ( vec_zeroed [i] 7 )
     : GVar loss ( build_block tp bl pav pbv )
     : b bok ( backward tp loss )
     ? bok {} { ( nurl_print `BACKWARD FAILED\n` ) ^ 1 }
@@ -48,8 +46,8 @@ unsafe @ main → i {
     ( nurl_print `\n` )
     : ~ i k 0
     ~ < k 7 {
-        : GVar pa @ GVar { ( nurl_peek pav k ) }
-        : GVar pb @ GVar { ( nurl_peek pbv k ) }
+        : GVar pa @ GVar { ( vec_at [i] pav k ) }
+        : GVar pb @ GVar { ( vec_at [i] pbv k ) }
         // (A gradient is lent from the tape: read one before asking for
         // the next.)
         : Tensor ga ( grad_of tp pa )

@@ -5,6 +5,15 @@ All notable changes to `pqc` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.7] — 2026-10-14
+
+Requires NURL 0.73.0.
+
+### Changed
+
+- `pqc probe` holds its connection as a `?TlsConn` until the handshake succeeds, instead of a `TlsConn` made up from a null address. No function is `unsafe` any more.
+- 2 fewer functions are `unsafe` than in 0.2.6 (0 left).
+
 ## [0.2.6] — 2026-10-12
 
 Requires NURL 0.73.0, in which a standard-library handle holds its

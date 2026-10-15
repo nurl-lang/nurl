@@ -205,3 +205,32 @@ CPU backend.
 backend and, when a host C++ compiler is present, on the CPU backend —
 checking every bit-identical op with `==` against a host computation. On an
 RTX 4090 and on the CPU backend: **14 / 14**.
+
+## Checked kernels
+
+`gk_run` compiles whatever kernel source it is given, so only `unsafe`
+code may call it. `gk_run_checked` (src/checked.nu) takes a kernel *body*
+written in a subset that cannot address memory it was not handed. Buffers
+are reached only through `LD(name, i)` and `ST(name, i, v)`, which check
+every index against that buffer's length. The body sees its scalars by
+name, plus `gid` and `nthreads`. It may declare scalar locals, branch,
+loop and call math functions and the `__d*_rn` rounding intrinsics.
+Anything that makes or follows an address is refused, with the reason in
+`gk_checked_error`, before anything compiles. That covers pointers,
+dereferences, `&`, `[]`, member access, the preprocessor, `asm`, `goto`,
+reserved names and other calls. So a safe package can launch its own
+kernels:
+
+```
+: ~ GkCall c ( gk_call_new )
+( gk_call_in_f c `x` xs )
+( gk_call_out_f c `y` ( vec_zeroed [f] n ) )
+( gk_call_i64 c `n` n )
+: b ok ( gk_run_checked kit c `scale2` `ST(y, gid, 2.0 * LD(x, gid));` n 256 )
+: ( Vec f ) ys ( gk_call_take_f c `y` )
+```
+
+A load past the end reads element 0, and a store past it is dropped. An
+output starts as the Vec it was bound with. arima's device evaluator is
+written this way and runs as fast as its unchecked predecessor did.
+

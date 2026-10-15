@@ -1,5 +1,49 @@
 # Changelog
 
+## [0.12.1] — 2026-10-15
+
+- No `unsafe` left. The 2-D and 3-D RoPE kernels moved into gpukit 0.11.4 as `gkd_rope2d` / `gkd_rope3d`, with the same source and the same checks. The device-block check's output is byte-identical.
+
+## [0.12.0] — 2026-10-14
+
+Requires NURL 0.73.0 with h268 closed, and gpukit 0.11.
+
+### Fixed
+
+- The parsed options held the model path, the output path, the viewer
+  page and the listen address as views of strings the parser freed on
+  its way out (`nurl_argv` hands back an owned copy): every later read
+  of `--model`, `--out`, `--page` or `--host` read freed memory. The
+  options own them now.
+
+### Changed
+
+- 2 `unsafe` functions left (66 in 0.11.2): the two RoPE kernel
+  launches. The host reference code — LayerNorm, attention, the
+  transformer block, the camera geometry, 2-D and 3-D RoPE, bicubic
+  resampling, patch embedding — takes `( Slice f )` / `( Slice i )`
+  views instead of raw pointers, scratch buffers are typed `Vec`s
+  carved into windows, and an absent optional input (qk-norm, RoPE) is
+  an empty slice rather than a null pointer. Outputs are bit-identical
+  to 0.11.2 on every deterministic check.
+- An `Lw` checkpoint is the shared mapping (`Pt`) beside its first
+  failure in a `Locked`, where it was an `Arc` changed through
+  `arc_ptr`. `lw_error` returns a `String`; `lw_f32_ptr` is
+  `lw_f32_bytes`, a checked view of the tensor's bytes, uploaded with
+  gpukit's `gk_dbuf_upload_bytes`; the converting read fills a slice
+  (`pt_read_f64_into`).
+- `pp_data` returns the frame's pixels as a `( Slice f )`.
+
+## [0.11.2] — 2026-10-14
+
+Requires NURL 0.73.0 (grammar v2.9 `raw`, `slice_window`, `file_is_open`).
+
+### Changed
+
+- The 2-D / 3-D RoPE kernels check their position buffers' dtype and length and skip a position past the cos/sin tables instead of reading beyond them. Needs gpukit 0.10.2.
+- 2 more functions are `unsafe`/`raw` than in 0.11.1 (100 now): where they launch kernels of their own, the trust is now written down.
+- Requires torchpt 0.4 (`pt_tensor_ptr` and `pt_read_f64` are `raw` there; the loaders that call them were already `unsafe`).
+
 ## [0.11.1] — 2026-10-12
 
 ### Changed

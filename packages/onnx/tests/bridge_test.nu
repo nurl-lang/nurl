@@ -16,7 +16,10 @@ $ `src/pb.nu`
 $ `src/model.nu`
 $ `src/tensor_bridge.nu`
 
-& `c` @ nurl_peek_f32 *u base i idx → f
+$ `stdlib/std/floatbits.nu`
+
+// The k-th little-endian f32 of a byte view.
+@ f32at ( Slice u ) b i k → f { ^ # f ( bits_to_f32 ( slice_u32_le b * k 4 ) ) }
 
 : ~ i g_fail 0
 
@@ -26,13 +29,11 @@ $ `src/tensor_bridge.nu`
 }
 
 // The file's f32 values, as the bytes the device reads (4 a value).
-unsafe @ load_f32b s path → ( Vec u ) {
+@ load_f32b s path → ( Vec u ) {
     ?? ( read_file_bytes path ) {
         T bytes → {
-            : i n / ( vec_len [u] bytes ) 4
-            : ( Vec u ) host ( vec_zeroed [u] * n 4 )
-            ( vec_f32_into bytes ( vec_data [u] host ) n )
-            ^ host
+            ( vec_truncate [u] bytes * / ( vec_len [u] bytes ) 4 4 )
+            ^ bytes
         }
         F _ → { ^ ( vec_new [u] ) }
     }
@@ -42,7 +43,7 @@ unsafe @ load_f32b s path → ( Vec u ) {
     : ( Vec i ) v ( vec_new [i] ) ( vec_push [i] v a ) ( vec_push [i] v b ) ^ v
 }
 
-unsafe @ main → i {
+@ main → i {
     // parse the model
     : ~ OGraph g ( onnx_empty_graph )
     ?? ( read_file_bytes `tests/data/tiny.onnx` ) {
@@ -51,10 +52,10 @@ unsafe @ main → i {
     }
 
     : ( Vec u ) input__b ( load_f32b `tests/data/tiny.in.f32` )
-    : *u input ( vec_data [u] input__b )
+    : ( Slice u ) input ( slice_from_vec [u] input__b )
     : i in_n / ( vec_len [u] input__b ) 4
     : ( Vec u ) refout__b ( load_f32b `tests/data/tiny.out.f32` )
-    : *u refout ( vec_data [u] refout__b )
+    : ( Slice u ) refout ( slice_from_vec [u] refout__b )
     : i out_n / ( vec_len [u] refout__b ) 4
     ? & == in_n 4 == out_n 3 {} { ( nurl_print `bad test data\n` ) ^ 1 }
 
@@ -70,7 +71,7 @@ unsafe @ main → i {
     // ── device path: DTensor input, no host staging in the run ───
     : ( Vec f ) inv ( vec_with_cap [f] 4 )
     : ~ i k 0
-    ~ < k 4 { ( vec_push [f] inv # f ( nurl_peek_f32 input k ) ) = k + k 1 }
+    ~ < k 4 { ( vec_push [f] inv # f ( f32at input k ) ) = k + k 1 }
     : Tensor tin ( tensor_from_data TE_F32 ( sh2b 1 4 ) inv )
     : DTensor din ( tensor_to_device kit tin )
     ( check ( dtensor_ok din ) `input uploaded as DTensor` )
@@ -82,7 +83,7 @@ unsafe @ main → i {
     : ~ i diffs 0
     = k 0
     ~ < k 3 {
-        ? == ( nurl_f32_to_bits # f32 ( nurl_peek_f32 ( gpu_host_ptr hostr ) k ) ) ( nurl_f32_to_bits # f32 ( nurl_peek_f32 ( gpu_host_ptr devr ) k ) ) {} { = diffs + diffs 1 }
+        ? == ( f32_to_bits # f32 ( gpu_host_get_f32 hostr k ) ) ( f32_to_bits # f32 ( gpu_host_get_f32 devr k ) ) {} { = diffs + diffs 1 }
         = k + k 1
     }
     ( check == diffs 0 `device-input output BIT-IDENTICAL to host-input output` )
@@ -91,7 +92,7 @@ unsafe @ main → i {
     : ~ f mx 0.0
     = k 0
     ~ < k 3 {
-        : f d ( float_abs - ( nurl_peek_f32 ( gpu_host_ptr devr ) k ) ( nurl_peek_f32 refout k ) )
+        : f d ( float_abs - ( gpu_host_get_f32 devr k ) ( f32at refout k ) )
         ? > d mx { = mx d } {}
         = k + k 1
     }
@@ -109,13 +110,13 @@ unsafe @ main → i {
     : Tensor hsm ( dtensor_to_host kit dsm )
 
     // host softmax of the reference
-    : ~ f m0 ( nurl_peek_f32 refout 0 )
+    : ~ f m0 ( f32at refout 0 )
     = k 1
-    ~ < k 3 { : f v ( nurl_peek_f32 refout k ) ? > v m0 { = m0 v } {} = k + k 1 }
+    ~ < k 3 { : f v ( f32at refout k ) ? > v m0 { = m0 v } {} = k + k 1 }
     : ~ f se 0.0
     : ( Vec f ) es ( vec_with_cap [f] 3 )
     = k 0
-    ~ < k 3 { : f ev ( float_exp - ( nurl_peek_f32 refout k ) m0 ) ( vec_push [f] es ev ) = se + se ev = k + k 1 }
+    ~ < k 3 { : f ev ( float_exp - ( f32at refout k ) m0 ) ( vec_push [f] es ev ) = se + se ev = k + k 1 }
     : ~ f mx2 0.0
     = k 0
     ~ < k 3 {

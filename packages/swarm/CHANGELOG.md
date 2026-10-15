@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.3.3] — 2026-10-14
+
+Requires NURL 0.73.0 (grammar v2.9 `raw`, `slice_window`, `file_is_open`).
+
+### Changed
+
+- The roster keeps its members in a `Locked` (adding one is checked and done under one checkout), and the node bundle is read through `arc_get` — it never changes once made. No function is `unsafe` any more.
+- 12 fewer functions are `unsafe` than in 0.3.2 (0 left).
+
 ## [0.3.2] — 2026-10-11
 
 Requires NURL 0.73.0, which allows `mem_forget`, `mem_take` and the

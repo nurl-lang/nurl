@@ -135,93 +135,14 @@ $ `deps/gpukit/src/devops.nu`
         maxkv }
 }
 
-// ── 2-D RoPE, on device ─────────────────────────────────────────────
-//
-// The one kernel this file adds. `x` is [heads, n, dim] and is rotated in
-// place: the first half of each head's feature vector by the token's ROW
-// coordinate, the second by its column. One thread per
-// (head, token, axis, frequency) — each owns a disjoint pair of elements,
-// so the in-place read-then-write is safe without a barrier.
-@ lm_rope2d GpuKit kit GkBuf x GkBuf rows GkBuf cols GkBuf cosb GkBuf sinb
-i heads i n i dim → b {
-    ? & & ( gk_buf_ok x ) ( gk_buf_ok rows ) ( gk_buf_ok cols ) {} { ^ F }
-    ? & ( gk_buf_ok cosb ) ( gk_buf_ok sinb ) {} { ^ F }
-    ? & & > heads 0 > n 0 == % dim 4 0 {} { ^ F }
-    ? == . x n * heads * n dim {} { ^ F }
-    : String src ( string_from `extern "C" __global__ void lm_rope2d(float* X, const long long* rows, const long long* cols, const float* cosT, const float* sinT, long long heads, long long n, long long dim){` )
-    ( string_push_str src `long long half=dim/2, quarter=half/2;` )
-    ( string_push_str src `long long tot=heads*n*quarter*2;` )
-    ( string_push_str src `long long idx=blockIdx.x*blockDim.x+threadIdx.x;if(idx>=tot)return;` )
-    ( string_push_str src `long long j=idx%quarter; long long r=idx/quarter;` )
-    ( string_push_str src `long long axis=r%2; r/=2;` )
-    ( string_push_str src `long long t=r%n; long long h=r/n;` )
-    ( string_push_str src `long long base=h*n*dim+t*dim+axis*half;` )
-    ( string_push_str src `long long pos=(axis==0)?rows[t]:cols[t];` )
-    ( string_push_str src `long long tbl=pos*half;` )
-    ( string_push_str src `float x1=X[base+j], x2=X[base+j+quarter];` )
-    ( string_push_str src `X[base+j]=x1*cosT[tbl+j]-x2*sinT[tbl+j];` )
-    ( string_push_str src `X[base+j+quarter]=x2*cosT[tbl+j+quarter]+x1*sinT[tbl+j+quarter];}` )
-    : ( Vec i ) args ( vec_new [i] )
-    ( vec_push [i] args ( gk_arg_dev x ) )
-    ( vec_push [i] args ( gk_arg_dev rows ) )
-    ( vec_push [i] args ( gk_arg_dev cols ) )
-    ( vec_push [i] args ( gk_arg_dev cosb ) )
-    ( vec_push [i] args ( gk_arg_dev sinb ) )
-    ( vec_push [i] args ( gpu_arg_i64 heads ) )
-    ( vec_push [i] args ( gpu_arg_i64 n ) )
-    ( vec_push [i] args ( gpu_arg_i64 dim ) )
-    : i tot * heads * n / dim 2
-    : b r ( gk_run_dev kit ( string_data src ) `lm_rope2d` ( gk_grid tot 256 ) 256 args )
-    ^ r
-}
-
-// 3-D RoPE on device. Unlike the 2-D one this rotates INTERLEAVED pairs
-// — (x0,x1), (x2,x3), … — and the 64-dim head is split 20 / 22 / 22
-// across the frame, row and column axes rather than in half. One thread
-// per (head, token, frequency); each owns one pair.
-@ lm_rope3d GpuKit kit GkBuf x GkBuf fr GkBuf rw GkBuf cl GkBuf cosb GkBuf sinb
-i heads i n i dim i nt i nh → b {
-    ? & & ( gk_buf_ok x ) ( gk_buf_ok fr ) ( gk_buf_ok rw ) {} { ^ F }
-    ? & & ( gk_buf_ok cl ) ( gk_buf_ok cosb ) ( gk_buf_ok sinb ) {} { ^ F }
-    ? & & > heads 0 > n 0 == % dim 2 0 {} { ^ F }
-    ? == . x n * heads * n dim {} { ^ F }
-    : String src ( string_from `extern "C" __global__ void lm_rope3d(float* X, const long long* fr, const long long* rw, const long long* cl, const float* cosT, const float* sinT, long long heads, long long n, long long dim, long long nt, long long nh){` )
-    ( string_push_str src `long long width=dim/2;` )
-    ( string_push_str src `long long tot=heads*n*width;` )
-    ( string_push_str src `long long idx=blockIdx.x*blockDim.x+threadIdx.x;if(idx>=tot)return;` )
-    ( string_push_str src `long long j=idx%width; long long r=idx/width;` )
-    ( string_push_str src `long long t=r%n; long long h=r/n;` )
-    ( string_push_str src `long long pos = (j<nt) ? fr[t] : ((j<nt+nh) ? rw[t] : cl[t]);` )
-    ( string_push_str src `long long tbl=pos*width+j;` )
-    ( string_push_str src `long long base=h*n*dim+t*dim+2*j;` )
-    ( string_push_str src `float c=cosT[tbl], s=sinT[tbl];` )
-    ( string_push_str src `float x1=X[base], x2=X[base+1];` )
-    ( string_push_str src `X[base]=x1*c-x2*s; X[base+1]=x1*s+x2*c;}` )
-    : ( Vec i ) args ( vec_new [i] )
-    ( vec_push [i] args ( gk_arg_dev x ) )
-    ( vec_push [i] args ( gk_arg_dev fr ) )
-    ( vec_push [i] args ( gk_arg_dev rw ) )
-    ( vec_push [i] args ( gk_arg_dev cl ) )
-    ( vec_push [i] args ( gk_arg_dev cosb ) )
-    ( vec_push [i] args ( gk_arg_dev sinb ) )
-    ( vec_push [i] args ( gpu_arg_i64 heads ) )
-    ( vec_push [i] args ( gpu_arg_i64 n ) )
-    ( vec_push [i] args ( gpu_arg_i64 dim ) )
-    ( vec_push [i] args ( gpu_arg_i64 nt ) )
-    ( vec_push [i] args ( gpu_arg_i64 nh ) )
-    : i tot * heads * n / dim 2
-    : b r ( gk_run_dev kit ( string_data src ) `lm_rope3d` ( gk_grid tot 256 ) 256 args )
-    ^ r
-}
-
 // Apply whichever rotation `rp` selects to a [heads, n, hd] tensor.
 @ lm_rope_apply GpuKit kit LmRope rp GkBuf x i heads i n i hd → b {
     ? == . rp mode LM_ROPE_NONE { ^ T } {}
     ? == . rp mode LM_ROPE_2D {
-        ^ ( lm_rope2d kit x . rp pa . rp pb . rp cosb . rp sinb heads n hd )
+        ^ ( gkd_rope2d kit x . rp pa . rp pb . rp cosb . rp sinb heads n hd )
     } {}
     // 20 / 22 / 22 over a 64-dim head → 10 frame, 11 row, 11 column
-    ^ ( lm_rope3d kit x . rp pa . rp pb . rp pc . rp cosb . rp sinb heads n hd 10 11 )
+    ^ ( gkd_rope3d kit x . rp pa . rp pb . rp pc . rp cosb . rp sinb heads n hd 10 11 )
 }
 
 // ── helpers ─────────────────────────────────────────────────────────

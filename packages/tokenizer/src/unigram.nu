@@ -80,8 +80,6 @@ $ `stdlib/core/slice.nu`
 
 @ Unigram_drop sink Unigram h → v {}
 
-unsafe @ __Unigram_ptr Unigram h → *UnigramImpl { ^ ( arc_ptr [UnigramImpl] . h a ) }
-
 @ __uni_set ( HashMap s i ) m s key i val → v {
     : ?i _old ( map_set [s i] m key val \ s x → i { ^ ( hash_string x ) } \ s a s b → b { ^ ( eq_string a b ) } )
 }
@@ -108,7 +106,7 @@ unsafe @ __Unigram_ptr Unigram h → *UnigramImpl { ^ ( arc_ptr [UnigramImpl] . 
     ^ h
 }
 
-unsafe @ __uni_ft_build * UnigramImpl u → v {
+@ __uni_ft_build inout UnigramImpl u → v {
     : i nv ( vec_len [String] . u pieces )
     : ~ i cap 16
     ~ < cap * nv 2 { = cap * cap 2 }
@@ -142,21 +140,21 @@ unsafe @ __uni_ft_build * UnigramImpl u → v {
 
 // id of the piece equal to text[off .. off+len), or -1 — `h` is the
 // caller's rolling FNV over exactly those bytes.
-unsafe @ __uni_ft_get * UnigramImpl u i h s text i off i len → i {
-    : *u ftp # *u ( vec_data [i] . u ft )
+@ __uni_ft_get UnigramImpl u i h ( Slice u ) tv i off i len → i {
+    : ( Slice i ) ftp ( slice_from_vec [i] . u ft )
     : ~ i sl & h . u ft_mask
     : ~ i found -1
     : ~ b run T
     ~ run {
         : i base * sl 2
-        : i ide ( nurl_peek ftp + base 1 )
+        : i ide ( slice_at [i] ftp + base 1 )
         ? == ide 0 { = run F } {
             : ~ b hit F
-            ? == ( nurl_peek ftp base ) h {
+            ? == ( slice_at [i] ftp base ) h {
                 ?? ( vec_get [String] . u pieces - ide 1 ) {
                     T pc → {
                         ? == ( string_len pc ) len {
-                            ? == 0 # i ( memcmp ( string_data pc ) # s + # i text off len ) {
+                            ? ( slice_bytes_eq ( slice_window [u] tv off len ) ( slice_of_str ( string_data pc ) ) ) {
                                 = hit T
                             } {}
                         } {}
@@ -189,13 +187,13 @@ unsafe @ __uni_ft_get * UnigramImpl u i h s text i off i len → i {
 //   has_leaf(u) = (u >> 8) & 1
 //   value(u)    = u & 0x7FFFFFFF        (read from the leaf unit)
 
-unsafe @ __uni_unit ( Vec u ) trie i k → i {
-    : *u p ( vec_data [u] trie )
+@ __uni_unit ( Vec u ) trie i k → i {
+    : ( Slice u ) p ( slice_from_vec [u] trie )
     : i o * k 4
-    : i b0 # i . p o
-    : i b1 # i . p + o 1
-    : i b2 # i . p + o 2
-    : i b3 # i . p + o 3
+    : i b0 # i ( slice_at [u] p o )
+    : i b1 # i ( slice_at [u] p + o 1 )
+    : i b2 # i ( slice_at [u] p + o 2 )
+    : i b3 # i ( slice_at [u] p + o 3 )
     ^ | | | b0 << b1 8 << b2 16 << b3 24
 }
 
@@ -212,7 +210,8 @@ unsafe @ __uni_unit ( Vec u ) trie i k → i {
 
 // Longest charsmap match for text[p..): writes the matched byte length to
 // `mlen`, returns the pool offset of the replacement (−1 = no match).
-unsafe @ __uni_norm_prefix * UnigramImpl u s text i p i n inout i mlen → i {
+@ __uni_norm_prefix UnigramImpl u ( Slice u ) tv i p inout i mlen → i {
+    : i n ( slice_len [u] tv )
     = mlen 0
     ? . u has_norm {} { ^ -1 }
     : i nunits / ( vec_len [u] . u trie ) 4
@@ -220,12 +219,11 @@ unsafe @ __uni_norm_prefix * UnigramImpl u s text i p i n inout i mlen → i {
     : ~ i node 0
     : i u0 ( __uni_unit . u trie 0 )
     = node ^^ node ( __uni_offset u0 )
-    : *u TP # *u text
     : ~ i best -1
     : ~ i k p
     : ~ b run T
     ~ & run < k n {
-        : i c & 255 # i . TP k
+        : i c ( slice_byte tv k )
         ? != c 0 {} { = run F }
         ? run {
             = node ^^ node c
@@ -250,33 +248,33 @@ unsafe @ __uni_norm_prefix * UnigramImpl u s text i p i n inout i mlen → i {
 }
 
 // Append the pool's NUL-terminated string at `off` to `out`.
-unsafe @ __uni_pool_push * UnigramImpl u i off String out → v {
-    : i pn ( vec_len [u] . u pool )
-    : *u pp ( vec_data [u] . u pool )
+@ __uni_pool_push UnigramImpl u i off String out → v {
+    : ( Slice u ) pp ( slice_from_vec [u] . u pool )
+    : i pn ( slice_len [u] pp )
     : ~ i k off
     : ~ b run T
     ~ & run < k pn {
-        : i b2 # i . pp k
+        : i b2 ( slice_byte pp k )
         ? == b2 0 { = run F } { ( string_push_char out b2 ) = k + k 1 }
     }
 }
 
 // Precompiled charsmap pass: longest-match replace, unmatched UTF-8 chars
 // copy through (invalid bytes copy as-is, one at a time).
-unsafe @ __uni_normalize * UnigramImpl u s text i n String out → v {
+@ __uni_normalize UnigramImpl u ( Slice u ) tv String out → v {
+    : i n ( slice_len [u] tv )
     : ~ i ml 0
-    : *u TP # *u text
     : ~ i p 0
     ~ < p n {
-        : i off ( __uni_norm_prefix u text p n ml )
+        : i off ( __uni_norm_prefix u tv p ml )
         ? & >= off 0 > ml 0 {
             ( __uni_pool_push u off out )
             = p + p ml
         } {
-            : Utf8Dec d ( utf8_decode_n text n p )
+            : Utf8Dec d ( utf8_decode_at tv p )
             : i w ? > . d width 0 { . d width } { 1 }
             : ~ i j 0
-            ~ < j w { ( string_push_char out & 255 # i . TP + p j ) = j + j 1 }
+            ~ < j w { ( string_push_char out ( slice_byte tv + p j ) ) = j + j 1 }
             = p + p w
         }
     }
@@ -287,17 +285,16 @@ unsafe @ __uni_normalize * UnigramImpl u s text i n String out → v {
 // normalize (charsmap → collapse spaces) → Metaspace: every ' ' → ▁, then
 // prepend ▁ UNLESS the result is empty or already starts with ▁ (that is
 // what HF's Metaspace does — a leading space becomes the prefix itself).
-unsafe @ __uni_pretoken * UnigramImpl u s text i n → String {
+@ __uni_pretoken UnigramImpl u ( Slice u ) tv → String {
     : String nrm ( string_new )
-    ( __uni_normalize u text n nrm )
+    ( __uni_normalize u tv nrm )
     : String body ( string_new )
-    : s d ( string_data nrm )
-    : i dn ( string_len nrm )
-    : *u DP # *u d
+    : ( Slice u ) dv ( string_bytes nrm )
+    : i dn ( slice_len [u] dv )
     : ~ i p 0
     : ~ b prev_sp F
     ~ < p dn {
-        : i b2 & 255 # i . DP p
+        : i b2 ( slice_byte dv p )
         ? == b2 32 {
             // Replace " {2,}"→" " (collapse), then Metaspace ' ' → ▁
             ? & . u collapse_spaces prev_sp {} { ( string_push_str body `▁` ) }
@@ -319,9 +316,10 @@ unsafe @ __uni_pretoken * UnigramImpl u s text i n → String {
 
 // Unigram Viterbi over the pre-tokenized bytes. Appends ids to `out`;
 // consecutive unknowns fuse into ONE unk id (HF fuse_unk).
-unsafe @ __uni_viterbi * UnigramImpl u String seg ( Vec i ) out → v {
+@ __uni_viterbi UnigramImpl u String seg ( Vec i ) out → v {
     : s e ( string_data seg )
     : i n ( string_len seg )
+    : ( Slice u ) ev ( slice_of_str e )
     ? > n 0 {} { ^ }
     // char-boundary flags (0/1) for 0..n
     : ( Vec i ) bnd ( vec_with_cap [i] + n 1 )
@@ -330,7 +328,7 @@ unsafe @ __uni_viterbi * UnigramImpl u String seg ( Vec i ) out → v {
     : ~ i p 0
     ~ < p n {
         ( vec_set [i] bnd p 1 )
-        : Utf8Dec d ( utf8_decode_n e n p )
+        : Utf8Dec d ( utf8_decode_at ev p )
         = p + p ? > . d width 0 { . d width } { 1 }
     }
     ( vec_set [i] bnd n 1 )
@@ -358,10 +356,10 @@ unsafe @ __uni_viterbi * UnigramImpl u String seg ( Vec i ) out → v {
             : i qmax ? < + p . u max_piece n { + p . u max_piece } { n }
             : ~ i h UNI_FNV_OFF
             ~ <= q qmax {
-                = h ^^ h ( nurl_str_at e n - q 1 )
+                = h ^^ h ( slice_byte ev - q 1 )
                 = h * h UNI_FNV_PRIME
                 ? == ( __uni_geti bnd q 1 ) 1 {
-                    : i id ( __uni_ft_get u h e p - q p )
+                    : i id ( __uni_ft_get u h ev p - q p )
                     ? >= id 0 {
                         : f sc + base ( __uni_getf . u scores id )
                         ? > sc ( __uni_getf best q ) {
@@ -411,7 +409,7 @@ unsafe @ __uni_viterbi * UnigramImpl u String seg ( Vec i ) out → v {
 
 // ── loading ──────────────────────────────────────────────────────────
 
-unsafe @ __uni_load_vocab Json model * UnigramImpl u → b {
+@ __uni_load_vocab Json model inout UnigramImpl u → b {
     ?? ( json_obj_get model `vocab` ) {
         T vocab → {
             : i nv ( json_arr_len vocab )
@@ -450,7 +448,7 @@ unsafe @ __uni_load_vocab Json model * UnigramImpl u → b {
     }
 }
 
-unsafe @ __uni_load_charsmap Json norm * UnigramImpl u → v {
+@ __uni_load_charsmap Json norm inout UnigramImpl u → v {
     : s ty ?? ( json_obj_get norm `type` ) { T t → ( json_str_data t ) F → `` }
     ? == 1 ( nurl_str_eq ty `Precompiled` ) {
         ?? ( json_obj_get norm `precompiled_charsmap` ) {
@@ -459,13 +457,13 @@ unsafe @ __uni_load_charsmap Json norm * UnigramImpl u → v {
                     T blob → {
                         : i bn ( vec_len [u] blob )
                         ? >= bn 4 {
-                            : *u bp ( vec_data [u] blob )
-                            : i tsz | | | # i . bp 0 << # i . bp 1 8 << # i . bp 2 16 << # i . bp 3 24
+                            : ( Slice u ) bp ( slice_from_vec [u] blob )
+                            : i tsz | | | ( slice_byte bp 0 ) << ( slice_byte bp 1 ) 8 << ( slice_byte bp 2 ) 16 << ( slice_byte bp 3 ) 24
                             ? <= + 4 tsz bn {
                                 : ~ i k 4
-                                ~ < k + 4 tsz { ( vec_push [u] . u trie # i . bp k ) = k + k 1 }
+                                ~ < k + 4 tsz { ( vec_push [u] . u trie ( slice_at [u] bp k ) ) = k + k 1 }
                                 = k + 4 tsz
-                                ~ < k bn { ( vec_push [u] . u pool # i . bp k ) = k + k 1 }
+                                ~ < k bn { ( vec_push [u] . u pool ( slice_at [u] bp k ) ) = k + k 1 }
                                 = . u has_norm T
                             } {}
                         } {}
@@ -494,7 +492,7 @@ unsafe @ __uni_load_charsmap Json norm * UnigramImpl u → v {
 
 // The template's <s>/</s> ids: first SpecialToken before the Sequence entry
 // and first after it, resolved through the vocab lookup.
-unsafe @ __uni_load_template Json root * UnigramImpl u → v {
+@ __uni_load_template Json root inout UnigramImpl u → v {
     ?? ( json_get root `post_processor.single` ) {
         T single → {
             : i sn ( json_arr_len single )
@@ -527,7 +525,7 @@ unsafe @ __uni_load_template Json root * UnigramImpl u → v {
 }
 
 // Added tokens, kept longest-first so overlapping literals match greedily.
-unsafe @ __uni_load_added Json root * UnigramImpl u → v {
+@ __uni_load_added Json root inout UnigramImpl u → v {
     ?? ( json_obj_get root `added_tokens` ) {
         T arr → {
             : i an ( json_arr_len arr )
@@ -563,7 +561,7 @@ unsafe @ __uni_load_added Json root * UnigramImpl u → v {
     }
 }
 
-unsafe @ uni_load s path → !Unigram String {
+@ uni_load s path → !Unigram String {
     ?? ( read_file path ) {
         T txt → {
             ?? ( json_parse ( string_data txt ) ) {
@@ -571,25 +569,13 @@ unsafe @ uni_load s path → !Unigram String {
                     : s mtype ?? ( json_get root `model.type` ) { T t → ( json_str_data t ) F → `` }
                     ? == 1 ( nurl_str_eq mtype `Unigram` ) {} { ^ ( __uni_err `unigram: model.type is not Unigram` ) }
                     // The handle first: a file without a vocabulary lets go of it.
-                    : Unigram h @ Unigram { ( arc_zero [UnigramImpl] ) }
-                    : *UnigramImpl u ( arc_ptr [UnigramImpl] . h a )
-                    = . u pieces ( vec_new [String] )
-                    = . u scores ( vec_new [f] )
-                    = . u lookup ( map_new [s i] )
-                    = . u ft ( vec_new [i] )
-                    = . u ft_mask 0
-                    = . u trie ( vec_new [u] )
-                    = . u pool ( vec_new [u] )
-                    = . u added ( vec_new [String] )
-                    = . u added_ids ( vec_new [i] )
-                    = . u added_lstrip ( vec_new [i] )
-                    = . u added_rstrip ( vec_new [i] )
-                    = . u has_norm F
-                    = . u collapse_spaces F
-                    = . u add_prefix T
-                    = . u max_piece 1
-                    = . u bos -1
-                    = . u eos -1
+                    // Built here, then shared: the Arc's payload is fixed once
+                    // made, so every reader takes it through arc_get unlocked.
+                    : ~ UnigramImpl u @ UnigramImpl {
+                        ( vec_new [String] ) ( vec_new [f] ) ( map_new [s i] ) ( vec_new [i] ) 0
+                        0 0.0 1 ( vec_new [u] ) ( vec_new [u] ) F F T -1 -1
+                        ( vec_new [String] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] )
+                    }
                     = . u unk_id ?? ( json_get root `model.unk_id` ) { T x → ?? ( json_num_as_i x ) { T v → v F → 0 } F → 0 }
                     : ?Json model ( json_obj_get root `model` )
                     : ~ b okv F
@@ -601,7 +587,7 @@ unsafe @ uni_load s path → !Unigram String {
                     = . u add_prefix apfx
                     ( __uni_load_template root u )
                     ( __uni_load_added root u )
-                    ^ @ !Unigram String { T h }
+                    ^ @ !Unigram String { T @ Unigram { ( arc_new [UnigramImpl] u ) } }
                 }
                 F je → { ^ ( __uni_err `unigram: tokenizer.json parse error` ) }
             }
@@ -613,29 +599,29 @@ unsafe @ uni_load s path → !Unigram String {
 // Let go of `u` now rather than at the end of its owner's scope.
 @ uni_free sink Unigram u → v {}
 
-unsafe @ uni_n_vocab Unigram u__h → i {
-    : *UnigramImpl u ( __Unigram_ptr u__h )
+@ uni_n_vocab Unigram u__h → i {
+    : UnigramImpl u ( arc_get [UnigramImpl] . u__h a )
     ^ ( vec_len [String] . u pieces )
 }
 
-unsafe @ uni_bos Unigram u__h → i {
-    : *UnigramImpl u ( __Unigram_ptr u__h )
+@ uni_bos Unigram u__h → i {
+    : UnigramImpl u ( arc_get [UnigramImpl] . u__h a )
     ^ . u bos
 }
 
-unsafe @ uni_eos Unigram u__h → i {
-    : *UnigramImpl u ( __Unigram_ptr u__h )
+@ uni_eos Unigram u__h → i {
+    : UnigramImpl u ( arc_get [UnigramImpl] . u__h a )
     ^ . u eos
 }
 
-unsafe @ uni_unk Unigram u__h → i {
-    : *UnigramImpl u ( __Unigram_ptr u__h )
+@ uni_unk Unigram u__h → i {
+    : UnigramImpl u ( arc_get [UnigramImpl] . u__h a )
     ^ . u unk_id
 }
 
 // Borrowed piece text ("" out of range).
-unsafe @ uni_piece Unigram u__h i id → s {
-    : *UnigramImpl u ( __Unigram_ptr u__h )
+@ uni_piece Unigram u__h i id → s {
+    : UnigramImpl u ( arc_get [UnigramImpl] . u__h a )
     ?? ( vec_get [String] . u pieces id ) { T p → { ^ ( string_data p ) } F → { ^ `` } }
 }
 
@@ -644,7 +630,8 @@ unsafe @ uni_piece Unigram u__h i id → s {
 }
 
 // Does an added token match text[p..)? Returns its index or −1.
-unsafe @ __uni_added_at * UnigramImpl u s text i p i n → i {
+@ __uni_added_at UnigramImpl u ( Slice u ) tv i p → i {
+    : i n ( slice_len [u] tv )
     : i na ( vec_len [String] . u added )
     : ~ i k 0
     ~ < k na {
@@ -652,7 +639,7 @@ unsafe @ __uni_added_at * UnigramImpl u s text i p i n → i {
             T lit → {
                 : i ll ( string_len lit )
                 ? <= + p ll n {
-                    ? == 0 ( nurl_memcmp_lex # s + # i text p ll ( string_data lit ) ll ) { ^ k } {}
+                    ? ( slice_bytes_eq ( slice_window [u] tv p ll ) ( string_bytes lit ) ) { ^ k } {}
                 } {}
             }
             F → {}
@@ -663,44 +650,44 @@ unsafe @ __uni_added_at * UnigramImpl u s text i p i n → i {
 }
 
 // One raw segment (no added tokens inside) through the full pipeline.
-unsafe @ __uni_segment * UnigramImpl u s text i off i len ( Vec i ) out → v {
+@ __uni_segment UnigramImpl u ( Slice u ) tv i off i len ( Vec i ) out → v {
     ? > len 0 {} { ^ }
-    : String raw ( string_new )
-    ( string_push_bytes raw # *u + # i text off len )
-    : String pre ( __uni_pretoken u ( string_data raw ) ( string_len raw ) )
+    : String pre ( __uni_pretoken u ( slice_window [u] tv off len ) )
     ( __uni_viterbi u pre out )
 }
 
 // Encode `text`. add_special wraps the result in the file's template
 // (<s> … </s>). Returns F only when the tokenizer is unusable.
-unsafe @ uni_encode Unigram u__h s text b add_special ( Vec i ) out → b {
-    : *UnigramImpl u ( __Unigram_ptr u__h )
+@ uni_encode Unigram u__h s text b add_special ( Vec i ) out → b {
+    : UnigramImpl u ( arc_get [UnigramImpl] . u__h a )
     ? > ( uni_n_vocab u__h ) 0 {} { ^ F }
     ? & add_special >= . u bos 0 { ( vec_push [i] out . u bos ) } {}
-    : i n ( nurl_str_len text )
+    // Measured once: every byte read below indexes this view.
+    : ( Slice u ) tv ( slice_of_str text )
+    : i n ( slice_len [u] tv )
     : ~ i seg 0
     : ~ i p 0
     ~ < p n {
-        : i ai ( __uni_added_at u text p n )
+        : i ai ( __uni_added_at u tv p )
         ? >= ai 0 {
             // lstrip: whitespace before the token belongs to it
             : ~ i segend p
             ? == ( __uni_geti . u added_lstrip ai 0 ) 1 {
-                ~ & > segend seg ( __uni_is_ws ( nurl_str_at text n - segend 1 ) ) { = segend - segend 1 }
+                ~ & > segend seg ( __uni_is_ws ( slice_byte tv - segend 1 ) ) { = segend - segend 1 }
             } {}
-            ( __uni_segment u text seg - segend seg out )
+            ( __uni_segment u tv seg - segend seg out )
             ( vec_push [i] out ( __uni_geti . u added_ids ai -1 ) )
             : i al ?? ( vec_get [String] . u added ai ) { T x → ( string_len x ) F → 1 }
             = p + p al
             ? == ( __uni_geti . u added_rstrip ai 0 ) 1 {
-                ~ & < p n ( __uni_is_ws ( nurl_str_at text n p ) ) { = p + p 1 }
+                ~ & < p n ( __uni_is_ws ( slice_byte tv p ) ) { = p + p 1 }
             } {}
             = seg p
         } {
             = p + p 1
         }
     }
-    ( __uni_segment u text seg - n seg out )
+    ( __uni_segment u tv seg - n seg out )
     ? & add_special >= . u eos 0 { ( vec_push [i] out . u eos ) } {}
     ^ T
 }

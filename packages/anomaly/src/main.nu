@@ -186,8 +186,7 @@ $ `src/mcp.nu`
 }
 
 // Print a verdict as one compact JSON object.
-unsafe @ __an_print_verdict Model mo__h Verdict vd → v {
-    : *ModelImpl mo ( _Model_ptr mo__h )
+@ __an_print_verdict Model mo Verdict vd → v {
     : Json o ( json_obj_new )
     ? . vd ready {
         ( json_obj_set o `status` ( json_str_lit `success` ) )
@@ -206,8 +205,7 @@ unsafe @ __an_print_verdict Model mo__h Verdict vd → v {
                     ( json_obj_set vo `severity` ( json_float ( anom_severity . vv score . vv margin ) ) )
                     ( json_obj_set vo `margin` ( json_float . vv margin ) )
                     ? >= . vv vv_feat 0 {
-                        : Meta pmm__h ( model_metadata mo__h )
-                        : *MetaImpl pmm ( _Meta_ptr pmm__h )
+                        : ~ Meta pmm ( model_metadata mo )
                         ?? ( vec_get [String] . pmm feats . vv vv_feat ) {
                             T fname → { ( json_obj_set vo `feature` ( json_str_lit ( string_data fname ) ) ) }
                             F _ → {}
@@ -224,7 +222,7 @@ unsafe @ __an_print_verdict Model mo__h Verdict vd → v {
         ( json_obj_set o `status` ( json_str_lit `collecting` ) )
         ( json_obj_set o `min_data_points` ( json_int . mo min_points ) )
     }
-    ( json_obj_set o `data_points` ( json_int ( model_n_points mo__h ) ) )
+    ( json_obj_set o `data_points` ( json_int ( model_n_points mo ) ) )
     : String out ( json_stringify o )
     ( pline ( string_data out ) )
 }
@@ -265,7 +263,7 @@ unsafe @ __an_print_verdict Model mo__h Verdict vd → v {
                 ( nurl_eprintln ( string_data mname ) )
                 = rc 1
             } {
-                : Model mo ( model_open st ( string_data mname ) )
+                : ~ Model mo ( model_open st ( string_data mname ) )
                 ? ingest {
                     : !Verdict String vr ( model_ingest mo rec )
                     = rc ( __an_report mo vr )
@@ -365,7 +363,7 @@ unsafe @ __an_print_verdict Model mo__h Verdict vd → v {
     // request rather than protect anything.
     ? ( anomaly_authz_apply cfg ) {
         ( nurl_eprint `anomaly: authentication ON, issuer ` )
-        ( nurl_eprintln ( anomaly_authz_issuer ) )
+        ( nurl_eprintln ( string_data ( anomaly_authz_issuer ) ) )
         ? ( anomaly_authz_open_ingest ) {
             ( nurl_eprintln `anomaly: /detect and /detect_only still accept unauthenticated points (auth.open_ingest = false to close them)` )
         } {}
@@ -478,16 +476,15 @@ unsafe @ __an_print_verdict Model mo__h Verdict vd → v {
     ^ rc
 }
 
-unsafe @ __an_cmd_train_ae CliCtx x → i {
+@ __an_cmd_train_ae CliCtx x → i {
     : String mname ( ctx_arg x 0 )
     : String root ( __an_store_root x )
     : Store st ( __an_store_of x ( string_data root ) )
     : ~ i rc 0
     ? ( store_exists st ( string_data mname ) ) {
-        : Model mo__h ( model_open st ( string_data mname ) )
-        : *ModelImpl mo ( _Model_ptr mo__h )
+        : ~ Model mo ( model_open st ( string_data mname ) )
         : ( Vec i ) hidden ( vec_new [i] )
-        : String err ( model_train_autoencoder mo__h hidden -1.0 )
+        : String err ( model_train_autoencoder mo hidden -1.0 )
         ? == ( string_len err ) 0 {
             : AeModel tae . mo ae
             : String msg ( string_from `autoencoder trained on ` )
@@ -509,13 +506,13 @@ unsafe @ __an_cmd_train_ae CliCtx x → i {
     ^ rc
 }
 
-unsafe @ __an_cmd_train_fc CliCtx x → i {
+@ __an_cmd_train_fc CliCtx x → i {
     : String mname ( ctx_arg x 0 )
     : String root ( __an_store_root x )
     : Store st ( __an_store_of x ( string_data root ) )
     : ~ i rc 0
     ? ( store_exists st ( string_data mname ) ) {
-        : Model mo ( model_open st ( string_data mname ) )
+        : ~ Model mo ( model_open st ( string_data mname ) )
         : i season ( ctx_int x `season` )
         ? >= season -1 {
             : Json vo ( json_obj_new )
@@ -529,8 +526,7 @@ unsafe @ __an_cmd_train_fc CliCtx x → i {
         } {}
         : String err ( model_train_forecast mo )
         ? == ( string_len err ) 0 {
-            : FcModel fc__h ( model_forecast mo )
-            : *FcModelImpl fc ( _FcModel_ptr fc__h )
+            : FcModel fc ( model_forecast mo )
             : String msg ( string_from `forecast models fitted for ` )
             ( string_push_int msg . fc nw )
             ( string_push_str msg ` features on ` )
@@ -552,15 +548,14 @@ unsafe @ __an_cmd_train_fc CliCtx x → i {
     ^ rc
 }
 
-unsafe @ __an_cmd_forecast CliCtx x → i {
+@ __an_cmd_forecast CliCtx x → i {
     : String mname ( ctx_arg x 0 )
     : String root ( __an_store_root x )
     : Store st ( __an_store_of x ( string_data root ) )
     : ~ i rc 0
     ? ( store_exists st ( string_data mname ) ) {
-        : Model mo ( model_open st ( string_data mname ) )
-        : FcModel fc__h ( model_forecast mo )
-        : *FcModelImpl fc ( _FcModel_ptr fc__h )
+        : ~ Model mo ( model_open st ( string_data mname ) )
+        : FcModel fc ( model_forecast mo )
         ? . fc trained {
             : ~ i h ( ctx_int x `horizon` )
             ? < h 1 { = h 12 } {}
@@ -643,7 +638,7 @@ unsafe @ __an_cmd_forecast CliCtx x → i {
     : Store st ( __an_store_of x ( string_data root ) )
     : ~ i rc 0
     ? ( store_exists st ( string_data mname ) ) {
-        : Model mo ( model_open st ( string_data mname ) )
+        : ~ Model mo ( model_open st ( string_data mname ) )
         ? ( model_is_trained mo ) {
             : ( Vec i ) w ( __an_cli_window mo x )
             : CalReport cal ( model_calibrate mo ( _mlp_iget w 0 ) ( _mlp_iget w 1 ) )
@@ -714,7 +709,7 @@ unsafe @ __an_cmd_forecast CliCtx x → i {
         ^ 2
     }
     ? ( store_exists st ( string_data mname ) ) {
-        : Model mo ( model_open st ( string_data mname ) )
+        : ~ Model mo ( model_open st ( string_data mname ) )
         ? ( model_is_trained mo ) {
             : ( Vec i ) w ( __an_cli_window mo x )
             : b dry ( ctx_bool x `dry-run` )
@@ -770,7 +765,7 @@ unsafe @ __an_cmd_forecast CliCtx x → i {
     : Store st ( __an_store_of x ( string_data root ) )
     : ~ i rc 0
     ? ( store_exists st ( string_data mname ) ) {
-        : Model mo ( model_open st ( string_data mname ) )
+        : ~ Model mo ( model_open st ( string_data mname ) )
         : i used ( model_force_train mo )
         ? > used 0 {
             : String msg ( string_from `trained on ` )
@@ -795,7 +790,7 @@ unsafe @ __an_cmd_forecast CliCtx x → i {
     : Store st ( __an_store_of x ( string_data root ) )
     : ~ i rc 0
     ? ( store_exists st ( string_data mname ) ) {
-        : Model mo ( model_open st ( string_data mname ) )
+        : ~ Model mo ( model_open st ( string_data mname ) )
         ( model_reset mo )
         ( pline `reset` )
     } {

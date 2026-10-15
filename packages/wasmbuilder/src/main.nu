@@ -23,10 +23,6 @@ $ `stdlib/std/args.nu`
 $ `stdlib/ext/env.nu`
 $ `build.nu`
 
-// Keep in step with nurl.toml's [package] version — `--version` is what a
-// bug report quotes, so a stale literal here misattributes the bug.
-@ __wbc_version → s { ^ `wasmbuilder 0.3.5` }
-
 // --doctor: print every resolution step so a broken setup explains itself.
 @ __wbc_doctor → i {
     ( nurl_print `wasmbuilder --doctor\n\n` )
@@ -94,7 +90,7 @@ $ `build.nu`
         ^ 0
     } {}
     ? ( args_present p `version` ) {
-        ( nurl_print ( __wbc_version ) ) ( nurl_print `\n` )
+        ( nurl_print `wasmbuilder ` ) ( nurl_print ( pkg_version ) ) ( nurl_print `\n` )
         ^ 0
     } {}
     ? ( args_present p `doctor` ) {

@@ -120,8 +120,6 @@ $ `stdlib/std/arc.nu`
 
 @ GcovObj_drop sink GcovObj h → v {}
 
-unsafe @ __GcovObj_ptr GcovObj h → *GcovObjImpl { ^ ( arc_ptr [GcovObjImpl] . h a ) }
-
 : | GcovErr {
     GcovNoNotes  // the .gcno could not be read
     GcovBadMagic  // not a coverage file at all
@@ -151,17 +149,10 @@ unsafe @ __GcovObj_ptr GcovObj h → *GcovObjImpl { ^ ( arc_ptr [GcovObjImpl] . 
 // Both files are streams of 32-bit little-endian words. A string is a
 // word-count followed by that many words of NUL-padded bytes.
 
-unsafe @ __g_u32 * u p i off → i {
-    ^ | | | # i . p off
-    << # i . p + off 1 8
-    << # i . p + off 2 16
-    << # i . p + off 3 24
-}
+@ __g_u32 ( Slice u ) p i off → i { ^ ( slice_u32_le p off ) }
 
 // Counters are 64-bit, stored low word first.
-unsafe @ __g_u64 * u p i off → i {
-    ^ | ( __g_u32 p off ) << ( __g_u32 p + off 4 ) 32
-}
+@ __g_u64 ( Slice u ) p i off → i { ^ ( slice_u64_le p off ) }
 
 // A GCOV string: `words` words of payload, NUL-padded to the word
 // boundary. The stored length is the padded one, so the real end is the
@@ -172,20 +163,21 @@ unsafe @ __g_u64 * u p i off → i {
 // million here, and a reader that trusts it walks that far off the end of
 // the buffer. A span that does not fit is not a short string, it is a
 // broken record, and the caller is told by getting nothing back.
-unsafe @ __g_str * u p i off i words i limit → String {
+@ __g_str ( Slice u ) p i off i words i limit → String {
     ? | < words 0 > + off * words 4 limit { ^ ( string_new ) } {}
     : i cap * words 4
     : ~ i n 0
     ~ < n cap {
-        ? == 0 # i . p + off n { = n cap } { = n + n 1 }
+        ? == 0 # i ( slice_at [u] p + off n ) { = n cap } { = n + n 1 }
     }
-    : *u at # *u + # i p off
-    ^ ( string_from_bytes at n )
+    : String out ( string_new )
+    ( string_push_window out p off n )
+    ^ out
 }
 
 // ── The file table ───────────────────────────────────────────────
 
-unsafe @ __g_file_idx * GcovObjImpl o String path → i {
+@ __g_file_idx inout GcovObjImpl o String path → i {
     : i n ( vec_len [String] . o files )
     : ~ i i 0
     ~ < i n {
@@ -201,15 +193,15 @@ unsafe @ __g_file_idx * GcovObjImpl o String path → i {
 
 // ── Notes (.gcno) ────────────────────────────────────────────────
 
-unsafe @ __g_read_notes * GcovObjImpl o ( Vec u ) buf → !v GcovErr {
+@ __g_read_notes inout GcovObjImpl o ( Vec u ) buf → !v GcovErr {
     : i len ( vec_len [u] buf )
     ? < len 12 { ^ @ !v GcovErr { F GcovTruncated } } {}
-    : *u p ( vec_data [u] buf )
+    : ( Slice u ) p ( slice_from_vec [u] buf )
     // "oncg" on disk: the magic is stored so that a little-endian reader
     // sees the characters in reverse. A big-endian producer would spell it
     // "gcno"; nurlc never emits that, so it is rejected rather than swapped.
-    ? ! & & == 111 # i . p 0 == 110 # i . p 1
-    & == 99 # i . p 2 == 103 # i . p 3
+    ? ! & & == 111 # i ( slice_at [u] p 0 ) == 110 # i ( slice_at [u] p 1 )
+    & == 99 # i ( slice_at [u] p 2 ) == 103 # i ( slice_at [u] p 3 )
     { ^ @ !v GcovErr { F GcovBadMagic } } {}
     ? ! ( __g_version_ok p 4 ) { ^ @ !v GcovErr { F GcovBadVersion } } {}
     = . o stamp ( __g_u32 p 8 )
@@ -262,7 +254,7 @@ unsafe @ __g_read_notes * GcovObjImpl o ( Vec u ) buf → !v GcovErr {
 // It is allocated HERE, while the function's arcs are still the last
 // thing in the shared table, because every function's arcs live in one
 // flat array: appending later would land it after some other function's.
-unsafe @ __g_close_fn * GcovObjImpl o i fi → v {
+@ __g_close_fn inout GcovObjImpl o i fi → v {
     ? < fi 0 { ^ v } {}
     ? < ( __g_fn o fi GFN_NBLOCK ) 2 { ^ v } {}
     ( vec_push [i] . o arcs 1 )  // from the exit block
@@ -275,14 +267,14 @@ unsafe @ __g_close_fn * GcovObjImpl o i fi → v {
 
 // Only the layout this reader implements is accepted. Guessing at an
 // unknown one produces numbers that look plausible and are wrong.
-unsafe @ __g_version_ok * u p i off → b {
-    ^ & & == 42 # i . p off == 56 # i . p + off 1
-    & == 48 # i . p + off 2 == 52 # i . p + off 3
+@ __g_version_ok ( Slice u ) p i off → b {
+    ^ & & == 42 # i ( slice_at [u] p off ) == 56 # i ( slice_at [u] p + off 1 )
+    & == 48 # i ( slice_at [u] p + off 2 ) == 52 # i ( slice_at [u] p + off 3 )
 }
 
 // A FUNCTION record opens a new function: identity, checksums, name,
 // source file and the line it starts on.
-unsafe @ __g_notes_function * GcovObjImpl o * u p i body i end → i {
+@ __g_notes_function inout GcovObjImpl o ( Slice u ) p i body i end → i {
     ? > + body 12 end { ^ -1 } {}
     : i ident ( __g_u32 p body )
     : i lcs ( __g_u32 p + body 4 )
@@ -320,7 +312,7 @@ unsafe @ __g_notes_function * GcovObjImpl o * u p i body i end → i {
 
 // A BLOCKS record is one word of flags per basic block; the count of words
 // IS the number of blocks. Block 0 is the entry, block 1 the exit.
-unsafe @ __g_notes_blocks * GcovObjImpl o i fi i words → v {
+@ __g_notes_blocks inout GcovObjImpl o i fi i words → v {
     ( vec_set [i] . o fns + * fi GFN_W GFN_NBLOCK words )
     : ~ i k 0
     ~ < k words { ( vec_push [i] . o blk_count 0 ) = k + k 1 }
@@ -332,7 +324,7 @@ unsafe @ __g_notes_blocks * GcovObjImpl o i fi i words → v {
 // describes is not this function's, and an arc pointing outside the block
 // table makes the walk that solves the flow unable to mark where it has
 // been. It loops. So the file is refused, which is what gcov does too.
-unsafe @ __g_notes_arcs * GcovObjImpl o i fi * u p i body i end → b {
+@ __g_notes_arcs inout GcovObjImpl o i fi ( Slice u ) p i body i end → b {
     ? > + body 4 end { ^ T } {}
     : i nb ( __g_fn o fi GFN_NBLOCK )
     : i from ( __g_u32 p body )
@@ -363,7 +355,7 @@ unsafe @ __g_notes_arcs * GcovObjImpl o i fi * u p i body i end → b {
 // source file could have and -3 for a block the function does not have.
 // Neither is a record to skip: nothing else in such a file can be trusted
 // either.
-unsafe @ __g_notes_lines * GcovObjImpl o i fi * u p i body i end → i {
+@ __g_notes_lines inout GcovObjImpl o i fi ( Slice u ) p i body i end → i {
     ? > + body 4 end { ^ -1 } {}
     : i blk ( __g_u32 p body )
     ? >= blk ( __g_fn o fi GFN_NBLOCK ) { ^ -3 } {}
@@ -396,13 +388,13 @@ unsafe @ __g_notes_lines * GcovObjImpl o i fi * u p i body i end → i {
 
 // ── Data (.gcda) ─────────────────────────────────────────────────
 
-unsafe @ __g_read_data * GcovObjImpl o ( Vec u ) buf → !v GcovErr {
+@ __g_read_data inout GcovObjImpl o ( Vec u ) buf → !v GcovErr {
     : i len ( vec_len [u] buf )
     ? < len 12 { ^ @ !v GcovErr { F GcovTruncated } } {}
-    : *u p ( vec_data [u] buf )
+    : ( Slice u ) p ( slice_from_vec [u] buf )
     // "adcg" — the .gcda spelling of the same reversed magic.
-    ? ! & & == 97 # i . p 0 == 100 # i . p 1
-    & == 99 # i . p 2 == 103 # i . p 3
+    ? ! & & == 97 # i ( slice_at [u] p 0 ) == 100 # i ( slice_at [u] p 1 )
+    & == 99 # i ( slice_at [u] p 2 ) == 103 # i ( slice_at [u] p 3 )
     { ^ @ !v GcovErr { F GcovBadMagic } } {}
     ? ! ( __g_version_ok p 4 ) { ^ @ !v GcovErr { F GcovBadVersion } } {}
     // The stamp ties data to notes. A stale .gcda read against fresh notes
@@ -449,7 +441,7 @@ unsafe @ __g_read_data * GcovObjImpl o ( Vec u ) buf → !v GcovErr {
     ^ @ !v GcovErr { T 0 }
 }
 
-unsafe @ __g_data_counters * GcovObjImpl o i fi * u p i body i n → v {
+@ __g_data_counters inout GcovObjImpl o i fi ( Slice u ) p i body i n → v {
     : i have ( __g_fn o fi GFN_CTR_N )
     ? == have 0 {
         ( vec_set [i] . o fns + * fi GFN_W GFN_CTR_OFF ( vec_len [i] . o counters ) )
@@ -474,19 +466,19 @@ unsafe @ __g_data_counters * GcovObjImpl o i fi * u p i body i n → v {
 
 // ── Small accessors ──────────────────────────────────────────────
 
-unsafe @ __g_fn * GcovObjImpl o i fi i field → i {
+@ __g_fn GcovObjImpl o i fi i field → i {
     ^ ?? ( vec_get [i] . o fns + * fi GFN_W field ) { T x → x F _ → 0 }
 }
 
-unsafe @ __g_ctr * GcovObjImpl o i idx → i {
+@ __g_ctr GcovObjImpl o i idx → i {
     ^ ?? ( vec_get [i] . o counters idx ) { T x → x F _ → 0 }
 }
 
-unsafe @ __g_arc * GcovObjImpl o i ai i field → i {
+@ __g_arc GcovObjImpl o i ai i field → i {
     ^ ?? ( vec_get [i] . o arcs + ai field ) { T x → x F _ → 0 }
 }
 
-unsafe @ __g_fn_by_ident * GcovObjImpl o i ident → i {
+@ __g_fn_by_ident GcovObjImpl o i ident → i {
     : i n ( __gcov_fn_count o )
     : ~ i i 0
     ~ < i n {
@@ -496,146 +488,146 @@ unsafe @ __g_fn_by_ident * GcovObjImpl o i ident → i {
     ^ -1
 }
 
-unsafe @ gcov_fn_count GcovObj o__h → i { ^ ( __gcov_fn_count ( __GcovObj_ptr o__h ) ) }
+@ gcov_fn_count GcovObj o__h → i { ^ ( __gcov_fn_count ( arc_get [GcovObjImpl] . o__h a ) ) }
 
-unsafe @ __gcov_fn_count * GcovObjImpl o → i {
+@ __gcov_fn_count GcovObjImpl o → i {
     ^ / ( vec_len [i] . o fns ) GFN_W
 }
 
-unsafe @ gcov_fn_name GcovObj o__h i fi → s {
-    : *GcovObjImpl o ( __GcovObj_ptr o__h )
+@ gcov_fn_name GcovObj o__h i fi → s {
+    : GcovObjImpl o ( arc_get [GcovObjImpl] . o__h a )
     ^ ?? ( vec_get [String] . o fn_names fi ) { T x → ( string_data x ) F _ → `` }
 }
 
-unsafe @ gcov_fn_src GcovObj o__h i fi → i {
-    : *GcovObjImpl o ( __GcovObj_ptr o__h )
+@ gcov_fn_src GcovObj o__h i fi → i {
+    : GcovObjImpl o ( arc_get [GcovObjImpl] . o__h a )
     ^ ( __g_fn o fi GFN_SRC )
 }
 
-unsafe @ gcov_fn_line GcovObj o__h i fi → i {
-    : *GcovObjImpl o ( __GcovObj_ptr o__h )
+@ gcov_fn_line GcovObj o__h i fi → i {
+    : GcovObjImpl o ( arc_get [GcovObjImpl] . o__h a )
     ^ ( __g_fn o fi GFN_LINE )
 }
 
-unsafe @ gcov_fn_nblocks GcovObj o__h i fi → i {
-    : *GcovObjImpl o ( __GcovObj_ptr o__h )
+@ gcov_fn_nblocks GcovObj o__h i fi → i {
+    : GcovObjImpl o ( arc_get [GcovObjImpl] . o__h a )
     ^ ( __g_fn o fi GFN_NBLOCK )
 }
 
 // Where this function's blocks start in the object-wide block table. An
 // index over all blocks needs one flat numbering, and this is it.
-unsafe @ gcov_fn_blk_off GcovObj o__h i fi → i {
-    : *GcovObjImpl o ( __GcovObj_ptr o__h )
+@ gcov_fn_blk_off GcovObj o__h i fi → i {
+    : GcovObjImpl o ( arc_get [GcovObjImpl] . o__h a )
     ^ ( __g_fn o fi GFN_BLK_OFF )
 }
 
-unsafe @ gcov_total_blocks GcovObj o__h → i { ^ ( __gcov_total_blocks ( __GcovObj_ptr o__h ) ) }
+@ gcov_total_blocks GcovObj o__h → i { ^ ( __gcov_total_blocks ( arc_get [GcovObjImpl] . o__h a ) ) }
 
-unsafe @ __gcov_total_blocks * GcovObjImpl o → i {
+@ __gcov_total_blocks GcovObjImpl o → i {
     ^ ( vec_len [i] . o blk_count )
 }
 
-unsafe @ gcov_total_arcs GcovObj o__h → i { ^ ( __gcov_total_arcs ( __GcovObj_ptr o__h ) ) }
+@ gcov_total_arcs GcovObj o__h → i { ^ ( __gcov_total_arcs ( arc_get [GcovObjImpl] . o__h a ) ) }
 
-unsafe @ __gcov_total_arcs * GcovObjImpl o → i {
+@ __gcov_total_arcs GcovObjImpl o → i {
     ^ / ( vec_len [i] . o arcs ) GARC_W
 }
 
-unsafe @ gcov_block_count GcovObj o__h i fi i blk → i { ^ ( __gcov_block_count ( __GcovObj_ptr o__h ) fi blk ) }
+@ gcov_block_count GcovObj o__h i fi i blk → i { ^ ( __gcov_block_count ( arc_get [GcovObjImpl] . o__h a ) fi blk ) }
 
-unsafe @ __gcov_block_count * GcovObjImpl o i fi i blk → i {
+@ __gcov_block_count GcovObjImpl o i fi i blk → i {
     ^ ?? ( vec_get [i] . o blk_count + ( __g_fn o fi GFN_BLK_OFF ) blk ) {
         T x → x
         F _ → 0
     }
 }
 
-unsafe @ gcov_file_count GcovObj o__h → i {
-    : *GcovObjImpl o ( __GcovObj_ptr o__h )
+@ gcov_file_count GcovObj o__h → i {
+    : GcovObjImpl o ( arc_get [GcovObjImpl] . o__h a )
     ^ ( vec_len [String] . o files )
 }
 
-unsafe @ gcov_runs GcovObj o__h → i {
-    : *GcovObjImpl o ( __GcovObj_ptr o__h )
+@ gcov_runs GcovObj o__h → i {
+    : GcovObjImpl o ( arc_get [GcovObjImpl] . o__h a )
     ^ . o runs
 }
 
-unsafe @ gcov_notes_path GcovObj o__h → s {
-    : *GcovObjImpl o ( __GcovObj_ptr o__h )
+@ gcov_notes_path GcovObj o__h → s {
+    : GcovObjImpl o ( arc_get [GcovObjImpl] . o__h a )
     ^ ( string_data . o notes )
 }
 
-unsafe @ gcov_data_path GcovObj o__h → s {
-    : *GcovObjImpl o ( __GcovObj_ptr o__h )
+@ gcov_data_path GcovObj o__h → s {
+    : GcovObjImpl o ( arc_get [GcovObjImpl] . o__h a )
     ^ ( string_data . o data )
 }
 
-unsafe @ gcov_file_path GcovObj o__h i idx → s {
-    : *GcovObjImpl o ( __GcovObj_ptr o__h )
+@ gcov_file_path GcovObj o__h i idx → s {
+    : GcovObjImpl o ( arc_get [GcovObjImpl] . o__h a )
     ^ ?? ( vec_get [String] . o files idx ) { T x → ( string_data x ) F _ → `` }
 }
 
 // The block-line rows of one function, as a half-open range over `blines`.
-unsafe @ gcov_fn_bl_first GcovObj o__h i fi → i {
-    : *GcovObjImpl o ( __GcovObj_ptr o__h )
+@ gcov_fn_bl_first GcovObj o__h i fi → i {
+    : GcovObjImpl o ( arc_get [GcovObjImpl] . o__h a )
     ^ ( __g_fn o fi GFN_BL_OFF )
 }
 
-unsafe @ gcov_fn_bl_end GcovObj o__h i fi → i {
-    : *GcovObjImpl o ( __GcovObj_ptr o__h )
+@ gcov_fn_bl_end GcovObj o__h i fi → i {
+    : GcovObjImpl o ( arc_get [GcovObjImpl] . o__h a )
     ^ + ( __g_fn o fi GFN_BL_OFF ) * GBL_W ( __g_fn o fi GFN_BL_N )
 }
 
-unsafe @ gcov_bl_block GcovObj o__h i row → i {
-    : *GcovObjImpl o ( __GcovObj_ptr o__h )
+@ gcov_bl_block GcovObj o__h i row → i {
+    : GcovObjImpl o ( arc_get [GcovObjImpl] . o__h a )
     ^ ?? ( vec_get [i] . o blines + row GBL_BLOCK ) { T x → x F _ → 0 }
 }
 
-unsafe @ gcov_bl_src GcovObj o__h i row → i {
-    : *GcovObjImpl o ( __GcovObj_ptr o__h )
+@ gcov_bl_src GcovObj o__h i row → i {
+    : GcovObjImpl o ( arc_get [GcovObjImpl] . o__h a )
     ^ ?? ( vec_get [i] . o blines + row GBL_SRC ) { T x → x F _ → 0 }
 }
 
-unsafe @ gcov_bl_line GcovObj o__h i row → i {
-    : *GcovObjImpl o ( __GcovObj_ptr o__h )
+@ gcov_bl_line GcovObj o__h i row → i {
+    : GcovObjImpl o ( arc_get [GcovObjImpl] . o__h a )
     ^ ?? ( vec_get [i] . o blines + row GBL_LINE ) { T x → x F _ → 0 }
 }
 
-unsafe @ gcov_fn_arc_first GcovObj o__h i fi → i {
-    : *GcovObjImpl o ( __GcovObj_ptr o__h )
+@ gcov_fn_arc_first GcovObj o__h i fi → i {
+    : GcovObjImpl o ( arc_get [GcovObjImpl] . o__h a )
     ^ ( __g_fn o fi GFN_ARC_OFF )
 }
 
-unsafe @ gcov_fn_arc_end GcovObj o__h i fi → i { ^ ( __gcov_fn_arc_end ( __GcovObj_ptr o__h ) fi ) }
+@ gcov_fn_arc_end GcovObj o__h i fi → i { ^ ( __gcov_fn_arc_end ( arc_get [GcovObjImpl] . o__h a ) fi ) }
 
-unsafe @ __gcov_fn_arc_end * GcovObjImpl o i fi → i {
+@ __gcov_fn_arc_end GcovObjImpl o i fi → i {
     ^ + ( __g_fn o fi GFN_ARC_OFF ) * GARC_W ( __g_fn o fi GFN_ARC_N )
 }
 
-unsafe @ gcov_arc_src GcovObj o__h i ai → i {
-    : *GcovObjImpl o ( __GcovObj_ptr o__h )
+@ gcov_arc_src GcovObj o__h i ai → i {
+    : GcovObjImpl o ( arc_get [GcovObjImpl] . o__h a )
     ^ ( __g_arc o ai GARC_SRC )
 }
 
-unsafe @ gcov_arc_dst GcovObj o__h i ai → i {
-    : *GcovObjImpl o ( __GcovObj_ptr o__h )
+@ gcov_arc_dst GcovObj o__h i ai → i {
+    : GcovObjImpl o ( arc_get [GcovObjImpl] . o__h a )
     ^ ( __g_arc o ai GARC_DST )
 }
 
-unsafe @ gcov_arc_flags GcovObj o__h i ai → i {
-    : *GcovObjImpl o ( __GcovObj_ptr o__h )
+@ gcov_arc_flags GcovObj o__h i ai → i {
+    : GcovObjImpl o ( arc_get [GcovObjImpl] . o__h a )
     ^ ( __g_arc o ai GARC_FLAGS )
 }
 
-unsafe @ gcov_arc_count GcovObj o__h i ai → i {
-    : *GcovObjImpl o ( __GcovObj_ptr o__h )
+@ gcov_arc_count GcovObj o__h i ai → i {
+    : GcovObjImpl o ( arc_get [GcovObjImpl] . o__h a )
     ^ ( __g_arc o ai GARC_COUNT )
 }
 
 // An arc the instrumenter treated as a real branch. Fake arcs (the ones
 // LLVM adds for abnormal exits) are not branches a test can take.
-unsafe @ gcov_arc_is_branch GcovObj o__h i ai → b {
-    : *GcovObjImpl o ( __GcovObj_ptr o__h )
+@ gcov_arc_is_branch GcovObj o__h i ai → b {
+    : GcovObjImpl o ( arc_get [GcovObjImpl] . o__h a )
     ^ == 0 & ( __g_arc o ai GARC_FLAGS ) GCOV_ARC_FAKE
 }
 
@@ -662,11 +654,11 @@ unsafe @ gcov_arc_is_branch GcovObj o__h i ai → b {
 // return the way it was entered — the two disagree, and the difference
 // shows up as a percentage that is quietly a few points wrong.
 
-unsafe @ __g_arc_field * GcovObjImpl o i ai i field → i {
+@ __g_arc_field GcovObjImpl o i ai i field → i {
     ^ ?? ( vec_get [i] . o arcs + ai field ) { T x → x F _ → 0 }
 }
 
-unsafe @ __g_on_tree * GcovObjImpl o i ai → b {
+@ __g_on_tree GcovObjImpl o i ai → b {
     ^ != 0 & ( __g_arc_field o ai GARC_FLAGS ) GCOV_ARC_ON_TREE
 }
 
@@ -695,10 +687,10 @@ unsafe @ __g_on_tree * GcovObjImpl o i ai → b {
     ( vec_set [i] tail key + slot 1 )
 }
 
-unsafe @ __g_index_build * GcovObjImpl o → v {
+@ __g_index_build inout GcovObjImpl o → v {
     : i nblk ( __gcov_total_blocks o )
     : i narc ( __gcov_total_arcs o )
-    // These start empty from `gcov_new` so that an error path can still
+    // These start empty from `__gcov_blank` so that an error path can still
     // free the object; replacing a Vec field drops the old handle on the
     // floor unless it is released first.
     ( vec_free [i] . o pred_head )
@@ -734,16 +726,16 @@ unsafe @ __g_index_build * GcovObjImpl o → v {
 
 // The first arc entering (`side` 0) or leaving (`side` 1) a block, as a
 // chain cursor: non-zero is an arc slot plus one, zero is the end.
-unsafe @ gcov_edge_first GcovObj o__h i fi i blk i side → i { ^ ( __gcov_edge_first ( __GcovObj_ptr o__h ) fi blk side ) }
+@ gcov_edge_first GcovObj o__h i fi i blk i side → i { ^ ( __gcov_edge_first ( arc_get [GcovObjImpl] . o__h a ) fi blk side ) }
 
-unsafe @ __gcov_edge_first * GcovObjImpl o i fi i blk i side → i {
+@ __gcov_edge_first GcovObjImpl o i fi i blk i side → i {
     : i key + ( __g_fn o fi GFN_BLK_OFF ) blk
     ^ ? == side 0 ( __g_ix . o pred_head key ) ( __g_ix . o succ_head key )
 }
 
-unsafe @ gcov_edge_next GcovObj o__h i cursor i side → i { ^ ( __gcov_edge_next ( __GcovObj_ptr o__h ) cursor side ) }
+@ gcov_edge_next GcovObj o__h i cursor i side → i { ^ ( __gcov_edge_next ( arc_get [GcovObjImpl] . o__h a ) cursor side ) }
 
-unsafe @ __gcov_edge_next * GcovObjImpl o i cursor i side → i {
+@ __gcov_edge_next GcovObjImpl o i cursor i side → i {
     ^ ? == side 0 ( __g_ix . o pred_next - cursor 1 ) ( __g_ix . o succ_next - cursor 1 )
 }
 
@@ -791,7 +783,7 @@ unsafe @ __gcov_edge_next * GcovObjImpl o i cursor i side → i {
 // One walk out from `root` along the spanning tree. Each tree arc's count
 // is the excess of everything hanging off it: what the counted arcs on
 // that side could not account for.
-unsafe @ __g_propagate * GcovObjImpl o i fi i root ( Vec i ) visited ( Vec i ) st → v {
+@ __g_propagate GcovObjImpl o i fi i root ( Vec i ) visited ( Vec i ) st → v {
     : ~ i sp 0
     ( __g_st_push st sp root -1 0 )
     ~ >= sp 0 {
@@ -847,7 +839,7 @@ unsafe @ __g_propagate * GcovObjImpl o i fi i root ( Vec i ) visited ( Vec i ) s
     }
 }
 
-unsafe @ __g_solve_fn * GcovObjImpl o i fi ( Vec i ) st → v {
+@ __g_solve_fn GcovObjImpl o i fi ( Vec i ) st → v {
     : i nb ( __g_fn o fi GFN_NBLOCK )
     ? < nb 2 { ^ v } {}
     : i a0 ( __g_fn o fi GFN_ARC_OFF )
@@ -903,38 +895,37 @@ unsafe @ __g_solve_fn * GcovObjImpl o i fi ( Vec i ) st → v {
 
 // Without data there is nothing to solve: every counter is zero, every
 // block is zero, and the report says so.
-unsafe @ gcov_solve GcovObj o__h → v {
-    : *GcovObjImpl o ( __GcovObj_ptr o__h )
+@ __gcov_solve inout GcovObjImpl o → v {
     ? ! . o has_data { ^ v } {}
     : ( Vec i ) st ( vec_new [i] )
-    : i n ( gcov_fn_count o__h )
+    : i n ( __gcov_fn_count o )
     : ~ i i 0
     ~ < i n { ( __g_solve_fn o i st ) = i + i 1 }
 }
 
 // ── Entry points ─────────────────────────────────────────────────
 
-unsafe @ gcov_new → GcovObj {
-    : ~ GcovObjImpl o @ GcovObjImpl {}
-    = . o notes ( string_new )
-    = . o data ( string_new )
-    = . o stamp 0
-    = . o runs 0
-    = . o has_data F
-    = . o files ( vec_new [String] )
-    = . o fns ( vec_new [i] )
-    = . o fn_names ( vec_new [String] )
-    = . o blk_count ( vec_new [i] )
-    = . o arcs ( vec_new [i] )
-    = . o blines ( vec_new [i] )
-    = . o counters ( vec_new [i] )
-    = . o pred_head ( vec_new [i] )
-    = . o pred_next ( vec_new [i] )
-    = . o pred_tail ( vec_new [i] )
-    = . o succ_head ( vec_new [i] )
-    = . o succ_next ( vec_new [i] )
-    = . o succ_tail ( vec_new [i] )
-    ^ @ GcovObj { ( arc_new [GcovObjImpl] o ) }
+@ __gcov_blank → GcovObjImpl {
+    ^ @ GcovObjImpl {
+        ( string_new )
+        ( string_new )
+        0
+        0
+        F
+        ( vec_new [String] )
+        ( vec_new [i] )
+        ( vec_new [String] )
+        ( vec_new [i] )
+        ( vec_new [i] )
+        ( vec_new [i] )
+        ( vec_new [i] )
+        ( vec_new [i] )
+        ( vec_new [i] )
+        ( vec_new [i] )
+        ( vec_new [i] )
+        ( vec_new [i] )
+        ( vec_new [i] )
+    }
 }
 
 // Let go of `o` now rather than at the end of its owner's scope.
@@ -945,9 +936,8 @@ unsafe @ gcov_new → GcovObj {
 // A missing .gcda is NOT an error — it is the answer "this program was
 // built but never run", and a coverage report has to be able to say that.
 // Every counter then reads zero, which is exactly what it means.
-unsafe @ gcov_read s notes_path s data_path → !GcovObj GcovErr {
-    : GcovObj h ( gcov_new )
-    : *GcovObjImpl o ( __GcovObj_ptr h )
+@ gcov_read s notes_path s data_path → !GcovObj GcovErr {
+    : ~ GcovObjImpl o ( __gcov_blank )
     ( string_push_str . o notes notes_path )
     : ~ i failed 0
     : ~ GcovErr err GcovNoNotes
@@ -977,6 +967,8 @@ unsafe @ gcov_read s notes_path s data_path → !GcovObj GcovErr {
     ? != failed 0 { ^ @ !GcovObj GcovErr { F err } } {}
 
     ( __g_index_build o )
-    ( gcov_solve h )
-    ^ @ !GcovObj GcovErr { T h }
+    ( __gcov_solve o )
+    // Read and solved: from here on nothing changes it, so every copy
+    // reads it without a lock.
+    ^ @ !GcovObj GcovErr { T @ GcovObj { ( arc_new [GcovObjImpl] o ) } }
 }

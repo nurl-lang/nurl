@@ -307,7 +307,7 @@ $ `stdlib/core/slice.nu`
     // A credential was presented and refused: say why. A bare 401 turns a
     // one-line configuration mistake into a sign-in screen that reappears
     // forever with nothing to go on.
-    : String why ( __an_safe_reason ( anomaly_authz_last_error ) )
+    : String why ( __an_safe_reason ( string_data ( anomaly_authz_last_error ) ) )
     : ~ HttpResponse r ( __an_json_err 401 `Authentication required.` )
     ? > ( string_len why ) 0 {
         : String msg ( string_from `Token rejected: ` )
@@ -469,11 +469,10 @@ $ `stdlib/core/slice.nu`
 
 // The verdict as JSON: the "collecting" shape before the model is
 // ready, the full one after.
-unsafe @ __an_verdict_json Model mo__h s mname Json body Verdict vd → Json {
-    : *ModelImpl mo ( _Model_ptr mo__h )
+@ __an_verdict_json Model mo s mname Json body Verdict vd → Json {
     ? . vd ready {} {
-        : Meta mm ( model_metadata mo__h )
-        : i n ( model_n_points mo__h )
+        : Meta mm ( model_metadata mo )
+        : i n ( model_n_points mo )
         : String msg ( string_from `Collecting data (` )
         ( string_push_int msg n )
         ( string_push_char msg 47 )
@@ -488,18 +487,17 @@ unsafe @ __an_verdict_json Model mo__h s mname Json body Verdict vd → Json {
         ^ o
     }
 
-    : Meta vmm__h ( model_metadata mo__h )
-    : *MetaImpl vmm ( _Meta_ptr vmm__h )
+    : ~ Meta vmm ( model_metadata mo )
     : Json o ( json_obj_new )
     ( json_obj_set o `status` ( json_str_lit `success` ) )
     ( json_obj_set o `model` ( json_str_lit mname ) )
     ( json_obj_set o `anomaly` ( json_bool . vd anomaly ) )
     ( json_obj_set o `score` ( json_float . vd score ) )
-    ( json_obj_set o `data_points` ( json_int ( model_n_points mo__h ) ) )
+    ( json_obj_set o `data_points` ( json_int ( model_n_points mo ) ) )
     // A stored point may leave columns out — a sensor that skipped a tick
     // is still a point in the stream — but the verdict says so: those
     // columns were scored at their training mean, which no version blames.
-    : ( Vec String ) miss ( anomaly_missing_cols vmm__h body )
+    : ( Vec String ) miss ( anomaly_missing_cols vmm body )
     ? > ( vec_len [String] miss ) 0 {
         : Json ma ( json_arr_new )
         : i nmiss ( vec_len [String] miss )
@@ -566,10 +564,9 @@ unsafe @ __an_verdict_json Model mo__h s mname Json body Verdict vd → Json {
 // stamps it, as before (-3: the model's own clock, a tick or the wall).
 // Returns the seconds, -1 for a timestamp that could not be read, -2
 // for one older than the newest stored point.
-unsafe @ __an_point_time Model mo__h Json body → i {
-    : *ModelImpl mo ( _Model_ptr mo__h )
+@ __an_point_time Model mo Json body → i {
     ? ( json_obj_has body `timestamp` ) {} { ^ -3 }
-    ? . ( _Meta_ptr . mo meta ) count_clock { ^ -3 } {}
+    ? . . mo meta count_clock { ^ -3 } {}
     : ~ i ts -1
     ?? ( json_obj_get body `timestamp` ) {
         T tv → {
@@ -583,7 +580,7 @@ unsafe @ __an_point_time Model mo__h Json body → i {
         F _ → {}
     }
     ? < ts 0 { ^ -1 } {}
-    ? < ts ( model_last_ts mo__h ) { ^ -2 } {}
+    ? < ts ( model_last_ts mo ) { ^ -2 } {}
     ^ ts
 }
 
@@ -618,7 +615,7 @@ unsafe @ __an_point_time Model mo__h Json body → i {
                 ^ ( __an_json_err 400 `The body must be a JSON object: the point's fields.` )
             }
             : Store st ( __an_store_of . gate who )
-            : Model mo ( model_open st ( string_data mname ) )
+            : ~ Model mo ( model_open st ( string_data mname ) )
             : ~ HttpResponse resp ( response_status_only 500 )
             : i pts ( __an_point_time mo body )
             ? | == pts -1 == pts -2 {
@@ -739,7 +736,7 @@ unsafe @ __an_point_time Model mo__h Json body → i {
                     ^ r404
                 }
             }
-            : Model mo ( model_open st ( string_data mname ) )
+            : ~ Model mo ( model_open st ( string_data mname ) )
             ? ingest {} {
                 ? ( model_is_trained mo ) {} {
                     : String msg ( string_from `Model ` )
@@ -806,7 +803,7 @@ unsafe @ __an_point_time Model mo__h Json body → i {
         : HttpResponse r404 ( __an_404_model ( string_data mname ) )
         ^ r404
     }
-    : Model mo ( model_open st ( string_data mname ) )
+    : ~ Model mo ( model_open st ( string_data mname ) )
     : i used ( model_force_train mo )
     : ~ HttpResponse resp ( response_status_only 500 )
     ? > used 0 {
@@ -929,18 +926,16 @@ unsafe @ __an_point_time Model mo__h Json body → i {
 // is watched".
 // What the flatline's margin asks of each column, in rows and — when the
 // ring has a step to read it by — in minutes.
-unsafe @ _an_flat_alert_json Model mo__h → Json {
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    : *MetaImpl mm ( _Meta_ptr . mo meta )
-    : i step ( model_step mo__h )
+@ _an_flat_alert_json Model mo → Json {
+    : i step ( model_step mo )
     : f margin ( meta_version_margin . mo meta ANOM_FLAT_NAME ANOM_FLAT_MARGIN )
     : Json o ( json_obj_new )
     ( json_obj_set o `step_seconds` ( json_int step ) )
     : Json cols ( json_obj_new )
-    : i nf ( vec_len [String] . mm feats )
+    : i nf ( vec_len [String] . . mo meta feats )
     : ~ i j 0
     ~ < j nf {
-        ?? ( vec_get [String] . mm feats j ) {
+        ?? ( vec_get [String] . . mo meta feats j ) {
             T fn → {
                 : f len ( _an_flat_ref_len . mo meta j )
                 ? > len 0.0 {
@@ -948,7 +943,7 @@ unsafe @ _an_flat_alert_json Model mo__h → Json {
                     ? < at 1 { = at 1 } {}
                     : Json c ( json_obj_new )
                     ( json_obj_set c `rows` ( json_int at ) )
-                    ? & > step 0 ! . mm count_clock {
+                    ? & > step 0 ! . . mo meta count_clock {
                         ( json_obj_set c `minutes` ( json_float / # f * at step 60.0 ) )
                     } {}
                     ( json_obj_set cols ( string_data fn ) c )
@@ -963,14 +958,13 @@ unsafe @ _an_flat_alert_json Model mo__h → Json {
     ^ o
 }
 
-unsafe @ _an_flat_json Meta mm__h → Json {
-    : *MetaImpl mm ( _Meta_ptr mm__h )
+@ _an_flat_json Meta mm → Json {
     : Json o ( json_obj_new )
-    : f margin ( meta_version_margin mm__h ANOM_FLAT_NAME ANOM_FLAT_MARGIN )
-    ( json_obj_set o `enabled` ( json_bool ( meta_version_enabled mm__h ANOM_FLAT_NAME F ) ) )
+    : f margin ( meta_version_margin mm ANOM_FLAT_NAME ANOM_FLAT_MARGIN )
+    ( json_obj_set o `enabled` ( json_bool ( meta_version_enabled mm ANOM_FLAT_NAME F ) ) )
     ( json_obj_set o `margin` ( json_float margin ) )
-    ( json_obj_set o `window_rows` ( json_int ( _an_flat_window mm__h ) ) )
-    ( json_obj_set o `look_back_rows` ( json_int ( _an_flat_need mm__h ) ) )
+    ( json_obj_set o `window_rows` ( json_int ( _an_flat_window mm ) ) )
+    ( json_obj_set o `look_back_rows` ( json_int ( _an_flat_need mm ) ) )
     : Json cols ( json_obj_new )
     : Json unwatched ( json_arr_new )
     : i nf ( vec_len [String] . mm feats )
@@ -978,7 +972,7 @@ unsafe @ _an_flat_json Meta mm__h → Json {
     ~ < j nf {
         ?? ( vec_get [String] . mm feats j ) {
             T fn → {
-                : f len ( _an_flat_ref_len mm__h j )
+                : f len ( _an_flat_ref_len mm j )
                 ? < len 0.0 { ( json_arr_push unwatched ( json_str_lit ( string_data fn ) ) ) } {
                     : Json c ( json_obj_new )
                     ( json_obj_set c `reference_run_rows` ( json_float ( _fc_getf . mm flat_run j ) ) )
@@ -1001,24 +995,23 @@ unsafe @ _an_flat_json Meta mm__h → Json {
     ^ o
 }
 
-unsafe @ __an_ae_json Store st s name Meta mm__h → Json {
-    : *MetaImpl mm ( _Meta_ptr mm__h )
+@ __an_ae_json Store st s name Meta mm → Json {
     : Json o ( json_obj_new )
     ?? ( store_load_ae st name ) {
         T ae → {
             ( json_obj_set o `trained` ( json_bool . ae trained ) )
-            ( json_obj_set o `enabled` ( json_bool ( meta_version_enabled mm__h `autoencoder` F ) ) )
+            ( json_obj_set o `enabled` ( json_bool ( meta_version_enabled mm `autoencoder` F ) ) )
             // A net whose feature order names features the model no
             // longer encodes does not score; the next forest retrain
             // replaces it, or train_autoencoder does now.
-            ( json_obj_set o `retrain_required` ( json_bool ( an_ae_stale mm__h ae ) ) )
+            ( json_obj_set o `retrain_required` ( json_bool ( an_ae_stale mm ae ) ) )
             ( json_obj_set o `reconstruction_threshold` ( json_float . ae threshold ) )
             ( json_obj_set o `training_data_points` ( json_int . ae trained_on ) )
             ( json_obj_set o `filtered_anomalies` ( json_int . ae filtered ) )
             ( json_obj_set o `prefilter_contamination` ( json_float . ae prefilter ) )
             ( json_obj_set o `trained_at` ( json_int . ae trained_at ) )
             ( json_obj_set o `retrain_with_forests` ( json_bool . mm sched_ae ) )
-            : f arel ( meta_version_margin mm__h `autoencoder` 0.05 )
+            : f arel ( meta_version_margin mm `autoencoder` 0.05 )
             ( json_obj_set o `decision_margin` ( json_float arel ) )
             // The band the score is actually compared to: threshold ×
             // decision_margin (SPEC §5.5), in the score's own units.
@@ -1028,7 +1021,7 @@ unsafe @ __an_ae_json Store st s name Meta mm__h → Json {
         }
         F → {
             ( json_obj_set o `trained` ( json_bool F ) )
-            ( json_obj_set o `enabled` ( json_bool ( meta_version_enabled mm__h `autoencoder` F ) ) )
+            ( json_obj_set o `enabled` ( json_bool ( meta_version_enabled mm `autoencoder` F ) ) )
             ( json_obj_set o `retrain_required` ( json_bool F ) )
         }
     }
@@ -1036,8 +1029,7 @@ unsafe @ __an_ae_json Store st s name Meta mm__h → Json {
 }
 
 // The forecast version's block of the metadata response (src/forecast.nu).
-unsafe @ __an_fc_json Store st s name Meta mm__h → Json {
-    : *MetaImpl mm ( _Meta_ptr mm__h )
+@ __an_fc_json Store st s name Meta mm → Json {
     : ~ Json o ( json_obj_new )
     ?? ( store_load_fc st name ) {
         T fc → {
@@ -1045,9 +1037,9 @@ unsafe @ __an_fc_json Store st s name Meta mm__h → Json {
         }
         F → { ( json_obj_set o `trained` ( json_bool F ) ) }
     }
-    ( json_obj_set o `enabled` ( json_bool ( meta_version_enabled mm__h ANOM_FC_NAME F ) ) )
-    ( json_obj_set o `decision_margin` ( json_float ( meta_version_margin mm__h ANOM_FC_NAME ANOM_FC_SIGMA ) ) )
-    : i at ( meta_find_version mm__h ANOM_FC_NAME )
+    ( json_obj_set o `enabled` ( json_bool ( meta_version_enabled mm ANOM_FC_NAME F ) ) )
+    ( json_obj_set o `decision_margin` ( json_float ( meta_version_margin mm ANOM_FC_NAME ANOM_FC_SIGMA ) ) )
+    : i at ( meta_find_version mm ANOM_FC_NAME )
     ? >= at 0 {
         ?? ( vec_get [VerCfg] . mm versions at ) {
             T vc → {
@@ -1065,7 +1057,7 @@ unsafe @ __an_fc_json Store st s name Meta mm__h → Json {
 // ring as it stands, and switch it on. Optional body: {"season": S,
 // "window_points": N, "window_minutes": M} — written into the version's
 // config first (S = the seasonal period in rows, 0 = none).
-unsafe @ __an_h_train_fc HttpRequest req Params p → HttpResponse {
+@ __an_h_train_fc HttpRequest req Params p → HttpResponse {
     : String mname ( __an_param_model p )
     ? ( __an_name_ok ( string_data mname ) ) {} {
         ^ ( __an_bad_name )
@@ -1080,7 +1072,7 @@ unsafe @ __an_h_train_fc HttpRequest req Params p → HttpResponse {
         : HttpResponse r404 ( __an_404_model ( string_data mname ) )
         ^ r404
     }
-    : Model mo ( model_open st ( string_data mname ) )
+    : ~ Model mo ( model_open st ( string_data mname ) )
     ?? ( __an_body_json req ) {
         T body → {
             : Json vo ( json_obj_new )
@@ -1100,8 +1092,7 @@ unsafe @ __an_h_train_fc HttpRequest req Params p → HttpResponse {
     }
     : String err ( model_train_forecast mo )
     ? == ( string_len err ) 0 {
-        : FcModel fc__h ( model_forecast mo )
-        : *FcModelImpl fc ( _FcModel_ptr fc__h )
+        : FcModel fc ( model_forecast mo )
         : String msg ( string_from `Forecast models trained for model ` )
         ( string_push_str msg ( string_data mname ) )
         : Json o ( __an_ok_msg ( string_data msg ) )
@@ -1120,7 +1111,7 @@ unsafe @ __an_h_train_fc HttpRequest req Params p → HttpResponse {
 // GET /models/dynamic/<model>/forecast?horizon=H: the next H values of
 // every watched feature from the states as they stand (the ring's
 // newest rows absorbed first), with standard errors.
-unsafe @ __an_h_forecast HttpRequest req Params p → HttpResponse {
+@ __an_h_forecast HttpRequest req Params p → HttpResponse {
     : String mname ( __an_param_model p )
     ? ( __an_name_ok ( string_data mname ) ) {} {
         ^ ( __an_bad_name )
@@ -1139,9 +1130,8 @@ unsafe @ __an_h_forecast HttpRequest req Params p → HttpResponse {
     ? < h 1 { = h 1 } {}
     ? > h 1000 { = h 1000 } {}
     : i origin ( __an_query_int . req query `origin` -1 )
-    : Model mo ( model_open st ( string_data mname ) )
-    : FcModel fc__h ( model_forecast mo )
-    : *FcModelImpl fc ( _FcModel_ptr fc__h )
+    : ~ Model mo ( model_open st ( string_data mname ) )
+    : FcModel fc ( model_forecast mo )
     : ~ HttpResponse resp ( response_status_only 500 )
     ? . fc trained {
         // ?origin=<row>: the forecast as it would have been made from that
@@ -1202,7 +1192,7 @@ unsafe @ __an_h_forecast HttpRequest req Params p → HttpResponse {
     ^ resp
 }
 
-unsafe @ __an_h_data HttpRequest req Params p → HttpResponse {
+@ __an_h_data HttpRequest req Params p → HttpResponse {
     : String mname ( __an_param_model p )
     ? ( __an_name_ok ( string_data mname ) ) {} {
         ^ ( __an_bad_name )
@@ -1263,7 +1253,7 @@ unsafe @ __an_h_data HttpRequest req Params p → HttpResponse {
     // Which clock the timestamps are on: seconds, or ticks of a count.
     ?? ( store_load_meta st ( string_data mname ) ) {
         T dmm → {
-            ( json_obj_set o `clock` ( json_str_lit ? . ( _Meta_ptr dmm ) count_clock `count` `time` ) )
+            ( json_obj_set o `clock` ( json_str_lit ? . dmm count_clock `count` `time` ) )
         }
         F _ → {}
     }
@@ -1647,7 +1637,7 @@ unsafe @ __an_h_data HttpRequest req Params p → HttpResponse {
 // what survived `limit`, `only` and `versions`, so a filtered response
 // still says how much it filtered. A row a reader has labelled carries
 // its `label` (POST …/labels).
-unsafe @ __an_h_anomalies HttpRequest req Params p → HttpResponse {
+@ __an_h_anomalies HttpRequest req Params p → HttpResponse {
     : String mname ( __an_param_model p )
     ? ( __an_name_ok ( string_data mname ) ) {} {
         ^ ( __an_bad_name )
@@ -1689,19 +1679,18 @@ unsafe @ __an_h_anomalies HttpRequest req Params p → HttpResponse {
     : String group ( __an_query_str . req query `group` )
     : b want_events == ( nurl_str_eq ( string_data group ) `runs` ) 1
 
-    : Model mo__h ( model_open st ( string_data mname ) )
-    : *ModelImpl mo ( _Model_ptr mo__h )
+    : ~ Model mo ( model_open st ( string_data mname ) )
 
     // `last` is relative to the window's upper bound, or to the newest
     // stored point when there is none — never to the server's clock, so a
     // model that stopped receiving data still answers "the last 24 h of it".
     : ~ i from_ts q_from
     : ~ i to_ts q_to
-    : i q_span ( __an_last_span mo__h q_last )
+    : i q_span ( __an_last_span mo q_last )
     ? > q_span 0 {
         : ~ i anchor to_ts
         ? > anchor 0 {} {
-            : i np ( model_n_points mo__h )
+            : i np ( model_n_points mo )
             ? > np 0 {
                 ?? ( vec_get [i] . mo times - np 1 ) { T x → { = anchor x } F _ → {} }
             } {}
@@ -1709,7 +1698,7 @@ unsafe @ __an_h_anomalies HttpRequest req Params p → HttpResponse {
         ? > anchor 0 { = from_ts - anchor q_span } {}
     } {}
 
-    : ScanOut so ( model_scan_at mo__h from_ts to_ts limit > refresh 0 )
+    : ScanOut so ( model_scan_at mo from_ts to_ts limit > refresh 0 )
 
     : Json vers ( json_arr_new )
     : i nvn ( vec_len [String] . so vnames )
@@ -1726,9 +1715,8 @@ unsafe @ __an_h_anomalies HttpRequest req Params p → HttpResponse {
     // whole record of each row, without the caller first having to ask
     // the metadata what the columns are.
     : b all_fields == ( nurl_str_eq ( string_data ffilter ) `*` ) 1
-    : *MetaImpl fmm ( _Meta_ptr . mo meta )
     : ( Vec String ) fields ? all_fields
-    ( vec_clone_with [String] . fmm cols \ String x → String { ^ ( string_from ( string_data x ) ) } )
+    ( vec_clone_with [String] . . mo meta cols \ String x → String { ^ ( string_from ( string_data x ) ) } )
     ( string_split ffilter `,` )
     : b want_fields > ( string_len ffilter ) 0
 
@@ -1782,8 +1770,8 @@ unsafe @ __an_h_anomalies HttpRequest req Params p → HttpResponse {
     : ~ i kstart 0
     ? & > rows 0 > nkept rows { = kstart - nkept rows } {}
     : ScanRuns sr ( scan_runs so minvotes )
-    : ( Vec Label ) labels ( model_labels mo__h )
-    : ( Vec i ) label_of ( model_label_map mo__h labels )
+    : ( Vec Label ) labels ( model_labels mo )
+    : ( Vec i ) label_of ( model_label_map mo labels )
 
     : Json arr ( json_arr_new )
     : ~ i shown 0
@@ -1823,7 +1811,7 @@ unsafe @ __an_h_anomalies HttpRequest req Params p → HttpResponse {
                 } {}
                 ( json_obj_set o `versions` flagged )
                 ? || want_fields . r sp_anomaly {
-                    ?? ( model_point_json mo__h . r sp_idx ) {
+                    ?? ( model_point_json mo . r sp_idx ) {
                         T rec → {
                             ? want_fields {
                                 : Json vals ( json_obj_new )
@@ -1847,7 +1835,7 @@ unsafe @ __an_h_anomalies HttpRequest req Params p → HttpResponse {
                             // pass, so it is computed only for the rows
                             // actually being returned as anomalies.
                             ? & . r sp_anomaly > topk 0 {
-                                : ( Vec AeContrib ) cs ( model_ae_contrib mo__h rec topk )
+                                : ( Vec AeContrib ) cs ( model_ae_contrib mo rec topk )
                                 : i nc ( vec_len [AeContrib] cs )
                                 ? > nc 0 {
                                     : Json ca ( json_arr_new )
@@ -1889,8 +1877,7 @@ unsafe @ __an_h_anomalies HttpRequest req Params p → HttpResponse {
     : Json o ( json_obj_new )
     ( json_obj_set o `status` ( json_str_lit `success` ) )
     ( json_obj_set o `model_name` ( json_str_lit ( string_data mname ) ) )
-    : *MetaImpl amm ( _Meta_ptr . mo meta )
-    ( json_obj_set o `clock` ( json_str_lit ? . amm count_clock `count` `time` ) )
+    ( json_obj_set o `clock` ( json_str_lit ? . . mo meta count_clock `count` `time` ) )
     ( json_obj_set o `data_points_count` ( json_int . so total ) )
     ( json_obj_set o `considered` ( json_int . so considered ) )
     // `anomalies` counts the rows `votes` versions or more flagged; at the
@@ -1994,7 +1981,7 @@ unsafe @ __an_h_anomalies HttpRequest req Params p → HttpResponse {
         : HttpResponse r404 ( __an_404_model ( string_data mname ) )
         ^ r404
     }
-    : Model mo ( model_open st ( string_data mname ) )
+    : ~ Model mo ( model_open st ( string_data mname ) )
     ( model_reset mo )
     : String msg ( string_from `Model ` )
     ( string_push_str msg ( string_data mname ) )
@@ -2030,7 +2017,7 @@ unsafe @ __an_h_anomalies HttpRequest req Params p → HttpResponse {
 // the label rides on the row through the scan and a false positive is
 // left out of calibration and fine-tune. `none` withdraws an earlier
 // label. Recorded with who said it and when; verdicts are untouched.
-unsafe @ __an_h_label HttpRequest req Params p → HttpResponse {
+@ __an_h_label HttpRequest req Params p → HttpResponse {
     : String mname ( __an_param_model p )
     ? ( __an_name_ok ( string_data mname ) ) {} {
         ^ ( __an_bad_name )
@@ -2067,15 +2054,14 @@ unsafe @ __an_h_label HttpRequest req Params p → HttpResponse {
     ? ( label_known ( string_data label ) ) {} {
         ^ ( __an_json_err 400 `label must be "false_positive", "confirmed" or "none"` )
     }
-    : Model mo__h ( model_open st ( string_data mname ) )
-    : *ModelImpl mo ( _Model_ptr mo__h )
+    : ~ Model mo ( model_open st ( string_data mname ) )
     // A false positive is a verdict a reader disputes, and calibration
     // leaves it out for exactly that reason. A row the model never
     // flagged has no verdict to dispute: accepting the label there let
     // any row at all be taken out of the sample the margins are measured
     // on, which is a way to move a margin without an audit entry.
     ? == ( nurl_str_eq ( string_data label ) ANOM_LABEL_FP ) 1 {
-        : i fl ( model_row_is_anomaly mo__h index )
+        : i fl ( model_row_is_anomaly mo index )
         ? == fl 0 {
             : String why ( string_from `Point ` )
             ( string_push_int why index )
@@ -2087,7 +2073,7 @@ unsafe @ __an_h_label HttpRequest req Params p → HttpResponse {
     : Principal who . gate who
     : String by ( __an_principal_handle who )
     : i at ( now_seconds )
-    : i seq ( model_label_point mo__h index ( string_data label ) ( string_data by ) ( string_data note ) at )
+    : i seq ( model_label_point mo index ( string_data label ) ( string_data by ) ( string_data note ) at )
     ? >= seq 0 {} {
         ^ ( __an_json_err 400 `index must name a stored point` )
     }
@@ -2114,7 +2100,7 @@ unsafe @ __an_h_label HttpRequest req Params p → HttpResponse {
 
 // GET /models/dynamic/<m>/labels — the labels in force, each with the
 // row's current `index` or `evicted` when the ring has let the row go.
-unsafe @ __an_h_labels HttpRequest req Params p → HttpResponse {
+@ __an_h_labels HttpRequest req Params p → HttpResponse {
     : String mname ( __an_param_model p )
     ? ( __an_name_ok ( string_data mname ) ) {} {
         ^ ( __an_bad_name )
@@ -2129,11 +2115,10 @@ unsafe @ __an_h_labels HttpRequest req Params p → HttpResponse {
         : HttpResponse r404 ( __an_404_model ( string_data mname ) )
         ^ r404
     }
-    : Model mo__h ( model_open st ( string_data mname ) )
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    : ( Vec Label ) labels ( model_labels mo__h )
-    : i base ( model_seq_base mo__h )
-    : i n ( model_n_points mo__h )
+    : Model mo ( model_open st ( string_data mname ) )
+    : ( Vec Label ) labels ( model_labels mo )
+    : i base ( model_seq_base mo )
+    : i n ( model_n_points mo )
     : Json arr ( json_arr_new )
     : ~ i fps 0
     : ~ i oks 0
@@ -2154,8 +2139,7 @@ unsafe @ __an_h_labels HttpRequest req Params p → HttpResponse {
     : Json o ( json_obj_new )
     ( json_obj_set o `status` ( json_str_lit `success` ) )
     ( json_obj_set o `model_name` ( json_str_lit ( string_data mname ) ) )
-    : *MetaImpl lmm ( _Meta_ptr . mo meta )
-    ( json_obj_set o `clock` ( json_str_lit ? . lmm count_clock `count` `time` ) )
+    ( json_obj_set o `clock` ( json_str_lit ? . . mo meta count_clock `count` `time` ) )
     ( json_obj_set o `count` ( json_int nl ) )
     ( json_obj_set o `false_positives` ( json_int fps ) )
     ( json_obj_set o `confirmed` ( json_int oks ) )
@@ -2208,7 +2192,7 @@ unsafe @ __an_h_labels HttpRequest req Params p → HttpResponse {
 // that is the `llm_…` scratch namespace, for an administrator any name.
 // The target must not exist yet; forking over a model would be a reset in
 // disguise, and reset has its own route.
-unsafe @ __an_h_fork HttpRequest req Params p → HttpResponse {
+@ __an_h_fork HttpRequest req Params p → HttpResponse {
     : String src ( __an_param_model p )
     ? ( __an_name_ok ( string_data src ) ) {} {
         ^ ( __an_bad_name )
@@ -2310,19 +2294,18 @@ unsafe @ __an_h_fork HttpRequest req Params p → HttpResponse {
     } {}
 
     // The slice of the source.
-    : Model smo__h ( model_open st ( string_data src ) )
-    : *ModelImpl smo ( _Model_ptr smo__h )
+    : Model smo ( model_open st ( string_data src ) )
     : ~ i from_ts q_from
     : i to_ts q_to
-    : i q_span ( __an_last_span smo__h q_last )
+    : i q_span ( __an_last_span smo q_last )
     ? > q_span 0 {
         : ~ i anchor to_ts
-        ? > anchor 0 {} { = anchor ( model_last_ts smo__h ) }
+        ? > anchor 0 {} { = anchor ( model_last_ts smo ) }
         ? > anchor 0 { = from_ts - anchor q_span } {}
     } {}
     : b project > ( vec_len [String] fields ) 0
     : ( Vec Json ) recs ( vec_new [Json] )
-    : i np ( model_n_points smo__h )
+    : i np ( model_n_points smo )
     : ~ i k 0
     ~ < k np {
         : i ts ( _mlp_iget . smo times k )
@@ -2330,7 +2313,7 @@ unsafe @ __an_h_fork HttpRequest req Params p → HttpResponse {
         ? & > from_ts 0 < ts from_ts { = keep F } {}
         ? & > to_ts 0 > ts to_ts { = keep F } {}
         ? keep {
-            ?? ( model_point_json smo__h k ) {
+            ?? ( model_point_json smo k ) {
                 T rec → {
                     ? project {
                         : Json row ( json_obj_new )
@@ -2364,13 +2347,12 @@ unsafe @ __an_h_fork HttpRequest req Params p → HttpResponse {
     // configuration (which versions, their windows and forests) and the
     // retrain schedule, so it behaves like its source once it is fed; and
     // the autoencoder's layout, so its own is trained the same shape.
-    : *MetaImpl sm ( _Meta_ptr . smo meta )
-    : b count_clock . sm count_clock
+    : b count_clock . . smo meta count_clock
     : ( Vec VerCfg ) src_versions ( meta_clone_versions . smo meta )
-    : i src_sched_below . sm sched_below
-    : i src_sched_at_max . sm sched_at_max
-    : b src_sched_ae . sm sched_ae
-    : i src_tuned . sm tuned_at
+    : i src_sched_below . . smo meta sched_below
+    : i src_sched_at_max . . smo meta sched_at_max
+    : b src_sched_ae . . smo meta sched_ae
+    : i src_tuned . . smo meta tuned_at
     : AeModel sae . smo ae
     : ( Vec i ) ae_layout ? . sae trained ( ae_hidden sae ) ( vec_new [i] )
     : i nrec ( vec_len [Json] recs )
@@ -2387,19 +2369,17 @@ unsafe @ __an_h_fork HttpRequest req Params p → HttpResponse {
     } {}
 
     // The new model: the slice is its whole world.
-    : Model mo__h ( model_open st ( string_data name ) )
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    : *MetaImpl mm ( _Meta_ptr . mo meta )
-    = . mm count_clock count_clock
-    = . mm versions src_versions
+    : ~ Model mo ( model_open st ( string_data name ) )
+    = . . mo meta count_clock count_clock
+    = . . mo meta versions src_versions
     // margins the source's owner set stay set: the fork is tuned as it was
-    = . mm tuned_at src_tuned
-    = . mm sched_below src_sched_below
-    = . mm sched_at_max src_sched_at_max
-    = . mm sched_ae src_sched_ae
+    = . . mo meta tuned_at src_tuned
+    = . . mo meta sched_below src_sched_below
+    = . . mo meta sched_at_max src_sched_at_max
+    = . . mo meta sched_ae src_sched_ae
     : i maxp ? > nrec ANOM_MAX_POINTS nrec ANOM_MAX_POINTS
-    ( model_set_limits mo__h ANOM_MIN_POINTS maxp )
-    : ImportReport rep ( model_import mo__h recs )
+    ( model_set_limits mo ANOM_MIN_POINTS maxp )
+    : ImportReport rep ( model_import mo recs )
     ? | > ( string_len . rep err ) 0 < . rep accepted ANOM_MIN_POINTS {
         : String m ( string_from `Nothing to train on: ` )
         ? > ( string_len . rep err ) 0 { ( string_push_str m ( string_data . rep err ) ) } {
@@ -2413,15 +2393,15 @@ unsafe @ __an_h_fork HttpRequest req Params p → HttpResponse {
         ^ rr
     } {}
     ( __an_gate_claim gate ( string_data name ) )
-    : WholeTrain wt ( model_train_whole mo__h rate ae_layout )
-    : ScanOut so ( model_scan mo__h 0 0 0 F )
+    : WholeTrain wt ( model_train_whole mo rate ae_layout )
+    : ScanOut so ( model_scan mo 0 0 0 F )
 
     : Json o ( json_obj_new )
     ( json_obj_set o `status` ( json_str_lit `success` ) )
     ( json_obj_set o `model_name` ( json_str_lit ( string_data name ) ) )
     ( json_obj_set o `source` ( json_str_lit ( string_data src ) ) )
     : Json wj ( json_obj_new )
-    : ( Vec i ) wb ( model_window_bounds mo__h from_ts to_ts )
+    : ( Vec i ) wb ( model_window_bounds mo from_ts to_ts )
     ( json_obj_set wj `from` ( json_int ( _mlp_iget wb 0 ) ) )
     ( json_obj_set wj `to` ( json_int ( _mlp_iget wb 1 ) ) )
     ( json_obj_set wj `source_points` ( json_int np ) )
@@ -2459,7 +2439,7 @@ unsafe @ __an_h_fork HttpRequest req Params p → HttpResponse {
     ^ r
 }
 
-unsafe @ __an_h_schedule HttpRequest req Params p → HttpResponse {
+@ __an_h_schedule HttpRequest req Params p → HttpResponse {
     : String mname ( __an_param_model p )
     ? ( __an_name_ok ( string_data mname ) ) {} {
         ^ ( __an_bad_name )
@@ -2485,10 +2465,9 @@ unsafe @ __an_h_schedule HttpRequest req Params p → HttpResponse {
             ? || > below 0 > atmax 0 {} {
                 ^ ( __an_json_err 400 `No training schedule parameters provided` )
             }
-            : Model mo ( model_open st ( string_data mname ) )
+            : ~ Model mo ( model_open st ( string_data mname ) )
             ( model_set_schedule mo below atmax )
-            : Meta mm__h ( model_metadata mo )
-            : *MetaImpl mm ( _Meta_ptr mm__h )
+            : ~ Meta mm ( model_metadata mo )
             : String msg ( string_from `Training schedule updated for model ` )
             ( string_push_str msg ( string_data mname ) )
             : Json o ( __an_ok_msg ( string_data msg ) )
@@ -2527,14 +2506,14 @@ unsafe @ __an_h_schedule HttpRequest req Params p → HttpResponse {
     : ?Json bodyo ( __an_body_json req )
     ?? bodyo {
         T body → {
-            : Model mo ( model_open st ( string_data mname ) )
+            : ~ Model mo ( model_open st ( string_data mname ) )
             : ( Vec String ) adj ( vec_new [String] )
             : String err ( model_apply_meta_patch_notes mo body adj )
             ? == ( string_len err ) 0 {} {
                 : HttpResponse rbad ( __an_json_err 400 ( string_data err ) )
                 ^ rbad
             }
-            : Meta mm ( model_metadata mo )
+            : ~ Meta mm ( model_metadata mo )
             : String msg ( string_from `Metadata updated for model ` )
             ( string_push_str msg ( string_data mname ) )
             : Json o ( __an_ok_msg ( string_data msg ) )
@@ -2567,7 +2546,7 @@ unsafe @ __an_h_schedule HttpRequest req Params p → HttpResponse {
     }
 }
 
-unsafe @ __an_h_train_ae HttpRequest req Params p → HttpResponse {
+@ __an_h_train_ae HttpRequest req Params p → HttpResponse {
     : String mname ( __an_param_model p )
     ? ( __an_name_ok ( string_data mname ) ) {} {
         ^ ( __an_bad_name )
@@ -2585,8 +2564,7 @@ unsafe @ __an_h_train_ae HttpRequest req Params p → HttpResponse {
         : HttpResponse r404 ( __an_404_model ( string_data mname ) )
         ^ r404
     }
-    : Model mo__h ( model_open st ( string_data mname ) )
-    : *ModelImpl mo ( _Model_ptr mo__h )
+    : ~ Model mo ( model_open st ( string_data mname ) )
     // Optional body: {"hidden": [64, 32, 64], "contamination": 0.1}.
     // Absent (or empty / unparsable) → the 64-32-64 default and the
     // pre-filter's own "auto" contamination.
@@ -2625,7 +2603,7 @@ unsafe @ __an_h_train_ae HttpRequest req Params p → HttpResponse {
         }
         F _ → {}
     }
-    : String err ( model_train_autoencoder mo__h hidden contam )
+    : String err ( model_train_autoencoder mo hidden contam )
     ? == ( string_len err ) 0 {
         : AeModel tae . mo ae
         : String msg ( string_from `Autoencoder trained successfully for model ` )
@@ -2776,7 +2754,7 @@ unsafe @ __an_h_train_ae HttpRequest req Params p → HttpResponse {
 // Per enabled, trained version: the current margin and what it flags in
 // the window, the margin for each standard alert rate, and the curve.
 // Read-only — nothing is written.
-unsafe @ __an_h_calibration HttpRequest req Params p → HttpResponse {
+@ __an_h_calibration HttpRequest req Params p → HttpResponse {
     : String mname ( __an_param_model p )
     ? ( __an_name_ok ( string_data mname ) ) {} {
         ^ ( __an_bad_name )
@@ -2797,35 +2775,33 @@ unsafe @ __an_h_calibration HttpRequest req Params p → HttpResponse {
     : String qcurve ( __an_query_str . req query `curve` )
     : b with_curve ! == ( nurl_str_eq ( string_data qcurve ) `0` ) 1
 
-    : Model mo__h ( model_open st ( string_data mname ) )
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    ? ( model_is_trained mo__h ) {} {
+    : ~ Model mo ( model_open st ( string_data mname ) )
+    ? ( model_is_trained mo ) {} {
         : String msg ( string_from `Model ` )
         ( string_push_str msg ( string_data mname ) )
         ( string_push_str msg ` exists but is not trained yet.` )
         : HttpResponse rr ( __an_json_err 400 ( string_data msg ) )
         ^ rr
     }
-    : ( Vec i ) win ( __an_cal_window mo__h q_from q_to q_last )
+    : ( Vec i ) win ( __an_cal_window mo q_from q_to q_last )
     : i from_ts ( _mlp_iget win 0 )
     : i to_ts ( _mlp_iget win 1 )
-    : CalReport cal ( model_calibrate mo__h from_ts to_ts )
+    : CalReport cal ( model_calibrate mo from_ts to_ts )
 
     : Json o ( json_obj_new )
     ( json_obj_set o `status` ( json_str_lit `success` ) )
     ( json_obj_set o `model` ( json_str_lit ( string_data mname ) ) )
-    : *MetaImpl cmm ( _Meta_ptr . mo meta )
-    ( json_obj_set o `clock` ( json_str_lit ? . cmm count_clock `count` `time` ) )
+    ( json_obj_set o `clock` ( json_str_lit ? . . mo meta count_clock `count` `time` ) )
     : Json wj ( json_obj_new )
-    : ( Vec i ) wb ( model_window_bounds mo__h from_ts to_ts )
+    : ( Vec i ) wb ( model_window_bounds mo from_ts to_ts )
     ( json_obj_set wj `from` ( json_int ( _mlp_iget wb 0 ) ) )
     ( json_obj_set wj `to` ( json_int ( _mlp_iget wb 1 ) ) )
     ( json_obj_set wj `rows` ( json_int . cal n_rows ) )
     ( json_obj_set wj `excluded` ( json_int . cal excluded ) )
-    ( json_obj_set wj `total` ( json_int ( model_n_points mo__h ) ) )
+    ( json_obj_set wj `total` ( json_int ( model_n_points mo ) ) )
     ( json_obj_set o `window` wj )
     : Json agg ( json_obj_new )
-    ( json_obj_set agg `votes_required` ( json_int ? > . cmm votes 1 . cmm votes 1 ) )
+    ( json_obj_set agg `votes_required` ( json_int ? > . . mo meta votes 1 . . mo meta votes 1 ) )
     ( json_obj_set agg `flagged` ( json_int . cal agg_flagged ) )
     : ~ f arate 0.0
     ? > . cal n_rows 0 { = arate / # f . cal agg_flagged # f . cal n_rows } {}
@@ -2845,7 +2821,7 @@ unsafe @ __an_h_calibration HttpRequest req Params p → HttpResponse {
                 // column has not moved for half an hour" is the sentence
                 // a person wants, and this is where the step is known.
                 ? ( _an_is_flat_name ( string_data . cv cvname ) ) {
-                    ( json_obj_set cvj `alert_line` ( _an_flat_alert_json mo__h ) )
+                    ( json_obj_set cvj `alert_line` ( _an_flat_alert_json mo ) )
                 } {}
                 ( json_obj_set vers ( string_data . cv cvname ) cvj )
             }
@@ -2867,7 +2843,7 @@ unsafe @ __an_h_calibration HttpRequest req Params p → HttpResponse {
 // `dry_run` reports without writing.
 // The response keeps the legacy `adjusted_margins` map (the new margins,
 // whether or not they were applied) beside the per-version detail.
-unsafe @ __an_h_finetune HttpRequest req Params p → HttpResponse {
+@ __an_h_finetune HttpRequest req Params p → HttpResponse {
     : String mname ( __an_param_model p )
     ? ( __an_name_ok ( string_data mname ) ) {} {
         ^ ( __an_bad_name )
@@ -2952,9 +2928,8 @@ unsafe @ __an_h_finetune HttpRequest req Params p → HttpResponse {
         ^ rb
     } {}
 
-    : Model mo__h ( model_open st ( string_data mname ) )
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    ? ( model_is_trained mo__h ) {} {
+    : ~ Model mo ( model_open st ( string_data mname ) )
+    ? ( model_is_trained mo ) {} {
         : String msg ( string_from `Model ` )
         ( string_push_str msg ( string_data mname ) )
         ( string_push_str msg ` exists but is not trained yet.` )
@@ -2964,11 +2939,11 @@ unsafe @ __an_h_finetune HttpRequest req Params p → HttpResponse {
     : ~ i from_ts 0
     : ~ i to_ts 0
     ? own {} {
-        : ( Vec i ) win ( __an_cal_window mo__h q_from q_to q_last )
+        : ( Vec i ) win ( __an_cal_window mo q_from q_to q_last )
         = from_ts ( _mlp_iget win 0 )
         = to_ts ( _mlp_iget win 1 )
     }
-    : FineTuneReport rep ? own ( model_finetune_own mo__h rate ! dry only ) ( model_finetune_at mo__h rate from_ts to_ts ! dry only )
+    : FineTuneReport rep ? own ( model_finetune_own mo rate ! dry only ) ( model_finetune_at mo rate from_ts to_ts ! dry only )
     ? own { = from_ts . rep from_ts } {}
 
     : Json margins ( json_obj_new )
@@ -3040,8 +3015,7 @@ unsafe @ __an_h_finetune HttpRequest req Params p → HttpResponse {
         ( string_push_str msg ( string_data mname ) )
     }
     : Json o ( __an_ok_msg ( string_data msg ) )
-    : *MetaImpl fmm ( _Meta_ptr . mo meta )
-    ( json_obj_set o `clock` ( json_str_lit ? . fmm count_clock `count` `time` ) )
+    ( json_obj_set o `clock` ( json_str_lit ? . . mo meta count_clock `count` `time` ) )
     ( json_obj_set o `rate` ( json_float rate ) )
     ( json_obj_set o `dry_run` ( json_bool dry ) )
     // What `rate` was a share OF. At one vote it is each version's own
@@ -3063,7 +3037,7 @@ unsafe @ __an_h_finetune HttpRequest req Params p → HttpResponse {
     } {}
     ? > ( string_len note ) 0 { ( json_obj_set o `note` ( json_str_lit ( string_data note ) ) ) } {}
     : Json wj ( json_obj_new )
-    : ( Vec i ) wb ( model_window_bounds mo__h from_ts to_ts )
+    : ( Vec i ) wb ( model_window_bounds mo from_ts to_ts )
     ( json_obj_set wj `from` ( json_int ( _mlp_iget wb 0 ) ) )
     ( json_obj_set wj `to` ( json_int ( _mlp_iget wb 1 ) ) )
     ( json_obj_set wj `rows` ( json_int . rep n_rows ) )
@@ -3206,13 +3180,13 @@ unsafe @ __an_h_finetune HttpRequest req Params p → HttpResponse {
     ( json_obj_set o `status` ( json_str_lit `success` ) )
     ( json_obj_set o `enabled` ( json_bool ( anomaly_authz_enabled ) ) )
     ( json_obj_set o `mode` ( json_str_lit ? ( anomaly_authz_enabled ) `oidc` `simple` ) )
-    ( json_obj_set o `issuer` ( json_str_lit ( anomaly_authz_issuer ) ) )
-    ( json_obj_set o `client_id` ( json_str_lit ( anomaly_authz_client_id ) ) )
-    ( json_obj_set o `audience` ( json_str_lit ( anomaly_authz_audience ) ) )
+    ( json_obj_set o `issuer` ( json_str_lit ( string_data ( anomaly_authz_issuer ) ) ) )
+    ( json_obj_set o `client_id` ( json_str_lit ( string_data ( anomaly_authz_client_id ) ) ) )
+    ( json_obj_set o `audience` ( json_str_lit ( string_data ( anomaly_authz_audience ) ) ) )
     ( json_obj_set o `redirect_path` ( json_str_lit `/oauth/callback` ) )
     ( json_obj_set o `open_ingest` ( json_bool ( anomaly_authz_open_ingest ) ) )
     : String scope ( string_from `openid profile email ` )
-    ( string_push_str scope ( anomaly_authz_audience ) )
+    ( string_push_str scope ( string_data ( anomaly_authz_audience ) ) )
     ( string_push_str scope `/access_as_user` )
     ( json_obj_set o `scope` ( json_str_lit ( string_data scope ) ) )
     : HttpResponse r ( response_json 200 o )
@@ -3553,7 +3527,7 @@ unsafe @ __an_h_finetune HttpRequest req Params p → HttpResponse {
 // including bringing the model into being. And what it creates belongs to
 // the ORGANISATION exactly like one grown from a stream — there is no third
 // kind of model here.
-unsafe @ __an_h_import HttpRequest req Params p → HttpResponse {
+@ __an_h_import HttpRequest req Params p → HttpResponse {
     : String mname ( __an_param_model p )
     ? ( __an_name_ok ( string_data mname ) ) {} {
         ^ ( __an_bad_name )
@@ -3632,11 +3606,9 @@ unsafe @ __an_h_import HttpRequest req Params p → HttpResponse {
         : ~ i npts 0
         : ~ b count F
         ? existed {
-            : Model mo0__h ( model_open st ( string_data mname ) )
-            : *ModelImpl mo0 ( _Model_ptr mo0__h )
-            : *MetaImpl mm0 ( _Meta_ptr . mo0 meta )
-            = npts ( model_n_points mo0__h )
-            = count . mm0 count_clock
+            : Model mo0 ( model_open st ( string_data mname ) )
+            = npts ( model_n_points mo0 )
+            = count . . mo0 meta count_clock
         } {}
         ( json_obj_set mj `data_points` ( json_int npts ) )
         ( json_obj_set mj `clock` ( json_str_lit ? count `count` `time` ) )
@@ -3644,9 +3616,7 @@ unsafe @ __an_h_import HttpRequest req Params p → HttpResponse {
         : HttpResponse ri ( response_json 200 insp )
         ^ ri
     } {}
-    : Model mo__h ( model_open st ( string_data mname ) )
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    : *MetaImpl mm ( _Meta_ptr . mo meta )
+    : ~ Model mo ( model_open st ( string_data mname ) )
 
     // The plan, applied: every row stamped from it, or a 400 naming what
     // the plan asked for and the file does not have.
@@ -3661,8 +3631,8 @@ unsafe @ __an_h_import HttpRequest req Params p → HttpResponse {
     // Which clock. A model that already holds points keeps its clock; a
     // fresh one takes `clock=`, or the one its first rows imply.
     : ~ String cerr ( string_new )
-    ? == ( model_n_points mo__h ) 0 {
-        : ~ b want . mm count_clock
+    ? == ( model_n_points mo ) 0 {
+        : ~ b want . . mo meta count_clock
         ? > ( string_len clockq ) 0 {
             ? == ( nurl_str_eq ( string_data clockq ) `count` ) 1 { = want T } {
                 ? == ( nurl_str_eq ( string_data clockq ) `time` ) 1 { = want F } {
@@ -3670,9 +3640,9 @@ unsafe @ __an_h_import HttpRequest req Params p → HttpResponse {
                 }
             }
         } { = want == . tr stamped 0 }
-        = . mm count_clock want
+        = . . mo meta count_clock want
     } {
-        ? & > ( string_len clockq ) 0 != == ( nurl_str_eq ( string_data clockq ) `count` ) 1 . mm count_clock {
+        ? & > ( string_len clockq ) 0 != == ( nurl_str_eq ( string_data clockq ) `count` ) 1 . . mo meta count_clock {
             = cerr ( string_from `clock can only change on a model with no stored points (reset it first)` )
         } {}
     }
@@ -3681,7 +3651,7 @@ unsafe @ __an_h_import HttpRequest req Params p → HttpResponse {
         ^ rc
     } {}
 
-    : ImportReport rep ( model_import mo__h . ip rows )
+    : ImportReport rep ( model_import mo . ip rows )
     // The first train of a model that arrived as a file calibrates its
     // margins (model_autotune_at): ?finetune=R sets the rate, 0 leaves
     // the defaults. A model tuned before keeps its margins.
@@ -3690,10 +3660,10 @@ unsafe @ __an_h_import HttpRequest req Params p → HttpResponse {
     // Why the margins were or were not set from this file, in words: the
     // reason has to be read BEFORE the call that changes it.
     : ~ String tune_why ( string_new )
-    ? . rep trained { ( string_push_str tune_why ( model_autotune_why mo__h ftrate ) ) } {
+    ? . rep trained { ( string_push_str tune_why ( model_autotune_why mo ftrate ) ) } {
         ( string_push_str tune_why `this import did not train the model — it was trained already, and an import leaves a trained model's margins where its owner left them. finetune {rate: 0.01} sets them from the history as it now stands, and calibration says what they flag first` )
     }
-    : b tuned ? . rep trained ( model_autotune_at mo__h ftrate ( model_now mo__h ) ) F
+    : b tuned ? . rep trained ( model_autotune_at mo ftrate ( model_now mo ) ) F
 
     : ~ HttpResponse r ( response_status_only 500 )
     ? > ( string_len . rep err ) 0 {
@@ -3721,7 +3691,7 @@ unsafe @ __an_h_import HttpRequest req Params p → HttpResponse {
                 ( json_obj_set o `not_calibrated_because` ( json_str_lit ( string_data tune_why ) ) )
             } {}
         }
-        ( json_obj_set o `clock` ( json_str_lit ? . mm count_clock `count` `time` ) )
+        ( json_obj_set o `clock` ( json_str_lit ? . . mo meta count_clock `count` `time` ) )
         : Json tj ( json_clone plan )
         ( json_obj_set tj `stamped` ( json_int . tr stamped ) )
         ( json_obj_set tj `failed` ( json_int . tr failed ) )
@@ -3740,10 +3710,10 @@ unsafe @ __an_h_import HttpRequest req Params p → HttpResponse {
         // The clock of a model with points is settled: stamps landing on
         // a count clock become ticks, unstamped rows on a time clock take
         // the clock time. Neither is an error, but both are worth a note.
-        ? & . mm count_clock > . tr stamped 0 {
+        ? & . . mo meta count_clock > . tr stamped 0 {
             ( json_arr_push notes ( json_str_lit `the model counts points: the rows' timestamps were read but not kept; every row took the next tick` ) )
         } {}
-        ? & ! . mm count_clock & == . tr stamped 0 > . rep accepted 0 {
+        ? & ! . . mo meta count_clock & == . tr stamped 0 > . rep accepted 0 {
             ( json_arr_push notes ( json_str_lit `the model runs on time and the rows carry no timestamp: they were stamped with the current time` ) )
         } {}
         : i rn ( vec_len [String] . rep notes )
@@ -3776,17 +3746,16 @@ unsafe @ __an_h_import HttpRequest req Params p → HttpResponse {
 // the GPU singleton and the authorization layer see one request at a
 // time, exactly as under the single-threaded server. Off = no pool (tests
 // drive the router directly), and the release/acquire pair is a no-op.
-// The global owns the lock; a later server's replaces it.
-: ~ Mutex g_an_lock 0
+// The global owns the lock, built at start.
+: Mutex g_an_lock ( mutex_new )
 : ~ b g_an_lock_on F
 
-unsafe @ __an_lock_acquire → v { ? g_an_lock_on { ( mutex_lock g_an_lock ) } {} }
+@ __an_lock_acquire → v { ? g_an_lock_on { ( mutex_lock g_an_lock ) } {} }
 
-unsafe @ __an_lock_release → v { ? g_an_lock_on { ( mutex_unlock g_an_lock ) } {} }
+@ __an_lock_release → v { ? g_an_lock_on { ( mutex_unlock g_an_lock ) } {} }
 
 // Before the workers start (no request can hold the old lock).
-unsafe @ __an_lock_open → v {
-    = g_an_lock ( mutex_new )
+@ __an_lock_open → v {
     = g_an_lock_on T
 }
 
@@ -4259,7 +4228,7 @@ unsafe @ __an_lock_open → v {
     }
     : Json o ( json_obj_new )
     ( json_obj_set o `status` ( json_str_lit `success` ) )
-    ( json_obj_set o `owner_tenant` ( json_str_lit ( anomaly_authz_owner_tenant ) ) )
+    ( json_obj_set o `owner_tenant` ( json_str_lit ( string_data ( anomaly_authz_owner_tenant ) ) ) )
     ( json_obj_set o `tenants` arr )
     : HttpResponse r ( response_json 200 o )
     ^ r

@@ -27,8 +27,8 @@
 //   ( wal_replay path m )              → !WalStat String  → memtable
 //   ( wal_reset path )                 → !v String        truncate to empty
 //
-// A Wal is a handle: every copy is the same log, and the last owner
-// closes its file.
+// A Wal is a value: the store owns it and changes it through `inout`;
+// its drop closes the log file.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
@@ -37,26 +37,18 @@ $ `stdlib/std/fs.nu`
 $ `stdlib/std/path.nu`
 $ `stdlib/std/deflate.nu`
 $ `memtable.nu`
-$ `stdlib/std/arc.nu`
 
-: WalImpl {
+: Wal {
     File f
     ( Vec u ) buf
     i bytes
     Crc32 crc
 }
 
-// The log file is the one part the compiler does not manage: the last
-// owner closes it (the buffer and the CRC table go with the drop glue).
-% Drop WalImpl { @ drop WalImpl w → v { ( file_close . w f ) } }
-
-: Wal { ( Arc WalImpl ) a }
-
-@ Wal_share Wal h → Wal { ^ @ Wal { ( arc_clone [WalImpl] . h a ) } }
-
-@ Wal_drop sink Wal h → v {}
-
-unsafe @ __Wal_ptr Wal h → *WalImpl { ^ ( arc_ptr [WalImpl] . h a ) }
+// The log is a value its owner (the store) changes through `inout`. The
+// log file is the one part the compiler does not manage: the drop closes
+// it (the buffer and the CRC table go with the drop glue).
+% Drop Wal { @ drop Wal w → v { ( file_close . w f ) } }
 
 : WalStat {
     i records
@@ -71,34 +63,30 @@ unsafe @ __Wal_ptr Wal h → *WalImpl { ^ ( arc_ptr [WalImpl] . h a ) }
     ^ msg
 }
 
-unsafe @ wal_open s path → !Wal String {
+@ wal_open s path → !Wal String {
     : !File IoErr fr ( file_append path )
     ?? fr {
         T f → {
-            : ~ WalImpl w @ WalImpl {}
-            = . w f f
-            = . w buf ( vec_with_cap [u] 256 )
-            = . w bytes ?? ( file_size path ) { T n → n F _ → 0 }
-            = . w crc ( crc32_ctx )
-            ^ @ !Wal String { T @ Wal { ( arc_new [WalImpl] w ) } }
+            : i bytes ?? ( file_size path ) { T n → n F _ → 0 }
+            ^ @ !Wal String { T @ Wal { f ( vec_with_cap [u] 256 ) bytes ( crc32_ctx ) } }
         }
         F _ → { ^ @ !Wal String { F ( __wal_open_err path ) } }
     }
 }
 
-unsafe @ wal_bytes Wal w__h → i {
-    : *WalImpl w ( __Wal_ptr w__h )
-    ^ . w bytes
-}
+// A log that is not open (its file the null File): what the store holds
+// until wal_open has opened the real one.
+@ wal_none → Wal { ^ @ Wal { ( file_none ) ( vec_new [u] ) 0 ( crc32_ctx ) } }
+
+@ wal_bytes Wal w → i { ^ . w bytes }
 
 // Close the log file and open `path` again for appending — what a flush
 // does once it has reset the log. If the reopen fails the log stays
 // closed, and every append after it is an error rather than a lost write.
-unsafe @ wal_reopen Wal w__h s path → !v String {
-    : *WalImpl w ( __Wal_ptr w__h )
+@ wal_reopen inout Wal w s path → !v String {
     ( file_close . w f )
     // The closed file's handle leaves the log (dropped here).
-    = . w f # File # s 0
+    = . w f ( file_none )
     ?? ( file_append path ) {
         T f → {
             = . w f f
@@ -112,8 +100,7 @@ unsafe @ wal_reopen Wal w__h s path → !v String {
 // Let go of `w` now rather than at the end of its owner's scope.
 @ wal_close sink Wal w → v {}
 
-unsafe @ wal_append Wal w__h ( Vec u ) key ( Vec u ) val i seq i kind → !v String {
-    : *WalImpl w ( __Wal_ptr w__h )
+@ wal_append inout Wal w ( Vec u ) key ( Vec u ) val i seq i kind → !v String {
     : i kl ( vec_len [u] key )
     : i vl ? == kind MT_PUT ( vec_len [u] val ) 0
     ( vec_clear [u] . w buf )
@@ -139,8 +126,7 @@ unsafe @ wal_append Wal w__h ( Vec u ) key ( Vec u ) val i seq i kind → !v Str
 
 // The durability point. Returning from here means the OS has the bytes
 // on the device — everything appended so far survives a power cut.
-unsafe @ wal_sync Wal w__h → !v String {
-    : *WalImpl w ( __Wal_ptr w__h )
+@ wal_sync Wal w → !v String {
     ?? ( file_sync . w f ) {
         T _ → { ^ @ !v String { T 0 } }
         F _ → { ^ @ !v String { F ( string_from `lsmdb: cannot fsync the write-ahead log` ) } }
@@ -177,7 +163,7 @@ unsafe @ wal_sync Wal w__h → !v String {
 
 // Replay every intact record into `m`. A missing log is an empty one —
 // a database that has never been written to is not an error.
-@ wal_replay s path MemTable m → !WalStat String {
+@ wal_replay s path inout MemTable m → !WalStat String {
     ? ( file_exists path ) {} {
         ^ @ !WalStat String { T @ WalStat { 0 0 0 0 } }
     }

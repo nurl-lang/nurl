@@ -1,6 +1,7 @@
 // gRPC message framing and protocol values. Inputs are borrowed; returned
 // buffers and GrpcError messages are owned. No protobuf schema is assumed.
 $ `stdlib/core/string.nu`
+$ `stdlib/core/slice.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/time.nu`
 $ `stdlib/ext/compress.nu`
@@ -103,15 +104,15 @@ $ `stdlib/ext/compress.nu`
     ^ F
 }
 
-unsafe @ grpc_method_path s path → b {
-    : i n ( nurl_str_len path )
+@ grpc_method_path s path → b {
+    : ( Slice u ) p ( slice_of_str path )
+    : i n ( slice_len [u] p )
     ? < n 4 { ^ F } {}
-    : *u p # *u path
-    ? != # i . p 0 47 { ^ F } {}
+    ? != ( slice_byte p 0 ) 47 { ^ F } {}
     : ~ i slash 0
     : ~ i k 1
     ~ < k n {
-        : i c # i . p k
+        : i c ( slice_byte p k )
         ? == c 47 {
             ? | != slash 0 | == k 1 == k - n 1 { ^ F } {}
             = slash k
@@ -258,11 +259,11 @@ unsafe @ grpc_method_path s path → b {
     } {}
 }
 
-unsafe @ grpc_decoder_next inout GrpcDecoder d → !GrpcMessage GrpcError {
+@ grpc_decoder_next inout GrpcDecoder d → !GrpcMessage GrpcError {
     : i available - ( vec_len [u] . d pending ) . d pos
     ? == available 0 { ^ @ !GrpcMessage GrpcError { T @ GrpcMessage { F ( vec_new [u] ) } } } {}
-    : *u p ( vec_data [u] . d pending )
-    : i flag # i . p . d pos
+    : ( Slice u ) p ( slice_from_vec [u] . d pending )
+    : i flag # i ( slice_at [u] p . d pos )
     ? > flag 1 { ^ @ !GrpcMessage GrpcError { F ( grpc_error GRPC_INTERNAL `invalid compressed flag` ) } } {}
     ? & == flag 1 == . d encoding GRPC_IDENTITY {
         ^ @ !GrpcMessage GrpcError { F ( grpc_error GRPC_INTERNAL `compressed message without grpc-encoding` ) }
@@ -270,7 +271,7 @@ unsafe @ grpc_decoder_next inout GrpcDecoder d → !GrpcMessage GrpcError {
     ? < available 5 { ^ @ !GrpcMessage GrpcError { T @ GrpcMessage { F ( vec_new [u] ) } } } {}
     : ~ i length 0
     : ~ i k 1
-    ~ < k 5 { = length + * length 256 # i . p + . d pos k = k + k 1 }
+    ~ < k 5 { = length + * length 256 # i ( slice_at [u] p + . d pos k ) = k + k 1 }
     ? > length . d max_message { ^ @ !GrpcMessage GrpcError { F ( grpc_error GRPC_RESOURCE_EXHAUSTED `message exceeds limit` ) } } {}
     ? < - available 5 length { ^ @ !GrpcMessage GrpcError { T @ GrpcMessage { F ( vec_new [u] ) } } } {}
     : ( Vec u ) body ( vec_new [u] )

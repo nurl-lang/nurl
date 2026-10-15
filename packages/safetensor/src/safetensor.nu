@@ -15,15 +15,18 @@
 // Nothing is allocated on the strength of a number the file supplied.
 //
 // mmap-backed and lazy, like gguf: the header is parsed up front, tensor bytes
-// are addressed straight out of the mapping, so inspecting a multi-GB model
-// costs no RAM.
+// are read straight out of the mapping (stdlib/std/mmap.nu), so inspecting a
+// multi-GB model costs no RAM. Every read is a checked slice of it.
 //
 //   ( st_open path )                → !St String
 //   ( st_parse_bytes data )         → !St String   (keeps `data`)
 //   ( st_n_tensors s )              → i
 //   ( st_tensors s )                → ( Vec StTensor )   (borrowed)
 //   ( st_find_tensor s name )       → i        (-1 = absent)
-//   ( st_tensor_ptr s t )           → *u       (into the mapping)
+//   ( st_tensor_bytes s t )         → ( Slice u )   the tensor's bytes, a
+//                                     view that lives no longer than `s`
+//   ( st_tensor_ptr s t )           → *u       raw: their address, for a
+//                                     device upload that keeps `s` alive
 //   ( st_dequant s idx )            → !( Vec u ) String   — f32 bytes
 //   ( st_dequant_range s idx first count ) → !( Vec u ) String
 //   ( st_close s )                  → v        early release (optional)
@@ -41,6 +44,7 @@ $ `stdlib/std/bytes.nu`
 $ `stdlib/std/floatbits.nu`
 $ `stdlib/ext/json.nu`
 $ `stdlib/std/arc.nu`
+$ `stdlib/std/mmap.nu`
 
 // ── dtypes ──────────────────────────────────────────────────────────
 // Our own codes; the file spells them as strings.
@@ -116,32 +120,20 @@ $ `stdlib/std/arc.nu`
 }
 
 : StImpl {
-    * u map
-    i map_size
-    b from_mmap
-    ( Vec u ) buf  // the bytes `map` points into, when they are not a mapping
+    MappedFile file  // the bytes: a mapping, or a buffer read whole
     ( Vec StTensor ) tensors
     i data_off  // absolute offset of the tensor-data region
     i data_size
 }
 
-// The mapping is the raw resource: its last owner unmaps it, as st_close
-// did. The tensor table and the buffer go with the drop glue.
-% Drop StImpl {
-    unsafe @ drop StImpl s → v {
-        ? . s from_mmap { : i32 _u ( munmap . s map . s map_size ) } {}
-    }
-}
-
-// An St is a handle on its state in an Arc (stdlib/std/arc.nu):
-// every copy is the same open file, and the last owner releases it.
+// An St is a handle on its state in an Arc (stdlib/std/arc.nu), frozen once
+// parsed: every copy is the same open file, and the last owner lets go of
+// the mapping.
 : St { ( Arc StImpl ) a }
 
 @ St_share St h → St { ^ @ St { ( arc_clone [StImpl] . h a ) } }
 
 @ St_drop sink St h → v {}
-
-unsafe @ __St_ptr St h → *StImpl { ^ ( arc_ptr [StImpl] . h a ) }
 
 @ __st_errs s msg → !St String {
     ^ @ !St String { F ( string_from msg ) }
@@ -155,11 +147,11 @@ unsafe @ __St_ptr St h → *StImpl { ^ ( arc_ptr [StImpl] . h a ) }
 
 // Read the u64 header length from the first 8 bytes. Little-endian, and a
 // value ≥ 2^63 surfaces as negative — which the caller rejects.
-unsafe @ __st_hdr_len * u p → i {
+@ __st_hdr_len ( Slice u ) p → i {
     : ~ i v 0
     : ~ i k 7
     ~ >= k 0 {
-        = v | << v 8 # i . p k
+        = v | << v 8 # i ( slice_at [u] p k )
         = k - k 1
     }
     ^ v
@@ -197,11 +189,11 @@ unsafe @ __st_hdr_len * u p → i {
     ^ n
 }
 
-// Parse the container at p[0, n). `keep` is what p points into when that is
-// not a mapping (the St holds it for as long as the tensors are read);
-// st_open hands in an empty Vec for a mapping, which it owns until this
-// succeeds.
-unsafe @ __st_parse * u p i n sink ( Vec u ) keep → !St String {
+// Parse the container `file` holds; the St keeps it for as long as the
+// tensors are read.
+@ __st_parse sink MappedFile file → !St String {
+    : ( Slice u ) p ( mapped_bytes file )
+    : i n ( slice_len [u] p )
     ? < n 8 { ^ ( __st_errs `safetensor: file too small (< 8 bytes)` ) } {}
     : i hlen ( __st_hdr_len p )
     // hlen is attacker-chosen: it must be positive, and 8 + hlen must fit in
@@ -217,11 +209,7 @@ unsafe @ __st_parse * u p i n sink ( Vec u ) keep → !St String {
     // out of the mapping with a NUL. It is the one thing we must copy: the
     // tensor bytes stay in the mapping.
     : String hdr ( string_new )
-    : ~ i k 0
-    ~ < k hlen {
-        ( string_push_char hdr # i . p + 8 k )
-        = k + k 1
-    }
+    ( string_push_window hdr p 8 hlen )
     : !Json JsonError jr ( json_parse ( string_data hdr ) )
     : ~ Json root ( json_null )
     ?? jr {
@@ -237,10 +225,7 @@ unsafe @ __st_parse * u p i n sink ( Vec u ) keep → !St String {
         ^ ( __st_errs `safetensor: header JSON is not an object` )
     }
 
-    // The handle first: a rejected header lets go of it (and of `keep`).
-    : St h @ St { ( arc_new [StImpl] @ StImpl { p n F keep ( vec_new [StTensor] ) data_off data_size } ) }
-    : *StImpl s ( __St_ptr h )
-
+    : ( Vec StTensor ) tensors ( vec_new [StTensor] )
     : ( Vec String ) keys ( json_obj_keys root )
     : ~ b ok T
     : ~ String err ( string_new )
@@ -343,7 +328,7 @@ unsafe @ __st_parse * u p i n sink ( Vec u ) keep → !St String {
                                         ( string_push_str err key )
                                         ( string_push_str err `' has data_offsets outside the file or the wrong extent for its dtype/shape` )
                                     } {
-                                        ( vec_push [StTensor] . s tensors @ StTensor {
+                                        ( vec_push [StTensor] tensors @ StTensor {
                                             ( string_from key ) dt nd d0 d1 d2 d3 ne + data_off a nb } )
                                     }
                                 } {}
@@ -358,58 +343,28 @@ unsafe @ __st_parse * u p i n sink ( Vec u ) keep → !St String {
         = ki + ki 1
     }
     ? ok {} { ^ @ !St String { F err } }
-    ^ @ !St String { T h }
+    ^ @ !St String { T @ St { ( arc_new [StImpl] @ StImpl { file tensors data_off data_size } ) } }
 }
 
 // ── open / close ────────────────────────────────────────────────────
 
 // mmap-backed where the platform has it (POSIX), a whole-file read where it
 // does not (wasm, win32) — correct everywhere, lazy where it matters.
-unsafe @ st_open s path → !St String {
-    ? != ( posix_const `MAP_PRIVATE` ) -1 {
-        : i32 fd ( open path # i32 ( posix_const `O_RDONLY` ) # i32 0 )
-        ? < # i fd 0 {
-            : String m ( string_from `safetensor: cannot open ` )
-            ( string_push_str m path )
-            ^ @ !St String { F m }
-        } {}
-        : i sz ( lseek fd 0 # i32 2 )
-        ? < sz 8 {
-            : i _c ( close # i fd )
-            ^ ( __st_errs `safetensor: file too small (< 8 bytes)` )
-        } {}
-        : *u m ( mmap # *u 0 sz # i32 ( posix_const `PROT_READ` ) # i32 ( posix_const `MAP_PRIVATE` ) fd 0 )
-        : i _c ( close # i fd )
-        ? == # i m -1 { ^ ( __st_errs `safetensor: mmap failed` ) } {}
-        : !St String r ( __st_parse m sz ( vec_new [u] ) )
-        ?? r {
-            T st → {
-                // from here on the St owns the mapping
-                : *StImpl s ( __St_ptr st )
-                = . s from_mmap T
-                ^ @ !St String { T st }
-            }
-            F e → {
-                : i32 _u ( munmap m sz )
-                ^ @ !St String { F e }
-            }
-        }
-    } {
-        // no mmap: the St keeps the file's bytes its tensors point into
-        ?? ( read_file_bytes path ) {
-            T data → { ^ ( __st_parse ( vec_data [u] data ) ( vec_len [u] data ) data ) }
-            F _ → {
-                : String m ( string_from `safetensor: cannot read ` )
-                ( string_push_str m path )
-                ^ @ !St String { F m }
-            }
+@ st_open s path → !St String {
+    ?? ( file_map path ) {
+        T m → { ^ ( __st_parse m ) }
+        F _ → {
+            : String msg ( string_from `safetensor: cannot open ` )
+            ( string_push_str msg path )
+            ^ @ !St String { F msg }
         }
     }
 }
 
-// Parse an in-memory image. The St keeps `data` (its tensors point into it).
-unsafe @ st_parse_bytes sink ( Vec u ) data → !St String {
-    ^ ( __st_parse ( vec_data [u] data ) ( vec_len [u] data ) data )
+// Parse an in-memory image. The St keeps `data` (its tensors are read out
+// of it).
+@ st_parse_bytes sink ( Vec u ) data → !St String {
+    ^ ( __st_parse ( mapped_of_bytes data ) )
 }
 
 // Let go of `s` now rather than at the end of its owner's scope; the last
@@ -418,24 +373,21 @@ unsafe @ st_parse_bytes sink ( Vec u ) data → !St String {
 
 // ── accessors ───────────────────────────────────────────────────────
 
-unsafe @ st_n_tensors St s__h → i {
-    : *StImpl s ( __St_ptr s__h )
-    ^ ( vec_len [StTensor] . s tensors )
+@ st_n_tensors St h → i {
+    ^ ( vec_len [StTensor] . ( arc_get [StImpl] . h a ) tensors )
 }
 
 // The tensor table (borrowed: valid while the St is).
-unsafe @ st_tensors St s__h → ( Vec StTensor ) {
-    : *StImpl s ( __St_ptr s__h )
-    ^ . s tensors
+@ st_tensors St h → ( Vec StTensor ) {
+    ^ . ( arc_get [StImpl] . h a ) tensors
 }
 
-unsafe @ st_data_size St s__h → i {
-    : *StImpl s ( __St_ptr s__h )
-    ^ . s data_size
+@ st_data_size St h → i {
+    ^ . ( arc_get [StImpl] . h a ) data_size
 }
 
-unsafe @ st_find_tensor St s__h s name → i {
-    : *StImpl s ( __St_ptr s__h )
+@ st_find_tensor St h s name → i {
+    : StImpl s ( arc_get [StImpl] . h a )
     : ~ i k 0
     : i n ( vec_len [StTensor] . s tensors )
     ~ < k n {
@@ -448,46 +400,44 @@ unsafe @ st_find_tensor St s__h s name → i {
     ^ -1
 }
 
-// The tensor's bytes, straight out of the mapping. Borrowed: valid while
-// the St (any copy of it) is.
-unsafe @ st_tensor_ptr St s__h StTensor t → *u {
-    : *StImpl s ( __St_ptr s__h )
-    ^ # *u + # i . s map . t offset
+// The tensor's bytes, straight out of the mapping: a checked view that
+// lives no longer than `h` (the borrow checker holds it to that). A tensor
+// of another St that does not fit this one panics rather than reading
+// past it.
+@ st_tensor_bytes St h StTensor t → ( Slice u ) {
+    ^ ( slice_window [u] ( mapped_bytes . ( arc_get [StImpl] . h a ) file ) . t offset . t nbytes )
+}
+
+// Their address, for a hand-off that takes a pointer (a device upload).
+// raw: the caller keeps `h` (any copy of it) alive while it is used.
+raw @ st_tensor_ptr St h StTensor t → *u {
+    ^ ( slice_data [u] ( st_tensor_bytes h t ) )
 }
 
 // ── dequantisation to f32 ───────────────────────────────────────────
 // Every safetensors dtype is fixed-width, so an element range is exact — no
 // block alignment to respect (which is what makes this simpler than gguf).
 
-// Little-endian scalar reads straight out of the mapping. stdlib's
-// bytes_read_* take a Vec; a mapping is a raw pointer, so these are the
-// pointer-shaped siblings (the same idiom gguf/dequant.nu uses).
-unsafe @ __st_u16 * u P i o → i {
-    ^ | # i . P o << # i . P + o 1 8
-}
+// Little-endian scalar reads out of a view of the mapping: one bounds
+// check per word (stdlib/core/slice.nu).
+@ __st_u16 ( Slice u ) P i o → i { ^ ( slice_u16_le P o ) }
 
-unsafe @ _st_u32 * u P i o → i {
-    ^ | # i . P o | << # i . P + o 1 8 | << # i . P + o 2 16 << # i . P + o 3 24
-}
+@ _st_u32 ( Slice u ) P i o → i { ^ ( slice_u32_le P o ) }
 
-unsafe @ __st_u64 * u P i o → i {
-    : i lo ( _st_u32 P o )
-    : i hi ( _st_u32 P + o 4 )
-    ^ | lo << hi 32
-}
+@ __st_u64 ( Slice u ) P i o → i { ^ ( slice_u64_le P o ) }
 
 // Sign-extending readers: the raw word is unsigned, the dtype is not.
-unsafe @ __st_i8 * u P i o → i {
-    : i v # i . P o
+@ __st_i8 ( Slice u ) P i o → i {
+    : i v # i ( slice_at [u] P o )
     ^ ? > v 127 - v 256 v
 }
 
-unsafe @ __st_i16 * u P i o → i {
+@ __st_i16 ( Slice u ) P i o → i {
     : i v ( __st_u16 P o )
     ^ ? > v 32767 - v 65536 v
 }
 
-unsafe @ __st_i32 * u P i o → i {
+@ __st_i32 ( Slice u ) P i o → i {
     : i v ( _st_u32 P o )
     ^ ? > v 2147483647 - v 4294967296 v
 }
@@ -495,14 +445,14 @@ unsafe @ __st_i32 * u P i o → i {
 // One element of a tensor, as f32. Every dtype widens to f32 here — an f64
 // loses precision (by construction: the device runs f32) and an integer
 // tensor becomes its numeric value.
-unsafe @ __st_read_f * u P i dt i idx → f {
+@ __st_read_f ( Slice u ) P i dt i idx → f {
     ? == dt ST_F32 { ^ # f ( bits_to_f32 ( _st_u32 P * idx 4 ) ) } {}
     ? == dt ST_F16 { ^ ( f16_to_f ( __st_u16 P * idx 2 ) ) } {}
     ? == dt ST_BF16 { ^ ( bf16_to_f ( __st_u16 P * idx 2 ) ) } {}
     ? == dt ST_F64 { ^ ( bits_to_f64 ( __st_u64 P * idx 8 ) ) } {}
     ? == dt ST_I8 { ^ # f ( __st_i8 P idx ) } {}
-    ? == dt ST_U8 { ^ # f # i . P idx } {}
-    ? == dt ST_BOOL { ^ ? != 0 # i . P idx 1.0 0.0 } {}
+    ? == dt ST_U8 { ^ # f # i ( slice_at [u] P idx ) } {}
+    ? == dt ST_BOOL { ^ ? != 0 # i ( slice_at [u] P idx ) 1.0 0.0 } {}
     ? == dt ST_I16 { ^ # f ( __st_i16 P * idx 2 ) } {}
     ? == dt ST_U16 { ^ # f ( __st_u16 P * idx 2 ) } {}
     ? == dt ST_I32 { ^ # f ( __st_i32 P * idx 4 ) } {}
@@ -514,8 +464,8 @@ unsafe @ __st_read_f * u P i dt i idx → f {
 // Elements [first, first+count) of tensor `idx`, as f32 BYTES (4 per
 // element) — the same shape of result gguf_dequant returns, so a caller can
 // upload it to the device without knowing which container it came from.
-unsafe @ st_dequant_range St s__h i idx i first i count → !( Vec u ) String {
-    : *StImpl s ( __St_ptr s__h )
+@ st_dequant_range St h i idx i first i count → !( Vec u ) String {
+    : StImpl s ( arc_get [StImpl] . h a )
     ? | < idx 0 >= idx ( vec_len [StTensor] . s tensors ) {
         ^ ( __st_err_vec `safetensor: tensor index out of range` )
     } {}
@@ -533,32 +483,45 @@ unsafe @ st_dequant_range St s__h i idx i first i count → !( Vec u ) String {
     ? | | | < first 0 < count 0 > first ne > count - ne first {
         ^ ( __st_err_vec `safetensor: element range outside the tensor` )
     } {}
-    : *u p # *u + # i . s map off
-    // The output is SIZED ONCE and written through a raw pointer.
+    : i esz ( st_dtype_size dt )
+    // The elements read, checked once: a loop to `count` over this window
+    // and the output's needs no check per byte.
+    : ( Slice u ) p ( slice_window [u] ( mapped_bytes . s file ) + off * first esz * count esz )
+    // The output is SIZED ONCE and written through a view of it.
     //
     // The obvious loop — push four bytes per element — pays a capacity check per
     // byte, and a 378-million-element F16 checkpoint is 1.5 BILLION of them: it
     // cost 11.3 seconds of a whisper transcription, while reading the same 1.5 GB
     // off disk takes 0.25 s. Same arithmetic, same result, one allocation.
-    : ( Vec u ) out ( vec_with_cap [u] * count 4 )
-    : b _sz ( vec_set_len [u] out * count 4 )
-    : *u q ( vec_data [u] out )
+    // F32 is what the result holds: the bytes themselves, one copy.
+    ? == dt ST_F32 { ^ @ !( Vec u ) String { T ( slice_to_vec [u] p ) } } {}
+    : ( Vec u ) out ( vec_zeroed [u] * count 4 )
+    : ( Slice u ) q ( slice_window [u] ( slice_from_vec [u] out ) 0 * count 4 )
     : ~ i k 0
-    ~ < k count {
-        : f v ( __st_read_f p dt + first k )
-        : i bits # i ( f32_to_bits # f32 v )
-        : i o * k 4
-        = . q o # u & bits 255
-        = . q + o 1 # u & >> bits 8 255
-        = . q + o 2 # u & >> bits 16 255
-        = . q + o 3 # u & >> bits 24 255
-        = k + k 1
-    }
+    ? == dt ST_F16 {
+        ~ < k count {
+            : i bits ( f16_bits_to_f32_bits ( __st_u16 p * k 2 ) )
+            ( slice_put_u32_le q * k 4 bits )
+            = k + k 1
+        }
+    } { ? == dt ST_BF16 {
+            ~ < k count {
+                : i bits << ( __st_u16 p * k 2 ) 16
+                ( slice_put_u32_le q * k 4 bits )
+                = k + k 1
+            }
+        } {
+            ~ < k count {
+                : f v ( __st_read_f p dt k )
+                ( slice_put_u32_le q * k 4 # i ( f32_to_bits # f32 v ) )
+                = k + k 1
+            }
+        } }
     ^ @ !( Vec u ) String { T out }
 }
 
-unsafe @ st_dequant St s__h i idx → !( Vec u ) String {
-    : *StImpl s ( __St_ptr s__h )
+@ st_dequant St h i idx → !( Vec u ) String {
+    : StImpl s ( arc_get [StImpl] . h a )
     ? | < idx 0 >= idx ( vec_len [StTensor] . s tensors ) {
         ^ ( __st_err_vec `safetensor: tensor index out of range` )
     } {}
@@ -567,5 +530,5 @@ unsafe @ st_dequant St s__h i idx → !( Vec u ) String {
         T t → { = ne . t nelems }
         F → {}
     }
-    ^ ( st_dequant_range s__h idx 0 ne )
+    ^ ( st_dequant_range h idx 0 ne )
 }

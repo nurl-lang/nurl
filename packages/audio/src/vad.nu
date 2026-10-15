@@ -23,7 +23,7 @@
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/float.nu`
 $ `stdlib/std/sort.nu`
-$ `stdlib/std/arc.nu`
+$ `stdlib/std/thread.nu`
 
 : VadSeg {
     i start  // first sample
@@ -311,38 +311,21 @@ $ `stdlib/std/arc.nu`
     i seg_end
 }
 
-// A VadStream is a handle on its state in an Arc (stdlib/std/arc.nu):
-// every copy is the same stream, and the last owner releases it.
-: VadStream { ( Arc VadStreamImpl ) a }
+// A VadStream is a handle on its state in a Locked (stdlib/std/thread.nu):
+// every copy is the same stream — one thread may push while another polls
+// and takes — and the last owner releases it. Each call checks the state
+// out for its length.
+: VadStream { ( Locked VadStreamImpl ) l }
 
-@ VadStream_share VadStream h → VadStream { ^ @ VadStream { ( arc_clone [VadStreamImpl] . h a ) } }
+@ VadStream_share VadStream h → VadStream { ^ @ VadStream { ( Locked_share [VadStreamImpl] . h l ) } }
 
 @ VadStream_drop sink VadStream h → v {}
 
-unsafe @ __VadStream_ptr VadStream h → *VadStreamImpl { ^ ( arc_ptr [VadStreamImpl] . h a ) }
-
-unsafe @ vad_stream_new i rate VadOpts o → VadStream {
-    : ~ VadStreamImpl st @ VadStreamImpl {}
-    = . st buf ( vec_new [f] )
-    = . st base 0
-    = . st nframe 0
-    = . st e ( vec_new [f] )
-    = . st e0 0
-    = . st rate rate
-    = . st win / * rate 30 1000
-    = . st hop / * rate 10 1000
-    = . st margin . o margin_db
-    = . st min_speech / . o min_speech_ms 10
-    = . st min_sil / . o min_silence_ms 10
-    = . st pad / * . o pad_ms rate 1000
-    = . st force * rate 28
-    = . st run_start -1
-    = . st last_voiced -1
-    = . st floor 0.0
-    = . st floor_at -1
-    = . st seg_start -1
-    = . st seg_end -1
-    ^ @ VadStream { ( arc_new [VadStreamImpl] st ) }
+@ vad_stream_new i rate VadOpts o → VadStream {
+    ^ @ VadStream { ( locked_new [VadStreamImpl] @ VadStreamImpl {
+            ( vec_new [f] ) 0 0 ( vec_new [f] ) 0 rate / * rate 30 1000 / * rate 10 1000
+            . o margin_db / . o min_speech_ms 10 / . o min_silence_ms 10 / * . o pad_ms rate 1000
+            * rate 28 -1 -1 0.0 -1 -1 -1 } ) }
 }
 
 // Let go of `st` now rather than at the end of its owner's scope.
@@ -350,7 +333,7 @@ unsafe @ vad_stream_new i rate VadOpts o → VadStream {
 
 // The trailing-minute percentile. ~6000 energies at most; sorting a copy once
 // a second is nothing next to one second of audio.
-unsafe @ __vads_refloor * VadStreamImpl st → v {
+@ __vads_refloor inout VadStreamImpl st → v {
     : i n ( vec_len [f] . st e )
     ? < n 30 { ^ {} } {}
     : ( Vec f ) s ( vec_new [f] )
@@ -366,7 +349,7 @@ unsafe @ __vads_refloor * VadStreamImpl st → v {
 }
 
 // Close the run [run_frame, end_frame) into the pending segment slot.
-unsafe @ __vads_close * VadStreamImpl st i run_frame i end_frame → v {
+@ __vads_close inout VadStreamImpl st i run_frame i end_frame → v {
     : ~ i s0 - * run_frame . st hop . st pad
     ? < s0 . st base { = s0 . st base } {}
     : ~ i s1 + * end_frame . st hop . st pad
@@ -379,17 +362,18 @@ unsafe @ __vads_close * VadStreamImpl st i run_frame i end_frame → v {
 // Feed samples. Frames are processed up to the data (or up to a pending
 // segment — one is handed over at a time, and processing resumes after
 // vad_stream_take).
-unsafe @ vad_stream_push VadStream st__h ( Vec f ) x → v {
-    : *VadStreamImpl st ( __VadStream_ptr st__h )
+@ vad_stream_push VadStream st__h ( Vec f ) x → v {
+    : ~ VadStreamImpl st ( locked_take [VadStreamImpl] . st__h l )
     : ~ i k 0
     ~ < k ( vec_len [f] x ) {
         ( vec_push [f] . st buf ( __vad_get x k ) )
         = k + k 1
     }
     ( __vads_process st )
+    ( locked_restore [VadStreamImpl] . st__h l st )
 }
 
-unsafe @ __vads_process * VadStreamImpl st → v {
+@ __vads_process inout VadStreamImpl st → v {
     ~ & == . st seg_start -1
     <= + * . st nframe . st hop . st win + . st base ( vec_len [f] . st buf ) {
         : i f . st nframe
@@ -452,7 +436,7 @@ unsafe @ __vads_process * VadStreamImpl st → v {
 }
 
 // Drop buffer prefix below absolute sample `abs`.
-unsafe @ __vads_drop * VadStreamImpl st i abs → v {
+@ __vads_drop inout VadStreamImpl st i abs → v {
     : i off - abs . st base
     ? <= off 0 { ^ {} } {}
     : ( Vec f ) nb ( vec_new [f] )
@@ -467,23 +451,27 @@ unsafe @ __vads_drop * VadStreamImpl st i abs → v {
 }
 
 // Is a closed segment waiting?
-unsafe @ vad_stream_poll VadStream st__h → b {
-    : *VadStreamImpl st ( __VadStream_ptr st__h )
-    ^ != . st seg_start -1
+@ vad_stream_poll VadStream st__h → b {
+    : VadStreamImpl st ( locked_take [VadStreamImpl] . st__h l )
+    : b r != . st seg_start -1
+    ( locked_restore [VadStreamImpl] . st__h l st )
+    ^ r
 }
 
 // Where the pending segment sits, in absolute samples since stream start.
-unsafe @ vad_stream_seg VadStream st__h → VadSeg {
-    : *VadStreamImpl st ( __VadStream_ptr st__h )
-    ^ @ VadSeg { . st seg_start . st seg_end }
+@ vad_stream_seg VadStream st__h → VadSeg {
+    : VadStreamImpl st ( locked_take [VadStreamImpl] . st__h l )
+    : VadSeg r @ VadSeg { . st seg_start . st seg_end }
+    ( locked_restore [VadStreamImpl] . st__h l st )
+    ^ r
 }
 
 // The pending segment's audio. Clears the slot, releases what came before
 // it, and resumes frame processing.
-unsafe @ vad_stream_take VadStream st__h → ( Vec f ) {
-    : *VadStreamImpl st ( __VadStream_ptr st__h )
+@ vad_stream_take VadStream st__h → ( Vec f ) {
+    : ~ VadStreamImpl st ( locked_take [VadStreamImpl] . st__h l )
     : ( Vec f ) out ( vec_new [f] )
-    ? == . st seg_start -1 { ^ out } {}
+    ? == . st seg_start -1 { ( locked_restore [VadStreamImpl] . st__h l st ) ^ out } {}
     : ~ i k - . st seg_start . st base
     : i to - . st seg_end . st base
     ~ < k to {
@@ -495,19 +483,21 @@ unsafe @ vad_stream_take VadStream st__h → ( Vec f ) {
     = . st seg_end -1
     ( __vads_drop st e2 )
     ( __vads_process st )
+    ( locked_restore [VadStreamImpl] . st__h l st )
     ^ out
 }
 
 // End of stream: close an open run (if it was ever long enough to be
 // speech). T = a segment is now pending.
-unsafe @ vad_stream_flush VadStream st__h → b {
-    : *VadStreamImpl st ( __VadStream_ptr st__h )
-    ? != . st seg_start -1 { ^ T } {}
-    ? >= . st run_start 0 {
+@ vad_stream_flush VadStream st__h → b {
+    : ~ VadStreamImpl st ( locked_take [VadStreamImpl] . st__h l )
+    ? & == . st seg_start -1 >= . st run_start 0 {
         ? >= - + . st last_voiced 1 . st run_start . st min_speech {
             ( __vads_close st . st run_start + . st last_voiced 1 )
         } {}
         = . st run_start -1
     } {}
-    ^ != . st seg_start -1
+    : b r != . st seg_start -1
+    ( locked_restore [VadStreamImpl] . st__h l st )
+    ^ r
 }

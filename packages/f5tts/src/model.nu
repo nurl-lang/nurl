@@ -35,6 +35,7 @@ $ `deps/torchpt/src/pickle.nu`
 $ `deps/torchpt/src/torchpt.nu`
 $ `kernels.nu`
 $ `stdlib/std/arc.nu`
+$ `stdlib/std/thread.nu`
 
 : f F5_PI 3.14159265358979323846
 
@@ -123,13 +124,11 @@ $ `stdlib/std/arc.nu`
 
 // An F5Model is a handle on its state in an Arc (stdlib/std/arc.nu):
 // every copy is the same engine, and the last owner releases it.
-: F5Model { ( Arc F5ModelImpl ) a }
+: F5Model { ( Locked F5ModelImpl ) l }
 
-@ F5Model_share F5Model h → F5Model { ^ @ F5Model { ( arc_clone [F5ModelImpl] . h a ) } }
+@ F5Model_share F5Model h → F5Model { ^ @ F5Model { ( Locked_share [F5ModelImpl] . h l ) } }
 
 @ F5Model_drop sink F5Model h → v {}
-
-unsafe @ __F5Model_ptr F5Model h → *F5ModelImpl { ^ ( arc_ptr [F5ModelImpl] . h a ) }
 
 @ __f5m_err s msg → !F5Model String {
     ^ @ !F5Model String { F ( string_from msg ) }
@@ -168,21 +167,21 @@ unsafe @ __F5Model_ptr F5Model h → *F5ModelImpl { ^ ( arc_ptr [F5ModelImpl] . 
 //   model_state_dict.transformer.               the same checkpoint's live weights
 //   transformer.                                a bare state dict
 //
-unsafe @ __f5m_src_find * F5ModelImpl m s name → i {
+@ __f5m_src_find inout F5ModelImpl m s name → i {
     ?? . m st { T sf → { ^ ( st_find_tensor sf name ) } F → {} }
     ?? . m pt { T pf → { ^ ( pt_find pf name ) } F → {} }
     ^ -1
 }
 
 // The same, with this checkpoint's prefix in front.
-unsafe @ __f5m_src_find_p * F5ModelImpl m s rest → i {
+@ __f5m_src_find_p inout F5ModelImpl m s rest → i {
     : String full ( string_clone . m prefix )
     ( string_push_str full rest )
     : i idx ( __f5m_src_find m ( string_data full ) )
     ^ idx
 }
 
-unsafe @ __f5m_src_nelems * F5ModelImpl m i idx → i {
+@ __f5m_src_nelems inout F5ModelImpl m i idx → i {
     ?? . m st {
         T sf → {
             ?? ( vec_get [StTensor] ( st_tensors sf ) idx ) {
@@ -196,7 +195,7 @@ unsafe @ __f5m_src_nelems * F5ModelImpl m i idx → i {
     ^ 0
 }
 
-unsafe @ __f5m_src_dim * F5ModelImpl m i idx i k → i {
+@ __f5m_src_dim inout F5ModelImpl m i idx i k → i {
     ?? . m st {
         T sf → {
             ?? ( vec_get [StTensor] ( st_tensors sf ) idx ) {
@@ -215,7 +214,7 @@ unsafe @ __f5m_src_dim * F5ModelImpl m i idx i k → i {
     ^ 0
 }
 
-unsafe @ __f5m_src_f32 * F5ModelImpl m i idx → b {
+@ __f5m_src_f32 inout F5ModelImpl m i idx → b {
     ?? . m st {
         T sf → {
             ?? ( vec_get [StTensor] ( st_tensors sf ) idx ) {
@@ -234,33 +233,35 @@ unsafe @ __f5m_src_f32 * F5ModelImpl m i idx → b {
     ^ F
 }
 
-unsafe @ __f5m_src_ptr * F5ModelImpl m i idx → *u {
+// Tensor `idx`'s bytes in the checkpoint, as a checked view (empty when
+// there is no such tensor).
+@ __f5m_src_bytes F5ModelImpl m i idx → ( Slice u ) {
     ?? . m st {
         T sf → {
             ?? ( vec_get [StTensor] ( st_tensors sf ) idx ) {
-                T t → { ^ ( st_tensor_ptr sf t ) }
-                F → { ^ # *u 0 }
+                T t → { ^ ( st_tensor_bytes sf t ) }
+                F → { ^ ( slice_empty [u] ) }
             }
         }
         F → {}
     }
-    ?? . m pt { T pf → { ^ ( pt_tensor_ptr pf idx ) } F → {} }
-    ^ # *u 0
+    ?? . m pt { T pf → { ^ ( pt_tensor_bytes pf idx ) } F → {} }
+    ^ ( slice_empty [u] )
 }
 
-unsafe @ __f5m_up * F5ModelImpl m s name → GkBuf {
+@ __f5m_up inout F5ModelImpl m s name → GkBuf {
     : i ti ( __f5m_src_find m name )
     ? < ti 0 { ^ ( __f5m_nobuf ) } {}
     ? ( __f5m_src_f32 m ti ) {} { ^ ( __f5m_nobuf ) }
     : GkBuf b ( gk_dbuf_new . m kit ( __f5m_src_nelems m ti ) GK_F32 )
     ? ( gk_buf_ok b ) {} { ^ ( __f5m_nobuf ) }
-    ? ( gk_dbuf_upload_raw . m kit b ( __f5m_src_ptr m ti ) ) {} {
+    ? ( gk_dbuf_upload_bytes . m kit b ( __f5m_src_bytes m ti ) ) {} {
         ^ ( __f5m_nobuf )
     }
     ^ b
 }
 
-unsafe @ __f5m_name * F5ModelImpl m s pre i k s suf → String {
+@ __f5m_name inout F5ModelImpl m s pre i k s suf → String {
     : String s ( string_clone . m prefix )
     ( string_push_str s pre )
     ( string_push_int s k )
@@ -276,16 +277,20 @@ unsafe @ __f5m_name * F5ModelImpl m s pre i k s suf → String {
     ^ s
 }
 
-unsafe @ __f5m_up1 * F5ModelImpl m s suf → GkBuf {
+@ __f5m_up1 inout F5ModelImpl m s suf → GkBuf {
     : String s ( string_clone . m prefix )
     ( string_push_str s suf )
     : GkBuf b ( __f5m_up m ( string_data s ) )
     ^ b
 }
 
-unsafe @ __f5m_upl * F5ModelImpl m s pre i k s suf ( Vec GkBuf ) dst → b {
+@ __f5m_upl inout F5ModelImpl m s pre i k s suf → GkBuf {
     : String s ( __f5m_name m pre k suf )
-    : GkBuf b ( __f5m_up m ( string_data s ) )
+    ^ ( __f5m_up m ( string_data s ) )
+}
+
+// Append `b` to a layer list; whether it is a real buffer.
+@ __f5m_push ( Vec GkBuf ) dst sink GkBuf b → b {
     : b ok ( gk_buf_ok b )
     ( vec_push [GkBuf] dst b )
     ^ ok
@@ -297,7 +302,7 @@ unsafe @ __f5m_upl * F5ModelImpl m s pre i k s suf ( Vec GkBuf ) dst → b {
 // between one coalesced read and thirty-two scattered ones — and on the
 // position embedding's 31-tap grouped convolution it was 70 % of a whole
 // synthesis.
-unsafe @ __f5m_up_convw * F5ModelImpl m s name → GkBuf {
+@ __f5m_up_convw inout F5ModelImpl m s name → GkBuf {
     : i ti ( __f5m_src_find m name )
     ? < ti 0 { ^ ( __f5m_nobuf ) } {}
     ? ( __f5m_src_f32 m ti ) {} { ^ ( __f5m_nobuf ) }
@@ -308,7 +313,7 @@ unsafe @ __f5m_up_convw * F5ModelImpl m s name → GkBuf {
     : i ne ( __f5m_src_nelems m ti )
     ? & & > cout 0 > ipg 0 > K 0 {} { ^ ( __f5m_nobuf ) }
     ? == ne * cout * ipg K {} { ^ ( __f5m_nobuf ) }
-    : *u base ( __f5m_src_ptr m ti )
+    : ( Slice u ) base ( __f5m_src_bytes m ti )
     : ( Vec f ) perm ( vec_with_cap [f] ne )
     : ~ i k 0
     ~ < k K {
@@ -316,7 +321,7 @@ unsafe @ __f5m_up_convw * F5ModelImpl m s name → GkBuf {
         ~ < j ipg {
             : ~ i c 0
             ~ < c cout {
-                ( vec_push [f] perm # f ( bits_to_f32 ( __f5m_u32 base * 4 + * + * c ipg j K k ) ) )
+                ( vec_push [f] perm # f ( bits_to_f32 ( slice_u32_le base * 4 + * + * c ipg j K k ) ) )
                 = c + c 1
             }
             = j + j 1
@@ -330,19 +335,16 @@ unsafe @ __f5m_up_convw * F5ModelImpl m s name → GkBuf {
     ^ b
 }
 
-unsafe @ __f5m_up_convw1 * F5ModelImpl m s suf → GkBuf {
+@ __f5m_up_convw1 inout F5ModelImpl m s suf → GkBuf {
     : String s ( string_clone . m prefix )
     ( string_push_str s suf )
     : GkBuf b ( __f5m_up_convw m ( string_data s ) )
     ^ b
 }
 
-unsafe @ __f5m_up_convwl * F5ModelImpl m s pre i idx s suf ( Vec GkBuf ) dst → b {
+@ __f5m_up_convwl inout F5ModelImpl m s pre i idx s suf → GkBuf {
     : String s ( __f5m_name m pre idx suf )
-    : GkBuf b ( __f5m_up_convw m ( string_data s ) )
-    : b ok ( gk_buf_ok b )
-    ( vec_push [GkBuf] dst b )
-    ^ ok
+    ^ ( __f5m_up_convw m ( string_data s ) )
 }
 
 // The three attention projections read the SAME normalised activation and
@@ -351,7 +353,7 @@ unsafe @ __f5m_up_convwl * F5ModelImpl m s pre i idx s suf ( Vec GkBuf ) dst →
 // output in 48 column tiles against 16, which is the difference between
 // leaving a quarter of a wave empty and filling it — 28.5 against 22.9
 // TFLOP/s, measured on the shapes this model runs.
-unsafe @ __f5m_up_stack3 * F5ModelImpl m i idx s a s b s c i rows i cols ( Vec GkBuf ) dst → b {
+@ __f5m_up_stack3 inout F5ModelImpl m i idx s a s b s c i rows i cols → GkBuf {
     : ( Vec i ) tis ( vec_new [i] )
     : String n1 ( __f5m_name m `transformer_blocks.` idx a )
     : String n2 ( __f5m_name m `transformer_blocks.` idx b )
@@ -361,10 +363,7 @@ unsafe @ __f5m_up_stack3 * F5ModelImpl m i idx s a s b s c i rows i cols ( Vec G
     ( vec_push [i] tis ( __f5m_src_find m ( string_data n3 ) ) )
     : i want * rows cols
     : GkBuf big ( gk_dbuf_new . m kit * 3 want GK_F32 )
-    ? ( gk_buf_ok big ) {} {
-        ( vec_push [GkBuf] dst ( __f5m_nobuf ) )
-        ^ F
-    }
+    ? ( gk_buf_ok big ) {} { ^ ( __f5m_nobuf ) }
     : ~ b ok T
     : ~ i p 0
     ~ < p 3 {
@@ -373,16 +372,12 @@ unsafe @ __f5m_up_stack3 * F5ModelImpl m i idx s a s b s c i rows i cols ( Vec G
         ? ok { ? & ( __f5m_src_f32 m ti ) == ( __f5m_src_nelems m ti ) want {} { = ok F } } {}
         ? ok {
             : GkBuf slot ( __f5m_view big * p want want )
-            = ok ( gk_dbuf_upload_raw . m kit slot ( __f5m_src_ptr m ti ) )
+            = ok ( gk_dbuf_upload_bytes . m kit slot ( __f5m_src_bytes m ti ) )
         } {}
         = p + p 1
     }
-    ? ok {} {
-        ( vec_push [GkBuf] dst ( __f5m_nobuf ) )
-        ^ F
-    }
-    ( vec_push [GkBuf] dst big )
-    ^ T
+    ? ok {} { ^ ( __f5m_nobuf ) }
+    ^ big
 }
 
 // The 22 blocks' timestep projections, stacked into ONE matrix.
@@ -394,7 +389,7 @@ unsafe @ __f5m_up_stack3 * F5ModelImpl m i idx s a s b s c i rows i cols ( Vec G
 // Stacked, the whole step is one GEMM — and since the timesteps are known
 // before the loop starts, ALL of them are one GEMM, so those 554 MB are read
 // once per utterance instead of once per step.
-unsafe @ __f5m_up_stack_mod * F5ModelImpl m → b {
+@ __f5m_up_stack_mod inout F5ModelImpl m → b {
     : i per * * 6 . m dim . m dim
     : i pb * 6 . m dim
     : GkBuf w ( gk_dbuf_new . m kit * . m depth per GK_F32 )
@@ -413,11 +408,11 @@ unsafe @ __f5m_up_stack_mod * F5ModelImpl m → b {
         ? ok { ? == ( __f5m_src_nelems m tw ) per {} { = ok F } } {}
         ? ok {
             : GkBuf slot ( __f5m_view w * k per per )
-            = ok ( gk_dbuf_upload_raw . m kit slot ( __f5m_src_ptr m tw ) )
+            = ok ( gk_dbuf_upload_bytes . m kit slot ( __f5m_src_bytes m tw ) )
         } {}
         ? ok {
             : GkBuf slot ( __f5m_view b * k pb pb )
-            = ok ( gk_dbuf_upload_raw . m kit slot ( __f5m_src_ptr m tb ) )
+            = ok ( gk_dbuf_upload_bytes . m kit slot ( __f5m_src_bytes m tb ) )
         } {}
         = k + k 1
     }
@@ -429,40 +424,40 @@ unsafe @ __f5m_up_stack_mod * F5ModelImpl m → b {
     ^ T
 }
 
-unsafe @ __f5m_layers * F5ModelImpl m → b {
+@ __f5m_layers inout F5ModelImpl m → b {
     : ~ b ok ( __f5m_up_stack_mod m )
     : ~ i k 0
     ~ < k . m nconv {
-        = ok & ok ( __f5m_up_convwl m `text_embed.text_blocks.` k `.dwconv.weight` . m tb_dw_w )
-        = ok & ok ( __f5m_upl m `text_embed.text_blocks.` k `.dwconv.bias` . m tb_dw_b )
-        = ok & ok ( __f5m_upl m `text_embed.text_blocks.` k `.norm.weight` . m tb_n_w )
-        = ok & ok ( __f5m_upl m `text_embed.text_blocks.` k `.norm.bias` . m tb_n_b )
-        = ok & ok ( __f5m_upl m `text_embed.text_blocks.` k `.pwconv1.weight` . m tb_p1_w )
-        = ok & ok ( __f5m_upl m `text_embed.text_blocks.` k `.pwconv1.bias` . m tb_p1_b )
-        = ok & ok ( __f5m_upl m `text_embed.text_blocks.` k `.grn.gamma` . m tb_gg )
-        = ok & ok ( __f5m_upl m `text_embed.text_blocks.` k `.grn.beta` . m tb_gb )
-        = ok & ok ( __f5m_upl m `text_embed.text_blocks.` k `.pwconv2.weight` . m tb_p2_w )
-        = ok & ok ( __f5m_upl m `text_embed.text_blocks.` k `.pwconv2.bias` . m tb_p2_b )
+        = ok & ok ( __f5m_push . m tb_dw_w ( __f5m_up_convwl m `text_embed.text_blocks.` k `.dwconv.weight` ) )
+        = ok & ok ( __f5m_push . m tb_dw_b ( __f5m_upl m `text_embed.text_blocks.` k `.dwconv.bias` ) )
+        = ok & ok ( __f5m_push . m tb_n_w ( __f5m_upl m `text_embed.text_blocks.` k `.norm.weight` ) )
+        = ok & ok ( __f5m_push . m tb_n_b ( __f5m_upl m `text_embed.text_blocks.` k `.norm.bias` ) )
+        = ok & ok ( __f5m_push . m tb_p1_w ( __f5m_upl m `text_embed.text_blocks.` k `.pwconv1.weight` ) )
+        = ok & ok ( __f5m_push . m tb_p1_b ( __f5m_upl m `text_embed.text_blocks.` k `.pwconv1.bias` ) )
+        = ok & ok ( __f5m_push . m tb_gg ( __f5m_upl m `text_embed.text_blocks.` k `.grn.gamma` ) )
+        = ok & ok ( __f5m_push . m tb_gb ( __f5m_upl m `text_embed.text_blocks.` k `.grn.beta` ) )
+        = ok & ok ( __f5m_push . m tb_p2_w ( __f5m_upl m `text_embed.text_blocks.` k `.pwconv2.weight` ) )
+        = ok & ok ( __f5m_push . m tb_p2_b ( __f5m_upl m `text_embed.text_blocks.` k `.pwconv2.bias` ) )
         = k + k 1
     }
     = k 0
     ~ < k . m depth {
-        = ok & ok ( __f5m_up_stack3 m k `.attn.to_q.weight` `.attn.to_k.weight`
-        `.attn.to_v.weight` . m dim . m dim . m wqkv )
-        = ok & ok ( __f5m_up_stack3 m k `.attn.to_q.bias` `.attn.to_k.bias`
-        `.attn.to_v.bias` 1 . m dim . m bqkv )
-        = ok & ok ( __f5m_upl m `transformer_blocks.` k `.attn.to_out.0.weight` . m wo )
-        = ok & ok ( __f5m_upl m `transformer_blocks.` k `.attn.to_out.0.bias` . m bo )
-        = ok & ok ( __f5m_upl m `transformer_blocks.` k `.ff.ff.0.0.weight` . m f1_w )
-        = ok & ok ( __f5m_upl m `transformer_blocks.` k `.ff.ff.0.0.bias` . m f1_b )
-        = ok & ok ( __f5m_upl m `transformer_blocks.` k `.ff.ff.2.weight` . m f2_w )
-        = ok & ok ( __f5m_upl m `transformer_blocks.` k `.ff.ff.2.bias` . m f2_b )
+        = ok & ok ( __f5m_push . m wqkv ( __f5m_up_stack3 m k `.attn.to_q.weight` `.attn.to_k.weight`
+        `.attn.to_v.weight` . m dim . m dim ) )
+        = ok & ok ( __f5m_push . m bqkv ( __f5m_up_stack3 m k `.attn.to_q.bias` `.attn.to_k.bias`
+        `.attn.to_v.bias` 1 . m dim ) )
+        = ok & ok ( __f5m_push . m wo ( __f5m_upl m `transformer_blocks.` k `.attn.to_out.0.weight` ) )
+        = ok & ok ( __f5m_push . m bo ( __f5m_upl m `transformer_blocks.` k `.attn.to_out.0.bias` ) )
+        = ok & ok ( __f5m_push . m f1_w ( __f5m_upl m `transformer_blocks.` k `.ff.ff.0.0.weight` ) )
+        = ok & ok ( __f5m_push . m f1_b ( __f5m_upl m `transformer_blocks.` k `.ff.ff.0.0.bias` ) )
+        = ok & ok ( __f5m_push . m f2_w ( __f5m_upl m `transformer_blocks.` k `.ff.ff.2.weight` ) )
+        = ok & ok ( __f5m_push . m f2_b ( __f5m_upl m `transformer_blocks.` k `.ff.ff.2.bias` ) )
         = k + k 1
     }
     ^ ok
 }
 
-unsafe @ __f5m_veclists * F5ModelImpl m → v {
+@ __f5m_veclists inout F5ModelImpl m → v {
     = . m tb_dw_w ( vec_new [GkBuf] )
     = . m tb_dw_b ( vec_new [GkBuf] )
     = . m tb_n_w ( vec_new [GkBuf] )
@@ -527,7 +522,7 @@ unsafe @ __f5m_veclists * F5ModelImpl m → v {
 // through the engine's pointer does not drop what it overwrites, so each
 // leaves through a take and is dropped when this returns — back in the pool
 // before the caller allocates the next utterance's.
-unsafe @ __f5m_scratch_zero * F5ModelImpl m → v {
+@ __f5m_scratch_zero inout F5ModelImpl m → v {
     = . m n 0
     = . m batch 0
     = . m ready F
@@ -538,14 +533,14 @@ unsafe @ __f5m_scratch_zero * F5ModelImpl m → v {
 }
 
 // The modulation schedule leaves the engine (dropped when this returns).
-unsafe @ __f5m_drop_mods * F5ModelImpl m → v {
+@ __f5m_drop_mods inout F5ModelImpl m → v {
     = . m mod_all ( __f5m_nobuf )
     = . m mod2_all ( __f5m_nobuf )
 }
 
 // The single-tensor weights leave the engine (dropped when this returns);
 // the per-layer lists are emptied by vec_clear, which drops their elements.
-unsafe @ __f5m_drop_top * F5ModelImpl m → v {
+@ __f5m_drop_top inout F5ModelImpl m → v {
     = . m tm0_w ( __f5m_nobuf )
     = . m tm0_b ( __f5m_nobuf )
     = . m tm2_w ( __f5m_nobuf )
@@ -568,7 +563,7 @@ unsafe @ __f5m_drop_top * F5ModelImpl m → v {
 // Every weight, from the mapping to the device. Split out of f5_open because
 // --unload-after calls it again: a server that has been idle gives the card
 // back and pays this to answer the next request.
-unsafe @ __f5m_upload_all * F5ModelImpl m → b {
+@ __f5m_upload_all inout F5ModelImpl m → b {
     ( vec_clear [GkBuf] . m tb_dw_w ) ( vec_clear [GkBuf] . m tb_dw_b )
     ( vec_clear [GkBuf] . m tb_n_w ) ( vec_clear [GkBuf] . m tb_n_b )
     ( vec_clear [GkBuf] . m tb_p1_w ) ( vec_clear [GkBuf] . m tb_p1_b )
@@ -605,7 +600,7 @@ unsafe @ __f5m_upload_all * F5ModelImpl m → b {
 // Which of the four prefixes this checkpoint actually uses, found by asking
 // for a tensor every F5-TTS has. Empty when none of them do, which is what a
 // file that is not an F5-TTS checkpoint looks like from here.
-unsafe @ __f5m_probe_prefix * F5ModelImpl m → String {
+@ __f5m_probe_prefix inout F5ModelImpl m → String {
     : ( Vec String ) cands ( vec_new [String] )
     ( vec_push [String] cands ( string_from `ema_model.transformer.` ) )
     ( vec_push [String] cands ( string_from `ema_model_state_dict.ema_model.transformer.` ) )
@@ -638,7 +633,7 @@ unsafe @ __f5m_probe_prefix * F5ModelImpl m → String {
 // long, the feed-forward's first matrix is [ff_mult*dim, dim], and the depth
 // is however many transformer_blocks.N there are. So F5TTS_Base, _Small, v1
 // and a finetune of any of them all load without being told which they are.
-unsafe @ __f5m_read_arch * F5ModelImpl m → b {
+@ __f5m_read_arch inout F5ModelImpl m → b {
     : i po ( __f5m_src_find_p m `proj_out.weight` )
     ? >= po 0 {} { ^ F }
     = . m mel ( __f5m_src_dim m po 0 )
@@ -668,7 +663,7 @@ unsafe @ __f5m_read_arch * F5ModelImpl m → b {
     ^ F
 }
 
-unsafe @ __f5m_arch_ok * F5ModelImpl m i depth → b {
+@ __f5m_arch_ok inout F5ModelImpl m i depth → b {
     = . m depth depth
     : ~ i nconv 0
     ~ T {
@@ -684,17 +679,30 @@ unsafe @ __f5m_arch_ok * F5ModelImpl m i depth → b {
     ^ F
 }
 
+// An engine with nothing in it: every buffer the null one, every list
+// empty — what f5_open fills in, field by field.
+@ __f5m_blank → F5ModelImpl {
+    ^ @ F5ModelImpl {
+        ( gk_none ) @ ?St { F } @ ?Pt { F } ( string_new ) 0 0 0 0 0 0 0 0 0 0 0 0
+        ( __f5m_nobuf ) ( __f5m_nobuf ) ( __f5m_nobuf ) ( __f5m_nobuf ) ( __f5m_nobuf )
+        ( vec_new [GkBuf] ) ( vec_new [GkBuf] ) ( vec_new [GkBuf] ) ( vec_new [GkBuf] )
+        ( vec_new [GkBuf] ) ( vec_new [GkBuf] ) ( vec_new [GkBuf] ) ( vec_new [GkBuf] )
+        ( vec_new [GkBuf] ) ( vec_new [GkBuf] ) ( __f5m_nobuf ) ( __f5m_nobuf ) ( __f5m_nobuf )
+        ( __f5m_nobuf ) ( __f5m_nobuf ) ( __f5m_nobuf ) ( __f5m_nobuf ) ( __f5m_nobuf )
+        ( __f5m_nobuf ) ( __f5m_nobuf ) 0 0 ( vec_new [GkBuf] ) ( vec_new [GkBuf] )
+        ( vec_new [GkBuf] ) ( vec_new [GkBuf] ) ( vec_new [GkBuf] ) ( vec_new [GkBuf] )
+        ( vec_new [GkBuf] ) ( vec_new [GkBuf] ) ( vec_new [GkBuf] ) ( vec_new [GkBuf] )
+        ( vec_new [GkBuf] ) ( vec_new [GkBuf] ) ( vec_new [GkBuf] ) ( vec_new [GkBuf] )
+        ( __f5m_nobuf ) ( __f5m_nobuf ) ( __f5m_nobuf ) ( __f5m_nobuf ) 0 0
+        ( __f5m_scratch_none ) F F }
+}
+
 // A checkpoint is a path to a .safetensors or a .pt. Which container, which
 // prefix and which architecture are all read out of the file: nothing here is
 // told what it is about to open.
-unsafe @ f5_open s ckpt s vocab_path i device → !F5Model String {
-    // zeroed: every handle field starts as the null handle, so an early
-    // return drops a half-built engine cleanly
-    : F5Model h @ F5Model { ( arc_zero [F5ModelImpl] ) }
-    : *F5ModelImpl m ( __F5Model_ptr h )
-    = . m st @ ?St { F }
-    = . m pt @ ?Pt { F }
-    = . m prefix ( string_new )
+@ f5_open s ckpt s vocab_path i device → !F5Model String {
+    // blank: an early return drops a half-built engine cleanly
+    : ~ F5ModelImpl m ( __f5m_blank )
     : b is_pt | ( nurl_str_ends ckpt `.pt` ) | ( nurl_str_ends ckpt `.pth` ) ( nurl_str_ends ckpt `.bin` )
     ? is_pt {
         ?? ( pt_open ckpt ) {
@@ -711,16 +719,10 @@ unsafe @ f5_open s ckpt s vocab_path i device → !F5Model String {
     ? ( gk_ok . m kit ) {} {
         ^ ( __f5m_err `f5tts: no GPU backend available (neither CUDA nor a host C++ compiler)` )
     }
-    ( __f5m_veclists m )
-    ( __f5m_scratch_zero m )
-    = . m an_all ( __f5m_nobuf )
-    = . m anb_all ( __f5m_nobuf )
     : String pfx ( __f5m_probe_prefix m )
     ? > ( string_len pfx ) 0 {} {
         ^ ( __f5m_err `f5tts: this file has no F5-TTS transformer in it (looked for proj_out.weight under every prefix a release uses)` )
     }
-    // the placeholder leaves through a take: a store through the pointer
-    // does not drop what it overwrites
     = . m prefix pfx
     ? ( __f5m_read_arch m ) {} {
         ^ ( __f5m_err `f5tts: the checkpoint's shapes do not describe a DiT` )
@@ -728,7 +730,7 @@ unsafe @ f5_open s ckpt s vocab_path i device → !F5Model String {
     ? ( __f5m_upload_all m ) {} {
         ^ ( __f5m_err `f5tts: the checkpoint is missing tensors this architecture needs` )
     }
-    ^ @ !F5Model String { T h }
+    ^ @ !F5Model String { T @ F5Model { ( locked_new [F5ModelImpl] m ) } }
 }
 
 // Free every buffer in the list but KEEP the list — an unload empties it and
@@ -737,15 +739,27 @@ unsafe @ f5_open s ckpt s vocab_path i device → !F5Model String {
 // weights, the scratch, the mapping and the kit.
 @ f5_close sink F5Model m → v {}
 
-unsafe @ f5_vocab_n F5Model m__h → i {
-    : *F5ModelImpl m ( __F5Model_ptr m__h )
+@ f5_vocab_n F5Model m__h → i {
+    : ~ F5ModelImpl m ( locked_take [F5ModelImpl] . m__h l )
+    : i __res ( __f5_vocab_n_in m )
+    ( locked_restore [F5ModelImpl] . m__h l m )
+    ^ __res
+}
+
+@ __f5_vocab_n_in inout F5ModelImpl m → i {
     ^ . m vocab
 }
 
 // ── per-generation buffers ──────────────────────────────────────────
 
-unsafe @ f5_alloc F5Model m__h i n i batch → b {
-    : *F5ModelImpl m ( __F5Model_ptr m__h )
+@ f5_alloc F5Model m__h i n i batch → b {
+    : ~ F5ModelImpl m ( locked_take [F5ModelImpl] . m__h l )
+    : b __res ( __f5_alloc_in m n batch )
+    ( locked_restore [F5ModelImpl] . m__h l m )
+    ^ __res
+}
+
+@ __f5_alloc_in inout F5ModelImpl m i n i batch → b {
     ( __f5m_scratch_zero m )
     : i rows * batch n
     : i dim . m dim
@@ -798,7 +812,7 @@ unsafe @ f5_alloc F5Model m__h i n i batch → b {
 
 // The rotary tables: one angle per PAIR of head features, the base 10000
 // exponent x_transformers uses.
-unsafe @ __f5m_rope_tables * F5ModelImpl m → b {
+@ __f5m_rope_tables inout F5ModelImpl m → b {
     : i n . m n
     : i half / . m hd 2
     : ( Vec f ) c ( vec_with_cap [f] * n half )
@@ -827,17 +841,13 @@ unsafe @ __f5m_rope_tables * F5ModelImpl m → b {
 // utterance, not once per ODE step — and everything after it is on the
 // device, because four ConvNeXt blocks over three thousand positions is not.
 
-unsafe @ __f5m_u32 * u p i off → i {
-    ^ | # i . p off | << # i . p + off 1 8 | << # i . p + off 2 16 << # i . p + off 3 24
-}
-
 // One row of the text encoder's INPUT: the character's embedding plus the
 // sinusoidal position code. F5-TTS spells that code as
 // `precompute_freqs_cis(text_dim, 8192)` — cos for the first half of the
 // features and sin for the second, over the same 256 frequencies — which is
 // NOT the layout its timestep embedding uses (sin first, then cos, over a
 // different frequency ladder). Two conventions, one model.
-unsafe @ __f5m_text_rows * F5ModelImpl m ( Vec i ) ids b drop ( Vec f ) out ( Vec f ) keep → v {
+@ __f5m_text_rows inout F5ModelImpl m ( Vec i ) ids b drop ( Vec f ) out ( Vec f ) keep → v {
     : i n . m n
     : i td . m td
     : i half / td 2
@@ -851,7 +861,7 @@ unsafe @ __f5m_text_rows * F5ModelImpl m ( Vec i ) ids b drop ( Vec f ) out ( Ve
         ( vec_push [f] inv / 1.0 ( pow 10000.0 / # f * 2 j # f td ) )
         = j + j 1
     }
-    : *u base ( __f5m_src_ptr m ti )
+    : ( Slice u ) base ( __f5m_src_bytes m ti )
     {
         : ~ i t 0
         ~ < t n {
@@ -873,7 +883,7 @@ unsafe @ __f5m_text_rows * F5ModelImpl m ( Vec i ) ids b drop ( Vec f ) out ( Ve
                 // it at every position, so skipping it as if id 0 meant
                 // "no embedding" leaves the unconditional forward with
                 // the position code and nothing else
-                : f w # f ( bits_to_f32 ( __f5m_u32 base * 4 + * id td j ) )
+                : f w # f ( bits_to_f32 ( slice_u32_le base * 4 + * id td j ) )
                 : ~ f pe 0.0
                 ?? ( vec_get [f] inv ? < j half j - j half ) {
                     T fq → { : f a * # f t fq = pe ? < j half ( cos a ) ( sin a ) }
@@ -901,7 +911,7 @@ unsafe @ __f5m_text_rows * F5ModelImpl m ( Vec i ) ids b drop ( Vec f ) out ( Ve
 // The depthwise convolution is what gives the text encoder its receptive
 // field — there is no attention in it at all — and GRN is what keeps one
 // feature from swallowing the block.
-unsafe @ __f5m_convnext * F5ModelImpl m i idx GkBuf x i rows → b {
+unsafe @ __f5m_convnext inout F5ModelImpl m i idx GkBuf x i rows → b {
     : i td . m td
     : i inner * 2 td
     : GkBuf t2 ( __f5m_view . . m sc tscr2 0 * rows td )
@@ -927,8 +937,14 @@ unsafe @ __f5m_convnext * F5ModelImpl m i idx GkBuf x i rows → b {
 // written into txt2 at `row_off`. `drop` is the unconditional branch: the
 // characters become the filler token, but the PADDING MASK is still the real
 // text's — which is why the unconditional text embedding is not zero.
-unsafe @ f5_text_encode F5Model m__h ( Vec i ) ids b drop i row_off → b {
-    : *F5ModelImpl m ( __F5Model_ptr m__h )
+@ f5_text_encode F5Model m__h ( Vec i ) ids b drop i row_off → b {
+    : ~ F5ModelImpl m ( locked_take [F5ModelImpl] . m__h l )
+    : b __res ( __f5_text_encode_in m ids drop row_off )
+    ( locked_restore [F5ModelImpl] . m__h l m )
+    ^ __res
+}
+
+unsafe @ __f5_text_encode_in inout F5ModelImpl m ( Vec i ) ids b drop i row_off → b {
     : i n . m n
     : i td . m td
     : ( Vec f ) rowsf ( vec_with_cap [f] * n td )
@@ -967,8 +983,14 @@ unsafe @ f5_text_encode F5Model m__h ( Vec i ) ids b drop i row_off → b {
 // exp(-i·ln(10000)/127) scaled by a thousand — a different ladder and a
 // different order from the position code its text encoder uses. Getting this
 // backwards does not crash; it conditions the whole network on the wrong time.
-unsafe @ f5_set_times F5Model m__h ( Vec f ) ts → b {
-    : *F5ModelImpl m ( __F5Model_ptr m__h )
+@ f5_set_times F5Model m__h ( Vec f ) ts → b {
+    : ~ F5ModelImpl m ( locked_take [F5ModelImpl] . m__h l )
+    : b __res ( __f5_set_times_in m ts )
+    ( locked_restore [F5ModelImpl] . m__h l m )
+    ^ __res
+}
+
+unsafe @ __f5_set_times_in inout F5ModelImpl m ( Vec f ) ts → b {
     : i dim . m dim
     : i S ( vec_len [f] ts )
     ? > S 0 {} { ^ F }
@@ -1015,15 +1037,26 @@ unsafe @ f5_set_times F5Model m__h ( Vec f ) ts → b {
     ^ ok
 }
 
-unsafe @ f5_set_step F5Model m__h i k → v {
-    : *F5ModelImpl m ( __F5Model_ptr m__h )
+@ f5_set_step F5Model m__h i k → v {
+    : ~ F5ModelImpl m ( locked_take [F5ModelImpl] . m__h l )
+    ( __f5_set_step_in m k )
+    ( locked_restore [F5ModelImpl] . m__h l m )
+}
+
+@ __f5_set_step_in inout F5ModelImpl m i k → v {
     = . m cur_step k
 }
 
 // ── the forward ─────────────────────────────────────────────────────
 
-unsafe @ f5_forward F5Model m__h → b {
-    : *F5ModelImpl m ( __F5Model_ptr m__h )
+@ f5_forward F5Model m__h → b {
+    : ~ F5ModelImpl m ( locked_take [F5ModelImpl] . m__h l )
+    : b __res ( __f5_forward_in m )
+    ( locked_restore [F5ModelImpl] . m__h l m )
+    ^ __res
+}
+
+unsafe @ __f5_forward_in inout F5ModelImpl m → b {
     : i n . m n
     : i batch . m batch
     : i rows * batch n
@@ -1113,67 +1146,139 @@ unsafe @ f5_forward F5Model m__h → b {
 
 // ── the handles a caller needs ──────────────────────────────────────
 
-unsafe @ f5_rope F5Model m__h → b {
-    : *F5ModelImpl m ( __F5Model_ptr m__h )
+@ f5_rope F5Model m__h → b {
+    : ~ F5ModelImpl m ( locked_take [F5ModelImpl] . m__h l )
+    : b __res ( __f5_rope_in m )
+    ( locked_restore [F5ModelImpl] . m__h l m )
+    ^ __res
+}
+
+@ __f5_rope_in inout F5ModelImpl m → b {
     ^ ( __f5m_rope_tables m )
 }
 
-unsafe @ f5_buf_txt F5Model m__h → GkBuf {
-    : *F5ModelImpl m ( __F5Model_ptr m__h )
-    ^ . . m sc txt2
+@ f5_buf_txt F5Model m__h → GkBuf {
+    : ~ F5ModelImpl m ( locked_take [F5ModelImpl] . m__h l )
+    : GkBuf __res ( __f5_buf_txt_in m )
+    ( locked_restore [F5ModelImpl] . m__h l m )
+    ^ __res
 }
 
-unsafe @ f5_buf_pred F5Model m__h → GkBuf {
-    : *F5ModelImpl m ( __F5Model_ptr m__h )
-    ^ . . m sc pred
+@ __f5_buf_txt_in F5ModelImpl m → GkBuf {
+    ^ ( gk_buf_view . . m sc txt2 0 ( gk_buf_len . . m sc txt2 ) )
 }
 
-unsafe @ f5_buf_x F5Model m__h → GkBuf {
-    : *F5ModelImpl m ( __F5Model_ptr m__h )
-    ^ . . m sc xbuf
+@ f5_buf_pred F5Model m__h → GkBuf {
+    : ~ F5ModelImpl m ( locked_take [F5ModelImpl] . m__h l )
+    : GkBuf __res ( __f5_buf_pred_in m )
+    ( locked_restore [F5ModelImpl] . m__h l m )
+    ^ __res
 }
 
-unsafe @ f5_buf_cond F5Model m__h → GkBuf {
-    : *F5ModelImpl m ( __F5Model_ptr m__h )
-    ^ . . m sc cond2
+@ __f5_buf_pred_in F5ModelImpl m → GkBuf {
+    ^ ( gk_buf_view . . m sc pred 0 ( gk_buf_len . . m sc pred ) )
 }
 
-unsafe @ f5_kit F5Model m__h → GpuKit {
-    : *F5ModelImpl m ( __F5Model_ptr m__h )
-    ^ . m kit
+@ f5_buf_x F5Model m__h → GkBuf {
+    : ~ F5ModelImpl m ( locked_take [F5ModelImpl] . m__h l )
+    : GkBuf __res ( __f5_buf_x_in m )
+    ( locked_restore [F5ModelImpl] . m__h l m )
+    ^ __res
 }
 
-unsafe @ f5_n F5Model m__h → i {
-    : *F5ModelImpl m ( __F5Model_ptr m__h )
+@ __f5_buf_x_in F5ModelImpl m → GkBuf {
+    ^ ( gk_buf_view . . m sc xbuf 0 ( gk_buf_len . . m sc xbuf ) )
+}
+
+@ f5_buf_cond F5Model m__h → GkBuf {
+    : ~ F5ModelImpl m ( locked_take [F5ModelImpl] . m__h l )
+    : GkBuf __res ( __f5_buf_cond_in m )
+    ( locked_restore [F5ModelImpl] . m__h l m )
+    ^ __res
+}
+
+@ __f5_buf_cond_in F5ModelImpl m → GkBuf {
+    ^ ( gk_buf_view . . m sc cond2 0 ( gk_buf_len . . m sc cond2 ) )
+}
+
+@ f5_kit F5Model m__h → GpuKit {
+    : ~ F5ModelImpl m ( locked_take [F5ModelImpl] . m__h l )
+    : GpuKit __res ( __f5_kit_in m )
+    ( locked_restore [F5ModelImpl] . m__h l m )
+    ^ __res
+}
+
+@ __f5_kit_in F5ModelImpl m → GpuKit {
+    ^ ( GpuKit_share . m kit )
+}
+
+@ f5_n F5Model m__h → i {
+    : ~ F5ModelImpl m ( locked_take [F5ModelImpl] . m__h l )
+    : i __res ( __f5_n_in m )
+    ( locked_restore [F5ModelImpl] . m__h l m )
+    ^ __res
+}
+
+@ __f5_n_in inout F5ModelImpl m → i {
     ^ . m n
 }
 
-unsafe @ f5_mel F5Model m__h → i {
-    : *F5ModelImpl m ( __F5Model_ptr m__h )
+@ f5_mel F5Model m__h → i {
+    : ~ F5ModelImpl m ( locked_take [F5ModelImpl] . m__h l )
+    : i __res ( __f5_mel_in m )
+    ( locked_restore [F5ModelImpl] . m__h l m )
+    ^ __res
+}
+
+@ __f5_mel_in inout F5ModelImpl m → i {
     ^ . m mel
 }
 
 // Read `nel` elements of a device buffer back, growing `out` to fit.
-unsafe @ f5_download F5Model m__h GkBuf b ( Vec f ) out i nel → b {
-    : *F5ModelImpl m ( __F5Model_ptr m__h )
+@ f5_download F5Model m__h GkBuf b ( Vec f ) out i nel → b {
+    : ~ F5ModelImpl m ( locked_take [F5ModelImpl] . m__h l )
+    : b __res ( __f5_download_in m b out nel )
+    ( locked_restore [F5ModelImpl] . m__h l m )
+    ^ __res
+}
+
+@ __f5_download_in inout F5ModelImpl m GkBuf b ( Vec f ) out i nel → b {
     ~ < ( vec_len [f] out ) nel { ( vec_push [f] out 0.0 ) }
     ^ ( gk_dbuf_download . m kit ( __f5m_view b 0 nel ) out )
 }
 
-unsafe @ f5_set_x F5Model m__h ( Vec f ) x → b {
-    : *F5ModelImpl m ( __F5Model_ptr m__h )
+@ f5_set_x F5Model m__h ( Vec f ) x → b {
+    : ~ F5ModelImpl m ( locked_take [F5ModelImpl] . m__h l )
+    : b __res ( __f5_set_x_in m x )
+    ( locked_restore [F5ModelImpl] . m__h l m )
+    ^ __res
+}
+
+@ __f5_set_x_in inout F5ModelImpl m ( Vec f ) x → b {
     ^ ( gk_dbuf_upload . m kit . . m sc xbuf x )
 }
 
-unsafe @ f5_set_cond F5Model m__h ( Vec f ) c → b {
-    : *F5ModelImpl m ( __F5Model_ptr m__h )
+@ f5_set_cond F5Model m__h ( Vec f ) c → b {
+    : ~ F5ModelImpl m ( locked_take [F5ModelImpl] . m__h l )
+    : b __res ( __f5_set_cond_in m c )
+    ( locked_restore [F5ModelImpl] . m__h l m )
+    ^ __res
+}
+
+@ __f5_set_cond_in inout F5ModelImpl m ( Vec f ) c → b {
     ^ ( gk_dbuf_upload . m kit ( __f5m_view . . m sc cond2 0 ( vec_len [f] c ) ) c )
 }
 
 // The unconditional half's conditioning audio is zero: classifier-free
 // guidance drops the reference voice, not only the text.
-unsafe @ f5_zero_cond_row F5Model m__h i row_off → b {
-    : *F5ModelImpl m ( __F5Model_ptr m__h )
+@ f5_zero_cond_row F5Model m__h i row_off → b {
+    : ~ F5ModelImpl m ( locked_take [F5ModelImpl] . m__h l )
+    : b __res ( __f5_zero_cond_row_in m row_off )
+    ( locked_restore [F5ModelImpl] . m__h l m )
+    ^ __res
+}
+
+@ __f5_zero_cond_row_in inout F5ModelImpl m i row_off → b {
     : i nel * . m n . m mel
     : ( Vec f ) z ( vec_with_cap [f] nel )
     : ~ i k 0
@@ -1182,9 +1287,15 @@ unsafe @ f5_zero_cond_row F5Model m__h i row_off → b {
     ^ ok
 }
 
-unsafe @ f5_buf_vel F5Model m__h → GkBuf {
-    : *F5ModelImpl m ( __F5Model_ptr m__h )
-    ^ . . m sc vel
+@ f5_buf_vel F5Model m__h → GkBuf {
+    : ~ F5ModelImpl m ( locked_take [F5ModelImpl] . m__h l )
+    : GkBuf __res ( __f5_buf_vel_in m )
+    ( locked_restore [F5ModelImpl] . m__h l m )
+    ^ __res
+}
+
+@ __f5_buf_vel_in F5ModelImpl m → GkBuf {
+    ^ ( gk_buf_view . . m sc vel 0 ( gk_buf_len . . m sc vel ) )
 }
 
 // ── the weights as a lease ──────────────────────────────────────────
@@ -1194,13 +1305,24 @@ unsafe @ f5_buf_vel F5Model m__h → GkBuf {
 // back would mean re-reading it from disk — so a reload is a copy from the
 // page cache to the device and costs about as much as the first one did.
 
-unsafe @ f5_loaded F5Model m__h → b {
-    : *F5ModelImpl m ( __F5Model_ptr m__h )
+@ f5_loaded F5Model m__h → b {
+    : ~ F5ModelImpl m ( locked_take [F5ModelImpl] . m__h l )
+    : b __res ( __f5_loaded_in m )
+    ( locked_restore [F5ModelImpl] . m__h l m )
+    ^ __res
+}
+
+@ __f5_loaded_in inout F5ModelImpl m → b {
     ^ . m loaded
 }
 
-unsafe @ f5_unload F5Model m__h → v {
-    : *F5ModelImpl m ( __F5Model_ptr m__h )
+@ f5_unload F5Model m__h → v {
+    : ~ F5ModelImpl m ( locked_take [F5ModelImpl] . m__h l )
+    ( __f5_unload_in m )
+    ( locked_restore [F5ModelImpl] . m__h l m )
+}
+
+@ __f5_unload_in inout F5ModelImpl m → v {
     ? . m loaded {} { ^ }
     ( __f5m_scratch_zero m )
     ( __f5m_drop_top m )
@@ -1222,8 +1344,14 @@ unsafe @ f5_unload F5Model m__h → v {
     ( gk_pool_release . m kit )
 }
 
-unsafe @ f5_reload F5Model m__h → b {
-    : *F5ModelImpl m ( __F5Model_ptr m__h )
+@ f5_reload F5Model m__h → b {
+    : ~ F5ModelImpl m ( locked_take [F5ModelImpl] . m__h l )
+    : b __res ( __f5_reload_in m )
+    ( locked_restore [F5ModelImpl] . m__h l m )
+    ^ __res
+}
+
+@ __f5_reload_in inout F5ModelImpl m → b {
     ? . m loaded { ^ T } {}
     ^ ( __f5m_upload_all m )
 }
@@ -1237,27 +1365,53 @@ unsafe @ f5_reload F5Model m__h → b {
     ^ ok
 }
 
-unsafe @ f5_dim F5Model m__h → i {
-    : *F5ModelImpl m ( __F5Model_ptr m__h )
+@ f5_dim F5Model m__h → i {
+    : ~ F5ModelImpl m ( locked_take [F5ModelImpl] . m__h l )
+    : i __res ( __f5_dim_in m )
+    ( locked_restore [F5ModelImpl] . m__h l m )
+    ^ __res
+}
+
+@ __f5_dim_in inout F5ModelImpl m → i {
     ^ . m dim
 }
 
-unsafe @ f5_depth F5Model m__h → i {
-    : *F5ModelImpl m ( __F5Model_ptr m__h )
+@ f5_depth F5Model m__h → i {
+    : ~ F5ModelImpl m ( locked_take [F5ModelImpl] . m__h l )
+    : i __res ( __f5_depth_in m )
+    ( locked_restore [F5ModelImpl] . m__h l m )
+    ^ __res
+}
+
+@ __f5_depth_in inout F5ModelImpl m → i {
     ^ . m depth
 }
 
-unsafe @ f5_heads F5Model m__h → i {
-    : *F5ModelImpl m ( __F5Model_ptr m__h )
+@ f5_heads F5Model m__h → i {
+    : ~ F5ModelImpl m ( locked_take [F5ModelImpl] . m__h l )
+    : i __res ( __f5_heads_in m )
+    ( locked_restore [F5ModelImpl] . m__h l m )
+    ^ __res
+}
+
+@ __f5_heads_in inout F5ModelImpl m → i {
     ^ . m heads
 }
 
-unsafe @ f5_td F5Model m__h → i {
-    : *F5ModelImpl m ( __F5Model_ptr m__h )
+@ f5_td F5Model m__h → i {
+    : ~ F5ModelImpl m ( locked_take [F5ModelImpl] . m__h l )
+    : i __res ( __f5_td_in m )
+    ( locked_restore [F5ModelImpl] . m__h l m )
+    ^ __res
+}
+
+@ __f5_td_in inout F5ModelImpl m → i {
     ^ . m td
 }
 
-unsafe @ f5_prefix F5Model m__h → s {
-    : *F5ModelImpl m ( __F5Model_ptr m__h )
-    ^ ( string_data . m prefix )
+@ f5_prefix F5Model m__h → String {
+    : ~ F5ModelImpl m ( locked_take [F5ModelImpl] . m__h l )
+    : String __res ( string_from ( string_data . m prefix ) )
+    ( locked_restore [F5ModelImpl] . m__h l m )
+    ^ __res
 }

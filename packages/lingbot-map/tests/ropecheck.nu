@@ -7,25 +7,25 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/std/float.nu`
 $ `src/rope.nu`
 
-unsafe @ case i heads i gw i gh i dim i nspecial → v {
+@ case i heads i gw i gh i dim i nspecial → v {
     : i npatch * gw gh
     : i n + nspecial npatch
-    : ( Vec u ) x__v ( vec_zeroed [u] * 8 * heads * n dim )
-    : *f x # *f ( vec_data [u] x__v )
-    : ( Vec u ) rows__v ( vec_zeroed [u] * 8 n )
-    : *i rows # *i ( vec_data [u] rows__v )
-    : ( Vec u ) cols__v ( vec_zeroed [u] * 8 n )
-    : *i cols # *i ( vec_data [u] cols__v )
+    : ( Vec f ) x__v ( vec_zeroed [f] * heads * n dim )
+    : ( Slice f ) x ( slice_from_vec [f] x__v )
+    : ( Vec i ) rows__v ( vec_zeroed [i] n )
+    : ( Slice i ) rows ( slice_from_vec [i] rows__v )
+    : ( Vec i ) cols__v ( vec_zeroed [i] n )
+    : ( Slice i ) cols ( slice_from_vec [i] cols__v )
     // special tokens at (0,0); patches at (y+1, x+1), row-major
     : ~ i t 0
-    ~ < t nspecial { = . rows t 0 = . cols t 0 = t + t 1 }
+    ~ < t nspecial { ( slice_put [i] rows t 0 ) ( slice_put [i] cols t 0 ) = t + t 1 }
     : ~ i y 0
     ~ < y gh {
         : ~ i xx 0
         ~ < xx gw {
             : i idx + nspecial + * y gw xx
-            = . rows idx + y 1
-            = . cols idx + xx 1
+            ( slice_put [i] rows idx + y 1 )
+            ( slice_put [i] cols idx + xx 1 )
             = xx + xx 1
         }
         = y + y 1
@@ -37,7 +37,7 @@ unsafe @ case i heads i gw i gh i dim i nspecial → v {
             : ~ i d 0
             ~ < d dim {
                 : f v ( float_sin + 0.11 * 0.37 # f + * h 1000 + * t 7 d )
-                = . x + * h * n dim + * t dim d v
+                ( slice_put [f] x + * h * n dim + * t dim d v )
                 = d + d 1
             }
             = t + t 1
@@ -45,10 +45,10 @@ unsafe @ case i heads i gw i gh i dim i nspecial → v {
         = h + h 1
     }
     : i maxpos + 2 ? > gw gh gw gh
-    : ( Vec u ) ct__v ( vec_zeroed [u] * 8 * maxpos / dim 2 )
-    : *f ct # *f ( vec_data [u] ct__v )
-    : ( Vec u ) st__v ( vec_zeroed [u] * 8 * maxpos / dim 2 )
-    : *f st # *f ( vec_data [u] st__v )
+    : ( Vec f ) ct__v ( vec_zeroed [f] * maxpos / dim 2 )
+    : ( Slice f ) ct ( slice_from_vec [f] ct__v )
+    : ( Vec f ) st__v ( vec_zeroed [f] * maxpos / dim 2 )
+    : ( Slice f ) st ( slice_from_vec [f] st__v )
     ( rope2d_tables / dim 2 maxpos ct st )
     ( rope2d_apply x heads n dim rows cols ct st )
     ( nurl_print `r` ) ( nurl_print ( nurl_str_int heads ) )
@@ -58,7 +58,7 @@ unsafe @ case i heads i gw i gh i dim i nspecial → v {
     ( nurl_print `_` ) ( nurl_print ( nurl_str_int nspecial ) )
     : ~ i j 0
     ~ < j * heads * n dim {
-        ( nurl_print ` ` ) ( nurl_print ( nurl_str_float . x j ) )
+        ( nurl_print ` ` ) ( nurl_print ( nurl_str_float ( slice_at [f] x j ) ) )
         = j + j 1
     }
     ( nurl_print `\n` )

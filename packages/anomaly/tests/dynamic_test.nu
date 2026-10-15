@@ -67,7 +67,7 @@ $ `src/dynamic.nu`
     i n_versions
 }
 
-@ ingest_pt Model mo f temp f load i idx → IngestOut {
+@ ingest_pt inout Model mo f temp f load i idx → IngestOut {
     : Json j ( json_obj_new )
     ( json_obj_set j `temp` ( json_float temp ) )
     ( json_obj_set j `load` ( json_float load ) )
@@ -83,7 +83,7 @@ $ `src/dynamic.nu`
     }
 }
 
-@ set_all_margins Model mo f margin → v {
+@ set_all_margins inout Model mo f margin → v {
     : b a ( model_set_margin mo `short_term` margin )
     : b b2 ( model_set_margin mo `daily` margin )
     : b c ( model_set_margin mo `weekly` margin )
@@ -93,9 +93,9 @@ $ `src/dynamic.nu`
 
 // ── Scenario A: statistical behaviour at production limits ────────────
 
-unsafe @ test_stream Store st → v {
+@ test_stream Store st → v {
     = g_lcg 1
-    : Model mo ( model_open_at st `stream` T0 )
+    : ~ Model mo ( model_open_at st `stream` T0 )
     ( check == ( store_exists st `stream` ) T `stream: created on first use` )
     ( set_all_margins mo 0.17 )
 
@@ -118,8 +118,7 @@ unsafe @ test_stream Store st → v {
     ( check all_warming `stream: points 1-49 warming up (ready=false)` )
     ( check ready_from_50 `stream: ready from point 50 (first train)` )
     ( check == any_false_alarm F `stream: no false alarms on 51 normal points` )
-    : Meta mm__h ( Meta_share ( model_metadata mo ) )
-    : *MetaImpl mm ( _Meta_ptr mm__h )
+    : ~ Meta mm ( model_metadata mo )
     ( check == . mm last_trained 100 `stream: schedule retrained at 100` )
 
     // The step change: extreme in both features, flagged immediately.
@@ -148,9 +147,9 @@ unsafe @ test_stream Store st → v {
 // no longer parsed, the model reopened empty over it and the old forests
 // walked a point of no columns off address zero.
 
-unsafe @ test_extreme Store st → v {
+@ test_extreme Store st → v {
     = g_lcg 7
-    : Model mo ( model_open_at st `extreme` T0 )
+    : ~ Model mo ( model_open_at st `extreme` T0 )
     : ~ i k 1
     ~ <= k 60 {
         : IngestOut o ( ingest_pt mo + 20.0 ( gauss3 ) + 5.0 * ( gauss3 ) 0.5 k )
@@ -195,8 +194,7 @@ unsafe @ test_extreme Store st → v {
     : IngestOut after ( ingest_pt mo 20.0 5.0 63 )
     ( check . after ok `extreme: scoring after the retrain does not crash` )
     ( check ( _an_finite . after score ) `extreme: the score after the retrain is finite` )
-    : Meta mm__h ( Meta_share ( model_metadata mo ) )
-    : *MetaImpl mm ( _Meta_ptr mm__h )
+    : ~ Meta mm ( model_metadata mo )
     : ~ b std_ok T
     : i nsd ( vec_len [f] . mm sc_std )
     : ~ i c 0
@@ -207,16 +205,15 @@ unsafe @ test_extreme Store st → v {
     ( check & > nsd 0 std_ok `extreme: every persisted std is finite and positive` )
 
     // Reopened from disk: the metadata parses, the columns are still there.
-    : Model mo2 ( model_open_at st `extreme` + T0 * 64 60 )
-    : Meta mm2__h ( model_metadata mo2 )
-    : *MetaImpl mm2 ( _Meta_ptr mm2__h )
+    : ~ Model mo2 ( model_open_at st `extreme` + T0 * 64 60 )
+    : ~ Meta mm2 ( model_metadata mo2 )
     ( check == ( vec_len [String] . mm2 feats ) 2 `extreme: the reopened model keeps its two features` )
     ( check ( model_is_trained mo2 ) `extreme: the reopened model is trained` )
     : IngestOut o2 ( ingest_pt mo2 20.0 5.0 64 )
     ( check & . o2 ok ( _an_finite . o2 score ) `extreme: the reopened model scores` )
 
     // A point of 1.0e308: still a finite number, still a finite score.
-    : Model mo3 ( model_open_at st `extreme` + T0 * 65 60 )
+    : ~ Model mo3 ( model_open_at st `extreme` + T0 * 65 60 )
     : IngestOut huge ( ingest_pt mo3 1.0e308 5.0 65 )
     ( check & . huge ok ( _an_finite . huge score ) `extreme: 1.0e308 scores finitely` )
 
@@ -224,9 +221,8 @@ unsafe @ test_extreme Store st → v {
     // Before this, one of them left the feature with a std of 1e199, and
     // every real reading standardised to nought: the feature stopped
     // being watched until the reading left the ring.
-    : Model mo4 ( model_open_at st `extreme` + T0 * 66 60 )
-    : Meta mm4__h ( model_metadata mo4 )
-    : *MetaImpl mm4 ( _Meta_ptr mm4__h )
+    : ~ Model mo4 ( model_open_at st `extreme` + T0 * 66 60 )
+    : ~ Meta mm4 ( model_metadata mo4 )
     : ~ b scale_sane F
     ?? ( vec_get [f] . mm4 sc_std 0 ) { T sd → { = scale_sane & > sd 0.01 < sd 100.0 } F _ → {} }
     ( check scale_sane `extreme: the absurd readings did not set the scale` )
@@ -265,7 +261,7 @@ unsafe @ test_extreme Store st → v {
 
 @ test_corrupt_meta Store st → v {
     = g_lcg 9
-    : Model mo ( model_open_at st `corrupt` T0 )
+    : ~ Model mo ( model_open_at st `corrupt` T0 )
     : ~ i k 1
     ~ <= k 55 {
         : IngestOut o ( ingest_pt mo + 20.0 ( gauss3 ) + 5.0 * ( gauss3 ) 0.5 k )
@@ -276,7 +272,7 @@ unsafe @ test_extreme Store st → v {
     // Break the stored metadata behind the model's back.
     ( __st_meta_put_on_test st `corrupt` `{"name": "corrupt", "created": "x", "scaler": {"mean": [null], "std": [null]}` )
 
-    : Model mo2 ( model_open_at st `corrupt` + T0 * 56 60 )
+    : ~ Model mo2 ( model_open_at st `corrupt` + T0 * 56 60 )
     ( check ! ( model_is_trained mo2 ) `corrupt: the model reopens untrained (no forest over no columns)` )
     : IngestOut o2 ( ingest_pt mo2 20.0 5.0 56 )
     ( check . o2 ok `corrupt: the reopened model takes a point without crashing` )
@@ -313,48 +309,46 @@ unsafe @ test_extreme Store st → v {
 
 // ── Scenario B: streaming mechanics at tiny limits ────────────────────
 
-unsafe @ test_mechanics Store st → v {
-    : Model mo__h ( model_open_at st `mech` T0 )
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    ( model_set_limits mo__h 10 30 )
-    ( model_set_schedule mo__h 10 20 )
-    ( check ( model_set_margin mo__h `weekly` 0.5 ) `mech: margin update accepted` )
-    ( check == ( model_set_margin mo__h `nosuch` 0.5 ) F `mech: unknown version margin rejected` )
-    ( set_all_margins mo__h 0.5 )
-    ( check == ( model_is_trained mo__h ) F `mech: starts untrained` )
+@ test_mechanics Store st → v {
+    : ~ Model mo ( model_open_at st `mech` T0 )
+    ( model_set_limits mo 10 30 )
+    ( model_set_schedule mo 10 20 )
+    ( check ( model_set_margin mo `weekly` 0.5 ) `mech: margin update accepted` )
+    ( check == ( model_set_margin mo `nosuch` 0.5 ) F `mech: unknown version margin rejected` )
+    ( set_all_margins mo 0.5 )
+    ( check == ( model_is_trained mo ) F `mech: starts untrained` )
 
     : ~ b all_warming T
     : ~ i k 1
     ~ <= k 9 {
-        : IngestOut o ( ingest_pt mo__h + 20.0 ( gauss3 ) + 5.0 ( gauss3 ) k )
+        : IngestOut o ( ingest_pt mo + 20.0 ( gauss3 ) + 5.0 ( gauss3 ) k )
         ? & . o ok == . o ready F {} { = all_warming F }
         = k + k 1
     }
     ( check all_warming `mech: points 1-9 warming up` )
 
-    : IngestOut o10 ( ingest_pt mo__h + 20.0 ( gauss3 ) + 5.0 ( gauss3 ) 10 )
+    : IngestOut o10 ( ingest_pt mo + 20.0 ( gauss3 ) + 5.0 ( gauss3 ) 10 )
     ( check . o10 ready `mech: point 10 trains and is ready` )
-    ( check ( model_is_trained mo__h ) `mech: trained after warm-up` )
-    : Meta mm__h ( Meta_share ( model_metadata mo__h ) )
-    : *MetaImpl mm ( _Meta_ptr mm__h )
+    ( check ( model_is_trained mo ) `mech: trained after warm-up` )
+    : ~ Meta mm ( model_metadata mo )
     ( check == . mm last_trained 10 `mech: last_trained = 10` )
 
     = k 11
     ~ <= k 25 {
-        : IngestOut o ( ingest_pt mo__h + 20.0 ( gauss3 ) + 5.0 ( gauss3 ) k )
+        : IngestOut o ( ingest_pt mo + 20.0 ( gauss3 ) + 5.0 ( gauss3 ) k )
         = k + k 1
     }
-    ( check == . mm last_trained 20 `mech: schedule retrained at 20` )
+    ( check == . ( model_metadata mo ) last_trained 20 `mech: schedule retrained at 20` )
 
     // detect_only mutates nothing: not metadata, not the ring, not disk.
-    : String meta_before ( meta_to_json_str mm__h )
-    : i pts_before ( model_n_points mo__h )
+    : String meta_before ( meta_to_json_str ( model_metadata mo ) )
+    : i pts_before ( model_n_points mo )
     : Json probe ( json_obj_new )
     ( json_obj_set probe `temp` ( json_float 1000.0 ) )
     ( json_obj_set probe `load` ( json_float 5.0 ) )
     ( json_obj_set probe `newcol` ( json_float 5.0 ) )
     ( json_obj_set probe `status` ( json_str_lit `newcat` ) )
-    : !Verdict String dr ( model_detect_only mo__h probe )
+    : !Verdict String dr ( model_detect_only mo probe )
     ?? dr {
         T vd → { ( check T `mech: detect_only succeeds` ) }
         F e → { ( check F `mech: detect_only succeeds` ) }
@@ -363,28 +357,28 @@ unsafe @ test_mechanics Store st → v {
     // as 0 it would be a value nobody sent.
     : Json half ( json_obj_new )
     ( json_obj_set half `temp` ( json_float 20.0 ) )
-    : !Verdict String hr ( model_detect_only mo__h half )
+    : !Verdict String hr ( model_detect_only mo half )
     ?? hr {
         T vd → { ( check F `mech: detect_only refuses a point without a known column` ) }
         F e → {
             ( check >= ( nurl_str_find ( string_data e ) `Missing columns: load` ) 0 `mech: detect_only refuses a point without a known column` )
         }
     }
-    : String meta_after ( meta_to_json_str mm__h )
+    : String meta_after ( meta_to_json_str ( model_metadata mo ) )
     ( check ( string_eq meta_before meta_after ) `mech: detect_only leaves metadata untouched` )
-    ( check == ( model_n_points mo__h ) pts_before `mech: detect_only leaves the ring untouched` )
+    ( check == ( model_n_points mo ) pts_before `mech: detect_only leaves the ring untouched` )
     : ( Vec String ) disk_pts ( store_load_points st `mech` )
     ( check == ( vec_len [String] disk_pts ) pts_before `mech: detect_only leaves disk untouched` )
 
     // Ring eviction: cap is 30, lifetime counter keeps going.
     = k 26
     ~ <= k 40 {
-        : IngestOut o ( ingest_pt mo__h + 20.0 ( gauss3 ) + 5.0 ( gauss3 ) k )
+        : IngestOut o ( ingest_pt mo + 20.0 ( gauss3 ) + 5.0 ( gauss3 ) k )
         = k + k 1
     }
-    ( check == ( model_n_points mo__h ) 30 `mech: ring capped at 30` )
-    ( check == . mm n_seen 40 `mech: n_seen counts past the cap` )
-    ( check == . mm n_stored 30 `mech: n_stored is the ring's fill, not the lifetime count` )
+    ( check == ( model_n_points mo ) 30 `mech: ring capped at 30` )
+    ( check == . ( model_metadata mo ) n_seen 40 `mech: n_seen counts past the cap` )
+    ( check == . ( model_metadata mo ) n_stored 30 `mech: n_stored is the ring's fill, not the lifetime count` )
     ?? ( vec_get [i] . mo times 0 ) {
         T t0 → { ( check > t0 T0 `mech: oldest point evicted` ) }
         F _ → {}
@@ -393,12 +387,11 @@ unsafe @ test_mechanics Store st → v {
     ( check == ( vec_len [String] disk2 ) 30 `mech: eviction persisted` )
 
     // Reopen from disk: trained state, counters, schedule survive.
-    : Model mo2 ( model_open_at st `mech` + T0 * 41 60 )
+    : ~ Model mo2 ( model_open_at st `mech` + T0 * 41 60 )
     ( model_set_limits mo2 10 30 )
     ( check ( model_is_trained mo2 ) `mech: reopened model is trained` )
     ( check == ( model_n_points mo2 ) 30 `mech: reopened ring intact` )
-    : Meta mm2__h ( model_metadata mo2 )
-    : *MetaImpl mm2 ( _Meta_ptr mm2__h )
+    : ~ Meta mm2 ( model_metadata mo2 )
     ( check == . mm2 n_seen 40 `mech: reopened n_seen intact` )
     ( check == . mm2 n_stored 30 `mech: reopened n_stored intact` )
     ( check == . mm2 sched_below 10 `mech: reopened schedule intact` )
@@ -412,14 +405,14 @@ unsafe @ test_mechanics Store st → v {
         T vd → { ( check F `mech: bad numeric rejected` ) }
         F e → { ( check T `mech: bad numeric rejected` ) }
     }
-    ( check == . mm2 n_seen seen_before `mech: rejected point not counted` )
+    ( check == . ( model_metadata mo2 ) n_seen seen_before `mech: rejected point not counted` )
 
     // Reset: data and forests gone, identity/schedule kept.
     ( model_reset mo2 )
     ( check == ( model_n_points mo2 ) 0 `mech: reset drops the ring` )
-    ( check == . ( _Meta_ptr ( model_metadata mo2 ) ) n_stored 0 `mech: reset zeroes n_stored` )
+    ( check == . ( model_metadata mo2 ) n_stored 0 `mech: reset zeroes n_stored` )
     ( check == ( model_is_trained mo2 ) F `mech: reset drops the forests` )
-    ( check == . ( _Meta_ptr ( model_metadata mo2 ) ) sched_below 10 `mech: reset keeps the schedule` )
+    ( check == . ( model_metadata mo2 ) sched_below 10 `mech: reset keeps the schedule` )
     ( check ( store_exists st `mech` ) `mech: reset keeps the model` )
 
     // Delete: everything gone.

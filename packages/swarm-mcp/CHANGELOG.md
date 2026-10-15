@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.31.1] — 2026-10-15
+
+### Changed
+
+- Requires nwasm 3 (an `Interp` run in place under its lock; the
+  captured trap message and output come back as copies). No change here.
+
+## [0.31.0] — 2026-10-14
+
+### Changed
+
+- No `unsafe` left (105 functions before): the node bundle (`Swarm`), each chunk's retry plan (`ChunkJob`), an iterate run (`IterRun`), the roster and the expression parser are plain values passed `inout`, not Arc handles written through `arc_ptr`. The coordinator's registry — tasks, datasets, the module cache, the async iterate runs, the relay list — is one `McpState` that `node_mcp` keeps in a `Locked`; each MCP tool handler checks it out for the call and back in. Tasks and datasets are found by id and taken out of their list while a call works on one (no `*Task` / `*Dataset` into boxes, no raw global).
+- A worker's keepalive handler captures the heartbeat frame, the transport and the group instead of a raw pointer to its own swarm.
+- A GPU chunk's argv is built as Strings of its own (`process_run_strings`), not pointers into a NUL-separated arena.
+- The CUDA source checks read the source through a byte view.
+
 ## [0.30.4] — 2026-10-12
 
 Requires NURL 0.73.0, in which a field written through a raw pointer

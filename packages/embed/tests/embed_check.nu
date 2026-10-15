@@ -9,7 +9,7 @@ $ `stdlib/ext/env.nu`
 $ `src/model.nu`
 $ `stdlib/core/slice.nu`
 
-unsafe @ main → i {
+@ main → i {
     : ( Vec String ) av ( env_args_list )
     : ~ i rc 0
     ? >= ( vec_len [String] av ) 3 {} { ( nurl_print `usage: embed_check <model-dir> <corpus>\n` ) ^ 2 }
@@ -27,7 +27,7 @@ unsafe @ main → i {
                     ~ <= p n {
                         ? | == p n == ( slice_byte d_v p ) 10 {
                             : String line ( string_new )
-                            ( string_push_bytes line # *u + # i d ls - p ls )
+                            ( string_push_window line d_v ls - p ls )
                             ? > ( string_len line ) 0 {
                                 : ( Vec f ) emb ( vec_new [f] )
                                 ? ( embed_encode e ( string_data line ) emb ) {
