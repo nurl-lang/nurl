@@ -706,11 +706,11 @@ unsafe @ __wh_source_done inout WhisperImpl w → v {
     }
 }
 
-// The engine before it is open: every field zero — the handles null, the
-// Vecs without a block. wh_open / wh_open_ggml fill every field before
-// anything reads it (a field written drops the zero it replaces, which
-// drops as nothing), and an early return drops the half-built engine whole.
-unsafe @ __wh_blank → ( Locked WhisperImpl ) { ^ ( locked_zero [WhisperImpl] ) }
+// The engine before it is open: every field at its empty value — no
+// device, no kernels, empty Vecs. wh_open / wh_open_ggml fill every field
+// before anything reads it, and an early return drops the half-built
+// engine whole.
+@ __wh_blank → ( Locked WhisperImpl ) { ^ ( locked_new [WhisperImpl] @ WhisperImpl { ( gpu_none ) @ WhKernels { ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) F ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) F } F @ ?St { F } @ ?Gg { F } ( vec_new [GpuCopy] ) 0 0 0 0 0 0 ( vec_new [i] ) ( vec_new [i] ) ( vec_new [GpuBuffer] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) 0 0 0 0 ( string_new ) 0 0 0 0 0 0 0 0 0 0 0 0 0 ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) 0 0 0 0 ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) 0 0 ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) 0 0 0 0 0 0 0 0 0 0 0 0 F ( gpu_host_none ) 0 0 0 0 0 0 0 0 0 0 0 0 ( vec_new [i] ) ( vec_new [i] ) ( vec_new [GpuBuffer] ) } ) }
 
 // Open a whisper.cpp ggml container: hyperparameters and tokenizer live in
 // the same file as the weights, so the only argument is the file.
@@ -757,7 +757,7 @@ unsafe @ __wh_blank → ( Locked WhisperImpl ) { ^ ( locked_zero [WhisperImpl] )
 // Everything after "the weight source is open and probed" — one body for
 // both containers: device, kernels, every upload (in HF names — the ggml
 // source translates), caches, scratch.
-unsafe @ __wh_finish inout WhisperImpl w i n_dctx → !v String {
+@ __wh_finish inout WhisperImpl w i n_dctx → !v String {
     // Every buffer below is sized from these, and every kernel indexes by
     // them: a config that cannot describe a whisper is refused here.
     ? | | | | <= . w d_model 0 <= . w n_mels 0 <= . w n_ctx_enc 0 <= . w n_vocab 0 <= n_dctx 0 {

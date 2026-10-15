@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.1] — 2026-10-15
+
+### Added
+
+- `gguf_empty`: a container with no metadata, tensors or bytes, for an
+  engine record built before its model file is opened.
+
 ## [0.6.0] — 2026-10-14
 
 Requires the NURL with `stdlib/std/mmap.nu`, the little-endian slice words

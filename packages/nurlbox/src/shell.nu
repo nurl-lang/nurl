@@ -449,7 +449,7 @@ $ `stdlib/core/slice.nu`
 
 // ── xargs ─────────────────────────────────────────────────────────
 
-unsafe @ __xargs_run ( Vec String ) cmd b trace → i {
+@ __xargs_run ( Vec String ) cmd b trace → i {
     : i n ( vec_len [String] cmd )
     ? == n 0 { ^ 0 } {}
     ? trace {
@@ -461,26 +461,8 @@ unsafe @ __xargs_run ( Vec String ) cmd b trace → i {
         }
         ( nurl_eprint `\n` )
     } {}
-    ( flush )
-    : i32 pid ( fork )
-    ? == # i pid 0 {
-        : ( Vec u ) argvbuf_v ( vec_zeroed [u] * 8 + n 1 )
-        : s argvbuf # s ( vec_data [u] argvbuf_v )
-        : ~ i k 0
-        ~ < k n {
-            ( nurl_poke argvbuf k # i ( bx_at cmd k ) )
-            = k + k 1
-        }
-        : i32 _r ( execvp ( bx_at cmd 0 ) # *u argvbuf )
-        ( _exit # i32 127 )
-        ^ 127
-    } {}
-    ? < # i pid 0 { ^ 127 } {}
-    : ( Vec u ) statusbuf_v ( vec_zeroed [u] 8 )
-    : s statusbuf # s ( vec_data [u] statusbuf_v )
-    : i32 _w ( waitpid pid # *u statusbuf # i32 0 )
-    : i raw ( nurl_peek statusbuf 0 )
-    ^ ( nurl_wait_exit_status & raw 65535 )
+    : i rc ( process_run_inherit cmd 0 )
+    ^ ? < rc 0 127 rc
 }
 
 // Split stdin into items: whitespace-separated, or NUL-separated with

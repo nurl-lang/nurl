@@ -85,6 +85,10 @@ $ `stdlib/std/unicat.nu`
 
 @ Tok_drop sink Tok h → v {}
 
+// A tokenizer with no vocabulary: what an engine record holds before its
+// model's tokenizer is loaded (it encodes nothing and decodes nothing).
+@ tok_empty → Tok { ^ @ Tok { ( arc_new [TokImpl] @ TokImpl { 0 ( vec_new [String] ) ( vec_new [f] ) ( vec_new [i] ) ( map_new [String i] ) ( map_new [String i] ) ( vec_new [String] ) ( vec_new [String] ) ( vec_new [i] ) 0 0 0 0 F F F ( vec_new [i] ) ( vec_new [i] ) } ) } }
+
 // ── string-keyed map helpers (yoloe/bpe.nu idiom) ───────────────────
 @ __tk_set ( HashMap String i ) m s key i val → v {
     : ?i _old ( map_set [String i] m ( string_from key ) val \ String x → i { ^ ( hash_string ( string_data x ) ) }

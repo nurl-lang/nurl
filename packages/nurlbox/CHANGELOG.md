@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.5.0] — 2026-10-15
+
+### Changed
+
+- No `unsafe` left. Process control goes through the new safe stdlib
+  surface in stdlib/std/process.nu (`process_run_inherit`, `posix_execvp`,
+  `posix_wait_exit`, `posix_pipe`, `posix_read_append`) instead of hand-built
+  argv arrays, status words and pipe buffers: external commands, `exec`,
+  `env`, `find -exec`, `xargs`, pipelines and `$(…)`.
+
+### Fixed
+
+- The shell test compared `ls nonexistent-entry` against busybox's sh,
+  which may run the system's GNU ls (exit 2) rather than its own applet
+  (exit 1, as nurlbox's); the case uses `cat`, whose status is 1
+  everywhere.
+
 ## [0.4.0] — 2026-10-14
 
 ### Changed

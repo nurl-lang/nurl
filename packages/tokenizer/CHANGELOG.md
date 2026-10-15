@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.6] — 2026-10-15
+
+### Added
+
+- `tok_empty`: a tokenizer with no vocabulary, for an engine record built
+  before its model's tokenizer is loaded (nurllama's blank engine).
+
 ## [0.4.5] — 2026-10-14
 
 Requires NURL 0.73.0 with `map_get_with` (stdlib/std/hashmap.nu) and

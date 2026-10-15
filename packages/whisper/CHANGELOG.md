@@ -1,5 +1,14 @@
 # Changelog
 
+## [3.1.2] — 2026-10-15
+
+### Changed
+
+- The engine starts as a literal of its empty values instead of
+  `locked_zero`, and `__wh_finish`, which needed none, is no longer marked
+  `unsafe`: 16 `unsafe` functions to 14, each of which uploads device
+  memory or launches kernels.
+
 ## [3.1.1] — 2026-10-14
 
 ### Fixed

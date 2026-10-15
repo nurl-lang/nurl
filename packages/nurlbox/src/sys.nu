@@ -138,19 +138,11 @@ $ `stdlib/core/slice.nu`
 
 // Hand the process over to `cmd`. On success this never returns — the
 // image is replaced, which is exactly what `env VAR=x prog` means.
-unsafe @ __exec_argv ( Vec String ) args i from → i {
+@ __exec_argv ( Vec String ) args i from → i {
     : i n - ( vec_len [String] args ) from
     ? <= n 0 { ^ 127 } {}
-    : ( Vec u ) argvbuf_v ( vec_zeroed [u] * 8 + n 1 )
-    : s argvbuf # s ( vec_data [u] argvbuf_v )
-    : ~ i k 0
-    ~ < k n {
-        ( nurl_poke argvbuf k # i ( bx_at args + from k ) )
-        = k + k 1
-    }
     : s cmd ( bx_at args from )
-    : i32 _rc ( execvp cmd # *u argvbuf )
-    : i err ( nurl_errno_get )
+    : i err ( posix_execvp args from )
     ( bx_err_at cmd ? == err ( posix_const `ENOENT` ) `No such file or directory` `Permission denied` )
     ^ ? == err ( posix_const `ENOENT` ) 127 126
 }

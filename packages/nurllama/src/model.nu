@@ -227,12 +227,11 @@ $ `stdlib/core/slice.nu`
 
 @ Llm_drop sink Llm h → v {}
 
-// The engine of a model that is opening: every field zero — the handles
-// null, the Vecs without a block. llm_open_st fills every field before
-// anything reads it (a field written drops the zero it replaces, which
-// drops as nothing), and an early return drops the half-built engine
-// whole.
-unsafe @ __lm_blank → ( Locked LlmImpl ) { ^ ( locked_zero [LlmImpl] ) }
+// The engine of a model that is opening: every field at its empty value —
+// no device, no kernels, an empty tokenizer and container, empty Vecs.
+// llm_open_st fills every field before anything reads it, and an early
+// return drops the half-built engine whole.
+@ __lm_blank → ( Locked LlmImpl ) { ^ ( locked_new [LlmImpl] @ LlmImpl { ( gpu_none ) @ LlmKernels { ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) F ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) F } ( tok_empty ) 0 0 0 0 0 0 0 0 0 0 0.0 0.0 0 0.0 0.0 F 0 0 0.0 F 0 0 0 0 0 0 0 0 0.0 F ( vec_new [i] ) ( vec_new [i] ) ( vec_new [f] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) 0 ( gpu_host_none ) 0 0 0 0 0 0 0 ( gguf_empty ) @ ?St { F } F 0 0 ( vec_new [u] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [GpuBuffer] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) 0 ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) 0 0 ( vec_new [i] ) ( vec_new [i] ) 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ( gpu_host_none ) 0 0 ( gpu_host_none ) ( gpu_host_none ) F 0 0 0 0 0 } ) }
 
 @ __lm_handle sink LlmImpl m → Llm {
     : LlmInfo inf @ LlmInfo { ( Tok_share . m tok ) . m n_vocab . m n_ctx . m mask_id . m bidir }

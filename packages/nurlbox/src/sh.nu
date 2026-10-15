@@ -35,6 +35,7 @@ $ `stdlib/ext/env.nu`
 $ `bx.nu`
 $ `filter.nu`
 $ `stdlib/core/slice.nu`
+$ `stdlib/std/process.nu`
 
 // ── Words ─────────────────────────────────────────────────────────
 
@@ -1457,14 +1458,12 @@ $ `stdlib/core/slice.nu`
 // says no.
 : ~ i g_sh_have_fork -1
 
-unsafe @ __sh_can_fork → b {
+@ __sh_can_fork → b {
     ? < g_sh_have_fork 0 {
         : i32 pid ( fork )
         ? < # i pid 0 { = g_sh_have_fork 0 } {
             ? == # i pid 0 { ( _exit # i32 0 ) } {}
-            : ( Vec u ) buf_v ( vec_zeroed [u] 8 )
-            : s buf # s ( vec_data [u] buf_v )
-            : i32 _w ( waitpid pid # *u buf # i32 0 )
+            : i _w ( posix_wait_exit # i pid )
             = g_sh_have_fork 1
         }
     } {}
@@ -1823,7 +1822,7 @@ unsafe @ __sh_can_fork → b {
 // An external program: fork, exec, wait. A machine with no processes
 // says so rather than reporting "not found" about a program that is
 // right there.
-unsafe @ __sh_exec_external ( Vec String ) argv → i {
+@ __sh_exec_external ( Vec String ) argv → i {
     ? ! ( __sh_can_fork ) {
         ( __sh_no_processes ( bx_at argv 0 ) )
         ^ 127
@@ -1831,26 +1830,14 @@ unsafe @ __sh_exec_external ( Vec String ) argv → i {
     ( flush )
     : i32 pid ( fork )
     ? == # i pid 0 {
-        : i n ( vec_len [String] argv )
-        : ( Vec u ) buf_v ( vec_zeroed [u] * 8 + n 1 )
-        : s buf # s ( vec_data [u] buf_v )
-        : ~ i k 0
-        ~ < k n {
-            ( nurl_poke buf k # i ( bx_at argv k ) )
-            = k + k 1
-        }
-        : i32 _r ( execvp ( bx_at argv 0 ) # *u buf )
+        : i _e ( posix_execvp argv 0 )
         ( nurl_eprint ( bx_at argv 0 ) )
         ( nurl_eprint `: not found\n` )
         ( _exit # i32 127 )
         ^ 127
     } {}
     ? < # i pid 0 { ^ 127 } {}
-    : ( Vec u ) statusbuf_v ( vec_zeroed [u] 8 )
-    : s statusbuf # s ( vec_data [u] statusbuf_v )
-    : i32 _w ( waitpid pid # *u statusbuf # i32 0 )
-    : i raw ( nurl_peek statusbuf 0 )
-    ^ ( nurl_wait_exit_status & raw 65535 )
+    ^ ( posix_wait_exit # i pid )
 }
 
 @ __sh_exec_simple inout ShStateImpl st ( Vec ShNode ) arena i idx → i {
@@ -2054,7 +2041,7 @@ unsafe @ __sh_exec_external ( Vec String ) argv → i {
     ^ rc
 }
 
-unsafe @ __sh_exec_pipe inout ShStateImpl st ( Vec ShNode ) arena i idx → i {
+@ __sh_exec_pipe inout ShStateImpl st ( Vec ShNode ) arena i idx → i {
     : ~ i rc 0
     ?? ( vec_get [ShNode] arena idx ) {
         F _ → { ^ 0 }
@@ -2067,8 +2054,6 @@ unsafe @ __sh_exec_pipe inout ShStateImpl st ( Vec ShNode ) arena i idx → i {
                 }
             } {}
             ? ! ( __sh_can_fork ) { ^ ( __sh_pipe_sequential st arena idx stages ) } {}
-            : ( Vec u ) fdbuf_v ( vec_zeroed [u] 16 )
-            : s fdbuf # s ( vec_data [u] fdbuf_v )
             : ( Vec i ) pids ( vec_new [i] )
             : ~ i prev_read -1
             : ~ i s 0
@@ -2076,13 +2061,12 @@ unsafe @ __sh_exec_pipe inout ShStateImpl st ( Vec ShNode ) arena i idx → i {
                 : ~ i wfd -1
                 : ~ i rfd -1
                 ? < s - stages 1 {
-                    : i32 pr ( pipe # *u fdbuf )
-                    ? < # i pr 0 {
-                        ( bx_err `cannot create a pipe` )
-                        = s stages
-                    } {
-                        = rfd ( __le32_at ( slice_from_vec [u] fdbuf_v ) 0 )
-                        = wfd ( __le32_at ( slice_from_vec [u] fdbuf_v ) 4 )
+                    ?? ( posix_pipe ) {
+                        T pp → { = rfd . pp rd = wfd . pp wr }
+                        F → {
+                            ( bx_err `cannot create a pipe` )
+                            = s stages
+                        }
                     }
                 } {}
                 : ~ i node -1
@@ -2096,18 +2080,14 @@ unsafe @ __sh_exec_pipe inout ShStateImpl st ( Vec ShNode ) arena i idx → i {
                 = prev_read rfd
                 = s + s 1
             }
-            : ( Vec u ) statusbuf_v ( vec_zeroed [u] 8 )
-            : s statusbuf # s ( vec_data [u] statusbuf_v )
             : i np ( vec_len [i] pids )
             : ~ i k 0
             ~ < k np {
                 ?? ( vec_get [i] pids k ) {
                     T pid → {
-                        : i32 _w ( waitpid # i32 pid # *u statusbuf # i32 0 )
+                        : i st_k ( posix_wait_exit pid )
                         // A pipeline's status is its LAST stage's.
-                        ? == k - np 1 {
-                            = rc ( nurl_wait_exit_status & ( nurl_peek statusbuf 0 ) 65535 )
-                        } {}
+                        ? == k - np 1 { = rc st_k } {}
                     }
                     F _ → {}
                 }
@@ -2122,7 +2102,7 @@ unsafe @ __sh_exec_pipe inout ShStateImpl st ( Vec ShNode ) arena i idx → i {
 // `pipe(2)` writes two 32-bit ints into the buffer it is given.
 @ __le32_at ( Slice u ) buf i off → i { ^ ( slice_u32_le buf off ) }
 
-unsafe @ __sh_exec inout ShStateImpl st ( Vec ShNode ) arena i idx → i {
+@ __sh_exec inout ShStateImpl st ( Vec ShNode ) arena i idx → i {
     ? < idx 0 { ^ 0 } {}
     ? != 0 . st exiting { ^ . st exit_code } {}
     : ~ i rc 0
@@ -2263,10 +2243,7 @@ unsafe @ __sh_exec inout ShStateImpl st ( Vec ShNode ) arena i idx → i {
                                                                     ( _exit # i32 r2 )
                                                                 } {}
                                                                 ? < # i pid 0 { = rc ( __sh_exec st arena . n a ) } {
-                                                                    : ( Vec u ) statusbuf_v ( vec_zeroed [u] 8 )
-                                                                    : s statusbuf # s ( vec_data [u] statusbuf_v )
-                                                                    : i32 _w ( waitpid pid # *u statusbuf # i32 0 )
-                                                                    = rc ( nurl_wait_exit_status & ( nurl_peek statusbuf 0 ) 65535 )
+                                                                    = rc ( posix_wait_exit # i pid )
                                                                 }
                                                             } {
                                                                 ( __sh_no_processes `a subshell` )
@@ -2340,7 +2317,7 @@ unsafe @ __sh_exec inout ShStateImpl st ( Vec ShNode ) arena i idx → i {
 // `$(…)`: the script runs in a child with stdout on a pipe, and the
 // trailing newlines come off the result — both of those are what makes
 // `x=$(pwd)` behave.
-unsafe @ __sh_capture inout ShStateImpl st s script → String {
+@ __sh_capture inout ShStateImpl st s script → String {
     : String out ( string_new )
     ? ! ( __sh_can_fork ) {
         // No processes: run it HERE with stdout pointed at a temporary
@@ -2384,14 +2361,12 @@ unsafe @ __sh_capture inout ShStateImpl st s script → String {
             }
         }
     } {}
-    : ( Vec u ) fdbuf_v ( vec_zeroed [u] 16 )
-    : s fdbuf # s ( vec_data [u] fdbuf_v )
-    : i32 pr ( pipe # *u fdbuf )
-    ? < # i pr 0 {
-        ^ out
-    } {}
-    : i rfd ( __le32_at ( slice_from_vec [u] fdbuf_v ) 0 )
-    : i wfd ( __le32_at ( slice_from_vec [u] fdbuf_v ) 4 )
+    : ~ i rfd -1
+    : ~ i wfd -1
+    ?? ( posix_pipe ) {
+        T pp → { = rfd . pp rd = wfd . pp wr }
+        F → { ^ out }
+    }
     ( flush )
     : i32 pid ( fork )
     ? == # i pid 0 {
@@ -2403,18 +2378,11 @@ unsafe @ __sh_capture inout ShStateImpl st s script → String {
         ( _exit # i32 rc )
     } {}
     : i32 _c2 ( close # i32 wfd )
-    : ( Vec u ) buf_v ( vec_zeroed [u] 4096 )
-    : s buf # s ( vec_data [u] buf_v )
-    : ~ b more T
-    ~ more {
-        : i got ( read # i32 rfd # *u buf 4096 )
-        ? <= got 0 { = more F } { ( string_push_window out ( slice_from_vec [u] buf_v ) 0 got ) }
-    }
+    : ( Vec u ) got_v ( vec_new [u] )
+    ~ > ( posix_read_append rfd got_v 4096 ) 0 {}
+    ( string_push_window out ( slice_from_vec [u] got_v ) 0 ( vec_len [u] got_v ) )
     : i32 _c3 ( close # i32 rfd )
-    : ( Vec u ) statusbuf_v ( vec_zeroed [u] 8 )
-    : s statusbuf # s ( vec_data [u] statusbuf_v )
-    : i32 _w ( waitpid pid # *u statusbuf # i32 0 )
-    = . st status ( nurl_wait_exit_status & ( nurl_peek statusbuf 0 ) 65535 )
+    = . st status ( posix_wait_exit # i pid )
     : ~ i n ( string_len out )
     ~ & > n 0 == ( string_get out - n 1 ) 10 { = n - n 1 }
     : String trimmed ( string_substr out 0 n )

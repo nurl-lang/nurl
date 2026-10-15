@@ -2,6 +2,16 @@
 
 All notable changes to the `nurllama` package.
 
+## [0.21.1] — 2026-10-14
+
+### Changed
+
+- The engine and finetune records start as literals of their empty values
+  (`gpu_none`, `gpu_kernel_none`, `tok_empty`, `gguf_empty`, empty Vecs)
+  instead of `locked_zero`: two `unsafe` functions fewer. What stays
+  `unsafe` uploads device memory or launches kernels. Requires tokenizer
+  0.4.6 and gguf 0.6.1.
+
 ## [0.21.0] — 2026-10-14
 
 ### Changed

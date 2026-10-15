@@ -110,10 +110,10 @@ $ `stdlib/std/arc.nu`
 
 @ FtModel_drop sink FtModel h → v {}
 
-// The state of a model that is opening: every field zero (Vecs without a
-// block, the Gguf option F). ft_open fills every field it reads before
-// anything reads it, and an early return drops the half-built state whole.
-unsafe @ __ft_blank → ( Locked FtModelImpl ) { ^ ( locked_zero [FtModelImpl] ) }
+// The state of a model that is opening: every field at its empty value.
+// ft_open fills every field it reads before anything reads it, and an
+// early return drops the half-built state whole.
+@ __ft_blank → ( Locked FtModelImpl ) { ^ ( locked_new [FtModelImpl] @ FtModelImpl { F 0 0 0 0 0 0 0 0.0 0.0 0 0 ( vec_new [f] ) @ FtW { 0 0 ( vec_new [f] ) } ( vec_new [f] ) ( vec_new [FtW] ) ( vec_new [FtW] ) ( vec_new [FtW] ) ( vec_new [FtW] ) ( vec_new [FtW] ) ( vec_new [FtW] ) ( vec_new [FtW] ) ( vec_new [FtV] ) ( vec_new [FtV] ) ( vec_new [FtV] ) ( vec_new [FtV] ) ( vec_new [FtV] ) ( vec_new [FtV] ) ( vec_new [FtV] ) ( string_new ) F ( vec_new [i] ) ( vec_new [i] ) @ ?Gguf { F } } ) }
 
 // Streaming base upload, OFF by default: the finetune tests compare the CPU
 // tape's loss against the device's, and a lazy const has no host values to

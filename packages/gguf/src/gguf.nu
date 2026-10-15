@@ -189,6 +189,12 @@ $ `stdlib/core/slice.nu`
 
 @ Gguf_drop sink Gguf h → v {}
 
+// A container with nothing in it: no metadata, no tensors, no bytes. What
+// an engine record holds before its model file is opened.
+@ gguf_empty → Gguf {
+    ^ @ Gguf { ( arc_new [GgufImpl] @ GgufImpl { 0 0 ( vec_new [GgufKv] ) ( vec_new [GgufTensor] ) 0 0 ( mapped_of_bytes ( vec_new [u] ) ) } ) }
+}
+
 // ── bounded little-endian cursor over the mapping ───────────────────
 // Every read checks the remaining byte budget first; the first
 // out-of-bounds read latches `fail` and all subsequent reads return

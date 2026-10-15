@@ -369,6 +369,7 @@ $ `stdlib/core/slice.nu`
 
 $ `stdlib/core/posix.nu`
 $ `fileops.nu`
+$ `stdlib/std/process.nu`
 
 : FindCtx {
     s path
@@ -438,30 +439,18 @@ $ `fileops.nu`
 // -exec CMD ... {} \;  — a real fork + exec, so the child writes to the
 // terminal itself instead of having its output captured and replayed
 // out of order.
-unsafe @ __find_exec ( Vec String ) toks i from i to s path → b {
+@ __find_exec ( Vec String ) toks i from i to s path → b {
     : i n - to from
     ? <= n 0 { ^ F } {}
-    ( flush )
-    : i32 pid ( fork )
-    ? == # i pid 0 {
-        : ( Vec u ) argvbuf_v ( vec_zeroed [u] * 8 + n 1 )
-        : s argvbuf # s ( vec_data [u] argvbuf_v )
-        : ~ i k 0
-        ~ < k n {
-            : s t ( __find_tok toks + from k )
-            ( nurl_poke argvbuf k # i ? ( bx_streq t `{}` ) path t )
-            = k + k 1
-        }
-        : i32 _r ( execvp # s ( nurl_peek argvbuf 0 ) # *u argvbuf )
-        ( _exit # i32 127 )
-        ^ F
-    } {}
-    ? < # i pid 0 { ^ F } {}
-    : ( Vec u ) statusbuf_v ( vec_zeroed [u] 8 )
-    : s statusbuf # s ( vec_data [u] statusbuf_v )
-    : i32 _w ( waitpid pid # *u statusbuf # i32 0 )
-    : i raw ( nurl_peek statusbuf 0 )
-    ^ == 0 ( nurl_wait_exit_status & raw 65535 )
+    // the command, `{}` replaced by the path
+    : ( Vec String ) argv ( vec_new [String] )
+    : ~ i k 0
+    ~ < k n {
+        : s t ( __find_tok toks + from k )
+        ( vec_push [String] argv ( string_from ? ( bx_streq t `{}` ) path t ) )
+        = k + k 1
+    }
+    ^ == 0 ( process_run_inherit argv 0 )
 }
 
 @ __find_print s path i term → v {

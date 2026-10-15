@@ -408,6 +408,16 @@ generic that copies its `T` cannot be instantiated with one (h235)
 
 ### Added
 
+- **Process control without pointers** (stdlib/std/process.nu).
+  `process_run_inherit` runs an argv as a child sharing this process's
+  stdio and returns its exit status. `posix_execvp` replaces the process
+  image from a `( Vec String )`. `posix_wait_exit` waits and decodes the
+  status, `posix_pipe` returns the descriptor pair as a `PosixPipe`, and
+  `posix_read_append` reads into a Vec. Code that drove fork/exec by hand
+  had to build argv arrays, status words and pipe buffers through raw
+  pointers; nurlbox's shell, `env`, `find -exec` and `xargs` need no
+  `unsafe` now.
+
 - **Globals set at start** (spec §3.4, docs/MEMORY.md Module globals,
   grammar `start_init`). `: ( Locked T ) g ( make )` runs `make`, a
   function of no arguments, once before `main`; nothing writes `g` after,
