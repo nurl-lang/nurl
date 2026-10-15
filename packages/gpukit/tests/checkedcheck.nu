@@ -306,6 +306,36 @@ ST(o, gid, s + LD(acc, 9) - LD(acc, 3));` 2 64 )
     ? ( gk_buf_ok huge ) { ( nurl_print `FAIL a buffer of 2^61 + 1 doubles was made\n` ) = g_fail + g_fail 1 } { ( nurl_print `ok   refuses a buffer whose byte count overflows\n` ) }
 }
 
+// Recorded launches: checked and bound once, replayed many times; a
+// record holds its buffers, so it outlives the caller's handles to them.
+@ rrun GpuKit kit → v {
+    : ~ ( Vec f ) xs ( vec_new [f] )
+    : ~ i k 0
+    ~ < k 64 { ( vec_push [f] xs # f k ) = k + k 1 }
+    : ~ GkLaunch rec ( gk_launch_none kit )
+    : ~ GkLaunch bad ( gk_launch_none kit )
+    : GkBuf o ( gk_dbuf_new kit 64 GK_F64 )
+    : b _z ( gk_dbuf_upload kit o ( vec_zeroed [f] 64 ) )
+    {
+        : GkBuf x ( gk_dbuf_new kit 64 GK_F64 )
+        : b _u ( gk_dbuf_upload kit x xs )
+        : ~ GkCall c ( gk_call_new )
+        ( gk_call_dev_in c `x` x ) ( gk_call_dev c `o` o ) ( gk_call_f64 c `w` 0.5 )
+        = rec ( gk_record_dev kit c `acc` `if (gid < 64) { ST(o, gid, LD(o, gid) + w * LD(x, gid)); }` 1 64 )
+        : ~ GkCall c2 ( gk_call_new )
+        ( gk_call_dev c2 `o` o )
+        = bad ( gk_record_dev kit c2 `bad` `double* p = 0;` 1 64 )
+    }
+    // x's own handle is gone; the record still holds the buffer
+    : ~ b ok ( gk_launch_ok rec )
+    = k 0
+    ~ < k 4 { = ok & ok ( gk_replay rec ) = k + k 1 }
+    : ~ ( Vec f ) got ( vec_zeroed [f] 64 )
+    : b _d ( gk_dbuf_download kit o got )
+    ? & & ok == ( vec_at [f] got 0 ) 0.0 == ( vec_at [f] got 63 ) 126.0 { ( nurl_print `ok   a recorded launch replayed four times (its input held by the record)\n` ) } { ( nurl_print `FAIL recorded launch\n` ) = g_fail + g_fail 1 }
+    ? | ( gk_launch_ok bad ) ( gk_replay bad ) { ( nurl_print `FAIL a refused body made a launch record\n` ) = g_fail + g_fail 1 } { ( nurl_print `ok   a refused body makes a record that launches nothing\n` ) }
+}
+
 @ main → i {
     : GpuKit kit ( gk_open_best )
     ? ( gk_ok kit ) {} { ( nurl_print `SKIP no device\n` ) ^ 0 }
@@ -315,6 +345,7 @@ ST(o, gid, s + LD(acc, 9) - LD(acc, 3));` 2 64 )
     ( dsubset kit )
     ( drun kit )
     ( xrun kit )
+    ( rrun kit )
     ? == g_fail 0 { ( nurl_print `checked: all passed\n` ) } { ( nurl_print `checked: FAILURES\n` ) }
     ^ 0
 }

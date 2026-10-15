@@ -1174,6 +1174,23 @@ unsafe @ gk_run_checked GpuKit kit inout GkCall c s kname s body i nthreads i bl
 // The 16-bit float buffer binding `k` (kind 12) is bound to.
 @ __gkc_hbuf GkCall c i k → GkHBuf { ^ ( vec_at [GkHBuf] . c hb ( vec_at [i] . c slots k ) ) }
 
+// Is device or half buffer binding `k` there, with an element?
+@ __gkc_live GkCall c i k → b {
+    ? == ( vec_at [i] . c kinds k ) 12 {
+        : GkHBuf h ( __gkc_hbuf c k )
+        ^ & ( gk_hbuf_ok h ) > . h n 0
+    } {}
+    : GkBuf bk ( __gkc_dbuf c k )
+    ^ & ( gk_buf_ok bk ) > . bk n 0
+}
+
+// Its element type, as one character of a cache key (a GkBuf dtype as a
+// digit; `h` / `b` for f16 / bf16).
+@ __gkc_dtch GkCall c i k → i {
+    ? == ( vec_at [i] . c kinds k ) 12 { ^ ? . ( __gkc_hbuf c k ) bf 98 104 } {}
+    ^ + 48 . ( __gkc_dbuf c k ) dtype
+}
+
 // Binding `k`'s device byte range [lo, hi) (a device or half buffer).
 @ __gkc_drange GkCall c i k inout i lo inout i hi → v {
     ? == ( vec_at [i] . c kinds k ) 12 {
@@ -1302,9 +1319,12 @@ long long gid = bid * bdim + tid; long long nthreads = nblocks * bdim;
 // is outside the subset (gk_checked_error says why), a binding is not a
 // device buffer or a scalar, a buffer is empty, or one the kernel only
 // reads overlaps one it writes; F as well on a device error.
-unsafe @ gk_run_checked_dev GpuKit kit inout GkCall c s kname s body i nblocks i block → b {
+// The kernel `body` builds to over `c`'s bindings, checked (cached by
+// name, bindings and body); none (an empty source, gk_checked_error c says
+// why) when it is refused.
+@ __gkc_dev_build GpuKit kit inout GkCall c s kname s body i nblocks i block → ( Arc GkcBuilt ) {
     = . c err ( string_new )
-    ? | | < nblocks 0 < block 1 > block 1024 { = . c err ( __gkc_why `launch shape (0 or more blocks of 1 to 1024 threads)` `` ) ^ F } {}
+    ? | | < nblocks 0 < block 1 > block 1024 { = . c err ( __gkc_why `launch shape (0 or more blocks of 1 to 1024 threads)` `` ) ^ ( __gkc_none ) } {}
     : i nb ( vec_len [String] . c names )
     : ~ String key ( string_from `D` )
     ( string_push_str key kname )
@@ -1312,17 +1332,11 @@ unsafe @ gk_run_checked_dev GpuKit kit inout GkCall c s kname s body i nblocks i
     ~ < k nb {
         : s nm ( string_data ( vec_at [String] . c names k ) )
         : i kd ( vec_at [i] . c kinds k )
-        ? | | | == kd 8 == kd 9 == kd 12 | == kd 4 == kd 5 {} { = . c err ( __gkc_why `gk_run_checked_dev takes device buffers and scalars` nm ) ^ F }
+        ? | | | == kd 8 == kd 9 == kd 12 | == kd 4 == kd 5 {} { = . c err ( __gkc_why `gk_run_checked_dev takes device buffers and scalars` nm ) ^ ( __gkc_none ) }
         ( string_push_char key 1 ) ( string_push_str key nm ) ( string_push_char key + 48 kd )
-        ? | == kd 8 == kd 9 {
-            : GkBuf bk ( __gkc_dbuf c k )
-            ? & ( gk_buf_ok bk ) > . bk n 0 {} { = . c err ( __gkc_why `an empty or failed device buffer` nm ) ^ F }
-            ( string_push_char key + 48 . bk dtype )
-        } {}
-        ? == kd 12 {
-            : GkHBuf hk ( __gkc_hbuf c k )
-            ? & ( gk_hbuf_ok hk ) > . hk n 0 {} { = . c err ( __gkc_why `an empty or failed device buffer` nm ) ^ F }
-            ( string_push_char key ? . hk bf 98 104 )
+        ? | | == kd 8 == kd 9 == kd 12 {
+            ? ( __gkc_live c k ) {} { = . c err ( __gkc_why `an empty or failed device buffer` nm ) ^ ( __gkc_none ) }
+            ( string_push_char key ( __gkc_dtch c k ) )
         } {}
         // What the kernel only reads stays put while it runs: no buffer it
         // writes overlaps it.
@@ -1336,7 +1350,7 @@ unsafe @ gk_run_checked_dev GpuKit kit inout GkCall c s kname s body i nblocks i
                     : ~ i lo2 0
                     : ~ i hi2 0
                     ( __gkc_drange c j lo2 hi2 )
-                    ? & < lo hi2 < lo2 hi { = . c err ( __gkc_why `a buffer the kernel reads overlaps one it writes` nm ) ^ F } {}
+                    ? & < lo hi2 < lo2 hi { = . c err ( __gkc_why `a buffer the kernel reads overlaps one it writes` nm ) ^ ( __gkc_none ) } {}
                 } {}
                 = j + j 1
             }
@@ -1358,19 +1372,19 @@ unsafe @ gk_run_checked_dev GpuKit kit inout GkCall c s kname s body i nblocks i
     : ~ ( Arc GkcBuilt ) hit ( __gkc_lookup ( string_data key ) idx )
     ? == 0 ( string_len . ( arc_get [GkcBuilt] hit ) src ) {
         // (Checked once: the key holds the name, so a hit had it checked.)
-        ? ( __gkc_name_ok kname ) {} { = . c err ( __gkc_why `kernel name` kname ) ^ F }
+        ? ( __gkc_name_ok kname ) {} { = . c err ( __gkc_why `kernel name` kname ) ^ ( __gkc_none ) }
         : ( Vec String ) toks ( __gkc_toks body )
         : ~ ( Vec String ) shn ( vec_new [String] )
         : ~ ( Vec i ) sht ( vec_new [i] )
         : ~ ( Vec i ) shz ( vec_new [i] )
         = . c err ( __gkc_shared toks shn sht shz )
-        ? > ( string_len . c err ) 0 { ^ F } {}
+        ? > ( string_len . c err ) 0 { ^ ( __gkc_none ) } {}
         : ~ String bufs ( string_new )
         : ~ String outs ( string_new )
         = k 0
         ~ < k nb {
             : s nm ( string_data ( vec_at [String] . c names k ) )
-            ? ( __gkc_name_ok nm ) {} { = . c err ( __gkc_why `binding name` nm ) ^ F }
+            ? ( __gkc_name_ok nm ) {} { = . c err ( __gkc_why `binding name` nm ) ^ ( __gkc_none ) }
             : i kd ( vec_at [i] . c kinds k )
             ? | | == kd 8 == kd 9 == kd 12 { ( string_push_char bufs 32 ) ( string_push_str bufs nm ) } {}
             ? == kd 9 { ( string_push_char outs 32 ) ( string_push_str outs nm ) } {}
@@ -1379,7 +1393,7 @@ unsafe @ gk_run_checked_dev GpuKit kit inout GkCall c s kname s body i nblocks i
         = k 0
         ~ < k ( vec_len [String] shn ) {
             : s sn ( string_data ( vec_at [String] shn k ) )
-            ? ( __gkc_word_in ( string_data bufs ) sn ) { = . c err ( __gkc_why `a shared array named like a binding` sn ) ^ F } {}
+            ? ( __gkc_word_in ( string_data bufs ) sn ) { = . c err ( __gkc_why `a shared array named like a binding` sn ) ^ ( __gkc_none ) } {}
             ( string_push_char bufs 32 ) ( string_push_str bufs sn )
             ( string_push_char outs 32 ) ( string_push_str outs sn )
             = k + k 1
@@ -1388,14 +1402,14 @@ unsafe @ gk_run_checked_dev GpuKit kit inout GkCall c s kname s body i nblocks i
         : ~ ( Vec i ) lct ( vec_new [i] )
         : ~ ( Vec i ) lcz ( vec_new [i] )
         = . c err ( __gkc_add_locals toks lcn lct lcz bufs outs )
-        ? > ( string_len . c err ) 0 { ^ F } {}
+        ? > ( string_len . c err ) 0 { ^ ( __gkc_none ) } {}
         : ~ ( Vec i ) inits ( vec_new [i] )
         = . c err ( __gkc_check body ( string_data bufs ) ( string_data outs ) inits )
-        ? > ( string_len . c err ) 0 { ^ F } {}
+        ? > ( string_len . c err ) 0 { ^ ( __gkc_none ) } {}
         : b coop ( __gkc_coop toks )
         ? coop {
             = . c err ( __gkc_sync_check toks ( string_data outs ) )
-            ? > ( string_len . c err ) 0 { ^ F } {}
+            ? > ( string_len . c err ) 0 { ^ ( __gkc_none ) } {}
         } {}
         ? < idx 0 { = idx ( __gkc_reserve ( string_data key ) ) } {}
         : String en ( __gkc_entry kname idx )
@@ -1404,9 +1418,16 @@ unsafe @ gk_run_checked_dev GpuKit kit inout GkCall c s kname s body i nblocks i
         = hit ( __gkc_store idx nsrc en ( __gkc_shfl toks ) )
     } {}
     : GkcBuilt hb ( arc_get [GkcBuilt] hit )
-    ? & . hb shfl != 0 % block 32 { = . c err ( __gkc_why `a kernel with a warp shuffle runs in blocks of whole warps (a multiple of 32 threads)` `` ) ^ F } {}
-    : ( Vec i ) args ( vec_new [i] )
-    = k 0
+    ? & . hb shfl != 0 % block 32 { = . c err ( __gkc_why `a kernel with a warp shuffle runs in blocks of whole warps (a multiple of 32 threads)` `` ) ^ ( __gkc_none ) } {}
+    ^ hit
+}
+
+// The argument words of a block launch over `c`'s bindings, in the
+// kernel's parameter order (a buffer: its address, then its length).
+@ __gkc_dev_args GkCall c → ( Vec i ) {
+    : i nb ( vec_len [String] . c names )
+    : ~ i k 0
+    : ~ ( Vec i ) args ( vec_new [i] )
     ~ < k nb {
         : i kd ( vec_at [i] . c kinds k )
         ? | == kd 8 == kd 9 {
@@ -1421,8 +1442,72 @@ unsafe @ gk_run_checked_dev GpuKit kit inout GkCall c s kname s body i nblocks i
         = k + k 1
     }
     ( vec_push [i] args ( gpu_arg_i64 0 ) )
+    ^ args
+}
+
+unsafe @ gk_run_checked_dev GpuKit kit inout GkCall c s kname s body i nblocks i block → b {
+    : ( Arc GkcBuilt ) hit ( __gkc_dev_build kit c kname body nblocks block )
+    : GkcBuilt hb ( arc_get [GkcBuilt] hit )
+    ? == 0 ( string_len . hb src ) { ^ F } {}
+    : ( Vec i ) args ( __gkc_dev_args c )
     ? == nblocks 0 { ^ T } {}
     ^ ( gk_run_dev kit ( string_data . hb src ) ( string_data . hb ename ) nblocks block args )
+}
+
+// ── Recorded launches ─────────────────────────────────────────────────
+//
+// A program that launches the same kernels over the same buffers again
+// and again — an autograd tape replayed every training step — need not
+// check, build and bind them every time. gk_record_dev does all of
+// gk_run_checked_dev but the launch, and keeps what it built: the kernel,
+// the argument words, and a share of every buffer bound (so the buffers
+// live as long as the record), on the kit it was made for. gk_replay then
+// only launches — no binding names, no cache key, no argument building.
+// A record is `raw`: its argument words are addresses, so only gpukit
+// makes one.
+raw : GkLaunch {
+    GpuKit kit
+    ( Arc GkcBuilt ) built
+    ( Vec i ) args
+    ( Vec GkBuf ) hold
+    ( Vec GkHBuf ) holdh
+    i slot  // the kernel's slot in the kit's cache
+    i nblocks
+    i block
+    b ok
+}
+
+// A record that launches nothing (gk_replay answers F).
+unsafe @ gk_launch_none GpuKit kit → GkLaunch {
+    ^ @ GkLaunch { ( GpuKit_share kit ) ( __gkc_none ) ( vec_new [i] ) ( vec_new [GkBuf] ) ( vec_new [GkHBuf] ) -1 0 1 F }
+}
+
+@ gk_launch_ok GkLaunch l → b { ^ . l ok }
+
+// Check `body` against `c`'s bindings and build it, as gk_run_checked_dev
+// does, and record the launch instead of making it: a record that is not
+// ok (gk_checked_error c says why) when it would have answered F.
+unsafe @ gk_record_dev GpuKit kit inout GkCall c s kname s body i nblocks i block → GkLaunch {
+    : ( Arc GkcBuilt ) hit ( __gkc_dev_build kit c kname body nblocks block )
+    ? == 0 ( string_len . ( arc_get [GkcBuilt] hit ) src ) { ^ ( gk_launch_none kit ) } {}
+    : ~ ( Vec GkBuf ) hold ( vec_new [GkBuf] )
+    : ~ i k 0
+    ~ < k ( vec_len [GkBuf] . c db ) { ( vec_push [GkBuf] hold ( vec_at [GkBuf] . c db k ) ) = k + k 1 }
+    : ~ ( Vec GkHBuf ) holdh ( vec_new [GkHBuf] )
+    = k 0
+    ~ < k ( vec_len [GkHBuf] . c hb ) { ( vec_push [GkHBuf] holdh ( vec_at [GkHBuf] . c hb k ) ) = k + k 1 }
+    : GkcBuilt hb ( arc_get [GkcBuilt] hit )
+    : i slot ( __gk_slot_of kit ( string_data . hb src ) ( string_data . hb ename ) )
+    ? < slot 0 { = . c err ( __gkc_why `the kernel did not compile` `` ) ^ ( gk_launch_none kit ) } {}
+    ^ @ GkLaunch { ( GpuKit_share kit ) hit ( __gkc_dev_args c ) hold holdh slot nblocks block T }
+}
+
+// Make a recorded launch again, on the kit it was recorded for. F when the
+// record is not ok, or on a device error.
+unsafe @ gk_replay GkLaunch l → b {
+    ? . l ok {} { ^ F }
+    ? == . l nblocks 0 { ^ T } {}
+    ^ ( __gk_run_slot . l kit . l slot . l nblocks . l block . l args )
 }
 
 // (Last: dev.nu's ops are written over GkCall.)

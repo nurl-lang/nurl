@@ -605,6 +605,39 @@ raw @ gk_run_dev GpuKit h s src s name i grid i block ( Vec i ) args → b {
     ^ T
 }
 
+// The cache slot of kernel `name` (compiled from `src` on first use), -1
+// when it does not compile. A kit's cache only grows, so the slot stays
+// this kernel's for as long as the kit lives.
+unsafe @ __gk_slot_of GpuKit h s src s name → i {
+    ? ( _gk_ok h ) {} { ^ -1 }
+    : GkInfo inf ( arc_get [GkInfo] . h info )
+    : ~ GkState kit ( locked_take [GkState] . h st )
+    : i slot ( _gk_kernel_slot kit inf src name )
+    ( locked_restore [GkState] . h st kit )
+    ^ slot
+}
+
+// gk_run_dev with the kernel's slot already known (gk_replay): no name
+// lookup. The caller vouches that `slot` is a slot of this kit's cache and
+// `args` fit the kernel in it.
+raw @ __gk_run_slot GpuKit h i slot i grid i block ( Vec i ) args → b {
+    ? ( _gk_ok h ) {} { ^ F }
+    : GkInfo inf ( arc_get [GkInfo] . h info )
+    ? . inf census { ^ T } {}
+    : ~ GkState kit ( locked_take [GkState] . h st )
+    ? g_gk_prof { ( gpu_timer_mark . inf gpu . kit ev0 ) } {}
+    : i rc ( _gk_slot_launch kit slot grid block args )
+    ? & g_gk_prof == rc 0 {
+        ( gpu_timer_mark . inf gpu . kit ev1 )
+        ( __gk_prof_add kit slot ( gpu_timer_ns . inf gpu . kit ev0 . kit ev1 ) )
+    } {}
+    : b wait & g_gk_autosync ! . kit async
+    ( locked_restore [GkState] . h st kit )
+    ? == rc 0 {} { ^ F }
+    ? wait { ^ == ( gpu_sync . inf gpu ) 0 } {}
+    ^ T
+}
+
 // Compile (cached) and launch, the state held: F when the compile or the
 // launch failed. A census kit records the kernel and launches nothing.
 raw @ __gk_launch_in inout GkState kit GkInfo inf s src s name i grid i block ( Vec i ) args → b {

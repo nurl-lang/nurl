@@ -30,6 +30,10 @@ argument path had no callee to ask whether the caller owned it. It is
 dropped after the call now, as any owned call result is
 (`compiler/tests/mem_dup_temp_arg.nu`); packages/embed leaked a share of
 every weight chunk per forward this way.
+The borrow checker no longer takes a binding whose block has ended for
+live storage of the caller's: a local copy of a parameter's element read
+in a loop body made a later store into another field of that parameter an
+error (`compiler/tests/loop_copy_then_param_field_store.nu`).
 
 Taking `unsafe` out of the packages. A handle's state is changed in safe
 code now: `rc_take` / `rc_restore` (stdlib/std/rc.nu) and `locked_take` /

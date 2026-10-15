@@ -54,376 +54,300 @@ $ `stdlib/std/arc.nu`
 $ `stdlib/core/slice.nu`
 
 // ── the kernels ───────────────────────────────────────────────────────
-// One source, compiled once per kit (cached by entry name). All f64.
-@ __gp_src_f64 → s {
-    ^ `extern "C" __global__ void gp_fill(double* o, long long n, double v)
-{
-    long long i = (long long)blockIdx.x * blockDim.x + threadIdx.x;
-    if (i < n) o[i] = v;
-}
-extern "C" __global__ void gp_ew_bc(const double* a, const double* b, double* o, const long long* meta, long long moff, long long n, long long op)
-{
-    long long i = (long long)blockIdx.x * blockDim.x + threadIdx.x;
-    if (i >= n) return;
-    const long long* m = meta + moff;
-    long long nd = m[0];
-    const long long* ost = m + 1;
-    const long long* ae = ost + nd;
-    const long long* be = ae + nd;
-    long long rem = i, ao = 0, bo = 0;
+// Every kernel is a gpukit CHECKED kernel (gk_record_dev / gk_replay): it
+// reaches the program's buffers only through LD / ST, which check every
+// index against the buffer bound, so a launch is safe whatever sizes it is
+// handed and needs no `unsafe` to vouch for them. Written once in f64; the
+// metadata blocks (strides and offsets, i64) are read the same way.
+@ __gp_body s name → s {
+    ? != 0 ( nurl_str_eq name `fill` ) { ^ `if (gid < n) { double vv = (double)v; ST(o, gid, vv); }` } {}
+    ? != 0 ( nurl_str_eq name `ew_bc` ) { ^ `if (gid < n) {
+    long long nd = LD(meta, moff);
+    long long rem = gid;
+    long long ao = 0;
+    long long bo = 0;
     for (long long d = 0; d < nd; d++) {
-        long long st = ost[d];
-        long long c = st > 0 ? rem / st : 0;
+        long long st = LD(meta, moff + 1 + d);
+        long long q = st > 0 ? rem / st : 0;
         if (st > 0) rem = rem % st;
-        ao += c * ae[d];
-        bo += c * be[d];
+        ao += q * LD(meta, moff + 1 + nd + d);
+        bo += q * LD(meta, moff + 1 + 2 * nd + d);
     }
-    double x = a[ao]; double y = b[bo]; double r;
+    double x = LD(a, ao);
+    double y = LD(b, bo);
+    double r;
     if (op == 2) r = __dadd_rn(x, y);
     else if (op == 3) r = __dsub_rn(x, y);
     else if (op == 4) r = __dmul_rn(x, y);
     else r = __ddiv_rn(x, y);
-    o[i] = r;
-}
-extern "C" __global__ void gp_scal(const double* a, double* o, long long n, long long op, double c)
-{
-    long long i = (long long)blockIdx.x * blockDim.x + threadIdx.x;
-    if (i >= n) return;
-    double x = a[i]; double y;
+    ST(o, gid, r);
+}` } {}
+    ? != 0 ( nurl_str_eq name `scal` ) { ^ `if (gid < n) {
+    double cc = (double)c;
+    double x = LD(a, gid);
+    double y;
     if (op == 6) y = __dsub_rn(0.0, x);
-    else if (op == 7) y = __dadd_rn(x, c);
-    else if (op == 8) y = __dmul_rn(x, c);
+    else if (op == 7) y = __dadd_rn(x, cc);
+    else if (op == 8) y = __dmul_rn(x, cc);
     else y = x > 0.0 ? x : 0.0;
-    o[i] = y;
-}
-extern "C" __global__ void gp_trans(const double* a, double* o, long long n, long long op)
-{
-    long long i = (long long)blockIdx.x * blockDim.x + threadIdx.x;
-    if (i >= n) return;
-    double x = a[i]; double y;
+    ST(o, gid, y);
+}` } {}
+    ? != 0 ( nurl_str_eq name `trans` ) { ^ `if (gid < n) {
+    double x = LD(a, gid);
+    double y;
     if (op == 10) { double e = exp(__dsub_rn(0.0, x)); y = __ddiv_rn(1.0, __dadd_rn(1.0, e)); }
     else if (op == 11) { double e2 = exp(__dmul_rn(2.0, x)); y = __ddiv_rn(__dsub_rn(e2, 1.0), __dadd_rn(e2, 1.0)); }
     else if (op == 12) y = exp(x);
     else if (op == 13) y = log(x);
     else y = sqrt(x);
-    o[i] = y;
-}
-extern "C" __global__ void gp_reduce(const double* a, double* o, long long n, long long op)
-{
-    if (blockIdx.x != 0 || threadIdx.x != 0) return;
+    ST(o, gid, y);
+}` } {}
+    ? != 0 ( nurl_str_eq name `reduce` ) { ^ `if (gid == 0) {
     double acc = 0.0;
-    for (long long k = 0; k < n; k++) acc = __dadd_rn(acc, a[k]);
+    long long k = 0;
+    for (; k + 8 <= n; k += 8) {
+        double x0 = LD(a, k);
+        double x1 = LD(a, k + 1);
+        double x2 = LD(a, k + 2);
+        double x3 = LD(a, k + 3);
+        double x4 = LD(a, k + 4);
+        double x5 = LD(a, k + 5);
+        double x6 = LD(a, k + 6);
+        double x7 = LD(a, k + 7);
+        acc = __dadd_rn(acc, x0);
+        acc = __dadd_rn(acc, x1);
+        acc = __dadd_rn(acc, x2);
+        acc = __dadd_rn(acc, x3);
+        acc = __dadd_rn(acc, x4);
+        acc = __dadd_rn(acc, x5);
+        acc = __dadd_rn(acc, x6);
+        acc = __dadd_rn(acc, x7);
+    }
+    for (; k < n; k++) acc = __dadd_rn(acc, LD(a, k));
     if (op == 16) acc = __ddiv_rn(acc, (double)n);
-    o[0] = acc;
-}
-extern "C" __global__ void gp_matmul(const double* a, const double* b, double* c, long long M, long long K, long long N)
-{
-    long long i = (long long)blockIdx.x * blockDim.x + threadIdx.x;
-    if (i >= M * N) return;
-    long long r = i / N, cx = i % N;
+    ST(o, 0, acc);
+}` } {}
+    ? != 0 ( nurl_str_eq name `matmul` ) { ^ `if (gid < M * N) {
+    long long r = gid / N;
+    long long cx = gid % N;
     double s = 0.0;
-    for (long long p = 0; p < K; p++)
-        s = __dadd_rn(s, __dmul_rn(a[r * K + p], b[p * N + cx]));
-    c[i] = s;
-}
-extern "C" __global__ void gp_bmm(const double* a, const double* b, double* c, long long B, long long M, long long K, long long N)
-{
-    long long i = (long long)blockIdx.x * blockDim.x + threadIdx.x;
-    if (i >= B * M * N) return;
-    long long bb = i / (M * N), rest = i % (M * N);
-    long long r = rest / N, cx = rest % N;
-    const double* ab = a + bb * M * K;
-    const double* bp = b + bb * K * N;
+    for (long long p = 0; p < K; p++) s = __dadd_rn(s, __dmul_rn(LD(a, r * K + p), LD(b, p * N + cx)));
+    ST(c, gid, s);
+}` } {}
+    ? != 0 ( nurl_str_eq name `bmm` ) { ^ `if (gid < B * M * N) {
+    long long bb = gid / (M * N);
+    long long rest = gid % (M * N);
+    long long r = rest / N;
+    long long cx = rest % N;
+    long long ab = bb * M * K;
+    long long bp = bb * K * N;
     double s = 0.0;
-    for (long long p = 0; p < K; p++)
-        s = __dadd_rn(s, __dmul_rn(ab[r * K + p], bp[p * N + cx]));
-    c[i] = s;
-}
-extern "C" __global__ void gp_transpose(const double* a, double* o, long long M, long long N)
-{
-    long long i = (long long)blockIdx.x * blockDim.x + threadIdx.x;
-    if (i >= M * N) return;
-    long long r = i / N, cx = i % N;
-    o[cx * M + r] = a[i];
-}
-extern "C" __global__ void gp_copy(const double* a, double* o, long long n)
-{
-    long long i = (long long)blockIdx.x * blockDim.x + threadIdx.x;
-    if (i < n) o[i] = a[i];
-}
-extern "C" __global__ void gp_softmax(const double* x, double* o, long long outer, long long ax, long long inner)
-{
-    long long i = (long long)blockIdx.x * blockDim.x + threadIdx.x;
-    if (i >= outer * inner) return;
-    long long ou = i / inner, in2 = i % inner;
+    for (long long p = 0; p < K; p++) s = __dadd_rn(s, __dmul_rn(LD(a, ab + r * K + p), LD(b, bp + p * N + cx)));
+    ST(c, gid, s);
+}` } {}
+    ? != 0 ( nurl_str_eq name `transpose` ) { ^ `if (gid < M * N) { long long r = gid / N; long long cx = gid % N; ST(o, cx * M + r, LD(a, gid)); }` } {}
+    ? != 0 ( nurl_str_eq name `copy` ) { ^ `if (gid < n) ST(o, gid, LD(a, gid));` } {}
+    ? != 0 ( nurl_str_eq name `softmax` ) { ^ `if (gid < outer * inner) {
+    long long ou = gid / inner;
+    long long in2 = gid % inner;
     long long base = ou * ax * inner + in2;
-    double m = x[base];
+    double m = LD(x, base);
     for (long long t = 1; t < ax; t++) {
-        double xv = x[base + t * inner];
+        double xv = LD(x, base + t * inner);
         if (xv > m) m = xv;
     }
     double s = 0.0;
     for (long long t = 0; t < ax; t++) {
-        double e = exp(__dsub_rn(x[base + t * inner], m));
-        o[base + t * inner] = e;
+        double e = exp(__dsub_rn(LD(x, base + t * inner), m));
+        ST(o, base + t * inner, e);
     }
-    for (long long t = 0; t < ax; t++) s = __dadd_rn(s, o[base + t * inner]);
+    for (long long t = 0; t < ax; t++) s = __dadd_rn(s, LD(o, base + t * inner));
     for (long long t = 0; t < ax; t++) {
         long long ix = base + t * inner;
-        o[ix] = __ddiv_rn(o[ix], s);
+        ST(o, ix, __ddiv_rn(LD(o, ix), s));
     }
-}
-extern "C" __global__ void gp_slice_fwd(const double* a, double* o, const long long* meta, long long n)
-{
-    long long i = (long long)blockIdx.x * blockDim.x + threadIdx.x;
-    if (i >= n) return;
-    long long nd = meta[0];
-    const long long* ost = meta + 1;
-    const long long* ist = ost + nd;
-    const long long* st = ist + nd;
-    long long rem = i, ino = 0;
+}` } {}
+    ? != 0 ( nurl_str_eq name `slice_fwd` ) { ^ `if (gid < n) {
+    long long nd = LD(meta, 0);
+    long long rem = gid;
+    long long ino = 0;
     for (long long d = 0; d < nd; d++) {
-        long long sd = ost[d];
-        long long c = sd > 0 ? rem / sd : 0;
+        long long sd = LD(meta, 1 + d);
+        long long q = sd > 0 ? rem / sd : 0;
         if (sd > 0) rem = rem % sd;
-        ino += (c + st[d]) * ist[d];
+        ino += (q + LD(meta, 1 + 2 * nd + d)) * LD(meta, 1 + nd + d);
     }
-    o[i] = a[ino];
-}
-extern "C" __global__ void gp_concat_fwd(const double* a, const double* b, double* o, long long outer, long long ax, long long inner, long long da)
-{
-    long long i = (long long)blockIdx.x * blockDim.x + threadIdx.x;
-    if (i >= outer * ax * inner) return;
-    long long ou = i / (ax * inner);
-    long long t = (i / inner) % ax;
-    long long in2 = i % inner;
-    if (t < da) o[i] = a[(ou * da + t) * inner + in2];
-    else o[i] = b[(ou * (ax - da) + (t - da)) * inner + in2];
-}
-extern "C" __global__ void gp_bw_accred(double* ga, const double* c, const long long* meta, long long moff, long long in_n, long long tfree, double sgn)
-{
-    long long i = (long long)blockIdx.x * blockDim.x + threadIdx.x;
-    if (i >= in_n) return;
-    const long long* m = meta + moff;
-    long long nd = m[0];
-    const long long* ost = m + 1;
-    const long long* dec = ost + nd;
-    const long long* fdim = dec + nd;
-    const long long* fdec = fdim + nd;
-    long long rem = i, base = 0;
+    ST(o, gid, LD(a, ino));
+}` } {}
+    ? != 0 ( nurl_str_eq name `concat_fwd` ) { ^ `if (gid < outer * ax * inner) {
+    long long ou = gid / (ax * inner);
+    long long t = (gid / inner) % ax;
+    long long in2 = gid % inner;
+    if (t < da) ST(o, gid, LD(a, (ou * da + t) * inner + in2));
+    else ST(o, gid, LD(b, (ou * (ax - da) + (t - da)) * inner + in2));
+}` } {}
+    ? != 0 ( nurl_str_eq name `bw_accred` ) { ^ `if (gid < in_n) {
+    double sg = (double)sgn;
+    long long nd = LD(meta, moff);
+    long long rem = gid;
+    long long base = 0;
     for (long long d = 0; d < nd; d++) {
-        long long st = dec[d];
+        long long st = LD(meta, moff + 1 + nd + d);
         long long ix = st > 0 ? rem / st : 0;
         if (st > 0) rem = rem % st;
-        base += ix * ost[d];
+        base += ix * LD(meta, moff + 1 + d);
     }
-    double g0 = ga[i];
+    double g0 = LD(ga, gid);
     for (long long q = 0; q < tfree; q++) {
-        long long r2 = q, off = base;
+        long long r2 = q;
+        long long off = base;
         for (long long d = 0; d < nd; d++) {
-            long long st = fdec[d];
+            long long st = LD(meta, moff + 1 + 3 * nd + d);
             long long jx = st > 0 ? r2 / st : 0;
             if (st > 0) r2 = r2 % st;
-            off += jx * ost[d];
+            off += jx * LD(meta, moff + 1 + d);
         }
-        g0 = __dadd_rn(g0, __dmul_rn(sgn, c[off]));
+        g0 = __dadd_rn(g0, __dmul_rn(sg, LD(c, off)));
     }
-    ga[i] = g0;
-}
-extern "C" __global__ void gp_bw_unary(double* ga, const double* g, const double* y, const double* x, long long n, long long op, double c)
-{
-    long long i = (long long)blockIdx.x * blockDim.x + threadIdx.x;
-    if (i >= n) return;
-    double gi = g[i]; double a0 = ga[i];
+    ST(ga, gid, g0);
+}` } {}
+    ? != 0 ( nurl_str_eq name `bw_unary` ) { ^ `if (gid < n) {
+    double cc = (double)c;
+    double gi = LD(g, gid);
+    double a0 = LD(ga, gid);
     if (op == 6) a0 = __dsub_rn(a0, gi);
     else if (op == 7) a0 = __dadd_rn(a0, gi);
-    else if (op == 8) a0 = __dadd_rn(a0, __dmul_rn(gi, c));
-    else if (op == 9) { if (y[i] > 0.0) a0 = __dadd_rn(a0, gi); }
-    else if (op == 10) { double yj = y[i]; a0 = __dadd_rn(a0, __dmul_rn(gi, __dmul_rn(yj, __dsub_rn(1.0, yj)))); }
-    else if (op == 11) { double yj = y[i]; a0 = __dadd_rn(a0, __dmul_rn(gi, __dsub_rn(1.0, __dmul_rn(yj, yj)))); }
-    else if (op == 12) a0 = __dadd_rn(a0, __dmul_rn(gi, y[i]));
-    else if (op == 13) a0 = __dadd_rn(a0, __ddiv_rn(gi, x[i]));
-    else a0 = __dadd_rn(a0, __ddiv_rn(gi, __dmul_rn(2.0, y[i])));
-    ga[i] = a0;
-}
-extern "C" __global__ void gp_bw_reduce(double* ga, const double* g, long long an, long long op)
-{
-    long long i = (long long)blockIdx.x * blockDim.x + threadIdx.x;
-    if (i >= an) return;
-    double g0 = g[0];
+    else if (op == 8) a0 = __dadd_rn(a0, __dmul_rn(gi, cc));
+    else if (op == 9) { if (LD(y, gid) > 0.0) a0 = __dadd_rn(a0, gi); }
+    else if (op == 10) { double yj = LD(y, gid); a0 = __dadd_rn(a0, __dmul_rn(gi, __dmul_rn(yj, __dsub_rn(1.0, yj)))); }
+    else if (op == 11) { double yj = LD(y, gid); a0 = __dadd_rn(a0, __dmul_rn(gi, __dsub_rn(1.0, __dmul_rn(yj, yj)))); }
+    else if (op == 12) a0 = __dadd_rn(a0, __dmul_rn(gi, LD(y, gid)));
+    else if (op == 13) a0 = __dadd_rn(a0, __ddiv_rn(gi, LD(x, gid)));
+    else a0 = __dadd_rn(a0, __ddiv_rn(gi, __dmul_rn(2.0, LD(y, gid))));
+    ST(ga, gid, a0);
+}` } {}
+    ? != 0 ( nurl_str_eq name `bw_reduce` ) { ^ `if (gid < an) {
+    double g0 = LD(g, 0);
     if (op == 16) g0 = __ddiv_rn(g0, (double)an);
-    ga[i] = __dadd_rn(ga[i], g0);
-}
-extern "C" __global__ void gp_bw_mm_a(double* ga, const double* g, const double* b, long long M, long long K, long long N)
-{
-    long long t = (long long)blockIdx.x * blockDim.x + threadIdx.x;
-    if (t >= M * K) return;
-    long long i = t / K, p = t % K;
+    ST(ga, gid, __dadd_rn(LD(ga, gid), g0));
+}` } {}
+    ? != 0 ( nurl_str_eq name `bw_mm_a` ) { ^ `if (gid < M * K) {
+    long long i = gid / K;
+    long long p = gid % K;
     double acc = 0.0;
-    for (long long j = 0; j < N; j++)
-        acc = __dadd_rn(acc, __dmul_rn(g[i * N + j], b[p * N + j]));
-    ga[t] = __dadd_rn(ga[t], acc);
-}
-extern "C" __global__ void gp_bw_mm_b(double* gb, const double* a, const double* g, long long M, long long K, long long N)
-{
-    long long t = (long long)blockIdx.x * blockDim.x + threadIdx.x;
-    if (t >= K * N) return;
-    long long p = t / N, j = t % N;
+    for (long long j = 0; j < N; j++) acc = __dadd_rn(acc, __dmul_rn(LD(g, i * N + j), LD(b, p * N + j)));
+    ST(ga, gid, __dadd_rn(LD(ga, gid), acc));
+}` } {}
+    ? != 0 ( nurl_str_eq name `bw_mm_b` ) { ^ `if (gid < K * N) {
+    long long p = gid / N;
+    long long j = gid % N;
     double acc = 0.0;
-    for (long long i = 0; i < M; i++)
-        acc = __dadd_rn(acc, __dmul_rn(a[i * K + p], g[i * N + j]));
-    gb[t] = __dadd_rn(gb[t], acc);
-}
-extern "C" __global__ void gp_bw_bmm_a(double* ga, const double* g, const double* b, long long B, long long M, long long K, long long N)
-{
-    long long t = (long long)blockIdx.x * blockDim.x + threadIdx.x;
-    if (t >= B * M * K) return;
-    long long bb = t / (M * K), rest = t % (M * K);
-    long long i = rest / K, p = rest % K;
-    const double* gb2 = g + bb * M * N;
-    const double* bp = b + bb * K * N;
+    for (long long i = 0; i < M; i++) acc = __dadd_rn(acc, __dmul_rn(LD(a, i * K + p), LD(g, i * N + j)));
+    ST(gb, gid, __dadd_rn(LD(gb, gid), acc));
+}` } {}
+    ? != 0 ( nurl_str_eq name `bw_bmm_a` ) { ^ `if (gid < B * M * K) {
+    long long bb = gid / (M * K);
+    long long rest = gid % (M * K);
+    long long i = rest / K;
+    long long p = rest % K;
+    long long gb2 = bb * M * N;
+    long long bp = bb * K * N;
     double acc = 0.0;
-    for (long long j = 0; j < N; j++)
-        acc = __dadd_rn(acc, __dmul_rn(gb2[i * N + j], bp[p * N + j]));
-    ga[t] = __dadd_rn(ga[t], acc);
-}
-extern "C" __global__ void gp_bw_bmm_b(double* gbo, const double* a, const double* g, long long B, long long M, long long K, long long N)
-{
-    long long t = (long long)blockIdx.x * blockDim.x + threadIdx.x;
-    if (t >= B * K * N) return;
-    long long bb = t / (K * N), rest = t % (K * N);
-    long long p = rest / N, j = rest % N;
-    const double* ab = a + bb * M * K;
-    const double* gp2 = g + bb * M * N;
+    for (long long j = 0; j < N; j++) acc = __dadd_rn(acc, __dmul_rn(LD(g, gb2 + i * N + j), LD(b, bp + p * N + j)));
+    ST(ga, gid, __dadd_rn(LD(ga, gid), acc));
+}` } {}
+    ? != 0 ( nurl_str_eq name `bw_bmm_b` ) { ^ `if (gid < B * K * N) {
+    long long bb = gid / (K * N);
+    long long rest = gid % (K * N);
+    long long p = rest / N;
+    long long j = rest % N;
+    long long ab = bb * M * K;
+    long long gp2 = bb * M * N;
     double acc = 0.0;
-    for (long long i = 0; i < M; i++)
-        acc = __dadd_rn(acc, __dmul_rn(ab[i * K + p], gp2[i * N + j]));
-    gbo[t] = __dadd_rn(gbo[t], acc);
-}
-extern "C" __global__ void gp_bw_transpose(double* ga, const double* g, long long M, long long N)
-{
-    long long i = (long long)blockIdx.x * blockDim.x + threadIdx.x;
-    if (i >= M * N) return;
-    long long r = i / N, cx = i % N;
-    ga[i] = __dadd_rn(ga[i], g[cx * M + r]);
-}
-extern "C" __global__ void gp_bw_copy(double* ga, const double* g, long long n)
-{
-    long long i = (long long)blockIdx.x * blockDim.x + threadIdx.x;
-    if (i < n) ga[i] = __dadd_rn(ga[i], g[i]);
-}
-extern "C" __global__ void gp_bw_softmax(double* ga, const double* g, const double* y, long long outer, long long ax, long long inner)
-{
-    long long i = (long long)blockIdx.x * blockDim.x + threadIdx.x;
-    if (i >= outer * inner) return;
-    long long ou = i / inner, in2 = i % inner;
+    for (long long i = 0; i < M; i++) acc = __dadd_rn(acc, __dmul_rn(LD(a, ab + i * K + p), LD(g, gp2 + i * N + j)));
+    ST(gbo, gid, __dadd_rn(LD(gbo, gid), acc));
+}` } {}
+    ? != 0 ( nurl_str_eq name `bw_transpose` ) { ^ `if (gid < M * N) { long long r = gid / N; long long cx = gid % N; ST(ga, gid, __dadd_rn(LD(ga, gid), LD(g, cx * M + r))); }` } {}
+    ? != 0 ( nurl_str_eq name `bw_copy` ) { ^ `if (gid < n) ST(ga, gid, __dadd_rn(LD(ga, gid), LD(g, gid)));` } {}
+    ? != 0 ( nurl_str_eq name `bw_softmax` ) { ^ `if (gid < outer * inner) {
+    long long ou = gid / inner;
+    long long in2 = gid % inner;
     long long base = ou * ax * inner + in2;
     double dot = 0.0;
-    for (long long t = 0; t < ax; t++) {
-        long long ix = base + t * inner;
-        dot = __dadd_rn(dot, __dmul_rn(g[ix], y[ix]));
-    }
-    for (long long t = 0; t < ax; t++) {
-        long long ix = base + t * inner;
-        ga[ix] = __dadd_rn(ga[ix], __dmul_rn(y[ix], __dsub_rn(g[ix], dot)));
-    }
-}
-extern "C" __global__ void gp_bw_slice(double* ga, const double* g, const long long* meta, long long n)
-{
-    long long i = (long long)blockIdx.x * blockDim.x + threadIdx.x;
-    if (i >= n) return;
-    long long nd = meta[0];
-    const long long* ost = meta + 1;
-    const long long* ist = ost + nd;
-    const long long* st = ist + nd;
-    long long rem = i, ioff = 0;
+    for (long long t = 0; t < ax; t++) { long long ix = base + t * inner; dot = __dadd_rn(dot, __dmul_rn(LD(g, ix), LD(y, ix))); }
+    for (long long t = 0; t < ax; t++) { long long ix = base + t * inner; ST(ga, ix, __dadd_rn(LD(ga, ix), __dmul_rn(LD(y, ix), __dsub_rn(LD(g, ix), dot)))); }
+}` } {}
+    ? != 0 ( nurl_str_eq name `bw_slice` ) { ^ `if (gid < n) {
+    long long nd = LD(meta, 0);
+    long long rem = gid;
+    long long ioff = 0;
     for (long long d = 0; d < nd; d++) {
-        long long sd = ost[d];
-        long long c = sd > 0 ? rem / sd : 0;
+        long long sd = LD(meta, 1 + d);
+        long long q = sd > 0 ? rem / sd : 0;
         if (sd > 0) rem = rem % sd;
-        ioff += (c + st[d]) * ist[d];
+        ioff += (q + LD(meta, 1 + 2 * nd + d)) * LD(meta, 1 + nd + d);
     }
-    ga[ioff] = __dadd_rn(ga[ioff], g[i]);
-}
-extern "C" __global__ void gp_bw_concat(double* ga, double* gb, const double* g, long long outer, long long ax, long long inner, long long da)
-{
-    long long i = (long long)blockIdx.x * blockDim.x + threadIdx.x;
-    if (i >= outer * ax * inner) return;
-    long long ou = i / (ax * inner);
-    long long t = (i / inner) % ax;
-    long long in2 = i % inner;
-    if (t < da) {
-        long long ix = (ou * da + t) * inner + in2;
-        ga[ix] = __dadd_rn(ga[ix], g[i]);
-    } else {
-        long long ix = (ou * (ax - da) + (t - da)) * inner + in2;
-        gb[ix] = __dadd_rn(gb[ix], g[i]);
-    }
-}
-extern "C" __global__ void gp_gnorm(const long long* ptab, long long np, double* o)
-{
-    if (blockIdx.x != 0 || threadIdx.x != 0) return;
+    ST(ga, ioff, __dadd_rn(LD(ga, ioff), LD(g, gid)));
+}` } {}
+    ? != 0 ( nurl_str_eq name `bw_concat` ) { ^ `if (gid < outer * ax * inner) {
+    long long ou = gid / (ax * inner);
+    long long t = (gid / inner) % ax;
+    long long in2 = gid % inner;
+    if (t < da) { long long ix = (ou * da + t) * inner + in2; ST(ga, ix, __dadd_rn(LD(ga, ix), LD(g, gid))); }
+    else { long long ix = (ou * (ax - da) + (t - da)) * inner + in2; ST(gb, ix, __dadd_rn(LD(gb, ix), LD(g, gid))); }
+}` } {}
+    ? != 0 ( nurl_str_eq name `sqacc` ) { ^ `if (gid == 0) {
     double ss = 0.0;
-    for (long long p = 0; p < np; p++) {
-        const double* g = (const double*)(unsigned long long)ptab[2 * p];
-        long long n = ptab[2 * p + 1];
-        for (long long k = 0; k < n; k++)
-            ss = __dadd_rn(ss, __dmul_rn(g[k], g[k]));
-    }
-    o[0] = sqrt(ss);
-}
-extern "C" __global__ void gp_clipcs(const long long* ptab, long long np, double clip, double* ctl)
-{
-    if (blockIdx.x != 0 || threadIdx.x != 0) return;
-    double ss = 0.0;
-    for (long long p = 0; p < np; p++) {
-        const double* g = (const double*)(unsigned long long)ptab[2 * p];
-        long long n = ptab[2 * p + 1];
-        for (long long k = 0; k < n; k++)
-            ss = __dadd_rn(ss, __dmul_rn(g[k], g[k]));
-    }
-    double gn = sqrt(ss);
-    ctl[1] = (gn > clip) ? (clip / gn) : 1.0;
-}
-extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double* v, long long n, long long kind, const double* ctl, double alpha, double lr)
-{
-    long long k = (long long)blockIdx.x * blockDim.x + threadIdx.x;
-    if (k >= n) return;
-    double lrt = ctl[0];
-    double cs = ctl[1];
-    double gk = __dadd_rn(__dmul_rn(g[k], cs), __dmul_rn(alpha, w[k]));
+    if (first == 0) ss = LD(acc, 0);
+    for (long long k = 0; k < n; k++) ss = __dadd_rn(ss, __dmul_rn(LD(g, k), LD(g, k)));
+    ST(acc, 0, ss);
+}` } {}
+    ? != 0 ( nurl_str_eq name `clipfin` ) { ^ `if (gid == 0) {
+    double cl = (double)clip;
+    double gn = sqrt(LD(acc, 0));
+    ST(ctl, 1, (gn > cl) ? (cl / gn) : 1.0);
+}` } {}
+    ? != 0 ( nurl_str_eq name `opt` ) { ^ `if (gid < n) {
+    double lrt = LD(ctl, 0);
+    double cs = LD(ctl, 1);
+    double al = (double)alpha;
+    double lrr = (double)lr;
+    double gk = __dadd_rn(__dmul_rn(LD(g, gid), cs), __dmul_rn(al, LD(w, gid)));
     if (kind == 0) {
-        w[k] = __dsub_rn(w[k], __dmul_rn(lr, gk));
+        ST(w, gid, __dsub_rn(LD(w, gid), __dmul_rn(lrr, gk)));
     } else {
-        double b1 = 0.9; double b2 = 0.999;
-        double nm = __dadd_rn(__dmul_rn(b1, m[k]), __dmul_rn(__dsub_rn(1.0, b1), gk));
-        double nv = __dadd_rn(__dmul_rn(b2, v[k]), __dmul_rn(__dsub_rn(1.0, b2), __dmul_rn(gk, gk)));
-        m[k] = nm; v[k] = nv;
-        w[k] = __dsub_rn(w[k], __ddiv_rn(__dmul_rn(lrt, nm), __dadd_rn(sqrt(nv), 0.00000001)));
+        double b1 = 0.9;
+        double b2 = 0.999;
+        double nm = __dadd_rn(__dmul_rn(b1, LD(m, gid)), __dmul_rn(__dsub_rn(1.0, b1), gk));
+        double nv = __dadd_rn(__dmul_rn(b2, LD(v, gid)), __dmul_rn(__dsub_rn(1.0, b2), __dmul_rn(gk, gk)));
+        ST(m, gid, nm);
+        ST(v, gid, nv);
+        ST(w, gid, __dsub_rn(LD(w, gid), __ddiv_rn(__dmul_rn(lrt, nm), __dadd_rn(sqrt(nv), 0.00000001))));
     }
-}
-`
+}` } {}
+    ^ ``
 }
 
-// The f32 kernel source: the same kernels computed in float32. Derived
-// from the f64 source by swapping the element type, the round-to-nearest
-// intrinsics, and the libm transcendentals, and by PREFIXING every kernel
-// name gp_ -> gpf_ so the two never collide in gpukit's name-keyed cache.
-// The scalar interface goes float too (the callers pass f32 bits), so the
-// substitution is uniform. Storage halves and f32 ALUs run; the CPU tape
-// stays the f64 reference and the parity test bounds the gap.
-@ __gp_src_f32 → String {
-    : ~ String x ( _str_replace_all ( __gp_src_f64 ) `__dadd_rn` `__fadd_rn` )
-    = x ( _str_replace_all ( string_data x ) `__dsub_rn` `__fsub_rn` )
-    = x ( _str_replace_all ( string_data x ) `__dmul_rn` `__fmul_rn` )
-    = x ( _str_replace_all ( string_data x ) `__ddiv_rn` `__fdiv_rn` )
-    = x ( _str_replace_all ( string_data x ) `exp(` `expf(` )
-    = x ( _str_replace_all ( string_data x ) `log(` `logf(` )
-    = x ( _str_replace_all ( string_data x ) `sqrt(` `sqrtf(` )
-    = x ( _str_replace_all ( string_data x ) `(double)` `(float)` )
-    = x ( _str_replace_all ( string_data x ) `double` `float` )
-    = x ( _str_replace_all ( string_data x ) `__global__ void gp_` `__global__ void gpf_` )
-    ^ x
+// A kernel's body for the program's dtype. f64 and mixed run it as
+// written: mixed binds f32 buffers, and a load widens to double and a store
+// narrows exactly as the old pointer-typed source did. Pure f32 swaps the
+// element type, the round-to-nearest intrinsics and the libm calls — the
+// same substitution the f32 kernel source always went through, so its
+// arithmetic is unchanged.
+@ _gp_body i dtype s name → String {
+    ? == dtype 1 {
+        : ~ String x ( _str_replace_all ( __gp_body name ) `__dadd_rn` `__fadd_rn` )
+        = x ( _str_replace_all ( string_data x ) `__dsub_rn` `__fsub_rn` )
+        = x ( _str_replace_all ( string_data x ) `__dmul_rn` `__fmul_rn` )
+        = x ( _str_replace_all ( string_data x ) `__ddiv_rn` `__fdiv_rn` )
+        = x ( _str_replace_all ( string_data x ) `exp(` `expf(` )
+        = x ( _str_replace_all ( string_data x ) `log(` `logf(` )
+        = x ( _str_replace_all ( string_data x ) `sqrt(` `sqrtf(` )
+        = x ( _str_replace_all ( string_data x ) `(double)` `(float)` )
+        = x ( _str_replace_all ( string_data x ) `double` `float` )
+        ^ x
+    } {}
+    ^ ( string_from ( __gp_body name ) )
 }
 
 // Every simple textual replacement of `needle` with `rep` in `hay`. `needle`
@@ -478,88 +402,16 @@ extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double*
     i loss
     GpuGraph gexec  // the CUDA graph of one fwd+bwd episode (none until captured)
     i dtype  // 0 GK_F64 (default) · 1 GK_F32 (device replay in float32)
+    // The recorded launches (gk_record_dev), built on the first replay:
+    // per node forward and backward, and the gradient zeroing + seed.
+    ( Vec ( Vec GkLaunch ) ) frec
+    ( Vec ( Vec GkLaunch ) ) brec
+    ( Vec GkLaunch ) zrec
 }
 
 // A GProg is a handle on its state in an Arc (stdlib/std/arc.nu):
 // every copy is the same state, and the last owner releases it.
 // The state, for this package's own code.
-// The f32 source is constant but building it runs 10 full-source string
-// passes, so it is built once — otherwise _gp_src (called on EVERY kernel
-// launch, though only the NAME feeds gpukit's cache) would regenerate ~15
-// KB of string ops thousands of times per training and dominate the run.
-// Built at start (a few microseconds) and shared: a lazily filled string
-// global was a race between two threads training at once — each could
-// free the string the other was launching from.
-@ __gp_src_f32_make → ( Arc String ) { ^ ( arc_new [String] ( __gp_src_f32 ) ) }
-
-: ( Arc String ) g_gp_src_f32 ( __gp_src_f32_make )
-
-@ __gp_src_f32c → s { ^ ( string_data ( arc_get [String] g_gp_src_f32 ) ) }
-
-// MIXED precision (dtype 2): f32 STORAGE, f64 ACCUMULATION. Every buffer
-// pointer (`double*`) becomes `float*` — so val/grad/moment tensors are
-// f32 in device memory, exactly halving VRAM like pure f32 — but the
-// arithmetic is untouched: accumulator LOCALS stay `double`, and every op
-// stays a `__d*_rn` f64 intrinsic. A float loaded from a buffer promotes to
-// double for the math and narrows back on store. So a matmul dot over K, a
-// reduction over N, the global-norm over every parameter, and the Adam
-// update all accumulate in f64 while storing f32 — killing the matmul-K
-// swamping and clip-norm degeneracy that pure f32 (dtype 1, which narrows
-// the accumulators too) suffers at scale. (The C style makes this a pure
-// substitution: pointers are written `double*`, locals `double `.)
-@ __gp_src_mixed → String {
-    : ~ String x ( _str_replace_all ( __gp_src_f64 ) `double*` `float*` )
-    = x ( _str_replace_all ( string_data x ) `__global__ void gp_` `__global__ void gpm_` )
-    ^ x
-}
-
-@ __gp_src_mixed_make → ( Arc String ) { ^ ( arc_new [String] ( __gp_src_mixed ) ) }
-
-: ( Arc String ) g_gp_src_mixed ( __gp_src_mixed_make )
-
-@ __gp_src_mixedc → s { ^ ( string_data ( arc_get [String] g_gp_src_mixed ) ) }
-
-// Kernel source for a program's dtype.
-@ _gp_src inout GProg pg → s {
-    ? == . pg dtype 1 { ^ ( __gp_src_f32c ) } {}
-    ? == . pg dtype 2 { ^ ( __gp_src_mixedc ) } {}
-    ^ ( __gp_src_f64 )
-}
-
-// A kernel's name for the dtype (gp_ -> gpf_ in f32, gpm_ in mixed).
-// Returns an OWNED String either way — the f32/mixed prefix needs an
-// allocation, and an owned-sometimes return is exactly how the previous
-// version leaked one String per kernel launch: a 36-layer mixed training
-// step is ~45k launches, ~10 MB of host RAM per step, and the kernel OOM
-// killer ended two long finetunes before the arithmetic did. The caller
-// frees it after the launch (gk_run_dev copies the name into its cache).
-// (The prefix is picked with a branch, not `string_from ? cond `a` `b``:
-// a string-literal ternary in argument position materializes the picked
-// literal as an owned temporary the compiler never drops — ~32 bytes per
-// call, which on this hot path was the SECOND finetune leak, ~3.6 MB per
-// 4B training step after the big one was fixed. Minimized repro in
-// compiler/tests once the compiler bug is fixed; until then no literal
-// ternaries in call arguments on hot paths.)
-@ __gp_kn inout GProg pg s name → String {
-    ? | == . pg dtype 1 == . pg dtype 2 {
-        : ~ s pre `gpf_`
-        ? == . pg dtype 2 { = pre `gpm_` } {}
-        : String o ( string_from pre )
-        : ( Slice u ) nv ( slice_of_str name )
-        ( string_push_window o nv 3 - ( slice_len [u] nv ) 3 )
-        ^ o
-    } {}
-    ^ ( string_from name )
-}
-
-// A scalar float arg for the dtype. Only pure f32 (dtype 1) narrows scalars
-// to 4-byte; mixed (dtype 2) keeps the f64 8-byte scalar args (the kernel
-// signatures leave scalar `double` params untouched — only pointers change).
-@ __gp_argf inout GProg pg f v → i {
-    ? == . pg dtype 1 { ^ ( gpu_arg_i32 ( f32_to_bits # f32 v ) ) } {}
-    ^ ( gpu_arg_i64 ( f64_to_bits v ) )
-}
-
 // The element buffer dtype: f32 storage for both pure-f32 and mixed.
 @ __gp_edt inout GProg pg → i { ? | == . pg dtype 1 == . pg dtype 2 { ^ GK_F32 } {} ^ GK_F64 }
 
@@ -576,9 +428,9 @@ extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double*
     ( Vec f ) alphas
     ( Vec GkBuf ) m
     ( Vec GkBuf ) v
-    GkBuf ptab  // [dptr len]* per param (built lazily for the clip norm)
-    GkBuf nrm  // 1-elem norm result
+    GkBuf acc  // the clip norm's running sum of squares (1 element)
     GkBuf ctl  // [lrt, cs] the update kernels read (graph-capturable)
+    ( Vec GkLaunch ) orec  // the step's launches, recorded on the first step
 }
 
 // A GpOpt is a handle on its state in an Arc (stdlib/std/arc.nu):
@@ -686,7 +538,8 @@ extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double*
 // bounds the gap ~1e-5 rel; it is NOT bit-equal to the tape like f64 is).
 @ gput_capture_dt GpuKit kit GTape tp GVar loss i dtype → GProg {
     // (the program holds the kit too)
-    : ~ GProg pg @ GProg { T ( GpuKit_share kit ) ( vec_new [GpNode] ) . loss id ( gpu_graph_none ) dtype }
+    : ~ GProg pg @ GProg { T ( GpuKit_share kit ) ( vec_new [GpNode] ) . loss id ( gpu_graph_none ) dtype
+        ( vec_new [( Vec GkLaunch )] ) ( vec_new [( Vec GkLaunch )] ) ( vec_new [GkLaunch] ) }
     ? & ( tape_ok tp ) >= . loss id 0 {} { ( _gp_fail pg `tape is poisoned or loss invalid` ) ^ pg }
     ? ( gk_ok kit ) {} { ( _gp_fail pg `no device` ) ^ pg }
     : i nn ( tape_len tp )
@@ -928,155 +781,147 @@ extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double*
 
 // ── replay: forward ──────────────────────────────────────────────────
 
-raw @ _gp_run inout GProg pg s name i grid i block ( Vec i ) args → b {
-    : String kn ( __gp_kn pg name )
-    : b r ( gk_run_dev . pg kit ( _gp_src pg ) ( string_data kn ) grid block args )
+// Bind and check kernel `name` over `c`'s bindings, record the launch
+// into `rs` and make it: `nb` blocks of `blk` threads. F (the program
+// marked failed, with the reason) when the kernel is refused or fails.
+@ _gp_go inout GProg pg inout ( Vec GkLaunch ) rs inout GkCall c s name i nb i blk → b {
+    : String body ( _gp_body . pg dtype name )
+    : ~ String kn ( string_from `gp_` )
+    ( string_push_str kn name )
+    : GkLaunch l ( gk_record_dev . pg kit c ( string_data kn ) ( string_data body ) nb blk )
+    ? ( gk_launch_ok l ) {} {
+        : ~ String why ( string_from `kernel ` )
+        ( string_push_str why name ) ( string_push_str why `: ` ) ( string_push_str why ( gk_checked_error c ) )
+        ( _gp_fail pg ( string_data why ) )
+        ^ F
+    }
+    : b r ( gk_replay l )
+    ( vec_push [GkLaunch] rs l )
     ^ r
 }
 
-unsafe @ _gp_fill_buf inout GProg pg GkBuf b f v → b {
-    : ( Vec i ) a ( vec_new [i] )
-    ( vec_push [i] a ( gk_arg_dev b ) )
-    ( vec_push [i] a ( gpu_arg_i64 . b n ) )
-    ( vec_push [i] a ( __gp_argf pg v ) )
-    : b r ( _gp_run pg `gp_fill` ( gk_grid . b n 256 ) 256 a )
+// Replay recorded launches in order: F at the first that fails.
+@ __gp_replay ( Vec GkLaunch ) rs → b {
+    : ~ b r T
+    : ~ i j 0
+    ~ & r < j ( vec_len [GkLaunch] rs ) {
+        = r ( gk_replay ( vec_at [GkLaunch] rs j ) )
+        = j + j 1
+    }
     ^ r
 }
 
-// One forward launch for node `k`. Leaves are data — nothing to do.
-unsafe @ _gp_fwd_node inout GProg pg i k → b {
+// One record list per node, forward and backward.
+@ __gp_recs_size inout GProg pg → v {
+    : i n ( vec_len [GpNode] . pg nodes )
+    ~ < ( vec_len [( Vec GkLaunch )] . pg frec ) n { ( vec_push [( Vec GkLaunch )] . pg frec ( vec_new [GkLaunch] ) ) }
+    ~ < ( vec_len [( Vec GkLaunch )] . pg brec ) n { ( vec_push [( Vec GkLaunch )] . pg brec ( vec_new [GkLaunch] ) ) }
+}
+
+// Buffer `b` filled with `v`, recorded into `rs`.
+@ _gp_fill_rec inout GProg pg inout ( Vec GkLaunch ) rs GkBuf b f v → b {
+    : ~ GkCall c ( gk_call_new )
+    ( gk_call_dev c `o` b ) ( gk_call_i64 c `n` . b n ) ( gk_call_f64 c `v` v )
+    ^ ( _gp_go pg rs c `fill` ( gk_grid . b n 256 ) 256 )
+}
+
+// Buffer `b` filled with `v` (not recorded).
+@ _gp_fill_buf inout GProg pg GkBuf b f v → b {
+    : ~ ( Vec GkLaunch ) rs ( vec_new [GkLaunch] )
+    ^ ( _gp_fill_rec pg rs b v )
+}
+
+// One forward launch for node `k`. Leaves are data — nothing to do. The
+// launches are recorded the first time and replayed after it: the same
+// kernels over the same buffers every episode, bound and checked once.
+@ _gp_fwd_node inout GProg pg i k → b {
+    ( __gp_recs_size pg )
+    ? > ( vec_len [GkLaunch] ( vec_at [( Vec GkLaunch )] . pg frec k ) ) 0 {
+        ^ ( __gp_replay ( vec_at [( Vec GkLaunch )] . pg frec k ) )
+    } {}
+    : ~ ( Vec GkLaunch ) rs ( vec_new [GkLaunch] )
+    : b r ( __gp_fwd_build pg k rs )
+    : b _s ( vec_set [( Vec GkLaunch )] . pg frec k rs )
+    ^ r
+}
+
+@ __gp_fwd_build inout GProg pg i k inout ( Vec GkLaunch ) rs → b {
     : GpNode nd ( _gp_node pg k )
     : i op . nd op
     ? <= op ( gop_const ) { ^ T } {}
-    : ~ b r T
+    : ~ GkCall c ( gk_call_new )
     ? & >= op ( gop_add ) <= op ( gop_div ) {
         : GpNode na ( _gp_node pg . nd a )
         : GpNode nb ( _gp_node pg . nd b )
-        : ( Vec i ) a ( vec_new [i] )
-        ( vec_push [i] a ( gk_arg_dev . na val ) )
-        ( vec_push [i] a ( gk_arg_dev . nb val ) )
-        ( vec_push [i] a ( gk_arg_dev . nd val ) )
-        ( vec_push [i] a ( gk_arg_dev . nd meta ) )
-        ( vec_push [i] a ( gpu_arg_i64 0 ) )
-        ( vec_push [i] a ( gpu_arg_i64 . nd n ) )
-        ( vec_push [i] a ( gpu_arg_i64 op ) )
-        = r ( _gp_run pg `gp_ew_bc` ( gk_grid . nd n 256 ) 256 a )
-        ^ r
+        ( gk_call_dev c `a` . na val ) ( gk_call_dev c `b` . nb val ) ( gk_call_dev c `o` . nd val ) ( gk_call_dev c `meta` . nd meta )
+        ( gk_call_i64 c `moff` 0 ) ( gk_call_i64 c `n` . nd n ) ( gk_call_i64 c `op` op )
+        ^ ( _gp_go pg rs c `ew_bc` ( gk_grid . nd n 256 ) 256 )
     } {}
     ? & >= op ( gop_neg ) <= op ( gop_relu ) {
         : GpNode na ( _gp_node pg . nd a )
-        : ( Vec i ) a ( vec_new [i] )
-        ( vec_push [i] a ( gk_arg_dev . na val ) )
-        ( vec_push [i] a ( gk_arg_dev . nd val ) )
-        ( vec_push [i] a ( gpu_arg_i64 . nd n ) )
-        ( vec_push [i] a ( gpu_arg_i64 op ) )
-        ( vec_push [i] a ( __gp_argf pg . nd s ) )
-        = r ( _gp_run pg `gp_scal` ( gk_grid . nd n 256 ) 256 a )
-        ^ r
+        ( gk_call_dev c `a` . na val ) ( gk_call_dev c `o` . nd val )
+        ( gk_call_i64 c `n` . nd n ) ( gk_call_i64 c `op` op ) ( gk_call_f64 c `c` . nd s )
+        ^ ( _gp_go pg rs c `scal` ( gk_grid . nd n 256 ) 256 )
     } {}
     ? & >= op ( gop_sigmoid ) <= op ( gop_sqrt ) {
         : GpNode na ( _gp_node pg . nd a )
-        : ( Vec i ) a ( vec_new [i] )
-        ( vec_push [i] a ( gk_arg_dev . na val ) )
-        ( vec_push [i] a ( gk_arg_dev . nd val ) )
-        ( vec_push [i] a ( gpu_arg_i64 . nd n ) )
-        ( vec_push [i] a ( gpu_arg_i64 op ) )
-        = r ( _gp_run pg `gp_trans` ( gk_grid . nd n 256 ) 256 a )
-        ^ r
+        ( gk_call_dev c `a` . na val ) ( gk_call_dev c `o` . nd val )
+        ( gk_call_i64 c `n` . nd n ) ( gk_call_i64 c `op` op )
+        ^ ( _gp_go pg rs c `trans` ( gk_grid . nd n 256 ) 256 )
     } {}
     ? | == op ( gop_sum ) == op ( gop_mean ) {
         : GpNode na ( _gp_node pg . nd a )
-        : ( Vec i ) a ( vec_new [i] )
-        ( vec_push [i] a ( gk_arg_dev . na val ) )
-        ( vec_push [i] a ( gk_arg_dev . nd val ) )
-        ( vec_push [i] a ( gpu_arg_i64 . na n ) )
-        ( vec_push [i] a ( gpu_arg_i64 op ) )
-        = r ( _gp_run pg `gp_reduce` 1 1 a )
-        ^ r
+        ( gk_call_dev c `a` . na val ) ( gk_call_dev c `o` . nd val )
+        ( gk_call_i64 c `n` . na n ) ( gk_call_i64 c `op` op )
+        ^ ( _gp_go pg rs c `reduce` 1 1 )
     } {}
     ? == op ( gop_matmul ) {
         : GpNode na ( _gp_node pg . nd a )
         : GpNode nb ( _gp_node pg . nd b )
-        : ( Vec i ) a ( vec_new [i] )
-        ( vec_push [i] a ( gk_arg_dev . na val ) )
-        ( vec_push [i] a ( gk_arg_dev . nb val ) )
-        ( vec_push [i] a ( gk_arg_dev . nd val ) )
-        ( vec_push [i] a ( gpu_arg_i64 ( _ti . nd dims 0 ) ) )
-        ( vec_push [i] a ( gpu_arg_i64 ( _ti . nd dims 1 ) ) )
-        ( vec_push [i] a ( gpu_arg_i64 ( _ti . nd dims 2 ) ) )
-        = r ( _gp_run pg `gp_matmul` ( gk_grid . nd n 256 ) 256 a )
-        ^ r
+        ( gk_call_dev c `a` . na val ) ( gk_call_dev c `b` . nb val ) ( gk_call_dev c `c` . nd val )
+        ( gk_call_i64 c `M` ( _ti . nd dims 0 ) ) ( gk_call_i64 c `K` ( _ti . nd dims 1 ) ) ( gk_call_i64 c `N` ( _ti . nd dims 2 ) )
+        ^ ( _gp_go pg rs c `matmul` ( gk_grid . nd n 256 ) 256 )
     } {}
     ? == op ( gop_bmm ) {
         : GpNode na ( _gp_node pg . nd a )
         : GpNode nb ( _gp_node pg . nd b )
-        : ( Vec i ) a ( vec_new [i] )
-        ( vec_push [i] a ( gk_arg_dev . na val ) )
-        ( vec_push [i] a ( gk_arg_dev . nb val ) )
-        ( vec_push [i] a ( gk_arg_dev . nd val ) )
-        ( vec_push [i] a ( gpu_arg_i64 ( _ti . nd dims 0 ) ) )
-        ( vec_push [i] a ( gpu_arg_i64 ( _ti . nd dims 1 ) ) )
-        ( vec_push [i] a ( gpu_arg_i64 ( _ti . nd dims 2 ) ) )
-        ( vec_push [i] a ( gpu_arg_i64 ( _ti . nd dims 3 ) ) )
-        = r ( _gp_run pg `gp_bmm` ( gk_grid . nd n 256 ) 256 a )
-        ^ r
+        ( gk_call_dev c `a` . na val ) ( gk_call_dev c `b` . nb val ) ( gk_call_dev c `c` . nd val )
+        ( gk_call_i64 c `B` ( _ti . nd dims 0 ) ) ( gk_call_i64 c `M` ( _ti . nd dims 1 ) )
+        ( gk_call_i64 c `K` ( _ti . nd dims 2 ) ) ( gk_call_i64 c `N` ( _ti . nd dims 3 ) )
+        ^ ( _gp_go pg rs c `bmm` ( gk_grid . nd n 256 ) 256 )
     } {}
     ? == op ( gop_transpose ) {
         : GpNode na ( _gp_node pg . nd a )
-        : ( Vec i ) a ( vec_new [i] )
-        ( vec_push [i] a ( gk_arg_dev . na val ) )
-        ( vec_push [i] a ( gk_arg_dev . nd val ) )
-        ( vec_push [i] a ( gpu_arg_i64 ( _ti . nd dims 0 ) ) )
-        ( vec_push [i] a ( gpu_arg_i64 ( _ti . nd dims 1 ) ) )
-        = r ( _gp_run pg `gp_transpose` ( gk_grid . nd n 256 ) 256 a )
-        ^ r
+        ( gk_call_dev c `a` . na val ) ( gk_call_dev c `o` . nd val )
+        ( gk_call_i64 c `M` ( _ti . nd dims 0 ) ) ( gk_call_i64 c `N` ( _ti . nd dims 1 ) )
+        ^ ( _gp_go pg rs c `transpose` ( gk_grid . nd n 256 ) 256 )
     } {}
     ? == op ( gop_reshape ) {
         : GpNode na ( _gp_node pg . nd a )
-        : ( Vec i ) a ( vec_new [i] )
-        ( vec_push [i] a ( gk_arg_dev . na val ) )
-        ( vec_push [i] a ( gk_arg_dev . nd val ) )
-        ( vec_push [i] a ( gpu_arg_i64 . nd n ) )
-        = r ( _gp_run pg `gp_copy` ( gk_grid . nd n 256 ) 256 a )
-        ^ r
+        ( gk_call_dev c `a` . na val ) ( gk_call_dev c `o` . nd val ) ( gk_call_i64 c `n` . nd n )
+        ^ ( _gp_go pg rs c `copy` ( gk_grid . nd n 256 ) 256 )
     } {}
     ? == op ( gop_softmax ) {
         : GpNode na ( _gp_node pg . nd a )
         : i sl * ( _ti . nd dims 0 ) ( _ti . nd dims 2 )
-        : ( Vec i ) a ( vec_new [i] )
-        ( vec_push [i] a ( gk_arg_dev . na val ) )
-        ( vec_push [i] a ( gk_arg_dev . nd val ) )
-        ( vec_push [i] a ( gpu_arg_i64 ( _ti . nd dims 0 ) ) )
-        ( vec_push [i] a ( gpu_arg_i64 ( _ti . nd dims 1 ) ) )
-        ( vec_push [i] a ( gpu_arg_i64 ( _ti . nd dims 2 ) ) )
-        = r ( _gp_run pg `gp_softmax` ( gk_grid sl 256 ) 256 a )
-        ^ r
+        ( gk_call_dev c `x` . na val ) ( gk_call_dev c `o` . nd val )
+        ( gk_call_i64 c `outer` ( _ti . nd dims 0 ) ) ( gk_call_i64 c `ax` ( _ti . nd dims 1 ) ) ( gk_call_i64 c `inner` ( _ti . nd dims 2 ) )
+        ^ ( _gp_go pg rs c `softmax` ( gk_grid sl 256 ) 256 )
     } {}
     ? == op ( gop_slice ) {
         : GpNode na ( _gp_node pg . nd a )
-        : ( Vec i ) a ( vec_new [i] )
-        ( vec_push [i] a ( gk_arg_dev . na val ) )
-        ( vec_push [i] a ( gk_arg_dev . nd val ) )
-        ( vec_push [i] a ( gk_arg_dev . nd meta ) )
-        ( vec_push [i] a ( gpu_arg_i64 . nd n ) )
-        = r ( _gp_run pg `gp_slice_fwd` ( gk_grid . nd n 256 ) 256 a )
-        ^ r
+        ( gk_call_dev c `a` . na val ) ( gk_call_dev c `o` . nd val ) ( gk_call_dev c `meta` . nd meta ) ( gk_call_i64 c `n` . nd n )
+        ^ ( _gp_go pg rs c `slice_fwd` ( gk_grid . nd n 256 ) 256 )
     } {}
     ? == op ( gop_concat ) {
         : GpNode na ( _gp_node pg . nd a )
         : GpNode nb ( _gp_node pg . nd b )
-        : ( Vec i ) a ( vec_new [i] )
-        ( vec_push [i] a ( gk_arg_dev . na val ) )
-        ( vec_push [i] a ( gk_arg_dev . nb val ) )
-        ( vec_push [i] a ( gk_arg_dev . nd val ) )
-        ( vec_push [i] a ( gpu_arg_i64 ( _ti . nd dims 0 ) ) )
-        ( vec_push [i] a ( gpu_arg_i64 ( _ti . nd dims 1 ) ) )
-        ( vec_push [i] a ( gpu_arg_i64 ( _ti . nd dims 2 ) ) )
-        ( vec_push [i] a ( gpu_arg_i64 ( _ti . nd dims 3 ) ) )
-        = r ( _gp_run pg `gp_concat_fwd` ( gk_grid . nd n 256 ) 256 a )
-        ^ r
+        ( gk_call_dev c `a` . na val ) ( gk_call_dev c `b` . nb val ) ( gk_call_dev c `o` . nd val )
+        ( gk_call_i64 c `outer` ( _ti . nd dims 0 ) ) ( gk_call_i64 c `ax` ( _ti . nd dims 1 ) )
+        ( gk_call_i64 c `inner` ( _ti . nd dims 2 ) ) ( gk_call_i64 c `da` ( _ti . nd dims 3 ) )
+        ^ ( _gp_go pg rs c `concat_fwd` ( gk_grid . nd n 256 ) 256 )
     } {}
-    ^ r
+    ^ T
 }
 
 @ __gput_fwd_launches inout GProg pg → b {
@@ -1104,34 +949,36 @@ unsafe @ _gp_fwd_node inout GProg pg i k → b {
 
 // The out-shaped contribution `src` accumulated into input `dst`'s gradient
 // over the broadcast axes (block at `moff`, odometer size `tfree`).
-unsafe @ _gp_accred inout GProg pg GpNode dst GpNode nd GkBuf src i moff i tfree f sgn → b {
-    : ( Vec i ) a ( vec_new [i] )
-    ( vec_push [i] a ( gk_arg_dev . dst grad ) )
-    ( vec_push [i] a ( gk_arg_dev src ) )
-    ( vec_push [i] a ( gk_arg_dev . nd meta ) )
-    ( vec_push [i] a ( gpu_arg_i64 moff ) )
-    ( vec_push [i] a ( gpu_arg_i64 . dst n ) )
-    ( vec_push [i] a ( gpu_arg_i64 tfree ) )
-    ( vec_push [i] a ( __gp_argf pg sgn ) )
-    : b r ( _gp_run pg `gp_bw_accred` ( gk_grid . dst n 256 ) 256 a )
-    ^ r
+// The out-shaped contribution `src` accumulated into input `dst`'s gradient
+// over the broadcast axes (block at `moff`, odometer size `tfree`).
+@ _gp_accred inout GProg pg inout ( Vec GkLaunch ) rs GpNode dst GpNode nd GkBuf src i moff i tfree f sgn → b {
+    : ~ GkCall c ( gk_call_new )
+    ( gk_call_dev c `ga` . dst grad ) ( gk_call_dev c `c` src ) ( gk_call_dev c `meta` . nd meta )
+    ( gk_call_i64 c `moff` moff ) ( gk_call_i64 c `in_n` . dst n ) ( gk_call_i64 c `tfree` tfree ) ( gk_call_f64 c `sgn` sgn )
+    ^ ( _gp_go pg rs c `bw_accred` ( gk_grid . dst n 256 ) 256 )
 }
 
 // g (out-shaped) ⊙ other-input → scr, via the ew block at `moff`.
-unsafe @ _gp_scr_ew inout GProg pg GpNode nd GkBuf x GkBuf y i moff i op → b {
-    : ( Vec i ) a ( vec_new [i] )
-    ( vec_push [i] a ( gk_arg_dev x ) )
-    ( vec_push [i] a ( gk_arg_dev y ) )
-    ( vec_push [i] a ( gk_arg_dev . nd scr ) )
-    ( vec_push [i] a ( gk_arg_dev . nd meta ) )
-    ( vec_push [i] a ( gpu_arg_i64 moff ) )
-    ( vec_push [i] a ( gpu_arg_i64 . nd n ) )
-    ( vec_push [i] a ( gpu_arg_i64 op ) )
-    : b r ( _gp_run pg `gp_ew_bc` ( gk_grid . nd n 256 ) 256 a )
+@ _gp_scr_ew inout GProg pg inout ( Vec GkLaunch ) rs GpNode nd GkBuf x GkBuf y i moff i op → b {
+    : ~ GkCall c ( gk_call_new )
+    ( gk_call_dev c `a` x ) ( gk_call_dev c `b` y ) ( gk_call_dev c `o` . nd scr ) ( gk_call_dev c `meta` . nd meta )
+    ( gk_call_i64 c `moff` moff ) ( gk_call_i64 c `n` . nd n ) ( gk_call_i64 c `op` op )
+    ^ ( _gp_go pg rs c `ew_bc` ( gk_grid . nd n 256 ) 256 )
+}
+
+// Node `k`'s backward launches, recorded the first time and replayed after.
+@ _gp_bwd_node inout GProg pg i k → b {
+    ( __gp_recs_size pg )
+    ? > ( vec_len [GkLaunch] ( vec_at [( Vec GkLaunch )] . pg brec k ) ) 0 {
+        ^ ( __gp_replay ( vec_at [( Vec GkLaunch )] . pg brec k ) )
+    } {}
+    : ~ ( Vec GkLaunch ) rs ( vec_new [GkLaunch] )
+    : b r ( __gp_bwd_build pg k rs )
+    : b _s ( vec_set [( Vec GkLaunch )] . pg brec k rs )
     ^ r
 }
 
-unsafe @ _gp_bwd_node inout GProg pg i k → b {
+@ __gp_bwd_build inout GProg pg i k inout ( Vec GkLaunch ) rs → b {
     : GpNode nd ( _gp_node pg k )
     ? == . nd reach 1 {} { ^ T }
     : i op . nd op
@@ -1150,58 +997,47 @@ unsafe @ _gp_bwd_node inout GProg pg i k → b {
         : b needa == . na reach 1
         : b needb == . nb reach 1
         ? == op ( gop_add ) {
-            ? needa { = r & r ( _gp_accred pg na nd . nd grad offBA tfa 1.0 ) } {}
-            ? needb { = r & r ( _gp_accred pg nb nd . nd grad offBB tfb 1.0 ) } {}
+            ? needa { = r & r ( _gp_accred pg rs na nd . nd grad offBA tfa 1.0 ) } {}
+            ? needb { = r & r ( _gp_accred pg rs nb nd . nd grad offBB tfb 1.0 ) } {}
         } {}
         ? == op ( gop_sub ) {
-            ? needa { = r & r ( _gp_accred pg na nd . nd grad offBA tfa 1.0 ) } {}
-            ? needb { = r & r ( _gp_accred pg nb nd . nd grad offBB tfb -1.0 ) } {}
+            ? needa { = r & r ( _gp_accred pg rs na nd . nd grad offBA tfa 1.0 ) } {}
+            ? needb { = r & r ( _gp_accred pg rs nb nd . nd grad offBB tfb -1.0 ) } {}
         } {}
         ? == op ( gop_mul ) {
             ? needa {
-                = r & r ( _gp_scr_ew pg nd . nd grad . nb val offB1 ( gop_mul ) )
-                = r & r ( _gp_accred pg na nd . nd scr offBA tfa 1.0 )
+                = r & r ( _gp_scr_ew pg rs nd . nd grad . nb val offB1 ( gop_mul ) )
+                = r & r ( _gp_accred pg rs na nd . nd scr offBA tfa 1.0 )
             } {}
             ? needb {
-                = r & r ( _gp_scr_ew pg nd . nd grad . na val offB2 ( gop_mul ) )
-                = r & r ( _gp_accred pg nb nd . nd scr offBB tfb 1.0 )
+                = r & r ( _gp_scr_ew pg rs nd . nd grad . na val offB2 ( gop_mul ) )
+                = r & r ( _gp_accred pg rs nb nd . nd scr offBB tfb 1.0 )
             } {}
         } {}
         ? == op ( gop_div ) {
             ? needa {
-                = r & r ( _gp_scr_ew pg nd . nd grad . nb val offB1 ( gop_div ) )
-                = r & r ( _gp_accred pg na nd . nd scr offBA tfa 1.0 )
+                = r & r ( _gp_scr_ew pg rs nd . nd grad . nb val offB1 ( gop_div ) )
+                = r & r ( _gp_accred pg rs na nd . nd scr offBA tfa 1.0 )
             } {}
             ? needb {
-                = r & r ( _gp_scr_ew pg nd . nd grad . nd val offB3 ( gop_mul ) )
-                = r & r ( _gp_scr_ew pg nd . nd scr . nb val offB1 ( gop_div ) )
-                = r & r ( _gp_accred pg nb nd . nd scr offBB tfb -1.0 )
+                = r & r ( _gp_scr_ew pg rs nd . nd grad . nd val offB3 ( gop_mul ) )
+                = r & r ( _gp_scr_ew pg rs nd . nd scr . nb val offB1 ( gop_div ) )
+                = r & r ( _gp_accred pg rs nb nd . nd scr offBB tfb -1.0 )
             } {}
         } {}
         ^ r
     } {}
+    : ~ GkCall c ( gk_call_new )
     ? & >= op ( gop_neg ) <= op ( gop_sqrt ) {
         : GpNode na ( _gp_node pg . nd a )
-        : ( Vec i ) a ( vec_new [i] )
-        ( vec_push [i] a ( gk_arg_dev . na grad ) )
-        ( vec_push [i] a ( gk_arg_dev . nd grad ) )
-        ( vec_push [i] a ( gk_arg_dev . nd val ) )
-        ( vec_push [i] a ( gk_arg_dev . na val ) )
-        ( vec_push [i] a ( gpu_arg_i64 . nd n ) )
-        ( vec_push [i] a ( gpu_arg_i64 op ) )
-        ( vec_push [i] a ( __gp_argf pg . nd s ) )
-        = r ( _gp_run pg `gp_bw_unary` ( gk_grid . nd n 256 ) 256 a )
-        ^ r
+        ( gk_call_dev c `ga` . na grad ) ( gk_call_dev c `g` . nd grad ) ( gk_call_dev c `y` . nd val ) ( gk_call_dev c `x` . na val )
+        ( gk_call_i64 c `n` . nd n ) ( gk_call_i64 c `op` op ) ( gk_call_f64 c `c` . nd s )
+        ^ ( _gp_go pg rs c `bw_unary` ( gk_grid . nd n 256 ) 256 )
     } {}
     ? | == op ( gop_sum ) == op ( gop_mean ) {
         : GpNode na ( _gp_node pg . nd a )
-        : ( Vec i ) a ( vec_new [i] )
-        ( vec_push [i] a ( gk_arg_dev . na grad ) )
-        ( vec_push [i] a ( gk_arg_dev . nd grad ) )
-        ( vec_push [i] a ( gpu_arg_i64 . na n ) )
-        ( vec_push [i] a ( gpu_arg_i64 op ) )
-        = r ( _gp_run pg `gp_bw_reduce` ( gk_grid . na n 256 ) 256 a )
-        ^ r
+        ( gk_call_dev c `ga` . na grad ) ( gk_call_dev c `g` . nd grad ) ( gk_call_i64 c `an` . na n ) ( gk_call_i64 c `op` op )
+        ^ ( _gp_go pg rs c `bw_reduce` ( gk_grid . na n 256 ) 256 )
     } {}
     ? == op ( gop_matmul ) {
         : GpNode na ( _gp_node pg . nd a )
@@ -1209,22 +1045,17 @@ unsafe @ _gp_bwd_node inout GProg pg i k → b {
         : i M ( _ti . nd dims 0 )
         : i K ( _ti . nd dims 1 )
         : i N2 ( _ti . nd dims 2 )
-        : ( Vec i ) a ( vec_new [i] )
-        ( vec_push [i] a ( gk_arg_dev . na grad ) )
-        ( vec_push [i] a ( gk_arg_dev . nd grad ) )
-        ( vec_push [i] a ( gk_arg_dev . nb val ) )
-        ( vec_push [i] a ( gpu_arg_i64 M ) )
-        ( vec_push [i] a ( gpu_arg_i64 K ) )
-        ( vec_push [i] a ( gpu_arg_i64 N2 ) )
-        ? == . na reach 1 { = r ( _gp_run pg `gp_bw_mm_a` ( gk_grid * M K 256 ) 256 a ) } {}
-        : ( Vec i ) a2 ( vec_new [i] )
-        ( vec_push [i] a2 ( gk_arg_dev . nb grad ) )
-        ( vec_push [i] a2 ( gk_arg_dev . na val ) )
-        ( vec_push [i] a2 ( gk_arg_dev . nd grad ) )
-        ( vec_push [i] a2 ( gpu_arg_i64 M ) )
-        ( vec_push [i] a2 ( gpu_arg_i64 K ) )
-        ( vec_push [i] a2 ( gpu_arg_i64 N2 ) )
-        ? == . nb reach 1 { = r & r ( _gp_run pg `gp_bw_mm_b` ( gk_grid * K N2 256 ) 256 a2 ) } {}
+        ? == . na reach 1 {
+            ( gk_call_dev c `ga` . na grad ) ( gk_call_dev c `g` . nd grad ) ( gk_call_dev c `b` . nb val )
+            ( gk_call_i64 c `M` M ) ( gk_call_i64 c `K` K ) ( gk_call_i64 c `N` N2 )
+            = r ( _gp_go pg rs c `bw_mm_a` ( gk_grid * M K 256 ) 256 )
+        } {}
+        ? == . nb reach 1 {
+            : ~ GkCall c2 ( gk_call_new )
+            ( gk_call_dev c2 `gb` . nb grad ) ( gk_call_dev c2 `a` . na val ) ( gk_call_dev c2 `g` . nd grad )
+            ( gk_call_i64 c2 `M` M ) ( gk_call_i64 c2 `K` K ) ( gk_call_i64 c2 `N` N2 )
+            = r & r ( _gp_go pg rs c2 `bw_mm_b` ( gk_grid * K N2 256 ) 256 )
+        } {}
         ^ r
     } {}
     ? == op ( gop_bmm ) {
@@ -1234,105 +1065,79 @@ unsafe @ _gp_bwd_node inout GProg pg i k → b {
         : i M ( _ti . nd dims 1 )
         : i K ( _ti . nd dims 2 )
         : i N2 ( _ti . nd dims 3 )
-        : ( Vec i ) a ( vec_new [i] )
-        ( vec_push [i] a ( gk_arg_dev . na grad ) )
-        ( vec_push [i] a ( gk_arg_dev . nd grad ) )
-        ( vec_push [i] a ( gk_arg_dev . nb val ) )
-        ( vec_push [i] a ( gpu_arg_i64 B2 ) )
-        ( vec_push [i] a ( gpu_arg_i64 M ) )
-        ( vec_push [i] a ( gpu_arg_i64 K ) )
-        ( vec_push [i] a ( gpu_arg_i64 N2 ) )
-        ? == . na reach 1 { = r ( _gp_run pg `gp_bw_bmm_a` ( gk_grid * B2 * M K 256 ) 256 a ) } {}
-        : ( Vec i ) a2 ( vec_new [i] )
-        ( vec_push [i] a2 ( gk_arg_dev . nb grad ) )
-        ( vec_push [i] a2 ( gk_arg_dev . na val ) )
-        ( vec_push [i] a2 ( gk_arg_dev . nd grad ) )
-        ( vec_push [i] a2 ( gpu_arg_i64 B2 ) )
-        ( vec_push [i] a2 ( gpu_arg_i64 M ) )
-        ( vec_push [i] a2 ( gpu_arg_i64 K ) )
-        ( vec_push [i] a2 ( gpu_arg_i64 N2 ) )
-        ? == . nb reach 1 { = r & r ( _gp_run pg `gp_bw_bmm_b` ( gk_grid * B2 * K N2 256 ) 256 a2 ) } {}
+        ? == . na reach 1 {
+            ( gk_call_dev c `ga` . na grad ) ( gk_call_dev c `g` . nd grad ) ( gk_call_dev c `b` . nb val )
+            ( gk_call_i64 c `B` B2 ) ( gk_call_i64 c `M` M ) ( gk_call_i64 c `K` K ) ( gk_call_i64 c `N` N2 )
+            = r ( _gp_go pg rs c `bw_bmm_a` ( gk_grid * B2 * M K 256 ) 256 )
+        } {}
+        ? == . nb reach 1 {
+            : ~ GkCall c2 ( gk_call_new )
+            ( gk_call_dev c2 `gbo` . nb grad ) ( gk_call_dev c2 `a` . na val ) ( gk_call_dev c2 `g` . nd grad )
+            ( gk_call_i64 c2 `B` B2 ) ( gk_call_i64 c2 `M` M ) ( gk_call_i64 c2 `K` K ) ( gk_call_i64 c2 `N` N2 )
+            = r & r ( _gp_go pg rs c2 `bw_bmm_b` ( gk_grid * B2 * K N2 256 ) 256 )
+        } {}
         ^ r
     } {}
     ? == op ( gop_transpose ) {
         : GpNode na ( _gp_node pg . nd a )
         : i M ( _ti . nd dims 0 )
         : i N2 ( _ti . nd dims 1 )
-        : ( Vec i ) a ( vec_new [i] )
-        ( vec_push [i] a ( gk_arg_dev . na grad ) )
-        ( vec_push [i] a ( gk_arg_dev . nd grad ) )
-        ( vec_push [i] a ( gpu_arg_i64 M ) )
-        ( vec_push [i] a ( gpu_arg_i64 N2 ) )
-        = r ( _gp_run pg `gp_bw_transpose` ( gk_grid * M N2 256 ) 256 a )
-        ^ r
+        ( gk_call_dev c `ga` . na grad ) ( gk_call_dev c `g` . nd grad ) ( gk_call_i64 c `M` M ) ( gk_call_i64 c `N` N2 )
+        ^ ( _gp_go pg rs c `bw_transpose` ( gk_grid * M N2 256 ) 256 )
     } {}
     ? == op ( gop_reshape ) {
         : GpNode na ( _gp_node pg . nd a )
-        : ( Vec i ) a ( vec_new [i] )
-        ( vec_push [i] a ( gk_arg_dev . na grad ) )
-        ( vec_push [i] a ( gk_arg_dev . nd grad ) )
-        ( vec_push [i] a ( gpu_arg_i64 . nd n ) )
-        = r ( _gp_run pg `gp_bw_copy` ( gk_grid . nd n 256 ) 256 a )
-        ^ r
+        ( gk_call_dev c `ga` . na grad ) ( gk_call_dev c `g` . nd grad ) ( gk_call_i64 c `n` . nd n )
+        ^ ( _gp_go pg rs c `bw_copy` ( gk_grid . nd n 256 ) 256 )
     } {}
     ? == op ( gop_softmax ) {
         : GpNode na ( _gp_node pg . nd a )
         : i sl * ( _ti . nd dims 0 ) ( _ti . nd dims 2 )
-        : ( Vec i ) a ( vec_new [i] )
-        ( vec_push [i] a ( gk_arg_dev . na grad ) )
-        ( vec_push [i] a ( gk_arg_dev . nd grad ) )
-        ( vec_push [i] a ( gk_arg_dev . nd val ) )
-        ( vec_push [i] a ( gpu_arg_i64 ( _ti . nd dims 0 ) ) )
-        ( vec_push [i] a ( gpu_arg_i64 ( _ti . nd dims 1 ) ) )
-        ( vec_push [i] a ( gpu_arg_i64 ( _ti . nd dims 2 ) ) )
-        = r ( _gp_run pg `gp_bw_softmax` ( gk_grid sl 256 ) 256 a )
-        ^ r
+        ( gk_call_dev c `ga` . na grad ) ( gk_call_dev c `g` . nd grad ) ( gk_call_dev c `y` . nd val )
+        ( gk_call_i64 c `outer` ( _ti . nd dims 0 ) ) ( gk_call_i64 c `ax` ( _ti . nd dims 1 ) ) ( gk_call_i64 c `inner` ( _ti . nd dims 2 ) )
+        ^ ( _gp_go pg rs c `bw_softmax` ( gk_grid sl 256 ) 256 )
     } {}
     ? == op ( gop_slice ) {
         : GpNode na ( _gp_node pg . nd a )
-        : ( Vec i ) a ( vec_new [i] )
-        ( vec_push [i] a ( gk_arg_dev . na grad ) )
-        ( vec_push [i] a ( gk_arg_dev . nd grad ) )
-        ( vec_push [i] a ( gk_arg_dev . nd meta ) )
-        ( vec_push [i] a ( gpu_arg_i64 . nd n ) )
-        = r ( _gp_run pg `gp_bw_slice` ( gk_grid . nd n 256 ) 256 a )
-        ^ r
+        ( gk_call_dev c `ga` . na grad ) ( gk_call_dev c `g` . nd grad ) ( gk_call_dev c `meta` . nd meta ) ( gk_call_i64 c `n` . nd n )
+        ^ ( _gp_go pg rs c `bw_slice` ( gk_grid . nd n 256 ) 256 )
     } {}
     ? == op ( gop_concat ) {
         : GpNode na ( _gp_node pg . nd a )
         : GpNode nb ( _gp_node pg . nd b )
-        : ( Vec i ) a ( vec_new [i] )
-        ( vec_push [i] a ( gk_arg_dev . na grad ) )
-        ( vec_push [i] a ( gk_arg_dev . nb grad ) )
-        ( vec_push [i] a ( gk_arg_dev . nd grad ) )
-        ( vec_push [i] a ( gpu_arg_i64 ( _ti . nd dims 0 ) ) )
-        ( vec_push [i] a ( gpu_arg_i64 ( _ti . nd dims 1 ) ) )
-        ( vec_push [i] a ( gpu_arg_i64 ( _ti . nd dims 2 ) ) )
-        ( vec_push [i] a ( gpu_arg_i64 ( _ti . nd dims 3 ) ) )
-        = r ( _gp_run pg `gp_bw_concat` ( gk_grid . nd n 256 ) 256 a )
-        ^ r
+        ( gk_call_dev c `ga` . na grad ) ( gk_call_dev c `gb` . nb grad ) ( gk_call_dev c `g` . nd grad )
+        ( gk_call_i64 c `outer` ( _ti . nd dims 0 ) ) ( gk_call_i64 c `ax` ( _ti . nd dims 1 ) )
+        ( gk_call_i64 c `inner` ( _ti . nd dims 2 ) ) ( gk_call_i64 c `da` ( _ti . nd dims 3 ) )
+        ^ ( _gp_go pg rs c `bw_concat` ( gk_grid . nd n 256 ) 256 )
     } {}
     ^ r
 }
 
 // Zero every gradient, seed dL/d(loss) = 1, sweep the tape in reverse over
 // the loss-ancestor set, then zero const-leaf gradients (grad.nu's epilogue).
+// The zeroing and the seed are recorded once, like the nodes' launches.
 @ __gput_bwd_launches inout GProg pg → b {
-    : i n ( vec_len [GpNode] . pg nodes )
     : ~ b r T
-    : ~ i k 0
-    ~ & < k n r {
-        : GpNode nd ( _gp_node pg k )
-        : GkBuf gb2 . nd grad
-        ? ( gk_buf_ok gb2 ) { = r ( _gp_fill_buf pg gb2 0.0 ) } {}
-        = k + k 1
+    ? > ( vec_len [GkLaunch] . pg zrec ) 0 {
+        = r ( __gp_replay . pg zrec )
+    } {
+        : ~ ( Vec GkLaunch ) zs ( vec_new [GkLaunch] )
+        : i n ( vec_len [GpNode] . pg nodes )
+        : ~ i k 0
+        ~ & < k n r {
+            : GpNode nd ( _gp_node pg k )
+            : GkBuf gb2 . nd grad
+            ? ( gk_buf_ok gb2 ) { = r ( _gp_fill_rec pg zs gb2 0.0 ) } {}
+            = k + k 1
+        }
+        ? r {
+            : GpNode lo ( _gp_node pg . pg loss )
+            : GkBuf lg . lo grad
+            ? ( gk_buf_ok lg ) { = r ( _gp_fill_rec pg zs lg 1.0 ) } {}
+        } {}
+        = . pg zrec zs
     }
-    ? r {
-        : GpNode lo ( _gp_node pg . pg loss )
-        : GkBuf lg . lo grad
-        ? ( gk_buf_ok lg ) { = r ( _gp_fill_buf pg lg 1.0 ) } {}
-    } {}
-    = k . pg loss
+    : ~ i k . pg loss
     ~ & >= k 0 r {
         = r ( _gp_bwd_node pg k )
         = k - k 1
@@ -1466,7 +1271,7 @@ unsafe @ _gp_bwd_node inout GProg pg i k → b {
 
 @ gpopt_new i kind f lr → GpOpt {
     ^ @ GpOpt { T kind lr 0.0 0 ( vec_new [i] ) ( vec_new [f] ) ( vec_new [GkBuf] ) ( vec_new [GkBuf] )
-        ( _gp_nobuf ) ( _gp_nobuf ) ( _gp_nobuf ) }
+        ( _gp_nobuf ) ( _gp_nobuf ) ( vec_new [GkLaunch] ) }
 }
 
 @ gpopt_sgd_new f lr → GpOpt { ^ ( gpopt_new 0 lr ) }
@@ -1479,6 +1284,7 @@ unsafe @ _gp_bwd_node inout GProg pg i k → b {
 
 @ gpopt_set_clip inout GpOpt o f maxn → v {
     = . o clip maxn
+    ( vec_clear [GkLaunch] . o orec )  // the step's launches change
 }
 
 // ── optimizer-state access (checkpoint / resume) ─────────────────────
@@ -1550,31 +1356,20 @@ unsafe @ _gp_bwd_node inout GProg pg i k → b {
     ( vec_push [f] . o alphas alpha )
     ( vec_push [GkBuf] . o m mb )
     ( vec_push [GkBuf] . o v vb )
+    ( vec_clear [GkLaunch] . o orec )  // the step's launches change
 }
 
-// Ensure the ctl buffer and (with clipping) the [dptr len] table exist.
+// Ensure the ctl buffer and (with clipping) the norm accumulator exist.
+// The accumulator keeps the sum's precision: f32 for a pure-f32 program,
+// f64 for f64 and mixed (whose norm always summed in double).
 @ _gpopt_ensure inout GpOpt o inout GProg pg → b {
     ? ( gk_buf_ok . o ctl ) {} {
         = . o ctl ( gk_dbuf_new . pg kit 2 ( __gp_edt pg ) )
         ? ( gk_buf_ok . o ctl ) {} { = . o ok F ^ F }
     }
-    ? & > . o clip 0.0 ! ( gk_buf_ok . o ptab ) {
-        : ( Vec i ) tv ( vec_new [i] )
-        : i np ( vec_len [i] . o ids )
-        : ~ i k 0
-        ~ < k np {
-            : GpNode nd ( _gp_node pg ( _ti . o ids k ) )
-            ? == . nd reach 1 {
-                : GkBuf gb . nd grad
-                ( vec_push [i] tv . gb dptr )
-                ( vec_push [i] tv . nd n )
-            } {}
-            = k + k 1
-        }
-        = . o ptab ( gk_dbuf_new . pg kit ( vec_len [i] tv ) GK_I64 )
-        : ~ b up ( gk_buf_ok . o ptab )
-        = up & up ( gk_dbuf_upload_i . pg kit . o ptab tv )
-        ? up {} { = . o ok F ^ F }
+    ? & > . o clip 0.0 ! ( gk_buf_ok . o acc ) {
+        = . o acc ( gk_dbuf_new . pg kit 1 ? == . pg dtype 1 GK_F32 GK_F64 )
+        ? ( gk_buf_ok . o acc ) {} { = . o ok F ^ F }
     } {}
     ^ T
 }
@@ -1599,19 +1394,43 @@ unsafe @ _gp_bwd_node inout GProg pg i k → b {
     ^ up
 }
 
-// The DEVICE half: (clip-scale kernel when clipping) + one gp_opt launch
-// per backward-active parameter. Pure launches — capturable into a graph.
-unsafe @ _gpopt_launches inout GpOpt o inout GProg pg → b {
+// The DEVICE half: (the clip scale when clipping) + one opt launch per
+// backward-active parameter. Pure launches — capturable into a graph —
+// recorded on the first step and replayed after it. The clip norm sums
+// every active parameter's squared gradient in registration order, one
+// parameter per launch into the accumulator: the order the single-thread
+// kernel over a table of raw gradient addresses summed in.
+@ _gpopt_launches inout GpOpt o inout GProg pg → b {
+    ? > ( vec_len [GkLaunch] . o orec ) 0 { ^ ( __gp_replay . o orec ) } {}
+    : ~ ( Vec GkLaunch ) rs ( vec_new [GkLaunch] )
     : ~ b r T
-    ? > . o clip 0.0 {
-        : ( Vec i ) a ( vec_new [i] )
-        ( vec_push [i] a ( gk_arg_dev . o ptab ) )
-        ( vec_push [i] a ( gpu_arg_i64 / ( gk_buf_len . o ptab ) 2 ) )
-        ( vec_push [i] a ( __gp_argf pg . o clip ) )
-        ( vec_push [i] a ( gk_arg_dev . o ctl ) )
-        = r ( _gp_run pg `gp_clipcs` 1 1 a )
-    } {}
     : i np ( vec_len [i] . o ids )
+    ? > . o clip 0.0 {
+        : ~ b first T
+        : ~ i pi 0
+        ~ & < pi np r {
+            : GpNode nd ( _gp_node pg ( _ti . o ids pi ) )
+            ? == . nd reach 1 {
+                : ~ GkCall c ( gk_call_new )
+                ( gk_call_dev c `g` . nd grad ) ( gk_call_dev c `acc` . o acc )
+                ( gk_call_i64 c `n` . nd n ) ( gk_call_i64 c `first` ? first 1 0 )
+                = r ( _gp_go pg rs c `sqacc` 1 1 )
+                = first F
+            } {}
+            = pi + pi 1
+        }
+        // (no active parameter: the norm of nothing is 0)
+        ? & r first {
+            : ~ GkCall c0 ( gk_call_new )
+            ( gk_call_dev c0 `g` . o acc ) ( gk_call_dev c0 `acc` . o acc ) ( gk_call_i64 c0 `n` 0 ) ( gk_call_i64 c0 `first` 1 )
+            = r ( _gp_go pg rs c0 `sqacc` 1 1 )
+        } {}
+        ? r {
+            : ~ GkCall cf ( gk_call_new )
+            ( gk_call_dev cf `acc` . o acc ) ( gk_call_dev cf `ctl` . o ctl ) ( gk_call_f64 cf `clip` . o clip )
+            = r ( _gp_go pg rs cf `clipfin` 1 1 )
+        } {}
+    } {}
     : ~ i pi 0
     ~ & < pi np r {
         : i id ( _ti . o ids pi )
@@ -1619,20 +1438,15 @@ unsafe @ _gpopt_launches inout GpOpt o inout GProg pg → b {
         ? == . nd reach 1 {
             : GkBuf mb ?? ( vec_get [GkBuf] . o m pi ) { T x → x F → ( _gp_nobuf ) }
             : GkBuf vb ?? ( vec_get [GkBuf] . o v pi ) { T x → x F → ( _gp_nobuf ) }
-            : ( Vec i ) a ( vec_new [i] )
-            ( vec_push [i] a ( gk_arg_dev . nd val ) )
-            ( vec_push [i] a ( gk_arg_dev . nd grad ) )
-            ( vec_push [i] a ( gk_arg_dev mb ) )
-            ( vec_push [i] a ( gk_arg_dev vb ) )
-            ( vec_push [i] a ( gpu_arg_i64 . nd n ) )
-            ( vec_push [i] a ( gpu_arg_i64 . o kind ) )
-            ( vec_push [i] a ( gk_arg_dev . o ctl ) )
-            ( vec_push [i] a ( __gp_argf pg ( _tf . o alphas pi ) ) )
-            ( vec_push [i] a ( __gp_argf pg . o lr ) )
-            = r ( _gp_run pg `gp_opt` ( gk_grid . nd n 256 ) 256 a )
+            : ~ GkCall c ( gk_call_new )
+            ( gk_call_dev c `w` . nd val ) ( gk_call_dev c `g` . nd grad ) ( gk_call_dev c `m` mb ) ( gk_call_dev c `v` vb )
+            ( gk_call_i64 c `n` . nd n ) ( gk_call_i64 c `kind` . o kind ) ( gk_call_dev c `ctl` . o ctl )
+            ( gk_call_f64 c `alpha` ( _tf . o alphas pi ) ) ( gk_call_f64 c `lr` . o lr )
+            = r ( _gp_go pg rs c `opt` ( gk_grid . nd n 256 ) 256 )
         } {}
         = pi + pi 1
     }
+    = . o orec rs
     ^ r
 }
 

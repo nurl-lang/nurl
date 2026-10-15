@@ -26621,6 +26621,7 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                 : s lsrcs ? != 0 ( nurl_str_len lsx ) ( bck_sx_sources st lsx ( bck_field_int rec 1 ) ) ( nurl_str_cat `*` `` )
                 : s lnest ? == lmk0 110 ( bck_sx_sources st ( bck_field rec 8 ) ( bck_field_int rec 1 ) ) ``
                 ( bck_partner_unlink ( bck_field_int rec 1 ) )
+                ( nurl_sym_set g_bck ( bck_bkey `oos_` ( bck_field rec 1 ) ) `` )
                 = st ( bck_st_set st ( bck_field_int rec 1 ) BCK_OWNED )
                 ? != 0 g_bck_ab_any { ( nurl_sym_set g_bck ( bck_bkey `ab_` ( bck_field rec 1 ) ) `` ) } {}
                 ? | ( seq ( bck_field rec 5 ) `s` ) ( seq ( bck_field rec 5 ) `c` ) { ( nurl_sym_set g_bck ( bck_bkey `nh_` ( bck_field rec 1 ) ) `1` ) } {}
@@ -27140,6 +27141,10 @@ unsafe @ bck_sx_ev s st s e b arg → s {
 // caller's Vec v, `= . r name x` through an `inout` r).
 @ bck_caller_view_diag i d i src i line → v {
     ? ! ( bck_caller_held d ) { ^ v } {}
+    // (A binding whose block has ended holds nothing any more: a local
+    // copy of a parameter's element read in a loop body is no storage of
+    // the caller's after the loop.)
+    ? != 0 ( nurl_sym_len g_bck ( bck_bkey `oos_` ( nurl_str_int ( bck_path_root d ) ) ) ) { ^ v } {}
     : s ds ( nurl_str_int d )
     : s tag ( nurl_str_cat4 `cv:` ds `:` ( nurl_str_int src ) )
     : s ws ( nurl_sym_get g_bck `warnset` )
@@ -28065,7 +28070,9 @@ unsafe @ bck_note_rc_arg s name s ty → v {
     ~ != 0 ( nurl_str_len rest ) {
         : s ds ( str_first_word rest ) = rest ( str_skip_word rest )
         : i d ( nurl_str_to_int ds )
-        ? & & ! ( bck_dead_state ( bck_st_get out d ) ) ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `vds_` ds ) ) sids ) ! & moved ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `vdi_` ds ) ) sids ) {
+        // (Not bound on this path — never yet, or its block left — it holds
+        // nothing to end.)
+        ? & & & ! ( bck_dead_state ( bck_st_get out d ) ) != BCK_UNINIT ( bck_st_get out d ) ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `vds_` ds ) ) sids ) ! & moved ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `vdi_` ds ) ) sids ) {
             // (Storage the caller holds outlives this function: a view of a
             // binding that ends here, stored into it, is an error now.)
             ? ! moved { ( bck_caller_view_diag d ( nurl_str_to_int sids ) line ) } {}
@@ -28370,6 +28377,7 @@ unsafe @ bck_note_rc_arg s name s ty → v {
         : i id ( nurl_str_to_int w )
         : i v ( bck_st_get out id )
         ? | == v BCK_OWNED == v BCK_MAYBE_MOVED { = out ( bck_borrow_end out id line `it went out of scope at the end of its match arm` 0 ) } {}
+        ( nurl_sym_set g_bck ( bck_bkey `oos_` w ) `1` )
     }
     ^ out
 }
@@ -28414,6 +28422,9 @@ unsafe @ bck_scope_leave s st i line → s {
             : i id ( bck_field_int rec 1 )
             : i v ( bck_st_get out id )
             ? | == v BCK_OWNED == v BCK_MAYBE_MOVED { = out ( bck_borrow_end out id line `it went out of scope at the end of its block` 0 ) } {}
+            // (Gone from here on — until a `let` binds it again: a later
+            // change to what it borrowed from no longer concerns it.)
+            ( nurl_sym_set g_bck ( bck_bkey `oos_` ( nurl_str_int id ) ) `1` )
             = j + j 1
         } {
             ? != 0 ( nurl_str_starts rec `cond\t` ) { = j + ( bck_match_close j `cond` `endcond` ) 1 } {
@@ -28444,6 +28455,7 @@ unsafe @ bck_scope_leave s st i line → s {
             ? ends {
                 : i v ( bck_st_get out id )
                 ? | == v BCK_OWNED == v BCK_MAYBE_MOVED { = out ( bck_borrow_end out id line `it went out of scope at the end of its block` 0 ) } {}
+                ( nurl_sym_set g_bck ( bck_bkey `oos_` ( nurl_str_int id ) ) `1` )
             } {}
             = out ( bck_st_set out id ( bck_st_get pre id ) )
             ( bck_partner_unlink id )

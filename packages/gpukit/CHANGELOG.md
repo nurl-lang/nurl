@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.11.11] — 2026-10-15
+
+- **Recorded launches.** `gk_record_dev kit call kname body nblocks block` does everything `gk_run_checked_dev` does except the launch. It checks and builds the kernel, binds the call, and keeps the argument words, the kernel's cache slot and a share of every bound buffer, so the buffers live as long as the record. `gk_replay rec` then only launches, on the kit the record was made for. A replay costs what a raw `gk_run_dev` launch costs (1.55 µs against 1.6 µs per launch on an RTX 4090, with no binding names, cache key or argument building), while a fresh checked launch costs about 2.6 µs. A program that replays the same launches every step, such as grad's tape, binds and checks them once. `GkLaunch` is `raw`, because its argument words are addresses. `gk_launch_ok` and `gk_launch_none` are also new.
+- The block-launch build step asks per-binding helpers for a buffer's liveness and element type instead of holding a view of the call across the error store. This avoided a borrow-checker false positive that is now also fixed in the compiler.
+
 ## [0.11.10] — 2026-10-15
 
 - **Checked loads are as fast as raw ones on CUDA.** When every buffer of a launch has 1 to 2^32 − 1 elements, a checked load clamps its index with one 32-bit `min` against the last element. Before, it used a 64-bit compare and select. The 64-bit form stopped the compiler from strength-reducing a loop's addresses, and f5tts's grouped convolution (31 taps, 16 groups, 1024 channels) ran 1.8× slower as a checked kernel than as its raw original. It now runs at parity: 0.80 ms per call, both forms, with byte-identical output. Launches with a buffer that is empty or has 2^32 elements or more keep the 64-bit check.
