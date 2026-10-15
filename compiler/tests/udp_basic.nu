@@ -72,6 +72,30 @@ $ `stdlib/core/slice.nu`
     ( nurl_print `\n` )
 }
 
+// Receive on `rx`, resending `msg` from `tx` to 127.0.0.1:`port` when a
+// wait of a second goes by with nothing: loopback UDP may still drop a
+// datagram on a loaded host, and a lost one must not hang the test. A
+// connected `tx` (port < 0) resends with udp_send.
+@ recv_resend UdpSocket rx UdpSocket tx s msg i port → !UdpPacket NetErr {
+    ( udp_set_timeout rx 1000 )
+    : ~ i tries 0
+    ~ T {
+        : !UdpPacket NetErr r ( udp_recv_from rx 1024 )
+        ?? r {
+            T pkt → { ^ @ !UdpPacket NetErr { T pkt } }
+            F e → { ? >= tries 20 { ^ @ !UdpPacket NetErr { F e } } {} }
+        }
+        = tries + tries 1
+        ? < port 0 {
+            : ( Vec u ) b ( bytes_from_str msg )
+            : !i NetErr _r ( udp_send tx b )
+        } {
+            : !i NetErr _r ( udp_send_str_to tx msg `127.0.0.1` port )
+        }
+    }
+    ^ @ !UdpPacket NetErr { F # NetErr NetTimeout }
+}
+
 @ main → i {
     // ── 1. Server bind, ephemeral port. ──────────────────────────
     : !UdpSocket NetErr sr ( udp_bind `127.0.0.1` 0 )
@@ -100,7 +124,7 @@ $ `stdlib/core/slice.nu`
                     }
 
                     // ── 4. Server recv_from. ─────────────────
-                    : !UdpPacket NetErr r1 ( udp_recv_from server 1024 )
+                    : !UdpPacket NetErr r1 ( recv_resend server client `ping` sport )
                     ?? r1 {
                         T pkt → {
                             : ( Vec u ) data . pkt data
@@ -126,7 +150,7 @@ $ `stdlib/core/slice.nu`
                     }
 
                     // ── 6. Client recv_from "pong". ─────────
-                    : !UdpPacket NetErr r2 ( udp_recv_from client 1024 )
+                    : !UdpPacket NetErr r2 ( recv_resend client server `pong` cport )
                     ?? r2 {
                         T pkt → {
                             : ( Vec u ) data . pkt data
@@ -153,7 +177,7 @@ $ `stdlib/core/slice.nu`
                         T n → ( print_label_int `zero_send_bytes` n )
                         F e → ( print_label_str `zero_send` ( net_err_name e ) )
                     }
-                    : !UdpPacket NetErr zr ( udp_recv_from server 1024 )
+                    : !UdpPacket NetErr zr ( recv_resend server zc `` sport )
                     ?? zr {
                         T pkt → {
                             : ( Vec u ) data . pkt data
@@ -212,7 +236,7 @@ $ `stdlib/core/slice.nu`
                     }
                     ( vec_free [u] hi )
 
-                    : !UdpPacket NetErr cr_in ( udp_recv_from cserver 1024 )
+                    : !UdpPacket NetErr cr_in ( recv_resend cserver cclient `hi` -1 )
                     ?? cr_in {
                         T pkt → {
                             : String s_in ( bytes_to_str . pkt data )
@@ -274,7 +298,16 @@ $ `stdlib/core/slice.nu`
 
                             : ( Vec u ) buf ( vec_with_cap [u] 32 )
                             : ( Vec u ) from ( udp_addr_new )
-                            : !i NetErr r ( udp_recv_into aserver buf from )
+                            // A receive timeout so a lost datagram is resent, not waited on.
+                            ( udp_set_timeout aserver 1000 )
+                            : ~ ! i NetErr r ( udp_recv_into aserver buf from )
+                            : ~ i tries 0
+                            ~ & < tries 20 ?? r { T _ → F F _ → T } {
+                                : ( Vec u ) again ( bytes_from_str `addr-ping` )
+                                : !i NetErr _s ( udp_send_addr aclient again to )
+                                = r ( udp_recv_into aserver buf from )
+                                = tries + tries 1
+                            }
                             ?? r {
                                 T n → {
                                     : String got ( bytes_to_str buf )
