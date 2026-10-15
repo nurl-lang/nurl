@@ -707,7 +707,7 @@ raw @ gpu_host_ptr GpuHost h → *u { ^ . h ptr }
 // Element `idx` of the buffer read as 4-byte cells; an index past the
 // end panics like vec_at (one compare, and the optimiser hoists it out of
 // a counted loop).
-unsafe @ __gpu_host_cell GpuHost h i idx → v {
+@ __gpu_host_cell GpuHost h i idx → v {
     ? | < idx 0 > + * idx 4 4 . h bytes { ( nurl_panic `gpu host buffer: index out of bounds` ) } {}
 }
 

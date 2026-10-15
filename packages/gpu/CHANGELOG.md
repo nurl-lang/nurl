@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.17.3] — 2026-10-15
+
+- `__gpu_host_cell`, the bounds check every host-buffer cell access makes, is a plain function: it reads only the buffer's size and never needed `unsafe`. Found by stripping each remaining `unsafe` in gpu, gpukit and nwasm in turn and checking that the compiler still demands it. This was the only one it did not.
+
 ## [0.17.2] — 2026-10-15
 
 - `gpu_buffer_sub b off bytes`: a bounds-checked sub-view of a buffer that shares its owner, so it stays valid however long it lives. `gpu_buffer_none` returns an empty buffer.
