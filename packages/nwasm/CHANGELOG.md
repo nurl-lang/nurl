@@ -1,5 +1,26 @@
 # Changelog
 
+## [2.6.0] — 2026-10-15
+
+### Changed
+
+- The interpreter passes its instance as `inout InterpImpl` instead of a
+  `*InterpImpl`, and its predecoded functions and decoded module as
+  `inout PFunc` / `inout ModuleImpl` (a `WFunc` by value): 51 `unsafe`
+  functions fewer in src/interp.nu (192 to 141). An `inout` parameter is
+  passed by address exactly as the raw pointer was (the IR is the same
+  pointer argument), so the instance keeps the fixed address that the
+  JIT and the call-out bridge hold. The public `interp_*` entry points are
+  now the one place that turns the `Arc` into that address. What stays
+  `unsafe` reads boxed records through `box_ptr`, reaches a thread's
+  owner through a raw pointer, or touches linear memory or JIT code.
+- The call-out bridge captures the instance's address rather than the
+  instance.
+- Every unit suite gives byte-identical output under tier 8, tier 7 and
+  the interpreter. A four-thread wasi-threads program counts to 400000 as
+  before. A program making 2 million host calls runs 5.055 G instructions
+  against 5.047 G before (+0.2 %), wall time at parity.
+
 ## [2.5.0] — 2026-10-15
 
 ### Changed
