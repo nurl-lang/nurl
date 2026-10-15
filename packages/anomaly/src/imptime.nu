@@ -523,12 +523,17 @@ $ `stdlib/core/slice.nu`
     ^ -1
 }
 
+// An empty slot for a column taken out to be counted (allocates nothing).
+@ __it_col_blank → ImpCol {
+    ^ @ ImpCol { ( string_new ) ( string_new ) 0 0 0 0 0 0 0 0 0 0 0 0 ( string_new ) }
+}
+
 @ __it_col_new s name → ImpCol {
     ^ @ ImpCol { ( string_from name ) ( __it_norm_name name ) 0 0 0 0 0 0 0 0 0 0 0 0 ( string_new ) }
 }
 
 // Count one cell into its column, in place.
-unsafe @ __it_col_add * ImpCol c Json v → v {
+@ __it_col_add inout ImpCol c Json v → v {
     = . c filled + . c filled 1
     ? == ( string_len . c sample ) 0 {
         ? ( json_is_str v ) { = . c sample ( string_from ( json_str_data v ) ) } { = . c sample ( json_stringify v ) }
@@ -579,7 +584,7 @@ unsafe @ __it_col_add * ImpCol c Json v → v {
     ^ `mixed`
 }
 
-unsafe @ __it_describe ( Vec Json ) rows → ( Vec ImpCol ) {
+@ __it_describe ( Vec Json ) rows → ( Vec ImpCol ) {
     : ( Vec ImpCol ) cols ( vec_new [ImpCol] )
     : i n ( vec_len [Json] rows )
     : i lim ? < n ANOM_INSPECT_ROWS n ANOM_INSPECT_ROWS
@@ -600,10 +605,15 @@ unsafe @ __it_describe ( Vec Json ) rows → ( Vec ImpCol ) {
                             } {}
                             ?? ( json_obj_get row ( string_data key ) ) {
                                 T v → {
-                                    // Counted in place: the column stays in its slot.
-                                    ? < ci ( vec_len [ImpCol] cols ) {
-                                        ( __it_col_add # *ImpCol + # i ( vec_data [ImpCol] cols ) * ci Z ImpCol v )
-                                    } {}
+                                    // Taken out of its slot, counted, put back.
+                                    ?? ( vec_replace [ImpCol] cols ci ( __it_col_blank ) ) {
+                                        T col → {
+                                            : ~ ImpCol c col
+                                            ( __it_col_add c v )
+                                            : ?ImpCol _old ( vec_replace [ImpCol] cols ci c )
+                                        }
+                                        F → {}
+                                    }
                                 }
                                 F _ → {}
                             }

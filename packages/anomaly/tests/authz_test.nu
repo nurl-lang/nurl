@@ -191,7 +191,7 @@ $ `stdlib/core/slice.nu`
     ( anomaly_authz_set_iss_tmpl `https://id.example/{tenantid}/v2.0` )
     : Principal p1 ( __az_token_principal ( string_data tok ) 1700000000 )
     ( check ! . p1 authed `wiring: an unapproved organisation is refused` )
-    ( check ( __has ( anomaly_authz_last_error ) `not approved` )
+    ( check ( __has ( string_data ( anomaly_authz_last_error ) ) `not approved` )
     `wiring: and the reason says it is not approved` )
 
     // With the tenant admitted, the refusal must move PAST the tenant check
@@ -210,12 +210,12 @@ $ `stdlib/core/slice.nu`
     ( anomaly_authz_set_iss_tmpl `https://id.example/{tenantid}/v2.0` )
     : Principal p2 ( __az_token_principal ( string_data tok ) 1700000000 )
     ( check ! . p2 authed `wiring: an unsigned token is still refused` )
-    ( check ! ( __has ( anomaly_authz_last_error ) `not approved` )
+    ( check ! ( __has ( string_data ( anomaly_authz_last_error ) ) `not approved` )
     `wiring: but no longer for its tenant — the issuer was derived` )
 
     // And every refusal says something. A 401 with an empty reason is the
     // sign-in screen that reappears forever with nothing to go on.
-    ( check > ( nurl_str_len ( anomaly_authz_last_error ) ) 0
+    ( check > ( nurl_str_len ( string_data ( anomaly_authz_last_error ) ) ) 0
     `wiring: a refusal always carries a reason` )
 
     ( __az_forget_provider )

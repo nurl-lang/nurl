@@ -1224,6 +1224,13 @@ generic that copies its `T` cannot be instantiated with one (h235)
 
 ### Performance
 
+- **`bytes_push_u32_le/_be` and `bytes_push_u64_le/_be` write the word
+  with one capacity check and one length bump** (`vec_push_word_u8`,
+  new in stdlib/core/vec.nu) instead of four or eight `vec_push` calls,
+  whose inlining into the serializer came and went with the optimizer's
+  module split. anomaly's dynamic suite, which writes its forest blobs
+  through them, retires 6 % fewer instructions.
+
 - **The compiler hoists IR type definitions without a two-byte search
   of the whole module.** `__types_first` looked for `\n%` with `memmem`
   across every module it emitted, megabytes at a time. It now finds each

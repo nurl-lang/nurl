@@ -89,7 +89,7 @@ $ `stdlib/std/arc.nu`
 
 // A live dynamic model. Obtain with model_open; the last copy of the
 // handle releases it (model_free lets go early).
-: ModelImpl {
+: Model {
     Store store
     String mname
     Meta meta
@@ -107,14 +107,6 @@ $ `stdlib/std/arc.nu`
 
 // A Model is a handle on its state in an Arc (stdlib/std/arc.nu):
 // every copy is the same state, and the last owner releases it.
-: Model { ( Arc ModelImpl ) a }
-
-@ Model_share Model h → Model { ^ @ Model { ( arc_clone [ModelImpl] . h a ) } }
-
-@ Model_drop sink Model h → v {}
-
-unsafe @ _Model_ptr Model h → *ModelImpl { ^ ( arc_ptr [ModelImpl] . h a ) }
-
 // Who is acting, and how, for the audit log: the service sets the actor
 // from the request's principal, the CLI and the scheduler name
 // themselves; the action is set by the operation that changes margins
@@ -142,8 +134,7 @@ unsafe @ _Model_ptr Model h → *ModelImpl { ^ ( arc_ptr [ModelImpl] . h a ) }
 }
 
 // The newest `limit` audit entries of a model (all when ≤ 0).
-unsafe @ model_audit Model mo__h i limit → Json {
-    : *ModelImpl mo ( _Model_ptr mo__h )
+@ model_audit Model mo i limit → Json {
     ^ ( store_load_audit . mo store ( string_data . mo mname ) limit )
 }
 
@@ -174,17 +165,14 @@ unsafe @ model_audit Model mo__h i limit → Json {
     }
 }
 
-unsafe @ __an_clear_forests Model mo__h → v {
-    : *ModelImpl mo ( _Model_ptr mo__h )
+@ __an_clear_forests Model mo → v {
     ( vec_clear [VerModel] . mo forests )
 }
 
 // The schedule step from the current ring fill: at capacity, retrain less.
-unsafe @ __an_sched_step Model mo__h → i {
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    : *MetaImpl mm ( _Meta_ptr . mo meta )
-    ? >= ( vec_len [String] . mo lines ) . mo max_points { ^ . mm sched_at_max } {}
-    ^ . mm sched_below
+@ __an_sched_step Model mo → i {
+    ? >= ( vec_len [String] . mo lines ) . mo max_points { ^ . . mo meta sched_at_max } {}
+    ^ . . mo meta sched_below
 }
 
 // ── Lifecycle ─────────────────────────────────────────────────────────
@@ -202,15 +190,12 @@ unsafe @ __an_sched_step Model mo__h → i {
     ^ ( _an_forestless_name vname )
 }
 
-unsafe @ model_open_at Store st s name i now → Model {
-    : ( Arc ModelImpl ) mo__box ( arc_zero [ModelImpl] )
-    : *ModelImpl mo ( arc_ptr [ModelImpl] mo__box )
-    : Model mo__h @ Model { mo__box }
-    = . mo store ( store_open_org ( string_data . st root ) ( store_org st ) )
-    = . mo mname ( string_from name )
-    = . mo forests ( vec_new [VerModel] )
-    = . mo min_points ANOM_MIN_POINTS
-    = . mo max_points ANOM_MAX_POINTS
+@ model_open_at Store st s name i now → Model {
+    // (The metadata, ring, scaler and versions start empty and are filled
+    // from the store below.)
+    : ~ Model mo @ Model { ( store_open_org ( string_data . st root ) ( store_org st ) ) ( string_from name )
+        ( meta_new name `` ) ( vec_new [String] ) ( vec_new [i] ) ( vec_new [VerModel] )
+        @ Scaler { ( vec_new [f] ) ( vec_new [f] ) } ( ae_empty ) F ( fc_new ) 0 ANOM_MIN_POINTS ANOM_MAX_POINTS }
 
     : ~ b loaded F
     ? ( store_exists st name ) {
@@ -245,23 +230,23 @@ unsafe @ model_open_at Store st s name i now → Model {
         = . mo meta ( meta_new name ( string_data iso ) )
         ( store_save_meta . mo store name . mo meta )
     }
-    : *MetaImpl mm ( _Meta_ptr . mo meta )
-    = . mo max_points . mm max_points
+    = . mo max_points . . mo meta max_points
 
     // Ring: adopt the stored lines wholesale, then stamp times from them.
     : ( Vec String ) pts ( store_load_points . mo store name )
-    = . mo lines pts
-    = . mo times ( vec_new [i] )
+    : ( Vec i ) tms ( vec_new [i] )
     : i np ( vec_len [String] pts )
     : ~ i k 0
     ~ < k np {
         ?? ( vec_get [String] pts k ) {
-            T l → { ( vec_push [i] . mo times ( _an_line_ts ( string_data l ) ) ) }
+            T l → { ( vec_push [i] tms ( _an_line_ts ( string_data l ) ) ) }
             F _ → {}
         }
         = k + k 1
     }
-    ( __an_note_stored mo__h )
+    = . mo lines pts
+    = . mo times tms
+    ( __an_note_stored mo )
 
     // Trained versions: one forest blob per enabled version, if present.
     // The `autoencoder` version is not a forest: its VerCfg only carries
@@ -269,11 +254,11 @@ unsafe @ model_open_at Store st s name i now → Model {
     // is the leftover of a release that trained one anyway (an empty
     // forest whose verdict shadowed the real autoencoder's) — ignored here
     // and deleted by the next retrain.
-    : i nv ( vec_len [VerCfg] . mm versions )
-    : i nfeat0 ( vec_len [String] . mm feats )
+    : i nv ( vec_len [VerCfg] . . mo meta versions )
+    : i nfeat0 ( vec_len [String] . . mo meta feats )
     : ~ i vi 0
     ~ < vi nv {
-        ?? ( vec_get [VerCfg] . mm versions vi ) {
+        ?? ( vec_get [VerCfg] . . mo meta versions vi ) {
             T vc → {
                 ? & . vc enabled ! ( __an_forestless ( string_data . vc vname ) ) {
                     : ?VerModel got ( store_load_forest . mo store name ( string_data . vc vname ) )
@@ -328,21 +313,20 @@ unsafe @ model_open_at Store st s name i now → Model {
         T fc → { = . mo fc fc }
         F → { = . mo fc ( fc_new ) }
     }
-    ? . ( _FcModel_ptr . mo fc ) trained {
-        ? ( __an_fc_stale mo__h ) { ( fc_clear . mo fc ) } {
-            : *FcModelImpl fc ( _FcModel_ptr . mo fc )
+    ? . . mo fc trained {
+        ? ( __an_fc_stale mo ) { ( fc_clear . mo fc ) } {
             : i np2 ( vec_len [String] . mo lines )
-            : ~ i pos - . fc seq ( model_seq_base mo__h )
+            : ~ i pos - . . mo fc seq ( model_seq_base mo )
             ? > pos np2 { = pos np2 } {}
             ? < pos 0 {
                 : ~ i j 0
-                ~ < j . fc nw {
-                    ?? ( _fc_model_at . mo fc j ) { T am → { ( arima_restart_at am - ( model_seq_base mo__h ) . fc origin_seq ) } F → {} }
+                ~ < j . . mo fc nw {
+                    ?? ( _fc_model_at . mo fc j ) { T am → { ( arima_restart_at am - ( model_seq_base mo ) . . mo fc origin_seq ) } F → {} }
                     = j + j 1
                 }
                 = pos 0
             } {}
-            = . fc pos pos
+            = . . mo fc pos pos
         }
     } {}
 
@@ -350,9 +334,9 @@ unsafe @ model_open_at Store st s name i now → Model {
     ? == ( vec_len [VerModel] . mo forests ) 0 {
         = . mo next_train_at . mo min_points
     } {
-        = . mo next_train_at + . mm n_seen ( __an_sched_step mo__h )
+        = . mo next_train_at + . . mo meta n_seen ( __an_sched_step mo )
     }
-    ^ mo__h
+    ^ mo
 }
 
 @ model_open Store st s name → Model {
@@ -362,19 +346,17 @@ unsafe @ model_open_at Store st s name i now → Model {
 // Set a version's sliding-window geometry (timevector). Takes effect at
 // the NEXT retrain — detect derives the live window from the trained
 // forest's width, so a config change can never desync scoring.
-unsafe @ model_set_version_window Model mo__h s vname i wsize i sstep → b {
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    : *MetaImpl mm ( _Meta_ptr . mo meta )
-    : i nv ( vec_len [VerCfg] . mm versions )
+@ model_set_version_window Model mo s vname i wsize i sstep → b {
+    : i nv ( vec_len [VerCfg] . . mo meta versions )
     : ~ i k 0
     ~ < k nv {
-        ?? ( vec_get [VerCfg] . mm versions k ) {
+        ?? ( vec_get [VerCfg] . . mo meta versions k ) {
             T vc → {
                 ? == ( nurl_str_eq ( string_data . vc vname ) vname ) 1 {
                     : ~ VerCfg nc vc
                     = . nc window_size wsize
                     = . nc step_size sstep
-                    : b _o ( vec_set [VerCfg] . mm versions k nc )
+                    : b _o ( vec_set [VerCfg] . . mo meta versions k nc )
                     ( store_save_meta . mo store ( string_data . mo mname ) . mo meta )
                     ^ T
                 } {}
@@ -389,16 +371,14 @@ unsafe @ model_set_version_window Model mo__h s vname i wsize i sstep → b {
 // ── Which clock ───────────────────────────────────────────────────────
 
 // The newest stored stamp, or 0 on an empty ring.
-unsafe @ model_last_ts Model mo__h → i {
-    : *ModelImpl mo ( _Model_ptr mo__h )
+@ model_last_ts Model mo → i {
     : i np ( vec_len [i] . mo times )
     ? > np 0 { ?? ( vec_get [i] . mo times - np 1 ) { T x → { ^ x } F _ → {} } } {}
     ^ 0
 }
 
 // The oldest stored stamp, 0 for an empty ring.
-unsafe @ model_first_ts Model mo__h → i {
-    : *ModelImpl mo ( _Model_ptr mo__h )
+@ model_first_ts Model mo → i {
     ?? ( vec_get [i] . mo times 0 ) { T x → { ^ x } F _ → {} }
     ^ 0
 }
@@ -421,10 +401,8 @@ unsafe @ model_first_ts Model mo__h → i {
 
 // "Now" for this model: the wall clock, or on the count clock the newest
 // tick — the moment the last point arrived is the only present it has.
-unsafe @ model_now Model mo__h → i {
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    : *MetaImpl mm ( _Meta_ptr . mo meta )
-    ? . mm count_clock { ^ ( model_last_ts mo__h ) } {}
+@ model_now Model mo → i {
+    ? . . mo meta count_clock { ^ ( model_last_ts mo ) } {}
     ^ ( now_seconds )
 }
 
@@ -434,8 +412,7 @@ unsafe @ model_now Model mo__h → i {
 
 // Test hook: shrink the warm-up / ring limits so eviction and scheduling
 // are exercisable without 150 000 points.
-unsafe @ model_set_limits Model mo__h i min_pts i max_pts → v {
-    : *ModelImpl mo ( _Model_ptr mo__h )
+@ model_set_limits inout Model mo i min_pts i max_pts → v {
     = . mo min_points min_pts
     = . mo max_points max_pts
     ? == ( vec_len [VerModel] . mo forests ) 0 {
@@ -443,13 +420,11 @@ unsafe @ model_set_limits Model mo__h i min_pts i max_pts → v {
     } {}
 }
 
-unsafe @ model_metadata Model mo__h → Meta {
-    : *ModelImpl mo ( _Model_ptr mo__h )
+@ model_metadata Model mo → Meta {
     ^ . mo meta
 }
 
-unsafe @ model_n_points Model mo__h → i {
-    : *ModelImpl mo ( _Model_ptr mo__h )
+@ model_n_points Model mo → i {
     ^ ( vec_len [String] . mo lines )
 }
 
@@ -457,13 +432,11 @@ unsafe @ model_n_points Model mo__h → i {
 // changes and before the metadata is written: the listing reads the
 // metadata alone, and "points seen" is a lifetime count that keeps
 // climbing past the cap.
-unsafe @ __an_note_stored Model mo__h → v {
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    = . ( _Meta_ptr . mo meta ) n_stored ( vec_len [String] . mo lines )
+@ __an_note_stored inout Model mo → v {
+    = . . mo meta n_stored ( vec_len [String] . mo lines )
 }
 
-unsafe @ model_is_trained Model mo__h → b {
-    : *ModelImpl mo ( _Model_ptr mo__h )
+@ model_is_trained Model mo → b {
     ^ > ( vec_len [VerModel] . mo forests ) 0
 }
 
@@ -479,9 +452,7 @@ unsafe @ model_is_trained Model mo__h → b {
 // timevector window is always the points BEFORE the one under judgement and
 // never leaks the future into a replayed verdict. None when the ring is too
 // short there, or a stored line no longer parses.
-unsafe @ __an_window_tail Model mo__h i need i end → ?( Vec f ) {
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    : *MetaImpl mm ( _Meta_ptr . mo meta )
+@ __an_window_tail Model mo i need i end → ?( Vec f ) {
     : i n end
     ? < n need { ^ @ ?( Vec f ) { F } } {}
     : ( Vec f ) out ( vec_new [f] )
@@ -493,10 +464,10 @@ unsafe @ __an_window_tail Model mo__h i need i end → ?( Vec f ) {
                 : !Json JsonError jr ( json_parse ( string_data l ) )
                 ?? jr {
                     T j → {
-                        : !EncPoint String er ( anomaly_preprocess . mo meta j )
+                        : !EncPoint String er ( anomaly_preprocess_ro . mo meta j )
                         ?? er {
                             T pt → {
-                                : ( Vec f ) row ( anomaly_project pt . mm feats )
+                                : ( Vec f ) row ( anomaly_project pt . . mo meta feats )
                                 ( scaler_apply . mo sc row )
                                 ( vec_extend [f] out row )
                             }
@@ -524,7 +495,7 @@ unsafe @ __an_window_tail Model mo__h i need i end → ?( Vec f ) {
 // The numbers are the per-row path's exactly (anom_decisions is
 // bit-identical to anom_decision, and the window is the same projection
 // of the same rows); only the work is shared.
-: HistImpl {
+: Hist {
     i base
     i n
     i nfeat
@@ -541,19 +512,10 @@ unsafe @ __an_window_tail Model mo__h i need i end → ?( Vec f ) {
 
 // A Hist is a handle on its state in an Arc (stdlib/std/arc.nu):
 // every copy is the same state, and the last owner releases it.
-: Hist { ( Arc HistImpl ) a }
-
-@ Hist_share Hist h → Hist { ^ @ Hist { ( arc_clone [HistImpl] . h a ) } }
-
-@ Hist_drop sink Hist h → v {}
-
-unsafe @ _Hist_ptr Hist h → *HistImpl { ^ ( arc_ptr [HistImpl] . h a ) }
-
 // Widest timevector window over the trained forests (1 when there is none):
 // the rows a scan of [lo, hi) needs encoded start at lo − width + 1.
-unsafe @ __an_hist_width Model mo__h → i {
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    : i nfeat ( vec_len [String] . ( _Meta_ptr . mo meta ) feats )
+@ __an_hist_width Model mo → i {
+    : i nfeat ( vec_len [String] . . mo meta feats )
     : ~ i w 1
     : i nf ( vec_len [VerModel] . mo forests )
     : ~ i k 0
@@ -573,10 +535,8 @@ unsafe @ __an_hist_width Model mo__h → i {
 }
 
 // Encode ring rows [from, to) and score them through every forest.
-unsafe @ __an_hist_build Model mo__h i from i to → Hist {
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    : *MetaImpl mm ( _Meta_ptr . mo meta )
-    : i nfeat ( vec_len [String] . mm feats )
+@ __an_hist_build Model mo i from i to → Hist {
+    : i nfeat ( vec_len [String] . . mo meta feats )
     : AeModel cae . mo ae
     : ~ i ae_nfeat 0
     ? & . cae trained ! . mo ae_stale { = ae_nfeat ( vec_len [String] . cae feats ) } {}
@@ -594,19 +554,18 @@ unsafe @ __an_hist_build Model mo__h i from i to → Hist {
     // a restart ANOM_FC_BURN rows before the window (the diffuse start
     // has faded by then), then every row, each row's z-scores kept when
     // it is in the window.
-    : *FcModelImpl fc ( _FcModel_ptr . mo fc )
     : ~ i fc_nw 0
-    ? & . fc trained ( meta_version_enabled . mo meta ANOM_FC_NAME F ) { = fc_nw . fc nw } {}
+    ? & . . mo fc trained ( meta_version_enabled . mo meta ANOM_FC_NAME F ) { = fc_nw . . mo fc nw } {}
     : ( Vec f ) fc_z ( vec_with_cap [f] * n fc_nw )
     : ( Vec i ) fc_ok ( vec_with_cap [i] n )
     : ~ ( Vec ArimaModel ) copies ( vec_new [ArimaModel] )
     ? > fc_nw 0 {
         : ~ i b0 - lo ANOM_FC_BURN
         ? < b0 0 { = b0 0 } {}
-        = copies ( fc_replay_begin . mo fc + ( model_seq_base mo__h ) b0 )
+        = copies ( fc_replay_begin . mo fc + ( model_seq_base mo ) b0 )
         : ( Vec f ) noz ( vec_new [f] )
         ~ < b0 lo {
-            : ( Vec f ) fr ( __an_fc_row mo__h b0 )
+            : ( Vec f ) fr ( __an_fc_row mo b0 )
             ( fc_replay_step . mo fc copies fr noz )
             = b0 + b0 1
         }
@@ -623,7 +582,7 @@ unsafe @ __an_hist_build Model mo__h i from i to → Hist {
                         : !EncPoint String er ( anomaly_preprocess_ro . mo meta j )
                         ?? er {
                             T p → {
-                                : ( Vec f ) row ( anomaly_project p . mm feats )
+                                : ( Vec f ) row ( anomaly_project p . . mo meta feats )
                                 ( scaler_apply . mo sc row )
                                 ( vec_extend [f] x row )
                                 ? > ae_nfeat 0 {
@@ -631,7 +590,7 @@ unsafe @ __an_hist_build Model mo__h i from i to → Hist {
                                     ( vec_extend [f] ae_x araw )
                                 } {}
                                 ? > fc_nw 0 {
-                                    : ( Vec f ) fr ( fc_project p . fc feats )
+                                    : ( Vec f ) fr ( fc_project p . . mo fc feats )
                                     : ( Vec f ) zrow ( vec_zeroed [f] fc_nw )
                                     ( fc_replay_step . mo fc copies fr zrow )
                                     ( vec_extend [f] fc_z zrow )
@@ -659,9 +618,8 @@ unsafe @ __an_hist_build Model mo__h i from i to → Hist {
             ? > fc_nw 0 {
                 // a row that did not parse is a gap to the models too
                 : ( Vec f ) gap ( vec_zeroed [f] fc_nw )
-                : *f gp ( vec_data [f] gap )
                 : ~ i z 0
-                ~ < z fc_nw { = . gp z ( float_nan ) ( vec_push [f] fc_z ( float_nan ) ) = z + z 1 }
+                ~ < z fc_nw { ( vec_put [f] gap z ( float_nan ) ) ( vec_push [f] fc_z ( float_nan ) ) = z + z 1 }
                 : ( Vec f ) noz ( vec_new [f] )
                 ( fc_replay_step . mo fc copies gap noz )
             } {}
@@ -697,8 +655,6 @@ unsafe @ __an_hist_build Model mo__h i from i to → Hist {
                         ? < per 1 { = per 1 } {}
                         : ( Vec f ) batch ( vec_with_cap [f] * per wcols )
                         : ( Vec i ) rows ( vec_with_cap [i] per )
-                        : *f xp ( vec_data [f] x )
-                        : *i okp ( vec_data [i] ok )
                         = r 0
                         ~ <= r n {
                             // Row r belongs to the batch when its whole
@@ -710,7 +666,7 @@ unsafe @ __an_hist_build Model mo__h i from i to → Hist {
                                     = take T
                                     : ~ i q - r need
                                     ~ & take <= q r {
-                                        ? == . okp q 1 {} { = take F }
+                                        ? == ( vec_at [i] ok q ) 1 {} { = take F }
                                         = q + q 1
                                     }
                                 } {}
@@ -718,7 +674,7 @@ unsafe @ __an_hist_build Model mo__h i from i to → Hist {
                             ? take {
                                 : i w0 * - r need nfeat
                                 : ~ i c 0
-                                ~ < c wcols { ( vec_push [f] batch . xp + w0 c ) = c + c 1 }
+                                ~ < c wcols { ( vec_push [f] batch ( vec_at [f] x + w0 c ) ) = c + c 1 }
                                 ( vec_push [i] rows r )
                             } {}
                             : i nb ( vec_len [i] rows )
@@ -731,8 +687,8 @@ unsafe @ __an_hist_build Model mo__h i from i to → Hist {
                                     ( vec_set [i] dok at 1 )
                                     = q + q 1
                                 }
-                                ( vec_set_len [f] batch 0 )
-                                ( vec_set_len [i] rows 0 )
+                                ( vec_clear [f] batch )
+                                ( vec_clear [i] rows )
                             } {}
                             = r + r 1
                         }
@@ -745,48 +701,43 @@ unsafe @ __an_hist_build Model mo__h i from i to → Hist {
         ( vec_push [( Vec i )] dfs_ok dok )
         = k + k 1
     }
-    ^ @ Hist { ( arc_new [HistImpl] @ HistImpl { lo n nfeat x ok ae_nfeat ae_x dfs dfs_ok fc_nw fc_z fc_ok } ) }
+    ^ @ Hist { lo n nfeat x ok ae_nfeat ae_x dfs dfs_ok fc_nw fc_z fc_ok }
 }
 
 // Row `at` of the ring as a standardised point, copied out of the history.
-unsafe @ __an_hist_row Hist h__h i at → ( Vec f ) {
-    : *HistImpl h ( _Hist_ptr h__h )
+@ __an_hist_row Hist h i at → ( Vec f ) {
     : i r - at . h base
     : ( Vec f ) out ( vec_with_cap [f] . h nfeat )
-    : *f xp ( vec_data [f] . h x )
     : ~ i c 0
-    ~ < c . h nfeat { ( vec_push [f] out . xp + * r . h nfeat c ) = c + c 1 }
+    ~ < c . h nfeat { ( vec_push [f] out ( vec_at [f] . h x + * r . h nfeat c ) ) = c + c 1 }
     ^ out
 }
 
 // The `need` rows ending just before `end`, from the history — None when
 // any of them lies outside it or failed to encode (the caller then reads
 // the ring, exactly as without a history).
-unsafe @ __an_hist_tail Hist h__h i need i end → ?( Vec f ) {
-    : *HistImpl h ( _Hist_ptr h__h )
+@ __an_hist_tail Hist h i need i end → ?( Vec f ) {
     : i first - end need
     ? | < first . h base > end + . h base . h n { ^ @ ?( Vec f ) { F } } {}
-    : *i okp ( vec_data [i] . h ok )
     : ~ i k first
     ~ < k end {
-        ? == . okp - k . h base 1 {} { ^ @ ?( Vec f ) { F } }
+        ? == ( vec_at [i] . h ok - k . h base ) 1 {} { ^ @ ?( Vec f ) { F } }
         = k + k 1
     }
     : ( Vec f ) out ( vec_with_cap [f] * need . h nfeat )
-    : *f xp ( vec_data [f] . h x )
     : i from * - first . h base . h nfeat
     : i cnt * need . h nfeat
     = k 0
-    ~ < k cnt { ( vec_push [f] out . xp + from k ) = k + k 1 }
+    ~ < k cnt { ( vec_push [f] out ( vec_at [f] . h x + from k ) ) = k + k 1 }
     ^ @ ?( Vec f ) { T out }
 }
 
 // The timevector tail: out of the history when one covers it, else read
 // from the ring.
-@ __an_tail_for Model mo ? Hist h i need i end → ?( Vec f ) {
+@ __an_tail_for Model mo ? ( Arc Hist ) h i need i end → ?( Vec f ) {
     ?? h {
         T hh → {
-            ?? ( __an_hist_tail hh need end ) {
+            ?? ( __an_hist_tail ( arc_get [Hist] hh ) need end ) {
                 T t → { ^ @ ?( Vec f ) { T t } }
                 F → {}
             }
@@ -799,34 +750,29 @@ unsafe @ __an_hist_tail Hist h__h i need i end → ?( Vec f ) {
 // Score `p` as though it sat at ring position `end` — the point's own slot,
 // exclusive: rows [0, end) are its past and everything from `end` on is
 // future the verdict must not see.
-unsafe @ __an_score_enc_upto Model mo__h EncPoint p i end b absorb → Verdict {
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    : *MetaImpl mm ( _Meta_ptr . mo meta )
-    : ( Vec f ) x ( anomaly_project p . mm feats )
+@ __an_score_enc_upto inout Model mo EncPoint p i end b absorb → Verdict {
+    : ( Vec f ) x ( anomaly_project p . . mo meta feats )
     ( scaler_apply . mo sc x )
     : AeModel cae . mo ae
     : ~ ( Vec f ) araw ( vec_new [f] )
     ? & . cae trained ! . mo ae_stale {
         = araw ( anomaly_project p . cae feats )
     } {}
-    : *FcModelImpl fc ( _FcModel_ptr . mo fc )
     : ~ ( Vec f ) fraw ( vec_new [f] )
-    ? . fc trained {
-        = fraw ( fc_project p . fc feats )
+    ? . . mo fc trained {
+        = fraw ( fc_project p . . mo fc feats )
     } {}
-    ^ ( __an_score_core mo__h x araw fraw end @ ?Hist { F } absorb )
+    ^ ( __an_score_core mo x araw fraw end @ ?( Arc Hist ) { F } absorb )
 }
 
 // Score ring row `at` out of an encoded history that covers it.
-unsafe @ __an_score_hist Model mo Hist h__h i at → Verdict {
-    : *HistImpl h ( _Hist_ptr h__h )
+@ __an_score_hist inout Model mo ( Arc Hist ) ha i at → Verdict {
+    : Hist h ( arc_get [Hist] ha )
     : i r - at . h base
-    : ( Vec f ) x ( __an_hist_row h__h at )
+    : ( Vec f ) x ( __an_hist_row h at )
     : ( Vec f ) araw ( vec_with_cap [f] . h ae_nfeat )
-    : *f ap ( vec_data [f] . h ae_x )
-    : ~ i c 0
-    ~ < c . h ae_nfeat { ( vec_push [f] araw . ap + * r . h ae_nfeat c ) = c + c 1 }
-    ^ ( __an_score_core mo x araw ( vec_new [f] ) at @ ?Hist { T ( Hist_share h__h ) } F )
+    ( vec_extend_range [f] araw . h ae_x * r . h ae_nfeat . h ae_nfeat )
+    ^ ( __an_score_core mo x araw ( vec_new [f] ) at @ ?( Arc Hist ) { T ( arc_clone [Hist] ha ) } F )
 }
 
 // The verdict of a standardised point `x` (owned) sitting at
@@ -839,19 +785,14 @@ unsafe @ __an_score_hist Model mo Hist h__h i at → Verdict {
 // come out of it; without, they are computed here and read from the
 // ring, and `absorb` says the point is the ring's newest and the
 // forecast states take it in (the live ingest; detect_only leaves them).
-unsafe @ __an_score_core Model mo__h ( Vec f ) x ( Vec f ) araw ( Vec f ) fraw i end ? Hist h__h b absorb → Verdict {
-    // the history's state, when there is one (read only under `hist`)
-    : *HistImpl h ?? h__h { T hh → ( _Hist_ptr hh ) F → # *HistImpl 0 }
-    : *ModelImpl mo ( _Model_ptr mo__h )
+@ __an_score_core inout Model mo ( Vec f ) x ( Vec f ) araw ( Vec f ) fraw i end ? ( Arc Hist ) h b absorb → Verdict {
     : ( Vec VerVerdict ) vvs ( vec_new [VerVerdict] )
     : b warm >= ( vec_len [String] . mo lines ) . mo min_points
-    ? & ( model_is_trained mo__h ) warm {} {
+    ? & ( model_is_trained mo ) warm {} {
         ^ @ Verdict { F F 0.0 0.0 vvs 0 0 }
     }
 
-    : *MetaImpl mm ( _Meta_ptr . mo meta )
-    : i nfeat ( vec_len [String] . mm feats )
-    : b hist ?? h__h { T _x → T F → F }
+    : i nfeat ( vec_len [String] . . mo meta feats )
 
     : ~ i hits 0
     // `worst` is the aggregate score: the decision value of the version
@@ -870,22 +811,26 @@ unsafe @ __an_score_core Model mo__h ( Vec f ) x ( Vec f ) araw ( Vec f ) fraw i
                 // a config change cannot desync until the next retrain).
                 : ~ f hdf 0.0
                 : ~ b have F
-                ? hist {
-                    : i r - end . h base
-                    ?? ( vec_get [( Vec i )] . h dfs_ok k ) {
-                        T okv → {
-                            ? & >= r 0 < r ( vec_len [i] okv ) {
-                                ? == ( _mlp_iget okv r ) 1 {
-                                    ?? ( vec_get [( Vec f )] . h dfs k ) {
-                                        T dv → { = hdf ( _mlp_fget dv r ) = have T }
-                                        F _ → {}
-                                    }
+                ?? h {
+                    T hva → {
+                        : Hist hv ( arc_get [Hist] hva )
+                        : i r - end . hv base
+                        ?? ( vec_get [( Vec i )] . hv dfs_ok k ) {
+                            T okv → {
+                                ? & >= r 0 < r ( vec_len [i] okv ) {
+                                    ? == ( _mlp_iget okv r ) 1 {
+                                        ?? ( vec_get [( Vec f )] . hv dfs k ) {
+                                            T dv → { = hdf ( _mlp_fget dv r ) = have T }
+                                            F _ → {}
+                                        }
+                                    } {}
                                 } {}
-                            } {}
+                            }
+                            F _ → {}
                         }
-                        F _ → {}
                     }
-                } {}
+                    F → {}
+                }
                 ? & > nfeat 0 != . vm n_cols nfeat {
                     : i W / . vm n_cols nfeat
                     : ~ ? ( Vec f ) tailo @ ?( Vec f ) { F }
@@ -893,7 +838,7 @@ unsafe @ __an_score_core Model mo__h ( Vec f ) x ( Vec f ) araw ( Vec f ) fraw i
                         // The history scored this window already; an
                         // empty tail stands for it and is not walked.
                         = tailo @ ?( Vec f ) { T ( vec_new [f] ) }
-                    } { = tailo ( __an_tail_for mo__h h__h - W 1 end ) }
+                    } { = tailo ( __an_tail_for mo h - W 1 end ) }
                     ?? tailo {
                         T tail → {
                             ? have {} { ( vec_extend [f] tail x ) }
@@ -952,10 +897,9 @@ unsafe @ __an_score_core Model mo__h ( Vec f ) x ( Vec f ) araw ( Vec f ) fraw i
     ? & ( meta_version_enabled . mo meta ANOM_GUARD_NAME F ) > ( vec_len [f] . . mo sc mean ) 0 {
         : ~ f gz 0.0
         : ~ i gi -1
-        : *f xp ( vec_data [f] x )
         : ~ i j 0
         ~ < j nfeat {
-            : f az ( float_abs . xp j )
+            : f az ( float_abs ( vec_at [f] x j ) )
             ? | < gi 0 > az gz { = gz az = gi j } {}
             = j + j 1
         }
@@ -978,7 +922,7 @@ unsafe @ __an_score_core Model mo__h ( Vec f ) x ( Vec f ) araw ( Vec f ) fraw i
 
     // The flatline guard: the column that has stopped moving, if one has.
     ? ( meta_version_enabled . mo meta ANOM_FLAT_NAME F ) {
-        : FlatOut fo ( __an_flat_judge mo__h x end h__h )
+        : FlatOut fo ( __an_flat_judge mo x end h )
         ? . fo ready {
             : f fdf - 0.0 . fo worst
             : f fmargin ( meta_version_margin . mo meta ANOM_FLAT_NAME ANOM_FLAT_MARGIN )
@@ -1002,34 +946,35 @@ unsafe @ __an_score_core Model mo__h ( Vec f ) x ( Vec f ) araw ( Vec f ) fraw i
     // in the forecast's standard errors, and the feature it is. Out of
     // the history's replay when there is one; live otherwise, the states
     // first caught up with the ring rows they have not seen.
-    : *FcModelImpl fc ( _FcModel_ptr . mo fc )
-    ? & . fc trained ( meta_version_enabled . mo meta ANOM_FC_NAME F ) {
+    ? & . . mo fc trained ( meta_version_enabled . mo meta ANOM_FC_NAME F ) {
         : ~ b fready F
         : ~ f fworst 0.0
         : ~ i ffeat -1
-        ? hist {
-            : i r - end . h base
-            ? & & >= r 0 < r . h n > . h fc_nw 0 {
-                ? == ( _mlp_iget . h fc_ok r ) 1 {
-                    : ( Vec f ) zrow ( vec_with_cap [f] . h fc_nw )
-                    : *f zp ( vec_data [f] . h fc_z )
-                    : ~ i c 0
-                    ~ < c . h fc_nw { ( vec_push [f] zrow . zp + * r . h fc_nw c ) = c + c 1 }
-                    : FcPick pk ( fc_worst zrow . fc cols )
-                    ? >= . pk feat 0 { = fready T = fworst . pk worst = ffeat . pk feat } {}
+        ?? h {
+            T hva → {
+                : Hist hv ( arc_get [Hist] hva )
+                : i r - end . hv base
+                ? & & >= r 0 < r . hv n > . hv fc_nw 0 {
+                    ? == ( _mlp_iget . hv fc_ok r ) 1 {
+                        : ( Vec f ) zrow ( vec_with_cap [f] . hv fc_nw )
+                        ( vec_extend_range [f] zrow . hv fc_z * r . hv fc_nw . hv fc_nw )
+                        : FcPick pk ( fc_worst zrow . . mo fc cols )
+                        ? >= . pk feat 0 { = fready T = fworst . pk worst = ffeat . pk feat } {}
+                    } {}
                 } {}
-            } {}
-        } {
-            ? == ( vec_len [f] fraw ) . fc nw {
-                ( __an_fc_sync mo__h end )
-                ? == . fc pos end {
-                    : FcOut fo ( fc_judge . mo fc fraw absorb )
-                    = fready . fo ready
-                    = fworst . fo worst
-                    = ffeat . fo feat
-                    ? & absorb >= . fc unsaved ANOM_FC_SAVE_EVERY { ( __an_fc_save mo__h ) } {}
+            }
+            F → {
+                ? == ( vec_len [f] fraw ) . . mo fc nw {
+                    ( __an_fc_sync mo end )
+                    ? == . . mo fc pos end {
+                        : FcOut fo ( fc_judge . mo fc fraw absorb )
+                        = fready . fo ready
+                        = fworst . fo worst
+                        = ffeat . fo feat
+                        ? & absorb >= . . mo fc unsaved ANOM_FC_SAVE_EVERY { ( __an_fc_save mo ) } {}
+                    } {}
                 } {}
-            } {}
+            }
         }
         ? fready {
             : f fcdf - 0.0 fworst
@@ -1080,7 +1025,7 @@ unsafe @ __an_score_core Model mo__h ( Vec f ) x ( Vec f ) araw ( Vec f ) fraw i
     // which is what a guard is for. More is consensus, and it is the
     // model that says so, because the answer has to mean the same thing
     // to a stored scan, to calibration, to fine-tune and to a detect.
-    : ~ i need . mm votes
+    : ~ i need . . mo meta votes
     ? < need 1 { = need 1 } {}
     ^ @ Verdict { T >= hits need worst top_sev vvs hits need }
 }
@@ -1088,18 +1033,15 @@ unsafe @ __an_score_core Model mo__h ( Vec f ) x ( Vec f ) araw ( Vec f ) fraw i
 // The live-point entry: `ring_has_current` is 1 when the point being scored
 // has already been appended to the ring (ingest) and 0 when it has not
 // (detect_only).
-unsafe @ __an_score_enc Model mo__h EncPoint p i ring_has_current → Verdict {
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    ^ ( __an_score_enc_upto mo__h p - ( vec_len [String] . mo lines ) ring_has_current == ring_has_current 1 )
+@ __an_score_enc inout Model mo EncPoint p i ring_has_current → Verdict {
+    ^ ( __an_score_enc_upto mo p - ( vec_len [String] . mo lines ) ring_has_current == ring_has_current 1 )
 }
 
 // ── The forecast version's place in the model ─────────────────────────
 
 // The watched features' readings of ring row `k` (NaN where the row has
 // none, or did not parse).
-unsafe @ __an_fc_row Model mo__h i k → ( Vec f ) {
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    : *FcModelImpl fc ( _FcModel_ptr . mo fc )
+@ __an_fc_row Model mo i k → ( Vec f ) {
     : ~ ( Vec f ) out ( vec_new [f] )
     : ~ b got F
     ?? ( vec_get [String] . mo lines k ) {
@@ -1110,7 +1052,7 @@ unsafe @ __an_fc_row Model mo__h i k → ( Vec f ) {
                     : !EncPoint String er ( anomaly_preprocess_ro . mo meta j )
                     ?? er {
                         T p → {
-                            = out ( fc_project p . fc feats )
+                            = out ( fc_project p . . mo fc feats )
                             = got T
                         }
                         F e → {}
@@ -1123,49 +1065,42 @@ unsafe @ __an_fc_row Model mo__h i k → ( Vec f ) {
     }
     ? got {} {
         : ~ i j 0
-        ~ < j . fc nw { ( vec_push [f] out ( float_nan ) ) = j + j 1 }
+        ~ < j . . mo fc nw { ( vec_push [f] out ( float_nan ) ) = j + j 1 }
     }
     ^ out
 }
 
 // Bring the states up to ring row `target` (exclusive): the rows between
 // are read from the ring and absorbed in order.
-unsafe @ __an_fc_sync Model mo__h i target → v {
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    : *FcModelImpl fc ( _FcModel_ptr . mo fc )
+@ __an_fc_sync inout Model mo i target → v {
     : i n ( vec_len [String] . mo lines )
     : ~ i t target
     ? > t n { = t n } {}
-    ~ < . fc pos t {
-        : ( Vec f ) fr ( __an_fc_row mo__h . fc pos )
+    ~ < . . mo fc pos t {
+        : ( Vec f ) fr ( __an_fc_row mo . . mo fc pos )
         ( fc_absorb . mo fc fr )
     }
 }
 
 // Write forecast.json with the states as they stand.
-unsafe @ __an_fc_save Model mo__h → v {
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    : *FcModelImpl fc ( _FcModel_ptr . mo fc )
-    = . fc seq + ( model_seq_base mo__h ) . fc pos
-    = . fc unsaved 0
+@ __an_fc_save inout Model mo → v {
+    = . . mo fc seq + ( model_seq_base mo ) . . mo fc pos
+    = . . mo fc unsaved 0
     ( store_save_fc . mo store ( string_data . mo mname ) . mo fc )
 }
 
 // Do the trained models name features the metadata's order no longer
 // has at those places?
-unsafe @ __an_fc_stale Model mo__h → b {
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    : *FcModelImpl fc ( _FcModel_ptr . mo fc )
-    : *MetaImpl mm ( _Meta_ptr . mo meta )
-    : i nfeat ( vec_len [String] . mm feats )
+@ __an_fc_stale Model mo → b {
+    : i nfeat ( vec_len [String] . . mo meta feats )
     : ~ b stale F
     : ~ i j 0
-    ~ & ! stale < j . fc nw {
-        : i c ( _fc_geti . fc cols j )
+    ~ & ! stale < j . . mo fc nw {
+        : i c ( _fc_geti . . mo fc cols j )
         ? >= c nfeat { = stale T } {
-            ?? ( vec_get [String] . mm feats c ) {
+            ?? ( vec_get [String] . . mo meta feats c ) {
                 T fn → {
-                    ?? ( vec_get [String] . fc feats j ) {
+                    ?? ( vec_get [String] . . mo fc feats j ) {
                         T wn → { ? ( string_eq fn wn ) {} { = stale T } }
                         F _ → { = stale T }
                     }
@@ -1180,29 +1115,24 @@ unsafe @ __an_fc_stale Model mo__h → b {
 
 // Ensure a `forecast` VerCfg exists (off by default): a model from
 // before the version gains it at its next retrain.
-unsafe @ _an_ensure_fc_cfg Model mo__h → v {
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    : *MetaImpl mm ( _Meta_ptr . mo meta )
+@ _an_ensure_fc_cfg Model mo → v {
     ? < ( meta_find_version . mo meta ANOM_FC_NAME ) 0 {} { ^ }
-    ( vec_push [VerCfg] . mm versions ( _an_vc_fc ) )
+    ( vec_push [VerCfg] . . mo meta versions ( _an_vc_fc ) )
 }
 
 // The first row of the forecast's fit window over encoded rows whose
 // times are `ets`: the version's own window_minutes / window_points.
-unsafe @ __an_fc_from Model mo__h ( Vec i ) ets i now → i {
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    : *MetaImpl mm ( _Meta_ptr . mo meta )
+@ __an_fc_from Model mo ( Vec i ) ets i now → i {
     : i ne ( vec_len [i] ets )
     : ~ i from 0
     : i at ( meta_find_version . mo meta ANOM_FC_NAME )
     ? >= at 0 {
-        ?? ( vec_get [VerCfg] . mm versions at ) {
+        ?? ( vec_get [VerCfg] . . mo meta versions at ) {
             T vc → {
-                ? & > . vc window_min 0 ! . mm count_clock {
+                ? & > . vc window_min 0 ! . . mo meta count_clock {
                     : i cutoff - now * . vc window_min 60
-                    : *i sp ( vec_data [i] ets )
                     : ~ i j 0
-                    ~ & < j ne < . sp j cutoff { = j + j 1 }
+                    ~ & < j ne < ( vec_at [i] ets j ) cutoff { = j + j 1 }
                     = from j
                 } {}
                 ? > . vc window_pts 0 {
@@ -1216,45 +1146,39 @@ unsafe @ __an_fc_from Model mo__h ( Vec i ) ets i now → i {
     ^ from
 }
 
-unsafe @ __an_fc_season Model mo__h → i {
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    : *MetaImpl mm ( _Meta_ptr . mo meta )
+@ __an_fc_season Model mo → i {
     : i at ( meta_find_version . mo meta ANOM_FC_NAME )
     ? >= at 0 {
-        ?? ( vec_get [VerCfg] . mm versions at ) { T vc → { ^ ? > . vc window_size 0 . vc window_size 0 } F _ → {} }
+        ?? ( vec_get [VerCfg] . . mo meta versions at ) { T vc → { ^ ? > . vc window_size 0 . vc window_size 0 } F _ → {} }
     } {}
     ^ 0
 }
 
 // Fit the forecast version from encoded ring rows (in ring order, with
 // their times) and persist it. Returns the features watched.
-unsafe @ __an_fc_fit Model mo__h ( Vec EncPoint ) encs ( Vec i ) ets i now → i {
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    : i from ( __an_fc_from mo__h ets now )
-    : i nw ( fc_train . mo fc . mo meta encs from ( __an_fc_season mo__h ) now ( model_seq_base mo__h ) )
-    ( __an_fc_save mo__h )
+@ __an_fc_fit inout Model mo ( Vec EncPoint ) encs ( Vec i ) ets i now → i {
+    : i from ( __an_fc_from mo ets now )
+    : i nw ( fc_train . mo fc . mo meta encs from ( __an_fc_season mo ) now ( model_seq_base mo ) )
+    ( __an_fc_save mo )
     ^ nw
 }
 
 // The forecast version's handle, its j-th model, and its states caught
 // up with the ring (for a forecast from the newest row).
-unsafe @ model_forecast Model mo__h → FcModel {
-    : *ModelImpl mo ( _Model_ptr mo__h )
+@ model_forecast Model mo → FcModel {
     ^ . mo fc
 }
 
 // The ring's step: the median gap between consecutive stored times, in
 // seconds (1 on a count clock; 0 when there are too few rows to say).
-unsafe @ model_step Model mo__h → i {
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    ? . ( _Meta_ptr . mo meta ) count_clock { ^ 1 } {}
+@ model_step Model mo → i {
+    ? . . mo meta count_clock { ^ 1 } {}
     : i n ( vec_len [i] . mo times )
     ? < n 3 { ^ 0 } {}
     : ( Vec i ) gaps ( vec_with_cap [i] n )
-    : *i tp ( vec_data [i] . mo times )
     : ~ i k 1
     ~ < k n {
-        : i g - . tp k . tp - k 1
+        : i g - ( vec_at [i] . mo times k ) ( vec_at [i] . mo times - k 1 )
         ? > g 0 { ( vec_push [i] gaps g ) } {}
         = k + k 1
     }
@@ -1283,28 +1207,24 @@ unsafe @ model_step Model mo__h → i {
 // it now, the season from the ring's step when the version has none
 // set, and switch it on. "" when the version is ready (already, or now);
 // otherwise why not (the model has not trained; no feature to forecast).
-unsafe @ model_forecast_ensure_at Model mo__h i now → String {
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    : *FcModelImpl fc ( _FcModel_ptr . mo fc )
-    ? . fc trained { ^ ( string_new ) } {}
-    ? ( model_is_trained mo__h ) {} { ^ ( string_from `the model has not trained yet: a forecast needs the first retrain (min_data_points stored)` ) }
-    ^ ( model_train_forecast_at mo__h now )
+@ model_forecast_ensure_at inout Model mo i now → String {
+    ? . . mo fc trained { ^ ( string_new ) } {}
+    ? ( model_is_trained mo ) {} { ^ ( string_from `the model has not trained yet: a forecast needs the first retrain (min_data_points stored)` ) }
+    ^ ( model_train_forecast_at mo now )
 }
 
 // A version whose season is 0 takes it from the ring's step (the day at
 // a step up to twelve hours, the week at a daily one); a season given
 // stands.
-unsafe @ __an_fc_season_from_step Model mo__h → v {
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    ( _an_ensure_fc_cfg mo__h )
-    : *MetaImpl mm ( _Meta_ptr . mo meta )
+@ __an_fc_season_from_step Model mo → v {
+    ( _an_ensure_fc_cfg mo )
     : i at ( meta_find_version . mo meta ANOM_FC_NAME )
     // 0 = from the step; a season given, or -1 (none), stands
     : ~ b unset T
-    ? >= at 0 { ?? ( vec_get [VerCfg] . mm versions at ) { T vc → { ? == . vc window_size 0 {} { = unset F } } F _ → {} } } {}
+    ? >= at 0 { ?? ( vec_get [VerCfg] . . mo meta versions at ) { T vc → { ? == . vc window_size 0 {} { = unset F } } F _ → {} } } {}
     ? unset {
-        : i season ( anomaly_season_of ( model_step mo__h ) )
-        ? > season 0 { : b _w ( model_set_version_window mo__h ANOM_FC_NAME season 0 ) } {}
+        : i season ( anomaly_season_of ( model_step mo ) )
+        ? > season 0 { : b _w ( model_set_version_window mo ANOM_FC_NAME season 0 ) } {}
     } {}
 }
 
@@ -1321,41 +1241,37 @@ unsafe @ __an_fc_season_from_step Model mo__h → v {
 // it. `season: 144` beside ARIMA(0,1,0) with s = 0 is not a daily rhythm
 // being watched — it is the number the search was given and every
 // feature declined.
-unsafe @ _an_fc_season_json FcModel fc__h Json o → v {
-    : *FcModelImpl fc ( _FcModel_ptr fc__h )
+@ _an_fc_season_json FcModel fc Json o → v {
     ( json_obj_set o `season` ( json_int . fc season ) )
-    : i used ( fc_seasonal_count fc__h )
+    : i used ( fc_seasonal_count fc )
     ( json_obj_set o `seasonal_features` ( json_int used ) )
     ? & > . fc season 0 == used 0 {
         ( json_obj_set o `season_note` ( json_str_lit `season is the period the order search was offered, in rows; no feature's chosen form uses it (see "selected" per feature), so nothing here models a cycle of that length. train_forecast {season: N} offers a different one, -1 none at all.` ) )
     } {}
 }
 
-unsafe @ model_forecast_json Model mo__h i h → Json {
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    ( model_forecast_sync mo__h )
-    : *FcModelImpl fc ( _FcModel_ptr . mo fc )
-    : *MetaImpl mm ( _Meta_ptr . mo meta )
+@ model_forecast_json inout Model mo i h → Json {
+    ( model_forecast_sync mo )
     : FcForecast ff ( fc_forecast . mo fc h )
     : Json o ( json_obj_new )
     ( json_obj_set o `horizon` ( json_int h ) )
     ( _an_fc_season_json . mo fc o )
-    ( json_obj_set o `points_absorbed` ( json_int . fc pos ) )
+    ( json_obj_set o `points_absorbed` ( json_int . . mo fc pos ) )
     ( json_obj_set o `enabled` ( json_bool ( meta_version_enabled . mo meta ANOM_FC_NAME F ) ) )
-    ( json_obj_set o `clock` ( json_str_lit ? . mm count_clock `count` `time` ) )
-    : i step ( model_step mo__h )
+    ( json_obj_set o `clock` ( json_str_lit ? . . mo meta count_clock `count` `time` ) )
+    : i step ( model_step mo )
     ( json_obj_set o `step_seconds` ( json_int step ) )
-    : i last ? . mm count_clock ( model_seq_base mo__h ) ( model_last_ts mo__h )
-    : i lastn ? . mm count_clock + last ( vec_len [String] . mo lines ) last
+    : i last ? . . mo meta count_clock ( model_seq_base mo ) ( model_last_ts mo )
+    : i lastn ? . . mo meta count_clock + last ( vec_len [String] . mo lines ) last
     : Json times ( json_arr_new )
     : ~ i k 1
-    ~ <= k h { ( json_arr_push times ( json_int + lastn * k ? . mm count_clock 1 step ) ) = k + k 1 }
+    ~ <= k h { ( json_arr_push times ( json_int + lastn * k ? . . mo meta count_clock 1 step ) ) = k + k 1 }
     ( json_obj_set o `times` times )
     ( json_obj_set o `from_time` ( json_int lastn ) )
     // the models step by row; a newest gap unlike the step says the
     // times above are rows dressed as a clock
     : i np2 ( vec_len [i] . mo times )
-    ? & & ! . mm count_clock > step 0 >= np2 2 {
+    ? & & ! . . mo meta count_clock > step 0 >= np2 2 {
         : i gap - ( _fc_geti . mo times - np2 1 ) ( _fc_geti . mo times - np2 2 )
         ? | > gap * 2 step < * 2 gap step {
             : String w ( string_from `the newest point came ` )
@@ -1412,21 +1328,18 @@ unsafe @ model_forecast_json Model mo__h i h → Json {
 // before it, then the next `h` steps — the same shape as
 // model_forecast_json, with the origin's row and time, so a reader can
 // put the forecast beside what followed. The live states are untouched.
-unsafe @ model_forecast_from_json Model mo__h i h i origin → Json {
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    : *FcModelImpl fc ( _FcModel_ptr . mo fc )
-    : *MetaImpl mm ( _Meta_ptr . mo meta )
+@ model_forecast_from_json Model mo i h i origin → Json {
     : i len ( vec_len [String] . mo lines )
     : ~ i at origin
     ? >= at len { = at - len 1 } {}
     ? < at 0 { = at 0 } {}
     : ~ i b0 - + at 1 ANOM_FC_BURN
     ? < b0 0 { = b0 0 } {}
-    : ( Vec ArimaModel ) copies ( fc_replay_begin . mo fc + ( model_seq_base mo__h ) b0 )
+    : ( Vec ArimaModel ) copies ( fc_replay_begin . mo fc + ( model_seq_base mo ) b0 )
     : ( Vec f ) noz ( vec_new [f] )
     : ~ i t b0
     ~ <= t at {
-        : ( Vec f ) fr ( __an_fc_row mo__h t )
+        : ( Vec f ) fr ( __an_fc_row mo t )
         ( fc_replay_step . mo fc copies fr noz )
         = t + t 1
     }
@@ -1434,22 +1347,22 @@ unsafe @ model_forecast_from_json Model mo__h i h i origin → Json {
     ( json_obj_set o `horizon` ( json_int h ) )
     ( _an_fc_season_json . mo fc o )
     ( json_obj_set o `origin` ( json_int at ) )
-    ( json_obj_set o `clock` ( json_str_lit ? . mm count_clock `count` `time` ) )
-    : i step ( model_step mo__h )
+    ( json_obj_set o `clock` ( json_str_lit ? . . mo meta count_clock `count` `time` ) )
+    : i step ( model_step mo )
     ( json_obj_set o `step_seconds` ( json_int step ) )
-    : i t0 ? . mm count_clock + ( model_seq_base mo__h ) at ( _fc_geti . mo times at )
+    : i t0 ? . . mo meta count_clock + ( model_seq_base mo ) at ( _fc_geti . mo times at )
     ( json_obj_set o `from_time` ( json_int t0 ) )
     : Json times ( json_arr_new )
     : ~ i k 1
-    ~ <= k h { ( json_arr_push times ( json_int + t0 * k ? . mm count_clock 1 step ) ) = k + k 1 }
+    ~ <= k h { ( json_arr_push times ( json_int + t0 * k ? . . mo meta count_clock 1 step ) ) = k + k 1 }
     ( json_obj_set o `times` times )
     : Json fa ( json_arr_new )
-    : i nw . fc nw
+    : i nw . . mo fc nw
     : ~ i j 0
     ~ < j nw {
         : Json fo ( json_obj_new )
-        ?? ( vec_get [String] . fc feats j ) { T fn → { ( json_obj_set fo `feature` ( json_str_lit ( string_data fn ) ) ) } F _ → {} }
-        : ArimaModel cm . ( vec_data [ArimaModel] copies ) j
+        ?? ( vec_get [String] . . mo fc feats j ) { T fn → { ( json_obj_set fo `feature` ( json_str_lit ( string_data fn ) ) ) } F _ → {} }
+        : ArimaModel cm ( vec_at [ArimaModel] copies j )
         : ArimaForecast f1 ( arima_forecast cm h )
         ( json_obj_set fo `mean` ( _an_jarr_of_floats . f1 mean ) )
         ( json_obj_set fo `se` ( _an_jarr_of_floats . f1 se ) )
@@ -1485,25 +1398,23 @@ unsafe @ model_forecast_from_json Model mo__h i h i origin → Json {
 // value carried forward, and the value one season earlier — with the
 // skill against each (1 − MAE/MAE_baseline: 0 is no better, 1 is
 // perfect, negative is worse). Gaps are skipped.
-unsafe @ model_forecast_backtest Model mo__h i h i n → Json {
-    : *ModelImpl mo ( _Model_ptr mo__h )
+@ model_forecast_backtest Model mo i h i n → Json {
     : Json o ( json_obj_new )
-    : *FcModelImpl fc ( _FcModel_ptr . mo fc )
     : i len ( vec_len [String] . mo lines )
     : ~ i no n
     ? > no - - len h 1 { = no - - len h 1 } {}
     ( json_obj_set o `horizon` ( json_int h ) )
-    ? | ! . fc trained < no 1 {
+    ? | ! . . mo fc trained < no 1 {
         ( json_obj_set o `origins` ( json_int 0 ) )
-        ( json_obj_set o `error` ( json_str_lit ? . fc trained `too few stored rows for the horizon` `the forecast version is not trained` ) )
+        ( json_obj_set o `error` ( json_str_lit ? . . mo fc trained `too few stored rows for the horizon` `the forecast version is not trained` ) )
         ^ o
     } {}
-    : i nw . fc nw
+    : i nw . . mo fc nw
     : i o0 - - len h no
     // the rows before the first origin: the burn-in for the replay, and
     // a season for the seasonal-naive baseline
     : ~ i back ANOM_FC_BURN
-    ? > + . fc season 1 back { = back + . fc season 1 } {}
+    ? > + . . mo fc season 1 back { = back + . . mo fc season 1 } {}
     : ~ i b0 - o0 back
     ? < b0 0 { = b0 0 } {}
     // the watched readings of rows [b0, len)
@@ -1511,11 +1422,10 @@ unsafe @ model_forecast_backtest Model mo__h i h i n → Json {
     : ( Vec f ) mat ( vec_with_cap [f] * nr nw )
     : ~ i k b0
     ~ < k len {
-        : ( Vec f ) fr ( __an_fc_row mo__h k )
+        : ( Vec f ) fr ( __an_fc_row mo k )
         ( vec_extend [f] mat fr )
         = k + k 1
     }
-    : *f mp ( vec_data [f] mat )
     // the sums, per feature and step
     : i cells * nw h
     : ( Vec f ) s_abs ( vec_zeroed [f] cells )
@@ -1527,40 +1437,38 @@ unsafe @ model_forecast_backtest Model mo__h i h i n → Json {
     : ( Vec i ) c_nai ( vec_zeroed [i] cells )
     : ( Vec i ) c_sea ( vec_zeroed [i] cells )
     : ( Vec i ) c_cov ( vec_zeroed [i] cells )
-    : *f pabs ( vec_data [f] s_abs ) : *f ppct ( vec_data [f] s_pct ) : *f pnai ( vec_data [f] s_nai ) : *f psea ( vec_data [f] s_sea )
-    : *i cabs ( vec_data [i] c_abs ) : *i cpct ( vec_data [i] c_pct ) : *i cnai ( vec_data [i] c_nai ) : *i csea ( vec_data [i] c_sea ) : *i ccov ( vec_data [i] c_cov )
-    : i season . fc season
-    : ( Vec ArimaModel ) copies ( fc_replay_begin . mo fc + ( model_seq_base mo__h ) b0 )
+    : i season . . mo fc season
+    : ( Vec ArimaModel ) copies ( fc_replay_begin . mo fc + ( model_seq_base mo ) b0 )
     : ( Vec f ) noz ( vec_new [f] )
     : ~ i t b0
     ~ < t len {
         : i r - t b0
         : ( Vec f ) row ( vec_with_cap [f] nw )
         : ~ i j 0
-        ~ < j nw { ( vec_push [f] row . mp + * r nw j ) = j + j 1 }
+        ~ < j nw { ( vec_push [f] row ( vec_at [f] mat + * r nw j ) ) = j + j 1 }
         ( fc_replay_step . mo fc copies row noz )
         ? & >= t o0 <= t - - len h 1 {
             = j 0
             ~ < j nw {
-                : ArimaModel cm . ( vec_data [ArimaModel] copies ) j
+                : ArimaModel cm ( vec_at [ArimaModel] copies j )
                 : ArimaForecast f1 ( arima_forecast cm h )
-                : f lastv . mp + * r nw j
+                : f lastv ( vec_at [f] mat + * r nw j )
                 : ~ i q 1
                 ~ <= q h {
-                    : f actual . mp + * + r q nw j
+                    : f actual ( vec_at [f] mat + * + r q nw j )
                     ? ( float_is_nan actual ) {} {
                         : i cell + * j h - q 1
                         : f m ( _fc_getf . f1 mean - q 1 )
                         : f se ( _fc_getf . f1 se - q 1 )
                         : f e ( float_abs - actual m )
-                        = . pabs cell + . pabs cell e
-                        = . cabs cell + . cabs cell 1
-                        ? > ( float_abs actual ) 0.000000001 { = . ppct cell + . ppct cell / e ( float_abs actual ) = . cpct cell + . cpct cell 1 } {}
-                        ? <= e * ANOM_Z95 se { = . ccov cell + . ccov cell 1 } {}
-                        ? ( float_is_nan lastv ) {} { = . pnai cell + . pnai cell ( float_abs - actual lastv ) = . cnai cell + . cnai cell 1 }
+                        ( vec_put [f] s_abs cell + ( vec_at [f] s_abs cell ) e )
+                        ( vec_put [i] c_abs cell + ( vec_at [i] c_abs cell ) 1 )
+                        ? > ( float_abs actual ) 0.000000001 { ( vec_put [f] s_pct cell + ( vec_at [f] s_pct cell ) / e ( float_abs actual ) ) ( vec_put [i] c_pct cell + ( vec_at [i] c_pct cell ) 1 ) } {}
+                        ? <= e * ANOM_Z95 se { ( vec_put [i] c_cov cell + ( vec_at [i] c_cov cell ) 1 ) } {}
+                        ? ( float_is_nan lastv ) {} { ( vec_put [f] s_nai cell + ( vec_at [f] s_nai cell ) ( float_abs - actual lastv ) ) ( vec_put [i] c_nai cell + ( vec_at [i] c_nai cell ) 1 ) }
                         ? & > season 0 >= - + r q season 0 {
-                            : f sv . mp + * - + r q season nw j
-                            ? ( float_is_nan sv ) {} { = . psea cell + . psea cell ( float_abs - actual sv ) = . csea cell + . csea cell 1 }
+                            : f sv ( vec_at [f] mat + * - + r q season nw j )
+                            ? ( float_is_nan sv ) {} { ( vec_put [f] s_sea cell + ( vec_at [f] s_sea cell ) ( float_abs - actual sv ) ) ( vec_put [i] c_sea cell + ( vec_at [i] c_sea cell ) 1 ) }
                         } {}
                     }
                     = q + q 1
@@ -1578,7 +1486,7 @@ unsafe @ model_forecast_backtest Model mo__h i h i n → Json {
     : ~ i j 0
     ~ < j nw {
         : Json fo ( json_obj_new )
-        ?? ( vec_get [String] . fc feats j ) { T fn → { ( json_obj_set fo `feature` ( json_str_lit ( string_data fn ) ) ) } F _ → {} }
+        ?? ( vec_get [String] . . mo fc feats j ) { T fn → { ( json_obj_set fo `feature` ( json_str_lit ( string_data fn ) ) ) } F _ → {} }
         : Json mae ( json_arr_new ) : Json mape ( json_arr_new ) : Json nai ( json_arr_new ) : Json sea ( json_arr_new ) : Json cov ( json_arr_new )
         : ~ f tot_abs 0.0 : ~ f tot_nai 0.0 : ~ f tot_sea 0.0
         : ~ i n_abs 0 : ~ i n_nai 0 : ~ i n_sea 0
@@ -1587,14 +1495,14 @@ unsafe @ model_forecast_backtest Model mo__h i h i n → Json {
             : i cell + * j h q
             // a cell without a comparison is null, never a zero that
             // reads as a perfect forecast
-            ( json_arr_push mae ? > . cabs cell 0 ( json_float / . pabs cell # f . cabs cell ) ( json_null ) )
-            ( json_arr_push mape ? > . cpct cell 0 ( json_float / . ppct cell # f . cpct cell ) ( json_null ) )
-            ( json_arr_push nai ? > . cnai cell 0 ( json_float / . pnai cell # f . cnai cell ) ( json_null ) )
-            ( json_arr_push sea ? > . csea cell 0 ( json_float / . psea cell # f . csea cell ) ( json_null ) )
-            ( json_arr_push cov ? > . cabs cell 0 ( json_float / # f . ccov cell # f . cabs cell ) ( json_null ) )
-            = tot_abs + tot_abs . pabs cell = n_abs + n_abs . cabs cell
-            = tot_nai + tot_nai . pnai cell = n_nai + n_nai . cnai cell
-            = tot_sea + tot_sea . psea cell = n_sea + n_sea . csea cell
+            ( json_arr_push mae ? > ( vec_at [i] c_abs cell ) 0 ( json_float / ( vec_at [f] s_abs cell ) # f ( vec_at [i] c_abs cell ) ) ( json_null ) )
+            ( json_arr_push mape ? > ( vec_at [i] c_pct cell ) 0 ( json_float / ( vec_at [f] s_pct cell ) # f ( vec_at [i] c_pct cell ) ) ( json_null ) )
+            ( json_arr_push nai ? > ( vec_at [i] c_nai cell ) 0 ( json_float / ( vec_at [f] s_nai cell ) # f ( vec_at [i] c_nai cell ) ) ( json_null ) )
+            ( json_arr_push sea ? > ( vec_at [i] c_sea cell ) 0 ( json_float / ( vec_at [f] s_sea cell ) # f ( vec_at [i] c_sea cell ) ) ( json_null ) )
+            ( json_arr_push cov ? > ( vec_at [i] c_abs cell ) 0 ( json_float / # f ( vec_at [i] c_cov cell ) # f ( vec_at [i] c_abs cell ) ) ( json_null ) )
+            = tot_abs + tot_abs ( vec_at [f] s_abs cell ) = n_abs + n_abs ( vec_at [i] c_abs cell )
+            = tot_nai + tot_nai ( vec_at [f] s_nai cell ) = n_nai + n_nai ( vec_at [i] c_nai cell )
+            = tot_sea + tot_sea ( vec_at [f] s_sea cell ) = n_sea + n_sea ( vec_at [i] c_sea cell )
             = q + q 1
         }
         ( json_obj_set fo `mae` mae )
@@ -1616,27 +1524,23 @@ unsafe @ model_forecast_backtest Model mo__h i h i n → Json {
     ^ o
 }
 
-unsafe @ model_forecast_model Model mo__h i j → ?ArimaModel {
-    : *ModelImpl mo ( _Model_ptr mo__h )
+@ model_forecast_model Model mo i j → ?ArimaModel {
     ^ ( _fc_model_at . mo fc j )
 }
 
-unsafe @ model_forecast_sync Model mo__h → v {
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    ( __an_fc_sync mo__h ( vec_len [String] . mo lines ) )
+@ model_forecast_sync inout Model mo → v {
+    ( __an_fc_sync mo ( vec_len [String] . mo lines ) )
 }
 
 // Train the forecast version now, on the ring as it stands, and switch
 // it on. The model must have trained once (a frozen feature order).
 // Returns the error text ("" = success).
-@ model_train_forecast Model mo → String {
+@ model_train_forecast inout Model mo → String {
     ^ ( model_train_forecast_at mo ( model_now mo ) )
 }
 
-unsafe @ model_train_forecast_at Model mo__h i now → String {
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    : *MetaImpl mm ( _Meta_ptr . mo meta )
-    ? ( model_is_trained mo__h ) {} { ^ ( string_from `the model has not trained yet: the forecast version fits the feature order a first retrain freezes` ) }
+@ model_train_forecast_at inout Model mo i now → String {
+    ? ( model_is_trained mo ) {} { ^ ( string_from `the model has not trained yet: the forecast version fits the feature order a first retrain freezes` ) }
     : i n ( vec_len [String] . mo lines )
     : ( Vec EncPoint ) encs ( vec_new [EncPoint] )
     : ( Vec i ) ets ( vec_new [i] )
@@ -1665,10 +1569,10 @@ unsafe @ model_train_forecast_at Model mo__h i now → String {
         }
         = k + k 1
     }
-    ( __an_fc_season_from_step mo__h )
-    : i nw ( __an_fc_fit mo__h encs ets now )
+    ( __an_fc_season_from_step mo )
+    : i nw ( __an_fc_fit mo encs ets now )
     ? > nw 0 {} { ^ ( string_from `no feature to forecast: a watched feature is a numeric column with at least 30 present, not all equal readings in the fit window` ) }
-    : b _on ( model_set_version_enabled mo__h ANOM_FC_NAME T )
+    : b _on ( model_set_version_enabled mo ANOM_FC_NAME T )
     // The default margin is a sigma count, and it is a sigma count of the
     // model's OWN standard errors — which an ARIMA reports from the fit
     // and which a backtest routinely finds optimistic (a 95 % interval
@@ -1681,7 +1585,7 @@ unsafe @ model_train_forecast_at Model mo__h i now → String {
     // as a file import calibrates the forests it has just trained. A
     // margin a reader has already moved is left alone — only the untouched
     // default is a placeholder.
-    ( _an_fc_autotune mo__h )
+    ( _an_fc_autotune mo )
     ^ ( string_new )
 }
 
@@ -1692,15 +1596,13 @@ unsafe @ model_train_forecast_at Model mo__h i now → String {
 // the feature order), refreshes the authoritative feature order, refits the
 // shared scaler over the full ring, then trains each version on its window.
 // Returns the number of ring points used (0 = not enough data, no change).
-unsafe @ model_force_train_at Model mo__h i now → i {
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    : *MetaImpl mm ( _Meta_ptr . mo meta )
+@ model_force_train_at inout Model mo i now → i {
     : i n ( vec_len [String] . mo lines )
     ? < n . mo min_points { ^ 0 } {}
 
     // A retrain re-encodes the whole ring, so it is where a model built
     // under an older calendar encoding moves to the current one.
-    = . mm feat_enc ANOM_FEAT_ENC
+    = . . mo meta feat_enc ANOM_FEAT_ENC
 
     // Pass 1: re-encode every raw point (learning), tracking timestamps.
     : ( Vec EncPoint ) encs ( vec_new [EncPoint] )
@@ -1737,23 +1639,22 @@ unsafe @ model_force_train_at Model mo__h i now → i {
 
     // The span these rows cover decides which calendar cycles the
     // feature order keeps (__an_cycle_seen); a count clock has no span.
-    = . mm train_span 0
-    ? . mm count_clock {} {
-        : *i sp ( vec_data [i] ets )
-        : ~ i tmin . sp 0
-        : ~ i tmax . sp 0
+    = . . mo meta train_span 0
+    ? . . mo meta count_clock {} {
+        : ~ i tmin ( vec_at [i] ets 0 )
+        : ~ i tmax ( vec_at [i] ets 0 )
         = k 1
         ~ < k ne {
-            ? < . sp k tmin { = tmin . sp k } {}
-            ? > . sp k tmax { = tmax . sp k } {}
+            ? < ( vec_at [i] ets k ) tmin { = tmin ( vec_at [i] ets k ) } {}
+            ? > ( vec_at [i] ets k ) tmax { = tmax ( vec_at [i] ets k ) } {}
             = k + k 1
         }
-        = . mm train_span - tmax tmin
+        = . . mo meta train_span - tmax tmin
     }
 
     // Freeze the (possibly grown) feature order, project the full matrix.
     ( meta_refresh_feats . mo meta )
-    : i nfeat ( vec_len [String] . mm feats )
+    : i nfeat ( vec_len [String] . . mo meta feats )
     ? <= nfeat 0 {
         ^ 0
     } {}
@@ -1762,7 +1663,7 @@ unsafe @ model_force_train_at Model mo__h i now → i {
     ~ < k ne {
         ?? ( vec_get [EncPoint] encs k ) {
             T p → {
-                : ( Vec f ) row ( anomaly_project p . mm feats )
+                : ( Vec f ) row ( anomaly_project p . . mo meta feats )
                 ( vec_extend [f] big row )
             }
             F _ → {}
@@ -1775,12 +1676,12 @@ unsafe @ model_force_train_at Model mo__h i now → i {
     // (prep.nu, "Absurd readings"). The forecast and the autoencoder mask
     // their own matrices, which are projected onto their own feature
     // orders.
-    ( vec_clear [f] . mm absurd_n )
+    ( vec_clear [f] . . mo meta absurd_n )
     : ( Vec i ) abs_counts ( vec_new [i] )
     : i abs_total ( anomaly_mask_absurd big ne nfeat abs_counts )
     : ~ i aci 0
     ~ < aci ( vec_len [i] abs_counts ) {
-        ?? ( vec_get [i] abs_counts aci ) { T cnt → { ( vec_push [f] . mm absurd_n # f cnt ) } F _ → {} }
+        ?? ( vec_get [i] abs_counts aci ) { T cnt → { ( vec_push [f] . . mo meta absurd_n # f cnt ) } F _ → {} }
         = aci + aci 1
     }
     ? > abs_total 0 {
@@ -1797,33 +1698,31 @@ unsafe @ model_force_train_at Model mo__h i now → i {
     // The forecast version, when it is on: a model per numeric feature,
     // fitted on its own window of these rows and filtered over all of
     // them (a version that is off keeps what it has, muted).
-    ( _an_ensure_fc_cfg mo__h )
-    ? ( meta_version_enabled . mo meta ANOM_FC_NAME F ) { : i _nw ( __an_fc_fit mo__h encs ets now ) } {}
+    ( _an_ensure_fc_cfg mo )
+    ? ( meta_version_enabled . mo meta ANOM_FC_NAME F ) { : i _nw ( __an_fc_fit mo encs ets now ) } {}
 
     // Shared scaler over the whole ring; standardise in place.
     : Scaler snew ( scaler_fit big ne nfeat )
     ( meta_set_scaler . mo meta snew )
-    = . mo sc snew
     ( scaler_apply_matrix snew big ne nfeat )
+    = . mo sc snew
 
     // Per enabled forest version: pick window rows, train, persist. The
     // `autoencoder` VerCfg is skipped — it has no forest (see
     // model_train_autoencoder), and training one under its name put a
     // second, empty "autoencoder" verdict beside the real one.
-    ( __an_clear_forests mo__h )
+    ( __an_clear_forests mo )
     ( store_delete_forest . mo store ( string_data . mo mname ) `autoencoder` )
     // The range guard needs nothing but the scaler just fitted; a model
     // from before it existed gains the version here, at its next retrain,
     // where the epoch bump and the metadata save happen anyway.
-    ( __an_ensure_guard_cfg mo__h )
-    ( __an_ensure_flat_cfg mo__h )
-    ( __an_flat_fit mo__h big ne nfeat )
-    : *f bigp ( vec_data [f] big )
-    : *i etsp ( vec_data [i] ets )
-    : i nv ( vec_len [VerCfg] . mm versions )
+    ( __an_ensure_guard_cfg mo )
+    ( __an_ensure_flat_cfg mo )
+    ( __an_flat_fit mo big ne nfeat )
+    : i nv ( vec_len [VerCfg] . . mo meta versions )
     : ~ i vi 0
     ~ < vi nv {
-        ?? ( vec_get [VerCfg] . mm versions vi ) {
+        ?? ( vec_get [VerCfg] . . mo meta versions vi ) {
             T vc → {
                 ? & . vc enabled ! ( __an_forestless ( string_data . vc vname ) ) {
                     // Window: time filter first, then point cap, then the
@@ -1832,7 +1731,7 @@ unsafe @ model_force_train_at Model mo__h i now → i {
                     ? > . vc window_min 0 {
                         : i cutoff - now * . vc window_min 60
                         : ~ i j 0
-                        ~ & < j ne < . etsp j cutoff { = j + j 1 }
+                        ~ & < j ne < ( vec_at [i] ets j ) cutoff { = j + j 1 }
                         = from j
                     } {}
                     ? > . vc window_pts 0 {
@@ -1857,8 +1756,7 @@ unsafe @ model_force_train_at Model mo__h i now → i {
                         ? >= cnt W {
                             : i nwin + / - cnt W S 1
                             : i wdim * W nfeat
-                            : ( Vec f ) wins ( vec_with_cap [f] * nwin wdim )
-                            : *f winp ( vec_data [f] wins )
+                            : ( Vec f ) wins ( vec_zeroed [f] * nwin wdim )
                             : ~ i wi 0
                             ~ < wi nwin {
                                 : i base + from * wi S
@@ -1866,14 +1764,13 @@ unsafe @ model_force_train_at Model mo__h i now → i {
                                 ~ < r2 W {
                                     : ~ i c2 0
                                     ~ < c2 nfeat {
-                                        = . winp + * wi wdim + * r2 nfeat c2 . bigp + * + base r2 nfeat c2
+                                        ( vec_put [f] wins + * wi wdim + * r2 nfeat c2 ( vec_at [f] big + * + base r2 nfeat c2 ) )
                                         = c2 + c2 1
                                     }
                                     = r2 + r2 1
                                 }
                                 = wi + wi 1
                             }
-                            ( vec_set_len [f] wins * nwin wdim )
                             : VerModel vm ( anom_train_version wins nwin wdim vc )
                             ( store_save_forest . mo store ( string_data . mo mname ) vm )
                             ( vec_push [VerModel] . mo forests vm )
@@ -1882,18 +1779,16 @@ unsafe @ model_force_train_at Model mo__h i now → i {
                         // version simply has no forest this round (its
                         // verdict is absent, never silently wrong).
                     } {
-                        : ( Vec f ) sub ( vec_with_cap [f] * cnt nfeat )
-                        : *f subp ( vec_data [f] sub )
+                        : ( Vec f ) sub ( vec_zeroed [f] * cnt nfeat )
                         : ~ i r 0
                         ~ < r cnt {
                             : ~ i c 0
                             ~ < c nfeat {
-                                = . subp + * r nfeat c . bigp + * + from r nfeat c
+                                ( vec_put [f] sub + * r nfeat c ( vec_at [f] big + * + from r nfeat c ) )
                                 = c + c 1
                             }
                             = r + r 1
                         }
-                        ( vec_set_len [f] sub * cnt nfeat )
 
                         : VerModel vm ( anom_train_version sub cnt nfeat vc )
                         ( store_save_forest . mo store ( string_data . mo mname ) vm )
@@ -1906,13 +1801,13 @@ unsafe @ model_force_train_at Model mo__h i now → i {
         = vi + vi 1
     }
 
-    = . mm last_trained . mm n_seen
-    = . mm trained_time ( now_seconds )
+    = . . mo meta last_trained . . mo meta n_seen
+    = . . mo meta trained_time ( now_seconds )
     ( meta_bump_epoch . mo meta )
     ( store_save_meta . mo store ( string_data . mo mname ) . mo meta )
-    = . mo next_train_at + . mm n_seen ( __an_sched_step mo__h )
+    = . mo next_train_at + . . mo meta n_seen ( __an_sched_step mo )
     = . mo ae_stale ( an_ae_stale . mo meta . mo ae )
-    ( __an_retrain_ae mo__h now )
+    ( __an_retrain_ae mo now )
     ^ ne
 }
 
@@ -1962,16 +1857,14 @@ unsafe @ model_force_train_at Model mo__h i now → i {
     ^ -1
 }
 
-unsafe @ __an_retrain_ae Model mo__h i now → v {
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    : *MetaImpl mm ( _Meta_ptr . mo meta )
+@ __an_retrain_ae inout Model mo i now → v {
     : AeModel cae . mo ae
-    ? & . cae trained | . mm sched_ae . mo ae_stale {} { ^ }
+    ? & . cae trained | . . mo meta sched_ae . mo ae_stale {} { ^ }
     : ( Vec i ) hidden ( ae_hidden cae )
-    : String err ( model_train_autoencoder_at mo__h hidden . cae prefilter now )
+    : String err ( model_train_autoencoder_at mo hidden . cae prefilter now )
 }
 
-@ model_force_train Model mo → i {
+@ model_force_train inout Model mo → i {
     ^ ( model_force_train_at mo ( model_now mo ) )
 }
 
@@ -1979,13 +1872,11 @@ unsafe @ __an_retrain_ae Model mo__h i now → v {
 
 // Ensure an `autoencoder` VerCfg exists in the metadata (margin tunable
 // through the same machinery as the forest versions; window fields 0).
-unsafe @ __an_ensure_ae_cfg Model mo__h → v {
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    : *MetaImpl mm ( _Meta_ptr . mo meta )
-    : i nv ( vec_len [VerCfg] . mm versions )
+@ __an_ensure_ae_cfg Model mo → v {
+    : i nv ( vec_len [VerCfg] . . mo meta versions )
     : ~ i k 0
     ~ < k nv {
-        ?? ( vec_get [VerCfg] . mm versions k ) {
+        ?? ( vec_get [VerCfg] . . mo meta versions k ) {
             T vc → {
                 ? == ( nurl_str_eq ( string_data . vc vname ) `autoencoder` ) 1 { ^ } {}
             }
@@ -1993,7 +1884,7 @@ unsafe @ __an_ensure_ae_cfg Model mo__h → v {
         }
         = k + k 1
     }
-    ( vec_push [VerCfg] . mm versions
+    ( vec_push [VerCfg] . . mo meta versions
     @ VerCfg { ( string_from `autoencoder` ) 0 0 0 0 0 0 -1.0 0.05 T } )
 }
 
@@ -2002,28 +1893,23 @@ unsafe @ __an_ensure_ae_cfg Model mo__h → v {
 // Ensure a `range_guard` VerCfg exists (SPEC §5.4): margin in standard
 // deviations, tunable like any other, window fields 0 — it has no
 // training of its own beyond the shared scaler.
-unsafe @ __an_ensure_guard_cfg Model mo__h → v {
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    : *MetaImpl mm ( _Meta_ptr . mo meta )
+@ __an_ensure_guard_cfg Model mo → v {
     ? < ( meta_find_version . mo meta ANOM_GUARD_NAME ) 0 {} { ^ }
-    ( vec_push [VerCfg] . mm versions ( _an_vc_guard ) )
+    ( vec_push [VerCfg] . . mo meta versions ( _an_vc_guard ) )
 }
 
 // ── The flatline guard version ────────────────────────────────────────
 
 // Ensure a `flatline` VerCfg exists (SPEC §5.4) — a model from before the
 // version gains it at its next retrain, where the references are fitted.
-unsafe @ __an_ensure_flat_cfg Model mo__h → v {
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    : *MetaImpl mm ( _Meta_ptr . mo meta )
+@ __an_ensure_flat_cfg Model mo → v {
     ? < ( meta_find_version . mo meta ANOM_FLAT_NAME ) 0 {} { ^ }
-    ( vec_push [VerCfg] . mm versions ( _an_vc_flat ) )
+    ( vec_push [VerCfg] . . mo meta versions ( _an_vc_flat ) )
 }
 
 // The configured window, in rows.
-unsafe @ _an_flat_window Meta mm__h → i {
-    : *MetaImpl mm ( _Meta_ptr mm__h )
-    : i at ( meta_find_version mm__h ANOM_FLAT_NAME )
+@ _an_flat_window Meta mm → i {
+    : i at ( meta_find_version mm ANOM_FLAT_NAME )
     ? >= at 0 {
         ?? ( vec_get [VerCfg] . mm versions at ) {
             T vc → { ? >= . vc window_size 2 { ^ . vc window_size } {} }
@@ -2036,11 +1922,9 @@ unsafe @ _an_flat_window Meta mm__h → i {
 // The references are fitted when there is one per feature of the frozen
 // order (the retrain refits them; an edit that changes the features
 // bumps the epoch and retrains).
-unsafe @ __an_flat_fitted Model mo__h → b {
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    : *MetaImpl mm ( _Meta_ptr . mo meta )
-    : i nf ( vec_len [String] . mm feats )
-    ^ & > nf 0 == ( vec_len [f] . mm flat_sd ) nf
+@ __an_flat_fitted Model mo → b {
+    : i nf ( vec_len [String] . . mo meta feats )
+    ^ & > nf 0 == ( vec_len [f] . . mo meta flat_sd ) nf
 }
 
 // Fit the references from the standardised training matrix: per watched
@@ -2052,18 +1936,14 @@ unsafe @ __an_flat_fitted Model mo__h → b {
 // not a numeric column, a ring shorter than the window, or a column whose
 // reference run is longer than the guard can look back gets -1: not
 // watched.
-unsafe @ __an_flat_fit Model mo__h ( Vec f ) big i n i nfeat → v {
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    : *MetaImpl mm ( _Meta_ptr . mo meta )
+@ __an_flat_fit inout Model mo ( Vec f ) big i n i nfeat → v {
     : i W ( _an_flat_window . mo meta )
     : ( Vec i ) mask ( meta_numeric_feat_mask . mo meta )
     : ( Vec f ) runs ( vec_with_cap [f] nfeat )
     : ( Vec f ) sds ( vec_with_cap [f] nfeat )
-    : *f bp ( vec_data [f] big )
-    : *i mp ( vec_data [i] mask )
     : ~ i j 0
     ~ < j nfeat {
-        ? | == . mp j 0 < n W {
+        ? | == ( vec_at [i] mask j ) 0 < n W {
             ( vec_push [f] runs -1.0 )
             ( vec_push [f] sds -1.0 )
         } {
@@ -2078,7 +1958,7 @@ unsafe @ __an_flat_fit Model mo__h ( Vec f ) big i n i nfeat → v {
             : ~ i run 1
             : ~ i r 1
             ~ < r n {
-                ? == . bp + * r nfeat j . bp + * - r 1 nfeat j { = run + run 1 } {
+                ? == ( vec_at [f] big + * r nfeat j ) ( vec_at [f] big + * - r 1 nfeat j ) { = run + run 1 } {
                     : ~ i w ? < run cap run cap
                     : ~ i q 0
                     ~ < q w { ( vec_push [f] rl # f run ) = q + q 1 }
@@ -2108,11 +1988,11 @@ unsafe @ __an_flat_fit Model mo__h ( Vec f ) big i n i nfeat → v {
             : ~ f sq 0.0
             = r 0
             ~ < r n {
-                : f v . bp + * r nfeat j
+                : f v ( vec_at [f] big + * r nfeat j )
                 = sum + sum v
                 = sq + sq * v v
                 ? >= r W {
-                    : f o . bp + * - r W nfeat j
+                    : f o ( vec_at [f] big + * - r W nfeat j )
                     = sum - sum o
                     = sq - sq * o o
                 } {}
@@ -2133,8 +2013,8 @@ unsafe @ __an_flat_fit Model mo__h ( Vec f ) big i n i nfeat → v {
         }
         = j + j 1
     }
-    = . mm flat_run runs
-    = . mm flat_sd sds
+    = . . mo meta flat_run runs
+    = . . mo meta flat_sd sds
 }
 
 // The run length a feature's reference asks for: twice what its training
@@ -2142,8 +2022,7 @@ unsafe @ __an_flat_fit Model mo__h ( Vec f ) big i n i nfeat → v {
 // not watched. The margin is read against THIS, so one number (0.9) means
 // the same thing on a column quantised to whole degrees and on a smooth
 // one beside it.
-unsafe @ _an_flat_ref_len Meta mm__h i j → f {
-    : *MetaImpl mm ( _Meta_ptr mm__h )
+@ _an_flat_ref_len Meta mm i j → f {
     : ( Vec f ) rr . mm flat_run
     ? < j ( vec_len [f] rr ) {} { ^ -1.0 }
     : f r ( _fc_getf rr j )
@@ -2157,14 +2036,13 @@ unsafe @ _an_flat_ref_len Meta mm__h i j → f {
 // for the longest reference run to be reached (so no watched column has a
 // bar its run can never touch). Bounded by the same cap the fit used to
 // decide what is watchable at all.
-unsafe @ _an_flat_need Meta mm__h → i {
-    : *MetaImpl mm ( _Meta_ptr mm__h )
-    : i W ( _an_flat_window mm__h )
+@ _an_flat_need Meta mm → i {
+    : i W ( _an_flat_window mm )
     : ~ i need W
     : i nf ( vec_len [f] . mm flat_run )
     : ~ i j 0
     ~ < j nf {
-        : f len ( _an_flat_ref_len mm__h j )
+        : f len ( _an_flat_ref_len mm j )
         ? > len 0.0 {
             : i want + # i ( float_ceil len ) 1
             ? > want need { = need want } {}
@@ -2184,33 +2062,28 @@ unsafe @ _an_flat_need Meta mm__h → i {
 // reference is 0: a column that never moved in training is not expected
 // to). The larger of the two, over the features, is the verdict's
 // fraction. The collapse rule reads the newest W rows of the look-back.
-unsafe @ __an_flat_judge Model mo__h ( Vec f ) x i end ? Hist h → FlatOut {
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    : *MetaImpl mm ( _Meta_ptr . mo meta )
-    ? ( __an_flat_fitted mo__h ) {} { ^ @ FlatOut { F 0.0 -1 } }
-    : i nfeat ( vec_len [String] . mm feats )
+@ __an_flat_judge Model mo ( Vec f ) x i end ? ( Arc Hist ) h → FlatOut {
+    ? ( __an_flat_fitted mo ) {} { ^ @ FlatOut { F 0.0 -1 } }
+    : i nfeat ( vec_len [String] . . mo meta feats )
     : i W ( _an_flat_window . mo meta )
     : i N ( _an_flat_need . mo meta )
-    ?? ( __an_tail_for mo__h h - N 1 end ) {
+    ?? ( __an_tail_for mo h - N 1 end ) {
         T tail → {
             ? == ( vec_len [f] tail ) * - N 1 nfeat {} {
                 ^ @ FlatOut { F 0.0 -1 }
             }
-            : *f tp ( vec_data [f] tail )
-            : *f xp ( vec_data [f] x )
-            : *f rsp ( vec_data [f] . mm flat_sd )
             : ~ f worst 0.0
             : ~ i wf -1
             : ~ i j 0
             ~ < j nfeat {
                 : f ref_run ( _an_flat_ref_len . mo meta j )
                 ? < ref_run 0.0 {} {
-                    : f cur . xp j
+                    : f cur ( vec_at [f] x j )
                     : ~ i run 1
                     : ~ b same T
                     : ~ i r - N 2
                     ~ & same >= r 0 {
-                        ? == . tp + * r nfeat j cur { = run + run 1 } { = same F }
+                        ? == ( vec_at [f] tail + * r nfeat j ) cur { = run + run 1 } { = same F }
                         = r - r 1
                     }
                     : ~ f frac / # f run ref_run
@@ -2219,14 +2092,14 @@ unsafe @ __an_flat_judge Model mo__h ( Vec f ) x i end ? Hist h → FlatOut {
                     // is the run rule's case alone, so a column that sat
                     // flat in training (a rain gauge) answers to its own
                     // reference run and not to a spread of zero.
-                    : f ref_sd ( _fc_getf . mm flat_sd j )
+                    : f ref_sd ( _fc_getf . . mo meta flat_sd j )
                     ? & > ref_sd 0.0 < run W {
                         : ~ f sum cur
                         : ~ f sq * cur cur
                         = r - N 1
                         ~ > r - N W {
                             = r - r 1
-                            : f v . tp + * r nfeat j
+                            : f v ( vec_at [f] tail + * r nfeat j )
                             = sum + sum v
                             = sq + sq * v v
                         }
@@ -2256,20 +2129,18 @@ unsafe @ __an_flat_judge Model mo__h ( Vec f ) x i end ? Hist h → FlatOut {
 // 64-32-64. Explicit by default; with `schedule.autoencoder` on, every
 // forest retrain repeats it with the same layout and pre-filter (see
 // __an_retrain_ae). Returns the error text ("" = success).
-@ model_train_autoencoder Model mo ( Vec i ) hidden f contamination → String {
+@ model_train_autoencoder inout Model mo ( Vec i ) hidden f contamination → String {
     ^ ( model_train_autoencoder_at mo hidden contamination ( model_now mo ) )
 }
 
-unsafe @ model_train_autoencoder_at Model mo__h ( Vec i ) hidden f contamination i now → String {
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    : *MetaImpl mm ( _Meta_ptr . mo meta )
+@ model_train_autoencoder_at inout Model mo ( Vec i ) hidden f contamination i now → String {
     : i n ( vec_len [String] . mo lines )
     ? < n . mo min_points { ^ ( string_from `not enough data points` ) } {}
     : AeModel cur_ae . mo ae
     ? & == ( vec_len [i] hidden ) 0 . cur_ae trained {
         : ( Vec i ) prev ( ae_hidden cur_ae )
         ? > ( vec_len [i] prev ) 0 {
-            : String r ( model_train_autoencoder_at mo__h prev contamination now )
+            : String r ( model_train_autoencoder_at mo prev contamination now )
             ^ r
         } {}
     } {}
@@ -2335,7 +2206,7 @@ unsafe @ model_train_autoencoder_at Model mo__h ( Vec i ) hidden f contamination
         = . nae trained_at now
         = . mo ae nae
         = . mo ae_stale F
-        ( __an_ensure_ae_cfg mo__h )
+        ( __an_ensure_ae_cfg mo )
         ( meta_bump_epoch . mo meta )
         ( store_save_ae . mo store ( string_data . mo mname ) . mo ae )
         ( store_save_meta . mo store ( string_data . mo mname ) . mo meta )
@@ -2351,9 +2222,7 @@ unsafe @ model_train_autoencoder_at Model mo__h ( Vec i ) hidden f contamination
 // ring (evicting the oldest at capacity), persist, retrain if the schedule
 // says so, then score it. Errors (bad numeric / timestamp values) leave the
 // model completely untouched.
-unsafe @ model_ingest_at Model mo__h Json raw i now → !Verdict String {
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    : *MetaImpl mm ( _Meta_ptr . mo meta )
+@ model_ingest_at inout Model mo Json raw i now → !Verdict String {
     : !EncPoint String er ( anomaly_preprocess . mo meta raw )
     ?? er {
         T p → {
@@ -2361,10 +2230,10 @@ unsafe @ model_ingest_at Model mo__h Json raw i now → !Verdict String {
             : Json rec ( json_clone raw )
             ( json_obj_set rec `timestamp` ( json_int now ) )
             : String line ( json_stringify rec )
-            : i seq . mm n_seen
+            : i seq . . mo meta n_seen
             ( vec_push [String] . mo lines line )
             ( vec_push [i] . mo times now )
-            = . mm n_seen + . mm n_seen 1
+            = . . mo meta n_seen + . . mo meta n_seen 1
 
             // Ring eviction past the cap: the oldest row goes, and it goes
             // as a range delete over an index whatever the cap is. This
@@ -2377,9 +2246,9 @@ unsafe @ model_ingest_at Model mo__h Json raw i now → !Verdict String {
                 }
                 ?? ( vec_remove [i] . mo times 0 ) { T _ → {} F _ → {} }
                 ( fc_evict . mo fc )
-                = evict - . mm n_seen ( vec_len [String] . mo lines )
+                = evict - . . mo meta n_seen ( vec_len [String] . mo lines )
             } {}
-            ( __an_note_stored mo__h )
+            ( __an_note_stored mo )
             // The row, the eviction and the counter that says how many
             // points there are go in as ONE transaction: a crash between
             // them would leave the ring and `n_seen` disagreeing, and
@@ -2395,30 +2264,27 @@ unsafe @ model_ingest_at Model mo__h Json raw i now → !Verdict String {
             }
 
             // Schedule: lifetime counter reaching the mark retrains all.
-            ? & >= . mm n_seen . mo next_train_at >= ( vec_len [String] . mo lines ) . mo min_points {
-                ( model_force_train_at mo__h now )
+            ? & >= . . mo meta n_seen . mo next_train_at >= ( vec_len [String] . mo lines ) . mo min_points {
+                ( model_force_train_at mo now )
             } {}
 
-            : Verdict vd ( __an_score_enc mo__h p 1 )
+            : Verdict vd ( __an_score_enc mo p 1 )
             ^ @ !Verdict String { T vd }
         }
         F e → { ^ @ !Verdict String { F e } }
     }
 }
 
-unsafe @ model_ingest Model mo__h Json raw → !Verdict String {
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    : *MetaImpl mm ( _Meta_ptr . mo meta )
-    ? . mm count_clock { ^ ( model_ingest_at mo__h raw ( model_next_tick mo__h ) ) } {}
-    ^ ( model_ingest_at mo__h raw ( now_seconds ) )
+@ model_ingest inout Model mo Json raw → !Verdict String {
+    ? . . mo meta count_clock { ^ ( model_ingest_at mo raw ( model_next_tick mo ) ) } {}
+    ^ ( model_ingest_at mo raw ( now_seconds ) )
 }
 
 // Score without ingesting: no metadata learning, no ring append, no
 // retrain, no disk writes. Unknown columns/categories project to zeros;
 // a column the trained model knows and the point leaves out is an
 // error, named — a question about a point must carry the whole point.
-unsafe @ model_detect_only Model mo__h Json raw → !Verdict String {
-    : *ModelImpl mo ( _Model_ptr mo__h )
+@ model_detect_only inout Model mo Json raw → !Verdict String {
     ? ( meta_is_frozen . mo meta ) {
         : ( Vec String ) miss ( anomaly_missing_cols . mo meta raw )
         ? > ( vec_len [String] miss ) 0 {
@@ -2440,7 +2306,7 @@ unsafe @ model_detect_only Model mo__h Json raw → !Verdict String {
     : !EncPoint String er ( anomaly_preprocess_ro . mo meta raw )
     ?? er {
         T p → {
-            : Verdict vd ( __an_score_enc mo__h p 0 )
+            : Verdict vd ( __an_score_enc mo p 0 )
             ^ @ !Verdict String { T vd }
         }
         F e → { ^ @ !Verdict String { F e } }
@@ -2508,10 +2374,8 @@ unsafe @ model_detect_only Model mo__h Json raw → !Verdict String {
 // record's own stamp is ignored: the file's order is its time, and the
 // rows take the ticks after the newest stored point, one each. Returns
 // what happened.
-unsafe @ model_import_at Model mo__h ( Vec Json ) recs i now → ImportReport {
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    : *MetaImpl mm ( _Meta_ptr . mo meta )
-    : ~ i tick ( model_next_tick mo__h )
+@ model_import_at inout Model mo ( Vec Json ) recs i now → ImportReport {
+    : ~ i tick ( model_next_tick mo )
     : i nrec ( vec_len [Json] recs )
     ? > nrec 0 {} {
         ^ @ ImportReport { 0 0 ( vec_len [String] . mo lines ) F
@@ -2534,7 +2398,7 @@ unsafe @ model_import_at Model mo__h ( Vec Json ) recs i now → ImportReport {
                     T p → {
                         : i given ( __an_imp_ts rec )
                         : ~ i ts ? > given 0 given now
-                        ? . mm count_clock { = ts tick = tick + tick ANOM_TICK } {}
+                        ? . . mo meta count_clock { = ts tick = tick + tick ANOM_TICK } {}
                         : Json out ( json_clone rec )
                         ( json_obj_set out `timestamp` ( json_int ts ) )
                         : String line ( json_stringify out )
@@ -2620,15 +2484,15 @@ unsafe @ model_import_at Model mo__h ( Vec Json ) recs i now → ImportReport {
 
     = . mo lines mlines
     = . mo times mtimes
-    = . mm n_seen + . mm n_seen accepted
-    ( __an_note_stored mo__h )
+    = . . mo meta n_seen + . . mo meta n_seen accepted
+    ( __an_note_stored mo )
     // The merge re-indexed the ring under the forecast states; the train
     // below refits them, and a ring still too small to train has none.
-    ? . ( _FcModel_ptr . mo fc ) trained { ( fc_clear . mo fc ) ( store_delete_fc . mo store ( string_data . mo mname ) ) } {}
+    ? . . mo fc trained { ( fc_clear . mo fc ) ( store_delete_fc . mo store ( string_data . mo mname ) ) } {}
 
     // One transaction for the whole merged ring, not one per point.
     ( store_write_points . mo store ( string_data . mo mname ) . mo lines
-    - . mm n_seen ( vec_len [String] . mo lines ) )
+    - . . mo meta n_seen ( vec_len [String] . mo lines ) )
     ( store_save_meta . mo store ( string_data . mo mname ) . mo meta )
 
     // And one train, if there is now enough to train on. An import that
@@ -2637,14 +2501,14 @@ unsafe @ model_import_at Model mo__h ( Vec Json ) recs i now → ImportReport {
     : ~ b trained F
     ? >= ( vec_len [String] . mo lines ) . mo min_points {
         // On the count clock the present moved with the import.
-        : i tnow ? . mm count_clock ( model_now mo__h ) now
-        ? > ( model_force_train_at mo__h tnow ) 0 { = trained T } {}
+        : i tnow ? . . mo meta count_clock ( model_now mo ) now
+        ? > ( model_force_train_at mo tnow ) 0 { = trained T } {}
     } {}
     ^ @ ImportReport { accepted rejected ( vec_len [String] . mo lines ) trained
         ( string_new ) notes }
 }
 
-@ model_import Model mo ( Vec Json ) recs → ImportReport {
+@ model_import inout Model mo ( Vec Json ) recs → ImportReport {
     ^ ( model_import_at mo recs ( model_now mo ) )
 }
 
@@ -2819,20 +2683,18 @@ unsafe @ model_import_at Model mo__h ( Vec Json ) recs i now → ImportReport {
 // live verdict path and collect each version's decision values. Rows are
 // scored as of their own ring position, exactly as the scan does, so a
 // timevector window never sees the future.
-unsafe @ model_calibrate Model mo__h i from_ts i to_ts → CalReport {
-    : *ModelImpl mo ( _Model_ptr mo__h )
+@ model_calibrate inout Model mo i from_ts i to_ts → CalReport {
     : ( Vec CalVer ) items ( vec_new [CalVer] )
     : ~ i n_rows 0
     : ~ i agg 0
-    ? ( model_is_trained mo__h ) {} { ^ @ CalReport { items from_ts to_ts 0 0 0 } }
+    ? ( model_is_trained mo ) {} { ^ @ CalReport { items from_ts to_ts 0 0 0 } }
 
     // A row a reader has called a false positive is left out: a margin
     // fitted over it would be paid for by known noise.
-    : ( Vec Label ) labels ( model_labels mo__h )
-    : ( Vec i ) label_of ( model_label_map mo__h labels )
+    : ( Vec Label ) labels ( model_labels mo )
+    : ( Vec i ) label_of ( model_label_map mo labels )
     : ~ i excluded 0
 
-    : *MetaImpl mm ( _Meta_ptr . mo meta )
     : AeModel cae . mo ae
     : f athr . cae threshold
     : i n ( vec_len [String] . mo lines )
@@ -2860,8 +2722,8 @@ unsafe @ model_calibrate Model mo__h i from_ts i to_ts → CalReport {
         }
         = hi q
     } {}
-    : Hist h__h ( __an_hist_build mo__h + - lo ( __an_hist_width mo__h ) 1 hi )
-    : *HistImpl h ( _Hist_ptr h__h )
+    : ( Arc Hist ) ha ( arc_new [Hist] ( __an_hist_build mo + - lo ( __an_hist_width mo ) 1 hi ) )
+    : Hist h ( arc_get [Hist] ha )
     : ~ i k lo
     ~ < k hi {
         : ~ i ts 0
@@ -2869,7 +2731,7 @@ unsafe @ model_calibrate Model mo__h i from_ts i to_ts → CalReport {
         : ~ b inside & || <= from_ts 0 >= ts from_ts || <= to_ts 0 <= ts to_ts
         ? & inside ( _an_label_is labels ( _mlp_iget label_of k ) ANOM_LABEL_FP ) { = inside F = excluded + excluded 1 } {}
         ? & inside == ( _mlp_iget . h ok - k . h base ) 1 {
-            : Verdict vd ( __an_score_hist mo__h h__h k )
+            : Verdict vd ( __an_score_hist mo ha k )
             ? . vd ready {
                 = n_rows + n_rows 1
                 ? . vd anomaly { = agg + agg 1 } {}
@@ -2939,9 +2801,8 @@ unsafe @ model_calibrate Model mo__h i from_ts i to_ts → CalReport {
                 : i nd ( vec_len [f] . u dfs )
                 = . u n nd
                 ? > nd 0 {
-                    : *f dp ( vec_data [f] . u dfs )
-                    = . u worst . dp 0
-                    = . u median . dp / nd 2
+                    = . u worst ( vec_at [f] . u dfs 0 )
+                    = . u median ( vec_at [f] . u dfs / nd 2 )
                 } {}
                 = . u flagged ( cal_flagged_at u . u cur_margin )
                 ( vec_set [CalVer] items k u )
@@ -2960,12 +2821,11 @@ unsafe @ model_calibrate Model mo__h i from_ts i to_ts → CalReport {
 
 // Resolve (from, to, last) the way the HTTP layer spells it: `last` seconds
 // back from `to`, or from the newest stored point when `to` is unbounded.
-unsafe @ model_window_from_last Model mo__h i to_ts i last → i {
-    : *ModelImpl mo ( _Model_ptr mo__h )
+@ model_window_from_last Model mo i to_ts i last → i {
     ? <= last 0 { ^ 0 } {}
     : ~ i anchor to_ts
     ? > anchor 0 {} {
-        : i np ( model_n_points mo__h )
+        : i np ( model_n_points mo )
         ? > np 0 {
             ?? ( vec_get [i] . mo times - np 1 ) { T x → { = anchor x } F _ → {} }
         } {}
@@ -3020,25 +2880,21 @@ unsafe @ model_window_from_last Model mo__h i to_ts i last → i {
 // same answer in words: "calibrated: false" with nothing beside it left a
 // reader to guess between four different situations, one of which
 // (already tuned) is the normal case and none of which is an error.
-unsafe @ model_autotune_why Model mo__h f rate → s {
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    : *MetaImpl mm ( _Meta_ptr . mo meta )
+@ model_autotune_why Model mo f rate → s {
     ? > rate 0.0 {} { ^ `the caller asked for no calibration (rate 0)` }
-    ? ( model_is_trained mo__h ) {} { ^ `the model has not trained yet — too few points; the run that brings enough calibrates` }
-    ? == . mm tuned_at 0 {} { ^ `the margins were set once already, by an earlier import, a fine-tune or an edit; a calibration repeated on every import would fold real anomalies into the target rate. finetune {rate: 0.01} sets them again from the history as it now stands` }
+    ? ( model_is_trained mo ) {} { ^ `the model has not trained yet — too few points; the run that brings enough calibrates` }
+    ? == . . mo meta tuned_at 0 {} { ^ `the margins were set once already, by an earlier import, a fine-tune or an edit; a calibration repeated on every import would fold real anomalies into the target rate. finetune {rate: 0.01} sets them again from the history as it now stands` }
     ? >= * rate # f ( vec_len [String] . mo lines ) 1.0 {} { ^ `the history is too short for the rate to flag even one row; the import that brings enough rows calibrates` }
     ^ ``
 }
 
-unsafe @ model_autotune_at Model mo__h f rate i now → b {
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    : *MetaImpl mm ( _Meta_ptr . mo meta )
-    ? & & > rate 0.0 == . mm tuned_at 0 ( model_is_trained mo__h ) {} { ^ F }
+@ model_autotune_at inout Model mo f rate i now → b {
+    ? & & > rate 0.0 == . . mo meta tuned_at 0 ( model_is_trained mo ) {} { ^ F }
     ? >= * rate # f ( vec_len [String] . mo lines ) 1.0 {} { ^ F }
     ( _an_set_action `autotune` )
     : ( Vec String ) none ( vec_new [String] )
-    : FineTuneReport ft ( model_finetune_at mo__h rate 0 0 T none )
-    = . mm tuned_at now
+    : FineTuneReport ft ( model_finetune_at mo rate 0 0 T none )
+    = . . mo meta tuned_at now
     ( store_save_meta . mo store ( string_data . mo mname ) . mo meta )
     ^ T
 }
@@ -3046,15 +2902,13 @@ unsafe @ model_autotune_at Model mo__h f rate i now → b {
 // The forecast version's first margin, measured rather than assumed (see
 // model_train_forecast_at). Lives here because it needs FineTuneReport,
 // which is declared with the fine-tune machinery below.
-unsafe @ _an_fc_autotune Model mo__h → v {
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    : *MetaImpl mm ( _Meta_ptr . mo meta )
+@ _an_fc_autotune inout Model mo → v {
     ? == ( f64_to_bits ( meta_version_margin . mo meta ANOM_FC_NAME ANOM_FC_SIGMA ) ) ( f64_to_bits ANOM_FC_SIGMA ) {} { ^ }
     ? >= * ANOM_FT_RATE # f ( vec_len [String] . mo lines ) 1.0 {} { ^ }
     ( _an_set_action `autotune` )
     : ( Vec String ) only ( vec_new [String] )
     ( vec_push [String] only ( string_from ANOM_FC_NAME ) )
-    : FineTuneReport ft ( model_finetune_at mo__h ANOM_FT_RATE 0 0 T only )
+    : FineTuneReport ft ( model_finetune_at mo ANOM_FT_RATE 0 0 T only )
 }
 
 // Set every enabled, trained version's margin so that a fraction `rate` of
@@ -3182,13 +3036,11 @@ unsafe @ _an_fc_autotune Model mo__h → v {
     ^ got
 }
 
-unsafe @ model_finetune_at Model mo__h f rate i from_ts i to_ts b apply ( Vec String ) only → FineTuneReport {
-    : *ModelImpl mo ( _Model_ptr mo__h )
+@ model_finetune_at inout Model mo f rate i from_ts i to_ts b apply ( Vec String ) only → FineTuneReport {
     ? apply { ( _an_set_action ? == ( nurl_str_eq g_an_action `autotune` ) 1 `autotune` `finetune` ) } {}
     : ( Vec FtVer ) items ( vec_new [FtVer] )
-    : CalReport cal ( model_calibrate mo__h from_ts to_ts )
-    : *MetaImpl ftmm ( _Meta_ptr . mo meta )
-    : ~ i need . ftmm votes
+    : CalReport cal ( model_calibrate mo from_ts to_ts )
+    : ~ i need . . mo meta votes
     ? < need 1 { = need 1 } {}
     // With one vote `rate` is each version's own share, as it always was.
     // With more, it is the MODEL's share and the versions share a
@@ -3264,7 +3116,7 @@ unsafe @ model_finetune_at Model mo__h f rate i from_ts i to_ts b apply ( Vec St
                         } {}
                     }
                     : ~ b did F
-                    ? & & apply wanted ! hold { = did ( model_set_margin mo__h nm nm_new ) } {}
+                    ? & & apply wanted ! hold { = did ( model_set_margin mo nm nm_new ) } {}
                     ( vec_push [FtVer] items @ FtVer {
                         ( string_from nm )
                         . cv cur_margin
@@ -3294,13 +3146,11 @@ unsafe @ model_finetune_at Model mo__h f rate i from_ts i to_ts b apply ( Vec St
 // point: window_min minutes back for a forest version, window_size points
 // back for timevector, and the whole ring (0) for the autoencoder, whose
 // training set is the whole ring too.
-unsafe @ model_version_from Model mo__h s vname → i {
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    : *MetaImpl mm ( _Meta_ptr . mo meta )
-    : i nv ( vec_len [VerCfg] . mm versions )
+@ model_version_from Model mo s vname → i {
+    : i nv ( vec_len [VerCfg] . . mo meta versions )
     : ~ i k 0
     ~ < k nv {
-        ?? ( vec_get [VerCfg] . mm versions k ) {
+        ?? ( vec_get [VerCfg] . . mo meta versions k ) {
             T vc → {
                 ? == ( nurl_str_eq ( string_data . vc vname ) vname ) 1 {
                     ? > . vc window_min 0 {
@@ -3308,11 +3158,11 @@ unsafe @ model_version_from Model mo__h s vname → i {
                         // points; the lower bound is inclusive, so the span
                         // is one tick short (as `last=N` is in the service).
                         : ~ i span * . vc window_min 60
-                        ? . mm count_clock { = span - span ANOM_TICK } {}
-                        ^ ( model_window_from_last mo__h 0 span )
+                        ? . . mo meta count_clock { = span - span ANOM_TICK } {}
+                        ^ ( model_window_from_last mo 0 span )
                     } {}
                     ? > . vc window_size 0 {
-                        : i np ( model_n_points mo__h )
+                        : i np ( model_n_points mo )
                         : i at - np . vc window_size
                         ? > at 0 { ?? ( vec_get [i] . mo times at ) { T x → { ^ x } F _ → {} } } {}
                     } {}
@@ -3330,7 +3180,7 @@ unsafe @ model_version_from Model mo__h s vname → i {
 // so short_term's margin answers for the last three hours and seasonal's
 // for the last ninety days, each at the same rate. One calibration per
 // version; the report's window is the widest of them.
-@ model_finetune_own Model mo f rate b apply ( Vec String ) only → FineTuneReport {
+@ model_finetune_own inout Model mo f rate b apply ( Vec String ) only → FineTuneReport {
     : ( Vec FtVer ) items ( vec_new [FtVer] )
     : ( Vec String ) names ( model_scan_versions mo )
     : i nn ( vec_len [String] names )
@@ -3390,22 +3240,19 @@ unsafe @ model_version_from Model mo__h s vname → i {
 // addressed by ring index at the API and by lifetime sequence number on
 // disk; the base of the ring is n_seen minus the rows it holds.
 
-unsafe @ model_seq_base Model mo__h → i {
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    : *MetaImpl mm ( _Meta_ptr . mo meta )
-    ^ - . mm n_seen ( vec_len [String] . mo lines )
+@ model_seq_base Model mo → i {
+    ^ - . . mo meta n_seen ( vec_len [String] . mo lines )
 }
 
 // Record what a reader said about the row at `index`. Returns the row's
 // sequence number, -1 for an index outside the ring, -2 for a label
 // that is not one of ANOM_LABEL_*. Verdicts do not change, so the epoch
 // does not move.
-unsafe @ model_label_point Model mo__h i index s label s by s note i at → i {
-    : *ModelImpl mo ( _Model_ptr mo__h )
+@ model_label_point Model mo i index s label s by s note i at → i {
     ? ( label_known label ) {} { ^ -2 }
     : i n ( vec_len [String] . mo lines )
     ? | < index 0 >= index n { ^ -1 } {}
-    : i seq + ( model_seq_base mo__h ) index
+    : i seq + ( model_seq_base mo ) index
     : ~ i ts 0
     ?? ( vec_get [i] . mo times index ) { T t → { = ts t } F _ → {} }
     : Label l @ Label { seq ts ( string_from label ) ( string_from by ) at ( string_from note ) }
@@ -3414,16 +3261,14 @@ unsafe @ model_label_point Model mo__h i index s label s by s note i at → i {
 }
 
 // The labels in force (store_load_labels), evicted rows included.
-unsafe @ model_labels Model mo__h → ( Vec Label ) {
-    : *ModelImpl mo ( _Model_ptr mo__h )
+@ model_labels Model mo → ( Vec Label ) {
     ^ ( store_load_labels . mo store ( string_data . mo mname ) )
 }
 
 // Per ring position, the index into `labels` of its label, -1 for none.
-unsafe @ model_label_map Model mo__h ( Vec Label ) labels → ( Vec i ) {
-    : *ModelImpl mo ( _Model_ptr mo__h )
+@ model_label_map Model mo ( Vec Label ) labels → ( Vec i ) {
     : i n ( vec_len [String] . mo lines )
-    : i base ( model_seq_base mo__h )
+    : i base ( model_seq_base mo )
     : ( Vec i ) out ( vec_with_cap [i] n )
     : ~ i k 0
     ~ < k n { ( vec_push [i] out -1 ) = k + k 1 }
@@ -3457,21 +3302,17 @@ unsafe @ model_label_map Model mo__h ( Vec Label ) labels → ( Vec i ) {
 // A `last` as a caller says it — seconds on a time clock, points on a count
 // clock — as the span model_window_from_last takes. N points back from the
 // newest is N ticks INCLUDING it, so the span is one short of N whole ticks.
-unsafe @ model_last_span Model mo__h i last → i {
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    : *MetaImpl mm ( _Meta_ptr . mo meta )
-    ? & . mm count_clock > last 0 { ^ - * last ANOM_TICK 1 } {}
+@ model_last_span Model mo i last → i {
+    ? & . . mo meta count_clock > last 0 { ^ - * last ANOM_TICK 1 } {}
     ^ last
 }
 
 // The default window: a day, or its worth of points (1440) on a count clock.
-unsafe @ model_default_last Model mo__h → i {
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    : *MetaImpl mm ( _Meta_ptr . mo meta )
-    ^ ? . mm count_clock / ANOM_CAL_WINDOW ANOM_TICK ANOM_CAL_WINDOW
+@ model_default_last Model mo → i {
+    ^ ? . . mo meta count_clock / ANOM_CAL_WINDOW ANOM_TICK ANOM_CAL_WINDOW
 }
 
-@ model_finetune Model mo → FineTuneReport {
+@ model_finetune inout Model mo → FineTuneReport {
     : i from_ts ( model_window_from_last mo 0 ( model_last_span mo ( model_default_last mo ) ) )
     : ( Vec String ) none ( vec_new [String] )
     : FineTuneReport rep ( model_finetune_at mo ANOM_FT_RATE from_ts 0 T none )
@@ -3503,36 +3344,34 @@ unsafe @ model_default_last Model mo__h → i {
 // retrains its short_term over three hours like its source, not over
 // everything it has ever seen. The autoencoder takes `hidden` as its
 // layout (empty = the 64-16-64 default) and `rate` as its pre-filter.
-unsafe @ model_train_whole Model mo__h f rate ( Vec i ) hidden → WholeTrain {
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    : *MetaImpl mm ( _Meta_ptr . mo meta )
-    : i nv ( vec_len [VerCfg] . mm versions )
+@ model_train_whole inout Model mo f rate ( Vec i ) hidden → WholeTrain {
+    : i nv ( vec_len [VerCfg] . . mo meta versions )
     : ( Vec i ) wmins ( vec_with_cap [i] nv )
     : ( Vec i ) wptss ( vec_with_cap [i] nv )
     : ~ i vi 0
     ~ < vi nv {
-        ?? ( vec_get [VerCfg] . mm versions vi ) {
+        ?? ( vec_get [VerCfg] . . mo meta versions vi ) {
             T vc → {
                 ( vec_push [i] wmins . vc window_min )
                 ( vec_push [i] wptss . vc window_pts )
                 : ~ VerCfg o vc
                 = . o window_min 0
                 = . o window_pts 0
-                : b _o ( vec_set [VerCfg] . mm versions vi o )
+                : b _o ( vec_set [VerCfg] . . mo meta versions vi o )
             }
             F _ → {}
         }
         = vi + vi 1
     }
-    ( model_force_train_at mo__h ( model_last_ts mo__h ) )
+    ( model_force_train_at mo ( model_last_ts mo ) )
     = vi 0
     ~ < vi nv {
-        ?? ( vec_get [VerCfg] . mm versions vi ) {
+        ?? ( vec_get [VerCfg] . . mo meta versions vi ) {
             T vc → {
                 : ~ VerCfg o vc
                 = . o window_min ( _mlp_iget wmins vi )
                 = . o window_pts ( _mlp_iget wptss vi )
-                : b _o ( vec_set [VerCfg] . mm versions vi o )
+                : b _o ( vec_set [VerCfg] . . mo meta versions vi o )
             }
             F _ → {}
         }
@@ -3546,14 +3385,14 @@ unsafe @ model_train_whole Model mo__h f rate ( Vec i ) hidden → WholeTrain {
         ( vec_push [i] layout 16 )
         ( vec_push [i] layout 64 )
     }
-    : String aerr ( model_train_autoencoder mo__h layout rate )
+    : String aerr ( model_train_autoencoder mo layout rate )
     ? > ( string_len aerr ) 0 {
         : String m ( string_from `autoencoder not trained: ` )
         ( string_push_str m ( string_data aerr ) )
         ( json_arr_push notes ( json_str_lit ( string_data m ) ) )
     } {}
     : ( Vec String ) none ( vec_new [String] )
-    : FineTuneReport ft ( model_finetune_at mo__h rate 0 0 T none )
+    : FineTuneReport ft ( model_finetune_at mo rate 0 0 T none )
     : Json margins ( json_obj_new )
     : i nft ( vec_len [FtVer] . ft items )
     : ~ i k 0
@@ -3566,7 +3405,7 @@ unsafe @ model_train_whole Model mo__h f rate ( Vec i ) hidden → WholeTrain {
     }
     // The flatline guard keeps its configured margin (finetune leaves it
     // alone); it is reported so the list is every version that judged.
-    ? & ( meta_version_enabled . mo meta ANOM_FLAT_NAME F ) ( __an_flat_fitted mo__h ) {
+    ? & ( meta_version_enabled . mo meta ANOM_FLAT_NAME F ) ( __an_flat_fitted mo ) {
         ( json_obj_set margins ANOM_FLAT_NAME ( json_float ( meta_version_margin . mo meta ANOM_FLAT_NAME ANOM_FLAT_MARGIN ) ) )
     } {}
     ^ @ WholeTrain { margins notes }
@@ -3686,11 +3525,10 @@ unsafe @ model_train_whole Model mo__h f rate ( Vec i ) hidden → WholeTrain {
 // Does the model flag the stored row at `index`? Read from the cached
 // ring scan, so a second question about the same model costs nothing.
 // -1 when there is no such row.
-unsafe @ model_row_is_anomaly Model mo__h i index → i {
-    : *ModelImpl mo ( _Model_ptr mo__h )
+@ model_row_is_anomaly inout Model mo i index → i {
     : i n ( vec_len [String] . mo lines )
     ? & >= index 0 < index n {} { ^ -1 }
-    : ScanOut so ( model_scan_at mo__h 0 0 0 F )
+    : ScanOut so ( model_scan_at mo 0 0 0 F )
     : ~ i out -1
     : i np ( vec_len [ScoredPt] . so pts )
     : ~ i k 0
@@ -3709,15 +3547,13 @@ unsafe @ model_row_is_anomaly Model mo__h i index → i {
 // stable within an epoch by construction — anything that adds, removes or
 // toggles a version bumps the epoch — and it is written into the cache so a
 // mismatch is caught rather than silently misread as different versions.
-unsafe @ model_scan_versions Model mo__h → ( Vec String ) {
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    : *MetaImpl mm ( _Meta_ptr . mo meta )
+@ model_scan_versions Model mo → ( Vec String ) {
     : AeModel cae . mo ae
     : ( Vec String ) out ( vec_new [String] )
-    : i nv ( vec_len [VerCfg] . mm versions )
+    : i nv ( vec_len [VerCfg] . . mo meta versions )
     : ~ i k 0
     ~ < k nv {
-        ?? ( vec_get [VerCfg] . mm versions k ) {
+        ?? ( vec_get [VerCfg] . . mo meta versions k ) {
             T vc → {
                 ? . vc enabled {
                     : s nm ( string_data . vc vname )
@@ -3726,9 +3562,9 @@ unsafe @ model_scan_versions Model mo__h → ( Vec String ) {
                     } { ? ( _an_is_guard_name nm ) {
                             ? > ( vec_len [f] . . mo sc mean ) 0 { ( vec_push [String] out ( string_from nm ) ) } {}
                         } { ? ( _an_is_flat_name nm ) {
-                                ? ( __an_flat_fitted mo__h ) { ( vec_push [String] out ( string_from nm ) ) } {}
+                                ? ( __an_flat_fitted mo ) { ( vec_push [String] out ( string_from nm ) ) } {}
                             } { ? ( _an_is_fc_name nm ) {
-                                    ? . ( _FcModel_ptr . mo fc ) trained { ( vec_push [String] out ( string_from nm ) ) } {}
+                                    ? . . mo fc trained { ( vec_push [String] out ( string_from nm ) ) } {}
                                 } {
                                     : ~ b has F
                                     : i nf ( vec_len [VerModel] . mo forests )
@@ -3770,9 +3606,8 @@ unsafe @ model_scan_versions Model mo__h → ( Vec String ) {
 // verdict folded into cache words. `at` is the row being scored, so the
 // ring entries AFTER it are the future: a timevector window ends at `at`,
 // not at the ring tip.
-unsafe @ __an_scan_row Model mo__h Hist h__h ( Vec String ) vnames i at → ScoredPt {
-    : *HistImpl h ( _Hist_ptr h__h )
-    : *ModelImpl mo ( _Model_ptr mo__h )
+@ __an_scan_row inout Model mo ( Arc Hist ) ha ( Vec String ) vnames i at → ScoredPt {
+    : Hist h ( arc_get [Hist] ha )
     : ~ i st ANOM_SC_NOT_READY
     : ~ f sc 0.0
     : ~ f sv 0.0
@@ -3782,7 +3617,7 @@ unsafe @ __an_scan_row Model mo__h Hist h__h ( Vec String ) vnames i at → Scor
     : i r - at . h base
     ? & >= r 0 < r . h n {
         ? == ( _mlp_iget . h ok r ) 1 {
-            : Verdict vd ( __an_score_hist mo__h h__h at )
+            : Verdict vd ( __an_score_hist mo ha at )
             ? . vd ready {
                 = st ANOM_SC_SCORED
                 = sc . vd score
@@ -3816,13 +3651,11 @@ unsafe @ __an_scan_row Model mo__h Hist h__h ( Vec String ) vnames i at → Scor
 // (<= 0 = no cap) taken from the END of the window. `force` recomputes
 // even when the cache is warm — the escape hatch for verifying the cache
 // itself, never needed for correctness.
-unsafe @ model_scan_at Model mo__h i from_ts i to_ts i limit b force → ScanOut {
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    : *MetaImpl mm ( _Meta_ptr . mo meta )
-    : ( Vec String ) vnames ( model_scan_versions mo__h )
+@ model_scan_at inout Model mo i from_ts i to_ts i limit b force → ScanOut {
+    : ( Vec String ) vnames ( model_scan_versions mo )
     : i total ( vec_len [String] . mo lines )
-    : i epoch . mm score_epoch
-    : i base - . mm n_seen total
+    : i epoch . . mo meta score_epoch
+    : i base - . . mo meta n_seen total
 
     // Load the cache, keeping it only if it is stamped with this epoch and
     // the same version order. Anything else starts empty.
@@ -3880,7 +3713,7 @@ unsafe @ model_scan_at Model mo__h i from_ts i to_ts i limit b force → ScanOut
     // The rows the misses need, encoded once — on the first miss, so a scan
     // the cache answers in full parses nothing. A timevector window reaches
     // back width−1 rows before the first row in the window.
-    : ~ ? Hist h @ ?Hist { F }
+    : ~ ? ( Arc Hist ) h @ ?( Arc Hist ) { F }
     : ~ i j lo
     ~ < j hi {
         // Cache index of ring row j: lifetime index minus the cache's base.
@@ -3917,10 +3750,10 @@ unsafe @ model_scan_at Model mo__h i from_ts i to_ts i limit b force → ScanOut
         } {
             = misses + misses 1
             : b need_h ?? h { T _x → F F → T }
-            ? need_h { = h @ ?Hist { T ( __an_hist_build mo__h + - lo ( __an_hist_width mo__h ) 1 hi ) } } {}
+            ? need_h { = h @ ?( Arc Hist ) { T ( arc_new [Hist] ( __an_hist_build mo + - lo ( __an_hist_width mo ) 1 hi ) ) } } {}
             ?? h {
                 T hh → {
-                    : ScoredPt row ( __an_scan_row mo__h hh vnames j )
+                    : ScoredPt row ( __an_scan_row mo hh vnames j )
                     ? . row sp_anomaly { = anoms + anoms 1 } {}
                     ( vec_push [ScoredPt] pts row )
                 }
@@ -3982,14 +3815,13 @@ unsafe @ model_scan_at Model mo__h i from_ts i to_ts i limit b force → ScanOut
     ^ @ ScanOut { pts vnames epoch total considered hits misses anoms }
 }
 
-@ model_scan Model mo i from_ts i to_ts i limit b force → ScanOut {
+@ model_scan inout Model mo i from_ts i to_ts i limit b force → ScanOut {
     ^ ( model_scan_at mo from_ts to_ts limit force )
 }
 
 // The raw stored record at a ring index, parsed (None when out of range or
 // no longer parsable).
-unsafe @ model_point_json Model mo__h i at → ?Json {
-    : *ModelImpl mo ( _Model_ptr mo__h )
+@ model_point_json Model mo i at → ?Json {
     ?? ( vec_get [String] . mo lines at ) {
         T l → {
             : !Json JsonError jr ( json_parse ( string_data l ) )
@@ -4021,8 +3853,7 @@ unsafe @ model_point_json Model mo__h i at → ?Json {
 // is how badly that feature failed to be predictable FROM THE OTHERS, so
 // the top entries name the broken relationship rather than the extreme
 // value. Empty when the model has no trained autoencoder.
-unsafe @ model_ae_contrib Model mo__h Json raw i topk → ( Vec AeContrib ) {
-    : *ModelImpl mo ( _Model_ptr mo__h )
+@ model_ae_contrib Model mo Json raw i topk → ( Vec AeContrib ) {
     : ( Vec AeContrib ) out ( vec_new [AeContrib] )
     : AeModel cae . mo ae
     ? & . cae trained ! . mo ae_stale {} { ^ out }
@@ -4087,26 +3918,23 @@ unsafe @ model_ae_contrib Model mo__h Json raw i topk → ( Vec AeContrib ) {
 
 // Drop all data and trained forests but keep the model's name, schedule
 // and version configs. Learned columns/categories/features/scaler reset.
-unsafe @ model_reset Model mo__h → v {
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    : *MetaImpl old ( _Meta_ptr . mo meta )
+@ model_reset inout Model mo → v {
 
     // Fresh metadata, carrying over identity + configuration.
-    : Meta fresh__h ( meta_new ( string_data . old name ) ( string_data . old created ) )
-    : *MetaImpl fresh ( _Meta_ptr fresh__h )
-    = . fresh sched_below . old sched_below
-    = . fresh sched_at_max . old sched_at_max
-    = . fresh sched_ae . old sched_ae
-    = . fresh count_clock . old count_clock
+    : ~ Meta fresh ( meta_new ( string_data . . mo meta name ) ( string_data . . mo meta created ) )
+    = . fresh sched_below . . mo meta sched_below
+    = . fresh sched_at_max . . mo meta sched_at_max
+    = . fresh sched_ae . . mo meta sched_ae
+    = . fresh count_clock . . mo meta count_clock
     // Carry the scoring epoch across the reset, bumped: cached verdicts for
     // the discarded points must never be mistaken for verdicts of the new
     // ones that will reuse their ring positions.
-    = . fresh score_epoch + . old score_epoch 1
+    = . fresh score_epoch + . . mo meta score_epoch 1
     ( vec_clear [VerCfg] . fresh versions )
-    : i nv ( vec_len [VerCfg] . old versions )
+    : i nv ( vec_len [VerCfg] . . mo meta versions )
     : ~ i vi 0
     ~ < vi nv {
-        ?? ( vec_get [VerCfg] . old versions vi ) {
+        ?? ( vec_get [VerCfg] . . mo meta versions vi ) {
             T vc → {
                 ( vec_push [VerCfg] . fresh versions ( __an_vercfg_clone vc ) )
                 // Remove the version's forest blob from disk as we go.
@@ -4116,12 +3944,12 @@ unsafe @ model_reset Model mo__h → v {
         }
         = vi + vi 1
     }
-    = . mo meta fresh__h
+    = . mo meta fresh
 
-    ( __an_clear_forests mo__h )
+    ( __an_clear_forests mo )
     ( vec_clear [String] . mo lines )
     ( vec_clear [i] . mo times )
-    = . mo sc ( meta_scaler fresh__h )
+    = . mo sc ( meta_scaler . mo meta )
     ( fc_clear . mo fc )
     ( store_delete_fc . mo store ( string_data . mo mname ) )
     = . mo next_train_at . mo min_points
@@ -4129,9 +3957,9 @@ unsafe @ model_reset Model mo__h → v {
     : ( Vec String ) none ( vec_new [String] )
     ( store_write_points . mo store ( string_data . mo mname ) none 0 )
     // Sequence numbers start over with the ring, so labels keyed on the
-    // old ones would name rows that never were.
+    // . mo meta ones would name rows that never were.
     ( store_delete_labels . mo store ( string_data . mo mname ) )
-    ( store_save_meta . mo store ( string_data . mo mname ) fresh__h )
+    ( store_save_meta . mo store ( string_data . mo mname ) . mo meta )
 }
 
 // Delete a model from the store entirely (an open Model handle of it goes
@@ -4145,8 +3973,7 @@ unsafe @ model_reset Model mo__h → v {
 // (fine-tune, autotune, the CLI, a source's first train) and the metadata
 // patch (`edit`), which sets margins straight into the VerCfg and for two
 // releases moved them without a word in the log the tool promises.
-unsafe @ _an_audit_margin Model mo__h s vname f before f after → v {
-    : *ModelImpl mo ( _Model_ptr mo__h )
+@ _an_audit_margin Model mo s vname f before f after → v {
     ? == ( f64_to_bits before ) ( f64_to_bits after ) { ^ } {}
     : Json e ( json_obj_new )
     ( json_obj_set e `at` ( json_int ( now_seconds ) ) )
@@ -4161,26 +3988,24 @@ unsafe @ _an_audit_margin Model mo__h s vname f before f after → v {
 // Set one version's decision margin in the metadata (persisted, effective
 // immediately at scoring — no retrain needed). Returns F for an unknown
 // version name.
-unsafe @ model_set_margin Model mo__h s vname f margin → b {
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    : *MetaImpl mm ( _Meta_ptr . mo meta )
-    : i nv ( vec_len [VerCfg] . mm versions )
+@ model_set_margin inout Model mo s vname f margin → b {
+    : i nv ( vec_len [VerCfg] . . mo meta versions )
     : ~ i k 0
     ~ < k nv {
-        ?? ( vec_get [VerCfg] . mm versions k ) {
+        ?? ( vec_get [VerCfg] . . mo meta versions k ) {
             T vc → {
                 ? == ( nurl_str_eq ( string_data . vc vname ) vname ) 1 {
                     : f before . vc decision_margin
                     : ~ VerCfg upd vc
                     = . upd decision_margin margin
-                    ( vec_set [VerCfg] . mm versions k upd )
+                    ( vec_set [VerCfg] . . mo meta versions k upd )
                     // A margin someone set is a margin the first train's
                     // calibration must not overwrite: the model counts
                     // as tuned from here on (model_autotune_at).
-                    ? == . mm tuned_at 0 { = . mm tuned_at ( now_seconds ) } {}
+                    ? == . . mo meta tuned_at 0 { = . . mo meta tuned_at ( now_seconds ) } {}
                     ( meta_bump_epoch . mo meta )
                     ( store_save_meta . mo store ( string_data . mo mname ) . mo meta )
-                    ( _an_audit_margin mo__h vname before margin )
+                    ( _an_audit_margin mo vname before margin )
                     ^ T
                 } {}
             }
@@ -4192,13 +4017,11 @@ unsafe @ model_set_margin Model mo__h s vname f margin → b {
 }
 
 // Update the retraining schedule (persisted immediately).
-unsafe @ model_set_schedule Model mo__h i below_max i at_max → v {
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    : *MetaImpl mm ( _Meta_ptr . mo meta )
-    ? > below_max 0 { = . mm sched_below below_max } {}
-    ? > at_max 0 { = . mm sched_at_max at_max } {}
-    ? ( model_is_trained mo__h ) {
-        = . mo next_train_at + . mm last_trained ( __an_sched_step mo__h )
+@ model_set_schedule inout Model mo i below_max i at_max → v {
+    ? > below_max 0 { = . . mo meta sched_below below_max } {}
+    ? > at_max 0 { = . . mo meta sched_at_max at_max } {}
+    ? ( model_is_trained mo ) {
+        = . mo next_train_at + . . mo meta last_trained ( __an_sched_step mo )
     } {}
     ( store_save_meta . mo store ( string_data . mo mname ) . mo meta )
 }
@@ -4210,8 +4033,7 @@ unsafe @ model_set_schedule Model mo__h i below_max i at_max → v {
 // forest trained against a feature order and scaler the model has since
 // moved past, and a stale width reads as a timevector window at scoring
 // time — a wrong verdict rather than an absent one.
-unsafe @ __an_drop_forest Model mo__h s vname → v {
-    : *ModelImpl mo ( _Model_ptr mo__h )
+@ __an_drop_forest inout Model mo s vname → v {
     : ( Vec VerModel ) kept ( vec_new [VerModel] )
     : i nf ( vec_len [VerModel] . mo forests )
     : ~ i k 0
@@ -4231,9 +4053,7 @@ unsafe @ __an_drop_forest Model mo__h s vname → v {
 
 // Every forest whose version is now off (or gone from the metadata) loses
 // its blob. The autoencoder has no forest, so it is never touched here.
-unsafe @ __an_prune_disabled Model mo__h → v {
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    : *MetaImpl mm ( _Meta_ptr . mo meta )
+@ __an_prune_disabled inout Model mo → v {
     : ( Vec String ) doomed ( vec_new [String] )
     : i nf ( vec_len [VerModel] . mo forests )
     : ~ i k 0
@@ -4252,7 +4072,7 @@ unsafe @ __an_prune_disabled Model mo__h → v {
     = k 0
     ~ < k nd {
         ?? ( vec_get [String] doomed k ) {
-            T d → { ( __an_drop_forest mo__h ( string_data d ) ) }
+            T d → { ( __an_drop_forest mo ( string_data d ) ) }
             F _ → {}
         }
         = k + k 1
@@ -4265,21 +4085,19 @@ unsafe @ __an_prune_disabled Model mo__h → v {
 // its net carries its OWN frozen feature order, so it stays valid across
 // retrains and is far too expensive to throw away on a checkbox. Returns F
 // for an unknown version name.
-unsafe @ model_set_version_enabled Model mo__h s vname b on → b {
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    : *MetaImpl mm ( _Meta_ptr . mo meta )
+@ model_set_version_enabled inout Model mo s vname b on → b {
     : i at ( meta_find_version . mo meta vname )
     ? < at 0 { ^ F } {}
-    ?? ( vec_get [VerCfg] . mm versions at ) {
+    ?? ( vec_get [VerCfg] . . mo meta versions at ) {
         T vc → {
             : ~ VerCfg upd vc
             = . upd enabled on
-            : b _o ( vec_set [VerCfg] . mm versions at upd )
+            : b _o ( vec_set [VerCfg] . . mo meta versions at upd )
         }
         F _ → {}
     }
     ? on {} {
-        ? ( __an_forestless vname ) {} { ( __an_drop_forest mo__h vname ) }
+        ? ( __an_forestless vname ) {} { ( __an_drop_forest mo vname ) }
     }
     ( meta_bump_epoch . mo meta )
     ( store_save_meta . mo store ( string_data . mo mname ) . mo meta )
@@ -4331,12 +4149,11 @@ unsafe @ model_set_version_enabled Model mo__h s vname b on → b {
 // sent `step_size: 0` read back a 1 and had nothing to blame but the
 // nearest flag it had also sent. Every field the patch names and the
 // config did not keep is reported back beside the change.
-unsafe @ _an_patch_adjustments Meta mm__h Json vers ( Vec String ) notes → v {
-    : *MetaImpl mm ( _Meta_ptr mm__h )
+@ _an_patch_adjustments Meta mm Json vers ( Vec String ) notes → v {
     ? ( json_is_obj vers ) {} { ^ }
     ( json_obj_each vers \ s vn Json vo → v {
         ? ( json_is_obj vo ) {} { ^ }
-        : i at ( meta_find_version mm__h vn )
+        : i at ( meta_find_version mm vn )
         ? >= at 0 {} { ^ }
         ?? ( vec_get [VerCfg] . mm versions at ) {
             T vc → {
@@ -4396,8 +4213,7 @@ unsafe @ _an_patch_adjustments Meta mm__h Json vers ( Vec String ) notes → v {
 
 // How many versions are switched on right now — the ceiling on `votes`,
 // since a point cannot be flagged by a version that does not judge.
-unsafe @ _an_enabled_count Meta mm__h → i {
-    : *MetaImpl mm ( _Meta_ptr mm__h )
+@ _an_enabled_count Meta mm → i {
     : ~ i n 0
     : i nv ( vec_len [VerCfg] . mm versions )
     : ~ i k 0
@@ -4411,16 +4227,14 @@ unsafe @ _an_enabled_count Meta mm__h → i {
     ^ n
 }
 
-@ model_apply_meta_patch Model mo Json patch → String {
+@ model_apply_meta_patch inout Model mo Json patch → String {
     : ( Vec String ) sink ( vec_new [String] )
     : String r ( model_apply_meta_patch_notes mo patch sink )
     ^ r
 }
 
-unsafe @ model_apply_meta_patch_notes Model mo__h Json patch ( Vec String ) notes → String {
-    : *ModelImpl mo ( _Model_ptr mo__h )
+@ model_apply_meta_patch_notes inout Model mo Json patch ( Vec String ) notes → String {
     ? ( json_is_obj patch ) {} { ^ ( string_from `metadata must be a JSON object` ) }
-    : *MetaImpl mm ( _Meta_ptr . mo meta )
     : ~ b touched F
 
     // Every key must be one the patch reads, at every level: a key it
@@ -4469,8 +4283,8 @@ unsafe @ model_apply_meta_patch_notes Model mo__h Json patch ( Vec String ) note
             ? > ( nurl_str_len araw ) ANOM_ALIAS_MAX {
                 ^ ( string_from `alias is too long (max 120 characters)` )
             } {}
-            ( string_clear . mm alias )
-            ( string_push_str . mm alias araw )
+            ( string_clear . . mo meta alias )
+            ( string_push_str . . mo meta alias araw )
             = touched T
         }
         F _ → {}
@@ -4479,14 +4293,14 @@ unsafe @ model_apply_meta_patch_notes Model mo__h Json patch ( Vec String ) note
     ?? ( json_obj_get patch `schedule` ) {
         T sj → {
             ? ( json_is_obj sj ) {} { ^ ( string_from `schedule must be a JSON object` ) }
-            : i below ( _an_jint sj `below_max` . mm sched_below )
-            : i atmax ( _an_jint sj `at_max` . mm sched_at_max )
+            : i below ( _an_jint sj `below_max` . . mo meta sched_below )
+            : i atmax ( _an_jint sj `at_max` . . mo meta sched_at_max )
             ? & > below 0 > atmax 0 {} {
                 ^ ( string_from `schedule.below_max and schedule.at_max must be positive` )
             }
-            = . mm sched_below below
-            = . mm sched_at_max atmax
-            ?? ( json_obj_get sj `autoencoder` ) { T aj → { = . mm sched_ae ( json_as_bool aj ) } F _ → {} }
+            = . . mo meta sched_below below
+            = . . mo meta sched_at_max atmax
+            ?? ( json_obj_get sj `autoencoder` ) { T aj → { = . . mo meta sched_ae ( json_as_bool aj ) } F _ → {} }
             = touched T
         }
         F _ → {}
@@ -4500,12 +4314,12 @@ unsafe @ model_apply_meta_patch_notes Model mo__h Json patch ( Vec String ) note
             ? == ( nurl_str_eq cs `count` ) 1 { = want T } {
                 ? == ( nurl_str_eq cs `time` ) 1 {} { ^ ( string_from `clock must be "time" or "count"` ) }
             }
-            ? == want . mm count_clock {} {
+            ? == want . . mo meta count_clock {} {
                 // Ticks and wall-clock stamps must never share a ring.
                 ? == ( vec_len [String] . mo lines ) 0 {} {
                     ^ ( string_from `clock can only change on a model with no stored points (reset it first)` )
                 }
-                = . mm count_clock want
+                = . . mo meta count_clock want
                 = touched T
             }
         }
@@ -4514,14 +4328,14 @@ unsafe @ model_apply_meta_patch_notes Model mo__h Json patch ( Vec String ) note
 
     ?? ( json_obj_get patch `max_data_points` ) {
         T _ → {
-            : i mx ( _an_jint patch `max_data_points` . mm max_points )
+            : i mx ( _an_jint patch `max_data_points` . . mo meta max_points )
             ? > mx 0 {} {
                 ^ ( string_from `max_data_points must be positive` )
             }
             ? >= mx . mo min_points {} {
                 ^ ( string_from `max_data_points must be at least min_points` )
             }
-            = . mm max_points mx
+            = . . mo meta max_points mx
             = . mo max_points mx
             : ~ b trimmed F
             ~ > ( vec_len [String] . mo lines ) mx {
@@ -4534,7 +4348,7 @@ unsafe @ model_apply_meta_patch_notes Model mo__h Json patch ( Vec String ) note
             }
             ? trimmed {
                 ( store_evict_points . mo store ( string_data . mo mname )
-                - . mm n_seen ( vec_len [String] . mo lines ) )
+                - . . mo meta n_seen ( vec_len [String] . mo lines ) )
             } {}
             = touched T
         }
@@ -4549,10 +4363,10 @@ unsafe @ model_apply_meta_patch_notes Model mo__h Json patch ( Vec String ) note
             // door a change came through.
             : ( Vec String ) an ( vec_new [String] )
             : ( Vec f ) am ( vec_new [f] )
-            : i nv0 ( vec_len [VerCfg] . mm versions )
+            : i nv0 ( vec_len [VerCfg] . . mo meta versions )
             : ~ i vk 0
             ~ < vk nv0 {
-                ?? ( vec_get [VerCfg] . mm versions vk ) {
+                ?? ( vec_get [VerCfg] . . mo meta versions vk ) {
                     T vc → {
                         ( vec_push [String] an ( string_clone . vc vname ) )
                         ( vec_push [f] am . vc decision_margin )
@@ -4571,8 +4385,8 @@ unsafe @ model_apply_meta_patch_notes Model mo__h Json patch ( Vec String ) note
                     T nm → {
                         : i at ( meta_find_version . mo meta ( string_data nm ) )
                         ? >= at 0 {
-                            ?? ( vec_get [VerCfg] . mm versions at ) {
-                                T now2 → { ( _an_audit_margin mo__h ( string_data nm ) ( _fc_getf am vk ) . now2 decision_margin ) }
+                            ?? ( vec_get [VerCfg] . . mo meta versions at ) {
+                                T now2 → { ( _an_audit_margin mo ( string_data nm ) ( _fc_getf am vk ) . now2 decision_margin ) }
                                 F _ → {}
                             }
                         } {}
@@ -4585,7 +4399,7 @@ unsafe @ model_apply_meta_patch_notes Model mo__h Json patch ( Vec String ) note
             // A margin a reader set is a margin the first train's
             // calibration must not overwrite (model_set_margin does the
             // same for its own door).
-            ? == . mm tuned_at 0 { = . mm tuned_at ( now_seconds ) } {}
+            ? == . . mo meta tuned_at 0 { = . . mo meta tuned_at ( now_seconds ) } {}
             = touched T
         }
         F _ → {}
@@ -4595,7 +4409,7 @@ unsafe @ model_apply_meta_patch_notes Model mo__h Json patch ( Vec String ) note
     // consensus in one call, and the ceiling is the list as it will BE.
     ?? ( json_obj_get patch `votes` ) {
         T _ → {
-            : i want ( _an_jint patch `votes` . mm votes )
+            : i want ( _an_jint patch `votes` . . mo meta votes )
             ? >= want 1 {} { ^ ( string_from `votes must be at least 1 (1 = any one enabled version is enough, which is the default)` ) }
             ? <= want ANOM_VOTES_MAX {} { ^ ( string_from `votes is far past any model's version count` ) }
             : i on ( _an_enabled_count . mo meta )
@@ -4607,7 +4421,7 @@ unsafe @ model_apply_meta_patch_notes Model mo__h Json patch ( Vec String ) note
                 ( string_push_str why ` are enabled — no point could ever reach it. Switch versions on, or lower votes.` )
                 ^ why
             }
-            = . mm votes want
+            = . . mo meta votes want
             = touched T
         }
         F _ → {}
@@ -4617,12 +4431,12 @@ unsafe @ model_apply_meta_patch_notes Model mo__h Json patch ( Vec String ) note
         ^ ( string_from `nothing to update: expected alias, schedule, max_data_points, versions and/or votes` )
     }
 
-    ( __an_prune_disabled mo__h )
-    ? ( model_is_trained mo__h ) {
-        = . mo next_train_at + . mm last_trained ( __an_sched_step mo__h )
+    ( __an_prune_disabled mo )
+    ? ( model_is_trained mo ) {
+        = . mo next_train_at + . . mo meta last_trained ( __an_sched_step mo )
     } {}
     ( meta_bump_epoch . mo meta )
-    ( __an_note_stored mo__h )
+    ( __an_note_stored mo )
     ( store_save_meta . mo store ( string_data . mo mname ) . mo meta )
     ^ ( string_new )
 }

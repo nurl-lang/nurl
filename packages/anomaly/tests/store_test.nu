@@ -159,7 +159,7 @@ $ `src/store.nu`
     ( check == ( vec_len [String] empty ) 0 `store: empty list on fresh root` )
 
     // Build a model: meta + one trained version.
-    : Meta m ( meta_new `sensor_a` `2026-07-03T00:00:00Z` )
+    : ~ Meta m ( meta_new `sensor_a` `2026-07-03T00:00:00Z` )
     : ( Vec f ) data ( make_data )
     : Scaler sc ( scaler_fit data 208 2 )
     ( meta_set_scaler m sc )

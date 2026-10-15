@@ -21,7 +21,7 @@ unsafe @ main → i {
             : i w ( img_w im )
             : i h ( img_h im )
             ( nurl_print `image ` ) ( nurl_print ( nurl_str_int w ) ) ( nurl_print `x` ) ( nurl_print ( nurl_str_int h ) ) ( nurl_print `\n` )
-            : XWin win ( xwin_open w h `yoloe wintest` )
+            : ~ XWin win ( xwin_open w h `yoloe wintest` )
             ? ! ( xwin_ok win ) { ( nurl_print `no X display (DISPLAY unset?)\n` ) ^ 1 } {}
             ( nurl_print `window open; showing for a moment...\n` )
             : ~ i k 0

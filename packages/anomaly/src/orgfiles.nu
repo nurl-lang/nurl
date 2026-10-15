@@ -26,6 +26,7 @@ $ `stdlib/std/random.nu`
 $ `stdlib/std/hash_sha256.nu`
 $ `stdlib/ext/json.nu`
 $ `stdlib/core/slice.nu`
+$ `stdlib/std/thread.nu`
 
 : i OF_NAME_MAX 128
 : i OF_LINK_TTL_DEFAULT 604800  // a week
@@ -41,25 +42,19 @@ $ `stdlib/core/slice.nu`
     String secret
 }
 
-: ~ OfState g_of_state 0
-: ~ b g_of_state_made F
+@ __of_blank → ( Locked OfState ) { ^ ( locked_new [OfState] @ OfState { ( string_from `.` ) ( string_new ) } ) }
 
-unsafe @ __of_state → *OfState {
-    ? ! g_of_state_made {
-        = g_of_state @ OfState { ( string_from `.` ) ( string_new ) }
-        = g_of_state_made T
-    } {}
-    ^ ( mem_addr g_of_state )
-}
+: ( Locked OfState ) g_of_state ( __of_blank )
 
-unsafe @ orgfiles_set_root s root → v {
-    : *OfState st ( __of_state )
+@ orgfiles_set_root s root → v {
+    : ~ OfState st ( locked_take [OfState] g_of_state )
     ( string_clear . st root )
     ( string_push_str . st root root )
+    ( locked_restore [OfState] g_of_state st )
 }
 
-unsafe @ __of_orgs_dir → String {
-    : String p ( string_from ( string_data . ( __of_state ) root ) )
+@ __of_orgs_dir → String {
+    : String p ( orgfiles_root )
     ( string_push_str p `/orgs` )
     ^ p
 }
@@ -85,7 +80,7 @@ unsafe @ __of_orgs_dir → String {
 
 // The store root itself, for a module that needs the models beside the
 // organisation folders.
-unsafe @ orgfiles_root → s { ^ ( string_data . ( __of_state ) root ) }
+@ orgfiles_root → String { ^ . ( locked_get [OfState] g_of_state ) root }
 
 // Every organisation that has a folder under <root>/orgs — the names of
 // the directories there, whatever they hold.
@@ -271,9 +266,9 @@ unsafe @ orgfiles_root → s { ^ ( string_data . ( __of_state ) root ) }
 // random bytes, generated on first use and kept at <root>/orgs/link.secret;
 // deleting the file revokes every link at once.
 
-unsafe @ __of_secret → s {
-    : *OfState st ( __of_state )
-    ? > ( string_len . st secret ) 0 { ^ ( string_data . st secret ) } {}
+@ __of_secret → String {
+    : String have . ( locked_get [OfState] g_of_state ) secret
+    ? > ( string_len have ) 0 { ^ have } {}
     : String p ( __of_orgs_dir )
     : !v IoErr mk ( dir_create_all ( string_data p ) )
     ?? mk { T _ → {} F _ → {} }
@@ -288,9 +283,11 @@ unsafe @ __of_secret → s {
         : !v IoErr wr ( write_file ( string_data p ) ( string_data sec ) )
         ?? wr { T _ → {} F _ → {} }
     } {}
-    // Kept for the life of the process, in the module's own block.
-    = . st secret sec
-    ^ ( string_data . st secret )
+    // Kept for the life of the process.
+    : ~ OfState st ( locked_take [OfState] g_of_state )
+    = . st secret ( string_from ( string_data sec ) )
+    ( locked_restore [OfState] g_of_state st )
+    ^ sec
 }
 
 @ orgfiles_sign s org s name i exp → String {
@@ -299,7 +296,7 @@ unsafe @ __of_secret → s {
     ( string_push_str msg name )
     ( string_push_char msg 10 )
     ( string_push_int msg exp )
-    : ( Vec u ) k ( bytes_from_str ( __of_secret ) )
+    : ( Vec u ) k ( bytes_from_str ( string_data ( __of_secret ) ) )
     : ( Vec u ) m ( bytes_from_str ( string_data msg ) )
     : ( Vec u ) dig ( hmac_sha256_pure k m )
     : String hex ( bytes_to_hex dig )

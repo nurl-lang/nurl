@@ -72,7 +72,7 @@ $ `src/orgfiles.nu`
 // step is found wherever it is.
 : AnaSep { f sep i rows }
 
-@ _ana_separation Model mo f rate → AnaSep {
+@ _ana_separation inout Model mo f rate → AnaSep {
     : CalReport cr ( model_calibrate mo 0 0 )
     : ~ AnaSep out @ AnaSep { -1.0 0 }
     : i ni ( vec_len [CalVer] . cr items )
@@ -408,7 +408,7 @@ $ `src/orgfiles.nu`
     ?? ( file_delete ( string_data ip ) ) { T _ → {} F _ → {} }
 }
 
-unsafe @ analyze_run s dir → i {
+@ analyze_run s dir → i {
     : Json params ?? ( __ana_read_json dir `params.json` ) { T j → j F _ → ( json_obj_new ) }
     : String org ( _ana_jstr params `org` )
     : String id ( _ana_jstr params `id` )
@@ -466,21 +466,19 @@ unsafe @ analyze_run s dir → i {
     : String sp ( __ana_file dir `store` )
     ?? ( dir_create_all ( string_data sp ) ) { T _ → {} F _ → {} }
     : Store store ( store_open ( string_data sp ) )
-    : Model mo__h ( model_open store `analysis` )
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    : *MetaImpl mm ( _Meta_ptr . mo meta )
+    : ~ Model mo ( model_open store `analysis` )
     : String clockq ( _ana_jstr params `clock` )
     : ~ b count == . tr stamped 0
     ? == ( nurl_str_eq ( string_data clockq ) `count` ) 1 { = count T } {}
     ? == ( nurl_str_eq ( string_data clockq ) `time` ) 1 { = count F } {}
-    = . mm count_clock count
+    = . . mo meta count_clock count
     // The whole file fits: the ring grows to the file, and the warm-up
     // shrinks to it, so a short file still gets a verdict.
     : i minp ? < nrows ANOM_MIN_POINTS nrows ANOM_MIN_POINTS
     : i maxp ? > nrows ANOM_MAX_POINTS nrows ANOM_MAX_POINTS
-    ( model_set_limits mo__h minp maxp )
+    ( model_set_limits mo minp maxp )
 
-    : ImportReport rep ( model_import mo__h . ip2 rows )
+    : ImportReport rep ( model_import mo . ip2 rows )
     ? > ( string_len . rep err ) 0 {
         : i rc ( __ana_fail dir ( string_data . rep err ) )
         ^ rc
@@ -491,12 +489,12 @@ unsafe @ analyze_run s dir → i {
     // recipe (model_train_whole), shared with a model forked from another
     // model's history.
     : ( Vec i ) dflt_layout ( vec_new [i] )
-    : WholeTrain wt ( model_train_whole mo__h ANA_TARGET_RATE dflt_layout )
+    : WholeTrain wt ( model_train_whole mo ANA_TARGET_RATE dflt_layout )
     : Json notes . wt notes
     : Json margins . wt margins
 
     // Scan everything, keep the anomalies.
-    : ScanOut so ( model_scan mo__h 0 0 0 F )
+    : ScanOut so ( model_scan mo 0 0 0 F )
     : Json vers ( json_arr_new )
     : i nvn ( vec_len [String] . so vnames )
     : ~ i k 0
@@ -548,9 +546,9 @@ unsafe @ analyze_run s dir → i {
                     ( json_obj_set o `severity` ( json_float . r sp_severity ) )
                     ( json_obj_set o `votes` ( json_int votes ) )
                     ( json_obj_set o `versions` flagged )
-                    ?? ( model_point_json mo__h . r sp_idx ) {
+                    ?? ( model_point_json mo . r sp_idx ) {
                         T rec → {
-                            : ( Vec AeContrib ) cs ( model_ae_contrib mo__h rec 3 )
+                            : ( Vec AeContrib ) cs ( model_ae_contrib mo rec 3 )
                             : i nc ( vec_len [AeContrib] cs )
                             ? > nc 0 {
                                 : Json ca ( json_arr_new )
@@ -583,7 +581,7 @@ unsafe @ analyze_run s dir → i {
         = k + k 1
     }
 
-    : ~ AnaSep sp ( _ana_separation mo__h ANA_TARGET_RATE )
+    : ~ AnaSep sp ( _ana_separation mo ANA_TARGET_RATE )
     ? > . sp sep 0.0 { = . sp sep / ( float_round * . sp sep 100.0 ) 100.0 } {}
     : f sep . sp sep
 

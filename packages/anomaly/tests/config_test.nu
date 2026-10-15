@@ -135,9 +135,9 @@ client_id = "cid-from-file"
 
     // The file alone.
     ( check ( anomaly_authz_apply c ) `layer: the file alone turns it on` )
-    ( check == ( nurl_str_eq ( anomaly_authz_client_id ) `cid-from-file` ) 1 `layer: client id from the file` )
+    ( check == ( nurl_str_eq ( string_data ( anomaly_authz_client_id ) ) `cid-from-file` ) 1 `layer: client id from the file` )
     // audience is derived, so a deployment never has to restate it
-    ( check == ( nurl_str_eq ( anomaly_authz_audience ) `api://cid-from-file` ) 1
+    ( check == ( nurl_str_eq ( string_data ( anomaly_authz_audience ) ) `api://cid-from-file` ) 1
     `layer: audience defaults to api://<client id>` )
     // Default DENY: without a credential naming an organisation there is
     // nothing a point could belong to.
@@ -148,9 +148,9 @@ client_id = "cid-from-file"
     ?? s1 { T _ → {} F _ → {} }
     : b on2 ( anomaly_authz_apply c )
     ( check on2 `layer: still on with the environment overlaid` )
-    ( check == ( nurl_str_eq ( anomaly_authz_client_id ) `cid-from-env` ) 1
+    ( check == ( nurl_str_eq ( string_data ( anomaly_authz_client_id ) ) `cid-from-env` ) 1
     `layer: the environment overrides the file` )
-    ( check == ( nurl_str_eq ( anomaly_authz_audience ) `api://cid-from-env` ) 1
+    ( check == ( nurl_str_eq ( string_data ( anomaly_authz_audience ) ) `api://cid-from-env` ) 1
     `layer: and the derived audience follows it` )
 
     // An unset variable must let the file show through rather than blank it.
@@ -158,7 +158,7 @@ client_id = "cid-from-file"
     ?? u1 { T _ → {} F _ → {} }
     : b on3 ( anomaly_authz_apply c )
     ( check on3 `layer: unsetting it does not turn anything off` )
-    ( check == ( nurl_str_eq ( anomaly_authz_client_id ) `cid-from-file` ) 1
+    ( check == ( nurl_str_eq ( string_data ( anomaly_authz_client_id ) ) `cid-from-file` ) 1
     `layer: an unset variable lets the file show through` )
 
     // The environment can also turn OFF what the file turned on.

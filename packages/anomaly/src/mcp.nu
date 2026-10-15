@@ -38,6 +38,7 @@ $ `stdlib/ext/mcp_auth.nu`
 $ `src/authz.nu`
 $ `src/imptime.nu`
 $ `src/store.nu`
+$ `stdlib/std/thread.nu`
 
 // One version for the CLI banner and the MCP handshake.
 : s ANOMALY_VERSION ( pkg_version )
@@ -48,50 +49,65 @@ $ `src/store.nu`
 // shares its routes, taken once the route table is complete), the static
 // server, and the public origin for the resource-metadata URLs.
 : McpWiring {
-    Router router
+    ( Arc Router ) router
     String public_url
     b has_server
-    McpServer server
+    ( Arc McpServer ) server
 }
 
-: ~ McpWiring g_mcp_wiring 0
-: ~ b g_mcp_wiring_made F
-
-unsafe @ __mcp_wiring → *McpWiring {
-    ? ! g_mcp_wiring_made {
-        = . g_mcp_wiring router ( router_new )
-        = . g_mcp_wiring public_url ( string_new )
-        = g_mcp_wiring_made T
-    } {}
-    ^ ( mem_addr g_mcp_wiring )
+@ __mcp_wiring_blank → ( Locked McpWiring ) {
+    ^ ( locked_new [McpWiring] @ McpWiring { ( arc_new [Router] ( router_new ) ) ( string_new ) F ( arc_new [McpServer] ( mcp_server_new `anomaly` ANOMALY_VERSION ) ) } )
 }
+
+// Built at start; changed under its lock, read through shares.
+: ( Locked McpWiring ) g_mcp_wiring ( __mcp_wiring_blank )
 
 // Called by anomaly_service_router once every route is registered. The
 // copy shares each route (a Route is a shared handle), so routes added to
 // `r` afterwards are not seen. The router the wiring held — the empty one,
 // or an earlier service router's copy and with it that router's routes — is
 // dropped by the store.
-unsafe @ an_mcp_attach_router Router r → v {
-    : *McpWiring w ( __mcp_wiring )
-    = . w router @ Router { . r routes }
+@ an_mcp_attach_router Router r → v {
+    : ~ McpWiring w ( locked_take [McpWiring] g_mcp_wiring )
+    = . w router ( arc_new [Router] @ Router { . r routes } )
+    ( locked_restore [McpWiring] g_mcp_wiring w )
 }
 
 // `[service] public_url` — the origin clients reach the service at, when
 // it sits behind a proxy that rewrites Host. Empty: derived per request
 // from Host / X-Forwarded-*.
-unsafe @ an_mcp_set_public_url s url → v {
-    : *McpWiring w ( __mcp_wiring )
+@ an_mcp_set_public_url s url → v {
+    : ~ McpWiring w ( locked_take [McpWiring] g_mcp_wiring )
     ( string_clear . w public_url )
     ( string_push_str . w public_url url )
+    ( locked_restore [McpWiring] g_mcp_wiring w )
 }
 
-unsafe @ __mcp_server → McpServer {
-    : *McpWiring w ( __mcp_wiring )
+// A share of the service router the tools call back into.
+@ __mcp_router → ( Arc Router ) {
+    : McpWiring w ( locked_take [McpWiring] g_mcp_wiring )
+    : ( Arc Router ) out ( arc_clone [Router] . w router )
+    ( locked_restore [McpWiring] g_mcp_wiring w )
+    ^ out
+}
+
+@ __mcp_public_url → String {
+    : McpWiring w ( locked_take [McpWiring] g_mcp_wiring )
+    : String out ( string_from ( string_data . w public_url ) )
+    ( locked_restore [McpWiring] g_mcp_wiring w )
+    ^ out
+}
+
+// The MCP server, built on first use; a share of it.
+@ __mcp_server → ( Arc McpServer ) {
+    : ~ McpWiring w ( locked_take [McpWiring] g_mcp_wiring )
     ? . w has_server {} {
-        = . w server ( __mcp_build_server )
+        = . w server ( arc_new [McpServer] ( __mcp_build_server ) )
         = . w has_server T
     }
-    ^ . w server
+    : ( Arc McpServer ) out ( arc_clone [McpServer] . w server )
+    ( locked_restore [McpWiring] g_mcp_wiring w )
+    ^ out
 }
 
 // ── The caller ───────────────────────────────────────────────────────
@@ -169,7 +185,7 @@ unsafe @ __mcp_server → McpServer {
 
 // The general form: a body of any content type (empty `content_type` =
 // no body).
-unsafe @ __mcp_api_send Json ctx s method s path String query s content_type s text → ApiOut {
+@ __mcp_api_send Json ctx s method s path String query s content_type s text → ApiOut {
     : HttpRequest req ( request_new )
     ( string_push_str . req method method )
     ( string_push_str . req path path )
@@ -187,8 +203,8 @@ unsafe @ __mcp_api_send Json ctx s method s path String query s content_type s t
         ( vec_push [Header] . req headers ( header_new `Content-Type` content_type ) )
         ( bytes_extend_str . req body text )
     } {}
-    : *McpWiring w ( __mcp_wiring )
-    : HttpResponse resp ( router_handle . w router req )
+    : ( Arc Router ) rt ( __mcp_router )
+    : HttpResponse resp ( router_handle ( arc_get [Router] rt ) req )
     : ~ Json parsed ( json_null )
     ? > ( vec_len [u] . resp body ) 0 {
         ?? ( json_parse_bytes . resp body ) {
@@ -3364,9 +3380,9 @@ Every member may build scratch models named llm_… (fork_model: a slice of an e
 // ── HTTP ─────────────────────────────────────────────────────────────
 
 // The origin to build absolute URLs on: configured, else from the request.
-unsafe @ __mcp_base HttpRequest req → String {
-    : *McpWiring w ( __mcp_wiring )
-    ? > ( string_len . w public_url ) 0 { ^ ( string_from ( string_data . w public_url ) ) } {}
+@ __mcp_base HttpRequest req → String {
+    : String pu ( __mcp_public_url )
+    ? > ( string_len pu ) 0 { ^ pu } {}
     ^ ( mcp_auth_base_url req `` )
 }
 
@@ -3379,9 +3395,9 @@ unsafe @ __mcp_base HttpRequest req → String {
     : String base ( __mcp_base req )
     : String resource ( string_from ( string_data base ) )
     ( string_push_str resource `/mcp` )
-    : String scope ( string_from ( anomaly_authz_audience ) )
+    : String scope ( string_from ( string_data ( anomaly_authz_audience ) ) )
     ( string_push_str scope `/access_as_user` )
-    : Json md ( mcp_auth_resource_metadata ( string_data resource ) ( anomaly_authz_issuer ) ( string_data scope ) )
+    : Json md ( mcp_auth_resource_metadata ( string_data resource ) ( string_data ( anomaly_authz_issuer ) ) ( string_data scope ) )
     : HttpResponse r ( mcp_auth_metadata_response md )
     ^ r
 }
@@ -3397,7 +3413,8 @@ unsafe @ __mcp_base HttpRequest req → String {
         : String mdpath ( mcp_auth_metadata_path `/mcp` )
         : String mdurl ( string_from ( string_data base ) )
         ( string_push_str mdurl ( string_data mdpath ) )
-        : s why ( anomaly_authz_last_error )
+        : String why_own ( anomaly_authz_last_error )
+        : s why ( string_data why_own )
         // A credential was PRESENTED — as a bearer token or in X-API-Key,
         // the two places authz_principal reads — and refused: that is
         // invalid_token, and the description says why. Nothing presented
@@ -3410,8 +3427,8 @@ unsafe @ __mcp_base HttpRequest req → String {
         ^ r
     } {}
     : Json ctx ( __mcp_ctx_of req p )
-    : McpServer srv ( __mcp_server )
-    : ( @ ?Json Json ) d \ Json rq → ?Json { ^ ( mcp_server_envelope_as srv rq ctx ) }
+    : ( Arc McpServer ) srv ( __mcp_server )
+    : ( @ ?Json Json ) d \ Json rq → ?Json { ^ ( mcp_server_envelope_as ( arc_get [McpServer] srv ) rq ctx ) }
     : ( @ HttpResponse HttpRequest ) h ( mcp_http_handler d )
     : HttpResponse out ( h req )
     ^ out

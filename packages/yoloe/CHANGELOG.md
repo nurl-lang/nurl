@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.8.0] — 2026-10-15
+
+### Changed
+
+- `Camera` and `XWin` are owned values (one holder, released by their
+  drop) instead of shared handles changed through `arc_ptr`: `cam_close`
+  and `xwin_close` take the value, `xwin_show` takes the window `inout`.
+  The `unsafe` left is the V4L2 ioctl/mmap ring and the X11 calls.
+
 ## [0.7.8] — 2026-10-14
 
 ### Changed

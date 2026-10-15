@@ -32,6 +32,7 @@ $ `src/model.nu`
 $ `deps/iforest/src/iforest.nu`
 $ `deps/gpu/src/gpu.nu`
 $ `deps/gpukit/src/gpukit.nu`
+$ `stdlib/std/thread.nu`
 
 // Below this many rows the pure loop wins on latency. Bit-equality of the
 // paths makes the threshold unobservable in results.
@@ -53,11 +54,26 @@ $ `deps/gpukit/src/gpukit.nu`
 // One GpuKit (device + kernel cache) per process, probed lazily on the first
 // bulk call. The gpukit facade owns the device, the compiled `anomaly_paths`
 // kernel (cached), and all the buffer marshalling. state: 0 = unprobed,
-// 1 = ready, -1 = unavailable/disabled. The global owns the open kit
-// (F = none) and drops it when anom_gpu_close lets it go.
+// 1 = ready, -1 = unavailable/disabled. The global — Locked, reached from
+// every worker thread — owns the open kit (F = none) and drops it when
+// anom_gpu_close lets it go.
+: AgState {
+    i state
+    ? GpuKit kit
+}
 
-: ~ i g_ag_state 0
-: ~ ? GpuKit g_ag_kit 0
+@ __ag_blank → ( Locked AgState ) { ^ ( locked_new [AgState] @ AgState { 0 @ ?GpuKit { F } } ) }
+
+: ( Locked AgState ) g_ag ( __ag_blank )
+
+@ __ag_state → i {
+    : AgState a ( locked_take [AgState] g_ag )
+    : i st . a state
+    ( locked_restore [AgState] g_ag a )
+    ^ st
+}
+
+@ __ag_set i state ? GpuKit kit → v { ( locked_set [AgState] g_ag @ AgState { state kit } ) }
 
 // The path-walk kernel. One thread per row; per tree, descend by the same
 // comparison the pure walker uses and accumulate depth + c(leaf) — nothing
@@ -100,37 +116,38 @@ $ `deps/gpukit/src/gpukit.nu`
 // another thread fails without one. gk_bind_thread is idempotent and
 // costs a cuCtxSetCurrent.
 @ __ag_ensure → b {
-    ? != g_ag_state 0 {
-        ? == g_ag_state 1 { ^ ( gk_bind_thread ( __ag_kit ) ) } {}
+    : i st ( __ag_state )
+    ? != st 0 {
+        ? == st 1 { ^ ( gk_bind_thread ( __ag_kit ) ) } {}
         ^ F
     } {}
     ? ( __ag_env_off ) {
-        = g_ag_state -1
+        ( __ag_set -1 @ ?GpuKit { F } )
         ^ F
     } {}
     : GpuKit kit ( gk_open 0 )
     ? ( gk_ok kit ) {} {
         ( gk_close kit )
-        = g_ag_state -1
+        ( __ag_set -1 @ ?GpuKit { F } )
         ^ F
     }
     ? ( gk_compile kit ( __ag_kernel_src ) `anomaly_paths` ) {} {
         ( gk_close kit )
-        = g_ag_state -1
+        ( __ag_set -1 @ ?GpuKit { F } )
         ^ F
     }
     // the global holds one owner of it from here (anom_gpu_close lets it go)
-    ( __ag_keep_kit kit )
-    = g_ag_state 1
+    ( __ag_set 1 @ ?GpuKit { T ( GpuKit_share kit ) } )
     ^ T
 }
 
-unsafe @ __ag_keep_kit GpuKit kit → v { = g_ag_kit @ ?GpuKit { T ( GpuKit_share kit ) } }
-
 // One more owner of the live kit (only valid when g_ag_state == 1).
-unsafe @ __ag_kit → GpuKit {
-    ?? g_ag_kit {
-        T k → { ^ ( GpuKit_share k ) }
+@ __ag_kit → GpuKit {
+    : AgState a ( locked_take [AgState] g_ag )
+    : ?GpuKit kit ?? . a kit { T k → @ ?GpuKit { T ( GpuKit_share k ) } F → @ ?GpuKit { F } }
+    ( locked_restore [AgState] g_ag a )
+    ?? kit {
+        T k → { ^ k }
         F → { ( nurl_panic `anomaly: no GPU kit is open` ) }
     }
 }
@@ -142,9 +159,8 @@ unsafe @ __ag_kit → GpuKit {
 
 // Release the device + kernel cache (tests call this so leak checkers see a
 // closed shop; a long-running service just keeps the singleton).
-unsafe @ anom_gpu_close → v {
-    = g_ag_kit @ ?GpuKit { F }  // the global's owner, released here
-    = g_ag_state 0
+@ anom_gpu_close → v {
+    ( __ag_set 0 @ ?GpuKit { F } )  // the global's owner, released here
 }
 
 // Which engine bulk scoring would use right now: `cuda`, `cpu` (the gpu
@@ -191,10 +207,9 @@ unsafe @ anom_scores_gpu VerModel vm ( Vec f ) scaled i n_rows i n_cols → ?( V
     // Per-node c(size), precomputed with the same host function the pure
     // walker calls at each leaf — the kernel only ever adds these values.
     : ( Vec f ) cleaf ( vec_with_cap [f] n_nodes )
-    : *i szp ( vec_data [i] . fo size )
     : ~ i k 0
     ~ < k n_nodes {
-        ( vec_push [f] cleaf ( iforest_avg_path . szp k ) )
+        ( vec_push [f] cleaf ( iforest_avg_path ( vec_at [i] . fo size k ) ) )
         = k + k 1
     }
 
@@ -224,11 +239,10 @@ unsafe @ anom_scores_gpu VerModel vm ( Vec f ) scaled i n_rows i n_cols → ?( V
 
     // Finish on the host, byte-for-byte the pure walker's arithmetic.
     : ( Vec f ) out ( vec_with_cap [f] n_rows )
-    : *f tp ( vec_data [f] totals )
     : f cpsi . fo c_psi
     : ~ i r 0
     ~ < r n_rows {
-        ( vec_push [f] out ( __ag_total_to_score . tp r n_trees cpsi ) )
+        ( vec_push [f] out ( __ag_total_to_score ( vec_at [f] totals r ) n_trees cpsi ) )
         = r + r 1
     }
     ^ @ ?( Vec f ) { T out }
@@ -249,13 +263,12 @@ unsafe @ anom_scores_gpu VerModel vm ( Vec f ) scaled i n_rows i n_cols → ?( V
 
 // decision_function for every row: -score - offset, same expression as
 // anom_decision.
-unsafe @ anom_decisions VerModel vm ( Vec f ) scaled i n_rows i n_cols → ( Vec f ) {
+@ anom_decisions VerModel vm ( Vec f ) scaled i n_rows i n_cols → ( Vec f ) {
     : ( Vec f ) ss ( anom_scores vm scaled n_rows n_cols )
-    : *f sp ( vec_data [f] ss )
     : f off . vm offset
     : ~ i r 0
     ~ < r n_rows {
-        = . sp r - - 0.0 . sp r off
+        ( vec_put [f] ss r - - 0.0 ( vec_at [f] ss r ) off )
         = r + r 1
     }
     ^ ss

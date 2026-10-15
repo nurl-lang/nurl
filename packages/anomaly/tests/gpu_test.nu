@@ -60,7 +60,7 @@ $ `stdlib/std/channel.nu`
     ^ data
 }
 
-unsafe @ main → i {
+@ main → i {
     : s engine ( anom_gpu_engine )
     ( nurl_print `gpu_test: engine = ` )
     ( pline engine )
@@ -85,11 +85,9 @@ unsafe @ main → i {
         T got → {
             : ~ b same T
             : ~ i n_diff 0
-            : *f a ( vec_data [f] ref )
-            : *f b2 ( vec_data [f] got )
             : ~ i r 0
             ~ < r ROWS {
-                ? == . a r . b2 r {} {
+                ? == ( vec_at [f] ref r ) ( vec_at [f] got r ) {} {
                     = same F
                     = n_diff + n_diff 1
                 }
@@ -109,11 +107,9 @@ unsafe @ main → i {
     //    give the same decisions as composing the pure pieces by hand.
     : ( Vec f ) dfs ( anom_decisions vm data ROWS COLS )
     : ~ b dsame T
-    : *f dp ( vec_data [f] dfs )
-    : *f rp ( vec_data [f] ref )
     : ~ i r 0
     ~ < r ROWS {
-        ? == . dp r - - 0.0 . rp r . vm offset {} { = dsame F }
+        ? == ( vec_at [f] dfs r ) - - 0.0 ( vec_at [f] ref r ) . vm offset {} { = dsame F }
         = r + r 1
     }
     ( check dsame `gpu: auto-path decisions bit-identical` )
@@ -125,10 +121,9 @@ unsafe @ main → i {
     : ( Vec f ) ref2 ( anom_scores_cpu vm_a data ROWS COLS )
     // offset from the pure path, recomputed by hand:
     : ( Vec f ) ss ( vec_with_cap [f] ROWS )
-    : *f r2 ( vec_data [f] ref2 )
     = r 0
     ~ < r ROWS {
-        ( vec_push [f] ss - 0.0 . r2 r )
+        ( vec_push [f] ss - 0.0 ( vec_at [f] ref2 r ) )
         = r + r 1
     }
     ( sort_by [f] ss \ f a f b → i {
@@ -152,11 +147,9 @@ unsafe @ main → i {
             T g → {
                 : ( Vec f ) pure ( anom_scores_cpu vm data ROWS COLS )
                 : ~ i st 1
-                : *f gp ( vec_data [f] g )
-                : *f pp ( vec_data [f] pure )
                 : ~ i k 0
                 ~ < k ROWS {
-                    ? == . gp k . pp k {} { = st 2 }
+                    ? == ( vec_at [f] g k ) ( vec_at [f] pure k ) {} { = st 2 }
                     = k + k 1
                 }
                 : b _sent ( chan_send [i] tflag st )

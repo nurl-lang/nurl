@@ -48,10 +48,9 @@ $ `src/store.nu`
 
 // One worker: its own model, CONC_POINTS points into the shared database,
 // each one its own transaction, with an eviction once past the cap.
-unsafe @ worker s root s name → v {
+@ worker s root s name → v {
     : Store st ( store_open root )
-    : Meta m__h ( meta_new name `2026-01-01T00:00:00Z` )
-    : *MetaImpl m ( _Meta_ptr m__h )
+    : ~ Meta m ( meta_new name `2026-01-01T00:00:00Z` )
     : ~ i k 0
     ~ < k CONC_POINTS {
         : String line ( string_from `{"temp":` )
@@ -63,7 +62,7 @@ unsafe @ worker s root s name → v {
         // Keep the newest 100: past that every point evicts one.
         : ~ i evict 0
         ? > + k 1 100 { = evict - + k 1 100 } {}
-        ( store_commit_point st name k ( string_data line ) evict m__h )
+        ( store_commit_point st name k ( string_data line ) evict m )
         = k + k 1
     }
 }

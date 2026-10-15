@@ -55,6 +55,7 @@ $ `stdlib/ext/http_request.nu`
 $ `stdlib/ext/http_auth.nu`
 $ `deps/oauth/src/oauth.nu`
 $ `stdlib/core/slice.nu`
+$ `stdlib/std/thread.nu`
 
 // ── Configuration ─────────────────────────────────────────────────────
 //
@@ -98,18 +99,15 @@ $ `stdlib/core/slice.nu`
     String s_iss_tmpl  // multi-tenant: the provider's issuer template
 }
 
-: ~ AzStrings g_az_strs 0
-: ~ b g_az_strs_made F
-
-unsafe @ __az_strs → *AzStrings {
-    ? ! g_az_strs_made {
-        = g_az_strs @ AzStrings { ( string_new ) ( string_new ) ( string_new ) ( string_new ) ( string_new ) ( string_new ) ( string_new ) }
-        = g_az_strs_made T
-    } {}
-    ^ ( mem_addr g_az_strs )
+@ __az_blank → ( Locked AzStrings ) {
+    ^ ( locked_new [AzStrings] @ AzStrings { ( string_new ) ( string_new ) ( string_new ) ( string_new ) ( string_new ) ( string_new ) ( string_new ) } )
 }
 
-unsafe @ __az_set_str * AzStrings a i which s v → v {
+// Built at start; read and set under its lock.
+: ( Locked AzStrings ) g_az_strs ( __az_blank )
+
+@ __az_set_str i which s v → v {
+    : ~ AzStrings a ( locked_take [AzStrings] g_az_strs )
     ? == which 0 { ( string_clear . a s_issuer ) ( string_push_str . a s_issuer v ) } {}
     ? == which 1 { ( string_clear . a s_client_id ) ( string_push_str . a s_client_id v ) } {}
     ? == which 2 { ( string_clear . a s_audience ) ( string_push_str . a s_audience v ) } {}
@@ -117,40 +115,53 @@ unsafe @ __az_set_str * AzStrings a i which s v → v {
     ? == which 4 { ( string_clear . a s_last_err ) ( string_push_str . a s_last_err v ) } {}
     ? == which 5 { ( string_clear . a s_owner ) ( string_push_str . a s_owner v ) } {}
     ? == which 6 { ( string_clear . a s_iss_tmpl ) ( string_push_str . a s_iss_tmpl v ) } {}
+    ( locked_restore [AzStrings] g_az_strs a )
 }
 
-unsafe @ g_az_issuer → s { ^ ( string_data . ( __az_strs ) s_issuer ) }
+// A copy of one of the strings.
+@ __az_get_str i which → String {
+    : AzStrings a ( locked_get [AzStrings] g_az_strs )
+    ? == which 0 { ^ ( string_from ( string_data . a s_issuer ) ) } {}
+    ? == which 1 { ^ ( string_from ( string_data . a s_client_id ) ) } {}
+    ? == which 2 { ^ ( string_from ( string_data . a s_audience ) ) } {}
+    ? == which 3 { ^ ( string_from ( string_data . a s_allowed ) ) } {}
+    ? == which 4 { ^ ( string_from ( string_data . a s_last_err ) ) } {}
+    ? == which 5 { ^ ( string_from ( string_data . a s_owner ) ) } {}
+    ^ ( string_from ( string_data . a s_iss_tmpl ) )
+}
 
-unsafe @ g_az_client_id → s { ^ ( string_data . ( __az_strs ) s_client_id ) }
+@ g_az_issuer → String { ^ ( __az_get_str 0 ) }
 
-unsafe @ g_az_audience → s { ^ ( string_data . ( __az_strs ) s_audience ) }
+@ g_az_client_id → String { ^ ( __az_get_str 1 ) }
 
-unsafe @ g_az_allowed → s { ^ ( string_data . ( __az_strs ) s_allowed ) }
+@ g_az_audience → String { ^ ( __az_get_str 2 ) }
+
+@ g_az_allowed → String { ^ ( __az_get_str 3 ) }
 
 // The multi-tenant issuer template, read from the provider's discovery
 // document (__az_provider_multi): every token's `iss` is measured against
 // it with `{tenantid}` replaced. Owned here like the configured strings —
 // it once was a view of the discovery reader's local String, which was
 // freed when the reader returned, so every later check read freed memory.
-unsafe @ g_az_iss_tmpl → s { ^ ( string_data . ( __az_strs ) s_iss_tmpl ) }
+@ g_az_iss_tmpl → String { ^ ( __az_get_str 6 ) }
 
-unsafe @ anomaly_authz_set_iss_tmpl s t → v { ( __az_set_str ( __az_strs ) 6 t ) }
+@ anomaly_authz_set_iss_tmpl s t → v { ( __az_set_str 6 t ) }
 
 // The OWNER TENANT: the organisation whose admins administer the service
 // itself — approving other tenants, managing any organisation's users. It
 // is set in the configuration file and nowhere else. A tenant that could
 // grant itself that from the dashboard would not be an anchor.
-unsafe @ g_az_owner → s { ^ ( string_data . ( __az_strs ) s_owner ) }
+@ g_az_owner → String { ^ ( __az_get_str 5 ) }
 
-unsafe @ anomaly_authz_set_owner_tenant s tid → v { ( __az_set_str ( __az_strs ) 5 tid ) }
+@ anomaly_authz_set_owner_tenant s tid → v { ( __az_set_str 5 tid ) }
 
 // Why the last presented token was refused. A 401 with no reason is what
 // turns a one-line configuration mistake — the wrong audience, a clock an
 // hour out, a tenant nobody listed — into an afternoon. The service is
 // single-threaded, so one slot is the whole story.
-unsafe @ anomaly_authz_last_error → s { ^ ( string_data . ( __az_strs ) s_last_err ) }
+@ anomaly_authz_last_error → String { ^ ( __az_get_str 4 ) }
 
-unsafe @ __az_set_last_err s v → v { ( __az_set_str ( __az_strs ) 4 v ) }
+@ __az_set_last_err s v → v { ( __az_set_str 4 v ) }
 
 // The identity provider, discovered lazily and then reused: it owns the
 // JWKS cache, and re-fetching a key set per request would turn every
@@ -161,7 +172,9 @@ unsafe @ __az_set_last_err s v → v { ( __az_set_str ( __az_strs ) 4 v ) }
 // One share of the provider handle, kept by the global; F means "not
 // discovered yet". Discovery happens once and the provider then lives for
 // the process.
-: ~ ? OidcProvider g_az_prov 0
+@ __az_prov_blank → ( Locked ? OidcProvider ) { ^ ( locked_new [? OidcProvider] @ ?OidcProvider { F } ) }
+
+: ( Locked ? OidcProvider ) g_az_prov ( __az_prov_blank )
 
 // ── Multi-tenant ──────────────────────────────────────────────────────
 //
@@ -198,20 +211,19 @@ unsafe @ __az_set_last_err s v → v { ( __az_set_str ( __az_strs ) 4 v ) }
 // reachable without credentials while a fleet of already-deployed data
 // producers is migrated onto keys. It is a migration setting: with it on,
 // anyone who can reach the port can write points into any model.
-unsafe @ anomaly_authz_configure b on b open_ingest s issuer s client_id s audience → v {
+@ anomaly_authz_configure b on b open_ingest s issuer s client_id s audience → v {
     = g_az_mode ? on AZ_MODE_OIDC AZ_MODE_SIMPLE
     = g_az_open_ingest open_ingest
-    : *AzStrings a ( __az_strs )
-    ( __az_set_str a 0 issuer )
-    ( __az_set_str a 1 client_id )
-    ( __az_set_str a 2 audience )
+    ( __az_set_str 0 issuer )
+    ( __az_set_str 1 client_id )
+    ( __az_set_str 2 audience )
 }
 
 // Multi-tenant acceptance. `allowed` is a comma-separated tenant list;
 // empty admits every organisation the provider will sign for.
-unsafe @ anomaly_authz_configure_tenancy b multi s allowed → v {
+@ anomaly_authz_configure_tenancy b multi s allowed → v {
     = g_az_multi multi
-    ( __az_set_str ( __az_strs ) 3 allowed )
+    ( __az_set_str 3 allowed )
     // A change of tenancy mode changes what the provider must be built
     // from, so the cached one is no longer the right one.
     ( __az_forget_provider )
@@ -220,7 +232,7 @@ unsafe @ anomaly_authz_configure_tenancy b multi s allowed → v {
 
 @ anomaly_authz_multi_tenant → b { ^ g_az_multi }
 
-@ anomaly_authz_allowed_tenants → s { ^ ( g_az_allowed ) }
+@ anomaly_authz_allowed_tenants → String { ^ ( g_az_allowed ) }
 
 // Resolve the settings from the configuration file and the environment,
 // in that order — the file is the persistent baseline, the environment is
@@ -313,7 +325,7 @@ unsafe @ anomaly_authz_configure_tenancy b multi s allowed → v {
     // The configured list only ever ADDS to the registry, so a headless
     // deployment can admit tenants without a dashboard and a decision made
     // in the dashboard is never undone by a restart.
-    ? usable { ( az_seed_allowed ( g_az_allowed ) ( now_seconds ) ) } {}
+    ? usable { ( az_seed_allowed ( string_data ( g_az_allowed ) ) ( now_seconds ) ) } {}
     // configure/configure_tenancy copy what they are given, so these go
     // with this scope. (They used to back the globals directly and were
     // deliberately leaked; that was a leak a service would never notice and
@@ -347,15 +359,15 @@ unsafe @ anomaly_authz_configure_tenancy b multi s allowed → v {
 
 @ anomaly_authz_simple → b { ^ == g_az_mode AZ_MODE_SIMPLE }
 
-@ anomaly_authz_owner_tenant → s { ^ ( g_az_owner ) }
+@ anomaly_authz_owner_tenant → String { ^ ( g_az_owner ) }
 
 @ anomaly_authz_open_ingest → b { ^ g_az_open_ingest }
 
-@ anomaly_authz_issuer → s { ^ ( g_az_issuer ) }
+@ anomaly_authz_issuer → String { ^ ( g_az_issuer ) }
 
-@ anomaly_authz_client_id → s { ^ ( g_az_client_id ) }
+@ anomaly_authz_client_id → String { ^ ( g_az_client_id ) }
 
-@ anomaly_authz_audience → s { ^ ( g_az_audience ) }
+@ anomaly_authz_audience → String { ^ ( g_az_audience ) }
 
 // ── The principal ─────────────────────────────────────────────────────
 
@@ -411,7 +423,8 @@ unsafe @ anomaly_authz_configure_tenancy b multi s allowed → v {
     // In simple mode there is one organisation and its admin is everyone,
     // so there is no service to administer separately.
     ? ( anomaly_authz_enabled ) {} { ^ F }
-    : s owner ( g_az_owner )
+    : String owner_own ( g_az_owner )
+    : s owner ( string_data owner_own )
     ? > ( nurl_str_len owner ) 0 {} { ^ F }
     : String key ( __az_org_key owner )
     : b same == ( nurl_str_eq ( string_data key ) ( string_data . p org ) ) 1
@@ -829,7 +842,8 @@ unsafe @ anomaly_authz_configure_tenancy b multi s allowed → v {
 // tenant nobody has decided on is recorded as pending and refused.
 @ az_tenant_admitted s tid i now → b {
     ? > ( nurl_str_len tid ) 0 {} { ^ F }
-    : s owner ( g_az_owner )
+    : String owner_own ( g_az_owner )
+    : s owner ( string_data owner_own )
     ? > ( nurl_str_len owner ) 0 {
         : String ok ( __az_lower owner )
         : b is_owner == ( nurl_str_eq ( string_data ok ) tid ) 1
@@ -1508,10 +1522,10 @@ unsafe @ anomaly_authz_configure_tenancy b multi s allowed → v {
 
 // The provider, discovered on first use. None when discovery fails, which
 // makes every token unverifiable — a closed door, not an open one.
-unsafe @ __az_provider → ?OidcProvider {
-    ?? g_az_prov { T kept → { ^ @ ?OidcProvider { T ( OidcProvider_share kept ) } } F → {} }
+@ __az_provider → ?OidcProvider {
+    ?? ( locked_get [? OidcProvider] g_az_prov ) { T kept → { ^ @ ?OidcProvider { T kept } } F → {} }
     ? g_az_multi { ^ ( __az_provider_multi ) } {}
-    ?? ( oidc_provider_discover ( g_az_issuer ) ) {
+    ?? ( oidc_provider_discover ( string_data ( g_az_issuer ) ) ) {
         T p → {
             ( __az_keep_provider p )
             ^ @ ?OidcProvider { T p }
@@ -1528,7 +1542,7 @@ unsafe @ __az_provider → ?OidcProvider {
 // any particular provider is hardcoded — the template and the key set both
 // come from the provider's own document.
 @ __az_provider_multi → ?OidcProvider {
-    : String url ( oidc_discovery_url ( g_az_issuer ) )
+    : String url ( oidc_discovery_url ( string_data ( g_az_issuer ) ) )
     : HttpClient hc ( http_client_new )
     : ~ String body ( string_new )
     : ~ b got F
@@ -1562,7 +1576,7 @@ unsafe @ __az_provider → ?OidcProvider {
         ^ @ ?OidcProvider { F }
     }
 
-    : OidcProvider p ( oidc_provider_new ( g_az_issuer ) )
+    : OidcProvider p ( oidc_provider_new ( string_data ( g_az_issuer ) ) )
     ( oidc_provider_set_jwks_uri p ( string_data jwks ) )
     ( anomaly_authz_set_iss_tmpl ( string_data tmpl ) )
     ( __az_keep_provider p )
@@ -1571,20 +1585,21 @@ unsafe @ __az_provider → ?OidcProvider {
 
 // One share of `p` stays in g_az_prov until it is replaced or forgotten;
 // the share kept before is released by the assignment.
-unsafe @ __az_keep_provider OidcProvider p → v {
-    = g_az_prov @ ?OidcProvider { T ( OidcProvider_share p ) }
+@ __az_keep_provider OidcProvider p → v {
+    ( locked_set [? OidcProvider] g_az_prov @ ?OidcProvider { T ( OidcProvider_share p ) } )
 }
 
 // The cached provider's share goes.
-unsafe @ __az_forget_provider → v {
-    = g_az_prov @ ?OidcProvider { F }
+@ __az_forget_provider → v {
+    ( locked_set [? OidcProvider] g_az_prov @ ?OidcProvider { F } )
 }
 
 // The issuer a token from tenant `tid` must carry: the provider's own
 // template with `{tenantid}` replaced. Empty when there is no template or
 // no tenant, which is a refusal rather than a wildcard.
 @ __az_issuer_for s tid → String {
-    : ( Slice u ) g_az_iss_tmpl_b ( slice_of_str ( g_az_iss_tmpl ) )
+    : String g_az_iss_tmpl_b_own ( g_az_iss_tmpl )
+    : ( Slice u ) g_az_iss_tmpl_b ( slice_of_str ( string_data g_az_iss_tmpl_b_own ) )
     : i tn ( slice_len [u] g_az_iss_tmpl_b )
     ? & > tn 0 > ( nurl_str_len tid ) 0 {} { ^ ( string_new ) }
     : s needle `{tenantid}`
@@ -1619,9 +1634,9 @@ unsafe @ __az_forget_provider → v {
 // "multi-tenant" asks for, and a deliberate setting rather than a default
 // nobody saw.
 @ __az_tenant_allowed s tid → b {
-    : i n ( nurl_str_len ( g_az_allowed ) )
+    : i n ( nurl_str_len ( string_data ( g_az_allowed ) ) )
     ? > n 0 {} { ^ T }
-    : String list ( string_from ( g_az_allowed ) )
+    : String list ( string_from ( string_data ( g_az_allowed ) ) )
     : ( Vec String ) parts ( string_split list `,` )
     : ~ b ok F
     : i np ( vec_len [String] parts )
@@ -1694,7 +1709,7 @@ unsafe @ __az_forget_provider → v {
             // the token's tenant substituted — the configured value is
             // then an AUTHORITY (.../organizations/v2.0), which no token
             // ever names, so comparing against it refuses everything.
-            : ~ String want_iss ( string_from ( g_az_issuer ) )
+            : ~ String want_iss ( string_from ( string_data ( g_az_issuer ) ) )
             ? g_az_multi {
                 : String tid0 ( __az_unverified_tid token )
                 = want_iss ( __az_issuer_for ( string_data tid0 ) )
@@ -1713,9 +1728,8 @@ unsafe @ __az_forget_provider → v {
             : ~ ? OidcIdentity got @ ?OidcIdentity { F }
             : ~ i attempt 0
             ~ < attempt 2 {
-                : ~ s aud ( g_az_audience )
-                ? == attempt 1 { = aud ( g_az_client_id ) } {}
-                : OidcPolicy pol ( oidc_policy_new ( string_data want_iss ) aud )
+                : String aud ? == attempt 1 ( g_az_client_id ) ( g_az_audience )
+                : OidcPolicy pol ( oidc_policy_new ( string_data want_iss ) ( string_data aud ) )
                 ?? ( oidc_verify_token p pol token ) {
                     T id → {
                         = got @ ?OidcIdentity { T id }

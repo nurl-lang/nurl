@@ -549,8 +549,8 @@ b,2.5`
 
 // The first train of a model that arrived as a whole calibrates its
 // margins once; a second call, and a later run, leave them alone.
-unsafe @ test_autotune Store st → v {
-    : Model mo ( model_open_at st `tuned` 1000 )
+@ test_autotune Store st → v {
+    : ~ Model mo ( model_open_at st `tuned` 1000 )
     ( model_set_limits mo 10 150000 )
     ( model_set_schedule mo 100000 100000 )
     : ~ i k 0
@@ -566,23 +566,22 @@ unsafe @ test_autotune Store st → v {
     }
     : i tr ( model_force_train_at mo + 1000 * 120 60 )
     ( check > tr 0 `autotune: trained` )
-    : Meta mm__h ( Meta_share ( model_metadata mo ) )
-    : *MetaImpl mm ( _Meta_ptr mm__h )
+    : ~ Meta mm ( model_metadata mo )
     ( check == . mm tuned_at 0 `autotune: never tuned yet` )
-    : f before ( meta_version_margin mm__h `short_term` -1.0 )
+    : f before ( meta_version_margin mm `short_term` -1.0 )
     ( check ! ( model_autotune_at mo 0.005 9998 ) `autotune: a rate that would flag no row of 120 does nothing` )
-    ( check == . mm tuned_at 0 `autotune: and leaves the model untuned for a bigger ring` )
+    ( check == . ( model_metadata mo ) tuned_at 0 `autotune: and leaves the model untuned for a bigger ring` )
     ( check ( model_autotune_at mo 0.05 9999 ) `autotune: the first train calibrates` )
-    ( check == . mm tuned_at 9999 `autotune: and remembers when` )
-    : f after ( meta_version_margin mm__h `short_term` -1.0 )
+    ( check == . ( model_metadata mo ) tuned_at 9999 `autotune: and remembers when` )
+    : f after ( meta_version_margin ( model_metadata mo ) `short_term` -1.0 )
     ( check ! ( near before after ) `autotune: the margin moved` )
     ( check ! ( model_autotune_at mo 0.05 10000 ) `autotune: a second call does nothing` )
-    ( check == . mm tuned_at 9999 `autotune: the first time stands` )
+    ( check == . ( model_metadata mo ) tuned_at 9999 `autotune: the first time stands` )
     ( check ! ( model_autotune_at mo 0.0 10001 ) `autotune: rate 0 does nothing` )
     // the metadata carries it
-    : String js ( meta_to_json_str mm__h )
+    : String js ( meta_to_json_str ( model_metadata mo ) )
     ?? ( meta_from_json_str ( string_data js ) ) {
-        T m2 → { ( check == . ( _Meta_ptr m2 ) tuned_at 9999 `autotune: tuned_at survives the JSON round trip` ) }
+        T m2 → { ( check == . m2 tuned_at 9999 `autotune: tuned_at survives the JSON round trip` ) }
         F _ → { ( check F `autotune: metadata parses back` ) }
     }
 }
@@ -606,7 +605,7 @@ unsafe @ test_autotune Store st → v {
 
 @ nop → v {}
 
-unsafe @ test_run Store st → v {
+@ test_run Store st → v {
     : String id ( make_source )
     ( check > ( string_len id ) 0 `run: source made` )
     : i now + T_0600 1800
@@ -633,11 +632,10 @@ unsafe @ test_run Store st → v {
         F _ → { ( check F `run: reload` ) }
     }
     ( check ( store_exists st `helsinki_weather` ) `run: the model exists now` )
-    : Model mo__h ( model_open st `helsinki_weather` )
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    ( check == ( model_n_points mo__h ) 3 `run: the model holds three points` )
-    ( check == ( model_last_ts mo__h ) T_0600 `run: the newest point carries the observation's clock` )
-    : *MetaImpl mm ( _Meta_ptr . mo meta )
+    : ~ Model mo ( model_open st `helsinki_weather` )
+    ( check == ( model_n_points mo ) 3 `run: the model holds three points` )
+    ( check == ( model_last_ts mo ) T_0600 `run: the newest point carries the observation's clock` )
+    : Meta mm . mo meta
     ( check ! . mm count_clock `run: a time clock` )
 
     // The same rows again, in the window the next run would ask for:
@@ -665,8 +663,7 @@ unsafe @ test_run Store st → v {
     }
 
     // Only the chosen features land: lat and lon were not chosen.
-    : Model mo3__h ( model_open st `helsinki_weather` )
-    : *ModelImpl mo3 ( _Model_ptr mo3__h )
+    : ~ Model mo3 ( model_open st `helsinki_weather` )
     ?? ( vec_get [String] . mo3 lines 0 ) {
         T line → {
             ( check ( string_contains line `"t2m"` ) `run: t2m stored` )
@@ -719,7 +716,7 @@ unsafe @ test_run Store st → v {
 
 // ── wide ──────────────────────────────────────────────────────────────
 
-unsafe @ test_wide Store st → v {
+@ test_wide Store st → v {
     ( check ( wfs_caps_has_stored CAPS_XML ) `wide: capabilities mention stored queries` )
     ( check ! ( wfs_caps_has_stored WIDE_XML ) `wide: a collection does not` )
     : Json cat ( wfs_catalog CAPS_XML )
@@ -876,9 +873,8 @@ unsafe @ test_wide Store st → v {
         }
         F _ → { ( check F `type run: reload` ) }
     }
-    : Model mo__h ( model_open st `dwd_t2m` )
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    ( check == ( model_n_points mo__h ) 3 `type run: model holds three points` )
+    : ~ Model mo ( model_open st `dwd_t2m` )
+    ( check == ( model_n_points mo ) 3 `type run: model holds three points` )
     : Json mj ( meta_to_json . mo meta )
     ?? ( json_obj_get mj `column_types` ) {
         T ct → {

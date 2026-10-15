@@ -10,7 +10,6 @@
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
-$ `stdlib/std/arc.nu`
 $ `image.nu`
 
 & `X11` @ XOpenDisplay *u name → *u
@@ -59,25 +58,15 @@ $ `image.nu`
 
 // Pointers (Display*, GC, XImage*) carried as i64; w/h the frame size. The
 // pixel buffer the XImage points at is the window's own Vec.
-: XWinImpl { i dpy i win i gc i img ( Vec u ) data i w i h i ok }
+// A window, owned by one holder; its drop closes the display connection.
+: XWin { i dpy i win i gc i img ( Vec u ) data i w i h i ok }
 
-% Drop XWinImpl { @ drop XWinImpl x → v { ( __xwin_release . x dpy . x gc . x img ) } }
-
-// A window is a handle: every copy is the same window, and its last owner
-// closes the display connection (xwin_close does that now — an optional
-// early release).
-: XWin { ( Arc XWinImpl ) a }
-
-@ XWin_share XWin h → XWin { ^ @ XWin { ( arc_clone [XWinImpl] . h a ) } }
-
-@ XWin_drop sink XWin h → v {}
-
-unsafe @ __XWin_ptr XWin h → *XWinImpl { ^ ( arc_ptr [XWinImpl] . h a ) }
+% Drop XWin { @ drop XWin x → v { ( __xwin_release . x dpy . x gc . x img ) } }
 
 // The window that never opened (ok=0): w×h is still the frame size.
-@ xwin_none i w i h → XWin { ^ @ XWin { ( arc_new [XWinImpl] @ XWinImpl { 0 0 0 0 ( vec_new [u] ) w h 0 } ) } }
+@ xwin_none i w i h → XWin { ^ @ XWin { 0 0 0 0 ( vec_new [u] ) w h 0 } }
 
-@ xwin_ok XWin h → b { ^ != . ( arc_get [XWinImpl] . h a ) ok 0 }
+@ xwin_ok XWin h → b { ^ != . h ok 0 }
 
 // Free the XImage (not its pixels — they are the Vec's: XDestroyImage frees
 // a non-null data pointer, so it is cleared first) and the GC, and close the
@@ -112,12 +101,11 @@ unsafe @ xwin_open i w i h s title → XWin {
     : ( Vec u ) data ( vec_zeroed [u] * * w h 4 )  // 32-bit BGRX per pixel
     : *u img ( XCreateImage dpy vis depth 2 0 ( vec_data [u] data ) w h 32 0 )  // ZPixmap=2, pad 32
     ( XFlush dpy )
-    ^ @ XWin { ( arc_new [XWinImpl] @ XWinImpl { # i dpy win # i gc # i img data w h 1 } ) }
+    ^ @ XWin { # i dpy win # i gc # i img data w h 1 }
 }
 
 // Blit one RGB Image into the window. The frame must match the window size.
-unsafe @ xwin_show XWin x__h Image im → v {
-    : *XWinImpl x ( __XWin_ptr x__h )
+unsafe @ xwin_show inout XWin x Image im → v {
     ? == . x ok 0 { ^ {} } {}
     : *u data ( vec_data [u] . x data )
     : i w . x w
@@ -141,8 +129,7 @@ unsafe @ xwin_show XWin x__h Image im → v {
 
 // Drain pending events; return T if the user asked to close (key, click, or
 // the window-manager close button).
-unsafe @ xwin_should_close XWin x__h → b {
-    : *XWinImpl x ( __XWin_ptr x__h )
+unsafe @ xwin_should_close XWin x → b {
     ? == . x ok 0 { ^ T } {}
     : *u dpy # *u . x dpy
     : ( Vec u ) evv ( vec_zeroed [u] 256 )  // an XEvent
@@ -157,12 +144,5 @@ unsafe @ xwin_should_close XWin x__h → b {
     ^ quit
 }
 
-// Close the window now (optional — its last owner does it anyway).
-unsafe @ xwin_close XWin x__h → v {
-    : *XWinImpl x ( __XWin_ptr x__h )
-    ( __xwin_release . x dpy . x gc . x img )
-    = . x dpy 0
-    = . x gc 0
-    = . x img 0
-    = . x ok 0
-}
+// Close the window now (optional — its drop does it anyway).
+@ xwin_close sink XWin x → v {}

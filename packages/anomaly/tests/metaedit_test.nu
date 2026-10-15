@@ -55,7 +55,7 @@ $ `src/dynamic.nu`
     ^ / # f g_lcg 2147483648.0
 }
 
-@ ingest_temp Model mo f temp i at → v {
+@ ingest_temp inout Model mo f temp i at → v {
     : Json j ( json_obj_new )
     ( json_obj_set j `temp` ( json_float temp ) )
     : !Verdict String r ( model_ingest_at mo j at )
@@ -66,7 +66,7 @@ $ `src/dynamic.nu`
 }
 
 // A model with 60 points of a tight temp regime, trained.
-@ seed Model mo → v {
+@ seed inout Model mo → v {
     ( model_set_limits mo 20 150000 )
     ( model_set_schedule mo 10 1000 )
     : ~ i k 1
@@ -78,7 +78,7 @@ $ `src/dynamic.nu`
 }
 
 // Does the verdict of a probe carry a slice named `vname`?
-@ has_version Model mo s vname → b {
+@ has_version inout Model mo s vname → b {
     : Json j ( json_obj_new )
     ( json_obj_set j `temp` ( json_float 20.2 ) )
     : !Verdict String r ( model_detect_only mo j )
@@ -103,7 +103,7 @@ $ `src/dynamic.nu`
 }
 
 // Apply a JSON patch written as text; returns the error text (owned).
-@ patch_text Model mo s src → String {
+@ patch_text inout Model mo s src → String {
     : !Json JsonError r ( json_parse src )
     ?? r {
         T j → {
@@ -116,17 +116,16 @@ $ `src/dynamic.nu`
 
 // ── Scenario 1: partial patches, adds, replace ────────────────────────
 
-unsafe @ test_patch Store st → v {
+@ test_patch Store st → v {
     = g_lcg 1
-    : Model mo ( model_open_at st `patch` T0 )
+    : ~ Model mo ( model_open_at st `patch` T0 )
     ( seed mo )
-    : Meta mm__h ( Meta_share ( model_metadata mo ) )
-    : *MetaImpl mm ( _Meta_ptr mm__h )
+    : ~ Meta mm ( model_metadata mo )
 
     : i before ( vec_len [VerCfg] . mm versions )
     : String e1 ( patch_text mo `{"versions":{"daily":{"decision_margin":0.33}}}` )
     ( check == ( string_len e1 ) 0 `patch: a one-field version object is accepted` )
-    ( check ( near ( meta_version_margin mm__h `daily` -1.0 ) 0.33 ) `patch: the named field changed` )
+    ( check ( near ( meta_version_margin ( model_metadata mo ) `daily` -1.0 ) 0.33 ) `patch: the named field changed` )
     // The audit trail promises "every change of a version's alert line";
     // a margin set through the metadata patch is one.
     : Json aud ( model_audit mo 0 )
@@ -142,11 +141,11 @@ unsafe @ test_patch Store st → v {
         }
         F _ → { ( check F `patch: the audit entry reads back` ) }
     }
-    ( check == ( vec_len [VerCfg] . mm versions ) before `patch: no version was added or lost` )
-    ( check == ( meta_version_margin mm__h `weekly` -1.0 ) 0.06 `patch: other versions are untouched` )
+    ( check == ( vec_len [VerCfg] . ( model_metadata mo ) versions ) before `patch: no version was added or lost` )
+    ( check == ( meta_version_margin ( model_metadata mo ) `weekly` -1.0 ) 0.06 `patch: other versions are untouched` )
 
-    : i at_daily ( meta_find_version mm__h `daily` )
-    ?? ( vec_get [VerCfg] . mm versions at_daily ) {
+    : i at_daily ( meta_find_version ( model_metadata mo ) `daily` )
+    ?? ( vec_get [VerCfg] . ( model_metadata mo ) versions at_daily ) {
         T vc → {
             ( check == . vc window_min 1440 `patch: omitted fields keep their value` )
             ( check == . vc n_estimators 300 `patch: omitted forest size keeps its value` )
@@ -161,16 +160,16 @@ unsafe @ test_patch Store st → v {
     ( check > ( string_len etypo ) 0 `add: a misspelt version name is refused, not silently created` )
     ( check ( string_contains etypo `autoenocder` ) `add: and the refusal names it` )
     ( check ( string_contains etypo `replace_versions` ) `add: and says how a version IS added` )
-    ( check < ( meta_find_version mm__h `autoenocder` ) 0 `add: nothing was created` )
-    ( check == ( vec_len [VerCfg] . mm versions ) before `add: and the version list is as it was` )
+    ( check < ( meta_find_version ( model_metadata mo ) `autoenocder` ) 0 `add: nothing was created` )
+    ( check == ( vec_len [VerCfg] . ( model_metadata mo ) versions ) before `add: and the version list is as it was` )
 
     // Adding one is the whole-list flag away, which is what the JSON
     // editor sends.
     : String e2 ( patch_text mo `{"versions":{"short_term":{},"daily":{},"weekly":{},"seasonal":{},"timevector":{},"range_guard":{},"flatline":{},"forecast":{},"autoencoder":{},"hourly":{"window_minutes":60,"n_estimators":150}},"replace_versions":true}` )
     ( check == ( string_len e2 ) 0 `add: a whole-list patch may name a version the model does not have` )
-    : i at_h ( meta_find_version mm__h `hourly` )
+    : i at_h ( meta_find_version ( model_metadata mo ) `hourly` )
     ( check >= at_h 0 `add: the new version is in the metadata` )
-    ?? ( vec_get [VerCfg] . mm versions at_h ) {
+    ?? ( vec_get [VerCfg] . ( model_metadata mo ) versions at_h ) {
         T vc → {
             ( check == . vc window_min 60 `add: the given fields are honoured` )
             ( check == . vc n_estimators 150 `add: forest size honoured` )
@@ -188,9 +187,9 @@ unsafe @ test_patch Store st → v {
     : String e3 ( patch_text mo
     `{"versions":{"short_term":{},"hourly":{}},"replace_versions":true}` )
     ( check == ( string_len e3 ) 0 `replace: accepted` )
-    ( check == ( vec_len [VerCfg] . mm versions ) 2 `replace: only the named versions survive` )
-    ( check < ( meta_find_version mm__h `daily` ) 0 `replace: an omitted version is gone` )
-    ( check >= ( meta_find_version mm__h `hourly` ) 0 `replace: a named version stays` )
+    ( check == ( vec_len [VerCfg] . ( model_metadata mo ) versions ) 2 `replace: only the named versions survive` )
+    ( check < ( meta_find_version ( model_metadata mo ) `daily` ) 0 `replace: an omitted version is gone` )
+    ( check >= ( meta_find_version ( model_metadata mo ) `hourly` ) 0 `replace: a named version stays` )
 
     // votes: the model's own consensus rule. It is checked against the
     // versions as the patch LEAVES them, so a patch may switch versions on
@@ -198,27 +197,26 @@ unsafe @ test_patch Store st → v {
     // than there are versions to give it.
     : String ev1 ( patch_text mo `{"votes":2}` )
     ( check == ( string_len ev1 ) 0 `votes: a consensus within reach is accepted` )
-    ( check == . mm votes 2 `votes: and applied` )
+    ( check == . ( model_metadata mo ) votes 2 `votes: and applied` )
     : String ev2 ( patch_text mo `{"votes":20}` )
     ( check > ( string_len ev2 ) 0 `votes: more agreement than there are versions is refused` )
     ( check ( string_contains ev2 `versions must agree` ) `votes: and the refusal says why` )
-    ( check == . mm votes 2 `votes: a refused patch leaves it where it was` )
+    ( check == . ( model_metadata mo ) votes 2 `votes: a refused patch leaves it where it was` )
     : String ev3 ( patch_text mo `{"votes":0}` )
     ( check > ( string_len ev3 ) 0 `votes: zero is refused` )
     : String ev4 ( patch_text mo `{"votes":1}` )
     ( check == ( string_len ev4 ) 0 `votes: back to one` )
-    ( check == . mm votes 1 `votes: one again` )
+    ( check == . ( model_metadata mo ) votes 1 `votes: one again` )
 
     // The schedule half of the patch.
     : String e4 ( patch_text mo `{"schedule":{"below_max":25,"at_max":500}}` )
     ( check == ( string_len e4 ) 0 `schedule: accepted` )
-    ( check == . mm sched_below 25 `schedule: below_max applied` )
-    ( check == . mm sched_at_max 500 `schedule: at_max applied` )
+    ( check == . ( model_metadata mo ) sched_below 25 `schedule: below_max applied` )
+    ( check == . ( model_metadata mo ) sched_at_max 500 `schedule: at_max applied` )
 
     // Everything survived the round trip through disk.
     : Model re ( model_open_at st `patch` T0 )
-    : Meta rm__h ( model_metadata re )
-    : *MetaImpl rm ( _Meta_ptr rm__h )
+    : ~ Meta rm ( model_metadata re )
     ( check == ( vec_len [VerCfg] . rm versions ) 2 `persist: the version list reloads` )
     ( check == . rm votes 1 `persist: the consensus rule reloads` )
     ( check == . rm sched_below 25 `persist: the schedule reloads` )
@@ -226,18 +224,17 @@ unsafe @ test_patch Store st → v {
 
 // ── Scenario 2: clamping ──────────────────────────────────────────────
 
-unsafe @ test_clamp Store st → v {
+@ test_clamp Store st → v {
     = g_lcg 7
-    : Model mo ( model_open_at st `clamp` T0 )
+    : ~ Model mo ( model_open_at st `clamp` T0 )
     ( seed mo )
-    : Meta mm__h ( Meta_share ( model_metadata mo ) )
-    : *MetaImpl mm ( _Meta_ptr mm__h )
+    : ~ Meta mm ( model_metadata mo )
 
     : String e ( patch_text mo
     `{"versions":{"daily":{"n_estimators":-5,"max_samples":0,"window_minutes":-60,"window_size":8,"step_size":0,"decision_margin":-1.0,"contamination":0.9}}}` )
     ( check == ( string_len e ) 0 `clamp: a nonsense config is accepted, not rejected` )
-    : i at ( meta_find_version mm__h `daily` )
-    ?? ( vec_get [VerCfg] . mm versions at ) {
+    : i at ( meta_find_version ( model_metadata mo ) `daily` )
+    ?? ( vec_get [VerCfg] . ( model_metadata mo ) versions at ) {
         T vc → {
             ( check == . vc n_estimators 1 `clamp: a forest has at least one tree` )
             ( check == . vc max_samples 1 `clamp: max_samples floors at 1` )
@@ -251,8 +248,8 @@ unsafe @ test_clamp Store st → v {
 
     // 0 contamination means "auto" (-1), the same as the string spelling.
     : String e2 ( patch_text mo `{"versions":{"weekly":{"contamination":0}}}` )
-    : i atw ( meta_find_version mm__h `weekly` )
-    ?? ( vec_get [VerCfg] . mm versions atw ) {
+    : i atw ( meta_find_version ( model_metadata mo ) `weekly` )
+    ?? ( vec_get [VerCfg] . ( model_metadata mo ) versions atw ) {
         T vc → { ( check < . vc contamination 0.0 `clamp: contamination 0 means auto` ) }
         F _ → { ( check F `clamp: weekly readable` ) }
     }
@@ -262,8 +259,8 @@ unsafe @ test_clamp Store st → v {
     : String aerr ( model_train_autoencoder mo hidden -1.0 )
     ( check == ( string_len aerr ) 0 `clamp: the autoencoder trains` )
     : String e3 ( patch_text mo `{"versions":{"autoencoder":{"decision_margin":0.07}}}` )
-    : i ata ( meta_find_version mm__h `autoencoder` )
-    ?? ( vec_get [VerCfg] . mm versions ata ) {
+    : i ata ( meta_find_version ( model_metadata mo ) `autoencoder` )
+    ?? ( vec_get [VerCfg] . ( model_metadata mo ) versions ata ) {
         T vc → {
             ( check == . vc n_estimators 0 `clamp: the autoencoder keeps 0 trees` )
             ( check == . vc max_samples 0 `clamp: the autoencoder keeps 0 samples` )
@@ -275,16 +272,15 @@ unsafe @ test_clamp Store st → v {
 
 // ── Scenario 3: enable / disable ──────────────────────────────────────
 
-unsafe @ test_toggle Store st → v {
+@ test_toggle Store st → v {
     = g_lcg 3
-    : Model mo__h ( model_open_at st `toggle` T0 )
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    ( seed mo__h )
-    ( check ( has_version mo__h `weekly` ) `toggle: weekly scores while enabled` )
+    : ~ Model mo ( model_open_at st `toggle` T0 )
+    ( seed mo )
+    ( check ( has_version mo `weekly` ) `toggle: weekly scores while enabled` )
 
-    ( check ( model_set_version_enabled mo__h `weekly` F ) `toggle: disabling a known version` )
-    ( check == ( model_set_version_enabled mo__h `nosuch` F ) F `toggle: an unknown version is refused` )
-    ( check == ( has_version mo__h `weekly` ) F `toggle: a disabled version stops scoring at once` )
+    ( check ( model_set_version_enabled mo `weekly` F ) `toggle: disabling a known version` )
+    ( check == ( model_set_version_enabled mo `nosuch` F ) F `toggle: an unknown version is refused` )
+    ( check == ( has_version mo `weekly` ) F `toggle: a disabled version stops scoring at once` )
     : ~ b blob_gone T
     ?? ( store_load_forest . mo store `toggle` `weekly` ) {
         T vm → { = blob_gone F }
@@ -293,7 +289,7 @@ unsafe @ test_toggle Store st → v {
     ( check blob_gone `toggle: the disabled version's forest blob is gone` )
 
     // Re-enabling does not resurrect a stale forest: it waits for a retrain.
-    : Model re ( model_open_at st `toggle` T0 )
+    : ~ Model re ( model_open_at st `toggle` T0 )
     ( check ( model_set_version_enabled re `weekly` T ) `toggle: re-enabling a known version` )
     ( check == ( has_version re `weekly` ) F `toggle: re-enabled but not yet retrained = no verdict` )
     : i _n ( model_force_train_at re + T0 * 62 60 )
@@ -312,12 +308,11 @@ unsafe @ test_toggle Store st → v {
 
 // ── Scenario 4: refused shapes ────────────────────────────────────────
 
-unsafe @ test_errors Store st → v {
+@ test_errors Store st → v {
     = g_lcg 5
-    : Model mo ( model_open_at st `errs` T0 )
+    : ~ Model mo ( model_open_at st `errs` T0 )
     ( seed mo )
-    : Meta mm0__h ( Meta_share ( model_metadata mo ) )
-    : *MetaImpl mm0 ( _Meta_ptr mm0__h )
+    : ~ Meta mm0 ( model_metadata mo )
 
     : String e1 ( patch_text mo `{}` )
     ( check > ( string_len e1 ) 0 `error: an empty patch is refused` )
@@ -335,8 +330,8 @@ unsafe @ test_errors Store st → v {
     : String e6 ( patch_text mo `{"schedule":{"forecast":500},"versions":{"daily":{"window_size":48}}}` )
     ( check ( string_contains e6 `schedule.forecast` ) `error: an unknown schedule key is named` )
     : ~ i daily_ws -1
-    : i dat ( meta_find_version mm0__h `daily` )
-    ? >= dat 0 { ?? ( vec_get [VerCfg] . mm0 versions dat ) { T dvc → { = daily_ws . dvc window_size } F _ → {} } } {}
+    : i dat ( meta_find_version ( model_metadata mo ) `daily` )
+    ? >= dat 0 { ?? ( vec_get [VerCfg] . ( model_metadata mo ) versions dat ) { T dvc → { = daily_ws . dvc window_size } F _ → {} } } {}
     ( check == daily_ws 0 `error: the rest of a refused patch is not applied` )
     : String e7 ( patch_text mo `{"versions":{"daily":{"window":48}}}` )
     ( check ( string_contains e7 `versions.daily.window` ) `error: an unknown version field is named` )
@@ -346,8 +341,7 @@ unsafe @ test_errors Store st → v {
     ( check ( string_contains e9 `versions.daily must be a JSON object` ) `error: a version value that is not an object is named` )
 
     // A refused patch changes nothing.
-    : Meta mm__h ( Meta_share ( model_metadata mo ) )
-    : *MetaImpl mm ( _Meta_ptr mm__h )
+    : ~ Meta mm ( model_metadata mo )
     ( check == . mm sched_below 10 `error: a refused patch leaves the schedule alone` )
 }
 
@@ -359,32 +353,30 @@ unsafe @ test_errors Store st → v {
 // file path or the feature order, which is why — unlike `name` — it may be
 // edited freely, hold spaces, and be cleared back to empty.
 
-unsafe @ test_alias Store st → v {
+@ test_alias Store st → v {
     = g_lcg 31
-    : Model mo ( model_open_at st `aliased` T0 )
+    : ~ Model mo ( model_open_at st `aliased` T0 )
     ( seed mo )
-    : Meta mm__h ( Meta_share ( model_metadata mo ) )
-    : *MetaImpl mm ( _Meta_ptr mm__h )
+    : ~ Meta mm ( model_metadata mo )
     ( check == ( string_len . mm alias ) 0 `alias: a fresh model has none` )
 
     : String e1 ( patch_text mo `{"alias":"Pannuhuone"}` )
     ( check == ( string_len e1 ) 0 `alias: a patch setting it is accepted` )
-    ( check == ( nurl_str_eq ( string_data . mm alias ) `Pannuhuone` ) 1 `alias: it took the value` )
+    ( check == ( nurl_str_eq ( string_data . ( model_metadata mo ) alias ) `Pannuhuone` ) 1 `alias: it took the value` )
 
     // It survives a round trip through the stored metadata, which is the
     // whole point of putting it there rather than in a side table.
     : Model mo2 ( model_open_at st `aliased` T0 )
-    : Meta mm2__h ( model_metadata mo2 )
-    : *MetaImpl mm2 ( _Meta_ptr mm2__h )
+    : ~ Meta mm2 ( model_metadata mo2 )
     ( check == ( nurl_str_eq ( string_data . mm2 alias ) `Pannuhuone` ) 1 `alias: it persists across a reopen` )
 
     // Editing and clearing both work; empty means "go by the name".
     : String e2 ( patch_text mo `{"alias":"Boiler room"}` )
     ( check == ( string_len e2 ) 0 `alias: it can be edited` )
-    ( check == ( nurl_str_eq ( string_data . mm alias ) `Boiler room` ) 1 `alias: the edit took` )
+    ( check == ( nurl_str_eq ( string_data . ( model_metadata mo ) alias ) `Boiler room` ) 1 `alias: the edit took` )
     : String e3 ( patch_text mo `{"alias":""}` )
     ( check == ( string_len e3 ) 0 `alias: it can be cleared` )
-    ( check == ( string_len . mm alias ) 0 `alias: cleared back to empty` )
+    ( check == ( string_len . ( model_metadata mo ) alias ) 0 `alias: cleared back to empty` )
 
     // A patch that names only the alias is a complete patch — the "at least
     // one key" rule has to count it, or the field is unreachable alone.
@@ -394,14 +386,14 @@ unsafe @ test_alias Store st → v {
     // Refusals leave it alone.
     : String e5 ( patch_text mo `{"alias":42}` )
     ( check > ( string_len e5 ) 0 `alias: a non-string is refused` )
-    ( check == ( nurl_str_eq ( string_data . mm alias ) `Solo` ) 1 `alias: a refused patch keeps the old value` )
+    ( check == ( nurl_str_eq ( string_data . ( model_metadata mo ) alias ) `Solo` ) 1 `alias: a refused patch keeps the old value` )
     : String long ( string_from `{"alias":"` )
     : ~ i k 0
     ~ < k 200 { ( string_push_char long 120 ) = k + k 1 }
     ( string_push_str long `"}` )
     : String e6 ( patch_text mo ( string_data long ) )
     ( check > ( string_len e6 ) 0 `alias: an over-long alias is refused` )
-    ( check == ( nurl_str_eq ( string_data . mm alias ) `Solo` ) 1 `alias: still the old value` )
+    ( check == ( nurl_str_eq ( string_data . ( model_metadata mo ) alias ) `Solo` ) 1 `alias: still the old value` )
 
     // It is published as an editable field, which is what puts it in the
     // dashboard's generated editor.
@@ -420,12 +412,11 @@ unsafe @ test_alias Store st → v {
 
 }
 
-unsafe @ test_maxpoints Store st → v {
+@ test_maxpoints Store st → v {
     = g_lcg 11
-    : Model mo ( model_open_at st `maxpts` T0 )
+    : ~ Model mo ( model_open_at st `maxpts` T0 )
     ( seed mo )
-    : Meta mm__h ( Meta_share ( model_metadata mo ) )
-    : *MetaImpl mm ( _Meta_ptr mm__h )
+    : ~ Meta mm ( model_metadata mo )
     ( check == ( model_n_points mo ) 60 `maxpts: the ring starts at 60 points` )
 
     // Lowering the cap below the current fill evicts at once. Before, the
@@ -434,13 +425,12 @@ unsafe @ test_maxpoints Store st → v {
     // arrived.
     : String e1 ( patch_text mo `{"max_data_points":25}` )
     ( check == ( string_len e1 ) 0 `maxpts: a positive cap is accepted` )
-    ( check == . mm max_points 25 `maxpts: the metadata carries the new cap` )
+    ( check == . ( model_metadata mo ) max_points 25 `maxpts: the metadata carries the new cap` )
     ( check == ( model_n_points mo ) 25 `maxpts: the ring was trimmed on the spot` )
 
     // The trim reached the log, and the cap reloads with the model.
-    : Model re ( model_open_at st `maxpts` T0 )
-    : Meta rm__h ( model_metadata re )
-    : *MetaImpl rm ( _Meta_ptr rm__h )
+    : ~ Model re ( model_open_at st `maxpts` T0 )
+    : ~ Meta rm ( model_metadata re )
     ( check == . rm max_points 25 `maxpts: the cap survives a reopen` )
     ( check == ( model_n_points re ) 25 `maxpts: the rewritten log reloads trimmed` )
 
@@ -455,7 +445,7 @@ unsafe @ test_maxpoints Store st → v {
     ( check > ( string_len e3 ) 0 `maxpts: a non-positive cap is refused` )
     : String e4 ( patch_text re `{"max_data_points":5}` )
     ( check > ( string_len e4 ) 0 `maxpts: a cap below min_points is refused` )
-    ( check == . rm max_points 90 `maxpts: a refused cap leaves the old one` )
+    ( check == . ( model_metadata re ) max_points 90 `maxpts: a refused cap leaves the old one` )
 }
 
 @ main → i {

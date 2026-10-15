@@ -461,6 +461,25 @@ inline @ alloc_grow_pow2 i cap i need i first → i {
     ( nurl_vctl_set ctl 1 + len 1 )
 }
 
+// Append the low `w` bytes (1..8) of `x` to a byte Vec, least significant
+// first (`be`: most significant first) — one capacity check and one
+// length bump for the whole word, so a serializer writing u32/u64 fields
+// does not pay eight pushes per field.
+@ vec_push_word_u8 ( Vec u ) v i x i w b be → v {
+    ? | < w 1 > w 8 { ^ } {}
+    : s ctl . v ctl
+    : i len ( __vec_len_raw ctl )
+    ? > + len w ( __vec_cap_raw ctl ) { ( __vec_grow [u] ctl + len w ) } {}
+    : *u data # *u ( nurl_vctl_data ctl )
+    : ~ i k 0
+    ~ < k w {
+        : i sh * 8 ? be - - w 1 k k
+        = . data + len k # u & >> x sh 255
+        = k + k 1
+    }
+    ( nurl_vctl_set ctl 1 + len w )
+}
+
 // Insert `x` at index `idx`, shifting existing [idx..len) right by one.
 // Valid indices: [0..len]. idx == len behaves like vec_push. Returns
 // false if idx is out of range. Out-of-range insert is a no-op.

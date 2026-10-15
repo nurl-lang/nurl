@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.6] — 2026-10-15
+
+### Changed
+
+- Requires yoloe 0.8 (owned `Camera` and `XWin`). No change here.
+
 ## [0.3.5] — 2026-10-14
 
 ### Changed

@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.36.0] — 2026-10-15
+
+### Changed
+
+- Without `unsafe` but the three functions that compile and launch the GPU
+  kernels (`_aeg_open`, `_aeg_train`, `anom_scores_gpu`) — 248 before.
+  `Model`, `Meta`, `FcModel` and `Hist` are plain values: a model is
+  passed `inout` where it changes, a history window is shared read-only
+  as an `( Arc Hist )`.
+- The process-wide state — the authorization strings and cached OIDC
+  provider, the organisation-files root and link secret, the MCP wiring,
+  the sources in flight, the GPU kit — lives in start-time `Locked`
+  globals, and the service lock is a start-time `Mutex`. The getters for
+  the configured issuer, client id, audience, owner tenant, allowed
+  tenants and last verification error return an owned `String`.
+- The forecast fits run through `par_map_index` over a frozen share of
+  the jobs, each returning its result, instead of lanes writing through
+  raw pointers into the jobs Vec.
+- An import counts each cell into its column taken out of the Vec and
+  put back, and WFS local names are cut with `string_substr`.
+- Instruction count of the dynamic suite 6 % lower (blob writing goes
+  through the stdlib word push); wall times at parity.
+
 ## [0.35.3] — 2026-10-14
 
 ### Fixed
