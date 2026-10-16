@@ -20,7 +20,7 @@
 // the C parameter list it is launched with, from which the bindings, the
 // uniform block and the argument decoding are generated (marshal).
 
-import { K, buildWGSL, bindLayout, marshal, uniformLayout, dispatchInvocations } from "./kernels_wgsl.js";
+import { resolve, buildWGSL, bindLayout, marshal, uniformLayout, dispatchInvocations } from "./kernels_wgsl.js";
 
 export async function makeWebGPUHost() {
   // high-performance matters on multi-GPU machines: the default adapter
@@ -40,8 +40,16 @@ export async function makeWebGPUHost() {
   const memI = () => new Int32Array(memory.buffer);
 
   // ── resources ──
+  // A buffer's handle — the "device pointer" NURL holds — is its id in
+  // the high 32 bits and a byte offset in the low 32: gpu_alloc returns
+  // id << 32, and a view the program makes into a buffer (pointer +
+  // offset, as on every other backend) is that handle plus its offset.
+  // Every import decodes both; a kernel gets the offset in its uniform
+  // block (kernels_wgsl.js, p.off_<name>).
   const buffers = new Map();      // id → GPUBuffer
   let nextBuf = 1;
+  const hid = (h) => Number(BigInt.asUintN(64, BigInt(h)) >> 32n);
+  const hoff = (h) => Number(BigInt.asUintN(64, BigInt(h)) & 0xffffffffn);
   const pipelines = [];           // [null, {pipe, name}, ...] (1-based)
   const pipeByName = new Map();   // name → id
 
@@ -111,7 +119,7 @@ export async function makeWebGPUHost() {
     wgpu_pipeline: (namePtr) => {
       if (!ok) return 0n;
       const name = cstr(namePtr);
-      if (!K[name]) return 0n;
+      if (!resolve(name)) return 0n;
       let id = pipeByName.get(name);
       if (id) return BigInt(id);
       let pipe;
@@ -139,32 +147,33 @@ export async function makeWebGPUHost() {
       const b = device.createBuffer({ size: Math.max(4, Number(bytes)), usage: ST });
       const id = nextBuf++;
       buffers.set(id, b);
-      return BigInt(id);
+      return BigInt(id) << 32n;
     },
-    wgpu_free: (id) => {
-      const b = buffers.get(Number(id)); if (!b) return;
-      buffers.delete(Number(id));
-      dropCachedFor(Number(id));
+    wgpu_free: (h) => {
+      const id = hid(h);
+      const b = buffers.get(id); if (!b) return;
+      buffers.delete(id);
+      dropCachedFor(id);
       // The pending encoder may still reference it in a bind group;
       // destroying now would fail validation at submit. Defer to flush().
       if (enc) deadBufs.push(b); else b.destroy();
     },
-    wgpu_upload: (id, hostPtr, bytes) => {
-      const b = buffers.get(Number(id)); if (!b) return -1n;
+    wgpu_upload: (h, hostPtr, bytes) => {
+      const b = buffers.get(hid(h)); if (!b) return -1n;
       // writeBuffer executes in queue order — flush pending dispatches so
       // they read the buffer's OLD contents, not this write.
       flush();
       const n = Number(bytes);
-      device.queue.writeBuffer(b, 0, mem().slice(Number(hostPtr), Number(hostPtr) + n));
+      device.queue.writeBuffer(b, hoff(h), mem().slice(Number(hostPtr), Number(hostPtr) + n));
       return 0n;
     },
     wgpu_dtod: (dst, src, bytes) => {
-      const d = buffers.get(Number(dst)), sb = buffers.get(Number(src)); if (!d || !sb) return -1n;
+      const d = buffers.get(hid(dst)), sb = buffers.get(hid(src)); if (!d || !sb) return -1n;
       // Encode into the pending batch (copies can't live inside a compute
       // pass, so end it; the next launch reopens one in the same encoder).
       endPass();
       if (!enc) enc = device.createCommandEncoder();
-      enc.copyBufferToBuffer(sb, 0, d, 0, Number(bytes));
+      enc.copyBufferToBuffer(sb, hoff(src), d, hoff(dst), Number(bytes));
       return 0n;
     },
     wgpu_launch: (pipeId, total, argsPtr, nargs) => {
@@ -206,17 +215,17 @@ export async function makeWebGPUHost() {
       return 0n;
     },
     // async readback → asyncify unwind/rewind
-    wgpu_download: (hostPtr, id, bytes) => {
+    wgpu_download: (hostPtr, h, bytes) => {
       if (asy.rewinding) { asy.rewinding = false; exp.asyncify_stop_rewind(); return asy.result; }
       initStack();
-      const b = buffers.get(Number(id)); if (!b) return -1n;
+      const b = buffers.get(hid(h)); if (!b) return -1n;
       const n = Number(bytes), hp = Number(hostPtr);
       const rb = device.createBuffer({ size: n, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
       // Ride the pending batch: the readback copy is ordered after every
       // encoded dispatch, and the whole frame goes up in ONE submit.
       endPass();
       if (!enc) enc = device.createCommandEncoder();
-      enc.copyBufferToBuffer(b, 0, rb, 0, n);
+      enc.copyBufferToBuffer(b, hoff(h), rb, 0, n);
       flush();
       asy.result = 0n;
       asy.pending = rb.mapAsync(GPUMapMode.READ).then(() => {
@@ -253,12 +262,12 @@ export async function makeWebGPUHost() {
     bind(instance) { memory = instance.exports.memory; exp = instance.exports; },
     // Read device buffer `id` back without Asyncify (for a JS caller that
     // can await — tests drive the imports directly with this).
-    async readBuffer(id, bytes) {
-      const b = buffers.get(Number(id)); if (!b) throw new Error("no buffer " + id);
+    async readBuffer(h, bytes) {
+      const b = buffers.get(hid(h)); if (!b) throw new Error("no buffer " + h);
       const rb = device.createBuffer({ size: bytes, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
       endPass();
       if (!enc) enc = device.createCommandEncoder();
-      enc.copyBufferToBuffer(b, 0, rb, 0, bytes);
+      enc.copyBufferToBuffer(b, hoff(h), rb, 0, bytes);
       flush();
       await rb.mapAsync(GPUMapMode.READ);
       const out = rb.getMappedRange().slice(0);

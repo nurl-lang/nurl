@@ -17,17 +17,23 @@ a browser worker and in Deno). Device memory is a `GPUBuffer`; the one async
 op — `GPUBuffer.mapAsync` readback — is bridged with Asyncify so the
 synchronous NURL `gpu_download` returns data in wasm memory
 (`web/wgpu_asyncify.c` provides the unwind stack; build with wasmbuilder
-`--asyncify-imports env.wgpu_download`).
+`--asyncify-imports env.wgpu_download`). A buffer's handle — the device
+pointer a program holds — is its id shifted up 32 bits, so a view
+(pointer plus a byte offset, as on every other backend) names the same
+buffer at that offset; each kernel argument reads and writes from its own.
 
-Kernels are looked up by entry name, so the set must be exactly what the
-executor requests. For the onnx executor it is **checked against the
-executor itself**: each entry states the CUDA-C parameter list it implements
-(`sig`), and the bindings, uniform block and argument decoding are generated
-from that list; onnx's `tests/wgsl_census_test.nu` (no device) fails when the
-executor's kernel census holds a kernel the set lacks, a `sig` that differs
-from the recorded parameter list, a parameter type the glue cannot marshal,
-or an entry the census no longer records. Only the WGSL bodies are written by
-hand. `gpu_open` probes the set's sentinel entry (`GPU_WGSL_SENTINEL`), never
+Kernels are looked up by entry name — a checked gpukit kernel by its base
+name, the entry name without its `__gk<hash>` suffix — so the set must be
+exactly what the executor requests. For the onnx executor it is **checked
+against the executor itself**: each entry states the C parameter list it
+implements (`sig`) and the WGSL name of each buffer (`names`), and the
+bindings, uniform block and argument decoding are generated from that list;
+onnx's `tests/wgsl_census_test.nu` (no device) fails when the executor's
+kernel census holds a kernel the set lacks, a `sig` that differs from the
+recorded parameter list, buffer names that are not the bindings the kernel
+reads, two kernels under one base name, a parameter type the glue cannot
+marshal, or an entry the census no longer records. Only the WGSL bodies are
+written by hand. `gpu_open` probes the set's sentinel entry (`GPU_WGSL_SENTINEL`), never
 a real kernel name.
 
 Every WGSL kernel runs on a real WebGPU device through this host, against a

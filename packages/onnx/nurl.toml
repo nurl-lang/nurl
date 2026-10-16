@@ -8,4 +8,4 @@ nurl-version = "0.73.0"
 [dependencies]
 tensor = { path = "../tensor", version = "^0.6" }
 gpukit = { path = "../gpukit", version = "^0.11.12" }
-gpu = { path = "../gpu", version = "^0.17" }
+gpu = { path = "../gpu", version = "^0.17.6" }

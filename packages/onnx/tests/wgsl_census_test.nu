@@ -12,6 +12,9 @@
 // and no compiler. Against the kernel census (rt_kernel_census — the
 // record kernels_static.c is generated from):
 //
+//   - gpukit's kernels are checked ones, named `<base>__gk<16 hex>`; the
+//     table is keyed by the base name, so no two census kernels may share
+//     one,
 //   - every census kernel has a WGSL entry,
 //   - whose `sig` is, character for character, the parameter list the
 //     census recorded (kernels_wgsl.js generates the bindings, the
@@ -19,6 +22,9 @@
 //     is an equal cell layout),
 //   - every parameter type has a marshalling row in kernels_wgsl.js's
 //     CTYPES,
+//   - an entry's `names` (the WGSL name of each `__gk_p<k>`) is the
+//     binding the census source reads that parameter by, so a body reads
+//     the buffer it means,
 //   - the set holds no entry the census does not record (a stale kernel
 //     is dead weight that still claims a layout), and
 //   - the set carries the sentinel gpu_open probes (GPU_WGSL_SENTINEL).
@@ -54,7 +60,7 @@ $ `stdlib/core/slice.nu`
 
 @ __is_id i c → b { ^ | | | & >= c 97 <= c 122 & >= c 65 <= c 90 & >= c 48 <= c 57 == c 95 }
 
-: WgslEntry { String name String sig }
+: WgslEntry { String name String sig String names }
 
 // The table's entries: every line `<name>: { sig: "<sig>"` starting in
 // column 0 (the format kernels_wgsl.js documents for its entries).
@@ -72,7 +78,16 @@ $ `stdlib/core/slice.nu`
                     : String rest ( __sub l s0 - ( nurl_str_len l ) s0 )
                     : i q ( nurl_str_find ( string_data rest ) `"` )
                     ? >= q 0 {
-                        ( vec_push [WgslEntry] out @ WgslEntry { ( __sub l 0 colon ) ( __sub l s0 q ) } )
+                        // `, names: "<names>"` after the sig, on the same line
+                        : ~ String nms ( string_new )
+                        : String after ( __sub l + s0 q - - ( nurl_str_len l ) s0 q )
+                        : i na ( nurl_str_find ( string_data after ) `names: "` )
+                        ? >= na 0 {
+                            : String nt ( __sub ( string_data after ) + na 8 - - ( string_len after ) na 8 )
+                            : i nq ( nurl_str_find ( string_data nt ) `"` )
+                            ? >= nq 0 { = nms ( __sub ( string_data nt ) 0 nq ) } {}
+                        } {}
+                        ( vec_push [WgslEntry] out @ WgslEntry { ( __sub l 0 colon ) ( __sub l s0 q ) nms } )
                     } {}
                 } {}
             }
@@ -159,6 +174,72 @@ $ `stdlib/core/slice.nu`
     }
 }
 
+// A checked kernel's base name: `<base>__gk<16 hex>` (with `_<n>` after it
+// when two keys hashed alike) without the suffix; any other name as is.
+@ base_name s name → String {
+    : ( Slice u ) v ( slice_of_str name )
+    : i n ( nurl_str_len name )
+    : ~ i k - n 20
+    ~ >= k 1 {
+        ? & & == ( slice_byte v k ) 95 == ( slice_byte v + k 1 ) 95 & == ( slice_byte v + k 2 ) 103 == ( slice_byte v + k 3 ) 107 {
+            : ~ b hex T
+            : ~ i j 0
+            ~ < j 16 {
+                : i c ( slice_byte v + + k 4 j )
+                ? | & >= c 48 <= c 57 & >= c 97 <= c 102 {} { = hex F }
+                = j + j 1
+            }
+            : i e + k 20
+            : ~ b tail == e n
+            ? & ! tail & < e n == ( slice_byte v e ) 95 {
+                = tail T
+                : ~ i m + e 1
+                ? >= m n { = tail F } {}
+                ~ < m n { : i d ( slice_byte v m ) ? & >= d 48 <= d 57 {} { = tail F } = m + m 1 }
+            } {}
+            ? & hex tail { ^ ( __sub name 0 k ) } {}
+        } {}
+        = k - k 1
+    }
+    ^ ( string_from name )
+}
+
+// The binding a checked kernel's source reads parameter `__gk_p<k>` by:
+// its `#define __GK_LD_<name>(i) <load>(__gk_p<k>, …` line. "" when none.
+@ census_bind s src i k → String {
+    : String pk ( string_new )
+    ( string_push_str pk `(__gk_p` ) ( string_push_int pk k ) ( string_push_str pk `, ` )
+    : ( Vec String ) lines ( string_split ( string_from src ) `\n` )
+    : ~ i j 0
+    ~ < j ( vec_len [String] lines ) {
+        : s l ( string_data ( vec_at [String] lines j ) )
+        ? & == ( nurl_str_find l `#define __GK_LD_` ) 0 >= ( nurl_str_find l ( string_data pk ) ) 0 {
+            : String rest ( __sub l 16 - ( nurl_str_len l ) 16 )
+            : i par ( nurl_str_find ( string_data rest ) `(` )
+            ? > par 0 { ^ ( __sub ( string_data rest ) 0 par ) } {}
+        } {}
+        = j + j 1
+    }
+    ^ ( string_new )
+}
+
+// The `names` an entry must carry for a census source: the binding of
+// each `__gk_p<k>`, k = 0, 1, … while there is one, space-separated.
+@ census_names s src → String {
+    : ~ String o ( string_new )
+    : ~ i k 0
+    ~ T {
+        : String pk ( string_new )
+        ( string_push_str pk `__gk_p` ) ( string_push_int pk k ) ( string_push_str pk `,` )
+        ? < ( nurl_str_find src ( string_data pk ) ) 0 { break } {}
+        : String b ( census_bind src k )
+        ? > k 0 { ( string_push_char o 32 ) } {}
+        ( string_push_str o ( string_data b ) )
+        = k + k 1
+    }
+    ^ o
+}
+
 @ main → i {
     : s path `deps/gpu/web/kernels_wgsl.js`
     : ~ String js ( string_new )
@@ -216,18 +297,45 @@ $ `stdlib/core/slice.nu`
     : ~ i missing 0
     : ~ i differ 0
     : ~ i untyped 0
+    : ~ i twice 0
+    : ~ i misnamed 0
     = k 0
     ~ < k nk {
         : String name__s ( gk_census_name kit k )
-        : s name ( string_data name__s )
-        : String want ( census_sig name ( string_data ( gk_census_src kit k ) ) )
-        ? == ( string_len want ) 0 { ( fail2 `census source has no parameter list: ` name ) } {}
+        : s full ( string_data name__s )
+        : String base__s ( base_name full )
+        : s name ( string_data base__s )
+        : String src__s ( gk_census_src kit k )
+        : String want ( census_sig full ( string_data src__s ) )
+        ? == ( string_len want ) 0 { ( fail2 `census source has no parameter list: ` full ) } {}
+        // the table answers by base name: it must name one kernel
+        : ~ i q2 + k 1
+        ~ < q2 nk {
+            : String o__s ( gk_census_name kit q2 )
+            : String ob ( base_name ( string_data o__s ) )
+            ? ( nurl_str_eq ( string_data ob ) name ) { ( fail2 `two census kernels share a base name: ` name ) = twice + twice 1 } {}
+            = q2 + q2 1
+        }
         : ~ i found -1
         : ~ i j 0
         ~ < j nt {
             ?? ( vec_get [WgslEntry] table j ) { T e → { ? ( nurl_str_eq ( string_data . e name ) name ) { = found j } {} } F _ → {} }
             = j + j 1
         }
+        ? >= found 0 {
+            : String wantn ( census_names ( string_data src__s ) )
+            ?? ( vec_get [WgslEntry] table found ) {
+                T e → {
+                    ? ( string_eq . e names wantn ) {} {
+                        ( fail2 `WGSL names are not the bindings the census source reads (update names AND body): ` name )
+                        ( nurl_print `         census: ` ) ( nurl_print ( string_data wantn ) ) ( nurl_print `\n` )
+                        ( nurl_print `         wgsl:   ` ) ( nurl_print ( string_data . e names ) ) ( nurl_print `\n` )
+                        = misnamed + misnamed 1
+                    }
+                }
+                F _ → {}
+            }
+        } {}
         ? < found 0 {
             ( fail2 `no WGSL kernel for census kernel: ` name )
             = missing + missing 1
@@ -264,7 +372,9 @@ $ `stdlib/core/slice.nu`
         }
         = k + k 1
     }
+    ( check == twice 0 `no two census kernels share a base name (the table's key)` )
     ( check == missing 0 `every census kernel has a WGSL kernel` )
+    ( check == misnamed 0 `every entry names the bindings its census kernel reads` )
     ( check == differ 0 `every WGSL sig is the census parameter list` )
     ( check == untyped 0 `every parameter type is marshallable (CTYPES)` )
 
@@ -278,7 +388,12 @@ $ `stdlib/core/slice.nu`
                 ? ( nurl_str_eq en GPU_WGSL_SENTINEL ) {} {
                     : ~ b seen F
                     : ~ i q 0
-                    ~ < q nk { ? ( nurl_str_eq ( string_data ( gk_census_name kit q ) ) en ) { = seen T } {} = q + q 1 }
+                    ~ < q nk {
+                        : String cn ( gk_census_name kit q )
+                        : String cb ( base_name ( string_data cn ) )
+                        ? ( nurl_str_eq ( string_data cb ) en ) { = seen T } {}
+                        = q + q 1
+                    }
                     ? seen {} { ( fail2 `WGSL kernel the executor no longer launches: ` en ) = stale + stale 1 }
                 }
             }

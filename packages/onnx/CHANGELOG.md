@@ -2,6 +2,7 @@
 
 ## [0.12.3] — 2026-10-16
 
+- WebGPU builds run again (with gpu 0.17.6, now required): `tests/wgsl_census_test.nu` matches the WGSL set to the census by a checked kernel's base name, requires base names to be unique, and checks each entry's buffer names against the bindings its census source reads. tiny.onnx, tinyyolov2 and yoloe-v8s-seg run on WebGPU (headless Chrome) and match the native backend.
 - **The static backend's conv2d is gpukit's own kernel again, and faster.** `kernels_static.c` carried a hand-written C conv2d in place of the generated one, because gpukit's conv2d left a CPU vectoriser nothing unit-stride. gpukit 0.11.12's host conv2d is written for the vectoriser, and its generic translation runs tinyyolov2 on the native static backend in 1.65 s per frame against the override's 2.17 s. It is bit-identical to the CPU and CUDA backends, which the override was not (it skipped the padding taps the kernel adds as zeros). The override mechanism is gone with it: every static kernel is now generated from the census. Needs gpukit ^0.11.12.
 
 ## [0.12.2] — 2026-10-15

@@ -25,13 +25,26 @@
 // is generated from `sig` by the one mechanical rule below:
 //
 //   C parameter          WGSL                                    kind
-//   const float* X       var<storage, read>       X: array<f32>  b
+//   const float* X       var<storage, read>       X: array<f32>  b   (also `const float* __restrict__`)
 //   float* X             var<storage, read_write> X: array<f32>  w
-//   const long long* X   var<storage, read>       X: array<i32>  q   (lo,hi word pairs: element k = X[2k], X[2k+1])
+//   const long long* X   var<storage, read>       X: array<i32>  q   (lo,hi word pairs: element k = X[2k], X[2k+1]; also `__restrict__`)
 //   long long* X         var<storage, read_write> X: array<i32>  Q
 //   long long n          p.n: i32   (the cell must fit in i32 — checked at launch)  I
 //   int n                p.n: i32                                i
 //   float a              p.a: f32                                f
+//   double a             p.a: f32   (the cell holds the double's bits; rounded to f32)  d
+//
+// gpukit's kernels are CHECKED kernels: every buffer parameter is
+// `__gk_p<k>` followed by its length `__gk_n<k>`, and the list ends with
+// `__gk_end`. An entry's `names` gives the WGSL name of each `__gk_p<k>`
+// in order — the binding name the kernel's source reads it by, which
+// tests/wgsl_census_test.nu (onnx) checks against the census — and the
+// length becomes `p.len_<name>`, the end word `p.gk_end`. A checked
+// kernel's entry name is its base name plus `__gk<16 hex digits>` (a
+// hash of its cache key); the table is keyed by the base name, which on
+// a fixed kernel set names exactly one kernel (the census test checks
+// that too). An out-of-range access needs no check here: WebGPU's
+// robust buffer access keeps every load and store inside its binding.
 //
 // Buffers bind at 0..B-1 in parameter order, the uniform struct `p` at B.
 // For every buffer parameter the struct also carries `p.nz_<name>`: 1
@@ -52,7 +65,7 @@ const PRE = "@compute @workgroup_size(64)\nfn main(@builtin(global_invocation_id
 
 // C parameter type → kind (see the table above). One row per type the
 // glue can marshal; tests/wgsl_census_test.nu (onnx) reads these keys.
-export const CTYPES = { "const float*": "b", "float*": "w", "const long long*": "q", "long long*": "Q", "long long": "I", "int": "i", "float": "f" };
+export const CTYPES = { "const float*": "b", "const float* __restrict__": "b", "float*": "w", "const long long*": "q", "const long long* __restrict__": "q", "long long*": "Q", "long long": "I", "int": "i", "float": "f", "double": "d" };
 
 // WGSL keywords and reserved words (WGSL spec §15) — a C parameter name in
 // this set gets a trailing `_`.
@@ -98,18 +111,14 @@ const bc = (op) => `if (idx >= p.n) { return; }
 // strided over K and tree-reduced in workgroup memory; the `invocations`
 // hook and the body branch on the same uniform predicate.
 const gemmInv = (p) => (p.M * p.N < 16384) ? p.M * p.N * 64 : p.M * p.N;
-const gemm = (honorTransB) => `if (p.M*p.N < 16384) {
+const gemm = (transB) => `if (p.M*p.N < 16384) {
     // padding workgroups (2D-dispatch rounding) redo the last output —
     // identical value, benign write race
     let out = min(idx / 64, p.M*p.N - 1);
     let lane = idx % 64;
     let r = out / p.N; let c = out % p.N;
     var s = 0.0;
-    ${honorTransB ? `if (p.transB != 0) {
-      for (var k = lane; k < p.K; k = k + 64) { s = s + A[r*p.K + k] * B[c*p.K + k]; }
-    } else {
-      for (var k = lane; k < p.K; k = k + 64) { s = s + A[r*p.K + k] * B[k*p.N + c]; }
-    }` : `for (var k = lane; k < p.K; k = k + 64) { s = s + A[r*p.K + k] * B[k*p.N + c]; }`}
+    ${transB ? `for (var k = lane; k < p.K; k = k + 64) { s = s + A[r*p.K + k] * B[c*p.K + k]; }` : `for (var k = lane; k < p.K; k = k + 64) { s = s + A[r*p.K + k] * B[k*p.N + c]; }`}
     gemm_part[lane] = s;
     workgroupBarrier();
     for (var w = 32; w > 0; w = w >> 1u) {
@@ -117,18 +126,14 @@ const gemm = (honorTransB) => `if (p.M*p.N < 16384) {
       workgroupBarrier();
     }
     if (lane == 0) {
-      let bias = select(0.0, C[c], p.nz_C != 0);
+      let bias = select(0.0, Cb[c], p.hasB != 0);
       Y[out] = p.alpha*gemm_part[0] + p.beta*bias;
     }
   } else if (idx < p.M*p.N) {
     let r = idx / p.N; let c = idx % p.N;
     var acc = 0.0;
-    ${honorTransB ? `if (p.transB != 0) {
-      for (var k = 0; k < p.K; k = k + 1) { acc = acc + A[r*p.K + k] * B[c*p.K + k]; }
-    } else {
-      for (var k = 0; k < p.K; k = k + 1) { acc = acc + A[r*p.K + k] * B[k*p.N + c]; }
-    }` : `for (var k = 0; k < p.K; k = k + 1) { acc = acc + A[r*p.K + k] * B[k*p.N + c]; }`}
-    let bias = select(0.0, C[c], p.nz_C != 0);
+    ${transB ? `for (var k = 0; k < p.K; k = k + 1) { acc = acc + A[r*p.K + k] * B[c*p.K + k]; }` : `for (var k = 0; k < p.K; k = k + 1) { acc = acc + A[r*p.K + k] * B[k*p.N + c]; }`}
+    let bias = select(0.0, Cb[c], p.hasB != 0);
     Y[idx] = p.alpha*acc + p.beta*bias;
   }`;
 
@@ -139,18 +144,16 @@ __nurl_wgsl_set: { sig: "()", body: `` },
 
 // ── matrix products ──
 // gk32_gemm_tiled is what gkd_gemm launches for transB=0 on every backend
-// with fixed kernel sets (its CUDA body ignores transB, and so does this).
-gk32_gemm_tiled: { sig: "(const float* A, const float* B, const float* C, float* Y, long long M, long long N, long long K, float alpha, float beta, long long transB)",
+// with fixed kernel sets, gk32_gemm (the per-element kernel) for
+// transB=1. A missing bias is hasB=0 (Cb is then bound to another input).
+gk32_gemm_tiled: { sig: "(const float* __restrict__ __gk_p0, long long __gk_n0, const float* __restrict__ __gk_p1, long long __gk_n1, const float* __restrict__ __gk_p2, long long __gk_n2, float* __gk_p3, long long __gk_n3, long long M, long long N, long long K, double alpha, double beta, long long hasB, long long __gk_end)", names: "A B Cb Y",
   extra: "var<workgroup> gemm_part: array<f32, 64>;\n", invocations: gemmInv, body: gemm(false) },
-gk32_gemm: { sig: "(const float* A, const float* B, const float* C, float* Y, long long M, long long N, long long K, float alpha, float beta, long long transB)",
+gk32_gemm: { sig: "(const float* __restrict__ __gk_p0, long long __gk_n0, const float* __restrict__ __gk_p1, long long __gk_n1, const float* __restrict__ __gk_p2, long long __gk_n2, float* __gk_p3, long long __gk_n3, long long M, long long N, long long K, double alpha, double beta, long long hasB, long long __gk_end)", names: "A B Cb Y",
   extra: "var<workgroup> gemm_part: array<f32, 64>;\n", invocations: gemmInv, body: gemm(true) },
-// batched: `total` is the CUDA launch's tile count, batch*ceil(M/8)*ceil(N/32);
-// here one invocation per output
-gk32_bmm_tiled: { sig: "(const float* A, const float* B, float* Y, long long M, long long N, long long K, long long as, long long bs, long long total)",
-  invocations: (p) => (p.total / (Math.ceil(p.M / 8) * Math.ceil(p.N / 32))) * p.M * p.N,
-  body: `let nt = ((p.M + 7) / 8) * ((p.N + 31) / 32);
-  let nb = p.total / nt;
-  if (idx >= nb*p.M*p.N) { return; }
+// batched: `nb` batches; one invocation per output
+gk32_bmm_tiled: { sig: "(const float* __restrict__ __gk_p0, long long __gk_n0, const float* __restrict__ __gk_p1, long long __gk_n1, float* __gk_p2, long long __gk_n2, long long M, long long N, long long K, long long as, long long bs, long long nb, long long __gk_end)", names: "A B Y",
+  invocations: (p) => p.nb * p.M * p.N,
+  body: `if (idx >= p.nb*p.M*p.N) { return; }
   let c = idx % p.N; let t = idx / p.N; let r = t % p.M; let bi = t / p.M;
   let ao = bi*p.as_ + r*p.K; let bo = bi*p.bs + c;
   var acc = 0.0;
@@ -164,7 +167,7 @@ gk32_bmm_tiled: { sig: "(const float* A, const float* B, float* Y, long long M, 
 // constant loop bounds let the compiler unroll — the naive
 // one-output-per-thread body ran at ~0.1% of a 4090's peak. Sums run
 // bias, then ic, ky, kx ascending, as the CUDA kernel's do.
-gk32_conv2d: { sig: "(const float* X, const float* Wt, const float* B, float* Y, long long Cin, long long H, long long W, long long Cout, long long kh, long long kw, long long OH, long long OW, long long ph, long long pw, long long sh, long long sw, long long hasB)",
+gk32_conv2d: { sig: "(const float* __restrict__ __gk_p0, long long __gk_n0, const float* __restrict__ __gk_p1, long long __gk_n1, const float* __restrict__ __gk_p2, long long __gk_n2, float* __gk_p3, long long __gk_n3, long long Cin, long long H, long long W, long long Cout, long long kh, long long kw, long long OH, long long OW, long long ph, long long pw, long long sh, long long sw, long long mode, long long tw, long long hasB, long long __gk_end)", names: "X Wt B Y",
   invocations: (p) => Math.ceil(p.Cout / 2) * p.OH * Math.ceil(p.OW / 4),
   body: `let nb = (p.OW + 3) / 4;
   let nc = (p.Cout + 1) / 2;
@@ -264,7 +267,7 @@ gk32_conv2d: { sig: "(const float* X, const float* Wt, const float* B, float* Y,
     }
   }` },
 // dilated: the CUDA body accumulates in double; WGSL has no f64, so f32
-gk32_conv2d_dil: { sig: "(const float* X, const float* Wt, const float* B, float* Y, long long Cin, long long H, long long W, long long Cout, long long kh, long long kw, long long OH, long long OW, long long ph, long long pw, long long sh, long long sw, long long dh, long long dw, long long hasB)",
+gk32_conv2d_dil: { sig: "(const float* __restrict__ __gk_p0, long long __gk_n0, const float* __restrict__ __gk_p1, long long __gk_n1, const float* __restrict__ __gk_p2, long long __gk_n2, float* __gk_p3, long long __gk_n3, long long Cin, long long H, long long W, long long Cout, long long kh, long long kw, long long OH, long long OW, long long ph, long long pw, long long sh, long long sw, long long dh, long long dw, long long hasB, long long __gk_end)", names: "X Wt B Y",
   body: `if (idx >= p.Cout*p.OH*p.OW) { return; }
   let ox = idx % p.OW; let oy = (idx / p.OW) % p.OH; let oc = idx / (p.OW*p.OH);
   var acc = select(0.0, B[oc], p.hasB != 0);
@@ -283,7 +286,7 @@ gk32_conv2d_dil: { sig: "(const float* X, const float* Wt, const float* B, float
   Y[idx] = acc;` },
 // ConvTranspose with stride == kernel and no padding: each output has
 // exactly one contributing tap, (ky,kx) = the output's phase
-gk32_convt2d_up: { sig: "(const float* X, const float* Wt, const float* B, float* Y, long long Cin, long long H, long long W, long long Cout, long long kh, long long kw, long long OH, long long OW, long long ph, long long pw, long long sh, long long sw, long long hasB)",
+gk32_convt2d_up: { sig: "(const float* __restrict__ __gk_p0, long long __gk_n0, const float* __restrict__ __gk_p1, long long __gk_n1, const float* __restrict__ __gk_p2, long long __gk_n2, float* __gk_p3, long long __gk_n3, long long Cin, long long H, long long W, long long Cout, long long kh, long long kw, long long OH, long long OW, long long ph, long long pw, long long sh, long long sw, long long hasB, long long __gk_end)", names: "X Wt B Y",
   body: `if (idx >= p.Cout*p.OH*p.OW) { return; }
   let ox = idx % p.OW; let oy = (idx / p.OW) % p.OH; let oc = idx / (p.OW*p.OH);
   var acc = select(0.0, B[oc], p.hasB != 0);
@@ -294,7 +297,7 @@ gk32_convt2d_up: { sig: "(const float* X, const float* Wt, const float* B, float
     }
   }
   Y[(oc*p.OH + oy)*p.OW + ox] = acc;` },
-gk32_convt2d: { sig: "(const float* X, const float* Wt, const float* B, float* Y, long long Cin, long long H, long long W, long long Cout, long long kh, long long kw, long long OH, long long OW, long long ph, long long pw, long long sh, long long sw, long long hasB)",
+gk32_convt2d: { sig: "(const float* __restrict__ __gk_p0, long long __gk_n0, const float* __restrict__ __gk_p1, long long __gk_n1, const float* __restrict__ __gk_p2, long long __gk_n2, float* __gk_p3, long long __gk_n3, long long Cin, long long H, long long W, long long Cout, long long kh, long long kw, long long OH, long long OW, long long ph, long long pw, long long sh, long long sw, long long hasB, long long __gk_end)", names: "X Wt B Y",
   body: `if (idx >= p.Cout*p.OH*p.OW) { return; }
   let ox = idx % p.OW; let oy = (idx / p.OW) % p.OH; let oc = idx / (p.OW*p.OH);
   var acc = select(0.0, B[oc], p.hasB != 0);
@@ -315,7 +318,7 @@ gk32_convt2d: { sig: "(const float* X, const float* Wt, const float* B, float* Y
     }
   }
   Y[(oc*p.OH + oy)*p.OW + ox] = acc;` },
-gk32_maxpool2d: { sig: "(const float* X, float* Y, long long C, long long H, long long W, long long kh, long long kw, long long OH, long long OW, long long sh, long long sw, long long ph, long long pw)",
+gk32_maxpool2d: { sig: "(const float* __restrict__ __gk_p0, long long __gk_n0, float* __gk_p1, long long __gk_n1, long long C, long long H, long long W, long long kh, long long kw, long long OH, long long OW, long long sh, long long sw, long long ph, long long pw, long long __gk_end)", names: "X Y",
   body: `if (idx >= p.C*p.OH*p.OW) { return; }
   let ow = idx % p.OW; let oh = (idx / p.OW) % p.OH; let c = idx / (p.OW*p.OH);
   let xoff = c*p.H*p.W;
@@ -331,30 +334,30 @@ gk32_maxpool2d: { sig: "(const float* X, float* Y, long long C, long long H, lon
     }
   }
   Y[(c*p.OH + oh)*p.OW + ow] = m;` },
-gk32_bnorm: { sig: "(const float* X, const float* sc, const float* B, const float* mean, const float* var, float* Y, long long C, long long HW, float eps)",
+gk32_bnorm: { sig: "(const float* __restrict__ __gk_p0, long long __gk_n0, const float* __restrict__ __gk_p1, long long __gk_n1, const float* __restrict__ __gk_p2, long long __gk_n2, const float* __restrict__ __gk_p3, long long __gk_n3, const float* __restrict__ __gk_p4, long long __gk_n4, float* __gk_p5, long long __gk_n5, long long C, long long HW, double eps, long long __gk_end)", names: "X sc B mean var Y",
   body: `if (idx >= p.C*p.HW) { return; }
   let c = idx / p.HW;
   Y[idx] = sc[c]*(X[idx] - mean[c]) / sqrt(var_[c] + p.eps) + B[c];` },
 
 // ── activations / maps ──
-gk32_relu: { sig: "(const float* in, float* o, long long n)",
-  body: `if (idx < p.n) { let x = in[idx]; o[idx] = select(0.0, x, x > 0.0); }` },
-gk32_sigmoid: { sig: "(const float* in, float* o, long long n)",
-  body: `if (idx < p.n) { o[idx] = 1.0 / (1.0 + exp(-in[idx])); }` },
-gk32_lrelu: { sig: "(const float* X, float* Y, long long n, float alpha)",
+gk32_relu: { sig: "(float* __gk_p0, long long __gk_n0, float* __gk_p1, long long __gk_n1, long long n, long long __gk_end)", names: "a o",
+  body: `if (idx < p.n) { let x = a[idx]; o[idx] = select(0.0, x, x > 0.0); }` },
+gk32_sigmoid: { sig: "(float* __gk_p0, long long __gk_n0, float* __gk_p1, long long __gk_n1, long long n, long long __gk_end)", names: "a o",
+  body: `if (idx < p.n) { o[idx] = 1.0 / (1.0 + exp(-a[idx])); }` },
+gk32_lrelu: { sig: "(const float* __restrict__ __gk_p0, long long __gk_n0, float* __gk_p1, long long __gk_n1, long long n, double alpha, long long __gk_end)", names: "X Y",
   body: `if (idx < p.n) { let v = X[idx]; Y[idx] = select(p.alpha*v, v, v >= 0.0); }` },
-gk32_clip: { sig: "(const float* X, float* Y, long long n, float lo, float hi)",
+gk32_clip: { sig: "(const float* __restrict__ __gk_p0, long long __gk_n0, float* __gk_p1, long long __gk_n1, long long n, double lo, double hi, long long __gk_end)", names: "X Y",
   body: `if (idx < p.n) { let v = X[idx]; Y[idx] = select(select(v, p.hi, v > p.hi), p.lo, v < p.lo); }` },
-gk32_erf: { sig: "(const float* in, float* o, long long n)", extra: ERF,
-  body: `if (idx < p.n) { o[idx] = erf_approx(in[idx]); }` },
-gk32_lnorm: { sig: "(const float* X, const float* sc, const float* bi, float* Y, long long outer, long long ax, float eps)",
+gk32_erf: { sig: "(float* __gk_p0, long long __gk_n0, float* __gk_p1, long long __gk_n1, long long n, long long __gk_end)", names: "a o", extra: ERF,
+  body: `if (idx < p.n) { o[idx] = erf_approx(a[idx]); }` },
+gk32_lnorm: { sig: "(const float* __restrict__ __gk_p0, long long __gk_n0, const float* __restrict__ __gk_p1, long long __gk_n1, const float* __restrict__ __gk_p2, long long __gk_n2, float* __gk_p3, long long __gk_n3, long long outer, long long ax, double eps, long long __gk_end)", names: "X sc bi Y",
   body: `if (idx >= p.outer) { return; }
   let off = idx*p.ax;
   var m = 0.0; for (var j = 0; j < p.ax; j = j + 1) { m = m + X[off + j]; } m = m / f32(p.ax);
   var v = 0.0; for (var j = 0; j < p.ax; j = j + 1) { let d = X[off + j] - m; v = v + d*d; } v = v / f32(p.ax);
   let inv = 1.0 / sqrt(v + p.eps);
   for (var j = 0; j < p.ax; j = j + 1) { Y[off + j] = (X[off + j] - m)*inv*sc[j] + bi[j]; }` },
-gk32_softmaxax: { sig: "(const float* X, float* Y, long long outer, long long ax, long long inner)",
+gk32_softmaxax: { sig: "(const float* __restrict__ __gk_p0, long long __gk_n0, float* __gk_p1, long long __gk_n1, long long outer, long long ax, long long inner, long long __gk_end)", names: "X Y",
   body: `if (idx >= p.outer*p.inner) { return; }
   let io = idx / p.inner; let ii = idx % p.inner;
   let base = io*p.ax*p.inner + ii;
@@ -365,23 +368,23 @@ gk32_softmaxax: { sig: "(const float* X, float* Y, long long outer, long long ax
   for (var a = 0; a < p.ax; a = a + 1) { Y[base + a*p.inner] = exp(X[base + a*p.inner] - m) / s; }` },
 
 // ── broadcast elementwise ──
-gk32_bcmul: { sig: "(const float* a, const float* b, float* o, long long n, long long d0, long long d1, long long d2, long long d3, long long d4, long long d5, long long A0, long long A1, long long A2, long long A3, long long A4, long long A5, long long B0, long long B1, long long B2, long long B3, long long B4, long long B5)", body: bc("*") },
-gk32_bcadd: { sig: "(const float* a, const float* b, float* o, long long n, long long d0, long long d1, long long d2, long long d3, long long d4, long long d5, long long A0, long long A1, long long A2, long long A3, long long A4, long long A5, long long B0, long long B1, long long B2, long long B3, long long B4, long long B5)", body: bc("+") },
-gk32_bcsub: { sig: "(const float* a, const float* b, float* o, long long n, long long d0, long long d1, long long d2, long long d3, long long d4, long long d5, long long A0, long long A1, long long A2, long long A3, long long A4, long long A5, long long B0, long long B1, long long B2, long long B3, long long B4, long long B5)", body: bc("-") },
-gk32_bcdiv: { sig: "(const float* a, const float* b, float* o, long long n, long long d0, long long d1, long long d2, long long d3, long long d4, long long d5, long long A0, long long A1, long long A2, long long A3, long long A4, long long A5, long long B0, long long B1, long long B2, long long B3, long long B4, long long B5)", body: bc("/") },
+gk32_bcmul: { sig: "(float* __gk_p0, long long __gk_n0, float* __gk_p1, long long __gk_n1, float* __gk_p2, long long __gk_n2, long long n, long long d0, long long A0, long long B0, long long d1, long long A1, long long B1, long long d2, long long A2, long long B2, long long d3, long long A3, long long B3, long long d4, long long A4, long long B4, long long d5, long long A5, long long B5, long long __gk_end)", names: "a b o", body: bc("*") },
+gk32_bcadd: { sig: "(float* __gk_p0, long long __gk_n0, float* __gk_p1, long long __gk_n1, float* __gk_p2, long long __gk_n2, long long n, long long d0, long long A0, long long B0, long long d1, long long A1, long long B1, long long d2, long long A2, long long B2, long long d3, long long A3, long long B3, long long d4, long long A4, long long B4, long long d5, long long A5, long long B5, long long __gk_end)", names: "a b o", body: bc("+") },
+gk32_bcsub: { sig: "(float* __gk_p0, long long __gk_n0, float* __gk_p1, long long __gk_n1, float* __gk_p2, long long __gk_n2, long long n, long long d0, long long A0, long long B0, long long d1, long long A1, long long B1, long long d2, long long A2, long long B2, long long d3, long long A3, long long B3, long long d4, long long A4, long long B4, long long d5, long long A5, long long B5, long long __gk_end)", names: "a b o", body: bc("-") },
+gk32_bcdiv: { sig: "(float* __gk_p0, long long __gk_n0, float* __gk_p1, long long __gk_n1, float* __gk_p2, long long __gk_n2, long long n, long long d0, long long A0, long long B0, long long d1, long long A1, long long B1, long long d2, long long A2, long long B2, long long d3, long long A3, long long B3, long long d4, long long A4, long long B4, long long d5, long long A5, long long B5, long long __gk_end)", names: "a b o", body: bc("/") },
 
 // ── data movement ──
-gk32_sliceax: { sig: "(const float* S, float* D, long long outer, long long sz, long long inner, long long src_ax, long long soff)",
+gk32_sliceax: { sig: "(const float* __restrict__ __gk_p0, long long __gk_n0, float* __gk_p1, long long __gk_n1, long long outer, long long sz, long long inner, long long src_ax, long long soff, long long __gk_end)", names: "S D",
   body: `if (idx >= p.outer*p.sz*p.inner) { return; }
   let ii = idx % p.inner; let t = idx / p.inner;
   let a = t % p.sz; let o = t / p.sz;
   D[idx] = S[(o*p.src_ax + (p.soff + a))*p.inner + ii];` },
-gk32_copyax: { sig: "(const float* S, float* D, long long outer, long long src_ax, long long inner, long long dst_ax, long long off)",
+gk32_copyax: { sig: "(const float* __restrict__ __gk_p0, long long __gk_n0, float* __gk_p1, long long __gk_n1, long long outer, long long src_ax, long long inner, long long dst_ax, long long off, long long __gk_end)", names: "S D",
   body: `if (idx >= p.outer*p.src_ax*p.inner) { return; }
   let ii = idx % p.inner; let t = idx / p.inner;
   let a = t % p.src_ax; let o = t / p.src_ax;
   D[(o*p.dst_ax + (p.off + a))*p.inner + ii] = S[idx];` },
-gk32_perm6: { sig: "(const float* X, float* Y, long long d0,long long d1,long long d2,long long d3,long long d4,long long d5,long long p0,long long p1,long long p2,long long p3,long long p4,long long p5)",
+gk32_perm6: { sig: "(const float* __restrict__ __gk_p0, long long __gk_n0, float* __gk_p1, long long __gk_n1, long long d0, long long p0, long long d1, long long p1, long long d2, long long p2, long long d3, long long p3, long long d4, long long p4, long long d5, long long p5, long long __gk_end)", names: "X Y",
   body: `var D = array<i32,6>(p.d0, p.d1, p.d2, p.d3, p.d4, p.d5);
   var P = array<i32,6>(p.p0, p.p1, p.p2, p.p3, p.p4, p.p5);
   var O = array<i32,6>(0, 0, 0, 0, 0, 0);
@@ -396,7 +399,7 @@ gk32_perm6: { sig: "(const float* X, float* Y, long long d0,long long d1,long lo
   let si = ((((ins[0]*p.d1 + ins[1])*p.d2 + ins[2])*p.d3 + ins[3])*p.d4 + ins[4])*p.d5 + ins[5];
   Y[idx] = X[si];` },
 // bilinear: the CUDA body interpolates in double; WGSL has no f64, so f32
-gk32_resizebilin: { sig: "(const float* X, float* Y, long long C, long long H, long long W, long long OH, long long OW, long long align)",
+gk32_resizebilin: { sig: "(const float* __restrict__ __gk_p0, long long __gk_n0, float* __gk_p1, long long __gk_n1, long long C, long long H, long long W, long long OH, long long OW, long long align, long long __gk_end)", names: "X Y",
   body: `if (idx >= p.C*p.OH*p.OW) { return; }
   let ox = idx % p.OW; let oy = (idx / p.OW) % p.OH; let c = idx / (p.OW*p.OH);
   var fy = 0.0; var fx = 0.0;
@@ -417,26 +420,26 @@ gk32_resizebilin: { sig: "(const float* X, float* Y, long long C, long long H, l
   let v10 = X[b + y1*p.W + x0]; let v11 = X[b + y1*p.W + x1];
   let top = v00 + (v01 - v00)*wx; let bot = v10 + (v11 - v10)*wx;
   Y[idx] = top + (bot - top)*wy;` },
-gk32_resizenn: { sig: "(const float* X, float* Y, long long C, long long H, long long W, long long OH, long long OW, long long sh, long long sw)",
+gk32_resizenn: { sig: "(const float* __restrict__ __gk_p0, long long __gk_n0, float* __gk_p1, long long __gk_n1, long long C, long long H, long long W, long long OH, long long OW, long long sh, long long sw, long long __gk_end)", names: "X Y",
   body: `if (idx >= p.C*p.OH*p.OW) { return; }
   let ox = idx % p.OW; let oy = (idx / p.OW) % p.OH; let c = idx / (p.OW*p.OH);
   Y[idx] = X[(c*p.H + oy/p.sh)*p.W + ox/p.sw];` },
-gk32_expandl: { sig: "(const float* X, float* Y, long long outer, long long rep)",
+gk32_expandl: { sig: "(const float* __restrict__ __gk_p0, long long __gk_n0, float* __gk_p1, long long __gk_n1, long long outer, long long rep, long long __gk_end)", names: "X Y",
   body: `if (idx < p.outer*p.rep) { Y[idx] = X[idx/p.rep]; }` },
 
 // ── reductions / index selection ──
-gk32_rl2: { sig: "(const float* X, float* Y, long long outer, long long ax)",
+gk32_rl2: { sig: "(const float* __restrict__ __gk_p0, long long __gk_n0, float* __gk_p1, long long __gk_n1, long long outer, long long ax, long long __gk_end)", names: "X Y",
   body: `if (idx >= p.outer) { return; }
   let off = idx*p.ax;
   var s = 0.0; for (var a = 0; a < p.ax; a = a + 1) { s = s + X[off + a]*X[off + a]; }
   Y[idx] = sqrt(s);` },
-gk32_argmax: { sig: "(const float* X, long long* Y, long long outer, long long ax)",
+gk32_argmax: { sig: "(const float* __restrict__ __gk_p0, long long __gk_n0, long long* __gk_p1, long long __gk_n1, long long outer, long long ax, long long __gk_end)", names: "X Y",
   body: `if (idx >= p.outer) { return; }
   let off = idx*p.ax;
   var bi = 0; var bv = X[off];
   for (var j = 1; j < p.ax; j = j + 1) { let v = X[off + j]; if (v > bv) { bv = v; bi = j; } }
   Y[2*idx] = bi; Y[2*idx + 1] = 0;` },
-gki_argmax: { sig: "(const long long* X, long long* Y, long long outer, long long ax)", extra: I64GT,
+gki_argmax: { sig: "(const long long* __restrict__ __gk_p0, long long __gk_n0, long long* __gk_p1, long long __gk_n1, long long outer, long long ax, long long __gk_end)", names: "X Y", extra: I64GT,
   body: `if (idx >= p.outer) { return; }
   let off = idx*p.ax;
   var bi = 0; var blo = X[2*off]; var bhi = X[2*off + 1];
@@ -447,7 +450,7 @@ gki_argmax: { sig: "(const long long* X, long long* Y, long long outer, long lon
   Y[2*idx] = bi; Y[2*idx + 1] = 0;` },
 // an index is an i64; one outside i32 is outside any axis — it reads 0,
 // as the CUDA body does for any out-of-range index
-gk32_gather: { sig: "(const float* D, const long long* ix, float* Y, long long axin, long long inner, long long nidx, long long total)",
+gk32_gather: { sig: "(float* __gk_p0, long long __gk_n0, long long* __gk_p1, long long __gk_n1, float* __gk_p2, long long __gk_n2, long long axin, long long inner, long long nidx, long long total, long long __gk_end)", names: "D ix Y",
   body: `if (idx >= p.total) { return; }
   let ii = idx % p.inner; let t = idx / p.inner;
   let g = t % p.nidx; let o = t / p.nidx;
@@ -456,7 +459,7 @@ gk32_gather: { sig: "(const float* D, const long long* ix, float* Y, long long a
   var v = 0.0;
   if (fits && x >= 0 && x < p.axin) { v = D[(o*p.axin + x)*p.inner + ii]; }
   Y[idx] = v;` },
-gk32_eosg: { sig: "(const float* data, const long long* tok, float* Y, long long B, long long L, long long D)", extra: I64GT,
+gk32_eosg: { sig: "(const float* __restrict__ __gk_p0, long long __gk_n0, const long long* __restrict__ __gk_p1, long long __gk_n1, float* __gk_p2, long long __gk_n2, long long B, long long L, long long D, long long __gk_end)", names: "data tok Y", extra: I64GT,
   body: `if (idx >= p.B*p.D) { return; }
   let d = idx % p.D; let b = idx / p.D;
   let t0 = b*p.L;
@@ -472,14 +475,29 @@ gk32_eosg: { sig: "(const float* data, const long long* tok, float* Y, long long
 
 const layouts = new Map();
 
+// The table key of entry name `name`: the name itself, or a checked
+// kernel's base name (`<base>__gk<16 hex>`, `_<n>` after it when two keys
+// hashed alike). null when the set has neither.
+export function resolve(name) {
+  if (Object.prototype.hasOwnProperty.call(K, name)) return name;
+  const m = /^(.+)__gk[0-9a-f]{16}(?:_[0-9]+)?$/.exec(name);
+  return m && Object.prototype.hasOwnProperty.call(K, m[1]) ? m[1] : null;
+}
+
+const entry = (name) => {
+  const key = resolve(name);
+  if (!key) throw new Error(`no WGSL kernel named ${name}`);
+  return K[key];
+};
+
 // [{ c, w, kind }] in parameter order: the C name, the WGSL name, the
 // CTYPES kind. Throws on a parameter type the glue cannot marshal.
 export function layout(name) {
   let l = layouts.get(name);
   if (l) return l;
-  const k = K[name];
-  if (!k) throw new Error(`no WGSL kernel named ${name}`);
+  const k = entry(name);
   const inner = k.sig.trim().replace(/^\(/, "").replace(/\)$/, "").trim();
+  const names = (k.names || "").split(" ").filter((x) => x !== "");
   l = [];
   if (inner !== "") {
     for (const part of inner.split(",")) {
@@ -488,7 +506,16 @@ export function layout(name) {
       const kind = CTYPES[ctype];
       if (!m || !kind) throw new Error(`${name}: parameter "${part.trim()}" has a type the WebGPU glue cannot marshal`);
       const c = m[2];
-      l.push({ c, w: RESERVED.has(c) ? c + "_" : c, kind });
+      // a checked kernel's buffer / length / end word (see the table above)
+      const g = /^__gk_([pn])([0-9]+)$/.exec(c);
+      let w;
+      if (g) {
+        const b = names[Number(g[2])];
+        if (!b) throw new Error(`${name}: no name for parameter ${c} (the entry's \`names\`)`);
+        w = g[1] === "p" ? b : "len_" + b;
+      } else if (c === "__gk_end") w = "gk_end";
+      else w = c;
+      l.push({ c, w: RESERVED.has(w) ? w + "_" : w, kind });
     }
   }
   layouts.set(name, l);
@@ -497,13 +524,16 @@ export function layout(name) {
 
 const isBuf = (kind) => kind === "b" || kind === "w" || kind === "q" || kind === "Q";
 
-// The uniform struct's members in order: [{ w, t: "i32"|"f32", c?, buf? }]
-// — every scalar parameter, then nz_<buffer> for every buffer parameter.
+// The uniform struct's members in order: [{ w, t: "i32"|"f32", c?, buf?, off? }]
+// — every scalar parameter, then nz_<buffer> for every buffer parameter,
+// then off_<buffer>: where the argument starts in its GPUBuffer, in 4-byte
+// words (an f32 element, half an i64 one) — a view's offset (webgpu.js).
 export function uniformLayout(name) {
   const l = layout(name);
   const u = [];
-  for (const a of l) if (!isBuf(a.kind)) u.push({ w: a.w, c: a.c, t: a.kind === "f" ? "f32" : "i32" });
+  for (const a of l) if (!isBuf(a.kind)) u.push({ w: a.w, c: a.c, t: (a.kind === "f" || a.kind === "d") ? "f32" : "i32" });
   for (const a of l) if (isBuf(a.kind)) u.push({ w: "nz_" + a.w, buf: a.c, t: "i32" });
+  for (const a of l) if (isBuf(a.kind)) u.push({ w: "off_" + a.w, off: a.c, t: "i32" });
   return u;
 }
 
@@ -521,7 +551,7 @@ export function bindLayout(name) {
 
 // Full WGSL for kernel `name`.
 export function buildWGSL(name) {
-  const k = K[name];
+  const k = entry(name);
   const l = layout(name);
   let src = k.extra || "";
   let b = 0;
@@ -536,7 +566,13 @@ export function buildWGSL(name) {
     src += "struct Params {\n" + u.map((m) => `  ${m.w}: ${m.t},`).join("\n") + "\n};\n";
     src += `@group(0) @binding(${b}) var<uniform> p: Params;\n`;
   }
-  src += PRE + k.body + "\n}\n";
+  // every access to a buffer starts at its argument's offset
+  let body = k.body;
+  for (const a of l) {
+    if (!isBuf(a.kind)) continue;
+    body = body.replace(new RegExp("(^|[^A-Za-z0-9_.])" + a.w + "\\[", "g"), "$1" + a.w + "[p.off_" + a.w + " + ");
+  }
+  src += PRE + body + "\n}\n";
   return src;
 }
 
@@ -552,15 +588,23 @@ export function marshal(name, cells) {
   const ub = new ArrayBuffer(Math.max(16, Math.ceil(u.length * 4 / 16) * 16));
   const ubI = new Int32Array(ub), ubF = new Float32Array(ub);
   const ids = [], scalars = {}, at = new Map();
-  u.forEach((m, i) => at.set(m.buf !== undefined ? "nz_" + m.buf : m.c, i));
+  u.forEach((m, i) => at.set(m.buf !== undefined ? "nz_" + m.buf : m.off !== undefined ? "off_" + m.off : m.c, i));
   for (let i = 0; i < l.length; i++) {
     const a = l[i], v = BigInt.asIntN(64, BigInt(cells[i]));
     if (isBuf(a.kind)) {
-      const id = Number(v);
+      // a handle: the buffer's id above bit 32, a byte offset below
+      const h = BigInt.asUintN(64, v);
+      const id = Number(h >> 32n), off = Number(h & 0xffffffffn);
+      if (off % 4 !== 0) return { error: `${name}: argument ${a.c} starts ${off} bytes into its buffer, not on a 4-byte word` };
       ids.push(id);
       ubI[at.get("nz_" + a.c)] = id !== 0 ? 1 : 0;
+      ubI[at.get("off_" + a.c)] = off / 4;
     } else if (a.kind === "f") {
       const fv = new Float32Array(new Int32Array([Number(BigInt.asIntN(32, v))]).buffer)[0];
+      ubF[at.get(a.c)] = fv;
+      scalars[a.c] = fv;
+    } else if (a.kind === "d") {
+      const fv = Math.fround(new Float64Array(new BigInt64Array([v]).buffer)[0]);
       ubF[at.get(a.c)] = fv;
       scalars[a.c] = fv;
     } else {
@@ -575,6 +619,6 @@ export function marshal(name, cells) {
 // Invocations for a launch: the CUDA launch's thread count `total`
 // (grid*block), unless the body maps work differently and says so.
 export function dispatchInvocations(name, scalars, total) {
-  const k = K[name];
+  const k = entry(name);
   return k.invocations ? k.invocations(scalars) : total;
 }
