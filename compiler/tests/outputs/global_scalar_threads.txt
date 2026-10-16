@@ -2,6 +2,7 @@ COMPILE OK
 LINK OK
 EXIT 0
 OUTPUT
+reads whole and in order
 done flag seen
 1000
 999

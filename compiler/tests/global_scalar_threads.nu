@@ -1,7 +1,13 @@
 // Scalar mutable globals reached from several threads: a flag, a counter,
 // a float and a string view. Each is read and written with relaxed atomics
 // (global_atomic_ir.sh checks the IR), so the race between the writer and
-// the reader is defined: the reader sees whole values only.
+// the reader is defined: the reader sees whole values only, and one
+// location's values in the order they were written.
+//
+// The reader samples a fixed number of times rather than waiting for the
+// writer: where threads are coroutines (the unikernel and nolibc targets)
+// the writer runs only once the reader blocks in the join, and a loop
+// spinning on its progress would never end there.
 $ `stdlib/core/io.nu`
 $ `stdlib/std/thread.nu`
 
@@ -25,9 +31,17 @@ $ `stdlib/std/thread.nu`
     }
     ?? ( thread_spawn_owned body ) {
         T t → {
-            : ~ i seen 0
-            ~ < seen 1000 { ? > g_count seen { = seen g_count } {} }
+            : ~ i last 0
+            : ~ i bad 0
+            : ~ i r 0
+            ~ < r 100000 {
+                : i c g_count
+                ? | < c last > c 1000 { = bad + bad 1 } {}
+                = last c
+                = r + r 1
+            }
             : i _j ( thread_join t )
+            ? == bad 0 { ( nurl_println `reads whole and in order` ) } { ( nurl_println `a torn or reordered read` ) }
         }
         F _ → {}
     }
