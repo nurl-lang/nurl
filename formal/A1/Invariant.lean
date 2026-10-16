@@ -50,10 +50,14 @@ def ViewAt (m : Mem) (dep : Dep) (d o l : Nat) (t : Ty) : Prop :=
 def ViewsOK (m : Mem) (τ : Ty) (T : Val) (H : List Dep) : Prop :=
   ∀ s v, ViewIn τ T s v → ∃ d o l, v = .view d o l ∧ ∃ dep ∈ H, ViewAt m dep d o l s
 
+/-- Where a value reached through a dependency of a given kind lies: the
+    root's node itself, or strictly inside it. -/
+def Lands (k : Kind) (n n0 : Val) : Prop :=
+  k = .self ∧ n = n0 ∨ k = .view ∧ n = n0 ∨ k = .inner ∧ Below n n0
+
 /-- The borrowed `Vec` `c` of element type `t` is valid through `dep`. -/
 def HrefAt (m : Mem) (dep : Dep) (c : Nat) (t : Ty) (H : List Dep) : Prop :=
-  ∃ n0 d es, RootNode m dep.root n0 ∧
-    (dep.kind = .self ∧ Val.node t c d es = n0 ∨ dep.kind = .inner ∧ Below (.node t c d es) n0) ∧
+  ∃ n0 d es, RootNode m dep.root n0 ∧ Lands dep.kind (.node t c d es) n0 ∧
     WFv (.vec t) (.node t c d es) ∧ ViewsOK m (.vec t) (.node t c d es) H
 
 /-- A borrowed value of type `τ`, depending on `P` and holding `H`. -/

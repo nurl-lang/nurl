@@ -26,9 +26,8 @@ theorem comp_ne_self {a b : Kind} (hb : b ≠ .self) : comp a b ≠ .self := by
 theorem derive_hrefAt {m : Mem} {y : Var} {E : Entry} {N : Val}
     (hroot : E.mode.isRoot = true → RootNode m y N)
     {k : Kind}
-    (hbor : E.mode = .bor → ∃ dep ∈ E.path, ∃ n0, RootNode m dep.root n0 ∧
-      comp dep.kind k ≠ .view ∧ Lands dep.kind N n0)
-    (hk : k ≠ .view) (hrk : rootKind E.ty k = k)
+    (hbor : E.mode = .bor → ∃ dep ∈ E.path, ∃ n0, RootNode m dep.root n0 ∧ Lands dep.kind N n0)
+    (hrk : rootKind E.ty k = k)
     {t : Ty} {c d : Nat} {es : List Val} (hl : Lands k (.node t c d es) N)
     (hw : WFv (.vec t) (.node t c d es)) {H : List Dep} (hv : ViewsOK m (.vec t) (.node t c d es) H) :
     ∃ dep ∈ derive y E k, HrefAt m dep c t H := by
@@ -36,13 +35,12 @@ theorem derive_hrefAt {m : Mem} {y : Var} {E : Entry} {N : Val}
   cases h : E.mode.isRoot with
   | true =>
     simp only [↓reduceIte, List.mem_singleton, exists_eq_left]
-    exact hrefAt_iff.mpr ⟨N, d, es, hroot h, by rw [hrk]; exact hk, by rw [hrk]; exact hl, hw, hv⟩
+    exact ⟨N, d, es, hroot h, by rw [hrk]; exact hl, hw, hv⟩
   | false =>
     simp only [Bool.false_eq_true, ↓reduceIte, List.mem_map]
     have hb : E.mode = .bor := by cases hm : E.mode <;> simp_all [Mode.isRoot]
-    obtain ⟨dep, hd, n0, hr, hkd, hld⟩ := hbor hb
-    exact ⟨_, ⟨dep, hd, rfl⟩, hrefAt_iff.mpr ⟨n0, d, es, hr, hkd,
-      lands_comp' hld hl, hw, hv⟩⟩
+    obtain ⟨dep, hd, n0, hr, hld⟩ := hbor hb
+    exact ⟨_, ⟨dep, hd, rfl⟩, n0, d, es, hr, lands_comp' hld hl, hw, hv⟩
 
 /-- A view taken from `y` in way `k`. -/
 theorem derive_viewAt {m : Mem} {y : Var} {E : Entry} {N : Val}
@@ -144,7 +142,7 @@ theorem wf_held {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} (hy 
     (hl : E.live = true) (hnint : E.ty ≠ .int) : ∀ r ∈ roots E.held,
     ∃ Er, Γ r = some Er ∧ Er.mode.isRoot = true := by
   intro r hr
-  refine hi.wf y E hy hl hnint r ?_
+  refine hi.wf y E hy hl (Or.inl hnint) r ?_
   simp only [roots, Entry.vdeps, List.map_append, List.mem_append] at hr ⊢
   exact Or.inr hr
 
@@ -152,7 +150,7 @@ theorem wf_path {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} (hy 
     (hl : E.live = true) (hnint : E.ty ≠ .int) (hm : E.mode.ownSlot = false) : ∀ r ∈ roots E.path,
     ∃ Er, Γ r = some Er ∧ Er.mode.isRoot = true := by
   intro r hr
-  refine hi.wf y E hy hl hnint r ?_
+  refine hi.wf y E hy hl (Or.inl hnint) r ?_
   simp only [roots, Entry.vdeps, hm, Bool.false_eq_true, ↓reduceIte, List.map_append,
     List.mem_append] at hr ⊢
   exact Or.inl hr
@@ -197,7 +195,7 @@ theorem out_copyBor {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} 
   mode := Or.inr hm
   live := hl
   tyok := hi.tyok hy
-  wf hn := hi.wf y E hy hl hn
+  wf hn := hi.wf y E hy hl (Or.inl hn)
   valOwn h := by rw [hm] at h; cases h
   valBor _ := by
     obtain ⟨w, hw, hok⟩ := hi.bor_val hy hl (by rw [hm]; rfl)
@@ -239,7 +237,7 @@ theorem out_borrowWhole {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Ent
           rw [hv] at h <;> cases h <;> rfl
       refine ⟨c, hvc, ?_⟩
       exact derive_hrefAt (hroot' ·) (fun h => by rw [h] at hisroot; cases hisroot)
-        (by decide) (by rw [hty]; rfl) (Or.inl ⟨rfl, rfl⟩) hw hvs
+        (by rw [hty]; rfl) (Or.inl ⟨rfl, rfl⟩) hw hvs
     | slice t =>
       obtain ⟨d, o, l, c, es, hs, _, _, hlen, hw, hroot', _⟩ := hi.slice_node hy hl hty
       have hvv : v = .view d o l := by
@@ -294,11 +292,8 @@ theorem out_at {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t : 
       cases hwe with
       | node hes =>
         rename_i c1 d1 es1
-        refine ⟨c1, rfl, derive_hrefAt (hroot ·) ?_ (by decide) (by rw [hty]; rfl)
+        exact ⟨c1, rfl, derive_hrefAt (hroot ·) hbor (by rw [hty]; rfl)
           (Lands.elem hmem) (WFv.node hes) (hvs.elem hmem)⟩
-        intro hb
-        obtain ⟨dep, hd, n0, hr, hk, hla⟩ := hbor hb
-        exact ⟨dep, hd, n0, hr, by cases dep.kind <;> simp [comp], hla⟩
 
 theorem out_view {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t : Ty}
     (hy : Γ y = some E) (hl : E.live = true) (hty : E.ty = .vec t) (hhv : t.holdsView = false)
@@ -322,7 +317,7 @@ theorem out_view {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t 
     refine ⟨d, 0, es.length, rfl, derive_viewAt (hroot ·) ?_ (by decide) (by rw [hty]; rfl)
       (Or.inr (Or.inl ⟨rfl, rfl⟩)) (by simp) hw⟩
     intro hb
-    obtain ⟨dep, hd, n0, hr, _, hla⟩ := hbor hb
+    obtain ⟨dep, hd, n0, hr, hla⟩ := hbor hb
     exact ⟨dep, hd, n0, hr, hla⟩
 
 theorem out_sat {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t : Ty}
@@ -366,11 +361,11 @@ theorem out_sat {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t :
       cases hwe with
       | node hes =>
         rename_i c1 d1 es1
-        refine ⟨c1, rfl, derive_hrefAt (hroot ·) ?_ (by decide) (by rw [hty]; rfl)
+        refine ⟨c1, rfl, derive_hrefAt (hroot ·) ?_ (by rw [hty]; rfl)
           (Lands.elem hmem) (WFv.node hes) (ViewsOK.none (by simpa [Ty.holdsView] using hok.2) _ _)⟩
         intro hb
         obtain ⟨dep, hd, n0, hr, _, hla⟩ := hbor hb
-        exact ⟨dep, hd, n0, hr, by cases dep.kind <;> simp [comp], hla⟩
+        exact ⟨dep, hd, n0, hr, hla⟩
 
 theorem rhs_new {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) {t : Ty} (ht : t.ok = true) :
     let m1 : Mem := { m with alloc := upd (upd m.alloc m.nid true) (m.nid + 1) true, nid := m.nid + 2 }
@@ -582,7 +577,7 @@ theorem rhs_pop {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
         by rw [killE_mode], fun hl' hn r hr => ?_⟩
       rw [killE_vdeps] at hr
       rw [killE_ty] at hn
-      obtain ⟨Er, hEr, hroot⟩ := hi.wf y E hy hl hn r hr
+      obtain ⟨Er, hEr, hroot⟩ := hi.wf y E hy hl (Or.inl hn) r hr
       by_cases hry : r = y
       · exact Or.inl ⟨hry, by rw [killE_mode, hm]; rfl⟩
       · exact Or.inr ⟨hry, kill_root hEr hroot⟩

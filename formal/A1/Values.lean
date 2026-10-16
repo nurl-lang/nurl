@@ -39,27 +39,10 @@ theorem MInv.mode_cases {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Ent
   | rootb => exact Or.inr (Or.inl rfl)
   | bor => exact Or.inr (Or.inr rfl)
 
-/-- Where a value reached through a dependency of a given kind lies. -/
-def Lands (k : Kind) (n n0 : Val) : Prop :=
-  k = .self ∧ n = n0 ∨ k = .view ∧ n = n0 ∨ k = .inner ∧ Below n n0
-
 theorem hrefAt_iff {m : Mem} {dep : Dep} {c : Nat} {t : Ty} {H : List Dep} :
-    HrefAt m dep c t H ↔ ∃ n0 d es, RootNode m dep.root n0 ∧ dep.kind ≠ .view ∧
+    HrefAt m dep c t H ↔ ∃ n0 d es, RootNode m dep.root n0 ∧
       Lands dep.kind (.node t c d es) n0 ∧
-      WFv (.vec t) (.node t c d es) ∧ ViewsOK m (.vec t) (.node t c d es) H := by
-  constructor
-  · rintro ⟨n0, d, es, hr, hk, hw, hv⟩
-    refine ⟨n0, d, es, hr, ?_, ?_, hw, hv⟩
-    · rcases hk with ⟨h, _⟩ | ⟨h, _⟩ <;> rw [h] <;> decide
-    · rcases hk with ⟨h1, h2⟩ | ⟨h1, h2⟩
-      · exact Or.inl ⟨h1, h2⟩
-      · exact Or.inr (Or.inr ⟨h1, h2⟩)
-  · rintro ⟨n0, d, es, hr, hk, hl, hw, hv⟩
-    refine ⟨n0, d, es, hr, ?_, hw, hv⟩
-    rcases hl with ⟨h1, h2⟩ | ⟨h1, _⟩ | ⟨h1, h2⟩
-    · exact Or.inl ⟨h1, h2⟩
-    · exact absurd h1 hk
-    · exact Or.inr ⟨h1, h2⟩
+      WFv (.vec t) (.node t c d es) ∧ ViewsOK m (.vec t) (.node t c d es) H := Iff.rfl
 
 theorem viewAt_iff {m : Mem} {dep : Dep} {d o l : Nat} {t : Ty} :
     ViewAt m dep d o l t ↔ ∃ n0 c es, RootNode m dep.root n0 ∧ dep.kind ≠ .self ∧
@@ -99,7 +82,7 @@ theorem MInv.vec_node {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry
     ∃ c d es, VecOf m y t c d es ∧ WFv (.vec t) (.node t c d es) ∧
       ViewsOK m (.vec t) (.node t c d es) E.held ∧
       (E.mode.isRoot = true → RootNode m y (.node t c d es)) ∧
-      (E.mode = .bor → ∃ dep ∈ E.path, ∃ n0, RootNode m dep.root n0 ∧ dep.kind ≠ .view ∧
+      (E.mode = .bor → ∃ dep ∈ E.path, ∃ n0, RootNode m dep.root n0 ∧
         Lands dep.kind (.node t c d es) n0) := by
   rcases hi.mode_cases hy with hm | hm | hm
   · have hos : E.mode.ownSlot = true := by rw [hm]; rfl
@@ -116,14 +99,14 @@ theorem MInv.vec_node {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry
     obtain ⟨v, hv, hok⟩ := hi.bor_val hy hl hos
     rw [ht] at hok
     obtain ⟨c, rfl, dep, hd, hh⟩ := hok
-    obtain ⟨n0, d, es, hr, hk, hla, hw, hvs⟩ := hrefAt_iff.mp hh
+    obtain ⟨n0, d, es, hr, hla, hw, hvs⟩ := hh
     obtain ⟨o, T, hoT, hsT⟩ := hr.owned
     have hsub : Sub (.node t c d es) n0 := hla.sub
     have hna : NodeAt m c (.node t c d es) := ⟨o, T, hoT, hsub.trans hsT, t, d, es, rfl⟩
     have ha := hi.heap.alloc o T hoT
     refine ⟨c, d, es, ⟨(ha c ((hsub.trans hsT).ids c (by simp))).1,
       (ha d ((hsub.trans hsT).ids d (by simp))).1, Or.inr ⟨hv, hna⟩⟩, hw, hvs,
-      fun _ => Or.inr (Or.inl ⟨c, hv, hna⟩), fun _ => ⟨dep, hd, n0, hr, hk, hla⟩⟩
+      fun _ => Or.inr (Or.inl ⟨c, hv, hna⟩), fun _ => ⟨dep, hd, n0, hr, hla⟩⟩
 
 /-- The buffer a live slice binding views. -/
 theorem MInv.slice_node {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t : Ty}

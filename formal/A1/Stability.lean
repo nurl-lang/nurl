@@ -92,7 +92,7 @@ theorem rootb_anchor {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
       simp only at hv hsl'
       subst hv; subst hsl'
       rcases hrn with h1 | ⟨c, h1, _⟩ | ⟨d, o, l, h1, _⟩ <;> rw [hsl] at h1 <;> simp at h1
-    obtain ⟨Er, hEr, hroot⟩ := hi.wf p E hp hlive hnint dep.root hdv
+    obtain ⟨Er, hEr, hroot⟩ := hi.wf p E hp hlive (Or.inl hnint) dep.root hdv
     rcases hr with hown | ⟨c, hc, hn⟩ | ⟨d, o, l, hc, hn⟩
     · exact ⟨dep.root, n0, hF, hown, hs⟩
     all_goals
@@ -119,7 +119,8 @@ theorem rootb_anchor {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
       obtain ⟨c', hc', dep, hd, n0, d, es, hr, hk, _, _⟩ := hok
       injection hc' with hcc; subst hcc
       have hsub : Sub (.node t c d es) n0 := by
-        rcases hk with ⟨_, h⟩ | ⟨_, h⟩
+        rcases hk with ⟨_, h⟩ | ⟨_, h⟩ | ⟨_, h⟩
+        · rw [h]; exact Sub.refl _
         · rw [h]; exact Sub.refl _
         · exact h.sub
       obtain ⟨o, T, hF, hoT, hsT⟩ := key dep _ hd ⟨n0, hr, hsub⟩
@@ -198,17 +199,18 @@ theorem Evolve.grow_vkeep {m m' : Mem} {x : Var} {t : Ty} {c d d' : Nat} {es es'
 
 theorem Evolve.grow_hkeep {m m' : Mem} {x : Var} {t : Ty} {c d d' : Nat} {es es' : List Val}
     (hev : Evolve m m' x t c d d' es es') (hpre : ∀ e ∈ es, e ∈ es') {k : Kind}
-    (hk : k = .self → t.holdsView = false) : HKeep m m' ⟨x, k⟩ := by
+    (hk : k = .self → t.holdsView = false) (hkv : k ≠ .view) : HKeep m m' ⟨x, k⟩ := by
   intro c2 t2 H hH ⟨n0, d2, es2, hr, hkk, hw, hv⟩
   have := rootNode_own hev.before hr
   subst this
-  rcases hkk with ⟨hs, heq⟩ | ⟨hin, hb⟩
+  rcases hkk with ⟨hs, heq⟩ | ⟨hvw, _⟩ | ⟨hin, hb⟩
   · cases heq
     exact ⟨_, d', es', Or.inl hev.after, Or.inl ⟨hs, rfl⟩, hev.wf, no_views (hk hs) _ _ _⟩
+  · exact absurd hvw hkv
   · obtain ⟨ty, c1, d1, es1, e, heq, he, hs⟩ := hb
     cases heq
-    exact ⟨_, d2, es2, Or.inl hev.after, Or.inr ⟨hin, _, _, d', es', e, rfl, hpre e he, hs⟩, hw,
-      hv.keep hH⟩
+    exact ⟨_, d2, es2, Or.inl hev.after, Or.inr (Or.inr ⟨hin, _, _, d', es', e, rfl, hpre e he, hs⟩),
+      hw, hv.keep hH⟩
 
 /-- Shrinking (`vec_pop`): only a borrow of the whole handle survives, and
     only of a container that holds no views. -/
@@ -217,9 +219,10 @@ theorem Evolve.self_hkeep {m m' : Mem} {x : Var} {t : Ty} {c d d' : Nat} {es es'
   intro c2 t2 H hH ⟨n0, d2, es2, hr, hkk, hw, hv⟩
   have := rootNode_own hev.before hr
   subst this
-  rcases hkk with ⟨_, heq⟩ | ⟨hin, _⟩
+  rcases hkk with ⟨_, heq⟩ | ⟨hin, _⟩ | ⟨hin, _⟩
   · cases heq
     exact ⟨_, d', es', Or.inl hev.after, Or.inl ⟨rfl, rfl⟩, hev.wf, no_views ht _ _ _⟩
+  · cases hin
   · cases hin
 
 /-! ### Rerooting at the end of a borrowed parameter's scope -/

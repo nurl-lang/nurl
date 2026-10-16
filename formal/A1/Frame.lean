@@ -177,7 +177,7 @@ theorem MInv.change {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     · obtain ⟨r, k⟩ := dep
       simp only at hr; subst hr
       exact hkeep k (hnot _ hd rfl)
-    · obtain ⟨Er, hEr, hroot⟩ := hi.wf v E hv' hlE hnint dep.root (List.mem_map_of_mem hd)
+    · obtain ⟨Er, hEr, hroot⟩ := hi.wf v E hv' hlE (Or.inl hnint) dep.root (List.mem_map_of_mem hd)
       have hk := rootKeep_frame hi hanch (fun o ho => hst o (fun h => hxF (h ▸ ho))) hEr hroot
         (hst _ hr)
       exact ⟨hk.vkeep, hk.hkeep⟩
@@ -251,14 +251,19 @@ theorem MInv.change {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     by_cases hvx : v = x
     · subst hvx
       have := getX E' hv'; subst this
-      obtain ⟨_, _, _, _, _, hwf⟩ := hox
-      rcases hwf hl hnint r hr with ⟨rfl, hroot⟩ | ⟨hrx, Er, hEr, hroot⟩
+      obtain ⟨_, _, _, _, hm', hwf⟩ := hox
+      have hnint' : E'.ty ≠ .int := by
+        rcases hnint with h | h
+        · exact h
+        · exact absurd (hm' ▸ h) hxr
+      rcases hwf hl hnint' r hr with ⟨rfl, hroot⟩ | ⟨hrx, Er, hEr, hroot⟩
       · exact ⟨E', by simp, hroot⟩
       · exact ⟨Er, by rw [upd_ne _ _ hrx]; exact hEr, hroot⟩
     · obtain ⟨E, hE, rfl⟩ := getE v E' hv' hvx
-      rw [killE_ty] at hnint
+      rw [killE_ty, killE_mode] at hnint
       rw [killE_vdeps] at hr
-      obtain ⟨hlE, hnot⟩ := killE_live_dep hl hnint
+      have hlE : E.live = true := by
+        rw [killE_live] at hl; simp only [Bool.and_eq_true] at hl; exact hl.1
       obtain ⟨Er, hEr, hroot⟩ := hi.wf v E hE hlE hnint r hr
       by_cases hrx : r = x
       · subst hrx
@@ -266,9 +271,11 @@ theorem MInv.change {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
         | none =>
           exfalso
           obtain ⟨dep, hd, rfl⟩ := List.mem_map.mp hr
-          have := hnot dep hd rfl
-          rw [hrem rfl] at this
-          cases hk : dep.kind <;> rw [hk] at this <;> simp [Eff.kills] at this
+          rcases hnint with hnint | hrb
+          · have := (killE_live_dep hl hnint).2 dep hd rfl
+            rw [hrem rfl] at this
+            cases hk : dep.kind <;> rw [hk] at this <;> simp [Eff.kills] at this
+          · exact hxF (hanch v E hE hrb _ (List.mem_map_of_mem hd))
         | some Ex' =>
           obtain ⟨_, _, _, _, hm, _⟩ := hox
           rw [hx] at hEr; cases hEr

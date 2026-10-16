@@ -119,7 +119,7 @@ def EntryWeaker (E E' : Entry) : Prop :=
 /-- A context's live entries depend only on roots it has.  (An integer's
     dependencies say nothing: it holds no memory.) -/
 def CtxWF (Γ : Ctx) : Prop :=
-  ∀ v E, Γ v = some E → E.live = true → E.ty ≠ .int → ∀ r ∈ roots E.vdeps,
+  ∀ v E, Γ v = some E → E.live = true → (E.ty ≠ .int ∨ E.mode = .rootb) → ∀ r ∈ roots E.vdeps,
     ∃ Er, Γ r = some Er ∧ Er.mode.isRoot = true
 
 def Weaker (Γ Γ' : Ctx) : Prop :=
@@ -279,9 +279,10 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       Γ x = none → x ∉ F → CallT P Γ F f args E Γ1 → StmtT P (setE Γ1 x E) F s Δ →
       StmtT P Γ F (.letcall x f args s) (exitScope x Δ)
   | scope {Γ Δ : Ctx} {F : List Var} {x : Var} {s : Stmt} :
-      (Γ x).isSome → x ∉ F → StmtT P Γ F s Δ → StmtT P Γ F (.scope x s) (exitScope x Δ)
+      (∃ E, Γ x = some E ∧ E.mode ≠ .rootb) → x ∉ F → StmtT P Γ F s Δ →
+      StmtT P Γ F (.scope x s) (exitScope x Δ)
   | rbind {Γ Δ : Ctx} {F : List Var} {p : Var} {s : Stmt} {E : Entry} :
-      Γ p = some E → E.mode = .rootb → E.live = true → (∀ r ∈ roots E.vdeps, r ∈ F) →
+      Γ p = some E → E.mode = .rootb → E.live = true → (∀ r ∈ roots E.vdeps, r ∈ F) → p ∉ F →
       StmtT P Γ F s Δ → StmtT P Γ F (.rbind p s) (exitRoot p E.path Δ)
   | frozen {Γ Δ : Ctx} {F z : List Var} {s : Stmt} :
       StmtT P Γ (F ++ z) s Δ → StmtT P Γ F (.frozen z s) Δ
@@ -306,7 +307,7 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       Γ x = some E → E.live = true → E.mode = .own → E.ty = .vec t → x ∉ F →
       StmtT P Γ F (.free x) (setE (kill .replace false x Γ) x { E with live := false })
   | sub {Γ Γ0 Δ0 Δ : Ctx} {F : List Var} {s : Stmt} :
-      Weaker Γ Γ0 → StmtT P Γ0 F s Δ0 → Weaker Δ0 Δ → StmtT P Γ F s Δ
+      Weaker Γ Γ0 → StmtT P Γ0 F s Δ0 → (Δ0 = Δ ∨ Weaker Δ0 Δ) → StmtT P Γ F s Δ
 
 /-! ### Functions -/
 
