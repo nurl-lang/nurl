@@ -377,14 +377,20 @@ jobs:
           git fetch --no-tags --depth=1 origin "${{ github.event.pull_request.base.sha || github.event.before }}" || true
           ./tools/check_golden_twins.sh "${{ github.event.pull_request.base.sha || github.event.before }}"
 
-      - name: no packages/… self-imports (breaks registry installs)
+      - name: package imports resolve once installed (no packages/… self-imports, every deps/ import declared)
         # In this repo every build runs from the root, so a
         # `$ \`packages/<name>/src/x.nu\`` import resolves and every test
         # passes. Installed from the registry the package lands under
         # deps/<name>/src/ and that path does not exist — torchpt 0.1.0
         # shipped that way and was uninstallable from the day it was
-        # published. No in-repo test can catch it; this can.
-        run: ./tools/check_package_imports.sh
+        # published. Likewise a `deps/<x>/…` import whose package is not
+        # in [dependencies] compiles here, where the deps/ symlink exists,
+        # and fails for every registry install — objdet 0.4.4 passed CI
+        # that way and was stopped only by the publish gate. No in-repo
+        # test can catch either; this can. The controls prove the rules.
+        run: |
+          ./tools/check_package_imports.sh
+          python3 tools/tests/test_package_imports.py
 
       - name: a package's --version matches its manifest
         # `cli_new prog about VERSION` takes the version as a string
