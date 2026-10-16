@@ -14,3 +14,4 @@ import A1.TypingFacts
 import A1.Preservation
 import A1.Progress
 import A1.Wf
+import A1.Rename
