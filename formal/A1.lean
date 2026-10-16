@@ -16,3 +16,4 @@ import A1.Progress
 import A1.Wf
 import A1.Rename
 import A1.Call
+import A1.Bind

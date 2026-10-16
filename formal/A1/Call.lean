@@ -1740,6 +1740,38 @@ theorem fin_weaker (h : CallH P Γ F x fn args base) {Δa : Ctx} (hdt : DomTy (s
     refine ⟨by simp, fun E E' hE hE' => ?_⟩
     cases hE; cases hE'; exact hw
 
+/-- The call's expansion is well-typed where the call was. -/
+theorem typed (h : CallH P Γ F x fn args base) {k : Stmt} {Δ : Ctx} (hk : k.src = true)
+    (hkT : StmtT P (setE (callPost Γ fn args) x (callRes Γ fn args)) F k Δ) :
+    StmtT P ((callS Γ F fn args base x).canon (sigCtx fn)) F (callStmt fn args base x k) (exitScope x Δ) := by
+  obtain ⟨hsrc, _, _, _, _, _, hlends, hrholds, _, Δa, hbody, ⟨Er, hEr, hErl, hErt, hErm, hErp, hErh⟩, hio⟩ :=
+    h.fnok
+  obtain ⟨hren, _⟩ := RSetup.StmtT.ren h.sOK h.prog hbody hsrc h.sig_abs (sigCtx_wf fn)
+  have hdt := StmtT.domTy hbody hsrc
+  have hErv : ∀ d0 ∈ Er.vdeps, lendable fn d0.root := by
+    intro d0 hd0
+    unfold Entry.vdeps at hd0
+    rcases List.mem_append.mp hd0 with hd | hd
+    · split at hd
+      · cases hd
+      · exact hlends _ (hErp d0 hd)
+    · exact hrholds _ (hErh d0 hd)
+  obtain ⟨hl', hm', ht', hp', hh'⟩ := h.res_props hErl hErt hErm hErp hErh
+  refine h.typed_of hk hren (h.res_at hEr hErm hErv) hl' hm' ht' ?_
+    (fun Γ3 hΓ3 => h.fin_weaker hdt hErl hErt hErm hErp hErh hio Γ3 hΓ3) hkT
+  intro hx
+  obtain ⟨d, hd, hdx⟩ := List.mem_map.mp hx
+  have hdom : (Γ d.root).isSome := by
+    unfold Entry.vdeps at hd
+    rcases List.mem_append.mp hd with hd | hd
+    · split at hd
+      · cases hd
+      · rename_i ho
+        rw [hm'] at ho
+        exact (hp' (by simpa using ho) d hd).1
+    · exact (hh' d hd).1
+  exact (h.dom_ne hdom).1 hdx
+
 end CallH
 
 end A1
