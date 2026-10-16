@@ -121,6 +121,7 @@ $ `src/silero.nu`
     i draft_at  // the stream position the last draft heard up to (−1 = none)
     i draft_voice  // last_voice when it was made
     i full_voice  // … and when the last full-context one was
+    b full_ok  // … and that one did run (a skipped one is not retried)
     b draft_full
     // the action being handed out
     i act_seg  // the utterance it belongs to (1, 2, …)
@@ -154,7 +155,7 @@ $ `src/silero.nu`
         -100.0 -100.0 . cfg threshold - . cfg threshold 0.15 0.0 0
         0 -1 -1 -1 0 F -1
         g 0 . cfg pause_ms -1
-        -1 -1 -1 F
+        -1 -1 -1 F F
         0 F F 0 0 F F 0 0 0 0
     }
 }
@@ -287,7 +288,7 @@ $ `src/silero.nu`
     = . s act_from . s seg_start
     = . s act_to end
     = . s act_full T
-    = . s act_reuse == . s full_voice . s last_voice
+    = . s act_reuse & . s full_ok == . s full_voice . s last_voice
     = . s act_pause_ms / - . s pos . s last_voice 16
     = . s act_speech_from . s onset
     = . s act_speech_to . s last_voice
@@ -481,6 +482,7 @@ $ `src/silero.nu`
                 = . s draft_at . s pos
                 = . s draft_voice . s last_voice
                 = . s full_voice . s last_voice
+                = . s full_ok T
                 = . s draft_full T
                 = . s act_seg . s seg
                 = . s act_from . s seg_start
@@ -521,6 +523,13 @@ $ `src/silero.nu`
         ( __wss_chunk s )
     }
     ^ WSS_NONE
+}
+
+// The draft just handed out did not run (the GPU was busy, or the stream's
+// share of it was spent): a full-context one can no longer stand in for
+// the final.
+@ ws_stream_draft_skipped inout WsStream s → v {
+    ? . s act_full { = . s full_ok F } {}
 }
 
 // The client is done (or gone): whatever is open closes now, over all the

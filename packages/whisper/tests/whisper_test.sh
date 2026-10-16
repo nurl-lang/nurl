@@ -353,6 +353,21 @@ PYEOF3
         else
             bad "ws_client did not build"
         fi
+        # an open stream is one connection, not the server: /health answers
+        # while a WebSocket sits open (one worker made it wait for the close)
+        python3 - "$PORT" <<'PYEOF' &
+import socket, sys, time
+s = socket.create_connection(("127.0.0.1", int(sys.argv[1])))
+s.sendall(b"GET / HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+          b"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n")
+s.recv(4096); time.sleep(4); s.close()
+PYEOF
+        HOLD_PID=$!
+        sleep 1
+        curl -s -m 2 "http://127.0.0.1:$PORT/health" | grep -q '"status"' \
+            && ok "serve: /health answers while a WebSocket stream is open (connections are served at once)" \
+            || bad "serve: /health waited behind an open stream"
+        wait $HOLD_PID 2>/dev/null
     else
         bad "serve did not come up"; tail -5 "$WORK/serve.log"
     fi

@@ -83,7 +83,10 @@ whisper serving on https://0.0.0.0:6543 (test page at /, POST /inference, GET /h
 
 The model loads once, before the port opens; a request pays only for its
 own audio (distil-large-v3: 0.33 s per warm request, where a cold CLI
-invocation of the same clip costs 1.15 s).
+invocation of the same clip costs 1.15 s). Eight connections are served
+at once — a WebSocket stream keeps its connection for as long as the
+microphone is open — while the GPU runs one transcription at a time; a
+stream's drafts give way to anyone's final.
 
 **`--unload-after SECONDS`** makes the model a thing the server *holds*
 rather than *is*: after that many idle seconds — no request, no open
