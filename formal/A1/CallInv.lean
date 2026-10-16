@@ -269,6 +269,119 @@ theorem keep (h : CallH P Γ F x fn args m.nv) {f : Nat} {k : Stmt} :
 
 end CallH
 
+/-! ### A well-typed call can bind its parameters -/
+
+theorem bind_exists {m0 : Mem} {base : Nat} :
+    ∀ (ps : List (PMode × Ty)) (as : List Var) (i : Nat) (m : Mem), ps.length = as.length →
+      (∀ (k : Nat) (p : PMode × Ty) (a : Var), ps[k]? = some p → as[k]? = some a →
+        (p.1 = .inp → ∃ v, (m0.st a).bind lendSlot = some v) ∧
+        (p.1 = .sink → ∃ v, m0.st a = some ⟨true, some v⟩)) →
+      (∀ a ∈ as, a < base) →
+      (∀ (k k' : Nat) (a : Var), k < k' → (∃ t, ps[k]? = some (PMode.sink, t)) → as[k]? = some a →
+        as[k']? ≠ some a) →
+      (∀ a ∈ as, m.st a = m0.st a) →
+      ∃ m1, BindParams m ps as base i m1 := by
+  intro ps
+  induction ps with
+  | nil =>
+    intro as i m hl _ _ _ _
+    cases as with
+    | nil => exact ⟨m, BindParams.nil⟩
+    | cons _ _ => simp at hl
+  | cons p ps ih =>
+    intro as i m hl hv hlt hd hsame
+    cases as with
+    | nil => simp at hl
+    | cons a as =>
+      obtain ⟨pm, t⟩ := p
+      have hl' : ps.length = as.length := by simpa using hl
+      have hv' : ∀ (k : Nat) (p : PMode × Ty) (a' : Var), ps[k]? = some p → as[k]? = some a' →
+          (p.1 = .inp → ∃ v, (m0.st a').bind lendSlot = some v) ∧
+          (p.1 = .sink → ∃ v, m0.st a' = some ⟨true, some v⟩) :=
+        fun k p a' h1 h2 => hv (k + 1) p a' (by simpa using h1) (by simpa using h2)
+      have hlt' : ∀ a' ∈ as, a' < base := fun a' h => hlt a' (by simp [h])
+      have hd' : ∀ (k k' : Nat) (a' : Var), k < k' → (∃ t, ps[k]? = some (PMode.sink, t)) → as[k]? = some a' →
+          as[k']? ≠ some a' := fun k k' a' hk h1 h2 => by
+        have := hd (k + 1) (k' + 1) a' (by omega) (by simpa using h1) (by simpa using h2)
+        simpa using this
+      have h0 := hv 0 (pm, t) a (by simp) (by simp)
+      cases pm with
+      | inp =>
+        obtain ⟨v, hv0⟩ := h0.1 rfl
+        cases hs : m0.st a with
+        | none => rw [hs] at hv0; cases hv0
+        | some sl =>
+          rw [hs] at hv0
+          obtain ⟨m1, hb⟩ := ih as (i + 1) (m.set (base + i) ⟨false, some v⟩) hl' hv' hlt' hd' (by
+            intro a' ha'
+            have hne : a' ≠ base + i := fun he => by have h1 := vlt (hlt' a' ha'); have h2 := veq he; omega
+            simp [upd_ne _ _ hne, hsame a' (by simp [ha'])])
+          exact ⟨m1, BindParams.inp (by rw [hsame a (by simp), hs]) hv0 hb⟩
+      | sink =>
+        obtain ⟨v, hv0⟩ := h0.2 rfl
+        obtain ⟨m1, hb⟩ := ih as (i + 1) ((m.set a ⟨true, none⟩).set (base + i) ⟨true, some v⟩) hl' hv'
+          hlt' hd' (by
+            intro a' ha'
+            have hne : a' ≠ base + i := fun he => by have h1 := vlt (hlt' a' ha'); have h2 := veq he; omega
+            have hna : a' ≠ a := by
+              intro he; subst he
+              obtain ⟨k', hk', hka⟩ := List.getElem_of_mem ha'
+              exact hd 0 (k' + 1) a' (by omega) ⟨t, by simp⟩ (by simp)
+                (by simp [List.getElem?_eq_getElem hk', hka])
+            simp [upd_ne _ _ hne, upd_ne _ _ hna, hsame a' (by simp [ha'])])
+        exact ⟨m1, BindParams.sink (by rw [hsame a (by simp), hv0]) hb⟩
+      | inout b =>
+        obtain ⟨m1, hb⟩ := ih as (i + 1) m hl' hv' hlt' hd' (fun a' ha' => hsame a' (by simp [ha']))
+        exact ⟨m1, BindParams.inout hb⟩
+
+/-- The call case of progress. -/
+theorem callProgress {P : Prog} {Γ : Ctx} {F : List Var} {x : Var} {f : Nat} {args : List Var} {k : Stmt}
+    {E : Entry} {Γ1 : Ctx} {m : Mem} (hx : Γ x = none) (hc : CallT P Γ F f args E Γ1) (hi : MInv m Γ) :
+    ∃ r, Step P m (.letcall x f args k) r := by
+  obtain ⟨fn, hf, hlen, hargs, _, _⟩ := hc
+  have hmx : m.st x = none := by
+    have := hi.dom x; rw [hx] at this; cases h : m.st x <;> simp_all
+  have hlt : ∀ a ∈ args, a < m.nv := by
+    intro a ha
+    obtain ⟨i, hi', rfl⟩ := mem_args ha
+    obtain ⟨Ea, hEa, _⟩ := hargs i (hlen ▸ hi')
+    exact hi.nvSt _ (by rw [← hi.dom, hEa]; rfl)
+  obtain ⟨m1, hb⟩ := bind_exists (m0 := m) (base := m.nv) fn.params args 0 m hlen.symm
+    (fun k p a hk ha => by
+      have hkl := (List.getElem?_eq_some_iff.mp hk).1
+      have hgd : args.getD k 0 = a := by simp [List.getD, ha]
+      obtain ⟨Ea, hEa, hl, hok, _⟩ := hargs k hkl
+      rw [hgd] at hEa
+      have hp := (List.getElem?_eq_some_iff.mp hk).2
+      rw [hp] at hok
+      obtain ⟨pm, t⟩ := p
+      refine ⟨fun hm => ?_, fun hm => ?_⟩
+      · rcases hi.mode_cases hEa with hmo | hmo | hmo
+        · obtain ⟨T, hT, hw, _⟩ := hi.own_val hEa hl (by rw [hmo]; rfl)
+          obtain ⟨sl, hsl, _, _, hown, _⟩ := hi.slot _ Ea hEa
+          obtain ⟨⟨t', ht'⟩, _⟩ := hown (by rw [hmo]; rfl)
+          rw [ht'] at hw
+          cases hw with
+          | node _ => exact ⟨_, by rw [hT]; rfl⟩
+        · obtain ⟨v, hv, _⟩ := hi.bor_val hEa hl (by rw [hmo]; rfl)
+          exact ⟨v, by rw [hv]; rfl⟩
+        · obtain ⟨v, hv, _⟩ := hi.bor_val hEa hl (by rw [hmo]; rfl)
+          exact ⟨v, by rw [hv]; rfl⟩
+      · simp only at hm; subst hm
+        obtain ⟨_, hmo, _⟩ := hok
+        obtain ⟨T, hT, _⟩ := hi.own_val hEa hl (by rw [hmo]; rfl)
+        exact ⟨T, hT⟩)
+    hlt
+    (fun k k' a hkk ⟨t, hk⟩ ha ha' => by
+      have hkl := (List.getElem?_eq_some_iff.mp hk).1
+      have hk'l : k' < args.length := (List.getElem?_eq_some_iff.mp ha').1
+      obtain ⟨_, _, _, _, hmv⟩ := hargs k hkl
+      have hp := (List.getElem?_eq_some_iff.mp hk).2
+      have := ((hmv (by rw [hp]; rfl)).2.2 k' (hlen ▸ hk'l) (by omega)).1
+      exact this (by simp [List.getD, ha, ha']))
+    (fun _ _ => rfl)
+  exact ⟨_, Step.letcall hf hmx hb⟩
+
 /-- What a well-typed call in a configuration satisfying the invariant gives. -/
 theorem callH_of {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {x : Var} {f : Nat} {args : List Var}
     {k : Stmt} {m : Mem} {fn : Fn} (hf : P[f]? = some fn) (hx : Γ x = none) (hxF : x ∉ F)
