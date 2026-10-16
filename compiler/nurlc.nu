@@ -11439,6 +11439,15 @@ unsafe @ nurl_lex_peek4_type i h → i {
     ^ out
 }
 
+// The side-table key under which a borrow of `cont` recorded for `ptr`
+// is CONDITIONAL — on a callee, not compiled yet, keeping the argument
+// that handed the view over (its value: "<callee> <argidx>"). One
+// function's keys never meet another's (g_ff_gen).
+@ __ptr_kc_key s ptr s cont → s {
+    : s out ( nurl_str_cat4 ptr `@kc@` cont ( nurl_str_int g_ff_gen ) )
+    ^ out
+}
+
 @ __is_ptr_ty s pt → b {
     : i n ( nurl_str_len pt )
     ^ & > n 0 == ( nurl_str_get pt - n 1 ) 42
@@ -14090,16 +14099,33 @@ unsafe @ gen_call i lex i syms i cg → s {
                 ? & == __pk_vc 2 == 0 ( nurl_sym_len g_fn_compiled call_name ) {
                     ( nurl_sym_def g_ptrtab ( nurl_str_cat __pk_c0 `@owncond` ) ( nurl_str_cat3 call_name ` ` ( nurl_str_int arg_idx ) ) )
                 } {}
+                // The container holds the view only if that callee keeps it:
+                // so is the borrow, and a later mutation of the view's
+                // source makes the container stale only then. The condition
+                // rides on the borrow (__ptr_kc_key) and moves into the dead
+                // mark when the source is mutated (__ptr_kill_tagged), to be
+                // decided with the callee's final summary (§2.10's parking).
+                : b __pk_kc & == __pk_vc 2 == 0 ( nurl_sym_len g_fn_compiled call_name )
                 ? != 0 ( nurl_str_len __pkb ) {
                     ( __ptr_own_note syms __pk_c0 __pkb )
                     ( __ptr_src_add __pk_c0 __pkb bck_arg_line )
+                    ? __pk_kc {
+                        : s __kck ( __ptr_kc_key __pk_c0 __pkb )
+                        ( nurl_sym_def g_ptrtab __kck ( nurl_str_cat3 call_name ` ` ( nurl_str_int arg_idx ) ) )
+                    } {}
                 } {
                     ? ( is_ident_tok bck_arg_tt ) {
                         : s __pko ( __pown_find bck_arg_val )
                         ? != 0 ( nurl_str_len __pko ) {
                             ( __ptr_own_set __pk_c0 __pko )
                             : s __pks ( __ptr_src_of bck_arg_val )
-                            ? != 0 ( nurl_str_len __pks ) { ( __ptr_src_add __pk_c0 __pks bck_arg_line ) } {}
+                            ? != 0 ( nurl_str_len __pks ) {
+                                ( __ptr_src_add __pk_c0 __pks bck_arg_line )
+                                ? __pk_kc {
+                                    : s __kck2 ( __ptr_kc_key __pk_c0 __pks )
+                                    ( nurl_sym_def g_ptrtab __kck2 ( nurl_str_cat3 call_name ` ` ( nurl_str_int arg_idx ) ) )
+                                } {}
+                            } {}
                         } {}
                     } {}
                 }
@@ -29129,6 +29155,10 @@ unsafe @ borrowck_fn_end i lex i syms s fname → v {
     // raw code's lint, where the walk takes the code's word.)
     ? & ( bck_sound ) ! ( bck_unsafe_ctx ) { ^ } {}
     : i syms g_ptrtab
+    // (a borrow recorded here is certain; a conditional one has its
+    // condition written back by its caller right after)
+    : s kck ( __ptr_kc_key ptr cont )
+    ? != 0 ( nurl_str_len ( nurl_sym_get syms kck ) ) { ( nurl_sym_def syms kck `` ) } {}
     : s cur ( nurl_sym_get syms `__ptr_src__` )
     : s e ( nurl_str_cat3 ptr ` ` ( nurl_str_cat3 cont ` ` ( nurl_str_int line ) ) )
     : s new ? == 0 ( nurl_str_len cur ) ( nurl_str_cat e `` ) ( nurl_str_cat3 cur ` ` e )
@@ -29251,16 +29281,27 @@ unsafe @ borrowck_fn_end i lex i syms s fname → v {
         : s _l ( str_first_word rest ) = rest ( str_skip_word rest )
         ? ( seq c cont ) {
             : s old ( __ptr_entry_find dead0 p )
+            // A borrow that holds only if a callee not compiled yet keeps
+            // its argument (__ptr_kc_key): a certain mutation of the
+            // source makes it stale only on that condition — `k:<callee>`
+            // in the mark, decided by resolve_pending_stale.
+            : s kck ( __ptr_kc_key p cont )
+            : s kcv ( nurl_sym_get syms kck )
+            : b condk & certain != 0 ( nurl_str_len kcv )
+            : s ecn ? condk ( nurl_str_cat `k:` ( str_first_word kcv ) ) ( nurl_str_cat cn `` )
+            : s efn ? condk ( nurl_str_cat ( str_first_word kcv ) `` ) ( nurl_str_cat fn `` )
+            : s eai ? condk ( nurl_str_cat ( str_first_word ( str_skip_word kcv ) ) `` ) ( nurl_str_cat ai `` )
+            : b ecertain & certain ! condk
             // Nothing recorded yet, or — for a CERTAIN mutation — a
             // parked question to supersede. The certain answer replaces
             // it, line and all: the report has to name the mutation that
             // really reallocates, not the call that raised the question.
             ? | == 0 ( nurl_str_len old )
-            & certain ! ( __ptr_tail_certain old )
+            & ecertain ! ( __ptr_tail_certain old )
             { ? != 0 ( nurl_str_len old ) { = dead ( __ptr_entry_drop dead p ) } {}
                 : s entry ( nurl_str_cat3 p ` `
                 ( nurl_str_cat3 ( nurl_str_int line ) ` `
-                ( nurl_str_cat3 cn ` ` ( nurl_str_cat3 fn ` ` ai ) ) ) )
+                ( nurl_str_cat3 ecn ` ` ( nurl_str_cat3 efn ` ` eai ) ) ) )
                 = dead ? == 0 ( nurl_str_len dead ) ( nurl_str_cat entry `` )
                 ( nurl_str_cat3 dead ` ` entry ) }
             {}
@@ -40350,12 +40391,21 @@ unsafe @ resolve_mutation_summaries → v {
         // Mangled name first, then the generic — the same two-step
         // lookup gen_call and resolve_pending_iter_mut do. A view ends
         // where its buffer may move or go (the reallocation summary).
-        : ~ s mut ( nurl_sym_get g_fn_reallocs cn )
-        ? == 0 ( nurl_str_len mut ) { = mut ( nurl_sym_get g_fn_reallocs fn ) } {}
-        ? ( str_contains_word mut ai )
-        { ( __ptr_stale_warn_at file ( nurl_str_to_int ln )
-            ( nurl_str_to_int cl ) nm ct ( nurl_str_to_int dl ) `` ) }
-        {}
+        ? ( nurl_str_starts cn `k:` ) {
+            // A borrow that held only if the callee keeps the argument
+            // that handed the view over: stale exactly when it does.
+            ? | ( nurl_sym_has_word g_fn_keeps fn ai ) ( nurl_sym_has_word g_fn_escapes fn ai )
+            { ( __ptr_stale_warn_at file ( nurl_str_to_int ln )
+                ( nurl_str_to_int cl ) nm ct ( nurl_str_to_int dl ) `` ) }
+            {}
+        } {
+            : ~ s mut ( nurl_sym_get g_fn_reallocs cn )
+            ? == 0 ( nurl_str_len mut ) { = mut ( nurl_sym_get g_fn_reallocs fn ) } {}
+            ? ( str_contains_word mut ai )
+            { ( __ptr_stale_warn_at file ( nurl_str_to_int ln )
+                ( nurl_str_to_int cl ) nm ct ( nurl_str_to_int dl ) `` ) }
+            {}
+        }
     }
 }
 

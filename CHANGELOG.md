@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+A view handed to a function defined further down the file no longer
+makes the container it was handed with stale by itself. In raw code,
+`( f c ( string_data x ) )` with `f` below the call was taken to keep the
+view in `c`, so a later mutation of `x` rejected the next use of `c` even
+when `f` only copied the string — and with `f` above, the same program
+compiled. The borrow is now conditional on `f` keeping that argument and
+is decided after the module, like the other verdicts that depend on a
+callee (compiler/tests/diag_stale_borrow_kept_forward.nu). gpukit hit it:
+`gk_run_checked` sits above the window parser it calls.
+
 Mutable globals no longer race. A scalar mutable global (an integer,
 bool, float or `s`) is read and written with relaxed atomics, so two
 threads touching it see whole values instead of having undefined
