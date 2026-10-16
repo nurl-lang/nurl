@@ -101,7 +101,7 @@ theorem killE_live (e : Eff) (hv : Bool) (x : Var) (E : Entry) :
 /-- A live entry after `kill` was not hit: each dependency on `x` is of a
     kind the effect does not end. -/
 theorem killE_live_dep {e : Eff} {hv : Bool} {x : Var} {E : Entry}
-    (hl : (killE e hv x E).live = true) (hnint : E.ty ≠ .int) :
+    (hl : (killE e hv x E).live = true) (hnint : E.ty ≠ .int ∨ E.mode = .rootb) :
     E.live = true ∧ ∀ dep ∈ E.vdeps, dep.root = x → e.kills hv dep.kind = false := by
   rw [killE_live] at hl
   simp only [Bool.and_eq_true, Bool.not_eq_eq_eq_not, Bool.not_true] at hl
@@ -112,8 +112,12 @@ theorem killE_live_dep {e : Eff} {hv : Bool} {x : Var} {E : Entry}
     exfalso
     have : hits e hv x E = true := by
       unfold hits
-      simp only [Bool.and_eq_true, bne_iff_ne, ne_eq, List.any_eq_true, beq_iff_eq]
-      exact ⟨hnint, dep, hd, hr, hb⟩
+      simp only [Bool.and_eq_true, Bool.or_eq_true, bne_iff_ne, ne_eq, List.any_eq_true,
+        beq_iff_eq]
+      refine ⟨?_, dep, hd, hr, hb⟩
+      rcases hnint with h | h
+      · exact Or.inl h
+      · exact Or.inr (by rw [h])
     rw [this] at hl; exact absurd hl.2 (by simp)
 
 theorem SlotOK.dead {m m' : Mem} {E : Entry} {sl : Slot} (h : SlotOK m E sl) (hl : E.live = false) :
@@ -172,7 +176,7 @@ theorem MInv.change {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
   have depKeep : ∀ v E, Γ v = some E → (killE e hv x E).live = true → E.ty ≠ .int →
       ∀ dep ∈ E.vdeps, VKeep m m' dep ∧ HKeep m m' dep := by
     intro v E hv' hl hnint dep hd
-    obtain ⟨hlE, hnot⟩ := killE_live_dep hl hnint
+    obtain ⟨hlE, hnot⟩ := killE_live_dep hl (Or.inl hnint)
     by_cases hr : dep.root = x
     · obtain ⟨r, k⟩ := dep
       simp only at hr; subst hr
@@ -272,7 +276,7 @@ theorem MInv.change {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
           exfalso
           obtain ⟨dep, hd, rfl⟩ := List.mem_map.mp hr
           rcases hnint with hnint | hrb
-          · have := (killE_live_dep hl hnint).2 dep hd rfl
+          · have := (killE_live_dep hl (Or.inl hnint)).2 dep hd rfl
             rw [hrem rfl] at this
             cases hk : dep.kind <;> rw [hk] at this <;> simp [Eff.kills] at this
           · exact hxF (hanch v E hE hrb _ (List.mem_map_of_mem hd))

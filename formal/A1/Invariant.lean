@@ -118,5 +118,7 @@ structure Inv (m : Mem) (Γ : Ctx) (F : List Var) (s : Stmt) : Prop extends MInv
   nvS       : ∀ v ∈ s.vars, v < m.nv
   nvF       : ∀ v ∈ F, v < m.nv
   anch      : ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ s.spine → ∀ r ∈ roots E.vdeps, r ∈ F
+  spineNd   : s.spine.Nodup
+  spineDom  : ∀ v ∈ s.spine, ∃ E, Γ v = some E
 
 end A1

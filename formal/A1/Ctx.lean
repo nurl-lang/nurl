@@ -118,6 +118,11 @@ theorem Inv.weaker {m : Mem} {Γ Γ' : Ctx} {F : List Var} {s : Stmt} (hi : Inv 
     obtain ⟨E, hE, hwe⟩ := hw.get' hp
     have hm' : E.mode = .rootb := by rw [← hwe.2.1]; exact hm
     rw [hwe.2.2.1 hm']; exact hi.anch p E hE hm'
+  spineNd := hi.spineNd
+  spineDom v hv := by
+    obtain ⟨E, hE⟩ := hi.spineDom v hv
+    obtain ⟨E', hE', _⟩ := hw.get hE
+    exact ⟨E', hE'⟩
 
 theorem Inv.weaker_iff_wf {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (hi : Inv m Γ F s) :
     Weaker Γ Γ := Weaker.refl hi.wf

@@ -83,9 +83,9 @@ def derive (y : Var) (E : Entry) (k : Kind) : List Dep :=
 def setE (Γ : Ctx) (x : Var) (E : Entry) : Ctx := upd Γ x (some E)
 
 /-- Does effect `e` on `x` (element type holding views: `hv`) end `E`?  An
-    integer holds no memory, so nothing ends it. -/
+    integer binding holds no memory, so nothing ends it. -/
 def hits (e : Eff) (hv : Bool) (x : Var) (E : Entry) : Bool :=
-  E.ty != .int && E.vdeps.any (fun d => d.root == x && e.kills hv d.kind)
+  (E.ty != .int || E.mode == .rootb) && E.vdeps.any (fun d => d.root == x && e.kills hv d.kind)
 
 def killE (e : Eff) (hv : Bool) (x : Var) (E : Entry) : Entry :=
   if hits e hv x E then { E with live := false } else E
@@ -267,16 +267,33 @@ def CallT (P : Prog) (Γ : Ctx) (F : List Var) (f : Nat) (args : List Var) (E : 
 
 /-! ### Statements -/
 
+/-- Source code: no run-time forms.  What has not started running yet (a
+    binding's body, the rest of a sequence, a branch, a loop body) is
+    source; run-time forms appear only where execution is. -/
+def Stmt.src : Stmt → Bool
+  | .skip => true
+  | .seq a b => a.src && b.src
+  | .letv _ _ s => s.src
+  | .letcall _ _ _ s => s.src
+  | .assign _ _ => true
+  | .ite _ a b => a.src && b.src
+  | .while _ s => s.src
+  | .push _ _ => true
+  | .free _ => true
+  | .scope _ _ => false
+  | .rbind _ _ => false
+  | .frozen _ _ => false
+
 inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
   | skip {Γ : Ctx} {F : List Var} : StmtT P Γ F .skip Γ
   | seq {Γ Γ1 Δ : Ctx} {F : List Var} {a b : Stmt} :
-      StmtT P Γ F a Γ1 → StmtT P Γ1 F b Δ → StmtT P Γ F (.seq a b) Δ
+      b.src = true → StmtT P Γ F a Γ1 → StmtT P Γ1 F b Δ → StmtT P Γ F (.seq a b) Δ
   | letv {Γ Γ1 Δ : Ctx} {F : List Var} {x : Var} {r : Rhs} {s : Stmt} {E : Entry} :
-      Γ x = none → x ∉ F → RhsT Γ F r E Γ1 → StmtT P (setE Γ1 x E) F s Δ →
+      s.src = true → Γ x = none → x ∉ F → RhsT Γ F r E Γ1 → StmtT P (setE Γ1 x E) F s Δ →
       StmtT P Γ F (.letv x r s) (exitScope x Δ)
   | letcall {Γ Γ1 Δ : Ctx} {F : List Var} {x : Var} {f : Nat} {args : List Var} {s : Stmt}
       {E : Entry} :
-      Γ x = none → x ∉ F → CallT P Γ F f args E Γ1 → StmtT P (setE Γ1 x E) F s Δ →
+      s.src = true → Γ x = none → x ∉ F → CallT P Γ F f args E Γ1 → StmtT P (setE Γ1 x E) F s Δ →
       StmtT P Γ F (.letcall x f args s) (exitScope x Δ)
   | scope {Γ Δ : Ctx} {F : List Var} {x : Var} {s : Stmt} :
       (∃ E, Γ x = some E ∧ E.mode ≠ .rootb) → x ∉ F → StmtT P Γ F s Δ →
@@ -293,9 +310,10 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       RhsT Γ F r E Γ1 → E.ty = Ex.ty → x ∉ roots E.vdeps → (Γ1 x).isSome →
       StmtT P Γ F (.assign x r) (setE (kill .replace false x Γ1) x { E with mode := Ex.mode })
   | ite {Γ Δ : Ctx} {F : List Var} {c : Expr} {a b : Stmt} :
-      ExprT Γ c → StmtT P Γ F a Δ → StmtT P Γ F b Δ → StmtT P Γ F (.ite c a b) Δ
+      a.src = true → b.src = true → ExprT Γ c → StmtT P Γ F a Δ → StmtT P Γ F b Δ →
+      StmtT P Γ F (.ite c a b) Δ
   | while {Γ : Ctx} {F : List Var} {c : Expr} {s : Stmt} :
-      ExprT Γ c → StmtT P Γ F s Γ → StmtT P Γ F (.while c s) Γ
+      s.src = true → ExprT Γ c → StmtT P Γ F s Γ → StmtT P Γ F (.while c s) Γ
   | push {Γ Γ1 : Ctx} {F : List Var} {x y : Var} {Ex Ey Ex1 : Entry} {t : Ty} {D : List Dep} :
       Γ x = some Ex → Ex.live = true → Ex.ty = .vec t → canDo Ex.mode .realloc → x ∉ F →
       Γ y = some Ey → Ey.live = true → Ey.ty = t → y ≠ x →
@@ -365,7 +383,7 @@ def Stmt.vars : Stmt → List Var
     and holds only what `lends` and `rholds` name, every `inout` parameter
     is set again and holds only what `outHolds` names. -/
 def FnOK (P : Prog) (fn : Fn) : Prop :=
-  fn.params.length < fn.nvars ∧ (∀ v ∈ fn.body.vars, v < fn.nvars) ∧
+  fn.body.src = true ∧ fn.params.length < fn.nvars ∧ (∀ v ∈ fn.body.vars, v < fn.nvars) ∧
   fn.resTy.ok = true ∧ (fn.resOwn = true → ∃ s, fn.resTy = .vec s) ∧
   (∀ pt ∈ fn.params, pt.2.ok = true ∧ (pt.1 ≠ .inp → ∃ s, pt.2 = .vec s)) ∧
   (∀ jk ∈ fn.lends, lendable fn jk.1) ∧ (∀ jk ∈ fn.rholds, lendable fn jk.1) ∧

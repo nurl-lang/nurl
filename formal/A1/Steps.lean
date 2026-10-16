@@ -704,6 +704,20 @@ theorem vdeps_reroot {p : Var} {D : List Dep} {E : Entry} :
   simp only
   split <;> simp [List.flatMap_append]
 
+/-- A borrowed parameter that does not depend on `p` is untouched by `p`'s
+    rerooting. -/
+theorem rerootE_rootb {Γ : Ctx} {F : List Var}
+    (hanch : ∀ p E, Γ p = some E → E.mode = .rootb → ∀ r ∈ roots E.vdeps, r ∈ F)
+    {p : Var} (hpF : p ∉ F) (D : List Dep) {v : Var} {E : Entry} (hE : Γ v = some E)
+    (hmE : E.mode = .rootb) : rerootE p D E = E := by
+  have : ∀ d ∈ E.vdeps, d.root ≠ p := fun d hd h => hpF (h ▸ hanch v E hE hmE d.root
+    (List.mem_map_of_mem hd))
+  have hos' : E.mode.ownSlot = false := by rw [hmE]; rfl
+  have h1 : ∀ d ∈ E.path, d.root ≠ p := fun d hd => this d (by simp [Entry.vdeps, hos', hd])
+  have h2 : ∀ d ∈ E.held, d.root ≠ p := fun d hd => this d (by simp [Entry.vdeps, hd])
+  unfold rerootE
+  rw [reroot_id h1, reroot_id h2]
+
 /-- The end of a borrowed parameter's scope. -/
 theorem step_rbindExit {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     (hanch : ∀ p E, Γ p = some E → E.mode = .rootb → ∀ r ∈ roots E.vdeps, r ∈ F)
