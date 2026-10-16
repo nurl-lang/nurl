@@ -1,5 +1,13 @@
 # Changelog
 
+## [3.4.1] — 2026-10-17
+
+### Fixed
+
+- **One open WebSocket stream was the whole server.** `whisper serve` ran a single worker thread (since it was added), and a worker is pinned to its connection for the connection's life — so while one microphone was streaming, `/health`, `/inference`, the test page and every other stream waited until it closed. 3.4.0's drafts made it visible: a stream reading aloud kept that one thread busy transcribing. The server now has 8 workers; `/health` answers at once while streams are open, and two streams at once both get their transcripts.
+- The model is one engine (one encoder output, one KV cache), so transcriptions still run one at a time, now explicitly: a GPU lock held for a whole transcription, with the device context bound to the thread that runs it. A final waits its turn; a draft that finds the GPU busy is skipped, never queued.
+- A stream's periodic drafts take at most half the GPU's time (after one that took D ms, the next waits until the stream is 2·D further on), and every transcription's tokens are capped by its audio's length — whisper looping on noise stops at what the seconds could hold, not at 200 tokens.
+
 ## [3.4.0] — 2026-10-17
 
 The WebSocket stream decides where an utterance ends with a voice detector instead of a loudness threshold, learns how long the speaker pauses, and has the transcript ready when the pause closes. Measured in real time over the socket (large-v3, RTX 4090; eight spoken answers, time from the end of speech to the final):

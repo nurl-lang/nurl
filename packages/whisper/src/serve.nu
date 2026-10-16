@@ -94,10 +94,11 @@ $ `stdlib/core/option.nu`
     i unloads
     i load_ms  // the last load's wall time
     i unload_ms  // 0 = the model stays for the process's life
+    b gpu  // a transcription is running (one at a time: see __srv_gpu_try)
 }
 
 @ __srv_blank → ( Locked SrvState ) {
-    ^ ( locked_new [SrvState] @ SrvState { @ ?Whisper { F } 0 0 0 0 0 0 0 } )
+    ^ ( locked_new [SrvState] @ SrvState { @ ?Whisper { F } 0 0 0 0 0 0 0 F } )
 }
 
 : ( Locked SrvState ) g_srv ( __srv_blank )
@@ -189,6 +190,28 @@ $ `stdlib/core/option.nu`
     ? ok { = . st busy + . st busy 1 } {}
     ( locked_restore [SrvState] g_srv st )
     ^ ok
+}
+
+// The model is ONE engine — one encoder output, one cross-attention K/V,
+// one KV cache — so one transcription runs at a time, from start to end:
+// the connections are served by many threads, the GPU by one at a time.
+// A transcription binds the device context to whichever thread runs it.
+@ __srv_gpu_try → b {
+    : ~ SrvState st ( locked_take [SrvState] g_srv )
+    : b ok ! . st gpu
+    ? ok { = . st gpu T } {}
+    ( locked_restore [SrvState] g_srv st )
+    ^ ok
+}
+
+@ __srv_gpu_lock → v {
+    ~ ! ( __srv_gpu_try ) { ( sleep_ms 2 ) }
+}
+
+@ __srv_gpu_unlock → v {
+    : ~ SrvState st ( locked_take [SrvState] g_srv )
+    = . st gpu F
+    ( locked_restore [SrvState] g_srv st )
 }
 
 @ __srv_release → v {
@@ -372,7 +395,11 @@ $ `stdlib/core/option.nu`
             : Whisper w ( __srv_model )
             : Tok t ( __srv_tok )
             : ( Vec u ) text ( vec_new [u] )
-            ? ( wh_run w t at16 lang g_srv_max use_vad with_ts g_srv_nospeech text ) {
+            ( __srv_gpu_lock )
+            : b _bt ( wh_bind_thread w )
+            : b ran ( wh_run w t at16 lang g_srv_max use_vad with_ts g_srv_nospeech text )
+            ( __srv_gpu_unlock )
+            ? ran {
                 // trim the leading space the tokenizer writes on plain text
                 : ~ i from 0
                 ? with_ts {} {
@@ -780,12 +807,20 @@ $ `stdlib/core/option.nu`
     ( Vec u ) last
     ( Vec u ) full
     i full_seg
+    // a stream's periodic drafts take at most half the GPU's time: after
+    // one that took D ms, the next waits until the stream is 2·D further on
+    i next_ok
 }
 
-// The audio [from, to) of the stream, transcribed. `full` = the whole 30 s
-// encoder context (a final, or a draft that may become one); otherwise the
-// context covers the audio plus 5 s (at least 10 s) — a draft's price.
-@ __srv_ws_run WsStream ws WsCfg wc i from i to b full ( Vec u ) text → b {
+// The audio [from, to) of the stream, transcribed: 1 = done, 0 = the decode
+// failed, -1 = a draft that did not run because the GPU was busy (another
+// stream's work comes first; a draft is never worth waiting for). `full` =
+// the whole 30 s encoder context (a final, or a draft that may become one);
+// otherwise the context covers the audio plus 5 s (at least 10 s) — a
+// draft's price. The tokens are capped by the audio's length: whisper
+// talked into a loop by noise ("42 42 42 …") stops at what the seconds
+// could hold instead of at 200 tokens and a second of GPU.
+@ __srv_ws_run WsStream ws WsCfg wc i from i to b full b draft ( Vec u ) text → i {
     : ( Vec f ) seg ( ws_stream_audio ws from to )
     : SrvCfg cf ( __srv_cfg )
     : ~ s lang ( string_data . cf lang )
@@ -794,6 +829,9 @@ $ `stdlib/core/option.nu`
     : Tok t ( __srv_tok )
     : ~ i ctx 0
     : ~ f nosp g_srv_nospeech
+    : i secs / + ( vec_len [f] seg ) 15999 16000
+    : ~ i maxtok ? draft + 16 * 6 secs + 32 * 8 secs
+    ? > maxtok g_srv_max { = maxtok g_srv_max } {}
     ? ! full {
         : i need / + ( vec_len [f] seg ) 319 320
         = ctx ? > + need 250 500 + need 250 500
@@ -802,7 +840,15 @@ $ `stdlib/core/option.nu`
         // not what it was calibrated on, and a draft is not the last word
         = nosp 1.0
     } {}
-    ^ ( wh_run_seg w t seg ctx lang g_srv_max nosp text )
+    ? draft {
+        ? ( __srv_gpu_try ) {} { ^ -1 }
+    } {
+        ( __srv_gpu_lock )
+    }
+    : b _bt ( wh_bind_thread w )
+    : b ok ( wh_run_seg w t seg ctx lang maxtok nosp text )
+    ( __srv_gpu_unlock )
+    ^ ? ok 1 0
 }
 
 @ __srv_ws_failed TcpConn c → v {
@@ -842,10 +888,23 @@ $ `stdlib/core/option.nu`
     : i t_start ( monotonic_ns )
     ? == act WSS_PARTIAL {
         : ( Vec u ) text ( vec_new [u] )
-        ? ( __srv_ws_run ws wc . ws act_from . ws act_to . ws act_full text ) {} {
+        // the budget is for the periodic drafts; the one at a pause can be
+        // the final, and is worth its GPU time
+        ? & ! . ws act_full < . ws act_to . dr next_ok {
+            ( ws_stream_draft_skipped ws )
+            ^ {}
+        } {}
+        : i r ( __srv_ws_run ws wc . ws act_from . ws act_to . ws act_full T text )
+        ? == r -1 {
+            ( ws_stream_draft_skipped ws )
+            ^ {}
+        } {}
+        : i took / - ( monotonic_ns ) t_start 1000000
+        = . dr next_ok + . ws act_to * took 32
+        ? == r 0 {
             ( __srv_ws_failed c )
             ^ {}
-        }
+        } {}
         : i agree ( wss_agree . dr last text )
         : ( Vec u ) stable ( wss_prefix text agree )
         ? . ws act_full {
@@ -875,7 +934,7 @@ $ `stdlib/core/option.nu`
     ? & . ws act_reuse == . dr full_seg . ws act_seg {
         = text ( vec_clone [u] . dr full )
     } {
-        ? ( __srv_ws_run ws wc . ws act_from . ws act_to T text ) {} {
+        ? == 1 ( __srv_ws_run ws wc . ws act_from . ws act_to T F text ) {} {
             ( __srv_ws_failed c )
             ( __srv_count )
             = . dr last ( vec_new [u] )
@@ -931,7 +990,7 @@ $ `stdlib/core/option.nu`
     }
     : ~ WsCfg wc @ WsCfg { F ( string_new ) ( wss_default_cfg ) T }
     : ~ WsStream ws ( ws_stream_new ( __srv_vad_net ) . wc st )
-    : ~ WsDrafts dr @ WsDrafts { ( vec_new [u] ) ( vec_new [u] ) 0 }
+    : ~ WsDrafts dr @ WsDrafts { ( vec_new [u] ) ( vec_new [u] ) 0 0 }
     : WsLimits lim ( ws_default_limits )
     : ~ b open T
     ~ open {
@@ -1000,7 +1059,7 @@ $ `stdlib/core/option.nu`
 
 @ __wh_serve_run sink Whisper w Tok t s dir s host i port s lang i maxtok b use_vad b with_ts s cert s key s token i unload_s s vad_model b energy → i {
     // the server owns the model from here
-    ( locked_set [SrvState] g_srv @ SrvState { @ ?Whisper { T w } 0 0 ( monotonic_ns ) 1 0 0 * unload_s 1000 } )
+    ( locked_set [SrvState] g_srv @ SrvState { @ ?Whisper { T w } 0 0 ( monotonic_ns ) 1 0 0 * unload_s 1000 F } )
     ( locked_set [? Tok] g_srv_tok @ ?Tok { T ( Tok_share t ) } )
     ( locked_set [SrvCfg] g_srv_cfg @ SrvCfg { ( string_from dir ) ( string_from lang ) ( string_from token ) } )
     ? > unload_s 0 {
@@ -1020,13 +1079,15 @@ $ `stdlib/core/option.nu`
     ( __srv_load_vad vad_model energy )
     = g_srv_max maxtok
     : HttpApp a ( http_app_new )
-    // One inference runs one model on one GPU; a second concurrent request
-    // would serialise on the model mutex anyway, so a single worker is the
-    // honest shape (a WebSocket stream holds its worker for the connection's
-    // life — that is the streaming contract). Production hardening layered
+    // A worker is pinned to a connection for its whole life, and a
+    // WebSocket stream is a connection that lasts as long as the
+    // microphone is open: with one worker, one open stream was the whole
+    // server — /health, /inference and every other stream waited until it
+    // closed. Eight connections are served at once; the GPU still runs one
+    // transcription at a time (__srv_gpu_try). Production hardening layered
     // on top: bounded bodies, a header cap, and per-request deadlines so a
-    // slow or hostile client cannot pin the one worker forever.
-    ( http_app_workers a 1 )
+    // slow or hostile client cannot pin a worker forever.
+    ( http_app_workers a 8 )
     // a WAV is ~2 MB/min at 16 kHz pcm16; an hour ~115 MB
     ( http_app_body_max a 268435456 )
     // a request head past 64 KB is not a browser; refuse it before the body
