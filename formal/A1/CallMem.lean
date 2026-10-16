@@ -438,4 +438,236 @@ theorem slot_inp (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
 
 end CallH
 
+theorem slot_empty {m : Mem} {E : Entry} {o : Bool} (ho : o = E.mode.ownSlot) (hl : E.live = false)
+    (hv : E.mode.ownSlot = true → ∃ t, E.ty = .vec t) : SlotOK m E ⟨o, none⟩ := by
+  refine ⟨ho, fun hos => ⟨hv hos, fun T hT => ?_, fun hl' => ?_⟩, fun _ hl' => ?_⟩
+  · cases hT
+  · rw [hl] at hl'; cases hl'
+  · rw [hl] at hl'; cases hl'
+
+theorem resMode_ownSlot (fn : Fn) : (resMode fn).ownSlot = fn.resOwn := by
+  unfold resMode; cases fn.resOwn <;> rfl
+
+namespace CallH
+variable {P : Prog} {Γ : Ctx} {F : List Var} {x : Var} {fn : Fn} {args : List Var} {m : Mem}
+
+/-- A frame binding's slot agrees with its entry after the call step. -/
+theorem slot_frame (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
+    (hb : BindParams m fn.params args m.nv 0 m1) {y : Var} (hy : ∀ v, callRen fn.params args m.nv v ≠ y)
+    (hyx : y ≠ x) {E1 : Entry} (h1 : callPost Γ fn args y = some E1) :
+    ∃ sl, (callMem m m1 fn x).st y = some sl ∧ E1.clean.ty.ok = true ∧ SlotOK (callMem m m1 fn x) E1.clean sl := by
+  by_cases hs : ∃ (k : Nat) (t : Ty), fn.params[k]? = some (PMode.sink, t) ∧ args.getD k 0 = y
+  · obtain ⟨k, t, hk, rfl⟩ := hs
+    have hkl := lt_of_get hk
+    obtain ⟨Ea, hEa, hae⟩ := h.argE_eq hkl
+    obtain ⟨_, h1', _, hok, _⟩ := h.arg k hkl
+    rw [hEa] at h1'; cases h1'
+    rw [get_of hk] at hok
+    obtain ⟨hty, hm, s, hs⟩ := hok
+    have hpost := callPostAux_at fn.params args 0 k Γ (getD_of (h.len ▸ hkl)) (fun k' hk' he => by
+      have hk'l : k' < args.length := (List.getElem?_eq_some_iff.mp he).1
+      have hge : args.getD k' 0 = args.getD k 0 := by simp [List.getD, he]
+      exact hk' (h.moving hkl (h.len ▸ hk'l) (by rw [get_of hk]; rfl) hge)) hk rfl E1 h1
+    simp only [postEnt, hae] at hpost
+    obtain ⟨ht1, hm1, _, _, hl1⟩ := hpost
+    have hl : E1.live = false := by cases h' : E1.live; rfl; exact absurd (hl1 h') (by simp)
+    refine ⟨_, h.st_sinkArg hb hk, by rw [clean_ty, ht1]; exact hi.tyok hEa, slot_empty ?_ ?_ ?_⟩
+    · rw [clean_mode, hm1, hm]; rfl
+    · rw [clean_live]; exact hl
+    · intro _; rw [clean_ty, ht1, hty, hs]; exact ⟨s, rfl⟩
+  · have hu := h.frame_untouched hy hyx (fun k t hk he => hs ⟨k, t, hk, he⟩)
+    have hmv : ∀ pa ∈ fn.params.zip args, pa.1.1.moves = true → pa.2 ≠ y := by
+      intro pa hpa hm he
+      obtain ⟨k, hk, hka, rfl⟩ := RSetup.mem_zip_getD hpa
+      simp only at hm he
+      have hget : fn.params[k]? = some fn.params[k] := List.getElem?_eq_getElem hk
+      generalize hp : fn.params[k] = p at hm hget
+      obtain ⟨pm, t⟩ := p
+      cases pm with
+      | inp => cases hm
+      | sink => exact hs ⟨k, t, hget, he⟩
+      | inout b => exact hy k (by unfold callRen; rw [hget]; exact he)
+    obtain ⟨E0, h0, ht0, hm0, hp0, hh0, hsv⟩ := callPostAux_frame fn.params args 0 Γ hmv E1 h1
+    obtain ⟨sl, hsl, hok, hslot⟩ := hi.slot y E0 h0
+    refine ⟨sl, by rw [h.st_other hb hu, hsl], by rw [clean_ty, ht0]; exact hok, ?_⟩
+    have hs1 := (hslot.weakLive ht0 hm0 hp0 hh0 (fun hl => (hsv hl).1)).clean
+    refine hs1.keep fun dep hd => ?_
+    -- what it depends on is untouched: a dependency on a moved argument ended it
+    unfold Entry.clean at hd
+    split at hd
+    · simp [Entry.vdeps] at hd
+    · rename_i hcl
+      have hl : E1.live = true := by
+        by_cases hrb : E1.mode = .rootb
+        · exact h.post_live_rootb h1 hrb
+        · cases hlv : E1.live
+          · exact absurd ⟨hrb, Or.inr hlv⟩ hcl
+          · rfl
+      have hn : E0.ty ≠ .int ∨ E0.mode = .rootb := by
+        by_cases hrb : E1.mode = .rootb
+        · exact Or.inr (by rw [← hm0]; exact hrb)
+        · exact Or.inl fun ht => hcl ⟨hrb, Or.inl (by rw [ht0]; exact ht)⟩
+      have hd0 : dep ∈ E0.vdeps := by unfold Entry.vdeps at hd ⊢; rwa [← hm0, ← hp0, ← hh0]
+      obtain ⟨Er, hEr, _⟩ := hi.wf y E0 h0 (hsv hl).1 hn dep.root (List.mem_map_of_mem hd0)
+      refine (fun hk => ⟨hk.vkeep, hk.hkeep⟩) (h.rootKeep hi hb ?_)
+      refine h.untouched_lt (h.domlt _ _ hEr) (fun e => by rw [e, h.fresh] at hEr; cases hEr) ?_
+      intro k t hk he
+      have hsk := ((hsv hl).2 ((.sink, t), args.getD k 0)
+        (mem_zip_of hk (h.len ▸ lt_of_get hk))).1 rfl
+      have := hits_false_dep hsk hn dep hd0 he.symm
+      cases dep.kind <;> simp [Eff.kills] at this
+
+theorem resTy_vec (h : CallH P Γ F x fn args m.nv) (ho : (resMode fn).ownSlot = true) : ∃ t, fn.resTy = .vec t := by
+  obtain ⟨_, _, _, _, hv, _⟩ := h.fnok
+  exact hv (by rw [← resMode_ownSlot]; exact ho)
+
+theorem param_ok (h : CallH P Γ F x fn args m.nv) {k : Nat} {p : PMode × Ty} (hk : fn.params[k]? = some p) :
+    p.2.ok = true ∧ (p.1 ≠ .inp → ∃ s, p.2 = .vec s) := by
+  obtain ⟨_, _, _, _, _, hpar, _⟩ := h.fnok
+  exact hpar p (List.mem_of_getElem? hk)
+
+/-- The invariant of memory, in the context the call sets up. -/
+theorem minv (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
+    (hb : BindParams m fn.params args m.nv 0 m1) :
+    MInv (callMem m m1 fn x) ((callS Γ F fn args m.nv x).canon (sigCtx fn)) where
+  dom y := by
+    rcases h.ctx_cases y with ⟨rfl, hc⟩ | ⟨rfl, hc⟩ | ⟨k, t, hk, rfl, hc⟩ | ⟨k, t, hk, rfl, hc⟩ |
+        ⟨k, b, t, hk, rfl, hc⟩ | ⟨hy, hyx, hc⟩ | ⟨hc, v, hv, rfl⟩ <;> rw [hc]
+    · rw [h.st_x]; rfl
+    · rw [st_r]; rfl
+    · rw [h.st_inp hb hk]; rfl
+    · rw [h.st_sink hb hk]; rfl
+    · have hkl := lt_of_get hk
+      obtain ⟨Ea, hEa, _⟩ := h.arg k hkl
+      have hu := h.untouched_lt (h.argLt hkl) (h.arg_ne hkl).1 (fun k' t' hk' he => by
+        have := h.moving (lt_of_get hk') hkl (by rw [get_of hk']; rfl) he.symm
+        subst this; rw [hk] at hk'; cases hk')
+      rw [h.st_other hb hu, ← hi.dom, hEa]; rfl
+    · by_cases hs : ∃ (k : Nat) (t : Ty), fn.params[k]? = some (PMode.sink, t) ∧ args.getD k 0 = y
+      · obtain ⟨k, t, hk, rfl⟩ := hs
+        obtain ⟨Ea, hEa, _⟩ := h.arg k (lt_of_get hk)
+        obtain ⟨E1, h1, _⟩ := h.postdm.get hEa
+        rw [h.st_sinkArg hb hk, h1]; rfl
+      · rw [h.st_other hb (h.frame_untouched hy hyx (fun k t hk he => hs ⟨k, t, hk, he⟩)), ← hi.dom,
+          ← h.postdm.1]
+        cases callPost Γ fn args y <;> rfl
+    · rw [h.st_other hb (h.high_untouched hv)]
+      cases h' : m.st (m.nv + v) with
+      | none => rfl
+      | some sl => exact absurd (dom_lt hi h') (Nat.not_lt.mpr (Nat.le_add_right _ _))
+  slot y E hy := by
+    rcases h.ctx_cases y with ⟨rfl, hc⟩ | ⟨rfl, hc⟩ | ⟨k, t, hk, rfl, hc⟩ | ⟨k, t, hk, rfl, hc⟩ |
+        ⟨k, b, t, hk, rfl, hc⟩ | ⟨hy', hyx, hc⟩ | ⟨hc, v, hv, rfl⟩ <;> rw [hc] at hy <;> (try cases hy)
+    · obtain ⟨_, _, _, hok, _⟩ := h.fnok
+      exact ⟨_, h.st_x m1, hok, slot_empty (by simp [callX, resMode_ownSlot]) rfl
+        (fun ho => h.resTy_vec ho)⟩
+    · obtain ⟨_, _, _, hok, _⟩ := h.fnok
+      exact ⟨_, st_r m1, hok, slot_empty (by simp [resMode_ownSlot]) rfl (fun ho => h.resTy_vec ho)⟩
+    · obtain ⟨v, hv, hok⟩ := h.slot_inp hi hb hk
+      have hpm : (callPe Γ fn.params args k).mode = .rootb := h.sOK.pe_rb k
+      refine ⟨_, h.st_inp hb hk, ?_, ⟨by rw [hpm]; rfl, fun hos => ?_, fun _ _ => ⟨v, hv, hok⟩⟩⟩
+      · have hkl := lt_of_get hk
+        obtain ⟨Ea, hEa, hae⟩ := h.argE_eq hkl
+        unfold callPe; rw [hk]; simp only; rw [hae]
+        split
+        · rfl
+        · show Ea.ty.ok = true; exact hi.tyok hEa
+      · rw [hpm] at hos; cases hos
+    · have hkl := lt_of_get hk
+      obtain ⟨Ea, hEa, hl, hok, _⟩ := h.arg k hkl
+      rw [get_of hk] at hok
+      obtain ⟨hty, hm, _⟩ := hok
+      simp only at hty
+      obtain ⟨T, hT, hw, hv⟩ := h.slot_ownArg hi hb hkl hEa hl hm
+      refine ⟨_, h.st_sink hb hk, by show t.ok = true; rw [← hty]; exact hi.tyok hEa,
+        ⟨rfl, fun _ => ⟨?_, ?_, ?_⟩, ?_⟩⟩
+      · obtain ⟨_, hs⟩ := h.param_ok hk; exact hs (by simp)
+      · intro T' hT'; rw [hT] at hT'; cases hT'; show WFv t _; rw [← hty]; exact hw
+      · intro _; exact ⟨T, by rw [hT]; rfl, by show ViewsOK _ t T _; rw [← hty]; exact hv⟩
+      · intro hos; cases hos
+    · have hkl := lt_of_get hk
+      obtain ⟨Ea, hEa, hl, hok, _⟩ := h.arg k hkl
+      rw [get_of hk] at hok
+      obtain ⟨hty, hcan, _⟩ := hok
+      simp only at hty
+      have hm : Ea.mode = .own := by
+        rcases hcan with hm | ⟨b', hm, _⟩
+        · exact hm
+        · exact absurd hm (h.noInout _ Ea b' hEa)
+      obtain ⟨T, hT, hw, hv⟩ := h.slot_ownArg hi hb hkl hEa hl hm
+      have hu := h.untouched_lt (h.argLt hkl) (h.arg_ne hkl).1 (fun k' t' hk' he => by
+        have := h.moving (lt_of_get hk') hkl (by rw [get_of hk']; rfl) he.symm
+        subst this; rw [hk] at hk'; cases hk')
+      refine ⟨_, by rw [h.st_other hb hu, hT], by show t.ok = true; rw [← hty]; exact hi.tyok hEa,
+        ⟨rfl, fun _ => ⟨?_, ?_, ?_⟩, ?_⟩⟩
+      · obtain ⟨_, hs⟩ := h.param_ok hk; exact hs (by simp)
+      · intro T' hT'; cases hT'; show WFv t _; rw [← hty]; exact hw
+      · intro _; exact ⟨T, rfl, by show ViewsOK _ t T _; rw [← hty]; exact hv⟩
+      · intro hos; cases hos
+    · obtain ⟨E1', h1', rfl⟩ := Option.map_eq_some_iff.mp hy
+      exact h.slot_frame hi hb hy' hyx h1'
+  heap := h.heap hi hb
+  nvSt y hy := by
+    obtain ⟨_, hnv, _⟩ := h.fnok
+    show y < m.nv + fn.nvars
+    by_cases hyx : y = x
+    · rw [hyx]; exact Nat.lt_of_lt_of_le h.xlt (Nat.le_add_right _ _)
+    by_cases hyr : y = m.nv + fn.params.length
+    · rw [hyr]; exact Nat.add_lt_add_left hnv _
+    by_cases hsl : ∃ (k : Nat) (p : PMode × Ty), fn.params[k]? = some p ∧ (∀ b, p.1 ≠ .inout b) ∧
+        y = m.nv + 0 + k
+    · obtain ⟨k, p, hk, _, rfl⟩ := hsl
+      rw [Nat.add_zero]; exact Nat.add_lt_add_left (Nat.lt_trans (lt_of_get hk) hnv) _
+    by_cases hsa : ∃ (k : Nat) (t : Ty), fn.params[k]? = some (PMode.sink, t) ∧ args.getD k 0 = y
+    · obtain ⟨k, t, hk, rfl⟩ := hsa
+      exact Nat.lt_of_lt_of_le (h.argLt (lt_of_get hk)) (Nat.le_add_right _ _)
+    have hu : Untouched fn args m.nv x y := by
+      refine ⟨hyx, hyr, fun k p hk hp he => hsl ⟨k, p, hk, hp, he⟩, fun k t hk he => ?_⟩
+      have hkl := lt_of_get hk
+      rw [getD_of (h.len ▸ hkl)] at he
+      exact hsa ⟨k, t, hk, Option.some.inj he⟩
+    rw [h.st_other hb hu] at hy
+    exact Nat.lt_of_lt_of_le (hi.nvSt y hy) (Nat.le_add_right _ _)
+  noInout y E b hy := by
+    rcases h.ctx_cases y with ⟨rfl, hc⟩ | ⟨rfl, hc⟩ | ⟨k, t, hk, rfl, hc⟩ | ⟨k, t, hk, rfl, hc⟩ |
+        ⟨k, b', t, hk, rfl, hc⟩ | ⟨hy', hyx, hc⟩ | ⟨hc, v, hv, rfl⟩ <;> rw [hc] at hy <;> (try cases hy)
+    · exact resMode_inout fn b
+    · exact resMode_inout fn b
+    · have := (h.sOK.pe_rb k); simp only [callS] at this; rw [this]; simp
+    · simp
+    · simp
+    · obtain ⟨E1', h1', rfl⟩ := Option.map_eq_some_iff.mp hy
+      obtain ⟨E0, h0, hm⟩ := h.postdm.2 y E1' h1'
+      rw [clean_mode, hm]; exact hi.noInout y E0 b h0
+  wf := RSetup.canon_wf h.sOK h.sig_abs (sigCtx_wf fn)
+  rootbLive p E hp hrb := by
+    rcases h.ctx_cases p with ⟨rfl, hc⟩ | ⟨rfl, hc⟩ | ⟨k, t, hk, rfl, hc⟩ | ⟨k, t, hk, rfl, hc⟩ |
+        ⟨k, b', t, hk, rfl, hc⟩ | ⟨hy', hyx, hc⟩ | ⟨hc, v, hv, rfl⟩ <;> rw [hc] at hp <;> (try cases hp)
+    · exact absurd hrb (resMode_ne' fn)
+    · exact absurd hrb (resMode_ne' fn)
+    · exact callPe_live _ _ _ _
+    · cases hrb
+    · cases hrb
+    · obtain ⟨E1', h1', rfl⟩ := Option.map_eq_some_iff.mp hp
+      rw [clean_mode] at hrb
+      rw [clean_live]; exact h.post_live_rootb h1' hrb
+  rootbLt p E hp hrb r hr := by
+    rcases h.ctx_cases p with ⟨rfl, hc⟩ | ⟨rfl, hc⟩ | ⟨k, t, hk, rfl, hc⟩ | ⟨k, t, hk, rfl, hc⟩ |
+        ⟨k, b', t, hk, rfl, hc⟩ | ⟨hy', hyx, hc⟩ | ⟨hc, v, hv, rfl⟩ <;> rw [hc] at hp <;> (try cases hp)
+    · exact absurd hrb (resMode_ne' fn)
+    · exact absurd hrb (resMode_ne' fn)
+    · obtain ⟨_, Er, hEr, _⟩ := h.sOK.pe_out k r hr
+      exact Nat.lt_of_lt_of_le (h.frame_lt hEr) (Nat.le_add_right _ _)
+    · cases hrb
+    · cases hrb
+    · obtain ⟨E1', h1', rfl⟩ := Option.map_eq_some_iff.mp hp
+      rw [clean_mode] at hrb
+      obtain ⟨E0, h0, hm⟩ := h.postdm.2 p E1' h1'
+      have := h.post_rootb h0 (hm ▸ hrb)
+      rw [h1'] at this; cases this
+      rw [clean_id (Or.inr hrb) (h.post_live_rootb h1' hrb)] at hr
+      exact hi.rootbLt p E1' h0 (hm ▸ hrb) r hr
+
+end CallH
+
 end A1
