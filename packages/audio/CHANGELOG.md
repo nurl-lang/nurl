@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.0] — 2026-10-17
+
+### Added
+
+- `log_mel_whisper_padded x n_total …`: whisper's log-mel of `x` zero-padded to `n_total` samples, computed only over the frames that see a sample of `x`. Every other frame of the padding is the same number (power 0 → the 1e-10 floor, then the max − 8 clamp), so the result is bit-identical to padding first — checked at 1 sample, 50, 1 s, 3 s, 10 s, 29.9 s, 29.99 s, 30 s and 31 s — and a 2-second clip costs ~10 ms instead of ~110. `audio mel` uses it.
+- `log_mel_whisper_raw`: the log10 mel energies before whisper's clamp and scaling, for at most `limit` frames.
+
 ## [0.8.4] — 2026-10-14
 
 Requires NURL 0.73.0 (`slice_at`, `slice_put`, `rc_take`, `locked_take`).

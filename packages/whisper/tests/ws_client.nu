@@ -1,6 +1,6 @@
 // tests/ws_client.nu — a WebSocket client for the serve tests, in NURL.
 //
-//   ws_client ws://127.0.0.1:PORT/ <audio.wav>
+//   ws_client ws://127.0.0.1:PORT/ <audio.wav> [config-json]
 //
 // Connects with stdlib's OWN RFC 6455 client (the server is stdlib's server —
 // both ends of the protocol are the same implementation under test), sends a
@@ -45,6 +45,8 @@ $ `stdlib/ext/websocket.nu`
     : ~ s wavpath ``
     ?? ( vec_get [String] pos 0 ) { T c → { = url ( string_data c ) } F → {} }
     ?? ( vec_get [String] pos 1 ) { T c → { = wavpath ( string_data c ) } F → {} }
+    : ~ s cfg `{"format":"pcm16"}`
+    ?? ( vec_get [String] pos 2 ) { T c → { = cfg ( string_data c ) } F → {} }
 
     ?? ( ws_connect url ) {
         T cl → {
@@ -52,7 +54,7 @@ $ `stdlib/ext/websocket.nu`
             : WsLimits lim ( ws_default_limits )
 
             // config first: pcm16 (the default — the ack proves the round trip)
-            : !v WsErr _s ( ws_client_send_text conn `{"format":"pcm16"}` )
+            : !v WsErr _s ( ws_client_send_text conn cfg )
             ?? ( ws_client_read_message conn lim ) {
                 T ack → {
                     : String am ( string_new )

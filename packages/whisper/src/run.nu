@@ -413,7 +413,6 @@ $ `stdlib/core/slice.nu`
         : ( Vec f ) sp ( vad_extract_runs at16 segs 8000 runs )
         = at16 sp
     } {}
-    : i nmel ( wh_n_mels w )
     : i total ( vec_len [f] at16 )
     // the window is the encoder's own length: 1500 positions × 2 (the
     // stride-2 conv) × 160 samples of hop = 30 s at 16 kHz. Derived, not
@@ -436,13 +435,41 @@ $ `stdlib/core/slice.nu`
             }
             = k + k 1
         }
-        : ( Vec f ) fixed ( pad_or_trim chunk window )
-        : ( Vec f ) mel ( log_mel_whisper fixed 400 160 nmel 16000 )
-        ( wh_encode w mel )
-        ( wh_prepare_cross w )
         : f woff / # f * wi window 16000.0
-        ? ( __wh_decode_window w t lang maxtok with_ts woff runs nospeech out ) {} { = ok F }
+        ? ( __wh_window w t chunk 0 lang maxtok with_ts woff runs nospeech out ) {} { = ok F }
         = wi + wi 1
     }
     ^ ok
+}
+
+// One window: the log-mel (computed where the audio is — the rest of the
+// 30 s is padding, and padding's frames are all one number), the encoder,
+// cross-attention's K/V, the decode.
+//
+// `ctx` > 0 runs the encoder over the first `ctx` positions only (20 ms
+// each) instead of all 1500 — whisper.cpp's audio_ctx. A two-second
+// utterance is 100 positions of speech and 1400 of padding, and the encoder's
+// cost is the positions: it is what makes a partial result every few hundred
+// milliseconds affordable. The model was trained on full windows, so this is
+// for drafts that a full-context pass replaces, not for the final word.
+@ __wh_window Whisper w Tok t ( Vec f ) chunk i ctx s lang i maxtok b with_ts f woff ( Vec VadRun ) runs f nospeech ( Vec u ) out → b {
+    : i nmel ( wh_n_mels w )
+    : i nctx ( wh_n_ctx_enc w )
+    : i window * nctx 320
+    : ( Vec f ) mel ( log_mel_whisper_padded chunk window 400 160 nmel 16000 )
+    ? & > ctx 0 < ctx nctx {
+        : b _t ( vec_truncate [f] mel * * 2 ctx nmel )
+    } {}
+    ( wh_encode w mel )
+    ( wh_prepare_cross w )
+    ^ ( __wh_decode_window w t lang maxtok with_ts woff runs nospeech out )
+}
+
+// One utterance of at most 30 s, as plain text, for a stream: no VAD (the
+// stream has already segmented), no timestamps (the segment is the
+// timestamp). `ctx` as in __wh_window; 0 = the full window.
+@ wh_run_seg Whisper w Tok t ( Vec f ) seg i ctx s lang i maxtok f nospeech ( Vec u ) out → b {
+    : ( Vec VadRun ) runs ( vec_new [VadRun] )
+    ? == ( vec_len [f] seg ) 0 { ^ T } {}
+    ^ ( __wh_window w t seg ctx lang maxtok F 0.0 runs nospeech out )
 }

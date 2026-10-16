@@ -158,6 +158,10 @@ transform is half the work.
 
 The whole 30-second mel spectrogram (3000 frames) takes about 0.14 s,
 down from 0.52 when every frame went through Bluestein at full length.
+A short clip that whisper pads to 30 s pays for far less:
+`log_mel_whisper_padded x 480000 …` computes only the frames that see a
+sample of `x` — every frame of the padding is the same number — and is
+bit-identical to padding first (a 2 s clip: ~10 ms).
 
 ## License
 

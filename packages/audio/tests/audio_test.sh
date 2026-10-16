@@ -137,6 +137,28 @@ assert ours.shape == ref.shape
 assert d < 1e-4, f"max|delta| = {d:.3e}"
 PYEOF
 
+# log_mel_whisper_padded computes only the frames that see audio: it has to
+# be the same floats as padding to 30 s first, at every length — a short
+# clip, a long one, and the ones whose reflection reaches past the shortcut
+if $NURL tests/mel_padded_check.nu "$WORK/mel_padded_check" >/dev/null 2>&1; then
+    python3 - "$WORK" <<'PYEOF'
+import sys, numpy as np, wave
+W = sys.argv[1]; rng = np.random.RandomState(3)
+for n in (1, 50, 16000, 48000, 160000, 478500, 479900, 480000, 496000):
+    w = wave.open(f"{W}/len{n}.wav", "wb"); w.setnchannels(1); w.setsampwidth(2); w.setframerate(16000)
+    w.writeframes((rng.randn(n) * 3000).astype("<i2").tobytes()); w.close()
+PYEOF
+    MP_OK=1
+    for n in 1 50 16000 48000 160000 478500 479900 480000 496000; do
+        "$WORK/mel_padded_check" "$WORK/len$n.wav" 80 >/dev/null 2>&1 || { MP_OK=0; echo "    differs at $n samples"; }
+    done
+    "$WORK/mel_padded_check" "$WORK/speechy.wav" 128 >/dev/null 2>&1 || MP_OK=0
+    [ $MP_OK = 1 ] && ok "log_mel_whisper_padded == padding to 30 s first, bit for bit (1 sample … 31 s)" \
+        || bad "log_mel_whisper_padded differs"
+else
+    bad "mel_padded_check did not build"
+fi
+
 # the real oracle, when it is available
 python3 - "$WORK" 2>/dev/null <<'PYEOF' && ok "log-mel == Hugging Face WhisperFeatureExtractor" || echo "  SKIP HF oracle (transformers not importable)"
 import sys, numpy as np, wave
