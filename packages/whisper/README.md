@@ -107,8 +107,10 @@ staging (`gk_upload_batch` in packages/gpukit). A cold start went from
 2.35 s to 0.8 s on large-v3.
 
 **`GET /`** is a built-in test page: drop an audio file on it, or press
-*Start microphone* and watch utterances appear as you pause. The page is
-staged by `nurlpkg install` into `share/whisper/` next to the binary.
+*Start microphone* and watch utterances appear as you pause — or pick
+*drafts* and watch them form word by word, with the room's noise level
+and the learned pause underneath. The page is staged by `nurlpkg install`
+into `share/whisper/` next to the binary, with the VAD weights.
 
 **`POST /inference`** is whisper.cpp's server surface, so its clients
 work unchanged: multipart `file` field, optional `language` and
@@ -119,19 +121,85 @@ flags.
 **WebSocket, same port** — live audio in, utterances out:
 
 ```
-→ {"format":"pcm16","lang":"fi"}                    (optional config first)
-← {"status":"ok","format":"pcm16","vad":"adaptive-floor"}
+→ {"format":"pcm16","lang":"fi"}                    (optional config, any time)
+← {"status":"ok","format":"pcm16","vad":"silero","pause_ms":400,…}
 → <binary frames: raw PCM16 @ 16 kHz>
-← {"text":" And so my fellow Americans.","t0":0.09,"t1":2.33}
+← {"type":"final","seg":1,"text":" Kaksikymmentäneljä.","t0":1.27,"t1":2.73,
+   "speech_t0":1.66,"speech_t1":2.53,"proc_ms":0}
 ← {"error":"…"}                                     (failures are named, never silent)
 ```
 
-Utterances are cut by a streaming VAD whose noise floor is the 10th
-percentile of the trailing minute, recomputed every second, and each is
-gated by the model's own no-speech probability — a phone microphone's
-auto-gain cannot talk it into transcribing an empty room. `t0`/`t1` are
-seconds on the stream's clock. A run that reaches 28 s closes forcibly:
-whisper's window is 30 s, and a lecture has no obligation to pause.
+`t0`/`t1` are seconds on the stream's clock (the audio that was
+transcribed, lead-in included); `speech_t0`/`speech_t1` where the voice
+itself began and ended — what a game compares with its deadline. A client
+that sends no configuration gets what it always got, plus the new fields.
+
+What cuts the stream into utterances, every 32 ms:
+
+* **Silero VAD v5**, in NURL on the CPU (`src/silero.nu`, 0.4 ms per
+  32 ms chunk; checked against onnxruntime on the original ONNX file to
+  5·10⁻⁶). It hears a voice, not loudness: a fan, music, a keyboard or the
+  game's own sound effects do not hold an utterance open. The weights
+  (MIT, `vad/`) are installed beside the binary; `--vad-model FILE` points
+  elsewhere, `--energy` (or no weights) falls back to an energy detector.
+* **The room, measured continuously**: the noise floor (20th percentile of
+  the last 10 s of non-speech), the speaker's own level (90th percentile of
+  the last 20 s of voice) and how readily Silero fires on this room's noise
+  — its thresholds rise above that.
+* **A near-field gate**: a voice more than 10 dB (`near_db`) below the
+  speaker's own is someone else — a television, a sibling across the room
+  — and neither starts an utterance nor keeps one open.
+* **A closing pause learned from the speaker**: the gaps between their
+  words are measured as they talk, and the silence that ends an utterance
+  is 1.3 × their 90th percentile + 150 ms (300…1000 ms, starting at 400). A
+  close followed quickly by more speech counts as a gap, so a speaker who
+  keeps getting cut mid-sentence stops being cut.
+* **The answer is ready when the pause closes**: as soon as the speaker
+  goes quiet, the utterance is transcribed with the full context while the
+  pause runs; if nothing more is said it is the final (`proc_ms` 0). The
+  log-mel is computed only where the audio is (a 2 s answer: ~10 ms
+  instead of ~110), and each utterance is still gated by the model's own
+  no-speech probability.
+
+The configuration message takes any subset of:
+
+| field | |
+|---|---|
+| `format` | `pcm16` (default) or `float32` |
+| `lang` | the language (default: `--lang`) |
+| `partials` | `true`: drafts while the utterance is spoken — `{"type":"partial","seg","text","stable","t0","t1","pause_ms"}`. `stable` is the prefix two drafts in a row agreed on; every utterance that had drafts ends in a final, an empty one included |
+| `partial_ms` | a draft per this much new speech (default 300) |
+| `pause_ms` | a fixed closing pause (turns the learning off unless `adaptive:true` comes with it) |
+| `adaptive`, `min_pause_ms`, `max_pause_ms` | the learned pause and its range |
+| `threshold` | Silero's p(speech) that opens an utterance (default 0.5) |
+| `near_db` | the near-field gate (default 10; 0 = off) |
+| `max_utt_ms` | close at the best gap past this (≤ 28000, whisper's window is 30 s) |
+| `events` | `{"type":"start","seg","t0"}` when speech begins |
+| `levels` | `{"type":"level","noise_db","speech_db","snr_db","p_noise","pause_ms","threshold"}` once a second |
+| `vad` | `silero` or `energy` |
+
+and two commands: `{"cmd":"end"}` (the utterance is over — transcribe it
+now) and `{"cmd":"reset"}` (forget the open utterance, e.g. when a new
+question appears).
+
+Drafts run the encoder over the audio plus 5 s (at least 10 s) instead of
+30 s — whisper.cpp's `audio_ctx` — which matched the full-context text on
+every test clip and costs about half. They are drafts: mid-word a draft
+can say "48." for "neljäkymmentä|kaksi", so act on `stable` or on the
+final, not on the newest draft.
+
+Measured in real time over the WebSocket (large-v3, RTX 4090; eight spoken
+answers, time from the end of speech to the final):
+
+| room | 3.3.0 | 3.4.0, `pause_ms:300` |
+|---|---|---|
+| quiet | ~930 ms | 73–306 ms |
+| a television talking 12 dB below the player | 1–6.7 s, the TV's sentence came back as an answer | 185–406 ms, every answer right |
+| music 10 dB below | all eight answers as one, after 26 s | 168–324 ms |
+
+`whisper vad <audio.wav> [--partials] [--pause MS] [--legacy]` runs the
+same endpointer over a file and prints what it would have done, on the
+stream's clock — no model needed.
 
 **TLS**: `--tls` mints a self-signed ECDSA-P256 certificate on the fly
 (pure NURL) — browsers require a secure context before they allow
@@ -221,6 +289,9 @@ would not survive f16.)
   launcher binds, so the engine is safe code end to end — no `unsafe`, no
   device addresses. The encoder, the cross-attention projections and one
   decoder step are recorded once when the model opens and replayed.
+* Silero VAD's 16 kHz network is the 14 trained tensors of the ONNX file
+  (`tests/silero_export.py`); its STFT basis is a periodic-Hann DFT, so it
+  is computed rather than stored.
 * Built on `packages/audio` (WAV, resample, mel, VAD), `packages/safetensor`,
   `packages/tokenizer`, `packages/gpukit` (CUDA + CPU backends) and
   `packages/http` (server + WebSocket) — each its own package, each with

@@ -42,6 +42,9 @@ echo "[1/3] build"
 if ! $NURL src/main.nu "$WORK/whisper" >/dev/null 2>"$WORK/build.err"; then
     echo "  build FAILED"; cat "$WORK/build.err"; exit 1
 fi
+# the VAD weights beside the binary, where an install puts them
+mkdir -p "$WORK/vad" && cp vad/silero_vad_v5.safetensors "$WORK/vad/"
+$NURL tests/silero_probs.nu "$WORK/silero_probs" >/dev/null 2>&1 || true
 WH="$WORK/whisper"
 (cd ../audio && $NURL src/main.nu "$WORK/audio" >/dev/null 2>&1)
 $NURL tests/ws_client.nu "$WORK/ws_client" >/dev/null 2>&1 || true
@@ -126,6 +129,31 @@ if fetch tiny/tokenizer.json \
         && ok "real speech transcribes word-for-word as HF transformers does" \
         || { bad "transcription"; echo "    got:  [$GOT]"; echo "    want: [$WANT]"; }
 
+    # Silero VAD (the streams' voice detector) against a numpy reading of the
+    # same weights, on real speech; then the endpointer over the clip
+    if [ -x "$WORK/silero_probs" ]; then
+        "$WORK/silero_probs" vad/silero_vad_v5.safetensors "$WORK/jfk.wav" > "$WORK/sprobs.txt" 2>/dev/null
+        SREF=$(python3 tests/silero_ref.py vad/silero_vad_v5.safetensors "$WORK/jfk.wav" "$WORK/sprobs.txt" 2>&1) \
+            && ok "Silero VAD == numpy reference on jfk.wav ($SREF)" \
+            || bad "Silero VAD vs numpy: $SREF"
+    else
+        bad "silero_probs did not build"
+    fi
+    VAD_OUT=$("$WH" vad "$WORK/jfk.wav" --vad-model vad/silero_vad_v5.safetensors 2>/dev/null)
+    NFIN=$(printf '%s\n' "$VAD_OUT" | grep -c '^final')
+    [ "$NFIN" -ge 1 ] && [ "$NFIN" -le 4 ] \
+        && ok "whisper vad: the endpointer closes jfk.wav's sentences ($NFIN finals)" \
+        || { bad "whisper vad on jfk.wav"; printf '%s\n' "$VAD_OUT" | head -5; }
+    python3 -c "
+import wave, numpy as np
+w = wave.open('$WORK/hum.wav', 'wb'); w.setnchannels(1); w.setsampwidth(2); w.setframerate(16000)
+t = np.arange(8 * 16000) / 16000; r = np.random.RandomState(5)
+x = 0.05 * np.sin(2 * np.pi * 120 * t) + 0.03 * np.cumsum(r.randn(t.size)) / 400 + 0.01 * r.randn(t.size)
+w.writeframes((np.clip(x, -1, 1) * 32767).astype('<i2').tobytes()); w.close()"
+    HUM=$("$WH" vad "$WORK/hum.wav" --vad-model vad/silero_vad_v5.safetensors 2>/dev/null | grep -c '^final')
+    [ "$HUM" -eq 0 ] \
+        && ok "whisper vad: 8 s of hum and rumble is no utterance at all" \
+        || bad "whisper vad: $HUM utterances in hum"
     GOT_CPU=$(NURL_GPU=cpu "$WH" transcribe "$WORK/model" "$WORK/jfk.wav" 2>/dev/null)
     [ "$GOT_CPU" = "$GOT" ] \
         && ok "CPU backend transcribes identically to CUDA" \
@@ -301,7 +329,7 @@ PYEOF3
         # The client is stdlib's own RFC 6455 client (tests/ws_client.nu) —
         # both ends of the protocol are the same implementation, under test
         # against each other. It streams the clip as PCM16, the server's
-        # adaptive-floor VAD closes utterances, and each comes back as
+        # endpointer (Silero) closes utterances, and each comes back as
         # {"text","t0","t1"} on the stream's clock.
         if [ -x "$WORK/ws_client" ]; then
             WS_OUT=$("$WORK/ws_client" "ws://127.0.0.1:$PORT/" "$WORK/jfk.wav" 2>/dev/null)
@@ -311,6 +339,17 @@ PYEOF3
                 && printf '%s' "$WS_OUT" | tr -d '\n' | grep -q "your country" \
                 && ok "WS: streamed PCM16 comes back as utterances with stream-clock t0/t1 (same port as HTTP)" \
                 || { bad "WS streaming"; echo "    got: [$WS_OUT]"; }
+            printf '%s' "$WS_OUT" | head -1 | grep -q '"vad":"silero"' \
+                && ok "WS: streams segment with Silero (the weights in vad/ were found)" \
+                || bad "WS: no Silero in the ack: $(printf '%s' "$WS_OUT" | head -1)"
+            # drafts: the utterance while it is spoken, then the final
+            WS_P=$("$WORK/ws_client" "ws://127.0.0.1:$PORT/" "$WORK/jfk.wav" '{"format":"pcm16","partials":true,"pause_ms":300}' 2>/dev/null)
+            printf '%s' "$WS_P" | grep -q '"type":"partial"' \
+                && printf '%s' "$WS_P" | grep -q '"stable":' \
+                && printf '%s' "$WS_P" | grep '"type":"final"' | tr -d '\n' | grep -q "your country" \
+                && printf '%s' "$WS_P" | grep -q '"speech_t1":' \
+                && ok "WS partials: drafts with a stable prefix, then the final ($(printf '%s' "$WS_P" | grep -c '"type":"partial"') drafts)" \
+                || { bad "WS partials"; echo "    got: [$WS_P]"; }
         else
             bad "ws_client did not build"
         fi

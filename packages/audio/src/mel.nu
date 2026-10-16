@@ -19,6 +19,10 @@
 //   ( mel_filters n_fft n_mels rate f_min f_max ) → ( Vec f )   (n_bins × n_mels)
 //   ( stft_power x plan window hop )              → ( Vec f )   frames × n_bins
 //   ( log_mel_whisper x n_fft hop n_mels rate )   → ( Vec f )   frames × n_mels
+//   ( log_mel_whisper_padded x n_total n_fft hop n_mels rate )
+//                                                 → the same of x zero-padded
+//                                                   to n_total, computed only
+//                                                   where x is
 //
 // Data is row-major and flat: a spectrogram is one `( Vec f )`, not a vec of
 // vecs. It goes to a GPU next, and that is the layout a GPU wants.
@@ -179,6 +183,30 @@ $ `stdlib/std/float.nu`
 // The whisper log-mel spectrogram: exactly what WhisperFeatureExtractor
 // produces, in the same layout (frames × n_mels, row-major).
 @ log_mel_whisper ( Vec f ) x i n_fft i hop i n_mels i rate → ( Vec f ) {
+    : ( Vec f ) out ( log_mel_whisper_raw x n_fft hop n_mels rate -1 )
+    : ~ f mx -1.0e30
+    : ~ i k 0
+    ~ < k ( vec_len [f] out ) {
+        : f v ( vec_at [f] out k )
+        ? > v mx { = mx v } {}
+        = k + k 1
+    }
+    // floor at (max − 8), then map to (x + 4)/4 — whisper's own scaling, and
+    // the reason the encoder sees numbers near [-1, 1] rather than decibels
+    : f floor8 - mx 8.0
+    = k 0
+    ~ < k ( vec_len [f] out ) {
+        : f v ( __mel_get out k )
+        : f c ? < v floor8 floor8 v
+        ( vec_set [f] out k / + c 4.0 4.0 )
+        = k + k 1
+    }
+    ^ out
+}
+
+// The log10 mel energies before whisper's clamp and scaling — at most
+// `limit` frames of them (-1 = all), frames × n_mels.
+@ log_mel_whisper_raw ( Vec f ) x i n_fft i hop i n_mels i rate i limit → ( Vec f ) {
     : i n_bins + / n_fft 2 1
     : ( Vec f ) win ( hann_periodic n_fft )
     : ( Vec f ) padded ( reflect_pad x / n_fft 2 )
@@ -187,7 +215,8 @@ $ `stdlib/std/float.nu`
     : i frames / ( vec_len [f] pw ) n_bins
     // whisper drops the last frame — with 30 s of audio that is what turns
     // 3001 frames into the 3000 the encoder expects
-    : i keep ? > frames 0 - frames 1 0
+    : ~ i keep ? > frames 0 - frames 1 0
+    ? & >= limit 0 < limit keep { = keep limit } {}
     : ( Vec f ) fb ( mel_filters n_fft n_mels rate 0.0 8000.0 )
     // A mel filter is a TRIANGLE: band m is nonzero over a handful of adjacent
     // bins and zero over the other ~195. The apply loop walks each band's own
@@ -215,7 +244,6 @@ $ `stdlib/std/float.nu`
         = mm + mm 1
     }
     : ( Vec f ) out ( vec_with_cap [f] * keep n_mels )
-    : ~ f mx -1.0e30
     : ~ i fr 0
     ~ < fr keep {
         : ~ i m 0
@@ -228,21 +256,57 @@ $ `stdlib/std/float.nu`
                 = b + b 1
             }
             : f cl ? < s 1.0e-10 1.0e-10 s
-            : f lg ( log10 cl )
-            ? > lg mx { = mx lg } {}
-            ( vec_push [f] out lg )
+            ( vec_push [f] out ( log10 cl ) )
             = m + m 1
         }
         = fr + fr 1
     }
-    // floor at (max − 8), then map to (x + 4)/4 — whisper's own scaling, and
-    // the reason the encoder sees numbers near [-1, 1] rather than decibels
-    : f floor8 - mx 8.0
+    ^ out
+}
+
+// log_mel_whisper of `x` zero-padded to `n_total` samples, without paying for
+// the padding. Whisper always hears 30 s, and a two-second answer is 28 s of
+// zeros whose frames are all the same number: a frame of zeros has power 0, its
+// log is the 1e-10 floor, and only the max − 8 clamp (taken over the whole
+// spectrogram) decides what that becomes. So the frames that see a sample of
+// `x` are computed, the rest are the floor, and the clamp runs over all of them
+// — the same floats as padding first and computing every frame, at the cost of
+// the speech rather than of 30 s (2 s of audio: ~10 ms instead of ~120).
+// `x` longer than `n_total` is trimmed, as pad_or_trim does.
+@ log_mel_whisper_padded ( Vec f ) x i n_total i n_fft i hop i n_mels i rate → ( Vec f ) {
+    : i half / n_fft 2
+    : ~ i have ( vec_len [f] x )
+    ? > have n_total { = have n_total } {}
+    // frame fr is centred on sample fr·hop and reads [fr·hop − half, fr·hop + half):
+    // the first `need` frames see a sample of x, every later one only zeros
+    : i need / + + have half - hop 1 hop
+    : i len_short + * need hop n_fft
+    // near the end the right-hand reflection reaches real samples: no shortcut
+    ? | >= len_short n_total < have 1 {
+        : ( Vec f ) fixed ( pad_or_trim x n_total )
+        ^ ( log_mel_whisper fixed n_fft hop n_mels rate )
+    } {}
+    : ( Vec f ) short ( pad_or_trim x len_short )
+    : ( Vec f ) head ( log_mel_whisper_raw short n_fft hop n_mels rate need )
+    : i frames / n_total hop
+    : ( Vec f ) out ( vec_with_cap [f] * frames n_mels )
+    : ~ f mx -1.0e30
     : ~ i k 0
+    ~ < k ( vec_len [f] head ) {
+        : f v ( vec_at [f] head k )
+        ? > v mx { = mx v } {}
+        ( vec_push [f] out v )
+        = k + k 1
+    }
+    : f zlog ( log10 1.0e-10 )
+    ? > zlog mx { = mx zlog } {}
+    ~ < ( vec_len [f] out ) * frames n_mels { ( vec_push [f] out zlog ) }
+    : f floor8 - mx 8.0
+    = k 0
     ~ < k ( vec_len [f] out ) {
-        : f v ( __mel_get out k )
+        : f v ( vec_at [f] out k )
         : f c ? < v floor8 floor8 v
-        ( vec_set [f] out k / + c 4.0 4.0 )
+        ( vec_put [f] out k / + c 4.0 4.0 )
         = k + k 1
     }
     ^ out

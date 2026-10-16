@@ -42,6 +42,8 @@ $ `stdlib/std/time.nu`
 $ `stdlib/std/floatbits.nu`
 $ `deps/http/src/http.nu`
 $ `src/run.nu`
+$ `src/silero.nu`
+$ `src/stream.nu`
 $ `stdlib/core/slice.nu`
 $ `stdlib/core/option.nu`
 
@@ -537,22 +539,58 @@ $ `stdlib/core/option.nu`
 // ── WebSocket streaming: the microphone case ────────────────────────
 //
 // The same port. A client that connects with `Upgrade: websocket` streams raw
-// audio (binary frames: PCM16 by default, or float32 — announce with a first
-// JSON text message {"format":"float32"}) and receives one JSON text message
-// per UTTERANCE:
+// 16 kHz mono audio (binary frames: PCM16 by default, or float32) and gets
+// JSON text messages back. With no configuration it gets what it always got,
+// one message per UTTERANCE:
 //
-//   {"text":" ...","t0":12.34,"t1":15.67}
+//   {"text":" ...","t0":12.34,"t1":15.67,"type":"final","seg":3,
+//    "speech_t0":12.64,"speech_t1":15.27,"proc_ms":0}
 //
 // t0/t1 are seconds on the STREAM's clock — where in everything sent so far
-// the words were said.
+// the audio that was transcribed lies (lead-in and closing silence
+// included); speech_t0/speech_t1 where the voice itself began and ended.
+// proc_ms is what the transcription cost after the utterance closed — 0
+// when the pause was used to make it ahead of time.
 //
-// Segmentation is the adaptive-floor streaming VAD (packages/audio). The
-// whisper.cpp fork this replaces cuts on a FIXED dB threshold and then grows a
-// pile of "auto settings" heuristics to keep re-tuning that threshold per
-// room — the adaptive floor (10th percentile of the trailing minute) is the
-// shape of the fix rather than a patch on the symptom. And it runs on one
-// port, not two: the fork needs a second listener because its HTTP and WS
-// stacks cannot share one, and ours are the same stack by construction.
+// A text message configures the stream — any time, any subset of fields —
+// and is answered with {"status":"ok", …the settings in force}:
+//
+//   format      "pcm16" | "float32"
+//   lang        "fi", "en", …  (default: the server's --lang)
+//   partials    true: drafts of the utterance while it is being spoken
+//                 {"type":"partial","seg":3,"text":"…","stable":"…","t0","t1","pause_ms"}
+//               `stable` is the prefix two drafts in a row agreed on (the
+//               words the speaker has finished); `pause_ms` how long they
+//               had been quiet when the draft's audio ended. Every utterance
+//               that had a draft ends in a final, an empty one included, so
+//               a client can clear what it showed.
+//   partial_ms  a draft per this much new speech (default 300, min 100)
+//   pause_ms    the silence that ends an utterance; setting it turns the
+//               adaptation off unless "adaptive":true comes with it
+//   adaptive    learn the closing pause from the speaker's own gaps between
+//               words (default true), within min_pause_ms…max_pause_ms
+//               (default 300…1000)
+//   threshold   Silero's p(speech) that opens an utterance (default 0.5)
+//   near_db     the near-field gate: chunks this far below the speaker's
+//               own level are someone else (default 10; 0 = off)
+//   max_utt_ms  close an utterance at its best gap past this (≤ 28000)
+//   events      true: {"type":"start","seg","t0"} when speech begins
+//   levels      true: {"type":"level","noise_db","speech_db","snr_db",
+//               "p_noise","pause_ms","threshold"} once a second
+//   vad         "silero" (default when the weights are installed) | "energy"
+//
+// and two commands, which are not acknowledged:
+//
+//   {"cmd":"end"}    the utterance is over now — transcribe what was heard
+//                    (a push-to-talk release, or a client that already knows)
+//   {"cmd":"reset"}  forget the open utterance (a new question: what was
+//                    being said is no longer an answer)
+//
+// What decides an utterance is stream.nu: Silero's voice probability, the
+// room's noise floor and the speaker's level re-measured continuously, and
+// a closing pause learned from the speaker. One port, not two: the whisper.cpp
+// fork this replaces needs a second listener because its HTTP and WS stacks
+// cannot share one, and ours are the same stack by construction.
 
 // One stream's settings, from its config messages. They belong to the
 // connection: as globals, two streams open at once took each other's
@@ -561,80 +599,164 @@ $ `stdlib/core/option.nu`
 : WsCfg {
     b f32  // the client sends float32 frames, else PCM16
     String lang  // the language override ("" = the server's default)
+    WssCfg st  // the endpointer's settings
+    b silero  // F = the energy detector, by request
 }
 
-@ __srv_ws_ack TcpConn c WsCfg wc → v {
-    : Json o ( json_obj_new )
-    : b _a ( json_obj_set o `status` ( json_str_lit `ok` ) )
-    : b _b ( json_obj_set o `format` ( json_str_lit ? . wc f32 `float32` `pcm16` ) )
-    : b _c ( json_obj_set o `vad` ( json_str_lit `adaptive-floor` ) )
+// The Silero network, loaded once when the server starts (F = no weights:
+// every stream falls back to the energy detector).
+@ __srv_vad_blank → ( Locked ? Silero ) { ^ ( locked_new [? Silero] @ ?Silero { F } ) }
+
+: ( Locked ? Silero ) g_srv_vad_net ( __srv_vad_blank )
+
+@ __srv_vad_net → ?Silero {
+    : ?Silero n ( locked_take [? Silero] g_srv_vad_net )
+    : ~ ? Silero out @ ?Silero { F }
+    ?? n { T x → { = out @ ?Silero { T ( Silero_share x ) } } F → {} }
+    ( locked_restore [? Silero] g_srv_vad_net n )
+    ^ out
+}
+
+@ __srv_ws_send TcpConn c Json o → v {
     : String body ( json_stringify o )
     : !v WsErr _w ( ws_send_text c ( string_data body ) )
 }
 
-@ __srv_ws_config TcpConn c ( Vec u ) payload inout WsCfg wc → v {
+@ __srv_ws_ack TcpConn c WsCfg wc WsStream ws → v {
+    : Json o ( json_obj_new )
+    : b _a ( json_obj_set o `status` ( json_str_lit `ok` ) )
+    : b _b ( json_obj_set o `format` ( json_str_lit ? . wc f32 `float32` `pcm16` ) )
+    : b _c ( json_obj_set o `vad` ( json_str_lit ? & . wc silero ( __srv_has_silero ) `silero` `energy` ) )
+    : b _d ( json_obj_set o `partials` ( json_bool . . wc st partials ) )
+    : b _e ( json_obj_set o `partial_ms` ( json_int . . wc st partial_ms ) )
+    : b _f ( json_obj_set o `pause_ms` ( json_int . ws eou_ms ) )
+    : b _g ( json_obj_set o `adaptive` ( json_bool . . wc st adaptive ) )
+    : b _h ( json_obj_set o `min_pause_ms` ( json_int . . wc st min_pause_ms ) )
+    : b _i ( json_obj_set o `max_pause_ms` ( json_int . . wc st max_pause_ms ) )
+    : b _j ( json_obj_set o `threshold` ( json_float . . wc st threshold ) )
+    : b _k ( json_obj_set o `near_db` ( json_float . . wc st near_db ) )
+    : b _l ( json_obj_set o `sample_rate` ( json_int 16000 ) )
+    ( __srv_ws_send c o )
+}
+
+@ __srv_has_silero → b {
+    ?? ( __srv_vad_net ) { T _ → { ^ T } F → { ^ F } }
+}
+
+@ __srv_jint Json j s key i def → i {
+    ?? ( json_obj_get j key ) {
+        T v → { ?? ( json_num_as_i v ) { T x → { ^ x } F → { ^ def } } }
+        F → { ^ def }
+    }
+}
+
+@ __srv_jnum Json j s key f def → f {
+    ?? ( json_obj_get j key ) {
+        T v → { ?? ( json_num_as_f v ) { T x → { ^ x } F → { ^ def } } }
+        F → { ^ def }
+    }
+}
+
+@ __srv_jbool Json j s key b def → b {
+    ?? ( json_obj_get j key ) {
+        T v → { ? ( json_is_bool v ) { ^ ( json_as_bool v ) } { ^ def } }
+        F → { ^ def }
+    }
+}
+
+@ __srv_clamp i x i lo i hi → i { ^ ? < x lo lo ? > x hi hi x }
+
+// A text frame: a command (T = it was one, `cmd` says which: 1 end, 2 reset)
+// or a configuration, applied and acknowledged.
+@ __srv_ws_text TcpConn c ( Vec u ) payload inout WsCfg wc inout WsStream ws → i {
     : String ps ( string_new )
     : ~ i k 0
     ~ < k ( vec_len [u] payload ) {
-        ?? ( vec_get [u] payload k ) {
-            T ch → { ( string_push_char ps ch ) }
-            F → {}
-        }
+        ( string_push_char ps ( vec_at [u] payload k ) )
         = k + k 1
     }
     ?? ( json_parse ( string_data ps ) ) {
         T j → {
-            ?? ( json_obj_get j `format` ) {
-                T v → {
-                    : s fs ( json_as_str v )
-                    = . wc f32 != 0 ( nurl_str_eq fs `float32` )
+            ?? ( json_obj_get j `cmd` ) {
+                T cv → {
+                    : s cmd ( json_as_str cv )
+                    ? != 0 ( nurl_str_eq cmd `end` ) { ^ 1 } {}
+                    ? != 0 ( nurl_str_eq cmd `reset` ) { ^ 2 } {}
+                    : Json eo ( json_obj_new )
+                    : b _e ( json_obj_set eo `error` ( json_str_lit `unknown cmd — "end" or "reset"` ) )
+                    ( __srv_ws_send c eo )
+                    ^ 0
                 }
+                F → {}
+            }
+            ?? ( json_obj_get j `format` ) {
+                T v → { = . wc f32 != 0 ( nurl_str_eq ( json_as_str v ) `float32` ) }
                 F → {}
             }
             ?? ( json_obj_get j `lang` ) {
                 T v → {
                     : s ls ( json_as_str v )
-                    ? > ( nurl_str_len ls ) 0 {
-                        = . wc lang ( string_from ls )
-                    } {}
+                    ? > ( nurl_str_len ls ) 0 { = . wc lang ( string_from ls ) } {}
                 }
                 F → {}
             }
+            ?? ( json_obj_get j `vad` ) {
+                T v → { = . wc silero == 0 ( nurl_str_eq ( json_as_str v ) `energy` ) }
+                F → {}
+            }
+            : ~ WssCfg st . wc st
+            = . st partials ( __srv_jbool j `partials` . st partials )
+            = . st partial_ms ( __srv_clamp ( __srv_jint j `partial_ms` . st partial_ms ) 100 5000 )
+            = . st min_pause_ms ( __srv_clamp ( __srv_jint j `min_pause_ms` . st min_pause_ms ) 100 5000 )
+            = . st max_pause_ms ( __srv_clamp ( __srv_jint j `max_pause_ms` . st max_pause_ms ) . st min_pause_ms 10000 )
+            ?? ( json_obj_get j `pause_ms` ) {
+                T _ → {
+                    = . st pause_ms ( __srv_clamp ( __srv_jint j `pause_ms` . st pause_ms ) 100 10000 )
+                    = . st adaptive F
+                    ? < . st pause_ms . st min_pause_ms { = . st min_pause_ms . st pause_ms } {}
+                    ? > . st pause_ms . st max_pause_ms { = . st max_pause_ms . st pause_ms } {}
+                }
+                F → {}
+            }
+            = . st adaptive ( __srv_jbool j `adaptive` . st adaptive )
+            : ~ f th ( __srv_jnum j `threshold` . st threshold )
+            ? < th 0.2 { = th 0.2 } {}
+            ? > th 0.95 { = th 0.95 } {}
+            = . st threshold th
+            : ~ f nd ( __srv_jnum j `near_db` . st near_db )
+            ? < nd 0.0 { = nd 0.0 } {}
+            = . st near_db nd
+            = . st max_utt_ms ( __srv_clamp ( __srv_jint j `max_utt_ms` . st max_utt_ms ) 2000 28000 )
+            = . st events ( __srv_jbool j `events` . st events )
+            = . st levels ( __srv_jbool j `levels` . st levels )
+            = . wc st st
+            ( ws_stream_set_cfg ws st )
+            ? . wc silero {} { = . ws net @ ?Silero { F } }
         }
         F _ → {}
     }
-    ( __srv_ws_ack c wc )
+    ( __srv_ws_ack c wc ws )
+    ^ 0
 }
 
 // binary frame → f32 samples at 16 kHz (the client's job to resample; a
 // microphone opened at 16 kHz is the normal case)
 @ __srv_ws_samples ( Vec u ) d b f32 → ( Vec f ) {
-    : ( Vec f ) out ( vec_new [f] )
     : i n ( vec_len [u] d )
     ? f32 {
+        : ( Vec f ) out ( vec_with_cap [f] / n 4 )
         : ~ i k 0
         ~ <= + k 4 n {
-            : ~ i b0 0
-            : ~ i b1 0
-            : ~ i b2 0
-            : ~ i b3 0
-            ?? ( vec_get [u] d k ) { T x0 → { = b0 # i x0 } F → {} }
-            ?? ( vec_get [u] d + k 1 ) { T x1 → { = b1 # i x1 } F → {} }
-            ?? ( vec_get [u] d + k 2 ) { T x2 → { = b2 # i x2 } F → {} }
-            ?? ( vec_get [u] d + k 3 ) { T x3 → { = b3 # i x3 } F → {} }
-            : i bits | | | b0 << b1 8 << b2 16 << b3 24
+            : i bits | | | # i ( vec_at [u] d k ) << # i ( vec_at [u] d + k 1 ) 8 << # i ( vec_at [u] d + k 2 ) 16 << # i ( vec_at [u] d + k 3 ) 24
             ( vec_push [f] out # f ( bits_to_f32 bits ) )
             = k + k 4
         }
         ^ out
     } {}
+    : ( Vec f ) out ( vec_with_cap [f] / n 2 )
     : ~ i k 0
     ~ <= + k 2 n {
-        : ~ i lo 0
-        : ~ i hi 0
-        ?? ( vec_get [u] d k ) { T xl → { = lo # i xl } F → {} }
-        ?? ( vec_get [u] d + k 1 ) { T xh → { = hi # i xh } F → {} }
-        : ~ i v | lo << hi 8
+        : ~ i v | # i ( vec_at [u] d k ) << # i ( vec_at [u] d + k 1 ) 8
         ? >= v 32768 { = v - v 65536 } {}
         ( vec_push [f] out / # f v 32768.0 )
         = k + k 2
@@ -642,52 +764,152 @@ $ `stdlib/core/option.nu`
     ^ out
 }
 
-// A closed utterance: transcribe it, send {"text","t0","t1"}.
-@ __srv_ws_emit TcpConn c VadStream vs WsCfg wc → v {
-    : VadSeg g ( vad_stream_seg vs )
-    : ( Vec f ) seg ( vad_stream_take vs )
+@ __srv_bytes_str ( Vec u ) b → String {
+    : String st ( string_with_cap ( vec_len [u] b ) )
+    : ~ i k 0
+    ~ < k ( vec_len [u] b ) {
+        ( string_push_char st ( vec_at [u] b k ) )
+        = k + k 1
+    }
+    ^ st
+}
+
+// One stream's drafts so far: the last one (what `stable` is agreed
+// against) and the last full-context one (which can be the final).
+: WsDrafts {
+    ( Vec u ) last
+    ( Vec u ) full
+    i full_seg
+}
+
+// The audio [from, to) of the stream, transcribed. `full` = the whole 30 s
+// encoder context (a final, or a draft that may become one); otherwise the
+// context covers the audio plus 5 s (at least 10 s) — a draft's price.
+@ __srv_ws_run WsStream ws WsCfg wc i from i to b full ( Vec u ) text → b {
+    : ( Vec f ) seg ( ws_stream_audio ws from to )
     : SrvCfg cf ( __srv_cfg )
     : ~ s lang ( string_data . cf lang )
     ? > ( string_len . wc lang ) 0 { = lang ( string_data . wc lang ) } {}
     : Whisper w ( __srv_model )
     : Tok t ( __srv_tok )
-    : ( Vec u ) text ( vec_new [u] )
-    // no VAD inside — the stream already segmented; no timestamps — the
-    // segment IS the timestamp, and t0/t1 carry it
-    ? ( wh_run w t seg lang g_srv_max F F g_srv_nospeech text ) {
-        // the gate ate it: the window held no speech (a phone mic's AGC
-        // pumping room noise past the energy floor). Nothing to say, and
-        // saying nothing is the right amount.
-        ? == ( vec_len [u] text ) 0 {
-            ( __srv_count )
-            ^ {}
-        } {}
-        : String st ( string_new )
-        : ~ i k 0
-        ~ < k ( vec_len [u] text ) {
-            ?? ( vec_get [u] text k ) {
-                T ch → { ( string_push_char st ch ) }
-                F → {}
-            }
-            = k + k 1
-        }
+    : ~ i ctx 0
+    : ~ f nosp g_srv_nospeech
+    ? ! full {
+        : i need / + ( vec_len [f] seg ) 319 320
+        = ctx ? > + need 250 500 + need 250 500
+        ? >= ctx ( wh_n_ctx_enc w ) { = ctx 0 } {}
+        // the no-speech gate reads the full window; a shortened one is
+        // not what it was calibrated on, and a draft is not the last word
+        = nosp 1.0
+    } {}
+    ^ ( wh_run_seg w t seg ctx lang g_srv_max nosp text )
+}
+
+@ __srv_ws_failed TcpConn c → v {
+    // The decode failed (an unknown language token, most likely) — SAY SO
+    // on the socket. A client staring at silence cannot tell a failed
+    // request from a quiet room, and "it just did nothing" is the worst
+    // bug report there is.
+    : Json eo ( json_obj_new )
+    : b _e ( json_obj_set eo `error` ( json_str_lit `transcription failed — check the language code (lowercase: fi, en, sv, …); the server log has the detail` ) )
+    ( __srv_ws_send c eo )
+}
+
+// One action of the endpointer, carried out.
+@ __srv_ws_act TcpConn c i act inout WsStream ws WsCfg wc inout WsDrafts dr → v {
+    : f t0 / # f . ws act_from 16000.0
+    : f t1 / # f . ws act_to 16000.0
+    ? == act WSS_START {
         : Json o ( json_obj_new )
-        : b _a ( json_obj_set o `text` ( json_str_lit ( string_data st ) ) )
-        : b _b ( json_obj_set o `t0` ( json_float / # f . g start 16000.0 ) )
-        : b _c ( json_obj_set o `t1` ( json_float / # f . g end 16000.0 ) )
-        : String body ( json_stringify o )
-        : !v WsErr _w ( ws_send_text c ( string_data body ) )
+        : b _a ( json_obj_set o `type` ( json_str_lit `start` ) )
+        : b _b ( json_obj_set o `seg` ( json_int . ws act_seg ) )
+        : b _c ( json_obj_set o `t0` ( json_float t0 ) )
+        ( __srv_ws_send c o )
+        ^ {}
+    } {}
+    ? == act WSS_LEVEL {
+        : Json o ( json_obj_new )
+        : b _a ( json_obj_set o `type` ( json_str_lit `level` ) )
+        : b _b ( json_obj_set o `noise_db` ( json_float . ws noise_db ) )
+        : b _c ( json_obj_set o `speech_db` ( json_float . ws speech_db ) )
+        : b _d ( json_obj_set o `snr_db` ( json_float - . ws speech_db . ws noise_db ) )
+        : b _e ( json_obj_set o `p_noise` ( json_float . ws p_noise ) )
+        : b _f ( json_obj_set o `pause_ms` ( json_int . ws eou_ms ) )
+        : b _g ( json_obj_set o `threshold` ( json_float . ws th_on ) )
+        ( __srv_ws_send c o )
+        ^ {}
+    } {}
+    : i t_start ( monotonic_ns )
+    ? == act WSS_PARTIAL {
+        : ( Vec u ) text ( vec_new [u] )
+        ? ( __srv_ws_run ws wc . ws act_from . ws act_to . ws act_full text ) {} {
+            ( __srv_ws_failed c )
+            ^ {}
+        }
+        : i agree ( wss_agree . dr last text )
+        : ( Vec u ) stable ( wss_prefix text agree )
+        ? . ws act_full {
+            = . dr full ( vec_clone [u] text )
+            = . dr full_seg . ws act_seg
+        } {}
+        = . dr last ( vec_clone [u] text )
+        // a speculative draft (no drafts asked for) is kept, not sent
+        ? | == ( vec_len [u] text ) 0 ! . . wc st partials { ^ {} } {}
+        : Json o ( json_obj_new )
+        : b _a ( json_obj_set o `type` ( json_str_lit `partial` ) )
+        : b _b ( json_obj_set o `seg` ( json_int . ws act_seg ) )
+        : b _c ( json_obj_set o `text` ( json_str_lit ( string_data ( __srv_bytes_str text ) ) ) )
+        : b _d ( json_obj_set o `stable` ( json_str_lit ( string_data ( __srv_bytes_str stable ) ) ) )
+        : b _e ( json_obj_set o `t0` ( json_float t0 ) )
+        : b _f ( json_obj_set o `t1` ( json_float t1 ) )
+        : b _g ( json_obj_set o `pause_ms` ( json_int . ws act_pause_ms ) )
+        : b _h ( json_obj_set o `proc_ms` ( json_int / - ( monotonic_ns ) t_start 1000000 ) )
+        : b _i ( json_obj_set o `speech_t0` ( json_float / # f . ws act_speech_from 16000.0 ) )
+        : b _j ( json_obj_set o `speech_t1` ( json_float / # f . ws act_speech_to 16000.0 ) )
+        ( __srv_ws_send c o )
+        ^ {}
+    } {}
+    // WSS_FINAL
+    : ~ ( Vec u ) text ( vec_new [u] )
+    : b drafted & . . wc st partials > ( vec_len [u] . dr last ) 0
+    ? & . ws act_reuse == . dr full_seg . ws act_seg {
+        = text ( vec_clone [u] . dr full )
     } {
-        // The decode failed (an unknown language token, most likely) —
-        // SAY SO on the socket. A client staring at silence cannot tell a
-        // failed request from a quiet room, and "it just did nothing" is
-        // the worst bug report there is.
-        : Json eo ( json_obj_new )
-        : b _e ( json_obj_set eo `error` ( json_str_lit `transcription failed — check the language code (lowercase: fi, en, sv, …); the server log has the detail` ) )
-        : String eb ( json_stringify eo )
-        : !v WsErr _we ( ws_send_text c ( string_data eb ) )
+        ? ( __srv_ws_run ws wc . ws act_from . ws act_to T text ) {} {
+            ( __srv_ws_failed c )
+            ( __srv_count )
+            = . dr last ( vec_new [u] )
+            = . dr full ( vec_new [u] )
+            ^ {}
+        }
     }
+    = . dr last ( vec_new [u] )
+    = . dr full ( vec_new [u] )
+    = . dr full_seg 0
     ( __srv_count )
+    // the gate ate it: the window held no speech (a phone mic's AGC pumping
+    // room noise past the floor). Nothing to say, and saying nothing is the
+    // right amount — unless drafts were shown, which an empty final clears.
+    ? & == ( vec_len [u] text ) 0 ! | drafted . . wc st partials { ^ {} } {}
+    : Json o ( json_obj_new )
+    : b _a ( json_obj_set o `text` ( json_str_lit ( string_data ( __srv_bytes_str text ) ) ) )
+    : b _b ( json_obj_set o `t0` ( json_float t0 ) )
+    : b _c ( json_obj_set o `t1` ( json_float t1 ) )
+    : b _d ( json_obj_set o `type` ( json_str_lit `final` ) )
+    : b _e ( json_obj_set o `seg` ( json_int . ws act_seg ) )
+    : b _f ( json_obj_set o `proc_ms` ( json_int / - ( monotonic_ns ) t_start 1000000 ) )
+    : b _g ( json_obj_set o `speech_t0` ( json_float / # f . ws act_speech_from 16000.0 ) )
+    : b _h ( json_obj_set o `speech_t1` ( json_float / # f . ws act_speech_to 16000.0 ) )
+    ( __srv_ws_send c o )
+}
+
+// Everything the endpointer has due, in order.
+@ __srv_ws_drain TcpConn c inout WsStream ws WsCfg wc inout WsDrafts dr → v {
+    : ~ b more T
+    ~ more {
+        : i act ( ws_stream_next ws )
+        ? == act WSS_NONE { = more F } { ( __srv_ws_act c act ws wc dr ) }
+    }
 }
 
 // The upgrade hook: T = this was a WebSocket connection and it has been
@@ -707,20 +929,28 @@ $ `stdlib/core/option.nu`
         : !v WsErr _c ( ws_send_close c 1011 `the model could not be loaded` )
         ^ T
     }
-    : ~ WsCfg wc @ WsCfg { F ( string_new ) }
-    : VadStream vs ( vad_stream_new 16000 ( vad_default_opts ) )
+    : ~ WsCfg wc @ WsCfg { F ( string_new ) ( wss_default_cfg ) T }
+    : ~ WsStream ws ( ws_stream_new ( __srv_vad_net ) . wc st )
+    : ~ WsDrafts dr @ WsDrafts { ( vec_new [u] ) ( vec_new [u] ) 0 }
     : WsLimits lim ( ws_default_limits )
     : ~ b open T
     ~ open {
         ?? ( ws_read_message c lim ) {
             T msg → {
                 ? == . msg opcode ( ws_opcode_text ) {
-                    ( __srv_ws_config c . msg payload wc )
+                    : i cmd ( __srv_ws_text c . msg payload wc ws )
+                    ? == cmd 1 {
+                        : b _e ( ws_stream_end ws )
+                    } {}
+                    ? == cmd 2 {
+                        ( ws_stream_reset ws )
+                        = . dr last ( vec_new [u] )
+                        = . dr full ( vec_new [u] )
+                    } {}
                 } {
-                    : ( Vec f ) x ( __srv_ws_samples . msg payload . wc f32 )
-                    ( vad_stream_push vs x )
-                    ~ ( vad_stream_poll vs ) { ( __srv_ws_emit c vs wc ) }
+                    ( ws_stream_feed ws ( __srv_ws_samples . msg payload . wc f32 ) )
                 }
+                ( __srv_ws_drain c ws wc dr )
             }
             F _ → { = open F }
         }
@@ -728,7 +958,8 @@ $ `stdlib/core/option.nu`
     // the stream ended: an open utterance is still an utterance — transcribe
     // and send it before answering the close (RFC 6455 allows pending frames
     // before the close reply)
-    ? ( vad_stream_flush vs ) { ( __srv_ws_emit c vs wc ) } {}
+    : b _e ( ws_stream_end ws )
+    ( __srv_ws_drain c ws wc dr )
     : !v WsErr _c ( ws_send_close c 1000 `bye` )
     ( __srv_release )
     ^ T
@@ -739,7 +970,35 @@ $ `stdlib/core/option.nu`
 // a reload swap it); the caller keeps the tokenizer.
 // cert/key: PEM paths — both set = HTTPS (and wss: the TcpConn's TLS is
 // transparent to the WebSocket layer). Both empty = plain HTTP.
-@ __wh_serve_run sink Whisper w Tok t s dir s host i port s lang i maxtok b use_vad b with_ts s cert s key s token i unload_s → i {
+// The streams' voice detector: Silero's weights from `path` (or the
+// installed ones), unless `energy` asks for the energy detector.
+@ __srv_load_vad s path b energy → v {
+    ? energy {
+        ( nurl_eprintln `whisper: streams use the energy detector (--energy)` )
+        ^ {}
+    } {}
+    : ~ String vp ( string_from path )
+    ? == ( string_len vp ) 0 { = vp ( silero_default_path ) } {}
+    ? == ( string_len vp ) 0 {
+        ( nurl_eprintln `whisper: no Silero VAD weights (vad/silero_vad_v5.safetensors beside the install, or --vad-model) — streams fall back to the energy detector` )
+        ^ {}
+    } {}
+    ?? ( silero_open ( string_data vp ) ) {
+        T n → {
+            ( locked_set [? Silero] g_srv_vad_net @ ?Silero { T n } )
+            : String m ( string_from `whisper: streams segment with Silero VAD (` )
+            ( string_push_str m ( string_data vp ) )
+            ( string_push_char m 41 )
+            ( nurl_eprintln ( string_data m ) )
+        }
+        F e → {
+            ( nurl_eprintln ( string_data e ) )
+            ( nurl_eprintln `whisper: streams fall back to the energy detector` )
+        }
+    }
+}
+
+@ __wh_serve_run sink Whisper w Tok t s dir s host i port s lang i maxtok b use_vad b with_ts s cert s key s token i unload_s s vad_model b energy → i {
     // the server owns the model from here
     ( locked_set [SrvState] g_srv @ SrvState { @ ?Whisper { T w } 0 0 ( monotonic_ns ) 1 0 0 * unload_s 1000 } )
     ( locked_set [? Tok] g_srv_tok @ ?Tok { T ( Tok_share t ) } )
@@ -758,6 +1017,7 @@ $ `stdlib/core/option.nu`
     } {}
     = g_srv_vad use_vad
     = g_srv_ts with_ts
+    ( __srv_load_vad vad_model energy )
     = g_srv_max maxtok
     : HttpApp a ( http_app_new )
     // One inference runs one model on one GPU; a second concurrent request
@@ -817,7 +1077,7 @@ $ `stdlib/core/option.nu`
 }
 
 // Load the model, open the port, serve until stopped.
-@ wh_serve s dir s host i port s lang i maxtok b use_vad b with_ts s cert s key s token i unload_s → i {
+@ wh_serve s dir s host i port s lang i maxtok b use_vad b with_ts s cert s key s token i unload_s s vad_model b energy → i {
     : String cfg ( _wh_path dir `config.json` )
     : String wts ( _wh_path dir `model.safetensors` )
     : String tjs ( _wh_path dir `tokenizer.json` )
@@ -833,7 +1093,7 @@ $ `stdlib/core/option.nu`
                             T t → {
                                 // the run owns the model from here: it closes
                                 // whatever is loaded when it returns
-                                : i rc2 ( __wh_serve_run w t dir host port lang maxtok use_vad with_ts cert key token unload_s )
+                                : i rc2 ( __wh_serve_run w t dir host port lang maxtok use_vad with_ts cert key token unload_s vad_model energy )
                                 ^ rc2
                             }
                             F e → {
@@ -856,7 +1116,7 @@ $ `stdlib/core/option.nu`
         T t → {
             ?? ( wh_open ( string_data cfg ) ( string_data wts ) ) {
                 T w → {
-                    : i rc2 ( __wh_serve_run w t dir host port lang maxtok use_vad with_ts cert key token unload_s )
+                    : i rc2 ( __wh_serve_run w t dir host port lang maxtok use_vad with_ts cert key token unload_s vad_model energy )
                     = rc rc2
                 }
                 F e → {

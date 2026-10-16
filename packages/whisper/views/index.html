@@ -26,6 +26,8 @@
          border-radius: 8px; padding: 12px; min-height: 44px; font-size: 15px; }
   .utt { padding: 3px 0; border-bottom: 1px dotted #21262d; }
   .utt .t { color: #7d8590; font: 12px/1.4 ui-monospace, monospace; margin-right: 8px; }
+  .utt.draft { color: #7d8590; font-style: italic; }
+  .utt.draft b { color: #c9d1d9; font-weight: normal; font-style: normal; }
   .status { color: #7d8590; font-size: 13px; margin-top: 8px; min-height: 18px; }
   .status.err { color: #f85149; }
   .meter { height: 4px; background: #21262d; border-radius: 2px; overflow: hidden; margin-top: 8px; }
@@ -62,9 +64,15 @@
     <div class="row">
       <button id="mic">Start microphone</button>
       <label>lang <input type="text" id="mlang" value="en"></label>
+      <label>mode <select id="mmode">
+        <option value="default">default (adaptive pause)</option>
+        <option value="answers">answers (300 ms pause)</option>
+        <option value="drafts">drafts (word by word)</option>
+      </select></label>
       <span class="status" id="mstat" style="margin-top:0"></span>
     </div>
     <div class="meter"><div id="level"></div></div>
+    <div class="status" id="mlevels"></div>
     <div class="out" id="mout"></div>
   </div>
 
@@ -74,8 +82,11 @@
       optional <code>language</code>, <code>response_format</code> (json|text),
       <code>vad</code>, <code>timestamps</code>. whisper.cpp clients work unchanged.</div>
     <div style="margin-top:6px">WebSocket on this same port — send an optional
-      <code>{"format":"pcm16"}</code> text frame, then raw PCM16 @ 16 kHz binary frames;
-      each detected utterance returns as <code>{"text","t0","t1"}</code>.</div>
+      <code>{"format":"pcm16","lang":"fi"}</code> text frame, then raw PCM16 @ 16 kHz binary frames;
+      each detected utterance returns as <code>{"type":"final","text","t0","t1","speech_t0","speech_t1"}</code>.
+      Also: <code>"partials":true</code> (drafts with a <code>stable</code> prefix), <code>"pause_ms"</code>,
+      <code>"levels":true</code>, <code>"events":true</code>; commands <code>{"cmd":"end"}</code> and
+      <code>{"cmd":"reset"}</code> — see the README.</div>
     <div style="margin-top:6px">GET <code>/health</code> — model shape and request count.</div>
   </div>
 </div>
@@ -152,7 +163,29 @@ function micStatus(msg, err) {
   el("mstat").textContent = msg;
 }
 
+// the draft line of the utterance being spoken: replaced by every newer
+// draft, and by the final
+var draft = { seg: -1, div: null };
+
+function showDraft(o) {
+  if (draft.seg !== o.seg || !draft.div) {
+    draft.seg = o.seg;
+    draft.div = document.createElement("div");
+    draft.div.className = "utt draft";
+    el("mout").appendChild(draft.div);
+  }
+  draft.div.textContent = "";
+  var b = document.createElement("b");
+  b.textContent = o.stable;
+  draft.div.appendChild(b);
+  draft.div.appendChild(document.createTextNode(o.text.substring(o.stable.length)));
+  draft.div.scrollIntoView({ block: "nearest" });
+}
+
 function addUtterance(o) {
+  if (draft.div && draft.seg === o.seg) { draft.div.remove(); }
+  draft.div = null;
+  if (!o.text) { return; }
   var d = document.createElement("div");
   d.className = "utt";
   var t = document.createElement("span");
@@ -183,7 +216,11 @@ function micStart() {
   ws.binaryType = "arraybuffer";
   mic.ws = ws;
   ws.onopen = function () {
-    ws.send(JSON.stringify({ format: "pcm16", lang: el("mlang").value || "en" }));
+    var cfg = { format: "pcm16", lang: el("mlang").value || "en", levels: true };
+    var mode = el("mmode").value;
+    if (mode === "answers") { cfg.pause_ms = 300; }
+    if (mode === "drafts") { cfg.partials = true; }
+    ws.send(JSON.stringify(cfg));
     navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1 } }).then(function (stream) {
       mic.stream = stream;
       mic.ctx = new (window.AudioContext || window.webkitAudioContext)();
@@ -228,7 +265,13 @@ function micStart() {
   ws.onmessage = function (ev) {
     try {
       var o = JSON.parse(ev.data);
-      if (o.text !== undefined && o.t0 !== undefined) { addUtterance(o); }
+      if (o.type === "partial") { showDraft(o); }
+      else if (o.type === "level") {
+        el("mlevels").textContent = "noise " + o.noise_db.toFixed(0) + " dB · voice " +
+          (o.speech_db > -99 ? o.speech_db.toFixed(0) + " dB" : "—") +
+          " · closing pause " + o.pause_ms + " ms · threshold " + o.threshold.toFixed(2);
+      }
+      else if (o.text !== undefined && o.t0 !== undefined) { addUtterance(o); }
       else if (o.error) { micStatus(o.error, true); }
       else if (o.status) { micStatus("connected (" + (o.vad || "server") + " vad)"); }
     } catch (e) { /* non-JSON frame: ignore */ }
