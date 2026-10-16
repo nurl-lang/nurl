@@ -2,6 +2,8 @@
 
 ## [0.17.6] — 2026-10-16
 
+- **Fixed: two processes could cache each other's CPU kernel.** The CPU backend wrote a kernel's generated source to `/tmp/nurlcpu_<name>.cc`, a path every process shares, and compiled straight into the cache entry named by its own source's hash. Two processes compiling same-named kernels at once could build one's source into the other's cache entry, and every later run would dlopen a kernel whose arguments are not the ones its caller lays out. A process could also dlopen an entry another was still writing. Each compile now builds in its own directory (made with `fs_tempdir` inside the cache directory) and moves the object into the cache with an atomic rename. Four CPU-backend test processes building into one empty cache at once all pass. The build directory is removed afterwards.
+- A host compile that fails prints the compiler's own message. It used to point at a shared `/tmp/nurlcpu_cc.log` and say "need a C++ compiler on PATH" for every failure, which a test harness took for a missing compiler and skipped. "No C++ compiler" is now said only when the shell finds none.
 - Nothing in the package frees a string or a buffer by hand any more (48 `string_free` / `vec_free` calls in the cache-path, environment and compile code). Each was an owned temporary that is released at the end of its scope anyway; the cache paths, the compile path with and without the cache, and `gpu_best_device` behave as before.
 
 ## [0.17.5] — 2026-10-15

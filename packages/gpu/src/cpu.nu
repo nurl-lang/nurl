@@ -232,14 +232,6 @@ static void __nurl_ensure(int n) {
     ^ out
 }
 
-@ __tmp_path s name s ext → String {
-    : String p ( string_with_cap 64 )
-    ( string_push_str p `/tmp/nurlcpu_` )
-    ( string_push_str p name )
-    ( string_push_str p ext )
-    ^ p
-}
-
 @ __write_file s path s content → i {
     ?? ( write_file path content ) { T _ → ^ 0 F _ → ^ - 0 1 }
 }
@@ -353,10 +345,27 @@ raw @ cpu_compile s src s name → *u {
                 ^ h0
             } {}
         } {}
-    } {
-        = sopath ( __tmp_path name `.so` )
+    } {}
+    // Every compile builds in a directory of its own: the source, the
+    // object and the compiler's log are never a path another process (or
+    // thread) compiling a same-named kernel writes too. They were shared
+    // /tmp names, and two compiles could build each other's source into a
+    // cache entry keyed by the wrong hash — a kernel whose arguments are
+    // not the ones its caller lays out. The object reaches the cache by an
+    // atomic rename (the build directory sits in the cache directory, on
+    // the same filesystem), so no process dlopens a half-written one.
+    : String bdir_parent ? use_cache ( __cpu_cache_dir ) ( string_from `/tmp` )
+    : !v IoErr _mk ( dir_create_all ( string_data bdir_parent ) )
+    : String bdir ?? ( fs_tempdir ( string_data bdir_parent ) `.nurlcpu-build-` ) {
+        T d → d
+        F _e → {
+            ( nurl_eprint `[gpu/cpu] cannot make a build directory in ` ) ( nurl_eprint ( string_data bdir_parent ) ) ( nurl_eprint `\n` )
+            ^ # *u 0
+        }
     }
-    : String cpath ( __tmp_path name `.cc` )
+    : String cpath ( path_join ( string_data bdir ) `k.cc` )
+    : String opath ( path_join ( string_data bdir ) `k.so` )
+    : String lpath ( path_join ( string_data bdir ) `cc.log` )
     : i wr ( __write_file ( string_data cpath ) ( string_data c ) )
     ? != 0 wr {
         ( nurl_eprint `[gpu/cpu] cannot write ` ) ( nurl_eprint ( string_data cpath ) ) ( nurl_eprint `\n` )
@@ -379,19 +388,45 @@ raw @ cpu_compile s src s name → *u {
         ( string_push_str cmd `${CXX:-c++} ` )
         ( string_push_str cmd ( __cpu_cc_flags cand ) )
         ( string_push_str cmd ` -ffp-contract=off -fPIC -shared -o ` )
-        ( string_push_str cmd ( string_data sopath ) )
+        ( string_push_str cmd ( string_data opath ) )
         ( string_push_char cmd 32 )
         ( string_push_str cmd ( string_data cpath ) )
-        ( string_push_str cmd ` 2>/tmp/nurlcpu_cc.log` )
+        ( string_push_str cmd ` 2>` )
+        ( string_push_str cmd ( string_data lpath ) )
         = rc # i ( system ( string_data cmd ) )
         = cand + cand 1
     }
     ? != rc 0 {
-        ( nurl_eprint `[gpu/cpu] host compile failed for ` ) ( nurl_eprint name )
-        ( nurl_eprint ` (see /tmp/nurlcpu_cc.log; need a C++ compiler on PATH)\n` )
+        // The shell's 127: no compiler at all. Anything else is the
+        // compiler refusing this kernel, and its own words say why.
+        ? == / rc 256 127 {
+            ( nurl_eprint `[gpu/cpu] no C++ compiler on PATH (set CXX) for ` ) ( nurl_eprint name ) ( nurl_eprint `\n` )
+        } {
+            ( nurl_eprint `[gpu/cpu] host compile failed for ` ) ( nurl_eprint name ) ( nurl_eprint `:\n` )
+            ?? ( read_file ( string_data lpath ) ) {
+                T log → {
+                    : i n ( string_len log )
+                    ( nurl_eprint ( string_data ( string_substr log 0 ? > n 2000 2000 n ) ) )
+                    ? > n 2000 { ( nurl_eprint `\n…\n` ) } {}
+                }
+                F _e → {}
+            }
+        }
+        : !v IoErr _rm0 ( dir_remove_all ( string_data bdir ) )
         ^ # *u 0
     } {}
-    : *u handle ( dlopen ( string_data sopath ) 2 )  // RTLD_NOW
+    // Into the cache, whole; without one (or should the rename fail) the
+    // object is opened where it was built. Either way the build directory
+    // goes: an opened object stays mapped after its file is removed.
+    : ~ String lib ( string_from ( string_data opath ) )
+    ? use_cache {
+        ?? ( fs_rename ( string_data opath ) ( string_data sopath ) ) {
+            T _ → { = lib ( string_from ( string_data sopath ) ) }
+            F _e → {}
+        }
+    } {}
+    : *u handle ( dlopen ( string_data lib ) 2 )  // RTLD_NOW
+    : !v IoErr _rm ( dir_remove_all ( string_data bdir ) )
     ^ handle
 }
 

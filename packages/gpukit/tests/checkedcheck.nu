@@ -224,7 +224,8 @@ if (tid == 0) { ST(o, bid, LD(t, 0)); }`
         : ~ GkCall c ( gk_call_new )
         ( gk_call_half_in c `h` h )
         ( gk_call_dev c `o` o )
-        : b ok ( gk_run_checked_dev kit c `halves` `ST(o, gid, LD(h, gid));` 256 256 )
+        // (odd elements through a window over the buffer: the same conversion)
+        : b ok ( gk_run_checked_dev kit c `halves` `WIN(hw, h, 0, 65536); ST(o, gid, gid % 2 == 0 ? LD(h, gid) : LD(hw, gid));` 256 256 )
         : ~ ( Vec f ) got ( vec_zeroed [f] 65536 )
         : b _d ( gk_dbuf_download kit o got )
         : ~ i bad 0
@@ -240,7 +241,7 @@ if (tid == 0) { ST(o, bid, LD(t, 0)); }`
             = k + k 1
         }
         ? & ok == bad 0 { ( nurl_print `ok   every ` ) } { ( nurl_print `FAIL ` ) = g_fail + g_fail 1 }
-        ( nurl_print ? bf `bf16` `f16` ) ( nurl_print ` bit pattern loads as the host converts it (bad ` ) ( nurl_print_int bad ) ( nurl_print `)\n` )
+        ( nurl_print ? bf `bf16` `f16` ) ( nurl_print ` bit pattern loads as the host converts it, directly and through a window (bad ` ) ( nurl_print_int bad ) ( nurl_print `)\n` )
         = bf T
         = round + round 1
     }
@@ -625,6 +626,65 @@ ST(o, 0, (double)a);` 1 32 )
     ? | | | bad1 bad2 bad3 bad4 { ( nurl_print `FAIL a store into a read window, a window declared twice, a SYNC behind a window or a window in an expression was launched\n` ) = g_fail + g_fail 1 } { ( nurl_print `ok   refuses a store into a read window, a name twice, a SYNC behind one, one inside an expression\n` ) }
 }
 
+// 2-D windows: rows of COLS elements, a stride apart; one that does not fit
+// is empty; ST2 outside its rows / columns is dropped.
+@ w2run GpuKit kit → v {
+    : ~ ( Vec f ) xs ( vec_new [f] )
+    : ~ i k 0
+    ~ < k 20 { ( vec_push [f] xs # f k ) = k + k 1 }
+    : GkBuf x ( gk_dbuf_new kit 20 GK_F64 )
+    : b _u ( gk_dbuf_upload kit x xs )
+    : GkBuf o ( gk_dbuf_new kit 16 GK_F64 )
+    : b _z ( gk_dbuf_upload kit o ( vec_zeroed [f] 16 ) )
+    : ~ ( Vec u ) bytes ( vec_new [u] )
+    = k 0
+    ~ < k 24 { ( vec_push [u] bytes # u + k 100 ) = k + k 1 }
+    : GkBBuf q ( gk_bbuf_new kit 24 )
+    : b _q ( gk_bbuf_upload_bytes kit q ( slice_from_vec [u] bytes ) )
+    : ~ GkCall c ( gk_call_new )
+    ( gk_call_dev_in c `x` x ) ( gk_call_dev c `o` o ) ( gk_call_bytes_in c `q` q )
+    : b ran ( gk_run_checked_dev kit c `win2` `if (gid == 0) {
+    WIN2(m, x, 1, 3, 5, 4);
+    double s = 0.0;
+    for (int r = 0; r < ROWS(m); r++) {
+        if (COLS(m) == 4) { for (int c = 0; c < 4; c++) { s += LD2(m, r, c); } }
+    }
+    ST(o, 0, s);
+    ST(o, 1, (double)(ROWS(m) * 10 + COLS(m)));
+    WIN2(bad, x, 10, 3, 5, 4);
+    ST(o, 2, (double)(ROWS(bad) * 10 + COLS(bad)));
+    WIN2(edge, x, 12, 2, 5, 3);
+    ST(o, 3, (double)(ROWS(edge) * 10 + COLS(edge)));
+    WIN2(ow, o, 8, 2, 4, 2);
+    for (int r = 0; r < 3; r++) { for (int c = 0; c < 3; c++) { ST2(ow, r, c, (double)(100 + r * 10 + c)); } }
+    WIN2(qm, q, 2, 2, 10, 3);
+    ST(o, 4, (double)(LD2(qm, 0, 0) + LD2(qm, 1, 2) + LD2(qm, 5, 5)));
+}` 1 32 )
+    : ~ ( Vec f ) g ( vec_zeroed [f] 16 )
+    : b _d ( gk_dbuf_download kit o g )
+    // rows start at 1, 6, 11, four each: (1+2+3+4) + (6+..+9) + (11+..+14) =
+    // 10 + 30 + 50 = 90; 3 rows of 4. Rows at 10, 15, 20 run past 20
+    // elements: empty. 12 + 5 + 2 = 19 is the last element: fits (2 rows of
+    // 3). ST2 writes o[8], o[9], o[12], o[13] only. q: 102 + (12 + 2 + 100)
+    // + q[2] (5, 5 is outside: the window's first byte)
+    : b vals & & == ( vec_at [f] g 0 ) 90.0 == ( vec_at [f] g 1 ) 34.0 & & == ( vec_at [f] g 2 ) 0.0 == ( vec_at [f] g 3 ) 23.0 == ( vec_at [f] g 4 ) 318.0
+    : b sts & & & == ( vec_at [f] g 8 ) 100.0 == ( vec_at [f] g 9 ) 101.0 & == ( vec_at [f] g 12 ) 110.0 == ( vec_at [f] g 13 ) 111.0 & & == ( vec_at [f] g 10 ) 0.0 == ( vec_at [f] g 11 ) 0.0 == ( vec_at [f] g 14 ) 0.0
+    ? & & ran vals sts {
+        ( nurl_print `ok   2-D windows read and write their rows and columns; one outside its buffer is empty\n` )
+    } {
+        ( nurl_print `FAIL 2-D windows: ` ) ( nurl_print ( gk_checked_error c ) )
+        : ~ String vs ( string_new )
+        : ~ i r 0
+        ~ < r 16 { ( string_push_str vs ` ` ) ( string_push_float vs ( vec_at [f] g r ) ) = r + r 1 }
+        ( nurl_print ( string_data vs ) ) ( nurl_print `\n` ) = g_fail + g_fail 1
+    }
+    : ~ GkCall c2 ( gk_call_new )
+    ( gk_call_dev_in c2 `x` x ) ( gk_call_dev c2 `o` o )
+    : b bad1 ( gk_run_checked_dev kit c2 `w2st` `WIN2(m, x, 0, 2, 4, 2); ST2(m, 0, 0, 1.0);` 1 32 )
+    : b bad2 ( gk_run_checked_dev kit c2 `w2ld` `WIN2(m, x, 0, 2, 4, 2); ST(o, 0, LD(m, 0));` 1 32 )
+    ? | bad1 bad2 { ( nurl_print `FAIL a store into a read 2-D window or LD on one was launched\n` ) = g_fail + g_fail 1 } { ( nurl_print `ok   refuses a store into a read 2-D window and LD on one\n` ) }
+}
+
 @ main → i {
     : GpuKit kit ( gk_open_best )
     ? ( gk_ok kit ) {} { ( nurl_print `SKIP no device\n` ) ^ 0 }
@@ -639,6 +699,7 @@ ST(o, 0, (double)a);` 1 32 )
     ( qrun kit )
     ( v4run kit )
     ( wrun kit )
+    ( w2run kit )
     ? == g_fail 0 { ( nurl_print `checked: all passed\n` ) } { ( nurl_print `checked: FAILURES\n` ) }
     ^ 0
 }

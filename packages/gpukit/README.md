@@ -266,6 +266,8 @@ for (int j = 0; j < LEN(xr); j++) { ss += LD(xr, j) * LD(xr, j); }
 The check folds for a signed counter compared to `LEN`, so count with an
 `int` (NVRTC also unrolls an `int` loop four times further than a
 `long long` one). Inside `if (LEN(w) == 32) { … }` a constant bound
-works too. nurllama's RMSNorm, attention and K-quant matvecs are written
-this way: within 4 % of their raw originals, or faster.
+works too. `WIN2(w, buf, off, rows, stride, cols);` is the 2-D form
+(`LD2(w, r, c)`, `ROWS(w)`, `COLS(w)`): a tile of a matrix, checked once.
+nurllama's RMSNorm, attention and quantised matvecs are written this
+way, on both backends: within 4 % of their raw originals, or faster.
 

@@ -270,14 +270,15 @@ if (gid < rows * batch) {
 }
 
 // The batch-reuse form: a thread per row walks every batch position. The
-// host's (the CPU backend): the row's block converted once, then four
-// positions at a time — four independent sums, each in its own element
-// order (the bits of one position at a time), through windows whose checks
-// the loop bound folds (a position past the batch's end reads the first
-// one's row again and is not stored). A host adds one float a cycle on one
-// port, so one sum at a time leaves the adder waiting on itself.
+// host's (the CPU backend): the row's block converted once, then a 2-D
+// window — the block's 32 columns down the batch's rows — read position by
+// position, each sum in its element order (the bits of the GPU's form). A
+// host adds one float a cycle on one port; the compiler vectorises this
+// loop ACROSS positions (a sum a lane, every one still in order), which
+// needs the 32 products written out: given a loop, it vectorises that loop
+// instead (its products, the sum still one at a time).
 @ __lk_mv_q8_0_bh → String {
-    ^ ( string_from `LOCAL_F(acc, 32);
+    : ~ String o ( string_from `LOCAL_F(acc, 32);
 LOCAL_F(qf, 32);
 if (gid < rows) {
     long long r = gid;
@@ -287,48 +288,32 @@ if (gid < rows) {
     for (long long b0 = 0; b0 < batch; b0 += 32) {
         long long bn = batch - b0;
         if (bn > 32) { bn = 32; }
-        UNROLL for (int t = 0; t < 32; t++) { ST(acc, t, 0.0f); }
+        for (int t = 0; t < 32; t++) { ST(acc, t, 0.0f); }
         for (long long blk = 0; blk < nb; blk++) {
             float d = F16(LD16(W, w0 + blk * 2));
-            if ((nb & 1) == 0) {
-                UNROLL for (int k8 = 0; k8 < 8; k8++) {
-                    unsigned int qq = LD32(W, q0 + blk * 32 + k8 * 4);
-                    ST(qf, k8 * 4, (float)(signed char)(qq));
-                    ST(qf, k8 * 4 + 1, (float)(signed char)(qq >> 8));
-                    ST(qf, k8 * 4 + 2, (float)(signed char)(qq >> 16));
-                    ST(qf, k8 * 4 + 3, (float)(signed char)(qq >> 24));
-                }
-            } else {
-                UNROLL for (int j = 0; j < 32; j++) { ST(qf, j, (float)(signed char)LD(W, q0 + blk * 32 + j)); }
+            WIN(wq, W, q0 + blk * 32, 32);
+            if (LEN(wq) == 32) {
+                for (int j = 0; j < 32; j++) { ST(qf, j, (float)(signed char)LD(wq, j)); }
             }
-            for (long long t = 0; t < bn; t += 4) {
-                long long xa = xoff + (b0 + t) * cols + blk * 32;
-                // (a position past the batch's end reads the first one's
-                // row again and is not stored)
-                WIN(xr0, x, xa, 32);
-                WIN(xr1, x, t + 1 < bn ? xa + cols : xa, 32);
-                WIN(xr2, x, t + 2 < bn ? xa + 2 * cols : xa, 32);
-                WIN(xr3, x, t + 3 < bn ? xa + 3 * cols : xa, 32);
-                float s0 = 0.0f;
-                float s1 = 0.0f;
-                float s2 = 0.0f;
-                float s3 = 0.0f;
-                for (int j = 0; j < 32 && j < LEN(xr0) && j < LEN(xr1) && j < LEN(xr2) && j < LEN(xr3); j++) {
-                    float qv = LD(qf, j);
-                    s0 += qv * LD(xr0, j);
-                    s1 += qv * LD(xr1, j);
-                    s2 += qv * LD(xr2, j);
-                    s3 += qv * LD(xr3, j);
+            WIN2(xb, x, xoff + b0 * cols + blk * 32, bn, cols, 32);
+            if (COLS(xb) == 32) {
+                for (int t = 0; t < ROWS(xb); t++) {
+                    float sub = 0.0f;
+` )
+    : ~ i c 0
+    ~ < c 32 {
+        ( string_push_str o `                    sub += LD(qf, ` ) ( string_push_int o c ) ( string_push_str o `) * LD2(xb, t, ` ) ( string_push_int o c ) ( string_push_str o `);
+` )
+        = c + c 1
+    }
+    ( string_push_str o `                    ST(acc, t, LD(acc, t) + d * sub);
                 }
-                ST(acc, t, LD(acc, t) + d * s0);
-                if (t + 1 < bn) { ST(acc, t + 1, LD(acc, t + 1) + d * s1); }
-                if (t + 2 < bn) { ST(acc, t + 2, LD(acc, t + 2) + d * s2); }
-                if (t + 3 < bn) { ST(acc, t + 3, LD(acc, t + 3) + d * s3); }
             }
         }
         for (long long t = 0; t < bn; t++) { ST(y, yoff + (b0 + t) * rows + r, LD(acc, t)); }
     }
 }` )
+    ^ o
 }
 
 // The GPU's: a position at a time, the words and float4s of the warp
@@ -819,7 +804,10 @@ if (gid < rows) {
         : b use_b | ! warp >= rows 16384
         : b use_sp & warp < cols 1024
         ? use_b {
-            ? == which 0 { ^ ( __lk_rec kit c `nl_mv_f32_b` ( __lk_mv_f32_b ) ( gk_grid rows 64 ) 64 plan ) } {}
+            ? == which 0 {
+                ? warp { ^ ( __lk_rec kit c `nl_mv_f32_b` ( __lk_mv_f32_b ) ( gk_grid rows 64 ) 64 plan ) } {}
+                ^ ( __lk_rec kit c `nl_mv_f32_bh` ( __lk_mv_f32_bh ) ( gk_grid rows 64 ) 64 plan )
+            } {}
             ? warp { ^ ( __lk_rec kit c `nl_mv_q8_0_b` ( string_data ( __lk_mv_q8_0_b ) ) ( gk_grid rows 64 ) 64 plan ) } {}
             ^ ( __lk_rec kit c `nl_mv_q8_0_bh` ( string_data ( __lk_mv_q8_0_bh ) ) ( gk_grid rows 64 ) 64 plan )
         } {}
@@ -841,17 +829,699 @@ if (gid < rows) {
         ? == which 7 { ^ ( __lk_rec kit c `nl_mv_q5_1_w` ( string_data ( __lk_mv_q5_w T ) ) wg 128 plan ) } {}
         ^ ( __lk_rec kit c `nl_mv_q5_k_w` ( string_data ( __lk_mv_qk_warp T ) ) wg 128 plan )
     } {}
-    ? == which 0 { ^ ( __lk_rec kit c `nl_mv` ( __lk_mv_body ) ( gk_grid * rows batch 256 ) 256 plan ) } {}
+    ? == which 0 { ^ ( __lk_rec kit c `nl_mv_h` ( __lk_mv_h ) ( gk_grid * rows batch 64 ) 64 plan ) } {}
     : i grid ( gk_grid * rows batch 64 )
-    ? == which 1 { ^ ( __lk_rec kit c `nl_mv_q4_0` ( string_data ( __lk_mv_q4_0 ) ) grid 64 plan ) } {}
-    // (here only the CPU backend: a GPU took a warp kernel above)
+    ? == which 1 { ^ ( __lk_rec kit c `nl_mv_q4_0_h` ( __lk_mv_q4_0_h ) grid 64 plan ) } {}
+    // (here only the CPU backend — a GPU took a warp kernel above — but f16)
+    ? == which 5 {
+        ? warp { ^ ( __lk_rec kit c `nl_mv_f16` ( __lk_mv_f16_body ) grid 64 plan ) } {}
+        ^ ( __lk_rec kit c `nl_mv_f16_h` ( __lk_mv_f16_h ) grid 64 plan )
+    } {}
     ? == which 2 { ^ ( __lk_rec kit c `nl_mv_q8_0_h` ( string_data ( __lk_mv_q8_0_h ) ) grid 64 plan ) } {}
-    ? == which 3 { ^ ( __lk_rec kit c `nl_mv_q4_k` ( string_data ( __lk_mv_qk_scalar F ) ) grid 64 plan ) } {}
-    ? == which 4 { ^ ( __lk_rec kit c `nl_mv_q6_k` ( string_data ( __lk_mv_q6_k ) ) grid 64 plan ) } {}
-    ? == which 5 { ^ ( __lk_rec kit c `nl_mv_f16` ( __lk_mv_f16_body ) grid 64 plan ) } {}
-    ? == which 6 { ^ ( __lk_rec kit c `nl_mv_q5_0` ( string_data ( __lk_mv_q5 F ) ) grid 64 plan ) } {}
-    ? == which 7 { ^ ( __lk_rec kit c `nl_mv_q5_1` ( string_data ( __lk_mv_q5 T ) ) grid 64 plan ) } {}
-    ^ ( __lk_rec kit c `nl_mv_q5_k` ( string_data ( __lk_mv_qk_scalar T ) ) grid 64 plan )
+    ? == which 3 { ^ ( __lk_rec kit c `nl_mv_q4_k_h` ( __lk_mv_q4_k_h ) grid 64 plan ) } {}
+    ? == which 4 { ^ ( __lk_rec kit c `nl_mv_q6_k_h` ( __lk_mv_q6_k_h ) grid 64 plan ) } {}
+    ? == which 6 { ^ ( __lk_rec kit c `nl_mv_q5_0_h` ( __lk_mv_q5_0_h ) grid 64 plan ) } {}
+    ? == which 7 { ^ ( __lk_rec kit c `nl_mv_q5_1_h` ( __lk_mv_q5_1_h ) grid 64 plan ) } {}
+    ^ ( __lk_rec kit c `nl_mv_q5_k_h` ( __lk_mv_q5_k_h ) grid 64 plan )
+}
+
+// ── the CPU backend's matvecs ───────────────────────────────────────
+//
+// The host runs a kernel's threads one after another, adds one float a
+// cycle on one port and converts integers on the same one, so the forms a
+// GPU wants leave it waiting on its adder. These keep every sum in the
+// order the GPU forms add in (the same bits), but compute the products —
+// dequantised value times x — in loops the host compiler vectorises (no
+// sum in them), through windows checked once a block, and run the sums of
+// independent blocks side by side where the format sums a block on its
+// own (q5_0 / q5_1 / the K-quants).
+
+// f32 weights.
+@ __lk_mv_h → s {
+    ^ `LOCAL_F(pr, 64);
+if (gid < rows * batch) {
+    long long b = gid / rows;
+    long long r = gid % rows;
+    long long w0 = woff + r * cols;
+    long long x0 = xoff + b * cols;
+    float acc = 0.0f;
+    long long c = 0;
+    for (; c + 64 <= cols; c += 64) {
+        WIN(wc, W, w0 + c, 64);
+        WIN(xc, x, x0 + c, 64);
+        if (LEN(wc) == 64 && LEN(xc) == 64) {
+            for (int j = 0; j < 64; j++) { ST(pr, j, LD(wc, j) * LD(xc, j)); }
+        }
+        for (int j = 0; j < 64; j++) { acc += LD(pr, j); }
+    }
+    for (; c < cols; c++) { acc += LD(W, w0 + c) * LD(x, x0 + c); }
+    ST(y, yoff + b * rows + r, acc);
+}`
+}
+
+// f16 weights: the host converts a half with branches (no vector form), so
+// splitting the products from the sum only adds work — one loop, its
+// checks folded by the windows.
+@ __lk_mv_f16_h → s {
+    ^ `if (gid < rows * batch) {
+    long long b = gid / rows;
+    long long r = gid % rows;
+    long long w0 = woff + r * cols;
+    long long x0 = xoff + b * cols;
+    WIN(wr, W, w0, cols);
+    WIN(xr, x, x0, cols);
+    float acc = 0.0f;
+    for (int c = 0; c < LEN(wr) && c < LEN(xr); c++) { acc += LD(wr, c) * LD(xr, c); }
+    ST(y, yoff + b * rows + r, acc);
+}`
+}
+
+@ __lk_mv_q4_0_h → s {
+    ^ `LOCAL_F(pr, 32);
+if (gid < rows * batch) {
+    long long b = gid / rows;
+    long long r = gid % rows;
+    long long x0 = xoff + b * cols;
+    long long nb = cols / 32;
+    long long w0 = woff + r * nb * 18;
+    float acc = 0.0f;
+    for (long long blk = 0; blk < nb; blk++) {
+        long long bp = w0 + blk * 18;
+        float d = F16(LD16(W, bp));
+        WIN(qw, W, bp + 2, 16);
+        WIN(xw, x, x0 + blk * 32, 32);
+        if (LEN(qw) == 16 && LEN(xw) == 32) {
+            for (int j = 0; j < 16; j++) {
+                int q = (int)LD(qw, j);
+                ST(pr, 2 * j, d * (float)((q & 15) - 8) * LD(xw, j));
+                ST(pr, 2 * j + 1, d * (float)((q >> 4) - 8) * LD(xw, j + 16));
+            }
+        }
+        for (int k = 0; k < 32; k++) { acc += LD(pr, k); }
+    }
+    ST(y, yoff + b * rows + r, acc);
+}`
+}
+
+@ __lk_mv_q5_0_h → s {
+    ^ `LOCAL_F(pr, 128);
+if (gid < rows * batch) {
+    long long b = gid / rows;
+    long long r = gid % rows;
+    long long x0 = xoff + b * cols;
+    long long nb = cols / 32;
+    long long w0 = woff + r * nb * 22;
+    float acc = 0.0f;
+    long long blk = 0;
+    for (; blk + 4 <= nb; blk += 4) {
+        long long bp0 = w0 + (blk + 0) * 22;
+        float d0 = F16(LD16(W, bp0));
+        unsigned int qh0 = LD16(W, bp0 + 2) | (LD16(W, bp0 + 4) << 16);
+        WIN(qw0, W, bp0 + 6, 16);
+        WIN(xw0, x, x0 + (blk + 0) * 32, 32);
+        long long bp1 = w0 + (blk + 1) * 22;
+        float d1 = F16(LD16(W, bp1));
+        unsigned int qh1 = LD16(W, bp1 + 2) | (LD16(W, bp1 + 4) << 16);
+        WIN(qw1, W, bp1 + 6, 16);
+        WIN(xw1, x, x0 + (blk + 1) * 32, 32);
+        long long bp2 = w0 + (blk + 2) * 22;
+        float d2 = F16(LD16(W, bp2));
+        unsigned int qh2 = LD16(W, bp2 + 2) | (LD16(W, bp2 + 4) << 16);
+        WIN(qw2, W, bp2 + 6, 16);
+        WIN(xw2, x, x0 + (blk + 2) * 32, 32);
+        long long bp3 = w0 + (blk + 3) * 22;
+        float d3 = F16(LD16(W, bp3));
+        unsigned int qh3 = LD16(W, bp3 + 2) | (LD16(W, bp3 + 4) << 16);
+        WIN(qw3, W, bp3 + 6, 16);
+        WIN(xw3, x, x0 + (blk + 3) * 32, 32);
+        if (LEN(qw0) == 16 && LEN(xw0) == 32 && LEN(qw1) == 16 && LEN(xw1) == 32 && LEN(qw2) == 16 && LEN(xw2) == 32 && LEN(qw3) == 16 && LEN(xw3) == 32) {
+            for (int j = 0; j < 16; j++) {
+                int q = (int)LD(qw0, j);
+                int h0 = (int)((qh0 >> j) & 1u) << 4;
+                int h1 = (int)((qh0 >> (j + 16)) & 1u) << 4;
+                ST(pr, 0 + 2 * j, (float)(((q & 15) | h0) - 16) * LD(xw0, j));
+                ST(pr, 0 + 2 * j + 1, (float)(((q >> 4) | h1) - 16) * LD(xw0, j + 16));
+            }
+            for (int j = 0; j < 16; j++) {
+                int q = (int)LD(qw1, j);
+                int h0 = (int)((qh1 >> j) & 1u) << 4;
+                int h1 = (int)((qh1 >> (j + 16)) & 1u) << 4;
+                ST(pr, 32 + 2 * j, (float)(((q & 15) | h0) - 16) * LD(xw1, j));
+                ST(pr, 32 + 2 * j + 1, (float)(((q >> 4) | h1) - 16) * LD(xw1, j + 16));
+            }
+            for (int j = 0; j < 16; j++) {
+                int q = (int)LD(qw2, j);
+                int h0 = (int)((qh2 >> j) & 1u) << 4;
+                int h1 = (int)((qh2 >> (j + 16)) & 1u) << 4;
+                ST(pr, 64 + 2 * j, (float)(((q & 15) | h0) - 16) * LD(xw2, j));
+                ST(pr, 64 + 2 * j + 1, (float)(((q >> 4) | h1) - 16) * LD(xw2, j + 16));
+            }
+            for (int j = 0; j < 16; j++) {
+                int q = (int)LD(qw3, j);
+                int h0 = (int)((qh3 >> j) & 1u) << 4;
+                int h1 = (int)((qh3 >> (j + 16)) & 1u) << 4;
+                ST(pr, 96 + 2 * j, (float)(((q & 15) | h0) - 16) * LD(xw3, j));
+                ST(pr, 96 + 2 * j + 1, (float)(((q >> 4) | h1) - 16) * LD(xw3, j + 16));
+            }
+        }
+        float s0 = 0.0f;
+        float s1 = 0.0f;
+        float s2 = 0.0f;
+        float s3 = 0.0f;
+        for (int k = 0; k < 32; k++) {
+            s0 += LD(pr, 0 + k);
+            s1 += LD(pr, 32 + k);
+            s2 += LD(pr, 64 + k);
+            s3 += LD(pr, 96 + k);
+        }
+        acc += d0 * s0;
+        acc += d1 * s1;
+        acc += d2 * s2;
+        acc += d3 * s3;
+    }
+    for (; blk < nb; blk++) {
+        long long bp0 = w0 + (blk + 0) * 22;
+        float d0 = F16(LD16(W, bp0));
+        unsigned int qh0 = LD16(W, bp0 + 2) | (LD16(W, bp0 + 4) << 16);
+        WIN(qt0, W, bp0 + 6, 16);
+        WIN(xt0, x, x0 + (blk + 0) * 32, 32);
+        if (LEN(qt0) == 16 && LEN(xt0) == 32) {
+            for (int j = 0; j < 16; j++) {
+                int q = (int)LD(qt0, j);
+                int h0 = (int)((qh0 >> j) & 1u) << 4;
+                int h1 = (int)((qh0 >> (j + 16)) & 1u) << 4;
+                ST(pr, 0 + 2 * j, (float)(((q & 15) | h0) - 16) * LD(xt0, j));
+                ST(pr, 0 + 2 * j + 1, (float)(((q >> 4) | h1) - 16) * LD(xt0, j + 16));
+            }
+        }
+        float s0 = 0.0f;
+        for (int k = 0; k < 32; k++) {
+            s0 += LD(pr, 0 + k);
+        }
+        acc += d0 * s0;
+    }
+    ST(y, yoff + b * rows + r, acc);
+}`
+}
+
+@ __lk_mv_q5_1_h → s {
+    ^ `LOCAL_F(pr, 128);
+LOCAL_F(px, 64);
+if (gid < rows * batch) {
+    long long b = gid / rows;
+    long long r = gid % rows;
+    long long x0 = xoff + b * cols;
+    long long nb = cols / 32;
+    long long w0 = woff + r * nb * 24;
+    float acc = 0.0f;
+    long long blk = 0;
+    for (; blk + 4 <= nb; blk += 4) {
+        long long bp0 = w0 + (blk + 0) * 24;
+        float d0 = F16(LD16(W, bp0));
+        float m0 = F16(LD16(W, bp0 + 2));
+        unsigned int qh0 = LD16(W, bp0 + 4) | (LD16(W, bp0 + 6) << 16);
+        WIN(qw0, W, bp0 + 8, 16);
+        WIN(xw0, x, x0 + (blk + 0) * 32, 32);
+        long long bp1 = w0 + (blk + 1) * 24;
+        float d1 = F16(LD16(W, bp1));
+        float m1 = F16(LD16(W, bp1 + 2));
+        unsigned int qh1 = LD16(W, bp1 + 4) | (LD16(W, bp1 + 6) << 16);
+        WIN(qw1, W, bp1 + 8, 16);
+        WIN(xw1, x, x0 + (blk + 1) * 32, 32);
+        long long bp2 = w0 + (blk + 2) * 24;
+        float d2 = F16(LD16(W, bp2));
+        float m2 = F16(LD16(W, bp2 + 2));
+        unsigned int qh2 = LD16(W, bp2 + 4) | (LD16(W, bp2 + 6) << 16);
+        WIN(qw2, W, bp2 + 8, 16);
+        WIN(xw2, x, x0 + (blk + 2) * 32, 32);
+        long long bp3 = w0 + (blk + 3) * 24;
+        float d3 = F16(LD16(W, bp3));
+        float m3 = F16(LD16(W, bp3 + 2));
+        unsigned int qh3 = LD16(W, bp3 + 4) | (LD16(W, bp3 + 6) << 16);
+        WIN(qw3, W, bp3 + 8, 16);
+        WIN(xw3, x, x0 + (blk + 3) * 32, 32);
+        if (LEN(qw0) == 16 && LEN(xw0) == 32 && LEN(qw1) == 16 && LEN(xw1) == 32 && LEN(qw2) == 16 && LEN(xw2) == 32 && LEN(qw3) == 16 && LEN(xw3) == 32) {
+            for (int j = 0; j < 16; j++) {
+                int q = (int)LD(qw0, j);
+                int h0 = (int)((qh0 >> j) & 1u) << 4;
+                int h1 = (int)((qh0 >> (j + 16)) & 1u) << 4;
+                ST(pr, 0 + 2 * j, (float)((q & 15) | h0) * LD(xw0, j));
+                ST(pr, 0 + 2 * j + 1, (float)((q >> 4) | h1) * LD(xw0, j + 16));
+                ST(px, 0 + j, LD(xw0, j) + LD(xw0, j + 16));
+            }
+            for (int j = 0; j < 16; j++) {
+                int q = (int)LD(qw1, j);
+                int h0 = (int)((qh1 >> j) & 1u) << 4;
+                int h1 = (int)((qh1 >> (j + 16)) & 1u) << 4;
+                ST(pr, 32 + 2 * j, (float)((q & 15) | h0) * LD(xw1, j));
+                ST(pr, 32 + 2 * j + 1, (float)((q >> 4) | h1) * LD(xw1, j + 16));
+                ST(px, 16 + j, LD(xw1, j) + LD(xw1, j + 16));
+            }
+            for (int j = 0; j < 16; j++) {
+                int q = (int)LD(qw2, j);
+                int h0 = (int)((qh2 >> j) & 1u) << 4;
+                int h1 = (int)((qh2 >> (j + 16)) & 1u) << 4;
+                ST(pr, 64 + 2 * j, (float)((q & 15) | h0) * LD(xw2, j));
+                ST(pr, 64 + 2 * j + 1, (float)((q >> 4) | h1) * LD(xw2, j + 16));
+                ST(px, 32 + j, LD(xw2, j) + LD(xw2, j + 16));
+            }
+            for (int j = 0; j < 16; j++) {
+                int q = (int)LD(qw3, j);
+                int h0 = (int)((qh3 >> j) & 1u) << 4;
+                int h1 = (int)((qh3 >> (j + 16)) & 1u) << 4;
+                ST(pr, 96 + 2 * j, (float)((q & 15) | h0) * LD(xw3, j));
+                ST(pr, 96 + 2 * j + 1, (float)((q >> 4) | h1) * LD(xw3, j + 16));
+                ST(px, 48 + j, LD(xw3, j) + LD(xw3, j + 16));
+            }
+        }
+        float s0 = 0.0f;
+        float ms0 = 0.0f;
+        float s1 = 0.0f;
+        float ms1 = 0.0f;
+        float s2 = 0.0f;
+        float ms2 = 0.0f;
+        float s3 = 0.0f;
+        float ms3 = 0.0f;
+        for (int k = 0; k < 32; k++) {
+            s0 += LD(pr, 0 + k);
+            s1 += LD(pr, 32 + k);
+            s2 += LD(pr, 64 + k);
+            s3 += LD(pr, 96 + k);
+        }
+        for (int j = 0; j < 16; j++) {
+            ms0 += LD(px, 0 + j);
+            ms1 += LD(px, 16 + j);
+            ms2 += LD(px, 32 + j);
+            ms3 += LD(px, 48 + j);
+        }
+        acc += d0 * s0 + m0 * ms0;
+        acc += d1 * s1 + m1 * ms1;
+        acc += d2 * s2 + m2 * ms2;
+        acc += d3 * s3 + m3 * ms3;
+    }
+    for (; blk < nb; blk++) {
+        long long bp0 = w0 + (blk + 0) * 24;
+        float d0 = F16(LD16(W, bp0));
+        float m0 = F16(LD16(W, bp0 + 2));
+        unsigned int qh0 = LD16(W, bp0 + 4) | (LD16(W, bp0 + 6) << 16);
+        WIN(qt0, W, bp0 + 8, 16);
+        WIN(xt0, x, x0 + (blk + 0) * 32, 32);
+        if (LEN(qt0) == 16 && LEN(xt0) == 32) {
+            for (int j = 0; j < 16; j++) {
+                int q = (int)LD(qt0, j);
+                int h0 = (int)((qh0 >> j) & 1u) << 4;
+                int h1 = (int)((qh0 >> (j + 16)) & 1u) << 4;
+                ST(pr, 0 + 2 * j, (float)((q & 15) | h0) * LD(xt0, j));
+                ST(pr, 0 + 2 * j + 1, (float)((q >> 4) | h1) * LD(xt0, j + 16));
+                ST(px, 0 + j, LD(xt0, j) + LD(xt0, j + 16));
+            }
+        }
+        float s0 = 0.0f;
+        float ms0 = 0.0f;
+        for (int k = 0; k < 32; k++) {
+            s0 += LD(pr, 0 + k);
+        }
+        for (int j = 0; j < 16; j++) {
+            ms0 += LD(px, 0 + j);
+        }
+        acc += d0 * s0 + m0 * ms0;
+    }
+    ST(y, yoff + b * rows + r, acc);
+}`
+}
+
+@ __lk_mv_q4_k_h → s {
+    ^ `LOCAL_F(pr, 256);
+if (gid < rows * batch) {
+    long long b = gid / rows;
+    long long r = gid % rows;
+    long long x0 = xoff + b * cols;
+    long long nb = cols / 256;
+    long long w0 = woff + r * nb * 144;
+    float acc = 0.0f;
+    for (long long blk = 0; blk < nb; blk++) {
+        long long bp = w0 + blk * 144;
+        float d = F16(LD16(W, bp));
+        float dmin = F16(LD16(W, bp + 2));
+        WIN(kb, W, bp, 144);
+        WIN(xw, x, x0 + blk * 256, 256);
+        if (LEN(kb) == 144 && LEN(xw) == 256) {
+            int sV0 = (int)LD(kb, 4) & 63;
+            int mV0 = (int)LD(kb, 8) & 63;
+            int sV1 = (int)LD(kb, 5) & 63;
+            int mV1 = (int)LD(kb, 9) & 63;
+            int sV2 = (int)LD(kb, 6) & 63;
+            int mV2 = (int)LD(kb, 10) & 63;
+            int sV3 = (int)LD(kb, 7) & 63;
+            int mV3 = (int)LD(kb, 11) & 63;
+            int sV4 = ((int)LD(kb, 12) & 15) | (((int)LD(kb, 4) >> 6) << 4);
+            int mV4 = ((int)LD(kb, 12) >> 4) | (((int)LD(kb, 8) >> 6) << 4);
+            int sV5 = ((int)LD(kb, 13) & 15) | (((int)LD(kb, 5) >> 6) << 4);
+            int mV5 = ((int)LD(kb, 13) >> 4) | (((int)LD(kb, 9) >> 6) << 4);
+            int sV6 = ((int)LD(kb, 14) & 15) | (((int)LD(kb, 6) >> 6) << 4);
+            int mV6 = ((int)LD(kb, 14) >> 4) | (((int)LD(kb, 10) >> 6) << 4);
+            int sV7 = ((int)LD(kb, 15) & 15) | (((int)LD(kb, 7) >> 6) << 4);
+            int mV7 = ((int)LD(kb, 15) >> 4) | (((int)LD(kb, 11) >> 6) << 4);
+            for (int l = 0; l < 32; l++) {
+                int q = (int)LD(kb, 16 + l);
+                ST(pr, 0 + l, (float)(q & 15) * LD(xw, 0 + l));
+            }
+            for (int l = 0; l < 32; l++) {
+                int q = (int)LD(kb, 16 + l);
+                ST(pr, 32 + l, (float)(q >> 4) * LD(xw, 32 + l));
+            }
+            for (int l = 0; l < 32; l++) {
+                int q = (int)LD(kb, 48 + l);
+                ST(pr, 64 + l, (float)(q & 15) * LD(xw, 64 + l));
+            }
+            for (int l = 0; l < 32; l++) {
+                int q = (int)LD(kb, 48 + l);
+                ST(pr, 96 + l, (float)(q >> 4) * LD(xw, 96 + l));
+            }
+            for (int l = 0; l < 32; l++) {
+                int q = (int)LD(kb, 80 + l);
+                ST(pr, 128 + l, (float)(q & 15) * LD(xw, 128 + l));
+            }
+            for (int l = 0; l < 32; l++) {
+                int q = (int)LD(kb, 80 + l);
+                ST(pr, 160 + l, (float)(q >> 4) * LD(xw, 160 + l));
+            }
+            for (int l = 0; l < 32; l++) {
+                int q = (int)LD(kb, 112 + l);
+                ST(pr, 192 + l, (float)(q & 15) * LD(xw, 192 + l));
+            }
+            for (int l = 0; l < 32; l++) {
+                int q = (int)LD(kb, 112 + l);
+                ST(pr, 224 + l, (float)(q >> 4) * LD(xw, 224 + l));
+            }
+            float s0 = 0.0f;
+            float m0 = 0.0f;
+            float s1 = 0.0f;
+            float m1 = 0.0f;
+            float s2 = 0.0f;
+            float m2 = 0.0f;
+            float s3 = 0.0f;
+            float m3 = 0.0f;
+            float s4 = 0.0f;
+            float m4 = 0.0f;
+            float s5 = 0.0f;
+            float m5 = 0.0f;
+            float s6 = 0.0f;
+            float m6 = 0.0f;
+            float s7 = 0.0f;
+            float m7 = 0.0f;
+            for (int l = 0; l < 32; l++) {
+                s0 += LD(pr, 0 + l);
+                m0 += LD(xw, 0 + l);
+                s1 += LD(pr, 32 + l);
+                m1 += LD(xw, 32 + l);
+                s2 += LD(pr, 64 + l);
+                m2 += LD(xw, 64 + l);
+                s3 += LD(pr, 96 + l);
+                m3 += LD(xw, 96 + l);
+                s4 += LD(pr, 128 + l);
+                m4 += LD(xw, 128 + l);
+                s5 += LD(pr, 160 + l);
+                m5 += LD(xw, 160 + l);
+                s6 += LD(pr, 192 + l);
+                m6 += LD(xw, 192 + l);
+                s7 += LD(pr, 224 + l);
+                m7 += LD(xw, 224 + l);
+            }
+            acc += (d * sV0) * s0 - (dmin * mV0) * m0;
+            acc += (d * sV1) * s1 - (dmin * mV1) * m1;
+            acc += (d * sV2) * s2 - (dmin * mV2) * m2;
+            acc += (d * sV3) * s3 - (dmin * mV3) * m3;
+            acc += (d * sV4) * s4 - (dmin * mV4) * m4;
+            acc += (d * sV5) * s5 - (dmin * mV5) * m5;
+            acc += (d * sV6) * s6 - (dmin * mV6) * m6;
+            acc += (d * sV7) * s7 - (dmin * mV7) * m7;
+        }
+    }
+    ST(y, yoff + b * rows + r, acc);
+}`
+}
+
+@ __lk_mv_q5_k_h → s {
+    ^ `LOCAL_F(pr, 256);
+if (gid < rows * batch) {
+    long long b = gid / rows;
+    long long r = gid % rows;
+    long long x0 = xoff + b * cols;
+    long long nb = cols / 256;
+    long long w0 = woff + r * nb * 176;
+    float acc = 0.0f;
+    for (long long blk = 0; blk < nb; blk++) {
+        long long bp = w0 + blk * 176;
+        float d = F16(LD16(W, bp));
+        float dmin = F16(LD16(W, bp + 2));
+        WIN(kb, W, bp, 176);
+        WIN(xw, x, x0 + blk * 256, 256);
+        if (LEN(kb) == 176 && LEN(xw) == 256) {
+            int sV0 = (int)LD(kb, 4) & 63;
+            int mV0 = (int)LD(kb, 8) & 63;
+            int sV1 = (int)LD(kb, 5) & 63;
+            int mV1 = (int)LD(kb, 9) & 63;
+            int sV2 = (int)LD(kb, 6) & 63;
+            int mV2 = (int)LD(kb, 10) & 63;
+            int sV3 = (int)LD(kb, 7) & 63;
+            int mV3 = (int)LD(kb, 11) & 63;
+            int sV4 = ((int)LD(kb, 12) & 15) | (((int)LD(kb, 4) >> 6) << 4);
+            int mV4 = ((int)LD(kb, 12) >> 4) | (((int)LD(kb, 8) >> 6) << 4);
+            int sV5 = ((int)LD(kb, 13) & 15) | (((int)LD(kb, 5) >> 6) << 4);
+            int mV5 = ((int)LD(kb, 13) >> 4) | (((int)LD(kb, 9) >> 6) << 4);
+            int sV6 = ((int)LD(kb, 14) & 15) | (((int)LD(kb, 6) >> 6) << 4);
+            int mV6 = ((int)LD(kb, 14) >> 4) | (((int)LD(kb, 10) >> 6) << 4);
+            int sV7 = ((int)LD(kb, 15) & 15) | (((int)LD(kb, 7) >> 6) << 4);
+            int mV7 = ((int)LD(kb, 15) >> 4) | (((int)LD(kb, 11) >> 6) << 4);
+            for (int l = 0; l < 32; l++) {
+                int q = (int)LD(kb, 48 + l);
+                int hb = ((int)LD(kb, 16 + l) >> 0) & 1;
+                ST(pr, 0 + l, (float)((q & 15) + (hb << 4)) * LD(xw, 0 + l));
+            }
+            for (int l = 0; l < 32; l++) {
+                int q = (int)LD(kb, 48 + l);
+                int hb = ((int)LD(kb, 16 + l) >> 1) & 1;
+                ST(pr, 32 + l, (float)((q >> 4) + (hb << 4)) * LD(xw, 32 + l));
+            }
+            for (int l = 0; l < 32; l++) {
+                int q = (int)LD(kb, 80 + l);
+                int hb = ((int)LD(kb, 16 + l) >> 2) & 1;
+                ST(pr, 64 + l, (float)((q & 15) + (hb << 4)) * LD(xw, 64 + l));
+            }
+            for (int l = 0; l < 32; l++) {
+                int q = (int)LD(kb, 80 + l);
+                int hb = ((int)LD(kb, 16 + l) >> 3) & 1;
+                ST(pr, 96 + l, (float)((q >> 4) + (hb << 4)) * LD(xw, 96 + l));
+            }
+            for (int l = 0; l < 32; l++) {
+                int q = (int)LD(kb, 112 + l);
+                int hb = ((int)LD(kb, 16 + l) >> 4) & 1;
+                ST(pr, 128 + l, (float)((q & 15) + (hb << 4)) * LD(xw, 128 + l));
+            }
+            for (int l = 0; l < 32; l++) {
+                int q = (int)LD(kb, 112 + l);
+                int hb = ((int)LD(kb, 16 + l) >> 5) & 1;
+                ST(pr, 160 + l, (float)((q >> 4) + (hb << 4)) * LD(xw, 160 + l));
+            }
+            for (int l = 0; l < 32; l++) {
+                int q = (int)LD(kb, 144 + l);
+                int hb = ((int)LD(kb, 16 + l) >> 6) & 1;
+                ST(pr, 192 + l, (float)((q & 15) + (hb << 4)) * LD(xw, 192 + l));
+            }
+            for (int l = 0; l < 32; l++) {
+                int q = (int)LD(kb, 144 + l);
+                int hb = ((int)LD(kb, 16 + l) >> 7) & 1;
+                ST(pr, 224 + l, (float)((q >> 4) + (hb << 4)) * LD(xw, 224 + l));
+            }
+            float s0 = 0.0f;
+            float m0 = 0.0f;
+            float s1 = 0.0f;
+            float m1 = 0.0f;
+            float s2 = 0.0f;
+            float m2 = 0.0f;
+            float s3 = 0.0f;
+            float m3 = 0.0f;
+            float s4 = 0.0f;
+            float m4 = 0.0f;
+            float s5 = 0.0f;
+            float m5 = 0.0f;
+            float s6 = 0.0f;
+            float m6 = 0.0f;
+            float s7 = 0.0f;
+            float m7 = 0.0f;
+            for (int l = 0; l < 32; l++) {
+                s0 += LD(pr, 0 + l);
+                m0 += LD(xw, 0 + l);
+                s1 += LD(pr, 32 + l);
+                m1 += LD(xw, 32 + l);
+                s2 += LD(pr, 64 + l);
+                m2 += LD(xw, 64 + l);
+                s3 += LD(pr, 96 + l);
+                m3 += LD(xw, 96 + l);
+                s4 += LD(pr, 128 + l);
+                m4 += LD(xw, 128 + l);
+                s5 += LD(pr, 160 + l);
+                m5 += LD(xw, 160 + l);
+                s6 += LD(pr, 192 + l);
+                m6 += LD(xw, 192 + l);
+                s7 += LD(pr, 224 + l);
+                m7 += LD(xw, 224 + l);
+            }
+            acc += (d * sV0) * s0 - (dmin * mV0) * m0;
+            acc += (d * sV1) * s1 - (dmin * mV1) * m1;
+            acc += (d * sV2) * s2 - (dmin * mV2) * m2;
+            acc += (d * sV3) * s3 - (dmin * mV3) * m3;
+            acc += (d * sV4) * s4 - (dmin * mV4) * m4;
+            acc += (d * sV5) * s5 - (dmin * mV5) * m5;
+            acc += (d * sV6) * s6 - (dmin * mV6) * m6;
+            acc += (d * sV7) * s7 - (dmin * mV7) * m7;
+        }
+    }
+    ST(y, yoff + b * rows + r, acc);
+}`
+}
+
+@ __lk_mv_q6_k_h → s {
+    ^ `LOCAL_F(pr, 256);
+if (gid < rows * batch) {
+    long long b = gid / rows;
+    long long r = gid % rows;
+    long long x0 = xoff + b * cols;
+    long long nb = cols / 256;
+    long long w0 = woff + r * nb * 210;
+    float acc = 0.0f;
+    for (long long blk = 0; blk < nb; blk++) {
+        long long bp = w0 + blk * 210;
+        float d = F16(LD16(W, bp + 208));
+        WIN(kb, W, bp, 210);
+        WIN(xw, x, x0 + blk * 256, 256);
+        if (LEN(kb) == 210 && LEN(xw) == 256) {
+            for (int l = 0; l < 16; l++) {
+                int h = (int)LD(kb, 128 + l);
+                int b1 = (int)LD(kb, 0 + l);
+                int b2 = (int)LD(kb, 32 + l);
+                int q1 = ((b1 & 15) | ((h & 3) << 4)) - 32;
+                int q2 = ((b2 & 15) | (((h >> 2) & 3) << 4)) - 32;
+                int q3 = ((b1 >> 4) | (((h >> 4) & 3) << 4)) - 32;
+                int q4 = ((b2 >> 4) | (((h >> 6) & 3) << 4)) - 32;
+                ST(pr, 0 + l * 4 + 0, d * (float)(signed char)LD(kb, 192) * (float)q1 * LD(xw, 0 + l));
+                ST(pr, 0 + l * 4 + 1, d * (float)(signed char)LD(kb, 194) * (float)q2 * LD(xw, 32 + l));
+                ST(pr, 0 + l * 4 + 2, d * (float)(signed char)LD(kb, 196) * (float)q3 * LD(xw, 64 + l));
+                ST(pr, 0 + l * 4 + 3, d * (float)(signed char)LD(kb, 198) * (float)q4 * LD(xw, 96 + l));
+            }
+            for (int l = 16; l < 32; l++) {
+                int h = (int)LD(kb, 128 + l);
+                int b1 = (int)LD(kb, 0 + l);
+                int b2 = (int)LD(kb, 32 + l);
+                int q1 = ((b1 & 15) | ((h & 3) << 4)) - 32;
+                int q2 = ((b2 & 15) | (((h >> 2) & 3) << 4)) - 32;
+                int q3 = ((b1 >> 4) | (((h >> 4) & 3) << 4)) - 32;
+                int q4 = ((b2 >> 4) | (((h >> 6) & 3) << 4)) - 32;
+                ST(pr, 0 + l * 4 + 0, d * (float)(signed char)LD(kb, 193) * (float)q1 * LD(xw, 0 + l));
+                ST(pr, 0 + l * 4 + 1, d * (float)(signed char)LD(kb, 195) * (float)q2 * LD(xw, 32 + l));
+                ST(pr, 0 + l * 4 + 2, d * (float)(signed char)LD(kb, 197) * (float)q3 * LD(xw, 64 + l));
+                ST(pr, 0 + l * 4 + 3, d * (float)(signed char)LD(kb, 199) * (float)q4 * LD(xw, 96 + l));
+            }
+            for (int l = 0; l < 16; l++) {
+                int h = (int)LD(kb, 160 + l);
+                int b1 = (int)LD(kb, 64 + l);
+                int b2 = (int)LD(kb, 96 + l);
+                int q1 = ((b1 & 15) | ((h & 3) << 4)) - 32;
+                int q2 = ((b2 & 15) | (((h >> 2) & 3) << 4)) - 32;
+                int q3 = ((b1 >> 4) | (((h >> 4) & 3) << 4)) - 32;
+                int q4 = ((b2 >> 4) | (((h >> 6) & 3) << 4)) - 32;
+                ST(pr, 128 + l * 4 + 0, d * (float)(signed char)LD(kb, 200) * (float)q1 * LD(xw, 128 + l));
+                ST(pr, 128 + l * 4 + 1, d * (float)(signed char)LD(kb, 202) * (float)q2 * LD(xw, 160 + l));
+                ST(pr, 128 + l * 4 + 2, d * (float)(signed char)LD(kb, 204) * (float)q3 * LD(xw, 192 + l));
+                ST(pr, 128 + l * 4 + 3, d * (float)(signed char)LD(kb, 206) * (float)q4 * LD(xw, 224 + l));
+            }
+            for (int l = 16; l < 32; l++) {
+                int h = (int)LD(kb, 160 + l);
+                int b1 = (int)LD(kb, 64 + l);
+                int b2 = (int)LD(kb, 96 + l);
+                int q1 = ((b1 & 15) | ((h & 3) << 4)) - 32;
+                int q2 = ((b2 & 15) | (((h >> 2) & 3) << 4)) - 32;
+                int q3 = ((b1 >> 4) | (((h >> 4) & 3) << 4)) - 32;
+                int q4 = ((b2 >> 4) | (((h >> 6) & 3) << 4)) - 32;
+                ST(pr, 128 + l * 4 + 0, d * (float)(signed char)LD(kb, 201) * (float)q1 * LD(xw, 128 + l));
+                ST(pr, 128 + l * 4 + 1, d * (float)(signed char)LD(kb, 203) * (float)q2 * LD(xw, 160 + l));
+                ST(pr, 128 + l * 4 + 2, d * (float)(signed char)LD(kb, 205) * (float)q3 * LD(xw, 192 + l));
+                ST(pr, 128 + l * 4 + 3, d * (float)(signed char)LD(kb, 207) * (float)q4 * LD(xw, 224 + l));
+            }
+        }
+        for (int k = 0; k < 256; k++) { acc += LD(pr, k); }
+    }
+    ST(y, yoff + b * rows + r, acc);
+}`
+}
+
+// The batch form for f32 weights, shaped as __lk_mv_q8_0_bh: a 2-D window
+// over 32 columns of the batch's rows, the 32 products and adds written
+// out, so the host compiler vectorises across positions.
+@ __lk_mv_f32_bh → s {
+    ^ `LOCAL_F(acc, 32);
+LOCAL_F(wf, 32);
+if (gid < rows) {
+    long long r = gid;
+    long long w0 = woff + r * cols;
+    for (long long b0 = 0; b0 < batch; b0 += 32) {
+        long long bn = batch - b0;
+        if (bn > 32) { bn = 32; }
+        for (int t = 0; t < 32; t++) { ST(acc, t, 0.0f); }
+        long long c0 = 0;
+        for (; c0 + 32 <= cols; c0 += 32) {
+            WIN(ww, W, w0 + c0, 32);
+            if (LEN(ww) == 32) {
+                for (int j = 0; j < 32; j++) { ST(wf, j, LD(ww, j)); }
+            }
+            WIN2(xb, x, xoff + b0 * cols + c0, bn, cols, 32);
+            if (COLS(xb) == 32) {
+                for (int t = 0; t < ROWS(xb); t++) {
+                    float a = LD(acc, t);
+                    a += LD(wf, 0) * LD2(xb, t, 0);
+                    a += LD(wf, 1) * LD2(xb, t, 1);
+                    a += LD(wf, 2) * LD2(xb, t, 2);
+                    a += LD(wf, 3) * LD2(xb, t, 3);
+                    a += LD(wf, 4) * LD2(xb, t, 4);
+                    a += LD(wf, 5) * LD2(xb, t, 5);
+                    a += LD(wf, 6) * LD2(xb, t, 6);
+                    a += LD(wf, 7) * LD2(xb, t, 7);
+                    a += LD(wf, 8) * LD2(xb, t, 8);
+                    a += LD(wf, 9) * LD2(xb, t, 9);
+                    a += LD(wf, 10) * LD2(xb, t, 10);
+                    a += LD(wf, 11) * LD2(xb, t, 11);
+                    a += LD(wf, 12) * LD2(xb, t, 12);
+                    a += LD(wf, 13) * LD2(xb, t, 13);
+                    a += LD(wf, 14) * LD2(xb, t, 14);
+                    a += LD(wf, 15) * LD2(xb, t, 15);
+                    a += LD(wf, 16) * LD2(xb, t, 16);
+                    a += LD(wf, 17) * LD2(xb, t, 17);
+                    a += LD(wf, 18) * LD2(xb, t, 18);
+                    a += LD(wf, 19) * LD2(xb, t, 19);
+                    a += LD(wf, 20) * LD2(xb, t, 20);
+                    a += LD(wf, 21) * LD2(xb, t, 21);
+                    a += LD(wf, 22) * LD2(xb, t, 22);
+                    a += LD(wf, 23) * LD2(xb, t, 23);
+                    a += LD(wf, 24) * LD2(xb, t, 24);
+                    a += LD(wf, 25) * LD2(xb, t, 25);
+                    a += LD(wf, 26) * LD2(xb, t, 26);
+                    a += LD(wf, 27) * LD2(xb, t, 27);
+                    a += LD(wf, 28) * LD2(xb, t, 28);
+                    a += LD(wf, 29) * LD2(xb, t, 29);
+                    a += LD(wf, 30) * LD2(xb, t, 30);
+                    a += LD(wf, 31) * LD2(xb, t, 31);
+                    ST(acc, t, a);
+                }
+            }
+        }
+        for (; c0 < cols; c0++) {
+            float wv = LD(W, w0 + c0);
+            for (long long t = 0; t < bn; t++) { ST(acc, t, LD(acc, t) + wv * LD(x, xoff + (b0 + t) * cols + c0)); }
+        }
+        for (long long t = 0; t < bn; t++) { ST(y, yoff + (b0 + t) * rows + r, LD(acc, t)); }
+    }
+}`
 }
 
 // ── Batched Mixture-of-Experts matvecs ──────────────────────────────
@@ -1333,14 +2003,37 @@ ST(out, b * nh * hd + h * hd + tid, acc / sum);` * nh batch hd plan )
 @ lk_q8_repack GpuKit kit GkBBuf src GkBBuf dst i nb i nblk inout ( Vec GkLaunch ) plan → b {
     : ~ GkCall c ( gk_call_new )
     ( gk_call_bytes_in c `src` src ) ( gk_call_bytes c `dst` dst ) ( gk_call_i64 c `nb` nb ) ( gk_call_i64 c `nblk` nblk )
+    // The CPU backend: a thread per row, the row's blocks and their two
+    // destinations as 2-D windows (a block a row of each) — no check per
+    // byte, and no per-thread cost per 34 bytes.
+    ? != 0 ( nurl_str_eq ( gk_backend kit ) `cpu` ) {
+        ^ ( __lk_rec kit c `nl_q8_repack_r` `if (gid < nblk / nb) {
+    long long drow = gid * nb * 34;
+    WIN2(sb, src, gid * nb * 34, nb, 34, 34);
+    WIN2(dd, dst, drow, nb, 2, 2);
+    WIN2(dq, dst, drow + nb * 2, nb, 32, 32);
+    if (COLS(sb) == 34 && COLS(dd) == 2 && COLS(dq) == 32) {
+        for (int b = 0; b < ROWS(sb) && b < ROWS(dd) && b < ROWS(dq); b++) {
+            ST2(dd, b, 0, LD2(sb, b, 0));
+            ST2(dd, b, 1, LD2(sb, b, 1));
+            for (int j = 0; j < 32; j++) { ST2(dq, b, j, LD2(sb, b, 2 + j)); }
+        }
+    }
+}` ( gk_grid / nblk nb 64 ) 64 plan )
+    } {}
+    // (the block and its two destinations as windows: a copy with no check
+    // per byte)
     ^ ( __lk_rec kit c `nl_q8_repack` `if (gid < nblk) {
     long long row = gid / nb;
     long long blk = gid - row * nb;
-    long long s0 = gid * 34;
     long long drow = row * nb * 34;
-    ST(dst, drow + blk * 2, LD(src, s0));
-    ST(dst, drow + blk * 2 + 1, LD(src, s0 + 1));
-    long long qd = drow + nb * 2 + blk * 32;
-    for (int j = 0; j < 32; j++) { ST(dst, qd + j, LD(src, s0 + 2 + j)); }
+    WIN(sb, src, gid * 34, 34);
+    WIN(dd, dst, drow + blk * 2, 2);
+    WIN(dq, dst, drow + nb * 2 + blk * 32, 32);
+    if (LEN(sb) == 34 && LEN(dd) == 2 && LEN(dq) == 32) {
+        ST(dd, 0, LD(sb, 0));
+        ST(dd, 1, LD(sb, 1));
+        for (int j = 0; j < 32; j++) { ST(dq, j, LD(sb, 2 + j)); }
+    }
 }` ( gk_grid nblk 256 ) 256 plan )
 }
