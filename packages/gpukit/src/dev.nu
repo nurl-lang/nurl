@@ -72,15 +72,15 @@ unsafe @ gk_buf_none i dtype → GkBuf { ^ @ GkBuf { 0 0 dtype ( __gk_nomem ) } 
 // valid however long the view lives.
 unsafe @ gk_buf_view GkBuf b i off i n → GkBuf {
     ? | | < off 0 < n 0 > n - . b n off { ^ ( gk_buf_none . b dtype ) } {}
-    ^ @ GkBuf { + . b dptr * off ( __gk_esz . b dtype ) n . b dtype ( __gk_mem_share . b mem ) }
+    ^ @ GkBuf { + . b dptr * off ( _gk_esz . b dtype ) n . b dtype ( __gk_mem_share . b mem ) }
 }
 
 // `n` elements of type `dtype` at BYTE offset `boff` into `b` — a view
 // that reinterprets (an f32 block read as i64 indices, say). Holds `b`'s
 // block like gk_buf_view; none when the bytes are not inside b.
 unsafe @ gk_buf_view_as GkBuf b i boff i n i dtype → GkBuf {
-    : i have ( _gk_p2 . b n ( __gk_esz . b dtype ) )
-    : i want ( _gk_p2 n ( __gk_esz dtype ) )
+    : i have ( _gk_p2 . b n ( _gk_esz . b dtype ) )
+    : i want ( _gk_p2 n ( _gk_esz dtype ) )
     ? | | | < boff 0 < want 0 < have 0 > want - have boff { ^ ( gk_buf_none dtype ) } {}
     ^ @ GkBuf { + . b dptr boff n dtype ( __gk_mem_share . b mem ) }
 }
@@ -97,7 +97,7 @@ unsafe @ gk_hbuf_none → GkHBuf { ^ @ GkHBuf { 0 0 F ( __gk_nomem ) } }
 // a view holding `b`'s block, none when the 2n bytes are not inside b or
 // boff is odd. How a model carves its half weights out of one allocation.
 unsafe @ gk_hbuf_of GkBuf b i boff i n b bf → GkHBuf {
-    : i have ( _gk_p2 . b n ( __gk_esz . b dtype ) )
+    : i have ( _gk_p2 . b n ( _gk_esz . b dtype ) )
     : i want ( _gk_p2 n 2 )
     ? | | | < boff 0 < want 1 < have 0 > want - have boff { ^ ( gk_hbuf_none ) } {}
     ? | != 0 % boff 2 ! ( gk_buf_ok b ) { ^ ( gk_hbuf_none ) } {}
@@ -141,7 +141,7 @@ unsafe @ gk_bbuf_none → GkBBuf { ^ @ GkBBuf { 0 0 ( __gk_nomem ) } }
 // unless the bytes are inside b, boff is a multiple of 4 and n is at least
 // 4 (so every word a kernel can name lies inside the view).
 unsafe @ gk_bbuf_of GkBuf b i boff i n → GkBBuf {
-    : i have ( _gk_p2 . b n ( __gk_esz . b dtype ) )
+    : i have ( _gk_p2 . b n ( _gk_esz . b dtype ) )
     ? | | | < boff 0 < n 4 < have 0 > n - have boff { ^ ( gk_bbuf_none ) } {}
     ? | != 0 % boff 4 ! ( gk_buf_ok b ) { ^ ( gk_bbuf_none ) } {}
     ^ @ GkBBuf { + . b dptr boff n ( __gk_mem_share . b mem ) }
@@ -171,7 +171,7 @@ unsafe @ __gk_bupload_view GkBBuf q ( Slice u ) src → b {
 // stays alive for as long as the GkBuf is used.
 raw @ gk_buf_wrap i dptr i n i dtype → GkBuf { ^ @ GkBuf { dptr n dtype ( __gk_nomem ) } }
 
-@ __gk_esz i dtype → i { ? == dtype GK_F32 { ^ 4 } {} ^ 8 }
+@ _gk_esz i dtype → i { ? == dtype GK_F32 { ^ 4 } {} ^ 8 }
 
 @ _gk_tname i dtype → s {
     ? == dtype GK_F32 { ^ `float` } {}
@@ -202,8 +202,8 @@ raw @ gk_buf_wrap i dptr i n i dtype → GkBuf { ^ @ GkBuf { dptr n dtype ( __gk
 
 // Bytes per element. Needed by anyone addressing a sub-range of a buffer
 // (the device pointer is byte-addressed), which is why it is public
-// rather than the file-private __gk_esz it wraps.
-@ gk_buf_esz GkBuf b → i { ^ ( __gk_esz . b dtype ) }
+// rather than the file-private _gk_esz it wraps.
+@ gk_buf_esz GkBuf b → i { ^ ( _gk_esz . b dtype ) }
 
 // ── Lifecycle ─────────────────────────────────────────────────────────
 
@@ -213,7 +213,7 @@ raw @ gk_buf_wrap i dptr i n i dtype → GkBuf { ^ @ GkBuf { dptr n dtype ( __gk
     // (The byte count is the checked product: n * 8 wraps for an n near
     // 2^61, and a buffer of 8 bytes would then claim 2^61 elements to
     // every check that trusts its length.)
-    : i bytes ( _gk_p2 n ( __gk_esz dtype ) )
+    : i bytes ( _gk_p2 n ( _gk_esz dtype ) )
     ? < bytes 1 { ^ ( gk_buf_none dtype ) } {}
     : GkInfo kit ( arc_get [GkInfo] . h info )
     ( _gk_pool_default kit )
@@ -230,7 +230,7 @@ raw @ gk_buf_wrap i dptr i n i dtype → GkBuf { ^ @ GkBuf { dptr n dtype ( __gk
 // memory that exists (a CPU kernel sees zeros, CUDA reports an invalid
 // address), never at a made-up one.
 unsafe @ __gk_census_buf GpuKit h i n i dtype → GkBuf {
-    : i bytes ( _gk_p2 n ( __gk_esz dtype ) )
+    : i bytes ( _gk_p2 n ( _gk_esz dtype ) )
     ? < bytes 1 { ^ ( gk_buf_none dtype ) } {}
     : ( Vec u ) host ( vec_zeroed [u] bytes )
     : i dptr # i ( vec_data [u] host )
@@ -293,7 +293,7 @@ unsafe @ gk_dbuf_upload GpuKit kit GkBuf b ( Vec f ) src → b {
     ? ( gk_buf_ok b ) {} { ^ F }
     : i n . b n
     : i m ( vec_len [f] src )
-    : GpuBuffer gb ( gpu_buffer_view . b dptr * n ( __gk_esz . b dtype ) )
+    : GpuBuffer gb ( gpu_buffer_view . b dptr * n ( _gk_esz . b dtype ) )
     ? & == . b dtype GK_F64 >= m n {
         ^ == ( gpu_upload gb # *u ( vec_data [f] src ) ) 0
     } {}
@@ -305,7 +305,7 @@ unsafe @ gk_dbuf_upload GpuKit kit GkBuf b ( Vec f ) src → b {
         ? ( __gk_f32_dev kit b src T ) { ^ T } {}
     } {}
     // stage-convert on the host, then one upload
-    : GpuHost stage ( gpu_host_alloc * n ( __gk_esz . b dtype ) )
+    : GpuHost stage ( gpu_host_alloc * n ( _gk_esz . b dtype ) )
     : *u sp ( gpu_host_ptr stage )
     : ~ i k 0
     ~ < k n {
@@ -325,7 +325,7 @@ unsafe @ gk_dbuf_download GpuKit kit GkBuf b ( Vec f ) dst → b {
     ? ( gk_buf_ok b ) {} { ^ F }
     : i n . b n
     ? >= ( vec_len [f] dst ) n {} { ^ F }
-    : GpuBuffer gb ( gpu_buffer_view . b dptr * n ( __gk_esz . b dtype ) )
+    : GpuBuffer gb ( gpu_buffer_view . b dptr * n ( _gk_esz . b dtype ) )
     ? == . b dtype GK_F64 {
         ^ == ( gpu_download # *u ( vec_data [f] dst ) gb ) 0
     } {}
@@ -333,7 +333,7 @@ unsafe @ gk_dbuf_download GpuKit kit GkBuf b ( Vec f ) dst → b {
     ? & & == . b dtype GK_F32 >= n 4096 ! ( _gk_census kit ) {
         ? ( __gk_f32_dev kit b dst F ) { ^ T } {}
     } {}
-    : GpuHost stage ( gpu_host_alloc * n ( __gk_esz . b dtype ) )
+    : GpuHost stage ( gpu_host_alloc * n ( _gk_esz . b dtype ) )
     : *u sp ( gpu_host_ptr stage )
     : i rc ( gpu_download sp gb )
     ? == rc 0 {
@@ -363,7 +363,7 @@ unsafe @ gk_dbuf_download GpuKit kit GkBuf b ( Vec f ) dst → b {
 // that has them as a checked view uploads with gk_dbuf_upload_bytes.
 raw @ gk_dbuf_upload_raw GpuKit kit GkBuf b * u src → b {
     ? & ( gk_buf_ok b ) != # i src 0 {} { ^ F }
-    ^ == ( gpu_upload ( gpu_buffer_view . b dptr * . b n ( __gk_esz . b dtype ) ) src ) 0
+    ^ == ( gpu_upload ( gpu_buffer_view . b dptr * . b n ( _gk_esz . b dtype ) ) src ) 0
 }
 
 // The same from a checked view of the bytes (a tensor's bytes in a mapped
@@ -371,7 +371,7 @@ raw @ gk_dbuf_upload_raw GpuKit kit GkBuf b * u src → b {
 // b.n elements. Safe, and as fast — one memcpy to the device.
 @ gk_dbuf_upload_bytes GpuKit kit GkBuf b ( Slice u ) src → b {
     ? ( gk_buf_ok b ) {} { ^ F }
-    ? < ( slice_len [u] src ) * . b n ( __gk_esz . b dtype ) { ^ F } {}
+    ? < ( slice_len [u] src ) * . b n ( _gk_esz . b dtype ) { ^ F } {}
     ^ ( __gk_upload_view b src )
 }
 
@@ -401,7 +401,7 @@ unsafe @ gk_upload_batch GpuKit kit ( Vec GkBuf ) dsts ( Vec ( Slice u ) ) srcs 
     ~ < k n {
         : GkBuf d ( vec_at [GkBuf] dsts k )
         : ( Slice u ) sv ( vec_at [( Slice u )] srcs k )
-        ? & ( gk_buf_ok d ) == ( slice_len [u] sv ) ( _gk_p2 . d n ( __gk_esz . d dtype ) ) {} { ^ F }
+        ? & ( gk_buf_ok d ) == ( slice_len [u] sv ) ( _gk_p2 . d n ( _gk_esz . d dtype ) ) {} { ^ F }
         ( vec_push [GpuCopy] q @ GpuCopy { . d dptr # i ( slice_data [u] sv ) ( slice_len [u] sv ) } )
         = k + k 1
     }
@@ -421,20 +421,20 @@ unsafe @ gk_upload_batch GpuKit kit ( Vec GkBuf ) dsts ( Vec ( Slice u ) ) srcs 
 
 // (`src` holds the buffer's bytes: checked by the caller above.)
 unsafe @ __gk_upload_view GkBuf b ( Slice u ) src → b {
-    ^ == ( gpu_upload ( gpu_buffer_view . b dptr * . b n ( __gk_esz . b dtype ) ) ( slice_data [u] src ) ) 0
+    ^ == ( gpu_upload ( gpu_buffer_view . b dptr * . b n ( _gk_esz . b dtype ) ) ( slice_data [u] src ) ) 0
 }
 
 // Device → a checked view of host bytes: F unless `dst` has room for the
 // buffer's b.n elements. The download counterpart of gk_dbuf_upload_bytes.
 @ gk_dbuf_download_bytes GpuKit kit GkBuf b ( Slice u ) dst → b {
     ? ( gk_buf_ok b ) {} { ^ F }
-    ? < ( slice_len [u] dst ) * . b n ( __gk_esz . b dtype ) { ^ F } {}
+    ? < ( slice_len [u] dst ) * . b n ( _gk_esz . b dtype ) { ^ F } {}
     ^ ( __gk_download_view b dst )
 }
 
 // (`dst` has room for the buffer's bytes: checked by the caller above.)
 unsafe @ __gk_download_view GkBuf b ( Slice u ) dst → b {
-    ^ == ( gpu_download ( slice_data [u] dst ) ( gpu_buffer_view . b dptr * . b n ( __gk_esz . b dtype ) ) ) 0
+    ^ == ( gpu_download ( slice_data [u] dst ) ( gpu_buffer_view . b dptr * . b n ( _gk_esz . b dtype ) ) ) 0
 }
 
 // Device → page-locked host memory (a GpuHost from gpu_host_alloc): all of
@@ -442,7 +442,7 @@ unsafe @ __gk_download_view GkBuf b ( Slice u ) dst → b {
 // A view of the buffer downloads part of it.
 @ gk_dbuf_download_host GpuKit kit GkBuf b GpuHost h → b {
     ? ( gk_buf_ok b ) {} { ^ F }
-    : i bytes ( _gk_p2 . b n ( __gk_esz . b dtype ) )
+    : i bytes ( _gk_p2 . b n ( _gk_esz . b dtype ) )
     ? | < bytes 1 > bytes ( gpu_host_bytes h ) { ^ F } {}
     ^ ( __gk_download_host b h bytes )
 }
@@ -462,7 +462,7 @@ unsafe @ __gk_download_host GkBuf b GpuHost h i bytes → b {
 
 // (Both live, one dtype, `dst` large enough: checked by the caller above.)
 unsafe @ __gk_copy_in GkBuf dst GkBuf src → b {
-    ^ == ( gpu_dtod ( gpu_buffer_view . dst dptr * . src n ( __gk_esz . src dtype ) ) . src dptr ) 0
+    ^ == ( gpu_dtod ( gpu_buffer_view . dst dptr * . src n ( _gk_esz . src dtype ) ) . src dptr ) 0
 }
 
 // Exact i64 host view (GK_I64 buffers only — index tensors must never make

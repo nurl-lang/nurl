@@ -45,6 +45,8 @@ $ `stdlib/std/floatbits.nu`
 $ `stdlib/std/thread.nu`
 $ `stdlib/std/arc.nu`
 $ `stdlib/std/hashmap.nu`
+$ `stdlib/std/hash.nu`
+$ `stdlib/std/bytes.nu`
 $ `gpukit.nu`
 $ `devbuf.nu`
 
@@ -249,38 +251,55 @@ $ `devbuf.nu`
 // once is enough.
 : GkcBuilt { String src String ename b shfl }  // shfl: the blocks must be whole warps
 
-: GkcCache { ( Vec String ) keys ( Vec ( Arc GkcBuilt ) ) built }
+: GkcCache {
+    ( Vec String ) keys
+    ( Vec ( Arc GkcBuilt ) ) built
+    ( Vec String ) names  // each entry's kernel entry point
+    ( HashMap String i ) ix  // key → entry
+}
 
-@ __gkc_cache0 → ( Locked GkcCache ) { ^ ( locked_new [GkcCache] @ GkcCache { ( vec_new [String] ) ( vec_new [( Arc GkcBuilt )] ) } ) }
+@ __gkc_cache0 → ( Locked GkcCache ) { ^ ( locked_new [GkcCache] @ GkcCache { ( vec_new [String] ) ( vec_new [( Arc GkcBuilt )] ) ( vec_new [String] ) ( map_new [String i] ) } ) }
 
 : ( Locked GkcCache ) g_gkc_cache ( __gkc_cache0 )
 
 @ __gkc_none → ( Arc GkcBuilt ) { ^ ( arc_new [GkcBuilt] @ GkcBuilt { ( string_new ) ( string_new ) F } ) }
 
-// What was built for `key` (an empty source when nothing was, or while it
-// is being built), and its cache index in `idx` (-1 when never checked).
+@ __gkc_hash s x → i { ^ ( hash_string x ) }
+
+@ __gkc_keq String a s b → b { ^ ( eq_string ( string_data a ) b ) }
+
+// The cache entry of `key` (-1 when there is none), and what it built
+// (an empty source while its build is still to come).
 @ __gkc_lookup s key inout i idx → ( Arc GkcBuilt ) {
     : ~ GkcCache c ( locked_take [GkcCache] g_gkc_cache )
-    = idx -1
-    : i n ( vec_len [String] . c keys )
-    : ~ i k 0
-    ~ < k n {
-        ? != 0 ( nurl_str_eq ( string_data ( vec_at [String] . c keys k ) ) key ) { = idx k = k n } { = k + k 1 }
-    }
+    = idx ?? ( map_get_with [String i s] . c ix key \ s x → i { ^ ( __gkc_hash x ) } \ String a s b → b { ^ ( __gkc_keq a b ) } ) { T v → v F → -1 }
     : ~ ( Arc GkcBuilt ) r ( __gkc_none )
     ? >= idx 0 { = r ( arc_clone [GkcBuilt] ( vec_at [( Arc GkcBuilt )] . c built idx ) ) } {}
     ( locked_restore [GkcCache] g_gkc_cache c )
     ^ r
 }
 
-// A cache entry for `key`, its source to come: its index names the
-// kernel's entry point, so two kernels the caller gave one name never
-// share a compiled one (the kit caches kernels by entry name).
-@ __gkc_reserve s key → i {
+// A cache entry for `key`, its source to come. Its entry point is
+// `kname__gk<16 hex digits of the key's BLAKE3>`: the same in every
+// process, so a static build — whose kernels a census recorded in another
+// process — links the name this process asks for (an index in first-use
+// order made the names depend on what ran first). Two keys never share a
+// name: should two hash alike, the later one's name takes its index too.
+@ __gkc_reserve s key s kname → i {
+    : ( Vec u ) kb ( bytes_from_str key )
+    : String hx ( blake3_hex kb )
+    : ~ String nm ( string_from kname )
+    ( string_push_str nm `__gk` ) ( string_push_str nm ( string_data ( string_substr hx 0 16 ) ) )
     : ~ GkcCache c ( locked_take [GkcCache] g_gkc_cache )
     : i idx ( vec_len [String] . c keys )
+    : ~ b taken F
+    : ~ i k 0
+    ~ < k idx { ? != 0 ( nurl_str_eq ( string_data ( vec_at [String] . c names k ) ) ( string_data nm ) ) { = taken T } {} = k + k 1 }
+    ? taken { ( string_push_char nm 95 ) ( string_push_int nm idx ) } {}
     ( vec_push [String] . c keys ( string_from key ) )
     ( vec_push [( Arc GkcBuilt )] . c built ( __gkc_none ) )
+    ( vec_push [String] . c names nm )
+    : ?i _o ( map_set [String i] . c ix ( string_from key ) idx \ String x → i { ^ ( __gkc_hash ( string_data x ) ) } \ String a String b → b { ^ ( eq_string ( string_data a ) ( string_data b ) ) } )
     ( locked_restore [GkcCache] g_gkc_cache c )
     ^ idx
 }
@@ -294,10 +313,11 @@ $ `devbuf.nu`
     ^ a
 }
 
-// The entry point of cache entry `idx`: `kname__gkc<idx>`.
-@ __gkc_entry s kname i idx → String {
-    : ~ String e ( string_from kname )
-    ( string_push_str e `__gkc` ) ( string_push_int e idx )
+// The entry point of cache entry `idx`.
+@ __gkc_entry i idx → String {
+    : GkcCache c ( locked_take [GkcCache] g_gkc_cache )
+    : String e ( string_from ( string_data ( vec_at [String] . c names idx ) ) )
+    ( locked_restore [GkcCache] g_gkc_cache c )
     ^ e
 }
 
@@ -613,9 +633,17 @@ static __device__ inline void __gk_stu8_32(unsigned char* p, long long n, long l
 // Compared signed, inside a lambda the compiler inlines before it looks at
 // the loop, so a loop counted to LEN folds the check away — an unsigned
 // compare, or the same compare in a helper function, stays in the loop.
+#ifdef __cplusplus
 #define __GK_WI(i, l) ([&]() { long long __gk_k = (long long)(i); return (__gk_k >= 0 && __gk_k < (l)) ? __gk_k : 0LL; }())
 #define __GK_WST(p, o, l, s, i, v) ([&]() { long long __gk_k = (long long)(i); auto __gk_v = (v); if (__gk_k >= 0 && __gk_k < (l)) (p)[(o) + __gk_k * (s)] = __gk_v; }())
 #define __GK_WST2(p, o, nr, s, nc, r, c, v) ([&]() { long long __gk_r = (long long)(r); long long __gk_c = (long long)(c); auto __gk_v = (v); if (__gk_r >= 0 && __gk_r < (nr) && __gk_c >= 0 && __gk_c < (nc)) (p)[(o) + __gk_r * (s) + __gk_c] = __gk_v; }())
+#else
+// (C — the static backend's translation: GNU statement expressions, which
+// gcc, clang and zig take; the same single evaluation, inline)
+#define __GK_WI(i, l) ({ long long __gk_k = (long long)(i); (__gk_k >= 0 && __gk_k < (l)) ? __gk_k : 0LL; })
+#define __GK_WST(p, o, l, s, i, v) ({ long long __gk_k = (long long)(i); __typeof__(v) __gk_v = (v); if (__gk_k >= 0 && __gk_k < (l)) (p)[(o) + __gk_k * (s)] = __gk_v; })
+#define __GK_WST2(p, o, nr, s, nc, r, c, v) ({ long long __gk_r = (long long)(r); long long __gk_c = (long long)(c); __typeof__(v) __gk_v = (v); if (__gk_r >= 0 && __gk_r < (nr) && __gk_c >= 0 && __gk_c < (nc)) (p)[(o) + __gk_r * (s) + __gk_c] = __gk_v; })
+#endif
 #ifdef __CUDACC__
 static __device__ inline unsigned int __gk_ldu8(const unsigned char* p, long long n, long long i) { return p[(unsigned long long)i < (unsigned long long)n ? i : n - 1]; }
 static __device__ inline unsigned int __gk_ldu16(const unsigned char* p, long long n, long long i) { unsigned long long w = (unsigned long long)i >> 1, m = (unsigned long long)n >> 1; return ((const unsigned short*)p)[w < m ? w : m - 1]; }
@@ -844,8 +872,8 @@ unsafe @ gk_run_checked GpuKit kit inout GkCall c s kname s body i nthreads i bl
         = . c err ( __gkc_check body ( string_data bufs ) ( string_data outs ) `` `` `` inits )
         ? > ( string_len . c err ) 0 { ^ F } {}
         ? ( __gkc_coop toks ) { = . c err ( __gkc_why `SYNC(), SHARED_* and SHFL_* need a block launch (gk_run_checked_dev)` `` ) ^ F } {}
-        ? < idx 0 { = idx ( __gkc_reserve ( string_data key ) ) } {}
-        : String en ( __gkc_entry kname idx )
+        ? < idx 0 { = idx ( __gkc_reserve ( string_data key ) kname ) } {}
+        : String en ( __gkc_entry idx )
         : String b2 ( __gkc_with_inits body inits )
         : String nsrc ( __gkc_source c grp ( string_data en ) ( string_data b2 ) narrow lcn lct lcz )
         = hit ( __gkc_store idx nsrc en F )
@@ -1729,6 +1757,7 @@ long long gid = bid * bdim + tid; long long nthreads = nblocks * bdim;
     : i nb ( vec_len [String] . c names )
     : ~ String key ( string_from `D` )
     ( string_push_str key kname )
+    : b ld4 >= ( nurl_str_find body `LD4` ) 0
     : ~ i k 0
     ~ < k nb {
         : s nm ( string_data ( vec_at [String] . c names k ) )
@@ -1738,7 +1767,9 @@ long long gid = bid * bdim + tid; long long nthreads = nblocks * bdim;
         ? | | | | == kd 8 == kd 9 == kd 12 == kd 13 == kd 14 {
             ? ( __gkc_live c k ) {} { = . c err ( __gkc_why `an empty or failed device buffer` nm ) ^ ( __gkc_none ) }
             ( string_push_char key ( __gkc_dtch c k ) )
-            ? | == kd 8 == kd 9 { ( string_push_char key ? ( __gkc_aligned4 c k ) 97 117 ) } {}
+            // (an alignment matters only to LD4 — and differs from process
+            // to process, which would rename a kernel a static build links)
+            ? & ld4 | == kd 8 == kd 9 { ( string_push_char key ? ( __gkc_aligned4 c k ) 97 117 ) } {}
         } {}
         // What the kernel only reads stays put while it runs: no buffer it
         // writes overlaps it.
@@ -1845,8 +1876,8 @@ long long gid = bid * bdim + tid; long long nthreads = nblocks * bdim;
             = . c err ( __gkc_sync_check toks ( string_data outs ) )
             ? > ( string_len . c err ) 0 { ^ ( __gkc_none ) } {}
         } {}
-        ? < idx 0 { = idx ( __gkc_reserve ( string_data key ) ) } {}
-        : String en ( __gkc_entry kname idx )
+        ? < idx 0 { = idx ( __gkc_reserve ( string_data key ) kname ) } {}
+        : String en ( __gkc_entry idx )
         : String b2 ( __gkc_with_inits body inits )
         : String nsrc ( __gkc_source_dev c ( string_data en ) ( string_data b2 ) shn sht shz coop narrow lcn lct lcz block wn wb wd )
         = hit ( __gkc_store idx nsrc en ( __gkc_shfl toks ) )

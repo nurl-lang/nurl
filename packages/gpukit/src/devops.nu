@@ -33,6 +33,32 @@ unsafe @ __gkd_launch GpuKit kit sink String src sink String kname i grid sink (
     ^ r
 }
 
+// Bind `b` as an input of `c`: read-only (restrict, and the read-only
+// cache) unless it overlaps `out`, the buffer the kernel writes — an op
+// called in place reads through a writable binding, as before.
+@ __gkd_in inout GkCall c s name GkBuf b GkBuf out → v {
+    : i e1 * . b n ( _gk_esz . b dtype )
+    : i e2 * . out n ( _gk_esz . out dtype )
+    ? & < . b dptr + . out dptr e2 < . out dptr + . b dptr e1 { ( gk_call_dev c name b ) } { ( gk_call_dev_in c name b ) }
+}
+
+// The counter type of a loop to `n`: an int when n fits one (the compiler
+// unrolls an int loop further, and a window's check folds against it),
+// else a long long — a counter that could wrap is never an int.
+@ __gkd_ctr i n → s { ? <= n 2147483647 { ^ `int` } {} ^ `long long` }
+
+// `x` as the element type's C scalar: a checked kernel's f64 scalar,
+// cast to float for an f32 op exactly as a float parameter was.
+@ __gkd_scal i dtype s nm → String {
+    : ~ String o ( string_from `((` )
+    ( string_push_str o ( _gk_tname dtype ) ) ( string_push_str o `)` ) ( string_push_str o nm ) ( string_push_str o `)` )
+    ^ o
+}
+
+@ __gkd_run GpuKit kit inout GkCall c String kname String body i total → b {
+    ^ ( gk_run_checked_dev kit c ( string_data kname ) ( string_data body ) ( gk_grid total 256 ) 256 )
+}
+
 // Kernel-source head: `extern "C" __global__ void <pfx><op>(` — returns the
 // source String and leaves the full kernel name in `kname`.
 @ __gkd_head String kname s op → String {
@@ -508,30 +534,14 @@ unsafe @ __gkd_launch GpuKit kit sink String src sink String kname i grid sink (
     ? & & & >= . sc n c >= . bb n c >= . mean n c >= . var n c {} { ^ F }
     : s tn ( _gk_tname . y dtype )
     : String kname ( __gkd_name . y dtype )
-    : String src ( __gkd_head kname `bnorm` )
-    ( string_push_str src `const ` ) ( string_push_str src tn ) ( string_push_str src `* X, const ` )
-    ( string_push_str src tn ) ( string_push_str src `* sc, const ` )
-    ( string_push_str src tn ) ( string_push_str src `* B, const ` )
-    ( string_push_str src tn ) ( string_push_str src `* mean, const ` )
-    ( string_push_str src tn ) ( string_push_str src `* var, ` )
-    ( string_push_str src tn ) ( string_push_str src `* Y, long long C, long long HW, ` )
-    ( string_push_str src tn ) ( string_push_str src ` eps){` )
-    ( string_push_str src `long long idx=blockIdx.x*blockDim.x+threadIdx.x;` )
-    ( string_push_str src `if(idx>=C*HW)return;long long c=idx/HW;` )
-    ( string_push_str src `Y[idx]=sc[c]*(X[idx]-mean[c])/sqrt` )
-    ( string_push_str src ( __gkd_sfx . y dtype ) )
-    ( string_push_str src `(var[c]+eps)+B[c];}` )
-    : ( Vec i ) args ( vec_new [i] )
-    ( vec_push [i] args ( gk_arg_dev x ) )
-    ( vec_push [i] args ( gk_arg_dev sc ) )
-    ( vec_push [i] args ( gk_arg_dev bb ) )
-    ( vec_push [i] args ( gk_arg_dev mean ) )
-    ( vec_push [i] args ( gk_arg_dev var ) )
-    ( vec_push [i] args ( gk_arg_dev y ) )
-    ( vec_push [i] args ( gpu_arg_i64 c ) )
-    ( vec_push [i] args ( gpu_arg_i64 hw ) )
-    ( vec_push [i] args ( _gk_scal . y dtype eps ) )
-    ^ ( __gkd_launch kit src kname ( gk_grid * c hw 256 ) args )
+    ( string_push_str kname `bnorm` )
+    : ~ String body ( string_from `if (gid < C * HW) { long long c = gid / HW; ST(Y, gid, LD(sc, c) * (LD(X, gid) - LD(mean, c)) / sqrt` )
+    ( string_push_str body ( __gkd_sfx . y dtype ) ) ( string_push_str body `(LD(var, c) + ` )
+    ( string_push_str body ( string_data ( __gkd_scal . y dtype `eps` ) ) ) ( string_push_str body `) + LD(B, c)); }` )
+    : ~ GkCall cl ( gk_call_new )
+    ( __gkd_in cl `X` x y ) ( __gkd_in cl `sc` sc y ) ( __gkd_in cl `B` bb y ) ( __gkd_in cl `mean` mean y ) ( __gkd_in cl `var` var y )
+    ( gk_call_dev cl `Y` y ) ( gk_call_i64 cl `C` c ) ( gk_call_i64 cl `HW` hw ) ( gk_call_f64 cl `eps` eps )
+    ^ ( __gkd_run kit cl kname body * c hw )
 }
 
 // ── LeakyRelu / Clip / Erf (elementwise with scalar params) ──────────
@@ -542,19 +552,13 @@ unsafe @ __gkd_launch GpuKit kit sink String src sink String kname i grid sink (
     : i n . y n
     : s tn ( _gk_tname . y dtype )
     : String kname ( __gkd_name . y dtype )
-    : String src ( __gkd_head kname `lrelu` )
-    ( string_push_str src `const ` ) ( string_push_str src tn ) ( string_push_str src `* X, ` )
-    ( string_push_str src tn ) ( string_push_str src `* Y, long long n, ` )
-    ( string_push_str src tn ) ( string_push_str src ` alpha){` )
-    ( string_push_str src `long long i=blockIdx.x*blockDim.x+threadIdx.x;` )
-    ( string_push_str src `if(i<n){` )
-    ( string_push_str src tn ) ( string_push_str src ` v=X[i];Y[i]=v>=0?v:alpha*v;}}` )
-    : ( Vec i ) args ( vec_new [i] )
-    ( vec_push [i] args ( gk_arg_dev x ) )
-    ( vec_push [i] args ( gk_arg_dev y ) )
-    ( vec_push [i] args ( gpu_arg_i64 n ) )
-    ( vec_push [i] args ( _gk_scal . y dtype alpha ) )
-    ^ ( __gkd_launch kit src kname ( gk_grid n 256 ) args )
+    ( string_push_str kname `lrelu` )
+    : ~ String body ( string_from `if (gid < n) { ` )
+    ( string_push_str body tn ) ( string_push_str body ` v = LD(X, gid); ST(Y, gid, v >= 0 ? v : ` )
+    ( string_push_str body ( string_data ( __gkd_scal . y dtype `alpha` ) ) ) ( string_push_str body ` * v); }` )
+    : ~ GkCall cl ( gk_call_new )
+    ( __gkd_in cl `X` x y ) ( gk_call_dev cl `Y` y ) ( gk_call_i64 cl `n` n ) ( gk_call_f64 cl `alpha` alpha )
+    ^ ( __gkd_run kit cl kname body n )
 }
 
 @ gkd_clip GpuKit kit GkBuf y GkBuf x f lo f hi → b {
@@ -563,21 +567,16 @@ unsafe @ __gkd_launch GpuKit kit sink String src sink String kname i grid sink (
     : i n . y n
     : s tn ( _gk_tname . y dtype )
     : String kname ( __gkd_name . y dtype )
-    : String src ( __gkd_head kname `clip` )
-    ( string_push_str src `const ` ) ( string_push_str src tn ) ( string_push_str src `* X, ` )
-    ( string_push_str src tn ) ( string_push_str src `* Y, long long n, ` )
-    ( string_push_str src tn ) ( string_push_str src ` lo, ` )
-    ( string_push_str src tn ) ( string_push_str src ` hi){` )
-    ( string_push_str src `long long i=blockIdx.x*blockDim.x+threadIdx.x;` )
-    ( string_push_str src `if(i<n){` )
-    ( string_push_str src tn ) ( string_push_str src ` v=X[i];Y[i]=v<lo?lo:(v>hi?hi:v);}}` )
-    : ( Vec i ) args ( vec_new [i] )
-    ( vec_push [i] args ( gk_arg_dev x ) )
-    ( vec_push [i] args ( gk_arg_dev y ) )
-    ( vec_push [i] args ( gpu_arg_i64 n ) )
-    ( vec_push [i] args ( _gk_scal . y dtype lo ) )
-    ( vec_push [i] args ( _gk_scal . y dtype hi ) )
-    ^ ( __gkd_launch kit src kname ( gk_grid n 256 ) args )
+    ( string_push_str kname `clip` )
+    : String lo2 ( __gkd_scal . y dtype `lo` )
+    : String hi2 ( __gkd_scal . y dtype `hi` )
+    : ~ String body ( string_from `if (gid < n) { ` )
+    ( string_push_str body tn ) ( string_push_str body ` v = LD(X, gid); ST(Y, gid, v < ` ) ( string_push_str body ( string_data lo2 ) )
+    ( string_push_str body ` ? ` ) ( string_push_str body ( string_data lo2 ) ) ( string_push_str body ` : (v > ` ) ( string_push_str body ( string_data hi2 ) )
+    ( string_push_str body ` ? ` ) ( string_push_str body ( string_data hi2 ) ) ( string_push_str body ` : v)); }` )
+    : ~ GkCall cl ( gk_call_new )
+    ( __gkd_in cl `X` x y ) ( gk_call_dev cl `Y` y ) ( gk_call_i64 cl `n` n ) ( gk_call_f64 cl `lo` lo ) ( gk_call_f64 cl `hi` hi )
+    ^ ( __gkd_run kit cl kname body n )
 }
 
 @ gkd_erf GpuKit kit GkBuf y GkBuf x → b {
@@ -1424,19 +1423,12 @@ i batch i heads i n i nkv i hd f scale → b {
     ? == . y dtype . x dtype {} { ^ F }
     ? & > outer 0 > rep 0 {} { ^ F }
     ? & == . x n outer == . y n ( _gk_p2 outer rep ) {} { ^ F }
-    : s tn ( _gk_tname . y dtype )
     : String kname ( __gkd_name . y dtype )
-    : String src ( __gkd_head kname `expandl` )
-    ( string_push_str src `const ` ) ( string_push_str src tn ) ( string_push_str src `* X, ` )
-    ( string_push_str src tn ) ( string_push_str src `* Y, long long outer, long long rep){` )
-    ( string_push_str src `long long i=blockIdx.x*blockDim.x+threadIdx.x;` )
-    ( string_push_str src `if(i<outer*rep)Y[i]=X[i/rep];}` )
-    : ( Vec i ) args ( vec_new [i] )
-    ( vec_push [i] args ( gk_arg_dev x ) )
-    ( vec_push [i] args ( gk_arg_dev y ) )
-    ( vec_push [i] args ( gpu_arg_i64 outer ) )
-    ( vec_push [i] args ( gpu_arg_i64 rep ) )
-    ^ ( __gkd_launch kit src kname ( gk_grid * outer rep 256 ) args )
+    ( string_push_str kname `expandl` )
+    : String body ( string_from `if (gid < outer * rep) { ST(Y, gid, LD(X, gid / rep)); }` )
+    : ~ GkCall cl ( gk_call_new )
+    ( __gkd_in cl `X` x y ) ( gk_call_dev cl `Y` y ) ( gk_call_i64 cl `outer` outer ) ( gk_call_i64 cl `rep` rep )
+    ^ ( __gkd_run kit cl kname body * outer rep )
 }
 
 // ── Reductions / index selection ─────────────────────────────────────
@@ -1449,22 +1441,14 @@ i batch i heads i n i nkv i hd f scale → b {
     ? & == . x n ( _gk_p2 outer ax ) == . y n outer {} { ^ F }
     : s tn ( _gk_tname . y dtype )
     : String kname ( __gkd_name . y dtype )
-    : String src ( __gkd_head kname `rl2` )
-    ( string_push_str src `const ` ) ( string_push_str src tn ) ( string_push_str src `* X, ` )
-    ( string_push_str src tn ) ( string_push_str src `* Y, long long outer, long long ax){` )
-    ( string_push_str src `long long o=blockIdx.x*blockDim.x+threadIdx.x;` )
-    ( string_push_str src `if(o>=outer)return;const ` )
-    ( string_push_str src tn ) ( string_push_str src `* p=X+o*ax;` )
-    ( string_push_str src tn ) ( string_push_str src ` s=0;for(long long a=0;a<ax;a++)s+=p[a]*p[a];` )
-    ( string_push_str src `Y[o]=sqrt` )
-    ( string_push_str src ( __gkd_sfx . y dtype ) )
-    ( string_push_str src `(s);}` )
-    : ( Vec i ) args ( vec_new [i] )
-    ( vec_push [i] args ( gk_arg_dev x ) )
-    ( vec_push [i] args ( gk_arg_dev y ) )
-    ( vec_push [i] args ( gpu_arg_i64 outer ) )
-    ( vec_push [i] args ( gpu_arg_i64 ax ) )
-    ^ ( __gkd_launch kit src kname ( gk_grid outer 256 ) args )
+    ( string_push_str kname `rl2` )
+    : ~ String body ( string_from `if (gid < outer) { WIN(p, X, gid * ax, ax); ` )
+    ( string_push_str body tn ) ( string_push_str body ` s = 0; for (` ) ( string_push_str body ( __gkd_ctr ax ) )
+    ( string_push_str body ` a = 0; a < LEN(p); a++) { s += LD(p, a) * LD(p, a); } ST(Y, gid, sqrt` )
+    ( string_push_str body ( __gkd_sfx . y dtype ) ) ( string_push_str body `(s)); }` )
+    : ~ GkCall cl ( gk_call_new )
+    ( __gkd_in cl `X` x y ) ( gk_call_dev cl `Y` y ) ( gk_call_i64 cl `outer` outer ) ( gk_call_i64 cl `ax` ax )
+    ^ ( __gkd_run kit cl kname body outer )
 }
 
 // ArgMax along the last axis: input (outer, ax) in any element type →
@@ -1475,21 +1459,13 @@ i batch i heads i n i nkv i hd f scale → b {
     ? & == . x n ( _gk_p2 outer ax ) == . y n outer {} { ^ F }
     : s tn ( _gk_tname . x dtype )
     : String kname ( __gkd_name . x dtype )
-    : String src ( __gkd_head kname `argmax` )
-    ( string_push_str src `const ` ) ( string_push_str src tn ) ( string_push_str src `* X, long long* Y, long long outer, long long ax){` )
-    ( string_push_str src `long long o=blockIdx.x*blockDim.x+threadIdx.x;` )
-    ( string_push_str src `if(o>=outer)return;const ` )
-    ( string_push_str src tn ) ( string_push_str src `* p=X+o*ax;` )
-    ( string_push_str src `long long bi=0;` )
-    ( string_push_str src tn ) ( string_push_str src ` bv=p[0];` )
-    ( string_push_str src `for(long long j=1;j<ax;j++){if(p[j]>bv){bv=p[j];bi=j;}}` )
-    ( string_push_str src `Y[o]=bi;}` )
-    : ( Vec i ) args ( vec_new [i] )
-    ( vec_push [i] args ( gk_arg_dev x ) )
-    ( vec_push [i] args ( gk_arg_dev y ) )
-    ( vec_push [i] args ( gpu_arg_i64 outer ) )
-    ( vec_push [i] args ( gpu_arg_i64 ax ) )
-    ^ ( __gkd_launch kit src kname ( gk_grid outer 256 ) args )
+    ( string_push_str kname `argmax` )
+    : ~ String body ( string_from `if (gid < outer) { WIN(p, X, gid * ax, ax); long long bi = 0; ` )
+    ( string_push_str body tn ) ( string_push_str body ` bv = LD(p, 0); for (` ) ( string_push_str body ( __gkd_ctr ax ) )
+    ( string_push_str body ` j = 1; j < LEN(p); j++) { if (LD(p, j) > bv) { bv = LD(p, j); bi = j; } } ST(Y, gid, bi); }` )
+    : ~ GkCall cl ( gk_call_new )
+    ( __gkd_in cl `X` x y ) ( gk_call_dev cl `Y` y ) ( gk_call_i64 cl `outer` outer ) ( gk_call_i64 cl `ax` ax )
+    ^ ( __gkd_run kit cl kname body outer )
 }
 
 // EOS read-out (CLIP): given per-row token ids `tok` [B,L] (GK_I64) and
@@ -1500,26 +1476,15 @@ i batch i heads i n i nkv i hd f scale → b {
     ? == . y dtype . data dtype {} { ^ F }
     ? & & > bsz 0 > l 0 > d 0 {} { ^ F }
     ? & & == . data n ( _gk_p3 bsz l d ) == . y n ( _gk_p2 bsz d ) >= . tok n ( _gk_p2 bsz l ) {} { ^ F }
-    : s tn ( _gk_tname . y dtype )
     : String kname ( __gkd_name . y dtype )
-    : String src ( __gkd_head kname `eosg` )
-    ( string_push_str src `const ` ) ( string_push_str src tn ) ( string_push_str src `* data, const long long* tok, ` )
-    ( string_push_str src tn ) ( string_push_str src `* Y, long long B, long long L, long long D){` )
-    ( string_push_str src `long long idx=blockIdx.x*blockDim.x+threadIdx.x;` )
-    ( string_push_str src `if(idx>=B*D)return;` )
-    ( string_push_str src `long long d=idx%D;long long b=idx/D;` )
-    ( string_push_str src `const long long* t=tok+b*L;` )
-    ( string_push_str src `long long pos=0;long long mx=t[0];` )
-    ( string_push_str src `for(long long j=1;j<L;j++){if(t[j]>mx){mx=t[j];pos=j;}}` )
-    ( string_push_str src `Y[idx]=data[(b*L+pos)*D+d];}` )
-    : ( Vec i ) args ( vec_new [i] )
-    ( vec_push [i] args ( gk_arg_dev data ) )
-    ( vec_push [i] args ( gk_arg_dev tok ) )
-    ( vec_push [i] args ( gk_arg_dev y ) )
-    ( vec_push [i] args ( gpu_arg_i64 bsz ) )
-    ( vec_push [i] args ( gpu_arg_i64 l ) )
-    ( vec_push [i] args ( gpu_arg_i64 d ) )
-    ^ ( __gkd_launch kit src kname ( gk_grid * bsz d 256 ) args )
+    ( string_push_str kname `eosg` )
+    : ~ String body ( string_from `if (gid < B * D) { long long d = gid % D; long long b = gid / D; WIN(t, tok, b * L, L); long long pos = 0; long long mx = LD(t, 0); for (` )
+    ( string_push_str body ( __gkd_ctr l ) )
+    ( string_push_str body ` j = 1; j < LEN(t); j++) { if (LD(t, j) > mx) { mx = LD(t, j); pos = j; } } ST(Y, gid, LD(data, (b * L + pos) * D + d)); }` )
+    : ~ GkCall cl ( gk_call_new )
+    ( __gkd_in cl `data` data y ) ( __gkd_in cl `tok` tok y ) ( gk_call_dev cl `Y` y )
+    ( gk_call_i64 cl `B` bsz ) ( gk_call_i64 cl `L` l ) ( gk_call_i64 cl `D` d )
+    ^ ( __gkd_run kit cl kname body * bsz d )
 }
 
 // ── Rotary position embedding over 2 and 3 axes ───────────────────
@@ -1546,31 +1511,26 @@ i heads i n i dim → b {
     ? & & == . x dtype GK_F32 == . rows dtype GK_I64 == . cols dtype GK_I64 {} { ^ F }
     ? & & >= . rows n n >= . cols n n & == . cosb dtype GK_F32 == . sinb dtype GK_F32 {} { ^ F }
     : i tl ? < . cosb n . sinb n . cosb n . sinb n
-    : String src ( string_from `extern "C" __global__ void gkd_rope2d(float* X, const long long* rows, const long long* cols, const float* cosT, const float* sinT, long long heads, long long n, long long dim, long long tl){` )
-    ( string_push_str src `long long half=dim/2, quarter=half/2;` )
-    ( string_push_str src `long long tot=heads*n*quarter*2;` )
-    ( string_push_str src `long long idx=blockIdx.x*blockDim.x+threadIdx.x;if(idx>=tot)return;` )
-    ( string_push_str src `long long j=idx%quarter; long long r=idx/quarter;` )
-    ( string_push_str src `long long axis=r%2; r/=2;` )
-    ( string_push_str src `long long t=r%n; long long h=r/n;` )
-    ( string_push_str src `long long base=h*n*dim+t*dim+axis*half;` )
-    ( string_push_str src `long long pos=(axis==0)?rows[t]:cols[t];` )
-    ( string_push_str src `long long tbl=pos*half;if(pos<0||tbl+half>tl)return;` )
-    ( string_push_str src `float x1=X[base+j], x2=X[base+j+quarter];` )
-    ( string_push_str src `X[base+j]=x1*cosT[tbl+j]-x2*sinT[tbl+j];` )
-    ( string_push_str src `X[base+j+quarter]=x2*cosT[tbl+j+quarter]+x1*sinT[tbl+j+quarter];}` )
-    : ( Vec i ) args ( vec_new [i] )
-    ( vec_push [i] args ( gk_arg_dev x ) )
-    ( vec_push [i] args ( gk_arg_dev rows ) )
-    ( vec_push [i] args ( gk_arg_dev cols ) )
-    ( vec_push [i] args ( gk_arg_dev cosb ) )
-    ( vec_push [i] args ( gk_arg_dev sinb ) )
-    ( vec_push [i] args ( gpu_arg_i64 heads ) )
-    ( vec_push [i] args ( gpu_arg_i64 n ) )
-    ( vec_push [i] args ( gpu_arg_i64 dim ) )
-    ( vec_push [i] args ( gpu_arg_i64 tl ) )
+    : String body ( string_from `long long half = dim / 2, quarter = half / 2;
+long long tot = heads * n * quarter * 2;
+if (gid < tot) {
+    long long j = gid % quarter; long long r = gid / quarter;
+    long long axis = r % 2; r /= 2;
+    long long t = r % n; long long h = r / n;
+    long long base = h * n * dim + t * dim + axis * half;
+    long long pos = (axis == 0) ? LD(rows, t) : LD(cols, t);
+    long long tbl = pos * half;
+    if (pos >= 0 && tbl + half <= tl) {
+        float x1 = LD(X, base + j), x2 = LD(X, base + j + quarter);
+        ST(X, base + j, x1 * LD(cosT, tbl + j) - x2 * LD(sinT, tbl + j));
+        ST(X, base + j + quarter, x2 * LD(cosT, tbl + j + quarter) + x1 * LD(sinT, tbl + j + quarter));
+    }
+}` )
+    : ~ GkCall cl ( gk_call_new )
+    ( gk_call_dev cl `X` x ) ( __gkd_in cl `rows` rows x ) ( __gkd_in cl `cols` cols x ) ( __gkd_in cl `cosT` cosb x ) ( __gkd_in cl `sinT` sinb x )
+    ( gk_call_i64 cl `heads` heads ) ( gk_call_i64 cl `n` n ) ( gk_call_i64 cl `dim` dim ) ( gk_call_i64 cl `tl` tl )
     : i tot * heads * n / dim 2
-    ^ ( __gkd_launch kit src ( string_from `gkd_rope2d` ) ( gk_grid tot 256 ) args )
+    ^ ( __gkd_run kit cl ( string_from `gkd_rope2d` ) body tot )
 }
 
 @ gkd_rope3d GpuKit kit GkBuf x GkBuf fr GkBuf rw GkBuf cl GkBuf cosb GkBuf sinb
@@ -1583,31 +1543,23 @@ i heads i n i dim i nt i nh → b {
     ? & & == . x dtype GK_F32 == . fr dtype GK_I64 & == . rw dtype GK_I64 == . cl dtype GK_I64 {} { ^ F }
     ? & & >= . fr n n >= . rw n n & >= . cl n n & == . cosb dtype GK_F32 == . sinb dtype GK_F32 {} { ^ F }
     : i tl ? < . cosb n . sinb n . cosb n . sinb n
-    : String src ( string_from `extern "C" __global__ void gkd_rope3d(float* X, const long long* fr, const long long* rw, const long long* cl, const float* cosT, const float* sinT, long long heads, long long n, long long dim, long long nt, long long nh, long long tl){` )
-    ( string_push_str src `long long width=dim/2;` )
-    ( string_push_str src `long long tot=heads*n*width;` )
-    ( string_push_str src `long long idx=blockIdx.x*blockDim.x+threadIdx.x;if(idx>=tot)return;` )
-    ( string_push_str src `long long j=idx%width; long long r=idx/width;` )
-    ( string_push_str src `long long t=r%n; long long h=r/n;` )
-    ( string_push_str src `long long pos = (j<nt) ? fr[t] : ((j<nt+nh) ? rw[t] : cl[t]);` )
-    ( string_push_str src `long long tbl=pos*width+j;if(pos<0||tbl>=tl)return;` )
-    ( string_push_str src `long long base=h*n*dim+t*dim+2*j;` )
-    ( string_push_str src `float c=cosT[tbl], s=sinT[tbl];` )
-    ( string_push_str src `float x1=X[base], x2=X[base+1];` )
-    ( string_push_str src `X[base]=x1*c-x2*s; X[base+1]=x1*s+x2*c;}` )
-    : ( Vec i ) args ( vec_new [i] )
-    ( vec_push [i] args ( gk_arg_dev x ) )
-    ( vec_push [i] args ( gk_arg_dev fr ) )
-    ( vec_push [i] args ( gk_arg_dev rw ) )
-    ( vec_push [i] args ( gk_arg_dev cl ) )
-    ( vec_push [i] args ( gk_arg_dev cosb ) )
-    ( vec_push [i] args ( gk_arg_dev sinb ) )
-    ( vec_push [i] args ( gpu_arg_i64 heads ) )
-    ( vec_push [i] args ( gpu_arg_i64 n ) )
-    ( vec_push [i] args ( gpu_arg_i64 dim ) )
-    ( vec_push [i] args ( gpu_arg_i64 nt ) )
-    ( vec_push [i] args ( gpu_arg_i64 nh ) )
-    ( vec_push [i] args ( gpu_arg_i64 tl ) )
+    : String body ( string_from `long long width = dim / 2;
+long long tot = heads * n * width;
+if (gid < tot) {
+    long long j = gid % width; long long r = gid / width;
+    long long t = r % n; long long h = r / n;
+    long long pos = (j < nt) ? LD(fr, t) : ((j < nt + nh) ? LD(rw, t) : LD(cl, t));
+    long long tbl = pos * width + j;
+    if (pos >= 0 && tbl < tl) {
+        long long base = h * n * dim + t * dim + 2 * j;
+        float c = LD(cosT, tbl), s = LD(sinT, tbl);
+        float x1 = LD(X, base), x2 = LD(X, base + 1);
+        ST(X, base, x1 * c - x2 * s); ST(X, base + 1, x1 * s + x2 * c);
+    }
+}` )
+    : ~ GkCall cl2 ( gk_call_new )
+    ( gk_call_dev cl2 `X` x ) ( __gkd_in cl2 `fr` fr x ) ( __gkd_in cl2 `rw` rw x ) ( __gkd_in cl2 `cl` cl x ) ( __gkd_in cl2 `cosT` cosb x ) ( __gkd_in cl2 `sinT` sinb x )
+    ( gk_call_i64 cl2 `heads` heads ) ( gk_call_i64 cl2 `n` n ) ( gk_call_i64 cl2 `dim` dim ) ( gk_call_i64 cl2 `nt` nt ) ( gk_call_i64 cl2 `nh` nh ) ( gk_call_i64 cl2 `tl` tl )
     : i tot * heads * n / dim 2
-    ^ ( __gkd_launch kit src ( string_from `gkd_rope3d` ) ( gk_grid tot 256 ) args )
+    ^ ( __gkd_run kit cl2 ( string_from `gkd_rope3d` ) body tot )
 }
