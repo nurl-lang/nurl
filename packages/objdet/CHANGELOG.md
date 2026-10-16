@@ -6,6 +6,9 @@
 
 - Requires onnx 0.12, whose run entry points take the input as a checked
   byte view and whose tensors own their device buffers. No change here.
+- Declares its `gpu` dependency (`^0.17.6`): `detect.nu` and `image.nu`
+  import the gpu package directly since 0.4.4, which the manifest did not
+  say, so a registry install had no `deps/gpu` to compile against.
 
 ## [0.4.4] — 2026-10-14
 

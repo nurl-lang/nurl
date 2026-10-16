@@ -8,3 +8,4 @@ license = "MIT OR Apache-2.0"
 [dependencies]
 onnx = { path = "../onnx", version = "^0.12" }
 image = { path = "../image", version = "^0" }
+gpu = { path = "../gpu", version = "^0.17.6" }
