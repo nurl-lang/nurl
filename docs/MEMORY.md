@@ -272,6 +272,13 @@ stops the build, and every violation in a run is reported.
 without the checker is not held to the rules, so nothing guarantees it is
 memory-safe. A correct program the rules reject is a bug worth reporting.
 
+The rules' core — owned `Vec` trees, moves and drop flags, `sink`,
+`inout`, borrows and views, reallocation, and calls checked against
+function summaries — is proven sound in Lean
+([`formal/`](../formal/README.md), phase A1): a well-typed core program
+never touches freed or out-of-bounds memory. [`formal/RULES.md`](../formal/RULES.md)
+gives the formal rule for each rule below.
+
 ### 2.1 Moves — use after move
 
 An owned value moves out of a binding when it is:
