@@ -67,6 +67,7 @@ structure RSetup.OK (S : RSetup) : Prop where
   Φwf    : ∀ y E, S.Φ y = some E → E.live = true → (E.ty ≠ .int ∨ E.mode = .rootb) →
              ∀ r ∈ roots E.vdeps, (∀ v, S.ρ v ≠ r) → ∃ Er, S.Φ r = some Er ∧ Er.mode.isRoot = true
   Φρ     : ∀ v, S.Φ (S.ρ v) = none
+  pe_held : ∀ v, (S.pe v).held ⊆ allKinds S.R
 
 /-- The callee's own contexts, as the call sets them up: a borrowed
     parameter depends on nothing it can see, and an `inout` parameter carries
@@ -405,6 +406,200 @@ theorem AbsOK.exitScope {Γa : Ctx} (hab : S.AbsOK Γa) {x : Var} (hbx : S.bnd x
   · have hvx : v ≠ x := fun e => by subst e; rw [hbx] at hb; cases hb
     obtain ⟨E0, h0, hm0⟩ := hk.2.2 v bh hb
     exact ⟨E0, by simp [A1.exitScope, upd_ne _ _ hvx, h0], hm0⟩
+
+theorem EntryWeaker.mk' {E E' : Entry} (ht : E'.ty = E.ty) (hm : E'.mode = E.mode)
+    (hrb : E.mode ≠ .rootb) (hl : E'.live = E.live) (hp : E.mode.ownSlot = false → E.path ⊆ E'.path)
+    (hh : E.held ⊆ E'.held) : EntryWeaker E E' :=
+  ⟨ht, hm, fun h' => absurd h' hrb, fun h' => ⟨by rw [← hl]; exact h', hp, hh⟩⟩
+
+theorem allKinds_comp {R : List Var} (k : Kind) :
+    (allKinds R).map (fun d => (⟨d.root, comp d.kind k⟩ : Dep)) ⊆ allKinds R := by
+  intro d hd
+  obtain ⟨d0, hd0, rfl⟩ := List.mem_map.mp hd
+  have hr := mem_allKinds hd0
+  simp only [allKinds, List.mem_flatMap, List.mem_cons, List.mem_singleton, List.not_mem_nil,
+    or_false]
+  exact ⟨d0.root, hr, by cases comp d0.kind k <;> simp⟩
+
+/-- What a lifted binding lends is what the binding it lifts lends, renamed,
+    or something the arguments held. -/
+theorem derive_lift (h : S.OK) (hab : S.AbsOK Γa) {y : Var} {Ey : Entry} (hy : Γa y = some Ey) (k : Kind) :
+    derive (S.ρ y) (S.liftE y Ey) k ⊆ rds S.ρ (derive y Ey k) ++ allKinds S.R := by
+  intro d hd
+  unfold derive at hd ⊢
+  rw [liftE_root h] at hd
+  cases hrt : Ey.mode.isRoot with
+  | true =>
+    simp only [hrt, ↓reduceIte, List.mem_singleton] at hd ⊢
+    subst hd
+    refine List.mem_append_left _ (mem_rds.mpr ⟨_, List.mem_singleton_self _, ?_⟩)
+    simp [Dep.ren, liftE_ty' h hab hy]
+  | false =>
+    simp only [hrt, Bool.false_eq_true, ↓reduceIte] at hd ⊢
+    have hrb : Ey.mode ≠ .rootb := fun e => by rw [e] at hrt; cases hrt
+    have hos : Ey.mode.ownSlot = false := by cases hm : Ey.mode <;> simp_all [Mode.isRoot, Mode.ownSlot]
+    have hpath : (S.liftE y Ey).path = rds S.ρ Ey.path ++ allKinds S.R := by simp [liftE, hrb, hos]
+    rw [hpath, List.map_append] at hd
+    rcases List.mem_append.mp hd with hd | hd
+    · obtain ⟨d1, hd1, rfl⟩ := List.mem_map.mp hd
+      obtain ⟨d0, hd0, rfl⟩ := mem_rds.mp hd1
+      exact List.mem_append_left _ (mem_rds.mpr ⟨_, List.mem_map_of_mem hd0, rfl⟩)
+    · exact List.mem_append_right _ (allKinds_comp k hd)
+
+theorem held_lift (h : S.OK) (hab : S.AbsOK Γa) {y : Var} {Ey : Entry} (hy : Γa y = some Ey) :
+    (S.liftE y Ey).held ⊆ rds S.ρ Ey.held ++ allKinds S.R := by
+  by_cases hrb : Ey.mode = .rootb
+  · simp only [liftE, hrb, ↓reduceIte]
+    exact fun d hd => List.mem_append_right _ (h.pe_held y hd)
+  · simp [liftE, hrb]
+
+theorem exprT_ren (h : S.OK) (hab : S.AbsOK Γa) {e : Expr} (he : ExprT Γa e) :
+    ExprT (S.canon Γa) (e.rename S.ρ) := by
+  induction he with
+  | lit => exact ExprT.lit
+  | var hx hl ht =>
+    exact ExprT.var (by rw [canon_ρ h, hx]; rfl) (by rw [liftE_live]; exact hl)
+      (by rw [liftE_ty' h hab hx]; exact ht)
+  | add _ _ iha ihb => exact ExprT.add iha ihb
+  | lt _ _ iha ihb => exact ExprT.lt iha ihb
+  | len hx hl ht =>
+    exact ExprT.len (by rw [canon_ρ h, hx]; rfl) (by rw [liftE_live]; exact hl)
+      (by rw [liftE_ty' h hab hx]; exact ht)
+  | slen hx hl ht =>
+    exact ExprT.slen (by rw [canon_ρ h, hx]; rfl) (by rw [liftE_live]; exact hl)
+      (by rw [liftE_ty' h hab hx]; exact ht)
+
+theorem liftE_indep {E : Entry} (hrb : E.mode ≠ .rootb) (x v : Var) : S.liftE x E = S.liftE v E := by
+  simp [liftE, hrb]
+
+theorem allowed_own (hab : S.AbsOK Γa) {y : Var} {Ey : Entry} (hy : Γa y = some Ey) (hm : Ey.mode = .own)
+    (e : Eff) (hv : Bool) : Allowed S e hv y := by
+  left
+  cases hb : S.bnd y with
+  | none => rfl
+  | some bh =>
+    obtain ⟨E, hE, hmE⟩ := hab.2.2 y bh hb
+    rw [hy] at hE; cases hE; rw [hm] at hmE; cases hmE
+
+theorem allowed_canDo (hab : S.AbsOK Γa) {y : Var} {Ey : Entry} {t : Ty} (hy : Γa y = some Ey)
+    (ht : Ey.ty = .vec t) {e : Eff} (hcan : canDo Ey.mode e) : Allowed S e t.holdsView y := by
+  rcases hcan with hm | ⟨b, hm, hle⟩
+  · exact allowed_own hab hy hm e _
+  · obtain ⟨t', ht', hb⟩ := hab.2.1 y Ey b hy hm
+    rw [ht] at ht'; cases ht'
+    exact Or.inr ⟨b, hb, hle⟩
+
+theorem canDo_lift {m : Mode} {e : Eff} (h : canDo m e) : canDo (liftMode m) e := by
+  rcases h with rfl | ⟨b, rfl, _⟩ <;> exact Or.inl rfl
+
+theorem intE_lift (x : Var) : EntryWeaker intE (S.liftE x intE) := by
+  have he : S.liftE x intE = ⟨.int, .bor, true, allKinds S.R, allKinds S.R⟩ := by
+    simp [liftE, intE, liftMode, rds, Mode.ownSlot]
+  rw [he]
+  exact EntryWeaker.mk' rfl rfl (by simp [intE]) rfl (fun _ => by simp [intE]) (by simp [intE])
+
+theorem elemE_lift (h : S.OK) (hab : S.AbsOK Γa) {y : Var} {Ey : Entry} (hy : Γa y = some Ey)
+    (t : Ty) (x : Var) : EntryWeaker (elemE (S.ρ y) (S.liftE y Ey) t) (S.liftE x (elemE y Ey t)) := by
+  have hl := held_lift h hab hy
+  cases t with
+  | int =>
+    show EntryWeaker intE (S.liftE x intE)
+    exact intE_lift x
+  | slice s =>
+    refine EntryWeaker.mk' (by simp [elemE, liftE]) (by simp [elemE, liftE, liftMode])
+      (by simp [elemE]) (by simp [elemE, liftE]) (fun _ => ?_) ?_
+    · simp only [elemE, liftE, reduceCtorEq, ↓reduceIte, liftMode, Mode.ownSlot, Bool.false_eq_true]
+      exact hl
+    · simp only [elemE, liftE, reduceCtorEq, ↓reduceIte]; exact hl
+  | vec s =>
+    refine EntryWeaker.mk' (by simp [elemE, liftE]) (by simp [elemE, liftE, liftMode])
+      (by simp [elemE]) (by simp [elemE, liftE]) (fun _ => ?_) ?_
+    · simp only [elemE, liftE, reduceCtorEq, ↓reduceIte, liftMode, Mode.ownSlot, Bool.false_eq_true]
+      exact derive_lift h hab hy .inner
+    · simp only [elemE, liftE, reduceCtorEq, ↓reduceIte]; exact hl
+
+theorem popE_lift (h : S.OK) (hab : S.AbsOK Γa) {y : Var} {Ey : Entry} (hy : Γa y = some Ey)
+    (t : Ty) (x : Var) : EntryWeaker (popE (S.ρ y) (S.liftE y Ey) t) (S.liftE x (popE y Ey t)) := by
+  cases t with
+  | vec s =>
+    refine EntryWeaker.mk' (by simp [popE, liftE]) (by simp [popE, liftE, liftMode])
+      (by simp [popE]) (by simp [popE, liftE]) (fun h' => by simp [popE, Mode.ownSlot] at h') ?_
+    simp only [popE, liftE, reduceCtorEq, ↓reduceIte]; exact held_lift h hab hy
+  | int => exact elemE_lift h hab hy .int x
+  | slice s => exact elemE_lift h hab hy (.slice s) x
+
+/-- A right-hand side of the callee, where the call places it. -/
+theorem RhsT.ren (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {r : Rhs} {E : Entry} {Γa1 : Ctx}
+    (hr : RhsT Γa Fa r E Γa1) :
+    ∃ E', RhsT (S.canon Γa) S.Fc (r.rename S.ρ) E' (S.canon Γa1) ∧ ∀ x, EntryWeaker E' (S.liftE x E) := by
+  cases hr with
+  | expr he =>
+    exact ⟨intE, RhsT.expr (exprT_ren h hab he), fun x => intE_lift x⟩
+  | new ht =>
+    refine ⟨_, RhsT.new ht, fun x => ?_⟩
+    exact EntryWeaker.mk' (by simp [liftE]) (by simp [liftE, liftMode]) (by simp) (by simp [liftE])
+      (fun h' => by simp [Mode.ownSlot] at h') (by simp)
+  | @moveOwn y Ey hy hl hm hyF =>
+    have hc : S.canon Γa (S.ρ y) = some (S.liftE y Ey) := by rw [canon_ρ h, hy]; rfl
+    have hrb : Ey.mode ≠ .rootb := by rw [hm]; simp
+    have hctx : S.canon (setE (kill .replace false y Γa) y { Ey with live := false }) =
+        setE (kill .replace false (S.ρ y) (S.canon Γa)) (S.ρ y) { S.liftE y Ey with live := false } := by
+      rw [canon_setE h, canon_kill h hab (allowed_own hab hy hm _ _), liftE_dead]
+    rw [hctx]
+    refine ⟨_, RhsT.moveOwn hc (by rw [liftE_live]; exact hl) (by rw [liftE_mode y hrb, hm]; rfl)
+      (h.Fcout y), fun x => ?_⟩
+    have he : S.liftE x ⟨Ey.ty, .own, true, [], Ey.held⟩ =
+        ⟨(S.liftE y Ey).ty, .own, true, [], (S.liftE y Ey).held⟩ := by
+      simp [liftE, hrb, liftMode, rds, Mode.ownSlot]
+    rw [he]; exact EntryWeaker.refl _
+  | @copyRoot y Ey hy hl hm =>
+    have hc : S.canon Γa (S.ρ y) = some (S.liftE y Ey) := by rw [canon_ρ h, hy]; rfl
+    refine ⟨_, RhsT.copyRoot hc (by rw [liftE_live]; exact hl) (by rw [liftE_rootb h]; exact hm),
+      fun x => ?_⟩
+    refine EntryWeaker.mk' (by rw [liftE_ty x (by simp)]; exact (liftE_ty' h hab hy).symm)
+      (by simp [liftE, liftMode]) (by simp) (by simp [liftE]) (fun _ => ?_) ?_
+    · simp only [liftE, reduceCtorEq, ↓reduceIte, liftMode, Mode.ownSlot, Bool.false_eq_true]
+      exact derive_lift h hab hy .self
+    · simp only [liftE, reduceCtorEq, ↓reduceIte]; exact held_lift h hab hy
+  | @copyBor y _ hy hl hm =>
+    have hc : S.canon Γa (S.ρ y) = some (S.liftE y E) := by rw [canon_ρ h, hy]; rfl
+    have hrb : E.mode ≠ .rootb := by rw [hm]; simp
+    refine ⟨_, RhsT.copyBor hc (by rw [liftE_live]; exact hl) (by rw [liftE_mode y hrb, hm]; rfl),
+      fun x => ?_⟩
+    rw [liftE_indep hrb x y]; exact EntryWeaker.refl _
+  | @borrow y Ey t hy hl ht =>
+    have hc : S.canon Γa (S.ρ y) = some (S.liftE y Ey) := by rw [canon_ρ h, hy]; rfl
+    refine ⟨_, RhsT.borrow hc (by rw [liftE_live]; exact hl) (by rw [liftE_ty' h hab hy]; exact ht),
+      fun x => ?_⟩
+    refine EntryWeaker.mk' (by rw [liftE_ty x (by simp)]; exact (liftE_ty' h hab hy).symm)
+      (by simp [liftE, liftMode]) (by simp) (by simp [liftE]) (fun _ => ?_) ?_
+    · simp only [liftE, reduceCtorEq, ↓reduceIte, liftMode, Mode.ownSlot, Bool.false_eq_true]
+      exact derive_lift h hab hy .self
+    · simp only [liftE, reduceCtorEq, ↓reduceIte]; exact held_lift h hab hy
+  | @«at» y i Ey t hy hl ht hi =>
+    have hc : S.canon Γa (S.ρ y) = some (S.liftE y Ey) := by rw [canon_ρ h, hy]; rfl
+    exact ⟨_, RhsT.at hc (by rw [liftE_live]; exact hl) (by rw [liftE_ty' h hab hy]; exact ht)
+      (exprT_ren h hab hi), fun x => elemE_lift h hab hy t x⟩
+  | @view y Ey t hy hl ht hhv =>
+    have hc : S.canon Γa (S.ρ y) = some (S.liftE y Ey) := by rw [canon_ρ h, hy]; rfl
+    refine ⟨_, RhsT.view hc (by rw [liftE_live]; exact hl) (by rw [liftE_ty' h hab hy]; exact ht) hhv,
+      fun x => ?_⟩
+    refine EntryWeaker.mk' (by simp [liftE]) (by simp [liftE, liftMode])
+      (by simp) (by simp [liftE]) (fun _ => ?_) ?_
+    · simp only [liftE, reduceCtorEq, ↓reduceIte, liftMode, Mode.ownSlot, Bool.false_eq_true]
+      exact derive_lift h hab hy .view
+    · simp only [liftE, reduceCtorEq, ↓reduceIte]; exact held_lift h hab hy
+  | @sat y i Ey t hy hl ht hi =>
+    have hc : S.canon Γa (S.ρ y) = some (S.liftE y Ey) := by rw [canon_ρ h, hy]; rfl
+    exact ⟨_, RhsT.sat hc (by rw [liftE_live]; exact hl) (by rw [liftE_ty' h hab hy]; exact ht)
+      (exprT_ren h hab hi), fun x => elemE_lift h hab hy t x⟩
+  | @pop y Ey t hy hl ht hcan hyF =>
+    have hc : S.canon Γa (S.ρ y) = some (S.liftE y Ey) := by rw [canon_ρ h, hy]; rfl
+    have hrb : Ey.mode ≠ .rootb := by
+      rcases hcan with hm | ⟨b, hm, _⟩ <;> rw [hm] <;> simp
+    rw [canon_kill h hab (allowed_canDo hab hy ht hcan)]
+    exact ⟨_, RhsT.pop hc (by rw [liftE_live]; exact hl) (by rw [liftE_ty' h hab hy]; exact ht)
+      (by rw [liftE_mode y hrb]; exact canDo_lift hcan) (h.Fcout y), fun x => popE_lift h hab hy t x⟩
 
 end RSetup
 
