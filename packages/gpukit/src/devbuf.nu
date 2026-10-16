@@ -36,6 +36,19 @@ raw : GkHBuf {
     ? GkMem mem
 }
 
+// A device buffer of BYTES that a checked kernel only reads — a quantised
+// weight's blocks, kept as the file stores them (gk_call_bytes_in). In the
+// kernel `LD(q, i)` is byte i (0–255), and `LD16(q, i)` / `LD32(q, i)` the
+// little-endian 16- / 32-bit word holding byte i — the word starting at
+// i rounded down to a multiple of 2 / 4, so a word load never straddles an
+// alignment the device would fault on. Its start is 4-byte aligned and it
+// holds at least 4 bytes (gk_bbuf_of refuses anything else).
+raw : GkBBuf {
+    i dptr
+    i n
+    ? GkMem mem
+}
+
 // The owner of one pooled block: its device pointer and the kit whose
 // pool it came from (held, so the kit — and its device — outlive it).
 // A census kit's block is `host` itself — bytes this owner holds, given

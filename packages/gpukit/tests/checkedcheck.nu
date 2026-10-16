@@ -390,6 +390,241 @@ ST(o, gid, s + LD(acc, 9) - LD(acc, 3));` 2 64 )
     } { ( nurl_print `FAIL mixed upload batch\n` ) = g_fail + g_fail 1 }
 }
 
+// Byte buffers: LD a byte, LD16 / LD32 the aligned word holding it, F16
+// of a word's bits; LD16 on any other buffer is refused.
+@ qrun GpuKit kit → v {
+    : ~ ( Vec u ) bytes ( vec_new [u] )
+    : ~ i k 0
+    ~ < k 64 { ( vec_push [u] bytes # u * k 3 ) = k + k 1 }
+    // bytes 8..9 hold the f16 1.5 (0x3E00), little endian
+    ( vec_put [u] bytes 8 0 ) ( vec_put [u] bytes 9 62 )
+    : GkBBuf q ( gk_bbuf_new kit 64 )
+    : b up ( gk_bbuf_upload_bytes kit q ( slice_from_vec [u] bytes ) )
+    : GkBuf o ( gk_dbuf_new kit 8 GK_F64 )
+    : ~ GkCall c ( gk_call_new )
+    ( gk_call_bytes_in c `q` q ) ( gk_call_dev c `o` o )
+    : b ran ( gk_run_checked_dev kit c `bytes` `if (gid == 0) {
+    ST(o, 0, (double)LD(q, 5));
+    ST(o, 1, (double)LD16(q, 3));
+    ST(o, 2, (double)LD32(q, 6));
+    ST(o, 3, (double)LD(q, 1000));
+    ST(o, 4, (double)LD32(q, 1000));
+    ST(o, 5, (double)F16(LD16(q, 8)));
+    ST(o, 6, (double)(signed char)LD(q, 63));
+    ST(o, 7, (double)LD16(q, -1));
+}` 1 32 )
+    : ~ ( Vec f ) g ( vec_zeroed [f] 8 )
+    : b _d ( gk_dbuf_download kit o g )
+    // byte 5 = 15; word 1 (bytes 2,3) = 6 | 9<<8; word 1 of 32 (bytes 4..7) =
+    // 12 | 15<<8 | 18<<16 | 21<<24; byte 1000 → the last byte (189); word
+    // 1000/4 → the last word (bytes 60..63); F16 0x3E00 = 1.5; byte 63 = 189
+    // as signed char = -67; a negative index reads the last word too
+    : f w1 # f + 6 * 9 256
+    : f w32 # f + + + 12 * 15 256 * 18 65536 * 21 16777216
+    : f wlast # f + + + 180 * 183 256 * 186 65536 * 189 16777216
+    : f h63 # f + 186 * 189 256
+    ? & & & up ran & == ( vec_at [f] g 0 ) 15.0 == ( vec_at [f] g 1 ) w1 & & == ( vec_at [f] g 2 ) w32 == ( vec_at [f] g 3 ) 189.0 & & == ( vec_at [f] g 4 ) wlast == ( vec_at [f] g 5 ) 1.5 & == ( vec_at [f] g 6 ) -67.0 == ( vec_at [f] g 7 ) h63 {
+        ( nurl_print `ok   a byte buffer reads bytes, aligned 16/32-bit words and f16 bits; past the end, the last byte or word\n` )
+    } { ( nurl_print `FAIL byte buffer loads: ` ) ( nurl_print ( gk_checked_error c ) ) ( nurl_print `\n` ) = g_fail + g_fail 1 }
+    // LD16 needs a byte buffer; a byte buffer is never written
+    : GkBuf fb ( gk_dbuf_new kit 8 GK_F32 )
+    : ~ GkCall c2 ( gk_call_new )
+    ( gk_call_dev_in c2 `x` fb ) ( gk_call_dev c2 `o` o )
+    : b bad1 ( gk_run_checked_dev kit c2 `ld16f` `ST(o, 0, (double)LD16(x, 0));` 1 32 )
+    : ~ GkCall c3 ( gk_call_new )
+    ( gk_call_bytes_in c3 `q` q ) ( gk_call_dev c3 `o` o )
+    : b bad2 ( gk_run_checked_dev kit c3 `stq` `ST(q, 0, 1);` 1 32 )
+    ? | bad1 bad2 { ( nurl_print `FAIL LD16 on a float buffer or a store into bytes was launched\n` ) = g_fail + g_fail 1 } { ( nurl_print `ok   refuses LD16 on a non-byte buffer and a store into a byte buffer\n` ) }
+    // a written byte buffer: ST stores the low byte; the read-only view of
+    // the same bytes cannot be bound beside it
+    : GkBBuf qw ( gk_bbuf_new kit 8 )
+    : ~ GkCall c5 ( gk_call_new )
+    ( gk_call_bytes c5 `w` qw )
+    : b wr ( gk_run_checked_dev kit c5 `stb` `if (gid < 8) { ST(w, gid, 250 + gid * 3); } ST(w, 99, 1);` 1 32 )
+    : ~ ( Vec u ) back ( vec_zeroed [u] 8 )
+    : GkBuf qwf ( gk_dbuf_new kit 2 GK_F32 )
+    : ~ GkCall c6 ( gk_call_new )
+    ( gk_call_bytes_in c6 `r` q ) ( gk_call_bytes c6 `w` q )
+    : b ovl ( gk_run_checked_dev kit c6 `ovl` `ST(w, gid, LD(r, gid));` 1 32 )
+    : ~ GkCall c7 ( gk_call_new )
+    ( gk_call_bytes_in c7 `r` qw ) ( gk_call_dev c7 `o` o )
+    : b rd ( gk_run_checked_dev kit c7 `rdb` `if (gid < 8) { ST(o, gid, (double)LD(r, gid)); }` 1 32 )
+    : ~ ( Vec f ) g7 ( vec_zeroed [f] 8 )
+    : b _d7 ( gk_dbuf_download kit o g7 )
+    // 250, 253, 256→0, 259→3, …
+    ? & & & wr rd ! ovl & & == ( vec_at [f] g7 0 ) 250.0 == ( vec_at [f] g7 2 ) 0.0 == ( vec_at [f] g7 7 ) 15.0 {
+        ( nurl_print `ok   a written byte buffer stores low bytes; it cannot overlap a read one\n` )
+    } { ( nurl_print `FAIL byte stores: ` ) ( nurl_print ( gk_checked_error c5 ) ) ( nurl_print ( gk_checked_error c7 ) ) ( nurl_print `\n` ) = g_fail + g_fail 1 }
+    // windows over bytes: a read window of q, a strided one, one past the
+    // end (empty), and stores through a window of a written byte buffer
+    : GkBBuf qw2 ( gk_bbuf_new kit 8 )
+    : ~ GkCall c8 ( gk_call_new )
+    ( gk_call_bytes_in c8 `q` q ) ( gk_call_bytes c8 `w` qw2 ) ( gk_call_dev c8 `o` o )
+    : b wran ( gk_run_checked_dev kit c8 `bwin` `if (gid == 0) {
+    WIN(qb, q, 10, 4);
+    double s = 0.0;
+    for (int j = 0; j < LEN(qb); j++) { s += (double)LD(qb, j); }
+    ST(o, 0, s);
+    WINS(qs, q, 1, 3, 20);
+    ST(o, 1, (double)(LD(qs, 0) + LD(qs, 1) + LD(qs, 2)));
+    WIN(qx, q, 60, 8);
+    ST(o, 2, (double)LEN(qx));
+    WIN(wb, w, 2, 4);
+    for (int j = 0; j < 6; j++) { ST(wb, j, 200 + j * 20); }
+}` 1 32 )
+    : ~ GkCall c9 ( gk_call_new )
+    ( gk_call_bytes_in c9 `r` qw2 ) ( gk_call_dev c9 `o` o )
+    : b wrd ( gk_run_checked_dev kit c9 `bwrd` `if (gid < 5) { ST(o, 3 + gid, (double)LD(r, gid + 2)); }` 1 32 )
+    : ~ ( Vec f ) g9 ( vec_zeroed [f] 8 )
+    : b _d9 ( gk_dbuf_download kit o g9 )
+    // q[10..14) = 30+33+36+39 = 138; q[1], q[21], q[41] = 3+63+123 = 189;
+    // q[60..68) runs past the end (empty); w[2..6) = 200, 220, 240, 260→4,
+    // the rest dropped — o[3..8) = w[2..7) = 200 220 240 4 0
+    : b bw & & == ( vec_at [f] g9 3 ) 200.0 == ( vec_at [f] g9 4 ) 220.0 & & == ( vec_at [f] g9 5 ) 240.0 == ( vec_at [f] g9 6 ) 4.0 == ( vec_at [f] g9 7 ) 0.0
+    ? & & & wran wrd & == ( vec_at [f] g9 0 ) 138.0 == ( vec_at [f] g9 1 ) 189.0 & == ( vec_at [f] g9 2 ) 0.0 bw {
+        ( nurl_print `ok   windows over bytes read and store bytes in their range\n` )
+    } {
+        ( nurl_print `FAIL byte windows: ` ) ( nurl_print ( gk_checked_error c8 ) ) ( nurl_print ( gk_checked_error c9 ) )
+        : ~ String vs ( string_new )
+        : ~ i q 0
+        ~ < q 8 { ( string_push_str vs ` ` ) ( string_push_float vs ( vec_at [f] g9 q ) ) = q + q 1 }
+        ( nurl_print ( string_data vs ) ) ( nurl_print `\n` ) = g_fail + g_fail 1
+    }
+    : ~ GkCall c10 ( gk_call_new )
+    ( gk_call_bytes_in c10 `q` q ) ( gk_call_dev c10 `o` o )
+    : b bad3 ( gk_run_checked_dev kit c10 `bwst` `WIN(qb, q, 0, 4); ST(qb, 0, 1);` 1 32 )
+    : b bad4 ( gk_run_checked_dev kit c10 `bwld32` `WIN(qb, q, 0, 4); ST(o, 0, (double)LD32(qb, 0));` 1 32 )
+    ? | bad3 bad4 { ( nurl_print `FAIL a store into a read byte window or LD32 through a window was launched\n` ) = g_fail + g_fail 1 } { ( nurl_print `ok   refuses a store into a read byte window and LD32 through a window\n` ) }
+    // views: 4-byte aligned starts, at least 4 bytes, inside the buffer
+    : GkBuf base ( gk_dbuf_new kit 4 GK_F32 )
+    ? & & ( gk_bbuf_ok ( gk_bbuf_of base 4 12 ) ) ! ( gk_bbuf_ok ( gk_bbuf_of base 2 8 ) ) & ! ( gk_bbuf_ok ( gk_bbuf_of base 0 3 ) ) ! ( gk_bbuf_ok ( gk_bbuf_of base 8 12 ) ) {
+        ( nurl_print `ok   a byte view starts 4-byte aligned, holds a word and stays inside its buffer\n` )
+    } { ( nurl_print `FAIL byte view bounds\n` ) = g_fail + g_fail 1 }
+}
+
+// LD4: the aligned group of four f32 holding element i, in one load; a
+// buffer that is not 16-byte aligned is refused, and LD4's targets are per
+// thread for SYNC's rule.
+@ v4run GpuKit kit → v {
+    : ~ ( Vec f ) xs ( vec_new [f] )
+    : ~ i k 0
+    ~ < k 10 { ( vec_push [f] xs # f + k 1 ) = k + k 1 }
+    : GkBuf x ( gk_dbuf_new kit 10 GK_F32 )
+    : b _u ( gk_dbuf_upload kit x xs )
+    : GkBuf o ( gk_dbuf_new kit 8 GK_F64 )
+    : ~ GkCall c ( gk_call_new )
+    ( gk_call_dev_in c `x` x ) ( gk_call_dev c `o` o )
+    : b ran ( gk_run_checked_dev kit c `ld4` `float a = 0.0f; float b = 0.0f; float e = 0.0f; float d = 0.0f;
+if (gid == 0) {
+    LD4(x, 5, a, b, e, d);
+    ST(o, 0, (double)a); ST(o, 1, (double)d);
+    LD4(x, 9, a, b, e, d);
+    ST(o, 2, (double)a); ST(o, 3, (double)d);
+    LD4(x, -3, a, b, e, d);
+    ST(o, 4, (double)a);
+}` 1 32 )
+    : ~ ( Vec f ) g ( vec_zeroed [f] 8 )
+    : b _d ( gk_dbuf_download kit o g )
+    // element 5 is in the group 4..7 (5, 8); element 9's group 8..11 is not
+    // whole, so the last whole group 4..7 is read; a negative index too
+    ? & & ran & == ( vec_at [f] g 0 ) 5.0 == ( vec_at [f] g 1 ) 8.0 & & == ( vec_at [f] g 2 ) 5.0 == ( vec_at [f] g 3 ) 8.0 == ( vec_at [f] g 4 ) 5.0 {
+        ( nurl_print `ok   LD4 reads an aligned group of four, past the end the last whole group\n` )
+    } { ( nurl_print `FAIL LD4 loads: ` ) ( nurl_print ( gk_checked_error c ) ) ( nurl_print `\n` ) = g_fail + g_fail 1 }
+    // a view one element in is 4-byte aligned only; an f64 buffer is not f32
+    : GkBuf xv ( gk_buf_view x 1 8 )
+    : ~ GkCall c2 ( gk_call_new )
+    ( gk_call_dev_in c2 `x` xv ) ( gk_call_dev c2 `o` o )
+    : b bad1 ( gk_run_checked_dev kit c2 `ld4` `float a = 0.0f; float b = 0.0f; float e = 0.0f; float d = 0.0f;
+if (gid == 0) {
+    LD4(x, 5, a, b, e, d);
+    ST(o, 0, (double)a); ST(o, 1, (double)d);
+    LD4(x, 9, a, b, e, d);
+    ST(o, 2, (double)a); ST(o, 3, (double)d);
+    LD4(x, -3, a, b, e, d);
+    ST(o, 4, (double)a);
+}` 1 32 )
+    : ~ GkCall c3 ( gk_call_new )
+    ( gk_call_dev_in c3 `x` o ) ( gk_call_dev c3 `o` x )
+    : b bad2 ( gk_run_checked_dev kit c3 `ld4d` `float a = 0.0f; float b = 0.0f; float e = 0.0f; float d = 0.0f; LD4(x, 0, a, b, e, d); ST(o, gid, a);` 1 32 )
+    // a SYNC behind an LD4 value is behind a per-thread value
+    : ~ GkCall c4 ( gk_call_new )
+    ( gk_call_dev_in c4 `x` x ) ( gk_call_dev c4 `o` o )
+    : b bad3 ( gk_run_checked_dev kit c4 `ld4s` `float a = 0.0f; float b = 0.0f; float e = 0.0f; float d = 0.0f;
+LD4(x, tid, a, b, e, d);
+if (a > 2.0f) { SYNC(); }
+ST(o, 0, (double)a);` 1 32 )
+    ? | | bad1 bad2 bad3 { ( nurl_print `FAIL an LD4 over a misaligned or f64 buffer, or a SYNC behind it, was launched\n` ) = g_fail + g_fail 1 } { ( nurl_print `ok   refuses LD4 on a misaligned or non-f32 buffer, and a SYNC behind an LD4 value\n` ) }
+}
+
+// Windows: WIN / WINS over a device buffer; a window out of its buffer
+// is empty; LD / ST through one; refusals.
+@ wrun GpuKit kit → v {
+    : ~ ( Vec f ) xs ( vec_new [f] )
+    : ~ i k 0
+    ~ < k 12 { ( vec_push [f] xs # f + k 1 ) = k + k 1 }
+    : GkBuf x ( gk_dbuf_new kit 12 GK_F64 )
+    : b _u ( gk_dbuf_upload kit x xs )
+    : GkBuf o ( gk_dbuf_new kit 12 GK_F64 )
+    : b _z ( gk_dbuf_upload kit o ( vec_zeroed [f] 12 ) )
+    : ~ GkCall c ( gk_call_new )
+    ( gk_call_dev_in c `x` x ) ( gk_call_dev c `o` o ) ( gk_call_i64 c `n` 4 )
+    : b ran ( gk_run_checked_dev kit c `win` `if (gid == 0) {
+    WIN(row, x, 4, n);
+    double s = 0.0;
+    for (long long j = 0; j < LEN(row); j++) { s += LD(row, j); }
+    ST(o, 0, s);
+    WINS(col, x, 1, 3, 4);
+    double t = 0.0;
+    for (long long j = 0; j < LEN(col); j++) { t += LD(col, j); }
+    ST(o, 1, t);
+    WIN(bad, x, 10, 5);
+    ST(o, 2, (double)LEN(bad));
+    ST(o, 3, LD(bad, 7));
+    WINS(far, x, 2, 4, 4);
+    ST(o, 4, (double)LEN(far));
+    WIN(ow, o, 5, 3);
+    for (long long j = 0; j < 4; j++) { ST(ow, j, 9.0); }
+    WIN(e, x, 1000000, 0);
+    ST(o, 8, LD(e, 0) + (double)LEN(e));
+    long long k = 3;
+    double v = LD(row, k++);
+    WIN(o2, o, 10, 2);
+    long long m = 1;
+    ST(o2, m++, v + (double)k);
+    ST(o, 10, (double)m);
+    ST(o, 9, LD(row, LD(col, 0) + 0.5) + LD(row, (int)LD(row, 0) - 4));
+}` 1 32 )
+    : ~ ( Vec f ) g ( vec_zeroed [f] 12 )
+    : b _d ( gk_dbuf_download kit o g )
+    // row = x[4..8) = 5+6+7+8; col = x[1], x[5], x[9] = 2+6+10; a window
+    // past the end is empty and reads the buffer's first element; 2+3·4 = 14
+    // is past the end too; ST through a window stops at its length; an
+    // empty window past the end is the empty window at 0 (reads x[0] = 1);
+    // an index with a side effect is evaluated once: row[3] = 8, k = 4,
+    // the store lands at o2[1] = o[11] and m = 2; a window's load may index
+    // by another (col[0] = 2 → row[2] = 7) and by a float, truncated as
+    // LD's index is (2.5 → 2, row[2] = 7), and by an int (5 - 4 → row[1] = 6)
+    : b more & & == ( vec_at [f] g 8 ) 1.0 == ( vec_at [f] g 11 ) 12.0 & == ( vec_at [f] g 10 ) 2.0 == ( vec_at [f] g 9 ) 13.0
+    ? & more & & ran & == ( vec_at [f] g 0 ) 26.0 == ( vec_at [f] g 1 ) 18.0 & & == ( vec_at [f] g 2 ) 0.0 == ( vec_at [f] g 3 ) 1.0 & & == ( vec_at [f] g 4 ) 0.0 == ( vec_at [f] g 5 ) 9.0 & == ( vec_at [f] g 7 ) 9.0 == ( vec_at [f] g 6 ) 9.0 {
+        ( nurl_print `ok   windows read and write their range; one outside its buffer is empty\n` )
+    } {
+        ( nurl_print `FAIL windows: ` ) ( nurl_print ( gk_checked_error c ) )
+        : ~ String vs ( string_new )
+        : ~ i q 0
+        ~ < q 12 { ( string_push_str vs ` ` ) ( string_push_float vs ( vec_at [f] g q ) ) = q + q 1 }
+        ( nurl_print ( string_data vs ) ) ( nurl_print `\n` ) = g_fail + g_fail 1
+    }
+    // refusals: a window into a read-only window's buffer cannot be written,
+    // a name used twice, a SYNC behind a window's length
+    : ~ GkCall c2 ( gk_call_new )
+    ( gk_call_dev_in c2 `x` x ) ( gk_call_dev c2 `o` o )
+    : b bad1 ( gk_run_checked_dev kit c2 `wst` `WIN(r, x, 0, 4); ST(r, 0, 1.0);` 1 32 )
+    : b bad2 ( gk_run_checked_dev kit c2 `wdup` `WIN(r, x, 0, 4); WIN(r, x, 4, 4); ST(o, 0, LD(r, 0));` 1 32 )
+    : b bad3 ( gk_run_checked_dev kit c2 `wsync` `WIN(r, x, tid, 4); if (LEN(r) > 2) { SYNC(); } ST(o, 0, LD(r, 0));` 1 32 )
+    : b bad4 ( gk_run_checked_dev kit c2 `wexpr` `double v = 1.0 + WIN(r, x, 0, 4); ST(o, 0, v);` 1 32 )
+    ? | | | bad1 bad2 bad3 bad4 { ( nurl_print `FAIL a store into a read window, a window declared twice, a SYNC behind a window or a window in an expression was launched\n` ) = g_fail + g_fail 1 } { ( nurl_print `ok   refuses a store into a read window, a name twice, a SYNC behind one, one inside an expression\n` ) }
+}
+
 @ main → i {
     : GpuKit kit ( gk_open_best )
     ? ( gk_ok kit ) {} { ( nurl_print `SKIP no device\n` ) ^ 0 }
@@ -401,6 +636,9 @@ ST(o, gid, s + LD(acc, 9) - LD(acc, 3));` 2 64 )
     ( xrun kit )
     ( rrun kit )
     ( urun kit )
+    ( qrun kit )
+    ( v4run kit )
+    ( wrun kit )
     ? == g_fail 0 { ( nurl_print `checked: all passed\n` ) } { ( nurl_print `checked: FAILURES\n` ) }
     ^ 0
 }

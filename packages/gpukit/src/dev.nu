@@ -123,6 +123,48 @@ unsafe @ __gk_hupload_view GkHBuf h ( Slice u ) src → b {
     ^ == ( gpu_upload ( gpu_buffer_view . h dptr * . h n 2 ) ( slice_data [u] src ) ) 0
 }
 
+// ── byte buffers (GkBBuf) ───────────────────────────────────────────
+
+// Another owner of the same view (what a call binding holds, so the caller
+// keeps its own).
+unsafe @ _gk_hbuf_share GkHBuf h → GkHBuf { ^ @ GkHBuf { . h dptr . h n . h bf ( __gk_mem_share . h mem ) } }
+
+unsafe @ _gk_bbuf_share GkBBuf q → GkBBuf { ^ @ GkBBuf { . q dptr . q n ( __gk_mem_share . q mem ) } }
+
+unsafe @ gk_bbuf_none → GkBBuf { ^ @ GkBBuf { 0 0 ( __gk_nomem ) } }
+
+@ gk_bbuf_ok GkBBuf q → b { ^ != . q dptr 0 }
+
+@ gk_bbuf_len GkBBuf q → i { ^ . q n }
+
+// `n` bytes at byte offset `boff` into `b`: a view holding `b`'s block, none
+// unless the bytes are inside b, boff is a multiple of 4 and n is at least
+// 4 (so every word a kernel can name lies inside the view).
+unsafe @ gk_bbuf_of GkBuf b i boff i n → GkBBuf {
+    : i have ( _gk_p2 . b n ( __gk_esz . b dtype ) )
+    ? | | | < boff 0 < n 4 < have 0 > n - have boff { ^ ( gk_bbuf_none ) } {}
+    ? | != 0 % boff 4 ! ( gk_buf_ok b ) { ^ ( gk_bbuf_none ) } {}
+    ^ @ GkBBuf { + . b dptr boff n ( __gk_mem_share . b mem ) }
+}
+
+// A new buffer of `n` bytes (contents undefined until uploaded).
+@ gk_bbuf_new GpuKit kit i n → GkBBuf {
+    ? < n 4 { ^ ( gk_bbuf_none ) } {}
+    : GkBuf b ( gk_dbuf_new kit / + n 3 4 GK_F32 )
+    ^ ( gk_bbuf_of b 0 n )
+}
+
+// Upload exactly the buffer's bytes from a checked view of them.
+@ gk_bbuf_upload_bytes GpuKit kit GkBBuf q ( Slice u ) src → b {
+    ? ( gk_bbuf_ok q ) {} { ^ F }
+    ? != ( slice_len [u] src ) . q n { ^ F } {}
+    ^ ( __gk_bupload_view q src )
+}
+
+unsafe @ __gk_bupload_view GkBBuf q ( Slice u ) src → b {
+    ^ == ( gpu_upload ( gpu_buffer_view . q dptr . q n ) ( slice_data [u] src ) ) 0
+}
+
 // A buffer over device memory something else owns (another package's
 // allocation, a raw pointer out of a C library). It owns nothing: the
 // caller vouches (`raw`) that `dptr` holds `n` elements of `dtype` and
@@ -393,6 +435,21 @@ unsafe @ __gk_upload_view GkBuf b ( Slice u ) src → b {
 // (`dst` has room for the buffer's bytes: checked by the caller above.)
 unsafe @ __gk_download_view GkBuf b ( Slice u ) dst → b {
     ^ == ( gpu_download ( slice_data [u] dst ) ( gpu_buffer_view . b dptr * . b n ( __gk_esz . b dtype ) ) ) 0
+}
+
+// Device → page-locked host memory (a GpuHost from gpu_host_alloc): all of
+// the buffer's bytes into the front of `h`. F unless `h` has room for them.
+// A view of the buffer downloads part of it.
+@ gk_dbuf_download_host GpuKit kit GkBuf b GpuHost h → b {
+    ? ( gk_buf_ok b ) {} { ^ F }
+    : i bytes ( _gk_p2 . b n ( __gk_esz . b dtype ) )
+    ? | < bytes 1 > bytes ( gpu_host_bytes h ) { ^ F } {}
+    ^ ( __gk_download_host b h bytes )
+}
+
+// (`h` holds at least `bytes`, the buffer's own size: checked above.)
+unsafe @ __gk_download_host GkBuf b GpuHost h i bytes → b {
+    ^ == ( gpu_download ( gpu_host_ptr h ) ( gpu_buffer_view . b dptr bytes ) ) 0
 }
 
 // Device → device: all of `src` into the front of `dst`. F unless both are

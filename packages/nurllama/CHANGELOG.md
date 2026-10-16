@@ -2,6 +2,27 @@
 
 All notable changes to the `nurllama` package.
 
+## [0.22.0] — 2026-10-16
+
+- **Every kernel is a gpukit checked kernel.** The 39 CUDA-C kernels launched over raw device addresses are gone: a weight is a byte buffer (`GkBBuf`) read with byte, 16- and 32-bit word loads, activations are `GkBuf`s, and every load and store is bounds-checked. `unsafe` 3 → 0, `raw` 18 → 0. The engine holds no device address.
+- **Same bits.** Each new kernel was compared with the raw one it replaces on random inputs over every routing (145 cases on CUDA, 77 on the CPU backend), all identical. Logits, greedy tokens and prefill hashes are identical on Qwen3-0.6B Q8_0, Qwen3-4B Q8_0, Qwen3-14B Q4_K_M and SmolLM-135M Q4_K_M, on CUDA and on the CPU backend.
+- **Faster on an RTX 4090:**
+
+  | Model | Decode, ms a token | Prompt of 150 |
+  |---|---|---|
+  | Qwen3-14B Q4_K_M | 56.7 → 50.7 | 6.3 → 5.3–5.6 s |
+  | Qwen3-0.6B Q8_0 | 3.81 → 3.63 | 75.2 → 74.5 ms (repeated) |
+  | Qwen3-4B Q8_0 | 9.93 → 9.89 | 532 → 539 ms |
+  | SmolLM-135M Q4_K_M | 2.84 → 2.48 | 31.5 → 29.4 ms (repeated) |
+
+  - The decode attention is one block per position and head: the block's maximum through shared memory, each softmax weight computed once into a shared tile, and every thread summing in position order — the old kernel's bits, without each of the head's threads recomputing every weight (17.8 → 10.0 µs a layer on Qwen3-0.6B). The score pass and RMSNorm stay 4–6 % behind their raw originals (11.8 → 12.5 µs, 9.3 → 9.7 µs).
+  - Q6_K's matvec is 26–28 % faster than the raw one and Q4_K / Q5_K are level or faster. A block is a window: every offset inside it is a constant plus a loop counter, so no check is left in the block.
+  - Up to four call shapes stay recorded (a prompt's 64-position chunks, its remainder, decode), each replayed with the new position. The single kept plan used to be recorded again twice per prompt, as chunk and remainder took turns.
+  - A chunk's embedding rows go to the device in one copy rather than one per row.
+- **The CPU backend** (i7-5930K, 8 threads): decode 112 → 82 ms a token. A single-position q8_0 matvec computes four blocks' products in one loop the host compiler vectorises and sums them in element order (1.5× its raw original), RMSNorm takes a row per thread (the sum once, not once per element), and attention's scores take a row per thread. The prompt is still slower, 6.7 → 7.2–7.7 s for 150 positions: the raw batch matvec was vectorised across positions by the host compiler, and through checked loads it is not yet.
+- A first prompt costs a few milliseconds more than before (each kernel is checked and each call shape recorded on first use) and loading costs less (13 kernel modules loaded instead of 39).
+- `finetune.nu`: four locals that shadowed outer names are renamed.
+
 ## [0.21.3] — 2026-10-15
 
 - The API server's text settings (the resident model's name, the store root, the wizard's model, token and history path, `--weights`) are a `( Locked ApiCfg )` read as copies. As string globals they were replaced at run time (a model switch renames the resident model) while other requests read them, and the compiler now refuses that in safe code.

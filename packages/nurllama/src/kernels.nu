@@ -1,1356 +1,794 @@
 // packages/nurllama/src/kernels.nu — the LLM decode ops as GPU kernels.
 //
-// CUDA-C sources compiled once through packages/gpu (NVRTC on the CUDA
-// backend; the SAME source runs on the CPU/OpenMP backend, so every
-// kernel below deliberately avoids __shared__ / __syncthreads__ —
-// each thread computes its output independently, exactly like the
-// onnx op set). Decode-step shapes (one token at a time) keep the
-// naive forms honest: the matvecs dominate and each row is one
-// thread's serial dot product.
+// Every kernel is a CHECKED kernel (packages/gpukit): it reaches device memory
+// only through LD / ST (and LD16 / LD32 / LD4) over the buffers its launcher
+// binds, and every index is checked against that buffer's length. A launcher
+// takes the buffers themselves — GkBuf for floats, GkBBuf for a weight's GGUF
+// bytes — never their addresses, so a wrong size or offset can give a wrong
+// number but never a read or write outside the model's memory: every
+// launcher is a plain safe function, and so is the engine that calls them.
+// The same kernels run on gpukit's CPU backend.
+//
+// A launcher RECORDS its launch and appends it to a plan (a Vec GkLaunch);
+// the engine records one evaluation's launches and replays them, giving the
+// next call only the scalars that changed (its position).
 //
 // Layout contracts (ggml row-major, ne0 fastest):
 //   weight W[out,in]  → W[r*in + c], matvec y[r] = Σc W[r*in+c]·x[c]
 //   K/V cache         → cache[t*(n_kv·hd) + kh*hd + d]
 //   q/k activations   → x[h*hd + d]
+//
+// Offsets are scalars, not views: `woff` (bytes of a quantised W, elements
+// of an f32 / f16 one), `xoff` and `yoff` (elements) move a launch inside its
+// buffers — a MoE expert's rows, the last position's activation — without a
+// view whose start would break the alignment the word loads rely on.
 
 $ `stdlib/core/vec.nu`
+$ `stdlib/core/string.nu`
 $ `deps/gpu/src/gpu.nu`
+$ `deps/gpukit/src/gpukit.nu`
+$ `deps/gpukit/src/dev.nu`
 
-: LlmKernels {
-    GpuKernel matvec
-    GpuKernel mv_q4_0
-    GpuKernel mv_q8_0
-    GpuKernel mv_f32_b
-    GpuKernel mv_q8_0_b
-    GpuKernel mv_q5_0
-    GpuKernel mv_q5_1
-    GpuKernel mv_q4_k
-    GpuKernel mv_q5_k
-    GpuKernel mv_q6_k
-    GpuKernel mv_f16
-    GpuKernel w_f32
-    GpuKernel w_q4_0
-    GpuKernel w_q8_0
-    GpuKernel w_q4_k
-    GpuKernel w_q6_k
-    GpuKernel w_q5_0
-    GpuKernel w_q5_1
-    GpuKernel w_q5_k
-    b warp
-    GpuKernel rmsnorm
-    GpuKernel rope
-    GpuKernel rope_neox
-    GpuKernel attn
-    GpuKernel attn_sc
-    GpuKernel attn_out
-    GpuKernel silumul
-    GpuKernel gelumul
-    GpuKernel scale
-    GpuKernel addv
-    GpuKernel addrow
-    GpuKernel copyat
-    GpuKernel axpy
-    GpuKernel mv_exp_f32
-    GpuKernel mv_exp_q8_0
-    GpuKernel moe_scatter
-    GpuKernel moe_route
-    GpuKernel argmax_conf
-    GpuKernel argmax_conf_w
-    GpuKernel q8_repack
-    b ok
+// A weight tensor on the device, in its GGUF form: `gt` the ggml type and
+// `q` its bytes (the quantised blocks — or, for the float types, the f32 /
+// f16 elements' bytes), and for the float types the same memory as f32
+// (`f`, gt 0) or halves (`h`, gt 1). Q8_0 is held in the SPLIT row layout
+// lk_q8_repack produces.
+: LkW { i gt GkBBuf q GkBuf f GkHBuf h }
+
+@ lk_w_none → LkW { ^ @ LkW { -1 ( gk_bbuf_none ) ( gk_buf_none GK_F32 ) ( gk_hbuf_none ) } }
+
+@ lk_w_ok LkW w → b { ^ >= . w gt 0 }
+
+// Record `body` over `c`, append it to `plan`. F (and why, on stderr — a
+// refused kernel is a bug in this file) when it is refused.
+@ __lk_rec GpuKit kit inout GkCall c s name s body i nblocks i block inout ( Vec GkLaunch ) plan → b {
+    : GkLaunch l ( gk_record_dev kit c name body nblocks block )
+    ? ( gk_launch_ok l ) {} {
+        ( nurl_eprint `nurllama: kernel ` ) ( nurl_eprint name ) ( nurl_eprint `: ` )
+        ( nurl_eprintln ( gk_checked_error c ) )
+        ^ F
+    }
+    ( vec_push [GkLaunch] plan l )
+    ^ T
 }
 
-// Kernel sources assembled from shared device helpers: an owned String
-// (__lk_compile hands its text to the compiler).
-@ __lk_cat2 s a s b → String {
-    : String r ( string_from a )
-    ( string_push_str r b )
+// Replay `plan`, in order. F on a device error.
+@ lk_run ( Vec GkLaunch ) plan → b {
+    : ~ b r T
+    : ~ i j 0
+    ~ & r < j ( vec_len [GkLaunch] plan ) {
+        = r ( gk_replay ( vec_at [GkLaunch] plan j ) )
+        = j + j 1
+    }
     ^ r
+}
+
+// Give scalar `name` of the plan's launch `at` the value `x`.
+@ lk_set inout ( Vec GkLaunch ) plan i at s name i x → b {
+    ^ ( vec_apply [GkLaunch b] plan at F \ inout GkLaunch l → b { ^ ( gk_launch_set_i64 l name x ) } )
 }
 
 @ __lk_cat3 s a s b s c → String {
-    : String r ( __lk_cat2 a b )
-    ( string_push_str r c )
-    ^ r
+    : ~ String o ( string_from a )
+    ( string_push_str o b ) ( string_push_str o c )
+    ^ o
 }
 
-@ __lk_cat4 s a s b s c s d → String {
-    : String r ( __lk_cat3 a b c )
-    ( string_push_str r d )
-    ^ r
+// ── matvec: y[yoff + b·rows + r] = Σc W[r, c] · x[xoff + b·cols + c] ──
+
+// One thread per output: the portable f32 matvec.
+@ __lk_mv_body → s {
+    ^ `if (gid < rows * batch) {
+    long long b = gid / rows;
+    long long r = gid % rows;
+    long long w0 = woff + r * cols;
+    long long x0 = xoff + b * cols;
+    float acc = 0.0f;
+    for (long long c = 0; c < cols; c++) { acc += LD(W, w0 + c) * LD(x, x0 + c); }
+    ST(y, yoff + b * rows + r, acc);
+}`
 }
 
-raw @ __lk_compile Gpu g String src s name → GpuKernel { ^ ( gpu_compile g ( string_data src ) name ) }
+// The f16 one: W bound as halves, read exactly as floats.
+@ __lk_mv_f16_body → s { ^ ( __lk_mv_body ) }
 
-@ __lk_matvec → s {
-    ^ `extern "C" __global__ void matvec(
-        const float* __restrict__ W, const float* __restrict__ x, float* __restrict__ y, int rows, int cols, int batch) {
-        int idx = blockIdx.x*blockDim.x + threadIdx.x;
-        if (idx >= rows*batch) return;
-        int b = idx / rows, r = idx % rows;
-        const float* w = W + (long long)r*cols;
-        const float* xb = x + (long long)b*cols;
-        float acc = 0.f;
-        for (int c = 0; c < cols; ++c) acc += w[c]*xb[c];
-        y[(long long)b*rows + r] = acc;
-    }`
+// One WARP per output row (CUDA): the 32 lanes stride through the row
+// together, so each warp's loads are one contiguous span, and a shuffle
+// reduction folds the lane partials. `INNER` walks lane's share of row r
+// for position b into `acc`.
+@ __lk_warp s inner → String {
+    ^ ( __lk_cat3 `long long warp = gid >> 5;
+long long lane = gid & 31;
+long long b = warp / rows;
+long long r = warp % rows;
+float acc = 0.0f;
+if (warp < rows * batch) {
+    long long x0 = xoff + b * cols;
+` inner `
 }
-
-// Every thread recomputes the sum of squares — O(n²) total, but norms
-// are dwarfed by the matvecs at decode shapes and this keeps the
-// kernel valid on the block-serial CPU backend (no cross-thread sync).
-// gemma's RMSNorm is documented as `x * inv * (1 + w)`, but the GGUF
-// converter folds that +1 into the stored weights (every norm weight in a
-// gemma GGUF is exactly the HF weight plus one — verified against the HF
-// checkpoint). Adding it again here is a double count, so this kernel is the
-// plain form for every architecture.
-@ __lk_rmsnorm → s {
-    ^ `extern "C" __global__ void rmsnorm(
-        const float* x, const float* w, float* y, int n, float eps, int batch) {
-        int idx = blockIdx.x*blockDim.x + threadIdx.x;
-        if (idx >= n*batch) return;
-        int b = idx / n, i = idx % n;
-        const float* xb = x + (long long)b*n;
-        float ss = 0.f;
-        for (int j = 0; j < n; ++j) ss += xb[j]*xb[j];
-        float inv = rsqrtf(ss/n + eps);
-        y[(long long)b*n + i] = xb[i]*inv*w[i];
-    }`
-}
-
-// Rotary embedding, ggml NORM style (llama): adjacent pairs (2j, 2j+1)
-// of the first rd dims of every head rotate by pos·base^(-2j/rd).
-@ __lk_rope → s {
-    ^ `extern "C" __global__ void rope(
-        float* x, int nh, int hd, int rd, int pos0, float base, int batch) {
-        int idx = blockIdx.x*blockDim.x + threadIdx.x;
-        int pairs = rd/2;
-        if (idx >= nh*pairs*batch) return;
-        int b = idx / (nh*pairs), p = idx % (nh*pairs);
-        x += (long long)b*nh*hd;
-        int pos = pos0 + b;
-        {
-            int h = p / pairs, j = p % pairs;
-            float theta = pos * powf(base, -2.f*j/rd);
-            float c = cosf(theta), s = sinf(theta);
-            float* v = x + h*hd + 2*j;
-            float a = v[0], b = v[1];
-            v[0] = a*c - b*s;
-            v[1] = a*s + b*c;
-        }
-    }`
-}
-
-// NEOX-style rotary (qwen2, phi, …): the rotated pairs are (j, j + rd/2)
-// — the two halves of the head's rotary span — not the adjacent (2j,
-// 2j+1) of the llama/NORM layout. Feeding a model the wrong variant
-// still runs and still produces fluent-looking garbage, which is why
-// the architecture selects it rather than a heuristic.
-@ __lk_rope_neox → s {
-    ^ `extern "C" __global__ void rope_neox(
-        float* x, int nh, int hd, int rd, int pos0, float base, int batch) {
-        int idx = blockIdx.x*blockDim.x + threadIdx.x;
-        int pairs = rd/2;
-        if (idx >= nh*pairs*batch) return;
-        int b = idx / (nh*pairs), p = idx % (nh*pairs);
-        x += (long long)b*nh*hd;
-        int pos = pos0 + b;
-        {
-            int h = p / pairs, j = p % pairs;
-            float theta = pos * powf(base, -2.f*j/rd);
-            float c = cosf(theta), s = sinf(theta);
-            float* v = x + h*hd;
-            float a = v[j], b = v[j + pairs];
-            v[j]         = a*c - b*s;
-            v[j + pairs] = a*s + b*c;
-        }
-    }`
-}
-
-// Causal attention for ONE decode position: head h attends over cache
-// rows 0..pos. One thread per head — serial softmax keeps it exact and
-// sync-free; npos·hd·2 flops per head is noise next to the matvecs.
-// GQA: query head h reads kv head h/(nh/nkv).
-@ __lk_attn → s {
-    ^ `extern "C" __global__ void attn(
-        const float* q, const float* K, const float* V, float* out,
-        float* scores, int nh, int nkv, int hd, int npos0, int batch, int maxpos) {
-        int idx = blockIdx.x*blockDim.x + threadIdx.x;
-        if (idx < nh*batch) {
-            int b = idx / nh, h = idx % nh;
-            // batch element b is at absolute position (npos0-1)+b, so it
-            // attends over npos0+b cache rows — its own causal window
-            int npos = npos0 + b;
-            q   += (long long)b*nh*hd;
-            out += (long long)b*nh*hd;
-            int kvdim = nkv*hd;
-            int kh = h / (nh/nkv);
-            const float* qh = q + h*hd;
-            float* sc = scores + (long long)idx*maxpos;
-            float scale = rsqrtf((float)hd);
-            float mx = -1e30f;
-            for (int t = 0; t < npos; ++t) {
-                const float* kr = K + (long long)t*kvdim + kh*hd;
-                float d = 0.f;
-                for (int j = 0; j < hd; ++j) d += qh[j]*kr[j];
-                d *= scale;
-                sc[t] = d;
-                if (d > mx) mx = d;
-            }
-            float sum = 0.f;
-            for (int t = 0; t < npos; ++t) { sc[t] = expf(sc[t]-mx); sum += sc[t]; }
-            float invs = 1.f/sum;
-            for (int j = 0; j < hd; ++j) {
-                float acc = 0.f;
-                for (int t = 0; t < npos; ++t)
-                    acc += sc[t] * V[(long long)t*kvdim + kh*hd + j];
-                out[h*hd + j] = acc*invs;
-            }
-        }
-    }`
-}
-
-// ── Attention, two passes ───────────────────────────────────────────
-//
-// The single-kernel form gives ONE THREAD a whole head: with 14 heads a
-// decode step ran 14 threads on a 16 000-core GPU, each looping over the
-// whole cache. Splitting the work parallelises it by three orders of
-// magnitude — and needs no cross-thread communication, so it stays on
-// the portable path (both backends).
-//
-//   pass 1: one thread per (position, head, cache row) → the raw score
-//   pass 2: one thread per (position, head, head-dim) → softmax over the
-//           row's scores (each thread folds them serially — npos is small)
-//           and the value-weighted sum
-// `qscale` is the query scale (1/sqrt(head_dim) for llama; gemma states it
-// separately as query_pre_attn_scalar). `window` > 0 is a sliding attention
-// window: a key older than `window` positions is not attended to at all —
-// gemma3 does this on five of every six layers. `window` = 0 is full causal
-// attention. attn_sc and attn_out compute the same lower bound `lo`, so the
-// masked score slots are never read rather than being written with -inf.
-// `causal` — 1: batch element b attends its own causal window
-// (npos0 + b cache rows, autoregressive decode). 0: every element
-// attends the SAME fixed range npos0 (block-diffusion: a query in the
-// active block sees the whole window, later positions included).
-@ __lk_attn_sc → s {
-    ^ `extern "C" __global__ void attn_sc(
-        const float* q, const float* K, float* scores,
-        int nh, int nkv, int hd, int npos0, int batch, int maxpos,
-        float qscale, int window, int causal) {
-        int idx = blockIdx.x*blockDim.x + threadIdx.x;
-        int total = nh*batch*maxpos;
-        if (idx >= total) return;
-        int t  = idx % maxpos;
-        int hb = idx / maxpos;
-        int h  = hb % nh, b = hb / nh;
-        int npos = causal ? npos0 + b : npos0;
-        if (t >= npos) return;
-        int lo = (window > 0 && npos - 1 - window > 0) ? (npos - 1 - window) : 0;
-        if (t < lo) return;
-        int kvdim = nkv*hd;
-        int kh = h / (nh/nkv);
-        const float* qh = q + (long long)b*nh*hd + h*hd;
-        const float* kr = K + (long long)t*kvdim + kh*hd;
-        float d = 0.f;
-        for (int j = 0; j < hd; ++j) d += qh[j]*kr[j];
-        scores[(long long)hb*maxpos + t] = d * qscale;
-    }`
-}
-
-@ __lk_attn_out → s {
-    ^ `extern "C" __global__ void attn_out(
-        const float* V, const float* scores, float* out,
-        int nh, int nkv, int hd, int npos0, int batch, int maxpos, int window,
-        int causal) {
-        int idx = blockIdx.x*blockDim.x + threadIdx.x;
-        if (idx >= nh*batch*hd) return;
-        int d  = idx % hd;
-        int hb = idx / hd;
-        int h  = hb % nh, b = hb / nh;
-        int npos = causal ? npos0 + b : npos0;
-        int lo = (window > 0 && npos - 1 - window > 0) ? (npos - 1 - window) : 0;
-        int kvdim = nkv*hd;
-        int kh = h / (nh/nkv);
-        const float* sc = scores + (long long)hb*maxpos;
-        float mx = -1e30f;
-        for (int t = lo; t < npos; ++t) if (sc[t] > mx) mx = sc[t];
-        float sum = 0.f, acc = 0.f;
-        for (int t = lo; t < npos; ++t) {
-            float p = expf(sc[t] - mx);
-            sum += p;
-            acc += p * V[(long long)t*kvdim + kh*hd + d];
-        }
-        out[(long long)b*nh*hd + h*hd + d] = acc / sum;
-    }`
-}
-
-// y ← y + a·x (see lk_axpy).
-@ __lk_axpy → s {
-    ^ `extern "C" __global__ void axpy(float* y, const float* x, float a, int n) {
-        int i = blockIdx.x*blockDim.x + threadIdx.x;
-        if (i < n) y[i] += a * x[i];
-    }`
-}
-
-// ── Batched Mixture-of-Experts matvecs ──────────────────────────────
-//
-// The MoE FFN used to launch one batch-1 matvec per (position, expert)
-// — 32 positions × 8 experts × 3 projections × 19 layers ≈ 24 000 tiny
-// kernels per forward, each too small to use the GPU, with the CPU
-// pegged issuing them. These kernels do the whole layer's expert work
-// in ONE launch per projection instead: output row `a` (an assignment,
-// there are n_assign = count·K of them) uses expert `expid[a]`'s weights
-// and reads its input from row `a / xk` of x — xk = K for the gate/up
-// projections (whose input is the per-POSITION activation) and xk = 1
-// for the down projection (whose input is the per-ASSIGNMENT hidden).
-// The 3D expert tensor is expert-major, so expert e's row r is the flat
-// weight row (e·rows + r). Portable: no atomics, no __shared__.
-
-@ __lk_mv_exp_f32 → s {
-    ^ `extern "C" __global__ void mv_exp_f32(
-        const float* __restrict__ W, const float* __restrict__ x, float* __restrict__ y,
-        const int* __restrict__ expid, int rows, int cols, int xk, int n_assign) {
-        int idx = blockIdx.x*blockDim.x + threadIdx.x;
-        if (idx >= rows*n_assign) return;
-        int a = idx / rows, r = idx % rows;
-        int e = expid[a];
-        const float* w = W + (long long)(e*rows + r)*cols;
-        const float* xb = x + (long long)(a/xk)*cols;
-        float acc = 0.f;
-        for (int c = 0; c < cols; ++c) acc += w[c]*xb[c];
-        y[(long long)a*rows + r] = acc;
-    }`
-}
-
-@ __lk_mv_exp_q8_0 → String {
-    ^ ( __lk_cat3 ( __lk_f16_dev ) ( __lk_q8s_dev ) `extern "C" __global__ void mv_exp_q8_0(
-        const unsigned char* __restrict__ W, const float* __restrict__ x, float* __restrict__ y,
-        const int* __restrict__ expid, int rows, int cols, int xk, int n_assign) {
-        int idx = blockIdx.x*blockDim.x + threadIdx.x;
-        if (idx >= rows*n_assign) return;
-        int a = idx / rows, r = idx % rows;
-        int e = expid[a];
-        int nb = cols / 32;
-        const unsigned char* w = W + (long long)(e*rows + r) * nb * 34;
-        const signed char* qrow = (const signed char*)(w + nb*2);
-        const float* xrow = x + (long long)(a/xk)*cols;
-        float acc = 0.f;
-        if ((nb & 1) == 0) {
-            for (int blk = 0; blk < nb; ++blk) {
-                float d = nl_f16(w + blk*2);
-                const int* qi = (const int*)(qrow + blk*32);
-                const float4* x4 = (const float4*)(xrow + blk*32);
-                float sub = 0.f;
-                NL_Q8_DOT(sub, qi, x4)
-                acc += d * sub;
-            }
-        } else {
-            for (int blk = 0; blk < nb; ++blk) {
-                float d = nl_f16(w + blk*2);
-                const signed char* q = qrow + blk*32;
-                const float* xb = xrow + blk*32;
-                float sub = 0.f;
-                for (int j = 0; j < 32; ++j) sub += (float)q[j] * xb[j];
-                acc += d * sub;
-            }
-        }
-        y[(long long)a*rows + r] = acc;
-    }` )
-}
-
-// On-device MoE router: one thread per position. Computes the sigmoid
-// gating scores, applies the selection-only expert bias, runs the
-// group-limited top-k (the best `topk_group` groups by their top-2 biased
-// sums, then the best `n_used` experts inside them), and writes the
-// assignment table — expid[pos*n_used + j] and its weight (the UNBIASED
-// score, normalised and scaled) — straight to device memory. This
-// replaces the per-position host routing + the router-logits download:
-// the whole MoE stays on the GPU. Fixed local arrays bound n_expert≤256,
-// n_group≤64, n_used≤32 (the LLaDA2 shapes: 256 / 8 / 8).
-@ __lk_moe_route → s {
-    ^ `extern "C" __global__ void moe_route(
-        const float* __restrict__ logits, const float* __restrict__ bias,
-        int* __restrict__ expid, float* __restrict__ wts,
-        int n_expert, int n_group, int topk_group, int n_used, float scale, int norm, int count) {
-        int pos = blockIdx.x*blockDim.x + threadIdx.x;
-        if (pos >= count) return;
-        const float* lg = logits + (long long)pos*n_expert;
-        float sc[256];
-        float bs[256];
-        for (int e = 0; e < n_expert; ++e) {
-            float s = 1.f/(1.f+expf(-lg[e]));
-            sc[e] = s; bs[e] = s + bias[e];
-        }
-        int per = (n_group > 0) ? n_expert / n_group : n_expert;
-        unsigned char allowed[256];
-        if (n_group > 1) {
-            float gsc[64];
-            for (int g = 0; g < n_group; ++g) {
-                float m1 = -1e30f, m2 = -1e30f;
-                for (int k = 0; k < per; ++k) {
-                    float v = bs[g*per + k];
-                    if (v > m1) { m2 = m1; m1 = v; } else if (v > m2) m2 = v;
-                }
-                gsc[g] = m1 + m2;
-            }
-            unsigned char gkeep[64];
-            for (int g = 0; g < n_group; ++g) gkeep[g] = 0;
-            for (int r = 0; r < topk_group; ++r) {
-                int best = -1; float bv = -1e30f;
-                for (int g = 0; g < n_group; ++g)
-                    if (!gkeep[g] && gsc[g] > bv) { bv = gsc[g]; best = g; }
-                if (best >= 0) gkeep[best] = 1;
-            }
-            for (int e = 0; e < n_expert; ++e) allowed[e] = gkeep[e/per];
-        } else {
-            for (int e = 0; e < n_expert; ++e) allowed[e] = 1;
-        }
-        int chosen[32];
-        for (int r = 0; r < n_used; ++r) {
-            int best = -1; float bv = -1e30f;
-            for (int e = 0; e < n_expert; ++e) {
-                if (!allowed[e]) continue;
-                unsigned char taken = 0;
-                for (int t = 0; t < r; ++t) if (chosen[t] == e) { taken = 1; break; }
-                if (taken) continue;
-                if (bs[e] > bv) { bv = bs[e]; best = e; }
-            }
-            chosen[r] = best;
-        }
-        float wsum = 0.f;
-        for (int r = 0; r < n_used; ++r) if (chosen[r] >= 0) wsum += sc[chosen[r]];
-        for (int r = 0; r < n_used; ++r) {
-            int e = chosen[r];
-            float w = (e >= 0) ? sc[e] : 0.f;
-            if (norm) w = w / (wsum + 1e-20f);
-            w *= scale;
-            expid[(long long)pos*n_used + r] = (e >= 0) ? e : 0;
-            wts[(long long)pos*n_used + r] = w;
-        }
-    }`
-}
-
-// Greedy argmax + confidence, on device: one thread per window position
-// scans the vocab once, and writes the argmax token id and its softmax
-// probability (1 / Σ exp(logit − max)). This replaces downloading the
-// whole logit matrix (vocab × positions) and running the softmax on the
-// host every denoise step — the diffusion decode's real hot spot. Only
-// count·2 small values come back instead of count·vocab.
-@ __lk_argmax_conf → s {
-    ^ `extern "C" __global__ void argmax_conf(
-        const float* __restrict__ logits, int* __restrict__ out_id, float* __restrict__ out_prob,
-        int vocab, int count) {
-        int pos = blockIdx.x*blockDim.x + threadIdx.x;
-        if (pos >= count) return;
-        const float* lg = logits + (long long)pos*vocab;
-        float mx = -1e30f; int arg = 0;
-        for (int v = 0; v < vocab; ++v) { float x = lg[v]; if (x > mx) { mx = x; arg = v; } }
-        float sum = 0.f;
-        for (int v = 0; v < vocab; ++v) sum += expf(lg[v] - mx);
-        out_id[pos] = arg;
-        out_prob[pos] = 1.f / sum;
-    }`
-}
-
-// Warp version (CUDA): one WARP per position. The scalar kernel above
-// puts the whole window in a single warp — 32 threads serially scanning
-// vocab-sized rows twice was the output phase's real cost. The lowest-
-// index tie-break reproduces the serial first-max argmax exactly.
-@ __lk_argmax_conf_w → String {
-    ^ ( __lk_cat2 ( __lk_warp_red ) `extern "C" __global__ void argmax_conf_w(
-        const float* __restrict__ logits, int* __restrict__ out_id, float* __restrict__ out_prob,
-        int vocab, int count) {
-        NL_WARP_PROLOGUE(count, 1)
-        (void)b;
-        const float* lg = logits + (long long)r*vocab;
-        float mx = -1e30f; int arg = 0x7fffffff;
-        for (int v = lane; v < vocab; v += 32) {
-            float x = lg[v];
-            if (x > mx || (x == mx && v < arg)) { mx = x; arg = v; }
-        }
-        for (int off = 16; off > 0; off >>= 1) {
-            float omx = __shfl_down_sync(0xffffffffu, mx, off);
-            int oarg = __shfl_down_sync(0xffffffffu, arg, off);
-            if (omx > mx || (omx == mx && oarg < arg)) { mx = omx; arg = oarg; }
-        }
-        mx = __shfl_sync(0xffffffffu, mx, 0);
-        float sum = 0.f;
-        for (int v = lane; v < vocab; v += 32) sum += expf(lg[v] - mx);
-        sum = nl_warp_sum(sum);
-        if (lane == 0) { out_id[r] = (arg == 0x7fffffff) ? 0 : arg; out_prob[r] = 1.f / sum; }
-    }` )
-}
-
-// Scatter-accumulate the experts' down-projections onto the residual:
-// for each (position, dim), out[pos*dim + d] += Σ_j wts[pos*K+j] ·
-// down[(pos*K+j)*dim + d]. One thread per (pos, dim); the K assignments
-// of a position are contiguous, so no atomics are needed.
-@ __lk_moe_scatter → s {
-    ^ `extern "C" __global__ void moe_scatter(
-        const float* __restrict__ down, const float* __restrict__ wts, float* __restrict__ out,
-        int K, int dim, int count) {
-        int idx = blockIdx.x*blockDim.x + threadIdx.x;
-        if (idx >= count*dim) return;
-        int pos = idx / dim, d = idx % dim;
-        float acc = 0.f;
-        for (int j = 0; j < K; ++j) {
-            int a = pos*K + j;
-            acc += wts[a] * down[(long long)a*dim + d];
-        }
-        out[(long long)pos*dim + d] += acc;
-    }`
-}
-
-// SwiGLU gate: g = silu(g) · u, in place on g.
-@ __lk_silumul → s {
-    ^ `extern "C" __global__ void silumul(float* g, const float* u, int n) {
-        int i = blockIdx.x*blockDim.x + threadIdx.x;
-        if (i < n) {
-            float v = g[i];
-            g[i] = (v / (1.f + expf(-v))) * u[i];
-        }
-    }`
-}
-
-// Residual add, in place: a += b.
-// GeGLU — gemma's FFN gate. The tanh approximation is what gemma was
-// trained with (gelu_pytorch_tanh), so the exact erf form would be the
-// wrong function here, not a more accurate one.
-@ __lk_gelumul → s {
-    ^ `extern "C" __global__ void gelumul(float* g, const float* u, int n) {
-        int i = blockIdx.x*blockDim.x + threadIdx.x;
-        if (i < n) {
-            float v = g[i];
-            float c = 0.7978845608028654f * (v + 0.044715f*v*v*v);
-            g[i] = (0.5f*v*(1.f + tanhf(c))) * u[i];
-        }
-    }`
-}
-
-// gemma scales the embedding row by sqrt(n_embd) before the first block.
-@ __lk_scale → s {
-    ^ `extern "C" __global__ void scale(float* x, float s, int n) {
-        int i = blockIdx.x*blockDim.x + threadIdx.x;
-        if (i < n) x[i] *= s;
-    }`
-}
-
-@ __lk_addv → s {
-    ^ `extern "C" __global__ void addv(float* a, const float* b, int n) {
-        int i = blockIdx.x*blockDim.x + threadIdx.x;
-        if (i < n) a[i] += b[i];
-    }`
-}
-
-// Broadcast add: every row of a batch gets the same vector (a bias).
-@ __lk_addrow → s {
-    ^ `extern "C" __global__ void addrow(float* a, const float* v, int n, int batch) {
-        int idx = blockIdx.x*blockDim.x + threadIdx.x;
-        if (idx < n*batch) a[idx] += v[idx % n];
-    }`
-}
-
-// Element copy into an offset — appends k/v rows into the cache.
-@ __lk_copyat → s {
-    ^ `extern "C" __global__ void copyat(float* dst, const float* src, int off, int n) {
-        int i = blockIdx.x*blockDim.x + threadIdx.x;
-        if (i < n) dst[off + i] = src[i];
-    }`
-}
-
-// ── Quantised matvec: dequantise IN the matmul ──────────────────────
-//
-// The weights stay on the device in their GGUF block form — a Q4_K
-// row is 4.5 bits/weight instead of 32, so a model needs ~7× less
-// device memory than the f32 expansion and the matvec reads ~7× fewer
-// bytes (these kernels are memory-bound, so that is also the speed).
-// Each thread owns one output row and walks its blocks, decoding each
-// on the fly into registers. Block layouts are ggml's, byte for byte —
-// the same ones packages/gguf's host dequant decodes, which is the
-// bit-exact oracle these kernels are verified against.
-
-@ __lk_f16_dev → s {
-    ^ `
-    // IEEE half → float, integer bit transport. Deliberately NOT
-    // __half2float: that needs cuda_fp16.h, which NVRTC does not have
-    // by default and the CPU backend's shim has no notion of. A union
-    // and shifts compile identically on both backends.
-    __device__ static inline float nl_f16(const unsigned char* p) {
-        unsigned int h = (unsigned int)p[0] | ((unsigned int)p[1] << 8);
-        unsigned int sign = (h >> 15) << 31;
-        unsigned int e = (h >> 10) & 31u;
-        unsigned int m = h & 1023u;
-        unsigned int bits;
-        if (e == 0u) {
-            if (m == 0u) bits = sign;
-            else {
-                int ex = 113;
-                while (!(m & 1024u)) { m <<= 1; ex--; }
-                m &= 1023u;
-                bits = sign | ((unsigned int)ex << 23) | (m << 13);
-            }
-        } else if (e == 31u) {
-            bits = sign | 0x7F800000u | (m << 13);
-        } else {
-            bits = sign | ((e + 112u) << 23) | (m << 13);
-        }
-        union { unsigned int u; float f; } cv;
-        cv.u = bits;
-        return cv.f;
-    }
-    `
-}
-
-// float4 for the CPU backend's C compiler (CUDA has it built in) plus
-// NL_Q8_DOT: one split-layout q8_0 quant block dotted against 32 x
-// floats. The quants are read as 8 ints and x as 8 float4s — 16 load
-// instructions instead of 64 — and the accumulation statements keep the
-// scalar loop's exact left-fold order, so the result is bit-identical
-// to the byte-at-a-time form.
-@ __lk_q8s_dev → s {
-    ^ `
-    #ifndef __CUDACC_RTC__
-    typedef struct { float x, y, z, w; } float4;
-    #endif
-    #define NL_Q8_DOT(SUB, QI, X4)                          \
-        for (int k8 = 0; k8 < 8; ++k8) {                    \
-            int qq = (QI)[k8];                              \
-            float4 xv = (X4)[k8];                           \
-            SUB += (float)(signed char)(qq)       * xv.x;   \
-            SUB += (float)(signed char)(qq >> 8)  * xv.y;   \
-            SUB += (float)(signed char)(qq >> 16) * xv.z;   \
-            SUB += (float)(signed char)(qq >> 24) * xv.w;   \
-        }
-    `
-}
-
-// Repack an uploaded q8_0 tensor from ggml's interleaved 34-byte blocks
-// ([d q0..q31] [d q0..q31] …) into a split per-row layout:
-// [d0 d1 … d_{nb-1}] [q-block0 … q-block_{nb-1}], same nb·34-byte row
-// stride. With an even nb the quant region is 4-byte aligned, which is
-// what lets the matvec kernels read ints and float4s instead of bytes
-// (their limit is load-instruction count, not bandwidth). One thread
-// per 34-byte block, run once at model load.
-@ __lk_q8_repack → s {
-    ^ `extern "C" __global__ void q8_repack(
-        const unsigned char* __restrict__ src, unsigned char* __restrict__ dst, int nb, long long nblk) {
-        long long i = (long long)blockIdx.x*blockDim.x + threadIdx.x;
-        if (i >= nblk) return;
-        long long row = i / nb;
-        int blk = (int)(i - row*nb);
-        const unsigned char* s = src + i*34;
-        unsigned char* drow = dst + row*(long long)nb*34;
-        drow[blk*2] = s[0];
-        drow[blk*2 + 1] = s[1];
-        unsigned char* q = drow + nb*2 + blk*32;
-        for (int j = 0; j < 32; ++j) q[j] = s[2 + j];
-    }`
-}
-
-@ __lk_mv_q4_0 → String {
-    ^ ( __lk_cat2 ( __lk_f16_dev ) `extern "C" __global__ void mv_q4_0(
-        const unsigned char* __restrict__ W, const float* __restrict__ x, float* __restrict__ y, int rows, int cols, int batch) {
-        int idx = blockIdx.x*blockDim.x + threadIdx.x;
-        if (idx >= rows*batch) return;
-        int b = idx / rows, r = idx % rows;
-        x += (long long)b*cols;
-        y += (long long)b*rows;
-        int nb = cols / 32;
-        const unsigned char* w = W + (long long)r * nb * 18;
-        float acc = 0.f;
-        for (int blk = 0; blk < nb; ++blk) {
-            const unsigned char* bp = w + blk*18;
-            float d = nl_f16(bp);
-            const float* xb = x + blk*32;
-            for (int j = 0; j < 16; ++j) {
-                unsigned char q = bp[2+j];
-                acc += d * ((float)((q & 0xF) - 8)) * xb[j];
-                acc += d * ((float)((q >> 4)  - 8)) * xb[j+16];
-            }
-        }
-        y[r] = acc;
-    }` )
-}
-
-// Q8_0 weights are stored in the SPLIT per-row layout (see
-// __lk_q8_repack): scales first, then 4-byte-aligned quant blocks.
-// Even nb takes the int/float4 fast path; odd nb (possible only in
-// tiny test models) reads bytes from the same layout.
-@ __lk_mv_q8_0 → String {
-    ^ ( __lk_cat3 ( __lk_f16_dev ) ( __lk_q8s_dev ) `extern "C" __global__ void mv_q8_0(
-        const unsigned char* __restrict__ W, const float* __restrict__ x, float* __restrict__ y, int rows, int cols, int batch) {
-        int idx = blockIdx.x*blockDim.x + threadIdx.x;
-        if (idx >= rows*batch) return;
-        int b = idx / rows, r = idx % rows;
-        x += (long long)b*cols;
-        y += (long long)b*rows;
-        int nb = cols / 32;
-        const unsigned char* w = W + (long long)r * nb * 34;
-        const signed char* qrow = (const signed char*)(w + nb*2);
-        float acc = 0.f;
-        if ((nb & 1) == 0) {
-            for (int blk = 0; blk < nb; ++blk) {
-                float d = nl_f16(w + blk*2);
-                const int* qi = (const int*)(qrow + blk*32);
-                const float4* x4 = (const float4*)(x + blk*32);
-                float sub = 0.f;
-                NL_Q8_DOT(sub, qi, x4)
-                acc += d * sub;
-            }
-        } else {
-            for (int blk = 0; blk < nb; ++blk) {
-                float d = nl_f16(w + blk*2);
-                const signed char* q = qrow + blk*32;
-                const float* xb = x + blk*32;
-                float sub = 0.f;
-                for (int j = 0; j < 32; ++j) sub += (float)q[j] * xb[j];
-                acc += d * sub;
-            }
-        }
-        y[r] = acc;
-    }` )
-}
-
-// Batch-reuse matvecs: one thread per output ROW, looping over the
-// batch positions in register tiles, so each weight element is read
-// from DRAM once per 32-position tile instead of once per position.
-// The dense per-(row,position) kernels above re-read the whole weight
-// matrix for every position — at window sizes (batch 32) that is 32×
-// the necessary traffic and it is where the decode's memory time goes.
-// The per-output summation order (ascending block, ascending j / c) is
-// IDENTICAL to the scalar kernels', so results are bit-exact and the
-// CPU backend runs the same source.
-@ __lk_mv_f32_b → s {
-    ^ `extern "C" __global__ void mv_f32_b(
-        const float* __restrict__ W, const float* __restrict__ x, float* __restrict__ y, int rows, int cols, int batch) {
-        int r = blockIdx.x*blockDim.x + threadIdx.x;
-        if (r >= rows) return;
-        const float* w = W + (long long)r*cols;
-        for (int b0 = 0; b0 < batch; b0 += 32) {
-            int bn = batch - b0; if (bn > 32) bn = 32;
-            float acc[32];
-            for (int t = 0; t < bn; ++t) acc[t] = 0.f;
-            for (int c = 0; c < cols; ++c) {
-                float wv = w[c];
-                for (int t = 0; t < bn; ++t) acc[t] += wv * x[(long long)(b0+t)*cols + c];
-            }
-            for (int t = 0; t < bn; ++t) y[(long long)(b0+t)*rows + r] = acc[t];
-        }
-    }`
-}
-
-@ __lk_mv_q8_0_b → String {
-    ^ ( __lk_cat3 ( __lk_f16_dev ) ( __lk_q8s_dev ) `extern "C" __global__ void mv_q8_0_b(
-        const unsigned char* __restrict__ W, const float* __restrict__ x, float* __restrict__ y, int rows, int cols, int batch) {
-        int r = blockIdx.x*blockDim.x + threadIdx.x;
-        if (r >= rows) return;
-        int nb = cols / 32;
-        const unsigned char* w = W + (long long)r * nb * 34;
-        const signed char* qrow = (const signed char*)(w + nb*2);
-        for (int b0 = 0; b0 < batch; b0 += 32) {
-            int bn = batch - b0; if (bn > 32) bn = 32;
-            float acc[32];
-            for (int t = 0; t < bn; ++t) acc[t] = 0.f;
-            if ((nb & 1) == 0) {
-                for (int blk = 0; blk < nb; ++blk) {
-                    float d = nl_f16(w + blk*2);
-                    const int* qi = (const int*)(qrow + blk*32);
-                    for (int t = 0; t < bn; ++t) {
-                        const float4* x4 = (const float4*)(x + (long long)(b0+t)*cols + blk*32);
-                        float sub = 0.f;
-                        NL_Q8_DOT(sub, qi, x4)
-                        acc[t] += d * sub;
-                    }
-                }
-            } else {
-                for (int blk = 0; blk < nb; ++blk) {
-                    float d = nl_f16(w + blk*2);
-                    const signed char* q = qrow + blk*32;
-                    for (int t = 0; t < bn; ++t) {
-                        const float* xb = x + (long long)(b0+t)*cols + blk*32;
-                        float sub = 0.f;
-                        for (int j = 0; j < 32; ++j) sub += (float)q[j] * xb[j];
-                        acc[t] += d * sub;
-                    }
-                }
-            }
-            for (int t = 0; t < bn; ++t) y[(long long)(b0+t)*rows + r] = acc[t];
-        }
-    }` )
-}
-
-// Q4_K: 144-byte super-block of 256 — d, dmin (f16), 12 packed 6-bit
-// scale/min pairs, 128 nibble bytes. Sub-block s takes its 32 values
-// from the low (even s) or high (odd s) nibbles of bytes [s/2*32 …].
-@ __lk_mv_q4_k → String {
-    ^ ( __lk_cat2 ( __lk_f16_dev ) `extern "C" __global__ void mv_q4_k(
-        const unsigned char* __restrict__ W, const float* __restrict__ x, float* __restrict__ y, int rows, int cols, int batch) {
-        int idx = blockIdx.x*blockDim.x + threadIdx.x;
-        if (idx >= rows*batch) return;
-        int b = idx / rows, r = idx % rows;
-        x += (long long)b*cols;
-        y += (long long)b*rows;
-        int nb = cols / 256;
-        const unsigned char* w = W + (long long)r * nb * 144;
-        float acc = 0.f;
-        for (int blk = 0; blk < nb; ++blk) {
-            const unsigned char* bp = w + blk*144;
-            float d    = nl_f16(bp);
-            float dmin = nl_f16(bp + 2);
-            const unsigned char* sc = bp + 4;
-            const unsigned char* qs = bp + 16;
-            const float* xb = x + blk*256;
-            for (int s = 0; s < 8; ++s) {
-                int sV, mV;
-                if (s < 4) { sV = sc[s] & 63; mV = sc[s+4] & 63; }
-                else {
-                    sV = (sc[s+4] & 0xF) | ((sc[s-4] >> 6) << 4);
-                    mV = (sc[s+4] >>  4) | ((sc[s]   >> 6) << 4);
-                }
-                float d1 = d * sV, m1 = dmin * mV;
-                const unsigned char* qb = qs + (s/2)*32;
-                const float* xs = xb + s*32;
-                int hi = s & 1;
-                float sub = 0.f, msum = 0.f;
-                for (int l = 0; l < 32; ++l) {
-                    int q = hi ? (qb[l] >> 4) : (qb[l] & 0xF);
-                    sub  += (float)q * xs[l];
-                    msum += xs[l];
-                }
-                acc += d1 * sub - m1 * msum;
-            }
-        }
-        y[r] = acc;
-    }` )
-}
-
-// Q6_K: 210-byte super-block of 256 — 128 low-nibble bytes, 64 bytes
-// of upper 2 bits, 16 int8 scales, f16 d. Sixteen 16-element groups.
-@ __lk_mv_q6_k → String {
-    ^ ( __lk_cat2 ( __lk_f16_dev ) `extern "C" __global__ void mv_q6_k(
-        const unsigned char* __restrict__ W, const float* __restrict__ x, float* __restrict__ y, int rows, int cols, int batch) {
-        int idx = blockIdx.x*blockDim.x + threadIdx.x;
-        if (idx >= rows*batch) return;
-        int b = idx / rows, r = idx % rows;
-        x += (long long)b*cols;
-        y += (long long)b*rows;
-        int nb = cols / 256;
-        const unsigned char* w = W + (long long)r * nb * 210;
-        float acc = 0.f;
-        for (int blk = 0; blk < nb; ++blk) {
-            const unsigned char* bp = w + blk*210;
-            const unsigned char* ql = bp;
-            const unsigned char* qh = bp + 128;
-            const signed char*   sc = (const signed char*)(bp + 192);
-            float d = nl_f16(bp + 208);
-            const float* xb = x + blk*256;
-            for (int n = 0; n < 2; ++n) {
-                const unsigned char* ql0 = ql + n*64;
-                const unsigned char* qh0 = qh + n*32;
-                const signed char*   sc0 = sc + n*8;
-                const float* xn = xb + n*128;
-                for (int l = 0; l < 32; ++l) {
-                    int is = l/16;
-                    unsigned char h = qh0[l];
-                    int b1 = ql0[l], b2 = ql0[l+32];
-                    int q1 = ((b1 & 0xF) | (( h       & 3) << 4)) - 32;
-                    int q2 = ((b2 & 0xF) | (((h >> 2) & 3) << 4)) - 32;
-                    int q3 = ((b1 >>  4) | (((h >> 4) & 3) << 4)) - 32;
-                    int q4 = ((b2 >>  4) | (((h >> 6) & 3) << 4)) - 32;
-                    acc += d * (float)sc0[is    ] * (float)q1 * xn[l];
-                    acc += d * (float)sc0[is + 2] * (float)q2 * xn[l + 32];
-                    acc += d * (float)sc0[is + 4] * (float)q3 * xn[l + 64];
-                    acc += d * (float)sc0[is + 6] * (float)q4 * xn[l + 96];
-                }
-            }
-        }
-        y[r] = acc;
-    }` )
-}
-
-@ __lk_mv_q5_0 → String {
-    ^ ( __lk_cat2 ( __lk_f16_dev ) `extern "C" __global__ void mv_q5_0(
-        const unsigned char* __restrict__ W, const float* __restrict__ x, float* __restrict__ y, int rows, int cols, int batch) {
-        int idx = blockIdx.x*blockDim.x + threadIdx.x;
-        if (idx >= rows*batch) return;
-        int b = idx / rows, r = idx % rows;
-        x += (long long)b*cols;
-        y += (long long)b*rows;
-        int nb = cols / 32;
-        const unsigned char* w = W + (long long)r * nb * 22;
-        float acc = 0.f;
-        for (int blk = 0; blk < nb; ++blk) {
-            const unsigned char* bp = w + blk*22;
-            float d = nl_f16(bp);
-            unsigned int qh = (unsigned int)bp[2] | ((unsigned int)bp[3] << 8)
-                            | ((unsigned int)bp[4] << 16) | ((unsigned int)bp[5] << 24);
-            const unsigned char* qs = bp + 6;
-            const float* xb = x + blk*32;
-            float sub = 0.f;
-            for (int j = 0; j < 16; ++j) {
-                int h0 = ((qh >> j) & 1u) << 4;
-                int h1 = ((qh >> (j + 16)) & 1u) << 4;
-                sub += (float)(((qs[j] & 0xF) | h0) - 16) * xb[j];
-                sub += (float)(((qs[j] >> 4)  | h1) - 16) * xb[j + 16];
-            }
-            acc += d * sub;
-        }
-        y[r] = acc;
-    }` )
-}
-
-@ __lk_mv_q5_1 → String {
-    ^ ( __lk_cat2 ( __lk_f16_dev ) `extern "C" __global__ void mv_q5_1(
-        const unsigned char* __restrict__ W, const float* __restrict__ x, float* __restrict__ y, int rows, int cols, int batch) {
-        int idx = blockIdx.x*blockDim.x + threadIdx.x;
-        if (idx >= rows*batch) return;
-        int b = idx / rows, r = idx % rows;
-        x += (long long)b*cols;
-        y += (long long)b*rows;
-        int nb = cols / 32;
-        const unsigned char* w = W + (long long)r * nb * 24;
-        float acc = 0.f;
-        for (int blk = 0; blk < nb; ++blk) {
-            const unsigned char* bp = w + blk*24;
-            float d = nl_f16(bp);
-            float m = nl_f16(bp + 2);
-            unsigned int qh = (unsigned int)bp[4] | ((unsigned int)bp[5] << 8)
-                            | ((unsigned int)bp[6] << 16) | ((unsigned int)bp[7] << 24);
-            const unsigned char* qs = bp + 8;
-            const float* xb = x + blk*32;
-            float sub = 0.f, msum = 0.f;
-            for (int j = 0; j < 16; ++j) {
-                int h0 = ((qh >> j) & 1u) << 4;
-                int h1 = ((qh >> (j + 16)) & 1u) << 4;
-                sub  += (float)((qs[j] & 0xF) | h0) * xb[j];
-                sub  += (float)((qs[j] >> 4)  | h1) * xb[j + 16];
-                msum += xb[j] + xb[j + 16];
-            }
-            acc += d * sub + m * msum;
-        }
-        y[r] = acc;
-    }` )
-}
-
-// Q5_K: 176-byte super-block of 256 — d, dmin (f16), 12 packed scale/
-// min bytes, 32 bytes carrying each value's 5th bit, 128 nibble bytes.
-@ __lk_mv_q5_k → String {
-    ^ ( __lk_cat2 ( __lk_f16_dev ) `extern "C" __global__ void mv_q5_k(
-        const unsigned char* __restrict__ W, const float* __restrict__ x, float* __restrict__ y, int rows, int cols, int batch) {
-        int idx = blockIdx.x*blockDim.x + threadIdx.x;
-        if (idx >= rows*batch) return;
-        int b = idx / rows, r = idx % rows;
-        x += (long long)b*cols;
-        y += (long long)b*rows;
-        int nb = cols / 256;
-        const unsigned char* w = W + (long long)r * nb * 176;
-        float acc = 0.f;
-        for (int blk = 0; blk < nb; ++blk) {
-            const unsigned char* bp = w + blk*176;
-            float d    = nl_f16(bp);
-            float dmin = nl_f16(bp + 2);
-            const unsigned char* sc = bp + 4;
-            const unsigned char* qh = bp + 16;
-            const unsigned char* qs = bp + 48;
-            const float* xb = x + blk*256;
-            for (int s = 0; s < 8; ++s) {
-                int sV, mV;
-                if (s < 4) { sV = sc[s] & 63; mV = sc[s+4] & 63; }
-                else {
-                    sV = (sc[s+4] & 0xF) | ((sc[s-4] >> 6) << 4);
-                    mV = (sc[s+4] >>  4) | ((sc[s]   >> 6) << 4);
-                }
-                float d1 = d * sV, m1 = dmin * mV;
-                const unsigned char* qb = qs + (s/2)*32;
-                const float* xs = xb + s*32;
-                int hi = s & 1;
-                float sub = 0.f, msum = 0.f;
-                for (int l = 0; l < 32; ++l) {
-                    int q = hi ? (qb[l] >> 4) : (qb[l] & 0xF);
-                    int hbit = (qh[l] >> s) & 1;
-                    sub  += (float)(q + (hbit << 4)) * xs[l];
-                    msum += xs[l];
-                }
-                acc += d1 * sub - m1 * msum;
-            }
-        }
-        y[r] = acc;
-    }` )
-}
-
-@ __lk_mv_f16 → String {
-    ^ ( __lk_cat2 ( __lk_f16_dev ) `extern "C" __global__ void mv_f16(
-        const unsigned char* __restrict__ W, const float* __restrict__ x, float* __restrict__ y, int rows, int cols, int batch) {
-        int idx = blockIdx.x*blockDim.x + threadIdx.x;
-        if (idx >= rows*batch) return;
-        int b = idx / rows, r = idx % rows;
-        x += (long long)b*cols;
-        y += (long long)b*rows;
-        const unsigned char* w = W + (long long)r*cols*2;
-        float acc = 0.f;
-        for (int c = 0; c < cols; ++c) acc += nl_f16(w + c*2) * x[c];
-        y[r] = acc;
-    }` )
-}
-
-// ── CUDA-only: one WARP per output row ──────────────────────────────
-//
-// The portable kernels above give one THREAD a whole row: lane-adjacent
-// threads then read addresses a full row apart, so a warp's memory
-// requests scatter across the weight matrix and the matvec — which is
-// memory-bound — runs at a fraction of the device's bandwidth.
-//
-// These variants give one WARP a row: the 32 lanes stride through the
-// row together (lane l takes block l, l+32, …), so each warp request is
-// a contiguous span, and a shuffle reduction folds the lane partials.
-// They use __shfl_down_sync, which exists only on CUDA — the CPU
-// backend keeps the portable kernels, and lk_build picks per backend.
-// Both paths are verified to produce the same text.
-
-@ __lk_warp_red → s {
-    ^ `
-    __device__ static inline float nl_warp_sum(float v) {
-        for (int off = 16; off > 0; off >>= 1) v += __shfl_down_sync(0xffffffffu, v, off);
-        return v;
-    }
-    #define NL_WARP_PROLOGUE(ROWS, BATCH)                       \
-        int gid  = blockIdx.x*blockDim.x + threadIdx.x;         \
-        int warp = gid >> 5, lane = gid & 31;                   \
-        if (warp >= (ROWS)*(BATCH)) return;                     \
-        int b = warp / (ROWS), r = warp % (ROWS);
-    `
+for (int off = 16; off > 0; off >>= 1) { acc += SHFL_DOWN(acc, off); }
+if (warp < rows * batch && lane == 0) { ST(y, yoff + b * rows + r, acc); }` )
 }
 
 @ __lk_mv_f32_w → String {
-    ^ ( __lk_cat2 ( __lk_warp_red ) `extern "C" __global__ void mv_f32_w(
-        const float* __restrict__ W, const float* __restrict__ x, float* __restrict__ y, int rows, int cols, int batch) {
-        NL_WARP_PROLOGUE(rows, batch)
-        const float* w = W + (long long)r*cols;
-        const float* xb = x + (long long)b*cols;
-        float acc = 0.f;
-        for (int c = lane; c < cols; c += 32) acc += w[c]*xb[c];
-        acc = nl_warp_sum(acc);
-        if (lane == 0) y[(long long)b*rows + r] = acc;
+    ^ ( __lk_warp `    long long w0 = woff + r * cols;
+    for (long long c = lane; c < cols; c += 32) { acc += LD(W, w0 + c) * LD(x, x0 + c); }` )
+}
+
+// Batch-reuse matvecs: one thread per output ROW, looping over the batch
+// positions in register tiles, so each weight element is read from DRAM
+// once per 32-position tile instead of once per position. The per-output
+// summation order is the scalar kernels', so results are bit-exact.
+@ __lk_mv_f32_b → s {
+    ^ `LOCAL_F(acc, 32);
+if (gid < rows) {
+    long long r = gid;
+    long long w0 = woff + r * cols;
+    for (long long b0 = 0; b0 < batch; b0 += 32) {
+        long long bn = batch - b0;
+        if (bn > 32) { bn = 32; }
+        for (long long t = 0; t < bn; t++) { ST(acc, t, 0.0f); }
+        for (long long c = 0; c < cols; c++) {
+            float wv = LD(W, w0 + c);
+            for (long long t = 0; t < bn; t++) { ST(acc, t, LD(acc, t) + wv * LD(x, xoff + (b0 + t) * cols + c)); }
+        }
+        for (long long t = 0; t < bn; t++) { ST(y, yoff + (b0 + t) * rows + r, LD(acc, t)); }
+    }
+}`
+}
+
+// ── Q8_0, in the SPLIT row layout (lk_q8_repack) ─────────────────────
+//
+// A row of nb blocks is [nb f16 scales][nb × 32 int8 quants], nb·34 bytes:
+// with an even nb the quant region is 4-byte aligned, so a block is eight
+// 32-bit words of quants against eight float4s of x — 16 loads instead of
+// 64, and the accumulation keeps the byte-at-a-time left fold, so the
+// result is the same bit for bit. Odd nb (tiny test models) reads bytes.
+
+// `sub` += the block's 32 quants (words from byte QB) · x (from XB).
+@ __lk_q8_dot s qb s xb → String {
+    : ~ String o ( string_from `UNROLL for (int k8 = 0; k8 < 8; k8++) {
+                unsigned int qq = LD32(W, ` )
+    ( string_push_str o qb )
+    ( string_push_str o ` + k8 * 4);
+                float xa = 0.0f;
+                float xc = 0.0f;
+                float xe = 0.0f;
+                float xg = 0.0f;
+                LD4(x, ` )
+    ( string_push_str o xb )
+    ( string_push_str o ` + k8 * 4, xa, xc, xe, xg);
+                sub += (float)(signed char)(qq) * xa;
+                sub += (float)(signed char)(qq >> 8) * xc;
+                sub += (float)(signed char)(qq >> 16) * xe;
+                sub += (float)(signed char)(qq >> 24) * xg;
+            }` )
+    ^ o
+}
+
+// The byte form of the same dot, for odd nb.
+@ __lk_q8_dotb s qb s xb → String {
+    : ~ String o ( string_from `for (int j = 0; j < 32; j++) { sub += (float)(signed char)LD(W, ` )
+    ( string_push_str o qb ) ( string_push_str o ` + j) * LD(x, ` ) ( string_push_str o xb ) ( string_push_str o ` + j); }` )
+    ^ o
+}
+
+// The block loop of one row against one x row: `LANE0`/`STEP` 0/1 for a
+// thread's own walk, lane/32 for a warp's.
+@ __lk_q8_row s from s step → String {
+    : ~ String o ( string_from `    long long nb = cols / 32;
+    long long w0 = woff + r * nb * 34;
+    long long q0 = w0 + nb * 2;
+    if ((nb & 1) == 0) {
+        for (long long blk = ` )
+    ( string_push_str o from ) ( string_push_str o `; blk < nb; blk += ` ) ( string_push_str o step ) ( string_push_str o `) {
+            float d = F16(LD16(W, w0 + blk * 2));
+            float sub = 0.0f;
+            ` )
+    ( string_push_str o ( string_data ( __lk_q8_dot `q0 + blk * 32` `x0 + blk * 32` ) ) )
+    ( string_push_str o `
+            acc += d * sub;
+        }
+    } else {
+        for (long long blk = ` )
+    ( string_push_str o from ) ( string_push_str o `; blk < nb; blk += ` ) ( string_push_str o step ) ( string_push_str o `) {
+            float d = F16(LD16(W, w0 + blk * 2));
+            float sub = 0.0f;
+            ` )
+    ( string_push_str o ( string_data ( __lk_q8_dotb `q0 + blk * 32` `x0 + blk * 32` ) ) )
+    ( string_push_str o `
+            acc += d * sub;
+        }
     }` )
+    ^ o
+}
+
+@ __lk_mv_q8_0 → String {
+    ^ ( __lk_cat3 `if (gid < rows * batch) {
+    long long b = gid / rows;
+    long long r = gid % rows;
+    long long x0 = xoff + b * cols;
+    float acc = 0.0f;
+` ( string_data ( __lk_q8_row `0` `1` ) ) `
+    ST(y, yoff + b * rows + r, acc);
+}` )
+}
+
+@ __lk_mv_q8_0_w → String { ^ ( __lk_warp ( string_data ( __lk_q8_row `lane` `32` ) ) ) }
+
+// The host's (CPU backend) single-position q8_0 matvec. Four blocks at a
+// time: their 128 products in one loop the host compiler vectorises (no
+// sum in it, so the products are the same floats however many it takes at
+// once), then four sums, each in its element order, added to the row's
+// total in block order — the bits of one element at a time on a backend
+// that does not fuse a multiply into an add (the CPU backend; a GPU fuses
+// and takes the warp kernels). A host adds one float a cycle on one port
+// and converts bytes on the same one, so the element-at-a-time loop is
+// bound by that port, not by its loads.
+@ __lk_mv_q8_0_h → String {
+    ^ ( string_from `LOCAL_F(pr, 128);
+if (gid < rows * batch) {
+    long long b = gid / rows;
+    long long r = gid % rows;
+    long long x0 = xoff + b * cols;
+    long long nb = cols / 32;
+    long long w0 = woff + r * nb * 34;
+    long long q0 = w0 + nb * 2;
+    float acc = 0.0f;
+    long long blk = 0;
+    for (; blk + 4 <= nb; blk += 4) {
+        WIN(wq, W, q0 + blk * 32, 128);
+        WIN(xw, x, x0 + blk * 32, 128);
+        if (LEN(wq) == 128 && LEN(xw) == 128) {
+            for (int j = 0; j < 128; j++) { ST(pr, j, (float)(signed char)LD(wq, j) * LD(xw, j)); }
+        }
+        float s0 = 0.0f;
+        float s1 = 0.0f;
+        float s2 = 0.0f;
+        float s3 = 0.0f;
+        for (int j = 0; j < 32; j++) {
+            s0 += LD(pr, j);
+            s1 += LD(pr, 32 + j);
+            s2 += LD(pr, 64 + j);
+            s3 += LD(pr, 96 + j);
+        }
+        acc += F16(LD16(W, w0 + blk * 2)) * s0;
+        acc += F16(LD16(W, w0 + blk * 2 + 2)) * s1;
+        acc += F16(LD16(W, w0 + blk * 2 + 4)) * s2;
+        acc += F16(LD16(W, w0 + blk * 2 + 6)) * s3;
+    }
+    for (; blk < nb; blk++) {
+        WIN(we, W, q0 + blk * 32, 32);
+        WIN(xe, x, x0 + blk * 32, 32);
+        float sv = 0.0f;
+        for (int j = 0; j < LEN(we) && j < LEN(xe); j++) { sv += (float)(signed char)LD(we, j) * LD(xe, j); }
+        acc += F16(LD16(W, w0 + blk * 2)) * sv;
+    }
+    ST(y, yoff + b * rows + r, acc);
+}` )
+}
+
+// The batch-reuse form: a thread per row walks every batch position. The
+// host's (the CPU backend): the row's block converted once, then four
+// positions at a time — four independent sums, each in its own element
+// order (the bits of one position at a time), through windows whose checks
+// the loop bound folds (a position past the batch's end reads the first
+// one's row again and is not stored). A host adds one float a cycle on one
+// port, so one sum at a time leaves the adder waiting on itself.
+@ __lk_mv_q8_0_bh → String {
+    ^ ( string_from `LOCAL_F(acc, 32);
+LOCAL_F(qf, 32);
+if (gid < rows) {
+    long long r = gid;
+    long long nb = cols / 32;
+    long long w0 = woff + r * nb * 34;
+    long long q0 = w0 + nb * 2;
+    for (long long b0 = 0; b0 < batch; b0 += 32) {
+        long long bn = batch - b0;
+        if (bn > 32) { bn = 32; }
+        UNROLL for (int t = 0; t < 32; t++) { ST(acc, t, 0.0f); }
+        for (long long blk = 0; blk < nb; blk++) {
+            float d = F16(LD16(W, w0 + blk * 2));
+            if ((nb & 1) == 0) {
+                UNROLL for (int k8 = 0; k8 < 8; k8++) {
+                    unsigned int qq = LD32(W, q0 + blk * 32 + k8 * 4);
+                    ST(qf, k8 * 4, (float)(signed char)(qq));
+                    ST(qf, k8 * 4 + 1, (float)(signed char)(qq >> 8));
+                    ST(qf, k8 * 4 + 2, (float)(signed char)(qq >> 16));
+                    ST(qf, k8 * 4 + 3, (float)(signed char)(qq >> 24));
+                }
+            } else {
+                UNROLL for (int j = 0; j < 32; j++) { ST(qf, j, (float)(signed char)LD(W, q0 + blk * 32 + j)); }
+            }
+            for (long long t = 0; t < bn; t += 4) {
+                long long xa = xoff + (b0 + t) * cols + blk * 32;
+                // (a position past the batch's end reads the first one's
+                // row again and is not stored)
+                WIN(xr0, x, xa, 32);
+                WIN(xr1, x, t + 1 < bn ? xa + cols : xa, 32);
+                WIN(xr2, x, t + 2 < bn ? xa + 2 * cols : xa, 32);
+                WIN(xr3, x, t + 3 < bn ? xa + 3 * cols : xa, 32);
+                float s0 = 0.0f;
+                float s1 = 0.0f;
+                float s2 = 0.0f;
+                float s3 = 0.0f;
+                for (int j = 0; j < 32 && j < LEN(xr0) && j < LEN(xr1) && j < LEN(xr2) && j < LEN(xr3); j++) {
+                    float qv = LD(qf, j);
+                    s0 += qv * LD(xr0, j);
+                    s1 += qv * LD(xr1, j);
+                    s2 += qv * LD(xr2, j);
+                    s3 += qv * LD(xr3, j);
+                }
+                ST(acc, t, LD(acc, t) + d * s0);
+                if (t + 1 < bn) { ST(acc, t + 1, LD(acc, t + 1) + d * s1); }
+                if (t + 2 < bn) { ST(acc, t + 2, LD(acc, t + 2) + d * s2); }
+                if (t + 3 < bn) { ST(acc, t + 3, LD(acc, t + 3) + d * s3); }
+            }
+        }
+        for (long long t = 0; t < bn; t++) { ST(y, yoff + (b0 + t) * rows + r, LD(acc, t)); }
+    }
+}` )
+}
+
+// The GPU's: a position at a time, the words and float4s of the warp
+// kernels' dot (a GPU overlaps the rows' threads instead).
+@ __lk_mv_q8_0_b → String {
+    ^ ( string_from `LOCAL_F(acc, 32);
+if (gid < rows) {
+    long long r = gid;
+    long long nb = cols / 32;
+    long long w0 = woff + r * nb * 34;
+    long long q0 = w0 + nb * 2;
+    for (long long b0 = 0; b0 < batch; b0 += 32) {
+        long long bn = batch - b0;
+        if (bn > 32) { bn = 32; }
+        for (long long t = 0; t < bn; t++) { ST(acc, t, 0.0f); }
+        if ((nb & 1) == 0) {
+            for (long long blk = 0; blk < nb; blk++) {
+                float d = F16(LD16(W, w0 + blk * 2));
+                for (long long t = 0; t < bn; t++) {
+                    float sub = 0.0f;
+                    UNROLL for (int k8 = 0; k8 < 8; k8++) {
+                unsigned int qq = LD32(W, q0 + blk * 32 + k8 * 4);
+                float xa = 0.0f;
+                float xc = 0.0f;
+                float xe = 0.0f;
+                float xg = 0.0f;
+                LD4(x, xoff + (b0 + t) * cols + blk * 32 + k8 * 4, xa, xc, xe, xg);
+                sub += (float)(signed char)(qq) * xa;
+                sub += (float)(signed char)(qq >> 8) * xc;
+                sub += (float)(signed char)(qq >> 16) * xe;
+                sub += (float)(signed char)(qq >> 24) * xg;
+            }
+                    ST(acc, t, LD(acc, t) + d * sub);
+                }
+            }
+        } else {
+            for (long long blk = 0; blk < nb; blk++) {
+                float d = F16(LD16(W, w0 + blk * 2));
+                for (long long t = 0; t < bn; t++) {
+                    float sub = 0.0f;
+                    for (int j = 0; j < 32; j++) { sub += (float)(signed char)LD(W, q0 + blk * 32 + j) * LD(x, xoff + (b0 + t) * cols + blk * 32 + j); }
+                    ST(acc, t, LD(acc, t) + d * sub);
+                }
+            }
+        }
+        for (long long t = 0; t < bn; t++) { ST(y, yoff + (b0 + t) * rows + r, LD(acc, t)); }
+    }
+}` )
+}
+
+// ── the other quantised formats: dequantise IN the matvec ───────────
+//
+// The weights stay on the device in their GGUF block form — a Q4_K row is
+// 4.5 bits a weight instead of 32 — and each kernel decodes a block into
+// registers as it walks the row. Block layouts are ggml's, byte for byte.
+
+// Q4_0: 18-byte blocks of 32 — f16 d, 16 bytes of nibbles.
+@ __lk_q4_0_blk → s {
+    ^ `            long long bp = w0 + blk * 18;
+            float d = F16(LD16(W, bp));
+            long long xb = x0 + blk * 32;
+            for (int j = 0; j < 16; j++) {
+                int q = (int)LD(W, bp + 2 + j);
+                acc += d * ((float)((q & 15) - 8)) * LD(x, xb + j);
+                acc += d * ((float)((q >> 4) - 8)) * LD(x, xb + j + 16);
+            }`
+}
+
+@ __lk_mv_q4_0 → String {
+    ^ ( __lk_cat3 `if (gid < rows * batch) {
+    long long b = gid / rows;
+    long long r = gid % rows;
+    long long x0 = xoff + b * cols;
+    long long nb = cols / 32;
+    long long w0 = woff + r * nb * 18;
+    float acc = 0.0f;
+    for (long long blk = 0; blk < nb; blk++) {
+` ( __lk_q4_0_blk ) `
+    }
+    ST(y, yoff + b * rows + r, acc);
+}` )
 }
 
 @ __lk_mv_q4_0_w → String {
-    ^ ( __lk_cat3 ( __lk_warp_red ) ( __lk_f16_dev ) `extern "C" __global__ void mv_q4_0_w(
-        const unsigned char* __restrict__ W, const float* __restrict__ x, float* __restrict__ y, int rows, int cols, int batch) {
-        NL_WARP_PROLOGUE(rows, batch)
-        int nb = cols / 32;
-        const unsigned char* w = W + (long long)r * nb * 18;
-        const float* xb = x + (long long)b*cols;
-        float acc = 0.f;
-        for (int blk = lane; blk < nb; blk += 32) {
-            const unsigned char* bp = w + blk*18;
-            float d = nl_f16(bp);
-            const float* xs = xb + blk*32;
-            for (int j = 0; j < 16; ++j) {
-                unsigned char q = bp[2+j];
-                acc += d * ((float)((q & 0xF) - 8)) * xs[j];
-                acc += d * ((float)((q >> 4)  - 8)) * xs[j+16];
-            }
-        }
-        acc = nl_warp_sum(acc);
-        if (lane == 0) y[(long long)b*rows + r] = acc;
-    }` )
+    ^ ( __lk_warp ( string_data ( __lk_cat3 `    long long nb = cols / 32;
+    long long w0 = woff + r * nb * 18;
+    for (long long blk = lane; blk < nb; blk += 32) {
+` ( __lk_q4_0_blk ) `
+    }` ) ) )
 }
 
-@ __lk_mv_q8_0_w → String {
-    ^ ( __lk_cat4 ( __lk_warp_red ) ( __lk_f16_dev ) ( __lk_q8s_dev ) `extern "C" __global__ void mv_q8_0_w(
-        const unsigned char* __restrict__ W, const float* __restrict__ x, float* __restrict__ y, int rows, int cols, int batch) {
-        NL_WARP_PROLOGUE(rows, batch)
-        int nb = cols / 32;
-        const unsigned char* w = W + (long long)r * nb * 34;
-        const signed char* qrow = (const signed char*)(w + nb*2);
-        const float* xb = x + (long long)b*cols;
-        float acc = 0.f;
-        if ((nb & 1) == 0) {
-            for (int blk = lane; blk < nb; blk += 32) {
-                float d = nl_f16(w + blk*2);
-                const int* qi = (const int*)(qrow + blk*32);
-                const float4* x4 = (const float4*)(xb + blk*32);
-                float sub = 0.f;
-                NL_Q8_DOT(sub, qi, x4)
-                acc += d * sub;
-            }
-        } else {
-            for (int blk = lane; blk < nb; blk += 32) {
-                float d = nl_f16(w + blk*2);
-                const signed char* q = qrow + blk*32;
-                const float* xs = xb + blk*32;
-                float sub = 0.f;
-                for (int j = 0; j < 32; ++j) sub += (float)q[j] * xs[j];
-                acc += d * sub;
-            }
-        }
-        acc = nl_warp_sum(acc);
-        if (lane == 0) y[(long long)b*rows + r] = acc;
-    }` )
+// Q4_K / Q5_K: a sub-block's 6-bit scale and min, packed into 12 bytes.
+@ __lk_k_scales s s → String {
+    : ~ String o ( string_from `int sV = 0;
+                int mV = 0;
+                if (` )
+    ( string_push_str o s ) ( string_push_str o ` < 4) { sV = (int)LD(W, sc + ` ) ( string_push_str o s ) ( string_push_str o `) & 63; mV = (int)LD(W, sc + ` ) ( string_push_str o s ) ( string_push_str o ` + 4) & 63; }
+                else {
+                    sV = ((int)LD(W, sc + ` ) ( string_push_str o s ) ( string_push_str o ` + 4) & 15) | (((int)LD(W, sc + ` ) ( string_push_str o s ) ( string_push_str o ` - 4) >> 6) << 4);
+                    mV = ((int)LD(W, sc + ` ) ( string_push_str o s ) ( string_push_str o ` + 4) >> 4) | (((int)LD(W, sc + ` ) ( string_push_str o s ) ( string_push_str o `) >> 6) << 4);
+                }` )
+    ^ o
 }
 
-@ __lk_mv_q4_k_w → String {
-    ^ ( __lk_cat3 ( __lk_warp_red ) ( __lk_f16_dev ) `extern "C" __global__ void mv_q4_k_w(
-        const unsigned char* __restrict__ W, const float* __restrict__ x, float* __restrict__ y, int rows, int cols, int batch) {
-        NL_WARP_PROLOGUE(rows, batch)
-        int nb = cols / 256;
-        const unsigned char* w = W + (long long)r * nb * 144;
-        const float* xb = x + (long long)b*cols;
-        float acc = 0.f;
-        // The whole warp walks the row's blocks TOGETHER, and the 32 lanes
-        // split each block's quants: lane l takes byte l of each 32-byte
-        // nibble group, so one warp load is 32 contiguous bytes (and the
-        // matching x load is 32 contiguous floats). Giving each lane its own
-        // 144-byte block instead — the obvious partition — makes every warp
-        // load touch 32 separate cache lines.
-        for (int blk = 0; blk < nb; ++blk) {
-            const unsigned char* bp = w + blk*144;
-            float d    = nl_f16(bp);
-            float dmin = nl_f16(bp + 2);
-            const unsigned char* sc = bp + 4;
-            const unsigned char* qs = bp + 16;
-            const float* xblk = xb + blk*256;
-            for (int j = 0; j < 4; ++j) {
-                unsigned char q = qs[j*32 + lane];
-                for (int t = 0; t < 2; ++t) {
-                    int sb = 2*j + t;               // sub-block: low nibble, then high
-                    int sV, mV;
-                    if (sb < 4) { sV = sc[sb] & 63; mV = sc[sb+4] & 63; }
-                    else {
-                        sV = (sc[sb+4] & 0xF) | ((sc[sb-4] >> 6) << 4);
-                        mV = (sc[sb+4] >>  4) | ((sc[sb]   >> 6) << 4);
-                    }
-                    float xv = xblk[sb*32 + lane];
-                    int   qq = t ? (q >> 4) : (q & 0xF);
-                    acc += (d * sV) * ((float)qq * xv) - (dmin * mV) * xv;
+// The same, read through `kb`, a window over the whole super-block.
+@ __lk_k_scales_w s s → String {
+    : ~ String o ( string_from `int sV = 0;
+                int mV = 0;
+                if (` )
+    ( string_push_str o s ) ( string_push_str o ` < 4) { sV = (int)LD(kb, 4 + ` ) ( string_push_str o s ) ( string_push_str o `) & 63; mV = (int)LD(kb, 8 + ` ) ( string_push_str o s ) ( string_push_str o `) & 63; }
+                else {
+                    sV = ((int)LD(kb, 8 + ` ) ( string_push_str o s ) ( string_push_str o `) & 15) | (((int)LD(kb, ` ) ( string_push_str o s ) ( string_push_str o `) >> 6) << 4);
+                    mV = ((int)LD(kb, 8 + ` ) ( string_push_str o s ) ( string_push_str o `) >> 4) | (((int)LD(kb, 4 + ` ) ( string_push_str o s ) ( string_push_str o `) >> 6) << 4);
+                }` )
+    ^ o
+}
+
+// Q4_K: 144-byte super-block of 256 — d, dmin (f16), 12 packed 6-bit
+// scale/min pairs, 128 nibble bytes. Sub-block s takes its 32 values from
+// the low (even s) or high (odd s) nibbles of bytes [s/2*32 …]. Q5_K
+// (176 bytes) adds 32 bytes carrying each value's 5th bit.
+@ __lk_mv_qk_scalar b five → String {
+    : ~ String o ( string_from `if (gid < rows * batch) {
+    long long b = gid / rows;
+    long long r = gid % rows;
+    long long x0 = xoff + b * cols;
+    long long nb = cols / 256;
+    long long w0 = woff + r * nb * ` )
+    ( string_push_str o ? five `176` `144` )
+    ( string_push_str o `;
+    float acc = 0.0f;
+    for (long long blk = 0; blk < nb; blk++) {
+        long long bp = w0 + blk * ` )
+    ( string_push_str o ? five `176` `144` )
+    ( string_push_str o `;
+        float d = F16(LD16(W, bp));
+        float dmin = F16(LD16(W, bp + 2));
+        long long sc = bp + 4;
+        long long qh = bp + 16;
+        long long qs = bp + ` )
+    ( string_push_str o ? five `48` `16` )
+    ( string_push_str o `;
+        long long xb = x0 + blk * 256;
+        for (int s = 0; s < 8; s++) {
+            ` )
+    ( string_push_str o ( string_data ( __lk_k_scales `s` ) ) )
+    ( string_push_str o `
+            float d1 = d * sV;
+            float m1 = dmin * mV;
+            long long qb = qs + (s / 2) * 32;
+            long long xs = xb + s * 32;
+            int hi = s & 1;
+            float sub = 0.0f;
+            float msum = 0.0f;
+            for (int l = 0; l < 32; l++) {
+                int qv = (int)LD(W, qb + l);
+                int q = hi ? (qv >> 4) : (qv & 15);
+` )
+    ? five {
+        ( string_push_str o `                int hbit = ((int)LD(W, qh + l) >> s) & 1;
+                sub += (float)(q + (hbit << 4)) * LD(x, xs + l);
+` )
+    } {
+        ( string_push_str o `                sub += (float)q * LD(x, xs + l);
+` )
+    }
+    ( string_push_str o `                msum += LD(x, xs + l);
+            }
+            acc += d1 * sub - m1 * msum;
+        }
+    }
+    ST(y, yoff + b * rows + r, acc);
+}` )
+    ^ o
+}
+
+// The warp walks the row's blocks TOGETHER and the 32 lanes split each
+// block's quants: lane l takes byte l of each 32-byte nibble group, so one
+// warp load is 32 contiguous bytes and the matching x load 32 contiguous
+// floats. Giving each lane its own block — the obvious partition — makes
+// every warp load touch 32 separate cache lines.
+// The warp form: the warp walks the row's blocks together and lane l takes
+// byte l of every 32-byte group (one warp load = 32 contiguous bytes, the
+// matching x load 32 contiguous floats). A block is a window — its
+// offsets are constants and the lane, so whole-length windows leave no
+// check in the block.
+@ __lk_mv_qk_warp b five → String {
+    : s bs ? five `176` `144`
+    : ~ String o ( string_from `    long long nb = cols / 256;
+    long long w0 = woff + r * nb * ` )
+    ( string_push_str o bs )
+    ( string_push_str o `;
+    for (long long blk = 0; blk < nb; blk++) {
+        long long bp = w0 + blk * ` )
+    ( string_push_str o bs )
+    ( string_push_str o `;
+        float d = F16(LD16(W, bp));
+        float dmin = F16(LD16(W, bp + 2));
+        WIN(kb, W, bp, ` )
+    ( string_push_str o bs )
+    ( string_push_str o `);
+        WIN(xw, x, x0 + blk * 256, 256);
+        if (LEN(kb) == ` )
+    ( string_push_str o bs )
+    ( string_push_str o ` && LEN(xw) == 256) {
+` )
+    ? five { ( string_push_str o `        int hbits = (int)LD(kb, 16 + lane);
+` ) } {}
+    // the eight sub-blocks written out: every offset a constant plus the
+    // lane (an offset of two loop counters keeps its check)
+    : ~ i j 0
+    ~ < j 4 {
+        ( string_push_str o `        int q` ) ( string_push_int o j ) ( string_push_str o ` = (int)LD(kb, ` )
+        ( string_push_int o + ? five 48 16 * j 32 ) ( string_push_str o ` + lane);
+` )
+        = j + j 1
+    }
+    : ~ i sb 0
+    ~ < sb 8 {
+        : ~ String sn ( string_new )
+        ( string_push_int sn sb )
+        ( string_push_str o `        {
+                ` )
+        ( string_push_str o ( string_data ( __lk_k_scales_w ( string_data sn ) ) ) )
+        ( string_push_str o `
+                float xv = LD(xw, ` ) ( string_push_int o * sb 32 ) ( string_push_str o ` + lane);
+                int qq = ` )
+        ( string_push_str o `q` ) ( string_push_int o / sb 2 ) ( string_push_str o ? == 1 % sb 2 ` >> 4` ` & 15` )
+        ? five { ( string_push_str o ` | (((hbits >> ` ) ( string_push_int o sb ) ( string_push_str o `) & 1) << 4)` ) } {}
+        ( string_push_str o `;
+                acc += (d * sV) * ((float)qq * xv) - (dmin * mV) * xv;
+        }
+` )
+        = sb + sb 1
+    }
+    ( string_push_str o `        }
+    }` )
+    ^ ( __lk_warp ( string_data o ) )
+}
+
+// Q6_K: 210-byte super-block of 256 — 128 low-nibble bytes, 64 bytes of
+// upper 2 bits, 16 int8 scales, f16 d. Sixteen 16-element groups.
+@ __lk_q6_k_blk → s {
+    ^ `            long long bp = w0 + blk * 210;
+            long long ql = bp;
+            long long qh = bp + 128;
+            long long sc = bp + 192;
+            float d = F16(LD16(W, bp + 208));
+            long long xb = x0 + blk * 256;
+            for (int n = 0; n < 2; n++) {
+                long long ql0 = ql + n * 64;
+                long long qh0 = qh + n * 32;
+                long long sc0 = sc + n * 8;
+                long long xn = xb + n * 128;
+                for (int l = 0; l < 32; l++) {
+                    int is = l / 16;
+                    int h = (int)LD(W, qh0 + l);
+                    int b1 = (int)LD(W, ql0 + l);
+                    int b2 = (int)LD(W, ql0 + l + 32);
+                    int q1 = ((b1 & 15) | ((h & 3) << 4)) - 32;
+                    int q2 = ((b2 & 15) | (((h >> 2) & 3) << 4)) - 32;
+                    int q3 = ((b1 >> 4) | (((h >> 4) & 3) << 4)) - 32;
+                    int q4 = ((b2 >> 4) | (((h >> 6) & 3) << 4)) - 32;
+                    acc += d * (float)(signed char)LD(W, sc0 + is) * (float)q1 * LD(x, xn + l);
+                    acc += d * (float)(signed char)LD(W, sc0 + is + 2) * (float)q2 * LD(x, xn + l + 32);
+                    acc += d * (float)(signed char)LD(W, sc0 + is + 4) * (float)q3 * LD(x, xn + l + 64);
+                    acc += d * (float)(signed char)LD(W, sc0 + is + 6) * (float)q4 * LD(x, xn + l + 96);
                 }
-            }
-        }
-        acc = nl_warp_sum(acc);
-        if (lane == 0) y[(long long)b*rows + r] = acc;
-    }` )
+            }`
 }
 
+@ __lk_mv_q6_k → String {
+    ^ ( __lk_cat3 `if (gid < rows * batch) {
+    long long b = gid / rows;
+    long long r = gid % rows;
+    long long x0 = xoff + b * cols;
+    long long nb = cols / 256;
+    long long w0 = woff + r * nb * 210;
+    float acc = 0.0f;
+    for (long long blk = 0; blk < nb; blk++) {
+` ( __lk_q6_k_blk ) `
+    }
+    ST(y, yoff + b * rows + r, acc);
+}` )
+}
+
+// The warp form: a lane per block, the block and its 256 x values as
+// windows — every offset a constant plus the loop's counter, which bounds
+// it, so no check is left in the block. (The block's quarters are written
+// out: an offset of two counters, or of a counter's l / 16, keeps its
+// check.)
 @ __lk_mv_q6_k_w → String {
-    ^ ( __lk_cat3 ( __lk_warp_red ) ( __lk_f16_dev ) `extern "C" __global__ void mv_q6_k_w(
-        const unsigned char* __restrict__ W, const float* __restrict__ x, float* __restrict__ y, int rows, int cols, int batch) {
-        NL_WARP_PROLOGUE(rows, batch)
-        int nb = cols / 256;
-        const unsigned char* w = W + (long long)r * nb * 210;
-        const float* xb = x + (long long)b*cols;
-        float acc = 0.f;
-        for (int blk = lane; blk < nb; blk += 32) {
-            const unsigned char* bp = w + blk*210;
-            const unsigned char* ql = bp;
-            const unsigned char* qh = bp + 128;
-            const signed char*   sc = (const signed char*)(bp + 192);
-            float d = nl_f16(bp + 208);
-            const float* xblk = xb + blk*256;
-            for (int n = 0; n < 2; ++n) {
-                const unsigned char* ql0 = ql + n*64;
-                const unsigned char* qh0 = qh + n*32;
-                const signed char*   sc0 = sc + n*8;
-                const float* xn = xblk + n*128;
-                for (int l = 0; l < 32; ++l) {
-                    int is = l/16;
-                    unsigned char h = qh0[l];
-                    int b1 = ql0[l], b2 = ql0[l+32];
-                    int q1 = ((b1 & 0xF) | (( h       & 3) << 4)) - 32;
-                    int q2 = ((b2 & 0xF) | (((h >> 2) & 3) << 4)) - 32;
-                    int q3 = ((b1 >>  4) | (((h >> 4) & 3) << 4)) - 32;
-                    int q4 = ((b2 >>  4) | (((h >> 6) & 3) << 4)) - 32;
-                    acc += d * (float)sc0[is    ] * (float)q1 * xn[l];
-                    acc += d * (float)sc0[is + 2] * (float)q2 * xn[l + 32];
-                    acc += d * (float)sc0[is + 4] * (float)q3 * xn[l + 64];
-                    acc += d * (float)sc0[is + 6] * (float)q4 * xn[l + 96];
-                }
+    ^ ( __lk_warp `    long long nb = cols / 256;
+    long long w0 = woff + r * nb * 210;
+    for (long long blk = lane; blk < nb; blk += 32) {
+        long long bp = w0 + blk * 210;
+        float d = F16(LD16(W, bp + 208));
+        WIN(kb, W, bp, 210);
+        WIN(xw, x, x0 + blk * 256, 256);
+        if (LEN(kb) == 210 && LEN(xw) == 256) {
+            for (int l = 0; l < 16; l++) {
+                int h = (int)LD(kb, 128 + l);
+                int b1 = (int)LD(kb, 0 + l);
+                int b2 = (int)LD(kb, 32 + l);
+                int q1 = ((b1 & 15) | ((h & 3) << 4)) - 32;
+                int q2 = ((b2 & 15) | (((h >> 2) & 3) << 4)) - 32;
+                int q3 = ((b1 >> 4) | (((h >> 4) & 3) << 4)) - 32;
+                int q4 = ((b2 >> 4) | (((h >> 6) & 3) << 4)) - 32;
+                acc += d * (float)(signed char)LD(kb, 192) * (float)q1 * LD(xw, 0 + l);
+                acc += d * (float)(signed char)LD(kb, 194) * (float)q2 * LD(xw, 32 + l);
+                acc += d * (float)(signed char)LD(kb, 196) * (float)q3 * LD(xw, 64 + l);
+                acc += d * (float)(signed char)LD(kb, 198) * (float)q4 * LD(xw, 96 + l);
+            }
+            for (int l = 16; l < 32; l++) {
+                int h = (int)LD(kb, 128 + l);
+                int b1 = (int)LD(kb, 0 + l);
+                int b2 = (int)LD(kb, 32 + l);
+                int q1 = ((b1 & 15) | ((h & 3) << 4)) - 32;
+                int q2 = ((b2 & 15) | (((h >> 2) & 3) << 4)) - 32;
+                int q3 = ((b1 >> 4) | (((h >> 4) & 3) << 4)) - 32;
+                int q4 = ((b2 >> 4) | (((h >> 6) & 3) << 4)) - 32;
+                acc += d * (float)(signed char)LD(kb, 193) * (float)q1 * LD(xw, 0 + l);
+                acc += d * (float)(signed char)LD(kb, 195) * (float)q2 * LD(xw, 32 + l);
+                acc += d * (float)(signed char)LD(kb, 197) * (float)q3 * LD(xw, 64 + l);
+                acc += d * (float)(signed char)LD(kb, 199) * (float)q4 * LD(xw, 96 + l);
+            }
+            for (int l = 0; l < 16; l++) {
+                int h = (int)LD(kb, 160 + l);
+                int b1 = (int)LD(kb, 64 + l);
+                int b2 = (int)LD(kb, 96 + l);
+                int q1 = ((b1 & 15) | ((h & 3) << 4)) - 32;
+                int q2 = ((b2 & 15) | (((h >> 2) & 3) << 4)) - 32;
+                int q3 = ((b1 >> 4) | (((h >> 4) & 3) << 4)) - 32;
+                int q4 = ((b2 >> 4) | (((h >> 6) & 3) << 4)) - 32;
+                acc += d * (float)(signed char)LD(kb, 200) * (float)q1 * LD(xw, 128 + l);
+                acc += d * (float)(signed char)LD(kb, 202) * (float)q2 * LD(xw, 160 + l);
+                acc += d * (float)(signed char)LD(kb, 204) * (float)q3 * LD(xw, 192 + l);
+                acc += d * (float)(signed char)LD(kb, 206) * (float)q4 * LD(xw, 224 + l);
+            }
+            for (int l = 16; l < 32; l++) {
+                int h = (int)LD(kb, 160 + l);
+                int b1 = (int)LD(kb, 64 + l);
+                int b2 = (int)LD(kb, 96 + l);
+                int q1 = ((b1 & 15) | ((h & 3) << 4)) - 32;
+                int q2 = ((b2 & 15) | (((h >> 2) & 3) << 4)) - 32;
+                int q3 = ((b1 >> 4) | (((h >> 4) & 3) << 4)) - 32;
+                int q4 = ((b2 >> 4) | (((h >> 6) & 3) << 4)) - 32;
+                acc += d * (float)(signed char)LD(kb, 201) * (float)q1 * LD(xw, 128 + l);
+                acc += d * (float)(signed char)LD(kb, 203) * (float)q2 * LD(xw, 160 + l);
+                acc += d * (float)(signed char)LD(kb, 205) * (float)q3 * LD(xw, 192 + l);
+                acc += d * (float)(signed char)LD(kb, 207) * (float)q4 * LD(xw, 224 + l);
             }
         }
-        acc = nl_warp_sum(acc);
-        if (lane == 0) y[(long long)b*rows + r] = acc;
     }` )
 }
 
-// Q5_0 / Q5_1 / Q5_K warp variants. The 5-bit quants were the last matvecs
-// without one — and a Q5_0-heavy model (which is what most llama.cpp
-// "q4_k_m" files actually are: 166 of this one's 272 tensors) therefore ran
-// entirely on the one-thread-per-row kernel, where the 32 lanes of a warp
-// read 32 rows at once, i.e. 32 unrelated cache lines per load. Same warp
-// split as the K-quants: the warp walks blocks together, lane l takes byte l.
-
-@ __lk_mv_q5_0_w → String {
-    ^ ( __lk_cat3 ( __lk_warp_red ) ( __lk_f16_dev ) `extern "C" __global__ void mv_q5_0_w(
-        const unsigned char* __restrict__ W, const float* __restrict__ x, float* __restrict__ y, int rows, int cols, int batch) {
-        NL_WARP_PROLOGUE(rows, batch)
-        int nb = cols / 32;
-        const unsigned char* w = W + (long long)r * nb * 22;
-        const float* xb = x + (long long)b*cols;
-        float acc = 0.f;
-        // 32 lanes, 16 bytes of quants per block: lanes 0..15 take the block's
-        // bytes, lanes 16..31 take the next block's — two blocks per step.
-        for (int blk = lane >> 4; blk < nb; blk += 2) {
-            const unsigned char* bp = w + blk*22;
-            int j = lane & 15;
-            float d = nl_f16(bp);
-            unsigned int qh = (unsigned int)bp[2] | ((unsigned int)bp[3] << 8)
-                            | ((unsigned int)bp[4] << 16) | ((unsigned int)bp[5] << 24);
-            unsigned char q = bp[6 + j];
-            const float* xs = xb + blk*32;
+// Q5_0 (22-byte blocks: f16 d, 32 fifth bits, 16 nibble bytes) and Q5_1
+// (24 bytes: d and a min m). The fifth bits are a 32-bit word at an even,
+// not always 4-aligned, offset: two 16-bit loads.
+@ __lk_mv_q5 b one → String {
+    : ~ String o ( string_from `if (gid < rows * batch) {
+    long long b = gid / rows;
+    long long r = gid % rows;
+    long long x0 = xoff + b * cols;
+    long long nb = cols / 32;
+    long long w0 = woff + r * nb * ` )
+    ( string_push_str o ? one `24` `22` )
+    ( string_push_str o `;
+    float acc = 0.0f;
+    for (long long blk = 0; blk < nb; blk++) {
+        long long bp = w0 + blk * ` )
+    ( string_push_str o ? one `24` `22` )
+    ( string_push_str o `;
+        float d = F16(LD16(W, bp));
+` )
+    ? one {
+        ( string_push_str o `        float m = F16(LD16(W, bp + 2));
+        unsigned int qh = LD16(W, bp + 4) | (LD16(W, bp + 6) << 16);
+        long long qs = bp + 8;
+` )
+    } {
+        ( string_push_str o `        unsigned int qh = LD16(W, bp + 2) | (LD16(W, bp + 4) << 16);
+        long long qs = bp + 6;
+` )
+    }
+    ( string_push_str o `        long long xb = x0 + blk * 32;
+        float sub = 0.0f;
+` )
+    ? one { ( string_push_str o `        float msum = 0.0f;
+` ) } {}
+    ( string_push_str o `        for (int j = 0; j < 16; j++) {
             int h0 = ((qh >> j) & 1u) << 4;
             int h1 = ((qh >> (j + 16)) & 1u) << 4;
-            acc += d * (float)(((q & 0xF) | h0) - 16) * xs[j];
-            acc += d * (float)(((q >> 4)  | h1) - 16) * xs[j + 16];
+            int qv = (int)LD(W, qs + j);
+` )
+    ? one {
+        ( string_push_str o `            sub += (float)((qv & 15) | h0) * LD(x, xb + j);
+            sub += (float)((qv >> 4) | h1) * LD(x, xb + j + 16);
+            msum += LD(x, xb + j) + LD(x, xb + j + 16);
         }
-        acc = nl_warp_sum(acc);
-        if (lane == 0) y[(long long)b*rows + r] = acc;
-    }` )
-}
-
-@ __lk_mv_q5_1_w → String {
-    ^ ( __lk_cat3 ( __lk_warp_red ) ( __lk_f16_dev ) `extern "C" __global__ void mv_q5_1_w(
-        const unsigned char* __restrict__ W, const float* __restrict__ x, float* __restrict__ y, int rows, int cols, int batch) {
-        NL_WARP_PROLOGUE(rows, batch)
-        int nb = cols / 32;
-        const unsigned char* w = W + (long long)r * nb * 24;
-        const float* xb = x + (long long)b*cols;
-        float acc = 0.f;
-        for (int blk = lane >> 4; blk < nb; blk += 2) {
-            const unsigned char* bp = w + blk*24;
-            int j = lane & 15;
-            float d = nl_f16(bp);
-            float m = nl_f16(bp + 2);
-            unsigned int qh = (unsigned int)bp[4] | ((unsigned int)bp[5] << 8)
-                            | ((unsigned int)bp[6] << 16) | ((unsigned int)bp[7] << 24);
-            unsigned char q = bp[8 + j];
-            const float* xs = xb + blk*32;
-            int h0 = ((qh >> j) & 1u) << 4;
-            int h1 = ((qh >> (j + 16)) & 1u) << 4;
-            acc += (d * (float)((q & 0xF) | h0) + m) * xs[j];
-            acc += (d * (float)((q >> 4)  | h1) + m) * xs[j + 16];
+        acc += d * sub + m * msum;
+` )
+    } {
+        ( string_push_str o `            sub += (float)(((qv & 15) | h0) - 16) * LD(x, xb + j);
+            sub += (float)(((qv >> 4) | h1) - 16) * LD(x, xb + j + 16);
         }
-        acc = nl_warp_sum(acc);
-        if (lane == 0) y[(long long)b*rows + r] = acc;
+        acc += d * sub;
+` )
+    }
+    ( string_push_str o `    }
+    ST(y, yoff + b * rows + r, acc);
+}` )
+    ^ o
+}
+
+// Warp: 32 lanes, 16 bytes of quants per block — lanes 0..15 take one
+// block's bytes, lanes 16..31 the next block's: two blocks per step.
+@ __lk_mv_q5_w b one → String {
+    : ~ String o ( string_from `    long long nb = cols / 32;
+    long long w0 = woff + r * nb * ` )
+    ( string_push_str o ? one `24` `22` )
+    ( string_push_str o `;
+    for (long long blk = lane >> 4; blk < nb; blk += 2) {
+        long long bp = w0 + blk * ` )
+    ( string_push_str o ? one `24` `22` )
+    ( string_push_str o `;
+        int j = (int)(lane & 15);
+        float d = F16(LD16(W, bp));
+` )
+    ? one {
+        ( string_push_str o `        float m = F16(LD16(W, bp + 2));
+        unsigned int qh = LD16(W, bp + 4) | (LD16(W, bp + 6) << 16);
+        int q = (int)LD(W, bp + 8 + j);
+` )
+    } {
+        ( string_push_str o `        unsigned int qh = LD16(W, bp + 2) | (LD16(W, bp + 4) << 16);
+        int q = (int)LD(W, bp + 6 + j);
+` )
+    }
+    ( string_push_str o `        long long xs = x0 + blk * 32;
+        int h0 = ((qh >> j) & 1u) << 4;
+        int h1 = ((qh >> (j + 16)) & 1u) << 4;
+` )
+    ? one {
+        ( string_push_str o `        acc += (d * (float)((q & 15) | h0) + m) * LD(x, xs + j);
+        acc += (d * (float)((q >> 4) | h1) + m) * LD(x, xs + j + 16);
     }` )
-}
-
-@ __lk_mv_q5_k_w → String {
-    ^ ( __lk_cat3 ( __lk_warp_red ) ( __lk_f16_dev ) `extern "C" __global__ void mv_q5_k_w(
-        const unsigned char* __restrict__ W, const float* __restrict__ x, float* __restrict__ y, int rows, int cols, int batch) {
-        NL_WARP_PROLOGUE(rows, batch)
-        int nb = cols / 256;
-        const unsigned char* w = W + (long long)r * nb * 176;
-        const float* xb = x + (long long)b*cols;
-        float acc = 0.f;
-        for (int blk = 0; blk < nb; ++blk) {
-            const unsigned char* bp = w + blk*176;
-            float d    = nl_f16(bp);
-            float dmin = nl_f16(bp + 2);
-            const unsigned char* sc = bp + 4;
-            const unsigned char* qh = bp + 16;
-            const unsigned char* qs = bp + 48;
-            const float* xblk = xb + blk*256;
-            unsigned char hbits = qh[lane];
-            for (int j = 0; j < 4; ++j) {
-                unsigned char q = qs[j*32 + lane];
-                for (int t = 0; t < 2; ++t) {
-                    int sb = 2*j + t;
-                    int sV, mV;
-                    if (sb < 4) { sV = sc[sb] & 63; mV = sc[sb+4] & 63; }
-                    else {
-                        sV = (sc[sb+4] & 0xF) | ((sc[sb-4] >> 6) << 4);
-                        mV = (sc[sb+4] >>  4) | ((sc[sb]   >> 6) << 4);
-                    }
-                    float xv = xblk[sb*32 + lane];
-                    int qq = (t ? (q >> 4) : (q & 0xF)) | (((hbits >> sb) & 1u) << 4);
-                    acc += (d * sV) * ((float)qq * xv) - (dmin * mV) * xv;
-                }
-            }
-        }
-        acc = nl_warp_sum(acc);
-        if (lane == 0) y[(long long)b*rows + r] = acc;
+    } {
+        ( string_push_str o `        acc += d * (float)(((q & 15) | h0) - 16) * LD(x, xs + j);
+        acc += d * (float)(((q >> 4) | h1) - 16) * LD(x, xs + j + 16);
     }` )
+    }
+    ^ ( __lk_warp ( string_data o ) )
 }
 
-// unsafe: compiles this file's own kernel sources.
-unsafe @ lk_build Gpu g → LlmKernels {
-    : GpuKernel k1 ( gpu_compile g ( __lk_matvec ) `matvec` )
-    : GpuKernel k2 ( gpu_compile g ( __lk_rmsnorm ) `rmsnorm` )
-    : GpuKernel k3 ( gpu_compile g ( __lk_rope ) `rope` )
-    : GpuKernel k3n ( gpu_compile g ( __lk_rope_neox ) `rope_neox` )
-    : GpuKernel k4 ( gpu_compile g ( __lk_attn ) `attn` )
-    : GpuKernel k4a ( gpu_compile g ( __lk_attn_sc ) `attn_sc` )
-    : GpuKernel k4b ( gpu_compile g ( __lk_attn_out ) `attn_out` )
-    : GpuKernel k5 ( gpu_compile g ( __lk_silumul ) `silumul` )
-    : GpuKernel k5g ( gpu_compile g ( __lk_gelumul ) `gelumul` )
-    : GpuKernel k5s ( gpu_compile g ( __lk_scale ) `scale` )
-    : GpuKernel k6 ( gpu_compile g ( __lk_addv ) `addv` )
-    : GpuKernel k6b ( gpu_compile g ( __lk_addrow ) `addrow` )
-    : GpuKernel k7 ( gpu_compile g ( __lk_copyat ) `copyat` )
-    : GpuKernel k8 ( gpu_compile g ( __lk_axpy ) `axpy` )
-    : GpuKernel me1 ( gpu_compile g ( __lk_mv_exp_f32 ) `mv_exp_f32` )
-    : GpuKernel me2 ( __lk_compile g ( __lk_mv_exp_q8_0 ) `mv_exp_q8_0` )
-    : GpuKernel me3 ( gpu_compile g ( __lk_moe_scatter ) `moe_scatter` )
-    : GpuKernel me4 ( gpu_compile g ( __lk_moe_route ) `moe_route` )
-    : GpuKernel me5 ( gpu_compile g ( __lk_argmax_conf ) `argmax_conf` )
-    : GpuKernel q1 ( __lk_compile g ( __lk_mv_q4_0 ) `mv_q4_0` )
-    : GpuKernel q2 ( __lk_compile g ( __lk_mv_q8_0 ) `mv_q8_0` )
-    : GpuKernel qb1 ( gpu_compile g ( __lk_mv_f32_b ) `mv_f32_b` )
-    : GpuKernel qb2 ( __lk_compile g ( __lk_mv_q8_0_b ) `mv_q8_0_b` )
-    : GpuKernel q3 ( __lk_compile g ( __lk_mv_q4_k ) `mv_q4_k` )
-    : GpuKernel q4 ( __lk_compile g ( __lk_mv_q6_k ) `mv_q6_k` )
-    : GpuKernel q5 ( __lk_compile g ( __lk_mv_f16 ) `mv_f16` )
-    : GpuKernel q6 ( __lk_compile g ( __lk_mv_q5_0 ) `mv_q5_0` )
-    : GpuKernel q7 ( __lk_compile g ( __lk_mv_q5_1 ) `mv_q5_1` )
-    : GpuKernel q8 ( __lk_compile g ( __lk_mv_q5_k ) `mv_q5_k` )
-    : b ok0 & & & ( gpu_kernel_ok k1 ) ( gpu_kernel_ok k2 )
-    & & & ( gpu_kernel_ok k3 ) ( gpu_kernel_ok k4 ) ( gpu_kernel_ok k4a ) ( gpu_kernel_ok k4b )
-    & & ( gpu_kernel_ok k5 ) ( gpu_kernel_ok k6 ) ( gpu_kernel_ok k7 )
-    : b ok1 & & ( gpu_kernel_ok q1 ) ( gpu_kernel_ok q2 )
-    & & ( gpu_kernel_ok q3 ) ( gpu_kernel_ok q4 ) ( gpu_kernel_ok q5 )
-    : GpuKernel rp ( gpu_compile g ( __lk_q8_repack ) `q8_repack` )
-    : b okme & & & & & ( gpu_kernel_ok me1 ) ( gpu_kernel_ok me2 ) ( gpu_kernel_ok me3 ) ( gpu_kernel_ok me4 ) ( gpu_kernel_ok me5 ) ( gpu_kernel_ok rp )
-    : b ok & & & & & & ok0 ( gpu_kernel_ok k3n ) ( gpu_kernel_ok k6b ) ( gpu_kernel_ok k8 ) okme
-    & ( gpu_kernel_ok k5g ) ( gpu_kernel_ok k5s ) & ok1 & & ( gpu_kernel_ok q6 ) ( gpu_kernel_ok q7 ) ( gpu_kernel_ok q8 )
-    // The warp-per-row matvecs use __shfl_down_sync — CUDA only. On any
-    // other backend the portable kernels above stay in charge, and the
-    // flag below turns the dispatch off.
-    : b want_warp == ( gpu_backend ) 0
-    : GpuKernel w1 ? want_warp ( __lk_compile g ( __lk_mv_f32_w ) `mv_f32_w` ) ( gpu_kernel_none )
-    : GpuKernel w2 ? want_warp ( __lk_compile g ( __lk_mv_q4_0_w ) `mv_q4_0_w` ) ( gpu_kernel_none )
-    : GpuKernel w3 ? want_warp ( __lk_compile g ( __lk_mv_q8_0_w ) `mv_q8_0_w` ) ( gpu_kernel_none )
-    : GpuKernel w4 ? want_warp ( __lk_compile g ( __lk_mv_q4_k_w ) `mv_q4_k_w` ) ( gpu_kernel_none )
-    : GpuKernel w5 ? want_warp ( __lk_compile g ( __lk_mv_q6_k_w ) `mv_q6_k_w` ) ( gpu_kernel_none )
-    : GpuKernel w6 ? want_warp ( __lk_compile g ( __lk_mv_q5_0_w ) `mv_q5_0_w` ) ( gpu_kernel_none )
-    : GpuKernel w7 ? want_warp ( __lk_compile g ( __lk_mv_q5_1_w ) `mv_q5_1_w` ) ( gpu_kernel_none )
-    : GpuKernel w8 ? want_warp ( __lk_compile g ( __lk_mv_q5_k_w ) `mv_q5_k_w` ) ( gpu_kernel_none )
-    : GpuKernel me5w ? want_warp ( __lk_compile g ( __lk_argmax_conf_w ) `argmax_conf_w` ) ( gpu_kernel_none )
-    : b warp & & want_warp ( gpu_kernel_ok me5w )
-    & & & ( gpu_kernel_ok w1 ) ( gpu_kernel_ok w2 ) & ( gpu_kernel_ok w3 ) ( gpu_kernel_ok w4 )
-    & & ( gpu_kernel_ok w5 ) ( gpu_kernel_ok w6 ) & ( gpu_kernel_ok w7 ) ( gpu_kernel_ok w8 )
-    ^ @ LlmKernels { k1 q1 q2 qb1 qb2 q6 q7 q3 q8 q4 q5 w1 w2 w3 w4 w5 w6 w7 w8 warp k2 k3 k3n k4 k4a k4b k5 k5g k5s k6 k6b k7 k8 me1 me2 me3 me4 me5 me5w rp ok }
-}
-
-// ── launch wrappers (raw device pointers, onnx op idiom) ────────────
-// Each takes device addresses as plain integers and launches a kernel
-// that indexes them by the sizes it is given, so each is `raw`: the
-// caller vouches that every address is a live buffer that big.
-
-raw @ lk_matvec LlmKernels ks i wd i xd i yd i rows i cols i batch → v {
-    : ( Vec i ) a ( vec_new [i] )
-    ( vec_push [i] a ( gpu_arg_i64 wd ) )
-    ( vec_push [i] a ( gpu_arg_i64 xd ) )
-    ( vec_push [i] a ( gpu_arg_i64 yd ) )
-    ( vec_push [i] a ( gpu_arg_i32 rows ) )
-    ( vec_push [i] a ( gpu_arg_i32 cols ) )
-    ( vec_push [i] a ( gpu_arg_i32 batch ) )
-    : i _r ( gpu_launch . ks matvec ( gpu_grid * rows batch 256 ) 256 a )
-}
-
-// Quantised matvec dispatch: `gt` is the ggml tensor type of W.
-// Returns F when the type has no device kernel (the caller then falls
-// back to the f32 path — correctness first, always).
-raw @ lk_matvec_q LlmKernels ks i gt i wd i xd i yd i rows i cols i batch → b {
+// The matvec dispatch: `w.gt` is the ggml type of W. F when the type has
+// no device kernel (the caller then falls back — correctness first).
+// `warp` = the CUDA warp shapes; without it, the portable kernels.
+@ lk_matvec GpuKit kit b warp LkW w i woff GkBuf x i xoff GkBuf y i yoff i rows i cols i batch inout ( Vec GkLaunch ) plan → b {
+    : i gt . w gt
     : ~ i which -1
     ? == gt 0 { = which 0 } {}
     ? == gt 1 { = which 5 } {}
@@ -1362,303 +800,547 @@ raw @ lk_matvec_q LlmKernels ks i gt i wd i xd i yd i rows i cols i batch → b 
     ? == gt 7 { = which 7 } {}
     ? == gt 13 { = which 8 } {}
     ? < which 0 { ^ F } {}
-    // Batch >= 4 routing for f32/Q8_0, from measurement at the llada2
-    // shapes (RTX 4090, 20-run means):
+    : ~ GkCall c ( gk_call_new )
+    ? == which 0 { ( gk_call_dev_in c `W` . w f ) } ? == which 5 { ( gk_call_half_in c `W` . w h ) } { ( gk_call_bytes_in c `W` . w q ) }
+    ( gk_call_dev_in c `x` x ) ( gk_call_dev c `y` y )
+    ( gk_call_i64 c `rows` rows ) ( gk_call_i64 c `cols` cols ) ( gk_call_i64 c `batch` batch )
+    ( gk_call_i64 c `woff` woff ) ( gk_call_i64 c `xoff` xoff ) ( gk_call_i64 c `yoff` yoff )
+    // Batch >= 4 routing for f32 / Q8_0, from measurement at the llada2
+    // shapes (RTX 4090):
     //   157184×2048: batch-reuse 4.4 ms vs warp-per-row 32 ms — a huge
     //     weight matrix busts L2, so re-reading it per position is the
     //     whole cost, and `rows` threads is already full occupancy.
-    //   2048×2048 / 512×2048: warp-per-row wins — the weights FIT in
-    //     L2, so batch-reuse saves nothing and its low thread count
-    //     loses; a warp-batched hybrid tied with plain warp (deleted).
+    //   2048×2048 / 512×2048: warp-per-row wins — the weights FIT in L2.
     //   2048×512: cols/32 = 16 blocks < 32 lanes starves the warp
     //     kernels (110 us) — the plain scalar kernel wins (45 us).
-    // The CPU backend always takes the batch-reuse kernel: the row
-    // stays in cache across the batch.
+    // The CPU backend always takes the batch-reuse kernel: the row stays
+    // in cache across the batch.
     ? & >= batch 4 | == which 0 == which 2 {
-        : b use_b | ! . ks warp >= rows 16384
-        : b use_sp & . ks warp < cols 1024
-        ? | use_b use_sp {
-            : ( Vec i ) ba ( vec_new [i] )
-            ( vec_push [i] ba ( gpu_arg_i64 wd ) )
-            ( vec_push [i] ba ( gpu_arg_i64 xd ) )
-            ( vec_push [i] ba ( gpu_arg_i64 yd ) )
-            ( vec_push [i] ba ( gpu_arg_i32 rows ) )
-            ( vec_push [i] ba ( gpu_arg_i32 cols ) )
-            ( vec_push [i] ba ( gpu_arg_i32 batch ) )
-            ? use_b {
-                : i bg ( gpu_grid rows 64 )
-                ? == which 0 { : i _r ( gpu_launch . ks mv_f32_b bg 64 ba ) } {}
-                ? == which 2 { : i _r ( gpu_launch . ks mv_q8_0_b bg 64 ba ) } {}
-            } {
-                : i sg ( gpu_grid * rows batch 64 )
-                ? == which 0 { : i _r ( gpu_launch . ks matvec sg 64 ba ) } {}
-                ? == which 2 { : i _r ( gpu_launch . ks mv_q8_0 sg 64 ba ) } {}
-            }
-            ^ T
+        : b use_b | ! warp >= rows 16384
+        : b use_sp & warp < cols 1024
+        ? use_b {
+            ? == which 0 { ^ ( __lk_rec kit c `nl_mv_f32_b` ( __lk_mv_f32_b ) ( gk_grid rows 64 ) 64 plan ) } {}
+            ? warp { ^ ( __lk_rec kit c `nl_mv_q8_0_b` ( string_data ( __lk_mv_q8_0_b ) ) ( gk_grid rows 64 ) 64 plan ) } {}
+            ^ ( __lk_rec kit c `nl_mv_q8_0_bh` ( string_data ( __lk_mv_q8_0_bh ) ) ( gk_grid rows 64 ) 64 plan )
+        } {}
+        ? use_sp {
+            ? == which 0 { ^ ( __lk_rec kit c `nl_mv` ( __lk_mv_body ) ( gk_grid * rows batch 64 ) 64 plan ) } {}
+            ^ ( __lk_rec kit c `nl_mv_q8_0` ( string_data ( __lk_mv_q8_0 ) ) ( gk_grid * rows batch 64 ) 64 plan )
         } {}
     } {}
-    // warp-per-row variants (CUDA): f32, Q4_0, Q8_0, Q4_K, Q6_K, Q5_0, Q5_1, Q5_K
-    ? & . ks warp | | | | | | | == which 0 == which 1 == which 2 == which 3 == which 4
-    == which 6 == which 7 == which 8 {
-        : ( Vec i ) wa ( vec_new [i] )
-        ( vec_push [i] wa ( gpu_arg_i64 wd ) )
-        ( vec_push [i] wa ( gpu_arg_i64 xd ) )
-        ( vec_push [i] wa ( gpu_arg_i64 yd ) )
-        ( vec_push [i] wa ( gpu_arg_i32 rows ) )
-        ( vec_push [i] wa ( gpu_arg_i32 cols ) )
-        ( vec_push [i] wa ( gpu_arg_i32 batch ) )
+    // warp-per-row variants (CUDA): every type but f16
+    ? & warp != which 5 {
         // 128 threads = 4 warps per block, one row each
-        : i threads * * rows batch 32
-        : i wg ( gpu_grid threads 128 )
-        ? == which 0 { : i _r ( gpu_launch . ks w_f32 wg 128 wa ) } {}
-        ? == which 1 { : i _r ( gpu_launch . ks w_q4_0 wg 128 wa ) } {}
-        ? == which 2 { : i _r ( gpu_launch . ks w_q8_0 wg 128 wa ) } {}
-        ? == which 3 { : i _r ( gpu_launch . ks w_q4_k wg 128 wa ) } {}
-        ? == which 4 { : i _r ( gpu_launch . ks w_q6_k wg 128 wa ) } {}
-        ? == which 6 { : i _r ( gpu_launch . ks w_q5_0 wg 128 wa ) } {}
-        ? == which 7 { : i _r ( gpu_launch . ks w_q5_1 wg 128 wa ) } {}
-        ? == which 8 { : i _r ( gpu_launch . ks w_q5_k wg 128 wa ) } {}
-        ^ T
+        : i wg ( gk_grid * * rows batch 32 128 )
+        ? == which 0 { ^ ( __lk_rec kit c `nl_mv_f32_w` ( string_data ( __lk_mv_f32_w ) ) wg 128 plan ) } {}
+        ? == which 1 { ^ ( __lk_rec kit c `nl_mv_q4_0_w` ( string_data ( __lk_mv_q4_0_w ) ) wg 128 plan ) } {}
+        ? == which 2 { ^ ( __lk_rec kit c `nl_mv_q8_0_w` ( string_data ( __lk_mv_q8_0_w ) ) wg 128 plan ) } {}
+        ? == which 3 { ^ ( __lk_rec kit c `nl_mv_q4_k_w` ( string_data ( __lk_mv_qk_warp F ) ) wg 128 plan ) } {}
+        ? == which 4 { ^ ( __lk_rec kit c `nl_mv_q6_k_w` ( string_data ( __lk_mv_q6_k_w ) ) wg 128 plan ) } {}
+        ? == which 6 { ^ ( __lk_rec kit c `nl_mv_q5_0_w` ( string_data ( __lk_mv_q5_w F ) ) wg 128 plan ) } {}
+        ? == which 7 { ^ ( __lk_rec kit c `nl_mv_q5_1_w` ( string_data ( __lk_mv_q5_w T ) ) wg 128 plan ) } {}
+        ^ ( __lk_rec kit c `nl_mv_q5_k_w` ( string_data ( __lk_mv_qk_warp T ) ) wg 128 plan )
     } {}
-    ? == which 0 {
-        ( lk_matvec ks wd xd yd rows cols batch )
-        ^ T
-    } {}
-    : ( Vec i ) a ( vec_new [i] )
-    ( vec_push [i] a ( gpu_arg_i64 wd ) )
-    ( vec_push [i] a ( gpu_arg_i64 xd ) )
-    ( vec_push [i] a ( gpu_arg_i64 yd ) )
-    ( vec_push [i] a ( gpu_arg_i32 rows ) )
-    ( vec_push [i] a ( gpu_arg_i32 cols ) )
-    ( vec_push [i] a ( gpu_arg_i32 batch ) )
-    : i grid ( gpu_grid * rows batch 64 )
-    ? == which 1 { : i _r ( gpu_launch . ks mv_q4_0 grid 64 a ) } {}
-    ? == which 2 { : i _r ( gpu_launch . ks mv_q8_0 grid 64 a ) } {}
-    ? == which 3 { : i _r ( gpu_launch . ks mv_q4_k grid 64 a ) } {}
-    ? == which 4 { : i _r ( gpu_launch . ks mv_q6_k grid 64 a ) } {}
-    ? == which 5 { : i _r ( gpu_launch . ks mv_f16 grid 64 a ) } {}
-    ? == which 6 { : i _r ( gpu_launch . ks mv_q5_0 grid 64 a ) } {}
-    ? == which 7 { : i _r ( gpu_launch . ks mv_q5_1 grid 64 a ) } {}
-    ? == which 8 { : i _r ( gpu_launch . ks mv_q5_k grid 64 a ) } {}
-    ^ T
+    ? == which 0 { ^ ( __lk_rec kit c `nl_mv` ( __lk_mv_body ) ( gk_grid * rows batch 256 ) 256 plan ) } {}
+    : i grid ( gk_grid * rows batch 64 )
+    ? == which 1 { ^ ( __lk_rec kit c `nl_mv_q4_0` ( string_data ( __lk_mv_q4_0 ) ) grid 64 plan ) } {}
+    // (here only the CPU backend: a GPU took a warp kernel above)
+    ? == which 2 { ^ ( __lk_rec kit c `nl_mv_q8_0_h` ( string_data ( __lk_mv_q8_0_h ) ) grid 64 plan ) } {}
+    ? == which 3 { ^ ( __lk_rec kit c `nl_mv_q4_k` ( string_data ( __lk_mv_qk_scalar F ) ) grid 64 plan ) } {}
+    ? == which 4 { ^ ( __lk_rec kit c `nl_mv_q6_k` ( string_data ( __lk_mv_q6_k ) ) grid 64 plan ) } {}
+    ? == which 5 { ^ ( __lk_rec kit c `nl_mv_f16` ( __lk_mv_f16_body ) grid 64 plan ) } {}
+    ? == which 6 { ^ ( __lk_rec kit c `nl_mv_q5_0` ( string_data ( __lk_mv_q5 F ) ) grid 64 plan ) } {}
+    ? == which 7 { ^ ( __lk_rec kit c `nl_mv_q5_1` ( string_data ( __lk_mv_q5 T ) ) grid 64 plan ) } {}
+    ^ ( __lk_rec kit c `nl_mv_q5_k` ( string_data ( __lk_mv_qk_scalar T ) ) grid 64 plan )
 }
 
-// True when the batched-expert matvec has a kernel for weight type `gt`.
-// Only F32 (0) and Q8_0 (8) so far — the two the converter produces and
-// the reference path uses; other types fall back to the per-position
-// loop in model.nu.
-@ lk_experts_supported LlmKernels ks i gt → b {
-    ^ | == gt 0 == gt 8
+// ── Batched Mixture-of-Experts matvecs ──────────────────────────────
+//
+// The MoE FFN used to launch one batch-1 matvec per (position, expert) —
+// 32 positions × 8 experts × 3 projections × 19 layers ≈ 24 000 tiny
+// kernels per forward, each too small to use the GPU, with the CPU pegged
+// issuing them. These do the whole layer's expert work in ONE launch per
+// projection: output row `a` (an assignment; there are n_assign = count·K)
+// uses expert `expid[a]`'s weights and reads its input from row `a / xk` of
+// x — xk = K for the gate/up projections (whose input is the per-POSITION
+// activation) and 1 for the down projection (the per-ASSIGNMENT hidden).
+// The 3D expert tensor is expert-major: expert e's row r is weight row
+// (e·rows + r). No atomics, no shared memory.
+
+@ __lk_mv_exp_f32 → s {
+    ^ `if (gid < rows * n_assign) {
+    long long a = gid / rows;
+    long long r = gid % rows;
+    long long e = LD(expid, a);
+    long long w0 = (e * rows + r) * cols;
+    long long x0 = (a / xk) * cols;
+    float acc = 0.0f;
+    for (long long c = 0; c < cols; c++) { acc += LD(W, w0 + c) * LD(x, x0 + c); }
+    ST(y, a * rows + r, acc);
+}`
 }
 
-// One batched matvec over all n_assign expert assignments. Output row a
-// uses expert expid_dev[a] and input row a/xk of x. Returns F when `gt`
-// has no batched kernel (caller falls back).
-raw @ lk_matvec_experts LlmKernels ks i gt i wd i xd i yd i expid_dev i rows i cols i xk i n_assign → b {
-    ? | == gt 0 == gt 8 {} { ^ F }
-    : ( Vec i ) a ( vec_new [i] )
-    ( vec_push [i] a ( gpu_arg_i64 wd ) )
-    ( vec_push [i] a ( gpu_arg_i64 xd ) )
-    ( vec_push [i] a ( gpu_arg_i64 yd ) )
-    ( vec_push [i] a ( gpu_arg_i64 expid_dev ) )
-    ( vec_push [i] a ( gpu_arg_i32 rows ) )
-    ( vec_push [i] a ( gpu_arg_i32 cols ) )
-    ( vec_push [i] a ( gpu_arg_i32 xk ) )
-    ( vec_push [i] a ( gpu_arg_i32 n_assign ) )
-    // NOTE: two "better" shapes were tried and measured SLOWER, so this
-    // stays the plain one-thread-per-(assignment, row) kernel:
-    //   - warp-per-row (coalesced): shfl reduction overhead beats the
-    //     coalescing win at these short rows (5.4s vs 6.7s).
-    //   - expert-grouped (assignments sharing an expert read its weights
-    //     once — a llada2 window shares each selected expert between ~4.2
-    //     positions): one-thread-per-group collapsed occupancy (9.9s) and
-    //     a padded 4-assignment-tile mapping still lost slightly (4.44s
-    //     vs 4.18s) — the phase is NOT weight-bandwidth-bound, so traffic
-    //     reduction buys nothing here.
-    : i grid ( gpu_grid * rows n_assign 64 )
-    ? == gt 0 { : i _r ( gpu_launch . ks mv_exp_f32 grid 64 a ) } {}
-    ? == gt 8 { : i _r ( gpu_launch . ks mv_exp_q8_0 grid 64 a ) } {}
-    ^ T
+@ __lk_mv_exp_q8_0 → String {
+    ^ ( __lk_cat3 `if (gid < rows * n_assign) {
+    long long a = gid / rows;
+    long long r = ( LD(expid, gid / rows) * rows ) + gid % rows;
+    long long x0 = (a / xk) * cols;
+    long long woff = 0;
+    float acc = 0.0f;
+` ( string_data ( __lk_q8_row `0` `1` ) ) `
+    ST(y, a * rows + gid % rows, acc);
+}` )
 }
 
-// On-device routing: fills expid_dev / wts_dev [count·n_used] from the
-// router logits and the expert bias. One thread per position.
-raw @ lk_moe_route LlmKernels ks i logitsd i biasd i expid_dev i wts_dev i n_expert i n_group i topk_group i n_used f scale i norm i count → v {
-    : ( Vec i ) a ( vec_new [i] )
-    ( vec_push [i] a ( gpu_arg_i64 logitsd ) )
-    ( vec_push [i] a ( gpu_arg_i64 biasd ) )
-    ( vec_push [i] a ( gpu_arg_i64 expid_dev ) )
-    ( vec_push [i] a ( gpu_arg_i64 wts_dev ) )
-    ( vec_push [i] a ( gpu_arg_i32 n_expert ) )
-    ( vec_push [i] a ( gpu_arg_i32 n_group ) )
-    ( vec_push [i] a ( gpu_arg_i32 topk_group ) )
-    ( vec_push [i] a ( gpu_arg_i32 n_used ) )
-    ( vec_push [i] a ( gpu_arg_f32 scale ) )
-    ( vec_push [i] a ( gpu_arg_i32 norm ) )
-    ( vec_push [i] a ( gpu_arg_i32 count ) )
-    : i _r ( gpu_launch . ks moe_route ( gpu_grid count 64 ) 64 a )
+// True when the batched-expert matvec has a kernel for weight type `gt`:
+// F32 (0) and Q8_0 (8) — the two the converter produces; other types fall
+// back to the per-position loop in model.nu.
+@ lk_experts_supported i gt → b { ^ | == gt 0 == gt 8 }
+
+// One batched matvec over all n_assign expert assignments. F when `gt` has
+// no batched kernel (caller falls back). (Two "better" shapes were measured
+// SLOWER and stay deleted: warp-per-row — the shuffle beats the coalescing
+// at these short rows — and expert-grouped tiles; the phase is not
+// weight-bandwidth-bound.)
+@ lk_matvec_experts GpuKit kit LkW w GkBuf x GkBuf y GkBuf expid i rows i cols i xk i n_assign inout ( Vec GkLaunch ) plan → b {
+    ? ( lk_experts_supported . w gt ) {} { ^ F }
+    : ~ GkCall c ( gk_call_new )
+    ? == . w gt 0 { ( gk_call_dev_in c `W` . w f ) } { ( gk_call_bytes_in c `W` . w q ) }
+    ( gk_call_dev_in c `x` x ) ( gk_call_dev c `y` y ) ( gk_call_dev_in c `expid` expid )
+    ( gk_call_i64 c `rows` rows ) ( gk_call_i64 c `cols` cols ) ( gk_call_i64 c `xk` xk ) ( gk_call_i64 c `n_assign` n_assign )
+    : i grid ( gk_grid * rows n_assign 64 )
+    ? == . w gt 0 { ^ ( __lk_rec kit c `nl_mv_exp_f32` ( __lk_mv_exp_f32 ) grid 64 plan ) } {}
+    ^ ( __lk_rec kit c `nl_mv_exp_q8_0` ( string_data ( __lk_mv_exp_q8_0 ) ) grid 64 plan )
 }
 
-// Greedy argmax + softmax-prob per position, on device.
-// Repack one uploaded q8_0 tensor into the split per-row layout (see
-// __lk_q8_repack). `nb` = quant blocks per row, `nblk` = blocks total.
-raw @ lk_q8_repack LlmKernels ks i srcd i dstd i nb i nblk → v {
-    : ( Vec i ) a ( vec_new [i] )
-    ( vec_push [i] a ( gpu_arg_i64 srcd ) )
-    ( vec_push [i] a ( gpu_arg_i64 dstd ) )
-    ( vec_push [i] a ( gpu_arg_i32 nb ) )
-    ( vec_push [i] a ( gpu_arg_i64 nblk ) )
-    : i _r ( gpu_launch . ks q8_repack ( gpu_grid nblk 256 ) 256 a )
+// On-device MoE router: one thread per position. The sigmoid gating scores,
+// the selection-only expert bias (all layers' biases in `bias`, this
+// layer's at `boff`), the group-limited top-k (the best `topk_group` groups
+// by their top-2 biased sums, then the best `n_used` experts inside them),
+// and the assignment table — expid[pos·n_used + j] and its weight (the
+// UNBIASED score, normalised and scaled) — written straight to the device.
+// Per-thread arrays bound n_expert ≤ 256, n_group ≤ 64, n_used ≤ 32 (the
+// LLaDA2 shapes: 256 / 8 / 8).
+@ __lk_moe_route → s {
+    ^ `LOCAL_F(sc, 256);
+LOCAL_F(bs, 256);
+LOCAL_L(allowed, 256);
+LOCAL_F(gsc, 64);
+LOCAL_L(gkeep, 64);
+LOCAL_L(chosen, 32);
+if (gid < count) {
+    long long lg = gid * n_expert;
+    for (long long e = 0; e < n_expert; e++) {
+        float s = 1.0f / (1.0f + expf(-LD(logits, lg + e)));
+        ST(sc, e, s);
+        ST(bs, e, s + LD(bias, boff + e));
+    }
+    long long per = (n_group > 0) ? n_expert / n_group : n_expert;
+    if (n_group > 1) {
+        for (long long g = 0; g < n_group; g++) {
+            float m1 = -1e30f;
+            float m2 = -1e30f;
+            for (long long k = 0; k < per; k++) {
+                float v = LD(bs, g * per + k);
+                if (v > m1) { m2 = m1; m1 = v; } else { if (v > m2) { m2 = v; } }
+            }
+            ST(gsc, g, m1 + m2);
+        }
+        for (long long g = 0; g < n_group; g++) { ST(gkeep, g, 0); }
+        for (long long r = 0; r < topk_group; r++) {
+            long long best = -1;
+            float bv = -1e30f;
+            for (long long g = 0; g < n_group; g++) {
+                if (LD(gkeep, g) == 0 && LD(gsc, g) > bv) { bv = LD(gsc, g); best = g; }
+            }
+            if (best >= 0) { ST(gkeep, best, 1); }
+        }
+        for (long long e = 0; e < n_expert; e++) { ST(allowed, e, LD(gkeep, e / per)); }
+    } else {
+        for (long long e = 0; e < n_expert; e++) { ST(allowed, e, 1); }
+    }
+    for (long long r = 0; r < n_used; r++) {
+        long long best = -1;
+        float bv = -1e30f;
+        for (long long e = 0; e < n_expert; e++) {
+            if (LD(allowed, e) != 0) {
+                long long taken = 0;
+                for (long long t = 0; t < r; t++) { if (LD(chosen, t) == e) { taken = 1; } }
+                if (taken == 0 && LD(bs, e) > bv) { bv = LD(bs, e); best = e; }
+            }
+        }
+        ST(chosen, r, best);
+    }
+    float wsum = 0.0f;
+    for (long long r = 0; r < n_used; r++) { if (LD(chosen, r) >= 0) { wsum += LD(sc, LD(chosen, r)); } }
+    for (long long r = 0; r < n_used; r++) {
+        long long e = LD(chosen, r);
+        float w = (e >= 0) ? LD(sc, e) : 0.0f;
+        if (norm != 0) { w = w / (wsum + 1e-20f); }
+        w *= (float)scale;
+        ST(expid, gid * n_used + r, (e >= 0) ? e : 0);
+        ST(wts, gid * n_used + r, w);
+    }
+}`
 }
 
-raw @ lk_argmax_conf LlmKernels ks i logitsd i outid i outprob i vocab i count → v {
-    : ( Vec i ) a ( vec_new [i] )
-    ( vec_push [i] a ( gpu_arg_i64 logitsd ) )
-    ( vec_push [i] a ( gpu_arg_i64 outid ) )
-    ( vec_push [i] a ( gpu_arg_i64 outprob ) )
-    ( vec_push [i] a ( gpu_arg_i32 vocab ) )
-    ( vec_push [i] a ( gpu_arg_i32 count ) )
-    ? . ks warp {
-        : i _r ( gpu_launch . ks argmax_conf_w ( gpu_grid * count 32 128 ) 128 a )
-    } {
-        : i _r ( gpu_launch . ks argmax_conf ( gpu_grid count 64 ) 64 a )
+@ lk_moe_route GpuKit kit GkBuf logits GkBuf bias i boff GkBuf expid GkBuf wts i n_expert i n_group i topk_group i n_used f scale i norm i count inout ( Vec GkLaunch ) plan → b {
+    : ~ GkCall c ( gk_call_new )
+    ( gk_call_dev_in c `logits` logits ) ( gk_call_dev_in c `bias` bias ) ( gk_call_dev c `expid` expid ) ( gk_call_dev c `wts` wts )
+    ( gk_call_i64 c `boff` boff ) ( gk_call_i64 c `n_expert` n_expert ) ( gk_call_i64 c `n_group` n_group ) ( gk_call_i64 c `topk_group` topk_group )
+    ( gk_call_i64 c `n_used` n_used ) ( gk_call_f64 c `scale` scale ) ( gk_call_i64 c `norm` norm ) ( gk_call_i64 c `count` count )
+    ^ ( __lk_rec kit c `nl_moe_route` ( __lk_moe_route ) ( gk_grid count 64 ) 64 plan )
+}
+
+// Scatter-accumulate the experts' down-projections onto the residual:
+// out[pos·dim + d] += Σ_j wts[pos·K+j] · down[(pos·K+j)·dim + d]. One thread
+// per (pos, dim); a position's K assignments are contiguous, so no atomics.
+@ lk_moe_scatter GpuKit kit GkBuf down GkBuf wts GkBuf out i K i dim i count inout ( Vec GkLaunch ) plan → b {
+    : ~ GkCall c ( gk_call_new )
+    ( gk_call_dev_in c `down` down ) ( gk_call_dev_in c `wts` wts ) ( gk_call_dev c `out` out )
+    ( gk_call_i64 c `K` K ) ( gk_call_i64 c `dim` dim ) ( gk_call_i64 c `count` count )
+    ^ ( __lk_rec kit c `nl_moe_scatter` `if (gid < count * dim) {
+    long long pos = gid / dim;
+    long long d = gid % dim;
+    float acc = 0.0f;
+    for (long long j = 0; j < K; j++) {
+        long long a = pos * K + j;
+        acc += LD(wts, a) * LD(down, a * dim + d);
+    }
+    ST(out, pos * dim + d, LD(out, pos * dim + d) + acc);
+}` ( gk_grid * count dim 64 ) 64 plan )
+}
+
+// ── Greedy argmax + confidence, on device ──────────────────────────
+//
+// One position per thread (portable) or per warp (CUDA): the argmax token
+// id and its softmax probability (1 / Σ exp(logit − max)), so only count·2
+// small values come back instead of count·vocab. `out_id` is an i64 buffer.
+// The lowest-index tie-break reproduces the serial first-max argmax.
+@ lk_argmax_conf GpuKit kit b warp GkBuf logits GkBuf out_id GkBuf out_prob i vocab i count inout ( Vec GkLaunch ) plan → b {
+    : ~ GkCall c ( gk_call_new )
+    ( gk_call_dev_in c `logits` logits ) ( gk_call_dev c `out_id` out_id ) ( gk_call_dev c `out_prob` out_prob )
+    ( gk_call_i64 c `vocab` vocab ) ( gk_call_i64 c `count` count )
+    ? warp {
+        ^ ( __lk_rec kit c `nl_argmax_conf_w` `long long warp = gid >> 5;
+long long lane = gid & 31;
+long long lg = warp * vocab;
+float mx = -1e30f;
+long long arg = 2147483647;
+if (warp < count) {
+    for (long long v = lane; v < vocab; v += 32) {
+        float xv = LD(logits, lg + v);
+        if (xv > mx || (xv == mx && v < arg)) { mx = xv; arg = v; }
     }
 }
-
-// out[pos] += Σ_j wts[pos*K+j] · down[(pos*K+j)] over `dim` floats.
-raw @ lk_moe_scatter LlmKernels ks i downd i wtsd i outd i K i dim i count → v {
-    : ( Vec i ) a ( vec_new [i] )
-    ( vec_push [i] a ( gpu_arg_i64 downd ) )
-    ( vec_push [i] a ( gpu_arg_i64 wtsd ) )
-    ( vec_push [i] a ( gpu_arg_i64 outd ) )
-    ( vec_push [i] a ( gpu_arg_i32 K ) )
-    ( vec_push [i] a ( gpu_arg_i32 dim ) )
-    ( vec_push [i] a ( gpu_arg_i32 count ) )
-    : i _r ( gpu_launch . ks moe_scatter ( gpu_grid * count dim 64 ) 64 a )
+for (int off = 16; off > 0; off >>= 1) {
+    float omx = SHFL_XOR(mx, off);
+    long long oarg = SHFL_XOR(arg, off);
+    if (omx > mx || (omx == mx && oarg < arg)) { mx = omx; arg = oarg; }
+}
+float sum = 0.0f;
+if (warp < count) {
+    for (long long v = lane; v < vocab; v += 32) { sum += expf(LD(logits, lg + v) - mx); }
+}
+for (int off = 16; off > 0; off >>= 1) { sum += SHFL_DOWN(sum, off); }
+if (warp < count && lane == 0) {
+    ST(out_id, warp, (arg == 2147483647) ? 0 : arg);
+    ST(out_prob, warp, 1.0f / sum);
+}` ( gk_grid * count 32 128 ) 128 plan )
+    } {}
+    ^ ( __lk_rec kit c `nl_argmax_conf` `if (gid < count) {
+    long long lg = gid * vocab;
+    float mx = -1e30f;
+    long long arg = 0;
+    for (long long v = 0; v < vocab; v++) {
+        float xv = LD(logits, lg + v);
+        if (xv > mx) { mx = xv; arg = v; }
+    }
+    float sum = 0.0f;
+    for (long long v = 0; v < vocab; v++) { sum += expf(LD(logits, lg + v) - mx); }
+    ST(out_id, gid, arg);
+    ST(out_prob, gid, 1.0f / sum);
+}` ( gk_grid count 64 ) 64 plan )
 }
 
-raw @ lk_rmsnorm LlmKernels ks i xd i wd i yd i n f eps i batch → v {
-    : ( Vec i ) a ( vec_new [i] )
-    ( vec_push [i] a ( gpu_arg_i64 xd ) )
-    ( vec_push [i] a ( gpu_arg_i64 wd ) )
-    ( vec_push [i] a ( gpu_arg_i64 yd ) )
-    ( vec_push [i] a ( gpu_arg_i32 n ) )
-    ( vec_push [i] a ( gpu_arg_f32 eps ) )
-    ( vec_push [i] a ( gpu_arg_i32 batch ) )
-    : i _r ( gpu_launch . ks rmsnorm ( gpu_grid * n batch 256 ) 256 a )
+// ── norms, rotations, attention ─────────────────────────────────────
+
+// RMSNorm. On a GPU every thread recomputes its row's sum of squares —
+// O(n²) a row, but norms are dwarfed by the matvecs at decode shapes and
+// it needs no cross-thread sync. The CPU backend runs threads one after
+// another, so there a thread takes a whole row: the sum once (in the same
+// order — the same bits), then the row. gemma's RMSNorm is documented as
+// `x * inv * (1 + w)`, but the GGUF converter folds that +1 into the
+// stored weights, so this is the plain form for every architecture. `y`
+// must not be `x`: another thread would overwrite the row under the sum.
+@ lk_rmsnorm GpuKit kit GkBuf x GkBuf w GkBuf y i n f eps i batch inout ( Vec GkLaunch ) plan → b {
+    : ~ GkCall c ( gk_call_new )
+    ( gk_call_dev_in c `x` x ) ( gk_call_dev_in c `w` w ) ( gk_call_dev c `y` y )
+    ( gk_call_i64 c `n` n ) ( gk_call_f64 c `eps` eps ) ( gk_call_i64 c `batch` batch )
+    ? != 0 ( nurl_str_eq ( gk_backend kit ) `cpu` ) {
+        ^ ( __lk_rec kit c `nl_rmsnorm_r` `if (gid < batch) {
+    WIN(xr, x, gid * n, n);
+    WIN(wr, w, 0, n);
+    WIN(yr, y, gid * n, n);
+    float ss = 0.0f;
+    for (int j = 0; j < LEN(xr); j++) { ss += LD(xr, j) * LD(xr, j); }
+    float inv = rsqrtf(ss / n + (float)eps);
+    for (int i = 0; i < LEN(xr) && i < LEN(wr) && i < LEN(yr); i++) { ST(yr, i, LD(xr, i) * inv * LD(wr, i)); }
+}` ( gk_grid batch 64 ) 64 plan )
+    } {}
+    ^ ( __lk_rec kit c `nl_rmsnorm` `if (gid < n * batch) {
+    long long b = gid / n;
+    long long i = gid % n;
+    WIN(xr, x, b * n, n);
+    float ss = 0.0f;
+    for (int j = 0; j < LEN(xr); j++) { ss += LD(xr, j) * LD(xr, j); }
+    float inv = rsqrtf(ss / n + (float)eps);
+    ST(y, b * n + i, LD(xr, i) * inv * LD(w, i));
+}` ( gk_grid * n batch 256 ) 256 plan )
 }
 
-// style: 0 = NORM (llama), 1 = NEOX (qwen2)
-raw @ lk_rope LlmKernels ks i xd i nh i hd i rd i pos f base i style i batch → v {
-    : ( Vec i ) a ( vec_new [i] )
-    ( vec_push [i] a ( gpu_arg_i64 xd ) )
-    ( vec_push [i] a ( gpu_arg_i32 nh ) )
-    ( vec_push [i] a ( gpu_arg_i32 hd ) )
-    ( vec_push [i] a ( gpu_arg_i32 rd ) )
-    ( vec_push [i] a ( gpu_arg_i32 pos ) )
-    ( vec_push [i] a ( gpu_arg_f32 base ) )
-    ( vec_push [i] a ( gpu_arg_i32 batch ) )
+// Rotary embedding of the first `rd` dims of every head, at position pos0+b
+// for batch element b. style 0 = ggml NORM (llama: adjacent pairs 2j, 2j+1),
+// 1 = NEOX (qwen2, phi, …: the halves j, j + rd/2). Feeding a model the
+// wrong one still runs and still produces fluent-looking garbage, which is
+// why the architecture selects it rather than a heuristic.
+@ lk_rope GpuKit kit GkBuf x i nh i hd i rd i pos0 f base i style i batch inout ( Vec GkLaunch ) plan → b {
+    : ~ GkCall c ( gk_call_new )
+    ( gk_call_dev c `x` x )
+    ( gk_call_i64 c `nh` nh ) ( gk_call_i64 c `hd` hd ) ( gk_call_i64 c `rd` rd ) ( gk_call_i64 c `pos0` pos0 )
+    ( gk_call_f64 c `base` base ) ( gk_call_i64 c `batch` batch )
     : i total * * nh / rd 2 batch
-    ? == style 1 {
-        : i _r ( gpu_launch . ks rope_neox ( gpu_grid total 256 ) 256 a )
-    } {
-        : i _r ( gpu_launch . ks rope ( gpu_grid total 256 ) 256 a )
+    : s pair ? == style 1 `long long v0 = base0 + h * hd + j;
+    long long v1 = v0 + pairs;` `long long v0 = base0 + h * hd + 2 * j;
+    long long v1 = v0 + 1;`
+    : ~ String body ( string_from `long long pairs = rd / 2;
+if (gid < nh * pairs * batch) {
+    long long b = gid / (nh * pairs);
+    long long p = gid % (nh * pairs);
+    long long base0 = b * nh * hd;
+    long long pos = pos0 + b;
+    long long h = p / pairs;
+    long long j = p % pairs;
+    float theta = pos * powf((float)base, -2.0f * j / rd);
+    float cs = cosf(theta);
+    float sn = sinf(theta);
+    ` )
+    ( string_push_str body pair )
+    ( string_push_str body `
+    float a0 = LD(x, v0);
+    float a1 = LD(x, v1);
+    ST(x, v0, a0 * cs - a1 * sn);
+    ST(x, v1, a0 * sn + a1 * cs);
+}` )
+    ^ ( __lk_rec kit c ? == style 1 `nl_rope_neox` `nl_rope` ( string_data body ) ( gk_grid total 256 ) 256 plan )
+}
+
+// Attention, two passes: one thread per (position, head, cache row) for the
+// raw score, then the softmax over the row's scores and the value-weighted
+// sum, a thread per (position, head, head-dim). `coop` (a backend whose
+// block barrier is cheap — a GPU): a block per (position, head) shares
+// the weights through shared memory; otherwise every thread walks its own
+// row (the CPU backend runs a barrier's threads as fibers).
+// `qscale` is the query scale (1/sqrt(head_dim) for llama; gemma states its
+// own). `window` > 0 is a sliding window: a key older than `window`
+// positions is not attended to (gemma3 on five layers of six). `causal` 1:
+// batch element b attends its own window, npos0 + b cache rows
+// (autoregressive decode); 0: every element attends the same npos0 rows
+// (block diffusion). GQA: query head h reads kv head h/(nh/nkv). Appends two
+// launches; npos0 is a scalar of both (lk_set).
+@ lk_attn GpuKit kit b coop GkBuf q GkBuf kc GkBuf vc GkBuf out GkBuf sc i nh i nkv i hd i npos0 i batch i maxpos f qscale i window i causal inout ( Vec GkLaunch ) plan → b {
+    : ~ GkCall c ( gk_call_new )
+    ( gk_call_dev_in c `q` q ) ( gk_call_dev_in c `K` kc ) ( gk_call_dev c `scores` sc )
+    ( gk_call_i64 c `nh` nh ) ( gk_call_i64 c `nkv` nkv ) ( gk_call_i64 c `hd` hd ) ( gk_call_i64 c `npos0` npos0 )
+    ( gk_call_i64 c `batch` batch ) ( gk_call_i64 c `maxpos` maxpos ) ( gk_call_f64 c `qscale` qscale )
+    ( gk_call_i64 c `window` window ) ( gk_call_i64 c `causal` causal )
+    // (the CPU backend: a thread per (position, head) walks its cache rows
+    // — the same dots, without a thread and its index arithmetic per row)
+    : b sc_ok ? coop T ( __lk_rec kit c `nl_attn_sc_r` `if (gid < nh * batch) {
+    long long h = gid % nh;
+    long long b = gid / nh;
+    long long npos = causal != 0 ? npos0 + b : npos0;
+    long long lo = (window > 0 && npos - 1 - window > 0) ? (npos - 1 - window) : 0;
+    long long hi = npos < maxpos ? npos : maxpos;
+    long long kvdim = nkv * hd;
+    long long kh = h / (nh / nkv);
+    WIN(qr, q, b * nh * hd + h * hd, hd);
+    WIN(sr, scores, gid * maxpos + lo, hi - lo);
+    for (int u = 0; u < LEN(sr); u++) {
+        WIN(kr, K, (lo + u) * kvdim + kh * hd, hd);
+        float d = 0.0f;
+        for (int j = 0; j < LEN(qr) && j < LEN(kr); j++) { d += LD(qr, j) * LD(kr, j); }
+        ST(sr, u, d * (float)qscale);
+    }
+}` ( gk_grid * nh batch 64 ) 64 plan )
+    ? sc_ok {} { ^ F }
+    : b sc2 ? coop ( __lk_rec kit c `nl_attn_sc` `long long total = nh * batch * maxpos;
+if (gid < total) {
+    long long t = gid % maxpos;
+    long long hb = gid / maxpos;
+    long long h = hb % nh;
+    long long b = hb / nh;
+    long long npos = causal != 0 ? npos0 + b : npos0;
+    long long lo = (window > 0 && npos - 1 - window > 0) ? (npos - 1 - window) : 0;
+    if (t < npos && t >= lo) {
+        long long kvdim = nkv * hd;
+        long long kh = h / (nh / nkv);
+        WIN(qr, q, b * nh * hd + h * hd, hd);
+        WIN(kr, K, t * kvdim + kh * hd, hd);
+        float d = 0.0f;
+        for (int j = 0; j < LEN(qr) && j < LEN(kr); j++) { d += LD(qr, j) * LD(kr, j); }
+        ST(scores, hb * maxpos + t, d * (float)qscale);
+    }
+}` ( gk_grid * * nh batch maxpos 256 ) 256 plan ) T
+    ? sc2 {} { ^ F }
+    : ~ GkCall c2 ( gk_call_new )
+    ( gk_call_dev_in c2 `V` vc ) ( gk_call_dev_in c2 `scores` sc ) ( gk_call_dev c2 `out` out )
+    ( gk_call_i64 c2 `nh` nh ) ( gk_call_i64 c2 `nkv` nkv ) ( gk_call_i64 c2 `hd` hd ) ( gk_call_i64 c2 `npos0` npos0 )
+    ( gk_call_i64 c2 `batch` batch ) ( gk_call_i64 c2 `maxpos` maxpos ) ( gk_call_i64 c2 `window` window ) ( gk_call_i64 c2 `causal` causal )
+    ? coop {} {
+        ^ ( __lk_rec kit c2 `nl_attn_out_t` `if (gid < nh * batch * hd) {
+    long long d = gid % hd;
+    long long hb = gid / hd;
+    long long h = hb % nh;
+    long long b = hb / nh;
+    long long npos = causal != 0 ? npos0 + b : npos0;
+    long long lo = (window > 0 && npos - 1 - window > 0) ? (npos - 1 - window) : 0;
+    long long kvdim = nkv * hd;
+    long long kh = h / (nh / nkv);
+    WIN(sr, scores, hb * maxpos + lo, npos - lo);
+    WINS(vc, V, lo * kvdim + kh * hd + d, npos - lo, kvdim);
+    float mx = -1e30f;
+    for (int t = 0; t < LEN(sr); t++) { if (LD(sr, t) > mx) { mx = LD(sr, t); } }
+    float sum = 0.0f;
+    float acc = 0.0f;
+    for (int t = 0; t < LEN(sr) && t < LEN(vc); t++) {
+        float p = expf(LD(sr, t) - mx);
+        sum += p;
+        acc += p * LD(vc, t);
+    }
+    ST(out, b * nh * hd + h * hd + d, acc / sum);
+}` ( gk_grid * * nh batch hd 256 ) 256 plan )
+    }
+    // One block of hd threads per (element, head), a thread per head dim:
+    // the block's max through shared memory (a max is exact, so in any
+    // order), then each weight computed once into a shared tile and summed
+    // by every thread in position order — the bits of one thread looping
+    // over every position, without each of hd threads recomputing every
+    // weight.
+    ^ ( __lk_rec kit c2 `nl_attn_out` `SHARED_F(pw, 256);
+SHARED_F(red, 1024);
+long long h = bid % nh;
+long long b = bid / nh;
+long long npos = causal != 0 ? npos0 + b : npos0;
+long long lo = (window > 0 && npos - 1 - window > 0) ? (npos - 1 - window) : 0;
+long long kvdim = nkv * hd;
+long long kh = h / (nh / nkv);
+long long s0 = bid * maxpos;
+float pm = -1e30f;
+for (long long t = lo + tid; t < npos; t += bdim) { float sv = LD(scores, s0 + t); if (sv > pm) { pm = sv; } }
+ST(red, tid, pm);
+SYNC();
+float mx = -1e30f;
+for (int u = 0; u < bdim; u++) { if (LD(red, u) > mx) { mx = LD(red, u); } }
+float sum = 0.0f;
+float acc = 0.0f;
+for (long long t0 = lo; t0 < npos; t0 += 256) {
+    SYNC();
+    for (long long u = tid; u < 256; u += bdim) {
+        if (t0 + u < npos) { ST(pw, u, expf(LD(scores, s0 + t0 + u) - mx)); }
+    }
+    SYNC();
+    WINS(vt, V, t0 * kvdim + kh * hd + tid, npos - t0 < 256 ? npos - t0 : 256, kvdim);
+    for (int u = 0; u < LEN(vt); u++) {
+        float p = LD(pw, u);
+        sum += p;
+        acc += p * LD(vt, u);
     }
 }
-
-// npos0 = the causal window of the FIRST batch element (element b sees
-// npos0 + b rows). maxpos strides the per-(batch,head) score scratch.
-// Two-pass attention: scores, then softmax + value-weighted sum.
-raw @ lk_attn LlmKernels ks i qd i kcd i vcd i outd i scd i nh i nkv i hd i npos0 i batch i maxpos f qscale i window i causal → v {
-    : ( Vec i ) a1 ( vec_new [i] )
-    ( vec_push [i] a1 ( gpu_arg_i64 qd ) )
-    ( vec_push [i] a1 ( gpu_arg_i64 kcd ) )
-    ( vec_push [i] a1 ( gpu_arg_i64 scd ) )
-    ( vec_push [i] a1 ( gpu_arg_i32 nh ) )
-    ( vec_push [i] a1 ( gpu_arg_i32 nkv ) )
-    ( vec_push [i] a1 ( gpu_arg_i32 hd ) )
-    ( vec_push [i] a1 ( gpu_arg_i32 npos0 ) )
-    ( vec_push [i] a1 ( gpu_arg_i32 batch ) )
-    ( vec_push [i] a1 ( gpu_arg_i32 maxpos ) )
-    ( vec_push [i] a1 ( gpu_arg_f32 qscale ) )
-    ( vec_push [i] a1 ( gpu_arg_i32 window ) )
-    ( vec_push [i] a1 ( gpu_arg_i32 causal ) )
-    : i _r1 ( gpu_launch . ks attn_sc ( gpu_grid * * * nh batch maxpos 1 256 ) 256 a1 )
-    : ( Vec i ) a2 ( vec_new [i] )
-    ( vec_push [i] a2 ( gpu_arg_i64 vcd ) )
-    ( vec_push [i] a2 ( gpu_arg_i64 scd ) )
-    ( vec_push [i] a2 ( gpu_arg_i64 outd ) )
-    ( vec_push [i] a2 ( gpu_arg_i32 nh ) )
-    ( vec_push [i] a2 ( gpu_arg_i32 nkv ) )
-    ( vec_push [i] a2 ( gpu_arg_i32 hd ) )
-    ( vec_push [i] a2 ( gpu_arg_i32 npos0 ) )
-    ( vec_push [i] a2 ( gpu_arg_i32 batch ) )
-    ( vec_push [i] a2 ( gpu_arg_i32 maxpos ) )
-    ( vec_push [i] a2 ( gpu_arg_i32 window ) )
-    ( vec_push [i] a2 ( gpu_arg_i32 causal ) )
-    : i _r2 ( gpu_launch . ks attn_out ( gpu_grid * * nh batch hd 256 ) 256 a2 )
+ST(out, b * nh * hd + h * hd + tid, acc / sum);` * nh batch hd plan )
 }
 
-// y ← y + a·x — the routed-expert accumulator (each selected expert's
-// down-projection lands weighted onto the residual stream).
-raw @ lk_axpy LlmKernels ks i yd i xd f a i n → v {
-    : ( Vec i ) ar ( vec_new [i] )
-    ( vec_push [i] ar ( gpu_arg_i64 yd ) )
-    ( vec_push [i] ar ( gpu_arg_i64 xd ) )
-    ( vec_push [i] ar ( gpu_arg_f32 a ) )
-    ( vec_push [i] ar ( gpu_arg_i32 n ) )
-    : i _r ( gpu_launch . ks axpy ( gpu_grid n 256 ) 256 ar )
+// ── elementwise ─────────────────────────────────────────────────────
+
+@ __lk_ew GpuKit kit inout GkCall c s name s body i n inout ( Vec GkLaunch ) plan → b {
+    ^ ( __lk_rec kit c name body ( gk_grid n 256 ) 256 plan )
 }
 
-// GeGLU: g ← gelu(g) * u, in place. Same shape as lk_silumul.
-raw @ lk_gelumul LlmKernels ks i gd i ud i n → v {
-    : ( Vec i ) a ( vec_new [i] )
-    ( vec_push [i] a ( gpu_arg_i64 gd ) )
-    ( vec_push [i] a ( gpu_arg_i64 ud ) )
-    ( vec_push [i] a ( gpu_arg_i32 n ) )
-    : i _r ( gpu_launch . ks gelumul ( gpu_grid n 256 ) 256 a )
+// y ← y + a·x — a routed expert's weighted down-projection onto the
+// residual (yoff / xoff: the position's rows).
+@ lk_axpy GpuKit kit GkBuf y i yoff GkBuf x i xoff f a i n inout ( Vec GkLaunch ) plan → b {
+    : ~ GkCall c ( gk_call_new )
+    ( gk_call_dev c `y` y ) ( gk_call_dev_in c `x` x ) ( gk_call_i64 c `yoff` yoff ) ( gk_call_i64 c `xoff` xoff )
+    ( gk_call_f64 c `a` a ) ( gk_call_i64 c `n` n )
+    ^ ( __lk_ew kit c `nl_axpy` `if (gid < n) { ST(y, yoff + gid, LD(y, yoff + gid) + (float)a * LD(x, xoff + gid)); }` n plan )
 }
 
-// x ← x * s, in place.
-raw @ lk_scale LlmKernels ks i xd f s i n → v {
-    : ( Vec i ) a ( vec_new [i] )
-    ( vec_push [i] a ( gpu_arg_i64 xd ) )
-    ( vec_push [i] a ( gpu_arg_f32 s ) )
-    ( vec_push [i] a ( gpu_arg_i32 n ) )
-    : i _r ( gpu_launch . ks scale ( gpu_grid n 256 ) 256 a )
+// SwiGLU gate: g = silu(g) · u, in place on g.
+@ lk_silumul GpuKit kit GkBuf g GkBuf u i n inout ( Vec GkLaunch ) plan → b {
+    : ~ GkCall c ( gk_call_new )
+    ( gk_call_dev c `g` g ) ( gk_call_dev_in c `u` u ) ( gk_call_i64 c `n` n )
+    ^ ( __lk_ew kit c `nl_silumul` `if (gid < n) { float v = LD(g, gid); ST(g, gid, (v / (1.0f + expf(-v))) * LD(u, gid)); }` n plan )
 }
 
-raw @ lk_silumul LlmKernels ks i gd i ud i n → v {
-    : ( Vec i ) a ( vec_new [i] )
-    ( vec_push [i] a ( gpu_arg_i64 gd ) )
-    ( vec_push [i] a ( gpu_arg_i64 ud ) )
-    ( vec_push [i] a ( gpu_arg_i32 n ) )
-    : i _r ( gpu_launch . ks silumul ( gpu_grid n 256 ) 256 a )
+// GeGLU — gemma's FFN gate. The tanh approximation is what gemma was
+// trained with (gelu_pytorch_tanh), so the exact erf form would be the
+// wrong function here, not a more accurate one.
+@ lk_gelumul GpuKit kit GkBuf g GkBuf u i n inout ( Vec GkLaunch ) plan → b {
+    : ~ GkCall c ( gk_call_new )
+    ( gk_call_dev c `g` g ) ( gk_call_dev_in c `u` u ) ( gk_call_i64 c `n` n )
+    ^ ( __lk_ew kit c `nl_gelumul` `if (gid < n) {
+    float v = LD(g, gid);
+    float cc = 0.7978845608028654f * (v + 0.044715f * v * v * v);
+    ST(g, gid, (0.5f * v * (1.0f + tanhf(cc))) * LD(u, gid));
+}` n plan )
 }
 
-raw @ lk_addv LlmKernels ks i ad i bd i n → v {
-    : ( Vec i ) a ( vec_new [i] )
-    ( vec_push [i] a ( gpu_arg_i64 ad ) )
-    ( vec_push [i] a ( gpu_arg_i64 bd ) )
-    ( vec_push [i] a ( gpu_arg_i32 n ) )
-    : i _r ( gpu_launch . ks addv ( gpu_grid n 256 ) 256 a )
+// x ← x · s (gemma scales the embedding row by sqrt(n_embd)).
+@ lk_scale GpuKit kit GkBuf x f s i n inout ( Vec GkLaunch ) plan → b {
+    : ~ GkCall c ( gk_call_new )
+    ( gk_call_dev c `x` x ) ( gk_call_f64 c `s` s ) ( gk_call_i64 c `n` n )
+    ^ ( __lk_ew kit c `nl_scale` `if (gid < n) { ST(x, gid, LD(x, gid) * (float)s); }` n plan )
 }
 
-// a[b][i] += v[i] for every row of the batch
-raw @ lk_addrow LlmKernels ks i ad i vd i n i batch → v {
-    : ( Vec i ) a ( vec_new [i] )
-    ( vec_push [i] a ( gpu_arg_i64 ad ) )
-    ( vec_push [i] a ( gpu_arg_i64 vd ) )
-    ( vec_push [i] a ( gpu_arg_i32 n ) )
-    ( vec_push [i] a ( gpu_arg_i32 batch ) )
-    : i _r ( gpu_launch . ks addrow ( gpu_grid * n batch 256 ) 256 a )
+// Residual add, in place: a += b.
+@ lk_addv GpuKit kit GkBuf a GkBuf b i n inout ( Vec GkLaunch ) plan → b {
+    : ~ GkCall c ( gk_call_new )
+    ( gk_call_dev c `a` a ) ( gk_call_dev_in c `b` b ) ( gk_call_i64 c `n` n )
+    ^ ( __lk_ew kit c `nl_addv` `if (gid < n) { ST(a, gid, LD(a, gid) + LD(b, gid)); }` n plan )
 }
 
-raw @ lk_copyat LlmKernels ks i dstd i srcd i off i n → v {
-    : ( Vec i ) a ( vec_new [i] )
-    ( vec_push [i] a ( gpu_arg_i64 dstd ) )
-    ( vec_push [i] a ( gpu_arg_i64 srcd ) )
-    ( vec_push [i] a ( gpu_arg_i32 off ) )
-    ( vec_push [i] a ( gpu_arg_i32 n ) )
-    : i _r ( gpu_launch . ks copyat ( gpu_grid n 256 ) 256 a )
+// Broadcast add: every row of a batch gets the same vector (a bias).
+@ lk_addrow GpuKit kit GkBuf a GkBuf v i n i batch inout ( Vec GkLaunch ) plan → b {
+    : ~ GkCall c ( gk_call_new )
+    ( gk_call_dev c `a` a ) ( gk_call_dev_in c `v` v ) ( gk_call_i64 c `n` n ) ( gk_call_i64 c `batch` batch )
+    ^ ( __lk_ew kit c `nl_addrow` `if (gid < n * batch) { ST(a, gid, LD(a, gid) + LD(v, gid % n)); }` * n batch plan )
+}
+
+// Element copy into an offset — appends k/v rows into the cache (`off`
+// moves with the position: lk_set).
+@ lk_copyat GpuKit kit GkBuf dst GkBuf src i off i n inout ( Vec GkLaunch ) plan → b {
+    : ~ GkCall c ( gk_call_new )
+    ( gk_call_dev c `dst` dst ) ( gk_call_dev_in c `src` src ) ( gk_call_i64 c `off` off ) ( gk_call_i64 c `n` n )
+    ^ ( __lk_ew kit c `nl_copyat` `if (gid < n) { ST(dst, off + gid, LD(src, gid)); }` n plan )
+}
+
+// Repack an uploaded q8_0 tensor from ggml's interleaved 34-byte blocks
+// ([d q0..q31] [d q0..q31] …) into the split per-row layout [d0 … d_{nb-1}]
+// [q-block0 … q-block_{nb-1}], same nb·34-byte row stride. With an even nb
+// the quant region is 4-byte aligned, which is what lets the matvecs read
+// words and float4s instead of bytes (their limit is load-instruction
+// count, not bandwidth). One thread per block, run once at model load.
+@ lk_q8_repack GpuKit kit GkBBuf src GkBBuf dst i nb i nblk inout ( Vec GkLaunch ) plan → b {
+    : ~ GkCall c ( gk_call_new )
+    ( gk_call_bytes_in c `src` src ) ( gk_call_bytes c `dst` dst ) ( gk_call_i64 c `nb` nb ) ( gk_call_i64 c `nblk` nblk )
+    ^ ( __lk_rec kit c `nl_q8_repack` `if (gid < nblk) {
+    long long row = gid / nb;
+    long long blk = gid - row * nb;
+    long long s0 = gid * 34;
+    long long drow = row * nb * 34;
+    ST(dst, drow + blk * 2, LD(src, s0));
+    ST(dst, drow + blk * 2 + 1, LD(src, s0 + 1));
+    long long qd = drow + nb * 2 + blk * 32;
+    for (int j = 0; j < 32; j++) { ST(dst, qd + j, LD(src, s0 + 2 + j)); }
+}` ( gk_grid nblk 256 ) 256 plan )
 }

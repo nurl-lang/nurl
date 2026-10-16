@@ -694,9 +694,9 @@ $ `stdlib/std/arc.nu`
 // LoRA params register FIRST.
 @ ft_graph FtModel h inout GTape tp ( Vec i ) ids i r f alpha i seed ( Vec i ) pids → FtG {
     : ~ FtModelImpl m ( locked_take [FtModelImpl] . h l )
-    : FtG r ( __ft_graph_in m tp ids r alpha seed pids )
+    : FtG g ( __ft_graph_in m tp ids r alpha seed pids )
     ( locked_restore [FtModelImpl] . h l m )
-    ^ r
+    ^ g
 }
 
 @ __ft_graph_in inout FtModelImpl m inout GTape tp ( Vec i ) ids i r f alpha i seed ( Vec i ) pids → FtG {
@@ -1303,9 +1303,9 @@ $ `stdlib/std/arc.nu`
 // ft_auto_stride) · else used as given, mod nwin.
 @ ft_train_ck FtModel h ( Vec i ) corpus i win i r f alpha i seed i steps f lr i dtype b verbose s ckptp i ckevery b resume i wstride → FtTrain {
     : ~ FtModelImpl m ( locked_take [FtModelImpl] . h l )
-    : FtTrain r ( __ft_train_ck_in m corpus win r alpha seed steps lr dtype verbose ckptp ckevery resume wstride )
+    : FtTrain tr ( __ft_train_ck_in m corpus win r alpha seed steps lr dtype verbose ckptp ckevery resume wstride )
     ( locked_restore [FtModelImpl] . h l m )
-    ^ r
+    ^ tr
 }
 
 @ __ft_train_ck_in inout FtModelImpl m ( Vec i ) corpus i win i r f alpha i seed i steps f lr i dtype b verbose s ckptp i ckevery b resume i wstride → FtTrain {
@@ -1458,9 +1458,9 @@ $ `stdlib/std/arc.nu`
 // blk.<L>.<which>.lora_a [in,r] and .lora_b [r,out], F32.
 @ ft_adapters_save s path FtModel h FtTrain t i r → !v String {
     : ~ FtModelImpl m ( locked_take [FtModelImpl] . h l )
-    : !v String r ( __ft_adapters_save_in m path t r )
+    : !v String res ( __ft_adapters_save_in m path t r )
     ( locked_restore [FtModelImpl] . h l m )
-    ^ r
+    ^ res
 }
 
 @ __ft_adapters_save_in inout FtModelImpl m s path FtTrain t i r → !v String {
@@ -1645,9 +1645,9 @@ $ `stdlib/std/arc.nu`
 // projections (a bisect handle for the merged-path diagnostics).
 @ ft_merge_st_mask s path FtModel h FtTrain t i r f alpha i mask → !v String {
     : ~ FtModelImpl m ( locked_take [FtModelImpl] . h l )
-    : !v String r ( __ft_merge_st_mask_in m path t r alpha mask )
+    : !v String res ( __ft_merge_st_mask_in m path t r alpha mask )
     ( locked_restore [FtModelImpl] . h l m )
-    ^ r
+    ^ res
 }
 
 @ __ft_merge_st_mask_in inout FtModelImpl m s path FtTrain t i r f alpha i mask → !v String {

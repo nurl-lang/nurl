@@ -230,7 +230,42 @@ kernels:
 : ( Vec f ) ys ( gk_call_take_f c `y` )
 ```
 
-A load past the end reads element 0, and a store past it is dropped. An
-output starts as the Vec it was bound with. arima's device evaluator is
-written this way and runs as fast as its unchecked predecessor did.
+A load past the end reads the buffer's last element, and a store past it
+is dropped. An output starts as the Vec it was bound with. arima's device
+evaluator is written this way and runs as fast as its unchecked
+predecessor did.
+
+### On device buffers
+
+`gk_run_checked_dev` (and `gk_record_dev` / `gk_replay`, which bind and
+check once and then only launch) take device-resident bindings:
+`gk_call_dev_in` / `gk_call_dev` for f32/f64/i64 `GkBuf`s,
+`gk_call_half_in` for half or bfloat16 `GkHBuf`s, and
+`gk_call_bytes_in` / `gk_call_bytes` for `GkBBuf` byte buffers. On a byte
+buffer `LD(q, i)` is the byte, `LD16` / `LD32` the aligned 16- or 32-bit
+word holding byte `i`, and `F16(bits)` / `BF16(bits)` turn 16 bits into a
+float; `ST` stores the low byte. A quantised weight format is read this
+way, without a pointer. `LD4(x, i, a, b, c, d)` loads the aligned group of
+four f32 holding element `i` in one instruction (the buffer must be
+16-byte aligned). Cooperative kernels have `SYNC()`, `SHARED_*` arrays and
+`SHFL_DOWN` / `SHFL_XOR`, under a rule the checker proves: every `if` /
+`for` / `while` around one decides the same for the whole block.
+
+**Windows** make a loop's checks free. `WIN(w, buf, off, len);` (or
+`WINS(w, buf, off, len, stride);`) checks a range of a device or byte
+buffer once; `LD(w, i)` / `ST(w, i, v)` then index it from 0 and
+`LEN(w)` is its length. A window that does not fit its buffer is empty.
+A loop bounded by `LEN(w)` lets the compiler drop every per-load check:
+
+```
+WIN(xr, x, row * n, n);
+float ss = 0.0f;
+for (int j = 0; j < LEN(xr); j++) { ss += LD(xr, j) * LD(xr, j); }
+```
+
+The check folds for a signed counter compared to `LEN`, so count with an
+`int` (NVRTC also unrolls an `int` loop four times further than a
+`long long` one). Inside `if (LEN(w) == 32) { … }` a constant bound
+works too. nurllama's RMSNorm, attention and K-quant matvecs are written
+this way: within 4 % of their raw originals, or faster.
 
