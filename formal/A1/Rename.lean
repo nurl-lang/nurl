@@ -601,6 +601,252 @@ theorem RhsT.ren (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {r : Rhs} {E : E
     exact ⟨_, RhsT.pop hc (by rw [liftE_live]; exact hl) (by rw [liftE_ty' h hab hy]; exact ht)
       (by rw [liftE_mode y hrb]; exact canDo_lift hcan) (h.Fcout y), fun x => popE_lift h hab hy t x⟩
 
+theorem pushArg_ren (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {y : Var} {Ey : Entry} {t : Ty}
+    {D : List Dep} {Γa1 : Ctx} (hy : Γa y = some Ey) (hp : PushArg Γa Fa y Ey t D Γa1) :
+    ∃ D', PushArg (S.canon Γa) S.Fc (S.ρ y) (S.liftE y Ey) t D' (S.canon Γa1) ∧
+      D' ⊆ rds S.ρ D ++ allKinds S.R := by
+  cases hp with
+  | move hm hyF =>
+    have hrb : Ey.mode ≠ .rootb := by rw [hm]; simp
+    have hctx : S.canon (setE (kill .replace false y Γa) y { Ey with live := false }) =
+        setE (kill .replace false (S.ρ y) (S.canon Γa)) (S.ρ y) { S.liftE y Ey with live := false } := by
+      rw [canon_setE h, canon_kill h hab (allowed_own hab hy hm _ _), liftE_dead]
+    rw [hctx]
+    exact ⟨_, PushArg.move (by rw [liftE_mode y hrb, hm]; rfl) (h.Fcout y), held_lift h hab hy⟩
+  | int => exact ⟨[], PushArg.int, by simp⟩
+  | slice hm =>
+    refine ⟨_, PushArg.slice ?_, ?_⟩
+    · rcases hm with hm | hm
+      · left; rw [liftE_mode y (by rw [hm]; simp), hm]; rfl
+      · right; rw [liftE_rootb h]; exact hm
+    · intro d hd
+      rcases List.mem_append.mp hd with hd | hd
+      · rcases List.mem_append.mp (derive_lift h hab hy .self hd) with h1 | h1
+        · obtain ⟨d0, hd0, rfl⟩ := mem_rds.mp h1
+          exact List.mem_append_left _ (mem_rds.mpr ⟨d0, List.mem_append_left _ hd0, rfl⟩)
+        · exact List.mem_append_right _ h1
+      · rcases List.mem_append.mp (held_lift h hab hy hd) with h1 | h1
+        · obtain ⟨d0, hd0, rfl⟩ := mem_rds.mp h1
+          exact List.mem_append_left _ (mem_rds.mpr ⟨d0, List.mem_append_right _ hd0, rfl⟩)
+        · exact List.mem_append_right _ h1
+
+theorem mem_allKinds_iff {L : List Var} {d : Dep} : d ∈ allKinds L ↔ d.root ∈ L := by
+  constructor
+  · exact mem_allKinds
+  · intro hd
+    simp only [allKinds, List.mem_flatMap, List.mem_cons, List.mem_singleton, List.not_mem_nil, or_false]
+    exact ⟨d.root, hd, by obtain ⟨r, k⟩ := d; cases k <;> simp⟩
+
+/-- Pointwise: each entry of `Γ` is at least as strong as `Γ'`'s. -/
+def PW (Γ Γ' : Ctx) : Prop :=
+  ∀ v, (Γ v = none ↔ Γ' v = none) ∧ ∀ E E', Γ v = some E → Γ' v = some E' → EntryWeaker E E'
+
+theorem PW.weaker {Γ Γ' : Ctx} (h : PW Γ Γ') (hw : CtxWF Γ') : Weaker Γ Γ' := ⟨h, hw⟩
+
+theorem PW.refl (Γ : Ctx) : PW Γ Γ := fun v => ⟨Iff.rfl, fun E E' h1 h2 => by
+  rw [h1] at h2; cases h2; exact EntryWeaker.refl _⟩
+
+theorem PW.kill {Γ Γ' : Ctx} (h : PW Γ Γ') (e : Eff) (hv : Bool) (x : Var) :
+    PW (A1.kill e hv x Γ) (A1.kill e hv x Γ') := by
+  intro v
+  refine ⟨?_, fun E E' h1 h2 => ?_⟩
+  · simp only [A1.kill, Option.map_eq_none_iff]; exact (h v).1
+  · simp only [A1.kill] at h1 h2
+    cases hE : Γ v with
+    | none => rw [hE] at h1; cases h1
+    | some E0 =>
+      cases hE' : Γ' v with
+      | none => rw [hE'] at h2; cases h2
+      | some E0' =>
+        rw [hE] at h1; rw [hE'] at h2; cases h1; cases h2
+        exact killE_weaker ((h v).2 E0 E0' hE hE')
+
+theorem PW.setE {Γ Γ' : Ctx} (h : PW Γ Γ') {x : Var} {E E' : Entry} (he : EntryWeaker E E') :
+    PW (A1.setE Γ x E) (A1.setE Γ' x E') := by
+  intro v
+  by_cases hvx : v = x
+  · subst hvx; simp only [A1.setE, upd_same, reduceCtorEq, iff_self, Option.some.injEq, true_and]
+    intro a b ha hb; subst ha hb; exact he
+  · simp only [A1.setE, upd_ne _ _ hvx]; exact h v
+
+theorem getD_map {args : List Var} {i : Nat} (hi : i < args.length) (ρ : Var → Var) :
+    (args.map ρ).getD i 0 = ρ (args.getD i 0) := by
+  simp [List.getD, hi]
+
+theorem argE_canon (h : S.OK) {a : Var} {Ea : Entry} (ha : Γa a = some Ea) :
+    argE (S.canon Γa) (S.ρ a) = S.liftE a Ea := by
+  unfold argE; rw [canon_ρ h, ha]; rfl
+
+theorem sub_rds_append {a b : List Dep} {L : List Dep} (ha : a ⊆ rds S.ρ L ++ allKinds S.R)
+    (hb : b ⊆ rds S.ρ L ++ allKinds S.R) : a ++ b ⊆ rds S.ρ L ++ allKinds S.R := by
+  intro d hd; rcases List.mem_append.mp hd with h | h
+  · exact ha h
+  · exact hb h
+
+theorem sub_mono {a L L' : List Dep} (ha : a ⊆ rds S.ρ L ++ allKinds S.R) (hL : L ⊆ L') :
+    a ⊆ rds S.ρ L' ++ allKinds S.R :=
+  fun d hd => append_sub (rds_subset hL) (List.Subset.refl _) (ha hd)
+
+theorem argDeps_lift (h : S.OK) (hab : S.AbsOK Γa) {args : List Var} {j : Nat} (hj : j < args.length)
+    {Ea : Entry} (hEa : Γa (args.getD j 0) = some Ea) (k : Kind) :
+    argDeps (S.canon Γa) (args.map S.ρ) (j, k) ⊆ rds S.ρ (argDeps Γa args (j, k)) ++ allKinds S.R := by
+  unfold argDeps
+  simp only [getD_map hj, argE_canon h hEa, liftE_ty' h hab hEa]
+  have hae : argE Γa (args.getD j 0) = Ea := by unfold argE; rw [hEa]; rfl
+  rw [hae]
+  split
+  · simp
+  · exact derive_lift h hab hEa k
+
+theorem heldOfArgs_lift (h : S.OK) (hab : S.AbsOK Γa) {args : List Var}
+    (hargs : ∀ a ∈ args, ∃ Ea, Γa a = some Ea) :
+    heldOfArgs (S.canon Γa) (args.map S.ρ) ⊆ rds S.ρ (heldOfArgs Γa args) ++ allKinds S.R := by
+  intro d hd
+  unfold heldOfArgs at hd ⊢
+  rw [mem_allKinds_iff] at hd
+  simp only [List.flatMap_map, List.mem_flatMap] at hd
+  obtain ⟨a, ha, hda⟩ := hd
+  obtain ⟨Ea, hEa⟩ := hargs a ha
+  rw [argE_canon h hEa, liftE_ty' h hab hEa] at hda
+  have hae : argE Γa a = Ea := by unfold argE; rw [hEa]; rfl
+  split at hda
+  · simp at hda
+  · rename_i hn
+    obtain ⟨d1, hd1, hdr⟩ := List.mem_map.mp hda
+    rcases List.mem_append.mp (held_lift h hab hEa hd1) with h1 | h1
+    · obtain ⟨d0, hd0, rfl⟩ := mem_rds.mp h1
+      refine List.mem_append_left _ (mem_rds.mpr ⟨⟨d0.root, d.kind⟩, ?_, ?_⟩)
+      · rw [mem_allKinds_iff]
+        simp only [List.mem_flatMap]
+        exact ⟨a, ha, by rw [hae, if_neg hn]; exact List.mem_map_of_mem hd0⟩
+      · obtain ⟨r, k⟩ := d; simp only [Dep.ren] at hdr ⊢; rw [← hdr]
+    · exact List.mem_append_right _ (mem_allKinds_iff.mpr (hdr ▸ mem_allKinds h1))
+
+theorem flatMap_lift {l : List (Nat × Kind)} {fc fa : Nat × Kind → List Dep}
+    (hf : ∀ jk ∈ l, fc jk ⊆ rds S.ρ (fa jk) ++ allKinds S.R) :
+    l.flatMap fc ⊆ rds S.ρ (l.flatMap fa) ++ allKinds S.R := by
+  intro d hd
+  obtain ⟨jk, hjk, hd'⟩ := List.mem_flatMap.mp hd
+  rcases List.mem_append.mp (hf jk hjk hd') with h1 | h1
+  · obtain ⟨d0, hd0, rfl⟩ := mem_rds.mp h1
+    exact List.mem_append_left _ (mem_rds.mpr ⟨d0, List.mem_flatMap.mpr ⟨jk, hjk, hd0⟩, rfl⟩)
+  · exact List.mem_append_right _ h1
+
+theorem outHeld_lift (h : S.OK) (hab : S.AbsOK Γa) {fn : Fn} {args : List Var}
+    (houts : ∀ o ∈ fn.outHolds, o.2.1 < args.length)
+    (hargs : ∀ j < args.length, ∃ Ea, Γa (args.getD j 0) = some Ea) (i : Nat) :
+    outHeld (S.canon Γa) fn (args.map S.ρ) i ⊆ rds S.ρ (outHeld Γa fn args i) ++ allKinds S.R := by
+  intro d hd
+  unfold outHeld at hd ⊢
+  obtain ⟨o, ho, hd'⟩ := List.mem_flatMap.mp hd
+  have hom := (List.mem_filter.mp ho).1
+  obtain ⟨Ea, hEa⟩ := hargs o.2.1 (houts o hom)
+  rcases List.mem_append.mp (argDeps_lift h hab (houts o hom) hEa o.2.2 hd') with h1 | h1
+  · obtain ⟨d0, hd0, rfl⟩ := mem_rds.mp h1
+    exact List.mem_append_left _ (mem_rds.mpr ⟨d0, List.mem_flatMap.mpr ⟨o, ho, hd0⟩, rfl⟩)
+  · exact List.mem_append_right _ h1
+
+theorem resMode_ne (fn : Fn) : resMode fn ≠ .rootb := by unfold resMode; split <;> simp
+theorem liftMode_resMode (fn : Fn) : liftMode (resMode fn) = resMode fn := by unfold resMode; split <;> rfl
+
+theorem app_lift {a b a0 b0 : List Dep} (ha : a ⊆ rds S.ρ a0 ++ allKinds S.R)
+    (hb : b ⊆ rds S.ρ b0 ++ allKinds S.R) : a ++ b ⊆ rds S.ρ (a0 ++ b0) ++ allKinds S.R := by
+  intro d hd
+  simp only [rds, List.map_append, List.mem_append] at hd ha hb ⊢
+  rcases hd with hd | hd
+  · rcases List.mem_append.mp (ha hd) with h1 | h1
+    · exact Or.inl (Or.inl h1)
+    · exact Or.inr h1
+  · rcases List.mem_append.mp (hb hd) with h1 | h1
+    · exact Or.inl (Or.inr h1)
+    · exact Or.inr h1
+
+theorem liftE_callRes (Γ : Ctx) (fn : Fn) (args : List Var) (x : Var) :
+    S.liftE x (callRes Γ fn args) =
+      ⟨fn.resTy, resMode fn, true,
+       rds S.ρ (fn.lends.flatMap (argDeps Γ args) ++ heldOfArgs Γ args) ++
+         (if (resMode fn).ownSlot then [] else allKinds S.R),
+       rds S.ρ (fn.rholds.flatMap (argDeps Γ args) ++ heldOfArgs Γ args) ++ allKinds S.R⟩ := by
+  simp only [liftE, callRes, resMode_ne fn, ↓reduceIte, liftMode_resMode]
+  rfl
+
+theorem callRes_lift (h : S.OK) (hab : S.AbsOK Γa) {fn : Fn} {args : List Var}
+    (hl : ∀ jk ∈ fn.lends ++ fn.rholds, jk.1 < args.length)
+    (hargs : ∀ j < args.length, ∃ Ea, Γa (args.getD j 0) = some Ea) (x : Var) :
+    EntryWeaker (callRes (S.canon Γa) fn (args.map S.ρ)) (S.liftE x (callRes Γa fn args)) := by
+  have hall : ∀ a ∈ args, ∃ Ea, Γa a = some Ea := by
+    intro a ha; obtain ⟨i, hi, rfl⟩ := mem_args ha; exact hargs i hi
+  have hA : ∀ jk ∈ fn.lends ++ fn.rholds, argDeps (S.canon Γa) (args.map S.ρ) jk ⊆
+      rds S.ρ (argDeps Γa args jk) ++ allKinds S.R := by
+    intro jk hjk
+    obtain ⟨Ea, hEa⟩ := hargs jk.1 (hl jk hjk)
+    exact argDeps_lift h hab (hl jk hjk) hEa jk.2
+  have hH := heldOfArgs_lift h hab hall
+  rw [liftE_callRes]
+  refine EntryWeaker.mk' rfl rfl (resMode_ne fn) rfl (fun _ => ?_) ?_
+  · rename_i ho
+    simp only [callRes] at ho
+    simp only [ho, Bool.false_eq_true, ↓reduceIte]
+    exact app_lift (S := S) (flatMap_lift (S := S) (fun jk hjk => hA jk (List.mem_append_left _ hjk))) hH
+  · exact app_lift (S := S) (flatMap_lift (S := S) (fun jk hjk => hA jk (List.mem_append_right _ hjk))) hH
+
+theorem callPostAux_lift (h : S.OK) (hab0 : S.AbsOK Γa) {fn : Fn} {args : List Var}
+    (houts : ∀ o ∈ fn.outHolds, o.2.1 < args.length)
+    (hargs : ∀ j < args.length, ∃ Ea, Γa (args.getD j 0) = some Ea) :
+    ∀ (ps : List (PMode × Ty)) (as : List Var) (i : Nat) (Γ : Ctx) (Γc : Ctx),
+      (∀ pa ∈ ps.zip as, ∃ Ea, Γa pa.2 = some Ea ∧ paramOK pa.1.1 pa.1.2 Ea) →
+      S.AbsOK Γ → PW Γc (S.canon Γ) →
+      PW (callPostAux (S.canon Γa) fn (args.map S.ρ) ps (as.map S.ρ) i Γc)
+        (S.canon (callPostAux Γa fn args ps as i Γ))
+  | [], _, _, _, _, _, _, hpw => by simpa [callPostAux] using hpw
+  | _ :: _, [], _, _, _, _, _, hpw => by simpa [callPostAux] using hpw
+  | (pm, t) :: ps, a :: as, i, Γ, Γc, hz, hab, hpw => by
+    obtain ⟨Ea, hEa, hpo⟩ := hz ((pm, t), a) (by simp)
+    have hz' : ∀ pa ∈ ps.zip as, ∃ Ea, Γa pa.2 = some Ea ∧ paramOK pa.1.1 pa.1.2 Ea :=
+      fun pa hpa => hz pa (by simp [hpa])
+    have hae : argE (S.canon Γa) (S.ρ a) = S.liftE a Ea := argE_canon h hEa
+    have hae0 : argE Γa a = Ea := by unfold argE; rw [hEa]; rfl
+    cases pm with
+    | inp => exact callPostAux_lift h hab0 houts hargs ps as (i + 1) Γ Γc hz' hab hpw
+    | sink =>
+      obtain ⟨_, hm, _⟩ := hpo
+      have hrb : Ea.mode ≠ .rootb := by rw [hm]; simp
+      simp only [callPostAux, List.map_cons]
+      apply callPostAux_lift h hab0 houts hargs ps as (i + 1) _ _ hz'
+      · refine (hab.kill _ _ _).setE (by simp [hae0, hrb]) (fun b hb => ?_) (fun bh hb => ?_)
+        · simp [hae0, hm] at hb
+        · obtain ⟨E, hE, hmE⟩ := hab0.2.2 a bh hb
+          rw [hEa] at hE; cases hE; rw [hm] at hmE; cases hmE
+      · rw [canon_setE h, canon_kill h hab (allowed_own hab0 hEa hm _ _), hae, hae0, liftE_dead]
+        exact PW.setE (hpw.kill _ _ _) (EntryWeaker.refl _)
+    | inout b =>
+      obtain ⟨ht, hcan, s, rfl⟩ := hpo
+      have hrb : Ea.mode ≠ .rootb := by
+        rcases hcan with hm | ⟨b', hm, _⟩ <;> rw [hm] <;> simp
+      simp only [callPostAux, List.map_cons]
+      apply callPostAux_lift h hab0 houts hargs ps as (i + 1) _ _ hz'
+      · refine (hab.kill _ _ _).setE (by simp [hae0, hrb]) (fun b' hb => ?_) (fun bh hb => ?_)
+        · simp only [hae0] at hb ⊢
+          obtain ⟨t', ht', hbd⟩ := hab0.2.1 a Ea b' hEa hb
+          exact ⟨t', ht', hbd⟩
+        · obtain ⟨E, hE, hmE⟩ := hab0.2.2 a bh hb
+          rw [hEa] at hE; cases hE; simp only [hae0]; exact hmE
+      · simp only [Ty.elem]
+        rw [canon_setE h, canon_kill h hab (allowed_canDo hab0 hEa ht hcan), hae, hae0]
+        refine PW.setE (hpw.kill _ _ _) ?_
+        refine EntryWeaker.mk' ?_ ?_ ?_ ?_ ?_ ?_
+        · simp [liftE, hrb]
+        · simp [liftE, hrb]
+        · show (S.liftE a Ea).mode ≠ .rootb
+          exact fun e => hrb ((liftE_rootb h).mp e)
+        · simp [liftE, hrb]
+        · intro ho; simp [liftE, hrb]
+        · simp only [liftE, hrb, ↓reduceIte]
+          have h1 := outHeld_lift h hab0 houts hargs i
+          have h2 := heldOfArgs_lift h hab0 (fun a ha => by
+            obtain ⟨j, hj, rfl⟩ := mem_args ha; exact hargs j hj)
+          exact app_lift (S := S) (app_lift (S := S) (List.Subset.refl _) h1) h2
+
 end RSetup
 
 end A1
