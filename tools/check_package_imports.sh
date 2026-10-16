@@ -2,8 +2,12 @@
 # Copyright (c) 2026 The NURL Project Developers
 # SPDX-License-Identifier: MIT OR Apache-2.0
 # ============================================================
-#  tools/check_package_imports.sh — assert that no package imports
-#  itself through a `packages/<name>/…` path.
+#  tools/check_package_imports.sh — assert that a package's imports
+#  resolve the same way once it is installed from the registry:
+#
+#   1. no package imports itself through a `packages/<name>/…` path;
+#   2. every `deps/<name>/…` a packaged source imports names a package
+#      declared in that package's [dependencies].
 #
 #  Inside this repo every build runs from the repo root, so
 #  `$ \`packages/torchpt/src/pickle.nu\`` resolves and every test
@@ -19,6 +23,17 @@
 #  which resolves relative to the importing file and is therefore
 #  correct in both layouts; a DEPENDENCY is imported through
 #  `deps/<pkg>/src/…`, which nurlpkg symlinks in both layouts too.
+#
+#  Rule 2 is the publish gate's (`nurlpkg publish` refuses "deps/<x>/… is
+#  imported, but '<x>' is missing from nurl.toml"), run on every change
+#  instead of at publication: deps/ is a local artefact, so an undeclared
+#  dependency compiles in the repo, where the symlink exists, and fails
+#  for every registry install. objdet 0.4.4 imported deps/gpu without
+#  declaring it, passed CI, and was found only by the gate in the middle
+#  of the 0.73.0 package sweep. The gate reads src/; this reads every
+#  packaged source (src/** and the package root's *.nu), the same import
+#  shape (a `$` that starts the line — a header comment documenting
+#  `$ \`deps/http/src/http.nu\`` is not an import).
 #
 #  Run from the repo root:  ./tools/check_package_imports.sh
 # ============================================================
@@ -36,10 +51,12 @@ import re
 import stat
 import subprocess
 import sys
+import tomllib
 
 artifacts = {'deps', 'build', 'target', 'node_modules', 'vendor', '.git', '.nurl-bin'}
 packages = Path('packages')
 pattern = re.compile(rb'^\s*\$[ \t]*`packages/')
+dep_import = re.compile(rb'^[ \t]*\$[ \t]*`deps/([^/`\r\n]+)/')
 
 
 def fail(message):
@@ -70,6 +87,25 @@ def git_inventory():
     if result.returncode or result.stderr:
         fail('cannot enumerate package sources: ' + os.fsdecode(result.stderr).strip())
     return {Path(os.fsdecode(path)) for path in result.stdout.split(b'\0') if path}
+
+
+def packaged(path):
+    # What the packer ships as source: src/** and the package root's *.nu.
+    rest = path.parts[2:]
+    return len(rest) == 1 or (len(rest) > 1 and rest[0] == 'src')
+
+
+def declared_dependencies(package, cache):
+    if package not in cache:
+        manifest = packages / package / 'nurl.toml'
+        try:
+            with manifest.open('rb') as source:
+                cache[package] = set(tomllib.load(source).get('dependencies', {}))
+        except FileNotFoundError:
+            cache[package] = None  # not a package: nothing is published from it
+        except (OSError, tomllib.TOMLDecodeError) as error:
+            fail(f'cannot read {manifest}: {error}')
+    return cache[package]
 
 
 def exported_inventory():
@@ -110,12 +146,24 @@ try:
             fail(f'expected a regular source file: {path}')
         sources.append(path)
     hits = []
+    undeclared = []
+    manifests = {}
     for path in sources:
+        ships = packaged(path)
         with path.open('rb') as source:
             for line_number, line in enumerate(source, 1):
+                text = None
                 if pattern.match(line):
                     text = line.rstrip(b'\r\n').decode('utf-8', errors='replace')
                     hits.append(f'{path}:{line_number}: {text}')
+                dep = dep_import.match(line) if ships else None
+                if dep:
+                    name = dep.group(1).decode('utf-8', errors='replace')
+                    declared = declared_dependencies(path.parts[1], manifests)
+                    if declared is not None and name not in declared:
+                        text = text or line.rstrip(b'\r\n').decode('utf-8', errors='replace')
+                        undeclared.append(f'{path}:{line_number}: {text}'
+                                          f"   ('{name}' is not in packages/{path.parts[1]}/nurl.toml)")
 except OSError as error:
     fail(f'cannot enumerate or read package sources: {error}')
 
@@ -126,8 +174,21 @@ if hits:
         print('  ' + hit, file=sys.stderr)
     print("\nimport a sibling by a relative path and a dependency through 'deps/<pkg>/src/…'.",
           file=sys.stderr)
+if undeclared:
+    if hits:
+        print(file=sys.stderr)
+    print('packaged sources import a package their manifest does not declare:', file=sys.stderr)
+    print('(deps/ is a local artefact: it compiles here and fails for every registry install;',
+          file=sys.stderr)
+    print(' `nurlpkg publish` refuses it)\n', file=sys.stderr)
+    for hit in undeclared:
+        print('  ' + hit, file=sys.stderr)
+    print('\nadd each one to [dependencies], with the version requirement the import needs.',
+          file=sys.stderr)
+if hits or undeclared:
     raise SystemExit(1)
 
 count = len({path.parts[1] for path in sources if len(path.parts) > 2})
-print(f"package imports OK ({count} packages, {len(sources)} source files, no 'packages/…' self-imports)")
+print(f'package imports OK ({count} packages, {len(sources)} source files, '
+      "no 'packages/…' self-imports, every deps/ import declared)")
 PYTHON
