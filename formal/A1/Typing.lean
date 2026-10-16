@@ -203,13 +203,20 @@ inductive PushArg (Γ : Ctx) (F : List Var) (y : Var) (E : Entry) : Ty → List 
 
 def argE (Γ : Ctx) (a : Var) : Entry := (Γ a).getD intE
 
-/-- What the summary pair `(j, k)` means at this call. -/
+/-- What the summary pair `(j, k)` means at this call.  An integer argument
+    lends nothing. -/
 def argDeps (Γ : Ctx) (args : List Var) (jk : Nat × Kind) : List Dep :=
-  derive (args.getD jk.1 0) (argE Γ (args.getD jk.1 0)) jk.2
+  if (argE Γ (args.getD jk.1 0)).ty = .int then []
+  else derive (args.getD jk.1 0) (argE Γ (args.getD jk.1 0)) jk.2
 
-/-- Everything any argument holds views of. -/
+/-- Every dependency of every kind on the given roots. -/
+def allKinds (rs : List Var) : List Dep :=
+  rs.flatMap (fun r => [⟨r, .self⟩, ⟨r, .inner⟩, ⟨r, .view⟩])
+
+/-- What the arguments hold views of, in every way a callee may come to
+    depend on it.  An integer holds nothing. -/
 def heldOfArgs (Γ : Ctx) (args : List Var) : List Dep :=
-  args.flatMap (fun a => (argE Γ a).held)
+  allKinds (args.flatMap (fun a => if (argE Γ a).ty = .int then [] else roots (argE Γ a).held))
 
 def resMode (fn : Fn) : Mode := if fn.resOwn then .own else .bor
 
