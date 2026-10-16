@@ -98,9 +98,10 @@ What stays manual is what the compiler does not own:
 - raw memory from `nurl_alloc` behind a `*T` pointer, in an `unsafe`
   function (release with `nurl_free`), and a value handed over for good
   with `( mem_forget x )`;
-- operating-system resources that have no owning handle, such as sockets
-  (`tcp_close_conn`, `tcp_close_listener`, `udp_close`,
-  `unix_close_conn`) and an `FsWatch` (`fswatch_close`).
+- operating-system resources that have no owning handle, such as UDP and
+  Unix-domain sockets (`udp_close`, `unix_close_conn`). A `TcpConn`, a
+  `TcpListener` and an `FsWatch` close with their last owner
+  (`tcp_close_conn` and `fswatch_close` close one early).
 
 `Channel`, `Mutex`, `Cond`, `File` and `ProcChild` are not on this list:
 each is a handle whose last copy releases it, and `chan_free`,
@@ -145,8 +146,8 @@ double-frees on its own. The checker is conservative. It rejects a program
 it cannot prove safe, and the error names a change that satisfies the
 rule. Together, the two layers guarantee that every program the compiler
 accepts, outside the bodies of `unsafe` functions, is memory-safe and
-leak-free, apart from the open holes `docs/MEMORY.md` §6.2 lists (each a
-probe in `tools/fuzz/holes/open/`).
+leak-free (`docs/MEMORY.md` §6.2). No hole is known: each one found has a
+probe in `tools/fuzz/holes/` that CI holds.
 Raw `*T` pointers, pointer casts, raw memory and foreign (FFI) calls are
 the escape hatch, and only an `unsafe` function can use them. The full
 soundness contract is in

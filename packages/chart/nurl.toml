@@ -1,6 +1,6 @@
 [package]
 name = "chart"
 version = "0.1.6"
-nurl-version = "0.72.0"
+nurl-version = "0.73.0"
 description = "Terminal data-visualisation — sparklines, bar charts, histograms, and line plots, as a CLI and a reusable library."
 license = "MIT OR Apache-2.0"

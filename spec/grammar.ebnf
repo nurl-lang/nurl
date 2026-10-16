@@ -55,7 +55,7 @@ program = decl* EOF ;
    declaration are rejected for the same reason. *)
 
 decl = import_decl                 (*  $                             *)
-     | ('pub')? ffi_decl           (*  &                             *)
+     | ('pub')? 'unsafe'? ffi_decl (*  &   (unsafe &: callers unsafe) *)
      | ('pub')? trait_decl         (*  %  IDENT  {                   *)
      | ('pub')? impl_decl          (*  %  IDENT  type                *)
      | decl_prefix* fn_decl        (*  @  (only kind enforced in v2.0)*)
@@ -65,9 +65,10 @@ decl = import_decl                 (*  $                             *)
      ;
 
 (* A function declaration may carry any of these prefixes, in any order
-   (`simd` grammar v2.6, `inline` v2.7, `unsafe` v2.8). `simd`, `inline`
-   and `unsafe` are accepted ONLY on `@` — on any other decl each is a
-   diagnostic, not a silent
+   (`simd` grammar v2.6, `inline` v2.7, `unsafe` v2.8, `raw` v2.9).
+   `simd` and `inline` are accepted ONLY on `@`, and `unsafe` only on `@`
+   and on a foreign declaration (`unsafe & …`: only `unsafe` code may call
+   it) — on any other decl each is a diagnostic, not a silent
    no-op, because a prefix left pending drifts onto the next `@` the
    parser reaches, which after an import boundary is a function in a
    different file. `pub` had exactly that bug before v2.0 made it

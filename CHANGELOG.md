@@ -6,7 +6,28 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.73.0] — 2026-10-16
+
+No hole in the memory guarantee is known. The 37 that 0.72.0 shipped as
+known issues are closed, along with 95 more found while closing them
+(probes h142–h273): each is rejected or runs clean under ASan/UBSan/LSan,
+CI holds every one, and `tools/fuzz/holes/open/` is empty
+(docs/MEMORY.md §6.2). Nothing a program keeps is released by hand any
+more — not in the examples, the bench kernels or any package, and in the
+standard library only inside the owners that implement it. An `Arc`'s
+payload is frozen once made, shared state that changes lives in the new
+`Locked [T]`, and a scalar mutable global is read and written atomically.
+Grammar v2.9 adds `raw` for functions whose soundness rests on their
+caller; with it and checked views (`slice_window`, `file_map`,
+`par_map_index`) the packages shed most of their `unsafe`: gpukit's GEMM,
+attention and convolutions and every kernel of nurllama, whisper, grad and
+f5tts are checked kernels, bit-identical to the raw ones and as fast or
+faster, and WebGPU builds run again (*Packages*). Code that calls
+`mem_forget`, `mem_take`, `mem_put_back` or the `rcbox` primitives must be
+`unsafe` now (*Changed*). The compiler compiles itself — 10 % more source
+than 0.72.0's — in 8 % fewer instructions and 8 % less time than 0.72.0
+compiled its own (same build, 11.58 G against 12.62 G instructions).
+`formal/` starts a mechanized proof of the guarantee (*Added*).
 
 A view handed to a function defined further down the file no longer
 makes the container it was handed with stale by itself. In raw code,
@@ -600,8 +621,39 @@ generic that copies its `T` cannot be instantiated with one (h235)
   from it. The word has no type, so they are raw primitives, callable
   only from `unsafe` code (spec §3.3d); they replace the hand-built
   `# i . h ctl` / `mem_forget` pairs that kept a handle in a global.
+- **`formal/`: the memory guarantee as a theorem to prove.** `CLAIM.md`
+  states docs/MEMORY.md §6.2 as a theorem, `README.md` the phases of a
+  mechanized proof (a core calculus; the full single-threaded language
+  with leak freedom; threads; then the standard library's `unsafe` base,
+  the compiler and code generation), `RULES.md` every ownership rule
+  against its formal rule, and `corpus/map.tsv` each hole probe against
+  the rule that rejects it. It is under construction: nothing in it is
+  proven yet, and the guarantee still rests on the compiler's tests. A
+  change that touches only `formal/` does not run the compiler CI jobs.
 
 ### Changed
+
+- **Test runs and the object cache prune themselves.** Every compiler
+  test run kept its artifact directory under `build/tests` (or
+  `build/tests-san`) for good — a few hundred MB each with sanitizer
+  builds. A run now keeps the newest `$NURL_TEST_KEEP_RUNS` (default 3)
+  and removes older ones as it starts; a run in progress holds a lock on
+  its own directory and is never removed. `nurl.sh`'s object cache had
+  only a two-week age limit; it is also capped at `$NURL_OBJ_CACHE_MB`
+  (default 2048), least recently used first, checked at most once an
+  hour, and the same pass drops probe results unused for two weeks and
+  the ThinLTO directory no build reads any more (`~/.cache/nurl`:
+  6.5 → 2.3 GB here).
+- **CI runs the unikernel and sanitizer gates as parallel jobs.** The
+  unikernel job (no-libc corpus and unit gates, the guest on three
+  architectures, the wasm-compiler and swarm appliances) is three jobs,
+  and the sanitizer corpus runs in two shards beside the targeted
+  controls: `run_san_tests.sh` takes `NURL_SAN_SHARD=i/n` (disjoint,
+  near-equal shards; a malformed value or an empty shard fails) and
+  `run_qemu_tests.sh` takes `NURL_QEMU_SKIP_APPLIANCE=1`. `swarm_gate.sh`
+  builds the guest image and the host node concurrently. `ci.yml`'s
+  `code` filter counted every change as code (several negations under
+  the default `some` quantifier); it now uses `every`.
 
 - **An `Arc`'s payload is frozen once made** (docs/MEMORY.md §6.5;
   breaking). `Arc` makes the count atomic, not the data: every clone reads
@@ -1506,6 +1558,39 @@ same instructions (77.92 M) with its parser state in the caller's frame.
   `String`, which a client reading it read through null. The MP3 and JPEG
   encoders, which left `Vec` fields of their state out of a literal and
   filled them in before any read, build the state whole now.
+- **The GPU stack runs on checked kernels.** gpukit 0.11.12's device
+  operations — the GEMM family, fused attention, the convolutions and the
+  rest — are checked kernels: what a kernel indexes is checked against its
+  buffers, through windows checked once so the checks leave the loops,
+  and `devops.nu` / `kernels.nu` have no `unsafe` left. Each is
+  bit-identical to the raw kernel it replaces on CUDA and the CPU backend
+  (133 oracle cases on CUDA, 123 on the CPU backend) and as fast or
+  faster: GEMM 783×1024×1024 78 → 66 µs, attention 8×2048 (head 128)
+  930 → 760 µs, yoloe-v8s-seg on the CPU backend 2.80 → 1.49 s. A launch
+  can be recorded once and replayed (`gk_record_dev` / `gk_replay`).
+  nurllama 0.22.0, whisper 3.3.0, grad 0.13.3 and f5tts 0.5.0 run on them
+  with no `unsafe` left and the same outputs: on an RTX 4090 Qwen3-14B
+  decodes in 50.7 ms a token (56.7) and whisper large-v3 in 3.89 ms
+  (7.97); on the CPU backend Qwen3-0.6B decodes in 84.5 ms (109.4). gpu
+  0.17.6's driver functions over integer handles are `raw`, its CPU
+  backend no longer lets two processes cache each other's kernel, and
+  WebGPU builds run again: the WGSL set follows the checked kernels, and
+  a view is a buffer at an offset. onnx 0.12.3's static backend generates
+  its convolution instead of a hand-written override (tinyyolov2
+  2.17 → 1.65 s, bit-identical to the other backends).
+- **Released with 0.73.0** (each changelog says what changed): agora
+  0.7.0, anomaly 0.36.4, arima 0.6.2, audio 0.8.4, benchmark 0.1.8, cas
+  0.1.6, chart 0.1.6, cli 0.4.4, data 0.2.5, embed 0.6.3, f5tts 0.5.0,
+  gRPC 0.3.0, gguf 0.6.1, gpu 0.17.6, gpukit 0.11.12, grad 0.13.3, http
+  0.7.6, http-client 0.3.5, hub 0.2.3, iforest 0.1.9, image 0.7.7,
+  lingbot-map 0.12.1, lsmdb 0.3.0, map-anything 0.7.2, mermaid-server
+  0.4.0, mlp 0.3.13, nn 0.3.0, nurl-cov 0.3.0, nurlbox 0.5.0, nurllama
+  0.22.0, nwasm 3.1.2, oauth 0.2.6, objdet 0.4.5, onnx 0.12.3, pki-server
+  0.5.2, ply 0.3.5, pqc 0.2.7, psql 0.4.5, redis 0.3.5, safetensor 0.6.0,
+  swarm 0.3.3, swarm-mcp 0.31.1, template 0.2.5, tensor 0.6.6, tokenizer
+  0.4.6, torchpt 0.4.1, video 0.2.5, vindex 0.2.3, wasmbuilder 0.3.6,
+  whisper 3.3.0, yoloe 0.8.1, yoloe-demo 0.3.6 and zst 0.2.3. The
+  versions named in the entries above are the steps on the way there.
 
 ## [0.72.0] — 2026-10-10
 

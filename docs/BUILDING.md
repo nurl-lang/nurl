@@ -90,7 +90,10 @@ The build script performs a complete bootstrap:
    and updates the compiler entry at the repo root.
 6. Runs the snapshot test suite (`compiler/tests/run_tests.sh`; on
    Windows `run_tests.ps1`, which needs PowerShell 7) and diffs against
-   the golden baseline.
+   the golden baseline. Each run's artifacts go under `build/tests/run.*`
+   (`build/tests-san/` for sanitizer builds); a run keeps the newest
+   `$NURL_TEST_KEEP_RUNS` (default 3) and removes older ones as it starts,
+   never one still in progress.
 
 It prints `BUILD SUCCESS & TESTS PASSED` on success, or the full log / diff
 on failure. All artefacts land under `build/`.
@@ -212,7 +215,11 @@ stays separated. The split-built compiler retires **3.4% more
 instructions** than the single-module one (3.242e9 vs 3.135e9 under
 `perf stat`, self-compile). A 5.6× cheaper build for 3.4% of the
 program's speed — worth it while you iterate, not worth it for what you
-ship. The drivers follow that rule rather than a global default:
+ship. (That figure predates 0.73.0, which copies small functions into
+every part that calls them — below — so they inline across parts again;
+the copies cost a large program's build about a fifth: anomaly 48 s →
+58 s, against 192 s unsplit.) The drivers follow that rule rather than a
+global default:
 
 - **`nurl.sh` splits your program**, because you rebuild it constantly.
 - **`build.sh` splits the throwaway stage-1 compiler**, but links the
@@ -270,7 +277,14 @@ attachments point into, and partitioning would strand them.
 
 The partition itself is a text-level pass over the finished IR, on the
 same footing as dead-function elimination above: a function goes to one
-part, everything a part does not define it declares, `private` globals
+part, everything a part does not define it declares — except a small
+function (up to 1600 bytes of IR), which is also copied as
+`linkonce_odr` into each part that calls it, with its own small callees.
+ThinLTO's import cannot stand in for the copy: it maps an imported
+function's struct types onto structurally equal ones of the importing
+module (every `Vec` is `{ ptr }` under opaque pointers), and a call whose
+type differs from its callee's is never inlined — mlp's slice loop ran
+4× slower split than unsplit. `private` globals
 follow the functions that name them, module-level globals are defined in
 part 0 and declared `external` in the rest — except a `linkonce_odr`
 one, which part 0 may discard when its own code does not use it, so it
@@ -288,7 +302,7 @@ Parallel lowering makes one build use every core; the cache makes the
 *next* build skip most of the work. On native Linux, `nurl.sh` links
 with ThinLTO by default and keeps three caches under `~/.cache/nurl`:
 
-1. **The link's backend codegen** (`thinlto/`): ThinLTO keys each
+1. **The link's backend codegen** (`thinlto-a64/`): ThinLTO keys each
    module's post-import optimisation and codegen by a hash of the
    module, everything it imports, and the entire flag set (LLVM bakes
    its own version in). `stdlib/runtime.o` is thin bitcode, so the
@@ -299,7 +313,9 @@ with ThinLTO by default and keeps three caches under `~/.cache/nurl`:
    pipeline over the emitted `.ll` is a pure function of the IR bytes
    and the flags, so its object is cached by content hash. A rebuild
    whose IR didn't change — and, on a split build, every *part* an edit
-   didn't touch — is a file copy. Pruned after two weeks unused.
+   didn't touch — is a file copy. Pruned after two weeks unused, and
+   capped at `$NURL_OBJ_CACHE_MB` (default 2048), least recently used
+   first, checked at most once an hour.
 3. **The toolchain probes** (`probes.*`): the opaque-pointer parse
    probe and the feature-lib trial links (~190 ms, before every build,
    answering questions about the *toolchain*) are cached keyed by the
@@ -312,7 +328,9 @@ optimisation round: `bench/sort_window`'s compare/exchange mill came out
 2.3× the instructions (branches where full LTO's second pass had found
 50 `cmov`s), and this is exactly the penalty the split-floor note above
 documents. Running the ThinLTO *backend* at O3 (`-plugin-opt,O3`; the
-pre-link compile stays at your `-O`) restores every such case measured —
+pre-link compile stays at your `-O`; since 0.73.0 with
+`-align-all-functions=6`, so one function's size no longer moves
+another's hot loop across a Skylake JCC boundary) restores every such case measured —
 identical instruction counts suite-wide — and improves one outright:
 `bench/nbody` retires **36% fewer instructions** than the full-LTO
 default it replaces. The cached path is not a build-speed/run-speed
@@ -342,6 +360,7 @@ Controls:
 | `NURL_LTO=full` | one full-LTO module, nothing cached. Slower code than the default on Linux, not faster: `runtime.o` is ThinLTO bitcode, which a full-LTO link optimises apart from the program, so no runtime function inlines into it (`json_parse`: 6.9% more instructions). |
 | `NURL_CACHE=0` | ThinLTO still on, all three caches off. |
 | `NURL_CACHE_DIR=DIR` | move the caches (default `$XDG_CACHE_HOME/nurl`). |
+| `NURL_OBJ_CACHE_MB=N` | cap the pre-link object cache at N MB (default 2048). |
 
 Scope: native Linux clang builds (GNU `ld`/`gold` load `LLVMgold.so`,
 and `lld` accepts the same `-plugin-opt` spellings). The zig-cc cross
@@ -539,7 +558,8 @@ parallel, the two host-platform workflows
 [`windows-tests.yml`](../.github/workflows/windows-tests.yml) and
 [`macos-tests.yml`](../.github/workflows/macos-tests.yml). A PR that
 touches only `webdocs/**` skips the code gates and builds the docs
-instead; one that touches both runs everything.
+instead, one that touches only `formal/` skips the code gates too, and
+one that touches both code and either of them runs everything.
 
 | Job / step | What it checks |
 |---|---|

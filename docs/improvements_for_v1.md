@@ -169,16 +169,17 @@ accurate user-facing documentation. A local one-off pass is not sufficient.
     growth thresholds, and wasm32 address-space limits.
 
 - [ ] **P0 — Finish the concurrency safety contract.** Structural Send/Sync
-  derivation cannot recognize opaque `s`-backed FFI handles, and the shared-Arc
-  mutation check counts lock/unlock calls instead of proving the same lock is
-  held on every path (`docs/MEMORY.md` section 6.5 and `docs/LIMITATIONS.md`).
+  derivation cannot recognize opaque `s`-backed FFI handles (`docs/MEMORY.md`
+  section 6.5 and `docs/LIMITATIONS.md`). (Shared mutation is closed in 0.73.0:
+  an `Arc`'s payload is frozen on every thread, the parent included, and state
+  threads change is a `Locked`, whose lock is its type's — none is counted.)
   - Audit every stdlib/package wrapper for files, sockets, TLS, processes,
     watchers, regex state, database handles, and other opaque resources; require
     explicit reviewed Send/Sync or NotSend/NotSync markers.
   - Treat positive Send/Sync assertions as explicit unsafe declarations, and
     prevent unknown opaque wrappers from silently defaulting to thread-safe.
-  - Make shared mutation checking path- and lock-identity-aware, including the
-    parent thread, or narrow the guarantee and require an explicit unsafe path.
+  - [x] Make shared mutation checking path- and lock-identity-aware, including
+    the parent thread *(0.73.0, h212/h213: frozen `Arc` payloads + `Locked`)*.
   - Add ThreadSanitizer where compatible and targeted high-contention/model
     tests where it is not.
 
@@ -236,7 +237,8 @@ accurate user-facing documentation. A local one-off pass is not sufficient.
   agree.** The v2.7 spec/import prose and snapshots have already drifted.
   - Correct importer-relative/cwd/`NURL_STDLIB`/realpath behavior in
     `docs/spec.md`; align hexadecimal/binary literal grammar with the compiler.
-  - Add missing `spec/grammar_v2.3.ebnf` through `grammar_v2.7.ebnf`, or replace
+  - Add missing `spec/grammar_v2.3.ebnf` through `grammar_v2.8.ebnf` (the
+    current grammar is v2.9), or replace
     the claimed snapshot policy with a truthful versioned mechanism.
   - Freeze the v1 grammar identifier and add a spec-driven conformance suite
     independent of compiler goldens, mapping positive and negative tests to

@@ -194,7 +194,8 @@ The second OS and the two non-Linux hosts keep the toolchain honest — the
 shipped `nurlc` / `nurlpkg` binaries link only libc and `nurl.sh` is POSIX
 `sh`, so the toolchain runs unmodified on glibc, musl / Alpine, BSD, Windows
 and macOS. A documentation-only PR (`webdocs/**`) skips the code gates and
-runs the docs build instead; a PR touching both runs everything. Gate list
+runs the docs build instead, one that touches only the proof work in
+`formal/` skips them too, and a PR touching code as well runs everything. Gate list
 and how to reproduce each locally:
 [`docs/BUILDING.md`](docs/BUILDING.md#continuous-integration).
 

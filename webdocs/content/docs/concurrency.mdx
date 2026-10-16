@@ -27,7 +27,9 @@ The runtime copies a `thread_spawn` closure's captured environment to the worker
 thread. The compiler rejects capturing an `Rc` (a non-atomic reference count) at
 compile time. If two threads race on its count, the result is undefined behavior. Use
 `Arc` (`stdlib/std/arc.nu`, atomic reference count) for any handle that you share
-across threads, and `Arc[Mutex]` for shared mutable state.
+across threads. An `Arc`'s payload is frozen once made; state that threads
+share and change lives in a `( Locked T )` (`stdlib/std/thread.nu`), whose
+operations hold its own lock.
 
 ## Async fibers
 

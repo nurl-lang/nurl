@@ -7,8 +7,8 @@ Anything marked done here has a regression test in
 [`compiler/tests/`](compiler/tests/) and is covered by the bootstrap fixed
 point.
 
-_Last reviewed: 2026-10-10 · Current release: **0.72.0** · Language: **Grammar
-v2.8** ([`spec/grammar.ebnf`](spec/grammar.ebnf))._
+_Last reviewed: 2026-10-16 · Current release: **0.73.0** · Language: **Grammar
+v2.9** ([`spec/grammar.ebnf`](spec/grammar.ebnf))._
 
 ---
 
@@ -21,7 +21,7 @@ stage2). The only build dependency is clang / LLVM 15+.
 
 What is solid today:
 
-- **Language (Grammar v2.8).** Sum types (`|`) and product types (structs),
+- **Language (Grammar v2.9).** Sum types (`|`) and product types (structs),
   generics over structs and functions (incl. generics over option/result
   types), pattern matching with **match guards**, **or-patterns**, and
   **N-ary payloads**, **trait bounds** on type parameters (`[A: Ord]`), **compile-time constant
@@ -47,7 +47,10 @@ What is solid today:
   — a helper whose arguments are constants at every call site, scored on
   its whole body, called from a caller large enough to push the decision
   the other way. 0.71.0 adds the third, **`unsafe`** (grammar v2.8,
-  §3.3d): the only functions whose body may touch raw memory. The grammar
+  §3.3d): the only functions whose body may touch raw memory. 0.73.0 adds
+  **`raw`** (grammar v2.9, §3.3e): a function whose soundness rests on its
+  caller, callable only from `unsafe` code, and a struct whose fields carry
+  such an invariant. The grammar
   decision
   for prefix-arity (no grouping delimiter) is formally locked, and since
   0.37.0 the n-ary `&`/`|` arity trap it makes possible is a **hard error
@@ -95,9 +98,12 @@ What is solid today:
   — so an `Rc` or a `Cell` reaching a worker is a compile error however
   it is spelled, and `% NotSend` / `% Send` mark the cases a structural
   derivation cannot see either way. Since 0.71.0 a thread closure moves
-  its captures and only `Channel` / `Mutex` / `Arc` cross threads, so data
-  races are inside the guarantee; marker assertions and whether a lock is
-  held are the trusted part ([`docs/MEMORY.md`](docs/MEMORY.md) §3, §6.5). Since 0.58.0 the Linux I/O path has no reactor thread:
+  its captures and only share handles (`Channel`, `Mutex`, `Arc`,
+  `Locked`) cross threads; since 0.73.0 an `Arc`'s payload is frozen once
+  made and state threads change lives in a `Locked [T]` whose own lock its
+  operations hold, so data races are inside the guarantee with no lock
+  counted; marker assertions are the trusted part
+  ([`docs/MEMORY.md`](docs/MEMORY.md) §3, §6.5). Since 0.58.0 the Linux I/O path has no reactor thread:
   an **idle worker becomes the poller** and blocks in `epoll_wait`
   itself, so a ready fiber resumes on that worker with no queue hop, no
   cross-thread wake and no migration (the Go netpoller / tokio driver
@@ -143,14 +149,15 @@ A high-level map of what exists. Dates and per-feature detail are in
 - Self-hosted compiler (`compiler/nurlc.nu`) with a deterministic, byte-identical
   bootstrap; stage-0 links the committed `nurlc_lastgood.ll` snapshot (no
   Python in the toolchain).
-- Grammar evolved v0.1 → **v2.8** (snapshots in [`spec/`](spec/)). v2.x added:
+- Grammar evolved v0.1 → **v2.9** (snapshots through v2.2 in [`spec/`](spec/)). v2.x added:
   visibility (`pub`) enforcement across functions, types, consts, and enum
   variants; trait bounds; match guards + or-patterns; const folding; channel
   select; **dynamic trait objects** (`%Trait` + `( dyn Trait v )`, v2.3);
   **`break` / `continue`** as reserved identifiers (v2.4); the **`v128`**
   SIMD lane type (v2.5); the **`simd` CPU-dispatch prefix** on `@`
   declarations (v2.6); the **`inline` always-inline prefix** (v2.7); the
-  **`unsafe` raw-memory prefix** (v2.8); and locked the prefix-arity
+  **`unsafe` raw-memory prefix** (v2.8); the **`raw` caller-vouched
+  prefix** (v2.9); and locked the prefix-arity
   grouping decision.
 - Type system: strong, static, inferred, algebraic; no subtyping, no implicit
   conversions. Sized integer/float types with **signedness carried in the
@@ -181,18 +188,20 @@ A high-level map of what exists. Dates and per-feature detail are in
   Since 0.68.0 the whole test corpus runs leak-clean under LeakSanitizer
   as a CI gate, `--lint` reports release calls the model made redundant
   (`[redundant-free]`), and the panic journal belongs to the fiber, so
-  recover extents of interleaving fibers stay apart. Since 0.69.0 nothing
-  is released by hand anywhere — stdlib, tools and every package free
-  nothing explicitly; opaque library state is self-releasing handles — and
-  a raw pointer or closure outliving the value it borrows is a compile
-  error. Since 0.70.0 ownership of a returned value is decided per call
+  recover extents of interleaving fibers stay apart. Since 0.69.0 opaque
+  library state is self-releasing handles and a raw pointer or closure
+  outliving the value it borrows is a compile error; since 0.73.0 nothing
+  a program keeps is released by hand — no package, example or bench
+  kernel frees or claims memory itself, and the standard library's
+  remaining such calls sit inside the owners that implement ownership. Since 0.70.0 ownership of a returned value is decided per call
   (a function that lends on one path and gives on another no longer leaks
   or double-frees), a borrowed value of a type that cannot be copied is
   never silently duplicated (a compile error says where to clone or move),
   and `--debug` builds at the default -O2. Since 0.71.0 the rules are a
   guarantee — every program accepted without an `unsafe` function of its
-  own is memory-safe and leak-free, apart from the open holes MEMORY.md
-  §6.2 lists — `Rc` cycles are collected by a cycle
+  own is memory-safe and leak-free (MEMORY.md §6.2; since 0.73.0 no hole
+  is known — every one found, through probe h273, is closed) — `Rc` cycles
+  are collected by a cycle
   collector, `Weak` and `ArcWeak` exist, and a cycle of thread-shared
   handles is a compile error. Model, guarantee and trusted base:
   [`docs/MEMORY.md`](docs/MEMORY.md).
@@ -236,7 +245,8 @@ A high-level map of what exists. Dates and per-feature detail are in
   independent modules (`--split=N`) that the driver lowers concurrently
   and links with ThinLTO, taking the clang step on the compiler's own
   3.2 MB of IR from 11.3 s to 2.0 s — at a measured 3.4% of the built
-  program's own speed, which is why `nurl.sh` splits your program and
+  program's own speed (before 0.73.0 started copying small functions into
+  every part that calls them, so they inline across parts), which is why `nurl.sh` splits your program and
   `build.sh` does not split the compiler it installs (`NURL_SPLIT=0`
   opts out). Since 0.40.0 that link is also **cached** — per-module
   ThinLTO backend codegen, the pre-link object keyed by content hash of
@@ -261,8 +271,10 @@ platform-specific shims.
 - **std/collections & algorithms** — `hashmap`, `set`, `deque`, `heap`,
   `ordmap`, `btree`, `lru`, `bitset`, `iter`, `sort`, `cmp`, `bytes`, `bufio`, `fmt`, `int`, `float`,
   `bigint` (arbitrary-precision integers), `decimal` (exact fixed-point).
-- **std/runtime services** — `async`, `thread`, `channel`, `arc`, `rc`,
-  `arena`, `signal`, `panic`/`recover`, `process`, `unixsock` (local IPC),
+- **std/runtime services** — `async`, `thread` (incl. `Locked [T]`,
+  shared state threads change), `par` (`par_map_index`), `channel`, `arc`,
+  `rc`, `arena`, `mmap` (a read-only file mapping lent as a checked
+  view), `signal`, `panic`/`recover`, `process`, `unixsock` (local IPC),
   `log` (text + JSON), `time` (incl. local time via the platform's zone,
   timezone/DST, HTTP/RFC 2822 dates), `args` (CLI parser),
   `term` (POSIX termios, ANSI), `sysinfo` (`uname` fields, host name,
@@ -282,7 +294,8 @@ platform-specific shims.
 - **ext/serialization** — `json`, `toml`, `csv`, `msgpack`, `cbor`, `xml`, `yaml`,
   `protobuf` (checked Protocol Buffers wire readers/writers,
   [`docs/stdlib/protobuf.md`](docs/stdlib/protobuf.md)), `serde`, `regex` (a
-  Pike VM, with capture groups and back references).
+  Pike VM, with capture groups and back references), `unicat` (Unicode
+  general categories for tokenizers).
 - **ext/web stack** — full HTTP/1.1 server (keep-alive, pipelining, static,
   auth, JWT bearer-auth with HS256/EdDSA/**ES256**, cookies, forms, multipart, router, middleware, access log + Prometheus
   metrics, DoS caps, graceful shutdown, per-request timeouts, panic recovery),
