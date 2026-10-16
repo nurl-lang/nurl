@@ -138,7 +138,7 @@ $ `src/dev.nu`
     ( dverdict kit `for (long long k = 0; k < 4; k++) { if (tid == k) { break; } SYNC(); }` F )
     ( dverdict kit `if (bid == 0) SYNC();` F )
     ( dverdict kit `if (bid == 0) { SHARED_D(t, 4); }` F )
-    ( dverdict kit `SHARED_D(t, 5000);` F )
+    ( dverdict kit `SHARED_D(t, 6145);` F )
     ( dverdict kit `SHARED_D(x, 4);` F )
     ( dverdict kit `__syncthreads();` F )
     ( dverdict kit `double z; ST(o, gid, z);` T )
@@ -796,6 +796,92 @@ ST(o, 0, (double)a);` 1 32 )
     ? ( gk_run_checked_dev_tagged kit ct3 `tagged4` `t` \ → String { ^ ( string_from `float a, b, c, d; LD4(x, 0, a, b, c, d); ST(o, 0, a);` ) } 1 32 ) { ( nurl_print `FAIL a tagged kernel reading LD4 was launched\n` ) = g_fail + g_fail 1 } { ( nurl_print `ok   refuses LD4 in a tagged kernel\n` ) }
 }
 
+// Windows into shared arrays: a tile written by rows and read back by
+// columns, a 1-D window over one row, a window past the array's end
+// (empty), a store outside the tile (dropped); a window into a per-thread
+// array is refused; shared arrays may take 48 KB a block, not more.
+@ swrun GpuKit kit → v {
+    : GkBuf o ( gk_dbuf_new kit 68 GK_F64 )
+    : b _z ( gk_dbuf_upload kit o ( vec_zeroed [f] 68 ) )
+    : ~ GkCall c ( gk_call_new )
+    ( gk_call_dev c `o` o )
+    : b ran ( gk_run_checked_dev kit c `shwin` `SHARED_D(t, 72);
+WIN2(tw, t, 0, 8, 9, 8);
+WIN(row, t, 9, 8);
+int r = (int)tid / 8;
+int q = (int)tid % 8;
+ST2(tw, r, q, (double)(r * 10 + q));
+SYNC();
+ST(o, tid, LD2(tw, q, r));
+if (tid == 0) {
+    ST(o, 64, (double)(ROWS(tw) * 10 + COLS(tw)));
+    double s = 0.0;
+    for (int j = 0; j < LEN(row); j++) { s += LD(row, j); }
+    ST(o, 65, s);
+    WIN2(bad, t, 60, 2, 9, 8);
+    ST(o, 66, (double)(ROWS(bad) * 10 + COLS(bad)));
+    ST2(tw, 8, 0, 99.0);
+    ST(o, 67, LD(t, 71));
+}` 1 64 )
+    : ~ ( Vec f ) g ( vec_zeroed [f] 68 )
+    : b _d ( gk_dbuf_download kit o g )
+    : ~ b tr T
+    : ~ i k 0
+    ~ < k 64 { ? == ( vec_at [f] g k ) # f + * % k 8 10 / k 8 {} { = tr F } = k + k 1 }
+    : b vals & & == ( vec_at [f] g 64 ) 88.0 == ( vec_at [f] g 65 ) 108.0 & == ( vec_at [f] g 66 ) 0.0 == ( vec_at [f] g 67 ) 0.0
+    ? & & ran tr vals {
+        ( nurl_print `ok   windows into a shared array: rows written, columns read, one past its end empty\n` )
+    } {
+        ( nurl_print `FAIL shared windows: ` ) ( nurl_print ( gk_checked_error c ) ) ( nurl_print `\n` ) = g_fail + g_fail 1
+    }
+    : ~ GkCall c2 ( gk_call_new )
+    ( gk_call_dev c2 `o` o )
+    : b bad1 ( gk_run_checked_dev kit c2 `lwin` `LOCAL_D(a, 4); WIN(w, a, 0, 4); ST(o, 0, LD(w, 0));` 1 32 )
+    ? bad1 { ( nurl_print `FAIL a window into a per-thread array was launched\n` ) = g_fail + g_fail 1 } { ( nurl_print `ok   refuses a window into a per-thread array\n` ) }
+    : ~ GkCall c3 ( gk_call_new )
+    ( gk_call_dev c3 `o` o )
+    : b big ( gk_run_checked_dev kit c3 `sh48` `SHARED_F(big, 12288); for (int j = (int)tid; j < 12288; j += 256) { ST(big, j, (float)j); } SYNC(); if (tid == 0) { ST(o, 0, (double)LD(big, 12287)); }` 1 256 )
+    : ~ ( Vec f ) g3 ( vec_zeroed [f] 68 )
+    : b _d3 ( gk_dbuf_download kit o g3 )
+    : ~ GkCall c4 ( gk_call_new )
+    ( gk_call_dev c4 `o` o )
+    : b over ( gk_run_checked_dev kit c4 `sh48x` `SHARED_F(big, 12289); ST(big, tid, 1.0f); SYNC(); ST(o, 0, LD(big, 0));` 1 256 )
+    ? & & big == ( vec_at [f] g3 0 ) 12287.0 ! over {
+        ( nurl_print `ok   48 KB of shared arrays run, a float more is refused\n` )
+    } {
+        ( nurl_print `FAIL 48 KB shared: ` ) ( nurl_print ( gk_checked_error c3 ) ) ( nurl_print ` / ` ) ( nurl_print ( gk_checked_error c4 ) ) ( nurl_print `\n` ) = g_fail + g_fail 1
+    }
+}
+
+// A binding name holding the key's separator cannot alias another call's
+// cache entry: bound as x (a scalar) and y, a kernel is built; one buffer
+// named "x4<1>y" spells the same key text, and must be refused, not handed
+// the kernel built for two bindings.
+@ keyrun GpuKit kit → v {
+    : GkBuf y ( gk_dbuf_new kit 4 GK_F64 )
+    : b _u ( gk_dbuf_upload kit y ( vec_zeroed [f] 4 ) )
+    : GkBuf o ( gk_dbuf_new kit 4 GK_F64 )
+    : b _z ( gk_dbuf_upload kit o ( vec_zeroed [f] 4 ) )
+    : ~ GkCall ca ( gk_call_new )
+    ( gk_call_i64 ca `x` 5 ) ( gk_call_dev_in ca `y` y ) ( gk_call_dev ca `o` o )
+    : b ra ( gk_run_checked_dev kit ca `alias` `if (gid == 0) { ST(o, 0, (double)x + LD(y, 0)); }` 1 32 )
+    : ~ String evil ( string_from `x4` )
+    ( string_push_char evil 1 ) ( string_push_str evil `y` )
+    : ~ GkCall cb ( gk_call_new )
+    ( gk_call_dev_in cb ( string_data evil ) y ) ( gk_call_dev cb `o` o )
+    : b rb ( gk_run_checked_dev kit cb `alias` `if (gid == 0) { ST(o, 0, (double)x + LD(y, 0)); }` 1 32 )
+    : ~ String kn ( string_from `ali` )
+    ( string_push_char kn 1 ) ( string_push_str kn `as` )
+    : ~ GkCall cc ( gk_call_new )
+    ( gk_call_dev cc `o` o )
+    : b rc ( gk_run_checked_dev kit cc ( string_data kn ) `ST(o, 0, 1.0);` 1 32 )
+    ? & & ra ! rb ! rc {
+        ( nurl_print `ok   a binding or kernel name holding the key's separator is refused, not matched to another call's kernel\n` )
+    } {
+        ( nurl_print `FAIL key aliasing: ` ) ( nurl_print ? ra `` `first call failed ` ) ( nurl_print ? rb `aliased call ran ` `` ) ( nurl_print ? rc `bad kernel name ran` `` ) ( nurl_print `\n` ) = g_fail + g_fail 1
+    }
+}
+
 @ main → i {
     : GpuKit kit ( gk_open_best )
     ? ( gk_ok kit ) {} { ( nurl_print `SKIP no device\n` ) ^ 0 }
@@ -812,6 +898,8 @@ ST(o, 0, (double)a);` 1 32 )
     ( wrun kit )
     ( w2run kit )
     ( w3run kit )
+    ( swrun kit )
+    ( keyrun kit )
     ? == g_fail 0 { ( nurl_print `checked: all passed\n` ) } { ( nurl_print `checked: FAILURES\n` ) }
     ^ 0
 }

@@ -22,26 +22,6 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
 $ `dev.nu`
 
-// Launch the cached kernel. The arg vector and the source/name buffers
-// every op wrapper builds per call are handed in and go with this call.
-// Every operation in this file checks its buffers' sizes and dtypes
-// against the dimensions it launches over (products through _gk_p2/3/4,
-// which cannot overflow into a match) before it gets here, and its kernel
-// keeps every index it forms inside them.
-unsafe @ __gkd_launch GpuKit kit sink String src sink String kname i grid sink ( Vec i ) args → b {
-    : b r ( gk_run_dev kit ( string_data src ) ( string_data kname ) grid 256 args )
-    ^ r
-}
-
-// Bind `b` as an input of `c`: read-only (restrict, and the read-only
-// cache) unless it overlaps `out`, the buffer the kernel writes — an op
-// called in place reads through a writable binding, as before.
-@ __gkd_in inout GkCall c s name GkBuf b GkBuf out → v {
-    : i e1 * . b n ( _gk_esz . b dtype )
-    : i e2 * . out n ( _gk_esz . out dtype )
-    ? & < . b dptr + . out dptr e2 < . out dptr + . b dptr e1 { ( gk_call_dev c name b ) } { ( gk_call_dev_in c name b ) }
-}
-
 // The counter type of a loop to `n`: an int when n — plus a stride of up
 // to 65536 past it, as a loop striding by the block takes — fits one (the
 // compiler unrolls an int loop further, and a window's check folds
@@ -56,24 +36,15 @@ unsafe @ __gkd_launch GpuKit kit sink String src sink String kname i grid sink (
     ^ o
 }
 
-// (the same, the body made by `mk` only the first time `tag` is seen:
-// see gk_run_checked_dev_tagged)
-@ __gkd_run_t GpuKit kit inout GkCall c String kname String tag ( @ String ) mk i total → b {
-    ^ ( gk_run_checked_dev_tagged kit c ( string_data kname ) ( string_data tag ) mk ( gk_grid total 256 ) 256 )
-}
-
+// One thread per element of `total`, in blocks of 256.
 @ __gkd_run GpuKit kit inout GkCall c String kname String body i total → b {
     ^ ( gk_run_checked_dev kit c ( string_data kname ) ( string_data body ) ( gk_grid total 256 ) 256 )
 }
 
-// Kernel-source head: `extern "C" __global__ void <pfx><op>(` — returns the
-// source String and leaves the full kernel name in `kname`.
-@ __gkd_head String kname s op → String {
-    ( string_push_str kname op )
-    : String src ( string_from `extern "C" __global__ void ` )
-    ( string_push_str src ( string_data kname ) )
-    ( string_push_char src 40 )
-    ^ src
+// (the same, the body made by `mk` only the first time `tag` is seen:
+// see gk_run_checked_dev_tagged)
+@ __gkd_run_t GpuKit kit inout GkCall c String kname String tag ( @ String ) mk i total → b {
+    ^ ( gk_run_checked_dev_tagged kit c ( string_data kname ) ( string_data tag ) mk ( gk_grid total 256 ) 256 )
 }
 
 @ __gkd_name i dtype → String { ^ ( string_from ( _gk_pfx dtype ) ) }
@@ -100,16 +71,17 @@ unsafe @ __gkd_launch GpuKit kit sink String src sink String kname i grid sink (
     : s tn ( _gk_tname . y dtype )
     // CPU with B already [K,N] (transb=0): one output per thread with a
     // scalar accumulator walks a COLUMN of B and gives the vectoriser
-    // nothing — the same shape problem __gkd_mm_tiled was written for.
+    // nothing — the same shape problem _gk_tile_body was written for.
     // Bit-identical to the per-element kernel: the sum still runs
     // t = 0..K ascending, only the visit order over outputs changes.
     //
     // transb=1 deliberately stays on the per-element kernel. Staging a
     // transpose at CALL time to reach the tiled body was measured and is
-    // a LOSS — see _gkd_gemm_tiled. Callers that want the tiled path
+    // a LOSS: the transpose is a full memory round trip over a cold weight
+    // used once, and a model came out 2.4x slower. Callers that want the tiled path
     // transpose their weights ONCE, at load.
     //
-    // On the CUDA backend the shared-memory tile (_gkd_smem_body) wins on
+    // On the CUDA backend the shared-memory tile (_gkd_smem_cbody) wins on
     // anything big enough to fill one: a 64x64 tile with K >= 16. Below
     // that — the M=1 GEMVs a camera/pose head runs — the per-element
     // kernel is the better shape, since a 64-row tile would be 63/64
@@ -118,7 +90,7 @@ unsafe @ __gkd_launch GpuKit kit sink String src sink String kname i grid sink (
     : b tiled & on_cpu == transb 0
     : b on_cuda ( nurl_str_eq ( gk_backend kit ) `cuda` )
     : b smem & & & on_cuda >= m 16 >= n 32 >= k 16
-    // The 128x64 tile with an 8x4 register block (see _gkd_smem_body):
+    // The 128x64 tile with an 8x4 register block (see _gkd_smem_cbody):
     // double the arithmetic intensity per shared read, but half the
     // blocks — so only where M is deep enough that ceil(M/128)*ceil(N/64)
     // still covers a big card's SMs. A batched or long-sequence encoder
@@ -135,82 +107,37 @@ unsafe @ __gkd_launch GpuKit kit sink String src sink String kname i grid sink (
     // bit-identical. The chains of different outputs overlap, so the
     // depth of one no longer sets the time.
     : b gemv & & on_cuda ! smem >= k 128
-    : String kname ( __gkd_name . y dtype )
-    : String src ( __gkd_head kname ? smem
+    : i dt . y dtype
+    : b tb != transb 0
+    : String kname ( __gkd_name dt )
+    ( string_push_str kname ? smem
     ? big
-    ? != transb 0 `gemm_smem2_t` `gemm_smem2`
-    ? != transb 0 `gemm_smem_t` `gemm_smem`
+    ? tb `gemm_smem2_t` `gemm_smem2`
+    ? tb `gemm_smem_t` `gemm_smem`
     ? gemv `gemv` ? tiled `gemm_tiled` `gemm` )
-    ( string_push_str src `const ` ) ( string_push_str src tn ) ( string_push_str src `* A, const ` )
-    ( string_push_str src tn ) ( string_push_str src `* B, const ` )
-    ( string_push_str src tn ) ( string_push_str src `* C, ` )
-    ( string_push_str src tn ) ( string_push_str src `* Y, long long M, long long N, long long K, ` )
-    ( string_push_str src tn ) ( string_push_str src ` alpha, ` )
-    ( string_push_str src tn ) ( string_push_str src ` beta, long long transB){` )
-    ( string_push_str src `(void)transB;` )
-    ? smem {
-        : String body ( _gkd_smem_body tn . y dtype transb 0 ? big { 1 } { 0 } )
-        ( string_push_str src ( string_data body ) )
-    } {
-        ? gemv {
-            ( string_push_str src `enum{CH=1024};__shared__ ` )
-            ( string_push_str src tn ) ( string_push_str src ` sa[CH];__shared__ ` )
-            ( string_push_str src tn ) ( string_push_str src ` sb[CH];` )
-            ( string_push_str src `long long idx=blockIdx.x;if(idx>=M*N)return;` )
-            ( string_push_str src `long long r=idx/N,c=idx%N;` )
-            ( string_push_str src tn ) ( string_push_str src ` acc=0;` )
-            ( string_push_str src `for(long long k0=0;k0<K;k0+=CH){` )
-            ( string_push_str src `long long cnt=(K-k0<CH)?(K-k0):CH;` )
-            ( string_push_str src `for(long long j=threadIdx.x;j<cnt;j+=blockDim.x){` )
-            ( string_push_str src `sa[j]=A[r*K+k0+j];sb[j]=transB?B[c*K+k0+j]:B[(k0+j)*N+c];}` )
-            ( string_push_str src `__syncthreads();if(threadIdx.x==0){` )
-            ( string_push_str src `for(long long j=0;j<cnt;j++)` )
-            : String mac ( _gkd_mac . y dtype `acc` `sa[j]` `sb[j]` )
-            ( string_push_str src ( string_data mac ) )
-            ( string_push_str src `}__syncthreads();}` )
-            ( string_push_str src `if(threadIdx.x==0){` )
-            ( string_push_str src tn ) ( string_push_str src ` bias=(C!=0)?C[c]:0;` )
-            ( string_push_str src `Y[idx]=alpha*acc+beta*bias;}}` )
-        } {
-            ? tiled {
-                : String body ( _gkd_gemm_tiled tn . y dtype )
-                ( string_push_str src ( string_data body ) )
-            } {
-                ( string_push_str src `long long idx=blockIdx.x*blockDim.x+threadIdx.x;` )
-                ( string_push_str src `if(idx<M*N){long long r=idx/N,c=idx%N;` )
-                ( string_push_str src tn ) ( string_push_str src ` acc=0;` )
-                ( string_push_str src `for(long long k=0;k<K;++k){` )
-                ( string_push_str src tn ) ( string_push_str src ` b=transB?B[c*K+k]:B[k*N+c];acc+=A[r*K+k]*b;}` )
-                ( string_push_str src tn ) ( string_push_str src ` bias=(C!=0)?C[c]:0;` )
-                ( string_push_str src `Y[idx]=alpha*acc+beta*bias;}}` )
-            }
-        }
-    }
-    : i cd ? != hasb 0 { ( gk_arg_dev c ) } { 0 }
-    : ( Vec i ) args ( vec_new [i] )
-    ( vec_push [i] args ( gk_arg_dev a ) )
-    ( vec_push [i] args ( gk_arg_dev b ) )
-    ( vec_push [i] args cd )
-    ( vec_push [i] args ( gk_arg_dev y ) )
-    ( vec_push [i] args ( gpu_arg_i64 m ) )
-    ( vec_push [i] args ( gpu_arg_i64 n ) )
-    ( vec_push [i] args ( gpu_arg_i64 k ) )
-    ( vec_push [i] args ( _gk_scal . y dtype alpha ) )
-    ( vec_push [i] args ( _gk_scal . y dtype beta ) )
-    ( vec_push [i] args ( gpu_arg_i64 transb ) )
+    : ~ GkCall cl ( gk_call_new )
+    ( _gkd_in cl `A` a y ) ( _gkd_in cl `B` b y )
+    // (a bias either way — the first operand standing in for an absent
+    // one — read only when hasB says so)
+    ? != hasb 0 { ( _gkd_in cl `Cb` c y ) } { ( _gkd_in cl `Cb` a y ) }
+    ( gk_call_dev cl `Y` y )
+    ( gk_call_i64 cl `M` m ) ( gk_call_i64 cl `N` n ) ( gk_call_i64 cl `K` k )
+    ( gk_call_f64 cl `alpha` alpha ) ( gk_call_f64 cl `beta` beta ) ( gk_call_i64 cl `hasB` hasb )
+    // (the transpose is in the body: the GEMV's and the per-element
+    // kernel's names do not carry it, so the tag does)
+    : String tag ( string_from ? tb `t` `n` )
     // The smem body maps ONE BLOCK to a 64x64 (or 128x64) tile, so its
-    // launch is a block count, not a thread count — gk_grid would divide
-    // it by 256.
+    // launch is a block count, not a thread count.
     ? smem {
         : i nb ? big
         { * ( _gkd_ceil m 128 ) ( _gkd_ceil n 64 ) }
         { * ( _gkd_ceil m GKD_BM ) ( _gkd_ceil n GKD_BN ) }
-        ^ ( __gkd_launch kit src kname nb args )
+        ^ ( gk_run_checked_dev_tagged kit cl ( string_data kname ) ( string_data tag ) \ → String { ^ ( _gkd_smem_cbody tn dt tb F big ) } nb 256 )
     } {}
     // one block per output element, not one thread
-    ? gemv { ^ ( __gkd_launch kit src kname * m n args ) } {}
+    ? gemv { ^ ( gk_run_checked_dev_tagged kit cl ( string_data kname ) ( string_data tag ) \ → String { ^ ( _gkd_gemv_cbody tn dt tb ) } * m n 256 ) } {}
     : i total ? tiled * ( _gkd_ceil m GKD_RT ) ( _gkd_ceil n GKD_CT ) * m n
-    ^ ( __gkd_launch kit src kname ( gk_grid total 256 ) args )
+    ^ ( gk_run_checked_dev_tagged kit cl ( string_data kname ) ( string_data tag ) \ → String { ^ ? tiled ( _gk_tile_body tn dt F T ) ( _gkd_elem_cbody tn dt tb T F F ) } ( gk_grid total 256 ) 256 )
 }
 
 // ── 2-D convolution, NCHW, batch 1, group 1 ──────────────────────────
@@ -386,12 +313,12 @@ if (gid < ncb * OH * nwb) {
     : String kname ( __gkd_name . y dtype )
     ( string_push_str kname `conv2d` )
     : ~ GkCall cl ( gk_call_new )
-    ( __gkd_in cl `X` x y ) ( __gkd_in cl `Wt` w y )
+    ( _gkd_in cl `X` x y ) ( _gkd_in cl `Wt` w y )
     : b cuda ( nurl_str_eq ( gk_backend kit ) `cuda` )
     // (the host's binds a bias either way — the input standing in for an
     // absent one — and reads it only when hasB says so: one kernel for
     // both, as the static backend links one)
-    ? != hasb 0 { ( __gkd_in cl `B` bias y ) } { ? cuda {} { ( __gkd_in cl `B` x y ) } }
+    ? != hasb 0 { ( _gkd_in cl `B` bias y ) } { ? cuda {} { ( _gkd_in cl `B` x y ) } }
     ( gk_call_dev cl `Y` y )
     ? cuda {
         // (the shape is the kernel: it is the tag, and the body is made
@@ -606,8 +533,8 @@ if (gid < ncb * OH * nwb) {
     : String kname ( __gkd_name . y dtype )
     ( string_push_str kname `conv2d_dil` )
     : ~ GkCall cl ( gk_call_new )
-    ( __gkd_in cl `X` x y ) ( __gkd_in cl `Wt` w y )
-    ? != hasb 0 { ( __gkd_in cl `B` bias y ) } { ( __gkd_in cl `B` x y ) }
+    ( _gkd_in cl `X` x y ) ( _gkd_in cl `Wt` w y )
+    ? != hasb 0 { ( _gkd_in cl `B` bias y ) } { ( _gkd_in cl `B` x y ) }
     ( gk_call_dev cl `Y` y )
     ( gk_call_i64 cl `Cin` cin ) ( gk_call_i64 cl `H` h ) ( gk_call_i64 cl `W` wd ) ( gk_call_i64 cl `Cout` cout ) ( gk_call_i64 cl `kh` kh ) ( gk_call_i64 cl `kw` kw )
     ( gk_call_i64 cl `OH` oh ) ( gk_call_i64 cl `OW` ow ) ( gk_call_i64 cl `ph` ph ) ( gk_call_i64 cl `pw` pw ) ( gk_call_i64 cl `sh` sh ) ( gk_call_i64 cl `sw` sw )
@@ -678,8 +605,8 @@ if (gid < ncb * OH * nwb) {
     : String kname ( __gkd_name . y dtype )
     ( string_push_str kname ? exact `convt2d_up` `convt2d` )
     : ~ GkCall cl ( gk_call_new )
-    ( __gkd_in cl `X` x y ) ( __gkd_in cl `Wt` w y )
-    ? != hasb 0 { ( __gkd_in cl `B` bias y ) } { ( __gkd_in cl `B` x y ) }
+    ( _gkd_in cl `X` x y ) ( _gkd_in cl `Wt` w y )
+    ? != hasb 0 { ( _gkd_in cl `B` bias y ) } { ( _gkd_in cl `B` x y ) }
     ( gk_call_dev cl `Y` y )
     ( gk_call_i64 cl `Cin` cin ) ( gk_call_i64 cl `H` h ) ( gk_call_i64 cl `W` wd ) ( gk_call_i64 cl `Cout` cout ) ( gk_call_i64 cl `kh` kh ) ( gk_call_i64 cl `kw` kw )
     ( gk_call_i64 cl `OH` oh ) ( gk_call_i64 cl `OW` ow ) ( gk_call_i64 cl `ph` ph ) ( gk_call_i64 cl `pw` pw ) ( gk_call_i64 cl `sh` sh ) ( gk_call_i64 cl `sw` sw ) ( gk_call_i64 cl `hasB` hasb )
@@ -751,7 +678,7 @@ if (gid < ncb * OH * nwb) {
     ( string_push_str kname `maxpool2d` )
     : i dty . y dtype
     : ~ GkCall cl ( gk_call_new )
-    ( __gkd_in cl `X` x y ) ( gk_call_dev cl `Y` y )
+    ( _gkd_in cl `X` x y ) ( gk_call_dev cl `Y` y )
     ( gk_call_i64 cl `C` c ) ( gk_call_i64 cl `H` h ) ( gk_call_i64 cl `W` wd ) ( gk_call_i64 cl `kh` kh ) ( gk_call_i64 cl `kw` kw )
     ( gk_call_i64 cl `OH` oh ) ( gk_call_i64 cl `OW` ow ) ( gk_call_i64 cl `sh` sh ) ( gk_call_i64 cl `sw` sw ) ( gk_call_i64 cl `ph` ph ) ( gk_call_i64 cl `pw` pw )
     ^ ( __gkd_run_t kit cl kname ( string_new ) \ → String {
@@ -786,7 +713,7 @@ if (gid < ncb * OH * nwb) {
     ( string_push_str kname `bnorm` )
     : i dty . y dtype
     : ~ GkCall cl ( gk_call_new )
-    ( __gkd_in cl `X` x y ) ( __gkd_in cl `sc` sc y ) ( __gkd_in cl `B` bb y ) ( __gkd_in cl `mean` mean y ) ( __gkd_in cl `var` var y )
+    ( _gkd_in cl `X` x y ) ( _gkd_in cl `sc` sc y ) ( _gkd_in cl `B` bb y ) ( _gkd_in cl `mean` mean y ) ( _gkd_in cl `var` var y )
     ( gk_call_dev cl `Y` y ) ( gk_call_i64 cl `C` c ) ( gk_call_i64 cl `HW` hw ) ( gk_call_f64 cl `eps` eps )
     ^ ( __gkd_run_t kit cl kname ( string_new ) \ → String {
         : ~ String body ( string_from `if (gid < C * HW) { long long c = gid / HW; ST(Y, gid, LD(sc, c) * (LD(X, gid) - LD(mean, c)) / sqrt` )
@@ -807,7 +734,7 @@ if (gid < ncb * OH * nwb) {
     ( string_push_str kname `lrelu` )
     : i dt . y dtype
     : ~ GkCall cl ( gk_call_new )
-    ( __gkd_in cl `X` x y ) ( gk_call_dev cl `Y` y ) ( gk_call_i64 cl `n` n ) ( gk_call_f64 cl `alpha` alpha )
+    ( _gkd_in cl `X` x y ) ( gk_call_dev cl `Y` y ) ( gk_call_i64 cl `n` n ) ( gk_call_f64 cl `alpha` alpha )
     ^ ( __gkd_run_t kit cl kname ( string_new ) \ → String {
         : ~ String body ( string_from `if (gid < n) { ` )
         ( string_push_str body tn ) ( string_push_str body ` v = LD(X, gid); ST(Y, gid, v >= 0 ? v : ` )
@@ -827,7 +754,7 @@ if (gid < ncb * OH * nwb) {
     : String hi2 ( __gkd_scal . y dtype `hi` )
     : i dty . y dtype
     : ~ GkCall cl ( gk_call_new )
-    ( __gkd_in cl `X` x y ) ( gk_call_dev cl `Y` y ) ( gk_call_i64 cl `n` n ) ( gk_call_f64 cl `lo` lo ) ( gk_call_f64 cl `hi` hi )
+    ( _gkd_in cl `X` x y ) ( gk_call_dev cl `Y` y ) ( gk_call_i64 cl `n` n ) ( gk_call_f64 cl `lo` lo ) ( gk_call_f64 cl `hi` hi )
     ^ ( __gkd_run_t kit cl kname ( string_new ) \ → String {
         : ~ String body ( string_from `if (gid < n) { ` )
         ( string_push_str body tn ) ( string_push_str body ` v = LD(X, gid); ST(Y, gid, v < ` ) ( string_push_str body ( string_data lo2 ) )
@@ -878,7 +805,7 @@ if (gid < ncb * OH * nwb) {
     ( string_push_str kname ? rowwise `lnormrow` `lnorm` )
     : s ct ( __gkd_ctr ax )
     : ~ GkCall cl ( gk_call_new )
-    ( __gkd_in cl `X` x y ) ( __gkd_in cl `sc` sc y ) ( __gkd_in cl `bi` bi y ) ( gk_call_dev cl `Y` y )
+    ( _gkd_in cl `X` x y ) ( _gkd_in cl `sc` sc y ) ( _gkd_in cl `bi` bi y ) ( gk_call_dev cl `Y` y )
     ( gk_call_i64 cl `outer` outer ) ( gk_call_i64 cl `ax` ax ) ( gk_call_f64 cl `eps` eps )
     : i dty . y dtype
     : String tag ( string_from ct )
@@ -926,10 +853,6 @@ if (bid < outer) {
     ^ body
 }
 
-// ── Softmax along an interior axis, viewed as (outer, ax, inner) ─────
-// For each (outer, inner) pair the `ax` elements at stride `inner` form
-// one distribution. Numerically stable (max-subtracted).
-
 // ── Fused scaled-dot-product attention ────────────────────────────────
 //
 //   O[h,i,:] = softmax_j( scale * Q[h,i,:]·K[h,j,:] ) · V[h,j,:]
@@ -957,23 +880,27 @@ if (bid < outer) {
 // within f32 rounding, and closer to the reference than the composed
 // form is, but a golden taken with gkd_bmm + gkd_softmax_ax will not
 // reproduce bit for bit.
+//
+// The kernel is a checked one: its tiles are shared arrays read through
+// windows, the heads' rows through LD/ST on the bound buffers. It runs
+// bit for bit the raw kernel it replaced, and as fast or faster.
+
+// Shared-memory budget one attention block may take: a third of the
+// 100 KB an Ada SM can carve out, so three blocks stay resident.
+: i GKD_ATTN_SMEM 33792
+
 // Whether gkd_attention will run for this head width on this backend —
 // so a caller can decide, before it allocates, whether it needs the
 // [heads, n, nkv] score buffer the composed fallback would want. At a
 // 72-frame window of 783 tokens that buffer is 2.8 GB, and it is the
 // difference between a long sequence fitting and not.
-// Shared-memory budget one attention block may take: a third of the
-// 100 KB an Ada SM can carve out, so three blocks stay resident.
-: i GKD_ATTN_SMEM 33792
-
 @ gkd_attention_ok GpuKit kit i hd → b {
     ? ( nurl_str_eq ( gk_backend kit ) `cuda` ) {} { ^ F }
-    ? & > hd 0 == % hd 16 0 {} { ^ F }
     // The register tile is sized for exactly QT*DT = 16 accumulators per
-    // thread, i.e. BQ*hd == 16*256; the call below fails closed when the
-    // head is too narrow to fill it, and this predicate has to say so
-    // BEFORE a caller decides it does not need the score buffer.
-    ^ >= * ? <= hd 64 { 64 } { 32 } hd * 16 256
+    // thread, i.e. BQ*hd == 16*256; the call fails closed for any other
+    // head width, and this predicate has to say so BEFORE a caller
+    // decides it does not need the score buffer.
+    ^ ( __gkd_attn_fits hd )
 }
 
 // Unmasked: every key is visible to every query.
@@ -1001,173 +928,9 @@ i heads i n i nkv i hd i hpb f scale → b {
         ? & & > hpb 0 == % heads hpb 0 == . mask dtype . o dtype {} { ^ F }
         ? >= . mask n ( _gk_p2 / heads hpb nkv ) {} { ^ F }
     } {}
-    // BQ x hd and BQ x BK both have to divide the 256-thread block
-    ? == % hd 16 0 {} { ^ F }
     ? & & == . q n * heads * n hd == . o n * heads * n hd
     & == . k n ( _gk_p3 heads nkv hd ) == . v n ( _gk_p3 heads nkv hd ) {} { ^ F }
-    // Only on CUDA: the CPU backend runs one "thread" per block index
-    // with no shared memory to speak of, and the composed path is the
-    // better shape there.
-    ? ( nurl_str_eq ( gk_backend kit ) `cuda` ) {} { ^ F }
-    : i esz ( gk_buf_esz o )
-    // BQ is chosen so each thread owns exactly QT*DT = 16 accumulators
-    // (BQ*hd / 256 threads), which is what the register tiles below are
-    // sized for. BK is then whatever the 48 KB of shared memory has
-    // left after Qs[BQ][hd+1], Ks[BK][hd+1], Vs[BK][hd+1] and
-    // S[BQ][BK+1] — get this wrong and the launch fails, silently, as a
-    // fail-closed F.
-    : i bq ? <= hd 64 64 32
-    : i fixed + * * bq + hd 1 esz * bq esz
-    : i per * + * 2 + hd 1 bq esz
-    // Sized for THREE resident blocks per SM, not for one block's 48 KB
-    // ceiling. Filling the ceiling is the obvious read of "how big a key
-    // tile fits", and it is the wrong one: at hd=64 it picks BK=32, which
-    // is 41 KB per block, and 41 KB lets only two blocks share an Ada
-    // SM's 100 KB — sixteen warps to hide the shared-memory latency of a
-    // kernel that is nothing but shared-memory traffic. A third of that
-    // budget picks BK=16 (29 KB, three blocks, 24 warps) and the same
-    // work runs measurably faster on both shapes an encoder produces:
-    // one 3072-token sequence 1862 -> 1689 us, sixteen 192-token ones
-    // 133 -> 122 us, on a 4090. The K/V tile is read once either way —
-    // only how much of it a block holds at a time changes.
-    : ~ i bk / - GKD_ATTN_SMEM fixed per
-    = bk * / bk 16 16
-    ? > bk 64 { = bk 64 } {}
-    ? < bk 16 { = bk 16 } {}
-    ? >= ( _gk_p2 bq hd ) * 16 256 {} { ^ F }
-    : s tn ( _gk_tname . o dtype )
-    : s sfx ( __gkd_sfx . o dtype )
-    : String kname ( __gkd_name . o dtype )
-    ( string_push_str kname `attn` )
-    ( string_push_int kname hd )
-    ( string_push_char kname 95 )
-    ( string_push_int kname bk )
-    ? masked { ( string_push_str kname `_m` ) } {}
-    : String src ( string_from `extern "C" __global__ void ` )
-    ( string_push_str src ( string_data kname ) )
-    ( string_push_str src `(const ` ) ( string_push_str src tn )
-    ( string_push_str src `* Q, const ` ) ( string_push_str src tn )
-    ( string_push_str src `* K, const ` ) ( string_push_str src tn )
-    ( string_push_str src `* V, ` ) ( string_push_str src tn )
-    ( string_push_str src `* O, long long heads, long long n, long long nkv, ` )
-    ? masked {
-        ( string_push_str src `const ` ) ( string_push_str src tn )
-        ( string_push_str src `* M, long long hpb, ` )
-    } {}
-    ( string_push_str src tn ) ( string_push_str src ` scale){` )
-    ( string_push_str src `enum{BQ=` )
-    ( string_push_int src bq )
-    ( string_push_str src `,NT=256,HD=` )
-    ( string_push_int src hd )
-    ( string_push_str src `,BK=` )
-    ( string_push_int src bk )
-    ( string_push_str src `,DT=4,QT=4,SK=2,NK=BK/SK,ND=HD/DT};` )
-    // +1 on every row so a column read walks distinct banks
-    ( string_push_str src `__shared__ ` ) ( string_push_str src tn )
-    ( string_push_str src ` Qs[BQ][HD+1];__shared__ ` )
-    ( string_push_str src tn ) ( string_push_str src ` Ks[BK][HD+1];__shared__ ` )
-    ( string_push_str src tn ) ( string_push_str src ` Vs[BK][HD+1];__shared__ ` )
-    ( string_push_str src tn ) ( string_push_str src ` S[BQ][BK+1];__shared__ ` )
-    ( string_push_str src tn ) ( string_push_str src ` mrow[BQ];__shared__ ` )
-    ( string_push_str src tn ) ( string_push_str src ` lrow[BQ];__shared__ ` )
-    ( string_push_str src tn ) ( string_push_str src ` crow[BQ];` )
-    ( string_push_str src `long long nqb=(n+BQ-1)/BQ;` )
-    ( string_push_str src `long long h=blockIdx.x/nqb,qb=(blockIdx.x%nqb)*BQ;` )
-    ( string_push_str src `const ` ) ( string_push_str src tn )
-    ( string_push_str src `* Qh=Q+h*n*HD;const ` ) ( string_push_str src tn )
-    ( string_push_str src `* Kh=K+h*nkv*HD;const ` ) ( string_push_str src tn )
-    ( string_push_str src `* Vh=V+h*nkv*HD;` )
-    ? masked {
-        ( string_push_str src `const ` ) ( string_push_str src tn )
-        ( string_push_str src `* Mh=M+(h/hpb)*nkv;` )
-    } {}
-    ( string_push_str src `int tid=threadIdx.x;` )
-    ( string_push_str src `for(int idx=tid;idx<BQ*HD;idx+=NT){int i=idx/HD,d=idx%HD;` )
-    ( string_push_str src `long long gq=qb+i;Qs[i][d]=(gq<n)?Qh[gq*HD+d]:(` )
-    ( string_push_str src tn ) ( string_push_str src `)0;}` )
-    ( string_push_str src tn ) ( string_push_str src ` acc[QT*DT];` )
-    ( string_push_str src `for(int t=0;t<QT*DT;t++)acc[t]=0;` )
-    ( string_push_str src `for(int r=tid;r<BQ;r+=NT)mrow[r]=` )
-    ( string_push_str src ( __gkd_neg . o dtype ) )
-    ( string_push_str src `,lrow[r]=0;__syncthreads();` )
-    ( string_push_str src `for(long long k0=0;k0<nkv;k0+=BK){` )
-    ( string_push_str src `for(int idx=tid;idx<BK*HD;idx+=NT){int j=idx/HD,d=idx%HD;` )
-    ( string_push_str src `long long gk=k0+j;` )
-    ( string_push_str src `Ks[j][d]=(gk<nkv)?Kh[gk*HD+d]:(` )
-    ( string_push_str src tn ) ( string_push_str src `)0;` )
-    ( string_push_str src `Vs[j][d]=(gk<nkv)?Vh[gk*HD+d]:(` )
-    ( string_push_str src tn ) ( string_push_str src `)0;}__syncthreads();` )
-    // scores for this tile, straight into shared
-    // A QTxDT block of the score tile per thread. One entry per thread
-    // is two shared reads per multiply-add — eight times what an SM can
-    // serve — and even one query by four keys is 1.25. Four by four is
-    // eight reads per sixteen, which is what makes this arithmetic
-    // rather than a shared-memory queue.
-    ( string_push_str src `for(int idx=tid;idx<(BQ/QT)*NK;idx+=NT){` )
-    ( string_push_str src `int i0=(idx/NK)*QT,j0=(idx%NK)*SK;` )
-    ( string_push_str src tn ) ( string_push_str src ` sc[QT][SK];` )
-    ( string_push_str src `for(int q=0;q<QT;q++)for(int t=0;t<SK;t++)sc[q][t]=0;` )
-    ( string_push_str src `for(int d=0;d<HD;d++){` )
-    ( string_push_str src tn ) ( string_push_str src ` qv[QT];` )
-    ( string_push_str src `for(int q=0;q<QT;q++)qv[q]=Qs[i0+q][d];` )
-    ( string_push_str src tn ) ( string_push_str src ` kv[SK];` )
-    ( string_push_str src `for(int t=0;t<SK;t++)kv[t]=Ks[j0+t][d];` )
-    ( string_push_str src `for(int q=0;q<QT;q++)for(int t=0;t<SK;t++)sc[q][t]+=qv[q]*kv[t];}` )
-    ( string_push_str src `for(int q=0;q<QT;q++)for(int t=0;t<SK;t++)` )
-    ( string_push_str src `S[i0+q][j0+t]=(k0+j0+t<nkv)?sc[q][t]*scale` )
-    ? masked { ( string_push_str src `+Mh[k0+j0+t]` ) } {}
-    ( string_push_str src `:` )
-    ( string_push_str src ( __gkd_neg . o dtype ) )
-    ( string_push_str src `;}__syncthreads();` )
-    // online softmax bookkeeping, one thread per query row
-    ( string_push_str src `for(int r=tid;r<BQ;r+=NT){` )
-    ( string_push_str src tn ) ( string_push_str src ` m=mrow[r],l=lrow[r],mt=` )
-    ( string_push_str src ( __gkd_neg . o dtype ) )
-    ( string_push_str src `;for(int j=0;j<BK;j++)if(S[r][j]>mt)mt=S[r][j];` )
-    ( string_push_str src tn ) ( string_push_str src ` mn=(mt>m)?mt:m;` )
-    ( string_push_str src tn ) ( string_push_str src ` corr=exp` )
-    ( string_push_str src sfx ) ( string_push_str src `(m-mn);` )
-    ( string_push_str src tn ) ( string_push_str src ` sum=0;` )
-    ( string_push_str src `for(int j=0;j<BK;j++){` )
-    ( string_push_str src tn ) ( string_push_str src ` p=exp` )
-    ( string_push_str src sfx ) ( string_push_str src `(S[r][j]-mn);S[r][j]=p;sum+=p;}` )
-    ( string_push_str src `mrow[r]=mn;lrow[r]=l*corr+sum;crow[r]=corr;}` )
-    ( string_push_str src `__syncthreads();` )
-    // rescale what is accumulated, then add this tile's contribution
-    // and a QTxDT block of the output for the same reason: four
-    // probabilities and four value channels, read once, feed sixteen
-    // multiply-adds
-    ( string_push_str src `{int idx=tid;int i0=(idx/ND)*QT,d0=(idx%ND)*DT;` )
-    ( string_push_str src tn ) ( string_push_str src ` a[QT][DT];` )
-    ( string_push_str src `for(int q=0;q<QT;q++){` )
-    ( string_push_str src tn ) ( string_push_str src ` cr=crow[i0+q];` )
-    ( string_push_str src `for(int u=0;u<DT;u++)a[q][u]=acc[q*DT+u]*cr;}` )
-    ( string_push_str src `for(int j=0;j<BK;j++){` )
-    ( string_push_str src tn ) ( string_push_str src ` pv[QT];` )
-    ( string_push_str src `for(int q=0;q<QT;q++)pv[q]=S[i0+q][j];` )
-    ( string_push_str src tn ) ( string_push_str src ` vv[DT];` )
-    ( string_push_str src `for(int u=0;u<DT;u++)vv[u]=Vs[j][d0+u];` )
-    ( string_push_str src `for(int q=0;q<QT;q++)for(int u=0;u<DT;u++)a[q][u]+=pv[q]*vv[u];}` )
-    ( string_push_str src `for(int q=0;q<QT;q++)for(int u=0;u<DT;u++)acc[q*DT+u]=a[q][u];}` )
-    ( string_push_str src `__syncthreads();}` )
-    ( string_push_str src `{int idx=tid;int i0=(idx/ND)*QT,d0=(idx%ND)*DT;` )
-    ( string_push_str src `for(int q=0;q<QT;q++){long long gq=qb+i0+q;if(gq<n){` )
-    ( string_push_str src tn ) ( string_push_str src ` li=lrow[i0+q];` )
-    ( string_push_str src `for(int u=0;u<DT;u++)O[h*n*HD+gq*HD+d0+u]=acc[q*DT+u]/li;}}}}` )
-    : ( Vec i ) args ( vec_new [i] )
-    ( vec_push [i] args ( gk_arg_dev q ) )
-    ( vec_push [i] args ( gk_arg_dev k ) )
-    ( vec_push [i] args ( gk_arg_dev v ) )
-    ( vec_push [i] args ( gk_arg_dev o ) )
-    ( vec_push [i] args ( gpu_arg_i64 heads ) )
-    ( vec_push [i] args ( gpu_arg_i64 n ) )
-    ( vec_push [i] args ( gpu_arg_i64 nkv ) )
-    ? masked {
-        ( vec_push [i] args ( gk_arg_dev mask ) )
-        ( vec_push [i] args ( gpu_arg_i64 hpb ) )
-    } {}
-    ( vec_push [i] args ( _gk_scal . o dtype scale ) )
-    ^ ( __gkd_launch kit src kname * heads ( _gkd_ceil n bq ) args )
+    ^ ( __gkd_attn kit o q k v mask 1 heads n nkv hd hpb scale )
 }
 
 // The fused attention over a BATCH of sequences in the layout a
@@ -1198,159 +961,314 @@ i batch i heads i n i nkv i hd f scale → b {
     ? masked {
         ? & == . mask dtype . o dtype >= . mask n ( _gk_p2 batch nkv ) {} { ^ F }
     } {}
-    ? == % hd 16 0 {} { ^ F }
     ? & & == . q n * * * batch n heads hd == . o n * * * batch n heads hd
     & == . k n ( _gk_p4 batch nkv heads hd ) == . v n ( _gk_p4 batch nkv heads hd ) {} { ^ F }
-    ? ( nurl_str_eq ( gk_backend kit ) `cuda` ) {} { ^ F }
-    : i esz ( gk_buf_esz o )
-    // identical tile sizing to gkd_attention_masked — see there
-    : i bq ? <= hd 64 64 32
+    ^ ( __gkd_attn kit o q k v mask batch heads n nkv hd 0 scale )
+}
+
+// The key tile of a head width: what the shared-memory budget leaves
+// after Qs[BQ][hd+1] once each key costs Ks, Vs rows and an S column.
+// Sized for THREE resident blocks per SM, not for one block's 48 KB
+// ceiling. Filling the ceiling is the obvious read of "how big a key
+// tile fits", and it is the wrong one: at hd=64 it picks BK=32, which
+// is 41 KB per block, and 41 KB lets only two blocks share an Ada
+// SM's 100 KB — sixteen warps to hide the shared-memory latency of a
+// kernel that is nothing but shared-memory traffic. A third of that
+// budget picks BK=16 (29 KB, three blocks, 24 warps) and the same
+// work runs measurably faster on both shapes an encoder produces:
+// one 3072-token sequence 1862 -> 1689 us, sixteen 192-token ones
+// 133 -> 122 us, on a 4090. The K/V tile is read once either way —
+// only how much of it a block holds at a time changes.
+@ __gkd_attn_bk i bq i hd i esz → i {
     : i fixed + * * bq + hd 1 esz * bq esz
     : i per * + * 2 + hd 1 bq esz
-    // Sized for THREE resident blocks per SM, not for one block's 48 KB
-    // ceiling. Filling the ceiling is the obvious read of "how big a key
-    // tile fits", and it is the wrong one: at hd=64 it picks BK=32, which
-    // is 41 KB per block, and 41 KB lets only two blocks share an Ada
-    // SM's 100 KB — sixteen warps to hide the shared-memory latency of a
-    // kernel that is nothing but shared-memory traffic. A third of that
-    // budget picks BK=16 (29 KB, three blocks, 24 warps) and the same
-    // work runs measurably faster on both shapes an encoder produces:
-    // one 3072-token sequence 1862 -> 1689 us, sixteen 192-token ones
-    // 133 -> 122 us, on a 4090. The K/V tile is read once either way —
-    // only how much of it a block holds at a time changes.
     : ~ i bk / - GKD_ATTN_SMEM fixed per
     = bk * / bk 16 16
     ? > bk 64 { = bk 64 } {}
     ? < bk 16 { = bk 16 } {}
-    ? >= ( _gk_p2 bq hd ) * 16 256 {} { ^ F }
-    : s tn ( _gk_tname . o dtype )
-    : s sfx ( __gkd_sfx . o dtype )
-    : String kname ( __gkd_name . o dtype )
-    ( string_push_str kname `attnx` )
+    // (a power of two, and few enough key pairs that the score tile is
+    // one pass of the block: the kernel masks its indices with both)
+    ? == bk 48 { = bk 32 } {}
+    ? > * / bq 4 / bk 2 256 { = bk / 2048 bq } {}
+    ^ bk
+}
+
+// Both entries: `hpb` > 0 is the head-major layout (mask row h/hpb),
+// 0 the batched one (`batch` sequences, mask row per sequence).
+@ __gkd_attn GpuKit kit GkBuf o GkBuf q GkBuf k GkBuf v GkBuf mask
+i batch i heads i n i nkv i hd i hpb f scale → b {
+    // Only on CUDA: the CPU backend runs a block's threads as fibers,
+    // and the composed path is the better shape there.
+    ? ( nurl_str_eq ( gk_backend kit ) `cuda` ) {} { ^ F }
+    // BQ is chosen so each thread owns exactly QT*DT = 16 accumulators
+    // (BQ*hd / 256 threads), which is what the register tiles are sized
+    // for: a head the 256 threads would not cover exactly is refused.
+    ? ( __gkd_attn_fits hd ) {} { ^ F }
+    : b masked ( gk_buf_ok mask )
+    : b major > hpb 0
+    : i esz ( gk_buf_esz o )
+    : i bq ? <= hd 64 64 32
+    : i bk ( __gkd_attn_bk bq hd esz )
+    : i dt . o dtype
+    : String kname ( __gkd_name dt )
+    ( string_push_str kname ? major `attn` `attnx` )
     ( string_push_int kname hd )
     ( string_push_char kname 95 )
     ( string_push_int kname bk )
     ? masked { ( string_push_str kname `_m` ) } {}
-    : String src ( string_from `extern "C" __global__ void ` )
-    ( string_push_str src ( string_data kname ) )
-    ( string_push_str src `(const ` ) ( string_push_str src tn )
-    ( string_push_str src `* Q, const ` ) ( string_push_str src tn )
-    ( string_push_str src `* K, const ` ) ( string_push_str src tn )
-    ( string_push_str src `* V, ` ) ( string_push_str src tn )
-    ( string_push_str src `* O, long long heads, long long n, long long nkv, ` )
-    ? masked {
-        ( string_push_str src `const ` ) ( string_push_str src tn )
-        ( string_push_str src `* M, ` )
-    } {}
-    ( string_push_str src tn ) ( string_push_str src ` scale){` )
-    ( string_push_str src `enum{BQ=` )
-    ( string_push_int src bq )
-    ( string_push_str src `,NT=256,HD=` )
-    ( string_push_int src hd )
-    ( string_push_str src `,BK=` )
-    ( string_push_int src bk )
-    ( string_push_str src `,DT=4,QT=4,SK=2,NK=BK/SK,ND=HD/DT};` )
-    ( string_push_str src `__shared__ ` ) ( string_push_str src tn )
-    ( string_push_str src ` Qs[BQ][HD+1];__shared__ ` )
-    ( string_push_str src tn ) ( string_push_str src ` Ks[BK][HD+1];__shared__ ` )
-    ( string_push_str src tn ) ( string_push_str src ` Vs[BK][HD+1];__shared__ ` )
-    ( string_push_str src tn ) ( string_push_str src ` S[BQ][BK+1];__shared__ ` )
-    ( string_push_str src tn ) ( string_push_str src ` mrow[BQ];__shared__ ` )
-    ( string_push_str src tn ) ( string_push_str src ` lrow[BQ];__shared__ ` )
-    ( string_push_str src tn ) ( string_push_str src ` crow[BQ];` )
-    ( string_push_str src `long long nqb=(n+BQ-1)/BQ;` )
-    // grid = batch·heads·nqb; decompose to (batch element, head, q tile)
-    ( string_push_str src `long long hb=blockIdx.x/nqb,qb=(blockIdx.x%nqb)*BQ;` )
-    ( string_push_str src `long long bi=hb/heads,h=hb%heads;` )
-    // the interleaved layout: token row stride RS, head offset h·HD
-    ( string_push_str src `long long RS=heads*HD;` )
-    ( string_push_str src `const ` ) ( string_push_str src tn )
-    ( string_push_str src `* Qh=Q+bi*n*RS+h*HD;const ` ) ( string_push_str src tn )
-    ( string_push_str src `* Kh=K+bi*nkv*RS+h*HD;const ` ) ( string_push_str src tn )
-    ( string_push_str src `* Vh=V+bi*nkv*RS+h*HD;` )
-    ? masked {
-        ( string_push_str src `const ` ) ( string_push_str src tn )
-        ( string_push_str src `* Mh=M+bi*nkv;` )
-    } {}
-    ( string_push_str src `int tid=threadIdx.x;` )
-    ( string_push_str src `for(int idx=tid;idx<BQ*HD;idx+=NT){int i=idx/HD,d=idx%HD;` )
-    ( string_push_str src `long long gq=qb+i;Qs[i][d]=(gq<n)?Qh[gq*RS+d]:(` )
-    ( string_push_str src tn ) ( string_push_str src `)0;}` )
-    ( string_push_str src tn ) ( string_push_str src ` acc[QT*DT];` )
-    ( string_push_str src `for(int t=0;t<QT*DT;t++)acc[t]=0;` )
-    ( string_push_str src `for(int r=tid;r<BQ;r+=NT)mrow[r]=` )
-    ( string_push_str src ( __gkd_neg . o dtype ) )
-    ( string_push_str src `,lrow[r]=0;__syncthreads();` )
-    ( string_push_str src `for(long long k0=0;k0<nkv;k0+=BK){` )
-    ( string_push_str src `for(int idx=tid;idx<BK*HD;idx+=NT){int j=idx/HD,d=idx%HD;` )
-    ( string_push_str src `long long gk=k0+j;` )
-    ( string_push_str src `Ks[j][d]=(gk<nkv)?Kh[gk*RS+d]:(` )
-    ( string_push_str src tn ) ( string_push_str src `)0;` )
-    ( string_push_str src `Vs[j][d]=(gk<nkv)?Vh[gk*RS+d]:(` )
-    ( string_push_str src tn ) ( string_push_str src `)0;}__syncthreads();` )
-    // scores, online softmax and the accumulator update are
-    // character-for-character the gkd_attention_masked body — only the
-    // global loads above and the store below know about the layout
-    ( string_push_str src `for(int idx=tid;idx<(BQ/QT)*NK;idx+=NT){` )
-    ( string_push_str src `int i0=(idx/NK)*QT,j0=(idx%NK)*SK;` )
-    ( string_push_str src tn ) ( string_push_str src ` sc[QT][SK];` )
-    ( string_push_str src `for(int q=0;q<QT;q++)for(int t=0;t<SK;t++)sc[q][t]=0;` )
-    ( string_push_str src `for(int d=0;d<HD;d++){` )
-    ( string_push_str src tn ) ( string_push_str src ` qv[QT];` )
-    ( string_push_str src `for(int q=0;q<QT;q++)qv[q]=Qs[i0+q][d];` )
-    ( string_push_str src tn ) ( string_push_str src ` kv[SK];` )
-    ( string_push_str src `for(int t=0;t<SK;t++)kv[t]=Ks[j0+t][d];` )
-    ( string_push_str src `for(int q=0;q<QT;q++)for(int t=0;t<SK;t++)sc[q][t]+=qv[q]*kv[t];}` )
-    ( string_push_str src `for(int q=0;q<QT;q++)for(int t=0;t<SK;t++)` )
-    ( string_push_str src `S[i0+q][j0+t]=(k0+j0+t<nkv)?sc[q][t]*scale` )
-    ? masked { ( string_push_str src `+Mh[k0+j0+t]` ) } {}
-    ( string_push_str src `:` )
-    ( string_push_str src ( __gkd_neg . o dtype ) )
-    ( string_push_str src `;}__syncthreads();` )
-    ( string_push_str src `for(int r=tid;r<BQ;r+=NT){` )
-    ( string_push_str src tn ) ( string_push_str src ` m=mrow[r],l=lrow[r],mt=` )
-    ( string_push_str src ( __gkd_neg . o dtype ) )
-    ( string_push_str src `;for(int j=0;j<BK;j++)if(S[r][j]>mt)mt=S[r][j];` )
-    ( string_push_str src tn ) ( string_push_str src ` mn=(mt>m)?mt:m;` )
-    ( string_push_str src tn ) ( string_push_str src ` corr=exp` )
-    ( string_push_str src sfx ) ( string_push_str src `(m-mn);` )
-    ( string_push_str src tn ) ( string_push_str src ` sum=0;` )
-    ( string_push_str src `for(int j=0;j<BK;j++){` )
-    ( string_push_str src tn ) ( string_push_str src ` p=exp` )
-    ( string_push_str src sfx ) ( string_push_str src `(S[r][j]-mn);S[r][j]=p;sum+=p;}` )
-    ( string_push_str src `mrow[r]=mn;lrow[r]=l*corr+sum;crow[r]=corr;}` )
-    ( string_push_str src `__syncthreads();` )
-    ( string_push_str src `{int idx=tid;int i0=(idx/ND)*QT,d0=(idx%ND)*DT;` )
-    ( string_push_str src tn ) ( string_push_str src ` a[QT][DT];` )
-    ( string_push_str src `for(int q=0;q<QT;q++){` )
-    ( string_push_str src tn ) ( string_push_str src ` cr=crow[i0+q];` )
-    ( string_push_str src `for(int u=0;u<DT;u++)a[q][u]=acc[q*DT+u]*cr;}` )
-    ( string_push_str src `for(int j=0;j<BK;j++){` )
-    ( string_push_str src tn ) ( string_push_str src ` pv[QT];` )
-    ( string_push_str src `for(int q=0;q<QT;q++)pv[q]=S[i0+q][j];` )
-    ( string_push_str src tn ) ( string_push_str src ` vv[DT];` )
-    ( string_push_str src `for(int u=0;u<DT;u++)vv[u]=Vs[j][d0+u];` )
-    ( string_push_str src `for(int q=0;q<QT;q++)for(int u=0;u<DT;u++)a[q][u]+=pv[q]*vv[u];}` )
-    ( string_push_str src `for(int q=0;q<QT;q++)for(int u=0;u<DT;u++)acc[q*DT+u]=a[q][u];}` )
-    ( string_push_str src `__syncthreads();}` )
-    ( string_push_str src `{int idx=tid;int i0=(idx/ND)*QT,d0=(idx%ND)*DT;` )
-    ( string_push_str src `for(int q=0;q<QT;q++){long long gq=qb+i0+q;if(gq<n){` )
-    ( string_push_str src tn ) ( string_push_str src ` li=lrow[i0+q];` )
-    ( string_push_str src `for(int u=0;u<DT;u++)O[(bi*n+gq)*RS+h*HD+d0+u]=acc[q*DT+u]/li;}}}}` )
-    : ( Vec i ) args ( vec_new [i] )
-    ( vec_push [i] args ( gk_arg_dev q ) )
-    ( vec_push [i] args ( gk_arg_dev k ) )
-    ( vec_push [i] args ( gk_arg_dev v ) )
-    ( vec_push [i] args ( gk_arg_dev o ) )
-    ( vec_push [i] args ( gpu_arg_i64 heads ) )
-    ( vec_push [i] args ( gpu_arg_i64 n ) )
-    ( vec_push [i] args ( gpu_arg_i64 nkv ) )
-    ? masked {
-        ( vec_push [i] args ( gk_arg_dev mask ) )
-    } {}
-    ( vec_push [i] args ( _gk_scal . o dtype scale ) )
-    ^ ( __gkd_launch kit src kname * * batch heads ( _gkd_ceil n bq ) args )
+    : ~ GkCall c ( gk_call_new )
+    ( gk_call_dev_in c `Q` q )
+    ( gk_call_dev_in c `K` k )
+    ( gk_call_dev_in c `V` v )
+    ( gk_call_dev c `O` o )
+    ? masked { ( gk_call_dev_in c `M` mask ) } {}
+    ( gk_call_i64 c `heads` heads )
+    ( gk_call_i64 c `n` n )
+    ( gk_call_i64 c `nkv` nkv )
+    ? & masked major { ( gk_call_i64 c `hpb` hpb ) } {}
+    ( gk_call_f64 c `scale` scale )
+    : i nb * * batch heads ( _gkd_ceil n bq )
+    ^ ( gk_run_checked_dev_tagged kit c ( string_data kname ) `` \ → String { ^ ( __gkd_attn_body dt bq hd bk masked major ) } nb 256 )
 }
+
+@ __gkd_attn_fits i hd → b {
+    ? & > hd 0 == % hd 16 0 {} { ^ F }
+    ^ == * ? <= hd 64 { 64 } { 32 } hd * 16 256
+}
+
+// The kernel: a block owns BQ queries of one head and walks the keys BK
+// at a time — Q, K and V tiles in shared memory (+1 on every row so a
+// column read walks distinct banks), the scaled scores into S, then the
+// online softmax and the accumulator update. A thread's register tiles
+// are written out: QT=4 queries by SK=2 keys of the score tile, QT=4
+// queries by DT=4 channels of the output — four by four is eight shared
+// reads per sixteen multiply-adds, which is what makes this arithmetic
+// rather than a shared-memory queue.
+//
+// Every tile is read through a 2-D window, its row and column checked
+// apart: the column is the loop's counter and the row a thread's own,
+// masked to the tile (all the extents are powers of two), so the compiler
+// sees both in range and no check is left in the loops.
+@ __gkd_attn_body i dt i bq i hd i bk b masked b major → String {
+    : s tn ( _gk_tname dt )
+    : s sfx ( __gkd_sfx dt )
+    : s neg ( __gkd_neg dt )
+    : s sh ? == dt GK_F32 `SHARED_F(` `SHARED_D(`
+    // (the rescale rounded on its own, as a loop over the keys leaves it:
+    // with the loop unrolled the compiler would fuse it into the first
+    // multiply-add, and the bits would change)
+    : s mul ? == dt GK_F32 `__fmul_rn` `__dmul_rn`
+    : i h1 + hd 1
+    : i b1 + bk 1
+    : i nk / bk 2
+    : i nd / hd 4
+    : ~ String b ( string_new )
+    ( string_push_str b sh ) ( string_push_str b `qs, ` ) ( string_push_int b * bq h1 ) ( string_push_str b `);
+` )
+    ( string_push_str b sh ) ( string_push_str b `ks, ` ) ( string_push_int b * bk h1 ) ( string_push_str b `);
+` )
+    ( string_push_str b sh ) ( string_push_str b `vs, ` ) ( string_push_int b * bk h1 ) ( string_push_str b `);
+` )
+    ( string_push_str b sh ) ( string_push_str b `ss, ` ) ( string_push_int b * bq b1 ) ( string_push_str b `);
+` )
+    ( string_push_str b sh ) ( string_push_str b `ms, ` ) ( string_push_int b bq ) ( string_push_str b `);
+` )
+    ( string_push_str b sh ) ( string_push_str b `ls, ` ) ( string_push_int b bq ) ( string_push_str b `);
+` )
+    ( string_push_str b sh ) ( string_push_str b `cs, ` ) ( string_push_int b bq ) ( string_push_str b `);
+` )
+    ( __gkd_attn_tile b `qt` `qs` bq h1 hd )
+    ( __gkd_attn_tile b `kt` `ks` bk h1 hd )
+    ( __gkd_attn_tile b `vt` `vs` bk h1 hd )
+    ( __gkd_attn_tile b `st` `ss` bq b1 bk )
+    ( string_push_str b `long long nqb = (n + ` ) ( string_push_int b - bq 1 ) ( string_push_str b `) / ` ) ( string_push_int b bq )
+    ( string_push_str b `;
+long long hb = bid / nqb;
+long long qb = (bid % nqb) * ` ) ( string_push_int b bq ) ( string_push_str b `;
+` )
+    // (a row of Q, K, V or O is `rs` elements from the next: the head's
+    // own width head-major, the token's heads·hd interleaved)
+    ? major {
+        ( string_push_str b `long long h = hb;
+long long rs = ` ) ( string_push_int b hd ) ( string_push_str b `;
+long long qo = h * n * rs;
+long long ko = h * nkv * rs;
+` )
+        ? masked { ( string_push_str b `long long mo = (h / hpb) * nkv;
+` ) } {}
+    } {
+        ( string_push_str b `long long bi = hb / heads;
+long long h = hb % heads;
+long long rs = heads * ` ) ( string_push_int b hd ) ( string_push_str b `;
+long long qo = bi * n * rs + h * ` ) ( string_push_int b hd ) ( string_push_str b `;
+long long ko = bi * nkv * rs + h * ` ) ( string_push_int b hd ) ( string_push_str b `;
+` )
+        ? masked { ( string_push_str b `long long mo = bi * nkv;
+` ) } {}
+    }
+    ( string_push_str b tn ) ( string_push_str b ` scl = (` ) ( string_push_str b tn ) ( string_push_str b `)scale;
+for (int it = 0; it < ` ) ( string_push_int b / * bq hd 256 ) ( string_push_str b `; it++) {
+    int idx = it * 256 + (int)tid;
+    int i = idx / ` ) ( string_push_int b hd ) ( string_push_str b `;
+    int d = idx & ` ) ( string_push_int b - hd 1 ) ( string_push_str b `;
+    long long gq = qb + i;
+    ST2(qt, i, d, (gq < n) ? LD(Q, qo + gq * rs + d) : 0);
+}
+` )
+    // (thread tid owns queries ai0..ai0+3 by channels ad0..ad0+3 of the
+    // output: BQ*hd/16 = 256 such blocks, one each)
+    ( string_push_str b `int ai0 = (((int)tid / ` ) ( string_push_int b nd ) ( string_push_str b `) & ` ) ( string_push_int b - / bq 4 1 ) ( string_push_str b `) * 4;
+int ad0 = ((int)tid & ` ) ( string_push_int b - nd 1 ) ( string_push_str b `) * 4;
+` )
+    : ~ i x 0
+    ~ < x 16 {
+        ( string_push_str b tn ) ( string_push_str b ` a` ) ( string_push_int b / x 4 ) ( string_push_int b % x 4 ) ( string_push_str b ` = 0;
+` )
+        = x + x 1
+    }
+    ( string_push_str b `if (tid < ` ) ( string_push_int b bq ) ( string_push_str b `) {
+    int r = (int)tid & ` ) ( string_push_int b - bq 1 ) ( string_push_str b `;
+    ST(ms, r, ` ) ( string_push_str b neg ) ( string_push_str b `);
+    ST(ls, r, 0);
+}
+SYNC();
+for (long long k0 = 0; k0 < nkv; k0 += ` ) ( string_push_int b bk ) ( string_push_str b `) {
+    for (int it = 0; it < ` ) ( string_push_int b / * bk hd 256 ) ( string_push_str b `; it++) {
+        int idx = it * 256 + (int)tid;
+        int j = idx / ` ) ( string_push_int b hd ) ( string_push_str b `;
+        int d = idx & ` ) ( string_push_int b - hd 1 ) ( string_push_str b `;
+        long long gk = k0 + j;
+        ST2(kt, j, d, (gk < nkv) ? LD(K, ko + gk * rs + d) : 0);
+        ST2(vt, j, d, (gk < nkv) ? LD(V, ko + gk * rs + d) : 0);
+    }
+    SYNC();
+    if (tid < ` ) ( string_push_int b * / bq 4 nk ) ( string_push_str b `) {
+        int i0 = (((int)tid / ` ) ( string_push_int b nk ) ( string_push_str b `) & ` ) ( string_push_int b - / bq 4 1 ) ( string_push_str b `) * 4;
+        int j0 = ((int)tid & ` ) ( string_push_int b - nk 1 ) ( string_push_str b `) * 2;
+` )
+    = x 0
+    ~ < x 8 {
+        ( string_push_str b `        ` ) ( string_push_str b tn ) ( string_push_str b ` s` ) ( string_push_int b / x 2 ) ( string_push_int b % x 2 ) ( string_push_str b ` = 0;
+` )
+        = x + x 1
+    }
+    ( string_push_str b `        UNROLL for (int d = 0; d < ` ) ( string_push_int b hd ) ( string_push_str b `; d++) {
+` )
+    = x 0
+    ~ < x 4 {
+        ( string_push_str b `            ` ) ( string_push_str b tn ) ( string_push_str b ` q` ) ( string_push_int b x ) ( string_push_str b ` = LD2(qt, i0 + ` ) ( string_push_int b x ) ( string_push_str b `, d);
+` )
+        = x + x 1
+    }
+    = x 0
+    ~ < x 2 {
+        ( string_push_str b `            ` ) ( string_push_str b tn ) ( string_push_str b ` kv` ) ( string_push_int b x ) ( string_push_str b ` = LD2(kt, j0 + ` ) ( string_push_int b x ) ( string_push_str b `, d);
+` )
+        = x + x 1
+    }
+    = x 0
+    ~ < x 8 {
+        ( string_push_str b `            s` ) ( string_push_int b / x 2 ) ( string_push_int b % x 2 ) ( string_push_str b ` += q` ) ( string_push_int b / x 2 ) ( string_push_str b ` * kv` ) ( string_push_int b % x 2 ) ( string_push_str b `;
+` )
+        = x + x 1
+    }
+    ( string_push_str b `        }
+` )
+    = x 0
+    ~ < x 8 {
+        : i qq / x 2
+        : i tt % x 2
+        ( string_push_str b `        ST2(st, i0 + ` ) ( string_push_int b qq ) ( string_push_str b `, j0 + ` ) ( string_push_int b tt )
+        ( string_push_str b `, (k0 + j0 + ` ) ( string_push_int b tt ) ( string_push_str b ` < nkv) ? s` ) ( string_push_int b qq ) ( string_push_int b tt ) ( string_push_str b ` * scl` )
+        ? masked { ( string_push_str b ` + LD(M, mo + k0 + j0 + ` ) ( string_push_int b tt ) ( string_push_str b `)` ) } {}
+        ( string_push_str b ` : ` ) ( string_push_str b neg ) ( string_push_str b `);
+` )
+        = x + x 1
+    }
+    // online softmax bookkeeping, one thread per query row
+    ( string_push_str b `    }
+    SYNC();
+    if (tid < ` ) ( string_push_int b bq ) ( string_push_str b `) {
+        int r = (int)tid & ` ) ( string_push_int b - bq 1 ) ( string_push_str b `;
+        ` ) ( string_push_str b tn ) ( string_push_str b ` m = LD(ms, r);
+        ` ) ( string_push_str b tn ) ( string_push_str b ` l = LD(ls, r);
+        ` ) ( string_push_str b tn ) ( string_push_str b ` mt = ` ) ( string_push_str b neg ) ( string_push_str b `;
+        for (int j = 0; j < ` ) ( string_push_int b bk ) ( string_push_str b `; j++) { ` ) ( string_push_str b tn ) ( string_push_str b ` sv = LD2(st, r, j); if (sv > mt) { mt = sv; } }
+        ` ) ( string_push_str b tn ) ( string_push_str b ` mn = (mt > m) ? mt : m;
+        ` ) ( string_push_str b tn ) ( string_push_str b ` corr = exp` ) ( string_push_str b sfx ) ( string_push_str b `(m - mn);
+        ` ) ( string_push_str b tn ) ( string_push_str b ` sum = 0;
+        for (int j = 0; j < ` ) ( string_push_int b bk ) ( string_push_str b `; j++) { ` ) ( string_push_str b tn ) ( string_push_str b ` p = exp` ) ( string_push_str b sfx ) ( string_push_str b `(LD2(st, r, j) - mn); ST2(st, r, j, p); sum += p; }
+        ST(ms, r, mn);
+        ST(ls, r, l * corr + sum);
+        ST(cs, r, corr);
+    }
+    SYNC();
+` )
+    // rescale what is accumulated, then add this tile's contribution
+    = x 0
+    ~ < x 4 {
+        ( string_push_str b `    ` ) ( string_push_str b tn ) ( string_push_str b ` c` ) ( string_push_int b x ) ( string_push_str b ` = LD(cs, ai0 + ` ) ( string_push_int b x ) ( string_push_str b `);
+` )
+        : ~ i u 0
+        ~ < u 4 {
+            ( string_push_str b `    a` ) ( string_push_int b x ) ( string_push_int b u ) ( string_push_str b ` = ` ) ( string_push_str b mul ) ( string_push_str b `(a` ) ( string_push_int b x ) ( string_push_int b u ) ( string_push_str b `, c` ) ( string_push_int b x ) ( string_push_str b `);
+` )
+            = u + u 1
+        }
+        = x + x 1
+    }
+    ( string_push_str b `    UNROLL for (int j = 0; j < ` ) ( string_push_int b bk ) ( string_push_str b `; j++) {
+` )
+    = x 0
+    ~ < x 4 {
+        ( string_push_str b `        ` ) ( string_push_str b tn ) ( string_push_str b ` p` ) ( string_push_int b x ) ( string_push_str b ` = LD2(st, ai0 + ` ) ( string_push_int b x ) ( string_push_str b `, j);
+` )
+        = x + x 1
+    }
+    = x 0
+    ~ < x 4 {
+        ( string_push_str b `        ` ) ( string_push_str b tn ) ( string_push_str b ` v` ) ( string_push_int b x ) ( string_push_str b ` = LD2(vt, j, ad0 + ` ) ( string_push_int b x ) ( string_push_str b `);
+` )
+        = x + x 1
+    }
+    = x 0
+    ~ < x 16 {
+        ( string_push_str b `        a` ) ( string_push_int b / x 4 ) ( string_push_int b % x 4 ) ( string_push_str b ` += p` ) ( string_push_int b / x 4 ) ( string_push_str b ` * v` ) ( string_push_int b % x 4 ) ( string_push_str b `;
+` )
+        = x + x 1
+    }
+    ( string_push_str b `    }
+    SYNC();
+}
+` )
+    = x 0
+    ~ < x 4 {
+        ( string_push_str b `if (qb + ai0 + ` ) ( string_push_int b x ) ( string_push_str b ` < n) {
+    ` ) ( string_push_str b tn ) ( string_push_str b ` li = LD(ls, ai0 + ` ) ( string_push_int b x ) ( string_push_str b `);
+` )
+        : ~ i u 0
+        ~ < u 4 {
+            ( string_push_str b `    ST(O, qo + (qb + ai0 + ` ) ( string_push_int b x ) ( string_push_str b `) * rs + ad0 + ` ) ( string_push_int b u ) ( string_push_str b `, a` ) ( string_push_int b x ) ( string_push_int b u ) ( string_push_str b ` / li);
+` )
+            = u + u 1
+        }
+        ( string_push_str b `}
+` )
+        = x + x 1
+    }
+    ^ b
+}
+
+// `WIN2(w, arr, 0, rows, stride, cols);` — a tile of shared array `arr`.
+@ __gkd_attn_tile inout String b s w s arr i rows i stride i cols → v {
+    ( string_push_str b `WIN2(` ) ( string_push_str b w ) ( string_push_str b `, ` ) ( string_push_str b arr ) ( string_push_str b `, 0, ` )
+    ( string_push_int b rows ) ( string_push_str b `, ` ) ( string_push_int b stride ) ( string_push_str b `, ` ) ( string_push_int b cols ) ( string_push_str b `);
+` )
+}
+
+// ── Softmax along an interior axis, viewed as (outer, ax, inner) ─────
+// For each (outer, inner) pair the `ax` elements at stride `inner` form
+// one distribution. Numerically stable (max-subtracted).
 
 @ gkd_softmax_ax GpuKit kit GkBuf y GkBuf x i outer i ax i inner → b {
     ? & ( __gkd_isfloat y ) ( gk_buf_ok x ) {} { ^ F }
@@ -1364,7 +1282,7 @@ i batch i heads i n i nkv i hd f scale → b {
     : s ct ( __gkd_ctr ax )
     : i dty . y dtype
     : ~ GkCall cl ( gk_call_new )
-    ( __gkd_in cl `X` x y ) ( gk_call_dev cl `Y` y ) ( gk_call_i64 cl `outer` outer ) ( gk_call_i64 cl `ax` ax ) ( gk_call_i64 cl `inner` inner )
+    ( _gkd_in cl `X` x y ) ( gk_call_dev cl `Y` y ) ( gk_call_i64 cl `outer` outer ) ( gk_call_i64 cl `ax` ax ) ( gk_call_i64 cl `inner` inner )
     ^ ( __gkd_run_t kit cl kname ( string_from ct ) \ → String {
         : ~ String body ( string_from `if (gid < outer * inner) {
     long long io = gid / inner, ii = gid % inner;
@@ -1399,7 +1317,7 @@ i batch i heads i n i nkv i hd f scale → b {
     : String kname ( __gkd_name . dst dtype )
     ( string_push_str kname `copyax` )
     : ~ GkCall cl ( gk_call_new )
-    ( __gkd_in cl `S` src dst ) ( gk_call_dev cl `D` dst )
+    ( _gkd_in cl `S` src dst ) ( gk_call_dev cl `D` dst )
     ( gk_call_i64 cl `outer` outer ) ( gk_call_i64 cl `src_ax` src_ax ) ( gk_call_i64 cl `inner` inner ) ( gk_call_i64 cl `dst_ax` dst_ax ) ( gk_call_i64 cl `off` off )
     ^ ( __gkd_run_t kit cl kname ( string_new ) \ → String {
         : String body ( string_from `if (gid < outer * src_ax * inner) {
@@ -1422,7 +1340,7 @@ i batch i heads i n i nkv i hd f scale → b {
     : String kname ( __gkd_name . dst dtype )
     ( string_push_str kname `sliceax` )
     : ~ GkCall cl ( gk_call_new )
-    ( __gkd_in cl `S` src dst ) ( gk_call_dev cl `D` dst )
+    ( _gkd_in cl `S` src dst ) ( gk_call_dev cl `D` dst )
     ( gk_call_i64 cl `outer` outer ) ( gk_call_i64 cl `sz` sz ) ( gk_call_i64 cl `inner` inner ) ( gk_call_i64 cl `src_ax` src_ax ) ( gk_call_i64 cl `soff` soff )
     ^ ( __gkd_run_t kit cl kname ( string_new ) \ → String {
         : String body ( string_from `if (gid < outer * sz * inner) {
@@ -1553,7 +1471,7 @@ if (gid < tot) {
 }` )
     }
     : ~ GkCall cl ( gk_call_new )
-    ( __gkd_in cl `X` x y ) ( gk_call_dev cl `Y` y )
+    ( _gkd_in cl `X` x y ) ( gk_call_dev cl `Y` y )
     ? lit {} {
         // input dims padded to 6 with trailing 1s, perm with the identity
         = k 0
@@ -1596,7 +1514,7 @@ if (gid < tot) {
     ( string_push_str kname `resizebilin` )
     : i dty . y dtype
     : ~ GkCall cl ( gk_call_new )
-    ( __gkd_in cl `X` x y ) ( gk_call_dev cl `Y` y )
+    ( _gkd_in cl `X` x y ) ( gk_call_dev cl `Y` y )
     ( gk_call_i64 cl `C` c ) ( gk_call_i64 cl `H` h ) ( gk_call_i64 cl `W` wd ) ( gk_call_i64 cl `OH` oh ) ( gk_call_i64 cl `OW` ow ) ( gk_call_i64 cl `align` align )
     ^ ( __gkd_run_t kit cl kname ( string_new ) \ → String {
         : ~ String body ( string_from `if (gid < C * OH * OW) {
@@ -1630,7 +1548,7 @@ if (gid < tot) {
     : String kname ( __gkd_name . y dtype )
     ( string_push_str kname `resizenn` )
     : ~ GkCall cl ( gk_call_new )
-    ( __gkd_in cl `X` x y ) ( gk_call_dev cl `Y` y )
+    ( _gkd_in cl `X` x y ) ( gk_call_dev cl `Y` y )
     ( gk_call_i64 cl `C` c ) ( gk_call_i64 cl `H` h ) ( gk_call_i64 cl `W` wd ) ( gk_call_i64 cl `OH` oh ) ( gk_call_i64 cl `OW` ow ) ( gk_call_i64 cl `sh` sh ) ( gk_call_i64 cl `sw` sw )
     ^ ( __gkd_run_t kit cl kname ( string_new ) \ → String {
         : String body ( string_from `if (gid < C * OH * OW) {
@@ -1650,7 +1568,7 @@ if (gid < tot) {
     : String kname ( __gkd_name . y dtype )
     ( string_push_str kname `expandl` )
     : ~ GkCall cl ( gk_call_new )
-    ( __gkd_in cl `X` x y ) ( gk_call_dev cl `Y` y ) ( gk_call_i64 cl `outer` outer ) ( gk_call_i64 cl `rep` rep )
+    ( _gkd_in cl `X` x y ) ( gk_call_dev cl `Y` y ) ( gk_call_i64 cl `outer` outer ) ( gk_call_i64 cl `rep` rep )
     ^ ( __gkd_run_t kit cl kname ( string_new ) \ → String {
         : String body ( string_from `if (gid < outer * rep) { ST(Y, gid, LD(X, gid / rep)); }` )
         ^ body
@@ -1670,7 +1588,7 @@ if (gid < tot) {
     ( string_push_str kname `rl2` )
     : i dty . y dtype
     : ~ GkCall cl ( gk_call_new )
-    ( __gkd_in cl `X` x y ) ( gk_call_dev cl `Y` y ) ( gk_call_i64 cl `outer` outer ) ( gk_call_i64 cl `ax` ax )
+    ( _gkd_in cl `X` x y ) ( gk_call_dev cl `Y` y ) ( gk_call_i64 cl `outer` outer ) ( gk_call_i64 cl `ax` ax )
     ^ ( __gkd_run_t kit cl kname ( string_from ( __gkd_ctr ax ) ) \ → String {
         : ~ String body ( string_from `if (gid < outer) { WIN(p, X, gid * ax, ax); ` )
         ( string_push_str body tn ) ( string_push_str body ` s = 0; for (` ) ( string_push_str body ( __gkd_ctr ax ) )
@@ -1691,7 +1609,7 @@ if (gid < tot) {
     ( string_push_str kname `argmax` )
     : i dtx . x dtype
     : ~ GkCall cl ( gk_call_new )
-    ( __gkd_in cl `X` x y ) ( gk_call_dev cl `Y` y ) ( gk_call_i64 cl `outer` outer ) ( gk_call_i64 cl `ax` ax )
+    ( _gkd_in cl `X` x y ) ( gk_call_dev cl `Y` y ) ( gk_call_i64 cl `outer` outer ) ( gk_call_i64 cl `ax` ax )
     ^ ( __gkd_run_t kit cl kname ( string_from ( __gkd_ctr ax ) ) \ → String {
         : ~ String body ( string_from `if (gid < outer) { WIN(p, X, gid * ax, ax); long long bi = 0; ` )
         ( string_push_str body tn ) ( string_push_str body ` bv = LD(p, 0); for (` ) ( string_push_str body ( __gkd_ctr ax ) )
@@ -1711,7 +1629,7 @@ if (gid < tot) {
     : String kname ( __gkd_name . y dtype )
     ( string_push_str kname `eosg` )
     : ~ GkCall cl ( gk_call_new )
-    ( __gkd_in cl `data` data y ) ( __gkd_in cl `tok` tok y ) ( gk_call_dev cl `Y` y )
+    ( _gkd_in cl `data` data y ) ( _gkd_in cl `tok` tok y ) ( gk_call_dev cl `Y` y )
     ( gk_call_i64 cl `B` bsz ) ( gk_call_i64 cl `L` l ) ( gk_call_i64 cl `D` d )
     ^ ( __gkd_run_t kit cl kname ( string_from ( __gkd_ctr l ) ) \ → String {
         : ~ String body ( string_from `if (gid < B * D) { long long d = gid % D; long long b = gid / D; WIN(t, tok, b * L, L); long long pos = 0; long long mx = LD(t, 0); for (` )
@@ -1746,7 +1664,7 @@ i heads i n i dim → b {
     ? & & >= . rows n n >= . cols n n & == . cosb dtype GK_F32 == . sinb dtype GK_F32 {} { ^ F }
     : i tl ? < . cosb n . sinb n . cosb n . sinb n
     : ~ GkCall cl ( gk_call_new )
-    ( gk_call_dev cl `X` x ) ( __gkd_in cl `rows` rows x ) ( __gkd_in cl `cols` cols x ) ( __gkd_in cl `cosT` cosb x ) ( __gkd_in cl `sinT` sinb x )
+    ( gk_call_dev cl `X` x ) ( _gkd_in cl `rows` rows x ) ( _gkd_in cl `cols` cols x ) ( _gkd_in cl `cosT` cosb x ) ( _gkd_in cl `sinT` sinb x )
     ( gk_call_i64 cl `heads` heads ) ( gk_call_i64 cl `n` n ) ( gk_call_i64 cl `dim` dim ) ( gk_call_i64 cl `tl` tl )
     : i tot * heads * n / dim 2
     ^ ( __gkd_run_t kit cl ( string_from `gkd_rope2d` ) ( string_new ) \ → String {
@@ -1780,7 +1698,7 @@ i heads i n i dim i nt i nh → b {
     ? & & >= . fr n n >= . rw n n & >= . cl n n & == . cosb dtype GK_F32 == . sinb dtype GK_F32 {} { ^ F }
     : i tl ? < . cosb n . sinb n . cosb n . sinb n
     : ~ GkCall cl2 ( gk_call_new )
-    ( gk_call_dev cl2 `X` x ) ( __gkd_in cl2 `fr` fr x ) ( __gkd_in cl2 `rw` rw x ) ( __gkd_in cl2 `cl` cl x ) ( __gkd_in cl2 `cosT` cosb x ) ( __gkd_in cl2 `sinT` sinb x )
+    ( gk_call_dev cl2 `X` x ) ( _gkd_in cl2 `fr` fr x ) ( _gkd_in cl2 `rw` rw x ) ( _gkd_in cl2 `cl` cl x ) ( _gkd_in cl2 `cosT` cosb x ) ( _gkd_in cl2 `sinT` sinb x )
     ( gk_call_i64 cl2 `heads` heads ) ( gk_call_i64 cl2 `n` n ) ( gk_call_i64 cl2 `dim` dim ) ( gk_call_i64 cl2 `nt` nt ) ( gk_call_i64 cl2 `nh` nh ) ( gk_call_i64 cl2 `tl` tl )
     : i tot * heads * n / dim 2
     ^ ( __gkd_run_t kit cl2 ( string_from `gkd_rope3d` ) ( string_new ) \ → String {

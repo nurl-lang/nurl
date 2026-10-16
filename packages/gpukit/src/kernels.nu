@@ -89,60 +89,130 @@ $ `checked.nu`  // the kernels below are checked kernels
 : i GK_MM_RT 8  // rows of C per thread (CPU tile)
 : i GK_MM_CT 32  // cols of C per thread (CPU tile)
 
-@ __gk_matmul_src_gpu → String {
-    : String src ( string_from `extern "C" __global__ void gk_matmul(const double* A, const double* B, double* C, long long M, long long K, long long N){` )
-    ( string_push_str src `long long idx=blockIdx.x*blockDim.x+threadIdx.x;` )
-    ( string_push_str src `if(idx<M*N){long long row=idx/N,col=idx%N;double s=0.0;` )
-    ( string_push_str src `for(long long t=0;t<K;t++)s=__dadd_rn(s,__dmul_rn(A[row*K+t],B[t*N+col]));C[idx]=s;}}` )
-    ^ src
+// ── Checked matmul bodies, shared by gk_matmul_f and the dev layer ──
+
+// A multiply-accumulate into per-thread array `acc` at `idx`, spelled as
+// each element type's contract requires: f64 with explicit
+// round-to-nearest (no fused multiply-add), f32 plain (true float32
+// semantics; CUDA may fuse it, as it did the raw kernels').
+@ _gk_cmac i dtype s idx s x s y → String {
+    : ~ String s ( string_from `ST(acc, ` )
+    ( string_push_str s idx )
+    ? == dtype GK_F64 {
+        ( string_push_str s `, __dadd_rn(LD(acc, ` ) ( string_push_str s idx ) ( string_push_str s `), __dmul_rn(` )
+        ( string_push_str s x ) ( string_push_str s `, ` ) ( string_push_str s y ) ( string_push_str s `)));` )
+    } {
+        ( string_push_str s `, LD(acc, ` ) ( string_push_str s idx ) ( string_push_str s `) + ` )
+        ( string_push_str s x ) ( string_push_str s ` * ` ) ( string_push_str s y ) ( string_push_str s `);` )
+    }
+    ^ s
 }
 
-@ __gk_matmul_src_cpu → String {
-    : String src ( string_from `enum{RT=8,CT=32};` )
-    ( string_push_str src `extern "C" __global__ void gk_matmul_tiled(const double* A, const double* B, double* C, long long M, long long K, long long N){` )
-    ( string_push_str src `long long idx=blockIdx.x*blockDim.x+threadIdx.x;` )
-    ( string_push_str src `long long ncb=(N+CT-1)/CT, nrb=(M+RT-1)/RT;` )
-    ( string_push_str src `if(idx>=nrb*ncb)return;` )
-    ( string_push_str src `long long rb=(idx/ncb)*RT, cb=(idx%ncb)*CT;` )
-    ( string_push_str src `long long rlim=(M-rb<RT)?(M-rb):RT, clim=(N-cb<CT)?(N-cb):CT;` )
-    ( string_push_str src `double acc[RT][CT];` )
-    ( string_push_str src `for(int r=0;r<RT;r++)for(int c=0;c<CT;c++)acc[r][c]=0.0;` )
-    // The full-tile path is spelled out separately so the trip counts are
-    // compile-time constants and the inner loop actually vectorises; the
-    // ragged edge takes the general path.
-    ( string_push_str src `if(rlim==RT&&clim==CT){` )
-    ( string_push_str src `for(long long t=0;t<K;t++){const double* Bt=B+t*N+cb;` )
-    ( string_push_str src `for(int r=0;r<RT;r++){double a=A[(rb+r)*K+t];` )
-    ( string_push_str src `for(int c=0;c<CT;c++)acc[r][c]=__dadd_rn(acc[r][c],__dmul_rn(a,Bt[c]));}}` )
-    ( string_push_str src `}else{` )
-    ( string_push_str src `for(long long t=0;t<K;t++){const double* Bt=B+t*N+cb;` )
-    ( string_push_str src `for(int r=0;r<rlim;r++){double a=A[(rb+r)*K+t];` )
-    ( string_push_str src `for(int c=0;c<clim;c++)acc[r][c]=__dadd_rn(acc[r][c],__dmul_rn(a,Bt[c]));}}}` )
-    ( string_push_str src `for(int r=0;r<rlim;r++)for(int c=0;c<clim;c++)C[(rb+r)*N+cb+c]=acc[r][c];}` )
-    ^ src
+// The CPU backend's register-tiled matmul body, checked: a thread owns
+// an 8x32 block of Y and reads B along a row — 32 contiguous elements
+// reused by all 8 rows — so the host compiler vectorises the inner loop.
+// A's rows and B's column strip are 2-D windows, opened once per thread;
+// the whole-tile loop runs to constant bounds, so no load in it carries
+// a check. Per output the sum still runs t = 0..K ascending: every value
+// is bit-identical to a per-element kernel and to a sequential host loop.
+//
+// Bindings A (M×K), B (K×N) and Y (M×N), scalars M, K, N. `batched`: Y
+// is batches of M×N, A and B advance by scalars `as` / `bs` per batch
+// (0 broadcasts), `nb` batches. `gemm`: the epilogue is alpha·acc +
+// beta·bias with a per-column bias `Cb` read when `hasB`.
+@ _gk_tile_body s tn i dtype b batched b gemm → String {
+    : ~ String s ( string_from ? == dtype GK_F64 `LOCAL_D(acc, 256);` `LOCAL_F(acc, 256);` )
+    ( string_push_str s `
+long long ncb = (N + 31) / 32, nrb = (M + 7) / 8;
+` )
+    ( string_push_str s ? batched `if (gid < nb * nrb * ncb) {
+    long long bi = gid / (nrb * ncb), tile = gid % (nrb * ncb);
+` `if (gid < nrb * ncb) {
+    long long tile = gid;
+` )
+    ( string_push_str s `    long long rb = (tile / ncb) * 8, cb = (tile % ncb) * 32;
+    long long rlim = M - rb < 8 ? M - rb : 8, clim = N - cb < 32 ? N - cb : 32;
+    WIN2(aw, A, ` ) ( string_push_str s ? batched `bi * as + ` `` ) ( string_push_str s `rb * K, rlim, K, K);
+    WIN2(bw, B, ` ) ( string_push_str s ? batched `bi * bs + ` `` ) ( string_push_str s `cb, K, N, clim);
+    if (COLS(aw) == K && ROWS(bw) == K) {
+        if (ROWS(aw) == 8 && COLS(bw) == 32) {
+            for (long long t = 0; t < K; t++) {
+                for (int r = 0; r < 8; r++) {
+                    ` ) ( string_push_str s tn ) ( string_push_str s ` av = LD2(aw, r, t);
+                    for (int c = 0; c < 32; c++) { ` )
+    ( string_push_str s ( string_data ( _gk_cmac dtype `r * 32 + c` `av` `LD2(bw, t, c)` ) ) )
+    ( string_push_str s ` }
+                }
+            }
+        } else {
+            for (long long t = 0; t < K; t++) {
+                for (int r = 0; r < ROWS(aw); r++) {
+                    ` ) ( string_push_str s tn ) ( string_push_str s ` av = LD2(aw, r, t);
+                    for (int c = 0; c < COLS(bw); c++) { ` )
+    ( string_push_str s ( string_data ( _gk_cmac dtype `r * 32 + c` `av` `LD2(bw, t, c)` ) ) )
+    ( string_push_str s ` }
+                }
+            }
+        }
+    }
+    WIN2(yw, Y, ` ) ( string_push_str s ? batched `bi * M * N + ` `` ) ( string_push_str s `rb * N + cb, rlim, N, clim);
+` )
+    // (a whole tile stored to constant bounds — vector stores — the edge
+    // one element at a time)
+    : ~ String st ( string_new )
+    ? gemm {
+        ( string_push_str st `            ` ) ( string_push_str st tn ) ( string_push_str st ` bias = hasB != 0 ? LD(Cb, cb + c) : 0;
+            ST2(yw, r, c, ` ) ( string_push_str st ? == dtype GK_F32 `((float)alpha)` `alpha` )
+        ( string_push_str st ` * LD(acc, r * 32 + c) + ` ) ( string_push_str st ? == dtype GK_F32 `((float)beta)` `beta` ) ( string_push_str st ` * bias);
+` )
+    } {
+        ( string_push_str st `            ST2(yw, r, c, LD(acc, r * 32 + c));
+` )
+    }
+    ( string_push_str s `    if (ROWS(yw) == 8 && COLS(yw) == 32) {
+        for (int r = 0; r < 8; r++) {
+            for (int c = 0; c < 32; c++) {
+` ) ( string_push_str s ( string_data st ) ) ( string_push_str s `            }
+        }
+    } else {
+        for (int r = 0; r < ROWS(yw); r++) {
+            for (int c = 0; c < COLS(yw); c++) {
+` ) ( string_push_str s ( string_data st ) ) ( string_push_str s `            }
+        }
+    }
+}` )
+    ^ s
 }
 
 // F unless a holds m×k, b k×n and c m×n elements: the kernels index all
 // three by those dimensions.
-unsafe @ gk_matmul_f GpuKit kit ( Vec f ) c ( Vec f ) a ( Vec f ) b i m i k i n → b {
+@ gk_matmul_f GpuKit kit ( Vec f ) c ( Vec f ) a ( Vec f ) b i m i k i n → b {
     ? ! ( __gk_dims_fit ( vec_len [f] a ) m k ) { ^ F } {}
     ? ! ( __gk_dims_fit ( vec_len [f] b ) k n ) { ^ F } {}
     ? ! ( __gk_dims_fit ( vec_len [f] c ) m n ) { ^ F } {}
+    ? | == m 0 == n 0 { ^ T } {}
     : b on_cpu ( nurl_str_eq ( gk_backend kit ) `cpu` )
-    : String src ? on_cpu ( __gk_matmul_src_cpu ) ( __gk_matmul_src_gpu )
-    : s entry ? on_cpu `gk_matmul_tiled` `gk_matmul`
+    : ~ GkCall cl ( gk_call_new )
+    ( gk_call_view_f cl `A` ( slice_from_vec [f] a ) )
+    ( gk_call_view_f cl `B` ( slice_from_vec [f] b ) )
+    ( gk_call_view_out_f cl `Y` ( slice_from_vec [f] c ) )
+    ( gk_call_i64 cl `M` m ) ( gk_call_i64 cl `K` k ) ( gk_call_i64 cl `N` n )
+    // (a row of A and a column of B as windows: the sum's loads carry no
+    // check, and it runs t = 0..K ascending in round-to-nearest steps)
+    : String body ? on_cpu ( _gk_tile_body `double` GK_F64 F F ) ( string_from `if (gid < M * N) {
+    long long row = gid / N, col = gid % N;
+    WIN(ar, A, row * K, K);
+    WINS(bc, B, col, K, N);
+    double s = 0.0;
+    if (LEN(ar) == K && LEN(bc) == K) {
+        for (long long t = 0; t < K; t++) { s = __dadd_rn(s, __dmul_rn(LD(ar, t), LD(bc, t))); }
+    }
+    ST(Y, gid, s);
+}` )
     : i nrb / + m - GK_MM_RT 1 GK_MM_RT
     : i ncb / + n - GK_MM_CT 1 GK_MM_CT
-    : i tiles ? on_cpu * nrb ncb * m n
-    : ( Vec GkArg ) call ( vec_new [GkArg] )
-    ( vec_push [GkArg] call ( gk_in_f a ) )
-    ( vec_push [GkArg] call ( gk_in_f b ) )
-    ( vec_push [GkArg] call ( gk_out_f c ) )
-    ( vec_push [GkArg] call ( gk_i64 m ) )
-    ( vec_push [GkArg] call ( gk_i64 k ) )
-    ( vec_push [GkArg] call ( gk_i64 n ) )
-    : b r ( gk_run kit ( string_data src ) entry ( gk_grid tiles 256 ) 256 call )
-    ^ r
+    : i nthreads ? on_cpu * nrb ncb * m n
+    ^ ( gk_run_checked kit cl ? on_cpu `gk_matmul_tiled` `gk_matmul` ( string_data body ) nthreads 256 )
 }
 
 // Whether a buffer of `len` elements holds an r×c matrix: neither
